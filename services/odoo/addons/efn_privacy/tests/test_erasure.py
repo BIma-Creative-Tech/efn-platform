@@ -30,6 +30,7 @@ class TestEfnPrivacyErasure(PepperMixin, TestPoSCommon):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        cls.config = cls.basic_config
         cls.company_b = cls.env["res.company"].create({"name": "EFN Privacy Uji B"})
 
     def setUp(self):

@@ -1,6 +1,6 @@
 # efn_setup_audit
 
-Modul konfigurasi **data-only** untuk OCA `auditlog` (OCA/server-tools 19.0.2.0.0, AGPL-3). Lisensi modul ini **AGPL-3** karena bergantung pada modul AGPL.
+Modul konfigurasi untuk OCA `auditlog` (data + satu patch kompatibilitas, lihat di bawah) (OCA/server-tools 19.0.2.0.0, AGPL-3). Lisensi modul ini **AGPL-3** karena bergantung pada modul AGPL.
 
 - **Risiko dimitigasi:** R-S10 (insider mengubah harga/stok), R-B06 (fraud promo kasir). **ADR:** ADR-015, ADR-020.
 - **Fit-gap:** `docs/08_ODOO_FIT_GAP.md` F-18.
@@ -31,6 +31,9 @@ odoo -d <db> -i efn_setup_audit
 ```
 
 ## Batasan
-- Belum pernah di-install. Nama field/xmlid diverifikasi terhadap source 19.0 (OCA `auditlog/models/auditlog_rule.py`, `stock/models/stock_quant.py`); xmlid `ir.model`/`ir.model.fields` mengikuti konvensi `model_<model>` / `field_<model>__<field>`.
+- Ter-install dan teruji tidak langsung (test efn_* berjalan dengan aturan aktif) di Odoo 19.0-20260926 (Gelombang 7). Nama field/xmlid diverifikasi terhadap source 19.0 (OCA `auditlog/models/auditlog_rule.py`, `stock/models/stock_quant.py`); xmlid `ir.model`/`ir.model.fields` mengikuti konvensi `model_<model>` / `field_<model>__<field>`.
 - Constraint OCA: satu aturan per model. Install gagal bila sudah ada aturan manual untuk model yang sama.
 - `log_read` sengaja mati (volume). Bila klien meminta jejak *akses* data pribadi (PDP), perlu aturan terpisah untuk `res.partner` dengan evaluasi beban.
+
+## Patch kompatibilitas `patches.py` (Gelombang 7, runtime Odoo 19.0-20260926)
+OCA auditlog 19.0.2.0.0 (`ThrowAwayCache`, mode `full`) menukar `transaction.field_dirty`, tetapi ORM 19.0 menyimpan referensi lama di `Environment._field_dirty` (`cached_property`). Akibatnya membuat produk (dan model lain ber-aturan `full`) saat ada record lain yang belum di-flush gagal dengan `AssertionError: Could not find all values of account.account(...) to flush them` — di produksi berarti create produk bisa gagal. `patches.py` membuang memo `_field_dirty` di semua env saat blok masuk/keluar. Tidak mengubah apa yang dicatat. Hapus bila upstream OCA/server-tools sudah memperbaikinya (cek saat menaikkan pin `scripts/fetch-oca.sh`).

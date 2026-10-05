@@ -206,3 +206,31 @@ Dockerfile/entrypoint **tidak diubah**: pepper dibaca langsung dari file yang di
 - **BFF:** `GET /v1/pos/payments/:id` sebaiknya selalu mengembalikan `payment_id` & `amount` (Odoo memverifikasi keduanya); daftar erasure boleh array atau `{items}`; consume menerima `amount_total` int Rupiah.
 - **efn-odoo-functional/DPO:** kontak anak, `bank_ids`, lampiran partner, retensi partner POS-only; exclude `efn_member_hash` dari aturan auditlog `res.partner` (opsional).
 - **QA:** tour/Hoot untuk `PaymentEfnGateway` (offline, polling, cancel, QR layar pelanggan).
+## Gelombang 7 — runtime (Odoo 19.0-20260926 nyata, 2026-10-06)
+
+Test addon pertama kali dijalankan di image `efn-odoo:ci` + PostgreSQL 16 (harness lead `odoo-test.sh`, `--test-tags efn`, termasuk `efn_setup_audit` dengan OCA auditlog aktif). Awal: `1 failed, 5 error(s) of 41 tests` (3 kelas gagal di setUpClass sehingga ~61 test tidak jalan). Akhir: **`0 failed, 0 error(s) of 102 tests`**, 0 baris `ERROR`/`CRITICAL`.
+
+| Modul | Test berjalan | Lolos |
+|---|---|---|
+| efn_core | 30 | 30 |
+| efn_kitting | 9 | 9 |
+| efn_pos_otp_gate | 37 | 37 |
+| efn_pos_payment_gateway | 20 | 20 |
+| efn_privacy | 20 | 20 |
+| efn_setup_* | 0 (data-only, tanpa test; install sukses) | – |
+
+### Akar masalah & perbaikan
+1. **setUpClass 3 kelas berbasis `TestPoSCommon`** (`AssertionError: Could not find all values of account.account(N,) to flush them`) — bug kompatibilitas **OCA auditlog 19.0.2.0.0 × ORM 19.0**: `ThrowAwayCache` (mode `full`) menukar `transaction.field_dirty`, tetapi `Environment._field_dirty` (cached_property baru di 19.0) masih menunjuk dict lama. Dipicu aturan `full` pada `product.template` saat create produk. Ini juga bug produksi (create produk bisa gagal). Perbaikan: `efn_setup_audit/patches.py` membuang memo `_field_dirty` saat blok masuk/keluar (tidak mengubah isi log). Versi modul 19.0.1.0.1.
+2. **efn_core `test_brand_code_unique` / `test_business_type_derived_from_brand_code`** (`duplicate key ... res_company_efn_brand_code_unique`) — test: `write({'efn_brand_code': False})` pada company data `efn_setup_company` belum di-flush saat `create` berikutnya INSERT kode yang sama. Tambah `flush_model(["efn_brand_code"])`. Pola sama dipasang preventif di setUpClass test OTP gate & payment gateway.
+3. **efn_privacy `test_hash_recomputed_when_phone_changes`** — test salah: nomor awal `081234567890` dan `0812-3456-7890` adalah nomor yang sama setelah normalisasi. Nomor awal diganti `081298765432`. Kode benar.
+4. **efn_privacy `TestEfnPrivacyErasure`** (muncul setelah #1) — `open_new_session()` butuh `cls.config`; ditambah `cls.config = cls.basic_config`.
+5. **efn_pos_payment_gateway `test_sync_reusing_intent_on_other_order_is_rejected`** (muncul setelah #1) — order kedua memakai `pos.payment.uuid` yang sama sehingga constraint inti `pos_payment_unique_uuid` menolak lebih dulu (IntegrityError + log ERROR) sebelum validasi EFN. Test dipecah: (a) `transaction_id` sama + uuid baris baru -> `UserError` dari validasi EFN (`order_mismatch`); (b) uuid sama -> `IntegrityError` dari constraint inti (logger `odoo.sql_db` di-mute). Kontrol keamanan tidak dilemahkan; kedua jalur ditolak dan order tidak tersimpan.
+
+### File diubah
+`efn_setup_audit/{__init__.py,patches.py(baru),__manifest__.py,README.md}`, `efn_core/tests/test_res_company.py`, `efn_privacy/tests/{test_member_hash.py,test_erasure.py}`, `efn_pos_otp_gate/tests/test_otp_gate.py`, `efn_pos_payment_gateway/tests/test_payment_gateway.py`. `ruff check` + `ruff format --check` (0.16.10) bersih.
+
+### Belum teruji
+- JS/OWL POS (patch frontend OTP gate & payment gateway, tombol offline-disabled): tidak ada tour/Hoot test; hanya jalur server (`sync_from_ui`) yang teruji.
+- HTTP nyata ke BFF/TLS mTLS (semua di-mock); controller Odoo tidak diuji lewat `HttpCase`.
+- Upgrade (`-u`) modul dan data `efn_setup_*` terhadap DB berisi data; multi-worker/cron nyata.
+- Patch auditlog: perlu dipantau tiap kenaikan pin OCA; laporkan ke upstream OCA/server-tools.

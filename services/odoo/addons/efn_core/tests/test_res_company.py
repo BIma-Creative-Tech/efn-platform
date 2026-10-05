@@ -11,6 +11,8 @@ class TestEfnResCompany(TransactionCase):
         Company = self.env["res.company"]
         # Bersihkan kode yang mungkin sudah dipakai data demo di DB uji.
         Company.search([("efn_brand_code", "=", "FARM")]).write({"efn_brand_code": False})
+        # UPDATE harus sampai DB sebelum INSERT berikut (constraint UNIQUE dicek PostgreSQL).
+        Company.flush_model(["efn_brand_code"])
         Company.create({"name": "EFN Farm Uji A", "efn_brand_code": "FARM"})
         with mute_logger("odoo.sql_db"), self.assertRaises(IntegrityError):
             # IntegrityError dari constraint UNIQUE (dibungkus savepoint oleh assertRaises).
@@ -19,6 +21,7 @@ class TestEfnResCompany(TransactionCase):
     def test_business_type_derived_from_brand_code(self):
         Company = self.env["res.company"]
         Company.search([("efn_brand_code", "in", ("RTL", "FNB"))]).write({"efn_brand_code": False})
+        Company.flush_model(["efn_brand_code"])
         company = Company.create({"name": "EFN Retail Uji", "efn_brand_code": "RTL"})
         self.assertEqual(company.efn_business_type, "retail")
         company.efn_brand_code = "FNB"

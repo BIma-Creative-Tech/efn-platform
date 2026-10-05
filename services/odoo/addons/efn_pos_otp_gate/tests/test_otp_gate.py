@@ -38,6 +38,7 @@ class TestEfnPosOtpGate(TestPoSCommon):
         cls.env["res.company"].search([("efn_brand_code", "=", "FNB"), ("id", "!=", company.id)]).write(
             {"efn_brand_code": False}
         )
+        cls.env["res.company"].flush_model(["efn_brand_code"])
         company.write({"efn_brand_code": "FNB"})  # efn_business_type kini turunan (3b)
 
         Partner = cls.env["res.partner"]

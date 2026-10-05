@@ -8,9 +8,12 @@ import uuid as uuidlib
 from datetime import timedelta
 from unittest.mock import patch
 
+from psycopg2 import IntegrityError
+
 from odoo import Command, fields
 from odoo.exceptions import AccessDenied, AccessError, UserError, ValidationError
 from odoo.tests import new_test_user, tagged
+from odoo.tools import mute_logger
 
 from odoo.addons.efn_core.models.efn_bff_client import BffResponse, EfnBffError
 from odoo.addons.point_of_sale.tests.common import TestPoSCommon
@@ -29,6 +32,7 @@ class TestEfnPosPaymentGateway(TestPoSCommon):
         cls.env["res.company"].search([("efn_brand_code", "=", "FNB"), ("id", "!=", company.id)]).write(
             {"efn_brand_code": False}
         )
+        cls.env["res.company"].flush_model(["efn_brand_code"])
         company.write({"efn_brand_code": "FNB"})
         # DB uji memakai mata uang company TestPoSCommon (bukan IDR); kontrak produksi = IDR.
         cls.env["ir.config_parameter"].sudo().set_param("efn.pos.gateway_currency", company.currency_id.name)
@@ -272,7 +276,12 @@ class TestEfnPosPaymentGateway(TestPoSCommon):
         self._mark_paid("pay-reuse")
         self._sync(self._order_data(order_uuid, tx="pay-reuse", pay_uuid=pay_uuid))
         other_uuid = self.create_random_uid()
+        # Penyerang memakai transaction_id yang sama dengan baris pembayaran baru -> validasi EFN.
         with self.assertRaises(UserError):
+            self._sync(self._order_data(other_uuid, tx="pay-reuse", pay_uuid=str(uuidlib.uuid4())))
+        self.assertFalse(self.env["pos.order"].search([("uuid", "=", other_uuid)]))
+        # uuid baris pembayaran yang sama sudah ditolak constraint inti `pos_payment_unique_uuid`.
+        with mute_logger("odoo.sql_db"), self.assertRaises(IntegrityError):
             self._sync(self._order_data(other_uuid, tx="pay-reuse", pay_uuid=pay_uuid))
         self.assertFalse(self.env["pos.order"].search([("uuid", "=", other_uuid)]))
 

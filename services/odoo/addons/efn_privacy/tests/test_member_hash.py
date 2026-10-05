@@ -72,7 +72,7 @@ class TestEfnMemberHash(PepperMixin, TransactionCase):
 
     def test_hash_recomputed_when_phone_changes(self):
         self._use_pepper()
-        partner = self.env["res.partner"].create({"name": "Uji Ubah", "phone": "081234567890"})
+        partner = self.env["res.partner"].create({"name": "Uji Ubah", "phone": "081298765432"})
         first = partner.efn_member_hash
         self.assertTrue(first)
         partner.phone = "0812-3456-7890"

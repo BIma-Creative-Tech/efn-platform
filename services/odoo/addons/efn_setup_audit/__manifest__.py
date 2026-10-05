@@ -4,7 +4,7 @@
         "Konfigurasi data-only: aturan OCA auditlog untuk harga, "
         "pricelist, program loyalty/promo, dan penyesuaian stok."
     ),
-    "version": "19.0.1.0.0",
+    "version": "19.0.1.0.1",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     # AGPL-3: bergantung pada OCA auditlog (AGPL-3) — konvensi CLAUDE.md / services/odoo/oca/README.md.
