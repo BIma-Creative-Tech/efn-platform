@@ -58,9 +58,7 @@ def _job(transform=None) -> Job:
 
 
 def _rows(n: int, same_ts: bool = False) -> list[dict[str, Any]]:
-    return [
-        {"_cursor_ts": T0 if same_ts else T0 + timedelta(seconds=i), "_cursor_key": f"{i:04d}"} for i in range(n)
-    ]
+    return [{"_cursor_ts": T0 if same_ts else T0 + timedelta(seconds=i), "_cursor_key": f"{i:04d}"} for i in range(n)]
 
 
 def test_pages_until_exhausted_and_advances_watermark() -> None:

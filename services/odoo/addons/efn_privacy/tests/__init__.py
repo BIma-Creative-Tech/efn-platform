@@ -1,2 +1,1 @@
-from . import test_member_hash
-from . import test_erasure
+from . import test_erasure, test_member_hash

@@ -11,9 +11,7 @@ class TestEfnKitting(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.warehouse = cls.env["stock.warehouse"].search(
-            [("company_id", "=", cls.env.company.id)], limit=1
-        )
+        cls.warehouse = cls.env["stock.warehouse"].search([("company_id", "=", cls.env.company.id)], limit=1)
         cls.stock_location = cls.warehouse.lot_stock_id
         cls.customer_location = cls.env.ref("stock.stock_location_customers")
         cls.uom_kg = cls.env.ref("uom.product_uom_kgm")
@@ -63,9 +61,13 @@ class TestEfnKitting(TransactionCase):
                 "product_uom_id": cls.uom_unit.id,
                 "type": "phantom",
                 "bom_line_ids": [
-                    Command.create({"product_id": cls.paket.id, "product_qty": 1.0, "product_uom_id": cls.uom_porsi.id}),
+                    Command.create(
+                        {"product_id": cls.paket.id, "product_qty": 1.0, "product_uom_id": cls.uom_porsi.id}
+                    ),
                     Command.create({"product_id": cls.nasi.id, "product_qty": 1.0, "product_uom_id": cls.uom_porsi.id}),
-                    Command.create({"product_id": cls.es_teh.id, "product_qty": 1.0, "product_uom_id": cls.uom_unit.id}),
+                    Command.create(
+                        {"product_id": cls.es_teh.id, "product_qty": 1.0, "product_uom_id": cls.uom_unit.id}
+                    ),
                 ],
             }
         )
@@ -156,7 +158,9 @@ class TestEfnKitting(TransactionCase):
                     "product_uom_id": self.uom_porsi.id,
                     "type": "phantom",
                     "bom_line_ids": [
-                        Command.create({"product_id": self.ayam.id, "product_qty": 0.2, "product_uom_id": self.uom_kg.id}),
+                        Command.create(
+                            {"product_id": self.ayam.id, "product_qty": 0.2, "product_uom_id": self.uom_kg.id}
+                        ),
                     ],
                 }
             )
@@ -171,7 +175,9 @@ class TestEfnKitting(TransactionCase):
                 "product_uom_id": self.uom_unit.id,
                 "type": "phantom",
                 "bom_line_ids": [
-                    Command.create({"product_id": self.nasi.id, "product_qty": 1.0, "product_uom_id": self.uom_porsi.id}),
+                    Command.create(
+                        {"product_id": self.nasi.id, "product_qty": 1.0, "product_uom_id": self.uom_porsi.id}
+                    ),
                 ],
             }
         )

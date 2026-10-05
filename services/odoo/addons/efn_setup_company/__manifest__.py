@@ -1,6 +1,9 @@
 {
     "name": "EFN Setup - Company & Pajak",
-    "summary": "Konfigurasi data-only: 4 company (EFN/RTL/FNB/FARM), IDR, CoA l10n_id; PB1 configurable (grup + default + fiscal position per kota).",
+    "summary": (
+        "Konfigurasi data-only: 4 company (EFN/RTL/FNB/FARM), IDR, CoA l10n_id; "
+        "PB1 configurable (grup + default + fiscal position per kota)."
+    ),
     "version": "19.0.1.1.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",

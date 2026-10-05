@@ -22,8 +22,12 @@ layer = load_semantic_layer("semantic_layer.yaml")
 resp = requests.post(
     "https://ollama:11434/api/generate",  # sidecar TLS; verify = CA internal (docs/04 §7.1)
     verify="/run/secrets/efn_ca_crt",
-    json={"model": "qwen2.5-coder:7b", "prompt": build_prompt(layer, "Rata-rata harga beras per kompetitor"),
-          "stream": False, "options": {"temperature": 0}},
+    json={
+        "model": "qwen2.5-coder:7b",
+        "prompt": build_prompt(layer, "Rata-rata harga beras per kompetitor"),
+        "stream": False,
+        "options": {"temperature": 0},
+    },
     timeout=60,
 )
 try:

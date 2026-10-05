@@ -93,7 +93,7 @@ jobs:
           cache: pip
           cache-dependency-path: "services/**/requirements*.txt"
       - name: Install tooling
-        run: pip install ruff pip-audit
+        run: pip install ruff==0.16.10 pip-audit   # pin: versi ruff menentukan hasil format
       - name: Daftar direktori Python yang ada
         id: dirs
         run: |

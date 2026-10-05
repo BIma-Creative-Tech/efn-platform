@@ -1,3 +1,5 @@
+from psycopg2 import IntegrityError
+
 from odoo.exceptions import ValidationError
 from odoo.tests import TransactionCase, tagged
 from odoo.tools import mute_logger
@@ -10,7 +12,7 @@ class TestEfnResCompany(TransactionCase):
         # Bersihkan kode yang mungkin sudah dipakai data demo di DB uji.
         Company.search([("efn_brand_code", "=", "FARM")]).write({"efn_brand_code": False})
         Company.create({"name": "EFN Farm Uji A", "efn_brand_code": "FARM"})
-        with mute_logger("odoo.sql_db"), self.assertRaises(Exception):
+        with mute_logger("odoo.sql_db"), self.assertRaises(IntegrityError):
             # IntegrityError dari constraint UNIQUE (dibungkus savepoint oleh assertRaises).
             Company.create({"name": "EFN Farm Uji B", "efn_brand_code": "FARM"})
 
@@ -26,9 +28,9 @@ class TestEfnResCompany(TransactionCase):
 
     def test_single_merchant_of_record(self):
         Company = self.env["res.company"]
-        Company.with_context(active_test=False).search(
-            [("efn_is_merchant_of_record", "=", True)]
-        ).write({"efn_is_merchant_of_record": False})
+        Company.with_context(active_test=False).search([("efn_is_merchant_of_record", "=", True)]).write(
+            {"efn_is_merchant_of_record": False}
+        )
         first = Company.create({"name": "EFN Holding Uji", "efn_is_merchant_of_record": True})
         self.assertTrue(first.efn_is_merchant_of_record)
         with self.assertRaises(ValidationError):

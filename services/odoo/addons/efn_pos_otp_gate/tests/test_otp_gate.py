@@ -35,9 +35,9 @@ class TestEfnPosOtpGate(TestPoSCommon):
         cls.env["ir.config_parameter"].sudo().set_param("efn.pos.otp_required_for_promo", "True")
         company = cls.config.company_id
         # Pastikan kode FNB unik di DB uji (data demo efn_kitting bisa memakainya).
-        cls.env["res.company"].search(
-            [("efn_brand_code", "=", "FNB"), ("id", "!=", company.id)]
-        ).write({"efn_brand_code": False})
+        cls.env["res.company"].search([("efn_brand_code", "=", "FNB"), ("id", "!=", company.id)]).write(
+            {"efn_brand_code": False}
+        )
         company.write({"efn_brand_code": "FNB"})  # efn_business_type kini turunan (3b)
 
         Partner = cls.env["res.partner"]
@@ -95,9 +95,7 @@ class TestEfnPosOtpGate(TestPoSCommon):
         return result
 
     def _patch_bff(self):
-        return patch.object(
-            self.env.registry["efn.bff.client"], "post", side_effect=self._fake_post
-        )
+        return patch.object(self.env.registry["efn.bff.client"], "post", side_effect=self._fake_post)
 
     def _order_data(self, reward=None, draft=False, uuid=None, customer=None, spoof_flags=False):
         """`spoof_flags=True`: klien mengosongkan is_reward_line/reward_id (SEC-12)."""
@@ -134,9 +132,7 @@ class TestEfnPosOtpGate(TestPoSCommon):
     def _verify_otp_for(self, uuid, partner=None):
         partner = partner or self.member_a
         self.responses[REQUEST] = BffResponse(202, {"challenge_id": "chal-1", "expires_in": 180})
-        self.responses[VERIFY] = BffResponse(
-            200, {"ok": True, "discount_token": DUMMY_TOKEN, "expires_in": 600}
-        )
+        self.responses[VERIFY] = BffResponse(200, {"ok": True, "discount_token": DUMMY_TOKEN, "expires_in": 600})
         res = self.config.efn_otp_request(uuid, 90.0, partner.id)
         self.assertTrue(res["ok"], res)
         res = self.config.efn_otp_verify(uuid, "123456")
@@ -274,9 +270,7 @@ class TestEfnPosOtpGate(TestPoSCommon):
         uuid = self.create_random_uid()
         with self._patch_bff():
             self._verify_otp_for(uuid)
-            self.responses[CONSUME] = BffResponse(
-                409, {"error": {"code": "amount_mismatch", "message": "x"}}
-            )
+            self.responses[CONSUME] = BffResponse(409, {"error": {"code": "amount_mismatch", "message": "x"}})
             order = self._sync(self._order_data(reward=self.reward, uuid=uuid))
         self.assertEqual(order.efn_otp_gate_note, "amount_mismatch")
 
@@ -284,9 +278,7 @@ class TestEfnPosOtpGate(TestPoSCommon):
         uuid = self.create_random_uid()
         with self._patch_bff():
             self._verify_otp_for(uuid)
-            self.responses[CONSUME] = BffResponse(
-                409, {"error": {"code": "member_mismatch", "message": "x"}}
-            )
+            self.responses[CONSUME] = BffResponse(409, {"error": {"code": "member_mismatch", "message": "x"}})
             order = self._sync(self._order_data(reward=self.reward, uuid=uuid, customer=self.member_b))
         self.assertEqual(order.efn_otp_gate_note, "member_mismatch")
 
@@ -324,9 +316,7 @@ class TestEfnPosOtpGate(TestPoSCommon):
         data = self._order_data(reward=self.reward, draft=True, spoof_flags=True)
         with self._patch_bff():
             order = self._sync(data)
-        self.assertFalse(
-            order.lines.filtered(lambda line: line.product_id == self.reward.discount_line_product_id)
-        )
+        self.assertFalse(order.lines.filtered(lambda line: line.product_id == self.reward.discount_line_product_id))
         self.assertTrue(order.lines.filtered(lambda line: line.product_id == self.product))
 
     def test_archived_otp_program_still_gated(self):
@@ -339,9 +329,7 @@ class TestEfnPosOtpGate(TestPoSCommon):
     # ------------------------------------------------- konfigurasi program (3b)
     def test_requires_otp_rejected_for_irrelevant_program_type(self):
         # Program dibuat valid dulu agar error yang diuji pasti dari constraint EFN.
-        program = self._create_program(
-            requires_otp=False, program_type="loyalty", pos_configs=self.config
-        )
+        program = self._create_program(requires_otp=False, program_type="loyalty", pos_configs=self.config)
         with self.assertRaises(ValidationError):
             program.efn_requires_otp = True
 

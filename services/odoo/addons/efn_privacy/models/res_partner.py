@@ -63,8 +63,7 @@ class ResPartner(models.Model):
                 # WARNING (bukan ERROR): instalasi/CI tanpa secret tidak boleh gagal; cron
                 # erasure yang menandai kondisi ini sebagai ERROR.
                 _logger.warning(
-                    "EFN privacy: pepper member_hash tidak tersedia (%s, cek env %s); "
-                    "efn_member_hash dikosongkan",
+                    "EFN privacy: pepper member_hash tidak tersedia (%s, cek env %s); efn_member_hash dikosongkan",
                     exc.code,
                     PEPPER_FILE_ENV,
                 )

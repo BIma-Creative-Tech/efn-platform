@@ -111,6 +111,6 @@ class EfnPosOtpChallenge(models.Model):
         limit_date = fields.Datetime.now() - timedelta(days=days)
         self.sudo().search([("create_date", "<", limit_date)]).unlink()
         # Token kedaluwarsa tidak berguna lagi: hapus nilainya lebih awal (minimisasi data).
-        self.sudo().search(
-            [("discount_token", "!=", False), ("token_expires_at", "<", fields.Datetime.now())]
-        ).write({"discount_token": False})
+        self.sudo().search([("discount_token", "!=", False), ("token_expires_at", "<", fields.Datetime.now())]).write(
+            {"discount_token": False}
+        )

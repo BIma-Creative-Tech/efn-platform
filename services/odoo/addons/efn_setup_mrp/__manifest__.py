@@ -1,6 +1,8 @@
 {
     "name": "EFN Setup - MRP Central Kitchen, Lot & FEFO",
-    "summary": "Konfigurasi data-only: lot/serial, multi-step routes, kategori FEFO; demo reorder rule Manufacture paket CK.",
+    "summary": (
+        "Konfigurasi data-only: lot/serial, multi-step routes, kategori FEFO; demo reorder rule Manufacture paket CK."
+    ),
     "version": "19.0.1.0.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",

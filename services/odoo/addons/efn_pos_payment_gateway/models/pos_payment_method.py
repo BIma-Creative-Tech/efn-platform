@@ -48,18 +48,14 @@ class PosPaymentMethod(models.Model):
             if "payment_method_type" in method._fields and method.payment_method_type != "terminal":
                 raise ValidationError(_("Metode EFN Payment Gateway harus berintegrasi 'Terminal'."))
             if not method.company_id or not method.company_id.efn_brand_code:
-                raise ValidationError(
-                    _("Metode EFN Payment Gateway wajib punya company dengan Kode Company EFN.")
-                )
+                raise ValidationError(_("Metode EFN Payment Gateway wajib punya company dengan Kode Company EFN."))
             if not method.journal_id or method.journal_id.type != "bank":
                 raise ValidationError(_("Metode EFN Payment Gateway wajib memakai jurnal bertipe Bank."))
             if method.split_transactions:
                 raise ValidationError(_("Metode EFN Payment Gateway tidak boleh 'Identify Customer'."))
             journal_currency = method.journal_id.currency_id
             if journal_currency and journal_currency.name != currency_name:
-                raise ValidationError(
-                    _("Mata uang jurnal EFN Payment Gateway harus %(cur)s.", cur=currency_name)
-                )
+                raise ValidationError(_("Mata uang jurnal EFN Payment Gateway harus %(cur)s.", cur=currency_name))
 
     # ---------------------------------------------------------------- helpers
     def _efn_gateway_check_caller(self, config):
@@ -196,9 +192,7 @@ class PosPaymentMethod(models.Model):
             "idempotency_key": idempotency_key,
         }
         try:
-            response = self.env["efn.bff.client"].post(
-                PAYMENTS_PATH, payload, log_context={"order_ref": order_uuid}
-            )
+            response = self.env["efn.bff.client"].post(PAYMENTS_PATH, payload, log_context={"order_ref": order_uuid})
         except EfnBffError:
             return self._efn_error("bff_unavailable", _("Layanan pembayaran tidak tersedia. Gunakan metode lain."))
         data = response.data

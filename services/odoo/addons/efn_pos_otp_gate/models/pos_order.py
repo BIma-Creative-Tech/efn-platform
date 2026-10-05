@@ -49,7 +49,7 @@ from odoo.addons.efn_core.models.efn_bff_client import (
 
 _logger = logging.getLogger(__name__)
 
-TOKEN_CONSUME_PATH = "/v1/pos/discount-token/consume"
+TOKEN_CONSUME_PATH = "/v1/pos/discount-token/consume"  # noqa: S105 - path URL, bukan secret
 CONSUME_REJECT_REASONS = (
     "already_used",
     "order_mismatch",
@@ -171,14 +171,11 @@ class PosOrder(models.Model):
                 self.write({"efn_otp_verified": False})
             return
 
-        challenge = self.env["efn.pos.otp.challenge"]._efn_find_latest(
-            self.config_id, self.uuid, ["verified"]
-        )
+        challenge = self.env["efn.pos.otp.challenge"]._efn_find_latest(self.config_id, self.uuid, ["verified"])
         if not challenge:
             _logger.warning("EFN OTP gate: order %s membawa reward ber-OTP tanpa OTP terverifikasi", self.uuid)
             raise UserError(
-                _("Promo pada order ini memerlukan verifikasi OTP pelanggan. "
-                  "Hapus promo atau lakukan verifikasi OTP.")
+                _("Promo pada order ini memerlukan verifikasi OTP pelanggan. Hapus promo atau lakukan verifikasi OTP.")
             )
         if not challenge.discount_token:
             self._efn_mark_review(challenge, "token_missing")

@@ -117,9 +117,7 @@ class EfnPrivacyErasure(models.AbstractModel):
                 summary["failed"] += 1
         if len(items) > batch:
             _logger.info("EFN privacy: %d permintaan tersisa untuk run berikutnya", len(items) - batch)
-        _logger.info(
-            "EFN privacy: erasure selesai=%(done)d gagal=%(failed)d dilewati=%(skipped)d", summary
-        )
+        _logger.info("EFN privacy: erasure selesai=%(done)d gagal=%(failed)d dilewati=%(skipped)d", summary)
         return summary
 
     # ---------------------------------------------------------------- helpers
@@ -153,9 +151,7 @@ class EfnPrivacyErasure(models.AbstractModel):
                 records = self._efn_erase_member(request_id, hashed)
         except Exception as exc:  # noqa: BLE001 - satu permintaan gagal tidak menghentikan lainnya
             # Tanpa traceback/pesan: bisa memuat nilai field (PII).
-            _logger.error(
-                "EFN privacy: anonimisasi request %s gagal (%s)", request_id, type(exc).__name__
-            )
+            _logger.error("EFN privacy: anonimisasi request %s gagal (%s)", request_id, type(exc).__name__)
             return False
         self._efn_commit()
         try:
@@ -165,14 +161,10 @@ class EfnPrivacyErasure(models.AbstractModel):
                 log_context={"request_id": request_id},
             )
         except EfnBffError as exc:
-            _logger.warning(
-                "EFN privacy: complete request %s gagal (%s); diulang run berikutnya", request_id, exc.code
-            )
+            _logger.warning("EFN privacy: complete request %s gagal (%s); diulang run berikutnya", request_id, exc.code)
             return False
         if not 200 <= response.status < 300:
-            _logger.warning(
-                "EFN privacy: complete request %s ditolak BFF (HTTP %s)", request_id, response.status
-            )
+            _logger.warning("EFN privacy: complete request %s ditolak BFF (HTTP %s)", request_id, response.status)
             return False
         _logger.info("EFN privacy: request %s selesai (%d partner)", request_id, records)
         return True
@@ -207,9 +199,7 @@ class EfnPrivacyErasure(models.AbstractModel):
     @api.model
     def _efn_anonymize_partners(self, partners, request_id):
         ids = partners.ids
-        vals = {
-            fname: False for fname in PARTNER_CLEAR_FIELDS if fname in partners._fields
-        }
+        vals = {fname: False for fname in PARTNER_CLEAR_FIELDS if fname in partners._fields}
         vals.update(
             {
                 "name": f"Pelanggan dihapus {request_id[:8]}",
@@ -237,13 +227,9 @@ class EfnPrivacyErasure(models.AbstractModel):
         Message = self.env["mail.message"].sudo()
         messages = Message.search([("model", "=", "res.partner"), ("res_id", "in", ids)])
         if messages:
-            self.env["mail.tracking.value"].sudo().search(
-                [("mail_message_id", "in", messages.ids)]
-            ).unlink()
+            self.env["mail.tracking.value"].sudo().search([("mail_message_id", "in", messages.ids)]).unlink()
             messages.unlink()
-        Message.search([("author_id", "in", ids), ("email_from", "!=", False)]).write(
-            {"email_from": False}
-        )
+        Message.search([("author_id", "in", ids), ("email_from", "!=", False)]).write({"email_from": False})
 
         # OCA auditlog (opsional): log lama berisi nilai HP/email sebelum & sesudah.
         if "auditlog.log" in self.env:

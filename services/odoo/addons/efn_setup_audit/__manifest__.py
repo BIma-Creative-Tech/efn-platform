@@ -1,6 +1,9 @@
 {
     "name": "EFN Setup - Audit Log",
-    "summary": "Konfigurasi data-only: aturan OCA auditlog untuk harga, pricelist, program loyalty/promo, dan penyesuaian stok.",
+    "summary": (
+        "Konfigurasi data-only: aturan OCA auditlog untuk harga, "
+        "pricelist, program loyalty/promo, dan penyesuaian stok."
+    ),
     "version": "19.0.1.0.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",

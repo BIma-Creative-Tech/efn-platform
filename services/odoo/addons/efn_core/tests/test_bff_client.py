@@ -52,9 +52,7 @@ class TestEfnBffClient(TransactionCase):
         # Key dummy khusus test (bukan secret nyata), ditulis ke file sementara.
         self.key_path = self._tmp_file("test-only-dummy-key\n")
         self.ca_path = self._tmp_file(DUMMY_CA_PEM)
-        env_patch = patch.dict(
-            os.environ, {API_KEY_FILE_ENV: self.key_path, CA_FILE_ENV: self.ca_path}
-        )
+        env_patch = patch.dict(os.environ, {API_KEY_FILE_ENV: self.key_path, CA_FILE_ENV: self.ca_path})
         env_patch.start()
         self.addCleanup(env_patch.stop)
         # Lingkungan CI bisa membawa env container; test harus deterministik.

@@ -72,11 +72,7 @@ class ResCompany(models.Model):
         if not self.filtered("efn_is_merchant_of_record"):
             return
         # Lintas company: sudo + active_test=False agar company arsip ikut dihitung.
-        count = (
-            self.sudo()
-            .with_context(active_test=False)
-            .search_count([("efn_is_merchant_of_record", "=", True)])
-        )
+        count = self.sudo().with_context(active_test=False).search_count([("efn_is_merchant_of_record", "=", True)])
         if count > 1:
             raise ValidationError(
                 _("Hanya satu company yang boleh menjadi agen penagih / pemegang akun gateway (ADR-019).")

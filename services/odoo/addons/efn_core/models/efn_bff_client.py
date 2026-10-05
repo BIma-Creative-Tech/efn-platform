@@ -6,9 +6,10 @@ Kontrak: docs/04_SERVICE_CONTRACTS.md §2 (header `X-EFN-Service-Key`, secret fi
 Aturan keamanan (CLAUDE.md, docs/04 §6-§7 v2):
 - **TLS wajib**: base URL harus `https://` dan sertifikat BFF diverifikasi terhadap CA
   internal di env `EFN_CA_FILE` (default `/run/secrets/efn_ca_crt`) lewat
-  ``requests.post/get(..., verify=<CA>)`` (`post` dan `get` berbagi `_efn_request`). CA tidak terbaca -> `bff_ca_missing` (tidak ada
-  fallback ke verifikasi CA sistem atau `verify=False`). `http://` hanya diterima bila
-  `EFN_ALLOW_PLAINTEXT=true` DAN `APP_ENV` eksplisit non-produksi.
+  ``requests.post/get(..., verify=<CA>)`` (`post` dan `get` berbagi `_efn_request`).
+  CA tidak terbaca -> `bff_ca_missing` (tidak ada fallback ke verifikasi CA sistem atau
+  `verify=False`). `http://` hanya diterima bila `EFN_ALLOW_PLAINTEXT=true` DAN `APP_ENV`
+  eksplisit non-produksi.
 - URL dari env `EFN_BFF_URL` (dikendalikan deployment) atau `ir.config_parameter`
   `efn.bff_url`. Verifikasi CA internal mencegah admin yang mengubah URL ke host luar
   menerima service key (host luar tidak punya sertifikat dari CA internal).
@@ -271,9 +272,7 @@ class EfnBffClient(models.AbstractModel):
         if not isinstance(path, str) or not path.startswith("/"):
             raise ValueError("path BFF harus diawali '/'")
         # Cegah path traversal / injeksi query lewat segmen id yang tidak divalidasi.
-        if any(token in path for token in ("?", "#", "..", "//", "\\")) or any(
-            ord(char) < 0x21 for char in path
-        ):
+        if any(token in path for token in ("?", "#", "..", "//", "\\")) or any(ord(char) < 0x21 for char in path):
             raise ValueError("path BFF tidak valid")
 
     @api.model
@@ -300,9 +299,9 @@ class EfnBffClient(models.AbstractModel):
             # titik mock di test tetap stabil.
             if method == "POST":
                 headers["Content-Type"] = "application/json"
-                response = requests.post(url, json=payload, **common)
+                response = requests.post(url, json=payload, **common)  # noqa: S113 - timeout ada di common
             elif method == "GET":
-                response = requests.get(url, params=params or None, **common)
+                response = requests.get(url, params=params or None, **common)  # noqa: S113 - timeout ada di common
             else:
                 raise ValueError("metode HTTP tidak didukung")
         except requests.exceptions.SSLError:

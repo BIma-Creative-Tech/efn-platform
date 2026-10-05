@@ -1,2 +1,1 @@
-from . import test_bff_client
-from . import test_res_company
+from . import test_bff_client, test_res_company

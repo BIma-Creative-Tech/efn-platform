@@ -6,6 +6,7 @@ extend = "../../ruff.toml"
 [lint.per-file-ignores]
 "**/__manifest__.py" = ["B018"]
 "**/__init__.py" = ["F401"]
+"**/tests/**" = ["S105", "S106", "S608"]
 
 [lint.isort]
 section-order = ["future", "standard-library", "third-party", "odoo", "odoo-addons", "first-party", "local-folder"]

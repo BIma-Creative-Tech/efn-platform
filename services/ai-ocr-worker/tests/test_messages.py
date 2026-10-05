@@ -108,9 +108,7 @@ def test_failure_action() -> None:
 
 
 def test_valid_result_publishes_loyalty_and_notify_v2() -> None:
-    messages = result_messages(
-        REPORT_ID, USER_HASH, "valid", "price_and_name_match", 10, product_name="Indomie Goreng"
-    )
+    messages = result_messages(REPORT_ID, USER_HASH, "valid", "price_and_name_match", 10, product_name="Indomie Goreng")
     assert [m.queue for m in messages] == [QUEUE_LOYALTY_EARN, QUEUE_NOTIFY_PUSH]
     earn = json.loads(messages[0].body)
     assert earn == {

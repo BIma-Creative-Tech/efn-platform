@@ -51,9 +51,7 @@ class PosOrder(models.Model):
 
     def _efn_gateway_validate_payments(self):
         self.ensure_one()
-        payments = self.payment_ids.sudo().filtered(
-            lambda p: p.payment_method_id.use_payment_terminal == TERMINAL_KEY
-        )
+        payments = self.payment_ids.sudo().filtered(lambda p: p.payment_method_id.use_payment_terminal == TERMINAL_KEY)
         if not payments:
             return
         Intent = self.env["efn.pos.payment.intent"].sudo()

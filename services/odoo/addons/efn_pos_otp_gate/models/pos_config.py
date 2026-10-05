@@ -82,9 +82,7 @@ class PosConfig(models.Model):
         messages = {
             "partner_missing": _("Pilih pelanggan (member) pada order terlebih dahulu."),
             "no_phone": _("Pelanggan belum punya nomor HP. Lengkapi nomor HP pelanggan dulu."),
-            "foreign_phone": _(
-                "Nomor HP pelanggan bukan nomor Indonesia (+62). Promo ber-OTP tidak tersedia."
-            ),
+            "foreign_phone": _("Nomor HP pelanggan bukan nomor Indonesia (+62). Promo ber-OTP tidak tersedia."),
             "invalid_phone": _("Nomor HP pelanggan tidak valid. Perbaiki data pelanggan."),
         }
         return messages.get(code, messages["invalid_phone"])

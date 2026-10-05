@@ -33,8 +33,11 @@ class ProductTemplate(models.Model):
                         name=template.display_name,
                     )
                 )
-        phantom_count = self.env["mrp.bom"].sudo().with_context(active_test=False).search_count(
-            [("product_tmpl_id", "in", packages.ids), ("type", "=", "phantom")]
+        phantom_count = (
+            self.env["mrp.bom"]
+            .sudo()
+            .with_context(active_test=False)
+            .search_count([("product_tmpl_id", "in", packages.ids), ("type", "=", "phantom")])
         )
         if phantom_count:
             raise ValidationError(

@@ -59,8 +59,9 @@ class TestEfnPrivacyErasure(PepperMixin, TestPoSCommon):
         self.assertEqual(self.member_archived_b.efn_member_hash, TEST_MEMBER_HASH)
         self.member.message_post(body="Catatan: HP 0812-3456-7890")
         self.open_new_session()
-        data = self.create_ui_order_data([(self.create_product("Produk Privasi", self.categ_basic, 10.0), 1)],
-                                         customer=self.member)
+        data = self.create_ui_order_data(
+            [(self.create_product("Produk Privasi", self.categ_basic, 10.0), 1)], customer=self.member
+        )
         self.env["pos.order"].sync_from_ui([data])
         self.order = self.env["pos.order"].search([("uuid", "=", data["uuid"])])
         self.calls = []
@@ -85,14 +86,11 @@ class TestEfnPrivacyErasure(PepperMixin, TestPoSCommon):
 
     def _run_cron(self):
         client = self.env.registry["efn.bff.client"]
-        with patch.object(client, "get", side_effect=self._fake_get), patch.object(
-            client, "post", side_effect=self._fake_post
+        with (
+            patch.object(client, "get", side_effect=self._fake_get),
+            patch.object(client, "post", side_effect=self._fake_post),
         ):
-            return (
-                self.env["efn.privacy.erasure"]
-                .with_context(efn_privacy_no_commit=True)
-                ._cron_pull_erasures()
-            )
+            return self.env["efn.privacy.erasure"].with_context(efn_privacy_no_commit=True)._cron_pull_erasures()
 
     def _completes(self):
         return [c for c in self.calls if c[0] == "POST"]
@@ -134,8 +132,8 @@ class TestEfnPrivacyErasure(PepperMixin, TestPoSCommon):
         self.assertFalse(self.order.mobile)
 
         # Chatter partner terhapus.
-        messages = self.env["mail.message"].sudo().search(
-            [("model", "=", "res.partner"), ("res_id", "in", partners.ids)]
+        messages = (
+            self.env["mail.message"].sudo().search([("model", "=", "res.partner"), ("res_id", "in", partners.ids)])
         )
         self.assertFalse(messages)
 

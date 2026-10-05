@@ -23,7 +23,9 @@ SQL_GET_WATERMARK = (
 # Satu koneksi per halaman: transaksi read-only, TimeZone UTC, statement_timeout (R-O03).
 class PgSource:
     def __init__(self, target: PgTarget, statement_timeout_ms: int, application_name: str = "efn-etl") -> None:
-        options = f"-c default_transaction_read_only=on -c statement_timeout={int(statement_timeout_ms)} -c TimeZone=UTC"
+        options = (
+            f"-c default_transaction_read_only=on -c statement_timeout={int(statement_timeout_ms)} -c TimeZone=UTC"
+        )
         # TLS: sslmode/sslrootcert divalidasi Settings.from_env (verify-full kecuali EFN_ALLOW_PLAINTEXT di dev).
         self._conninfo = make_conninfo(
             host=target.host,

@@ -1,3 +1,1 @@
-from . import member_hash
-from . import res_partner
-from . import efn_privacy_erasure
+from . import efn_privacy_erasure, member_hash, res_partner

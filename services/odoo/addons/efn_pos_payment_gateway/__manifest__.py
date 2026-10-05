@@ -1,6 +1,8 @@
 {
     "name": "EFN POS Payment Gateway (QRIS via BFF)",
-    "summary": "Metode terminal POS `efn_gateway`: QRIS lewat BFF EFN (provider-agnostic), validasi server saat sync order.",
+    "summary": (
+        "Metode terminal POS `efn_gateway`: QRIS lewat BFF EFN (provider-agnostic), validasi server saat sync order."
+    ),
     "version": "19.0.1.0.0",
     "category": "EFN/Point of Sale",
     "author": "Era Food and Nourishment",

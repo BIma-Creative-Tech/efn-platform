@@ -9,7 +9,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from odoo import Command, fields
-from odoo.exceptions import AccessDenied, UserError, ValidationError
+from odoo.exceptions import AccessDenied, AccessError, UserError, ValidationError
 from odoo.tests import new_test_user, tagged
 
 from odoo.addons.efn_core.models.efn_bff_client import BffResponse, EfnBffError
@@ -26,14 +26,12 @@ class TestEfnPosPaymentGateway(TestPoSCommon):
         super().setUpClass()
         cls.config = cls.basic_config
         company = cls.config.company_id
-        cls.env["res.company"].search(
-            [("efn_brand_code", "=", "FNB"), ("id", "!=", company.id)]
-        ).write({"efn_brand_code": False})
+        cls.env["res.company"].search([("efn_brand_code", "=", "FNB"), ("id", "!=", company.id)]).write(
+            {"efn_brand_code": False}
+        )
         company.write({"efn_brand_code": "FNB"})
         # DB uji memakai mata uang company TestPoSCommon (bukan IDR); kontrak produksi = IDR.
-        cls.env["ir.config_parameter"].sudo().set_param(
-            "efn.pos.gateway_currency", company.currency_id.name
-        )
+        cls.env["ir.config_parameter"].sudo().set_param("efn.pos.gateway_currency", company.currency_id.name)
         cls.gw_method = cls.env["pos.payment.method"].create(
             {
                 "name": "QRIS EFN (uji)",
@@ -115,9 +113,7 @@ class TestEfnPosPaymentGateway(TestPoSCommon):
         self.get_responses[f"{PAYMENTS}/{payment_id}"] = self._remote(payment_id, "paid", amount)
 
     def _order_data(self, order_uuid, tx=None, pay_uuid=None, amount=100.0):
-        data = self.create_ui_order_data(
-            [(self.product, 1)], payments=[(self.gw_method, amount)], uuid=order_uuid
-        )
+        data = self.create_ui_order_data([(self.product, 1)], payments=[(self.gw_method, amount)], uuid=order_uuid)
         for command in data["payment_ids"]:
             vals = command[2]
             if vals["payment_method_id"] == self.gw_method.id:
@@ -342,7 +338,7 @@ class TestEfnPosPaymentGateway(TestPoSCommon):
         )
         intent = self.env["efn.pos.payment.intent"].with_user(user).search([("bff_payment_id", "=", "pay-acl")])
         self.assertTrue(intent)
-        with self.assertRaises(Exception):
+        with self.assertRaises(AccessError):
             intent.write({"status": "paid"})
 
     def test_constraint_requires_bank_journal(self):

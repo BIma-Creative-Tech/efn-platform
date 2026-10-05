@@ -8,7 +8,7 @@ Tidak ada data kartu/PAN (QRIS saja); `qr_string` dikosongkan setelah status fin
 
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from odoo import _, api, fields, models
 
@@ -40,7 +40,7 @@ def parse_bff_datetime(value):
     except ValueError:
         return None
     if parsed.tzinfo:
-        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        parsed = parsed.astimezone(UTC).replace(tzinfo=None)
     return parsed.replace(microsecond=0)
 
 
@@ -54,11 +54,20 @@ class EfnPosPaymentIntent(models.Model):
 
     company_id = fields.Many2one("res.company", required=True, index=True, readonly=True)
     pos_config_id = fields.Many2one(
-        "pos.config", string="Point of Sale", required=True, index=True, readonly=True,
-        ondelete="restrict", check_company=True,
+        "pos.config",
+        string="Point of Sale",
+        required=True,
+        index=True,
+        readonly=True,
+        ondelete="restrict",
+        check_company=True,
     )
     payment_method_id = fields.Many2one(
-        "pos.payment.method", required=True, readonly=True, ondelete="restrict", check_company=True,
+        "pos.payment.method",
+        required=True,
+        readonly=True,
+        ondelete="restrict",
+        check_company=True,
     )
     pos_order_uuid = fields.Char(string="Order (uuid)", required=True, index=True, readonly=True)
     payment_uuid = fields.Char(string="Baris pembayaran (uuid)", required=True, readonly=True)
@@ -74,12 +83,21 @@ class EfnPosPaymentIntent(models.Model):
     paid_at = fields.Datetime(readonly=True)
     idempotency_key = fields.Char(required=True, readonly=True, copy=False)
     pos_payment_id = fields.Many2one(
-        "pos.payment", string="Pembayaran POS", readonly=True, ondelete="set null", index="btree_not_null",
+        "pos.payment",
+        string="Pembayaran POS",
+        readonly=True,
+        ondelete="set null",
+        index="btree_not_null",
         copy=False,
     )
     pos_order_id = fields.Many2one(
-        "pos.order", string="Order POS", readonly=True, ondelete="set null", index="btree_not_null",
-        copy=False, check_company=True,
+        "pos.order",
+        string="Order POS",
+        readonly=True,
+        ondelete="set null",
+        index="btree_not_null",
+        copy=False,
+        check_company=True,
     )
     note = fields.Char(string="Catatan", readonly=True)
     orphan_flagged = fields.Boolean(readonly=True, copy=False)
@@ -87,9 +105,7 @@ class EfnPosPaymentIntent(models.Model):
     _bff_payment_id_unique = models.Constraint(
         "UNIQUE(bff_payment_id)", "Payment ID BFF sudah tercatat pada intent lain."
     )
-    _idempotency_key_unique = models.Constraint(
-        "UNIQUE(idempotency_key)", "Idempotency key intent harus unik."
-    )
+    _idempotency_key_unique = models.Constraint("UNIQUE(idempotency_key)", "Idempotency key intent harus unik.")
 
     # ---------------------------------------------------------------- BFF sync
     def _efn_apply_remote(self, data):
@@ -111,9 +127,7 @@ class EfnPosPaymentIntent(models.Model):
             return False
         if self.status == "paid":
             if status != "paid":
-                _logger.warning(
-                    "EFN gateway: intent %s sudah paid; status BFF %s diabaikan", self.id, status
-                )
+                _logger.warning("EFN gateway: intent %s sudah paid; status BFF %s diabaikan", self.id, status)
             return status == "paid"
         vals = {"status": status}
         if status == "paid":
