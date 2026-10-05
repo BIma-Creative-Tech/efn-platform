@@ -28,7 +28,7 @@ JWT_EXP=4102444800   # 2100-01-01T00:00:00Z (setara token `mc admin prometheus g
 die() { echo "derive-secrets: $*" >&2; exit 1; }
 
 # EFN_DERIVE_FORCE_OPENSSL=1 memaksa jalur openssl (dipakai CI untuk menguji fallback)
-have_python() { [[ "${EFN_DERIVE_FORCE_OPENSSL:-0}" != "1" ]] && command -v python3 > /dev/null 2>&1; }
+have_python() { [[ "${EFN_DERIVE_FORCE_OPENSSL:-0}" != "1" ]] && command -v python3 > /dev/null 2>&1 && python3 -c "import hashlib, hmac" > /dev/null 2>&1; }
 
 # HKDF-SHA256 dengan salt kosong, keluaran hex 32 byte. IKM dibaca dari stdin (byte apa adanya).
 hkdf_hex() {
