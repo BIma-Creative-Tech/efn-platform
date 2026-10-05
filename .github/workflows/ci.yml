@@ -72,7 +72,7 @@ jobs:
       - name: Lint
         run: npm run lint --if-present
       - name: Test
-        run: npm test --if-present -- --ci
+        run: npm test --if-present   # CI=true di-set runner; Jest & Vitest membacanya (vitest tidak menerima --ci)
       - name: Build
         run: npm run build
       - name: Audit (prod deps, high+)
