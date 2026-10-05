@@ -381,3 +381,77 @@ Dihapus: `--disable-authentication` (SEC-20), XFF dari 10/8 (SEC-21), MinIO metr
 2. **`docker compose config` prod**: `PAYMENT_PROVIDER:?` (`.env.example` mengisi mock), env list `${ACME_DNS_TOKEN_ENV:-CF_DNS_API_TOKEN}_FILE=...`, port `${EFN_PUBLIC_BIND}`.
 3. **Runtime PLAUSIBLE**: Traefik `serversTransports.certificates` + TLS option per Host pada entrypoint metrics; lego `CF_DNS_API_TOKEN_FILE`; RabbitMQ `prometheus.ssl.verify/fail_if_no_peer_cert` + definitions `queues` quorum (argumen harus identik dengan klien → kalau beda: PRECONDITION_FAILED); MinIO JWT metrik (`admin:Prometheus` untuk user non-root); `REDIS_EXPORTER_TLS_SERVER_CA_CERT_FILE`; Loki `client_auth_type`; Grafana `tlsClientCert` via `$__file{}`; nftables `ct original proto-dst` dan interaksi dengan iptables-nft Docker; Docker bind `10.88.0.1:443` (wg0 harus naik dulu); DNAT mempertahankan IP sumber peer (bila `userland-proxy` ikut campur, allowlist melihat IP gateway → 403 → set `"userland-proxy": false`).
 4. **Migrasi**: deploy pertama gelombang 5 menerbitkan ulang SEMUA leaf + recreate semua container; Superadmin harus mengunggah `EFN_PKI_*` dan vars `PAYMENT_PROVIDER`, `EFN_PUBLIC_BIND`, secret `ACME_DNS_API_TOKEN`, `ALTCHA_HMAC_KEY`, `RABBITMQ_PASSWORD_ETL`, `MINIO_PROMETHEUS_SECRET`, `PAYMENT_PROVIDER_API_KEY` (`disabled` bila mock) **sebelum** deploy; host butuh grup `efn-superadmin`, sudoers deploy, wg0 + drop-in docker.
+
+
+---
+
+# Gelombang 7 — runtime (6 Okt 2026, Docker Desktop 29.8.1 / WSL2)
+
+Pertama kali stack dijalankan nyata. Semua hasil di bawah **terverifikasi di runtime**, kecuali yang ditandai *belum*.
+
+## G7.1 Langkah CI infra (direplikasi persis di container)
+
+| Langkah | Status | Catatan |
+|---|---|---|
+| yamllint `infra .github` | **Lolos** (hanya warning line-length) | 2 syntax error diperbaiki: `name:` berisi `: ` tanpa kutip (`security.yml:94`, `ci.yml:226`) |
+| actionlint (rhysd/actionlint:latest) | **Lolos** | — |
+| shellcheck (persis ci.yml) | **Lolos** | SC2034 `deploy.sh` (`for _`), SC2115 `fetch-oca.sh` (`${TARGET:?}`) |
+| secrets compose == secrets.list | **Lolos setelah perbaikan** | Bug nyata: `compose config` membuang secret top-level yang tak dipakai service, sehingga `payment_provider_api_key` (hanya di-mount `docker-compose.payment.yml`) hilang. Langkah CI kini ikut `-f docker-compose.payment.yml`. Ratusan baris `-` di harness lead berasal dari escaping awk di harness itu, bukan bug repo. |
+| prod hanya publish Traefik | Lolos | — |
+| promtool (prometheus.yml, web-config*.yml) | Lolos | Diulang setelah perubahan prometheus.yml |
+| amtool | Lolos | — |
+| hadolint `--failure-threshold warning` | **Lolos** | DL3003 di `infra/backup/postgres/Dockerfile` (hapus `cd /tmp`, path absolut). `infra/minio/Dockerfile` baru juga lolos. |
+| derive self-test, check-encryption, cloudflare, grafana JSON | Lolos | — |
+| `docker compose config -q` dev & prod (semua profil) | Lolos | — |
+
+## G7.2 Status service
+
+| Profil | Service | Status | Catatan |
+|---|---|---|---|
+| core | postgres, redis, rabbitmq, minio, minio-init (exit 0), docker-socket-proxy(+tls), traefik, odoo(+tls, +ws-tls), api-gateway, superapp-web(+tls) | **healthy** | lihat perbaikan G7.3 |
+| data | clickhouse, clickhouse-init (exit 0), etl, metabase(+tls) | **healthy** | tabel `efn_dwh` ber-`storage_policy=encrypted` |
+| observability/ops | prometheus, loki, promtail, grafana, uptime-kuma, alertmanager, node-exporter, cadvisor(+tls), postgres-/redis-/blackbox-exporter | **Up**; yang punya healthcheck = healthy | 33/33 target Prometheus `up`; Loki menerima log 29 service |
+| ai | ollama, ocr-worker | *belum di-boot* | butuh pull model; alert `EfnOcrNoConsumer` dan probe `ollama:11434` wajar gagal |
+
+Alert yang aktif di dev dan memang diharapkan: `EfnPublicEndpointDown` (blackbox memakai CA publik sementara dev memakai sertifikat self-signed), `EfnBackupMetricMissing`, `EfnOcrNoConsumer`, probe ollama.
+
+## G7.3 Perbaikan (bug nyata yang ditemukan runtime)
+
+1. **Image MinIO hilang dari registry**: `minio/minio` & `minio/mc` tidak ada lagi di Docker Hub, dan quay.io meminta auth. Solusi: `infra/minio/Dockerfile` membangun **dari source tag upstream** (minio `RELEASE.2025-10-15T17-29-55Z`, yang memuat fix CVE-2025-62506; mc `RELEASE.2025-08-13T08-35-41Z`), non-root uid 1000, satu image untuk `minio` dan `minio-init`. Image ditambahkan ke `build-push.yml` (scan/SBOM/sign), `deploy.yml` (cosign verify digest), `deploy.sh` (`IMAGE_MINIO` wajib digest), `.env.example`. **Keputusan untuk lead/architect**: upstream community edition kini source-only dan dalam mode maintenance. Pilihannya: build sendiri (cara sekarang), fork komunitas (pgsty/minio), atau S3 lain (Garage/SeaweedFS). Pertimbangkan ADR.
+2. **CRLF di secret** (openssl Windows): `tr -d '\n'` menyisakan CR, sehingga postgres 00-roles menolak password dan init gagal di tengah jalan (volume tercatat sudah terinisialisasi, role tidak ada). Redis menolak password. Kini `gen-secrets.sh` memakai `tr -d '\r\n'` dan `gen-pki.sh` membuang CR dari serial. Secret turunan dihitung ulang.
+3. **Redis**: (a) `chmod` setelah `chown` ditolak (tanpa CAP_FOWNER), urutan dibalik. (b) **Crash-loop pada setiap restart dengan data**: entrypoint resmi menjalankan `find . ! -user redis -exec chown` sebagai root tanpa DAC_OVERRIDE (`appendonlydir: Permission denied`). Wrapper kini langsung `setpriv --reuid redis` dan tidak memakai entrypoint resmi. Sudah diuji dengan 2x restart. (c) ACL exporter `+latency|histogram`.
+4. **MinIO metrik**: policy `admin:Prometheus` dengan `Resource arn:minio:admin:::*` ditolak ("invalid resource"), sehingga user efn-prometheus gagal dibuat. Resource dihapus; target `minio` kini up.
+5. **Traefik v3.2 tidak bisa bicara dengan Docker Engine 29** (API minimum 1.44, provider docker "Error response from daemon"). Dinaikkan ke `traefik:v3.7.13`. `aliasHeadersStrategy: delete` ditambahkan di semua entrypoint (peringatan keamanan v3.7: spoof header alias seperti `X_Forwarded_For`).
+6. **TLS publik dev gagal total**: `sniStrict: true` + tidak ada sertifikat untuk `*.efn.local` (ACME tidak bisa), sehingga handshake ditolak ("unrecognized name"). Perbaikan: sertifikat edge **dev-only** self-signed (`gen-secrets.sh`, `secrets/dev_edge_*.txt`, terpisah dari CA internal) + `infra/traefik/dev/edge-dev.yml`, di-mount oleh dev override. Mount dynamic base dipindah ke `/etc/traefik/dynamic/base`; provider file membaca subdirektori secara rekursif. Prod tidak berubah perilakunya.
+7. **RabbitMQ :15692 plaintext terbuka di network** (listener TCP default plugin prometheus, tidak bisa dimatikan lewat conf). Kini diikat ke `127.0.0.1`.
+8. **mTLS Prometheus → RabbitMQ :15691 gagal** ("internal error"). Erlang/OTP `public_key` crash (`function_clause` di `pubkey_cert:match_name(iPAddress, ...)`) saat sertifikat klien punya SAN IP dan intermediate punya nameConstraints IP. Direproduksi di OTP RabbitMQ 3.13 **dan** 4.1. Perbaikan: `gen-pki.sh` `NO_IP_SAN_SERVICES=" prometheus "` (leaf prometheus tanpa SAN IP, terbit ulang otomatis). Perhatian: klien mTLS baru ke server Erlang harus masuk daftar ini.
+9. **Alertmanager**: `--web.external-url=.../alertmanager` memindahkan semua route, sehingga scrape **dan pengiriman alert** Prometheus mendapat 404. Perbaikan: `path_prefix: /alertmanager` + `metrics_path`.
+10. **Target api-gateway hilang**: DNS Docker mengembalikan IP network `data` (172.30.2.x), lalu relabel `172.30.1.x` membuangnya. Kini `api-gateway.efn_internal` / `ocr-worker.efn_internal`.
+11. **Promtail**: `tcp://` menyebabkan klien docker memakai HTTP polos ke port mTLS (koneksi putus/EOF). Diganti `https://`. Discovery & push Loki jalan. Sisa: peringatan berkala `could not transfer logs ... request canceled` (stream log terputus timeout lalu tersambung ulang). Log tetap masuk, tapi perlu dipantau.
+12. **ClickHouse**: disk `encrypted` di atas `default` ditolak oleh 24.8 ("wrapped disk must have been announced earlier"). Kini memakai disk lokal eksplisit `disk_local` (`/var/lib/clickhouse/disks/local/`). Volume prod lama (bila ada) perlu migrasi; untuk dev volume baru.
+13. **BFF dev OOM** (`nest start --watch`, heap ~250 MB): dev override `NODE_OPTIONS=--max-old-space-size=1024`, limit 1536M.
+14. **node-exporter** di Docker Desktop: `rslave` ditolak. Dev override `/:/host:ro`. Prod tetap rslave.
+
+## G7.4 Bukti enkripsi / kontrol akses (runtime)
+
+- Traefik publik: TLSv1.3 (`TLS_AES_128_GCM_SHA256`). `https://api.efn.local/health` 200, `app.efn.local` 200, HTTP 80 → 301 https. HSTS/CSP terpasang. `/metrics` & `/v1/pos/*` di api publik 404. `erp.` di 443 publik 404. Di wg-https :9443: `/web/login` 200 (setelah init DB), `/web/database/manager` 404, `/jsonrpc` & `/xmlrpc` 403.
+- PostgreSQL: `sslmode=disable` → `pg_hba rejects ... no encryption`. Superuser via TCP+TLS ditolak. `pg_stat_ssl`: efn_bff, efn_odoo, efn_metabase semuanya `ssl=t TLSv1.3`.
+- Redis: plaintext → connection reset. TLS + ACL efn-bff → PONG. User default tanpa auth ditolak. BFF tersambung sebagai `efn-bff`.
+- RabbitMQ: hanya 5671/15671/15691 di network (5672, 15672, 25672, 4369 tertutup, dan 15692 kini loopback). Handshake AMQP plaintext dibalas alert TLS. `list_connections`: efn-bff `ssl=true tlsv1.3`. BFF reconnect otomatis setelah broker restart.
+- MinIO: HTTP → 400. HTTPS verify CA → 200. BFF→MinIO TLS terverifikasi (`authorized=true`, TLSv1.3, CN minio). Policy efn-bff: Put `reports/*` OK, Get & Put di luar prefix ditolak. Objek SSE-S3. WAL-G archive ke MinIO berjalan (`pg_stat_archiver` archived 3; 4 gagal awal sebelum MinIO siap).
+- mTLS sidecar: odoo-tls tanpa sertifikat klien / CN api-gateway → ditolak; CN traefik → 200. BFF :9464 tanpa sertifikat → ditolak. docker-socket-proxy tanpa sertifikat → `certificate required`. Port plaintext 8069/3001 tidak terjangkau dari network.
+- ClickHouse: hanya 8443/9440 (TLS) yang listen.
+
+## G7.5 File yang diubah
+
+`.github/workflows/{ci,security,build-push,deploy}.yml`; `scripts/{deploy,fetch-oca,gen-secrets,gen-pki}.sh`; `infra/compose/{docker-compose.yml,docker-compose.dev.yml,.env.example}` (+ `.env` lokal, di-ignore); `infra/minio/Dockerfile` (baru), `infra/minio/minio-init.sh`; `infra/redis/redis-entrypoint.sh`; `infra/rabbitmq/rabbitmq.conf`; `infra/traefik/traefik.yml`, `infra/traefik/dev/edge-dev.yml` (baru); `infra/observability/{prometheus,promtail}.yml`; `infra/clickhouse/config.d/encrypted-storage.xml`; `infra/backup/postgres/Dockerfile`; `docs/runbooks/dev-stack-boot.md` (baru). Tidak ada perubahan di `services/**`.
+
+## G7.6 Sisa / butuh agent lain
+
+- **Lead/architect**: keputusan sumber image MinIO (G7.3 no. 1, perlu ADR); Traefik naik minor v3.2 → v3.7 (cek catatan migrasi v3.3–v3.7 terhadap middleware yang ada; peringatan `encodedCharacters` belum ditindaklanjuti); update docs/04 §7 (subjek tanpa SAN IP untuk klien Erlang).
+- **efn-bff-engineer**: image dev (`target: dev`) berjalan sebagai **root** (stage dev tanpa `USER`); prod runtime non-root. Peringatan `EBADENGINE` (paket butuh Node ≥ 22.13, image 22.12): pertimbangkan bump `node:22.x-alpine`.
+- **efn-odoo-engineer/functional**: DB `efn_odoo` hanya diinit `base` (runbook §3). Pemasangan modul efn_* belum diuji di stack ini.
+- **efn-data-ai-engineer**: profil `ai` belum di-boot.
+- *Belum*: restore-test.sh, backup base (`efn-walg backup-push`), deploy prod overlay, workflow GitHub di runner nyata.
+
+Volume dev `efn_*` **dipertahankan** setelah `down` (pg-data sudah berisi `efn_odoo` ter-init base, plus MinIO, ClickHouse, dan lain-lain), sehingga run berikutnya tidak perlu init ulang. Reset: `down -v`.

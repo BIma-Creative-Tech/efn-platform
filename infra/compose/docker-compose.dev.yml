@@ -11,6 +11,10 @@ services:
     environment:
       # Browser laptop -> port publish -> Traefik terlihat dari bridge Docker Desktop (bukan WireGuard)
       - EFN_INTERNAL_EXTRA_CIDR=172.16.0.0/12
+    # Sertifikat edge dev self-signed *.efn.local (scripts/gen-secrets.sh): sniStrict butuh sertifikat yang cocok.
+    volumes:
+      - ../traefik/dev:/etc/traefik/dynamic/dev:ro
+    secrets: [dev_edge_crt, dev_edge_key]   # digabung dengan daftar secret base
 
   # `command` menggantikan base seluruhnya: parameter archive WAL-G, TLS, hba_file, SEC-18 tetap disertakan.
   # Set PG_ARCHIVE_MODE=off di .env bila tidak ingin archiving di laptop.
@@ -59,7 +63,11 @@ services:
     ports: ["127.0.0.1:5671:5671", "127.0.0.1:15671:15671"]   # amqps, management https
 
   minio:
+    image: efn/minio:dev
     ports: ["127.0.0.1:9000:9000", "127.0.0.1:9001:9001"]     # https (API, console)
+
+  minio-init:
+    image: efn/minio:dev
 
   odoo:
     image: efn/odoo:dev
@@ -78,6 +86,8 @@ services:
     environment:
       NODE_ENV: development
       APP_ENV: dev
+      # `nest start --watch` (tsc) butuh heap > default ~250 MB -> OOM pada limit 512M base (gelombang 7)
+      NODE_OPTIONS: --max-old-space-size=1024
       WHATSAPP_ENABLED: "false"
       PAYMENT_PROVIDER: mock
       # Teks consent DRAFT frontend (services/superapp-web/lib/consent.ts): versi persis + SHA-256 UTF-8 `body`.
@@ -90,6 +100,9 @@ services:
       - ../../services/api-gateway/src:/app/src:ro
     read_only: false
     command: ["npm", "run", "start:dev"]
+    deploy:
+      resources:
+        limits: { memory: 1536M }
 
   # Stage dev image: `next dev -H ${HOSTNAME}` -> 127.0.0.1 (base env), diakses lewat sidecar :3443
   superapp-web:
@@ -127,3 +140,14 @@ services:
     image: efn/ai-ocr-worker:dev
     environment:
       APP_ENV: dev
+
+  # Docker Desktop (WSL2): "/" bukan shared/slave mount -> propagasi rslave ditolak daemon. Target sama = mengganti
+  # entri base (/:/host:ro,rslave). Produksi (Linux) tetap rslave.
+  node-exporter:
+    volumes:
+      - /:/host:ro
+
+# Dev saja (bukan bagian scripts/secrets.list / produksi): sertifikat edge self-signed dari scripts/gen-secrets.sh
+secrets:
+  dev_edge_crt: { file: ../../secrets/dev_edge_crt.txt }
+  dev_edge_key: { file: ../../secrets/dev_edge_key.txt }

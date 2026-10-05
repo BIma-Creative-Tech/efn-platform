@@ -11,7 +11,7 @@
 #              /opt/efn/secrets (TIDAK disinkronkan; root:efn-superadmin 0750).
 # Env wajib : TRAEFIK_DOMAIN ACME_EMAIL GHCR_USER GHCR_TOKEN COMPOSE_PROFILES APP_ENV PAYMENT_PROVIDER
 #             EFN_PUBLIC_BIND (IP publik host untuk 80/443 websecure)
-#             IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL
+#             IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_MINIO
 #               (= <registry>/<svc>@sha256:<digest> hasil `cosign verify` di workflow; SEC-10: deploy by digest)
 #             EFN_PKI_INTERMEDIATE_KEY EFN_PKI_INTERMEDIATE_CRT EFN_PKI_ROOT_CRT (PKI 3 tingkat, ADR-022 W1)
 #             + satu env UPPERCASE per baris scripts/secrets.list yang BUKAN `pki`/`derived:*`
@@ -43,7 +43,7 @@ die() { echo "deploy: $*" >&2; exit 1; }
 [[ -z "${PKI_SOURCE:-}" || "${PKI_SOURCE}" == "intermediate" ]] \
   || die "PKI_SOURCE=${PKI_SOURCE} sudah dihapus (SEC-23); leaf selalu diterbitkan dari intermediate"
 DIGEST_RE='^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$'
-for v in IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL; do
+for v in IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_MINIO; do
   [[ "${!v:-}" =~ $DIGEST_RE ]] || die "$v harus <registry>/<image>@sha256:<64 hex> (dapat: '${!v:-}')"
 done
 [[ "${TRAEFIK_DOMAIN:-}" =~ ^[a-z0-9.-]+$ ]] || die "TRAEFIK_DOMAIN tidak valid"
@@ -206,6 +206,7 @@ IMAGE_API_GATEWAY=${IMAGE_API_GATEWAY}
 IMAGE_SUPERAPP_WEB=${IMAGE_SUPERAPP_WEB}
 IMAGE_AI_OCR_WORKER=${IMAGE_AI_OCR_WORKER}
 IMAGE_ETL=${IMAGE_ETL}
+IMAGE_MINIO=${IMAGE_MINIO}
 APP_ENV=${APP_ENV}
 NODE_ENV=production
 PG_SUPERUSER=${PG_SUPERUSER:-postgres}
@@ -278,8 +279,8 @@ echo "==> Pull image (by digest, hasil cosign verify)"
 
 wait_healthy() {
   # $1 = service (opsional: kosong = semua)
-  local i unhealthy starting
-  for i in $(seq 1 36); do
+  local unhealthy starting
+  for _ in $(seq 1 36); do
     unhealthy=$("${DC[@]}" ps --format json "$@" | jq -r '(if type=="array" then .[] else . end) | select(.Health=="unhealthy") | .Service' | tr '\n' ' ')
     starting=$("${DC[@]}" ps --format json "$@" | jq -r '(if type=="array" then .[] else . end) | select(.Health=="starting") | .Service' | tr '\n' ' ')
     if [[ -z "${unhealthy// }" && -z "${starting// }" ]]; then return 0; fi

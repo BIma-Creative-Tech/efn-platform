@@ -223,7 +223,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Fetch OCA addons (sama dengan build image)
         run: bash scripts/fetch-oca.sh services/odoo/oca
-      - name: Build image Odoo dari services/odoo/Dockerfile (BuildKit: COPY --chmod)
+      - name: "Build image Odoo dari services/odoo/Dockerfile (BuildKit: COPY --chmod)"
         env:
           DOCKER_BUILDKIT: "1"
         run: docker build -t efn-odoo:ci services/odoo
@@ -353,8 +353,10 @@ jobs:
           [ "$published" = "traefik" ] || { echo "::error::port publish selain traefik: $published"; exit 1; }
       - name: Setiap secret yang direferensikan service didefinisikan & ada di secrets.list
         working-directory: infra/compose
+        # docker compose config membuang secret top-level yang tak direferensikan service; payment_provider_api_key
+        # hanya di-mount oleh docker-compose.payment.yml -> overlay itu wajib ikut agar perbandingan lengkap.
         run: |
-          cfg=$(docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+          cfg=$(docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.payment.yml \
             --profile core --profile data --profile ai --profile observability --profile ops config --format json)
           defined=$(echo "$cfg" | jq -r '.secrets | keys[]' | sort)
           listed=$(awk '!/^[[:space:]]*#/ && NF {print $1}' ../../scripts/secrets.list | sort)

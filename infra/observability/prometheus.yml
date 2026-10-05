@@ -15,7 +15,9 @@ rule_files:
 
 alerting:
   alertmanagers:
+    # Alertmanager --web.external-url=.../alertmanager -> semua route di bawah /alertmanager (tanpa ini POST alert 404, gel. 7)
     - scheme: https
+      path_prefix: /alertmanager
       tls_config:
         ca_file: /run/secrets/efn_ca_crt
         cert_file: /run/secrets/tls_server_crt
@@ -35,6 +37,7 @@ scrape_configs:
       - targets: ["localhost:9090"]
 
   - job_name: alertmanager
+    metrics_path: /alertmanager/metrics
     scheme: https
     tls_config:
       ca_file: /run/secrets/efn_ca_crt
@@ -68,7 +71,9 @@ scrape_configs:
       key_file: /run/secrets/tls_server_key
       server_name: api-gateway
     dns_sd_configs:
-      - names: ["api-gateway"]
+      # <service>.<network>: DNS Docker mengembalikan IP di network itu (tanpa sufiks -> IP network `data`
+      # 172.30.2.x yang dibuang relabel di bawah -> target hilang; gelombang 7)
+      - names: ["api-gateway.efn_internal"]
         type: A
         port: 9464
     relabel_configs:
@@ -86,7 +91,7 @@ scrape_configs:
       key_file: /run/secrets/tls_server_key
       server_name: ocr-worker
     dns_sd_configs:
-      - names: ["ocr-worker"]
+      - names: ["ocr-worker.efn_internal"]   # lihat job api-gateway
         type: A
         port: 9100
     relabel_configs:

@@ -143,11 +143,12 @@ mc admin policy attach efn efn-ocr-market-scout --user "${OCR_USER}" > /dev/null
 # Metrik Prometheus (SEC-20/SEC-30): user khusus dengan aksi admin:Prometheus saja; token JWT HS512 diturunkan
 # scripts/derive-secrets.sh dari minio_prometheus_secret (setara `mc admin prometheus generate`). Kegagalan di
 # sini TIDAK menggagalkan deploy (hanya metrik MinIO yang hilang -> EfnServiceDown job minio).
+# Aksi admin:* TANPA "Resource" (MinIO menolak arn:minio:admin:::* -> "invalid resource", diuji gelombang 7).
 cat > /tmp/prom-policy.json <<EOF
 {
   "Version": "2012-10-17",
   "Statement": [
-    {"Effect": "Allow", "Action": ["admin:Prometheus"], "Resource": ["arn:minio:admin:::*"]}
+    {"Effect": "Allow", "Action": ["admin:Prometheus"]}
   ]
 }
 EOF

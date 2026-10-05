@@ -72,6 +72,12 @@ PKI_SERVICES=(
   "docker-socket-proxy|server"
 )
 
+# Service TANPA SAN IP 127.0.0.1 (gelombang 7). Erlang/OTP public_key (RabbitMQ 3.13/OTP 26, juga 4.1/OTP 27)
+# crash (function_clause di pubkey_cert:match_name iPAddress) saat memvalidasi sertifikat KLIEN yang punya SAN IP
+# terhadap nameConstraints IP intermediate -> handshake mTLS ke rabbitmq:15691 gagal ("internal error").
+# Prometheus = satu-satunya klien mTLS ke server Erlang; ia tidak butuh SAN IP (scrape diri via DNS localhost).
+NO_IP_SAN_SERVICES=" prometheus "
+
 die() { echo "gen-pki: $*" >&2; exit 1; }
 command -v openssl > /dev/null || die "openssl tidak ditemukan"
 
@@ -149,7 +155,7 @@ EOF
   ( umask 077; openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "${odir}/intermediate.key" )
   openssl req -new -key "${odir}/intermediate.key" -config "${WORK}/int.cnf" -out "${WORK}/int.csr"
   ( umask 022; openssl x509 -req -in "${WORK}/int.csr" -CA "${rdir}/root.crt" -CAkey "${rdir}/root.key" \
-      -set_serial "0x$(openssl rand -hex 16)" -days "$INTERMEDIATE_DAYS" -sha256 \
+      -set_serial "0x$(openssl rand -hex 16 | tr -d '\r')" -days "$INTERMEDIATE_DAYS" -sha256 \
       -extfile "${WORK}/int.cnf" -extensions v3_int -out "${odir}/intermediate.crt" )
   cat "${odir}/intermediate.crt" "${rdir}/root.crt" > "${odir}/efn_ca_crt.txt"
   cp "${rdir}/root.crt" "${odir}/root.crt"
@@ -201,7 +207,10 @@ issue_leaf() {
   crt="${SECRETS_DIR}/${name}_crt.txt"
   key="${SECRETS_DIR}/${name}_key.txt"
 
-  if [[ "$FORCE" != "1" ]] && leaf_ok "$crt" "$key" "$profile"; then
+  local want_ip=1 has_ip=0
+  [[ "$NO_IP_SAN_SERVICES" == *" ${svc} "* ]] && want_ip=0
+  [[ -s "$crt" ]] && openssl x509 -in "$crt" -noout -ext subjectAltName 2> /dev/null | grep -q 'IP Address' && has_ip=1
+  if [[ "$FORCE" != "1" && "$want_ip" == "$has_ip" ]] && leaf_ok "$crt" "$key" "$profile"; then
     echo "ada    : ${name}"
     return 0
   fi
@@ -230,7 +239,7 @@ issue_leaf() {
       IFS=',' read -r -a extra <<< "$aliases"
       for a in "${extra[@]}"; do echo "DNS.${i} = ${a}"; i=$((i + 1)); done
     fi
-    echo "IP.1 = 127.0.0.1"
+    if [[ "$want_ip" == "1" ]]; then echo "IP.1 = 127.0.0.1"; fi
   } > "${WORK}/${name}.cnf"
 
   # Kunci PKCS#8 ECDSA P-256 (didukung PostgreSQL, Redis, Erlang, Go, Node, Poco/ClickHouse)
@@ -238,7 +247,7 @@ issue_leaf() {
     openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "${WORK}/${name}.key"
     openssl req -new -key "${WORK}/${name}.key" -config "${WORK}/${name}.cnf" -out "${WORK}/${name}.csr"
     openssl x509 -req -in "${WORK}/${name}.csr" -CA "$INT_CRT" -CAkey "$INT_KEY" \
-      -set_serial "0x$(openssl rand -hex 16)" -days "$LEAF_DAYS" -sha256 \
+      -set_serial "0x$(openssl rand -hex 16 | tr -d '\r')" -days "$LEAF_DAYS" -sha256 \
       -extfile "${WORK}/${name}.cnf" -extensions v3_leaf -out "${WORK}/${name}.crt" 2> /dev/null
   )
   # Rantai lengkap harus valid terhadap bundle (memeriksa nameConstraints intermediate juga)
@@ -249,7 +258,7 @@ issue_leaf() {
   install -m "${SECRET_FILE_MODE:-0644}" "${WORK}/${name}.crt" "$crt"
   install -m "${SECRET_FILE_MODE:-0644}" "${WORK}/${name}.key" "$key"
   printf '%s\n%s\n' "${name}_crt" "${name}_key" >> "${SECRETS_DIR}/.pki-renewed"
-  echo "dibuat : ${name} (${profile}; SAN ${svc}, localhost, efn-${svc}-1${aliases:+, ${aliases}}, 127.0.0.1; ${LEAF_DAYS} hari)"
+  echo "dibuat : ${name} (${profile}; SAN ${svc}, localhost, efn-${svc}-1${aliases:+, ${aliases}}$([[ "$want_ip" == "1" ]] && echo ", 127.0.0.1"); ${LEAF_DAYS} hari)"
 }
 
 cmd_leaf() {

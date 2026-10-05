@@ -19,13 +19,12 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends ca-certificates curl libsodium23; \
     asset="wal-g-pg-22.04-amd64"; \
     base="https://github.com/wal-g/wal-g/releases/download/${WALG_VERSION}"; \
-    cd /tmp; \
-    curl -fsSLo "${asset}" "${base}/${asset}"; \
-    curl -fsSLo "${asset}.sha256" "${base}/${asset}.sha256"; \
-    echo "$(cut -d' ' -f1 "${asset}.sha256")  ${asset}" | sha256sum -c -; \
-    if [ -n "${WALG_SHA256}" ]; then echo "${WALG_SHA256}  ${asset}" | sha256sum -c -; fi; \
-    install -m 0755 "${asset}" /usr/local/bin/wal-g; \
-    rm -f "${asset}" "${asset}.sha256"; \
+    curl -fsSLo "/tmp/${asset}" "${base}/${asset}"; \
+    curl -fsSLo "/tmp/${asset}.sha256" "${base}/${asset}.sha256"; \
+    echo "$(cut -d' ' -f1 "/tmp/${asset}.sha256")  /tmp/${asset}" | sha256sum -c -; \
+    if [ -n "${WALG_SHA256}" ]; then echo "${WALG_SHA256}  /tmp/${asset}" | sha256sum -c -; fi; \
+    install -m 0755 "/tmp/${asset}" /usr/local/bin/wal-g; \
+    rm -f "/tmp/${asset}" "/tmp/${asset}.sha256"; \
     apt-get purge -y --auto-remove curl; \
     rm -rf /var/lib/apt/lists/*; \
     wal-g --version

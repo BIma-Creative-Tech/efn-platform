@@ -32,9 +32,12 @@ entryPoints:
     address: "127.0.0.1:8081"
   metrics:
     address: ":8082"
+    http:
+      aliasHeadersStrategy: delete
   web:
     address: ":80"
     http:
+      aliasHeadersStrategy: delete   # header alias (X_Forwarded_For dsb.) dibuang; Traefik >= v3.7 (gel. 7)
       redirections:
         entryPoint:
           to: websecure
@@ -43,6 +46,7 @@ entryPoints:
   websecure:
     address: ":443"
     http:
+      aliasHeadersStrategy: delete   # header alias (X_Forwarded_For dsb.) dibuang; Traefik >= v3.7 (gel. 7)
       tls: {}
       middlewares:
         - secure-headers@file
@@ -83,6 +87,7 @@ entryPoints:
   wg-https:
     address: ":8443"
     http:
+      aliasHeadersStrategy: delete   # header alias (X_Forwarded_For dsb.) dibuang; Traefik >= v3.7 (gel. 7)
       tls: {}
       middlewares:
         - secure-headers@file

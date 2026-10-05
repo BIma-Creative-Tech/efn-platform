@@ -21,7 +21,9 @@ scrape_configs:
   - job_name: docker
     docker_sd_configs:
       # docker-socket-proxy (read-only) lewat sidecar ghostunnel mTLS :2376
-      - host: tcp://docker-socket-proxy:2376
+      # https:// (bukan tcp://): klien docker di promtail memakai scheme dari URL -> tcp:// = HTTP polos ke port mTLS
+      # (EOF, gelombang 7). Traefik memakai klien sendiri sehingga tcp:// + tls tetap benar di traefik.yml.
+      - host: https://docker-socket-proxy:2376
         refresh_interval: 15s
         tls_config:
           ca_file: /run/secrets/efn_ca_crt

@@ -33,7 +33,7 @@ for repo in "${!MODULES[@]}"; do
   # shellcheck disable=SC2086  # daftar modul dipisah spasi, sengaja di-split
   for m in ${MODULES[$repo]}; do
     if [[ -d "$TMP/$repo/$m" ]]; then
-      rm -rf "$TARGET/$m" && cp -r "$TMP/$repo/$m" "$TARGET/$m"
+      rm -rf "${TARGET:?}/$m" && cp -r "$TMP/$repo/$m" "$TARGET/$m"
       echo "ok  $repo/$m ($branch)"
     else
       echo "MISSING $repo/$m di branch $branch"

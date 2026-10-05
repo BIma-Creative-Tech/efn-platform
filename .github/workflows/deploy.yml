@@ -102,7 +102,7 @@ jobs:
           set -euo pipefail
           owner="${OWNER,,}"
           identity="https://github.com/${REPO}/.github/workflows/build-push.yml@${SIGNER_REF}"
-          for svc in postgres odoo api-gateway superapp-web ai-ocr-worker etl; do
+          for svc in postgres odoo api-gateway superapp-web ai-ocr-worker etl minio; do
             ref="ghcr.io/${owner}/${svc}:${TAG}"
             digest=$(cosign verify \
                 --certificate-identity "$identity" \
@@ -196,6 +196,7 @@ jobs:
           IMAGE_SUPERAPP_WEB: ${{ steps.digests.outputs.IMAGE_SUPERAPP_WEB }}
           IMAGE_AI_OCR_WORKER: ${{ steps.digests.outputs.IMAGE_AI_OCR_WORKER }}
           IMAGE_ETL: ${{ steps.digests.outputs.IMAGE_ETL }}
+          IMAGE_MINIO: ${{ steps.digests.outputs.IMAGE_MINIO }}
         run: |
           set -euo pipefail
           [ "$APP_ENV" = "staging" ] || APP_ENV=production
@@ -207,7 +208,7 @@ jobs:
                 CONSENT_LOCATION_VERSION CONSENT_LOCATION_TEXT_SHA256 CONSENT_MARKETING_VERSION
                 CONSENT_MARKETING_TEXT_SHA256 DSAR_DELETE_GRACE_DAYS
                 EFN_PKI_INTERMEDIATE_KEY EFN_PKI_INTERMEDIATE_CRT EFN_PKI_ROOT_CRT EFN_PKI_EXTRA_TRUST
-                IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL)
+                IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_MINIO)
           {
             for v in "${vars[@]}"; do
               printf 'export %s=%q\n' "$v" "${!v}"

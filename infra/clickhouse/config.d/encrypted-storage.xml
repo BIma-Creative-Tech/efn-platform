@@ -1,6 +1,6 @@
 <!--
   Enkripsi at rest data mart (docs/04 §7.2). Disk `encrypted` (tersedia sejak ClickHouse 21.x, didukung 24.8):
-  data part MergeTree dienkripsi AES-256-CTR sebelum ditulis ke disk `default` (/var/lib/clickhouse/encrypted/).
+  data part MergeTree dienkripsi AES-256-CTR sebelum ditulis ke disk `disk_local` (/var/lib/clickhouse/disks/local/encrypted/).
   Kunci: 32 byte = 64 karakter hex, dari secret `clickhouse_disk_key`. ClickHouse membaca kunci dari env
   (atribut from_env); entrypoint compose mengekspor:
       export CLICKHOUSE_DISK_KEY_HEX="$(cat /run/secrets/clickhouse_disk_key)"
@@ -17,9 +17,15 @@
 <clickhouse>
     <storage_configuration>
         <disks>
+            <!-- Disk lokal eksplisit: disk `default` implisit belum terdaftar saat disk encrypted di-parse
+                 ("The wrapped disk must have been announced earlier. No disk with name default", 24.8, gel. 7). -->
+            <disk_local>
+                <type>local</type>
+                <path>/var/lib/clickhouse/disks/local/</path>
+            </disk_local>
             <encrypted_default>
                 <type>encrypted</type>
-                <disk>default</disk>
+                <disk>disk_local</disk>
                 <path>encrypted/</path>
                 <algorithm>AES_256_CTR</algorithm>
                 <key_hex id="0" from_env="CLICKHOUSE_DISK_KEY_HEX"/>

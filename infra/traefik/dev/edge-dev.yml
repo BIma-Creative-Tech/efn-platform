@@ -1,0 +1,8 @@
+# HANYA dev (di-mount oleh infra/compose/docker-compose.dev.yml ke /etc/traefik/dynamic/dev). Gelombang 7.
+# tls.options.default memakai sniStrict: true -> tanpa sertifikat yang cocok dengan SNI, handshake ditolak
+# ("unrecognized name"). ACME tidak bisa menerbitkan untuk *.efn.local, maka dev memakai sertifikat edge self-signed
+# dari scripts/gen-secrets.sh (secrets/dev_edge_*.txt). Produksi: sertifikat ACME, file ini tidak di-mount.
+tls:
+  certificates:
+    - certFile: /run/secrets/dev_edge_crt
+      keyFile: /run/secrets/dev_edge_key
