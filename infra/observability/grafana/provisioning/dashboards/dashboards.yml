@@ -1,0 +1,10 @@
+apiVersion: 1
+providers:
+  - name: efn
+    folder: EFN
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 60
+    options:
+      path: /etc/grafana/provisioning/dashboards/json

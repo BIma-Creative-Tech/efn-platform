@@ -1,0 +1,49 @@
+#!/usr/sbin/nft -f
+# Firewall hub WireGuard EFN (SEC-28, ADR-023 butir 3). Dipasang ke /etc/efn/efn-wg.nft, dimuat oleh
+# PostUp wg0 (`nft -f`). Idempoten & atomik (tabel dibuat ulang dalam satu transaksi).
+#
+# Hubungan dengan Docker: Docker (iptables-nft) memasang tabel `ip filter`/`ip nat` sendiri. Tabel ini terpisah;
+# di nftables `drop` pada base chain mana pun bersifat final, sedangkan `accept` di sini TIDAK melewati aturan
+# Docker. Lalu lintas peer ke Traefik wg-https (10.88.0.1:443) di-DNAT Docker ke container -> melewati hook
+# FORWARD (bukan INPUT), sehingga aturan utamanya di chain forward. ip_forward tetap 1 (dibutuhkan Docker).
+#
+# Sesuaikan define di bawah bila alokasi berubah (harus sama dengan EFN_WG_* di deploy).
+define WG_IF = "wg0"
+define WG_IP = 10.88.0.1
+define WG_HTTPS_PORT = 443
+define STAFF_IT_NET = 10.89.0.0/24
+
+table inet efn_wg
+delete table inet efn_wg
+
+table inet efn_wg {
+  # Lalu lintas dari peer yang ditujukan ke proses di host (bukan container)
+  chain input {
+    type filter hook input priority filter - 10; policy accept;
+    iifname != $WG_IF return
+    ct state established,related accept
+    ct state invalid drop
+    icmp type echo-request limit rate 5/second accept
+    # Resolver split DNS di hub (dnsmasq/unbound bind 10.88.0.1) - opsional
+    ip daddr $WG_IP udp dport 53 accept
+    ip daddr $WG_IP tcp dport 53 accept
+    # SSH hanya dari subnet staf IT (bukan outlet, bukan staf umum)
+    ip saddr $STAFF_IT_NET ip daddr $WG_IP tcp dport 22 accept
+    counter drop
+  }
+
+  # Lalu lintas yang diteruskan (peer <-> container / peer <-> peer / peer -> internet)
+  chain forward {
+    type filter hook forward priority filter - 10; policy accept;
+    # Antar-peer (outlet <-> outlet, outlet <-> staf): tidak pernah
+    iifname $WG_IF oifname $WG_IF counter drop
+    # Balasan ke peer boleh; koneksi BARU dari container/host ke peer tidak
+    oifname $WG_IF ct state established,related accept
+    oifname $WG_IF counter drop
+    iifname $WG_IF ct state established,related accept
+    # Satu-satunya tujuan baru: Traefik entrypoint wg-https (published port Docker pada WG_IP)
+    iifname $WG_IF ct status dnat ct original ip daddr $WG_IP ct original proto-dst $WG_HTTPS_PORT accept
+    # Sisanya (DB, port dev, container lain, node lain, internet lewat hub): drop
+    iifname $WG_IF counter drop
+  }
+}

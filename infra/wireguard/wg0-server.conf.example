@@ -1,0 +1,39 @@
+# WireGuard hub (node edge EFN, yang menjalankan Traefik) - CONTOH, tanpa kunci nyata. ADR-023, docs/04 §7.4,
+# runbook docs/runbooks/wireguard-outlet.md. Salin ke /etc/wireguard/wg0.conf di host (mode 0600, root).
+#
+# Pembagian alamat (ADR-023 butir 3; HARUS sama dengan EFN_WG_OUTLET_CIDR / EFN_WG_STAFF_CIDR di deploy):
+#   10.88.0.1           hub (IP ini = EFN_WG_BIND: Traefik entrypoint wg-https :443 + resolver split DNS :53)
+#   10.88.0.0/16        OUTLET  (router outlet / perangkat POS). Satu /32 per peer, mulai 10.88.1.1.
+#                       -> hanya erp. (Odoo/POS). Middleware Traefik `internal-only`.
+#   10.89.0.0/16        STAF back-office/IT/manajemen (laptop). 10.89.0.0/24 = staf IT (boleh SSH ke hub).
+#                       -> erp. + bi. + ops. + status. Middleware `internal-ops` (bi./ops./status.).
+# Subnet outlet & staf tidak tumpang tindih -> LAN outlet (termasuk Wi-Fi tamu yang salah VLAN) tidak pernah
+# mendapat akses dashboard (SEC-21).
+#
+# Kunci privat hub dibuat SEKALI di host:  umask 077; wg genkey | tee /etc/wireguard/server.key | wg pubkey > /etc/wireguard/server.pub
+# Peer menambahkan dirinya dengan kunci yang DIBUAT DI PERANGKAT (gen-peer.sh --pubkey, ADR-023 butir 5).
+#
+# Urutan boot: wg0 harus aktif SEBELUM docker (Docker mem-bind 10.88.0.1:443). Drop-in:
+#   /etc/systemd/system/docker.service.d/10-efn-wg.conf:
+#     [Unit]
+#     Wants=wg-quick@wg0.service
+#     After=wg-quick@wg0.service
+
+[Interface]
+Address = 10.88.0.1/16, 10.89.0.1/16
+ListenPort = 51820
+PrivateKey = <ISI_DARI_/etc/wireguard/server.key>
+# SEC-28: isolasi peer DIKODEKAN di nftables (infra/wireguard/efn-wg.nft -> /etc/efn/efn-wg.nft):
+#   peer -> hanya 10.88.0.1:443 (Traefik wg-https, lewat DNAT Docker) dan :53 (DNS); SSH hanya dari 10.89.0.0/24;
+#   peer -> peer, peer -> container lain, peer -> internet = DROP.
+# JANGAN set net.ipv4.ip_forward=0: Docker membutuhkan ip_forward=1 (published port & network container).
+# Isolasi dilakukan di hook forward/input nftables, bukan dengan mematikan forwarding.
+PostUp = nft -f /etc/efn/efn-wg.nft
+PostDown = nft delete table inet efn_wg
+
+# ── Peer contoh (blok dicetak gen-peer.sh; satu blok per router outlet / perangkat / laptop staf) ──
+# [Peer]
+# # outlet: FNB-JKT-001 (router OpenWrt), dibuat 2026-10-05 oleh <ops>, kunci dibuat di perangkat
+# PublicKey = <PUBKEY_PEER>
+# PresharedKey = <PSK_PEER>
+# AllowedIPs = 10.88.1.1/32

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- Multi-company: intent hanya terlihat di company yang aktif. -->
+    <record id="efn_pos_payment_intent_rule_company" model="ir.rule">
+        <field name="name">EFN POS payment intent: multi-company</field>
+        <field name="model_id" ref="model_efn_pos_payment_intent"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+</odoo>

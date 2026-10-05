@@ -1,0 +1,46 @@
+apiVersion: 1
+# Semua datasource lewat HTTPS dengan CA internal (docs/04 §7.1) + sertifikat klien `grafana` (mTLS, docs/04 §8.5):
+# Prometheus/Alertmanager hanya menerima SAN prometheus|grafana (web-config-ui.yml), Loki hanya klien CA internal.
+# $__file{} dibaca Grafana saat provisioning.
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: https://prometheus:9090
+    isDefault: true
+    jsonData:
+      tlsAuth: true
+      tlsAuthWithCACert: true
+      serverName: prometheus
+    secureJsonData:
+      tlsCACert: $__file{/run/secrets/efn_ca_crt}
+      tlsClientCert: $__file{/run/secrets/tls_grafana_crt}
+      tlsClientKey: $__file{/run/secrets/tls_grafana_key}
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: https://loki:3100
+    jsonData:
+      tlsAuth: true
+      tlsAuthWithCACert: true
+      serverName: loki
+    secureJsonData:
+      tlsCACert: $__file{/run/secrets/efn_ca_crt}
+      tlsClientCert: $__file{/run/secrets/tls_grafana_crt}
+      tlsClientKey: $__file{/run/secrets/tls_grafana_key}
+  - name: Alertmanager
+    uid: alertmanager
+    type: alertmanager
+    access: proxy
+    url: https://alertmanager:9093
+    jsonData:
+      implementation: prometheus
+      tlsAuth: true
+      tlsAuthWithCACert: true
+      serverName: alertmanager
+    secureJsonData:
+      tlsCACert: $__file{/run/secrets/efn_ca_crt}
+      tlsClientCert: $__file{/run/secrets/tls_grafana_crt}
+      tlsClientKey: $__file{/run/secrets/tls_grafana_key}

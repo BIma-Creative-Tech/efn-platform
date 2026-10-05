@@ -1,0 +1,55 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    groups:
+      actions: { patterns: ["*"] }
+
+  - package-ecosystem: docker
+    directory: /services/odoo
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: /services/api-gateway
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: /services/superapp-web
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: /services/ai-ocr-worker
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: /services/etl
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: /infra/backup/postgres
+    schedule: { interval: weekly }
+  - package-ecosystem: docker-compose
+    directory: /infra/compose
+    schedule: { interval: weekly }
+
+  - package-ecosystem: npm
+    directory: /services/api-gateway
+    schedule: { interval: weekly }
+    groups:
+      nestjs: { patterns: ["@nestjs/*"] }
+      dev: { dependency-type: development }
+  - package-ecosystem: npm
+    directory: /services/superapp-web
+    schedule: { interval: weekly }
+    groups:
+      next: { patterns: ["next", "react", "react-dom", "eslint-config-next"] }
+      dev: { dependency-type: development }
+
+  - package-ecosystem: pip
+    directory: /services/ai-ocr-worker
+    schedule: { interval: weekly }
+  - package-ecosystem: pip
+    directory: /services/etl
+    schedule: { interval: weekly }
+  - package-ecosystem: pip
+    directory: /services/text2sql
+    schedule: { interval: weekly }
+  - package-ecosystem: pip
+    directory: /services/odoo
+    schedule: { interval: weekly }

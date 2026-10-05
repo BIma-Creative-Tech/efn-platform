@@ -1,0 +1,39 @@
+# Alertmanager EFN. Penerima = webhook generik (URL dari Docker secret `alertmanager_webhook_url`), mis.
+# relay ke Telegram/Slack/Google Chat/WhatsApp-ops milik tim IT. URL tidak pernah ditulis di repo.
+# Dev: secret berisi http://127.0.0.1:9/disabled (notifikasi gagal terkirim secara sengaja).
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: ops-webhook
+  group_by: [alertname, job, queue]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: ['severity="critical"']
+      receiver: ops-webhook
+      repeat_interval: 1h
+    # Alert berbasis metrik yang belum diekspos (metric_status=proposed) tidak pernah aktif; tetap dirutekan normal.
+
+inhibit_rules:
+  # Jika PostgreSQL mati, jangan banjiri dengan probe/5xx turunan
+  - source_matchers: ['alertname="EfnPostgresDown"']
+    target_matchers: ['alertname=~"EfnHealthProbeFailed|EfnOdooHttp5xxHigh|EfnWalArchiveStale"']
+  # Level critical menekan pasangan warning-nya (cert 3 vs 14 hari, disk 95% vs 85%)
+  - source_matchers: ['alertname="EfnCertExpiryCritical"']
+    target_matchers: ['alertname="EfnCertExpiringSoon"']
+    equal: [instance]
+  - source_matchers: ['alertname="EfnInternalCertExpiryCritical"']
+    target_matchers: ['alertname="EfnInternalCertExpiringSoon"']
+    equal: [instance, cert]
+  - source_matchers: ['alertname="EfnDiskUsageCritical"']
+    target_matchers: ['alertname="EfnDiskUsageHigh"']
+    equal: [instance, mountpoint]
+
+receivers:
+  - name: ops-webhook
+    webhook_configs:
+      - url_file: /run/secrets/alertmanager_webhook_url
+        send_resolved: true
+        max_alerts: 20

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="loyalty_program_view_form_inherit_efn_pos_otp_gate" model="ir.ui.view">
+        <field name="name">loyalty.program.view.form.inherit.efn.pos.otp.gate</field>
+        <field name="model">loyalty.program</field>
+        <field name="inherit_id" ref="pos_loyalty.loyalty_program_view_form_inherit_pos_loyalty"/>
+        <field name="arch" type="xml">
+            <field name="pos_config_ids" position="after">
+                <field name="efn_requires_otp"
+                       invisible="not pos_ok or program_type not in ('promotion', 'buy_x_get_y', 'promo_code', 'coupons')"/>
+            </field>
+        </field>
+    </record>
+</odoo>

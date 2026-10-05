@@ -1,0 +1,26 @@
+<!--
+  Metrik Prometheus ClickHouse lewat HTTPS 8443 (/metrics) - tidak ada listener 9363 plaintext (docs/04 §7.1).
+  Handler `prometheus` di http_handlers + <defaults/> agar handler bawaan (/ping, query) tetap ada.
+  Scrape job `clickhouse` di infra/observability/prometheus.yml (scheme https, CA internal).
+  PLAUSIBLE (belum diuji di 24.8): bila handler type `prometheus` ditolak, ClickHouse gagal start -> lihat
+  laporan devsecops "Belum terverifikasi" (fallback: <port>9363</port> + listen loopback + sidecar ghostunnel).
+-->
+<clickhouse>
+    <prometheus>
+        <endpoint>/metrics</endpoint>
+        <metrics>true</metrics>
+        <events>true</events>
+        <asynchronous_metrics>true</asynchronous_metrics>
+        <errors>true</errors>
+    </prometheus>
+    <http_handlers>
+        <rule>
+            <url>/metrics</url>
+            <methods>GET</methods>
+            <handler>
+                <type>prometheus</type>
+            </handler>
+        </rule>
+        <defaults/>
+    </http_handlers>
+</clickhouse>

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Metode pembayaran POS STANDAR yang tidak bergantung penyedia payment gateway
+     (keputusan user Gelombang 5: gateway belum ditentukan → POS harus agnostik; QRIS/e-wallet
+     lewat modul gap efn_pos_payment_gateway yang memanggil BFF docs/04 §8.3).
+
+     - Kartu debit/kredit via EDC BANK (tidak terintegrasi): payment_method_type 'none',
+       jurnal Bank PT dari template l10n_id; kasir memasukkan nominal, struk EDC = bukti.
+       Tidak menyimpan PAN (CLAUDE.md). Satu metode per PT, boleh dipakai banyak outlet.
+     - TUNAI sengaja TIDAK dibuat di sini: constraint 19.0 _check_cash_method_single_shop
+       ("You cannot assign the same Cash payment method to multiple POS Shops"); pos.config
+       baru membuat metode & jurnal kas per outlet sendiri (_default_payment_methods /
+       _create_cash_payment_method).
+     - QRIS bawaan l10n_id_pos (qr_code_method 'id_qr', provider qris.online, API key di
+       res.partner.bank) TIDAK dikonfigurasi: menyimpang dari prinsip secret di /run/secrets
+       dan mengikat ke satu provider (E-13).
+     Field terverifikasi: point_of_sale/models/pos_payment_method.py 19.0 (2026-10-06).
+     Jurnal dicari dengan atribut search (record pertama) karena xmlid jurnal template
+     bergantung id company. noupdate: nama/jurnal boleh diubah atau diarsipkan admin. -->
+<odoo noupdate="1">
+    <record id="pos_payment_method_edc_rtl" model="pos.payment.method">
+        <field name="name">Kartu Debit/Kredit (EDC manual)</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="payment_method_type">none</field>
+        <field name="journal_id" model="account.journal"
+               search="[('type', '=', 'bank'), ('company_id', '=', ref('efn_setup_company.company_rtl'))]"/>
+    </record>
+
+    <record id="pos_payment_method_edc_fnb" model="pos.payment.method">
+        <field name="name">Kartu Debit/Kredit (EDC manual)</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="payment_method_type">none</field>
+        <field name="journal_id" model="account.journal"
+               search="[('type', '=', 'bank'), ('company_id', '=', ref('efn_setup_company.company_fnb'))]"/>
+    </record>
+</odoo>

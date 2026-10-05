@@ -1,0 +1,152 @@
+# Override produksi / staging. Tidak ada port backend yang dipublish; HANYA Traefik 80/443 (dari base).
+# Jangan menambah `ports:` di file ini: compose menggabungkan daftar ports sehingga override tidak bisa menghapusnya.
+# Secrets dibaca dari /opt/efn/secrets/*.txt yang ditulis oleh scripts/deploy.sh dari GitHub Environment secrets
+# (lewat docker-compose.host.yml yang digenerate di host). Direktori secrets/ ada di .gitignore.
+# Image aplikasi dipin ke DIGEST hasil verifikasi cosign (IMAGE_<SVC>=...@sha256:..., ditulis deploy.sh ke .env).
+services:
+  traefik:
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 512M }
+
+  # `command` menggantikan base: parameter archive WAL-G, TLS, hba_file dan SEC-18 wajib tetap ada.
+  postgres:
+    deploy:
+      resources:
+        limits: { cpus: "4", memory: 8G }
+    command:
+      - postgres
+      - -c
+      - max_connections=300
+      - -c
+      - shared_buffers=2GB
+      - -c
+      - effective_cache_size=6GB
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=5
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=/usr/local/bin/efn-walg wal-push %p
+      - -c
+      - archive_timeout=900
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - log_min_duration_statement=500
+      # SEC-18
+      - -c
+      - log_parameter_max_length=0
+      - -c
+      - log_parameter_max_length_on_error=0
+      # TLS (docs/04 §7.1)
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/secrets/tls_postgres_crt
+      - -c
+      - ssl_key_file=/var/run/postgresql/efn-tls/server.key
+      - -c
+      - ssl_min_protocol_version=TLSv1.2
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+
+  redis:
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 768M }
+
+  rabbitmq:
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 2G }
+
+  minio:
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 2G }
+
+  odoo:
+    deploy:
+      replicas: 1
+      resources:
+        limits: { cpus: "4", memory: 6G }
+    environment:
+      APP_ENV: ${APP_ENV:-production}   # staging: deploy.sh menulis APP_ENV=staging ke .env (G6 QA)
+      ODOO_WORKERS: "6"
+      ODOO_MAX_CRON_THREADS: "2"
+
+  api-gateway:
+    environment:
+      APP_ENV: ${APP_ENV:-production}   # staging: deploy.sh menulis APP_ENV=staging ke .env (G6 QA)
+      NODE_ENV: production
+      # Wajib eksplisit di staging/prod (deploy.sh menulis .env; production menolak `mock`, docs/04 §8.3)
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:?PAYMENT_PROVIDER wajib di-set eksplisit (mock hanya staging)}
+    deploy:
+      replicas: 2
+      resources:
+        limits: { cpus: "1", memory: 1G }
+
+  # Sidecar ghostunnel (network_mode: service:superapp-web) hanya bisa menempel ke SATU container -> replicas 1.
+  # Skala horizontal: tambah pasangan service (superapp-web-2 + sidecar) atau TLS native di Next.js (frontend).
+  superapp-web:
+    environment:
+      APP_ENV: ${APP_ENV:-production}   # staging: deploy.sh menulis APP_ENV=staging ke .env (G6 QA)
+    deploy:
+      replicas: 1
+      resources:
+        limits: { cpus: "2", memory: 1G }
+
+  clickhouse:
+    deploy:
+      resources:
+        limits: { cpus: "4", memory: 16G }
+
+  metabase:
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 3G }
+
+  ollama:
+    deploy:
+      resources:
+        limits: { memory: 24G }
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  ocr-worker:
+    environment:
+      APP_ENV: ${APP_ENV:-production}   # staging: deploy.sh menulis APP_ENV=staging ke .env (G6 QA)
+    deploy:
+      replicas: 2
+      resources:
+        limits: { cpus: "2", memory: 4G }
+
+  etl:
+    environment:
+      APP_ENV: ${APP_ENV:-production}   # staging: deploy.sh menulis APP_ENV=staging ke .env (G6 QA)
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 2G }
+
+  prometheus:
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.config.file=/etc/prometheus/web-config.yml
+      - --storage.tsdb.retention.time=30d
+      - --storage.tsdb.retention.size=40GB
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 4G }
+
+  loki:
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 2G }

@@ -1,0 +1,10 @@
+[Unit]
+Description=Jadwal base backup EFN harian 01:30 WIB (di luar jam operasional POS)
+
+[Timer]
+OnCalendar=*-*-* 01:30:00 Asia/Jakarta
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

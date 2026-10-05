@@ -1,0 +1,11 @@
+# exporter-toolkit web config untuk Prometheus dan Alertmanager (docs/04 §8.5, SEC-20): HANYA TLS + mTLS.
+# Klien sah: Prometheus (self-scrape, alerting -> Alertmanager) dan Grafana (datasource). Tidak diekspos Traefik.
+tls_server_config:
+  cert_file: /run/secrets/tls_server_crt
+  key_file: /run/secrets/tls_server_key
+  min_version: TLS12
+  client_auth_type: RequireAndVerifyClientCert
+  client_ca_file: /run/secrets/efn_ca_crt
+  client_allowed_sans:
+    - prometheus
+    - grafana

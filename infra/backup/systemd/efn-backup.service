@@ -1,0 +1,18 @@
+# Base backup harian PostgreSQL (WAL-G -> MinIO). Pasang: lihat docs/runbooks/backup-restore.md §2.
+[Unit]
+Description=EFN PostgreSQL base backup (WAL-G)
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=deploy
+Group=docker
+Environment=COMPOSE_PROJECT=efn
+Environment=RETAIN_FULL=14
+Environment=TEXTFILE_DIR=/var/lib/efn/node-exporter
+ExecStart=/bin/bash /opt/efn/scripts/backup.sh
+TimeoutStartSec=6h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

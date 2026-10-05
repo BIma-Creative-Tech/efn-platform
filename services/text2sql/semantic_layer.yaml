@@ -1,0 +1,72 @@
+# Semantic layer Text-to-SQL (contoh, R-T06). Hanya VIEW yang boleh dibaca LLM; tabel dasar & kolom identitas
+# (user_hash, member_hash) sengaja tidak dicantumkan. View didefinisikan di infra/clickhouse/init/0*.sql.
+version: 1
+database: efn_dwh
+max_limit: 1000
+max_execution_time_seconds: 15
+
+# Tabel dasar efn_dwh yang TIDAK boleh dibaca LLM dan tidak boleh dipakai sebagai nama CTE (anti-shadowing, SEC-04).
+# WAJIB ditambah setiap kali tabel baru dibuat di efn_dwh (infra/clickhouse/init/*.sql).
+protected_tables: [competitor_prices, loyalty_events, fact_sales_line, etl_watermark]
+
+tables:
+  - name: v_competitor_prices
+    description: Harga kompetitor dari laporan Price Hunter yang tervalidasi (status valid).
+    columns:
+      - {name: report_id, type: UUID, description: ID laporan}
+      - {name: reported_at, type: "DateTime('Asia/Jakarta')", description: Waktu laporan dikirim (WIB)}
+      - {name: product_name, type: String, description: Nama produk seperti dilaporkan pelanggan}
+      - {name: product_sku, type: Nullable(String), description: SKU internal bila sudah dipetakan}
+      - {name: competitor_name, type: String, description: Nama toko kompetitor}
+      - {name: price, type: "Decimal(14,2)", description: Harga yang dilaporkan (Rupiah)}
+      - {name: extracted_price, type: "Nullable(Decimal(14,2))", description: Harga hasil OCR yang cocok}
+      - {name: ocr_confidence, type: Nullable(Float32), description: Confidence OCR tahap 1 (0..1)}
+      - {name: geo_lat, type: Nullable(Float64), description: Lintang dibulatkan 3 desimal}
+      - {name: geo_lng, type: Nullable(Float64), description: Bujur dibulatkan 3 desimal}
+
+  - name: v_price_hunter_quality
+    description: Jumlah laporan Price Hunter per hari, status, dan alasan (kualitas pipeline OCR).
+    columns:
+      - {name: day, type: Date}
+      - {name: status, type: String, description: "valid | rejected | flagged"}
+      - {name: reason, type: String, description: "Alasan keputusan (mis. price_mismatch, vlm_unavailable)"}
+      - {name: reports, type: UInt64}
+
+  - name: v_loyalty_daily
+    description: Ringkasan poin harian per PT penanggung, sumber, dan alasan (WIB).
+    columns:
+      - {name: day, type: Date}
+      - {name: company_code, type: String, description: "PT penanggung liabilitas poin: EFN | RTL | FNB | FARM"}
+      - {name: source, type: String, description: "price_hunter | pos | mgm | ..."}
+      - {name: reason, type: String}
+      - {name: points_issued, type: Int64}
+      - {name: points_redeemed_or_reversed, type: Int64}
+      - {name: events, type: UInt64}
+
+  - name: v_sales_daily
+    description: Penjualan harian per company, brand, toko, kategori (dari POS Odoo).
+    columns:
+      - {name: day, type: Date}
+      - {name: company_id, type: UInt32}
+      - {name: brand, type: String, description: "EFN | RTL | FNB | FARM"}
+      - {name: store_id, type: UInt32}
+      - {name: category, type: String}
+      - {name: qty, type: Decimal}
+      - {name: revenue, type: Decimal, description: Subtotal sebelum pajak}
+      - {name: tax, type: Decimal}
+      - {name: cogs, type: Decimal}
+      - {name: lines, type: UInt64}
+
+examples:
+  - question: Rata-rata harga Indomie Goreng per kompetitor bulan ini
+    sql: |
+      SELECT competitor_name, avg(price) AS avg_price, count() AS reports
+      FROM v_competitor_prices
+      WHERE product_name ILIKE '%indomie goreng%' AND reported_at >= toStartOfMonth(now())
+      GROUP BY competitor_name
+      ORDER BY avg_price
+  - question: Berapa persen laporan Price Hunter yang di-flag minggu lalu?
+    sql: |
+      SELECT sumIf(reports, status = 'flagged') / sum(reports) AS flagged_ratio
+      FROM v_price_hunter_quality
+      WHERE day >= today() - 7

@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO / ILUSTRASI — hanya dimuat pada database dengan data demo. JANGAN dipakai sebagai
+     konfigurasi produksi. Bergantung keputusan klien & konsultan pajak (R-L03, Q-22, Q-2,
+     ADR-019). PB1 default (grup + pajak + default PT F&B) kini di data/account_tax_pb1_data.xml.
+
+     Ilustrasi pola "PB1 per kota tanpa developer" (lihat README):
+     - pajak "PB1 Kota Contoh 5% (DEMO)" dengan Replaces (original_tax_ids) = PB1 default;
+     - fiscal position "Outlet Kota Contoh (DEMO)" berisi pajak tersebut (tax_ids);
+     - pos.config outlet di kota itu memakai Default Fiscal Position = FP ini (diisi lewat UI,
+       pos.config tidak dibuat via XML — lihat efn_setup_pos).
+     Tarif 5% hanyalah angka ilustrasi, BUKAN tarif Perda mana pun. -->
+<odoo>
+    <record id="tax_pb1_kota_contoh_fnb" model="account.tax">
+        <field name="name">PB1 Kota Contoh 5% (DEMO)</field>
+        <field name="invoice_label">PB1</field>
+        <field name="type_tax_use">sale</field>
+        <field name="amount_type">percent</field>
+        <field name="amount">5.0</field>
+        <field name="sequence">10</field>
+        <field name="company_id" ref="company_fnb"/>
+        <field name="tax_group_id" ref="tax_group_pb1_fnb"/>
+        <field name="original_tax_ids" eval="[(6, 0, [ref('tax_pb1_10_fnb')])]"/>
+    </record>
+
+    <record id="fiscal_position_kota_contoh_fnb" model="account.fiscal.position">
+        <field name="name">Outlet Kota Contoh (DEMO)</field>
+        <field name="company_id" ref="company_fnb"/>
+        <field name="sequence">10</field>
+        <!-- auto_apply False: dipilih per outlet (pos.config.default_fiscal_position_id),
+             bukan dari alamat pelanggan. -->
+        <field name="auto_apply" eval="False"/>
+        <field name="tax_ids" eval="[(6, 0, [ref('tax_pb1_kota_contoh_fnb')])]"/>
+        <field name="note">&lt;p&gt;DEMO: memetakan PB1 default ke PB1 kota contoh.&lt;/p&gt;</field>
+    </record>
+
+    <!-- Service charge sebagai "pajak" non-negara (opsi standar tanpa modul tambahan; CE 19 tidak
+         punya fitur service charge POS — modul di Apps Store pihak ketiga, OCA/pos 19.0 tidak ada).
+         sequence 5 < PB1 (10) + include_base_amount=True => SC MASUK dasar PB1.
+         Bila konsultan pajak menyatakan SC tidak masuk DPP PB1: set include_base_amount=False.
+         Baris repartisi tanpa akun => nilai SC diposting ke akun pendapatan baris (perilaku
+         belum diuji di PoC); lebih baik isi akun "Pendapatan Service Charge" (Q-2).
+         Pasang di produk menu bersama PB1 (taxes_id), atau tidak sama sekali bila outlet tidak
+         memungut SC. -->
+    <record id="tax_group_service_charge_fnb" model="account.tax.group">
+        <field name="name">Service Charge</field>
+        <field name="company_id" ref="company_fnb"/>
+        <field name="sequence">15</field>
+    </record>
+    <record id="tax_service_charge_5_fnb" model="account.tax">
+        <field name="name">Service Charge 5% (DEMO)</field>
+        <field name="invoice_label">Service</field>
+        <field name="type_tax_use">sale</field>
+        <field name="amount_type">percent</field>
+        <field name="amount">5.0</field>
+        <field name="sequence">5</field>
+        <field name="include_base_amount" eval="True"/>
+        <field name="company_id" ref="company_fnb"/>
+        <field name="tax_group_id" ref="tax_group_service_charge_fnb"/>
+    </record>
+
+    <!-- Harga rak retail lazimnya sudah termasuk PPN (Q-9/Q-28) — placeholder. -->
+    <record id="company_rtl" model="res.company">
+        <field name="account_price_include">tax_included</field>
+    </record>
+
+    <!-- ADR-019 (Proposed): Holding = pemegang akun gateway / agen penagih (Q-1). -->
+    <record id="company_efn" model="res.company">
+        <field name="efn_is_merchant_of_record" eval="True"/>
+    </record>
+</odoo>

@@ -1,0 +1,112 @@
+# Security (shift-left): secret scanning, SAST, dependency & IaC scanning. Memblokir merge pada temuan HIGH/CRITICAL.
+# Semua `uses:` dipin ke commit SHA (SEC-10).
+name: Security
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 2 * * 1"   # Senin 02:17 UTC: scan ulang dependensi walau tidak ada perubahan
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: read
+
+jobs:
+  gitleaks:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  semgrep:
+    name: SAST (semgrep)
+    runs-on: ubuntu-latest
+    container:
+      # TODO(devsecops): pin ke digest (semgrep/semgrep@sha256:...) setelah digest rilis dicek; tag `latest` bergerak.
+      image: semgrep/semgrep:latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Semgrep (OWASP Top 10, secrets, docker, typescript, python)
+        run: |
+          semgrep scan \
+            --config p/owasp-top-ten --config p/secrets --config p/dockerfile \
+            --config p/typescript --config p/python --config p/nodejs \
+            --sarif --output semgrep.sarif --error --severity ERROR --severity WARNING
+      - uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52  # v3.38.2
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  trivy-fs:
+    name: Trivy filesystem (vuln, secret, misconfig)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      # 0.35.0: tag aman pasca insiden supply chain Maret 2026 (CVE-2026-33634); binary Trivy dipin.
+      - uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
+        with:
+          version: v0.69.3
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: sarif
+          output: trivy-fs.sarif
+          # secrets/ (dev, gen-secrets) tidak pernah di-commit; dikecualikan bila ada di workspace
+          skip-dirs: secrets
+      - uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52  # v3.38.2
+        if: always()
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+  dependency-review:
+    name: Dependency review (PR)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48  # v4.9.0
+        with:
+          fail-on-severity: high
+          deny-licenses: GPL-3.0-only, AGPL-3.0-only   # untuk dependensi NPM/Py; addons Odoo sendiri AGPL dan dikecualikan
+          allow-dependencies-licenses: pkg:pypi/odoo
+
+  checkov:
+    name: IaC (checkov: compose, Dockerfile, GitHub Actions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: bridgecrewio/checkov-action@2fb0e6d652cf09a76a42a9c62a5f4bb06f7d1b6e  # v12.1237.0
+        with:
+          directory: .
+          framework: dockerfile,github_actions,yaml
+          soft_fail: false
+          output_format: cli,sarif
+          output_file_path: console,checkov.sarif
+          skip_check: CKV_DOCKER_2   # HEALTHCHECK dicek di compose, bukan di setiap Dockerfile
+      - uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52  # v3.38.2
+        if: always()
+        with:
+          sarif_file: checkov.sarif
+          category: checkov

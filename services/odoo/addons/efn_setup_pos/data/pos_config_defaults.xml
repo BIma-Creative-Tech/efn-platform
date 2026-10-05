@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Default untuk pos.config BARU (ir.default, global: user_id=False, company_id=False).
+     Tidak mengubah pos.config yang sudah ada; per outlet tetap bisa diubah manajer.
+     Blok noupdate: <function> hanya jalan saat install. ir.default.set (@api.model) memvalidasi
+     bahwa field ada (ValidationError bila tidak).
+     Anti-fraud kasir (R-B06, SEC-07/SEC-12 sisa risiko):
+     - restrict_price_control: "Only users with Manager access rights for PoS app can modify the
+       product prices on orders." (point_of_sale 19.0)
+     - manual_discount (default CE True = "Line Discounts"): dimatikan agar diskon hanya lewat
+       program promo (loyalty.program, diaudit) — PLACEHOLDER menunggu Q-27/Q-28. -->
+<odoo noupdate="1">
+    <function model="ir.default" name="set" eval="['pos.config', 'restrict_price_control', True]"/>
+    <function model="ir.default" name="set" eval="['pos.config', 'manual_discount', False]"/>
+</odoo>

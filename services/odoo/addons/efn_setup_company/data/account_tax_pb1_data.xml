@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PB1 / PBJT makanan-minuman (pajak DAERAH) — pola CONFIGURABLE dengan fitur standar CE 19
+     (keputusan user Gelombang 5: tarif per kota & include/exclude TIDAK ditetapkan developer).
+     ADR-015, R-L03, Q-22. Field terverifikasi di odoo/odoo 19.0 account/models/account_tax.py,
+     account/models/partner.py, account/models/company.py (2026-10-06).
+
+     Pola:
+     1. SATU grup pajak "PB1" per PT F&B (account.tax.group) -> laporan & akun liabilitas PB1
+        cukup di-set sekali di grup (tax_payable_account_id) / di baris repartisi pajak.
+     2. SATU pajak "PB1 default" (10% = tarif maksimum UU HKPD 1/2022, PLACEHOLDER sampai
+        konsultan pajak menjawab) = pajak penjualan default PT F&B dan pajak yang dipasang di
+        produk menu.
+     3. Tarif kota lain DIBUAT ADMIN LEWAT UI: pajak baru di grup yang sama dengan
+        "Replaces" (original_tax_ids) = PB1 default, lalu dimasukkan ke fiscal position kota
+        (account.fiscal.position.tax_ids). Odoo 19 memetakan pajak lewat
+        tax_map[src] = dest (account.fiscal.position._compute_tax_map) — model
+        account.fiscal.position.tax sudah tidak ada di 19.0.
+     4. Include/exclude: price_include_override SENGAJA kosong -> pajak mengikuti setting company
+        res.company.account_price_include (default CE 'tax_excluded'). Satu saklar per PT;
+        override per pajak tetap tersedia di form pajak bila dibutuhkan.
+     noupdate="1": tarif, nama, akun yang diubah admin tidak ditimpa saat upgrade modul.
+     xmlid tax_pb1_10_fnb / tax_group_pb1_fnb dipertahankan dari versi demo sebelumnya.
+
+     GO-LIVE BLOCKER: akun liabilitas PB1 belum ada di CoA l10n_id (tidak ada akun "Pajak
+     Daerah"/PB1 di account.account-id.csv 19.0) -> admin membuat akun & mengisinya di baris
+     repartisi pajak (Q-2). Tanpa akun, nilai pajak jatuh ke akun pendapatan baris. -->
+<odoo noupdate="1">
+    <record id="tax_group_pb1_fnb" model="account.tax.group">
+        <field name="name">PB1 (Pajak Restoran / PBJT)</field>
+        <field name="company_id" ref="company_fnb"/>
+        <field name="sequence">20</field>
+    </record>
+
+    <record id="tax_pb1_10_fnb" model="account.tax">
+        <field name="name">PB1 Default 10% (PLACEHOLDER)</field>
+        <field name="invoice_label">PB1</field>
+        <field name="type_tax_use">sale</field>
+        <field name="amount_type">percent</field>
+        <field name="amount">10.0</field>
+        <field name="sequence">10</field>
+        <!-- Dasar PB1 boleh dipengaruhi pajak/biaya bersequence lebih kecil yang
+             include_base_amount=True (mis. service charge, lihat demo). Default CE True. -->
+        <field name="is_base_affected" eval="True"/>
+        <field name="company_id" ref="company_fnb"/>
+        <field name="tax_group_id" ref="tax_group_pb1_fnb"/>
+        <field name="description">&lt;p&gt;PB1 default PT F&amp;amp;B. Tarif 10% PLACEHOLDER (Q-22, R-L03). Tarif kota lain: buat pajak baru dengan "Replaces" = pajak ini, lalu masukkan ke fiscal position kota. Include/exclude mengikuti setting company kecuali diisi di "Included in Price".&lt;/p&gt;</field>
+    </record>
+
+    <!-- PT F&B (restoran) memungut PB1, bukan PPN, atas penjualan makanan/minuman di tempat.
+         Menimpa default tax_ST4 dari template l10n_id (try_loading di res_company_data.xml). -->
+    <record id="company_fnb" model="res.company">
+        <field name="account_sale_tax_id" ref="tax_pb1_10_fnb"/>
+    </record>
+</odoo>

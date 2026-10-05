@@ -1,0 +1,3 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_pos_otp_challenge_pos_manager,efn.pos.otp.challenge pos manager,model_efn_pos_otp_challenge,point_of_sale.group_pos_manager,1,0,0,0
+access_efn_pos_otp_challenge_system,efn.pos.otp.challenge system,model_efn_pos_otp_challenge,base.group_system,1,1,1,1

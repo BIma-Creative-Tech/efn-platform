@@ -1,0 +1,7 @@
+extends: default
+rules:
+  line-length: { max: 180, level: warning }
+  document-start: disable
+  truthy: { allowed-values: ["true", "false", "on", "off"] }
+  comments-indentation: disable
+  braces: { max-spaces-inside: 1 }

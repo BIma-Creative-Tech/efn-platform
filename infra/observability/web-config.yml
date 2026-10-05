@@ -1,0 +1,12 @@
+# exporter-toolkit web config untuk EXPORTER (node-exporter, postgres-exporter, blackbox-exporter): endpoint HTTP
+# HANYA TLS + mTLS (docs/04 §7.1, §8.5, SEC-20). Klien satu-satunya = Prometheus (SAN `prometheus`).
+# Compose me-mount sertifikat masing-masing service ke nama generik /run/secrets/tls_server_crt|key (secret long
+# syntax `target:`), sehingga satu file dipakai bersama. Prometheus & Alertmanager memakai web-config-ui.yml.
+tls_server_config:
+  cert_file: /run/secrets/tls_server_crt
+  key_file: /run/secrets/tls_server_key
+  min_version: TLS12
+  client_auth_type: RequireAndVerifyClientCert
+  client_ca_file: /run/secrets/efn_ca_crt
+  client_allowed_sans:
+    - prometheus

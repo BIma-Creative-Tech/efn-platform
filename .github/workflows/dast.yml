@@ -1,0 +1,38 @@
+# DAST: OWASP ZAP baseline terhadap staging setiap kali deploy staging selesai + mingguan.
+name: DAST (OWASP ZAP)
+
+on:
+  workflow_run:
+    workflows: ["Deploy"]
+    types: [completed]
+  schedule:
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  zap:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    # STAGING_DOMAIN adalah repository variable (bukan environment-scoped) agar bisa dipakai di matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - https://app.${{ vars.STAGING_DOMAIN }}
+          - https://api.${{ vars.STAGING_DOMAIN }}/health
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - name: ZAP baseline
+        uses: zaproxy/action-baseline@7c4deb10e6261301961c86d65d54a516394f9aed  # v0.14.0
+        with:
+          target: ${{ matrix.target }}
+          rules_file_name: .zap/rules.tsv
+          cmd_options: "-a -j"
+          allow_issue_writing: true
+          fail_action: false   # ubah ke true setelah baseline bersih

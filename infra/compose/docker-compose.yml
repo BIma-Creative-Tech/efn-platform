@@ -1,0 +1,1615 @@
+# EFN Platform - base compose. Dipakai bersama override:
+#   dev     : docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile core --profile data up -d
+#   prod    : docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.host.yml \
+#               --profile core --profile data --profile ai --profile observability --profile ops up -d
+# Profiles: core (edge, odoo, bff, web, pg, redis, mq, minio) | data (clickhouse, metabase, etl) | ai (ollama, ocr-worker)
+#           observability (prometheus, loki, promtail, grafana, uptime-kuma) | ops (alertmanager + exporter)
+# Semua image di-pin versi. Dependabot (.github/dependabot.yml) mengusulkan bump.
+#
+# ENKRIPSI DI SETIAP TRANSAKSI DATA (docs/04 §7, ADR-022) - gelombang 3:
+#   - Setiap hop TCP antar-container memakai TLS yang diverifikasi terhadap CA internal (/run/secrets/efn_ca_crt).
+#     PKI: scripts/gen-pki.sh (dev/CI) atau GitHub Environment (staging/prod). Tidak ada listener plaintext di network.
+#   - Aplikasi tanpa TLS native (Odoo, Next.js, Ollama, Metabase, cAdvisor, docker-socket-proxy) listen 127.0.0.1
+#     dan dibungkus sidecar ghostunnel (`network_mode: service:<app>`): plaintext hanya di loopback namespace itu.
+#     Konsekuensi: port/label Traefik tetap di service app (namespace pemilik); sidecar ikut di-recreate bila app
+#     di-recreate; service ber-sidecar tidak bisa di-scale >1 replika (lihat prod: superapp-web replicas 1).
+#   - mTLS (docs/04 §8.5, gelombang 5): setiap sidecar ghostunnel memakai --cacert + --allow-cn (klien sah saja,
+#     TIDAK ada --disable-authentication; dicek check-encryption.sh) dan endpoint observability mewajibkan
+#     sertifikat klien (web-config*.yml, loki.yml, redis_exporter, rabbitmq 15691, Traefik :8082).
+#     PKI 3 tingkat: root offline -> intermediate per lingkungan -> leaf 90 hari (scripts/gen-pki.sh).
+#   - Kredensial per service (docs/04 §7.3, SEC-02): tidak ada aplikasi yang memakai superuser/root.
+#   - scripts/check-encryption.sh (CI job infra) menolak URL/env plaintext di compose.
+#
+# Baseline hardening setiap service (lihat docs/runbooks/README.md):
+#   restart, logging terbatas, no-new-privileges, limit memori (deploy.resources.limits), healthcheck,
+#   cap_drop ALL bila image tidak butuh capability, read_only + tmpfs bila image tidak menulis di luar volume.
+#   Pengecualian dicatat sebagai komentar di service yang bersangkutan.
+# Secret: hanya lewat `secrets:` (file di /run/secrets/<nama>). Daftar sumber: scripts/secrets.list.
+
+name: efn
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+    labels: "service"
+
+x-common: &common
+  restart: unless-stopped
+  logging: *default-logging
+  security_opt:
+    - no-new-privileges:true
+
+# Sidecar TLS (docs/04 §7.1). Non-root, read-only, tanpa capability. Status ghostunnel hanya di loopback.
+x-ghostunnel: &ghostunnel
+  <<: *common
+  image: ghostunnel/ghostunnel:v1.11.3-alpine
+  user: "65534:65534"
+  read_only: true
+  cap_drop: [ALL]
+  deploy:
+    resources:
+      limits: { memory: 64M }
+
+# Subnet di-pin agar TRUSTED_PROXIES BFF (SEC-03) presisi. Bentrok dengan jaringan host -> ubah di sini + .env.
+networks:
+  edge:          # Traefik dan publik (80/443)
+    ipam:
+      config: [{ subnet: 172.30.0.0/24 }]
+  egress:        # akses keluar internet terkontrol: WhatsApp Cloud API, alert webhook, probe TLS, pull model
+    ipam:
+      config: [{ subnet: 172.30.3.0/24 }]
+  internal:      # semua service backend (Traefik -> app, Next.js -> BFF)
+    internal: true
+    ipam:
+      config: [{ subnet: 172.30.1.0/24 }]
+  data:          # DB, broker, object storage; tidak bisa keluar
+    internal: true
+    ipam:
+      config: [{ subnet: 172.30.2.0/24 }]
+  cache:         # Redis hanya untuk BFF + exporter (SEC-05)
+    internal: true
+    ipam:
+      config: [{ subnet: 172.30.5.0/24 }]
+  socket-proxy:  # hanya Traefik/Promtail/cAdvisor <-> docker-socket-proxy (mTLS)
+    internal: true
+    ipam:
+      config: [{ subnet: 172.30.4.0/24 }]
+
+volumes:
+  traefik-acme:
+  pg-data:
+  redis-data:
+  rabbitmq-data:
+  minio-data:
+  odoo-data:
+  clickhouse-data:
+  metabase-data:
+  ollama-models:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+  uptime-kuma-data:
+  alertmanager-data:
+
+# Harus identik dengan scripts/secrets.list (dicek CI job infra).
+secrets:
+  # superuser / admin
+  pg_password: { file: ../../secrets/pg_password.txt }
+  odoo_admin_password: { file: ../../secrets/odoo_admin_password.txt }
+  rabbitmq_password: { file: ../../secrets/rabbitmq_password.txt }
+  minio_root_password: { file: ../../secrets/minio_root_password.txt }
+  clickhouse_password: { file: ../../secrets/clickhouse_password.txt }
+  grafana_admin_password: { file: ../../secrets/grafana_admin_password.txt }
+  # kredensial per service (docs/04 §7.3)
+  pg_password_odoo: { file: ../../secrets/pg_password_odoo.txt }
+  pg_password_bff: { file: ../../secrets/pg_password_bff.txt }
+  pg_password_ocr: { file: ../../secrets/pg_password_ocr.txt }
+  pg_password_etl: { file: ../../secrets/pg_password_etl.txt }
+  pg_password_metabase: { file: ../../secrets/pg_password_metabase.txt }
+  pg_password_exporter: { file: ../../secrets/pg_password_exporter.txt }
+  rabbitmq_password_bff: { file: ../../secrets/rabbitmq_password_bff.txt }
+  rabbitmq_password_ocr: { file: ../../secrets/rabbitmq_password_ocr.txt }
+  rabbitmq_password_etl: { file: ../../secrets/rabbitmq_password_etl.txt }
+  redis_password_bff: { file: ../../secrets/redis_password_bff.txt }
+  redis_password_exporter: { file: ../../secrets/redis_password_exporter.txt }
+  minio_bff_secret: { file: ../../secrets/minio_bff_secret.txt }
+  minio_ocr_secret: { file: ../../secrets/minio_ocr_secret.txt }
+  minio_prometheus_secret: { file: ../../secrets/minio_prometheus_secret.txt }
+  clickhouse_password_etl: { file: ../../secrets/clickhouse_password_etl.txt }
+  clickhouse_password_text2sql: { file: ../../secrets/clickhouse_password_text2sql.txt }
+  clickhouse_password_metabase: { file: ../../secrets/clickhouse_password_metabase.txt }
+  # kunci aplikasi (docs/04 §2, §7.2)
+  jwt_secret: { file: ../../secrets/jwt_secret.txt }
+  otp_pepper: { file: ../../secrets/otp_pepper.txt }
+  discount_token_secret: { file: ../../secrets/discount_token_secret.txt }
+  odoo_bff_api_key: { file: ../../secrets/odoo_bff_api_key.txt }
+  whatsapp_token: { file: ../../secrets/whatsapp_token.txt }
+  webhook_payment_secret: { file: ../../secrets/webhook_payment_secret.txt }
+  pii_encryption_key: { file: ../../secrets/pii_encryption_key.txt }
+  altcha_hmac_key: { file: ../../secrets/altcha_hmac_key.txt }
+  payment_provider_api_key: { file: ../../secrets/payment_provider_api_key.txt }   # mount: docker-compose.payment.yml
+  acme_dns_api_token: { file: ../../secrets/acme_dns_api_token.txt }
+  # turunan (scripts/derive-secrets.sh)
+  member_hash_pepper: { file: ../../secrets/member_hash_pepper.txt }
+  minio_prometheus_token: { file: ../../secrets/minio_prometheus_token.txt }
+  # backup & at rest
+  minio_backup_password: { file: ../../secrets/minio_backup_password.txt }
+  walg_libsodium_key: { file: ../../secrets/walg_libsodium_key.txt }
+  minio_kms_key: { file: ../../secrets/minio_kms_key.txt }
+  clickhouse_disk_key: { file: ../../secrets/clickhouse_disk_key.txt }
+  alertmanager_webhook_url: { file: ../../secrets/alertmanager_webhook_url.txt }
+  # PKI internal (scripts/gen-pki.sh)
+  efn_ca_crt: { file: ../../secrets/efn_ca_crt.txt }
+  tls_postgres_crt: { file: ../../secrets/tls_postgres_crt.txt }
+  tls_postgres_key: { file: ../../secrets/tls_postgres_key.txt }
+  tls_redis_crt: { file: ../../secrets/tls_redis_crt.txt }
+  tls_redis_key: { file: ../../secrets/tls_redis_key.txt }
+  tls_rabbitmq_crt: { file: ../../secrets/tls_rabbitmq_crt.txt }
+  tls_rabbitmq_key: { file: ../../secrets/tls_rabbitmq_key.txt }
+  tls_minio_crt: { file: ../../secrets/tls_minio_crt.txt }
+  tls_minio_key: { file: ../../secrets/tls_minio_key.txt }
+  tls_clickhouse_crt: { file: ../../secrets/tls_clickhouse_crt.txt }
+  tls_clickhouse_key: { file: ../../secrets/tls_clickhouse_key.txt }
+  tls_api_gateway_crt: { file: ../../secrets/tls_api_gateway_crt.txt }
+  tls_api_gateway_key: { file: ../../secrets/tls_api_gateway_key.txt }
+  tls_odoo_crt: { file: ../../secrets/tls_odoo_crt.txt }
+  tls_odoo_key: { file: ../../secrets/tls_odoo_key.txt }
+  tls_superapp_web_crt: { file: ../../secrets/tls_superapp_web_crt.txt }
+  tls_superapp_web_key: { file: ../../secrets/tls_superapp_web_key.txt }
+  tls_ollama_crt: { file: ../../secrets/tls_ollama_crt.txt }
+  tls_ollama_key: { file: ../../secrets/tls_ollama_key.txt }
+  tls_metabase_crt: { file: ../../secrets/tls_metabase_crt.txt }
+  tls_metabase_key: { file: ../../secrets/tls_metabase_key.txt }
+  tls_traefik_crt: { file: ../../secrets/tls_traefik_crt.txt }
+  tls_traefik_key: { file: ../../secrets/tls_traefik_key.txt }
+  tls_prometheus_crt: { file: ../../secrets/tls_prometheus_crt.txt }
+  tls_prometheus_key: { file: ../../secrets/tls_prometheus_key.txt }
+  tls_alertmanager_crt: { file: ../../secrets/tls_alertmanager_crt.txt }
+  tls_alertmanager_key: { file: ../../secrets/tls_alertmanager_key.txt }
+  tls_grafana_crt: { file: ../../secrets/tls_grafana_crt.txt }
+  tls_grafana_key: { file: ../../secrets/tls_grafana_key.txt }
+  tls_loki_crt: { file: ../../secrets/tls_loki_crt.txt }
+  tls_loki_key: { file: ../../secrets/tls_loki_key.txt }
+  tls_promtail_crt: { file: ../../secrets/tls_promtail_crt.txt }
+  tls_promtail_key: { file: ../../secrets/tls_promtail_key.txt }
+  tls_uptime_kuma_crt: { file: ../../secrets/tls_uptime_kuma_crt.txt }
+  tls_uptime_kuma_key: { file: ../../secrets/tls_uptime_kuma_key.txt }
+  tls_node_exporter_crt: { file: ../../secrets/tls_node_exporter_crt.txt }
+  tls_node_exporter_key: { file: ../../secrets/tls_node_exporter_key.txt }
+  tls_postgres_exporter_crt: { file: ../../secrets/tls_postgres_exporter_crt.txt }
+  tls_postgres_exporter_key: { file: ../../secrets/tls_postgres_exporter_key.txt }
+  tls_redis_exporter_crt: { file: ../../secrets/tls_redis_exporter_crt.txt }
+  tls_redis_exporter_key: { file: ../../secrets/tls_redis_exporter_key.txt }
+  tls_blackbox_exporter_crt: { file: ../../secrets/tls_blackbox_exporter_crt.txt }
+  tls_blackbox_exporter_key: { file: ../../secrets/tls_blackbox_exporter_key.txt }
+  tls_ocr_worker_crt: { file: ../../secrets/tls_ocr_worker_crt.txt }
+  tls_ocr_worker_key: { file: ../../secrets/tls_ocr_worker_key.txt }
+  tls_cadvisor_crt: { file: ../../secrets/tls_cadvisor_crt.txt }
+  tls_cadvisor_key: { file: ../../secrets/tls_cadvisor_key.txt }
+  tls_docker_socket_proxy_crt: { file: ../../secrets/tls_docker_socket_proxy_crt.txt }
+  tls_docker_socket_proxy_key: { file: ../../secrets/tls_docker_socket_proxy_key.txt }
+
+services:
+  # ───────────────────────── EDGE ─────────────────────────
+  # Traefik/Promtail/cAdvisor tidak me-mount docker.sock; discovery lewat proxy read-only (GET containers/events).
+  # Proxy hanya listen 127.0.0.1:2375; akses dari network lewat sidecar ghostunnel mTLS :2376 (CN yang diizinkan:
+  # traefik, promtail, cadvisor).
+  docker-socket-proxy:
+    <<: *common
+    image: tecnativa/docker-socket-proxy:0.3.0
+    profiles: ["core"]
+    environment:
+      BIND_CONFIG: "127.0.0.1:2375"
+      CONTAINERS: "1"
+      EVENTS: "1"
+      INFO: "1"
+      NETWORKS: "1"
+      PING: "1"
+      VERSION: "1"
+      POST: "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [socket-proxy]
+    cap_drop: [ALL]
+    # haproxy menulis file runtime saat start -> tidak read_only
+    deploy:
+      resources:
+        limits: { memory: 64M }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2375/_ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: docker-socket-proxy
+
+  docker-socket-proxy-tls:
+    <<: *ghostunnel
+    profiles: ["core"]
+    network_mode: "service:docker-socket-proxy"
+    depends_on: [docker-socket-proxy]
+    command:
+      - server
+      - --listen=0.0.0.0:2376
+      - --target=127.0.0.1:2375
+      - --cert=/run/secrets/tls_docker_socket_proxy_crt
+      - --key=/run/secrets/tls_docker_socket_proxy_key
+      - --cacert=/run/secrets/efn_ca_crt
+      - --allow-cn=traefik
+      - --allow-cn=promtail
+      - --allow-cn=cadvisor
+      - --status=http://127.0.0.1:6060
+      - --quiet=conns
+    secrets: [efn_ca_crt, tls_docker_socket_proxy_crt, tls_docker_socket_proxy_key]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6060/_status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: docker-socket-proxy-tls
+
+  traefik:
+    <<: *common
+    image: traefik:v3.2
+    profiles: ["core"]
+    depends_on:
+      docker-socket-proxy-tls:
+        condition: service_healthy
+    command:
+      - --configFile=/etc/traefik/traefik.yml
+    # Publik (websecure, lewat Cloudflare) di IP publik host; `wg-https` (ADR-023, host internal erp./bi./ops./status.)
+    # HANYA di IP WireGuard host. Prod: EFN_PUBLIC_BIND=<IP publik>, EFN_WG_BIND=10.88.0.1, EFN_WG_HTTPS_PORT=443
+    # (ditulis deploy.sh). Dev: wg-https di 127.0.0.1:9443 (https://erp.efn.local:9443).
+    ports:
+      - "${EFN_PUBLIC_BIND:-0.0.0.0}:80:80"
+      - "${EFN_PUBLIC_BIND:-0.0.0.0}:443:443"
+      - "${EFN_WG_BIND:-127.0.0.1}:${EFN_WG_HTTPS_PORT:-9443}:8443"
+    environment:
+      - TRAEFIK_DOMAIN=${TRAEFIK_DOMAIN:-efn.local}
+      # Allowlist WireGuard (dynamic/middlewares.yml, SEC-21): outlet vs staf back-office/IT (ADR-023 butir 3)
+      - EFN_WG_OUTLET_CIDR=${EFN_WG_OUTLET_CIDR:-10.88.0.0/16}
+      - EFN_WG_STAFF_CIDR=${EFN_WG_STAFF_CIDR:-10.89.0.0/16}
+      # Tambahan allowlist (dev: bridge Docker Desktop). Prod: tidak diset (127.0.0.1/32).
+      - EFN_INTERNAL_EXTRA_CIDR=${EFN_INTERNAL_EXTRA_CIDR:-127.0.0.1/32}
+      # ACME DNS-01 (resolver letsencrypt-dns, entrypoint wg-https). lego membaca <VAR>_FILE.
+      - ${ACME_DNS_TOKEN_ENV:-CF_DNS_API_TOKEN}_FILE=/run/secrets/acme_dns_api_token
+    secrets: [efn_ca_crt, tls_traefik_crt, tls_traefik_key, acme_dns_api_token]
+    volumes:
+      - ../traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ../traefik/dynamic:/etc/traefik/dynamic:ro
+      - traefik-acme:/acme
+    networks: [edge, internal, socket-proxy]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    deploy:
+      resources:
+        limits: { memory: 256M }
+    labels:
+      service: traefik
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--configFile=/etc/traefik/traefik.yml"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ───────────────────────── DATA LAYER ─────────────────────────
+  # Image custom = postgres:16.6-bookworm + WAL-G (infra/backup/postgres). WAL di-archive ke MinIO (HTTPS, CA internal)
+  # bucket pg-backup setiap segmen penuh atau paling lambat archive_timeout=900 s -> RPO 15 menit (R-T08).
+  # TLS: ssl=on, TLSv1.2+, hba_file = infra/postgres/pg_hba.conf (hostssl saja, superuser hanya socket lokal).
+  # PostgreSQL menolak kunci privat yang bisa dibaca group/other -> entrypoint menyalin kunci (0600) ke
+  # /var/run/postgresql/efn-tls sebelum memanggil entrypoint resmi.
+  # Non-root (USER postgres di image) -> cap_drop ALL aman. Tidak read_only: socket/lock di /var/run/postgresql.
+  postgres:
+    <<: *common
+    image: ${IMAGE_POSTGRES:-ghcr.io/efn/postgres:dev}
+    build:
+      context: ../backup/postgres
+    profiles: ["core"]
+    entrypoint:
+      - /bin/bash
+      - -c
+      - >-
+        install -d -m 0700 /var/run/postgresql/efn-tls &&
+        install -m 0600 /run/secrets/tls_postgres_key /var/run/postgresql/efn-tls/server.key &&
+        exec docker-entrypoint.sh "$$@"
+      - efn-pg-entrypoint
+    environment:
+      # Superuser hanya untuk entrypoint/backup via socket lokal (pg_hba menolak superuser lewat TCP)
+      POSTGRES_USER: ${PG_SUPERUSER:-postgres}
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+      POSTGRES_DB: ${PG_DB:-efn_platform}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      # WAL-G (dibaca oleh /usr/local/bin/efn-walg; secret dibaca dari file per pemanggilan)
+      WALG_S3_PREFIX: ${WALG_S3_PREFIX:-s3://pg-backup/efn}
+      WALG_S3_ENDPOINT: https://minio:9000
+      WALG_S3_CA_CERT_FILE: /run/secrets/efn_ca_crt
+      MINIO_BACKUP_USER: ${MINIO_BACKUP_USER:-pgbackup}
+      MINIO_BACKUP_PASSWORD_FILE: /run/secrets/minio_backup_password
+      WALG_LIBSODIUM_KEY_FILE: /run/secrets/walg_libsodium_key
+    secrets:
+      - pg_password
+      - minio_backup_password
+      - walg_libsodium_key
+      - efn_ca_crt
+      - tls_postgres_crt
+      - tls_postgres_key
+      # dibaca infra/postgres/init/00-roles.sh (role per service)
+      - pg_password_odoo
+      - pg_password_bff
+      - pg_password_ocr
+      - pg_password_etl
+      - pg_password_metabase
+      - pg_password_exporter
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ../postgres/init:/docker-entrypoint-initdb.d:ro
+      - ../postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+    networks: [data]
+    shm_size: 256m
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 2G }
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_mode=${PG_ARCHIVE_MODE:-on}
+      - -c
+      - archive_command=/usr/local/bin/efn-walg wal-push %p
+      - -c
+      - archive_timeout=900
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - log_min_duration_statement=1000
+      # SEC-18: parameter bind (bisa berisi nomor HP) tidak pernah dicetak ke log
+      - -c
+      - log_parameter_max_length=0
+      - -c
+      - log_parameter_max_length_on_error=0
+      # TLS (docs/04 §7.1)
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/secrets/tls_postgres_crt
+      - -c
+      - ssl_key_file=/var/run/postgresql/efn-tls/server.key
+      - -c
+      - ssl_min_protocol_version=TLSv1.2
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    labels:
+      service: postgres
+
+  # Redis: TLS saja (6379 = tls-port, port plaintext 0), ACL dari secret (user default off), noeviction (SEC-05).
+  # Network `cache` khusus: hanya api-gateway, redis-exporter, blackbox.
+  redis:
+    <<: *common
+    image: redis:7.4-alpine
+    profiles: ["core"]
+    entrypoint: ["/bin/sh", "/efn/redis-entrypoint.sh"]
+    environment:
+      REDIS_MAXMEMORY: 512mb
+    secrets: [efn_ca_crt, tls_redis_crt, tls_redis_key, redis_password_bff, redis_password_exporter]
+    volumes:
+      - redis-data:/data
+      - ../redis/redis-entrypoint.sh:/efn/redis-entrypoint.sh:ro
+    networks: [cache]
+    read_only: true
+    tmpfs: [/tmp]
+    # entrypoint resmi: chown /data lalu su-exec ke user redis; wrapper chown file ACL
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
+    deploy:
+      resources:
+        limits: { memory: 768M }
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          REDISCLI_AUTH="$$(cat /run/secrets/redis_password_exporter)" redis-cli --tls
+          --cacert /run/secrets/efn_ca_crt -h localhost -p 6379 --user efn-exporter --no-auth-warning ping
+          | grep -q PONG
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    labels:
+      service: redis
+
+  # RabbitMQ: amqps 5671 saja, management https 15671, metrik https 15691 (infra/rabbitmq/rabbitmq.conf).
+  # User per service + permission regex dari definitions yang dibangkitkan entrypoint (SEC-02, SEC-08).
+  # Distribusi Erlang (25672) & epmd hanya di loopback; nodename tetap (rabbit@localhost) agar data stabil.
+  # Tidak read_only: entrypoint resmi menulis cookie/konfigurasi di /var/lib/rabbitmq.
+  rabbitmq:
+    <<: *common
+    image: rabbitmq:3.13-management-alpine
+    profiles: ["core"]
+    hostname: rabbitmq
+    entrypoint: ["/bin/sh", "/efn/rabbitmq-entrypoint.sh"]
+    environment:
+      RABBITMQ_ADMIN_USER: ${RABBITMQ_ADMIN_USER:-efn-admin}
+      RABBITMQ_NODENAME: rabbit@localhost
+      ERL_EPMD_ADDRESS: 127.0.0.1
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-kernel inet_dist_use_interface {127,0,0,1}"
+      # SEC-25 (G6): default strict - configure dicabut, read hanya queue yang dikonsumsi. Semua klien memakai
+      # passive declare (BFF checkQueue, worker queue_declare(passive=True), ETL tanpa declare). Fallback: false.
+      RABBITMQ_STRICT_PERMISSIONS: ${RABBITMQ_STRICT_PERMISSIONS:-true}
+    secrets:
+      - rabbitmq_password
+      - rabbitmq_password_bff
+      - rabbitmq_password_ocr
+      - rabbitmq_password_etl
+      - efn_ca_crt
+      - tls_rabbitmq_crt
+      - tls_rabbitmq_key
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+      - ../rabbitmq/rabbitmq.conf:/etc/rabbitmq/conf.d/10-defaults.conf:ro
+      - ../rabbitmq/rabbitmq-entrypoint.sh:/efn/rabbitmq-entrypoint.sh:ro
+    tmpfs: [/tmp]
+    networks: [data, internal]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    deploy:
+      resources:
+        limits: { memory: 1G }
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    labels:
+      service: rabbitmq
+
+  # MinIO: HTTPS saja (sertifikat disalin ke /tmp/certs karena MinIO butuh nama file public.crt/private.key),
+  # SSE-S3 dengan kunci KMS statis dari secret minio_kms_key (docs/04 §7.2).
+  # Juga di network `data` agar archive_command Postgres (WAL-G) bisa menjangkaunya.
+  # Tidak read_only: MinIO menulis ~/.minio saat start.
+  minio:
+    <<: *common
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    profiles: ["core"]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        mkdir -p /tmp/certs/CAs &&
+        cp /run/secrets/tls_minio_crt /tmp/certs/public.crt &&
+        cp /run/secrets/tls_minio_key /tmp/certs/private.key &&
+        cp /run/secrets/efn_ca_crt /tmp/certs/CAs/efn-ca.crt &&
+        exec minio server /data --console-address :9001 --certs-dir /tmp/certs
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-efnadmin}
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_root_password
+      MINIO_KMS_SECRET_KEY_FILE: /run/secrets/minio_kms_key
+      # Metrik hanya dengan bearer JWT user efn-prometheus (minio-init + scripts/derive-secrets.sh), SEC-20/SEC-30
+      MINIO_PROMETHEUS_AUTH_TYPE: jwt
+      # Healthcheck `mc ready` memverifikasi TLS dengan CA internal (Go membaca SSL_CERT_FILE)
+      SSL_CERT_FILE: /run/secrets/efn_ca_crt
+    secrets: [minio_root_password, minio_kms_key, efn_ca_crt, tls_minio_crt, tls_minio_key]
+    volumes:
+      - minio-data:/data
+    networks: [internal, data]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 1G }
+    healthcheck:
+      test: ["CMD-SHELL", "MC_HOST_health=https://localhost:9000 mc ready health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    labels:
+      service: minio
+
+  # One-shot: bucket (SSE-S3, versioning, object lock), user per service + kebijakan minimum (docs/04 §7.2-§7.3).
+  # Idempoten; dijalankan ulang setiap `up`. Juga dipakai untuk rotasi password user MinIO.
+  minio-init:
+    <<: *common
+    image: minio/mc:RELEASE.2024-11-17T19-35-25Z
+    profiles: ["core"]
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/init/minio-init.sh"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-efnadmin}
+      MINIO_BACKUP_USER: ${MINIO_BACKUP_USER:-pgbackup}
+      MINIO_BUCKET_MARKET_SCOUT: market-scout
+      MINIO_BUCKET_PG_BACKUP: pg-backup
+      # Retensi foto Market Scout (docs/04 §8.4: default 90 hari, menunggu DPO)
+      MINIO_MARKET_SCOUT_EXPIRE_DAYS: ${MARKET_SCOUT_PHOTO_RETENTION_DAYS:-90}
+      MC_CONFIG_DIR: /tmp/.mc
+    secrets: [minio_root_password, minio_backup_password, minio_bff_secret, minio_ocr_secret, minio_prometheus_secret, efn_ca_crt]
+    volumes:
+      - ../minio/minio-init.sh:/init/minio-init.sh:ro
+    networks: [internal]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 128M }
+    labels:
+      service: minio-init
+
+  # ───────────────────────── ERP ─────────────────────────
+  # Odoo listen 127.0.0.1:8069 (HTTP) dan :8072 (websocket); TLS oleh sidecar odoo-tls (:8443) dan
+  # odoo-ws-tls (:8444). Ke PostgreSQL: user efn_odoo, sslmode verify-full (render_odoo_conf.py).
+  # SEC-01: semua router Odoo internal-only (WireGuard), login di-rate-limit ketat, /xmlrpc & /jsonrpc diblok.
+  # Tidak read_only: entrypoint merender /etc/odoo/odoo.conf saat start. User odoo (non-root).
+  odoo:
+    <<: *common
+    image: ${IMAGE_ODOO:-ghcr.io/efn/odoo:dev}
+    build:
+      context: ../../services/odoo
+    profiles: ["core"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      HOST: postgres
+      PORT: "5432"
+      USER: efn_odoo
+      PASSWORD_FILE: /run/secrets/pg_password_odoo
+      ODOO_ADMIN_PASSWORD_FILE: /run/secrets/odoo_admin_password
+      ODOO_HTTP_INTERFACE: 127.0.0.1
+      PGSSLROOTCERT: /run/secrets/efn_ca_crt
+      EFN_CA_FILE: /run/secrets/efn_ca_crt
+      EFN_BFF_URL: https://api-gateway:3000
+      EFN_BFF_API_KEY_FILE: /run/secrets/odoo_bff_api_key
+      # docs/04 §8.4: pepper member_hash (HKDF dari otp_pepper, scripts/derive-secrets.sh) untuk efn_member_hash
+      EFN_MEMBER_HASH_PEPPER_FILE: /run/secrets/member_hash_pepper
+    secrets: [pg_password_odoo, odoo_admin_password, odoo_bff_api_key, member_hash_pepper, efn_ca_crt]
+    volumes:
+      - odoo-data:/var/lib/odoo
+    networks: [internal, data]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 3G }
+    labels:
+      service: odoo
+      traefik.enable: "true"
+      traefik.docker.network: efn_internal
+      # ADR-023: HANYA entrypoint wg-https (IP WireGuard) + allowlist outlet/staf (SEC-01, SEC-21). Sertifikat publik
+      # ACME DNS-01 (browser POS tidak perlu CA internal). Tidak ada router erp. di websecure (publik).
+      traefik.http.routers.odoo.rule: Host(`erp.${TRAEFIK_DOMAIN:-efn.local}`)
+      traefik.http.routers.odoo.entrypoints: wg-https
+      traefik.http.routers.odoo.tls.certresolver: letsencrypt-dns
+      traefik.http.routers.odoo.middlewares: internal-only@file,secure-headers@file,odoo-block-dbmanager@file,ratelimit-odoo@file
+      traefik.http.routers.odoo.service: odoo
+      traefik.http.services.odoo.loadbalancer.server.port: "8443"
+      traefik.http.services.odoo.loadbalancer.server.scheme: https
+      traefik.http.services.odoo.loadbalancer.serversTransport: efn-odoo@file
+      # Login: rate limit ketat per peer WireGuard
+      traefik.http.routers.odoo-login.rule: >-
+        Host(`erp.${TRAEFIK_DOMAIN:-efn.local}`)
+        && (Path(`/web/login`) || PathPrefix(`/web/session/authenticate`) || PathPrefix(`/web/login/totp`))
+      traefik.http.routers.odoo-login.priority: "200"
+      traefik.http.routers.odoo-login.entrypoints: wg-https
+      traefik.http.routers.odoo-login.tls.certresolver: letsencrypt-dns
+      traefik.http.routers.odoo-login.middlewares: internal-only@file,secure-headers@file,ratelimit-odoo-login@file
+      traefik.http.routers.odoo-login.service: odoo
+      # XML-RPC / JSON-RPC / JSON-2 API Odoo 19 (SEC-22) diblok total (403). Integrasi server-to-server tidak
+      # lewat Traefik; sidecar odoo-tls hanya menerima klien mTLS CN traefik (+ probe blackbox).
+      traefik.http.routers.odoo-rpc-block.rule: >-
+        Host(`erp.${TRAEFIK_DOMAIN:-efn.local}`)
+        && (PathPrefix(`/xmlrpc`) || PathPrefix(`/jsonrpc`) || PathPrefix(`/json/2`))
+      traefik.http.routers.odoo-rpc-block.priority: "300"
+      traefik.http.routers.odoo-rpc-block.entrypoints: wg-https
+      traefik.http.routers.odoo-rpc-block.tls.certresolver: letsencrypt-dns
+      traefik.http.routers.odoo-rpc-block.middlewares: deny-all@file
+      traefik.http.routers.odoo-rpc-block.service: odoo
+      # Websocket (POS, bus)
+      traefik.http.routers.odoo-ws.rule: Host(`erp.${TRAEFIK_DOMAIN:-efn.local}`) && PathPrefix(`/websocket`)
+      traefik.http.routers.odoo-ws.priority: "250"
+      traefik.http.routers.odoo-ws.entrypoints: wg-https
+      traefik.http.routers.odoo-ws.tls.certresolver: letsencrypt-dns
+      traefik.http.routers.odoo-ws.middlewares: internal-only@file,secure-headers@file,ratelimit-odoo@file
+      traefik.http.routers.odoo-ws.service: odoo-ws
+      traefik.http.services.odoo-ws.loadbalancer.server.port: "8444"
+      traefik.http.services.odoo-ws.loadbalancer.server.scheme: https
+      traefik.http.services.odoo-ws.loadbalancer.serversTransport: efn-odoo@file
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8069/web/health || exit 1"]   # loopback namespace sendiri
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  odoo-tls:
+    <<: *ghostunnel
+    profiles: ["core"]
+    network_mode: "service:odoo"
+    depends_on: [odoo]
+    command:
+      - server
+      - --listen=0.0.0.0:8443
+      - --target=127.0.0.1:8069
+      - --cert=/run/secrets/tls_odoo_crt
+      - --key=/run/secrets/tls_odoo_key
+      # mTLS (docs/04 §8.5, SEC-20/SEC-22): hanya Traefik (+ probe kesehatan blackbox yang hanya bisa dipicu
+      # Prometheus lewat mTLS). Container lain di network internal/data tidak bisa mencapai Odoo.
+      - --cacert=/run/secrets/efn_ca_crt
+      - --allow-cn=traefik
+      - --allow-cn=blackbox-exporter
+      - --status=http://127.0.0.1:6061
+      - --quiet=conns
+    secrets: [efn_ca_crt, tls_odoo_crt, tls_odoo_key]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6061/_status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: odoo-tls
+
+  odoo-ws-tls:
+    <<: *ghostunnel
+    profiles: ["core"]
+    network_mode: "service:odoo"
+    depends_on: [odoo]
+    command:
+      - server
+      - --listen=0.0.0.0:8444
+      - --target=127.0.0.1:8072
+      - --cert=/run/secrets/tls_odoo_crt
+      - --key=/run/secrets/tls_odoo_key
+      - --cacert=/run/secrets/efn_ca_crt
+      - --allow-cn=traefik
+      - --allow-cn=blackbox-exporter
+      - --status=http://127.0.0.1:6062
+      - --quiet=conns
+    secrets: [efn_ca_crt, tls_odoo_crt, tls_odoo_key]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6062/_status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: odoo-ws-tls
+
+  # ───────────────────────── BFF / API ─────────────────────────
+  # HTTPS native di :3000 (TLS_CERT_FILE/TLS_KEY_FILE). Network `egress` untuk WhatsApp Cloud API & payment.
+  api-gateway:
+    <<: *common
+    image: ${IMAGE_API_GATEWAY:-ghcr.io/efn/api-gateway:dev}
+    build:
+      context: ../../services/api-gateway
+    profiles: ["core"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      APP_ENV: ${APP_ENV:-production}
+      PORT: "3000"
+      TLS_CERT_FILE: /run/secrets/tls_api_gateway_crt
+      TLS_KEY_FILE: /run/secrets/tls_api_gateway_key
+      EFN_CA_FILE: /run/secrets/efn_ca_crt
+      # SEC-23: TIDAK ada NODE_EXTRA_CA_CERTS di BFF - CA internal hanya dipercaya oleh klien internal eksplisit
+      # (pg/redis/amqp/minio), bukan untuk egress publik (WhatsApp, payment gateway).
+      HEALTHCHECK_CA_FILE: /run/secrets/efn_ca_crt
+      HEALTHCHECK_SERVERNAME: api-gateway
+      # SEC-03: subnet Docker internal (Traefik, Next.js) + rentang Cloudflare (scripts/deploy.sh dari
+      # infra/traefik/cloudflare-ips.txt). Dev: hanya subnet internal.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.30.1.0/24}
+      # PostgreSQL (docs/04 §7.1/§7.3)
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_DB: ${PG_DB:-efn_platform}
+      PG_USER: efn_bff
+      PG_PASSWORD_FILE: /run/secrets/pg_password_bff
+      PG_SSLMODE: verify-full
+      PG_SSLROOTCERT: /run/secrets/efn_ca_crt
+      # Redis (TLS + ACL)
+      REDIS_URL: rediss://redis:6379
+      REDIS_USERNAME: efn-bff
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password_bff
+      REDIS_TLS_CA_FILE: /run/secrets/efn_ca_crt
+      # RabbitMQ (amqps, URL tanpa password)
+      AMQP_URL: amqps://efn-bff@rabbitmq:5671
+      RABBITMQ_PASSWORD_FILE: /run/secrets/rabbitmq_password_bff
+      AMQP_TLS_CA_FILE: /run/secrets/efn_ca_crt
+      # Auth & OTP (docs/04 §2, §3.1)
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      OTP_PEPPER_FILE: /run/secrets/otp_pepper
+      DISCOUNT_TOKEN_SECRET_FILE: /run/secrets/discount_token_secret
+      ODOO_BFF_API_KEY_FILE: /run/secrets/odoo_bff_api_key
+      WEBHOOK_PAYMENT_SECRET_FILE: /run/secrets/webhook_payment_secret
+      OTP_TTL_SECONDS: "180"
+      OTP_MAX_ATTEMPTS: "3"
+      # PII at rest (docs/04 §7.2): AES-256-GCM, key ring versi 1 (rotasi: docs/runbooks/pii-key-rotation.md)
+      PII_ENCRYPTION_KEY_FILE: /run/secrets/pii_encryption_key
+      # Rotasi (U2): kunci v2+ via override yang me-mount pii_encryption_key_v<N> + PII_ENCRYPTION_KEY_V<N>_FILE,
+      # lalu naikkan versi aktif, jalankan `node dist/cli/pii-reencrypt.js`, baru pensiunkan (PII_RETIRED_VERSIONS).
+      PII_ACTIVE_KEY_VERSION: ${PII_ACTIVE_KEY_VERSION:-1}
+      PII_RETIRED_VERSIONS: ${PII_RETIRED_VERSIONS:-}
+      # Captcha OTP ALTCHA (docs/04 §8.1)
+      ALTCHA_HMAC_KEY_FILE: /run/secrets/altcha_hmac_key
+      # /metrics di listener mTLS terpisah (docs/04 §8.10/§8.11): https://api-gateway:9464/metrics, klien CN prometheus.
+      # Port tidak dipublish; Prometheus menjangkau lewat network `internal`.
+      METRICS_PORT: "9464"
+      METRICS_TLS_CLIENT_ALLOWED_CN: prometheus
+      METRICS_CLIENT_CA_FILE: /run/secrets/efn_ca_crt
+      # Consent (docs/04 §8.9): versi + sha256 teks AKTIF. Kosong -> grant 503 consent_unavailable. Dev: compose dev.
+      CONSENT_LOCATION_VERSION: ${CONSENT_LOCATION_VERSION:-}
+      CONSENT_LOCATION_TEXT_SHA256: ${CONSENT_LOCATION_TEXT_SHA256:-}
+      CONSENT_MARKETING_VERSION: ${CONSENT_MARKETING_VERSION:-}
+      CONSENT_MARKETING_TEXT_SHA256: ${CONSENT_MARKETING_TEXT_SHA256:-}
+      # DSAR & retensi (docs/04 §8.4; default usulan, menunggu DPO)
+      DSAR_DELETE_GRACE_DAYS: ${DSAR_DELETE_GRACE_DAYS:-7}
+      OTP_AUDIT_RETENTION_DAYS: "90"
+      PRICE_HUNTER_USER_ENC_RETENTION_DAYS: ${MARKET_SCOUT_PHOTO_RETENTION_DAYS:-90}
+      PRICE_HUNTER_REPORT_RETENTION_DAYS: "730"
+      # Payment gateway-agnostic (docs/04 §8.3). Base/dev/staging: mock. Produksi WAJIB eksplisit (prod override +
+      # deploy.sh menolak mock). Kunci provider hanya di-mount bila != mock (docker-compose.payment.yml).
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-mock}
+      # WhatsApp Cloud API resmi (WHATSAPP_ENABLED=false -> sender console, token tidak dipakai)
+      WHATSAPP_ENABLED: ${WHATSAPP_ENABLED:-false}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      WHATSAPP_OTP_TEMPLATE: ${WHATSAPP_OTP_TEMPLATE:-efn_otp}
+      WHATSAPP_TOKEN_FILE: /run/secrets/whatsapp_token
+      # Object storage (user efn-bff, bukan root)
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: "9000"
+      MINIO_USE_SSL: "true"
+      MINIO_CA_FILE: /run/secrets/efn_ca_crt
+      MINIO_ACCESS_KEY: efn-bff
+      MINIO_SECRET_KEY_FILE: /run/secrets/minio_bff_secret
+      MINIO_BUCKET_MARKET_SCOUT: market-scout
+    secrets:
+      - efn_ca_crt
+      - tls_api_gateway_crt
+      - tls_api_gateway_key
+      - pg_password_bff
+      - redis_password_bff
+      - rabbitmq_password_bff
+      - minio_bff_secret
+      - jwt_secret
+      - otp_pepper
+      - discount_token_secret
+      - odoo_bff_api_key
+      - whatsapp_token
+      - webhook_payment_secret
+      - pii_encryption_key
+      - altcha_hmac_key
+    networks: [internal, data, cache, egress]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 512M }
+    labels:
+      service: api-gateway
+      traefik.enable: "true"
+      traefik.docker.network: efn_internal
+      # Tidak lewat router publik (docs/04 §1-2, ADR-002):
+      #   /metrics    -> tidak ada di :3000 lagi; Prometheus scrape https://api-gateway:9464 (mTLS, tidak lewat Traefik)
+      #   /v1/pos/*   -> server-to-server Odoo (efn.bff_url = https://api-gateway:3000)
+      #   /internal/* -> server-to-server
+      #   /v1/webhooks/* -> hanya router api-webhook-payments di bawah (POST saja)
+      traefik.http.routers.api.rule: >-
+        Host(`api.${TRAEFIK_DOMAIN:-efn.local}`) && !PathPrefix(`/metrics`)
+        && !PathPrefix(`/v1/pos`) && !PathPrefix(`/internal`) && !PathPrefix(`/v1/webhooks`)
+      traefik.http.routers.api.entrypoints: websecure
+      traefik.http.routers.api.tls.certresolver: letsencrypt
+      traefik.http.routers.api.middlewares: secure-headers@file,ratelimit-api@file
+      traefik.http.routers.api.service: api
+      # Webhook payment provider (docs/04 §8.3): publik, POST saja, bucket rate limit terpisah. Verifikasi
+      # signature/HMAC + replay window + idempotensi di BFF.
+      traefik.http.routers.api-webhook-payments.rule: >-
+        Host(`api.${TRAEFIK_DOMAIN:-efn.local}`) && Method(`POST`) && PathPrefix(`/v1/webhooks/payments/`)
+      traefik.http.routers.api-webhook-payments.priority: "200"
+      traefik.http.routers.api-webhook-payments.entrypoints: websecure
+      traefik.http.routers.api-webhook-payments.tls.certresolver: letsencrypt
+      traefik.http.routers.api-webhook-payments.middlewares: secure-headers@file,ratelimit-webhook@file
+      traefik.http.routers.api-webhook-payments.service: api
+      traefik.http.services.api.loadbalancer.server.port: "3000"
+      traefik.http.services.api.loadbalancer.server.scheme: https
+      traefik.http.services.api.loadbalancer.serversTransport: efn-api-gateway@file
+    healthcheck:
+      # healthcheck.js image BFF: HTTPS loopback, verifikasi CA (HEALTHCHECK_CA_FILE) + servername api-gateway
+      test: ["CMD", "node", "healthcheck.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ───────────────────────── WEB ─────────────────────────
+  # Satu app Next.js melayani beberapa host: app (super-app), mart (supermarket), kitchen (F&B).
+  # Next.js standalone listen 127.0.0.1:3001; TLS oleh sidecar superapp-web-tls (:3443).
+  superapp-web:
+    <<: *common
+    image: ${IMAGE_SUPERAPP_WEB:-ghcr.io/efn/superapp-web:dev}
+    build:
+      context: ../../services/superapp-web
+    profiles: ["core"]
+    depends_on: [api-gateway]
+    environment:
+      NODE_ENV: production
+      APP_ENV: ${APP_ENV:-production}
+      HOSTNAME: 127.0.0.1
+      PORT: "3001"
+      # Browser tidak memanggil BFF langsung; Next.js server-side meneruskan request lewat HTTPS terverifikasi.
+      # CSP dikirim oleh Next.js sendiri; middleware Traefik secure-headers@file sengaja tidak menyetel CSP.
+      BFF_INTERNAL_URL: https://api-gateway:3000
+      NODE_EXTRA_CA_CERTS: /run/secrets/efn_ca_crt
+    secrets: [efn_ca_crt]
+    networks: [internal]
+    read_only: true
+    tmpfs: [/tmp, /app/.next/cache]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 512M }
+    labels:
+      service: superapp-web
+      traefik.enable: "true"
+      traefik.docker.network: efn_internal
+      traefik.http.routers.web.rule: >-
+        Host(`app.${TRAEFIK_DOMAIN:-efn.local}`) || Host(`${TRAEFIK_DOMAIN:-efn.local}`)
+        || Host(`mart.${TRAEFIK_DOMAIN:-efn.local}`) || Host(`kitchen.${TRAEFIK_DOMAIN:-efn.local}`)
+      traefik.http.routers.web.entrypoints: websecure
+      traefik.http.routers.web.tls.certresolver: letsencrypt
+      traefik.http.routers.web.middlewares: secure-headers@file
+      traefik.http.services.web.loadbalancer.server.port: "3443"
+      traefik.http.services.web.loadbalancer.server.scheme: https
+      traefik.http.services.web.loadbalancer.serversTransport: efn-superapp-web@file
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  superapp-web-tls:
+    <<: *ghostunnel
+    profiles: ["core"]
+    network_mode: "service:superapp-web"
+    depends_on: [superapp-web]
+    command:
+      - server
+      - --listen=0.0.0.0:3443
+      - --target=127.0.0.1:3001
+      - --cert=/run/secrets/tls_superapp_web_crt
+      - --key=/run/secrets/tls_superapp_web_key
+      - --cacert=/run/secrets/efn_ca_crt
+      - --allow-cn=traefik
+      - --allow-cn=blackbox-exporter
+      - --status=http://127.0.0.1:6063
+      - --quiet=conns
+    secrets: [efn_ca_crt, tls_superapp_web_crt, tls_superapp_web_key]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6063/_status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: superapp-web-tls
+
+  # ───────────────────────── ANALYTICS ─────────────────────────
+  # ClickHouse: HTTPS 8443 + native TLS 9440 saja (config.d/tls.xml), disk terenkripsi (config.d/encrypted-storage.xml,
+  # kunci clickhouse_disk_key). Skema/user/grant dipasang one-shot `clickhouse-init` lewat TLS (bukan initdb.d
+  # bawaan yang memakai port native plaintext).
+  # Tidak cap_drop/read_only: entrypoint ClickHouse butuh chown + IPC_LOCK/SYS_NICE dan menulis /etc/clickhouse-server.
+  clickhouse:
+    <<: *common
+    image: clickhouse/clickhouse-server:24.8-alpine
+    profiles: ["data"]
+    # image tidak mendukung *_FILE: baca secret di entrypoint wrapper
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        export CLICKHOUSE_PASSWORD="$$(cat /run/secrets/clickhouse_password)"
+        CLICKHOUSE_DISK_KEY_HEX="$$(cat /run/secrets/clickhouse_disk_key)";
+        exec /entrypoint.sh
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-efn}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    secrets: [clickhouse_password, clickhouse_disk_key, efn_ca_crt, tls_clickhouse_crt, tls_clickhouse_key]
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ../clickhouse/config.d/tls.xml:/etc/clickhouse-server/config.d/tls.xml:ro
+      - ../clickhouse/config.d/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
+      - ../clickhouse/config.d/encrypted-storage.xml:/etc/clickhouse-server/config.d/encrypted-storage.xml:ro
+      - ../clickhouse/client-config.xml:/etc/clickhouse-client/config.xml:ro
+    networks: [data]
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    deploy:
+      resources:
+        limits: { memory: 4G }
+    healthcheck:
+      # Liveness loopback di namespace sendiri (bukan transaksi data); busybox wget tidak punya opsi CA.
+      # Verifikasi TLS penuh dilakukan clickhouse-init dan probe-internal-tls Prometheus.
+      test: ["CMD", "wget", "-q", "--spider", "--no-check-certificate", "https://127.0.0.1:8443/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    labels:
+      service: clickhouse
+
+  clickhouse-init:
+    <<: *common
+    image: clickhouse/clickhouse-server:24.8-alpine
+    profiles: ["data"]
+    restart: "no"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    user: "101:101"
+    entrypoint: ["/bin/sh", "/efn/clickhouse-init.sh"]
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-efn}
+      # TTL mart (docs/04 §8.4, default 5 tahun; dipakai blok TTL data-AI di clickhouse-init.sh)
+      CH_MART_RETENTION_YEARS: ${CH_MART_RETENTION_YEARS:-5}
+    secrets:
+      - clickhouse_password
+      - clickhouse_password_etl
+      - clickhouse_password_text2sql
+      - clickhouse_password_metabase
+      - efn_ca_crt
+    volumes:
+      - ../clickhouse/clickhouse-init.sh:/efn/clickhouse-init.sh:ro
+      - ../clickhouse/init:/init/schema:ro
+      - ../clickhouse/access:/init/access:ro
+    networks: [data]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 256M }
+    labels:
+      service: clickhouse-init
+
+  # Metabase: Jetty listen 127.0.0.1:3000, TLS oleh sidecar metabase-tls (:3443). DB aplikasi: user efn_metabase
+  # lewat JDBC sslmode=verify-full. Koneksi ke ClickHouse dibuat di UI: HTTPS 8443, user efn_metabase,
+  # password = secret clickhouse_password_metabase, CA internal (runbook internal-pki.md).
+  # Tidak cap_drop/read_only: run_metabase.sh dapat chown direktori data dan menulis plugins ke /plugins.
+  metabase:
+    <<: *common
+    image: metabase/metabase:v0.52.4
+    profiles: ["data"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # image tidak mendukung *_FILE: baca secret di entrypoint wrapper
+    entrypoint: ["/bin/sh", "-c", "export MB_DB_PASS=\"$$(cat /run/secrets/pg_password_metabase)\"; exec /app/run_metabase.sh"]
+    environment:
+      MB_JETTY_HOST: 127.0.0.1
+      MB_JETTY_PORT: "3000"
+      MB_DB_TYPE: postgres
+      MB_DB_CONNECTION_URI: "jdbc:postgresql://postgres:5432/metabase?ssl=true&sslmode=verify-full&sslrootcert=/run/secrets/efn_ca_crt"
+      MB_DB_USER: efn_metabase
+      JAVA_TIMEZONE: Asia/Jakarta
+    secrets: [pg_password_metabase, clickhouse_password_metabase, efn_ca_crt]
+    volumes:
+      - metabase-data:/metabase-data
+    networks: [internal, data]
+    deploy:
+      resources:
+        limits: { memory: 2G }
+    labels:
+      service: metabase
+      traefik.enable: "true"
+      traefik.docker.network: efn_internal
+      traefik.http.routers.bi.rule: Host(`bi.${TRAEFIK_DOMAIN:-efn.local}`)
+      # ADR-023/SEC-21: hanya wg-https + subnet staf (bukan LAN outlet)
+      traefik.http.routers.bi.entrypoints: wg-https
+      traefik.http.routers.bi.tls.certresolver: letsencrypt-dns
+      traefik.http.routers.bi.middlewares: internal-ops@file,secure-headers@file
+      traefik.http.services.bi.loadbalancer.server.port: "3443"
+      traefik.http.services.bi.loadbalancer.server.scheme: https
+      traefik.http.services.bi.loadbalancer.serversTransport: efn-metabase@file
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/health"]   # loopback namespace sendiri
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  metabase-tls:
+    <<: *ghostunnel
+    profiles: ["data"]
+    network_mode: "service:metabase"
+    depends_on: [metabase]
+    command:
+      - server
+      - --listen=0.0.0.0:3443
+      - --target=127.0.0.1:3000
+      - --cert=/run/secrets/tls_metabase_crt
+      - --key=/run/secrets/tls_metabase_key
+      - --cacert=/run/secrets/efn_ca_crt
+      - --allow-cn=traefik
+      - --allow-cn=blackbox-exporter
+      - --status=http://127.0.0.1:6064
+      - --quiet=conns
+    secrets: [efn_ca_crt, tls_metabase_crt, tls_metabase_key]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6064/_status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: metabase-tls
+
+  # ETL: user efn_etl (PostgreSQL, grant level kolom) dan efn_etl (ClickHouse, INSERT/SELECT mart).
+  # Tidak membaca otp_pepper (SEC-16): hash member sudah dihitung BFF di PostgreSQL.
+  etl:
+    <<: *common
+    image: ${IMAGE_ETL:-ghcr.io/efn/etl:dev}
+    build:
+      context: ../../services/etl
+    profiles: ["data"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse-init:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_USER: efn_etl
+      PG_PASSWORD_FILE: /run/secrets/pg_password_etl
+      PG_SSLMODE: verify-full
+      PG_SSLROOTCERT: /run/secrets/efn_ca_crt
+      PG_DB: ${PG_DB:-efn_platform}
+      ODOO_DB: ${ODOO_DB:-efn_odoo}
+      ODOO_PG_HOST: postgres
+      ODOO_PG_PORT: "5432"
+      ODOO_PG_USER: efn_etl
+      ODOO_PG_PASSWORD_FILE: /run/secrets/pg_password_etl
+      CH_HOST: clickhouse
+      CH_PORT: "8443"
+      CH_SECURE: "true"
+      CH_CA_FILE: /run/secrets/efn_ca_crt
+      CH_DATABASE: efn_dwh
+      CH_USER: efn_etl
+      CH_PASSWORD_FILE: /run/secrets/clickhouse_password_etl
+      ETL_INTERVAL_SECONDS: "900"
+      # DSAR ClickHouse (docs/04 §8.4): publish privacy.erasure.completed sebagai efn-etl (write amq.default saja)
+      AMQP_URL: amqps://efn-etl@rabbitmq:5671
+      RABBITMQ_PASSWORD_FILE: /run/secrets/rabbitmq_password_etl
+      AMQP_TLS_CA_FILE: /run/secrets/efn_ca_crt
+    secrets: [pg_password_etl, clickhouse_password_etl, rabbitmq_password_etl, efn_ca_crt]
+    networks: [data]   # rabbitmq, postgres, clickhouse semuanya di network data
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 1G }
+    # ETL tidak punya port HTTP: healthcheck hanya memastikan proses utama hidup.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: etl
+
+  # ───────────────────────── AI ─────────────────────────
+  # Ollama listen 127.0.0.1:11435; TLS oleh sidecar ollama-tls di :11434 (OLLAMA_URL=https://ollama:11434).
+  # Network `egress` hanya untuk `ollama pull` model. Tidak read_only: runner diekstrak ke direktori tmp besar.
+  ollama:
+    <<: *common
+    image: ollama/ollama:0.5.4
+    profiles: ["ai"]
+    volumes:
+      - ollama-models:/root/.ollama
+    networks: [internal, egress]
+    environment:
+      OLLAMA_HOST: 127.0.0.1:11435
+      OLLAMA_KEEP_ALIVE: 10m
+      OLLAMA_NUM_PARALLEL: "2"
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 12G }
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      service: ollama
+    # GPU: aktifkan di docker-compose.prod.yml (deploy.resources.reservations.devices)
+
+  ollama-tls:
+    <<: *ghostunnel
+    profiles: ["ai"]
+    network_mode: "service:ollama"
+    depends_on: [ollama]
+    command:
+      - server
+      - --listen=0.0.0.0:11434
+      - --target=127.0.0.1:11435
+      - --cert=/run/secrets/tls_ollama_crt
+      - --key=/run/secrets/tls_ollama_key
+      # SEC-20: Ollama tanpa autentikasi sendiri -> hanya ocr-worker (+ probe handshake blackbox) yang boleh masuk.
+      - --cacert=/run/secrets/efn_ca_crt
+      - --allow-cn=ocr-worker
+      - --allow-cn=blackbox-exporter
+      - --status=http://127.0.0.1:6065
+      - --quiet=conns
+    secrets: [efn_ca_crt, tls_ollama_crt, tls_ollama_key]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6065/_status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: ollama-tls
+
+  # Worker: amqps (user efn-ocr), PostgreSQL efn_ocr verify-full, MinIO efn-ocr (GetObject saja), Ollama HTTPS,
+  # metrik Prometheus HTTPS di :9100.
+  ocr-worker:
+    <<: *common
+    image: ${IMAGE_AI_OCR_WORKER:-ghcr.io/efn/ai-ocr-worker:dev}
+    build:
+      context: ../../services/ai-ocr-worker
+    profiles: ["ai"]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      AMQP_URL: amqps://efn-ocr@rabbitmq:5671
+      RABBITMQ_URL: amqps://efn-ocr@rabbitmq:5671
+      RABBITMQ_PASSWORD_FILE: /run/secrets/rabbitmq_password_ocr
+      AMQP_TLS_CA_FILE: /run/secrets/efn_ca_crt
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_DB: ${PG_DB:-efn_platform}
+      PG_USER: efn_ocr
+      PG_PASSWORD_FILE: /run/secrets/pg_password_ocr
+      PG_SSLMODE: verify-full
+      PG_SSLROOTCERT: /run/secrets/efn_ca_crt
+      OLLAMA_URL: https://ollama:11434
+      OLLAMA_CA_FILE: /run/secrets/efn_ca_crt
+      # mTLS ke sidecar ollama-tls (--allow-cn=ocr-worker, docs/04 §8.5): sertifikat tls_ocr_worker (EKU server+client)
+      OLLAMA_CLIENT_CERT_FILE: /run/secrets/tls_ocr_worker_crt
+      OLLAMA_CLIENT_KEY_FILE: /run/secrets/tls_ocr_worker_key
+      OLLAMA_MODEL: ${OLLAMA_VISION_MODEL:-qwen2.5vl:7b}
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: "9000"
+      MINIO_USE_SSL: "true"
+      MINIO_CA_FILE: /run/secrets/efn_ca_crt
+      MINIO_ACCESS_KEY: efn-ocr
+      MINIO_SECRET_KEY_FILE: /run/secrets/minio_ocr_secret
+      MINIO_BUCKET_MARKET_SCOUT: market-scout
+      OCR_CONFIDENCE_THRESHOLD: "0.80"
+      NAME_SIMILARITY_THRESHOLD: "0.75"
+      METRICS_PORT: "9100"
+      METRICS_TLS_CERT_FILE: /run/secrets/tls_ocr_worker_crt
+      METRICS_TLS_KEY_FILE: /run/secrets/tls_ocr_worker_key
+      METRICS_TLS_CA_FILE: /run/secrets/efn_ca_crt
+      # /metrics mewajibkan sertifikat klien dari CA internal (Prometheus); pembatasan CN tidak didukung
+      # prometheus-client -> pengecualian parsial E12 (ADR-022)
+      METRICS_TLS_CLIENT_CA_FILE: /run/secrets/efn_ca_crt
+    secrets:
+      - rabbitmq_password_ocr
+      - minio_ocr_secret
+      - pg_password_ocr
+      - efn_ca_crt
+      - tls_ocr_worker_crt
+      - tls_ocr_worker_key
+    networks: [internal, data]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 2G }
+    healthcheck:
+      test: ["CMD", "python", "-m", "efn_ocr.healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    labels:
+      service: ocr-worker
+
+  # ───────────────────────── OBSERVABILITY ─────────────────────────
+  # Endpoint HTTP komponen exporter-toolkit hanya TLS (infra/observability/web-config.yml). Image busybox tidak
+  # bisa memverifikasi TLS di healthcheck -> healthcheck Docker dinonaktifkan untuk komponen ber-TLS tanpa klien
+  # yang sesuai; kesehatannya dipantau Prometheus (`up`, EfnServiceDown) dan Uptime Kuma.
+  prometheus:
+    <<: *common
+    image: prom/prometheus:v2.55.1
+    profiles: ["observability"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.config.file=/etc/prometheus/web-config.yml
+      - --storage.tsdb.retention.time=30d
+    # tls_server_crt/key = sertifikat `prometheus` (EKU server+client): server web UI/API (mTLS: klien prometheus,
+    # grafana) DAN sertifikat klien untuk semua scrape/alerting (docs/04 §8.5).
+    secrets:
+      - efn_ca_crt
+      - minio_prometheus_token
+      - source: tls_prometheus_crt
+        target: tls_server_crt
+      - source: tls_prometheus_key
+        target: tls_server_key
+    volumes:
+      - ../observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../observability/web-config-ui.yml:/etc/prometheus/web-config.yml:ro
+      - ../observability/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
+      - ../observability/targets:/etc/prometheus/targets:ro
+      - prometheus-data:/prometheus
+    networks: [internal, data]
+    read_only: true
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 1G }
+    healthcheck:
+      disable: true
+    labels:
+      service: prometheus
+
+  # Image Loki 3.x tidak membawa shell/wget -> healthcheck Docker tidak tersedia;
+  # kesehatan Loki dipantau Prometheus (job `loki`, alert EfnServiceDown).
+  loki:
+    <<: *common
+    image: grafana/loki:3.2.1
+    profiles: ["observability"]
+    command: -config.file=/etc/loki/loki.yml
+    secrets: [efn_ca_crt, tls_loki_crt, tls_loki_key]   # efn_ca_crt: verifikasi sertifikat klien (mTLS)
+    volumes:
+      - ../observability/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+    networks: [internal]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 1G }
+    healthcheck:
+      disable: true
+    labels:
+      service: loki
+
+  promtail:
+    <<: *common
+    image: grafana/promtail:3.2.1
+    profiles: ["observability"]
+    command: -config.file=/etc/promtail/promtail.yml
+    secrets: [efn_ca_crt, tls_promtail_crt, tls_promtail_key]
+    volumes:
+      - ../observability/promtail.yml:/etc/promtail/promtail.yml:ro
+    networks: [internal, socket-proxy]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 256M }
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9080"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: promtail
+
+  grafana:
+    <<: *common
+    image: grafana/grafana:11.3.1
+    profiles: ["observability"]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: https://ops.${TRAEFIK_DOMAIN:-efn.local}
+      GF_SERVER_PROTOCOL: https
+      GF_SERVER_CERT_FILE: /run/secrets/tls_grafana_crt
+      GF_SERVER_CERT_KEY: /run/secrets/tls_grafana_key
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    secrets: [grafana_admin_password, efn_ca_crt, tls_grafana_crt, tls_grafana_key]
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks: [internal]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 512M }
+    healthcheck:
+      disable: true   # dipantau probe-internal-tls (grafana:3000) + Uptime Kuma
+    labels:
+      service: grafana
+      traefik.enable: "true"
+      traefik.docker.network: efn_internal
+      traefik.http.routers.ops.rule: Host(`ops.${TRAEFIK_DOMAIN:-efn.local}`)
+      traefik.http.routers.ops.entrypoints: wg-https
+      traefik.http.routers.ops.tls.certresolver: letsencrypt-dns
+      traefik.http.routers.ops.middlewares: internal-ops@file,secure-headers@file
+      traefik.http.services.ops.loadbalancer.server.port: "3000"
+      traefik.http.services.ops.loadbalancer.server.scheme: https
+      traefik.http.services.ops.loadbalancer.serversTransport: efn-grafana@file
+
+  # HTTPS native (UPTIME_KUMA_SSL_*); healthcheck bawaan image (extra/healthcheck) mengikuti mode SSL.
+  # Tidak cap_drop: entrypoint melakukan chown data.
+  uptime-kuma:
+    <<: *common
+    image: louislam/uptime-kuma:1.23.16
+    profiles: ["observability"]
+    environment:
+      UPTIME_KUMA_SSL_CERT: /run/secrets/tls_uptime_kuma_crt
+      UPTIME_KUMA_SSL_KEY: /run/secrets/tls_uptime_kuma_key
+      NODE_EXTRA_CA_CERTS: /run/secrets/efn_ca_crt
+    secrets: [efn_ca_crt, tls_uptime_kuma_crt, tls_uptime_kuma_key]
+    volumes:
+      - uptime-kuma-data:/app/data
+    networks: [internal, egress]
+    deploy:
+      resources:
+        limits: { memory: 512M }
+    labels:
+      service: uptime-kuma
+      traefik.enable: "true"
+      traefik.docker.network: efn_internal
+      traefik.http.routers.status.rule: Host(`status.${TRAEFIK_DOMAIN:-efn.local}`)
+      traefik.http.routers.status.entrypoints: wg-https
+      traefik.http.routers.status.tls.certresolver: letsencrypt-dns
+      traefik.http.routers.status.middlewares: internal-ops@file,secure-headers@file
+      traefik.http.services.status.loadbalancer.server.port: "3001"
+      traefik.http.services.status.loadbalancer.server.scheme: https
+      traefik.http.services.status.loadbalancer.serversTransport: efn-uptime-kuma@file
+
+  # ───────────────────────── OPS (alerting + exporter) ─────────────────────────
+  # Cluster gossip (9094) dimatikan: single instance, tidak ada listener plaintext.
+  alertmanager:
+    <<: *common
+    image: prom/alertmanager:v0.27.0
+    profiles: ["ops"]
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --web.config.file=/etc/alertmanager/web-config.yml
+      - --storage.path=/alertmanager
+      - --cluster.listen-address=
+      - --web.external-url=https://ops.${TRAEFIK_DOMAIN:-efn.local}/alertmanager
+    secrets:
+      - alertmanager_webhook_url
+      - efn_ca_crt
+      - source: tls_alertmanager_crt
+        target: tls_server_crt
+      - source: tls_alertmanager_key
+        target: tls_server_key
+    volumes:
+      - ../observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ../observability/web-config-ui.yml:/etc/alertmanager/web-config.yml:ro
+      - alertmanager-data:/alertmanager
+    networks: [internal, egress]
+    read_only: true
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 128M }
+    healthcheck:
+      disable: true
+    labels:
+      service: alertmanager
+
+  # Metrik host (disk, CPU, memori) + textfile collector untuk status backup/restore-test & masa berlaku
+  # sertifikat internal (ditulis scripts/backup.sh, restore-test.sh, deploy.sh ke ${NODE_EXPORTER_TEXTFILE_DIR}).
+  node-exporter:
+    <<: *common
+    image: prom/node-exporter:v1.8.2
+    profiles: ["ops"]
+    command:
+      - --path.rootfs=/host
+      - --web.config.file=/etc/node-exporter/web-config.yml
+      - --collector.textfile.directory=/textfile
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker/.+)($|/)
+    pid: host
+    secrets:
+      - efn_ca_crt
+      - source: tls_node_exporter_crt
+        target: tls_server_crt
+      - source: tls_node_exporter_key
+        target: tls_server_key
+    volumes:
+      - /:/host:ro,rslave
+      - ${NODE_EXPORTER_TEXTFILE_DIR:-/var/lib/efn/node-exporter}:/textfile:ro
+      - ../observability/web-config.yml:/etc/node-exporter/web-config.yml:ro
+    networks: [internal]
+    read_only: true
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 128M }
+    healthcheck:
+      disable: true
+    labels:
+      service: node-exporter
+
+  # cAdvisor (SEC-09): tanpa docker.sock, tanpa rootfs host. Metadata container lewat docker-socket-proxy (mTLS,
+  # read-only GET), statistik dari /sys/fs/cgroup (cgroup namespace host) + /var/lib/docker/image (metadata layer
+  # saja, bukan volume). cap_drop ALL. Listen 127.0.0.1:8080; TLS oleh sidecar cadvisor-tls :8443.
+  cadvisor:
+    <<: *common
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    profiles: ["ops"]
+    cgroup: host
+    command:
+      - --listen_ip=127.0.0.1
+      - --port=8080
+      - --docker=tcp://docker-socket-proxy:2376
+      - --docker-tls
+      - --docker-tls-ca=/run/secrets/efn_ca_crt
+      - --docker-tls-cert=/run/secrets/tls_cadvisor_crt
+      - --docker-tls-key=/run/secrets/tls_cadvisor_key
+      - --docker_only=true
+      - --housekeeping_interval=30s
+      - --disable_metrics=percpu,sched,tcp,udp,disk,diskIO,hugetlb,referenced_memory,cpu_topology,resctrl
+    secrets: [efn_ca_crt, tls_cadvisor_crt, tls_cadvisor_key]
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+      - /var/lib/docker/image:/var/lib/docker/image:ro
+    networks: [internal, socket-proxy]
+    read_only: true
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 256M }
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: cadvisor
+
+  cadvisor-tls:
+    <<: *ghostunnel
+    profiles: ["ops"]
+    network_mode: "service:cadvisor"
+    depends_on: [cadvisor]
+    command:
+      - server
+      - --listen=0.0.0.0:8443
+      - --target=127.0.0.1:8080
+      - --cert=/run/secrets/tls_cadvisor_crt
+      - --key=/run/secrets/tls_cadvisor_key
+      - --cacert=/run/secrets/efn_ca_crt
+      - --allow-cn=prometheus
+      - --status=http://127.0.0.1:6066
+      - --quiet=conns
+    secrets: [efn_ca_crt, tls_cadvisor_crt, tls_cadvisor_key]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6066/_status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: cadvisor-tls
+
+  # postgres-exporter: user efn_exporter (pg_monitor), TLS verify-full ke PostgreSQL, endpoint metrik TLS.
+  postgres-exporter:
+    <<: *common
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.16.0
+    profiles: ["ops"]
+    command:
+      - --extend.query-path=/etc/postgres-exporter/queries.yml
+      - --web.config.file=/etc/postgres-exporter/web-config.yml
+    environment:
+      DATA_SOURCE_URI: postgres:5432/${PG_DB:-efn_platform}?sslmode=verify-full&sslrootcert=/run/secrets/efn_ca_crt
+      DATA_SOURCE_USER: efn_exporter
+      DATA_SOURCE_PASS_FILE: /run/secrets/pg_password_exporter
+    secrets:
+      - pg_password_exporter
+      - efn_ca_crt
+      - source: tls_postgres_exporter_crt
+        target: tls_server_crt
+      - source: tls_postgres_exporter_key
+        target: tls_server_key
+    volumes:
+      - ../observability/postgres-exporter-queries.yml:/etc/postgres-exporter/queries.yml:ro
+      - ../observability/web-config.yml:/etc/postgres-exporter/web-config.yml:ro
+    networks: [data]
+    read_only: true
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 128M }
+    healthcheck:
+      disable: true
+    labels:
+      service: postgres-exporter
+
+  # redis_exporter: rediss + ACL efn-exporter; endpoint metrik TLS. Password dari secret lewat wrapper (env
+  # REDIS_PASSWORD hanya di proses exporter).
+  redis-exporter:
+    <<: *common
+    image: oliver006/redis_exporter:v1.66.0-alpine
+    profiles: ["ops"]
+    entrypoint: ["/bin/sh", "-c", "export REDIS_PASSWORD=\"$$(cat /run/secrets/redis_password_exporter)\"; exec /redis_exporter"]
+    environment:
+      REDIS_ADDR: rediss://redis:6379
+      REDIS_USER: efn-exporter
+      REDIS_EXPORTER_TLS_CA_CERT_FILE: /run/secrets/efn_ca_crt
+      REDIS_EXPORTER_TLS_SERVER_CERT_FILE: /run/secrets/tls_redis_exporter_crt
+      REDIS_EXPORTER_TLS_SERVER_KEY_FILE: /run/secrets/tls_redis_exporter_key
+      # mTLS: endpoint metrik mewajibkan sertifikat klien CA internal (EKU clientAuth hanya pada klien sah, §8.5)
+      REDIS_EXPORTER_TLS_SERVER_CA_CERT_FILE: /run/secrets/efn_ca_crt
+    secrets: [redis_password_exporter, efn_ca_crt, tls_redis_exporter_crt, tls_redis_exporter_key]
+    networks: [cache, data]
+    read_only: true
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 64M }
+    healthcheck:
+      disable: true
+    labels:
+      service: redis-exporter
+
+  # Probe health (HTTPS internal), handshake TLS semua listener internal, dan HTTPS publik (sertifikat ACME).
+  blackbox-exporter:
+    <<: *common
+    image: prom/blackbox-exporter:v0.25.0
+    profiles: ["ops"]
+    command:
+      - --config.file=/etc/blackbox/blackbox.yml
+      - --web.config.file=/etc/blackbox/web-config.yml
+    secrets:
+      - efn_ca_crt
+      - source: tls_blackbox_exporter_crt
+        target: tls_server_crt
+      - source: tls_blackbox_exporter_key
+        target: tls_server_key
+    volumes:
+      - ../observability/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+      - ../observability/web-config.yml:/etc/blackbox/web-config.yml:ro
+    networks: [internal, data, cache, egress]
+    read_only: true
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 64M }
+    healthcheck:
+      disable: true
+    labels:
+      service: blackbox-exporter

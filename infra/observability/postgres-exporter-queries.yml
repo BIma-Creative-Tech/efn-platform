@@ -1,0 +1,25 @@
+# Query tambahan postgres-exporter (--extend.query-path). Dipakai alert EfnWalArchiveFailing / EfnWalArchiveStale.
+# Catatan: flag extend.query-path berstatus deprecated di postgres-exporter; ganti ke collector bawaan saat tersedia.
+efn_archiver:
+  query: |
+    SELECT
+      archived_count,
+      failed_count,
+      COALESCE(EXTRACT(EPOCH FROM now() - last_archived_time), -1) AS last_archive_age_seconds,
+      CASE WHEN last_failed_time IS NOT NULL
+                AND last_failed_time > COALESCE(last_archived_time, 'epoch'::timestamptz)
+           THEN 1 ELSE 0 END AS failing
+    FROM pg_stat_archiver
+  metrics:
+    - archived_count:
+        usage: COUNTER
+        description: Jumlah segmen WAL yang berhasil di-archive (WAL-G wal-push)
+    - failed_count:
+        usage: COUNTER
+        description: Jumlah percobaan archive WAL yang gagal
+    - last_archive_age_seconds:
+        usage: GAUGE
+        description: Detik sejak WAL terakhir berhasil di-archive (-1 bila belum pernah)
+    - failing:
+        usage: GAUGE
+        description: 1 bila kegagalan archive terakhir lebih baru dari keberhasilan terakhir

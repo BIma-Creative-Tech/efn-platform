@@ -1,0 +1,9 @@
+# Target probe HTTPS publik. Domain efn.local diganti TRAEFIK_DOMAIN oleh scripts/deploy.sh di host.
+# Di dev (sertifikat self-signed) probe ini gagal dan itu wajar; alert cert hanya bermakna di staging/prod.
+# erp./bi./ops./status. TIDAK diprobe dari sini: hanya ada di entrypoint wg-https (IP WireGuard, ADR-023) dan tidak
+# punya record DNS publik; sertifikat DNS-01 dipantau lewat Traefik log + runbook tls-cert-expiry.md.
+- targets:
+    - https://app.efn.local/api/health
+    - https://api.efn.local/health
+  labels:
+    probe: public

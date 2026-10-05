@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_pos_payment_intent_view_list" model="ir.ui.view">
+        <field name="name">efn.pos.payment.intent.list</field>
+        <field name="model">efn.pos.payment.intent</field>
+        <field name="arch" type="xml">
+            <list create="false" edit="false" delete="false">
+                <field name="create_date"/>
+                <field name="bff_payment_id"/>
+                <field name="pos_config_id"/>
+                <field name="pos_order_id"/>
+                <field name="amount"/>
+                <field name="currency_id" column_invisible="True"/>
+                <field name="status" decoration-success="status == 'paid'" decoration-warning="status == 'pending'"/>
+                <field name="note"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_pos_payment_intent_view_form" model="ir.ui.view">
+        <field name="name">efn.pos.payment.intent.form</field>
+        <field name="model">efn.pos.payment.intent</field>
+        <field name="arch" type="xml">
+            <form create="false" edit="false" delete="false">
+                <header>
+                    <field name="status" widget="statusbar"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="bff_payment_id"/>
+                            <field name="provider"/>
+                            <field name="provider_ref"/>
+                            <field name="amount"/>
+                            <field name="currency_id" invisible="1"/>
+                            <field name="paid_at"/>
+                            <field name="expires_at"/>
+                        </group>
+                        <group>
+                            <field name="pos_config_id"/>
+                            <field name="payment_method_id"/>
+                            <field name="pos_order_uuid"/>
+                            <field name="pos_order_id"/>
+                            <field name="pos_payment_id"/>
+                            <field name="note"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                    </group>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="efn_pos_payment_intent_view_search" model="ir.ui.view">
+        <field name="name">efn.pos.payment.intent.search</field>
+        <field name="model">efn.pos.payment.intent</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="bff_payment_id"/>
+                <field name="pos_order_uuid"/>
+                <filter name="orphan" string="Lunas tanpa order"
+                        domain="[('status', '=', 'paid'), ('pos_payment_id', '=', False)]"/>
+                <filter name="pending" string="Menunggu" domain="[('status', '=', 'pending')]"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_efn_pos_payment_intent" model="ir.actions.act_window">
+        <field name="name">QRIS Gateway (EFN)</field>
+        <field name="res_model">efn.pos.payment.intent</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="efn_pos_payment_intent_view_search"/>
+    </record>
+
+    <menuitem id="menu_efn_pos_payment_intent"
+              name="QRIS Gateway (EFN)"
+              parent="point_of_sale.menu_point_of_sale"
+              action="action_efn_pos_payment_intent"
+              groups="point_of_sale.group_pos_manager,account.group_account_manager"
+              sequence="90"/>
+</odoo>

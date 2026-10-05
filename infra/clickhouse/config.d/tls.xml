@@ -1,0 +1,38 @@
+<!--
+  ClickHouse TLS (docs/04 §7.1, ADR-022). Pemilik: efn-devsecops-engineer.
+  - HTTPS 8443 dan native TLS 9440 saja; port plaintext (8123 HTTP, 9000 native, 9004 MySQL, 9005 PostgreSQL,
+    9009 interserver) DIHAPUS.
+  - Sertifikat server = Docker secret tls_clickhouse_crt/key; CA = efn_ca_crt (klien: CH_SECURE=true, CH_CA_FILE).
+-->
+<clickhouse>
+    <http_port remove="1"/>
+    <tcp_port remove="1"/>
+    <mysql_port remove="1"/>
+    <postgresql_port remove="1"/>
+    <interserver_http_port remove="1"/>
+
+    <https_port>8443</https_port>
+    <tcp_port_secure>9440</tcp_port_secure>
+
+    <openSSL>
+        <server>
+            <certificateFile>/run/secrets/tls_clickhouse_crt</certificateFile>
+            <privateKeyFile>/run/secrets/tls_clickhouse_key</privateKeyFile>
+            <caConfig>/run/secrets/efn_ca_crt</caConfig>
+            <loadDefaultCAFile>false</loadDefaultCAFile>
+            <verificationMode>none</verificationMode>
+            <cacheSessions>true</cacheSessions>
+            <disableProtocols>sslv2,sslv3,tlsv1,tlsv1_1</disableProtocols>
+            <preferServerCiphers>true</preferServerCiphers>
+        </server>
+        <client>
+            <caConfig>/run/secrets/efn_ca_crt</caConfig>
+            <loadDefaultCAFile>false</loadDefaultCAFile>
+            <verificationMode>strict</verificationMode>
+            <disableProtocols>sslv2,sslv3,tlsv1,tlsv1_1</disableProtocols>
+            <invalidCertificateHandler>
+                <name>RejectCertificateHandler</name>
+            </invalidCertificateHandler>
+        </client>
+    </openSSL>
+</clickhouse>

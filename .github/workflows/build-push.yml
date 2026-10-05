@@ -1,0 +1,132 @@
+# Build image per service -> scan (Trivy) -> SBOM (Syft) -> sign (Cosign keyless) -> attest provenance -> push GHCR.
+# Dipicu oleh push ke main (tag: sha-<short>, main) dan tag v* (tag: vX.Y.Z, latest).
+name: Build & Push Images
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write       # cosign keyless (OIDC)
+  attestations: write   # build provenance
+  security-events: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NS: ${{ github.repository_owner }}
+
+jobs:
+  build:
+    name: ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [odoo, api-gateway, superapp-web, ai-ocr-worker, etl, postgres]
+        include:
+          - { service: odoo, context: services/odoo }
+          - { service: api-gateway, context: services/api-gateway }
+          - { service: superapp-web, context: services/superapp-web }
+          - { service: ai-ocr-worker, context: services/ai-ocr-worker }
+          - { service: etl, context: services/etl }
+          # PostgreSQL + WAL-G (R-T08): image infra, ikut scan/SBOM/sign seperti image aplikasi
+          - { service: postgres, context: infra/backup/postgres }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Fetch OCA addons (hanya odoo)
+        if: matrix.service == 'odoo'
+        run: bash scripts/fetch-oca.sh services/odoo/oca
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Metadata (tags & labels)
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5.10.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NS }}/${{ matrix.service }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+          labels: |
+            org.opencontainers.image.vendor=Era Food and Nourishment
+            org.opencontainers.image.title=efn-${{ matrix.service }}
+
+      - name: Build (load lokal untuk scan sebelum push)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
+        with:
+          context: ${{ matrix.context }}
+          target: ${{ (matrix.service == 'api-gateway' || matrix.service == 'superapp-web') && 'runtime' || '' }}
+          load: true
+          tags: local/${{ matrix.service }}:scan
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,scope=${{ matrix.service }},mode=max
+          provenance: false
+
+      - name: Trivy image scan (gate HIGH/CRITICAL)
+        # 0.35.0: satu-satunya tag yang tidak di-force-push pada insiden supply chain Maret 2026 (CVE-2026-33634);
+        # binary Trivy dipin ke versi aman.
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
+        with:
+          version: v0.69.3
+          image-ref: local/${{ matrix.service }}:scan
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: sarif
+          output: trivy-${{ matrix.service }}.sarif
+      - uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52  # v3.38.2
+        if: always()
+        with:
+          sarif_file: trivy-${{ matrix.service }}.sarif
+          category: trivy-image-${{ matrix.service }}
+
+      - name: Push
+        id: push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
+        with:
+          context: ${{ matrix.context }}
+          target: ${{ (matrix.service == 'api-gateway' || matrix.service == 'superapp-web') && 'runtime' || '' }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          provenance: mode=max
+          sbom: true
+
+      - name: SBOM (Syft, SPDX) sebagai artifact
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NS }}/${{ matrix.service }}@${{ steps.push.outputs.digest }}
+          format: spdx-json
+          artifact-name: sbom-${{ matrix.service }}.spdx.json
+
+      - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
+
+      - name: Cosign sign (keyless, OIDC)
+        env:
+          COSIGN_YES: "true"
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NS }}/${{ matrix.service }}@${{ steps.push.outputs.digest }}
+        run: cosign sign "$IMAGE"
+
+      - name: Attest build provenance (GitHub)
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2.4.0
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NS }}/${{ matrix.service }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

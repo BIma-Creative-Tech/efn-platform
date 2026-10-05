@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Filter & menu untuk supervisor: order berbayar yang token promonya gagal di-consume
+         (ADR-017 #2: ditandai review, tidak dibatalkan otomatis). -->
+    <record id="view_pos_order_filter_inherit_efn_pos_otp_gate" model="ir.ui.view">
+        <field name="name">pos.order.search.inherit.efn.pos.otp.gate</field>
+        <field name="model">pos.order</field>
+        <field name="inherit_id" ref="point_of_sale.view_pos_order_filter"/>
+        <field name="arch" type="xml">
+            <filter name="invoiced" position="after">
+                <filter string="Perlu review OTP promo" name="efn_otp_review"
+                        domain="[('efn_otp_gate_state', '=', 'review')]"/>
+            </filter>
+        </field>
+    </record>
+
+    <record id="action_pos_order_efn_otp_review" model="ir.actions.act_window">
+        <field name="name">Review OTP Promo</field>
+        <field name="res_model">pos.order</field>
+        <field name="view_mode">list,form</field>
+        <field name="domain">[('efn_otp_gate_state', '=', 'review')]</field>
+        <field name="context">{}</field>
+    </record>
+
+    <menuitem id="menu_pos_order_efn_otp_review"
+              name="Review OTP Promo"
+              parent="point_of_sale.menu_point_of_sale"
+              action="action_pos_order_efn_otp_review"
+              sequence="90"
+              groups="point_of_sale.group_pos_manager"/>
+</odoo>

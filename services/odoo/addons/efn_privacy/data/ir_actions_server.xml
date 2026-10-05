@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Backfill / rotasi pepper. Tidak di-bind ke menu Action partner; jalankan dari
+         Settings > Technical > Server Actions. Metode menolak user non-administrator. -->
+    <record id="action_efn_recompute_member_hash" model="ir.actions.server">
+        <field name="name">EFN: hitung ulang member hash (admin)</field>
+        <field name="model_id" ref="base.model_res_partner"/>
+        <field name="state">code</field>
+        <field name="code">model._efn_recompute_member_hash()</field>
+    </record>
+</odoo>

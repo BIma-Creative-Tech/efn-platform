@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Filter tersimpan (ir.filters 19.0: name, model_id, domain, context, sort, user_ids, action_id)
+     untuk audit supervisor atas baris order POS. user_ids kosong = dibagikan ke semua user yang
+     berhak membaca pos.order.line; action_id kosong = muncul di semua tampilan pos.order.line
+     (mis. point_of_sale.action_pos_order_line, Point of Sale → Reporting/Orders → Order Lines).
+     Field terverifikasi 19.0: pos.order.line.discount, price_type ('original'|'manual'|'automatic'),
+     price_subtotal, refunded_orderline_id (point_of_sale); reward_id, is_reward_line (pos_loyalty). -->
+<odoo noupdate="1">
+    <record id="filter_pos_line_manual_discount" model="ir.filters">
+        <field name="name">EFN Audit: Diskon baris tanpa program promo</field>
+        <field name="model_id">pos.order.line</field>
+        <field name="domain">[('discount', '&gt;', 0), ('reward_id', '=', False), ('refunded_orderline_id', '=', False)]</field>
+        <field name="context">{'group_by': ['order_id']}</field>
+        <field name="sort">[]</field>
+    </record>
+
+    <record id="filter_pos_line_manual_price" model="ir.filters">
+        <field name="name">EFN Audit: Harga diubah manual</field>
+        <field name="model_id">pos.order.line</field>
+        <field name="domain">[('price_type', '=', 'manual'), ('refunded_orderline_id', '=', False)]</field>
+        <field name="context">{'group_by': ['order_id']}</field>
+        <field name="sort">[]</field>
+    </record>
+
+    <!-- Baris bernilai negatif yang bukan reward promo & bukan refund: diskon global (pos_discount)
+         atau produk "diskon" yang diinput manual. -->
+    <record id="filter_pos_line_negative_non_reward" model="ir.filters">
+        <field name="name">EFN Audit: Baris negatif non-promo (diskon global/manual)</field>
+        <field name="model_id">pos.order.line</field>
+        <field name="domain">[('price_subtotal', '&lt;', 0), ('is_reward_line', '=', False), ('refunded_orderline_id', '=', False)]</field>
+        <field name="context">{'group_by': ['order_id']}</field>
+        <field name="sort">[]</field>
+    </record>
+</odoo>

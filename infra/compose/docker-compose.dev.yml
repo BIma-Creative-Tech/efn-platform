@@ -1,0 +1,129 @@
+# Override untuk laptop developer. Mem-publish port ke 127.0.0.1 laptop dan me-mount source code untuk hot reload.
+# JANGAN dipakai di server. Dev = prod untuk enkripsi: PKI dari `make pki`/`make secrets` (scripts/gen-pki.sh),
+# semua port yang dipublish adalah port TLS (tidak ada EFN_ALLOW_PLAINTEXT). Untuk alat lokal (psql, redis-cli,
+# DBeaver) gunakan CA secrets/efn_ca_crt.txt dan hostname `localhost` (ada di SAN).
+# Catatan: daftar `ports` digabung (append) dengan base; port 80/443 Traefik sudah ada di base.
+# Port service ber-sidecar dipublish di service app (pemilik network namespace), bukan di sidecar.
+services:
+  # Host internal (erp./bi./ops./status.) hanya di entrypoint wg-https: dev = https://erp.efn.local:9443
+  # (base: 127.0.0.1:9443 -> :8443). Sertifikat publik dev = default self-signed Traefik (E8).
+  traefik:
+    environment:
+      # Browser laptop -> port publish -> Traefik terlihat dari bridge Docker Desktop (bukan WireGuard)
+      - EFN_INTERNAL_EXTRA_CIDR=172.16.0.0/12
+
+  # `command` menggantikan base seluruhnya: parameter archive WAL-G, TLS, hba_file, SEC-18 tetap disertakan.
+  # Set PG_ARCHIVE_MODE=off di .env bila tidak ingin archiving di laptop.
+  postgres:
+    image: efn/postgres:dev
+    ports: ["127.0.0.1:5432:5432"]   # TLS wajib: psql "sslmode=verify-full sslrootcert=secrets/efn_ca_crt.txt host=localhost"
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_mode=${PG_ARCHIVE_MODE:-on}
+      - -c
+      - archive_command=/usr/local/bin/efn-walg wal-push %p
+      - -c
+      - archive_timeout=900
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - log_statement=all
+      - -c
+      - log_parameter_max_length=0
+      - -c
+      - log_parameter_max_length_on_error=0
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/secrets/tls_postgres_crt
+      - -c
+      - ssl_key_file=/var/run/postgresql/efn-tls/server.key
+      - -c
+      - ssl_min_protocol_version=TLSv1.2
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+
+  redis:
+    ports: ["127.0.0.1:6379:6379"]          # rediss
+
+  rabbitmq:
+    ports: ["127.0.0.1:5671:5671", "127.0.0.1:15671:15671"]   # amqps, management https
+
+  minio:
+    ports: ["127.0.0.1:9000:9000", "127.0.0.1:9001:9001"]     # https (API, console)
+
+  odoo:
+    image: efn/odoo:dev
+    ports: ["127.0.0.1:8443:8443", "127.0.0.1:8444:8444"]     # sidecar ghostunnel (https)
+    volumes:
+      - ../../services/odoo/addons:/mnt/extra-addons:ro
+    environment:
+      APP_ENV: dev
+      ODOO_DEV_MODE: "all"
+
+  api-gateway:
+    image: efn/api-gateway:dev
+    build:
+      target: dev
+    ports: ["127.0.0.1:3000:3000"]          # https
+    environment:
+      NODE_ENV: development
+      APP_ENV: dev
+      WHATSAPP_ENABLED: "false"
+      PAYMENT_PROVIDER: mock
+      # Teks consent DRAFT frontend (services/superapp-web/lib/consent.ts): versi persis + SHA-256 UTF-8 `body`.
+      # Dijaga test superapp-web tests/consent.test.ts — ubah teks = ubah keduanya (G6 QA).
+      CONSENT_LOCATION_VERSION: location@2026-10-06
+      CONSENT_LOCATION_TEXT_SHA256: 938707dc56c73323db27d0360d69386bf95e290ce0b0a465741de78ca19c96e5
+      CONSENT_MARKETING_VERSION: marketing@2026-10-06
+      CONSENT_MARKETING_TEXT_SHA256: 5a04537c9eacd169d6b899e6da058e8c17da358119ff09d65cd6b8c4309d76ec
+    volumes:
+      - ../../services/api-gateway/src:/app/src:ro
+    read_only: false
+    command: ["npm", "run", "start:dev"]
+
+  # Stage dev image: `next dev -H ${HOSTNAME}` -> 127.0.0.1 (base env), diakses lewat sidecar :3443
+  superapp-web:
+    image: efn/superapp-web:dev
+    build:
+      target: dev
+    ports: ["127.0.0.1:3443:3443"]          # sidecar ghostunnel (https)
+    environment:
+      NODE_ENV: development
+      APP_ENV: dev
+      # Dev via https://app.efn.local (Traefik) -> cookie Secure tetap jalan; COOKIE_INSECURE diabaikan di production.
+    volumes:
+      - ../../services/superapp-web/app:/app/app:ro
+      - ../../services/superapp-web/lib:/app/lib:ro
+      - ../../services/superapp-web/components:/app/components:ro
+      - ../../services/superapp-web/middleware.ts:/app/middleware.ts:ro
+    read_only: false
+
+  clickhouse:
+    ports: ["127.0.0.1:18443:8443", "127.0.0.1:9440:9440"]    # https (host 18443: 8443 dipakai odoo), native TLS
+
+  metabase:
+    ports: ["127.0.0.1:3444:3443"]          # sidecar ghostunnel (https; host 3444: 3443 dipakai superapp-web)
+
+  ollama:
+    ports: ["127.0.0.1:11434:11434"]        # sidecar ghostunnel (https)
+
+  etl:
+    image: efn/etl:dev
+    environment:
+      APP_ENV: dev
+      ETL_INTERVAL_SECONDS: "120"
+
+  ocr-worker:
+    image: efn/ai-ocr-worker:dev
+    environment:
+      APP_ENV: dev

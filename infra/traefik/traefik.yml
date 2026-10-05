@@ -1,0 +1,123 @@
+# Traefik v3 static configuration (docs/04 §7.1, §7.4, §7.5; ADR-022).
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+log:
+  level: INFO
+  format: json
+
+accessLog:
+  format: json
+  fields:
+    headers:
+      names:
+        Authorization: drop
+        Cookie: drop
+
+# Ping hanya di loopback container (healthcheck `traefik healthcheck --ping`), bukan di network.
+ping:
+  entryPoint: ping
+
+# Metrik Prometheus: router manual (infra/traefik/dynamic/internal-tls.yml) di entrypoint `metrics` dengan TLS
+# sertifikat internal tls_traefik_* -> tidak ada endpoint metrik plaintext.
+metrics:
+  prometheus:
+    entryPoint: metrics
+    addRoutersLabels: true
+    manualRouting: true
+
+entryPoints:
+  ping:
+    address: "127.0.0.1:8081"
+  metrics:
+    address: ":8082"
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  websecure:
+    address: ":443"
+    http:
+      tls: {}
+      middlewares:
+        - secure-headers@file
+    # SEC-03/SEC-21: X-Forwarded-For HANYA dipercaya dari Cloudflare. Peer WireGuard tidak lewat proxy (dan kini
+    # masuk lewat entrypoint wg-https), jadi 10.0.0.0/8 tidak lagi dipercaya -> peer outlet tidak bisa memalsukan IP
+    # untuk rate limit api.
+    # Blok Cloudflare DIBANGKITKAN dari infra/traefik/cloudflare-ips.txt oleh scripts/update-cloudflare-ips.sh
+    # (CI memeriksa sinkron: `scripts/update-cloudflare-ips.sh --check`). Jangan edit manual di antara penanda.
+    forwardedHeaders:
+      trustedIPs:
+        # BEGIN cloudflare-ips
+        - 173.245.48.0/20
+        - 103.21.244.0/22
+        - 103.22.200.0/22
+        - 103.31.4.0/22
+        - 141.101.64.0/18
+        - 108.162.192.0/18
+        - 190.93.240.0/20
+        - 188.114.96.0/20
+        - 197.234.240.0/22
+        - 198.41.128.0/17
+        - 162.158.0.0/15
+        - 104.16.0.0/13
+        - 104.24.0.0/14
+        - 172.64.0.0/13
+        - 131.0.72.0/22
+        - 2400:cb00::/32
+        - 2606:4700::/32
+        - 2803:f800::/32
+        - 2405:b500::/32
+        - 2405:8100::/32
+        - 2a06:98c0::/29
+        - 2c0f:f248::/32
+        # END cloudflare-ips
+  # ADR-023: entrypoint khusus host internal (erp., bi., ops., status.). Di container :8443; compose mem-publish
+  # HANYA ke IP WireGuard host (EFN_WG_BIND:EFN_WG_HTTPS_PORT). Tanpa forwardedHeaders (XFF tidak dipercaya,
+  # RemoteAddr = IP peer WireGuard asli karena DNAT Docker mempertahankan alamat sumber).
+  wg-https:
+    address: ":8443"
+    http:
+      tls: {}
+      middlewares:
+        - secure-headers@file
+
+providers:
+  docker:
+    # Lewat docker-socket-proxy (read-only GET) via sidecar ghostunnel mTLS :2376 (tidak ada TCP plaintext).
+    endpoint: "tcp://docker-socket-proxy:2376"
+    tls:
+      ca: /run/secrets/efn_ca_crt
+      cert: /run/secrets/tls_traefik_crt
+      key: /run/secrets/tls_traefik_key
+    exposedByDefault: false
+    network: efn_internal
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+certificatesResolvers:
+  # Host publik (app., api., mart., kitchen., apex) lewat Cloudflare
+  letsencrypt:
+    acme:
+      email: "ops@example.com"   # ganti via sed di scripts/deploy.sh dari ACME_EMAIL
+      storage: /acme/acme.json
+      httpChallenge:
+        entryPoint: web
+  # Host internal di wg-https (ADR-023 butir 2): DNS-01 -> tidak butuh port 80 publik maupun record A publik.
+  # Token: secret acme_dns_api_token (<ACME_DNS_TOKEN_ENV>_FILE di compose). Provider diganti deploy.sh dari
+  # ACME_DNS_PROVIDER (default cloudflare).
+  letsencrypt-dns:
+    acme:
+      email: "ops@example.com"   # ganti via sed di scripts/deploy.sh dari ACME_EMAIL
+      storage: /acme/acme-dns.json
+      dnsChallenge:
+        provider: cloudflare
+        resolvers:
+          - "1.1.1.1:53"
+          - "9.9.9.9:53"

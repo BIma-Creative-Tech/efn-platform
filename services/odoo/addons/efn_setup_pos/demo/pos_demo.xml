@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO — bergantung keputusan klien: Q-18 (jenis layanan outlet), Q-19 (stasiun dapur &
+     routing), Q-20 (layout meja), Q-24 (printer), Q-56 (perangkat). Hanya DB demo.
+     pos.config TIDAK dibuat di sini: default pos.config (journal, payment method, picking type)
+     dihitung dari env.company sehingga pembuatannya untuk company non-aktif lewat XML rawan
+     gagal check_company. Buat pos.config per outlet lewat UI mengikuti README (checklist). -->
+<odoo>
+    <!-- Kategori POS = dasar routing printer dapur per stasiun (pos.printer.product_categories_ids). -->
+    <record id="pos_categ_hot_kitchen" model="pos.category">
+        <field name="name">Dapur Panas</field>
+        <field name="sequence">10</field>
+    </record>
+    <record id="pos_categ_bar" model="pos.category">
+        <field name="name">Bar Minuman</field>
+        <field name="sequence">20</field>
+    </record>
+
+    <!-- Printer dapur Epson ePOS (tanpa IoT box). IP dari blok dokumentasi RFC 5737 (PLACEHOLDER). -->
+    <record id="pos_printer_hot_kitchen" model="pos.printer">
+        <field name="name">Printer Dapur Panas (DEMO)</field>
+        <field name="printer_type">epson_epos</field>
+        <field name="epson_printer_ip">192.0.2.10</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="product_categories_ids" eval="[(6, 0, [ref('pos_categ_hot_kitchen')])]"/>
+    </record>
+    <record id="pos_printer_bar" model="pos.printer">
+        <field name="name">Printer Bar (DEMO)</field>
+        <field name="printer_type">epson_epos</field>
+        <field name="epson_printer_ip">192.0.2.11</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="product_categories_ids" eval="[(6, 0, [ref('pos_categ_bar')])]"/>
+    </record>
+
+    <!-- Denah meja contoh (hubungkan ke pos.config restoran lewat floor_ids). -->
+    <record id="floor_main" model="restaurant.floor">
+        <field name="name">Lantai Utama (DEMO)</field>
+        <field name="sequence">1</field>
+    </record>
+    <record id="table_1" model="restaurant.table">
+        <field name="floor_id" ref="floor_main"/>
+        <field name="table_number">1</field>
+        <field name="seats">4</field>
+        <field name="shape">square</field>
+        <field name="position_h">50</field>
+        <field name="position_v">50</field>
+    </record>
+    <record id="table_2" model="restaurant.table">
+        <field name="floor_id" ref="floor_main"/>
+        <field name="table_number">2</field>
+        <field name="seats">4</field>
+        <field name="shape">square</field>
+        <field name="position_h">150</field>
+        <field name="position_v">50</field>
+    </record>
+    <record id="table_3" model="restaurant.table">
+        <field name="floor_id" ref="floor_main"/>
+        <field name="table_number">3</field>
+        <field name="seats">2</field>
+        <field name="shape">square</field>
+        <field name="position_h">250</field>
+        <field name="position_v">50</field>
+    </record>
+</odoo>

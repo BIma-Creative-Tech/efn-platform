@@ -1,0 +1,14 @@
+# Setiap perubahan pada path di bawah wajib direview oleh tim pemilik (branch protection: require CODEOWNERS review).
+# Ganti handle tim sesuai organisasi GitHub EFN.
+*                         @efn/platform-leads
+/docs/                    @efn/product-owner @efn/architects
+/docs/decisions/          @efn/architects
+/infra/                   @efn/devops @efn/security
+/.github/                 @efn/devops @efn/security
+/scripts/                 @efn/devops
+/services/odoo/           @efn/odoo-engineers
+/services/api-gateway/    @efn/backend
+/services/superapp-web/   @efn/frontend
+/services/ai-ocr-worker/  @efn/data-ai
+/services/etl/            @efn/data-ai
+SECURITY.md               @efn/security

@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- EFN Setup Company (ADR-001). noupdate="1": dimuat sekali saat install; perubahan
+     pengguna (nama legal, NPWP, alamat) tidak ditimpa saat upgrade modul.
+     Nama company adalah PLACEHOLDER sampai klien menjawab Q-1 (daftar PT & nama legal).
+     Kode company mengikuti kontrak docs/04_SERVICE_CONTRACTS.md §1 (field efn_core).
+     efn_business_type TIDAK diisi: sejak efn_core 19.0.1.2.0 field itu compute stored dari
+     efn_brand_code (temuan QA U6, Gelombang 5). -->
+<odoo noupdate="1">
+
+    <!-- Rupiah aktif (base.IDR nonaktif di database baru). -->
+    <record id="base.IDR" model="res.currency">
+        <field name="active" eval="True"/>
+    </record>
+
+    <!-- 4 PT = 4 company terpisah (badan hukum berbeda). JANGAN memakai parent_id
+         (fitur "Branches" Odoo): cabang berbagi CoA/pajak induk, tidak cocok untuk PT berbeda. -->
+    <record id="company_efn" model="res.company">
+        <field name="name">PT EFN Holding (PLACEHOLDER nama legal)</field>
+        <field name="sequence">1</field>
+        <field name="efn_brand_code">EFN</field>
+        <field name="country_id" ref="base.id"/>
+        <field name="currency_id" ref="base.IDR"/>
+    </record>
+
+    <record id="company_rtl" model="res.company">
+        <field name="name">PT EFN Retail (PLACEHOLDER nama legal)</field>
+        <field name="sequence">2</field>
+        <field name="efn_brand_code">RTL</field>
+        <field name="country_id" ref="base.id"/>
+        <field name="currency_id" ref="base.IDR"/>
+    </record>
+
+    <record id="company_fnb" model="res.company">
+        <field name="name">PT EFN F&amp;B (PLACEHOLDER nama legal)</field>
+        <field name="sequence">3</field>
+        <field name="efn_brand_code">FNB</field>
+        <field name="country_id" ref="base.id"/>
+        <field name="currency_id" ref="base.IDR"/>
+    </record>
+
+    <record id="company_farm" model="res.company">
+        <field name="name">PT EFN Farming (PLACEHOLDER nama legal)</field>
+        <field name="sequence">4</field>
+        <field name="efn_brand_code">FARM</field>
+        <field name="country_id" ref="base.id"/>
+        <field name="currency_id" ref="base.IDR"/>
+    </record>
+
+    <!-- Admin boleh berpindah ke keempat company (user lain diatur per peran). -->
+    <record id="base.user_admin" model="res.users">
+        <field name="company_ids" eval="[(4, ref('company_efn')), (4, ref('company_rtl')), (4, ref('company_fnb')), (4, ref('company_farm'))]"/>
+    </record>
+
+    <!-- Fiscal localization Indonesia (template 'id' dari l10n_id) per company.
+         account.chart.template.try_loading(template_code, company) BUKAN @api.model,
+         sehingga argumen pertama adalah ids kosong. Di blok noupdate, <function> hanya
+         dijalankan saat install (tidak saat upgrade).
+         Template memberi PPN (tax_ST4 "12% (Non-Luxury Good)" = 12% x DPP 11/12, efektif 11%)
+         sebagai pajak penjualan default; PB1 TIDAK ada di template (lihat
+         data/account_tax_pb1_data.xml, dimuat SETELAH file ini karena pajak butuh fiscal
+         country yang di-set try_loading). -->
+    <function model="account.chart.template" name="try_loading" eval="[[], 'id', ref('company_efn')]"/>
+    <function model="account.chart.template" name="try_loading" eval="[[], 'id', ref('company_rtl')]"/>
+    <function model="account.chart.template" name="try_loading" eval="[[], 'id', ref('company_fnb')]"/>
+    <function model="account.chart.template" name="try_loading" eval="[[], 'id', ref('company_farm')]"/>
+</odoo>

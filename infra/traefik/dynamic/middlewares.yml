@@ -1,0 +1,117 @@
+# Traefik dynamic configuration: middleware keamanan yang direferensikan via label `xxx@file`
+# (docs/04 §7.4 SEC-01, §7.5 SEC-03).
+http:
+  middlewares:
+    secure-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        forceSTSHeader: true
+        frameDeny: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        referrerPolicy: strict-origin-when-cross-origin
+        permissionsPolicy: "camera=(self), geolocation=(self), microphone=()"
+        customResponseHeaders:
+          Server: ""
+          X-Powered-By: ""
+
+    # Odoo: tutup database manager dari luar (R-S03). Router odoo-* juga internal-only (SEC-01).
+    odoo-block-dbmanager:
+      replacePathRegex:
+        regex: "^/web/database/(manager|selector|create|duplicate|drop|backup|restore|change_password|list)(.*)$"
+        replacement: "/web/efn-blocked"
+
+    # Tolak semua (403): dipakai router odoo-rpc-block untuk /xmlrpc, /jsonrpc, /json/2 (SEC-22). Sidecar odoo-tls
+    # hanya menerima mTLS CN traefik (+ probe blackbox) -> tidak ada jalur RPC in-cluster yang melewati Traefik.
+    deny-all:
+      ipAllowList:
+        sourceRange:
+          - 127.0.0.1/32
+
+    # Publik lewat Cloudflare: IP klien = entri XFF paling kanan yang ditambahkan Cloudflare (depth 1).
+    # XFF hanya dipercaya dari Cloudflare/WireGuard (traefik.yml forwardedHeaders.trustedIPs); firewall origin
+    # hanya membuka 443 untuk Cloudflare + WireGuard (docs/runbooks/origin-firewall.md).
+    ratelimit-default:
+      rateLimit:
+        average: 100
+        burst: 200
+        period: 1s
+        sourceCriterion:
+          ipStrategy:
+            depth: 1
+
+    # API publik (OTP, login, upload): lebih ketat (R-S04)
+    ratelimit-api:
+      rateLimit:
+        average: 30
+        burst: 60
+        period: 1s
+        sourceCriterion:
+          ipStrategy:
+            depth: 1
+
+    # Login Odoo (SEC-01): sumber = peer WireGuard (RemoteAddr, tanpa XFF). Satu outlet ber-NAT = satu IP,
+    # jadi batas per outlet: 10/menit, burst 20 (cukup untuk pergantian shift beberapa kasir).
+    ratelimit-odoo-login:
+      rateLimit:
+        average: 10
+        burst: 20
+        period: 1m
+
+    # Odoo umum di jalur WireGuard (RemoteAddr)
+    ratelimit-odoo:
+      rateLimit:
+        average: 50
+        burst: 100
+        period: 1s
+
+    # Allowlist WireGuard (SEC-21, ADR-023 butir 3). Lapisan kedua setelah entrypoint wg-https yang hanya
+    # di-bind ke IP WireGuard host. RemoteAddr (tanpa ipStrategy): akses WireGuard langsung tidak membawa XFF.
+    # Host internal TIDAK boleh di-proxy Cloudflare; DNS-nya menunjuk IP WireGuard server (split DNS).
+    # Tidak ada subnet Docker di sini: tidak ada service internal yang perlu memanggil Odoo/BI lewat Traefik.
+    # Dev: EFN_INTERNAL_EXTRA_CIDR=172.16.0.0/12 (bridge Docker Desktop) diset di docker-compose.dev.yml.
+    #
+    # internal-only : erp. (Odoo/POS) = subnet outlet + subnet staf
+    internal-only:
+      ipAllowList:
+        sourceRange:
+          - '{{ env "EFN_WG_OUTLET_CIDR" | default "10.88.0.0/16" }}'
+          - '{{ env "EFN_WG_STAFF_CIDR" | default "10.89.0.0/16" }}'
+          - '{{ env "EFN_INTERNAL_EXTRA_CIDR" | default "127.0.0.1/32" }}'
+
+    # internal-ops : bi. (Metabase), ops. (Grafana), status. (Uptime Kuma) = subnet staf saja. Perangkat di LAN
+    # outlet (termasuk Wi-Fi tamu bila VLAN tidak dipisah) tidak bisa membuka halaman login dashboard.
+    internal-ops:
+      ipAllowList:
+        sourceRange:
+          - '{{ env "EFN_WG_STAFF_CIDR" | default "10.89.0.0/16" }}'
+          - '{{ env "EFN_INTERNAL_EXTRA_CIDR" | default "127.0.0.1/32" }}'
+
+    # Webhook payment provider (docs/04 §8.3): IP provider via Cloudflare (depth 1); burst untuk retry provider.
+    ratelimit-webhook:
+      rateLimit:
+        average: 20
+        burst: 100
+        period: 1s
+        sourceCriterion:
+          ipStrategy:
+            depth: 1
+
+    compress:
+      compress: {}
+
+# TLS options modern (publik)
+tls:
+  options:
+    default:
+      minVersion: VersionTLS12
+      sniStrict: true
+      cipherSuites:
+        - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305
+        - TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305

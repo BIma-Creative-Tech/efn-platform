@@ -1,0 +1,308 @@
+/* Tema per brand lewat CSS custom properties yang di-set di <html style> oleh app/layout.tsx.
+   Nilai di bawah hanya fallback (brand default). Jangan duplikasi komponen per brand (R-T14). */
+:root {
+  --color-primary: #0b5d4b;
+  --color-primary-contrast: #ffffff;
+  --color-accent: #f2a900;
+  --color-surface: #ffffff;
+  --color-surface-alt: #f3f6f5;
+  --color-text: #14211d;
+  --color-text-muted: #4a5a55;
+  --color-border: #cfd8d5;
+  --color-danger: #b42318;
+  --color-success: #067647;
+  --color-warning-bg: #fffaeb;
+  --color-warning-border: #f79009;
+  --radius: 10px;
+  --space: 1rem;
+  --max-width: 64rem;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  color-scheme: light;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  line-height: 1.5;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+a {
+  color: var(--color-primary);
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--color-surface);
+  padding: 0.5rem 1rem;
+  z-index: 10;
+}
+.skip-link:focus {
+  left: 1rem;
+}
+
+.container {
+  width: 100%;
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: 0 var(--space);
+}
+
+/* Header */
+.site-header {
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+}
+.site-header .container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+.brand-logo {
+  font-weight: 800;
+  font-size: 1.25rem;
+  color: var(--color-primary-contrast);
+  text-decoration: none;
+}
+.site-nav ul {
+  list-style: none;
+  display: flex;
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  flex-wrap: wrap;
+}
+.site-nav a {
+  color: var(--color-primary-contrast);
+  text-decoration: none;
+  font-weight: 600;
+}
+.site-nav a:hover {
+  text-decoration: underline;
+}
+
+main {
+  flex: 1;
+  padding: 1.5rem 0 2.5rem;
+}
+
+.site-footer {
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  padding: 1rem 0;
+}
+
+/* Kartu & layout */
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+}
+.stack > * + * {
+  margin-top: 1rem;
+}
+.grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+}
+.two-col {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+}
+@media (max-width: 48rem) {
+  .two-col {
+    grid-template-columns: 1fr;
+  }
+}
+
+.muted {
+  color: var(--color-text-muted);
+}
+.small {
+  font-size: 0.875rem;
+}
+
+.badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+.badge-mock {
+  background: var(--color-warning-bg);
+  border-color: var(--color-warning-border);
+}
+
+.notice {
+  border-left: 4px solid var(--color-warning-border);
+  background: var(--color-warning-bg);
+  padding: 0.75rem 1rem;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+/* Form */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.field label {
+  font-weight: 600;
+}
+.field input[type='text'],
+.field input[type='tel'],
+.field input[type='number'],
+.field input[type='file'],
+.field input[inputmode] {
+  font: inherit;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--color-text-muted);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.hint {
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+}
+.checkbox {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+.checkbox input {
+  margin-top: 0.3rem;
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.btn {
+  font: inherit;
+  font-weight: 700;
+  display: inline-block;
+  border: 2px solid var(--color-primary);
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+  padding: 0.625rem 1.25rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+  text-decoration: none;
+}
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.btn-secondary {
+  background: transparent;
+  color: var(--color-primary);
+}
+.btn-danger {
+  border-color: var(--color-danger);
+  background: var(--color-danger);
+  color: #ffffff;
+}
+.btn-small {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.875rem;
+}
+
+.alert {
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius);
+  border: 1px solid;
+}
+.alert-error {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+  background: #fef3f2;
+}
+.alert-success {
+  color: var(--color-success);
+  border-color: var(--color-success);
+  background: #ecfdf3;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Cart per PT */
+.cart-group {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  background: var(--color-surface);
+}
+.cart-group h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+.cart-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.cart-table th,
+.cart-table td {
+  text-align: left;
+  padding: 0.25rem 0;
+}
+.cart-table td.num,
+.cart-table th.num {
+  text-align: right;
+}
+.cart-table tfoot td {
+  border-top: 1px solid var(--color-border);
+}
+
+.points {
+  font-size: 2.5rem;
+  font-weight: 800;
+  color: var(--color-primary);
+}
+
+.photo-preview {
+  max-width: 100%;
+  max-height: 16rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+}

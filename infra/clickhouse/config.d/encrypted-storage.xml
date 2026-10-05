@@ -1,0 +1,43 @@
+<!--
+  Enkripsi at rest data mart (docs/04 §7.2). Disk `encrypted` (tersedia sejak ClickHouse 21.x, didukung 24.8):
+  data part MergeTree dienkripsi AES-256-CTR sebelum ditulis ke disk `default` (/var/lib/clickhouse/encrypted/).
+  Kunci: 32 byte = 64 karakter hex, dari secret `clickhouse_disk_key`. ClickHouse membaca kunci dari env
+  (atribut from_env); entrypoint compose mengekspor:
+      export CLICKHOUSE_DISK_KEY_HEX="$(cat /run/secrets/clickhouse_disk_key)"
+  Env kosong/tidak valid -> server gagal start (fail closed). Generate: `openssl rand -hex 32`.
+  Rotasi: tambah <key_hex id="1">, set <current_key_id>1</current_key_id>; part lama tetap terbaca dengan kunci 0
+  sampai di-merge/rewrite. JANGAN hapus kunci lama sebelum semua part ditulis ulang.
+  Kebijakan `encrypted` menjadi default untuk SEMUA tabel MergeTree baru lewat <merge_tree><storage_policy>.
+  Tabel yang sudah ada sebelum file ini dipasang TIDAK ikut terenkripsi (dev: `docker compose down -v` volume
+  clickhouse-data; prod: buat ulang tabel lalu INSERT SELECT). Verifikasi:
+      SELECT database, name, storage_policy FROM system.tables WHERE database = 'efn_dwh';
+      SELECT name, type, path FROM system.disks;
+  Metadata (DDL .sql, nama part/kolom) tidak dienkripsi -> LUKS di host tetap wajib (runbook).
+-->
+<clickhouse>
+    <storage_configuration>
+        <disks>
+            <encrypted_default>
+                <type>encrypted</type>
+                <disk>default</disk>
+                <path>encrypted/</path>
+                <algorithm>AES_256_CTR</algorithm>
+                <key_hex id="0" from_env="CLICKHOUSE_DISK_KEY_HEX"/>
+                <current_key_id>0</current_key_id>
+            </encrypted_default>
+        </disks>
+        <policies>
+            <encrypted>
+                <volumes>
+                    <main>
+                        <disk>encrypted_default</disk>
+                    </main>
+                </volumes>
+            </encrypted>
+        </policies>
+    </storage_configuration>
+
+    <merge_tree>
+        <storage_policy>encrypted</storage_policy>
+    </merge_tree>
+</clickhouse>

@@ -1,0 +1,50 @@
+# auth_enabled: false = single tenant. Kontrol akses = mTLS (SEC-20, docs/04 §8.5): push/query hanya dari
+# pemegang sertifikat klien CA internal (EKU clientAuth hanya diterbitkan untuk Promtail, Grafana, Prometheus,
+# blackbox, Traefik, ocr-worker, cAdvisor). Loki tidak mendukung allowlist SAN -> pengecualian parsial E12.
+auth_enabled: false
+
+# HTTP hanya TLS + mTLS (docs/04 §7.1, §8.5). gRPC & ring hanya loopback (single binary, tidak ada peer lain).
+server:
+  http_listen_port: 3100
+  http_tls_config:
+    cert_file: /run/secrets/tls_loki_crt
+    key_file: /run/secrets/tls_loki_key
+    client_auth_type: RequireAndVerifyClientCert
+    client_ca_file: /run/secrets/efn_ca_crt
+  grpc_listen_address: 127.0.0.1
+  grpc_listen_port: 9095
+
+common:
+  path_prefix: /loki
+  instance_addr: 127.0.0.1
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+memberlist:
+  bind_addr: [127.0.0.1]
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  retention_period: 720h   # 30 hari; audit log penting disalin ke MinIO oleh job terpisah
+  ingestion_rate_mb: 16
+  ingestion_burst_size_mb: 32
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem

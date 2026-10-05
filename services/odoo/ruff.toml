@@ -1,0 +1,15 @@
+# Ruff untuk addon Odoo: mewarisi aturan root, tetapi urutan import mengikuti konvensi OCA/Odoo
+# (stdlib | third-party | odoo | odoo.addons). Tanpa ini rule I001 gagal pada semua modul efn_* di CI.
+extend = "../../ruff.toml"
+
+# Didefinisikan ulang dengan glob `**/` agar tidak bergantung pada basis path relatif config induk.
+[lint.per-file-ignores]
+"**/__manifest__.py" = ["B018"]
+"**/__init__.py" = ["F401"]
+
+[lint.isort]
+section-order = ["future", "standard-library", "third-party", "odoo", "odoo-addons", "first-party", "local-folder"]
+
+[lint.isort.sections]
+"odoo" = ["odoo"]
+"odoo-addons" = ["odoo.addons"]

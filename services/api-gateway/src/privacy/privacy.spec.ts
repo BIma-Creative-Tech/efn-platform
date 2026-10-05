@@ -1,0 +1,325 @@
+import { MemberService } from '../common/member/member.service';
+import { MetricsService } from '../common/metrics/metrics.service';
+import { AmqpService, PermanentMessageError } from '../common/amqp/amqp.service';
+import { PII_AAD } from '../common/pii/crypto';
+import { erasureTombstone, memberHash } from '../common/pii/pii';
+import { RateLimiter } from '../common/rate-limit/rate-limiter';
+import { AccessTokenService } from '../common/security/access-token.service';
+import {
+  FakeClock,
+  FakeDb,
+  FakeKvStore,
+  FakeMemberTable,
+  FakeWhatsAppSender,
+  QueryHandler,
+  catchApiError,
+  testCipher,
+  testConfig,
+} from '../common/testing/fakes';
+import { LoyaltyService } from '../loyalty/loyalty.service';
+import { OtpService } from '../otp/otp.service';
+import { ConsentService, UNKNOWN_TEXT_SHA256 } from './consent.service';
+import { parseErasureComplete, parseReauth, parseSetConsent } from './dto/privacy.dto';
+import { DsarService } from './dsar.service';
+import { ERASURE_COMPLETED_CONSUMER, ErasureCompletedConsumer, parseErasureCompleted } from './erasure-completed.consumer';
+import { ErasureService } from './erasure.service';
+
+const PHONE = '6281234567890';
+const MEMBER_ID = '8d7b5a1e-2c3f-4a5b-9c8d-7e6f5a4b3c2d';
+const REQ_ID = '5e0c3a2b-1d4f-4e6a-8b7c-9d0e1f2a3b4c';
+const SHA = 'ab'.repeat(32);
+
+function setup(overrides: Record<string, string> = {}, handler: QueryHandler = () => undefined) {
+  const clock = new FakeClock();
+  const config = testConfig({ CONSENT_LOCATION_VERSION: 'v2', CONSENT_LOCATION_TEXT_SHA256: SHA, ...overrides });
+  const kv = new FakeKvStore(clock.now);
+  const cipher = testCipher(config);
+  const members = new FakeMemberTable();
+  const hash = memberHash(config.memberHashPepper, PHONE);
+  members.rows.set(MEMBER_ID, {
+    id: MEMBER_ID,
+    member_hash: hash,
+    member_ref_enc: cipher.encrypt(PHONE, PII_AAD.MEMBER_REF),
+    created_at: new Date(clock.ms),
+    deleted_at: null,
+  });
+  const db = new FakeDb((t, p) => members.handle(t, p) ?? handler(t, p));
+  const sender = new FakeWhatsAppSender();
+  const limiter = new RateLimiter(kv);
+  limiter.now = clock.now;
+  const otp = new OtpService(config, kv, db, sender, new MetricsService(), limiter, cipher);
+  otp.now = clock.now;
+  const tokens = new AccessTokenService(config);
+  tokens.now = clock.now;
+  const loyalty = new LoyaltyService(config, db, cipher);
+  const memberService = new MemberService(config, db, cipher);
+  const consents = new ConsentService(config, db, cipher);
+  const dsar = new DsarService(config, db, memberService, tokens, otp, limiter, loyalty, consents);
+  dsar.now = clock.now;
+  const user = { memberId: MEMBER_ID, memberHash: hash };
+  return { clock, config, kv, cipher, db, sender, tokens, consents, dsar, user, hash, members };
+}
+
+describe('ConsentService (§8.4/§8.7/§8.9)', () => {
+  it('grant versi aktif → INSERT append-only dengan text_sha256 & ip_enc terenkripsi', async () => {
+    const ctx = setup();
+    const res = await ctx.consents.set(MEMBER_ID, 'location', { granted: true, version: 'v2' }, '203.0.113.7');
+    expect(res).toMatchObject({ purpose: 'location', granted: true, version: 'v2' });
+    const q = ctx.db.find('INSERT INTO platform.consent')[0];
+    expect(q.params.slice(0, 5)).toEqual([MEMBER_ID, 'location', true, 'v2', SHA]);
+    expect(ctx.cipher.decrypt(q.params[5] as Buffer, PII_AAD.CONSENT_IP)).toBe('203.0.113.7');
+    expect(ctx.db.queries.some((x) => /UPDATE platform\.consent|DELETE FROM platform\.consent/.test(x.text))).toBe(false);
+  });
+
+  it('grant versi lama → 409 stale_text; teks belum dikonfigurasi → 503; penarikan selalu diterima', async () => {
+    const ctx = setup();
+    const err = await catchApiError(() => ctx.consents.set(MEMBER_ID, 'location', { granted: true, version: 'v1' }, null));
+    expect(err.getStatus()).toBe(409);
+    expect(err.body).toEqual({ error: { code: 'stale_text', message: expect.any(String) } });
+    const unconf = await catchApiError(() => ctx.consents.set(MEMBER_ID, 'marketing', { granted: true, version: 'v1' }, null));
+    expect(unconf.getStatus()).toBe(503);
+    await ctx.consents.set(MEMBER_ID, 'location', { granted: false, version: 'v1' }, null);
+    await ctx.consents.set(MEMBER_ID, 'marketing', { granted: false, version: 'v1' }, null);
+    const ins = ctx.db.find('INSERT INTO platform.consent');
+    expect(ins.map((q) => q.params[4])).toEqual([SHA, UNKNOWN_TEXT_SHA256]);
+  });
+
+  it('list: purpose tanpa riwayat → granted false; DTO validasi', async () => {
+    const ctx = setup({}, (t) =>
+      t.includes('DISTINCT ON') ? { rows: [{ purpose: 'location', granted: true, version: 'v2', created_at: new Date(0) }], rowCount: 1 } : undefined,
+    );
+    expect(await ctx.consents.list(MEMBER_ID)).toEqual([
+      { purpose: 'location', granted: true, version: 'v2', updated_at: '1970-01-01T00:00:00.000Z' },
+      { purpose: 'marketing', granted: false, version: null, updated_at: null },
+    ]);
+    expect(parseSetConsent({ granted: true, version: 'v2' })).toEqual({ granted: true, version: 'v2' });
+    expect((await catchApiError(() => parseSetConsent({ granted: 'ya', version: 'v2' }))).getStatus()).toBe(400);
+  });
+
+  it('G6 QA: format versi frontend `<purpose>@<tanggal>` diterima DTO & AppConfig (kontrak frontend ↔ BFF)', async () => {
+    expect(parseSetConsent({ granted: true, version: 'location@2026-10-06' })).toEqual({ granted: true, version: 'location@2026-10-06' });
+    expect((await catchApiError(() => parseSetConsent({ granted: true, version: 'a b' }))).getStatus()).toBe(400);
+    const ctx = setup({ CONSENT_LOCATION_VERSION: 'location@2026-10-06' });
+    const res = await ctx.consents.set(MEMBER_ID, 'location', { granted: true, version: 'location@2026-10-06' }, null);
+    expect(res).toMatchObject({ granted: true, version: 'location@2026-10-06' });
+  });
+});
+
+describe('DsarService (§8.9)', () => {
+  it('reauth dua langkah: {} → 202 OTP ke nomor sendiri; {challenge_id, code} → 200 step_up_token', async () => {
+    const ctx = setup();
+    expect(parseReauth({})).toEqual({ kind: 'request' });
+    const r1 = await ctx.dsar.reauth(ctx.user, { kind: 'request' }, '203.0.113.7');
+    expect(r1.status).toBe(202);
+    expect(ctx.sender.otps[0].to).toBe(PHONE);
+    const body1 = r1.body as { challenge_id: string };
+    const r2 = await ctx.dsar.reauth(ctx.user, { kind: 'verify', challengeId: body1.challenge_id, code: ctx.sender.lastCode() }, null);
+    expect(r2.status).toBe(200);
+    const body2 = r2.body as { step_up_token: string; expires_in: number };
+    expect(body2.expires_in).toBe(600);
+    expect(ctx.tokens.verifyStepUp(body2.step_up_token, MEMBER_ID)).toBe(true);
+    expect(Object.keys(body2).sort()).toEqual(['expires_in', 'step_up_token']);
+  });
+
+  it('challenge milik member lain tidak menghasilkan step-up', async () => {
+    const ctx = setup();
+    const r1 = await ctx.dsar.reauth(ctx.user, { kind: 'request' }, null);
+    const other = { memberId: '00000000-0000-4000-8000-000000000001', memberHash: 'c'.repeat(64) };
+    const err = await catchApiError(() =>
+      ctx.dsar.reauth(other, { kind: 'verify', challengeId: (r1.body as { challenge_id: string }).challenge_id, code: ctx.sender.lastCode() }, null),
+    );
+    expect(err.getStatus()).toBe(400);
+  });
+
+  it('step-up: hilang → 403 step_up_required; invalid/kedaluwarsa → 403 step_up_invalid', async () => {
+    const ctx = setup();
+    let err = await catchApiError(() => ctx.dsar.requireStepUp(ctx.user, undefined));
+    expect(err.body).toEqual({ error: { code: 'step_up_required', message: expect.any(String) } });
+    err = await catchApiError(() => ctx.dsar.requireStepUp(ctx.user, 'a.b.c'));
+    expect(err.body).toEqual({ error: { code: 'step_up_invalid', message: expect.any(String) } });
+    const t = ctx.tokens.issueStepUp(MEMBER_ID).token;
+    expect(() => ctx.dsar.requireStepUp(ctx.user, t)).not.toThrow();
+    ctx.clock.advanceSeconds(601);
+    err = await catchApiError(() => ctx.dsar.requireStepUp(ctx.user, t));
+    expect(err.getStatus()).toBe(403);
+  });
+
+  it('DELETE /v1/me → 202 {request_id, scheduled_at (+7 hari), points_forfeited}; idempotent bila sudah aktif', async () => {
+    let active: { id: string; scheduled_at: Date } | null = null;
+    const ctx = setup({}, (t, p) => {
+      if (t.includes('SUM(delta_points)')) return { rows: [{ balance: 350 }], rowCount: 1 };
+      if (t.includes("status IN ('scheduled', 'processing')")) return active ? { rows: [active], rowCount: 1 } : { rows: [], rowCount: 0 };
+      if (t.includes('INSERT INTO platform.dsar_request')) {
+        active = { id: p[0] as string, scheduled_at: new Date(p[3] as string) };
+        return { rows: [], rowCount: 1 };
+      }
+      return undefined;
+    });
+    const res = await ctx.dsar.requestDelete(ctx.user);
+    expect(res.points_forfeited).toBe(350);
+    expect(res.scheduled_at).toBe(new Date(ctx.clock.ms + 7 * 86_400_000).toISOString());
+    const ins = ctx.db.find('INSERT INTO platform.dsar_request')[0];
+    expect(ins.text).toContain("'delete', 'scheduled'");
+    expect(ins.params.slice(1, 3)).toEqual([MEMBER_ID, ctx.hash]);
+    const again = await ctx.dsar.requestDelete(ctx.user);
+    expect(again.request_id).toBe(res.request_id);
+    expect(ctx.db.find('INSERT INTO platform.dsar_request')).toHaveLength(1);
+  });
+
+  it('cancel dalam masa tenggang → cancelled; tidak ada → 404; requests → { items }', async () => {
+    let cancelled = false;
+    const ctx = setup({}, (t) => {
+      if (t.includes("SET status = 'cancelled'")) {
+        if (cancelled) return { rows: [], rowCount: 0 };
+        cancelled = true;
+        return { rows: [{ id: REQ_ID }], rowCount: 1 };
+      }
+      if (t.includes('ORDER BY requested_at DESC LIMIT 50')) {
+        return {
+          rows: [{ id: REQ_ID, type: 'delete', status: 'cancelled', requested_at: new Date(0), scheduled_at: new Date(0), completed_at: null }],
+          rowCount: 1,
+        };
+      }
+      return undefined;
+    });
+    expect(await ctx.dsar.cancelDelete(ctx.user)).toEqual({ request_id: REQ_ID, status: 'cancelled' });
+    expect((await catchApiError(() => ctx.dsar.cancelDelete(ctx.user))).getStatus()).toBe(404);
+    const list = await ctx.dsar.listRequests(ctx.user);
+    expect(list.items[0]).toEqual({
+      id: REQ_ID,
+      type: 'delete',
+      status: 'cancelled',
+      requested_at: '1970-01-01T00:00:00.000Z',
+      scheduled_at: '1970-01-01T00:00:00.000Z',
+      completed_at: null,
+    });
+  });
+
+  it('export: data milik sendiri + nomor penuh, dicatat sebagai dsar_request type export', async () => {
+    const ctx = setup({}, (t) => (t.includes('SUM(delta_points)') ? { rows: [{ balance: 10 }], rowCount: 1 } : undefined));
+    const data = await ctx.dsar.exportData(ctx.user);
+    expect(data.profile).toMatchObject({ member_id: MEMBER_ID, member_ref: PHONE, member_ref_masked: '62812****890' });
+    expect((data.points as { balance: number }).balance).toBe(10);
+    const ins = ctx.db.find('INSERT INTO platform.dsar_request')[0];
+    expect(ins.text).toContain("'export', 'completed'");
+    // query data selalu dibatasi member_hash / member_id pemanggil
+    for (const q of ctx.db.find('WHERE member_ref_hash = $1').concat(ctx.db.find('WHERE user_hash = $1'))) expect(q.params[0]).toBe(ctx.hash);
+  });
+});
+
+describe('ErasureService (§8.4)', () => {
+  function erasureSetup(status = 'scheduled') {
+    const storage = { put: jest.fn(), remove: jest.fn().mockRejectedValueOnce(new Error('minio down')).mockResolvedValue(undefined) };
+    const hash = 'd'.repeat(64);
+    let stores = ['platform', 'odoo', 'clickhouse'];
+    const db = new FakeDb((t, p) => {
+      if (t.includes('SELECT member_hash FROM platform.dsar_request')) return status === 'scheduled' ? { rows: [{ member_hash: hash }], rowCount: 1 } : { rows: [], rowCount: 0 };
+      if (t.includes('SELECT image_object')) return { rows: [{ image_object: 'reports/2026/10/a.jpg' }, { image_object: 'reports/2026/10/b.jpg' }], rowCount: 2 };
+      if (t.includes('pg_try_advisory_xact_lock')) return { rows: [{ ok: true }], rowCount: 1 };
+      if (t.includes("SET status = 'processing'")) return { rows: [{ member_id: MEMBER_ID, member_hash: hash }], rowCount: 1 };
+      if (t.includes('GROUP BY company_code')) return { rows: [{ company_code: 'EFN', balance: '120' }, { company_code: 'FNB', balance: 30 }], rowCount: 2 };
+      if (t.includes('array_remove')) {
+        stores = stores.filter((s) => s !== p[1]);
+        return { rows: [{ status: stores.length === 0 ? 'completed' : 'processing' }], rowCount: 1 };
+      }
+      return undefined;
+    });
+    const config = testConfig();
+    const svc = new ErasureService(config, db, storage);
+    return { svc, db, storage, hash, stores: () => stores };
+  }
+
+  it('setelah masa tenggang: processing + erasure platform dalam satu transaksi (tombstone, forfeit per PT, NULL PII, hapus member)', async () => {
+    const ctx = erasureSetup();
+    expect(await ctx.svc.processDue(REQ_ID)).toBe(true);
+    const tomb = erasureTombstone(REQ_ID);
+    expect(ctx.storage.remove).toHaveBeenCalledTimes(2); // satu gagal → tetap lanjut (lifecycle)
+
+    const forfeits = ctx.db.find('INSERT INTO platform.loyalty_ledger');
+    expect(forfeits.map((q) => q.params)).toEqual([
+      [tomb, 'EFN', -120, REQ_ID, `dsar:forfeit:${REQ_ID}:EFN`],
+      [tomb, 'FNB', -30, REQ_ID, `dsar:forfeit:${REQ_ID}:FNB`],
+    ]);
+    expect(forfeits[0].text).toContain('erased_at');
+    const ledger = ctx.db.find('UPDATE platform.loyalty_ledger')[0];
+    expect(ledger.text).toContain('member_ref_enc = NULL');
+    expect(ledger.params).toEqual([ctx.hash, tomb]);
+    const report = ctx.db.find('UPDATE platform.price_hunter_report')[0];
+    expect(report.text).toMatch(/user_enc = NULL.*geo_lat = NULL/s);
+    expect(ctx.db.find('UPDATE platform.otp_audit')[0].params).toEqual([ctx.hash, tomb]);
+    expect(ctx.db.find('UPDATE platform.consent SET ip_enc = NULL')[0].params).toEqual([MEMBER_ID]);
+    expect(ctx.db.find('DELETE FROM platform.member')[0].params).toEqual([MEMBER_ID]);
+    expect(ctx.db.find('UPDATE platform.member SET deleted_at')).toHaveLength(1);
+    expect(ctx.stores()).toEqual(['odoo', 'clickhouse']);
+    // urutan: processing sebelum erasure
+    const idx = (frag: string) => ctx.db.queries.findIndex((q) => q.text.includes(frag));
+    expect(idx("SET status = 'processing'")).toBeLessThan(idx('UPDATE platform.loyalty_ledger'));
+  });
+
+  it('request dibatalkan sebelum diproses → tidak ada erasure', async () => {
+    const ctx = erasureSetup('cancelled');
+    expect(await ctx.svc.processDue(REQ_ID)).toBe(false);
+    expect(ctx.db.find('UPDATE platform.loyalty_ledger')).toHaveLength(0);
+  });
+
+  it('Odoo pull/complete & ClickHouse event → completed setelah semua store; DTO {store:"odoo", records:0}', async () => {
+    const ctx = erasureSetup();
+    await ctx.svc.processDue(REQ_ID);
+    expect(await ctx.svc.completeStore('odoo', REQ_ID)).toEqual({ ok: true, status: 'processing' });
+    expect(await ctx.svc.completeStore('clickhouse', REQ_ID)).toEqual({ ok: true, status: 'completed' });
+    expect(parseErasureComplete({ store: 'odoo', records: 0 })).toEqual({ store: 'odoo', records: 0 });
+    expect((await catchApiError(() => parseErasureComplete({ store: 'clickhouse', records: 1 }))).getStatus()).toBe(400);
+  });
+
+  it('completeStore request tidak dikenal → not_found; status lain → not_processing', async () => {
+    const db = new FakeDb((t) => (t.includes('SELECT status FROM platform.dsar_request') ? { rows: [{ status: 'cancelled' }], rowCount: 1 } : undefined));
+    const svc = new ErasureService(testConfig(), db, { put: jest.fn(), remove: jest.fn() });
+    expect(await svc.completeStore('odoo', REQ_ID)).toEqual({ ok: false, reason: 'not_processing' });
+    const db2 = new FakeDb();
+    const svc2 = new ErasureService(testConfig(), db2, { put: jest.fn(), remove: jest.fn() });
+    expect(await svc2.completeStore('odoo', REQ_ID)).toEqual({ ok: false, reason: 'not_found' });
+  });
+});
+
+describe('ErasureCompletedConsumer (privacy.erasure.completed)', () => {
+  const payload = { schema_version: 2, idempotency_key: `erasure:${REQ_ID}:clickhouse`, request_id: REQ_ID, store: 'clickhouse' };
+
+  function consumerSetup() {
+    const claimed = new Set<string>();
+    const db = new FakeDb((t, p) => {
+      if (t.includes('INSERT INTO platform.processed_message')) {
+        const k = `${p[0]}|${p[1]}`;
+        if (claimed.has(k)) return { rows: [], rowCount: 0 };
+        claimed.add(k);
+        return { rows: [{ consumer: p[0] }], rowCount: 1 };
+      }
+      return undefined;
+    });
+    const erasure = { completeStore: jest.fn().mockResolvedValue({ ok: true, status: 'completed' }) };
+    const consumer = new ErasureCompletedConsumer(
+      {} as AmqpService,
+      db,
+      erasure as unknown as ErasureService,
+      testConfig({ AMQP_CONSUMERS_ENABLED: 'false' }),
+    );
+    return { consumer, erasure, db };
+  }
+
+  it('user_id efn-etl diterima; kiriman ulang tiap siklus → duplicate (processed_message)', async () => {
+    const ctx = consumerSetup();
+    expect(await ctx.consumer.handle(payload, { userId: 'efn-etl' })).toBe('applied');
+    expect(await ctx.consumer.handle(payload, { userId: 'efn-etl' })).toBe('duplicate');
+    expect(ctx.erasure.completeStore).toHaveBeenCalledTimes(1);
+    expect(ctx.db.find('processed_message')[0].params[0]).toBe(ERASURE_COMPLETED_CONSUMER);
+  });
+
+  it('publisher lain / payload salah / request tidak processing → DLQ (PermanentMessageError)', async () => {
+    const ctx = consumerSetup();
+    await expect(ctx.consumer.handle(payload, { userId: 'efn-ocr' })).rejects.toBeInstanceOf(PermanentMessageError);
+    await expect(ctx.consumer.handle(payload, { userId: undefined })).rejects.toBeInstanceOf(PermanentMessageError);
+    expect(() => parseErasureCompleted({ ...payload, store: 'odoo' })).toThrow(PermanentMessageError);
+    expect(() => parseErasureCompleted({ ...payload, idempotency_key: 'erasure:lain:clickhouse' })).toThrow(PermanentMessageError);
+    ctx.erasure.completeStore.mockResolvedValueOnce({ ok: false, reason: 'not_found' });
+    await expect(ctx.consumer.handle(payload, { userId: 'efn-etl' })).rejects.toBeInstanceOf(PermanentMessageError);
+  });
+});

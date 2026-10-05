@@ -1,0 +1,6 @@
+# Mewarisi aturan root; menambahkan deteksi first-party agar urutan import (rule I) deterministik.
+extend = "../../ruff.toml"
+src = ["."]
+
+[lint.isort]
+known-first-party = ["efn_text2sql"]

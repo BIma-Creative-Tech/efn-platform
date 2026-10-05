@@ -1,0 +1,19 @@
+# Restore test bulanan (R-T08): pulihkan backup terakhir ke container sementara + verifikasi.
+[Unit]
+Description=EFN PostgreSQL restore test (WAL-G -> container sementara)
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+# root: /opt/efn/secrets = root:efn-superadmin 0750 (docs/runbooks/key-custody.md); user deploy tidak bisa
+# menelusuri direktori itu. (User grup docker sudah setara root, jadi ini tidak memperluas kepercayaan.)
+User=root
+Group=root
+Environment=COMPOSE_PROJECT=efn
+Environment=SECRETS_DIR=/opt/efn/secrets
+Environment=TEXTFILE_DIR=/var/lib/efn/node-exporter
+Environment=RESTORE_TIMEOUT=10800
+ExecStart=/bin/bash /opt/efn/scripts/restore-test.sh
+TimeoutStartSec=4h
+Nice=10

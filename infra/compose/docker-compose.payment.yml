@@ -1,0 +1,12 @@
+# Override payment gateway (docs/04 §8.3, §8.11). Hanya disertakan scripts/deploy.sh bila PAYMENT_PROVIDER = xendit|midtrans,
+# sehingga kunci API provider TIDAK di-mount ke BFF selama provider belum ditentukan (ADR-016) / dev / staging mock /
+# production `disabled`.
+# Adapter xendit/midtrans masih kerangka: BFF menolak start tanpa PAYMENT_PROVIDER_EXPERIMENTAL=true (sengaja default false;
+# set eksplisit di .env host hanya untuk uji sandbox vendor).
+services:
+  api-gateway:
+    environment:
+      PAYMENT_PROVIDER_API_KEY_FILE: /run/secrets/payment_provider_api_key
+      PAYMENT_PROVIDER_EXPERIMENTAL: ${PAYMENT_PROVIDER_EXPERIMENTAL:-false}
+    secrets:
+      - payment_provider_api_key

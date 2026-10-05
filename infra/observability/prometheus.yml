@@ -1,0 +1,271 @@
+# Prometheus EFN. Alert rules: alert-rules.yml (runbook: docs/runbooks/). Alertmanager: profile `ops`.
+# Semua scrape lewat HTTPS dengan verifikasi CA internal (docs/04 §7.1) DAN sertifikat klien `prometheus`
+# (mTLS, docs/04 §8.5): exporter/Alertmanager/Loki/Traefik/cAdvisor/RabbitMQ/redis_exporter MENOLAK klien tanpa
+# sertifikat dari CA internal; web-config*.yml membatasi SAN klien. /run/secrets/tls_server_crt|key = sertifikat
+# `prometheus` (EKU server+client). `server_name` wajib untuk job dns_sd (alamat target = IP).
+# MinIO: bearer JWT (minio_prometheus_token). ClickHouse/BFF/worker: lihat pengecualian E11/E12 ADR-022.
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+  external_labels:
+    platform: efn
+
+rule_files:
+  - /etc/prometheus/alert-rules.yml
+
+alerting:
+  alertmanagers:
+    - scheme: https
+      tls_config:
+        ca_file: /run/secrets/efn_ca_crt
+        cert_file: /run/secrets/tls_server_crt
+        key_file: /run/secrets/tls_server_key
+      static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: prometheus
+    scheme: https
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+      cert_file: /run/secrets/tls_server_crt
+      key_file: /run/secrets/tls_server_key
+      server_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: alertmanager
+    scheme: https
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+      cert_file: /run/secrets/tls_server_crt
+      key_file: /run/secrets/tls_server_key
+    static_configs:
+      - targets: ["alertmanager:9093"]
+
+  # Router metrics Traefik: Host(`traefik`) + opsi TLS efn-mtls (SNI = traefik)
+  - job_name: traefik
+    scheme: https
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+      cert_file: /run/secrets/tls_server_crt
+      key_file: /run/secrets/tls_server_key
+      server_name: traefik
+    static_configs:
+      - targets: ["traefik:8082"]
+
+  # api-gateway bisa >1 replika (prod): dns_sd mengambil semua A record service compose.
+  # Container BFF ada di 4 network -> satu replika bisa muncul dengan beberapa IP (QA U8): hanya IP di subnet
+  # network `internal` (172.30.1.0/24) yang dipertahankan.
+  # docs/04 §8.10/§8.11: /metrics BFF hanya di listener mTLS TERPISAH :9464 (METRICS_PORT), CN klien `prometheus`
+  # (METRICS_TLS_CLIENT_ALLOWED_CN). Port API :3000 tidak lagi melayani /metrics (404).
+  - job_name: api-gateway
+    metrics_path: /metrics
+    scheme: https
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+      cert_file: /run/secrets/tls_server_crt
+      key_file: /run/secrets/tls_server_key
+      server_name: api-gateway
+    dns_sd_configs:
+      - names: ["api-gateway"]
+        type: A
+        port: 9464
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '172\.30\.1\.\d+:9464'
+        action: keep
+
+  # ai-ocr-worker: metrik HTTPS di :9100 (METRICS_TLS_*; mewajibkan sertifikat klien CA internal)
+  - job_name: ocr-worker
+    metrics_path: /metrics
+    scheme: https
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+      cert_file: /run/secrets/tls_server_crt
+      key_file: /run/secrets/tls_server_key
+      server_name: ocr-worker
+    dns_sd_configs:
+      - names: ["ocr-worker"]
+        type: A
+        port: 9100
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '172\.30\.1\.\d+:9100'
+        action: keep
+
+  # Metrik per-queue (ocr.requested, *.dlq): endpoint per-object plugin rabbitmq_prometheus (TLS 15691, mTLS)
+  - job_name: rabbitmq
+    metrics_path: /metrics/per-object
+    scrape_interval: 60s
+    scheme: https
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+      cert_file: /run/secrets/tls_server_crt
+      key_file: /run/secrets/tls_server_key
+    static_configs:
+      - targets: ["rabbitmq:15691"]
+
+  - job_name: clickhouse
+    metrics_path: /metrics
+    scheme: https
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+      cert_file: /run/secrets/tls_server_crt
+      key_file: /run/secrets/tls_server_key
+    static_configs:
+      - targets: ["clickhouse:8443"]
+
+  - job_name: minio
+    metrics_path: /minio/v2/metrics/cluster
+    scheme: https
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/minio_prometheus_token
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+    static_configs:
+      - targets: ["minio:9000"]
+
+  - job_name: loki
+    scheme: https
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+      cert_file: /run/secrets/tls_server_crt
+      key_file: /run/secrets/tls_server_key
+    static_configs:
+      - targets: ["loki:3100"]
+
+  - job_name: node
+    scheme: https
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+      cert_file: /run/secrets/tls_server_crt
+      key_file: /run/secrets/tls_server_key
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  # cAdvisor tanpa TLS native -> sidecar ghostunnel :8443 (--allow-cn=prometheus)
+  - job_name: cadvisor
+    scheme: https
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+      cert_file: /run/secrets/tls_server_crt
+      key_file: /run/secrets/tls_server_key
+    static_configs:
+      - targets: ["cadvisor:8443"]
+
+  - job_name: postgres
+    scheme: https
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+      cert_file: /run/secrets/tls_server_crt
+      key_file: /run/secrets/tls_server_key
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  - job_name: redis
+    scheme: https
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+      cert_file: /run/secrets/tls_server_crt
+      key_file: /run/secrets/tls_server_key
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+
+  - job_name: blackbox
+    scheme: https
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+      cert_file: /run/secrets/tls_server_crt
+      key_file: /run/secrets/tls_server_key
+    static_configs:
+      - targets: ["blackbox-exporter:9115"]
+
+  # Probe health endpoint internal lewat TLS terverifikasi (tidak lewat Traefik). Blackbox membawa sertifikat
+  # klien `blackbox-exporter` (diizinkan sidecar Odoo/Next.js/Metabase/Ollama untuk probe saja).
+  - job_name: probe-internal
+    metrics_path: /probe
+    scheme: https
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+      cert_file: /run/secrets/tls_server_crt
+      key_file: /run/secrets/tls_server_key
+      server_name: blackbox-exporter
+    params:
+      module: [https_internal]
+    static_configs:
+      - targets:
+          - https://odoo:8443/web/health
+          - https://api-gateway:3000/health
+          - https://superapp-web:3443/api/health
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # Handshake TLS ke SETIAP listener internal: membuktikan TLS aktif + sertifikat cocok nama service + masa berlaku
+  # (alert EfnInternalCertExpiring*). PostgreSQL (STARTTLS-like SSLRequest) dipantau lewat metrik textfile.
+  - job_name: probe-internal-tls
+    metrics_path: /probe
+    scrape_interval: 5m
+    scheme: https
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+      cert_file: /run/secrets/tls_server_crt
+      key_file: /run/secrets/tls_server_key
+      server_name: blackbox-exporter
+    params:
+      module: [tls_internal]
+    static_configs:
+      - targets:
+          - redis:6379
+          - rabbitmq:5671
+          - rabbitmq:15671
+          - minio:9000
+          - clickhouse:9440
+          - clickhouse:8443
+          - api-gateway:3000
+          - odoo:8443
+          - odoo:8444
+          - superapp-web:3443
+          - ollama:11434
+          - metabase:3443
+          - grafana:3000
+          - loki:3100
+          - uptime-kuma:3001
+          # docker-socket-proxy:2376 tidak diprobe: mTLS (CN traefik/promtail/cadvisor) + network socket-proxy
+          # terisolasi; kesehatannya terlihat dari discovery Traefik/Promtail dan healthcheck sidecar.
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # Probe HTTPS publik (lewat Cloudflare/Traefik): ketersediaan + masa berlaku sertifikat publik.
+  # Target di targets/blackbox-https.yml; scripts/deploy.sh mengganti efn.local dengan TRAEFIK_DOMAIN.
+  - job_name: probe-https
+    metrics_path: /probe
+    scrape_interval: 60s
+    scheme: https
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+      cert_file: /run/secrets/tls_server_crt
+      key_file: /run/secrets/tls_server_key
+      server_name: blackbox-exporter
+    params:
+      module: [https_2xx]
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/blackbox-https.yml"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115

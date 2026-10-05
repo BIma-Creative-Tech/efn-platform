@@ -1,0 +1,73 @@
+# OpenWrt /etc/config/firewall - router OUTLET (ADR-023 B1, SEC-21). CONTOH. `/etc/init.d/firewall reload`.
+# Prinsip: hanya zona `pos` yang boleh ke tunnel EFN, dan hanya ke 10.88.0.1:443 (+53 DNS). Wi-Fi tamu (`guest`)
+# hanya ke internet, tidak ke `pos`, tidak ke tunnel, tidak ke router (selain DHCP/DNS).
+
+config zone
+	option name 'pos'
+	list network 'lan_pos'
+	option input 'ACCEPT'
+	option output 'ACCEPT'
+	option forward 'REJECT'
+
+config zone
+	option name 'efn'
+	list network 'efn_wg'
+	option input 'REJECT'
+	option output 'ACCEPT'
+	option forward 'REJECT'
+	# Semua perangkat POS keluar sebagai 10.88.1.1 (alamat peer) -> hub hanya melihat satu IP per outlet
+	option masq '1'
+	option mtu_fix '1'
+
+config zone
+	option name 'guest'
+	list network 'guest'
+	option input 'REJECT'
+	option output 'ACCEPT'
+	option forward 'REJECT'
+
+# pos -> internet (pembayaran EDC/QRIS, update) dan pos -> efn
+config forwarding
+	option src 'pos'
+	option dest 'wan'
+
+config forwarding
+	option src 'pos'
+	option dest 'efn'
+
+# Persempit pos -> efn: hanya HTTPS + DNS ke hub; selain itu tolak
+config rule
+	option name 'pos-to-efn-https'
+	option src 'pos'
+	option dest 'efn'
+	option dest_ip '10.88.0.1'
+	option proto 'tcp'
+	option dest_port '443 53'
+	option target 'ACCEPT'
+
+config rule
+	option name 'pos-to-efn-dns-udp'
+	option src 'pos'
+	option dest 'efn'
+	option dest_ip '10.88.0.1'
+	option proto 'udp'
+	option dest_port '53'
+	option target 'ACCEPT'
+
+config rule
+	option name 'pos-to-efn-deny'
+	option src 'pos'
+	option dest 'efn'
+	option target 'REJECT'
+
+# Tamu: internet saja
+config forwarding
+	option src 'guest'
+	option dest 'wan'
+
+config rule
+	option name 'guest-dhcp-dns'
+	option src 'guest'
+	option proto 'tcpudp'
+	option dest_port '53 67 68'
+	option target 'ACCEPT'

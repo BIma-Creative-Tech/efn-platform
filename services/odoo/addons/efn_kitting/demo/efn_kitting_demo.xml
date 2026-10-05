@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Data DEMO PoC Kitting (ADR-018, docs/02 §3.3). Hanya dimuat pada database demo.
+     Resep (gramasi) di bawah adalah contoh dari docs/02 §3.3, BUKAN resep resmi EFN.
+
+     Gelombang 3b: modul ini TIDAK lagi membuat company sendiri (bentrok UNIQUE
+     efn_brand_code dengan efn_setup_company). Company demo = company yang SUDAH ADA dengan
+     efn_brand_code = 'FNB' (mis. efn_setup_company.company_fnb), fallback base.main_company.
+     efn_kitting sengaja tidak bergantung pada efn_setup_company: urutan install tanpa
+     dependensi tidak dijamin, sehingga fallback main company dapat terjadi.
+     Ekspresi company diulang di setiap record (eval XML tidak punya variabel bersama);
+     `obj` = env['res.company'].browse karena atribut model="res.company". -->
+<odoo>
+    <!-- Bahan mentah (dipasok PT Retail via inter-company; di sini cukup stok awal manual). -->
+    <record id="product_ayam_utuh" model="product.product">
+        <field name="name">Ayam Utuh</field>
+        <field name="type">consu</field>
+        <field name="is_storable" eval="True"/>
+        <field name="uom_id" ref="uom.product_uom_kgm"/>
+        <field name="standard_price">38000</field>
+        <field name="company_id" model="res.company"
+               eval="obj().search([('efn_brand_code', '=', 'FNB')], limit=1).id or ref('base.main_company')"/>
+    </record>
+    <record id="product_tepung_bumbu" model="product.product">
+        <field name="name">Tepung Bumbu</field>
+        <field name="type">consu</field>
+        <field name="is_storable" eval="True"/>
+        <field name="uom_id" ref="uom.product_uom_kgm"/>
+        <field name="standard_price">22000</field>
+        <field name="company_id" model="res.company"
+               eval="obj().search([('efn_brand_code', '=', 'FNB')], limit=1).id or ref('base.main_company')"/>
+    </record>
+
+    <!-- Paket CK: storable, UoM Porsi, hasil MO. -->
+    <record id="product_paket_ayam_geprek" model="product.product">
+        <field name="name">Paket Ayam Geprek</field>
+        <field name="type">consu</field>
+        <field name="is_storable" eval="True"/>
+        <field name="uom_id" ref="uom_porsi"/>
+        <field name="efn_is_kitting_package" eval="True"/>
+        <field name="company_id" model="res.company"
+               eval="obj().search([('efn_brand_code', '=', 'FNB')], limit=1).id or ref('base.main_company')"/>
+    </record>
+    <record id="product_paket_nasi_putih" model="product.product">
+        <field name="name">Paket Nasi Putih</field>
+        <field name="type">consu</field>
+        <field name="is_storable" eval="True"/>
+        <field name="uom_id" ref="uom_porsi"/>
+        <field name="efn_is_kitting_package" eval="True"/>
+        <field name="company_id" model="res.company"
+               eval="obj().search([('efn_brand_code', '=', 'FNB')], limit=1).id or ref('base.main_company')"/>
+    </record>
+    <!-- Es Teh dibuat di outlet; consumable tanpa pelacakan stok untuk PoC. -->
+    <record id="product_es_teh" model="product.product">
+        <field name="name">Es Teh Manis</field>
+        <field name="type">consu</field>
+        <field name="is_storable" eval="False"/>
+        <field name="company_id" model="res.company"
+               eval="obj().search([('efn_brand_code', '=', 'FNB')], limit=1).id or ref('base.main_company')"/>
+    </record>
+
+    <!-- Menu POS (combo). Set "Available in POS" secara manual bila point_of_sale terpasang
+         (efn_kitting sengaja tidak bergantung pada point_of_sale). -->
+    <record id="product_menu_geprek_komplit" model="product.product">
+        <field name="name">Menu Ayam Geprek Komplit</field>
+        <field name="type">consu</field>
+        <field name="is_storable" eval="False"/>
+        <field name="sale_ok" eval="True"/>
+        <field name="list_price">35000</field>
+        <field name="company_id" model="res.company"
+               eval="obj().search([('efn_brand_code', '=', 'FNB')], limit=1).id or ref('base.main_company')"/>
+    </record>
+
+    <!-- BoM MANUFACTURE di CK: 1 Porsi paket = 0,2 kg ayam + 0,05 kg tepung. -->
+    <record id="bom_paket_ayam_geprek" model="mrp.bom">
+        <field name="product_tmpl_id" ref="product_paket_ayam_geprek_product_template"/>
+        <field name="product_qty">1</field>
+        <field name="product_uom_id" ref="uom_porsi"/>
+        <field name="type">normal</field>
+        <field name="company_id" model="res.company"
+               eval="obj().search([('efn_brand_code', '=', 'FNB')], limit=1).id or ref('base.main_company')"/>
+    </record>
+    <record id="bom_line_paket_ayam" model="mrp.bom.line">
+        <field name="bom_id" ref="bom_paket_ayam_geprek"/>
+        <field name="product_id" ref="product_ayam_utuh"/>
+        <field name="product_qty">0.2</field>
+        <field name="product_uom_id" ref="uom.product_uom_kgm"/>
+    </record>
+    <record id="bom_line_paket_tepung" model="mrp.bom.line">
+        <field name="bom_id" ref="bom_paket_ayam_geprek"/>
+        <field name="product_id" ref="product_tepung_bumbu"/>
+        <field name="product_qty">0.05</field>
+        <field name="product_uom_id" ref="uom.product_uom_kgm"/>
+    </record>
+
+    <!-- BoM KIT (phantom) untuk menu combo POS: dijual -> memotong produk PAKET, bukan bahan. -->
+    <record id="bom_menu_geprek_komplit" model="mrp.bom">
+        <field name="product_tmpl_id" ref="product_menu_geprek_komplit_product_template"/>
+        <field name="product_qty">1</field>
+        <field name="product_uom_id" ref="uom.product_uom_unit"/>
+        <field name="type">phantom</field>
+        <field name="company_id" model="res.company"
+               eval="obj().search([('efn_brand_code', '=', 'FNB')], limit=1).id or ref('base.main_company')"/>
+    </record>
+    <record id="bom_line_menu_paket_geprek" model="mrp.bom.line">
+        <field name="bom_id" ref="bom_menu_geprek_komplit"/>
+        <field name="product_id" ref="product_paket_ayam_geprek"/>
+        <field name="product_qty">1</field>
+        <field name="product_uom_id" ref="uom_porsi"/>
+    </record>
+    <record id="bom_line_menu_nasi" model="mrp.bom.line">
+        <field name="bom_id" ref="bom_menu_geprek_komplit"/>
+        <field name="product_id" ref="product_paket_nasi_putih"/>
+        <field name="product_qty">1</field>
+        <field name="product_uom_id" ref="uom_porsi"/>
+    </record>
+    <record id="bom_line_menu_es_teh" model="mrp.bom.line">
+        <field name="bom_id" ref="bom_menu_geprek_komplit"/>
+        <field name="product_id" ref="product_es_teh"/>
+        <field name="product_qty">1</field>
+        <field name="product_uom_id" ref="uom.product_uom_unit"/>
+    </record>
+</odoo>

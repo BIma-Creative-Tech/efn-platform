@@ -1,0 +1,66 @@
+# TLS internal Traefik (docs/04 §7.1, §8.5; ADR-022).
+#  - serversTransports: Traefik -> upstream SELALU https, sertifikat diverifikasi terhadap CA internal (bundle).
+#    serverName wajib per upstream karena docker provider memakai IP container (bukan nama) sebagai alamat server.
+#    Traefik MEMBAWA sertifikat klien `traefik` (EKU clientAuth) - wajib untuk sidecar ghostunnel yang hanya
+#    menerima --allow-cn=traefik (Odoo, Next.js, Metabase); dikirim juga ke upstream lain (tidak meminta = diabaikan).
+#  - Entrypoint metrics (:8082): mTLS (RequireAndVerifyClientCert, CA internal). Router di-host `traefik` agar opsi
+#    TLS berlaku per SNI (Prometheus mengirim SNI "traefik").
+http:
+  serversTransports:
+    efn-odoo:
+      serverName: odoo
+      rootCAs: [/run/secrets/efn_ca_crt]
+      certificates:
+        - certFile: /run/secrets/tls_traefik_crt
+          keyFile: /run/secrets/tls_traefik_key
+    efn-api-gateway:
+      serverName: api-gateway
+      rootCAs: [/run/secrets/efn_ca_crt]
+      certificates:
+        - certFile: /run/secrets/tls_traefik_crt
+          keyFile: /run/secrets/tls_traefik_key
+    efn-superapp-web:
+      serverName: superapp-web
+      rootCAs: [/run/secrets/efn_ca_crt]
+      certificates:
+        - certFile: /run/secrets/tls_traefik_crt
+          keyFile: /run/secrets/tls_traefik_key
+    efn-metabase:
+      serverName: metabase
+      rootCAs: [/run/secrets/efn_ca_crt]
+      certificates:
+        - certFile: /run/secrets/tls_traefik_crt
+          keyFile: /run/secrets/tls_traefik_key
+    efn-grafana:
+      serverName: grafana
+      rootCAs: [/run/secrets/efn_ca_crt]
+      certificates:
+        - certFile: /run/secrets/tls_traefik_crt
+          keyFile: /run/secrets/tls_traefik_key
+    efn-uptime-kuma:
+      serverName: uptime-kuma
+      rootCAs: [/run/secrets/efn_ca_crt]
+      certificates:
+        - certFile: /run/secrets/tls_traefik_crt
+          keyFile: /run/secrets/tls_traefik_key
+
+  routers:
+    # Metrik Traefik (manualRouting) hanya lewat mTLS sertifikat internal
+    traefik-metrics:
+      entryPoints: [metrics]
+      rule: Host(`traefik`) && PathPrefix(`/metrics`)
+      service: prometheus@internal
+      tls:
+        options: efn-mtls
+
+tls:
+  options:
+    efn-mtls:
+      minVersion: VersionTLS12
+      sniStrict: true
+      clientAuth:
+        caFiles: [/run/secrets/efn_ca_crt]
+        clientAuthType: RequireAndVerifyClientCert
+  certificates:
+    - certFile: /run/secrets/tls_traefik_crt
+      keyFile: /run/secrets/tls_traefik_key

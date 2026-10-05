@@ -1,0 +1,19 @@
+<!--
+  Konfigurasi clickhouse-client di dalam container clickhouse & clickhouse-init (healthcheck, bootstrap user).
+  Selalu TLS (9440) + verifikasi sertifikat terhadap CA internal (docs/04 §7.1).
+-->
+<config>
+    <secure>true</secure>
+    <port>9440</port>
+    <openSSL>
+        <client>
+            <caConfig>/run/secrets/efn_ca_crt</caConfig>
+            <loadDefaultCAFile>false</loadDefaultCAFile>
+            <verificationMode>strict</verificationMode>
+            <disableProtocols>sslv2,sslv3,tlsv1,tlsv1_1</disableProtocols>
+            <invalidCertificateHandler>
+                <name>RejectCertificateHandler</name>
+            </invalidCertificateHandler>
+        </client>
+    </openSSL>
+</config>

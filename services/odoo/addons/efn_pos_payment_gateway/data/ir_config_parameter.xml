@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- Batas nominal satu QRIS POS (Rupiah). Nilai usulan; sesuaikan dengan limit provider. -->
+    <record id="param_gateway_max_amount" model="ir.config_parameter">
+        <field name="key">efn.pos.gateway_max_amount</field>
+        <field name="value">20000000</field>
+    </record>
+</odoo>

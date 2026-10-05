@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Parameter sistem EFN (docs/04_SERVICE_CONTRACTS.md §6 v2).
+     API key BFF TIDAK disimpan di sini; dibaca dari file secret (env EFN_BFF_API_KEY_FILE).
+     efn.bff_url wajib https (CA internal di env EFN_CA_FILE); env EFN_BFF_URL bila diisi
+     mengalahkan parameter ini. DB lama dengan nilai http:// dimigrasi oleh
+     migrations/19.0.1.2.0/post-migrate.py. -->
+<odoo noupdate="1">
+    <record id="param_bff_url" model="ir.config_parameter">
+        <field name="key">efn.bff_url</field>
+        <field name="value">https://api-gateway:3000</field>
+    </record>
+    <record id="param_otp_required_for_promo" model="ir.config_parameter">
+        <field name="key">efn.pos.otp_required_for_promo</field>
+        <field name="value">True</field>
+    </record>
+    <record id="param_promo_disabled_offline" model="ir.config_parameter">
+        <field name="key">efn.pos.promo_disabled_when_offline</field>
+        <field name="value">True</field>
+    </record>
+    <record id="param_otp_timeout_seconds" model="ir.config_parameter">
+        <field name="key">efn.pos.otp_timeout_seconds</field>
+        <field name="value">5</field>
+    </record>
+</odoo>

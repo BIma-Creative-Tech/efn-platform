@@ -1,0 +1,241 @@
+# Deploy ke staging (otomatis setelah build di main) dan prod (tag v*, dengan approval di GitHub Environment "production").
+# Mekanisme: verifikasi signature cosign per image -> resolve DIGEST -> SSH ke host via WireGuard/bastion ->
+# tulis secrets ke file -> compose pull & up BY DIGEST (SEC-10, R-S07/R-S08).
+# Semua `uses:` dipin ke commit SHA 40 karakter (komentar = versi). Bump lewat Dependabot (github-actions).
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["Build & Push Images"]
+    types: [completed]
+    branches: [main]
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [staging, production]
+        required: true
+      image_tag:
+        description: "Image tag: sha-<7 hex> (build main) atau X.Y.Z / vX.Y.Z (rilis)"
+        required: true
+
+# Minimal: cosign verify keyless tidak butuh id-token; pull GHCR butuh packages:read.
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  resolve:
+    name: Resolve target
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.r.outputs.environment }}
+      image_tag: ${{ steps.r.outputs.image_tag }}
+      signer_ref: ${{ steps.r.outputs.signer_ref }}
+    steps:
+      # Input pengguna TIDAK diinterpolasi ke skrip; lewat env lalu divalidasi regex (SEC-10).
+      - id: r
+        env:
+          EVENT: ${{ github.event_name }}
+          IN_ENV: ${{ inputs.environment }}
+          IN_TAG: ${{ inputs.image_tag }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            workflow_dispatch) env_name="$IN_ENV"; tag="$IN_TAG" ;;
+            push)              env_name="production"; tag="$REF_NAME" ;;
+            *)                 env_name="staging"; tag="sha-${RUN_SHA:0:7}" ;;
+          esac
+          [[ "$env_name" =~ ^(staging|production)$ ]] || { echo "::error::environment tidak valid"; exit 1; }
+          if [[ "$tag" =~ ^sha-[0-9a-f]{7}$ ]]; then
+            # Build dari main: identitas penanda tangan = build-push.yml @ refs/heads/main
+            signer_ref="refs/heads/main"
+          elif [[ "$tag" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            # Rilis: tag image = X.Y.Z (metadata-action semver), penanda tangan = build-push.yml @ refs/tags/vX.Y.Z
+            tag="${BASH_REMATCH[1]}"
+            signer_ref="refs/tags/v${tag}"
+          else
+            echo "::error::image_tag harus sha-<7 hex> atau X.Y.Z / vX.Y.Z"; exit 1
+          fi
+          if [[ "$env_name" == "production" && "$signer_ref" != refs/tags/v* ]]; then
+            echo "::error::production hanya menerima image rilis bertanda tangan dari tag v*"; exit 1
+          fi
+          {
+            echo "environment=$env_name"
+            echo "image_tag=$tag"
+            echo "signer_ref=$signer_ref"
+          } >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Deploy ${{ needs.resolve.outputs.environment }} (${{ needs.resolve.outputs.image_tag }})
+    needs: resolve
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ needs.resolve.outputs.environment }}
+      url: https://app.${{ vars.TRAEFIK_DOMAIN }}
+    concurrency:
+      group: deploy-${{ needs.resolve.outputs.environment }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
+
+      # Verifikasi signature lalu ambil DIGEST yang terverifikasi; host mem-pull digest itu (bukan tag) -> tidak ada
+      # TOCTOU antara verifikasi dan pull (SEC-10). Identitas dikunci ke workflow + ref spesifik (bukan @.*).
+      - name: Verifikasi signature & resolve digest (R-S08)
+        id: digests
+        env:
+          TAG: ${{ needs.resolve.outputs.image_tag }}
+          SIGNER_REF: ${{ needs.resolve.outputs.signer_ref }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          owner="${OWNER,,}"
+          identity="https://github.com/${REPO}/.github/workflows/build-push.yml@${SIGNER_REF}"
+          for svc in postgres odoo api-gateway superapp-web ai-ocr-worker etl; do
+            ref="ghcr.io/${owner}/${svc}:${TAG}"
+            digest=$(cosign verify \
+                --certificate-identity "$identity" \
+                --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+                --output json "$ref" \
+              | jq -r '[.[].critical.image."docker-manifest-digest"] | unique | if length == 1 then .[0] else error("digest ganda") end')
+            [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "::error::digest tidak valid untuk $svc"; exit 1; }
+            var="IMAGE_$(echo "$svc" | tr 'a-z-' 'A-Z_')"
+            echo "${var}=ghcr.io/${owner}/${svc}@${digest}" >> "$GITHUB_OUTPUT"
+            echo "OK ${svc} -> ${digest}"
+          done
+
+      # Kunci SSH ditulis ke file 0600 di runner (tanpa action pihak ketiga; webfactory/ssh-agent dihapus, SEC-10).
+      - name: Kunci SSH & known_hosts
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 0700 ~/.ssh
+          ( umask 077; printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/efn_deploy )
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      # infra/ -> /opt/efn/ dan scripts/ -> /opt/efn/scripts/. --delete dibatasi per sumber dan
+      # mengecualikan file milik host (secrets, pki-ca, .env, compose host override) agar tidak terhapus.
+      - name: Sinkronisasi infra & scripts ke host
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          RSH="ssh -i $HOME/.ssh/efn_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+          rsync -az --delete -e "$RSH" \
+            --exclude=/secrets/ --exclude=/scripts/ --exclude=/pki-ca/ \
+            --exclude=/compose/.env --exclude=/compose/docker-compose.host.yml \
+            infra/ "${DEPLOY_USER}@${HOST}:/opt/efn/"
+          rsync -az --delete -e "$RSH" scripts/ "${DEPLOY_USER}@${HOST}:/opt/efn/scripts/"
+          # Grant baca ETL di DB Odoo (QA U1, file milik data-AI) - diterapkan deploy.sh bila ada
+          if [ -d services/etl/sql ]; then
+            rsync -az --delete -e "$RSH" services/etl/sql/ "${DEPLOY_USER}@${HOST}:/opt/efn/etl-sql/"
+          fi
+
+      # Secret dikirim lewat stdin (`sudo -n bash -s`), bukan argumen ssh, agar tidak terlihat di `ps` host.
+      # Daftar secret = scripts/secrets.list; nilai diambil dari toJSON(secrets) (GitHub Environment, UPPERCASE),
+      # sehingga menambah secret tidak butuh mengedit workflow ini. Jenis `pki` (diterbitkan di host dari
+      # intermediate) dan `derived:*` (diturunkan di host) TIDAK dikirim. Secret yang hilang -> deploy.sh gagal.
+      # deploy.sh berjalan sebagai root (secrets root:efn-superadmin, docs/runbooks/key-custody.md); sudoers host:
+      #   deploy ALL=(root) NOPASSWD: /usr/bin/bash -s
+      - name: Deploy (compose pull & up by digest)
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          ALL_SECRETS: ${{ toJSON(secrets) }}
+          EFN_PKI_INTERMEDIATE_KEY: ${{ secrets.EFN_PKI_INTERMEDIATE_KEY }}
+          EFN_PKI_INTERMEDIATE_CRT: ${{ secrets.EFN_PKI_INTERMEDIATE_CRT }}
+          EFN_PKI_ROOT_CRT: ${{ secrets.EFN_PKI_ROOT_CRT }}
+          EFN_PKI_EXTRA_TRUST: ${{ secrets.EFN_PKI_EXTRA_TRUST }}
+          TRAEFIK_DOMAIN: ${{ vars.TRAEFIK_DOMAIN }}
+          ACME_EMAIL: ${{ vars.ACME_EMAIL }}
+          APP_ENV: ${{ needs.resolve.outputs.environment }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMPOSE_PROFILES: ${{ vars.COMPOSE_PROFILES || 'core,data,ai,observability,ops' }}
+          PG_SUPERUSER: ${{ vars.PG_SUPERUSER || 'postgres' }}
+          WHATSAPP_ENABLED: ${{ vars.WHATSAPP_ENABLED || 'false' }}
+          WHATSAPP_PHONE_NUMBER_ID: ${{ vars.WHATSAPP_PHONE_NUMBER_ID }}
+          WHATSAPP_OTP_TEMPLATE: ${{ vars.WHATSAPP_OTP_TEMPLATE || 'efn_otp' }}
+          # Wajib eksplisit (tanpa default): production menolak mock (docs/04 §8.3)
+          PAYMENT_PROVIDER: ${{ vars.PAYMENT_PROVIDER }}
+          EFN_PUBLIC_BIND: ${{ vars.EFN_PUBLIC_BIND }}
+          EFN_WG_BIND: ${{ vars.EFN_WG_BIND || '10.88.0.1' }}
+          EFN_WG_HTTPS_PORT: ${{ vars.EFN_WG_HTTPS_PORT || '443' }}
+          EFN_WG_OUTLET_CIDR: ${{ vars.EFN_WG_OUTLET_CIDR || '10.88.0.0/16' }}
+          EFN_WG_STAFF_CIDR: ${{ vars.EFN_WG_STAFF_CIDR || '10.89.0.0/16' }}
+          ACME_DNS_PROVIDER: ${{ vars.ACME_DNS_PROVIDER || 'cloudflare' }}
+          ACME_DNS_TOKEN_ENV: ${{ vars.ACME_DNS_TOKEN_ENV || 'CF_DNS_API_TOKEN' }}
+          RABBITMQ_STRICT_PERMISSIONS: ${{ vars.RABBITMQ_STRICT_PERMISSIONS || 'true' }}
+          MARKET_SCOUT_PHOTO_RETENTION_DAYS: ${{ vars.MARKET_SCOUT_PHOTO_RETENTION_DAYS || '90' }}
+          CH_MART_RETENTION_YEARS: ${{ vars.CH_MART_RETENTION_YEARS || '5' }}
+          # Teks consent aktif (docs/04 §8.9): versi = superapp-web lib/consent.ts, sha256 = UTF-8 body persis.
+          # Kosong -> BFF menjawab grant consent 503 consent_unavailable (penarikan tetap diterima).
+          CONSENT_LOCATION_VERSION: ${{ vars.CONSENT_LOCATION_VERSION }}
+          CONSENT_LOCATION_TEXT_SHA256: ${{ vars.CONSENT_LOCATION_TEXT_SHA256 }}
+          CONSENT_MARKETING_VERSION: ${{ vars.CONSENT_MARKETING_VERSION }}
+          CONSENT_MARKETING_TEXT_SHA256: ${{ vars.CONSENT_MARKETING_TEXT_SHA256 }}
+          DSAR_DELETE_GRACE_DAYS: ${{ vars.DSAR_DELETE_GRACE_DAYS || '7' }}
+          IMAGE_POSTGRES: ${{ steps.digests.outputs.IMAGE_POSTGRES }}
+          IMAGE_ODOO: ${{ steps.digests.outputs.IMAGE_ODOO }}
+          IMAGE_API_GATEWAY: ${{ steps.digests.outputs.IMAGE_API_GATEWAY }}
+          IMAGE_SUPERAPP_WEB: ${{ steps.digests.outputs.IMAGE_SUPERAPP_WEB }}
+          IMAGE_AI_OCR_WORKER: ${{ steps.digests.outputs.IMAGE_AI_OCR_WORKER }}
+          IMAGE_ETL: ${{ steps.digests.outputs.IMAGE_ETL }}
+        run: |
+          set -euo pipefail
+          [ "$APP_ENV" = "staging" ] || APP_ENV=production
+          vars=(TRAEFIK_DOMAIN ACME_EMAIL APP_ENV GHCR_USER GHCR_TOKEN COMPOSE_PROFILES PG_SUPERUSER
+                WHATSAPP_ENABLED WHATSAPP_PHONE_NUMBER_ID WHATSAPP_OTP_TEMPLATE
+                PAYMENT_PROVIDER EFN_PUBLIC_BIND EFN_WG_BIND EFN_WG_HTTPS_PORT EFN_WG_OUTLET_CIDR EFN_WG_STAFF_CIDR
+                ACME_DNS_PROVIDER ACME_DNS_TOKEN_ENV RABBITMQ_STRICT_PERMISSIONS
+                MARKET_SCOUT_PHOTO_RETENTION_DAYS CH_MART_RETENTION_YEARS
+                CONSENT_LOCATION_VERSION CONSENT_LOCATION_TEXT_SHA256 CONSENT_MARKETING_VERSION
+                CONSENT_MARKETING_TEXT_SHA256 DSAR_DELETE_GRACE_DAYS
+                EFN_PKI_INTERMEDIATE_KEY EFN_PKI_INTERMEDIATE_CRT EFN_PKI_ROOT_CRT EFN_PKI_EXTRA_TRUST
+                IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL)
+          {
+            for v in "${vars[@]}"; do
+              printf 'export %s=%q\n' "$v" "${!v}"
+            done
+            while read -r name kind _; do
+              [ -z "$name" ] && continue
+              case "$name" in \#*) continue ;; esac
+              case "$kind" in pki|derived:*) continue ;; esac
+              up="$(echo "$name" | tr '[:lower:]' '[:upper:]')"
+              val="$(jq -r --arg k "$up" '.[$k] // empty' <<< "$ALL_SECRETS")"
+              printf 'export %s=%q\n' "$up" "$val"
+            done < scripts/secrets.list
+            echo 'bash /opt/efn/scripts/deploy.sh'
+          } | ssh -i "$HOME/.ssh/efn_deploy" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+                "${DEPLOY_USER}@${HOST}" 'sudo -n bash -s'
+
+      - name: Smoke test
+        env:
+          DOMAIN: ${{ vars.TRAEFIK_DOMAIN }}
+        run: |
+          for url in "https://api.${DOMAIN}/health" "https://app.${DOMAIN}/api/health"; do
+            for i in $(seq 1 20); do
+              if curl -fsS --max-time 10 "$url" > /dev/null; then echo "OK $url"; break; fi
+              sleep 10
+              [ "$i" -eq 20 ] && { echo "FAIL $url"; exit 1; }
+            done
+          done
+
+      - name: Hapus kunci SSH
+        if: always()
+        run: rm -f ~/.ssh/efn_deploy

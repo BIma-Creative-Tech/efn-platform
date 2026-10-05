@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO — memakai produk & company demo efn_kitting (PT EFN F&B Demo Central Kitchen).
+     Angka min/max dan umur simpan adalah PLACEHOLDER: menunggu Q-34 (FEFO/expiry/waste) dan
+     Q-35 (kapasitas CK, produksi forecast vs pesanan outlet). -->
+<odoo>
+    <!-- Paket CK: dilacak per lot + tanggal kedaluwarsa, kategori FEFO. -->
+    <record id="efn_kitting.product_paket_ayam_geprek" model="product.product">
+        <field name="tracking">lot</field>
+        <field name="use_expiration_date" eval="True"/>
+        <field name="expiration_time">3</field>
+        <field name="use_time">2</field>
+        <field name="removal_time">1</field>
+        <field name="alert_time">1</field>
+        <field name="categ_id" ref="product_category_perishable_fefo"/>
+    </record>
+    <record id="efn_kitting.product_paket_nasi_putih" model="product.product">
+        <field name="tracking">lot</field>
+        <field name="use_expiration_date" eval="True"/>
+        <field name="expiration_time">1</field>
+        <field name="use_time">1</field>
+        <field name="removal_time">0</field>
+        <field name="alert_time">0</field>
+        <field name="categ_id" ref="product_category_perishable_fefo"/>
+    </record>
+
+    <!-- Reorder rule di gudang CK: stok paket < 20 Porsi -> MO (BoM Manufacture) hingga 100 Porsi.
+         Odoo 19: route "Manufacture" (mrp.route_warehouse0_manufacture) adalah route GUDANG
+         (product_selectable=False, warehouse_selectable=True); aktif bila warehouse
+         manufacture_to_resupply=True (default True). Tidak perlu (dan tidak bisa) dipasang di
+         form produk. warehouse_id/location_id dihitung otomatis (precompute) dari company.
+         route_id SENGAJA dikosongkan (QA gelombang 4): xmlid route_warehouse0_manufacture terikat ke
+         warehouse/company utama, sedangkan orderpoint ini milik company FNB -> risiko _check_company.
+         Dengan route kosong, Odoo memakai route manufacture gudang company FNB (produk punya BoM normal). -->
+    <record id="orderpoint_paket_ayam_geprek_ck" model="stock.warehouse.orderpoint">
+        <field name="product_id" ref="efn_kitting.product_paket_ayam_geprek"/>
+        <field name="company_id" model="res.company"
+               eval="obj().search([('efn_brand_code', '=', 'FNB')], limit=1).id or ref('base.main_company')"/>
+        <field name="product_min_qty">20</field>
+        <field name="product_max_qty">100</field>
+        <field name="trigger">auto</field>
+    </record>
+    <record id="orderpoint_paket_nasi_putih_ck" model="stock.warehouse.orderpoint">
+        <field name="product_id" ref="efn_kitting.product_paket_nasi_putih"/>
+        <field name="company_id" model="res.company"
+               eval="obj().search([('efn_brand_code', '=', 'FNB')], limit=1).id or ref('base.main_company')"/>
+        <field name="product_min_qty">20</field>
+        <field name="product_max_qty">100</field>
+        <field name="trigger">manual</field>
+    </record>
+</odoo>

@@ -1,0 +1,7 @@
+10021	WARN	(X-Content-Type-Options Header Missing)
+10038	WARN	(Content Security Policy (CSP) Header Not Set)
+10063	WARN	(Permissions Policy Header Not Set)
+40012	FAIL	(Cross Site Scripting (Reflected))
+40014	FAIL	(Cross Site Scripting (Persistent))
+40018	FAIL	(SQL Injection)
+90022	FAIL	(Application Error Disclosure)

@@ -1,0 +1,7 @@
+ignored:
+  - DL3008   # apt pin versi: kami pakai image base ber-tag dan Trivy untuk CVE
+  - DL3013   # pip pin: ditangani requirements.txt
+  - DL3018   # apk pin
+trustedRegistries:
+  - docker.io
+  - ghcr.io

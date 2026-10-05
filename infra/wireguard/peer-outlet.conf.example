@@ -1,0 +1,28 @@
+# WireGuard peer PERANGKAT POS / KDS (pola B2, ADR-023) - CONTOH, tanpa kunci nyata. Open source: klien resmi
+# WireGuard (GPLv2/MIT) untuk Windows, Android, Linux. Format INI ini identik untuk ketiganya:
+#   Windows : WireGuard for Windows -> "Add Tunnel" -> "Add empty tunnel..." (kunci dibuat aplikasi), tempel
+#             bagian [Interface] Address/DNS + [Peer] di bawah. Centang "Block untunneled traffic" = TIDAK
+#             (split tunnel). Pasang sebagai service: `wireguard.exe /installtunnelservice <file.conf>` agar kasir
+#             tidak bisa mematikan dari tray (akun kasir non-admin).
+#   Android : aplikasi WireGuard (F-Droid/Play) -> "+" -> "Create from scratch" -> "Generate" kunci di perangkat.
+#             Aktifkan "Always-on VPN" di Pengaturan Android (Jaringan -> VPN) agar tunnel naik saat boot.
+#   Linux   : `apt install wireguard-tools`; `umask 077; wg genkey | tee /etc/wireguard/efn.key | wg pubkey`;
+#             salin file ini ke /etc/wireguard/efn.conf; `systemctl enable --now wg-quick@efn`.
+# Kunci privat DIBUAT DI PERANGKAT (ADR-023 butir 5); hanya PUBLIC KEY yang dikirim ke ops:
+#   bash gen-peer.sh --pubkey <PUBKEY_PERANGKAT> outlet FNB-JKT-001-POS1 10.88.1.11/32 vpn.<domain>:51820
+#
+# Split tunnel: hanya 10.88.0.1/32 (hub) lewat tunnel; internet & pembayaran EDC/QRIS tetap lewat jalur biasa.
+
+[Interface]
+PrivateKey = <DIBUAT_DI_PERANGKAT>
+Address = 10.88.1.11/32
+# Resolver split DNS di hub (erp.<domain> -> 10.88.0.1). Bila tidak ada resolver: entri hosts
+#   Windows C:\Windows\System32\drivers\etc\hosts / Linux /etc/hosts:  10.88.0.1 erp.<domain>
+DNS = 10.88.0.1
+
+[Peer]
+PublicKey = <PUBKEY_HUB>
+PresharedKey = <PSK_DARI_OPS>
+Endpoint = <DNS_ATAU_IP_PUBLIK_HUB>:51820
+AllowedIPs = 10.88.0.1/32
+PersistentKeepalive = 25

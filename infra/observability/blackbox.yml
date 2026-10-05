@@ -1,0 +1,43 @@
+modules:
+  # Health endpoint internal: HTTPS terverifikasi CA internal (hostname = nama service di URL). Membawa sertifikat
+  # klien `blackbox-exporter` (/run/secrets/tls_server_crt, EKU server+client) karena sidecar ghostunnel Odoo/
+  # Next.js/Metabase/Ollama mewajibkan mTLS (docs/04 §8.5). Blackbox sendiri hanya bisa dipicu Prometheus (mTLS).
+  https_internal:
+    prober: http
+    timeout: 5s
+    http:
+      method: GET
+      valid_status_codes: []   # default 2xx
+      preferred_ip_protocol: ip4
+      no_follow_redirects: true
+      fail_if_not_ssl: true
+      tls_config:
+        ca_file: /run/secrets/efn_ca_crt
+        cert_file: /run/secrets/tls_server_crt
+        key_file: /run/secrets/tls_server_key
+        insecure_skip_verify: false
+
+  # Handshake TLS mentah ke listener internal (redis, amqps, clickhouse native, ...): verifikasi rantai + nama,
+  # menyediakan probe_ssl_earliest_cert_expiry untuk alert sertifikat internal.
+  tls_internal:
+    prober: tcp
+    timeout: 5s
+    tcp:
+      preferred_ip_protocol: ip4
+      tls: true
+      tls_config:
+        ca_file: /run/secrets/efn_ca_crt
+        cert_file: /run/secrets/tls_server_crt
+        key_file: /run/secrets/tls_server_key
+        insecure_skip_verify: false
+
+  # Endpoint publik HTTPS: verifikasi TLS publik + sediakan probe_ssl_earliest_cert_expiry (tanpa sertifikat klien)
+  https_2xx:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      preferred_ip_protocol: ip4
+      fail_if_not_ssl: true
+      tls_config:
+        insecure_skip_verify: false

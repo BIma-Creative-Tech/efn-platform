@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dipakai ir.config_parameter.set_param (@api.model) alih-alih <record> agar tidak bentrok
+     dengan key yang mungkin sudah ada. Blok noupdate: <function> hanya jalan saat install,
+     sehingga perubahan admin lewat Settings tidak ditimpa saat upgrade. -->
+<odoo noupdate="1">
+    <!-- auth_totp_mail 19.0: res.config.settings.auth_totp_policy -> 'auth_totp.policy'.
+         'employee_required' = user internal wajib 2FA; user internal tanpa aplikasi
+         authenticator menerima kode 2FA lewat email (butuh outgoing mail server). -->
+    <function model="ir.config_parameter" name="set_param" eval="['auth_totp.policy', 'employee_required']"/>
+
+    <!-- auth_password_policy 19.0: param 'auth_password_policy.minlength' (default 0 = mati).
+         12 = usulan; menunggu Q-54. -->
+    <function model="ir.config_parameter" name="set_param" eval="['auth_password_policy.minlength', '12']"/>
+</odoo>

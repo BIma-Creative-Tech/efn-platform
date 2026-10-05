@@ -1,0 +1,321 @@
+# Aturan alert EFN. Prinsip: hanya kondisi yang butuh tindakan manusia, `for:` cukup panjang agar tidak berisik,
+# setiap alert punya runbook_url. Severity: critical (bangunkan on-call) | warning (jam kerja).
+# Label `metric_status: proposed` = metrik belum diekspos service; nama metrik diusulkan ke agent pemilik service.
+groups:
+  # ─────────────────────────── Ketersediaan ───────────────────────────
+  - name: efn-availability
+    rules:
+      - alert: EfnServiceDown
+        expr: up{job!~"probe-.*"} == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Target scrape {{ $labels.job }} ({{ $labels.instance }}) tidak bisa dijangkau"
+          description: "Prometheus gagal scrape {{ $labels.job }} selama 3 menit. Service mati, restart loop, atau exporter belum jalan."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/service-down.md
+
+      - alert: EfnHealthProbeFailed
+        expr: probe_success{job="probe-internal"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Health endpoint {{ $labels.instance }} gagal"
+          description: "Probe internal ke {{ $labels.instance }} gagal 2 menit. Odoo/BFF/Web tidak melayani request (POS & checkout terdampak)."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/service-down.md
+
+      - alert: EfnPublicEndpointDown
+        expr: probe_success{job="probe-https"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Endpoint publik {{ $labels.instance }} tidak dapat diakses"
+          description: "Probe HTTPS publik gagal 5 menit (DNS, Cloudflare, Traefik, atau sertifikat)."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/service-down.md
+
+      - alert: EfnPostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL tidak menerima koneksi"
+          description: "postgres-exporter tidak bisa terhubung ke PostgreSQL. Semua PT (Odoo multi-company) terdampak."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/service-down.md
+
+      - alert: EfnRedisDown
+        expr: redis_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis tidak tersedia"
+          description: "OTP, rate limit, dan discount token BFF bergantung pada Redis."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/service-down.md
+
+  # ─────────────────────────── Odoo ───────────────────────────
+  - name: efn-odoo
+    rules:
+      - alert: EfnOdooHttp5xxHigh
+        expr: |
+          (
+            sum(rate(traefik_service_requests_total{service=~"odoo(-ws)?@docker", code=~"5.."}[5m]))
+            /
+            sum(rate(traefik_service_requests_total{service=~"odoo(-ws)?@docker"}[5m]))
+          ) > 0.05
+          and
+          sum(rate(traefik_service_requests_total{service=~"odoo(-ws)?@docker"}[5m])) > 0.2
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Odoo mengembalikan HTTP 5xx > 5% ({{ $value | humanizePercentage }})"
+          description: "Rasio 5xx dari Odoo lewat Traefik di atas 5% selama 5 menit (minimal 0.2 req/s agar tidak berisik)."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/odoo-http-5xx.md
+
+  # ─────────────────────────── RabbitMQ / OCR ───────────────────────────
+  - name: efn-messaging
+    rules:
+      - alert: EfnOcrQueueBacklog
+        expr: sum by (queue) (rabbitmq_queue_messages{queue="ocr.requested"}) > 200
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Antrean ocr.requested menumpuk ({{ $value }} pesan)"
+          description: "Lebih dari 200 pesan menunggu selama 10 menit. Price Hunter tertunda; transaksi POS tidak terdampak."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/rabbitmq-ocr-backlog.md
+
+      - alert: EfnOcrNoConsumer
+        expr: sum by (queue) (rabbitmq_queue_consumers{queue="ocr.requested"}) == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tidak ada consumer di ocr.requested"
+          description: "ai-ocr-worker tidak terhubung ke RabbitMQ selama 10 menit."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/rabbitmq-ocr-backlog.md
+
+      - alert: EfnDeadLetterNotEmpty
+        expr: sum by (queue) (rabbitmq_queue_messages{queue=~".+\\.dlq"}) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DLQ {{ $labels.queue }} berisi {{ $value }} pesan"
+          description: "Ada pesan yang gagal diproses permanen. Periksa penyebab sebelum replay (consumer idempotent)."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/rabbitmq-dlq.md
+
+  # ─────────────────────────── OTP / WhatsApp (metrik diusulkan) ───────────────────────────
+  # Metrik BFF (prom-client, services/api-gateway/src/common/metrics/metrics.service.ts):
+  #   efn_otp_verify_total{purpose="pos_promo|login", outcome="verified|invalid|expired|locked"}
+  #   efn_otp_request_total{purpose, outcome="sent|delivery_failed|rate_limited"}
+  #   efn_whatsapp_send_total{outcome="success|failure"}
+  # Label = `outcome` (bukan `result`): dengan `result!="ok"` semua seri cocok -> alert palsu permanen.
+  - name: efn-otp
+    rules:
+      - alert: EfnOtpVerifyFailureRateHigh
+        expr: |
+          (
+            sum by (purpose) (rate(efn_otp_verify_total{outcome!="verified"}[15m]))
+            /
+            sum by (purpose) (rate(efn_otp_verify_total[15m]))
+          ) > 0.4
+          and
+          sum by (purpose) (increase(efn_otp_verify_total[15m])) > 20
+        for: 10m
+        labels:
+          severity: warning
+          metric_status: proposed
+        annotations:
+          summary: "Kegagalan verifikasi OTP {{ $labels.purpose }} tinggi ({{ $value | humanizePercentage }})"
+          description: "Lebih dari 40% verifikasi OTP gagal (min. 20 percobaan/15 menit). Indikasi WA terlambat, jam server, atau brute force."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/otp-failure-rate.md
+
+      - alert: EfnOtpSendFailureRateHigh
+        expr: |
+          (
+            sum(rate(efn_whatsapp_send_total{outcome="failure"}[10m]))
+            /
+            sum(rate(efn_whatsapp_send_total[10m]))
+          ) > 0.1
+          and
+          sum(increase(efn_whatsapp_send_total[10m])) > 10
+        for: 10m
+        labels:
+          severity: critical
+          metric_status: proposed
+        annotations:
+          summary: "Pengiriman OTP WhatsApp gagal > 10%"
+          description: "WhatsApp Cloud API menolak/time-out. Promo ber-OTP di POS tidak bisa dipakai pelanggan."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/otp-failure-rate.md
+
+  # ─────────────────────────── Backup & DR (R-T08) ───────────────────────────
+  # Metrik efn_backup_* / efn_restore_test_* ditulis scripts/backup.sh & scripts/restore-test.sh (textfile collector).
+  - name: efn-backup
+    rules:
+      - alert: EfnBackupFailed
+        expr: efn_backup_last_status{type="base"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Base backup PostgreSQL terakhir GAGAL"
+          description: "scripts/backup.sh selesai dengan error. Lihat journalctl -u efn-backup."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/backup-failed.md
+
+      - alert: EfnBackupStale
+        expr: time() - efn_backup_last_success_timestamp_seconds{type="base"} > 26 * 3600
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tidak ada base backup sukses > 26 jam"
+          description: "Backup harian terlambat/terlewat. RTO memanjang karena replay WAL lebih banyak."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/backup-failed.md
+
+      - alert: EfnBackupMetricMissing
+        expr: absent(efn_backup_last_success_timestamp_seconds{type="base"})
+        for: 26h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Metrik backup tidak ada"
+          description: "Timer efn-backup belum dipasang atau textfile collector tidak membaca direktori metrik."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/backup-failed.md
+
+      - alert: EfnWalArchiveFailing
+        expr: efn_archiver_failing == 1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "WAL archiving (WAL-G -> MinIO) gagal"
+          description: "archive_command gagal > 10 menit: RPO 15 menit terlanggar dan pg_wal akan membengkak."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/backup-failed.md
+
+      - alert: EfnWalArchiveStale
+        expr: efn_archiver_last_archive_age_seconds > 3600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tidak ada WAL ter-archive > 1 jam"
+          description: "Normalnya archive_timeout=900 memaksa archive tiap 15 menit bila ada aktivitas. Cek archive_mode & aktivitas DB."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/backup-failed.md
+
+      - alert: EfnRestoreTestFailed
+        expr: efn_restore_test_last_status == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Restore test bulanan GAGAL"
+          description: "Backup tidak terbukti bisa dipulihkan. Perlakukan sebagai insiden DR."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/backup-restore.md
+
+      - alert: EfnRestoreTestOverdue
+        expr: time() - efn_restore_test_last_success_timestamp_seconds > 35 * 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Restore test sukses terakhir > 35 hari"
+          description: "DoD keamanan mensyaratkan restore test < 30 hari (docs/03 §5)."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/backup-restore.md
+
+  # ─────────────────────────── Host ───────────────────────────
+  - name: efn-host
+    rules:
+      - alert: EfnDiskUsageHigh
+        expr: |
+          (1 - node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|nsfs|ramfs"}
+               / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|nsfs|ramfs"}) > 0.85
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk {{ $labels.mountpoint }} terpakai {{ $value | humanizePercentage }}"
+          description: "Penggunaan disk > 85% selama 15 menit. PostgreSQL berhenti menulis bila disk penuh."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/disk-usage.md
+
+      - alert: EfnDiskUsageCritical
+        expr: |
+          (1 - node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|nsfs|ramfs"}
+               / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|nsfs|ramfs"}) > 0.95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk {{ $labels.mountpoint }} hampir penuh ({{ $value | humanizePercentage }})"
+          description: "Tindakan segera: risiko PostgreSQL/RabbitMQ berhenti."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/disk-usage.md
+
+  # ─────────────────────────── TLS ───────────────────────────
+  - name: efn-tls
+    rules:
+      - alert: EfnCertExpiringSoon
+        expr: (probe_ssl_earliest_cert_expiry{job="probe-https"} - time()) / 86400 < 14
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sertifikat {{ $labels.instance }} kedaluwarsa dalam {{ $value | humanize }} hari"
+          description: "Perpanjangan otomatis ACME Traefik seharusnya terjadi 30 hari sebelum kedaluwarsa."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/tls-cert-expiry.md
+
+      - alert: EfnCertExpiryCritical
+        expr: (probe_ssl_earliest_cert_expiry{job="probe-https"} - time()) / 86400 < 3
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Sertifikat {{ $labels.instance }} kedaluwarsa dalam < 3 hari"
+          description: "Super-App, API, dan ERP akan ditolak browser/aplikasi."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/tls-cert-expiry.md
+
+  # ─────────────────────────── PKI internal (docs/04 §7.1) ───────────────────────────
+  # Dua sumber: (1) probe handshake TLS ke listener internal (probe-internal-tls), (2) metrik textfile
+  # efn_internal_cert_expiry_timestamp_seconds{cert} yang ditulis scripts/deploy.sh dari file secret (mencakup
+  # PostgreSQL dan CA). Sertifikat internal kedaluwarsa = koneksi antar-service GAGAL (fail closed, tanpa fallback).
+  - name: efn-internal-tls
+    rules:
+      - alert: EfnInternalTlsHandshakeFailed
+        expr: probe_success{job="probe-internal-tls"} == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Handshake TLS internal ke {{ $labels.instance }} gagal"
+          description: "Listener tidak TLS, sertifikat tidak cocok nama service / tidak diterbitkan CA internal, atau service mati."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/internal-pki.md
+
+      # Leaf 90 hari; deploy.sh menerbitkan ulang leaf yang sisa < 30 hari. < 21 hari = belum ada deploy sejak
+      # masuk jendela perpanjangan -> jalankan workflow Deploy (workflow_dispatch) untuk rotasi.
+      - alert: EfnInternalCertExpiringSoon
+        expr: |
+          ((probe_ssl_earliest_cert_expiry{job="probe-internal-tls"} - time()) / 86400 < 21)
+          or
+          ((efn_internal_cert_expiry_timestamp_seconds - time()) / 86400 < 21)
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sertifikat internal {{ $labels.instance }}{{ $labels.cert }} kedaluwarsa dalam {{ $value | humanize }} hari"
+          description: "Jalankan workflow Deploy (deploy.sh memperbarui leaf < 30 hari otomatis). Intermediate/root: prosedur Superadmin di runbook."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/internal-pki.md
+
+      - alert: EfnInternalCertExpiryCritical
+        expr: |
+          ((probe_ssl_earliest_cert_expiry{job="probe-internal-tls"} - time()) / 86400 < 7)
+          or
+          ((efn_internal_cert_expiry_timestamp_seconds - time()) / 86400 < 7)
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Sertifikat internal {{ $labels.instance }}{{ $labels.cert }} kedaluwarsa dalam < 7 hari"
+          description: "Setelah kedaluwarsa, klien menolak koneksi (verify-full): POS OTP, Super-App, OCR, ETL berhenti."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/internal-pki.md

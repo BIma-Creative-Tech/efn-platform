@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Aturan OCA auditlog (19.0.2.0.0, models/auditlog_rule.py). Constraint OCA: satu aturan per
+     model — bila sudah ada aturan manual untuk model yang sama, install gagal; hapus dulu.
+     Rule dibuat 'draft' lalu dikonfirmasi lewat set_to_confirmed() (metode OCA yang juga
+     membuat shortcut "View logs"). Blok noupdate: <function> hanya jalan saat install. -->
+<odoo noupdate="1">
+
+    <!-- Harga: pricelist & aturan pricelist (harga member/promo/kuantitas, Q-9). -->
+    <record id="rule_product_pricelist" model="auditlog.rule">
+        <field name="name">EFN - Pricelist</field>
+        <field name="model_id" ref="product.model_product_pricelist"/>
+        <field name="log_type">full</field>
+        <field name="log_read" eval="False"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_record" eval="True"/>
+    </record>
+    <record id="rule_product_pricelist_item" model="auditlog.rule">
+        <field name="name">EFN - Aturan Pricelist</field>
+        <field name="model_id" ref="product.model_product_pricelist_item"/>
+        <field name="log_type">full</field>
+        <field name="log_read" eval="False"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_record" eval="True"/>
+    </record>
+
+    <!-- Harga jual/biaya produk (list_price, standard_price) dan master produk. -->
+    <record id="rule_product_template" model="auditlog.rule">
+        <field name="name">EFN - Produk (harga &amp; master)</field>
+        <field name="model_id" ref="product.model_product_template"/>
+        <field name="log_type">full</field>
+        <field name="log_read" eval="False"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_record" eval="False"/>
+    </record>
+
+    <!-- Promo/loyalty mekanik toko (ADR-020: poin member TIDAK di Odoo; promo tetap diaudit). -->
+    <record id="rule_loyalty_program" model="auditlog.rule">
+        <field name="name">EFN - Program Promo/Loyalty</field>
+        <field name="model_id" ref="loyalty.model_loyalty_program"/>
+        <field name="log_type">full</field>
+        <field name="log_read" eval="False"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_record" eval="True"/>
+    </record>
+    <record id="rule_loyalty_reward" model="auditlog.rule">
+        <field name="name">EFN - Reward Promo</field>
+        <field name="model_id" ref="loyalty.model_loyalty_reward"/>
+        <field name="log_type">full</field>
+        <field name="log_read" eval="False"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_record" eval="True"/>
+    </record>
+    <record id="rule_loyalty_rule" model="auditlog.rule">
+        <field name="name">EFN - Syarat Promo</field>
+        <field name="model_id" ref="loyalty.model_loyalty_rule"/>
+        <field name="log_type">full</field>
+        <field name="log_read" eval="False"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_record" eval="True"/>
+    </record>
+
+    <!-- Stok: hanya penyesuaian manual (stock opname). Field `quantity` & `reserved_quantity`
+         dikecualikan karena berubah pada SETIAP pergerakan stok (volume log & beban DB, R-T11).
+         Yang tercatat: inventory_quantity (jumlah hitung), inventory_date, user penanggung jawab,
+         serta penghapusan quant. Mutasi stok sendiri sudah tercatat di stock.move.line. -->
+    <record id="rule_stock_quant" model="auditlog.rule">
+        <field name="name">EFN - Penyesuaian Stok (quant)</field>
+        <field name="model_id" ref="stock.model_stock_quant"/>
+        <field name="log_type">fast</field>
+        <field name="log_read" eval="False"/>
+        <field name="log_create" eval="False"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_record" eval="False"/>
+        <field name="fields_to_exclude_ids" eval="[(6, 0, [ref('stock.field_stock_quant__quantity'), ref('stock.field_stock_quant__reserved_quantity')])]"/>
+    </record>
+
+    <!-- Pelanggan/member: perubahan nomor HP menentukan member_ref OTP (efn_pos_otp_gate, SEC-07).
+         Create tidak dicatat (volume dari POS/Super-App); write & delete dicatat. -->
+    <record id="rule_res_partner" model="auditlog.rule">
+        <field name="name">EFN - Kontak/Pelanggan (ubah &amp; hapus)</field>
+        <field name="model_id" ref="base.model_res_partner"/>
+        <field name="log_type">fast</field>
+        <field name="log_read" eval="False"/>
+        <field name="log_create" eval="False"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_record" eval="False"/>
+    </record>
+
+    <!-- set_to_confirmed bukan @api.model: argumen pertama = ids. -->
+    <function model="auditlog.rule" name="set_to_confirmed" eval="[[
+        ref('rule_product_pricelist'),
+        ref('rule_product_pricelist_item'),
+        ref('rule_product_template'),
+        ref('rule_loyalty_program'),
+        ref('rule_loyalty_reward'),
+        ref('rule_loyalty_rule'),
+        ref('rule_stock_quant'),
+        ref('rule_res_partner'),
+    ]]"/>
+</odoo>

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Setara mencentang di Inventory → Settings (res.config.settings 19.0):
+       group_stock_production_lot  -> stock.group_production_lot      ("Lots & Serial Numbers")
+       group_stock_multi_locations -> stock.group_stock_multi_locations ("Storage Locations")
+       group_stock_adv_location    -> stock.group_adv_location        ("Multi-Step Routes")
+     Diterapkan dengan implied_ids pada base.group_user (pola yang sama dengan stock_security.xml).
+     "Expiration Dates" (module_product_expiry) dipenuhi lewat depends. -->
+<odoo noupdate="1">
+    <record id="base.group_user" model="res.groups">
+        <field name="implied_ids" eval="[
+            (4, ref('stock.group_production_lot')),
+            (4, ref('stock.group_stock_multi_locations')),
+            (4, ref('stock.group_adv_location')),
+        ]"/>
+    </record>
+
+    <!-- Kategori untuk produk perishable (paket CK, fresh): removal strategy FEFO
+         (product.removal `product_expiry.removal_fefo`). Produk bertracking lot + use_expiration_date
+         yang masuk kategori ini diambil berdasarkan tanggal kedaluwarsa terdekat. -->
+    <record id="product_category_perishable_fefo" model="product.category">
+        <field name="name">Perishable (FEFO)</field>
+        <field name="removal_strategy_id" ref="product_expiry.removal_fefo"/>
+    </record>
+</odoo>

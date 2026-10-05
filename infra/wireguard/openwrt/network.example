@@ -1,0 +1,52 @@
+# OpenWrt (open source, >= 22.03; juga GL.iNet berbasis OpenWrt) - router OUTLET pola B1 (ADR-023).
+# CONTOH tanpa kunci nyata. Tambahkan ke /etc/config/network, lalu `/etc/init.d/network reload`.
+# Paket: opkg update && opkg install wireguard-tools luci-proto-wireguard
+#
+# Kunci privat DIBUAT DI ROUTER (ADR-023 butir 5):
+#   umask 077; wg genkey > /etc/wireguard/efn.key; wg pubkey < /etc/wireguard/efn.key   # kirim PUBLIC KEY ke ops
+#   ops: bash gen-peer.sh --pubkey <PUBKEY_ROUTER> outlet FNB-JKT-001 10.88.1.1/32 vpn.<domain>:51820
+#
+# Segmentasi WAJIB (SEC-21): VLAN/bridge POS (lan_pos) terpisah dari Wi-Fi tamu (guest). Hanya zona pos yang
+# boleh masuk tunnel (lihat firewall.example). Seluruh perangkat di lan_pos ikut ter-NAT ke 10.88.1.1 -> rate
+# limit login Odoo berlaku per outlet.
+
+config interface 'efn_wg'
+	option proto 'wireguard'
+	option private_key '<ISI_DARI_/etc/wireguard/efn.key>'
+	list addresses '10.88.1.1/32'
+	option mtu '1420'
+
+config wireguard_efn_wg
+	option description 'EFN hub'
+	option public_key '<PUBKEY_HUB>'
+	option preshared_key '<PSK_DARI_OPS>'
+	option endpoint_host '<DNS_ATAU_IP_PUBLIK_HUB>'
+	option endpoint_port '51820'
+	option persistent_keepalive '25'
+	option route_allowed_ips '1'
+	# Split tunnel: hanya hub
+	list allowed_ips '10.88.0.1/32'
+
+# Jaringan POS/KDS/printer (VLAN 20 pada switch port LAN; sesuaikan perangkat). Wi-Fi kasir boleh di sini
+# dengan SSID tersendiri + WPA2/WPA3; Wi-Fi tamu memakai interface 'guest' terpisah.
+config device
+	option type 'bridge'
+	option name 'br-pos'
+	list ports 'lan2.20'
+
+config interface 'lan_pos'
+	option device 'br-pos'
+	option proto 'static'
+	option ipaddr '192.168.20.1'
+	option netmask '255.255.255.0'
+
+config interface 'guest'
+	option device 'br-guest'
+	option proto 'static'
+	option ipaddr '192.168.50.1'
+	option netmask '255.255.255.0'
+
+# Split DNS: erp.<domain> -> 10.88.0.1 untuk klien lan_pos (dnsmasq OpenWrt, /etc/config/dhcp):
+#   config domain
+#   	option name 'erp.<domain>'
+#   	option ip '10.88.0.1'

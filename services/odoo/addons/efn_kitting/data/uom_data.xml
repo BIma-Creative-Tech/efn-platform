@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Odoo 19: uom.uom tidak lagi memakai kategori; satuan turunan didefinisikan dengan
+     relative_uom_id + relative_factor. 1 Porsi = 1 Units. -->
+<odoo noupdate="1">
+    <record id="uom_porsi" model="uom.uom">
+        <field name="name">Porsi</field>
+        <field name="relative_factor" eval="1.0"/>
+        <field name="relative_uom_id" ref="uom.product_uom_unit"/>
+    </record>
+</odoo>
