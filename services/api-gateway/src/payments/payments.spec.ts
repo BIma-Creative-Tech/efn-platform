@@ -18,7 +18,7 @@ const BODY = {
   idempotency_key: 'pos:3f2b8c1e:pay-1',
 };
 
-interface Row {
+type Row = {
   id: string;
   provider: string;
   provider_ref: string | null;
@@ -30,7 +30,7 @@ interface Row {
   expires_at: Date | null;
   paid_at: Date | null;
   idempotency_key: string;
-}
+};
 
 /** Emulasi `platform.payment_intent` + `processed_message` untuk FakeDb. */
 function fakePaymentDb() {
