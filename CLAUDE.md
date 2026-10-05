@@ -41,8 +41,8 @@ User hanya berbicara dengan **`efn-lead`** (`.claude/agents/efn-lead.md`). Di se
 
 ## Batasan lingkungan kerja
 
-Mesin penulis **tidak punya** Docker, Git, Node, atau Python yang bisa dijalankan. Konsekuensi:
-- Tidak ada yang bisa di-run lokal; validasi terjadi di CI (`.github/workflows/ci.yml`).
+Status mesin penulis (per 6 Okt 2026): **Git + Git Bash + OpenSSL tersedia** (repo lokal, branch `main`); **Docker Desktop terpasang tetapi belum bisa jalan** (virtualisasi/WSL2 belum aktif); Node dan Python belum ada. Konsekuensi:
+- Skrip shell & PKI bisa diuji lokal lewat Git Bash (`MSYS2_ARG_CONV_EXCL="/CN=;/O=;/C=;/OU="` untuk openssl). Build/test service menunggu Docker atau CI (`.github/workflows/ci.yml`).
 - Tulis kode yang konservatif: API library yang stabil dan terdokumentasi, hindari fitur eksperimental.
 - Setiap dependency baru ditambahkan eksplisit ke `package.json` / `requirements.txt` dengan versi yang di-pin (caret untuk npm boleh).
 - Laporkan dengan jujur apa yang **belum** terverifikasi.
