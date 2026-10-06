@@ -32,8 +32,9 @@ jobs:
     name: SAST (semgrep)
     runs-on: ubuntu-latest
     container:
-      # TODO(devsecops): pin ke digest (semgrep/semgrep@sha256:...) setelah digest rilis dicek; tag `latest` bergerak.
-      image: semgrep/semgrep:latest
+      # SEC-30 (gelombang 9): dipin ke digest index rilis 1.179.0 (dicek `docker buildx imagetools inspect`, 6 Okt
+      # 2026). Bump manual/Dependabot (docker): ganti tag + digest bersamaan.
+      image: semgrep/semgrep:1.179.0@sha256:93963d9295a366f59e4850127b1550400ee7b388f04fe144e4a1f6325d96e01b
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:

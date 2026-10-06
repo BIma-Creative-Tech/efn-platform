@@ -17,6 +17,9 @@ from efn_ocr.publisher import (
 )
 from efn_ocr.tls import TlsConfigError
 
+# Access key acak dummy (bentuk sama dengan gen-secrets.sh `akid`: 20 hex huruf besar), docs/04 §8.12
+AK = "0A1B2C3D4E5F60718293"
+
 
 @pytest.fixture
 def tls_env(tmp_path: Path) -> dict[str, str]:
@@ -27,6 +30,8 @@ def tls_env(tmp_path: Path) -> dict[str, str]:
     cert.write_text("dummy-cert", encoding="utf-8")
     key = tmp_path / "metrics.key"
     key.write_text("dummy-key", encoding="utf-8")
+    access_key = tmp_path / "minio_ocr_access_key"
+    access_key.write_text(f"{AK}\n", encoding="utf-8")
     return {
         "APP_ENV": "production",
         "AMQP_URL": "amqps://efn-ocr@rabbitmq:5671",
@@ -37,6 +42,7 @@ def tls_env(tmp_path: Path) -> dict[str, str]:
         "MINIO_PORT": "9000",
         "MINIO_USE_SSL": "true",
         "MINIO_CA_FILE": str(ca),
+        "MINIO_ACCESS_KEY_FILE": str(access_key),
         "OLLAMA_URL": "https://ollama:11434",
         "OLLAMA_CA_FILE": str(ca),
         "OLLAMA_CLIENT_CERT_FILE": str(cert),
@@ -79,7 +85,7 @@ def test_settings_tls_production(tls_env: dict[str, str]) -> None:
     assert settings.pg_user == "efn_ocr"
     assert settings.minio_endpoint == "minio:9000"
     assert settings.minio_secure is True
-    assert settings.minio_access_key == "efn-ocr"
+    assert settings.minio_access_key == AK
     assert settings.ollama_ca_file == tls_env["OLLAMA_CA_FILE"]
     assert settings.metrics_cert_file == tls_env["METRICS_TLS_CERT_FILE"]
     assert settings.metrics_client_ca_file == tls_env["METRICS_TLS_CLIENT_CA_FILE"]
@@ -189,6 +195,45 @@ def test_settings_other_values() -> None:
     assert settings.minio_endpoint == "minio:9100"
     assert settings.ollama_url == "http://ollama:11434"
     assert settings.pg_database == "efn_platform_x"
+
+
+def test_minio_access_key_file_wins_over_literal(tls_env: dict[str, str]) -> None:
+    """docs/04 §8.13: MINIO_ACCESS_KEY_FILE (trim) menang atas literal MINIO_ACCESS_KEY."""
+    settings = Settings.from_env({**tls_env, "MINIO_ACCESS_KEY": "efn-ocr"})
+    assert settings.minio_access_key == AK
+
+
+@pytest.mark.parametrize("app_env", ["production", "staging", ""])
+def test_minio_access_key_literal_rejected_outside_dev(tls_env: dict[str, str], app_env: str) -> None:
+    env = {k: v for k, v in tls_env.items() if k != "MINIO_ACCESS_KEY_FILE"}
+    with pytest.raises(RuntimeError, match="MINIO_ACCESS_KEY_FILE"):
+        Settings.from_env({**env, "APP_ENV": app_env, "MINIO_ACCESS_KEY": AK})
+
+
+def test_minio_access_key_validation(tls_env: dict[str, str], tmp_path: Path) -> None:
+    short = tmp_path / "short"
+    short.write_text("efn-ocr", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="terlalu pendek"):
+        Settings.from_env({**tls_env, "MINIO_ACCESS_KEY_FILE": str(short)})
+    bad = tmp_path / "bad"
+    bad.write_text("AAAA BBBB CCCC DDDD", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="tidak valid"):
+        Settings.from_env({**tls_env, "MINIO_ACCESS_KEY_FILE": str(bad)})
+    empty = tmp_path / "empty"
+    empty.write_text("\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="tidak valid"):
+        Settings.from_env({**tls_env, "MINIO_ACCESS_KEY_FILE": str(empty)})
+    with pytest.raises(RuntimeError, match="tidak ditemukan"):
+        Settings.from_env({**tls_env, "MINIO_ACCESS_KEY_FILE": str(tmp_path / "missing")})
+
+
+def test_minio_access_key_dev_literal_and_default(tls_env: dict[str, str]) -> None:
+    assert Settings.from_env(PLAIN_DEV).minio_access_key == "efn-ocr"
+    assert Settings.from_env({**PLAIN_DEV, "MINIO_ACCESS_KEY": "efn-ocr-dev"}).minio_access_key == "efn-ocr-dev"
+    # APP_ENV=dev tetapi NODE_ENV=production -> diperlakukan production (SEC-27) -> literal ditolak
+    env = {k: v for k, v in tls_env.items() if k != "MINIO_ACCESS_KEY_FILE"}
+    with pytest.raises(RuntimeError, match="MINIO_ACCESS_KEY_FILE"):
+        Settings.from_env({**env, "APP_ENV": "dev", "NODE_ENV": "production", "MINIO_ACCESS_KEY": AK})
 
 
 def test_vlm_disabled_does_not_require_ollama_tls(tls_env: dict[str, str]) -> None:

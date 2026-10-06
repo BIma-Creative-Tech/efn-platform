@@ -76,6 +76,10 @@ networks:
     internal: true
     ipam:
       config: [{ subnet: 172.30.4.0/24 }]
+  objstore:      # hanya s3-gateway (filter L7) + minio-init <-> minio (ADR-030); klien aplikasi TIDAK ada di sini
+    internal: true
+    ipam:
+      config: [{ subnet: 172.30.6.0/24 }]
 
 volumes:
   traefik-acme:
@@ -117,6 +121,10 @@ secrets:
   minio_bff_secret: { file: ../../secrets/minio_bff_secret.txt }
   minio_ocr_secret: { file: ../../secrets/minio_ocr_secret.txt }
   minio_prometheus_secret: { file: ../../secrets/minio_prometheus_secret.txt }
+  # access key object storage = secret acak (docs/04 §8.12, ADR-030)
+  minio_bff_access_key: { file: ../../secrets/minio_bff_access_key.txt }
+  minio_ocr_access_key: { file: ../../secrets/minio_ocr_access_key.txt }
+  minio_prometheus_access_key: { file: ../../secrets/minio_prometheus_access_key.txt }
   clickhouse_password_etl: { file: ../../secrets/clickhouse_password_etl.txt }
   clickhouse_password_text2sql: { file: ../../secrets/clickhouse_password_text2sql.txt }
   clickhouse_password_metabase: { file: ../../secrets/clickhouse_password_metabase.txt }
@@ -136,6 +144,7 @@ secrets:
   minio_prometheus_token: { file: ../../secrets/minio_prometheus_token.txt }
   # backup & at rest
   minio_backup_password: { file: ../../secrets/minio_backup_password.txt }
+  minio_backup_access_key: { file: ../../secrets/minio_backup_access_key.txt }
   walg_libsodium_key: { file: ../../secrets/walg_libsodium_key.txt }
   minio_kms_key: { file: ../../secrets/minio_kms_key.txt }
   clickhouse_disk_key: { file: ../../secrets/clickhouse_disk_key.txt }
@@ -150,6 +159,8 @@ secrets:
   tls_rabbitmq_key: { file: ../../secrets/tls_rabbitmq_key.txt }
   tls_minio_crt: { file: ../../secrets/tls_minio_crt.txt }
   tls_minio_key: { file: ../../secrets/tls_minio_key.txt }
+  tls_s3_gateway_crt: { file: ../../secrets/tls_s3_gateway_crt.txt }
+  tls_s3_gateway_key: { file: ../../secrets/tls_s3_gateway_key.txt }
   tls_clickhouse_crt: { file: ../../secrets/tls_clickhouse_crt.txt }
   tls_clickhouse_key: { file: ../../secrets/tls_clickhouse_key.txt }
   tls_api_gateway_crt: { file: ../../secrets/tls_api_gateway_crt.txt }
@@ -299,6 +310,32 @@ services:
       timeout: 5s
       retries: 3
 
+  # SEC-35: metrik Traefik (entrypoint `metrics` di 127.0.0.1:8084) hanya lewat sidecar ini, mTLS CN prometheus.
+  # Ikut namespace Traefik -> di-recreate bersama traefik.
+  traefik-metrics-tls:
+    <<: *ghostunnel
+    profiles: ["core"]
+    network_mode: "service:traefik"
+    depends_on: [traefik]
+    command:
+      - server
+      - --listen=0.0.0.0:8082
+      - --target=127.0.0.1:8084
+      - --cert=/run/secrets/tls_traefik_crt
+      - --key=/run/secrets/tls_traefik_key
+      - --cacert=/run/secrets/efn_ca_crt
+      - --allow-cn=prometheus
+      - --status=http://127.0.0.1:6070
+      - --quiet=conns
+    secrets: [efn_ca_crt, tls_traefik_crt, tls_traefik_key]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6070/_status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: traefik-metrics-tls
+
   # ───────────────────────── DATA LAYER ─────────────────────────
   # Image custom = postgres:16.6-bookworm + WAL-G (infra/backup/postgres). WAL di-archive ke MinIO (HTTPS, CA internal)
   # bucket pg-backup setiap segmen penuh atau paling lambat archive_timeout=900 s -> RPO 15 menit (R-T08).
@@ -328,13 +365,15 @@ services:
       PGDATA: /var/lib/postgresql/data/pgdata
       # WAL-G (dibaca oleh /usr/local/bin/efn-walg; secret dibaca dari file per pemanggilan)
       WALG_S3_PREFIX: ${WALG_S3_PREFIX:-s3://pg-backup/efn}
-      WALG_S3_ENDPOINT: https://minio:9000
+      # Lewat filter L7 s3-gateway (ADR-030), bukan langsung ke storage
+      WALG_S3_ENDPOINT: https://s3-gateway:9000
       WALG_S3_CA_CERT_FILE: /run/secrets/efn_ca_crt
-      MINIO_BACKUP_USER: ${MINIO_BACKUP_USER:-pgbackup}
+      MINIO_BACKUP_ACCESS_KEY_FILE: /run/secrets/minio_backup_access_key
       MINIO_BACKUP_PASSWORD_FILE: /run/secrets/minio_backup_password
       WALG_LIBSODIUM_KEY_FILE: /run/secrets/walg_libsodium_key
     secrets:
       - pg_password
+      - minio_backup_access_key
       - minio_backup_password
       - walg_libsodium_key
       - efn_ca_crt
@@ -482,13 +521,41 @@ services:
     labels:
       service: rabbitmq
 
-  # MinIO: HTTPS saja (sertifikat disalin ke /tmp/certs karena MinIO butuh nama file public.crt/private.key),
-  # SSE-S3 dengan kunci KMS statis dari secret minio_kms_key (docs/04 §7.2).
-  # Juga di network `data` agar archive_command Postgres (WAL-G) bisa menjangkaunya.
-  # Tidak read_only: MinIO menulis ~/.minio saat start.
+  # SEC-35: metrik RabbitMQ (plugin di 127.0.0.1:15692) hanya lewat sidecar ini, mTLS CN prometheus saja.
+  rabbitmq-metrics-tls:
+    <<: *ghostunnel
+    profiles: ["core"]
+    network_mode: "service:rabbitmq"
+    depends_on: [rabbitmq]
+    command:
+      - server
+      - --listen=0.0.0.0:15691
+      - --target=127.0.0.1:15692
+      - --cert=/run/secrets/tls_rabbitmq_crt
+      - --key=/run/secrets/tls_rabbitmq_key
+      - --cacert=/run/secrets/efn_ca_crt
+      - --allow-cn=prometheus
+      - --status=http://127.0.0.1:6069
+      - --quiet=conns
+    secrets: [efn_ca_crt, tls_rabbitmq_crt, tls_rabbitmq_key]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6069/_status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: rabbitmq-metrics-tls
+
+  # Object storage S3 = SILO (fork komunitas MinIO, ADR-030), nama service tetap `minio`. HTTPS saja (sertifikat
+  # disalin ke /tmp/certs karena butuh nama file public.crt/private.key), SSE-S3 dengan kunci KMS statis dari secret
+  # minio_kms_key (docs/04 §7.2).
+  # HANYA di network `objstore`: klien (BFF, worker, WAL-G, Prometheus) wajib lewat filter L7 `s3-gateway`
+  # (ADR-030 Keputusan 2); minio-init (admin API) satu-satunya klien langsung.
+  # Tidak read_only: server menulis ~/.minio saat start.
   minio:
     <<: *common
-    # Dibangun dari source upstream (infra/minio/Dockerfile): image minio/minio & minio/mc sudah hilang dari Docker Hub.
+    # Dibangun dari source tag SILO (infra/minio/Dockerfile): image minio/minio & minio/mc sudah hilang dari Docker Hub
+    # dan upstream diarsipkan.
     image: ${IMAGE_MINIO:-ghcr.io/efn/minio:dev}
     build:
       context: ../minio
@@ -506,14 +573,14 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-efnadmin}
       MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_root_password
       MINIO_KMS_SECRET_KEY_FILE: /run/secrets/minio_kms_key
-      # Metrik hanya dengan bearer JWT user efn-prometheus (minio-init + scripts/derive-secrets.sh), SEC-20/SEC-30
+      # Metrik hanya dengan bearer JWT user metrik (access key acak; minio-init + derive-secrets.sh), SEC-20/SEC-30
       MINIO_PROMETHEUS_AUTH_TYPE: jwt
       # Healthcheck `mc ready` memverifikasi TLS dengan CA internal (Go membaca SSL_CERT_FILE)
       SSL_CERT_FILE: /run/secrets/efn_ca_crt
     secrets: [minio_root_password, minio_kms_key, efn_ca_crt, tls_minio_crt, tls_minio_key]
     volumes:
       - minio-data:/data
-    networks: [internal, data]
+    networks: [objstore]
     cap_drop: [ALL]
     deploy:
       resources:
@@ -525,6 +592,37 @@ services:
       retries: 5
     labels:
       service: minio
+
+  # Filter L7 (HAProxy LTS) di depan object storage - ADR-030 Keputusan 2, aturan di infra/s3-gateway/haproxy.cfg.
+  # TLS masuk dengan sertifikat `s3-gateway` (CA internal); TLS keluar ke minio:9000 diverifikasi (CA internal,
+  # verifyhost minio). Satu-satunya jalur klien aplikasi ke storage. Non-root (uid haproxy image), read_only,
+  # tanpa capability (port 9000 > 1024). PEM gabungan crt+key hanya di tmpfs /tmp.
+  s3-gateway:
+    <<: *common
+    image: haproxy:3.2.25-alpine@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be
+    profiles: ["core"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/efn/entrypoint.sh"]
+    secrets: [efn_ca_crt, tls_s3_gateway_crt, tls_s3_gateway_key]
+    volumes:
+      - ../s3-gateway/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ../s3-gateway/entrypoint.sh:/efn/entrypoint.sh:ro
+    networks: [internal, data, objstore]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 128M }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8405/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: s3-gateway
 
   # One-shot: bucket (SSE-S3, versioning, object lock), user per service + kebijakan minimum (docs/04 §7.2-§7.3).
   # Idempoten; dijalankan ulang setiap `up`. Juga dipakai untuk rotasi password user MinIO.
@@ -541,16 +639,27 @@ services:
     entrypoint: ["/bin/sh", "/init/minio-init.sh"]
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-efnadmin}
-      MINIO_BACKUP_USER: ${MINIO_BACKUP_USER:-pgbackup}
+      # Admin langsung ke storage di network objstore (bukan lewat s3-gateway yang menolak /minio/admin/*)
+      MINIO_URL: https://minio:9000
       MINIO_BUCKET_MARKET_SCOUT: market-scout
       MINIO_BUCKET_PG_BACKUP: pg-backup
       # Retensi foto Market Scout (docs/04 §8.4: default 90 hari, menunggu DPO)
       MINIO_MARKET_SCOUT_EXPIRE_DAYS: ${MARKET_SCOUT_PHOTO_RETENTION_DAYS:-90}
       MC_CONFIG_DIR: /tmp/.mc
-    secrets: [minio_root_password, minio_backup_password, minio_bff_secret, minio_ocr_secret, minio_prometheus_secret, efn_ca_crt]
+    secrets:
+      - minio_root_password
+      - minio_backup_password
+      - minio_bff_secret
+      - minio_ocr_secret
+      - minio_prometheus_secret
+      - minio_backup_access_key
+      - minio_bff_access_key
+      - minio_ocr_access_key
+      - minio_prometheus_access_key
+      - efn_ca_crt
     volumes:
       - ../minio/minio-init.sh:/init/minio-init.sh:ro
-    networks: [internal]
+    networks: [objstore]
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
@@ -715,6 +824,8 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+      s3-gateway:
+        condition: service_healthy
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       APP_ENV: ${APP_ENV:-production}
@@ -785,12 +896,12 @@ services:
       WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
       WHATSAPP_OTP_TEMPLATE: ${WHATSAPP_OTP_TEMPLATE:-efn_otp}
       WHATSAPP_TOKEN_FILE: /run/secrets/whatsapp_token
-      # Object storage (user efn-bff, bukan root)
-      MINIO_ENDPOINT: minio
+      # Object storage lewat filter L7 s3-gateway (ADR-030); user bff (bukan root), access key = secret acak (§8.12)
+      MINIO_ENDPOINT: s3-gateway
       MINIO_PORT: "9000"
       MINIO_USE_SSL: "true"
       MINIO_CA_FILE: /run/secrets/efn_ca_crt
-      MINIO_ACCESS_KEY: efn-bff
+      MINIO_ACCESS_KEY_FILE: /run/secrets/minio_bff_access_key
       MINIO_SECRET_KEY_FILE: /run/secrets/minio_bff_secret
       MINIO_BUCKET_MARKET_SCOUT: market-scout
     secrets:
@@ -800,6 +911,7 @@ services:
       - pg_password_bff
       - redis_password_bff
       - rabbitmq_password_bff
+      - minio_bff_access_key
       - minio_bff_secret
       - jwt_secret
       - otp_pepper
@@ -1107,6 +1219,9 @@ services:
       CH_USER: efn_etl
       CH_PASSWORD_FILE: /run/secrets/clickhouse_password_etl
       ETL_INTERVAL_SECONDS: "900"
+      # R5: job fact_sales_line dari DB Odoo (butuh services/etl/sql/odoo-readonly-grants.sql; deploy.sh menerapkan
+      # grant lalu mengaktifkan otomatis). Dev override: true.
+      ETL_ENABLE_ODOO: ${ETL_ENABLE_ODOO:-false}
       # DSAR ClickHouse (docs/04 §8.4): publish privacy.erasure.completed sebagai efn-etl (write amq.default saja)
       AMQP_URL: amqps://efn-etl@rabbitmq:5671
       RABBITMQ_PASSWORD_FILE: /run/secrets/rabbitmq_password_etl
@@ -1133,7 +1248,7 @@ services:
   # Network `egress` hanya untuk `ollama pull` model. Tidak read_only: runner diekstrak ke direktori tmp besar.
   ollama:
     <<: *common
-    image: ollama/ollama:0.5.4
+    image: ollama/ollama:0.35.1@sha256:292ee7945dfc3d5840a181f3ab86fedb1e66703e02c8af98b50f4da56b7e278c
     profiles: ["ai"]
     # Ollama yang bind ke loopback menolak (403) Host selain localhost/os.Hostname()/*.local|.internal (proteksi DNS
     # rebinding). Klien datang lewat sidecar ollama-tls dengan `Host: ollama:11434`; tanpa hostname eksplisit
@@ -1218,11 +1333,12 @@ services:
       OLLAMA_CLIENT_CERT_FILE: /run/secrets/tls_ocr_worker_crt
       OLLAMA_CLIENT_KEY_FILE: /run/secrets/tls_ocr_worker_key
       OLLAMA_MODEL: ${OLLAMA_VISION_MODEL:-qwen2.5vl:7b}
-      MINIO_ENDPOINT: minio
+      # Lewat filter L7 s3-gateway (ADR-030); access key = secret acak (docs/04 §8.12/§8.13)
+      MINIO_ENDPOINT: s3-gateway
       MINIO_PORT: "9000"
       MINIO_USE_SSL: "true"
       MINIO_CA_FILE: /run/secrets/efn_ca_crt
-      MINIO_ACCESS_KEY: efn-ocr
+      MINIO_ACCESS_KEY_FILE: /run/secrets/minio_ocr_access_key
       MINIO_SECRET_KEY_FILE: /run/secrets/minio_ocr_secret
       MINIO_BUCKET_MARKET_SCOUT: market-scout
       OCR_CONFIDENCE_THRESHOLD: "0.80"
@@ -1236,6 +1352,7 @@ services:
       METRICS_TLS_CLIENT_CA_FILE: /run/secrets/efn_ca_crt
     secrets:
       - rabbitmq_password_ocr
+      - minio_ocr_access_key
       - minio_ocr_secret
       - pg_password_ocr
       - efn_ca_crt
@@ -1297,12 +1414,14 @@ services:
 
   # Image Loki 3.x tidak membawa shell/wget -> healthcheck Docker tidak tersedia;
   # kesehatan Loki dipantau Prometheus (job `loki`, alert EfnServiceDown).
+  # SEC-35 (gelombang 9): Loki tidak mendukung allowlist CN klien -> Loki listen 127.0.0.1:3101 (pola E1) dan
+  # sidecar loki-tls (:3100) hanya menerima mTLS CN promtail (push), grafana (query), prometheus (metrik).
+  # Sertifikat klien lain (mis. ocr-worker, blackbox) ditolak -> log tidak bisa dibaca/dipalsukan dari sana.
   loki:
     <<: *common
     image: grafana/loki:3.2.1
     profiles: ["observability"]
     command: -config.file=/etc/loki/loki.yml
-    secrets: [efn_ca_crt, tls_loki_crt, tls_loki_key]   # efn_ca_crt: verifikasi sertifikat klien (mTLS)
     volumes:
       - ../observability/loki.yml:/etc/loki/loki.yml:ro
       - loki-data:/loki
@@ -1317,6 +1436,32 @@ services:
       disable: true
     labels:
       service: loki
+
+  loki-tls:
+    <<: *ghostunnel
+    profiles: ["observability"]
+    network_mode: "service:loki"
+    depends_on: [loki]
+    command:
+      - server
+      - --listen=0.0.0.0:3100
+      - --target=127.0.0.1:3101
+      - --cert=/run/secrets/tls_loki_crt
+      - --key=/run/secrets/tls_loki_key
+      - --cacert=/run/secrets/efn_ca_crt
+      - --allow-cn=promtail
+      - --allow-cn=grafana
+      - --allow-cn=prometheus
+      - --status=http://127.0.0.1:6067
+      - --quiet=conns
+    secrets: [efn_ca_crt, tls_loki_crt, tls_loki_key]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6067/_status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: loki-tls
 
   promtail:
     <<: *common
@@ -1570,8 +1715,9 @@ services:
     labels:
       service: postgres-exporter
 
-  # redis_exporter: rediss + ACL efn-exporter; endpoint metrik TLS. Password dari secret lewat wrapper (env
-  # REDIS_PASSWORD hanya di proses exporter).
+  # redis_exporter: rediss + ACL efn-exporter. Password dari secret lewat wrapper (env REDIS_PASSWORD hanya di proses
+  # exporter). SEC-35 (gelombang 9): redis_exporter tidak mendukung allowlist CN -> endpoint metrik di loopback
+  # 127.0.0.1:9122 (pola E1) dan sidecar redis-exporter-tls (:9121) hanya menerima mTLS CN prometheus.
   redis-exporter:
     <<: *common
     image: oliver006/redis_exporter:v1.66.0-alpine
@@ -1580,12 +1726,10 @@ services:
     environment:
       REDIS_ADDR: rediss://redis:6379
       REDIS_USER: efn-exporter
+      # CA untuk koneksi KLIEN exporter -> Redis (TLS terverifikasi)
       REDIS_EXPORTER_TLS_CA_CERT_FILE: /run/secrets/efn_ca_crt
-      REDIS_EXPORTER_TLS_SERVER_CERT_FILE: /run/secrets/tls_redis_exporter_crt
-      REDIS_EXPORTER_TLS_SERVER_KEY_FILE: /run/secrets/tls_redis_exporter_key
-      # mTLS: endpoint metrik mewajibkan sertifikat klien CA internal (EKU clientAuth hanya pada klien sah, §8.5)
-      REDIS_EXPORTER_TLS_SERVER_CA_CERT_FILE: /run/secrets/efn_ca_crt
-    secrets: [redis_password_exporter, efn_ca_crt, tls_redis_exporter_crt, tls_redis_exporter_key]
+      REDIS_EXPORTER_WEB_LISTEN_ADDRESS: 127.0.0.1:9122
+    secrets: [redis_password_exporter, efn_ca_crt]
     networks: [cache, data]
     read_only: true
     cap_drop: [ALL]
@@ -1596,6 +1740,30 @@ services:
       disable: true
     labels:
       service: redis-exporter
+
+  redis-exporter-tls:
+    <<: *ghostunnel
+    profiles: ["ops"]
+    network_mode: "service:redis-exporter"
+    depends_on: [redis-exporter]
+    command:
+      - server
+      - --listen=0.0.0.0:9121
+      - --target=127.0.0.1:9122
+      - --cert=/run/secrets/tls_redis_exporter_crt
+      - --key=/run/secrets/tls_redis_exporter_key
+      - --cacert=/run/secrets/efn_ca_crt
+      - --allow-cn=prometheus
+      - --status=http://127.0.0.1:6068
+      - --quiet=conns
+    secrets: [efn_ca_crt, tls_redis_exporter_crt, tls_redis_exporter_key]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6068/_status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: redis-exporter-tls
 
   # Probe health (HTTPS internal), handshake TLS semua listener internal, dan HTTPS publik (sertifikat ACME).
   blackbox-exporter:

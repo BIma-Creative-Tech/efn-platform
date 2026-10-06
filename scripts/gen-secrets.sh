@@ -24,6 +24,8 @@ gen_value() {
     # tr -d '\r\n': openssl Windows (Git Bash) menulis CRLF -> tanpa '\r' secret berisi CR (gelombang 7)
     random)    openssl rand -base64 36 | tr -d '\r\n' ;;
     hex32)     openssl rand -hex 32 | tr -d '\r\n' ;;
+    # access key ID object storage (docs/04 §8.12): 20 hex huruf besar, bukan nama service yang mudah ditebak
+    akid)      openssl rand -hex 10 | tr -d '\r\n' | tr 'a-f' 'A-F' ;;
     b64key32)  openssl rand -base64 32 | tr -d '\r\n' ;;
     minio_kms) printf 'efn-sse-key:%s' "$(openssl rand -base64 32 | tr -d '\r\n')" ;;
     literal:*) printf '%s' "${kind#literal:}" ;;

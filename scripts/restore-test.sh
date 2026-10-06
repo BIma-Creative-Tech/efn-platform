@@ -91,13 +91,13 @@ PG_USER="${PG_USER:-postgres}"
 ENV_ARGS=()
 while IFS= read -r kv; do
   case "$kv" in
-    WALG_S3_PREFIX=*|WALG_S3_ENDPOINT=*|MINIO_BACKUP_USER=*|POSTGRES_USER=*|POSTGRES_DB=*|PGDATA=*)
+    WALG_S3_PREFIX=*|WALG_S3_ENDPOINT=*|POSTGRES_USER=*|POSTGRES_DB=*|PGDATA=*)
       ENV_ARGS+=(-e "$kv") ;;
   esac
 done < <(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$LIVE")
 
 # MinIO hanya HTTPS (docs/04 §7.1): container restore memverifikasi sertifikat dengan CA internal
-for s in minio_backup_password walg_libsodium_key efn_ca_crt; do
+for s in minio_backup_access_key minio_backup_password walg_libsodium_key efn_ca_crt; do
   [[ -r "${SECRETS_DIR}/${s}.txt" ]] || { log "secret ${SECRETS_DIR}/${s}.txt tidak terbaca"; exit 1; }
 done
 
@@ -124,10 +124,12 @@ docker run -d --name "$NAME" \
   --memory "${RESTORE_MEMORY:-4g}" \
   --shm-size 256m \
   "${ENV_ARGS[@]}" \
+  -e MINIO_BACKUP_ACCESS_KEY_FILE=/run/secrets/minio_backup_access_key \
   -e MINIO_BACKUP_PASSWORD_FILE=/run/secrets/minio_backup_password \
   -e WALG_LIBSODIUM_KEY_FILE=/run/secrets/walg_libsodium_key \
   -e WALG_S3_CA_CERT_FILE=/run/secrets/efn_ca_crt \
   -v "${VOLUME}:/var/lib/postgresql/data" \
+  -v "${SECRETS_DIR}/minio_backup_access_key.txt:/run/secrets/minio_backup_access_key:ro" \
   -v "${SECRETS_DIR}/minio_backup_password.txt:/run/secrets/minio_backup_password:ro" \
   -v "${SECRETS_DIR}/walg_libsodium_key.txt:/run/secrets/walg_libsodium_key:ro" \
   -v "${SECRETS_DIR}/efn_ca_crt.txt:/run/secrets/efn_ca_crt:ro" \

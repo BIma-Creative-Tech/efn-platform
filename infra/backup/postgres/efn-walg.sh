@@ -6,9 +6,9 @@
 set -euo pipefail
 
 : "${WALG_S3_PREFIX:=s3://pg-backup/efn}"
-: "${WALG_S3_ENDPOINT:=https://minio:9000}"
+: "${WALG_S3_ENDPOINT:=https://s3-gateway:9000}"
 : "${WALG_S3_CA_CERT_FILE:=/run/secrets/efn_ca_crt}"
-: "${MINIO_BACKUP_USER:=pgbackup}"
+: "${MINIO_BACKUP_ACCESS_KEY_FILE:=/run/secrets/minio_backup_access_key}"
 : "${MINIO_BACKUP_PASSWORD_FILE:=/run/secrets/minio_backup_password}"
 : "${WALG_LIBSODIUM_KEY_FILE:=/run/secrets/walg_libsodium_key}"
 
@@ -19,7 +19,7 @@ case "$WALG_S3_ENDPOINT" in
 esac
 export WALG_S3_CA_CERT_FILE
 
-for f in "$MINIO_BACKUP_PASSWORD_FILE" "$WALG_LIBSODIUM_KEY_FILE" "$WALG_S3_CA_CERT_FILE"; do
+for f in "$MINIO_BACKUP_ACCESS_KEY_FILE" "$MINIO_BACKUP_PASSWORD_FILE" "$WALG_LIBSODIUM_KEY_FILE" "$WALG_S3_CA_CERT_FILE"; do
   if [[ ! -r "$f" ]]; then
     echo "efn-walg: secret tidak terbaca: $f" >&2
     exit 1
@@ -30,7 +30,9 @@ export WALG_S3_PREFIX
 export AWS_ENDPOINT="$WALG_S3_ENDPOINT"
 export AWS_S3_FORCE_PATH_STYLE=true
 export AWS_REGION="${AWS_REGION:-us-east-1}"
-export AWS_ACCESS_KEY_ID="$MINIO_BACKUP_USER"
+# Access key = secret acak (docs/04 §8.12, ADR-030), bukan nama tetap `pgbackup`
+AWS_ACCESS_KEY_ID="$(tr -d "\r\n" < "$MINIO_BACKUP_ACCESS_KEY_FILE")"
+export AWS_ACCESS_KEY_ID
 AWS_SECRET_ACCESS_KEY="$(< "$MINIO_BACKUP_PASSWORD_FILE")"
 export AWS_SECRET_ACCESS_KEY
 

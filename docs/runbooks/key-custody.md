@@ -39,14 +39,63 @@ Secret operasional lain (password service, token WhatsApp, kunci API payment, to
 groupadd --system efn-superadmin
 usermod -aG efn-superadmin <superadmin-1>; usermod -aG efn-superadmin <superadmin-2>
 echo '%efn-superadmin ALL=(ALL:ALL) ALL' > /etc/sudoers.d/efn-superadmin        # sudo dengan password
-echo 'deploy ALL=(root) NOPASSWD: /usr/bin/bash -s' > /etc/sudoers.d/efn-deploy   # dipakai deploy.yml
-chmod 0440 /etc/sudoers.d/efn-*
 install -d -o root -g efn-superadmin -m 0750 /opt/efn/secrets
 # /proc hidepid: argv/env proses lain tidak terlihat oleh user non-root (mitigasi fallback openssl di derive-secrets.sh)
 echo 'proc /proc proc defaults,hidepid=2 0 0' >> /etc/fstab && mount -o remount,hidepid=2 /proc
 ```
 
-Catatan kepercayaan (jujur): user `deploy` ada di grup `docker` → **setara root** di host. Kontrol nyata atas kunci adalah (a) hanya workflow yang di-approve Superadmin yang memegang kunci SSH deploy (secret Environment), (b) SSH deploy hanya dari runner via WireGuard/bastion, (c) tidak ada user manusia lain di grup `docker`.
+### 4a. Jalur deploy CI terkunci (SEC-36, gelombang 9)
+
+Sebelumnya: `deploy ALL=(root) NOPASSWD: /usr/bin/bash -s` + `/opt/efn/scripts` milik user deploy = shell root bagi
+siapa pun yang memegang kunci SSH deploy. Sekarang kunci CI **hanya** bisa menjalankan wrapper root
+`/usr/local/sbin/efn-deploy` (sumber: `scripts/host/efn-deploy`), yang **menolak** rilis tanpa tanda tangan cosign
+keyless dari workflow `deploy.yml` pada ref yang diizinkan, lalu menjalankan `deploy.sh` dari salinan milik root.
+
+```bash
+# 1) cosign di host (versi = signer di cosign-installer deploy.yml; v2.6.1), verifikasi checksum
+curl -fsSLo /tmp/cosign https://github.com/sigstore/cosign/releases/download/v2.6.1/cosign-linux-amd64
+echo '064954c5d8c7e3b28188eee5b1727b31c411550bc5fefd41aa672d3c761d103a  /tmp/cosign' | sha256sum -c -
+install -o root -g root -m 0755 /tmp/cosign /usr/local/bin/cosign
+
+# 2) wrapper: SALIN DARI COMMIT YANG SUDAH DI-REVIEW, bandingkan sha256 dengan yang tercatat di PR
+install -o root -g root -m 0755 scripts/host/efn-deploy /usr/local/sbin/efn-deploy
+sha256sum /usr/local/sbin/efn-deploy
+
+# 3) konfigurasi identitas penanda tangan (root-only). production: tag v*; staging: main
+install -d -o root -g root -m 0755 /etc/efn
+cat > /etc/efn/deploy.conf <<'EOF'
+COSIGN_BIN=/usr/local/bin/cosign
+EFN_SIGNER_IDENTITY_REGEXP='^https://github\.com/<org>/<repo>/\.github/workflows/deploy\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'
+EFN_SIGNER_ISSUER=https://token.actions.githubusercontent.com
+EOF
+chmod 0644 /etc/efn/deploy.conf
+
+# 4) sudoers TANPA argumen (bukan bash -s) + user deploy keluar dari grup docker
+echo 'deploy ALL=(root) NOPASSWD: /usr/local/sbin/efn-deploy' > /etc/sudoers.d/efn-deploy
+chmod 0440 /etc/sudoers.d/efn-*
+gpasswd -d deploy docker || true
+
+# 5) kunci CI di ~deploy/.ssh/authorized_keys: forced command, tanpa forwarding/pty
+#    restrict,command="sudo -n /usr/local/sbin/efn-deploy" ssh-ed25519 AAAA... efn-ci
+
+# 6) /opt/efn milik root (sisa rsync lama sebagai user deploy)
+chown -R root:root /opt/efn/scripts /opt/efn/compose /opt/efn/traefik /opt/efn/observability 2>/dev/null || true
+
+# 7) audit setiap sudo dari user deploy
+echo '-a always,exit -F arch=b64 -S execve -F path=/usr/local/sbin/efn-deploy -k efn_deploy' \
+  > /etc/audit/rules.d/efn-deploy.rules && augenrules --load
+```
+
+Yang dijaga: pemegang kunci SSH deploy **saja** (tanpa akses tulis repo + approval Environment) tidak dapat
+menjalankan perintah arbitrer sebagai root, tidak dapat menimpa `deploy.sh`, dan tidak dapat mengirim variabel env
+di luar allowlist (`PATH`, `LD_PRELOAD`, `BASH_ENV` ditolak). Yang **tidak** dijaga (risiko residu, jujur):
+penyerang dengan hak tulis repo + approval Environment (Superadmin) tetap bisa men-deploy apa pun — itu memang jalur
+rilis yang sah; kompromi admin org GitHub tetap kritis (lihat juga intermediate PKI online). Pembaruan wrapper
+sendiri tidak lewat CI (disengaja): setiap perubahan `scripts/host/efn-deploy` wajib dipasang ulang manual oleh
+Superadmin.
+
+Verifikasi setelah pasang: `ssh deploy@host 'id'` harus menjalankan efn-deploy (bukan `id`) dan gagal "input"
+karena stdin kosong; `sudo -l -U deploy` hanya menampilkan `/usr/local/sbin/efn-deploy`; `id deploy` tanpa `docker`.
 
 ### Mekanisme uid: kenapa file secret 0444 di dalam direktori 0750
 

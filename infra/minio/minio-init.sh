@@ -4,12 +4,17 @@
 #  - Koneksi HTTPS ke minio:9000, diverifikasi dengan CA internal (/run/secrets/efn_ca_crt). Tanpa fallback HTTP.
 #  - bucket market-scout : foto Price Hunter, privat, SSE-S3, lifecycle hapus objek reports/* setelah
 #                          MINIO_MARKET_SCOUT_EXPIRE_DAYS (default 90 hari, docs/04 §8.4 - menunggu DPO; SEC-11)
-#  - user efn-prometheus : hanya admin:Prometheus (bearer JWT metrik, MINIO_PROMETHEUS_AUTH_TYPE=jwt, SEC-20)
+#  - user metrik         : hanya admin:Prometheus (bearer JWT metrik, MINIO_PROMETHEUS_AUTH_TYPE=jwt, SEC-20)
 #  - bucket pg-backup    : repo WAL-G, privat, SSE-S3, versioning + OBJECT LOCK (GOVERNANCE) + expiry versi lama
 #                          (object lock HANYA bisa diaktifkan saat bucket DIBUAT -> lihat docs/runbooks/internal-pki.md
 #                          bagian MinIO untuk migrasi bucket lama)
-#  - user pgbackup (WAL-G), efn-bff (Put/Delete market-scout/reports/*), efn-ocr (Get market-scout/reports/*)
+#  - user backup (WAL-G), bff (Put/Delete market-scout/reports/*), ocr (Get market-scout/reports/*)
 #    `user add` = upsert -> juga dipakai untuk rotasi password.
+#  - Access key (nama user) = SECRET ACAK (docs/04 §8.12, ADR-030): minio_{backup,bff,ocr,prometheus}_access_key.
+#    Nama lama yang mudah ditebak (pgbackup, efn-bff, efn-ocr, efn-prometheus) DIHAPUS bila masih ada (migrasi).
+#    Access key tidak pernah dicetak ke log (keluaran `mc admin user ...` dibuang).
+#  - Admin API hanya dijangkau dari sini (network `objstore`); klien aplikasi lewat filter s3-gateway yang menolak
+#    /minio/admin/* (infra/s3-gateway/haproxy.cfg).
 set -eu
 
 ROOT_PW="$(cat /run/secrets/minio_root_password)"
@@ -17,12 +22,21 @@ BACKUP_PW="$(cat /run/secrets/minio_backup_password)"
 BFF_PW="$(cat /run/secrets/minio_bff_secret)"
 OCR_PW="$(cat /run/secrets/minio_ocr_secret)"
 PROM_PW="$(cat /run/secrets/minio_prometheus_secret)"
-PROM_USER="${MINIO_PROMETHEUS_USER:-efn-prometheus}"
+read_ak() {
+  v="$(tr -d '\r\n' < "/run/secrets/$1")"
+  case "$v" in
+    ''|*[!A-Za-z0-9._-]*) echo "minio-init: secret $1 kosong/tidak valid" >&2; exit 1 ;;
+  esac
+  printf '%s' "$v"
+}
+BACKUP_USER="$(read_ak minio_backup_access_key)"
+BFF_USER="$(read_ak minio_bff_access_key)"
+OCR_USER="$(read_ak minio_ocr_access_key)"
+PROM_USER="$(read_ak minio_prometheus_access_key)"
+LEGACY_USERS="pgbackup efn-bff efn-ocr efn-prometheus"
+MINIO_URL="${MINIO_URL:-https://minio:9000}"
 MS_BUCKET="${MINIO_BUCKET_MARKET_SCOUT:-market-scout}"
 PG_BUCKET="${MINIO_BUCKET_PG_BACKUP:-pg-backup}"
-BACKUP_USER="${MINIO_BACKUP_USER:-pgbackup}"
-BFF_USER="${MINIO_BFF_USER:-efn-bff}"
-OCR_USER="${MINIO_OCR_USER:-efn-ocr}"
 LOCK_DAYS="${MINIO_PG_BACKUP_LOCK_DAYS:-15}"
 NONCURRENT_DAYS="${MINIO_PG_BACKUP_NONCURRENT_DAYS:-35}"
 PHOTO_DAYS="${MINIO_MARKET_SCOUT_EXPIRE_DAYS:-90}"
@@ -35,10 +49,10 @@ mkdir -p "${MC_CONFIG_DIR}/certs/CAs"
 cp /run/secrets/efn_ca_crt "${MC_CONFIG_DIR}/certs/CAs/efn-ca.crt"
 
 i=0
-until mc alias set efn https://minio:9000 "${MINIO_ROOT_USER}" "${ROOT_PW}" > /dev/null 2>&1; do
+until mc alias set efn "${MINIO_URL}" "${MINIO_ROOT_USER}" "${ROOT_PW}" > /dev/null 2>&1; do
   i=$((i + 1))
   if [ "$i" -ge 30 ]; then
-    echo "minio-init: MinIO (https://minio:9000) tidak siap / TLS gagal diverifikasi setelah 60 detik" >&2
+    echo "minio-init: MinIO (${MINIO_URL}) tidak siap / TLS gagal diverifikasi setelah 60 detik" >&2
     exit 1
   fi
   sleep 2
@@ -128,17 +142,28 @@ cat > /tmp/ocr-policy.json <<EOF
 }
 EOF
 
-mc admin policy create efn pgbackup-rw /tmp/pgbackup-policy.json
-mc admin policy create efn efn-bff-market-scout /tmp/bff-policy.json
-mc admin policy create efn efn-ocr-market-scout /tmp/ocr-policy.json
+mc admin policy create efn pgbackup-rw /tmp/pgbackup-policy.json > /dev/null
+mc admin policy create efn efn-bff-market-scout /tmp/bff-policy.json > /dev/null
+mc admin policy create efn efn-ocr-market-scout /tmp/ocr-policy.json > /dev/null
 
-mc admin user add efn "${BACKUP_USER}" "${BACKUP_PW}"
-mc admin user add efn "${BFF_USER}" "${BFF_PW}"
-mc admin user add efn "${OCR_USER}" "${OCR_PW}"
+# Keluaran `mc admin user add` memuat access key -> dibuang (access key = secret, docs/04 §8.12)
+mc admin user add efn "${BACKUP_USER}" "${BACKUP_PW}" > /dev/null
+mc admin user add efn "${BFF_USER}" "${BFF_PW}" > /dev/null
+mc admin user add efn "${OCR_USER}" "${OCR_PW}" > /dev/null
 
 mc admin policy attach efn pgbackup-rw --user "${BACKUP_USER}" > /dev/null 2>&1 || true
 mc admin policy attach efn efn-bff-market-scout --user "${BFF_USER}" > /dev/null 2>&1 || true
 mc admin policy attach efn efn-ocr-market-scout --user "${OCR_USER}" > /dev/null 2>&1 || true
+
+# Migrasi ADR-030: user bernama tetap (mudah ditebak) dihapus setelah user access-key-acak siap.
+REMOVED=0
+for u in $LEGACY_USERS; do
+  case " ${BACKUP_USER} ${BFF_USER} ${OCR_USER} ${PROM_USER} " in *" ${u} "*) continue ;; esac
+  if mc admin user info efn "$u" > /dev/null 2>&1; then
+    mc admin user remove efn "$u" > /dev/null
+    REMOVED=$((REMOVED + 1))
+  fi
+done
 
 # Metrik Prometheus (SEC-20/SEC-30): user khusus dengan aksi admin:Prometheus saja; token JWT HS512 diturunkan
 # scripts/derive-secrets.sh dari minio_prometheus_secret (setara `mc admin prometheus generate`). Kegagalan di
@@ -157,10 +182,11 @@ if mc admin policy create efn efn-prometheus-metrics /tmp/prom-policy.json > /de
   mc admin policy attach efn efn-prometheus-metrics --user "${PROM_USER}" > /dev/null 2>&1 || true
   PROM_STATE="siap"
 else
-  echo "minio-init: PERINGATAN user ${PROM_USER} (metrik) gagal dibuat; metrik MinIO tidak tersedia" >&2
+  echo "minio-init: PERINGATAN user metrik gagal dibuat; metrik object storage tidak tersedia" >&2
   PROM_STATE="GAGAL"
 fi
 
 rm -f /tmp/*-policy.json /tmp/ilm-*.json
 echo "minio-init: TLS OK; bucket ${MS_BUCKET} (SSE-S3, expiry reports/ ${PHOTO_DAYS} hari), ${PG_BUCKET} (SSE-S3, versioning," \
-  "lock GOVERNANCE ${LOCK_DAYS} hari); user ${BACKUP_USER}, ${BFF_USER}, ${OCR_USER} siap; ${PROM_USER} ${PROM_STATE}"
+  "lock GOVERNANCE ${LOCK_DAYS} hari); user backup/bff/ocr (access key acak) siap; user metrik ${PROM_STATE};" \
+  "user lama bernama tetap dihapus: ${REMOVED}"

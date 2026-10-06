@@ -9,7 +9,8 @@
 #   - insecure_skip_verify / insecureSkipVerify: true
 #   - scrape Prometheus tanpa `scheme: https`
 #   - sidecar ghostunnel dengan --disable-authentication atau tanpa --cacert/--allow-cn (mTLS, docs/04 §8.5)
-#   - web-config exporter / Loki tanpa client_auth_type RequireAndVerifyClientCert
+#   - web-config exporter tanpa client_auth_type RequireAndVerifyClientCert; Loki tidak loopback (SEC-35)
+#   - filter L7 s3-gateway (HAProxy) tanpa TLS masuk atau tanpa `ssl verify required` ke storage (ADR-030)
 # Pengecualian hanya lewat ADR-022; tambahkan di sini dengan komentar alasan.
 set -euo pipefail
 
@@ -125,10 +126,20 @@ check_files() {
 
   # mTLS endpoint observability (docs/04 §8.5)
   local f
-  for f in web-config.yml web-config-ui.yml loki.yml; do
+  for f in web-config.yml web-config-ui.yml; do
     grep -qE '^[[:space:]]*client_auth_type:[[:space:]]*RequireAndVerifyClientCert' "${ROOT_DIR}/infra/observability/$f" \
       || err "infra/observability/$f: tanpa client_auth_type RequireAndVerifyClientCert"
   done
+  # SEC-35: Loki hanya loopback (pola E1); TLS + allowlist CN oleh sidecar ghostunnel loki-tls (dicek di compose)
+  grep -qE '^[[:space:]]*http_listen_address:[[:space:]]*127\.0\.0\.1' "${ROOT_DIR}/infra/observability/loki.yml" \
+    || err "infra/observability/loki.yml: HTTP Loki harus 127.0.0.1 (akses network hanya lewat sidecar mTLS loki-tls)"
+  # ADR-030: filter L7 object storage wajib re-encrypt ke storage dengan verifikasi CA (tidak ada hop plaintext)
+  local hap="${ROOT_DIR}/infra/s3-gateway/haproxy.cfg"
+  grep -qE '^[[:space:]]*server[[:space:]].*[[:space:]]ssl[[:space:]]+verify[[:space:]]+required[[:space:]]+ca-file[[:space:]]' "$hap" \
+    || err "infra/s3-gateway/haproxy.cfg: backend storage tanpa 'ssl verify required ca-file'"
+  grep -qE '^[[:space:]]*bind[[:space:]]+:9000[[:space:]]+ssl[[:space:]]' "$hap" \
+    || err "infra/s3-gateway/haproxy.cfg: listener :9000 tanpa ssl"
+  if grep -qE 'verify[[:space:]]+none' "$hap"; then err "infra/s3-gateway/haproxy.cfg: verify none dilarang"; fi
   echo "check-encryption: file konfigurasi infra diperiksa"
 }
 

@@ -3,8 +3,9 @@
 #    serverName wajib per upstream karena docker provider memakai IP container (bukan nama) sebagai alamat server.
 #    Traefik MEMBAWA sertifikat klien `traefik` (EKU clientAuth) - wajib untuk sidecar ghostunnel yang hanya
 #    menerima --allow-cn=traefik (Odoo, Next.js, Metabase); dikirim juga ke upstream lain (tidak meminta = diabaikan).
-#  - Entrypoint metrics (:8082): mTLS (RequireAndVerifyClientCert, CA internal). Router di-host `traefik` agar opsi
-#    TLS berlaku per SNI (Prometheus mengirim SNI "traefik").
+#  - Entrypoint metrics: hanya 127.0.0.1:8084 (loopback container). TLS + mTLS CN prometheus oleh sidecar
+#    ghostunnel `traefik-metrics-tls` (:8082), SEC-35. Opsi TLS efn-mtls tidak lagi dipakai router metrik (Traefik
+#    tidak bisa membatasi CN klien); definisinya dipertahankan untuk router internal lain bila kelak dibutuhkan.
 http:
   serversTransports:
     efn-odoo:
@@ -45,13 +46,11 @@ http:
           keyFile: /run/secrets/tls_traefik_key
 
   routers:
-    # Metrik Traefik (manualRouting) hanya lewat mTLS sertifikat internal
+    # Metrik Traefik (manualRouting): entrypoint loopback saja; dari network hanya lewat sidecar mTLS (SEC-35)
     traefik-metrics:
       entryPoints: [metrics]
-      rule: Host(`traefik`) && PathPrefix(`/metrics`)
+      rule: PathPrefix(`/metrics`)
       service: prometheus@internal
-      tls:
-        options: efn-mtls
 
 tls:
   options:

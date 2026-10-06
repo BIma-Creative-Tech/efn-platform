@@ -57,8 +57,9 @@ Keputusan memulihkan diambil Head IT. Estimasi: fetch base backup (ukuran DB / b
 3. Restore ke volume baru (PITR opsional):
    ```bash
    docker run --rm --name efn-dr-restore --network efn_data \
-     --env-file <(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' efn-postgres-1 | grep -E '^(WALG_|MINIO_BACKUP_USER|POSTGRES_USER|POSTGRES_DB|PGDATA)=') \
+     --env-file <(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' efn-postgres-1 | grep -E '^(WALG_|MINIO_BACKUP_ACCESS_KEY_FILE|MINIO_BACKUP_PASSWORD_FILE|POSTGRES_USER|POSTGRES_DB|PGDATA)=') \
      -v efn_pg-data-new:/var/lib/postgresql/data \
+     -v /opt/efn/secrets/minio_backup_access_key.txt:/run/secrets/minio_backup_access_key:ro \
      -v /opt/efn/secrets/minio_backup_password.txt:/run/secrets/minio_backup_password:ro \
      -v /opt/efn/secrets/walg_libsodium_key.txt:/run/secrets/walg_libsodium_key:ro \
      --entrypoint bash ghcr.io/<org>/postgres:<tag> -c \

@@ -388,8 +388,19 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck scripts/*.sh infra/backup/postgres/*.sh infra/postgres/init/*.sh infra/wireguard/*.sh
-          shellcheck -s sh infra/minio/*.sh infra/redis/*.sh infra/rabbitmq/*.sh infra/clickhouse/*.sh
+          shellcheck scripts/*.sh scripts/host/efn-deploy scripts/smoke/*.sh infra/backup/postgres/*.sh \
+            infra/postgres/init/*.sh infra/wireguard/*.sh
+          shellcheck -s sh infra/minio/*.sh infra/redis/*.sh infra/rabbitmq/*.sh infra/clickhouse/*.sh infra/s3-gateway/*.sh
+      # Filter L7 object storage (ADR-030): sintaks HAProxy valid dengan sertifikat dummy dari gen-pki.sh
+      - name: haproxy -c (infra/s3-gateway/haproxy.cfg)
+        run: |
+          cat secrets/tls_s3_gateway_crt.txt secrets/tls_s3_gateway_key.txt > /tmp/s3-gateway.pem
+          chmod 644 /tmp/s3-gateway.pem
+          docker run --rm -v "$PWD/infra/s3-gateway/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
+            -v /tmp/s3-gateway.pem:/tmp/haproxy/s3-gateway.pem:ro \
+            -v "$PWD/secrets/efn_ca_crt.txt:/run/secrets/efn_ca_crt:ro" \
+            haproxy:3.2.25-alpine@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be \
+            haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
       - name: hadolint
         uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf  # v3.1.0
         with:

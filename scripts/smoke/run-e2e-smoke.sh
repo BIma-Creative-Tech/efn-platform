@@ -164,16 +164,24 @@ scenario_d() {
 
 scenario_f() {
   echo "== f. ETL -> ClickHouse (tunggu 1 siklus ETL dev 120 s)"
-  local mh n1 n2 mb
+  local mh n1 n2 n3 mb g
+  # R5 (gelombang 9): grant baca level-kolom efn_etl di DB Odoo (sama dengan langkah deploy.sh; idempoten, sebagai
+  # pemilik tabel efn_odoo lewat socket lokal). Job sales_fact_pos aktif di dev (ETL_ENABLE_ODOO=true).
+  g="$(MSYS_NO_PATHCONV=1 docker exec -i "$PG" psql -X -q -v ON_ERROR_STOP=1 -U efn_odoo -d efn_odoo -f - \
+        < "${ROOT}/services/etl/sql/odoo-readonly-grants.sql" 2>&1 && echo GRANT_OK || true)"
+  check "f.odoo_etl_grants" "$([[ "$g" == *GRANT_OK* ]] && echo 1 || echo 0)" "$(tail -c 160 <<< "$g")"
   mh="$(psql_platform -c "select user_hash from platform.price_hunter_report where status='valid' order by created_at desc limit 1")"
   for _ in $(seq 1 30); do
     n1="$(echo "select count() from efn_dwh.competitor_prices final where user_hash='$mh'" | chq)"
     n2="$(echo "select count() from efn_dwh.loyalty_events final where member_hash='$mh'" | chq)"
-    [[ "$n1" -ge 1 && "$n2" -ge 1 ]] && break
+    n3="$(echo "select count() from efn_dwh.fact_sales_line final where source='pos' and _loaded_at > now() - interval 1 day" | chq)"
+    [[ "$n1" -ge 1 && "$n2" -ge 1 && "$n3" -ge 1 ]] && break
     sleep 10
   done
   check "f.ch_competitor_prices" "$([[ "$n1" -ge 1 ]] && echo 1 || echo 0)" "rows=$n1 untuk user_hash report valid terakhir"
   check "f.ch_loyalty_events" "$([[ "$n2" -ge 1 ]] && echo 1 || echo 0)" "rows=$n2"
+  # Order POS smoke (skenario c/d) -> fact_sales_line (R5). customer_id = id partner saja (tanpa PII).
+  check "f.ch_fact_sales_line" "$([[ "$n3" -ge 1 ]] && echo 1 || echo 0)" "rows=$n3 (pos, dimuat 24 jam terakhir)"
   mb="$(docker inspect "${P}-metabase-1" --format '{{.State.Health.Status}}')/$(docker inspect "${P}-metabase-tls-1" --format '{{.State.Health.Status}}')"
   check "f.metabase_healthy" "$([[ "$mb" == healthy/healthy ]] && echo 1 || echo 0)" "metabase/metabase-tls=$mb"
   echo "$mh" > "${WORK}/member_hash"
@@ -221,8 +229,39 @@ scenario_g() {
   check "g.pg_plaintext_rejected" "$([[ "$out" == *"no encryption"* || "$out" == *"pg_hba"* ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
   out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal curlimages/curl:8.11.1 -sS -m 5 -o /dev/null -w '%{http_code}' https://odoo:8443/web/login --cacert /dev/null -k 2>&1 || true)"
   check "g.odoo_tls_without_client_cert_rejected" "$([[ "$out" != 200 ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
-  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data curlimages/curl:8.11.1 -sS -m 5 -o /dev/null -w '%{http_code}' http://minio:9000/minio/health/live 2>&1 || true)"
-  check "g.minio_http_rejected" "$([[ "$out" != 200 ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
+  # ADR-030 (gelombang 9): storage tidak terjangkau dari network klien; semua lewat filter L7 s3-gateway
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data curlimages/curl:8.11.1 -sS -m 5 -o /dev/null -w '%{http_code}' https://minio:9000/minio/health/live 2>&1 || true)"
+  # Lolos bila TIDAK ada respons HTTP sama sekali (nama tak ter-resolve / timeout / koneksi gagal)
+  check "g.storage_not_reachable_from_data" "$([[ ! "$out" =~ ^[0-9]{3}$ || "$out" == 000 ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data curlimages/curl:8.11.1 -sS -m 5 -o /dev/null -w '%{http_code}' http://s3-gateway:9000/minio/health/live 2>&1 || true)"
+  check "g.s3gw_http_rejected" "$([[ "$out" != 200 ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
+  cp "${ROOT}/secrets/efn_ca_crt.txt" "${WORK}/efn_ca.crt"
+  s3gw() { # metode path [header...] -> "kode|potongan body"
+    local m="$1" p="$2"; shift 2
+    local h=(); for x in "$@"; do h+=(-H "$x"); done
+    MSYS_NO_PATHCONV=1 docker run --rm --network efn_data -v "${WORK_W}:/work" curlimages/curl:8.11.1 -sS -m 10 \
+      --cacert /work/efn_ca.crt -X "$m" "${h[@]}" -w '|%{http_code}' "https://s3-gateway:9000${p}" 2>&1 | tr -d '\r\n' || true
+  }
+  out="$(s3gw GET /minio/health/live)"
+  check "g.s3gw_tls_health_ok" "$([[ "$out" == *"|200" ]] && echo 1 || echo 0)" "$(tail -c 120 <<< "$out")"
+  local denied='forbidden by administrative rules'
+  out="$(s3gw PUT '/pg-backup/efn/x' 'x-amz-bypass-governance-retention: true')"
+  check "g.s3gw_bypass_governance_blocked" "$([[ "$out" == *"$denied"* && "$out" == *"|403" ]] && echo 1 || echo 0)" "$(tail -c 120 <<< "$out")"
+  out="$(s3gw PUT '/pg-backup/efn/x?retention')"
+  check "g.s3gw_put_retention_blocked" "$([[ "$out" == *"$denied"* ]] && echo 1 || echo 0)" "$(tail -c 120 <<< "$out")"
+  out="$(s3gw PUT '/pg-backup/efn/x' 'x-amz-object-lock-mode: COMPLIANCE')"
+  check "g.s3gw_object_lock_header_blocked" "$([[ "$out" == *"$denied"* ]] && echo 1 || echo 0)" "$(tail -c 120 <<< "$out")"
+  out="$(s3gw PUT '/market-scout/reports/x' 'x-amz-content-sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER')"
+  check "g.s3gw_unsigned_trailer_blocked" "$([[ "$out" == *"$denied"* ]] && echo 1 || echo 0)" "$(tail -c 120 <<< "$out")"
+  out="$(s3gw PUT '/market-scout/reports/x' 'X-Minio-Replication-Server-Side-Encryption-Iv: AAAA')"
+  check "g.s3gw_replication_header_blocked" "$([[ "$out" == *"$denied"* ]] && echo 1 || echo 0)" "$(tail -c 120 <<< "$out")"
+  out="$(s3gw POST '/market-scout/reports/x?select&select-type=2')"
+  check "g.s3gw_select_blocked" "$([[ "$out" == *"$denied"* ]] && echo 1 || echo 0)" "$(tail -c 120 <<< "$out")"
+  out="$(s3gw GET '/minio/admin/v3/info')"
+  check "g.s3gw_admin_api_blocked" "$([[ "$out" == *"$denied"* ]] && echo 1 || echo 0)" "$(tail -c 120 <<< "$out")"
+  # Kontrol positif: request S3 biasa tanpa kredensial diteruskan ke storage (ditolak storage, bukan filter)
+  out="$(s3gw GET '/market-scout/reports/x')"
+  check "g.s3gw_forwards_normal_s3" "$([[ "$out" == *AccessDenied* && "$out" != *"$denied"* ]] && echo 1 || echo 0)" "$(tail -c 120 <<< "$out")"
   out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data curlimages/curl:8.11.1 -sS -m 5 telnet://rabbitmq:5672 2>&1 || true)"
   check "g.amqp_plain_port_closed" "$([[ "$out" == *"Could not resolve"* || "$out" == *"refused"* || "$out" == *"Failed to connect"* ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
   out="$(MSYS_NO_PATHCONV=1 docker exec "$PG" psql -U postgres -At -c "select usename||':'||ssl||':'||coalesce(version,'') from pg_stat_ssl join pg_stat_activity using(pid) where usename in ('efn_bff','efn_odoo','efn_ocr','efn_etl') group by 1 order by 1" | tr '\n' ' ')"
@@ -241,4 +280,6 @@ CHECK_OK='"check": "[^"]*", "ok": true'; CHECK_FAIL='"check": "[^"]*", "ok": fal
 pass="$(grep -cE "$CHECK_OK" "$RESULTS" || true)"; fail="$(grep -cE "$CHECK_FAIL" "$RESULTS" || true)"
 echo "RINGKASAN: PASS=$pass FAIL=$fail (hasil lengkap: $RESULTS)"
 grep -E "$CHECK_FAIL" "$RESULTS" || true
+# CI (R7, .github/workflows/e2e-nightly.yml): salin hasil ke direktori artefak bila diminta
+if [[ -n "${SMOKE_OUT_DIR:-}" ]]; then mkdir -p "$SMOKE_OUT_DIR" && cp "$RESULTS" "${SMOKE_OUT_DIR}/smoke-results.txt"; fi
 [[ "$fail" == 0 ]]

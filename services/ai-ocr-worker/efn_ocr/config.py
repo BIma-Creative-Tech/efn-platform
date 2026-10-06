@@ -6,6 +6,7 @@ RabbitMQ `efn-ocr`, MinIO `efn-ocr`.
 """
 
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -67,6 +68,34 @@ def _minio_endpoint(env: Mapping[str, str]) -> str:
     if ":" in host:
         return host
     return f"{host}:{_int(env, 'MINIO_PORT', 9000)}"
+
+
+# docs/04 §8.12/§8.13 (ADR-030): access key object storage = secret acak (`minio_ocr_access_key`), dibaca dari
+# `MINIO_ACCESS_KEY_FILE`. Literal `MINIO_ACCESS_KEY` (atau default `efn-ocr`) hanya untuk APP_ENV=dev, karena
+# CVE-2026-41145/40344 di build MinIO lama cukup membutuhkan access key ID yang mudah ditebak.
+_DEV_APP_ENVS = frozenset({"dev", "development", "local", "test"})
+_ACCESS_KEY_RE = re.compile(r"^[A-Za-z0-9._~+=-]{3,128}$")
+_ACCESS_KEY_MIN_LEN = 16
+
+
+def _minio_access_key(env: Mapping[str, str], default: str) -> str:
+    """Access key MinIO: `MINIO_ACCESS_KEY_FILE` (wajib di luar dev) > literal `MINIO_ACCESS_KEY` (dev saja)."""
+    dev = _str(env, "APP_ENV", "").strip().lower() in _DEV_APP_ENVS and not is_production(env)
+    path = env.get("MINIO_ACCESS_KEY_FILE")
+    if path:
+        file = Path(path)
+        if not file.is_file():
+            raise RuntimeError("MINIO_ACCESS_KEY_FILE di-set tetapi file tidak ditemukan")
+        value = file.read_text(encoding="utf-8").strip()
+    elif dev:
+        value = _str(env, "MINIO_ACCESS_KEY", default)
+    else:
+        raise RuntimeError("MINIO_ACCESS_KEY_FILE wajib di luar APP_ENV=dev (docs/04 §8.13)")
+    if not _ACCESS_KEY_RE.fullmatch(value):
+        raise RuntimeError("Access key MinIO memuat karakter/panjang tidak valid")
+    if not dev and len(value) < _ACCESS_KEY_MIN_LEN:
+        raise RuntimeError("Access key MinIO terlalu pendek (< 16) di luar APP_ENV=dev (docs/04 §8.12)")
+    return value
 
 
 @dataclass(frozen=True)
@@ -195,7 +224,7 @@ class Settings:
             pg_sslmode=pg_sslmode,
             pg_sslrootcert=pg_sslrootcert,
             minio_endpoint=_minio_endpoint(e),
-            minio_access_key=_str(e, "MINIO_ACCESS_KEY", d.minio_access_key),
+            minio_access_key=_minio_access_key(e, d.minio_access_key),
             minio_secret_key=read_secret("MINIO_SECRET_KEY", e),
             minio_secure=minio_secure,
             minio_ca_file=minio_ca,

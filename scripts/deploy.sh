@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Dijalankan DI HOST target sebagai ROOT oleh GitHub Actions (deploy.yml: `ssh ... 'sudo -n bash -s'`, secret lewat
-# stdin -> tidak muncul di argv/ps host) atau manual oleh Superadmin (`sudo -E bash /opt/efn/scripts/deploy.sh`).
+# Dijalankan DI HOST target sebagai ROOT oleh wrapper root /usr/local/sbin/efn-deploy (scripts/host/efn-deploy,
+# SEC-36): wrapper memverifikasi tanda tangan cosign bundel rilis dari deploy.yml, menyalinnya ke /opt/efn milik
+# root, mengekspor env tervalidasi (secret lewat stdin, tidak di argv/ps), lalu exec skrip ini. Manual oleh
+# Superadmin: `sudo -E bash /opt/efn/scripts/deploy.sh`.
 # Kenapa root: /opt/efn/secrets dimiliki root:efn-superadmin 0750 (docs/04 §8.6, docs/runbooks/key-custody.md).
-# User deploy (grup docker) sudah setara root; kontrol sebenarnya = approval Superadmin di GitHub Environment.
+# User deploy TIDAK di grup docker dan tidak bisa menulis /opt/efn (runbook key-custody §4).
 #
 # Prasyarat host: docker + compose plugin, jq, openssl (>= 3.0), grup `efn-superadmin`, direktori /opt/efn,
 #                 WireGuard wg0 aktif SEBELUM docker (EFN_WG_BIND harus sudah ada di host; runbook wireguard-outlet).
@@ -19,7 +21,7 @@
 #               EFN_WG_BIND (default 10.88.0.1) EFN_WG_HTTPS_PORT (default 443) EFN_WG_OUTLET_CIDR EFN_WG_STAFF_CIDR
 #               ACME_DNS_PROVIDER (default cloudflare) ACME_DNS_TOKEN_ENV (default CF_DNS_API_TOKEN)
 #               EFN_PKI_EXTRA_TRUST (PEM CA lama selama rotasi CA) RABBITMQ_STRICT_PERMISSIONS
-#               MARKET_SCOUT_PHOTO_RETENTION_DAYS CH_MART_RETENTION_YEARS PG_SUPERUSER
+#               MARKET_SCOUT_PHOTO_RETENTION_DAYS CH_MART_RETENTION_YEARS PG_SUPERUSER ETL_ENABLE_ODOO (true|false)
 set -euo pipefail
 
 BASE=/opt/efn
@@ -196,6 +198,12 @@ fi
 CF_IPS=$(grep -Ev '^[[:space:]]*(#|$)' "$BASE/traefik/cloudflare-ips.txt" | paste -sd, -)
 [[ -n "$CF_IPS" ]] || die "infra/traefik/cloudflare-ips.txt kosong"
 
+# R5: job ETL fact_sales_line (Odoo POS -> ClickHouse). Nilai eksplisit (vars ETL_ENABLE_ODOO) menang; bila tidak
+# di-set, nilai .env sebelumnya dipertahankan (diaktifkan otomatis setelah grant Odoo sukses, langkah di bawah).
+[[ -z "${ETL_ENABLE_ODOO:-}" || "$ETL_ENABLE_ODOO" =~ ^(true|false)$ ]] || die "ETL_ENABLE_ODOO harus true|false"
+PREV_ETL_ODOO=$(sed -n 's/^ETL_ENABLE_ODOO=\(true\|false\)$/\1/p' "$COMPOSE_DIR/.env" 2> /dev/null || true)
+ETL_ENABLE_ODOO_EFF="${ETL_ENABLE_ODOO:-${PREV_ETL_ODOO:-false}}"
+
 echo "==> Menulis .env (non-secret)"
 cat > "$COMPOSE_DIR/.env" <<EOF
 TRAEFIK_DOMAIN=${TRAEFIK_DOMAIN}
@@ -215,7 +223,6 @@ ODOO_DB=efn_odoo
 RABBITMQ_ADMIN_USER=efn-admin
 RABBITMQ_STRICT_PERMISSIONS=${RABBITMQ_STRICT_PERMISSIONS:-true}
 MINIO_ROOT_USER=efnadmin
-MINIO_BACKUP_USER=pgbackup
 CLICKHOUSE_USER=efn
 GRAFANA_ADMIN_USER=admin
 OLLAMA_VISION_MODEL=${OLLAMA_VISION_MODEL:-qwen2.5vl:7b}
@@ -242,6 +249,7 @@ CONSENT_LOCATION_TEXT_SHA256=${CONSENT_LOCATION_TEXT_SHA256:-}
 CONSENT_MARKETING_VERSION=${CONSENT_MARKETING_VERSION:-}
 CONSENT_MARKETING_TEXT_SHA256=${CONSENT_MARKETING_TEXT_SHA256:-}
 DSAR_DELETE_GRACE_DAYS=${DSAR_DELETE_GRACE_DAYS:-7}
+ETL_ENABLE_ODOO=${ETL_ENABLE_ODOO_EFF}
 EOF
 chmod 0640 "$COMPOSE_DIR/.env"
 
@@ -301,6 +309,19 @@ echo "==> PostgreSQL dulu, lalu role per service (00-roles.sh: idempoten + rotas
 wait_healthy postgres || die "postgres tidak sehat"
 "${DC[@]}" exec -T postgres bash /docker-entrypoint-initdb.d/00-roles.sh || die "00-roles.sh gagal"
 
+# Migrasi skema idempoten (gelombang 9): file init bernomor >= 04 (mis. 04-platform-v3-6.sql, SEC-31/SEC-39) wajib
+# idempoten + transaksional (kontrak pemilik file: efn-bff-engineer). Volume baru menjalankannya lewat initdb; volume
+# lama hanya lewat langkah ini. Dijalankan sebagai superuser lewat socket lokal, SEBELUM BFF baru start.
+echo "==> Migrasi skema idempoten (infra/postgres/init/[0-9][0-9]-*.sql >= 04)"
+for mig in "$BASE"/postgres/init/[0-9][0-9]-*.sql; do
+  [[ -e "$mig" ]] || continue
+  num=$(basename "$mig"); num=${num%%-*}
+  (( 10#$num >= 4 )) || continue
+  echo "    $(basename "$mig")"
+  "${DC[@]}" exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U "${PG_SUPERUSER:-postgres}" -d postgres \
+    -f "/docker-entrypoint-initdb.d/$(basename "$mig")" || die "migrasi $(basename "$mig") gagal"
+done
+
 echo "==> Up (--no-build: host hanya memakai image bertanda tangan dari GHCR)"
 "${DC[@]}" up -d --remove-orphans --no-build
 
@@ -351,6 +372,12 @@ if [[ -s "$ETL_GRANTS_SQL" ]]; then
     echo "==> Grant ETL di DB Odoo ($(basename "$ETL_GRANTS_SQL"))"
     "${DC[@]}" exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U efn_odoo -d efn_odoo -f - < "$ETL_GRANTS_SQL" \
       || die "grant ETL di DB Odoo gagal"
+    # R5 (gelombang 9): job fact_sales_line aktif otomatis setelah grant sukses, kecuali dimatikan eksplisit
+    # (ETL_ENABLE_ODOO=false di GitHub Environment vars).
+    if [[ -z "${ETL_ENABLE_ODOO:-}" && "$ETL_ENABLE_ODOO_EFF" != "true" && ",${COMPOSE_PROFILES}," == *",data,"* ]]; then
+      sed -i 's/^ETL_ENABLE_ODOO=.*/ETL_ENABLE_ODOO=true/' "$COMPOSE_DIR/.env"
+      "${DC[@]}" up -d etl
+    fi
   else
     echo "    DB efn_odoo belum ter-install (pos_order belum ada) - grant ETL dilewati, ulangi deploy setelah install"
   fi

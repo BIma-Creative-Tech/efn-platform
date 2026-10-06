@@ -22,7 +22,8 @@ on:
         description: "Image tag: sha-<7 hex> (build main) atau X.Y.Z / vX.Y.Z (rilis)"
         required: true
 
-# Minimal: cosign verify keyless tidak butuh id-token; pull GHCR butuh packages:read.
+# Minimal: cosign verify keyless tidak butuh id-token; pull GHCR butuh packages:read. Job deploy menambah
+# id-token: write untuk menandatangani bundel rilis (SEC-36).
 permissions:
   contents: read
   packages: read
@@ -76,6 +77,11 @@ jobs:
     name: Deploy ${{ needs.resolve.outputs.environment }} (${{ needs.resolve.outputs.image_tag }})
     needs: resolve
     runs-on: ubuntu-latest
+    # id-token: write HANYA untuk cosign sign-blob keyless atas bundel rilis (SEC-36); diverifikasi efn-deploy di host.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     environment:
       name: ${{ needs.resolve.outputs.environment }}
       url: https://app.${{ vars.TRAEFIK_DOMAIN }}
@@ -127,32 +133,28 @@ jobs:
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      # infra/ -> /opt/efn/ dan scripts/ -> /opt/efn/scripts/. --delete dibatasi per sumber dan
-      # mengecualikan file milik host (secrets, pki-ca, .env, compose host override) agar tidak terhapus.
-      - name: Sinkronisasi infra & scripts ke host
-        env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      # SEC-36 (gelombang 9): TIDAK ada lagi rsync sebagai user deploy maupun `sudo bash -s`. Satu-satunya perintah
+      # yang bisa dijalankan kunci SSH CI adalah wrapper root /usr/local/sbin/efn-deploy (forced command di
+      # authorized_keys + sudoers tanpa argumen). Wrapper menerima arsip rilis yang DITANDATANGANI cosign keyless oleh
+      # workflow ini (identitas deploy.yml @ ref yang diizinkan, dikonfigurasi root di /etc/efn/deploy.conf), lalu
+      # menjalankan deploy.sh dari salinan milik root. Lihat scripts/host/efn-deploy, docs/runbooks/key-custody.md §4.
+      - name: Bundel rilis (infra + scripts + etl-sql) & tanda tangan keyless
         run: |
           set -euo pipefail
-          RSH="ssh -i $HOME/.ssh/efn_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
-          rsync -az --delete -e "$RSH" \
-            --exclude=/secrets/ --exclude=/scripts/ --exclude=/pki-ca/ \
-            --exclude=/compose/.env --exclude=/compose/docker-compose.host.yml \
-            infra/ "${DEPLOY_USER}@${HOST}:/opt/efn/"
-          rsync -az --delete -e "$RSH" scripts/ "${DEPLOY_USER}@${HOST}:/opt/efn/scripts/"
-          # Grant baca ETL di DB Odoo (QA U1, file milik data-AI) - diterapkan deploy.sh bila ada
-          if [ -d services/etl/sql ]; then
-            rsync -az --delete -e "$RSH" services/etl/sql/ "${DEPLOY_USER}@${HOST}:/opt/efn/etl-sql/"
-          fi
+          mkdir -p "$RUNNER_TEMP/efn-release"
+          paths=(infra scripts)
+          [ -d services/etl/sql ] && paths+=(services/etl/sql)
+          # mtime/owner tetap -> arsip deterministik untuk commit yang sama
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='2000-01-01 00:00Z' \
+              --exclude='infra/compose/.env' -czf "$RUNNER_TEMP/efn-release/release.tar.gz" "${paths[@]}"
+          cosign sign-blob --yes --bundle "$RUNNER_TEMP/efn-release/release.sigstore.json" \
+            "$RUNNER_TEMP/efn-release/release.tar.gz"
+          sha256sum "$RUNNER_TEMP/efn-release/release.tar.gz"
 
-      # Secret dikirim lewat stdin (`sudo -n bash -s`), bukan argumen ssh, agar tidak terlihat di `ps` host.
+      # Secret & variabel dikirim lewat stdin (bukan argumen ssh), di-encode base64 per baris (tanpa eval di host).
       # Daftar secret = scripts/secrets.list; nilai diambil dari toJSON(secrets) (GitHub Environment, UPPERCASE),
-      # sehingga menambah secret tidak butuh mengedit workflow ini. Jenis `pki` (diterbitkan di host dari
-      # intermediate) dan `derived:*` (diturunkan di host) TIDAK dikirim. Secret yang hilang -> deploy.sh gagal.
-      # deploy.sh berjalan sebagai root (secrets root:efn-superadmin, docs/runbooks/key-custody.md); sudoers host:
-      #   deploy ALL=(root) NOPASSWD: /usr/bin/bash -s
-      - name: Deploy (compose pull & up by digest)
+      # sehingga menambah secret tidak butuh mengedit workflow ini. Jenis `pki`/`derived:*` TIDAK dikirim.
+      - name: Deploy (efn-deploy di host -> compose pull & up by digest)
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
@@ -190,6 +192,8 @@ jobs:
           CONSENT_MARKETING_VERSION: ${{ vars.CONSENT_MARKETING_VERSION }}
           CONSENT_MARKETING_TEXT_SHA256: ${{ vars.CONSENT_MARKETING_TEXT_SHA256 }}
           DSAR_DELETE_GRACE_DAYS: ${{ vars.DSAR_DELETE_GRACE_DAYS || '7' }}
+          # R5: kosong = job ETL Odoo aktif otomatis setelah grant di DB Odoo sukses (deploy.sh)
+          ETL_ENABLE_ODOO: ${{ vars.ETL_ENABLE_ODOO }}
           IMAGE_POSTGRES: ${{ steps.digests.outputs.IMAGE_POSTGRES }}
           IMAGE_ODOO: ${{ steps.digests.outputs.IMAGE_ODOO }}
           IMAGE_API_GATEWAY: ${{ steps.digests.outputs.IMAGE_API_GATEWAY }}
@@ -206,12 +210,16 @@ jobs:
                 ACME_DNS_PROVIDER ACME_DNS_TOKEN_ENV RABBITMQ_STRICT_PERMISSIONS
                 MARKET_SCOUT_PHOTO_RETENTION_DAYS CH_MART_RETENTION_YEARS
                 CONSENT_LOCATION_VERSION CONSENT_LOCATION_TEXT_SHA256 CONSENT_MARKETING_VERSION
-                CONSENT_MARKETING_TEXT_SHA256 DSAR_DELETE_GRACE_DAYS
+                CONSENT_MARKETING_TEXT_SHA256 DSAR_DELETE_GRACE_DAYS ETL_ENABLE_ODOO
                 EFN_PKI_INTERMEDIATE_KEY EFN_PKI_INTERMEDIATE_CRT EFN_PKI_ROOT_CRT EFN_PKI_EXTRA_TRUST
                 IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_MINIO)
+          rel="$RUNNER_TEMP/efn-release"
+          umask 077
           {
             for v in "${vars[@]}"; do
-              printf 'export %s=%q\n' "$v" "${!v}"
+              # Variabel opsional yang kosong tidak dikirim (deploy.sh memakai default-nya)
+              [ -n "${!v}" ] || continue
+              printf '%s=%s\n' "$v" "$(printf '%s' "${!v}" | base64 -w0)"
             done
             while read -r name kind _; do
               [ -z "$name" ] && continue
@@ -219,11 +227,14 @@ jobs:
               case "$kind" in pki|derived:*) continue ;; esac
               up="$(echo "$name" | tr '[:lower:]' '[:upper:]')"
               val="$(jq -r --arg k "$up" '.[$k] // empty' <<< "$ALL_SECRETS")"
-              printf 'export %s=%q\n' "$up" "$val"
+              printf '%s=%s\n' "$up" "$(printf '%s' "$val" | base64 -w0)"
             done < scripts/secrets.list
-            echo 'bash /opt/efn/scripts/deploy.sh'
-          } | ssh -i "$HOME/.ssh/efn_deploy" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-                "${DEPLOY_USER}@${HOST}" 'sudo -n bash -s'
+          } > "$rel/env.b64"
+          # forced command di host = sudo -n /usr/local/sbin/efn-deploy (perintah yang dikirim di sini diabaikan)
+          tar -C "$rel" -cf - release.tar.gz release.sigstore.json env.b64 \
+            | ssh -i "$HOME/.ssh/efn_deploy" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+                "${DEPLOY_USER}@${HOST}" efn-deploy
+          rm -f "$rel/env.b64"
 
       - name: Smoke test
         env:

@@ -1,0 +1,141 @@
+# Smoke E2E nightly / manual (R7, docs/testing/E2E_SMOKE_REPORT.md; gelombang 9).
+# Membangun dan menyalakan stack DEV penuh (profil core + data + ai, Ollama TANPA model) dengan TLS/mTLS aktif dan
+# secret DUMMY dari scripts/gen-secrets.sh (tidak ada secret GitHub yang dipakai), memasang modul Odoo efn_*, lalu
+# menjalankan scripts/smoke/run-e2e-smoke.sh dan mengunggah hasilnya. Semua data = fiktif; stack dihancurkan di akhir.
+#
+# Runner: default ubuntu-latest. Stack penuh butuh ±12-16 GB RAM; repo privat (runner 2 vCPU/7 GB) sebaiknya memakai
+# runner self-hosted/larger lewat variable repo E2E_RUNNER (mis. "self-hosted" atau label larger runner).
+# Semua `uses:` dipin ke commit SHA 40 karakter (komentar = versi).
+name: E2E smoke (nightly)
+
+on:
+  schedule:
+    - cron: "0 19 * * *"   # 02:00 WIB
+  workflow_dispatch:
+    inputs:
+      scenarios:
+        description: "Skenario (spasi), kosong = semua: a b c d f e g"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-nightly
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    name: Stack dev + smoke E2E
+    runs-on: ${{ vars.E2E_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    env:
+      DC_FILES: -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.dev.yml --env-file infra/compose/.env
+      PROFILES: --profile core --profile data --profile ai
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Secret dummy + PKI dev + .env
+        run: |
+          set -euo pipefail
+          bash scripts/gen-secrets.sh > /dev/null
+          cp infra/compose/.env.example infra/compose/.env
+          # node-exporter tidak dipakai (profil ops tidak dinyalakan); direktori textfile tetap dibuat
+          sudo install -d -m 0755 /var/lib/efn/node-exporter || true
+
+      - name: Build image (core + data + ai)
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086  # DC_FILES/PROFILES sengaja di-split
+          docker compose $DC_FILES $PROFILES build
+
+      - name: Up core
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086
+          docker compose $DC_FILES --profile core up -d
+
+      - name: Tunggu healthy
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            # shellcheck disable=SC2086
+            st=$(docker compose $DC_FILES $PROFILES ps --format json \
+              | jq -rs 'flatten | map(select(.Health == "starting" or .Health == "unhealthy")) | map(.Service + ":" + .Health) | join(" ")')
+            [ -z "$st" ] && { echo "semua healthy"; exit 0; }
+            echo "menunggu ($i): $st"; sleep 10
+          done
+          echo "::error::timeout healthcheck: $st"; exit 1
+
+      - name: Init DB Odoo + modul efn_* (runbook dev-stack-boot §3)
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086
+          docker compose $DC_FILES --profile core run --rm --no-deps -e ODOO_DEV_MODE= odoo \
+            odoo -d efn_odoo -i base --stop-after-init --without-demo=all
+          # shellcheck disable=SC2086
+          docker compose $DC_FILES --profile core stop odoo odoo-tls odoo-ws-tls
+          # shellcheck disable=SC2086
+          docker compose $DC_FILES --profile core run --rm --no-deps -e ODOO_DEV_MODE= odoo \
+            odoo -d efn_odoo --stop-after-init --without-demo=all \
+            -i efn_core,efn_setup_company,efn_setup_security,efn_setup_pos,efn_setup_mrp,efn_setup_audit,efn_kitting,efn_pos_otp_gate,efn_pos_payment_gateway,efn_privacy
+          # shellcheck disable=SC2086
+          docker compose $DC_FILES --profile core up -d odoo odoo-tls odoo-ws-tls
+
+      - name: Up data + ai (Ollama tanpa model)
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086
+          docker compose $DC_FILES $PROFILES up -d
+
+      - name: Tunggu healthy (semua profil)
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            # shellcheck disable=SC2086
+            st=$(docker compose $DC_FILES $PROFILES ps --format json \
+              | jq -rs 'flatten | map(select(.Health == "starting" or .Health == "unhealthy")) | map(.Service + ":" + .Health) | join(" ")')
+            [ -z "$st" ] && { echo "semua healthy"; exit 0; }
+            echo "menunggu ($i): $st"; sleep 10
+          done
+          echo "::error::timeout healthcheck: $st"; exit 1
+
+      - name: Smoke E2E
+        env:
+          SMOKE_OUT_DIR: ${{ runner.temp }}/e2e
+          SCENARIOS: ${{ inputs.scenarios }}
+        run: |
+          set -euo pipefail
+          # Input divalidasi (huruf skenario saja), tidak diinterpolasi ke skrip
+          [[ -z "${SCENARIOS}" || "${SCENARIOS}" =~ ^[a-g\ ]+$ ]] || { echo "::error::scenarios tidak valid"; exit 1; }
+          # shellcheck disable=SC2086
+          bash scripts/smoke/run-e2e-smoke.sh ${SCENARIOS}
+
+      - name: Kumpulkan status & log (data fiktif; tanpa secret)
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/e2e"
+          # shellcheck disable=SC2086
+          docker compose $DC_FILES $PROFILES ps -a > "$RUNNER_TEMP/e2e/compose-ps.txt" 2>&1 || true
+          # shellcheck disable=SC2086
+          docker compose $DC_FILES $PROFILES logs --no-color --tail=300 > "$RUNNER_TEMP/e2e/compose-logs.txt" 2>&1 || true
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        if: always()
+        with:
+          name: e2e-smoke-${{ github.run_id }}
+          path: ${{ runner.temp }}/e2e
+          retention-days: 7
+
+      - name: Hancurkan stack
+        if: always()
+        run: |
+          # shellcheck disable=SC2086
+          docker compose $DC_FILES --profile core --profile data --profile ai --profile observability --profile ops \
+            down -v --remove-orphans || true
+          rm -rf secrets

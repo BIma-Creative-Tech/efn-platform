@@ -25,8 +25,31 @@ $DC --profile core up -d --build
 $DC --profile core --profile data --profile observability --profile ops up -d
 ```
 
-Build pertama makan waktu: image MinIO dikompilasi dari source (`infra/minio/Dockerfile`). Image `minio/minio` dan
-`minio/mc` sudah tidak ada di Docker Hub.
+Build pertama makan waktu: image object storage dikompilasi dari source tag **SILO** (`infra/minio/Dockerfile`,
+fork komunitas MinIO, ADR-030; Go 1.27.1, ±10 menit). Image `minio/minio` dan `minio/mc` sudah tidak ada di Docker
+Hub dan upstream diarsipkan.
+
+### 2b. Gelombang 9: migrasi stack dev lama (sekali)
+
+1. `bash scripts/gen-secrets.sh` — membuat 4 access key acak (`secrets/minio_*_access_key.txt`, docs/04 §8.12) dan,
+   karena service PKI baru `s3-gateway`, **membuat ulang CA dev** (lama diarsip ke `secrets/pki-ca.old-*`) + semua leaf.
+2. `$DC --profile core build postgres minio` (WAL-G membaca `MINIO_BACKUP_ACCESS_KEY_FILE`; server SILO).
+3. Volume `minio-data` lama (MinIO `RELEASE.2025-10-15`) **dipakai ulang langsung** oleh SILO — diuji gelombang 9:
+   boot healthy, bucket/objek/versi/lock lama terbaca. Tidak perlu reset. Rollback: image `efn/minio:legacy-2025-10-15`.
+4. Migrasi skema idempoten BFF sebelum BFF baru start (volume `pg-data` lama):
+   ```bash
+   $DC --profile core up -d postgres
+   MSYS_NO_PATHCONV=1 $DC exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres \
+     -f /docker-entrypoint-initdb.d/04-platform-v3-6.sql      # produksi: otomatis di deploy.sh
+   ```
+5. `$DC --profile core --profile data --profile observability --profile ops up -d --force-recreate` (semua container
+   memegang bundle CA lama). `minio-init` membuat user ber-access-key acak dan **menghapus** user lama `pgbackup`,
+   `efn-bff`, `efn-ocr`, `efn-prometheus` (log: "user lama bernama tetap dihapus: 4").
+
+Topologi baru object storage: klien (BFF, ocr-worker, WAL-G, Prometheus) → `https://s3-gateway:9000` (filter L7
+HAProxy, `infra/s3-gateway/haproxy.cfg`) → `https://minio:9000` di network `objstore` saja. Akses dari laptop:
+`https://localhost:9000` (filter; admin API diblok). Admin: `docker exec efn-minio-1 sh -c 'mc alias set l
+https://localhost:9000 efnadmin "$(cat /run/secrets/minio_root_password)" && mc admin info l'`.
 
 ## 3. Inisialisasi database Odoo (sekali per volume `pg-data`)
 
@@ -63,8 +86,23 @@ $DC --profile core --profile data --profile ai up -d
 ```
 
 Tanpa model vision, laporan yang ragu (confidence Tesseract < 0.80) berakhir `flagged/vlm_unavailable` (perilaku yang
-diharapkan). Ollama 0.5.4 yang di-pin TIDAK bisa menarik `qwen2.5vl` (412 "requires a newer version of Ollama") —
-lihat docs/testing/E2E_SMOKE_REPORT.md.
+diharapkan). Gelombang 9 (R1): image dinaikkan ke `ollama/ollama:0.35.1` (dipin digest); manifest `qwen2.5vl`
+kini diterima (0.5.4 menolak dengan 412). Model terkecil yang layak untuk dev: `qwen2.5vl:3b` (±3,2 GB):
+
+```bash
+docker exec efn-ollama-1 ollama pull qwen2.5vl:3b
+# .env lokal: OLLAMA_VISION_MODEL=qwen2.5vl:3b, lalu: $DC --profile core --profile ai up -d ocr-worker
+bash scripts/smoke/run-e2e-smoke.sh b      # + subperintah report_vlm (scripts/smoke/README.md)
+```
+
+`hostname: ollama` di base compose tetap wajib (proteksi DNS rebinding Ollama, gelombang 8).
+
+## 3d. Grant ETL Odoo (R5)
+
+Dev override menyetel `ETL_ENABLE_ODOO=true`. Grant baca level-kolom `efn_etl` di DB `efn_odoo` diterapkan otomatis oleh
+smoke skenario `f` (dan oleh `deploy.sh` di staging/prod). Manual:
+`MSYS_NO_PATHCONV=1 docker exec -i efn-postgres-1 psql -X -q -v ON_ERROR_STOP=1 -U efn_odoo -d efn_odoo -f - < services/etl/sql/odoo-readonly-grants.sql`.
+Sebelum grant, job `sales_fact_pos` gagal per siklus (permission denied) tanpa memengaruhi job lain.
 
 ## 3c. Smoke E2E
 

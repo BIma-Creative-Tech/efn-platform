@@ -8,8 +8,9 @@
 #                            `memberHashPepper`) dan ETL. Dipakai Odoo (EFN_MEMBER_HASH_PEPPER_FILE).
 #                            Test vector (app-config.spec.ts): otp_pepper "test-otp-pepper-v1" ->
 #                            46df3d2fee0e91a91083827a5f303586e9c6b5c54afe096896bac9feb724061f
-#   minio_prometheus_token = JWT HS512 {sub/accessKey: efn-prometheus, iss: prometheus, exp: 2100-01-01} ditandatangani
-#                            secret key user MinIO `efn-prometheus` (= `mc admin prometheus generate`), dipakai
+#   minio_prometheus_token = JWT HS512 {sub/accessKey: <minio_prometheus_access_key>, iss: prometheus, exp: 2100-01-01}
+#                            ditandatangani secret key user metrik (access key acak, docs/04 §8.12; = `mc admin
+#                            prometheus generate`), dipakai
 #                            Prometheus sebagai bearer token metrik MinIO (MINIO_PROMETHEUS_AUTH_TYPE=jwt).
 #
 # Kerahasiaan input: bila python3 tersedia, kunci dikirim lewat stdin (tidak pernah di argv/`ps`). Fallback openssl
@@ -22,7 +23,6 @@ set -euo pipefail
 
 VECTOR_IKM="test-otp-pepper-v1"
 VECTOR_OUT="46df3d2fee0e91a91083827a5f303586e9c6b5c54afe096896bac9feb724061f"
-MINIO_PROM_USER="${MINIO_PROMETHEUS_USER:-efn-prometheus}"
 JWT_EXP=4102444800   # 2100-01-01T00:00:00Z (setara token `mc admin prometheus generate`, rotasi = ganti secret dasar)
 
 die() { echo "derive-secrets: $*" >&2; exit 1; }
@@ -105,9 +105,14 @@ derive_all() {
 
   src="${dir}/minio_prometheus_secret.txt"
   [[ -s "$src" ]] || die "minio_prometheus_secret.txt tidak ada (dibutuhkan minio_prometheus_token)"
-  local header payload sig keyfile
+  # Access key user metrik = secret acak (docs/04 §8.12), BUKAN nama tetap `efn-prometheus`
+  [[ -s "${dir}/minio_prometheus_access_key.txt" ]] \
+    || die "minio_prometheus_access_key.txt tidak ada (dibutuhkan minio_prometheus_token)"
+  local header payload sig keyfile prom_ak
+  prom_ak="$(tr -d '\r\n' < "${dir}/minio_prometheus_access_key.txt")"
+  [[ "$prom_ak" =~ ^[A-Za-z0-9._-]{3,128}$ ]] || die "minio_prometheus_access_key tidak valid"
   header=$(printf '%s' '{"alg":"HS512","typ":"JWT"}' | b64url)
-  payload=$(printf '{"exp":%s,"sub":"%s","accessKey":"%s","iss":"prometheus"}' "$JWT_EXP" "$MINIO_PROM_USER" "$MINIO_PROM_USER" | b64url)
+  payload=$(printf '{"exp":%s,"sub":"%s","accessKey":"%s","iss":"prometheus"}' "$JWT_EXP" "$prom_ak" "$prom_ak" | b64url)
   keyfile=$(mktemp)
   printf '%s' "$(< "$src")" > "$keyfile"
   sig=$(printf '%s.%s' "$header" "$payload" | hmac512_b64url "$keyfile")

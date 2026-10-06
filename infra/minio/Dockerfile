@@ -1,34 +1,40 @@
-# MinIO server + mc dibangun dari SOURCE tag resmi upstream (github.com/minio/minio, github.com/minio/mc; AGPL-3.0).
-# Alasan (gelombang 7, runtime): image minio/minio dan minio/mc sudah TIDAK tersedia di Docker Hub (repository
-# dihapus; quay.io/minio meminta autentikasi). Membangun dari tag source yang di-pin = rantai pasok paling bisa diaudit
-# tanpa bergantung pada fork pihak ketiga (pgsty, bitnamilegacy, chainguard). Keputusan final (fork komunitas vs
-# build sendiri vs pengganti S3 lain) -> lead/architect (catatan di docs/agent-reports/efn-devsecops-engineer.md).
-# Satu image dipakai service `minio` (server, healthcheck `mc ready`) dan `minio-init` (mc).
-# Tag terakhir upstream community edition: minio RELEASE.2025-10-15T17-29-55Z (fix CVE-2025-62506),
-# mc RELEASE.2025-08-13T08-35-41Z.
-FROM golang:1.24-alpine AS build
-ARG MINIO_TAG=RELEASE.2025-10-15T17-29-55Z
-ARG MC_TAG=RELEASE.2025-08-13T08-35-41Z
+# Object storage S3 = SILO (fork komunitas MinIO oleh Pigsty, github.com/pgsty/silo, AGPL-3.0-or-later) + klien
+# pgsty/mc, keduanya dibangun dari SOURCE tag rilis di pipeline sendiri (bukan menarik image pihak ketiga), sehingga
+# SBOM/Trivy/cosign build-push.yml tetap berlaku (R-S08). Keputusan: ADR-030 (status Proposed; rekomendasi jangka
+# pendek opsi B diterapkan gelombang 9 karena CVE High aktif di MinIO 2025-10-15; reversible = ganti ARG kembali).
+# Kompatibilitas (klaim SILO, diuji gelombang 9 di stack dev): env MINIO_*, format .minio.sys, route /minio/*,
+# metrik minio_*. SILO tidak memasang alias biner `minio` -> image ini membuat symlink agar compose/runbook lama jalan.
+# Tag di-pin + commit SHA diverifikasi (tag git bisa dipindah; commit tidak).
+# Versi Go mengikuti go.mod kedua repo (go 1.27.1); digest base = yang dipakai Dockerfile.goreleaser SILO.
+FROM golang:1.27.1-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS build
+ARG SILO_TAG=RELEASE.2026-09-16T00-00-00Z
+ARG SILO_COMMIT=2a4d51406b7ed87af5fe6fe0f801f3290f96eb3c
+ARG MC_TAG=RELEASE.2026-09-16T00-00-00Z
+ARG MC_COMMIT=e952aa78f10a2b77dd525a2b7e3143bcda0cd377
 # MINIO_RELEASE/MC_RELEASE=RELEASE -> versi "RELEASE.<tanggal>" (bukan "DEVELOPMENT.<tanggal>")
 ENV CGO_ENABLED=0 GOFLAGS=-trimpath MINIO_RELEASE=RELEASE MC_RELEASE=RELEASE
 # hadolint ignore=DL3018
 RUN apk add --no-cache git
-WORKDIR /src/minio
-RUN git clone --depth 1 --branch "${MINIO_TAG}" https://github.com/minio/minio.git . \
-    && go build -tags kqueue -ldflags "$(go run buildscripts/gen-ldflags.go)" -o /out/minio .
+WORKDIR /src/silo
+RUN git clone --depth 1 --branch "${SILO_TAG}" https://github.com/pgsty/silo.git . \
+    && test "$(git rev-parse HEAD)" = "${SILO_COMMIT}" \
+    && go build -tags kqueue -ldflags "$(go run buildscripts/gen-ldflags.go)" -o /out/silo .
 WORKDIR /src/mc
-RUN git clone --depth 1 --branch "${MC_TAG}" https://github.com/minio/mc.git . \
+RUN git clone --depth 1 --branch "${MC_TAG}" https://github.com/pgsty/mc.git . \
+    && test "$(git rev-parse HEAD)" = "${MC_COMMIT}" \
     && go build -tags kqueue -ldflags "$(go run buildscripts/gen-ldflags.go)" -o /out/mc .
 
-FROM alpine:3.20
+FROM alpine:3.24
 # hadolint ignore=DL3018
 RUN apk add --no-cache ca-certificates \
     && addgroup -S -g 1000 minio && adduser -S -D -H -u 1000 -G minio minio \
     && install -d -o minio -g minio -m 0750 /data
-COPY --from=build /out/minio /out/mc /usr/bin/
+COPY --from=build /out/silo /out/mc /usr/bin/
+# Alias kompatibilitas: `minio` (compose entrypoint, runbook) dan `mcli` (nama klien di dokumentasi SILO).
+RUN ln -s /usr/bin/silo /usr/bin/minio && ln -s /usr/bin/mc /usr/bin/mcli
 # Non-root: volume baru mewarisi owner /data (uid 1000) dari image.
 ENV HOME=/tmp
 USER 1000:1000
 EXPOSE 9000 9001
-ENTRYPOINT ["/usr/bin/minio"]
+ENTRYPOINT ["/usr/bin/silo"]
 CMD ["server", "/data"]

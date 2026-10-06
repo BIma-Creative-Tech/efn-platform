@@ -26,9 +26,10 @@ Efek `nameConstraints` (SEC-23): kunci intermediate yang bocor tidak bisa memals
 | ghostunnel `docker-socket-proxy-tls` | idem | `traefik`, `promtail`, `cadvisor` |
 | Prometheus, Alertmanager | `web-config-ui.yml` RequireAndVerifyClientCert + `client_allowed_sans` | `prometheus`, `grafana` |
 | node/postgres/blackbox exporter | `web-config.yml` idem | `prometheus` |
-| Loki | `http_tls_config` RequireAndVerifyClientCert | klien ber-EKU clientAuth (promtail, grafana, prometheus, …) — tanpa allowlist SAN (E12) |
-| redis_exporter, RabbitMQ :15691, Traefik :8082 | verifikasi sertifikat klien CA internal | klien ber-EKU clientAuth (E12) |
-| MinIO metrik | bearer JWT user `efn-prometheus` (`admin:Prometheus`) | Prometheus |
+| ghostunnel `loki-tls` (Loki di 127.0.0.1:3101) | `--cacert` + `--allow-cn` (SEC-35, gel. 9) | `promtail`, `grafana`, `prometheus` |
+| ghostunnel `redis-exporter-tls`, `rabbitmq-metrics-tls` (:15691), `traefik-metrics-tls` (:8082) | idem (SEC-35, gel. 9) | `prometheus` |
+| Object storage via filter `s3-gateway` (HAProxy, ADR-030) | server-TLS sertifikat `s3-gateway`; re-encrypt ke `minio:9000` (`verify required`, `verifyhost minio`) | klien S3 berkredensial (access key acak, docs/04 §8.12); storage hanya di network `objstore` |
+| Metrik object storage | bearer JWT user metrik (access key acak `minio_prometheus_access_key`, `admin:Prometheus`) lewat `s3-gateway` | Prometheus |
 | ClickHouse `/metrics`, BFF `/metrics`, ocr-worker `/metrics` | lihat E11/E12 ADR-022 | Prometheus |
 
 Hop dengan kredensial aplikasi (PostgreSQL, Redis, RabbitMQ AMQP, MinIO S3, ClickHouse SQL, BFF API) tetap server-TLS + password per service (mTLS opsional fase 2).
@@ -83,3 +84,15 @@ Dev: `make pki-rotate`.
 | MinIO | <a id="minio-object-lock"></a>**Object lock `pg-backup`** hanya saat bucket dibuat: buat `pg-backup-v2` (`mc mb --with-lock`), ubah `WALG_S3_PREFIX` + `MINIO_BUCKET_PG_BACKUP`, base backup baru, hapus bucket lama setelah retensi |
 | ClickHouse | `docker volume rm efn_clickhouse-data` lalu `clickhouse-init` + ETL mengisi ulang |
 | Metabase | Koneksi ClickHouse di UI: host `clickhouse`, port 8443, SSL on, user `efn_metabase`, sertifikat CA = isi `efn_ca_crt` (bundle) |
+
+## Service baru di PKI_SERVICES <a id="service-baru"></a>
+
+`nameConstraints` intermediate memuat daftar `PKI_SERVICES` (`scripts/gen-pki.sh`). Service baru (gelombang 9:
+`s3-gateway`, filter L7 object storage ADR-030) **tidak** bisa diberi leaf oleh intermediate lama.
+
+- **Dev/CI:** `bash scripts/gen-secrets.sh` mendeteksi intermediate yang tidak mencakup service baru, mengarsipkan
+  `secrets/pki-ca` ke `secrets/pki-ca.old-<waktu>`, membuat root + intermediate DEV baru, dan menerbitkan ulang SEMUA
+  leaf. Setelah itu: `up -d --force-recreate` seluruh stack (semua container memegang bundle lama).
+- **Staging/produksi:** `deploy.sh` (gen-pki leaf) **gagal** dengan pesan "intermediate ... tidak mencakup semua
+  service". Superadmin: `make pki-intermediate ENV=<env>` dari root offline (daftar service terbaru), unggah 3 secret
+  `EFN_PKI_*`, lalu deploy (= prosedur rotasi intermediate di atas). Root tidak berubah.

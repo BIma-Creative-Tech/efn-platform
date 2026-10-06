@@ -455,3 +455,118 @@ Alert yang aktif di dev dan memang diharapkan: `EfnPublicEndpointDown` (blackbox
 - *Belum*: restore-test.sh, backup base (`efn-walg backup-push`), deploy prod overlay, workflow GitHub di runner nyata.
 
 Volume dev `efn_*` **dipertahankan** setelah `down` (pg-data sudah berisi `efn_odoo` ter-init base, plus MinIO, ClickHouse, dan lain-lain), sehingga run berikutnya tidak perlu init ulang. Reset: `down -v`.
+
+---
+
+# Gelombang 9 — SILO, filter L7, access key acak, SEC-35/36/37/30, R1/R5/R7 (6 Okt 2026)
+
+Runtime: Docker Desktop 29.8.1 (WSL2), host 16 CPU/31 GB yang **sangat padat** (CPU 100 %, RAM bebas 0,2–7 GB karena
+proses lain di host). Docker Desktop sempat mati sekali (pipe hilang, pull Ollama `unexpected EOF`) dan saya nyalakan
+ulang; hasil di bawah diambil setelah restart. ADR-030 masih **Proposed**; lead memutuskan menerapkan rekomendasi jangka
+pendek. Semua perubahan reversible (G9.5).
+
+## G9.1 Status per butir
+
+| # | Butir | Status | Bukti (runtime kecuali disebut) |
+|---|---|---|---|
+| 1 | Object storage → **SILO** dari source | **Selesai** | `infra/minio/Dockerfile`: `pgsty/silo` + `pgsty/mc` tag `RELEASE.2026-09-16T00-00-00Z` (rilis terbaru per GitHub API), commit SHA diverifikasi saat build (`2a4d514…`, `e952aa7…`), `golang:1.27.1-alpine@sha256:cf6fca…` (= `go.mod` 1.27.1, digest yang sama dipakai SILO), runtime `alpine:3.24`, non-root 1000, symlink `minio`/`mcli`. `silo version RELEASE.2026-09-16T15-50-09Z (go1.27.1)`. **Upgrade in-place volume dev lama** (data MinIO 2025-10-15): boot healthy tanpa reset; 16 objek lama `pg-backup/efn/` terbaca; versioning enabled; `Object locking 'GOVERNANCE' 15DAYS`; `sse-s3` auto-encrypt kedua bucket; objek baru `Encryption: SSE-S3`; ILM `reports/` 90 hari + noncurrent 35 hari; `minio-init` idempoten. Metrik JWT lewat filter: 219 baris `minio_*` dengan token, 403 tanpa token |
+| 2 | Access key acak (§8.12) | **Selesai** | Secret `minio_{bff,ocr,backup,prometheus}_access_key` (generator `akid` = 20 hex huruf besar, 80 bit): `secrets.list`, `gen-secrets.sh`, compose (top-level + mount per service). BFF & worker `MINIO_ACCESS_KEY_FILE`; WAL-G `MINIO_BACKUP_ACCESS_KEY_FILE` (`efn-walg.sh`, `restore-test.sh`, runbook backup-restore); token JWT Prometheus `sub/accessKey` dari file (`derive-secrets.sh`, diverifikasi). `minio-init` membuat user dari access key acak dan **menghapus user lama** `pgbackup/efn-bff/efn-ocr/efn-prometheus` (log "dihapus: 4"); keluaran `mc admin user` dibuang (access key tidak masuk log). Uji: kredensial lama `efn-bff` ditolak; bff PUT `reports/` OK, PUT di luar prefix & GET ditolak; ocr GET OK, PUT ditolak. Worker: `efn_ocr/config.py` (`_minio_access_key`: file > literal hanya APP_ENV dev/development/local/test dan bukan production, regex + min 16 di luar dev) + test (fixture `MINIO_ACCESS_KEY_FILE`, 4 test baru). pytest **168 lulus**, ruff 0.16.10 bersih |
+| 3 | Filter L7 | **Selesai** | Service `s3-gateway` = HAProxy 3.2.25 LTS (digest dipin), `infra/s3-gateway/{haproxy.cfg,entrypoint.sh,README.md}`. TLS masuk sertifikat `s3-gateway` (gen-pki), re-encrypt `ssl verify required ca-file … verifyhost minio`. Storage dipindah ke network baru `objstore` (172.30.6.0/24, internal): hanya `s3-gateway` + `minio-init`. Klien: BFF/worker `MINIO_ENDPOINT=s3-gateway`, WAL-G `https://s3-gateway:9000`, Prometheus job `minio` + probe TLS. Header trailer dicek di sumber dulu: minio-js 8.x `UNSIGNED-PAYLOAD`/sha256, minio-py 7.2.12 `UNSIGNED-PAYLOAD`, WAL-G v3.0.9 = aws-sdk-go **v1** (tanpa trailer) → aman diblok; dibuktikan runtime (upload BFF, GET worker, WAL-G push sha256 tetap 200 lewat filter). Smoke `g.s3gw_*` (10 cek) lulus: bypass-governance, `PUT ?retention`, `x-amz-object-lock-*`, trailer, `X-Minio-Replication-*`, `?select`, `/minio/admin/` → 403 halaman HAProxy; HTTP polos ditolak; storage tak ter-resolve dari `data`; kontrol positif: S3 biasa diteruskan (AccessDenied dari storage). `mc retention clear` oleh user backup → 403 filter |
+| 4 | R1 Ollama | lihat G9.3 | `ollama/ollama:0.35.1@sha256:292ee7…` (stabil terbaru 29 Sep 2026; 0.40 masih rc), `hostname: ollama` tetap; container + sidecar mTLS + ocr-worker healthy. `ollama pull qwen2.5vl:3b`: manifest **diterima** (0.5.4 = 412) |
+| 5 | R5 ETL Odoo | **Selesai** | `ETL_ENABLE_ODOO` (base `false`, dev `true`, `.env.example`, var deploy). Sebelum grant: `job=sales_fact_pos gagal … permission denied for table pos_order_line` (job lain tetap jalan). Smoke `f` menerapkan `odoo-readonly-grants.sql` (sama dengan deploy.sh: `psql -U efn_odoo` via socket) → `f.odoo_etl_grants` OK, **`f.ch_fact_sales_line rows=36`** dari order POS smoke. `deploy.sh`: setelah grant sukses dan var tidak di-set, `.env` → `ETL_ENABLE_ODOO=true` + `up -d etl` (nilai dipertahankan antar-deploy) |
+| 6 | R7 nightly | **Selesai, belum pernah jalan di GitHub** | `.github/workflows/e2e-nightly.yml`: `schedule` 02:00 WIB + `workflow_dispatch` (input skenario divalidasi regex), `permissions: contents: read`, action dipin SHA, secret dummy `gen-secrets.sh`, build → core → install modul Odoo → data+ai (Ollama tanpa model) → `run-e2e-smoke.sh` (`SMOKE_OUT_DIR` baru) → artefak (hasil, `compose ps`, tail log; data fiktif) → `down -v`. Runner `vars.E2E_RUNNER` (default ubuntu-latest; stack ±12–16 GB → larger/self-hosted untuk repo privat) |
+| 7a | SEC-35 | **Selesai** | Loki → `127.0.0.1:3101` + sidecar `loki-tls` (`--allow-cn` promtail, grafana, prometheus); redis_exporter → `127.0.0.1:9122` + `redis-exporter-tls` (prometheus); RabbitMQ: listener TLS 15691 plugin dicabut, `rabbitmq-metrics-tls` :15691 → 127.0.0.1:15692 (prometheus); Traefik entrypoint `metrics` → `127.0.0.1:8084` + `traefik-metrics-tls` :8082 (prometheus). Uji: sertifikat prometheus → 200 di keempatnya, grafana → Loki 200; sertifikat **ocr-worker → `alert bad certificate`** di keempatnya. Target `loki`, `redis`, `rabbitmq`, `traefik`, `minio`, `api-gateway`, `ocr-worker`, `clickhouse` = up. `loki:3100` dikeluarkan dari probe-internal-tls (blackbox tidak boleh membaca log). check-encryption: Loki wajib loopback |
+| 7b | SEC-36 | **Kode + runbook selesai; host belum dipasang** | `scripts/host/efn-deploy` (wrapper root, dipasang manual Superadmin) + `deploy.yml`: bundel `infra/ scripts/ services/etl/sql` deterministik ditandatangani **cosign keyless** (`id-token: write` hanya job deploy), dikirim bersama env base64 lewat satu stdin tar ke forced command `restrict,command="sudo -n /usr/local/sbin/efn-deploy"`. Wrapper: batas 64 MB, tepat 3 file biasa, `cosign verify-blob` dengan identitas/issuer dari `/etc/efn/deploy.conf` (root), tolak symlink & path di luar `infra|scripts|services/etl/sql`, ekstrak ke `/opt/efn/releases/<sha256>` milik root, sync ke `/opt/efn`, env hanya allowlist (nama tetap + `secrets.list` rilis terverifikasi), `exec /bin/bash deploy.sh` salinan root. Uji container (cosign palsu): tanda tangan invalid, `PATH`, `LD_PRELOAD`, `$(id)`, entri tar ekstra, path traversal, stdin kosong → ditolak; kasus sah → deploy.sh jalan sebagai root, nilai ber-spasi/`$` utuh, file konfigurasi 0644 root. Runbook `key-custody.md §4a`: sudoers tanpa argumen, `deploy` keluar dari grup docker, cosign v2.6.1 + sha256, auditd |
+| 7c | SEC-37 | **Prosedur + desain** | `docs/runbooks/acme-dns-token.md`: delegasi `_acme-challenge` CNAME ke zona khusus, token `DNS:Edit`+`Zone:Read` satu zona + IP filtering + TTL, uji negatif ke zona utama, opsi wildcard `*.int` untuk CT. Pemisahan ACME dari Traefik (container lego di `egress`) didesain, **belum** diterapkan |
+| 7d | SEC-30 semgrep | **Selesai** | `semgrep/semgrep:1.179.0@sha256:93963d…` (digest index, `imagetools inspect`) |
+| 8 | Validasi | **Lulus** | G9.2 |
+
+Pesan lead di tengah tugas: `api-gateway` memakai `MINIO_ACCESS_KEY_FILE=/run/secrets/minio_bff_access_key` + secret di-mount,
+literal dihapus (dev juga). `04-platform-v3-6.sql` dijalankan manual di volume dev (2×, idempoten) sebelum BFF start;
+`deploy.sh` kini menjalankan semua `infra/postgres/init/NN-*.sql` dengan NN ≥ 04 sebagai superuser (socket lokal) setelah
+`00-roles.sh` dan sebelum `up` penuh (kontrak: file ≥ 04 wajib idempoten + transaksional); runbook dev-stack-boot §2b.
+
+## G9.2 Validasi
+
+| Langkah CI `infra` (direplikasi di container Linux) | Hasil |
+|---|---|
+| yamllint `infra .github` / actionlint | 0 error / lulus (termasuk e2e-nightly.yml, deploy.yml baru) |
+| shellcheck (daftar CI + `scripts/host/efn-deploy`, `scripts/smoke/*.sh`, `infra/s3-gateway/*.sh`) | bersih |
+| hadolint v2.12.0 (= hadolint-action v3.1.0) | lulus (`hadolint:latest` memunculkan DL3062/DL3025 baru; CI memakai versi action) |
+| `haproxy -c` (langkah CI baru) | valid |
+| promtool (prometheus.yml, 25 rules) / amtool | lulus |
+| compose config dev & prod, secrets == secrets.list, prod hanya publish Traefik | OK |
+| check-encryption (+ cek baru: Loki loopback, s3-gateway TLS/verify) | OK |
+| derive self-test (python3 & openssl), cloudflare sinkron | OK |
+| PKI | `gen-pki.sh` mendeteksi intermediate dev yang tidak mencakup `s3-gateway`, mengarsipkan CA lama, membuat ulang root+intermediate dev + semua leaf; run kedua idempoten |
+
+Runtime: core + data + ai healthy; observability/ops dinyalakan sebagian (RAM host). **Smoke E2E penuh (a b c d f e g):
+PASS=88 FAIL=0** (gelombang 8: 72). Cek baru: `g.s3gw_*`, `g.storage_not_reachable_from_data`, `f.odoo_etl_grants`,
+`f.ch_fact_sales_line`. Smoke sempat gagal di skenario c karena kolom `res_partner.efn_erased` (perubahan odoo-engineer
+paralel) belum di-upgrade di DB dev → saya jalankan `-u efn_privacy,efn_pos_otp_gate` (dev saja).
+
+## G9.3 R1 — VLM
+
+- **Terverifikasi:** `ollama/ollama:0.35.1` (digest dipin) jalan di belakang sidecar mTLS, `hostname: ollama` tetap,
+  healthcheck & ocr-worker healthy, probe/target tidak regresi; `ollama pull qwen2.5vl:3b` **menerima manifest**
+  (0.5.4 menjawab 412) dan mengunduh blob 3,2 GB sampai 100 %.
+- **Belum terverifikasi:** model tidak pernah selesai terdaftar — Docker Desktop mati di akhir unduhan pertama; unduhan
+  ulang (mulai dari 0) turun ke ±12 KB/s (estimasi 61 jam) sehingga dihentikan. Jadi smoke `report_vlm` dengan model
+  nyata **belum dijalankan**; jalur tanpa model (`flagged/vlm_unavailable`) tetap lulus di smoke b.
+- Ulangi di jaringan normal: `docker exec efn-ollama-1 ollama pull qwen2.5vl:3b`, set `OLLAMA_VISION_MODEL=qwen2.5vl:3b`
+  di `.env`, `up -d ocr-worker`, lalu jalankan subperintah `report_vlm` (runbook dev-stack-boot §3b). Default compose
+  masih `qwen2.5vl:7b` (keputusan data-ai/architect, ADR-008).
+
+## G9.3b Kesiapan penghapusan OCA (instruksi user, commit 244de70) — DISIAPKAN, BELUM DIEKSEKUSI
+
+Menunggu kabar lead bahwa modul audit pengganti `efn_setup_audit` sudah ada (addons tidak saya sentuh).
+- **Siap:** `scripts/check-odoo-deps.sh <daftar-CE>` — gagal bila `depends` efn_* di luar Odoo CE 19 / `efn_*`.
+  Diuji: daftar CE dari `efn-odoo:ci` (692 modul) → saat ini **1 pelanggaran: `efn_setup_audit` → `auditlog`** (benar),
+  shellcheck bersih. Belum dipasang di CI (akan memerahkan CI sampai audit diganti).
+- **Inventaris yang akan dihapus/diubah:** `scripts/fetch-oca.sh`; `ci.yml` (path-filter `scripts/fetch-oca.sh` baris 40,
+  langkah "Fetch OCA addons" + pengecualian auditlog + `--addons-path …/mnt/oca-addons` di job odoo-test); `build-push.yml`
+  langkah "Fetch OCA addons"; `services/odoo/Dockerfile` (`COPY oca /mnt/oca-addons`, mkdir/chown) dan
+  `services/odoo/odoo.conf.tpl` `addons_path` (di luar batas file saya → minta izin lead/odoo-engineer); `.gitignore`
+  baris 22–24 + `services/odoo/oca/README.md`. Tidak ada rujukan di `deploy.sh`, compose, `check-encryption.sh`,
+  runbook, maupun Makefile (tidak ada Makefile di repo). Lalu job CI baru: ekstrak daftar CE dari image odoo-test,
+  jalankan `check-odoo-deps.sh`.
+
+## G9.4 File yang diubah / dibuat
+
+Baru: `infra/s3-gateway/{haproxy.cfg,entrypoint.sh,README.md}`, `scripts/host/efn-deploy`, `scripts/check-odoo-deps.sh`, `.github/workflows/e2e-nightly.yml`,
+`docs/runbooks/acme-dns-token.md`.
+Diubah: `infra/minio/{Dockerfile,minio-init.sh}`, `infra/compose/{docker-compose.yml,docker-compose.dev.yml,.env.example}`,
+`infra/backup/postgres/efn-walg.sh`, `infra/observability/{loki.yml,prometheus.yml}`, `infra/rabbitmq/rabbitmq.conf`,
+`infra/traefik/{traefik.yml,dynamic/internal-tls.yml}`, `scripts/{secrets.list,gen-secrets.sh,gen-pki.sh,derive-secrets.sh,
+deploy.sh,restore-test.sh,check-encryption.sh}`, `scripts/smoke/run-e2e-smoke.sh`, `.github/workflows/{ci.yml,deploy.yml,
+security.yml}`, `docs/runbooks/{dev-stack-boot,internal-pki,key-custody,backup-restore}.md`,
+**di luar infra (dicatat):** `services/ai-ocr-worker/efn_ocr/config.py`, `services/ai-ocr-worker/tests/test_config.py`.
+Lokal (tidak di-commit): `secrets/*` baru, CA dev lama di `secrets/pki-ca.old-*`, `.env` (hapus `MINIO_BACKUP_USER`,
+tambah `ETL_ENABLE_ODOO`), image rollback `efn/minio:legacy-2025-10-15`.
+
+## G9.5 Rollback (reversible, ADR-030 Proposed)
+
+- Storage: ganti ARG/repo di `infra/minio/Dockerfile` kembali (atau tag `efn/minio:legacy-2025-10-15` di dev). Format
+  `.minio.sys` tidak diubah oleh boot SILO (diuji satu arah saja: lama → SILO; arah balik **belum diuji**).
+- Filter: kembalikan `MINIO_ENDPOINT`/`WALG_S3_ENDPOINT`/target Prometheus ke `minio` dan tambahkan `internal, data`
+  ke network `minio`. Access key acak tetap dipakai (tidak bergantung filter).
+
+## G9.6 Sisa / butuh pihak lain
+
+- **Lead/architect:** ADR-030 masih Proposed (Q-OS1..5); docs/04 §7.3 (endpoint storage = `s3-gateway`, network `objstore`)
+  dan ADR-022 (hop baru s3-gateway; loopback E1 untuk Loki/redis_exporter/RabbitMQ metrics/Traefik metrics menggantikan E12)
+  perlu diperbarui architect. Staging/produksi: **intermediate PKI harus diterbitkan ulang** (service baru `s3-gateway`
+  di nameConstraints; deploy.sh gagal jelas bila belum) + 4 secret `MINIO_*_ACCESS_KEY` baru di GitHub Environment.
+- **Superadmin (SEC-36):** pasang `efn-deploy`, `/etc/efn/deploy.conf`, cosign, sudoers, authorized_keys forced command,
+  keluarkan `deploy` dari grup docker — **deploy.yml baru tidak akan jalan sebelum ini**. Belum diuji end-to-end dengan
+  cosign/Rekor asli (hanya cosign palsu di container).
+- **SEC-37:** delegasi DNS & token terbatas = tugas Superadmin; komponen ACME terpisah belum dibangun.
+- **SN-2026-015** masih berlaku untuk kredensial yang langsung ke storage (root via `minio-init`); filter menutup jalur
+  aplikasi. COMPLIANCE menunggu Q-OS3.
+- **Filter:** log HAProxy ke stdout kehilangan baris saat host sangat lambat (permintaan smoke tidak semua tercatat);
+  HAProxy sempat mencetak peringatan watchdog `stuck` lalu pulih (CPU host 100 %). Belum ada metrik HAProxy. Belum diuji
+  base backup besar (`backup-push`) dan `restore-test.sh` lewat filter.
+- **BFF/QA:** `mc rm` dengan user bff gagal karena mc melakukan stat (GetObject) dulu; BFF memakai `removeObject` langsung
+  (tidak terdampak), tetapi QA sebaiknya menguji erasure foto DSAR lewat filter (smoke e lulus).
+- **R7:** workflow belum pernah jalan di GitHub; ukuran runner perlu diputuskan (biaya larger runner).
+- **docs/testing/E2E_SMOKE_REPORT.md** (milik QA) perlu diperbarui dengan hasil 88/88 dan R1/R5/R7.

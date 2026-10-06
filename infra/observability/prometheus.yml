@@ -121,6 +121,7 @@ scrape_configs:
     static_configs:
       - targets: ["clickhouse:8443"]
 
+  # Object storage (SILO) hanya lewat filter L7 s3-gateway (ADR-030); /minio/v2/metrics/* diizinkan filter.
   - job_name: minio
     metrics_path: /minio/v2/metrics/cluster
     scheme: https
@@ -129,8 +130,9 @@ scrape_configs:
       credentials_file: /run/secrets/minio_prometheus_token
     tls_config:
       ca_file: /run/secrets/efn_ca_crt
+      server_name: s3-gateway
     static_configs:
-      - targets: ["minio:9000"]
+      - targets: ["s3-gateway:9000"]
 
   - job_name: loki
     scheme: https
@@ -230,7 +232,7 @@ scrape_configs:
           - redis:6379
           - rabbitmq:5671
           - rabbitmq:15671
-          - minio:9000
+          - s3-gateway:9000
           - clickhouse:9440
           - clickhouse:8443
           - api-gateway:3000
@@ -240,7 +242,6 @@ scrape_configs:
           - ollama:11434
           - metabase:3443
           - grafana:3000
-          - loki:3100
           - uptime-kuma:3001
           # docker-socket-proxy:2376 tidak diprobe: mTLS (CN traefik/promtail/cadvisor) + network socket-proxy
           # terisolasi; kesehatannya terlihat dari discovery Traefik/Promtail dan healthcheck sidecar.

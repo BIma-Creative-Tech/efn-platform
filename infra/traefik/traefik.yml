@@ -19,8 +19,9 @@ accessLog:
 ping:
   entryPoint: ping
 
-# Metrik Prometheus: router manual (infra/traefik/dynamic/internal-tls.yml) di entrypoint `metrics` dengan TLS
-# sertifikat internal tls_traefik_* -> tidak ada endpoint metrik plaintext.
+# Metrik Prometheus: router manual (infra/traefik/dynamic/internal-tls.yml) di entrypoint `metrics` yang HANYA
+# listen di loopback container (127.0.0.1:8084, pola E1). Dari network: sidecar ghostunnel `traefik-metrics-tls`
+# (:8082, sertifikat traefik) dengan mTLS --allow-cn=prometheus (SEC-35; opsi TLS Traefik tidak bisa membatasi CN).
 metrics:
   prometheus:
     entryPoint: metrics
@@ -31,7 +32,7 @@ entryPoints:
   ping:
     address: "127.0.0.1:8081"
   metrics:
-    address: ":8082"
+    address: "127.0.0.1:8084"
     http:
       aliasHeadersStrategy: delete
   web:

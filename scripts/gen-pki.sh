@@ -50,6 +50,7 @@ PKI_SERVICES=(
   "redis|server"
   "rabbitmq|server"
   "minio|server"
+  "s3-gateway|server"   # filter L7 HAProxy di depan object storage (ADR-030 Keputusan 2, gelombang 9)
   "clickhouse|server"
   "api-gateway|server"
   "odoo|server"
@@ -261,6 +262,16 @@ issue_leaf() {
   echo "dibuat : ${name} (${profile}; SAN ${svc}, localhost, efn-${svc}-1${aliases:+, ${aliases}}$([[ "$want_ip" == "1" ]] && echo ", 127.0.0.1"); ${LEAF_DAYS} hari)"
 }
 
+# Apakah nameConstraints intermediate saat ini memuat setiap service di PKI_SERVICES (DNS:<svc>)?
+int_covers_services() {
+  local nc entry svc
+  nc=$(openssl x509 -in "$INT_CRT" -noout -ext nameConstraints 2> /dev/null | tr -d '\r') || return 1
+  for entry in "${PKI_SERVICES[@]}"; do
+    svc="${entry%%|*}"
+    grep -Eq "DNS:${svc}([^-a-z0-9]|$)" <<< "$nc" || return 1
+  done
+}
+
 cmd_leaf() {
   mkdir -p "$SECRETS_DIR"
   chmod 700 "$SECRETS_DIR" 2> /dev/null || true
@@ -273,6 +284,21 @@ cmd_leaf() {
     make_root "${CA_DIR}/root" plain
     make_intermediate dev "${CA_DIR}/root" "$CA_DIR"
     FORCE=1   # CA baru -> semua leaf diterbitkan ulang
+  elif ! int_covers_services; then
+    # Service baru di PKI_SERVICES tidak tercakup nameConstraints intermediate -> leaf-nya pasti gagal verifikasi.
+    case "$APP_ENV" in
+      production|prod|staging)
+        die "intermediate ${CA_DIR} tidak mencakup semua service di PKI_SERVICES (nameConstraints). Superadmin: terbitkan ulang intermediate (docs/runbooks/internal-pki.md#service-baru)" ;;
+    esac
+    # Dev/CI: CA dev lama diarsipkan, root+intermediate dev dibuat ulang, semua leaf diterbitkan ulang.
+    # Container yang memakai secret PKI perlu di-recreate (`up -d --force-recreate`).
+    local old
+    old="${CA_DIR}.old-$(date +%Y%m%d%H%M%S)"
+    echo "dev/CI : intermediate dev tidak mencakup service baru -> CA dev dibuat ulang (lama: ${old})"
+    mv "$CA_DIR" "$old"
+    make_root "${CA_DIR}/root" plain
+    make_intermediate dev "${CA_DIR}/root" "$CA_DIR"
+    FORCE=1
   fi
   [[ -s "$ROOT_CRT" ]] || die "${ROOT_CRT} tidak ada (bundle membutuhkan root)"
 

@@ -62,12 +62,17 @@ services:
   rabbitmq:
     ports: ["127.0.0.1:5671:5671", "127.0.0.1:15671:15671"]   # amqps, management https
 
+  # Storage hanya di network internal `objstore` (ADR-030) -> port tidak bisa/tidak boleh dipublish. Akses S3 dari
+  # laptop lewat filter s3-gateway (https://localhost:9000, CA secrets/efn_ca_crt.txt); admin/console:
+  # `docker exec efn-minio-1 mc ...` (runbook dev-stack-boot.md §5).
   minio:
     image: efn/minio:dev
-    ports: ["127.0.0.1:9000:9000", "127.0.0.1:9001:9001"]     # https (API, console)
 
   minio-init:
     image: efn/minio:dev
+
+  s3-gateway:
+    ports: ["127.0.0.1:9000:9000"]          # https (S3 API lewat filter L7)
 
   odoo:
     image: efn/odoo:dev
@@ -135,6 +140,8 @@ services:
     environment:
       APP_ENV: dev
       ETL_INTERVAL_SECONDS: "120"
+      # R5: grant efn_etl di DB Odoo diterapkan scripts/smoke/run-e2e-smoke.sh / runbook dev-stack-boot §3
+      ETL_ENABLE_ODOO: "true"
 
   ocr-worker:
     image: efn/ai-ocr-worker:dev

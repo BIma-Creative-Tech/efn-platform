@@ -1,16 +1,14 @@
-# auth_enabled: false = single tenant. Kontrol akses = mTLS (SEC-20, docs/04 §8.5): push/query hanya dari
-# pemegang sertifikat klien CA internal (EKU clientAuth hanya diterbitkan untuk Promtail, Grafana, Prometheus,
-# blackbox, Traefik, ocr-worker, cAdvisor). Loki tidak mendukung allowlist SAN -> pengecualian parsial E12.
+# auth_enabled: false = single tenant. Kontrol akses = mTLS dengan ALLOWLIST CN (SEC-20, SEC-35, docs/04 §8.5):
+# Loki sendiri hanya listen di loopback namespace-nya (127.0.0.1:3101, pola E1 ADR-022); satu-satunya jalan masuk
+# dari network adalah sidecar ghostunnel `loki-tls` (:3100, TLS sertifikat loki) yang hanya menerima sertifikat
+# klien CN promtail (push), grafana (query) dan prometheus (metrik). Sebelumnya (E12) sertifikat klien CA internal
+# APA PUN diterima (termasuk ocr-worker yang memproses gambar tak tepercaya).
 auth_enabled: false
 
-# HTTP hanya TLS + mTLS (docs/04 §7.1, §8.5). gRPC & ring hanya loopback (single binary, tidak ada peer lain).
+# HTTP hanya loopback (TLS + mTLS di sidecar). gRPC & ring hanya loopback (single binary, tidak ada peer lain).
 server:
-  http_listen_port: 3100
-  http_tls_config:
-    cert_file: /run/secrets/tls_loki_crt
-    key_file: /run/secrets/tls_loki_key
-    client_auth_type: RequireAndVerifyClientCert
-    client_ca_file: /run/secrets/efn_ca_crt
+  http_listen_address: 127.0.0.1
+  http_listen_port: 3101
   grpc_listen_address: 127.0.0.1
   grpc_listen_port: 9095
 
