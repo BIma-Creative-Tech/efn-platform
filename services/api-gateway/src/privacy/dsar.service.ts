@@ -6,12 +6,14 @@ import { ApiError, Errors } from '../common/errors/api-error';
 import { MemberService } from '../common/member/member.service';
 import { maskMsisdn, redisKeyHash } from '../common/pii/pii';
 import { RateLimiter } from '../common/rate-limit/rate-limiter';
+import { KV_STORE, KvStore } from '../common/redis/kv-store';
 import { AccessTokenService, AuthUser } from '../common/security/access-token.service';
 import { safeEqualHex } from '../common/security/safe-equal';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import { OtpService } from '../otp/otp.service';
 import { ConsentService, toIso } from './consent.service';
 import { ReauthInput } from './dto/privacy.dto';
+import { DsarReceiptService } from './dsar-receipt.service';
 
 export interface DsarRequestItem {
   id: string;
@@ -26,7 +28,12 @@ export interface DeleteAccountResponse {
   request_id: string;
   scheduled_at: string;
   points_forfeited: number;
+  /** R6 (§8.13): bukti opak untuk `GET /v1/dsar/requests/:id` (header `X-DSAR-Receipt`), 30 hari, tanpa PII. */
+  receipt_token: string;
 }
+
+/** SEC-40: penanda jti step-up terpakai. Prefix di bawah `otp:*` (sudah ada di ACL Redis `efn-bff`). */
+export const STEP_UP_USED_PREFIX = 'otp:stepup-used:';
 
 /** Pemroses data (informasi untuk subjek data; finalisasi oleh DPO). */
 export const DATA_PROCESSORS = [
@@ -62,11 +69,28 @@ export class DsarService {
     private readonly limiter: RateLimiter,
     private readonly loyalty: LoyaltyService,
     private readonly consents: ConsentService,
+    private readonly receipts: DsarReceiptService,
+    @Inject(KV_STORE) private readonly kv: KvStore,
   ) {}
 
   requireStepUp(user: AuthUser, token: string | undefined): void {
     if (!token) throw Errors.stepUpRequired();
     if (!this.tokens.verifyStepUp(token, user.memberId)) throw Errors.stepUpInvalid();
+  }
+
+  /**
+   * SEC-40: seperti `requireStepUp`, lalu menandai `jti` terpakai secara atomik (`SET NX EX` sampai token kedaluwarsa).
+   * Dipakai `DELETE /v1/me`: token step-up hanya bisa mengonfirmasi SATU permintaan hapus; pakai ulang → 403
+   * `step_up_invalid`. Ditandai SEBELUM operasi (aman terhadap balapan); bila operasi gagal pengguna mengulang re-OTP.
+   * Redis tidak tersedia → error (fail closed). Ekspor (`GET /v1/me/data`) tetap boleh memakai token yang sama selama
+   * masa berlakunya (rate limit per jam membatasi).
+   */
+  async consumeStepUp(user: AuthUser, token: string | undefined): Promise<void> {
+    if (!token) throw Errors.stepUpRequired();
+    const claims = this.tokens.verifyStepUpClaims(token, user.memberId);
+    if (!claims) throw Errors.stepUpInvalid();
+    const ttl = Math.max(1, claims.exp - Math.floor(this.now() / 1000) + 1);
+    if (!(await this.kv.setNxEx(`${STEP_UP_USED_PREFIX}${claims.jti}`, '1', ttl))) throw Errors.stepUpInvalid();
   }
 
   async reauth(
@@ -199,7 +223,7 @@ export class DsarService {
   async requestDelete(user: AuthUser): Promise<DeleteAccountResponse> {
     const points = await this.loyalty.balanceByHash(user.memberHash);
     const active = await this.findActiveDelete(user.memberId);
-    if (active) return { request_id: active.id, scheduled_at: active.scheduledAt, points_forfeited: points };
+    if (active) return this.deleteResponse(active.id, active.scheduledAt, points);
     const id = randomUUID();
     const scheduled = new Date(this.now() + this.config.dsarDeleteGraceDays * 86_400_000);
     try {
@@ -211,11 +235,20 @@ export class DsarService {
     } catch (err) {
       // Balapan dua DELETE paralel → unique uq_dsar_active_delete; kembalikan yang menang
       const again = await this.findActiveDelete(user.memberId);
-      if (again) return { request_id: again.id, scheduled_at: again.scheduledAt, points_forfeited: points };
+      if (again) return this.deleteResponse(again.id, again.scheduledAt, points);
       throw err;
     }
     this.logger.log(`Permintaan hapus akun ${id} dijadwalkan ${scheduled.toISOString()}`);
-    return { request_id: id, scheduled_at: scheduled.toISOString(), points_forfeited: points };
+    return this.deleteResponse(id, scheduled.toISOString(), points);
+  }
+
+  private deleteResponse(requestId: string, scheduledAt: string, points: number): DeleteAccountResponse {
+    return {
+      request_id: requestId,
+      scheduled_at: scheduledAt,
+      points_forfeited: points,
+      receipt_token: this.receipts.issue(requestId),
+    };
   }
 
   async cancelDelete(user: AuthUser): Promise<{ request_id: string; status: 'cancelled' }> {

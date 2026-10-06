@@ -25,7 +25,7 @@ R-S06 (polyglot/bomb/EXIF), R-B05 (fraud: cap harian, pHash), R-T05 (OCR async),
 - Tabel menyimpan `user_hash` (member_hash) + `user_enc` (AES-256-GCM, AAD `efn:price_hunter_report.user_enc:v1`); kolom `user_id` dihapus. Cap harian (Redis) & kepemilikan `GET /reports/:id` memakai `user_hash` dari `sub` token.
 - `ocr.requested` **schema_version 2**: `user_hash`, tanpa nomor HP (outbox pun tidak memuat nomor HP).
 - SEC-17: `lat/lng` dibulatkan **3 desimal di server** (`roundCoord`) sebelum INSERT & payload.
-- MinIO: `MINIO_USE_SSL=true` + `transportAgent` CA internal (`MINIO_CA_FILE`), user `efn-bff` (`MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY_FILE` → `minio_bff_secret`) yang hanya `PutObject/DeleteObject` → BFF tidak lagi `bucketExists/makeBucket` (bucket dibuat `minio-init`). Kredensial lazy (503 saat upload), TLS divalidasi saat start.
+- MinIO: `MINIO_USE_SSL=true` + `transportAgent` CA internal (`MINIO_CA_FILE`), user BFF (access key dari `MINIO_ACCESS_KEY_FILE` → secret `minio_bff_access_key`, dibaca langsung tanpa env; literal `MINIO_ACCESS_KEY` hanya `APP_ENV=dev`; di luar dev ≥ 16 karakter — docs/04 §8.12/§8.13; `MINIO_SECRET_KEY_FILE` → `minio_bff_secret`) yang hanya `PutObject/DeleteObject` → BFF tidak lagi `bucketExists/makeBucket` (bucket dibuat `minio-init`). Kredensial lazy (503 saat upload), TLS divalidasi saat start.
 
 ## Belum / catatan
 - Lifecycle rule bucket (foto 12 bulan, objek yatim) — wewenang DevSecOps (`minio-init`).

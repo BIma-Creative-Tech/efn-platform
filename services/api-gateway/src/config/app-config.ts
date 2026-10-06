@@ -2,7 +2,8 @@ import { hkdfSync } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { createSecureContext } from 'node:tls';
-import { secretsLoader, EnvRecord } from './secrets.loader';
+import { posix } from 'node:path';
+import { DIRECT_SECRET_FILES, secretsLoader, EnvRecord } from './secrets.loader';
 
 /**
  * Konfigurasi terketik untuk seluruh BFF. Secret dibaca dari env yang sudah di-resolve oleh
@@ -444,13 +445,48 @@ export class AppConfig {
     return out;
   }
 
+  /**
+   * SEC-29: kunci PII hanya hidup di memori objek ini (Buffer), tidak pernah di `process.env`.
+   * Sumber (berurutan): `${name}_FILE` (dibaca langsung, secretsLoader melewatinya) → untuk v1 fallback
+   * `${SECRETS_DIR:-/run/secrets}/pii_encryption_key` → env literal `${name}` (HANYA non-production: unit test/dev).
+   * Hasil decode di-cache; buffer mentah file di-nol-kan setelah decode.
+   */
+  private readonly piiKeys = new Map<string, Buffer | null>();
+
+  private piiKeyIfConfigured(name: string): Buffer | null {
+    if (this.piiKeys.has(name)) return this.piiKeys.get(name) ?? null;
+    let key: Buffer | null = null;
+    const file = this.str(`${name}_FILE`);
+    if (file) {
+      let raw: Buffer;
+      try {
+        raw = this.readFile(file);
+      } catch {
+        throw new ConfigError(`${name}_FILE (${file}) tidak dapat dibaca`);
+      }
+      key = decodeBase64Key(name, raw);
+    } else if (this.str(name) !== undefined) {
+      if (this.isProduction) {
+        throw new ConfigError(`${name} sebagai env literal ditolak saat production; pakai ${name}_FILE (SEC-29)`);
+      }
+      key = decodeBase64Key(name, Buffer.from(this.str(name) ?? '', 'utf8'));
+    } else if (name === 'PII_ENCRYPTION_KEY') {
+      const dir = this.str('SECRETS_DIR') ?? '/run/secrets';
+      let raw: Buffer | null = null;
+      try {
+        raw = this.readFile(posix.join(dir, DIRECT_SECRET_FILES.PII_ENCRYPTION_KEY));
+      } catch {
+        raw = null; // tidak ada → v1 dianggap tidak dikonfigurasi
+      }
+      if (raw) key = decodeBase64Key(name, raw);
+    }
+    this.piiKeys.set(name, key);
+    return key;
+  }
+
   private decodePiiKey(name: string): Buffer {
-    const raw = this.str(name);
-    if (!raw) throw new ConfigError(`${name} belum dikonfigurasi`);
-    const s = raw.trim();
-    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(s)) throw new ConfigError(`${name} harus base64`);
-    const key = Buffer.from(s, 'base64');
-    if (key.length !== PII_KEY_BYTES) throw new ConfigError(`${name} harus ${PII_KEY_BYTES} byte (base64)`);
+    const key = this.piiKeyIfConfigured(name);
+    if (!key) throw new ConfigError(`${name} belum dikonfigurasi`);
     return key;
   }
 
@@ -465,17 +501,22 @@ export class AppConfig {
     const retired = this.piiRetiredVersions;
     const ring = new Map<number, Buffer>();
     if (!retired.has(1)) {
-      if (this.str('PII_ENCRYPTION_KEY') === undefined) {
+      const v1 = this.piiKeyIfConfigured('PII_ENCRYPTION_KEY');
+      if (!v1) {
         throw new ConfigError(
           'PII_ENCRYPTION_KEY (v1) belum dikonfigurasi; bila v1 sudah dipensiunkan setelah re-encrypt, set PII_RETIRED_VERSIONS=1',
         );
       }
-      ring.set(1, this.piiEncryptionKey);
+      ring.set(1, v1);
     }
-    for (const name of Object.keys(this.env)) {
-      const m = /^PII_ENCRYPTION_KEY_V(\d{1,3})$/.exec(name);
-      if (!m || this.str(name) === undefined) continue;
-      const version = Number(m[1]);
+    const versions = new Set<number>();
+    for (const envName of Object.keys(this.env)) {
+      const m = /^PII_ENCRYPTION_KEY_V(\d{1,3})(_FILE)?$/.exec(envName);
+      if (!m || this.str(envName) === undefined) continue;
+      versions.add(Number(m[1]));
+    }
+    for (const version of [...versions].sort((a, b) => a - b)) {
+      const name = `PII_ENCRYPTION_KEY_V${version}`;
       if (version < 2 || version > 255) throw new ConfigError(`${name}: versi kunci PII harus 2..255`);
       if (retired.has(version)) continue;
       ring.set(version, this.decodePiiKey(name));
@@ -552,9 +593,16 @@ export class AppConfig {
   }
 
   // ───────────── ALTCHA (docs/04 §8.1, SEC-06) ─────────────
-  /** Rentang angka proof-of-work (0..maxnumber). Makin besar makin mahal bagi bot (dan perangkat pelanggan). */
+  /**
+   * Rentang angka proof-of-work (0..maxnumber). Makin besar makin mahal bagi bot (dan perangkat pelanggan).
+   * SEC-34 (r3): default dinaikkan 100 000 → 500 000. Rata-rata kerja = maxnumber/2 = 250 000 SHA-256:
+   * ponsel kelas bawah (WebCrypto di worker ±100–250 rb hash/s) ±1–2,5 s rata-rata, kasus terburuk ±5 s; ponsel
+   * menengah/desktop < 1 s. Bot native tetap murah per challenge (±25 ms), sehingga kontrol utama tetap rate limit
+   * challenge per IP + plafon per nomor + budget global (ADR-028). Bila alert budget OTP menyala, operator dapat
+   * menaikkan sementara ke 1 000 000 (rata-rata ±2–5 s di ponsel bawah). Batas atas 10 000 000.
+   */
   get altchaMaxNumber(): number {
-    return this.int('ALTCHA_MAX_NUMBER', 100_000, 1000, 10_000_000);
+    return this.int('ALTCHA_MAX_NUMBER', 500_000, 1000, 10_000_000);
   }
   /** Kontrak: TTL 5 menit. */
   get altchaTtlSeconds(): number {
@@ -591,6 +639,23 @@ export class AppConfig {
     if (!version || !/^[A-Za-z0-9._@-]{1,32}$/.test(version)) throw new ConfigError(`CONSENT_${p}_VERSION tidak valid`);
     if (!textSha256 || !/^[0-9a-f]{64}$/.test(textSha256)) throw new ConfigError(`CONSENT_${p}_TEXT_SHA256 harus hex 64`);
     return { version, textSha256 };
+  }
+  /**
+   * R6 (docs/04 §8.13): kunci HMAC `receipt_token` DSAR = HKDF-SHA256(ikm=jwt_secret, salt="", info="efn:dsar_receipt:v1",
+   * 32 byte). Domain terpisah dari JWT (token receipt tidak bisa dipakai sebagai JWT dan sebaliknya).
+   */
+  get dsarReceiptKey(): Buffer {
+    if (!this.receiptKey) this.receiptKey = Buffer.from(hkdfSync('sha256', this.jwtSecret, Buffer.alloc(0), 'efn:dsar_receipt:v1', 32));
+    return this.receiptKey;
+  }
+  private receiptKey: Buffer | undefined;
+  /** Masa berlaku `receipt_token` (hari), default 30 (kontrak §8.13). */
+  get dsarReceiptTtlDays(): number {
+    return this.int('DSAR_RECEIPT_TTL_DAYS', 30, 1, 90);
+  }
+  /** Batas `GET /v1/dsar/requests/:id` per IP (hash) per 15 menit. */
+  get dsarReceiptRateLimit(): number {
+    return this.int('DSAR_RECEIPT_RL_LIMIT', 30, 1, 10_000);
   }
   /** Batas re-OTP `POST /v1/me/reauth` (permintaan kode) per member per `OTP_RL_WINDOW_SECONDS`. */
   get dsarReauthLimit(): number {
@@ -786,14 +851,53 @@ export class AppConfig {
     }
     return { endPoint: host, port, useSSL, tls: this.tlsClientOptions('MINIO_CA_FILE', host, 'MinIO') };
   }
-  /** Kredensial user MinIO khusus BFF (`efn-bff`, secret `minio_bff_secret`), bukan root. Dibaca lazy. */
+  /** Kredensial user MinIO khusus BFF (secret `minio_bff_access_key` + `minio_bff_secret`), bukan root. Dibaca lazy. */
   get minioConnection(): MinioConnectionConfig {
-    const accessKey = this.str('MINIO_ACCESS_KEY');
+    const accessKey = this.minioAccessKey;
     const secretKey = this.str('MINIO_SECRET_KEY');
-    if (!accessKey || !secretKey) {
-      throw new ConfigError('Kredensial MinIO (MINIO_ACCESS_KEY / MINIO_SECRET_KEY_FILE) belum dikonfigurasi');
-    }
+    if (!secretKey) throw new ConfigError('Kredensial MinIO (MINIO_SECRET_KEY_FILE) belum dikonfigurasi');
     return { ...this.minioTransport, accessKey, secretKey };
+  }
+
+  /**
+   * docs/04 §8.12/§8.13 (ADR-030, CVE-2026-41145/40344): access key object storage diperlakukan sebagai secret.
+   * Sumber: `MINIO_ACCESS_KEY_FILE` → fallback `${SECRETS_DIR:-/run/secrets}/minio_bff_access_key` → literal
+   * `MINIO_ACCESS_KEY` HANYA bila `APP_ENV=dev`. Di luar dev panjang minimal 16 (bukan nama mudah ditebak).
+   * Disimpan di memori config saja (tidak disalin ke env).
+   */
+  private cachedMinioAccessKey: string | undefined;
+  get minioAccessKey(): string {
+    if (this.cachedMinioAccessKey) return this.cachedMinioAccessKey;
+    const dev = this.str('APP_ENV') === 'dev';
+    const file = this.str('MINIO_ACCESS_KEY_FILE');
+    let v: string | undefined;
+    if (file) {
+      try {
+        v = this.readFile(file).toString('utf8').trim();
+      } catch {
+        throw new ConfigError(`MINIO_ACCESS_KEY_FILE (${file}) tidak dapat dibaca`);
+      }
+    } else {
+      try {
+        v = this.readFile(posix.join(this.str('SECRETS_DIR') ?? '/run/secrets', DIRECT_SECRET_FILES.MINIO_ACCESS_KEY))
+          .toString('utf8')
+          .trim();
+      } catch {
+        v = undefined;
+      }
+      if (!v) {
+        const literal = this.str('MINIO_ACCESS_KEY');
+        if (literal !== undefined && !dev) {
+          throw new ConfigError('MINIO_ACCESS_KEY literal hanya untuk APP_ENV=dev; pakai MINIO_ACCESS_KEY_FILE (docs/04 §8.13)');
+        }
+        v = literal;
+      }
+    }
+    if (!v) throw new ConfigError('Access key MinIO (MINIO_ACCESS_KEY_FILE) belum dikonfigurasi');
+    if (!/^[A-Za-z0-9._~+=-]{3,128}$/.test(v)) throw new ConfigError('Access key MinIO memuat karakter/panjang tidak valid');
+    if (!dev && v.length < 16) throw new ConfigError('Access key MinIO terlalu pendek (< 16) di luar APP_ENV=dev (docs/04 §8.12)');
+    this.cachedMinioAccessKey = v;
+    return v;
   }
   get marketScoutBucket(): string {
     return this.str('MINIO_BUCKET_MARKET_SCOUT') ?? this.str('MARKET_SCOUT_BUCKET') ?? 'market-scout';
@@ -882,4 +986,20 @@ export function isValidProxyEntry(entry: string): boolean {
   if (!/^\d{1,3}$/.test(bitsRaw)) return false;
   const bits = Number(bitsRaw);
   return family === 4 ? bits <= 32 : bits <= 128;
+}
+
+/**
+ * Decode kunci base64 32 byte dari Buffer mentah (file/env) lalu nol-kan buffer mentah (SEC-29). Pesan error hanya
+ * memuat NAMA kunci.
+ */
+function decodeBase64Key(name: string, raw: Buffer): Buffer {
+  try {
+    const s = raw.toString('ascii').trim();
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(s)) throw new ConfigError(`${name} harus base64`);
+    const key = Buffer.from(s, 'base64');
+    if (key.length !== PII_KEY_BYTES) throw new ConfigError(`${name} harus ${PII_KEY_BYTES} byte (base64)`);
+    return key;
+  } finally {
+    raw.fill(0);
+  }
 }

@@ -1,4 +1,5 @@
-import { GUARDS_METADATA } from '@nestjs/common/constants';
+import { RequestMethod } from '@nestjs/common';
+import { GUARDS_METADATA, METHOD_METADATA } from '@nestjs/common/constants';
 import { FastifyRequest } from 'fastify';
 import { ServiceKeyGuard } from '../common/security/service-key.guard';
 import { catchApiError, httpContext, testConfig } from '../common/testing/fakes';
@@ -59,10 +60,21 @@ describe('PosController', () => {
     expect(err.getStatus()).toBe(400);
   });
 
-  it('loyalty balance: member_ref query wajib valid', async () => {
-    expect(await controller.balance('6281234567890')).toEqual({ points_balance: 5 });
-    const err = await catchApiError(() => controller.balance(undefined));
-    expect(err.getStatus()).toBe(400);
+  it('loyalty balance (R2): POST body { member_ref } wajib valid, ter-normalisasi', async () => {
+    expect(await controller.balance({ member_ref: '081234567890' })).toEqual({ points_balance: 5 });
+    expect(pos.balance).toHaveBeenCalledWith('6281234567890');
+    for (const body of [undefined, {}, { member_ref: 'abc' }, '6281234567890']) {
+      const err = await catchApiError(() => controller.balance(body));
+      expect(err.getStatus()).toBe(400);
+    }
+  });
+
+  it('R2: tidak ada route GET (PII tidak lewat URL/query)', () => {
+    const methods = Object.getOwnPropertyNames(PosController.prototype)
+      .filter((n) => n !== 'constructor')
+      .map((n) => Reflect.getMetadata(METHOD_METADATA, (PosController.prototype as unknown as Record<string, object>)[n]) as number);
+    expect(methods).not.toContain(RequestMethod.GET);
+    expect(Reflect.getMetadata(METHOD_METADATA, PosController.prototype.balance)).toBe(RequestMethod.POST);
   });
 
   it('consume: member_ref (SEC-07) diteruskan ter-normalisasi', async () => {

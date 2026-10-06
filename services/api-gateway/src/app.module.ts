@@ -23,7 +23,16 @@ import { PrivacyModule } from './privacy/privacy.module';
  */
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, load: [() => secretsLoader()] }),
+    // SEC-29: secret tidak diduplikasi ke ConfigService (tidak dipakai); AppConfig membaca env/file sendiri.
+    ConfigModule.forRoot({
+      isGlobal: true,
+      load: [
+        (): Record<string, never> => {
+          secretsLoader();
+          return {};
+        },
+      ],
+    }),
     TerminusModule,
     CommonModule,
     OtpModule,

@@ -5,6 +5,7 @@ import { AuthUser } from '../common/security/access-token.service';
 import { CurrentUser, JwtAuthGuard, StepUpToken } from '../common/security/jwt-auth.guard';
 import { ConsentService, ConsentState } from './consent.service';
 import { parseConsentPurpose, parseReauth, parseSetConsent } from './dto/privacy.dto';
+import { DSAR_RECEIPT_HEADER, DsarReceiptService } from './dsar-receipt.service';
 import { DeleteAccountResponse, DsarRequestItem, DsarService } from './dsar.service';
 
 /** Consent (docs/04 §8.4/§8.9), Bearer. */
@@ -52,7 +53,8 @@ export class DsarController {
   @Delete()
   @HttpCode(HttpStatus.ACCEPTED)
   async remove(@CurrentUser() user: AuthUser, @StepUpToken() stepUp: string | undefined): Promise<DeleteAccountResponse> {
-    this.dsar.requireStepUp(user, stepUp);
+    // SEC-40: token step-up sekali pakai untuk hapus akun
+    await this.dsar.consumeStepUp(user, stepUp);
     return this.dsar.requestDelete(user);
   }
 
@@ -65,5 +67,21 @@ export class DsarController {
   @Get('requests')
   requests(@CurrentUser() user: AuthUser): Promise<{ items: DsarRequestItem[] }> {
     return this.dsar.listRequests(user);
+  }
+}
+
+/**
+ * R6 (docs/04 §8.13): status permintaan hapus akun TANPA sesi (akun bisa sudah terhapus). Otorisasi = header
+ * `X-DSAR-Receipt` (receipt_token dari `DELETE /v1/me`). Tanpa JwtAuthGuard; rate limit per IP di service.
+ * Semua kegagalan otorisasi → 404 generik. Respons tanpa PII.
+ */
+@Controller('dsar/requests')
+export class DsarReceiptController {
+  constructor(private readonly receipts: DsarReceiptService) {}
+
+  @Get(':id')
+  status(@Param('id') id: string, @Req() req: FastifyRequest): Promise<DsarRequestItem> {
+    const raw = req.headers[DSAR_RECEIPT_HEADER];
+    return this.receipts.status(id, typeof raw === 'string' ? raw : undefined, clientIp(req));
   }
 }

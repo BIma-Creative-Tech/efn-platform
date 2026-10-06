@@ -86,6 +86,7 @@ export function parseDiscountTokenConsume(body: unknown): DiscountTokenConsumeDt
   return { discountToken, orderRef, memberRef, amountTotal: requireNumber(o, 'amount_total', 0, 1_000_000_000_000) };
 }
 
-export function parseMemberRefQuery(value: unknown): string {
-  return requireMemberRef(value);
+/** R2 (§8.13): `POST /v1/pos/loyalty/balance` body `{ member_ref }`. */
+export function parseLoyaltyBalance(body: unknown): string {
+  return requireMemberRef(asRecord(body).member_ref);
 }

@@ -271,19 +271,141 @@ describe('AppConfig — TLS builder (docs/04 §7.1)', () => {
     expect(() => testConfig({ WHATSAPP_GRAPH_BASE_URL: 'http://graph.facebook.com' }).whatsappGraphBaseUrl).toThrow(ConfigError);
   });
 
-  it('secretsLoader TIDAK menyalin isi *_CA_FILE / TLS_KEY_FILE ke env (kunci privat tidak masuk process.env)', () => {
+  it('secretsLoader TIDAK menyalin isi *_CA_FILE / TLS_KEY_FILE / kunci PII / access key MinIO ke env (SEC-29)', () => {
     const env: Record<string, string | undefined> = {
       TLS_KEY_FILE: '/k',
       TLS_CERT_FILE: '/c',
       REDIS_TLS_CA_FILE: '/ca',
       PII_ENCRYPTION_KEY_FILE: '/pii',
       PII_ENCRYPTION_KEY_V2_FILE: '/pii2',
+      MINIO_ACCESS_KEY_FILE: '/ak',
+      JWT_SECRET_FILE: '/jwt',
     };
-    secretsLoader(env, (p) => `isi:${p}`);
+    const read: string[] = [];
+    const out = secretsLoader(env, (p) => {
+      read.push(p);
+      return `isi:${p}`;
+    });
     expect(env.TLS_KEY).toBeUndefined();
     expect(env.TLS_CERT).toBeUndefined();
     expect(env.REDIS_TLS_CA).toBeUndefined();
-    expect(env.PII_ENCRYPTION_KEY).toBe('isi:/pii');
-    expect(env.PII_ENCRYPTION_KEY_V2).toBe('isi:/pii2');
+    expect(env.PII_ENCRYPTION_KEY).toBeUndefined();
+    expect(env.PII_ENCRYPTION_KEY_V2).toBeUndefined();
+    expect(env.MINIO_ACCESS_KEY).toBeUndefined();
+    expect(Object.keys(out)).not.toEqual(expect.arrayContaining(['PII_ENCRYPTION_KEY']));
+    expect(read).not.toContain('/pii');
+    expect(read).not.toContain('/run/secrets/pii_encryption_key'); // fallback kontrak bukan lagi lewat env
+    expect(env.JWT_SECRET).toBe('isi:/jwt'); // secret lain tetap pola lama
+  });
+});
+
+describe('AppConfig — kunci PII dari file (SEC-29)', () => {
+  const k1 = Buffer.alloc(32, 7).toString('base64');
+  const k2 = Buffer.alloc(32, 9).toString('base64');
+
+  it('PII_ENCRYPTION_KEY_FILE / _V2_FILE dibaca langsung sebagai Buffer, buffer mentah di-nol-kan, hasil di-cache', () => {
+    const raws: Buffer[] = [];
+    const reads: string[] = [];
+    const reader = (p: string): Buffer => {
+      reads.push(p);
+      const b = Buffer.from(`${p === '/s/pii' ? k1 : k2}\n`);
+      raws.push(b);
+      return b;
+    };
+    const env: Record<string, string> = {
+      NODE_ENV: 'production',
+      PII_ENCRYPTION_KEY_FILE: '/s/pii',
+      PII_ENCRYPTION_KEY_V2_FILE: '/s/pii2',
+      PII_ACTIVE_KEY_VERSION: '2',
+    };
+    const cfg = new AppConfig(env, reader);
+    const ring = cfg.piiKeyRing;
+    expect(ring.get(1)?.equals(Buffer.alloc(32, 7))).toBe(true);
+    expect(ring.get(2)?.equals(Buffer.alloc(32, 9))).toBe(true);
+    expect(cfg.piiActiveKeyVersion).toBe(2);
+    expect(reads.sort()).toEqual(['/s/pii', '/s/pii2']); // sekali per file
+    for (const r of raws) expect(r.every((b) => b === 0)).toBe(true);
+    expect(env.PII_ENCRYPTION_KEY).toBeUndefined();
+  });
+
+  it('fallback /run/secrets/pii_encryption_key (SECRETS_DIR) untuk v1; tidak ada → error jelas', () => {
+    const cfg = new AppConfig({ NODE_ENV: 'production', SECRETS_DIR: '/sec' }, (p) => {
+      if (p === '/sec/pii_encryption_key') return Buffer.from(k1);
+      throw new Error('ENOENT');
+    });
+    expect(cfg.piiKeyRing.get(1)?.length).toBe(32);
+    expect(() => new AppConfig({ NODE_ENV: 'production' }, () => Buffer.alloc(0)).piiKeyRing).toThrow('harus base64');
+    expect(
+      () =>
+        new AppConfig({ NODE_ENV: 'production' }, () => {
+          throw new Error('ENOENT');
+        }).piiKeyRing,
+    ).toThrow('PII_ENCRYPTION_KEY (v1) belum dikonfigurasi');
+  });
+
+  it('literal env PII_ENCRYPTION_KEY ditolak saat production; diterima di test/dev; file tak terbaca → error tanpa nilai', () => {
+    expect(() => new AppConfig({ NODE_ENV: 'production', PII_ENCRYPTION_KEY: k1 }).piiKeyRing).toThrow('ditolak saat production');
+    expect(() => new AppConfig({ NODE_ENV: 'development', APP_ENV: 'production', PII_ENCRYPTION_KEY: k1 }).piiKeyRing).toThrow(
+      'ditolak saat production',
+    );
+    expect(testConfig({ PII_ENCRYPTION_KEY: k1 }).piiKeyRing.get(1)?.equals(Buffer.alloc(32, 7))).toBe(true);
+    let msg = '';
+    try {
+      void new AppConfig({ NODE_ENV: 'production', PII_ENCRYPTION_KEY_FILE: '/hilang' }, () => {
+        throw new Error('ENOENT');
+      }).piiKeyRing;
+    } catch (err) {
+      msg = (err as Error).message;
+    }
+    expect(msg).toContain('PII_ENCRYPTION_KEY_FILE (/hilang) tidak dapat dibaca');
+  });
+});
+
+describe('AppConfig — access key MinIO dari file (docs/04 §8.12/§8.13)', () => {
+  const AK = 'Q3vX9pLm2Rt8Kw4Zb7Nc';
+  const base = { MINIO_SECRET_KEY: 's'.repeat(32), MINIO_USE_SSL: 'false', EFN_ALLOW_PLAINTEXT: 'true' };
+
+  it('MINIO_ACCESS_KEY_FILE dibaca (trim), menang atas literal', () => {
+    const cfg = testConfig({ ...base, MINIO_ACCESS_KEY_FILE: '/run/secrets/minio_bff_access_key', MINIO_ACCESS_KEY: 'efn-bff' }, (p) =>
+      p === '/run/secrets/minio_bff_access_key' ? Buffer.from(`${AK}\n`) : Buffer.alloc(0),
+    );
+    expect(cfg.minioConnection.accessKey).toBe(AK);
+  });
+
+  it('fallback /run/secrets/minio_bff_access_key tanpa env', () => {
+    const cfg = testConfig({ ...base, SECRETS_DIR: '/sec' }, (p) => {
+      if (p === '/sec/minio_bff_access_key') return Buffer.from(AK);
+      throw new Error('ENOENT');
+    });
+    expect(cfg.minioAccessKey).toBe(AK);
+  });
+
+  it('literal MINIO_ACCESS_KEY hanya APP_ENV=dev; di luar dev ditolak; file tak terbaca/kosong/pendek/karakter aneh → ConfigError', () => {
+    expect(testConfig({ ...base, APP_ENV: 'dev', MINIO_ACCESS_KEY: 'efn-bff' }).minioAccessKey).toBe('efn-bff');
+    expect(() => testConfig({ ...base, MINIO_ACCESS_KEY: 'efn-bff' }).minioAccessKey).toThrow('hanya untuk APP_ENV=dev');
+    expect(() => testConfig({ ...base, APP_ENV: 'staging', MINIO_ACCESS_KEY: AK }).minioAccessKey).toThrow('hanya untuk APP_ENV=dev');
+    expect(() => testConfig({ ...base, MINIO_ACCESS_KEY_FILE: '/x' }).minioAccessKey).toThrow('MINIO_ACCESS_KEY_FILE (/x) tidak dapat dibaca');
+    expect(() => testConfig({ ...base }).minioAccessKey).toThrow('belum dikonfigurasi');
+    expect(() => testConfig({ ...base, MINIO_ACCESS_KEY_FILE: '/x' }, () => Buffer.from('efn-bff')).minioAccessKey).toThrow('terlalu pendek');
+    expect(() => testConfig({ ...base, MINIO_ACCESS_KEY_FILE: '/x' }, () => Buffer.from(`${AK} spasi`)).minioAccessKey).toThrow(
+      'tidak valid',
+    );
+    expect(testConfig({ ...base, APP_ENV: 'dev', MINIO_ACCESS_KEY_FILE: '/x' }, () => Buffer.from('efn-bff')).minioAccessKey).toBe('efn-bff');
+  });
+});
+
+describe('AppConfig — ALTCHA & receipt DSAR', () => {
+  it('SEC-34: default ALTCHA_MAX_NUMBER 500 000, override tetap dibatasi 1000..10 000 000', () => {
+    expect(testConfig().altchaMaxNumber).toBe(500_000);
+    expect(testConfig({ ALTCHA_MAX_NUMBER: '1000000' }).altchaMaxNumber).toBe(1_000_000);
+    expect(() => testConfig({ ALTCHA_MAX_NUMBER: '20000000' }).altchaMaxNumber).toThrow(ConfigError);
+  });
+
+  it('R6: kunci receipt = HKDF(jwt_secret, efn:dsar_receipt:v1), TTL default 30 hari', () => {
+    const cfg = testConfig();
+    const expected = Buffer.from(hkdfSync('sha256', cfg.jwtSecret, Buffer.alloc(0), 'efn:dsar_receipt:v1', 32));
+    expect(cfg.dsarReceiptKey.equals(expected)).toBe(true);
+    expect(cfg.dsarReceiptTtlDays).toBe(30);
+    expect(() => testConfig({ DSAR_RECEIPT_TTL_DAYS: '365' }).dsarReceiptTtlDays).toThrow(ConfigError);
   });
 });

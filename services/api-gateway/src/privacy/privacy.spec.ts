@@ -2,7 +2,8 @@ import { MemberService } from '../common/member/member.service';
 import { MetricsService } from '../common/metrics/metrics.service';
 import { AmqpService, PermanentMessageError } from '../common/amqp/amqp.service';
 import { PII_AAD } from '../common/pii/crypto';
-import { erasureTombstone, memberHash } from '../common/pii/pii';
+import { createHash } from 'node:crypto';
+import { memberHash } from '../common/pii/pii';
 import { RateLimiter } from '../common/rate-limit/rate-limiter';
 import { AccessTokenService } from '../common/security/access-token.service';
 import {
@@ -20,7 +21,8 @@ import { LoyaltyService } from '../loyalty/loyalty.service';
 import { OtpService } from '../otp/otp.service';
 import { ConsentService, UNKNOWN_TEXT_SHA256 } from './consent.service';
 import { parseErasureComplete, parseReauth, parseSetConsent } from './dto/privacy.dto';
-import { DsarService } from './dsar.service';
+import { DsarReceiptService } from './dsar-receipt.service';
+import { DsarService, STEP_UP_USED_PREFIX } from './dsar.service';
 import { ERASURE_COMPLETED_CONSUMER, ErasureCompletedConsumer, parseErasureCompleted } from './erasure-completed.consumer';
 import { ErasureService } from './erasure.service';
 
@@ -54,10 +56,12 @@ function setup(overrides: Record<string, string> = {}, handler: QueryHandler = (
   const loyalty = new LoyaltyService(config, db, cipher);
   const memberService = new MemberService(config, db, cipher);
   const consents = new ConsentService(config, db, cipher);
-  const dsar = new DsarService(config, db, memberService, tokens, otp, limiter, loyalty, consents);
+  const receipts = new DsarReceiptService(config, db, limiter);
+  receipts.now = clock.now;
+  const dsar = new DsarService(config, db, memberService, tokens, otp, limiter, loyalty, consents, receipts, kv);
   dsar.now = clock.now;
   const user = { memberId: MEMBER_ID, memberHash: hash };
-  return { clock, config, kv, cipher, db, sender, tokens, consents, dsar, user, hash, members };
+  return { clock, config, kv, cipher, db, sender, tokens, consents, dsar, receipts, user, hash, members };
 }
 
 describe('ConsentService (§8.4/§8.7/§8.9)', () => {
@@ -161,9 +165,39 @@ describe('DsarService (§8.9)', () => {
     const ins = ctx.db.find('INSERT INTO platform.dsar_request')[0];
     expect(ins.text).toContain("'delete', 'scheduled'");
     expect(ins.params.slice(1, 3)).toEqual([MEMBER_ID, ctx.hash]);
+    // R6: receipt_token opak, terikat request_id, tanpa PII
+    expect(Object.keys(res).sort()).toEqual(['points_forfeited', 'receipt_token', 'request_id', 'scheduled_at']);
+    expect(res.receipt_token).toMatch(/^v1\.\d+\.[A-Za-z0-9_-]{43}$/);
+    expect(res.receipt_token).not.toContain(PHONE);
+    expect(res.receipt_token).not.toContain(res.request_id);
+    expect(ctx.receipts.verify(res.request_id, res.receipt_token)).toBe(true);
     const again = await ctx.dsar.requestDelete(ctx.user);
     expect(again.request_id).toBe(res.request_id);
+    expect(ctx.receipts.verify(again.request_id, again.receipt_token)).toBe(true);
     expect(ctx.db.find('INSERT INTO platform.dsar_request')).toHaveLength(1);
+  });
+
+  it('SEC-40: step-up DELETE sekali pakai (jti di Redis sampai exp); pakai ulang/milik member lain → 403 step_up_invalid', async () => {
+    const ctx = setup();
+    const t = ctx.tokens.issueStepUp(MEMBER_ID).token;
+    await ctx.dsar.consumeStepUp(ctx.user, t);
+    const used = ctx.kv.keys().filter((k) => k.startsWith(STEP_UP_USED_PREFIX));
+    expect(used).toHaveLength(1);
+    expect(used[0]).toMatch(/^otp:stepup-used:[0-9a-f-]{36}$/);
+    expect(await ctx.kv.ttl(used[0])).toBeGreaterThan(590);
+    expect(await ctx.kv.ttl(used[0])).toBeLessThanOrEqual(601);
+    const reuse = await catchApiError(() => ctx.dsar.consumeStepUp(ctx.user, t));
+    expect(reuse.body).toEqual({ error: { code: 'step_up_invalid', message: expect.any(String) } });
+    const other = ctx.tokens.issueStepUp('00000000-0000-4000-8000-000000000001').token;
+    expect((await catchApiError(() => ctx.dsar.consumeStepUp(ctx.user, other))).getStatus()).toBe(403);
+    expect((await catchApiError(() => ctx.dsar.consumeStepUp(ctx.user, undefined))).body).toEqual({
+      error: { code: 'step_up_required', message: expect.any(String) },
+    });
+    // token baru tetap bisa dipakai; requireStepUp (ekspor) tidak menandai jti
+    const t2 = ctx.tokens.issueStepUp(MEMBER_ID).token;
+    ctx.dsar.requireStepUp(ctx.user, t2);
+    ctx.dsar.requireStepUp(ctx.user, t2);
+    await expect(ctx.dsar.consumeStepUp(ctx.user, t2)).resolves.toBeUndefined();
   });
 
   it('cancel dalam masa tenggang → cancelled; tidak ada → 404; requests → { items }', async () => {
@@ -213,10 +247,11 @@ describe('ErasureService (§8.4)', () => {
     const hash = 'd'.repeat(64);
     let stores = ['platform', 'odoo', 'clickhouse'];
     const db = new FakeDb((t, p) => {
-      if (t.includes('SELECT member_hash FROM platform.dsar_request')) return status === 'scheduled' ? { rows: [{ member_hash: hash }], rowCount: 1 } : { rows: [], rowCount: 0 };
       if (t.includes('SELECT image_object')) return { rows: [{ image_object: 'reports/2026/10/a.jpg' }, { image_object: 'reports/2026/10/b.jpg' }], rowCount: 2 };
       if (t.includes('pg_try_advisory_xact_lock')) return { rows: [{ ok: true }], rowCount: 1 };
-      if (t.includes("SET status = 'processing'")) return { rows: [{ member_id: MEMBER_ID, member_hash: hash }], rowCount: 1 };
+      if (t.includes("SET status = 'processing'")) {
+        return status === 'scheduled' ? { rows: [{ member_id: MEMBER_ID, member_hash: hash }], rowCount: 1 } : { rows: [], rowCount: 0 };
+      }
       if (t.includes('GROUP BY company_code')) return { rows: [{ company_code: 'EFN', balance: '120' }, { company_code: 'FNB', balance: 30 }], rowCount: 2 };
       if (t.includes('array_remove')) {
         stores = stores.filter((s) => s !== p[1]);
@@ -232,15 +267,33 @@ describe('ErasureService (§8.4)', () => {
   it('setelah masa tenggang: processing + erasure platform dalam satu transaksi (tombstone, forfeit per PT, NULL PII, hapus member)', async () => {
     const ctx = erasureSetup();
     expect(await ctx.svc.processDue(REQ_ID)).toBe(true);
-    const tomb = erasureTombstone(REQ_ID);
     expect(ctx.storage.remove).toHaveBeenCalledTimes(2); // satu gagal → tetap lanjut (lifecycle)
 
+    // SEC-31: tombstone acak 32 byte, bukan turunan request_id/member_hash, sama untuk semua baris subjek
     const forfeits = ctx.db.find('INSERT INTO platform.loyalty_ledger');
-    expect(forfeits.map((q) => q.params)).toEqual([
-      [tomb, 'EFN', -120, REQ_ID, `dsar:forfeit:${REQ_ID}:EFN`],
-      [tomb, 'FNB', -30, REQ_ID, `dsar:forfeit:${REQ_ID}:FNB`],
+    const tomb = forfeits[0].params[0] as string;
+    expect(tomb).toMatch(/^[0-9a-f]{64}$/);
+    expect(tomb).not.toBe(createHash('sha256').update(`erased:${REQ_ID}`, 'utf8').digest('hex'));
+    expect(tomb).not.toBe(ctx.hash);
+    expect(forfeits.map((q) => q.params.slice(0, 3))).toEqual([
+      [tomb, 'EFN', -120],
+      [tomb, 'FNB', -30],
     ]);
-    expect(forfeits[0].text).toContain('erased_at');
+    for (const f of forfeits) {
+      expect(f.text).toContain('erased_at');
+      expect(f.text).toMatch(/'dsar', NULL, \$4/); // source_ref NULL
+      expect(f.params[3]).toMatch(/^dsar:forfeit:[0-9a-f-]{36}$/);
+      expect(JSON.stringify(f.params)).not.toContain(REQ_ID);
+    }
+    expect(forfeits[0].params[3]).not.toBe(forfeits[1].params[3]);
+    // request_id tidak pernah muncul bersama tombstone dalam satu statement
+    for (const q of ctx.db.queries) {
+      if (q.params.includes(tomb)) expect(q.params).not.toContain(REQ_ID);
+    }
+    // dsar_request lain milik subjek tidak lagi memuat member_hash
+    expect(ctx.db.find('UPDATE platform.dsar_request SET member_hash = NULL')[0].params).toEqual([MEMBER_ID, REQ_ID]);
+    // foto dihapus SETELAH transaksi (SEC-40): daftar diambil sebelum tombstone
+    expect(ctx.db.find('SELECT image_object')[0].params).toEqual([ctx.hash]);
     const ledger = ctx.db.find('UPDATE platform.loyalty_ledger')[0];
     expect(ledger.text).toContain('member_ref_enc = NULL');
     expect(ledger.params).toEqual([ctx.hash, tomb]);
@@ -260,6 +313,26 @@ describe('ErasureService (§8.4)', () => {
     const ctx = erasureSetup('cancelled');
     expect(await ctx.svc.processDue(REQ_ID)).toBe(false);
     expect(ctx.db.find('UPDATE platform.loyalty_ledger')).toHaveLength(0);
+    expect(ctx.storage.remove).not.toHaveBeenCalled();
+  });
+
+  it('dua erasure menghasilkan tombstone berbeda (tidak deterministik)', async () => {
+    const a = erasureSetup();
+    const b = erasureSetup();
+    await a.svc.processDue(REQ_ID);
+    await b.svc.processDue(REQ_ID);
+    const ta = a.db.find('UPDATE platform.otp_audit')[0].params[1];
+    const tb = b.db.find('UPDATE platform.otp_audit')[0].params[1];
+    expect(ta).not.toBe(tb);
+  });
+
+  it('SEC-31: completed → member_hash di-NULL-kan; pull Odoo hanya request processing ber-hash', async () => {
+    const ctx = erasureSetup();
+    await ctx.svc.completeStore('odoo', REQ_ID);
+    const upd = ctx.db.find('array_remove')[0].text;
+    expect(upd).toMatch(/member_hash = CASE WHEN cardinality\(array_remove\(stores_pending, \$2::text\)\) = 0\s+THEN NULL ELSE member_hash END/);
+    await ctx.svc.pendingFor('odoo');
+    expect(ctx.db.find('ANY(stores_pending) AND member_hash IS NOT NULL')[0].text).toContain("status = 'processing'");
   });
 
   it('Odoo pull/complete & ClickHouse event → completed setelah semua store; DTO {store:"odoo", records:0}', async () => {
@@ -321,5 +394,83 @@ describe('ErasureCompletedConsumer (privacy.erasure.completed)', () => {
     expect(() => parseErasureCompleted({ ...payload, idempotency_key: 'erasure:lain:clickhouse' })).toThrow(PermanentMessageError);
     ctx.erasure.completeStore.mockResolvedValueOnce({ ok: false, reason: 'not_found' });
     await expect(ctx.consumer.handle(payload, { userId: 'efn-etl' })).rejects.toBeInstanceOf(PermanentMessageError);
+  });
+});
+
+describe('DsarReceiptService (R6, §8.13)', () => {
+  const OTHER_ID = '6f1d2c3b-4a5e-4f60-9a7b-8c9d0e1f2a3b';
+  function receiptSetup(overrides: Record<string, string> = {}) {
+    const ctx = setup(overrides, (t, p) =>
+      t.includes("FROM platform.dsar_request WHERE id = $1 AND type = 'delete'") && (p[0] === REQ_ID || p[0] === OTHER_ID)
+        ? {
+            rows: [{ id: p[0], type: 'delete', status: 'completed', requested_at: new Date(0), scheduled_at: new Date(0), completed_at: new Date(1000) }],
+            rowCount: 1,
+          }
+        : undefined,
+    );
+    return ctx;
+  }
+
+  it('receipt sah → status tanpa PII; format opak tanpa request_id', async () => {
+    const ctx = receiptSetup();
+    const token = ctx.receipts.issue(REQ_ID);
+    expect(token).not.toContain(REQ_ID);
+    const res = await ctx.receipts.status(REQ_ID, token, '203.0.113.7');
+    expect(res).toEqual({
+      id: REQ_ID,
+      type: 'delete',
+      status: 'completed',
+      requested_at: '1970-01-01T00:00:00.000Z',
+      scheduled_at: '1970-01-01T00:00:00.000Z',
+      completed_at: '1970-01-01T00:00:01.000Z',
+    });
+    expect(Object.keys(res)).not.toEqual(expect.arrayContaining(['member_hash']));
+  });
+
+  it('token salah / milik request lain / kedaluwarsa (30 hari) / hilang / id bukan UUID → 404 generik', async () => {
+    const ctx = receiptSetup();
+    const token = ctx.receipts.issue(REQ_ID);
+    const i = token.length - 10;
+    const tampered = `${token.slice(0, i)}${token[i] === 'A' ? 'B' : 'A'}${token.slice(i + 1)}`;
+    const extended = token.replace(/^v1\.(\d+)\./, (_m, e: string) => `v1.${Number(e) + 86_400}.`);
+    const cases: [string, string | undefined][] = [
+      [REQ_ID, tampered],
+      [REQ_ID, extended],
+      [OTHER_ID, token],
+      [REQ_ID, undefined],
+      [REQ_ID, ''],
+      [REQ_ID, 'x'.repeat(500)],
+      ['not-a-uuid', token],
+    ];
+    for (const [id, tok] of cases) {
+      const err = await catchApiError(() => ctx.receipts.status(id, tok, null));
+      expect(err.getStatus()).toBe(404);
+      expect(err.body).toEqual({ error: { code: 'not_found', message: expect.any(String) } });
+    }
+    // masih berlaku di hari ke-29, kedaluwarsa setelah 30 hari
+    ctx.clock.advanceSeconds(29 * 86_400);
+    await expect(ctx.receipts.status(REQ_ID, token, null)).resolves.toMatchObject({ id: REQ_ID });
+    ctx.clock.advanceSeconds(86_400);
+    expect((await catchApiError(() => ctx.receipts.status(REQ_ID, token, null))).getStatus()).toBe(404);
+  });
+
+  it('request tidak ada (receipt sah) → 404; rate limit per IP → 429', async () => {
+    const ctx = receiptSetup({ DSAR_RECEIPT_RL_LIMIT: '3' });
+    const missing = '0e9d8c7b-6a5f-4e3d-8c2b-1a0f9e8d7c6b';
+    expect((await catchApiError(() => ctx.receipts.status(missing, ctx.receipts.issue(missing), '198.51.100.1'))).getStatus()).toBe(404);
+    await ctx.receipts.status(REQ_ID, ctx.receipts.issue(REQ_ID), '198.51.100.1');
+    await catchApiError(() => ctx.receipts.status(REQ_ID, 'salah', '198.51.100.1'));
+    const err = await catchApiError(() => ctx.receipts.status(REQ_ID, ctx.receipts.issue(REQ_ID), '198.51.100.1'));
+    expect(err.getStatus()).toBe(429);
+    // IP lain tidak terpengaruh; key Redis tidak memuat IP mentah
+    await expect(ctx.receipts.status(REQ_ID, ctx.receipts.issue(REQ_ID), '198.51.100.2')).resolves.toMatchObject({ id: REQ_ID });
+    expect(ctx.kv.keys().some((k) => k.includes('198.51.100'))).toBe(false);
+  });
+
+  it('kunci receipt terpisah dari jwt_secret (HKDF) — receipt tidak berlaku bila JWT_SECRET lain', () => {
+    const a = receiptSetup();
+    const b = receiptSetup();
+    expect(b.receipts.verify(REQ_ID, a.receipts.issue(REQ_ID))).toBe(false);
+    expect(a.config.dsarReceiptKey.equals(Buffer.from(a.config.jwtSecret))).toBe(false);
   });
 });

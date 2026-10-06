@@ -15,8 +15,8 @@ Subperintah (state di `SMOKE_STATE`, JSON):
   consent      PUT /v1/me/consents/location (versi aktif dari env), GET daftar
   report       upload foto sintetis -> 202 -> poll status sampai final -> GET /v1/me (poin)
   report_dup   upload foto yang sama lagi (anti-fraud duplikat)
-  delete       reauth step-up -> DELETE /v1/me -> GET /v1/me/requests
-  requests     GET /v1/me/requests (status DSAR)
+  delete       reauth step-up -> DELETE /v1/me (+receipt_token, step-up sekali pakai SEC-40)
+  requests     GET /v1/me/requests + GET /v1/dsar/requests/:id (X-DSAR-Receipt, R6)
 """
 
 import base64
@@ -209,9 +209,12 @@ def cmd_negatives():
     result("neg.me_without_token", s == 401, http=s)
     s, b, _, _ = req("GET", "/v1/me", headers={"Authorization": "Bearer eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0."})
     result("neg.me_alg_none", s == 401, http=s)
-    for path in ("/v1/pos/loyalty/balance?member_ref=6281200000001", "/metrics", "/internal/v1/x"):
+    for path in ("/metrics", "/internal/v1/x"):
         s, _, _, _ = req("GET", path)
-        result("neg.public_blocked " + path.split("?")[0], s == 404, http=s)
+        result("neg.public_blocked " + path, s == 404, http=s)
+    # R2 (docs/04 §8.13): saldo POS = POST body (nomor HP tidak di URL); /v1/pos tidak dirutekan publik
+    s, _, _, _ = req("POST", "/v1/pos/loyalty/balance", body={"member_ref": NEG_PHONE})
+    result("neg.public_blocked /v1/pos/loyalty/balance", s == 404, http=s)
 
 
 # ------------------------------------------------------------------ skenario b
@@ -346,15 +349,40 @@ def cmd_delete():
     )
     result("dsar.reauth_verify", s == 200 and b2.get("step_up_token"), http=s)
     s, b3, _, _ = req("DELETE", "/v1/me", headers={**bearer(st), "X-Step-Up-Token": b2["step_up_token"]})
-    result("dsar.delete_accepted", s == 202 and b3.get("request_id"), http=s, body=b3)
+    result(
+        "dsar.delete_accepted",
+        s == 202 and b3.get("request_id") and b3.get("receipt_token"),
+        http=s,
+        body={k: v for k, v in (b3 or {}).items() if k != "receipt_token"},
+    )
     st["dsar_request_id"] = b3.get("request_id")
+    st["dsar_receipt"] = b3.get("receipt_token")
     save_state(st)
+    # SEC-40: token step-up DELETE sekali pakai
+    s, b4, _, _ = req("DELETE", "/v1/me", headers={**bearer(st), "X-Step-Up-Token": b2["step_up_token"]})
+    code = ((b4 or {}).get("error") or {}).get("code")
+    result("dsar.step_up_single_use", s == 403 and code == "step_up_invalid", http=s)
 
 
 def cmd_requests():
     st = load_state()
     s, b, _, _ = req("GET", "/v1/me/requests", headers=bearer(st))
     result("dsar.requests", s in (200, 401, 409), http=s, body=b)
+    # R6 (docs/04 §8.13): status lewat receipt, tetap jalan setelah akun terhapus; receipt salah/hilang -> 404 generik
+    rid, receipt = st.get("dsar_request_id"), st.get("dsar_receipt")
+    if not (rid and receipt):
+        result("dsar.receipt_status", False, reason="receipt belum ada (jalankan delete dulu)")
+        return
+    s, b, _, _ = req("GET", f"/v1/dsar/requests/{rid}", headers={"X-DSAR-Receipt": receipt})
+    keys = {"id", "type", "status", "requested_at", "scheduled_at", "completed_at"}
+    ok = s == 200 and isinstance(b, dict) and b.get("id") == rid and set(b) == keys
+    result("dsar.receipt_status", ok, http=s, status=(b or {}).get("status") if isinstance(b, dict) else None)
+    i = len(receipt) - 10
+    bad = receipt[:i] + ("B" if receipt[i] == "A" else "A") + receipt[i + 1 :]
+    s, _, _, _ = req("GET", f"/v1/dsar/requests/{rid}", headers={"X-DSAR-Receipt": bad})
+    result("dsar.receipt_wrong_404", s == 404, http=s)
+    s, _, _, _ = req("GET", f"/v1/dsar/requests/{rid}")
+    result("dsar.receipt_missing_404", s == 404, http=s)
 
 
 if __name__ == "__main__":

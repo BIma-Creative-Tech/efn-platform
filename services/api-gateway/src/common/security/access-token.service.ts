@@ -59,11 +59,21 @@ export class AccessTokenService {
 
   /** true bila token step-up valid DAN milik member yang sama dengan access token. */
   verifyStepUp(token: string | undefined, memberId: string): boolean {
-    if (typeof token !== 'string') return false;
+    return this.verifyStepUpClaims(token, memberId) !== null;
+  }
+
+  /**
+   * Seperti `verifyStepUp`, tetapi mengembalikan `jti` + `exp` (detik epoch) untuk penandaan sekali pakai (SEC-40).
+   * Token tanpa `jti` UUID ditolak.
+   */
+  verifyStepUpClaims(token: string | undefined, memberId: string): { jti: string; exp: number } | null {
+    if (typeof token !== 'string') return null;
     const decoded = this.decode(token);
-    if (!decoded || decoded.typ !== 'step_up' || decoded.purpose !== STEP_UP_PURPOSE) return false;
-    const sub = decoded.sub;
-    return typeof sub === 'string' && sub.toLowerCase() === memberId.toLowerCase();
+    if (!decoded || decoded.typ !== 'step_up' || decoded.purpose !== STEP_UP_PURPOSE) return null;
+    const { sub, jti, exp } = decoded;
+    if (typeof sub !== 'string' || sub.toLowerCase() !== memberId.toLowerCase()) return null;
+    if (!isUuid(jti) || typeof exp !== 'number') return null;
+    return { jti: jti.toLowerCase(), exp };
   }
 
   private sign(claims: Record<string, unknown>, ttl: number): string {

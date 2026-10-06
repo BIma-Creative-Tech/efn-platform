@@ -1,7 +1,8 @@
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { AppConfig } from '../config/app-config';
 import { DB, Db, Queryable } from '../common/db/db';
-import { erasureTombstone } from '../common/pii/pii';
+import { randomTombstone } from '../common/pii/pii';
 import { OBJECT_STORAGE, ObjectStorage } from '../market-scout/storage/object-storage';
 
 export const ERASURE_STORES = ['platform', 'odoo', 'clickhouse'] as const;
@@ -20,31 +21,35 @@ export interface ErasureRunResult {
 }
 
 /**
- * Penghapusan akun lintas-store (docs/04 §8.4, PDP_DSAR_DESIGN §5), tanpa nomor HP mentah di luar BFF.
+ * Penghapusan akun lintas-store (docs/04 §8.4, §8.13; PDP_DSAR_DESIGN §5), tanpa nomor HP mentah di luar BFF.
  *
  * Job periodik (`DSAR_JOB_INTERVAL_MS`, satu replika per siklus via `pg_try_advisory_xact_lock`):
  * untuk setiap `dsar_request` `delete` berstatus `scheduled` yang `scheduled_at` ≤ now (masa tenggang
  * `DSAR_DELETE_GRACE_DAYS` habis) — dalam SATU transaksi:
  *   1. status → `processing`, `stores_pending = {platform, odoo, clickhouse}`, `member.deleted_at = now()`
  *      (token yang beredar langsung ditolak JwtAuthGuard);
- *   2. erasure platform SEGERA (permintaan lead: identitas subjek hilang dari sumber sebelum ETL siklus berikut):
- *      - ledger: entri `forfeit` per PT (−saldo belum kedaluwarsa, source `dsar`) lalu SEMUA baris member
- *        `member_ref_hash` → tombstone `sha256("erased:"||request_id)`, `member_ref_enc` NULL, `erased_at` now
- *        (catatan finansial 10 th dipertahankan, total liabilitas per PT tetap seimbang);
- *      - `price_hunter_report`: `user_hash` → tombstone, `user_enc`/`geo_*` NULL, `updated_at` now (ETL ikut
- *        menerima versi teranonim lewat watermark updated_at); foto MinIO dihapus (best effort SEBELUM transaksi;
- *        sisa dibersihkan lifecycle 90 hari);
+ *   2. erasure platform SEGERA dengan tombstone ACAK 32 byte (SEC-31, `randomTombstone`) — tidak diturunkan dari
+ *      `request_id`/`member_hash` dan tidak disimpan di tabel/log mana pun selain baris yang di-tombstone:
+ *      - ledger: entri `forfeit` per PT (−saldo belum kedaluwarsa, source `dsar`, `source_ref` NULL, idempotency_key
+ *        UUID acak — tidak memuat request_id) lalu SEMUA baris member `member_ref_hash` → tombstone,
+ *        `member_ref_enc` NULL, `erased_at` now (catatan finansial 10 th dipertahankan, total liabilitas per PT seimbang);
+ *      - `price_hunter_report`: `user_hash` → tombstone, `user_enc`/`geo_*` NULL, `updated_at` now (ETL ikut menerima
+ *        versi teranonim lewat watermark updated_at);
  *      - `otp_audit`: `subject` → tombstone, `ip_enc` NULL;
  *      - `consent`: `ip_enc` NULL (baris dipertahankan sebagai bukti tanpa PII);
+ *      - `dsar_request` LAIN milik member (export, delete yang dulu dibatalkan): `member_hash` NULL;
  *      - `member`: baris DIHAPUS;
  *      - `stores_pending` −= platform.
- *   Pilihan tombstone (bukan sekadar `erased_at`): hash lama tidak lagi muncul di sumber mana pun, sehingga ETL yang
- *   memuat ulang (watermark/backfill) tidak bisa menghidupkan kembali subjek; tombstone tidak dapat dihubungkan ke
- *   nomor HP (tanpa pepper pun). `dsar_request.member_hash` dipertahankan agar Odoo/ClickHouse menemukan subjeknya
- *   dan agar restore backup bisa menjalankan ulang daftar penghapusan.
- * Store lain menyelesaikan lewat `completeStore` (Odoo via HTTP pull/complete, ClickHouse via event
- * `privacy.erasure.completed`). `stores_pending` kosong → `completed`, `completed_at`.
- * Gagal di tengah → transaksi rollback, status tetap `scheduled`, dicoba siklus berikutnya (idempotent).
+ *   3. SETELAH commit (SEC-40 race hapus-foto vs batal): foto MinIO laporan subjek dihapus (best effort; sisa
+ *      dibersihkan lifecycle 90 hari). Daftar objek diambil di dalam transaksi sebelum tombstone.
+ * `dsar_request.member_hash` hanya dipertahankan selama `processing` (Odoo/ETL masih membutuhkannya) dan di-NULL-kan
+ * saat `completed` (§8.13). Store lain menyelesaikan lewat `completeStore` (Odoo via HTTP pull/complete, ClickHouse via
+ * event `privacy.erasure.completed`). `stores_pending` kosong → `completed`, `completed_at`, `member_hash` NULL.
+ * Gagal di tengah → transaksi rollback, status tetap `scheduled`, dicoba siklus berikutnya (tombstone baru).
+ *
+ * Sisa risiko (didokumentasikan, README): korelasi waktu (`erased_at`/`created_at` forfeit ≈ `scheduled_at` request)
+ * dapat menautkan baris ber-tombstone ke `request_id`, tetapi setelah `completed` request tidak lagi memuat
+ * `member_hash` sehingga rantai ke nomor HP terputus.
  */
 @Injectable()
 export class ErasureService implements OnModuleInit, OnModuleDestroy {
@@ -104,20 +109,12 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
 
   /** @returns false bila request tidak lagi `scheduled` (dibatalkan/diproses replika lain). */
   async processDue(requestId: string): Promise<boolean> {
-    const req = await this.db.query<{ member_hash: string }>(
-      `SELECT member_hash FROM platform.dsar_request WHERE id = $1 AND type = 'delete' AND status = 'scheduled'`,
-      [requestId],
-    );
-    const hash = req.rows[0]?.member_hash;
-    if (!hash) return false;
-    await this.removePhotos(hash);
-
-    return this.db.tx(async (q) => {
+    const result = await this.db.tx(async (q) => {
       const lock = await q.query<{ ok: boolean }>('SELECT pg_try_advisory_xact_lock($1, hashtext($2)) AS ok', [
         ERASURE_LOCK_KEY,
         requestId,
       ]);
-      if (!lock.rows[0]?.ok) return false;
+      if (!lock.rows[0]?.ok) return null;
       const started = await q.query<{ member_id: string; member_hash: string }>(
         `UPDATE platform.dsar_request
             SET status = 'processing', stores_pending = ARRAY['platform', 'odoo', 'clickhouse']::text[]
@@ -126,18 +123,27 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
         [requestId],
       );
       const r = started.rows[0];
-      if (!r) return false;
+      if (!r) return null;
       await q.query(`UPDATE platform.member SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL`, [r.member_id]);
+      const objects = await q.query<{ image_object: string }>(
+        `SELECT image_object FROM platform.price_hunter_report WHERE user_hash = $1`,
+        [r.member_hash],
+      );
       await this.erasePlatform(q, requestId, r.member_id, r.member_hash);
       await this.completeStore('platform', requestId, q);
-      return true;
+      return objects.rows.map((o) => o.image_object);
     });
+    if (result === null) return false;
+    await this.removePhotos(result);
+    return true;
   }
 
   /** Erasure data platform untuk satu subjek (di dalam transaksi pemanggil). */
   async erasePlatform(q: Queryable, requestId: string, memberId: string, hash: string): Promise<void> {
-    const tomb = erasureTombstone(requestId);
-    // 1. Forfeit saldo per PT (liabilitas turun tercatat; perlakuan akuntansi: Finance, ADR-020)
+    const tomb = randomTombstone();
+    // 1. Forfeit saldo per PT (liabilitas turun tercatat; perlakuan akuntansi: Finance, ADR-020).
+    //    source_ref NULL & idempotency_key acak: entri tidak memuat request_id (SEC-31). Idempotensi dijamin transaksi +
+    //    transisi status `scheduled → processing` (retry setelah rollback memulai dari nol).
     const balances = await q.query<{ company_code: string; balance: string | number }>(
       `SELECT company_code, SUM(delta_points)::bigint AS balance
          FROM platform.loyalty_ledger
@@ -150,9 +156,8 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
       await q.query(
         `INSERT INTO platform.loyalty_ledger
            (member_ref_hash, member_ref_enc, erased_at, company_code, delta_points, reason, source, source_ref, idempotency_key)
-         VALUES ($1, NULL, now(), $2, $3, 'dsar_forfeit', 'dsar', $4, $5)
-         ON CONFLICT (idempotency_key) DO NOTHING`,
-        [tomb, b.company_code, -Number(b.balance), requestId, `dsar:forfeit:${requestId}:${b.company_code}`],
+         VALUES ($1, NULL, now(), $2, $3, 'dsar_forfeit', 'dsar', NULL, $4)`,
+        [tomb, b.company_code, -Number(b.balance), `dsar:forfeit:${randomUUID()}`],
       );
     }
     // 2. Tombstone ledger
@@ -173,13 +178,20 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
     await q.query(`UPDATE platform.otp_audit SET subject = $2, ip_enc = NULL WHERE subject = $1`, [hash, tomb]);
     // 5. Consent: bukti dipertahankan tanpa PII
     await q.query(`UPDATE platform.consent SET ip_enc = NULL WHERE member_id = $1 AND ip_enc IS NOT NULL`, [memberId]);
-    // 6. Member
+    // 6. Request DSAR lain milik subjek (export, delete yang pernah dibatalkan) tidak lagi memuat member_hash
+    await q.query(
+      `UPDATE platform.dsar_request SET member_hash = NULL
+        WHERE member_id = $1 AND id <> $2 AND member_hash IS NOT NULL`,
+      [memberId, requestId],
+    );
+    // 7. Member
     await q.query(`DELETE FROM platform.member WHERE id = $1`, [memberId]);
   }
 
   /**
    * Tandai satu store selesai. Idempotent: store yang sudah dihapus dari `stores_pending` → ok dengan status saat ini.
-   * Hanya request `processing`/`completed` yang diterima.
+   * Hanya request `processing`/`completed` yang diterima. Saat `stores_pending` kosong → `completed` dan
+   * `member_hash` di-NULL-kan (SEC-31, §8.13).
    */
   async completeStore(store: ErasureStore, requestId: string, q: Queryable = this.db): Promise<CompleteStoreResult> {
     const res = await q.query<{ status: string }>(
@@ -188,7 +200,9 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
               status = CASE WHEN status = 'processing' AND cardinality(array_remove(stores_pending, $2::text)) = 0
                             THEN 'completed' ELSE status END,
               completed_at = CASE WHEN status = 'processing' AND cardinality(array_remove(stores_pending, $2::text)) = 0
-                                  THEN now() ELSE completed_at END
+                                  THEN now() ELSE completed_at END,
+              member_hash = CASE WHEN cardinality(array_remove(stores_pending, $2::text)) = 0
+                                 THEN NULL ELSE member_hash END
         WHERE id = $1 AND type = 'delete' AND status IN ('processing', 'completed')
         RETURNING status`,
       [requestId, store],
@@ -205,7 +219,7 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
     const res = await this.db.query<{ request_id: string; member_hash: string }>(
       `SELECT id::text AS request_id, member_hash
          FROM platform.dsar_request
-        WHERE type = 'delete' AND status = 'processing' AND $1::text = ANY(stores_pending)
+        WHERE type = 'delete' AND status = 'processing' AND $1::text = ANY(stores_pending) AND member_hash IS NOT NULL
         ORDER BY requested_at
         LIMIT 500`,
       [store],
@@ -213,16 +227,12 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
     return res.rows.map((r) => ({ request_id: r.request_id, member_hash: r.member_hash }));
   }
 
-  private async removePhotos(hash: string): Promise<void> {
-    const objs = await this.db.query<{ image_object: string }>(
-      `SELECT image_object FROM platform.price_hunter_report WHERE user_hash = $1`,
-      [hash],
-    );
+  private async removePhotos(objects: readonly string[]): Promise<void> {
     const bucket = this.config.marketScoutBucket;
     let failed = 0;
-    for (const o of objs.rows) {
+    for (const o of objects) {
       try {
-        await this.storage.remove(bucket, o.image_object);
+        await this.storage.remove(bucket, o);
       } catch {
         failed += 1;
       }

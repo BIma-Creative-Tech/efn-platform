@@ -8,7 +8,7 @@ Semua endpoint dilindungi `ServiceKeyGuard` (`X-EFN-Service-Key` = secret `odoo_
 | `POST /v1/pos/otp/request` | `202 { challenge_id, expires_in: 180 }` | `400 invalid_request`, `401`, `429 rate_limited` (+`Retry-After`), `503 otp_delivery_failed` |
 | `POST /v1/pos/otp/verify` | `200 { ok:true, discount_token, expires_in: 600 }` | `400 { ok:false, reason: invalid\|expired\|locked, attempts_left }` |
 | `POST /v1/pos/discount-token/consume` `{ discount_token, order_ref, member_ref }` | `200 { ok:true }` | `400 invalid_phone`, `409 { ok:false, reason: already_used\|order_mismatch\|member_mismatch\|expired\|invalid }` |
-| `GET /v1/pos/loyalty/balance?member_ref=` | `200 { points_balance }` (nomor tak dikenal → 0) | `400 invalid_phone`, `401` |
+| `POST /v1/pos/loyalty/balance` `{ member_ref }` (v3.6 R2 — GET dengan query **dihapus**: nomor HP tidak boleh di URL/access log) | `200 { points_balance }` (nomor tak dikenal → 0) | `400 invalid_phone`, `401`, `404` untuk GET lama |
 
 **v2 (SEC-06/SEC-07):** `member_ref` di request & consume diambil server Odoo dari nomor HP `partner_id` order. Hanya `^62[0-9]{8,13}$` (lainnya `400 invalid_phone`). Consume membandingkan `member_hash(member_ref)` dengan klaim `member_hash` token (`timingSafeEqual`) **sebelum** cek marker `used` → `409 member_mismatch`, token tidak terbakar. Budget OTP POS per jam terpisah dari login publik (`OTP_POS_HOURLY_BUDGET`). Server BFF kini HTTPS (`https://api-gateway:3000`, Odoo memverifikasi dengan `EFN_CA_FILE`).
 

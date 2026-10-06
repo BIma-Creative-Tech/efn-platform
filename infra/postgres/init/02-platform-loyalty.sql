@@ -4,12 +4,14 @@
 -- Pemilik: services/api-gateway (efn-bff-engineer). ADR terkait: D-05 (satu ledger poin), ADR-020 (Proposed,
 -- liabilitas poin per PT), ADR-022 (enkripsi). Retensi: lihat komentar per tabel.
 --
--- PERUBAHAN v2 (5 Okt 2026, Fase 0): loyalty_ledger.member_ref_enc WAJIB (NOT NULL); objek dimiliki efn_bff.
+-- PERUBAHAN v2 (5 Okt 2026, Fase 0): loyalty_ledger.member_ref_enc WAJIB (NOT NULL).
+-- PERUBAHAN gelombang 9 (SEC-39): objek dimiliki efn_platform_owner (NOLOGIN); volume lama: jalankan 04-platform-v3-6.sql
+-- lebih dulu (memindahkan kepemilikan), baru file ini aman diulang.
 
 \connect efn_platform
 \set ON_ERROR_STOP on
 
-SET ROLE efn_bff;   -- objek dimiliki efn_bff (pemilik skema platform), bukan superuser
+SET ROLE efn_platform_owner;   -- SEC-39: objek dimiliki role NOLOGIN (bukan efn_bff, bukan superuser); hak efn_bff di 04-platform-v3-6.sql
 
 -- ─────────────────────────────────────────────────────────────
 -- Ledger poin tunggal (D-05). Saldo = SUM(delta_points) entri yang belum kedaluwarsa.

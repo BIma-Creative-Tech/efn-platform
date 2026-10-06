@@ -1,7 +1,7 @@
 -- Dijalankan sekali saat volume PostgreSQL kosong (docker-entrypoint-initdb.d, sebagai superuser, urutan alfabet).
 -- 00-roles.sh (DevSecOps) SUDAH membuat role login per service dengan password dari secret (docs/04 §7.3, SEC-02):
 --   efn_odoo, efn_bff, efn_ocr, efn_etl (anggota efn_readonly), efn_metabase, efn_exporter.
--- File ini: database, skema `platform` milik efn_bff, tabel inti, dan GRANT level-kolom.
+-- File ini: database, skema `platform` milik efn_platform_owner (NOLOGIN, SEC-39), tabel inti, dan GRANT level-kolom.
 -- Pemilik isi skema platform: services/api-gateway (efn-bff-engineer). Kontrak: docs/04 §5, §7.2, §7.3.
 --
 -- PERUBAHAN v2 (5 Okt 2026, Fase 0 — belum ada data produksi, file diubah langsung):
@@ -56,12 +56,21 @@ CREATE EXTENSION IF NOT EXISTS "pg_stat_statements";
 
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 
--- Skema platform dimiliki efn_bff (§7.3). Objek dibuat SEBAGAI efn_bff agar pemiliknya efn_bff (bukan superuser).
-CREATE SCHEMA IF NOT EXISTS platform AUTHORIZATION efn_bff;
-ALTER SCHEMA platform OWNER TO efn_bff;
+-- SEC-39 (gelombang 9): skema platform dimiliki role NOLOGIN `efn_platform_owner` (hanya dipakai migrasi lewat
+-- `SET ROLE` oleh superuser). efn_bff (login aplikasi) BUKAN pemilik dan BUKAN anggota role ini, sehingga tidak bisa
+-- `ALTER TABLE ... DISABLE TRIGGER`, mengubah GRANT, atau DDL; haknya hanya DML yang di-GRANT di 04-platform-v3-6.sql.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'efn_platform_owner') THEN
+    CREATE ROLE efn_platform_owner NOLOGIN;
+  END IF;
+END $$;
+ALTER ROLE efn_platform_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+CREATE SCHEMA IF NOT EXISTS platform AUTHORIZATION efn_platform_owner;
 REVOKE ALL ON SCHEMA platform FROM PUBLIC;
+-- Volume lama (skema masih milik efn_bff): pemindahan kepemilikan dilakukan 04-platform-v3-6.sql (REASSIGN OWNED).
 
-SET ROLE efn_bff;
+SET ROLE efn_platform_owner;
 
 -- ─────────────────────────────────────────────────────────────
 -- Price Hunter (docs/04 §3.3, §7.2). Identitas pelapor:
@@ -108,7 +117,7 @@ CREATE TABLE IF NOT EXISTS platform.otp_audit (
 CREATE INDEX IF NOT EXISTS ix_otp_audit_created ON platform.otp_audit (created_at);
 
 -- ─────────────────────────────────────────────────────────────
--- GRANT (pemilik = efn_bff). Tidak ada kolom *_enc untuk role selain efn_bff.
+-- GRANT (pemilik = efn_platform_owner; hak DML efn_bff di 04-platform-v3-6.sql). Tidak ada kolom *_enc untuk role selain efn_bff.
 -- Tidak ada `GRANT SELECT ON ALL TABLES` / `ALTER DEFAULT PRIVILEGES`: tabel baru tidak otomatis terbaca.
 -- ─────────────────────────────────────────────────────────────
 GRANT USAGE ON SCHEMA platform TO efn_ocr, efn_readonly;

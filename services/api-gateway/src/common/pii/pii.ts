@@ -1,4 +1,4 @@
-import { createHash, createHmac } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 
 /**
  * Utilitas data pribadi (UU PDP 27/2022, R-L01).
@@ -47,7 +47,12 @@ export function redisKeyHash(pepper: Buffer, value: string): string {
   return createHmac('sha256', pepper).update(value, 'utf8').digest('hex').slice(0, 32);
 }
 
-/** Tombstone pengganti member_hash pada baris yang dianonimkan (PDP_DSAR_DESIGN §5): sha256("erased:" || request_id). */
-export function erasureTombstone(requestId: string): string {
-  return createHash('sha256').update(`erased:${requestId}`, 'utf8').digest('hex');
+/**
+ * Tombstone pengganti member_hash pada baris yang dianonimkan (PDP_DSAR_DESIGN §5, docs/04 §8.13 SEC-31):
+ * 32 byte ACAK (hex 64), dibuat sekali per erasure. TIDAK diturunkan dari `request_id`/`member_hash` dan TIDAK disimpan
+ * di mana pun selain baris yang di-tombstone (tidak di dsar_request, tidak di log) → tidak bisa ditautkan ke subjek.
+ * Semua baris satu subjek memakai tombstone yang sama agar saldo ledger per tombstone tetap seimbang.
+ */
+export function randomTombstone(): string {
+  return randomBytes(32).toString('hex');
 }

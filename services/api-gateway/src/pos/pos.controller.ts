@@ -1,10 +1,10 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Post, Req, UseGuards } from '@nestjs/common';
 import { FastifyRequest } from 'fastify';
 import { clientIp } from '../common/net/client-ip';
 import { ServiceKeyGuard } from '../common/security/service-key.guard';
 import {
   parseDiscountTokenConsume,
-  parseMemberRefQuery,
+  parseLoyaltyBalance,
   parsePosOtpRequest,
   parsePosOtpVerify,
 } from './dto/pos.dto';
@@ -34,8 +34,12 @@ export class PosController {
     return this.pos.consumeToken(parseDiscountTokenConsume(body));
   }
 
-  @Get('loyalty/balance')
-  balance(@Query('member_ref') memberRef: unknown): Promise<{ points_balance: number }> {
-    return this.pos.balance(parseMemberRefQuery(memberRef));
+  /**
+   * R2 (docs/04 §8.13): POST body `{ member_ref }` — nomor HP tidak pernah di URL/query (access log). GET lama dihapus.
+   */
+  @Post('loyalty/balance')
+  @HttpCode(HttpStatus.OK)
+  balance(@Body() body: unknown): Promise<{ points_balance: number }> {
+    return this.pos.balance(parseLoyaltyBalance(body));
   }
 }

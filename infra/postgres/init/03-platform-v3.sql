@@ -1,12 +1,13 @@
 -- Skema platform v3 (docs/04 §8.2–§8.4 + klarifikasi v3.1 §8.7). Pemilik: services/api-gateway (efn-bff-engineer).
 -- Dijalankan setelah 01/02 (urutan alfabet docker-entrypoint-initdb.d) saat volume kosong. IDEMPOTEN: untuk volume yang
--- sudah ada jalankan manual sebagai superuser `psql -d efn_platform -f 03-platform-v3.sql` (aman diulang).
+-- sudah ada jalankan manual sebagai superuser `psql -d efn_platform -f 03-platform-v3.sql` (aman diulang SETELAH
+-- 04-platform-v3-6.sql pernah dijalankan — SEC-39).
 -- ADR terkait: ADR-016 (payment, Proposed), ADR-019/020 (merchant of record, ledger), ADR-022 (enkripsi). UU PDP: SEC-11.
 
 \connect efn_platform
 \set ON_ERROR_STOP on
 
-SET ROLE efn_bff;   -- objek dimiliki efn_bff (pemilik skema platform)
+SET ROLE efn_platform_owner;   -- SEC-39: objek dimiliki role NOLOGIN (bukan efn_bff, bukan superuser); hak efn_bff di 04-platform-v3-6.sql
 
 -- ─────────────────────────────────────────────────────────────
 -- §8.2 Identitas member opak. JWT `sub` = member.id. member_ref_enc = AES-256-GCM, AAD 'efn:member.member_ref_enc:v1'.
@@ -25,8 +26,8 @@ CREATE TABLE IF NOT EXISTS platform.member (
 -- member_id sengaja TANPA FK: baris consent dipertahankan sebagai bukti setelah member dihapus (ip_enc di-null-kan).
 -- Append-only ditegakkan dua lapis: (1) hak efn_bff hanya SELECT, INSERT, UPDATE(ip_enc) — UPDATE kolom ip_enc
 -- dibutuhkan erasure (NULL) dan re-encrypt rotasi kunci (U2); (2) trigger menolak DELETE/TRUNCATE dan UPDATE kolom
--- lain. Catatan: pemilik tabel secara teknis bisa mengembalikan haknya sendiri — ini pagar terhadap bug aplikasi,
--- bukan terhadap DBA. Retensi "selama akun + 5 th" butuh job DBA terpisah (BFF tidak punya DELETE).
+-- lain. SEC-39: pemilik tabel = efn_platform_owner (NOLOGIN), sehingga efn_bff yang terkompromi TIDAK bisa
+-- DISABLE TRIGGER / GRANT ulang; tetap bukan pagar terhadap superuser/DBA (lihat README privacy). Retensi "selama akun + 5 th" butuh job DBA terpisah (BFF tidak punya DELETE).
 -- ─────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS platform.consent (
   id           bigserial PRIMARY KEY,
@@ -40,8 +41,7 @@ CREATE TABLE IF NOT EXISTS platform.consent (
   created_at   timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS ix_consent_member_purpose ON platform.consent (member_id, purpose, created_at DESC, id DESC);
--- Run ulang (idempoten): pulihkan hak pemilik sementara agar DROP/CREATE TRIGGER berhasil; dicabut lagi di bawah.
-GRANT ALL ON platform.consent TO efn_bff;
+-- (SEC-39) Pemilik = efn_platform_owner sehingga DROP/CREATE TRIGGER di run ulang tidak butuh hak efn_bff.
 
 CREATE OR REPLACE FUNCTION platform.consent_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -69,8 +69,8 @@ GRANT UPDATE (ip_enc) ON platform.consent TO efn_bff;
 GRANT USAGE, SELECT ON SEQUENCE platform.consent_id_seq TO efn_bff;
 
 -- ─────────────────────────────────────────────────────────────
--- §8.4 + §8.7 DSAR. member_hash dipertahankan setelah selesai (pseudonim) karena restore backup wajib menjalankan
--- ulang daftar penghapusan (PDP_DSAR_DESIGN §2). reason = alasan penolakan/kegagalan tanpa PII.
+-- §8.4 + §8.7 DSAR. reason = alasan penolakan/kegagalan tanpa PII. v3.6 (SEC-31, 04-platform-v3-6.sql): member_hash
+-- NULLABLE — hanya ada selama request aktif (scheduled/processing); di-NULL-kan saat `completed`.
 -- ─────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS platform.dsar_request (
   id              uuid PRIMARY KEY,
