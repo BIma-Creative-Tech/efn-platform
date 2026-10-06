@@ -1,0 +1,244 @@
+#!/usr/bin/env bash
+# Smoke E2E stack dev EFN dengan TLS/mTLS aktif (gelombang 8, docs/testing/E2E_SMOKE_REPORT.md).
+#
+# Prasyarat: stack dev jalan (profil core + data + ai), modul efn_* terpasang di DB efn_odoo
+# (docs/runbooks/dev-stack-boot.md). HANYA untuk dev: memanipulasi `dsar_request.scheduled_at` lewat superuser
+# PostgreSQL (socket lokal container) untuk melewati masa tenggang, membaca OTP dari log console BFF
+# (APP_ENV=dev), dan memanggil endpoint simulate payment (404 di produksi).
+#
+# Tidak ada secret di skrip: password dibaca DI DALAM container dari /run/secrets. Nomor HP = nomor fiktif acak.
+# Idempoten: setiap run memakai nomor, order, dan foto baru; data Odoo smoke (config/produk/metode) dipakai ulang.
+#
+# Pemakaian (Git Bash/Linux):  bash scripts/smoke/run-e2e-smoke.sh [a b c d e f g]   (default: semua)
+# Keluaran: baris `SMOKE_RESULT {...}` + ringkasan PASS/FAIL; exit 1 bila ada FAIL.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SMOKE_DIR="${ROOT}/scripts/smoke"
+# Docker Desktop (Windows/Git Bash) tidak selalu ada di PATH; override dengan env DOCKER_BIN.
+DOCKER_BIN="${DOCKER_BIN:-${LOCALAPPDATA:-/nonexistent}/Programs/DockerDesktop/resources/bin}"
+command -v cygpath > /dev/null && DOCKER_BIN="$(cygpath -u "$DOCKER_BIN")"
+[[ -d "$DOCKER_BIN" ]] && PATH="$PATH:$DOCKER_BIN"
+command -v docker > /dev/null || { echo "docker dibutuhkan" >&2; exit 2; }
+command -v openssl > /dev/null || { echo "openssl dibutuhkan" >&2; exit 2; }
+
+P="efn"
+BFF="${P}-api-gateway-1"; ODOO="${P}-odoo-1"; PG="${P}-postgres-1"; CH="${P}-clickhouse-1"
+SCENARIOS=("$@"); [[ ${#SCENARIOS[@]} -eq 0 ]] && SCENARIOS=(a b c d f e g)
+
+WORK="$(mktemp -d)"
+RESULTS="${WORK}/results.txt"
+: > "$RESULTS"
+cp "${ROOT}/secrets/dev_edge_crt.txt" "${WORK}/edge_ca.crt"
+cp "${SMOKE_DIR}/bff_smoke.py" "${WORK}/"
+WORK_W="$WORK"; command -v cygpath > /dev/null && WORK_W="$(cygpath -w "$WORK")"
+
+docker logs -f --since 1s "$BFF" > "${WORK}/bff.log" 2>&1 &
+LOGPID=$!
+trap 'kill "$LOGPID" 2>/dev/null || true' EXIT
+
+TRAEFIK_IP="$(docker inspect "${P}-traefik-1" --format '{{(index .NetworkSettings.Networks "efn_edge").IPAddress}}')"
+rand8() { printf '%08d' $(( ( $(od -An -N4 -tu4 /dev/urandom | tr -d ' ') ) % 100000000 )); }
+newuuid() { local h; h="$(openssl rand -hex 16 | tr -d '\r\n')"; echo "${h:0:8}-${h:8:4}-4${h:13:3}-a${h:17:3}-${h:20:12}"; }
+PHONE="62812$(rand8)"          # akun Super-App (dipakai juga oleh partner Odoo E untuk DSAR lintas store)
+MASKED="${PHONE:0:5}****${PHONE: -3}"
+
+record() { echo "SMOKE_RESULT $1" | tee -a "$RESULTS"; }
+check() { # nama ok(0/1) detail
+  local ok=false; [[ "$2" == 1 ]] && ok=true
+  record "{\"check\": \"$1\", \"ok\": $ok, \"detail\": \"${3//\"/\'}\"}"
+}
+
+py() { # subperintah bff_smoke.py
+  MSYS_NO_PATHCONV=1 docker run --rm --network efn_edge \
+    --add-host "api.efn.local:${TRAEFIK_IP}" --add-host "app.efn.local:${TRAEFIK_IP}" \
+    -v "${WORK_W}:/work" -v efn-pip-cache:/root/.cache/pip \
+    -e SMOKE_PHONE="$PHONE" -e SMOKE_CONSENT_VERSION="location@2026-10-06" \
+    python:3.12-bookworm sh -c "pip install -q pillow==11.3.0 > /dev/null 2>&1; python /work/bff_smoke.py $1" \
+    2>&1 | grep '^SMOKE_RESULT' | tee -a "$RESULTS" || true
+}
+
+odoo() { # -e K=V ... ; mencetak satu baris SMOKE_RESULT
+  MSYS_NO_PATHCONV=1 docker exec -i "$@" "$ODOO" odoo shell -d efn_odoo --no-http --log-level=warn \
+    < "${SMOKE_DIR}/odoo_pos_smoke.py" 2>&1 | grep -E '^SMOKE_RESULT|Error' | tail -1
+}
+
+psql_platform() { MSYS_NO_PATHCONV=1 docker exec -i "$PG" psql -U postgres -d efn_platform -At "$@"; }
+chq() {
+  MSYS_NO_PATHCONV=1 docker exec -i "$CH" sh -c \
+    'clickhouse-client --secure --host clickhouse --port 9440 --user "${CLICKHOUSE_USER:-efn}" --password "$(cat /run/secrets/clickhouse_password)" --multiquery'
+}
+
+otp_code() { # masked -> kode terakhir di log BFF (console sender dev)
+  for _ in $(seq 1 20); do
+    local c; c="$(grep -F "OTP untuk $1:" "${WORK}/bff.log" | tail -1 | grep -oE ': [0-9]{6}' | tr -dc '0-9' || true)"
+    [[ -n "$c" ]] && { echo "$c"; return 0; }
+    sleep 1
+  done
+  echo "000000"
+}
+
+field() { sed -nE "s/.*\"$1\": \"?([^\",}]*)\"?.*/\1/p" <<< "$2" | head -1; }
+
+pos_otp() { # uuid partner amount -> verify
+  local r m code
+  r="$(odoo -e SMOKE_STEP=otp_request -e SMOKE_ORDER_UUID="$1" -e SMOKE_PARTNER="$2" -e SMOKE_AMOUNT="$3")"
+  m="$(field member_masked "$r")"
+  code="$(otp_code "$m")"
+  r="$(odoo -e SMOKE_STEP=otp_verify -e SMOKE_ORDER_UUID="$1" -e SMOKE_CODE="$code")"
+  check "pos.otp_verify[$2]" "$([[ "$(field ok "$r")" == true ]] && echo 1 || echo 0)" "$r"
+}
+
+# ---------------------------------------------------------------------------------------------------------------
+scenario_a() {
+  echo "== a. Login OTP Super-App ($MASKED)"
+  py login
+  py login_web
+  py negatives
+}
+
+scenario_b() {
+  echo "== b. Consent + Price Hunter"
+  py consent
+  py report
+  py report_dup
+  local raw rows
+  raw="$(MSYS_NO_PATHCONV=1 docker exec "$PG" pg_dump -U postgres -d efn_platform --data-only --schema=platform | grep -c "${PHONE:4}" || true)"
+  check "b.db_no_raw_phone" "$([[ "$raw" == 0 ]] && echo 1 || echo 0)" "hits=$raw (pg_dump skema platform)"
+  rows="$(psql_platform -c "select count(*) from platform.price_hunter_report where length(user_hash)=64 and get_byte(user_enc,0)=1 and length(user_enc)=42 and created_at > now() - interval '15 minutes'")"
+  check "b.report_user_hash_enc" "$([[ "$rows" -ge 1 ]] && echo 1 || echo 0)" "rows=$rows (user_hash 64 hex, user_enc v1 AES-GCM)"
+  local sse
+  sse="$(cd "$ROOT" && MSYS_NO_PATHCONV=1 docker compose -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.dev.yml \
+    --env-file infra/compose/.env --profile core run --rm --no-deps --entrypoint /bin/sh minio-init -c \
+    'mkdir -p /tmp/.mc/certs/CAs && cp /run/secrets/efn_ca_crt /tmp/.mc/certs/CAs/ && mc alias set efn https://minio:9000 "$MINIO_ROOT_USER" "$(cat /run/secrets/minio_root_password)" >/dev/null && O=$(mc ls --recursive efn/market-scout/reports/ | tail -1 | awk "{print \$NF}") && mc stat "efn/market-scout/reports/$O" | grep -i "^Encryption"' 2>/dev/null | tail -1)"
+  check "b.minio_sse" "$([[ "$sse" == *SSE-S3* ]] && echo 1 || echo 0)" "$sse"
+  local notif
+  notif="$(grep -F "notify.push price_hunter_valid" "${WORK}/bff.log" | grep -cF "${MASKED}: sent" || true)"
+  check "b.notification_recorded" "$([[ "$notif" -ge 1 ]] && echo 1 || echo 0)" "notify.push price_hunter_valid count=$notif"
+}
+
+scenario_c() {
+  echo "== c. POS OTP gate (Odoo -> BFF HTTPS)"
+  rp() { echo "0812$(rand8)"; }
+  odoo -e SMOKE_STEP=setup -e SMOKE_PHONE_A="$(rp)" -e SMOKE_PHONE_B="$(rp)" -e SMOKE_PHONE_C="$(rp)" \
+    -e SMOKE_PHONE_D="$(rp)" -e SMOKE_PHONE_E="0${PHONE:2}" | tee -a "$RESULTS"
+  local u r
+  u="$(newuuid)"; pos_otp "$u" A 45000
+  r="$(odoo -e SMOKE_STEP=sync -e SMOKE_ORDER_UUID="$u" -e SMOKE_PARTNER=A)"
+  check "c.consume_consumed" "$([[ "$(field gate_state "$r")" == consumed && "$(field challenge_state "$r")" == consumed ]] && echo 1 || echo 0)" "$r"
+  r="$(odoo -e SMOKE_STEP=sync -e SMOKE_ORDER_UUID="$u" -e SMOKE_PARTNER=A)"
+  check "c.resync_idempotent" "$([[ "$(field gate_state "$r")" == consumed ]] && echo 1 || echo 0)" "$r"
+  u="$(newuuid)"; pos_otp "$u" C 45000
+  r="$(odoo -e SMOKE_STEP=sync -e SMOKE_ORDER_UUID="$u" -e SMOKE_PARTNER=B)"
+  check "c.member_mismatch_review" "$([[ "$(field gate_state "$r")" == review && "$(field gate_note "$r")" == *member_mismatch* ]] && echo 1 || echo 0)" "$r"
+  u="$(newuuid)"; pos_otp "$u" D 45000
+  r="$(odoo -e SMOKE_STEP=sync -e SMOKE_ORDER_UUID="$u" -e SMOKE_PARTNER=D -e SMOKE_QTY=3)"
+  check "c.amount_mismatch_review" "$([[ "$(field gate_state "$r")" == review && "$(field gate_note "$r")" == *amount_mismatch* ]] && echo 1 || echo 0)" "$r"
+  r="$(odoo -e SMOKE_STEP=sync -e SMOKE_ORDER_UUID="$(newuuid)" -e SMOKE_PARTNER=A)"
+  check "c.paid_reward_without_otp_rejected" "$([[ "$(field ok "$r")" == false && "$(field error "$r")" == UserError ]] && echo 1 || echo 0)" "$r"
+  r="$(odoo -e SMOKE_STEP=sync -e SMOKE_ORDER_UUID="$(newuuid)" -e SMOKE_PARTNER=A -e SMOKE_REWARD=0)"
+  check "c.regular_order_ok" "$([[ "$(field state "$r")" == paid ]] && echo 1 || echo 0)" "$r"
+}
+
+scenario_d() {
+  echo "== d. QRIS POS mock"
+  local u p r iid tx
+  u="$(newuuid)"; p="$(newuuid)"
+  r="$(odoo -e SMOKE_STEP=gw_create -e SMOKE_ORDER_UUID="$u" -e SMOKE_PAYMENT_UUID="$p" -e SMOKE_AMOUNT=50000)"
+  iid="$(field intent_id "$r")"
+  check "d.create_pending" "$([[ "$(field status "$r")" == pending ]] && echo 1 || echo 0)" "$r"
+  r="$(odoo -e SMOKE_STEP=sync -e SMOKE_ORDER_UUID="$u" -e SMOKE_REWARD=0 -e "SMOKE_PAYMENT={\"method\":\"qris\",\"transaction_id\":\"forged-$(newuuid)\",\"uuid\":\"$p\"}")"
+  check "d.forged_tx_rejected" "$([[ "$r" == *intent_unknown* ]] && echo 1 || echo 0)" "$r"
+  r="$(odoo -e SMOKE_STEP=gw_simulate -e SMOKE_INTENT_ID="$iid")"
+  check "d.simulate_paid" "$([[ "$(field status "$r")" == paid ]] && echo 1 || echo 0)" "$r"
+  r="$(odoo -e SMOKE_STEP=gw_status -e SMOKE_INTENT_ID="$iid")"
+  tx="$(field transaction_id "$r")"
+  check "d.status_paid" "$([[ "$(field status "$r")" == paid && -n "$tx" ]] && echo 1 || echo 0)" "$r"
+  r="$(odoo -e SMOKE_STEP=sync -e SMOKE_ORDER_UUID="$u" -e SMOKE_REWARD=0 -e SMOKE_QTY=2 -e "SMOKE_PAYMENT={\"method\":\"qris\",\"transaction_id\":\"$tx\",\"uuid\":\"$p\"}")"
+  check "d.amount_mismatch_rejected" "$([[ "$r" == *amount_mismatch* ]] && echo 1 || echo 0)" "$r"
+  r="$(odoo -e SMOKE_STEP=sync -e SMOKE_ORDER_UUID="$u" -e SMOKE_REWARD=0 -e "SMOKE_PAYMENT={\"method\":\"qris\",\"transaction_id\":\"$tx\",\"uuid\":\"$p\"}")"
+  check "d.sync_paid_ok" "$([[ "$(field state "$r")" == paid ]] && echo 1 || echo 0)" "$r"
+  r="$(odoo -e SMOKE_STEP=sync -e SMOKE_ORDER_UUID="$(newuuid)" -e SMOKE_REWARD=0 -e "SMOKE_PAYMENT={\"method\":\"qris\",\"transaction_id\":\"$tx\",\"uuid\":\"$(newuuid)\"}")"
+  check "d.intent_reuse_rejected" "$([[ "$r" == *order_mismatch* || "$r" == *intent_reused* ]] && echo 1 || echo 0)" "$r"
+}
+
+scenario_f() {
+  echo "== f. ETL -> ClickHouse (tunggu 1 siklus ETL dev 120 s)"
+  local mh n1 n2 mb
+  mh="$(psql_platform -c "select user_hash from platform.price_hunter_report where status='valid' order by created_at desc limit 1")"
+  for _ in $(seq 1 30); do
+    n1="$(echo "select count() from efn_dwh.competitor_prices final where user_hash='$mh'" | chq)"
+    n2="$(echo "select count() from efn_dwh.loyalty_events final where member_hash='$mh'" | chq)"
+    [[ "$n1" -ge 1 && "$n2" -ge 1 ]] && break
+    sleep 10
+  done
+  check "f.ch_competitor_prices" "$([[ "$n1" -ge 1 ]] && echo 1 || echo 0)" "rows=$n1 untuk user_hash report valid terakhir"
+  check "f.ch_loyalty_events" "$([[ "$n2" -ge 1 ]] && echo 1 || echo 0)" "rows=$n2"
+  mb="$(docker inspect "${P}-metabase-1" --format '{{.State.Health.Status}}')/$(docker inspect "${P}-metabase-tls-1" --format '{{.State.Health.Status}}')"
+  check "f.metabase_healthy" "$([[ "$mb" == healthy/healthy ]] && echo 1 || echo 0)" "metabase/metabase-tls=$mb"
+  echo "$mh" > "${WORK}/member_hash"
+}
+
+scenario_e() {
+  echo "== e. DSAR hapus akun lintas store"
+  # OTP login + login_web + reauth = 3 permintaan / 15 menit untuk nomor yang sama (batas rate limit per member)
+  py delete
+  local rid mh st r
+  rid="$(psql_platform -c "select id from platform.dsar_request where type='delete' and status='scheduled' order by requested_at desc limit 1")"
+  mh="$(psql_platform -c "select member_hash from platform.dsar_request where id='$rid'")"
+  r="$(odoo -e SMOKE_STEP=partner -e SMOKE_MEMBER_HASH="$mh")"
+  check "e.odoo_partner_hash_matches_bff" "$([[ "$(field by_hash "$r")" -ge 1 ]] && echo 1 || echo 0)" "$r"
+  # Dev: lewati masa tenggang (DSAR_DELETE_GRACE_DAYS) dengan memajukan scheduled_at
+  psql_platform -c "update platform.dsar_request set scheduled_at = now() - interval '1 second' where id='$rid'" > /dev/null
+  for _ in $(seq 1 15); do
+    st="$(psql_platform -c "select status||' '||coalesce(array_to_string(stores_pending, ','),'') from platform.dsar_request where id='$rid'")"
+    [[ "$st" == processing* || "$st" == completed* ]] && break
+    sleep 6
+  done
+  check "e.platform_erasure_processing" "$([[ "$st" == processing* ]] && echo 1 || echo 0)" "$st"
+  local left
+  left="$(psql_platform -c "select (select count(*) from platform.member where member_hash='$mh' and deleted_at is null) || '/' || (select count(*) from platform.price_hunter_report where user_hash='$mh') || '/' || (select count(*) from platform.loyalty_ledger where member_ref_hash='$mh')")"
+  check "e.platform_rows_tombstoned" "$([[ "$left" == 0/0/0 ]] && echo 1 || echo 0)" "member_aktif/report/ledger dengan hash lama = $left"
+  r="$(odoo -e SMOKE_STEP=erasure_cron)"
+  r="$(odoo -e SMOKE_STEP=partner -e SMOKE_MEMBER_HASH="$mh")"
+  check "e.odoo_partner_anonymized" "$([[ "$(field by_hash "$r")" == 0 ]] && echo 1 || echo 0)" "$r"
+  for _ in $(seq 1 30); do
+    st="$(psql_platform -c "select status||' '||coalesce(array_to_string(stores_pending, ','),'') from platform.dsar_request where id='$rid'")"
+    [[ "$st" == completed* ]] && break
+    sleep 10
+  done
+  check "e.dsar_completed" "$([[ "$st" == completed* ]] && echo 1 || echo 0)" "$st"
+  local chn
+  chn="$( (echo "select count() from efn_dwh.competitor_prices where user_hash='$mh'"; ) | chq)/$(echo "select count() from efn_dwh.loyalty_events where member_hash='$mh'" | chq)"
+  check "e.clickhouse_rows_deleted" "$([[ "$chn" == 0/0 ]] && echo 1 || echo 0)" "competitor_prices/loyalty_events=$chn"
+  py requests
+}
+
+scenario_g() {
+  echo "== g. Negatif enkripsi (regresi)"
+  local out
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data postgres:16.6-bookworm psql "host=postgres dbname=efn_platform user=efn_bff sslmode=disable connect_timeout=5" -c 'select 1' 2>&1 || true)"
+  check "g.pg_plaintext_rejected" "$([[ "$out" == *"no encryption"* || "$out" == *"pg_hba"* ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal curlimages/curl:8.11.1 -sS -m 5 -o /dev/null -w '%{http_code}' https://odoo:8443/web/login --cacert /dev/null -k 2>&1 || true)"
+  check "g.odoo_tls_without_client_cert_rejected" "$([[ "$out" != 200 ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data curlimages/curl:8.11.1 -sS -m 5 -o /dev/null -w '%{http_code}' http://minio:9000/minio/health/live 2>&1 || true)"
+  check "g.minio_http_rejected" "$([[ "$out" != 200 ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data curlimages/curl:8.11.1 -sS -m 5 telnet://rabbitmq:5672 2>&1 || true)"
+  check "g.amqp_plain_port_closed" "$([[ "$out" == *"Could not resolve"* || "$out" == *"refused"* || "$out" == *"Failed to connect"* ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
+  out="$(MSYS_NO_PATHCONV=1 docker exec "$PG" psql -U postgres -At -c "select usename||':'||ssl||':'||coalesce(version,'') from pg_stat_ssl join pg_stat_activity using(pid) where usename in ('efn_bff','efn_odoo','efn_ocr','efn_etl') group by 1 order by 1" | tr '\n' ' ')"
+  check "g.pg_clients_tls" "$([[ "$out" != *":f:"* && "$out" == *efn_ocr* && "$out" == *efn_bff* ]] && echo 1 || echo 0)" "$out"
+  out="$(MSYS_NO_PATHCONV=1 docker exec "${P}-rabbitmq-1" rabbitmqctl list_connections user ssl ssl_protocol -q --no-table-headers 2>/dev/null | sort -u | tr '\t\n' ': ')"
+  check "g.amqp_clients_tls" "$([[ "$out" != *":false"* && "$out" == *efn-ocr* ]] && echo 1 || echo 0)" "$out"
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_edge --add-host "api.efn.local:${TRAEFIK_IP}" -v "${WORK_W}:/work" curlimages/curl:8.11.1 -sS -o /dev/null -w '%{http_code}' --cacert /work/edge_ca.crt -X POST -H 'Content-Type: application/json' -H 'X-EFN-Signature: t=1,v1=00' -d '{}' https://api.efn.local/v1/webhooks/payments/mock 2>&1 || true)"
+  check "g.webhook_bad_signature_rejected" "$([[ "$out" == 401 || "$out" == 400 || "$out" == 403 ]] && echo 1 || echo 0)" "http=$out"
+}
+
+for s in "${SCENARIOS[@]}"; do "scenario_${s}"; done
+
+echo
+# Hanya status level cek (body respons bisa memuat "ok": false, mis. OTP salah yang memang diharapkan)
+CHECK_OK='"check": "[^"]*", "ok": true'; CHECK_FAIL='"check": "[^"]*", "ok": false'
+pass="$(grep -cE "$CHECK_OK" "$RESULTS" || true)"; fail="$(grep -cE "$CHECK_FAIL" "$RESULTS" || true)"
+echo "RINGKASAN: PASS=$pass FAIL=$fail (hasil lengkap: $RESULTS)"
+grep -E "$CHECK_FAIL" "$RESULTS" || true
+[[ "$fail" == 0 ]]

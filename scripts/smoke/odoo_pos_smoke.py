@@ -1,0 +1,348 @@
+# Smoke E2E sisi Odoo (dev saja) — dijalankan lewat `odoo shell` oleh scripts/smoke/run-e2e-smoke.sh.
+#
+# Bukan modul Odoo dan bukan test unit: skrip ini memanggil metode server yang sama dengan frontend POS
+# (`pos.config.efn_otp_request/verify`, `pos.payment.method.efn_gateway_create/status`, `pos.order.sync_from_ui`)
+# terhadap BFF NYATA (HTTPS + CA internal, service key dari /run/secrets). Tidak ada secret di file ini.
+# Nomor HP berasal dari env (dibuat acak per run oleh orkestrator; nomor fiktif, bukan data pribadi).
+#
+# Env: SMOKE_STEP (setup|otp_request|otp_verify|sync|gw_create|gw_simulate|gw_status|erasure_cron|partner)
+#      dan parameter per langkah (lihat fungsi). Keluaran: satu baris `SMOKE_RESULT <json>`.
+# Dipakai hanya di DB dev (`efn_odoo` dev); ditolak bila APP_ENV bukan dev.
+# ruff: noqa: F821  (variabel `env` disediakan odoo shell)
+import json
+import os
+import random
+
+from odoo import Command, fields
+
+if (os.environ.get("APP_ENV") or "").lower() != "dev":
+    raise SystemExit("odoo_pos_smoke hanya untuk APP_ENV=dev")
+
+STEP = os.environ["SMOKE_STEP"]
+STATE_FILE = "/tmp/efn_smoke_state.json"  # noqa: S108 - container dev, hanya id record (tanpa PII)
+PREFIX = "SMOKE"
+
+
+def out(**kw):
+    print("SMOKE_RESULT " + json.dumps(kw, default=str))
+
+
+def load_state():
+    with open(STATE_FILE, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def ctx_env():
+    st = load_state()
+    company = env["res.company"].browse(st["company_id"])
+    admin = env.ref("base.user_admin")
+    return env(user=admin, context={"allowed_company_ids": [company.id]}), st
+
+
+def step_setup():
+    company = env["res.company"].search([("efn_brand_code", "=", "FNB")], limit=1)
+    assert company, "company FNB (efn_setup_company) tidak ada"
+    admin = env.ref("base.user_admin")
+    if company not in admin.company_ids:
+        admin.write({"company_ids": [Command.link(company.id)]})
+    e = env(user=admin, context={"allowed_company_ids": [company.id]})
+    su = e(su=True)
+
+    Journal = su["account.journal"]
+    cash_j = Journal.search([("type", "=", "cash"), ("company_id", "=", company.id)], limit=1)
+    bank_j = Journal.search([("type", "=", "bank"), ("company_id", "=", company.id)], limit=1)
+    assert cash_j and bank_j, "jurnal cash/bank FNB tidak ada (CoA l10n_id?)"
+
+    PM = su["pos.payment.method"]
+    cash_pm = PM.search([("name", "=", f"{PREFIX} Cash"), ("company_id", "=", company.id)], limit=1) or PM.create(
+        {"name": f"{PREFIX} Cash", "journal_id": cash_j.id, "company_id": company.id}
+    )
+    vals_q = {"name": f"{PREFIX} QRIS", "journal_id": bank_j.id, "company_id": company.id}
+    if "payment_method_type" in PM._fields:
+        vals_q["payment_method_type"] = "terminal"
+    vals_q["use_payment_terminal"] = "efn_gateway"
+    qris_pm = PM.search([("name", "=", f"{PREFIX} QRIS"), ("company_id", "=", company.id)], limit=1) or PM.create(
+        vals_q
+    )
+
+    Product = su["product.product"]
+    product = Product.search([("name", "=", f"{PREFIX} Nasi Goreng"), ("company_id", "=", company.id)], limit=1)
+    if not product:
+        product = Product.create(
+            {
+                "name": f"{PREFIX} Nasi Goreng",
+                "type": "consu",
+                "available_in_pos": True,
+                "list_price": 50000.0,
+                "taxes_id": [Command.clear()],
+                "company_id": company.id,
+            }
+        )
+
+    Config = su["pos.config"]
+    config = Config.search([("name", "=", f"{PREFIX} POS FNB"), ("company_id", "=", company.id)], limit=1)
+    if not config:
+        config = Config.create(
+            {
+                "name": f"{PREFIX} POS FNB",
+                "company_id": company.id,
+                "payment_method_ids": [Command.set([cash_pm.id, qris_pm.id])],
+            }
+        )
+
+    Program = su["loyalty.program"]
+    program = Program.search([("name", "=", f"{PREFIX} Promo OTP"), ("company_id", "=", company.id)], limit=1)
+    if not program:
+        program = Program.create(
+            {
+                "name": f"{PREFIX} Promo OTP",
+                "company_id": company.id,
+                "program_type": "promotion",
+                "trigger": "auto",
+                "applies_on": "current",
+                "pos_ok": True,
+                "pos_config_ids": [Command.set(config.ids)],
+                "efn_requires_otp": True,
+                "rule_ids": [Command.create({"minimum_amount": 0})],
+                "reward_ids": [
+                    Command.create(
+                        {
+                            "reward_type": "discount",
+                            "discount": 10,
+                            "discount_mode": "percent",
+                            "discount_applicability": "order",
+                        }
+                    )
+                ],
+            }
+        )
+    su["ir.config_parameter"].set_param("efn.pos.otp_required_for_promo", "True")
+
+    if not config.current_session_id:
+        config.with_user(admin).open_ui()
+        config.current_session_id.set_opening_control(0, None)
+
+    partners = {}
+    for key in ("A", "B", "C", "D", "E"):
+        phone = os.environ.get(f"SMOKE_PHONE_{key}")
+        if not phone:
+            continue
+        partner = su["res.partner"].create({"name": f"{PREFIX} Member {key}", "phone": phone})
+        partners[key] = partner.id
+
+    state = {
+        "company_id": company.id,
+        "config_id": config.id,
+        "session_id": config.current_session_id.id,
+        "cash_pm": cash_pm.id,
+        "qris_pm": qris_pm.id,
+        "product_id": product.id,
+        "program_id": program.id,
+        "reward_id": program.reward_ids[:1].id,
+        "partners": partners,
+    }
+    with open(STATE_FILE, "w", encoding="utf-8") as fh:
+        json.dump(state, fh)
+    env.cr.commit()
+    out(
+        ok=True,
+        config_id=config.id,
+        session_state=config.current_session_id.state,
+        admin_pos_user=admin.has_group("point_of_sale.group_pos_user"),
+        partners=list(partners),
+    )
+
+
+def step_otp_request():
+    e, st = ctx_env()
+    config = e["pos.config"].browse(st["config_id"])
+    partner_id = st["partners"][os.environ["SMOKE_PARTNER"]]
+    res = config.efn_otp_request(os.environ["SMOKE_ORDER_UUID"], float(os.environ["SMOKE_AMOUNT"]), partner_id)
+    env.cr.commit()
+    out(**res)
+
+
+def step_otp_verify():
+    e, st = ctx_env()
+    config = e["pos.config"].browse(st["config_id"])
+    res = config.efn_otp_verify(os.environ["SMOKE_ORDER_UUID"], os.environ["SMOKE_CODE"])
+    env.cr.commit()
+    out(**res)
+
+
+def _order_data(e, st, uuid, partner_id, qty, with_reward, payment):
+    product = e["product.product"].browse(st["product_id"])
+    reward = e["loyalty.reward"].browse(st["reward_id"])
+    session = e["pos.session"].browse(st["session_id"])
+    config = session.config_id
+    price = product.lst_price
+    lines = [
+        (
+            0,
+            0,
+            {
+                "id": random.randint(1, 1_000_000),  # noqa: S311
+                "pack_lot_ids": [],
+                "price_unit": price,
+                "product_id": product.id,
+                "price_subtotal": price * qty,
+                "price_subtotal_incl": price * qty,
+                "qty": qty,
+                "tax_ids": [(6, 0, [])],
+            },
+        )
+    ]
+    if with_reward:
+        disc = -round(price * qty * 0.10, 2)
+        lines.append(
+            (
+                0,
+                0,
+                {
+                    "id": random.randint(1, 1_000_000),  # noqa: S311
+                    "pack_lot_ids": [],
+                    "price_unit": disc,
+                    "product_id": reward.discount_line_product_id.id,
+                    "price_subtotal": disc,
+                    "price_subtotal_incl": disc,
+                    "qty": 1,
+                    "tax_ids": [(6, 0, [])],
+                    "is_reward_line": True,
+                    "reward_id": reward.id,
+                },
+            )
+        )
+    total = sum(line[2]["price_subtotal_incl"] for line in lines)
+    pay = {"amount": total, "name": fields.Datetime.now(), "payment_method_id": st["cash_pm"]}
+    if payment:
+        # {"method": "qris", "transaction_id": <bff payment_id>, "uuid": <payment_uuid>, "amount"?: n}
+        if payment.pop("method", None) == "qris":
+            pay["payment_method_id"] = st["qris_pm"]
+        pay.update(payment)
+        pay["amount"] = float(payment.get("amount", total))
+    return {
+        "amount_paid": pay["amount"],
+        "amount_return": 0,
+        "amount_tax": 0,
+        "amount_total": total,
+        "date_order": fields.Datetime.to_string(fields.Datetime.now()),
+        "fiscal_position_id": False,
+        "pricelist_id": config.pricelist_id.id,
+        "name": f"Order {uuid}",
+        "last_order_preparation_change": "{}",
+        "lines": lines,
+        "partner_id": partner_id,
+        "session_id": session.id,
+        "payment_ids": [(0, 0, pay)],
+        "uuid": uuid,
+        "user_id": e.uid,
+        "to_invoice": False,
+        "state": "paid",
+    }, total
+
+
+def step_sync():
+    e, st = ctx_env()
+    uuid = os.environ["SMOKE_ORDER_UUID"]
+    pkey = os.environ.get("SMOKE_PARTNER")
+    partner_id = st["partners"][pkey] if pkey else False
+    qty = int(os.environ.get("SMOKE_QTY", "1"))
+    with_reward = os.environ.get("SMOKE_REWARD", "1") == "1"
+    payment = json.loads(os.environ["SMOKE_PAYMENT"]) if os.environ.get("SMOKE_PAYMENT") else None
+    data, total = _order_data(e, st, uuid, partner_id, qty, with_reward, payment)
+    try:
+        e["pos.order"].sync_from_ui([data])
+        env.cr.commit()
+    except Exception as exc:  # noqa: BLE001 - laporan smoke
+        env.cr.rollback()
+        out(ok=False, error=type(exc).__name__, message=str(exc)[:300], total=total)
+        return
+    order = e["pos.order"].search([("uuid", "=", uuid)], limit=1)
+    challenge = e["efn.pos.otp.challenge"].sudo().search([("order_ref", "=", uuid)], order="id desc", limit=1)
+    out(
+        ok=bool(order),
+        total=total,
+        state=order.state,
+        gate_state=order.efn_otp_gate_state,
+        gate_note=order.efn_otp_gate_note,
+        challenge_state=challenge.state,
+        challenge_reason=challenge.failure_reason,
+        reward_lines=len(order.lines.filtered("is_reward_line")),
+        token_cleared=not challenge.discount_token,
+    )
+
+
+def step_gw_create():
+    e, st = ctx_env()
+    pm = e["pos.payment.method"].browse(st["qris_pm"])
+    res = pm.efn_gateway_create(
+        os.environ["SMOKE_ORDER_UUID"],
+        os.environ["SMOKE_PAYMENT_UUID"],
+        float(os.environ["SMOKE_AMOUNT"]),
+        st["config_id"],
+    )
+    env.cr.commit()
+    res.pop("qr_image", None)
+    if res.get("qr_string"):
+        res["qr_string"] = res["qr_string"][:24] + "..."
+    out(**res)
+
+
+def step_gw_simulate():
+    # Endpoint dev-only BFF (docs/04 §8.11) memakai service key Odoo -> lewat efn.bff.client yang sama.
+    # payment_id BFF tidak dikirim ke browser sebelum paid -> dibaca dari intent (sisi server).
+    intent = env["efn.pos.payment.intent"].sudo().browse(int(os.environ["SMOKE_INTENT_ID"]))
+    payment_id = intent.bff_payment_id
+    resp = env["efn.bff.client"].post(
+        f"/v1/pos/payments/{payment_id}/simulate", {"status": os.environ.get("SMOKE_SIM_STATUS", "paid")}
+    )
+    out(http=resp.status, **resp.data)
+
+
+def step_gw_status():
+    e, st = ctx_env()
+    pm = e["pos.payment.method"].browse(st["qris_pm"])
+    res = pm.efn_gateway_status(int(os.environ["SMOKE_INTENT_ID"]))
+    env.cr.commit()
+    out(**res)
+
+
+def step_erasure_cron():
+    cron = env.ref("efn_privacy.ir_cron_efn_privacy_pull_erasures", raise_if_not_found=False)
+    if not cron:
+        cron = env["ir.cron"].search([("cron_name", "ilike", "erasure")], limit=1) or env["ir.cron"].search(
+            [("name", "ilike", "erasure")], limit=1
+        )
+    assert cron, "cron erasure efn_privacy tidak ditemukan"
+    cron.method_direct_trigger()
+    env.cr.commit()
+    out(ok=True, cron=cron.name)
+
+
+def step_partner():
+    # Status partner untuk verifikasi DSAR (tanpa mencetak nomor mentah).
+    member_hash = os.environ["SMOKE_MEMBER_HASH"]
+    partners = env["res.partner"].with_context(active_test=False).search([("efn_member_hash", "=", member_hash)])
+    pid = int(os.environ.get("SMOKE_PARTNER_ID") or 0)
+    p = env["res.partner"].with_context(active_test=False).browse(pid).exists() if pid else env["res.partner"]
+    out(
+        by_hash=len(partners),
+        partner_exists=bool(p),
+        name=p.name if p else None,
+        phone_present=bool(p.phone) if p else None,
+        active=p.active if p else None,
+        hash_present=bool(p.efn_member_hash) if p else None,
+    )
+
+
+{
+    "setup": step_setup,
+    "otp_request": step_otp_request,
+    "otp_verify": step_otp_verify,
+    "sync": step_sync,
+    "gw_create": step_gw_create,
+    "gw_simulate": step_gw_simulate,
+    "gw_status": step_gw_status,
+    "erasure_cron": step_erasure_cron,
+    "partner": step_partner,
+}[STEP]()

@@ -201,3 +201,42 @@ Risiko runtime (bukan CI, baru terlihat di `tls-integration`/staging): ClickHous
 5. **`pytest` etl/ai-ocr-worker**: `pika==1.3.2` + `pip-audit --strict`, test erasure/passive declare/mTLS Ollama belum pernah dijalankan.
 
 Risiko runtime (staging): RabbitMQ strict default (butir G6.3-5), ALTCHA widget, Traefik `wg-https` + ACME DNS-01, intermediate PKI nameConstraints di klien Node/Go/Erlang, Redis ACL `~altcha:used:*` (pola glob dengan `:`), consent hash bila teks frontend berubah.
+# Gelombang 8 — Integrasi runtime: smoke E2E stack dev dengan TLS/mTLS (2026-10-06)
+
+Peran gabungan QA + DevSecOps (integration engineer). **Pertama kali alur bisnis diuji di runtime nyata**, bukan
+dengan membaca kode. Laporan lengkap + bukti: `docs/testing/E2E_SMOKE_REPORT.md`. Skrip: `scripts/smoke/`.
+
+## G8.1 Hasil skenario (run 2 orkestrator: 72/72 cek lolos)
+| # | Skenario | Status |
+|---|---|---|
+| a | Login OTP Super-App (ALTCHA PoW → OTP → JWT → `/v1/me`; juga via route handler Next.js + cookie) + negatif | Lolos |
+| b | Consent + Price Hunter (foto sintetis → worker Tesseract → `valid` → poin ledger → notifikasi; duplikat; VLM tanpa model → `flagged/vlm_unavailable`; DB tanpa HP mentah; MinIO SSE-S3) | Lolos (VLM nyata: tidak bisa, R1) |
+| c | POS OTP gate dari Odoo (request/verify ke BFF HTTPS, sync → `consumed`, resync idempoten, `member_mismatch`, `amount_mismatch`, tanpa OTP ditolak) | Lolos |
+| d | QRIS POS mock (create → simulate paid → status → sync; tx palsu, nominal beda, intent dipakai ulang ditolak; webhook signature salah 401) | Lolos |
+| e | DSAR hapus akun lintas Platform → Odoo → ClickHouse → `completed` (hash Odoo = hash BFF) | Lolos |
+| f | ETL Platform → ClickHouse; Metabase sehat | Lolos (ETL Odoo tidak aktif, R5) |
+| g | Negatif enkripsi (PG plaintext, mTLS Odoo/Ollama, MinIO HTTP, AMQP 5672, `pg_stat_ssl`, koneksi RabbitMQ) | Lolos |
+
+## G8.2 Perbaikan
+1. `infra/compose/docker-compose.yml` (service `ollama`): tambah `hostname: ollama`. Sebelumnya Ollama (bind loopback,
+   di belakang sidecar ghostunnel) menjawab **403** untuk `Host: ollama:11434` (proteksi DNS rebinding Ollama;
+   hostname container = id) → semua panggilan VLM gagal diam-diam menjadi `flagged/vlm_unavailable`. Setelah fix: 200.
+2. Bukan bug produk: skrip smoke baru (`scripts/smoke/{run-e2e-smoke.sh,bff_smoke.py,odoo_pos_smoke.py,README.md}`),
+   runbook `dev-stack-boot.md` (instal modul efn_*, profil `ai` butuh `--profile core`, smoke, jebakan Ollama/Git Bash).
+
+## G8.3 Sisa (detail & bukti di E2E_SMOKE_REPORT §5)
+- R1 Ollama 0.5.4 tidak bisa menarik `qwen2.5vl` (412 "requires a newer version") → devsecops/data-ai/architect.
+- R2 HP di query string `GET /v1/pos/loyalty/balance?member_ref=` tercatat utuh di access log Traefik → architect/BFF.
+- R3 Odoo memanggil `vies.api.odoo.com` (tanpa egress) → traceback di log → odoo-functional.
+- R4 README.md modul dirender sebagai RST saat install → 27 baris `(ERROR/3)` → odoo-engineer.
+- R5 ETL `fact_sales_line` (Odoo) tidak aktif di dev → data-ai/devsecops.
+- R6 Setelah DSAR `completed`, `GET /v1/me/requests` → 401 (status akhir tidak terlihat pengguna) → frontend/architect.
+- R7 Smoke E2E belum di CI → devsecops.
+- Risiko G6.3#1 (under-count agregat poin ClickHouse setelah erasure) **tidak muncul** di runtime: total per
+  `source` PG = ClickHouse (`price_hunter +30`, `dsar_forfeit -10`).
+
+## G8.4 Test
+Tidak ada kode service yang diubah → test unit tidak diulang. `ruff` 0.16.10 (check + format) dan `shellcheck`
+bersih untuk skrip baru; `docker compose config -q` dev & prod lolos. Yang belum diverifikasi di runtime: frontend
+POS OWL (skrip memanggil metode server yang sama), jalur VLM dengan model nyata, profil `observability`/`ops` di
+gelombang ini (lihat gelombang 7), webhook payment provider nyata, export DSAR besar.

@@ -1135,6 +1135,10 @@ services:
     <<: *common
     image: ollama/ollama:0.5.4
     profiles: ["ai"]
+    # Ollama yang bind ke loopback menolak (403) Host selain localhost/os.Hostname()/*.local|.internal (proteksi DNS
+    # rebinding). Klien datang lewat sidecar ollama-tls dengan `Host: ollama:11434`; tanpa hostname eksplisit
+    # (default = id container) semua panggilan VLM ocr-worker -> 403 -> flagged/vlm_unavailable (G8 E2E).
+    hostname: ollama
     volumes:
       - ollama-models:/root/.ollama
     networks: [internal, egress]
