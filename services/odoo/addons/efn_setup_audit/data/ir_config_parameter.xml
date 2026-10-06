@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Retensi log audit efn_audit (hari). PLACEHOLDER 730 hari sampai klien/auditor/DPO menjawab
+     (Q-6, Q-49). noupdate: nilai yang diubah admin tidak ditimpa upgrade. Perubahan parameter ini
+     ikut dicatat (aturan audit_rule_ir_config_parameter, prefix efn.). 0 = tidak pernah dihapus. -->
+<odoo noupdate="1">
+    <record id="param_efn_audit_retention_days" model="ir.config_parameter">
+        <field name="key">efn.audit.retention_days</field>
+        <field name="value">730</field>
+    </record>
+</odoo>

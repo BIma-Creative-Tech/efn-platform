@@ -1,27 +1,31 @@
 {
     "name": "EFN Setup - Audit Log",
     "summary": (
-        "Konfigurasi data-only: aturan OCA auditlog untuk harga, "
-        "pricelist, program loyalty/promo, dan penyesuaian stok."
+        "Konfigurasi data-only: aturan efn_audit untuk harga, pricelist, "
+        "program promo, penyesuaian stok, kontak, dan parameter efn.*."
     ),
-    "version": "19.0.1.0.1",
+    "version": "19.0.2.0.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
-    # AGPL-3: bergantung pada OCA auditlog (AGPL-3) — konvensi CLAUDE.md / services/odoo/oca/README.md.
-    "license": "AGPL-3",
+    # LGPL-3: sejak Gelombang 10 tidak lagi bergantung pada OCA auditlog (AGPL-3).
+    # Kebijakan: tanpa dependency OCA/Cybrosys/vendor (CLAUDE.md, ADR-031 Proposed).
+    "license": "LGPL-3",
     "website": "https://github.com/efn/efn-platform",
-    # R-S10 (insider/fraud harga & stok), R-B06 (fraud promo). ADR-015 (OCA dulu).
-    # auditlog 19.0.2.0.0 (OCA/server-tools, AGPL-3, depends base) terverifikasi 2026-10-05;
-    # diambil oleh scripts/fetch-oca.sh.
+    # R-S10 (insider/fraud harga & stok), R-B06 (fraud promo). Fit-gap F-17, spesifikasi
+    # model efn_audit: docs/08_ODOO_FIT_GAP.md §5.1.
     "depends": [
-        "auditlog",
+        "efn_audit",
         "product",
         "stock",
         "loyalty",
     ],
     "data": [
-        "data/auditlog_rule_data.xml",
+        "data/efn_audit_rule_data.xml",
+        "data/ir_config_parameter.xml",
     ],
-    "installable": True,
+    # SEMENTARA False: modul `efn_audit` belum ada (tugas efn-odoo-engineer, docs/08 §5.1).
+    # Ubah ke True pada PR yang sama yang menambahkan `efn_audit`, setelah nama field model
+    # dicocokkan dengan data/efn_audit_rule_data.xml.
+    "installable": False,
     "application": False,
 }

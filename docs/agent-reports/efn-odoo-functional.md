@@ -87,3 +87,66 @@ Q-22 diperluas: daftar kota outlet + tarif PBJT Perda, perlakuan takeaway/delive
 
 ## Batasan
 Tidak ada yang di-install/dijalankan. Field, model, dan xmlid diverifikasi pada source 19.0 via WebFetch (dirangkum per file di `docs/08`); perilaku runtime (offline POS, ePOS, QRIS, FEFO di POS, inter-company stok) menunggu PoC. Modul `efn_core`/`efn_pos_otp_gate`/`efn_kitting` tidak diubah.
+
+## Gelombang 10 — 2026-10-06 (kebijakan baru: tanpa dependency OCA/Cybrosys/vendor)
+
+### Perubahan fit-gap (`docs/08`)
+| ID | Sebelum | Sesudah |
+|---|---|---|
+| F-03 Inter-company | **O** — OCA `purchase_sale_inter_company` + `account_invoice_inter_company` | **C** — `efn_intercompany` fase 1 (§5.2). CE 19 hanya `account_payment_interco` (kliring pembayaran online `payment.transaction`), lokasi *Inter-company transit*, `ref_company_ids` |
+| F-17 Audit log | **O** — OCA `auditlog` (+ `patches.py`) | **C** — `efn_audit` **segera** (§5.1); standar CE parsial (chatter tracking, `stock.move.is_inventory`, `restrictive_audit_trail`) |
+| F-19 Konsolidasi | **O** — `mis_builder`, `account_financial_report` (+ `report_xlsx`, `date_range`) | **S + jalur data** — Invoice Analysis/Journal Items + ekspor xlsx standar; konsolidasi di Metabase/ClickHouse; custom Odoo hanya bila Q-6 menolak |
+| F-01 | saran `base_multi_company`/`product_multi_company` | `product.template.company_id` standar; OCA hanya referensi bila Q-8 = subset PT |
+| F-04, F-10 | saran `pos_session_sequence`, `pos_edit_order_line`, `pos_partner_birthdate` | dihapus (tidak dibutuhkan) |
+| F-07, F-12, F-16, F-26 | OCA sebagai opsi | jadi kolom *Referensi* (+ Cybrosys `pos_kitchen_screen_odoo` untuk KDS) |
+Rekap: Standar 19→**20**, OCA 3→**0**, Custom 8→**10**. Temuan baru §2 no. 11–17.
+
+### Referensi terverifikasi (WebFetch `__manifest__.py` @19.0, 2026-10-06)
+| Modul | Versi | Lisensi | Dipakai untuk |
+|---|---|---|---|
+| OCA/server-tools `auditlog` | 19.0.2.0.0 | AGPL-3 | konsep rule/log/line, exclude field, autovacuum (cron `autovacuum(180)` nonaktif), tanpa multi-company |
+| Cybrosys `user_audit` | 19.0.1.0.0 | LGPL-3 | hanya ide filter user; log dari JS, tanpa nilai lama/baru, log bisa dihapus wizard → tidak cocok |
+| OCA/multi-company `purchase_sale_inter_company` | 19.0.1.0.1 | AGPL-3 | PO→SO (`button_approve`, `ref_company_ids`, `so_from_po`, user inter-company) |
+| OCA/multi-company `account_invoice_inter_company` | 19.0.1.0.3 | AGPL-3 | invoice→bill (`action_post`, `auto_invoice_id`, cancel berantai) |
+| Cybrosys `inter_company_synchronization` | 19.0.1.0.0 | AGPL-3 | PO→SO di `button_confirm`, cegah loop via `origin`, tanpa invoice |
+| OCA/mis-builder `mis_builder` | 19.0.1.2.1 | AGPL-3 | (cadangan F-19) |
+| OCA/reporting-engine `report_xlsx` | 19.0.1.0.2 | AGPL-3 | tidak perlu (ekspor xlsx standar CE) |
+| OCA/server-ux `date_range` | 19.0.1.0.0 | LGPL-3 | tidak perlu |
+| OCA/account-financial-reporting `account_financial_report` | 19.0.0.0.26 | AGPL-3 | (cadangan F-19) |
+| Cybrosys `dynamic_accounts_report` / `base_accounting_kit` | 19.0.1.1.2 / 19.0.3.3.1 | LGPL-3 | (cadangan F-19; menarik `cybrosys_support_client`) |
+| OCA `product_multi_company` | 19.0.1.0.1 | AGPL-3 | referensi F-01 |
+| OCA `mrp_multi_level` | 19.0.1.0.5 | LGPL-3 | referensi F-12 |
+| OCA `quality_control_oca` | 19.0.1.0.0 | AGPL-3 | referensi F-16 |
+| OCA `pos_printing_qztray` | 19.0.1.0.1 | AGPL-3 | referensi F-07 |
+| Cybrosys `pos_kitchen_screen_odoo` | 19.0.1.0.0 | LGPL-3 | referensi F-26 |
+CybroAddons punya branch 19.0 (juga 20.0, saas-19.4). Padanan Cybrosys untuk audit log *lengkap* (nilai lama/baru) **tidak ditemukan** (listing tree terpotong + WebSearch) — "belum terverifikasi tidak ada".
+
+### `efn_setup_audit` 19.0.2.0.0 (data-only, LGPL-3)
+- `depends`: `efn_audit`, `product`, `stock`, `loyalty` (OCA `auditlog` dihapus). `__init__.py` tidak lagi mengimpor `patches.py`. **`installable: False`** sampai `efn_audit` ada.
+- `data/efn_audit_rule_data.xml` (noupdate): 9 aturan `efn.audit.rule` — pricelist, pricelist item, product.template, loyalty program/reward/rule, stock.quant (hanya `inventory_quantity`, `inventory_date`, `user_id`), res.partner (`name`, `phone`, `email`, `vat`, `active`, `company_id`; **phone & email ter-mask**), ir.config_parameter (`efn.%` + `auth_totp.policy` + `auth_password_policy.minlength`). Header file = kontrak nama field model.
+- `data/ir_config_parameter.xml`: `efn.audit.retention_days = 730` (PLACEHOLDER).
+- README: tabel aturan, yang sudah standar, migrasi dari OCA (uninstall `auditlog` wajib karena patch tidak dimuat lagi), keputusan klien.
+
+### Rekomendasi untuk efn-odoo-engineer
+- **E-18 (segera) `efn_audit`** — spesifikasi lengkap `docs/08 §5.1`: hook di `_inherit="base"` (create/write/unlink, tanpa monkeypatch registry, tanpa `ThrowAwayCache`), rule di-cache `ormcache` sebagai data polos, filter field sebelum `read`, nilai lama via `read()` sebelum `super().write`; model rule/log/line; masking HP/email sebelum simpan; immutable (write/unlink ditolak kecuali penanda `cr.cache` purge); grup auditor/manager; record rule multi-company; `@api.autovacuum` retensi; API `_efn_audit_purge_records` untuk erasure. Lalu set `efn_setup_audit` `installable: True`.
+- **E-19** `efn_privacy`: ganti cabang OCA `auditlog.log` → `_efn_audit_purge_records("res.partner", ids)`; depends `efn_audit`. `efn_pos_otp_gate`: test & docstring yang menyebut auditlog/patch registry disederhanakan (masalah urutan patch hilang).
+- **E-20** `git rm efn_setup_audit/patches.py efn_setup_audit/data/auditlog_rule_data.xml` (agent ini tidak bisa menghapus file).
+- **E-21 (fase 1)** `efn_intercompany` — `docs/08 §5.2`; jangan mulai sebelum Q-3/Q-4 dan konsultan pajak menjawab.
+- E-14 (Gelombang 1: tambahkan `efn_setup_audit` ke CI setelah fetch OCA) **gugur**.
+
+### Untuk efn-lead / efn-devsecops-engineer (di luar wewenang tulis agent ini)
+- `.github/workflows/ci.yml` `pick()`: hapus cabang `auditlog`; selama `efn_audit` belum ada, `efn_setup_audit` ber-`installable: False` — Odoo diperkirakan melewatinya pada `-i` (state `uninstallable`), **belum diuji di 19.0**; lebih aman lewati di `pick()` bila `services/odoo/addons/efn_audit/__manifest__.py` belum ada. Sama untuk `e2e-nightly.yml` (`-i ...,efn_setup_audit,...`).
+- `scripts/fetch-oca.sh`, `services/odoo/oca/README.md`, `docs/06 §2` (daftar OCA untuk fetch) perlu diselaraskan dengan kebijakan tanpa OCA (efn-architect/devsecops).
+- DB dev/staging yang sudah memasang OCA `auditlog`: uninstall `auditlog` setelah `efn_audit` aktif (tanpa `patches.py`, bug flush ORM 19 kembali).
+- **efn-data-ai-engineer**: ETL akuntansi (`account_move_line` dst.) + dashboard konsolidasi Metabase (`docs/08 §5.3`) — belum ada di `services/etl`.
+
+### Pertanyaan klien (Gelombang 10)
+1. **Q-6 / auditor eksternal:** apakah laporan keuangan & konsolidasi di Metabase (data warehouse, near-real-time 15 menit) dapat diterima, atau laporan wajib keluar dari Odoo?
+2. **Q-49 + DPO:** retensi log audit (placeholder 2 tahun)? Apakah cukup nomor HP/email **tersamar** di log audit, atau auditor perlu nilai lengkap (butuh enkripsi kolom + persetujuan DPO)?
+3. Siapa auditor internal per PT (grup *EFN Audit: Auditor*)? Perlu audit tambahan untuk pajak/fiscal position, metode pembayaran POS, hak akses user?
+4. **Q-3/Q-4:** harga transfer CK→Retail (harga PO vs pricelist F&B), siapa yang membuat dokumen (PO Retail memicu SO F&B?), SO otomatis dikonfirmasi?, settlement/netting bulanan? PPN atas penjualan paket CK antar-PT (konsultan pajak).
+5. **Q-8:** produk dipakai semua PT, satu PT, atau sebagian PT?
+6. Biaya produk AVCO (`product.product.standard_price`) perlu diaudit? (volume: tiap penerimaan barang).
+
+### Asumsi belum terverifikasi
+xmlid `base.field_ir_config_parameter__key/value` dan `base.field_res_partner__name/phone/email/vat/active/company_id` (konvensi, belum diuji install); perilaku `-i` atas modul `installable: False`; aktivasi *Inter-company transit*; overhead hook `base` (ukur di PoC); `restrictive_audit_trail` perilaku detail.

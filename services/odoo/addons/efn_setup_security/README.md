@@ -34,4 +34,4 @@ odoo -d <db> -i efn_setup_security
 Ubah kemudian via *Settings → Permissions → Enforce two-factor authentication* dan *Minimum Password Length* (tidak ditimpa upgrade).
 
 ## Batasan
-Belum pernah di-install. Audit log (OCA `auditlog`) dipisah ke `efn_setup_audit` karena berlisensi AGPL-3 dan menarik dependensi `stock`/`loyalty`.
+Belum pernah di-install. Aturan audit log dipisah ke `efn_setup_audit` (data untuk modul custom `efn_audit`, Gelombang 10 — tanpa dependency OCA) karena menarik dependensi `stock`/`loyalty`.

@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Aturan audit untuk model `efn.audit.rule` (modul custom efn_audit, spesifikasi
+     docs/08_ODOO_FIT_GAP.md §5.1). Menggantikan data/auditlog_rule_data.xml (OCA auditlog).
+
+     KONTRAK FIELD (harus sama dengan implementasi efn-odoo-engineer):
+       name (Char), model_id (M2o ir.model, unik), active (Boolean, default True),
+       log_create / log_write / log_unlink (Boolean),
+       tracked_field_ids (M2m ir.model.fields; kosong = semua field yang memenuhi syarat),
+       excluded_field_ids (M2m ir.model.fields), masked_field_ids (M2m ir.model.fields),
+       filter_domain (Char, domain Python; kosong = semua record),
+       capture_unlink_values (Boolean), retention_days (Integer; 0 = pakai efn.audit.retention_days).
+     Aturan langsung aktif saat dibuat (tidak ada state draft/confirm seperti OCA).
+
+     noupdate="1": admin boleh mengubah aturan (mis. menambah field) tanpa ditimpa upgrade.
+     Perubahan aturan sendiri selalu dicatat efn_audit (hard-coded, bukan data).
+     xmlid baru (audit_rule_*) agar tidak bentrok dengan xmlid lama rule_* milik OCA auditlog. -->
+<odoo noupdate="1">
+
+    <!-- Harga: pricelist & aturan pricelist (harga member/promo/kuantitas, Q-9). Semua field. -->
+    <record id="audit_rule_product_pricelist" model="efn.audit.rule">
+        <field name="name">EFN - Pricelist</field>
+        <field name="model_id" ref="product.model_product_pricelist"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+    </record>
+    <record id="audit_rule_product_pricelist_item" model="efn.audit.rule">
+        <field name="name">EFN - Aturan Pricelist</field>
+        <field name="model_id" ref="product.model_product_pricelist_item"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+    </record>
+
+    <!-- Produk: harga jual/biaya + master. Semua field yang memenuhi syarat (perilaku sama
+         dengan aturan OCA lama mode full). list_price juga ber-tracking chatter standar. -->
+    <record id="audit_rule_product_template" model="efn.audit.rule">
+        <field name="name">EFN - Produk (harga &amp; master)</field>
+        <field name="model_id" ref="product.model_product_template"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="False"/>
+    </record>
+
+    <!-- Promo mekanik toko (ADR-020: poin member TIDAK di Odoo). loyalty.program tidak punya
+         chatter di 19.0 (terverifikasi) sehingga efn_audit satu-satunya jejak.
+         Flag efn_requires_otp (efn_pos_otp_gate) ikut tercatat karena semua field dilacak. -->
+    <record id="audit_rule_loyalty_program" model="efn.audit.rule">
+        <field name="name">EFN - Program Promo/Loyalty</field>
+        <field name="model_id" ref="loyalty.model_loyalty_program"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+    </record>
+    <record id="audit_rule_loyalty_reward" model="efn.audit.rule">
+        <field name="name">EFN - Reward Promo</field>
+        <field name="model_id" ref="loyalty.model_loyalty_reward"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+    </record>
+    <record id="audit_rule_loyalty_rule" model="efn.audit.rule">
+        <field name="name">EFN - Syarat Promo</field>
+        <field name="model_id" ref="loyalty.model_loyalty_rule"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+    </record>
+
+    <!-- Stok: hanya hitungan opname manual. `quantity`/`reserved_quantity` TIDAK dilacak
+         (berubah lewat quant.write pada setiap mutasi stok — volume, R-T11). Penyesuaian yang
+         diterapkan sudah tercatat standar sebagai stock.move is_inventory=True (Moves History).
+         Field terverifikasi di stock/models/stock_quant.py 19.0. -->
+    <record id="audit_rule_stock_quant" model="efn.audit.rule">
+        <field name="name">EFN - Hitungan Stok Opname (quant)</field>
+        <field name="model_id" ref="stock.model_stock_quant"/>
+        <field name="log_create" eval="False"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="False"/>
+        <field name="tracked_field_ids" eval="[(6, 0, [
+            ref('stock.field_stock_quant__inventory_quantity'),
+            ref('stock.field_stock_quant__inventory_date'),
+            ref('stock.field_stock_quant__user_id'),
+        ])]"/>
+    </record>
+
+    <!-- Kontak/member: nomor HP menentukan member_ref OTP (efn_pos_otp_gate, SEC-07).
+         Create tidak dicatat (volume POS/Super-App). HP & email DISIMPAN TER-MASK (UU PDP:
+         minimisasi) — nilai lengkap tidak pernah masuk log. efn_member_hash sengaja tidak
+         dilacak. Log partner dihapus saat erasure (efn_privacy). Odoo 19 res.partner tidak
+         punya field `mobile` (dihapus di base). -->
+    <record id="audit_rule_res_partner" model="efn.audit.rule">
+        <field name="name">EFN - Kontak/Pelanggan (ubah &amp; hapus)</field>
+        <field name="model_id" ref="base.model_res_partner"/>
+        <field name="log_create" eval="False"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="False"/>
+        <field name="tracked_field_ids" eval="[(6, 0, [
+            ref('base.field_res_partner__name'),
+            ref('base.field_res_partner__phone'),
+            ref('base.field_res_partner__email'),
+            ref('base.field_res_partner__vat'),
+            ref('base.field_res_partner__active'),
+            ref('base.field_res_partner__company_id'),
+        ])]"/>
+        <field name="masked_field_ids" eval="[(6, 0, [
+            ref('base.field_res_partner__phone'),
+            ref('base.field_res_partner__email'),
+        ])]"/>
+    </record>
+
+    <!-- Parameter sistem EFN (kill switch OTP efn.pos.otp_required_for_promo, batas gateway,
+         dll.) + kebijakan keamanan (2FA, panjang password). Secret TIDAK boleh ada di
+         ir.config_parameter (CLAUDE.md: hanya /run/secrets) sehingga `value` dicatat apa adanya;
+         parameter lain (mis. database.secret) di luar filter. -->
+    <record id="audit_rule_ir_config_parameter" model="efn.audit.rule">
+        <field name="name">EFN - Parameter Sistem efn.* &amp; keamanan</field>
+        <field name="model_id" ref="base.model_ir_config_parameter"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+        <field name="filter_domain">['|', ('key', '=like', 'efn.%'), ('key', 'in', ['auth_totp.policy', 'auth_password_policy.minlength'])]</field>
+        <field name="tracked_field_ids" eval="[(6, 0, [
+            ref('base.field_ir_config_parameter__key'),
+            ref('base.field_ir_config_parameter__value'),
+        ])]"/>
+    </record>
+</odoo>
