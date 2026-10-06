@@ -62,6 +62,17 @@ Kota yang memakai tarif sama dengan PB1 default **tidak** perlu fiscal position.
 ### Service charge
 CE 19 **tidak** punya fitur service charge POS (modul di Apps Store adalah pihak ketiga; OCA/pos 19.0 tidak menyediakan). Opsi standar yang disarankan: **"pajak" Service Charge** (lihat demo) yang dipasang di produk menu bersama PB1. Alternatif tanpa efek ke PB1: produk "Service Charge" yang ditambahkan manual oleh kasir (rawan lupa/fraud) atau produk tip (`pos.config.iface_tipproduct`) — keduanya tidak masuk dasar PB1 otomatis. Keputusan masuk/tidaknya SC ke DPP PB1 = konsultan pajak (Q-22).
 
+## Tanpa egress internet (R3, Gelombang 9)
+Odoo EFN tidak punya akses internet (hanya jaringan internal, SEC-01). Fitur standar yang memanggil layanan Odoo S.A. dimatikan lewat **konfigurasi** (`data/no_egress.xml`, `noupdate="0"` agar diterapkan ulang setiap upgrade):
+
+| Sumber (19.0, terverifikasi di source) | Perilaku tanpa egress | Konfigurasi |
+|---|---|---|
+| Cron `base_vat.vies_iap_check_update` → `POST https://vies.api.odoo.com/api/vies/1/check_update` (selalu, tidak bergantung `vat_check_vies`) | traceback `NameResolutionError` (ERROR) tiap hari | cron `active = False` |
+| Cron `mail.ir_cron_module_update_notification` (publisher warranty) → `POST http://services.odoo.com/publisher-warranty/` dengan nama/email/telepon company + jumlah user | cron gagal (`cron_mode=None` → exception) + transfer data ke luar negeri bila ada egress | cron `active = False` |
+| VIES saat mengisi NPWP (`res.company.vat_check_vies`) | tidak dipanggil bila tidak ada company dengan flag ini | `vat_check_vies = False` di 4 company (install); default CE juga False |
+
+Hanya dipicu aksi pengguna (bukan cron) — dibiarkan, didokumentasikan untuk runbook/pelatihan: `partner_autocomplete` (auto-install; enrich company & autocomplete nama/NPWP → `partner-autocomplete.odoo.com`, gagal = WARNING; bila ingin bersih: uninstall modul ini lewat Apps), `snailmail`/`sms` (hanya bila dipakai; `stock_sms` default nonaktif: `res.company.stock_text_confirmation = False`), `web_unsplash`/`html_editor` (gambar & AI teks, hanya saat dipakai), `google_gmail`/`microsoft_outlook`/`google_address_autocomplete` (hanya bila dikonfigurasi), menu Apps (`apps.odoo.com`). Untuk mengaktifkan lagi cron di atas (hanya bila egress disetujui): ubah `no_egress.xml`, bukan UI.
+
 ## Keputusan klien yang dibutuhkan
 - **Q-1** daftar PT, nama legal, NPWP, alamat (ganti nama placeholder lewat UI; tidak ditimpa upgrade).
 - **Q-2** CoA seragam atau berbeda per PT; **akun liabilitas PB1** (go-live blocker), akun pendapatan service charge, akun dana titipan (ADR-019), akun liabilitas poin (ADR-020).

@@ -8,6 +8,8 @@
 # Env: SMOKE_STEP (setup|otp_request|otp_verify|sync|gw_create|gw_simulate|gw_status|erasure_cron|partner)
 #      dan parameter per langkah (lihat fungsi). Keluaran: satu baris `SMOKE_RESULT <json>`.
 # Dipakai hanya di DB dev (`efn_odoo` dev); ditolak bila APP_ENV bukan dev.
+# R2 (docs/04 §8.13): skrip ini tidak pernah menaruh nomor HP/token di URL. Saldo poin (bila dicek) wajib lewat
+# `efn.bff.client.post("/v1/pos/loyalty/balance", {"member_ref": ...})`; `efn.bff.client.get` menolak PII di query.
 # ruff: noqa: F821  (variabel `env` disediakan odoo shell)
 import json
 import os
@@ -325,6 +327,9 @@ def step_partner():
     partners = env["res.partner"].with_context(active_test=False).search([("efn_member_hash", "=", member_hash)])
     pid = int(os.environ.get("SMOKE_PARTNER_ID") or 0)
     p = env["res.partner"].with_context(active_test=False).browse(pid).exists() if pid else env["res.partner"]
+    # SEC-31 (docs/04 §8.13): partner teranonim hanya punya flag `efn_erased`; tidak ada request_id /
+    # member_hash yang tersisa. Penanda sementara idempotensi complete wajib kosong setelah complete.
+    Pending = env["efn.privacy.erasure.pending"] if "efn.privacy.erasure.pending" in env else None
     out(
         by_hash=len(partners),
         partner_exists=bool(p),
@@ -332,6 +337,9 @@ def step_partner():
         phone_present=bool(p.phone) if p else None,
         active=p.active if p else None,
         hash_present=bool(p.efn_member_hash) if p else None,
+        erased_flag=bool(p.efn_erased) if p and "efn_erased" in p._fields else None,
+        legacy_request_field="efn_erasure_request_id" in env["res.partner"]._fields,
+        pending_markers=Pending.sudo().search_count([]) if Pending is not None else None,
     )
 
 

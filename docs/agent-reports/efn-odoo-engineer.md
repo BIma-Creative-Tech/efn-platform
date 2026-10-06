@@ -234,3 +234,51 @@ Test addon pertama kali dijalankan di image `efn-odoo:ci` + PostgreSQL 16 (harne
 - HTTP nyata ke BFF/TLS mTLS (semua di-mock); controller Odoo tidak diuji lewat `HttpCase`.
 - Upgrade (`-u`) modul dan data `efn_setup_*` terhadap DB berisi data; multi-worker/cron nyata.
 - Patch auditlog: perlu dipantau tiap kenaikan pin OCA; laporkan ke upstream OCA/server-tools.
+
+## Gelombang 9 — SEC-31, R2, R3, R4, sisa SEC-07 (2026-10-06)
+
+Acuan: `docs/04_SERVICE_CONTRACTS.md` §8.13 (v3.6), `docs/reviews/SECURITY_REVIEW_2026-10-06-r3.md` (SEC-31, SEC-07 partial), `docs/testing/E2E_SMOKE_REPORT.md` (R2, R3, R4). Semua diverifikasi di image `efn-odoo:ci` (Odoo 19.0-20260926) + PostgreSQL 16.
+
+### 1. SEC-31 — erasure tanpa tautan (`efn_privacy` 19.0.1.1.0)
+- Field `res.partner.efn_erasure_request_id` **dihapus**; diganti flag boolean `efn_erased` (admin saja). Nama partner teranonim `Pelanggan dihapus` (tanpa potongan id). `efn_member_hash` kosong karena HP dikosongkan, kini **diverifikasi eksplisit** setelah write (gagal → savepoint rollback, request tidak di-complete).
+- `privacy.log.execution_details` tanpa request_id (`EFN erasure (UU PDP): n partner dianonimkan …`).
+- **Idempotensi `complete` — desain dipilih: penanda sementara** `efn.privacy.erasure.pending` (`request_id`, `records`; tanpa id partner/hash/HP). Dibuat di savepoint yang sama dengan anonimisasi, ditambah bila run berikutnya menemukan partner baru, **dihapus begitu BFF menjawab 2xx**; sisa (request dibatalkan di BFF) dibersihkan autovacuum > 30 hari. Alternatif "nilai turunan di `privacy.log`" ditolak: hash/HMAC deterministik dari request_id tetap bisa ditautkan oleh siapa pun yang tahu request_id. Model tanpa `company_id` (pengecualian konvensi, dicatat di README): data teknis lintas company; ACL baca saja `base.group_system`.
+- Migrasi `migrations/19.0.1.1.0/pre-migrate.py`: `efn_erased = TRUE` untuk partner lama, request_id di-NULL-kan, potongan id dihapus dari `name`/`complete_name`/`account_move.invoice_partner_display_name`, request_id dihapus dari `privacy_log`; ORM lalu men-drop kolom lama. **Diuji runtime**: install versi HEAD (git archive) → seed partner + privacy_log gaya lama → `-u efn_core,efn_privacy,efn_pos_otp_gate` → kolom `efn_erasure_request_id` hilang, partner `Pelanggan dihapus`/`efn_erased=t`, log bersih, 0 ERROR.
+- Catatan migrasi: request lama yang sudah anonim tetapi complete-nya belum diterima BFF akan di-complete ulang dengan `records: 0` (informatif).
+- Test (`tests/test_erasure.py`): scan `row_to_json` tabel `res_partner`, `privacy_log`, penanda, `mail_message`, `pos_order` → tidak ada request_id, potongan 8 karakter, atau member_hash setelah complete; retry complete (gagal lalu sukses) mengirim `records: 2` dua kali tanpa privacy.log ganda dan penanda hilang; complete 409 → penanda tetap; autovacuum; penanda tidak terbaca kasir.
+
+### 2. R2 — tidak ada PII di URL (`efn_core` 19.0.1.4.0)
+- Audit: Odoo **tidak pernah** memanggil saldo poin (tidak ada pemakaian `/v1/pos/loyalty/balance` di addons). Pemakaian `efn.bff.client.get` hanya `GET /v1/pos/payments/<uuid>` dan `GET /v1/pos/privacy/erasures?store=odoo` — tanpa PII.
+- Pencegahan regresi: `get()` menolak (`ValueError`, tanpa HTTP) kunci query `PII_QUERY_KEYS` (member_ref, member_hash, phone, mobile, msisdn, email, token, discount_token, otp, code, challenge_id, nik, npwp; case-insensitive) dan nilai str/int yang tampak seperti nomor HP (≥ 8 digit); `get()`/`post()` menolak segmen path seperti nomor HP. Test `test_get_rejects_pii_in_query_and_path`, `test_get_allows_non_pii_params`.
+- `scripts/smoke/odoo_pos_smoke.py`: catatan R2 di header (saldo hanya lewat `post(... {"member_ref"})`); langkah `partner` kini juga melaporkan `erased_flag`, `legacy_request_field`, `pending_markers` (SEC-31). Probe `GET /v1/pos/loyalty/balance?member_ref=…` di `scripts/smoke/bff_smoke.py:212` **di luar batas file saya** → untuk BFF/QA.
+
+### 3. R3 — tanpa egress internet (`efn_setup_company` 19.0.1.2.0, konfigurasi standar)
+Diverifikasi di source 19.0: cron `base_vat.vies_iap_check_update` memanggil `https://vies.api.odoo.com/api/vies/1/check_update` **selalu** (tidak bergantung `vat_check_vies`) dan `_logger.exception` saat gagal; cron `mail.ir_cron_module_update_notification` (publisher warranty, `update_notification(None)`) menaikkan exception tanpa egress dan, bila ada egress, mengirim nama/email/telepon company + jumlah user ke Odoo S.A.
+- `data/no_egress.xml` (`noupdate="0"`): kedua cron `active = False`. `vat_check_vies = False` di 4 company (`res_company_data.xml`, saat install; default CE juga False).
+- **Diuji runtime**: install ke DB yang sudah ada → kedua cron nonaktif; `-u base_vat` → tetap nonaktif (upgrade dependen menerapkan ulang); cron publisher yang diaktifkan manual admin **tidak** ditimpa `-u mail` (xmlid noupdate di modul asal) — diterima, didokumentasikan.
+- Pemicu lain yang hanya dari aksi pengguna (partner_autocomplete, snailmail/sms, unsplash/OLG, gmail/outlook, Apps) didokumentasikan di README; `partner_autocomplete` (auto-install) gagal sebagai WARNING, disarankan uninstall bila log harus bersih — keputusan functional/lead.
+- Test `efn_setup_company/tests/test_no_egress.py` (3 test).
+- **Bug ditemukan & diperbaiki saat verifikasi**: `efn_setup_company` gagal di-install ke DB yang sudah ada (`AttributeError: 'int' object has no attribute 'name'` di `account.chart.template.try_loading` 19.0, yang memakai `company.name` untuk warning sebelum mengubah int menjadi recordset). Kini company dikirim sebagai recordset (`obj().env['res.company'].browse(ref(...))`). CI tidak menangkapnya karena semua modul di-install sekaligus di DB baru.
+
+### 4. R4 — docutils `(ERROR/3)` saat install
+Odoo 19 `ir.module.module._get_desc` merender README sebagai RST dengan docutils **kecuali** ada `static/description/index.html`. Ditambahkan `static/description/index.html` ringkas (judul, ringkasan, ADR/risiko, rujukan ke README.md) di **10 addon `efn_*`**; isi README.md tidak dikurangi (tetap sumber utama). Hasil: 0 baris docutils di log install+test (sebelumnya 27).
+
+### 5. SEC-07 sisa — kunci HP member (`efn_pos_otp_gate` 19.0.1.4.0)
+- **Fit-gap standar 19.0 (verifikasi source)**: `res.partner` create/write hanya untuk `base.group_partner_manager`; `base.group_user` baca saja; POS mengedit pelanggan lewat form standar (tunduk ACL). Standar biner (kasir bisa membuat **dan** mengubah HP siapa pun, atau tidak sama sekali) → gap kecil.
+- Implementasi minimal `models/res_partner.py`: HP partner yang punya riwayat OTP (`efn.pos.otp.challenge.partner_id`, retensi 30 hari) atau order `efn_otp_gate_state` consumed/review hanya bisa diubah/dikosongkan `point_of_sale.group_pos_manager`/`base.group_system`/OdooBot; lainnya `AccessError`. Perubahan manajer → catatan chatter ter-mask (`62812****890 → 62813****222`) + log tanpa nomor; auditlog mencatat nilai lengkap.
+- **Temuan penting (lintas modul)**: OCA auditlog mem-patch `write` di kelas registry dengan `origin` = MRO saat patch. Bila aturan auditlog dibuat di proses yang sama sebelum modul lain dimuat (install/upgrade sekaligus — persis harness CI), override `write` modul yang dimuat belakangan **terlewati sampai restart**. Karena itu ada dua lapis: override `write` (cek awal + chatter) dan `@api.constrains("phone")` sebagai jaring pengaman (constraint dijalankan Odoo dengan sudo → keputusan memakai uid asli; penanda "sudah dicek" di `cr.cache`, bukan context yang bisa diisi klien RPC). Dampak umum untuk override `write/create/unlink` lain pada model ber-aturan auditlog (product.template, pricelist, loyalty.*, stock.quant, res.partner): **restart Odoo setelah install/upgrade** (deploy normal sudah `--stop-after-init` lalu start). Untuk devsecops/QA.
+- Test `tests/test_partner_phone_lock.py` (7 test): kasir ditolak ubah/kosongkan HP member (lapis 1 & 2), boleh field lain/HP non-member/buat pelanggan baru, riwayat order consumed mengunci, manajer tercatat (chatter ter-mask atau auditlog), OdooBot tidak dikunci, constraint pakai uid asli & tidak bisa dilewati lewat context.
+
+### 6. Hasil
+- `odoo-test.sh` (fetch OCA, build, install + `--test-tags efn`, install `efn_setup_security`): **`0 failed, 0 error(s) of 117 tests`**, 0 baris `ERROR`/`CRITICAL`, 0 baris docutils. Per modul (stats): efn_core 32, efn_kitting 9, efn_pos_otp_gate 46, efn_pos_payment_gateway 20, efn_privacy 23, efn_setup_company 5 (termasuk subtest).
+- `ruff check` + `ruff format --check` (0.16.10) untuk `services/odoo` + `scripts/smoke/odoo_pos_smoke.py`: bersih (70 file).
+
+### File diubah/baru
+`efn_core/{__manifest__.py,models/efn_bff_client.py,tests/test_bff_client.py,README.md}`; `efn_privacy/{__manifest__.py,models/efn_privacy_erasure.py,models/res_partner.py,security/ir.model.access.csv(baru),migrations/19.0.1.1.0/pre-migrate.py(baru),tests/test_erasure.py,tests/test_member_hash.py,README.md}`; `efn_pos_otp_gate/{__manifest__.py,models/__init__.py,models/res_partner.py(baru),tests/__init__.py,tests/test_partner_phone_lock.py(baru),README.md}`; `efn_setup_company/{__manifest__.py,data/no_egress.xml(baru),data/res_company_data.xml,tests/(baru),README.md}`; `*/static/description/index.html` (10, baru); `scripts/smoke/odoo_pos_smoke.py`.
+
+### Asumsi / belum teruji
+- BFF membuang item erasure dari daftar setelah `complete` 2xx; bila item yang sudah complete muncul lagi, Odoo complete ulang dengan `records: 0` (aman, informatif).
+- Lapis 1 SEC-07 (chatter) tidak aktif di proses yang terkena patch auditlog lama; diverifikasi di shell proses baru bahwa lapis 1 menolak. Pesan error di UI POS saat menyimpan pelanggan belum diuji lewat tour.
+- `mobile` tidak ada di `res.partner` 19.0 base; constraint hanya `phone` (override `write` menangani `mobile` bila modul lain menambahkannya).
+- Install dengan data demo (`--without-demo=False`): `try_loading` kini lolos, tetapi install berhenti di `efn_setup_mrp/demo/mrp_demo.xml:34` (INSERT `stock_warehouse_orderpoint` dengan `location_id`/`warehouse_id` NULL). Bug demo yang sudah ada, di luar paket ini — untuk efn-odoo-functional (pemilik `efn_setup_mrp`). Install tanpa demo (CI, produksi) tidak terdampak.
+- Smoke E2E (`run-e2e-smoke.sh`) belum dijalankan ulang terhadap stack penuh di gelombang ini.

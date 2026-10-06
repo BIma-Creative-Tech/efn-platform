@@ -13,21 +13,26 @@ Alur tiap 15 menit (user OdooBot):
    - `auditlog.log` (+ lines, cascade) untuk `res.partner` tsb dihapus bila OCA auditlog
      terpasang (aturan efn_setup_audit mencatat nomor HP lama, termasuk write anonimisasi ini).
    - Jejak `privacy.log` standar (privacy_lookup) dengan nama/email placeholder valid; tanpa
-     hash/HP.
+     hash/HP dan **tanpa request_id** (SEC-31).
+   - Penanda sementara `efn.privacy.erasure.pending` (request_id + jumlah, TANPA id partner)
+     dibuat/ditambah di transaksi yang sama.
    - Commit (di luar test), lalu `POST /v1/pos/privacy/erasures/:id/complete
-     {store:"odoo", records:n}`. `n` = jumlah partner bertanda request ini (termasuk run
-     sebelumnya) -> idempoten: rerun / complete yang sempat gagal mengirim angka yang sama.
+     {store:"odoo", records:n}`. `n` = jumlah di penanda (termasuk run sebelumnya) ->
+     idempoten: rerun / complete yang sempat gagal mengirim angka yang sama.
+   - Complete diterima BFF -> penanda dihapus. Sejak itu tidak ada lagi nilai di Odoo yang
+     menautkan partner teranonim ke permintaan/member_hash (SEC-31, docs/04 §8.13).
 4. Dokumen akuntansi & `pos.order` dipertahankan dengan partner teranonim (retensi 10 th,
    menunggu DPO).
 
-Log hanya memuat `request_id` dan jumlah; tidak pernah nomor HP, email, atau hash.
+Log hanya memuat `request_id` dan jumlah; tidak pernah nomor HP, email, hash, atau id partner.
 """
 
 import logging
 import re
 import threading
+from datetime import timedelta
 
-from odoo import _, api, models
+from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 
 from odoo.addons.efn_core.models.efn_bff_client import EfnBffError
@@ -42,6 +47,9 @@ STORE = "odoo"
 DEFAULT_BATCH = 100
 REQUEST_ID_RE = re.compile(r"^[0-9A-Za-z\-]{8,64}$")
 PLACEHOLDER_NAME = "Member"
+# Nama partner teranonim: TANPA potongan request_id (SEC-31 rekomendasi 3).
+ERASED_PARTNER_NAME = "Pelanggan dihapus"
+PENDING_MAX_AGE_DAYS = 30
 # Wajib berisi '@': privacy.log._anonymize_email mengembalikan UserError untuk email tanpa '@'
 # (docs/08 §2 temuan 9). Domain .invalid (RFC 2606) tidak pernah bisa menerima email.
 PLACEHOLDER_EMAIL = "erased@efn.invalid"
@@ -166,12 +174,19 @@ class EfnPrivacyErasure(models.AbstractModel):
         if not 200 <= response.status < 300:
             _logger.warning("EFN privacy: complete request %s ditolak BFF (HTTP %s)", request_id, response.status)
             return False
+        # SEC-31: tautan request -> jumlah hanya hidup sampai BFF menerima complete.
+        self.env["efn.privacy.erasure.pending"]._efn_done(request_id)
+        self._efn_commit()
         _logger.info("EFN privacy: request %s selesai (%d partner)", request_id, records)
         return True
 
     @api.model
     def _efn_erase_member(self, request_id, hashed):
-        """Anonimkan semua partner dengan hash cocok. Kembalikan jumlah partner bertanda request."""
+        """Anonimkan semua partner dengan hash cocok.
+
+        Kembalikan jumlah partner yang dianonimkan untuk request ini, termasuk run sebelumnya
+        yang complete-nya gagal (dibaca dari penanda sementara, bukan dari partner).
+        """
         Partner = (
             self.env["res.partner"]
             .sudo()
@@ -184,37 +199,34 @@ class EfnPrivacyErasure(models.AbstractModel):
         )
         partners = Partner.search([("efn_member_hash", "=", hashed)])
         if partners:
-            self._efn_anonymize_partners(partners, request_id)
+            self._efn_anonymize_partners(partners)
             self.env["privacy.log"].sudo().create(
                 {
                     "anonymized_name": PLACEHOLDER_NAME,
                     "anonymized_email": PLACEHOLDER_EMAIL,
-                    "execution_details": f"EFN erasure request {request_id}: "
-                    f"{len(partners)} partner dianonimkan (res.partner, pos.order kontak, chatter, auditlog)",
+                    # SEC-31: tanpa request_id / hash / id partner.
+                    "execution_details": f"EFN erasure (UU PDP): {len(partners)} partner dianonimkan "
+                    "(res.partner, pos.order kontak, chatter, auditlog)",
                     "records_description": f"res.partner: {len(partners)}",
                 }
             )
-        return Partner.search_count([("efn_erasure_request_id", "=", request_id)])
+        return self.env["efn.privacy.erasure.pending"]._efn_add(request_id, len(partners))
 
     @api.model
-    def _efn_anonymize_partners(self, partners, request_id):
+    def _efn_anonymize_partners(self, partners):
         ids = partners.ids
         vals = {fname: False for fname in PARTNER_CLEAR_FIELDS if fname in partners._fields}
-        vals.update(
-            {
-                "name": f"Pelanggan dihapus {request_id[:8]}",
-                "efn_erasure_request_id": request_id,
-            }
-        )
+        vals.update({"name": ERASED_PARTNER_NAME, "efn_erased": True})
         partners.write(vals)
+        # HP kosong -> efn_member_hash (compute stored) ikut kosong. Dipastikan eksplisit: hash
+        # yang tersisa = tautan ke member_hash platform (SEC-31). Gagal -> savepoint rollback.
+        partners.flush_recordset()
+        if partners.filtered("efn_member_hash"):
+            raise UserError(_("member_hash partner teranonim tidak terhapus."))
         # Partner milik user aktif tidak bisa diarsipkan (constraint base); user diurus terpisah.
         with_users = partners.filtered("user_ids")
         if with_users:
-            _logger.warning(
-                "EFN privacy: request %s — %d partner terkait user tidak diarsipkan",
-                request_id,
-                len(with_users),
-            )
+            _logger.warning("EFN privacy: %d partner terkait user tidak diarsipkan", len(with_users))
         (partners - with_users).write({"active": False})
 
         # Salinan kontak stored di pos.order (compute dari partner, readonly=False).
@@ -240,3 +252,49 @@ class EfnPrivacyErasure(models.AbstractModel):
                 domain = [("model_id.model", "=", "res.partner")]
             Log.search(domain + [("res_id", "in", ids)]).unlink()
         return len(partners)
+
+
+class EfnPrivacyErasurePending(models.Model):
+    """Penanda SEMENTARA untuk idempotensi `complete` (SEC-31, docs/04 §8.13).
+
+    Masalah: setelah anonimisasi, HP partner kosong sehingga pencarian ulang via member_hash
+    mengembalikan 0. Bila `complete` gagal (BFF down) dan diulang, `records` akan salah. Desain
+    lama menyimpan `request_id` permanen di partner -> partner teranonim bisa ditautkan ke
+    `dsar_request` (dan member_hash-nya). Sekarang:
+
+    - Penanda hanya berisi `request_id` + jumlah (TIDAK ada id/nama partner, hash, atau HP),
+      dibuat di transaksi/savepoint yang sama dengan anonimisasi (atomik).
+    - Dihapus begitu BFF menerima `complete` (2xx). Sisa penanda (mis. request dibatalkan di
+      BFF setelah anonimisasi tetapi sebelum complete) dibersihkan autovacuum setelah 30 hari.
+
+    Tanpa `company_id` (pengecualian konvensi CLAUDE.md, dicatat di README): data teknis proses
+    erasure lintas company, bukan data bisnis per PT; ditulis cron (sudo), ACL baca saja untuk
+    `base.group_system`.
+    """
+
+    _name = "efn.privacy.erasure.pending"
+    _description = "EFN Privacy Erasure Pending (penanda sementara)"
+
+    request_id = fields.Char(required=True, readonly=True, index=True)
+    records = fields.Integer(required=True, default=0, readonly=True)
+
+    _request_id_unique = models.Constraint("UNIQUE(request_id)", "Penanda erasure per request harus unik.")
+
+    @api.model
+    def _efn_add(self, request_id, count):
+        """Tambah `count` ke penanda request (buat bila belum ada). Kembalikan total."""
+        marker = self.sudo().search([("request_id", "=", request_id)], limit=1)
+        if not marker:
+            marker = self.sudo().create({"request_id": request_id, "records": count})
+        elif count:
+            marker.records += count
+        return marker.records
+
+    @api.model
+    def _efn_done(self, request_id):
+        self.sudo().search([("request_id", "=", request_id)]).unlink()
+
+    @api.autovacuum
+    def _gc_efn_stale_markers(self):
+        limit = fields.Datetime.now() - timedelta(days=PENDING_MAX_AGE_DAYS)
+        self.sudo().search([("create_date", "<", limit)]).unlink()

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- R3 (E2E smoke gelombang 8): Odoo EFN TIDAK punya egress internet (Odoo hanya di jaringan
+     internal, docs/02, SEC-01). Panggilan keluar dari cron standar hanya menghasilkan traceback
+     ERROR di log (Loki/alert) dan, untuk publisher warranty, mengirim nama/email/telepon company
+     + jumlah user ke Odoo S.A. (transfer data lintas negara, UU PDP). Dinonaktifkan dengan
+     konfigurasi standar (field `active` cron), tanpa kode.
+
+     SENGAJA noupdate="0": cron base_vat bukan noupdate di modul asalnya, sehingga upgrade
+     base_vat akan mengaktifkannya lagi; upgrade base_vat ikut meng-upgrade modul ini (dependen),
+     sehingga nilai False diterapkan ulang. Record mail sudah noupdate di modul asal (tidak
+     diaktifkan ulang oleh upgrade mail).
+
+     Terverifikasi di source Odoo 19.0 (image efn-odoo:ci, 2026-10-06):
+     - base_vat/data/ir_cron.xml `vies_iap_check_update` -> res.partner._cron_check_vies_iap()
+       -> POST https://vies.api.odoo.com/api/vies/1/check_update SELALU (tidak bergantung
+       `vat_check_vies`), gagal -> `_logger.exception` (traceback ERROR).
+     - mail/data/ir_cron_data.xml `ir_cron_module_update_notification` -> publisher_warranty
+       .update_notification(None) -> POST http://services.odoo.com/publisher-warranty/;
+       cron_mode=None -> exception dinaikkan -> cron gagal (traceback ERROR).
+     Untuk mengaktifkan lagi (hanya bila ada egress yang disetujui): ubah file ini, bukan UI. -->
+<odoo>
+    <record id="base_vat.vies_iap_check_update" model="ir.cron">
+        <field name="active" eval="False"/>
+    </record>
+
+    <record id="mail.ir_cron_module_update_notification" model="ir.cron">
+        <field name="active" eval="False"/>
+    </record>
+</odoo>

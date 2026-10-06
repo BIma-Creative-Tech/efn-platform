@@ -9,6 +9,8 @@
 - Pepper tak terbaca -> nilai kosong + WARNING sekali per proses (simpan partner / POS tidak
   pernah diblokir). Cron erasure yang gagal keras (ERROR). Setelah pepper dipasang/dirotasi,
   jalankan server action "EFN: hitung ulang member hash".
+- Partner teranonim: `phone`/`mobile` dikosongkan sehingga `efn_member_hash` ikut kosong
+  (SEC-31); yang tersisa hanya flag `efn_erased`.
 """
 
 import logging
@@ -44,13 +46,16 @@ class ResPartner(models.Model):
         help="hex(sha256(pepper_hex + member_ref)) dari nomor HP (docs/04 §1). Dipakai hanya "
         "untuk mencocokkan permintaan hapus data (UU PDP) dari BFF.",
     )
-    efn_erasure_request_id = fields.Char(
-        string="EFN Erasure Request",
+    # SEC-31 (docs/04 §8.13): HANYA flag boolean. id permintaan (platform.dsar_request) dan
+    # member_hash TIDAK disimpan di partner teranonim agar partner tidak bisa ditautkan kembali
+    # ke permintaan/nomor HP (field lama `efn_erasure_request_id` dihapus, lihat migrasi
+    # 19.0.1.1.0).
+    efn_erased = fields.Boolean(
+        string="EFN Dianonimkan (UU PDP)",
         copy=False,
         readonly=True,
-        index="btree_not_null",
         groups="base.group_system",
-        help="id permintaan penghapusan (platform.dsar_request) yang menganonimkan partner ini.",
+        help="True bila partner ini dianonimkan oleh permintaan hapus data member (UU PDP).",
     )
 
     @api.depends(_phone_depends)

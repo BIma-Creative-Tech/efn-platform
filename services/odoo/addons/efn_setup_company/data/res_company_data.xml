@@ -20,6 +20,8 @@
         <field name="efn_brand_code">EFN</field>
         <field name="country_id" ref="base.id"/>
         <field name="currency_id" ref="base.IDR"/>
+        <!-- R3: validasi VIES (EU) tidak relevan untuk NPWP dan butuh egress internet. -->
+        <field name="vat_check_vies" eval="False"/>
     </record>
 
     <record id="company_rtl" model="res.company">
@@ -28,6 +30,8 @@
         <field name="efn_brand_code">RTL</field>
         <field name="country_id" ref="base.id"/>
         <field name="currency_id" ref="base.IDR"/>
+        <!-- R3: validasi VIES (EU) tidak relevan untuk NPWP dan butuh egress internet. -->
+        <field name="vat_check_vies" eval="False"/>
     </record>
 
     <record id="company_fnb" model="res.company">
@@ -36,6 +40,8 @@
         <field name="efn_brand_code">FNB</field>
         <field name="country_id" ref="base.id"/>
         <field name="currency_id" ref="base.IDR"/>
+        <!-- R3: validasi VIES (EU) tidak relevan untuk NPWP dan butuh egress internet. -->
+        <field name="vat_check_vies" eval="False"/>
     </record>
 
     <record id="company_farm" model="res.company">
@@ -44,6 +50,8 @@
         <field name="efn_brand_code">FARM</field>
         <field name="country_id" ref="base.id"/>
         <field name="currency_id" ref="base.IDR"/>
+        <!-- R3: validasi VIES (EU) tidak relevan untuk NPWP dan butuh egress internet. -->
+        <field name="vat_check_vies" eval="False"/>
     </record>
 
     <!-- Admin boleh berpindah ke keempat company (user lain diatur per peran). -->
@@ -58,9 +66,13 @@
          Template memberi PPN (tax_ST4 "12% (Non-Luxury Good)" = 12% x DPP 11/12, efektif 11%)
          sebagai pajak penjualan default; PB1 TIDAK ada di template (lihat
          data/account_tax_pb1_data.xml, dimuat SETELAH file ini karena pajak butuh fiscal
-         country yang di-set try_loading). -->
-    <function model="account.chart.template" name="try_loading" eval="[[], 'id', ref('company_efn')]"/>
-    <function model="account.chart.template" name="try_loading" eval="[[], 'id', ref('company_rtl')]"/>
-    <function model="account.chart.template" name="try_loading" eval="[[], 'id', ref('company_fnb')]"/>
-    <function model="account.chart.template" name="try_loading" eval="[[], 'id', ref('company_farm')]"/>
+         country yang di-set try_loading).
+         Gelombang 9: company dikirim sebagai RECORDSET (bukan int). try_loading 19.0 mencetak
+         warning `company.name` SEBELUM mengubah int menjadi recordset bila registry belum
+         loaded (install modul ini ke DB yang sudah ada) -> AttributeError dan install gagal. -->
+
+    <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_efn'))]"/>
+    <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_rtl'))]"/>
+    <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_fnb'))]"/>
+    <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_farm'))]"/>
 </odoo>

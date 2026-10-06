@@ -4,7 +4,7 @@
         "Konfigurasi data-only: 4 company (EFN/RTL/FNB/FARM), IDR, CoA l10n_id; "
         "PB1 configurable (grup + default + fiscal position per kota)."
     ),
-    "version": "19.0.1.1.0",
+    "version": "19.0.1.2.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",
@@ -15,9 +15,14 @@
     "depends": [
         "efn_core",
         "l10n_id",
+        # R3 (no_egress.xml): cron yang dinonaktifkan milik modul ini (sudah ikut l10n_id/efn_core).
+        "base_vat",
+        "mail",
     ],
     "data": [
         "data/res_company_data.xml",
+        # R3: cron standar yang memanggil layanan internet Odoo S.A. dinonaktifkan.
+        "data/no_egress.xml",
         # Harus SETELAH res_company_data.xml (butuh CoA/fiscal country dari try_loading).
         "data/account_tax_pb1_data.xml",
     ],

@@ -1,0 +1,12 @@
+<!-- R4: deskripsi modul untuk Odoo Apps. Bila file ini ada, Odoo (ir.module.module._get_desc)
+     tidak merender README sebagai reStructuredText dengan docutils, sehingga instalasi tidak
+     lagi mencetak "(ERROR/3)". Dokumentasi lengkap tetap di README.md modul (sumber utama). -->
+<section class="oe_container">
+    <div class="oe_row oe_spaced">
+        <h2 class="oe_slogan">EFN Setup - Keamanan Login</h2>
+        <p>Konfigurasi data-only: 2FA wajib untuk user internal (auth_totp_mail) dan panjang minimum password.</p>
+        <p>Risiko: R-S03, R-S10. Fit-gap F-19. Pertanyaan klien: Q-54.</p>
+        <p>Dokumentasi lengkap (tujuan, ADR, risiko, uji manual, batasan): <code>README.md</code> di folder modul
+            <code>services/odoo/addons/efn_setup_security</code> repo EFN Platform.</p>
+    </div>
+</section>

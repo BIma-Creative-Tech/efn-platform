@@ -103,7 +103,8 @@ class TestEfnMemberHash(PepperMixin, TransactionCase):
         config = self.env["pos.config"].search([], limit=1)
         fields_list = self.env["res.partner"]._load_pos_data_fields(config)
         self.assertNotIn("efn_member_hash", fields_list)
-        self.assertNotIn("efn_erasure_request_id", fields_list)
+        self.assertNotIn("efn_erased", fields_list)
+        self.assertNotIn("efn_erasure_request_id", self.env["res.partner"]._fields, "SEC-31: field dihapus")
 
     def test_recompute_backfills_and_requires_admin(self):
         self._no_pepper()

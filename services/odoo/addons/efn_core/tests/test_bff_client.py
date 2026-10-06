@@ -248,6 +248,35 @@ class TestEfnBffClient(TransactionCase):
                 self.client.get("/v1/x", {"a": {"nested": 1}})
         get.assert_not_called()
 
+    def test_get_rejects_pii_in_query_and_path(self):
+        """R2 (docs/04 §8.13): HP/token/identitas tidak pernah lewat URL (access log)."""
+        cases = [
+            {"member_ref": "x"},
+            {"MEMBER_REF": "x"},
+            {"phone": "x"},
+            {"discount_token": "x"},
+            {"q": "6281234567890"},
+            {"q": "+62 812-3456-7890"},
+            {"q": 6281234567890},
+        ]
+        with patch(REQUESTS_GET) as get, patch(REQUESTS_POST) as post:
+            for params in cases:
+                with self.subTest(params=params), self.assertRaises(ValueError):
+                    self.client.get("/v1/pos/loyalty/balance", params)
+            for path in ("/v1/pos/loyalty/balance/6281234567890", "/v1/x/081234567890"):
+                with self.subTest(path=path), self.assertRaises(ValueError):
+                    self.client.get(path)
+                with self.subTest(path=path), self.assertRaises(ValueError):
+                    self.client.post(path, {})
+        get.assert_not_called()
+        post.assert_not_called()
+
+    def test_get_allows_non_pii_params(self):
+        with patch(REQUESTS_GET, return_value=self._response(200, [])) as get:
+            self.client.get("/v1/pos/privacy/erasures", {"store": "odoo", "limit": 100})
+            self.client.get("/v1/pos/payments/7f0c2a9e-1b2c-4d5e-8f90-123456789abc")
+        self.assertEqual(get.call_count, 2)
+
     # ---------------------------------------------------------------- phone
     def test_mask_and_normalize_phone(self):
         self.assertEqual(mask_phone("6281234567890"), "62812****890")

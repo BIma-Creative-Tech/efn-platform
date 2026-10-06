@@ -17,6 +17,10 @@ Aturan keamanan (CLAUDE.md, docs/04 §6-§7 v2):
 - Payload (nomor HP, kode OTP, discount_token) TIDAK pernah di-log; hanya path, status,
   latensi, dan konteks yang sudah di-mask (lihat `mask_phone`).
 - Redirect tidak diikuti agar header service key tidak bocor ke host lain.
+- R2 (docs/04 §8.13): nomor HP, token, dan identitas tidak pernah dikirim lewat URL (query string
+  atau segmen path) karena URL tercatat di access log; `get()` menolak kunci query terlarang
+  (`PII_QUERY_KEYS`) dan nilai/segmen yang tampak seperti nomor HP. Data tsb lewat body `post()`
+  (mis. `POST /v1/pos/loyalty/balance {member_ref}`).
 """
 
 import logging
@@ -44,6 +48,25 @@ MAX_TIMEOUT_SECONDS = 30.0
 
 _TRUE_VALUES = {"1", "true", "yes", "y", "on"}
 _MEMBER_REF_RE = re.compile(r"^62\d{8,13}$")
+# R2: kunci query yang dilarang + nilai yang tampak seperti nomor HP (8+ digit, boleh +/spasi/-).
+PII_QUERY_KEYS = frozenset(
+    {
+        "member_ref",
+        "member_hash",
+        "phone",
+        "mobile",
+        "msisdn",
+        "email",
+        "token",
+        "discount_token",
+        "otp",
+        "code",
+        "challenge_id",
+        "nik",
+        "npwp",
+    }
+)
+_PHONE_LIKE_RE = re.compile(r"^\+?[\d\s\-().]{8,}$")
 
 
 def plaintext_allowed():
@@ -265,6 +288,11 @@ class EfnBffClient(models.AbstractModel):
             for key, value in params.items():
                 if not isinstance(key, str) or not isinstance(value, (str, int, float, bool)):
                     raise ValueError("params BFF hanya boleh berisi nilai skalar")
+                # R2 (docs/04 §8.13): nomor HP, token, identitas TIDAK boleh lewat URL/query
+                # (tercatat di access log). Data seperti itu wajib dikirim lewat body POST.
+                text = value.strip() if isinstance(value, str) else (str(value) if type(value) is int else "")
+                if key.lower() in PII_QUERY_KEYS or _PHONE_LIKE_RE.match(text):
+                    raise ValueError("params BFF tidak boleh memuat data pribadi/token; pakai POST body")
         return self._efn_request("GET", path, params=params, log_context=log_context)
 
     @api.model
@@ -274,6 +302,9 @@ class EfnBffClient(models.AbstractModel):
         # Cegah path traversal / injeksi query lewat segmen id yang tidak divalidasi.
         if any(token in path for token in ("?", "#", "..", "//", "\\")) or any(ord(char) < 0x21 for char in path):
             raise ValueError("path BFF tidak valid")
+        # R2: segmen path yang tampak seperti nomor HP (mis. /balance/6281...) juga dilarang.
+        if any(_PHONE_LIKE_RE.match(segment) for segment in path.split("/") if segment):
+            raise ValueError("path BFF tidak boleh memuat data pribadi")
 
     @api.model
     def _efn_request(self, method, path, payload=None, params=None, log_context=None):

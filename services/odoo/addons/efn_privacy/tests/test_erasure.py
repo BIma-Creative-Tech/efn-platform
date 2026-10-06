@@ -6,7 +6,7 @@ Nomor & email di bawah fiktif khusus test.
 
 from unittest.mock import patch
 
-from odoo.exceptions import UserError
+from odoo.exceptions import AccessError, UserError
 from odoo.tests import tagged
 
 from odoo.addons.efn_core.models.efn_bff_client import BffResponse, EfnBffError
@@ -96,8 +96,25 @@ class TestEfnPrivacyErasure(PepperMixin, TestPoSCommon):
     def _completes(self):
         return [c for c in self.calls if c[0] == "POST"]
 
-    def _privacy_logs(self, request_id):
-        return self.env["privacy.log"].sudo().search([("execution_details", "ilike", request_id)])
+    def _privacy_logs(self):
+        return self.env["privacy.log"].sudo().search([("execution_details", "ilike", "EFN erasure")])
+
+    def _pending(self, request_id=None):
+        domain = [("request_id", "=", request_id)] if request_id else []
+        return self.env["efn.privacy.erasure.pending"].sudo().search(domain)
+
+    def _tables_containing(self, needle):
+        """Tabel (dari daftar) yang masih memuat `needle` di kolom mana pun (SEC-31)."""
+        self.env.flush_all()
+        found = []
+        for table in ("res_partner", "privacy_log", "efn_privacy_erasure_pending", "mail_message", "pos_order"):
+            self.env.cr.execute(
+                f"SELECT count(*) FROM {table} t WHERE row_to_json(t)::text LIKE %s",  # noqa: S608 - nama tabel konstan
+                (f"%{needle}%",),
+            )
+            if self.env.cr.fetchone()[0]:
+                found.append(table)
+        return found
 
     # ------------------------------------------------------------------- tests
     def test_erasure_anonymizes_partner_archived_cross_company_and_copies(self):
@@ -114,14 +131,14 @@ class TestEfnPrivacyErasure(PepperMixin, TestPoSCommon):
         partners = (self.member | self.member_archived_b).with_context(active_test=False)
         partners.invalidate_recordset()
         for partner in partners:
-            self.assertTrue(partner.name.startswith("Pelanggan dihapus"))
+            self.assertEqual(partner.name, "Pelanggan dihapus", "SEC-31: tanpa potongan request_id")
             self.assertFalse(partner.phone)
             self.assertFalse(partner.email)
             self.assertFalse(partner.street)
             self.assertFalse(partner.city)
             self.assertFalse(partner.active)
             self.assertFalse(partner.efn_member_hash)
-            self.assertEqual(partner.efn_erasure_request_id, REQ_1)
+            self.assertTrue(partner.efn_erased)
         self.assertEqual(self.other.name, "Pelanggan Lain")
         self.assertTrue(self.other.phone)
 
@@ -139,24 +156,73 @@ class TestEfnPrivacyErasure(PepperMixin, TestPoSCommon):
         self.assertFalse(messages)
 
         # Jejak privacy.log standar, placeholder (tanpa HP/hash).
-        log = self._privacy_logs(REQ_1)
+        log = self._privacy_logs()
         self.assertEqual(len(log), 1)
         self.assertNotIn(TEST_MEMBER_HASH, log.execution_details or "")
+        self.assertNotIn(REQ_1, log.execution_details or "", "SEC-31: privacy.log tanpa request_id")
         self.assertNotEqual(log.anonymized_email, TEST_EMAIL)
         self.assertIn("@", PLACEHOLDER_EMAIL)
+
+        # SEC-31: setelah complete diterima, tidak ada request_id / member_hash yang tersisa.
+        self.assertFalse(self._pending(), "penanda sementara dihapus setelah complete sukses")
+        self.assertEqual(self._tables_containing(REQ_1), [])
+        self.assertEqual(self._tables_containing(REQ_1[:8]), [])
+        self.assertEqual(self._tables_containing(TEST_MEMBER_HASH), [])
 
         # Log aplikasi tanpa nomor HP / email / hash.
         output = "\n".join(logs.output)
         for secret in ("81234567890", "3456", TEST_EMAIL, TEST_MEMBER_HASH, TEST_PEPPER_HEX):
             self.assertNotIn(secret, output)
 
-    def test_rerun_is_idempotent(self):
-        self._run_cron()
-        self._run_cron()
+    def test_complete_retry_is_idempotent_without_permanent_link(self):
+        # Run 1: anonimisasi sukses, complete gagal -> penanda sementara menyimpan jumlah.
+        self.complete_response = EfnBffError("bff_unreachable")
+        summary = self._run_cron()
+        self.assertEqual(summary["failed"], 1)
+        self.assertEqual(self._pending(REQ_1).records, 2)
+        self.assertEqual(self._tables_containing(REQ_1), ["efn_privacy_erasure_pending"])
+        # Run 2: partner sudah anonim (hash kosong) tetapi jumlah tetap 2; penanda lalu dihapus.
+        self.complete_response = BffResponse(200, {"ok": True})
+        summary = self._run_cron()
+        self.assertEqual(summary["done"], 1)
         completes = self._completes()
         self.assertEqual(len(completes), 2)
-        self.assertEqual(completes[1][2], {"store": "odoo", "records": 2}, "jumlah sama saat rerun")
-        self.assertEqual(len(self._privacy_logs(REQ_1)), 1, "tidak ada privacy.log ganda")
+        self.assertEqual(completes[0][2], {"store": "odoo", "records": 2})
+        self.assertEqual(completes[1][2], {"store": "odoo", "records": 2}, "jumlah sama saat retry")
+        self.assertEqual(len(self._privacy_logs()), 1, "tidak ada privacy.log ganda")
+        self.assertFalse(self._pending())
+        self.assertEqual(self._tables_containing(REQ_1), [])
+
+    def test_rejected_complete_keeps_marker(self):
+        self.complete_response = BffResponse(409, {"ok": False})
+        self._run_cron()
+        self.assertEqual(self._pending(REQ_1).records, 2)
+
+    def test_stale_marker_vacuumed(self):
+        Pending = self.env["efn.privacy.erasure.pending"].sudo()
+        old = Pending.create({"request_id": REQ_2, "records": 1})
+        fresh = Pending.create({"request_id": REQ_1, "records": 1})
+        self.env.cr.execute(
+            "UPDATE efn_privacy_erasure_pending SET create_date = now() - interval '31 days' WHERE id = %s",
+            (old.id,),
+        )
+        Pending.invalidate_model(["create_date"])
+        Pending._gc_efn_stale_markers()
+        self.assertFalse(old.exists())
+        self.assertTrue(fresh.exists())
+
+    def test_pending_marker_admin_read_only(self):
+        Pending = self.env["efn.privacy.erasure.pending"]
+        self.assertFalse(Pending._fields.get("partner_id"), "penanda tidak boleh menautkan partner")
+        user = self.env["res.users"].create(
+            {
+                "name": "Kasir Uji Privasi",
+                "login": "kasir.uji.privasi",
+                "group_ids": [(6, 0, [self.env.ref("point_of_sale.group_pos_user").id])],
+            }
+        )
+        with self.assertRaises(AccessError):
+            Pending.with_user(user).search([])
 
     def test_unknown_hash_completes_with_zero(self):
         self.list_response = BffResponse(200, [{"request_id": REQ_2, "member_hash": OTHER_HASH}])
