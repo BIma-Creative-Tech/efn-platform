@@ -10,8 +10,8 @@ Alur tiap 15 menit (user OdooBot):
    - Salinan kontak di `pos.order` (`email`, `mobile`, stored) dikosongkan.
    - Chatter (`mail.message` + `mail.tracking.value`) pada partner dihapus; `email_from`
      pesan yang ditulis partner di dokumen lain dikosongkan.
-   - `auditlog.log` (+ lines, cascade) untuk `res.partner` tsb dihapus bila OCA auditlog
-     terpasang (aturan efn_setup_audit mencatat nomor HP lama, termasuk write anonimisasi ini).
+   - Log `efn.audit.log` (+ baris) untuk `res.partner` tsb dihapus lewat
+     `_efn_audit_purge_records` (efn_audit; aturan efn_setup_audit mencatat HP lama ter-mask).
    - Jejak `privacy.log` standar (privacy_lookup) dengan nama/email placeholder valid; tanpa
      hash/HP dan **tanpa request_id** (SEC-31).
    - Penanda sementara `efn.privacy.erasure.pending` (request_id + jumlah, TANPA id partner)
@@ -206,7 +206,7 @@ class EfnPrivacyErasure(models.AbstractModel):
                     "anonymized_email": PLACEHOLDER_EMAIL,
                     # SEC-31: tanpa request_id / hash / id partner.
                     "execution_details": f"EFN erasure (UU PDP): {len(partners)} partner dianonimkan "
-                    "(res.partner, pos.order kontak, chatter, auditlog)",
+                    "(res.partner, pos.order kontak, chatter, log audit)",
                     "records_description": f"res.partner: {len(partners)}",
                 }
             )
@@ -243,14 +243,11 @@ class EfnPrivacyErasure(models.AbstractModel):
             messages.unlink()
         Message.search([("author_id", "in", ids), ("email_from", "!=", False)]).write({"email_from": False})
 
-        # OCA auditlog (opsional): log lama berisi nilai HP/email sebelum & sesudah.
-        if "auditlog.log" in self.env:
-            Log = self.env["auditlog.log"].sudo()
-            if "model_model" in Log._fields:
-                domain = [("model_model", "=", "res.partner")]
-            else:
-                domain = [("model_id.model", "=", "res.partner")]
-            Log.search(domain + [("res_id", "in", ids)]).unlink()
+        # efn_audit (ADR-031, pengganti OCA auditlog): log res.partner menyimpan HP/email lama
+        # (ter-mask) + nama — termasuk write anonimisasi di atas. Hapus log partner tsb dan
+        # kosongkan ref/nilai di baris log model lain yang menunjuk partner ini; efn_audit
+        # menulis satu log `purge` tanpa id/nama.
+        self.env["efn.audit.log"].sudo()._efn_audit_purge_records("res.partner", ids)
         return len(partners)
 
 

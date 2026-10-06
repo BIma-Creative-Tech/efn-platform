@@ -1,6 +1,5 @@
 target-version = "py312"
 line-length = 120
-extend-exclude = ["services/odoo/oca"]
 
 [lint]
 select = ["E", "F", "W", "I", "B", "UP", "S"]

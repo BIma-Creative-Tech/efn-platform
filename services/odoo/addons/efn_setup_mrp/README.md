@@ -24,11 +24,11 @@ Modul konfigurasi **data-only** untuk Central Kitchen (kitting via BoM Manufactu
 1. Gudang CK (company PT F&B): *Manufacture to Resupply* aktif; `manufacture_steps` sesuai SOP (1/2/3 langkah).
 2. Paket: storable, UoM Porsi (`efn_kitting.uom_porsi`), `tracking = lot`, kategori FEFO, BoM Manufacture.
 3. Gudang outlet (company sama): *Resupply From* = gudang CK (field `resupply_wh_ids` — nama di 19.0 belum diverifikasi; butuh Multi-Step Routes) → reorder rule outlet memicu transfer CK→outlet; reorder rule CK memicu MO.
-4. Outlet beda PT → inter-company OCA (`purchase_sale_inter_company`), bukan resupply route (lihat `docs/08` F-03, F-12).
+4. Outlet beda PT → inter-company lewat modul custom `efn_intercompany` (fase 1, `docs/08` §5.2, ADR-031 — tanpa OCA), bukan resupply route (lihat `docs/08` F-03, F-12).
 
 ## Keputusan klien yang dibutuhkan
 - **Q-34** FEFO, umur simpan per paket, alert, markdown mendekati expiry, waste logging.
-- **Q-35** jumlah/kapasitas CK, produksi forecast vs pesanan outlet (menentukan min/max & `mrp_multi_level` OCA).
+- **Q-35** jumlah/kapasitas CK, produksi forecast vs pesanan outlet (menentukan min/max; OCA `mrp_multi_level` hanya referensi desain, ADR-031).
 - **Q-30** jumlah gudang & lokasi, multi-step receipt.
 - **Q-3** transfer pricing bila outlet beda PT.
 

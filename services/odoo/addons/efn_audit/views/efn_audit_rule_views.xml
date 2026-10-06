@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_audit_rule_view_list" model="ir.ui.view">
+        <field name="name">efn.audit.rule.list</field>
+        <field name="model">efn.audit.rule</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="name"/>
+                <field name="model_id"/>
+                <field name="log_create"/>
+                <field name="log_write"/>
+                <field name="log_unlink"/>
+                <field name="retention_days"/>
+                <field name="active" widget="boolean_toggle"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_audit_rule_view_form" model="ir.ui.view">
+        <field name="name">efn.audit.rule.form</field>
+        <field name="model">efn.audit.rule</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <widget name="web_ribbon" title="Arsip" bg_color="text-bg-danger" invisible="active"/>
+                    <group>
+                        <group>
+                            <field name="name"/>
+                            <field name="model_id" options="{'no_create': True}"/>
+                            <field name="active" invisible="1"/>
+                            <field name="retention_days"/>
+                        </group>
+                        <group>
+                            <field name="log_create"/>
+                            <field name="log_write"/>
+                            <field name="log_unlink"/>
+                            <field name="capture_unlink_values"/>
+                        </group>
+                    </group>
+                    <group>
+                        <field name="tracked_field_ids" widget="many2many_tags" options="{'no_create': True}"/>
+                        <field name="excluded_field_ids" widget="many2many_tags" options="{'no_create': True}"/>
+                        <field name="masked_field_ids" widget="many2many_tags" options="{'no_create': True}"/>
+                        <field name="filter_domain" placeholder="[('key', '=like', 'efn.%')]"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="efn_audit_rule_view_search" model="ir.ui.view">
+        <field name="name">efn.audit.rule.search</field>
+        <field name="model">efn.audit.rule</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="model_id"/>
+                <filter name="inactive" string="Arsip" domain="[('active', '=', False)]"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="efn_audit_rule_action" model="ir.actions.act_window">
+        <field name="name">Aturan Audit</field>
+        <field name="res_model">efn.audit.rule</field>
+        <field name="view_mode">list,form</field>
+    </record>
+</odoo>

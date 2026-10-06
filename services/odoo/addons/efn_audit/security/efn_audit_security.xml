@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Multi-company: auditor hanya melihat log company yang diizinkan + log tanpa company
+     (parameter sistem, aturan audit, kontak tanpa company). -->
+<odoo noupdate="1">
+    <record id="efn_audit_log_rule_company" model="ir.rule">
+        <field name="name">EFN Audit Log: multi-company</field>
+        <field name="model_id" ref="model_efn_audit_log"/>
+        <field name="groups" eval="[Command.link(ref('group_auditor'))]"/>
+        <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_audit_log_line_rule_company" model="ir.rule">
+        <field name="name">EFN Audit Log Line: multi-company</field>
+        <field name="model_id" ref="model_efn_audit_log_line"/>
+        <field name="groups" eval="[Command.link(ref('group_auditor'))]"/>
+        <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+    </record>
+</odoo>

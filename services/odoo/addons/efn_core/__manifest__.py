@@ -4,7 +4,7 @@
     "version": "19.0.1.4.0",
     "category": "EFN",
     "author": "Era Food and Nourishment",
-    # LGPL-3: tidak bergantung pada modul OCA AGPL (lihat CLAUDE.md konvensi lisensi).
+    # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031, CLAUDE.md).
     "license": "LGPL-3",
     "website": "https://github.com/efn/efn-platform",
     # Sengaja ramping: modul domain (efn_kitting -> mrp, efn_pos_otp_gate -> point_of_sale)

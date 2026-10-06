@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_audit_log_view_list" model="ir.ui.view">
+        <field name="name">efn.audit.log.list</field>
+        <field name="model">efn.audit.log</field>
+        <field name="arch" type="xml">
+            <list create="0" edit="0" delete="0">
+                <field name="create_date" string="Tanggal"/>
+                <field name="user_id"/>
+                <field name="model_name"/>
+                <field name="res_id"/>
+                <field name="res_name"/>
+                <field name="operation"/>
+                <field name="is_sudo" optional="hide"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="note" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_audit_log_view_form" model="ir.ui.view">
+        <field name="name">efn.audit.log.form</field>
+        <field name="model">efn.audit.log</field>
+        <field name="arch" type="xml">
+            <form create="0" edit="0" delete="0">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="create_date" string="Tanggal"/>
+                            <field name="user_id"/>
+                            <field name="is_sudo"/>
+                            <field name="operation"/>
+                        </group>
+                        <group>
+                            <field name="model_name"/>
+                            <field name="res_id"/>
+                            <field name="res_name"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="rule_id"/>
+                            <field name="note" invisible="not note"/>
+                        </group>
+                    </group>
+                    <field name="line_ids">
+                        <list>
+                            <field name="field_label"/>
+                            <field name="field_name" optional="hide"/>
+                            <field name="old_value"/>
+                            <field name="new_value"/>
+                            <field name="is_masked" optional="show"/>
+                        </list>
+                    </field>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="efn_audit_log_view_search" model="ir.ui.view">
+        <field name="name">efn.audit.log.search</field>
+        <field name="model">efn.audit.log</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="model_name"/>
+                <field name="res_name"/>
+                <field name="user_id"/>
+                <field name="operation"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="line_ids" string="Field" filter_domain="[('line_ids.field_name', 'ilike', self)]"/>
+                <filter name="today" string="Hari ini"
+                        domain="[('create_date', '&gt;=', context_today().strftime('%Y-%m-%d'))]"/>
+                <filter name="last_7_days" string="7 hari"
+                        domain="[('create_date', '&gt;=', (context_today() - relativedelta(days=7)).strftime('%Y-%m-%d'))]"/>
+                <separator/>
+                <filter name="price" string="Harga"
+                        domain="[('model_name', 'in', ['product.pricelist', 'product.pricelist.item', 'product.template'])]"/>
+                <filter name="promo" string="Promo" domain="[('model_name', '=like', 'loyalty.%')]"/>
+                <filter name="customer" string="Pelanggan" domain="[('model_name', '=', 'res.partner')]"/>
+                <separator/>
+                <filter name="op_create" string="Create" domain="[('operation', '=', 'create')]"/>
+                <filter name="op_write" string="Write" domain="[('operation', '=', 'write')]"/>
+                <filter name="op_unlink" string="Delete" domain="[('operation', '=', 'unlink')]"/>
+                <filter name="op_purge" string="Purge" domain="[('operation', '=', 'purge')]"/>
+                <group>
+                    <filter name="group_model" string="Model" context="{'group_by': 'model_name'}"/>
+                    <filter name="group_user" string="User" context="{'group_by': 'user_id'}"/>
+                    <filter name="group_date" string="Tanggal" context="{'group_by': 'create_date:day'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="efn_audit_log_action" model="ir.actions.act_window">
+        <field name="name">Log Audit</field>
+        <field name="res_model">efn.audit.log</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="efn_audit_log_view_search"/>
+        <field name="context">{'search_default_last_7_days': 1}</field>
+    </record>
+</odoo>

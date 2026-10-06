@@ -1,4 +1,4 @@
-# Odoo CE 19 + addons EFN + OCA. Image resmi sudah non-root (user odoo).
+# Odoo CE 19 + addons EFN saja (ADR-031: tanpa modul OCA/Cybrosys/vendor). Image resmi non-root (user odoo).
 # TLS (docs/04 §7.1): Odoo HTTP listen di 127.0.0.1 (http_interface) dan dibungkus sidecar
 # ghostunnel yang berbagi network namespace; DB lewat db_sslmode=verify-full.
 FROM odoo:19.0
@@ -10,17 +10,15 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt
 
-# OCA addons di-vendor via git submodule atau di-copy saat build (lihat README):
-#   services/odoo/oca/multi-company, services/odoo/oca/pos, ...
+# Hanya addons efn_* dari repo; tidak ada fetch kode pihak ketiga saat build (ADR-031,
+# gerbang CI scripts/check-odoo-deps.sh).
 COPY --chown=odoo:odoo addons /mnt/extra-addons
-COPY --chown=odoo:odoo oca /mnt/oca-addons
 # Template & skrip render milik root (read-only bagi user odoo); hanya odoo.conf hasil
 # render yang ditulis user odoo di /etc/odoo (mode 0600).
 COPY --chown=root:root --chmod=0644 odoo.conf.tpl /etc/odoo/odoo.conf.tpl
 COPY --chown=root:root --chmod=0755 render_odoo_conf.py /usr/local/lib/efn/render_odoo_conf.py
 COPY --chown=root:root --chmod=0755 entrypoint-efn.sh /entrypoint-efn.sh
-RUN mkdir -p /mnt/oca-addons \
-    && chown -R odoo:odoo /mnt/extra-addons /mnt/oca-addons \
+RUN chown -R odoo:odoo /mnt/extra-addons \
     && chown odoo:odoo /etc/odoo \
     && rm -f /etc/odoo/odoo.conf
 

@@ -20,18 +20,18 @@ Aturan:
   `AccessError`. Kode server dengan `sudo()` tidak dikunci di lapis 1; cron erasure UU PDP
   berjalan sebagai OdooBot (superuser) sehingga lolos kedua lapis.
 - Perubahan oleh manajer dicatat di chatter partner (nomor ter-mask, UU PDP) + log aplikasi
-  tanpa nomor. Auditlog OCA (`efn_setup_audit`, aturan res.partner) mencatat nilai lengkap.
+  tanpa nomor. Jejak audit formal: `efn_audit` (aturan res.partner di `efn_setup_audit`,
+  HP ter-mask) — hook `base` berada di dasar MRO sehingga melihat `vals` final setelah
+  override ini (ADR-031; tidak ada lagi monkeypatch registry ala OCA auditlog).
 
 Dua lapis (keduanya perlu):
 1. `write()` — cek lebih awal (hanya bila nilai benar-benar berubah) + catatan chatter.
-2. `@api.constrains("phone")` — jaring pengaman yang tidak bisa dilewati. OCA auditlog
-   mem-patch `write` di kelas registry; bila aturan auditlog dibuat dalam proses yang sama
-   sebelum modul ini dimuat (install/upgrade sekaligus), patch itu memanggil `write` lama dan
-   override (1) terlewati sampai Odoo di-restart. Constraint tetap dijalankan oleh
-   `BaseModel.write` (selalu dengan sudo, jadi keputusan memakai uid asli; `sudo()` dengan uid
-   kasir ikut ditolak = fail-closed). Pada jalur itu catatan chatter tidak dibuat, tetapi
-   auditlog (penyebab patch) sudah mencatat nilai lama/baru. Penanda "sudah dicek lapis 1"
-   disimpan di `cr.cache` (bukan context, yang bisa diisi klien lewat RPC).
+2. `@api.constrains("phone")` — jaring pengaman yang tidak bisa dilewati, termasuk jalur yang
+   tidak melewati override (1) (mis. pemanggilan `write` kelas dasar langsung atau modul lain
+   yang menulis lewat `sudo()` dengan uid kasir). Constraint dijalankan oleh `BaseModel.write`
+   (selalu dengan sudo, jadi keputusan memakai uid asli; `sudo()` dengan uid kasir ikut
+   ditolak = fail-closed). Penanda "sudah dicek lapis 1" disimpan di `cr.cache` (bukan
+   context, yang bisa diisi klien lewat RPC).
 """
 
 import logging

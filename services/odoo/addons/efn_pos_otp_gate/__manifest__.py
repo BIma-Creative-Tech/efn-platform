@@ -1,7 +1,7 @@
 {
     "name": "EFN POS OTP Gate",
     "summary": "Promo/loyalty POS yang ditandai wajib OTP hanya berlaku dengan discount_token sekali pakai dari BFF.",
-    "version": "19.0.1.4.0",
+    "version": "19.0.1.5.0",
     "category": "EFN/Point of Sale",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",
@@ -11,6 +11,8 @@
         "point_of_sale",
         "pos_loyalty",
         "efn_core",
+        # SEC-07: jejak audit perubahan HP member (ADR-031, pengganti OCA auditlog).
+        "efn_audit",
     ],
     "data": [
         "security/ir.model.access.csv",

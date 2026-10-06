@@ -37,7 +37,7 @@ jobs:
           filters: |
             api:    ['services/api-gateway/**']
             web:    ['services/superapp-web/**']
-            odoo:   ['services/odoo/**', 'scripts/fetch-oca.sh']
+            odoo:   ['services/odoo/**', 'scripts/check-odoo-deps.sh']
             python: ['services/ai-ocr-worker/**', 'services/etl/**', 'services/text2sql/**']
             ai-ocr-worker: ['services/ai-ocr-worker/**']
             etl:           ['services/etl/**']
@@ -206,12 +206,12 @@ jobs:
     env:
       # Modul yang di-install + diuji (--test-tags efn); yang belum ada di repo dilewati otomatis.
       # efn_setup_* = modul konfigurasi data-only (efn-odoo-functional): ikut di-install agar test efn berjalan di
-      # atas konfigurasi nyata (4 company, POS, MRP/FEFO, auditlog). efn_setup_audit butuh OCA auditlog
-      # (diambil scripts/fetch-oca.sh di langkah pertama).
+      # atas konfigurasi nyata (4 company, POS, MRP/FEFO, aturan audit). Tanpa modul OCA/vendor (ADR-031):
+      # hanya Odoo CE 19 + efn_* (gerbang check-odoo-deps di bawah).
       # efn_privacy menarik privacy_lookup (CE, depends manifest) otomatis; tidak didaftarkan di sini
       # karena pick() hanya menerima modul di services/odoo/addons.
       EFN_TEST_MODULES: >-
-        efn_core efn_pos_otp_gate efn_kitting
+        efn_core efn_audit efn_pos_otp_gate efn_kitting
         efn_pos_payment_gateway efn_privacy
         efn_setup_company efn_setup_pos efn_setup_mrp efn_setup_audit
       # Di-install SETELAH test, tanpa test: efn_setup_security menaikkan auth_password_policy.minlength ke 12,
@@ -221,12 +221,16 @@ jobs:
       EFN_INSTALL_ONLY_MODULES: efn_setup_security
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-      - name: Fetch OCA addons (sama dengan build image)
-        run: bash scripts/fetch-oca.sh services/odoo/oca
       - name: "Build image Odoo dari services/odoo/Dockerfile (BuildKit: COPY --chmod)"
         env:
           DOCKER_BUILDKIT: "1"
         run: docker build -t efn-odoo:ci services/odoo
+      - name: Gerbang dependency addons (hanya Odoo CE 19 + efn_*, ADR-031)
+        run: |
+          # Daftar modul CE diambil dari image yang sama dengan test (bukan daftar statis).
+          docker run --rm --entrypoint ls efn-odoo:ci /usr/lib/python3/dist-packages/odoo/addons \
+            > "$RUNNER_TEMP/ce-modules.txt"
+          bash scripts/check-odoo-deps.sh "$RUNNER_TEMP/ce-modules.txt"
       - name: Tentukan modul
         id: mods
         run: |
@@ -235,9 +239,6 @@ jobs:
             for m in "$@"; do
               if [ ! -f "services/odoo/addons/$m/__manifest__.py" ]; then
                 echo "::notice::modul $m belum ada, dilewati" >&2; continue
-              fi
-              if [ "$m" = "efn_setup_audit" ] && [ ! -f "services/odoo/oca/auditlog/__manifest__.py" ]; then
-                echo "::warning::OCA auditlog tidak ter-fetch; efn_setup_audit dilewati" >&2; continue
               fi
               out="${out:+$out,}$m"
             done
@@ -256,7 +257,7 @@ jobs:
           # Entrypoint resmi dilewati (--entrypoint odoo) agar argumen DB eksplisit. Nama DB efn_* sesuai dbfilter.
           docker run --rm --network host --entrypoint odoo efn-odoo:ci \
             --db_host=127.0.0.1 --db_port=5432 --db_user=odoo --db_password=odoo-ci-only \
-            --addons-path=/mnt/extra-addons,/mnt/oca-addons,/usr/lib/python3/dist-packages/odoo/addons \
+            --addons-path=/mnt/extra-addons,/usr/lib/python3/dist-packages/odoo/addons \
             -d efn_test -i "${{ steps.mods.outputs.modules }}" \
             --test-tags efn --stop-after-init --log-level=test --workers=0 --max-cron-threads=0 \
             2>&1 | tee odoo-test.log
@@ -266,7 +267,7 @@ jobs:
           set -o pipefail
           docker run --rm --network host --entrypoint odoo efn-odoo:ci \
             --db_host=127.0.0.1 --db_port=5432 --db_user=odoo --db_password=odoo-ci-only \
-            --addons-path=/mnt/extra-addons,/mnt/oca-addons,/usr/lib/python3/dist-packages/odoo/addons \
+            --addons-path=/mnt/extra-addons,/usr/lib/python3/dist-packages/odoo/addons \
             -d efn_test -i "${{ steps.mods.outputs.later }}" \
             --stop-after-init --workers=0 --max-cron-threads=0 \
             2>&1 | tee -a odoo-test.log

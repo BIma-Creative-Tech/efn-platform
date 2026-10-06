@@ -19,10 +19,6 @@ __pycache__/
 .venv/
 .ruff_cache/
 
-# odoo OCA vendored at build time
-services/odoo/oca/*
-!services/odoo/oca/README.md
-
 # OS / IDE
 .DS_Store
 Thumbs.db

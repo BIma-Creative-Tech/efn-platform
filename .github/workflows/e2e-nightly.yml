@@ -83,7 +83,7 @@ jobs:
           # shellcheck disable=SC2086
           docker compose $DC_FILES --profile core run --rm --no-deps -e ODOO_DEV_MODE= odoo \
             odoo -d efn_odoo --stop-after-init --without-demo=all \
-            -i efn_core,efn_setup_company,efn_setup_security,efn_setup_pos,efn_setup_mrp,efn_setup_audit,efn_kitting,efn_pos_otp_gate,efn_pos_payment_gateway,efn_privacy
+            -i efn_core,efn_audit,efn_setup_company,efn_setup_security,efn_setup_pos,efn_setup_mrp,efn_setup_audit,efn_kitting,efn_pos_otp_gate,efn_pos_payment_gateway,efn_privacy
           # shellcheck disable=SC2086
           docker compose $DC_FILES --profile core up -d odoo odoo-tls odoo-ws-tls
 

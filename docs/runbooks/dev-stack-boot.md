@@ -66,7 +66,7 @@ proses yang menulis registry:
 ```bash
 $DC --profile core stop odoo odoo-tls odoo-ws-tls
 $DC --profile core run --rm --no-deps -e ODOO_DEV_MODE= odoo odoo -d efn_odoo --stop-after-init --without-demo=all \
-  -i efn_core,efn_setup_company,efn_setup_security,efn_setup_pos,efn_setup_mrp,efn_setup_audit,efn_kitting,efn_pos_otp_gate,efn_pos_payment_gateway,efn_privacy
+  -i efn_core,efn_audit,efn_setup_company,efn_setup_security,efn_setup_pos,efn_setup_mrp,efn_setup_audit,efn_kitting,efn_pos_otp_gate,efn_pos_payment_gateway,efn_privacy
 $DC --profile core up -d odoo odoo-tls odoo-ws-tls
 ```
 
@@ -74,6 +74,34 @@ $DC --profile core up -d odoo odoo-tls odoo-ws-tls
 `efn_member_hash` dihitung saat install untuk partner yang sudah ada dan otomatis untuk partner baru; server action
 "Recompute member hash" hanya diperlukan setelah pepper berubah. Baris `(ERROR/3) Undefined substitution` di log
 install berasal dari docutils yang merender README.md modul sebagai RST (kosmetik, lihat E2E_SMOKE_REPORT).
+
+### 3a. Gelombang 10: migrasi DB lama dari OCA `auditlog` ke `efn_audit` (sekali)
+
+Berlaku untuk volume `pg-data` yang pernah memasang `efn_setup_audit` 19.0.1.x + OCA `auditlog` (ADR-031). Urutan
+penting: `efn_setup_audit` harus di-upgrade dulu (dependency berpindah ke `efn_audit`), kalau tidak uninstall
+`auditlog` ikut meng-uninstall `efn_setup_audit`. Langkah 1–3 memakai image Odoo **lama** (masih berisi
+`/mnt/oca-addons`); addons `efn_*` baru sudah ter-mount dari repo oleh `docker-compose.dev.yml`.
+
+```bash
+S=<folder backup lokal di luar repo>
+docker exec efn-postgres-1 pg_dump -U postgres -Fc efn_odoo > "$S/efn_odoo_pre_g10.dump"       # 0. backup
+$DC --profile core stop odoo odoo-tls odoo-ws-tls
+$DC --profile core run --rm --no-deps -e ODOO_DEV_MODE= odoo odoo -d efn_odoo --stop-after-init \
+  -i efn_audit -u efn_setup_audit,efn_privacy,efn_pos_otp_gate,efn_core                         # 1. efn_audit + upgrade
+# 2. (opsional) ekspor log lama: docker exec efn-postgres-1 psql -U postgres -d efn_odoo -c '\copy auditlog_log TO ...'
+printf '%s\n' "m = env['ir.module.module'].search([('name', '=', 'auditlog')])" \
+  "m.button_immediate_uninstall()" "env.cr.commit()" |
+  $DC --profile core run --rm --no-deps -T -e ODOO_DEV_MODE= odoo odoo shell -d efn_odoo --no-http   # 3. uninstall auditlog
+$DC --profile core build odoo                                                                     # 4. image tanpa OCA
+$DC --profile core up -d odoo odoo-tls odoo-ws-tls
+```
+
+Cek: `select name,state from ir_module_module where name in ('auditlog','efn_audit','efn_setup_audit')` →
+`auditlog` *uninstalled*, lainnya *installed*; tidak ada tabel `auditlog_*`; `efn_audit_rule` = 9 baris. Jangan
+menjalankan image baru (tanpa OCA) sebelum langkah 3: modul `auditlog` yang masih *installed* tanpa kode tidak bisa
+di-uninstall bersih dan, bila masih termuat, memicu bug flush ORM 19 (`patches.py` sudah dihapus).
+Diverifikasi 6 Okt 2026 pada volume dev (58 log lama, exit 0, 0 baris ERROR; setelah start: healthy, create/write
+produk tercatat `efn.audit.log`). Rollback: `pg_restore --clean -d efn_odoo` dari dump langkah 0 + image lama.
 
 ### 3b. Profil `ai` (Ollama + ocr-worker)
 

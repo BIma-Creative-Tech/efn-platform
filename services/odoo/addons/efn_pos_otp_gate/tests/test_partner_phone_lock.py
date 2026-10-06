@@ -84,13 +84,44 @@ class TestEfnPartnerPhoneLock(TestPoSCommon):
         self.assertTrue(created)
 
     def test_manager_change_is_recorded(self):
+        """SEC-07: perubahan HP oleh manajer tercatat di chatter DAN log efn_audit (ter-mask)."""
+        Rule = self.env["efn.audit.rule"].sudo().with_context(active_test=False)
+        phone_field = self.env["ir.model.fields"]._get("res.partner", "phone").id
+        vals = {
+            "active": True,
+            "log_write": True,
+            "tracked_field_ids": [Command.set([phone_field])],
+            "masked_field_ids": [Command.set([phone_field])],
+        }
+        rule = Rule.search([("model_name", "=", "res.partner")], limit=1)
+        if rule:
+            rule.write(vals)
+        else:
+            Rule.create(dict(vals, name="Uji SEC-07", model_id=self.env["ir.model"]._get_id("res.partner")))
+        self.addCleanup(self.env.registry.clear_cache)
         self.member.with_user(self.manager).write({"phone": PHONE_NEW})
         self.assertEqual(self.member.phone, PHONE_NEW)
-        recorded = bool(self._notes(self.member))
-        if not recorded and "auditlog.log" in self.env:
-            Log = self.env["auditlog.log"].sudo()
-            recorded = bool(Log.search([("res_id", "=", self.member.id), ("method", "=", "write")]))
-        self.assertTrue(recorded, "perubahan HP member wajib tercatat (chatter atau auditlog)")
+        self.assertTrue(self._notes(self.member), "catatan chatter SEC-07")
+        log = (
+            self.env["efn.audit.log"]
+            .sudo()
+            .search([("model_name", "=", "res.partner"), ("res_id", "=", self.member.id), ("operation", "=", "write")])
+        )
+        self.assertEqual(len(log), 1)
+        self.assertEqual(log.user_id, self.manager)
+        line = log.line_ids.filtered(lambda item: item.field_name == "phone")
+        self.assertEqual((line.old_value, line.new_value, line.is_masked), ("62812****890", "62813****222", True))
+        # Kasir ditolak -> tidak ada log tambahan (transaksi write gagal sebelum hook).
+        with self.assertRaises(AccessError):
+            self.member.with_user(self.cashier).write({"phone": "0812-0000-1111"})
+        self.assertEqual(
+            self.env["efn.audit.log"]
+            .sudo()
+            .search_count(
+                [("model_name", "=", "res.partner"), ("res_id", "=", self.member.id), ("operation", "=", "write")]
+            ),
+            1,
+        )
 
     def test_manager_change_is_logged_masked(self):
         EfnResPartner.write(self.member.with_user(self.manager), {"phone": PHONE_NEW})

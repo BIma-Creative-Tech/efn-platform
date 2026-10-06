@@ -16,7 +16,7 @@ Tidak menulis ulang MRP scheduler. Di company CK:
 1. *Inventory → Configuration → Settings*: aktifkan *Multi-Step Routes* bila perlu; warehouse CK: *Manufacture to Resupply* aktif (default `True` saat `mrp` terpasang).
 2. **Tidak ada langkah di form produk.** Di Odoo 19 route **Manufacture** (`mrp.route_warehouse0_manufacture`) adalah route **gudang** (`product_selectable=False`, `warehouse_selectable=True`) — tidak bisa dan tidak perlu dipasang di tab *Inventory* produk. Cukup produk punya BoM tipe Manufacture dan warehouse CK punya *Manufacture to Resupply*. (Koreksi atas versi README sebelumnya.)
 3. *Inventory → Operations → Replenishment*: buat reorder rule paket (min/max per lokasi CK, atau per outlet dengan route resupply dari CK); route boleh dikosongkan atau diisi route Manufacture gudang. Scheduler harian (`stock.action_procurement_compute` / tombol *Order Once*) membuat MO draft/confirmed dari BoM Manufacture.
-4. Outlet: route *Resupply from CK* (internal transfer) atau inter-company (OCA `purchase_sale_inter_company`, ADR-019/ADR-001) bila outlet beda PT.
+4. Outlet: route *Resupply from CK* (internal transfer) atau inter-company bila outlet beda PT (modul custom `efn_intercompany` fase 1, `docs/08` §5.2; ADR-031 — tanpa modul OCA, ADR-019/ADR-001).
 5. Penjualan menu Kit di POS meng-explode ke produk paket lewat modul CE `pos_mrp` (auto-install bila `point_of_sale` + `mrp`). Centang *Available in POS* pada menu secara manual (modul ini sengaja tidak bergantung pada `point_of_sale`).
 
 ## Uji manual (DB demo)

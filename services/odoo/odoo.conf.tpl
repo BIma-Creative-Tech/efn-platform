@@ -3,7 +3,7 @@
 ; entrypoint dari env + Docker secrets (SEC-15) dan render akan gagal bila kunci rahasia ada.
 ; Komentar file ini tidak ikut ke odoo.conf hasil render.
 [options]
-addons_path = /mnt/extra-addons,/mnt/oca-addons,/usr/lib/python3/dist-packages/odoo/addons
+addons_path = /mnt/extra-addons,/usr/lib/python3/dist-packages/odoo/addons
 data_dir = /var/lib/odoo
 
 ; Keamanan (R-S03, SEC-01). proxy_mode juga dipaksa True oleh render (di belakang

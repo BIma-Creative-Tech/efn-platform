@@ -8,7 +8,7 @@
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     # LGPL-3: sejak Gelombang 10 tidak lagi bergantung pada OCA auditlog (AGPL-3).
-    # Kebijakan: tanpa dependency OCA/Cybrosys/vendor (CLAUDE.md, ADR-031 Proposed).
+    # Kebijakan: tanpa dependency OCA/Cybrosys/vendor (CLAUDE.md, ADR-031).
     "license": "LGPL-3",
     "website": "https://github.com/efn/efn-platform",
     # R-S10 (insider/fraud harga & stok), R-B06 (fraud promo). Fit-gap F-17, spesifikasi
@@ -23,9 +23,6 @@
         "data/efn_audit_rule_data.xml",
         "data/ir_config_parameter.xml",
     ],
-    # SEMENTARA False: modul `efn_audit` belum ada (tugas efn-odoo-engineer, docs/08 §5.1).
-    # Ubah ke True pada PR yang sama yang menambahkan `efn_audit`, setelah nama field model
-    # dicocokkan dengan data/efn_audit_rule_data.xml.
-    "installable": False,
+    "installable": True,
     "application": False,
 }

@@ -1,0 +1,5 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_audit_rule_auditor,efn.audit.rule auditor,model_efn_audit_rule,group_auditor,1,0,0,0
+access_efn_audit_rule_manager,efn.audit.rule manager,model_efn_audit_rule,group_manager,1,1,1,1
+access_efn_audit_log_auditor,efn.audit.log auditor,model_efn_audit_log,group_auditor,1,0,0,0
+access_efn_audit_log_line_auditor,efn.audit.log.line auditor,model_efn_audit_log_line,group_auditor,1,0,0,0

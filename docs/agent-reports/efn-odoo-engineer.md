@@ -282,3 +282,28 @@ Odoo 19 `ir.module.module._get_desc` merender README sebagai RST dengan docutils
 - `mobile` tidak ada di `res.partner` 19.0 base; constraint hanya `phone` (override `write` menangani `mobile` bila modul lain menambahkannya).
 - Install dengan data demo (`--without-demo=False`): `try_loading` kini lolos, tetapi install berhenti di `efn_setup_mrp/demo/mrp_demo.xml:34` (INSERT `stock_warehouse_orderpoint` dengan `location_id`/`warehouse_id` NULL). Bug demo yang sudah ada, di luar paket ini — untuk efn-odoo-functional (pemilik `efn_setup_mrp`). Install tanpa demo (CI, produksi) tidak terdampak.
 - Smoke E2E (`run-e2e-smoke.sh`) belum dijalankan ulang terhadap stack penuh di gelombang ini.
+
+# Gelombang 10 — `efn_audit` (pengganti OCA auditlog) + OCA dihapus dari build (6 Okt 2026)
+
+## Modul & file
+| Modul | Perubahan |
+|---|---|
+| `efn_audit` 19.0.1.0.0 (**baru**, LGPL-3, `depends: base, efn_core`) | Sesuai `docs/08` §5.1: `efn.audit.rule` / `efn.audit.log` / `efn.audit.log.line` (nama field = kontrak `efn_setup_audit/data/efn_audit_rule_data.xml`); hook `create/write/unlink` di `_inherit="base"` (ormcache data polos, irisan field ∩ vals sebelum read, `filtered_domain`, `read` lama/baru, hanya field berubah, batch create, skip saat `registry.ready=False`); masking HP (`mask_phone` setelah normalisasi 62…)/email/lainnya; denylist global; aturan `efn.audit.rule` selalu diaudit; grup Auditor/Manager (`base.group_system` → Manager); ACL log baca-saja; immutable (write/unlink → `UserError`, purge hanya via `_efn_audit_purge_*` + penanda `cr.cache`); record rule multi-company (log + baris); `@api.autovacuum _gc_efn_audit_logs` (`efn.audit.retention_days`, default 730, 0 = selamanya, per aturan); API `_efn_audit_purge_records(model, ids)`; view/menu *Audit*; README dengan bagian **Referensi** (OCA auditlog AGPL-3 & Cybrosys user_audit LGPL-3 hanya referensi, tidak ada kode disalin) |
+| `efn_setup_audit` 19.0.2.0.0 | `installable: True`; `git rm` `patches.py`, `data/auditlog_rule_data.xml`; test baru `tests/test_setup_audit.py`; README (status, migrasi, test) |
+| `efn_privacy` 19.0.1.2.0 | `depends += efn_audit`; cabang `auditlog.log` → `efn.audit.log._efn_audit_purge_records("res.partner", ids)`; test `test_audit_logs_purged`; README |
+| `efn_pos_otp_gate` 19.0.1.5.0 | `depends += efn_audit` (jejak SEC-07); docstring/README tanpa alasan patch OCA; `test_manager_change_is_recorded` cek chatter **dan** `efn.audit.log` ter-mask + penolakan kasir tidak menambah log |
+| Build/CI | `services/odoo/Dockerfile` (tanpa `COPY oca`/`/mnt/oca-addons`), `odoo.conf.tpl` addons_path, `.dockerignore`, `requirements.txt` (komentar), `services/odoo/oca/` (dihapus, termasuk README), `scripts/fetch-oca.sh` (dihapus), `.gitignore`, `ruff.toml` (exclude oca), `ci.yml` (path-filter → `check-odoo-deps.sh`, langkah fetch & cabang auditlog di `pick()` dihapus, addons-path, `efn_audit` di daftar modul, **langkah baru gerbang `check-odoo-deps.sh`** dengan daftar CE dari image CI), `build-push.yml` (langkah fetch dihapus), `e2e-nightly.yml` + runbook (daftar `-i` + `efn_audit`), runbook §3a migrasi |
+| README lain | `efn_kitting`, `efn_setup_mrp`, `efn_setup_company`, `efn_core` manifest: rujukan OCA → `efn_intercompany` fase 1 / referensi ADR-031 |
+
+## Verifikasi nyata (container)
+- Image `efn-odoo:ci` di-rebuild tanpa OCA (`/mnt/oca-addons` tidak ada). `check-odoo-deps.sh`: **11 modul, 0 pelanggaran**.
+- Install + `--test-tags efn` 10 modul, lalu `efn_setup_security` di DB yang sama: **149/149 lulus, 0 failed, 0 error, 0 baris ERROR/CRITICAL** (60 WARNING = log jalur negatif test yang diharapkan, sebelumnya 65). Per modul: efn_core 28, efn_audit 25, efn_pos_otp_gate 42, efn_kitting 7, efn_pos_payment_gateway 18, efn_privacy 19, efn_setup_company 3, efn_setup_audit 7.
+- Performa (test): model tanpa aturan 0 query tambahan; write 50 partner ber-aturan +2 query; create 200 `product.template` (semua field) 463 vs 441 query, ±1,2 s vs 0,8 s.
+- ruff 0.16.10 check + format bersih (seluruh direktori CI), compileall OK; yamllint (`.yamllint.yml`) 0; actionlint 1.7.7 untuk `ci.yml`/`build-push.yml`/`e2e-nightly.yml` 0 (temuan SC2153 di `deploy.yml` sudah ada sebelumnya, file tidak disentuh).
+- **Migrasi volume dev** (`efn_odoo`, auditlog terpasang, 58 log): backup `pg_dump` → `-i efn_audit -u efn_setup_audit,efn_privacy,efn_pos_otp_gate,efn_core` (image lama) → uninstall `auditlog` via shell → rebuild `efn/odoo:dev` tanpa OCA → up. Hasil: exit 0, 0 ERROR, auditlog *uninstalled*, tabel `auditlog_*` 0, 9 aturan efn, Odoo healthy, create/write produk tercatat (`create`,`write`). Runbook §3a.
+
+## Belum / sisa
+- Belum PoC beban (100 order POS, 1.000 produk) di staging; tamper-evident (hash berantai/ETL) & enkripsi kolom PII = keputusan klien/DPO.
+- Action binding "Lihat log audit" belum dibuat (opsional). `filter_domain` tanpa variabel eval (`uid`, `context_today`).
+- Dokumen yang masih menyebut OCA/auditlog sebagai rujukan (bukan pemakaian aktif): `docs/06`, `docs/08` (spesifikasi/referensi), `docs/testing/E2E_SMOKE_REPORT.md` (historis), ADR & laporan agent — wewenang architect/functional.
+- CI GitHub belum dijalankan (gerbang akhir). Tidak ada commit (instruksi lead).

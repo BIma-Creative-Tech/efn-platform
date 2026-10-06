@@ -230,24 +230,41 @@ class TestEfnPrivacyErasure(PepperMixin, TestPoSCommon):
         self.assertEqual(self._completes(), [("POST", f"{LIST}/{REQ_2}/complete", {"store": "odoo", "records": 0})])
         self.assertTrue(self.member.active)
 
-    def test_auditlog_entries_removed_when_installed(self):
-        if "auditlog.log" not in self.env:
-            self.skipTest("OCA auditlog tidak terpasang")
-        Log = self.env["auditlog.log"].sudo()
+    def test_audit_logs_purged(self):
+        """Log efn_audit partner (HP lama ter-mask, nama) dihapus saat erasure; log purge tanpa PII."""
+        Rule = self.env["efn.audit.rule"].sudo().with_context(active_test=False)
+        fields_ = [self.env["ir.model.fields"]._get("res.partner", f).id for f in ("name", "phone", "email")]
+        masked = fields_[1:]
+        rule = Rule.search([("model_name", "=", "res.partner")], limit=1)
         vals = {
-            "name": "uji",
-            "model_id": self.env["ir.model"]._get_id("res.partner"),
-            "res_id": self.member.id,
-            "method": "write",
+            "active": True,
+            "log_write": True,
+            "tracked_field_ids": [(6, 0, fields_)],
+            "masked_field_ids": [(6, 0, masked)],
         }
-        Log.create({k: v for k, v in vals.items() if k in Log._fields})
+        if rule:
+            rule.write(vals)
+        else:
+            Rule.create(dict(vals, name="Uji privasi", model_id=self.env["ir.model"]._get_id("res.partner")))
+        self.addCleanup(self.env.registry.clear_cache)
+        self.member.write({"name": "Member Uji Hapus 2"})
+        self.other.write({"name": "Pelanggan Lain 2"})
+        Log = self.env["efn.audit.log"].sudo()
+        ids = [self.member.id, self.member_archived_b.id]
+        self.assertTrue(Log.search([("model_name", "=", "res.partner"), ("res_id", "in", ids)]))
         self._run_cron()
-        model_domain = (
-            [("model_model", "=", "res.partner")]
-            if "model_model" in Log._fields
-            else [("model_id.model", "=", "res.partner")]
+        self.assertFalse(Log.search([("model_name", "=", "res.partner"), ("res_id", "in", ids)]))
+        self.assertTrue(Log.search([("model_name", "=", "res.partner"), ("res_id", "=", self.other.id)]))
+        purge = Log.search([("operation", "=", "purge"), ("model_name", "=", "res.partner")], limit=1)
+        self.assertTrue(purge)
+        self.assertFalse(purge.res_id or purge.res_name)
+        self.env.flush_all()
+        self.env.cr.execute(
+            "SELECT count(*) FROM efn_audit_log_line l JOIN efn_audit_log g ON g.id = l.log_id"
+            " WHERE g.res_id = ANY(%s) AND g.model_name = 'res.partner'",
+            [ids],
         )
-        self.assertFalse(Log.search(model_domain + [("res_id", "in", [self.member.id, self.member_archived_b.id])]))
+        self.assertEqual(self.env.cr.fetchone()[0], 0)
 
     def test_failure_of_one_request_does_not_stop_others(self):
         self.list_response = BffResponse(

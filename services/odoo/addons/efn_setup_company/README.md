@@ -2,7 +2,7 @@
 
 Modul konfigurasi **data-only** (tanpa Python) untuk struktur multi-company EFN dan pajak di Odoo CE 19.
 
-- **ADR:** ADR-001 (satu DB multi-company), ADR-019 (unified cart, Holding = agen penagih), ADR-015 (CE/OCA dulu). Semua *Proposed*.
+- **ADR:** ADR-001 (satu DB multi-company), ADR-019 (unified cart, Holding = agen penagih), ADR-015 (penamaan; bagian "OCA dulu" digantikan ADR-031: tanpa modul pihak ketiga). *Proposed* kecuali prinsip ADR-031 (diputuskan klien).
 - **Risiko dimitigasi:** R-T01/R-O01 (master data company konsisten dengan kontrak BFF), R-L03 (PB1 vs PPN dipisah per company; tarif & include/exclude **configurable**, bukan ditetapkan developer).
 - **Fit-gap:** `docs/08_ODOO_FIT_GAP.md` baris F-01, F-02, F-27, F-28.
 
@@ -93,4 +93,4 @@ Prasyarat: `efn_core` (≥ 19.0.1.2.0) di addons path. Install pada DB **baru** 
 - `try_loading` saat instalasi modul mencetak peringatan "without a fully loaded registry"; bila CI gagal, pindahkan ke `post_init_hook` (E-11, efn-odoo-engineer).
 - Konflik demo `efn_kitting` (E-7) sudah diselesaikan engineer: demo `efn_kitting` mencari company `efn_brand_code = 'FNB'` yang ada.
 - Company bawaan (`base.main_company`) tidak diubah; arsipkan atau pakai sebagai company teknis.
-- Inter-company OCA belum dikonfigurasi (F-03).
+- Inter-company belum ada (F-03: modul custom `efn_intercompany` fase 1, `docs/08` §5.2).

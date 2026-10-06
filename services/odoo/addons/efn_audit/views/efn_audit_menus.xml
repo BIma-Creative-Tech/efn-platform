@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_efn_audit_root" name="Audit" sequence="95" groups="group_auditor"/>
+    <menuitem id="menu_efn_audit_log" name="Log" parent="menu_efn_audit_root"
+              action="efn_audit_log_action" sequence="10" groups="group_auditor"/>
+    <menuitem id="menu_efn_audit_rule" name="Aturan" parent="menu_efn_audit_root"
+              action="efn_audit_rule_action" sequence="20" groups="group_manager"/>
+</odoo>
