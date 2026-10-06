@@ -4,6 +4,8 @@
 >
 > **Pembaruan 6 Okt 2026 (gelombang 8).** ADR-030: MinIO community sudah diarsipkan upstream (April 2026) dan build kami (Okt 2025) masih mengandung ≥ 4 celah High yang hanya ditambal di produk komersial. Rekomendasi: build fork komunitas **SILO** dari source (±2–3 hari, Rp0) + filter pengaman di depan storage, dan uji coba SeaweedFS sebagai jalur keluar. Butuh tanda tangan IT + Security **sebelum staging publik**.
 >
+> **Pembaruan 6 Okt 2026 (gelombang 10).** **ADR-031 — diputuskan klien:** tidak ada modul Odoo pihak ketiga yang dipasang (OCA, Cybrosys, Apps Store); keduanya hanya **referensi desain**, gap dibangun sebagai `efn_*` LGPL-3. ADR-015 bagian "OCA dulu" **digantikan sebagian**. Dampak: audit log, inter-company, dan laporan keuangan/konsolidasi dibangun sendiri atau dipindah ke Metabase — **±10–16 minggu-engineer (±Rp50–145 jt)**, Fase 1 berisiko mundur 2–4 minggu tanpa engineer tambahan. Rincian pelaksanaan (Q-V1..Q-V6) masih butuh tanda tangan. Total kini **31 ADR**.
+>
 > **Ringkasan manajemen (awal).** Ada 25 keputusan arsitektur yang menunggu tanda tangan klien. Semuanya berstatus **Proposed**: tim boleh mulai mengikuti rekomendasi, tetapi tidak boleh mengunci pilihan yang mahal dibalik sebelum disetujui. **ADR-022 (enkripsi) dan ADR-025 (model tim agent) berasal dari instruksi klien 5 Okt 2026** — prinsipnya sudah wajib; yang ditandatangani adalah caranya. Tujuh keputusan di **Gelombang 1** memblokir Fase 1 dan perlu ditandatangani dalam 2 minggu pertama; ADR-022/023/024 (keamanan) ditandatangani paralel karena memblokir staging publik. Keputusan pajak dan legal (MGM, unified cart) butuh konsultan eksternal sehingga harus **dimulai** sekarang.
 
 Status: `Proposed` = belum disetujui klien · `Accepted` = disetujui (catat nama & tanggal) · `Superseded by ADR-xxx`.
@@ -27,7 +29,7 @@ Sumber: `docs/01_REVIEW_RISK_GAP_ANALYSIS.md` (D-xx, R-xxx, Q-xx). Template: `AD
 | [012](ADR-012-rabbitmq-message-broker.md) | RabbitMQ | D-12 | Proposed | IT | R-T10 |
 | [013](ADR-013-scope-pos-fnb-ce19.md) | Scope POS F&B pada CE 19 (KDS custom) | D-13 | Proposed | PO + Ops F&B + IT | R-T03 |
 | [014](ADR-014-hosting-ai-jaringan-privat.md) | AI di jaringan privat (bukan air-gapped) | D-14 | Proposed | IT + Legal/DPO | R-L01 |
-| [015](ADR-015-penamaan-modul-efn-oca-first.md) | Modul `efn_*`, OCA/CE dulu | D-15 | Proposed | IT | R-T03, R-T04 |
+| [015](ADR-015-penamaan-modul-efn-oca-first.md) | Modul `efn_*`, OCA/CE dulu | D-15 | Proposed — **sebagian digantikan ADR-031** (penamaan `efn_*` tetap) | IT | R-T03, R-T04 |
 | [016](ADR-016-satu-payment-gateway-utama.md) | Satu payment gateway — **pemilihan vendor ditunda** (Xendit = kandidat) | D-16 | Proposed — vendor ditunda (klien 6 Okt) | Finance + Legal + IT | R-S09, R-L05 |
 | [017](ADR-017-otp-saat-pos-offline.md) | OTP saat POS offline: opsi (a) nonaktif | §3.2 | Proposed | PO + Ops Outlet + Finance | R-T02 |
 | [018](ADR-018-kitting-manufacture-bom.md) | Kitting = Manufacture BoM, bukan Phantom | §3.1 | Proposed | PO + Ops CK + Finance | R-T01 |
@@ -43,11 +45,12 @@ Sumber: `docs/01_REVIEW_RISK_GAP_ANALYSIS.md` (D-xx, R-xxx, Q-xx). Template: `AD
 | [028](ADR-028-captcha-altcha-self-hosted.md) | Captcha OTP = ALTCHA self-hosted (tanpa pihak ketiga) | SEC-06 | Proposed | IT + Legal/DPO | R-L01, R-B02 |
 | [029](ADR-029-identitas-member-opak.md) | Identitas member opak: JWT `sub` = UUID | R-L01 | Proposed | IT + Legal/DPO | R-L01 |
 | [030](ADR-030-sumber-image-object-storage.md) | Object storage: MinIO community diarsipkan → build SILO (fork) dari source + filter L7; PoC SeaweedFS sebagai jalur keluar | R-S02, R-S08 (usulan R-S13) | Proposed | IT + Security (Finance bila opsi berbayar) | R-S02, R-S08, R-T08, R-L01 |
+| [031](ADR-031-tanpa-dependency-modul-odoo-pihak-ketiga.md) | Tanpa dependency modul Odoo pihak ketiga; OCA & Cybrosys sebagai referensi; gap = `efn_*` LGPL-3 (clean implementation) | D-15, R-T04, R-L08 | **Diputuskan klien 6 Okt 2026** (prinsip); rincian Q-V1..Q-V6 Proposed | Klien; rincian: IT + Finance + Legal | R-T04, R-L08, R-B09, R-S10, usulan R-T13 |
 
 Catatan pemetaan: D-09 dipetakan ke ADR-001 (sudah ada) sehingga ADR-009 dipakai untuk D-08. D-10 dibahas di ADR-010 dan juga disinggung ADR-001.
 
 ## Urutan tanda tangan yang tersisa (per 6 Okt 2026)
-Belum ada ADR berstatus Accepted. Sudah dijawab klien: Q-E1 (kustodi = Superadmin), Q-E4 (mTLS), prinsip pajak configurable, penundaan vendor payment. Urutan berikut menggantikan prioritas di bawah bila berbeda.
+Belum ada ADR berstatus Accepted. Sudah dijawab klien: Q-E1 (kustodi = Superadmin), Q-E4 (mTLS), prinsip pajak configurable, penundaan vendor payment, **prinsip tanpa dependency modul Odoo pihak ketiga (ADR-031)**. Urutan berikut menggantikan prioritas di bawah bila berbeda.
 
 | Urutan | ADR / dokumen | Yang masih perlu ditandatangani | Pemutus |
 |---|---|---|---|
@@ -56,6 +59,7 @@ Belum ada ADR berstatus Accepted. Sudah dijawab klien: Q-E1 (kustodi = Superadmi
 | 3 | ADR-023 | Pola B-a/B-b per outlet; Q-W1 jumlah perangkat per outlet; Q-W4 model Android POS; Q-55 model router | IT + Ops Outlet + Finance |
 | 4 | ADR-024, ADR-028, ADR-029 | Teknis, biaya Rp0 — dapat ditandatangani sekaligus | IT (+ DPO untuk 028/029) |
 | 4a | **ADR-030** | Q-OS1 (terima fork komunitas tanpa SLA), Q-OS3 (object lock COMPLIANCE), Q-OS2 PoC SeaweedFS; **memblokir staging publik** karena CVE High terbuka di build saat ini — tandatangani bersama ADR-024 | IT + Security |
+| 4b | **ADR-031** (rincian) | Q-V2 lisensi LGPL-3; Q-V4 anggaran/jadwal (+10–16 minggu-engineer); Q-V3 laporan keuangan per PT; Q-V1/Q-V5/Q-V6 ruang lingkup referensi — **memblokir mulai `efn_audit` & `efn_intercompany` (Fase 1)** | IT + Finance + Legal |
 | 5 | **Paket UU PDP**: `docs/compliance/*` (DPO, retensi, Q-P1..P8), `PDP_TRANSFER_LINTAS_NEGARA.md` (Q-T1..T6) | Penetapan DPO lebih dulu; tanpa DPO, retensi tetap default usulan | DPO + Legal |
 | 6 | ADR-027 | Daftar kota/tarif & kebijakan include/exclude (konsultan pajak) — sebelum go-live F&B | Finance + Tax |
 | 7 | ADR-026 → ADR-016 | Prinsip abstraksi sekarang; pemilihan vendor dengan kriteria ADR-026 sebelum Fase 3 (KYB tiap PT) | Finance + Legal + IT |

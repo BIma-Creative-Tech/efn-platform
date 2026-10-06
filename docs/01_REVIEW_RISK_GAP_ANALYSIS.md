@@ -52,12 +52,12 @@ Setiap baris butuh **satu keputusan** dari product owner. Kolom "Rekomendasi" ad
 | D-07 | Engine OCR | Llama 3.2 Vision (Blueprint, BRD) | LLaVA / Tesseract (Arch v2, TSD) | - | Pipeline 2 tahap: **PaddleOCR/Tesseract** (cepat, CPU) untuk ekstraksi teks, lalu **VLM kecil** (Qwen2.5-VL 3B/7B atau Llama 3.2 Vision 11B) hanya jika confidence rendah. Lihat R-T05. |
 | D-08 | Parameter MGM | Tidak didefinisikan (BRD) | 5% Tier-1, 2% Tier-2 cashback (Cetak Biru) | - | Harus diputuskan finance. 7% total komisi dari order value sangat besar untuk margin groceries (umumnya 15-25% gross). Lihat R-B03. |
 | D-09 | Arsitektur Odoo multi-PT | Satu Odoo multi-company (Cetak Biru, Arch v2) | "Odoo F&B" dan "Odoo Supermarket" sebagai instance terpisah (FSD §1 langkah 2) | - | **Satu database Odoo, multi-company**. Instance terpisah membuat inter-company jadi integrasi API antar-sistem, 10x lebih rumit. |
-| D-10 | Peran AI saat runtime | AI tidak berjalan di sistem live (TSD §4.2) | "Agentic AI mendeteksi permintaan lintas-PT dan men-generate PO/SO" (FSD §1 langkah 2) | - | AI **tidak** di jalur transaksi. Inter-company PO/SO adalah automasi deterministik (OCA `purchase_sale_inter_company`). AI hanya untuk OCR dan Text-to-SQL. |
+| D-10 | Peran AI saat runtime | AI tidak berjalan di sistem live (TSD §4.2) | "Agentic AI mendeteksi permintaan lintas-PT dan men-generate PO/SO" (FSD §1 langkah 2) | - | AI **tidak** di jalur transaksi. Inter-company PO/SO adalah automasi deterministik (OCA `purchase_sale_inter_company`; **diperbarui ADR-031: `efn_intercompany`**). AI hanya untuk OCR dan Text-to-SQL. |
 | D-11 | Kanal WhatsApp | Provider murah / Baileys open source (Arch v2) | WhatsApp API (TSD) | - | **WhatsApp Cloud API resmi (Meta)** via BSP. Baileys adalah library unofficial, melanggar ToS WhatsApp, nomor bisa diblokir. Tidak boleh dipakai untuk mekanisme anti-fraud produksi. |
 | D-12 | Message broker | Tidak ada (Blueprint, Arch v2, TSD) | RabbitMQ/Kafka (Cetak Biru) | - | **RabbitMQ** diperlukan (OCR async, notifikasi, kalkulasi MGM, webhook 3PL). Kafka berlebihan di skala awal. |
 | D-13 | Scope POS F&B | KDS, ODS, Kiosk, Booking, Waitlist (BRD, Cetak Biru) | Tidak dirinci (Charter) | - | Verifikasi ketersediaan modul di **Odoo CE 19** (bukan Enterprise). Lihat R-T03. |
 | D-14 | Hosting AI | "100% offline/air-gapped" (TSD) | Menerima request HTTP dari API Gateway (FSD) | - | Istilah yang benar: **jaringan privat tanpa egress internet**. Air-gapped berarti tidak bisa dipanggil API Gateway. |
-| D-15 | Nama custom module | 4 modul (Blueprint: Multi-Company, MGM, Kitting, OTP Interceptor) | 5 modul `custom_efn_*` (Cetak Biru) | - | Gunakan penamaan Cetak Biru dengan prefix `efn_` (konvensi Odoo), dan petakan ke OCA dulu sebelum menulis dari nol. |
+| D-15 | Nama custom module | 4 modul (Blueprint: Multi-Company, MGM, Kitting, OTP Interceptor) | 5 modul `custom_efn_*` (Cetak Biru) | - | Gunakan penamaan Cetak Biru dengan prefix `efn_` (konvensi Odoo), dan petakan ke OCA dulu sebelum menulis dari nol. **Diperbarui ADR-031 (keputusan klien 6 Okt 2026):** tidak ada dependency modul Odoo pihak ketiga; urutan = Standar CE → di luar Odoo (BFF/ETL/Metabase) → `efn_*` sendiri (LGPL-3), OCA & Cybrosys hanya referensi desain. |
 | D-16 | Payment | Tidak disebut (BRD, Charter) | Midtrans, Xendit, QRIS, VA, e-wallet (Cetak Biru) | - | Pilih **satu** gateway utama (Xendit atau Midtrans) di fase 1. Keduanya sudah mencakup QRIS, VA, dan e-wallet. |
 
 ---
@@ -99,7 +99,7 @@ Satu checkout berisi barang dari PT Retail dan PT F&B. Konsekuensi yang belum di
 
 ### 3.4 Multi-company vs multi-instance Odoo (FSD §1)
 
-Jika tiap PT adalah instance Odoo terpisah, tidak ada "inter-company rule" bawaan apa pun; semuanya menjadi integrasi API antar-sistem dengan masalah idempotency, retry, dan rekonsiliasi master data. Satu database multi-company adalah satu-satunya jalur yang realistis. Catatan: modul `sale_purchase_inter_company` dan `account_invoice_inter_company` tersedia di **OCA/multi-company** (open source, AGPL), sehingga modul "Multi-Company" tidak perlu ditulis dari nol.
+Jika tiap PT adalah instance Odoo terpisah, tidak ada "inter-company rule" bawaan apa pun; semuanya menjadi integrasi API antar-sistem dengan masalah idempotency, retry, dan rekonsiliasi master data. Satu database multi-company adalah satu-satunya jalur yang realistis. Catatan: modul `sale_purchase_inter_company` dan `account_invoice_inter_company` tersedia di **OCA/multi-company** (open source, AGPL), sehingga modul "Multi-Company" tidak perlu ditulis dari nol. *(Diperbarui ADR-031, 6 Okt 2026: modul OCA tidak dipasang; inter-company dibangun sebagai `efn_intercompany` dengan OCA & Cybrosys `inter_company_synchronization` sebagai referensi, ±4–6 minggu.)*
 
 ### 3.5 Target latency OCR < 5 detik tanpa GPU (BRD §7.1)
 
@@ -107,7 +107,7 @@ Llama 3.2 Vision 11B pada CPU memakan 30-120 detik per gambar. Target <5 detik m
 
 ### 3.6 Konsolidasi keuangan lintas-PT real-time (BRD §5.1)
 
-Odoo CE tidak memiliki modul konsolidasi (`account_consolidation` adalah Enterprise). Opsi open source: **OCA `mis_builder`** untuk laporan multi-company, atau konsolidasi di layer ClickHouse/Metabase. "Real-time" harus diturunkan menjadi "near real-time (15 menit)" selaras dengan D-02.
+Odoo CE tidak memiliki modul konsolidasi (`account_consolidation` adalah Enterprise). Opsi open source: **OCA `mis_builder`** untuk laporan multi-company, atau konsolidasi di layer ClickHouse/Metabase. "Real-time" harus diturunkan menjadi "near real-time (15 menit)" selaras dengan D-02. *(Diperbarui ADR-031: `mis_builder` tidak dipasang; konsolidasi di ClickHouse/Metabase. Laporan keuangan per PT untuk akuntan menunggu Q-V3.)*
 
 ---
 
@@ -137,7 +137,7 @@ Skala: **Probabilitas** (P) dan **Dampak** (D) 1-5. **Skor** = P × D. Prioritas
 | R-T01 | **Phantom BoM salah konsep** (§3.1). | 5 | 4 | 20 | Koreksi FSD sebelum development. Proof of concept 2 hari di Odoo CE 19 sandbox. |
 | R-T02 | **OTP vs offline POS** (§3.2). | 5 | 4 | 20 | Keputusan bisnis opsi (a)/(b)/(c). Dokumentasikan di ADR. |
 | R-T03 | **Fitur POS yang diasumsikan ada di CE 19 ternyata Enterprise** (Kitchen Display / `pos_preparation_display`, table booking/appointment, loyalty/gift card tertentu, IoT box). | 4 | 4 | 16 | Audit modul per fitur pada Odoo CE 19 aktual di minggu 1. Cari padanan OCA (`pos` repo) atau rencanakan custom. Kiosk `pos_self_order` ada di CE. |
-| R-T04 | **Odoo 19 CE masih baru** (rilis akhir 2025): OCA modules multi-company/pos/mrp belum semua dimigrasi ke 19. | 4 | 3 | 12 | Cek status migrasi OCA untuk tiap modul yang dibutuhkan. Fallback: Odoo 18 CE (OCA lebih matang) atau porting sendiri. Keputusan di minggu 1. |
+| R-T04 | **Odoo 19 CE masih baru** (rilis akhir 2025): OCA modules multi-company/pos/mrp belum semua dimigrasi ke 19. | 4 | 3 | 12 | Cek status migrasi OCA untuk tiap modul yang dibutuhkan. Fallback: Odoo 18 CE (OCA lebih matang) atau porting sendiri. Keputusan di minggu 1. **Diperbarui ADR-031 (6 Okt 2026):** OCA tidak lagi dipasang, sehingga risiko bergeser dari "menunggu migrasi OCA" ke **kapasitas engineer EFN** untuk modul `efn_*` pengganti (audit log, inter-company, laporan): +10–16 minggu-engineer. Lihat usulan R-T13 di ADR-031. |
 | R-T05 | **OCR < 5 detik tidak tercapai tanpa GPU** (§3.5). | 4 | 3 | 12 | Pipeline async + OCR klasik dulu. GPU bila volume >1.000 foto/hari. Ubah KPI: "hasil validasi diterima pelanggan ≤ 60 detik". |
 | R-T06 | **Text-to-SQL menghasilkan jawaban salah** yang dipakai manajemen untuk keputusan. | 4 | 3 | 12 | Read-only user ClickHouse, whitelist tabel/view (semantic layer), tampilkan SQL yang dijalankan, label "AI-generated, verifikasi di dashboard", batas waktu query, logging. |
 | R-T07 | **Uptime 99.9% tidak tercapai** dengan Odoo+PostgreSQL single node (budget downtime 43 menit/bulan). | 4 | 3 | 12 | Fase 1 target 99.5% (3,6 jam/bulan). PostgreSQL streaming replica + failover (Patroni/repmgr) sebelum klaim 99.9%. |
@@ -146,6 +146,7 @@ Skala: **Probabilitas** (P) dan **Dampak** (D) 1-5. **Skor** = P × D. Prioritas
 | R-T10 | **Split order + 3PL + payment adalah distributed transaction** (bayar sukses, 3PL gagal, stok sudah dipotong). | 4 | 4 | 16 | Saga/outbox pattern via RabbitMQ, status order eksplisit (`paid`, `dispatch_pending`, `dispatch_failed`), idempotency key di semua webhook, kompensasi otomatis. |
 | R-T11 | **Odoo sebagai backend POS + e-commerce + ERP dalam satu proses** menyebabkan POS lambat saat ETL/laporan berat. | 3 | 4 | 12 | Pisahkan worker Odoo (HTTP vs cron vs longpolling), PgBouncer, ETL membaca dari **replica**, bukan primary. |
 | R-T12 | **Monorepo tanpa disiplin** (Odoo Python, NestJS, Next.js, RN, ETL Python) membuat CI lambat dan rilis saling menunggu. | 3 | 3 | 9 | Path-filtered workflows (sudah disiapkan di `.github/workflows/`), versioning per service, container image per service. |
+| R-T13 | **Kapasitas & retensi Odoo engineer** — ADR-031 memindahkan audit log, inter-company, dan laporan ke modul `efn_*` sendiri (±10–16 minggu-engineer) plus porting tiap upgrade mayor Odoo. | 4 | 4 | 16 | Minimal 2 Odoo engineer yang paham modul `efn_*` (bus factor), dokumentasi & test wajib per modul, estimasi divalidasi Odoo engineer senior (Q-53), anggarkan porting tiap rilis mayor. |
 | R-T13 | **React Native + Next.js PWA "hybrid"** tidak jelas: dua codebase mobile atau satu? | 3 | 3 | 9 | Putuskan: **Expo (React Native) untuk mobile**, Next.js untuk web. Shared package untuk API client & design tokens. |
 | R-T14 | **Multi-tenant brand frontends** (satu codebase banyak brand) tanpa desain tema/konfigurasi. | 3 | 3 | 9 | Config-driven theming per brand (domain → brand_id → theme + catalog scope). Uji dengan 2 brand di fase awal. |
 
@@ -160,7 +161,7 @@ Skala: **Probabilitas** (P) dan **Dampak** (D) 1-5. **Skor** = P × D. Prioritas
 | R-L05 | **PCI DSS** jika menyimpan data kartu. | 2 | 5 | 10 | Jangan pernah menyimpan PAN. Gunakan tokenisasi gateway (SAQ A). |
 | R-L06 | **Memotret di toko kompetitor** bisa melanggar tata tertib toko; menampilkan nama kompetitor + harga bisa memicu sengketa. | 2 | 3 | 6 | Tampilkan "harga pasar" teragregasi, bukan per-nama-toko ke publik. Terms of use untuk kontributor. |
 | R-L07 | **Keamanan pangan & traceability** (BPOM, halal): lot/expiry tracking untuk fresh product. | 3 | 3 | 9 | Aktifkan `product_expiry` dan lot tracking (CE). QR traceability di fase lanjut. |
-| R-L08 | **Lisensi AGPL Odoo/OCA**: modul custom yang di-deploy sebagai layanan jaringan tunduk AGPL (source harus tersedia bagi pengguna jaringan jika didistribusikan). | 2 | 2 | 4 | Untuk penggunaan internal EFN tidak masalah. Catat di `LICENSES.md`. Jangan campur kode proprietary ke dalam addon Odoo jika akan dikomersialkan. |
+| R-L08 | **Lisensi AGPL Odoo/OCA**: modul custom yang di-deploy sebagai layanan jaringan tunduk AGPL (source harus tersedia bagi pengguna jaringan jika didistribusikan). | 2 | 2 | 4 | Untuk penggunaan internal EFN tidak masalah. Catat di `LICENSES.md`. Jangan campur kode proprietary ke dalam addon Odoo jika akan dikomersialkan. **Diperbarui ADR-031:** tidak ada modul AGPL pihak ketiga yang dipasang; semua `efn_*` LGPL-3. Risiko baru: kode OCA (AGPL/LGPL) atau Cybrosys (LGPL/AGPL/OPL-1) tersalin ke `efn_*` → panduan clean implementation + bagian "Referensi" di README modul. |
 
 ### 4.4 Risiko Keamanan Siber
 
@@ -175,7 +176,7 @@ Skala: **Probabilitas** (P) dan **Dampak** (D) 1-5. **Skor** = P × D. Prioritas
 | R-S07 | **Supply chain: GitHub Actions dari pihak ketiga** dibajak. | 3 | 4 | 12 | Pin actions ke SHA, `permissions:` minimal per job, OIDC bukan long-lived token, Dependabot untuk actions. |
 | R-S08 | **Image container tanpa provenance**; staging/prod menjalankan image yang bukan hasil CI. | 3 | 4 | 12 | Build hanya di CI, push ke GHCR, SBOM (Syft), sign (Cosign keyless), deploy memverifikasi signature. |
 | R-S09 | **Webhook payment/3PL dipalsukan.** | 3 | 5 | 15 | Verifikasi signature HMAC setiap webhook, IP allowlist, idempotency key, replay window. |
-| R-S10 | **Insider threat**: admin Odoo bisa ubah harga/stok/poin tanpa jejak. | 3 | 4 | 12 | Audit log (OCA `auditlog`), 4-eyes untuk perubahan pricelist, alert anomali ke manager (sudah disebut BRD, perlu dijadikan requirement konkret). |
+| R-S10 | **Insider threat**: admin Odoo bisa ubah harga/stok/poin tanpa jejak. | 3 | 4 | 12 | Audit log (OCA `auditlog`; **diperbarui ADR-031: modul sendiri `efn_audit`**), 4-eyes untuk perubahan pricelist, alert anomali ke manager (sudah disebut BRD, perlu dijadikan requirement konkret). |
 | R-S11 | **Tidak ada pentest** sebelum go-live (hanya disebut di Cetak Biru fase 4). | 4 | 4 | 16 | DAST (OWASP ZAP) tiap deploy staging + pentest manual pihak ketiga sebelum tiap go-live mayor. |
 | R-S12 | **Kasir/kiosk device tidak dikelola** (Android tanpa MDM, browser bebas). | 3 | 3 | 9 | Kiosk mode, MDM open source (misal Headwind MDM) atau minimal kebijakan device, Wi-Fi terpisah untuk POS. |
 | R-S13 | **Komponen inti ditinggalkan upstream** (MinIO community diarsipkan Apr 2026; build terakhir rentan CVE High yang hanya ditambal di edisi proprietary). Pola yang sama bisa terjadi pada komponen lain. | 4 | 4 | 16 | ADR-030: build dari fork komunitas aktif (SILO) di pipeline sendiri + filter L7 + PoC jalur keluar (SeaweedFS). Pantau status upstream semua komponen inti tiap kuartal (repo diarsipkan, rilis terakhir, CVE terbuka) dan catat di ADR terkait. |
@@ -312,10 +313,10 @@ Satu versi yang merekonsiliasi keenam dokumen. Detail visual ada di artifact ars
 | Edge | Reverse proxy | Traefik v3 | Let's Encrypt otomatis, rate limit middleware, routing per domain/brand. |
 | Frontend | Web Super-App & brand sites | Next.js 15 (App Router) | Multi-tenant via domain → brand config. |
 | Frontend | Mobile | Expo (React Native) | Satu codebase iOS/Android; EAS Build gratis tier terbatas atau self-build. |
-| Frontend | POS, Kiosk, KDS, Customer Display | Odoo POS (CE) + OCA/custom | Berjalan di browser Chromium kiosk mode. |
+| Frontend | POS, Kiosk, KDS, Customer Display | Odoo POS (CE) + custom `efn_*` (tanpa OCA, ADR-031) | Berjalan di browser Chromium kiosk mode. |
 | Frontend | QC Intake mobile | PWA Next.js (offline-capable) | Lebih cepat dibangun daripada app native terpisah. |
 | Backend | BFF / API | NestJS (TypeScript) | Auth/OTP, cart, checkout orchestrator, MGM, price hunter, 3PL/payment connector, notifikasi. |
-| Backend | ERP | Odoo CE 19 + addons `efn_*` + OCA | Multi-company, inter-company, MRP, POS, l10n_id. |
+| Backend | ERP | Odoo CE 19 + addons `efn_*` (tanpa OCA/pihak ketiga, ADR-031) | Multi-company, inter-company, MRP, POS, l10n_id. |
 | Backend | Workers | NestJS worker + Python worker | Konsumen RabbitMQ: OCR, notif, MGM settle, ETL. |
 | Data | OLTP | PostgreSQL 16 (Odoo) + PostgreSQL 16 (platform) | Dua DB logis; satu cluster di awal, pisah saat beban naik. PgBouncer di depan. |
 | Data | Cache/OTP/session | Redis 7 | TTL OTP 3 menit, rate-limit counters. |

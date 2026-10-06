@@ -1,9 +1,11 @@
 # ADR-015: Penamaan Modul Custom `efn_<domain>` dan Prinsip "OCA/CE Dulu, Custom Terakhir"
 
-- **Status:** Proposed
-- **Tanggal:** 2026-10-05
+- **Status:** Proposed — **sebagian digantikan oleh [ADR-031](ADR-031-tanpa-dependency-modul-odoo-pihak-ketiga.md) (6 Okt 2026, keputusan klien)**: prinsip "OCA/CE dulu", peta modul OCA di bagian Keputusan, dan aturan lisensi AGPL-3 untuk modul yang bergantung OCA **tidak berlaku lagi**. Yang tetap berlaku: penamaan `efn_<domain>` dan prinsip "Standar CE dulu, custom terakhir".
+- **Tanggal:** 2026-10-05 (catatan supersede 2026-10-06)
 - **Pemutus (klien):** IT Lead
 - **Referensi review:** D-15, R-T03, R-T04, R-L08, R-B09
+
+> **Catatan ADR-031.** Urutan fit-gap kini: Standar CE → di luar Odoo (BFF/ETL/Metabase) → modul `efn_*` sendiri dengan OCA & Cybrosys sebagai **referensi desain** (bukan dependency). Semua `efn_*` berlisensi LGPL-3. Tabel "Kebutuhan → Solusi" di bawah dibiarkan sebagai catatan sejarah; peta yang berlaku ada di ADR-031 dan `docs/06`.
 
 > **Ringkasan manajemen.** Dokumen menyebut 4 atau 5 "modul custom". Setelah dicek, sebagian sudah tersedia gratis (inter-company dari OCA, loyalty dari Odoo Community). Kami hanya menulis kode sendiri untuk yang benar-benar tidak ada, dengan nama seragam `efn_*`. Ini memangkas pekerjaan dan biaya perawatan saat upgrade.
 

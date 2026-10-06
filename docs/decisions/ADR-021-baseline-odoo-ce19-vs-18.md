@@ -6,6 +6,7 @@
 - **Referensi review:** R-T04 (*"Keputusan di minggu 1"*), R-T03
 - **Bukti:** `docs/06_ODOO_CE19_MODULE_AUDIT.md`
 - **Catatan:** ADR tambahan di luar D-01..D-16; dibuat karena R-T04 meminta keputusan eksplisit dan audit menemukan kesenjangan OCA/pos 19.0.
+- **Catatan ADR-031 (6 Okt 2026):** modul OCA tidak lagi dipasang (keputusan klien). Alasan "modul OCA kunci sudah 19.0" di bawah tidak lagi relevan; keputusan **tetap CE 19** karena alasan lain (umur dukungan, Coretax di CE) dan karena tanpa OCA keunggulan CE 18 (OCA/pos lebih lengkap) juga hilang. Gate PoC tidak lagi memasang OCA multi-company/mis_builder/auditlog; yang diuji adalah CE + `efn_*`.
 
 > **Ringkasan manajemen.** Kami tetap memakai Odoo Community 19 (versi terbaru) karena modul-modul kunci (inter-company, laporan konsolidasi, audit log, pajak Indonesia/Coretax) sudah tersedia untuk versi 19. Kelemahannya, ekstensi POS dari komunitas (OCA) di versi 19 masih sangat sedikit. Pindah ke versi 18 hanya jika uji coba 2 minggu pertama menemukan hambatan serius.
 
