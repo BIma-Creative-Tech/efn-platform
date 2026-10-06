@@ -1,6 +1,8 @@
 # Indeks Architecture Decision Records (ADR) — EFN Platform
 
-> **Pembaruan 6 Okt 2026.** Klien memutuskan: (1) kunci hanya dipegang **Superadmin** dan (2) **mTLS sesuai rekomendasi** — keduanya dicatat di ADR-022 sebagai "Diputuskan klien 6 Okt 2026" (ADR-022 sendiri tetap Proposed untuk bagian lain); (3) **pajak PB1 per kota & include/exclude dibuat configurable** → ADR-027; (4) **payment gateway belum ditentukan** → ADR-026 (abstraksi), ADR-016 ditunda; (5) atas pertanyaan "router WireGuard — tidak ada solusi open source?", ADR-023 direvisi: default **klien WireGuard di perangkat (Rp0 hardware)** untuk outlet ≤ 3 perangkat, **OpenWrt (±Rp0,4–0,9 jt)** untuk outlet besar. **UU PDP (DPO, retensi, transfer lintas negara) belum diputuskan** — default usulan dipakai sementara (`docs/compliance/`). Total kini **29 ADR**, semua masih Proposed; belum ada yang Accepted penuh.
+> **Pembaruan 6 Okt 2026.** Klien memutuskan: (1) kunci hanya dipegang **Superadmin** dan (2) **mTLS sesuai rekomendasi** — keduanya dicatat di ADR-022 sebagai "Diputuskan klien 6 Okt 2026" (ADR-022 sendiri tetap Proposed untuk bagian lain); (3) **pajak PB1 per kota & include/exclude dibuat configurable** → ADR-027; (4) **payment gateway belum ditentukan** → ADR-026 (abstraksi), ADR-016 ditunda; (5) atas pertanyaan "router WireGuard — tidak ada solusi open source?", ADR-023 direvisi: default **klien WireGuard di perangkat (Rp0 hardware)** untuk outlet ≤ 3 perangkat, **OpenWrt (±Rp0,4–0,9 jt)** untuk outlet besar. **UU PDP (DPO, retensi, transfer lintas negara) belum diputuskan** — default usulan dipakai sementara (`docs/compliance/`). Total kini **30 ADR**, semua masih Proposed; belum ada yang Accepted penuh.
+>
+> **Pembaruan 6 Okt 2026 (gelombang 8).** ADR-030: MinIO community sudah diarsipkan upstream (April 2026) dan build kami (Okt 2025) masih mengandung ≥ 4 celah High yang hanya ditambal di produk komersial. Rekomendasi: build fork komunitas **SILO** dari source (±2–3 hari, Rp0) + filter pengaman di depan storage, dan uji coba SeaweedFS sebagai jalur keluar. Butuh tanda tangan IT + Security **sebelum staging publik**.
 >
 > **Ringkasan manajemen (awal).** Ada 25 keputusan arsitektur yang menunggu tanda tangan klien. Semuanya berstatus **Proposed**: tim boleh mulai mengikuti rekomendasi, tetapi tidak boleh mengunci pilihan yang mahal dibalik sebelum disetujui. **ADR-022 (enkripsi) dan ADR-025 (model tim agent) berasal dari instruksi klien 5 Okt 2026** — prinsipnya sudah wajib; yang ditandatangani adalah caranya. Tujuh keputusan di **Gelombang 1** memblokir Fase 1 dan perlu ditandatangani dalam 2 minggu pertama; ADR-022/023/024 (keamanan) ditandatangani paralel karena memblokir staging publik. Keputusan pajak dan legal (MGM, unified cart) butuh konsultan eksternal sehingga harus **dimulai** sekarang.
 
@@ -40,6 +42,7 @@ Sumber: `docs/01_REVIEW_RISK_GAP_ANALYSIS.md` (D-xx, R-xxx, Q-xx). Template: `AD
 | [027](ADR-027-pajak-configurable-pb1-per-kota.md) | Pajak configurable: PB1 per kota via fiscal position, include/exclude per pajak, tanpa tarif di kode | Q-22, R-L03 | Proposed — prinsip "configurable" dari klien 6 Okt | Finance + Tax + Ops F&B | R-L03 |
 | [028](ADR-028-captcha-altcha-self-hosted.md) | Captcha OTP = ALTCHA self-hosted (tanpa pihak ketiga) | SEC-06 | Proposed | IT + Legal/DPO | R-L01, R-B02 |
 | [029](ADR-029-identitas-member-opak.md) | Identitas member opak: JWT `sub` = UUID | R-L01 | Proposed | IT + Legal/DPO | R-L01 |
+| [030](ADR-030-sumber-image-object-storage.md) | Object storage: MinIO community diarsipkan → build SILO (fork) dari source + filter L7; PoC SeaweedFS sebagai jalur keluar | R-S02, R-S08 (usulan R-S13) | Proposed | IT + Security (Finance bila opsi berbayar) | R-S02, R-S08, R-T08, R-L01 |
 
 Catatan pemetaan: D-09 dipetakan ke ADR-001 (sudah ada) sehingga ADR-009 dipakai untuk D-08. D-10 dibahas di ADR-010 dan juga disinggung ADR-001.
 
@@ -52,6 +55,7 @@ Belum ada ADR berstatus Accepted. Sudah dijawab klien: Q-E1 (kustodi = Superadmi
 | 2 | ADR-022 | Opsi PKI A1; Q-E1a/b/c (jumlah Superadmin ≥ 2, Shamir 2-dari-3, lokasi salinan offline); Q-E2 LUKS/AES-NI; Q-E3 PII Odoo; pengecualian E1–E10 | IT + Security |
 | 3 | ADR-023 | Pola B-a/B-b per outlet; Q-W1 jumlah perangkat per outlet; Q-W4 model Android POS; Q-55 model router | IT + Ops Outlet + Finance |
 | 4 | ADR-024, ADR-028, ADR-029 | Teknis, biaya Rp0 — dapat ditandatangani sekaligus | IT (+ DPO untuk 028/029) |
+| 4a | **ADR-030** | Q-OS1 (terima fork komunitas tanpa SLA), Q-OS3 (object lock COMPLIANCE), Q-OS2 PoC SeaweedFS; **memblokir staging publik** karena CVE High terbuka di build saat ini — tandatangani bersama ADR-024 | IT + Security |
 | 5 | **Paket UU PDP**: `docs/compliance/*` (DPO, retensi, Q-P1..P8), `PDP_TRANSFER_LINTAS_NEGARA.md` (Q-T1..T6) | Penetapan DPO lebih dulu; tanpa DPO, retensi tetap default usulan | DPO + Legal |
 | 6 | ADR-027 | Daftar kota/tarif & kebijakan include/exclude (konsultan pajak) — sebelum go-live F&B | Finance + Tax |
 | 7 | ADR-026 → ADR-016 | Prinsip abstraksi sekarang; pemilihan vendor dengan kriteria ADR-026 sebelum Fase 3 (KYB tiap PT) | Finance + Legal + IT |

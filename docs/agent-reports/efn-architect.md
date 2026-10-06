@@ -155,3 +155,30 @@ Keputusan klien dicatat apa adanya: kunci hanya dipegang Superadmin dan mTLS ses
 ## Terverifikasi / belum terverifikasi
 - **Terverifikasi (sumber primer, 6 Okt 2026):** Headscale = BSD-3-Clause (LICENSE) dan ruang lingkup "single tailnet … personal use, or a small open-source organisation" (README); NetBird = BSD-3-Clause kecuali `management/`, `signal/`, `relay/` = AGPLv3 (README); wireguard-android = Apache-2.0 (COPYING); ALTCHA = MIT (repo); Odoo 19.0: `account.tax.price_include_override`, `original_tax_ids`, `fiscal_position_ids`; `account.fiscal.position` (`auto_apply`, `country_id`, `state_ids`, `zip_from/to`, `tax_ids`, tidak ada model `account.fiscal.position.tax`); `pos.config.default_fiscal_position_id`, `fiscal_position_ids`, `iface_tax_included`.
 - **Belum terverifikasi:** semua harga perangkat (indikatif — validasi vendor); `wireguard.com` tidak dapat diakses dari lingkungan ini (daftar platform klien dari pengetahuan umum); dukungan OpenWrt untuk router outlet; Always-on VPN di Android POS bermerek; WA Cloud API Local Storage Indonesia (hanya sumber sekunder BSP); Cloudflare Data Localization Suite untuk Indonesia; tarif PBJT/PB1 per Perda; penyesuaian harga include→exclude di POS 19; nomor pasal UU PDP; Mermaid tidak dirender.
+
+# Gelombang 8 — Sumber image & masa depan object storage (2026-10-06)
+
+Pemicu: devsecops G7.3 no. 1 (image `minio/minio` & `minio/mc` hilang dari Docker Hub, Quay wajib login; build sementara dari tag source `RELEASE.2025-10-15T17-29-55Z`).
+
+## Ringkasan (untuk manajemen)
+MinIO community resmi ditinggalkan vendornya (repo diarsipkan April 2026). Build kami saat ini masih mengandung beberapa celah keamanan **High** yang hanya ditambal di produk berbayar MinIO. Rekomendasi: pakai **SILO**, fork komunitas yang aktif dan sudah menambal celah tersebut, tetap kami bangun dan tandatangani sendiri (±2–3 hari, Rp0). Tambahkan filter pengaman di depan storage (±2–3 hari) dan uji coba **SeaweedFS** 5 hari sebagai jalur keluar. Butuh tanda tangan IT + Security sebelum staging publik.
+
+## File dibuat / diubah
+| File | Perubahan |
+|---|---|
+| `docs/decisions/ADR-030-sumber-image-object-storage.md` | **Baru** (Proposed): kronologi status MinIO, tabel CVE yang tidak ditambal, 8 kandidat (status quo, SILO, SeaweedFS, Garage, Ceph RGW, Versity, AIStor, RustFS) × 10 kebutuhan, biaya/waktu, rekomendasi jangka pendek & menengah, pemicu tinjauan, daftar sumber & klaim belum terverifikasi |
+| `docs/decisions/README.md` | Indeks ADR-030, catatan gelombang 8, urutan tanda tangan 4a |
+
+## Keputusan yang butuh tanda tangan klien
+- **ADR-030 Q-OS1** terima fork komunitas tanpa SLA (SILO) untuk Fase 0–1; **Q-OS2** anggaran PoC SeaweedFS 5 hari; **Q-OS3** object lock `pg-backup` → COMPLIANCE 15 hari selama SN-2026-015 belum difix (tidak bisa dibatalkan siapa pun); **Q-OS4** filestore Odoo tetap di disk lokal Fase 0–1; **Q-OS5** target backup off-site yang mendukung object lock.
+
+## Temuan teknis penting untuk agent lain
+- **devsecops (mendesak):** build `RELEASE.2025-10-15` rentan CVE-2026-41145 & -40344 (tulis objek tanpa secret, cukup access key ID), CVE-2026-34204 (rusak metadata SSE → objek backup tak terbaca), CVE-2026-39414 (DoS S3 Select), dan SN-2026-015 (principal mana pun bisa menghapus retensi GOVERNANCE `pg-backup`; belum difix di mana pun). Tindakan: (1) ganti sumber build ke `github.com/pgsty/silo` tag `RELEASE.2026-09-16T00-00-00Z` + `pgsty/mc` (cek versi Go di `go.mod`, kemungkinan > 1.24); (2) filter L7 di depan storage (daftar header/aksi di ADR-030 Keputusan 2); (3) access key acak sebagai secret; (4) uji upgrade in-place volume dev lama.
+- **QA:** checklist kesesuaian di ADR-030 Keputusan 1 dipakai untuk SILO dan PoC SeaweedFS; tambah uji negatif: `PUT ?retention` + `x-amz-bypass-governance-retention` oleh efn-bff harus ditolak.
+- **bff / data-ai:** jangan memakai admin API MinIO dari aplikasi; tetap S3 API standar. Perlu dicek apakah minio-js 8.x / minio-py 7.2.x mengirim `STREAMING-UNSIGNED-PAYLOAD-TRAILER` (menentukan filter L7).
+- **lead:** usulan risiko baru **R-S13** (komponen inti ditinggalkan/berganti lisensi upstream) untuk `docs/01`; `docs/04 §7.3` perlu catatan access key = secret.
+- **efn-odoo-functional:** bila filestore kelak ke object storage, fit-gap OCA `fs_attachment_s3`/`fs_storage` (ada di OCA/storage 19.0).
+
+## Terverifikasi / belum terverifikasi
+- **Terverifikasi (sumber primer, 6 Okt 2026):** `minio/minio` archived (`pushed_at 2026-04-24`), README "no longer maintained / source code only", tag terakhir `RELEASE.2025-10-15T17-29-55Z`; advisory GHSA untuk CVE-2026-41145/40344/34204/39414/42600/33322/33419 dengan fix hanya di AIStor; `minio/mc` archived 14 Jul 2026; `minio-js` aktif (Apache-2.0); `pgsty/silo` aktif, AGPL-3.0, rilis 2026-09-16, rename 2026-08-06; SILO Security Chronicle mencatat fix CVE di atas (2026-04-17 / 2026-06-18) dan SN-2026-015 belum difix; Garage: tanpa versioning/object lock/SSE/bucket policy, TLS S3 via reverse proxy; SeaweedFS (Apache-2.0, 4.48) mendokumentasikan SSE-S3/KMS/C, object lock, lifecycle tanpa transition, bucket policy; Ceph RGW SSE-S3 hanya via Vault; Versity v1.8.0 Apache-2.0; RustFS 1.0.0 (16 Sep 2026); AIStor Free = proprietary, standalone, tanpa hak modifikasi/redistribusi; OCA/storage 19.0 memuat `fs_attachment_s3`, `fs_storage`.
+- **Belum terverifikasi:** SN-2026-015 berlaku di upstream (klaim SILO); kompatibilitas drop-in & upgrade in-place SILO; versi Go build SILO; perilaku header trailer di SDK/WAL-G; fitur SeaweedFS/Versity di stack EFN; tanggal pasti hilangnya Docker Hub/Quay anonim (sekunder + runtime); harga AIStor Enterprise; isi penuh lisensi AIStor Free; jumlah maintainer aktif SILO (disimpulkan dari daftar kontributor).

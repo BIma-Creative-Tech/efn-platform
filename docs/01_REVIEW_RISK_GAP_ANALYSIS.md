@@ -178,6 +178,7 @@ Skala: **Probabilitas** (P) dan **Dampak** (D) 1-5. **Skor** = P × D. Prioritas
 | R-S10 | **Insider threat**: admin Odoo bisa ubah harga/stok/poin tanpa jejak. | 3 | 4 | 12 | Audit log (OCA `auditlog`), 4-eyes untuk perubahan pricelist, alert anomali ke manager (sudah disebut BRD, perlu dijadikan requirement konkret). |
 | R-S11 | **Tidak ada pentest** sebelum go-live (hanya disebut di Cetak Biru fase 4). | 4 | 4 | 16 | DAST (OWASP ZAP) tiap deploy staging + pentest manual pihak ketiga sebelum tiap go-live mayor. |
 | R-S12 | **Kasir/kiosk device tidak dikelola** (Android tanpa MDM, browser bebas). | 3 | 3 | 9 | Kiosk mode, MDM open source (misal Headwind MDM) atau minimal kebijakan device, Wi-Fi terpisah untuk POS. |
+| R-S13 | **Komponen inti ditinggalkan upstream** (MinIO community diarsipkan Apr 2026; build terakhir rentan CVE High yang hanya ditambal di edisi proprietary). Pola yang sama bisa terjadi pada komponen lain. | 4 | 4 | 16 | ADR-030: build dari fork komunitas aktif (SILO) di pipeline sendiri + filter L7 + PoC jalur keluar (SeaweedFS). Pantau status upstream semua komponen inti tiap kuartal (repo diarsipkan, rilis terakhir, CVE terbuka) dan catat di ADR terkait. |
 
 ### 4.5 Risiko Operasional & Data
 
