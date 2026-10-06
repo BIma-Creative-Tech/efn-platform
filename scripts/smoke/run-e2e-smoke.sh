@@ -55,7 +55,7 @@ py() { # subperintah bff_smoke.py
     --add-host "api.efn.local:${TRAEFIK_IP}" --add-host "app.efn.local:${TRAEFIK_IP}" \
     -v "${WORK_W}:/work" -v efn-pip-cache:/root/.cache/pip \
     -e SMOKE_PHONE="$PHONE" -e SMOKE_CONSENT_VERSION="location@2026-10-06" \
-    python:3.12-bookworm sh -c "pip install -q pillow==11.3.0 > /dev/null 2>&1; python /work/bff_smoke.py $1" \
+    python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea sh -c "pip install -q pillow==11.3.0 > /dev/null 2>&1; python /work/bff_smoke.py $1" \
     2>&1 | grep '^SMOKE_RESULT' | tee -a "$RESULTS" || true
 }
 
@@ -111,7 +111,7 @@ scenario_b() {
   local sse
   sse="$(cd "$ROOT" && MSYS_NO_PATHCONV=1 docker compose -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.dev.yml \
     --env-file infra/compose/.env --profile core run --rm --no-deps --entrypoint /bin/sh minio-init -c \
-    'mkdir -p /tmp/.mc/certs/CAs && cp /run/secrets/efn_ca_crt /tmp/.mc/certs/CAs/ && mc alias set efn https://minio:9000 "$MINIO_ROOT_USER" "$(cat /run/secrets/minio_root_password)" >/dev/null && O=$(mc ls --recursive efn/market-scout/reports/ | tail -1 | awk "{print \$NF}") && mc stat "efn/market-scout/reports/$O" | grep -i "^Encryption"' 2>/dev/null | tail -1)"
+    'mkdir -p /tmp/.mc/certs/CAs && cp /run/secrets/efn_ca_crt /tmp/.mc/certs/CAs/ && mc alias set efn https://minio:9000 "$(cat /run/secrets/minio_root_user)" "$(cat /run/secrets/minio_root_password)" >/dev/null && O=$(mc ls --recursive efn/market-scout/reports/ | tail -1 | awk "{print \$NF}") && mc stat "efn/market-scout/reports/$O" | grep -i "^Encryption"' 2>/dev/null | tail -1)"
   check "b.minio_sse" "$([[ "$sse" == *SSE-S3* ]] && echo 1 || echo 0)" "$sse"
   local notif
   notif="$(grep -F "notify.push price_hunter_valid" "${WORK}/bff.log" | grep -cF "${MASKED}: sent" || true)"
@@ -281,21 +281,21 @@ scenario_e() {
 scenario_g() {
   echo "== g. Negatif enkripsi (regresi)"
   local out
-  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data postgres:16.6-bookworm psql "host=postgres dbname=efn_platform user=efn_bff sslmode=disable connect_timeout=5" -c 'select 1' 2>&1 || true)"
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data postgres:16.6-bookworm@sha256:557fea37a744d5f4c8faab304b0a90858b53ab119735a88c131fd19dab802f36 psql "host=postgres dbname=efn_platform user=efn_bff sslmode=disable connect_timeout=5" -c 'select 1' 2>&1 || true)"
   check "g.pg_plaintext_rejected" "$([[ "$out" == *"no encryption"* || "$out" == *"pg_hba"* ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
-  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal curlimages/curl:8.11.1 -sS -m 5 -o /dev/null -w '%{http_code}' https://odoo:8443/web/login --cacert /dev/null -k 2>&1 || true)"
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -m 5 -o /dev/null -w '%{http_code}' https://odoo:8443/web/login --cacert /dev/null -k 2>&1 || true)"
   check "g.odoo_tls_without_client_cert_rejected" "$([[ "$out" != 200 ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
   # ADR-030 (gelombang 9): storage tidak terjangkau dari network klien; semua lewat filter L7 s3-gateway
-  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data curlimages/curl:8.11.1 -sS -m 5 -o /dev/null -w '%{http_code}' https://minio:9000/minio/health/live 2>&1 || true)"
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -m 5 -o /dev/null -w '%{http_code}' https://minio:9000/minio/health/live 2>&1 || true)"
   # Lolos bila TIDAK ada respons HTTP sama sekali (nama tak ter-resolve / timeout / koneksi gagal)
   check "g.storage_not_reachable_from_data" "$([[ ! "$out" =~ ^[0-9]{3}$ || "$out" == 000 ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
-  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data curlimages/curl:8.11.1 -sS -m 5 -o /dev/null -w '%{http_code}' http://s3-gateway:9000/minio/health/live 2>&1 || true)"
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -m 5 -o /dev/null -w '%{http_code}' http://s3-gateway:9000/minio/health/live 2>&1 || true)"
   check "g.s3gw_http_rejected" "$([[ "$out" != 200 ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
   cp "${ROOT}/secrets/efn_ca_crt.txt" "${WORK}/efn_ca.crt"
   s3gw() { # metode path [header...] -> "kode|potongan body"
     local m="$1" p="$2"; shift 2
     local h=(); for x in "$@"; do h+=(-H "$x"); done
-    MSYS_NO_PATHCONV=1 docker run --rm --network efn_data -v "${WORK_W}:/work" curlimages/curl:8.11.1 -sS -m 10 \
+    MSYS_NO_PATHCONV=1 docker run --rm --network efn_data -v "${WORK_W}:/work" curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS --path-as-is -m 10 \
       --cacert /work/efn_ca.crt -X "$m" "${h[@]}" -w '|%{http_code}' "https://s3-gateway:9000${p}" 2>&1 | tr -d '\r\n' || true
   }
   out="$(s3gw GET /minio/health/live)"
@@ -315,16 +315,38 @@ scenario_g() {
   check "g.s3gw_select_blocked" "$([[ "$out" == *"$denied"* ]] && echo 1 || echo 0)" "$(tail -c 120 <<< "$out")"
   out="$(s3gw GET '/minio/admin/v3/info')"
   check "g.s3gw_admin_api_blocked" "$([[ "$out" == *"$denied"* ]] && echo 1 || echo 0)" "$(tail -c 120 <<< "$out")"
+  # SEC-41 (gelombang 11): varian encoded / ';' / huruf besar / path non-kanonik harus ditolak FILTER (403 HAProxy),
+  # bukan diteruskan ke storage (yang men-decode nama kunci query dan memisah pada ';').
+  local v bad=""
+  for v in 'PUT /pg-backup/efn/x?rete%6Etion' 'PUT /pg-backup/efn/x?%72etention=' 'PUT /pg-backup/efn/x?x=1;retention' \
+           'PUT /pg-backup/efn/x?RETENTION' 'PUT /pg-backup/efn/x?Retention=' 'PUT /pg-backup/efn/x?legal-ho%6Cd' \
+           'PUT /pg-backup/efn/x?a=1&legal-hold;b' 'PUT /pg-backup/efn/x?%2572etention' 'DELETE /pg-backup?LIFECYCLE' \
+           'POST /market-scout/reports/x?%73elect&select-type=2' 'GET /market-scout/reports/x?SELECT' \
+           'POST /market-scout/reports/x?x;select' 'PUT /market-scout/reports/x?x-amz-cr%65dential=a' \
+           'PUT /market-scout/reports/x?X-AMZ-CREDENTIAL=a' 'PUT /market-scout/reports/x?X-Amz-Signature=0' \
+           'POST /?%61ction=AssumeRole' 'GET /?ACTION=AssumeRole' 'POST //' 'GET /%6Dinio/admin/v3/info' \
+           'GET /MINIO/admin/v3/info' 'GET /minio/health/../admin/v3/info' 'GET //minio/admin/v3/info'; do
+    out="$(s3gw "${v%% *}" "${v#* }")"
+    [[ "$out" == *"$denied"* && "$out" == *"|403" ]] || bad+="${v} => $(tail -c 40 <<< "$out"); "
+  done
+  out="$(s3gw PUT '/market-scout/reports/x' 'x-amz-content-sha256: UNSIGNED-PAYLOAD' 'X-Amz-Content-Sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER')"
+  [[ "$out" == *"$denied"* ]] || bad+="dup-sha256 => $(tail -c 40 <<< "$out"); "
+  out="$(s3gw PUT '/pg-backup/efn/x' 'X-AMZ-Bypass-Governance-Retention: true')"
+  [[ "$out" == *"$denied"* ]] || bad+="bypass-hdr-case => $(tail -c 40 <<< "$out"); "
+  check "g.s3gw_encoded_variants_blocked" "$([[ -z "$bad" ]] && echo 1 || echo 0)" "${bad:-22 varian query/path + 2 varian header -> 403 filter}"
+  # Kontrol positif: query sah dengan nilai ber-%-encoding (ListObjectsV2 prefix) tetap diteruskan ke storage
+  out="$(s3gw GET '/market-scout?list-type=2&prefix=reports%2F&delimiter=%2F')"
+  check "g.s3gw_encoded_value_get_forwarded" "$([[ "$out" == *AccessDenied* && "$out" != *"$denied"* ]] && echo 1 || echo 0)" "$(tail -c 120 <<< "$out")"
   # Kontrol positif: request S3 biasa tanpa kredensial diteruskan ke storage (ditolak storage, bukan filter)
   out="$(s3gw GET '/market-scout/reports/x')"
   check "g.s3gw_forwards_normal_s3" "$([[ "$out" == *AccessDenied* && "$out" != *"$denied"* ]] && echo 1 || echo 0)" "$(tail -c 120 <<< "$out")"
-  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data curlimages/curl:8.11.1 -sS -m 5 telnet://rabbitmq:5672 2>&1 || true)"
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -m 5 telnet://rabbitmq:5672 2>&1 || true)"
   check "g.amqp_plain_port_closed" "$([[ "$out" == *"Could not resolve"* || "$out" == *"refused"* || "$out" == *"Failed to connect"* ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
   out="$(MSYS_NO_PATHCONV=1 docker exec "$PG" psql -U postgres -At -c "select usename||':'||ssl||':'||coalesce(version,'') from pg_stat_ssl join pg_stat_activity using(pid) where usename in ('efn_bff','efn_odoo','efn_ocr','efn_etl') group by 1 order by 1" | tr '\n' ' ')"
   check "g.pg_clients_tls" "$([[ "$out" != *":f:"* && "$out" == *efn_ocr* && "$out" == *efn_bff* ]] && echo 1 || echo 0)" "$out"
   out="$(MSYS_NO_PATHCONV=1 docker exec "${P}-rabbitmq-1" rabbitmqctl list_connections user ssl ssl_protocol -q --no-table-headers 2>/dev/null | sort -u | tr '\t\n' ': ')"
   check "g.amqp_clients_tls" "$([[ "$out" != *":false"* && "$out" == *efn-ocr* ]] && echo 1 || echo 0)" "$out"
-  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_edge --add-host "api.efn.local:${TRAEFIK_IP}" -v "${WORK_W}:/work" curlimages/curl:8.11.1 -sS -o /dev/null -w '%{http_code}' --cacert /work/edge_ca.crt -X POST -H 'Content-Type: application/json' -H 'X-EFN-Signature: t=1,v1=00' -d '{}' https://api.efn.local/v1/webhooks/payments/mock 2>&1 || true)"
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_edge --add-host "api.efn.local:${TRAEFIK_IP}" -v "${WORK_W}:/work" curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -o /dev/null -w '%{http_code}' --cacert /work/edge_ca.crt -X POST -H 'Content-Type: application/json' -H 'X-EFN-Signature: t=1,v1=00' -d '{}' https://api.efn.local/v1/webhooks/payments/mock 2>&1 || true)"
   check "g.webhook_bad_signature_rejected" "$([[ "$out" == 401 || "$out" == 400 || "$out" == 403 ]] && echo 1 || echo 0)" "http=$out"
 }
 

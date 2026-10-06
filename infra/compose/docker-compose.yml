@@ -44,7 +44,7 @@ x-common: &common
 # Sidecar TLS (docs/04 §7.1). Non-root, read-only, tanpa capability. Status ghostunnel hanya di loopback.
 x-ghostunnel: &ghostunnel
   <<: *common
-  image: ghostunnel/ghostunnel:v1.11.3-alpine
+  image: ghostunnel/ghostunnel:v1.11.3-alpine@sha256:2599b8a04bae16d70a4209495618dea61b46a00a9a05fcf74da282688ad3517f
   user: "65534:65534"
   read_only: true
   cap_drop: [ALL]
@@ -104,6 +104,7 @@ secrets:
   odoo_admin_password: { file: ../../secrets/odoo_admin_password.txt }
   rabbitmq_password: { file: ../../secrets/rabbitmq_password.txt }
   minio_root_password: { file: ../../secrets/minio_root_password.txt }
+  minio_root_user: { file: ../../secrets/minio_root_user.txt }
   clickhouse_password: { file: ../../secrets/clickhouse_password.txt }
   grafana_admin_password: { file: ../../secrets/grafana_admin_password.txt }
   # kredensial per service (docs/04 §7.3)
@@ -209,7 +210,7 @@ services:
   # traefik, promtail, cadvisor).
   docker-socket-proxy:
     <<: *common
-    image: tecnativa/docker-socket-proxy:0.3.0
+    image: tecnativa/docker-socket-proxy:0.3.0@sha256:9e4b9e7517a6b660f2cc903a19b257b1852d5b3344794e3ea334ff00ae677ac2
     profiles: ["core"]
     environment:
       BIND_CONFIG: "127.0.0.1:2375"
@@ -265,7 +266,7 @@ services:
   traefik:
     <<: *common
     # >= v3.6.1 wajib: Docker Engine 29 menolak API < 1.44 (Traefik v3.2 gagal "Error response from daemon", gel. 7)
-    image: traefik:v3.7.13
+    image: traefik:v3.7.13@sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0
     profiles: ["core"]
     depends_on:
       docker-socket-proxy-tls:
@@ -337,7 +338,7 @@ services:
       service: traefik-metrics-tls
 
   # ───────────────────────── DATA LAYER ─────────────────────────
-  # Image custom = postgres:16.6-bookworm + WAL-G (infra/backup/postgres). WAL di-archive ke MinIO (HTTPS, CA internal)
+  # Image custom = postgres:16.6-bookworm@sha256:557fea37a744d5f4c8faab304b0a90858b53ab119735a88c131fd19dab802f36 + WAL-G (infra/backup/postgres). WAL di-archive ke MinIO (HTTPS, CA internal)
   # bucket pg-backup setiap segmen penuh atau paling lambat archive_timeout=900 s -> RPO 15 menit (R-T08).
   # TLS: ssl=on, TLSv1.2+, hba_file = infra/postgres/pg_hba.conf (hostssl saja, superuser hanya socket lokal).
   # PostgreSQL menolak kunci privat yang bisa dibaca group/other -> entrypoint menyalin kunci (0600) ke
@@ -445,7 +446,7 @@ services:
   # Network `cache` khusus: hanya api-gateway, redis-exporter, blackbox.
   redis:
     <<: *common
-    image: redis:7.4-alpine
+    image: redis:7.4-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     profiles: ["core"]
     entrypoint: ["/bin/sh", "/efn/redis-entrypoint.sh"]
     environment:
@@ -482,7 +483,7 @@ services:
   # Tidak read_only: entrypoint resmi menulis cookie/konfigurasi di /var/lib/rabbitmq.
   rabbitmq:
     <<: *common
-    image: rabbitmq:3.13-management-alpine
+    image: rabbitmq:3.13-management-alpine@sha256:606d8c0d6b3c18d1da9afc53bc7cdb2a8d5486df91b5a9830e9e07626c9ae281
     profiles: ["core"]
     hostname: rabbitmq
     entrypoint: ["/bin/sh", "/efn/rabbitmq-entrypoint.sh"]
@@ -570,14 +571,15 @@ services:
         cp /run/secrets/efn_ca_crt /tmp/certs/CAs/efn-ca.crt &&
         exec minio server /data --console-address :9001 --certs-dir /tmp/certs
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-efnadmin}
+      # Root user = access key acak dari secret (SEC-48, docs/04 §8.12), bukan nama tetap `efnadmin`
+      MINIO_ROOT_USER_FILE: /run/secrets/minio_root_user
       MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_root_password
       MINIO_KMS_SECRET_KEY_FILE: /run/secrets/minio_kms_key
       # Metrik hanya dengan bearer JWT user metrik (access key acak; minio-init + derive-secrets.sh), SEC-20/SEC-30
       MINIO_PROMETHEUS_AUTH_TYPE: jwt
       # Healthcheck `mc ready` memverifikasi TLS dengan CA internal (Go membaca SSL_CERT_FILE)
       SSL_CERT_FILE: /run/secrets/efn_ca_crt
-    secrets: [minio_root_password, minio_kms_key, efn_ca_crt, tls_minio_crt, tls_minio_key]
+    secrets: [minio_root_user, minio_root_password, minio_kms_key, efn_ca_crt, tls_minio_crt, tls_minio_key]
     volumes:
       - minio-data:/data
     networks: [objstore]
@@ -638,7 +640,6 @@ services:
         condition: service_healthy
     entrypoint: ["/bin/sh", "/init/minio-init.sh"]
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-efnadmin}
       # Admin langsung ke storage di network objstore (bukan lewat s3-gateway yang menolak /minio/admin/*)
       MINIO_URL: https://minio:9000
       MINIO_BUCKET_MARKET_SCOUT: market-scout
@@ -647,6 +648,7 @@ services:
       MINIO_MARKET_SCOUT_EXPIRE_DAYS: ${MARKET_SCOUT_PHOTO_RETENTION_DAYS:-90}
       MC_CONFIG_DIR: /tmp/.mc
     secrets:
+      - minio_root_user
       - minio_root_password
       - minio_backup_password
       - minio_bff_secret
@@ -1043,7 +1045,7 @@ services:
   # Tidak cap_drop/read_only: entrypoint ClickHouse butuh chown + IPC_LOCK/SYS_NICE dan menulis /etc/clickhouse-server.
   clickhouse:
     <<: *common
-    image: clickhouse/clickhouse-server:24.8-alpine
+    image: clickhouse/clickhouse-server:24.8-alpine@sha256:b002e56ed5c16e224c312527f6fcba7e77216fec5d7a88a7828f59efc614feb5
     profiles: ["data"]
     # image tidak mendukung *_FILE: baca secret di entrypoint wrapper
     entrypoint:
@@ -1081,7 +1083,7 @@ services:
 
   clickhouse-init:
     <<: *common
-    image: clickhouse/clickhouse-server:24.8-alpine
+    image: clickhouse/clickhouse-server:24.8-alpine@sha256:b002e56ed5c16e224c312527f6fcba7e77216fec5d7a88a7828f59efc614feb5
     profiles: ["data"]
     restart: "no"
     depends_on:
@@ -1119,7 +1121,7 @@ services:
   # Tidak cap_drop/read_only: run_metabase.sh dapat chown direktori data dan menulis plugins ke /plugins.
   metabase:
     <<: *common
-    image: metabase/metabase:v0.52.4
+    image: metabase/metabase:v0.52.4@sha256:ea0229a63116ea625ef09085a84ee0d2618311fd34a6e72cc527ae2eb003a5f9
     profiles: ["data"]
     depends_on:
       postgres:
@@ -1380,7 +1382,7 @@ services:
   # yang sesuai; kesehatannya dipantau Prometheus (`up`, EfnServiceDown) dan Uptime Kuma.
   prometheus:
     <<: *common
-    image: prom/prometheus:v2.55.1
+    image: prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3
     profiles: ["observability"]
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -1419,11 +1421,15 @@ services:
   # Sertifikat klien lain (mis. ocr-worker, blackbox) ditolak -> log tidak bisa dibaca/dipalsukan dari sana.
   loki:
     <<: *common
-    image: grafana/loki:3.2.1
+    image: grafana/loki:3.2.1@sha256:09a53b4a4ff81ffcd8f13886df19d33fac7a8d3aaf952e3c7e66cbade5b2fc31
     profiles: ["observability"]
     command: -config.file=/etc/loki/loki.yml
+    # Gelombang 11: ruler Loki mengirim alert sink audit Odoo (SEC-43) ke Alertmanager lewat mTLS (sertifikat loki,
+    # EKU server+client; Alertmanager allowlist SAN loki di web-config-alertmanager.yml).
+    secrets: [efn_ca_crt, tls_loki_crt, tls_loki_key]
     volumes:
       - ../observability/loki.yml:/etc/loki/loki.yml:ro
+      - ../observability/loki-rules:/etc/loki/rules/fake:ro
       - loki-data:/loki
     networks: [internal]
     read_only: true
@@ -1465,7 +1471,7 @@ services:
 
   promtail:
     <<: *common
-    image: grafana/promtail:3.2.1
+    image: grafana/promtail:3.2.1@sha256:bf617e9d67e80247a59f717f9c1ad388d7d32dc0a1d29abd5799516d15e0a9b5
     profiles: ["observability"]
     command: -config.file=/etc/promtail/promtail.yml
     secrets: [efn_ca_crt, tls_promtail_crt, tls_promtail_key]
@@ -1488,7 +1494,7 @@ services:
 
   grafana:
     <<: *common
-    image: grafana/grafana:11.3.1
+    image: grafana/grafana:11.3.1@sha256:fa801ab6e1ae035135309580891e09f7eb94d1abdbd2106bdc288030b028158c
     profiles: ["observability"]
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
@@ -1529,7 +1535,7 @@ services:
   # Tidak cap_drop: entrypoint melakukan chown data.
   uptime-kuma:
     <<: *common
-    image: louislam/uptime-kuma:1.23.16
+    image: louislam/uptime-kuma:1.23.16@sha256:431fee3be822b04861cf0e35daf4beef6b7cb37391c5f26c3ad6e12ce280fe18
     profiles: ["observability"]
     environment:
       UPTIME_KUMA_SSL_CERT: /run/secrets/tls_uptime_kuma_crt
@@ -1558,7 +1564,7 @@ services:
   # Cluster gossip (9094) dimatikan: single instance, tidak ada listener plaintext.
   alertmanager:
     <<: *common
-    image: prom/alertmanager:v0.27.0
+    image: prom/alertmanager:v0.27.0@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5
     profiles: ["ops"]
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
@@ -1575,7 +1581,7 @@ services:
         target: tls_server_key
     volumes:
       - ../observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-      - ../observability/web-config-ui.yml:/etc/alertmanager/web-config.yml:ro
+      - ../observability/web-config-alertmanager.yml:/etc/alertmanager/web-config.yml:ro
       - alertmanager-data:/alertmanager
     networks: [internal, egress]
     read_only: true
@@ -1592,7 +1598,7 @@ services:
   # sertifikat internal (ditulis scripts/backup.sh, restore-test.sh, deploy.sh ke ${NODE_EXPORTER_TEXTFILE_DIR}).
   node-exporter:
     <<: *common
-    image: prom/node-exporter:v1.8.2
+    image: prom/node-exporter:v1.8.2@sha256:4032c6d5bfd752342c3e631c2f1de93ba6b86c41db6b167b9a35372c139e7706
     profiles: ["ops"]
     command:
       - --path.rootfs=/host
@@ -1626,7 +1632,7 @@ services:
   # saja, bukan volume). cap_drop ALL. Listen 127.0.0.1:8080; TLS oleh sidecar cadvisor-tls :8443.
   cadvisor:
     <<: *common
-    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    image: gcr.io/cadvisor/cadvisor:v0.49.1@sha256:3cde6faf0791ebf7b41d6f8ae7145466fed712ea6f252c935294d2608b1af388
     profiles: ["ops"]
     cgroup: host
     command:
@@ -1685,7 +1691,7 @@ services:
   # postgres-exporter: user efn_exporter (pg_monitor), TLS verify-full ke PostgreSQL, endpoint metrik TLS.
   postgres-exporter:
     <<: *common
-    image: quay.io/prometheuscommunity/postgres-exporter:v0.16.0
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.16.0@sha256:6999a7657e2f2fb0ca6ebf417213eebf6dc7d21b30708c622f6fcb11183a2bb0
     profiles: ["ops"]
     command:
       - --extend.query-path=/etc/postgres-exporter/queries.yml
@@ -1720,7 +1726,7 @@ services:
   # 127.0.0.1:9122 (pola E1) dan sidecar redis-exporter-tls (:9121) hanya menerima mTLS CN prometheus.
   redis-exporter:
     <<: *common
-    image: oliver006/redis_exporter:v1.66.0-alpine
+    image: oliver006/redis_exporter:v1.66.0-alpine@sha256:117e28099cf52e284c43073935a3beb8dd7a29aa4972a7c1a062dba421e986fa
     profiles: ["ops"]
     entrypoint: ["/bin/sh", "-c", "export REDIS_PASSWORD=\"$$(cat /run/secrets/redis_password_exporter)\"; exec /redis_exporter"]
     environment:
@@ -1768,7 +1774,7 @@ services:
   # Probe health (HTTPS internal), handshake TLS semua listener internal, dan HTTPS publik (sertifikat ACME).
   blackbox-exporter:
     <<: *common
-    image: prom/blackbox-exporter:v0.25.0
+    image: prom/blackbox-exporter:v0.25.0@sha256:b04a9fef4fa086a02fc7fcd8dcdbc4b7b35cc30cdee860fdc6a19dd8b208d63e
     profiles: ["ops"]
     command:
       - --config.file=/etc/blackbox/blackbox.yml

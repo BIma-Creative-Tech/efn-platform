@@ -38,7 +38,14 @@ schema_config:
         period: 24h
 
 limits_config:
-  retention_period: 720h   # 30 hari; audit log penting disalin ke MinIO oleh job terpisah
+  retention_period: 720h   # 30 hari (default semua stream)
+  # Gelombang 11 (SEC-43): salinan tamper-evident ringkasan log audit kontrol Odoo (EFN_AUDIT_SINK, tanpa nilai/PII)
+  # disimpan 400 hari (> MIN retensi log kontrol di Odoo 365 hari). Per-stream retention butuh compactor
+  # retention_enabled (di bawah). Stream lain tetap 30 hari.
+  retention_stream:
+    - selector: '{stream="efn_audit_sink"}'
+      priority: 1
+      period: 9600h
   ingestion_rate_mb: 16
   ingestion_burst_size_mb: 32
 
@@ -46,3 +53,24 @@ compactor:
   working_directory: /loki/compactor
   retention_enabled: true
   delete_request_store: filesystem
+
+# Gelombang 11 (SEC-43): ruler mengevaluasi aturan LogQL di infra/observability/loki-rules/ (tenant tunggal "fake",
+# auth_enabled=false) dan mengirim alert ke Alertmanager lewat HTTPS + mTLS (sertifikat loki, CA internal, verifikasi
+# nama). Tanpa fallback plaintext. Penyimpanan rule read-only (bind mount), tidak ada API rule tulis yang dipakai.
+ruler:
+  storage:
+    type: local
+    local:
+      directory: /etc/loki/rules
+  rule_path: /tmp/loki-rules-scratch
+  evaluation_interval: 1m
+  enable_api: false
+  alertmanager_url: https://alertmanager:9093/alertmanager
+  enable_alertmanager_v2: true
+  alertmanager_client:
+    tls_ca_path: /run/secrets/efn_ca_crt
+    tls_cert_path: /run/secrets/tls_loki_crt
+    tls_key_path: /run/secrets/tls_loki_key
+    tls_server_name: alertmanager
+    tls_insecure_skip_verify: false
+  external_url: https://ops.efn.local/grafana

@@ -1,6 +1,7 @@
 # OCR worker Price Hunter (ADR-008): RabbitMQ ocr.requested -> Tesseract (CPU) -> VLM Ollama bila ragu
 # -> PostgreSQL + event loyalty.earn.requested / notify.push.
-FROM python:3.12-slim
+# SEC-47: base image dipin tag@digest (build reprodusibel); Dependabot `docker` memperbarui digest per tag.
+FROM python:3.12-slim@sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

@@ -1,4 +1,6 @@
 version: 2
+# SEC-47: semua base image Dockerfile dan image compose dipin tag@digest; ekosistem docker/docker-compose di bawah
+# memperbarui digest (dan tag) lewat PR. Image di workflow CI/smoke (docker run) diperbarui manual saat review.
 updates:
   - package-ecosystem: github-actions
     directory: /
@@ -23,6 +25,9 @@ updates:
     schedule: { interval: weekly }
   - package-ecosystem: docker
     directory: /infra/backup/postgres
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: /infra/minio
     schedule: { interval: weekly }
   - package-ecosystem: docker-compose
     directory: /infra/compose

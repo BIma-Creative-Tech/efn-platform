@@ -1,0 +1,54 @@
+# Aturan ruler Loki (gelombang 11, SEC-43): alert dari baris `EFN_AUDIT_SINK {json}` yang ditulis Odoo
+# (logger odoo.addons.efn_audit.sink) setelah commit untuk perubahan MODEL KONTROL audit (aturan audit,
+# ir.config_parameter efn.audit.*, server action, cron, modul, otomasi) dan operasi purge log audit.
+# Promtail memberi label stream="efn_audit_sink" (infra/observability/promtail.yml). Payload tanpa nilai/PII:
+# log_id, operation, model, res_id, uid, sudo, fields, note. Runbook: docs/runbooks/audit-sink-alerts.md.
+groups:
+  - name: efn-audit-sink
+    interval: 1m
+    rules:
+      # Setiap perubahan model kontrol = kejadian jarang yang harus bisa dijelaskan (change request / deploy).
+      - alert: EfnAuditControlChange
+        expr: |
+          sum by (operation, model, uid, sudo) (
+            count_over_time({stream="efn_audit_sink"}
+              | regexp `EFN_AUDIT_SINK (?P<payload>[{].*[}])` | line_format "{{.payload}}" | json
+              | operation != "purge" [5m])
+          ) > 0
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Odoo: perubahan model kontrol audit ({{ $labels.operation }} {{ $labels.model }}, uid {{ $labels.uid }})"
+          description: "Model kontrol audit berubah di Odoo. Cocokkan dengan change request; tanpa CR = insiden (SEC-43)."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/audit-sink-alerts.md#efnauditcontrolchange"
+      # Purge log audit di luar jalur sah (retensi terjadwal / erasure UU PDP) = indikasi penghapusan jejak.
+      - alert: EfnAuditUnexpectedPurge
+        expr: |
+          sum by (model, uid, sudo) (
+            count_over_time({stream="efn_audit_sink"}
+              | regexp `EFN_AUDIT_SINK (?P<payload>[{].*[}])` | line_format "{{.payload}}" | json
+              | operation = "purge" | note !~ "(retensi|retention|erasure)(:| ).*" [5m])
+          ) > 0
+        labels:
+          severity: critical
+          team: security
+        annotations:
+          summary: "Odoo: purge log audit TIDAK lewat retensi/erasure (model {{ $labels.model }}, uid {{ $labels.uid }})"
+          description: "Log audit dihapus di luar jalur sah. Perlakukan sebagai insiden keamanan (SEC-43, R-S10)."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/audit-sink-alerts.md#efnauditunexpectedpurge"
+      # Volume purge retensi tidak wajar (mis. retensi diturunkan lalu GC menghapus massal).
+      - alert: EfnAuditRetentionPurgeBurst
+        expr: |
+          sum (
+            count_over_time({stream="efn_audit_sink"}
+              | regexp `EFN_AUDIT_SINK (?P<payload>[{].*[}])` | line_format "{{.payload}}" | json
+              | operation = "purge" | note =~ "(retensi|retention)(:| ).*" [1h])
+          ) > 5
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Odoo: purge retensi log audit > 5 kali dalam 1 jam"
+          description: "GC retensi normalnya sekali sehari. Periksa perubahan efn.audit.retention_days / aturan audit."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/audit-sink-alerts.md#efnauditretentionpurgeburst"

@@ -570,3 +570,121 @@ tambah `ETL_ENABLE_ODOO`), image rollback `efn/minio:legacy-2025-10-15`.
   (tidak terdampak), tetapi QA sebaiknya menguji erasure foto DSAR lewat filter (smoke e lulus).
 - **R7:** workflow belum pernah jalan di GitHub; ukuran runner perlu diputuskan (biaya larger runner).
 - **docs/testing/E2E_SMOKE_REPORT.md** (milik QA) perlu diperbarui dengan hasil 88/88 dan R1/R5/R7.
+
+
+# Gelombang 11 — SEC-41, SEC-42, SEC-47, SEC-48, sink audit Odoo ke Loki (6 Okt 2026)
+
+Basis: `a810b55`, review keamanan r4 (`docs/reviews/SECURITY_REVIEW_2026-10-06-r4.md`). Semua diuji di stack dev
+nyata (Docker Desktop/WSL2, profil core+data+ai+observability+ops) kecuali yang ditandai.
+
+## G11.1 Status
+
+| SEC | Status | Bukti |
+|---|---|---|
+| SEC-41 (s3-gateway encoding) | **Fixed + terverifikasi runtime** | Sebelum perbaikan bypass **terkonfirmasi** (bukan lagi PLAUSIBLE): `PUT /pg-backup/efn/x?rete%6Etion` → SILO `MissingContentMD5` (= handler PutObjectRetention), `PUT ?X-Amz-Cr%65dential=..` → `MissingFields` (jalur presigned), `?x=1;retention` juga lolos filter. Sesudah: 22 varian query/path + 2 varian header → 403 filter (`g.s3gw_encoded_variants_blocked`), ListObjectsV2 dengan nilai ber-`%` tetap diteruskan (`g.s3gw_encoded_value_get_forwarded`), WAL-G `backup-push` + `wal-push` (archived naik, failed 0), BFF PUT + ocr GET (smoke `b`) lolos |
+| SEC-42 (efn-deploy) | **Fixed (kode + uji container); host belum dipasang** | manifest bertanda tangan + `cosign verify` image di host + pin root CA + anti-replay/downgrade; `scripts/host/test-efn-deploy.sh` 32/32 PASS (cosign palsu); uji mutasi (cek pin root dihapus) → FAIL terdeteksi |
+| SEC-47 (supply chain) | **Fixed** | semua `FROM` (7 Dockerfile) + 22 `image:` compose + image CI/smoke dipin `tag@sha256`; Dependabot `docker` (+ `/infra/minio` baru) dan `docker-compose` memperbarui. Build ulang semua image lokal sukses; `odoo:19.0@sha256:dd9013…` = base image dev yang sedang berjalan (layer pip CACHED) |
+| SEC-48 (root MinIO) | **Fixed + terverifikasi** | secret `minio_root_user` (`akid`, 20 hex) → `MINIO_ROOT_USER_FILE`; `efnadmin` dihapus dari compose/.env.example/deploy.sh. Volume lama: minio healthy, minio-init exit 0, 4 user IAM utuh, objek pg-backup terbaca, `efnadmin` ditolak |
+| Tambahan lead: sink audit | **Selesai, diuji dengan baris sintetis** | Promtail → `stream="efn_audit_sink"`; ruler Loki → Alertmanager (mTLS): `EfnAuditUnexpectedPurge` (critical) dan `EfnAuditControlChange` (warning) diterima; purge `retensi:` tidak memicu alert. Retensi stream 400 hari (`retention_stream`) |
+
+## G11.2 SEC-41 — aturan (`infra/s3-gateway/haproxy.cfg`)
+1. Tolak `;` literal di query (semua method) dan `%` di **nama** kunci query (semua method); tolak `%` di mana pun
+   di query untuk PUT/POST/DELETE (nilai tulis sah hanya uploadId/partNumber/versionId URL-safe). Double-encoding
+   (`%2572…`) karenanya ditolak.
+2. Daftar blok (`retention|legal-hold|object-lock|versioning|lifecycle|policy|encryption|replication|notification|acl`,
+   `select`, `action`, `x-amz-credential|signature|algorithm`) dicocokkan pada `query,url_dec`, `-i`, pemisah `[&;]`.
+3. Path: `path,url_dec` + `-i` untuk `/minio/*` (sebelumnya `/%6Dinio/admin` diteruskan ke storage); segmen
+   `/./`, `/../`, `//` ditolak; `p_root` = `^/+$`.
+4. Header: `x-amz-content-sha256` ganda ditolak (Go `Header.Get` membaca kemunculan pertama). Body form
+   `application/x-www-form-urlencoded` berisi `X-Amz-Credential`/`retention` **diuji tidak** dirutekan SILO sebagai
+   presigned/retensi (AccessDenied biasa), jadi tidak diblok.
+5. Path-style vs virtual-host: `MINIO_DOMAIN` tidak diset → Host `pg-backup.s3-gateway` tetap path-style (diuji).
+   Komentar di cfg: bila MINIO_DOMAIN diaktifkan, `p_root` wajib ditinjau.
+6. `log-format` + `%Ta`. `s3gw()` di smoke kini `--path-as-is` (tanpa itu curl menormalkan `..`).
+
+## G11.3 SEC-42 — desain
+- `deploy.yml`: langkah bundel menulis `efn-release.json` (schema 1: `app_env`, `version`, `seq` = `run_number`,
+  `git_sha` (= `workflow_run.head_sha` bila ada), `signer_ref`, 7 `images`, `pki.root_sha256`,
+  `pki.extra_trust_sha256[]`) **ke dalam** `release.tar.gz` sebelum `cosign sign-blob`; `gzip -n` (deterministik).
+  `IMAGE_*` tidak lagi dikirim lewat env.
+- `efn-deploy`: kunci conf baru wajib `EFN_APP_ENV`, `EFN_GITHUB_REPO`, `EFN_IMAGE_PREFIX`, `EFN_PKI_ROOT_SHA256`
+  (+ opsional `EFN_PKI_EXTRA_TRUST_SHA256`). Urutan: verify-blob → ekstrak ke `releases/<sha>.tmp` → manifest
+  (skema, env, versi/ref, anti-downgrade terhadap `/var/lib/efn/last-release`) → env allowlist (tanpa `IMAGE_*`;
+  `APP_ENV` = conf) → trust anchor (root tepat 1 sertifikat = pin = manifest; intermediate `openssl verify
+  -x509_strict` ke root dipin + CA:TRUE; setiap EXTRA_TRUST dipin **dan** ada di manifest) → `cosign verify` tiap
+  image di host (identitas tepat `build-push.yml@<signer_ref>`; kredensial pull di tmpfs `DOCKER_CONFIG`, bukan
+  argv) → baru sinkron `/opt/efn`, tulis state, exec `deploy.sh`. Downgrade sah: `/etc/efn/allow-downgrade` berisi
+  sha256 arsip (root 0600), sekali pakai.
+- `deploy.sh`: lapis kedua — root CA wajib cocok `EFN_PKI_ROOT_SHA256` (dari wrapper atau dibaca deploy.conf saat manual).
+- Runbook: `key-custody.md` §4a (conf baru) + §4b baru (tabel cek, rollback, rotasi root, risiko residu secret env),
+  `internal-pki.md` rotasi root (pin sebelum deploy transisi).
+- CI `infra`: langkah `efn-deploy regression (cosign palsu)` + shellcheck `scripts/host/*.sh`.
+
+## G11.4 Sink audit Odoo (permintaan lead)
+- `promtail.yml`: `match {service="odoo"} |= "odoo.addons.efn_audit.sink: EFN_AUDIT_SINK "` → regex + json →
+  label `stream=efn_audit_sink`, `audit_op`. Baris yang memuat teks `EFN_AUDIT_SINK` tanpa prefiks logger (mis. URL
+  di access log) **tidak** masuk stream (diuji).
+- `loki.yml`: `retention_stream` `{stream="efn_audit_sink"}` 9600h (400 hari > minimum 365 hari log kontrol Odoo);
+  stream lain 30 hari. Ruler lokal (`infra/observability/loki-rules/efn-audit-sink.yml`, mount read-only),
+  `enable_api: false`, Alertmanager `https://alertmanager:9093/alertmanager` dengan mTLS (sertifikat loki).
+- PKI: `loki|both` (EKU clientAuth; nama sama → **tidak** perlu intermediate baru, leaf terbit ulang otomatis).
+  Alertmanager kini memakai `web-config-alertmanager.yml` (allowlist prometheus, grafana, **loki**);
+  `web-config-ui.yml` (Prometheus) tidak berubah → sertifikat loki tidak bisa meng-query Prometheus.
+- Alert: `EfnAuditControlChange` (warning, operation ≠ purge), `EfnAuditUnexpectedPurge` (critical, note bukan
+  `retensi:`/`retention`/`erasure:`), `EfnAuditRetentionPurgeBurst` (warning, > 5 purge retensi/jam). Runbook
+  `docs/runbooks/audit-sink-alerts.md`. Odoo menulis `retensi:` (bukan `retention`) — regex menerima keduanya.
+- Diuji dengan container sementara berlabel `service=odoo` yang mencetak baris write param, purge `x 12`, purge
+  `retensi: 3 log`: series Loki `audit_op=write|purge`, Alertmanager menerima tepat 2 alert yang benar.
+  **Belum** diuji dengan Odoo nyata (modul `efn_audit` gelombang 11 belum di-upgrade di container berjalan; tidak
+  saya restart karena Odoo engineer bekerja paralel).
+
+## G11.5 Validasi
+
+| Cek | Hasil |
+|---|---|
+| shellcheck (daftar CI + `scripts/host/*.sh`) | bersih |
+| actionlint 1.7.12 | bersih |
+| yamllint `infra .github` | 0 error |
+| hadolint v2.12.0 (7 Dockerfile) | lulus (info DL3059 saja) |
+| promtool config (25 rule) + 3 web-config, amtool | SUCCESS |
+| compose config dev & prod (semua profil), secrets compose == secrets.list, port publish prod = traefik | OK |
+| check-encryption.sh (di container docker:27-cli + jq; host tanpa jq) | OK |
+| haproxy -c (image CI dipin) | rc 0 |
+| update-cloudflare-ips --check | sinkron |
+| `test-efn-deploy.sh` | 32/32 |
+| Prometheus targets | 33/33 up |
+| smoke E2E penuh | lihat G11.6 |
+
+## G11.6 Smoke E2E
+Setelah semua perubahan diterapkan (stack di-recreate dengan image ber-digest, root MinIO acak, Loki ruler):
+- `g` (negatif enkripsi + s3-gateway): **19/19** (termasuk 24 varian encoded dan kontrol positif), dua kali.
+- `a`, `b` (login OTP, consent, Price Hunter upload lewat s3-gateway, access key lama ditolak, SSE-S3 dengan root
+  acak): semua lulus; `d` (QRIS) 7/7; `f` (ETL → ClickHouse, Metabase) 5/5; `c` 6 cek POS OTP gate lulus.
+- **Terhenti (bukan regresi gelombang ini):** `c.audit_*` dan `e` bagian Odoo (`odoo_partner_*`, `audit_partner`)
+  gagal karena kode `efn_audit` 19.0.1.1.0 milik Odoo engineer (pekerjaan paralel, kolom baru `prev_company_id`)
+  sudah ter-mount tetapi DB masih 19.0.1.0.0 (belum `-u efn_audit`): `odoo shell` → `UndefinedColumn
+  prev_company_id`. Bagian platform `e` (DSAR completed, `member_hash` NULL) lulus. Jalankan ulang `c e` setelah
+  upgrade modul. `e.odoo_partner_hash_matches_bff` juga butuh partner E dari skenario `c` di run yang sama.
+
+
+## G11.7 File
+`infra/s3-gateway/{haproxy.cfg,README.md}`, `scripts/smoke/run-e2e-smoke.sh`, `scripts/host/efn-deploy`,
+`scripts/host/test-efn-deploy.sh` (baru), `scripts/deploy.sh`, `scripts/secrets.list`, `scripts/gen-pki.sh`,
+`.github/workflows/{deploy.yml,ci.yml}`, `.github/dependabot.yml`,
+`services/{odoo,api-gateway,superapp-web,ai-ocr-worker,etl}/Dockerfile`, `infra/minio/{Dockerfile,minio-init.sh}`,
+`infra/backup/postgres/Dockerfile`, `infra/compose/{docker-compose.yml,.env.example}`,
+`infra/observability/{loki.yml,promtail.yml,web-config-ui.yml,web-config-alertmanager.yml (baru),loki-rules/efn-audit-sink.yml (baru)}`,
+`docs/runbooks/{key-custody.md,internal-pki.md,secret-rotation.md,dev-stack-boot.md,audit-sink-alerts.md (baru)}`.
+
+## G11.8 Sisa / butuh pihak lain
+- **Host staging/prod (Superadmin):** pasang ulang `/usr/local/sbin/efn-deploy` (sha256 dari PR), tambah kunci baru
+  di `/etc/efn/deploy.conf`; GitHub Environment butuh secret baru `MINIO_ROOT_USER` (deploy.sh menolak bila kosong).
+  Rilis pertama: `last-release` belum ada → seq apa pun diterima.
+- cosign/Rekor/Fulcio asli belum diuji end-to-end (hanya cosign palsu); `cosign verify` image privat GHCR dengan
+  `DOCKER_CONFIG` tmpfs belum dicoba di host nyata.
+- Secret dari env tetap tidak bertanda tangan (risiko residu, key-custody §4b); log `efn-deploy` (journald host)
+  belum dikirim ke Loki — Promtail hanya membaca log container.
+- Alert sink perlu diuji dengan Odoo nyata setelah upgrade `efn_audit` (lead/QA). `docs/04` §8.5 (matriks mTLS)
+  perlu baris loki → alertmanager (dokumen architect).
+- Makefile `lint` memakai `hadolint/hadolint` tanpa tag (di luar batas file).
+- `infra/compose/.env` lokal developer lain mungkin masih memuat `MINIO_ROOT_USER=efnadmin` (diabaikan).

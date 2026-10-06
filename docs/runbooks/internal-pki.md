@@ -64,8 +64,11 @@ Dev: `make pki-rotate`.
 ## Rotasi root (10 tahun, atau bila root bocor)
 
 1. `make pki-root` di direktori baru (`PKI_ROOT_DIR=~/efn-pki-root-2`), intermediate baru dari root baru.
-2. Transisi: set `EFN_PKI_EXTRA_TRUST` = PEM root lama, unggah `EFN_PKI_*` baru, deploy (bundle = intermediate baru + root baru + root lama).
-3. Setelah semua leaf baru (satu deploy), kosongkan `EFN_PKI_EXTRA_TRUST`, deploy. Musnahkan root lama sesuai [key-custody.md](key-custody.md).
+2. **Pin di setiap host (SEC-42, sebelum deploy):** di `/etc/efn/deploy.conf` set `EFN_PKI_ROOT_SHA256` = sidik jari
+   root BARU dan `EFN_PKI_EXTRA_TRUST_SHA256` = sidik jari root LAMA (dari register kunci, bukan dari GitHub).
+   `efn-deploy` menolak root/CA transisi yang tidak dipin.
+3. Transisi: set `EFN_PKI_EXTRA_TRUST` = PEM root lama, unggah `EFN_PKI_*` baru, deploy (bundle = intermediate baru + root baru + root lama). Manifest rilis memuat sidik jari keduanya.
+4. Setelah semua leaf baru (satu deploy), kosongkan `EFN_PKI_EXTRA_TRUST` dan `EFN_PKI_EXTRA_TRUST_SHA256`, deploy. Musnahkan root lama sesuai [key-custody.md](key-custody.md).
 
 ## Migrasi dari PKI satu tingkat (gelombang 3) — sekali
 

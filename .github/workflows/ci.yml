@@ -194,7 +194,7 @@ jobs:
     timeout-minutes: 45
     services:
       postgres:
-        image: postgres:16.6-bookworm
+        image: postgres:16.6-bookworm@sha256:557fea37a744d5f4c8faab304b0a90858b53ab119735a88c131fd19dab802f36
         env:
           POSTGRES_USER: odoo
           POSTGRES_PASSWORD: odoo-ci-only   # kredensial DB sementara CI, bukan secret
@@ -371,25 +371,25 @@ jobs:
             -v "$PWD/secrets/minio_prometheus_token.txt:/run/secrets/minio_prometheus_token:ro" \
             -v "$PWD/secrets/tls_prometheus_crt.txt:/run/secrets/tls_server_crt:ro" \
             -v "$PWD/secrets/tls_prometheus_key.txt:/run/secrets/tls_server_key:ro" \
-            --entrypoint promtool prom/prometheus:v2.55.1 check config /etc/prometheus/prometheus.yml
-          for wc in web-config.yml web-config-ui.yml; do
+            --entrypoint promtool prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3 check config /etc/prometheus/prometheus.yml
+          for wc in web-config.yml web-config-ui.yml web-config-alertmanager.yml; do
             docker run --rm -v "$PWD/infra/observability:/etc/prometheus:ro" \
               -v "$PWD/secrets/efn_ca_crt.txt:/run/secrets/efn_ca_crt:ro" \
               -v "$PWD/secrets/tls_prometheus_crt.txt:/run/secrets/tls_server_crt:ro" \
               -v "$PWD/secrets/tls_prometheus_key.txt:/run/secrets/tls_server_key:ro" \
-              --entrypoint promtool prom/prometheus:v2.55.1 check web-config "/etc/prometheus/$wc"
+              --entrypoint promtool prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3 check web-config "/etc/prometheus/$wc"
           done
       - name: amtool (alertmanager.yml)
         run: |
           docker run --rm -v "$PWD/infra/observability:/cfg:ro" --entrypoint amtool \
-            prom/alertmanager:v0.27.0 check-config /cfg/alertmanager.yml
+            prom/alertmanager:v0.27.0@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5 check-config /cfg/alertmanager.yml
       - name: Grafana dashboard JSON valid
         run: |
           for f in infra/observability/grafana/provisioning/dashboards/json/*.json; do jq empty "$f"; done
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck scripts/*.sh scripts/host/efn-deploy scripts/smoke/*.sh infra/backup/postgres/*.sh \
+          shellcheck scripts/*.sh scripts/host/efn-deploy scripts/host/*.sh scripts/smoke/*.sh infra/backup/postgres/*.sh \
             infra/postgres/init/*.sh infra/wireguard/*.sh
           shellcheck -s sh infra/minio/*.sh infra/redis/*.sh infra/rabbitmq/*.sh infra/clickhouse/*.sh infra/s3-gateway/*.sh
       # Filter L7 object storage (ADR-030): sintaks HAProxy valid dengan sertifikat dummy dari gen-pki.sh
@@ -402,6 +402,13 @@ jobs:
             -v "$PWD/secrets/efn_ca_crt.txt:/run/secrets/efn_ca_crt:ro" \
             haproxy:3.2.25-alpine@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be \
             haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
+      # SEC-36/SEC-42: wrapper deploy host diuji dengan cosign palsu di container sekali pakai (32 kasus: replay/
+      # downgrade, IMAGE_* lewat env, registry asing, trust anchor PKI, tanda tangan, allowlist env)
+      - name: efn-deploy regression (cosign palsu)
+        run: |
+          docker run --rm -v "$PWD:/src:ro" \
+            python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea \
+            bash /src/scripts/host/test-efn-deploy.sh
       - name: hadolint
         uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf  # v3.1.0
         with:

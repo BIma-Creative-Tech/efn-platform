@@ -1,0 +1,13 @@
+# exporter-toolkit web config KHUSUS Alertmanager (docs/04 §8.5, SEC-20): HANYA TLS + mTLS.
+# Klien sah: Prometheus (alerting), Grafana (datasource) dan Loki (ruler: alert sink audit Odoo, gelombang 11).
+# Dipisah dari web-config-ui.yml agar sertifikat Loki TIDAK bisa meng-query Prometheus (least privilege).
+tls_server_config:
+  cert_file: /run/secrets/tls_server_crt
+  key_file: /run/secrets/tls_server_key
+  min_version: TLS12
+  client_auth_type: RequireAndVerifyClientCert
+  client_ca_file: /run/secrets/efn_ca_crt
+  client_allowed_sans:
+    - prometheus
+    - grafana
+    - loki

@@ -10,7 +10,8 @@
 #   (divalidasi saat boot oleh instrumentation.ts; konfigurasi tidak aman -> exit 1).
 # Catatan: Docker men-set HOSTNAME = id container secara default; ENV di bawah menimpanya.
 
-FROM node:22.12-alpine AS base
+# SEC-47: base image dipin tag@digest (build reprodusibel); Dependabot `docker` memperbarui digest per tag.
+FROM node:22.12-alpine@sha256:51eff88af6dff26f59316b6e356188ffa2c422bd3c3b76f2556a2e7e89d080bd AS base
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1 NPM_CONFIG_UPDATE_NOTIFIER=false NPM_CONFIG_FUND=false \
     PORT=3001 HOSTNAME=0.0.0.0
@@ -28,7 +29,7 @@ FROM dev AS build
 # Browser tidak memanggil BFF langsung (connect-src 'self'); URL BFF hanya runtime server-side (BFF_INTERNAL_URL).
 RUN npm run build
 
-FROM node:22.12-alpine AS runtime
+FROM node:22.12-alpine@sha256:51eff88af6dff26f59316b6e356188ffa2c422bd3c3b76f2556a2e7e89d080bd AS runtime
 WORKDIR /app
 # server.js standalone membaca PORT & HOSTNAME saat start.
 ENV NODE_ENV=production PORT=3001 HOSTNAME=0.0.0.0 NEXT_TELEMETRY_DISABLED=1

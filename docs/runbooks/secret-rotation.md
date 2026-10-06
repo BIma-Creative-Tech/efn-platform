@@ -29,6 +29,7 @@ Sumber tunggal daftar secret: `scripts/secrets.list`. Nilai staging/prod ada di 
 | `jwt_secret` | api-gateway | update + recreate api-gateway | semua sesi Super-App logout (token lama invalid) — lakukan di luar jam sibuk |
 | `rabbitmq_password` | rabbitmq (user admin `efn-admin`, ops saja) | update + recreate rabbitmq (definitions) | tidak ada untuk aplikasi |
 | `minio_root_password` | minio, minio-init (root hanya untuk bootstrap) | update + recreate minio lalu minio-init | tidak ada untuk aplikasi |
+| `minio_root_user` (SEC-48, access key acak) | minio (`MINIO_ROOT_USER_FILE`), minio-init | update + recreate minio lalu minio-init (diuji gelombang 11 pada volume lama: IAM/bucket utuh, root lama ditolak) | tidak ada untuk aplikasi |
 | `clickhouse_password` | clickhouse (admin `efn`), clickhouse-init | update + recreate clickhouse lalu clickhouse-init | tidak ada untuk aplikasi |
 | `otp_pepper` | api-gateway (ETL tidak lagi memegangnya, SEC-16) | update + recreate | OTP aktif (≤ 180 s) gagal diverifikasi; `member_hash` diturunkan dari pepper ini (docs/04 §1) → rotasi memutus join hash lama (ledger, DWH): rencanakan re-hash dengan BFF + data-ai sebelum rotasi |
 | `discount_token_secret` | api-gateway | update + recreate | discount token yang belum dikonsumsi (≤ 600 s) ditolak → kasir minta OTP ulang |

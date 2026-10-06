@@ -138,15 +138,59 @@ jobs:
       # authorized_keys + sudoers tanpa argumen). Wrapper menerima arsip rilis yang DITANDATANGANI cosign keyless oleh
       # workflow ini (identitas deploy.yml @ ref yang diizinkan, dikonfigurasi root di /etc/efn/deploy.conf), lalu
       # menjalankan deploy.sh dari salinan milik root. Lihat scripts/host/efn-deploy, docs/runbooks/key-custody.md §4.
-      - name: Bundel rilis (infra + scripts + etl-sql) & tanda tangan keyless
+      # SEC-42 (gelombang 11): manifest efn-release.json DI DALAM arsip bertanda tangan: 7 digest image (hasil
+      # verifikasi di atas), versi + seq monoton (run_number, anti-replay/downgrade di host), git sha, dan sidik jari
+      # trust anchor PKI. Host (efn-deploy) mengambil IMAGE_* HANYA dari manifest, menjalankan `cosign verify` sendiri,
+      # dan mencocokkan sidik jari dengan pin di /etc/efn/deploy.conf.
+      - name: Bundel rilis (infra + scripts + etl-sql + manifest) & tanda tangan keyless
+        env:
+          APP_ENV: ${{ needs.resolve.outputs.environment }}
+          VERSION: ${{ needs.resolve.outputs.image_tag }}
+          SIGNER_REF: ${{ needs.resolve.outputs.signer_ref }}
+          SEQ: ${{ github.run_number }}
+          GIT_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          EFN_PKI_ROOT_CRT: ${{ secrets.EFN_PKI_ROOT_CRT }}
+          EFN_PKI_EXTRA_TRUST: ${{ secrets.EFN_PKI_EXTRA_TRUST }}
+          IMAGE_POSTGRES: ${{ steps.digests.outputs.IMAGE_POSTGRES }}
+          IMAGE_ODOO: ${{ steps.digests.outputs.IMAGE_ODOO }}
+          IMAGE_API_GATEWAY: ${{ steps.digests.outputs.IMAGE_API_GATEWAY }}
+          IMAGE_SUPERAPP_WEB: ${{ steps.digests.outputs.IMAGE_SUPERAPP_WEB }}
+          IMAGE_AI_OCR_WORKER: ${{ steps.digests.outputs.IMAGE_AI_OCR_WORKER }}
+          IMAGE_ETL: ${{ steps.digests.outputs.IMAGE_ETL }}
+          IMAGE_MINIO: ${{ steps.digests.outputs.IMAGE_MINIO }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/efn-release"
-          paths=(infra scripts)
+          [ "$APP_ENV" = "staging" ] || APP_ENV=production
+          # Versi manifest: X.Y.Z (rilis) atau sha-<7 hex> (main); sama dengan aturan efn-deploy
+          ver="$VERSION"
+          fps() { # PEM (stdin) -> sidik jari SHA-256 hex huruf kecil per sertifikat, satu per baris
+            mkdir -p "$RUNNER_TEMP/pem"
+            awk -v d="$RUNNER_TEMP/pem" '/-----BEGIN CERTIFICATE-----/{n++; f=d "/" n ".pem"} n && f {print > f} /-----END CERTIFICATE-----/{close(f); f=""}'
+            for f in "$RUNNER_TEMP"/pem/*.pem; do
+              [ -e "$f" ] || continue
+              openssl x509 -in "$f" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr 'A-F' 'a-f'
+            done
+            rm -rf "$RUNNER_TEMP/pem"
+          }
+          root_fp="$(printf '%s\n' "$EFN_PKI_ROOT_CRT" | fps)"
+          [[ "$root_fp" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::EFN_PKI_ROOT_CRT harus tepat 1 sertifikat"; exit 1; }
+          extra_json="$(printf '%s\n' "${EFN_PKI_EXTRA_TRUST:-}" | fps | jq -R . | jq -sc .)"
+          jq -n --arg env "$APP_ENV" --arg ver "$ver" --argjson seq "$SEQ" --arg git "$GIT_SHA" --arg ref "$SIGNER_REF" \
+             --arg root "$root_fp" --argjson extra "$extra_json" \
+             --arg pg "$IMAGE_POSTGRES" --arg odoo "$IMAGE_ODOO" --arg api "$IMAGE_API_GATEWAY" \
+             --arg web "$IMAGE_SUPERAPP_WEB" --arg ocr "$IMAGE_AI_OCR_WORKER" --arg etl "$IMAGE_ETL" --arg minio "$IMAGE_MINIO" \
+             '{schema: 1, app_env: $env, version: $ver, seq: $seq, git_sha: $git, signer_ref: $ref,
+               images: {IMAGE_POSTGRES: $pg, IMAGE_ODOO: $odoo, IMAGE_API_GATEWAY: $api, IMAGE_SUPERAPP_WEB: $web,
+                        IMAGE_AI_OCR_WORKER: $ocr, IMAGE_ETL: $etl, IMAGE_MINIO: $minio},
+               pki: {root_sha256: $root, extra_trust_sha256: $extra}}' > efn-release.json
+          cat efn-release.json
+          paths=(infra scripts efn-release.json)
           [ -d services/etl/sql ] && paths+=(services/etl/sql)
-          # mtime/owner tetap -> arsip deterministik untuk commit yang sama
+          # mtime/owner tetap -> arsip deterministik untuk commit + manifest yang sama
           tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='2000-01-01 00:00Z' \
-              --exclude='infra/compose/.env' -czf "$RUNNER_TEMP/efn-release/release.tar.gz" "${paths[@]}"
+              --exclude='infra/compose/.env' -cf - "${paths[@]}" | gzip -n > "$RUNNER_TEMP/efn-release/release.tar.gz"
+          rm -f efn-release.json
           cosign sign-blob --yes --bundle "$RUNNER_TEMP/efn-release/release.sigstore.json" \
             "$RUNNER_TEMP/efn-release/release.tar.gz"
           sha256sum "$RUNNER_TEMP/efn-release/release.tar.gz"
@@ -194,13 +238,7 @@ jobs:
           DSAR_DELETE_GRACE_DAYS: ${{ vars.DSAR_DELETE_GRACE_DAYS || '7' }}
           # R5: kosong = job ETL Odoo aktif otomatis setelah grant di DB Odoo sukses (deploy.sh)
           ETL_ENABLE_ODOO: ${{ vars.ETL_ENABLE_ODOO }}
-          IMAGE_POSTGRES: ${{ steps.digests.outputs.IMAGE_POSTGRES }}
-          IMAGE_ODOO: ${{ steps.digests.outputs.IMAGE_ODOO }}
-          IMAGE_API_GATEWAY: ${{ steps.digests.outputs.IMAGE_API_GATEWAY }}
-          IMAGE_SUPERAPP_WEB: ${{ steps.digests.outputs.IMAGE_SUPERAPP_WEB }}
-          IMAGE_AI_OCR_WORKER: ${{ steps.digests.outputs.IMAGE_AI_OCR_WORKER }}
-          IMAGE_ETL: ${{ steps.digests.outputs.IMAGE_ETL }}
-          IMAGE_MINIO: ${{ steps.digests.outputs.IMAGE_MINIO }}
+        # IMAGE_* TIDAK dikirim lewat env (SEC-42): host mengambilnya dari manifest bertanda tangan.
         run: |
           set -euo pipefail
           [ "$APP_ENV" = "staging" ] || APP_ENV=production
@@ -211,8 +249,7 @@ jobs:
                 MARKET_SCOUT_PHOTO_RETENTION_DAYS CH_MART_RETENTION_YEARS
                 CONSENT_LOCATION_VERSION CONSENT_LOCATION_TEXT_SHA256 CONSENT_MARKETING_VERSION
                 CONSENT_MARKETING_TEXT_SHA256 DSAR_DELETE_GRACE_DAYS ETL_ENABLE_ODOO
-                EFN_PKI_INTERMEDIATE_KEY EFN_PKI_INTERMEDIATE_CRT EFN_PKI_ROOT_CRT EFN_PKI_EXTRA_TRUST
-                IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_MINIO)
+                EFN_PKI_INTERMEDIATE_KEY EFN_PKI_INTERMEDIATE_CRT EFN_PKI_ROOT_CRT EFN_PKI_EXTRA_TRUST)
           rel="$RUNNER_TEMP/efn-release"
           umask 077
           {

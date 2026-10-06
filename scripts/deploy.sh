@@ -14,7 +14,9 @@
 # Env wajib : TRAEFIK_DOMAIN ACME_EMAIL GHCR_USER GHCR_TOKEN COMPOSE_PROFILES APP_ENV PAYMENT_PROVIDER
 #             EFN_PUBLIC_BIND (IP publik host untuk 80/443 websecure)
 #             IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_MINIO
-#               (= <registry>/<svc>@sha256:<digest> hasil `cosign verify` di workflow; SEC-10: deploy by digest)
+#               (= <registry>/<svc>@sha256:<digest>; SEC-10: deploy by digest). Lewat efn-deploy nilainya HANYA dari
+#               manifest rilis bertanda tangan + `cosign verify` di host (SEC-42); env CI tidak bisa mengisinya.
+#             Pin root CA: EFN_PKI_ROOT_SHA256 (dari efn-deploy, atau dibaca dari /etc/efn/deploy.conf saat manual)
 #             EFN_PKI_INTERMEDIATE_KEY EFN_PKI_INTERMEDIATE_CRT EFN_PKI_ROOT_CRT (PKI 3 tingkat, ADR-022 W1)
 #             + satu env UPPERCASE per baris scripts/secrets.list yang BUKAN `pki`/`derived:*`
 # Env opsional: WHATSAPP_ENABLED WHATSAPP_PHONE_NUMBER_ID WHATSAPP_OTP_TEMPLATE OLLAMA_VISION_MODEL
@@ -134,6 +136,15 @@ trap cleanup_pki EXIT
   printf '%s\n' "$EFN_PKI_INTERMEDIATE_CRT" > "$PKI_TMP/intermediate.crt"
   printf '%s\n' "$EFN_PKI_ROOT_CRT" > "$PKI_TMP/root.crt" )
 unset EFN_PKI_INTERMEDIATE_KEY
+# SEC-42: trust anchor wajib = root CA yang sidik jarinya dipin di host (efn-deploy sudah memeriksa; ini lapis kedua
+# untuk jalur manual Superadmin `sudo -E bash deploy.sh`).
+PIN_ROOT="${EFN_PKI_ROOT_SHA256:-}"
+if [[ -z "$PIN_ROOT" && -f /etc/efn/deploy.conf ]]; then
+  PIN_ROOT=$(sed -n "s/^EFN_PKI_ROOT_SHA256='\{0,1\}\([0-9A-Fa-f]\{64\}\)'\{0,1\}\$/\1/p" /etc/efn/deploy.conf | tail -n1)
+fi
+[[ "${PIN_ROOT,,}" =~ ^[0-9a-f]{64}$ ]] || die "EFN_PKI_ROOT_SHA256 belum dipin di /etc/efn/deploy.conf (key-custody §4a)"
+ROOT_FP=$(openssl x509 -in "$PKI_TMP/root.crt" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr 'A-F' 'a-f')
+[[ "$ROOT_FP" == "${PIN_ROOT,,}" ]] || die "EFN_PKI_ROOT_CRT tidak cocok dengan sidik jari root yang dipin di host"
 [[ "$(openssl x509 -in "$PKI_TMP/intermediate.crt" -noout -pubkey | openssl sha256)" == \
    "$(openssl pkey -in "$PKI_TMP/intermediate.key" -pubout | openssl sha256)" ]] || die "kunci intermediate != sertifikat"
 openssl x509 -in "$PKI_TMP/intermediate.crt" -noout -checkend $((30 * 86400)) > /dev/null \
@@ -222,7 +233,6 @@ PG_DB=efn_platform
 ODOO_DB=efn_odoo
 RABBITMQ_ADMIN_USER=efn-admin
 RABBITMQ_STRICT_PERMISSIONS=${RABBITMQ_STRICT_PERMISSIONS:-true}
-MINIO_ROOT_USER=efnadmin
 CLICKHOUSE_USER=efn
 GRAFANA_ADMIN_USER=admin
 OLLAMA_VISION_MODEL=${OLLAMA_VISION_MODEL:-qwen2.5vl:7b}

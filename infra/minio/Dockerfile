@@ -6,6 +6,7 @@
 # metrik minio_*. SILO tidak memasang alias biner `minio` -> image ini membuat symlink agar compose/runbook lama jalan.
 # Tag di-pin + commit SHA diverifikasi (tag git bisa dipindah; commit tidak).
 # Versi Go mengikuti go.mod kedua repo (go 1.27.1); digest base = yang dipakai Dockerfile.goreleaser SILO.
+# SEC-47: base image dipin tag@digest (build reprodusibel); Dependabot `docker` memperbarui digest per tag.
 FROM golang:1.27.1-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS build
 ARG SILO_TAG=RELEASE.2026-09-16T00-00-00Z
 ARG SILO_COMMIT=2a4d51406b7ed87af5fe6fe0f801f3290f96eb3c
@@ -24,7 +25,7 @@ RUN git clone --depth 1 --branch "${MC_TAG}" https://github.com/pgsty/mc.git . \
     && test "$(git rev-parse HEAD)" = "${MC_COMMIT}" \
     && go build -tags kqueue -ldflags "$(go run buildscripts/gen-ldflags.go)" -o /out/mc .
 
-FROM alpine:3.24
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 # hadolint ignore=DL3018
 RUN apk add --no-cache ca-certificates \
     && addgroup -S -g 1000 minio && adduser -S -D -H -u 1000 -G minio minio \

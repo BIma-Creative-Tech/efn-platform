@@ -1,7 +1,8 @@
 # NestJS BFF - multi-stage, non-root, distroless-style runtime
 # syntax=docker/dockerfile:1.7
 
-FROM node:22.12-alpine AS base
+# SEC-47: base image dipin tag@digest (build reprodusibel); Dependabot `docker` memperbarui digest per tag.
+FROM node:22.12-alpine@sha256:51eff88af6dff26f59316b6e356188ffa2c422bd3c3b76f2556a2e7e89d080bd AS base
 WORKDIR /app
 ENV NPM_CONFIG_UPDATE_NOTIFIER=false NPM_CONFIG_FUND=false
 COPY package*.json ./
@@ -20,7 +21,7 @@ CMD ["npm", "run", "start:dev"]
 FROM dev AS build
 RUN npm run build && npm prune --omit=dev
 
-FROM node:22.12-alpine AS runtime
+FROM node:22.12-alpine@sha256:51eff88af6dff26f59316b6e356188ffa2c422bd3c3b76f2556a2e7e89d080bd AS runtime
 WORKDIR /app
 ENV NODE_ENV=production PORT=3000
 RUN addgroup -S app && adduser -S app -G app

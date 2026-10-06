@@ -244,3 +244,8 @@ Root CA key (offline), `pii_encryption_key*`, `walg_libsodium_key`, `minio_kms_k
 - Request yang ditolak gateway (403): header `x-amz-bypass-governance-retention`, PUT `?retention`/`?legal-hold`/`?object-lock`, unsigned trailer, header `X-Minio-Replication-*`, `?select`, admin API (kecuali minio-init/prometheus).
 - Access key per klien dari file (§8.12): `minio_{bff,ocr,backup,prometheus}_access_key`.
 - Metrik Loki/redis_exporter/RabbitMQ 15691/Traefik 8082 hanya via sidecar ghostunnel dengan allowlist CN (menggantikan pengecualian E12).
+
+### 8.15 Catatan v3.8 (gelombang 11)
+- mTLS tambahan: Loki ruler → Alertmanager (sertifikat `loki` ber-EKU server+client; Alertmanager memakai `web-config-alertmanager.yml` yang hanya mengizinkan klien `prometheus` dan `loki`).
+- Stream log `efn_audit_sink` (baris `EFN_AUDIT_SINK {json}` dari Odoo `efn_audit`) diretensi 400 hari di Loki; alert `EfnAuditControlChange`, `EfnAuditUnexpectedPurge`, `EfnAuditRetentionPurgeBurst`.
+- Root user object storage dari secret `minio_root_user` (acak), bukan nilai default.

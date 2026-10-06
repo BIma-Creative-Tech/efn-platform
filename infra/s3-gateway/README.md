@@ -11,7 +11,14 @@
   dibuka kuncinya lewat jalur aplikasi), R-S06.
 - **Komponen:** HAProxy LTS `3.2.25-alpine` (dipin digest), non-root, read-only, tanpa capability; konfigurasi
   `haproxy.cfg`, `entrypoint.sh` (gabung crt+key ke tmpfs). Storage hanya di network `objstore`.
-- **Verifikasi:** `scripts/smoke/run-e2e-smoke.sh g` (cek `g.s3gw_*`), CI `haproxy -c` + `check-encryption.sh`.
+- **Normalisasi (SEC-41, gelombang 11):** storage men-decode nama kunci query dan memisah pada `;`. Filter kini
+  menolak `;` di query (semua method), `%` di nama kunci query (semua method), `%` di query method tulis, segmen
+  dot/`//` di path, `x-amz-content-sha256` ganda; daftar blok dicocokkan pada query/path yang sudah `url_dec`,
+  case-insensitive, pemisah `&` dan `;`. Sebelum perbaikan diverifikasi bypass nyata di SILO: `PUT ?rete%6Etion`
+  dirutekan ke PutObjectRetention (`MissingContentMD5`), `PUT ?X-Amz-Cr%65dential=..` ke jalur presigned. Klien sah
+  (minio-js BFF, minio-py ocr-worker, WAL-G backup-push/wal-push, Prometheus) tetap lolos. Log akses kini
+  memuat `%Ta` (waktu aktif request).
+- **Verifikasi:** `scripts/smoke/run-e2e-smoke.sh g` (cek `g.s3gw_*`, termasuk `g.s3gw_encoded_variants_blocked` 24 varian), CI `haproxy -c` + `check-encryption.sh`.
 - **Belum / batas:**
   - Filter tidak bisa membedakan principal (semua klien sama); admin hanya dari `minio-init` (network `objstore`).
   - SN-2026-015 juga bisa dieksploitasi oleh kredensial yang langsung ke storage (hanya `minio-init`/root) — itu

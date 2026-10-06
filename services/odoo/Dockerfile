@@ -1,7 +1,8 @@
 # Odoo CE 19 + addons EFN saja (ADR-031: tanpa modul OCA/Cybrosys/vendor). Image resmi non-root (user odoo).
 # TLS (docs/04 §7.1): Odoo HTTP listen di 127.0.0.1 (http_interface) dan dibungkus sidecar
 # ghostunnel yang berbagi network namespace; DB lewat db_sslmode=verify-full.
-FROM odoo:19.0
+# SEC-47: base image dipin tag@digest (build reprodusibel); Dependabot `docker` memperbarui digest per tag.
+FROM odoo:19.0@sha256:dd9013e669caaa23d26765dc55814655eaeecca7cfc2c265dbabae913bce22fd
 
 USER root
 

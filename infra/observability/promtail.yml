@@ -44,3 +44,20 @@ scrape_configs:
       - replace:
           expression: '(?i)bearer\s+[a-z0-9\-_\.]+'
           replace: 'Bearer [REDACTED]'
+      # Gelombang 11 (SEC-43): baris sink audit Odoo (`EFN_AUDIT_SINK {json}`, logger odoo.addons.efn_audit.sink)
+      # -> stream terpisah stream="efn_audit_sink" (retensi 400 hari di loki.yml, alert ruler loki-rules/).
+      # Label rendah kardinalitas saja: audit_op (create/write/unlink/purge). Field lain diparse saat query.
+      # Hanya dari container service=odoo: container lain tidak bisa memalsukan stream ini dengan mencetak teks sama.
+      - match:
+          selector: '{service="odoo"} |= "odoo.addons.efn_audit.sink: EFN_AUDIT_SINK "'
+          stages:
+            - regex:
+                expression: 'EFN_AUDIT_SINK (?P<sink>\{.*\})'
+            - json:
+                source: sink
+                expressions:
+                  audit_op: operation
+            - static_labels:
+                stream: efn_audit_sink
+            - labels:
+                audit_op:

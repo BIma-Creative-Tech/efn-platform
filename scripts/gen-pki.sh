@@ -42,7 +42,8 @@ APP_ENV="${APP_ENV:-dev}"
 #   server : EKU serverAuth saja (tidak bisa dipakai sebagai sertifikat klien mTLS)
 #   both   : serverAuth + clientAuth (service yang juga menjadi KLIEN mTLS, docs/04 §8.5)
 #   client : clientAuth saja (tidak punya listener jaringan)
-# Klien mTLS = Traefik, Prometheus, Grafana, Promtail, ocr-worker (ke Ollama), blackbox-exporter (probe), cAdvisor.
+# Klien mTLS = Traefik, Prometheus, Grafana, Promtail, ocr-worker (ke Ollama), blackbox-exporter (probe), cAdvisor,
+# Loki (ruler -> Alertmanager).
 # Sumber kebenaran SAN + nameConstraints intermediate. Tambah service baru = baris di sini + 2 baris `pki` di
 # scripts/secrets.list + TERBITKAN ULANG INTERMEDIATE (nameConstraints memuat daftar ini; lihat runbook internal-pki).
 PKI_SERVICES=(
@@ -61,7 +62,7 @@ PKI_SERVICES=(
   "prometheus|both"
   "alertmanager|server"
   "grafana|both"
-  "loki|server"
+  "loki|both"           # klien mTLS ke Alertmanager (ruler alert audit sink, gelombang 11)
   "promtail|client"
   "uptime-kuma|server"
   "node-exporter|server"

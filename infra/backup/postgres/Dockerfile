@@ -5,7 +5,8 @@
 #
 # Basis Debian (bookworm), bukan alpine: binary rilis WAL-G di-link ke glibc. Konsekuensi: volume data dari image
 # alpine lama (uid 70, collation musl) TIDAK kompatibel -> pindahkan via dump/restore (runbook bagian "Migrasi").
-FROM postgres:16.6-bookworm
+# SEC-47: base image dipin tag@digest (build reprodusibel); Dependabot `docker` memperbarui digest per tag.
+FROM postgres:16.6-bookworm@sha256:557fea37a744d5f4c8faab304b0a90858b53ab119735a88c131fd19dab802f36
 
 ARG WALG_VERSION=v3.0.9
 # Isi dengan sha256 resmi saat bump versi (supply chain). Bila kosong, hanya diverifikasi dengan file .sha256 rilis.

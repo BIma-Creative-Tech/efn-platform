@@ -49,7 +49,17 @@ Hub dan upstream diarsipkan.
 Topologi baru object storage: klien (BFF, ocr-worker, WAL-G, Prometheus) → `https://s3-gateway:9000` (filter L7
 HAProxy, `infra/s3-gateway/haproxy.cfg`) → `https://minio:9000` di network `objstore` saja. Akses dari laptop:
 `https://localhost:9000` (filter; admin API diblok). Admin: `docker exec efn-minio-1 sh -c 'mc alias set l
-https://localhost:9000 efnadmin "$(cat /run/secrets/minio_root_password)" && mc admin info l'`.
+https://localhost:9000 "$(cat /run/secrets/minio_root_user)" "$(cat /run/secrets/minio_root_password)" && mc admin info l'`.
+
+### 2c. Gelombang 11: migrasi stack dev (sekali)
+
+1. `bash scripts/gen-secrets.sh` — membuat `secrets/minio_root_user.txt` (root MinIO acak, SEC-48) dan menerbitkan
+   ulang leaf `loki` (kini EKU server+client untuk ruler → Alertmanager). `infra/compose/.env` lama: hapus baris
+   `MINIO_ROOT_USER=efnadmin` (tidak dipakai lagi).
+2. `$DC --profile core --profile data --profile ai --profile observability --profile ops up -d` — image dipin
+   digest (SEC-47) dan konfigurasi Loki/Alertmanager/Promtail baru me-recreate container terkait. `minio` +
+   `minio-init` memakai root acak; volume lama tetap terbaca (diuji: IAM/bucket utuh, root `efnadmin` ditolak).
+3. Build ulang image lokal bila ingin base yang dipin: `$DC --profile core --profile data --profile ai build`.
 
 ## 3. Inisialisasi database Odoo (sekali per volume `pg-data`)
 
@@ -155,6 +165,9 @@ Sebelum grant, job `sales_fact_pos` gagal per siklus (permission denied) tanpa m
 
 - File konfigurasi yang di-bind-mount satu per satu (rabbitmq.conf, encrypted-storage.xml, promtail.yml, secrets)
   dan diedit dengan `sed -i` atau ditulis ulang: lakukan `up -d --force-recreate <svc>`, bukan sekadar `restart`.
+- Service ber-sidecar `network_mode: service:<x>` (loki/loki-tls, odoo/odoo-tls, ...): `docker restart <x>` membuat
+  namespace jaringan sidecar basi (sidecar `unhealthy`, Promtail gagal push). Selalu
+  `up -d --force-recreate <x> <x>-tls` bersamaan (gelombang 11).
 - Docker Desktop: propagasi `rslave` untuk `/` ditolak, sehingga dev override node-exporter memakai `/:/host:ro`.
 - `nest start --watch` butuh heap lebih dari 250 MB. Dev override memberi `NODE_OPTIONS=--max-old-space-size=1024` + limit 1536M.
 - Dev Postgres memakai `log_statement=all`. Odoo (psycopg2) menginterpolasi parameter di sisi klien, jadi nilai

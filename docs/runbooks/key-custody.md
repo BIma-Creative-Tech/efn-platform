@@ -61,12 +61,20 @@ install -o root -g root -m 0755 /tmp/cosign /usr/local/bin/cosign
 install -o root -g root -m 0755 scripts/host/efn-deploy /usr/local/sbin/efn-deploy
 sha256sum /usr/local/sbin/efn-deploy
 
-# 3) konfigurasi identitas penanda tangan (root-only). production: tag v*; staging: main
+# 3) konfigurasi root-only: identitas penanda tangan, lingkungan, registry, PIN trust anchor (SEC-42).
+#    production: tag v*; staging: main (EFN_SIGNER_IDENTITY_REGEXP ...@refs/heads/main$, EFN_APP_ENV=staging)
+#    EFN_PKI_ROOT_SHA256 = sidik jari root CA dari register kunci (§5 butir 3), BUKAN disalin dari GitHub:
+#      openssl x509 -in ~/efn-pki-root/root.crt -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr A-F a-f
 install -d -o root -g root -m 0755 /etc/efn
 cat > /etc/efn/deploy.conf <<'EOF'
 COSIGN_BIN=/usr/local/bin/cosign
 EFN_SIGNER_IDENTITY_REGEXP='^https://github\.com/<org>/<repo>/\.github/workflows/deploy\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'
 EFN_SIGNER_ISSUER=https://token.actions.githubusercontent.com
+EFN_APP_ENV=production
+EFN_GITHUB_REPO=<org>/<repo>
+EFN_IMAGE_PREFIX=ghcr.io/<org-huruf-kecil>/
+EFN_PKI_ROOT_SHA256=<64 hex>
+EFN_PKI_EXTRA_TRUST_SHA256=''
 EOF
 chmod 0644 /etc/efn/deploy.conf
 
@@ -96,6 +104,42 @@ Superadmin.
 
 Verifikasi setelah pasang: `ssh deploy@host 'id'` harus menjalankan efn-deploy (bukan `id`) dan gagal "input"
 karena stdin kosong; `sudo -l -U deploy` hanya menampilkan `/usr/local/sbin/efn-deploy`; `id deploy` tanpa `docker`.
+
+### 4b. Manifest rilis bertanda tangan, pin trust anchor, anti-downgrade (SEC-42, gelombang 11)
+
+`deploy.yml` menulis `efn-release.json` **di dalam** `release.tar.gz` yang ditandatangani: 7 digest image (hasil
+`cosign verify` di runner), versi (`X.Y.Z` / `sha-<7>`), `seq` = `github.run_number`, git sha, `signer_ref`, dan
+sidik jari root CA + CA transisi. `efn-deploy` di host:
+
+| Cek | Penolakan bila |
+|---|---|
+| `IMAGE_*` | dikirim lewat env (tidak lagi di allowlist); di manifest bukan `${EFN_IMAGE_PREFIX}<svc>@sha256:<64 hex>`; `cosign verify` **di host** gagal untuk identitas `build-push.yml@<signer_ref>` |
+| Trust anchor | `EFN_PKI_ROOT_CRT` ≠ tepat 1 sertifikat atau sidik jari ≠ `EFN_PKI_ROOT_SHA256`; root di manifest ≠ pin; intermediate tidak diterbitkan root yang dipin / bukan CA; setiap sertifikat `EFN_PKI_EXTRA_TRUST` tidak ada di `EFN_PKI_EXTRA_TRUST_SHA256` **dan** manifest |
+| Lingkungan | manifest `app_env` ≠ `EFN_APP_ENV`; env `APP_ENV` ≠ `EFN_APP_ENV`; production bukan `X.Y.Z` dari `refs/tags/vX.Y.Z` |
+| Anti-replay/downgrade | `seq` < `seq` terakhir di `/var/lib/efn/last-release` (root 0600); `seq` sama tetapi isi berbeda; production: versi semver turun. Rilis identik (sha256 sama) boleh di-deploy ulang |
+
+Tidak ada yang ditulis ke `/opt/efn` sebelum semua cek lolos. Uji regresi: `scripts/host/test-efn-deploy.sh`
+(cosign palsu, 32 kasus; CI job `infra`).
+
+**Rollback ke rilis lama (sengaja):** jalankan workflow Deploy dengan tag lama → seq baru, versi lebih rendah →
+ditolak. Superadmin di host mengizinkan **sekali** untuk arsip tertentu:
+```bash
+# sha256 release.tar.gz rilis yang akan dipakai: tercetak di log job "Bundel rilis" (baris sha256sum)
+echo '<sha256>' > /etc/efn/allow-downgrade && chmod 0600 /etc/efn/allow-downgrade   # dihapus otomatis setelah dipakai
+```
+Rename `deploy.yml` mereset `run_number` → semua deploy ditolak sampai Superadmin menghapus
+`/var/lib/efn/last-release` (catat di register perubahan).
+
+**Rotasi root CA:** sebelum deploy transisi, tambahkan sidik jari root LAMA ke `EFN_PKI_EXTRA_TRUST_SHA256` dan ganti
+`EFN_PKI_ROOT_SHA256` ke root BARU di setiap host (lihat [internal-pki.md](internal-pki.md) §Rotasi root).
+
+**Risiko residu (jujur):** nilai **secret** dari env (password DB, pepper, token) tidak bisa ditandatangani tanpa
+masuk log transparansi Rekor, jadi tetap dipercaya dari kanal SSH. Pemegang kunci SSH deploy dapat mengganti
+secret (mis. password DB → layanan gagal start / data baru dienkripsi kunci penyerang) tetapi tidak dapat
+menjalankan image/skrip lain atau memasang CA lain. Mitigasi: kunci SSH hanya di GitHub Environment ber-approval,
+auditd `-k efn_deploy`, dan baris `logger -t efn-deploy` (journald) yang dikirim ke penyimpanan log terpisah;
+tinjau `journalctl -t efn-deploy` setelah setiap deploy (alert Loki untuk journald host = backlog: Promtail saat
+ini hanya membaca log container).
 
 ### Mekanisme uid: kenapa file secret 0444 di dalam direktori 0750
 

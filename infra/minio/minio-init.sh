@@ -33,6 +33,8 @@ BACKUP_USER="$(read_ak minio_backup_access_key)"
 BFF_USER="$(read_ak minio_bff_access_key)"
 OCR_USER="$(read_ak minio_ocr_access_key)"
 PROM_USER="$(read_ak minio_prometheus_access_key)"
+# Root user acak (SEC-48): secret minio_root_user, sama dengan MINIO_ROOT_USER_FILE service minio
+MINIO_ROOT_USER="$(read_ak minio_root_user)"
 LEGACY_USERS="pgbackup efn-bff efn-ocr efn-prometheus"
 MINIO_URL="${MINIO_URL:-https://minio:9000}"
 MS_BUCKET="${MINIO_BUCKET_MARKET_SCOUT:-market-scout}"
