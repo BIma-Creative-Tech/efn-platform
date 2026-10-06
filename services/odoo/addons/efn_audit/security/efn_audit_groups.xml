@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Grup EFN Audit (docs/08 §5.1). Auditor = baca log; Manager = kelola aturan (implies Auditor).
-     base.group_system -> Manager. Penunjukan auditor per PT menunggu keputusan klien. -->
+     base.group_system -> Manager. Penunjukan auditor per PT menunggu keputusan klien.
+     Gelombang 11 (SEC-45): Auditor Data Pribadi Lintas PT = satu-satunya grup yang membaca log
+     data pribadi TANPA company (kontak pelanggan umumnya tanpa company). Tidak diberikan otomatis
+     ke siapa pun (termasuk admin/Manager); penunjukan = keputusan klien/DPO (auditor holding). -->
 <odoo>
     <record id="module_category_efn_audit" model="ir.module.category">
         <field name="name">EFN Audit</field>
@@ -14,8 +17,15 @@
 
     <record id="group_auditor" model="res.groups">
         <field name="name">Auditor</field>
-        <field name="comment">EFN Audit: Auditor — membaca log audit (company sendiri + log tanpa company).</field>
+        <field name="comment">EFN Audit: Auditor — membaca log audit company yang diizinkan + log tanpa company yang bukan data pribadi (parameter, aturan, server action).</field>
         <field name="privilege_id" ref="res_groups_privilege_efn_audit"/>
+    </record>
+
+    <record id="group_auditor_personal" model="res.groups">
+        <field name="name">Auditor Data Pribadi Lintas PT</field>
+        <field name="comment">EFN Audit: Auditor + log data pribadi tanpa company (kontak/pelanggan lintas PT). Hanya untuk auditor holding/DPO (UU PDP, SEC-45).</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_audit"/>
+        <field name="implied_ids" eval="[Command.link(ref('group_auditor'))]"/>
     </record>
 
     <record id="group_manager" model="res.groups">

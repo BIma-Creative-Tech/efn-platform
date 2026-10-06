@@ -127,12 +127,12 @@ class TestEfnAuditHook(EfnAuditCase):
         self.assertEqual(len(self._logs(country, "write")), 1)
 
     def test_rule_changes_always_audited(self):
-        self.rule.write({"retention_days": 90})
+        self.rule.write({"retention_days": 400})
         log = self.Log.search(
             [("model_name", "=", "efn.audit.rule"), ("res_id", "=", self.rule.id), ("operation", "=", "write")], limit=1
         )
         self.assertTrue(log)
-        self.assertEqual(self._line(log, "retention_days").new_value, "90")
+        self.assertEqual(self._line(log, "retention_days").new_value, "400")
 
     def test_company_of_record_stored(self):
         company_b = self.env["res.company"].create({"name": "PT Audit B"})

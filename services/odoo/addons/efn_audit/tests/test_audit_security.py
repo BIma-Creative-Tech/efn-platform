@@ -109,8 +109,8 @@ class TestEfnAuditSecurity(EfnAuditCase):
         logs.invalidate_recordset(["create_date"])
 
     def test_autovacuum_retention(self):
-        self.env["ir.config_parameter"].sudo().set_param("efn.audit.retention_days", "30")
-        self._age(self.log_a, 40)
+        self.env["ir.config_parameter"].sudo().set_param("efn.audit.retention_days", "365")
+        self._age(self.log_a, 400)
         self._age(self.log_b, 10)
         count = self.Log._gc_efn_audit_logs()
         self.assertGreaterEqual(count, 1)
@@ -122,17 +122,25 @@ class TestEfnAuditSecurity(EfnAuditCase):
 
     def test_autovacuum_rule_retention_and_forever(self):
         rule = self.Rule.search([("model_name", "=", "res.partner")])
-        self._age(self.log_a | self.log_b, 50)
+        self._age(self.log_a | self.log_b, 400)
         self.env["ir.config_parameter"].sudo().set_param("efn.audit.retention_days", "0")
         self.Log._gc_efn_audit_logs()
         self.assertTrue(self.log_a.exists(), "0 = simpan selamanya")
-        rule.retention_days = 40
+        rule.retention_days = 365
         self.Log._gc_efn_audit_logs()
         self.assertFalse((self.log_a | self.log_b).exists(), "retensi per aturan menang")
 
     def test_global_retention_invalid_defaults(self):
-        self.env["ir.config_parameter"].sudo().set_param("efn.audit.retention_days", "abc")
-        self.assertEqual(self.Log._efn_audit_global_retention(), 730)
+        # Lewat SQL (melewati constraint): nilai tidak valid -> 730, terlalu kecil -> minimum.
+        self.env["ir.config_parameter"].sudo().set_param("efn.audit.retention_days", "730")
+        self.env.flush_all()
+        for raw, expected in (("abc", 730), ("10", 365), ("-5", 730), ("0", 0), ("1000", 1000)):
+            self.env.cr.execute(
+                "UPDATE ir_config_parameter SET value = %s WHERE key = 'efn.audit.retention_days'", [raw]
+            )
+            self.env["ir.config_parameter"].invalidate_model(["value"])
+            self.env.registry.clear_cache("stable")
+            self.assertEqual(self.Log._efn_audit_global_retention(), expected, raw)
 
     # ------------------------------------------------------------ erasure
     def test_purge_records(self):

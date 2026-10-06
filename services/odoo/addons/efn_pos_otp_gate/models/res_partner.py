@@ -17,8 +17,12 @@ Aturan:
   pepper belum terpasang.
 - Mengubah/mengosongkan `phone` (dan `mobile` bila ada modul yang menambahkannya) partner tsb
   hanya untuk `point_of_sale.group_pos_manager` atau `base.group_system`; selain itu
-  `AccessError`. Kode server dengan `sudo()` tidak dikunci di lapis 1; cron erasure UU PDP
-  berjalan sebagai OdooBot (superuser) sehingga lolos kedua lapis.
+  `AccessError`. Keputusan SELALU memakai uid asli (`env.user`), juga di dalam `sudo()`
+  (SEC-44, review r4): kode server yang menulis HP dengan `sudo()` atas nama kasir ikut ditolak.
+  Proses internal sah berjalan sebagai OdooBot (`SUPERUSER_ID`, mis. cron erasure UU PDP) dan
+  lolos lewat `_is_superuser()`; kode kustom yang perlu mengubah HP member atas nama sistem
+  harus memakai `with_user(SUPERUSER_ID)` secara eksplisit (tercatat sebagai OdooBot di
+  efn_audit), bukan sekadar `sudo()`.
 - Perubahan oleh manajer dicatat di chatter partner (nomor ter-mask, UU PDP) + log aplikasi
   tanpa nomor. Jejak audit formal: `efn_audit` (aturan res.partner di `efn_setup_audit`,
   HP ter-mask) — hook `base` berada di dasar MRO sehingga melihat `vals` final setelah
@@ -31,7 +35,8 @@ Dua lapis (keduanya perlu):
    yang menulis lewat `sudo()` dengan uid kasir). Constraint dijalankan oleh `BaseModel.write`
    (selalu dengan sudo, jadi keputusan memakai uid asli; `sudo()` dengan uid kasir ikut
    ditolak = fail-closed). Penanda "sudah dicek lapis 1" disimpan di `cr.cache` (bukan
-   context, yang bisa diisi klien lewat RPC).
+   context, yang bisa diisi klien lewat RPC) dan HANYA diisi setelah pemeriksaan lapis 1
+   benar-benar dijalankan dan lolos (SEC-44: dulu diisi juga saat lapis 1 dilewati karena sudo).
 """
 
 import logging
@@ -64,8 +69,11 @@ class ResPartner(models.Model):
         fnames = [f for f in PHONE_FIELDS if f in vals and f in self._fields]
         if not fnames:
             return super().write(vals)
+        # SEC-44: tanpa pengecualian `env.su` — keputusan dari uid asli (`env.user`), sudo atau
+        # tidak. Bila sampai baris setelah pemeriksaan, pemeriksaan sudah dijalankan dan lolos.
+        # OdooBot (proses sistem: cron erasure, data modul) selalu boleh, tanpa catatan chatter.
         changed = self.browse()
-        if not self.env.su:
+        if not self.env.user._is_superuser():
             members = self._efn_otp_member_partners().sudo()
             changed = members.filtered(lambda p: any((p[f] or False) != (vals[f] or False) for f in fnames))
             if changed and not self._efn_can_change_member_phone():

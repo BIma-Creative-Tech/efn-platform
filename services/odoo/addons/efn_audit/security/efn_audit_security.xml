@@ -1,17 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Multi-company: auditor hanya melihat log company yang diizinkan + log tanpa company
-     (parameter sistem, aturan audit, kontak tanpa company). -->
-<odoo noupdate="1">
-    <record id="efn_audit_log_rule_company" model="ir.rule">
-        <field name="name">EFN Audit Log: multi-company</field>
+<!-- Multi-company + data pribadi (Gelombang 11, SEC-45/SEC-46). Rule dengan grup berbeda
+     digabung OR oleh Odoo:
+     - Auditor: log company yang diizinkan (company sekarang ATAU company sebelum dipindah) +
+       log tanpa company yang BUKAN data pribadi (parameter, aturan audit, server action, cron).
+     - Auditor Data Pribadi Lintas PT: + semua log tanpa company (termasuk kontak pelanggan).
+     noupdate="0" (sengaja): rule keamanan mengikuti kode saat upgrade. Rule lama
+     efn_audit_log_rule_company / efn_audit_log_line_rule_company (noupdate) dihapus oleh
+     migrations/19.0.1.1.0/post-migrate.py. -->
+<odoo>
+    <record id="efn_audit_log_rule_auditor" model="ir.rule">
+        <field name="name">EFN Audit Log: auditor (company + non-pribadi)</field>
         <field name="model_id" ref="model_efn_audit_log"/>
         <field name="groups" eval="[Command.link(ref('group_auditor'))]"/>
-        <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+        <field name="domain_force">['|', '|', ('company_id', 'in', company_ids), ('prev_company_id', 'in', company_ids), '&amp;', ('company_id', '=', False), ('is_personal', '=', False)]</field>
     </record>
-    <record id="efn_audit_log_line_rule_company" model="ir.rule">
-        <field name="name">EFN Audit Log Line: multi-company</field>
+    <record id="efn_audit_log_rule_personal" model="ir.rule">
+        <field name="name">EFN Audit Log: auditor data pribadi lintas PT</field>
+        <field name="model_id" ref="model_efn_audit_log"/>
+        <field name="groups" eval="[Command.link(ref('group_auditor_personal'))]"/>
+        <field name="domain_force">['|', '|', ('company_id', '=', False), ('company_id', 'in', company_ids), ('prev_company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_audit_log_line_rule_auditor" model="ir.rule">
+        <field name="name">EFN Audit Log Line: auditor (company + non-pribadi)</field>
         <field name="model_id" ref="model_efn_audit_log_line"/>
         <field name="groups" eval="[Command.link(ref('group_auditor'))]"/>
-        <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+        <field name="domain_force">['|', '|', ('company_id', 'in', company_ids), ('prev_company_id', 'in', company_ids), '&amp;', ('company_id', '=', False), ('is_personal', '=', False)]</field>
+    </record>
+    <record id="efn_audit_log_line_rule_personal" model="ir.rule">
+        <field name="name">EFN Audit Log Line: auditor data pribadi lintas PT</field>
+        <field name="model_id" ref="model_efn_audit_log_line"/>
+        <field name="groups" eval="[Command.link(ref('group_auditor_personal'))]"/>
+        <field name="domain_force">['|', '|', ('company_id', '=', False), ('company_id', 'in', company_ids), ('prev_company_id', 'in', company_ids)]</field>
     </record>
 </odoo>

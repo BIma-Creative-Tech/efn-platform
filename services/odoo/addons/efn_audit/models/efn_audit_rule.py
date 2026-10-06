@@ -7,13 +7,26 @@ sebagai **data polos** (namedtuple berisi frozenset nama field), bukan recordset
 overhead write pada model tanpa aturan hanya satu lookup cache. Cache dibersihkan setiap
 create/write/unlink aturan (`registry.clear_cache()`, disinyalkan ke worker lain oleh registry),
 jadi aturan baru langsung aktif tanpa restart.
+
+Gelombang 11 (SEC-43): model kontrol (`CONTROL_SPECS` di audit_policy.py: parameter `efn.audit.*`,
+server action, cron, modul, otomasi) + `efn.audit.rule` SELALU diaudit dengan spesifikasi bawaan;
+aturan admin hanya bisa menambah. Retensi per aturan minimal `MIN_RETENTION_DAYS` (0 = global).
+Aturan bawaan (punya xmlid, mis. dari efn_setup_audit) tidak bisa dihapus — hanya diarsipkan
+(tercatat) — kecuali lewat uninstall modul pemiliknya.
 """
 
+import logging
 from collections import namedtuple
 
 from odoo import _, api, fields, models, tools
-from odoo.exceptions import ValidationError
+from odoo.exceptions import UserError, ValidationError
 from odoo.tools.safe_eval import safe_eval
+
+from odoo.addons.base.models.ir_model import MODULE_UNINSTALL_FLAG
+
+from .audit_policy import CONTROL_SPECS, MIN_RETENTION_DAYS, retention_error
+
+_logger = logging.getLogger(__name__)
 
 # Denylist global (tidak pernah dicatat walau dipilih eksplisit di aturan).
 DENY_SUBSTRINGS = ("password", "secret", "token", "api_key", "totp", "signature")
@@ -27,9 +40,10 @@ NON_ELIGIBLE_NAMES = frozenset({"website_message_ids"})
 SELF_RULE_MODEL = "efn.audit.rule"
 LOG_MODELS = frozenset({"efn.audit.log", "efn.audit.log.line"})
 
+# `filters`: tuple string domain; record diaudit bila cocok SALAH SATU. Tuple kosong = semua record.
 RuleData = namedtuple(
     "RuleData",
-    "rule_id log_create log_write log_unlink tracked masked filter_domain capture_unlink",
+    "rule_id log_create log_write log_unlink tracked masked filters capture_unlink",
 )
 
 
@@ -116,7 +130,7 @@ class EfnAuditRule(models.Model):
     retention_days = fields.Integer(
         string="Retensi (hari)",
         default=0,
-        help="0 = pakai parameter efn.audit.retention_days.",
+        help=f"0 = pakai parameter efn.audit.retention_days. Selain 0 minimal {MIN_RETENTION_DAYS} hari (SEC-43).",
     )
 
     _model_uniq = models.Constraint("unique(model_id)", "Satu aturan audit per model.")
@@ -158,8 +172,10 @@ class EfnAuditRule(models.Model):
 
     @api.constrains("retention_days")
     def _check_retention(self):
-        if any(rule.retention_days < 0 for rule in self):
-            raise ValidationError(_("Retensi tidak boleh negatif."))
+        for rule in self:
+            message = retention_error(rule.retention_days)
+            if message:
+                raise ValidationError(message)
 
     # ------------------------------------------------------------------- CRUD
     @api.model_create_multi
@@ -174,6 +190,17 @@ class EfnAuditRule(models.Model):
         return res
 
     def unlink(self):
+        # Aturan bawaan (punya xmlid) hanya boleh diarsipkan (tercatat), tidak dihapus — kecuali
+        # oleh proses uninstall modul pemiliknya (yang sendiri tercatat lewat ir.module.module).
+        if not self.env.context.get(MODULE_UNINSTALL_FLAG):
+            builtin = (
+                self.env["ir.model.data"].sudo().search_count([("model", "=", self._name), ("res_id", "in", self.ids)])
+            )
+            if builtin:
+                raise UserError(
+                    _("Aturan audit bawaan tidak dapat dihapus. Arsipkan saja (perubahan tercatat di log audit).")
+                )
+        _logger.warning("EFN audit: user %s menghapus %d aturan audit %s", self.env.uid, len(self), self.ids)
         res = super().unlink()
         self.env.registry.clear_cache()
         return res
@@ -189,10 +216,11 @@ class EfnAuditRule(models.Model):
         model = self.env[model_name]
         if model_name == SELF_RULE_MODEL:
             # Perubahan aturan audit selalu dicatat (tidak bisa dimatikan lewat data).
-            return RuleData(False, True, True, True, eligible_fields(model), frozenset(), "", True)
+            return RuleData(False, True, True, True, eligible_fields(model), frozenset(), (), True)
+        builtin = self._efn_builtin_rule(model)
         rule = self.sudo().search([("model_name", "=", model_name), ("active", "=", True)], limit=1)
         if not rule:
-            return None
+            return builtin
         if rule.tracked_field_ids:
             tracked = {
                 f.name
@@ -202,13 +230,40 @@ class EfnAuditRule(models.Model):
         else:
             tracked = set(eligible_fields(model))
         tracked -= set(rule.excluded_field_ids.mapped("name"))
-        return RuleData(
+        data = RuleData(
             rule.id,
             rule.log_create,
             rule.log_write,
             rule.log_unlink,
             frozenset(tracked),
             frozenset(rule.masked_field_ids.mapped("name")),
-            rule.filter_domain or "",
+            (rule.filter_domain,) if rule.filter_domain else (),
             rule.capture_unlink_values,
         )
+        if builtin is None:
+            return data
+        # Model kontrol: aturan admin hanya MENAMBAH pada spesifikasi bawaan (tidak bisa mengurangi).
+        filters = () if not (builtin.filters and data.filters) else builtin.filters + data.filters
+        return data._replace(
+            log_create=True,
+            log_write=True,
+            log_unlink=True,
+            tracked=data.tracked | builtin.tracked,
+            filters=filters,
+            capture_unlink=True,
+        )
+
+    @api.model
+    def _efn_builtin_rule(self, model):
+        """Spesifikasi audit bawaan untuk model kontrol (SEC-43), atau None."""
+        spec = CONTROL_SPECS.get(model._name)
+        if spec is None or model._transient or model._abstract:
+            return None
+        fnames, domain = spec
+        if fnames is None:
+            tracked = eligible_fields(model)
+        else:
+            tracked = frozenset(
+                f for f in fnames if f in model._fields and not is_denied(model._name, f, model._fields[f])
+            )
+        return RuleData(False, True, True, True, tracked, frozenset(), (domain,) if domain else (), True)

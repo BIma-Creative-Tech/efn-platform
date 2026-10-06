@@ -307,3 +307,39 @@ Odoo 19 `ir.module.module._get_desc` merender README sebagai RST dengan docutils
 - Action binding "Lihat log audit" belum dibuat (opsional). `filter_domain` tanpa variabel eval (`uid`, `context_today`).
 - Dokumen yang masih menyebut OCA/auditlog sebagai rujukan (bukan pemakaian aktif): `docs/06`, `docs/08` (spesifikasi/referensi), `docs/testing/E2E_SMOKE_REPORT.md` (historis), ADR & laporan agent — wewenang architect/functional.
 - CI GitHub belum dijalankan (gerbang akhir). Tidak ada commit (instruksi lead).
+
+# Gelombang 11 — SEC-43, SEC-44, SEC-45 (+ SEC-46 sebagian), review r4 (6 Okt 2026)
+
+## Perubahan
+| Modul / file | Perubahan |
+|---|---|
+| `efn_audit` 19.0.1.1.0 — `models/audit_policy.py` (**baru**) | Kebijakan hard-code: `MIN_RETENTION_DAYS = 365`, validasi/efektif retensi; `CONTROL_SPECS` (model kontrol selalu diaudit: `ir.config_parameter` key `efn.audit.%`, `ir.actions.server` semua field termasuk `code`, `ir.cron` jadwal/user/aktif tanpa `nextcall/lastcall/failure_*`, `ir.module.module.state`, `base.automation`); `PROTECTED_LOG_MODELS`; pola PII (`is_pii_field`) + mask HP/email/NPWP-NIK (`****` + 3 digit akhir)/nama orang (inisial) |
+| `models/ir_config_parameter.py` (**baru**) | Constraint `efn.audit.retention_days`: bukan bilangan bulat ≥ 0 atau 1..364 → `ValidationError` dengan pesan jelas |
+| `models/efn_audit_rule.py` | `retention_days` 1..364 ditolak; `_efn_get_rule` menggabungkan spesifikasi bawaan (aturan admin hanya menambah: field gabungan, filter OR, flag dipaksa aktif; arsip aturan tidak mematikan bawaan); `RuleData.filters` (tuple domain, OR); aturan ber-xmlid tidak bisa dihapus (hanya diarsipkan, tercatat) kecuali konteks uninstall modul; log WARNING saat aturan dihapus |
+| `models/efn_audit_log.py` | GC: retensi efektif ≥ 365 (nilai kecil via SQL diperlakukan minimum), log `purge` + log model kontrol tidak pernah dihapus (juga di `_efn_audit_purge_logs` langsung); `_efn_audit_purge_records` menolak model kontrol; field `prev_company_id` (SEC-46) dan `is_personal` (compute stored; line: related stored); log purge dikirim ke sink |
+| `models/base.py` | Masking wajib berbasis pola nama field + nama orang (non-perusahaan); `res_name` model orang = `model,id`; `prev_company_id` hanya bila `company_id` di vals (tanpa query lain); sink `odoo.addons.efn_audit.sink` (`EFN_AUDIT_SINK {json}` via `cr.postcommit`, tanpa nilai/PII) untuk log model kontrol |
+| `security/efn_audit_groups.xml`, `security/efn_audit_security.xml`, `migrations/19.0.1.1.0/post-migrate.py` | Grup baru **Auditor Data Pribadi Lintas PT** (`group_auditor_personal`, tidak diberikan ke siapa pun default, admin juga tidak). Rule baru (noupdate=0): auditor = company/prev_company diizinkan + log tanpa company non-pribadi; auditor pribadi = + semua log tanpa company. Migrasi menghapus rule lama noupdate |
+| `views/efn_audit_log_views.xml`, `README.md` | Field baru di form; README: klaim "immutable termasuk admin" dikoreksi → "immutable terhadap ORM/RPC, admin sistem tetap dapat memengaruhi lewat kode/uninstall/DB — dimitigasi"; bagian tamper resistance, masking, record rule, test, batasan |
+| `efn_pos_otp_gate/models/res_partner.py` (SEC-44) | Syarat `not env.su` dihapus: keputusan selalu dari uid asli; OdooBot (`_is_superuser`) lolos tanpa chatter; penanda `cr.cache` hanya diisi setelah pemeriksaan benar-benar jalan dan lolos. Docstring + README |
+| `efn_setup_audit` data (komentar saja) | Catatan SEC-45 (masking di kode) dan minimum retensi SEC-43. Data `noupdate` tidak diubah |
+| Test | `efn_audit/tests/test_audit_tamper.py` (9), `test_audit_privacy.py` (5), penyesuaian `test_audit_security.py` (retensi 365/400 hari, parameter tidak valid via SQL), `test_audit_hook.py` (retensi 400); `efn_pos_otp_gate/tests/test_partner_phone_lock.py` +3 (sudo+kasir via `write` sungguhan ditolak di lapis 1 dan lapis 2 `models.Model.write`, penanda tidak tertinggal; manajer via sudo boleh + chatter; OdooBot boleh tanpa chatter) |
+
+## Verifikasi (container, harness tanpa OCA, DB sementara — stack dev tidak disentuh)
+- `odoo-test-nooca.sh` (build image + `check-odoo-deps` + install/test 10 modul + `efn_setup_security`): **166/166 lulus, 0 failed, 0 error, 0 baris ERROR/CRITICAL** (65 WARNING = jalur negatif yang diharapkan). efn_audit 47, efn_pos_otp_gate 49, efn_privacy 23, efn_setup_audit 9, efn_core 32, efn_pos_payment_gateway 20, efn_kitting 9, efn_setup_company 5.
+- Uji upgrade: install `efn_setup_audit` dari HEAD (efn_audit 19.0.1.0.0) + log partner → `-u efn_audit,efn_setup_audit` dengan kode baru: exit 0, 0 ERROR, rule lama hilang, 4 rule baru, `is_personal` log lama = True, versi 19.0.1.1.0.
+- `check-odoo-deps.sh`: 11 modul, 0 pelanggaran. ruff 0.16.10 `check` + `format --check` bersih (`services/odoo/addons`).
+
+## Batas yang diakui (dokumentasi, bukan bug)
+- Admin sistem tetap bisa: server action berisi kode yang memanggil metode privat atau SQL (`env.cr.execute`), uninstall `efn_audit`, akses DB. Sekarang setiap pembuatan/perubahan server action/cron/modul **tercatat** (log tidak ikut GC) dan **dikirim ke sink setelah commit**, tetapi kode itu sendiri juga bisa menghapus baris tersebut lewat SQL dalam transaksi yang sama — baris sink Loki dari commit **sebelumnya** (mis. pembuatan server action) tetap ada. Mitigasi kuat = `base.group_system` hanya Superadmin + sink eksternal.
+
+## Spesifikasi untuk lead (di luar batas file saya)
+1. **devsecops (Loki/Alertmanager):** Promtail sudah mengirim log Odoo; tambahkan rule Loki `{service="odoo"} |= "EFN_AUDIT_SINK"` → alert (severity warning) bila `"model": "ir.config_parameter"` / `"efn.audit.rule"` / `"ir.actions.server"` / `"ir.cron"` / `"ir.module.module"` atau `"operation": "purge"` dengan note bukan `retensi:`/`erasure:`; juga alert pada `EFN audit: user .* menghapus .* aturan audit`. Pertimbangkan retensi Loki khusus stream ini > 30 hari.
+2. **data-ai (ETL ClickHouse):** tabel `efn_audit_log` + `efn_audit_log_line` (append-only, incremental by `id`), user ClickHouse tanpa `ALTER/DELETE`, kolom `row_hash = sha256(prev_hash || payload)` dihitung di ETL; laporan rekonsiliasi harian "id hilang di PostgreSQL vs ClickHouse" (gap id = indikasi penghapusan di luar GC; GC sendiri tercatat sebagai log `purge` berisi jumlah).
+3. **architect/DPO:** `PDP_DATA_INVENTORY.md` — tambahkan `efn.audit.log` (data: HP/email/NPWP ter-mask, nama orang ter-mask, uid pelaku; retensi 730 hari default, minimum 365; pembaca: Auditor per PT, Auditor Data Pribadi Lintas PT; dihapus saat erasure). Penunjukan anggota `group_auditor_personal` = keputusan klien. Nilai `MIN_RETENTION_DAYS` (365) menunggu Q-6/Q-49.
+4. **SEC-43 butir 5:** batasi `base.group_system` ke Superadmin (functional/devsecops).
+
+## Belum / sisa
+- Hash berantai di Odoo tidak dibuat (dipilih di ETL, butir 2). Uji server action nyata yang memanggil `_efn_audit_purge_logs` lewat UI belum dijalankan; test hanya memastikan pembuatan/perubahan kodenya tercatat dan log terlindung tidak terhapus oleh metode itu.
+- SEC-46: `prev_company_id` dikerjakan; `with_user(SUPERUSER_ID)` kehilangan uid pemicu dan `_write`/SQL/upgrade tetap di luar cakupan (README). Index untuk `=like` purge erasure belum.
+- `res.groups`/`res.users.group_ids` belum masuk model kontrol (bisa ditambah admin lewat aturan).
+- Sink baru diverifikasi di test (`assertLogs` setelah `postcommit.run()`); belum dilihat di Loki stack nyata. CI GitHub belum dijalankan. Tidak ada commit.

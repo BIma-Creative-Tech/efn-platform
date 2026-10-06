@@ -36,6 +36,8 @@
                             <field name="res_id"/>
                             <field name="res_name"/>
                             <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="prev_company_id" groups="base.group_multi_company" invisible="not prev_company_id"/>
+                            <field name="is_personal"/>
                             <field name="rule_id"/>
                             <field name="note" invisible="not note"/>
                         </group>

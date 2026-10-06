@@ -17,18 +17,37 @@ Alur hemat `write(vals)`:
 6. `read` nilai baru; 7. hanya field yang berubah; 8. satu `create` batch log + baris.
 
 Kegagalan menulis log tidak ditelan: exception naik dan transaksi gagal (log audit = kontrol).
+
+Gelombang 11:
+- SEC-45: masking wajib berbasis pola nama field (HP/email/NPWP/NIK/rekening — `is_pii_field`)
+  berlaku walau tidak dipilih di aturan; nama orang di-mask inisial; `res_name` model orang =
+  `model,id`.
+- SEC-46: bila `company_id` berubah pada write, company lama disimpan (`prev_company_id`) agar
+  auditor PT lama tetap melihat jejak pemindahan.
+- SEC-43: log model kontrol + log purge juga dikirim ke logger sink `odoo.addons.efn_audit.sink`
+  SETELAH commit (Loki = salinan di luar kendali admin Odoo; tanpa nilai, tanpa PII).
 """
 
 import json
+import logging
 
 from odoo import api, models
 from odoo.tools import float_repr, html2plaintext
 from odoo.tools.safe_eval import safe_eval
 
-from odoo.addons.efn_core.models.efn_bff_client import mask_phone, normalize_member_ref
+from .audit_policy import (
+    PERSON_NAME_FIELDS,
+    PERSONAL_MODELS,
+    PROTECTED_LOG_MODELS,
+    is_pii_field,
+    mask_email,  # noqa: F401 - API lama (dipakai test & modul lain)
+    mask_value,
+)
 
 MAX_VALUE_LEN = 2000
 MAX_X2M_NAMES = 20
+
+_sink_logger = logging.getLogger("odoo.addons.efn_audit.sink")
 
 
 def _truncate(text):
@@ -37,24 +56,34 @@ def _truncate(text):
     return text
 
 
-def mask_email(value):
-    """`budi@example.com` -> `b***@example.com` (UU PDP)."""
-    if not value or "@" not in value:
-        return "****"
-    local, _sep, domain = value.partition("@")
-    return f"{local[:1]}***@{domain}"
+def emit_sink(cr, events):
+    """Kirim ringkasan log kontrol ke logger sink setelah commit (Promtail -> Loki).
+
+    Isi: id log, operasi, model, res_id, uid, flag sudo, nama field berubah, catatan purge — tanpa
+    nilai lama/baru dan tanpa PII. Transaksi yang di-rollback tidak menghasilkan baris sink.
+    """
+    if not events:
+        return
+    payload = [json.dumps(event, sort_keys=True, default=str) for event in events]
+
+    def _emit():
+        for line in payload:
+            _sink_logger.info("EFN_AUDIT_SINK %s", line)
+
+    cr.postcommit.add(_emit)
 
 
-def mask_value(fname, text):
-    """Samarkan nilai field PII SEBELUM masuk DB. Nilai lengkap tidak pernah disimpan."""
-    if not text:
-        return text
-    lname = fname.lower()
-    if "phone" in lname or "mobile" in lname:
-        return mask_phone(normalize_member_ref(text) or text)
-    if "email" in lname:
-        return mask_email(text)
-    return f"****({len(text)})"
+def sink_event(log_vals, log_id):
+    return {
+        "log_id": log_id,
+        "operation": log_vals.get("operation"),
+        "model": log_vals.get("model_name"),
+        "res_id": log_vals.get("res_id") or None,
+        "uid": log_vals.get("user_id"),
+        "sudo": bool(log_vals.get("is_sudo")),
+        "fields": sorted(line[2]["field_name"] for line in log_vals.get("line_ids", ()) if line[2].get("field_name")),
+        "note": log_vals.get("note") or None,
+    }
 
 
 def _normalize(field, value):
@@ -80,9 +109,12 @@ class Base(models.AbstractModel):
 
     def _efn_audit_filter(self, rule):
         records = self.browse([rid for rid in self._ids if isinstance(rid, int)])
-        if records and rule.filter_domain:
-            domain = safe_eval(rule.filter_domain)
-            records = self.browse(records.sudo().with_context(active_test=False).filtered_domain(domain)._ids)
+        if records and rule.filters:
+            source = records.sudo().with_context(active_test=False)
+            matched = source.browse()
+            for text in rule.filters:
+                matched |= source.filtered_domain(safe_eval(text))
+            records = self.browse([rid for rid in records._ids if rid in set(matched._ids)])
         return records
 
     def _efn_audit_read(self, fnames):
@@ -121,10 +153,21 @@ class Base(models.AbstractModel):
         if not records:
             return super().write(vals)
         old = records._efn_audit_read(fnames)
+        prev_company = records._efn_audit_company_before(vals)
         result = super().write(vals)
         new = records._efn_audit_read(fnames)
-        records._efn_audit_log("write", rule, {rid: fnames for rid in records.ids}, old, new)
+        records._efn_audit_log("write", rule, {rid: fnames for rid in records.ids}, old, new, prev_company=prev_company)
         return result
+
+    def _efn_audit_company_before(self, vals):
+        """SEC-46: {id: company_id lama} hanya bila `company_id` ada di vals (tanpa query lain)."""
+        if "company_id" not in vals or not self._efn_audit_has_company():
+            return {}
+        return {record.id: record.company_id.id for record in self.sudo().with_context(active_test=False)}
+
+    def _efn_audit_has_company(self):
+        field = self._fields.get("company_id")
+        return field is not None and field.type == "many2one" and field.comodel_name == "res.company"
 
     def unlink(self):
         rule = self._efn_audit_rule()
@@ -137,21 +180,21 @@ class Base(models.AbstractModel):
         return super().unlink()
 
     # ----------------------------------------------------------------- log
-    def _efn_audit_log(self, operation, rule, fnames_by_id, old, new):
+    def _efn_audit_log(self, operation, rule, fnames_by_id, old, new, prev_company=None):
         """Satu create batch `efn.audit.log` (+ baris) untuk record `self`."""
         formatter = _Formatter(self.env, self, rule, old, new)
-        company_field = self._fields.get("company_id")
-        has_company = (
-            company_field is not None
-            and company_field.type == "many2one"
-            and company_field.comodel_name == "res.company"
-        )
+        has_company = self._efn_audit_has_company()
         records = self.sudo().with_context(active_test=False)
         model_id = self.env["ir.model"]._get_id(self._name)
         field_ids = self.env["ir.model.fields"]._get_ids(self._name)
+        personal = self._name in PERSONAL_MODELS
+        name_fields = PERSON_NAME_FIELDS.get(self._name, frozenset())
+        prev_company = prev_company or {}
         vals_list = []
         for record in records:
             lines = []
+            # Nama perusahaan (res.partner is_company) bukan data pribadi -> tidak di-mask.
+            person = bool(name_fields) and not (self._name == "res.partner" and record.is_company)
             for fname in fnames_by_id.get(record.id, ()):
                 field = self._fields[fname]
                 o_raw = old.get(record.id, {}).get(fname) if operation != "create" else None
@@ -160,9 +203,11 @@ class Base(models.AbstractModel):
                     continue
                 o_text, o_ref = formatter.format(field, o_raw) if operation != "create" else (False, False)
                 n_text, n_ref = formatter.format(field, n_raw) if operation != "unlink" else (False, False)
-                masked = fname in rule.masked
+                kind = "name" if (person and fname in name_fields) else None
+                # SEC-45: masking wajib (pola nama field / nama orang) + pilihan aturan.
+                masked = fname in rule.masked or kind == "name" or is_pii_field(fname, field)
                 if masked:
-                    o_text, n_text = mask_value(fname, o_text), mask_value(fname, n_text)
+                    o_text, n_text = mask_value(fname, o_text, kind), mask_value(fname, n_text, kind)
                     o_ref = n_ref = False
                 lines.append(
                     {
@@ -178,6 +223,8 @@ class Base(models.AbstractModel):
                 )
             if operation == "write" and not lines:
                 continue
+            company_id = record.company_id.id if has_company else False
+            previous = prev_company.get(record.id) or False
             vals_list.append(
                 {
                     "user_id": self.env.uid,
@@ -186,14 +233,18 @@ class Base(models.AbstractModel):
                     "model_id": model_id,
                     "model_name": self._name,
                     "res_id": record.id,
-                    "res_name": _truncate(record.display_name or ""),
-                    "company_id": record.company_id.id if has_company else False,
+                    # SEC-45: model orang tanpa nama (auditor membuka record bila berhak).
+                    "res_name": f"{self._name},{record.id}" if personal else _truncate(record.display_name or ""),
+                    "company_id": company_id,
+                    "prev_company_id": previous if previous != company_id else False,
                     "rule_id": rule.rule_id or False,
                     "line_ids": [(0, 0, line) for line in lines],
                 }
             )
         if vals_list:
-            self.env["efn.audit.log"].sudo().create(vals_list)
+            logs = self.env["efn.audit.log"].sudo().create(vals_list)
+            if self._name in PROTECTED_LOG_MODELS:
+                emit_sink(self.env.cr, [sink_event(v, log.id) for v, log in zip(vals_list, logs, strict=True)])
 
 
 class _Formatter:

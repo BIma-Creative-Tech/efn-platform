@@ -3,10 +3,11 @@
 Nomor di bawah fiktif khusus test (bukan data pribadi nyata).
 """
 
-from odoo import SUPERUSER_ID, Command
+from odoo import SUPERUSER_ID, Command, models
 from odoo.exceptions import AccessError
 from odoo.tests import tagged
 
+from odoo.addons.efn_pos_otp_gate.models.res_partner import CHECKED_KEY
 from odoo.addons.efn_pos_otp_gate.models.res_partner import ResPartner as EfnResPartner
 from odoo.addons.point_of_sale.tests.common import TestPoSCommon
 
@@ -164,3 +165,36 @@ class TestEfnPartnerPhoneLock(TestPoSCommon):
             self.member.with_user(self.cashier).with_context(
                 efn_member_phone_checked=True
             )._efn_check_member_phone_change()
+
+    # ------------------------------------------------------------- SEC-44
+    def test_sudo_with_cashier_uid_rejected_via_write(self):
+        """SEC-44 (review r4): `sudo()` dengan uid kasir tidak melewati kunci (lewat write sungguhan)."""
+        with self.assertRaises(AccessError):
+            self.member.with_user(self.cashier).sudo().write({"phone": PHONE_NEW})
+        with self.assertRaises(AccessError):
+            self.member.with_user(self.cashier).sudo().write({"phone": False})
+        # Penanda "sudah dicek" tidak tertinggal setelah penolakan.
+        self.assertFalse(self.env.cr.cache.get(CHECKED_KEY))
+        # Lapis 2 sendiri (write kelas dasar, melewati override lapis 1) juga menolak sudo + kasir.
+        with self.assertRaises(AccessError):
+            models.Model.write(self.member.with_user(self.cashier).sudo(), {"phone": PHONE_NEW})
+        self.member.invalidate_recordset()
+        self.assertEqual(self.member.phone, PHONE_MEMBER)
+        # HP non-member tetap bebas, juga via sudo.
+        self.plain.with_user(self.cashier).sudo().write({"phone": PHONE_NEW})
+        self.assertEqual(self.plain.phone, PHONE_NEW)
+
+    def test_sudo_with_manager_uid_allowed_and_recorded(self):
+        self.member.with_user(self.manager).sudo().write({"phone": PHONE_NEW})
+        self.assertEqual(self.member.phone, PHONE_NEW)
+        notes = self._notes(self.member)
+        self.assertEqual(len(notes), 1, "perubahan oleh manajer via sudo tetap tercatat di chatter")
+        self.assertEqual(notes.author_id, self.manager.partner_id)
+
+    def test_odoobot_internal_process_allowed(self):
+        """Proses internal sah (OdooBot, mis. cron erasure) tetap jalan; tanpa catatan chatter."""
+        self.member.with_user(SUPERUSER_ID).write({"phone": PHONE_NEW})
+        self.assertEqual(self.member.phone, PHONE_NEW)
+        self.member.with_user(SUPERUSER_ID).sudo().write({"phone": False})
+        self.assertFalse(self.member.phone)
+        self.assertFalse(self._notes(self.member))

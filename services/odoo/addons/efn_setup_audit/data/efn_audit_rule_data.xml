@@ -95,7 +95,10 @@
          Create tidak dicatat (volume POS/Super-App). HP & email DISIMPAN TER-MASK (UU PDP:
          minimisasi) — nilai lengkap tidak pernah masuk log. efn_member_hash sengaja tidak
          dilacak. Log partner dihapus saat erasure (efn_privacy). Odoo 19 res.partner tidak
-         punya field `mobile` (dihapus di base). -->
+         punya field `mobile` (dihapus di base).
+         Gelombang 11 (SEC-45): efn_audit juga me-mask `vat` (NPWP/NIK), nama orang, dan field
+         HP/email apa pun berdasarkan pola nama field di KODE - daftar di bawah tidak lagi
+         satu-satunya pelindung; res_name partner = res.partner,id. -->
     <record id="audit_rule_res_partner" model="efn.audit.rule">
         <field name="name">EFN - Kontak/Pelanggan (ubah &amp; hapus)</field>
         <field name="model_id" ref="base.model_res_partner"/>

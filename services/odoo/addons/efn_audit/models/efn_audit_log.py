@@ -6,6 +6,14 @@
   metode privat `_efn_audit_purge_*` yang memasang penanda di `cr.cache` (bukan context —
   context bisa diisi klien lewat RPC; pola sama dengan efn_pos_otp_gate).
 - Retensi: `@api.autovacuum` `_gc_efn_audit_logs`. Erasure UU PDP: `_efn_audit_purge_records`.
+- Gelombang 11 (SEC-43): retensi efektif minimal `MIN_RETENTION_DAYS` (hard-coded); log operasi
+  `purge` dan log model kontrol (`PROTECTED_LOG_MODELS`: aturan audit, parameter, server action,
+  cron, modul, otomasi) TIDAK PERNAH dihapus GC; log purge juga dikirim ke sink (Loki).
+- SEC-45: `is_personal` (log model orang / baris ter-mask) membatasi log tanpa company ke grup
+  Auditor Data Pribadi Lintas PT. SEC-46: `prev_company_id` (company sebelum write).
+
+Batas (diakui, README): metode privat dapat dipanggil kode server action oleh admin sistem;
+mitigasinya = jejak server action yang tidak ikut GC + sink eksternal setelah commit.
 """
 
 import logging
@@ -15,11 +23,22 @@ from datetime import timedelta
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 
+from .audit_policy import (
+    DEFAULT_RETENTION_DAYS,
+    PERSONAL_MODELS,
+    PROTECTED_LOG_MODELS,
+    RETENTION_PARAM,
+    effective_retention,
+    parse_retention,
+)
+from .base import emit_sink, sink_event
+
 _logger = logging.getLogger(__name__)
 
 PURGE_KEY = "efn_audit_purge"
-DEFAULT_RETENTION_DAYS = 730
 GC_BATCH = 10000
+# Domain yang dikecualikan dari GC retensi (SEC-43).
+GC_PROTECTED_DOMAIN = [("operation", "!=", "purge"), ("model_name", "not in", sorted(PROTECTED_LOG_MODELS))]
 OPERATIONS = [
     ("create", "Create"),
     ("write", "Write"),
@@ -65,11 +84,31 @@ class EfnAuditLog(models.Model):
     res_id = fields.Many2oneReference(string="ID Record", model_field="model_name", index=True)
     res_name = fields.Char(string="Record")
     company_id = fields.Many2one("res.company", string="Company", index=True, ondelete="set null")
+    prev_company_id = fields.Many2one(
+        "res.company",
+        string="Company Sebelumnya",
+        index="btree_not_null",
+        ondelete="set null",
+        help="Diisi bila write memindahkan record ke company lain (SEC-46).",
+    )
+    is_personal = fields.Boolean(
+        string="Data Pribadi",
+        compute="_compute_is_personal",
+        store=True,
+        index=True,
+        help="Log model orang (kontak/user) atau memuat nilai ter-mask. Tanpa company hanya "
+        "terbaca oleh grup Auditor Data Pribadi Lintas PT (SEC-45).",
+    )
     rule_id = fields.Many2one("efn.audit.rule", string="Aturan", ondelete="set null")
     line_ids = fields.One2many("efn.audit.log.line", "log_id", string="Perubahan")
     note = fields.Char(help="Hanya untuk operasi purge: jumlah & alasan, tanpa PII.")
 
     _model_res_idx = models.Index("(model_name, res_id)")
+
+    @api.depends("model_name", "line_ids.is_masked")
+    def _compute_is_personal(self):
+        for log in self:
+            log.is_personal = log.model_name in PERSONAL_MODELS or any(log.line_ids.mapped("is_masked"))
 
     @api.depends("model_name", "res_id", "operation")
     def _compute_display_name(self):
@@ -92,16 +131,17 @@ class EfnAuditLog(models.Model):
     # ------------------------------------------------------------- purge
     @api.model
     def _efn_audit_write_purge_log(self, model_name, note):
-        return self.sudo().create(
-            {
-                "user_id": self.env.uid,
-                "is_sudo": self.env.su,
-                "operation": "purge",
-                "model_name": model_name,
-                "model_id": self.env["ir.model"]._get_id(model_name) if model_name in self.env else False,
-                "note": note,
-            }
-        )
+        vals = {
+            "user_id": self.env.uid,
+            "is_sudo": self.env.su,
+            "operation": "purge",
+            "model_name": model_name,
+            "model_id": self.env["ir.model"]._get_id(model_name) if model_name in self.env else False,
+            "note": note,
+        }
+        log = self.sudo().create(vals)
+        emit_sink(self.env.cr, [sink_event(vals, log.id)])
+        return log
 
     @api.model
     def _efn_audit_purge_records(self, model_name, res_ids):
@@ -111,6 +151,9 @@ class EfnAuditLog(models.Model):
         ids = {int(i) for i in res_ids or () if i}
         if not ids or not model_name:
             return 0
+        if model_name in PROTECTED_LOG_MODELS:
+            # Erasure hanya untuk data pribadi; log kontrol (SEC-43) tidak boleh dihapus lewat jalur ini.
+            raise UserError(_("Log audit model kontrol %s tidak dapat di-purge.", model_name))
         Log = self.sudo().with_context(active_test=False)
         Line = self.env["efn.audit.log.line"].sudo()
         logs = Log.search([("model_name", "=", model_name), ("res_id", "in", list(ids))])
@@ -134,28 +177,31 @@ class EfnAuditLog(models.Model):
         return count
 
     def _efn_audit_purge_logs(self, note):
-        """Hapus log `self` (retensi) + tulis satu log purge."""
-        count = len(self)
+        """Hapus log `self` (retensi) + tulis satu log purge. Log terlindungi (purge/model
+        kontrol, SEC-43) tidak pernah ikut terhapus walau ada di `self`."""
+        logs = self.filtered(lambda log: log.operation != "purge" and log.model_name not in PROTECTED_LOG_MODELS)
+        count = len(logs)
         if not count:
             return 0
         with _purge_allowed(self.env.cr):
-            self.sudo().unlink()
+            logs.sudo().unlink()
         self._efn_audit_write_purge_log("efn.audit.log", note.format(count=count))
         return count
 
     @api.model
     def _efn_audit_global_retention(self):
-        raw = self.env["ir.config_parameter"].sudo().get_param("efn.audit.retention_days")
-        try:
-            days = int(raw)
-        except (TypeError, ValueError):
+        """Hari retensi global efektif. Hilang/tidak valid -> 730; 0 = selamanya; nilai > 0 di
+        bawah minimum (mis. ditulis lewat SQL melewati constraint) -> minimum (SEC-43)."""
+        days = parse_retention(self.env["ir.config_parameter"].sudo().get_param(RETENTION_PARAM))
+        if days is None:
             return DEFAULT_RETENTION_DAYS
-        return days if days >= 0 else DEFAULT_RETENTION_DAYS
+        return effective_retention(days)
 
     @api.autovacuum
     def _gc_efn_audit_logs(self):
         """Retensi: `rule.retention_days` (>0) atau parameter global `efn.audit.retention_days`
-        (tidak valid/hilang -> 730; 0 = simpan selamanya). Maks GC_BATCH log per jalan."""
+        (tidak valid/hilang -> 730; 0 = simpan selamanya), keduanya minimal `MIN_RETENTION_DAYS`.
+        Log purge & log model kontrol tidak pernah dihapus. Maks GC_BATCH log per jalan."""
         Log = self.sudo().with_context(active_test=False)
         now = fields.Datetime.now()
         remaining = GC_BATCH
@@ -166,13 +212,17 @@ class EfnAuditLog(models.Model):
         for rule in own_rules:
             if remaining <= 0:
                 break
-            cutoff = now - timedelta(days=rule.retention_days)
-            found = Log.search([("rule_id", "=", rule.id), ("create_date", "<", cutoff)], limit=remaining, order="id")
+            cutoff = now - timedelta(days=effective_retention(rule.retention_days))
+            found = Log.search(
+                [("rule_id", "=", rule.id), ("create_date", "<", cutoff), *GC_PROTECTED_DOMAIN],
+                limit=remaining,
+                order="id",
+            )
             to_delete |= found
             remaining -= len(found)
         global_days = self._efn_audit_global_retention()
         if global_days and remaining > 0:
-            domain = [("create_date", "<", now - timedelta(days=global_days))]
+            domain = [("create_date", "<", now - timedelta(days=global_days)), *GC_PROTECTED_DOMAIN]
             if own_rules:
                 domain.append(("rule_id", "not in", own_rules.ids))
             to_delete |= Log.search(domain, limit=remaining, order="id")
@@ -189,6 +239,8 @@ class EfnAuditLogLine(models.Model):
 
     log_id = fields.Many2one("efn.audit.log", required=True, ondelete="cascade", index=True)
     company_id = fields.Many2one(related="log_id.company_id", store=True, index=True)
+    prev_company_id = fields.Many2one(related="log_id.prev_company_id", store=True, index="btree_not_null")
+    is_personal = fields.Boolean(related="log_id.is_personal", store=True, index=True)
     field_id = fields.Many2one("ir.model.fields", string="Field", ondelete="set null")
     field_name = fields.Char(string="Nama Field", index=True)
     field_label = fields.Char(string="Label")
