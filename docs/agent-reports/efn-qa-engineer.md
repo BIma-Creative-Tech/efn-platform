@@ -277,3 +277,29 @@ Integration QA di stack dev nyata (core + data + ai + observability + ops). Deta
 - frontend: `superapp-web` dev 77 % dari limit 512 MiB.
 - Test unit service tidak diulang (tidak ada kode service yang diubah). Belum diverifikasi: POS OWL, halaman
   status penghapusan di browser, VLM di GPU.
+
+# Gelombang 11 — Penutupan runtime: regresi, sink audit nyata, SEC-44 lewat RPC (2026-10-06)
+
+Diverifikasi di **runtime nyata** (Docker Desktop, semua profil termasuk `ai`), basis `26110ef`. Detail & bukti:
+`docs/testing/E2E_SMOKE_REPORT.md` bagian Gelombang 11. Tidak ada commit.
+
+## G11.1 Hasil
+| Item | Hasil |
+|---|---|
+| Build ulang image (digest dipin) + `up -d` | sukses; `odoo`, `minio`, `minio-init` di-recreate; 0 container `unhealthy` |
+| Upgrade `-u efn_audit,efn_setup_audit,efn_pos_otp_gate` | exit 0, 0 ERROR/WARNING; post-migrate 19.0.1.1.0 menghapus 2 rule lama; restart `healthy`, 0 ERROR sepanjang sesi |
+| Smoke penuh a b c d f e g (satu run) | **PASS=108 FAIL=0** (a 21, b 17, c 16, d 7, f 5, e 24, g 19); PII di log 7 service = 0 |
+| Sink audit nyata | perubahan lewat Traefik wg-https + login TOTP + `/web/dataset/call_kw` (sysadmin QA): 3 baris `EFN_AUDIT_SINK` di stdout Odoo → Loki `stream="efn_audit_sink"` (query mTLS sertifikat grafana; tanpa sertifikat ditolak) → **3 alert `EfnAuditControlChange`** di Alertmanager (≈16 s) |
+| Retensi 30 | `ValidationError` "minimal 365 hari… Nilai 30 ditolak"; tidak ada baris sink untuk transaksi gagal |
+| SEC-44 RPC | kasir (POS user + Contact Creation): `write`, `web_save`, kosongkan, batch, context palsu → `AccessError`; **jalur sudo nyata** portal `/my/address/submit` (`partner_sudo.write` dengan uid kasir) → 403 + rollback; manajer POS boleh + chatter ter-mask |
+
+## G11.2 Perbaikan
+Tidak ada (tidak ditemukan bug integrasi). File yang diubah: hanya laporan ini dan `docs/testing/E2E_SMOKE_REPORT.md`.
+
+## G11.3 Sisa
+- `EfnAuditUnexpectedPurge` dengan Odoo nyata **belum**: uji purge via server action ditolak pengaman izin sesi agen
+  (penghapusan log audit); butuh izin eksplisit user. Jalur ini sudah diuji devsecops dengan baris sintetis.
+- Observasi: traceback lengkap di `data.debug` error JSON-RPC Odoo (standar, internal-only) → security-reviewer;
+  grup diubah via `odoo shell` tidak meng-invalidasi cache worker → ubah lewat UI/RPC; `group_pos_user` tanpa
+  Contact Creation tidak bisa onboarding pelanggan (keputusan konfigurasi functional).
+- Data QA tertinggal di DB dev: user `qa_g11_*`, partner 60, challenge `QA-G11-SEC44`, server action 591.

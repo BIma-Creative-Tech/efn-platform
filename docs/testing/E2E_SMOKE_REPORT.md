@@ -1,4 +1,4 @@
-# Laporan Smoke E2E — stack dev dengan TLS/mTLS aktif (Gelombang 8 + regresi Gelombang 10, 6 Okt 2026)
+# Laporan Smoke E2E — stack dev dengan TLS/mTLS aktif (Gelombang 8 + regresi Gelombang 10 & 11, 6 Okt 2026)
 
 Penulis: integration engineer (efn-qa-engineer + efn-devsecops-engineer) di bawah efn-lead.
 Skrip: `scripts/smoke/` (`run-e2e-smoke.sh`, `bff_smoke.py`, `odoo_pos_smoke.py`; README di folder itu).
@@ -214,3 +214,98 @@ BFF/Next.js/Odoo/pytest tidak diulang. `ruff check` + `ruff format --check` (0.1
 bash scripts/smoke/run-e2e-smoke.sh        # a b c d f e g (±20 menit)
 bash scripts/smoke/run-e2e-smoke.sh v      # VLM nyata (butuh model; ±2 menit di CPU)
 ```
+
+# Gelombang 11 — Penutupan: regresi penuh + sink audit nyata + SEC-44 lewat RPC (6 Okt 2026)
+
+Basis `26110ef` (SEC-41/42/43/44/45/47/48). Tidak ada commit. Tidak ada volume yang dihapus.
+
+## G11.1 Lingkungan & persiapan
+
+- Docker Desktop (WSL2) 16 CPU / 16 GB; profil `core` + `data` + `ai` + `observability` + `ops` (Ollama dengan
+  `qwen2.5vl:3b` termuat). 37 container jalan, tidak ada yang `unhealthy` (8 tanpa healthcheck: exporter, Loki,
+  Prometheus, Alertmanager, Grafana).
+- `$DC --profile core --profile data --profile ai --profile observability --profile ops build`: semua image lokal
+  (base dipin `tag@sha256`, SEC-47) dibangun ulang sukses; hanya `odoo`, `minio`, `minio-init` yang berubah sehingga
+  di-recreate oleh `up -d` (sidecar `odoo-tls`/`odoo-ws-tls` ikut di-recreate bersamaan).
+- Upgrade Odoo (Odoo dihentikan dulu): `odoo -d efn_odoo --stop-after-init -u efn_audit,efn_setup_audit,efn_pos_otp_gate`
+  → **exit 0, 0 baris ERROR/CRITICAL, 0 WARNING**. Post-migrate `19.0.1.1.0` jalan: 2 rule lama
+  (`efn_audit_log_rule_company`, `efn_audit_log_line_rule_company`) dihapus. Versi terpasang: `efn_audit 19.0.1.1.0`,
+  `efn_setup_audit 19.0.2.0.0`, `efn_pos_otp_gate 19.0.1.5.0`. Setelah start: `healthy`, 0 baris ERROR di log Odoo
+  sepanjang sesi.
+
+## G11.2 Smoke E2E penuh
+
+`bash scripts/smoke/run-e2e-smoke.sh` (a b c d f e g, satu run, ±7 menit): **`RINGKASAN: PASS=108 FAIL=0`, exit 0**.
+Per skenario: a 21, b 17, c 16, d 7, f 5, e 24, g 19 (termasuk cek s3-gateway gelombang 11 dari devsecops:
+`g.s3gw_encoded_variants_blocked`, `g.s3gw_encoded_value_get_forwarded`). PII di log (regex HP 62/08 + 812/813/877/899,
+5000 baris terakhir) `api-gateway`, `ocr-worker`, `etl`, `superapp-web`, `odoo`, `traefik`, `s3-gateway` = 0.
+
+## G11.3 Sink audit nyata (SEC-43): Odoo → Promtail → Loki → ruler → Alertmanager
+
+Perubahan dilakukan lewat **jalur staf nyata**: `curl` host → Traefik `wg-https` (`https://erp.efn.local:9443`) →
+`odoo-tls` (mTLS) → Odoo; login form `/web/login` + **TOTP** (`/web/login/totp`, kebijakan `employee_required`
+aktif) sebagai user QA `qa_g11_sysadmin` (`base.group_system`, uid 5), lalu `/web/dataset/call_kw` (jalur UI).
+User QA (`qa_g11_sysadmin`, `qa_g11_cashier`, `qa_g11_posmgr`, company PT EFN F&B) dibuat di DB dev dengan
+password + secret TOTP acak yang disimpan hanya di `/tmp` container Odoo (0600), tidak pernah dicetak.
+
+| Langkah | Hasil |
+|---|---|
+| `ir.config_parameter.set_param('efn.audit.retention_days', '400')` | OK (730 → 400) |
+| `set_param(..., '30')` | **ditolak** `odoo.exceptions.ValidationError`: "Retensi log audit minimal 365 hari (SEC-43; 0 = simpan selamanya). Nilai 30 ditolak." Nilai tetap 400; **tidak ada** baris sink untuk transaksi yang di-rollback (postcommit) |
+| `ir.actions.server.create` (server action dummy `QA G11 dummy server action`, id 591, `code: pass`) | OK |
+| stdout Odoo | 3 baris `odoo.addons.efn_audit.sink: EFN_AUDIT_SINK {...}`: `write ir.config_parameter fields=[value] uid=5 sudo=false log_id=21`; `create ir.actions.server fields=[code,model_id,name,state] log_id=22`; `write ir.actions.server fields=[update_path] sudo=true log_id=23` (tanpa nilai/PII) |
+| Loki `query_range {stream="efn_audit_sink"}` lewat mTLS (dari container Grafana, sertifikat klien `grafana`, CA internal) | 3 baris, 2 stream: `{audit_op="create"/"write", container="efn-odoo-1", service="odoo", stream="efn_audit_sink"}` |
+| Loki tanpa sertifikat klien / HTTP polos | `tlsv13 alert certificate required` / koneksi ditutup |
+| Alertmanager `GET /alertmanager/api/v2/alerts` (mTLS) | **3 alert `EfnAuditControlChange`** (severity warning, team security, receiver `ops-webhook`, `startsAt 10:08:42Z` = evaluasi ruler pertama ±16 s setelah perubahan): `write ir.config_parameter uid 5 sudo=false`, `create ir.actions.server uid 5`, `write ir.actions.server uid 5 sudo=true` |
+| Pemulihan | `efn.audit.retention_days` dikembalikan ke 730 lewat RPC yang sama (perubahan kontrol ke-4, tercatat) |
+
+Tidak dijalankan: **purge lewat server action** (memicu `EfnAuditUnexpectedPurge`). Langkah ini (mengubah kode
+server action agar memanggil `_efn_audit_purge_logs`, termasuk percobaan pada log terlindung) **ditolak oleh
+pengaman izin sesi agen** karena berupa penghapusan log audit. Jalur alert purge sudah diuji devsecops dengan
+baris sintetis; uji dengan Odoo nyata menunggu izin eksplisit user. Server action dummy id 591 dibiarkan
+(`code: pass`, tidak terikat ke menu/otomasi).
+
+## G11.4 SEC-44 lewat RPC nyata (kunci HP member)
+
+Partner member = SMOKE Member C (id 49, punya riwayat `efn.pos.otp.challenge`). Kasir `qa_g11_cashier`
+(`point_of_sale.group_pos_user` + `base.group_partner_manager`/Contact Creation; tanpa grup itu kasir sudah ditolak
+ACL standar untuk create/write partner apa pun, konsisten dengan `efn_setup_pos/README.md`), login TOTP lewat Traefik.
+
+| # | Panggilan (kasir) | Hasil |
+|---|---|---|
+| T1 | `res.partner.write([49], {phone})` | **ditolak** `AccessError` "Nomor HP pelanggan ini sudah dipakai untuk OTP/promo member… (SEC-07)" |
+| T2 | idem + context `{"efn_member_phone_checked": [49]}` (meniru penanda) | **ditolak** (penanda di `cr.cache`, bukan context) |
+| T3 | `web_save` (jalur form UI) | **ditolak** |
+| T4 | `write({phone: false})` (mengosongkan) | **ditolak** |
+| T4b | `write([49, 60], ...)` campur member + non-member | **ditolak** seluruhnya (atomik) |
+| T4c | `write` HP yang sama (tanpa perubahan) | OK (bukan perubahan) |
+| T5 | `write` field lain (`street`) partner member | OK |
+| T6/T7 | `create` partner baru ber-HP; ubah HP partner non-member | OK |
+| **T8 (jalur sudo)** | `POST /my/address/submit` (portal standar: `partner_sudo.write(address_values)` = **sudo dengan uid kasir**), partner milik kasir sendiri (id 58) dijadikan member | **ditolak**: HTTP 403, log `EFN POS: user 6 ditolak mengubah HP 1 partner member (SEC-07)`, transaksi di-rollback (HP & zip tidak berubah). Sebelum SEC-44 jalur ini lolos karena pengecualian `env.su` |
+| T8b | idem untuk partner lain (49) | 403 `Forbidden` standar portal (`_can_be_edited_by_current_customer`) |
+| Kontrol | `qa_g11_posmgr` (`group_pos_manager` + Contact Creation) `write([49], {phone})` | OK + chatter "Nomor HP member diubah oleh QA G11 posmgr (SEC-07). phone: 62812\*\*\*\*049 → 62812\*\*\*\*981" (ter-mask); `efn.audit.log` uid 7 ter-mask. HP dikembalikan ke nilai asal |
+
+Tidak ditemukan method RPC standar POS 19.0 lain yang menulis HP partner dengan `sudo()` (`point_of_sale/models/res_partner.py`
+tidak punya `create_from_ui`); jalur sudo nyata yang dapat dijangkau kasir adalah portal `/my/address/submit` (T8).
+
+## G11.5 Bug / observasi
+
+**Tidak ada bug produk atau integrasi yang ditemukan; tidak ada file kode yang diubah.**
+
+1. (security-reviewer, observasi) Respons error JSON-RPC Odoo menyertakan `data.debug` = traceback Python lengkap
+   untuk user yang login (perilaku standar Odoo; hanya terjangkau dari `wg-https`). Pertimbangkan apakah perlu
+   disaring di produksi.
+2. (runbook) Mengubah grup user lewat `odoo shell` (proses terpisah) tidak meng-invalidasi cache `has_group`
+   worker Odoo yang berjalan; perubahan baru berlaku setelah perubahan lewat UI/RPC atau restart. Ubah hak akses
+   lewat UI/RPC.
+3. (functional, konfirmasi PoC) `group_pos_user` saja tidak bisa membuat/mengubah partner (ACL standar:
+   Contact/Creation, Inventory/Administrator, Manufacturing/Administrator). Onboarding pelanggan di kasir butuh
+   `base.group_partner_manager`: keputusan konfigurasi (butir "cek di PoC" README `efn_setup_pos` kini terkonfirmasi
+   di runtime).
+4. Data QA tertinggal di DB dev: user `qa_g11_*` (id 5–7, partner 57–59), partner `QA G11 walk-in` (60), challenge
+   OTP `QA-G11-SEC44` untuk partner 58, server action 591. Hapus bila perlu.
+
+## G11.6 Belum diverifikasi
+- `EfnAuditUnexpectedPurge` / `EfnAuditRetentionPurgeBurst` dengan Odoo nyata (G11.3; butuh izin user).
+- Pengiriman Alertmanager ke receiver nyata (`ops-webhook` dev); retensi 400 hari stream (konfigurasi, tidak diuji waktu).
+- Test unit service tidak diulang (tidak ada kode yang diubah); CI GitHub belum dijalankan untuk `26110ef`.
