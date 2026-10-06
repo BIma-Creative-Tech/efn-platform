@@ -240,3 +240,40 @@ Tidak ada kode service yang diubah → test unit tidak diulang. `ruff` 0.16.10 (
 bersih untuk skrip baru; `docker compose config -q` dev & prod lolos. Yang belum diverifikasi di runtime: frontend
 POS OWL (skrip memanggil metode server yang sama), jalur VLM dengan model nyata, profil `observability`/`ops` di
 gelombang ini (lihat gelombang 7), webhook payment provider nyata, export DSAR besar.
+
+# Gelombang 10 — Regresi runtime setelah gelombang 9–10 (2026-10-06)
+
+Integration QA di stack dev nyata (core + data + ai + observability + ops). Detail & bukti:
+`docs/testing/E2E_SMOKE_REPORT.md` bagian "Gelombang 10".
+
+## G10.1 Hasil
+- **Run 2 orkestrator (a b c d f e g): 106/106 cek lolos, exit 0** (a 21, b 17, c 15, d 7, f 5, e 24, g 17).
+  Run 1: 104/106; dua kegagalan berasal dari bug di skrip baru saya (diperbaiki), bukan bug produk.
+- **Skenario VLM `v`: 13/13** dengan `qwen2.5vl:3b` (`vlm=ok`, ±70 s per foto di CPU) setelah timeout dev 240 s.
+- Persiapan: build ulang (hanya api-gateway & superapp-web berubah), `04-platform-v3-6.sql` idempoten exit 0,
+  `-u` 9 modul efn_* exit 0 (0 ERROR), DB sudah tanpa `auditlog`. Tidak ada volume yang dihapus.
+
+## G10.2 Skenario baru (smoke)
+| Permintaan | Cek | Status |
+|---|---|---|
+| (a) `efn.audit.log` harga produk & HP partner ter-mask | `c.audit_price_logged`, `c.audit_phone_masked`, `c.audit_partner_e_logged` | Lolos |
+| (b) setelah DSAR: log audit partner terpurge, `member_hash` NULL, tombstone acak ≠ turunan request_id | `e.odoo_audit_logs_purged`, `e.odoo_pending_markers_cleared`, `e.dsar_member_hash_nulled`, `e.tombstone_random_unlinkable` | Lolos |
+| (c) receipt DSAR BFF & Next.js: 200 tanpa PII, salah/hilang 404 | `dsar.receipt_*` (4), `web.dsar_receipt_*` (4, termasuk lintas situs 403) | Lolos |
+| (d) `POST /v1/pos/loyalty/balance` dari Odoo 200, GET lama 404 | `c.pos_balance_post_200` (saldo = Super-App), `c.pos_balance_old_get_404`, `c.pos_balance_invalid_400` | Lolos |
+| (e) upload Market Scout lewat s3-gateway, access key lama ditolak | `b.upload_via_s3_gateway`, `b.old_access_keys_rejected`, `b.random_access_keys_authenticate` | Lolos |
+| VLM nyata | `report_vlm.model_used` (skenario opsional `v`) | Lolos (dengan timeout dev 240 s) |
+
+## G10.3 Perbaikan
+1. `infra/compose/docker-compose.dev.yml` (ocr-worker): `OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-240}`.
+   Bukti: worker `VLM tidak tersedia (ReadTimeout)` pada 90 s; Ollama `prompt eval 67465 ms / 1300 token`. Setelah
+   fix: `vlm=ok ms=69340`.
+2. Skrip smoke (`run-e2e-smoke.sh`, `odoo_pos_smoke.py`, `bff_smoke.py`, README) + runbook §3b. ruff/shellcheck
+   bersih.
+
+## G10.4 Sisa (bukan blocker; detail G10.5 di laporan E2E)
+- data-ai/devsecops: VLM CPU ±70 s per foto → resize gambar sebelum VLM dan/atau GPU produksi (ADR-008).
+- devsecops: `log-format` s3-gateway pakai `%Tt` (menyesatkan, tambah `%Ta`); satu watchdog HAProxy 739 ms;
+  `docker logs --since` s3-gateway tidak andal di Docker Desktop → cek ingest Loki.
+- frontend: `superapp-web` dev 77 % dari limit 512 MiB.
+- Test unit service tidak diulang (tidak ada kode service yang diubah). Belum diverifikasi: POS OWL, halaman
+  status penghapusan di browser, VLM di GPU.

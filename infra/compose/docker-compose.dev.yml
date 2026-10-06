@@ -147,6 +147,9 @@ services:
     image: efn/ai-ocr-worker:dev
     environment:
       APP_ENV: dev
+      # Gelombang 10: Ollama dev = CPU saja; qwen2.5vl:3b butuh ±70 s per foto baru (prompt eval ±1300 token gambar
+      # @ ±19 tok/s) -> default worker 90 s mepet (ReadTimeout -> flagged/vlm_unavailable). Produksi (GPU) tetap 90 s.
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-240}
 
   # Docker Desktop (WSL2): "/" bukan shared/slave mount -> propagasi rslave ditolak daemon. Target sama = mengganti
   # entri base (/:/host:ro,rslave). Produksi (Linux) tetap rslave.

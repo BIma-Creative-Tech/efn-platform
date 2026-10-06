@@ -30,7 +30,20 @@ Prasyarat: stack dev `core` + `data` + `ai` jalan dan modul `efn_*` terpasang (`
   bayar, program promo ber-OTP, partner fiktif) di DB dev.
 - Tidak ada secret di file mana pun: password dibaca di dalam container. Nomor HP = nomor fiktif acak per run.
 
+## Cek tambahan gelombang 10
+- `b`: upload foto lewat `s3-gateway` (PUT BFF + GET ocr-worker untuk id report run ini di log HAProxy); access key
+  lama bernama tetap (`efn-bff`, `efn-ocr`, `pgbackup`) → `InvalidAccessKeyId`, access key acak → terautentikasi
+  (`AccessDenied` untuk ListBucket = least privilege). `docker logs --since` tidak andal untuk container
+  s3-gateway di Docker Desktop, jadi skrip memakai `--tail`.
+- `c`: `efn.audit.log` mencatat `list_price` produk dan HP partner ter-mask (`is_masked`, `****`, digit tengah tidak
+  ada); `POST /v1/pos/loyalty/balance` dari Odoo (service key) 200 = saldo Super-App, GET lama 404, body salah 400.
+- `e`: tombstone acak (≠ `sha256("erased:"||request_id)`, ≠ member_hash, sama di report & ledger, tidak ada di
+  `dsar_request`); `dsar_request.member_hash` NULL setelah `completed`; log audit partner subjek terhapus + log
+  `purge` tanpa id; penanda `efn.privacy.erasure.pending` kosong; receipt DSAR via BFF dan via Next.js
+  `/api/dsar/requests/:id` (cookie `efn_dsar_receipt`): 200 tanpa PII, receipt salah/hilang 404, lintas situs 403.
+
 ## Belum
 - Tidak masuk CI (butuh stack penuh + ±15 menit). Kandidat job nightly pada runner self-hosted.
 - Frontend POS (OWL) tidak disentuh: skrip memanggil metode server yang sama dengan frontend.
-- Jalur VLM dengan model nyata (lihat laporan E2E: Ollama 0.5.4 tidak bisa memuat `qwen2.5vl`).
+- Jalur VLM dengan model nyata: subperintah `report_vlm` tidak termasuk run default (butuh model `qwen2.5vl:3b`
+  ±3,2 GB, lihat E2E_SMOKE_REPORT gelombang 10).

@@ -16,7 +16,8 @@ Subperintah (state di `SMOKE_STATE`, JSON):
   report       upload foto sintetis -> 202 -> poll status sampai final -> GET /v1/me (poin)
   report_dup   upload foto yang sama lagi (anti-fraud duplikat)
   delete       reauth step-up -> DELETE /v1/me (+receipt_token, step-up sekali pakai SEC-40)
-  requests     GET /v1/me/requests + GET /v1/dsar/requests/:id (X-DSAR-Receipt, R6)
+  requests     GET /v1/me/requests + GET /v1/dsar/requests/:id (X-DSAR-Receipt, R6) + Next.js
+               /api/dsar/requests/:id (cookie efn_dsar_receipt)
 """
 
 import base64
@@ -333,6 +334,8 @@ def cmd_report_vlm():
     jpeg = make_jpeg(name, "Rp 3.500", uuid.uuid4().hex[:8], noisy=True)
     _rid, final = submit_report(st, jpeg, name, 3500, "report_vlm")
     result("report_vlm.final", final is not None, final=final)
+    # Dengan model terpasang, jalur VLM harus benar-benar dipakai (bukan fallback vlm_unavailable).
+    result("report_vlm.model_used", (final or {}).get("reason") not in (None, "vlm_unavailable"), final=final)
 
 
 # ------------------------------------------------------------------ skenario e
@@ -377,12 +380,31 @@ def cmd_requests():
     keys = {"id", "type", "status", "requested_at", "scheduled_at", "completed_at"}
     ok = s == 200 and isinstance(b, dict) and b.get("id") == rid and set(b) == keys
     result("dsar.receipt_status", ok, http=s, status=(b or {}).get("status") if isinstance(b, dict) else None)
+    receipt_body = b
     i = len(receipt) - 10
     bad = receipt[:i] + ("B" if receipt[i] == "A" else "A") + receipt[i + 1 :]
     s, _, _, _ = req("GET", f"/v1/dsar/requests/{rid}", headers={"X-DSAR-Receipt": bad})
     result("dsar.receipt_wrong_404", s == 404, http=s)
     s, _, _, _ = req("GET", f"/v1/dsar/requests/{rid}")
     result("dsar.receipt_missing_404", s == 404, http=s)
+    pii = [PHONE, PHONE[2:], PHONE[4:]]
+    dumped = json.dumps(receipt_body)
+    result("dsar.receipt_no_pii", receipt_body is not None and not any(p and p in dumped for p in pii))
+    # R6 lewat Next.js: cookie HttpOnly efn_dsar_receipt (Path /api/dsar) -> route handler -> BFF. Tanpa sesi.
+    same = {"Sec-Fetch-Site": "same-origin"}
+    path = f"/api/dsar/requests/{rid}"
+    s, b, _, _ = req("GET", path, host=WEB_HOST, headers={**same, "Cookie": f"efn_dsar_receipt={receipt}"})
+    web_keys = {"id", "status", "requested_at", "scheduled_at", "completed_at"}
+    ok = s == 200 and isinstance(b, dict) and b.get("id") == rid and set(b) <= web_keys
+    ok = ok and not any(p in json.dumps(b) for p in pii) and receipt not in json.dumps(b)
+    result("web.dsar_receipt_status", ok, http=s, keys=sorted(b) if isinstance(b, dict) else None)
+    s, _, _, _ = req("GET", path, host=WEB_HOST, headers={**same, "Cookie": f"efn_dsar_receipt={bad}"})
+    result("web.dsar_receipt_wrong_404", s == 404, http=s)
+    s, _, _, _ = req("GET", path, host=WEB_HOST, headers=same)
+    result("web.dsar_receipt_missing_404", s == 404, http=s)
+    cross = {"Sec-Fetch-Site": "cross-site", "Cookie": f"efn_dsar_receipt={receipt}"}
+    s, _, _, _ = req("GET", path, host=WEB_HOST, headers=cross)
+    result("web.dsar_receipt_cross_site_rejected", s == 403, http=s)
 
 
 if __name__ == "__main__":

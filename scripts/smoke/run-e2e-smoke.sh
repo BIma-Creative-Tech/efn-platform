@@ -9,7 +9,8 @@
 # Tidak ada secret di skrip: password dibaca DI DALAM container dari /run/secrets. Nomor HP = nomor fiktif acak.
 # Idempoten: setiap run memakai nomor, order, dan foto baru; data Odoo smoke (config/produk/metode) dipakai ulang.
 #
-# Pemakaian (Git Bash/Linux):  bash scripts/smoke/run-e2e-smoke.sh [a b c d e f g]   (default: semua)
+# Pemakaian (Git Bash/Linux):  bash scripts/smoke/run-e2e-smoke.sh [a b c d e f g v]   (default: a b c d f e g;
+#   v = jalur VLM nyata, opsional, butuh model OLLAMA_VISION_MODEL di Ollama)
 # Keluaran: baris `SMOKE_RESULT {...}` + ringkasan PASS/FAIL; exit 1 bila ada FAIL.
 set -euo pipefail
 
@@ -115,6 +116,34 @@ scenario_b() {
   local notif
   notif="$(grep -F "notify.push price_hunter_valid" "${WORK}/bff.log" | grep -cF "${MASKED}: sent" || true)"
   check "b.notification_recorded" "$([[ "$notif" -ge 1 ]] && echo 1 || echo 0)" "notify.push price_hunter_valid count=$notif"
+  # Gelombang 10 (docs/04 §8.12/§8.14): foto masuk lewat filter s3-gateway; access key lama bernama tetap ditolak,
+  # access key acak lolos autentikasi (AccessDenied = policy least-privilege, bukan InvalidAccessKeyId).
+  # `docker logs --since` tidak andal untuk log HAProxy ini (Docker Desktop membaca file log lama, gelombang 10):
+  # pakai --tail lalu cari id report dari run ini (PUT oleh BFF + GET oleh ocr-worker).
+  local gw repid
+  repid="$(sed -nE 's/.*"report_id": "([0-9a-f-]{36})".*/\1/p' "${WORK}/state.json" 2>/dev/null || true)"
+  gw="$(docker logs --tail 400 "${P}-s3-gateway-1" 2>&1 | grep -F "${repid:-none}" | grep -oE ' (PUT|GET) [^ ]+ 200 ' | awk '{print $1}' | sort -u | tr '\n' ' ')"
+  check "b.upload_via_s3_gateway" "$([[ -n "$repid" && "$gw" == *GET* && "$gw" == *PUT* ]] && echo 1 || echo 0)" "report=$repid metode 200 di log s3-gateway: $gw"
+  local sw keys
+  sw="$(cd "$ROOT/secrets" && pwd)"; command -v cygpath > /dev/null && sw="$(cygpath -w "$sw")"
+  keys="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data -v "${sw}:/s:ro" --entrypoint /bin/sh "${P}/minio:dev" -c '
+    export MC_CONFIG_DIR=/tmp/.mc; mkdir -p /tmp/.mc/certs/CAs && cp /s/efn_ca_crt.txt /tmp/.mc/certs/CAs/ca.crt
+    t() { mc alias set --api S3v4 k https://s3-gateway:9000 "$1" "$(cat "/s/$2")" > /dev/null 2>&1
+          r="$(mc ls k/market-scout/reports/ 2>&1 | tail -1)"
+          case "$r" in *"does not exist"*) echo -n "$3=invalid ";; *"Access Denied"*) echo -n "$3=authn ";; *) echo -n "$3=other ";; esac; }
+    t efn-bff minio_bff_secret.txt old_bff; t efn-ocr minio_ocr_secret.txt old_ocr
+    t pgbackup minio_backup_password.txt old_backup
+    t "$(cat /s/minio_bff_access_key.txt)" minio_bff_secret.txt new_bff
+    t "$(cat /s/minio_ocr_access_key.txt)" minio_ocr_secret.txt new_ocr' 2>&1 | tail -1)"
+  check "b.old_access_keys_rejected" "$([[ "$keys" == *"old_bff=invalid old_ocr=invalid old_backup=invalid"* ]] && echo 1 || echo 0)" "$keys"
+  check "b.random_access_keys_authenticate" "$([[ "$keys" == *"new_bff=authn new_ocr=authn"* ]] && echo 1 || echo 0)" "$keys"
+}
+
+scenario_v() { # opsional (tidak di default): jalur VLM nyata, butuh model OLLAMA_VISION_MODEL di Ollama
+  echo "== v. Price Hunter jalur VLM (Ollama)"
+  [[ -s "${WORK}/state.json" ]] || py login
+  py consent
+  py report_vlm
 }
 
 scenario_c() {
@@ -138,6 +167,18 @@ scenario_c() {
   check "c.paid_reward_without_otp_rejected" "$([[ "$(field ok "$r")" == false && "$(field error "$r")" == UserError ]] && echo 1 || echo 0)" "$r"
   r="$(odoo -e SMOKE_STEP=sync -e SMOKE_ORDER_UUID="$(newuuid)" -e SMOKE_PARTNER=A -e SMOKE_REWARD=0)"
   check "c.regular_order_ok" "$([[ "$(field state "$r")" == paid ]] && echo 1 || echo 0)" "$r"
+  # Gelombang 10 (ADR-031): efn_audit mencatat harga produk & HP partner (ter-mask)
+  r="$(odoo -e SMOKE_STEP=audit -e SMOKE_NEW_PHONE="0813$(rand8)")"
+  check "c.audit_price_logged" "$([[ "$(field price_logged "$r")" == true ]] && echo 1 || echo 0)" "$r"
+  check "c.audit_phone_masked" "$([[ "$(field phone_logged "$r")" == true && "$(field phone_masked "$r")" == true && "$(field phone_raw_hidden "$r")" == true ]] && echo 1 || echo 0)" "$r"
+  check "c.audit_partner_e_logged" "$([[ "$(field partner_e_logs "$r")" -ge 1 ]] && echo 1 || echo 0)" "logs=$(field partner_e_logs "$r")"
+  # R2 (docs/04 §8.13): saldo POS via POST body dengan service key Odoo; GET lama 404
+  local pts
+  r="$(odoo -e SMOKE_STEP=balance)"
+  pts="$(sed -nE 's/.*"points_after": ([0-9]+).*/\1/p' "${WORK}/state.json" 2>/dev/null || true)"
+  check "c.pos_balance_post_200" "$([[ "$(field http "$r")" == 200 && -n "$(field points_balance "$r")" && ( -z "$pts" || "$(field points_balance "$r")" == "$pts" ) ]] && echo 1 || echo 0)" "$r (points_after Super-App=${pts:-?})"
+  check "c.pos_balance_old_get_404" "$([[ "$(field old_get_http "$r")" == 404 ]] && echo 1 || echo 0)" "old_get_http=$(field old_get_http "$r")"
+  check "c.pos_balance_invalid_400" "$([[ "$(field invalid_http "$r")" == 400 ]] && echo 1 || echo 0)" "invalid_http=$(field invalid_http "$r")"
 }
 
 scenario_d() {
@@ -207,6 +248,14 @@ scenario_e() {
   local left
   left="$(psql_platform -c "select (select count(*) from platform.member where member_hash='$mh' and deleted_at is null) || '/' || (select count(*) from platform.price_hunter_report where user_hash='$mh') || '/' || (select count(*) from platform.loyalty_ledger where member_ref_hash='$mh')")"
   check "e.platform_rows_tombstoned" "$([[ "$left" == 0/0/0 ]] && echo 1 || echo 0)" "member_aktif/report/ledger dengan hash lama = $left"
+  # SEC-31 (docs/04 §8.13): tombstone = 32 byte acak, BUKAN sha256("erased:"||request_id) (desain lama) dan bukan
+  # member_hash; tidak tersimpan di dsar_request; satu tombstone per subjek (report & ledger sama).
+  local repid tomb derived tinfo
+  repid="$(sed -nE 's/.*"report_id": "([0-9a-f-]{36})".*/\1/p' "${WORK}/state.json" 2>/dev/null || true)"
+  tomb="$(psql_platform -c "select user_hash from platform.price_hunter_report where id='$repid'")"
+  derived="$(printf 'erased:%s' "$rid" | openssl dgst -sha256 -r | cut -c1-64)"
+  tinfo="$(psql_platform -c "select (select count(*) from platform.loyalty_ledger where member_ref_hash='$tomb') || '/' || (select count(*) from platform.dsar_request where member_hash='$tomb')")"
+  check "e.tombstone_random_unlinkable" "$([[ ${#tomb} == 64 && "$tomb" != "$derived" && "$tomb" != "$mh" && "${tinfo#*/}" == 0 && "${tinfo%/*}" -ge 1 ]] && echo 1 || echo 0)" "len=${#tomb} beda_turunan_request_id=$([[ "$tomb" != "$derived" ]] && echo ya || echo TIDAK) ledger_same_tombstone/dsar_rows=$tinfo"
   r="$(odoo -e SMOKE_STEP=erasure_cron)"
   r="$(odoo -e SMOKE_STEP=partner -e SMOKE_MEMBER_HASH="$mh")"
   check "e.odoo_partner_anonymized" "$([[ "$(field by_hash "$r")" == 0 ]] && echo 1 || echo 0)" "$r"
@@ -216,6 +265,13 @@ scenario_e() {
     sleep 10
   done
   check "e.dsar_completed" "$([[ "$st" == completed* ]] && echo 1 || echo 0)" "$st"
+  local mhn
+  mhn="$(psql_platform -c "select count(*) filter (where member_hash is null) || '/' || count(*) from platform.dsar_request where id='$rid'")"
+  check "e.dsar_member_hash_nulled" "$([[ "$mhn" == 1/1 ]] && echo 1 || echo 0)" "member_hash NULL/baris=$mhn"
+  # efn_audit (ADR-031): log res.partner subjek terhapus, ref lintas model kosong, log purge tanpa id
+  r="$(odoo -e SMOKE_STEP=audit_partner)"
+  check "e.odoo_audit_logs_purged" "$([[ "$(field partner_logs "$r")" == 0 && "$(field ref_lines "$r")" == 0 && "$(field purge_note "$r")" == erasure* && "$(field purge_res_id "$r")" == null ]] && echo 1 || echo 0)" "$r"
+  check "e.odoo_pending_markers_cleared" "$([[ "$(field pending_markers "$r")" == 0 ]] && echo 1 || echo 0)" "pending=$(field pending_markers "$r")"
   local chn
   chn="$( (echo "select count() from efn_dwh.competitor_prices where user_hash='$mh'"; ) | chq)/$(echo "select count() from efn_dwh.loyalty_events where member_hash='$mh'" | chq)"
   check "e.clickhouse_rows_deleted" "$([[ "$chn" == 0/0 ]] && echo 1 || echo 0)" "competitor_prices/loyalty_events=$chn"

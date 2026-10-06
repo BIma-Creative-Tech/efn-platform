@@ -5,7 +5,8 @@
 # terhadap BFF NYATA (HTTPS + CA internal, service key dari /run/secrets). Tidak ada secret di file ini.
 # Nomor HP berasal dari env (dibuat acak per run oleh orkestrator; nomor fiktif, bukan data pribadi).
 #
-# Env: SMOKE_STEP (setup|otp_request|otp_verify|sync|gw_create|gw_simulate|gw_status|erasure_cron|partner)
+# Env: SMOKE_STEP (setup|otp_request|otp_verify|sync|gw_create|gw_simulate|gw_status|erasure_cron|partner|
+#      audit|audit_partner|balance)
 #      dan parameter per langkah (lihat fungsi). Keluaran: satu baris `SMOKE_RESULT <json>`.
 # Dipakai hanya di DB dev (`efn_odoo` dev); ditolak bila APP_ENV bukan dev.
 # R2 (docs/04 §8.13): skrip ini tidak pernah menaruh nomor HP/token di URL. Saldo poin (bila dicek) wajib lewat
@@ -343,7 +344,105 @@ def step_partner():
     )
 
 
+def _audit_logs(model_name, res_id):
+    return env["efn.audit.log"].sudo().search([("model_name", "=", model_name), ("res_id", "=", res_id)])
+
+
+def step_audit():
+    # Gelombang 10 (ADR-031, efn_audit): perubahan harga produk & HP/email partner tercatat; HP/email TER-MASK.
+    # Partner A (dipakai skenario c) mendapat HP baru; partner E (subjek DSAR) hanya email agar member_hash tetap.
+    e, st = ctx_env()
+    su = e(su=False)
+    product = su["product.product"].browse(st["product_id"])
+    tmpl = product.product_tmpl_id
+    before = _audit_logs("product.template", tmpl.id).ids
+    old_price = tmpl.list_price
+    tmpl.write({"list_price": old_price + 1000})
+    tmpl.write({"list_price": old_price})
+    price_lines = (
+        _audit_logs("product.template", tmpl.id)
+        .filtered(lambda log: log.id not in before)
+        .line_ids.filtered(lambda line: line.field_name == "list_price")
+    )
+    new_phone = os.environ["SMOKE_NEW_PHONE"]
+    pa = su["res.partner"].browse(st["partners"]["A"])
+    before_a = _audit_logs("res.partner", pa.id).ids
+    pa.write({"phone": new_phone})
+    phone_lines = (
+        _audit_logs("res.partner", pa.id)
+        .filtered(lambda log: log.id not in before_a)
+        .line_ids.filtered(lambda line: line.field_name == "phone")
+    )
+    masked = bool(phone_lines) and all(line.is_masked and "****" in (line.new_value or "") for line in phone_lines)
+    digits = "".join(ch for ch in new_phone if ch.isdigit())
+    raw_hidden = all(digits[3:-3] not in (line.new_value or "") for line in phone_lines)
+    pe = su["res.partner"].browse(st["partners"]["E"])
+    pe.write({"email": "smoke-e@example.invalid"})
+    env.cr.commit()
+    out(
+        price_logged=len(price_lines) >= 2,
+        price_values=[(line.old_value, line.new_value) for line in price_lines[:2]],
+        phone_logged=len(phone_lines) >= 1,
+        phone_masked=masked,
+        phone_raw_hidden=raw_hidden,
+        phone_new_value=phone_lines[:1].new_value if phone_lines else None,
+        partner_e_logs=len(_audit_logs("res.partner", pe.id)),
+        partner_e_id=pe.id,
+    )
+
+
+def step_audit_partner():
+    # Setelah erasure: log res.partner subjek terhapus + baris ref lintas model kosong + satu log purge tanpa id/nama.
+    st = load_state()
+    pid = st["partners"]["E"]
+    Line = env["efn.audit.log.line"].sudo()
+
+    def refs(ref):
+        parts = (ref or "").split(",")
+        return parts[0] == "res.partner" and str(pid) in parts[1:]
+
+    ref_lines = len(
+        Line.search(["|", ("old_ref", "=like", "res.partner,%"), ("new_ref", "=like", "res.partner,%")]).filtered(
+            lambda line: refs(line.old_ref) or refs(line.new_ref)
+        )
+    )
+    purge = (
+        env["efn.audit.log"]
+        .sudo()
+        .search([("operation", "=", "purge"), ("model_name", "=", "res.partner")], order="id desc", limit=1)
+    )
+    out(
+        partner_logs=len(_audit_logs("res.partner", pid)),
+        ref_lines=ref_lines,
+        purge_note=purge.note,
+        purge_res_id=purge.res_id or None,
+        pending_markers=env["efn.privacy.erasure.pending"].sudo().search_count([]),
+    )
+
+
+def step_balance():
+    # R2 (docs/04 §8.13): saldo POS lewat POST body (service key Odoo); GET lama sudah dihapus -> 404.
+    from odoo.addons.efn_core.models.efn_bff_client import partner_member_ref
+
+    st = load_state()
+    partner = env["res.partner"].sudo().browse(st["partners"]["E"])
+    client = env["efn.bff.client"]
+    resp = client.post("/v1/pos/loyalty/balance", {"member_ref": partner_member_ref(partner)[0]})
+    old = client.get("/v1/pos/loyalty/balance")
+    bad = client.post("/v1/pos/loyalty/balance", {"member_ref": "bukan-nomor"})
+    out(
+        http=resp.status,
+        points_balance=resp.data.get("points_balance"),
+        keys=sorted(resp.data),
+        old_get_http=old.status,
+        invalid_http=bad.status,
+    )
+
+
 {
+    "audit": step_audit,
+    "audit_partner": step_audit_partner,
+    "balance": step_balance,
     "setup": step_setup,
     "otp_request": step_otp_request,
     "otp_verify": step_otp_verify,

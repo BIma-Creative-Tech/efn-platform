@@ -120,8 +120,12 @@ kini diterima (0.5.4 menolak dengan 412). Model terkecil yang layak untuk dev: `
 ```bash
 docker exec efn-ollama-1 ollama pull qwen2.5vl:3b
 # .env lokal: OLLAMA_VISION_MODEL=qwen2.5vl:3b, lalu: $DC --profile core --profile ai up -d ocr-worker
-bash scripts/smoke/run-e2e-smoke.sh b      # + subperintah report_vlm (scripts/smoke/README.md)
+bash scripts/smoke/run-e2e-smoke.sh v      # jalur VLM nyata (login + consent + foto ber-noise -> vlm=ok)
 ```
+
+Gelombang 10 (diverifikasi): pull ±30 menit di koneksi ±1–2 MB/s (`ollama pull` bisa dilanjutkan setelah
+terputus). Ollama dev berjalan di CPU (8 thread): ±70 s per foto baru, sehingga dev override menyetel
+`OLLAMA_TIMEOUT_SECONDS=240` untuk ocr-worker (default 90 s → `ReadTimeout` → `flagged/vlm_unavailable`).
 
 `hostname: ollama` di base compose tetap wajib (proteksi DNS rebinding Ollama, gelombang 8).
 

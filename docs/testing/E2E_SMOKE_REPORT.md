@@ -1,4 +1,4 @@
-# Laporan Smoke E2E — stack dev dengan TLS/mTLS aktif (Gelombang 8, 6 Okt 2026)
+# Laporan Smoke E2E — stack dev dengan TLS/mTLS aktif (Gelombang 8 + regresi Gelombang 10, 6 Okt 2026)
 
 Penulis: integration engineer (efn-qa-engineer + efn-devsecops-engineer) di bawah efn-lead.
 Skrip: `scripts/smoke/` (`run-e2e-smoke.sh`, `bff_smoke.py`, `odoo_pos_smoke.py`; README di folder itu).
@@ -103,4 +103,114 @@ BFF/Odoo/pytest tidak perlu diulang. Validasi yang dijalankan: `ruff check` + `r
 ```bash
 bash scripts/smoke/run-e2e-smoke.sh            # semua (±15 menit)
 bash scripts/smoke/run-e2e-smoke.sh g          # hanya negatif enkripsi
+```
+
+---
+
+# Gelombang 10 — Regresi penuh setelah gelombang 9–10 (6 Okt 2026)
+
+Cakupan perubahan yang diregresi: BFF SEC-31 (tombstone acak) / R2 (saldo POS via POST) / R6 (receipt DSAR),
+frontend receipt DSAR (Next.js), Odoo `efn_audit` (pengganti OCA `auditlog`, ADR-031), object storage SILO di
+belakang `s3-gateway` (ADR-030), access key acak (§8.12), Ollama 0.35.1 (R1).
+
+## G10.1 Lingkungan & persiapan
+
+- Docker Desktop (WSL2) 16 CPU / 16 GB. Profil `core` + `data` + `ai` + `observability` + `ops` semuanya jalan
+  (RAM cukup); tidak ada container `unhealthy`.
+- Build ulang (`$DC build api-gateway superapp-web ocr-worker etl postgres minio odoo`): hanya `api-gateway` dan
+  `superapp-web` yang berubah; lainnya dari cache (image odoo tanpa OCA sudah dibangun lead). Container
+  di-recreate dengan `up -d`.
+- Migrasi SQL `04-platform-v3-6.sql` dijalankan ulang (idempoten, exit 0); `dsar_request.member_hash` nullable.
+- Odoo: DB `efn_odoo` sudah dimigrasi `auditlog → efn_audit` (runbook §3a; `auditlog` *uninstalled*).
+  `-u efn_audit,efn_setup_audit,efn_privacy,efn_pos_otp_gate,efn_core,efn_pos_payment_gateway,efn_setup_company,
+  efn_setup_security,efn_setup_pos` → exit 0, 102 modul, 0 baris ERROR/Traceback. Versi terpasang = manifest.
+- Volume: **tidak ada yang dihapus/di-reset**. Volume Ollama kini berisi `qwen2.5vl:3b` (3,2 GB). `.env` lokal
+  (gitignored) diubah `OLLAMA_VISION_MODEL=qwen2.5vl:3b`.
+
+## G10.2 Hasil
+
+| Run | Cakupan | Hasil |
+|---|---|---|
+| Run 1 (a b c d f e g) | 106 cek (32 cek baru) | 104 lolos, 2 gagal: keduanya bug di skrip baru saya (G10.4), bukan bug produk. Ringkasan akhir terpotong (`syntax error` baris 321) karena orkestrator diedit saat berjalan |
+| **Run 2** (a b c d f e g, bersih) | **106 cek** | **106 lolos, 0 gagal** (`RINGKASAN: PASS=106 FAIL=0`, exit 0) |
+| Skenario `v` (VLM nyata) | 13 cek | run pertama `report_vlm.model_used` gagal (ReadTimeout 90 s, G10.3); dengan `OLLAMA_TIMEOUT_SECONDS=240` (dev): **13/13**, 2× berturut-turut |
+
+Run 2 per skenario: a 21, b 17, c 15, d 7, f 5, e 24, g 17.
+
+### Cek baru gelombang 10 (semua lolos di run 2)
+
+| Cek | Bukti |
+|---|---|
+| `b.upload_via_s3_gateway` | log HAProxy untuk id report run ini: `PUT /market-scout/reports/2026/10/<id>.jpg 200` (BFF) dan `GET … 200` (ocr-worker). BFF/worker tidak berada di network `objstore` (`efn_cache efn_data efn_egress efn_internal` / `efn_data efn_internal`) |
+| `b.old_access_keys_rejected` | `efn-bff`, `efn-ocr`, `pgbackup` + secret masing-masing lewat `s3-gateway` → `The Access Key Id you provided does not exist` |
+| `b.random_access_keys_authenticate` | access key acak bff/ocr → terautentikasi; `ListBucket` ditolak `Access Denied` (policy least-privilege) |
+| `c.audit_price_logged` | `product.template.list_price` 50000→51000→50000 tercatat 2 baris `efn.audit.log.line` |
+| `c.audit_phone_masked` | HP partner A diganti → baris `phone` `is_masked=True`, nilai baru `62813****790`, digit tengah tidak ada di log |
+| `c.audit_partner_e_logged` | email partner E (subjek DSAR) diubah → 1 log `res.partner` sebelum erasure |
+| `c.pos_balance_post_200` | `efn.bff.client.post("/v1/pos/loyalty/balance", {member_ref})` (service key Odoo) → 200 `{points_balance: 10}` = saldo Super-App |
+| `c.pos_balance_old_get_404` / `c.pos_balance_invalid_400` | GET lama → 404; `member_ref` bukan nomor → 400 |
+| `e.tombstone_random_unlinkable` | tombstone 64 hex, ≠ `sha256("erased:" + request_id)` (desain lama), ≠ member_hash; dipakai juga oleh 2 baris ledger (sama dengan report); 0 baris `dsar_request` memuatnya |
+| `e.dsar_member_hash_nulled` | setelah `completed`: `dsar_request.member_hash` NULL (1/1) |
+| `e.odoo_audit_logs_purged` | log `res.partner` partner E = 0, baris ref lintas model = 0, log `purge` baru `note="erasure: 3 log dihapus, 0 baris ref dikosongkan"` tanpa `res_id` |
+| `e.odoo_pending_markers_cleared` | `efn.privacy.erasure.pending` = 0 setelah complete |
+| `dsar.receipt_status` / `_wrong_404` / `_missing_404` / `_no_pii` | BFF `GET /v1/dsar/requests/:id` + `X-DSAR-Receipt` → 200 `{id,type,status=completed,requested_at,scheduled_at,completed_at}` tanpa nomor HP; receipt diubah 1 karakter → 404; tanpa header → 404 |
+| `web.dsar_receipt_status` / `_wrong_404` / `_missing_404` / `_cross_site_rejected` | Next.js `/api/dsar/requests/:id` dengan cookie `efn_dsar_receipt` → 200 hanya `{id,status,requested_at,scheduled_at,completed_at}` (tanpa HP/receipt); cookie salah/hilang → 404; `Sec-Fetch-Site: cross-site` → 403 |
+| `report_vlm.model_used` (`v`) | foto ber-noise (Tesseract < 0,80) → VLM `qwen2.5vl:3b` → `valid / price_and_name_match`, worker `vlm=ok ms=69340` / `71391` |
+
+PII di log selama run (regex `628(12|13)\d{7,8}` / `08(12|13)\d{7,8}`, 5000 baris terakhir): `api-gateway`,
+`ocr-worker`, `etl`, `superapp-web`, `odoo`, `s3-gateway`, **`traefik` = 0** (R2 gelombang 8 tertutup: probe
+saldo kini POST body).
+
+## G10.3 Status VLM (R1)
+
+- `ollama pull qwen2.5vl:3b` di Ollama 0.35.1: manifest diterima. Batas 20 menit habis di 86 % (2,7/3,2 GB,
+  ±1–2 MB/s); pull dilanjutkan (resume blob) dan selesai ±10 menit kemudian → `success`.
+- Inferensi CPU (8 thread, tanpa GPU): foto baru 1200×800 = ±1300 token prompt @ ±19 tok/s → **±70 s**; foto yang
+  sama (cache) ±5 s. Hasil benar: `{"product_name": "INDOMIE GORENG", "price": "Rp 3.500"}`.
+- Default worker `OLLAMA_TIMEOUT_SECONDS=90` → run pertama `ReadTimeout` → `flagged/vlm_unavailable` (fallback
+  benar). Perbaikan dev: `infra/compose/docker-compose.dev.yml` service `ocr-worker`
+  `OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-240}` → `vlm=ok`.
+- Staging/produksi: 70 s per foto di CPU tidak layak sebagai throughput (prefetch 2 → ±1,7 foto/menit). Butuh GPU
+  atau resize gambar sebelum VLM (G10.5 butir 1).
+
+## G10.4 Perbaikan
+
+| # | File | Perubahan | Alasan |
+|---|---|---|---|
+| 1 | `infra/compose/docker-compose.dev.yml` (ocr-worker) | + `OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-240}` | G10.3; `docker compose config -q` dev (semua profil) & base lolos |
+| 2 | `scripts/smoke/run-e2e-smoke.sh` | cek baru b/c/e (tabel G10.2) + skenario opsional `v` | regresi gelombang 9–10 |
+| 3 | `scripts/smoke/odoo_pos_smoke.py` | langkah `audit`, `audit_partner`, `balance` | idem |
+| 4 | `scripts/smoke/bff_smoke.py` | receipt via Next.js, `dsar.receipt_no_pii`, `report_vlm.model_used` | idem |
+| 5 | `scripts/smoke/README.md`, `docs/runbooks/dev-stack-boot.md` §3b | dokumentasi cek baru, `run-e2e-smoke.sh v`, waktu pull & inferensi CPU | — |
+
+Bug di skrip baru saya yang muncul di run 1 (sudah diperbaiki): (a) `partner_member_ref()` mengembalikan tuple
+`(member_ref, error)` → body `{member_ref: [...]}` → BFF 400 (penolakan yang benar); (b) `docker logs --since` tidak
+mengembalikan baris baru untuk container `s3-gateway` di Docker Desktop, diganti `--tail` + id report.
+**Tidak ada bug produk yang ditemukan di gelombang ini.**
+
+## G10.5 Sisa / observasi (bukan blocker)
+
+1. **data-ai / devsecops**: VLM di CPU ±70 s per foto. Usulan: resize gambar sebelum dikirim ke VLM (mis. sisi
+   terpanjang 768 px) untuk memangkas token gambar, dan putuskan GPU untuk host Ollama produksi (ADR-008).
+2. **devsecops**: `log-format` di `infra/s3-gateway/haproxy.cfg` memakai `%Tt` (durasi sesi termasuk idle
+   keep-alive), sehingga log menunjukkan 30 s untuk scrape metrik dan 12 s untuk PUT yang sebenarnya cepat.
+   Usulan: tambah `%Ta` (waktu aktif request). Sekali tercatat watchdog HAProxy `thread 10 has stopped processing
+   traffic for 739 milliseconds` (02:30Z, sebelum restart 07:27Z; tidak berulang di run ini).
+3. **devsecops**: `docker logs --since` untuk container `s3-gateway` tidak andal di Docker Desktop (hanya
+   mengembalikan file lama sampai 02:53Z), sedangkan `--tail` benar. Perlu dicek apakah promtail mengirim log
+   HAProxy terbaru ke Loki.
+4. **frontend**: `superapp-web` dev memakai 395/512 MiB (77 %) saat smoke (`next dev`); bila sering OOM, naikkan
+   limit di dev override.
+5. Belum diverifikasi: frontend POS OWL, halaman status penghapusan di browser (route handler diuji langsung),
+   webhook payment provider nyata, VLM di GPU, export DSAR besar.
+
+## G10.6 Test unit
+
+Tidak ada kode service yang diubah (hanya dev compose, skrip smoke, dokumentasi), sehingga test unit
+BFF/Next.js/Odoo/pytest tidak diulang. `ruff check` + `ruff format --check` (0.16.10) `scripts/smoke/*.py` bersih;
+`shellcheck` `run-e2e-smoke.sh` bersih; `docker compose config -q` dev & base lolos.
+
+```bash
+bash scripts/smoke/run-e2e-smoke.sh        # a b c d f e g (±20 menit)
+bash scripts/smoke/run-e2e-smoke.sh v      # VLM nyata (butuh model; ±2 menit di CPU)
 ```
