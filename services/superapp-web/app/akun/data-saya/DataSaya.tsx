@@ -27,7 +27,7 @@ type DeleteStep =
   | { kind: 'idle' }
   | { kind: 'otp'; challengeId: string }
   | { kind: 'confirm' }
-  | { kind: 'done'; result: DeleteAcceptedParsed };
+  | { kind: 'done'; result: DeleteAcceptedParsed & { status_available?: boolean } };
 
 async function errorMessage(res: Response, fallback: string): Promise<string> {
   const data = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
@@ -279,7 +279,7 @@ export function DataSaya({
         body: JSON.stringify({ confirm: DELETE_CONFIRM_WORD, acknowledge_points: true }),
       });
       if (res.status === 202) {
-        const result = (await res.json()) as DeleteAcceptedParsed;
+        const result = (await res.json()) as DeleteAcceptedParsed & { status_available?: boolean };
         setStep({ kind: 'done', result });
         return;
       }
@@ -602,7 +602,19 @@ export function DataSaya({
                   Anda telah keluar. Berubah pikiran? Masuk kembali sebelum tanggal tersebut dan buka{' '}
                   <strong>Akun &rarr; Data Saya</strong> untuk membatalkan.
                 </p>
+                {step.result.status_available && (
+                  <p style={{ margin: 0 }}>
+                    Status penghapusan dapat dipantau dari peramban ini selama 30 hari, walau Anda sudah keluar.
+                  </p>
+                )}
                 <p style={{ margin: 0 }}>
+                  {step.result.status_available && (
+                    <>
+                      <Link href={`/akun/penghapusan/${encodeURIComponent(step.result.request_id)}`} className="btn">
+                        Lihat status penghapusan
+                      </Link>{' '}
+                    </>
+                  )}
                   <Link href="/" className="btn btn-secondary">
                     Ke beranda
                   </Link>

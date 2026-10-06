@@ -20,6 +20,7 @@
 | `app/api/auth/challenge`, `components/AltchaWidget.tsx`, `lib/altcha.ts` | Captcha ALTCHA self-hosted (docs/04 §8.1) |
 | `app/akun/privasi`, `app/api/me/consents`, `lib/consent.ts` | Consent lokasi & marketing (docs/04 §8.4) |
 | `app/akun/data-saya`, `app/api/me/{data,reauth,requests,delete/cancel}`, `app/api/me` (DELETE), `lib/dsar.ts` | DSAR: unduh data, hapus akun (re-OTP step-up), batal, riwayat |
+| `app/akun/penghapusan/[id]`, `app/api/dsar/requests/[id]`, `lib/dsar-receipt.ts` | R6 (docs/04 §8.13): status hapus akun tanpa sesi via cookie HttpOnly `efn_dsar_receipt` (Path `/api/dsar`, SameSite=Strict, ≤ 30 hari) |
 | `lib/tax.ts`, `lib/mock-catalog.ts`, `components/CartDemo.tsx` | **MOCK** katalog + konfigurasi pajak `{ tax_label, rate, price_include }` per PT + demo cart (tanpa checkout). Tidak ada tarif di UI |
 
 ## Env

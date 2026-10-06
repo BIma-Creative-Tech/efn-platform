@@ -8,6 +8,7 @@
 import 'server-only';
 import { cookies } from 'next/headers';
 import type { NextRequest, NextResponse } from 'next/server';
+import { DSAR_RECEIPT_COOKIE, DSAR_RECEIPT_PATH, isPlausibleReceipt, receiptMaxAge } from './dsar-receipt';
 
 export const SESSION_COOKIE = 'efn_session';
 
@@ -70,6 +71,40 @@ export function clearStepUpCookie(res: NextResponse): void {
 
 export function getStepUpTokenFromRequest(req: NextRequest): string | null {
   return req.cookies.get(STEP_UP_COOKIE)?.value || null;
+}
+
+/**
+ * R6 (docs/04 §8.13): `receipt_token` hapus akun di cookie HttpOnly `efn_dsar_receipt`, SameSite=Strict,
+ * Path=/api/dsar (hanya dikirim ke Route Handler status), Max-Age <= 30 hari. Tidak pernah ke JavaScript/log.
+ * Token yang sudah kedaluwarsa/bentuknya tidak masuk akal tidak disimpan.
+ */
+export function setDsarReceiptCookie(res: NextResponse, token: string, nowMs: number = Date.now()): boolean {
+  if (!isPlausibleReceipt(token)) return false;
+  const maxAge = receiptMaxAge(token, nowMs);
+  if (maxAge === null) return false;
+  res.cookies.set(DSAR_RECEIPT_COOKIE, token, {
+    httpOnly: true,
+    secure: secureFlag(),
+    sameSite: 'strict',
+    path: DSAR_RECEIPT_PATH,
+    maxAge,
+  });
+  return true;
+}
+
+export function clearDsarReceiptCookie(res: NextResponse): void {
+  res.cookies.set(DSAR_RECEIPT_COOKIE, '', {
+    httpOnly: true,
+    secure: secureFlag(),
+    sameSite: 'strict',
+    path: DSAR_RECEIPT_PATH,
+    maxAge: 0,
+  });
+}
+
+export function getDsarReceiptFromRequest(req: NextRequest): string | null {
+  const v = req.cookies.get(DSAR_RECEIPT_COOKIE)?.value;
+  return isPlausibleReceipt(v) ? v : null;
 }
 
 /** Untuk Server Components (Next 15: cookies() async). */

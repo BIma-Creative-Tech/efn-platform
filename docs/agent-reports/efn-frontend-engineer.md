@@ -160,3 +160,29 @@ Asumsi lain untuk BFF/lead: (1) login OTP tetap diizinkan selama masa tenggang a
 - Tautan unduh export (presigned MinIO) dibuka langsung oleh browser: host MinIO publik/subdomain dan CORS/Content-Disposition di sisi MinIO perlu keputusan devsecops (frontend hanya menerima `https:`).
 - Konfigurasi pajak masih MOCK; endpoint BFF konfigurasi pajak/katalog per company belum ada di docs/04. PB1/PBJT dan PPN (DPP nilai lain) wajib dikonfirmasi tim pajak; pembulatan per kelompok hanya ilustrasi.
 - Koreksi profil (`PATCH /v1/me`) dan ganti nomor (`/v1/me/phone-change`) belum dibuat (tidak diminta gelombang ini).
+
+## Gelombang 9 — R6 status penghapusan & SEC-40 step-up sekali pakai (2026-10-06)
+
+Kontrak: docs/04 §8.13 (v3.6) + `efn-bff-engineer.md` G9.4 "frontend".
+
+### File
+| File | Perubahan |
+|---|---|
+| `lib/dsar-receipt.ts` (baru, murni) | Validasi bentuk `receipt_token` (`v1.<exp>.<b64url>`, ≤ 160 char — verifikasi HMAC tetap di BFF), `receiptMaxAge` = min(30 hari, sisa `exp`; kedaluwarsa → tidak disimpan), `isDsarRequestId` (UUID), `parseDeletionStatus` (allowlist `{id,status,requested_at,scheduled_at,completed_at}`, `type` wajib `delete`, `id` wajib sama), label/deskripsi status, `canCancelDeletion` |
+| `lib/session.ts` | `setDsarReceiptCookie` / `clearDsarReceiptCookie` / `getDsarReceiptFromRequest`: cookie `efn_dsar_receipt` HttpOnly, Secure (kecuali dev `COOKIE_INSECURE=true`, tidak berlaku di production), SameSite=Strict, Path=`/api/dsar` |
+| `app/api/me/route.ts` | `DELETE` sukses: `receipt_token` → cookie (tidak pernah di body respons/log), body = allowlist + `status_available`; cookie `efn_stepup` & `efn_session` dihapus. `403 step_up_invalid` (SEC-40, step-up dipakai ulang) → `403 step_up_required` + pesan "kode hanya berlaku untuk satu kali penghapusan" + hapus cookie step-up → UI kembali ke langkah re-OTP |
+| `app/api/dsar/requests/[id]/route.ts` (baru) | `GET` → BFF `GET /v1/dsar/requests/:id` dengan header `X-DSAR-Receipt` dari cookie, tanpa Bearer. Id bukan UUID / cookie tak ada atau rusak / BFF 404/400 → `404 not_found` generik (tanpa memanggil BFF bila bisa ditolak lokal). 429 diteruskan; 5xx/respons rusak → 502 generik. Fetch Metadata lintas situs → 403. `cache-control: no-store` |
+| `app/akun/penghapusan/[id]/page.tsx` + `DeletionStatus.tsx` (baru) | Halaman status tanpa sesi (`noindex`). Client memuat `/api/dsar/requests/:id` (cookie Path `/api/dsar` tidak terbaca halaman). Menampilkan status (`scheduled/processing/completed/cancelled`, lainnya "Sedang diperbarui") + tanggal diajukan/jadwal/selesai (Asia/Jakarta). Tombol **Batalkan** hanya bila status `scheduled` DAN server memastikan sesi valid yang **memiliki** request ini dalam masa tenggang (`GET /v1/me/requests` berisi id tsb) — sesi akun lain di perangkat yang sama tidak mendapat tombol. Tanpa sesi + `scheduled` → tautan "Masuk kembali" (`/masuk?next=/akun/penghapusan/<id>`) |
+| `app/akun/data-saya/DataSaya.tsx` | Setelah DELETE: tombol "Lihat status penghapusan" bila `status_available` |
+| `tests/dsar-receipt.test.ts` (12), `tests/dsar-routes.test.ts` (9, BFF di-mock, `server-only` di-stub) | Atribut cookie, receipt tidak bocor ke body, step-up & sesi dihapus, `step_up_invalid`, 404 generik, header `X-DSAR-Receipt` tanpa Bearer, allowlist respons, lintas situs, 429/5xx |
+| `README.md` | Baris tabel modul R6 |
+
+### Hasil uji
+Container `node:22-bookworm` (`npm ci && npm run lint && npm test && npm run build`): lint 0 error (1 warning lama `safe-next.ts` unused eslint-disable, tak terkait), **10 file, 219 test lulus**, `next build` sukses (route baru `/akun/penghapusan/[id]`, `/api/dsar/requests/[id]`).
+
+### Asumsi / belum diverifikasi
+- Belum diuji E2E terhadap BFF nyata (stack dev tidak menyala); bentuk `receipt_token` diambil dari kode `dsar-receipt.service.ts`.
+- Satu cookie receipt per peramban: DELETE berikutnya (setelah batal) menimpa receipt lama; halaman status request lama lalu 404 generik. Bukti hanya ada di peramban yang dipakai saat DELETE (dijelaskan di pesan 404).
+- Tidak ada halaman status tanpa id (`/akun/penghapusan`): pengguna yang kehilangan URL harus masuk kembali (selama akun masih ada) atau memakai tautan dari layar konfirmasi. Bila perlu, opsi: simpan `request_id` di cookie yang sama.
+- Pembatalan dari halaman status memakai `POST /api/me/delete/cancel` yang ada (tanpa step-up; perilaku BFF tidak berubah gelombang ini).
+- Cookie receipt tidak dihapus otomatis saat status `completed`/`cancelled` (berakhir sendiri ≤ 30 hari; tidak memuat PII).
