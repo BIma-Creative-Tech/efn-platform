@@ -11,13 +11,13 @@ Dibaca oleh semua agent (`.claude/agents/efn-*.md`) dan oleh developer. Bahasa d
 
 ## Model kerja: Lead Agent
 
-User hanya berbicara dengan **`efn-lead`** (`.claude/agents/efn-lead.md`). Di sesi utama (termasuk ekstensi VS Code), Claude bertindak sebagai efn-lead: merencanakan, menetapkan kontrak, mendelegasikan ke agent spesialis, merekonsiliasi, menjalankan QA + security review, dan melapor ke user. Dari CLI bisa juga `claude --agent efn-lead`. Kebutuhan Odoo selalu lewat `efn-odoo-functional` (fit-gap standar CE/OCA) sebelum `efn-odoo-engineer` menulis kode.
+User hanya berbicara dengan **`efn-lead`** (`.claude/agents/efn-lead.md`). Di sesi utama (termasuk ekstensi VS Code), Claude bertindak sebagai efn-lead: merencanakan, menetapkan kontrak, mendelegasikan ke agent spesialis, merekonsiliasi, menjalankan QA + security review, dan melapor ke user. Dari CLI bisa juga `claude --agent efn-lead`. Kebutuhan Odoo selalu lewat `efn-odoo-functional` (fit-gap standar CE; OCA & Cybrosys hanya referensi) sebelum `efn-odoo-engineer` menulis kode.
 
 ## Prinsip yang tidak boleh dilanggar
 
 - **Enkripsi di setiap transaksi data.** Semua koneksi antar-service TLS dengan verifikasi sertifikat CA internal (`/run/secrets/efn_ca_crt`); data pribadi & backup terenkripsi at rest. Tidak ada fallback diam-diam ke plaintext. Detail: `docs/04_SERVICE_CONTRACTS.md` §7, ADR-022.
 - **Least privilege**: setiap service punya kredensial DB/broker/storage sendiri (docs/04 §7.3). Superuser/root tidak dipakai aplikasi.
-- Odoo CE 19 **satu database multi-company**. Tidak ada modul Enterprise. Cek OCA sebelum menulis dari nol.
+- Odoo CE 19 **satu database multi-company**. Tidak ada modul Enterprise. **Tidak ada dependency ke modul Odoo pihak ketiga** (OCA, Cybrosys, vendor lain): yang tidak tertutup Odoo CE standar dibangun sendiri sebagai `efn_*`. OCA (github.com/OCA) dan Cybrosys (github.com/CybroOdoo/CybroAddons) hanya **referensi desain** — jangan menyalin kodenya verbatim; tulis ulang dan catat referensinya di README modul (ADR-031).
 - Odoo tidak pernah diakses langsung dari internet; Super-App hanya lewat NestJS BFF.
 - Async by default (RabbitMQ) untuk OCR, notifikasi, MGM settle, webhook. Semua consumer idempotent, punya DLQ.
 - PostgreSQL = source of truth; ClickHouse hanya turunan via ETL. Tidak ada tulis langsung API → ClickHouse.
@@ -49,7 +49,7 @@ Status mesin penulis (per 6 Okt 2026): **Git + Git Bash + OpenSSL + Docker Deskt
 
 ## Konvensi kode
 
-- Odoo: modul `efn_<domain>`, versi `19.0.x.y.z`, lisensi `LGPL-3` (atau AGPL-3 bila bergantung OCA AGPL), field `company_id` + record rule multi-company untuk setiap model baru, `ir.model.access.csv` lengkap.
+- Odoo: modul `efn_<domain>`, versi `19.0.x.y.z`, lisensi `LGPL-3`, field `company_id` + record rule multi-company untuk setiap model baru, `ir.model.access.csv` lengkap.
 - NestJS: satu folder per bounded context di `src/<context>/` (module, controller, service, dto, spec). Validasi input dengan DTO + `class-validator` atau guard manual. Error tidak membocorkan detail internal.
 - Endpoint publik di-rate-limit; respons OTP tidak membocorkan apakah nomor terdaftar.
 - Nama queue RabbitMQ: `<domain>.<event>` (mis. `ocr.requested`, `notify.push`), DLQ `<queue>.dlq`.
