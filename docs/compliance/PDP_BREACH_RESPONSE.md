@@ -1,6 +1,6 @@
 # Respons Kegagalan Pelindungan Data Pribadi (Breach) — 3×24 Jam
 
-- **Status:** Draf kebijakan untuk DPO/Legal/Direksi. Bagian teknis (deteksi, containment, forensik) akan ditulis devsecops di `docs/runbooks/` (usulan: `docs/runbooks/security-incident.md`).
+- **Status:** Draf kebijakan untuk DPO/Legal/Direksi. Bagian teknis: [`docs/runbooks/security-incident.md`](../runbooks/security-incident.md) (pintu masuk semua insiden keamanan: deteksi dari alert, severity, containment, forensik — dibuat 2026-10-06 Gelombang 12) dan [`docs/runbooks/breach-response-72h.md`](../runbooks/breach-response-72h.md) (langkah teknis per jam untuk insiden data pribadi).
 - **Tanggal:** 2026-10-05 · Penyusun: efn-architect · Menutup sebagian SEC-11 / R-L01
 - **Rujukan:** UU PDP Pasal 46 (pemberitahuan tertulis paling lambat 3×24 jam kepada subjek data dan lembaga) — **verifikasi Legal**, termasuk lembaga penerima selama Lembaga PDP belum beroperasi penuh (kementerian yang membidangi komunikasi & digital).
 
@@ -61,8 +61,8 @@ Template WA harus **didaftarkan dan disetujui Meta sebelumnya** (kategori utilit
 | Waktu (WIB) | Pelaku | Aksi / temuan | Bukti (lokasi) |
 |---|---|---|---|
 
-## 6. Bagian teknis (ditulis devsecops di `docs/runbooks/`)
-Usulan isi `docs/runbooks/security-incident.md`: sumber deteksi (alert Prometheus/Loki, CrowdSec, Trivy, laporan), preservasi bukti (snapshot volume, export log Loki sebelum retensi 30 hari habis), containment (cabut peer WireGuard, ganti kredensial per service via `secret-rotation.md`, cabut sesi JWT/rotasi `jwt_secret`, isolasi container), rotasi kunci (`pii_encryption_key`, intermediate CA — ADR-022), pemulihan dari backup (`backup-restore.md`), verifikasi integritas ledger poin.
+## 6. Bagian teknis (`docs/runbooks/`)
+Sudah ditulis di [`security-incident.md`](../runbooks/security-incident.md). Cakupan awal yang diminta: sumber deteksi (alert Prometheus/Loki, CrowdSec, Trivy, laporan), preservasi bukti (snapshot volume, export log Loki sebelum retensi 30 hari habis), containment (cabut peer WireGuard, ganti kredensial per service via `secret-rotation.md`, cabut sesi JWT/rotasi `jwt_secret`, isolasi container), rotasi kunci (`pii_encryption_key`, intermediate CA — ADR-022), pemulihan dari backup (`backup-restore.md`), verifikasi integritas ledger poin.
 Runbook terkait yang sudah ada: [secret-rotation](../runbooks/secret-rotation.md), [backup-restore](../runbooks/backup-restore.md), [tls-cert-expiry](../runbooks/tls-cert-expiry.md), [indeks runbook](../runbooks/README.md).
 
 ## 7. Latihan

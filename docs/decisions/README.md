@@ -6,6 +6,8 @@
 >
 > **Pembaruan 6 Okt 2026 (gelombang 10).** **ADR-031 — diputuskan klien:** tidak ada modul Odoo pihak ketiga yang dipasang (OCA, Cybrosys, Apps Store); keduanya hanya **referensi desain**, gap dibangun sebagai `efn_*` LGPL-3. ADR-015 bagian "OCA dulu" **digantikan sebagian**. Dampak: audit log, inter-company, dan laporan keuangan/konsolidasi dibangun sendiri atau dipindah ke Metabase — **±10–16 minggu-engineer (±Rp50–145 jt)**, Fase 1 berisiko mundur 2–4 minggu tanpa engineer tambahan. Rincian pelaksanaan (Q-V1..Q-V6) masih butuh tanda tangan. Total kini **31 ADR**.
 >
+> **Pembaruan 6 Okt 2026 (gelombang 12).** Status implementasi dicatat di ADR-022 (E12 dipersempit ke satu endpoint metrik ocr-worker; hop baru s3-gateway, Loki→Alertmanager mTLS, sink audit) dan ADR-030 (SILO + s3-gateway jalan di dev; celah SEC-41 terkonfirmasi lalu diperbaiki dan diuji). Belum ada ADR yang Accepted. Daftar gabungan keputusan klien yang masih terbuka: bagian **"Keputusan klien yang masih terbuka"** di bawah. Ringkasan satu halaman untuk manajemen: `docs/STATUS_MANAJEMEN.md`.
+>
 > **Ringkasan manajemen (awal).** Ada 25 keputusan arsitektur yang menunggu tanda tangan klien. Semuanya berstatus **Proposed**: tim boleh mulai mengikuti rekomendasi, tetapi tidak boleh mengunci pilihan yang mahal dibalik sebelum disetujui. **ADR-022 (enkripsi) dan ADR-025 (model tim agent) berasal dari instruksi klien 5 Okt 2026** — prinsipnya sudah wajib; yang ditandatangani adalah caranya. Tujuh keputusan di **Gelombang 1** memblokir Fase 1 dan perlu ditandatangani dalam 2 minggu pertama; ADR-022/023/024 (keamanan) ditandatangani paralel karena memblokir staging publik. Keputusan pajak dan legal (MGM, unified cart) butuh konsultan eksternal sehingga harus **dimulai** sekarang.
 
 Status: `Proposed` = belum disetujui klien · `Accepted` = disetujui (catat nama & tanggal) · `Superseded by ADR-xxx`.
@@ -44,7 +46,7 @@ Sumber: `docs/01_REVIEW_RISK_GAP_ANALYSIS.md` (D-xx, R-xxx, Q-xx). Template: `AD
 | [027](ADR-027-pajak-configurable-pb1-per-kota.md) | Pajak configurable: PB1 per kota via fiscal position, include/exclude per pajak, tanpa tarif di kode | Q-22, R-L03 | Proposed — prinsip "configurable" dari klien 6 Okt | Finance + Tax + Ops F&B | R-L03 |
 | [028](ADR-028-captcha-altcha-self-hosted.md) | Captcha OTP = ALTCHA self-hosted (tanpa pihak ketiga) | SEC-06 | Proposed | IT + Legal/DPO | R-L01, R-B02 |
 | [029](ADR-029-identitas-member-opak.md) | Identitas member opak: JWT `sub` = UUID | R-L01 | Proposed | IT + Legal/DPO | R-L01 |
-| [030](ADR-030-sumber-image-object-storage.md) | Object storage: MinIO community diarsipkan → build SILO (fork) dari source + filter L7; PoC SeaweedFS sebagai jalur keluar | R-S02, R-S08 (usulan R-S13) | Proposed | IT + Security (Finance bila opsi berbayar) | R-S02, R-S08, R-T08, R-L01 |
+| [030](ADR-030-sumber-image-object-storage.md) | Object storage: MinIO community diarsipkan → build SILO (fork) dari source + filter L7; PoC SeaweedFS sebagai jalur keluar | R-S02, R-S08 (usulan R-S13) | Proposed — jangka pendek **diterapkan di dev** (SILO + s3-gateway, SEC-41 fixed) | IT + Security (Finance bila opsi berbayar) | R-S02, R-S08, R-T08, R-L01 |
 | [031](ADR-031-tanpa-dependency-modul-odoo-pihak-ketiga.md) | Tanpa dependency modul Odoo pihak ketiga; OCA & Cybrosys sebagai referensi; gap = `efn_*` LGPL-3 (clean implementation) | D-15, R-T04, R-L08 | **Diputuskan klien 6 Okt 2026** (prinsip); rincian Q-V1..Q-V6 Proposed | Klien; rincian: IT + Finance + Legal | R-T04, R-L08, R-B09, R-S10, usulan R-T13 |
 
 Catatan pemetaan: D-09 dipetakan ke ADR-001 (sudah ada) sehingga ADR-009 dipakai untuk D-08. D-10 dibahas di ADR-010 dan juga disinggung ADR-001.
@@ -66,6 +68,34 @@ Belum ada ADR berstatus Accepted. Sudah dijawab klien: Q-E1 (kustodi = Superadmi
 | 8 | ADR-019 | Opini pajak & legal (lead time panjang) | Finance + Tax + Legal |
 | 9 | ADR-025 | Formalitas | Athera + PO |
 | 10 | Gelombang 2 & 3 lainnya | Seperti di bawah | — |
+
+## Keputusan klien yang masih terbuka (gabungan, per 6 Okt 2026 — Gelombang 12)
+
+Sudah dijawab: Q-E1 (kustodi = Superadmin), Q-E4 (mTLS), prinsip pajak configurable, vendor payment ditunda, prinsip tanpa modul Odoo pihak ketiga (ADR-031). Kolom "Default bila tidak dijawab" = yang dipakai tim sekarang.
+
+| Prioritas | ID | Pertanyaan | Sumber | Pemutus | Default bila tidak dijawab | Memblokir |
+|---|---|---|---|---|---|---|
+| **A** | Q-P1 | Penetapan DPO + kontak publik | PDP_DATA_INVENTORY | Direksi | Legal sebagai DPO sementara | Semua keputusan retensi, notifikasi breach |
+| **A** | Q-E1a/b/c | Jumlah Superadmin (≥ 2), Shamir 2-dari-3, lokasi salinan offline kedua | ADR-022 | Direksi + IT | 1 orang = bus factor 1 | Staging publik (rotasi/restore darurat) |
+| **A** | Q-OS1 / Q-OS3 | Terima SILO tanpa SLA; object lock `pg-backup` COMPLIANCE 15 h | ADR-030 | IT + Security | SILO + GOVERNANCE + filter | Staging publik |
+| **A** | Q-V2 / Q-V4 | Lisensi `efn_*` LGPL-3; anggaran ±Rp50–145 jt + mundur 2–4 mgg **atau** engineer kontrak | ADR-031 | IT + Finance + Legal | LGPL-3; jadwal berisiko mundur | Fase 1 (`efn_intercompany`) |
+| **A** | Gelombang 1 | ADR-001, 021, 018, 017, 004, 005, 013 | indeks | lihat indeks | rekomendasi ADR | Fase 1 |
+| B | Q-OS2 / Q-OS4 / Q-OS5 | PoC SeaweedFS 5 h; filestore Odoo lokal; target backup off-site | ADR-030 | IT | ya / lokal / belum ada | Go-live (off-site wajib) |
+| B | Q-E2 / Q-E3 | LUKS + AES-NI di pengadaan VPS; enkripsi kolom PII Odoo | ADR-022 | IT + DPO | wajib / tidak | Pengadaan server |
+| B | Q-V1 / Q-V3 / Q-V5 / Q-V6 | Sandbox referensi; laporan keuangan per PT (Metabase vs Odoo); cakupan "pihak ketiga"; vendor referensi lain | ADR-031 | IT + Finance | tidak / — / hanya addon / OCA+Cybrosys | Fase 1 laporan keuangan |
+| B | Q-W1 / Q-W2 / Q-W3 / Q-W4 / Q-55 | Jumlah perangkat per outlet, pemasang & SLA, user Odoo eksternal, model Android POS, model router | ADR-023 | IT + Ops Outlet | klien WG di perangkat | Pilot outlet |
+| B | Q-P2..Q-P8 | Retensi transaksi 10 th, usia, transfer, data keuangan, tombstone, CH 24 bln vs 5 th, lokasi 90 h | PDP_DATA_INVENTORY | DPO + Legal | default usulan | Go-live publik |
+| B | **Q-P9** (baru) | Retensi log audit (730 h, min 365; log kontrol/purge tanpa batas; salinan ClickHouse simpan PII atau tidak) | PDP_DATA_INVENTORY | DPO + auditor | 730/365/tanpa batas | — |
+| B | **Q-P10** (baru) | Anggota grup "Auditor Data Pribadi Lintas PT" | PDP_DATA_INVENTORY | DPO + Direksi | tidak ada anggota | Audit lintas PT |
+| B | **Q-P11** (baru, SEC-38) | Akun tidak aktif / nomor HP daur ulang (anonimisasi otomatis N bulan) | PDP_DATA_INVENTORY | DPO + PO | tidak ada kebijakan (risiko residu) | — |
+| B | Q-T1..Q-T6 | Dasar transfer Meta/Cloudflare, WA Local Storage, mode Cloudflare, lokasi data payment, kunci tidak di GitHub, DPIA | PDP_TRANSFER_LINTAS_NEGARA | DPO + Legal | proxy penuh CF | Go-live publik |
+| B | **Q-K1** (baru) | **Kasir boleh membuat pelanggan baru di POS?** Saat ini kasir tanpa grup Contact Creation tidak bisa onboarding pelanggan; bila boleh, HP member yang sudah ada tetap terkunci (SEC-07/44 terbukti) | QA G11, functional E-6 | PO + Ops Outlet | belum ditetapkan (konfigurasi grup) | SOP kasir pilot |
+| C | Q-3 | Metode transfer pricing antar-PT & siapa berwenang | docs/01 | Finance + Tax | — | `efn_intercompany` |
+| C | Q-4 | Periode & mekanisme settlement poin lintas-brand | docs/01 | Finance | — | ADR-020 fase 2 |
+| C | Q-6 | Auditor eksternal & format konsolidasi (juga menentukan minimum retensi log audit) | docs/01 | Finance | — | Q-V3, Q-P9 |
+| C | Q-8 | Satu katalog induk atau per PT; pemilik data produk | docs/01 | PO + Ops | — | Master data Fase 1 |
+| C | Q-22 | Service charge & PB1 include/exclude per outlet/daerah | docs/01, ADR-027 | Finance + Tax | configurable | Go-live F&B |
+| C | Q-49 | Retensi DWH & anonimisasi analitik | docs/01 | DPO + Finance | 5 th mart | (= Q-P7/Q-P9) |
 
 ## Urutan prioritas tanda tangan (awal, 5 Okt 2026)
 

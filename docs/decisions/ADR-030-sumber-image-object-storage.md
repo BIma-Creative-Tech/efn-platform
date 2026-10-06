@@ -1,7 +1,7 @@
 # ADR-030: Sumber Image & Masa Depan Object Storage (MinIO community ditinggalkan upstream)
 
-- **Status:** Proposed
-- **Tanggal:** 2026-10-06
+- **Status:** Proposed — rekomendasi jangka pendek **sudah diterapkan di dev** (Gelombang 9–11, reversible); lihat "Status implementasi"
+- **Tanggal:** 2026-10-06 (status implementasi diperbarui Gelombang 12)
 - **Pemutus (klien):** IT (Head IT) + Security; Finance hanya bila memilih opsi berbayar (dukungan komersial)
 - **Referensi review:** R-S02 (kerentanan dependency), R-S08 (provenance image), R-T08 (backup/DR), R-L01 (UU PDP), R-S06 (upload foto); **usulan risiko baru R-S13** (komponen inti ditinggalkan upstream, lihat bawah)
 - **Terkait:** ADR-004 (topologi 4 node, WAL-G → MinIO), ADR-022 (S3 = SSE-S3 MinIO KMS, T9 TLS), ADR-024 (user/policy per service), `infra/minio/Dockerfile`, `infra/minio/minio-init.sh`, `docs/agent-reports/efn-devsecops-engineer.md` Gelombang 7 §G7.3 no. 1
@@ -130,6 +130,19 @@ flowchart TD
     F -- tidak --> H[Evaluasi Versity / Ceph RGW / AIStor - keputusan klien]
     E --> D
 ```
+
+## Status implementasi (per 6 Okt 2026, Gelombang 12)
+ADR tetap **Proposed**; lead memutuskan menerapkan rekomendasi jangka pendek karena reversible (rollback: `efn-devsecops-engineer.md` G9.5).
+
+| Butir keputusan | Status | Bukti | Sisa |
+|---|---|---|---|
+| 1. SILO dibangun dari tag source | **Selesai (dev)** | `infra/minio/Dockerfile`: `pgsty/silo` + `pgsty/mc` `RELEASE.2026-09-16T00-00-00Z`, commit SHA diverifikasi saat build, Go 1.27.1 (digest dipin), non-root. **Upgrade in-place volume lama berhasil** (objek lama terbaca, versioning, lock GOVERNANCE 15 h, SSE-S3, ILM 90 h) — menjawab klaim "belum diuji" di atas untuk arah lama → SILO | Arah balik (SILO → MinIO lama) belum diuji; staging belum ada |
+| 2a. Filter L7 | **Selesai (dev)** — service `s3-gateway` (HAProxy 3.2 LTS, digest dipin), storage dipindah ke network internal `objstore` | Smoke `g` 19/19; WAL-G push/wal-push, upload BFF, GET worker lolos filter | Belum ada metrik HAProxy dan alert burst 403 (usulan `EfnS3GatewayDeniedBurst`, lihat `docs/runbooks/security-incident.md`); `backup-push` besar + `restore-test.sh` lewat filter belum diuji |
+| SEC-41 (bypass filter lewat percent-encoding / `;`) | **Fixed + terverifikasi runtime** (G11) | Bypass sempat **terkonfirmasi** (`?rete%6Etion` dirutekan SILO ke PutObjectRetention). Perbaikan: tolak `;` dan `%` di nama kunci query, `%` di query method tulis, cocokkan `query,url_dec` dengan pemisah `[&;]`, `path,url_dec`, tolak segmen `/./ /../ //`, tolak `x-amz-content-sha256` ganda. 24 varian encoded → 403 | Bila `MINIO_DOMAIN` (virtual-host) diaktifkan, aturan `p_root` wajib ditinjau |
+| 2b. Access key acak | **Selesai** | Secret `minio_{bff,ocr,backup,prometheus}_access_key` (80 bit), user lama dihapus, kredensial lama ditolak; root user acak (`minio_root_user`, SEC-48) | Staging/prod: secret baru di GitHub Environment |
+| 2c. Mode retensi `pg-backup` | **Menunggu Q-OS3** — tetap GOVERNANCE + filter | `mc retention clear` oleh user backup → 403 filter | SN-2026-015 masih berlaku untuk kredensial yang langsung ke storage (root lewat `minio-init` di network `objstore`) |
+| 3. Filestore Odoo lokal | Sesuai rekomendasi | — | Q-OS4 |
+| 5. PoC SeaweedFS | Belum dimulai (Fase 1) | — | Q-OS2 |
 
 ## Konsekuensi
 - **Positif:** menutup 5 CVE yang diketahui tanpa migrasi data; rantai pasok tetap bisa diaudit (build + sign sendiri); filter L7 menutup kelas serangan "header berbahaya" terlepas dari vendor; jalur keluar terdokumentasi.

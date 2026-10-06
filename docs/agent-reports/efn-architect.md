@@ -213,4 +213,46 @@ Odoo kini hanya berisi modul standar Community 19 dan modul buatan EFN (`efn_*`)
 
 ## Terverifikasi / belum terverifikasi
 - **Terverifikasi (sumber primer, 6 Okt 2026):** CybroAddons: branch 8.0–20.0 + `saas-19.4`, default 19.0, push 2026-10-05, lisensi repo `null`; manifest 19.0: `pos_kitchen_screen_odoo` 19.0.1.0.0 LGPL-3, `user_audit` 19.0.1.0.0 LGPL-3, `inter_company_synchronization` 19.0.1.0.0 AGPL-3 (README: SO/PO saja), `advanced_loyalty_management` 19.0.1.0.0 LGPL-3, `base_accounting_kit` 19.0.3.3.1 LGPL-3, `dynamic_accounts_report` 19.0.1.1.2 LGPL-3, `base_account_budget` 19.0.1.0.2 LGPL-3, `cybrosys_support_client` 19.0.1.0.1 LGPL-3, `pos_book_order` 19.0.1.0.0 AGPL-3, `pos_auto_lot_selection` 19.0.1.0.1 AGPL-3, `pos_automated_manufacturing` 19.0.1.0.0 LGPL-3, `advanced_pos_reports` 19.0.1.0.1 LGPL-3, `pos_analysis_report` 19.0.1.0.0 LGPL-3, `advanced_excel_reports` 19.0.1.0.0 LGPL-3, `excel_report_designer` 19.0.1.0.0 AGPL-3, `odoo_queue_manager` 19.0.1.0.0 AGPL-3 (antrean pelanggan); 404 di 19.0: `kitchen_screen`, `pos_restaurant_table_booking`, `account_reports_xlsx`. apps.odoo.com: `account_reports_xlsx` 19.0 OPL-1 USD 22,40; `pos_kitchen_screen_odoo` LGPL-3 versi 15–19. OCA 19.0: `auditlog` 19.0.2.0.0 AGPL-3 (belum naik versi), `account_financial_report` 19.0.0.0.26 AGPL-3, `queue_job` 19.0.2.1.5 LGPL-3. CE 19.0: `web/controllers/export.py` `ExcelExport` + `/web/export/xlsx`.
-- **Belum terverifikasi:** daftar lengkap modul CybroAddons 19.0 (tree API terpotong); padanan Cybrosys untuk QC intake, multi-company share, inter-company invoice, booking meja; cakupan old/new value `user_audit`; panggilan jaringan `cybrosys_support_client`; lisensi OCA/pos 19.0, `base_multi_company`, `product_multi_company`, OCA/storage; apakah bug ORM auditlog sudah diperbaiki di commit 19.0 tanpa menaikkan versi; semua estimasi minggu-engineer (asumsi arsitek, perlu validasi Odoo engineer senior, Q-53); alat cek kemiripan kode; Mermaid tidak dirender.
+- **Belum terverifikasi (G10):** daftar lengkap modul CybroAddons 19.0 (tree API terpotong); padanan Cybrosys untuk QC intake, multi-company share, inter-company invoice, booking meja; cakupan old/new value `user_audit`; panggilan jaringan `cybrosys_support_client`; lisensi OCA/pos 19.0, `base_multi_company`, `product_multi_company`, OCA/storage; apakah bug ORM auditlog sudah diperbaiki di commit 19.0 tanpa menaikkan versi; semua estimasi minggu-engineer (asumsi arsitek, perlu validasi Odoo engineer senior, Q-53); alat cek kemiripan kode; Mermaid tidak dirender.
+
+# Gelombang 12 — Dokumentasi kepatuhan (sisa SEC-11/SEC-40), runbook insiden, status ADR (2026-10-06)
+
+Basis: `d61faf0`, review r4 (SEC-11 partial, SEC-38 open, SEC-40 partial), `docs/04` v3.8, laporan Gelombang 8–11.
+
+## Ringkasan (untuk manajemen)
+Dokumen kepatuhan kini mengikuti kondisi sistem yang sebenarnya: daftar data pribadi (RoPA) mencatat log audit Odoo, cache tanpa nomor HP, dan penyimpanan baru. Ada runbook insiden keamanan yang menghubungkan alarm otomatis dengan langkah penanganan dan kewajiban lapor 3×24 jam UU PDP. Ringkasan satu halaman untuk manajemen tersedia di `docs/STATUS_MANAJEMEN.md`. Keputusan terpenting yang masih terbuka: penunjukan DPO, jumlah Superadmin, persetujuan SILO, dan anggaran modul buatan sendiri.
+
+## File dibuat / diubah
+| File | Perubahan |
+|---|---|
+| `docs/compliance/PDP_DATA_INVENTORY.md` | **v3**: kolom dasar pemrosesan + akses per item; `member` (baris dihapus saat erasure), `consent` (ip_enc NULL, baris yatim), `dsar_request` (CHECK hash aktif), tombstone acak, `payment_intent` (data pribadi tidak langsung), retensi aktual dari `app-config.ts` (outbox/processed **14/14 h**, v2 salah 7/30), Redis key HMAC + challenge login terenkripsi (SEC-24 ditutup), `efn.audit.log` (masking, 730/min 365, log kontrol tanpa batas, grup auditor lintas PT), sink Loki 400 h, salinan audit ClickHouse (sedang dibangun), bukti smoke log bebas HP, SILO/s3-gateway, WAL-G 14 full. Q-P9..Q-P11 baru |
+| `docs/runbooks/security-incident.md` | **Baru**: peran, alur Mermaid, sumber deteksi (alert nyata dari `alert-rules.yml` + `loki-rules`), severity S1–S3, containment per vektor (tautan runbook yang ada), forensik (Loki, sink, `efn.audit.log`, ClickHouse, PITR), notifikasi PDP, celah jujur |
+| `docs/compliance/PDP_BREACH_RESPONSE.md` | Tautan ke runbook baru |
+| `docs/decisions/ADR-022-…md` | Status implementasi; **E12 dipersempit** (bukan ditutup penuh, lihat bawah); tabel hop baru T9a/T9b s3-gateway, T12a Loki→Alertmanager mTLS, T12b sink audit, S3a root acak, S8 salinan audit |
+| `docs/decisions/ADR-030-…md` | Bagian "Status implementasi" (SILO, s3-gateway, SEC-41 terkonfirmasi lalu fixed, access key/root acak, sisa) |
+| `docs/decisions/README.md` | Catatan G12; tabel gabungan **keputusan klien terbuka** (Q-P*, Q-E*, Q-OS*, Q-V*, Q-W*, Q-T*, Q-3/4/6/8/22/49, Q-K1 kasir buat pelanggan) dengan default & yang diblokir |
+| `docs/02_TARGET_ARCHITECTURE.md` | v4: diagram konteks/layer/zona dengan s3-gateway + SILO (network `objstore`), `efn_intercompany`/`efn_audit` menggantikan OCA, §5.5 baru (alur audit + sink + ClickHouse), catatan kredensial |
+| `docs/STATUS_MANAJEMEN.md` | **Baru**: ringkasan satu halaman non-teknis |
+
+## Temuan saat menulis (koreksi atas brief)
+- **E12 tidak tertutup penuh**: ocr-worker `/metrics` masih mTLS tanpa allowlist CN (`services/ai-ocr-worker/efn_ocr/metrics.py:7-9`). E12 dipersempit ke satu endpoint, penutupan ±0,5 hari devsecops (sidecar ghostunnel `--allow-cn=prometheus`).
+- **Alert burst 403 s3-gateway belum ada**: runbook memakai query LogQL manual. Usulan alert `EfnS3GatewayDeniedBurst` untuk devsecops (label service Promtail perlu dicek).
+- Konflik desain salinan audit ClickHouse append-only vs erasure PII → Q-P9 (usulan: hanya baris non-pribadi, atau DELETE terkontrol yang dicatat).
+- `consent`/`dsar_request` belum punya job retensi (tidak mendesak; retensi 5 th).
+
+## Usulan perubahan `docs/04` (milik lead)
+1. §8.4 retensi: tambah `outbox`/`processed_message` 14 h (kode), log audit Odoo 730 h (min 365, hard-coded), stream Loki `efn_audit_sink` 400 h, Loki umum 30 h, WAL-G 14 full.
+2. §8.5 matriks mTLS: baris loki → alertmanager (sudah di §8.15, pindahkan ke matriks) dan catatan ocr-worker `/metrics` tanpa allowlist CN (E12 sisa).
+3. §8.11 baris tombstone `sha256("erased:"||request_id)` sudah usang → beri coret/rujuk §8.13 agar tidak dibaca sebagai kontrak.
+4. §8.8 "auditlog milik partner" → `efn.audit.log` (`_efn_audit_purge_records`).
+5. Kontrak salinan audit ClickHouse (nama tabel, user tanpa ALTER/DELETE, `row_hash`, rekonsiliasi) setelah data-AI selesai.
+6. Prefix Redis lengkap (`otp:stepup-used:*`, `dsar:receipt-ip:*`, `altcha:ip:*`) + aturan "IP di key wajib HMAC".
+7. Usulan runbook index: tambah `security-incident.md` di `docs/runbooks/README.md` (di luar batas file saya).
+
+## Keputusan yang butuh tanda tangan klien
+Lihat `docs/decisions/README.md` bagian baru. Baru di gelombang ini: **Q-P9** retensi log audit, **Q-P10** anggota Auditor Data Pribadi Lintas PT, **Q-P11** akun dorman / HP daur ulang (SEC-38), **Q-K1** kasir boleh membuat pelanggan.
+
+## Terverifikasi / belum terverifikasi
+- **Terverifikasi (membaca kode/konfigurasi repo):** prefix Redis & `redisKeyHash` (`auth.service.ts`, `dsar.service.ts`, `dsar-receipt.service.ts`), field `m` terenkripsi (`otp.service.ts:64-66`), retensi BFF (`app-config.ts:671-691`, `retention.service.ts`), erasure menghapus `member` + `consent.ip_enc` NULL (`erasure.service.ts:127,180,188`), `RETAIN_FULL=14`, ILM 90 h (`minio-init.sh`), Loki 720h/9600h, daftar alert (`alert-rules.yml`, `loki-rules/efn-audit-sink.yml`), ocr-worker metrics tanpa CN allowlist.
+- **Dari laporan agent (tidak saya jalankan):** smoke 108/108, log bebas HP, SEC-41 runtime, sink audit nyata, upgrade in-place SILO.
+- **Belum terverifikasi:** kode salinan audit ClickHouse (data-AI); label Promtail untuk s3-gateway di query LogQL; nomor pasal UU PDP; semua hal staging/produksi (LUKS, `log_parameter_max_length`, efn-deploy di host); Mermaid tidak dirender.
