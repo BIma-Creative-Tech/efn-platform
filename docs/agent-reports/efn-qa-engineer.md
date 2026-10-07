@@ -331,3 +331,32 @@ Basis `ce7e2b0`, tidak ada commit. Verifikasi di stack dev nyata (bukan hanya ba
 - Log ETL dari `compose run --rm` tidak sampai Loki (catat di runbook etl-audit-copy bila operator menjalankan recon
   manual).
 - Belum: UI Metabase→ClickHouse, kelas recon erasure/retention dengan log yang sudah tersalin, tour POS di stack ini, CI.
+
+# Gelombang 13 — Penutupan runtime: loyalty POS E2E + dashboard (2026-10-07)
+
+Basis `c1b770a`, tidak ada commit. Verifikasi di stack dev nyata. Detail: `docs/testing/E2E_SMOKE_REPORT.md`
+bagian Gelombang 13.
+
+## G13.1 Hasil
+| Item | Hasil |
+|---|---|
+| Rebuild api-gateway/odoo/etl/metabase + boot 5 profil | OK, semua healthy |
+| `-u efn_audit,efn_pos_otp_gate,efn_setup_pos -i efn_pos_loyalty_ledger` | exit 0, 0 ERROR |
+| SQL 05, secret baru, `metabase-provision` | ada / ter-mount / exit 0 |
+| Skenario baru `l` (32 cek): earn → saldo → OTP `pos_redeem` → reserve → commit → release (dialog & cancel draft) → lintas purpose (Odoo + BFF) → refund proporsional → outbox saat BFF mati → PDP → ETL | 32/32 |
+| Smoke `a b c d f e g l` satu run (snapshot `c1b770a`) | **PASS=140 FAIL=0** |
+| Metabase 3 dashboard via API | 28 dashcard, 0 gagal; poin EFN 6.000, refund 97.000, lot kedaluwarsa, indeks Price Hunter terlihat |
+| HP mentah di tabel loyalty baru / log 7 service | 0 |
+
+## G13.2 Perbaikan (harness)
+- `run-e2e-smoke.sh`: skenario `l`; `odoo()` tidak lagi menghentikan run diam-diam pada traceback `psycopg2.errors.*`;
+  `scenario_b` `gw` `|| true`; trap membunuh semua follower log.
+- `odoo_pos_smoke.py`: 6 langkah `loy_*` baru, `SMOKE_DRAFT`, output outbox datar, helper `bff_post/bff_get`
+  kompatibel SEC-58 (`_efn_post`) dan `c1b770a` (`post`).
+- `scripts/smoke/README.md`: dokumentasi skenario `l`.
+
+## G13.3 Sisa
+- Working tree agent lain (SEC-58 dkk.) belum di-upgrade di DB dev (`redeem_max_pct`, manifest naik, SQL 06) → reserve
+  poin dev gagal sampai `-u` + SQL 06. Run final sengaja memakai snapshot `c1b770a`.
+- Observasi data-AI: penyesuaian poin pada refund masuk `refunds` (uang), poin yang dikembalikan tidak terlihat terpisah.
+- Belum: frontend POS OWL (tour refund berpoin), `reservation_expired`, redeem/refund offline, CI GitHub, `v`.

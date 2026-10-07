@@ -411,3 +411,105 @@ Pelanggan Fiktif", data `SMOKE *` run ini. Log audit id 17 sudah dikembalikan ke
 - Kelas rekonsiliasi `erasure`/`retention` untuk log yang sudah tersalin lalu di-purge (butuh menunggu settle 600 s
   sebelum purge; tidak dijalankan).
 - Tour POS (OWL) G12 tidak dijalankan di stack ini (hanya harness odoo engineer); CI GitHub belum dijalankan.
+
+# Gelombang 13 — Penutupan: Fase 1 loyalty POS end-to-end + 3 dashboard Metabase (7 Okt 2026)
+
+Basis `c1b770a`. Tidak ada commit, tidak ada volume yang dihapus. Selama sesi ini agent lain mengubah working tree
+(SEC-58 dkk.: `efn_core`, `efn_pos_loyalty_ledger`, `efn_pos_otp_gate`, BFF `src/pos`, `06-platform-loyalty-guard.sql`,
+mulai 07:14 UTC). Karena itu run final dijalankan terhadap **snapshot `c1b770a`** (lihat G13.3).
+
+## G13.1 Lingkungan & persiapan
+
+| Langkah | Hasil |
+|---|---|
+| `$DC ... build api-gateway odoo etl metabase` | sukses (metabase: driver ClickHouse 1.52.0 ber-checksum) |
+| Upgrade Odoo (odoo dihentikan): `-u efn_audit,efn_pos_otp_gate,efn_setup_pos -i efn_pos_loyalty_ledger` | **exit 0, 0 ERROR/CRITICAL** (1 WARNING `--without-demo=all`); 103 modul; `efn_audit 19.0.1.3.0`, `efn_pos_otp_gate 19.0.1.6.0`, `efn_setup_pos 19.0.1.2.0`, `efn_pos_loyalty_ledger 19.0.1.0.0` installed |
+| `up -d` semua profil `core data ai observability ops` | semua container healthy; odoo/api-gateway/etl di-recreate; log Odoo sesudah start 0 ERROR |
+| SQL 05 | `platform.loyalty_reservation`, `platform.loyalty_pos_earn` ada (diterapkan devsecops 06:37) |
+| Secret baru ter-mount | api-gateway `migration_api_key`; odoo & etl `efn_audit_sink_key`; metabase-provision `metabase_admin_password` |
+| `metabase-provision` | exit 0, semua kartu `completed` |
+
+## G13.2 E2E loyalty POS nyata — skenario baru `l` (`scripts/smoke/run-e2e-smoke.sh`)
+
+Odoo (`odoo shell`, metode server yang sama dengan frontend POS) → BFF nyata (HTTPS + CA, service key). Tiga partner
+fiktif baru per run (L, M, N). Parameter default BFF dev: 1 poin/Rp10.000, Rp100/poin, min 50, maks 50 %.
+
+| # | Langkah | Hasil (run final) |
+|---|---|---|
+| 1 | Order ber-member 20 × Rp50.000 → outbox `earn` | order `paid`; outbox `done` (1 percobaan); `points_earned=100`; `platform.loyalty_pos_earn` 100/1.000.000; ledger `pos_earn` +100 |
+| 2 | Cek saldo dari POS (`efn_loyalty_balance`) | 100, `point_value_idr=100`, `redeem_min_points=50`, member ter-mask `62812****073` |
+| 3 | OTP `pos_redeem` (kode dari log console) → reserve 60 poin | verify OK; reserve `value_idr=6000`; BFF `reserved/60/6000` |
+| 3b | Order 4 × Rp50.000 + baris Poin EFN −6.000 → sync | `paid`, 1 baris poin, total 194.000, outbox `earn` + `redeem_commit` |
+| 3c | Outbox → commit | commit `done` delta −60, reservasi `committed`; earn 19 (Rp194.000; porsi poin tidak dapat poin, K-1); BFF `committed/60/6000`, ledger −60/+19; **saldo 59** |
+| 4 | Batal di dialog (RPC release) | lokal `released` (`released_by_cashier`); BFF `released/50/5000` |
+| 5 | Order draft berpoin → `action_pos_order_cancel` | baris poin tetap di draft (reservasi aktif); order `cancel`; outbox `redeem_release` `done`; BFF `released`; **saldo tetap 59** |
+| 6a | OTP promo → reserve | Odoo `otp_required`; token promo langsung ke `POST /v1/pos/loyalty/redeem/reserve` → **409 `token_invalid`** |
+| 6b | OTP redeem → order promo | gate promo menolak (`UserError` "Promo ... memerlukan verifikasi OTP"); token redeem ke `POST /v1/pos/discount-token/consume` → **409 `invalid`** |
+| 7 | Refund 2/4 unit order 3b, baris penyesuaian dari `efn_loyalty_refund_preview` | rasio 0,5, penyesuaian Rp3.000, total refund −97.000; outbox `reverse` (`eligible` 97.000) `done` delta +20; ledger restore **+30** (floor 60×0,5), clawback **−10** (ceil 19×0,5); **saldo 79** |
+| 8 | `docker stop` api-gateway → sync order 2 × Rp50.000 | order tetap `paid`; earn `pending` (`bff_unreachable`), status poin order `pending` |
+| 8b | `docker start` → outbox retry (cron + backoff) | earn `done` pada percobaan ke-2, `points_earned=10`, ledger +10; **saldo 89** — earn tertunda tidak hilang |
+| 9 | PDP | 0 kemunculan digit HP L/M/N di `pg_dump` `platform.loyalty_*`, `efn_pos_loyalty_*`, `efn_pos_otp_challenge`, log BFF run ini dan log Odoo 30 menit; regex HP di 5000 baris log api-gateway, odoo, etl, ocr-worker, superapp-web, traefik, metabase = **0**; WARNING Odoo saat BFF mati memuat `member=62812****073` (ter-mask) |
+| 10 | ETL → ClickHouse | `fact_sales_line`: 1 baris `line_kind=points` (−6.000) untuk order 3b, 2 baris `is_refund=1` untuk refund |
+
+## G13.3 Smoke penuh `a b c d f e g l`
+
+| Run | Hasil | Sebab |
+|---|---|---|
+| `l` saja (±07:10, kode `c1b770a`) | 31/32 | 1 FAIL = ekspresi cek skenario baru (`eligible_amount` numeric `1000000.00`); data benar. Diperbaiki (`::bigint`) |
+| Penuh #1 (07:16) | berhenti di `l` langkah reserve tanpa ringkasan (a–g semua PASS) | working tree berubah di tengah run: field baru `efn.pos.loyalty.reservation.redeem_max_pct` (agent lain, 07:18) dimuat `odoo shell` tanpa upgrade DB → `psycopg2.errors.UndefinedColumn`; harness berhenti diam-diam (G13.5 #1) |
+| Penuh #2 (07:33) | berhenti di `b` | api-gateway baru di-recreate → Traefik 404 ±20 s (temuan load test G13) + harness berhenti (G13.5 #2) |
+| **Penuh #3 (07:34–07:49)** | **`RINGKASAN: PASS=140 FAIL=0`, exit 0** | a 21, b 17, c 15, d 7, f 5, e 24, g 19, l 32 |
+
+Run #3 memakai override compose sementara yang me-mount `services/odoo/addons` dan `services/api-gateway/src` dari
+`git archive c1b770a` (odoo + sidecar dan api-gateway di-recreate dengan snapshot itu); image, DB, dan service lain
+sama. Sesudahnya odoo dan api-gateway di-recreate lagi dengan compose normal (mount working tree) → healthy. `v` tidak
+dijalankan. Budget OTP global (`rl:otp:budget:*`) dibersihkan sebelum run (pola `tests/load/run.sh`). Load test tidak
+dijalankan.
+
+## G13.4 Dashboard (setelah siklus ETL)
+
+View ClickHouse (hari ini, FNB / "SMOKE POS FNB", sebelum run final): `v_pos_sales_daily` penjualan bersih 1.847.000,
+poin EFN 6.000, refund 97.000, promo 50.000; `v_pos_payment_daily` 2 metode; `v_stock_expiring` 1 lot (ETLDEV-L1,
+3 hari); `v_stock_below_reorder` 1; `v_stock_current` 3; `v_price_index` 16; `v_etl_freshness` semua job `ok`,
+0 kegagalan 24 jam.
+
+Metabase lewat API (admin dari secret file, mTLS ke sidecar `metabase-tls`, endpoint dashboard
+`/api/dashboard/:id/dashcard/:dc/card/:c/query` seperti browser): **3 dashboard, 28 dashcard, 0 gagal**.
+- Penjualan Harian Outlet: "Diskon, promo, poin EFN & refund per hari" 07-10: promo 75.000, poin EFN 6.000, refund
+  97.000; "Ringkasan outlet harian" 19 order, 1 order refund.
+- Stok & Kedaluwarsa: lot ETLDEV-L1 "segera", sisa 3 hari, 12 unit; 1 produk di bawah titik pesan ulang.
+- Price Hunter: Indomie Goreng vs "Toko Smoke" 17 laporan, indeks 94,6; produk belum termatch 0 baris.
+
+## G13.5 Bug / perbaikan (harness smoke; tidak ada bug produk ditemukan)
+
+1. `run-e2e-smoke.sh` `odoo()`: traceback `psycopg2.errors.*` tidak memuat "Error" → `grep` kosong + `pipefail` →
+   seluruh run berhenti tanpa ringkasan. Kini juga mencari `errors\.` dan, bila kosong, mencetak
+   `SMOKE_RESULT {"ok": false, "error": "odoo_shell_no_result"}` sehingga cek gagal tercatat.
+2. `scenario_b`: pipeline `gw=$(docker logs ... | grep ...)` menghentikan run bila id report kosong → `|| true`.
+3. `odoo_pos_smoke.py`: helper `bff_post`/`bff_get` memakai `_efn_post`/`_efn_get` (SEC-58, working tree) bila ada,
+   selain itu `post`/`get` (`c1b770a`), agar smoke jalan di kedua versi `efn_core`.
+4. Skenario `l` + langkah Odoo baru `loy_partner`, `loy_balance`, `loy_release`, `loy_cancel`, `loy_token_probe`,
+   `loy_refund`; `loy_sync` mendukung `SMOKE_DRAFT=1`; `loy_outbox` mengeluarkan field datar. shellcheck v0.11.0 dan
+   ruff 0.16.10 (check + format) bersih.
+
+Observasi (bukan bug):
+- `v_pos_sales_daily.refunds` = uang yang dikembalikan (97.000 = barang 100.000 − penyesuaian poin 3.000). Baris
+  penyesuaian poin pada refund (`line_kind=points`, `is_refund=1`) masuk `refunds`, sedangkan `points_redeemed_idr`
+  hanya order non-refund, sehingga nilai poin yang dikembalikan (3.000) tidak terlihat terpisah. Usul data-AI: kolom
+  refund barang kotor + poin dikembalikan.
+- **Working tree saat laporan ini tidak sesuai DB dev**: perubahan agent lain (versi manifest `efn_core`,
+  `efn_pos_loyalty_ledger`, `efn_pos_otp_gate`, `efn_pos_payment_gateway`, `efn_privacy`, `efn_setup_pos` naik; field
+  baru `redeem_max_pct`; `06-platform-loyalty-guard.sql`) belum di-upgrade/diterapkan. Odoo dev memuat kode itu
+  setelah recreate, jadi reserve poin di dev gagal `UndefinedColumn` sampai pemiliknya menjalankan `-u` + SQL 06.
+  BFF dev hanya mengompilasi ulang saat container restart (bind mount Windows tidak memicu `--watch`).
+- Skenario `l` mematikan api-gateway ±1 menit (alert dev BFF down bisa firing sesaat).
+
+## G13.6 Data QA tertinggal di DB dev
+Partner fiktif `SMOKE Member L/M/N` (run `l`, penuh #1, penuh #3), order/reservasi/ledger poin terkait, data `SMOKE *`
+skenario lain. Tidak ada nomor asli.
+
+## G13.7 Belum diverifikasi
+- Frontend POS (OWL) tidak disentuh: skrip memanggil RPC server yang sama dengan tombol Cek Poin/Tukar Poin/refund.
+  Tour refund berpoin belum ada (catatan odoo-engineer).
+- `reservation_expired` (> 24 jam), redeem saat POS offline, refund berpoin offline, reverse kumulatif > 1 refund.
+- Kode working tree pasca-`c1b770a` (SEC-58 dkk.) tidak termasuk run ini.

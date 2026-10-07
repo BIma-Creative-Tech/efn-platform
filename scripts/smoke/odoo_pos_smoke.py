@@ -6,14 +6,16 @@
 # Nomor HP berasal dari env (dibuat acak per run oleh orkestrator; nomor fiktif, bukan data pribadi).
 #
 # Env: SMOKE_STEP (setup|otp_request|otp_verify|sync|gw_create|gw_simulate|gw_status|erasure_cron|partner|
-#      audit|audit_partner|balance|loy_config|loy_otp_request|loy_otp_verify|loy_reserve|loy_sync|loy_outbox)
+#      audit|audit_partner|balance|loy_config|loy_otp_request|loy_otp_verify|loy_reserve|loy_sync|loy_outbox|
+#      loy_partner|loy_balance|loy_release|loy_cancel|loy_token_probe|loy_refund)
 #      Langkah `loy_*` (Gelombang 13b, butuh modul efn_pos_loyalty_ledger terpasang di DB dev): urutan
 #      loy_config -> loy_otp_request -> loy_otp_verify (SMOKE_CODE) -> loy_reserve (SMOKE_POINTS) -> loy_sync
-#      -> loy_outbox. Belum dirangkai di run-e2e-smoke.sh.
+#      -> loy_outbox. Dirangkai di run-e2e-smoke.sh skenario `l` (Gelombang 13, QA).
 #      dan parameter per langkah (lihat fungsi). Keluaran: satu baris `SMOKE_RESULT <json>`.
 # Dipakai hanya di DB dev (`efn_odoo` dev); ditolak bila APP_ENV bukan dev.
 # R2 (docs/04 §8.13): skrip ini tidak pernah menaruh nomor HP/token di URL. Saldo poin (bila dicek) wajib lewat
-# `efn.bff.client.post("/v1/pos/loyalty/balance", {"member_ref": ...})`; `efn.bff.client.get` menolak PII di query.
+# `efn.bff.client._efn_post("/v1/pos/loyalty/balance", {"member_ref": ...})`;
+# `efn.bff.client._efn_get` menolak PII di query. SEC-58: klien BFF hanya metode privat (`_efn_*`).
 # ruff: noqa: F821  (variabel `env` disediakan odoo shell)
 import json
 import os
@@ -31,6 +33,21 @@ PREFIX = "SMOKE"
 
 def out(**kw):
     print("SMOKE_RESULT " + json.dumps(kw, default=str))
+
+
+def _bff_method(name):
+    # SEC-58 (r6) mengganti `post`/`get` publik menjadi `_efn_post`/`_efn_get`; smoke harus jalan di kedua versi
+    # efn_core (DB dev bisa tertinggal satu upgrade dari kode).
+    client = env["efn.bff.client"]
+    return getattr(client, f"_efn_{name}", None) or getattr(client, name)
+
+
+def bff_post(path, payload):
+    return _bff_method("post")(path, payload)
+
+
+def bff_get(path):
+    return _bff_method("get")(path)
 
 
 def load_state():
@@ -299,9 +316,7 @@ def step_gw_simulate():
     # payment_id BFF tidak dikirim ke browser sebelum paid -> dibaca dari intent (sisi server).
     intent = env["efn.pos.payment.intent"].sudo().browse(int(os.environ["SMOKE_INTENT_ID"]))
     payment_id = intent.bff_payment_id
-    resp = env["efn.bff.client"].post(
-        f"/v1/pos/payments/{payment_id}/simulate", {"status": os.environ.get("SMOKE_SIM_STATUS", "paid")}
-    )
+    resp = bff_post(f"/v1/pos/payments/{payment_id}/simulate", {"status": os.environ.get("SMOKE_SIM_STATUS", "paid")})
     out(http=resp.status, **resp.data)
 
 
@@ -429,10 +444,9 @@ def step_balance():
 
     st = load_state()
     partner = env["res.partner"].sudo().browse(st["partners"]["E"])
-    client = env["efn.bff.client"]
-    resp = client.post("/v1/pos/loyalty/balance", {"member_ref": partner_member_ref(partner)[0]})
-    old = client.get("/v1/pos/loyalty/balance")
-    bad = client.post("/v1/pos/loyalty/balance", {"member_ref": "bukan-nomor"})
+    resp = bff_post("/v1/pos/loyalty/balance", {"member_ref": partner_member_ref(partner)[0]})
+    old = bff_get("/v1/pos/loyalty/balance")
+    bad = bff_post("/v1/pos/loyalty/balance", {"member_ref": "bukan-nomor"})
     out(
         http=resp.status,
         points_balance=resp.data.get("points_balance"),
@@ -489,6 +503,7 @@ def step_loy_sync():
     uuid = os.environ["SMOKE_ORDER_UUID"]
     partner_id = st["partners"][os.environ["SMOKE_PARTNER"]]
     data, total = _order_data(e, st, uuid, partner_id, int(os.environ.get("SMOKE_QTY", "1")), False, None)
+    draft = os.environ.get("SMOKE_DRAFT") == "1"
     reservation = e["efn.pos.loyalty.reservation"].sudo().search([("order_uuid", "=", uuid)], limit=1)
     value = reservation.value_idr if reservation else 0
     if value:
@@ -513,6 +528,9 @@ def step_loy_sync():
         total -= value
         data["amount_total"] = data["amount_paid"] = total
         data["payment_ids"][0][2]["amount"] = total
+    if draft:
+        # Order belum dibayar (mis. disimpan lalu dibatalkan kasir) -> jalur release via cancel.
+        data.update({"state": "draft", "payment_ids": [], "amount_paid": 0})
     try:
         e["pos.order"].sync_from_ui([data])
         env.cr.commit()
@@ -522,7 +540,14 @@ def step_loy_sync():
         return
     order = e["pos.order"].search([("uuid", "=", uuid)], limit=1)
     outbox = e["efn.pos.loyalty.outbox"].sudo().search([("order_id", "=", order.id)])
-    out(ok=True, total=total, loyalty_state=order.efn_loyalty_state, outbox=sorted(outbox.mapped("kind")))
+    out(
+        ok=True,
+        total=total,
+        state=order.state,
+        points_lines=len(order._efn_points_lines()),
+        loyalty_state=order.efn_loyalty_state,
+        outbox=sorted(outbox.mapped("kind")),
+    )
 
 
 def step_loy_outbox():
@@ -532,10 +557,212 @@ def step_loy_outbox():
     env.cr.commit()
     order = e["pos.order"].search([("uuid", "=", uuid)], limit=1)
     outbox = e["efn.pos.loyalty.outbox"].sudo().search([("order_id", "=", order.id)])
+    flat = {}
+    for rec in outbox:
+        flat.update(
+            {
+                f"{rec.kind}_state": rec.state,
+                f"{rec.kind}_error": rec.last_error or "",
+                f"{rec.kind}_delta": rec.points_delta,
+                f"{rec.kind}_attempts": rec.attempt_count,
+            }
+        )
+    reservation = e["efn.pos.loyalty.reservation"].sudo().search([("order_uuid", "=", uuid)], limit=1)
     out(
+        order_state=order.state,
         loyalty_state=order.efn_loyalty_state,
         points_earned=order.efn_loyalty_points_earned,
-        outbox={rec.kind: [rec.state, rec.last_error, rec.points_delta] for rec in outbox},
+        reservation_state=reservation.state if reservation else None,
+        **flat,
+    )
+
+
+# --------------------------------------------------------------------------------------------------------------
+# Gelombang 13 (QA): langkah tambahan skenario `l` run-e2e-smoke.sh (loyalty POS end-to-end terhadap BFF nyata).
+def step_loy_partner():
+    """Partner fiktif tambahan (kunci SMOKE_KEY) untuk skenario loyalty; ditambahkan ke state."""
+    st = load_state()
+    key = os.environ["SMOKE_KEY"]
+    partner = env["res.partner"].sudo().create({"name": f"{PREFIX} Member {key}", "phone": os.environ["SMOKE_PHONE"]})
+    st["partners"][key] = partner.id
+    with open(STATE_FILE, "w", encoding="utf-8") as fh:
+        json.dump(st, fh)
+    env.cr.commit()
+    out(ok=True, key=key, partner_id=partner.id, hash_present=bool(partner.efn_member_hash))
+
+
+def step_loy_balance():
+    e, st = ctx_env()
+    config = e["pos.config"].browse(st["config_id"])
+    res = config.efn_loyalty_balance(st["partners"][os.environ["SMOKE_PARTNER"]])
+    out(**res)
+
+
+def step_loy_release():
+    """Kasir membatalkan penukaran (dialog Batal/Back) -> RPC release."""
+    e, st = ctx_env()
+    uuid = os.environ["SMOKE_ORDER_UUID"]
+    config = e["pos.config"].browse(st["config_id"])
+    res = config.efn_loyalty_redeem_release(uuid)
+    env.cr.commit()
+    reservation = e["efn.pos.loyalty.reservation"].sudo().search([("order_uuid", "=", uuid)], limit=1)
+    out(ok=res.get("ok"), reservation_state=reservation.state, note=reservation.note)
+
+
+def step_loy_cancel():
+    """Order draft berpoin dibatalkan (`action_pos_order_cancel`) -> outbox redeem_release -> BFF."""
+    e, _st = ctx_env()
+    uuid = os.environ["SMOKE_ORDER_UUID"]
+    order = e["pos.order"].search([("uuid", "=", uuid)], limit=1)
+    order.action_pos_order_cancel()
+    env.cr.commit()
+    e["efn.pos.loyalty.outbox"]._efn_process_due()
+    env.cr.commit()
+    reservation = e["efn.pos.loyalty.reservation"].sudo().search([("order_uuid", "=", uuid)], limit=1)
+    outbox = e["efn.pos.loyalty.outbox"].sudo().search([("reservation_id", "=", reservation.id)])
+    out(
+        order_state=order.state,
+        reservation_state=reservation.state,
+        release_state=",".join(outbox.filtered(lambda r: r.kind == "redeem_release").mapped("state")),
+    )
+
+
+def step_loy_token_probe():
+    """Token OTP dipakai lintas purpose LANGSUNG ke BFF (melewati filter purpose Odoo).
+
+    SMOKE_PURPOSE = purpose challenge yang sudah verified untuk order ini. Token promo -> reserve
+    (harus 409 token_invalid); token redeem -> consume promo (harus 409).
+    """
+    e, st = ctx_env()
+    uuid = os.environ["SMOKE_ORDER_UUID"]
+    purpose = os.environ["SMOKE_PURPOSE"]
+    config = e["pos.config"].browse(st["config_id"])
+    challenge = e["efn.pos.otp.challenge"]._efn_find_valid_verified(config, uuid, purpose=purpose)
+    partner = e["res.partner"].sudo().browse(st["partners"][os.environ["SMOKE_PARTNER"]])
+    from odoo.addons.efn_core.models.efn_bff_client import partner_member_ref
+
+    member = partner_member_ref(partner)[0]
+    amount = int(float(os.environ["SMOKE_AMOUNT"]))
+    if not challenge or not challenge.discount_token:
+        out(ok=False, error="no_verified_challenge")
+        return
+    if purpose == "pos_promo":
+        resp = bff_post(
+            "/v1/pos/loyalty/redeem/reserve",
+            {
+                "discount_token": challenge.discount_token,
+                "order_ref": uuid,
+                "member_ref": member,
+                "points": int(os.environ.get("SMOKE_POINTS", "50")),
+                "amount_total": amount,
+            },
+        )
+    else:
+        resp = bff_post(
+            "/v1/pos/discount-token/consume",
+            {
+                "discount_token": challenge.discount_token,
+                "order_ref": uuid,
+                "member_ref": member,
+                "amount_total": amount,
+            },
+        )
+    error = resp.data.get("error")
+    code = error.get("code") if isinstance(error, dict) else resp.data.get("reason")
+    out(http=resp.status, code=code)
+
+
+def step_loy_refund():
+    """Refund sebagian order asal berpoin (SMOKE_ORIG_UUID, SMOKE_QTY unit barang) dengan baris
+    penyesuaian Poin EFN sesuai `efn_loyalty_refund_preview` (perilaku layar refund POS)."""
+    e, st = ctx_env()
+    uuid = os.environ["SMOKE_ORDER_UUID"]
+    qty = int(os.environ.get("SMOKE_QTY", "1"))
+    original = e["pos.order"].search([("uuid", "=", os.environ["SMOKE_ORIG_UUID"])], limit=1)
+    config = e["pos.config"].browse(st["config_id"])
+    points_product = e["pos.order"]._efn_points_product()
+    goods = original.lines.filtered(lambda line: line.product_id != points_product)[:1]
+    preview = config.efn_loyalty_refund_preview(original.id, [[goods.id, qty]])
+    session = e["pos.session"].browse(st["session_id"])
+    price = goods.price_unit
+    lines = [
+        (
+            0,
+            0,
+            {
+                "id": random.randint(1, 1_000_000),  # noqa: S311
+                "pack_lot_ids": [],
+                "price_unit": price,
+                "product_id": goods.product_id.id,
+                "price_subtotal": -price * qty,
+                "price_subtotal_incl": -price * qty,
+                "qty": -qty,
+                "tax_ids": [(6, 0, [])],
+                "refunded_orderline_id": goods.id,
+            },
+        )
+    ]
+    adjust = preview.get("value_idr") or 0
+    if adjust:
+        lines.append(
+            (
+                0,
+                0,
+                {
+                    "id": random.randint(1, 1_000_000),  # noqa: S311
+                    "pack_lot_ids": [],
+                    "price_unit": adjust,
+                    "product_id": points_product.id,
+                    "price_subtotal": adjust,
+                    "price_subtotal_incl": adjust,
+                    "qty": 1,
+                    "tax_ids": [(6, 0, [])],
+                    "price_type": "automatic",
+                },
+            )
+        )
+    total = -price * qty + adjust
+    data = {
+        "amount_paid": total,
+        "amount_return": 0,
+        "amount_tax": 0,
+        "amount_total": total,
+        "date_order": fields.Datetime.to_string(fields.Datetime.now()),
+        "fiscal_position_id": False,
+        "pricelist_id": config.pricelist_id.id,
+        "name": f"Order {uuid}",
+        "last_order_preparation_change": "{}",
+        "lines": lines,
+        "partner_id": original.partner_id.id,
+        "session_id": session.id,
+        "payment_ids": [(0, 0, {"amount": total, "name": fields.Datetime.now(), "payment_method_id": st["cash_pm"]})],
+        "uuid": uuid,
+        "user_id": e.uid,
+        "to_invoice": False,
+        "state": "paid",
+        "is_refund": True,
+    }
+    try:
+        e["pos.order"].sync_from_ui([data])
+        env.cr.commit()
+    except Exception as exc:  # noqa: BLE001 - laporan smoke
+        env.cr.rollback()
+        out(ok=False, error=type(exc).__name__, message=str(exc)[:300], preview=preview)
+        return
+    order = e["pos.order"].search([("uuid", "=", uuid)], limit=1)
+    outbox = e["efn.pos.loyalty.outbox"].sudo().search([("order_id", "=", order.id), ("kind", "=", "reverse")])
+    out(
+        ok=True,
+        state=order.state,
+        is_refund=order.is_refund,
+        refunded_order=order.refunded_order_id.uuid,
+        preview_ratio=preview.get("ratio"),
+        preview_value=adjust,
+        total=total,
+        loyalty_state=order.efn_loyalty_state,
+        reverse_ratio=outbox.refund_ratio,
+        reverse_eligible=outbox.eligible_amount,
+        reverse_state=outbox.state,
     )
 
 
@@ -558,4 +785,10 @@ def step_loy_outbox():
     "loy_reserve": step_loy_reserve,
     "loy_sync": step_loy_sync,
     "loy_outbox": step_loy_outbox,
+    "loy_partner": step_loy_partner,
+    "loy_balance": step_loy_balance,
+    "loy_release": step_loy_release,
+    "loy_cancel": step_loy_cancel,
+    "loy_token_probe": step_loy_token_probe,
+    "loy_refund": step_loy_refund,
 }[STEP]()

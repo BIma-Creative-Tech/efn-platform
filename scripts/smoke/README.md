@@ -9,7 +9,7 @@ ETL, dan regresi negatif enkripsi. Hasil gelombang 8: `docs/testing/E2E_SMOKE_RE
 
 | File | Dijalankan di | Isi |
 |---|---|---|
-| `run-e2e-smoke.sh` | host (Git Bash/Linux) | orkestrator skenario `a b c d f e g` (default semua), ringkasan PASS/FAIL, exit 1 bila gagal |
+| `run-e2e-smoke.sh` | host (Git Bash/Linux) | orkestrator skenario `a b c d f e g l` (default semua; `v` opsional), ringkasan PASS/FAIL, exit 1 bila gagal |
 | `bff_smoke.py` | container `python:3.12` di network `efn_edge` (klien publik, lewat Traefik) | Super-App/BFF: ALTCHA PoW, OTP, JWT, consent, upload foto sintetis (Pillow), DSAR |
 | `odoo_pos_smoke.py` | `odoo shell` di container `efn-odoo-1` | setup POS smoke (company FNB), `efn_otp_request/verify`, `sync_from_ui`, `efn_gateway_*`, cron erasure |
 
@@ -41,6 +41,24 @@ Prasyarat: stack dev `core` + `data` + `ai` jalan dan modul `efn_*` terpasang (`
   `dsar_request`); `dsar_request.member_hash` NULL setelah `completed`; log audit partner subjek terhapus + log
   `purge` tanpa id; penanda `efn.privacy.erasure.pending` kosong; receipt DSAR via BFF dan via Next.js
   `/api/dsar/requests/:id` (cookie `efn_dsar_receipt`): 200 tanpa PII, receipt salah/hilang 404, lintas situs 403.
+
+## Skenario `l` — Poin EFN di POS (gelombang 13, docs/04 §9)
+Butuh `efn_pos_loyalty_ledger` terpasang dan SQL `05-platform-loyalty-pos.sql` di DB platform. Tiga partner fiktif
+baru (L/M/N) per run; nilai poin memakai default BFF dev (1 poin/Rp10.000, Rp100/poin, min 50, maks 50 %).
+- Earn order 20 × Rp50.000 → 100 poin (outbox Odoo → `POST /v1/pos/loyalty/earn`, `platform.loyalty_pos_earn` + ledger).
+- Saldo dari POS (`efn_loyalty_balance`) = 100.
+- Redeem: OTP `pos_redeem` (kode dari log console BFF) → reserve 60 poin (Rp6.000) → order dengan baris Poin EFN →
+  sync → outbox commit; saldo 100 − 60 + 19 (earn atas Rp194.000) = 59; reservasi BFF `committed/60/6000`.
+- Batal: RPC release (dialog kasir) dan order draft berpoin → `action_pos_order_cancel` → outbox release; BFF `released`.
+- Lintas purpose: OTP promo → reserve ditolak Odoo (`otp_required`) dan token promo langsung ke BFF reserve → 409
+  `token_invalid`; OTP redeem → order promo ditolak gate (`UserError`) dan token redeem ke consume promo → 409.
+- Refund 2/4 unit order berpoin (penyesuaian Rp3.000 dari `efn_loyalty_refund_preview`) → reverse rasio 0,5:
+  restore 30, clawback 10 → saldo 79.
+- `docker stop` api-gateway saat sync → order tetap `paid`, earn `pending` (`bff_unreachable`); setelah start, outbox
+  mengirim ulang (backoff) → saldo 89. Skenario ini **mematikan api-gateway ±1 menit**.
+- PDP: 0 kemunculan digit HP partner L/M/N di `platform.loyalty_*`, `efn_pos_loyalty_*`, `efn_pos_otp_challenge`,
+  log BFF dan log Odoo; ETL: baris `line_kind=points` (−6000) dan baris refund masuk `fact_sales_line`.
+- Batas OTP per member 3/15 menit: partner L memakai tepat 3 OTP redeem.
 
 ## Belum
 - Tidak masuk CI (butuh stack penuh + ±15 menit). Kandidat job nightly pada runner self-hosted.
