@@ -27,6 +27,10 @@
         "point_of_sale._assets_pos": [
             "efn_pos_payment_gateway/static/src/**/*",
         ],
+        # Gelombang 12: tour UI POS (hanya mode test, HttpCase tag efn_tour).
+        "web.assets_tests": [
+            "efn_pos_payment_gateway/static/tests/tours/**/*",
+        ],
     },
     "installable": True,
     "application": False,

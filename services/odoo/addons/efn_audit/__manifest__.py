@@ -4,7 +4,7 @@
         "Log audit nilai lama/baru per aturan model (create/write/unlink), PII ter-mask, "
         "immutable, multi-company, retensi otomatis. Pengganti OCA auditlog (ADR-031)."
     ),
-    "version": "19.0.1.1.0",
+    "version": "19.0.1.2.0",
     "category": "EFN",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency OCA/Cybrosys (ADR-031). OCA `auditlog` (AGPL-3) dan Cybrosys

@@ -37,11 +37,10 @@ Cron harian *EFN Gateway: rekonsiliasi intent QRIS POS*: intent `pending` lewat 
 
 ## Test otomatis
 `tests/test_payment_gateway.py` (TestPoSCommon, tag `efn`, BFF di-mock): payload kontrak + idempotensi create, nominal/BFF down, non-POS user `AccessDenied`, metode bukan milik config, status `paid` (transaction_id, QR dikosongkan), `paid` dengan nominal beda → `failed`, cancel → retry key baru, balapan cancel vs paid, sync sukses + tautan intent, sync ditolak untuk intent pending / BFF down / nominal beda / intent dipakai ulang / tanpa intent (skenario offline), cron rekonsiliasi (kedaluwarsa + yatim sekali), record rule multi-company, kasir tidak bisa menulis intent, constraint jurnal bank.
+`tests/test_gateway_tour.py` (HttpCase + tour Chrome headless, tag `efn_tour`, job CI `odoo-tour`; tour `static/tests/tours/efn_gateway_tour.js`, BFF di-mock): pilih metode -> Send -> QR PNG tampil di `QRPopup` -> polling status `paid` -> baris "Payment Successful" -> validasi -> order lunas dengan `transaction_id` = payment_id; dan batal dari popup -> intent `cancelled` -> baris `Retry` -> hapus -> bayar Bank.
 
 ## Batasan / belum terverifikasi
-- Belum pernah di-install/dijalankan. **Tidak ada test JS** (QUnit/Hoot/tour) — perilaku offline/polling/QR frontend hanya diuji manual.
+- Gelombang 12: alur frontend paid/cancel terverifikasi lewat tour (Chrome headless, BFF di-mock). Belum: provider/BFF nyata, kedaluwarsa QR di frontend, offline di tengah polling, layar pelanggan.
 - Bentuk `order.qrPaymentData` untuk layar pelanggan 19.0 **belum terverifikasi** (template `customer_display.xml` 19.0 tidak merujuknya); kode menulis `{name, amount, qrCode}` dalam `try`. Bila layar pelanggan tidak menampilkannya, QR tetap tampil di popup kasir.
-- Props `QRPopup` 19.0 terverifikasi (`line`, `order`, `qrCode`, + props `ConfirmationDialog`); prop `dismiss` dan nilai kembali `dialog.add` (fungsi tutup) diasumsikan seperti 17/18.
-- Alur payment screen 19.0 (status `waitingCard`, `pay()` → `retry/done`) diasumsikan seperti `pos_adyen` 19.0.
-- `ir.actions.report.barcode("QR", value, width, height)` diasumsikan tersedia (gagal → tanpa gambar, notifikasi).
+- Props `QRPopup`, penutupan popup lewat fungsi hasil `dialog.add`, alur `waitingCard` -> `done`/`retry`, dan render QR `ir.actions.report.barcode` terverifikasi oleh tour 19.0 (Gelombang 12).
 - Mata uang produksi dipaksa `IDR` (parameter hanya untuk DB uji). Settlement per PT/ADR-019 belum diimplementasi (BFF).

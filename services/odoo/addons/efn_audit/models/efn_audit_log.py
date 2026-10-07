@@ -31,7 +31,7 @@ from .audit_policy import (
     effective_retention,
     parse_retention,
 )
-from .base import emit_sink, sink_event
+from .base import emit_sink, origin_uid, sink_event
 
 _logger = logging.getLogger(__name__)
 
@@ -77,6 +77,15 @@ class EfnAuditLog(models.Model):
     _order = "id desc"
 
     user_id = fields.Many2one("res.users", string="User", required=True, index=True, ondelete="restrict")
+    origin_user_id = fields.Many2one(
+        "res.users",
+        string="User Pemicu",
+        index="btree_not_null",
+        ondelete="restrict",
+        help="SEC-46: user manusia yang memicu perubahan bila `User` berbeda (mis. kode memakai "
+        "with_user(SUPERUSER_ID) -> OdooBot). Dari sesi HTTP atau helper elevate_as_superuser; "
+        "kosong bila sama dengan User atau tidak diketahui (cron tanpa helper).",
+    )
     is_sudo = fields.Boolean(string="Via sudo")
     operation = fields.Selection(OPERATIONS, required=True, index=True)
     model_id = fields.Many2one("ir.model", string="Model", ondelete="set null")
@@ -133,6 +142,7 @@ class EfnAuditLog(models.Model):
     def _efn_audit_write_purge_log(self, model_name, note):
         vals = {
             "user_id": self.env.uid,
+            "origin_user_id": origin_uid(self.env),
             "is_sudo": self.env.su,
             "operation": "purge",
             "model_name": model_name,
@@ -249,6 +259,12 @@ class EfnAuditLogLine(models.Model):
     old_ref = fields.Char(string="Ref Lama", help="model,id[,id...] untuk many2one/many2many")
     new_ref = fields.Char(string="Ref Baru")
     is_masked = fields.Boolean(string="Disamarkan")
+
+    # SEC-46 (Gelombang 12): `_efn_audit_purge_records` mencari `old_ref/new_ref =like "model,%"`.
+    # btree text_pattern_ops mendukung LIKE prefix di collation non-C; parsial (hanya baris ber-ref,
+    # yaitu field relasi) agar kecil. Diverifikasi EXPLAIN di test_audit_privacy.
+    _old_ref_prefix_idx = models.Index("(old_ref text_pattern_ops) WHERE old_ref IS NOT NULL")
+    _new_ref_prefix_idx = models.Index("(new_ref text_pattern_ops) WHERE new_ref IS NOT NULL")
 
     def write(self, vals):
         if not self.env.cr.cache.get(PURGE_KEY):

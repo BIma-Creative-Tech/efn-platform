@@ -111,13 +111,13 @@ def check_ca_file(path, purpose):
 
 
 def hash_admin_password(password):
+    # SEC-30: tidak ada fallback plaintext. passlib adalah dependensi wajib Odoo 19 (image
+    # resmi: paket python3-passlib); bila hilang, render GAGAL agar admin_passwd tidak pernah
+    # ditulis tanpa hash.
     try:
         from passlib.context import CryptContext
     except ImportError:
-        # passlib adalah dependensi wajib Odoo 19; bila hilang, plaintext tetap bisa
-        # diverifikasi Odoo (skema 'plaintext' deprecated) dan file tetap 0600.
-        log("PERINGATAN: passlib tidak tersedia; admin_passwd ditulis tanpa hash")
-        return password
+        fail("passlib tidak tersedia; admin_passwd tidak boleh ditulis tanpa hash (SEC-30)")
     return CryptContext(schemes=["pbkdf2_sha512"], pbkdf2_sha512__rounds=600_000).hash(password)
 
 

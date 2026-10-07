@@ -24,6 +24,10 @@
         "point_of_sale._assets_pos": [
             "efn_pos_otp_gate/static/src/**/*",
         ],
+        # Gelombang 12: tour UI POS (hanya dimuat dalam mode test, HttpCase tag efn_tour).
+        "web.assets_tests": [
+            "efn_pos_otp_gate/static/tests/tours/**/*",
+        ],
     },
     "installable": True,
     "application": False,

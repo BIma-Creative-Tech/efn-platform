@@ -343,3 +343,44 @@ Odoo 19 `ir.module.module._get_desc` merender README sebagai RST dengan docutils
 - SEC-46: `prev_company_id` dikerjakan; `with_user(SUPERUSER_ID)` kehilangan uid pemicu dan `_write`/SQL/upgrade tetap di luar cakupan (README). Index untuk `=like` purge erasure belum.
 - `res.groups`/`res.users.group_ids` belum masuk model kontrol (bisa ditambah admin lewat aturan).
 - Sink baru diverifikasi di test (`assertLogs` setelah `postcommit.run()`); belum dilihat di Loki stack nyata. CI GitHub belum dijalankan. Tidak ada commit.
+
+# Gelombang 12 — Tour UI POS (OWL) nyata, SEC-46 sisa, SEC-30 (7 Okt 2026)
+
+Basis `d61faf0`. Tidak ada commit. Stack dev tidak di-restart (Docker Desktop sempat mati di antara sesi dan dinyalakan ulang; semua uji memakai container/DB sementara `efn-ci-pg`/`efn-tourci-pg`, sudah dibersihkan).
+
+## Perubahan
+| Area | File | Isi |
+|---|---|---|
+| Image test | `services/odoo/Dockerfile` | Stage `runtime` (isi produksi) → `test` (Google Chrome stable dari repo apt Google, kunci diverifikasi fingerprint `EB4C1BFD…4796` + `signed-by`; `python3-websocket`) → `production` (stage terakhir = target default, tanpa browser). Build memverifikasi `import passlib.context` (SEC-30). |
+| SEC-30 | `services/odoo/render_odoo_conf.py` | Fallback plaintext dihapus: passlib hilang → `FATAL` exit 1. Diverifikasi: hash `$pbkdf2-sha512$600000…` normal; `passlib.context` disembunyikan → exit 1. |
+| Tour OTP | `efn_pos_otp_gate/static/tests/tours/efn_otp_gate_tour.js`, `tests/test_pos_otp_tour.py`, manifest `web.assets_tests` | 3 tour (lihat bawah), `HttpCase`/`TestPointOfSaleHttpCommon.start_pos_tour`, tag `efn_tour`, BFF di-mock server-side (`patch.object(registry["efn.bff.client"], "post", autospec)`). |
+| Tour QRIS | `efn_pos_payment_gateway/static/tests/tours/efn_gateway_tour.js`, `tests/test_gateway_tour.py`, manifest | 2 tour: paid, cancel. Mock `post`+`get`. |
+| SEC-46 | `efn_audit/models/base.py`, `models/efn_audit_log.py`, views, manifest `19.0.1.2.0` | Field `origin_user_id` (User Pemicu) dari sumber tepercaya saja: `request.session.uid` atau helper `elevate_as_superuser(env)` (penanda `cr.cache`); context RPC diabaikan. Ikut di log purge + sink Loki (`origin_uid`). Index parsial `text_pattern_ops` pada `old_ref`/`new_ref` untuk purge erasure. Test `tests/test_audit_origin.py` (6). |
+| CI | `.github/workflows/ci.yml` | Job baru `odoo-tour` (build `--target test`, DB terpisah modul `efn_pos_otp_gate,efn_pos_payment_gateway`, `--test-tags efn_tour`, `--init --no-healthcheck --shm-size=1g`; gagal bila ada ERROR, bila browser di-skip, atau < 5 test berjalan) + `odoo-tour` ditambahkan ke `needs` `ci-gate` (satu baris di luar job odoo-test, diperlukan agar gerbang menahan merge). Job `odoo-test` tidak diubah. |
+| Dok | README `efn_audit`, `efn_pos_otp_gate`, `efn_pos_payment_gateway` | Test, batasan baru. |
+
+## Tour yang lolos (Chrome 154 headless, Odoo 19 nyata)
+1. `EfnPosOtpGateTour`: produk → Reward ber-OTP tanpa pelanggan → notifikasi + daftar pelanggan → pilih member → popup OTP (nomor `62812****890`) → kode salah (notifikasi, reward tidak terpasang) → kode benar → reward terpasang → bayar Bank → order `paid`, `efn_otp_gate_state = consumed`, payload request (member dari partner, company_code) & consume (order_ref, amount_total, token) diperiksa.
+2. `EfnPosOtpNoCustomerTour`: tanpa pelanggan, daftar pelanggan ditutup → tidak ada panggilan BFF, tanpa reward, order tetap bisa dibayar.
+3. `EfnPosOtpOfflineTour`: offline → tombol Reward tidak menawarkan reward ber-OTP; online → OTP → reward; offline → Validate diblok dialog "POS sedang offline"; online → validate → `consumed`.
+4. `EfnPosQrisPaidTour`: metode QRIS EFN → Send → QR PNG di `QRPopup` → polling `paid` → "Payment Successful" → validate → order lunas, `transaction_id` = payment_id BFF.
+5. `EfnPosQrisCancelTour`: batal dari popup → intent `cancelled` → baris `Retry` → hapus → bayar Bank.
+
+Temuan saat menulis tour: kode frontend POS yang ada (OTP gate & gateway) berjalan tanpa perubahan. Catatan util offline Odoo: event `offline` dipicu sebelum fetch/XHR diblok, sehingga tour memanggil ulang `posmodel.data.checkConnectivity()`.
+
+## Validasi
+| Gerbang | Hasil |
+|---|---|
+| Harness unit (`odoo-test-nooca.sh`, image produksi, 10 modul + efn_setup_security) | **0 failed, 0 error(s) of 172 tests**, 0 baris ERROR (efn_audit 57 termasuk 6 baru) |
+| Harness tour (salinan job `odoo-tour`, image `test`) | **0 failed, 0 error(s) of 5 tests**, 5× `tour succeeded`, 0 ERROR, 0 skip browser |
+| Image produksi tanpa Chrome | `command -v google-chrome chromium` → tidak ada |
+| check-odoo-deps | 11 modul, 0 dependensi terlarang |
+| ruff 0.16.10 check + format --check (`services/odoo`) | bersih |
+| hadolint v2.12.0 (versi hadolint-action CI) | bersih. `hadolint:latest` melaporkan DL3025 pada `HEALTHCHECK CMD` (sudah ada di HEAD, bukan dari perubahan ini) |
+| yamllint (`.yamllint.yml`) + actionlint 1.7.12 (+shellcheck) `ci.yml` | bersih |
+
+## Belum diverifikasi / sisa
+- Tour belum dijalankan di GitHub Actions (hanya salinan lokal job). Image `test` tidak reprodusibel (Chrome stable saat build); tidak pernah di-deploy.
+- Tour berjalan di DB tanpa `efn_setup_*` (fixture `TestPointOfSaleHttpCommon` gagal di `setUpClass` dengan 4 company `efn_setup_company`: user `accountman` tidak bisa membaca pajak company lain). Konfigurasi POS nyata efn_setup_pos belum diuji lewat UI.
+- Mode mobile (`isActive: ["mobile"]`), layar pelanggan QRIS, kedaluwarsa QR & offline di tengah polling, BFF/WhatsApp/provider nyata: belum.
+- SEC-46: cron/consumer yang memakai `with_user(SUPERUSER_ID)` langsung (tanpa helper, tanpa sesi HTTP) tetap tanpa uid pemicu; `_write`/SQL langsung & `registry.ready=False` tetap di luar cakupan (by design). Upgrade `efn_audit` 19.0.1.1.0 → 1.2.0 pada DB dev/staging belum dijalankan (kolom & index dibuat ORM); efektivitas index belum diukur pada volume besar.

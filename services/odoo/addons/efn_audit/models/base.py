@@ -26,12 +26,19 @@ Gelombang 11:
   auditor PT lama tetap melihat jejak pemindahan.
 - SEC-43: log model kontrol + log purge juga dikirim ke logger sink `odoo.addons.efn_audit.sink`
   SETELAH commit (Loki = salinan di luar kendali admin Odoo; tanpa nilai, tanpa PII).
+
+Gelombang 12 (SEC-46 sisa):
+- `origin_user_id`: uid manusia pemicu bila `env.uid` berbeda (mis. `with_user(SUPERUSER_ID)` tercatat
+  OdooBot). Sumber tepercaya saja: penanda `cr.cache` dari `elevate_as_superuser()` atau
+  `request.session.uid` (sesi HTTP terautentikasi). Context RPC TIDAK dipakai (bisa diisi klien).
 """
 
 import json
 import logging
+from contextlib import contextmanager
 
-from odoo import api, models
+from odoo import SUPERUSER_ID, api, models
+from odoo.http import request
 from odoo.tools import float_repr, html2plaintext
 from odoo.tools.safe_eval import safe_eval
 
@@ -48,6 +55,53 @@ MAX_VALUE_LEN = 2000
 MAX_X2M_NAMES = 20
 
 _sink_logger = logging.getLogger("odoo.addons.efn_audit.sink")
+
+# SEC-46 (Gelombang 12): penanda uid pemicu di `cr.cache` (per cursor/transaksi, tidak bisa diisi
+# klien lewat RPC — berbeda dengan context). Diisi oleh `elevate_as_superuser`.
+ORIGIN_UID_KEY = "efn_audit_origin_uid"
+
+
+@contextmanager
+def elevate_as_superuser(env):
+    """Elevasi `with_user(SUPERUSER_ID)` yang TETAP mencatat uid pemicu di log audit (SEC-46).
+
+    Pakai ini (bukan `env(user=SUPERUSER_ID)` langsung) di kode kustom yang perlu bertindak
+    sebagai OdooBot, mis. dari cron/consumer tanpa sesi HTTP::
+
+        with elevate_as_superuser(self.env) as su_env:
+            su_env["product.product"].browse(ids).write({...})
+
+    Log audit di dalam blok: `user_id` = OdooBot, `origin_user_id` = uid pemanggil.
+    """
+    cache = env.cr.cache
+    previous = cache.get(ORIGIN_UID_KEY)
+    if not previous and env.uid != SUPERUSER_ID:
+        cache[ORIGIN_UID_KEY] = env.uid
+    try:
+        yield env(user=SUPERUSER_ID)
+    finally:
+        if previous:
+            cache[ORIGIN_UID_KEY] = previous
+        else:
+            cache.pop(ORIGIN_UID_KEY, None)
+
+
+def origin_uid(env):
+    """uid manusia pemicu bila berbeda dari `env.uid` (mis. `with_user(SUPERUSER_ID)`), atau False.
+
+    Sumber tepercaya saja (bukan context RPC): (1) penanda `cr.cache` dari `elevate_as_superuser`;
+    (2) `request.session.uid` — user yang terautentikasi di sesi HTTP, ditetapkan server.
+    Cron/queue tanpa sesi HTTP dan tanpa helper -> False (batasan, README).
+    """
+    uid = env.cr.cache.get(ORIGIN_UID_KEY)
+    if not uid and request:
+        try:
+            uid = request.session.uid
+        except (AttributeError, RuntimeError):
+            uid = None
+    if isinstance(uid, int) and not isinstance(uid, bool) and uid != env.uid:
+        return uid
+    return False
 
 
 def _truncate(text):
@@ -80,6 +134,7 @@ def sink_event(log_vals, log_id):
         "model": log_vals.get("model_name"),
         "res_id": log_vals.get("res_id") or None,
         "uid": log_vals.get("user_id"),
+        "origin_uid": log_vals.get("origin_user_id") or None,
         "sudo": bool(log_vals.get("is_sudo")),
         "fields": sorted(line[2]["field_name"] for line in log_vals.get("line_ids", ()) if line[2].get("field_name")),
         "note": log_vals.get("note") or None,
@@ -190,6 +245,7 @@ class Base(models.AbstractModel):
         personal = self._name in PERSONAL_MODELS
         name_fields = PERSON_NAME_FIELDS.get(self._name, frozenset())
         prev_company = prev_company or {}
+        trigger_uid = origin_uid(self.env)
         vals_list = []
         for record in records:
             lines = []
@@ -228,6 +284,7 @@ class Base(models.AbstractModel):
             vals_list.append(
                 {
                     "user_id": self.env.uid,
+                    "origin_user_id": trigger_uid,
                     "is_sudo": self.env.su,
                     "operation": operation,
                     "model_id": model_id,
