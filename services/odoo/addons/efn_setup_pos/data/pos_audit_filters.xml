@@ -79,4 +79,16 @@
         <field name="context">{'group_by': ['order_id']}</field>
         <field name="sort">[]</field>
     </record>
+
+    <!-- SEC-63 (r6): label harga barcode `23` pada produk TIMBANG (setUnitPrice + price_type
+         'manual' tanpa cek restrict_price_control di frontend CE). Filter di atas sengaja
+         mengecualikan produk timbang, jadi label harga palsu untuk produk timbang mahal punya
+         filter sendiri: kelompokkan per produk, bandingkan harga satuan dengan harga jual. -->
+    <record id="filter_pos_line_weighed_price_label" model="ir.filters">
+        <field name="name">EFN Audit: Label harga produk timbang (barcode 23)</field>
+        <field name="model_id">pos.order.line</field>
+        <field name="domain">[('price_type', '=', 'manual'), ('refunded_orderline_id', '=', False), ('is_reward_line', '=', False), ('product_id.to_weight', '=', True)]</field>
+        <field name="context">{'group_by': ['product_id']}</field>
+        <field name="sort">[]</field>
+    </record>
 </odoo>

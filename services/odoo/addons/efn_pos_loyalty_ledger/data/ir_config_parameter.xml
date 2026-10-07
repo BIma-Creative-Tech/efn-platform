@@ -16,4 +16,10 @@
         <field name="key">efn.pos.loyalty.balance_rate_per_minute</field>
         <field name="value">20</field>
     </record>
+    <!-- SEC-62: fallback batas % poin per order bila parameter BFF tidak terbaca (samakan dengan
+         LOYALTY_REDEEM_MAX_PCT_OF_ORDER di BFF; PLACEHOLDER Finance/Q-13). -->
+    <record id="param_loyalty_redeem_max_pct_fallback" model="ir.config_parameter">
+        <field name="key">efn.pos.loyalty.redeem_max_pct_fallback</field>
+        <field name="value">50</field>
+    </record>
 </odoo>

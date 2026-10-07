@@ -468,3 +468,30 @@ Batas file: `efn_pos_loyalty_ledger/**` (baru), `efn_pos_otp_gate/**` (E-23), `e
 - Tour skenario refund (penyesuaian otomatis di layar refund) belum ada; logika server teruji unit (`efn_loyalty_refund_preview` + validasi sync). Refund berpoin saat offline → review.
 - Perlakuan PPN poin (P-8) dan nilai bisnis poin (Q-13) masih placeholder; `totalFactor` promo `pos_loyalty` bila promo dihitung ulang setelah poin terpasang belum diuji.
 - Upgrade `efn_pos_otp_gate` 1.5→1.6 di volume dev belum diuji (kolom baru dengan default; tanpa skrip migrasi).
+
+# Gelombang 13c — SEC-58 (High), SEC-59, SEC-60, SEC-62, SEC-63, SEC-65 (review r6), 2026-10-07
+
+Batas file: `services/odoo/addons/**`, `scripts/smoke/odoo_pos_smoke.py`, laporan ini. Tanpa commit; stack dev tidak disentuh (harness `odoo-test-s58.sh` / `odoo-tour-s58.sh`, image & container `-s58`).
+
+## Perubahan
+- **SEC-58 `efn_core` 19.0.1.6.0:** `efn.bff.client.post/get` → `_efn_post/_efn_get` (privat; `@api.private` ada di 19.0 tetapi awalan `_` dipilih). Semua pemanggil diperbarui (`efn_pos_otp_gate`, `efn_pos_loyalty_ledger`, `efn_pos_payment_gateway`, `efn_privacy`, test, smoke — smoke kemudian juga diadaptasi agen lain dengan helper `_bff_method` yang kompatibel dua versi).
+  - Audit metode publik `efn_*`: hanya RPC kasir `pos.config.efn_otp_*`/`efn_loyalty_*`, `pos.payment.method.efn_gateway_*`, tombol supervisor baru `efn.pos.loyalty.outbox.action_efn_hold_*`, override CE (`pos.order.action_pos_order_cancel/remove_from_ui`, `res.partner.write`, ORM `efn_audit`). `_efn_check_otp_caller` kini juga `check_access('read')` pada config + company config ∈ company user (call_kw hanya `browse`).
+  - Gerbang: `efn_core/tests/test_rpc_surface.py` — AST (metode publik baru tanpa `RPC_ALLOWLIST` → gagal; AbstractModel `efn.*` = 0 metode publik), registry (`get_public_method` nyata), HttpCase `call_kw` user `base.group_user` → ditolak, `requests` tidak terpanggil. `efn_pos_loyalty_ledger/tests/test_rpc_access.py` (HttpCase `call_kw`, tag `efn_tour` karena fixture `TestPointOfSaleHttpCommon`): kasir & user biasa ditolak ke `efn.bff.client.*`; user biasa ditolak ke RPC POS/gateway/outbox; kasir PT lain & kasir tanpa sesi ditolak; kasir tidak bisa memutuskan outbox hold; jalur sah `efn_loyalty_balance` via RPC tetap OK.
+- **SEC-59 `efn_pos_loyalty_ledger` 19.0.1.1.0:** jenis order dari server (`_efn_loyalty_order_kind`: `refunded_orderline_id`, qty < 0 tanpa asal, `is_refund` hanya menambah kecurigaan). `abs()` dihapus (earn hanya dasar bertanda positif). Retur tanpa struk / tukar barang / refund ambigu → `review` + catatan chatter, tanpa earn/reverse. Temuan: core 19 sudah menolak refund dari > 1 order asal (`ValidationError`).
+- **SEC-60:** mismatch baris penyesuaian → outbox reverse `state='hold'` (cron tidak mengirim), order `review`, aktivitas POS manager; tombol *Setujui & kirim* / *Batalkan* (POS manager + record rule + company); rasio ditahan tetap dihitung dalam batas kumulatif.
+- **SEC-62:** validasi preventif di `_efn_loyalty_validate_paid` → `UserError` (rollback) untuk baris poin ≥ 0, nilai ≠ `value_idr`, partner beda, poin > `redeem_max_pct` × total barang server, total < 0. `redeem_max_pct` disimpan di reservasi saat reserve (params BFF §9.1, fallback `efn.pos.loyalty.redeem_max_pct_fallback` = 50).
+- **Pesan lead (§9.8 v4.3):** body earn membawa `pos_config_id`. `409 earn_limit_exceeded` sudah final + review (test lama); test baru: reverse atas order ber-earn ditolak → `earn_pending` diulang → 48 jam `failed (max_age:earn_pending)` + review. Runbook retur di README modul.
+- **SEC-63 `efn_setup_pos` 19.0.1.3.0:** `barcode_hardening_data.xml` (noupdate=0): semua `barcode.rule` tipe `discount` (nomenklatur apa pun) → aturan produk `22` (tidak dihapus agar tidak dibuat ulang upgrade point_of_sale). Filter audit baru *Label harga produk timbang (barcode 23)*. README: risiko PIN `pos_hr` (SHA-1 tanpa salt di browser) + mitigasi (PIN manager ≥ 8 digit, rotasi 90 hari/saat keluar, badge `041`, devtools dimatikan, review filter harian, G13-2/G13-6/Q-27). Test `efn_setup_pos/tests/test_barcode_hardening.py`.
+- **SEC-65 `efn_privacy` 19.0.1.3.0:** erasure mengosongkan `partner_id`/`member_ref_masked` (+token) di `efn.pos.otp.challenge` & `efn.pos.loyalty.reservation`, outbox `pending`/`hold` order partner → `skipped (member_erased)`; modul opsional dicek lewat registry.
+- Tour `efn_loyalty_tour.js`: langkah cek baris poin kini menunggu (maks 5 dtk) — race RPC verify→reserve terlihat saat run.
+
+## Validasi (container, DB sementara)
+- Unit `odoo-test-s58.sh`: **274 test, 0 failed, 0 error, 0 baris ERROR**; `efn_setup_security` ter-install. `check-odoo-deps`: 12 modul, 0 terlarang.
+- Tour `odoo-tour-s58.sh`: **15/15** (9 tour lama + 6 HttpCase `test_rpc_access`), 0 ERROR, 0 skip browser.
+- ruff check + format (`services/odoo/addons`): lolos.
+
+## Belum / sisa
+- `/json/2`: HttpCase dengan bearer key menggantung di harness (kunci baris) → tidak dipakai; `/json/2` memakai `get_public_method` yang sama (dicakup gerbang registry). Uji `/json/2` nyata di staging.
+- CI (di luar batas): `EFN_TOUR_MIN_TESTS` sebaiknya 9 → 15. `docs/04` §6 baris "efn.bff.client.get" perlu diganti `_efn_get`.
+- Upgrade DB dev (efn_core 1.6, otp_gate 1.7, loyalty 1.1 dengan field/state baru, privacy 1.3, setup_pos 1.3) belum diuji di volume dev.
+- SEC-60 lanjutan: field `restore_points` di kontrak reverse (BFF). SEC-61 (plafon/alert/rekonsiliasi) di BFF/ETL. SEC-63: kontrol kas/void/refund-metode masih di browser; aturan diskon buatan admin dinetralkan baru pada upgrade berikutnya. Order berpoin yang ditolak sync tertahan di POS sampai penukaran dihapus (belum ada tour kasus tolak).

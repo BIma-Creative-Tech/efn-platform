@@ -74,7 +74,7 @@
         <field name="name">efn.pos.loyalty.outbox.list</field>
         <field name="model">efn.pos.loyalty.outbox</field>
         <field name="arch" type="xml">
-            <list create="0" edit="0" delete="0" decoration-danger="state == 'failed'" decoration-muted="state == 'skipped'">
+            <list create="0" edit="0" delete="0" decoration-danger="state == 'failed'" decoration-warning="state == 'hold'" decoration-muted="state == 'skipped'">
                 <field name="create_date"/>
                 <field name="kind"/>
                 <field name="order_id"/>
@@ -95,6 +95,13 @@
         <field name="arch" type="xml">
             <form create="0" edit="0" delete="0">
                 <header>
+                    <!-- SEC-60: keputusan supervisor atas reverse yang ditahan (cek grup & company di server). -->
+                    <button name="action_efn_hold_approve" type="object" string="Setujui &amp; kirim reverse"
+                            class="btn-primary" invisible="state != 'hold'" groups="point_of_sale.group_pos_manager"
+                            confirm="Reverse akan dikirim apa adanya, termasuk pengembalian poin yang ditukar. Lanjutkan?"/>
+                    <button name="action_efn_hold_cancel" type="object" string="Batalkan reverse"
+                            invisible="state != 'hold'" groups="point_of_sale.group_pos_manager"
+                            confirm="Tidak ada clawback/restore otomatis; penyesuaian poin dilakukan manual. Lanjutkan?"/>
                     <field name="state" widget="statusbar"/>
                 </header>
                 <sheet>
@@ -131,6 +138,7 @@
                 <field name="idempotency_key"/>
                 <field name="order_id"/>
                 <filter string="Gagal" name="failed" domain="[('state', '=', 'failed')]"/>
+                <filter string="Ditahan (review)" name="hold" domain="[('state', '=', 'hold')]"/>
                 <filter string="Menunggu" name="pending" domain="[('state', '=', 'pending')]"/>
             </search>
         </field>

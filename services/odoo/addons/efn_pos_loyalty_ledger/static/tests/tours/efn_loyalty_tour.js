@@ -44,8 +44,13 @@ function pointsLines(expected) {
     return {
         content: `order punya ${expected} baris Poin EFN`,
         trigger: "body",
-        run: () => {
-            const lines = posmodel.getOrder().efnPointsLines();
+        run: async () => {
+            // RPC verify -> reserve berjalan async setelah klik; tunggu (maks 5 dtk) agar tidak race.
+            let lines = posmodel.getOrder().efnPointsLines();
+            for (let i = 0; i < 50 && lines.length !== expected; i++) {
+                await new Promise((resolve) => setTimeout(resolve, 100));
+                lines = posmodel.getOrder().efnPointsLines();
+            }
             if (lines.length !== expected) {
                 throw new Error(`baris poin ${lines.length} != ${expected}`);
             }

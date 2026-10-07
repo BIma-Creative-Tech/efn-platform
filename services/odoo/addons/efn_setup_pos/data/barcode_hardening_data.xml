@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SEC-63 (r6): aturan barcode DISKON dinonaktifkan untuk SEMUA PT/nomenklatur, termasuk DB yang
+     sudah memasang modul ini (noupdate="0": dijalankan ulang setiap install/upgrade efn_setup_pos).
+
+     Masalah: aturan `22{NN}` (point_of_sale.barcode_rule_discount, nomenklatur default yang dipakai
+     PT selain Retail) memanggil _barcodeDiscountAction -> setDiscountFromUI pada baris terakhir
+     TANPA cek manual_discount/peran kasir: barcode cetakan "2250" = diskon 50%.
+
+     Penetralan: setiap barcode.rule bertipe `discount` (nomenklatur apa pun, termasuk yang dibuat
+     admin) diubah menjadi aturan PRODUK berawalan `22` (kode in-store GS1 20-29) -> barcode `22..`
+     hanya dicari sebagai barcode produk biasa (sama dengan aturan `.*`), tidak pernah memberi diskon.
+     Record TIDAK dihapus: record noupdate point_of_sale yang dihapus akan dibuat ulang saat upgrade
+     point_of_sale. Diskon manual tetap lewat tombol POS standar (manual_discount + peran pos_hr).
+
+     Verifikasi 19.0 (2026-10-07): barcode.rule tidak punya field `active`; tipe `product` & pola
+     tanpa kurung kurawal valid; nomenklatur EFN Retail tidak memuat aturan diskon sama sekali. -->
+<odoo noupdate="0">
+    <function model="barcode.rule" name="write">
+        <value model="barcode.rule" search="[('type', '=', 'discount')]"/>
+        <value eval="{'type': 'product', 'pattern': '22', 'encoding': 'any', 'name': 'Barcode diskon DINONAKTIFKAN (EFN SEC-63): 22 = produk'}"/>
+    </function>
+</odoo>

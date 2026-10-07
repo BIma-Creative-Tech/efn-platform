@@ -6,7 +6,7 @@ Kontrak: docs/04_SERVICE_CONTRACTS.md §2 (header `X-EFN-Service-Key`, secret fi
 Aturan keamanan (CLAUDE.md, docs/04 §6-§7 v2):
 - **TLS wajib**: base URL harus `https://` dan sertifikat BFF diverifikasi terhadap CA
   internal di env `EFN_CA_FILE` (default `/run/secrets/efn_ca_crt`) lewat
-  ``requests.post/get(..., verify=<CA>)`` (`post` dan `get` berbagi `_efn_request`).
+  ``requests.post/get(..., verify=<CA>)`` (`_efn_post` dan `_efn_get` berbagi `_efn_request`).
   CA tidak terbaca -> `bff_ca_missing` (tidak ada fallback ke verifikasi CA sistem atau
   `verify=False`). `http://` hanya diterima bila `EFN_ALLOW_PLAINTEXT=true` DAN `APP_ENV`
   eksplisit non-produksi.
@@ -18,9 +18,15 @@ Aturan keamanan (CLAUDE.md, docs/04 §6-§7 v2):
   latensi, dan konteks yang sudah di-mask (lihat `mask_phone`).
 - Redirect tidak diikuti agar header service key tidak bocor ke host lain.
 - R2 (docs/04 §8.13): nomor HP, token, dan identitas tidak pernah dikirim lewat URL (query string
-  atau segmen path) karena URL tercatat di access log; `get()` menolak kunci query terlarang
-  (`PII_QUERY_KEYS`) dan nilai/segmen yang tampak seperti nomor HP. Data tsb lewat body `post()`
+  atau segmen path) karena URL tercatat di access log; `_efn_get()` menolak kunci query terlarang
+  (`PII_QUERY_KEYS`) dan nilai/segmen yang tampak seperti nomor HP. Data tsb lewat body `_efn_post()`
   (mis. `POST /v1/pos/loyalty/balance {member_ref}`).
+- SEC-58 (r6, High): model ini adalah proxy service key BFF. **Tidak boleh ada metode publik**:
+  Odoo mengekspos setiap metode tanpa awalan `_` ke `/web/dataset/call_kw` dan `/json/2`, sehingga
+  `post`/`get` publik membuat kasir mana pun bisa mencetak poin / mengirim OTP / memalsukan
+  penyelesaian erasure. Semua metode berawalan `_` (Odoo menolak RPC ke nama `_*`, lihat
+  `odoo/service/model.py`), dipanggil hanya dari kode server yang sudah memeriksa grup/sesi/company.
+  Gerbang statis: `efn_core/tests/test_rpc_surface.py`.
 """
 
 import logging
@@ -257,7 +263,7 @@ class EfnBffClient(models.AbstractModel):
 
     # -------------------------------------------------------------------- HTTP
     @api.model
-    def post(self, path, payload, log_context=None):
+    def _efn_post(self, path, payload, log_context=None):
         """POST JSON ke BFF.
 
         :param str path: path absolut kontrak, mis. ``/v1/pos/otp/request``.
@@ -270,8 +276,8 @@ class EfnBffClient(models.AbstractModel):
         return self._efn_request("POST", path, payload=payload, log_context=log_context)
 
     @api.model
-    def get(self, path, params=None, log_context=None):
-        """GET ke BFF dengan aturan yang sama dengan :meth:`post` (docs/04 §8.8).
+    def _efn_get(self, path, params=None, log_context=None):
+        """GET ke BFF dengan aturan yang sama dengan :meth:`_efn_post` (docs/04 §8.8).
 
         HTTPS + CA internal, service key dari file secret, timeout, tanpa redirect, tanpa log
         payload/parameter.
@@ -280,7 +286,7 @@ class EfnBffClient(models.AbstractModel):
             wajib sudah divalidasi pemanggil (path dengan ``?``/``#``/``..`` ditolak).
         :param dict params: query string (nilai str/int/float/bool). Tidak pernah di-log.
         :returns: :class:`BffResponse` (``body`` bisa berupa list untuk endpoint array).
-        :raises EfnBffError: seperti :meth:`post`.
+        :raises EfnBffError: seperti :meth:`_efn_post`.
         """
         if params is not None:
             if not isinstance(params, dict):

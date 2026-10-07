@@ -313,7 +313,7 @@ jobs:
       EFN_TOUR_MODULES: efn_pos_otp_gate,efn_pos_payment_gateway,efn_pos_loyalty_ledger
       # Jumlah test tour yang WAJIB berjalan (HttpCase di-skip diam-diam bila Chrome/websocket tidak ada).
       # 5 (OTP gate 3 + gateway 2) + 4 Poin EFN (Gelombang 13b).
-      EFN_TOUR_MIN_TESTS: "9"
+      EFN_TOUR_MIN_TESTS: "15"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Build image target test (runtime + Chrome headless)

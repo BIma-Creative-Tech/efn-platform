@@ -93,7 +93,7 @@ class EfnPrivacyErasure(models.AbstractModel):
 
         client = self.env["efn.bff.client"]
         try:
-            response = client.get(ERASURES_PATH, {"store": STORE}, log_context={"store": STORE})
+            response = client._efn_get(ERASURES_PATH, {"store": STORE}, log_context={"store": STORE})
         except EfnBffError as exc:
             _logger.error("EFN privacy: gagal menarik daftar erasure (%s)", exc.code)
             raise UserError(_("BFF tidak dapat dihubungi untuk daftar erasure.")) from None
@@ -163,7 +163,7 @@ class EfnPrivacyErasure(models.AbstractModel):
             return False
         self._efn_commit()
         try:
-            response = self.env["efn.bff.client"].post(
+            response = self.env["efn.bff.client"]._efn_post(
                 COMPLETE_PATH % request_id,
                 {"store": STORE, "records": records},
                 log_context={"request_id": request_id},
@@ -235,6 +235,8 @@ class EfnPrivacyErasure(models.AbstractModel):
         if order_vals:
             PosOrder.search([("partner_id", "in", ids)]).write(order_vals)
 
+        self._efn_erase_pos_loyalty(ids)
+
         # Chatter & tracking pada partner (termasuk tracking dari write di atas, bila ada).
         Message = self.env["mail.message"].sudo()
         messages = Message.search([("model", "=", "res.partner"), ("res_id", "in", ids)])
@@ -249,6 +251,40 @@ class EfnPrivacyErasure(models.AbstractModel):
         # menulis satu log `purge` tanpa id/nama.
         self.env["efn.audit.log"].sudo()._efn_audit_purge_records("res.partner", ids)
         return len(partners)
+
+    @api.model
+    def _efn_erase_pos_loyalty(self, partner_ids):
+        """SEC-65 (r6): data OTP/Poin EFN POS milik partner yang dihapus.
+
+        Modul opsional (efn_pos_otp_gate, efn_pos_loyalty_ledger) tidak menjadi dependency
+        efn_privacy, jadi diperiksa lewat registry. Yang dibersihkan:
+        - `efn.pos.otp.challenge` & `efn.pos.loyalty.reservation`: tautan partner + nomor ter-mask
+          (+ token sisa challenge);
+        - `efn.pos.loyalty.outbox` yang belum terkirim (`pending`/`hold`) untuk order partner tsb ->
+          `skipped` (`member_erased`): tidak ada earn/reverse ke member yang sudah dihapus BFF.
+        Baris reservasi/outbox tetap ada (bukti keuangan anonim: poin, nilai, order).
+        """
+        if "efn.pos.otp.challenge" in self.env:
+            Challenge = self.env["efn.pos.otp.challenge"].sudo()
+            vals = {"partner_id": False, "member_ref_masked": False}
+            if "discount_token" in Challenge._fields:
+                vals["discount_token"] = False
+            Challenge.search([("partner_id", "in", partner_ids)]).write(vals)
+        if "efn.pos.loyalty.reservation" in self.env:
+            self.env["efn.pos.loyalty.reservation"].sudo().search([("partner_id", "in", partner_ids)]).write(
+                {"partner_id": False, "member_ref_masked": False}
+            )
+        if "efn.pos.loyalty.outbox" in self.env:
+            Outbox = self.env["efn.pos.loyalty.outbox"].sudo()
+            open_records = Outbox.search(
+                [
+                    ("state", "in", ("pending", "hold")),
+                    "|",
+                    ("order_id.partner_id", "in", partner_ids),
+                    ("original_order_id.partner_id", "in", partner_ids),
+                ]
+            )
+            open_records.write({"state": "skipped", "last_error": "member_erased", "done_at": fields.Datetime.now()})
 
 
 class EfnPrivacyErasurePending(models.Model):

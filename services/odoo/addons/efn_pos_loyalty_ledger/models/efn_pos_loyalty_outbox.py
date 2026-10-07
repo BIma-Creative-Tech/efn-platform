@@ -15,10 +15,17 @@ Aturan:
   kumulatif refund deterministik.
 - `reverse` menunggu `earn`/`redeem_commit` order asal selesai (`done`/`failed`/`skipped`);
   BFF `409 earn_pending` (K-6) juga dicoba ulang.
-- Retry hanya untuk `earn_pending`, 429, dan 5xx/jaringan (docs/04 §9.7); 409 lain final.
+- Retry hanya untuk `earn_pending`, 429, dan 5xx/jaringan (docs/04 §9.7); 409 lain final, termasuk
+  `earn_limit_exceeded` (§9.8 v4.3: batas per order/harian member/PT & kasir per jam) -> `failed`
+  + order `review` + aktivitas. Reverse atas order yang earn-nya ditolak menerima `earn_pending`
+  dari BFF (dicoba ulang) sampai `outbox_max_hours` (48) -> `failed` (`max_age:earn_pending`) +
+  `review`; tidak ada restore/clawback otomatis.
   404 pada release = selesai.
 - 4xx definitif -> `failed` + order `review` + aktivitas ke POS manager. Umur >
   `efn.pos.loyalty.outbox_max_hours` (48) -> `failed`.
+- SEC-60: `hold` = tidak pernah dikirim cron. Hanya POS manager company terkait yang dapat
+  meneruskan (`pending`) atau membatalkan (`skipped`) lewat tombol form; keduanya memeriksa grup
+  & company secara eksplisit (metode publik masuk allowlist RPC `efn_core/tests/test_rpc_surface.py`).
 - Dua worker tidak mengirim record yang sama: baris dikunci `FOR UPDATE SKIP LOCKED` sampai
   commit (idempotency BFF tetap jaring pengaman).
 """
@@ -27,6 +34,7 @@ import logging
 from datetime import timedelta
 
 from odoo import _, api, fields, models
+from odoo.exceptions import AccessError, UserError
 
 from odoo.addons.efn_core.models.efn_bff_client import EfnBffError, mask_phone, partner_member_ref
 
@@ -48,6 +56,9 @@ STATES = [
     ("done", "Terkirim"),
     ("skipped", "Dilewati"),
     ("failed", "Gagal"),
+    # SEC-60: reverse refund berpoin dengan baris penyesuaian salah/hilang TIDAK dikirim
+    # (restore poin ditahan) sampai POS manager memutuskan (`action_efn_hold_approve/cancel`).
+    ("hold", "Ditahan (review supervisor)"),
 ]
 FINAL_STATES = ("done", "failed", "skipped")
 # Alasan 4xx yang boleh dicoba ulang (bukan penolakan bisnis final).
@@ -121,6 +132,46 @@ class EfnPosLoyaltyOutbox(models.Model):
         "Outbox loyalty selain release wajib menunjuk order.",
     )
 
+    # ------------------------------------------------- keputusan supervisor (SEC-60)
+    def _efn_check_hold_decider(self):
+        """POS manager (bukan kasir) pada company record; record harus berstatus `hold`."""
+        if not self.env.su and not self.env.user.has_group("point_of_sale.group_pos_manager"):
+            raise AccessError(_("Hanya POS manager yang dapat memutuskan outbox Poin EFN yang ditahan."))
+        self.check_access("read")  # record rule multi-company
+        for record in self:
+            if record.company_id not in self.env.user.company_ids and not self.env.su:
+                raise AccessError(_("Outbox Poin EFN milik company lain."))
+            if record.state != "hold":
+                raise UserError(_("Hanya outbox berstatus 'Ditahan' yang dapat diputuskan."))
+
+    def action_efn_hold_approve(self):
+        """Supervisor menyetujui reverse yang ditahan: dikirim apa adanya (termasuk restore poin)."""
+        self._efn_check_hold_decider()
+        for record in self.sudo():
+            record.write({"state": "pending", "next_attempt_at": fields.Datetime.now(), "last_error": False})
+            record.message_post(
+                body=_("Reverse ditahan disetujui oleh %(user)s.", user=self.env.user.name),
+                message_type="comment",
+                subtype_xmlid="mail.mt_note",
+            )
+            _logger.info("EFN loyalty outbox %s: hold disetujui uid=%s", record.id, self.env.uid)
+        self._efn_trigger()
+        return True
+
+    def action_efn_hold_cancel(self):
+        """Supervisor membatalkan reverse yang ditahan: tidak ada clawback/restore otomatis
+        (penyesuaian poin dilakukan manual lewat BFF/Finance)."""
+        self._efn_check_hold_decider()
+        for record in self.sudo():
+            record.write({"state": "skipped", "last_error": "supervisor_cancelled", "done_at": fields.Datetime.now()})
+            record.message_post(
+                body=_("Reverse ditahan dibatalkan oleh %(user)s.", user=self.env.user.name),
+                message_type="comment",
+                subtype_xmlid="mail.mt_note",
+            )
+            _logger.info("EFN loyalty outbox %s: hold dibatalkan uid=%s", record.id, self.env.uid)
+        return True
+
     # ------------------------------------------------------------- enqueue
     @api.model
     def _efn_enqueue(self, vals):
@@ -188,7 +239,7 @@ class EfnPosLoyaltyOutbox(models.Model):
             self._efn_finish("skipped", skip.code)
             return
         try:
-            response = self.env["efn.bff.client"].post(path, payload, log_context=log_context)
+            response = self.env["efn.bff.client"]._efn_post(path, payload, log_context=log_context)
         except EfnBffError as exc:
             self._efn_retry_or_fail(exc.code)
             return
@@ -253,6 +304,8 @@ class EfnPosLoyaltyOutbox(models.Model):
                     "member_ref": member,
                     "company_code": company_code,
                     "eligible_amount": self.eligible_amount,
+                    # §9.8 (v4.3, SEC-61): mengaktifkan batas earn per kasir/jam di BFF.
+                    "pos_config_id": order.config_id.id,
                 },
                 {"member": mask_phone(member), "order_ref": order.uuid},
             )

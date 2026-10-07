@@ -3,7 +3,7 @@
     "summary": (
         "Metode terminal POS `efn_gateway`: QRIS lewat BFF EFN (provider-agnostic), validasi server saat sync order."
     ),
-    "version": "19.0.1.0.0",
+    "version": "19.0.1.1.0",
     "category": "EFN/Point of Sale",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",

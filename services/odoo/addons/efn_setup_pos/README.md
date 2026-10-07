@@ -14,9 +14,10 @@ Modul konfigurasi untuk POS **retail (PT Retail)** dan **restoran (PT F&B)** di 
 |---|---|---|
 | `pos_config_defaults.xml` | `ir.default` pos.config baru: `restrict_price_control = True`, `manual_discount = False` | `pos_config.py` |
 | `pos_retail_defaults.xml` (G13) | `ir.default`: `order_edit_tracking = True` (void baris pada order tersinkron dicatat), `set_maximum_difference = True` + `amount_authorized_diff = 0` (setiap selisih kas penutupan butuh supervisor); `ir.config_parameter point_of_sale.limited_product_count = 20000` (**PLACEHOLDER**, default CE 5000; produk di luar batas tidak bisa di-scan saat offline) | `pos_config.py` (`get_limited_product_count`), `closing_popup.js`, pos_hr `closing_popup.js` |
-| `pos_audit_filters.xml` | 7 filter tersimpan: diskon baris tanpa program, harga manual, harga manual non-timbang (G13), baris negatif non-promo (E-24: dinonaktifkan & diganti versi tanpa baris "Poin EFN" bila `efn_pos_loyalty_ledger` terpasang), **refund tanpa struk** (G13), **order refund per kasir** (G13), **order diedit/void baris** (G13) | `ir.filters`; `pos.order(.line)` |
+| `pos_audit_filters.xml` | 8 filter tersimpan: **label harga produk timbang (barcode `23`, SEC-63, 13c — dikelompokkan per produk untuk membandingkan harga satuan dengan harga jual)**, diskon baris tanpa program, harga manual, harga manual non-timbang (G13), baris negatif non-promo (E-24: dinonaktifkan & diganti versi tanpa baris "Poin EFN" bila `efn_pos_loyalty_ledger` terpasang), **refund tanpa struk** (G13), **order refund per kasir** (G13), **order diedit/void baris** (G13) | `ir.filters`; `pos.order(.line)` |
 | `pos_payment_method_data.xml` | *Kartu Debit/Kredit (EDC manual)* RTL & FNB. Tunai dibuat otomatis per outlet. QRIS `id_qr` tidak dikonfigurasi (pakai `efn_pos_payment_gateway`) | `pos_payment_method.py` |
 | `barcode_nomenclature_data.xml` (G13) | Nomenklatur **EFN Retail (IDR)**, dipasang ke PT Retail: `23.....{NNNNN}` harga Rupiah bulat, `21.....{NNDDD}` berat kg, `042` pelanggan, `041` karyawan, `043\|044` kupon, `.*` produk. **Tanpa** aturan diskon `22{NN}` (vektor fraud: memberi diskon tanpa cek peran/`manual_discount`) dan tanpa aturan lot `10` (salah baca EAN impor) | `barcodes`, `point_of_sale`/`stock`/`pos_loyalty` `default_barcode_patterns.xml`, `product_screen.js` |
+| `barcode_hardening_data.xml` (13c, **noupdate=0**) | SEC-63: setiap `barcode.rule` bertipe `discount` di **semua** nomenklatur (termasuk default `point_of_sale.barcode_rule_discount` `22{NN}` yang dipakai PT F&B/EFN/FARM dan aturan buatan admin) diubah menjadi aturan **produk** berawalan `22` → barcode `22..` hanya dicari sebagai barcode produk, tidak pernah memberi diskon. Dijalankan ulang setiap install/upgrade modul (berlaku juga untuk DB yang sudah memasang modul). Record tidak dihapus (record noupdate `point_of_sale` yang dihapus dibuat ulang saat upgrade) | `barcodes/models/barcode_rule.py` (tanpa field `active`), `product_screen.js` `_barcodeDiscountAction` |
 | `pos_bill_idr_data.xml` (G13) | Pecahan Rupiah (Rp100..Rp100.000) untuk hitung kas buka/tutup; 13 pecahan USD bawaan dihapus (`forcecreate="0"` → tidak muncul lagi saat upgrade) | `pos_bill.py`, `point_of_sale_data.xml` |
 
 **Catatan upgrade:** semua blok `noupdate` (termasuk `<function>` dan penetapan nomenklatur PT Retail) hanya dijalankan saat **install**. DB yang sudah memasang `efn_setup_pos` 19.0.1.1.0: filter audit baru ikut dibuat saat `-u`, tetapi default/nomenklatur/pecahan harus diterapkan manual (Settings POS) atau DB pilot di-install bersih.
@@ -42,7 +43,13 @@ Modul konfigurasi untuk POS **retail (PT Retail)** dan **restoran (PT F&B)** di 
 
 **"Approval" di CE = supervisor mengambil alih kasir sementara**: ketuk nama kasir → pilih supervisor → PIN → lakukan aksi → kembali ke kasir. Tidak ada dialog persetujuan inline dan tidak ada catatan "disetujui oleh" per baris (order hanya mencatat `employee_id` pembuat). Bila klien butuh persetujuan inline + jejak per aksi → gap **G13-2** (`docs/08 §6`). Rekomendasi pilot: kasir = **minimal** (bila refund wajib supervisor, Q-27) atau **basic**; supervisor = **manager**.
 
-Keamanan PIN: hash PIN karyawan dimuat ke browser POS (dipakai offline) → PIN 4 digit mudah ditebak oleh siapa pun yang memegang perangkat; PIN adalah kontrol operasional, **bukan** autentikasi kuat. Pakai PIN ≥ 6 digit, unik, ganti saat karyawan keluar; user Odoo terminal POS tetap ber-2FA (`efn_setup_security`).
+**Risiko PIN `pos_hr` (SEC-63, r6) — diterima sebagai kontrol operasional, bukan autentikasi.** Hash PIN karyawan (SHA-1 **tanpa salt**, docs/08 §6.2 #18) dimuat ke browser POS agar login kasir jalan offline. Pemegang perangkat dapat mengambil hash dari devtools/penyimpanan browser dan menebak PIN 4–6 digit secara offline dalam hitungan detik → kasir bisa "menjadi manager" di UI (refund, ubah harga, tutup sesi dengan selisih). Tidak ada perbaikan di CE tanpa mengubah core POS. Mitigasi wajib pilot:
+1. **PIN manager ≥ 8 digit acak, unik per orang**; PIN kasir ≥ 6 digit. Jangan pakai tanggal lahir/NIK/nomor HP.
+2. **Rotasi**: PIN manager diganti tiap 90 hari, segera saat karyawan/manager keluar atau perangkat hilang, dan setelah setiap insiden selisih kas; PIN kasir saat rotasi shift tetap.
+3. **Manager login dengan badge `041`** (kartu karyawan, nomenklatur EFN Retail) bila perangkat mendukung; badge disimpan manager, tidak ditinggal di kasir.
+4. Perangkat kasir: profil browser khusus, tanpa akses devtools (kebijakan Chrome `DeveloperToolsAvailability=2` / mode kiosk), user Odoo terminal POS ber-2FA (`efn_setup_security`).
+5. Deteksi: filter audit *refund per kasir*, *harga manual*, *label harga produk timbang*, *order diedit/void* ditinjau harian; aksi manager di luar jam kehadiran manager = anomali.
+6. Kontrol yang masih hanya di browser (batas selisih kas #21, void sebelum sinkron #24, refund ke metode lain #25) tetap terbuka; penegakan server = gap **G13-2** (approver diverifikasi server) dan **G13-6** (batas selisih di server), keputusan **Q-27**.
 
 ### Retur/refund
 - **Dengan struk:** *Orders* → cari order → pilih baris & qty → *Refund*. Order refund menyalin pelanggan, pricelist, fiscal position; `refunded_orderline_id` mencegah refund melebihi qty asal.
@@ -61,6 +68,7 @@ Keamanan PIN: hash PIN karyawan dimuat ke browser POS (dipakai offline) → PIN 
 
 ### Barcode berat/harga & timbangan (Q-25)
 - Timbangan label (prepack): cetak label EAN-13 sesuai nomenklatur *EFN Retail (IDR)* → scan di kasir: `21` qty = berat, `23` harga = nilai label (baris `price_type = 'manual'`).
+- **SEC-63:** aksi barcode harga CE (`setUnitPrice`) **tidak** memeriksa `restrict_price_control` → siapa pun yang bisa mencetak label `23` dapat menurunkan harga produk berlabel. Mitigasi: printer/timbangan label hanya di area produksi (bukan di kasir), filter audit *Label harga produk timbang (barcode 23)* ditinjau harian. Penegakan sistem (tolak label di bawah harga jual × berat minimum) = gap, belum dibuat. Barcode diskon `22` dinetralkan di semua PT (`barcode_hardening_data.xml`).
 - Timbangan terhubung ke kasir: `pos.config.iface_electronic_scale` + `product.to_weight` → layar timbang; butuh IoT box/driver perangkat (**[B]**, Q-56).
 - Barcode produk di master = base code (`21PPPPP00000C` / `23PPPPP00000C`), PLU 5 digit unik per toko/PT.
 
@@ -131,6 +139,7 @@ odoo -d <db> -i efn_setup_pos     # menarik efn_setup_company (4 company + CoA)
 ```
 
 ## Batasan / belum terverifikasi
+- SEC-63: aturan diskon yang dibuat admin **setelah** upgrade baru dinetralkan pada upgrade `efn_setup_pos` berikutnya (barcode.rule belum masuk aturan `efn_audit`). Test: `tests/test_barcode_hardening.py`.
 - Belum di-install dengan data G13 (CI berikutnya). `<delete>` pecahan bawaan & penetapan nomenklatur di blok noupdate — perilaku saat install [B].
 - Check digit barcode demo dihitung manual; scan nyata, timbangan, IoT, mode offline, ePOS, layar pelanggan: PoC perangkat.
 - FEFO/lot di POS, scan barcode kemasan (`product.uom`), akun selisih kas jurnal tunai `l10n_id`: [B].

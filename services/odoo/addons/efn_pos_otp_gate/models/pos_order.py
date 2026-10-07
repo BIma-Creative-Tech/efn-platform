@@ -204,7 +204,7 @@ class PosOrder(models.Model):
             "amount_total": int(round(self.amount_total or 0.0)),
         }
         try:
-            response = self.env["efn.bff.client"].post(
+            response = self.env["efn.bff.client"]._efn_post(
                 TOKEN_CONSUME_PATH,
                 payload,
                 log_context={"member": member_masked, "order_ref": self.uuid},

@@ -5,7 +5,7 @@ Chrome headless. Tag `efn_tour` (bukan `efn`): hanya dijalankan job CI `odoo-tou
 image target `test` (Chrome tidak ada di image produksi). Tanpa Chrome, Odoo men-skip test
 HttpCase -> job CI menolak hasil "skipped" (lihat ci.yml).
 
-BFF di-mock server-side: `efn.bff.client.post` di-patch pada kelas registry, jadi berlaku juga
+BFF di-mock server-side: `efn.bff.client._efn_post` di-patch pada kelas registry, jadi berlaku juga
 untuk request HTTP dari browser yang dilayani thread server test (registry sama).
 """
 
@@ -78,7 +78,7 @@ class TestEfnPosOtpTour(TestPointOfSaleHttpCommon):
         super().setUp()
         self.calls = []
         client_cls = self.env.registry["efn.bff.client"]
-        patcher = patch.object(client_cls, "post", autospec=True, side_effect=self._fake_post)
+        patcher = patch.object(client_cls, "_efn_post", autospec=True, side_effect=self._fake_post)
         patcher.start()
         self.addCleanup(patcher.stop)
 

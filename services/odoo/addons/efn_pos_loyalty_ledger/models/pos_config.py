@@ -41,6 +41,7 @@ RESERVE_REJECT_REASONS = (
 TOKEN_FINAL_REASONS = frozenset({"token_invalid", "member_mismatch", "amount_mismatch"})
 DEFAULT_BALANCE_RATE_PER_MINUTE = 20
 PARAMS_CACHE_SECONDS = 300
+DEFAULT_REDEEM_MAX_PCT = 50  # = default BFF LOYALTY_REDEEM_MAX_PCT_OF_ORDER
 
 
 def parse_bff_datetime(value):
@@ -146,7 +147,7 @@ class PosConfig(models.Model):
         if cached and time.monotonic() - cached[0] < PARAMS_CACHE_SECONDS:
             return cached[1]
         try:
-            response = self.env["efn.bff.client"].get(PARAMS_PATH)
+            response = self.env["efn.bff.client"]._efn_get(PARAMS_PATH)
         except EfnBffError:
             return {}
         if response.status != 200:
@@ -158,6 +159,21 @@ class PosConfig(models.Model):
         }
         _PARAMS_CACHE[key] = (time.monotonic(), params)
         return params
+
+    def _efn_loyalty_redeem_max_pct(self):
+        """SEC-62: batas % dari parameter BFF (cache/GET §9.1), fallback ir.config_parameter."""
+        pct = self._efn_loyalty_params().get("redeem_max_pct_of_order")
+        if not isinstance(pct, (int, float)) or isinstance(pct, bool) or not 0 < pct <= 100:
+            raw = (
+                self.env["ir.config_parameter"]
+                .sudo()
+                .get_param("efn.pos.loyalty.redeem_max_pct_fallback", DEFAULT_REDEEM_MAX_PCT)
+            )
+            try:
+                pct = int(raw)
+            except (TypeError, ValueError):
+                pct = DEFAULT_REDEEM_MAX_PCT
+        return max(1, min(100, int(pct)))
 
     def _efn_loyalty_check_redeem(self):
         self._efn_check_otp_caller()
@@ -197,7 +213,7 @@ class PosConfig(models.Model):
         masked = mask_phone(member)
         try:
             # §9.7 (K-8): rate limit BFF per member & per pos_config.
-            response = self.env["efn.bff.client"].post(
+            response = self.env["efn.bff.client"]._efn_post(
                 BALANCE_PATH,
                 {"member_ref": member, "pos_config_id": self.id, "company_code": self.company_id.efn_brand_code},
                 log_context={"member": masked},
@@ -249,7 +265,7 @@ class PosConfig(models.Model):
             "amount_total": int(round(amount_value)),
         }
         try:
-            response = self.env["efn.bff.client"].post(
+            response = self.env["efn.bff.client"]._efn_post(
                 RESERVE_PATH, payload, log_context={"member": masked, "order_ref": order_uuid}
             )
         except EfnBffError as exc:
@@ -293,6 +309,7 @@ class PosConfig(models.Model):
                 "bff_reservation_id": bff_id,
                 "points": points,
                 "value_idr": value_idr,
+                "redeem_max_pct": self._efn_loyalty_redeem_max_pct(),
                 "expires_at": expires_at,
             }
         )
@@ -315,7 +332,7 @@ class PosConfig(models.Model):
         if not reservation:
             return {"ok": True}
         try:
-            response = self.env["efn.bff.client"].post(
+            response = self.env["efn.bff.client"]._efn_post(
                 RELEASE_PATH,
                 {"reservation_id": reservation.bff_reservation_id},
                 log_context={"member": reservation.member_ref_masked, "order_ref": order_uuid},

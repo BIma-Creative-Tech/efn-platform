@@ -12,11 +12,20 @@ titik ini baris order sudah tertulis. Modul ini membungkus `_process_saved_order
   `value_idr` reservasi (toleransi Rp1 x jumlah baris) dan partner order dengan partner
   reservasi -> beda: reservasi & order `review` (tanpa commit); cocok -> outbox `redeem_commit`.
   Reservasi aktif tanpa baris poin -> outbox `redeem_release`.
-- Earn: order paid non-refund, partner ada, `efn_loyalty_earn_enabled`, company ber-
-  `efn_brand_code` -> outbox `earn` (`eligible_amount` K-1).
-- Refund atas order asal yang ikut loyalty -> outbox `reverse` dengan `refund_ratio`; bila order
-  asal memakai poin, refund wajib membawa baris penyesuaian Poin EFN = round(ratio x nilai poin
-  asal) (selisih -> `review`).
+- SEC-62: order berpoin disinkron online (ADR-017 opsi a), jadi validasi redeem bersifat
+  PREVENTIF: baris poin bertanda positif, |nilai| != `value_idr` reservasi, partner != partner
+  reservasi, nilai poin > `redeem_max_pct` x total barang (hitung server), atau total akhir < 0
+  -> `UserError` (sync ditolak, poin tidak pernah jadi diskon gratis). `review` hanya backstop.
+- SEC-59: jenis order ditentukan SERVER (`_efn_loyalty_order_kind`), bukan flag `is_refund`
+  kiriman klien: baris ber-`refunded_orderline_id` -> refund; baris barang qty < 0 tanpa order asal
+  (retur tanpa struk) atau refund dengan != 1 order asal -> `review` (catatan chatter + filter
+  *Review Poin*) tanpa earn/reverse. `pos.order` CE tidak punya mail.activity.mixin.
+- Earn: order `sale`, partner ada, `efn_loyalty_earn_enabled`, company ber-`efn_brand_code` ->
+  outbox `earn` (`eligible_amount` K-1, hanya bila dasar BERTANDA positif; tidak ada `abs()`).
+- Refund atas tepat satu order asal yang ikut loyalty -> outbox `reverse` dengan `refund_ratio`;
+  bila order asal memakai poin, refund wajib membawa baris penyesuaian Poin EFN = round(ratio x
+  nilai poin asal). SEC-60: selisih -> reverse `hold` (TIDAK dikirim; restore poin ditahan) +
+  order `review` + aktivitas, sampai POS manager memutuskan.
 - Order draft dibatalkan/dihapus (`action_pos_order_cancel`, `remove_from_ui`) dengan reservasi
   aktif -> outbox `redeem_release`.
 
@@ -107,17 +116,49 @@ class PosOrder(models.Model):
             return False
         return line.product_id.categ_id.id not in excluded_categ_ids
 
-    def _efn_loyalty_eligible_raw(self):
+    def _efn_loyalty_eligible_raw(self, lines=None):
         """Σ subtotal tanpa pajak baris BARANG yang berhak poin (bertanda; refund -> negatif).
         Baris Poin EFN tidak termasuk (porsinya diterapkan lewat `_efn_loyalty_money_factor`)."""
         self.ensure_one()
         points_product = self._efn_points_product()
         excluded = self.env["product.category"]._efn_loyalty_excluded_ids()
+        lines = self.lines.sudo() if lines is None else lines
         return sum(
             self._efn_line_raw_amounts(line)[0]
-            for line in self.lines.sudo()
+            for line in lines
             if self._efn_line_is_eligible(line, points_product, excluded)
         )
+
+    def _efn_loyalty_goods_lines(self):
+        self.ensure_one()
+        points_product = self._efn_points_product()
+        return self.lines.sudo().filtered(lambda line: line.product_id != points_product)
+
+    def _efn_loyalty_order_kind(self):
+        """SEC-59: jenis order menurut SERVER (flag `is_refund` klien hanya menambah kecurigaan).
+
+        :returns: ``(kind, origins)`` dengan kind:
+            - ``sale``: tanpa baris refund, tanpa baris barang qty < 0, `is_refund` tidak diset;
+            - ``refund``: baris barang refund menunjuk TEPAT SATU order asal
+              (`refunded_orderline_id`), tanpa barang qty < 0 tanpa asal dan tanpa barang baru;
+            - ``return_unlinked``: barang qty < 0 tanpa order asal (retur tanpa struk / tombol
+              `-`) atau `is_refund` tanpa baris refund;
+            - ``refund_ambiguous``: baris refund dari > 1 order asal, atau refund bercampur
+              barang lain.
+        """
+        self.ensure_one()
+        goods = self._efn_loyalty_goods_lines()
+        linked = goods.filtered("refunded_orderline_id")
+        origins = linked.refunded_orderline_id.order_id
+        unlinked_negative = goods.filtered(lambda line: line.qty < 0 and not line.refunded_orderline_id)
+        if not origins:
+            if unlinked_negative or self.is_refund:
+                return "return_unlinked", origins
+            return "sale", origins
+        new_items = (goods - linked).filtered(lambda line: line.qty > 0)
+        if len(origins) != 1 or unlinked_negative or new_items:
+            return "refund_ambiguous", origins
+        return "refund", origins
 
     def _efn_loyalty_money_factor(self):
         """Porsi nilai barang yang dibayar uang (1 - porsi Poin EFN), tanpa pajak, 0..1.
@@ -136,30 +177,29 @@ class PosOrder(models.Model):
                 points += excl
             else:
                 goods += excl
-        if not goods or self.is_refund:
+        if goods <= 0:
             return 1.0
         return max(0.0, min(1.0, 1.0 + points / goods))
 
-    def _efn_loyalty_eligible_amount(self, factor=None):
+    def _efn_loyalty_eligible_amount(self, factor=None, lines=None, refund=False):
         """K-1 (docs/04 §9.6): Σ subtotal TANPA pajak baris produk setelah diskon baris & reward
         promo (baris reward ikut, mengurangi dasar), TIDAK termasuk baris "Poin EFN" dan produk di
         kategori `efn_loyalty_earn_excluded` (K-2), dikurangi porsi yang dibayar poin (faktor
-        uang). Dibulatkan ke bawah ke Rupiah; refund -> nilai absolut dengan faktor order asal.
-        Satu fungsi agar mudah diubah bila Finance menetapkan lain (Q-13)."""
+        uang). Dibulatkan ke bawah ke Rupiah. SEC-59: TANPA `abs()` -- order jual hanya menghasilkan
+        dasar bila Σ bertanda positif; refund (`refund=True`) memakai -Σ baris refund dengan faktor
+        order asal. Satu fungsi agar mudah diubah bila Finance menetapkan lain (Q-13)."""
         self.ensure_one()
-        raw = self._efn_loyalty_eligible_raw()
+        raw = self._efn_loyalty_eligible_raw(lines)
         if factor is None:
             factor = self._efn_loyalty_money_factor()
-        value = abs(raw) * factor
+        value = (-raw if refund else raw) * factor
         return int(math.floor(value + 1e-6)) if value > 0 else 0
 
-    def _efn_goods_incl_raw(self):
+    def _efn_goods_incl_raw(self, lines=None):
         """Σ total incl. pajak semua baris kecuali baris poin (bertanda)."""
         self.ensure_one()
-        points_product = self._efn_points_product()
-        return sum(
-            self._efn_line_raw_amounts(line)[1] for line in self.lines.sudo() if line.product_id != points_product
-        )
+        lines = self._efn_loyalty_goods_lines() if lines is None else lines
+        return sum(self._efn_line_raw_amounts(line)[1] for line in lines)
 
     @api.model
     def _efn_tolerance(self, line_count):
@@ -185,7 +225,9 @@ class PosOrder(models.Model):
             if not records:
                 continue
             states = set(records.mapped("state"))
-            if "pending" in states:
+            if "hold" in states:
+                new_state = "review"
+            elif "pending" in states:
                 new_state = "pending"
             elif "failed" in states:
                 new_state = "review"
@@ -214,8 +256,10 @@ class PosOrder(models.Model):
         lines = self._efn_points_lines()
         if not lines:
             return
-        if self.is_refund:
-            # Refund hanya boleh MENGURANGI uang kembali lewat baris penyesuaian (nilai positif).
+        kind, _origins = self._efn_loyalty_order_kind()
+        if kind != "sale":
+            # Retur/refund (ditentukan server) hanya boleh MENGURANGI uang kembali lewat baris
+            # penyesuaian (nilai positif).
             if any(self._efn_line_raw_amounts(line)[1] < 0 for line in lines):
                 _logger.warning("EFN loyalty: refund %s membawa baris Poin EFN negatif", self.uuid)
                 raise UserError(_("Baris Poin EFN pada refund tidak valid. Hapus baris tersebut."))
@@ -229,20 +273,64 @@ class PosOrder(models.Model):
                     "Hapus baris Poin EFN atau ulangi penukaran (OTP)."
                 )
             )
+        reason = self._efn_loyalty_redeem_violation(reservation, lines)
+        if reason:
+            _logger.warning("EFN loyalty: order %s ditolak saat sync (%s)", self.uuid, reason)
+            raise UserError(
+                _(
+                    "Penukaran Poin EFN pada order ini tidak sesuai reservasi (%(reason)s). "
+                    "Order tidak disimpan; batalkan penukaran poin lalu ulangi.",
+                    reason=reason,
+                )
+            )
+
+    def _efn_loyalty_redeem_violation(self, reservation, lines):
+        """SEC-62: kode pelanggaran redeem (None bila sah). Semua nilai dihitung server."""
+        self.ensure_one()
+        tolerance = self._efn_tolerance(len(lines))
+        signed = [self._efn_line_raw_amounts(line)[1] for line in lines]
+        if any(value >= 0 for value in signed):
+            return "points_line_positive"
+        value = -sum(signed)
+        stored = -sum(lines.mapped("price_subtotal_incl"))
+        if abs(value - reservation.value_idr) > tolerance or abs(stored - reservation.value_idr) > tolerance:
+            return "value_mismatch"
+        if reservation.partner_id != self.partner_id:
+            return "partner_mismatch"
+        goods = self._efn_goods_incl_raw()
+        pct = reservation.redeem_max_pct or 100
+        if value > goods * pct / 100.0 + tolerance:
+            return "exceeds_max_pct"
+        if goods - value < -tolerance or self.currency_id.compare_amounts(self.amount_total, 0.0) < 0:
+            return "negative_total"
+        return None
 
     def _efn_loyalty_process_paid(self):
         self.ensure_one()
         Outbox = self.env["efn.pos.loyalty.outbox"]
-        if self.is_refund:
-            originals = self.refunded_order_id
-            if len(originals) == 1:
-                self._efn_loyalty_process_refund(originals)
-        else:
+        kind, origins = self._efn_loyalty_order_kind()
+        if kind == "refund":
+            self._efn_loyalty_process_refund(origins)
+        elif kind == "sale":
             self._efn_loyalty_process_redeem()
             self._efn_loyalty_enqueue_earn()
+        elif self._efn_loyalty_return_relevant(origins):
+            # SEC-59: retur tanpa tepat satu order asal -> tidak ada earn, tidak ada reverse
+            # otomatis (tidak dilewati diam-diam); supervisor memutuskan clawback manual.
+            self._efn_loyalty_flag_review(kind)
         if Outbox.sudo().search_count([("order_id", "=", self.id)], limit=1):
             self._efn_loyalty_refresh_state()
             Outbox._efn_trigger()
+
+    def _efn_loyalty_return_relevant(self, origins):
+        """Retur yang menyangkut Poin EFN: ada baris poin, pelanggan dipilih di POS ber-earn,
+        atau order asal ikut loyalty."""
+        self.ensure_one()
+        if self._efn_points_lines():
+            return True
+        if self.partner_id and self.config_id.efn_loyalty_earn_enabled:
+            return True
+        return any(origin._efn_loyalty_original_involved() for origin in origins)
 
     def _efn_loyalty_process_redeem(self):
         Reservation = self.env["efn.pos.loyalty.reservation"]
@@ -264,14 +352,8 @@ class PosOrder(models.Model):
                     }
                 )
             return
-        value = abs(self._efn_points_value(lines))
-        stored = abs(sum(lines.mapped("price_subtotal_incl")))
-        tolerance = self._efn_tolerance(len(lines))
-        reason = None
-        if abs(value - reservation.value_idr) > tolerance or abs(stored - reservation.value_idr) > tolerance:
-            reason = "value_mismatch"
-        elif reservation.partner_id != self.partner_id:
-            reason = "partner_mismatch"
+        # Backstop (validasi preventif SEC-62 sudah menolak sync sebelum titik ini).
+        reason = self._efn_loyalty_redeem_violation(reservation, lines)
         self.write(
             {
                 "efn_loyalty_points_redeemed": reservation.points,
@@ -367,6 +449,7 @@ class PosOrder(models.Model):
     def _efn_loyalty_process_refund(self, original):
         Outbox = self.env["efn.pos.loyalty.outbox"]
         refund_lines = self._efn_points_lines()
+        goods = self._efn_loyalty_goods_lines()
         original_has_points = bool(original._efn_points_lines())
         if not original._efn_loyalty_original_involved() and not original_has_points:
             if refund_lines:
@@ -374,15 +457,19 @@ class PosOrder(models.Model):
             return
         # Dasar clawback memakai faktor uang order ASAL (baris penyesuaian poin di refund
         # mengembalikan porsi poin secara proporsional).
-        refunded_eligible = self._efn_loyalty_eligible_amount(factor=original._efn_loyalty_money_factor())
-        ratio = original._efn_loyalty_refund_ratio(
-            self._efn_loyalty_eligible_raw(), self._efn_goods_incl_raw(), exclude_refund=self
+        refunded_eligible = self._efn_loyalty_eligible_amount(
+            factor=original._efn_loyalty_money_factor(), lines=goods, refund=True
         )
+        ratio = original._efn_loyalty_refund_ratio(
+            self._efn_loyalty_eligible_raw(goods), self._efn_goods_incl_raw(goods), exclude_refund=self
+        )
+        hold_reason = None
         if original_has_points:
             expected = original._efn_loyalty_expected_adjustment(ratio)
             actual = self._efn_points_value(refund_lines)
             if abs(actual - expected) > self._efn_tolerance(len(refund_lines)):
-                self._efn_loyalty_flag_review("refund_points_adjustment_mismatch")
+                hold_reason = "refund_points_adjustment_mismatch"
+                self._efn_loyalty_flag_review(hold_reason)
         vals = {
             "company_id": self.company_id.id,
             "order_id": self.id,
@@ -397,7 +484,12 @@ class PosOrder(models.Model):
             vals.update({"state": "skipped", "last_error": "zero_ratio"})
         elif not member:
             vals.update({"state": "skipped", "last_error": f"member_missing:{member_error}"})
-        Outbox._efn_enqueue(vals)
+        elif hold_reason:
+            # SEC-60: restore poin redeem TIDAK boleh terjadi otomatis bila uang sudah kembali.
+            vals.update({"state": "hold", "last_error": hold_reason})
+        record = Outbox._efn_enqueue(vals)
+        if record.state == "hold":
+            record._efn_schedule_activity(hold_reason or record.last_error)
 
     # ------------------------------------------------------------------ hooks
     def _process_saved_order(self, draft):

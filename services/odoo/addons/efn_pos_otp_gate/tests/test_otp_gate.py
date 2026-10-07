@@ -96,7 +96,7 @@ class TestEfnPosOtpGate(TestPoSCommon):
         return result
 
     def _patch_bff(self):
-        return patch.object(self.env.registry["efn.bff.client"], "post", side_effect=self._fake_post)
+        return patch.object(self.env.registry["efn.bff.client"], "_efn_post", side_effect=self._fake_post)
 
     def _order_data(self, reward=None, draft=False, uuid=None, customer=None, spoof_flags=False):
         """`spoof_flags=True`: klien mengosongkan is_reward_line/reward_id (SEC-12)."""

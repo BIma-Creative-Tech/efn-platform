@@ -67,6 +67,10 @@ class EfnPosLoyaltyReservation(models.Model):
     )
     points = fields.Integer(required=True, readonly=True)
     value_idr = fields.Integer(string="Nilai (Rp)", required=True, readonly=True)
+    # SEC-62: batas % poin terhadap nilai order (parameter BFF §9.1 saat reserve, fallback
+    # `efn.pos.loyalty.redeem_max_pct_fallback`). Dicek ulang server saat sync terhadap total
+    # barang hasil hitung server (amount_total saat reserve berasal dari klien).
+    redeem_max_pct = fields.Integer(string="Batas % order", readonly=True, default=100)
     expires_at = fields.Datetime(readonly=True, help="Batas UI (TTL 15 menit); commit masih diterima BFF s.d. 24 jam.")
     state = fields.Selection(RESERVATION_STATES, required=True, default="reserved", index=True, readonly=True)
     note = fields.Char(readonly=True)

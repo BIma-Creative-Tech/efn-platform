@@ -71,6 +71,15 @@ class PosConfig(models.Model):
         self.ensure_one()
         if not self.env.user.has_group("point_of_sale.group_pos_user"):
             raise AccessError(_("Anda tidak berhak memakai fitur OTP POS."))
+        # SEC-58 (audit metode publik): RPC `call_kw` hanya mem-browse id tanpa cek record rule,
+        # jadi config & company diperiksa eksplisit (user PT lain tidak bisa memakai sesi PT ini).
+        if not self.env.su:
+            try:
+                self.check_access("read")
+            except AccessError:
+                raise AccessError(_("Anda tidak berhak memakai fitur OTP POS.")) from None
+            if self.company_id not in self.env.user.company_ids:
+                raise AccessError(_("Anda tidak berhak memakai fitur OTP POS."))
         session = self.current_session_id
         if not session or session.state != "opened":
             raise UserError(_("Sesi POS belum dibuka."))
@@ -148,7 +157,7 @@ class PosConfig(models.Model):
             "purpose": purpose,
         }
         try:
-            response = self.env["efn.bff.client"].post(
+            response = self.env["efn.bff.client"]._efn_post(
                 OTP_REQUEST_PATH, payload, log_context={"member": masked, "order_ref": order_ref}
             )
         except EfnBffError:
@@ -219,7 +228,7 @@ class PosConfig(models.Model):
             "code": code,
         }
         try:
-            response = self.env["efn.bff.client"].post(
+            response = self.env["efn.bff.client"]._efn_post(
                 OTP_VERIFY_PATH,
                 payload,
                 log_context={"member": challenge.member_ref_masked, "order_ref": order_ref},

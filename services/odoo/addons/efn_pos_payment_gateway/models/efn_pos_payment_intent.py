@@ -155,7 +155,7 @@ class EfnPosPaymentIntent(models.Model):
         self.ensure_one()
         if self.status in FINAL_STATUSES:
             return self.status
-        response = self.env["efn.bff.client"].get(
+        response = self.env["efn.bff.client"]._efn_get(
             f"{PAYMENTS_PATH}/{self.bff_payment_id}", log_context={"intent": self.id}
         )
         if response.status == 200:
@@ -171,7 +171,7 @@ class EfnPosPaymentIntent(models.Model):
         self.ensure_one()
         if self.status in FINAL_STATUSES:
             return self.status
-        response = self.env["efn.bff.client"].post(
+        response = self.env["efn.bff.client"]._efn_post(
             f"{PAYMENTS_PATH}/{self.bff_payment_id}/cancel", {}, log_context={"intent": self.id}
         )
         remote_status = response.data.get("status")

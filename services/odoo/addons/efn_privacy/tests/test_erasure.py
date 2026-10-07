@@ -88,8 +88,8 @@ class TestEfnPrivacyErasure(PepperMixin, TestPoSCommon):
     def _run_cron(self):
         client = self.env.registry["efn.bff.client"]
         with (
-            patch.object(client, "get", side_effect=self._fake_get),
-            patch.object(client, "post", side_effect=self._fake_post),
+            patch.object(client, "_efn_get", side_effect=self._fake_get),
+            patch.object(client, "_efn_post", side_effect=self._fake_post),
         ):
             return self.env["efn.privacy.erasure"].with_context(efn_privacy_no_commit=True)._cron_pull_erasures()
 
@@ -173,6 +173,73 @@ class TestEfnPrivacyErasure(PepperMixin, TestPoSCommon):
         output = "\n".join(logs.output)
         for secret in ("81234567890", "3456", TEST_EMAIL, TEST_MEMBER_HASH, TEST_PEPPER_HEX):
             self.assertNotIn(secret, output)
+
+    def test_erasure_clears_pos_loyalty_data(self):
+        """SEC-65: reservasi/challenge Poin EFN tidak lagi menautkan partner + nomor ter-mask;
+        outbox yang belum terkirim untuk order partner tsb dilewati."""
+        if "efn.pos.loyalty.reservation" not in self.env:
+            self.skipTest("efn_pos_loyalty_ledger tidak terpasang")
+        company = self.config.company_id
+        reservation = (
+            self.env["efn.pos.loyalty.reservation"]
+            .sudo()
+            .create(
+                {
+                    "company_id": company.id,
+                    "config_id": self.config.id,
+                    "order_uuid": self.order.uuid,
+                    "order_id": self.order.id,
+                    "partner_id": self.member.id,
+                    "member_ref_masked": "62812****890",
+                    "points": 10,
+                    "value_idr": 1000,
+                    "state": "committed",
+                }
+            )
+        )
+        challenge = (
+            self.env["efn.pos.otp.challenge"]
+            .sudo()
+            .create(
+                {
+                    "company_id": company.id,
+                    "config_id": self.config.id,
+                    "order_ref": self.order.uuid,
+                    "partner_id": self.member.id,
+                    "member_ref_masked": "62812****890",
+                }
+            )
+        )
+        Outbox = self.env["efn.pos.loyalty.outbox"].sudo()
+        pending = Outbox.create(
+            {"company_id": company.id, "order_id": self.order.id, "kind": "earn", "idempotency_key": "pos_earn:pdp"}
+        )
+        other_order_outbox = Outbox.create(
+            {
+                "company_id": company.id,
+                "order_id": self.order.id,
+                "kind": "redeem_commit",
+                "idempotency_key": "pos_redeem:pdp",
+                "state": "done",
+            }
+        )
+        self._run_cron()
+        self.assertFalse(reservation.partner_id)
+        self.assertFalse(reservation.member_ref_masked)
+        self.assertEqual(reservation.points, 10, "bukti keuangan anonim tetap ada")
+        self.assertFalse(challenge.partner_id)
+        self.assertFalse(challenge.member_ref_masked)
+        self.assertEqual(pending.state, "skipped")
+        self.assertEqual(pending.last_error, "member_erased")
+        self.assertEqual(other_order_outbox.state, "done")
+        self.assertEqual(self._tables_containing("62812****890"), [])
+        self.env.flush_all()
+        for table in ("efn_pos_loyalty_reservation", "efn_pos_otp_challenge"):
+            self.env.cr.execute(
+                f"SELECT count(*) FROM {table} t WHERE row_to_json(t)::text LIKE %s",  # noqa: S608 - nama tabel konstan
+                ("%62812****890%",),
+            )
+            self.assertEqual(self.env.cr.fetchone()[0], 0, table)
 
     def test_complete_retry_is_idempotent_without_permanent_link(self):
         # Run 1: anonimisasi sukses, complete gagal -> penanda sementara menyimpan jumlah.

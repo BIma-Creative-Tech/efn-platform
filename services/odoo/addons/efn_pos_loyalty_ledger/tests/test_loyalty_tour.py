@@ -1,7 +1,7 @@
 """Tour UI POS (OWL) Poin EFN — Gelombang 13b.
 
 HttpCase + tour Chrome headless, tag `efn_tour` (job CI `odoo-tour`, image target `test`). BFF
-di-mock server-side dengan mem-patch `efn.bff.client.post/get` pada kelas registry (berlaku juga
+di-mock server-side dengan mem-patch `efn.bff.client._efn_post/_efn_get` pada kelas registry (berlaku juga
 untuk request browser yang dilayani thread server test).
 """
 
@@ -57,7 +57,7 @@ class TestEfnPosLoyaltyTour(TestPointOfSaleHttpCommon):
         loyalty_pos_config._BALANCE_CALLS.clear()
         loyalty_pos_config._PARAMS_CACHE.clear()
         client_cls = self.env.registry["efn.bff.client"]
-        for name, fake in (("post", self._fake_post), ("get", self._fake_get)):
+        for name, fake in (("_efn_post", self._fake_post), ("_efn_get", self._fake_get)):
             patcher = patch.object(client_cls, name, autospec=True, side_effect=fake)
             patcher.start()
             self.addCleanup(patcher.stop)

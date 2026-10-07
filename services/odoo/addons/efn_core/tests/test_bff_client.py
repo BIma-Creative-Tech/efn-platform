@@ -68,7 +68,7 @@ class TestEfnBffClient(TransactionCase):
     # ------------------------------------------------------------------ HTTP
     def test_post_sends_service_key_timeout_and_verifies_internal_ca(self):
         with patch(REQUESTS_POST, return_value=self._response(202, {"challenge_id": "c1"})) as post:
-            res = self.client.post("/v1/pos/otp/request", {"member_ref": "6281234567890"})
+            res = self.client._efn_post("/v1/pos/otp/request", {"member_ref": "6281234567890"})
         self.assertEqual(res.status, 202)
         self.assertEqual(res.data["challenge_id"], "c1")
         args, kwargs = post.call_args
@@ -83,7 +83,7 @@ class TestEfnBffClient(TransactionCase):
         os.environ[CA_FILE_ENV] = self.ca_path + ".missing"
         with patch(REQUESTS_POST) as post:
             with self.assertRaises(EfnBffError) as cm:
-                self.client.post("/v1/pos/otp/request", {})
+                self.client._efn_post("/v1/pos/otp/request", {})
         self.assertEqual(cm.exception.code, "bff_ca_missing")
         post.assert_not_called()
 
@@ -91,7 +91,7 @@ class TestEfnBffClient(TransactionCase):
     def test_tls_verification_failure_is_not_retried_plaintext(self):
         with patch(REQUESTS_POST, side_effect=requests.exceptions.SSLError()) as post:
             with self.assertRaises(EfnBffError) as cm:
-                self.client.post("/v1/pos/otp/request", {})
+                self.client._efn_post("/v1/pos/otp/request", {})
         self.assertEqual(cm.exception.code, "bff_tls_error")
         self.assertEqual(post.call_count, 1)
 
@@ -102,7 +102,7 @@ class TestEfnBffClient(TransactionCase):
         os.environ[APP_ENV_ENV] = "production"
         with patch(REQUESTS_POST) as post:
             with self.assertRaises(EfnBffError) as cm:
-                self.client.post("/v1/pos/otp/request", {})
+                self.client._efn_post("/v1/pos/otp/request", {})
         self.assertEqual(cm.exception.code, "bff_insecure_url")
         post.assert_not_called()
 
@@ -112,7 +112,7 @@ class TestEfnBffClient(TransactionCase):
         os.environ[APP_ENV_ENV] = "development"
         with patch(REQUESTS_POST) as post:
             with self.assertRaises(EfnBffError) as cm:
-                self.client.post("/v1/pos/otp/request", {})
+                self.client._efn_post("/v1/pos/otp/request", {})
         self.assertEqual(cm.exception.code, "bff_insecure_url")
         post.assert_not_called()
 
@@ -131,14 +131,14 @@ class TestEfnBffClient(TransactionCase):
         os.environ[ALLOW_PLAINTEXT_ENV] = "true"
         os.environ[APP_ENV_ENV] = "development"
         with patch(REQUESTS_POST, return_value=self._response(202, {})) as post:
-            self.client.post("/v1/pos/otp/request", {})
+            self.client._efn_post("/v1/pos/otp/request", {})
         args, _kwargs = post.call_args
         self.assertEqual(args[0], "http://bff.test:3000/v1/pos/otp/request")
 
     def test_env_bff_url_overrides_parameter(self):
         os.environ[BFF_URL_ENV] = "https://api-gateway:3000"
         with patch(REQUESTS_POST, return_value=self._response(202, {})) as post:
-            self.client.post("/v1/pos/otp/request", {})
+            self.client._efn_post("/v1/pos/otp/request", {})
         self.assertEqual(post.call_args[0][0], "https://api-gateway:3000/v1/pos/otp/request")
 
     def test_default_parameter_is_https(self):
@@ -147,26 +147,26 @@ class TestEfnBffClient(TransactionCase):
 
     def test_4xx_is_returned_not_raised(self):
         with patch(REQUESTS_POST, return_value=self._response(400, {"ok": False, "reason": "invalid"})):
-            res = self.client.post("/v1/pos/otp/verify", {})
+            res = self.client._efn_post("/v1/pos/otp/verify", {})
         self.assertEqual(res.status, 400)
         self.assertEqual(res.data["reason"], "invalid")
 
     def test_timeout_raises_bff_error(self):
         with patch(REQUESTS_POST, side_effect=requests.exceptions.Timeout()):
             with self.assertRaises(EfnBffError) as cm:
-                self.client.post("/v1/pos/otp/request", {})
+                self.client._efn_post("/v1/pos/otp/request", {})
         self.assertEqual(cm.exception.code, "bff_timeout")
 
     def test_connection_error_raises_bff_error(self):
         with patch(REQUESTS_POST, side_effect=requests.exceptions.ConnectionError()):
             with self.assertRaises(EfnBffError) as cm:
-                self.client.post("/v1/pos/otp/request", {})
+                self.client._efn_post("/v1/pos/otp/request", {})
         self.assertEqual(cm.exception.code, "bff_unreachable")
 
     def test_5xx_raises_bff_error(self):
         with patch(REQUESTS_POST, return_value=self._response(503, {})):
             with self.assertRaises(EfnBffError) as cm:
-                self.client.post("/v1/pos/otp/request", {})
+                self.client._efn_post("/v1/pos/otp/request", {})
         self.assertEqual(cm.exception.code, "bff_server_error")
 
     @mute_logger(CLIENT_LOGGER)
@@ -174,7 +174,7 @@ class TestEfnBffClient(TransactionCase):
         os.environ[API_KEY_FILE_ENV] = self.key_path + ".missing"
         with patch(REQUESTS_POST) as post:
             with self.assertRaises(EfnBffError) as cm:
-                self.client.post("/v1/pos/otp/request", {})
+                self.client._efn_post("/v1/pos/otp/request", {})
         self.assertEqual(cm.exception.code, "bff_key_missing")
         post.assert_not_called()
 
@@ -182,7 +182,7 @@ class TestEfnBffClient(TransactionCase):
     def test_invalid_base_url(self):
         self.env["ir.config_parameter"].sudo().set_param("efn.bff_url", "ftp://nope")
         with self.assertRaises(EfnBffError) as cm:
-            self.client.post("/v1/pos/otp/request", {})
+            self.client._efn_post("/v1/pos/otp/request", {})
         self.assertEqual(cm.exception.code, "bff_not_configured")
 
     def test_timeout_param_fallback_and_cap(self):
@@ -195,7 +195,7 @@ class TestEfnBffClient(TransactionCase):
     # ------------------------------------------------------------------ GET
     def test_get_uses_same_tls_key_timeout_rules(self):
         with patch(REQUESTS_GET, return_value=self._response(200, {"status": "paid"})) as get:
-            res = self.client.get("/v1/pos/payments/pay-1", {"store": "odoo"})
+            res = self.client._efn_get("/v1/pos/payments/pay-1", {"store": "odoo"})
         self.assertEqual(res.status, 200)
         self.assertEqual(res.data["status"], "paid")
         args, kwargs = get.call_args
@@ -210,7 +210,7 @@ class TestEfnBffClient(TransactionCase):
     def test_get_list_body_is_exposed(self):
         body = [{"request_id": "r1", "member_hash": "a" * 64}]
         with patch(REQUESTS_GET, return_value=self._response(200, body)):
-            res = self.client.get("/v1/pos/privacy/erasures", {"store": "odoo"})
+            res = self.client._efn_get("/v1/pos/privacy/erasures", {"store": "odoo"})
         self.assertEqual(res.body, body)
         self.assertEqual(res.data, {}, "data tetap dict untuk endpoint objek")
         self.assertNotIn("r1", repr(res))
@@ -220,7 +220,7 @@ class TestEfnBffClient(TransactionCase):
         os.environ[CA_FILE_ENV] = self.ca_path + ".missing"
         with patch(REQUESTS_GET) as get:
             with self.assertRaises(EfnBffError) as cm:
-                self.client.get("/v1/pos/payments/pay-1")
+                self.client._efn_get("/v1/pos/payments/pay-1")
         self.assertEqual(cm.exception.code, "bff_ca_missing")
         get.assert_not_called()
 
@@ -228,24 +228,24 @@ class TestEfnBffClient(TransactionCase):
     def test_get_tls_error_and_5xx(self):
         with patch(REQUESTS_GET, side_effect=requests.exceptions.SSLError()):
             with self.assertRaises(EfnBffError) as cm:
-                self.client.get("/v1/pos/payments/pay-1")
+                self.client._efn_get("/v1/pos/payments/pay-1")
         self.assertEqual(cm.exception.code, "bff_tls_error")
         with patch(REQUESTS_GET, return_value=self._response(502, {})):
             with self.assertRaises(EfnBffError) as cm:
-                self.client.get("/v1/pos/payments/pay-1")
+                self.client._efn_get("/v1/pos/payments/pay-1")
         self.assertEqual(cm.exception.code, "bff_server_error")
         with patch(REQUESTS_GET, return_value=self._response(302, {})):
             with self.assertRaises(EfnBffError) as cm:
-                self.client.get("/v1/pos/payments/pay-1")
+                self.client._efn_get("/v1/pos/payments/pay-1")
         self.assertEqual(cm.exception.code, "bff_server_error", "redirect tidak diikuti")
 
     def test_get_rejects_unsafe_path_and_params(self):
         with patch(REQUESTS_GET) as get:
             for path in ("/v1/pos/payments/../admin", "/v1/x?y=1", "v1/x", "/v1//x", "/v1/a b"):
                 with self.subTest(path=path), self.assertRaises(ValueError):
-                    self.client.get(path)
+                    self.client._efn_get(path)
             with self.assertRaises(ValueError):
-                self.client.get("/v1/x", {"a": {"nested": 1}})
+                self.client._efn_get("/v1/x", {"a": {"nested": 1}})
         get.assert_not_called()
 
     def test_get_rejects_pii_in_query_and_path(self):
@@ -262,19 +262,19 @@ class TestEfnBffClient(TransactionCase):
         with patch(REQUESTS_GET) as get, patch(REQUESTS_POST) as post:
             for params in cases:
                 with self.subTest(params=params), self.assertRaises(ValueError):
-                    self.client.get("/v1/pos/loyalty/balance", params)
+                    self.client._efn_get("/v1/pos/loyalty/balance", params)
             for path in ("/v1/pos/loyalty/balance/6281234567890", "/v1/x/081234567890"):
                 with self.subTest(path=path), self.assertRaises(ValueError):
-                    self.client.get(path)
+                    self.client._efn_get(path)
                 with self.subTest(path=path), self.assertRaises(ValueError):
-                    self.client.post(path, {})
+                    self.client._efn_post(path, {})
         get.assert_not_called()
         post.assert_not_called()
 
     def test_get_allows_non_pii_params(self):
         with patch(REQUESTS_GET, return_value=self._response(200, [])) as get:
-            self.client.get("/v1/pos/privacy/erasures", {"store": "odoo", "limit": 100})
-            self.client.get("/v1/pos/payments/7f0c2a9e-1b2c-4d5e-8f90-123456789abc")
+            self.client._efn_get("/v1/pos/privacy/erasures", {"store": "odoo", "limit": 100})
+            self.client._efn_get("/v1/pos/payments/7f0c2a9e-1b2c-4d5e-8f90-123456789abc")
         self.assertEqual(get.call_count, 2)
 
     # ---------------------------------------------------------------- phone

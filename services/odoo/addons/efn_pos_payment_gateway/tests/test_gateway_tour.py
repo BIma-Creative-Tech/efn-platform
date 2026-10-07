@@ -67,7 +67,7 @@ class TestEfnPosGatewayTour(TestPointOfSaleHttpCommon):
         self.calls = []
         self.status_after_polls = None  # None = tetap pending
         client_cls = self.env.registry["efn.bff.client"]
-        for name, fake in (("post", self._fake_post), ("get", self._fake_get)):
+        for name, fake in (("_efn_post", self._fake_post), ("_efn_get", self._fake_get)):
             patcher = patch.object(client_cls, name, autospec=True, side_effect=fake)
             patcher.start()
             self.addCleanup(patcher.stop)

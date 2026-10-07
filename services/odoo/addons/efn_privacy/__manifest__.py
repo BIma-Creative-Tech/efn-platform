@@ -1,7 +1,7 @@
 {
     "name": "EFN Privacy (UU PDP erasure)",
     "summary": "member_hash pelanggan + cron tarik/anonimkan/selesaikan permintaan hapus data dari BFF (docs/04 §8.4).",
-    "version": "19.0.1.2.0",
+    "version": "19.0.1.3.0",
     "category": "EFN",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",

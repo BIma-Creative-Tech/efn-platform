@@ -192,7 +192,9 @@ class PosPaymentMethod(models.Model):
             "idempotency_key": idempotency_key,
         }
         try:
-            response = self.env["efn.bff.client"].post(PAYMENTS_PATH, payload, log_context={"order_ref": order_uuid})
+            response = self.env["efn.bff.client"]._efn_post(
+                PAYMENTS_PATH, payload, log_context={"order_ref": order_uuid}
+            )
         except EfnBffError:
             return self._efn_error("bff_unavailable", _("Layanan pembayaran tidak tersedia. Gunakan metode lain."))
         data = response.data

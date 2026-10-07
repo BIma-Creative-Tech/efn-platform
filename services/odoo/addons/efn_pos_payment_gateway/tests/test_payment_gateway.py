@@ -74,8 +74,8 @@ class TestEfnPosPaymentGateway(TestPoSCommon):
 
     def _patch_bff(self):
         client = self.env.registry["efn.bff.client"]
-        post = patch.object(client, "post", side_effect=self._fake_post)
-        get = patch.object(client, "get", side_effect=self._fake_get)
+        post = patch.object(client, "_efn_post", side_effect=self._fake_post)
+        get = patch.object(client, "_efn_get", side_effect=self._fake_get)
         post.start()
         get.start()
         self.addCleanup(post.stop)
