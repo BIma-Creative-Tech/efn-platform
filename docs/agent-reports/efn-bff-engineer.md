@@ -362,3 +362,36 @@ Kuota keras 3/15 menit dipindah dari "per nomor" ke "per (nomor, IP klien)", seh
 
 ## G9.5 Status SEC (bagian BFF)
 SEC-29 Fixed. SEC-31 Fixed sisi BFF (sisa: korelasi waktu, replay restore, CH lama — README privacy). SEC-34 Partial (biaya naik; binding IP/adaptif belum). SEC-39 Fixed terhadap `efn_bff` (superuser/DBA tetap bisa; hash-chain consent backlog). SEC-40 step-up & race foto Fixed. R2, R6 Fixed sisi BFF.
+---
+
+# Gelombang 12 — SEC-29 tuntas, SEC-34 sisa (7 Okt 2026)
+
+## G12.1 SEC-29: tidak ada secret di `process.env`
+- `src/config/secrets.loader.ts`: fungsi `secretsLoader()` (yang mengisi `process.env[X]`) **dihapus**. File kini hanya daftar `KNOWN_SECRET_FILES`, alias `EFN_BFF_API_KEY`, `SECRET_ENV_NAMES`/`isSecretEnvName`.
+- `src/config/app-config.ts`: resolver privat `secretValue(name)`: `<NAMA>_FILE` (wajib terbaca, ConfigError menyebut path, bukan nilai) → `${SECRETS_DIR:-/run/secrets}/<nama kontrak>` → env literal **hanya `APP_ENV=dev`**. Nilai di-cache di memori objek; buffer file di-nol-kan. Berlaku untuk JWT_SECRET, OTP_PEPPER, DISCOUNT_TOKEN_SECRET, ODOO_BFF_API_KEY (+alias), WEBHOOK_PAYMENT_SECRET, ALTCHA_HMAC_KEY, PAYMENT_PROVIDER_API_KEY, WHATSAPP_TOKEN, PG/Redis/RabbitMQ password, MinIO secret key (PII & access key MinIO sudah dari G9). Aturan literal PII diseragamkan: `APP_ENV=dev` (sebelumnya "non-production").
+- Di luar `APP_ENV=dev`: env literal bernama secret **atau** password di `DATABASE_URL`/`REDIS_URL`/`AMQP_URL`/`RABBITMQ_URL` → `assertStartupSecrets` gagal start (nilai sudah ada di environ, file pun tidak menyelamatkan).
+- `fromProcessEnv()` memakai snapshot `{...process.env}`, tidak menulis env. `app.module.ts`: `ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true })` (dotenv tidak lagi bisa menyalin `.env` ke `process.env`).
+- `testConfig()` (fakes) kini menyuplai secret sebagai **file** (`<NAMA>_FILE=/test-secrets/<NAMA>`), jalur yang sama dengan produksi.
+- Spec statis baru `src/config/no-secret-env-write.spec.ts`: gagal bila ada `process.env.<SECRET> =`/`??=`/`||=` atau `process.env['<SECRET>'] =` di seluruh `src` (termasuk spec), dan bila kode non-test menulis `process.env` apa pun (`Object.assign(process.env…)`, dll.). Ada kontrol positif regex.
+- Compose tidak perlu diubah: semua secret api-gateway sudah `*_FILE`, URL tanpa password (dicek `docker-compose.yml`, `.dev.yml`, `.payment.yml`).
+
+## G12.2 SEC-34: ALTCHA terikat IP + biaya adaptif
+- `signature = HMAC(altcha_hmac_key, "efn-altcha:v2\n" + challenge + "\n" + ip_binding)`; `ip_binding` = IPv4 utuh / IPv6 prefix /64 / `unknown`. IP tidak dikirim/simpan. `verify(payload, ip)` → solusi dari IP lain = `400 captcha_required` generik. Format JSON tidak berubah (frontend & widget tidak perlu diubah; challenge & request sama-sama lewat Next.js yang meneruskan XFF ke hop tepercaya).
+- Biaya adaptif: `maxnumber = ALTCHA_MAX_NUMBER × 2^level` dipotong `ALTCHA_MAX_NUMBER_CAP` (default max(4 000 000, base), ≤ 10 000 000, harus ≥ base). Level 0..3 = maks(level per IP: rasio challenge/IP atau OTP login/IP, ambang 25/50/75 %; level global: OTP login jam ini / `OTP_GLOBAL_HOURLY_BUDGET`, ambang 50/75/90 %). Membaca counter Redis rate limit yang SUDAH ada lewat `RateLimiter.peek` (tanpa menambah, tanpa key baru). `ALTCHA_ADAPTIVE=false` mematikan. Verifikasi menerima number ≤ cap.
+- Metrik baru `efn_altcha_challenge_total{level}` (tanpa IP).
+- **Dampak UX** (didokumentasikan di `src/auth/README.md`): normal tidak berubah (±1–2,5 s ponsel bawah). Level 1 ±2–5 s, level 2 ±4–10 s, level 3 ±8–20 s ponsel bawah (< 4 s desktop). Terkena: IP bersama (CGNAT seluler, Wi-Fi publik/kantor) setelah ≥ 5 OTP/15 menit dari IP itu, atau semua pengguna saat budget global ≥ 50 %. Pindah jaringan antara verifikasi & kirim → `captcha_required`, ulangi verifikasi. Saat deploy, challenge lama (≤ 5 menit) ditolak sekali.
+- `scripts/smoke/bff_smoke.py`: solver PoW ±2x lebih cepat (prefix salt di-hash sekali + `copy()`), komentar SEC-34. Tidak ada perubahan alur (challenge & request dari klien yang sama).
+
+## G12.3 Validasi
+- Container `node:22.12-alpine@sha256:51eff88a…` (digest Dockerfile): `npm run build` OK, `npm run lint` 0 error (2 warning lama `no-control-regex`), `CI=true npm test` **28 suite, 332 test lulus** (+19 test).
+- **Cek runtime `/proc/<pid>/environ`** (container yang sama, secret file dummy acak di `SECRETS_DIR`, sebagian via `_FILE`): (1) `node dist/main.js` hidup → `/proc/<pid>/environ` **0 nilai secret** (22 var); (2) in-process setelah semua getter secret disentuh: `process.env`, `/proc/self/environ`, env child process (`sh -c env`), `process.report.environmentVariables` → **0 secret** semua. Kontrol pola lama (`process.env.X = v`): bocor ke child = true, process.report = true, `/proc/self/environ` = false — catatan teknis: `/proc/<pid>/environ` hanya memuat env awal proses, jadi vektor nyata pola lama adalah child process & diagnostic report/heap dump; keduanya kini tertutup.
+- `bff_smoke.py` lolos parse Python.
+- **Belum**: `run-e2e-smoke.sh a` **tidak dijalankan**. Stack dev menyala dan dipakai agent lain; bind mount Windows tidak memicu `nest --watch`, sehingga BFF dev yang berjalan **masih kode lama** sampai `docker compose restart api-gateway` (tidak saya lakukan). Setelah restart: jalankan `scripts/smoke/run-e2e-smoke.sh a`.
+
+## G12.4 Untuk lead / agent lain
+- **devsecops**: alert opsional `increase(efn_altcha_challenge_total{level="3"}[15m]) > 0`; tidak ada perubahan compose/secret. Pastikan tidak ada `.env` berisi secret di image (kini diabaikan juga).
+- **frontend (opsional)**: teks progres "Memverifikasi perangkat…" saat PoW lama; reset widget pada `captcha_required` sudah ada.
+- **architect**: catat di docs/04 §8.1: format signature v2 (domain + IP binding), env `ALTCHA_MAX_NUMBER_CAP`/`ALTCHA_ADAPTIVE`, metrik baru; §7.3: env literal secret hanya `APP_ENV=dev`.
+
+## G12.5 Status SEC (bagian BFF)
+SEC-29 **Fixed** (semua secret BFF; spec statis + verifikasi runtime). SEC-34 **Fixed** sisi BFF (binding IP + biaya adaptif; sisa by design: PoW memperlambat, bukan mencegah — kontrol utama tetap rate limit + budget).

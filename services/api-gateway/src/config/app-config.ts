@@ -3,11 +3,13 @@ import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { createSecureContext } from 'node:tls';
 import { posix } from 'node:path';
-import { DIRECT_SECRET_FILES, secretsLoader, EnvRecord } from './secrets.loader';
+import { DIRECT_SECRET_FILES, EnvRecord, KNOWN_SECRET_FILES, isSecretEnvName } from './secrets.loader';
 
 /**
- * Konfigurasi terketik untuk seluruh BFF. Secret dibaca dari env yang sudah di-resolve oleh
- * `secretsLoader` (pola *_FILE → /run/secrets/*). Nilai secret tidak pernah dimasukkan ke pesan error/log.
+ * Konfigurasi terketik untuk seluruh BFF. SEC-29: secret dibaca LANGSUNG dari file (`<NAMA>_FILE` → fallback
+ * `${SECRETS_DIR:-/run/secrets}/<nama_secret>`) ke memori objek ini (cache privat) dan TIDAK PERNAH disalin ke
+ * `process.env`. Env literal secret hanya diterima bila `APP_ENV=dev` (lihat `secrets.loader.ts`).
+ * Nilai secret tidak pernah dimasukkan ke pesan error/log.
  *
  * Enkripsi in transit (docs/04 §7.1, ADR-022): setiap koneksi keluar (PostgreSQL, Redis, RabbitMQ, MinIO) dan
  * server HTTP BFF memakai TLS ≥ 1.2 dengan verifikasi sertifikat terhadap CA internal (`/run/secrets/efn_ca_crt`).
@@ -117,23 +119,17 @@ export class AppConfig {
     private readonly readFile: BinaryFileReader = defaultBinaryReader,
   ) {}
 
+  /**
+   * SEC-29: `process.env` hanya DIBACA (nama/path non-rahasia + literal dev). Tidak ada lagi pemuat yang menulis
+   * secret ke env; snapshot salinan dangkal agar perubahan env setelah start tidak memengaruhi config.
+   */
   static fromProcessEnv(): AppConfig {
-    secretsLoader();
-    return new AppConfig(process.env);
+    return new AppConfig({ ...process.env });
   }
 
   /** Dipanggil di main.ts sebelum aplikasi dibuat. Pesan hanya memuat NAMA secret. */
   assertStartupSecrets(): void {
     const problems: string[] = [];
-    const check = (name: string): void => {
-      const v = this.str(name);
-      if (!v) problems.push(`${name} belum dikonfigurasi`);
-      else if (v.length < MIN_SECRET_LENGTH) problems.push(`${name} kurang dari ${MIN_SECRET_LENGTH} karakter`);
-    };
-    for (const name of REQUIRED_SECRETS) {
-      if (name === 'ODOO_BFF_API_KEY' && !this.str(name) && this.str('EFN_BFF_API_KEY')) continue;
-      check(name);
-    }
     const attempt = (fn: () => void, fallback: string): void => {
       try {
         fn();
@@ -141,9 +137,35 @@ export class AppConfig {
         problems.push(err instanceof Error ? err.message : fallback);
       }
     };
+    // SEC-29: di luar APP_ENV=dev, env literal berisi secret = sudah bocor ke environ proses → tolak start.
+    if (!this.isDevEnv) {
+      for (const name of Object.keys(this.env)) {
+        if (isSecretEnvName(name) && this.str(name) !== undefined) {
+          problems.push(`${name} sebagai env literal ditolak di luar APP_ENV=dev; pakai ${name}_FILE (SEC-29)`);
+        }
+      }
+      for (const name of ['DATABASE_URL', 'REDIS_URL', 'AMQP_URL', 'RABBITMQ_URL']) {
+        attempt(() => this.assertNoUrlPassword(name), `${name} tidak valid`);
+      }
+    }
+    const check = (name: string, alias?: string): void => {
+      let v: string | undefined;
+      try {
+        v = this.secretValue(name) ?? (alias ? this.secretValue(alias) : undefined);
+      } catch (err) {
+        problems.push(err instanceof Error ? err.message : `${name} tidak valid`);
+        return;
+      }
+      if (!v) problems.push(`${name} belum dikonfigurasi`);
+      else if (v.length < MIN_SECRET_LENGTH) problems.push(`${name} kurang dari ${MIN_SECRET_LENGTH} karakter`);
+    };
+    for (const name of REQUIRED_SECRETS) {
+      check(name, name === 'ODOO_BFF_API_KEY' ? 'EFN_BFF_API_KEY' : undefined);
+    }
     attempt(() => void this.piiActiveKeyVersion, 'PII_ENCRYPTION_KEY tidak valid'); // seluruh key ring + versi aktif
     attempt(() => void this.paymentProvider, 'PAYMENT_PROVIDER tidak valid');
     attempt(() => void this.posOtpAmountTolerancePct, 'POS_OTP_AMOUNT_TOLERANCE_PCT tidak valid');
+    attempt(() => void this.altchaMaxNumberCap, 'ALTCHA_MAX_NUMBER_CAP tidak valid');
     if (this.whatsappEnabled) {
       check('WHATSAPP_TOKEN');
       if (!this.str('WHATSAPP_PHONE_NUMBER_ID')) problems.push('WHATSAPP_PHONE_NUMBER_ID belum dikonfigurasi');
@@ -193,11 +215,79 @@ export class AppConfig {
     return v === undefined || v === '' ? undefined : v;
   }
 
+  /** SEC-29: env literal secret & URL berpassword hanya untuk APP_ENV=dev. */
+  private get isDevEnv(): boolean {
+    return this.str('APP_ENV') === 'dev';
+  }
+
+  private readonly secretCache = new Map<string, string | null>();
+
+  /**
+   * SEC-29: nilai secret `name` (string, di-trim) atau `undefined` bila tidak dikonfigurasi. Sumber berurutan:
+   * `<name>_FILE` (wajib terbaca) → `${SECRETS_DIR:-/run/secrets}/<nama kontrak>` → env literal `<name>` (HANYA
+   * APP_ENV=dev). Hasil di-cache di memori objek ini; buffer mentah file di-nol-kan. Tidak pernah menulis env.
+   */
+  private secretValue(name: string): string | undefined {
+    if (this.secretCache.has(name)) return this.secretCache.get(name) ?? undefined;
+    const literal = this.str(name);
+    if (literal !== undefined && !this.isDevEnv) {
+      throw new ConfigError(`${name} sebagai env literal ditolak di luar APP_ENV=dev; pakai ${name}_FILE (SEC-29)`);
+    }
+    let v: string | undefined;
+    const file = this.str(`${name}_FILE`);
+    if (file) {
+      v = this.readSecretFile(file, true, name);
+    } else {
+      const contractName = KNOWN_SECRET_FILES[name];
+      if (contractName) v = this.readSecretFile(posix.join(this.str('SECRETS_DIR') ?? '/run/secrets', contractName), false, name);
+      if (!v) v = literal;
+    }
+    this.secretCache.set(name, v && v.length > 0 ? v : null);
+    return v && v.length > 0 ? v : undefined;
+  }
+
+  private readSecretFile(path: string, required: boolean, name: string): string | undefined {
+    let raw: Buffer;
+    try {
+      raw = this.readFile(path);
+    } catch {
+      if (required) throw new ConfigError(`${name}_FILE (${path}) tidak dapat dibaca`);
+      return undefined;
+    }
+    try {
+      const s = raw.toString('utf8').trim();
+      return s.length > 0 ? s : undefined;
+    } finally {
+      raw.fill(0);
+    }
+  }
+
   private secret(name: string, fallbackName?: string): string {
-    const v = this.str(name) ?? (fallbackName ? this.str(fallbackName) : undefined);
+    const v = this.secretValue(name) ?? (fallbackName ? this.secretValue(fallbackName) : undefined);
     if (!v) throw new ConfigError(`Secret ${name} belum dikonfigurasi`);
     if (v.length < MIN_SECRET_LENGTH) throw new ConfigError(`Secret ${name} terlalu pendek`);
     return v;
+  }
+
+  /** SEC-29: password di URL koneksi (DATABASE_URL, REDIS_URL, AMQP_URL) = secret di env → hanya APP_ENV=dev. */
+  private assertNoUrlPassword(name: string): void {
+    const raw = this.str(name);
+    if (raw === undefined || this.isDevEnv) return;
+    let hasPassword: boolean;
+    try {
+      hasPassword = new URL(raw).password.length > 0;
+    } catch {
+      throw new ConfigError(`${name} bukan URL yang valid`);
+    }
+    if (hasPassword) {
+      throw new ConfigError(`${name} tidak boleh memuat password di luar APP_ENV=dev; pakai *_PASSWORD_FILE (SEC-29)`);
+    }
+  }
+
+  private urlPassword(name: string, u: URL): string | undefined {
+    if (!u.password) return undefined;
+    this.assertNoUrlPassword(name);
+    return decodeURIComponent(u.password);
   }
 
   private int(name: string, def: number, min = 0, max = Number.MAX_SAFE_INTEGER): number {
@@ -447,8 +537,8 @@ export class AppConfig {
 
   /**
    * SEC-29: kunci PII hanya hidup di memori objek ini (Buffer), tidak pernah di `process.env`.
-   * Sumber (berurutan): `${name}_FILE` (dibaca langsung, secretsLoader melewatinya) → untuk v1 fallback
-   * `${SECRETS_DIR:-/run/secrets}/pii_encryption_key` → env literal `${name}` (HANYA non-production: unit test/dev).
+   * Sumber (berurutan): `${name}_FILE` (dibaca langsung) → untuk v1 fallback
+   * `${SECRETS_DIR:-/run/secrets}/pii_encryption_key` → env literal `${name}` (HANYA APP_ENV=dev).
    * Hasil decode di-cache; buffer mentah file di-nol-kan setelah decode.
    */
   private readonly piiKeys = new Map<string, Buffer | null>();
@@ -466,8 +556,8 @@ export class AppConfig {
       }
       key = decodeBase64Key(name, raw);
     } else if (this.str(name) !== undefined) {
-      if (this.isProduction) {
-        throw new ConfigError(`${name} sebagai env literal ditolak saat production; pakai ${name}_FILE (SEC-29)`);
+      if (!this.isDevEnv) {
+        throw new ConfigError(`${name} sebagai env literal ditolak di luar APP_ENV=dev; pakai ${name}_FILE (SEC-29)`);
       }
       key = decodeBase64Key(name, Buffer.from(this.str(name) ?? '', 'utf8'));
     } else if (name === 'PII_ENCRYPTION_KEY') {
@@ -603,6 +693,22 @@ export class AppConfig {
    */
   get altchaMaxNumber(): number {
     return this.int('ALTCHA_MAX_NUMBER', 500_000, 1000, 10_000_000);
+  }
+  /**
+   * SEC-34 (Gelombang 12): biaya adaptif. `maxnumber` challenge = `ALTCHA_MAX_NUMBER` × 2^level (level 0..3,
+   * lihat `adaptiveAltchaMaxNumber`), dipotong ke batas atas ini. Default max(4 000 000, ALTCHA_MAX_NUMBER):
+   * level 3 dari base 500 000 = 4 000 000 → rata-rata 2 jt SHA-256 ≈ 8–20 s di ponsel kelas bawah, < 4 s desktop.
+   * Harus ≥ ALTCHA_MAX_NUMBER; maksimum 10 000 000 (juga batas NUMBER_RE verifikasi).
+   */
+  get altchaMaxNumberCap(): number {
+    const base = this.altchaMaxNumber;
+    const cap = this.int('ALTCHA_MAX_NUMBER_CAP', Math.max(4_000_000, base), 1000, 10_000_000);
+    if (cap < base) throw new ConfigError('ALTCHA_MAX_NUMBER_CAP harus ≥ ALTCHA_MAX_NUMBER');
+    return cap;
+  }
+  /** SEC-34: `ALTCHA_ADAPTIVE=false` mematikan kenaikan biaya (maxnumber tetap = ALTCHA_MAX_NUMBER). Default aktif. */
+  get altchaAdaptive(): boolean {
+    return this.bool('ALTCHA_ADAPTIVE', true);
   }
   /** Kontrak: TTL 5 menit. */
   get altchaTtlSeconds(): number {
@@ -752,20 +858,20 @@ export class AppConfig {
         port: this.int('PG_PORT', 5432, 1, 65535),
         database: this.str('PG_DB') ?? 'efn_platform',
         user: this.str('PG_USER') ?? 'efn_bff',
-        password: this.str('PG_PASSWORD'),
+        password: this.secretValue('PG_PASSWORD'),
         max: this.int('PG_POOL_MAX', 10, 1, 100),
       };
     } else {
       const raw = this.str('DATABASE_URL');
       if (!raw) throw new ConfigError('PG_HOST atau DATABASE_URL belum dikonfigurasi');
       const u = new URL(raw);
-      const urlPassword = u.password ? decodeURIComponent(u.password) : undefined;
+      const urlPassword = this.urlPassword('DATABASE_URL', u);
       base = {
         host: u.hostname,
         port: u.port ? Number(u.port) : 5432,
         database: decodeURIComponent(u.pathname.replace(/^\//, '')),
         user: decodeURIComponent(u.username),
-        password: this.str('PG_PASSWORD') ?? urlPassword,
+        password: this.secretValue('PG_PASSWORD') ?? urlPassword,
         max: this.int('PG_POOL_MAX', 10, 1, 100),
       };
     }
@@ -781,7 +887,7 @@ export class AppConfig {
   get redisConnection(): RedisConnectionConfig {
     const u = new URL(this.str('REDIS_URL') ?? 'rediss://redis:6379');
     const username = this.str('REDIS_USERNAME') ?? (u.username ? decodeURIComponent(u.username) : undefined);
-    const password = this.str('REDIS_PASSWORD') ?? (u.password ? decodeURIComponent(u.password) : undefined);
+    const password = this.secretValue('REDIS_PASSWORD') ?? this.urlPassword('REDIS_URL', u);
     u.username = '';
     u.password = '';
     if (u.protocol === 'rediss:') {
@@ -804,10 +910,10 @@ export class AppConfig {
     const u = new URL(this.str('AMQP_URL') ?? this.str('RABBITMQ_URL') ?? 'amqps://efn-bff@rabbitmq:5671');
     const username = u.username ? decodeURIComponent(u.username) : '';
     if (!username) throw new ConfigError('AMQP_URL harus memuat username (mis. amqps://efn-bff@rabbitmq:5671)');
-    const urlPassword = u.password ? decodeURIComponent(u.password) : undefined;
+    const urlPassword = this.urlPassword(this.str('AMQP_URL') ? 'AMQP_URL' : 'RABBITMQ_URL', u);
     u.username = '';
     u.password = '';
-    const password = this.str('RABBITMQ_PASSWORD') ?? urlPassword ?? '';
+    const password = this.secretValue('RABBITMQ_PASSWORD') ?? urlPassword ?? '';
     if (u.protocol === 'amqps:') {
       return { url: u.toString(), username, password, tls: this.tlsClientOptions('AMQP_TLS_CA_FILE', u.hostname, 'RabbitMQ') };
     }
@@ -854,7 +960,7 @@ export class AppConfig {
   /** Kredensial user MinIO khusus BFF (secret `minio_bff_access_key` + `minio_bff_secret`), bukan root. Dibaca lazy. */
   get minioConnection(): MinioConnectionConfig {
     const accessKey = this.minioAccessKey;
-    const secretKey = this.str('MINIO_SECRET_KEY');
+    const secretKey = this.secretValue('MINIO_SECRET_KEY');
     if (!secretKey) throw new ConfigError('Kredensial MinIO (MINIO_SECRET_KEY_FILE) belum dikonfigurasi');
     return { ...this.minioTransport, accessKey, secretKey };
   }

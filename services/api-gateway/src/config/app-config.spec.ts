@@ -1,6 +1,5 @@
 import { createHash, hkdfSync } from 'node:crypto';
 import { AppConfig, ConfigError, tlsKeyPairCheck } from './app-config';
-import { secretsLoader } from './secrets.loader';
 import { randomSecret, testConfig } from '../common/testing/fakes';
 import { memberHash } from '../common/pii/pii';
 
@@ -11,7 +10,10 @@ import { memberHash } from '../common/pii/pii';
 const CA_PEM = Buffer.from('-----BEGIN CERTIFICATE-----\ndummy-ca\n-----END CERTIFICATE-----\n');
 const SERVER_CERT = Buffer.from('-----BEGIN CERTIFICATE-----\ndummy-server\n-----END CERTIFICATE-----\n');
 const SERVER_KEY = Buffer.from('-----BEGIN PRIVATE KEY-----\ndummy\n');
-const caReader = (): Buffer => CA_PEM;
+// Salinan baru per baca: AppConfig me-nol-kan buffer file secret setelah dipakai (SEC-29), jadi konstanta tidak boleh dibagi.
+const caReader = (): Buffer => Buffer.from(CA_PEM);
+/** Path fallback secret kontrak (`/run/secrets/<nama>`) yang kini dibaca lewat reader AppConfig (SEC-29). */
+const SECRET_FALLBACK_RE = /^\/run\/secrets\/(pg|redis|rabbitmq|minio)_/;
 
 /** Rentang Cloudflare publik (https://www.cloudflare.com/ips/) — contoh daftar panjang untuk TRUSTED_PROXIES. */
 const CLOUDFLARE_V4 = [
@@ -23,32 +25,93 @@ const CLOUDFLARE_V6 = [
   '2400:cb00::/32', '2606:4700::/32', '2803:f800::/32', '2405:b500::/32', '2405:8100::/32', '2a06:98c0::/29', '2c0f:f248::/32',
 ];
 
-describe('secretsLoader', () => {
-  it('X_FILE → X dan fallback /run/secrets/<nama kontrak>', () => {
-    const files: Record<string, string> = {
-      '/custom/jwt': 'jwt-value\n',
-      '/run/secrets/otp_pepper': 'pepper-value',
-    };
-    const env: Record<string, string | undefined> = { JWT_SECRET_FILE: '/custom/jwt' };
-    secretsLoader(env, (p) => {
-      if (!(p in files)) throw new Error('ENOENT');
-      return files[p];
-    });
-    expect(env.JWT_SECRET).toBe('jwt-value');
-    expect(env.OTP_PEPPER).toBe('pepper-value');
-    expect(env.WHATSAPP_TOKEN).toBeUndefined();
+describe('AppConfig — secret dari file ke memori, tidak ke env (SEC-29)', () => {
+  const JWT = 'jwt-value-0123456789abcdef';
+  const PEPPER = 'pepper-value-0123456789abcdef';
+  const files: Record<string, string> = {
+    '/custom/jwt': `${JWT}\n`,
+    '/run/secrets/otp_pepper': PEPPER,
+    '/run/secrets/pg_password_bff': 'pg-pw-0123456789abcdef',
+  };
+  const reader = (p: string): Buffer => {
+    if (!(p in files)) throw new Error('ENOENT');
+    return Buffer.from(files[p]);
+  };
+
+  it('X_FILE dan fallback /run/secrets/<nama kontrak> dibaca; env TIDAK pernah ditulis', () => {
+    const env: Record<string, string | undefined> = { NODE_ENV: 'test', JWT_SECRET_FILE: '/custom/jwt', PG_HOST: 'postgres', PG_SSLMODE: 'disable', EFN_ALLOW_PLAINTEXT: 'true' };
+    const before = JSON.stringify(env);
+    const cfg = new AppConfig(env, reader);
+    expect(cfg.jwtSecret).toBe(JWT);
+    expect(cfg.otpPepper).toBe(PEPPER);
+    expect(cfg.pgConnection.password).toBe('pg-pw-0123456789abcdef');
+    expect(() => cfg.whatsappToken).toThrow('belum dikonfigurasi');
+    expect(JSON.stringify(env)).toBe(before);
   });
 
-  it('tidak menimpa variabel yang sudah ada', () => {
-    const env: Record<string, string | undefined> = { JWT_SECRET: 'ada', JWT_SECRET_FILE: '/x' };
-    secretsLoader(env, () => 'baru');
-    expect(env.JWT_SECRET).toBe('ada');
+  it('fromProcessEnv tidak mengubah process.env', () => {
+    const before = { ...process.env };
+    void AppConfig.fromProcessEnv();
+    expect(process.env).toEqual(before);
+  });
+
+  it('buffer mentah file di-nol-kan dan file dibaca sekali (cache)', () => {
+    const raws: Buffer[] = [];
+    const cfg = new AppConfig({ JWT_SECRET_FILE: '/custom/jwt' }, (p) => {
+      const b = reader(p);
+      raws.push(b);
+      return b;
+    });
+    expect(cfg.jwtSecret).toBe(JWT);
+    expect(cfg.jwtSecret).toBe(JWT);
+    expect(raws).toHaveLength(1);
+    expect(raws[0].every((x) => x === 0)).toBe(true);
+  });
+
+  it('X_FILE tak terbaca → ConfigError dengan nama/path, bukan nilai', () => {
+    expect(() => new AppConfig({ JWT_SECRET_FILE: '/hilang' }, reader).jwtSecret).toThrow('JWT_SECRET_FILE (/hilang) tidak dapat dibaca');
+  });
+
+  it('env literal secret hanya APP_ENV=dev; di luar dev ditolak (getter & assertStartupSecrets), file pun tidak menyelamatkan', () => {
+    expect(new AppConfig({ APP_ENV: 'dev', JWT_SECRET: JWT }, reader).jwtSecret).toBe(JWT);
+    for (const appEnv of [undefined, 'staging', 'production']) {
+      const env: Record<string, string | undefined> = { JWT_SECRET: JWT, JWT_SECRET_FILE: '/custom/jwt', PG_HOST: 'postgres' };
+      if (appEnv) env.APP_ENV = appEnv;
+      const cfg = new AppConfig(env, reader);
+      expect(() => cfg.jwtSecret).toThrow('ditolak di luar APP_ENV=dev');
+      let msg = '';
+      try {
+        cfg.assertStartupSecrets();
+      } catch (err) {
+        msg = (err as Error).message;
+      }
+      expect(msg).toContain('JWT_SECRET sebagai env literal ditolak');
+      expect(msg).not.toContain(JWT);
+    }
+    expect(() => new AppConfig({ EFN_BFF_API_KEY: JWT }, reader).odooBffApiKey).toThrow('ditolak di luar APP_ENV=dev');
+  });
+
+  it('password di URL koneksi (DATABASE_URL/REDIS_URL/AMQP_URL) hanya APP_ENV=dev', () => {
+    const plain = { NODE_ENV: 'test', EFN_ALLOW_PLAINTEXT: 'true', PG_SSLMODE: 'disable' };
+    expect(() => new AppConfig({ ...plain, DATABASE_URL: 'postgresql://u:pw@db/x' }, reader).pgConnection).toThrow('tidak boleh memuat password');
+    expect(() => new AppConfig({ ...plain, REDIS_URL: 'redis://u:pw@redis:6379' }, reader).redisConnection).toThrow('tidak boleh memuat password');
+    expect(() => new AppConfig({ ...plain, AMQP_URL: 'amqp://u:pw@rabbitmq' }, reader).amqpConnection).toThrow('tidak boleh memuat password');
+    const noFiles = (): Buffer => {
+      throw new Error('ENOENT');
+    };
+    expect(new AppConfig({ ...plain, APP_ENV: 'dev', DATABASE_URL: 'postgresql://u:pw@db/x' }, noFiles).pgConnection.password).toBe('pw');
+    // file secret tetap menang atas password URL (urutan lama)
+    expect(new AppConfig({ ...plain, APP_ENV: 'dev', DATABASE_URL: 'postgresql://u:pw@db/x' }, reader).pgConnection.password).toBe(
+      'pg-pw-0123456789abcdef',
+    );
   });
 });
 
 describe('AppConfig', () => {
   it('assertStartupSecrets menyebut nama secret yang hilang, bukan nilainya', () => {
-    const cfg = new AppConfig({ JWT_SECRET: 'short', PG_HOST: 'postgres' });
+    const cfg = new AppConfig({ APP_ENV: 'dev', JWT_SECRET: 'short', PG_HOST: 'postgres' }, () => {
+      throw new Error('ENOENT');
+    });
     let msg = '';
     try {
       cfg.assertStartupSecrets();
@@ -165,8 +228,9 @@ describe('AppConfig — TLS builder (docs/04 §7.1)', () => {
   it('default: semua klien TLS dengan CA /run/secrets/efn_ca_crt, servername = host, TLS ≥ 1.2', () => {
     const paths: string[] = [];
     const cfg = testConfig({ ...tlsEnv, TLS_CERT_FILE: '', TLS_KEY_FILE: '' }, (p) => {
+      if (SECRET_FALLBACK_RE.test(p)) throw new Error('ENOENT'); // fallback secret kontrak (SEC-29), bukan CA
       paths.push(p);
-      return CA_PEM;
+      return Buffer.from(CA_PEM);
     });
     expect(cfg.redisConnection).toEqual({
       url: 'rediss://redis:6379',
@@ -187,8 +251,9 @@ describe('AppConfig — TLS builder (docs/04 §7.1)', () => {
   it('*_CA_FILE per koneksi dihormati', () => {
     const paths: string[] = [];
     const cfg = testConfig({ ...tlsEnv, REDIS_TLS_CA_FILE: '/x/redis-ca.pem', PG_SSLROOTCERT: '/x/pg-ca.pem' }, (p) => {
+      if (SECRET_FALLBACK_RE.test(p)) throw new Error('ENOENT');
       paths.push(p);
-      return CA_PEM;
+      return Buffer.from(CA_PEM);
     });
     void cfg.redisConnection;
     void cfg.pgConnection;
@@ -243,7 +308,7 @@ describe('AppConfig — TLS builder (docs/04 §7.1)', () => {
     };
     const cfg = testConfig({ ...tlsEnv, NODE_ENV: 'production' }, (p) => {
       if (!(p in files)) throw new Error('ENOENT');
-      return files[p];
+      return Buffer.from(files[p]);
     });
     // Validasi pasangan cert/key (OpenSSL) diganti stub: repo tidak boleh memuat kunci privat, bahkan dummy.
     const original = tlsKeyPairCheck.verify;
@@ -271,31 +336,21 @@ describe('AppConfig — TLS builder (docs/04 §7.1)', () => {
     expect(() => testConfig({ WHATSAPP_GRAPH_BASE_URL: 'http://graph.facebook.com' }).whatsappGraphBaseUrl).toThrow(ConfigError);
   });
 
-  it('secretsLoader TIDAK menyalin isi *_CA_FILE / TLS_KEY_FILE / kunci PII / access key MinIO ke env (SEC-29)', () => {
+  it('material TLS / kunci PII / access key MinIO dibaca langsung; env tidak pernah bertambah (SEC-29)', () => {
     const env: Record<string, string | undefined> = {
-      TLS_KEY_FILE: '/k',
-      TLS_CERT_FILE: '/c',
-      REDIS_TLS_CA_FILE: '/ca',
+      APP_ENV: 'dev',
       PII_ENCRYPTION_KEY_FILE: '/pii',
-      PII_ENCRYPTION_KEY_V2_FILE: '/pii2',
       MINIO_ACCESS_KEY_FILE: '/ak',
       JWT_SECRET_FILE: '/jwt',
     };
-    const read: string[] = [];
-    const out = secretsLoader(env, (p) => {
-      read.push(p);
-      return `isi:${p}`;
-    });
-    expect(env.TLS_KEY).toBeUndefined();
-    expect(env.TLS_CERT).toBeUndefined();
-    expect(env.REDIS_TLS_CA).toBeUndefined();
-    expect(env.PII_ENCRYPTION_KEY).toBeUndefined();
-    expect(env.PII_ENCRYPTION_KEY_V2).toBeUndefined();
-    expect(env.MINIO_ACCESS_KEY).toBeUndefined();
-    expect(Object.keys(out)).not.toEqual(expect.arrayContaining(['PII_ENCRYPTION_KEY']));
-    expect(read).not.toContain('/pii');
-    expect(read).not.toContain('/run/secrets/pii_encryption_key'); // fallback kontrak bukan lagi lewat env
-    expect(env.JWT_SECRET).toBe('isi:/jwt'); // secret lain tetap pola lama
+    const before = Object.keys(env).sort();
+    const cfg = new AppConfig(env, (p) =>
+      Buffer.from(p === '/pii' ? Buffer.alloc(32, 1).toString('base64') : p === '/ak' ? 'efn-bff-access-key' : 'isi-jwt-0123456789abcdef'),
+    );
+    expect(cfg.piiKeyRing.get(1)?.length).toBe(32);
+    expect(cfg.minioAccessKey).toBe('efn-bff-access-key');
+    expect(cfg.jwtSecret).toBe('isi-jwt-0123456789abcdef');
+    expect(Object.keys(env).sort()).toEqual(before);
   });
 });
 
@@ -343,10 +398,10 @@ describe('AppConfig — kunci PII dari file (SEC-29)', () => {
     ).toThrow('PII_ENCRYPTION_KEY (v1) belum dikonfigurasi');
   });
 
-  it('literal env PII_ENCRYPTION_KEY ditolak saat production; diterima di test/dev; file tak terbaca → error tanpa nilai', () => {
-    expect(() => new AppConfig({ NODE_ENV: 'production', PII_ENCRYPTION_KEY: k1 }).piiKeyRing).toThrow('ditolak saat production');
+  it('literal env PII_ENCRYPTION_KEY hanya APP_ENV=dev; file tak terbaca → error tanpa nilai', () => {
+    expect(() => new AppConfig({ NODE_ENV: 'production', PII_ENCRYPTION_KEY: k1 }).piiKeyRing).toThrow('ditolak di luar APP_ENV=dev');
     expect(() => new AppConfig({ NODE_ENV: 'development', APP_ENV: 'production', PII_ENCRYPTION_KEY: k1 }).piiKeyRing).toThrow(
-      'ditolak saat production',
+      'ditolak di luar APP_ENV=dev',
     );
     expect(testConfig({ PII_ENCRYPTION_KEY: k1 }).piiKeyRing.get(1)?.equals(Buffer.alloc(32, 7))).toBe(true);
     let msg = '';
@@ -399,6 +454,16 @@ describe('AppConfig — ALTCHA & receipt DSAR', () => {
     expect(testConfig().altchaMaxNumber).toBe(500_000);
     expect(testConfig({ ALTCHA_MAX_NUMBER: '1000000' }).altchaMaxNumber).toBe(1_000_000);
     expect(() => testConfig({ ALTCHA_MAX_NUMBER: '20000000' }).altchaMaxNumber).toThrow(ConfigError);
+  });
+
+  it('SEC-34: ALTCHA_MAX_NUMBER_CAP default max(4 000 000, base), harus ≥ base; ALTCHA_ADAPTIVE default aktif', () => {
+    expect(testConfig().altchaMaxNumberCap).toBe(4_000_000);
+    expect(testConfig({ ALTCHA_MAX_NUMBER: '6000000' }).altchaMaxNumberCap).toBe(6_000_000);
+    expect(testConfig({ ALTCHA_MAX_NUMBER_CAP: '2000000' }).altchaMaxNumberCap).toBe(2_000_000);
+    expect(() => testConfig({ ALTCHA_MAX_NUMBER_CAP: '100000' }).altchaMaxNumberCap).toThrow('harus ≥ ALTCHA_MAX_NUMBER');
+    expect(() => testConfig({ ALTCHA_MAX_NUMBER_CAP: '20000000' }).altchaMaxNumberCap).toThrow(ConfigError);
+    expect(testConfig().altchaAdaptive).toBe(true);
+    expect(testConfig({ ALTCHA_ADAPTIVE: 'false' }).altchaAdaptive).toBe(false);
   });
 
   it('R6: kunci receipt = HKDF(jwt_secret, efn:dsar_receipt:v1), TTL default 30 hari', () => {

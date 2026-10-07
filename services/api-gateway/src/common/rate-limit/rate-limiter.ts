@@ -33,6 +33,15 @@ export class RateLimiter {
     return { allowed: count <= limit, count, limit, retryAfterSeconds: Math.max(1, remaining) };
   }
 
+  /** Baca counter window berjalan TANPA menambah (0 bila belum ada). Dipakai biaya ALTCHA adaptif (SEC-34). */
+  async peek(key: string, windowSeconds: number, offsetSeconds = 0): Promise<number> {
+    const nowSec = Math.floor(this.now() / 1000) + offsetSeconds;
+    const bucket = Math.floor(nowSec / windowSeconds);
+    const raw = await this.kv.get(`rl:${key}:${bucket}`);
+    const n = raw === null ? 0 : Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
   /** Seperti `hit`, tetapi melempar 429 (format kontrak + Retry-After) bila melewati batas. */
   async enforce(key: string, limit: number, windowSeconds: number, offsetSeconds = 0): Promise<RateLimitResult> {
     const res = await this.hit(key, limit, windowSeconds, offsetSeconds);

@@ -5,6 +5,7 @@
 import { ExecutionContext } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { AppConfig } from '../../config/app-config';
+import { isSecretEnvName } from '../../config/secrets.loader';
 import { WhatsAppSender } from '../../otp/whatsapp/whatsapp-sender';
 import { Db, Queryable, QueryResultLike } from '../db/db';
 import { ApiError } from '../errors/api-error';
@@ -235,24 +236,43 @@ export function testConfig(
     throw new Error('ENOENT (testConfig)');
   },
 ): AppConfig {
-  return new AppConfig(
-    {
-      NODE_ENV: 'test',
-      JWT_SECRET: randomSecret(),
-      OTP_PEPPER: randomSecret(),
-      DISCOUNT_TOKEN_SECRET: randomSecret(),
-      ODOO_BFF_API_KEY: randomSecret(),
-      WEBHOOK_PAYMENT_SECRET: randomSecret(),
-      PII_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
-      ALTCHA_HMAC_KEY: randomSecret(),
-      OUTBOX_RELAY_INTERVAL_MS: '0',
-      RETENTION_PURGE_INTERVAL_MS: '0',
-      DATABASE_URL: 'postgresql://efn_bff@localhost:5432/efn_platform',
-      ...overrides,
-    },
-    readFile,
-  );
+  // SEC-29: secret disuplai sebagai FILE (`<NAMA>_FILE=/test-secrets/<NAMA>`), bukan env literal — jalur yang sama
+  // dengan produksi. Override bernama secret ikut dipindah ke file; nilai '' = secret tidak dikonfigurasi.
+  // Pengecualian: MINIO_ACCESS_KEY tetap literal karena test-nya justru menguji aturan literal (APP_ENV=dev).
+  const secrets: Record<string, string> = {
+    JWT_SECRET: randomSecret(),
+    OTP_PEPPER: randomSecret(),
+    DISCOUNT_TOKEN_SECRET: randomSecret(),
+    ODOO_BFF_API_KEY: randomSecret(),
+    WEBHOOK_PAYMENT_SECRET: randomSecret(),
+    PII_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
+    ALTCHA_HMAC_KEY: randomSecret(),
+  };
+  const env: Record<string, string> = {
+    NODE_ENV: 'test',
+    OUTBOX_RELAY_INTERVAL_MS: '0',
+    RETENTION_PURGE_INTERVAL_MS: '0',
+    DATABASE_URL: 'postgresql://efn_bff@localhost:5432/efn_platform',
+  };
+  for (const [k, v] of Object.entries(overrides)) {
+    if (isSecretEnvName(k) && k !== 'MINIO_ACCESS_KEY') {
+      if (v === '') delete secrets[k];
+      else secrets[k] = v;
+    } else {
+      env[k] = v;
+    }
+  }
+  for (const k of Object.keys(secrets)) env[`${k}_FILE`] ??= `${TEST_SECRETS_DIR}/${k}`;
+  return new AppConfig(env, (path) => {
+    if (path.startsWith(`${TEST_SECRETS_DIR}/`)) {
+      const name = path.slice(TEST_SECRETS_DIR.length + 1);
+      if (name in secrets) return Buffer.from(secrets[name], 'utf8'); // buffer baru: AppConfig me-nol-kannya
+    }
+    return readFile(path);
+  });
 }
+
+const TEST_SECRETS_DIR = '/test-secrets';
 
 /** Cipher PII dengan kunci dari config test. */
 export function testCipher(config: AppConfig): PiiCipher {

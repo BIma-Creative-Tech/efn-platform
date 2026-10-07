@@ -7,7 +7,7 @@ import { RateLimiter } from '../common/rate-limit/rate-limiter';
 import { AccessTokenService, AuthUser } from '../common/security/access-token.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import { OtpService } from '../otp/otp.service';
-import { AltchaChallenge, AltchaService } from './altcha.service';
+import { AltchaChallenge, AltchaService, adaptiveAltchaMaxNumber, altchaPressureLevel } from './altcha.service';
 import { AuthOtpRequestDto, AuthOtpVerifyDto } from './dto/auth.dto';
 
 export interface AuthOtpRequestResponse {
@@ -60,13 +60,36 @@ export class AuthService {
     return redisKeyHash(this.config.redisKeyPepper, ip ?? 'unknown');
   }
 
+  /**
+   * SEC-34: challenge terikat IP + biaya adaptif. Level dihitung dari counter Redis yang SUDAH ada (tanpa key baru):
+   * challenge per IP (`altcha:ip:<ipk>`), OTP login per IP (`otp:login:ip:<ipk>`), budget OTP login global per jam
+   * (`otp:budget:login`). maxnumber = ALTCHA_MAX_NUMBER × 2^level, maksimum ALTCHA_MAX_NUMBER_CAP.
+   */
   async challenge(ip: string | null): Promise<AltchaChallenge> {
-    await this.limiter.enforce(`altcha:ip:${this.ipKey(ip)}`, this.config.altchaChallengeRateLimit, this.config.otpRateWindowSeconds);
-    return this.altcha.createChallenge();
+    const ipk = this.ipKey(ip);
+    const window = this.config.otpRateWindowSeconds;
+    const rl = await this.limiter.enforce(`altcha:ip:${ipk}`, this.config.altchaChallengeRateLimit, window);
+    let level = 0;
+    if (this.config.altchaAdaptive) {
+      const [ipOtpRequests, globalOtpRequests] = await Promise.all([
+        this.limiter.peek(`otp:login:ip:${ipk}`, window),
+        this.limiter.peek('otp:budget:login', 3600),
+      ]);
+      level = altchaPressureLevel({
+        ipChallenges: rl.count,
+        ipChallengeLimit: this.config.altchaChallengeRateLimit,
+        ipOtpRequests,
+        ipOtpLimit: this.config.otpRateSourceLimit,
+        globalOtpRequests,
+        globalOtpBudget: this.config.otpGlobalHourlyBudget,
+      });
+    }
+    const maxnumber = adaptiveAltchaMaxNumber(this.config.altchaMaxNumber, this.config.altchaMaxNumberCap, level);
+    return this.altcha.createChallenge(ip, maxnumber, level);
   }
 
   async requestOtp(dto: AuthOtpRequestDto, ip: string | null): Promise<AuthOtpRequestResponse> {
-    if (!(await this.altcha.verify(dto.altcha))) throw Errors.captchaRequired();
+    if (!(await this.altcha.verify(dto.altcha, ip))) throw Errors.captchaRequired();
     const window = this.config.otpRateWindowSeconds;
     const ipk = this.ipKey(ip);
     const subject = memberHash(this.config.memberHashPepper, dto.phone);

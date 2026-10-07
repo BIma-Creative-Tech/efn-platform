@@ -50,8 +50,8 @@ function setup(overrides: Record<string, string> = {}) {
   altcha.now = clock.now;
   const memberService = new MemberService(config, db, cipher);
   const auth = new AuthService(config, otp, limiter, tokens, loyalty, altcha, memberService);
-  const captcha = (): string => solveAltcha(altcha.createChallenge());
-  const request = (phone: string, ip: string | null) => auth.requestOtp({ phone, altcha: captcha() }, ip);
+  const captcha = (ip: string | null = null): string => solveAltcha(altcha.createChallenge(ip));
+  const request = (phone: string, ip: string | null) => auth.requestOtp({ phone, altcha: captcha(ip) }, ip);
   return { clock, config, kv, sender, tokens, auth, altcha, members, memberService, cipher, captcha, request };
 }
 
@@ -165,7 +165,7 @@ describe('AuthService', () => {
     const ctx = setup();
     const err = await catchApiError(() => ctx.auth.requestOtp({ phone: PHONE, altcha: 'bm90LWpzb24=' }, '203.0.113.7'));
     expect(err.body).toEqual({ error: { code: 'captcha_required', message: expect.any(String) } });
-    const solved = ctx.captcha();
+    const solved = ctx.captcha('203.0.113.7');
     await ctx.auth.requestOtp({ phone: PHONE, altcha: solved }, '203.0.113.7');
     const replay = await catchApiError(() => ctx.auth.requestOtp({ phone: PHONE, altcha: solved }, '203.0.113.7'));
     expect(replay.body).toEqual({ error: { code: 'captcha_required', message: expect.any(String) } });
@@ -226,5 +226,47 @@ describe('JwtAuthGuard / AccessTokenService', () => {
     ctx.clock.advanceSeconds(3601);
     const expired = await catchApiError(() => guard.canActivate(httpContext(ok)));
     expect(expired.getStatus()).toBe(401);
+  });
+
+  it('SEC-34: solusi ALTCHA terikat IP — dipakai dari IP lain → 400 captcha_required, OTP tidak terkirim', async () => {
+    const ctx = setup();
+    const solved = ctx.captcha('203.0.113.7');
+    const err = await catchApiError(() => ctx.auth.requestOtp({ phone: PHONE, altcha: solved }, '198.51.100.66'));
+    expect(err.body).toEqual({ error: { code: 'captcha_required', message: expect.any(String) } });
+    expect(ctx.sender.otps).toHaveLength(0);
+    // IP asli tetap bisa memakai solusinya (kegagalan IP lain tidak menandai used)
+    await expect(ctx.auth.requestOtp({ phone: PHONE, altcha: solved }, '203.0.113.7')).resolves.toBeDefined();
+  });
+
+  it('SEC-34: challenge lewat AuthService terikat IP pemanggil dan bisa dipakai IP yang sama', async () => {
+    const ctx = setup();
+    const ch = await ctx.auth.challenge('203.0.113.7');
+    expect(ch.maxnumber).toBe(1000);
+    await expect(ctx.auth.requestOtp({ phone: PHONE, altcha: solveAltcha(ch) }, '203.0.113.7')).resolves.toBeDefined();
+  });
+
+  it('SEC-34: biaya adaptif naik bila OTP per IP tinggi; IP lain tetap biaya dasar; dibatasi cap', async () => {
+    const ctx = setup({ ALTCHA_MAX_NUMBER_CAP: '4000' });
+    const IP = '198.51.100.9';
+    expect((await ctx.auth.challenge(IP)).maxnumber).toBe(1000);
+    // 5/20 OTP per IP = 25% → level 1
+    for (let i = 0; i < 5; i += 1) await ctx.request(`62812000000${String(i).padStart(2, '0')}`, IP);
+    expect((await ctx.auth.challenge(IP)).maxnumber).toBe(2000);
+    // 15/20 = 75% → level 3 → 8000 dipotong cap 4000
+    for (let i = 5; i < 15; i += 1) await ctx.request(`62812000000${String(i).padStart(2, '0')}`, IP);
+    expect((await ctx.auth.challenge(IP)).maxnumber).toBe(4000);
+    expect((await ctx.auth.challenge('203.0.113.50')).maxnumber).toBe(1000);
+    // window berikutnya → kembali ke dasar
+    ctx.clock.advanceSeconds(900);
+    expect((await ctx.auth.challenge(IP)).maxnumber).toBe(1000);
+  });
+
+  it('SEC-34: tekanan global (budget OTP login) menaikkan biaya untuk semua IP; ALTCHA_ADAPTIVE=false mematikan', async () => {
+    const ctx = setup({ OTP_GLOBAL_HOURLY_BUDGET: '10' });
+    for (let i = 0; i < 5; i += 1) await ctx.request(`62812000001${String(i).padStart(2, '0')}`, `203.0.113.${10 + i}`);
+    expect((await ctx.auth.challenge('192.0.2.1')).maxnumber).toBe(2000); // 50% budget → level 1
+    const off = setup({ OTP_GLOBAL_HOURLY_BUDGET: '10', ALTCHA_ADAPTIVE: 'false' });
+    for (let i = 0; i < 9; i += 1) await off.request(`62812000001${String(i).padStart(2, '0')}`, `203.0.113.${10 + i}`);
+    expect((await off.auth.challenge('192.0.2.1')).maxnumber).toBe(1000);
   });
 });

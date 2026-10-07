@@ -5,7 +5,6 @@ import { TerminusModule } from '@nestjs/terminus';
 import { AuthModule } from './auth/auth.module';
 import { CommonModule } from './common/common.module';
 import { ContractExceptionFilter } from './common/errors/contract-exception.filter';
-import { secretsLoader } from './config/secrets.loader';
 import { HealthController } from './health/health.controller';
 import { LoyaltyModule } from './loyalty/loyalty.module';
 import { MarketScoutModule } from './market-scout/market-scout.module';
@@ -23,16 +22,9 @@ import { PrivacyModule } from './privacy/privacy.module';
  */
 @Module({
   imports: [
-    // SEC-29: secret tidak diduplikasi ke ConfigService (tidak dipakai); AppConfig membaca env/file sendiri.
-    ConfigModule.forRoot({
-      isGlobal: true,
-      load: [
-        (): Record<string, never> => {
-          secretsLoader();
-          return {};
-        },
-      ],
-    }),
+    // SEC-29: ConfigService tidak dipakai. ignoreEnvFile: dotenv TIDAK boleh menyalin isi .env ke process.env;
+    // AppConfig membaca secret langsung dari file (/run/secrets/*) ke memori objek config.
+    ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
     TerminusModule,
     CommonModule,
     OtpModule,

@@ -1,22 +1,18 @@
-import { readFileSync } from 'node:fs';
-import { posix } from 'node:path';
-
 /**
- * Pemuat secret (R-S01). Dua mekanisme, berurutan:
+ * Daftar secret BFF dan nama file Docker secret-nya (R-S01, SEC-29).
  *
- * 1. Pola `X_FILE`: setiap env var `X_FILE` yang menunjuk ke file (Docker secret) dibaca menjadi `X`.
- *    PENGECUALIAN (`isDirectReadFileVar`) — file dibaca langsung oleh AppConfig sebagai Buffer dan TIDAK PERNAH
- *    disalin ke `process.env` (SEC-29; env mudah bocor lewat /proc/<pid>/environ, crash dump, child process):
- *      - `*_CA_FILE`, `TLS_CERT_FILE`, `TLS_KEY_FILE` (material TLS),
- *      - `PII_ENCRYPTION_KEY_FILE`, `PII_ENCRYPTION_KEY_V<N>_FILE` (key ring PII, docs/04 §7.2),
- *      - `MINIO_ACCESS_KEY_FILE` (docs/04 §8.12/§8.13: literal `MINIO_ACCESS_KEY` hanya untuk APP_ENV=dev, sehingga
- *        AppConfig harus bisa membedakan asal nilainya).
- * 2. Fallback nama kontrak (docs/04 §2, §7.3): bila `X` dan `X_FILE` sama-sama tidak ada,
- *    coba baca `${SECRETS_DIR:-/run/secrets}/<nama_secret>` untuk secret yang dikenal. Untuk kunci PII v1
- *    (`pii_encryption_key`) dan access key MinIO (`minio_bff_access_key`) fallback ini dilakukan AppConfig (Buffer).
+ * SEC-29 (Gelombang 12): TIDAK ADA secret yang disalin ke `process.env`. Env mudah bocor lewat child process
+ * (mewarisi environ), `process.report` / diagnostic report (memuat `environmentVariables`), heap/crash dump, dan
+ * library pihak ketiga yang men-dump env saat error. Semua secret dibaca oleh `AppConfig` langsung dari file ke
+ * memori objek config (string/Buffer privat, di-cache), dengan urutan sumber:
  *
- * Secret tidak pernah ada di environment compose/CI sebagai plaintext. Nilai tidak pernah di-log.
- * Fungsi ini idempoten: variabel yang sudah terisi tidak ditimpa.
+ *   1. `<NAMA>_FILE` (path Docker secret, mis. `JWT_SECRET_FILE=/run/secrets/jwt_secret`) — file wajib terbaca;
+ *   2. fallback nama kontrak `${SECRETS_DIR:-/run/secrets}/<nama_secret>` (docs/04 §2, §7.3);
+ *   3. env literal `<NAMA>` — HANYA bila `APP_ENV=dev`. Di luar dev, keberadaan env literal secret saja sudah
+ *      membuat BFF gagal start (`assertStartupSecrets`), karena nilainya sudah ada di environ proses.
+ *
+ * Fungsi lama `secretsLoader()` (yang mengisi `process.env[X]`) DIHAPUS. Spec `no-secret-env-write.spec.ts`
+ * gagal bila ada kode yang menulis `process.env.<SECRET> = ...`.
  */
 export const KNOWN_SECRET_FILES: Readonly<Record<string, string>> = {
   JWT_SECRET: 'jwt_secret',
@@ -35,57 +31,35 @@ export const KNOWN_SECRET_FILES: Readonly<Record<string, string>> = {
   MINIO_SECRET_KEY: 'minio_bff_secret',
 };
 
-/** Nama secret Docker default untuk file yang dibaca langsung oleh AppConfig (tanpa env). */
+/** Alias nama env lama yang juga diperlakukan sebagai secret (nama kontrak §2). */
+export const SECRET_ALIASES: Readonly<Record<string, string>> = {
+  EFN_BFF_API_KEY: 'ODOO_BFF_API_KEY',
+};
+
+/** Nama secret Docker default untuk file yang dibaca langsung oleh AppConfig sebagai Buffer. */
 export const DIRECT_SECRET_FILES = {
   PII_ENCRYPTION_KEY: 'pii_encryption_key',
   MINIO_ACCESS_KEY: 'minio_bff_access_key',
 } as const;
 
-/** Env *_FILE yang berisi path material TLS, bukan secret yang di-resolve ke env. */
+/**
+ * Semua nama env yang BERISI nilai secret (bukan path). Dipakai `AppConfig.assertStartupSecrets` (tolak literal di
+ * luar dev) dan spec statis. `PII_ENCRYPTION_KEY_V<N>` dicocokkan lewat `isSecretEnvName`.
+ */
+export const SECRET_ENV_NAMES: readonly string[] = [
+  ...Object.keys(KNOWN_SECRET_FILES),
+  ...Object.keys(SECRET_ALIASES),
+  'PII_ENCRYPTION_KEY',
+  'MINIO_ACCESS_KEY',
+];
+
+export function isSecretEnvName(name: string): boolean {
+  return SECRET_ENV_NAMES.includes(name) || /^PII_ENCRYPTION_KEY_V\d{1,3}$/.test(name);
+}
+
+/** Env *_FILE yang berisi path material TLS. */
 export function isTlsMaterialFileVar(key: string): boolean {
   return key.endsWith('_CA_FILE') || key === 'TLS_CERT_FILE' || key === 'TLS_KEY_FILE';
 }
 
-/** SEC-29: env *_FILE yang dibaca langsung oleh AppConfig ke Buffer (tidak disalin ke env). */
-export function isDirectReadFileVar(key: string): boolean {
-  return isTlsMaterialFileVar(key) || /^PII_ENCRYPTION_KEY(_V\d{1,3})?_FILE$/.test(key) || key === 'MINIO_ACCESS_KEY_FILE';
-}
-
 export type EnvRecord = Record<string, string | undefined>;
-export type FileReader = (path: string) => string;
-
-const defaultReader: FileReader = (path) => readFileSync(path, 'utf8');
-
-export function secretsLoader(
-  env: EnvRecord = process.env,
-  readFile: FileReader = defaultReader,
-): Record<string, string> {
-  const out: Record<string, string> = {};
-
-  for (const [key, value] of Object.entries(env)) {
-    if (!key.endsWith('_FILE') || !value || isDirectReadFileVar(key)) continue;
-    const target = key.slice(0, -'_FILE'.length);
-    if (env[target]) continue;
-    try {
-      out[target] = readFile(value).trim();
-      env[target] = out[target];
-    } catch {
-      // Biarkan AppConfig gagal dengan pesan jelas (nama secret, bukan nilainya) saat start
-    }
-  }
-
-  const dir = env.SECRETS_DIR && env.SECRETS_DIR.length > 0 ? env.SECRETS_DIR : '/run/secrets';
-  for (const [target, fileName] of Object.entries(KNOWN_SECRET_FILES)) {
-    if (env[target] || env[`${target}_FILE`]) continue;
-    try {
-      const v = readFile(posix.join(dir, fileName)).trim();
-      if (v.length > 0) {
-        out[target] = v;
-        env[target] = v;
-      }
-    } catch {
-      // Secret opsional (mis. whatsapp_token di dev) boleh tidak ada
-    }
-  }
-  return out;
-}

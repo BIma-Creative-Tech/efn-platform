@@ -90,8 +90,15 @@ def req(method, path, host=BASE_HOST, body=None, headers=None, raw=None, ctype=N
 
 
 def solve_altcha(ch):
+    # SEC-34: maxnumber kini adaptif (bisa naik s.d. ALTCHA_MAX_NUMBER_CAP bila smoke memicu banyak OTP dari satu IP),
+    # dan challenge terikat IP -> challenge & otp/request harus dari klien/IP yang sama (selalu benar di smoke ini).
+    # Prefix salt di-hash sekali lalu di-copy (±2x lebih cepat dari hash ulang penuh).
+    base = hashlib.sha256(ch["salt"].encode())
+    target = ch["challenge"]
     for n in range(ch["maxnumber"] + 1):
-        if hashlib.sha256(f"{ch['salt']}{n}".encode()).hexdigest() == ch["challenge"]:
+        h = base.copy()
+        h.update(str(n).encode())
+        if h.hexdigest() == target:
             payload = {k: ch[k] for k in ("algorithm", "challenge", "salt", "signature")}
             payload["number"] = n
             return base64.b64encode(json.dumps(payload).encode()).decode()

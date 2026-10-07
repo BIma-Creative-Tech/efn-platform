@@ -10,7 +10,7 @@ type FastifyAdapterOptions = ConstructorParameters<typeof FastifyAdapter>[0];
 
 async function bootstrap(): Promise<void> {
   const logger = new Logger('Bootstrap');
-  // Resolve *_FILE → env lalu gagal cepat bila secret wajib tidak ada (pesan hanya memuat nama secret)
+  // SEC-29: secret dibaca dari file ke memori config (tidak ke env) lalu gagal cepat bila secret wajib tidak ada (pesan hanya memuat nama secret)
   const config = AppConfig.fromProcessEnv();
   config.assertStartupSecrets();
   // docs/04 §7.1: semua kanal TLS terverifikasi; CA/sertifikat tidak terbaca → gagal start (tanpa fallback plaintext)
