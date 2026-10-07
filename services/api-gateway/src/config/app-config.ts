@@ -166,6 +166,24 @@ export class AppConfig {
     attempt(() => void this.paymentProvider, 'PAYMENT_PROVIDER tidak valid');
     attempt(() => void this.posOtpAmountTolerancePct, 'POS_OTP_AMOUNT_TOLERANCE_PCT tidak valid');
     attempt(() => void this.altchaMaxNumberCap, 'ALTCHA_MAX_NUMBER_CAP tidak valid');
+    // Fase 1 loyalty POS (docs/04 §9.1): salah konfigurasi = gagal start, bukan gagal di tengah transaksi kasir
+    for (const getter of [
+      () => this.loyaltyEarnIdrPerPoint,
+      () => this.loyaltyPointValueIdr,
+      () => this.loyaltyRedeemMinPoints,
+      () => this.loyaltyRedeemMaxPctOfOrder,
+      () => this.loyaltyPointExpiryDays,
+      () => this.loyaltyPosMaxEarnPoints,
+      () => this.loyaltyReservationTtlSeconds,
+    ]) {
+      attempt(() => void getter(), 'parameter LOYALTY_* tidak valid');
+    }
+    if (this.migrationEnabled) {
+      check('MIGRATION_API_KEY');
+      attempt(() => {
+        if (this.migrationApiKey === this.odooBffApiKey) throw new ConfigError('MIGRATION_API_KEY harus berbeda dari ODOO_BFF_API_KEY (K-7)');
+      }, 'MIGRATION_API_KEY tidak valid');
+    }
     if (this.whatsappEnabled) {
       check('WHATSAPP_TOKEN');
       if (!this.str('WHATSAPP_PHONE_NUMBER_ID')) problems.push('WHATSAPP_PHONE_NUMBER_ID belum dikonfigurasi');
@@ -772,6 +790,77 @@ export class AppConfig {
   /** SEC-08: plafon poin per pesan `loyalty.earn.requested` (kontrak §4, default 100). */
   get loyaltyMaxPointsPerEvent(): number {
     return this.int('LOYALTY_MAX_POINTS_PER_EVENT', 100, 1, 1_000_000);
+  }
+
+  // Fase 1 — loyalty di POS (docs/04 §9.1). Semua nilai default adalah PLACEHOLDER menunggu Q-13/Finance.
+  /** Rupiah eligible (setelah diskon, sebelum pajak) per 1 poin; poin = floor(eligible / nilai ini). */
+  get loyaltyEarnIdrPerPoint(): number {
+    return this.int('LOYALTY_EARN_IDR_PER_POINT', 10_000, 1, 1_000_000_000);
+  }
+  /** Nilai tukar 1 poin saat redeem (Rupiah). */
+  get loyaltyPointValueIdr(): number {
+    return this.int('LOYALTY_POINT_VALUE_IDR', 100, 1, 1_000_000_000);
+  }
+  get loyaltyRedeemMinPoints(): number {
+    return this.int('LOYALTY_REDEEM_MIN_POINTS', 50, 1, 1_000_000);
+  }
+  /** Nilai redeem maksimum sebagai persen `amount_total` order (1..100). */
+  get loyaltyRedeemMaxPctOfOrder(): number {
+    return this.int('LOYALTY_REDEEM_MAX_PCT_OF_ORDER', 50, 1, 100);
+  }
+  // K-2 (docs/04 §9.6): kategori tanpa poin dikelola di Odoo (flag kategori produk) — BFF tidak punya parameter ini.
+  /** Masa berlaku poin earn POS (hari). 0 = tidak kedaluwarsa. */
+  get loyaltyPointExpiryDays(): number {
+    return this.int('LOYALTY_POINT_EXPIRY_DAYS', 365, 0, 3650);
+  }
+  /** Plafon poin satu earn POS (pagar fraud/salah hitung; batas teknis ledger 1 000 000). */
+  get loyaltyPosMaxEarnPoints(): number {
+    return this.int('LOYALTY_POS_MAX_EARN_POINTS', 100_000, 1, 1_000_000);
+  }
+  /** TTL reservasi redeem yang ditampilkan ke UI kasir (kontrak §9.3: 15 menit; K-3: hanya informasi UI). */
+  get loyaltyReservationTtlSeconds(): number {
+    return this.int('LOYALTY_RESERVATION_TTL_SECONDS', 900, 60, 3600);
+  }
+  /**
+   * K-3 (docs/04 §9.6): reservasi `reserved` tetap menahan poin dan bisa di-commit sampai N detik sejak dibuat
+   * (default 24 jam) — order offline-sync terlambat tidak kehilangan poin. Setelahnya job melepas (status `expired`).
+   */
+  get loyaltyReservationCommitWindowSeconds(): number {
+    return this.int('LOYALTY_RESERVATION_COMMIT_WINDOW_SECONDS', 86_400, 900, 7 * 86_400);
+  }
+  /** K-8: rate limit `POST /v1/pos/loyalty/balance` per member dan per pos_config per `LOYALTY_RL_WINDOW_SECONDS`. */
+  get loyaltyBalanceRateMemberLimit(): number {
+    return this.int('LOYALTY_BALANCE_RL_MEMBER_LIMIT', 30, 1, 100_000);
+  }
+  get loyaltyBalanceRateSourceLimit(): number {
+    return this.int('LOYALTY_BALANCE_RL_SOURCE_LIMIT', 600, 1, 1_000_000);
+  }
+  /** K-7: endpoint migrasi `/internal/v1/migration/*` aktif hanya bila true (default false → 404). */
+  get migrationEnabled(): boolean {
+    return this.bool('MIGRATION_ENABLED', false);
+  }
+  /** K-7: kunci terpisah dari `odoo_bff_api_key` (secret `migration_api_key`). */
+  get migrationApiKey(): string {
+    return this.secret('MIGRATION_API_KEY');
+  }
+  /** Interval job pelepas reservasi kedaluwarsa. 0 = dimatikan (test). Default 60 s. */
+  get loyaltyReservationSweepIntervalMs(): number {
+    return this.int('LOYALTY_RESERVATION_SWEEP_INTERVAL_MS', 60_000, 0, 24 * 3600 * 1000);
+  }
+  /** Reservasi berstatus akhir (committed/released/expired) dihapus setelah N hari (data transien; ledger tetap). */
+  get loyaltyReservationRetentionDays(): number {
+    return this.int('LOYALTY_RESERVATION_RETENTION_DAYS', 30, 1, 3650);
+  }
+  /** K-6: catatan earn per order (`loyalty_pos_earn`) dihapus setelah N hari (≥ masa retur). Default 400. */
+  get loyaltyPosEarnRetentionDays(): number {
+    return this.int('LOYALTY_POS_EARN_RETENTION_DAYS', 400, 30, 3650);
+  }
+  /** Rate limit per member per operasi (earn / reserve / reverse) per `LOYALTY_RL_WINDOW_SECONDS`. */
+  get loyaltyRateMemberLimit(): number {
+    return this.int('LOYALTY_RL_MEMBER_LIMIT', 30, 1, 100_000);
+  }
+  get loyaltyRateWindowSeconds(): number {
+    return this.int('LOYALTY_RL_WINDOW_SECONDS', 900, 60, 86_400);
   }
 
   // ───────────── Retensi (UU PDP, SEC-11) ─────────────

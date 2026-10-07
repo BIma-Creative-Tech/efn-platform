@@ -32,7 +32,7 @@ describe('PosController', () => {
       fakeReq(),
     );
     expect(pos.requestOtp).toHaveBeenCalledWith(
-      { memberRef: '6281234567890', orderRef: '3f2b8c1e-7d4a-4e0b-9c55-2a1f0e6d9b10', amount: 125000, companyCode: 'FNB', posConfigId: 3 },
+      { purpose: 'pos_promo', memberRef: '6281234567890', orderRef: '3f2b8c1e-7d4a-4e0b-9c55-2a1f0e6d9b10', amount: 125000, companyCode: 'FNB', posConfigId: 3 },
       '10.0.0.5',
     );
   });
@@ -62,8 +62,10 @@ describe('PosController', () => {
 
   it('loyalty balance (R2): POST body { member_ref } wajib valid, ter-normalisasi', async () => {
     expect(await controller.balance({ member_ref: '081234567890' })).toEqual({ points_balance: 5 });
-    expect(pos.balance).toHaveBeenCalledWith('6281234567890');
-    for (const body of [undefined, {}, { member_ref: 'abc' }, '6281234567890']) {
+    expect(pos.balance).toHaveBeenCalledWith({ memberRef: '6281234567890', posConfigId: null, companyCode: null });
+    await controller.balance({ member_ref: '6281234567890', pos_config_id: 3, company_code: 'FNB' });
+    expect(pos.balance).toHaveBeenLastCalledWith({ memberRef: '6281234567890', posConfigId: 3, companyCode: 'FNB' });
+    for (const body of [undefined, {}, { member_ref: 'abc' }, '6281234567890', { member_ref: '6281234567890', pos_config_id: 0 }, { member_ref: '6281234567890', company_code: 'X' }]) {
       const err = await catchApiError(() => controller.balance(body));
       expect(err.getStatus()).toBe(400);
     }

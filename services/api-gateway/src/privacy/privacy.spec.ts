@@ -300,6 +300,8 @@ describe('ErasureService (§8.4)', () => {
     const report = ctx.db.find('UPDATE platform.price_hunter_report')[0];
     expect(report.text).toMatch(/user_enc = NULL.*geo_lat = NULL/s);
     expect(ctx.db.find('UPDATE platform.otp_audit')[0].params).toEqual([ctx.hash, tomb]);
+    expect(ctx.db.find('DELETE FROM platform.loyalty_reservation')[0].params).toEqual([ctx.hash]);
+    expect(ctx.db.find('DELETE FROM platform.loyalty_pos_earn')[0].params).toEqual([ctx.hash]);
     expect(ctx.db.find('UPDATE platform.consent SET ip_enc = NULL')[0].params).toEqual([MEMBER_ID]);
     expect(ctx.db.find('DELETE FROM platform.member')[0].params).toEqual([MEMBER_ID]);
     expect(ctx.db.find('UPDATE platform.member SET deleted_at')).toHaveLength(1);

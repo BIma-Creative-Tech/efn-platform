@@ -13,8 +13,18 @@ import { safeEqualHex } from '../common/security/safe-equal';
 import { UUID_RE } from '../common/validation';
 import { WHATSAPP_SENDER, WhatsAppSender } from './whatsapp/whatsapp-sender';
 
-/** `dsar` = re-OTP step-up untuk aksi DSAR (docs/04 §8.4). */
-export type OtpPurpose = 'pos_promo' | 'login' | 'dsar';
+/**
+ * `dsar` = re-OTP step-up untuk aksi DSAR (docs/04 §8.4). `pos_redeem` = OTP redeem poin di POS (docs/04 §9.3) — token
+ * hasilnya tidak bisa dipakai untuk consume promo (`pos_promo`) dan sebaliknya.
+ */
+export type OtpPurpose = 'pos_promo' | 'pos_redeem' | 'login' | 'dsar';
+/** Purpose kanal kasir (rate limit/budget POS, challenge terikat `order_ref`). */
+export const POS_OTP_PURPOSES = ['pos_promo', 'pos_redeem'] as const;
+export type PosOtpPurpose = (typeof POS_OTP_PURPOSES)[number];
+
+export function isPosOtpPurpose(v: unknown): v is PosOtpPurpose {
+  return typeof v === 'string' && (POS_OTP_PURPOSES as readonly string[]).includes(v);
+}
 export type OtpFailureReason = 'invalid' | 'expired' | 'locked';
 export type OtpAuditOutcome = 'sent' | 'verified' | 'failed' | 'expired' | 'locked';
 
@@ -35,9 +45,14 @@ export interface IssueOtpResult {
 
 export interface VerifyOtpInput {
   purpose: OtpPurpose;
+  /**
+   * Purpose lain yang juga diterima (mis. verify POS menerima `pos_promo` dan `pos_redeem` karena body verify tidak
+   * memuat purpose — purpose dibawa challenge). Hasil `ok` menyebut purpose challenge yang sebenarnya.
+   */
+  alsoAccept?: readonly OtpPurpose[];
   challengeId: string;
   code: string;
-  /** Wajib untuk pos_promo: harus sama dengan order_ref saat request. */
+  /** Wajib untuk purpose POS: harus sama dengan order_ref saat request. */
   orderRef?: string | null;
   ip?: string | null;
 }
@@ -45,6 +60,8 @@ export interface VerifyOtpInput {
 export type VerifyOtpResult =
   | {
       ok: true;
+      /** Purpose challenge (dari Redis, bukan dari pemanggil). */
+      purpose: OtpPurpose;
       memberHash: string;
       memberRef: string | null;
       orderRef: string | null;
@@ -58,7 +75,7 @@ export const OTP_TOMBSTONE_GRACE_SECONDS = 600;
 const CODE_RE = /^\d{6}$/;
 
 /**
- * Inti OTP bersama untuk POS (`pos_promo`) dan login Super-App (`login`) — kontrak §3.1/§3.2, R-S04.
+ * Inti OTP bersama untuk POS (`pos_promo`, `pos_redeem`) dan login Super-App (`login`) — kontrak §3.1/§3.2, R-S04.
  *
  * - Kode 6 digit dari `crypto.randomInt`; yang disimpan hanya HMAC-SHA256(otp_pepper, challenge_id:code).
  * - Redis hash `otp:<challenge_id>`: h=hash, p=purpose, s=member_hash, o=order_ref, c=company_code, t=amount (POS,
@@ -71,7 +88,7 @@ const CODE_RE = /^\d{6}$/;
  *   terenkripsi di `ip_enc` (AES-256-GCM, docs/04 §7.2) — forensik hanya lewat dekripsi oleh admin.
  * - Rate limit per nomor/IP dilakukan pemanggil (PosService/AuthService) karena kuncinya berbeda per kanal.
  * - SEC-06: budget global pengiriman WA per jam DI SINI (berlaku untuk semua pemanggil), terpisah per purpose:
- *   `login` (kanal publik) = `OTP_GLOBAL_HOURLY_BUDGET`, `pos_promo` = `OTP_POS_HOURLY_BUDGET`, sehingga pumping
+ *   `login` (kanal publik) = `OTP_GLOBAL_HOURLY_BUDGET`, `pos_promo`/`pos_redeem` = `OTP_POS_HOURLY_BUDGET`, sehingga pumping
  *   lewat login publik tidak bisa menghabiskan budget kasir.
  */
 @Injectable()
@@ -131,32 +148,45 @@ export class OtpService {
   }
 
   async verify(input: VerifyOtpInput): Promise<VerifyOtpResult> {
-    const res = await this.verifyInner(input);
-    this.metrics.recordOtpVerify(input.purpose, res.ok ? 'verified' : res.reason);
+    const { res, purpose } = await this.verifyInner(input);
+    this.metrics.recordOtpVerify(purpose, res.ok ? 'verified' : res.reason);
     return res;
   }
 
-  private async verifyInner(input: VerifyOtpInput): Promise<VerifyOtpResult> {
+  private async verifyInner(input: VerifyOtpInput): Promise<{ res: VerifyOtpResult; purpose: OtpPurpose }> {
     const ip = input.ip ?? null;
     const orderRefInput = input.orderRef ?? null;
-    if (!UUID_RE.test(input.challengeId)) return this.fail('expired', 0);
+    if (!UUID_RE.test(input.challengeId)) return { res: this.fail('expired', 0), purpose: input.purpose };
 
     const key = this.key(input.challengeId);
     const st = await this.kv.hgetall(key);
-    if (!st.h || st.p !== input.purpose) {
+    const accepted: readonly OtpPurpose[] = [input.purpose, ...(input.alsoAccept ?? [])];
+    if (!st.h || !(accepted as readonly string[]).includes(st.p ?? '')) {
       // Challenge tidak dikenal / sudah dipakai / beda tujuan → perlakukan sebagai kedaluwarsa
       await this.audit(input.purpose, 'unknown', orderRefInput, 'expired', ip);
-      return this.fail('expired', 0);
+      return { res: this.fail('expired', 0), purpose: input.purpose };
     }
+    const purpose = st.p as OtpPurpose;
+    return { res: await this.verifyChallenge(input, key, st, purpose), purpose };
+  }
+
+  private async verifyChallenge(
+    input: VerifyOtpInput,
+    key: string,
+    st: Record<string, string>,
+    purpose: OtpPurpose,
+  ): Promise<VerifyOtpResult> {
+    const ip = input.ip ?? null;
+    const orderRefInput = input.orderRef ?? null;
     const subject = st.s ?? 'unknown';
     const storedOrderRef = st.o ? st.o : null;
 
     if (st.l === '1') {
-      await this.audit(input.purpose, subject, storedOrderRef, 'locked', ip);
+      await this.audit(purpose, subject, storedOrderRef, 'locked', ip);
       return this.fail('locked', 0);
     }
     if (this.nowSec() > Number(st.e)) {
-      await this.audit(input.purpose, subject, storedOrderRef, 'expired', ip);
+      await this.audit(purpose, subject, storedOrderRef, 'expired', ip);
       return this.fail('expired', 0);
     }
 
@@ -164,11 +194,11 @@ export class OtpService {
     const attempts = await this.kv.hincrby(key, 'a', 1);
     if (attempts > max) {
       await this.kv.hset(key, 'l', '1');
-      await this.audit(input.purpose, subject, storedOrderRef, 'locked', ip);
+      await this.audit(purpose, subject, storedOrderRef, 'locked', ip);
       return this.fail('locked', 0);
     }
 
-    const orderMatches = input.purpose !== 'pos_promo' || (orderRefInput ?? '') === (st.o ?? '');
+    const orderMatches = !isPosOtpPurpose(purpose) || (orderRefInput ?? '') === (st.o ?? '');
     const codeMatches =
       typeof input.code === 'string' &&
       CODE_RE.test(input.code) &&
@@ -177,9 +207,10 @@ export class OtpService {
     if (orderMatches && codeMatches) {
       const won = (await this.kv.del(key)) === 1;
       if (!won) return this.fail('expired', 0); // verify paralel lain sudah memakai challenge ini
-      await this.audit(input.purpose, subject, storedOrderRef, 'verified', ip);
+      await this.audit(purpose, subject, storedOrderRef, 'verified', ip);
       return {
         ok: true,
+        purpose,
         memberHash: subject,
         memberRef: st.m ? this.decryptMemberRef(st.m) : null,
         orderRef: storedOrderRef,
@@ -191,10 +222,10 @@ export class OtpService {
     const left = max - attempts;
     if (left <= 0) {
       await this.kv.hset(key, 'l', '1');
-      await this.audit(input.purpose, subject, storedOrderRef, 'locked', ip);
+      await this.audit(purpose, subject, storedOrderRef, 'locked', ip);
       return this.fail('locked', 0);
     }
-    await this.audit(input.purpose, subject, storedOrderRef, 'failed', ip);
+    await this.audit(purpose, subject, storedOrderRef, 'failed', ip);
     return this.fail('invalid', left);
   }
 
@@ -203,8 +234,8 @@ export class OtpService {
    * (tidak membocorkan alasan), metrik `outcome="budget_exhausted"` dan log error untuk alert.
    */
   private async enforceGlobalBudget(purpose: OtpPurpose): Promise<void> {
-    // Kanal pelanggan (login, dsar) memakai budget publik; POS punya budget terpisah
-    const budget = purpose === 'pos_promo' ? this.config.otpPosHourlyBudget : this.config.otpGlobalHourlyBudget;
+    // Kanal pelanggan (login, dsar) memakai budget publik; POS (pos_promo, pos_redeem) budget terpisah per purpose
+    const budget = isPosOtpPurpose(purpose) ? this.config.otpPosHourlyBudget : this.config.otpGlobalHourlyBudget;
     const res = await this.limiter.hit(`otp:budget:${purpose}`, budget, 3600);
     if (res.allowed) return;
     this.metrics.recordOtpRequest(purpose, 'budget_exhausted');

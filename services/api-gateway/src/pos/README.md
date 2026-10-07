@@ -33,3 +33,28 @@ R-T02 (OTP vs offline — fitur dimatikan saat offline di Odoo), R-S04, R-B06/R-
 - Alasan: OTP disetujui pelanggan untuk order bernilai X; token tidak boleh dipindah ke order yang jauh lebih besar (barang ditumpuk setelah OTP) atau jauh lebih kecil. Toleransi atas menampung tambahan item kecil.
 - Token tanpa klaim `amount` (diterbitkan sebelum v3) → `invalid`.
 - Payment QRIS (§8.3) ada di modul `payments`; pull erasure Odoo (§8.4) di modul `privacy` — keduanya di bawah `/v1/pos/*` dengan `ServiceKeyGuard`.
+## v4.0/v4.1 — Gelombang 13: Loyalty di POS (docs/04 §9, §9.6)
+ADR: ADR-017 (redeem wajib OTP, nonaktif offline), ADR-020 (ledger tunggal, liabilitas per PT), ADR-022. Risiko: R-B05/R-B06 (fraud poin), R-O05 (clawback), R-L01 (UU PDP).
+DDL: `infra/postgres/init/05-platform-loyalty-pos.sql` (`loyalty_reservation`, `loyalty_pos_earn`, indeks ledger `(source, source_ref)`).
+
+| Endpoint (service key) | Body | Respons | Error 409 (`{ error: { code } }`) |
+|---|---|---|---|
+| `GET /v1/pos/loyalty/params` | — | parameter §9.1 + `reservation_commit_window_seconds` | — |
+| `POST /v1/pos/otp/request` | + `purpose: pos_promo\|pos_redeem` (default promo) | sama | — |
+| `POST /v1/pos/loyalty/earn` | `{ idempotency_key: "pos_earn:<uuid>", order_ref, member_ref, company_code, eligible_amount }` | `{ points_earned, points_balance }` | `idempotency_conflict`, `earn_limit_exceeded` |
+| `POST /v1/pos/loyalty/redeem/reserve` | `{ discount_token, order_ref, member_ref, points, amount_total }` | `{ reservation_id, points, value_idr, expires_at, hold_until }` | `insufficient_points`, `below_minimum`, `exceeds_max_pct`, `token_invalid`, `member_mismatch`, `amount_mismatch`, `reservation_exists` |
+| `POST /v1/pos/loyalty/redeem/commit` | `{ reservation_id, order_ref, member_ref, value_idr, idempotency_key: "pos_redeem:<uuid>" }` | `{ points_redeemed, points_balance }` | `order_mismatch`, `member_mismatch`, `value_mismatch`, `reservation_released`, `reservation_expired`, `idempotency_conflict`; 404 `reservation_not_found` |
+| `POST /v1/pos/loyalty/redeem/release` | `{ reservation_id }` | `{ ok: true }` (idempoten) | `already_committed`; 404 `reservation_not_found` |
+| `POST /v1/pos/loyalty/reverse` | `{ idempotency_key: "pos_reverse:<uuid>", original_order_ref, refund_order_ref, member_ref, refunded_eligible_amount, refund_ratio (0,1] }` | `{ points_clawed_back, points_restored, points_balance }` | `earn_pending` (retry), `member_mismatch`, `idempotency_conflict` |
+| `POST /v1/pos/loyalty/balance` | `{ member_ref, pos_config_id?, company_code? }` (K-8) | `{ points_balance }` | 429 per member / per pos_config |
+
+Aturan inti:
+- **Earn**: `floor(eligible / LOYALTY_EARN_IDR_PER_POINT)`; eligible dihitung Odoo (K-1, kategori dikecualikan dikelola Odoo — K-2). Kedaluwarsa 00:00 WIB setelah `LOYALTY_POINT_EXPIRY_DAYS` hari (dibulatkan per hari). Setiap earn (juga 0 poin) dicatat di `loyalty_pos_earn` → dasar `earn_pending` (K-6).
+- **FIFO kedaluwarsa**: saldo = SUM entri belum kedaluwarsa; debit dialokasikan ke "bucket" `expires_at` terdekat (entri debit menyalin `expires_at` bucket) sehingga SUM tetap benar setelah poin kedaluwarsa. Utang (saldo negatif) = bucket `NULL`; kredit berikutnya melunasi utang dulu.
+- **Reserve**: serialisasi per member `pg_advisory_xact_lock(EFNM, hash32)` → reservasi paralel melebihi saldo: satu `insufficient_points` (diuji juga terhadap PostgreSQL nyata, 10 paralel). Token `pos_redeem` sekali pakai (UNIQUE `token_jti`, K-4); retry identik → reservasi sama. Satu order = satu reservasi aktif.
+- **Hold & commit (K-3)**: `expires_at` (15 menit) hanya UI; poin ditahan & commit diterima sampai `hold_until` (default 24 jam, `LOYALTY_RESERVATION_COMMIT_WINDOW_SECONDS`). Commit setelah 15 menit → metrik `outcome="late"`. Lewat 24 jam → `reservation_expired`; job `LoyaltyReservationSweeper` (advisory lock `EFNL`, interval `LOYALTY_RESERVATION_SWEEP_INTERVAL_MS`) menandai `expired`, menghapus baris akhir > `LOYALTY_RESERVATION_RETENTION_DAYS` (30) dan `loyalty_pos_earn` > `LOYALTY_POS_EARN_RETENTION_DAYS` (400).
+- **Reverse**: restore redeem `floor(R×ratio)` dulu, lalu clawback earn `ceil(E×ratio)` (pembulatan memihak PT, kumulatif ≤ total asal; ratio 1 = sisa penuh). Kekurangan → utang. Restore ke bucket asal; bucket kedaluwarsa → masa berlaku baru.
+- Ledger: `source ∈ {pos_earn, pos_redeem, pos_reverse}`, `company_code` PT order, `member_ref_enc` AES-256-GCM. Tabel baru TIDAK memuat nomor HP (hanya `member_hash`).
+- Rate limit per member per operasi (`LOYALTY_RL_MEMBER_LIMIT`/`LOYALTY_RL_WINDOW_SECONDS`), balance per member & per pos_config. Metrik: `efn_loyalty_pos_ops_total{op,outcome}`, `efn_loyalty_pos_points_total{kind,company}`, `efn_loyalty_reservation_expired_total`.
+
+Belum: plafon poin per member per hari (fraud), kebijakan Finance atas utang poin & restore poin kedaluwarsa (placeholder), alert Prometheus untuk `outcome="late"`/`earn_pending` berulang (devsecops), skenario smoke E2E.

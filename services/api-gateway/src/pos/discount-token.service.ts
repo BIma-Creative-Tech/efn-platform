@@ -4,6 +4,7 @@ import { TokenExpiredError, sign, verify } from 'jsonwebtoken';
 import { AppConfig } from '../config/app-config';
 import { KV_STORE, KvStore } from '../common/redis/kv-store';
 import { safeEqualHex } from '../common/security/safe-equal';
+import { PosOtpPurpose } from '../otp/otp.service';
 
 export type ConsumeFailureReason =
   | 'already_used'
@@ -31,6 +32,8 @@ export function amountWithinBounds(otpAmount: number, amountTotal: number, toler
 export type ConsumeResult = { ok: true } | { ok: false; reason: ConsumeFailureReason };
 
 export interface IssueDiscountTokenInput {
+  /** Purpose challenge OTP asal (docs/04 §9.3). Default `pos_promo`. */
+  purpose?: PosOtpPurpose;
   orderRef: string;
   memberHash: string;
   companyCode: string;
@@ -38,17 +41,31 @@ export interface IssueDiscountTokenInput {
   amount: number;
 }
 
+/** Klaim token yang sudah diverifikasi tanda tangan, exp, bentuk, dan purpose-nya. */
+export interface DiscountTokenClaims {
+  jti: string;
+  purpose: PosOtpPurpose;
+  orderRef: string;
+  memberHash: string;
+  companyCode: string;
+  amount: number;
+  exp: number;
+}
+
+export type VerifyTokenResult = { ok: true; claims: DiscountTokenClaims } | { ok: false; reason: 'expired' | 'invalid' };
+
 export const DISCOUNT_TOKEN_PURPOSE = 'pos_promo';
 const MAX_TOKEN_LENGTH = 4096;
 /** Penanda `used` disimpan sedikit lebih lama dari sisa umur token. */
 const USED_MARKER_GRACE_SECONDS = 60;
 
 /**
- * `discount_token` (kontrak §3.1): JWT HS256 (`discount_token_secret`) dengan klaim
- * `{ jti, purpose: "pos_promo", order_ref, member_hash, company_code, amount, iat, exp }`, exp 600 s
- * (`amount` = v3 SEC-07, lihat `amountWithinBounds`).
+ * `discount_token` (kontrak §3.1, §9.3): JWT HS256 (`discount_token_secret`) dengan klaim
+ * `{ jti, purpose: "pos_promo" | "pos_redeem", order_ref, member_hash, company_code, amount, iat, exp }`, exp 600 s
+ * (`amount` = v3 SEC-07, lihat `amountWithinBounds`). `purpose` = purpose challenge OTP asal: token `pos_redeem`
+ * hanya diterima reserve redeem poin (`PosLoyaltyService`), token `pos_promo` hanya diterima consume promo.
  *
- * Sekali pakai: saat consume, `SET dtok:used:<jti> <order_ref> NX EX` — hanya pemanggil pertama yang menang.
+ * Sekali pakai (promo): saat consume, `SET dtok:used:<jti> <order_ref> NX EX` — hanya pemanggil pertama yang menang.
  * Idempotent untuk pasangan jti + order_ref yang sama (retry Odoo bila commit gagal setelah consume sukses):
  * panggilan ulang dengan order yang sama → ok; dengan order lain → already_used.
  * Urutan cek: tanda tangan & exp → purpose → member_hash (SEC-07, `member_mismatch`) → amount_total
@@ -71,7 +88,7 @@ export class DiscountTokenService {
     const token = sign(
       {
         jti: randomUUID(),
-        purpose: DISCOUNT_TOKEN_PURPOSE,
+        purpose: input.purpose ?? DISCOUNT_TOKEN_PURPOSE,
         order_ref: input.orderRef,
         member_hash: input.memberHash,
         company_code: input.companyCode,
@@ -86,19 +103,18 @@ export class DiscountTokenService {
   }
 
   /**
-   * @param memberHashOfOrder member_hash dari `member_ref` yang dikirim Odoo saat consume (nomor HP partner order).
-   * @param amountTotal total akhir order (Rupiah) yang dikirim Odoo saat consume (SEC-07).
+   * Verifikasi tanda tangan, exp, bentuk klaim, dan purpose. Purpose berbeda → `invalid` (token redeem tidak bisa
+   * dipakai untuk promo dan sebaliknya). Tidak menyentuh state sekali-pakai.
    */
-  async consume(token: string, orderRef: string, memberHashOfOrder: string, amountTotal: number): Promise<ConsumeResult> {
+  verifyClaims(token: string, expectedPurpose: PosOtpPurpose): VerifyTokenResult {
     if (typeof token !== 'string' || token.length === 0 || token.length > MAX_TOKEN_LENGTH) {
       return { ok: false, reason: 'invalid' };
     }
-    const nowSec = Math.floor(this.now() / 1000);
     let claims: Record<string, unknown>;
     try {
       const decoded = verify(token, this.config.discountTokenSecret, {
         algorithms: ['HS256'],
-        clockTimestamp: nowSec,
+        clockTimestamp: Math.floor(this.now() / 1000),
       });
       if (typeof decoded === 'string') return { ok: false, reason: 'invalid' };
       claims = decoded as Record<string, unknown>;
@@ -106,12 +122,12 @@ export class DiscountTokenService {
       if (err instanceof TokenExpiredError) return { ok: false, reason: 'expired' };
       return { ok: false, reason: 'invalid' };
     }
-
     const { jti, purpose, exp } = claims;
     if (
-      purpose !== DISCOUNT_TOKEN_PURPOSE ||
+      purpose !== expectedPurpose ||
       typeof jti !== 'string' ||
       jti.length === 0 ||
+      jti.length > 64 ||
       typeof claims.order_ref !== 'string' ||
       typeof claims.member_hash !== 'string' ||
       typeof claims.amount !== 'number' ||
@@ -120,21 +136,44 @@ export class DiscountTokenService {
     ) {
       return { ok: false, reason: 'invalid' };
     }
+    return {
+      ok: true,
+      claims: {
+        jti,
+        purpose: expectedPurpose,
+        orderRef: claims.order_ref,
+        memberHash: claims.member_hash,
+        companyCode: typeof claims.company_code === 'string' ? claims.company_code : '',
+        amount: claims.amount,
+        exp,
+      },
+    };
+  }
+
+  /**
+   * @param memberHashOfOrder member_hash dari `member_ref` yang dikirim Odoo saat consume (nomor HP partner order).
+   * @param amountTotal total akhir order (Rupiah) yang dikirim Odoo saat consume (SEC-07).
+   */
+  async consume(token: string, orderRef: string, memberHashOfOrder: string, amountTotal: number): Promise<ConsumeResult> {
+    const verified = this.verifyClaims(token, DISCOUNT_TOKEN_PURPOSE);
+    if (!verified.ok) return verified;
+    const claims = verified.claims;
+    const nowSec = Math.floor(this.now() / 1000);
     // SEC-07: token hanya berlaku untuk pelanggan yang tercatat pada order (bukan nomor yang diketik kasir)
-    if (!safeEqualHex(claims.member_hash, memberHashOfOrder)) return { ok: false, reason: 'member_mismatch' };
+    if (!safeEqualHex(claims.memberHash, memberHashOfOrder)) return { ok: false, reason: 'member_mismatch' };
     // SEC-07 sisa: nilai order tidak boleh bergeser jauh dari nilai saat OTP (tidak membakar token)
     if (!amountWithinBounds(claims.amount, amountTotal, this.config.posOtpAmountTolerancePct)) {
       return { ok: false, reason: 'amount_mismatch' };
     }
-    const usedKey = `dtok:used:${jti}`;
+    const usedKey = `dtok:used:${claims.jti}`;
     // Sudah pernah dipakai? Idempotent untuk order yang sama (retry Odoo), selain itu already_used.
     const usedFor = await this.kv.get(usedKey);
     if (usedFor !== null) return this.replayResult(usedFor, orderRef);
 
     // Belum dipakai: order harus sama dengan klaim token. Mismatch TIDAK membakar token.
-    if (claims.order_ref !== orderRef) return { ok: false, reason: 'order_mismatch' };
+    if (claims.orderRef !== orderRef) return { ok: false, reason: 'order_mismatch' };
 
-    const ttl = Math.max(exp - nowSec, 1) + USED_MARKER_GRACE_SECONDS;
+    const ttl = Math.max(claims.exp - nowSec, 1) + USED_MARKER_GRACE_SECONDS;
     const first = await this.kv.setNxEx(usedKey, orderRef, ttl);
     if (first) return { ok: true };
     // Kalah balapan dengan consume paralel: bandingkan dengan nilai pemenang

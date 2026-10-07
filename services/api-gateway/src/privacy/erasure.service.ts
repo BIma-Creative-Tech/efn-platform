@@ -35,6 +35,7 @@ export interface ErasureRunResult {
  *        `member_ref_enc` NULL, `erased_at` now (catatan finansial 10 th dipertahankan, total liabilitas per PT seimbang);
  *      - `price_hunter_report`: `user_hash` → tombstone, `user_enc`/`geo_*` NULL, `updated_at` now (ETL ikut menerima
  *        versi teranonim lewat watermark updated_at);
+ *      - `loyalty_reservation` dan `loyalty_pos_earn` (POS, §9.5/§9.6): baris subjek DIHAPUS (transien, pseudonim);
  *      - `otp_audit`: `subject` → tombstone, `ip_enc` NULL;
  *      - `consent`: `ip_enc` NULL (baris dipertahankan sebagai bukti tanpa PII);
  *      - `dsar_request` LAIN milik member (export, delete yang dulu dibatalkan): `member_hash` NULL;
@@ -167,6 +168,9 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
         WHERE member_ref_hash = $1`,
       [hash, tomb],
     );
+    // 2b. Reservasi redeem     // 2b. Reservasi redeem POS (§9.5): data transien berisi member_ref_enc → dihapus (catatan finansial ada di ledger) catatan earn per order POS (§9.5, §9.6 K-6): transien/pseudonim → dihapus (ledger tetap)
+    await q.query(`DELETE FROM platform.loyalty_reservation WHERE member_hash = $1`, [hash]);
+    await q.query(`DELETE FROM platform.loyalty_pos_earn WHERE member_hash = $1`, [hash]);
     // 3. Laporan Market Scout
     await q.query(
       `UPDATE platform.price_hunter_report

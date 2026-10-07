@@ -252,6 +252,7 @@ export function testConfig(
     NODE_ENV: 'test',
     OUTBOX_RELAY_INTERVAL_MS: '0',
     RETENTION_PURGE_INTERVAL_MS: '0',
+    LOYALTY_RESERVATION_SWEEP_INTERVAL_MS: '0',
     DATABASE_URL: 'postgresql://efn_bff@localhost:5432/efn_platform',
   };
   for (const [k, v] of Object.entries(overrides)) {

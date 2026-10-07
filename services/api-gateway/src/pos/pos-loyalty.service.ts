@@ -1,0 +1,661 @@
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import { AppConfig } from '../config/app-config';
+import { DB, Db, Queryable } from '../common/db/db';
+import { ApiError, Errors } from '../common/errors/api-error';
+import { LoyaltyPosOp, MetricsService } from '../common/metrics/metrics.service';
+import { RateLimiter } from '../common/rate-limit/rate-limiter';
+import { safeEqualHex } from '../common/security/safe-equal';
+import {
+  Allocation,
+  CompanyCode,
+  LedgerBucket,
+  LedgerEntryInput,
+  LoyaltyService,
+  allocateDebit,
+  isCompanyCode,
+  splitCredit,
+} from '../loyalty/loyalty.service';
+import { DiscountTokenService, amountWithinBounds } from './discount-token.service';
+import { PosEarnDto, PosReverseDto, RedeemCommitDto, RedeemReserveDto } from './dto/pos-loyalty.dto';
+
+export interface PosEarnResponse {
+  points_earned: number;
+  points_balance: number;
+}
+export interface RedeemReserveResponse {
+  reservation_id: string;
+  points: number;
+  value_idr: number;
+  /** TTL UI (15 menit) — K-3: hanya informasi kasir. */
+  expires_at: string;
+  /** K-3: batas commit / penahanan poin (default +24 jam). Field tambahan (non-breaking). */
+  hold_until: string;
+}
+export interface RedeemCommitResponse {
+  points_redeemed: number;
+  points_balance: number;
+}
+export interface PosReverseResponse {
+  points_clawed_back: number;
+  points_restored: number;
+  points_balance: number;
+}
+export interface LoyaltyParamsResponse {
+  earn_idr_per_point: number;
+  point_value_idr: number;
+  redeem_min_points: number;
+  redeem_max_pct_of_order: number;
+  point_expiry_days: number;
+  reservation_ttl_seconds: number;
+  reservation_commit_window_seconds: number;
+}
+
+/** Sumber entri ledger Fase 1 (§9.5). */
+export const POS_SOURCES = { EARN: 'pos_earn', REDEEM: 'pos_redeem', REVERSE: 'pos_reverse' } as const;
+export const REVERSE_REASON = { CLAWBACK: 'pos_refund_clawback', RESTORE: 'pos_refund_restore' } as const;
+/** Toleransi galat floating point pada perhitungan proporsional (mis. 0.1 × 30 = 3.0000000000000004). */
+const EPS = 1e-9;
+
+interface ReservationRow {
+  id: string;
+  member_hash: string;
+  company_code: string;
+  order_ref: string;
+  points: number;
+  value_idr: string | number;
+  status: 'reserved' | 'committed' | 'released' | 'expired';
+  expires_at: Date | string;
+  hold_until: Date | string;
+  commit_idempotency_key: string | null;
+}
+
+interface LedgerRow {
+  member_ref_hash: string;
+  company_code: string;
+  delta_points: number;
+  expires_at: Date | string | null;
+  reason: string;
+  source: string;
+  source_ref: string | null;
+  idempotency_key: string;
+}
+
+interface EarnRecordRow {
+  order_ref: string;
+  idempotency_key: string;
+  member_hash: string;
+  points_earned: number;
+}
+
+/** Error kontrak loyalty POS (format umum §3: `{ error: { code, message } }`). */
+const LoyaltyErrors = {
+  insufficientPoints: (): ApiError => Errors.conflict('insufficient_points', 'Poin tidak mencukupi.'),
+  belowMinimum: (): ApiError => Errors.conflict('below_minimum', 'Jumlah poin di bawah minimum penukaran.'),
+  exceedsMaxPct: (): ApiError => Errors.conflict('exceeds_max_pct', 'Nilai poin melebihi batas maksimum per transaksi.'),
+  tokenInvalid: (): ApiError => Errors.conflict('token_invalid', 'Verifikasi OTP tidak valid atau kedaluwarsa. Minta OTP baru.'),
+  memberMismatch: (): ApiError => Errors.conflict('member_mismatch', 'Pelanggan tidak sesuai dengan verifikasi OTP.'),
+  amountMismatch: (): ApiError => Errors.conflict('amount_mismatch', 'Total transaksi berubah terlalu jauh sejak OTP. Minta OTP baru.'),
+  valueMismatch: (): ApiError => Errors.conflict('value_mismatch', 'Nilai poin tidak sesuai dengan reservasi.'),
+  reservationExists: (): ApiError => Errors.conflict('reservation_exists', 'Transaksi ini sudah memiliki penukaran poin aktif.'),
+  reservationNotFound: (): ApiError => ApiError.of(404, 'reservation_not_found', 'Reservasi poin tidak ditemukan.'),
+  reservationReleased: (): ApiError => Errors.conflict('reservation_released', 'Reservasi poin sudah dibatalkan.'),
+  reservationExpired: (): ApiError => Errors.conflict('reservation_expired', 'Reservasi poin sudah kedaluwarsa.'),
+  alreadyCommitted: (): ApiError => Errors.conflict('already_committed', 'Reservasi poin sudah dipakai.'),
+  orderMismatch: (): ApiError => Errors.conflict('order_mismatch', 'Transaksi tidak sesuai dengan reservasi.'),
+  idempotencyConflict: (): ApiError => Errors.conflict('idempotency_conflict', 'Kunci idempotensi sudah dipakai untuk data lain.'),
+  earnPending: (): ApiError => Errors.conflict('earn_pending', 'Poin transaksi asal belum tercatat. Coba lagi nanti.'),
+  earnLimitExceeded: (): ApiError => Errors.conflict('earn_limit_exceeded', 'Poin transaksi melebihi batas. Hubungi admin.'),
+};
+
+const DAY_MS = 86_400_000;
+const WIB_OFFSET_MS = 7 * 3600 * 1000;
+
+/** 00:00 WIB setelah `days` hari penuh sejak `nowMs`; `days` = 0 → null (tanpa kedaluwarsa). */
+export function expiryFor(nowMs: number, days: number): Date | null {
+  if (days <= 0) return null;
+  const startOfDayWib = Math.floor((nowMs + WIB_OFFSET_MS) / DAY_MS) * DAY_MS - WIB_OFFSET_MS;
+  return new Date(startOfDayWib + (days + 1) * DAY_MS);
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === '23505';
+}
+
+function toDate(v: Date | string): Date {
+  return v instanceof Date ? v : new Date(v);
+}
+
+function errorCode(err: unknown): string {
+  if (err instanceof ApiError) {
+    const body = err.body as { error?: { code?: string } };
+    return body.error?.code ?? 'error';
+  }
+  return 'error';
+}
+
+/**
+ * Loyalty di POS — Fase 1 (docs/04 §9, §9.6 v4.1; ADR-017, ADR-020). Dipanggil server Odoo (service key,
+ * `/v1/pos/loyalty/*`).
+ *
+ * - **Earn** (§9.2, K-1): poin = floor(eligible_amount / LOYALTY_EARN_IDR_PER_POINT) (pembulatan ke bawah; eligible
+ *   dihitung Odoo, termasuk pengecualian kategori — K-2). Masa berlaku LOYALTY_POINT_EXPIRY_DAYS (0 = tanpa
+ *   kedaluwarsa); bila member berutang, bagian kredit melunasi utang dulu (`splitCredit`). Setiap earn (juga 0 poin)
+ *   dicatat di `platform.loyalty_pos_earn` (order_ref PK) — dasar `earn_pending` (K-6) dan idempotensi.
+ * - **Reserve** (§9.3): token `pos_redeem` (bukan `pos_promo`), DIKONSUMSI saat reserve (K-4: UNIQUE token_jti; retry
+ *   identik mengembalikan reservasi yang sama), order & member sama dengan klaim token, `amount_total` dalam batas
+ *   SEC-07, poin ≥ minimum, nilai ≤ max% × amount_total, poin ≤ saldo − reservasi aktif. Serialisasi per member
+ *   (`pg_advisory_xact_lock`): dua reservasi paralel yang bersama-sama melebihi saldo → satu `insufficient_points`.
+ * - **Commit** (K-3): body membawa member_ref & value_idr yang diverifikasi; reservasi `reserved` boleh di-commit
+ *   sampai `hold_until` (default 24 jam; `expires_at` 15 menit hanya UI — commit setelahnya dicatat `outcome="late"`).
+ *   Entri ledger negatif dialokasikan FIFO (`allocateDebit`), idempoten (status + `commit_idempotency_key`).
+ * - **Release** (K-5): idempoten; committed → 409 `already_committed`.
+ * - **Reverse** (§9.4): catatan earn order asal belum ada → 409 `earn_pending` (K-6). Restore redeem floor(R × ratio)
+ *   lalu clawback earn ceil(E × ratio) (pembulatan memihak PT, kumulatif dibatasi total asal; ratio = 1 → sisa penuh).
+ *   Clawback melebihi sisa bucket → utang (bucket NULL). Restore ke bucket asal; bucket kedaluwarsa → masa berlaku baru.
+ *
+ * Saldo yang dikembalikan = saldo ledger (belum dikurangi reservasi aktif), sama dengan `POST /v1/pos/loyalty/balance`.
+ */
+@Injectable()
+export class PosLoyaltyService {
+  private readonly logger = new Logger(PosLoyaltyService.name);
+  now: () => number = () => Date.now();
+
+  constructor(
+    private readonly config: AppConfig,
+    @Inject(DB) private readonly db: Db,
+    private readonly loyalty: LoyaltyService,
+    private readonly tokens: DiscountTokenService,
+    private readonly limiter: RateLimiter,
+    private readonly metrics: MetricsService,
+  ) {}
+
+  params(): LoyaltyParamsResponse {
+    return {
+      earn_idr_per_point: this.config.loyaltyEarnIdrPerPoint,
+      point_value_idr: this.config.loyaltyPointValueIdr,
+      redeem_min_points: this.config.loyaltyRedeemMinPoints,
+      redeem_max_pct_of_order: this.config.loyaltyRedeemMaxPctOfOrder,
+      point_expiry_days: this.config.loyaltyPointExpiryDays,
+      reservation_ttl_seconds: this.config.loyaltyReservationTtlSeconds,
+      reservation_commit_window_seconds: this.config.loyaltyReservationCommitWindowSeconds,
+    };
+  }
+
+  /** Poin earn untuk `eligible` Rupiah — pembulatan ke bawah. */
+  pointsFor(eligibleAmount: number): number {
+    return Math.floor(eligibleAmount / this.config.loyaltyEarnIdrPerPoint + EPS);
+  }
+
+  // ───────────────────────── Earn (§9.2) ─────────────────────────
+  async earn(dto: PosEarnDto): Promise<PosEarnResponse> {
+    return this.observe('earn', async () => {
+      const hash = this.loyalty.hashMember(dto.memberRef);
+      await this.rateLimit('earn', hash);
+      const points = this.pointsFor(dto.eligibleAmount);
+      if (points > this.config.loyaltyPosMaxEarnPoints) {
+        this.logger.warn(`earn POS ditolak: ${points} poin > LOYALTY_POS_MAX_EARN_POINTS (order ${dto.orderRef})`);
+        throw LoyaltyErrors.earnLimitExceeded();
+      }
+      return this.db.tx(async (q) => {
+        await this.loyalty.lockMember(q, hash);
+        const existing = await q.query<EarnRecordRow>(
+          `SELECT order_ref, idempotency_key, member_hash, points_earned
+             FROM platform.loyalty_pos_earn WHERE order_ref = $1 OR idempotency_key = $2`,
+          [dto.orderRef, dto.idempotencyKey],
+        );
+        if (existing.rows.length > 0) {
+          const consistent = existing.rows.every(
+            (r) => r.order_ref === dto.orderRef && r.idempotency_key === dto.idempotencyKey && r.member_hash === hash,
+          );
+          if (!consistent) throw LoyaltyErrors.idempotencyConflict();
+          return {
+            result: { points_earned: Number(existing.rows[0].points_earned), points_balance: await this.loyalty.balanceByHash(hash, q) },
+            outcome: 'replay',
+          };
+        }
+        await q.query(
+          `INSERT INTO platform.loyalty_pos_earn
+             (order_ref, idempotency_key, member_hash, company_code, eligible_amount, points_earned, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [dto.orderRef, dto.idempotencyKey, hash, dto.companyCode, dto.eligibleAmount, points, new Date(this.now()).toISOString()],
+        );
+        if (points > 0) {
+          const parts = splitCredit(await this.loyalty.buckets(q, hash, new Date(this.now())), points, this.earnExpiry());
+          const enc = this.loyalty.encryptMemberRef(dto.memberRef);
+          await this.writeParts(q, parts, (part, i) => ({
+            idempotencyKey: i === 0 ? dto.idempotencyKey : `${dto.idempotencyKey}#${i + 1}`,
+            memberHash: hash,
+            memberRefEnc: enc,
+            delta: part.points,
+            reason: 'pos_sale',
+            source: POS_SOURCES.EARN,
+            sourceRef: dto.orderRef,
+            companyCode: dto.companyCode,
+            expiresAt: part.expiresAt,
+          }));
+          this.metrics.recordLoyaltyPosPoints('earned', dto.companyCode, points);
+        }
+        return {
+          result: { points_earned: points, points_balance: await this.loyalty.balanceByHash(hash, q) },
+          outcome: points > 0 ? 'ok' : 'zero',
+        };
+      });
+    });
+  }
+
+  // ───────────────────────── Reserve (§9.3 langkah 2) ─────────────────────────
+  async reserve(dto: RedeemReserveDto): Promise<RedeemReserveResponse> {
+    return this.observe('reserve', async () => {
+      const hash = this.loyalty.hashMember(dto.memberRef);
+      await this.rateLimit('reserve', hash);
+
+      const verified = this.tokens.verifyClaims(dto.discountToken, 'pos_redeem');
+      if (!verified.ok) throw LoyaltyErrors.tokenInvalid();
+      const claims = verified.claims;
+      if (claims.orderRef !== dto.orderRef || !isCompanyCode(claims.companyCode)) throw LoyaltyErrors.tokenInvalid();
+      if (!safeEqualHex(claims.memberHash, hash)) throw LoyaltyErrors.memberMismatch();
+      if (!amountWithinBounds(claims.amount, dto.amountTotal, this.config.posOtpAmountTolerancePct)) {
+        throw LoyaltyErrors.amountMismatch();
+      }
+      const companyCode: CompanyCode = claims.companyCode;
+      if (dto.points < this.config.loyaltyRedeemMinPoints) throw LoyaltyErrors.belowMinimum();
+      const valueIdr = dto.points * this.config.loyaltyPointValueIdr;
+      // nilai poin ≤ pct% × amount_total (perbandingan perkalian, bukan pembagian)
+      if (valueIdr * 100 > dto.amountTotal * this.config.loyaltyRedeemMaxPctOfOrder + EPS) throw LoyaltyErrors.exceedsMaxPct();
+
+      const now = new Date(this.now());
+      try {
+        return await this.db.tx(async (q) => {
+          await this.loyalty.lockMember(q, hash);
+          // Reservasi order ini yang melewati hold_until tetapi belum disapu job → expired (agar unik per order tidak menghalangi)
+          await q.query(
+            `UPDATE platform.loyalty_reservation SET status = 'expired', updated_at = $2
+              WHERE order_ref = $1 AND status = 'reserved' AND hold_until <= $2`,
+            [dto.orderRef, now.toISOString()],
+          );
+          // K-4: token sekali pakai. Retry identik (respons hilang) → reservasi yang sama selama masih reserved.
+          const byToken = await q.query<ReservationRow>(
+            `SELECT id::text AS id, member_hash, order_ref, points, value_idr, status, expires_at, hold_until
+               FROM platform.loyalty_reservation WHERE token_jti = $1`,
+            [claims.jti],
+          );
+          const prev = byToken.rows[0];
+          if (prev) {
+            if (prev.status === 'reserved' && prev.order_ref === dto.orderRef && Number(prev.points) === dto.points) {
+              return {
+                result: this.reserveResponse(prev.id, dto.points, Number(prev.value_idr), toDate(prev.expires_at), toDate(prev.hold_until)),
+                outcome: 'replay',
+              };
+            }
+            throw LoyaltyErrors.tokenInvalid();
+          }
+          const active = await q.query<{ n: number }>(
+            `SELECT 1 AS n FROM platform.loyalty_reservation WHERE order_ref = $1 AND status IN ('reserved', 'committed')`,
+            [dto.orderRef],
+          );
+          if ((active.rowCount ?? 0) > 0) throw LoyaltyErrors.reservationExists();
+
+          const available = await this.available(q, hash, now);
+          if (available < dto.points) throw LoyaltyErrors.insufficientPoints();
+
+          const id = randomUUID();
+          const expiresAt = new Date(now.getTime() + this.config.loyaltyReservationTtlSeconds * 1000);
+          const holdUntil = new Date(
+            Math.max(expiresAt.getTime(), now.getTime() + this.config.loyaltyReservationCommitWindowSeconds * 1000),
+          );
+          await q.query(
+            `INSERT INTO platform.loyalty_reservation
+               (id, member_hash, company_code, order_ref, token_jti, points, value_idr, amount_total,
+                status, expires_at, hold_until, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'reserved', $9, $10, $11, $11)`,
+            [
+              id,
+              hash,
+              companyCode,
+              dto.orderRef,
+              claims.jti,
+              dto.points,
+              valueIdr,
+              dto.amountTotal,
+              expiresAt.toISOString(),
+              holdUntil.toISOString(),
+              now.toISOString(),
+            ],
+          );
+          this.metrics.recordLoyaltyPosPoints('reserved', companyCode, dto.points);
+          return { result: this.reserveResponse(id, dto.points, valueIdr, expiresAt, holdUntil), outcome: 'ok' };
+        });
+      } catch (err) {
+        // Balapan: token sama paralel / dua reservasi order sama dari member berbeda → indeks unik menolak satu
+        if (isUniqueViolation(err)) {
+          const constraint = (err as { constraint?: string }).constraint ?? '';
+          throw constraint.includes('jti') ? LoyaltyErrors.tokenInvalid() : LoyaltyErrors.reservationExists();
+        }
+        throw err;
+      }
+    });
+  }
+
+  // ───────────────────────── Commit (§9.3 langkah 3, K-3) ─────────────────────────
+  async commit(dto: RedeemCommitDto): Promise<RedeemCommitResponse> {
+    return this.observe('commit', async () => {
+      const hash = this.loyalty.hashMember(dto.memberRef);
+      try {
+        return await this.db.tx(async (q) => {
+          // Urutan kunci sama dengan reserve (member → baris) agar tidak deadlock
+          await this.loyalty.lockMember(q, hash);
+          const res = await q.query<ReservationRow>(
+            `SELECT id::text AS id, member_hash, company_code, order_ref, points, value_idr, status, expires_at, hold_until,
+                    commit_idempotency_key
+               FROM platform.loyalty_reservation WHERE id = $1 FOR UPDATE`,
+            [dto.reservationId],
+          );
+          const r = res.rows[0];
+          if (!r) throw LoyaltyErrors.reservationNotFound();
+          if (r.order_ref !== dto.orderRef) throw LoyaltyErrors.orderMismatch();
+          if (!safeEqualHex(r.member_hash, hash)) throw LoyaltyErrors.memberMismatch();
+          if (Number(r.value_idr) !== dto.valueIdr) throw LoyaltyErrors.valueMismatch();
+          const points = Number(r.points);
+
+          if (r.status === 'committed') {
+            if (r.commit_idempotency_key !== dto.idempotencyKey) throw LoyaltyErrors.idempotencyConflict();
+            return {
+              result: { points_redeemed: points, points_balance: await this.loyalty.balanceByHash(hash, q) },
+              outcome: 'replay',
+            };
+          }
+          if (r.status === 'released') throw LoyaltyErrors.reservationReleased();
+          const now = new Date(this.now());
+          if (r.status === 'expired' || toDate(r.hold_until).getTime() <= now.getTime()) throw LoyaltyErrors.reservationExpired();
+          const late = toDate(r.expires_at).getTime() <= now.getTime();
+
+          if ((await this.ledgerByKeys(q, [dto.idempotencyKey])).length > 0) throw LoyaltyErrors.idempotencyConflict();
+          if (!isCompanyCode(r.company_code)) throw new Error('company_code reservasi tidak dikenal');
+          const company: CompanyCode = r.company_code;
+          const enc = this.loyalty.encryptMemberRef(dto.memberRef);
+          const parts = allocateDebit(await this.loyalty.buckets(q, hash, now), points);
+          await this.writeParts(q, parts, (part, i) => ({
+            idempotencyKey: i === 0 ? dto.idempotencyKey : `${dto.idempotencyKey}#${i + 1}`,
+            memberHash: hash,
+            memberRefEnc: enc,
+            delta: -part.points,
+            reason: 'pos_redeem',
+            source: POS_SOURCES.REDEEM,
+            sourceRef: r.order_ref,
+            companyCode: company,
+            expiresAt: part.expiresAt,
+          }));
+          await q.query(
+            `UPDATE platform.loyalty_reservation
+                SET status = 'committed', committed_at = $2, commit_idempotency_key = $3, updated_at = $2
+              WHERE id = $1`,
+            [r.id, now.toISOString(), dto.idempotencyKey],
+          );
+          const balance = await this.loyalty.balanceByHash(hash, q);
+          if (balance < 0) this.logger.warn(`commit redeem order ${r.order_ref}: saldo member negatif (${balance})`);
+          this.metrics.recordLoyaltyPosPoints('redeemed', company, points);
+          return { result: { points_redeemed: points, points_balance: balance }, outcome: late ? 'late' : 'ok' };
+        });
+      } catch (err) {
+        if (isUniqueViolation(err)) throw LoyaltyErrors.idempotencyConflict();
+        throw err;
+      }
+    });
+  }
+
+  // ───────────────────────── Release (§9.3 langkah 4, K-5) ─────────────────────────
+  async release(reservationId: string): Promise<{ ok: true }> {
+    return this.observe('release', async () => {
+      const now = new Date(this.now()).toISOString();
+      const upd = await this.db.query<{ id: string }>(
+        `UPDATE platform.loyalty_reservation SET status = 'released', updated_at = $2
+          WHERE id = $1 AND status IN ('reserved', 'expired')
+          RETURNING id::text AS id`,
+        [reservationId, now],
+      );
+      if ((upd.rowCount ?? 0) > 0) return { result: { ok: true as const }, outcome: 'ok' };
+      const cur = await this.db.query<{ status: string }>(`SELECT status FROM platform.loyalty_reservation WHERE id = $1`, [
+        reservationId,
+      ]);
+      const status = cur.rows[0]?.status;
+      if (status === undefined) throw LoyaltyErrors.reservationNotFound();
+      if (status === 'committed') throw LoyaltyErrors.alreadyCommitted();
+      return { result: { ok: true as const }, outcome: 'replay' }; // sudah released
+    });
+  }
+
+  // ───────────────────────── Reverse (§9.4, K-6) ─────────────────────────
+  async reverse(dto: PosReverseDto): Promise<PosReverseResponse> {
+    return this.observe('reverse', async () => {
+      const hash = this.loyalty.hashMember(dto.memberRef);
+      await this.rateLimit('reverse', hash);
+      const clawKey = (i: number): string => `${dto.idempotencyKey}:claw${i === 0 ? '' : `#${i + 1}`}`;
+      const restoreKey = (i: number): string => `${dto.idempotencyKey}:restore#${i + 1}`;
+
+      return this.db.tx(async (q) => {
+        await this.loyalty.lockMember(q, hash);
+        // Replay: entri reverse ini (kunci `<key>:claw…` / `<key>:restore#n`), dicari lewat indeks (source, source_ref)
+        // + kunci pertama tiap jenis lewat indeks unik (retry dengan order asal lain → terdeteksi konflik). Kunci
+        // deterministik + UNIQUE menjadi pagar terakhir (writeParts → idempotency_conflict).
+        const existing = (
+          await q.query<LedgerRow>(
+            `SELECT member_ref_hash, company_code, delta_points, expires_at, reason, source, source_ref, idempotency_key
+               FROM platform.loyalty_ledger
+              WHERE (source = 'pos_reverse' AND source_ref = $2 AND starts_with(idempotency_key, $1))
+                 OR idempotency_key = ANY($3::text[])`,
+            [`${dto.idempotencyKey}:`, dto.originalOrderRef, [clawKey(0), restoreKey(0)]],
+          )
+        ).rows;
+        if (existing.length > 0) {
+          const consistent = existing.every(
+            (r) => r.member_ref_hash === hash && r.source === POS_SOURCES.REVERSE && r.source_ref === dto.originalOrderRef,
+          );
+          if (!consistent) throw LoyaltyErrors.idempotencyConflict();
+          return {
+            result: {
+              points_clawed_back: -this.sumBy(existing, REVERSE_REASON.CLAWBACK),
+              points_restored: this.sumBy(existing, REVERSE_REASON.RESTORE),
+              points_balance: await this.loyalty.balanceByHash(hash, q),
+            },
+            outcome: 'replay',
+          };
+        }
+
+        // K-6: earn order asal harus sudah tercatat (termasuk earn 0 poin) — selain itu Odoo retry via outbox
+        const earnRec = await q.query<EarnRecordRow>(
+          `SELECT order_ref, idempotency_key, member_hash, points_earned FROM platform.loyalty_pos_earn WHERE order_ref = $1`,
+          [dto.originalOrderRef],
+        );
+        const rec = earnRec.rows[0];
+        if (!rec) throw LoyaltyErrors.earnPending();
+        if (!safeEqualHex(rec.member_hash, hash)) throw LoyaltyErrors.memberMismatch();
+
+        const rows = await q.query<LedgerRow>(
+          `SELECT member_ref_hash, company_code, delta_points, expires_at, reason, source, source_ref, idempotency_key
+             FROM platform.loyalty_ledger
+            WHERE source IN ('pos_earn', 'pos_redeem', 'pos_reverse') AND source_ref = $1
+            ORDER BY id`,
+          [dto.originalOrderRef],
+        );
+        const earnRows = rows.rows.filter((r) => r.source === POS_SOURCES.EARN);
+        const redeemRows = rows.rows.filter((r) => r.source === POS_SOURCES.REDEEM);
+        const priorRows = rows.rows.filter((r) => r.source === POS_SOURCES.REVERSE);
+        if (![...earnRows, ...redeemRows].every((r) => r.member_ref_hash === hash)) throw LoyaltyErrors.memberMismatch();
+
+        const earned = earnRows.reduce((s, r) => s + Number(r.delta_points), 0);
+        const redeemed = -redeemRows.reduce((s, r) => s + Number(r.delta_points), 0);
+        const priorClaw = -this.sumBy(priorRows, REVERSE_REASON.CLAWBACK);
+        const priorRestore = this.sumBy(priorRows, REVERSE_REASON.RESTORE);
+        const full = dto.refundRatio >= 1;
+        const restore = Math.max(
+          0,
+          Math.min(redeemed - priorRestore, full ? redeemed : Math.floor(redeemed * dto.refundRatio + EPS)),
+        );
+        const claw = Math.max(0, Math.min(earned - priorClaw, full ? earned : Math.ceil(earned * dto.refundRatio - EPS)));
+
+        const now = new Date(this.now());
+        const enc = this.loyalty.encryptMemberRef(dto.memberRef);
+        // 1. Restore dulu (clawback berikutnya bisa memakai poin yang baru dikembalikan di bucket yang sama)
+        if (restore > 0) {
+          const parts = this.restoreAllocation(redeemRows, restore, now);
+          const company = this.companyOf(redeemRows);
+          await this.writeParts(q, parts, (part, i) => ({
+            idempotencyKey: restoreKey(i),
+            memberHash: hash,
+            memberRefEnc: enc,
+            delta: part.points,
+            reason: REVERSE_REASON.RESTORE,
+            source: POS_SOURCES.REVERSE,
+            sourceRef: dto.originalOrderRef,
+            companyCode: company,
+            expiresAt: part.expiresAt,
+          }));
+          this.metrics.recordLoyaltyPosPoints('restored', company, restore);
+        }
+        // 2. Clawback earn ke bucket earn asal; kekurangan → utang (bucket NULL, saldo negatif dicatat)
+        if (claw > 0) {
+          const parts = this.clawAllocation(earnRows, await this.loyalty.buckets(q, hash, now), claw, now);
+          const company = this.companyOf(earnRows);
+          await this.writeParts(q, parts, (part, i) => ({
+            idempotencyKey: clawKey(i),
+            memberHash: hash,
+            memberRefEnc: enc,
+            delta: -part.points,
+            reason: REVERSE_REASON.CLAWBACK,
+            source: POS_SOURCES.REVERSE,
+            sourceRef: dto.originalOrderRef,
+            companyCode: company,
+            expiresAt: part.expiresAt,
+          }));
+          this.metrics.recordLoyaltyPosPoints('clawed_back', company, claw);
+        }
+        const balance = await this.loyalty.balanceByHash(hash, q);
+        if (balance < 0) {
+          this.logger.warn(`reverse refund ${dto.refundOrderRef}: saldo member negatif (${balance}) — ditagih di earn berikutnya`);
+        }
+        return { result: { points_clawed_back: claw, points_restored: restore, points_balance: balance }, outcome: 'ok' };
+      });
+    });
+  }
+
+  // ───────────────────────── helper ─────────────────────────
+
+  /** Saldo tersedia = saldo ledger − reservasi aktif (status reserved & belum lewat hold_until). */
+  private async available(q: Queryable, hash: string, at: Date): Promise<number> {
+    const balance = await this.loyalty.balanceByHash(hash, q);
+    const held = await q.query<{ held: string | number | null }>(
+      `SELECT COALESCE(SUM(points), 0)::bigint AS held
+         FROM platform.loyalty_reservation
+        WHERE member_hash = $1 AND status = 'reserved' AND hold_until > $2`,
+      [hash, at.toISOString()],
+    );
+    return balance - Number(held.rows[0]?.held ?? 0);
+  }
+
+  private async ledgerByKeys(q: Queryable, keys: string[]): Promise<LedgerRow[]> {
+    const res = await q.query<LedgerRow>(
+      `SELECT member_ref_hash, company_code, delta_points, expires_at, reason, source, source_ref, idempotency_key
+         FROM platform.loyalty_ledger WHERE idempotency_key = ANY($1::text[])`,
+      [keys],
+    );
+    return res.rows;
+  }
+
+  private async writeParts(q: Queryable, parts: Allocation[], build: (part: Allocation, i: number) => LedgerEntryInput): Promise<void> {
+    for (const [i, part] of parts.entries()) {
+      if (part.points <= 0) continue;
+      const inserted = await this.loyalty.insertEntry(build(part, i), q);
+      // Kunci deterministik sudah ada padahal pemeriksaan awal kosong → data tidak konsisten; batalkan transaksi
+      if (!inserted) throw LoyaltyErrors.idempotencyConflict();
+    }
+  }
+
+  /**
+   * Restore ke bucket redeem asal, mulai dari bucket yang paling lama berlaku. Bucket asal yang sudah kedaluwarsa →
+   * masa berlaku baru (`earnExpiry`) agar poin yang dikembalikan tidak langsung hangus.
+   */
+  private restoreAllocation(redeemRows: LedgerRow[], points: number, now: Date): Allocation[] {
+    const rows = [...redeemRows].sort((a, b) => {
+      if (a.expires_at === null) return b.expires_at === null ? 0 : -1;
+      if (b.expires_at === null) return 1;
+      return toDate(b.expires_at).getTime() - toDate(a.expires_at).getTime();
+    });
+    const out: Allocation[] = [];
+    let left = points;
+    for (const r of rows) {
+      if (left <= 0) break;
+      const take = Math.min(left, -Number(r.delta_points));
+      if (take <= 0) continue;
+      const orig = r.expires_at === null ? null : toDate(r.expires_at);
+      const target = orig === null || orig.getTime() > now.getTime() ? orig : this.earnExpiry();
+      const same = out.find((a) => (a.expiresAt?.getTime() ?? null) === (target?.getTime() ?? null));
+      if (same) same.points += take;
+      else out.push({ expiresAt: target, points: take });
+      left -= take;
+    }
+    if (left > 0) out.push({ expiresAt: this.earnExpiry(), points: left });
+    return out;
+  }
+
+  /**
+   * Clawback ke bucket earn asal (bagian bermasa berlaku). Bucket asal sudah kedaluwarsa → entri ikut tanggal itu
+   * (poin sudah hangus; tidak menghukum dua kali). Sisa bucket tidak cukup → kekurangan ke bucket NULL (utang).
+   */
+  private clawAllocation(earnRows: LedgerRow[], buckets: LedgerBucket[], points: number, now: Date): Allocation[] {
+    const dated = earnRows.find((r) => r.expires_at !== null);
+    const target = dated?.expires_at ? toDate(dated.expires_at) : null;
+    if (target === null) return [{ expiresAt: null, points }];
+    if (target.getTime() <= now.getTime()) return [{ expiresAt: target, points }];
+    const remaining = buckets.find((b) => b.expiresAt?.getTime() === target.getTime())?.remaining ?? 0;
+    const fromBucket = Math.min(points, Math.max(0, remaining));
+    const out: Allocation[] = [];
+    if (fromBucket > 0) out.push({ expiresAt: target, points: fromBucket });
+    if (points - fromBucket > 0) out.push({ expiresAt: null, points: points - fromBucket });
+    return out;
+  }
+
+  private companyOf(rows: LedgerRow[]): CompanyCode {
+    const c = rows[0]?.company_code;
+    if (!isCompanyCode(c)) throw new Error('company_code ledger asal tidak dikenal');
+    return c;
+  }
+
+  private sumBy(rows: LedgerRow[], reason: string): number {
+    return rows.filter((r) => r.reason === reason).reduce((s, r) => s + Number(r.delta_points), 0);
+  }
+
+  /**
+   * Masa berlaku poin baru: pukul 00:00 WIB setelah `LOYALTY_POINT_EXPIRY_DAYS` hari penuh. Dibulatkan per hari agar
+   * jumlah bucket (dan entri debit per redeem) tetap kecil. 0 hari = tanpa kedaluwarsa (NULL).
+   */
+  private earnExpiry(): Date | null {
+    return expiryFor(this.now(), this.config.loyaltyPointExpiryDays);
+  }
+
+  private reserveResponse(id: string, points: number, valueIdr: number, expiresAt: Date, holdUntil: Date): RedeemReserveResponse {
+    return {
+      reservation_id: id,
+      points,
+      value_idr: valueIdr,
+      expires_at: expiresAt.toISOString(),
+      hold_until: holdUntil.toISOString(),
+    };
+  }
+
+  private async rateLimit(op: 'earn' | 'reserve' | 'reverse', hash: string): Promise<void> {
+    await this.limiter.enforce(`loy:${op}:${hash}`, this.config.loyaltyRateMemberLimit, this.config.loyaltyRateWindowSeconds);
+  }
+
+  /** Catat metrik hasil per operasi (kode error kontrak sebagai outcome). */
+  private async observe<T>(op: LoyaltyPosOp, fn: () => Promise<{ result: T; outcome: string }>): Promise<T> {
+    try {
+      const { result, outcome } = await fn();
+      this.metrics.recordLoyaltyPosOp(op, outcome);
+      return result;
+    } catch (err) {
+      this.metrics.recordLoyaltyPosOp(op, errorCode(err));
+      throw err;
+    }
+  }
+}

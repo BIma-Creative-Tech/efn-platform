@@ -1,0 +1,126 @@
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import { AppConfig } from '../config/app-config';
+import { DB, Db } from '../common/db/db';
+import { Errors } from '../common/errors/api-error';
+import { PII_AAD, PiiCipher } from '../common/pii/crypto';
+import { maskMsisdn } from '../common/pii/pii';
+import { LoyaltyService, splitCredit } from '../loyalty/loyalty.service';
+import { expiryFor } from '../pos/pos-loyalty.service';
+import { MigrationMemberDto, OpeningBalanceDto } from './dto/migration.dto';
+
+export interface MigrationMemberResponse {
+  member: 'created' | 'existing';
+  consents_recorded: number;
+}
+
+export interface OpeningBalanceResponse {
+  /** false = source_ref sudah pernah diimpor dengan data yang sama (idempoten). */
+  applied: boolean;
+  points_balance: number;
+}
+
+export const MIGRATION_SOURCE = 'migration_opening';
+
+/**
+ * Migrasi data member & saldo pembuka dari sistem lama (docs/04 §9.6 K-7). Internal, dijaga `MigrationKeyGuard`.
+ *
+ * - Member: upsert `platform.member` (nomor HP terenkripsi AAD member, hash member) — idempoten per nomor. Consent hanya
+ *   bila ada bukti (versi + SHA-256 teks yang disetujui), `source = 'migration'`, satu baris per (member, purpose)
+ *   — impor ulang tidak menambah baris (consent append-only, docs/04 §8.4).
+ * - Saldo pembuka: entri ledger `source = 'migration_opening'`, `idempotency_key = migration_opening:<source_ref>`,
+ *   `company_code` = PT penanggung liabilitas (ADR-020). Idempoten per `source_ref`: impor ulang identik → `applied:false`;
+ *   source_ref sama dengan data berbeda → `409 idempotency_conflict`. Masa berlaku mengikuti
+ *   `LOYALTY_POINT_EXPIRY_DAYS` sejak tanggal migrasi (PLACEHOLDER — menunggu Finance/Q-13); bila member berutang,
+ *   kredit melunasi utang dulu (sama dengan earn).
+ * - Log hanya nomor ter-mask; `source_ref` tidak boleh berisi PII (tanggung jawab skrip migrasi).
+ */
+@Injectable()
+export class MigrationService {
+  private readonly logger = new Logger(MigrationService.name);
+  now: () => number = () => Date.now();
+
+  constructor(
+    private readonly config: AppConfig,
+    @Inject(DB) private readonly db: Db,
+    private readonly cipher: PiiCipher,
+    private readonly loyalty: LoyaltyService,
+  ) {}
+
+  async importMember(dto: MigrationMemberDto): Promise<MigrationMemberResponse> {
+    const hash = this.loyalty.hashMember(dto.memberRef);
+    return this.db.tx(async (q) => {
+      const ins = await q.query<{ id: string }>(
+        `INSERT INTO platform.member (id, member_hash, member_ref_enc)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (member_hash) DO NOTHING
+         RETURNING id::text AS id`,
+        [randomUUID(), hash, this.cipher.encrypt(dto.memberRef, PII_AAD.MEMBER_REF)],
+      );
+      let memberId = ins.rows[0]?.id;
+      const created = memberId !== undefined;
+      if (!memberId) {
+        const sel = await q.query<{ id: string; deleted_at: Date | string | null }>(
+          `SELECT id::text AS id, deleted_at FROM platform.member WHERE member_hash = $1`,
+          [hash],
+        );
+        const row = sel.rows[0];
+        if (!row) throw new Error('member hilang setelah konflik upsert');
+        if (row.deleted_at !== null) throw Errors.conflict('member_deleting', 'Akun sedang dalam proses penghapusan.');
+        memberId = row.id;
+      }
+      let recorded = 0;
+      for (const c of dto.consents) {
+        const res = await q.query(
+          `INSERT INTO platform.consent (member_id, purpose, granted, version, text_sha256, source, created_at)
+           SELECT $1, $2, $3, $4, $5, 'migration', COALESCE($6::timestamptz, now())
+            WHERE NOT EXISTS (SELECT 1 FROM platform.consent WHERE member_id = $1 AND purpose = $2 AND source = 'migration')`,
+          [memberId, c.purpose, c.granted, c.version, c.textSha256, c.recordedAt ? c.recordedAt.toISOString() : null],
+        );
+        recorded += res.rowCount ?? 0;
+      }
+      if (created) this.logger.log(`migrasi member ${maskMsisdn(dto.memberRef)} (${dto.sourceRef})`);
+      return { member: created ? ('created' as const) : ('existing' as const), consents_recorded: recorded };
+    });
+  }
+
+  async openingBalance(dto: OpeningBalanceDto): Promise<OpeningBalanceResponse> {
+    const hash = this.loyalty.hashMember(dto.memberRef);
+    const key = `${MIGRATION_SOURCE}:${dto.sourceRef}`;
+    const keys = [key, `${key}#2`];
+    return this.db.tx(async (q) => {
+      await this.loyalty.lockMember(q, hash);
+      const existing = await q.query<{ member_ref_hash: string; company_code: string; delta_points: number }>(
+        `SELECT member_ref_hash, company_code, delta_points FROM platform.loyalty_ledger WHERE idempotency_key = ANY($1::text[])`,
+        [keys],
+      );
+      if (existing.rows.length > 0) {
+        const total = existing.rows.reduce((s, r) => s + Number(r.delta_points), 0);
+        const same =
+          total === dto.points && existing.rows.every((r) => r.member_ref_hash === hash && r.company_code === dto.companyCode);
+        if (!same) throw Errors.conflict('idempotency_conflict', 'source_ref sudah dipakai untuk data lain.');
+        return { applied: false, points_balance: await this.loyalty.balanceByHash(hash, q) };
+      }
+      const at = new Date(this.now());
+      const parts = splitCredit(await this.loyalty.buckets(q, hash, at), dto.points, expiryFor(at.getTime(), this.config.loyaltyPointExpiryDays));
+      const enc = this.loyalty.encryptMemberRef(dto.memberRef);
+      for (const [i, part] of parts.entries()) {
+        await this.loyalty.insertEntry(
+          {
+            idempotencyKey: keys[i],
+            memberHash: hash,
+            memberRefEnc: enc,
+            delta: part.points,
+            reason: 'opening_balance',
+            source: MIGRATION_SOURCE,
+            sourceRef: dto.sourceRef,
+            companyCode: dto.companyCode,
+            expiresAt: part.expiresAt,
+          },
+          q,
+        );
+      }
+      return { applied: true, points_balance: await this.loyalty.balanceByHash(hash, q) };
+    });
+  }
+}

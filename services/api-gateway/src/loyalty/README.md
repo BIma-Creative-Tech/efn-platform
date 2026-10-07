@@ -20,4 +20,4 @@ Idempotensi: `processed_message('bff.loyalty-earn', key)` + UNIQUE `idempotency_
 R-B05/R-B06 (fraud poin), R-S10, R-T10, R-L01.
 
 ## Belum
-- Redeem/debit, clawback (R-O05), FIFO kedaluwarsa; sumber `mgm` (butuh validasi semantik sendiri); plafon poin per member per hari.
+- Redeem/clawback POS + FIFO kedaluwarsa: SELESAI gelombang 13 (lihat `src/pos/README.md`, primitif `allocateDebit`/`splitCredit`/`lockMember` di sini). Sisa: sumber `mgm` (butuh validasi semantik sendiri); plafon poin per member per hari.

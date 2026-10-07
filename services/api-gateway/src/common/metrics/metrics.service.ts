@@ -1,11 +1,13 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { Counter, Registry, collectDefaultMetrics } from 'prom-client';
 
-export type OtpPurposeLabel = 'pos_promo' | 'login' | 'dsar';
+export type OtpPurposeLabel = 'pos_promo' | 'pos_redeem' | 'login' | 'dsar';
 /** `budget_exhausted` = budget global per jam habis (SEC-06) — kandidat alert DevSecOps. */
 export type OtpRequestOutcome = 'sent' | 'delivery_failed' | 'rate_limited' | 'budget_exhausted';
 export type OtpVerifyOutcome = 'verified' | 'invalid' | 'expired' | 'locked';
 export type WhatsAppSendOutcome = 'success' | 'failure';
+export type LoyaltyPosOp = 'earn' | 'reserve' | 'commit' | 'release' | 'reverse';
+export type LoyaltyPointsKind = 'earned' | 'reserved' | 'redeemed' | 'clawed_back' | 'restored';
 
 /**
  * Metrik Prometheus BFF. Nama counter disepakati dengan alert rules DevSecOps:
@@ -49,6 +51,32 @@ export class MetricsService implements OnModuleInit {
     registers: [this.registry],
   });
 
+  /**
+   * Fase 1 loyalty POS (docs/04 §9): jumlah panggilan per operasi & hasil. `op` ∈ earn|reserve|commit|release|reverse;
+   * `outcome` = `ok`, `replay` (idempoten), `zero` (earn 0 poin), `late` (commit reservasi kedaluwarsa), atau kode
+   * error kontrak (`insufficient_points`, `token_invalid`, …). Tanpa member/order di label.
+   */
+  readonly loyaltyPosOps = new Counter({
+    name: 'efn_loyalty_pos_ops_total',
+    help: 'Operasi loyalty POS (earn/redeem/reverse) per hasil',
+    labelNames: ['op', 'outcome'] as const,
+    registers: [this.registry],
+  });
+
+  /** Poin yang benar-benar dibukukan/ditahan: kind ∈ earned|reserved|redeemed|clawed_back|restored, per PT (4 nilai). */
+  readonly loyaltyPosPoints = new Counter({
+    name: 'efn_loyalty_pos_points_total',
+    help: 'Poin loyalty POS per jenis mutasi dan PT',
+    labelNames: ['kind', 'company'] as const,
+    registers: [this.registry],
+  });
+
+  readonly loyaltyReservationExpired = new Counter({
+    name: 'efn_loyalty_reservation_expired_total',
+    help: 'Reservasi redeem poin yang dilepas otomatis karena kedaluwarsa',
+    registers: [this.registry],
+  });
+
   /** Metrik default proses Node (CPU, heap, event loop) hanya di runtime, bukan di unit test. */
   onModuleInit(): void {
     collectDefaultMetrics({ register: this.registry });
@@ -68,6 +96,19 @@ export class MetricsService implements OnModuleInit {
 
   recordAltchaChallenge(level: number): void {
     this.altchaChallenge.inc({ level: String(Math.max(0, Math.min(3, Math.floor(level)))) });
+  }
+
+  recordLoyaltyPosOp(op: LoyaltyPosOp, outcome: string): void {
+    // outcome dari kode internal (bukan input pengguna); batasi bentuk agar kardinalitas terjaga
+    this.loyaltyPosOps.inc({ op, outcome: /^[a-z_]{1,40}$/.test(outcome) ? outcome : 'error' });
+  }
+
+  recordLoyaltyPosPoints(kind: LoyaltyPointsKind, company: string, points: number): void {
+    if (points > 0) this.loyaltyPosPoints.inc({ kind, company }, points);
+  }
+
+  recordLoyaltyReservationExpired(n: number): void {
+    if (n > 0) this.loyaltyReservationExpired.inc(n);
   }
 
   get contentType(): string {

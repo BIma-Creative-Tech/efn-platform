@@ -1,3 +1,4 @@
+import { GLOBAL_PREFIX, GLOBAL_PREFIX_EXCLUDE } from './common/http/global-prefix';
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -56,7 +57,8 @@ async function bootstrap(): Promise<void> {
 
   app.enableShutdownHooks();
   // Kontrak §1: prefix `/v1` (bukan `/api/v1`). Health & metrics tanpa prefix.
-  app.setGlobalPrefix('v1', { exclude: ['health', 'health/ready', 'metrics'] });
+  // Health, metrics & migrasi internal (K-7) tanpa prefix — lihat common/http/global-prefix.ts.
+  app.setGlobalPrefix(GLOBAL_PREFIX, { exclude: GLOBAL_PREFIX_EXCLUDE });
 
   await app.listen(config.port, '0.0.0.0');
   logger.log(`BFF mendengar ${https ? 'HTTPS' : 'HTTP (plaintext, non-production)'} di :${config.port}`);

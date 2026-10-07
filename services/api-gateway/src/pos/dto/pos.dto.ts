@@ -2,6 +2,8 @@ import { Errors } from '../../common/errors/api-error';
 import { normalizeMsisdn } from '../../common/pii/pii';
 import { asRecord, requireInt, requireNumber, requireString, requireUuid } from '../../common/validation';
 import { CompanyCode, isCompanyCode } from '../../loyalty/loyalty.service';
+import { PosOtpPurpose, isPosOtpPurpose } from '../../otp/otp.service';
+import { DISCOUNT_TOKEN_PURPOSE } from '../discount-token.service';
 
 /** DTO kontrak §3.1 / §3.4. Validasi manual → 400 `invalid_request` generik (`invalid_phone` untuk nomor). */
 
@@ -12,7 +14,7 @@ import { CompanyCode, isCompanyCode } from '../../loyalty/loyalty.service';
 export const ORDER_REF_MAX = 64;
 const ORDER_REF_RE = /^[\x20-\x7e]{1,64}$/;
 
-function requireOrderRef(o: Record<string, unknown>): string {
+export function requireOrderRef(o: Record<string, unknown>): string {
   const v = requireString(o, 'order_ref', ORDER_REF_MAX);
   if (!ORDER_REF_RE.test(v)) throw Errors.invalidRequest();
   return v;
@@ -22,13 +24,15 @@ function requireOrderRef(o: Record<string, unknown>): string {
  * `member_ref` (SEC-07 v2): diambil server Odoo dari nomor HP `partner_id` order. Hanya nomor Indonesia
  * `^62[0-9]{8,13}$` → selain itu 400 `invalid_phone` (SEC-06).
  */
-function requireMemberRef(value: unknown): string {
+export function requireMemberRef(value: unknown): string {
   const memberRef = normalizeMsisdn(value);
   if (!memberRef) throw Errors.invalidPhone();
   return memberRef;
 }
 
 export interface PosOtpRequestDto {
+  /** docs/04 §9.3: `pos_promo` (default) | `pos_redeem`. */
+  purpose: PosOtpPurpose;
   memberRef: string;
   orderRef: string;
   amount: number;
@@ -54,7 +58,10 @@ export function parsePosOtpRequest(body: unknown): PosOtpRequestDto {
   const o = asRecord(body);
   const memberRef = requireMemberRef(o.member_ref);
   if (!isCompanyCode(o.company_code)) throw Errors.invalidRequest();
+  const purpose = o.purpose === undefined || o.purpose === null ? DISCOUNT_TOKEN_PURPOSE : o.purpose;
+  if (!isPosOtpPurpose(purpose)) throw Errors.invalidRequest();
   return {
+    purpose,
     memberRef,
     orderRef: requireOrderRef(o),
     amount: requireNumber(o, 'amount', 0, 1_000_000_000_000),
@@ -86,7 +93,24 @@ export function parseDiscountTokenConsume(body: unknown): DiscountTokenConsumeDt
   return { discountToken, orderRef, memberRef, amountTotal: requireNumber(o, 'amount_total', 0, 1_000_000_000_000) };
 }
 
-/** R2 (§8.13): `POST /v1/pos/loyalty/balance` body `{ member_ref }`. */
-export function parseLoyaltyBalance(body: unknown): string {
-  return requireMemberRef(asRecord(body).member_ref);
+export interface LoyaltyBalanceDto {
+  memberRef: string;
+  /** K-8: kunci rate limit per kasir. Opsional demi kompatibilitas; Odoo WAJIB mengirim (tanpa → bucket bersama). */
+  posConfigId: number | null;
+  companyCode: CompanyCode | null;
+}
+
+/**
+ * R2 (§8.13) + K-8 (§9.6): `POST /v1/pos/loyalty/balance` body `{ member_ref, pos_config_id?, company_code? }`.
+ */
+export function parseLoyaltyBalance(body: unknown): LoyaltyBalanceDto {
+  const o = asRecord(body);
+  const memberRef = requireMemberRef(o.member_ref);
+  const posConfigId = o.pos_config_id === undefined || o.pos_config_id === null ? null : requireInt(o, 'pos_config_id', 1, 2_147_483_647);
+  let companyCode: CompanyCode | null = null;
+  if (o.company_code !== undefined && o.company_code !== null) {
+    if (!isCompanyCode(o.company_code)) throw Errors.invalidRequest();
+    companyCode = o.company_code;
+  }
+  return { memberRef, posConfigId, companyCode };
 }

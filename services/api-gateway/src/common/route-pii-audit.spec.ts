@@ -4,7 +4,9 @@ import { AuthController } from '../auth/auth.controller';
 import { MeController } from '../auth/me.controller';
 import { HealthController } from '../health/health.controller';
 import { MarketScoutController } from '../market-scout/market-scout.controller';
+import { MigrationController } from '../migration/migration.controller';
 import { PaymentWebhookController, PosPaymentsController } from '../payments/payments.controller';
+import { PosLoyaltyController } from '../pos/pos-loyalty.controller';
 import { PosController } from '../pos/pos.controller';
 import { PosPrivacyController } from '../privacy/pos-privacy.controller';
 import { ConsentController, DsarController, DsarReceiptController } from '../privacy/privacy.controller';
@@ -25,6 +27,8 @@ const CONTROLLERS: (new (...args: never[]) => unknown)[] = [
   PosPaymentsController,
   PaymentWebhookController,
   PosController,
+  PosLoyaltyController,
+  MigrationController,
   PosPrivacyController,
   ConsentController,
   DsarController,

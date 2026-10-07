@@ -1,6 +1,6 @@
 # otp — inti OTP + adapter WhatsApp
 
-Dipakai bersama oleh `pos` (purpose `pos_promo`) dan `auth` (purpose `login`). Kontrak: `docs/04` §3.1/§3.2.
+Dipakai bersama oleh `pos` (purpose `pos_promo`, `pos_redeem`), `auth` (`login`), dan `privacy` (`dsar`). Kontrak: `docs/04` §3.1/§3.2/§9.3.
 ADR/keputusan: D-11 (WhatsApp Cloud API resmi, **Baileys dilarang**), ADR OTP-offline opsi (a) (Proposed: OTP dinonaktifkan saat POS offline — ditegakkan di Odoo).
 
 ## Perilaku
@@ -8,7 +8,7 @@ ADR/keputusan: D-11 (WhatsApp Cloud API resmi, **Baileys dilarang**), ADR OTP-of
 - TTL OTP 180 s (`OTP_TTL_SECONDS`); key disimpan +600 s sebagai tombstone agar verify terlambat menjawab `expired`.
 - Maks 3 percobaan (`OTP_MAX_ATTEMPTS`); attempt dinaikkan atomik (`HINCRBY`) sebelum perbandingan `timingSafeEqual`; setelah habis → `locked`.
 - Sukses = `DEL` key; hanya pemanggil yang `DEL`=1 yang menang (sekali pakai, aman terhadap verify paralel).
-- `pos_promo`: `order_ref` verify harus sama dengan saat request (mismatch = attempt gagal).
+- `pos_promo` / `pos_redeem`: `order_ref` verify harus sama dengan saat request (mismatch = attempt gagal). Verify POS menerima kedua purpose (`alsoAccept`) karena body verify tidak memuat purpose; purpose challenge diteruskan ke klaim `discount_token`. Token `pos_redeem` hanya diterima reserve redeem; token `pos_promo` hanya diterima consume promo (docs/04 §9.3).
 - Audit `platform.otp_audit` untuk `sent|verified|failed|expired|locked` dengan `subject = member_hash` (bukan nomor HP) dan `ip_enc` (IP terenkripsi AES-256-GCM, AAD `efn:otp_audit.ip_enc:v1`). Retensi 90 hari (`OTP_AUDIT_RETENTION_DAYS`, job `RetentionService`). Kegagalan audit tidak memutus alur.
 - SEC-06: budget global pengiriman per jam per purpose (`OTP_GLOBAL_HOURLY_BUDGET` login, `OTP_POS_HOURLY_BUDGET` POS) → 429 + metrik `budget_exhausted`.
 - Gagal kirim WA → challenge dihapus, `503 otp_delivery_failed` (tidak membocorkan status keanggotaan karena semua nomor valid diperlakukan sama).

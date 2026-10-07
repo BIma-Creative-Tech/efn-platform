@@ -395,3 +395,38 @@ SEC-29 Fixed. SEC-31 Fixed sisi BFF (sisa: korelasi waktu, replay restore, CH la
 
 ## G12.5 Status SEC (bagian BFF)
 SEC-29 **Fixed** (semua secret BFF; spec statis + verifikasi runtime). SEC-34 **Fixed** sisi BFF (binding IP + biaya adaptif; sisa by design: PoW memperlambat, bukan mencegah — kontrol utama tetap rate limit + budget).
+
+---
+
+# Gelombang 13 — Fase 1 loyalty di POS (docs/04 §9 v4.0 + §9.6 v4.1, 7 Okt 2026)
+
+## G13.1 Endpoint (semua service key, identitas hanya di body)
+- `POST /v1/pos/otp/request` + `purpose` (`pos_promo` default | `pos_redeem`); verify menerima keduanya dan membawa purpose ke klaim `discount_token`. Token redeem ditolak consume promo (`invalid`), token promo ditolak reserve (`token_invalid`). Budget OTP POS per purpose.
+- `POST /v1/pos/loyalty/earn`, `/redeem/reserve`, `/redeem/commit` (K-3: + `member_ref`, `value_idr`), `/redeem/release` (K-5 idempoten), `/reverse` (K-6 `409 earn_pending`), `GET /v1/pos/loyalty/params` (tambahan), `POST /v1/pos/loyalty/balance` (K-8: + `pos_config_id?`, `company_code?`, rate limit per member & per pos_config).
+- K-7: `POST /internal/v1/migration/members` & `/opening-balance` (`MIGRATION_ENABLED`, header `X-EFN-Migration-Key`, secret `migration_api_key`).
+- Tabel kode/kontrak lengkap: `services/api-gateway/src/pos/README.md`, `src/migration/README.md`.
+
+## G13.2 Desain penting
+- **FIFO kedaluwarsa**: debit dialokasikan ke bucket `expires_at` (entri debit menyalin `expires_at` bucket) → saldo = SUM entri belum kedaluwarsa tetap benar. Utang = bucket NULL, dilunasi kredit berikutnya. Kedaluwarsa dibulatkan ke 00:00 WIB (bucket per hari).
+- **Konkurensi**: `pg_advisory_xact_lock(0x45464e4d, hash32)` per member untuk earn/reserve/commit/reverse/opening-balance; job sweeper `pg_try_advisory_xact_lock(0x45464e4c)`.
+- **K-3**: `expires_at` 15 menit = UI; `hold_until` (default 24 jam) = penahanan poin & batas commit; lewat → `reservation_expired`.
+- **K-4**: UNIQUE `token_jti` (sekali pakai, juga setelah release); retry identik → reservasi sama.
+- **K-6**: tabel `loyalty_pos_earn` mencatat setiap earn termasuk 0 poin (ledger tidak bisa menyimpan 0) → reverse tanpa catatan = `earn_pending`.
+- **K-2**: `LOYALTY_EARN_EXCLUDED_CATEGORIES` tidak ada di BFF.
+- Reservasi TIDAK menyimpan nomor HP (sempat `member_ref_enc`, dihapus setelah K-3 karena commit membawa `member_ref`).
+- Reverse: restore `floor` dulu, clawback `ceil` (memihak PT, kumulatif ≤ asal, EPS untuk galat float).
+- Error loyalty memakai format umum `{ error: { code, message } }` (bukan `{ ok, reason }`). Kode tambahan di luar daftar §9.3: `amount_mismatch`, `value_mismatch`, `reservation_exists`, `reservation_released`, `reservation_expired`, `already_committed`, `order_mismatch`, `idempotency_conflict`, `earn_limit_exceeded`, 404 `reservation_not_found`.
+
+## G13.3 Skema — `infra/postgres/init/05-platform-loyalty-pos.sql` (baru, idempoten, satu transaksi)
+`platform.loyalty_reservation` (+ `hold_until`, `token_jti` UNIQUE, unik parsial order aktif), `platform.loyalty_pos_earn` (PK order_ref), indeks ledger `(source, source_ref)`. Pemilik `efn_platform_owner`; `efn_bff` SELECT/INSERT/DELETE + UPDATE kolom status/commit saja; `efn_readonly` kolom non-PII (tanpa `member_hash`/`token_jti`). Erasure DSAR menghapus baris subjek di kedua tabel.
+
+## G13.4 Validasi
+- Container `node:22.12-alpine@sha256:51eff88a…`: `tsc` OK, `nest build` OK, `eslint` 0 error (2 warning lama), `CI=true jest` **30 suite, 406 test lulus** (+74). Spec baru: `pos/pos-loyalty.spec.ts`, `migration/migration.spec.ts` (Fastify nyata: path `/internal/v1/...`, 404 saat nonaktif, 401 kunci salah/kunci Odoo), tambahan OTP/pos/privacy. Fake DB `common/testing/fake-loyalty-db.ts` (undo-log rollback, mutex advisory lock; kontrol negatif membuktikan test konkurensi bermakna).
+- **PostgreSQL 16.6 nyata (throwaway, init 00–05 + 05 diulang)**: dist BFF dijalankan sebagai `efn_bff` — 10 reserve paralel @30 dari saldo 100 → tepat 3 sukses/7 `insufficient_points`; commit/replay/value_mismatch, release idempoten, earn_pending, reverse penuh + replay, sweeper paralel (satu skipped), migrasi idempoten; `efn_bff` ditolak UPDATE points/delta/pos_earn & DDL, boleh DELETE untuk erasure; tidak ada kolom `*_enc` di tabel baru. (Satu bug ditemukan & diperbaiki: komentar SQL tanpa `--`.)
+- **Belum**: SQL 05 TIDAK diterapkan ke stack dev bersama dan api-gateway dev TIDAK di-rebuild (stack sedang dipakai agent lain: ETL, CI Odoo). Smoke E2E (`bff_smoke.py`) tidak ditambah/dijalankan.
+
+## G13.5 Untuk agent lain / lead
+- **odoo-engineer**: (1) OTP redeem: `purpose: "pos_redeem"`; (2) selalu panggil earn untuk order ber-member, JUGA bila eligible 0 (K-6) — sebelum reverse; (3) commit kirim `member_ref` (partner order) + `value_idr` dari respons reserve; tangani `409 reservation_expired` (>24 jam) sebagai review manual; (4) 404 pada release = anggap selesai; (5) retry outbox untuk `earn_pending`/5xx/429; 409 lain = jangan retry; (6) balance kirim `pos_config_id` + `company_code`; (7) nilai poin/min/max dari `GET /v1/pos/loyalty/params`.
+- **devsecops**: buat secret `migration_api_key` (gen-secrets, ≥ 32 char, beda dari `odoo_bff_api_key`), mount ke api-gateway sebagai `MIGRATION_API_KEY_FILE`; `MIGRATION_ENABLED=false` default; route `/internal` sudah dikecualikan Traefik — pertahankan. Terapkan 05 sebelum deploy BFF (`psql -f /docker-entrypoint-initdb.d/05-platform-loyalty-pos.sql`). Alert opsional: `increase(efn_loyalty_pos_ops_total{op="commit",outcome="late"}[1h])`, `efn_loyalty_pos_ops_total{outcome="earn_limit_exceeded"}`.
+- **data-ai**: grant `efn_readonly` kolom non-PII `loyalty_reservation` & `loyalty_pos_earn` tersedia bila mart perlu; ledger punya `source` baru `pos_earn|pos_redeem|pos_reverse|migration_opening`; entri ledger bisa ber-`expires_at` (bukan lagi selalu NULL).
+- **architect/lead**: catat di docs/04: kode error tambahan (G13.2), field `hold_until` respons reserve, `GET /v1/pos/loyalty/params`, tabel `loyalty_pos_earn`, env `LOYALTY_RESERVATION_COMMIT_WINDOW_SECONDS`, `LOYALTY_POS_MAX_EARN_POINTS`, `LOYALTY_RL_*`, `LOYALTY_BALANCE_RL_*`, `LOYALTY_POS_EARN_RETENTION_DAYS`, `MIGRATION_ENABLED`; K-6 dilaporkan sebagai `{ error: { code: "earn_pending" } }` (bukan `{ reason }`). Kebijakan menunggu Finance: utang poin, restore ke bucket kedaluwarsa (diberi masa berlaku baru), masa berlaku saldo pembuka.

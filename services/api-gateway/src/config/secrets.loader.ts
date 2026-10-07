@@ -24,6 +24,8 @@ export const KNOWN_SECRET_FILES: Readonly<Record<string, string>> = {
   // v3 (docs/04 §8.1, §8.3)
   ALTCHA_HMAC_KEY: 'altcha_hmac_key',
   PAYMENT_PROVIDER_API_KEY: 'payment_provider_api_key',
+  // v4.1 (docs/04 §9.6 K-7): kunci endpoint migrasi, TERPISAH dari odoo_bff_api_key; wajib hanya bila MIGRATION_ENABLED
+  MIGRATION_API_KEY: 'migration_api_key',
   // Kredensial per service (docs/04 §7.3, SEC-02) — bukan lagi kredensial bersama/superuser
   PG_PASSWORD: 'pg_password_bff',
   RABBITMQ_PASSWORD: 'rabbitmq_password_bff',

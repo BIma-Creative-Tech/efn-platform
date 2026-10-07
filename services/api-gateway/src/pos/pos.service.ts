@@ -6,7 +6,7 @@ import { RateLimiter } from '../common/rate-limit/rate-limiter';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import { OtpService } from '../otp/otp.service';
 import { DiscountTokenService } from './discount-token.service';
-import { DiscountTokenConsumeDto, PosOtpRequestDto, PosOtpVerifyDto } from './dto/pos.dto';
+import { DiscountTokenConsumeDto, LoyaltyBalanceDto, PosOtpRequestDto, PosOtpVerifyDto } from './dto/pos.dto';
 
 export interface PosOtpRequestResponse {
   challenge_id: string;
@@ -48,11 +48,12 @@ export class PosService {
         window,
       );
     } catch (err) {
-      if (err instanceof ApiError && err.getStatus() === 429) this.otp.recordRateLimited('pos_promo');
+      if (err instanceof ApiError && err.getStatus() === 429) this.otp.recordRateLimited(dto.purpose);
       throw err;
     }
+    // Rate limit per member & per pos_config dibagi bersama pos_promo dan pos_redeem (satu kanal kasir).
     const res = await this.otp.issue({
-      purpose: 'pos_promo',
+      purpose: dto.purpose,
       memberRef: dto.memberRef,
       orderRef: dto.orderRef,
       companyCode: dto.companyCode,
@@ -63,8 +64,10 @@ export class PosService {
   }
 
   async verifyOtp(dto: PosOtpVerifyDto, ip: string | null): Promise<PosOtpVerifyResponse> {
+    // Body verify tidak memuat purpose: purpose dibawa challenge (pos_promo | pos_redeem) dan diteruskan ke token.
     const res = await this.otp.verify({
       purpose: 'pos_promo',
+      alsoAccept: ['pos_redeem'],
       challengeId: dto.challengeId,
       code: dto.code,
       orderRef: dto.orderRef,
@@ -74,6 +77,7 @@ export class PosService {
       throw new ApiError(400, { ok: false, reason: res.reason, attempts_left: res.attemptsLeft });
     }
     const token = this.tokens.issue({
+      purpose: res.purpose === 'pos_redeem' ? 'pos_redeem' : 'pos_promo',
       orderRef: res.orderRef ?? dto.orderRef,
       memberHash: res.memberHash,
       companyCode: res.companyCode ?? '',
@@ -95,8 +99,20 @@ export class PosService {
     return { ok: true };
   }
 
-  /** Nomor tidak dikenal → saldo 0 (tidak membocorkan status keanggotaan). */
-  async balance(memberRef: string): Promise<{ points_balance: number }> {
-    return { points_balance: await this.loyalty.balance(memberRef) };
+  /**
+   * Nomor tidak dikenal → saldo 0 (tidak membocorkan status keanggotaan). K-8 (§9.6): tanpa OTP; rate limit per member
+   * (`LOYALTY_BALANCE_RL_MEMBER_LIMIT`) dan per pos_config (`LOYALTY_BALANCE_RL_SOURCE_LIMIT`) per
+   * `LOYALTY_RL_WINDOW_SECONDS` — membatasi enumerasi saldo oleh kasir. Respons hanya saldo.
+   */
+  async balance(dto: LoyaltyBalanceDto): Promise<{ points_balance: number }> {
+    const window = this.config.loyaltyRateWindowSeconds;
+    const cfg = dto.posConfigId === null ? 'na' : `${dto.companyCode ?? 'na'}:${dto.posConfigId}`;
+    await this.limiter.enforce(`loy:bal:cfg:${cfg}`, this.config.loyaltyBalanceRateSourceLimit, window);
+    await this.limiter.enforce(
+      `loy:bal:member:${memberHash(this.config.memberHashPepper, dto.memberRef)}`,
+      this.config.loyaltyBalanceRateMemberLimit,
+      window,
+    );
+    return { points_balance: await this.loyalty.balance(dto.memberRef) };
   }
 }
