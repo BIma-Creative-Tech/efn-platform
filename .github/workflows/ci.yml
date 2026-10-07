@@ -212,7 +212,7 @@ jobs:
       # karena pick() hanya menerima modul di services/odoo/addons.
       EFN_TEST_MODULES: >-
         efn_core efn_audit efn_pos_otp_gate efn_kitting
-        efn_pos_payment_gateway efn_privacy
+        efn_pos_payment_gateway efn_pos_loyalty_ledger efn_privacy
         efn_setup_company efn_setup_pos efn_setup_mrp efn_setup_audit
       # Di-install SETELAH test, tanpa test: efn_setup_security menaikkan auth_password_policy.minlength ke 12,
       # sedangkan fixture test Odoo (mis. user `accountman` di AccountTestInvoicingCommon) memakai password < 12
@@ -310,9 +310,10 @@ jobs:
           --health-cmd "pg_isready -U odoo"
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
-      EFN_TOUR_MODULES: efn_pos_otp_gate,efn_pos_payment_gateway
+      EFN_TOUR_MODULES: efn_pos_otp_gate,efn_pos_payment_gateway,efn_pos_loyalty_ledger
       # Jumlah test tour yang WAJIB berjalan (HttpCase di-skip diam-diam bila Chrome/websocket tidak ada).
-      EFN_TOUR_MIN_TESTS: "5"
+      # 5 (OTP gate 3 + gateway 2) + 4 Poin EFN (Gelombang 13b).
+      EFN_TOUR_MIN_TESTS: "9"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Build image target test (runtime + Chrome headless)
@@ -377,7 +378,7 @@ jobs:
           openssl x509 -in secrets/tls_api_gateway_crt.txt -noout -ext subjectAltName | grep -q 'DNS:api-gateway'
           openssl x509 -in secrets/tls_clickhouse_crt.txt -noout -ext subjectAltName | grep -q 'IP Address:127.0.0.1'
           # Klien mTLS (docs/04 §8.5) punya clientAuth; server murni TIDAK
-          for s in traefik prometheus grafana promtail ocr_worker blackbox_exporter cadvisor; do
+          for s in traefik prometheus grafana promtail ocr_worker blackbox_exporter cadvisor etl metabase_provision; do
             openssl x509 -in "secrets/tls_${s}_crt.txt" -noout -ext extendedKeyUsage | grep -q 'Client Authentication'
           done
           if openssl x509 -in secrets/tls_postgres_crt.txt -noout -ext extendedKeyUsage | grep -q 'Client Authentication'; then
@@ -456,7 +457,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck scripts/*.sh scripts/host/efn-deploy scripts/host/*.sh scripts/smoke/*.sh infra/backup/postgres/*.sh \
+          shellcheck -x scripts/*.sh scripts/lib/*.sh scripts/host/efn-deploy scripts/host/*.sh scripts/smoke/*.sh tests/load/*.sh infra/backup/postgres/*.sh \
             infra/postgres/init/*.sh infra/wireguard/*.sh
           shellcheck -s sh infra/minio/*.sh infra/redis/*.sh infra/rabbitmq/*.sh infra/clickhouse/*.sh infra/s3-gateway/*.sh \
             infra/acme/*.sh scripts/acme-test/*.sh
@@ -470,13 +471,19 @@ jobs:
             -v "$PWD/secrets/efn_ca_crt.txt:/run/secrets/efn_ca_crt:ro" \
             haproxy:3.2.25-alpine@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be \
             haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
-      # SEC-36/SEC-42: wrapper deploy host diuji dengan cosign palsu di container sekali pakai (32 kasus: replay/
-      # downgrade, IMAGE_* lewat env, registry asing, trust anchor PKI, tanda tangan, allowlist env)
+      # SEC-36/SEC-42/SEC-50: wrapper deploy host diuji dengan cosign palsu di container sekali pakai (74 kasus: replay/
+      # downgrade, IMAGE_* lewat env, registry asing, trust anchor PKI, tanda tangan, allowlist env, topologi dipin di
+      # deploy.conf, config manifest, karakter kontrol/multi-baris, kontrol keamanan production, lib deploy-validate)
       - name: efn-deploy regression (cosign palsu)
         run: |
           docker run --rm -v "$PWD:/src:ro" \
             python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea \
             bash /src/scripts/host/test-efn-deploy.sh
+      # G13 (data-AI): dashboard Metabase sebagai kode - validasi definisi (SQL hanya efn_dwh.v_*, TLS wajib) + ruff.
+      # Container sekali pakai (image python yang sama dengan uji efn-deploy), direktori repo read-only.
+      - name: pytest + ruff infra/metabase
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -w /src/infra/metabase -e PYTHONDONTWRITEBYTECODE=1             python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea             sh -c 'pip install -q --disable-pip-version-check pytest==8.3.4 ruff==0.16.10                    && ruff check --no-cache . && ruff format --no-cache --check .                    && python -m pytest -q -p no:cacheprovider tests'
       # SEC-37: ACME DNS-01 terpisah dari Traefik, diuji terhadap Pebble (server ACME uji Let's Encrypt) di network
       # --internal sekali pakai: penerbitan, hot-reload Traefik tanpa restart, izin volume, mode nonaktif, <VAR>_FILE
       - name: acme-dns regression (Pebble)
@@ -489,12 +496,14 @@ jobs:
                      and ([.services.traefik.environment // {} | keys[] | select(test("_FILE$|TOKEN"))] | length) == 0
                      and (.services["acme-dns"].ports // [] | length) == 0
                      and (.services["acme-dns"].networks | keys) == ["egress"]'
+      # G13: hadolint v2.14.0 (image ber-digest) menggantikan hadolint-action v3.1.0 (hadolint 2.12): 2.12 tidak
+      # mengenal `ADD --checksum` (BuildKit) yang dipakai infra/metabase/Dockerfile untuk memin jar driver.
       - name: hadolint
-        uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf  # v3.1.0
-        with:
-          recursive: true
-          config: .hadolint.yaml
-          failure-threshold: warning
+        run: |
+          mapfile -t files < <(find . -name Dockerfile -not -path '*/node_modules/*' | sort)
+          docker run --rm -v "$PWD:/src:ro" -w /src \
+            hadolint/hadolint:v2.14.0@sha256:27086352fd5e1907ea2b934eb1023f217c5ae087992eb59fde121dce9c9ff21e \
+            hadolint --config .hadolint.yaml --failure-threshold warning "${files[@]}"
       - name: yamllint
         run: pipx run yamllint -c .yamllint.yml infra .github
 

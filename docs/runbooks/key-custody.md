@@ -75,6 +75,15 @@ EFN_GITHUB_REPO=<org>/<repo>
 EFN_IMAGE_PREFIX=ghcr.io/<org-huruf-kecil>/
 EFN_PKI_ROOT_SHA256=<64 hex>
 EFN_PKI_EXTRA_TRUST_SHA256=''
+# SEC-50 (gelombang 13): topologi host DIPIN di sini (stdin efn-deploy menolaknya). Lihat §4c.
+TRAEFIK_DOMAIN=<domain>
+EFN_PUBLIC_BIND=<IPv4 host untuk 80/443>
+EFN_WG_BIND=10.88.0.1
+EFN_WG_HTTPS_PORT=443
+EFN_WG_OUTLET_CIDR=10.88.0.0/16
+EFN_WG_STAFF_CIDR=10.89.0.0/16
+COMPOSE_PROFILES=core,data,ai,observability,ops
+EFN_ALLOW_CONTROL_OFF=''
 EOF
 chmod 0644 /etc/efn/deploy.conf
 
@@ -115,11 +124,12 @@ sidik jari root CA + CA transisi. `efn-deploy` di host:
 |---|---|
 | `IMAGE_*` | dikirim lewat env (tidak lagi di allowlist); di manifest bukan `${EFN_IMAGE_PREFIX}<svc>@sha256:<64 hex>`; `cosign verify` **di host** gagal untuk identitas `build-push.yml@<signer_ref>` |
 | Trust anchor | `EFN_PKI_ROOT_CRT` ≠ tepat 1 sertifikat atau sidik jari ≠ `EFN_PKI_ROOT_SHA256`; root di manifest ≠ pin; intermediate tidak diterbitkan root yang dipin / bukan CA; setiap sertifikat `EFN_PKI_EXTRA_TRUST` tidak ada di `EFN_PKI_EXTRA_TRUST_SHA256` **dan** manifest |
-| Lingkungan | manifest `app_env` ≠ `EFN_APP_ENV`; env `APP_ENV` ≠ `EFN_APP_ENV`; production bukan `X.Y.Z` dari `refs/tags/vX.Y.Z` |
+| Lingkungan | manifest `app_env` ≠ `EFN_APP_ENV`; `APP_ENV` dikirim lewat stdin (G13: `APP_ENV` = `EFN_APP_ENV`); production bukan `X.Y.Z` dari `refs/tags/vX.Y.Z` |
+| Konfigurasi (G13, SEC-50) | lihat §4c |
 | Anti-replay/downgrade | `seq` < `seq` terakhir di `/var/lib/efn/last-release` (root 0600); `seq` sama tetapi isi berbeda; production: versi semver turun. Rilis identik (sha256 sama) boleh di-deploy ulang |
 
 Tidak ada yang ditulis ke `/opt/efn` sebelum semua cek lolos. Uji regresi: `scripts/host/test-efn-deploy.sh`
-(cosign palsu, 32 kasus; CI job `infra`).
+(cosign palsu, 74 kasus sejak gelombang 13; CI job `infra`).
 
 **Rollback ke rilis lama (sengaja):** jalankan workflow Deploy dengan tag lama → seq baru, versi lebih rendah →
 ditolak. Superadmin di host mengizinkan **sekali** untuk arsip tertentu:
@@ -140,6 +150,38 @@ menjalankan image/skrip lain atau memasang CA lain. Mitigasi: kunci SSH hanya di
 auditd `-k efn_deploy`, dan baris `logger -t efn-deploy` (journald) yang dikirim ke penyimpanan log terpisah;
 tinjau `journalctl -t efn-deploy` setelah setiap deploy (alert Loki untuk journald host = backlog: Promtail saat
 ini hanya membaca log container).
+
+### 4c. Konfigurasi non-rahasia: topologi dipin di host, konfigurasi ditandatangani (SEC-50, gelombang 13)
+
+Sebelum G13, pemegang kunci SSH deploy (dengan rilis bertanda tangan asli) dapat mengirim `EFN_WG_BIND=<IP publik>` +
+`EFN_WG_STAFF_CIDR=0.0.0.0/0` (membuka `erp.`/`bi.`/`ops.` ke internet), menyisipkan baris ke `.env` lewat nilai
+multi-baris, atau mematikan `RABBITMQ_STRICT_PERMISSIONS`/`ETL_AUDIT_COPY_ENABLED`. Sekarang setiap nilai punya SATU
+sumber, dan stdin `efn-deploy` hanya membawa secret:
+
+| Sumber | Variabel | Siapa yang mengubah |
+|---|---|---|
+| `/etc/efn/deploy.conf` (root) | `TRAEFIK_DOMAIN`, `EFN_PUBLIC_BIND`, `EFN_WG_BIND`, `EFN_WG_HTTPS_PORT`, `EFN_WG_OUTLET_CIDR`, `EFN_WG_STAFF_CIDR`, `COMPOSE_PROFILES`, `EFN_ALLOW_CONTROL_OFF` | Superadmin di host (catat di register perubahan) |
+| Manifest `efn-release.json` → `config` (di dalam arsip bertanda tangan) | `ACME_*`, `PAYMENT_PROVIDER`, `PG_SUPERUSER`, `WHATSAPP_*`, `RABBITMQ_STRICT_PERMISSIONS`, retensi, `CONSENT_*`, `DSAR_DELETE_GRACE_DAYS`, `ETL_ENABLE_*`, `ETL_AUDIT_COPY_ENABLED`, `OLLAMA_VISION_MODEL`, `MIGRATION_ENABLED`, `METABASE_ADMIN_EMAIL` | GitHub Environment **vars** (proses PR/approval environment), ditandatangani `deploy.yml` |
+| stdin `env.b64` | `GHCR_USER`, `GHCR_TOKEN`, `EFN_PKI_*`, secret di `scripts/secrets.list` | GitHub Environment **secrets** |
+
+Aturan (`scripts/lib/deploy-validate.sh`, dipakai `efn-deploy` SEBELUM menulis `/opt/efn` dan lagi oleh `deploy.sh`):
+- `EFN_WG_BIND` wajib IPv4 di `10.88.0.0/16` atau `10.89.0.0/16`, bukan `EFN_PUBLIC_BIND`; `deploy.sh` juga mewajibkan
+  alamat itu ada di interface `wg0` (`ip -4 addr show dev wg0`).
+- `EFN_WG_*_CIDR` wajib CIDR kanonik di dalam `10.88.0.0/15` dengan prefix ≥ /16 (`0.0.0.0/0`, `10.0.0.0/8`,
+  `192.168.x` ditolak). `EFN_PUBLIC_BIND` bukan `0.0.0.0`/loopback/subnet WG.
+- Semua nilai: regex per variabel, karakter kontrol (newline, CR, ESC, …) ditolak — PEM `EFN_PKI_*` hanya boleh newline.
+  `.env` ditulis "satu kunci satu baris" dan jumlah barisnya diverifikasi ulang.
+- Production menolak `RABBITMQ_STRICT_PERMISSIONS=false` dan `ETL_AUDIT_COPY_ENABLED=false`, kecuali nama variabel itu
+  dicantumkan Superadmin di `EFN_ALLOW_CONTROL_OFF` (darurat; hapus lagi setelahnya). `COMPOSE_PROFILES` production
+  wajib memuat `core,data,observability`. `PAYMENT_PROVIDER=mock` ditolak.
+- Jalur manual `sudo -E bash deploy.sh`: nilai topologi dari env yang BERBEDA dengan pin `deploy.conf` → ditolak.
+
+**Migrasi host lama (sekali):** tambahkan kunci topologi di atas ke `deploy.conf` (nilai = GitHub vars lama), pasang
+ulang `efn-deploy` (sha256 dari PR), lalu deploy. GitHub vars `EFN_*`/`COMPOSE_PROFILES`/`TRAEFIK_DOMAIN` boleh
+tetap ada (TRAEFIK_DOMAIN dipakai smoke test workflow) tetapi tidak lagi dikirim ke host. Rilis lama (schema 1) ditolak.
+**Secret baru G13** di GitHub Environment: `EFN_AUDIT_SINK_KEY` (≥ 32 byte acak, [SA]), `METABASE_ADMIN_PASSWORD`,
+`MIGRATION_API_KEY` (hex, berbeda dari `ODOO_BFF_API_KEY`). PKI: service baru `etl`, `metabase-provision` →
+intermediate staging/prod diterbitkan ulang ([internal-pki.md](internal-pki.md#service-baru)).
 
 ### Mekanisme uid: kenapa file secret 0444 di dalam direktori 0750
 

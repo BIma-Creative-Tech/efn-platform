@@ -113,3 +113,14 @@ Traefik: acme-dns-certs di-mount READ-ONLY SEBAGAI /etc/traefik/dynamic (direkto
 - Rotasi terjadwal: buat token baru (cakupan sama) → perbarui secret Environment → deploy → cabut token lama.
 - Dugaan kompromi host atau container `acme-dns` (Traefik tidak lagi memegang token): cabut token di Cloudflare **segera**, periksa audit log Cloudflare (perubahan DNS) dan CT
   log (crt.sh) untuk sertifikat yang tidak dikenal pada domain, terbitkan token baru setelah host bersih.
+
+## 6. Pemisahan penulis konfigurasi Traefik (gelombang 13, SEC-53)
+- `acme-dns` (network `egress`, pemegang token DNS) hanya menulis PEM `efn-wg.crt`/`.key` ke volume `acme-dns-out`.
+- `acme-publish` (`infra/acme/acme-publish.sh`; `network_mode: none`, read-only, cap_drop ALL, uid 65533) membaca PEM
+  (read-only), memvalidasi PEM murni (crt 1–5 blok CERTIFICATE, kunci tepat 1 blok), lalu menulis crt/key berversi +
+  `acme-dns.yml` dari template tetap (hanya `tls.certificates`) ke volume `traefik-dynamic` (= `/etc/traefik/dynamic`
+  read-only di Traefik). `base/` dan `dev/` milik root dalam direktori sticky 1770 (dibuat `acme-dns-init`).
+- Gejala: log `acme-publish: DITOLAK ...` = PEM dari acme-dns tidak murni → Traefik tetap memakai sertifikat lama;
+  perlakukan sebagai dugaan kompromi `acme-dns` ([security-incident.md](security-incident.md)), periksa image/log lego.
+- Uji: `scripts/test-acme-dns.sh` (16 cek, termasuk PEM berisi router YAML ditolak dan `base/` tidak dapat diubah).
+- Migrasi host: volume lama `acme-dns-certs` tidak dipakai lagi (boleh dihapus setelah sertifikat terbit di volume baru).

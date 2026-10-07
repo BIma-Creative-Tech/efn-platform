@@ -1,5 +1,5 @@
 # HANYA UJI (scripts/test-acme-dns.sh; di luar infra/, tidak pernah di-mount compose): meniru bind mount infra/traefik/dynamic -> /etc/traefik/dynamic/base di dalam
-# volume acme-dns-certs (layout produksi SEC-37).
+# volume traefik-dynamic (layout produksi SEC-37/SEC-53).
 http:
   middlewares:
     acme-test-noop:

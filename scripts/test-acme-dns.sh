@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Uji integrasi SEC-37: komponen ACME DNS-01 terpisah (infra/acme/acme-dns.sh) + Traefik provider file.
+# Uji integrasi SEC-37/SEC-53: ACME DNS-01 terpisah (infra/acme/acme-dns.sh) + penulis konfigurasi Traefik terpisah
+# (infra/acme/acme-publish.sh, network none) + Traefik provider file.
 # Memakai Pebble + pebble-challtestsrv (server ACME/DNS uji open source Let's Encrypt) di network Docker --internal
 # sekali pakai: tanpa domain, tanpa token, tanpa akses internet. Dijalankan di CI job infra dan lokal (Git Bash).
 #
 # Membuktikan:
 #   1. acme-dns-init + acme-dns non-root (65532:0, read-only, cap_drop ALL) menerbitkan sertifikat via DNS-01.
-#   2. Traefik (image & digest sama dengan compose, read-only, cap_drop ALL, TANPA token) menyajikan sertifikat itu
-#      lewat SNI dari volume read-only di subdirektori /etc/traefik/dynamic/acme.
+#   2. acme-publish (65533:0, network none) memasang PEM ke volume traefik-dynamic; Traefik (image & digest sama
+#      dengan compose, read-only, cap_drop ALL, TANPA token) menyajikan sertifikat itu lewat SNI.
 #   3. Perpanjangan (--renew-force) -> Traefik menyajikan sertifikat baru TANPA restart; file versi lama dihapus.
-#   4. Izin: kunci 0640 65532:0 di volume certs; kunci akun ACME tidak pernah masuk volume certs.
+#   4. Izin: kunci 0640 65533:0 di volume traefik-dynamic; kunci akun ACME tidak pernah keluar dari volume data.
 #   5. Mode nonaktif (token `disabled`) tidak menghubungi CA; lego v5 membaca token dari <VAR>_FILE.
+#   6. SEC-53: PEM berisi YAML/router disisipkan ke acme-dns-out -> DITOLAK acme-publish, konfigurasi lama tetap;
+#      acme-publish tidak bisa mengganti nama base/ (sticky + milik root); acme-dns tidak me-mount traefik-dynamic.
 set -euo pipefail
 export MSYS_NO_PATHCONV=1   # Git Bash: jangan ubah path container (/data, /certs, ...)
 
@@ -36,12 +39,12 @@ fail() { echo "FAIL  $*"; FAIL=1; }
 cleanup() {
   docker rm -f "$N-dns" "$N-pebble" "$N-traefik" > /dev/null 2>&1 || true
   docker network rm "$N" > /dev/null 2>&1 || true
-  docker volume rm "$N-data" "$N-certs" "$N-ca" > /dev/null 2>&1 || true
+  docker volume rm "$N-data" "$N-out" "$N-dyn" "$N-ca" > /dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 docker network create --internal "$N" > /dev/null
-for v in data certs ca; do docker volume create "$N-$v" > /dev/null; done
+for v in data out dyn ca; do docker volume create "$N-$v" > /dev/null; done
 
 docker run -d --name "$N-dns" --network "$N" --network-alias challtestsrv "$CHALL" \
   -defaultIPv4 "" -defaultIPv6 "" -http01 "" -https01 "" -tlsalpn01 "" -doh "" \
@@ -58,19 +61,26 @@ docker cp "$N-pebble:/test/certs/pebble.minica.pem" - \
 
 # 1. init (sama dengan compose acme-dns-init)
 docker run --rm --user 0:0 --cap-drop ALL --cap-add CHOWN --cap-add FOWNER --security-opt no-new-privileges \
-  --read-only -v "$N-data:/data" -v "$N-certs:/certs" -v "$ACME_SRC:/opt/efn-acme:ro" \
+  --read-only -v "$N-data:/data" -v "$N-out:/out" -v "$N-dyn:/dyn" -v "$ACME_SRC:/opt/efn-acme:ro" \
   --entrypoint /bin/sh "$LEGO" /opt/efn-acme/acme-dns-init.sh
 
 acme() {
   # $@ = argumen env tambahan (-e ...)
   docker run --rm --network "$N" --user 65532:0 --read-only --tmpfs /tmp --cap-drop ALL \
     --security-opt no-new-privileges \
-    -v "$N-data:/data" -v "$N-certs:/certs" -v "$N-ca:/ca:ro" -v "$ACME_SRC:/opt/efn-acme:ro" \
+    -v "$N-data:/data" -v "$N-out:/out" -v "$N-ca:/ca:ro" -v "$ACME_SRC:/opt/efn-acme:ro" -e ACME_OUT=/out \
     -e ACME_ONESHOT=1 -e ACME_DOMAINS="$DOM,bi.efn.test" -e ACME_EMAIL=ops@efn.test \
     -e ACME_SERVER=https://pebble:14000/dir -e LEGO_CA_CERTIFICATES=/ca/pebble.minica.pem \
     -e ACME_DNS_RESOLVERS=challtestsrv:8053 -e ACME_TOKEN_FILE=/run/secrets/none \
-    -e EXEC_PATH=/ca/hook.sh -e ACME_TRAEFIK_DIR=/etc/traefik/dynamic "$@" \
+    -e EXEC_PATH=/ca/hook.sh "$@" \
     --entrypoint /bin/sh "$LEGO" /opt/efn-acme/acme-dns.sh
+}
+# acme-publish satu siklus (sama dengan compose: 65533:0, network none, read-only, cap_drop ALL)
+publish() {
+  docker run --rm --network none --user 65533:0 --read-only --tmpfs /tmp --cap-drop ALL \
+    --security-opt no-new-privileges -v "$N-out:/in:ro" -v "$N-dyn:/dyn" -v "$ACME_SRC:/opt/efn-acme:ro" \
+    -e ACME_ONESHOT=1 -e ACME_IN=/in -e ACME_DYN=/dyn -e ACME_TRAEFIK_DIR=/etc/traefik/dynamic \
+    --entrypoint /bin/sh "$LEGO" /opt/efn-acme/acme-publish.sh
 }
 
 # 5a. Mode nonaktif: token `disabled`, provider cloudflare -> exit 0 tanpa request ACME
@@ -90,8 +100,8 @@ else
   pass "lego v5 membaca token dari CF_DNS_API_TOKEN_FILE"
 fi
 # bersihkan sisa percobaan (akun/pesanan gagal) agar penerbitan berikut bersih
-docker run --rm -v "$N-data:/data" -v "$N-certs:/certs" --entrypoint /bin/sh "$LEGO" \
-  -c 'rm -rf /data/certificates; rm -f /certs/*.crt /certs/*.key /certs/*.yml; true'
+docker run --rm -v "$N-data:/data" -v "$N-out:/out" --entrypoint /bin/sh "$LEGO" \
+  -c 'rm -rf /data/certificates; rm -f /out/*.crt /out/*.key; true'
 
 # 1. Penerbitan pertama
 if out=$(acme -e ACME_DNS_PROVIDER=exec -e ACME_EXTRA_ARGS="--dns.propagation.wait=1s" 2>&1); then
@@ -99,15 +109,20 @@ if out=$(acme -e ACME_DNS_PROVIDER=exec -e ACME_EXTRA_ARGS="--dns.propagation.wa
 else
   fail "penerbitan: $(tail -15 <<< "$out")"; exit 1
 fi
+if out=$(publish 2>&1) && grep -q 'dipasang untuk Traefik' <<< "$out"; then
+  pass "acme-publish memasang PEM tervalidasi ke traefik-dynamic"
+else
+  fail "acme-publish: $out"
+fi
 
 # 2. Traefik membaca volume certs (read-only) di subdirektori provider file, tanpa token
 docker run -d --name "$N-traefik" --network "$N" --network-alias traefik --read-only --tmpfs /tmp --cap-drop ALL \
-  --security-opt no-new-privileges -v "$N-certs:/etc/traefik/dynamic:ro" -v "$BASE_SRC:/etc/traefik/dynamic/base:ro" "$TRAEFIK" \
+  --security-opt no-new-privileges -v "$N-dyn:/etc/traefik/dynamic:ro" -v "$BASE_SRC:/etc/traefik/dynamic/base:ro" "$TRAEFIK" \
   --log.level=DEBUG --entrypoints.wg.address=:8443 --entrypoints.wg.http.tls=true \
   --providers.file.directory=/etc/traefik/dynamic --providers.file.watch=true > /dev/null
 
 served() {
-  docker run --rm --network "$N" -v "$N-certs:/certs:ro" --entrypoint /bin/sh "$TRAEFIK_CLIENT" -c '
+  docker run --rm --network "$N" -v "$N-dyn:/certs:ro" --entrypoint /bin/sh "$TRAEFIK_CLIENT" -c '
     set -e
     srv=$(echo | openssl s_client -connect traefik:8443 -servername '"$DOM"' 2>/dev/null | openssl x509 -noout -fingerprint -sha256)
     f=$(ls /certs/*.crt)
@@ -129,13 +144,17 @@ wait_match() {
 if r1=$(wait_match); then pass "Traefik menyajikan sertifikat Pebble untuk $DOM (${r1%%|*})"; else fail "Traefik: $r1"; fi
 
 # 4. Izin & isolasi
-perm=$(docker run --rm -v "$N-certs:/certs:ro" -v "$N-data:/data:ro" --entrypoint /bin/sh "$LEGO" -c \
-  'stat -c "%a %u:%g" /certs/*.key; stat -c "%a" /data; ls -R /certs | grep -c "accounts\|\.json" || true')
-if [[ "$perm" == $'640 65532:0\n700\n0' ]]; then pass "izin kunci 0640 65532:0, /data 0700, akun ACME tidak di volume certs"; else fail "izin: $perm"; fi
+perm=$(docker run --rm -v "$N-dyn:/dyn:ro" -v "$N-out:/out:ro" -v "$N-data:/data:ro" --entrypoint /bin/sh "$LEGO" -c \
+  'stat -c "%a %u:%g" /dyn/*.key; stat -c "%a" /data; stat -c "%a %u:%g" /dyn /dyn/base;
+   ls -R /dyn /out | grep -c "accounts\|\.json" || true')
+if [[ "$perm" == $'640 65533:0\n700\n1770 0:0\n755 0:0\n0' ]]; then
+  pass "izin: kunci 0640 65533:0, /data 0700, /dyn 1770 root, base/ root, akun ACME tidak keluar dari volume data"
+else fail "izin: $perm"; fi
 
 # 3. Perpanjangan paksa -> Traefik memuat sertifikat baru tanpa restart
-if out=$(acme -e ACME_DNS_PROVIDER=exec -e ACME_EXTRA_ARGS="--dns.propagation.wait=1s --renew-force --no-random-sleep" 2>&1); then
-  pass "perpanjangan paksa"
+if out=$(acme -e ACME_DNS_PROVIDER=exec -e ACME_EXTRA_ARGS="--dns.propagation.wait=1s --renew-force --no-random-sleep" 2>&1) \
+   && publish > /dev/null 2>&1; then
+  pass "perpanjangan paksa + publish"
 else
   fail "perpanjangan: $(tail -15 <<< "$out")"
 fi
@@ -157,6 +176,36 @@ if grep -q acme-test-noop <<< "$tlog"; then
   pass "konfigurasi base/ (bind mount di dalam volume ro) tetap dimuat"
 else
   fail "konfigurasi base/ tidak dimuat"
+fi
+
+# 6. SEC-53: acme-dns terkompromi menyisipkan konfigurasi Traefik lewat PEM -> ditolak; konfigurasi lama tetap
+yml_before=$(docker run --rm -v "$N-dyn:/dyn:ro" --entrypoint /bin/cat "$LEGO" /dyn/acme-dns.yml)
+docker run --rm --user 65532:0 -v "$N-out:/out" --entrypoint /bin/sh "$LEGO" -c '
+  { cat /out/efn-wg.crt; printf "http:\n  routers:\n    evil:\n      rule: Host(\`api.x\`)\n      service: odoo@docker\n"; } > /out/.x
+  mv -f /out/.x /out/efn-wg.crt'
+out=$(publish 2>&1 || true)
+yml_after=$(docker run --rm -v "$N-dyn:/dyn:ro" --entrypoint /bin/sh "$LEGO" -c 'cat /dyn/acme-dns.yml; ls /dyn')
+if grep -q 'DITOLAK' <<< "$out" && [[ "$yml_after" == "$yml_before"* ]] && ! grep -q 'evil\|routers' <<< "$yml_after"; then
+  pass "PEM berisi router YAML ditolak acme-publish; konfigurasi lama tetap"
+else
+  fail "PEM jahat: $out | $yml_after"
+fi
+docker run --rm --user 65532:0 -v "$N-out:/out" --entrypoint /bin/sh "$LEGO" -c \
+  'printf -- "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n-----BEGIN EC PRIVATE KEY-----\nAAAA\n-----END EC PRIVATE KEY-----\n" > /out/efn-wg.key'
+# crt dipulihkan (sah) agar yang diuji benar-benar penolakan kunci
+docker run --rm --user 65532:0 -v "$N-out:/out" -v "$N-data:/data:ro" --entrypoint /bin/sh "$LEGO" -c 'cp /data/certificates/efn-wg.crt /out/efn-wg.crt && chmod 0640 /out/efn-wg.crt'
+out=$(publish 2>&1 || true)
+if grep -q 'DITOLAK: /in/efn-wg.key' <<< "$out"; then pass "kunci berisi >1 blok PEM ditolak"; else fail "kunci multi-blok tidak ditolak: $out"; fi
+if docker run --rm --user 65533:0 --cap-drop ALL -v "$N-dyn:/dyn" --entrypoint /bin/sh "$LEGO" -c \
+     'mv /dyn/base /dyn/x 2>/dev/null || rm -rf /dyn/base 2>/dev/null || mkdir /dyn/base/x 2>/dev/null'; then
+  fail "acme-publish bisa mengubah titik mount base/"
+else
+  pass "acme-publish tidak bisa mengganti nama/menghapus/menulis base/ (sticky, milik root)"
+fi
+if awk '/^  acme-dns:$/{f=1; next} f && /^  [a-z]/{f=0} f' "$COMPOSE" | grep -q 'traefik-dynamic'; then
+  fail "compose: acme-dns me-mount traefik-dynamic"
+else
+  pass "compose: acme-dns tidak me-mount traefik-dynamic"
 fi
 
 if [[ $FAIL == 0 ]]; then echo "test-acme-dns: SEMUA LULUS"; else echo "test-acme-dns: ADA YANG GAGAL"; exit 1; fi

@@ -84,7 +84,8 @@ networks:
 volumes:
   traefik-acme:          # acme.json resolver HTTP-01 host publik (Traefik)
   acme-dns-data:         # SEC-37: kunci akun ACME + sertifikat asli lego, HANYA service acme-dns
-  acme-dns-certs:        # SEC-37: crt/key berversi + acme-dns.yml, ditulis acme-dns, dibaca Traefik (ro)
+  acme-dns-out:          # SEC-53: PEM crt/key hasil acme-dns (rw acme-dns, ro acme-publish). BUKAN direktori Traefik
+  traefik-dynamic:       # SEC-53: direktori provider file Traefik (ro); satu-satunya penulis = acme-publish (network none)
   pg-data:
   redis-data:
   rabbitmq-data:
@@ -142,6 +143,10 @@ secrets:
   altcha_hmac_key: { file: ../../secrets/altcha_hmac_key.txt }
   payment_provider_api_key: { file: ../../secrets/payment_provider_api_key.txt }   # mount: docker-compose.payment.yml
   acme_dns_api_token: { file: ../../secrets/acme_dns_api_token.txt }
+  # G13: HMAC baris sink audit Odoo (SEC-51; hanya odoo + etl), admin Metabase (provision), endpoint migrasi BFF (K-7)
+  efn_audit_sink_key: { file: ../../secrets/efn_audit_sink_key.txt }
+  metabase_admin_password: { file: ../../secrets/metabase_admin_password.txt }
+  migration_api_key: { file: ../../secrets/migration_api_key.txt }
   # turunan (scripts/derive-secrets.sh)
   member_hash_pepper: { file: ../../secrets/member_hash_pepper.txt }
   minio_prometheus_token: { file: ../../secrets/minio_prometheus_token.txt }
@@ -188,6 +193,11 @@ secrets:
   tls_loki_key: { file: ../../secrets/tls_loki_key.txt }
   tls_promtail_crt: { file: ../../secrets/tls_promtail_crt.txt }
   tls_promtail_key: { file: ../../secrets/tls_promtail_key.txt }
+  # G13: klien mTLS (clientAuth saja): etl -> loki-tls (verifikasi sink v2), metabase-provision -> metabase-tls
+  tls_etl_crt: { file: ../../secrets/tls_etl_crt.txt }
+  tls_etl_key: { file: ../../secrets/tls_etl_key.txt }
+  tls_metabase_provision_crt: { file: ../../secrets/tls_metabase_provision_crt.txt }
+  tls_metabase_provision_key: { file: ../../secrets/tls_metabase_provision_key.txt }
   tls_uptime_kuma_crt: { file: ../../secrets/tls_uptime_kuma_crt.txt }
   tls_uptime_kuma_key: { file: ../../secrets/tls_uptime_kuma_key.txt }
   tls_node_exporter_crt: { file: ../../secrets/tls_node_exporter_crt.txt }
@@ -273,7 +283,7 @@ services:
     depends_on:
       docker-socket-proxy-tls:
         condition: service_healthy
-      acme-dns-init:   # titik mount base/ dev/ di volume acme-dns-certs (SEC-37)
+      acme-dns-init:   # titik mount base/ dev/ (milik root, sticky) di volume traefik-dynamic (SEC-37/SEC-53)
         condition: service_completed_successfully
     command:
       - --configFile=/etc/traefik/traefik.yml
@@ -292,15 +302,16 @@ services:
       # Tambahan allowlist (dev: bridge Docker Desktop). Prod: tidak diset (127.0.0.1/32).
       - EFN_INTERNAL_EXTRA_CIDR=${EFN_INTERNAL_EXTRA_CIDR:-127.0.0.1/32}
     # SEC-37: Traefik (internet-facing) TIDAK memegang token DNS. Sertifikat host wg-https (erp./bi./ops./status.)
-    # diterbitkan service `acme-dns` dan dibaca dari volume acme-dns-certs (read-only) lewat provider file.
+    # diterbitkan service `acme-dns` dan dipasang `acme-publish` ke volume traefik-dynamic (read-only di sini).
     secrets: [efn_ca_crt, tls_traefik_crt, tls_traefik_key]
     volumes:
       - ../traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      # SEC-37: volume acme-dns-certs = direktori provider file itu sendiri (read-only). Watch Traefik (fsnotify)
-      # TIDAK rekursif -> acme-dns.yml harus di puncak agar sertifikat baru dimuat tanpa restart (diuji
+      # SEC-37/SEC-53: volume traefik-dynamic = direktori provider file itu sendiri (read-only). Watch Traefik
+      # (fsnotify) TIDAK rekursif -> acme-dns.yml harus di puncak agar sertifikat baru dimuat tanpa restart (diuji
       # scripts/test-acme-dns.sh). Konfigurasi statis di subdirektori (dibaca rekursif saat start/reload):
-      # base/ (di bawah) dan dev/ (override dev); titik mount dibuat acme-dns-init.
-      - acme-dns-certs:/etc/traefik/dynamic:ro
+      # base/ (di bawah) dan dev/ (override dev); titik mount dibuat acme-dns-init (milik root, sticky).
+      # Penulis volume ini HANYA acme-publish (network none, template tetap), bukan acme-dns yang ber-network.
+      - traefik-dynamic:/etc/traefik/dynamic:ro
       - ../traefik/dynamic:/etc/traefik/dynamic/base:ro
       - traefik-acme:/acme
     networks: [edge, internal, socket-proxy]
@@ -347,7 +358,8 @@ services:
 
   # SEC-37 (ADR-023): ACME DNS-01 untuk host wg-https, terpisah dari Traefik. lego resmi (image ber-digest) + skrip
   # infra/acme/acme-dns.sh: TANPA port, hanya network egress (CA + API DNS), satu-satunya pemegang token DNS.
-  # Menulis crt/key berversi + acme-dns.yml ke volume acme-dns-certs (0640 grup 0) -> Traefik hot-reload.
+  # SEC-53: acme-dns hanya menulis PEM ke volume acme-dns-out; `acme-publish` (network none) memvalidasi PEM dan
+  # menulis crt/key berversi + acme-dns.yml (template tetap) ke volume traefik-dynamic -> Traefik hot-reload.
   # Dev/CI: token `disabled` -> idle (tanpa request ACME). Uji: scripts/test-acme-dns.sh (Pebble).
   # Runbook: docs/runbooks/acme-dns-token.md. Volume acme-dns-data (kunci akun ACME) hanya di sini.
   acme-dns-init:
@@ -360,7 +372,8 @@ services:
     volumes:
       - ../acme:/opt/efn-acme:ro
       - acme-dns-data:/data
-      - acme-dns-certs:/certs
+      - acme-dns-out:/out
+      - traefik-dynamic:/dyn
     network_mode: none
     read_only: true
     cap_drop: [ALL]
@@ -387,7 +400,7 @@ services:
       - ACME_DNS_PROVIDER=${ACME_DNS_PROVIDER:-cloudflare}
       # Staging ACME: https://acme-staging-v02.api.letsencrypt.org/directory (uji sebelum produksi, runbook §3)
       - ACME_SERVER=${ACME_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
-      - ACME_TRAEFIK_DIR=/etc/traefik/dynamic
+      - ACME_OUT=/out
       - LEGO_LOG_LEVEL=info
       # lego membaca <VAR>_FILE (diuji scripts/test-acme-dns.sh): token tidak pernah di env/argv
       - ${ACME_DNS_TOKEN_ENV:-CF_DNS_API_TOKEN}_FILE=/run/secrets/acme_dns_api_token
@@ -395,7 +408,7 @@ services:
     volumes:
       - ../acme:/opt/efn-acme:ro
       - acme-dns-data:/data
-      - acme-dns-certs:/certs
+      - acme-dns-out:/out
     networks: [egress]
     read_only: true
     tmpfs: [/tmp]
@@ -411,6 +424,44 @@ services:
       timeout: 5s
       retries: 2
       start_period: 10m
+
+  # SEC-53: satu-satunya penulis direktori provider file Traefik. Tanpa network (tidak memproses input jaringan),
+  # read-only, cap_drop ALL, uid terpisah (65533, grup 0 = baca PEM acme-dns + dibaca Traefik). Memvalidasi PEM murni
+  # lalu menulis acme-dns.yml dari template tetap (infra/acme/acme-publish.sh). Mode nonaktif acme-dns: tidak ada PEM
+  # -> idle sehat.
+  acme-publish:
+    <<: *common
+    image: goacme/lego:v5.5.2@sha256:1944e8c36055beec47c7de6f15202b41128be75eea0ffa257f0c14d93c5155fd
+    profiles: ["core"]
+    depends_on:
+      acme-dns-init:
+        condition: service_completed_successfully
+    user: "65533:0"
+    init: true
+    entrypoint: ["/bin/sh", "/opt/efn-acme/acme-publish.sh"]
+    environment:
+      - ACME_IN=/in
+      - ACME_DYN=/dyn
+      - ACME_TRAEFIK_DIR=/etc/traefik/dynamic
+    volumes:
+      - ../acme:/opt/efn-acme:ro
+      - acme-dns-out:/in:ro
+      - traefik-dynamic:/dyn
+    network_mode: none
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 32M }
+    labels:
+      service: acme-publish
+    healthcheck:
+      test: ["CMD-SHELL", "[ -n \"$$(find /tmp/.acme-publish-alive -mmin -5 2>/dev/null)\" ]"]
+      interval: 1m
+      timeout: 5s
+      retries: 3
+      start_period: 2m
 
   # ───────────────────────── DATA LAYER ─────────────────────────
   # Image custom = postgres:16.6-bookworm@sha256:557fea37a744d5f4c8faab304b0a90858b53ab119735a88c131fd19dab802f36 + WAL-G (infra/backup/postgres). WAL di-archive ke MinIO (HTTPS, CA internal)
@@ -774,7 +825,9 @@ services:
       EFN_BFF_API_KEY_FILE: /run/secrets/odoo_bff_api_key
       # docs/04 §8.4: pepper member_hash (HKDF dari otp_pepper, scripts/derive-secrets.sh) untuk efn_member_hash
       EFN_MEMBER_HASH_PEPPER_FILE: /run/secrets/member_hash_pepper
-    secrets: [pg_password_odoo, odoo_admin_password, odoo_bff_api_key, member_hash_pepper, efn_ca_crt]
+      # SEC-51 (G13): HMAC per baris sink audit (efn_audit >= 19.0.1.3.0); tanpa secret -> "mac": null + alert
+      EFN_AUDIT_SINK_KEY_FILE: /run/secrets/efn_audit_sink_key
+    secrets: [pg_password_odoo, odoo_admin_password, odoo_bff_api_key, member_hash_pepper, efn_audit_sink_key, efn_ca_crt]
     volumes:
       - odoo-data:/var/lib/odoo
     networks: [internal, data]
@@ -942,6 +995,10 @@ services:
       WEBHOOK_PAYMENT_SECRET_FILE: /run/secrets/webhook_payment_secret
       OTP_TTL_SECONDS: "180"
       OTP_MAX_ATTEMPTS: "3"
+      # SEC-54 (G13): CGNAT seluler = banyak pelanggan per IPv4. Kontrol utama = batas per member (3/15 menit, 10/jam)
+      # + budget global; batas per IP sumber dinaikkan 20 -> 60/15 menit agar satu penyerang di IP bersama butuh 3x
+      # lebih banyak PoW untuk mengunci IP itu. Level ALTCHA berbasis rasio kegagalan = backlog BFF (laporan G13).
+      OTP_RL_SOURCE_LIMIT: ${OTP_RL_SOURCE_LIMIT:-60}
       # PII at rest (docs/04 §7.2): AES-256-GCM, key ring versi 1 (rotasi: docs/runbooks/pii-key-rotation.md)
       PII_ENCRYPTION_KEY_FILE: /run/secrets/pii_encryption_key
       # Rotasi (U2): kunci v2+ via override yang me-mount pii_encryption_key_v<N> + PII_ENCRYPTION_KEY_V<N>_FILE,
@@ -950,6 +1007,10 @@ services:
       PII_RETIRED_VERSIONS: ${PII_RETIRED_VERSIONS:-}
       # Captcha OTP ALTCHA (docs/04 §8.1)
       ALTCHA_HMAC_KEY_FILE: /run/secrets/altcha_hmac_key
+      # K-7 (G13): endpoint migrasi /internal/v1/migration/* (server-to-server, TIDAK dirutekan Traefik publik).
+      # Default false -> 404. Production: aktif sementara hanya lewat config manifest bertanda tangan (SEC-50).
+      MIGRATION_ENABLED: ${MIGRATION_ENABLED:-false}
+      MIGRATION_API_KEY_FILE: /run/secrets/migration_api_key
       # /metrics di listener mTLS terpisah (docs/04 §8.10/§8.11): https://api-gateway:9464/metrics, klien CN prometheus.
       # Port tidak dipublish; Prometheus menjangkau lewat network `internal`.
       METRICS_PORT: "9464"
@@ -998,6 +1059,7 @@ services:
       - webhook_payment_secret
       - pii_encryption_key
       - altcha_hmac_key
+      - migration_api_key
     networks: [internal, data, cache, egress]
     read_only: true
     tmpfs: [/tmp]
@@ -1196,7 +1258,11 @@ services:
   # Tidak cap_drop/read_only: run_metabase.sh dapat chown direktori data dan menulis plugins ke /plugins.
   metabase:
     <<: *common
-    image: metabase/metabase:v0.52.4@sha256:ea0229a63116ea625ef09085a84ee0d2618311fd34a6e72cc527ae2eb003a5f9
+    # G13: image sendiri = metabase v0.52.4 (digest) + driver ClickHouse resmi ber-checksum (infra/metabase/Dockerfile).
+    # Staging/prod: by digest dari manifest rilis bertanda tangan (IMAGE_METABASE, SEC-42).
+    image: ${IMAGE_METABASE:-ghcr.io/efn/metabase:dev}
+    build:
+      context: ../metabase
     profiles: ["data"]
     depends_on:
       postgres:
@@ -1250,6 +1316,7 @@ services:
       - --cacert=/run/secrets/efn_ca_crt
       - --allow-cn=traefik
       - --allow-cn=blackbox-exporter
+      - --allow-cn=metabase-provision   # G13: one-shot provision.py (setup admin segera setelah sehat)
       - --status=http://127.0.0.1:6064
       - --quiet=conns
     secrets: [efn_ca_crt, tls_metabase_crt, tls_metabase_key]
@@ -1263,6 +1330,44 @@ services:
 
   # ETL: user efn_etl (PostgreSQL, grant level kolom) dan efn_etl (ClickHouse, INSERT/SELECT mart).
   # Tidak membaca otp_pepper (SEC-16): hash member sudah dihitung BFF di PostgreSQL.
+  # G13 (data-AI infra/metabase/provision.py): setup awal Metabase (admin dari secret), koneksi ClickHouse TLS strict,
+  # dashboard sebagai kode. Jalan OTOMATIS begitu metabase-tls sehat: instance yang belum di-setup bisa diklaim siapa
+  # pun di subnet staf, jadi tidak boleh ada jeda manual. Idempoten (run ulang = update). Lewat sidecar metabase-tls
+  # (HTTPS + mTLS CN metabase-provision, CA internal), tanpa network egress. deploy.sh memeriksa exit code-nya.
+  metabase-provision:
+    <<: *common
+    image: python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea
+    profiles: ["data"]
+    restart: "no"
+    depends_on:
+      metabase:
+        condition: service_healthy
+      metabase-tls:
+        condition: service_healthy
+    user: "65534:65534"
+    entrypoint: ["python", "-I", "-B", "/opt/efn-metabase/provision.py"]
+    command:
+      - --url=https://metabase:3443
+      - --ca-file=/run/secrets/efn_ca_crt
+      - --client-cert=/run/secrets/tls_metabase_provision_crt
+      - --client-key=/run/secrets/tls_metabase_provision_key
+      - --admin-email=${METABASE_ADMIN_EMAIL:-admin@efn.local}
+      - --admin-password-file=/run/secrets/metabase_admin_password
+      - --ch-password-file=/run/secrets/clickhouse_password_metabase
+    secrets: [efn_ca_crt, tls_metabase_provision_crt, tls_metabase_provision_key, metabase_admin_password,
+              clickhouse_password_metabase]
+    volumes:
+      - ../metabase:/opt/efn-metabase:ro
+    networks: [internal]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 128M }
+    labels:
+      service: metabase-provision
+
   etl:
     <<: *common
     image: ${IMAGE_ETL:-ghcr.io/efn/etl:dev}
@@ -1307,8 +1412,16 @@ services:
       AMQP_URL: amqps://efn-etl@rabbitmq:5671
       RABBITMQ_PASSWORD_FILE: /run/secrets/rabbitmq_password_etl
       AMQP_TLS_CA_FILE: /run/secrets/efn_ca_crt
-    secrets: [pg_password_etl, clickhouse_password_etl, rabbitmq_password_etl, efn_ca_crt]
-    networks: [data]   # rabbitmq, postgres, clickhouse semuanya di network data
+      # SEC-51/52 (G13): verifikasi HMAC baris sink audit Odoo dari Loki (query_range lewat loki-tls, mTLS CN etl).
+      # Disiapkan devsecops; dipakai services/etl/efn_etl/sink.py (data-AI) bila sudah diaktifkan.
+      EFN_AUDIT_SINK_KEY_FILE: /run/secrets/efn_audit_sink_key
+      LOKI_URL: https://loki:3100
+      LOKI_CA_FILE: /run/secrets/efn_ca_crt
+      LOKI_CLIENT_CERT_FILE: /run/secrets/tls_etl_crt
+      LOKI_CLIENT_KEY_FILE: /run/secrets/tls_etl_key
+    secrets: [pg_password_etl, clickhouse_password_etl, rabbitmq_password_etl, efn_audit_sink_key, tls_etl_crt, tls_etl_key,
+              efn_ca_crt]
+    networks: [data]   # rabbitmq, postgres, clickhouse, loki (G13) semuanya di network data
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
@@ -1566,7 +1679,7 @@ services:
       - ../observability/loki.yml:/etc/loki/loki.yml:ro
       - ../observability/loki-rules:/etc/loki/rules/fake:ro
       - loki-data:/loki
-    networks: [internal]
+    networks: [internal, data]   # data: klien etl (G13, mTLS CN etl di loki-tls)
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
@@ -1593,6 +1706,7 @@ services:
       - --allow-cn=promtail
       - --allow-cn=grafana
       - --allow-cn=prometheus
+      - --allow-cn=etl          # G13: baca baris sink audit untuk verifikasi HMAC (SEC-51)
       - --status=http://127.0.0.1:6067
       - --quiet=conns
     secrets: [efn_ca_crt, tls_loki_crt, tls_loki_key]

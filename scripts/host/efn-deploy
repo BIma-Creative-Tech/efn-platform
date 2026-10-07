@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# efn-deploy - wrapper deploy milik ROOT di host (SEC-36 r3, gelombang 9; SEC-42 r4, gelombang 11).
+# efn-deploy - wrapper deploy milik ROOT di host (SEC-36 r3, gelombang 9; SEC-42 r4, gelombang 11; SEC-50 r5, gelombang 13).
 #
 # DIPASANG MANUAL oleh Superadmin (bukan oleh pipeline) - salinan di repo hanya referensi/sumber review:
 #   install -o root -g root -m 0755 scripts/host/efn-deploy /usr/local/sbin/efn-deploy
@@ -14,6 +14,15 @@
 #   EFN_IMAGE_PREFIX=ghcr.io/<org>/             (hanya image dari prefix ini yang diterima; huruf kecil)
 #   EFN_PKI_ROOT_SHA256=<64 hex>                (sidik jari SHA-256 root CA, register kunci Superadmin)
 #   EFN_PKI_EXTRA_TRUST_SHA256='<hex> <hex>'    (opsional; hanya selama rotasi root CA)
+#   SEC-50 - topologi host DIPIN di sini (TIDAK diterima dari stdin; divalidasi scripts/lib/deploy-validate.sh):
+#   TRAEFIK_DOMAIN=efn.example                  (wajib)
+#   EFN_PUBLIC_BIND=<IPv4 host untuk 80/443>    (wajib; bukan 0.0.0.0/loopback/subnet WG)
+#   EFN_WG_BIND=10.88.0.1                       (opsional; IP wg0 di 10.88.0.0/16|10.89.0.0/16; deploy.sh cek wg0)
+#   EFN_WG_HTTPS_PORT=443  EFN_WG_OUTLET_CIDR=10.88.0.0/16  EFN_WG_STAFF_CIDR=10.89.0.0/16   (opsional; CIDR di
+#                                                dalam 10.88.0.0/15, prefix >= /16)
+#   COMPOSE_PROFILES=core,data,ai,observability,ops  (opsional; production wajib memuat core,data,observability)
+#   EFN_ALLOW_CONTROL_OFF=''                    (opsional, darurat Superadmin: nama kontrol yang boleh `false` di
+#                                                production: RABBITMQ_STRICT_PERMISSIONS ETL_AUDIT_COPY_ENABLED)
 # sudoers : deploy ALL=(root) NOPASSWD: /usr/local/sbin/efn-deploy        (TANPA argumen, TANPA bash -s)
 # authorized_keys user deploy (kunci CI):
 #   restrict,command="sudo -n /usr/local/sbin/efn-deploy" ssh-ed25519 AAAA... efn-ci
@@ -22,11 +31,13 @@
 # Protokol stdin (dibuat .github/workflows/deploy.yml): arsip tar berisi TEPAT tiga file biasa
 #   release.tar.gz          infra/ + scripts/ + services/etl/sql/ + efn-release.json dari commit yang di-deploy
 #   release.sigstore.json   bundle cosign keyless (sign-blob) atas release.tar.gz oleh workflow deploy.yml
-#   env.b64                 baris NAME=<base64 nilai>; NAME harus ada di allowlist (lihat allowed_names)
-# efn-release.json (manifest, DI DALAM arsip bertanda tangan -> terikat tanda tangan, SEC-42):
-#   {"schema":1,"app_env":"production","version":"1.2.3","seq":<github.run_number>,"git_sha":"<40 hex>",
-#    "signer_ref":"refs/tags/v1.2.3","images":{"IMAGE_POSTGRES":"ghcr.io/<org>/postgres@sha256:<hex>",...7},
-#    "pki":{"root_sha256":"<hex>","extra_trust_sha256":["<hex>",...]}}
+#   env.b64                 baris NAME=<base64 nilai>; NAME hanya GHCR_USER, GHCR_TOKEN, EFN_PKI_* dan secret di
+#                           scripts/secrets.list (allowed_names). Nilai tanpa karakter kontrol (PEM: newline saja).
+# efn-release.json (manifest, DI DALAM arsip bertanda tangan -> terikat tanda tangan, SEC-42/SEC-50):
+#   {"schema":2,"app_env":"production","version":"1.2.3","seq":<github.run_number>,"git_sha":"<40 hex>",
+#    "signer_ref":"refs/tags/v1.2.3","images":{"IMAGE_POSTGRES":"ghcr.io/<org>/postgres@sha256:<hex>",...8},
+#    "pki":{"root_sha256":"<hex>","extra_trust_sha256":["<hex>",...]},
+#    "config":{"PAYMENT_PROVIDER":"disabled","ETL_AUDIT_COPY_ENABLED":"",...}}   (EFN_RELEASE_CONFIG_VARS; "" = default)
 #
 # Langkah: batasi ukuran -> ekstrak ke tmpfs root 0700 -> cosign verify-blob (identitas dari /etc/efn/deploy.conf,
 # BUKAN dari input) -> ekstrak rilis ke direktori sementara milik root -> validasi manifest (app_env, anti-downgrade/
@@ -37,7 +48,8 @@
 #
 # Yang dijaga: pemegang kunci SSH deploy saja tidak bisa (a) menjalankan kode selain rilis bertanda tangan,
 # (b) mengganti image (registry/digest) di luar manifest bertanda tangan, (c) memasang trust anchor PKI lain,
-# (d) memutar ulang rilis lama bertanda tangan (downgrade). Risiko residu: nilai SECRET dari env tetap tidak
+# (d) memutar ulang rilis lama bertanda tangan (downgrade), (e) mengubah topologi jaringan / mematikan kontrol
+# keamanan lewat env non-rahasia (SEC-50: topologi dari deploy.conf, konfigurasi dari manifest). Risiko residu: nilai SECRET dari env tetap tidak
 # bertanda tangan (tidak mungkin ditandatangani tanpa membocorkannya ke log transparansi) -> docs/runbooks/key-custody.md.
 set -euo pipefail
 umask 077
@@ -50,7 +62,7 @@ CONF=/etc/efn/deploy.conf
 STATE_DIR=/var/lib/efn
 STATE="$STATE_DIR/last-release"
 ALLOW_DOWNGRADE=/etc/efn/allow-downgrade
-IMAGE_VARS=(IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_MINIO)
+IMAGE_VARS=(IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_MINIO IMAGE_METABASE)
 log() { logger -t efn-deploy -- "$*" 2> /dev/null || true; echo "efn-deploy: $*" >&2; }
 die() { log "GAGAL: $*"; exit 1; }
 
@@ -60,10 +72,16 @@ for c in jq openssl rsync sha256sum base64 tar sort; do command -v "$c" > /dev/n
 [[ "$(stat -c '%u:%a' "$CONF")" =~ ^0:(6[04]4|600|640)$ ]] || die "$CONF harus milik root dan tidak bisa ditulis group/other"
 COSIGN_BIN="" EFN_SIGNER_IDENTITY_REGEXP="" EFN_SIGNER_ISSUER="" EFN_APP_ENV="" EFN_GITHUB_REPO="" EFN_IMAGE_PREFIX=""
 EFN_PKI_ROOT_SHA256="" EFN_PKI_EXTRA_TRUST_SHA256=""
+# SEC-50: topologi host dipin di deploy.conf; nilai dari lingkungan pemanggil dibuang (sudo env_reset juga membuangnya)
+unset TRAEFIK_DOMAIN EFN_PUBLIC_BIND EFN_WG_BIND EFN_WG_HTTPS_PORT EFN_WG_OUTLET_CIDR EFN_WG_STAFF_CIDR COMPOSE_PROFILES \
+  EFN_ALLOW_CONTROL_OFF
 while IFS='=' read -r k v; do
+  [[ "$k$v" != *[[:cntrl:]]* ]] || die "karakter kontrol di $CONF"
   case "$k" in
     COSIGN_BIN|EFN_SIGNER_IDENTITY_REGEXP|EFN_SIGNER_ISSUER|EFN_APP_ENV|EFN_GITHUB_REPO|EFN_IMAGE_PREFIX|EFN_PKI_ROOT_SHA256|EFN_PKI_EXTRA_TRUST_SHA256)
       v="${v#\'}"; v="${v%\'}"; printf -v "$k" '%s' "$v" ;;
+    TRAEFIK_DOMAIN|EFN_PUBLIC_BIND|EFN_WG_BIND|EFN_WG_HTTPS_PORT|EFN_WG_OUTLET_CIDR|EFN_WG_STAFF_CIDR|COMPOSE_PROFILES|EFN_ALLOW_CONTROL_OFF)
+      v="${v#\'}"; v="${v%\'}"; printf -v "$k" '%s' "$v"; export "${k?}" ;;
     ''|\#*) ;;
     *) die "kunci tidak dikenal di $CONF: $k" ;;
   esac
@@ -120,16 +138,24 @@ rm -rf "$REL_TMP"; install -d -o root -g root -m 0755 "$REL_TMP"
 tar -xzf "$WORK/in/release.tar.gz" -C "$REL_TMP" --no-same-owner --no-same-permissions
 chown -R root:root "$REL_TMP"; chmod -R go-w "$REL_TMP"
 umask 077
+# SEC-50: aturan validasi konfigurasi dari rilis TERVERIFIKASI (sama dengan yang dipakai deploy.sh)
+VALIDATE_LIB="$REL_TMP/scripts/lib/deploy-validate.sh"
+[[ -f "$VALIDATE_LIB" && ! -L "$VALIDATE_LIB" ]] || die "rilis tanpa scripts/lib/deploy-validate.sh"
+# shellcheck source=scripts/lib/deploy-validate.sh
+source "$VALIDATE_LIB"
 
 # ── 4. Manifest rilis bertanda tangan (SEC-42): lingkungan, versi, anti-downgrade ─────────────────────────────
 MAN="$REL_TMP/efn-release.json"
 [[ -f "$MAN" && ! -L "$MAN" ]] || die "manifest efn-release.json tidak ada di rilis bertanda tangan"
-jq -e --argjson n "${#IMAGE_VARS[@]}" '
-  (.schema == 1) and (.app_env | type == "string") and (.version | type == "string")
+CFG_KEYS_JSON=$(printf '%s\n' "${EFN_RELEASE_CONFIG_VARS[@]}" | jq -R . | jq -sc .)
+jq -e --argjson n "${#IMAGE_VARS[@]}" --argjson cfgkeys "$CFG_KEYS_JSON" '
+  (.schema == 2) and (.app_env | type == "string") and (.version | type == "string")
   and (.seq | type == "number" and . >= 1 and . == floor) and (.git_sha | test("^[0-9a-f]{40}$"))
   and (.signer_ref | type == "string") and (.images | type == "object" and length == $n)
   and (.pki.root_sha256 | test("^[0-9a-f]{64}$"))
-  and (.pki.extra_trust_sha256 | type == "array" and all(test("^[0-9a-f]{64}$")))' "$MAN" > /dev/null \
+  and (.pki.extra_trust_sha256 | type == "array" and all(test("^[0-9a-f]{64}$")))
+  and (.config | type == "object" and ((keys - $cfgkeys) | length == 0)
+       and all(.[]; type == "string" and (test("[[:cntrl:]]") | not)))' "$MAN" > /dev/null \
   || die "manifest rilis tidak valid (skema)"
 M_ENV=$(jq -r .app_env "$MAN"); M_VER=$(jq -r .version "$MAN"); M_SEQ=$(jq -r .seq "$MAN")
 M_REF=$(jq -r .signer_ref "$MAN"); M_GIT=$(jq -r .git_sha "$MAN"); M_ROOT=$(jq -r .pki.root_sha256 "$MAN")
@@ -175,14 +201,10 @@ fi
 
 # ── 5. Env tervalidasi (allowlist dari rilis TERVERIFIKASI, bukan dari input) ─────────────────────────────────
 # IMAGE_* TIDAK ada di allowlist: image hanya dari manifest bertanda tangan (SEC-42).
+# SEC-50: stdin hanya membawa SECRET (+ kredensial pull GHCR dan PKI). APP_ENV, topologi (deploy.conf) dan konfigurasi
+# non-rahasia (manifest `config`) DITOLAK dari stdin.
 allowed_names() {
-  printf '%s\n' TRAEFIK_DOMAIN ACME_EMAIL APP_ENV GHCR_USER GHCR_TOKEN COMPOSE_PROFILES PG_SUPERUSER \
-    WHATSAPP_ENABLED WHATSAPP_PHONE_NUMBER_ID WHATSAPP_OTP_TEMPLATE PAYMENT_PROVIDER EFN_PUBLIC_BIND EFN_WG_BIND \
-    EFN_WG_HTTPS_PORT EFN_WG_OUTLET_CIDR EFN_WG_STAFF_CIDR ACME_DNS_PROVIDER ACME_DNS_TOKEN_ENV ACME_SERVER \
-    RABBITMQ_STRICT_PERMISSIONS MARKET_SCOUT_PHOTO_RETENTION_DAYS CH_MART_RETENTION_YEARS CONSENT_LOCATION_VERSION \
-    CONSENT_LOCATION_TEXT_SHA256 CONSENT_MARKETING_VERSION CONSENT_MARKETING_TEXT_SHA256 DSAR_DELETE_GRACE_DAYS \
-    ETL_ENABLE_ODOO ETL_ENABLE_GL ETL_AUDIT_COPY_ENABLED OLLAMA_VISION_MODEL EFN_PKI_INTERMEDIATE_KEY EFN_PKI_INTERMEDIATE_CRT EFN_PKI_ROOT_CRT \
-    EFN_PKI_EXTRA_TRUST
+  printf '%s\n' GHCR_USER GHCR_TOKEN EFN_PKI_INTERMEDIATE_KEY EFN_PKI_INTERMEDIATE_CRT EFN_PKI_ROOT_CRT EFN_PKI_EXTRA_TRUST
   awk '!/^[[:space:]]*#/ && NF && $2 != "pki" && $2 !~ /^derived:/ { print toupper($1) }' "$REL_TMP/scripts/secrets.list"
 }
 mapfile -t ALLOWED < <(allowed_names)
@@ -193,12 +215,30 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   [[ -z "$line" ]] && continue
   [[ "$line" =~ ^([A-Z][A-Z0-9_]{0,63})=([A-Za-z0-9+/]*={0,2})$ ]] || die "baris env tidak valid (#$((count + 1)))"
   name="${BASH_REMATCH[1]}"; b64="${BASH_REMATCH[2]}"
+  if [[ "$name" == APP_ENV ]] || efn_list_has "$name" "${EFN_HOST_PINNED_VARS[@]}" "${EFN_RELEASE_CONFIG_VARS[@]}"; then
+    die "variabel tidak diizinkan: $name (SEC-50: dipin di $CONF / manifest rilis bertanda tangan, bukan dari stdin)"
+  fi
   [[ -n "${OK[$name]:-}" ]] || die "variabel tidak diizinkan: $name"
   val=$(printf '%s' "$b64" | base64 -d) || die "base64 tidak valid: $name"
+  # SEC-50b: tanpa karakter kontrol; PEM (EFN_PKI_*) hanya boleh newline. Newline di ujung sudah dibuang $(...).
+  if [[ "$name" == EFN_PKI_* ]]; then chk="${val//$'\n'/}"; else chk="$val"; fi
+  [[ "$chk" != *[[:cntrl:]]* ]] || die "nilai $name memuat karakter kontrol/multi-baris (ditolak)"
   export "$name=$val"
   count=$((count + 1))
 done < "$WORK/in/env.b64"
-[[ "${APP_ENV:-}" == "$EFN_APP_ENV" ]] || die "APP_ENV env (${APP_ENV:-kosong}) != ${EFN_APP_ENV} (deploy.conf)"
+# APP_ENV = deploy.conf (sudah == manifest app_env, langkah 4)
+export APP_ENV="$EFN_APP_ENV"
+
+# ── 5b. Konfigurasi non-rahasia (SEC-50): topologi dari deploy.conf, konfigurasi dari manifest bertanda tangan ──
+unset "${EFN_RELEASE_CONFIG_VARS[@]}"
+while IFS=$'\t' read -r k v; do
+  efn_list_has "$k" "${EFN_RELEASE_CONFIG_VARS[@]}" || die "kunci config manifest tidak dikenal: $k"
+  export "$k=$v"
+done < <(jq -r '.config | to_entries[] | select(.value != "") | "\(.key)\t\(.value)"' "$MAN")
+efn_validate_topology "$EFN_APP_ENV" || die "topologi di $CONF tidak valid (SEC-50)"
+efn_validate_config "$EFN_APP_ENV" || die "config manifest rilis tidak valid (SEC-50)"
+export EFN_WG_BIND EFN_WG_HTTPS_PORT EFN_WG_OUTLET_CIDR EFN_WG_STAFF_CIDR COMPOSE_PROFILES EFN_ALLOW_CONTROL_OFF
+log "topologi (deploy.conf) & config manifest valid: wg ${EFN_WG_BIND}:${EFN_WG_HTTPS_PORT}, profil ${COMPOSE_PROFILES}"
 
 # ── 6. Trust anchor PKI: root & EXTRA_TRUST harus cocok dengan sidik jari yang dipin di deploy.conf ───────────
 fp_dir="$WORK/pki"; mkdir -m 0700 "$fp_dir"
@@ -249,7 +289,7 @@ for v in "${IMAGE_VARS[@]}"; do
     "$img" > /dev/null 2>&1 || die "cosign verify GAGAL untuk $v (${svc}; identitas build-push.yml@${M_REF})"
   export "$v=$img"
 done
-log "7 image terverifikasi cosign di host (build-push.yml@${M_REF})"
+log "${#IMAGE_VARS[@]} image terverifikasi cosign di host (build-push.yml@${M_REF})"
 
 # ── 8. Semua cek lolos: pasang rilis, sinkron ke /opt/efn, catat rilis terakhir ────────────────────────────────
 umask 022

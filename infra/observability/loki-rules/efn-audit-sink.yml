@@ -1,49 +1,65 @@
-# Aturan ruler Loki (gelombang 11, SEC-43): alert dari baris `EFN_AUDIT_SINK {json}` yang ditulis Odoo
-# (logger odoo.addons.efn_audit.sink) setelah commit untuk perubahan MODEL KONTROL audit (aturan audit,
-# ir.config_parameter efn.audit.*, server action, cron, modul, otomasi) dan operasi purge log audit.
-# Promtail memberi label stream="efn_audit_sink" (infra/observability/promtail.yml). Payload tanpa nilai/PII:
-# log_id, operation, model, res_id, uid, sudo, fields, note. Runbook: docs/runbooks/audit-sink-alerts.md.
+# Aturan ruler Loki (gelombang 11 SEC-43; gelombang 13 SEC-49/SEC-51 format sink v2): alert dari baris
+# `EFN_AUDIT_SINK {json}` yang ditulis Odoo (logger odoo.addons.efn_audit.sink, efn_audit >= 19.0.1.3.0) setelah commit
+# untuk perubahan hak akses (grup user, ir.rule, ACL, API key), model kontrol audit lain, dan purge log audit.
+# Promtail (infra/observability/promtail.yml) hanya memasukkan baris yang cocok format berjangkar v2 ke
+# stream="efn_audit_sink" dan memberi label audit_op + critical. Payload tanpa nilai/PII: log_id, audit_op, critical,
+# operation, model, res_id, uid, origin_uid, sudo, fields, note, groups_added/removed (xmlid), users_added/removed (uid),
+# key_owner_uid, mac, v. Runbook: docs/runbooks/audit-sink-alerts.md.
 groups:
   - name: efn-audit-sink
     interval: 1m
     rules:
-      # Setiap perubahan model kontrol = kejadian jarang yang harus bisa dijelaskan (change request / deploy).
+      # SEC-49: grant yang mencakup base.group_system / group_erp_manager / auditor / manager audit, perubahan ir.rule
+      # atau ACL (ir.model.access), dan purge di luar jalur resmi (purge_manual) = critical (ditentukan Odoo).
+      - alert: EfnAuditCriticalAccessChange
+        expr: |
+          sum by (audit_op, model, uid, sudo) (
+            count_over_time({stream="efn_audit_sink", critical="true"}
+              | regexp `EFN_AUDIT_SINK (?P<payload>[{].*[}])` | line_format "{{.payload}}" | json [5m])
+          ) > 0
+        labels:
+          severity: critical
+          team: security
+        annotations:
+          summary: "Odoo: perubahan hak akses KRITIS ({{ $labels.audit_op }} {{ $labels.model }}, uid {{ $labels.uid }})"
+          description: "Pemberian grup admin/auditor, perubahan ir.rule/ACL, atau purge log audit manual. Cocokkan dengan change request yang disetujui Superadmin; tanpa CR = insiden (SEC-49, R-S10)."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/audit-sink-alerts.md#efnauditcriticalaccesschange"
+      # Perubahan hak akses / model kontrol non-kritis = kejadian jarang yang harus bisa dijelaskan (CR / deploy).
       - alert: EfnAuditControlChange
         expr: |
-          sum by (operation, model, uid, sudo) (
-            count_over_time({stream="efn_audit_sink"}
-              | regexp `EFN_AUDIT_SINK (?P<payload>[{].*[}])` | line_format "{{.payload}}" | json
-              | operation != "purge" [5m])
+          sum by (audit_op, model, uid, sudo) (
+            count_over_time({stream="efn_audit_sink", critical="false", audit_op!~"purge|purge_manual"}
+              | regexp `EFN_AUDIT_SINK (?P<payload>[{].*[}])` | line_format "{{.payload}}" | json [5m])
           ) > 0
         labels:
           severity: warning
           team: security
         annotations:
-          summary: "Odoo: perubahan model kontrol audit ({{ $labels.operation }} {{ $labels.model }}, uid {{ $labels.uid }})"
-          description: "Model kontrol audit berubah di Odoo. Cocokkan dengan change request; tanpa CR = insiden (SEC-43)."
+          summary: "Odoo: perubahan kontrol/hak akses ({{ $labels.audit_op }} {{ $labels.model }}, uid {{ $labels.uid }})"
+          description: "Hak akses atau model kontrol audit berubah di Odoo. Cocokkan dengan change request; tanpa CR = insiden (SEC-43/SEC-49)."
           runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/audit-sink-alerts.md#efnauditcontrolchange"
-      # Purge log audit di luar jalur sah (retensi terjadwal / erasure UU PDP) = indikasi penghapusan jejak.
+      # Lapis kedua: purge berlabel `purge` (jalur resmi) tetapi catatan tidak berawalan retensi/erasure.
       - alert: EfnAuditUnexpectedPurge
         expr: |
           sum by (model, uid, sudo) (
-            count_over_time({stream="efn_audit_sink"}
+            count_over_time({stream="efn_audit_sink", audit_op=~"purge|purge_manual"}
               | regexp `EFN_AUDIT_SINK (?P<payload>[{].*[}])` | line_format "{{.payload}}" | json
-              | operation = "purge" | note !~ "(retensi|retention|erasure)(:| ).*" [5m])
+              | note !~ "(retensi|retention|erasure)(:| ).*" [5m])
           ) > 0
         labels:
           severity: critical
           team: security
         annotations:
           summary: "Odoo: purge log audit TIDAK lewat retensi/erasure (model {{ $labels.model }}, uid {{ $labels.uid }})"
-          description: "Log audit dihapus di luar jalur sah. Perlakukan sebagai insiden keamanan (SEC-43, R-S10)."
+          description: "Log audit dihapus di luar jalur sah. Perlakukan sebagai insiden keamanan (SEC-43/SEC-51, R-S10)."
           runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/audit-sink-alerts.md#efnauditunexpectedpurge"
       # Volume purge retensi tidak wajar (mis. retensi diturunkan lalu GC menghapus massal).
       - alert: EfnAuditRetentionPurgeBurst
         expr: |
           sum (
-            count_over_time({stream="efn_audit_sink"}
+            count_over_time({stream="efn_audit_sink", audit_op="purge"}
               | regexp `EFN_AUDIT_SINK (?P<payload>[{].*[}])` | line_format "{{.payload}}" | json
-              | operation = "purge" | note =~ "(retensi|retention)(:| ).*" [1h])
+              | note =~ "(retensi|retention)(:| ).*" [1h])
           ) > 5
         labels:
           severity: warning
@@ -52,3 +68,15 @@ groups:
           summary: "Odoo: purge retensi log audit > 5 kali dalam 1 jam"
           description: "GC retensi normalnya sekali sehari. Periksa perubahan efn.audit.retention_days / aturan audit."
           runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/audit-sink-alerts.md#efnauditretentionpurgeburst"
+      # SEC-51: baris sink tanpa HMAC (`"mac": null`) = secret efn_audit_sink_key tidak ter-mount di Odoo; baris sink
+      # tidak dapat diverifikasi keasliannya oleh ETL. Dev/CI tanpa secret: wajar.
+      - alert: EfnAuditSinkUnsigned
+        expr: |
+          sum (count_over_time({stream="efn_audit_sink"} |= `"mac": null` [1h])) > 0
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Odoo: baris sink audit tanpa tanda tangan HMAC (mac null)"
+          description: "Secret efn_audit_sink_key tidak terbaca oleh Odoo; keaslian baris sink tidak dapat diverifikasi (SEC-51)."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/audit-sink-alerts.md#efnauditsinkunsigned"

@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [odoo, api-gateway, superapp-web, ai-ocr-worker, etl, postgres, minio]
+        service: [odoo, api-gateway, superapp-web, ai-ocr-worker, etl, postgres, minio, metabase]
         include:
           - { service: odoo, context: services/odoo }
           - { service: api-gateway, context: services/api-gateway }
@@ -37,6 +37,8 @@ jobs:
           - { service: postgres, context: infra/backup/postgres }
           # MinIO server + mc dari source upstream (image minio/minio & minio/mc hilang dari Docker Hub, gelombang 7)
           - { service: minio, context: infra/minio }
+          # G13: Metabase + driver ClickHouse ber-checksum (infra/metabase/Dockerfile)
+          - { service: metabase, context: infra/metabase }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:

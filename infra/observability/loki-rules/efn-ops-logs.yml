@@ -8,9 +8,10 @@ groups:
     rules:
       # Rekonsiliasi salinan audit (services/etl/efn_etl/audit_job.py) mencatat WARNING hanya bila ada anomali:
       # log Odoo hilang/berubah dibanding salinan ClickHouse, celah seq, rantai hash putus = indikasi tamper (SEC-43/46).
+      # G13 (SEC-51): hanya baris berjangkar logger efn_etl.audit_job (stream jangkar, promtail.yml), bukan substring.
       - alert: EfnAuditReconAnomaly
         expr: |
-          sum (count_over_time({service="etl"} |= "EFN_AUDIT_RECON" |= " WARNING " [15m])) > 0
+          sum (count_over_time({stream="efn_audit_anchor", audit_event="recon"} |~ `^\S+ \S+ WARNING ` [15m])) > 0
         labels:
           severity: critical
           team: security
@@ -29,6 +30,70 @@ groups:
           summary: "ETL: job audit_copy gagal >= 2 kali dalam 1 jam"
           description: "Salinan audit tamper-evident tidak berjalan (grant, versi efn_audit, ClickHouse). Log Odoo tetap aman, tetapi jejak eksternal tertunda."
           runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/etl-audit-copy.md#efnauditcopyfailing"
+
+  # G13 (SEC-52 butir 1): DEAD-MAN ETL dari heartbeat data-AI (services/etl/efn_etl/heartbeat.py):
+  # `<ts> INFO efn_etl.heartbeat EFN_ETL_HEARTBEAT job=<job> status=<ok|error|partial> ...` (logfmt). Dicocokkan
+  # BERJANGKAR (logger efn_etl.heartbeat di awal baris), bukan substring. Absennya status=ok untuk job X selama ambang
+  # = ETL berhenti / crash loop / job gagal terus / dimatikan (ETL_AUDIT_COPY_ENABLED=false ditolak production, SEC-50).
+  # Ambang = beberapa kali interval normal (siklus 15 menit; snapshot stok per jam; rekonsiliasi harian).
+  - name: efn-etl-heartbeat
+    interval: 1m
+    rules:
+      - alert: EfnEtlCycleMissing
+        expr: |
+          absent_over_time({service="etl"} |~ `^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} INFO efn_etl\.heartbeat EFN_ETL_HEARTBEAT job=cycle status=ok ` [45m])
+        for: 15m
+        labels:
+          severity: warning
+          team: data
+        annotations:
+          summary: "ETL: tidak ada siklus sukses (job=cycle status=ok) > 45 menit"
+          description: "ETL berhenti atau gagal setiap siklus; mart ClickHouse dan dashboard Metabase basi."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/etl-audit-copy.md#efnetlcyclemissing"
+      - alert: EfnEtlSalesFactStale
+        expr: |
+          absent_over_time({service="etl"} |~ `^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} INFO efn_etl\.heartbeat EFN_ETL_HEARTBEAT job=sales_fact_pos status=ok ` [45m])
+        for: 15m
+        labels:
+          severity: warning
+          team: data
+        annotations:
+          summary: "ETL: fakta penjualan POS (sales_fact_pos) tidak sukses > 45 menit"
+          description: "Dashboard Penjualan Harian Outlet basi. Periksa grant Odoo / ETL_ENABLE_ODOO."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/etl-audit-copy.md#efnetlcyclemissing"
+      - alert: EfnEtlStockSnapshotStale
+        expr: |
+          absent_over_time({service="etl"} |~ `^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} INFO efn_etl\.heartbeat EFN_ETL_HEARTBEAT job=stock_snapshot status=ok ` [3h])
+        for: 15m
+        labels:
+          severity: warning
+          team: data
+        annotations:
+          summary: "ETL: snapshot stok tidak sukses > 3 jam"
+          description: "Dashboard Stok & Kedaluwarsa basi."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/etl-audit-copy.md#efnetlcyclemissing"
+      - alert: EfnAuditCopyMissing
+        expr: |
+          absent_over_time({service="etl"} |~ `^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} INFO efn_etl\.heartbeat EFN_ETL_HEARTBEAT job=audit_copy status=ok ` [1h])
+        for: 15m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "ETL: salinan audit tamper-evident (audit_copy) tidak sukses > 1 jam"
+          description: "Penghapusan/perubahan log audit Odoo pada jendela ini tidak punya bukti eksternal (SEC-52)."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/etl-audit-copy.md#efnauditcopymissing"
+      - alert: EfnAuditReconMissing
+        expr: |
+          absent_over_time({service="etl"} |~ `^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} INFO efn_etl\.heartbeat EFN_ETL_HEARTBEAT job=audit_recon status=ok ` [26h])
+        for: 15m
+        labels:
+          severity: critical
+          team: security
+        annotations:
+          summary: "ETL: rekonsiliasi salinan audit (audit_recon) tidak sukses > 26 jam"
+          description: "Kontrol detektif tamper log audit tidak berjalan; tamper tidak terdeteksi sampai rekonsiliasi berjalan lagi (SEC-52)."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/etl-audit-copy.md#efnauditreconmissing"
 
   - name: efn-s3-gateway
     interval: 1m

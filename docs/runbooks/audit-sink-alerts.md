@@ -55,3 +55,26 @@ log yang dihapus (`note`).
   menghapus baris yang sudah terkirim ke Loki.
 - Loki bukan penyimpanan WORM; salinan append-only jangka panjang (ClickHouse tanpa DELETE / object lock) masih
   backlog SEC-43 butir 4.
+
+## Format sink v2 & pemilihan baris (gelombang 13, SEC-49/SEC-51)
+- Promtail memasukkan baris ke `stream="efn_audit_sink"` HANYA bila seluruh baris cocok regex berjangkar: format log
+  Odoo (`<tgl> <jam>,<ms> <pid> INFO <db> odoo.addons.efn_audit.sink: EFN_AUDIT_SINK {json}`), JSON v2 diawali
+  `"audit_op"`, `"critical"`, memuat `"log_id"` numerik, diakhiri `"v": 2`. Label: `audit_op`, `critical`. Baris dari
+  logger lain (mis. login gagal berisi teks `EFN_AUDIT_SINK`), level lain, atau format v1 tidak masuk stream audit.
+  Diuji G13 dengan container sintetis berlabel `service=odoo`: 2 baris sah masuk (label benar), 3 baris palsu ditolak.
+- Batas: baris palsu UTUH tetap mungkin bila teks pengguna bisa menyisipkan newline di logger Odoo lain. Odoo v2
+  meng-escape newline di isi sink, dan `mac` (HMAC, secret `efn_audit_sink_key`) diverifikasi ETL di luar Odoo.
+  Selama verifikasi ETL belum aktif, perlakukan alert sebagai indikasi; cocokkan `log_id` dengan `efn_audit_log`.
+
+## EfnAuditCriticalAccessChange
+Odoo menandai `critical=true`: grant (langsung/implied) `base.group_system`, `base.group_erp_manager`,
+`efn_audit.group_auditor_personal`, `efn_audit.group_manager`; perubahan `ir.rule`/ACL (`access_rule_change`); purge
+manual (`purge_manual`). Langkah: (1) cocokkan dengan change request yang disetujui Superadmin (SEC-43 butir 5);
+(2) tanpa CR → [security-incident.md](security-incident.md): cabut grant lewat UI/RPC (bukan `odoo shell`, lihat
+[odoo-access-changes.md](odoo-access-changes.md)), rotasi kredensial user terdampak (`users_added`), periksa
+`efn_audit_log` + salinan ClickHouse untuk `log_id` sekitar kejadian.
+
+## EfnAuditSinkUnsigned
+Baris sink `"mac": null` = Odoo tidak membaca `/run/secrets/efn_audit_sink_key` (secret tidak ter-mount / kurang dari
+32 byte). Periksa `docker compose config` service `odoo` (secret `efn_audit_sink_key`, env `EFN_AUDIT_SINK_KEY_FILE`)
+dan log Odoo `EFN audit sink: kunci HMAC tidak tersedia`. Dev/CI tanpa secret: wajar.

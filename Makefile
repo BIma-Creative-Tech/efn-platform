@@ -65,17 +65,17 @@ validate: env secrets
 	$(DEV) $(ALL_PROFILES) config -q
 	$(PROD) $(ALL_PROFILES) config -q
 
-# Image linter dipin digest (SEC-47; versi = hadolint-action v3.1.0 di CI). Dependabot tidak membaca Makefile:
+# Image linter dipin digest (SEC-47; sama dengan job CI infra; G13: hadolint v2.14.0). Dependabot tidak membaca Makefile:
 # perbarui manual bersama ci.yml. Shellcheck: daftar file sama dengan job CI `infra`.
-HADOLINT_IMG := hadolint/hadolint:v2.12.0@sha256:30a8fd2e785ab6176eed53f74769e04f125afb2f74a6c52aef7d463583b6d45e
+HADOLINT_IMG := hadolint/hadolint:v2.14.0@sha256:27086352fd5e1907ea2b934eb1023f217c5ae087992eb59fde121dce9c9ff21e
 SHELLCHECK_IMG := koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
 
 lint:
 	ruff check services/ai-ocr-worker services/etl services/odoo/addons
 	docker run --rm -i -v "$(PWD):/src" -w /src $(HADOLINT_IMG) hadolint --config .hadolint.yaml --failure-threshold warning \
-	  services/*/Dockerfile infra/backup/postgres/Dockerfile infra/minio/Dockerfile
-	docker run --rm -v "$(PWD):/src" -w /src $(SHELLCHECK_IMG) scripts/*.sh scripts/host/efn-deploy scripts/host/*.sh \
-	  scripts/smoke/*.sh infra/backup/postgres/*.sh infra/postgres/init/*.sh infra/wireguard/*.sh
+	  services/*/Dockerfile infra/backup/postgres/Dockerfile infra/minio/Dockerfile infra/metabase/Dockerfile
+	docker run --rm -v "$(PWD):/src" -w /src $(SHELLCHECK_IMG) -x scripts/*.sh scripts/lib/*.sh scripts/host/efn-deploy scripts/host/*.sh \
+	  scripts/smoke/*.sh tests/load/*.sh infra/backup/postgres/*.sh infra/postgres/init/*.sh infra/wireguard/*.sh
 	docker run --rm -v "$(PWD):/src" -w /src $(SHELLCHECK_IMG) -s sh infra/minio/*.sh infra/redis/*.sh \
 	  infra/rabbitmq/*.sh infra/clickhouse/*.sh infra/s3-gateway/*.sh infra/acme/*.sh scripts/acme-test/*.sh
 

@@ -43,7 +43,7 @@ APP_ENV="${APP_ENV:-dev}"
 #   both   : serverAuth + clientAuth (service yang juga menjadi KLIEN mTLS, docs/04 §8.5)
 #   client : clientAuth saja (tidak punya listener jaringan)
 # Klien mTLS = Traefik, Prometheus, Grafana, Promtail, ocr-worker (ke Ollama), blackbox-exporter (probe), cAdvisor,
-# Loki (ruler -> Alertmanager).
+# Loki (ruler -> Alertmanager), etl (-> loki-tls) dan metabase-provision (-> metabase-tls) (G13).
 # Sumber kebenaran SAN + nameConstraints intermediate. Tambah service baru = baris di sini + 2 baris `pki` di
 # scripts/secrets.list + TERBITKAN ULANG INTERMEDIATE (nameConstraints memuat daftar ini; lihat runbook internal-pki).
 PKI_SERVICES=(
@@ -64,6 +64,8 @@ PKI_SERVICES=(
   "grafana|both"
   "loki|both"           # klien mTLS ke Alertmanager (ruler alert audit sink, gelombang 11)
   "promtail|client"
+  "etl|client"                 # G13: klien mTLS loki-tls (verifikasi HMAC sink audit, SEC-51)
+  "metabase-provision|client"  # G13: one-shot infra/metabase/provision.py -> metabase-tls
   "uptime-kuma|server"
   "node-exporter|server"
   "postgres-exporter|server"

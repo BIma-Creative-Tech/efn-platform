@@ -11,16 +11,23 @@
 # Layout host: /opt/efn/{compose,traefik,observability,backup,minio,postgres,clickhouse,redis,rabbitmq,wireguard}
 #              (= isi infra/), /opt/efn/scripts (= scripts/), /opt/efn/etl-sql (= services/etl/sql/, opsional),
 #              /opt/efn/secrets (TIDAK disinkronkan; root:efn-superadmin 0750).
-# Env wajib : TRAEFIK_DOMAIN ACME_EMAIL GHCR_USER GHCR_TOKEN COMPOSE_PROFILES APP_ENV PAYMENT_PROVIDER
-#             EFN_PUBLIC_BIND (IP publik host untuk 80/443 websecure)
-#             IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_MINIO
+# SEC-50 (gelombang 13): sumber nilai non-rahasia - lihat scripts/lib/deploy-validate.sh:
+#   topologi (TRAEFIK_DOMAIN EFN_PUBLIC_BIND EFN_WG_* COMPOSE_PROFILES EFN_ALLOW_CONTROL_OFF) = /etc/efn/deploy.conf
+#     (dipin; env yang berbeda dengan pin DITOLAK), konfigurasi aplikasi = manifest rilis bertanda tangan (diekspor
+#     efn-deploy) atau env Superadmin pada jalur manual. Semua divalidasi regex/subnet; karakter kontrol ditolak;
+#     production menolak RABBITMQ_STRICT_PERMISSIONS=false / ETL_AUDIT_COPY_ENABLED=false tanpa izin deploy.conf.
+# Env wajib : TRAEFIK_DOMAIN ACME_EMAIL GHCR_USER GHCR_TOKEN APP_ENV PAYMENT_PROVIDER
+#             EFN_PUBLIC_BIND (IP host untuk 80/443 websecure)
+#             IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_MINIO IMAGE_METABASE
 #               (= <registry>/<svc>@sha256:<digest>; SEC-10: deploy by digest). Lewat efn-deploy nilainya HANYA dari
 #               manifest rilis bertanda tangan + `cosign verify` di host (SEC-42); env CI tidak bisa mengisinya.
 #             Pin root CA: EFN_PKI_ROOT_SHA256 (dari efn-deploy, atau dibaca dari /etc/efn/deploy.conf saat manual)
 #             EFN_PKI_INTERMEDIATE_KEY EFN_PKI_INTERMEDIATE_CRT EFN_PKI_ROOT_CRT (PKI 3 tingkat, ADR-022 W1)
 #             + satu env UPPERCASE per baris scripts/secrets.list yang BUKAN `pki`/`derived:*`
 # Env opsional: WHATSAPP_ENABLED WHATSAPP_PHONE_NUMBER_ID WHATSAPP_OTP_TEMPLATE OLLAMA_VISION_MODEL
-#               EFN_WG_BIND (default 10.88.0.1) EFN_WG_HTTPS_PORT (default 443) EFN_WG_OUTLET_CIDR EFN_WG_STAFF_CIDR
+#               COMPOSE_PROFILES (default core,data,ai,observability,ops; production wajib core,data,observability)
+#               EFN_WG_BIND (default 10.88.0.1; WAJIB IP di interface wg0) EFN_WG_HTTPS_PORT (default 443)
+#               EFN_WG_OUTLET_CIDR EFN_WG_STAFF_CIDR (di dalam 10.88.0.0/15, prefix >= /16)
 #               ACME_DNS_PROVIDER (default cloudflare) ACME_DNS_TOKEN_ENV (default CF_DNS_API_TOKEN)
 #               ACME_SERVER (default LE produksi; LE staging diizinkan) - service acme-dns (SEC-37)
 #               EFN_PKI_EXTRA_TRUST (PEM CA lama selama rotasi CA) RABBITMQ_STRICT_PERMISSIONS
@@ -43,55 +50,31 @@ SECRET_GROUP="${EFN_SECRET_GROUP:-efn-superadmin}"
 export SECRET_FILE_MODE="${SECRET_FILE_MODE:-0444}"
 
 die() { echo "deploy: $*" >&2; exit 1; }
+# shellcheck source=scripts/lib/deploy-validate.sh
+source "$BASE/scripts/lib/deploy-validate.sh"
 
 # ── 0. Validasi input non-rahasia (SEC-10/SEC-30: tidak ada nilai tak tervalidasi ke shell/compose/sed) ───────
 [[ "${EUID}" -eq 0 ]] || die "harus dijalankan sebagai root (sudo); lihat docs/runbooks/key-custody.md"
 [[ -z "${PKI_SOURCE:-}" || "${PKI_SOURCE}" == "intermediate" ]] \
   || die "PKI_SOURCE=${PKI_SOURCE} sudah dihapus (SEC-23); leaf selalu diterbitkan dari intermediate"
 DIGEST_RE='^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$'
-for v in IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_MINIO; do
+for v in IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_MINIO IMAGE_METABASE; do
   [[ "${!v:-}" =~ $DIGEST_RE ]] || die "$v harus <registry>/<image>@sha256:<64 hex> (dapat: '${!v:-}')"
 done
-[[ "${TRAEFIK_DOMAIN:-}" =~ ^[a-z0-9.-]+$ ]] || die "TRAEFIK_DOMAIN tidak valid"
-[[ "${ACME_EMAIL:-}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || die "ACME_EMAIL tidak valid"
 [[ "$APP_ENV" =~ ^(production|staging)$ ]] || die "APP_ENV harus production|staging"
-[[ "${COMPOSE_PROFILES:-}" =~ ^[a-z,]+$ ]] || die "COMPOSE_PROFILES tidak valid"
-# `disabled` = default production BFF selama vendor belum dipilih (docs/04 §8.11, ADR-016/026) - G6 QA
-[[ "${PAYMENT_PROVIDER:-}" =~ ^(mock|disabled|xendit|midtrans)$ ]] || die "PAYMENT_PROVIDER wajib eksplisit: mock|disabled|xendit|midtrans"
-[[ "$APP_ENV" == "production" && "$PAYMENT_PROVIDER" == "mock" ]] && die "production menolak PAYMENT_PROVIDER=mock (docs/04 §8.3)"
-IPV4_RE='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
-CIDR_RE='^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$'
-[[ "${EFN_PUBLIC_BIND:-}" =~ $IPV4_RE ]] || die "EFN_PUBLIC_BIND (IP publik host untuk websecure) wajib"
-EFN_WG_BIND="${EFN_WG_BIND:-10.88.0.1}"
-EFN_WG_HTTPS_PORT="${EFN_WG_HTTPS_PORT:-443}"
-EFN_WG_OUTLET_CIDR="${EFN_WG_OUTLET_CIDR:-10.88.0.0/16}"
-EFN_WG_STAFF_CIDR="${EFN_WG_STAFF_CIDR:-10.89.0.0/16}"
-[[ "$EFN_WG_BIND" =~ $IPV4_RE ]] || die "EFN_WG_BIND tidak valid"
-[[ "$EFN_WG_HTTPS_PORT" =~ ^[0-9]{2,5}$ ]] || die "EFN_WG_HTTPS_PORT tidak valid"
-[[ "$EFN_WG_OUTLET_CIDR" =~ $CIDR_RE && "$EFN_WG_STAFF_CIDR" =~ $CIDR_RE ]] || die "EFN_WG_*_CIDR tidak valid"
-[[ "$EFN_PUBLIC_BIND" != "$EFN_WG_BIND" ]] || die "EFN_PUBLIC_BIND dan EFN_WG_BIND harus berbeda"
-ip -4 addr show 2> /dev/null | grep -q "inet ${EFN_WG_BIND}/" \
-  || die "IP WireGuard ${EFN_WG_BIND} belum ada di host (wg-quick@wg0 harus aktif sebelum deploy/docker)"
+# SEC-50: topologi dipin di deploy.conf (env berbeda = ditolak), lalu validasi ketat topologi + konfigurasi
+efn_load_pinned_conf /etc/efn/deploy.conf || die "pin topologi /etc/efn/deploy.conf"
+efn_validate_topology "$APP_ENV" || die "topologi tidak valid (SEC-50)"
+efn_validate_config "$APP_ENV" || die "konfigurasi tidak valid (SEC-50)"
+# SEC-50a: IP wg-https WAJIB alamat di interface WireGuard (bukan sekadar IP yang ada di host, mis. IP publik)
+ip -4 -o addr show dev wg0 2> /dev/null | grep -q " inet ${EFN_WG_BIND}/" \
+  || die "IP WireGuard ${EFN_WG_BIND} tidak ada di interface wg0 (wg-quick@wg0 harus aktif sebelum deploy/docker)"
 ACME_DNS_PROVIDER="${ACME_DNS_PROVIDER:-cloudflare}"
 ACME_DNS_TOKEN_ENV="${ACME_DNS_TOKEN_ENV:-CF_DNS_API_TOKEN}"
-[[ "$ACME_DNS_PROVIDER" =~ ^[a-z0-9]+$ ]] || die "ACME_DNS_PROVIDER tidak valid"
-[[ "$ACME_DNS_TOKEN_ENV" =~ ^[A-Z][A-Z0-9_]+$ ]] || die "ACME_DNS_TOKEN_ENV tidak valid"
-# SEC-37: CA untuk service acme-dns (lego). Hanya Let's Encrypt produksi atau staging (uji perdana: staging dulu).
+# SEC-37: CA untuk service acme-dns (lego). Hanya Let's Encrypt produksi atau staging (divalidasi di lib).
 ACME_SERVER="${ACME_SERVER:-https://acme-v02.api.letsencrypt.org/directory}"
-[[ "$ACME_SERVER" =~ ^https://acme-(staging-)?v02\.api\.letsencrypt\.org/directory$ ]] \
-  || die "ACME_SERVER harus URL Let's Encrypt produksi/staging"
-for v in MARKET_SCOUT_PHOTO_RETENTION_DAYS CH_MART_RETENTION_YEARS DSAR_DELETE_GRACE_DAYS; do
-  [[ -z "${!v:-}" || "${!v}" =~ ^[0-9]+$ ]] || die "$v harus angka"
-done
-# Teks consent aktif (docs/04 §8.9; BFF menolak start bila format salah). Kosong = grant consent 503 (G6 QA).
-for p in LOCATION MARKETING; do
-  ver="CONSENT_${p}_VERSION"; sha="CONSENT_${p}_TEXT_SHA256"
-  [[ -z "${!ver:-}" || "${!ver}" =~ ^[A-Za-z0-9._@-]{1,32}$ ]] || die "$ver tidak valid"
-  [[ -z "${!sha:-}" || "${!sha}" =~ ^[0-9a-f]{64}$ ]] || die "$sha harus hex 64 huruf kecil"
-  if [[ -n "${!ver:-}" && -z "${!sha:-}" ]] || [[ -z "${!ver:-}" && -n "${!sha:-}" ]]; then
-    die "$ver dan $sha harus di-set berpasangan"
-  fi
-done
+WALG_S3_PREFIX="${WALG_S3_PREFIX:-s3://pg-backup/efn}"
+[[ "$WALG_S3_PREFIX" =~ ^s3://[a-z0-9.-]+(/[A-Za-z0-9._-]+)*$ ]] || die "WALG_S3_PREFIX tidak valid"
 getent group "$SECRET_GROUP" > /dev/null || die "grup ${SECRET_GROUP} belum ada (docs/runbooks/key-custody.md §Host)"
 for v in EFN_PKI_INTERMEDIATE_KEY EFN_PKI_INTERMEDIATE_CRT EFN_PKI_ROOT_CRT; do
   [[ -n "${!v:-}" ]] || die "$v kosong (Superadmin: make pki-intermediate ENV=${APP_ENV}, unggah ke GitHub Environment)"
@@ -224,62 +207,65 @@ ETL_ENABLE_ODOO_EFF="${ETL_ENABLE_ODOO:-${PREV_ETL_ODOO:-false}}"
 # R5: eksplisit menang, lalu nilai .env sebelumnya, default false; diaktifkan otomatis HANYA setelah grant sukses
 # (grant butuh efn_audit >= 19.0.1.2.0 -> urutan: -u efn_audit -> deploy (grant) -> job aktif).
 for v in ETL_ENABLE_GL ETL_AUDIT_COPY_ENABLED; do
-  [[ -z "${!v:-}" || "${!v}" =~ ^(true|false)$ ]] || die "$v harus true|false"
   prev=$(sed -n "s/^${v}=\(true\|false\)$/\1/p" "$COMPOSE_DIR/.env" 2> /dev/null || true)
   printf -v "${v}_EFF" '%s' "${!v:-${prev:-false}}"
 done
 
 echo "==> Menulis .env (non-secret)"
-cat > "$COMPOSE_DIR/.env" <<EOF
-TRAEFIK_DOMAIN=${TRAEFIK_DOMAIN}
-ACME_EMAIL=${ACME_EMAIL}
-IMAGE_POSTGRES=${IMAGE_POSTGRES}
-IMAGE_ODOO=${IMAGE_ODOO}
-IMAGE_API_GATEWAY=${IMAGE_API_GATEWAY}
-IMAGE_SUPERAPP_WEB=${IMAGE_SUPERAPP_WEB}
-IMAGE_AI_OCR_WORKER=${IMAGE_AI_OCR_WORKER}
-IMAGE_ETL=${IMAGE_ETL}
-IMAGE_MINIO=${IMAGE_MINIO}
-APP_ENV=${APP_ENV}
-NODE_ENV=production
-PG_SUPERUSER=${PG_SUPERUSER:-postgres}
-PG_DB=efn_platform
-ODOO_DB=efn_odoo
-RABBITMQ_ADMIN_USER=efn-admin
-RABBITMQ_STRICT_PERMISSIONS=${RABBITMQ_STRICT_PERMISSIONS:-true}
-CLICKHOUSE_USER=efn
-GRAFANA_ADMIN_USER=admin
-OLLAMA_VISION_MODEL=${OLLAMA_VISION_MODEL:-qwen2.5vl:7b}
-WHATSAPP_ENABLED=${WHATSAPP_ENABLED:-false}
-WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID:-}
-WHATSAPP_OTP_TEMPLATE=${WHATSAPP_OTP_TEMPLATE:-efn_otp}
-PAYMENT_PROVIDER=${PAYMENT_PROVIDER}
-PG_ARCHIVE_MODE=on
-WALG_S3_PREFIX=${WALG_S3_PREFIX:-s3://pg-backup/efn}
-TRUSTED_PROXIES=172.30.1.0/24,${CF_IPS}
-NODE_EXPORTER_TEXTFILE_DIR=${TEXTFILE_DIR}
-COMPOSE_PROFILES=${COMPOSE_PROFILES}
-EFN_PUBLIC_BIND=${EFN_PUBLIC_BIND}
-EFN_WG_BIND=${EFN_WG_BIND}
-EFN_WG_HTTPS_PORT=${EFN_WG_HTTPS_PORT}
-EFN_WG_OUTLET_CIDR=${EFN_WG_OUTLET_CIDR}
-EFN_WG_STAFF_CIDR=${EFN_WG_STAFF_CIDR}
-EFN_INTERNAL_EXTRA_CIDR=127.0.0.1/32
-ACME_DNS_PROVIDER=${ACME_DNS_PROVIDER}
-ACME_DNS_TOKEN_ENV=${ACME_DNS_TOKEN_ENV}
-ACME_SERVER=${ACME_SERVER}
-MARKET_SCOUT_PHOTO_RETENTION_DAYS=${MARKET_SCOUT_PHOTO_RETENTION_DAYS:-90}
-CH_MART_RETENTION_YEARS=${CH_MART_RETENTION_YEARS:-5}
-CONSENT_LOCATION_VERSION=${CONSENT_LOCATION_VERSION:-}
-CONSENT_LOCATION_TEXT_SHA256=${CONSENT_LOCATION_TEXT_SHA256:-}
-CONSENT_MARKETING_VERSION=${CONSENT_MARKETING_VERSION:-}
-CONSENT_MARKETING_TEXT_SHA256=${CONSENT_MARKETING_TEXT_SHA256:-}
-DSAR_DELETE_GRACE_DAYS=${DSAR_DELETE_GRACE_DAYS:-7}
-ETL_ENABLE_ODOO=${ETL_ENABLE_ODOO_EFF}
-ETL_ENABLE_GL=${ETL_ENABLE_GL_EFF}
-ETL_AUDIT_COPY_ENABLED=${ETL_AUDIT_COPY_ENABLED_EFF}
-EOF
-chmod 0640 "$COMPOSE_DIR/.env"
+# SEC-50b: satu kunci satu baris; nilai dengan karakter kontrol ditolak; jumlah baris diverifikasi
+DOTENV=(
+  "TRAEFIK_DOMAIN=${TRAEFIK_DOMAIN}"
+  "ACME_EMAIL=${ACME_EMAIL}"
+  "IMAGE_POSTGRES=${IMAGE_POSTGRES}"
+  "IMAGE_ODOO=${IMAGE_ODOO}"
+  "IMAGE_API_GATEWAY=${IMAGE_API_GATEWAY}"
+  "IMAGE_SUPERAPP_WEB=${IMAGE_SUPERAPP_WEB}"
+  "IMAGE_AI_OCR_WORKER=${IMAGE_AI_OCR_WORKER}"
+  "IMAGE_ETL=${IMAGE_ETL}"
+  "IMAGE_MINIO=${IMAGE_MINIO}"
+  "IMAGE_METABASE=${IMAGE_METABASE}"
+  "APP_ENV=${APP_ENV}"
+  "NODE_ENV=production"
+  "PG_SUPERUSER=${PG_SUPERUSER:-postgres}"
+  "PG_DB=efn_platform"
+  "ODOO_DB=efn_odoo"
+  "RABBITMQ_ADMIN_USER=efn-admin"
+  "RABBITMQ_STRICT_PERMISSIONS=${RABBITMQ_STRICT_PERMISSIONS:-true}"
+  "CLICKHOUSE_USER=efn"
+  "GRAFANA_ADMIN_USER=admin"
+  "OLLAMA_VISION_MODEL=${OLLAMA_VISION_MODEL:-qwen2.5vl:7b}"
+  "WHATSAPP_ENABLED=${WHATSAPP_ENABLED:-false}"
+  "WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID:-}"
+  "WHATSAPP_OTP_TEMPLATE=${WHATSAPP_OTP_TEMPLATE:-efn_otp}"
+  "PAYMENT_PROVIDER=${PAYMENT_PROVIDER}"
+  "PG_ARCHIVE_MODE=on"
+  "WALG_S3_PREFIX=${WALG_S3_PREFIX:-s3://pg-backup/efn}"
+  "TRUSTED_PROXIES=172.30.1.0/24,${CF_IPS}"
+  "NODE_EXPORTER_TEXTFILE_DIR=${TEXTFILE_DIR}"
+  "COMPOSE_PROFILES=${COMPOSE_PROFILES}"
+  "EFN_PUBLIC_BIND=${EFN_PUBLIC_BIND}"
+  "EFN_WG_BIND=${EFN_WG_BIND}"
+  "EFN_WG_HTTPS_PORT=${EFN_WG_HTTPS_PORT}"
+  "EFN_WG_OUTLET_CIDR=${EFN_WG_OUTLET_CIDR}"
+  "EFN_WG_STAFF_CIDR=${EFN_WG_STAFF_CIDR}"
+  "EFN_INTERNAL_EXTRA_CIDR=127.0.0.1/32"
+  "ACME_DNS_PROVIDER=${ACME_DNS_PROVIDER}"
+  "ACME_DNS_TOKEN_ENV=${ACME_DNS_TOKEN_ENV}"
+  "ACME_SERVER=${ACME_SERVER}"
+  "MARKET_SCOUT_PHOTO_RETENTION_DAYS=${MARKET_SCOUT_PHOTO_RETENTION_DAYS:-90}"
+  "CH_MART_RETENTION_YEARS=${CH_MART_RETENTION_YEARS:-5}"
+  "CONSENT_LOCATION_VERSION=${CONSENT_LOCATION_VERSION:-}"
+  "CONSENT_LOCATION_TEXT_SHA256=${CONSENT_LOCATION_TEXT_SHA256:-}"
+  "CONSENT_MARKETING_VERSION=${CONSENT_MARKETING_VERSION:-}"
+  "CONSENT_MARKETING_TEXT_SHA256=${CONSENT_MARKETING_TEXT_SHA256:-}"
+  "DSAR_DELETE_GRACE_DAYS=${DSAR_DELETE_GRACE_DAYS:-7}"
+  "ETL_ENABLE_ODOO=${ETL_ENABLE_ODOO_EFF}"
+  "ETL_ENABLE_GL=${ETL_ENABLE_GL_EFF}"
+  "ETL_AUDIT_COPY_ENABLED=${ETL_AUDIT_COPY_ENABLED_EFF}"
+  "MIGRATION_ENABLED=${MIGRATION_ENABLED:-false}"
+  "METABASE_ADMIN_EMAIL=${METABASE_ADMIN_EMAIL:-${ACME_EMAIL}}"
+)
+efn_write_dotenv "$COMPOSE_DIR/.env" "${DOTENV[@]}" || die "gagal menulis .env (SEC-50)"
 
 # compose base merujuk ../../secrets (layout repo). Di host layout-nya /opt/efn/{compose,secrets},
 # jadi lokasi secrets dioverride lewat compose file khusus host (tidak di-commit).
@@ -392,7 +378,17 @@ if [[ ",${COMPOSE_PROFILES}," == *",data,"* ]]; then
     sleep 5
   done
   check_oneshot clickhouse-init || die "clickhouse-init gagal"
+  # G13: Metabase yang belum di-setup dapat diklaim siapa pun di subnet staf -> provision.py jalan otomatis begitu
+  # metabase sehat (depends_on di compose, tanpa jeda manual); di sini hanya dipastikan sukses.
+  echo "==> metabase-provision (setup admin, koneksi ClickHouse TLS strict, dashboard) harus sukses"
+  for _ in $(seq 1 60); do
+    state=$("${DC[@]}" ps -a --format json metabase-provision | jq -r '(if type=="array" then .[] else . end) | .State' | head -n1)
+    [[ "$state" == "exited" ]] && break
+    sleep 5
+  done
+  check_oneshot metabase-provision || die "metabase-provision gagal - Metabase JANGAN dibiarkan belum ter-setup (runbook)"
 fi
+[[ "${MIGRATION_ENABLED:-false}" != true ]]   || echo "PERINGATAN: MIGRATION_ENABLED=true (endpoint migrasi K-7 aktif) - matikan lagi setelah migrasi selesai" >&2
 
 # QA U1: grant baca level-kolom efn_etl pada tabel Odoo (file milik data-AI). Dijalankan sebagai efn_odoo
 # (pemilik tabel, lewat socket lokal di container postgres) setelah Odoo ter-install; idempoten, ON_ERROR_STOP.

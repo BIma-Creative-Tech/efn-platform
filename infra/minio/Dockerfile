@@ -17,10 +17,12 @@ ENV CGO_ENABLED=0 GOFLAGS=-trimpath MINIO_RELEASE=RELEASE MC_RELEASE=RELEASE
 # hadolint ignore=DL3018
 RUN apk add --no-cache git
 WORKDIR /src/silo
+# hadolint ignore=DL3062  # bukan `go install`: build dari clone tag + commit yang diverifikasi (hadolint >= 2.13)
 RUN git clone --depth 1 --branch "${SILO_TAG}" https://github.com/pgsty/silo.git . \
     && test "$(git rev-parse HEAD)" = "${SILO_COMMIT}" \
     && go build -tags kqueue -ldflags "$(go run buildscripts/gen-ldflags.go)" -o /out/silo .
 WORKDIR /src/mc
+# hadolint ignore=DL3062  # bukan `go install`: build dari clone tag + commit yang diverifikasi (hadolint >= 2.13)
 RUN git clone --depth 1 --branch "${MC_TAG}" https://github.com/pgsty/mc.git . \
     && test "$(git rev-parse HEAD)" = "${MC_COMMIT}" \
     && go build -tags kqueue -ldflags "$(go run buildscripts/gen-ldflags.go)" -o /out/mc .

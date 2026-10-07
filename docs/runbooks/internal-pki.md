@@ -99,3 +99,9 @@ Dev: `make pki-rotate`.
 - **Staging/produksi:** `deploy.sh` (gen-pki leaf) **gagal** dengan pesan "intermediate ... tidak mencakup semua
   service". Superadmin: `make pki-intermediate ENV=<env>` dari root offline (daftar service terbaru), unggah 3 secret
   `EFN_PKI_*`, lalu deploy (= prosedur rotasi intermediate di atas). Root tidak berubah.
+
+## Gelombang 13: service PKI baru `etl`, `metabase-provision` (klien mTLS)
+`etl` (→ `loki-tls`, verifikasi HMAC sink audit) dan `metabase-provision` (→ `metabase-tls`) mendapat leaf
+`clientAuth`. nameConstraints intermediate memuat daftar service → **staging/prod: terbitkan ulang intermediate**
+(§service-baru) sebelum deploy G13; `deploy.sh` menolak bila intermediate belum mencakupnya. Dev: `gen-secrets.sh`
+membuat ulang CA dev + semua leaf → `up -d --force-recreate` seluruh stack.

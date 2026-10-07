@@ -781,3 +781,95 @@ memeriksa ghostunnel mode client (`--cacert`, `--verify-cn`, listen loopback, ta
 - Git: file `infra/acme/*.sh` dipanggil lewat `/bin/sh <file>` (tidak butuh bit exec); hook uji disalin + chmod di
   volume uji.
 - `promtail-journal` belum diuji di host nyata; `EfnAltchaMaxLevelSpike` belum pernah firing nyata.
+
+
+# Gelombang 13 — SEC-50/51/52/53/54, integrasi G13 (Odoo/data-AI/BFF), load test Fase 1 (7 Okt 2026)
+
+Basis: `67039db` (+ commit G13 agent lain s.d. `67f4462`). Diuji di stack dev nyata. Tidak ada commit.
+
+## G13.1 Status
+| Item | Status | Bukti |
+|---|---|---|
+| SEC-50 env deploy | **Fixed (kode + uji)** | `test-efn-deploy.sh` **74/74** (42 kasus baru) |
+| SEC-51 selector sink | **Fixed (infra)** | regex berjangkar format v2 + label `audit_op`,`critical`; uji container sintetis: 2 baris sah masuk, 5 palsu (substring di pesan login, logger `sinkx`, level WARNING, v1, tanpa `log_id`) ditolak; alert Critical/Control/Unsigned diterima Alertmanager, purge palsu TIDAK memicu alert |
+| SEC-52 butir 1 dead-man | **Fixed** | 5 rule heartbeat ETL (`efn-etl-heartbeat`), `absent_over_time` dibuktikan (jendela 5 s → 1, 1 h → kosong) |
+| SEC-52 butir 2 jangkar 400 hari | **Fixed** | `stream="efn_audit_anchor"` (chain_head, recon) retensi 9600h; kepala rantai dikecualikan dari redaksi HP (terbukti: hash memuat `0812345678` utuh); perbandingan otomatis = data-AI |
+| SEC-53 acme-dns | **Fixed (kode + Pebble)** | service `acme-publish` (network none); `test-acme-dns.sh` 16/16 (PEM berisi router YAML ditolak, kunci multi-blok ditolak, `base/` tak bisa diubah) |
+| SEC-54 CGNAT | **Mitigasi infra + dokumentasi** | `OTP_RL_SOURCE_LIMIT` 20→60; `::ffff:` sudah dinormalkan BFF (`common/net/client-ip.ts`); level berbasis rasio gagal = backlog BFF |
+| Load test | **Selesai** | `tests/load/` k6; 5 menit, 200 771 req, error 0 % (di luar 404 transisi Traefik) |
+
+## G13.2 SEC-50 — desain
+- `scripts/lib/deploy-validate.sh` (baru): satu sumber aturan, di-source `efn-deploy` (dari rilis TERVERIFIKASI, sebelum
+  `/opt/efn` ditulis) dan `deploy.sh` (lapis 2 + jalur manual).
+- Topologi (`TRAEFIK_DOMAIN`, `EFN_PUBLIC_BIND`, `EFN_WG_*`, `COMPOSE_PROFILES`, `EFN_ALLOW_CONTROL_OFF`) dipin di
+  `/etc/efn/deploy.conf`; env pemanggil dibuang. Konfigurasi aplikasi → manifest `config` (schema 2, ditandatangani;
+  kunci allowlist, string tanpa karakter kontrol). Stdin hanya GHCR + `EFN_PKI_*` + secret; nama lain → ditolak dengan
+  pesan SEC-50. `APP_ENV` = `EFN_APP_ENV`.
+- Validasi: WG bind di 10.88/16|10.89/16 (+ `deploy.sh`: harus ada di `wg0`); CIDR kanonik dalam 10.88.0.0/15, prefix
+  ≥ /16; public bind ≠ 0.0.0.0/loopback/subnet WG; regex per variabel; production menolak `RABBITMQ_STRICT_PERMISSIONS=
+  false`/`ETL_AUDIT_COPY_ENABLED=false` (kecuali `EFN_ALLOW_CONTROL_OFF`), profil wajib `core,data,observability`.
+  `.env` ditulis lewat `efn_write_dotenv` (kunci unik, tanpa kontrol, jumlah baris diverifikasi).
+- `deploy.yml`: `CFG_*` → `config` (jq `$ENV`, cek kontrol di CI); step deploy hanya mengirim secret.
+- sha256 `scripts/host/efn-deploy` saat laporan ini: `9c2bb1b0074408d1f094094d6d05f720c5e80c908e9b3221a218ad930f0ea273` (cocokkan ulang di PR).
+
+## G13.3 Integrasi permintaan lead (Odoo / data-AI / BFF)
+- Secret baru `efn_audit_sink_key` [SA] (odoo + etl, `EFN_AUDIT_SINK_KEY_FILE`), `metabase_admin_password`,
+  `migration_api_key` (api-gateway, `MIGRATION_API_KEY_FILE`; `MIGRATION_ENABLED` default false, prod via manifest
+  `config`, peringatan di deploy.sh bila true). `/internal/*` tetap dikecualikan router Traefik (dev: 404, diuji).
+- PKI klien baru `etl` (→ loki-tls `--allow-cn=etl`, loki ikut network `data`; diuji: dengan sertifikat 200, tanpa
+  sertifikat ditolak) dan `metabase-provision` (→ metabase-tls). **Staging/prod: terbitkan ulang intermediate.**
+- Metabase: `build: ../metabase`, image `IMAGE_METABASE` (image ke-8: build-push matrix, deploy.yml digest+manifest,
+  efn-deploy `IMAGE_VARS`, deploy.sh). One-shot `metabase-provision` (python ber-digest, `-I -B`, user 65534,
+  read-only, network internal, mTLS) jalan otomatis begitu metabase(+tls) sehat; deploy.sh memeriksa exit 0. Dev: exit 0
+  (14 kartu `completed`). Sidecar `metabase-tls` ikut di-recreate pada `up --force-recreate` (network_mode service).
+- Heartbeat ETL: rule `efn-etl-heartbeat` (cycle/sales_fact_pos 45m, audit_copy 1h, stock_snapshot 3h, audit_recon 26h
+  critical); rule G13 awal berbasis `EFN_AUDIT_CHAIN_HEAD` diganti agar tidak dobel.
+- deploy.sh menerapkan `05-platform-loyalty-pos.sql` lewat pola ≥ 04 yang ada (sebelum `up`). Dev volume lama belum
+  punya tabelnya → `earn` 500 di load test pertama; diterapkan manual 06:37 UTC (idempoten).
+- CI: langkah `pytest + ruff infra/metabase` (23 passed lokal); hadolint-action (2.12) diganti hadolint v2.14.0
+  ber-digest (2.12 tidak mengenal `ADD --checksum`); DL3062 minio di-ignore dengan alasan; shellcheck `-x` +
+  `scripts/lib`, `tests/load`; cek EKU klien `etl`, `metabase_provision`.
+
+## G13.4 Load test (detail: `tests/load/README.md`)
+p95: login otp/request 195 ms, POS otp/request 158 ms, balance 118 ms, earn 170 ms, scout upload 413 ms; p99 ≤ 518 ms;
+±669 req/s. Bottleneck: api-gateway CPU ±128 % (event loop, mode dev), postgres 75 % rata-rata, rabbitmq puncak
+315 %, promtail puncak 200 % (log per request). Temuan: (1) Traefik merutekan container baru 20–25 s setelah recreate
+(404 transisi) — relevan untuk deploy rolling; (2) load test menghabiskan budget OTP global per jam → `run.sh` kini
+membersihkan `rl:otp:budget:*` (dev). Belum: image produksi, verify OTP sukses, redeem.
+
+## G13.5 Validasi
+| Cek | Hasil |
+|---|---|
+| shellcheck v0.11.0 (`-x`, daftar CI + lib + tests/load + acme sh) | bersih |
+| hadolint v2.14.0 (8 Dockerfile) | lulus (info DL3059) |
+| actionlint 1.7.12 | bersih |
+| yamllint | 0 error (5 warning line-length regex) |
+| promtool rules (27) / promtail -check-syntax / loki -verify-config | OK |
+| compose config dev & prod semua profil; secrets compose == secrets.list; publish prod = traefik | OK |
+| check-encryption.sh (docker:27-cli) | OK |
+| test-efn-deploy.sh | 74/74 |
+| test-acme-dns.sh | 16/16 (2 run berurutan) |
+| pytest infra/metabase | 23 passed |
+| Prometheus targets | 34/34 up |
+| Smoke E2E `a b g` | 57/57 |
+| Ruler Loki | semua rule G13 dievaluasi tanpa error |
+
+## G13.6 Restart stack dev (UTC)
+05:37–05:42 promtail crash loop (selector match pakai backtick → promtail tidak menerima; diperbaiki, log container
+periode itu mungkin tertunda); 05:57 recreate `acme-dns-init`, `acme-dns`, `acme-publish` (baru), `traefik`,
+`traefik-metrics-tls`; 06:25 `gen-secrets.sh` → **CA dev dibuat ulang** (service PKI baru) + semua leaf; 06:26–06:28
+`up -d --force-recreate` SEMUA profil; 06:33–06:47 api-gateway di-recreate beberapa kali oleh load test; 06:37 migrasi
+05 di PG dev; 06:57 hapus `rl:otp:budget:*` di Redis dev; ±06:50 recreate `acme-publish`. Container uji sintetis
+`g13-fake-*` (label service=odoo/etl) menulis baris palsu ke Loki dev (log_id 99000x/99010x, company 990/991) — abaikan
+saat investigasi dev; memicu EfnAuditControlChange/CriticalAccessChange/SinkUnsigned di Alertmanager dev.
+
+## G13.7 Sisa / butuh pihak lain
+- **Superadmin (host):** pasang ulang `efn-deploy`; tambah kunci topologi ke `deploy.conf` (key-custody §4c); secret
+  GitHub baru `EFN_AUDIT_SINK_KEY`, `METABASE_ADMIN_PASSWORD`, `MIGRATION_API_KEY`; vars `METABASE_ADMIN_EMAIL`,
+  `MIGRATION_ENABLED`; terbitkan ulang intermediate (etl, metabase-provision). Rilis schema 1 ditolak.
+- **BFF:** level ALTCHA dari rasio kegagalan + kuota IP CGNAT (SEC-54 butir 2–3).
+- **data-AI:** pakai `LOKI_URL`/`LOKI_CLIENT_*` (CN etl) untuk verifikasi `mac` sink v2 + perbandingan kepala rantai antar
+  hari (SEC-52 butir 2–3). `sales_fact_pos` alert akan firing bila `ETL_ENABLE_ODOO=false` di production.
+- **Odoo:** baris sink v1 (efn_audit < 19.0.1.3.0) tidak lagi masuk stream audit — pastikan modul ter-upgrade sebelum
+  deploy G13.
+- Belum diuji: host Linux nyata (wg0, cosign asli), LE/Cloudflare nyata, load test image produksi.

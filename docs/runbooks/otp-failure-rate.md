@@ -44,3 +44,13 @@ atau anggaran OTP global (`OTP_GLOBAL_HOURLY_BUDGET`) hampir habis. Metrik tanpa
 3. Serangan terkonfirmasi: aturan WAF/rate limit Cloudflare untuk path OTP; turunkan `OTP_GLOBAL_HOURLY_BUDGET`
    sementara. Dugaan kompromi akun → [security-incident.md](security-incident.md).
 4. Lonjakan sah (kampanye marketing) → catat di tiket, tanpa tindakan.
+
+## CGNAT seluler (gelombang 13, SEC-54)
+Operator seluler Indonesia memakai CGNAT: banyak pelanggan berbagi satu IPv4. Batas per IP sumber hanya kontrol
+sekunder; kontrol utama = batas per member (3/15 menit, 10/jam) + budget global. Sejak G13 `OTP_RL_SOURCE_LIMIT`
+default compose **60**/15 menit (sebelumnya 20) agar satu penyerang di IP bersama butuh 3× lebih banyak PoW untuk
+mengunci IP itu. BFF sudah menormalkan `::ffff:a.b.c.d` → IPv4 (`common/net/client-ip.ts`).
+- Gejala CGNAT: banyak member berbeda dari satu IP mendapat 429 / PoW level tinggi; `EfnAltchaMaxLevelSpike`.
+- Sementara: naikkan `OTP_RL_SOURCE_LIMIT` (env api-gateway) — jangan turunkan batas per member.
+- Backlog BFF: level ALTCHA dari rasio kegagalan (bukan jumlah permintaan sukses), kuota lebih tinggi untuk IP dengan
+  banyak `member_hash` berbeda.

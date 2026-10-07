@@ -37,27 +37,59 @@ scrape_configs:
         regex: "/(.*)"
         target_label: container
     pipeline_stages:
-      # Redaksi dasar: nomor HP Indonesia dan token Bearer tidak boleh masuk log (UU PDP, R-L01)
-      - replace:
-          expression: '(\+?62|0)8[1-9][0-9]{7,11}'
-          replace: '[PHONE_REDACTED]'
-      - replace:
-          expression: '(?i)bearer\s+[a-z0-9\-_\.]+'
-          replace: 'Bearer [REDACTED]'
-      # Gelombang 11 (SEC-43): baris sink audit Odoo (`EFN_AUDIT_SINK {json}`, logger odoo.addons.efn_audit.sink)
-      # -> stream terpisah stream="efn_audit_sink" (retensi 400 hari di loki.yml, alert ruler loki-rules/).
-      # Label rendah kardinalitas saja: audit_op (create/write/unlink/purge). Field lain diparse saat query.
-      # Hanya dari container service=odoo: container lain tidak bisa memalsukan stream ini dengan mencetak teks sama.
+      # Gelombang 13 (SEC-51/SEC-52): baris jangkar audit dikenali dengan regex BERJANGKAR penuh pada format log
+      # (timestamp, level, NAMA LOGGER, payload JSON ber-skema) - bukan substring di mana pun dalam baris. Baris lain
+      # yang kebetulan memuat teks "EFN_AUDIT_SINK"/"EFN_AUDIT_RECON" (mis. login gagal berisi teks itu) tidak masuk
+      # stream audit. Batas: newline di argumen log Python tidak di-escape -> baris palsu utuh tetap mungkin sampai
+      # Odoo/ETL meng-escape newline (SEC-51 butir 2, Odoo engineer/data-AI); runbook audit-sink-alerts.md §Batas.
+      #
+      # (1) Kepala rantai salinan audit ClickHouse (ETL, logger efn_etl.audit_job) -> stream="efn_audit_anchor"
+      #     retensi 400 hari (loki.yml) = jangkar eksternal + dead-man (loki-rules/efn-ops-logs.yml). Dicocokkan
+      #     SEBELUM redaksi: hash hex 64 dapat memuat pola "08xxxxxxxx" yang akan dirusak redaksi nomor HP.
       - match:
-          selector: '{service="odoo"} |= "odoo.addons.efn_audit.sink: EFN_AUDIT_SINK "'
+          selector: '{service="etl"} |~ "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2},\\d{3} INFO efn_etl\\.audit_job EFN_AUDIT_CHAIN_HEAD \\{\"company\":\\d+,\"seq\":\\d+,\"row_hash\":\"[0-9a-f]{64}\"\\}\\s*$"'
+          stages:
+            - static_labels:
+                stream: efn_audit_anchor
+                audit_event: chain_head
+      # Redaksi dasar: nomor HP Indonesia dan token Bearer tidak boleh masuk log (UU PDP, R-L01). Semua baris kecuali
+      # kepala rantai (isi kepala rantai sudah dibatasi regex: hanya angka + hex).
+      - match:
+          selector: '{container=~".+", stream!="efn_audit_anchor"}'
+          stages:
+            - replace:
+                expression: '(\+?62|0)8[1-9][0-9]{7,11}'
+                replace: '[PHONE_REDACTED]'
+            - replace:
+                expression: '(?i)bearer\s+[a-z0-9\-_\.]+'
+                replace: 'Bearer [REDACTED]'
+      # (2) Gelombang 11 (SEC-43) + 13 (SEC-49/SEC-51): baris sink audit Odoo v2 (efn_audit >= 19.0.1.3.0) ->
+      #     stream="efn_audit_sink" (retensi 400 hari, alert loki-rules/efn-audit-sink.yml). Format Odoo:
+      #     "<tgl> <jam>,<ms> <pid> INFO <db> odoo.addons.efn_audit.sink: EFN_AUDIT_SINK {json}". JSON sort_keys +
+      #     ensure_ascii (newline di nilai selalu di-escape): wajib diawali "audit_op", "critical", memuat "log_id"
+      #     numerik, dan diakhiri "v": 2. Baris lain (logger lain, level lain, v1, substring di pesan login) DIBUANG
+      #     dari stream ini. Label rendah kardinalitas: audit_op (10 nilai) + critical (true|false). Keaslian per baris =
+      #     `mac` HMAC (kunci efn_audit_sink_key, diverifikasi ETL); alert EfnAuditSinkUnsigned bila mac null.
+      #     Hanya dari container service=odoo (label Docker; container lain tidak bisa memalsukan).
+      - match:
+          selector: '{service="odoo"} |~ "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2},\\d{3} \\d+ INFO \\S+ odoo\\.addons\\.efn_audit\\.sink: EFN_AUDIT_SINK \\{\"audit_op\": \"[a-z_]{1,32}\", \"critical\": (true|false), [^\\n]*\"log_id\": [1-9]\\d*, [^\\n]*\"v\": 2\\}\\s*$"'
           stages:
             - regex:
-                expression: 'EFN_AUDIT_SINK (?P<sink>\{.*\})'
+                expression: ' odoo\.addons\.efn_audit\.sink: EFN_AUDIT_SINK (?P<sink>\{"audit_op": .*\})\s*$'
             - json:
                 source: sink
                 expressions:
-                  audit_op: operation
+                  audit_op: audit_op
+                  critical: critical
             - static_labels:
                 stream: efn_audit_sink
             - labels:
                 audit_op:
+                critical:
+      # (3) Hasil rekonsiliasi harian salinan audit (ETL) -> stream jangkar 400 hari + dead-man (SEC-52 butir 1).
+      - match:
+          selector: '{service="etl"} |~ "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2},\\d{3} (INFO|WARNING) efn_etl\\.audit_job EFN_AUDIT_RECON \\{\"max_log_id\":.*\\}\\s*$"'
+          stages:
+            - static_labels:
+                stream: efn_audit_anchor
+                audit_event: recon

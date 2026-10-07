@@ -291,7 +291,7 @@ groups:
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/tls-cert-expiry.md
 
       # SEC-37: Traefik menyajikan sertifikat yang tidak valid publik untuk erp. (acme-dns belum pernah menerbitkan,
-      # volume acme-dns-certs kosong, atau rantai salah). Tanpa ini kegagalan penerbitan PERTAMA tidak terlihat oleh
+      # acme-publish menolak PEM / volume traefik-dynamic kosong, atau rantai salah). Tanpa ini kegagalan penerbitan PERTAMA tidak terlihat oleh
       # alert kedaluwarsa (metrik expiry tidak ada saat handshake gagal). Dev: selalu gagal (self-signed) - wajar.
       - alert: EfnWgCertProbeFailed
         expr: probe_success{job="probe-wg-tls"} == 0

@@ -1,0 +1,17 @@
+# Override HANYA untuk load test di stack DEV (tests/load/run.sh). Tidak pernah dipakai deploy.sh / staging / prod.
+# run.sh menolak jalan bila APP_ENV api-gateway bukan dev dan mengembalikan api-gateway ke konfigurasi normal.
+# Batas per IP / per member TIDAK dilonggarkan (k6 memakai X-Forwarded-For acak per iterasi dari subnet proxy tepercaya,
+# meniru banyak klien). Yang dilonggarkan hanya:
+#   - budget global per jam (OTP publik 1 000/jam, POS 5 000/jam) - load test 5 menit melampauinya; yang diukur =
+#     kapasitas aplikasi, bukan budget anti-SMS-pumping;
+#   - biaya PoW ALTCHA (dibayar CPU KLIEN, bukan server) agar generator beban tidak menjadi bottleneck;
+#   - batas harian laporan Market Scout per member (skenario scout memakai satu member uji).
+services:
+  api-gateway:
+    environment:
+      APP_ENV: dev
+      OTP_GLOBAL_HOURLY_BUDGET: "10000000"
+      OTP_POS_HOURLY_BUDGET: "10000000"
+      ALTCHA_ADAPTIVE: "false"
+      ALTCHA_MAX_NUMBER: "1000"          # minimum yang diizinkan BFF; produksi 500 000
+      MARKET_SCOUT_DAILY_CAP: "10000"

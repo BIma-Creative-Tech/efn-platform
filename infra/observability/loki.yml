@@ -50,6 +50,12 @@ limits_config:
     - selector: '{job="host-journal"}'
       priority: 2
       period: 9600h
+    # G13 (SEC-52 butir 2/3): jangkar eksternal salinan audit ClickHouse (EFN_AUDIT_CHAIN_HEAD per siklus ETL,
+    # EFN_AUDIT_RECON harian) - label dari promtail.yml (regex berjangkar, logger efn_etl.audit_job). 400 hari agar
+    # kepala rantai lama dapat dibandingkan dengan isi ClickHouse saat investigasi (runbook etl-audit-copy.md §Jangkar).
+    - selector: '{stream="efn_audit_anchor"}'
+      priority: 3
+      period: 9600h
   ingestion_rate_mb: 16
   ingestion_burst_size_mb: 32
 

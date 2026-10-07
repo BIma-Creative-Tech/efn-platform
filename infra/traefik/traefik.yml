@@ -116,5 +116,6 @@ certificatesResolvers:
       httpChallenge:
         entryPoint: web
   # Host internal di wg-https (ADR-023 butir 2, DNS-01) TIDAK lagi diterbitkan Traefik (SEC-37): service `acme-dns`
-  # (infra/acme/acme-dns.sh, tanpa port, satu-satunya pemegang token DNS) menulis sertifikat ke volume acme-dns-certs
+  # (infra/acme/acme-dns.sh, tanpa port, satu-satunya pemegang token DNS) menerbitkan; `acme-publish` (network none,
+  # SEC-53) memvalidasi PEM dan menulisnya + acme-dns.yml (template tetap) ke volume traefik-dynamic
   # = /etc/traefik/dynamic (read-only, provider file di atas). Router wg-https memakai `tls: true` tanpa certresolver.
