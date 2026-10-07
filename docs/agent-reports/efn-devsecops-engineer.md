@@ -873,3 +873,45 @@ saat investigasi dev; memicu EfnAuditControlChange/CriticalAccessChange/SinkUnsi
 - **Odoo:** baris sink v1 (efn_audit < 19.0.1.3.0) tidak lagi masuk stream audit — pastikan modul ter-upgrade sebelum
   deploy G13.
 - Belum diuji: host Linux nyata (wg0, cosign asli), LE/Cloudflare nyata, load test image produksi.
+
+# Gelombang 13c — Penutupan infra loyalty (SEC-61/65), 2026-10-07
+
+Dijalankan bersama peran QA (satu agent). Tanpa commit. Detail runtime: `docs/testing/E2E_SMOKE_REPORT.md` §G13c.
+
+## G13c.1 Perubahan
+- `scripts/deploy.sh`: migrasi `>= 04` sudah otomatis lewat glob (06 ikut); ditambah **cek wajib** `04/05/06-*.sql` ada
+  di bundel sebelum loop (bundel tidak lengkap = deploy gagal, bukan dilewati diam-diam).
+- `infra/compose/docker-compose.yml`: api-gateway `NO_COLOR: "1"` (log NestJS tanpa ANSI). Dev override:
+  `LOYALTY_RECON_INTERVAL_MS: "300000"` (rekonsiliasi 5 menit agar teramati smoke).
+- `infra/observability/promtail.yml` tahap 4: regex berjangkar penuh (`[Nest] <pid>  - <waktu> WARN|LOG|ERROR
+  [PosLoyaltyService|LoyaltyReconService|MigrationService] EFN_LOYALTY_* {json ber-skema}`, hanya `service=api-gateway`)
+  → `stream="efn_loyalty"`, label `loyalty_event` (anomaly|recon|migration), `kind`, `severity`, `recon_status`.
+- `infra/observability/loki.yml`: retensi stream `efn_loyalty` 400 hari (bukti fraud/rekonsiliasi Finance).
+- `infra/observability/loki-rules/efn-loyalty.yml` (baru): `EfnLoyaltyAnomalyCritical` (critical → page, per kind,
+  15 m), `EfnLoyaltyAnomalyWarning` (warning, ringkasan per kind 1 j, satu notifikasi lewat group_by alertname),
+  dead-man `EfnLoyaltyReconMissing` (`absent_over_time` heartbeat ok 2 j, for 15 m), `EfnLoyaltyReconFailing`.
+- `infra/observability/alert-rules.yml` grup `efn-loyalty`: `EfnLoyaltyReconStale` dari gauge
+  `efn_loyalty_recon_last_success_timestamp_seconds` (`max_over_time[26h] > 0` agar restart/deploy tidak memicu alert
+  palsu; max antar replika). `alertmanager.yml`: inhibit Loki-dead-man → gauge-dead-man.
+- Runbook baru `docs/runbooks/loyalty-anomaly.md` (+ indeks README); `dev-stack-boot.md` §2d migrasi dev G13c.
+
+## G13c.2 Validasi
+- promtool `check config` (28 rule) + `promtool test rules` untuk `EfnLoyaltyReconStale` (2 kasus: stale 2h20m → alert;
+  gauge 0 tiga jam → tidak ada alert); amtool `check-config` (5 inhibit); `docker compose config -q` dev & prod;
+  yamllint (`.yamllint.yml`, hanya warning panjang baris lama/baru); actionlint 0 temuan; shellcheck `deploy.sh`,
+  `run-e2e-smoke.sh` bersih; ruff 0.16.10 check + format `scripts/smoke/` bersih.
+- Runtime dev: ruler Loki mengevaluasi 4 rule baru; anomali nyata → Loki → `EfnLoyaltyAnomalyWarning` active di
+  Alertmanager (±1 menit); heartbeat recon di Loki dan gauge Prometheus.
+
+## G13c.3 Restart stack dev (UTC)
+08:02 SQL 06; 08:03 upgrade Odoo (odoo berhenti ±4 menit); 08:07 recreate api-gateway/odoo/promtail/loki/alertmanager/
+prometheus; 08:08–08:10 promtail restart loop (selector salah, diperbaiki); 08:14 api-gateway `MIGRATION_ENABLED=true`;
+08:15–08:31 smoke (api-gateway mati ±1 menit di skenario `l`); ±08:33 api-gateway kembali `MIGRATION_ENABLED=false`.
+
+## G13c.4 Sisa
+- `EfnLoyaltyAnomalyCritical` belum dipicu nyata; dead-man Loki belum ditunggu 2 jam.
+- Log ruler Loki `status=500` pada semua rule (lama juga) meskipun query 200 dan alert terkirim — selidiki (bukan blocker).
+- Regex promtail bergantung format waktu locale default Node (`MM/DD/YYYY, h:mm:ss AM`); perubahan format = dead-man
+  menyala (didokumentasikan di runbook). Opsi lebih kuat: logger JSON di BFF (backlog BFF).
+- CI: `EFN_TOUR_MIN_TESTS` 9 → 15 (usul odoo-engineer) dan `docs/04` §6 `efn.bff.client.get` → `_efn_get` belum diubah
+  (di luar batas file).

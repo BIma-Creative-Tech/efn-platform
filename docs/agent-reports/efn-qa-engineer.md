@@ -360,3 +360,30 @@ bagian Gelombang 13.
   poin dev gagal sampai `-u` + SQL 06. Run final sengaja memakai snapshot `c1b770a`.
 - Observasi data-AI: penyesuaian poin pada refund masuk `refunds` (uang), poin yang dikembalikan tidak terlihat terpisah.
 - Belum: frontend POS OWL (tour refund berpoin), `reservation_expired`, redeem/refund offline, CI GitHub, `v`.
+
+# Gelombang 13c — Regresi penuh + cek SEC-58/59/61/65 di stack nyata (2026-10-07)
+
+Dijalankan bersama peran devsecops (satu agent), runtime dev nyata (bukan hanya baca kode). Tanpa commit.
+
+## G13c.1 Hasil
+| Cek | Hasil |
+|---|---|
+| Smoke `a b c d f e g l` satu run | **153/153 PASS** (G13: 140) |
+| (a) SEC-58: user internal & kasir → `efn.bff.client._efn_post/_efn_get/post/get` via `/web/dataset/call_kw` (login password + TOTP lewat Traefik wg-https) | semua ditolak (AccessError metode privat / metode tidak ada), kontrol positif OK |
+| (b) SEC-61: earn 2005 poin > batas harian 2000 | `earn_limit_exceeded` final, order review, 0 earn/ledger BFF; `EFN_LOYALTY_ANOMALY earn_limit_member_day` di log (tanpa ANSI/HP) → Loki → `EfnLoyaltyAnomalyWarning` active di Alertmanager |
+| (c) SEC-59: retur tanpa struk | review `return_unlinked`, tanpa outbox earn/reverse, saldo tetap |
+| (d) SEC-65: migrasi member saat DSAR delete | members & opening-balance `409 member_deleting`; setelah erasure `409 member_erased`, tidak hidup kembali; 3 baris anomali `migration_erased_member` (`MIGRATION_ENABLED=true` sementara, dikembalikan `false`) |
+
+## G13c.2 Perbaikan (harness)
+- `scripts/smoke/odoo_rpc_smoke.py` (baru), `scripts/smoke/obs_smoke.py` (baru); `odoo_pos_smoke.py` langkah `rpc_users`,
+  `loy_refund_noreceipt`, `loy_outbox` + `loyalty_note`; `run-e2e-smoke.sh` helper `obs`, `migrate`, 13 cek baru;
+  README smoke. Kredensial user smoke & kunci migrasi tidak pernah di argv/log host (file 0600 → stdin; `curl -H @file`
+  di dalam container).
+- Tidak ada bug produk ditemukan; kontrak BFF ↔ Odoo (`earn_limit_exceeded` → failed + review, `pos_config_id` di earn)
+  cocok di runtime.
+
+## G13c.3 Sisa
+- Kasus critical (`earn_limit_company_hour`, manipulasi ledger) dan dead-man 2 jam tidak dipicu nyata.
+- Belum: frontend POS OWL (tour refund berpoin / order berpoin ditolak sync), `/json/2` dengan API key, CI GitHub.
+- Data QA baru di DB dev: user `smoke_rpc_internal`, `smoke_rpc_cashier` (password/TOTP acak per run, tidak tersimpan
+  di host), partner `SMOKE Member O`, order 20 juta (review) + retur tanpa struk.

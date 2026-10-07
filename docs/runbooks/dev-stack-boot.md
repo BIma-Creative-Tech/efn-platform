@@ -61,6 +61,27 @@ https://localhost:9000 "$(cat /run/secrets/minio_root_user)" "$(cat /run/secrets
    `minio-init` memakai root acak; volume lama tetap terbaca (diuji: IAM/bucket utuh, root `efnadmin` ditolak).
 3. Build ulang image lokal bila ingin base yang dipin: `$DC --profile core --profile data --profile ai build`.
 
+### 2d. Gelombang 13c: migrasi stack dev (sekali)
+
+Diverifikasi 7 Okt 2026 (volume dev lama, 0 baris ERROR):
+
+```bash
+docker exec efn-postgres-1 pg_dump -U postgres -Fc efn_odoo > "$S/efn_odoo_pre_g13c.dump"        # backup di luar repo
+MSYS_NO_PATHCONV=1 $DC exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres \
+  -f /docker-entrypoint-initdb.d/06-platform-loyalty-guard.sql      # SEC-61/65; produksi: otomatis di deploy.sh
+$DC --profile core build odoo api-gateway
+$DC --profile core stop odoo odoo-tls odoo-ws-tls
+$DC --profile core run --rm --no-deps -e ODOO_DEV_MODE= odoo odoo -d efn_odoo --stop-after-init \
+  -u efn_core,efn_pos_otp_gate,efn_pos_loyalty_ledger,efn_pos_payment_gateway,efn_privacy,efn_setup_pos
+$DC --profile core --profile observability up -d --force-recreate api-gateway odoo odoo-tls odoo-ws-tls \
+  promtail loki loki-tls alertmanager prometheus
+```
+
+Tanpa SQL 06 BFF 13c mencetak `Retensi daftar tolak erasure gagal: relation "platform.erasure_suppression" does not
+exist` tiap menit dan erasure DSAR tertunda. Upgrade mencetak 13 `WARNING Skipping deletion for missing XML ID
+point_of_sale.<pecahan>` (data CE, kosmetik). Compose baru: `NO_COLOR=1` di api-gateway (baris log tanpa kode ANSI
+untuk regex promtail loyalty) dan, khusus dev, `LOYALTY_RECON_INTERVAL_MS=300000`.
+
 ## 3. Inisialisasi database Odoo (sekali per volume `pg-data`)
 
 `list_db = False` + `dbfilter ^efn_.*$`. Tanpa database `efn_odoo`, `/web/login` mengarah ke `/web/database/selector`,

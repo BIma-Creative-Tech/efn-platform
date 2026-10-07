@@ -7,7 +7,8 @@
 #
 # Env: SMOKE_STEP (setup|otp_request|otp_verify|sync|gw_create|gw_simulate|gw_status|erasure_cron|partner|
 #      audit|audit_partner|balance|loy_config|loy_otp_request|loy_otp_verify|loy_reserve|loy_sync|loy_outbox|
-#      loy_partner|loy_balance|loy_release|loy_cancel|loy_token_probe|loy_refund)
+#      loy_partner|loy_balance|loy_release|loy_cancel|loy_token_probe|loy_refund|rpc_users|loy_refund_noreceipt)
+#      G13c: `rpc_users` (SEC-58, user + kasir ber-2FA untuk odoo_rpc_smoke.py), `loy_refund_noreceipt` (SEC-59).
 #      Langkah `loy_*` (Gelombang 13b, butuh modul efn_pos_loyalty_ledger terpasang di DB dev): urutan
 #      loy_config -> loy_otp_request -> loy_otp_verify (SMOKE_CODE) -> loy_reserve (SMOKE_POINTS) -> loy_sync
 #      -> loy_outbox. Dirangkai di run-e2e-smoke.sh skenario `l` (Gelombang 13, QA).
@@ -571,6 +572,7 @@ def step_loy_outbox():
     out(
         order_state=order.state,
         loyalty_state=order.efn_loyalty_state,
+        loyalty_note=(order.efn_loyalty_note or "")[:80],
         points_earned=order.efn_loyalty_points_earned,
         reservation_state=reservation.state if reservation else None,
         **flat,
@@ -766,7 +768,123 @@ def step_loy_refund():
     )
 
 
+# --------------------------------------------------------------------------------------------------------------
+# Gelombang 13c (QA/devsecops): langkah tambahan regresi SEC-58 / SEC-59 / SEC-61.
+RPC_CRED_FILE = "/tmp/efn_smoke_rpc.json"  # noqa: S108 - container dev, 0600, dibaca lewat pipe oleh orkestrator
+
+
+def step_rpc_users():
+    """User internal biasa + kasir POS (FNB) dengan password & TOTP acak per run (2FA wajib).
+
+    Kredensial ditulis ke RPC_CRED_FILE (0600) di container Odoo dan TIDAK dicetak; orkestrator mem-pipe file ini
+    ke odoo_rpc_smoke.py (stdin) lalu menghapusnya.
+    """
+    import base64
+    import secrets
+
+    st = load_state()
+    company = env["res.company"].browse(st["company_id"])
+    spec = {
+        "smoke_rpc_internal": ["base.group_user"],
+        "smoke_rpc_cashier": ["base.group_user", "point_of_sale.group_pos_user"],
+    }
+    Users = env["res.users"].sudo().with_context(no_reset_password=True)
+    creds, ids = {}, {}
+    for login, groups in spec.items():
+        pw = secrets.token_urlsafe(24)
+        secret = base64.b32encode(secrets.token_bytes(20)).decode()
+        vals = {
+            "name": f"{PREFIX} RPC {login.rsplit('_', 1)[-1]}",
+            "login": login,
+            "company_id": company.id,
+            "company_ids": [Command.set([company.id])],
+            "group_ids": [Command.set([env.ref(g).id for g in groups])],
+        }
+        user = Users.search([("login", "=", login)], limit=1)
+        if user:
+            user.write(vals)
+        else:
+            user = Users.create(vals)
+        user.password = pw
+        user.totp_secret = secret
+        creds[login] = {"password": pw, "totp": secret}
+        ids[login] = user.id
+    env.cr.commit()
+    fd = os.open(RPC_CRED_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump(creds, fh)
+    out(ok=True, users=ids)
+
+
+def step_loy_refund_noreceipt():
+    """SEC-59: retur tanpa struk (qty < 0 tanpa `refunded_orderline_id`) untuk member -> review, tanpa earn/reverse."""
+    e, st = ctx_env()
+    uuid = os.environ["SMOKE_ORDER_UUID"]
+    qty = int(os.environ.get("SMOKE_QTY", "1"))
+    partner_id = st["partners"][os.environ["SMOKE_PARTNER"]]
+    product = e["product.product"].browse(st["product_id"])
+    config = e["pos.config"].browse(st["config_id"])
+    price = product.list_price
+    total = -price * qty
+    data = {
+        "amount_paid": total,
+        "amount_return": 0,
+        "amount_tax": 0,
+        "amount_total": total,
+        "date_order": fields.Datetime.to_string(fields.Datetime.now()),
+        "fiscal_position_id": False,
+        "pricelist_id": config.pricelist_id.id,
+        "name": f"Order {uuid}",
+        "last_order_preparation_change": "{}",
+        "lines": [
+            (
+                0,
+                0,
+                {
+                    "id": random.randint(1, 1_000_000),  # noqa: S311
+                    "pack_lot_ids": [],
+                    "price_unit": price,
+                    "product_id": product.id,
+                    "price_subtotal": total,
+                    "price_subtotal_incl": total,
+                    "qty": -qty,
+                    "tax_ids": [(6, 0, [])],
+                },
+            )
+        ],
+        "partner_id": partner_id,
+        "session_id": st["session_id"],
+        "payment_ids": [(0, 0, {"amount": total, "name": fields.Datetime.now(), "payment_method_id": st["cash_pm"]})],
+        "uuid": uuid,
+        "user_id": e.uid,
+        "to_invoice": False,
+        "state": "paid",
+        "is_refund": True,
+    }
+    try:
+        e["pos.order"].sync_from_ui([data])
+        env.cr.commit()
+    except Exception as exc:  # noqa: BLE001 - laporan smoke
+        env.cr.rollback()
+        out(ok=False, error=type(exc).__name__, message=str(exc)[:300])
+        return
+    e["efn.pos.loyalty.outbox"]._efn_process_due()
+    env.cr.commit()
+    order = e["pos.order"].search([("uuid", "=", uuid)], limit=1)
+    outbox = e["efn.pos.loyalty.outbox"].sudo().search([("order_id", "=", order.id)])
+    out(
+        ok=True,
+        state=order.state,
+        loyalty_state=order.efn_loyalty_state,
+        outbox=",".join(sorted(outbox.mapped("kind"))) or "none",
+        note=(order.efn_loyalty_note or "")[:120],
+        points_earned=order.efn_loyalty_points_earned,
+    )
+
+
 {
+    "rpc_users": step_rpc_users,
+    "loy_refund_noreceipt": step_loy_refund_noreceipt,
     "audit": step_audit,
     "audit_partner": step_audit_partner,
     "balance": step_balance,

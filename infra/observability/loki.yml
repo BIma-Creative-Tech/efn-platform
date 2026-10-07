@@ -56,6 +56,11 @@ limits_config:
     - selector: '{stream="efn_audit_anchor"}'
       priority: 3
       period: 9600h
+    # G13c (SEC-61): anomali/heartbeat/migrasi poin EFN dari BFF (promtail.yml tahap 4, tanpa PII: kind, PT, order_ref
+    # opak, angka). 400 hari = bukti investigasi fraud poin & rekonsiliasi liabilitas poin oleh Finance (Q-13).
+    - selector: '{stream="efn_loyalty"}'
+      priority: 4
+      period: 9600h
   ingestion_rate_mb: 16
   ingestion_burst_size_mb: 32
 

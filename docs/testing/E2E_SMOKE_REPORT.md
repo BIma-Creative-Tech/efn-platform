@@ -513,3 +513,54 @@ skenario lain. Tidak ada nomor asli.
   Tour refund berpoin belum ada (catatan odoo-engineer).
 - `reservation_expired` (> 24 jam), redeem saat POS offline, refund berpoin offline, reverse kumulatif > 1 refund.
 - Kode working tree pasca-`c1b770a` (SEC-58 dkk.) tidak termasuk run ini.
+
+# Gelombang 13c — Penutupan: SQL 06, upgrade Odoo, alert loyalty, regresi penuh (7 Okt 2026)
+
+Basis `6b7b7fc` (working tree bersih di awal). Dijalankan efn-devsecops + efn-qa (satu agent). Tidak ada commit, tidak
+ada volume yang dihapus. Waktu UTC.
+
+## G13c.1 Lingkungan & persiapan
+
+| Langkah | Hasil |
+|---|---|
+| Backup `pg_dump -Fc efn_odoo` (scratchpad, di luar repo) | 6,2 MB |
+| `06-platform-loyalty-guard.sql` ke PG dev (superuser, socket lokal), diulang 2× | sukses; run ke-2 hanya NOTICE "already exists" (idempoten). `platform.erasure_suppression` (efn_bff `ard` + `w(expires_at)`), indeks `ix_loyalty_pos_earn_member_created`, `ix_erasure_suppression_expires` ada. Peringatan BFF "relation platform.erasure_suppression does not exist" (tiap menit sejak 07:52) berhenti |
+| `$DC build odoo api-gateway` | sukses |
+| `-u efn_core,efn_pos_otp_gate,efn_pos_loyalty_ledger,efn_pos_payment_gateway,efn_privacy,efn_setup_pos` (odoo dihentikan) | **exit 0, 0 ERROR/CRITICAL**; 13 WARNING `Skipping deletion for missing XML ID point_of_sale.<pecahan>` (kosmetik). Versi: efn_core 1.6.0, otp_gate 1.7.0, loyalty_ledger 1.1.0, payment_gateway 1.1.0, privacy 1.3.0, setup_pos 1.3.0. SEC-63: 0 `barcode.rule` tipe `discount` tersisa |
+| Recreate `api-gateway odoo odoo-tls odoo-ws-tls promtail loki loki-tls alertmanager prometheus` | semua healthy. Log BFF tanpa kode ANSI (`NO_COLOR=1`) |
+| Heartbeat rekonsiliasi | `EFN_LOYALTY_RECON {"status":"ok","anomalies":0,...}` tiap 5 menit (dev) → Loki `{stream="efn_loyalty", loyalty_event="recon", recon_status="ok"}`; gauge Prometheus `efn_loyalty_recon_last_success_timestamp_seconds` terisi; rule `EfnLoyaltyReconStale` health ok |
+| BFF untuk run | sementara `MIGRATION_ENABLED=true` (recreate dengan env shell), **dikembalikan ke `false`** setelah run (diverifikasi `docker inspect`) |
+
+## G13c.2 Smoke penuh `a b c d f e g l` (satu run, 08:15–08:31)
+
+**RINGKASAN: PASS=153 FAIL=0** (G13: 140; +13 cek baru). Log: scratchpad `g13c/smoke1.log`.
+
+| Cek baru | Hasil |
+|---|---|
+| (a) SEC-58 `l.sec58_rpc_internal_bff_client_rejected`, `l.sec58_rpc_cashier_bff_client_rejected` | user `base.group_user` dan kasir POS FNB, login nyata password + TOTP lewat Traefik wg-https (`erp.efn.local`, sertifikat diverifikasi), kontrol `res.partner.search_count` OK; `efn.bff.client._efn_post`/`_efn_get` → `AccessError: Private methods ... cannot be called remotely`; `post`/`get` → ditolak (metode tidak ada, pesan disamarkan "Internal server error"). 8 baris ERROR `odoo.http` di log Odoo = penolakan ini (diharapkan) |
+| (b) `l.earn_daily_limit_rejected`, `l.earn_daily_limit_no_bff_earn` | partner O, order 401 × Rp50.000 = 2005 poin > 2000/hari: outbox earn `failed` `earn_limit_exceeded`, order `review` (`earn:earn_limit_exceeded`), 0 `loyalty_pos_earn`/ledger |
+| (b) `l.anomaly_log_line` | `WARN [PosLoyaltyService] EFN_LOYALTY_ANOMALY {"kind":"earn_limit_member_day","severity":"warning","company":"FNB","order_ref":"<uuid>","points":2005,"earned_today":0,"limit":2000}`, tanpa ANSI, tanpa HP |
+| (b) `l.anomaly_in_loki` | stream `{stream="efn_loyalty", loyalty_event="anomaly", kind="earn_limit_member_day", severity="warning"}` 1 baris |
+| (b) `l.anomaly_alert_in_alertmanager` | `EfnLoyaltyAnomalyWarning` **active** (labels kind=earn_limit_member_day, severity=warning, team=finance) dalam ±1 menit |
+| `l.recon_heartbeat_in_loki` | 3 heartbeat ok dalam 30 menit |
+| (c) `l.refund_noreceipt_review`, `l.refund_noreceipt_no_bff_effect` | retur tanpa struk (qty −1 tanpa `refunded_orderline_id`) member L: order `paid`, `efn_loyalty_state=review` (`return_unlinked`), tanpa outbox; ledger/earn BFF 0, saldo tetap 89 |
+| (d) `e.migration_member_deleting_409` | DSAR delete terjadwal: `POST /internal/v1/migration/members` dan `/opening-balance` → **409 `member_deleting`** (keduanya) |
+| (d) `e.migration_member_erased_409` | setelah erasure selesai: members → **409 `member_erased`**, member aktif dengan hash lama 0 |
+| (d) `e.migration_anomaly_logged` | 3 baris `EFN_LOYALTY_ANOMALY migration_erased_member` |
+
+Semua cek lama (a–g, l) tetap lolos, termasuk PDP (0 kemunculan digit HP partner L/M/N/O di tabel & log) dan ETL poin.
+
+## G13c.3 Bug / perbaikan
+- Tidak ada bug produk ditemukan. Perubahan harness: `odoo_rpc_smoke.py`, `obs_smoke.py` (baru), langkah Odoo
+  `rpc_users`, `loy_refund_noreceipt`, `loy_outbox` kini menyertakan `loyalty_note`; cek migrasi otomatis dilewati
+  bila BFF tidak `MIGRATION_ENABLED=true`.
+- Temuan saat menulis konfigurasi: selector promtail berisi regex dalam string LogQL bertanda kutip ganda wajib backslash
+  ganda (`\\[` di YAML); string backtick di selector match promtail ditolak ("unexpected IDENTIFIER"). Diperbaiki sebelum run.
+
+## G13c.4 Belum diverifikasi
+- Alert `EfnLoyaltyAnomalyCritical` (page) hanya divalidasi sintaks + evaluasi ruler (tidak ada kejadian critical yang
+  dipicu; butuh manipulasi ledger / batas PT 50.000 poin/jam). Dead-man `EfnLoyaltyReconMissing` tidak ditunggu 2 jam;
+  `EfnLoyaltyReconStale` diuji `promtool test rules` (alert pada 2h20m tanpa sukses, tidak ada alert palsu saat gauge 0).
+- Log ruler Loki menampilkan `status=500` di baris metrik untuk SEMUA rule (lama dan baru) walau query manual 200 dan
+  alert terkirim; tampaknya artefak logging ruler lokal — belum diselidiki.
+- `deploy.sh` (cek migrasi wajib 04/05/06) belum dijalankan di host Linux nyata. CI GitHub belum dijalankan.

@@ -959,6 +959,9 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       APP_ENV: ${APP_ENV:-production}
+      # G13c: ConsoleLogger NestJS tanpa kode warna ANSI -> baris log berjangkar (`[Nest] <pid>  - <waktu>  WARN [Ctx] ...`)
+      # untuk regex promtail EFN_LOYALTY_ANOMALY / EFN_LOYALTY_RECON (infra/observability/promtail.yml).
+      NO_COLOR: "1"
       PORT: "3000"
       TLS_CERT_FILE: /run/secrets/tls_api_gateway_crt
       TLS_KEY_FILE: /run/secrets/tls_api_gateway_key

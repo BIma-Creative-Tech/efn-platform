@@ -31,8 +31,10 @@ WORK="$(mktemp -d)"
 RESULTS="${WORK}/results.txt"
 : > "$RESULTS"
 cp "${ROOT}/secrets/dev_edge_crt.txt" "${WORK}/edge_ca.crt"
-cp "${SMOKE_DIR}/bff_smoke.py" "${WORK}/"
+cp "${SMOKE_DIR}/bff_smoke.py" "${SMOKE_DIR}/odoo_rpc_smoke.py" "${SMOKE_DIR}/obs_smoke.py" "${WORK}/"
 WORK_W="$WORK"; command -v cygpath > /dev/null && WORK_W="$(cygpath -w "$WORK")"
+SECRETS_W="${ROOT}/secrets"; command -v cygpath > /dev/null && SECRETS_W="$(cygpath -w "$SECRETS_W")"
+PY_IMAGE="python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea"
 
 docker logs -f --since 1s "$BFF" > "${WORK}/bff.log" 2>&1 &
 LOGPID=$!
@@ -66,6 +68,24 @@ odoo() { # -e K=V ... ; mencetak satu baris SMOKE_RESULT
   o="$(MSYS_NO_PATHCONV=1 docker exec -i "$@" "$ODOO" odoo shell -d efn_odoo --no-http --log-level=warn \
     < "${SMOKE_DIR}/odoo_pos_smoke.py" 2>&1 | grep -E '^SMOKE_RESULT|Error|errors\.' | tail -1 || true)"
   if [[ -n "$o" ]]; then echo "$o"; else echo 'SMOKE_RESULT {"ok": false, "error": "odoo_shell_no_result"}'; fi
+}
+
+obs() { # G13c: query Loki / Alertmanager nyata (mTLS, sertifikat klien Grafana read-only) -> satu baris SMOKE_RESULT
+  MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal -v "${WORK_W}:/work:ro" \
+    -v "${SECRETS_W}/efn_ca_crt.txt:/s/efn_ca_crt.txt:ro" -v "${SECRETS_W}/tls_grafana_crt.txt:/s/tls_grafana_crt.txt:ro" \
+    -v "${SECRETS_W}/tls_grafana_key.txt:/s/tls_grafana_key.txt:ro" "$PY_IMAGE" python /work/obs_smoke.py "$@" 2>&1 \
+    | grep '^SMOKE_RESULT' | tail -1 || true
+}
+
+MIGRATION_ON=0
+docker inspect "$BFF" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -qx 'MIGRATION_ENABLED=true' && MIGRATION_ON=1
+migrate() { # G13c: <members|opening-balance> <json> -> "<body>|<http>" ; kunci migrasi dibaca DI DALAM container
+  MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal -v "${SECRETS_W}/migration_api_key.txt:/s/k:ro" \
+    -v "${SECRETS_W}/efn_ca_crt.txt:/s/ca:ro" --entrypoint /bin/sh \
+    curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -c \
+    'printf "X-EFN-Migration-Key: %s\n" "$(cat /s/k)" > /tmp/h && curl -sS -m 10 --cacert /s/ca -H @/tmp/h \
+       -H "Content-Type: application/json" -d "$2" -w "|%{http_code}" "https://api-gateway:3000/internal/v1/migration/$1"' \
+    sh "$1" "$2" 2>&1 | tr -d '\r\n' || true
 }
 
 psql_platform() { MSYS_NO_PATHCONV=1 docker exec -i "$PG" psql -U postgres -d efn_platform -At "$@"; }
@@ -244,6 +264,15 @@ scenario_e() {
   mh="$(psql_platform -c "select member_hash from platform.dsar_request where id='$rid'")"
   r="$(odoo -e SMOKE_STEP=partner -e SMOKE_MEMBER_HASH="$mh")"
   check "e.odoo_partner_hash_matches_bff" "$([[ "$(field by_hash "$r")" -ge 1 ]] && echo 1 || echo 0)" "$r"
+  # G13c SEC-65: migrasi K-7 untuk subjek yang sedang DSAR delete -> 409 member_deleting (member & saldo pembuka).
+  # Hanya bila BFF dev dijalankan dengan MIGRATION_ENABLED=true (endpoint 404 bila tidak; runbook E2E_SMOKE_REPORT).
+  if [[ "$MIGRATION_ON" == 1 ]]; then
+    r="$(migrate members "{\"source_ref\":\"smoke-mig-$(rand8)\",\"member_ref\":\"$PHONE\"}")"
+    r="$r ; $(migrate opening-balance "{\"source_ref\":\"smoke-ob-$(rand8)\",\"member_ref\":\"$PHONE\",\"points\":10,\"company_code\":\"FNB\"}")"
+    check "e.migration_member_deleting_409" "$([[ "$r" == *member_deleting*"|409 ; "*member_deleting*"|409" ]] && echo 1 || echo 0)" "$r"
+  else
+    echo "   (cek migrasi SEC-65 dilewati: MIGRATION_ENABLED != true di $BFF)"
+  fi
   # Dev: lewati masa tenggang (DSAR_DELETE_GRACE_DAYS) dengan memajukan scheduled_at
   psql_platform -c "update platform.dsar_request set scheduled_at = now() - interval '1 second' where id='$rid'" > /dev/null
   for _ in $(seq 1 15); do
@@ -275,6 +304,15 @@ scenario_e() {
   local mhn
   mhn="$(psql_platform -c "select count(*) filter (where member_hash is null) || '/' || count(*) from platform.dsar_request where id='$rid'")"
   check "e.dsar_member_hash_nulled" "$([[ "$mhn" == 1/1 ]] && echo 1 || echo 0)" "member_hash NULL/baris=$mhn"
+  if [[ "$MIGRATION_ON" == 1 ]]; then
+    # Setelah erasure selesai: subjek ada di platform.erasure_suppression -> 409 member_erased, tidak hidup kembali
+    r="$(migrate members "{\"source_ref\":\"smoke-mig-$(rand8)\",\"member_ref\":\"$PHONE\"}")"
+    local alive
+    alive="$(psql_platform -c "select count(*) from platform.member where member_hash='$mh' and deleted_at is null")"
+    check "e.migration_member_erased_409" "$([[ "$r" == *member_erased*"|409" && "$alive" == 0 ]] && echo 1 || echo 0)" "$r member_aktif=$alive"
+    r="$(grep -cF 'EFN_LOYALTY_ANOMALY {"kind":"migration_erased_member"' "${WORK}/bff.log" || true)"
+    check "e.migration_anomaly_logged" "$([[ "$r" -ge 3 ]] && echo 1 || echo 0)" "baris migration_erased_member=$r (2 deleting + 1 erased)"
+  fi
   # efn_audit (ADR-031): log res.partner subjek terhapus, ref lintas model kosong, log purge tanpa id
   r="$(odoo -e SMOKE_STEP=audit_partner)"
   check "e.odoo_audit_logs_purged" "$([[ "$(field partner_logs "$r")" == 0 && "$(field ref_lines "$r")" == 0 && "$(field purge_note "$r")" == erasure* && "$(field purge_res_id "$r")" == null ]] && echo 1 || echo 0)" "$r"
@@ -369,6 +407,20 @@ scenario_l() { # Gelombang 13: Poin EFN di POS (docs/04 §9) — Odoo efn_pos_lo
   done
   r="$(odoo -e SMOKE_STEP=loy_config)"
   check "l.config_points_product" "$([[ "$(field ok "$r")" == true && "$(field points_product "$r")" -gt 0 ]] && echo 1 || echo 0)" "$r"
+
+  # 0. G13c SEC-58: user internal biasa & kasir (login nyata password + TOTP lewat Traefik wg-https) memanggil
+  #    efn.bff.client._efn_post/_efn_get dan nama lama post/get lewat /web/dataset/call_kw -> semua DITOLAK; kontrol
+  #    positif (res.partner.search_count) membuktikan sesi valid. Kredensial: file 0600 di container Odoo -> stdin.
+  local rpc who
+  r="$(odoo -e SMOKE_STEP=rpc_users)"
+  rpc="$(MSYS_NO_PATHCONV=1 docker exec "$ODOO" sh -c 'cat /tmp/efn_smoke_rpc.json; rm -f /tmp/efn_smoke_rpc.json' \
+    | MSYS_NO_PATHCONV=1 docker run --rm -i --network efn_edge --add-host "erp.efn.local:${TRAEFIK_IP}" \
+        -v "${WORK_W}:/work:ro" "$PY_IMAGE" python /work/odoo_rpc_smoke.py 2>&1 | grep '^SMOKE_RESULT' || true)"
+  for who in internal cashier; do
+    r="$(grep -F "\"user\": \"smoke_rpc_${who}\"" <<< "$rpc" | head -1)"
+    check "l.sec58_rpc_${who}_bff_client_rejected" "$([[ "$r" == *'"logged_in": true'* && "$r" == *'"all_rejected": true'* ]] && echo 1 || echo 0)" "${r:-tidak ada hasil}"
+  done
+
   ledger() { psql_platform -c "select coalesce(sum(delta_points),0) from platform.loyalty_ledger where source='$1' and source_ref='$2'${3:+ and $3}"; }
   resv() { psql_platform -c "select status||'/'||points||'/'||value_idr from platform.loyalty_reservation where order_ref='$1' order by created_at desc limit 1"; }
   bal() { field points_balance "$(odoo -e SMOKE_STEP=loy_balance -e SMOKE_PARTNER="${1:-L}")"; }
@@ -466,9 +518,45 @@ scenario_l() { # Gelombang 13: Poin EFN di POS (docs/04 §9) — Odoo efn_pos_lo
   r="$(bal)"
   check "l.balance_final" "$([[ "$r" == 89 ]] && echo 1 || echo 0)" "saldo=$r (79 + 10)"
 
+  # 8b. G13c SEC-59: retur tanpa struk (qty < 0 tanpa order asal) untuk member L -> review, tanpa earn/reverse
+  local u9 u8 po
+  u9="$(newuuid)"
+  r="$(odoo -e SMOKE_STEP=loy_refund_noreceipt -e SMOKE_ORDER_UUID="$u9" -e SMOKE_PARTNER=L -e SMOKE_QTY=1)"
+  check "l.refund_noreceipt_review" "$([[ "$(field ok "$r")" == true && "$(field state "$r")" =~ ^(paid|done)$ && "$(field loyalty_state "$r")" == review && "$(field outbox "$r")" == none ]] && echo 1 || echo 0)" "$r"
+  r="$(psql_platform -c "select (select count(*) from platform.loyalty_ledger where source_ref='$u9') || '/' || (select count(*) from platform.loyalty_pos_earn where order_ref='$u9')")/$(bal)"
+  check "l.refund_noreceipt_no_bff_effect" "$([[ "$r" == 0/0/89 ]] && echo 1 || echo 0)" "ledger/earn/saldo=$r"
+
+  # 8c. G13c SEC-61: earn melebihi batas harian member (2000 poin; order 401 x Rp50.000 = 2005 poin, < plafon order
+  #     5000) -> 409 earn_limit_exceeded final, order review, tanpa catatan earn; baris EFN_LOYALTY_ANOMALY sampai Loki
+  #     (stream efn_loyalty, label kind) dan alert EfnLoyaltyAnomalyWarning sampai Alertmanager.
+  po="0812$(rand8)"
+  odoo -e SMOKE_STEP=loy_partner -e SMOKE_KEY=O -e SMOKE_PHONE="$po" > /dev/null
+  u8="$(newuuid)"
+  r="$(odoo -e SMOKE_STEP=loy_sync -e SMOKE_ORDER_UUID="$u8" -e SMOKE_PARTNER=O -e SMOKE_QTY=401)"
+  r="$(odoo -e SMOKE_STEP=loy_outbox -e SMOKE_ORDER_UUID="$u8")"
+  check "l.earn_daily_limit_rejected" "$([[ "$(field earn_state "$r")" == failed && "$(field earn_error "$r")" == *earn_limit_exceeded* && "$(field loyalty_state "$r")" == review ]] && echo 1 || echo 0)" "$r"
+  r="$(psql_platform -c "select (select count(*) from platform.loyalty_pos_earn where order_ref='$u8') || '/' || (select count(*) from platform.loyalty_ledger where source_ref='$u8')")"
+  check "l.earn_daily_limit_no_bff_earn" "$([[ "$r" == 0/0 ]] && echo 1 || echo 0)" "earn/ledger=$r"
+  r="$(grep -F 'EFN_LOYALTY_ANOMALY {"kind":"earn_limit_member_day","severity":"warning"' "${WORK}/bff.log" | grep -F "$u8" | tail -1 || true)"
+  check "l.anomaly_log_line" "$([[ "$r" == *'WARN [PosLoyaltyService] EFN_LOYALTY_ANOMALY'* && "$r" != *$'\e'* && "$r" != *"${po:4}"* ]] && echo 1 || echo 0)" "$(tail -c 220 <<< "$r")"
+  for _ in $(seq 1 12); do
+    r="$(obs loki "{stream=\"efn_loyalty\", loyalty_event=\"anomaly\", kind=\"earn_limit_member_day\", severity=\"warning\"} |= \"${u8:0:8}\"" 30)"
+    [[ "$(field lines "$r")" -ge 1 ]] && break
+    sleep 10
+  done
+  check "l.anomaly_in_loki" "$([[ "$(field lines "$r")" -ge 1 ]] && echo 1 || echo 0)" "$(head -c 260 <<< "$r")"
+  for _ in $(seq 1 24); do
+    r="$(obs alert EfnLoyaltyAnomalyWarning kind=earn_limit_member_day)"
+    [[ "$r" == *'"state": "active"'* ]] && break
+    sleep 10
+  done
+  check "l.anomaly_alert_in_alertmanager" "$([[ "$r" == *'"state": "active"'* && "$r" == *'"severity": "warning"'* ]] && echo 1 || echo 0)" "$(head -c 260 <<< "$r")"
+  r="$(obs loki '{stream="efn_loyalty", loyalty_event="recon", recon_status="ok"}' 30)"
+  check "l.recon_heartbeat_in_loki" "$([[ "$(field lines "$r")" -ge 1 ]] && echo 1 || echo 0)" "$(head -c 200 <<< "$r") (dev: LOYALTY_RECON_INTERVAL_MS=300000)"
+
   # 9. PDP: tidak ada HP mentah di tabel loyalty BFF/Odoo maupun log BFF/Odoo
   hs=0
-  for n in "$pl" "$pm" "$pn"; do
+  for n in "$pl" "$pm" "$pn" "$po"; do
     m="${n:4}"
     hs=$(( hs + $(MSYS_NO_PATHCONV=1 docker exec "$PG" sh -c "pg_dump -U postgres -d efn_platform --data-only -t 'platform.loyalty_*'; pg_dump -U postgres -d efn_odoo --data-only -t 'efn_pos_loyalty_*' -t efn_pos_otp_challenge" | grep -c "$m" || true) ))
     hs=$(( hs + $(grep -c "$m" "${WORK}/bff.log" || true) + $(docker logs --since 30m "$ODOO" 2>&1 | grep -c "$m" || true) ))

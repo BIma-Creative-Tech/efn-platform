@@ -93,3 +93,44 @@ scrape_configs:
             - static_labels:
                 stream: efn_audit_anchor
                 audit_event: recon
+      # (4) G13c (SEC-61): baris loyalty BFF (NestJS ConsoleLogger, NO_COLOR=1 di compose) -> stream="efn_loyalty"
+      #     (retensi 400 hari = bukti fraud poin/Finance, loki.yml; alert loki-rules/efn-loyalty.yml). Format:
+      #     "[Nest] <pid>  - <MM/DD/YYYY, h:mm:ss AM>    WARN [PosLoyaltyService] EFN_LOYALTY_ANOMALY {json}". Regex
+      #     BERJANGKAR penuh: konteks logger tetap (3 kelas penulis), level, tag, dan payload ber-skema (kind + severity
+      #     dari daftar tetap BFF `LOYALTY_ANOMALY_KINDS`, nilai string disaring BFF ke [A-Za-z0-9_.:-]). Hanya dari
+      #     container service=api-gateway (label Docker). Baris dengan teks "EFN_LOYALTY_*" di tempat lain diabaikan.
+      #     Format waktu berubah (locale/versi Nest) = baris tidak cocok -> dead-man EfnLoyaltyReconMissing menyala.
+      - match:
+          selector: '{service="api-gateway"} |~ "^\\[Nest\\] \\d+  - \\d{1,2}/\\d{1,2}/\\d{4}, \\d{1,2}:\\d{2}:\\d{2} (AM|PM) +WARN \\[(PosLoyaltyService|LoyaltyReconService|MigrationService)\\] EFN_LOYALTY_ANOMALY \\{\"kind\":\"[a-z_]{1,40}\",\"severity\":\"(warning|critical)\"[^\\n]*\\}\\s*$"'
+          stages:
+            - regex:
+                expression: ' EFN_LOYALTY_ANOMALY (?P<payload>\{"kind":.*\})\s*$'
+            - json:
+                source: payload
+                expressions:
+                  kind: kind
+                  severity: severity
+            - static_labels:
+                stream: efn_loyalty
+                loyalty_event: anomaly
+            - labels:
+                kind:
+                severity:
+      #     Heartbeat job rekonsiliasi (LoyaltyReconService, akhir setiap siklus): status ok|error -> dead-man.
+      - match:
+          selector: '{service="api-gateway"} |~ "^\\[Nest\\] \\d+  - \\d{1,2}/\\d{1,2}/\\d{4}, \\d{1,2}:\\d{2}:\\d{2} (AM|PM) +(LOG|ERROR) \\[LoyaltyReconService\\] EFN_LOYALTY_RECON \\{\"status\":\"(ok|error)\"[^\\n]*$"'
+          stages:
+            - regex:
+                expression: ' EFN_LOYALTY_RECON \{"status":"(?P<recon_status>ok|error)"'
+            - static_labels:
+                stream: efn_loyalty
+                loyalty_event: recon
+            - labels:
+                recon_status:
+      #     Saldo pembuka migrasi K-7 yang dibukukan (company, points, source_ref; tanpa nomor) -> rekonsiliasi Finance.
+      - match:
+          selector: '{service="api-gateway"} |~ "^\\[Nest\\] \\d+  - \\d{1,2}/\\d{1,2}/\\d{4}, \\d{1,2}:\\d{2}:\\d{2} (AM|PM) +LOG \\[MigrationService\\] EFN_LOYALTY_MIGRATION \\{\"company\":\"[A-Za-z0-9_-]{1,16}\",\"points\":\\d+,\"source_ref\":\"[A-Za-z0-9_.:-]{0,64}\"\\}\\s*$"'
+          stages:
+            - static_labels:
+                stream: efn_loyalty
+                loyalty_event: migration

@@ -329,6 +329,11 @@ wait_healthy postgres || die "postgres tidak sehat"
 # idempoten + transaksional (kontrak pemilik file: efn-bff-engineer). Volume baru menjalankannya lewat initdb; volume
 # lama hanya lewat langkah ini. Dijalankan sebagai superuser lewat socket lokal, SEBELUM BFF baru start.
 echo "==> Migrasi skema idempoten (infra/postgres/init/[0-9][0-9]-*.sql >= 04)"
+# G13c: migrasi yang WAJIB ada sebelum BFF rilis ini start (bundel tidak lengkap = gagal, bukan dilewati diam-diam):
+# 05 = loyalty POS (G13), 06 = pagar earn + daftar tolak erasure (SEC-61/SEC-65; tanpa 06 job erasure BFF gagal).
+for req in 04-platform-v3-6.sql 05-platform-loyalty-pos.sql 06-platform-loyalty-guard.sql; do
+  [[ -s "$BASE/postgres/init/$req" ]] || die "migrasi wajib $req tidak ada di $BASE/postgres/init (bundel rilis tidak lengkap)"
+done
 for mig in "$BASE"/postgres/init/[0-9][0-9]-*.sql; do
   [[ -e "$mig" ]] || continue
   num=$(basename "$mig"); num=${num%%-*}

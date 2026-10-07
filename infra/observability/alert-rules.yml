@@ -166,6 +166,25 @@ groups:
           description: "Challenge biaya maksimum melonjak: rate limit per IP / anggaran OTP global hampir habis (dugaan OTP pumping)."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/otp-failure-rate.md#altcha-level-3
 
+  # ─────────────────────────── Poin EFN (SEC-61, G13c) ───────────────────────────
+  # Lapis kedua dead-man rekonsiliasi loyalty (lapis utama berbasis log: loki-rules/efn-loyalty.yml
+  # EfnLoyaltyReconMissing, yang menekan alert ini lewat inhibit Alertmanager). Gauge per proses BFF bernilai 0 setelah
+  # restart sampai siklus pertama (LOYALTY_RECON_INTERVAL_MS, default 1 jam) -> max_over_time 26 jam + filter > 0 agar
+  # deploy/restart tidak memicu alert palsu; hanya satu replika menjalankan siklus (advisory lock) -> max antar replika.
+  - name: efn-loyalty
+    rules:
+      - alert: EfnLoyaltyReconStale
+        expr: |
+          time() - max(max_over_time(efn_loyalty_recon_last_success_timestamp_seconds{job="api-gateway"}[26h]) > 0) > 7200
+        for: 15m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Poin EFN: rekonsiliasi ledger terakhir sukses {{ $value | humanizeDuration }} lalu"
+          description: "Job LoyaltyReconService tidak sukses > 2 jam; kontrol detektif fraud poin tidak berjalan."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-anomaly.md#efnloyaltyreconmissing
+
   # ─────────────────────────── Backup & DR (R-T08) ───────────────────────────
   # Metrik efn_backup_* / efn_restore_test_* ditulis scripts/backup.sh & scripts/restore-test.sh (textfile collector).
   - name: efn-backup

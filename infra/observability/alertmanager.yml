@@ -27,6 +27,9 @@ inhibit_rules:
   - source_matchers: ['alertname="EfnInternalCertExpiryCritical"']
     target_matchers: ['alertname="EfnInternalCertExpiringSoon"']
     equal: [instance, cert]
+  # G13c: dead-man loyalty berbasis log (Loki) menekan pasangan berbasis gauge (Prometheus)
+  - source_matchers: ['alertname="EfnLoyaltyReconMissing"']
+    target_matchers: ['alertname="EfnLoyaltyReconStale"']
   - source_matchers: ['alertname="EfnDiskUsageCritical"']
     target_matchers: ['alertname="EfnDiskUsageHigh"']
     equal: [instance, mountpoint]

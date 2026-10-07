@@ -38,6 +38,7 @@ Layout host: `/opt/efn/{compose,traefik,observability,backup,minio,clickhouse,po
 | EfnAuditReconAnomaly, EfnAuditCopyFailing (salinan audit tamper-evident ETL) | critical / warning | [etl-audit-copy.md](etl-audit-copy.md) |
 | EfnEtlCycleMissing, EfnEtlSalesFactStale, EfnEtlStockSnapshotStale, EfnAuditCopyMissing, EfnAuditReconMissing (dead-man heartbeat ETL, G13) | warning / warning / warning / warning / critical | [etl-audit-copy.md](etl-audit-copy.md#dead-man-etl-gelombang-13-sec-52-butir-1) |
 | EfnS3GatewayDeniedBurst (burst 403 filter object storage) | warning | [s3-gateway-denied.md](s3-gateway-denied.md) |
+| EfnLoyaltyAnomalyCritical, EfnLoyaltyAnomalyWarning, EfnLoyaltyReconMissing, EfnLoyaltyReconFailing (Poin EFN, G13c SEC-61); EfnLoyaltyReconStale (Prometheus) | critical / warning / warning / warning / warning | [loyalty-anomaly.md](loyalty-anomaly.md) |
 
 Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-incident.md](security-incident.md).
 

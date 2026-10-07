@@ -1,0 +1,67 @@
+# Aturan ruler Loki gelombang 13c (SEC-61): anomali poin EFN dari BFF (services/api-gateway/src/loyalty/loyalty-anomaly.ts).
+# Sumber: baris `EFN_LOYALTY_ANOMALY {json}` (pagar earn 409 earn_limit_exceeded, job rekonsiliasi ledger per jam,
+# migrasi K-7) dan heartbeat `EFN_LOYALTY_RECON {json}` (LoyaltyReconService). Promtail (promtail.yml tahap 4)
+# hanya memasukkan baris yang cocok regex BERJANGKAR (container service=api-gateway, konteks logger tetap, payload
+# ber-skema) ke stream="efn_loyalty" dengan label loyalty_event (anomaly|recon|migration), kind, severity, recon_status.
+# Severity per kind ditentukan BFF (LOYALTY_ANOMALY_KINDS), bukan rule ini: critical = indikasi ledger dimanipulasi /
+# aturan earn dilanggar (page on-call), warning = pagar batas bekerja / data perlu ditinjau (ringkasan jam kerja).
+# Alertmanager group_by [alertname, ...] -> semua kind warning dalam satu notifikasi (ringkasan per kind).
+# Runbook: docs/runbooks/loyalty-anomaly.md. Pasangan metrik Prometheus: efn_loyalty_anomaly_total{kind,severity},
+# efn_loyalty_recon_last_success_timestamp_seconds (alert-rules.yml grup efn-loyalty).
+groups:
+  - name: efn-loyalty
+    interval: 1m
+    rules:
+      # Satu kejadian critical sudah cukup: earn_ledger_mismatch/orphan, earn_above_rule, reverse_exceeds_earn,
+      # restore_exceeds_redeem, ledger_unknown_source, earn_limit_company_hour. Temuan rekonsiliasi berulang tiap
+      # siklus selama masih di jendela lookback (26 jam) -> alert tetap menyala sampai ditangani.
+      - alert: EfnLoyaltyAnomalyCritical
+        expr: |
+          sum by (kind) (
+            count_over_time({stream="efn_loyalty", loyalty_event="anomaly", severity="critical"} [15m])
+          ) > 0
+        labels:
+          severity: critical
+          team: security
+        annotations:
+          summary: "Poin EFN: anomali KRITIS {{ $labels.kind }} ({{ $value }} baris dalam 15 menit)"
+          description: "Ledger poin tidak konsisten dengan catatan earn/redeem atau pagar batas PT terlampaui. Perlakukan sebagai dugaan fraud/insiden sampai terbukti sebaliknya; jangan koreksi ledger tanpa CR Finance."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-anomaly.md#efnloyaltyanomalycritical"
+      # Ringkasan per kind (jam kerja): earn_limit_order/member_day/pos_config_hour, earn_above_order_cap,
+      # member_day_above_limit, migration_large_balance, migration_erased_member.
+      - alert: EfnLoyaltyAnomalyWarning
+        expr: |
+          sum by (kind) (
+            count_over_time({stream="efn_loyalty", loyalty_event="anomaly", severity="warning"} [1h])
+          ) > 0
+        labels:
+          severity: warning
+          team: finance
+        annotations:
+          summary: "Poin EFN: {{ $value }} anomali {{ $labels.kind }} dalam 1 jam"
+          description: "Pagar batas earn menolak transaksi atau data poin perlu ditinjau (order di Odoo berstatus review). Tinjau pola per kasir/PT."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-anomaly.md#efnloyaltyanomalywarning"
+      # DEAD-MAN: job rekonsiliasi (tiap jam, LOYALTY_RECON_INTERVAL_MS) tidak mencetak status ok selama 2 jam = job
+      # mati/gagal terus, BFF tidak jalan, ATAU format log berubah sehingga promtail tidak lagi mengenali baris
+      # loyalty (alert anomali ikut buta). Persisten lintas restart BFF (berbasis log, bukan gauge proses).
+      - alert: EfnLoyaltyReconMissing
+        expr: |
+          absent_over_time({stream="efn_loyalty", loyalty_event="recon", recon_status="ok"} [2h])
+        for: 15m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Poin EFN: rekonsiliasi ledger tidak sukses > 2 jam (atau baris log tidak dikenali)"
+          description: "Kontrol detektif fraud poin tidak berjalan atau pipeline log loyalty buta (format log/NO_COLOR/promtail). Anomali tidak akan ter-alert sampai pulih."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-anomaly.md#efnloyaltyreconmissing"
+      - alert: EfnLoyaltyReconFailing
+        expr: |
+          sum (count_over_time({stream="efn_loyalty", loyalty_event="recon", recon_status="error"} [3h])) >= 2
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Poin EFN: job rekonsiliasi gagal >= 2 kali dalam 3 jam"
+          description: "Query rekonsiliasi gagal (DB, grant, timeout). Lihat log LoyaltyReconService di BFF."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-anomaly.md#efnloyaltyreconmissing"

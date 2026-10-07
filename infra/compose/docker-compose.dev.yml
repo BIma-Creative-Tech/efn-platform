@@ -95,6 +95,9 @@ services:
       NODE_OPTIONS: --max-old-space-size=1024
       WHATSAPP_ENABLED: "false"
       PAYMENT_PROVIDER: mock
+      # G13c: rekonsiliasi loyalty tiap 5 menit di dev (default 1 jam) agar heartbeat EFN_LOYALTY_RECON & anomali
+      # rekonsiliasi teramati oleh smoke dalam satu run.
+      LOYALTY_RECON_INTERVAL_MS: "300000"
       # Teks consent DRAFT frontend (services/superapp-web/lib/consent.ts): versi persis + SHA-256 UTF-8 `body`.
       # Dijaga test superapp-web tests/consent.test.ts — ubah teks = ubah keduanya (G6 QA).
       CONSENT_LOCATION_VERSION: location@2026-10-06

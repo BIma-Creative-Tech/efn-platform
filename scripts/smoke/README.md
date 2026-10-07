@@ -60,6 +60,28 @@ baru (L/M/N) per run; nilai poin memakai default BFF dev (1 poin/Rp10.000, Rp100
   log BFF dan log Odoo; ETL: baris `line_kind=points` (−6000) dan baris refund masuk `fact_sales_line`.
 - Batas OTP per member 3/15 menit: partner L memakai tepat 3 OTP redeem.
 
+## Cek tambahan gelombang 13c (SEC-58/59/61/65)
+| File baru | Dijalankan di | Isi |
+|---|---|---|
+| `odoo_rpc_smoke.py` | container `python:3.12` (efn_edge → Traefik wg-https `erp.efn.local`, CA edge dev) | login nyata password + TOTP, `POST /web/dataset/call_kw` |
+| `obs_smoke.py` | container `python:3.12` (efn_internal, sertifikat klien Grafana read-only) | query Loki `query_range` & Alertmanager `api/v2/alerts` (mTLS) |
+
+- `l` (awal): langkah Odoo `rpc_users` membuat `smoke_rpc_internal` (base.group_user) dan `smoke_rpc_cashier`
+  (+ POS user) dengan password & TOTP acak per run (file 0600 di container Odoo → stdin `odoo_rpc_smoke.py` → dihapus).
+  `efn.bff.client._efn_post/_efn_get/post/get` lewat `call_kw` → semua ditolak (AccessError metode privat /
+  metode tidak ada); kontrol positif `res.partner.search_count` membuktikan sesi valid.
+- `l` (8b): retur tanpa struk (langkah `loy_refund_noreceipt`) → order `review`, tanpa outbox earn/reverse, ledger BFF
+  tidak berubah.
+- `l` (8c): partner O, order 401 × Rp50.000 = 2005 poin > batas harian 2000 → outbox earn `failed`
+  (`earn_limit_exceeded`), order `review`, tanpa `loyalty_pos_earn`; baris `EFN_LOYALTY_ANOMALY` (tanpa ANSI, tanpa HP)
+  di log BFF → Loki `{stream="efn_loyalty", kind="earn_limit_member_day"}` → alert `EfnLoyaltyAnomalyWarning` aktif di
+  Alertmanager (±1–2 menit); heartbeat `EFN_LOYALTY_RECON` di Loki (dev: rekonsiliasi tiap 5 menit).
+- `e`: bila container BFF dijalankan dengan `MIGRATION_ENABLED=true`, migrasi K-7 (member + saldo pembuka) subjek
+  yang sedang DSAR delete → `409 member_deleting`; setelah erasure selesai → `409 member_erased`, member tidak hidup
+  kembali, ≥ 3 baris anomali `migration_erased_member`. Tanpa flag itu cek dilewati (endpoint 404). Kunci migrasi dibaca
+  di dalam container curl (`-H @file`), tidak di argv. Menyalakan sementara:
+  `MIGRATION_ENABLED=true $DC --profile core up -d --no-deps --force-recreate api-gateway`, lalu ulangi tanpa variabel.
+
 ## Belum
 - Tidak masuk CI (butuh stack penuh + ±15 menit). Kandidat job nightly pada runner self-hosted.
 - Frontend POS (OWL) tidak disentuh: skrip memanggil metode server yang sama dengan frontend.
