@@ -25,6 +25,7 @@ import { DsarReceiptService } from './dsar-receipt.service';
 import { DsarService, STEP_UP_USED_PREFIX } from './dsar.service';
 import { ERASURE_COMPLETED_CONSUMER, ErasureCompletedConsumer, parseErasureCompleted } from './erasure-completed.consumer';
 import { ErasureService } from './erasure.service';
+import { erasureSuppressionTag } from '../common/pii/erasure-suppression';
 
 const PHONE = '6281234567890';
 const MEMBER_ID = '8d7b5a1e-2c3f-4a5b-9c8d-7e6f5a4b3c2d';
@@ -242,7 +243,7 @@ describe('DsarService (§8.9)', () => {
 });
 
 describe('ErasureService (§8.4)', () => {
-  function erasureSetup(status = 'scheduled') {
+  function erasureSetup(status = 'scheduled', overrides: Record<string, string> = {}) {
     const storage = { put: jest.fn(), remove: jest.fn().mockRejectedValueOnce(new Error('minio down')).mockResolvedValue(undefined) };
     const hash = 'd'.repeat(64);
     let stores = ['platform', 'odoo', 'clickhouse'];
@@ -259,9 +260,9 @@ describe('ErasureService (§8.4)', () => {
       }
       return undefined;
     });
-    const config = testConfig();
+    const config = testConfig(overrides);
     const svc = new ErasureService(config, db, storage);
-    return { svc, db, storage, hash, stores: () => stores };
+    return { svc, db, storage, hash, config, stores: () => stores };
   }
 
   it('setelah masa tenggang: processing + erasure platform dalam satu transaksi (tombstone, forfeit per PT, NULL PII, hapus member)', async () => {
@@ -309,6 +310,36 @@ describe('ErasureService (§8.4)', () => {
     // urutan: processing sebelum erasure
     const idx = (frag: string) => ctx.db.queries.findIndex((q) => q.text.includes(frag));
     expect(idx("SET status = 'processing'")).toBeLessThan(idx('UPDATE platform.loyalty_ledger'));
+  });
+
+  it('SEC-65: processing menyimpan tag daftar tolak migrasi (HMAC domain terpisah, bukan member_hash) selama ERASURE_SUPPRESSION_DAYS', async () => {
+    const ctx = erasureSetup();
+    await ctx.svc.processDue(REQ_ID);
+    const ins = ctx.db.find('INSERT INTO platform.erasure_suppression');
+    expect(ins).toHaveLength(1);
+    expect(ins[0].params).toEqual([erasureSuppressionTag(ctx.config.erasureSuppressionKey, ctx.hash), 90]);
+    expect(ins[0].params[0]).not.toBe(ctx.hash);
+    expect(ins[0].text).toContain('GREATEST'); // erasure ulang memperpanjang, tidak memendekkan
+    expect(JSON.stringify(ins[0].params)).not.toContain(REQ_ID);
+    // di dalam transaksi erasure yang sama, setelah status processing
+    const idx = (frag: string) => ctx.db.queries.findIndex((q) => q.text.includes(frag));
+    expect(idx("SET status = 'processing'")).toBeLessThan(idx('INSERT INTO platform.erasure_suppression'));
+
+    const off = erasureSetup('scheduled', { ERASURE_SUPPRESSION_DAYS: '0' });
+    await off.svc.processDue(REQ_ID);
+    expect(off.db.find('INSERT INTO platform.erasure_suppression')).toHaveLength(0);
+  });
+
+  it('SEC-65: siklus job menghapus tag kedaluwarsa; kegagalan retensi tidak menghentikan erasure', async () => {
+    const ctx = erasureSetup();
+    await ctx.svc.runOnce();
+    expect(ctx.db.find('DELETE FROM platform.erasure_suppression WHERE expires_at <= now()')).toHaveLength(1);
+    const db = new FakeDb((t) => {
+      if (t.includes('DELETE FROM platform.erasure_suppression')) throw new Error('relation does not exist');
+      return undefined;
+    });
+    const svc = new ErasureService(testConfig(), db, { put: jest.fn(), remove: jest.fn() });
+    expect(await svc.runOnce()).toEqual({ processed: 0, failed: 0, skipped: false });
   });
 
   it('request dibatalkan sebelum diproses → tidak ada erasure', async () => {

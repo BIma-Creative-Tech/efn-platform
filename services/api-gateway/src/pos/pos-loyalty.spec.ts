@@ -616,7 +616,10 @@ describe('DTO & controller loyalty POS', () => {
       memberRef: MEMBER,
       companyCode: 'FNB',
       eligibleAmount: 125000,
+      posConfigId: null,
     });
+    // SEC-61: pos_config_id opsional (kunci batas per kasir per jam)
+    expect(parsePosEarn({ ...earnBody, pos_config_id: 7 }).posConfigId).toBe(7);
   });
 
   it.each([
@@ -626,6 +629,9 @@ describe('DTO & controller loyalty POS', () => {
     [{ ...earnBody, company_code: 'XYZ' }],
     [{ ...earnBody, eligible_amount: -1 }],
     [{ ...earnBody, eligible_amount: '1000' }],
+    [{ ...earnBody, pos_config_id: 0 }],
+    [{ ...earnBody, pos_config_id: '7' }],
+    [{ ...earnBody, pos_config_id: 1.5 }],
   ])('earn: body tidak valid → 400 (%j)', async (body) => {
     expect(await code(Promise.resolve().then(() => parsePosEarn(body)))).toBe('400 invalid_request');
   });

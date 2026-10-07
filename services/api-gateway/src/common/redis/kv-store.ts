@@ -15,6 +15,8 @@ export interface KvStore {
   del(key: string): Promise<number>;
   /** INCR atomik; TTL dipasang saat hit pertama (fixed window). */
   incrWindow(key: string, windowSeconds: number): Promise<number>;
+  /** INCRBY atomik (boleh negatif = kompensasi); TTL dipasang bila key belum punya TTL (fixed window). */
+  incrByWindow(key: string, by: number, windowSeconds: number): Promise<number>;
   ttl(key: string): Promise<number>;
   /** HSET banyak field + EXPIRE dalam satu MULTI. */
   hsetEx(key: string, fields: Record<string, string>, ttlSeconds: number): Promise<void>;
@@ -27,6 +29,11 @@ export interface KvStore {
 const INCR_WINDOW_SCRIPT = `
 local c = redis.call('INCR', KEYS[1])
 if c == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
+return c`;
+
+const INCRBY_WINDOW_SCRIPT = `
+local c = redis.call('INCRBY', KEYS[1], ARGV[1])
+if redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end
 return c`;
 
 export class IoRedisKvStore implements KvStore {
@@ -51,6 +58,11 @@ export class IoRedisKvStore implements KvStore {
 
   async incrWindow(key: string, windowSeconds: number): Promise<number> {
     const res = await this.redis.eval(INCR_WINDOW_SCRIPT, 1, key, String(windowSeconds));
+    return Number(res);
+  }
+
+  async incrByWindow(key: string, by: number, windowSeconds: number): Promise<number> {
+    const res = await this.redis.eval(INCRBY_WINDOW_SCRIPT, 1, key, String(Math.trunc(by)), String(windowSeconds));
     return Number(res);
   }
 

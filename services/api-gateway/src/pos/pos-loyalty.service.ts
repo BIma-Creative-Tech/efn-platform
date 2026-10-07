@@ -16,6 +16,7 @@ import {
   isCompanyCode,
   splitCredit,
 } from '../loyalty/loyalty.service';
+import { LoyaltyAnomalyKind, reportLoyaltyAnomaly } from '../loyalty/loyalty-anomaly';
 import { DiscountTokenService, amountWithinBounds } from './discount-token.service';
 import { PosEarnDto, PosReverseDto, RedeemCommitDto, RedeemReserveDto } from './dto/pos-loyalty.dto';
 
@@ -111,6 +112,11 @@ const LoyaltyErrors = {
 const DAY_MS = 86_400_000;
 const WIB_OFFSET_MS = 7 * 3600 * 1000;
 
+/** Awal hari kalender WIB (00:00 WIB) yang memuat `nowMs`. */
+export function startOfWibDay(nowMs: number): Date {
+  return new Date(Math.floor((nowMs + WIB_OFFSET_MS) / DAY_MS) * DAY_MS - WIB_OFFSET_MS);
+}
+
 /** 00:00 WIB setelah `days` hari penuh sejak `nowMs`; `days` = 0 → null (tanpa kedaluwarsa). */
 export function expiryFor(nowMs: number, days: number): Date | null {
   if (days <= 0) return null;
@@ -193,10 +199,6 @@ export class PosLoyaltyService {
       const hash = this.loyalty.hashMember(dto.memberRef);
       await this.rateLimit('earn', hash);
       const points = this.pointsFor(dto.eligibleAmount);
-      if (points > this.config.loyaltyPosMaxEarnPoints) {
-        this.logger.warn(`earn POS ditolak: ${points} poin > LOYALTY_POS_MAX_EARN_POINTS (order ${dto.orderRef})`);
-        throw LoyaltyErrors.earnLimitExceeded();
-      }
       return this.db.tx(async (q) => {
         await this.loyalty.lockMember(q, hash);
         const existing = await q.query<EarnRecordRow>(
@@ -214,6 +216,8 @@ export class PosLoyaltyService {
             outcome: 'replay',
           };
         }
+        // SEC-61: pagar batas SETELAH cek replay (retry earn yang dulu diterima tetap 200 walau batas diturunkan)
+        if (points > 0) await this.enforceEarnLimits(q, hash, dto, points);
         await q.query(
           `INSERT INTO platform.loyalty_pos_earn
              (order_ref, idempotency_key, member_hash, company_code, eligible_amount, points_earned, created_at)
@@ -540,6 +544,56 @@ export class PosLoyaltyService {
   }
 
   // ───────────────────────── helper ─────────────────────────
+
+  /**
+   * SEC-61 (Gelombang 13c) — defense in depth karena BFF mempercayai `eligible_amount` dari Odoo (SEC-58: pemanggil
+   * service key mana pun). Semua pelanggaran → 409 `earn_limit_exceeded` + baris `EFN_LOYALTY_ANOMALY` + metrik;
+   * TIDAK ada catatan earn (Odoo menandai order untuk review; reverse order itu kelak `earn_pending` → review).
+   * 1. Plafon per order `LOYALTY_POS_MAX_EARN_POINTS`.
+   * 2. Per member per hari WIB `LOYALTY_EARN_DAILY_MAX_POINTS` — Σ `loyalty_pos_earn.points_earned` hari ini, dihitung
+   *    di bawah kunci member (pemanggil sudah `lockMember`) → tepat walau paralel.
+   * 3. Per PT per jam `LOYALTY_EARN_COMPANY_HOURLY_MAX_POINTS` dan per pos_config per jam
+   *    `LOYALTY_EARN_POS_CONFIG_HOURLY_MAX_POINTS` (bila dikirim) — counter Redis berbobot (`RateLimiter.consume`, gagal
+   *    dikompensasi). Redis mati → error 5xx (fail closed; Odoo retry). Bila transaksi DB gagal setelah counter
+   *    bertambah, counter sedikit lebih tinggi dari kenyataan (memihak keamanan).
+   */
+  private async enforceEarnLimits(q: Queryable, hash: string, dto: PosEarnDto, points: number): Promise<void> {
+    const base = { company: dto.companyCode, order_ref: dto.orderRef, points };
+    const cap = this.config.loyaltyPosMaxEarnPoints;
+    if (points > cap) this.rejectEarn('earn_limit_order', { ...base, limit: cap });
+
+    const daily = this.config.loyaltyEarnDailyMaxPoints;
+    if (daily > 0) {
+      const res = await q.query<{ earned: string | number | null }>(
+        `SELECT COALESCE(SUM(points_earned), 0)::bigint AS earned
+           FROM platform.loyalty_pos_earn WHERE member_hash = $1 AND created_at >= $2`,
+        [hash, startOfWibDay(this.now()).toISOString()],
+      );
+      const today = Number(res.rows[0]?.earned ?? 0);
+      if (today + points > daily) this.rejectEarn('earn_limit_member_day', { ...base, earned_today: today, limit: daily });
+    }
+
+    const companyLimit = this.config.loyaltyEarnCompanyHourlyMaxPoints;
+    const companyKey = `loy:earnpts:co:${dto.companyCode}`;
+    if (companyLimit > 0) {
+      const r = await this.limiter.consume(companyKey, points, companyLimit, 3600);
+      if (!r.allowed) this.rejectEarn('earn_limit_company_hour', { ...base, limit: companyLimit });
+    }
+    const cfgLimit = this.config.loyaltyEarnPosConfigHourlyMaxPoints;
+    if (cfgLimit > 0 && dto.posConfigId !== undefined && dto.posConfigId !== null) {
+      const r = await this.limiter.consume(`loy:earnpts:cfg:${dto.companyCode}:${dto.posConfigId}`, points, cfgLimit, 3600);
+      if (!r.allowed) {
+        // kuota PT yang sudah terpakai oleh percobaan ini dikembalikan
+        if (companyLimit > 0) await this.limiter.release(companyKey, points, 3600).catch(() => undefined);
+        this.rejectEarn('earn_limit_pos_config_hour', { ...base, pos_config_id: dto.posConfigId, limit: cfgLimit });
+      }
+    }
+  }
+
+  private rejectEarn(kind: LoyaltyAnomalyKind, fields: Record<string, string | number>): never {
+    reportLoyaltyAnomaly(this.logger, this.metrics, kind, fields);
+    throw LoyaltyErrors.earnLimitExceeded();
+  }
 
   /** Saldo tersedia = saldo ledger − reservasi aktif (status reserved & belum lewat hold_until). */
   private async available(q: Queryable, hash: string, at: Date): Promise<number> {

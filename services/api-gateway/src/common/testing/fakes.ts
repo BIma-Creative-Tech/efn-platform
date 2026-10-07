@@ -87,6 +87,17 @@ export class FakeKvStore implements KvStore {
     return n;
   }
 
+  async incrByWindow(key: string, by: number, windowSeconds: number): Promise<number> {
+    const e = this.live(key);
+    if (!e) {
+      this.data.set(key, { value: String(by), expiresAt: this.exp(windowSeconds) });
+      return by;
+    }
+    const n = Number(e.value) + by;
+    e.value = String(n);
+    return n;
+  }
+
   async ttl(key: string): Promise<number> {
     const e = this.live(key);
     if (!e) return -2;

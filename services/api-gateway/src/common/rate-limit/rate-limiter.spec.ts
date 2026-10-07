@@ -50,6 +50,21 @@ describe('RateLimiter (fixed window)', () => {
     expect(Number(err.headers['Retry-After'])).toBeGreaterThan(0);
   });
 
+  it('SEC-61 consume berbobot: melewati batas → ditolak & dikompensasi; release mengembalikan; window baru reset', async () => {
+    const { limiter, kv, clock } = setup(Date.UTC(2026, 9, 5, 3, 0, 0));
+    expect((await limiter.consume('p', 60, 100, 3600)).allowed).toBe(true);
+    const over = await limiter.consume('p', 50, 100, 3600);
+    expect(over).toMatchObject({ allowed: false, count: 110, limit: 100 });
+    const key = kv.keys().find((k) => k.startsWith('rl:p:'))!;
+    expect(kv.raw(key)).toBe('60');
+    expect((await limiter.consume('p', 40, 100, 3600)).allowed).toBe(true);
+    await limiter.release('p', 30, 3600);
+    expect(kv.raw(key)).toBe('70');
+    expect((await limiter.consume('p', 0, 100, 3600)).count).toBe(0);
+    clock.advanceSeconds(3600);
+    expect((await limiter.consume('p', 100, 100, 3600)).allowed).toBe(true);
+  });
+
   it('offset WIB: window harian reset pada 00:00 WIB (17:00 UTC)', async () => {
     const { limiter, clock } = setup(Date.UTC(2026, 9, 5, 16, 59, 0)); // 23:59 WIB
     expect((await limiter.hit('d', 1, 86_400, WIB_OFFSET_SECONDS)).allowed).toBe(true);

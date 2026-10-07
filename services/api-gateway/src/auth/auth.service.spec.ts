@@ -261,6 +261,51 @@ describe('JwtAuthGuard / AccessTokenService', () => {
     expect((await ctx.auth.challenge(IP)).maxnumber).toBe(1000);
   });
 
+  it('SEC-54: rasio GAGAL ALTCHA per IP menaikkan biaya (setelah sampel minimum); IP lain tidak terpengaruh', async () => {
+    const ctx = setup({ ALTCHA_MAX_NUMBER_CAP: '8000' });
+    const BOT = '198.51.100.20';
+    const bad = Buffer.from(JSON.stringify({ algorithm: 'SHA-256', challenge: 'a'.repeat(64), number: 1, salt: 'x', signature: 'b'.repeat(64) })).toString('base64');
+    for (let i = 0; i < 4; i += 1) {
+      expect((await catchApiError(() => ctx.auth.requestOtp({ phone: PHONE, altcha: bad }, BOT))).getStatus()).toBe(400);
+    }
+    // 4 percobaan < ALTCHA_FAIL_MIN_SAMPLE (5) → belum naik (salah ketik/kedaluwarsa wajar)
+    expect((await ctx.auth.challenge(BOT)).maxnumber).toBe(1000);
+    await catchApiError(() => ctx.auth.requestOtp({ phone: PHONE, altcha: bad }, BOT));
+    // 5/5 gagal = 100 % → level 3 (1000 × 8)
+    expect((await ctx.auth.challenge(BOT)).maxnumber).toBe(8000);
+    expect((await ctx.auth.challenge('203.0.113.60')).maxnumber).toBe(1000);
+    // nama key Redis tanpa IP mentah (SEC-24)
+    expect(ctx.kv.keys().filter((k) => k.includes('altcha:fail:ip:')).every((k) => !k.includes(BOT))).toBe(true);
+  });
+
+  it('SEC-54: rasio kode OTP salah per IP ikut dihitung; IP ramai dengan kegagalan rendah tidak dihukum oleh rasio', async () => {
+    const ctx = setup({ ALTCHA_MAX_NUMBER_CAP: '8000', OTP_RL_SOURCE_LIMIT: '1000' });
+    const IP = '198.51.100.30';
+    // 6 percobaan verify, 2 gagal (33 %) → level 1 dari rasio; volume OTP 6/1000 kecil
+    const challenges: string[] = [];
+    for (let i = 0; i < 4; i += 1) challenges.push((await ctx.request(`62812000002${i}`, IP)).challenge_id);
+    for (let i = 0; i < 4; i += 1) {
+      const code = ctx.sender.otps[i].code;
+      await ctx.auth.verifyOtp({ challengeId: challenges[i], code }, IP);
+    }
+    const wrong = (c: string) => String((Number(c) + 1) % 1_000_000).padStart(6, '0');
+    const extra = (await ctx.request('6281200000299', IP)).challenge_id;
+    const extraCode = ctx.sender.otps[4].code;
+    await catchApiError(() => ctx.auth.verifyOtp({ challengeId: extra, code: wrong(extraCode) }, IP));
+    await catchApiError(() => ctx.auth.verifyOtp({ challengeId: extra, code: wrong(wrong(extraCode)) }, IP));
+    expect((await ctx.auth.challenge(IP)).maxnumber).toBe(2000);
+    // IP CGNAT ramai: 20 verify sukses, 1 gagal (≈5 %) → tetap biaya dasar dari sisi rasio
+    const busy = setup({ ALTCHA_MAX_NUMBER_CAP: '8000', OTP_RL_SOURCE_LIMIT: '1000', OTP_RL_VERIFY_LIMIT: '1000' });
+    const NAT = '198.51.100.31';
+    for (let i = 0; i < 20; i += 1) {
+      const id = (await busy.request(`628120001${String(i).padStart(3, '0')}`, NAT)).challenge_id;
+      await busy.auth.verifyOtp({ challengeId: id, code: busy.sender.otps[i].code }, NAT);
+    }
+    const id = (await busy.request('6281200019999', NAT)).challenge_id;
+    await catchApiError(() => busy.auth.verifyOtp({ challengeId: id, code: wrong(busy.sender.otps[20].code) }, NAT));
+    expect((await busy.auth.challenge(NAT)).maxnumber).toBe(1000);
+  });
+
   it('SEC-34: tekanan global (budget OTP login) menaikkan biaya untuk semua IP; ALTCHA_ADAPTIVE=false mematikan', async () => {
     const ctx = setup({ OTP_GLOBAL_HOURLY_BUDGET: '10' });
     for (let i = 0; i < 5; i += 1) await ctx.request(`62812000001${String(i).padStart(2, '0')}`, `203.0.113.${10 + i}`);

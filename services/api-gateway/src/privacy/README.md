@@ -54,6 +54,16 @@ Pemilik skema `platform` & semua objeknya = role **NOLOGIN** `efn_platform_owner
 ## Consent
 Tabel append-only `platform.consent` (hak efn_bff: SELECT, INSERT, UPDATE(ip_enc) + trigger menolak DELETE/TRUNCATE/UPDATE kolom lain). `text_sha256` = hash teks aktif (`CONSENT_<PURPOSE>_TEXT_SHA256`); penarikan dengan teks belum dikonfigurasi memakai `UNKNOWN_TEXT_SHA256` (sha256 string kosong). IP terenkripsi (AAD `efn:consent.ip_enc:v1`). Market Scout membuang koordinat tanpa consent `location`.
 
+### SEC-65 (Gelombang 13c) — daftar tolak migrasi pasca-erasure
+Masalah: setelah erasure `completed`, `member` dihapus dan `dsar_request.member_hash` di-NULL-kan, sehingga impor migrasi K-7 file lama dapat membuat ulang subjek beserta consent/saldonya.
+Desain: saat request masuk `processing`, `ErasureService` menyimpan `tag = HMAC-SHA256(HKDF(otp_pepper,"efn:erasure_suppression:v1"), "efn:erasure_suppression:v1\n" + member_hash)` di `platform.erasure_suppression (tag, expires_at)` selama `ERASURE_SUPPRESSION_DAYS` (default 90, 0 = mati). Migrasi menolak member_hash dengan DSAR aktif atau tag belum kedaluwarsa. Tag kedaluwarsa dihapus tiap siklus job erasure.
+Trade-off privasi (untuk DPO):
+- Yang disimpan hanya tag + waktu kedaluwarsa: tanpa request_id, waktu permintaan, PT, atau member_hash. Tag berdomain terpisah → tidak bisa di-JOIN ke tabel/mart mana pun; `efn_readonly`/`efn_etl` tidak punya akses.
+- Sisa risiko: pemegang `otp_pepper` (BFF/Superadmin) yang mengetahui sebuah nomor HP dapat menguji "nomor ini pernah meminta penghapusan dalam N hari terakhir". Ini data pribadi (pseudonim) yang diproses untuk menghormati hak hapus (daftar supresi) — perlu dicantumkan di RoPA (`PDP_DATA_INVENTORY` v4) dengan dasar & retensi.
+- Alternatif yang ditolak: (a) tanpa daftar → subjek bisa hidup kembali; (b) menyimpan member_hash apa adanya → dapat di-JOIN ke ledger/mart lain; (c) tolak hanya selama `processing` → celah setelah `completed` (dipakai bila DPO memilih `ERASURE_SUPPRESSION_DAYS=0`).
+- Re-registrasi lewat login OTP oleh pemilik nomor TIDAK diblokir (hanya impor migrasi) — itu kehendak subjek sendiri.
+- Urutan deploy: jalankan `06-platform-loyalty-guard.sql` SEBELUM BFF Gelombang 13c; tanpa tabel, transaksi erasure gagal dan dicoba ulang (DSAR tertunda, tidak ada data hilang).
+
 ## Belum / risiko terbuka
 - Export > batas (1000 baris per bagian) dipotong (`truncated:true`); jalur `202` + tautan unduh MinIO belum.
 - `correction`/`phone_change` (PATCH /v1/me, ganti nomor) belum diimplementasi (tipe sudah ada di CHECK).

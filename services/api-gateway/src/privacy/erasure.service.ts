@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nest
 import { randomUUID } from 'node:crypto';
 import { AppConfig } from '../config/app-config';
 import { DB, Db, Queryable } from '../common/db/db';
+import { erasureSuppressionTag } from '../common/pii/erasure-suppression';
 import { randomTombstone } from '../common/pii/pii';
 import { OBJECT_STORAGE, ObjectStorage } from '../market-scout/storage/object-storage';
 
@@ -48,6 +49,11 @@ export interface ErasureRunResult {
  * event `privacy.erasure.completed`). `stores_pending` kosong → `completed`, `completed_at`, `member_hash` NULL.
  * Gagal di tengah → transaksi rollback, status tetap `scheduled`, dicoba siklus berikutnya (tombstone baru).
  *
+ * SEC-65 (Gelombang 13c): saat request masuk `processing`, tag HMAC subjek (`erasureSuppressionTag`, domain terpisah
+ * dari member_hash) disimpan di `platform.erasure_suppression` selama `ERASURE_SUPPRESSION_DAYS` (default 90; 0 = tidak
+ * disimpan) agar impor migrasi K-7 menolak subjek ini setelah `member_hash` request di-NULL-kan. Baris kedaluwarsa
+ * dihapus di awal setiap siklus job.
+ *
  * Sisa risiko (didokumentasikan, README): korelasi waktu (`erased_at`/`created_at` forfeit ≈ `scheduled_at` request)
  * dapat menautkan baris ber-tombstone ke `request_id`, tetapi setelah `completed` request tidak lagi memuat
  * `member_hash` sehingga rantai ke nomor HP terputus.
@@ -82,6 +88,7 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
     if (this.running) return { processed: 0, failed: 0, skipped: true };
     this.running = true;
     try {
+      await this.purgeSuppression();
       const due = await this.db.query<{ id: string }>(
         `SELECT id::text AS id FROM platform.dsar_request
           WHERE type = 'delete' AND status = 'scheduled' AND scheduled_at <= now()
@@ -126,6 +133,7 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
       const r = started.rows[0];
       if (!r) return null;
       await q.query(`UPDATE platform.member SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL`, [r.member_id]);
+      await this.suppress(q, r.member_hash);
       const objects = await q.query<{ image_object: string }>(
         `SELECT image_object FROM platform.price_hunter_report WHERE user_hash = $1`,
         [r.member_hash],
@@ -229,6 +237,28 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
       [store],
     );
     return res.rows.map((r) => ({ request_id: r.request_id, member_hash: r.member_hash }));
+  }
+
+  /** SEC-65: tag daftar tolak migrasi (perpanjang bila sudah ada, tidak pernah memendekkan). */
+  private async suppress(q: Queryable, hash: string): Promise<void> {
+    const days = this.config.erasureSuppressionDays;
+    if (days <= 0) return;
+    await q.query(
+      `INSERT INTO platform.erasure_suppression (tag, expires_at)
+       VALUES ($1, now() + make_interval(days => $2::int))
+       ON CONFLICT (tag) DO UPDATE SET expires_at = GREATEST(platform.erasure_suppression.expires_at, EXCLUDED.expires_at)`,
+      [erasureSuppressionTag(this.config.erasureSuppressionKey, hash), days],
+    );
+  }
+
+  /** Retensi daftar tolak (gagal → dicatat, siklus erasure tetap jalan). */
+  private async purgeSuppression(): Promise<void> {
+    try {
+      const res = await this.db.query(`DELETE FROM platform.erasure_suppression WHERE expires_at <= now()`);
+      if ((res.rowCount ?? 0) > 0) this.logger.log(`Daftar tolak erasure: ${res.rowCount} tag kedaluwarsa dihapus`);
+    } catch (err) {
+      this.logger.warn(`Retensi daftar tolak erasure gagal: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private async removePhotos(objects: readonly string[]): Promise<void> {

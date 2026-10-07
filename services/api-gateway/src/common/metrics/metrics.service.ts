@@ -1,5 +1,5 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
-import { Counter, Registry, collectDefaultMetrics } from 'prom-client';
+import { Counter, Gauge, Registry, collectDefaultMetrics } from 'prom-client';
 
 export type OtpPurposeLabel = 'pos_promo' | 'pos_redeem' | 'login' | 'dsar';
 /** `budget_exhausted` = budget global per jam habis (SEC-06) — kandidat alert DevSecOps. */
@@ -77,6 +77,40 @@ export class MetricsService implements OnModuleInit {
     registers: [this.registry],
   });
 
+  /**
+   * SEC-61 (Gelombang 13c): anomali poin (`kind` dari daftar tetap `LOYALTY_ANOMALY_KINDS`, severity warning|critical).
+   * Pasangan baris log `EFN_LOYALTY_ANOMALY {json}`. Kandidat alert: `increase(...{severity="critical"}[15m]) > 0`.
+   */
+  readonly loyaltyAnomaly = new Counter({
+    name: 'efn_loyalty_anomaly_total',
+    help: 'Anomali loyalty (pagar batas earn, rekonsiliasi ledger, migrasi) per jenis',
+    labelNames: ['kind', 'severity'] as const,
+    registers: [this.registry],
+  });
+
+  /** SEC-61/SEC-66: poin saldo pembuka migrasi K-7 yang dibukukan, per PT. */
+  readonly loyaltyMigrationPoints = new Counter({
+    name: 'efn_loyalty_migration_points_total',
+    help: 'Poin saldo pembuka migrasi yang dibukukan per PT',
+    labelNames: ['company'] as const,
+    registers: [this.registry],
+  });
+
+  /** SEC-61: hasil siklus job rekonsiliasi loyalty (`ok` | `error` | `skipped`). */
+  readonly loyaltyReconRuns = new Counter({
+    name: 'efn_loyalty_recon_runs_total',
+    help: 'Siklus job rekonsiliasi loyalty per hasil',
+    labelNames: ['outcome'] as const,
+    registers: [this.registry],
+  });
+
+  /** SEC-61: dead-man — waktu (unix detik) siklus rekonsiliasi terakhir yang sukses. */
+  readonly loyaltyReconLastSuccess = new Gauge({
+    name: 'efn_loyalty_recon_last_success_timestamp_seconds',
+    help: 'Waktu siklus rekonsiliasi loyalty terakhir yang sukses',
+    registers: [this.registry],
+  });
+
   /** Metrik default proses Node (CPU, heap, event loop) hanya di runtime, bukan di unit test. */
   onModuleInit(): void {
     collectDefaultMetrics({ register: this.registry });
@@ -105,6 +139,22 @@ export class MetricsService implements OnModuleInit {
 
   recordLoyaltyPosPoints(kind: LoyaltyPointsKind, company: string, points: number): void {
     if (points > 0) this.loyaltyPosPoints.inc({ kind, company }, points);
+  }
+
+  recordLoyaltyAnomaly(kind: string, severity: string): void {
+    this.loyaltyAnomaly.inc({
+      kind: /^[a-z_]{1,40}$/.test(kind) ? kind : 'other',
+      severity: severity === 'critical' ? 'critical' : 'warning',
+    });
+  }
+
+  recordLoyaltyMigrationPoints(company: string, points: number): void {
+    if (points > 0) this.loyaltyMigrationPoints.inc({ company }, points);
+  }
+
+  recordLoyaltyRecon(outcome: 'ok' | 'error' | 'skipped', atMs?: number): void {
+    this.loyaltyReconRuns.inc({ outcome });
+    if (outcome === 'ok') this.loyaltyReconLastSuccess.set(Math.floor((atMs ?? Date.now()) / 1000));
   }
 
   recordLoyaltyReservationExpired(n: number): void {

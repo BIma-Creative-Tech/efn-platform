@@ -1,10 +1,13 @@
+import { Logger } from '@nestjs/common';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import { APP_FILTER } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { AppConfig } from '../config/app-config';
 import { ContractExceptionFilter } from '../common/errors/contract-exception.filter';
 import { GLOBAL_PREFIX, GLOBAL_PREFIX_EXCLUDE } from '../common/http/global-prefix';
+import { MetricsService } from '../common/metrics/metrics.service';
 import { PII_AAD } from '../common/pii/crypto';
+import { erasureSuppressionTag } from '../common/pii/erasure-suppression';
 import { memberHash } from '../common/pii/pii';
 import { FakeLoyaltyDb } from '../common/testing/fake-loyalty-db';
 import { FakeClock, FakeDb, catchApiError, randomSecret, testCipher, testConfig } from '../common/testing/fakes';
@@ -26,9 +29,10 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
       const db = new FakeLoyaltyDb();
       const loyalty = new LoyaltyService(config, db, cipher);
       loyalty.now = clock.now;
-      const svc = new MigrationService(config, db, cipher, loyalty);
+      const metrics = new MetricsService();
+      const svc = new MigrationService(config, db, cipher, loyalty, metrics);
       svc.now = clock.now;
-      return { config, cipher, db, svc, hash: memberHash(config.memberHashPepper, MEMBER) };
+      return { clock, config, cipher, db, svc, metrics, hash: memberHash(config.memberHashPepper, MEMBER) };
     }
 
     it('entri ledger migration_opening terenkripsi; idempoten per source_ref; data beda → idempotency_conflict', async () => {
@@ -52,6 +56,57 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
       expect(err.getStatus()).toBe(409);
       expect((err.body as { error: { code: string } }).error.code).toBe('idempotency_conflict');
     });
+
+    it('SEC-61/SEC-66: metrik poin migrasi per PT + baris EFN_LOYALTY_MIGRATION tanpa nomor; saldo besar → anomali (tetap diterima)', async () => {
+      const ctx = setup();
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+      try {
+        await ctx.svc.openingBalance({ sourceRef: 'legacy-001', memberRef: MEMBER, points: 250, companyCode: 'RTL' });
+        expect((await ctx.svc.openingBalance({ sourceRef: 'legacy-002', memberRef: MEMBER, points: 6000, companyCode: 'FNB' })).applied).toBe(true);
+        const m = await ctx.metrics.loyaltyMigrationPoints.get();
+        expect(m.values.map((v) => [v.labels.company, v.value])).toEqual([
+          ['RTL', 250],
+          ['FNB', 6000],
+        ]);
+        const lines = log.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('EFN_LOYALTY_MIGRATION '));
+        expect(lines).toHaveLength(2);
+        expect(JSON.parse(lines[0].slice('EFN_LOYALTY_MIGRATION '.length))).toEqual({ company: 'RTL', points: 250, source_ref: 'legacy-001' });
+        const anomalies = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('EFN_LOYALTY_ANOMALY '));
+        expect(anomalies).toHaveLength(1);
+        expect(JSON.parse(anomalies[0].slice('EFN_LOYALTY_ANOMALY '.length))).toMatchObject({
+          kind: 'migration_large_balance',
+          severity: 'warning',
+          company: 'FNB',
+          points: 6000,
+          limit: 5000,
+        });
+        for (const l of [...lines, ...anomalies]) {
+          expect(l).not.toContain(MEMBER.slice(2));
+          expect(l).not.toContain(ctx.hash);
+        }
+      } finally {
+        warn.mockRestore();
+        log.mockRestore();
+      }
+    });
+
+    it('SEC-65: saldo pembuka untuk subjek yang sedang/pernah dihapus → 409, tanpa entri ledger', async () => {
+      const ctx = setup();
+      const dto = { sourceRef: 'legacy-009', memberRef: MEMBER, points: 10, companyCode: 'RTL' as const };
+      ctx.db.erasureActive.add(ctx.hash);
+      expect((await catchApiError(() => ctx.svc.openingBalance(dto))).body).toEqual({ error: { code: 'member_deleting', message: expect.any(String) } });
+      ctx.db.erasureActive.clear();
+      const tag = erasureSuppressionTag(ctx.config.erasureSuppressionKey, ctx.hash);
+      ctx.db.suppression.set(tag, new Date(ctx.clock.now() + 86_400_000).toISOString());
+      expect((await catchApiError(() => ctx.svc.openingBalance(dto))).body).toEqual({ error: { code: 'member_erased', message: expect.any(String) } });
+      expect(ctx.db.ledger).toHaveLength(0);
+      const anomalies = await ctx.metrics.loyaltyAnomaly.get();
+      expect(anomalies.values.find((v) => v.labels.kind === 'migration_erased_member')?.value).toBe(2);
+      // tag kedaluwarsa → impor diterima lagi
+      ctx.clock.advanceSeconds(2 * 86_400);
+      expect((await ctx.svc.openingBalance(dto)).applied).toBe(true);
+    });
   });
 
   describe('members', () => {
@@ -60,7 +115,12 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
       const cipher = testCipher(config);
       const members = new Map<string, { id: string; deleted_at: Date | null; enc: Buffer }>();
       const consents: unknown[][] = [];
+      const erasure = { active: new Set<string>(), tags: new Set<string>() };
       const db = new FakeDb((text, p) => {
+        if (text.includes('FROM platform.dsar_request') && text.includes('platform.erasure_suppression')) {
+          if (erasure.active.has(String(p[0]))) return { rows: [{ kind: 'erasure_active' }], rowCount: 1 };
+          return erasure.tags.has(String(p[1])) ? { rows: [{ kind: 'erased' }], rowCount: 1 } : { rows: [], rowCount: 0 };
+        }
         if (text.includes('INSERT INTO platform.member')) {
           if (members.has(String(p[1]))) return { rows: [], rowCount: 0 };
           members.set(String(p[1]), { id: String(p[0]), deleted_at: null, enc: p[2] as Buffer });
@@ -78,8 +138,8 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
         return undefined;
       });
       const loyalty = new LoyaltyService(config, db, cipher);
-      const svc = new MigrationService(config, db, cipher, loyalty);
-      return { config, cipher, members, consents, svc, hash: memberHash(config.memberHashPepper, MEMBER) };
+      const svc = new MigrationService(config, db, cipher, loyalty, new MetricsService());
+      return { config, cipher, members, consents, erasure, db, svc, hash: memberHash(config.memberHashPepper, MEMBER) };
     }
 
     it('upsert member (nomor terenkripsi AAD member) + consent ber-bukti sekali; impor ulang tidak menambah baris', async () => {
@@ -101,6 +161,36 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
       ctx.members.get(ctx.hash)!.deleted_at = new Date();
       const err = await catchApiError(() => ctx.svc.importMember(parseMigrationMember({ source_ref: 'x', member_ref: MEMBER })));
       expect(err.getStatus()).toBe(409);
+    });
+
+    it('SEC-65: member yang dihapus (erasure processing, member sudah DIHAPUS) → 409 member_deleting, tidak dibuat ulang', async () => {
+      const ctx = setup();
+      ctx.erasure.active.add(ctx.hash);
+      const err = await catchApiError(() => ctx.svc.importMember(parseMigrationMember({ source_ref: 'x', member_ref: MEMBER })));
+      expect(err.body).toEqual({ error: { code: 'member_deleting', message: expect.any(String) } });
+      expect(ctx.members.size).toBe(0);
+      expect(ctx.db.find('INSERT INTO platform.member')).toHaveLength(0);
+    });
+
+    it('SEC-65: erasure completed (tag daftar tolak HMAC, bukan member_hash) → 409 member_erased; nomor lain tetap bisa', async () => {
+      const ctx = setup();
+      const tag = erasureSuppressionTag(ctx.config.erasureSuppressionKey, ctx.hash);
+      expect(tag).toMatch(/^[0-9a-f]{64}$/);
+      expect(tag).not.toBe(ctx.hash);
+      ctx.erasure.tags.add(tag);
+      const err = await catchApiError(() =>
+        ctx.svc.importMember(
+          parseMigrationMember({ source_ref: 'x', member_ref: MEMBER, consents: [{ purpose: 'marketing', granted: true, version: 'v', text_sha256: SHA }] }),
+        ),
+      );
+      expect(err.body).toEqual({ error: { code: 'member_erased', message: expect.any(String) } });
+      expect(ctx.members.size).toBe(0);
+      expect(ctx.consents).toHaveLength(0);
+      // query memakai member_hash (dsar_request aktif) dan tag (daftar tolak) — bukan nomor HP
+      const q = ctx.db.find('platform.erasure_suppression')[0];
+      expect(q.params.slice(0, 2)).toEqual([ctx.hash, tag]);
+      expect(JSON.stringify(q.params)).not.toContain(MEMBER);
+      expect((await ctx.svc.importMember(parseMigrationMember({ source_ref: 'y', member_ref: '6285711112222' }))).member).toBe('created');
     });
 
     it.each([

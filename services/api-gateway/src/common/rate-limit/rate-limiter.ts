@@ -42,6 +42,30 @@ export class RateLimiter {
     return Number.isFinite(n) && n > 0 ? n : 0;
   }
 
+  /**
+   * SEC-61: kuota berbobot (mis. poin per jam). Menambah `amount` ke counter window berjalan; bila hasilnya melewati
+   * `limit`, penambahan DIKOMPENSASI (dikurangi lagi) sehingga percobaan yang ditolak tidak memakan kuota sah, lalu
+   * `allowed=false`. `amount` ≤ 0 → tidak menyentuh Redis.
+   */
+  async consume(key: string, amount: number, limit: number, windowSeconds: number, offsetSeconds = 0): Promise<RateLimitResult> {
+    const nowSec = Math.floor(this.now() / 1000) + offsetSeconds;
+    const bucket = Math.floor(nowSec / windowSeconds);
+    const remaining = Math.max(1, (bucket + 1) * windowSeconds - nowSec);
+    if (amount <= 0) return { allowed: true, count: 0, limit, retryAfterSeconds: remaining };
+    const k = `rl:${key}:${bucket}`;
+    const count = await this.kv.incrByWindow(k, amount, windowSeconds);
+    if (count <= limit) return { allowed: true, count, limit, retryAfterSeconds: remaining };
+    await this.kv.incrByWindow(k, -amount, windowSeconds);
+    return { allowed: false, count, limit, retryAfterSeconds: remaining };
+  }
+
+  /** Kembalikan `amount` yang sudah di-`consume` di window berjalan (kompensasi lintas-kunci). */
+  async release(key: string, amount: number, windowSeconds: number, offsetSeconds = 0): Promise<void> {
+    if (amount <= 0) return;
+    const nowSec = Math.floor(this.now() / 1000) + offsetSeconds;
+    await this.kv.incrByWindow(`rl:${key}:${Math.floor(nowSec / windowSeconds)}`, -amount, windowSeconds);
+  }
+
   /** Seperti `hit`, tetapi melempar 429 (format kontrak + Retry-After) bila melewati batas. */
   async enforce(key: string, limit: number, windowSeconds: number, offsetSeconds = 0): Promise<RateLimitResult> {
     const res = await this.hit(key, limit, windowSeconds, offsetSeconds);

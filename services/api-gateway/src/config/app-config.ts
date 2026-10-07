@@ -175,9 +175,17 @@ export class AppConfig {
       () => this.loyaltyPointExpiryDays,
       () => this.loyaltyPosMaxEarnPoints,
       () => this.loyaltyReservationTtlSeconds,
+      () => this.loyaltyEarnDailyMaxPoints,
+      () => this.loyaltyEarnPosConfigHourlyMaxPoints,
+      () => this.loyaltyEarnCompanyHourlyMaxPoints,
+      () => this.loyaltyReconIntervalMs,
+      () => this.loyaltyReconLookbackHours,
+      () => this.loyaltyMigrationAnomalyPoints,
     ]) {
       attempt(() => void getter(), 'parameter LOYALTY_* tidak valid');
     }
+    attempt(() => void this.erasureSuppressionDays, 'ERASURE_SUPPRESSION_DAYS tidak valid');
+    attempt(() => void this.altchaFailMinSample, 'ALTCHA_FAIL_MIN_SAMPLE tidak valid');
     if (this.migrationEnabled) {
       check('MIGRATION_API_KEY');
       attempt(() => {
@@ -513,6 +521,14 @@ export class AppConfig {
   get redisKeyPepper(): Buffer {
     return this.derive('efn:redis_key:v1');
   }
+  /**
+   * SEC-65 (Gelombang 13c): kunci HMAC daftar tolak migrasi pasca-erasure =
+   * HKDF-SHA256(ikm=otp_pepper, salt="", info="efn:erasure_suppression:v1", 32 byte). Domain terpisah dari member_hash:
+   * tag di `platform.erasure_suppression` tidak dapat di-JOIN ke kolom member_hash mana pun.
+   */
+  get erasureSuppressionKey(): Buffer {
+    return this.derive('efn:erasure_suppression:v1');
+  }
   get discountTokenSecret(): string {
     return this.secret('DISCOUNT_TOKEN_SECRET');
   }
@@ -736,6 +752,13 @@ export class AppConfig {
   get altchaChallengeRateLimit(): number {
     return this.int('ALTCHA_CHALLENGE_RL_LIMIT', 120, 1, 100_000);
   }
+  /**
+   * SEC-54 (Gelombang 13c): jumlah percobaan minimum per IP (per `OTP_RL_WINDOW_SECONDS`) sebelum rasio gagal
+   * (ALTCHA tidak valid / kode OTP salah) ikut menaikkan level biaya. Mencegah 1 salah ketik = level tinggi.
+   */
+  get altchaFailMinSample(): number {
+    return this.int('ALTCHA_FAIL_MIN_SAMPLE', 5, 1, 10_000);
+  }
 
   // ───────────── Privasi / DSAR (docs/04 §8.4) ─────────────
   get dsarDeleteGraceDays(): number {
@@ -748,6 +771,14 @@ export class AppConfig {
   /** Batas export `GET /v1/me/data` per member per jam. */
   get dsarExportHourlyLimit(): number {
     return this.int('DSAR_EXPORT_HOURLY_LIMIT', 10, 1, 1000);
+  }
+  /**
+   * SEC-65 (Gelombang 13c): lama (hari) tag HMAC subjek yang sudah dihapus disimpan di `platform.erasure_suppression`
+   * agar impor migrasi K-7 tidak menghidupkannya kembali. Default 90 (PLACEHOLDER — keputusan DPO; set ≥ sisa masa
+   * migrasi). 0 = tidak menyimpan tag (migrasi hanya ditolak selama erasure masih `scheduled`/`processing`).
+   */
+  get erasureSuppressionDays(): number {
+    return this.int('ERASURE_SUPPRESSION_DAYS', 90, 0, 730);
   }
   /**
    * docs/04 §8.7/§8.9: versi & SHA-256 teks consent AKTIF per purpose: `CONSENT_<PURPOSE>_VERSION`,
@@ -813,9 +844,45 @@ export class AppConfig {
   get loyaltyPointExpiryDays(): number {
     return this.int('LOYALTY_POINT_EXPIRY_DAYS', 365, 0, 3650);
   }
-  /** Plafon poin satu earn POS (pagar fraud/salah hitung; batas teknis ledger 1 000 000). */
+  /**
+   * Plafon poin satu earn POS (pagar fraud/salah hitung; batas teknis ledger 1 000 000). SEC-61 (Gelombang 13c):
+   * default turun 100 000 → 5 000 (= basket Rp50 juta pada 1 poin/Rp10.000). PLACEHOLDER menunggu Finance.
+   */
   get loyaltyPosMaxEarnPoints(): number {
-    return this.int('LOYALTY_POS_MAX_EARN_POINTS', 100_000, 1, 1_000_000);
+    return this.int('LOYALTY_POS_MAX_EARN_POINTS', 5_000, 1, 1_000_000);
+  }
+  /**
+   * SEC-61: total poin earn POS per member per hari kalender WIB (dihitung dari `loyalty_pos_earn` di bawah kunci
+   * member — tepat, tanpa balapan). Default 2 000 (= belanja Rp20 juta/hari). 0 = mati. PLACEHOLDER Finance.
+   */
+  get loyaltyEarnDailyMaxPoints(): number {
+    return this.int('LOYALTY_EARN_DAILY_MAX_POINTS', 2_000, 0, 1_000_000);
+  }
+  /**
+   * SEC-61: total poin earn POS per pos_config (kasir) per jam (counter Redis). Berlaku hanya bila Odoo mengirim
+   * `pos_config_id` di body earn (opsional). Default 10 000. 0 = mati.
+   */
+  get loyaltyEarnPosConfigHourlyMaxPoints(): number {
+    return this.int('LOYALTY_EARN_POS_CONFIG_HOURLY_MAX_POINTS', 10_000, 0, 100_000_000);
+  }
+  /**
+   * SEC-61: total poin earn POS per PT per jam (counter Redis, selalu berlaku — `pos_config_id` kiriman pemanggil
+   * bisa dipalsukan, PT tidak menambah kombinasi). Default 50 000. 0 = mati.
+   */
+  get loyaltyEarnCompanyHourlyMaxPoints(): number {
+    return this.int('LOYALTY_EARN_COMPANY_HOURLY_MAX_POINTS', 50_000, 0, 1_000_000_000);
+  }
+  /** SEC-61: interval job rekonsiliasi ledger ↔ aturan earn. 0 = mati. Default 1 jam. */
+  get loyaltyReconIntervalMs(): number {
+    return this.int('LOYALTY_RECON_INTERVAL_MS', 3_600_000, 0, 24 * 3600 * 1000);
+  }
+  /** SEC-61: jendela data yang diperiksa tiap siklus rekonsiliasi (jam). Default 26 (≥ 1 hari + jeda). */
+  get loyaltyReconLookbackHours(): number {
+    return this.int('LOYALTY_RECON_LOOKBACK_HOURS', 26, 1, 24 * 14);
+  }
+  /** SEC-61: saldo pembuka migrasi di atas ambang ini dicatat sebagai anomali (tidak ditolak). Default 5 000. */
+  get loyaltyMigrationAnomalyPoints(): number {
+    return this.int('LOYALTY_MIGRATION_ANOMALY_POINTS', 5_000, 1, 1_000_000);
   }
   /** TTL reservasi redeem yang ditampilkan ke UI kasir (kontrak §9.3: 15 menit; K-3: hanya informasi UI). */
   get loyaltyReservationTtlSeconds(): number {

@@ -73,6 +73,9 @@ export class FakeLoyaltyDb implements Db {
   readonly earns = new Map<string, FakeEarnRow>();
   readonly reservations = new Map<string, FakeReservationRow>();
   readonly queries: string[] = [];
+  /** SEC-65 (`erasureBlock`): member_hash dengan DSAR delete aktif; tag daftar tolak → expires_at ISO. */
+  readonly erasureActive = new Set<string>();
+  readonly suppression = new Map<string, string>();
   noLocks = false;
   /** Jumlah transaksi yang di-rollback (untuk asersi). */
   rollbacks = 0;
@@ -141,6 +144,13 @@ export class FakeLoyaltyDb implements Db {
       return ok([{ ok: true }]);
     }
 
+    // ───── erasure (SEC-65) ─────
+    if (text.includes('FROM platform.dsar_request') && text.includes('platform.erasure_suppression')) {
+      if (this.erasureActive.has(String(p[0]))) return ok([{ kind: 'erasure_active' }]);
+      const exp = this.suppression.get(String(p[1]));
+      return ok(exp !== undefined && ms(exp) > ms(String(p[2])) ? [{ kind: 'erased' }] : []);
+    }
+
     // ───── ledger ─────
     if (text.includes('INSERT INTO platform.loyalty_ledger')) {
       const key = String(p[7]);
@@ -202,6 +212,12 @@ export class FakeLoyaltyDb implements Db {
     // ───── loyalty_pos_earn ─────
     if (text.includes('FROM platform.loyalty_pos_earn WHERE order_ref = $1 OR idempotency_key = $2')) {
       return ok([...this.earns.values()].filter((r) => r.order_ref === p[0] || r.idempotency_key === p[1]).map((r) => ({ ...r })));
+    }
+    if (text.includes('AS earned') && text.includes('FROM platform.loyalty_pos_earn WHERE member_hash = $1 AND created_at >= $2')) {
+      const sum = [...this.earns.values()]
+        .filter((r) => r.member_hash === p[0] && ms(r.created_at) >= ms(String(p[1])))
+        .reduce((s, r) => s + r.points_earned, 0);
+      return ok([{ earned: String(sum) }]);
     }
     if (text.includes('FROM platform.loyalty_pos_earn WHERE order_ref = $1')) {
       const r = this.earns.get(String(p[0]));

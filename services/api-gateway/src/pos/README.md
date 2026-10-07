@@ -41,7 +41,7 @@ DDL: `infra/postgres/init/05-platform-loyalty-pos.sql` (`loyalty_reservation`, `
 |---|---|---|---|
 | `GET /v1/pos/loyalty/params` | — | parameter §9.1 + `reservation_commit_window_seconds` | — |
 | `POST /v1/pos/otp/request` | + `purpose: pos_promo\|pos_redeem` (default promo) | sama | — |
-| `POST /v1/pos/loyalty/earn` | `{ idempotency_key: "pos_earn:<uuid>", order_ref, member_ref, company_code, eligible_amount }` | `{ points_earned, points_balance }` | `idempotency_conflict`, `earn_limit_exceeded` |
+| `POST /v1/pos/loyalty/earn` | `{ idempotency_key: "pos_earn:<uuid>", order_ref, member_ref, company_code, eligible_amount, pos_config_id? }` (pos_config_id: 13c, opsional) | `{ points_earned, points_balance }` | `idempotency_conflict`, `earn_limit_exceeded` |
 | `POST /v1/pos/loyalty/redeem/reserve` | `{ discount_token, order_ref, member_ref, points, amount_total }` | `{ reservation_id, points, value_idr, expires_at, hold_until }` | `insufficient_points`, `below_minimum`, `exceeds_max_pct`, `token_invalid`, `member_mismatch`, `amount_mismatch`, `reservation_exists` |
 | `POST /v1/pos/loyalty/redeem/commit` | `{ reservation_id, order_ref, member_ref, value_idr, idempotency_key: "pos_redeem:<uuid>" }` | `{ points_redeemed, points_balance }` | `order_mismatch`, `member_mismatch`, `value_mismatch`, `reservation_released`, `reservation_expired`, `idempotency_conflict`; 404 `reservation_not_found` |
 | `POST /v1/pos/loyalty/redeem/release` | `{ reservation_id }` | `{ ok: true }` (idempoten) | `already_committed`; 404 `reservation_not_found` |
@@ -57,4 +57,19 @@ Aturan inti:
 - Ledger: `source ∈ {pos_earn, pos_redeem, pos_reverse}`, `company_code` PT order, `member_ref_enc` AES-256-GCM. Tabel baru TIDAK memuat nomor HP (hanya `member_hash`).
 - Rate limit per member per operasi (`LOYALTY_RL_MEMBER_LIMIT`/`LOYALTY_RL_WINDOW_SECONDS`), balance per member & per pos_config. Metrik: `efn_loyalty_pos_ops_total{op,outcome}`, `efn_loyalty_pos_points_total{kind,company}`, `efn_loyalty_reservation_expired_total`.
 
-Belum: plafon poin per member per hari (fraud), kebijakan Finance atas utang poin & restore poin kedaluwarsa (placeholder), alert Prometheus untuk `outcome="late"`/`earn_pending` berulang (devsecops), skenario smoke E2E.
+### Gelombang 13c — SEC-61: pagar earn & rekonsiliasi (defense in depth, BFF percaya `eligible_amount` dari Odoo)
+DDL: `infra/postgres/init/06-platform-loyalty-guard.sql` (indeks `loyalty_pos_earn (member_hash, created_at)`). Semua batas = PLACEHOLDER menunggu Finance; 0 = mati.
+
+| Pagar | Env (default) | Mekanisme |
+|---|---|---|
+| Plafon per order | `LOYALTY_POS_MAX_EARN_POINTS` (5 000, dulu 100 000) | dicek setelah cek replay |
+| Per member per hari WIB | `LOYALTY_EARN_DAILY_MAX_POINTS` (2 000) | Σ `loyalty_pos_earn` hari ini di bawah kunci member (tepat walau paralel) |
+| Per PT per jam | `LOYALTY_EARN_COMPANY_HOURLY_MAX_POINTS` (50 000) | counter Redis berbobot `rl:loy:earnpts:co:<PT>:<jam>`; ditolak → dikompensasi |
+| Per kasir per jam | `LOYALTY_EARN_POS_CONFIG_HOURLY_MAX_POINTS` (10 000) | hanya bila body earn membawa `pos_config_id` (opsional, non-breaking — Odoo belum mengirim) |
+
+- Pelanggaran → `409 earn_limit_exceeded` (kode lama, final di outbox Odoo → order `review`), TANPA catatan earn (reverse order itu kelak `earn_pending` → review), baris log `EFN_LOYALTY_ANOMALY {json}` dan `efn_loyalty_anomaly_total{kind,severity}`. Retry earn yang dulu diterima tetap `200 replay` walau batas diturunkan.
+- **Job rekonsiliasi** `LoyaltyReconService` (`loyalty-recon.service.ts`, advisory lock `EFNC`, transaksi READ ONLY, `LOYALTY_RECON_INTERVAL_MS` = 1 jam, jendela `LOYALTY_RECON_LOOKBACK_HOURS` = 26): `earn_ledger_mismatch`, `earn_above_rule` (points > floor(eligible/tarif saat ini)), `earn_above_order_cap`, `earn_ledger_orphan` (ledger `pos_earn` tanpa catatan earn, kecuali ter-erasure), `member_day_above_limit`, `reverse_exceeds_earn`, `restore_exceeds_redeem`, `ledger_unknown_source` (source di luar `pos_*`, `migration_opening`, `dsar`, `price_hunter` → admin/SQL manual). Heartbeat tiap siklus: `EFN_LOYALTY_RECON {"status":"ok",...}` + gauge `efn_loyalty_recon_last_success_timestamp_seconds`; error → `EFN_LOYALTY_RECON {"status":"error"}` + `efn_loyalty_recon_runs_total{outcome="error"}`.
+- Format log (tanpa nomor HP/member_hash/IP; nilai string disaring `[A-Za-z0-9_.:-]`): `EFN_LOYALTY_ANOMALY {"kind":"earn_limit_member_day","severity":"warning","company":"FNB","order_ref":"<uuid>","points":120,"earned_today":1950,"limit":2000}`. Daftar `kind` & severity tetap: `src/loyalty/loyalty-anomaly.ts`.
+- Batas: job ini TIDAK melihat Odoo — earn untuk `order_ref` yang tidak pernah ada di `pos.order` hanya terdeteksi oleh rekonsiliasi ETL (SEC-61 rek. 3, data-ai). `earn_above_rule` memakai tarif saat ini (positif palsu bila tarif dinaikkan dalam jendela). Pagar per PT/jam dapat dihabiskan pemegang service key (DoS earn sah selama ≤ 1 jam) — itulah sebabnya severity `critical`.
+
+Belum: kebijakan Finance atas utang poin & restore poin kedaluwarsa (placeholder), alert Prometheus untuk `outcome="late"`/`earn_pending` berulang (devsecops), skenario smoke E2E.

@@ -6,6 +6,7 @@ import {
   AltchaService,
   adaptiveAltchaMaxNumber,
   altchaIpBinding,
+  altchaFailRatio,
   altchaPressureLevel,
   sha256Hex,
   solveAltcha,
@@ -139,6 +140,19 @@ describe('AltchaService — SEC-34 pengikatan IP & biaya adaptif', () => {
     expect(adaptiveAltchaMaxNumber(500_000, 4_000_000, 2)).toBe(2_000_000);
     expect(adaptiveAltchaMaxNumber(500_000, 3_000_000, 3)).toBe(3_000_000);
     expect(adaptiveAltchaMaxNumber(500_000, 4_000_000, 9)).toBe(4_000_000);
+  });
+
+  it('SEC-54: level rasio gagal per IP 30/50/75 %, hanya bila percobaan ≥ sampel minimum; ambil maksimum dengan level lain', () => {
+    const base = { ipChallenges: 0, ipChallengeLimit: 120, ipOtpRequests: 0, ipOtpLimit: 20, globalOtpRequests: 0, globalOtpBudget: 1000 };
+    const f = { altchaFails: 0, altchaAttempts: 0, otpVerifyFails: 0, otpVerifyAttempts: 0, minSample: 5 };
+    expect(altchaPressureLevel({ ...base, failures: f })).toBe(0);
+    expect(altchaPressureLevel({ ...base, failures: { ...f, altchaFails: 4, altchaAttempts: 4 } })).toBe(0); // sampel kurang
+    expect(altchaPressureLevel({ ...base, failures: { ...f, altchaFails: 2, altchaAttempts: 10 } })).toBe(0); // 20 %
+    expect(altchaPressureLevel({ ...base, failures: { ...f, altchaFails: 3, altchaAttempts: 10 } })).toBe(1);
+    expect(altchaPressureLevel({ ...base, failures: { ...f, otpVerifyFails: 5, otpVerifyAttempts: 10 } })).toBe(2);
+    expect(altchaPressureLevel({ ...base, failures: { ...f, otpVerifyFails: 9, otpVerifyAttempts: 10 } })).toBe(3);
+    expect(altchaPressureLevel({ ...base, ipOtpRequests: 10, failures: { ...f, altchaFails: 3, altchaAttempts: 10 } })).toBe(2);
+    expect(altchaFailRatio({ ...f, altchaFails: 50, altchaAttempts: 10 })).toBe(1); // dipotong
   });
 
   it('metrik efn_altcha_challenge_total{level} tanpa IP', async () => {

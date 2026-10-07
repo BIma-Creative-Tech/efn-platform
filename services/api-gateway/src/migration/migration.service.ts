@@ -1,10 +1,13 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { AppConfig } from '../config/app-config';
-import { DB, Db } from '../common/db/db';
-import { Errors } from '../common/errors/api-error';
+import { DB, Db, Queryable } from '../common/db/db';
+import { ApiError, Errors } from '../common/errors/api-error';
+import { MetricsService } from '../common/metrics/metrics.service';
+import { erasureBlock } from '../common/pii/erasure-suppression';
 import { PII_AAD, PiiCipher } from '../common/pii/crypto';
 import { maskMsisdn } from '../common/pii/pii';
+import { reportLoyaltyAnomaly } from '../loyalty/loyalty-anomaly';
 import { LoyaltyService, splitCredit } from '../loyalty/loyalty.service';
 import { expiryFor } from '../pos/pos-loyalty.service';
 import { MigrationMemberDto, OpeningBalanceDto } from './dto/migration.dto';
@@ -22,6 +25,10 @@ export interface OpeningBalanceResponse {
 
 export const MIGRATION_SOURCE = 'migration_opening';
 
+const MigrationErrors = {
+  memberErased: (): ApiError => Errors.conflict('member_erased', 'Data pelanggan ini sudah dihapus atas permintaan pelanggan.'),
+};
+
 /**
  * Migrasi data member & saldo pembuka dari sistem lama (docs/04 §9.6 K-7). Internal, dijaga `MigrationKeyGuard`.
  *
@@ -34,6 +41,14 @@ export const MIGRATION_SOURCE = 'migration_opening';
  *   `LOYALTY_POINT_EXPIRY_DAYS` sejak tanggal migrasi (PLACEHOLDER — menunggu Finance/Q-13); bila member berutang,
  *   kredit melunasi utang dulu (sama dengan earn).
  * - Log hanya nomor ter-mask; `source_ref` tidak boleh berisi PII (tanggung jawab skrip migrasi).
+ * - SEC-65 (Gelombang 13c): member DAN saldo pembuka ditolak bila subjek sedang/pernah dihapus (DSAR) —
+ *   `409 member_deleting` (erasure `scheduled`/`processing`) atau `409 member_erased` (tag di
+ *   `platform.erasure_suppression`, masa `ERASURE_SUPPRESSION_DAYS`). Tanpa ini impor ulang file lama menghidupkan
+ *   kembali subjek beserta consent dan saldonya. Penolakan dicatat `EFN_LOYALTY_ANOMALY kind=migration_erased_member`
+ *   (tanpa nomor).
+ * - SEC-61/SEC-66: setiap saldo pembuka yang dibukukan menambah `efn_loyalty_migration_points_total{company}` dan
+ *   mencetak `EFN_LOYALTY_MIGRATION {json}` (company, points, source_ref — tanpa nomor) untuk rekonsiliasi Finance;
+ *   saldo > `LOYALTY_MIGRATION_ANOMALY_POINTS` → `EFN_LOYALTY_ANOMALY kind=migration_large_balance` (tetap diterima).
  */
 @Injectable()
 export class MigrationService {
@@ -45,11 +60,23 @@ export class MigrationService {
     @Inject(DB) private readonly db: Db,
     private readonly cipher: PiiCipher,
     private readonly loyalty: LoyaltyService,
+    private readonly metrics: MetricsService,
   ) {}
+
+  /** SEC-65: tolak subjek yang sedang/pernah dihapus (dipanggil di dalam transaksi impor). */
+  private async assertNotErased(q: Queryable, hash: string, sourceRef: string, op: 'member' | 'opening_balance'): Promise<void> {
+    const block = await erasureBlock(q, this.config.erasureSuppressionKey, hash, new Date(this.now()));
+    if (block === null) return;
+    reportLoyaltyAnomaly(this.logger, this.metrics, 'migration_erased_member', { op, state: block, source_ref: sourceRef });
+    throw block === 'erasure_active'
+      ? Errors.conflict('member_deleting', 'Akun sedang dalam proses penghapusan.')
+      : MigrationErrors.memberErased();
+  }
 
   async importMember(dto: MigrationMemberDto): Promise<MigrationMemberResponse> {
     const hash = this.loyalty.hashMember(dto.memberRef);
     return this.db.tx(async (q) => {
+      await this.assertNotErased(q, hash, dto.sourceRef, 'member');
       const ins = await q.query<{ id: string }>(
         `INSERT INTO platform.member (id, member_hash, member_ref_enc)
          VALUES ($1, $2, $3)
@@ -90,6 +117,7 @@ export class MigrationService {
     const keys = [key, `${key}#2`];
     return this.db.tx(async (q) => {
       await this.loyalty.lockMember(q, hash);
+      await this.assertNotErased(q, hash, dto.sourceRef, 'opening_balance');
       const existing = await q.query<{ member_ref_hash: string; company_code: string; delta_points: number }>(
         `SELECT member_ref_hash, company_code, delta_points FROM platform.loyalty_ledger WHERE idempotency_key = ANY($1::text[])`,
         [keys],
@@ -119,6 +147,18 @@ export class MigrationService {
           },
           q,
         );
+      }
+      this.metrics.recordLoyaltyMigrationPoints(dto.companyCode, dto.points);
+      this.logger.log(
+        `EFN_LOYALTY_MIGRATION ${JSON.stringify({ company: dto.companyCode, points: dto.points, source_ref: dto.sourceRef.replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 64) })}`,
+      );
+      if (dto.points > this.config.loyaltyMigrationAnomalyPoints) {
+        reportLoyaltyAnomaly(this.logger, this.metrics, 'migration_large_balance', {
+          company: dto.companyCode,
+          points: dto.points,
+          limit: this.config.loyaltyMigrationAnomalyPoints,
+          source_ref: dto.sourceRef,
+        });
       }
       return { applied: true, points_balance: await this.loyalty.balanceByHash(hash, q) };
     });

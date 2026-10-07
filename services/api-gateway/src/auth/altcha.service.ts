@@ -47,6 +47,12 @@ const USED_MARKER_GRACE_SECONDS = 60;
 export const ALTCHA_IP_THRESHOLDS = [0.25, 0.5, 0.75] as const;
 /** Ambang rasio budget OTP login global per jam → level 1/2/3 (lebih tinggi: trafik puncak sah tidak dihukum). */
 export const ALTCHA_GLOBAL_THRESHOLDS = [0.5, 0.75, 0.9] as const;
+/**
+ * SEC-54 (Gelombang 13c): ambang rasio GAGAL per IP (ALTCHA tidak valid / kode OTP salah) → level 1/2/3. Rasio, bukan
+ * volume: IP CGNAT/kantor dengan banyak pengguna sah punya volume tinggi tetapi rasio gagal rendah, sedangkan bot
+ * (solver/penebak kode) gagal jauh lebih sering.
+ */
+export const ALTCHA_FAIL_THRESHOLDS = [0.3, 0.5, 0.75] as const;
 
 export interface AltchaChallenge {
   algorithm: typeof ALTCHA_ALGORITHM;
@@ -64,17 +70,33 @@ export interface AltchaPressure {
   ipOtpLimit: number;
   globalOtpRequests: number;
   globalOtpBudget: number;
+  /** SEC-54: counter kegagalan per IP (opsional). Rasio hanya dihitung bila percobaan ≥ `minSample`. */
+  failures?: {
+    altchaFails: number;
+    altchaAttempts: number;
+    otpVerifyFails: number;
+    otpVerifyAttempts: number;
+    minSample: number;
+  };
+}
+
+/** SEC-54: rasio gagal tertinggi (ALTCHA, verify OTP) per IP; 0 bila sampel belum cukup. */
+export function altchaFailRatio(f: NonNullable<AltchaPressure['failures']>): number {
+  const ratio = (fails: number, attempts: number): number =>
+    attempts >= Math.max(1, f.minSample) ? Math.min(1, fails / attempts) : 0;
+  return Math.max(ratio(f.altchaFails, f.altchaAttempts), ratio(f.otpVerifyFails, f.otpVerifyAttempts));
 }
 
 function levelFor(ratio: number, thresholds: readonly number[]): number {
   return thresholds.filter((t) => ratio >= t).length;
 }
 
-/** Level tekanan 0..3 = maksimum level per IP dan level global. */
+/** Level tekanan 0..3 = maksimum level volume per IP, level global, dan level rasio gagal per IP (SEC-54). */
 export function altchaPressureLevel(p: AltchaPressure): number {
   const ipRatio = Math.max(p.ipChallenges / Math.max(1, p.ipChallengeLimit), p.ipOtpRequests / Math.max(1, p.ipOtpLimit));
   const globalRatio = p.globalOtpRequests / Math.max(1, p.globalOtpBudget);
-  return Math.max(levelFor(ipRatio, ALTCHA_IP_THRESHOLDS), levelFor(globalRatio, ALTCHA_GLOBAL_THRESHOLDS));
+  const failLevel = p.failures ? levelFor(altchaFailRatio(p.failures), ALTCHA_FAIL_THRESHOLDS) : 0;
+  return Math.max(levelFor(ipRatio, ALTCHA_IP_THRESHOLDS), levelFor(globalRatio, ALTCHA_GLOBAL_THRESHOLDS), failLevel);
 }
 
 /** maxnumber = base × 2^level, dipotong ke cap. */

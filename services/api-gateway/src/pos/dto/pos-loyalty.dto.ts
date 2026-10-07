@@ -31,9 +31,17 @@ export interface PosEarnDto {
   memberRef: string;
   companyCode: CompanyCode;
   eligibleAmount: number;
+  /**
+   * SEC-61 (Gelombang 13c, opsional, non-breaking): pos.config asal order — kunci batas poin per kasir per jam
+   * (`LOYALTY_EARN_POS_CONFIG_HOURLY_MAX_POINTS`). Tidak ada → hanya batas per PT per jam yang berlaku.
+   */
+  posConfigId?: number | null;
 }
 
-/** §9.2 `{ idempotency_key: "pos_earn:<order_uuid>", order_ref, member_ref, company_code, eligible_amount }`. */
+/**
+ * §9.2 `{ idempotency_key: "pos_earn:<order_uuid>", order_ref, member_ref, company_code, eligible_amount,
+ * pos_config_id? }`.
+ */
 export function parsePosEarn(body: unknown): PosEarnDto {
   const o = asRecord(body);
   const memberRef = requireMemberRef(o.member_ref);
@@ -44,6 +52,7 @@ export function parsePosEarn(body: unknown): PosEarnDto {
     memberRef,
     companyCode: o.company_code,
     eligibleAmount: requireNumber(o, 'eligible_amount', 0, MAX_AMOUNT_IDR),
+    posConfigId: o.pos_config_id === undefined || o.pos_config_id === null ? null : requireInt(o, 'pos_config_id', 1, 2_147_483_647),
   };
 }
 

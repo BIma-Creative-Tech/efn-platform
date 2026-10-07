@@ -71,9 +71,12 @@ export class AuthService {
     const rl = await this.limiter.enforce(`altcha:ip:${ipk}`, this.config.altchaChallengeRateLimit, window);
     let level = 0;
     if (this.config.altchaAdaptive) {
-      const [ipOtpRequests, globalOtpRequests] = await Promise.all([
+      const [ipOtpRequests, globalOtpRequests, altchaFails, verifyAttempts, verifyFails] = await Promise.all([
         this.limiter.peek(`otp:login:ip:${ipk}`, window),
         this.limiter.peek('otp:budget:login', 3600),
+        this.limiter.peek(`altcha:fail:ip:${ipk}`, window),
+        this.limiter.peek(`otp:login:verify-ip:${ipk}`, window),
+        this.limiter.peek(`otp:login:verify-fail-ip:${ipk}`, window),
       ]);
       level = altchaPressureLevel({
         ipChallenges: rl.count,
@@ -82,6 +85,14 @@ export class AuthService {
         ipOtpLimit: this.config.otpRateSourceLimit,
         globalOtpRequests,
         globalOtpBudget: this.config.otpGlobalHourlyBudget,
+        failures: {
+          altchaFails,
+          // percobaan ALTCHA ≈ yang lolos (counter OTP per IP) + yang gagal
+          altchaAttempts: altchaFails + ipOtpRequests,
+          otpVerifyFails: verifyFails,
+          otpVerifyAttempts: verifyAttempts,
+          minSample: this.config.altchaFailMinSample,
+        },
       });
     }
     const maxnumber = adaptiveAltchaMaxNumber(this.config.altchaMaxNumber, this.config.altchaMaxNumberCap, level);
@@ -89,9 +100,12 @@ export class AuthService {
   }
 
   async requestOtp(dto: AuthOtpRequestDto, ip: string | null): Promise<AuthOtpRequestResponse> {
-    if (!(await this.altcha.verify(dto.altcha, ip))) throw Errors.captchaRequired();
     const window = this.config.otpRateWindowSeconds;
     const ipk = this.ipKey(ip);
+    if (!(await this.altcha.verify(dto.altcha, ip))) {
+      await this.countFailure(`altcha:fail:ip:${ipk}`, window);
+      throw Errors.captchaRequired();
+    }
     const subject = memberHash(this.config.memberHashPepper, dto.phone);
     try {
       await this.limiter.enforce(`otp:login:ip:${ipk}`, this.config.otpRateSourceLimit, window);
@@ -117,6 +131,7 @@ export class AuthService {
     );
     const res = await this.otp.verify({ purpose: 'login', challengeId: dto.challengeId, code: dto.code, ip });
     if (!res.ok) {
+      await this.countFailure(`otp:login:verify-fail-ip:${this.ipKey(ip)}`, this.config.otpRateWindowSeconds);
       throw new ApiError(400, { ok: false, reason: res.reason, attempts_left: res.attemptsLeft });
     }
     if (!res.memberRef) {
@@ -132,6 +147,18 @@ export class AuthService {
     const token = this.tokens.issue(member.id);
     this.logger.log(`Login berhasil untuk ${maskMsisdn(res.memberRef)}`);
     return { access_token: token.accessToken, token_type: 'Bearer', expires_in: token.expiresIn };
+  }
+
+  /**
+   * SEC-54: counter kegagalan per IP (hash, SEC-24) untuk level ALTCHA berbasis rasio. Best effort: Redis gagal tidak
+   * mengubah respons (tetap 400 generik).
+   */
+  private async countFailure(key: string, window: number): Promise<void> {
+    try {
+      await this.limiter.hit(key, Number.MAX_SAFE_INTEGER, window);
+    } catch {
+      // diabaikan — hanya sinyal biaya adaptif
+    }
   }
 
   async me(user: AuthUser): Promise<MeResponse> {
