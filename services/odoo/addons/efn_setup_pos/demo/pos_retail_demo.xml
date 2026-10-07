@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO POS retail (Gelombang 13) — hanya DB demo; bergantung keputusan klien Q-25 (format
+     label timbangan), Q-9 (harga member), Q-28 (mekanik promo), Q-8 (katalog per PT).
+     Field terverifikasi 19.0 (2026-10-07): product.template type ('consu'/'service'/'combo'),
+     is_storable (stock), available_in_pos/to_weight/pos_categ_ids (point_of_sale), uom_id,
+     barcode, company_id, taxes_id; product.pricelist.item applied_on ('3_global'...),
+     compute_price ('percentage'/'formula'/'fixed'), percent_price.
+
+     Barcode produk berlabel timbangan = base code (bagian nilai diisi 0 + check digit EAN-13
+     dihitung ulang, barcode.nomenclature.sanitize_ean):
+       Tomat 21-00001-00000-C -> 2100001000004; label 1,250 kg -> 2100001012502
+       Daging 23-00002-00000-C -> 2300002000007; label Rp45.500 -> 2300002455005
+     (check digit dihitung manual; uji scan di PoC.) -->
+<odoo>
+    <record id="pos_categ_fresh_weighed" model="pos.category">
+        <field name="name">Fresh (Timbang) (DEMO)</field>
+        <field name="sequence">30</field>
+    </record>
+
+    <!-- Produk dijual per kg: scan label berat (21) -> qty = berat; tanpa label, POS membuka
+         layar timbangan bila pos.config.iface_electronic_scale = True. -->
+    <record id="product_demo_tomato_kg" model="product.template">
+        <field name="name">Tomat Merah per kg (DEMO)</field>
+        <field name="type">consu</field>
+        <field name="is_storable" eval="True"/>
+        <field name="available_in_pos" eval="True"/>
+        <field name="to_weight" eval="True"/>
+        <field name="uom_id" ref="uom.product_uom_kgm"/>
+        <field name="list_price">18000</field>
+        <field name="barcode">2100001000004</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="pos_categ_ids" eval="[(6, 0, [ref('pos_categ_fresh_weighed')])]"/>
+        <field name="taxes_id" model="res.company"
+               eval="[(6, 0, obj(ref('efn_setup_company.company_rtl')).account_sale_tax_id.ids)]"/>
+    </record>
+
+    <!-- Produk berlabel harga: scan label harga (23) -> price_unit = nilai label,
+         price_type = 'manual' (lihat filter audit "Harga manual (bukan produk timbang)"). -->
+    <record id="product_demo_beef_label" model="product.template">
+        <field name="name">Daging Sapi Has Dalam - label harga (DEMO)</field>
+        <field name="type">consu</field>
+        <field name="is_storable" eval="True"/>
+        <field name="available_in_pos" eval="True"/>
+        <field name="to_weight" eval="True"/>
+        <field name="uom_id" ref="uom.product_uom_kgm"/>
+        <field name="list_price">160000</field>
+        <field name="barcode">2300002000007</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="pos_categ_ids" eval="[(6, 0, [ref('pos_categ_fresh_weighed')])]"/>
+        <field name="taxes_id" model="res.company"
+               eval="[(6, 0, obj(ref('efn_setup_company.company_rtl')).account_sale_tax_id.ids)]"/>
+    </record>
+
+    <!-- Harga member = pricelist (Q-9). Pasang di pos.config.available_pricelist_ids dan pada
+         partner member (property_product_pricelist, company-dependent: set saat company aktif
+         = PT Retail). Diskon 5% global = PLACEHOLDER. -->
+    <record id="pricelist_member_rtl" model="product.pricelist">
+        <field name="name">Harga Member (DEMO)</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+    </record>
+    <record id="pricelist_member_rtl_item_global" model="product.pricelist.item">
+        <field name="pricelist_id" ref="pricelist_member_rtl"/>
+        <field name="applied_on">3_global</field>
+        <field name="compute_price">percentage</field>
+        <field name="percent_price">5</field>
+    </record>
+</odoo>

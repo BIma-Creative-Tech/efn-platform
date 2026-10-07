@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Nomenklatur barcode POS retail untuk Rupiah (Gelombang 13, F-33; Q-25 timbangan).
+     Terverifikasi di source 19.0 (2026-10-07):
+     - res.company.nomenclature_id (barcodes/models/res_company.py), default
+       barcodes.default_barcode_nomenclature; POS membaca nomenklatur company
+       (res.config.settings.barcode_nomenclature_id related company_id.nomenclature_id).
+     - barcode.rule: name, barcode_nomenclature_id, sequence, encoding (any/ean13/ean8/upca),
+       type (barcodes: alias/product; point_of_sale: weight/price/discount/client/cashier;
+       pos_loyalty: coupon), pattern (satu pasang kurung {N..D..}).
+     - match_pattern: pola dicocokkan sebagai PREFIX (re.match atas base_code[:len(pattern)]);
+       {NNNNN} = bilangan bulat 5 digit, {NNDDD} = 2 digit bulat + 3 desimal.
+
+     Mengapa tidak memakai nomenklatur default apa adanya:
+     1. Aturan harga default `23.....{NNNDD}` (point_of_sale) = maks 999,99 -> tidak cocok
+        untuk Rupiah. Di sini 23 = harga Rupiah BULAT 5 digit (Rp 0..99.999).
+     2. Aturan diskon default `22{NN}` (encoding any, sequence 20) memasang diskon NN% pada
+        baris terakhir lewat _barcodeDiscountAction -> setDiscountFromUI, TANPA cek
+        manual_discount/peran kasir -> vektor fraud (barcode cetakan "2250" = diskon 50%).
+        Aturan ini SENGAJA TIDAK dibuat.
+     3. Aturan lot `10` (stock, sequence 80, encoding any) mendahului aturan produk (90): EAN-13
+        impor berawalan 10x (GS1 AS) berisiko terbaca sebagai lot. Aturan lot/paket/lokasi
+        (stock) tidak dipakai POS retail CE -> tidak dibuat.
+     Format label timbangan (prefix, panjang PLU, berat vs harga) = KEPUTUSAN Q-25: ubah
+     pola lewat Inventory/POS Settings -> Barcode Nomenclature bila timbangan memakai format
+     lain. noupdate: aturan boleh diubah admin.
+     Penerapan ke PT Retail hanya saat INSTALL modul (blok noupdate dilewati saat upgrade);
+     DB yang sudah memasang efn_setup_pos: pilih nomenklatur ini manual di
+     Point of Sale -> Configuration -> Settings -> Barcodes (per company). -->
+<odoo noupdate="1">
+    <record id="barcode_nomenclature_efn_retail" model="barcode.nomenclature">
+        <field name="name">EFN Retail (IDR)</field>
+        <field name="upc_ean_conv">always</field>
+    </record>
+
+    <!-- 23 PPPPP VVVVV C : harga Rupiah bulat (label harga timbangan). -->
+    <record id="barcode_rule_efn_price_idr" model="barcode.rule">
+        <field name="name">Harga Rupiah (label timbangan) 23-PPPPP-VVVVV</field>
+        <field name="barcode_nomenclature_id" ref="barcode_nomenclature_efn_retail"/>
+        <field name="sequence">14</field>
+        <field name="type">price</field>
+        <field name="encoding">ean13</field>
+        <field name="pattern">23.....{NNNNN}</field>
+    </record>
+
+    <!-- 21 PPPPP WWWWW C : berat kg dengan 3 desimal (sama dengan aturan standar stock). -->
+    <record id="barcode_rule_efn_weight_kg" model="barcode.rule">
+        <field name="name">Berat kg 3 desimal 21-PPPPP-WWWWW</field>
+        <field name="barcode_nomenclature_id" ref="barcode_nomenclature_efn_retail"/>
+        <field name="sequence">36</field>
+        <field name="type">weight</field>
+        <field name="encoding">ean13</field>
+        <field name="pattern">21.....{NNDDD}</field>
+    </record>
+
+    <record id="barcode_rule_efn_client" model="barcode.rule">
+        <field name="name">Kartu pelanggan (042)</field>
+        <field name="barcode_nomenclature_id" ref="barcode_nomenclature_efn_retail"/>
+        <field name="sequence">40</field>
+        <field name="type">client</field>
+        <field name="encoding">any</field>
+        <field name="pattern">042</field>
+    </record>
+
+    <record id="barcode_rule_efn_cashier" model="barcode.rule">
+        <field name="name">Kartu karyawan/kasir (041)</field>
+        <field name="barcode_nomenclature_id" ref="barcode_nomenclature_efn_retail"/>
+        <field name="sequence">50</field>
+        <field name="type">cashier</field>
+        <field name="encoding">any</field>
+        <field name="pattern">041</field>
+    </record>
+
+    <!-- Tipe 'coupon' ditambahkan pos_loyalty (depends modul ini). -->
+    <record id="barcode_rule_efn_coupon" model="barcode.rule">
+        <field name="name">Kupon &amp; gift card (043/044)</field>
+        <field name="barcode_nomenclature_id" ref="barcode_nomenclature_efn_retail"/>
+        <field name="sequence">55</field>
+        <field name="type">coupon</field>
+        <field name="encoding">any</field>
+        <field name="pattern">043|044</field>
+    </record>
+
+    <record id="barcode_rule_efn_product" model="barcode.rule">
+        <field name="name">Barcode produk</field>
+        <field name="barcode_nomenclature_id" ref="barcode_nomenclature_efn_retail"/>
+        <field name="sequence">90</field>
+        <field name="type">product</field>
+        <field name="encoding">any</field>
+        <field name="pattern">.*</field>
+    </record>
+
+    <!-- Hanya PT Retail. PT F&B tetap nomenklatur default (tanpa timbangan); bila outlet F&B
+         memakai printer label/timbangan, pilih nomenklatur ini juga lewat UI. -->
+    <record id="efn_setup_company.company_rtl" model="res.company">
+        <field name="nomenclature_id" ref="barcode_nomenclature_efn_retail"/>
+    </record>
+</odoo>

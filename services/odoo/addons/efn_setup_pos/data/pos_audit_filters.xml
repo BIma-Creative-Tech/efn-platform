@@ -31,4 +31,49 @@
         <field name="context">{'group_by': ['order_id']}</field>
         <field name="sort">[]</field>
     </record>
+
+    <!-- ===== Gelombang 13 (SOP retail: R-O05 void/refund, Q-27) =====
+         Field terverifikasi 19.0 (2026-10-07): pos.order.is_refund (stored), has_deleted_line
+         (stored), employee_id (pos_hr), pos.order.line.is_edited (stored), qty,
+         refunded_orderline_id, product_id.to_weight. pos.order.is_edited & refunded_order_id
+         adalah compute TIDAK stored -> tidak dipakai di domain. -->
+
+    <!-- Refund tanpa struk: qty negatif yang tidak menunjuk baris order asal (tombol "-" di
+         numpad; dibatasi pos_hr untuk peran minimal saja). -->
+    <record id="filter_pos_line_refund_without_receipt" model="ir.filters">
+        <field name="name">EFN Audit: Refund tanpa struk (qty negatif tanpa order asal)</field>
+        <field name="model_id">pos.order.line</field>
+        <field name="domain">[('qty', '&lt;', 0), ('refunded_orderline_id', '=', False), ('is_reward_line', '=', False)]</field>
+        <field name="context">{'group_by': ['order_id']}</field>
+        <field name="sort">[]</field>
+    </record>
+
+    <!-- Semua order refund per kasir (employee pos_hr). -->
+    <record id="filter_pos_order_refund_by_cashier" model="ir.filters">
+        <field name="name">EFN Audit: Order refund per kasir</field>
+        <field name="model_id">pos.order</field>
+        <field name="domain">[('is_refund', '=', True)]</field>
+        <field name="context">{'group_by': ['employee_id']}</field>
+        <field name="sort">[]</field>
+    </record>
+
+    <!-- Void baris pada order yang sudah tersinkron (perlu order_edit_tracking = True). -->
+    <record id="filter_pos_order_edited" model="ir.filters">
+        <field name="name">EFN Audit: Order diedit/void baris setelah tersinkron</field>
+        <field name="model_id">pos.order</field>
+        <field name="domain">['|', ('has_deleted_line', '=', True), ('lines.is_edited', '=', True)]</field>
+        <field name="context">{'group_by': ['employee_id']}</field>
+        <field name="sort">[]</field>
+    </record>
+
+    <!-- Harga manual di luar produk timbang. Label harga timbangan (aturan barcode 'price')
+         juga menandai baris price_type='manual' (pos_order_line.js setOptions), sehingga filter
+         "Harga diubah manual" di atas berisi positif palsu untuk produk berlabel harga. -->
+    <record id="filter_pos_line_manual_price_non_weighed" model="ir.filters">
+        <field name="name">EFN Audit: Harga manual (bukan produk timbang)</field>
+        <field name="model_id">pos.order.line</field>
+        <field name="domain">[('price_type', '=', 'manual'), ('refunded_orderline_id', '=', False), ('is_reward_line', '=', False), ('product_id.to_weight', '=', False)]</field>
+        <field name="context">{'group_by': ['order_id']}</field>
+        <field name="sort">[]</field>
+    </record>
 </odoo>

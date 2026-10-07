@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Pecahan uang Rupiah untuk hitung kas buka/tutup sesi (Gelombang 13, F-32; R-O06, Q-27).
+     Terverifikasi di source 19.0 (2026-10-07):
+     - pos.bill: name (Char), value (Float), pos_config_ids (M2m). POS memuat bill dengan domain
+       ['|', ('id', 'in', config.default_bill_ids.ids), ('pos_config_ids', '=', False)]
+       (pos_bill.py _load_pos_data_domain) -> bill tanpa pos_config_ids tampil di SEMUA POS.
+     - point_of_sale/data/point_of_sale_data.xml membuat 13 bill USD/EUR (0.05 .. 200.00)
+       dengan forcecreate="0" di blok noupdate -> setelah dihapus TIDAK dibuat ulang saat
+       upgrade point_of_sale. Semua company EFN ber-IDR, jadi pecahan itu tidak berguna dan
+       membingungkan kasir saat menghitung kas.
+     Pecahan: uang logam Rp100/200/500/1.000, uang kertas Rp1.000..Rp100.000 (Rp1.000 logam &
+     kertas digabung satu baris). Pecahan yang jarang (Rp50, Rp75.000 peringatan) bisa
+     ditambah admin di Point of Sale -> Configuration -> Coins/Bills.
+     noupdate: hanya saat install; admin boleh mengubah/menambah. -->
+<odoo noupdate="1">
+    <delete model="pos.bill" id="point_of_sale.0_05"/>
+    <delete model="pos.bill" id="point_of_sale.0_10"/>
+    <delete model="pos.bill" id="point_of_sale.0_20"/>
+    <delete model="pos.bill" id="point_of_sale.0_25"/>
+    <delete model="pos.bill" id="point_of_sale.0_50"/>
+    <delete model="pos.bill" id="point_of_sale.1_00"/>
+    <delete model="pos.bill" id="point_of_sale.2_00"/>
+    <delete model="pos.bill" id="point_of_sale.5_00"/>
+    <delete model="pos.bill" id="point_of_sale.10_00"/>
+    <delete model="pos.bill" id="point_of_sale.20_00"/>
+    <delete model="pos.bill" id="point_of_sale.50_00"/>
+    <delete model="pos.bill" id="point_of_sale.100_00"/>
+    <delete model="pos.bill" id="point_of_sale.200_00"/>
+
+    <record id="pos_bill_idr_100" model="pos.bill">
+        <field name="name">100</field>
+        <field name="value">100</field>
+    </record>
+    <record id="pos_bill_idr_200" model="pos.bill">
+        <field name="name">200</field>
+        <field name="value">200</field>
+    </record>
+    <record id="pos_bill_idr_500" model="pos.bill">
+        <field name="name">500</field>
+        <field name="value">500</field>
+    </record>
+    <record id="pos_bill_idr_1000" model="pos.bill">
+        <field name="name">1000</field>
+        <field name="value">1000</field>
+    </record>
+    <record id="pos_bill_idr_2000" model="pos.bill">
+        <field name="name">2000</field>
+        <field name="value">2000</field>
+    </record>
+    <record id="pos_bill_idr_5000" model="pos.bill">
+        <field name="name">5000</field>
+        <field name="value">5000</field>
+    </record>
+    <record id="pos_bill_idr_10000" model="pos.bill">
+        <field name="name">10000</field>
+        <field name="value">10000</field>
+    </record>
+    <record id="pos_bill_idr_20000" model="pos.bill">
+        <field name="name">20000</field>
+        <field name="value">20000</field>
+    </record>
+    <record id="pos_bill_idr_50000" model="pos.bill">
+        <field name="name">50000</field>
+        <field name="value">50000</field>
+    </record>
+    <record id="pos_bill_idr_100000" model="pos.bill">
+        <field name="name">100000</field>
+        <field name="value">100000</field>
+    </record>
+</odoo>

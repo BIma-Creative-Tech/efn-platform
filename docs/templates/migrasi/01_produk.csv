@@ -1,0 +1,1 @@
+id,name,default_code,barcode,type,is_storable,tracking,use_expiration_date,expiration_time,uom_id/id,categ_id,pos_categ_ids,list_price,standard_price,taxes_id/id,supplier_taxes_id/id,company_id/id,available_in_pos,to_weight,sale_ok,purchase_ok

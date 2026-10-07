@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Default POS untuk SOP kasir (Gelombang 13; R-O05 void/refund, R-O06 cash management, Q-27).
+     ir.default berlaku untuk pos.config BARU (tidak mengubah config yang sudah ada); per outlet
+     tetap bisa diubah manajer. Blok noupdate: <function> hanya jalan saat INSTALL modul.
+     Field terverifikasi di point_of_sale/models/pos_config.py 19.0 (2026-10-07):
+     - order_edit_tracking ("Track orders edits", default False): baris yang qty-nya dikurangi
+       pada order yang SUDAH tersinkron ditandai pos.order.line.is_edited + log chatter; baris
+       dihapus -> pos.order.has_deleted_line. Catatan: order retail biasanya baru tersinkron saat
+       dibayar, sehingga void baris SEBELUM sinkron tidak terekam (gap G13-3, docs/08 §6).
+     - set_maximum_difference + amount_authorized_diff: selisih kas penutupan di atas batas hanya
+       bisa ditutup peran manajer (pos_hr: cashier._role == 'manager' dan _user_role == 'admin';
+       tanpa pos_hr: props.is_manager). Batas 0 = SETIAP selisih butuh supervisor (ketat, aman);
+       nilai toleransi = keputusan klien Q-27. PERINGATAN: batas ini hanya ditegakkan di
+       frontend (closing_popup.js); server tidak memeriksa (lihat docs/08 §6 G13-6).
+     - point_of_sale.limited_product_count (ir.config_parameter, default CE 5000): jumlah produk
+       yang dimuat ke POS saat sesi dibuka. Produk di luar batas dicari ke server saat scan ->
+       GAGAL saat offline. Untuk POS retail offline-first, nilai harus >= jumlah SKU aktif
+       toko. 20000 = PLACEHOLDER menunggu Q-7 (jumlah SKU) dan uji memori perangkat (Q-56).
+       Parameter ini global (semua outlet, termasuk F&B). -->
+<odoo noupdate="1">
+    <function model="ir.default" name="set" eval="['pos.config', 'order_edit_tracking', True]"/>
+    <function model="ir.default" name="set" eval="['pos.config', 'set_maximum_difference', True]"/>
+    <function model="ir.default" name="set" eval="['pos.config', 'amount_authorized_diff', 0.0]"/>
+    <function model="ir.config_parameter" name="set_param" eval="['point_of_sale.limited_product_count', '20000']"/>
+</odoo>

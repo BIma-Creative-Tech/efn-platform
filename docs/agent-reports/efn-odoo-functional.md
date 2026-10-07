@@ -148,5 +148,48 @@ CybroAddons punya branch 19.0 (juga 20.0, saas-19.4). Padanan Cybrosys untuk aud
 5. **Q-8:** produk dipakai semua PT, satu PT, atau sebagian PT?
 6. Biaya produk AVCO (`product.product.standard_price`) perlu diaudit? (volume: tiap penerimaan barang).
 
-### Asumsi belum terverifikasi
+### Asumsi belum terverifikasi (Gelombang 10)
 xmlid `base.field_ir_config_parameter__key/value` dan `base.field_res_partner__name/phone/email/vat/active/company_id` (konvensi, belum diuji install); perilaku `-i` atas modul `installable: False`; aktivasi *Inter-company transit*; overhead hook `base` (ukur di PoC); `restrictive_audit_trail` perilaku detail.
+
+## Gelombang 13 — 2026-10-07 (Fase 1: pilot POS retail 1 toko, loyalty POS §9, migrasi)
+
+Detail lengkap: `docs/08_ODOO_FIT_GAP.md` §6 (F-31..F-42, G13-1..G13-7, P-1..P-10, K-1..K-8).
+
+### Konfigurasi standar yang diterapkan (`efn_setup_pos` 19.0.1.1.0 → 19.0.1.2.0)
+| File | Isi | Mengapa |
+|---|---|---|
+| `data/barcode_nomenclature_data.xml` (baru) | Nomenklatur *EFN Retail (IDR)* → `res.company.nomenclature_id` PT Retail: harga Rupiah `23.....{NNNNN}`, berat `21.....{NNDDD}`, pelanggan 042, karyawan 041, kupon 043\|044, produk `.*` | Aturan harga bawaan `{NNNDD}` maks 999,99; **aturan diskon bawaan `22{NN}` memberi diskon tanpa cek peran/`manual_discount` (fraud) — tidak dibuat**; aturan lot `10` berisiko salah baca EAN impor |
+| `data/pos_bill_idr_data.xml` (baru) | Pecahan Rp100..Rp100.000; 13 pecahan USD bawaan dihapus (`forcecreate="0"` → tidak kembali) | Hitung kas buka/tutup per pecahan (R-O06) |
+| `data/pos_retail_defaults.xml` (baru) | `ir.default` `order_edit_tracking=True`, `set_maximum_difference=True`, `amount_authorized_diff=0`; `point_of_sale.limited_product_count=20000` (PLACEHOLDER) | Void tersinkron tercatat; setiap selisih kas butuh supervisor; katalog offline (default CE 5000) |
+| `data/pos_audit_filters.xml` | +4 filter: refund tanpa struk, order refund per kasir, order diedit/void baris, harga manual non-timbang | R-O05; label harga timbangan menandai `price_type='manual'` (positif palsu filter lama) |
+| `demo/pos_retail_demo.xml` (baru) | Kategori *Fresh (Timbang)*, produk kg berbarcode berat & berlabel harga, pricelist *Harga Member (DEMO)* 5% | Q-25/Q-9 belum dijawab |
+| `README.md` | Matriks peran `pos_hr` (minimal/basic/manager) per aksi, SOP refund/void/kas/Z, barcode timbangan, multi-UoM, FEFO, mekanik promo, checklist outlet pilot retail | |
+
+Catatan: blok `noupdate` (default, nomenklatur PT Retail, hapus pecahan) hanya berlaku saat **install**; DB dev yang sudah memasang 19.0.1.1.0 perlu install bersih atau set manual.
+
+Template migrasi (baru): `docs/templates/migrasi/` — `01_produk.csv`, `02_lot.csv`, `03_stok_awal.csv`, `04_pelanggan_odoo.csv`, `05_member_bff.csv`, `06_saldo_poin_awal_bff.csv`, `07_karyawan_kasir.csv` (judul kolom saja) + `README.md` (urutan impor, kolom, aturan UU PDP, ringkasan validator). Saldo poin & consent → BFF, bukan Odoo. PIN karyawan tidak pernah di file.
+
+### Temuan standar CE 19 (terverifikasi source 19.0)
+- "Approval supervisor" CE = supervisor mengambil alih kasir via PIN (`pos_hr`); tidak ada dialog persetujuan inline atau jejak "disetujui oleh". Peran **minimal** memblokir refund, tombol `-`, harga, diskon; **basic** bisa refund; **manager** bisa ubah pembayaran & tutup sesi berselisih.
+- Hash PIN karyawan (SHA-1) dimuat ke browser → PIN pendek mudah ditebak pemegang perangkat (**untuk efn-security-reviewer**).
+- Batas selisih kas hanya ditegakkan frontend; `cash_register_difference` tidak stored.
+- Kas masuk/keluar hanya POS Manager atau grup *Invoicing*.
+- Refund tidak dibatasi ke metode bayar asal; void sebelum sinkron tidak tercatat; `remove_from_ui` menghapus draft tersinkron (`sudo().unlink()`).
+- `product.template.taxes_id` tanpa `check_company` → risiko pajak PT lain saat impor.
+
+### Rekomendasi untuk efn-odoo-engineer
+- **E-22 (WAJIB fase 1) `efn_pos_loyalty_ledger`** — `docs/08 §6.3`: produk "Poin EFN" via `_get_special_products`; model `efn.pos.loyalty.reservation` & `efn.pos.loyalty.outbox` (transactional outbox, idempotency key unik, payload dibangun saat kirim — HP tidak disimpan, backoff, `_trigger`, urutan reverse setelah earn); RPC balance/reserve/release; tombol "Tukar Poin EFN" di layar pembayaran (OTP `pos_redeem`, baris per kelompok pajak, `price_type: "automatic"`), dialog batal saat kembali ke layar produk, blokir offline; validasi server saat sync (deteksi baris poin dari produk — SEC-12, `UserError` tanpa reservasi, review bila nilai/partner beda); earn/reverse via outbox dengan ratio; test & tour terdaftar di spesifikasi.
+- **E-23** perluasan kecil `efn_pos_otp_gate`: `efn.pos.otp.challenge.purpose` + parameter `purpose` di `efn_otp_request`/`efn_otp_flow.js`; gate promo hanya menerima `pos_promo` (cegah challenge tukar poin membuka promo).
+- **E-24** setelah E-22: filter audit "Baris negatif non-promo" (`efn_setup_pos`) akan menampilkan baris Poin EFN — modul baru menyediakan filter pengganti yang mengecualikan produk poin (efn_setup_pos tidak bisa me-`ref` produk modul yang belum ada).
+- **E-25 (WAJIB sebelum migrasi) validator pra-impor** — `docs/08 §6.4` (skrip CLI, bukan modul Odoo; pemilik diputuskan efn-lead).
+- **Opsional menunggu Q-27/Q-29:** G13-2 `efn_pos_supervisor_approval`, G13-3/5 `efn_pos_void_log`, G13-4 refund ke metode asal, G13-6 batas selisih kas di server (`docs/08 §6.5`). **Jangan dibangun** sebelum klien menjawab; pilot bisa jalan dengan standar.
+- **Jangan dikustom:** peran `pos_hr`, layar refund/tutup sesi, `pos.bill`, nomenklatur barcode (konfigurasi), `loyalty.program` untuk poin.
+
+### Usulan kontrak ke efn-lead (docs/04 §9) — K-1..K-8 di `docs/08 §6.7`
+Ringkas: definisi `eligible_amount` ambigu (K-1); kategori tanpa poin harus di Odoo (K-2); commit membawa `member_ref`/`value_idr` dan diterima setelah kedaluwarsa bila belum di-release (K-3); token `pos_redeem` di-consume saat reserve (K-4); release idempoten (K-5); reverse sebelum earn → 409 retryable (K-6); endpoint migrasi member+consent & saldo poin awal (K-7); rate limit/OTP untuk balance (K-8).
+
+### Pertanyaan klien yang memblokir pilot (P-1..P-10, `docs/08 §6.6`)
+Toko pilot & jumlah SKU; Q-25 timbangan & format label; Q-27 peran kasir/refund/void/toleransi selisih/setoran; Q-28 daftar promo; Q-29 metode bayar, pembulatan, refund ke metode asal; Q-55/Q-56 internet & perangkat; Q-13 + Finance parameter poin & retur berpoin; konsultan pajak (PPN atas penukaran poin); Q-5/Q-12 sumber data & consent; Q-34 lot di kasir.
+
+### Asumsi belum terverifikasi (Gelombang 13)
+Install modul dengan data baru belum dijalankan (`<delete>` pada blok noupdate, penulisan `nomenclature_id` ke company milik modul lain, `eval` `obj(...)` untuk `taxes_id` demo); check digit barcode demo dihitung manual; perilaku POS untuk barcode kemasan `product.uom`, FEFO otomatis tanpa lot, layar timbangan/IoT, monitor pelanggan, offline dengan 20.000 produk; format xmlid pajak per company (`account.<id>_tax_ST4`); akun selisih jurnal tunai `l10n_id`; produk khusus `_get_special_products` dimuat walau tanpa kategori POS. Tidak ada test/CI yang dijalankan oleh agent ini.
