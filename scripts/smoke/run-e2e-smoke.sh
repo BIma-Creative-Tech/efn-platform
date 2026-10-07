@@ -141,7 +141,9 @@ scenario_b() {
 
 scenario_v() { # opsional (tidak di default): jalur VLM nyata, butuh model OLLAMA_VISION_MODEL di Ollama
   echo "== v. Price Hunter jalur VLM (Ollama)"
-  [[ -s "${WORK}/state.json" ]] || py login
+  # Akun skenario a sudah dihapus bila e jalan lebih dulu (urutan "a b c d f e g v"): login nomor fiktif baru.
+  if [[ "${ERASED:-0}" == 1 ]]; then PHONE="62812$(rand8)"; MASKED="${PHONE:0:5}****${PHONE: -3}"; py login
+  elif [[ ! -s "${WORK}/state.json" ]]; then py login; fi
   py consent
   py report_vlm
 }
@@ -230,6 +232,7 @@ scenario_f() {
 
 scenario_e() {
   echo "== e. DSAR hapus akun lintas store"
+  ERASED=1   # akun $PHONE dihapus di skenario ini; skenario sesudahnya (v) wajib login akun baru
   # OTP login + login_web + reauth = 3 permintaan / 15 menit untuk nomor yang sama (batas rate limit per member)
   py delete
   local rid mh st r

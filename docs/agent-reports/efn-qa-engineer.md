@@ -303,3 +303,31 @@ Tidak ada (tidak ditemukan bug integrasi). File yang diubah: hanya laporan ini d
   grup diubah via `odoo shell` tidak meng-invalidasi cache worker → ubah lewat UI/RPC; `group_pos_user` tanpa
   Contact Creation tidak bisa onboarding pelanggan (keputusan konfigurasi functional).
 - Data QA tertinggal di DB dev: user `qa_g11_*`, partner 60, challenge `QA-G11-SEC44`, server action 591.
+
+# Gelombang 12 — Penutupan runtime: GL, salinan audit + tamper, smoke penuh + VLM (2026-10-07)
+
+Basis `ce7e2b0`, tidak ada commit. Verifikasi di stack dev nyata (bukan hanya baca kode). Detail & bukti:
+`docs/testing/E2E_SMOKE_REPORT.md` bagian Gelombang 12.
+
+## G12.1 Hasil
+| Item | Hasil |
+|---|---|
+| Rebuild api-gateway/ocr-worker/etl/odoo + boot 5 profil | OK, 40 container, 0 unhealthy, Prometheus 34/34 up |
+| `-u efn_audit,efn_setup_audit,efn_pos_otp_gate,efn_pos_payment_gateway` | exit 0, 0 ERROR; efn_audit 19.0.1.2.0 (`origin_user_id`) |
+| Grant ETL (`efn_odoo`) + job GL & audit copy | jalan; tidak ada `audit_copy gagal` dari ETL nyata |
+| GL (3 jurnal posted di company 3 & 4, 2 IC) | `fact_gl_line` 6 baris logis; `v_gl_consolidated` dibaca `efn_metabase`, eliminasi IC benar; `efn_metabase` ditolak ke `audit_log_copy`/INSERT (497) |
+| Tamper `efn_audit_log` id 17 (dev) | recon `modified=1, sample_ids=[17]` → Loki → **`EfnAuditReconAnomaly` di Alertmanager ±15 s**; baris dikembalikan, recon 0, alert resolved |
+| `EfnAuditCopyFailing` | tidak firing dari ETL nyata (yang aktif = baris sintetis devsecops, resolved 04:56) |
+| Smoke `a b c d f e g v` satu run | **PASS=121 FAIL=0** (run 1: 108/4 karena bug skrip `v`) |
+| SEC-34 | solver smoke lolos; solusi lintas IP → 400 `captcha_required`, IP sama → 202 |
+| PII di log 7 service | 0 |
+
+## G12.2 Perbaikan
+- `scripts/smoke/run-e2e-smoke.sh`: `scenario_e` set `ERASED=1`; `scenario_v` login nomor fiktif baru bila akun sudah
+  dihapus DSAR (sebelumnya 401 karena token akun terhapus). shellcheck bersih.
+
+## G12.3 Sisa
+- Alert dev permanen `EfnPublicEndpointDown`/`EfnWgCertProbeFailed` (self-signed) → usul silence dev (devsecops).
+- Log ETL dari `compose run --rm` tidak sampai Loki (catat di runbook etl-audit-copy bila operator menjalankan recon
+  manual).
+- Belum: UI Metabase→ClickHouse, kelas recon erasure/retention dengan log yang sudah tersalin, tour POS di stack ini, CI.

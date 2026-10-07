@@ -46,4 +46,5 @@ Prasyarat: stack dev `core` + `data` + `ai` jalan dan modul `efn_*` terpasang (`
 - Tidak masuk CI (butuh stack penuh + ±15 menit). Kandidat job nightly pada runner self-hosted.
 - Frontend POS (OWL) tidak disentuh: skrip memanggil metode server yang sama dengan frontend.
 - Jalur VLM dengan model nyata: subperintah `report_vlm` tidak termasuk run default (butuh model `qwen2.5vl:3b`
-  ±3,2 GB, lihat E2E_SMOKE_REPORT gelombang 10).
+  ±3,2 GB, lihat E2E_SMOKE_REPORT gelombang 10). `v` boleh dijalankan setelah `e` (`a b c d f e g v`): akun skenario
+  `a` sudah dihapus DSAR, sehingga `v` login dengan nomor fiktif baru (gelombang 12).

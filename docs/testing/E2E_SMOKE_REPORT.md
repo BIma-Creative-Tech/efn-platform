@@ -1,4 +1,4 @@
-# Laporan Smoke E2E — stack dev dengan TLS/mTLS aktif (Gelombang 8 + regresi Gelombang 10 & 11, 6 Okt 2026)
+# Laporan Smoke E2E — stack dev dengan TLS/mTLS aktif (Gelombang 8 + regresi Gelombang 10, 11 & 12, 6–7 Okt 2026)
 
 Penulis: integration engineer (efn-qa-engineer + efn-devsecops-engineer) di bawah efn-lead.
 Skrip: `scripts/smoke/` (`run-e2e-smoke.sh`, `bff_smoke.py`, `odoo_pos_smoke.py`; README di folder itu).
@@ -309,3 +309,105 @@ tidak punya `create_from_ui`); jalur sudo nyata yang dapat dijangkau kasir adala
 - `EfnAuditUnexpectedPurge` / `EfnAuditRetentionPurgeBurst` dengan Odoo nyata (G11.3; butuh izin user).
 - Pengiriman Alertmanager ke receiver nyata (`ops-webhook` dev); retensi 400 hari stream (konfigurasi, tidak diuji waktu).
 - Test unit service tidak diulang (tidak ada kode yang diubah); CI GitHub belum dijalankan untuk `26110ef`.
+
+# Gelombang 12 — Penutupan: GL nyata, salinan audit + uji tamper, SEC-34 ALTCHA, smoke penuh + VLM (7 Okt 2026)
+
+Basis `ce7e2b0`. Tidak ada commit. Tidak ada volume yang dihapus. Odoo engineer paralel (SEC-22) bekerja di harness
+terpisah; tidak ditunggu.
+
+## G12.1 Lingkungan & persiapan
+
+| Langkah | Hasil |
+|---|---|
+| `$DC ... build api-gateway ocr-worker etl odoo` (Odoo target runtime, tanpa Chrome) | sukses |
+| Upgrade Odoo (odoo dihentikan): `-u efn_audit,efn_setup_audit,efn_pos_otp_gate,efn_pos_payment_gateway` | **exit 0, 0 ERROR/CRITICAL** (1 WARNING kosmetik `--without-demo=all` di Odoo 19); `efn_audit 19.0.1.2.0`, kolom `efn_audit_log.origin_user_id` ada; `up -d --force-recreate odoo odoo-tls odoo-ws-tls` → healthy, 0 ERROR di log Odoo sesudahnya |
+| Grant `services/etl/sql/odoo-readonly-grants.sql` sebagai `efn_odoo` (pola `deploy.sh`) | rc 0 (NOTICE: index sudah ada) |
+| Recreate `api-gateway`, `ocr-worker` (+2 sidecar metrik), `etl`; `up -d` semua profil `core data ai observability ops` | 40 container jalan, 0 unhealthy; Prometheus **34/34 target up** |
+| ETL | `jobs=[..., companies, gl_accounts, gl_lines, gl_lines_by_move] audit_copy=True`; container nyata tidak pernah mencatat `job=audit_copy gagal` |
+
+## G12.2 Mart konsolidasi GL dengan jurnal nyata
+
+Data dev dibuat lewat `odoo shell` (ORM standar, `action_post`): PT EFN Retail (3) `INV/2026/00001` 1.500.000 ke
+partner PT EFN F&B (inter-company), PT EFN F&B (4) `BILL/2026/10/0001` 1.500.000 dari partner Retail (IC), Retail
+`INV/2026/00002` 250.000 ke partner fiktif "QA G12 Pelanggan Fiktif" (tanpa pajak agar angka mudah dicek). Siklus ETL
+berikutnya: `gl_lines rows=6`, `gl_lines_by_move rows=6`.
+
+Dibaca sebagai **`efn_metabase`** (clickhouse-client TLS, password dari file secret lewat stdin) dari `v_gl_consolidated`:
+
+| company | akun | IC | lawan | balance | balance_after_elimination |
+|---|---|---|---|---|---|
+| 3 | 11210010 receivable | 0 | – | 250.000 | 250.000 |
+| 3 | 11210010 receivable | 1 | 4 | 1.500.000 | 0 |
+| 3 | 41000010 income | 0 | – | −250.000 | −250.000 |
+| 3 | 41000010 income | 1 | 4 | −1.500.000 | 0 |
+| 4 | 21100010 payable | 1 | 3 | −1.500.000 | 0 |
+| 4 | 51000010 expense | 1 | 3 | 1.500.000 | 0 |
+
+Konsolidasi per akun setelah eliminasi: receivable 250.000, income −250.000, payable/expense IC 0 — benar. `period`
+2026-10-01, `fiscal_year` 2026. Negatif: `efn_metabase` SELECT `audit_log_copy` dan INSERT `fact_gl_line` → **497
+ACCESS_DENIED**. Koneksi database ClickHouse di UI Metabase tidak dikonfigurasi/diuji; yang diverifikasi adalah hak user
+`efn_metabase` yang dipakai koneksi itu.
+
+## G12.3 Salinan audit tamper-evident + uji tamper nyata
+
+Rantai sebelum uji: company 0 seq 14, company 4 seq 6 (20 log). Rekonsiliasi baseline (one-shot; ETL utama dihentikan
+agar tidak ada dua instance): semua kelas 0.
+
+Uji (DB **dev**, superuser, izin lead): `UPDATE efn_audit_log SET res_name='QA-G12 TAMPER' WHERE id=17` (log
+`write product.template` company 4, sudah tersalin).
+
+| Langkah | Hasil |
+|---|---|
+| Run 1 (one-shot `compose run --rm`, `ETL_AUDIT_RECON_INTERVAL_SECONDS=1`) | `WARNING ... EFN_AUDIT_RECON {"modified":1,"sample_ids":[17]}` (kelas lain 0) — tetapi baris **tidak sampai ke Loki** (container `--rm` hilang sebelum discovery Promtail) → tidak ada alert. Observasi, bukan bug produk |
+| Run 2 (instance ETL sementara long-running `efn-etl-qa-recon`, label `service=etl`, recon 60 s; ETL utama berhenti) | 04:30:50 recon bersih → tamper 04:30:57 → **04:31:51 `WARNING EFN_AUDIT_RECON {"modified":1,"sample_ids":[17]}`** |
+| Loki `{service="etl"} \|= "EFN_AUDIT_RECON"` (mTLS) | 3 baris dari `efn-etl-qa-recon`, termasuk WARNING |
+| Alertmanager `GET /alertmanager/api/v2/alerts` (mTLS, SAN grafana) | **`EfnAuditReconAnomaly` active, critical, `startsAt 04:32:06Z`** (±15 s setelah log) |
+| Pemulihan | baris dikembalikan (`res_name='SMOKE Nasi Goreng'`; `write_date` tidak tersentuh) 04:31:56; recon berikut 04:32:51 semua 0; alert resolved setelah jendela 15 menit. Instance sementara dihapus, `efn-etl-1` dinyalakan lagi |
+| Setelah smoke (DSAR `e` mem-purge log partner) | recon one-shot: `max_log_id 46, checked 28`, semua kelas 0 (log yang di-purge sebelum lewat `ETL_AUDIT_SETTLE_SECONDS` memang tidak pernah tersalin) |
+
+`EfnAuditCopyFailing` yang aktif sejak 03:54 berasal dari container sintetis devsecops (`efn-g12-fake-etl`, baris
+03:50/03:55); resolved 04:56 ketika baris itu keluar dari jendela 1 jam. Log baru dari smoke (`odoo shell`, uid 2)
+tersalin dengan `origin_user_id = NULL` — sesuai desain SEC-46 (tanpa sesi HTTP/helper elevate tidak ada uid pemicu).
+
+## G12.4 Smoke E2E penuh (+ VLM) dan SEC-34
+
+`bash scripts/smoke/run-e2e-smoke.sh a b c d f e g v`:
+
+- Run 1: `PASS=108 FAIL=4` — keempatnya di `v` (`consent.*`, `report_vlm.submit` 401): `v` memakai token akun skenario
+  `a` yang sudah **dihapus** oleh DSAR di `e`. Bug urutan di skrip smoke (G12.5), bukan regresi produk.
+- Run 2 (setelah perbaikan, satu run): **`RINGKASAN: PASS=121 FAIL=0`, exit 0**. Per skenario: a 21, b 17, c 16, d 7,
+  f 5, e 24, g 19, v 13. VLM: `report_vlm.final` `valid / price_and_name_match`, `model_used` OK (qwen2.5vl:3b, image
+  ocr-worker G12).
+- ALTCHA: solver smoke lolos (`maxnumber 500000` = level 0, PoW ±0,25 s per login).
+- **SEC-34 binding IP** (uji tambahan; dua container hidup bersamaan di `efn_edge`, 172.30.0.3 dan .4, lewat Traefik):
+  solusi dari A dikirim dari B → **400 `captcha_required`**; solusi dari A dikirim dari A → 202. Catatan: dua
+  `docker run --rm` berurutan bisa mendapat IP yang sama (percobaan pertama memberi 202 positif-palsu).
+- PII di log (regex HP 62/08 + 812/813/877/899, 5000 baris terakhir): api-gateway, ocr-worker, etl, superapp-web, odoo,
+  traefik, s3-gateway = **0**.
+
+## G12.5 Bug / perbaikan
+
+1. **`scripts/smoke/run-e2e-smoke.sh` skenario `v` setelah `e`** (diperbaiki): `scenario_e` menandai `ERASED=1`;
+   `scenario_v` login dengan nomor fiktif baru bila akun sudah dihapus (sebelumnya hanya login bila `state.json`
+   kosong → token akun terhapus → 401). shellcheck v0.11.0 bersih; dibuktikan run 2 (121/121).
+
+Tidak ada bug produk/integrasi lain. Observasi (bukan bug):
+- `EfnPublicEndpointDown` (api/app.efn.local) dan `EfnWgCertProbeFailed` (traefik:8443) firing permanen di dev
+  (sertifikat edge self-signed; diketahui devsecops). Pertimbangkan silence/inhibit khusus dev agar alert nyata tidak
+  tenggelam.
+- Job ETL membaca ulang baris `>= watermark − overlap` tiap siklus (mis. `gl_accounts rows=523` tiap 120 s karena semua
+  akun ber-`write_date` sama saat instalasi). Aman (ReplacingMergeTree + `FINAL`), tetapi `count()` tanpa FINAL
+  menggandakan (fact_gl_line 12 fisik / 6 logis) — query ad hoc harus memakai view/FINAL.
+- Log ETL dari container `compose run --rm` tidak masuk Loki; operasi manual ETL yang harus bisa memicu alert jangan
+  memakai one-shot `--rm`.
+
+## G12.6 Data QA tertinggal di DB dev
+3 jurnal posted (`INV/2026/00001`, `INV/2026/00002` company 3; `BILL/2026/10/0001` company 4), partner "QA G12
+Pelanggan Fiktif", data `SMOKE *` run ini. Log audit id 17 sudah dikembalikan ke nilai asal.
+
+## G12.7 Belum diverifikasi
+- Koneksi UI Metabase → ClickHouse (hanya hak user `efn_metabase`); GL tahun fiskal non-Desember, cancel/reset-to-draft,
+  multi-currency.
+- Kelas rekonsiliasi `erasure`/`retention` untuk log yang sudah tersalin lalu di-purge (butuh menunggu settle 600 s
+  sebelum purge; tidak dijalankan).
+- Tour POS (OWL) G12 tidak dijalankan di stack ini (hanya harness odoo engineer); CI GitHub belum dijalankan.
