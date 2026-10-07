@@ -24,8 +24,11 @@ Status kontrol (gelombang 12):
 - Filter di Traefik **tidak** dipasang: Traefik v3 tidak punya middleware penulisan ulang body bawaan; plugin pihak
   ketiga (Yaegi, kode tak terverifikasi di proxy internet-facing) bertentangan dengan kebijakan supply chain
   (SEC-47) dan mengganggu respons terkompresi/streaming.
-- Perbaikan yang aman ada di Odoo: override kecil di modul `efn_*` (milik efn-odoo-engineer) yang mengosongkan
-  `data.debug` untuk user tanpa `base.group_system`. Traceback tetap tercatat di log server untuk diagnosis.
-  Diusulkan ke lead. Sampai itu diterapkan, risiko residu (Low): user internal terautentikasi bisa melihat path, kode,
-  dan nilai field pada pesan error.
+- **Diterapkan (gelombang 12b):** `efn_core/models/ir_http.py` meng-override `ir.http._handle_error` (titik resmi
+  per-database). Untuk dispatcher `jsonrpc` dan `json2`, user bukan `base.group_system` (termasuk kasir POS, portal,
+  publik, tanpa sesi) mendapat `debug: ""`; pesan exception bisnis (`UserError`/`ValidationError`/`AccessError`/
+  `MissingError`/`RedirectWarning`/`SessionExpired`/HTTPException) tetap utuh; exception tak terduga diganti pesan
+  generik (`name`=`Exception`, tanpa argumen). Admin sistem (uid sesi, atau API key untuk `/json/2`) tetap mendapat
+  traceback. Log server tidak berubah. Batasan: request tanpa database (`_serve_nodb`) tidak tertangani — produksi
+  memakai satu DB + dbfilter. Risiko residu ditutup untuk jalur ber-database.
 - Diagnosis tetap lewat log server: Loki `{service="odoo"} |= "Traceback"`.

@@ -384,3 +384,26 @@ Temuan saat menulis tour: kode frontend POS yang ada (OTP gate & gateway) berjal
 - Tour berjalan di DB tanpa `efn_setup_*` (fixture `TestPointOfSaleHttpCommon` gagal di `setUpClass` dengan 4 company `efn_setup_company`: user `accountman` tidak bisa membaca pajak company lain). Konfigurasi POS nyata efn_setup_pos belum diuji lewat UI.
 - Mode mobile (`isActive: ["mobile"]`), layar pelanggan QRIS, kedaluwarsa QR & offline di tengah polling, BFF/WhatsApp/provider nyata: belum.
 - SEC-46: cron/consumer yang memakai `with_user(SUPERUSER_ID)` langsung (tanpa helper, tanpa sesi HTTP) tetap tanpa uid pemicu; `_write`/SQL langsung & `registry.ready=False` tetap di luar cakupan (by design). Upgrade `efn_audit` 19.0.1.1.0 → 1.2.0 pada DB dev/staging belum dijalankan (kolom & index dibuat ORM); efektivitas index belum diukur pada volume besar.
+
+---
+
+# Gelombang 12b — SEC-22 sisa: traceback di respons error JSON-RPC / `/json/2` (7 Okt 2026)
+
+## Perubahan
+- `services/odoo/addons/efn_core/models/ir_http.py` (baru): override `ir.http._handle_error` (classmethod resmi, dipanggil `Request._update_served_exception` untuk setiap exception pada request ber-DB). Hanya dispatcher `jsonrpc`/`json2` dengan respons `application/json` yang di-post-process; tidak ada monkeypatch `odoo.http.serialize_exception` (dipakai juga oleh `ir_cron`, export, report).
+  - Non-`base.group_system` (termasuk tanpa sesi/publik): `debug` → `""`. Exception bisnis (`UserError`+turunan, `RedirectWarning`, `SessionExpiredException`, `HTTPException`) mempertahankan `name`/`message`/`arguments`/`context` → dialog POS (`handleRPCError` memakai `exceptionName` + `data.message`) dan web client tidak berubah. Exception tak terduga → `name`=`Exception`, pesan generik, `arguments`=[pesan], `context`={}.
+  - Admin: uid dari **sesi** (bukan `request.env.uid` yang bisa dinaikkan controller ke superuser); `/json/2` tanpa sesi memakai uid API key. Cek gagal → non-admin (fail closed). Parse/redaksi gagal → respons generik + log exception.
+  - Log server tidak berubah (traceback penuh tetap dicatat `odoo.http`).
+- `efn_core/tests/test_error_redaction.py` (HttpCase, tag `efn`): method pemicu ditambahkan sementara ke kelas registry `res.partner` (`patch.object(..., create=True)`), tanpa route produksi baru. Kasus: kasir UserError (pesan utuh, `debug` kosong), kasir exception tak terduga (generik, tanpa `Traceback`/`.py`/argumen), tanpa sesi, admin (traceback ada), `/json/2` API key kasir vs admin.
+- `efn_core` 19.0.1.4.0 → 19.0.1.5.0 (tanpa migrasi data); README, `docs/runbooks/odoo-access-changes.md` §2 diperbarui.
+
+## Validasi (container, Odoo 19 nyata)
+- `odoo-test-nooca.sh`: build OK, check-odoo-deps 11 modul 0 terlarang, **0 failed / 0 error dari 177 test**, 0 baris ERROR (efn_core 39 test termasuk 5 baru).
+- `odoo-tour.sh`: **5/5 tour lolos**, 0 ERROR, skip browser 0.
+- ruff 0.16.10 `check` + `format --check` `services/odoo`: bersih.
+
+## Belum / sisa
+- Request tanpa database (`_serve_nodb`, mis. tanpa `dbfilter`) memakai `dispatcher.handle_error` langsung, tidak lewat `ir.http` → tidak teredaksi. Produksi: satu DB + dbfilter (perlu dikonfirmasi devsecops).
+- Admin sistem pada error DB (transaksi aborted) bisa kehilangan `debug` karena cek group gagal → fail closed; diagnosis lewat Loki.
+- Bug upstream POS `hooks.js` (`error.data.debug.status.message_body` pada string) tidak berubah perilakunya (sudah melempar sebelum perubahan ini).
+- Belum diuji manual di stack dev (tidak di-restart, QA sedang memakai); belum dijalankan di GitHub Actions.

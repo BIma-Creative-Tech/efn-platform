@@ -1,7 +1,7 @@
 {
     "name": "EFN Core",
     "summary": "Fondasi addons EFN: atribut multi-company, parameter sistem, klien HTTP ke BFF.",
-    "version": "19.0.1.4.0",
+    "version": "19.0.1.5.0",
     "category": "EFN",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031, CLAUDE.md).
