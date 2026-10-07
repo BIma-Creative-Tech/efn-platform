@@ -22,8 +22,10 @@
 # Env opsional: WHATSAPP_ENABLED WHATSAPP_PHONE_NUMBER_ID WHATSAPP_OTP_TEMPLATE OLLAMA_VISION_MODEL
 #               EFN_WG_BIND (default 10.88.0.1) EFN_WG_HTTPS_PORT (default 443) EFN_WG_OUTLET_CIDR EFN_WG_STAFF_CIDR
 #               ACME_DNS_PROVIDER (default cloudflare) ACME_DNS_TOKEN_ENV (default CF_DNS_API_TOKEN)
+#               ACME_SERVER (default LE produksi; LE staging diizinkan) - service acme-dns (SEC-37)
 #               EFN_PKI_EXTRA_TRUST (PEM CA lama selama rotasi CA) RABBITMQ_STRICT_PERMISSIONS
 #               MARKET_SCOUT_PHOTO_RETENTION_DAYS CH_MART_RETENTION_YEARS PG_SUPERUSER ETL_ENABLE_ODOO (true|false)
+#               ETL_ENABLE_GL ETL_AUDIT_COPY_ENABLED (true|false; kosong = aktif otomatis setelah grant, G12)
 set -euo pipefail
 
 BASE=/opt/efn
@@ -74,6 +76,10 @@ ACME_DNS_PROVIDER="${ACME_DNS_PROVIDER:-cloudflare}"
 ACME_DNS_TOKEN_ENV="${ACME_DNS_TOKEN_ENV:-CF_DNS_API_TOKEN}"
 [[ "$ACME_DNS_PROVIDER" =~ ^[a-z0-9]+$ ]] || die "ACME_DNS_PROVIDER tidak valid"
 [[ "$ACME_DNS_TOKEN_ENV" =~ ^[A-Z][A-Z0-9_]+$ ]] || die "ACME_DNS_TOKEN_ENV tidak valid"
+# SEC-37: CA untuk service acme-dns (lego). Hanya Let's Encrypt produksi atau staging (uji perdana: staging dulu).
+ACME_SERVER="${ACME_SERVER:-https://acme-v02.api.letsencrypt.org/directory}"
+[[ "$ACME_SERVER" =~ ^https://acme-(staging-)?v02\.api\.letsencrypt\.org/directory$ ]] \
+  || die "ACME_SERVER harus URL Let's Encrypt produksi/staging"
 for v in MARKET_SCOUT_PHOTO_RETENTION_DAYS CH_MART_RETENTION_YEARS DSAR_DELETE_GRACE_DAYS; do
   [[ -z "${!v:-}" || "${!v}" =~ ^[0-9]+$ ]] || die "$v harus angka"
 done
@@ -214,6 +220,14 @@ CF_IPS=$(grep -Ev '^[[:space:]]*(#|$)' "$BASE/traefik/cloudflare-ips.txt" | past
 [[ -z "${ETL_ENABLE_ODOO:-}" || "$ETL_ENABLE_ODOO" =~ ^(true|false)$ ]] || die "ETL_ENABLE_ODOO harus true|false"
 PREV_ETL_ODOO=$(sed -n 's/^ETL_ENABLE_ODOO=\(true\|false\)$/\1/p' "$COMPOSE_DIR/.env" 2> /dev/null || true)
 ETL_ENABLE_ODOO_EFF="${ETL_ENABLE_ODOO:-${PREV_ETL_ODOO:-false}}"
+# G12 (data-AI): mart GL (ETL_ENABLE_GL) dan salinan audit tamper-evident (ETL_AUDIT_COPY_ENABLED). Pola sama dengan
+# R5: eksplisit menang, lalu nilai .env sebelumnya, default false; diaktifkan otomatis HANYA setelah grant sukses
+# (grant butuh efn_audit >= 19.0.1.2.0 -> urutan: -u efn_audit -> deploy (grant) -> job aktif).
+for v in ETL_ENABLE_GL ETL_AUDIT_COPY_ENABLED; do
+  [[ -z "${!v:-}" || "${!v}" =~ ^(true|false)$ ]] || die "$v harus true|false"
+  prev=$(sed -n "s/^${v}=\(true\|false\)$/\1/p" "$COMPOSE_DIR/.env" 2> /dev/null || true)
+  printf -v "${v}_EFF" '%s' "${!v:-${prev:-false}}"
+done
 
 echo "==> Menulis .env (non-secret)"
 cat > "$COMPOSE_DIR/.env" <<EOF
@@ -251,7 +265,9 @@ EFN_WG_HTTPS_PORT=${EFN_WG_HTTPS_PORT}
 EFN_WG_OUTLET_CIDR=${EFN_WG_OUTLET_CIDR}
 EFN_WG_STAFF_CIDR=${EFN_WG_STAFF_CIDR}
 EFN_INTERNAL_EXTRA_CIDR=127.0.0.1/32
+ACME_DNS_PROVIDER=${ACME_DNS_PROVIDER}
 ACME_DNS_TOKEN_ENV=${ACME_DNS_TOKEN_ENV}
+ACME_SERVER=${ACME_SERVER}
 MARKET_SCOUT_PHOTO_RETENTION_DAYS=${MARKET_SCOUT_PHOTO_RETENTION_DAYS:-90}
 CH_MART_RETENTION_YEARS=${CH_MART_RETENTION_YEARS:-5}
 CONSENT_LOCATION_VERSION=${CONSENT_LOCATION_VERSION:-}
@@ -260,6 +276,8 @@ CONSENT_MARKETING_VERSION=${CONSENT_MARKETING_VERSION:-}
 CONSENT_MARKETING_TEXT_SHA256=${CONSENT_MARKETING_TEXT_SHA256:-}
 DSAR_DELETE_GRACE_DAYS=${DSAR_DELETE_GRACE_DAYS:-7}
 ETL_ENABLE_ODOO=${ETL_ENABLE_ODOO_EFF}
+ETL_ENABLE_GL=${ETL_ENABLE_GL_EFF}
+ETL_AUDIT_COPY_ENABLED=${ETL_AUDIT_COPY_ENABLED_EFF}
 EOF
 chmod 0640 "$COMPOSE_DIR/.env"
 
@@ -274,10 +292,12 @@ echo "==> Menulis docker-compose.host.yml"
   done
 } > "$COMPOSE_DIR/docker-compose.host.yml"
 
-echo "==> ACME email/provider & domain target probe"
+echo "==> ACME email (resolver HTTP-01 Traefik) & domain target probe"
+# DNS-01 (wg-https) bukan lagi di Traefik: service acme-dns membaca ACME_* dari .env (SEC-37)
 sed -i "s|email: \".*\"|email: \"${ACME_EMAIL}\"|" "$BASE/traefik/traefik.yml"
-sed -i "s|provider: cloudflare|provider: ${ACME_DNS_PROVIDER}|" "$BASE/traefik/traefik.yml"
 sed -i "s|efn\.local|${TRAEFIK_DOMAIN}|g" "$BASE/observability/targets/blackbox-https.yml"
+# SEC-37: SNI probe sertifikat wg-https (module tls_wg_public)
+sed -i "s|server_name: erp\.efn\.local|server_name: erp.${TRAEFIK_DOMAIN}|" "$BASE/observability/blackbox.yml"
 
 echo "==> Login GHCR"
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
@@ -379,15 +399,26 @@ fi
 if [[ -s "$ETL_GRANTS_SQL" ]]; then
   if "${DC[@]}" exec -T postgres psql -X -q -t -A -U efn_odoo -d efn_odoo \
        -c "SELECT to_regclass('public.pos_order') IS NOT NULL" 2> /dev/null | grep -qx t; then
+    # G12: grant memuat efn_audit_log.origin_user_id (efn_audit >= 19.0.1.2.0). Pesan jelas bila modul belum
+    # di-upgrade (grant sengaja gagal ON_ERROR_STOP; job lama tetap jalan dengan grant sebelumnya).
+    "${DC[@]}" exec -T postgres psql -X -q -t -A -U efn_odoo -d efn_odoo -c \
+      "SELECT 1 FROM information_schema.columns WHERE table_name='efn_audit_log' AND column_name='origin_user_id'" \
+      | grep -qx 1 || die "efn_audit belum >= 19.0.1.2.0 (kolom origin_user_id tidak ada): jalankan upgrade modul
+    (docs/runbooks/dev-stack-boot.md §3a / runbook rilis Odoo) lalu ulangi deploy - grant ETL & job GL/audit menunggu"
     echo "==> Grant ETL di DB Odoo ($(basename "$ETL_GRANTS_SQL"))"
     "${DC[@]}" exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U efn_odoo -d efn_odoo -f - < "$ETL_GRANTS_SQL" \
       || die "grant ETL di DB Odoo gagal"
-    # R5 (gelombang 9): job fact_sales_line aktif otomatis setelah grant sukses, kecuali dimatikan eksplisit
-    # (ETL_ENABLE_ODOO=false di GitHub Environment vars).
-    if [[ -z "${ETL_ENABLE_ODOO:-}" && "$ETL_ENABLE_ODOO_EFF" != "true" && ",${COMPOSE_PROFILES}," == *",data,"* ]]; then
-      sed -i 's/^ETL_ENABLE_ODOO=.*/ETL_ENABLE_ODOO=true/' "$COMPOSE_DIR/.env"
-      "${DC[@]}" up -d etl
-    fi
+    # R5 (gelombang 9) + G12: job ETL Odoo aktif otomatis setelah grant sukses, kecuali dimatikan eksplisit
+    # (<VAR>=false di GitHub Environment vars).
+    etl_changed=0
+    for v in ETL_ENABLE_ODOO ETL_ENABLE_GL ETL_AUDIT_COPY_ENABLED; do
+      eff_name="${v}_EFF"
+      if [[ -z "${!v:-}" && "${!eff_name}" != "true" && ",${COMPOSE_PROFILES}," == *",data,"* ]]; then
+        sed -i "s/^${v}=.*/${v}=true/" "$COMPOSE_DIR/.env"
+        etl_changed=1
+      fi
+    done
+    [[ "$etl_changed" == 0 ]] || "${DC[@]}" up -d etl
   else
     echo "    DB efn_odoo belum ter-install (pos_order belum ada) - grant ETL dilewati, ulangi deploy setelah install"
   fi

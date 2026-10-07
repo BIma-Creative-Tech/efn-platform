@@ -41,3 +41,16 @@ modules:
       fail_if_not_ssl: true
       tls_config:
         insecure_skip_verify: false
+
+  # SEC-37 (gel. 12): sertifikat Let's Encrypt host wg-https (erp./bi./ops./status., satu sertifikat SAN dari service
+  # acme-dns) diprobe langsung ke traefik:8443 dengan SNI erp.<domain>, verifikasi CA publik (root sistem image).
+  # efn.local diganti TRAEFIK_DOMAIN oleh scripts/deploy.sh. Dev: sertifikat self-signed -> probe gagal (wajar).
+  tls_wg_public:
+    prober: tcp
+    timeout: 10s
+    tcp:
+      preferred_ip_protocol: ip4
+      tls: true
+      tls_config:
+        server_name: erp.efn.local
+        insecure_skip_verify: false

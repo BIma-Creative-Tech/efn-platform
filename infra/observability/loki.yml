@@ -46,6 +46,10 @@ limits_config:
     - selector: '{stream="efn_audit_sink"}'
       priority: 1
       period: 9600h
+    # G12: jejak deploy/backup host (promtail-journal, prod) = log kontrol keamanan, retensi sama dengan sink audit
+    - selector: '{job="host-journal"}'
+      priority: 2
+      period: 9600h
   ingestion_rate_mb: 16
   ingestion_burst_size_mb: 32
 

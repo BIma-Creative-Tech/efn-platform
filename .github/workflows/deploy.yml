@@ -226,6 +226,8 @@ jobs:
           EFN_WG_STAFF_CIDR: ${{ vars.EFN_WG_STAFF_CIDR || '10.89.0.0/16' }}
           ACME_DNS_PROVIDER: ${{ vars.ACME_DNS_PROVIDER || 'cloudflare' }}
           ACME_DNS_TOKEN_ENV: ${{ vars.ACME_DNS_TOKEN_ENV || 'CF_DNS_API_TOKEN' }}
+          # SEC-37: kosong = Let's Encrypt produksi; isi URL staging LE untuk uji perdana service acme-dns
+          ACME_SERVER: ${{ vars.ACME_SERVER }}
           RABBITMQ_STRICT_PERMISSIONS: ${{ vars.RABBITMQ_STRICT_PERMISSIONS || 'true' }}
           MARKET_SCOUT_PHOTO_RETENTION_DAYS: ${{ vars.MARKET_SCOUT_PHOTO_RETENTION_DAYS || '90' }}
           CH_MART_RETENTION_YEARS: ${{ vars.CH_MART_RETENTION_YEARS || '5' }}
@@ -238,6 +240,9 @@ jobs:
           DSAR_DELETE_GRACE_DAYS: ${{ vars.DSAR_DELETE_GRACE_DAYS || '7' }}
           # R5: kosong = job ETL Odoo aktif otomatis setelah grant di DB Odoo sukses (deploy.sh)
           ETL_ENABLE_ODOO: ${{ vars.ETL_ENABLE_ODOO }}
+          # G12: kosong = aktif otomatis setelah grant (butuh efn_audit >= 19.0.1.2.0)
+          ETL_ENABLE_GL: ${{ vars.ETL_ENABLE_GL }}
+          ETL_AUDIT_COPY_ENABLED: ${{ vars.ETL_AUDIT_COPY_ENABLED }}
         # IMAGE_* TIDAK dikirim lewat env (SEC-42): host mengambilnya dari manifest bertanda tangan.
         run: |
           set -euo pipefail
@@ -245,10 +250,10 @@ jobs:
           vars=(TRAEFIK_DOMAIN ACME_EMAIL APP_ENV GHCR_USER GHCR_TOKEN COMPOSE_PROFILES PG_SUPERUSER
                 WHATSAPP_ENABLED WHATSAPP_PHONE_NUMBER_ID WHATSAPP_OTP_TEMPLATE
                 PAYMENT_PROVIDER EFN_PUBLIC_BIND EFN_WG_BIND EFN_WG_HTTPS_PORT EFN_WG_OUTLET_CIDR EFN_WG_STAFF_CIDR
-                ACME_DNS_PROVIDER ACME_DNS_TOKEN_ENV RABBITMQ_STRICT_PERMISSIONS
+                ACME_DNS_PROVIDER ACME_DNS_TOKEN_ENV ACME_SERVER RABBITMQ_STRICT_PERMISSIONS
                 MARKET_SCOUT_PHOTO_RETENTION_DAYS CH_MART_RETENTION_YEARS
                 CONSENT_LOCATION_VERSION CONSENT_LOCATION_TEXT_SHA256 CONSENT_MARKETING_VERSION
-                CONSENT_MARKETING_TEXT_SHA256 DSAR_DELETE_GRACE_DAYS ETL_ENABLE_ODOO
+                CONSENT_MARKETING_TEXT_SHA256 DSAR_DELETE_GRACE_DAYS ETL_ENABLE_ODOO ETL_ENABLE_GL ETL_AUDIT_COPY_ENABLED
                 EFN_PKI_INTERMEDIATE_KEY EFN_PKI_INTERMEDIATE_CRT EFN_PKI_ROOT_CRT EFN_PKI_EXTRA_TRUST)
           rel="$RUNNER_TEMP/efn-release"
           umask 077

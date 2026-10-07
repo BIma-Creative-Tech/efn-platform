@@ -152,6 +152,20 @@ groups:
           description: "WhatsApp Cloud API menolak/time-out. Promo ber-OTP di POS tidak bisa dipakai pelanggan."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/otp-failure-rate.md
 
+      # SEC-34 (G12 BFF): ALTCHA adaptif naik ke level 3 (biaya PoW maksimum) bila rate limit per IP atau anggaran
+      # OTP global hampir habis. Lonjakan level 3 = indikasi serangan SMS/WhatsApp pumping atau bot login.
+      - alert: EfnAltchaMaxLevelSpike
+        expr: sum(increase(efn_altcha_challenge_total{level="3"}[15m])) > 50
+        for: 5m
+        labels:
+          severity: warning
+          team: security
+          metric_status: proposed
+        annotations:
+          summary: "ALTCHA level 3 diterbitkan {{ $value | humanize }} kali dalam 15 menit"
+          description: "Challenge biaya maksimum melonjak: rate limit per IP / anggaran OTP global hampir habis (dugaan OTP pumping)."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/otp-failure-rate.md#altcha-level-3
+
   # ─────────────────────────── Backup & DR (R-T08) ───────────────────────────
   # Metrik efn_backup_* / efn_restore_test_* ditulis scripts/backup.sh & scripts/restore-test.sh (textfile collector).
   - name: efn-backup
@@ -257,17 +271,17 @@ groups:
   - name: efn-tls
     rules:
       - alert: EfnCertExpiringSoon
-        expr: (probe_ssl_earliest_cert_expiry{job="probe-https"} - time()) / 86400 < 14
+        expr: (probe_ssl_earliest_cert_expiry{job=~"probe-https|probe-wg-tls"} - time()) / 86400 < 14
         for: 1h
         labels:
           severity: warning
         annotations:
           summary: "Sertifikat {{ $labels.instance }} kedaluwarsa dalam {{ $value | humanize }} hari"
-          description: "Perpanjangan otomatis ACME Traefik seharusnya terjadi 30 hari sebelum kedaluwarsa."
+          description: "Perpanjangan otomatis (Traefik HTTP-01 untuk host publik, service acme-dns untuk wg-https) seharusnya terjadi jauh sebelum kedaluwarsa."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/tls-cert-expiry.md
 
       - alert: EfnCertExpiryCritical
-        expr: (probe_ssl_earliest_cert_expiry{job="probe-https"} - time()) / 86400 < 3
+        expr: (probe_ssl_earliest_cert_expiry{job=~"probe-https|probe-wg-tls"} - time()) / 86400 < 3
         for: 10m
         labels:
           severity: critical
@@ -275,6 +289,19 @@ groups:
           summary: "Sertifikat {{ $labels.instance }} kedaluwarsa dalam < 3 hari"
           description: "Super-App, API, dan ERP akan ditolak browser/aplikasi."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/tls-cert-expiry.md
+
+      # SEC-37: Traefik menyajikan sertifikat yang tidak valid publik untuk erp. (acme-dns belum pernah menerbitkan,
+      # volume acme-dns-certs kosong, atau rantai salah). Tanpa ini kegagalan penerbitan PERTAMA tidak terlihat oleh
+      # alert kedaluwarsa (metrik expiry tidak ada saat handshake gagal). Dev: selalu gagal (self-signed) - wajar.
+      - alert: EfnWgCertProbeFailed
+        expr: probe_success{job="probe-wg-tls"} == 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sertifikat publik wg-https (erp./bi./ops./status.) tidak valid"
+          description: "Handshake TLS ke traefik:8443 dengan SNI erp. gagal diverifikasi CA publik. POS outlet akan menolak koneksi."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/acme-dns-token.md#5-operasi-service-acme-dns
 
   # ─────────────────────────── PKI internal (docs/04 §7.1) ───────────────────────────
   # Dua sumber: (1) probe handshake TLS ke listener internal (probe-internal-tls), (2) metrik textfile

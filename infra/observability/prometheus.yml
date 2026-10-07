@@ -81,7 +81,8 @@ scrape_configs:
         regex: '172\.30\.1\.\d+:9464'
         action: keep
 
-  # ai-ocr-worker: metrik HTTPS di :9100 (METRICS_TLS_*; mewajibkan sertifikat klien CA internal)
+  # ai-ocr-worker: metrik HTTPS :9100 = sidecar ghostunnel ocr-worker-metrics-tls (mTLS --allow-cn=prometheus, E12
+  # ditutup gel. 12); worker sendiri hanya di loopback :9101.
   - job_name: ocr-worker
     metrics_path: /metrics
     scheme: https
@@ -253,6 +254,28 @@ scrape_configs:
       - target_label: __address__
         replacement: blackbox-exporter:9115
 
+  # SEC-37: sertifikat DNS-01 host wg-https (service acme-dns -> volume -> Traefik). Satu target cukup: satu sertifikat
+  # SAN untuk erp./bi./ops./status. Alert EfnCertExpiringSoon/Critical dan EfnWgCertProbeFailed.
+  - job_name: probe-wg-tls
+    metrics_path: /probe
+    scrape_interval: 5m
+    scheme: https
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+      cert_file: /run/secrets/tls_server_crt
+      key_file: /run/secrets/tls_server_key
+      server_name: blackbox-exporter
+    params:
+      module: [tls_wg_public]
+    static_configs:
+      - targets: ["traefik:8443"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
   # Probe HTTPS publik (lewat Cloudflare/Traefik): ketersediaan + masa berlaku sertifikat publik.
   # Target di targets/blackbox-https.yml; scripts/deploy.sh mengganti efn.local dengan TRAEFIK_DOMAIN.
   - job_name: probe-https

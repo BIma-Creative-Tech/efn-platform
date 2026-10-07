@@ -1,0 +1,52 @@
+# Aturan ruler Loki gelombang 12 (devsecops): alert dari LOG yang tidak punya metrik Prometheus.
+# Label `service` = label Docker container (promtail.yml), tidak dapat diubah proses lain -> container lain tidak bisa
+# memalsukan baris `service="etl"`. Runbook: docs/runbooks/etl-audit-copy.md, docs/runbooks/s3-gateway-denied.md;
+# insiden: docs/runbooks/security-incident.md.
+groups:
+  - name: efn-etl-audit-copy
+    interval: 1m
+    rules:
+      # Rekonsiliasi salinan audit (services/etl/efn_etl/audit_job.py) mencatat WARNING hanya bila ada anomali:
+      # log Odoo hilang/berubah dibanding salinan ClickHouse, celah seq, rantai hash putus = indikasi tamper (SEC-43/46).
+      - alert: EfnAuditReconAnomaly
+        expr: |
+          sum (count_over_time({service="etl"} |= "EFN_AUDIT_RECON" |= " WARNING " [15m])) > 0
+        labels:
+          severity: critical
+          team: security
+        annotations:
+          summary: "ETL: rekonsiliasi salinan audit Odoo menemukan anomali"
+          description: "Log audit Odoo dan salinan tamper-evident ClickHouse tidak cocok. Perlakukan sebagai dugaan insiden sampai terbukti sebaliknya."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/etl-audit-copy.md#efnauditreconanomaly"
+      # Job salinan gagal berulang -> jendela tanpa salinan (bukti eksternal) melebar.
+      - alert: EfnAuditCopyFailing
+        expr: |
+          sum (count_over_time({service="etl"} |= "job=audit_copy gagal" [1h])) >= 2
+        labels:
+          severity: warning
+          team: data
+        annotations:
+          summary: "ETL: job audit_copy gagal >= 2 kali dalam 1 jam"
+          description: "Salinan audit tamper-evident tidak berjalan (grant, versi efn_audit, ClickHouse). Log Odoo tetap aman, tetapi jejak eksternal tertunda."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/etl-audit-copy.md#efnauditcopyfailing"
+
+  - name: efn-s3-gateway
+    interval: 1m
+    rules:
+      # Filter L7 object storage (ADR-030, SEC-41). Format log HAProxy: "<ip> <method> <path> <status> ...".
+      # Klien sah (BFF, ocr-worker, WAL-G, Prometheus) hampir tidak pernah ditolak; burst 403 dari satu IP container =
+      # percobaan retention/governance bypass, presigned, atau varian encoded -> indikasi container terkompromi.
+      - alert: EfnS3GatewayDeniedBurst
+        expr: |
+          sum by (client) (
+            count_over_time({service="s3-gateway"}
+              | regexp `^(?P<client>\S+) (?P<method>\S+) \S+ (?P<status>\d{3}) ` | status = "403" [5m])
+          ) > 10
+        for: 2m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "s3-gateway: > 10 permintaan ditolak (403) dari {{ $labels.client }} dalam 5 menit"
+          description: "Klien internal mencoba operasi object storage yang diblok filter. Identifikasi container dari IP lalu ikuti runbook."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/s3-gateway-denied.md"

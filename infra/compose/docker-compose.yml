@@ -82,7 +82,9 @@ networks:
       config: [{ subnet: 172.30.6.0/24 }]
 
 volumes:
-  traefik-acme:
+  traefik-acme:          # acme.json resolver HTTP-01 host publik (Traefik)
+  acme-dns-data:         # SEC-37: kunci akun ACME + sertifikat asli lego, HANYA service acme-dns
+  acme-dns-certs:        # SEC-37: crt/key berversi + acme-dns.yml, ditulis acme-dns, dibaca Traefik (ro)
   pg-data:
   redis-data:
   rabbitmq-data:
@@ -271,6 +273,8 @@ services:
     depends_on:
       docker-socket-proxy-tls:
         condition: service_healthy
+      acme-dns-init:   # titik mount base/ dev/ di volume acme-dns-certs (SEC-37)
+        condition: service_completed_successfully
     command:
       - --configFile=/etc/traefik/traefik.yml
     # Publik (websecure, lewat Cloudflare) di IP publik host; `wg-https` (ADR-023, host internal erp./bi./ops./status.)
@@ -287,12 +291,16 @@ services:
       - EFN_WG_STAFF_CIDR=${EFN_WG_STAFF_CIDR:-10.89.0.0/16}
       # Tambahan allowlist (dev: bridge Docker Desktop). Prod: tidak diset (127.0.0.1/32).
       - EFN_INTERNAL_EXTRA_CIDR=${EFN_INTERNAL_EXTRA_CIDR:-127.0.0.1/32}
-      # ACME DNS-01 (resolver letsencrypt-dns, entrypoint wg-https). lego membaca <VAR>_FILE.
-      - ${ACME_DNS_TOKEN_ENV:-CF_DNS_API_TOKEN}_FILE=/run/secrets/acme_dns_api_token
-    secrets: [efn_ca_crt, tls_traefik_crt, tls_traefik_key, acme_dns_api_token]
+    # SEC-37: Traefik (internet-facing) TIDAK memegang token DNS. Sertifikat host wg-https (erp./bi./ops./status.)
+    # diterbitkan service `acme-dns` dan dibaca dari volume acme-dns-certs (read-only) lewat provider file.
+    secrets: [efn_ca_crt, tls_traefik_crt, tls_traefik_key]
     volumes:
       - ../traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      # Subdirektori: provider file Traefik membaca rekursif; dev menambah /etc/traefik/dynamic/dev (edge-dev.yml)
+      # SEC-37: volume acme-dns-certs = direktori provider file itu sendiri (read-only). Watch Traefik (fsnotify)
+      # TIDAK rekursif -> acme-dns.yml harus di puncak agar sertifikat baru dimuat tanpa restart (diuji
+      # scripts/test-acme-dns.sh). Konfigurasi statis di subdirektori (dibaca rekursif saat start/reload):
+      # base/ (di bawah) dan dev/ (override dev); titik mount dibuat acme-dns-init.
+      - acme-dns-certs:/etc/traefik/dynamic:ro
       - ../traefik/dynamic:/etc/traefik/dynamic/base:ro
       - traefik-acme:/acme
     networks: [edge, internal, socket-proxy]
@@ -336,6 +344,73 @@ services:
       retries: 3
     labels:
       service: traefik-metrics-tls
+
+  # SEC-37 (ADR-023): ACME DNS-01 untuk host wg-https, terpisah dari Traefik. lego resmi (image ber-digest) + skrip
+  # infra/acme/acme-dns.sh: TANPA port, hanya network egress (CA + API DNS), satu-satunya pemegang token DNS.
+  # Menulis crt/key berversi + acme-dns.yml ke volume acme-dns-certs (0640 grup 0) -> Traefik hot-reload.
+  # Dev/CI: token `disabled` -> idle (tanpa request ACME). Uji: scripts/test-acme-dns.sh (Pebble).
+  # Runbook: docs/runbooks/acme-dns-token.md. Volume acme-dns-data (kunci akun ACME) hanya di sini.
+  acme-dns-init:
+    <<: *common
+    image: goacme/lego:v5.5.2@sha256:1944e8c36055beec47c7de6f15202b41128be75eea0ffa257f0c14d93c5155fd
+    profiles: ["core"]
+    restart: "no"
+    user: "0:0"
+    entrypoint: ["/bin/sh", "/opt/efn-acme/acme-dns-init.sh"]
+    volumes:
+      - ../acme:/opt/efn-acme:ro
+      - acme-dns-data:/data
+      - acme-dns-certs:/certs
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    deploy:
+      resources:
+        limits: { memory: 32M }
+    labels:
+      service: acme-dns-init
+
+  acme-dns:
+    <<: *common
+    image: goacme/lego:v5.5.2@sha256:1944e8c36055beec47c7de6f15202b41128be75eea0ffa257f0c14d93c5155fd
+    profiles: ["core"]
+    depends_on:
+      acme-dns-init:
+        condition: service_completed_successfully
+    user: "65532:0"
+    init: true
+    entrypoint: ["/bin/sh", "/opt/efn-acme/acme-dns.sh"]
+    environment:
+      - ACME_DOMAINS=erp.${TRAEFIK_DOMAIN:-efn.local},bi.${TRAEFIK_DOMAIN:-efn.local},ops.${TRAEFIK_DOMAIN:-efn.local},status.${TRAEFIK_DOMAIN:-efn.local}
+      - ACME_EMAIL=${ACME_EMAIL:-ops@example.com}
+      - ACME_DNS_PROVIDER=${ACME_DNS_PROVIDER:-cloudflare}
+      # Staging ACME: https://acme-staging-v02.api.letsencrypt.org/directory (uji sebelum produksi, runbook §3)
+      - ACME_SERVER=${ACME_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
+      - ACME_TRAEFIK_DIR=/etc/traefik/dynamic
+      - LEGO_LOG_LEVEL=info
+      # lego membaca <VAR>_FILE (diuji scripts/test-acme-dns.sh): token tidak pernah di env/argv
+      - ${ACME_DNS_TOKEN_ENV:-CF_DNS_API_TOKEN}_FILE=/run/secrets/acme_dns_api_token
+    secrets: [acme_dns_api_token]
+    volumes:
+      - ../acme:/opt/efn-acme:ro
+      - acme-dns-data:/data
+      - acme-dns-certs:/certs
+    networks: [egress]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 64M }
+    labels:
+      service: acme-dns
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /data/.disabled || [ -n \"$$(find /data/.last-ok -mmin -1500 2>/dev/null)\" ]"]
+      interval: 5m
+      timeout: 5s
+      retries: 2
+      start_period: 10m
 
   # ───────────────────────── DATA LAYER ─────────────────────────
   # Image custom = postgres:16.6-bookworm@sha256:557fea37a744d5f4c8faab304b0a90858b53ab119735a88c131fd19dab802f36 + WAL-G (infra/backup/postgres). WAL di-archive ke MinIO (HTTPS, CA internal)
@@ -715,7 +790,7 @@ services:
       # ACME DNS-01 (browser POS tidak perlu CA internal). Tidak ada router erp. di websecure (publik).
       traefik.http.routers.odoo.rule: Host(`erp.${TRAEFIK_DOMAIN:-efn.local}`)
       traefik.http.routers.odoo.entrypoints: wg-https
-      traefik.http.routers.odoo.tls.certresolver: letsencrypt-dns
+      traefik.http.routers.odoo.tls: "true"   # sertifikat dari acme-dns (SEC-37), bukan resolver Traefik
       traefik.http.routers.odoo.middlewares: internal-only@file,secure-headers@file,odoo-block-dbmanager@file,ratelimit-odoo@file
       traefik.http.routers.odoo.service: odoo
       traefik.http.services.odoo.loadbalancer.server.port: "8443"
@@ -727,7 +802,7 @@ services:
         && (Path(`/web/login`) || PathPrefix(`/web/session/authenticate`) || PathPrefix(`/web/login/totp`))
       traefik.http.routers.odoo-login.priority: "200"
       traefik.http.routers.odoo-login.entrypoints: wg-https
-      traefik.http.routers.odoo-login.tls.certresolver: letsencrypt-dns
+      traefik.http.routers.odoo-login.tls: "true"   # sertifikat dari acme-dns (SEC-37), bukan resolver Traefik
       traefik.http.routers.odoo-login.middlewares: internal-only@file,secure-headers@file,ratelimit-odoo-login@file
       traefik.http.routers.odoo-login.service: odoo
       # XML-RPC / JSON-RPC / JSON-2 API Odoo 19 (SEC-22) diblok total (403). Integrasi server-to-server tidak
@@ -737,14 +812,14 @@ services:
         && (PathPrefix(`/xmlrpc`) || PathPrefix(`/jsonrpc`) || PathPrefix(`/json/2`))
       traefik.http.routers.odoo-rpc-block.priority: "300"
       traefik.http.routers.odoo-rpc-block.entrypoints: wg-https
-      traefik.http.routers.odoo-rpc-block.tls.certresolver: letsencrypt-dns
+      traefik.http.routers.odoo-rpc-block.tls: "true"   # sertifikat dari acme-dns (SEC-37), bukan resolver Traefik
       traefik.http.routers.odoo-rpc-block.middlewares: deny-all@file
       traefik.http.routers.odoo-rpc-block.service: odoo
       # Websocket (POS, bus)
       traefik.http.routers.odoo-ws.rule: Host(`erp.${TRAEFIK_DOMAIN:-efn.local}`) && PathPrefix(`/websocket`)
       traefik.http.routers.odoo-ws.priority: "250"
       traefik.http.routers.odoo-ws.entrypoints: wg-https
-      traefik.http.routers.odoo-ws.tls.certresolver: letsencrypt-dns
+      traefik.http.routers.odoo-ws.tls: "true"   # sertifikat dari acme-dns (SEC-37), bukan resolver Traefik
       traefik.http.routers.odoo-ws.middlewares: internal-only@file,secure-headers@file,ratelimit-odoo@file
       traefik.http.routers.odoo-ws.service: odoo-ws
       traefik.http.services.odoo-ws.loadbalancer.server.port: "8444"
@@ -1149,7 +1224,7 @@ services:
       traefik.http.routers.bi.rule: Host(`bi.${TRAEFIK_DOMAIN:-efn.local}`)
       # ADR-023/SEC-21: hanya wg-https + subnet staf (bukan LAN outlet)
       traefik.http.routers.bi.entrypoints: wg-https
-      traefik.http.routers.bi.tls.certresolver: letsencrypt-dns
+      traefik.http.routers.bi.tls: "true"   # sertifikat dari acme-dns (SEC-37), bukan resolver Traefik
       traefik.http.routers.bi.middlewares: internal-ops@file,secure-headers@file
       traefik.http.services.bi.loadbalancer.server.port: "3443"
       traefik.http.services.bi.loadbalancer.server.scheme: https
@@ -1224,6 +1299,10 @@ services:
       # R5: job fact_sales_line dari DB Odoo (butuh services/etl/sql/odoo-readonly-grants.sql; deploy.sh menerapkan
       # grant lalu mengaktifkan otomatis). Dev override: true.
       ETL_ENABLE_ODOO: ${ETL_ENABLE_ODOO:-false}
+      # G12: mart GL + salinan audit tamper-evident (services/etl/README.md). Grant yang sama (efn_audit >= 19.0.1.2.0);
+      # deploy.sh mengaktifkan otomatis setelah grant sukses. Dev override: true.
+      ETL_ENABLE_GL: ${ETL_ENABLE_GL:-false}
+      ETL_AUDIT_COPY_ENABLED: ${ETL_AUDIT_COPY_ENABLED:-false}
       # DSAR ClickHouse (docs/04 §8.4): publish privacy.erasure.completed sebagai efn-etl (write amq.default saja)
       AMQP_URL: amqps://efn-etl@rabbitmq:5671
       RABBITMQ_PASSWORD_FILE: /run/secrets/rabbitmq_password_etl
@@ -1345,12 +1424,15 @@ services:
       MINIO_BUCKET_MARKET_SCOUT: market-scout
       OCR_CONFIDENCE_THRESHOLD: "0.80"
       NAME_SIMILARITY_THRESHOLD: "0.75"
-      METRICS_PORT: "9100"
+      # E12 ditutup (gel. 12): worker tetap HTTPS+mTLS tetapi HANYA di loopback :9101 (prometheus-client tidak bisa
+      # membatasi CN). Dari network: ocr-worker-metrics-tls :9100 (--allow-cn=prometheus) -> 127.0.0.1:9102
+      # ocr-worker-metrics-bridge (ghostunnel client, TLS ke worker, verify-cn ocr-worker) -> 127.0.0.1:9101.
+      # Healthcheck worker tetap ke 127.0.0.1:${METRICS_PORT}.
+      METRICS_PORT: "9101"
+      METRICS_BIND_ADDRESS: 127.0.0.1
       METRICS_TLS_CERT_FILE: /run/secrets/tls_ocr_worker_crt
       METRICS_TLS_KEY_FILE: /run/secrets/tls_ocr_worker_key
       METRICS_TLS_CA_FILE: /run/secrets/efn_ca_crt
-      # /metrics mewajibkan sertifikat klien dari CA internal (Prometheus); pembatasan CN tidak didukung
-      # prometheus-client -> pengecualian parsial E12 (ADR-022)
       METRICS_TLS_CLIENT_CA_FILE: /run/secrets/efn_ca_crt
     secrets:
       - rabbitmq_password_ocr
@@ -1375,6 +1457,59 @@ services:
       start_period: 60s
     labels:
       service: ocr-worker
+
+  # E12 (ADR-022) ditutup: /metrics worker dari network hanya untuk CN prometheus. Dua sidecar di namespace worker
+  # (di-recreate bersama ocr-worker): server mTLS :9100 -> loopback :9102 -> client TLS -> worker 127.0.0.1:9101.
+  # Hop plaintext hanya 127.0.0.1:9102 di namespace worker (pola E1). Worker sendiri tetap mewajibkan sertifikat
+  # klien CA internal; bridge memakai sertifikat ocr-worker (EKU server+client) dan memverifikasi CN ocr-worker.
+  ocr-worker-metrics-tls:
+    <<: *ghostunnel
+    profiles: ["ai"]
+    network_mode: "service:ocr-worker"
+    depends_on: [ocr-worker-metrics-bridge]
+    command:
+      - server
+      - --listen=0.0.0.0:9100
+      - --target=127.0.0.1:9102
+      - --cert=/run/secrets/tls_ocr_worker_crt
+      - --key=/run/secrets/tls_ocr_worker_key
+      - --cacert=/run/secrets/efn_ca_crt
+      - --allow-cn=prometheus
+      - --status=http://127.0.0.1:6075
+      - --quiet=conns
+    secrets: [efn_ca_crt, tls_ocr_worker_crt, tls_ocr_worker_key]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6075/_status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: ocr-worker-metrics-tls
+
+  ocr-worker-metrics-bridge:
+    <<: *ghostunnel
+    profiles: ["ai"]
+    network_mode: "service:ocr-worker"
+    depends_on: [ocr-worker]
+    command:
+      - client
+      - --listen=127.0.0.1:9102
+      - --target=127.0.0.1:9101
+      - --override-server-name=ocr-worker
+      - --cert=/run/secrets/tls_ocr_worker_crt
+      - --key=/run/secrets/tls_ocr_worker_key
+      - --cacert=/run/secrets/efn_ca_crt
+      - --verify-cn=ocr-worker
+      - --status=http://127.0.0.1:6076
+      - --quiet=conns
+    secrets: [efn_ca_crt, tls_ocr_worker_crt, tls_ocr_worker_key]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6076/_status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: ocr-worker-metrics-bridge
 
   # ───────────────────────── OBSERVABILITY ─────────────────────────
   # Endpoint HTTP komponen exporter-toolkit hanya TLS (infra/observability/web-config.yml). Image busybox tidak
@@ -1525,7 +1660,7 @@ services:
       traefik.docker.network: efn_internal
       traefik.http.routers.ops.rule: Host(`ops.${TRAEFIK_DOMAIN:-efn.local}`)
       traefik.http.routers.ops.entrypoints: wg-https
-      traefik.http.routers.ops.tls.certresolver: letsencrypt-dns
+      traefik.http.routers.ops.tls: "true"   # sertifikat dari acme-dns (SEC-37), bukan resolver Traefik
       traefik.http.routers.ops.middlewares: internal-ops@file,secure-headers@file
       traefik.http.services.ops.loadbalancer.server.port: "3000"
       traefik.http.services.ops.loadbalancer.server.scheme: https
@@ -1554,7 +1689,7 @@ services:
       traefik.docker.network: efn_internal
       traefik.http.routers.status.rule: Host(`status.${TRAEFIK_DOMAIN:-efn.local}`)
       traefik.http.routers.status.entrypoints: wg-https
-      traefik.http.routers.status.tls.certresolver: letsencrypt-dns
+      traefik.http.routers.status.tls: "true"   # sertifikat dari acme-dns (SEC-37), bukan resolver Traefik
       traefik.http.routers.status.middlewares: internal-ops@file,secure-headers@file
       traefik.http.services.status.loadbalancer.server.port: "3001"
       traefik.http.services.status.loadbalancer.server.scheme: https

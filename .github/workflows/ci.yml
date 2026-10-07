@@ -285,6 +285,73 @@ jobs:
           path: odoo-test.log
           retention-days: 7
 
+  odoo-tour:
+    # Gelombang 12: test UI POS (OWL) nyata — HttpCase + tour di Chrome headless (tag efn_tour): OTP gate
+    # (online, tanpa pelanggan, offline) dan QRIS efn_gateway (paid, cancel). BFF di-mock server-side di test.
+    # Image = target `test` dari Dockerfile yang sama (runtime + Google Chrome); image produksi (target default)
+    # tidak memuat browser. DB terpisah dengan modul minimum: fixture TestPointOfSaleHttpCommon tidak cocok
+    # dengan 4 company efn_setup_company (user uji tidak punya akses pajak company lain).
+    name: Odoo POS UI tours (Chrome headless)
+    needs: changes
+    if: needs.changes.outputs.odoo == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16.6-bookworm@sha256:557fea37a744d5f4c8faab304b0a90858b53ab119735a88c131fd19dab802f36
+        env:
+          POSTGRES_USER: odoo
+          POSTGRES_PASSWORD: odoo-ci-only   # kredensial DB sementara CI, bukan secret
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U odoo"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      EFN_TOUR_MODULES: efn_pos_otp_gate,efn_pos_payment_gateway
+      # Jumlah test tour yang WAJIB berjalan (HttpCase di-skip diam-diam bila Chrome/websocket tidak ada).
+      EFN_TOUR_MIN_TESTS: "5"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Build image target test (runtime + Chrome headless)
+        env:
+          DOCKER_BUILDKIT: "1"
+        run: docker build --target test -t efn-odoo:ci-test services/odoo
+      - name: Install + tour (--test-tags efn_tour)
+        run: |
+          set -o pipefail
+          # --init: reaping proses Chrome; --no-healthcheck: curl HEALTHCHECK image tidak relevan saat test.
+          docker run --rm --init --no-healthcheck --shm-size=1g --network host --entrypoint odoo efn-odoo:ci-test \
+            --db_host=127.0.0.1 --db_port=5432 --db_user=odoo --db_password=odoo-ci-only \
+            --addons-path=/mnt/extra-addons,/usr/lib/python3/dist-packages/odoo/addons \
+            -d efn_tour -i "$EFN_TOUR_MODULES" \
+            --test-tags efn_tour --stop-after-init --log-level=test --workers=0 --max-cron-threads=0 \
+            2>&1 | tee odoo-tour.log
+      - name: Periksa log (ERROR/CRITICAL, skip, jumlah test)
+        if: always()
+        run: |
+          if grep -E '^[0-9-]+ [0-9:,]+ [0-9]+ (ERROR|CRITICAL) ' odoo-tour.log; then
+            echo "::error::Tour POS melaporkan ERROR"; exit 1
+          fi
+          if grep -E 'Chrome executable not found|websocket-client module is not installed|Failed to detect chrome' \
+            odoo-tour.log; then
+            echo "::error::Tour di-skip (browser tidak tersedia)"; exit 1
+          fi
+          ran=$(grep -oE 'odoo.tests.result: 0 failed, 0 error\(s\) of [0-9]+ tests' odoo-tour.log \
+            | grep -oE '[0-9]+ tests' | grep -oE '[0-9]+' | tail -1)
+          if [ -z "$ran" ] || [ "$ran" -lt "$EFN_TOUR_MIN_TESTS" ]; then
+            echo "::error::hanya ${ran:-0} test tour berjalan (minimal $EFN_TOUR_MIN_TESTS)"; exit 1
+          fi
+          echo "tour: $ran test lolos"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        if: always()
+        with:
+          name: odoo-tour-log
+          path: odoo-tour.log
+          retention-days: 7
+
   infra:
     name: Infra (compose, observability, shellcheck, hadolint, yamllint)
     needs: changes
@@ -391,7 +458,8 @@ jobs:
           shellcheck --version
           shellcheck scripts/*.sh scripts/host/efn-deploy scripts/host/*.sh scripts/smoke/*.sh infra/backup/postgres/*.sh \
             infra/postgres/init/*.sh infra/wireguard/*.sh
-          shellcheck -s sh infra/minio/*.sh infra/redis/*.sh infra/rabbitmq/*.sh infra/clickhouse/*.sh infra/s3-gateway/*.sh
+          shellcheck -s sh infra/minio/*.sh infra/redis/*.sh infra/rabbitmq/*.sh infra/clickhouse/*.sh infra/s3-gateway/*.sh \
+            infra/acme/*.sh scripts/acme-test/*.sh
       # Filter L7 object storage (ADR-030): sintaks HAProxy valid dengan sertifikat dummy dari gen-pki.sh
       - name: haproxy -c (infra/s3-gateway/haproxy.cfg)
         run: |
@@ -409,6 +477,18 @@ jobs:
           docker run --rm -v "$PWD:/src:ro" \
             python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea \
             bash /src/scripts/host/test-efn-deploy.sh
+      # SEC-37: ACME DNS-01 terpisah dari Traefik, diuji terhadap Pebble (server ACME uji Let's Encrypt) di network
+      # --internal sekali pakai: penerbitan, hot-reload Traefik tanpa restart, izin volume, mode nonaktif, <VAR>_FILE
+      - name: acme-dns regression (Pebble)
+        run: bash scripts/test-acme-dns.sh
+      - name: Traefik tidak memegang token DNS (SEC-37)
+        working-directory: infra/compose
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile core config --format json \
+            | jq -e '(.services.traefik.secrets // [] | map(.source) | index("acme_dns_api_token")) == null
+                     and ([.services.traefik.environment // {} | keys[] | select(test("_FILE$|TOKEN"))] | length) == 0
+                     and (.services["acme-dns"].ports // [] | length) == 0
+                     and (.services["acme-dns"].networks | keys) == ["egress"]'
       - name: hadolint
         uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf  # v3.1.0
         with:
@@ -421,7 +501,7 @@ jobs:
   ci-gate:
     name: CI gate
     if: always()
-    needs: [node, python, pytest, odoo-addons, odoo-test, infra]
+    needs: [node, python, pytest, odoo-addons, odoo-test, odoo-tour, infra]
     runs-on: ubuntu-latest
     permissions: {}
     steps:

@@ -115,15 +115,6 @@ certificatesResolvers:
       storage: /acme/acme.json
       httpChallenge:
         entryPoint: web
-  # Host internal di wg-https (ADR-023 butir 2): DNS-01 -> tidak butuh port 80 publik maupun record A publik.
-  # Token: secret acme_dns_api_token (<ACME_DNS_TOKEN_ENV>_FILE di compose). Provider diganti deploy.sh dari
-  # ACME_DNS_PROVIDER (default cloudflare).
-  letsencrypt-dns:
-    acme:
-      email: "ops@example.com"   # ganti via sed di scripts/deploy.sh dari ACME_EMAIL
-      storage: /acme/acme-dns.json
-      dnsChallenge:
-        provider: cloudflare
-        resolvers:
-          - "1.1.1.1:53"
-          - "9.9.9.9:53"
+  # Host internal di wg-https (ADR-023 butir 2, DNS-01) TIDAK lagi diterbitkan Traefik (SEC-37): service `acme-dns`
+  # (infra/acme/acme-dns.sh, tanpa port, satu-satunya pemegang token DNS) menulis sertifikat ke volume acme-dns-certs
+  # = /etc/traefik/dynamic (read-only, provider file di atas). Router wg-https memakai `tls: true` tanpa certresolver.

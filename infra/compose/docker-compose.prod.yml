@@ -150,3 +150,36 @@ services:
     deploy:
       resources:
         limits: { cpus: "2", memory: 2G }
+
+  # Gelombang 12: journald host (efn-deploy, efn-backup, efn-restore-test) -> Loki. HANYA prod/staging (Linux host
+  # dengan journald persisten /var/log/journal). Read-only, tanpa network selain internal (Loki via loki-tls mTLS,
+  # sertifikat promtail). Root di container TANPA capability: file journal milik root:systemd-journal 0640 -> dibaca
+  # lewat kepemilikan uid 0. Runbook: docs/runbooks/host-journal-loki.md.
+  promtail-journal:
+    image: grafana/promtail:3.2.1@sha256:bf617e9d67e80247a59f717f9c1ad388d7d32dc0a1d29abd5799516d15e0a9b5
+    profiles: ["observability"]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5", labels: "service" }
+    security_opt: [no-new-privileges:true]
+    command: -config.file=/etc/promtail/promtail-journal.yml
+    secrets: [efn_ca_crt, tls_promtail_crt, tls_promtail_key]
+    volumes:
+      - ../observability/promtail-journal.yml:/etc/promtail/promtail-journal.yml:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+    networks: [internal]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 128M }
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9081"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: promtail-journal

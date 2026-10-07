@@ -94,6 +94,22 @@ check_compose() {
        (if ([$c[] | select(startswith("--cacert="))] | length) > 0 then "1" else "0" end),
        ([$c[] | select(startswith("--allow-cn=") or startswith("--allow-uri="))] | length | tostring)] | @tsv' <<< "$json")
 
+  # 3b) ghostunnel mode client (bridge E12): wajib --cacert + --verify-cn, listen hanya loopback, tanpa
+  #     --disable-authentication / --unsafe-listen
+  while IFS=$'\t' read -r svc bad cacert verify loopback; do
+    [[ -z "$svc" ]] && continue
+    [[ "$bad" == "0" ]] || err "[$label] $svc: ghostunnel client dengan --disable-authentication/--unsafe-listen dilarang"
+    [[ "$cacert" == "1" && "$verify" -ge 1 ]] || err "[$label] $svc: ghostunnel client tanpa --cacert/--verify-cn"
+    [[ "$loopback" == "1" ]] || err "[$label] $svc: ghostunnel client harus --listen=127.0.0.1:<port>"
+  done < <(jq -r '
+      .services | to_entries[] | select((.value.image // "") | startswith("ghostunnel/")) |
+      (.value.command // []) as $c | select(($c | index("client")) != null) |
+      [.key,
+       ([$c[] | select(. == "--disable-authentication" or . == "--unsafe-listen")] | length | tostring),
+       (if ([$c[] | select(startswith("--cacert="))] | length) > 0 then "1" else "0" end),
+       ([$c[] | select(startswith("--verify-cn="))] | length | tostring),
+       (if ([$c[] | select(startswith("--listen=127.0.0.1:"))] | length) > 0 then "1" else "0" end)] | @tsv' <<< "$json")
+
   echo "check-encryption: compose ${label} diperiksa"
 }
 

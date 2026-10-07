@@ -1,6 +1,6 @@
 # Runbook Operasional EFN
 
-Indeks runbook untuk alert Prometheus (`infra/observability/alert-rules.yml`, anotasi `runbook_url`) dan prosedur operasional. Audiens: on-call IT EFN / vendor ops.
+Indeks runbook untuk alert Prometheus (`infra/observability/alert-rules.yml`) dan ruler Loki (`infra/observability/loki-rules/`) — anotasi `runbook_url` — serta prosedur operasional. Diperbarui gelombang 12 (7 Okt 2026). Audiens: on-call IT EFN / vendor ops.
 
 ## Konvensi di host staging/prod
 
@@ -27,6 +27,18 @@ Layout host: `/opt/efn/{compose,traefik,observability,backup,minio,clickhouse,po
 | EfnDiskUsageHigh, EfnDiskUsageCritical | warning / critical | [disk-usage.md](disk-usage.md) |
 | EfnCertExpiringSoon, EfnCertExpiryCritical | warning / critical | [tls-cert-expiry.md](tls-cert-expiry.md) |
 | EfnInternalTlsHandshakeFailed, EfnInternalCertExpiringSoon, EfnInternalCertExpiryCritical | critical / warning / critical | [internal-pki.md](internal-pki.md) |
+| EfnWgCertProbeFailed (sertifikat wg-https dari service `acme-dns`, SEC-37) | warning | [acme-dns-token.md](acme-dns-token.md#5-operasi-service-acme-dns) |
+| EfnAltchaMaxLevelSpike (ALTCHA adaptif level 3, SEC-34) | warning | [otp-failure-rate.md](otp-failure-rate.md#altcha-level-3) |
+
+### Alert dari log (ruler Loki, `infra/observability/loki-rules/`)
+
+| Alert | Severity | Runbook |
+|---|---|---|
+| EfnAuditControlChange, EfnAuditUnexpectedPurge, EfnAuditRetentionPurgeBurst (sink audit Odoo) | warning / critical / warning | [audit-sink-alerts.md](audit-sink-alerts.md) |
+| EfnAuditReconAnomaly, EfnAuditCopyFailing (salinan audit tamper-evident ETL) | critical / warning | [etl-audit-copy.md](etl-audit-copy.md) |
+| EfnS3GatewayDeniedBurst (burst 403 filter object storage) | warning | [s3-gateway-denied.md](s3-gateway-denied.md) |
+
+Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-incident.md](security-incident.md).
 
 ## Prosedur
 
@@ -41,6 +53,11 @@ Layout host: `/opt/efn/{compose,traefik,observability,backup,minio,clickhouse,po
 | Firewall origin (443 hanya Cloudflare + WireGuard) | [origin-firewall.md](origin-firewall.md) |
 | Enkripsi disk host (LUKS2) | [luks-disk.md](luks-disk.md) |
 | Kegagalan pelindungan data pribadi 3×24 jam (UU PDP) | [breach-response-72h.md](breach-response-72h.md) |
+| Insiden keamanan (deteksi, severity, containment, forensik) — pintu masuk | [security-incident.md](security-incident.md) |
+| Token DNS ACME, service `acme-dns` (sertifikat wg-https), uji staging LE | [acme-dns-token.md](acme-dns-token.md) |
+| Ubah grup/hak user Odoo (UI/RPC, bukan `odoo shell`); traceback JSON-RPC (sisa SEC-22) | [odoo-access-changes.md](odoo-access-changes.md) |
+| journald host (efn-deploy, backup) → Loki | [host-journal-loki.md](host-journal-loki.md) |
+| Boot stack dev di laptop (Docker Desktop/WSL2), upgrade modul Odoo dev | [dev-stack-boot.md](dev-stack-boot.md) |
 
 ## Baseline hardening container (`infra/compose/docker-compose.yml`)
 
@@ -57,5 +74,9 @@ Setiap service: `restart`, logging dibatasi 5×20 MB, `no-new-privileges`, limit
 | loki, prometheus, alertmanager, grafana, exporter | healthcheck Docker dinonaktifkan | endpoint hanya TLS dan image tanpa klien TLS ber-CA; dipantau `up`/probe Prometheus + Uptime Kuma |
 | docker-socket-proxy | satu-satunya yang me-mount `docker.sock` (ro), listen 127.0.0.1 | Traefik, Promtail, cAdvisor lewat sidecar ghostunnel mTLS :2376 (GET only) |
 | sidecar `*-tls` (ghostunnel) | `network_mode: service:<app>` | TLS untuk app tanpa TLS native; app listen 127.0.0.1 |
+| `ocr-worker-metrics-tls` + `ocr-worker-metrics-bridge` | dua ghostunnel (server mTLS `--allow-cn=prometheus` → loopback → client TLS) | worker HTTPS hanya di 127.0.0.1:9101; prometheus-client tidak bisa membatasi CN (E12 ditutup, gel. 12) |
+| `acme-dns-init` | root dengan CAP_CHOWN+FOWNER, `network_mode: none`, one-shot | chown volume `acme-dns-*` ke 65532:0 + titik mount `base/`, `dev/` (SEC-37) |
+| `acme-dns` | satu-satunya pemegang token DNS; tanpa port, hanya network `egress`, non-root 65532 | ACME DNS-01 terpisah dari Traefik (SEC-37) |
+| `promtail-journal` (prod) | mount `/var/log/journal` + `/etc/machine-id` read-only, root tanpa capability | journald host (efn-deploy, backup) → Loki |
 
 Di prod hanya Traefik yang mem-publish port (80/443); dicek otomatis di CI job `infra`.

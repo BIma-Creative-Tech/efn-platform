@@ -30,3 +30,17 @@ Alert: `EfnOtpVerifyFailureRateHigh` (> 40% verifikasi gagal, min. 20 percobaan/
 - Token: rotasi `whatsapp_token`, deploy ulang.
 - Abuse: perketat `ratelimit-api` (Traefik) atau blokir IP di Cloudflare; rate limit per member_ref di BFF tetap berlaku.
 - Jangan menonaktifkan OTP gate di Odoo tanpa persetujuan bisnis (`efn.pos.otp_required_for_promo`).
+
+## ALTCHA level 3
+
+Alert: `EfnAltchaMaxLevelSpike` — `efn_altcha_challenge_total{level="3"}` naik > 50 dalam 15 menit (SEC-34, ALTCHA
+adaptif BFF, `services/api-gateway/src/auth/README.md`). Level 3 = biaya proof-of-work maksimum: rate limit per IP
+atau anggaran OTP global (`OTP_GLOBAL_HOURLY_BUDGET`) hampir habis. Metrik tanpa IP.
+
+1. Cek anggaran global & biaya: `sum(increase(efn_otp_request_total[1h]))`, WhatsApp Manager (OTP pumping = biaya per
+   pesan).
+2. Loki: `{service="api-gateway"} |= "altcha"`; IP sumber hanya di access log Traefik (`{service="traefik"}`,
+   path `/v1/auth/`). IP = data pribadi: jangan disalin ke tiket publik.
+3. Serangan terkonfirmasi: aturan WAF/rate limit Cloudflare untuk path OTP; turunkan `OTP_GLOBAL_HOURLY_BUDGET`
+   sementara. Dugaan kompromi akun → [security-incident.md](security-incident.md).
+4. Lonjakan sah (kampanye marketing) → catat di tiket, tanpa tindakan.

@@ -688,3 +688,96 @@ Setelah semua perubahan diterapkan (stack di-recreate dengan image ber-digest, r
   perlu baris loki → alertmanager (dokumen architect).
 - Makefile `lint` memakai `hadolint/hadolint` tanpa tag (di luar batas file).
 - `infra/compose/.env` lokal developer lain mungkin masih memuat `MINIO_ROOT_USER=efnadmin` (diabaikan).
+
+
+# Gelombang 12 — SEC-37 ACME terpisah, E12 ocr-worker, alert log, ops kecil (7 Okt 2026)
+
+Basis: `59d37a5`. Diuji di stack dev nyata (Docker Desktop/WSL2) kecuali yang ditandai. Tidak ada commit.
+Recreate di stack dev (UTC): 03:31 `acme-dns-init`, `acme-dns`, `traefik`, `superapp-web` (+ sidecar
+`traefik-metrics-tls`, `superapp-web-tls`); 03:33 `odoo`, `metabase`, `grafana`, `uptime-kuma` (+ `odoo-tls`,
+`odoo-ws-tls`, `metabase-tls`) agar label router baru berlaku; 03:37 `ocr-worker` (rebuild image dev) + 2 sidecar baru;
+03:46 `etl`, restart `prometheus`, `blackbox-exporter`, `loki` (03:54 recreate `loki-tls` — restart loki memutus
+namespace sidecar ±8 menit, promtail sempat 500 `empty ring`/connection refused).
+
+## G12.1 Status
+
+| Item | Status | Bukti |
+|---|---|---|
+| SEC-37 ACME terpisah dari Traefik | **Fixed (kode + uji Pebble); LE/Cloudflare nyata belum** | `scripts/test-acme-dns.sh` 10/10 PASS (8 run berurutan lulus; 1 run sebelumnya gagal tanpa detail tercatat → batas tunggu hot-reload dinaikkan 30→60 s); CI: Traefik tanpa token, `acme-dns` tanpa port + hanya `egress` |
+| E12 ocr-worker `/metrics` | **Ditutup** | dari network `:9100`: CN prometheus 200, grafana/ocr-worker/tanpa sertifikat ditolak (000), `:9101` tidak terjangkau; Prometheus target `ocr-worker` up |
+| SEC-22 sisa (`data.debug`) | **Didokumentasikan, tidak bisa ditutup di infra** | Odoo 19 `serialize_exception` selalu mengisi `debug`, tanpa opsi konfigurasi; usulan override `efn_*` (Odoo engineer) di `odoo-access-changes.md` §2 |
+| Alert log (lead) | **Selesai + diuji** | `EfnAuditReconAnomaly`, `EfnAuditCopyFailing`, `EfnS3GatewayDeniedBurst` diterima Alertmanager (container sintetis berlabel `service=etl` / `service=s3-gateway`); `EfnAltchaMaxLevelSpike` (Prometheus, promtool OK, belum firing nyata) |
+| ETL GL/audit copy env | **Compose + deploy.sh siap; job belum jalan di dev** | env `true` di container etl, tetapi image `efn/etl:dev` belum di-rebuild dengan kode data-AI (job GL/audit tidak muncul di log). Rebuild setelah `-u efn_audit` 19.0.1.2.0 + grant |
+| Ops kecil | Selesai | lihat G12.4 |
+
+## G12.2 SEC-37 — desain
+- `acme-dns-init` (one-shot, root CAP_CHOWN+FOWNER, `network_mode: none`) → `acme-dns` (`goacme/lego:v5.5.2@sha256:1944e8…`,
+  `infra/acme/acme-dns.sh`, user 65532:0, read-only, cap_drop ALL, `init: true`, hanya `egress`, secret
+  `acme_dns_api_token` via `<ACME_DNS_TOKEN_ENV>_FILE`). `lego run` tiap 12 jam (gagal: 1 jam), satu sertifikat SAN
+  erp./bi./ops./status., EC256, `--force-cert-domains`. Mode `disabled` (dev/CI) = idle sehat.
+- Volume `acme-dns-certs` di-mount Traefik **read-only sebagai `/etc/traefik/dynamic`**; `base/` (dan `dev/`) bind
+  mount di dalamnya. Ditemukan saat uji: watch provider file Traefik **tidak rekursif** — layout awal (volume di
+  subdirektori `acme/`) gagal hot-reload. Nama file berversi (`efn-wg-<sha16>.crt`) karena Traefik tidak membaca ulang
+  isi file berpath sama. Kunci 0640 grup 0 (Traefik root tanpa CAP_DAC_*).
+- Traefik: resolver `letsencrypt-dns` dihapus, 7 router wg-https `tls.certresolver` → `tls: "true"`; secret dan env
+  token dihapus. `deploy.sh`: `ACME_SERVER` (hanya URL LE prod/staging), `.env` + `ACME_DNS_PROVIDER`, sed provider di
+  traefik.yml dihapus; `efn-deploy` allowlist + `deploy.yml` var `ACME_SERVER`.
+- Monitoring: blackbox module `tls_wg_public` + job `probe-wg-tls` (`traefik:8443`, SNI `erp.<domain>`, CA publik;
+  deploy.sh mengganti domain) → `EfnCertExpiringSoon/Critical` kini juga untuk wg-https + alert baru
+  `EfnWgCertProbeFailed` (penerbitan pertama gagal). Dev: probe gagal (self-signed), sama seperti probe-https.
+- Fixture uji di `scripts/acme-test/` (bukan `infra/`: check-encryption menolak URL http challtestsrv; tidak di-mount compose).
+
+## G12.3 E12 — ocr-worker
+Worker tetap HTTPS+mTLS (kode data-AI menolak plaintext di produksi) tetapi `METRICS_BIND_ADDRESS=127.0.0.1`,
+`METRICS_PORT=9101`. ghostunnel tidak bisa meneruskan ke backend TLS, jadi dua sidecar di namespace worker:
+`ocr-worker-metrics-tls` (server :9100, `--allow-cn=prometheus`) → 127.0.0.1:9102 → `ocr-worker-metrics-bridge`
+(client, `--verify-cn=ocr-worker`, sertifikat klien ocr-worker) → 127.0.0.1:9101. `check-encryption.sh` kini juga
+memeriksa ghostunnel mode client (`--cacert`, `--verify-cn`, listen loopback, tanpa `--disable-authentication`/
+`--unsafe-listen`). Alternatif lebih sederhana (satu sidecar) butuh worker mengizinkan plaintext loopback di produksi
+— keputusan data-AI/lead. ADR-022 E12 & docs/04 §8.5 perlu diperbarui (architect).
+
+## G12.4 Ops kecil
+- `superapp-web` dev: diukur 330 MiB setelah start → 477 → 487 MiB/512 (95 %) setelah 6–9 route `next dev`
+  dikompilasi; limit dev 1024M (base/prod tetap 512M).
+- `Makefile lint`: hadolint `v2.12.0@sha256:30a8fd…`, shellcheck `v0.11.0@sha256:61862e…`, `--config .hadolint.yaml`,
+  daftar file = CI (+ infra/minio, scripts/host, acme).
+- Runbook `odoo-access-changes.md`: ubah grup lewat UI/RPC, bukan `odoo shell`; §2 traceback JSON-RPC.
+- journald host → Loki: service `promtail-journal` (prod override saja, `infra/observability/promtail-journal.yml`,
+  `/var/log/journal` + `/etc/machine-id` ro, hanya `efn-deploy`, `efn-backup`, `efn-restore-test`, label `service=host-*`,
+  retensi 400 hari). `promtail -check-syntax` OK; **belum diuji di host Linux nyata**.
+- ETL: `ETL_ENABLE_GL`, `ETL_AUDIT_COPY_ENABLED` (base default false, dev true); `deploy.sh` pola R5 (eksplisit >
+  .env lama > false; aktif otomatis setelah grant sukses) + pra-cek kolom `efn_audit_log.origin_user_id` dengan pesan
+  jelas sebelum grant. `efn-deploy` allowlist + `deploy.yml` vars.
+- Loki: `loki-rules/efn-ops-logs.yml` (3 alert); `alert-rules.yml` + `EfnAltchaMaxLevelSpike`, `EfnWgCertProbeFailed`.
+- Runbook baru: `etl-audit-copy.md`, `s3-gateway-denied.md`, `host-journal-loki.md`, `odoo-access-changes.md`;
+  diperbarui: `acme-dns-token.md` (§3–§5 baru), `tls-cert-expiry.md`, `otp-failure-rate.md` (ALTCHA), `README.md`
+  (indeks: semua 25 runbook + alert Loki, tabel pengecualian hardening).
+
+## G12.5 Validasi
+
+| Cek | Hasil |
+|---|---|
+| shellcheck (daftar CI + acme) | bersih |
+| actionlint 1.7.12 | bersih |
+| yamllint `infra .github` | 0 error (1 warning lama line-length baris 416) |
+| hadolint v2.12.0 (7 Dockerfile) | lulus |
+| promtool config (27 rule) + 3 web-config; amtool | SUCCESS |
+| compose config dev & prod (semua profil); secrets compose == secrets.list; port publish prod = traefik | OK |
+| check-encryption.sh (container docker:27-cli) | OK |
+| haproxy -c | rc 0 |
+| update-cloudflare-ips --check, derive-secrets --self-test | OK |
+| test-efn-deploy.sh | 32/32 |
+| test-acme-dns.sh (baru, CI) | 10/10 |
+| Prometheus targets | 34 up, 0 down |
+| Smoke E2E `a b g` | **57/57** (`a g` saja: 39/40 — `g.pg_clients_tls` butuh koneksi efn_ocr yang hanya ada setelah `b`; bukan regresi) |
+
+## G12.6 Sisa / butuh pihak lain
+- **Superadmin**: delegasi zona + token terbatas (runbook §1), uji perdana dengan `ACME_SERVER` staging LE (§4).
+  Belum ada uji dengan Let's Encrypt/Cloudflare nyata.
+- **Odoo engineer**: override `data.debug` untuk non-`group_system` (SEC-22 sisa).
+- **Lead/Odoo/data-AI**: urutan dev: `-u efn_audit` 19.0.1.2.0 → grant `odoo-readonly-grants.sql` → rebuild/recreate
+  `etl` (job GL + audit copy). Sebelum grant, `EfnAuditCopyFailing` akan firing di dev.
+- **Architect**: ADR-022 E12 → ditutup (pola 2 sidecar); docs/04 §8.5 baris ocr-worker; ADR-023 catatan acme-dns.
+- Git: file `infra/acme/*.sh` dipanggil lewat `/bin/sh <file>` (tidak butuh bit exec); hook uji disalin + chmod di
+  volume uji.
+- `promtail-journal` belum diuji di host nyata; `EfnAltchaMaxLevelSpike` belum pernah firing nyata.
