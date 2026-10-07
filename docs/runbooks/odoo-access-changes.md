@@ -6,7 +6,24 @@ meng-invalidasi cache worker HTTP yang sedang berjalan, sehingga user tetap puny
 di-restart. Lewat UI (Settings → Users) atau RPC `res.users.write` dari sesi admin, Odoo mengirim sinyal invalidasi
 registry ke semua worker.
 - Prosedur: Settings → Users & Companies → Users → tab Access Rights (admin `base.group_system`, lewat `erp.` di
-  WireGuard staf). Perubahan tercatat di `efn.audit.log` bila aturan audit `res.users` aktif.
+  WireGuard staf).
+- **Jejak audit (Gelombang 13, SEC-49):** `efn_audit` >= 19.0.1.3.0 SELALU mencatat (tanpa aturan admin, tidak ikut GC
+  retensi) perubahan lewat ORM/UI/RPC pada: grup user (`res.users.group_ids` dan sisi grup `res.groups.user_ids`/
+  `implied_ids`/`implied_by_ids`), `res.users` `active`/`login`/`company_ids`/`company_id`, `res.groups`, record rule
+  (`ir.rule`), ACL (`ir.model.access`), serta pembuatan/pencabutan API key (`res.users.apikeys`, tanpa nilai key).
+  Lihat di menu *Audit → Log* (model `res.users`/`res.groups`/`ir.rule`/`ir.model.access`/`res.users.apikeys`); grup
+  tampil sebagai xmlid (`base.group_system`), user sebagai `res.users,<id>`. Setiap perubahan juga dikirim ke sink
+  Loki (`{stream="efn_audit_sink"}`) dengan `audit_op` = `access_grant` / `access_revoke` / `access_rule_change` /
+  `apikey_create` / `apikey_revoke` / `user_change` / `group_change`, dan `critical: true` bila grant mencakup
+  `base.group_system`, `base.group_erp_manager`, `efn_audit.group_auditor_personal`, `efn_audit.group_manager`, atau
+  perubahan record rule/ACL.
+- **TIDAK tercatat** (gunakan hanya sebagai break-glass, catat manual di tiket insiden): perubahan lewat `odoo shell`
+  dengan SQL langsung, `psql`, atau selama install/upgrade modul (data XML/CSV); penghapusan API key kedaluwarsa oleh
+  autovacuum Odoo. Perubahan ORM di `odoo shell` (mis. `user.write({...})`) TETAP tercatat, tetapi log + baris sink baru
+  ada setelah `env.cr.commit()`.
+- Pemberian `base.group_system` / Auditor Data Pribadi Lintas PT yang sah: buat tiket dulu (pemohon, penyetuju,
+  alasan, durasi), lalu cocokkan dengan alert sink `critical`. Alert tanpa tiket = insiden
+  ([security-incident.md](security-incident.md)).
 - Bila terpaksa memakai `odoo shell` (break-glass), restart Odoo sesudahnya: `$DC restart odoo`. Bila container
   odoo dibuat ulang (`$DC up`), recreate juga sidecar `odoo-tls` dan `odoo-ws-tls` (ikut namespace).
 - Pencabutan akses karena insiden: cabut lewat UI, nonaktifkan user (`active=False`), lalu restart Odoo agar cache
@@ -32,3 +49,15 @@ Status kontrol (gelombang 12):
   traceback. Log server tidak berubah. Batasan: request tanpa database (`_serve_nodb`) tidak tertangani — produksi
   memakai satu DB + dbfilter. Risiko residu ditutup untuk jalur ber-database.
 - Diagnosis tetap lewat log server: Loki `{service="odoo"} |= "Traceback"`.
+
+## 3. Membaca baris sink hak akses (Loki) — catatan devsecops (SEC-51)
+- Format v2 (efn_audit 19.0.1.3.0): `<ts> <pid> INFO <db> odoo.addons.efn_audit.sink: EFN_AUDIT_SINK {json}`; JSON satu
+  baris (newline di nilai selalu di-escape), kunci `v`=2, `audit_op`, `critical`, `mac`, `groups_added`/`groups_removed`
+  (xmlid), `users_added`/`users_removed` (uid). Detail: `services/odoo/addons/efn_audit/README.md` (Format sink v2).
+- Promtail **wajib** memilih baris berdasarkan format baris Odoo + nama logger, bukan substring di mana pun:
+  `^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} \d+ INFO \S+ odoo\.addons\.efn_audit\.sink: EFN_AUDIT_SINK (\{[^\n]*\})$`,
+  lalu stage `json` dan buang baris tanpa `log_id` numerik. Teks pengguna yang dicetak logger Odoo lain (mis. login
+  gagal) tidak bisa memenuhi pola ini kecuali menyisipkan newline; untuk itu `mac` (HMAC-SHA256, kunci file secret
+  `/run/secrets/efn_audit_sink_key`) diverifikasi di luar Odoo (ETL) — baris tanpa `mac` valid = tidak terverifikasi.
+- `mac: null` berarti secret belum di-mount (dev/CI); Odoo mencetak WARNING `EFN audit sink: kunci HMAC tidak tersedia`
+  sekali per proses.

@@ -14,6 +14,12 @@
 
 Batas (diakui, README): metode privat dapat dipanggil kode server action oleh admin sistem;
 mitigasinya = jejak server action yang tidak ikut GC + sink eksternal setelah commit.
+
+Gelombang 13 (SEC-51 butir 4): `_efn_audit_purge_logs` menolak log yang belum melewati retensi
+efektifnya (pemeriksaan umur di metode, bukan hanya di GC). Log purge yang tidak ditulis dari jalur
+resmi (GC retensi / erasure, penanda `cr.cache`) diberi awalan `manual:` + `audit_op=purge_manual`
+di sink, sehingga tidak lolos pengecualian alert `retensi:`/`erasure:`. Admin yang menulis kode
+server action tetap dapat meniru penanda — menaikkan biaya, bukan mencegah (kontrol nyata SEC-43 b5).
 """
 
 import logging
@@ -36,6 +42,8 @@ from .base import emit_sink, origin_uid, sink_event
 _logger = logging.getLogger(__name__)
 
 PURGE_KEY = "efn_audit_purge"
+# SEC-51: jalur purge resmi ("retention" / "erasure") yang sedang berjalan di cursor ini.
+PURGE_PATH_KEY = "efn_audit_purge_path"
 GC_BATCH = 10000
 # Domain yang dikecualikan dari GC retensi (SEC-43).
 GC_PROTECTED_DOMAIN = [("operation", "!=", "purge"), ("model_name", "not in", sorted(PROTECTED_LOG_MODELS))]
@@ -59,6 +67,20 @@ def _purge_allowed(cr):
             cr.cache[PURGE_KEY] = previous
         else:
             cr.cache.pop(PURGE_KEY, None)
+
+
+@contextmanager
+def _purge_path(cr, path):
+    """Tandai jalur purge resmi selama blok ini (per cursor, bukan context RPC)."""
+    previous = cr.cache.get(PURGE_PATH_KEY)
+    cr.cache[PURGE_PATH_KEY] = path
+    try:
+        yield
+    finally:
+        if previous:
+            cr.cache[PURGE_PATH_KEY] = previous
+        else:
+            cr.cache.pop(PURGE_PATH_KEY, None)
 
 
 def _ref_matches(ref, model_name, ids):
@@ -140,6 +162,9 @@ class EfnAuditLog(models.Model):
     # ------------------------------------------------------------- purge
     @api.model
     def _efn_audit_write_purge_log(self, model_name, note):
+        official = self.env.cr.cache.get(PURGE_PATH_KEY)
+        if not official:
+            note = f"manual: {note}"
         vals = {
             "user_id": self.env.uid,
             "origin_user_id": origin_uid(self.env),
@@ -150,7 +175,8 @@ class EfnAuditLog(models.Model):
             "note": note,
         }
         log = self.sudo().create(vals)
-        emit_sink(self.env.cr, [sink_event(vals, log.id)])
+        extra = {"audit_op": "purge"} if official else {"audit_op": "purge_manual", "critical": True}
+        emit_sink(self.env.cr, [sink_event(vals, log.id, extra)])
         return log
 
     @api.model
@@ -181,15 +207,27 @@ class EfnAuditLog(models.Model):
             if logs:
                 logs.unlink()
         if count or lines:
-            self._efn_audit_write_purge_log(
-                model_name, f"erasure: {count} log dihapus, {len(lines)} baris ref dikosongkan"
-            )
+            with _purge_path(self.env.cr, "erasure"):
+                self._efn_audit_write_purge_log(
+                    model_name, f"erasure: {count} log dihapus, {len(lines)} baris ref dikosongkan"
+                )
         return count
 
     def _efn_audit_purge_logs(self, note):
         """Hapus log `self` (retensi) + tulis satu log purge. Log terlindungi (purge/model
-        kontrol, SEC-43) tidak pernah ikut terhapus walau ada di `self`."""
-        logs = self.filtered(lambda log: log.operation != "purge" and log.model_name not in PROTECTED_LOG_MODELS)
+        kontrol, SEC-43) dan log yang belum melewati retensi efektifnya (SEC-51) tidak pernah ikut
+        terhapus walau ada di `self`."""
+        global_days = self._efn_audit_global_retention()
+        now = fields.Datetime.now()
+
+        def expired(log):
+            own = log.rule_id.retention_days if log.rule_id else 0
+            days = effective_retention(own) if own and own > 0 else global_days
+            return bool(days) and bool(log.create_date) and log.create_date < now - timedelta(days=days)
+
+        logs = self.sudo().filtered(
+            lambda log: log.operation != "purge" and log.model_name not in PROTECTED_LOG_MODELS and expired(log)
+        )
         count = len(logs)
         if not count:
             return 0
@@ -236,7 +274,8 @@ class EfnAuditLog(models.Model):
             if own_rules:
                 domain.append(("rule_id", "not in", own_rules.ids))
             to_delete |= Log.search(domain, limit=remaining, order="id")
-        count = to_delete._efn_audit_purge_logs("retensi: {count} log")
+        with _purge_path(self.env.cr, "retention"):
+            count = to_delete._efn_audit_purge_logs("retensi: {count} log")
         if count:
             _logger.info("EFN audit: retensi menghapus %d log", count)
         return count

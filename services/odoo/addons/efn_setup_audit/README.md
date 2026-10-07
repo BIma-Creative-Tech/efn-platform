@@ -22,7 +22,7 @@ Parameter `efn.audit.retention_days` = **730 (PLACEHOLDER)** di `data/ir_config_
 Yang **sudah dicatat standar CE** (tidak perlu aturan): penyesuaian stok yang diterapkan (`stock.move.is_inventory`, *Moves History*); chatter `list_price`/kategori produk (`tracking=True`) dan mata uang/company pricelist; jurnal akuntansi lewat *Restrictive Audit Trail* (`res.company.restrictive_audit_trail`, `account` 19.0).
 
 ## Usulan tambahan (belum dibuat, butuh persetujuan + ukur volume)
-`account.tax`, `account.fiscal.position` (tarif PB1 per kota, ADR-027), `pos.payment.method`, `pos.config` (`restrict_price_control`, `manual_discount`), `res.users` (perubahan grup). `account.move`: pakai *Restrictive Audit Trail* standar dulu.
+`account.tax`, `account.fiscal.position` (tarif PB1 per kota, ADR-027), `pos.payment.method`, `pos.config` (`restrict_price_control`, `manual_discount`). Perubahan hak akses (`res.users` grup/aktif/login/company, `res.groups`, `ir.rule`, `ir.model.access`, API key) **tidak perlu aturan di sini**: sejak `efn_audit` 19.0.1.3.0 (Gelombang 13, SEC-49) model tersebut diaudit bawaan (hard-coded, tidak ikut GC, masuk sink). Catatan SEC-56: `stock.quant.user_id` kini tersimpan `res.users,id` (tanpa nama staf). `account.move`: pakai *Restrictive Audit Trail* standar dulu.
 
 ## Keputusan klien yang dibutuhkan
 - **Retensi** log audit (Q-6 auditor eksternal, Q-49, DPO): placeholder 730 hari.

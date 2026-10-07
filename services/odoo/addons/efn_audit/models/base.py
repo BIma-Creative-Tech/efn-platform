@@ -31,10 +31,27 @@ Gelombang 12 (SEC-46 sisa):
 - `origin_user_id`: uid manusia pemicu bila `env.uid` berbeda (mis. `with_user(SUPERUSER_ID)` tercatat
   OdooBot). Sumber tepercaya saja: penanda `cr.cache` dari `elevate_as_superuser()` atau
   `request.session.uid` (sesi HTTP terautentikasi). Context RPC TIDAK dipakai (bisa diisi klien).
+
+Gelombang 13:
+- SEC-49: hak akses (`res.users` grup/aktif/login/company, `res.groups`, `ir.rule`, `ir.model.access`,
+  `res.users.apikeys`) = model kontrol. Baris sink membawa `audit_op` (`access_grant`, `access_revoke`,
+  `access_rule_change`, `apikey_create`, `apikey_revoke`, `user_change`, `group_change`), xmlid grup
+  yang diberikan/dicabut, uid terdampak (tanpa nama/login), dan `critical` (grup admin/auditor).
+  Saat create model kontrol, semua field dilacak yang bernilai dicatat (bukan hanya yang ada di vals).
+- SEC-51: baris sink versi 2 — JSON satu baris (ensure_ascii: newline/teks pengguna selalu di-escape)
+  + `mac` HMAC-SHA256 dengan kunci dari file secret (`/run/secrets/efn_audit_sink_key`) yang dibaca
+  proses Odoo saja; tidak ada di DB/parameter sehingga tidak terbaca admin lewat UI/server action.
+  Verifikasi di luar Odoo (ETL/rekonsiliasi). Promtail wajib memfilter format baris + nama logger.
+- SEC-56: nilai relasi ke model orang (`PERSONAL_MODELS`) disimpan `model,id` tanpa nama; relasi ke
+  `res.groups` sebagai xmlid; x2many pada write disimpan sebagai selisih (`dihapus:` / `ditambah:`),
+  ref tetap daftar lengkap.
 """
 
+import hashlib
+import hmac
 import json
 import logging
+import os
 from contextlib import contextmanager
 
 from odoo import SUPERUSER_ID, api, models
@@ -43,6 +60,8 @@ from odoo.tools import float_repr, html2plaintext
 from odoo.tools.safe_eval import safe_eval
 
 from .audit_policy import (
+    ACCESS_MODELS,
+    CRITICAL_GROUP_XMLIDS,
     PERSON_NAME_FIELDS,
     PERSONAL_MODELS,
     PROTECTED_LOG_MODELS,
@@ -55,6 +74,15 @@ MAX_VALUE_LEN = 2000
 MAX_X2M_NAMES = 20
 
 _sink_logger = logging.getLogger("odoo.addons.efn_audit.sink")
+_logger = logging.getLogger(__name__)
+
+# SEC-51 (Gelombang 13): format & integritas baris sink.
+SINK_VERSION = 2
+SINK_PREFIX = "EFN_AUDIT_SINK"
+SINK_KEY_FILE_ENV = "EFN_AUDIT_SINK_KEY_FILE"  # path (bukan rahasia); isi file = rahasia
+DEFAULT_SINK_KEY_FILE = "/run/secrets/efn_audit_sink_key"
+SINK_KEY_MIN_BYTES = 32
+_SINK_KEY = []  # cache per proses: [bytes | None]
 
 # SEC-46 (Gelombang 12): penanda uid pemicu di `cr.cache` (per cursor/transaksi, tidak bisa diisi
 # klien lewat RPC — berbeda dengan context). Diisi oleh `elevate_as_superuser`.
@@ -110,25 +138,76 @@ def _truncate(text):
     return text
 
 
+def _sink_key():
+    """Kunci HMAC sink (bytes) dari file secret, atau None. Dibaca sekali per proses.
+
+    Tidak pernah disimpan di DB / `ir.config_parameter` (terbaca admin Odoo). Kunci tidak ada / terlalu
+    pendek -> baris sink tetap dikirim dengan `"mac": null` + WARNING sekali (bukan diam-diam);
+    verifikator (ETL) memperlakukan baris tanpa mac sebagai tidak terverifikasi.
+    """
+    if not _SINK_KEY:
+        path = os.environ.get(SINK_KEY_FILE_ENV) or DEFAULT_SINK_KEY_FILE
+        key = None
+        try:
+            with open(path, "rb") as handle:
+                key = handle.read().strip() or None
+        except OSError:
+            key = None
+        if key is not None and len(key) < SINK_KEY_MIN_BYTES:
+            _logger.warning("EFN audit sink: kunci HMAC < %d byte, diabaikan", SINK_KEY_MIN_BYTES)
+            key = None
+        if key is None:
+            _logger.warning("EFN audit sink: kunci HMAC tidak tersedia; baris sink dikirim dengan mac=null")
+        _SINK_KEY.append(key)
+    return _SINK_KEY[0]
+
+
+def sink_canonical(event):
+    """Bentuk kanonik untuk HMAC: JSON tanpa `mac`, kunci terurut, tanpa spasi, ASCII."""
+    body = {k: v for k, v in event.items() if k != "mac"}
+    return json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
+
+
+def sink_mac(key, event):
+    return hmac.new(key, sink_canonical(event).encode("ascii"), hashlib.sha256).hexdigest()
+
+
+def sink_line(event, key=None):
+    """JSON satu baris (+ `mac`). `ensure_ascii` meng-escape newline/karakter kontrol/Unicode, jadi isi
+    event (mis. `note`) tidak pernah bisa memecah baris atau membentuk baris sink kedua.
+
+    Verifikasi (ETL): `hmac.compare_digest(mac, sink_mac(key, json.loads(line)))`.
+    """
+    body = json.loads(sink_canonical(event))
+    body["mac"] = sink_mac(key, body) if key else None
+    return json.dumps(body, sort_keys=True, ensure_ascii=True)
+
+
 def emit_sink(cr, events):
     """Kirim ringkasan log kontrol ke logger sink setelah commit (Promtail -> Loki).
 
-    Isi: id log, operasi, model, res_id, uid, flag sudo, nama field berubah, catatan purge — tanpa
-    nilai lama/baru dan tanpa PII. Transaksi yang di-rollback tidak menghasilkan baris sink.
+    Isi: id log, operasi, `audit_op`, model, res_id, uid, flag sudo, nama field berubah, catatan purge,
+    xmlid grup diberikan/dicabut + uid terdampak (SEC-49) — tanpa nilai lama/baru dan tanpa PII.
+    Transaksi yang di-rollback tidak menghasilkan baris sink.
     """
     if not events:
         return
-    payload = [json.dumps(event, sort_keys=True, default=str) for event in events]
+    key = _sink_key()
+    payload = [sink_line(event, key) for event in events]
 
     def _emit():
         for line in payload:
-            _sink_logger.info("EFN_AUDIT_SINK %s", line)
+            _sink_logger.info("%s %s", SINK_PREFIX, line)
 
     cr.postcommit.add(_emit)
 
 
-def sink_event(log_vals, log_id):
-    return {
+def sink_event(log_vals, log_id, extra=None):
+    operation = log_vals.get("operation")
+    event = {
+        "v": SINK_VERSION,
+        "audit_op": "purge" if operation == "purge" else "control_change",
+        "critical": False,
         "log_id": log_id,
         "operation": log_vals.get("operation"),
         "model": log_vals.get("model_name"),
@@ -139,6 +218,86 @@ def sink_event(log_vals, log_id):
         "fields": sorted(line[2]["field_name"] for line in log_vals.get("line_ids", ()) if line[2].get("field_name")),
         "note": log_vals.get("note") or None,
     }
+    if extra:
+        event.update(extra)
+    return event
+
+
+def _has_value(raw):
+    return raw not in (None, False, "", (), [])
+
+
+def _diff_ids(old_ids, new_ids):
+    """(ditambah, dihapus) dengan urutan asli."""
+    old_ids = [i for i in (old_ids or ()) if isinstance(i, int)]
+    new_ids = [i for i in (new_ids or ()) if isinstance(i, int)]
+    return [i for i in new_ids if i not in old_ids], [i for i in old_ids if i not in new_ids]
+
+
+def group_refs(env, ids):
+    """{id: xmlid} grup; tanpa xmlid (grup buatan UI / sudah terhapus) -> `res.groups,id`."""
+    if not ids:
+        return {}
+    groups = env["res.groups"].sudo().with_context(active_test=False).browse(ids).exists()
+    xml = groups.get_external_id()
+    return {gid: xml.get(gid) or f"res.groups,{gid}" for gid in ids}
+
+
+def is_critical_grant(env, group_ids):
+    """True bila grup (atau grup yang di-imply-nya) termasuk CRITICAL_GROUP_XMLIDS."""
+    groups = env["res.groups"].sudo().with_context(active_test=False).browse(group_ids).exists()
+    if not groups:
+        return False
+    implied = groups | groups.all_implied_ids
+    return any(xmlid in CRITICAL_GROUP_XMLIDS for xmlid in implied.get_external_id().values())
+
+
+def access_extra(env, model, operation, rid, old_row, new_row):
+    """Field sink tambahan untuk model hak akses (SEC-49). Hanya id/xmlid, tanpa nama/login."""
+    if model in ("ir.rule", "ir.model.access"):
+        return {"audit_op": "access_rule_change", "critical": True}
+    if model == "res.users.apikeys":
+        owner = (new_row or old_row).get("user_id") or None
+        return {"audit_op": "apikey_create" if operation == "create" else "apikey_revoke", "key_owner_uid": owner}
+    granted, revoked, users_added, users_removed = [], [], [], []
+    if model == "res.users":
+        granted, revoked = _diff_ids(old_row.get("group_ids"), new_row.get("group_ids"))
+        users_added = [rid] if granted else []
+        users_removed = [rid] if revoked else []
+        default_op = "user_change"
+    elif model == "res.groups":
+        users_added, users_removed = _diff_ids(old_row.get("user_ids"), new_row.get("user_ids"))
+        if users_added:
+            granted.append(rid)
+        if users_removed:
+            revoked.append(rid)
+        # implied_ids: anggota grup ini mendapat/kehilangan grup lain.
+        implied_added, implied_removed = _diff_ids(old_row.get("implied_ids"), new_row.get("implied_ids"))
+        granted += implied_added
+        revoked += implied_removed
+        # implied_by_ids: anggota grup lain kini mendapat/kehilangan grup ini.
+        by_added, by_removed = _diff_ids(old_row.get("implied_by_ids"), new_row.get("implied_by_ids"))
+        if by_added:
+            granted.append(rid)
+        if by_removed:
+            revoked.append(rid)
+        default_op = "group_change"
+    else:
+        return {}
+    if not (granted or revoked):
+        return {"audit_op": default_op}
+    refs = group_refs(env, sorted(set(granted) | set(revoked)))
+    extra = {
+        "audit_op": "access_grant" if granted else "access_revoke",
+        "critical": bool(granted) and is_critical_grant(env, sorted(set(granted))),
+        "groups_added": sorted({refs[g] for g in granted}),
+        "groups_removed": sorted({refs[g] for g in revoked}),
+    }
+    if users_added:
+        extra["users_added"] = sorted(users_added)
+    if users_removed:
+        extra["users_removed"] = sorted(users_removed)
+    return extra
 
 
 def _normalize(field, value):
@@ -192,8 +351,18 @@ class Base(models.AbstractModel):
             }
             audited = records._efn_audit_filter(rule)
             if audited:
-                union = {f for rid in audited.ids for f in per_record.get(rid, ())}
-                new = audited._efn_audit_read(union)
+                if rule.control:
+                    # Model kontrol (SEC-49): field bernilai dari default/compute juga dicatat
+                    # (mis. grup default user baru), bukan hanya yang ada di vals.
+                    new = audited._efn_audit_read(rule.tracked)
+                    for rid in audited.ids:
+                        given = list(per_record.get(rid, ()))
+                        row = new.get(rid, {})
+                        given += [f for f in sorted(rule.tracked) if f not in given and _has_value(row.get(f))]
+                        per_record[rid] = given
+                else:
+                    union = {f for rid in audited.ids for f in per_record.get(rid, ())}
+                    new = audited._efn_audit_read(union)
                 audited._efn_audit_log("create", rule, per_record, {}, new)
         return records
 
@@ -246,7 +415,9 @@ class Base(models.AbstractModel):
         name_fields = PERSON_NAME_FIELDS.get(self._name, frozenset())
         prev_company = prev_company or {}
         trigger_uid = origin_uid(self.env)
+        access = self._name in ACCESS_MODELS and self._name in PROTECTED_LOG_MODELS
         vals_list = []
+        extras = []
         for record in records:
             lines = []
             # Nama perusahaan (res.partner is_company) bukan data pribadi -> tidak di-mask.
@@ -259,6 +430,11 @@ class Base(models.AbstractModel):
                     continue
                 o_text, o_ref = formatter.format(field, o_raw) if operation != "create" else (False, False)
                 n_text, n_ref = formatter.format(field, n_raw) if operation != "unlink" else (False, False)
+                if operation == "write" and field.type in ("many2many", "one2many"):
+                    # Selisih (dicabut / ditambah) agar tidak terpotong MAX_X2M_NAMES; ref = daftar lengkap.
+                    added, removed = _diff_ids(o_raw, n_raw)
+                    o_text = formatter.format_ids(field, removed, "dihapus: ")
+                    n_text = formatter.format_ids(field, added, "ditambah: ")
                 kind = "name" if (person and fname in name_fields) else None
                 # SEC-45: masking wajib (pola nama field / nama orang) + pilihan aturan.
                 masked = fname in rule.masked or kind == "name" or is_pii_field(fname, field)
@@ -298,10 +474,18 @@ class Base(models.AbstractModel):
                     "line_ids": [(0, 0, line) for line in lines],
                 }
             )
+            extras.append(
+                access_extra(self.env, self._name, operation, record.id, old.get(record.id, {}), new.get(record.id, {}))
+                if access
+                else None
+            )
         if vals_list:
             logs = self.env["efn.audit.log"].sudo().create(vals_list)
             if self._name in PROTECTED_LOG_MODELS:
-                emit_sink(self.env.cr, [sink_event(v, log.id) for v, log in zip(vals_list, logs, strict=True)])
+                emit_sink(
+                    self.env.cr,
+                    [sink_event(v, log.id, extra) for v, log, extra in zip(vals_list, logs, extras, strict=True)],
+                )
 
 
 class _Formatter:
@@ -320,11 +504,28 @@ class _Formatter:
                     ids = raw if isinstance(raw, (list, tuple)) else [raw]
                     wanted.setdefault(field.comodel_name, set()).update(i for i in ids if isinstance(i, int))
         for comodel, ids in wanted.items():
-            recs = env[comodel].sudo().with_context(active_test=False).browse(sorted(ids))
-            self._names[comodel] = {r.id: r.display_name or "" for r in recs.exists()}
+            if comodel in PERSONAL_MODELS:
+                continue  # SEC-56: tanpa nama orang -> `model,id`
+            recs = env[comodel].sudo().with_context(active_test=False).browse(sorted(ids)).exists()
+            if comodel == "res.groups":
+                self._names[comodel] = group_refs(env, recs.ids)  # SEC-49: xmlid, bukan label
+            else:
+                self._names[comodel] = {r.id: r.display_name or "" for r in recs}
 
     def _name(self, comodel, rid):
+        if comodel in PERSONAL_MODELS:
+            return f"{comodel},{rid}"
         return self._names.get(comodel, {}).get(rid) or f"{comodel},{rid}"
+
+    def format_ids(self, field, ids, prefix):
+        """Teks daftar id relasi (selisih x2many) dengan awalan, atau False bila kosong."""
+        ids = [i for i in ids if isinstance(i, int)]
+        if not ids:
+            return False
+        text = ", ".join(self._name(field.comodel_name, i) for i in ids[:MAX_X2M_NAMES])
+        if len(ids) > MAX_X2M_NAMES:
+            text += f" … (+{len(ids) - MAX_X2M_NAMES})"
+        return _truncate(prefix + text)
 
     def format(self, field, raw):
         ftype = field.type

@@ -93,8 +93,14 @@ class TestEfnAuditHook(EfnAuditCase):
         self.assertEqual(parent_line.new_value, "Induk")
         self.assertEqual(parent_line.new_ref, f"res.partner.category,{parent.id}")
         m2m = self._line(log, "partner_ids")
-        self.assertEqual(set(m2m.new_value.split(", ")), {"Relasi 1", "Relasi 2"})
+        # Gelombang 13: write x2many = selisih; relasi ke model orang = `model,id` (SEC-56), ref lengkap.
+        self.assertFalse(m2m.old_value)
+        self.assertEqual(m2m.new_value, "ditambah: " + ", ".join(f"res.partner,{i}" for i in sorted(partners.ids)))
         self.assertEqual(m2m.new_ref, "res.partner," + ",".join(str(i) for i in sorted(partners.ids)))
+        cat.write({"partner_ids": [Command.unlink(partners[0].id)]})
+        diff = self._line(self._logs(cat, "write").sorted("id")[-1], "partner_ids")
+        self.assertEqual((diff.old_value, diff.new_value), (f"dihapus: res.partner,{partners[0].id}", False))
+        self.assertEqual(diff.new_ref, f"res.partner,{partners[1].id}")
 
     def test_sudo_keeps_real_user(self):
         user = self.env["res.users"].create(

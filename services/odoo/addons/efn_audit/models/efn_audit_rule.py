@@ -30,7 +30,16 @@ _logger = logging.getLogger(__name__)
 
 # Denylist global (tidak pernah dicatat walau dipilih eksplisit di aturan).
 DENY_SUBSTRINGS = ("password", "secret", "token", "api_key", "totp", "signature")
-DENY_FIELDS = frozenset({("res.partner", "efn_member_hash")})
+# SEC-49: `key` (hash) dan `index` (8 karakter awal key) API key — bukan field ORM di Odoo 19, tetapi
+# dikunci eksplisit agar override/versi lain tidak pernah mencatatnya (`key` tidak cocok "api_key").
+DENY_FIELDS = frozenset(
+    {
+        ("res.partner", "efn_member_hash"),
+        ("res.users.apikeys", "key"),
+        ("res.users.apikeys", "index"),
+        ("res.users.apikeys.show", "key"),
+    }
+)
 # Field teknis yang tidak ikut "semua field" (tracked kosong).
 MAGIC_FIELDS = frozenset({"id", "display_name", "create_uid", "create_date", "write_uid", "write_date"})
 NON_ELIGIBLE_TYPES = frozenset({"one2many", "binary"})
@@ -41,9 +50,12 @@ SELF_RULE_MODEL = "efn.audit.rule"
 LOG_MODELS = frozenset({"efn.audit.log", "efn.audit.log.line"})
 
 # `filters`: tuple string domain; record diaudit bila cocok SALAH SATU. Tuple kosong = semua record.
+# `control` (Gelombang 13): model kontrol (CONTROL_SPECS) -> saat create, semua field dilacak yang
+# bernilai ikut dicatat (bukan hanya yang ada di vals; default seperti grup user baru tetap terlihat).
 RuleData = namedtuple(
     "RuleData",
-    "rule_id log_create log_write log_unlink tracked masked filters capture_unlink",
+    "rule_id log_create log_write log_unlink tracked masked filters capture_unlink control",
+    defaults=(False,),
 )
 
 
@@ -251,6 +263,7 @@ class EfnAuditRule(models.Model):
             tracked=data.tracked | builtin.tracked,
             filters=filters,
             capture_unlink=True,
+            control=True,
         )
 
     @api.model
@@ -266,4 +279,4 @@ class EfnAuditRule(models.Model):
             tracked = frozenset(
                 f for f in fnames if f in model._fields and not is_denied(model._name, f, model._fields[f])
             )
-        return RuleData(False, True, True, True, tracked, frozenset(), (domain,) if domain else (), True)
+        return RuleData(False, True, True, True, tracked, frozenset(), (domain,) if domain else (), True, True)

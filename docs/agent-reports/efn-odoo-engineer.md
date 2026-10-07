@@ -407,3 +407,35 @@ Temuan saat menulis tour: kode frontend POS yang ada (OTP gate & gateway) berjal
 - Admin sistem pada error DB (transaksi aborted) bisa kehilangan `debug` karena cek group gagal → fail closed; diagnosis lewat Loki.
 - Bug upstream POS `hooks.js` (`error.data.debug.status.message_body` pada string) tidak berubah perilakunya (sudah melempar sebelum perubahan ini).
 - Belum diuji manual di stack dev (tidak di-restart, QA sedang memakai); belum dijalankan di GitHub Actions.
+
+# Gelombang 13 — SEC-49, SEC-51, SEC-56 (review r5), 7 Okt 2026
+
+Batas file: `efn_audit/**`, `efn_setup_audit/README.md`, `docs/runbooks/odoo-access-changes.md`. Addon lain tidak disentuh; stack dev tidak di-restart; tanpa commit.
+
+## Perubahan (`efn_audit` 19.0.1.2.0 -> 19.0.1.3.0, tanpa perubahan skema)
+- **SEC-49** (`models/audit_policy.py` `CONTROL_SPECS`): model kontrol baru, selalu diaudit, tidak ikut GC, ditolak `_efn_audit_purge_records`, masuk sink: `res.users` (`group_ids`, `active`, `login`, `company_ids`, `company_id`, `share`), `res.groups` (semua field: `user_ids`, `implied_ids`, `implied_by_ids`, `rule_groups`, ...), `ir.rule`, `ir.model.access` (semua field), `res.users.apikeys` (`name`, `user_id`, `scope`, `expiration_date`). Nama field diverifikasi di image `odoo:19.0` yang dipin (`group_ids`/`user_ids`, bukan `groups_id`/`users`).
+  - API key: Odoo 19 membuatnya lewat SQL (`_generate`), jadi `models/res_users_apikeys.py` meng-override `_generate` untuk mencatat create; unlink lewat hook biasa. `key`/`index` di denylist eksplisit.
+  - Create model kontrol mencatat semua field dilacak yang bernilai (grup default user baru ikut tercatat).
+  - Nilai: x2many pada write = selisih (`dihapus:` / `ditambah:`), ref = daftar lengkap; grup ditampilkan sebagai xmlid.
+  - Sink: `audit_op` (`access_grant`, `access_revoke`, `access_rule_change`, `apikey_create`, `apikey_revoke`, `user_change`, `group_change`, `control_change`, `purge`, `purge_manual`), `critical` (grant langsung/implied ke `base.group_system`, `base.group_erp_manager`, `efn_audit.group_auditor_personal`, `efn_audit.group_manager`; semua perubahan ir.rule/ACL; purge manual), `groups_added`/`groups_removed` (xmlid), `users_added`/`users_removed` (uid), `key_owner_uid`. Tanpa nama/login.
+  - Test menemukan perilaku nyata Odoo: menambah company ke user otomatis memberi `base.group_multi_company`. Ini kini tercatat sebagai `access_grant` (non-critical).
+- **SEC-51**: sink v2. Baris `EFN_AUDIT_SINK {json}`; JSON `ensure_ascii` + `sort_keys` sehingga newline/teks pengguna selalu di-escape. `mac` = HMAC-SHA256 atas bentuk kanonik (`sink_canonical`), dengan kunci dari file `EFN_AUDIT_SINK_KEY_FILE` (default `/run/secrets/efn_audit_sink_key`, minimal 32 byte). Kunci dibaca proses saja, tidak ada di DB/parameter, dan tidak terjangkau `safe_eval`. Bila kunci tidak ada: `mac: null` + WARNING sekali (tidak diam-diam). Butir 4 juga dikerjakan: `_efn_audit_purge_logs` menolak log yang belum melewati retensi efektifnya. Log purge di luar jalur GC/erasure (penanda `cr.cache`) diberi awalan `manual:` + `purge_manual` critical.
+- **SEC-56**: relasi ke `PERSONAL_MODELS` disimpan `model,id` tanpa nama (M2o & M2m, termasuk `stock.quant.user_id` di aturan bawaan). Pola PII ditambah token `street`/`street2`/`street3`/`zip`/`address`/`login`, serta `birth` untuk tipe date/datetime/char (`****-**-**`). `login` di-mask email/HP-aware. `city` sengaja tidak di-mask.
+- Test baru: `tests/test_audit_access.py` (9), `tests/test_audit_sink.py` (8). `test_audit_hook.test_relational_format_and_refs` disesuaikan (selisih + `res.partner,id`). README `efn_audit`/`efn_setup_audit` + runbook `odoo-access-changes.md` (kalimat "bila aturan res.users aktif" diganti, ditambah §3 sink untuk devsecops).
+
+## Validasi (container, DB sementara)
+- Harness unit (salinan `odoo-test-nooca.sh` dengan nama container/image `-aud` agar tidak bentrok): **193 test, 0 failed, 0 error, 0 baris ERROR**. efn_audit 77 test. `efn_setup_security` ter-install OK. WARNING 67 vs baseline 64: +1 WARNING kunci HMAC tidak ada (sesuai desain), sisanya log hapus aturan uji.
+- `check-odoo-deps`: 11 modul, 0 dependensi terlarang.
+- Tour `odoo-tour.sh`: **5/5**, 0 ERROR, Chrome tidak ada di image produksi. Tour dijalankan sebelum perbaikan terakhir yang hanya menyentuh file test; kode model tidak berubah sesudahnya.
+- ruff check + ruff format --check `efn_audit`, `efn_setup_audit`: lolos.
+
+## Untuk lead (di luar batas file saya)
+- **devsecops**: (1) Promtail: ganti selector substring dengan regex ber-anchor `^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} \d+ INFO \S+ odoo\.addons\.efn_audit\.sink: EFN_AUDIT_SINK (\{[^\n]*\})$` + stage json yang mewajibkan `log_id`. Ambil label dari kunci JSON `audit_op` (kardinalitas ~10), bukan `operation`, agar tidak bentrok `audit_op_extracted`. (2) Alert Loki critical untuk `critical=true` dan `audit_op=~"access_rule_change|purge_manual"`; warning untuk `apikey_create`. Aturan purge yang ada (`note !~ retensi|erasure`) tetap bekerja karena purge manual berawalan `manual:`. (3) Docker secret `efn_audit_sink_key` (32+ byte acak) di-mount ke odoo + etl.
+- **data-ai**: ETL memverifikasi `mac` (`hmac.compare_digest(mac, HMAC-SHA256(key, json.dumps(event tanpa mac, sort_keys=True, separators=(",",":"), ensure_ascii=True)))`). Cocokkan `log_id` sink dengan `efn_audit_log`; tandai baris tanpa/mac salah.
+- **efn_core** (bukan batas saya): `logging.Filter` global yang meng-escape `\r\n` di argumen log (SEC-51 butir 2) masih disarankan untuk stream lain.
+- SEC-43 butir 5 (`base.group_system` hanya Superadmin) tetap keputusan klien. HMAC membuktikan asal baris, bukan kebenaran isinya, terhadap admin yang menulis kode server action.
+
+## Belum / sisa
+- Tidak tercatat: ACL/rule/grup dari data XML/CSV saat install/upgrade, penghapusan API key kedaluwarsa oleh autovacuum (SQL), SQL langsung.
+- Upgrade 19.0.1.2.0 -> 19.0.1.3.0 di volume dev belum diuji. Tidak ada migrasi karena tidak ada perubahan skema. Log M2m lama tetap berformat daftar penuh.
+- Overhead pada beban nyata (POS/ubah user massal) belum diukur. Penulisan `res.users` tanpa field dilacak tetap 0 read tambahan.
