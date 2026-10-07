@@ -8,6 +8,8 @@
 >
 > **Pembaruan 6 Okt 2026 (gelombang 12).** Status implementasi dicatat di ADR-022 (E12 dipersempit ke satu endpoint metrik ocr-worker; hop baru s3-gateway, Loki→Alertmanager mTLS, sink audit) dan ADR-030 (SILO + s3-gateway jalan di dev; celah SEC-41 terkonfirmasi lalu diperbaiki dan diuji). Belum ada ADR yang Accepted. Daftar gabungan keputusan klien yang masih terbuka: bagian **"Keputusan klien yang masih terbuka"** di bawah. Ringkasan satu halaman untuk manajemen: `docs/STATUS_MANAJEMEN.md`.
 >
+> **Pembaruan 7 Okt 2026 (gelombang 14, Fase 1).** Fitur poin di kasir sudah selesai dan diuji di lingkungan pengembangan. Reviewer keamanan (r7) memberi **GO bersyarat** untuk mengaktifkan poin di **satu outlet pilot** dengan 7 syarat (bagian "Syarat GO pilot loyalty" di bawah). Tabel keputusan terbuka ditambah **P-1..P-10** (pertanyaan pilot dari fit-gap Odoo), **Q-13** (nilai & batas poin oleh Finance), dan **Q-P12..Q-P14** (UU PDP, inventaris v4). Belum ada ADR baru; belum ada ADR yang Accepted.
+>
 > **Ringkasan manajemen (awal).** Ada 25 keputusan arsitektur yang menunggu tanda tangan klien. Semuanya berstatus **Proposed**: tim boleh mulai mengikuti rekomendasi, tetapi tidak boleh mengunci pilihan yang mahal dibalik sebelum disetujui. **ADR-022 (enkripsi) dan ADR-025 (model tim agent) berasal dari instruksi klien 5 Okt 2026** — prinsipnya sudah wajib; yang ditandatangani adalah caranya. Tujuh keputusan di **Gelombang 1** memblokir Fase 1 dan perlu ditandatangani dalam 2 minggu pertama; ADR-022/023/024 (keamanan) ditandatangani paralel karena memblokir staging publik. Keputusan pajak dan legal (MGM, unified cart) butuh konsultan eksternal sehingga harus **dimulai** sekarang.
 
 Status: `Proposed` = belum disetujui klien · `Accepted` = disetujui (catat nama & tanggal) · `Superseded by ADR-xxx`.
@@ -69,9 +71,50 @@ Belum ada ADR berstatus Accepted. Sudah dijawab klien: Q-E1 (kustodi = Superadmi
 | 9 | ADR-025 | Formalitas | Athera + PO |
 | 10 | Gelombang 2 & 3 lainnya | Seperti di bawah | — |
 
-## Keputusan klien yang masih terbuka (gabungan, per 6 Okt 2026 — Gelombang 12)
+## Syarat GO pilot loyalty (review keamanan r7, 7 Okt 2026)
+
+Sumber: `docs/reviews/SECURITY_REVIEW_2026-10-07-r7.md` §"Rekomendasi go/no-go". Rekomendasi reviewer: **GO bersyarat** untuk satu outlet PT Retail; alternatif lebih hati-hati: poin didapat (earn) dulu, penukaran (redeem) 1–2 minggu kemudian bila tidak ada anomali kritis.
+
+| # | Syarat sebelum fitur poin dinyalakan | Siapa | Status 7 Okt | Butuh keputusan klien? |
+|---|---|---|---|---|
+| G-1 | Staging: skema `06-*.sql` + modul Odoo versi 13c terpasang; uji `call_kw` **dan `/json/2`** ke klien BFF ditolak | devsecops + QA | **Belum** (staging belum ada) | Ya, tidak langsung: pengadaan server (ADR-004) |
+| G-2 | Finance menetapkan batas poin final (per order, harian per member, per PT/jam, per kasir/jam), semuanya > 0 di production | **Finance** | **Belum** (placeholder 5.000 / 2.000 / 50.000 / 10.000 poin) | **Ya — Q-13** |
+| G-3 | Hak akses: `base.group_system` hanya Superadmin; akun perangkat kasir **tanpa** grup POS Manager | **IT klien** + Ops Outlet | **Belum** (keputusan klien 6 Okt sudah menetapkan prinsip "hanya Superadmin"; daftar nama belum) | Ya — daftar nama Superadmin (Q-E1a) |
+| G-4 | Operasional: supervisor meninjau "Review Poin" + outbox `hold` setiap hari; on-call menerima alert kritis; dead-man rekonsiliasi diamati sekali di staging | **Ops Outlet** + devsecops | **Belum** | Ya — siapa supervisor & on-call |
+| G-5 | Inventaris UU PDP v4 | architect | **Selesai** (`docs/compliance/PDP_DATA_INVENTORY.md` v4, Gelombang 14) | DPO meninjau (Q-P12..Q-P14) |
+| G-6 | CI: `EFN_TOUR_MIN_TESTS` 9 → 15 | devsecops | **Belum** (±10 menit) | Tidak |
+| G-7 | SOP: retur tanpa struk wajib supervisor sampai SEC-68 / Q-27 diputuskan | **Ops Outlet** | **Belum** | Ya — P-3 (Q-27) |
+
+Kondisi berhenti (NO-GO): alert `earn_ledger_orphan`, `earn_ledger_mismatch`, `ledger_unknown_source`, `restore_exceeds_redeem`, atau `earn_limit_company_hour` tanpa penjelasan → matikan flag poin di config POS (kasir tetap jalan tanpa poin), ikuti `docs/runbooks/loyalty-anomaly.md`.
+
+## Keputusan klien yang masih terbuka (gabungan, per 7 Okt 2026 — Gelombang 14)
 
 Sudah dijawab: Q-E1 (kustodi = Superadmin), Q-E4 (mTLS), prinsip pajak configurable, vendor payment ditunda, prinsip tanpa modul Odoo pihak ketiga (ADR-031). Kolom "Default bila tidak dijawab" = yang dipakai tim sekarang.
+
+### Pilot POS retail & loyalty (baru, Gelombang 14)
+Sumber: `docs/08_ODOO_FIT_GAP.md` §6.6 (functional G13), review r7. Semua memblokir **outlet pilot**, bukan pengembangan.
+
+| Prioritas | ID | Pertanyaan | Pemutus | Default bila tidak dijawab | Memblokir |
+|---|---|---|---|---|---|
+| **A** | **Q-13** (+ P-7) | Nilai poin, minimum tukar, maks % order, masa berlaku, kategori tanpa poin, dasar perolehan, perlakuan retur berpoin, saldo negatif/utang poin, **dan batas anti-fraud** (per order, harian per member, per PT/jam, per kasir/jam) | **Finance** + PO | 1 poin/Rp10.000, 1 poin = Rp100, min 50, maks 50 %, 365 hari; batas 5.000 / 2.000 / 50.000 / 10.000 poin (placeholder) | Syarat GO G-2; liabilitas poin di neraca |
+| **A** | P-1 | Toko pilot mana (alamat, jam buka, jumlah kasir per shift, jumlah SKU aktif)? | PO + Ops | — | Semua persiapan pilot; kapasitas katalog offline (Q-7) |
+| **A** | P-3 (Q-27) | Peran kasir: refund & retur tanpa struk wajib supervisor? void baris? toleransi selisih kas (Rp)? setoran tunai? satu sesi per shift? persetujuan inline + jejak atau cukup PIN supervisor? | Ops Outlet + Finance | Standar Odoo (supervisor login PIN, tanpa jejak "disetujui oleh"); SOP retur tanpa struk wajib supervisor (G-7) | Syarat GO G-7; modul opsional G13-2/3/5/6 (±1–3 minggu-engineer bila diminta) |
+| **A** | P-8 | Konsultan pajak: PPN atas penukaran poin (potongan harga mengurangi DPP **atau** alat bayar)? | Finance + Tax | Potongan harga per kelompok pajak (desain saat ini) | Pembukuan pajak redeem; ubah perlakuan setelah go-live = koreksi faktur |
+| **A** | P-9 (Q-5/Q-12) | Sumber data migrasi (sistem lama), bukti consent member lama, kasir boleh daftarkan member? | PO + DPO | Member tanpa bukti consent → marketing `false`; Q-K1 | Impor member & saldo awal; **lihat Q-P13** |
+| B | P-2 (Q-25) | Timbangan: merek/model, label prepack atau terhubung ke kasir, format label | Ops Outlet | Nomenklatur EFN Retail (prefix 21 berat / 23 harga) | Produk timbang |
+| B | P-4 (Q-28) | Daftar promo pilot konkret, harga member (pricelist % atau tetap), promo ber-OTP mana | PO + Marketing | Pricelist member 5 % (demo) | Konfigurasi promo |
+| B | P-5 (Q-29) | Metode bayar pilot (tunai, EDC bank apa, QRIS), split payment, pembulatan tunai, refund wajib ke metode asal? | Finance + Ops | Tunai + EDC manual; refund tidak dibatasi ke metode asal (standar CE) | G13-4 (opsional) |
+| B | P-6 (Q-55/Q-56) | Internet toko (utama + cadangan 4G), perangkat kasir, printer, laci kas, scanner, layar pelanggan | IT + Ops | — | Pengadaan perangkat outlet; mode offline |
+| B | P-10 (Q-34) | Produk fresh perlu lot/kedaluwarsa di kasir? | Ops | Tidak (lot di gudang saja) | Alur kasir produk fresh |
+
+### UU PDP — tambahan inventaris v4 (baru, Gelombang 14)
+| Prioritas | ID | Pertanyaan | Pemutus | Default bila tidak dijawab | Memblokir |
+|---|---|---|---|---|---|
+| **A** | **Q-P13** | Nomor referensi data lama (`source_ref`) saat impor saldo poin wajib opak, bukan nomor pelanggan sistem lama? | DPO + Finance | **Rekomendasi: wajib opak** (±0,5 hari); tanpa keputusan, id lama tersimpan permanen setelah akun dihapus | **Impor saldo pertama** (entri tidak bisa diubah) |
+| B | Q-P12 | Masa simpan daftar tolak akun terhapus (`erasure_suppression`) + terima risiko uji keanggotaan oleh pemegang kunci | DPO | 90 hari | — |
+| B | Q-P14 | Retensi outbox poin Odoo (kini tanpa batas) & riwayat query/akun Metabase | DPO + Finance | tanpa batas / selama dipakai | — |
+
+### Umum (dari Gelombang 12, diperbarui)
 
 | Prioritas | ID | Pertanyaan | Sumber | Pemutus | Default bila tidak dijawab | Memblokir |
 |---|---|---|---|---|---|---|
@@ -85,7 +128,7 @@ Sudah dijawab: Q-E1 (kustodi = Superadmin), Q-E4 (mTLS), prinsip pajak configura
 | B | Q-V1 / Q-V3 / Q-V5 / Q-V6 | Sandbox referensi; laporan keuangan per PT (Metabase vs Odoo); cakupan "pihak ketiga"; vendor referensi lain | ADR-031 | IT + Finance | tidak / — / hanya addon / OCA+Cybrosys | Fase 1 laporan keuangan |
 | B | Q-W1 / Q-W2 / Q-W3 / Q-W4 / Q-55 | Jumlah perangkat per outlet, pemasang & SLA, user Odoo eksternal, model Android POS, model router | ADR-023 | IT + Ops Outlet | klien WG di perangkat | Pilot outlet |
 | B | Q-P2..Q-P8 | Retensi transaksi 10 th, usia, transfer, data keuangan, tombstone, CH 24 bln vs 5 th, lokasi 90 h | PDP_DATA_INVENTORY | DPO + Legal | default usulan | Go-live publik |
-| B | **Q-P9** (baru) | Retensi log audit (730 h, min 365; log kontrol/purge tanpa batas; salinan ClickHouse simpan PII atau tidak) | PDP_DATA_INVENTORY | DPO + auditor | 730/365/tanpa batas | — |
+| B | **Q-P9** | Retensi log audit (730 h, min 365; log kontrol/purge/akses tanpa batas; salinan ClickHouse TTL 10 th — v4: nilai pribadi sudah tidak disalin) | PDP_DATA_INVENTORY | DPO + auditor | 730/365/tanpa batas/10 th | — |
 | B | **Q-P10** (baru) | Anggota grup "Auditor Data Pribadi Lintas PT" | PDP_DATA_INVENTORY | DPO + Direksi | tidak ada anggota | Audit lintas PT |
 | B | **Q-P11** (baru, SEC-38) | Akun tidak aktif / nomor HP daur ulang (anonimisasi otomatis N bulan) | PDP_DATA_INVENTORY | DPO + PO | tidak ada kebijakan (risiko residu) | — |
 | B | Q-T1..Q-T6 | Dasar transfer Meta/Cloudflare, WA Local Storage, mode Cloudflare, lokasi data payment, kunci tidak di GitHub, DPIA | PDP_TRANSFER_LINTAS_NEGARA | DPO + Legal | proxy penuh CF | Go-live publik |

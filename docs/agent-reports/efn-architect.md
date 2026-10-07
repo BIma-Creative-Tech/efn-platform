@@ -256,3 +256,58 @@ Lihat `docs/decisions/README.md` bagian baru. Baru di gelombang ini: **Q-P9** re
 - **Terverifikasi (membaca kode/konfigurasi repo):** prefix Redis & `redisKeyHash` (`auth.service.ts`, `dsar.service.ts`, `dsar-receipt.service.ts`), field `m` terenkripsi (`otp.service.ts:64-66`), retensi BFF (`app-config.ts:671-691`, `retention.service.ts`), erasure menghapus `member` + `consent.ip_enc` NULL (`erasure.service.ts:127,180,188`), `RETAIN_FULL=14`, ILM 90 h (`minio-init.sh`), Loki 720h/9600h, daftar alert (`alert-rules.yml`, `loki-rules/efn-audit-sink.yml`), ocr-worker metrics tanpa CN allowlist.
 - **Dari laporan agent (tidak saya jalankan):** smoke 108/108, log bebas HP, SEC-41 runtime, sink audit nyata, upgrade in-place SILO.
 - **Belum terverifikasi:** kode salinan audit ClickHouse (data-AI); label Promtail untuk s3-gateway di query LogQL; nomor pasal UU PDP; semua hal staging/produksi (LUKS, `log_parameter_max_length`, efn-deploy di host); Mermaid tidak dirender.
+
+# Gelombang 14 — Inventaris PDP v4 (data G13/G13c), keputusan pilot, status manajemen (2026-10-07)
+
+Basis: `0e8a1ff`, review r7 (syarat GO no. 5, SEC-65 & SEC-11 Partial), `docs/04` §9 v4.0–4.3, laporan agent G13/13b/13c. Hanya dokumen; tidak ada kode diubah, tidak ada commit.
+
+## Ringkasan (untuk manajemen)
+Daftar data pribadi kini mencakup semua data fitur poin di kasir, sehingga syarat GO pilot no. 5 terpenuhi. Indeks keputusan memuat 7 syarat GO beserta pemiliknya dan 10 pertanyaan pilot. Ringkasan manajemen diperbarui ke status Fase 1. Penghambat utama pilot adalah server staging dan batas poin dari Finance. Ada satu temuan baru yang harus diputuskan **sebelum impor saldo poin lama** (Q-P13).
+
+## File diubah
+| File | Perubahan |
+|---|---|
+| `docs/compliance/PDP_DATA_INVENTORY.md` | **v4**: §2.1a (`loyalty_reservation` 30 h, `loyalty_pos_earn` 400 h, `erasure_suppression` tag HMAC 90 h + risiko uji keanggotaan, entri ledger `pos_*`/`migration_opening`, endpoint migrasi), §2.2a (`efn.pos.otp.challenge.purpose`, `efn.pos.loyalty.reservation` 400 h, `efn.pos.loyalty.outbox` tanpa payload/tanpa GC, `efn.audit.log` kontrol akses SEC-49), §2.4 (`fact_pos_payment`, stok, price index, `fact_gl_line` tanpa partner/tanpa TTL, salinan audit ter-redaksi + `row_hash`, TTL 10 th), §2.6 (stream Loki `efn_loyalty`, `efn_audit_anchor`, `host-journal` 400 h; Metabase), kolom Erasure, matriks retensi, Q-P12..Q-P14 |
+| `docs/decisions/README.md` | Catatan G14; tabel **Syarat GO pilot loyalty** (G-1..G-7, pemilik, status); keputusan terbuka: Q-13 + P-1..P-10, Q-P12..Q-P14; Q-P9 diperbarui |
+| `docs/STATUS_MANAJEMEN.md` | Ditulis ulang untuk Fase 1: apa yang jalan, status 7 syarat GO, risiko, 8 kebutuhan dari manajemen, biaya |
+
+## Temuan saat menulis (untuk lead)
+1. **(usulan Low, R-L01) `source_ref` migrasi = id sistem lama** (template `06_saldo_poin_awal_bff.csv`). Nilai ini masuk ke `loyalty_ledger.source_ref` + `idempotency_key`. Erasure tidak menyentuhnya, dan `efn_bff` memang tidak punya UPDATE pada kolom itu. ETL menyalinnya ke ClickHouse `loyalty_events`, lalu nilai yang sama juga dicatat di Loki `EFN_LOYALTY_MIGRATION` (400 h). Akibatnya, bila sistem lama masih menyimpan pemetaan id ↔ HP, jaminan SEC-31 "tidak dapat ditautkan" gugur untuk member hasil migrasi.
+   - Usulan: validator E-25 + README template mewajibkan `source_ref` opak (HMAC dengan kunci batch yang dimusnahkan setelah rekonsiliasi). Biaya ±0,5 hari.
+   - Harus diputuskan sebelum impor pertama, karena ledger tidak bisa diubah (Q-P13).
+   - Diteruskan ke security-reviewer untuk diklasifikasi.
+2. **Outbox Odoo `efn.pos.loyalty.outbox` tanpa retensi** (tidak ada `@api.autovacuum`). Usulan: hapus baris selesai setelah 400 h (Q-P14), ±0,5 hari odoo-engineer.
+3. **Metabase menyimpan kredensial koneksi ClickHouse tanpa enkripsi aplikasi** selama `MB_ENCRYPTION_SECRET_KEY` belum diset (SEC-64 Open). Saat ini hanya terlindung LUKS/WAL-G.
+4. Komentar `erasure.service.ts:179` rusak (dua komentar tergabung) dan menyebut reservasi "berisi member_ref_enc". Ini bertentangan dengan skema `05-*.sql`. Perlu dirapikan oleh bff-engineer (kosmetik).
+5. Template migrasi menulis `source = migration` / `migration:<source_ref>`, sedangkan kode memakai `migration_opening`. README template perlu disamakan (functional).
+6. Salinan audit ClickHouse ternyata sudah me-redaksi nilai pribadi (`audit.py` `line_copy_row`/`is_log_personal`). Konflik Q-P9(c) dari v3 tertutup secara desain. Residu: uid karyawan disimpan 10 th, dan `line_hash` atas nilai berentropi rendah bisa dikonfirmasi lewat tebakan.
+
+## Keputusan yang butuh tanda tangan klien (baru/diperbarui)
+- **Q-13** batas poin & parameter: Finance (syarat GO G-2).
+- **P-1..P-10**: toko pilot, Q-27 peran kasir, PPN poin, sumber migrasi, dan seterusnya.
+- **Q-P13** `source_ref` opak: DPO + Finance, sebelum impor saldo.
+- **Q-P12** retensi `erasure_suppression`.
+- **Q-P14** retensi outbox Odoo & Metabase.
+- Daftar nama Superadmin (G-3).
+- Supervisor peninjau harian & on-call (G-4).
+
+## Terverifikasi / belum terverifikasi
+- **Terverifikasi dengan membaca repo:**
+  - skema `05/06-*.sql` (kolom, grant, retensi);
+  - `app-config.ts:781,896,919,923` (default 90/24 jam/30/400);
+  - `erasure.service.ts:166-181,242-252`;
+  - `erasure-suppression.ts`;
+  - `loyalty-anomaly.ts` (field tanpa PII);
+  - model Odoo `efn.pos.loyalty.reservation` (autovacuum 400/min 30) dan `outbox` (tanpa GC, payload tidak disimpan), ACL `ir.model.access.csv`;
+  - `efn.pos.otp.challenge.purpose` (30 h);
+  - `loki.yml` (4 stream 9600h);
+  - `03-gl-audit.sql` (tanpa `partner_id`), `04-fase1-marts.sql`, `clickhouse-init.sh` (TTL 5 th / audit 10 th / GL tanpa TTL), `metabase-access.sql`;
+  - `services/etl/efn_etl/audit.py` (redaksi);
+  - `jobs.py:123` (`source_ref` disalin).
+- **Dari laporan agent (tidak saya jalankan):** smoke 153/153, erasure G13c (d), uji 497 Metabase, log bebas HP.
+- **Belum terverifikasi:**
+  - retensi riwayat query Metabase OSS v0.52.4;
+  - job retensi reservasi/earn di runtime;
+  - `host-journal` di host nyata;
+  - nomor pasal UU PDP;
+  - apakah sistem lama klien memakai id yang dapat dipetakan ke HP (bergantung P-9).
