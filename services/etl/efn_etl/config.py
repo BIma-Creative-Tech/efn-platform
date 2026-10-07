@@ -79,6 +79,15 @@ class Settings:
     amqp_url: str = "amqps://efn-etl@rabbitmq:5671"
     amqp_password: str = field(default="", repr=False)
     amqp_ca_file: str | None = None  # None = plaintext (hanya dev dengan EFN_ALLOW_PLAINTEXT)
+    # Gelombang 12: mart GL (F-19) dan salinan audit tamper-evident. Default mati sampai grant Odoo diterapkan
+    # (sql/odoo-readonly-grants.sql); keduanya membaca DB Odoo (ODOO_PG_*).
+    gl_enabled: bool = False
+    audit_copy_enabled: bool = False
+    audit_settle_seconds: int = 600
+    audit_late_window_seconds: int = 86_400
+    audit_batch_size: int = 2000
+    audit_recon_interval_seconds: int = 86_400
+    audit_recon_content: bool = True
 
     @property
     def amqp_user(self) -> str:
@@ -158,4 +167,11 @@ class Settings:
             amqp_url=amqp_url,
             amqp_password=read_secret("RABBITMQ_PASSWORD", e) if erasure_enabled else "",
             amqp_ca_file=amqp_ca,
+            gl_enabled=_bool(e, "ETL_ENABLE_GL", False),
+            audit_copy_enabled=_bool(e, "ETL_AUDIT_COPY_ENABLED", False),
+            audit_settle_seconds=_int(e, "ETL_AUDIT_SETTLE_SECONDS", 600),
+            audit_late_window_seconds=_int(e, "ETL_AUDIT_LATE_WINDOW_SECONDS", 86_400),
+            audit_batch_size=_int(e, "ETL_AUDIT_BATCH_SIZE", 2000),
+            audit_recon_interval_seconds=_int(e, "ETL_AUDIT_RECON_INTERVAL_SECONDS", 86_400),
+            audit_recon_content=_bool(e, "ETL_AUDIT_RECON_CONTENT", True),
         )

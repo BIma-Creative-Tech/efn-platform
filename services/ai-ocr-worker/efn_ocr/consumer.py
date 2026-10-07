@@ -69,6 +69,9 @@ def build_processor(settings: Settings, publisher: PikaPublisher) -> ReportProce
                 if settings.ollama_client_cert_file and settings.ollama_client_key_file
                 else None
             ),
+            num_predict=settings.ollama_num_predict,
+            num_ctx=settings.ollama_num_ctx,
+            keep_alive=settings.ollama_keep_alive,
         )
     ocr = build_engine(settings.ocr_engine, settings.tesseract_lang)
     return ReportProcessor(settings, repo, images, ocr, vlm, publisher)

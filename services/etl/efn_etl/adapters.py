@@ -10,6 +10,7 @@ from clickhouse_connect.driver.client import Client
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
 
+from efn_etl.audit import ChainHead, ChainRow, CopiedLog
 from efn_etl.config import PgTarget, Settings
 from efn_etl.erasure import count_sql, delete_sql
 from efn_etl.watermark import Cursor, normalize_watermark
@@ -124,3 +125,87 @@ class ClickHouseWatermarkStore:
             column_names=["job", "watermark", "rows_loaded", "updated_at"],
             database=self._database,
         )
+
+
+class ClickHouseAuditStore:
+    """Salinan audit append-only (Gelombang 12). Hak efn_etl: SELECT+INSERT saja pada tabel audit_* (tanpa ALTER/
+    DELETE/TRUNCATE; etl-access.sql). Semua query berparameter (tidak ada interpolasi nilai)."""
+
+    def __init__(self, client: Client, database: str) -> None:
+        self._client = client
+        self._database = database
+
+    def _rows(self, sql: str, params: dict[str, Any] | None = None) -> list[tuple[Any, ...]]:
+        return list(self._client.query(sql, parameters=params or {}).result_rows)
+
+    def heads(self) -> dict[int, ChainHead]:
+        rows = self._rows(
+            "SELECT chain_company, max(chain_seq), argMax(row_hash, chain_seq) FROM audit_log_copy "
+            "GROUP BY chain_company"
+        )
+        return {int(c): ChainHead(seq=int(s), row_hash=str(h)) for c, s, h in rows}
+
+    def max_log_id(self) -> int:
+        rows = self._rows("SELECT max(log_id) FROM audit_log_copy")
+        return int(rows[0][0] or 0) if rows else 0
+
+    def min_log_id_since(self, since: datetime) -> int | None:
+        rows = self._rows(
+            "SELECT min(log_id), count() FROM audit_log_copy WHERE create_date >= {since:DateTime64(6)}",
+            {"since": since},
+        )
+        return int(rows[0][0]) if rows and rows[0][1] else None
+
+    def log_ids_between(self, lo: int, hi: int) -> set[int]:
+        rows = self._rows(
+            "SELECT log_id FROM audit_log_copy WHERE log_id > {lo:UInt64} AND log_id <= {hi:UInt64}",
+            {"lo": lo, "hi": hi},
+        )
+        return {int(r[0]) for r in rows}
+
+    def logs_with_lines(self, log_ids: Sequence[int]) -> set[int]:
+        if not log_ids:
+            return set()
+        rows = self._rows(
+            "SELECT DISTINCT log_id FROM audit_log_line_copy WHERE log_id IN {ids:Array(UInt64)}",
+            {"ids": list(log_ids)},
+        )
+        return {int(r[0]) for r in rows}
+
+    def insert(self, table: str, columns: Sequence[str], rows: list[list[Any]]) -> None:
+        if rows:
+            self._client.insert(table, rows, column_names=list(columns), database=self._database)
+
+    def copied_range(self, lo: int, hi: int) -> list[CopiedLog]:
+        rows = self._rows(
+            "SELECT log_id, create_date, model_name, operation, payload_hash FROM audit_log_copy "
+            "WHERE log_id > {lo:UInt64} AND log_id <= {hi:UInt64}",
+            {"lo": lo, "hi": hi},
+        )
+        return [CopiedLog(int(a), b, str(c), str(d), str(e)) for a, b, c, d, e in rows]
+
+    def line_hashes(self, log_ids: Sequence[int]) -> dict[int, dict[int, str]]:
+        if not log_ids:
+            return {}
+        rows = self._rows(
+            "SELECT log_id, line_id, line_hash FROM audit_log_line_copy WHERE log_id IN {ids:Array(UInt64)}",
+            {"ids": list(log_ids)},
+        )
+        out: dict[int, dict[int, str]] = {}
+        for log_id, line_id, digest in rows:
+            out.setdefault(int(log_id), {})[int(line_id)] = str(digest)
+        return out
+
+    def chain_rows(self, company: int, after_seq: int, limit: int) -> list[ChainRow]:
+        rows = self._rows(
+            "SELECT chain_company, chain_seq, log_id, payload_hash, prev_hash, row_hash FROM audit_log_copy "
+            "WHERE chain_company = {c:UInt32} AND chain_seq > {s:UInt64} ORDER BY chain_seq LIMIT {n:UInt32}",
+            {"c": company, "s": after_seq, "n": limit},
+        )
+        return [ChainRow(int(a), int(b), int(c), str(d), str(e), str(f)) for a, b, c, d, e, f in rows]
+
+    def last_recon_at(self) -> datetime | None:
+        rows = self._rows("SELECT max(run_at), count() FROM audit_recon_run")
+        if not rows or not rows[0][1]:
+            return None
+        return normalize_watermark(rows[0][0])

@@ -69,6 +69,8 @@ Tesseract dari apt Debian (`tesseract-ocr-ind`, `-eng`): image ramping, tanpa un
 | `OCR_CONFIDENCE_THRESHOLD` | `0.80` | di bawah ini -> VLM |
 | `OCR_VLM_ENABLED` | `true` | `false` -> laporan ragu jadi `flagged/vlm_disabled` |
 | `OLLAMA_URL` / `OLLAMA_CA_FILE` / `OLLAMA_MODEL` / `OLLAMA_TIMEOUT_SECONDS` | `https://ollama:11434` / CA internal / `qwen2.5vl:7b` / `90` | sidecar TLS |
+| `OCR_VLM_MAX_SIDE` / `OCR_VLM_JPEG_QUALITY` / `OCR_VLM_TRIM_BORDER` | `1024` / `85` / `false` | G12: gambar untuk VLM diperkecil (tidak pernah diperbesar); trim tepi polos opsional |
+| `OLLAMA_NUM_PREDICT` / `OLLAMA_NUM_CTX` / `OLLAMA_KEEP_ALIVE` | `128` / `2048` / `30m` | gagal start bila `NUM_CTX` < token gambar sisi maks + 200 + `NUM_PREDICT` |
 | `NAME_SIMILARITY_THRESHOLD` | `75` (atau `0.75`) | skor rapidfuzz |
 | `PRICE_TOLERANCE_PCT` | `2.0` | |
 | `PRICE_HUNTER_DAILY_CAP` | `20` | laporan valid per user per hari (WIB); 0 = nonaktif |
@@ -77,11 +79,28 @@ Tesseract dari apt Debian (`tesseract-ocr-ind`, `-eng`): image ramping, tanpa un
 | `PRICE_HUNTER_POINTS` | `10` | menunggu Q-13/Q-43 |
 | `OCR_PREFETCH` / `OCR_MAX_RETRIES` / `OCR_STALE_PROCESSING_SECONDS` | `2` / `3` / `900` | |
 | `METRICS_PORT` / `LOG_LEVEL` | `9100` / `INFO` | |
+| `METRICS_BIND_ADDRESS` | `0.0.0.0` bila HTTPS, `127.0.0.1` bila plaintext dev | literal IP; non-loopback tanpa TLS ditolak. Healthcheck memprobe 127.0.0.1 -> pakai `0.0.0.0`/`::` atau loopback |
 | `METRICS_TLS_CERT_FILE` / `METRICS_TLS_KEY_FILE` / `METRICS_TLS_CA_FILE` | — | secret `tls_ocr_worker_crt` / `tls_ocr_worker_key`; CA untuk healthcheck |
 | `METRICS_TLS_CLIENT_CA_FILE` | — (wajib production) | CA internal; healthcheck membawa sertifikat worker sebagai klien |
 | `OLLAMA_CLIENT_CERT_FILE` / `OLLAMA_CLIENT_KEY_FILE` | — (wajib production bila VLM aktif) | secret `tls_ocr_worker_crt` / `tls_ocr_worker_key` |
 
 Metrik Prometheus di `https://ocr-worker:9100/metrics`: `efn_ocr_reports_total{status}`, `efn_ocr_processed_total`, `efn_ocr_deliveries_total{action}`, `efn_ocr_vlm_calls_total{outcome}`, `efn_ocr_processing_seconds` (histogram).
+
+## Performa VLM (Gelombang 12)
+
+Diukur di stack dev (Docker Desktop WSL2, Ollama 0.35.1 CPU, `qwen2.5vl:3b`, foto smoke sintetis ber-noise 1200x800, 3 foto baru per varian, model sudah termuat):
+
+| Varian | Token prompt | Waktu per foto (rata-rata) | Akurasi (nama+harga persis) |
+|---|---|---|---|
+| Sebelum: gambar asli 1200x800 q92, tanpa batas | 1333 | 66,7 s (74,1 / 64,6 / 61,3) | 3/3 |
+| **Default G12**: sisi maks 1024, q85, `num_predict=128`, `num_ctx=2048`, `keep_alive=30m` | 1166 | **59,1 s** (64,7 / 55,1 / 57,5) | 3/3 |
+| 768 px | 1166 | 59,3 s | 1/3 (sufiks nama hilang) |
+| 512 px (probe) | 1166 | 55,7 s | 1/1 |
+| 1024 + trim tepi | 1126–1144 | 59,4 s | 2/3 |
+
+Temuan: Ollama (implementasi qwen2.5vl) **menormalkan ukuran gambar sendiri** — di bawah ~1024 px jumlah token gambar tetap ~1080, jadi resize di klien hanya memangkas ~12 % token/waktu dan mengecilkan payload (45–54 KB -> 27–31 KB); memperkecil lebih jauh menurunkan akurasi tanpa mempercepat. Waktu didominasi *prompt eval* gambar (~20 token/s di CPU). `keep_alive` mencegah muat ulang model (~78 s setelah restart). **Kesimpulan: CPU tidak layak untuk throughput produksi; resize bukan solusi.**
+
+Rekomendasi produksi (ADR-008, keputusan klien): host Ollama dengan GPU NVIDIA >= 8 GB VRAM (mis. L4 24 GB / RTX 4060 Ti 16 GB) untuk `qwen2.5vl:7b` (atau 3b). Perkiraan (belum diukur di GPU): prompt eval ratusan-ribuan token/s -> ~1–3 s per foto, ~20–40 foto/menit per GPU dengan `OLLAMA_NUM_PARALLEL=2`, vs ~1 foto/menit di CPU 8 thread. Target operasional usulan: p95 < 10 s per foto VLM, antrean `ocr.requested` < 5 menit pada puncak. Tanpa GPU: biarkan VLM aktif sebagai jalur lambat (laporan ragu menunggu ~1 menit; timeout dev 240 s) atau `OCR_VLM_ENABLED=false` -> `flagged/vlm_disabled` (review manual).
 
 ## Menjalankan test
 

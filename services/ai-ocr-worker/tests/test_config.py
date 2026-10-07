@@ -328,3 +328,21 @@ def test_published_messages_carry_amqp_user_id() -> None:
     assert props.delivery_mode == 2
     with pytest.raises(ValueError):
         PikaPublisher(pika.ConnectionParameters(), "")
+
+
+def test_metrics_bind_address_defaults(tls_env: dict[str, str]) -> None:
+    assert Settings.from_env(tls_env).metrics_bind_address == "0.0.0.0"  # noqa: S104
+    assert Settings.from_env(PLAIN_DEV).metrics_bind_address == "127.0.0.1"
+    assert Settings.from_env({**tls_env, "METRICS_BIND_ADDRESS": "::"}).metrics_bind_address == "::"
+    assert Settings.from_env({**PLAIN_DEV, "METRICS_BIND_ADDRESS": "::1"}).metrics_bind_address == "::1"
+
+
+@pytest.mark.parametrize("value", ["ocr-worker", "0.0.0.0/0", "999.1.1.1"])
+def test_metrics_bind_address_must_be_ip(tls_env: dict[str, str], value: str) -> None:
+    with pytest.raises(ValueError):
+        Settings.from_env({**tls_env, "METRICS_BIND_ADDRESS": value})
+
+
+def test_metrics_bind_address_plaintext_only_loopback() -> None:
+    with pytest.raises(TlsConfigError):
+        Settings.from_env({**PLAIN_DEV, "METRICS_BIND_ADDRESS": "0.0.0.0"})  # noqa: S104

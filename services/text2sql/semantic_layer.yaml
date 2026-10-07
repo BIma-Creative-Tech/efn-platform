@@ -7,7 +7,10 @@ max_execution_time_seconds: 15
 
 # Tabel dasar efn_dwh yang TIDAK boleh dibaca LLM dan tidak boleh dipakai sebagai nama CTE (anti-shadowing, SEC-04).
 # WAJIB ditambah setiap kali tabel baru dibuat di efn_dwh (infra/clickhouse/init/*.sql).
-protected_tables: [competitor_prices, loyalty_events, fact_sales_line, etl_watermark]
+protected_tables: [competitor_prices, loyalty_events, fact_sales_line, etl_watermark, fact_gl_line, dim_gl_account,
+                   dim_company, audit_log_copy, audit_log_line_copy, audit_recon_run]
+# Sengaja BELUM ada di `tables`: v_gl_consolidated (tanpa PII, tetapi laporan keuangan lintas PT; Text-to-SQL belum punya
+# pembatasan per company -> butuh keputusan klien/Q-6) dan semua tabel audit (khusus auditor).
 
 tables:
   - name: v_competitor_prices

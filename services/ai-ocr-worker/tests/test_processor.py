@@ -141,6 +141,7 @@ def _processor(
         pub,
         image_loader=lambda data: object(),
         phasher=lambda image: "0123456789abcdef",
+        vlm_encoder=lambda image: b"vlm-jpeg",
     )
     return processor, pub
 

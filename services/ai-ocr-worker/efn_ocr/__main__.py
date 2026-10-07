@@ -23,6 +23,7 @@ def main() -> None:
         settings.metrics_cert_file,
         settings.metrics_key_file,
         settings.metrics_client_ca_file,
+        addr=settings.metrics_bind_address,
     )
     log = logging.getLogger("efn_ocr")
     log.info(

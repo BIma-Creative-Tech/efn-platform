@@ -291,3 +291,41 @@ Tanpa ketiganya worker **gagal start** di production. Sidecar `ollama-tls`: gant
 Hasil cek `vlm.py`: `OllamaVlm` menyetel `Session.cert = (crt, key)`; `requests` menggabungkan `Session.cert` ke setiap request (`merge_environment_settings`, tidak bergantung `trust_env`). `consumer.build_processor` meneruskan `OLLAMA_CLIENT_CERT_FILE/KEY_FILE` dari Settings; production gagal start tanpa keduanya.
 
 Untuk devsecops: user `efn-ocr` cukup configure `^$`, read `^ocr\.requested$`, write `^amq\.default$` (retry publish ke `ocr.requested` + publish loyalty/notify lewat default exchange). Belum diverifikasi: bahwa passive `queue.declare` di RabbitMQ 3.13/4.x tidak memerlukan izin `configure` (perkiraan saya tidak; bila ternyata perlu, berikan configure `^ocr\.requested(\.dlq)?$`). ETL sejak Gelombang 5 tidak mendeklarasikan queue apa pun.
+
+## Gelombang 12 — VLM performa, salinan audit tamper-evident, mart konsolidasi GL (7 Okt 2026)
+
+### 1. VLM (services/ai-ocr-worker)
+- `imaging.encode_for_vlm` (sisi maks `OCR_VLM_MAX_SIDE`=1024, JPEG q85, tidak pernah upscale; trim tepi polos opsional `OCR_VLM_TRIM_BORDER`=false), dipanggil `processor` sebelum `vlm.extract` (gagal encode -> `flagged/vlm_unavailable`, bukan crash).
+- `OllamaVlm`: `options.num_predict`=128, `num_ctx`=2048, `keep_alive`=30m (env `OLLAMA_NUM_PREDICT/NUM_CTX/KEEP_ALIVE`); `Settings` gagal start bila `num_ctx` tidak muat token gambar sisi maks + 200 + num_predict.
+- Pengukuran dev (Ollama 0.35.1 CPU, qwen2.5vl:3b, 3 foto smoke baru per varian): **sebelum 66,7 s/foto, 1333 token prompt, 3/3 benar -> sesudah (default G12) 59,1 s/foto, 1166 token, 3/3 benar (-11 %)**. 768/512 px tidak lebih cepat (token tetap 1166: Ollama menormalkan ukuran gambar) dan 768 kehilangan sufiks nama (1/3). Kesimpulan: resize bukan solusi throughput; butuh GPU (README §Performa VLM: L4/RTX ≥ 8 GB, perkiraan 1–3 s/foto, target p95 < 10 s). Angka GPU belum diukur.
+- `METRICS_BIND_ADDRESS` (permintaan lead): literal IP, default `0.0.0.0` bila HTTPS metrik, `127.0.0.1` bila plaintext dev; non-loopback tanpa TLS ditolak (`TlsConfigError`); diteruskan ke `start_http_server(addr=)`.
+- Skenario `run-e2e-smoke.sh v` **belum dijalankan dengan kode baru** (butuh rebuild/recreate container ocr-worker; tidak dilakukan agar stack yang sedang dipakai tidak terganggu). Pengukuran dilakukan dengan skrip benchmark lewat `docker exec` ke Ollama yang sama (mTLS, payload identik).
+
+### 2. Salinan audit tamper-evident (services/etl/efn_etl/audit.py, audit_job.py)
+- Tabel ClickHouse (`infra/clickhouse/init/03-gl-audit.sql`): `audit_log_copy`, `audit_log_line_copy` (MergeTree biasa, tanpa partisi -> INSERT atomik), `audit_recon_run`.
+- `payload_hash = sha256(canonical_row)` (JSON kanonik kolom log + `lines_digest`), `row_hash = sha256(prev_hash || payload_hash)` per `chain_company` (company log; 0 = tanpa company), `chain_seq`. Kolom yang berubah sah (write_*, FK set-null `model_id/rule_id/field_id`, kolom related baris) tidak di-hash. Kepala rantai dicatat `EFN_AUDIT_CHAIN_HEAD` (Loki = jangkar eksternal).
+- Late commit: id ≤ max tersalin yang muncul dalam `ETL_AUDIT_LATE_WINDOW_SECONDS` disalin `ingest_kind=late`; log baru setelah `ETL_AUDIT_SETTLE_SECONDS`. Crash antara insert baris dan log tidak menggandakan baris.
+- PII: log orang/is_personal -> `res_id`/`res_name` NULL; baris ter-mask atau ref ke model orang -> nilai/ref NULL (`redacted=1`), hanya hash. Kebijakan erasure: gap karena `_efn_audit_purge_records` sah bila ada log purge `erasure: N log` untuk model itu setelah log dibuat (dalam anggaran N); retensi sah bila umur ≥ 365 hari (dalam anggaran `retensi: N log`); log purge/model kontrol hilang = selalu `unexplained`. Gap sequence PostgreSQL (rollback) bukan indikasi. Kelas & alert: lihat `services/etl/README.md`.
+- Rekonsiliasi harian -> `audit_recon_run` + log `EFN_AUDIT_RECON {json}` (WARNING bila `unexplained|modified|unseen|chain_problems` > 0). **devsecops**: rule Loki `{service="etl"} |= "EFN_AUDIT_RECON" |= "WARNING"` dan `|= "job=audit_copy gagal"`; opsional bandingkan `EFN_AUDIT_CHAIN_HEAD` antar hari.
+- Retensi salinan: TTL `CH_AUDIT_COPY_RETENTION_YEARS` (default 10, clickhouse-init.sh) — usulan menunggu DPO/Q-49. Role `audit_copy_reader` dibuat, tidak diikat ke user (keputusan klien).
+
+### 3. Mart konsolidasi GL (services/etl/efn_etl/gl.py)
+- Kolom Odoo 19 diverifikasi dari DB dev (information_schema): `account_account.code_store` jsonb per company root, `name` jsonb, relasi `account_account_res_company_rel`; `account_move_line.parent_state`, `balance`, dll.
+- Job `companies` -> `dim_company`, `gl_accounts` -> `dim_gl_account` (kode per company), `gl_lines` (cursor `account_move_line.write_date`) + `gl_lines_by_move` (cursor `account_move.write_date`) -> `fact_gl_line` (ReplacingMergeTree(version_ts), **partisi per company** karena tanggal draft bisa berubah). Semua state dimuat; view hanya `posted`. `partner_id` tidak disalin; `ic_company_id` = company grup lawan (partner = partner company lain).
+- View `v_gl_consolidated` (Metabase): period, fiscal_year, company, akun, `is_intercompany`, `counterparty_company_id`, debit/credit/balance, `balance_after_elimination`. Tidak ditambahkan ke semantic layer Text-to-SQL (bebas PII, tetapi laporan keuangan lintas PT tanpa pembatasan per company -> Q-6); tabel baru masuk `protected_tables`.
+
+### Grant yang dibutuhkan
+- PostgreSQL (Odoo, `services/etl/sql/odoo-readonly-grants.sql`, dijalankan deploy sebagai `efn_odoo` **setelah `-u efn_audit` ke 19.0.1.2.0** karena `origin_user_id`): SELECT kolom `account_move_line`, `account_move`, `account_account`, `account_account_res_company_rel`, `res_company` (+partner_id, parent_id, parent_path, currency_id, fiscalyear_*, write_date), `res_currency(id,name)`, `efn_audit_log`, `efn_audit_log_line`; index `CONCURRENTLY` `(write_date, id)` pada `account_move_line` dan `account_move`.
+- ClickHouse (`etl-access.sql`): `efn_etl` SELECT+INSERT `fact_gl_line`, `dim_gl_account`, `dim_company`, `audit_log_copy`, `audit_log_line_copy`, `audit_recon_run`; REVOKE defensif ALTER DELETE/UPDATE, TRUNCATE, DROP TABLE, OPTIMIZE pada tabel audit. `metabase-access.sql`: `v_gl_consolidated` + tabel GL + `audit_recon_run`. Role `audit_copy_reader`.
+- Env baru ETL: `ETL_ENABLE_GL`, `ETL_AUDIT_COPY_ENABLED` (default false), `ETL_AUDIT_*`. Compose belum diubah (milik devsecops): aktifkan dua flag di service `etl` setelah grant diterapkan.
+
+### Validasi
+- pytest (python:3.12-slim digest Dockerfile): ai-ocr-worker 184 lulus, etl 94 lulus, text2sql 93 lulus; ruff 0.16.10 check + format bersih (ketiga service).
+- Stack dev: `clickhouse-init` dijalankan ulang (`compose run --rm --no-deps`, idempoten) -> 03-gl-audit.sql, TTL, grant diterapkan; grant PG diterapkan ke DB dev (tanpa kolom `origin_user_id` karena efn_audit dev masih 19.0.1.1.0). ETL baru dijalankan sekali di dalam container `efn-etl-1` (kode lewat /tmp, SQL `origin_user_id` diganti `NULL` untuk dev): `dim_company` 5, `dim_gl_account` 523, `fact_gl_line` 0 (DB dev belum punya jurnal), `audit_log_copy` 20 log (2 rantai: company 0 seq 14, company 4 seq 6), baris 21 (8 diredaksi, 0 nilai bocor), rekonsiliasi 0 anomali; run kedua: 0 baris baru, kepala rantai identik. `efn_etl` mencoba ALTER DELETE / DELETE / TRUNCATE / ALTER UPDATE / DROP / OPTIMIZE pada tabel audit -> semua ditolak (497 ACCESS_DENIED). SQL view `v_gl_consolidated` dieksekusi (0 baris).
+- Catatan: Docker Desktop berhenti di tengah sesi dan dinyalakan ulang oleh agent ini (container kembali otomatis); tidak ada `down`/recreate service.
+
+### Belum terverifikasi
+- GL dengan jurnal nyata (posted/cancel, inter-company, tahun fiskal non-Desember); grant Metabase pada view (diuji hanya sebagai `efn_etl` untuk SQL body).
+- Kolom `origin_user_id` di DB nyata (menunggu upgrade efn_audit 19.0.1.2.0).
+- Skenario tamper nyata di PostgreSQL (hanya unit test) dan alert Loki (rule belum dibuat devsecops).
+- `run-e2e-smoke.sh v` dengan image ocr-worker baru; angka GPU.

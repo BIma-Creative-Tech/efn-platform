@@ -5,6 +5,7 @@ service gagal start bila TLS tidak terkonfigurasi. Kredensial per service (docs/
 RabbitMQ `efn-ocr`, MinIO `efn-ocr`.
 """
 
+import ipaddress
 import os
 import re
 from collections.abc import Mapping
@@ -14,6 +15,7 @@ from typing import Self
 from urllib.parse import urlsplit
 
 from efn_ocr.fraud import GeoCircle, parse_geofence
+from efn_ocr.imaging import estimate_vlm_image_tokens
 from efn_ocr.tls import (
     TlsConfigError,
     ca_file,
@@ -26,6 +28,8 @@ from efn_ocr.tls import (
 )
 
 _TRUE = {"1", "true", "yes", "on"}
+# Token teks prompt VLM + template chat (perkiraan longgar; prompt efn_ocr.vlm.PROMPT ~80 token).
+VLM_PROMPT_TOKEN_BUDGET = 200
 
 
 def read_secret(name: str, env: Mapping[str, str] | None = None, default: str = "") -> str:
@@ -136,6 +140,15 @@ class Settings:
     ollama_client_key_file: str | None = None
     ollama_model: str = "qwen2.5vl:7b"
     ollama_timeout_seconds: float = 90.0
+    # G12 performa VLM: gambar diperkecil sebelum dikirim (sisi terpanjang, px), kualitas JPEG, batas token.
+    vlm_max_side: int = 1024
+    vlm_jpeg_quality: int = 85
+    # Trim tepi polos: default mati (G12: 1 dari 3 foto smoke kehilangan sufiks nama; manfaat token nihil karena
+    # Ollama qwen2.5vl menormalkan ukuran gambar).
+    vlm_trim_border: bool = False
+    ollama_num_predict: int = 128
+    ollama_num_ctx: int = 2048
+    ollama_keep_alive: str = "30m"
     # Validasi & anti-fraud
     name_similarity_threshold: float = 75.0
     price_tolerance_pct: float = 2.0
@@ -147,6 +160,9 @@ class Settings:
     stale_processing_seconds: int = 900
     # Observability (HTTPS bila sertifikat tersedia)
     metrics_port: int = 9100
+    # Alamat bind endpoint metrik. Default: semua interface bila HTTPS (Prometheus scrape lintas container),
+    # loopback bila plaintext dev (hanya healthcheck lokal). Wajib literal IP (bukan hostname).
+    metrics_bind_address: str = "0.0.0.0"  # noqa: S104 - disengaja (HTTPS+mTLS), lihat _bind_address
     metrics_cert_file: str | None = None
     metrics_key_file: str | None = None
     # mTLS endpoint metrik (docs/04 §8.5): CA untuk memverifikasi sertifikat klien Prometheus; wajib di production.
@@ -201,6 +217,8 @@ class Settings:
             elif not (ollama_scheme == "http" and allow_plain):
                 raise TlsConfigError("OLLAMA_URL wajib https:// (sidecar TLS)")
 
+        vlm_max_side, vlm_quality, num_predict, num_ctx = _vlm_limits(e, d)
+
         metrics_pair = server_cert_pair(e, "METRICS_TLS_CERT_FILE", "METRICS_TLS_KEY_FILE")
         if metrics_pair is None and not allow_plain:
             raise TlsConfigError("METRICS_TLS_CERT_FILE/METRICS_TLS_KEY_FILE wajib (endpoint metrik HTTPS)")
@@ -240,6 +258,12 @@ class Settings:
             ollama_client_key_file=ollama_client[1] if ollama_client else None,
             ollama_model=_str(e, "OLLAMA_MODEL", d.ollama_model),
             ollama_timeout_seconds=_float(e, "OLLAMA_TIMEOUT_SECONDS", d.ollama_timeout_seconds),
+            vlm_max_side=vlm_max_side,
+            vlm_jpeg_quality=vlm_quality,
+            vlm_trim_border=_bool(e, "OCR_VLM_TRIM_BORDER", d.vlm_trim_border),
+            ollama_num_predict=num_predict,
+            ollama_num_ctx=num_ctx,
+            ollama_keep_alive=_str(e, "OLLAMA_KEEP_ALIVE", d.ollama_keep_alive),
             name_similarity_threshold=_percent_score(
                 _float(e, "NAME_SIMILARITY_THRESHOLD", d.name_similarity_threshold),
             ),
@@ -251,7 +275,40 @@ class Settings:
             points_per_valid_report=_int(e, "PRICE_HUNTER_POINTS", d.points_per_valid_report),
             stale_processing_seconds=_int(e, "OCR_STALE_PROCESSING_SECONDS", d.stale_processing_seconds),
             metrics_port=_int(e, "METRICS_PORT", d.metrics_port),
+            metrics_bind_address=_bind_address(e, metrics_pair is not None),
             metrics_cert_file=metrics_pair[0] if metrics_pair else None,
             metrics_key_file=metrics_pair[1] if metrics_pair else None,
             metrics_client_ca_file=metrics_client_ca,
         )
+
+
+def _vlm_limits(e: Mapping[str, str], d: "Settings") -> tuple[int, int, int, int]:
+    """Validasi batas VLM (G12). Konteks harus muat token gambar terbesar + prompt + keluaran; jika tidak, Ollama
+    memotong konteks diam-diam dan hasil tidak dapat diandalkan -> gagal start."""
+    max_side = _int(e, "OCR_VLM_MAX_SIDE", d.vlm_max_side)
+    quality = _int(e, "OCR_VLM_JPEG_QUALITY", d.vlm_jpeg_quality)
+    num_predict = _int(e, "OLLAMA_NUM_PREDICT", d.ollama_num_predict)
+    num_ctx = _int(e, "OLLAMA_NUM_CTX", d.ollama_num_ctx)
+    if not 256 <= max_side <= 2048:
+        raise ValueError("OCR_VLM_MAX_SIDE harus 256..2048")
+    if not 50 <= quality <= 95:
+        raise ValueError("OCR_VLM_JPEG_QUALITY harus 50..95")
+    if not 32 <= num_predict <= 1024:
+        raise ValueError("OLLAMA_NUM_PREDICT harus 32..1024")
+    needed = estimate_vlm_image_tokens(max_side, max_side) + VLM_PROMPT_TOKEN_BUDGET + num_predict
+    if not needed <= num_ctx <= 32768:
+        raise ValueError(f"OLLAMA_NUM_CTX harus >= {needed} untuk OCR_VLM_MAX_SIDE={max_side} (maks 32768)")
+    return max_side, quality, num_predict, num_ctx
+
+
+def _bind_address(e: Mapping[str, str], tls: bool) -> str:
+    """`METRICS_BIND_ADDRESS`: literal IPv4/IPv6. Tanpa TLS (dev) default loopback agar /metrics plaintext tidak
+    terekspos ke network container lain; non-loopback tanpa TLS ditolak."""
+    raw = _str(e, "METRICS_BIND_ADDRESS", "0.0.0.0" if tls else "127.0.0.1").strip()  # noqa: S104
+    try:
+        address = ipaddress.ip_address(raw)
+    except ValueError as exc:
+        raise ValueError("METRICS_BIND_ADDRESS harus alamat IP literal") from exc
+    if not tls and not address.is_loopback:
+        raise TlsConfigError("METRICS_BIND_ADDRESS non-loopback membutuhkan METRICS_TLS_CERT_FILE/KEY_FILE")
+    return str(address)

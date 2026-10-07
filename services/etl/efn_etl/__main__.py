@@ -8,10 +8,11 @@ import logging
 import os
 import signal
 import threading
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from efn_etl.adapters import (
+    ClickHouseAuditStore,
     ClickHouseErasureStore,
     ClickHouseSink,
     ClickHouseWatermarkStore,
@@ -19,13 +20,27 @@ from efn_etl.adapters import (
     build_clickhouse_client,
 )
 from efn_etl.amqp import PikaPublisher, build_connection_params
+from efn_etl.audit_job import AuditSettings, recon_due, run_audit_copy, run_audit_recon
 from efn_etl.config import Settings
 from efn_etl.erasure import SQL_PENDING_ERASURES, excluded_hashes, parse_requests, run_erasure
+from efn_etl.gl import GL_JOBS
 from efn_etl.jobs import enabled_jobs
 from efn_etl.runner import run_once
 from efn_etl.tls import client_ssl_context
 
 log = logging.getLogger("efn_etl")
+
+
+def run_audit_cycle(source: PgSource, audit_store: ClickHouseAuditStore, cfg: AuditSettings) -> None:
+    """Salinan audit + rekonsiliasi berkala. Gagal = log ERROR (alert Loki), tidak menghentikan job lain."""
+    now = datetime.now(UTC)
+    try:
+        result = run_audit_copy(source, audit_store, cfg, now)
+        log.info("job=audit_copy new=%d late=%d chains=%d", result.new_rows, result.late_rows, len(result.heads))
+        if recon_due(audit_store, cfg, now):
+            run_audit_recon(source, audit_store, cfg, now)
+    except Exception:
+        log.exception("job=audit_copy gagal")
 
 
 def main() -> None:
@@ -62,11 +77,23 @@ def main() -> None:
         publisher = PikaPublisher(params, settings.amqp_user)
     else:
         log.warning("ETL_ERASURE_ENABLED=false: penghapusan DSAR di ClickHouse TIDAK berjalan (hanya untuk dev)")
+    audit_store = ClickHouseAuditStore(client, settings.ch_database) if settings.audit_copy_enabled else None
+    audit_cfg = AuditSettings(
+        settle=timedelta(seconds=settings.audit_settle_seconds),
+        late_window=timedelta(seconds=settings.audit_late_window_seconds),
+        batch_size=settings.audit_batch_size,
+        max_pages=settings.max_pages_per_run,
+        recon_interval=timedelta(seconds=settings.audit_recon_interval_seconds),
+        recon_content=settings.audit_recon_content,
+    )
     jobs = enabled_jobs(settings.odoo_enabled)
+    if settings.gl_enabled:
+        jobs.extend(GL_JOBS)
     overlap = timedelta(seconds=settings.overlap_seconds)
     log.info(
-        "ETL mulai: jobs=%s erasure=%s interval=%ds overlap=%ds",
+        "ETL mulai: jobs=%s audit_copy=%s erasure=%s interval=%ds overlap=%ds",
         [j.name for j in jobs],
+        settings.audit_copy_enabled,
         settings.erasure_enabled,
         settings.interval_seconds,
         settings.overlap_seconds,
@@ -88,6 +115,8 @@ def main() -> None:
                 excluded = excluded_hashes(requests)
                 run_erasure(requests, erasure_store, publisher)
         run_once(cycle_jobs, sources, sink, store, overlap, settings.batch_size, settings.max_pages_per_run, excluded)
+        if audit_store is not None:
+            run_audit_cycle(sources["odoo"], audit_store, audit_cfg)
         if settings.run_once:
             break
         stop.wait(settings.interval_seconds)

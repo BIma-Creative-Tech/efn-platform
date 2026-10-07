@@ -231,3 +231,11 @@ def test_custom_whitelist() -> None:
     guard_sql("SELECT * FROM only_this", config)
     with pytest.raises(SqlGuardError):
         guard_sql("SELECT * FROM v_sales_daily", config)
+
+
+def test_g12_tables_protected_and_not_whitelisted() -> None:
+    new_tables = {"fact_gl_line", "dim_gl_account", "dim_company", "audit_log_copy", "audit_log_line_copy"}
+    assert new_tables | {"audit_recon_run"} <= CONFIG.protected_tables
+    for table in sorted(new_tables):
+        with pytest.raises(SqlGuardError):
+            guard_sql(f"SELECT count() FROM {table}", CONFIG)

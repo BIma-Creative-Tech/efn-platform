@@ -62,6 +62,9 @@ class OllamaVlm:
         ca_file: str | None,
         session: requests.Session | None = None,
         client_cert: tuple[str, str] | None = None,
+        num_predict: int = 128,
+        num_ctx: int = 2048,
+        keep_alive: str = "30m",
     ) -> None:
         if url.startswith("https://") and not ca_file:
             raise ValueError("OLLAMA_URL https membutuhkan OLLAMA_CA_FILE")
@@ -76,6 +79,10 @@ class OllamaVlm:
         self._session.trust_env = False
         if client_cert is not None:
             self._session.cert = client_cert
+        # G12 (performa CPU): batasi token keluaran (JSON pendek) dan konteks (gambar <= ~1400 token setelah
+        # encode_for_vlm); keep_alive menjaga model tetap termuat (muat ulang 3b di CPU ~75 s).
+        self._options = {"temperature": 0, "num_predict": int(num_predict), "num_ctx": int(num_ctx)}
+        self._keep_alive = keep_alive
         self.name = f"ollama:{model}"
 
     def extract(self, image_bytes: bytes) -> VlmResult:
@@ -85,7 +92,8 @@ class OllamaVlm:
             "images": [base64.b64encode(image_bytes).decode("ascii")],
             "stream": False,
             "format": "json",
-            "options": {"temperature": 0},
+            "options": dict(self._options),
+            "keep_alive": self._keep_alive,
         }
         try:
             resp = self._session.post(f"{self._url}/api/generate", json=payload, timeout=self._timeout)

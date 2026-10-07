@@ -50,5 +50,6 @@ def start_metrics_server(
     certfile: str | None,
     keyfile: str | None,
     client_cafile: str | None = None,
+    addr: str = "127.0.0.1",
 ) -> None:
-    start_http_server(port, **metrics_server_kwargs(certfile, keyfile, client_cafile))
+    start_http_server(port, addr=addr, **metrics_server_kwargs(certfile, keyfile, client_cafile))

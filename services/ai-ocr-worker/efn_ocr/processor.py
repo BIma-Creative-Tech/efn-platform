@@ -16,7 +16,7 @@ from PIL import Image
 from efn_ocr.config import Settings
 from efn_ocr.errors import ImageNotFoundError, UnreadableImageError, VlmUnavailableError
 from efn_ocr.fraud import outside_geofence
-from efn_ocr.imaging import compute_phash, load_image
+from efn_ocr.imaging import compute_phash, encode_for_vlm, load_image
 from efn_ocr.messages import OcrRequest, OutgoingMessage, result_messages, short_hash
 from efn_ocr.ocr_engines import OcrEngine, OcrResult
 from efn_ocr.pricing import extract_price_candidates
@@ -85,6 +85,7 @@ class ReportProcessor:
         publisher: Publisher,
         image_loader: Callable[[bytes], Image.Image] = load_image,
         phasher: Callable[[Image.Image], str] = compute_phash,
+        vlm_encoder: Callable[[Image.Image], bytes] | None = None,
     ) -> None:
         self._s = settings
         self._repo = repo
@@ -94,6 +95,12 @@ class ReportProcessor:
         self._publisher = publisher
         self._load = image_loader
         self._phash = phasher
+        # G12: gambar diperkecil sebelum VLM (token gambar ~ kuadrat sisi). Default dari Settings.
+        self._vlm_encode = vlm_encoder or (
+            lambda image: encode_for_vlm(
+                image, settings.vlm_max_side, settings.vlm_jpeg_quality, settings.vlm_trim_border
+            )
+        )
         self._thresholds = Thresholds(
             name_similarity=settings.name_similarity_threshold,
             price_tolerance_pct=settings.price_tolerance_pct,
@@ -144,7 +151,7 @@ class ReportProcessor:
             return self._finish(row, fraud, extracted, None, phash, "not_used", started)
 
         classic = self._ocr.extract(image)
-        extraction, vlm_state, unavailable_reason = self._second_stage(classic, image_bytes)
+        extraction, vlm_state, unavailable_reason = self._second_stage(classic, image)
         decision = decide(
             row.product_name,
             row.reported_price,
@@ -172,7 +179,7 @@ class ReportProcessor:
             _noop,
         )
 
-    def _second_stage(self, classic: OcrResult, image_bytes: bytes) -> tuple[Extraction | None, str, Reason]:
+    def _second_stage(self, classic: OcrResult, image: Image.Image) -> tuple[Extraction | None, str, Reason]:
         if classic.text and classic.confidence >= self._s.ocr_confidence_threshold:
             extraction = Extraction(
                 engine=classic.engine,
@@ -184,7 +191,12 @@ class ReportProcessor:
         if self._vlm is None:
             return None, "disabled", Reason.VLM_DISABLED
         try:
-            result = self._vlm.extract(image_bytes)
+            vlm_image = self._vlm_encode(image)
+        except (OSError, ValueError) as exc:
+            log.warning("gambar gagal disiapkan untuk VLM (%s); laporan akan di-flag", type(exc).__name__)
+            return None, "unavailable", Reason.VLM_UNAVAILABLE
+        try:
+            result = self._vlm.extract(vlm_image)
         except VlmUnavailableError as exc:
             log.warning("VLM tidak tersedia (%s); laporan akan di-flag untuk review manual", exc)
             return None, "unavailable", Reason.VLM_UNAVAILABLE

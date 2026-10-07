@@ -19,6 +19,13 @@ GRANT SELECT ON efn_dwh.v_competitor_prices TO metabase_reader;
 GRANT SELECT ON efn_dwh.v_price_hunter_quality TO metabase_reader;
 GRANT SELECT ON efn_dwh.v_loyalty_daily TO metabase_reader;
 GRANT SELECT ON efn_dwh.v_sales_daily TO metabase_reader;
+-- Gelombang 12: konsolidasi GL (F-19). View INVOKER -> kolom tabel dasar juga di-grant (tanpa PII: partner tidak
+-- disimpan di mart). Rekonsiliasi audit: hanya hitungan (audit_recon_run), BUKAN salinan log.
+GRANT SELECT ON efn_dwh.v_gl_consolidated TO metabase_reader;
+GRANT SELECT ON efn_dwh.fact_gl_line TO metabase_reader;
+GRANT SELECT ON efn_dwh.dim_gl_account TO metabase_reader;
+GRANT SELECT ON efn_dwh.dim_company TO metabase_reader;
+GRANT SELECT ON efn_dwh.audit_recon_run TO metabase_reader;
 
 -- Mart: semua kolom KECUALI identitas pseudonim (user_hash, member_hash, customer_id). Analisis per member
 -- (mis. kohort) butuh keputusan DPO dan grant terpisah, bukan default dashboard.

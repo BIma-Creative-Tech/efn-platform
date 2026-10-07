@@ -85,6 +85,24 @@ ALTER TABLE efn_dwh.fact_sales_line MODIFY TTL order_date + INTERVAL ${RETENTION
 ALTER TABLE efn_dwh.fact_sales_line MODIFY SETTING ttl_only_drop_parts = 1;
 EOF
 
+# Salinan audit (G12): retensi terpisah, default 10 tahun (>= retensi log Odoo; selaras kewajiban simpan dokumen
+# 10 tahun UU KUP) — usulan menunggu DPO (Q-49). TTL dijalankan server saat merge (bukan hak ETL). Tanpa partisi ->
+# baris kedaluwarsa dibuang per baris; verifikasi rantai memakai baris tertua yang tersisa sebagai jangkar.
+# GL (fact_gl_line) sengaja TANPA TTL: catatan akuntansi; penghapusan mengikuti kebijakan arsip keuangan.
+AUDIT_YEARS="${CH_AUDIT_COPY_RETENTION_YEARS:-10}"
+case "$AUDIT_YEARS" in
+  ''|*[!0-9]*) echo "clickhouse-init: CH_AUDIT_COPY_RETENTION_YEARS harus bilangan bulat" >&2; exit 1 ;;
+esac
+if [ "$AUDIT_YEARS" -lt 2 ] || [ "$AUDIT_YEARS" -gt 30 ]; then
+  echo "clickhouse-init: CH_AUDIT_COPY_RETENTION_YEARS di luar rentang 2..30" >&2; exit 1
+fi
+echo "clickhouse-init: TTL salinan audit ${AUDIT_YEARS} tahun"
+$CH --multiquery <<EOF
+SET materialize_ttl_after_modify = 0;
+ALTER TABLE efn_dwh.audit_log_copy MODIFY TTL toDateTime(create_date) + INTERVAL ${AUDIT_YEARS} YEAR;
+ALTER TABLE efn_dwh.audit_log_line_copy MODIFY TTL toDateTime(create_date) + INTERVAL ${AUDIT_YEARS} YEAR;
+EOF
+
 create_user() {
   # $1 = nama user, $2 = file secret. ClickHouse menyamarkan password CREATE/ALTER USER di query_log/log server.
   pw="$(cat "$2")"
