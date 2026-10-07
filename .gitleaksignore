@@ -1,0 +1,6 @@
+# Gitleaks false positives (diperiksa efn-lead 2026-10-07): JWT sengaja tidak valid di load test,
+# teks log acme-dns, dan nilai dummy di spec BFF. Bukan secret nyata.
+c1b770a966ad72b70d29e2dc278961ba84ea8a87:tests/load/k6/efn-fase1.js:generic-api-key:153
+ce7e2b0a3aaf7d5942d55c1962af4b85c39d902d:infra/acme/acme-dns.sh:generic-api-key:58
+136f689510afc74b341582df794cf03a4439f736:services/api-gateway/src/config/app-config.spec.ts:generic-api-key:34
+136f689510afc74b341582df794cf03a4439f736:services/api-gateway/src/config/app-config.spec.ts:generic-api-key:348
