@@ -37,6 +37,29 @@ GRANT SELECT(line_id, source, company_id, company_name, brand, store_id, order_r
              product_name, category, qty, price_unit, discount_pct, subtotal, tax_amount, cost_total, write_date)
     ON efn_dwh.fact_sales_line TO metabase_reader;
 
+-- Gelombang 13 (Fase 1): view dashboard "EFN Fase 1" (infra/metabase/dashboards/*.json). View INVOKER -> tabel dasar
+-- juga di-grant. Tabel baru tidak memuat identitas (tanpa partner/kartu/hash), jadi grant tabel penuh.
+GRANT SELECT ON efn_dwh.v_pos_sales_daily TO metabase_reader;
+GRANT SELECT ON efn_dwh.v_pos_outlet_daily TO metabase_reader;
+GRANT SELECT ON efn_dwh.v_pos_sales_hourly TO metabase_reader;
+GRANT SELECT ON efn_dwh.v_pos_payment_daily TO metabase_reader;
+GRANT SELECT ON efn_dwh.v_stock_daily TO metabase_reader;
+GRANT SELECT ON efn_dwh.v_stock_current TO metabase_reader;
+GRANT SELECT ON efn_dwh.v_stock_expiring TO metabase_reader;
+GRANT SELECT ON efn_dwh.v_stock_below_reorder TO metabase_reader;
+GRANT SELECT ON efn_dwh.v_price_index TO metabase_reader;
+GRANT SELECT ON efn_dwh.v_price_hunter_match_rate TO metabase_reader;
+GRANT SELECT ON efn_dwh.v_etl_freshness TO metabase_reader;
+GRANT SELECT ON efn_dwh.fact_pos_payment TO metabase_reader;
+GRANT SELECT ON efn_dwh.dim_outlet TO metabase_reader;
+GRANT SELECT ON efn_dwh.dim_product TO metabase_reader;
+GRANT SELECT ON efn_dwh.fact_stock_snapshot TO metabase_reader;
+GRANT SELECT ON efn_dwh.fact_orderpoint_snapshot TO metabase_reader;
+GRANT SELECT ON efn_dwh.stock_snapshot_run TO metabase_reader;
+GRANT SELECT ON efn_dwh.etl_job_run TO metabase_reader;
+-- Kolom baru fact_sales_line (tetap TANPA customer_id).
+GRANT SELECT(order_id, is_refund, line_kind, discount_amount) ON efn_dwh.fact_sales_line TO metabase_reader;
+
 GRANT metabase_reader TO efn_metabase;
 SET DEFAULT ROLE metabase_reader TO efn_metabase;
 ALTER USER efn_metabase SETTINGS PROFILE 'metabase_readonly';

@@ -14,6 +14,28 @@
 | `privacy_erasure` (`ETL_ERASURE_ENABLED`, default `true`) | `platform.dsar_request` (`processing`, `clickhouse` ∈ `stores_pending`) | `ALTER TABLE ... DELETE` di `competitor_prices`, `loyalty_events` + publish `privacy.erasure.completed` | tiap siklus, sebelum job lain |
 | `companies`, `gl_accounts`, `gl_lines`, `gl_lines_by_move` (`ETL_ENABLE_GL=true`, G12) | Odoo `res_company`, `account_account` (+ rel company), `account_move_line` + `account_move` | `dim_company`, `dim_gl_account`, `fact_gl_line` | `write_date` (`gl_lines_by_move`: `account_move.write_date`) |
 | `audit_copy` (`ETL_AUDIT_COPY_ENABLED=true`, G12) | Odoo `efn_audit_log` + `efn_audit_log_line` | `audit_log_copy`, `audit_log_line_copy` (MergeTree append-only), `audit_recon_run` | id (keyset) + jendela settle/late |
+| `pos_outlets`, `products`, `pos_payments` (`ETL_ENABLE_ODOO=true`, G13) | Odoo `pos_config`; `product_product`+`product_template`; `pos_payment`+`pos_payment_method` | `dim_outlet`, `dim_product`, `fact_pos_payment` | `write_date` (produk: `GREATEST(variant, template)`) |
+| `stock_snapshot` (`ETL_ENABLE_STOCK`, default = `ETL_ENABLE_ODOO`, G13) | Odoo `stock_quant` (lokasi internal) + `stock_lot` + `stock_warehouse_orderpoint` | `fact_stock_snapshot`, `fact_orderpoint_snapshot`, penanda `stock_snapshot_run` | snapshot penuh tiap `ETL_STOCK_SNAPSHOT_INTERVAL_SECONDS` (3600) + saat ganti tanggal WIB |
+
+### Mart Fase 1 (Gelombang 13) — docs/01 §7 "ETL dasar + 3 dashboard Metabase"
+Skema: `infra/clickhouse/init/04-fase1-marts.sql`. Dashboard: `infra/metabase/`.
+- **Penjualan POS**: `fact_sales_line` + `order_id`, `is_refund` (`pos_order.is_refund` / `refunded_orderline_id`), `line_kind` (`product|discount|reward|points|tip`: produk "Poin EFN" = `default_code` di `ETL_POINTS_PRODUCT_CODES`, default `EFN-POINTS` — kontrak dengan modul POS loyalty; reward loyalty Odoo; produk diskon/tip `pos_config`), `discount_amount` (diskon persen baris, basis tanpa pajak). Metode bayar: `fact_pos_payment` (tanpa data kartu/nomor referensi). View: `v_pos_sales_daily`, `v_pos_outlet_daily`, `v_pos_sales_hourly`, `v_pos_payment_daily`.
+- **Stok & kedaluwarsa**: snapshot penuh dalam satu transaksi `REPEATABLE READ READ ONLY` (Odoo menghapus quant nol, jadi incremental tidak cukup). Snapshot hanya terlihat setelah penanda `stock_snapshot_run` ditulis (snapshot setengah jadi tidak tampil). View: `v_stock_daily` (snapshot terakhir per tanggal), `v_stock_current`, `v_stock_expiring` (lot ≤ 7 hari, termasuk yang sudah lewat), `v_stock_below_reorder` (on-hand per gudang ≤ `product_min_qty`; Odoo memakai stok perkiraan per lokasi — pendekatan).
+- **Price Hunter**: `v_price_index` = laporan valid yang termatch ke `dim_product` lewat `product_sku = default_code` atau nama dinormalisasi (lowercase, spasi dirapatkan); indeks = harga pesaing / `list_price` × 100, plus terhadap harga POS rata-rata 30 hari. `v_price_hunter_match_rate` menunjukkan porsi laporan yang bisa dipakai.
+- **Backfill** kolom baru `fact_sales_line` setelah upgrade: tulis watermark epoch sebagai admin ClickHouse, `INSERT INTO efn_dwh.etl_watermark (job, watermark, rows_loaded, updated_at) VALUES ('sales_fact_pos', toDateTime64('1970-01-01 00:00:00', 6, 'UTC'), 0, now64(6, 'UTC'))` — siklus berikutnya memuat ulang semua baris (ReplacingMergeTree, idempoten).
+
+### Heartbeat & dead-man (SEC-52 butir 1) — Gelombang 13
+Setiap job + setiap siklus menulis satu baris log logfmt dan satu baris `efn_dwh.etl_job_run` (retensi 90 hari):
+
+```
+EFN_ETL_HEARTBEAT job=<job> status=<ok|error|partial> rows=<n> pages=<n> duration_ms=<n> watermark=<iso|-> ts=<iso>
+```
+
+`job` ∈ `cycle` (loop hidup; selalu `ok`), `competitor_prices`, `loyalty_events`, `sales_fact_pos`, `pos_outlets`, `products`, `pos_payments`, `companies`, `gl_accounts`, `gl_lines`, `gl_lines_by_move`, `stock_snapshot`, `audit_copy`, `audit_recon` (hanya saat rekonsiliasi jatuh tempo, default harian), `privacy_erasure` (`partial` bila ada request gagal). Nama job divalidasi `^[a-z0-9_]{1,64}$` (anti log injection). Alert yang diusulkan (Loki ruler, devsecops), contoh:
+`absent_over_time({service="etl"} |= "EFN_ETL_HEARTBEAT" | logfmt | job="audit_copy" | status="ok" [1h])` (prod), `job="cycle"` 45m, `job="sales_fact_pos"` 45m, `job="stock_snapshot"` 3h, `job="audit_recon"` 26h. Kartu "Kesegaran data ETL" di Metabase membaca `v_etl_freshness`.
+
+### Verifikasi sink audit v2 (SEC-51/52) — logika saja
+`efn_etl/sink.py`: verifikasi `mac` HMAC-SHA256 baris `EFN_AUDIT_SINK` (format kanonik efn_audit) dan rekonsiliasi sink ↔ log PostgreSQL → `sink_mac_invalid`, `sink_missing_log`, `log_missing_sink`. **Belum di-wire**: butuh pembaca Loki (query_range via loki-tls mTLS) + secret `efn_audit_sink_key` di container ETL (spesifikasi: laporan efn-data-ai-engineer Gelombang 13).
 
 ### Erasure DSAR (docs/04 §8.4)
 `efn_etl/erasure.py`: per request hitung baris `user_hash`/`member_hash` cocok → `ALTER TABLE ... DELETE` (mutation, `mutations_sync=2`; menghapus fisik, bukan sekadar mask seperti lightweight `DELETE`) → verifikasi `count()=0` → publish `{schema_version: 2, idempotency_key: "erasure:<request_id>:clickhouse", request_id, store: "clickhouse"}` (amqps, user `efn-etl`, properti `user_id`/`message_id`). Belum 0 / error → request tetap `processing`, diulang siklus berikutnya. Hash yang sedang dihapus dikecualikan dari job incremental pada siklus itu (overlap window tidak memuat ulang); bila `dsar_request` tidak terbaca, job ber-hash dilewati (fail closed). ETL tidak mendeklarasikan queue (milik BFF).
@@ -89,4 +111,6 @@ pytest
 - Hard delete di sumber tidak tersinkron (tabel platform tidak menghapus; ledger append-only).
 - Salinan audit: satu instance ETL saja (dua instance = rantai bercabang, terdeteksi sebagai `seq_gap`). Rekonsiliasi harian membaca seluruh log + baris (cukup untuk volume ratusan ribu; untuk jutaan log, batasi `ETL_AUDIT_RECON_CONTENT=false` atau tambah jendela). Hash isi yang diredaksi bisa dikonfirmasi dengan tebakan (mis. nama) oleh pembaca salinan — akses dibatasi role `audit_copy_reader` (belum diikat ke user).
 - GL: belum diuji dengan baris jurnal nyata (DB dev belum punya `account_move_line`); eliminasi inter-company hanya berbasis partner = company grup (kontak anak company tidak terdeteksi); akun company cabang memakai kode company root.
-- Belum ada metrik Prometheus untuk ETL (lag watermark) — disarankan berikutnya.
+- Belum ada metrik Prometheus untuk ETL; heartbeat via log Loki + `etl_job_run` (G13). Endpoint `/metrics` bila nanti diperlukan.
+- Zona waktu bisnis mart = WIB; outlet di WITA/WIT (mis. Bali) belum dibedakan per outlet.
+- `dim_product`/`dim_outlet`: perubahan nama kategori/metode bayar tidak menimpa baris fakta lama (nama disalin saat muat).

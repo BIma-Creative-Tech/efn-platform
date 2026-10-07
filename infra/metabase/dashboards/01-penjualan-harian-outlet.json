@@ -1,0 +1,182 @@
+{
+  "key": "penjualan-harian-outlet",
+  "name": "Penjualan Harian Outlet",
+  "description": "Fase 1: penjualan POS per hari/outlet/PT/kategori/jam, metode bayar, diskon/poin, retur. Nilai uang tanpa pajak. Zona waktu WIB. Sumber: view efn_dwh.v_pos_* (ETL 15 menit).",
+  "parameters": [
+    {
+      "slug": "date_from",
+      "name": "Dari tanggal",
+      "type": "date/single"
+    },
+    {
+      "slug": "date_to",
+      "name": "Sampai tanggal",
+      "type": "date/single"
+    },
+    {
+      "slug": "company",
+      "name": "PT (nama/kode brand)",
+      "type": "string/="
+    },
+    {
+      "slug": "outlet",
+      "name": "Outlet",
+      "type": "string/="
+    }
+  ],
+  "cards": [
+    {
+      "key": "kpi-penjualan-bersih",
+      "name": "Penjualan bersih",
+      "display": "scalar",
+      "row": 0,
+      "col": 0,
+      "size_x": 6,
+      "size_y": 3,
+      "sql": "SELECT sum(net_sales) AS penjualan_bersih FROM efn_dwh.v_pos_outlet_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND (positionCaseInsensitive(company_name, {{company}}) > 0 OR brand = upper({{company}}))]] [[AND positionCaseInsensitive(store_name, {{outlet}}) > 0]]"
+    },
+    {
+      "key": "kpi-jumlah-order",
+      "name": "Jumlah order",
+      "display": "scalar",
+      "row": 0,
+      "col": 6,
+      "size_x": 6,
+      "size_y": 3,
+      "sql": "SELECT sum(orders) AS jumlah_order FROM efn_dwh.v_pos_outlet_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND (positionCaseInsensitive(company_name, {{company}}) > 0 OR brand = upper({{company}}))]] [[AND positionCaseInsensitive(store_name, {{outlet}}) > 0]]"
+    },
+    {
+      "key": "kpi-basket",
+      "name": "Rata-rata nilai belanja",
+      "display": "scalar",
+      "row": 0,
+      "col": 12,
+      "size_x": 6,
+      "size_y": 3,
+      "sql": "SELECT round((sum(net_sales) + sum(refunds)) / nullIf(sum(orders), 0)) AS rata_rata_basket FROM efn_dwh.v_pos_outlet_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND (positionCaseInsensitive(company_name, {{company}}) > 0 OR brand = upper({{company}}))]] [[AND positionCaseInsensitive(store_name, {{outlet}}) > 0]]"
+    },
+    {
+      "key": "kpi-refund",
+      "name": "Retur / refund",
+      "display": "scalar",
+      "row": 0,
+      "col": 18,
+      "size_x": 6,
+      "size_y": 3,
+      "sql": "SELECT sum(refunds) AS refund FROM efn_dwh.v_pos_outlet_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND (positionCaseInsensitive(company_name, {{company}}) > 0 OR brand = upper({{company}}))]] [[AND positionCaseInsensitive(store_name, {{outlet}}) > 0]]"
+    },
+    {
+      "key": "tren-harian",
+      "name": "Tren penjualan bersih harian per outlet",
+      "display": "line",
+      "row": 3,
+      "col": 0,
+      "size_x": 16,
+      "size_y": 6,
+      "sql": "SELECT day, store_name, sum(net_sales) AS penjualan_bersih FROM efn_dwh.v_pos_outlet_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND (positionCaseInsensitive(company_name, {{company}}) > 0 OR brand = upper({{company}}))]] [[AND positionCaseInsensitive(store_name, {{outlet}}) > 0]] GROUP BY day, store_name ORDER BY day",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "day",
+          "store_name"
+        ],
+        "graph.metrics": [
+          "penjualan_bersih"
+        ]
+      }
+    },
+    {
+      "key": "metode-bayar",
+      "name": "Metode pembayaran",
+      "display": "pie",
+      "row": 3,
+      "col": 16,
+      "size_x": 8,
+      "size_y": 6,
+      "description": "Nilai bersih (pembayaran dikurangi kembalian).",
+      "sql": "SELECT method_name AS metode, sum(amount) AS nilai FROM efn_dwh.v_pos_payment_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND positionCaseInsensitive(company_name, {{company}}) > 0]] [[AND positionCaseInsensitive(store_name, {{outlet}}) > 0]] GROUP BY metode ORDER BY nilai DESC",
+      "visualization_settings": {
+        "pie.dimension": "metode",
+        "pie.metric": "nilai"
+      }
+    },
+    {
+      "key": "per-kategori",
+      "name": "Penjualan per kategori",
+      "display": "row",
+      "row": 9,
+      "col": 0,
+      "size_x": 12,
+      "size_y": 6,
+      "sql": "SELECT if(category = '', '(tanpa kategori)', category) AS kategori, sum(net_sales) AS penjualan_bersih, sum(qty_sold) AS qty_terjual FROM efn_dwh.v_pos_sales_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND (positionCaseInsensitive(company_name, {{company}}) > 0 OR brand = upper({{company}}))]] [[AND positionCaseInsensitive(store_name, {{outlet}}) > 0]] GROUP BY kategori ORDER BY penjualan_bersih DESC LIMIT 20",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "kategori"
+        ],
+        "graph.metrics": [
+          "penjualan_bersih"
+        ]
+      }
+    },
+    {
+      "key": "pola-jam",
+      "name": "Pola jam (WIB)",
+      "display": "bar",
+      "row": 9,
+      "col": 12,
+      "size_x": 12,
+      "size_y": 6,
+      "sql": "SELECT hour AS jam, sum(orders) AS jumlah_order, sum(net_sales) AS penjualan_bersih FROM efn_dwh.v_pos_sales_hourly WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND positionCaseInsensitive(company_name, {{company}}) > 0]] [[AND positionCaseInsensitive(store_name, {{outlet}}) > 0]] GROUP BY jam ORDER BY jam",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "jam"
+        ],
+        "graph.metrics": [
+          "jumlah_order"
+        ]
+      }
+    },
+    {
+      "key": "diskon-poin-refund",
+      "name": "Diskon, promo, poin EFN & refund per hari",
+      "display": "bar",
+      "row": 15,
+      "col": 0,
+      "size_x": 24,
+      "size_y": 6,
+      "sql": "SELECT day, sum(line_discount) AS diskon_baris, sum(promo_discount) AS promo, sum(points_redeemed_idr) AS poin_efn, sum(refunds) AS refund FROM efn_dwh.v_pos_sales_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND (positionCaseInsensitive(company_name, {{company}}) > 0 OR brand = upper({{company}}))]] [[AND positionCaseInsensitive(store_name, {{outlet}}) > 0]] GROUP BY day ORDER BY day",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "day"
+        ],
+        "graph.metrics": [
+          "diskon_baris",
+          "promo",
+          "poin_efn",
+          "refund"
+        ],
+        "stackable.stack_type": "stacked"
+      }
+    },
+    {
+      "key": "tabel-outlet-harian",
+      "name": "Ringkasan outlet harian",
+      "display": "table",
+      "row": 21,
+      "col": 0,
+      "size_x": 24,
+      "size_y": 7,
+      "sql": "SELECT day AS tanggal, company_name AS pt, store_name AS outlet, orders AS jumlah_order, refund_orders AS order_refund, gross_sales AS penjualan_kotor, discounts AS diskon_promo, points_redeemed_idr AS poin_efn, refunds AS refund, net_sales AS penjualan_bersih, avg_basket AS rata_rata_basket FROM efn_dwh.v_pos_outlet_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND (positionCaseInsensitive(company_name, {{company}}) > 0 OR brand = upper({{company}}))]] [[AND positionCaseInsensitive(store_name, {{outlet}}) > 0]] ORDER BY tanggal DESC, outlet LIMIT 500"
+    },
+    {
+      "key": "kesegaran-data",
+      "name": "Kesegaran data ETL",
+      "display": "table",
+      "row": 28,
+      "col": 0,
+      "size_x": 24,
+      "size_y": 4,
+      "description": "Heartbeat ETL (SEC-52). Data dianggap basi bila menit_sejak_sukses > 30.",
+      "sql": "SELECT job, last_ok_at AS sukses_terakhir_utc, minutes_since_ok AS menit_sejak_sukses, last_status AS status_terakhir, failures_24h AS gagal_24_jam FROM efn_dwh.v_etl_freshness WHERE job IN ('cycle', 'pos_outlets', 'pos_payments', 'products', 'sales_fact_pos') ORDER BY job"
+    }
+  ]
+}

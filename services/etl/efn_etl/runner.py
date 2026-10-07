@@ -4,9 +4,10 @@ import logging
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
+from efn_etl.heartbeat import Heartbeat, JobRun
 from efn_etl.jobs import Job
 from efn_etl.watermark import Cursor, cursor_after, initial_cursor, next_watermark
 
@@ -85,8 +86,12 @@ def run_once(
     batch_size: int,
     max_pages: int,
     excluded_hashes: frozenset[str] = frozenset(),
+    heartbeat: Heartbeat | None = None,
 ) -> list[JobResult]:
-    """Satu putaran semua job. Kegagalan satu job tidak menghentikan job lain."""
+    """Satu putaran semua job. Kegagalan satu job tidak menghentikan job lain.
+
+    `heartbeat` (SEC-52): dipanggil sekali per job dengan status ok|error -> log `EFN_ETL_HEARTBEAT` + `etl_job_run`.
+    """
     results: list[JobResult] = []
     for job in jobs:
         started = time.monotonic()
@@ -95,14 +100,32 @@ def run_once(
         except Exception:
             log.exception("job=%s gagal", job.name)
             results.append(JobResult(job=job.name, rows=0, pages=0, watermark=None, skipped="error"))
+            if heartbeat is not None:
+                heartbeat(JobRun(job.name, datetime.now(UTC), "error", duration_ms=_elapsed_ms(started)))
             continue
+        if heartbeat is not None:
+            heartbeat(
+                JobRun(
+                    job.name,
+                    datetime.now(UTC),
+                    "ok",
+                    rows=result.rows,
+                    pages=result.pages,
+                    duration_ms=_elapsed_ms(started),
+                    watermark=result.watermark,
+                )
+            )
         log.info(
             "job=%s rows=%d pages=%d watermark=%s ms=%d",
             result.job,
             result.rows,
             result.pages,
             result.watermark.isoformat() if result.watermark else None,
-            int((time.monotonic() - started) * 1000),
+            _elapsed_ms(started),
         )
         results.append(result)
     return results
+
+
+def _elapsed_ms(started: float) -> int:
+    return int((time.monotonic() - started) * 1000)

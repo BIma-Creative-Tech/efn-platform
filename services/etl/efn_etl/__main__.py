@@ -8,12 +8,14 @@ import logging
 import os
 import signal
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from efn_etl.adapters import (
     ClickHouseAuditStore,
     ClickHouseErasureStore,
+    ClickHouseRunStore,
     ClickHouseSink,
     ClickHouseWatermarkStore,
     PgSource,
@@ -24,23 +26,80 @@ from efn_etl.audit_job import AuditSettings, recon_due, run_audit_copy, run_audi
 from efn_etl.config import Settings
 from efn_etl.erasure import SQL_PENDING_ERASURES, excluded_hashes, parse_requests, run_erasure
 from efn_etl.gl import GL_JOBS
+from efn_etl.heartbeat import Heartbeat, JobRun, make_heartbeat
 from efn_etl.jobs import enabled_jobs
 from efn_etl.runner import run_once
+from efn_etl.stock import STOCK_JOB, run_stock_snapshot, snapshot_due
 from efn_etl.tls import client_ssl_context
 
 log = logging.getLogger("efn_etl")
 
 
-def run_audit_cycle(source: PgSource, audit_store: ClickHouseAuditStore, cfg: AuditSettings) -> None:
+def _ms(started: float) -> int:
+    return int((time.monotonic() - started) * 1000)
+
+
+def run_audit_cycle(
+    source: PgSource, audit_store: ClickHouseAuditStore, cfg: AuditSettings, heartbeat: Heartbeat
+) -> None:
     """Salinan audit + rekonsiliasi berkala. Gagal = log ERROR (alert Loki), tidak menghentikan job lain."""
     now = datetime.now(UTC)
+    started = time.monotonic()
     try:
         result = run_audit_copy(source, audit_store, cfg, now)
         log.info("job=audit_copy new=%d late=%d chains=%d", result.new_rows, result.late_rows, len(result.heads))
-        if recon_due(audit_store, cfg, now):
-            run_audit_recon(source, audit_store, cfg, now)
     except Exception:
         log.exception("job=audit_copy gagal")
+        heartbeat(JobRun("audit_copy", datetime.now(UTC), "error", duration_ms=_ms(started)))
+        return
+    heartbeat(
+        JobRun("audit_copy", datetime.now(UTC), "ok", rows=result.new_rows + result.late_rows, duration_ms=_ms(started))
+    )
+    started = time.monotonic()
+    try:
+        if not recon_due(audit_store, cfg, now):
+            return
+        run_audit_recon(source, audit_store, cfg, now)
+    except Exception:
+        log.exception("job=audit_copy gagal (rekonsiliasi)")
+        heartbeat(JobRun("audit_recon", datetime.now(UTC), "error", duration_ms=_ms(started)))
+        return
+    heartbeat(JobRun("audit_recon", datetime.now(UTC), "ok", duration_ms=_ms(started)))
+
+
+def run_stock_cycle(
+    source: PgSource,
+    sink: ClickHouseSink,
+    run_store: ClickHouseRunStore,
+    interval: timedelta,
+    batch_size: int,
+    max_pages: int,
+    heartbeat: Heartbeat,
+) -> None:
+    """Snapshot stok (G13) bila jatuh tempo. Gagal = heartbeat error; snapshot tanpa penanda tidak tampil di view."""
+    started = time.monotonic()
+    now = datetime.now(UTC)
+    try:
+        if not snapshot_due(run_store.last_stock_snapshot(), now, interval):
+            return
+        with source.snapshot() as tx:
+            result = run_stock_snapshot(tx, sink, now, batch_size, max_pages)
+    except Exception:
+        log.exception("job=%s gagal", STOCK_JOB)
+        heartbeat(JobRun(STOCK_JOB, datetime.now(UTC), "error", duration_ms=_ms(started)))
+        return
+    log.info("job=%s quants=%d orderpoints=%d", STOCK_JOB, result.quants, result.orderpoints)
+    heartbeat(
+        JobRun(
+            STOCK_JOB,
+            datetime.now(UTC),
+            "ok",
+            rows=result.quants + result.orderpoints,
+            pages=result.pages,
+            duration_ms=_ms(started),
+            watermark=result.snapshot_ts,
+        )
+    )
 
 
 def main() -> None:
@@ -65,6 +124,8 @@ def main() -> None:
     client = build_clickhouse_client(settings)
     sink = ClickHouseSink(client, settings.ch_database)
     store = ClickHouseWatermarkStore(client, settings.ch_database)
+    run_store = ClickHouseRunStore(client, settings.ch_database)
+    heartbeat = make_heartbeat(run_store)
     sources = {
         "platform": PgSource(settings.platform_pg, settings.statement_timeout_ms),
         "odoo": PgSource(settings.odoo_pg, settings.statement_timeout_ms),
@@ -86,13 +147,14 @@ def main() -> None:
         recon_interval=timedelta(seconds=settings.audit_recon_interval_seconds),
         recon_content=settings.audit_recon_content,
     )
-    jobs = enabled_jobs(settings.odoo_enabled)
+    jobs = enabled_jobs(settings.odoo_enabled, settings.points_product_codes)
     if settings.gl_enabled:
         jobs.extend(GL_JOBS)
     overlap = timedelta(seconds=settings.overlap_seconds)
     log.info(
-        "ETL mulai: jobs=%s audit_copy=%s erasure=%s interval=%ds overlap=%ds",
+        "ETL mulai: jobs=%s stock_snapshot=%s audit_copy=%s erasure=%s interval=%ds overlap=%ds",
         [j.name for j in jobs],
+        settings.stock_enabled,
         settings.audit_copy_enabled,
         settings.erasure_enabled,
         settings.interval_seconds,
@@ -100,6 +162,7 @@ def main() -> None:
     )
 
     while not stop.is_set():
+        cycle_started = time.monotonic()
         excluded: frozenset[str] = frozenset()
         cycle_jobs = jobs
         if publisher is not None:
@@ -110,13 +173,38 @@ def main() -> None:
                 # dilewati siklus ini agar tidak memuat ulang data subjek. Diulang siklus berikutnya.
                 log.exception("job=privacy_erasure gagal membaca dsar_request; job ber-hash member dilewati")
                 cycle_jobs = [j for j in jobs if not j.identity_field]
+                heartbeat(JobRun("privacy_erasure", datetime.now(UTC), "error"))
             else:
                 requests = parse_requests(rows)
                 excluded = excluded_hashes(requests)
-                run_erasure(requests, erasure_store, publisher)
-        run_once(cycle_jobs, sources, sink, store, overlap, settings.batch_size, settings.max_pages_per_run, excluded)
+                erased = run_erasure(requests, erasure_store, publisher)
+                status = "partial" if any(r.status == "error" for r in erased) else "ok"
+                heartbeat(JobRun("privacy_erasure", datetime.now(UTC), status, rows=len(requests)))
+        results = run_once(
+            cycle_jobs,
+            sources,
+            sink,
+            store,
+            overlap,
+            settings.batch_size,
+            settings.max_pages_per_run,
+            excluded,
+            heartbeat,
+        )
+        if settings.stock_enabled:
+            run_stock_cycle(
+                sources["odoo"],
+                sink,
+                run_store,
+                timedelta(seconds=settings.stock_snapshot_interval_seconds),
+                settings.batch_size,
+                settings.max_pages_per_run,
+                heartbeat,
+            )
         if audit_store is not None:
-            run_audit_cycle(sources["odoo"], audit_store, audit_cfg)
+            run_audit_cycle(sources["odoo"], audit_store, audit_cfg, heartbeat)
+        # Heartbeat siklus: bukti loop hidup (status selalu ok; kegagalan job terlihat di heartbeat job masing-masing).
+        heartbeat(JobRun("cycle", datetime.now(UTC), "ok", rows=len(results), duration_ms=_ms(cycle_started)))
         if settings.run_once:
             break
         stop.wait(settings.interval_seconds)

@@ -1,6 +1,7 @@
 """Adapter I/O: PostgreSQL (read-only) dan ClickHouse (sink + watermark)."""
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
@@ -13,6 +14,7 @@ from psycopg.rows import dict_row
 from efn_etl.audit import ChainHead, ChainRow, CopiedLog
 from efn_etl.config import PgTarget, Settings
 from efn_etl.erasure import count_sql, delete_sql
+from efn_etl.heartbeat import JobRun
 from efn_etl.watermark import Cursor, normalize_watermark
 
 WATERMARK_TABLE = "etl_watermark"
@@ -48,6 +50,24 @@ class PgSource:
     def query(self, sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         with psycopg.connect(self._conninfo, autocommit=True, row_factory=dict_row) as conn:
             return conn.execute(sql, params).fetchall()
+
+    @contextmanager
+    def snapshot(self) -> Iterator["PgSnapshot"]:
+        """Satu transaksi REPEATABLE READ READ ONLY untuk snapshot konsisten multi-halaman (stok, G13)."""
+        with psycopg.connect(self._conninfo, autocommit=False, row_factory=dict_row) as conn:
+            conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            try:
+                yield PgSnapshot(conn)
+            finally:
+                conn.rollback()
+
+
+class PgSnapshot:
+    def __init__(self, conn: psycopg.Connection[dict[str, Any]]) -> None:
+        self._conn = conn
+
+    def query(self, sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        return self._conn.execute(sql, params).fetchall()
 
 
 def clickhouse_client_kwargs(settings: Settings) -> dict[str, Any]:
@@ -125,6 +145,30 @@ class ClickHouseWatermarkStore:
             column_names=["job", "watermark", "rows_loaded", "updated_at"],
             database=self._database,
         )
+
+
+class ClickHouseRunStore:
+    """Riwayat run job (`etl_job_run`, heartbeat SEC-52) dan penanda snapshot stok terakhir."""
+
+    COLUMNS = ("job", "run_ts", "status", "rows", "pages", "duration_ms", "watermark")
+
+    def __init__(self, client: Client, database: str) -> None:
+        self._client = client
+        self._database = database
+
+    def record(self, run: JobRun) -> None:
+        self._client.insert(
+            "etl_job_run",
+            [[run.job, run.run_ts, run.status, run.rows, run.pages, run.duration_ms, run.watermark]],
+            column_names=list(self.COLUMNS),
+            database=self._database,
+        )
+
+    def last_stock_snapshot(self) -> datetime | None:
+        rows = self._client.query("SELECT max(snapshot_ts), count() FROM stock_snapshot_run").result_rows
+        if not rows or not rows[0][1]:
+            return None
+        return normalize_watermark(rows[0][0])
 
 
 class ClickHouseAuditStore:

@@ -329,3 +329,51 @@ Untuk devsecops: user `efn-ocr` cukup configure `^$`, read `^ocr\.requested$`, w
 - Kolom `origin_user_id` di DB nyata (menunggu upgrade efn_audit 19.0.1.2.0).
 - Skenario tamper nyata di PostgreSQL (hanya unit test) dan alert Loki (rule belum dibuat devsecops).
 - `run-e2e-smoke.sh v` dengan image ocr-worker baru; angka GPU.
+
+---
+
+## Gelombang 13 — Mart Fase 1, 3 dashboard Metabase sebagai kode, heartbeat ETL (7 Okt 2026)
+
+Konteks: docs/01 §7 Fase 1 "ETL dasar + 3 dashboard Metabase" (daftar final dashboard C-level = Q-47, masih terbuka), SEC-52 butir 1 (dead-man), tambahan lead: verifikasi sink audit v2 (HMAC).
+
+### 1. Mart (infra/clickhouse/init/04-fase1-marts.sql, services/etl)
+| Bagian | Tabel / job | View (semantic layer Metabase) |
+|---|---|---|
+| (a) Penjualan POS | `fact_sales_line` + `order_id`, `is_refund`, `line_kind` (product/discount/reward/points/tip), `discount_amount`; job baru `pos_payments` → `fact_pos_payment`, `pos_outlets` → `dim_outlet`, `products` → `dim_product` (`efn_etl/pos.py`) | `v_pos_sales_daily` (hari×PT×outlet×kategori: kotor, diskon baris, promo, poin EFN, refund, bersih, pajak, HPP, qty), `v_pos_outlet_daily` (order, basket), `v_pos_sales_hourly`, `v_pos_payment_daily` |
+| (b) Stok & kedaluwarsa | job `stock_snapshot` (`efn_etl/stock.py`): snapshot penuh quant internal + lot + orderpoint dalam satu transaksi REPEATABLE READ, penanda `stock_snapshot_run` ditulis terakhir; `fact_stock_snapshot`, `fact_orderpoint_snapshot` | `v_stock_daily`, `v_stock_current`, `v_stock_expiring` (≤ 7 hari, termasuk yang lewat), `v_stock_below_reorder` |
+| (c) Price Hunter | `dim_product.list_price` + `competitor_prices` | `v_price_index` (match SKU atau nama dinormalisasi; indeks vs harga jual & vs harga POS 30 hari), `v_price_hunter_match_rate` |
+| Heartbeat | `etl_job_run` (TTL 90 hari) | `v_etl_freshness` |
+
+Mengapa snapshot stok (bukan incremental): Odoo menghapus quant ber-qty nol, jadi incremental `write_date` tidak pernah melihat stok habis. Kolom Odoo 19 diverifikasi lewat `information_schema` DB dev (product_expiry + pos_loyalty terpasang). Backfill `fact_sales_line` di dev: watermark epoch → 84 baris dimuat ulang (prosedur di README ETL). TTL mart 5 tahun juga untuk tabel baru (`clickhouse-init.sh`). **Kontrak baru untuk Odoo engineer:** produk "Poin EFN" (docs/04 §9.3) memakai `default_code = EFN-POINTS` (atau set `ETL_POINTS_PRODUCT_CODES`).
+
+### 2. Grant baru
+- **Odoo** (`sql/odoo-readonly-grants.sql`, kolom per kolom; diterapkan ke DB dev sebagai `efn_odoo` → OK): `pos_order_line(refunded_orderline_id, is_reward_line)`, `pos_order(is_refund)`, `pos_payment(id, pos_order_id, payment_method_id, amount, is_change, payment_date, write_date)` — TANPA card_no, cardholder_name, card_brand/type, transaction_id, payment_ref_no, authcode, issuer_bank, ticket; `pos_payment_method(id, name, payment_method_type, is_cash_count)`; `pos_config(id, name, company_id, warehouse_id, discount_product_id, tip_product_id, active, write_date)`; `product_product(+default_code, active, standard_price, write_date)`; `product_template(+name, company_id, list_price, type, is_storable, tracking, use_expiration_date, sale_ok, available_in_pos, active, write_date)`; `stock_quant(id, company_id, location_id, product_id, lot_id, quantity, reserved_quantity, in_date)` — TANPA owner_id/user_id; `stock_lot(id, name, expiration_date)`; `stock_location(id, complete_name, usage, warehouse_id)`; `stock_warehouse(id, name)`; `stock_warehouse_orderpoint(id, company_id, warehouse_id, location_id, product_id, product_min_qty, product_max_qty, trigger, active)`; index `efn_etl_pos_payment_write_date_id_idx`.
+- **ClickHouse:** `etl_writer` SELECT+INSERT pada 7 tabel baru; `metabase_reader` SELECT 11 view baru + tabel dasarnya (tanpa identitas) + 4 kolom baru `fact_sales_line` (tetap tanpa `customer_id` — diverifikasi ditolak 497; INSERT juga 497). Semantic layer Text-to-SQL TIDAK diubah (di luar batas file).
+
+### 3. Dashboard (infra/metabase) — diuji di stack dev
+`provision.py` (stdlib, idempoten; dijalankan 2× tanpa duplikat; 28/28 kartu `completed`; filter outlet/tanggal/PT diuji via API). Koneksi ClickHouse `efn_metabase`: HTTPS 8443 + `sslmode=strict` + CA internal (CA salah → "Failed to create connection", diverifikasi). Skrip → Metabase lewat Traefik `bi.efn.local` (HTTPS terverifikasi; CA server salah → gagal). Driver ClickHouse resmi 1.52.0 (Apache-2.0) dipin sha256 di `infra/metabase/Dockerfile`.
+
+Kartu (semua SQL native ke `efn_dwh.v_*`; validator menolak relasi lain/DDL/fungsi tabel):
+- **Penjualan Harian Outlet** (filter: dari/sampai tanggal, PT nama/kode brand, outlet): Penjualan bersih, Jumlah order, Rata-rata nilai belanja, Retur/refund (scalar, `v_pos_outlet_daily`); Tren penjualan bersih harian per outlet (line); Metode pembayaran (pie, `v_pos_payment_daily`); Penjualan per kategori (row, `v_pos_sales_daily`); Pola jam WIB (bar, `v_pos_sales_hourly`); Diskon/promo/poin EFN/refund per hari (bar stacked, `v_pos_sales_daily`); Ringkasan outlet harian (table); Kesegaran data ETL (`v_etl_freshness`).
+- **Stok & Kedaluwarsa** (filter: tanggal, PT, gudang/outlet): Nilai stok saat ini, Lot kedaluwarsa ≤ 7 hari, Produk di bawah titik pesan ulang (scalar); Produk mendekati kedaluwarsa (table, `v_stock_expiring`); Stok di bawah titik pesan ulang (table, `v_stock_below_reorder`); Nilai stok harian per gudang (line, `v_stock_daily`); Stok saat ini per produk & gudang (table, `v_stock_current`); Kesegaran data ETL.
+- **Price Hunter** (filter: tanggal, pesaing, produk): Laporan valid (`v_price_hunter_quality`), Indeks harga rata-rata (`v_price_index`), Laporan valid termatch % (`v_price_hunter_match_rate`) (scalar); Indeks harga per produk & pesaing (table); Indeks rata-rata per pesaing (row); Tren indeks harian (line); Kualitas laporan per status (bar stacked); Produk dilaporkan belum termatch (table, `v_competitor_prices` minus `v_price_index`); Kesegaran data ETL.
+
+Data dev tambahan (Odoo company 4, lewat `odoo shell`): produk `ETL-DEV-UHT` (lot ETLDEV-L1 kedaluwarsa +3 hari, L2 +60 hari, orderpoint min 50/max 120) dan `ETL-DEV-INDOMIE` "Indomie Goreng" (match laporan Price Hunter smoke → indeks 94,6).
+
+### 4. Heartbeat (SEC-52 butir 1) — nama metrik untuk devsecops
+Log Loki `service="etl"`, satu baris logfmt per job per siklus (INFO bila ok, WARNING selain itu), plus baris `efn_dwh.etl_job_run`:
+`EFN_ETL_HEARTBEAT job=<job> status=<ok|error|partial> rows=<n> pages=<n> duration_ms=<n> watermark=<iso|-> ts=<iso>`.
+Job: `cycle` (loop hidup), `competitor_prices`, `loyalty_events`, `sales_fact_pos`, `pos_outlets`, `products`, `pos_payments`, `companies`, `gl_accounts`, `gl_lines`, `gl_lines_by_move`, `stock_snapshot`, `audit_copy`, `audit_recon`, `privacy_erasure`. Nama job divalidasi `^[a-z0-9_]{1,64}$`. Usulan alert: `absent_over_time({service="etl"} |= "EFN_ETL_HEARTBEAT" | logfmt | job="<job>" | status="ok" [<ambang>])` — cycle 45m, sales_fact_pos 45m, audit_copy 1h (prod), stock_snapshot 3h, audit_recon 26h; plus `sum by (job) (count_over_time({service="etl"} |= "EFN_ETL_HEARTBEAT" | logfmt | status!="ok" [1h])) >= 2`.
+
+### 5. Sink audit v2 (tambahan lead)
+`efn_etl/sink.py` + 16 test: verifikasi `mac` (kanonik identik `efn_audit.models.base.sink_canonical`) dan rekonsiliasi → `sink_mac_invalid`, `sink_missing_log`, `log_missing_sink`. **Belum di-wire ke `EFN_AUDIT_RECON`.** Spesifikasi wiring: (1) devsecops mount secret `efn_audit_sink_key` ke `etl` + env `EFN_AUDIT_SINK_KEY_FILE`, sertifikat klien `etl` yang di-allow `loki-tls`, akses network observability; (2) ETL membaca `GET /loki/api/v1/query_range?query={service="odoo"} |= "EFN_AUDIT_SINK"` per jendela recon (paging `limit`/`start`, ≤ retensi stream sink); (3) PG: `efn_audit_log` model kontrol + `purge` di jendela yang sama (grant sudah ada); (4) hitungan digabung ke payload `EFN_AUDIT_RECON` + kolom baru `audit_recon_run`; WARNING bila > 0. Kunci belum ada di Odoo → `mac` null → semua baris `sink_mac_invalid` (sengaja tidak diam).
+
+### 6. Validasi
+- `services/etl`: ruff check + format bersih; pytest 154 lulus (container python:3.12-slim). `infra/metabase`: ruff bersih; pytest 23 lulus.
+- `clickhouse-init` dijalankan ulang di dev (semua skema/akses OK); image ETL dibangun ulang; satu siklus penuh: semua heartbeat `status=ok`.
+
+### 7. Belum / perlu pihak lain
+- **devsecops:** compose `metabase` → `build: ../metabase` (driver ClickHouse; di dev jar disalin manual dengan `docker cp` dan hilang saat recreate); secret `metabase_admin_password` di `scripts/secrets.list` (dev: dibuat lokal `secrets/metabase_admin_password.txt`); langkah `provision.py` di deploy segera setelah Metabase pertama hidup (instance yang belum di-setup bisa diklaim siapa pun di subnet staf); alert heartbeat; job CI untuk `infra/metabase/tests`. Catatan: `docker restart efn-metabase-1` membuat sidecar `metabase-tls` (network_mode service) unhealthy, jadi sidecar juga harus di-restart.
+- Q-47 (dashboard C-level), Q-54 (SSO/password Metabase), izin per grup pada collection.
+- WITA/WIT per outlet belum dibedakan; reorder memakai on-hand (bukan forecast Odoo); filter berupa teks (bukan dropdown).
+- View baru belum masuk semantic layer Text-to-SQL.

@@ -120,3 +120,17 @@ def test_non_hash_identity_aborts_page_fail_closed() -> None:
     assert results[0].skipped == "error"
     assert sink.inserted == []
     assert store.sets == []
+
+
+def test_heartbeat_ok_and_error_per_job() -> None:
+    from efn_etl.heartbeat import JobRun
+
+    runs: list[JobRun] = []
+    good = _job()
+    bad = Job("bad", "platform", "-- fake", "t", ("id",), lambda row: (_ for _ in ()).throw(ValueError("x")))
+    run_once(
+        [good, bad], {"platform": FakeSource(_rows(3))}, FakeSink(), FakeStore(), OVERLAP, 10, 10, heartbeat=runs.append
+    )
+    assert [(r.job, r.status) for r in runs] == [("t", "ok"), ("bad", "error")]
+    assert runs[0].rows == 3 and runs[0].watermark == T0 + timedelta(seconds=2)
+    assert runs[1].rows == 0

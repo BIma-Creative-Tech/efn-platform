@@ -162,14 +162,15 @@ def transform_loyalty_event(row: dict[str, Any]) -> list[Any]:
     ]
 
 
-# ---------------------------------------------------------------- Odoo pos_order_line -> fact_sales_line (STUB)
+# ---------------------------------------------------------------- Odoo pos_order_line -> fact_sales_line
 
-# Kolom diselaraskan ke Odoo CE 19.0 (addons/point_of_sale/models/pos_order.py, product_category.py, dicek
-# 5 Okt 2026): `pos.order.config_id` kini stored (tidak perlu join pos_session), `state` 19.0 = draft|cancel|paid|done
-# (tidak ada lagi `invoiced`), `product_category.complete_name` stored. Grant minimum: sql/odoo-readonly-grants.sql
-# (QA U1). Aktifkan dengan ETL_ENABLE_ODOO=true setelah grant diterapkan pasca-install Odoo.
-# Cursor memakai write_date baris (POS menulis order + line dalam satu sinkronisasi); perubahan yang hanya menyentuh
-# pos_order.write_date tidak tertangkap (lihat README). `res_partner` TIDAK dibaca (PII); customer_id = id partner.
+# Kolom diselaraskan ke Odoo CE 19.0 (diverifikasi information_schema DB dev, 7 Okt 2026): `pos.order.config_id`
+# stored, `state` 19.0 = draft|cancel|paid|done, `pos_order.is_refund`, `pos_order_line.refunded_orderline_id`,
+# `pos_order_line.is_reward_line` (pos_loyalty), `pos_config.discount_product_id`/`tip_product_id`.
+# Grant minimum: sql/odoo-readonly-grants.sql. Cursor = write_date baris (POS menulis order + line dalam satu
+# sinkronisasi); perubahan yang hanya menyentuh pos_order.write_date tidak tertangkap (lihat README).
+# `res_partner` TIDAK dibaca (PII); customer_id = id partner.
+# Gelombang 13 (Fase 1): order_id, is_refund, line_kind (product|discount|reward|points|tip), discount_amount.
 SQL_SALES_FACT = """
 SELECT l.id AS line_id, o.company_id, c.name AS company_name, COALESCE(c.efn_brand_code, '') AS brand,
        o.config_id AS store_id, COALESCE(o.pos_reference, o.name) AS order_ref, o.date_order AS order_date,
@@ -177,6 +178,10 @@ SELECT l.id AS line_id, o.company_id, c.name AS company_name, COALESCE(c.efn_bra
        COALESCE(pc.complete_name, '') AS category, l.qty, l.price_unit, l.discount AS discount_pct,
        l.price_subtotal AS subtotal, (l.price_subtotal_incl - l.price_subtotal) AS tax_amount,
        l.total_cost AS cost_total, l.write_date,
+       l.order_id, (COALESCE(o.is_refund, FALSE) OR l.refunded_orderline_id IS NOT NULL) AS is_refund,
+       COALESCE(l.is_reward_line, FALSE) AS is_reward_line, COALESCE(pp.default_code, '') AS default_code,
+       (cfg.discount_product_id IS NOT NULL AND cfg.discount_product_id = l.product_id) AS is_discount_product,
+       (cfg.tip_product_id IS NOT NULL AND cfg.tip_product_id = l.product_id) AS is_tip_product,
        l.write_date AS _cursor_ts, l.id::text AS _cursor_key
 FROM pos_order_line l
 JOIN pos_order o ON o.id = l.order_id
@@ -184,6 +189,7 @@ JOIN res_company c ON c.id = o.company_id
 JOIN product_product pp ON pp.id = l.product_id
 JOIN product_template pt ON pt.id = pp.product_tmpl_id
 LEFT JOIN product_category pc ON pc.id = pt.categ_id
+LEFT JOIN pos_config cfg ON cfg.id = o.config_id
 WHERE o.state IN ('paid', 'done')
   AND l.write_date >= %(cursor_ts)s
   AND (l.write_date, l.id::text) > (%(cursor_ts)s, %(cursor_key)s)
@@ -211,10 +217,51 @@ SALES_FACT_COLUMNS = (
     "tax_amount",
     "cost_total",
     "write_date",
+    "order_id",
+    "is_refund",
+    "line_kind",
+    "discount_amount",
 )
 
+# Produk "Poin EFN" (docs/04 §9.3): baris diskon senilai poin yang di-redeem. Kode internal (default_code) dapat
+# diubah lewat env ETL_POINTS_PRODUCT_CODES (dipisah koma) — kontrak dengan modul POS loyalty Odoo.
+DEFAULT_POINTS_PRODUCT_CODES = frozenset({"EFN-POINTS"})
+LINE_KINDS = ("product", "discount", "reward", "points", "tip")
+_HUNDRED = Decimal(100)
+_CENT = Decimal("0.01")
 
-def transform_sales_line(row: dict[str, Any]) -> list[Any]:
+
+def line_kind(row: dict[str, Any], points_codes: frozenset[str] = DEFAULT_POINTS_PRODUCT_CODES) -> str:
+    """Jenis baris POS. Urutan prioritas: poin EFN > reward loyalty Odoo > produk diskon global > tip > produk."""
+    if str(row.get("default_code") or "").strip() in points_codes:
+        return "points"
+    if row.get("is_reward_line"):
+        return "reward"
+    if row.get("is_discount_product"):
+        return "discount"
+    if row.get("is_tip_product"):
+        return "tip"
+    return "product"
+
+
+def line_discount_amount(subtotal: Decimal, discount_pct: Decimal, qty: Decimal, price_unit: Decimal) -> Decimal:
+    """Nilai diskon persen baris dalam basis yang sama dengan `price_subtotal` (setelah diskon, tanpa pajak).
+
+    subtotal = dasar * (1 - d/100) -> diskon = subtotal * d / (100 - d). Untuk d >= 100 subtotal = 0, sehingga dipakai
+    perkiraan qty * price_unit (basis harga POS; bisa termasuk pajak bila harga POS tax-included).
+    """
+    if discount_pct <= 0:
+        return Decimal(0)
+    if discount_pct >= _HUNDRED:
+        return (qty * price_unit).quantize(_CENT)
+    return (subtotal * discount_pct / (_HUNDRED - discount_pct)).quantize(_CENT)
+
+
+def transform_sales_line(row: dict[str, Any], points_codes: frozenset[str] = DEFAULT_POINTS_PRODUCT_CODES) -> list[Any]:
+    qty = Decimal(str(row["qty"]))
+    price_unit = Decimal(str(row["price_unit"]))
+    discount_pct = Decimal(str(row["discount_pct"] or 0))
+    subtotal = Decimal(str(row["subtotal"]))
     return [
         int(row["line_id"]),
         "pos",
@@ -228,13 +275,17 @@ def transform_sales_line(row: dict[str, Any]) -> list[Any]:
         int(row["product_id"]),
         str(row["product_name"]),
         str(row["category"]),
-        Decimal(str(row["qty"])),
-        Decimal(str(row["price_unit"])),
-        Decimal(str(row["discount_pct"] or 0)),
-        Decimal(str(row["subtotal"])),
+        qty,
+        price_unit,
+        discount_pct,
+        subtotal,
         Decimal(str(row["tax_amount"] or 0)),
         _opt_decimal(row["cost_total"]),
         _dt(row["write_date"]),
+        int(row.get("order_id") or 0),
+        1 if row.get("is_refund") else 0,
+        line_kind(row, points_codes),
+        line_discount_amount(subtotal, discount_pct, qty, price_unit),
     ]
 
 
@@ -256,18 +307,29 @@ LOYALTY_EVENTS = Job(
     transform=transform_loyalty_event,
     identity_field="member_ref_hash",
 )
-SALES_FACT = Job(
-    name="sales_fact_pos",
-    source="odoo",
-    sql=SQL_SALES_FACT,
-    target_table="fact_sales_line",
-    columns=SALES_FACT_COLUMNS,
-    transform=transform_sales_line,
-)
 
 
-def enabled_jobs(odoo_enabled: bool) -> list[Job]:
+def sales_fact_job(points_codes: frozenset[str] = DEFAULT_POINTS_PRODUCT_CODES) -> Job:
+    return Job(
+        name="sales_fact_pos",
+        source="odoo",
+        sql=SQL_SALES_FACT,
+        target_table="fact_sales_line",
+        columns=SALES_FACT_COLUMNS,
+        transform=lambda row: transform_sales_line(row, points_codes),
+    )
+
+
+SALES_FACT = sales_fact_job()
+
+
+def enabled_jobs(odoo_enabled: bool, points_codes: frozenset[str] = DEFAULT_POINTS_PRODUCT_CODES) -> list[Job]:
+    """Job incremental. Odoo: penjualan POS + (Gelombang 13) pembayaran POS, outlet, produk (efn_etl/pos.py)."""
     jobs = [COMPETITOR_PRICES, LOYALTY_EVENTS]
     if odoo_enabled:
-        jobs.append(SALES_FACT)
+        # Import lokal: pos.py mengimpor helper dari modul ini.
+        from efn_etl.pos import POS_JOBS
+
+        jobs.append(sales_fact_job(points_codes))
+        jobs.extend(POS_JOBS)
     return jobs

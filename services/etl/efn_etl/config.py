@@ -88,6 +88,11 @@ class Settings:
     audit_batch_size: int = 2000
     audit_recon_interval_seconds: int = 86_400
     audit_recon_content: bool = True
+    # Gelombang 13 (Fase 1): snapshot stok & kedaluwarsa (efn_etl/stock.py). Default = ETL_ENABLE_ODOO (grant sama).
+    stock_enabled: bool = False
+    stock_snapshot_interval_seconds: int = 3600
+    # default_code produk "Poin EFN" (docs/04 §9.3) -> line_kind=points di fact_sales_line.
+    points_product_codes: frozenset[str] = frozenset({"EFN-POINTS"})
 
     @property
     def amqp_user(self) -> str:
@@ -144,10 +149,14 @@ class Settings:
                 raise TlsConfigError("AMQP_URL tidak boleh memuat password; gunakan RABBITMQ_PASSWORD_FILE")
             if not parts.username:
                 raise TlsConfigError("AMQP_URL wajib memuat user (efn-etl)")
+        odoo_enabled = _bool(e, "ETL_ENABLE_ODOO", False)
+        points_codes = frozenset(
+            code.strip() for code in _str(e, "ETL_POINTS_PRODUCT_CODES", "EFN-POINTS").split(",") if code.strip()
+        )
         return cls(
             platform_pg=platform,
             odoo_pg=odoo,
-            odoo_enabled=_bool(e, "ETL_ENABLE_ODOO", False),
+            odoo_enabled=odoo_enabled,
             ch_host=_str(e, "CH_HOST", "clickhouse"),
             ch_port=_int(e, "CH_PORT", 8443 if ch_secure else 8123),
             ch_user=_str(e, "CH_USER", "efn_etl"),
@@ -174,4 +183,7 @@ class Settings:
             audit_batch_size=_int(e, "ETL_AUDIT_BATCH_SIZE", 2000),
             audit_recon_interval_seconds=_int(e, "ETL_AUDIT_RECON_INTERVAL_SECONDS", 86_400),
             audit_recon_content=_bool(e, "ETL_AUDIT_RECON_CONTENT", True),
+            stock_enabled=_bool(e, "ETL_ENABLE_STOCK", odoo_enabled),
+            stock_snapshot_interval_seconds=_int(e, "ETL_STOCK_SNAPSHOT_INTERVAL_SECONDS", 3600),
+            points_product_codes=points_codes,
         )

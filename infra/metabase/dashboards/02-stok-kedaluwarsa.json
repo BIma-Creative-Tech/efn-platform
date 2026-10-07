@@ -1,0 +1,122 @@
+{
+  "key": "stok-kedaluwarsa",
+  "name": "Stok & Kedaluwarsa",
+  "description": "Fase 1: stok per gudang/PT dari snapshot Odoo (per jam), lot kedaluwarsa <= 7 hari, stok di bawah titik pesan ulang (on-hand vs min orderpoint). Sumber: view efn_dwh.v_stock_*.",
+  "parameters": [
+    {
+      "slug": "date_from",
+      "name": "Dari tanggal",
+      "type": "date/single"
+    },
+    {
+      "slug": "date_to",
+      "name": "Sampai tanggal",
+      "type": "date/single"
+    },
+    {
+      "slug": "company",
+      "name": "PT",
+      "type": "string/="
+    },
+    {
+      "slug": "warehouse",
+      "name": "Gudang / outlet",
+      "type": "string/="
+    }
+  ],
+  "cards": [
+    {
+      "key": "kpi-nilai-stok",
+      "name": "Nilai stok saat ini",
+      "display": "scalar",
+      "row": 0,
+      "col": 0,
+      "size_x": 8,
+      "size_y": 3,
+      "description": "Qty x harga pokok (standard_price) per PT.",
+      "sql": "SELECT sum(stock_value) AS nilai_stok FROM efn_dwh.v_stock_current WHERE 1 = 1 [[AND positionCaseInsensitive(company_name, {{company}}) > 0]] [[AND positionCaseInsensitive(warehouse_name, {{warehouse}}) > 0]]"
+    },
+    {
+      "key": "kpi-lot-kedaluwarsa",
+      "name": "Lot kedaluwarsa <= 7 hari",
+      "display": "scalar",
+      "row": 0,
+      "col": 8,
+      "size_x": 8,
+      "size_y": 3,
+      "description": "Termasuk lot yang sudah lewat tanggal kedaluwarsa dan masih ada stok.",
+      "sql": "SELECT count() AS lot_kedaluwarsa_7_hari FROM efn_dwh.v_stock_expiring WHERE 1 = 1 [[AND positionCaseInsensitive(company_name, {{company}}) > 0]] [[AND positionCaseInsensitive(warehouse_name, {{warehouse}}) > 0]]"
+    },
+    {
+      "key": "kpi-di-bawah-reorder",
+      "name": "Produk di bawah titik pesan ulang",
+      "display": "scalar",
+      "row": 0,
+      "col": 16,
+      "size_x": 8,
+      "size_y": 3,
+      "sql": "SELECT count() AS produk_di_bawah_reorder FROM efn_dwh.v_stock_below_reorder WHERE 1 = 1 [[AND positionCaseInsensitive(company_name, {{company}}) > 0]] [[AND positionCaseInsensitive(warehouse_name, {{warehouse}}) > 0]]"
+    },
+    {
+      "key": "tabel-kedaluwarsa",
+      "name": "Produk mendekati kedaluwarsa (<= 7 hari)",
+      "display": "table",
+      "row": 3,
+      "col": 0,
+      "size_x": 24,
+      "size_y": 6,
+      "sql": "SELECT expiry_status AS status, days_to_expiry AS sisa_hari, product_name AS produk, default_code AS kode, lot_name AS lot, expiration_date AS kedaluwarsa, company_name AS pt, warehouse_name AS gudang, location_name AS lokasi, quantity AS qty, stock_value AS nilai FROM efn_dwh.v_stock_expiring WHERE 1 = 1 [[AND positionCaseInsensitive(company_name, {{company}}) > 0]] [[AND positionCaseInsensitive(warehouse_name, {{warehouse}}) > 0]] ORDER BY sisa_hari, produk LIMIT 500"
+    },
+    {
+      "key": "tabel-reorder",
+      "name": "Stok di bawah titik pesan ulang",
+      "display": "table",
+      "row": 9,
+      "col": 0,
+      "size_x": 24,
+      "size_y": 6,
+      "description": "Pendekatan: stok on-hand per gudang (Odoo memakai stok perkiraan per lokasi).",
+      "sql": "SELECT product_name AS produk, default_code AS kode, company_name AS pt, warehouse_name AS gudang, on_hand AS stok, free_qty AS stok_bebas, min_qty AS minimum, max_qty AS maksimum, suggested_qty AS saran_pesan, trigger AS pemicu FROM efn_dwh.v_stock_below_reorder WHERE 1 = 1 [[AND positionCaseInsensitive(company_name, {{company}}) > 0]] [[AND positionCaseInsensitive(warehouse_name, {{warehouse}}) > 0]] ORDER BY produk LIMIT 500"
+    },
+    {
+      "key": "tren-nilai-stok",
+      "name": "Nilai stok harian per gudang",
+      "display": "line",
+      "row": 15,
+      "col": 0,
+      "size_x": 24,
+      "size_y": 6,
+      "sql": "SELECT day, warehouse_name AS gudang, sum(stock_value) AS nilai_stok FROM efn_dwh.v_stock_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND positionCaseInsensitive(company_name, {{company}}) > 0]] [[AND positionCaseInsensitive(warehouse_name, {{warehouse}}) > 0]] GROUP BY day, gudang ORDER BY day",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "day",
+          "gudang"
+        ],
+        "graph.metrics": [
+          "nilai_stok"
+        ]
+      }
+    },
+    {
+      "key": "tabel-stok-produk",
+      "name": "Stok saat ini per produk & gudang",
+      "display": "table",
+      "row": 21,
+      "col": 0,
+      "size_x": 24,
+      "size_y": 7,
+      "sql": "SELECT warehouse_name AS gudang, product_name AS produk, default_code AS kode, category AS kategori, sum(quantity) AS qty, sum(free_quantity) AS qty_bebas, sum(stock_value) AS nilai, min(expiration_date) AS kedaluwarsa_terdekat FROM efn_dwh.v_stock_current WHERE 1 = 1 [[AND positionCaseInsensitive(company_name, {{company}}) > 0]] [[AND positionCaseInsensitive(warehouse_name, {{warehouse}}) > 0]] GROUP BY gudang, produk, kode, kategori ORDER BY nilai DESC LIMIT 500"
+    },
+    {
+      "key": "kesegaran-data",
+      "name": "Kesegaran data ETL",
+      "display": "table",
+      "row": 28,
+      "col": 0,
+      "size_x": 24,
+      "size_y": 4,
+      "description": "Heartbeat ETL (SEC-52). Data dianggap basi bila menit_sejak_sukses > 30.",
+      "sql": "SELECT job, last_ok_at AS sukses_terakhir_utc, minutes_since_ok AS menit_sejak_sukses, last_status AS status_terakhir, failures_24h AS gagal_24_jam FROM efn_dwh.v_etl_freshness WHERE job IN ('cycle', 'products', 'stock_snapshot') ORDER BY job"
+    }
+  ]
+}

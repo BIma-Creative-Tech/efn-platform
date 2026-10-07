@@ -83,6 +83,14 @@ ALTER TABLE efn_dwh.loyalty_events MODIFY TTL toDateTime(created_at) + INTERVAL 
 ALTER TABLE efn_dwh.loyalty_events MODIFY SETTING ttl_only_drop_parts = 1;
 ALTER TABLE efn_dwh.fact_sales_line MODIFY TTL order_date + INTERVAL ${RETENTION_YEARS} YEAR;
 ALTER TABLE efn_dwh.fact_sales_line MODIFY SETTING ttl_only_drop_parts = 1;
+ALTER TABLE efn_dwh.fact_pos_payment MODIFY TTL payment_date + INTERVAL ${RETENTION_YEARS} YEAR;
+ALTER TABLE efn_dwh.fact_pos_payment MODIFY SETTING ttl_only_drop_parts = 1;
+ALTER TABLE efn_dwh.fact_stock_snapshot MODIFY TTL snapshot_date + INTERVAL ${RETENTION_YEARS} YEAR;
+ALTER TABLE efn_dwh.fact_stock_snapshot MODIFY SETTING ttl_only_drop_parts = 1;
+ALTER TABLE efn_dwh.fact_orderpoint_snapshot MODIFY TTL snapshot_date + INTERVAL ${RETENTION_YEARS} YEAR;
+ALTER TABLE efn_dwh.fact_orderpoint_snapshot MODIFY SETTING ttl_only_drop_parts = 1;
+ALTER TABLE efn_dwh.stock_snapshot_run MODIFY TTL snapshot_date + INTERVAL ${RETENTION_YEARS} YEAR;
+ALTER TABLE efn_dwh.stock_snapshot_run MODIFY SETTING ttl_only_drop_parts = 1;
 EOF
 
 # Salinan audit (G12): retensi terpisah, default 10 tahun (>= retensi log Odoo; selaras kewajiban simpan dokumen

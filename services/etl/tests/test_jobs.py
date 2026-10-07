@@ -141,4 +141,4 @@ def test_transform_sales_line() -> None:
 
 def test_odoo_job_disabled_by_default() -> None:
     assert [j.name for j in enabled_jobs(False)] == ["competitor_prices", "loyalty_events"]
-    assert enabled_jobs(True)[-1].name == "sales_fact_pos"
+    assert "sales_fact_pos" in [j.name for j in enabled_jobs(True)]

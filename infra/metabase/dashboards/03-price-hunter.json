@@ -1,0 +1,148 @@
+{
+  "key": "price-hunter",
+  "name": "Price Hunter",
+  "description": "Fase 1: indeks harga pesaing vs harga jual EFN (laporan valid yang termatch ke produk; < 100 = pesaing lebih murah), kualitas laporan, dan produk dilaporkan yang belum termatch. Sumber: efn_dwh.v_price_index, v_price_hunter_*, v_competitor_prices.",
+  "parameters": [
+    {
+      "slug": "date_from",
+      "name": "Dari tanggal",
+      "type": "date/single"
+    },
+    {
+      "slug": "date_to",
+      "name": "Sampai tanggal",
+      "type": "date/single"
+    },
+    {
+      "slug": "competitor",
+      "name": "Pesaing",
+      "type": "string/="
+    },
+    {
+      "slug": "product",
+      "name": "Produk",
+      "type": "string/="
+    }
+  ],
+  "cards": [
+    {
+      "key": "kpi-laporan-valid",
+      "name": "Laporan valid",
+      "display": "scalar",
+      "row": 0,
+      "col": 0,
+      "size_x": 8,
+      "size_y": 3,
+      "sql": "SELECT sum(reports) AS laporan_valid FROM efn_dwh.v_price_hunter_quality WHERE status = 'valid' [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]]"
+    },
+    {
+      "key": "kpi-indeks",
+      "name": "Indeks harga rata-rata",
+      "display": "scalar",
+      "row": 0,
+      "col": 8,
+      "size_x": 8,
+      "size_y": 3,
+      "description": "Harga pesaing / harga jual EFN x 100.",
+      "sql": "SELECT round(avg(price_index), 1) AS indeks_harga FROM efn_dwh.v_price_index WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND positionCaseInsensitive(competitor_name, {{competitor}}) > 0]] [[AND positionCaseInsensitive(efn_product_name, {{product}}) > 0]]"
+    },
+    {
+      "key": "kpi-termatch",
+      "name": "Laporan valid termatch (%)",
+      "display": "scalar",
+      "row": 0,
+      "col": 16,
+      "size_x": 8,
+      "size_y": 3,
+      "sql": "SELECT round(sum(matched_reports) / nullIf(sum(valid_reports), 0) * 100, 1) AS persen_termatch FROM efn_dwh.v_price_hunter_match_rate WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]]"
+    },
+    {
+      "key": "tabel-indeks-produk",
+      "name": "Indeks harga per produk & pesaing",
+      "display": "table",
+      "row": 3,
+      "col": 0,
+      "size_x": 24,
+      "size_y": 7,
+      "sql": "SELECT efn_product_name AS produk, default_code AS kode, competitor_name AS pesaing, count() AS laporan, round(avg(toFloat64(competitor_price))) AS harga_pesaing_rata2, any(efn_list_price) AS harga_jual_efn, round(any(efn_avg_pos_price_30d)) AS harga_pos_efn_30_hari, round(avg(price_index), 1) AS indeks, max(reported_at) AS laporan_terakhir FROM efn_dwh.v_price_index WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND positionCaseInsensitive(competitor_name, {{competitor}}) > 0]] [[AND positionCaseInsensitive(efn_product_name, {{product}}) > 0]] GROUP BY produk, kode, pesaing ORDER BY indeks LIMIT 500"
+    },
+    {
+      "key": "indeks-per-pesaing",
+      "name": "Indeks rata-rata per pesaing",
+      "display": "row",
+      "row": 10,
+      "col": 0,
+      "size_x": 12,
+      "size_y": 6,
+      "sql": "SELECT competitor_name AS pesaing, round(avg(price_index), 1) AS indeks FROM efn_dwh.v_price_index WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND positionCaseInsensitive(competitor_name, {{competitor}}) > 0]] [[AND positionCaseInsensitive(efn_product_name, {{product}}) > 0]] GROUP BY pesaing ORDER BY indeks",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "pesaing"
+        ],
+        "graph.metrics": [
+          "indeks"
+        ]
+      }
+    },
+    {
+      "key": "tren-indeks",
+      "name": "Tren indeks harga harian",
+      "display": "line",
+      "row": 10,
+      "col": 12,
+      "size_x": 12,
+      "size_y": 6,
+      "sql": "SELECT day, round(avg(price_index), 1) AS indeks FROM efn_dwh.v_price_index WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND positionCaseInsensitive(competitor_name, {{competitor}}) > 0]] [[AND positionCaseInsensitive(efn_product_name, {{product}}) > 0]] GROUP BY day ORDER BY day",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "day"
+        ],
+        "graph.metrics": [
+          "indeks"
+        ]
+      }
+    },
+    {
+      "key": "kualitas-laporan",
+      "name": "Kualitas laporan per status",
+      "display": "bar",
+      "row": 16,
+      "col": 0,
+      "size_x": 12,
+      "size_y": 6,
+      "sql": "SELECT day, status, sum(reports) AS laporan FROM efn_dwh.v_price_hunter_quality WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] GROUP BY day, status ORDER BY day",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "day",
+          "status"
+        ],
+        "graph.metrics": [
+          "laporan"
+        ],
+        "stackable.stack_type": "stacked"
+      }
+    },
+    {
+      "key": "belum-termatch",
+      "name": "Produk dilaporkan belum termatch",
+      "display": "table",
+      "row": 16,
+      "col": 12,
+      "size_x": 12,
+      "size_y": 6,
+      "description": "Petakan ke SKU EFN (product_sku) atau samakan nama produk agar masuk indeks.",
+      "sql": "SELECT product_name AS produk_dilaporkan, competitor_name AS pesaing, count() AS laporan, max(reported_at) AS terakhir FROM efn_dwh.v_competitor_prices WHERE report_id NOT IN (SELECT report_id FROM efn_dwh.v_price_index) [[AND toDate(reported_at) >= {{date_from}}]] [[AND toDate(reported_at) <= {{date_to}}]] [[AND positionCaseInsensitive(competitor_name, {{competitor}}) > 0]] [[AND positionCaseInsensitive(product_name, {{product}}) > 0]] GROUP BY produk_dilaporkan, pesaing ORDER BY laporan DESC LIMIT 200"
+    },
+    {
+      "key": "kesegaran-data",
+      "name": "Kesegaran data ETL",
+      "display": "table",
+      "row": 22,
+      "col": 0,
+      "size_x": 24,
+      "size_y": 4,
+      "description": "Heartbeat ETL (SEC-52). Data dianggap basi bila menit_sejak_sukses > 30.",
+      "sql": "SELECT job, last_ok_at AS sukses_terakhir_utc, minutes_since_ok AS menit_sejak_sukses, last_status AS status_terakhir, failures_24h AS gagal_24_jam FROM efn_dwh.v_etl_freshness WHERE job IN ('competitor_prices', 'cycle', 'products', 'sales_fact_pos') ORDER BY job"
+    }
+  ]
+}
