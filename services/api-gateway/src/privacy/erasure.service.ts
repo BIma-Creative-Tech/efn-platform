@@ -176,7 +176,7 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
         WHERE member_ref_hash = $1`,
       [hash, tomb],
     );
-    // 2b. Reservasi redeem     // 2b. Reservasi redeem POS (§9.5): data transien berisi member_ref_enc → dihapus (catatan finansial ada di ledger) catatan earn per order POS (§9.5, §9.6 K-6): transien/pseudonim → dihapus (ledger tetap)
+    // 2b. Reservasi redeem POS (§9.5) dan catatan earn per order (§9.6 K-6): data transien/pseudonim tanpa HP → dihapus (catatan finansial tetap di ledger)
     await q.query(`DELETE FROM platform.loyalty_reservation WHERE member_hash = $1`, [hash]);
     await q.query(`DELETE FROM platform.loyalty_pos_earn WHERE member_hash = $1`, [hash]);
     // 3. Laporan Market Scout

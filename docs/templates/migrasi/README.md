@@ -17,7 +17,7 @@ File di folder ini **hanya baris judul** (template kosong). Jangan menaruh data 
 | 3 | `03_stok_awal.csv` | Saldo stok awal per lokasi (+lot) | *Inventory → Physical Inventory → Import* (`stock.quant`, kolom `inventory_quantity`) → *Apply All* | #1, #2 |
 | 4 | `04_pelanggan_odoo.csv` | Partner minimal untuk POS (nama, HP, pricelist) | *Contacts → Import* (`res.partner`) | #0; keputusan Q-12 |
 | 5 | `05_member_bff.csv` | Member + consent | **BFF** (endpoint migrasi — belum ada di kontrak, usulan ke efn-lead) | Q-12, DPO |
-| 6 | `06_saldo_poin_awal_bff.csv` | Saldo poin awal | **BFF** ledger (`source = migration`) — **bukan Odoo** | Q-13, Finance |
+| 6 | `06_saldo_poin_awal_bff.csv` | Saldo poin awal | **BFF** ledger (`source = migration_opening`) — **bukan Odoo** | Q-13, Finance |
 | 7 | `07_karyawan_kasir.csv` | Karyawan untuk login kasir (`pos_hr`) | *Employees → Import* (`hr.employee`) | user Odoo terminal |
 
 Setiap impor: (1) jalankan validator (G13-7) → laporan nol error; (2) *Test* di layar impor Odoo; (3) impor; (4) cek jumlah baris & 10 sampel; (5) simpan laporan validator (tanpa data pribadi) di berita acara.
@@ -61,7 +61,7 @@ Kemasan tambahan (karton, pak) = `uom_ids` + barcode per kemasan (`product.uom`)
 `source_ref` (id sistem lama, untuk idempotensi), `phone_e164`, `display_name`, `consent_marketing` (`true`/`false`), `consent_channel` (`whatsapp`/`sms`/`email`), `consent_at` (ISO 8601), `consent_evidence_ref` (rujukan bukti: formulir/rekaman). Member tanpa bukti consent → `consent_marketing = false`.
 
 ### 06_saldo_poin_awal_bff.csv (BFF ledger)
-`source_ref`, `phone_e164`, `company_code` (`RTL`/`FNB`, PT penanggung liabilitas), `points` (bilangan bulat ≥ 0), `expires_at` (ISO 8601 atau kosong = kebijakan default `LOYALTY_POINT_EXPIRY_DAYS`). Diposting sebagai entri ledger `source = migration`, `idempotency_key = migration:<source_ref>` (usulan kontrak). Total poin per PT direkonsiliasi dengan saldo liabilitas poin di neraca (Finance).
+`source_ref`, `phone_e164`, `company_code` (`RTL`/`FNB`, PT penanggung liabilitas), `points` (bilangan bulat ≥ 0), `expires_at` (ISO 8601 atau kosong = kebijakan default `LOYALTY_POINT_EXPIRY_DAYS`). Diposting sebagai entri ledger `source = migration_opening`, `idempotency_key = migration:<source_ref>` (usulan kontrak). Total poin per PT direkonsiliasi dengan saldo liabilitas poin di neraca (Finance).
 
 ### 07_karyawan_kasir.csv (`hr.employee`)
 `id`, `name`, `company_id/id`, `barcode` (kartu karyawan berawalan `041`, opsional), `user_id/id` (hanya untuk supervisor yang punya user Odoo POS Manager). **PIN tidak diimpor** — setiap karyawan mengisi sendiri di form karyawan / diisi HR langsung di Odoo; jangan pernah menaruh PIN di file. Peran POS (minimal/basic/manager) diatur di `pos.config`, bukan di file ini.
