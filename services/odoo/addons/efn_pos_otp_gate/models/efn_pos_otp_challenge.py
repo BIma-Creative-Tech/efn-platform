@@ -14,6 +14,10 @@ from datetime import timedelta
 from odoo import api, fields, models
 
 DEFAULT_RETENTION_DAYS = 30
+PURPOSE_PROMO = "pos_promo"
+PURPOSE_REDEEM = "pos_redeem"
+OTP_PURPOSES = [(PURPOSE_PROMO, "Promo"), (PURPOSE_REDEEM, "Tukar poin")]
+OTP_PURPOSE_KEYS = frozenset(key for key, _label in OTP_PURPOSES)
 
 
 class EfnPosOtpChallenge(models.Model):
@@ -50,6 +54,14 @@ class EfnPosOtpChallenge(models.Model):
         help="Pelanggan order saat OTP diminta (SEC-07). Nomor HP diambil dari partner ini, "
         "bukan diketik kasir. Saat consume, member_ref diambil dari partner FINAL order.",
     )
+    # E-23 (docs/08 §6.3 A): challenge tukar poin (pos_redeem) tidak boleh membuka promo dan sebaliknya.
+    purpose = fields.Selection(
+        OTP_PURPOSES,
+        string="Tujuan OTP",
+        required=True,
+        default=PURPOSE_PROMO,
+        index=True,
+    )
     member_ref_masked = fields.Char(string="Member (mask)")
     amount = fields.Integer(
         string="Nominal saat OTP (Rp)",
@@ -79,21 +91,24 @@ class EfnPosOtpChallenge(models.Model):
     )
 
     @api.model
-    def _efn_find_latest(self, config, order_ref, states):
+    def _efn_find_latest(self, config, order_ref, states, purpose=PURPOSE_PROMO):
+        """Challenge terbaru untuk (config, order, purpose). Default `pos_promo`: gate promo
+        tidak pernah melihat challenge tukar poin (E-23)."""
         return self.sudo().search(
             [
                 ("config_id", "=", config.id),
                 ("order_ref", "=", order_ref),
                 ("state", "in", list(states)),
+                ("purpose", "=", purpose),
             ],
             order="id desc",
             limit=1,
         )
 
     @api.model
-    def _efn_find_valid_verified(self, config, order_ref):
+    def _efn_find_valid_verified(self, config, order_ref, purpose=PURPOSE_PROMO):
         """Challenge `verified` yang tokennya belum kedaluwarsa menurut catatan lokal."""
-        challenge = self._efn_find_latest(config, order_ref, ["verified"])
+        challenge = self._efn_find_latest(config, order_ref, ["verified"], purpose=purpose)
         if not challenge:
             return challenge
         if challenge.token_expires_at and challenge.token_expires_at < fields.Datetime.now():

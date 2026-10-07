@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_pos_pos_form_inherit_efn_loyalty" model="ir.ui.view">
+        <field name="name">pos.order.form.inherit.efn.loyalty</field>
+        <field name="model">pos.order</field>
+        <field name="inherit_id" ref="point_of_sale.view_pos_pos_form"/>
+        <field name="arch" type="xml">
+            <page name="extra" position="after">
+                <page string="Poin EFN" name="efn_loyalty" invisible="not efn_loyalty_state">
+                    <group>
+                        <group>
+                            <field name="efn_loyalty_state"/>
+                            <field name="efn_loyalty_note"/>
+                        </group>
+                        <group>
+                            <field name="efn_loyalty_points_earned"/>
+                            <field name="efn_loyalty_points_redeemed" readonly="1"/>
+                            <field name="efn_loyalty_redeem_value" readonly="1"/>
+                        </group>
+                    </group>
+                </page>
+            </page>
+        </field>
+    </record>
+
+    <record id="view_pos_order_filter_inherit_efn_loyalty" model="ir.ui.view">
+        <field name="name">pos.order.search.inherit.efn.loyalty</field>
+        <field name="model">pos.order</field>
+        <field name="inherit_id" ref="point_of_sale.view_pos_order_filter"/>
+        <field name="arch" type="xml">
+            <filter name="invoiced" position="after">
+                <filter string="Perlu review Poin EFN" name="efn_loyalty_review"
+                        domain="[('efn_loyalty_state', '=', 'review')]"/>
+                <filter string="Poin EFN tertunda" name="efn_loyalty_pending"
+                        domain="[('efn_loyalty_state', '=', 'pending')]"/>
+            </filter>
+        </field>
+    </record>
+
+    <record id="action_pos_order_efn_loyalty_review" model="ir.actions.act_window">
+        <field name="name">Review Poin</field>
+        <field name="res_model">pos.order</field>
+        <field name="view_mode">list,form</field>
+        <field name="domain">[('efn_loyalty_state', '=', 'review')]</field>
+        <field name="context">{}</field>
+    </record>
+
+    <menuitem id="menu_pos_order_efn_loyalty_review"
+              name="Review Poin"
+              parent="point_of_sale.menu_point_of_sale"
+              action="action_pos_order_efn_loyalty_review"
+              sequence="91"
+              groups="point_of_sale.group_pos_manager"/>
+</odoo>

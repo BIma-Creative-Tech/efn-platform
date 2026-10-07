@@ -439,3 +439,32 @@ Batas file: `efn_audit/**`, `efn_setup_audit/README.md`, `docs/runbooks/odoo-acc
 - Tidak tercatat: ACL/rule/grup dari data XML/CSV saat install/upgrade, penghapusan API key kedaluwarsa oleh autovacuum (SQL), SQL langsung.
 - Upgrade 19.0.1.2.0 -> 19.0.1.3.0 di volume dev belum diuji. Tidak ada migrasi karena tidak ada perubahan skema. Log M2m lama tetap berformat daftar penuh.
 - Overhead pada beban nyata (POS/ubah user massal) belum diukur. Penulisan `res.users` tanpa field dilacak tetap 0 read tambahan.
+
+# Gelombang 13b — Poin EFN di POS (E-22, E-23, E-24), 2026-10-07
+
+Batas file: `efn_pos_loyalty_ledger/**` (baru), `efn_pos_otp_gate/**` (E-23), `efn_setup_pos` (hanya komentar filter audit + README, E-24), `.github/workflows/ci.yml` (daftar modul odoo-test/odoo-tour + `EFN_TOUR_MIN_TESTS` 5→9), `scripts/smoke/odoo_pos_smoke.py` (langkah `loy_*`). Tanpa commit; stack dev tidak di-restart. Tidak ada kode vendor yang dipelajari/dipakai.
+
+## Perubahan
+- **E-23 `efn_pos_otp_gate` 19.0.1.5.0 → 19.0.1.6.0:** `efn.pos.otp.challenge.purpose` (`pos_promo` default | `pos_redeem`, required, index); `efn_otp_request(..., purpose)` mengirim `purpose` ke BFF; `efn_otp_verify(..., purpose)`; `_efn_find_latest/_efn_find_valid_verified` default `pos_promo` → gate promo tidak menerima challenge tukar poin dan sebaliknya; `efn_otp_flow.js` opsi `{purpose, amount}`. +6 test lintas-purpose.
+- **E-22 `efn_pos_loyalty_ledger` 19.0.1.0.0 (baru):** produk "Poin EFN" (`default_code=EFN-POINTS`, `_get_special_products`), `product.category.efn_loyalty_earn_excluded` (K-2, juga untuk ETL), `pos.config.efn_loyalty_earn_enabled/redeem_enabled` (+ settings, constraint kiosk), model `efn.pos.loyalty.reservation` & `efn.pos.loyalty.outbox` (idempotency key unik, payload tidak disimpan, backoff 1 m→1 j, `FOR UPDATE SKIP LOCKED`, `_trigger`, reverse menunggu earn/commit, aktivitas POS manager), RPC `efn_loyalty_balance/redeem_reserve/redeem_release/refund_preview`, validasi sync (deteksi dari produk; tanpa reservasi → `UserError`; nilai/partner beda → review; reservasi tanpa baris → release; draft tanpa reservasi → baris dibuang), earn/reverse via outbox, release saat `action_pos_order_cancel`/`remove_from_ui`. Frontend: tombol *Cek Poin* & *Tukar Poin EFN* di layar pembayaran, baris per kelompok pajak `price_type:"automatic"`, dialog batal (Back/ganti pelanggan/hapus order) + release, blok validasi offline, penyesuaian poin otomatis di layar refund, baris poin dinetralkan dari `pos_loyalty`, teks struk. Menu Review Poin / Reservasi / Outbox.
+- **E-24:** filter pengganti "Baris negatif non-promo (… tanpa Poin EFN)" + "Order dengan tukar Poin EFN"; filter lama `efn_setup_pos` dinonaktifkan `post_init_hook` (aktif lagi saat uninstall).
+
+## Keputusan/asumsi kontrak (perlu dikonfirmasi lead/BFF)
+1. **K-1 eligible_amount**: barang eligible tanpa pajak × faktor uang (1 − nilai poin/nilai barang, tanpa pajak) — mengikuti kalimat "bagian yang dibayar poin tidak menghasilkan poin". `refund_ratio` = barang eligible direfund / barang eligible asal; `refunded_eligible_amount` = barang eligible refund × faktor uang order asal.
+2. Earn dikirim untuk setiap order ber-member di config `earn_enabled` (termasuk eligible 0, §9.7); HP non-+62/anonim → `skipped` lokal.
+3. Reserve: 409 bisnis (`insufficient_points`, `below_minimum`, `exceeds_max_pct`, `reservation_exists`) → challenge tetap `verified` (kasir boleh coba jumlah lain; bila BFF sudah memakai token, coba berikutnya `token_invalid` → OTP baru). `token_invalid`/`member_mismatch`/`amount_mismatch`/timeout → challenge `failed`.
+4. Balance body `{member_ref, pos_config_id, company_code}` (§9.7); params dari `GET /v1/pos/loyalty/params` (cache 5 menit/worker); `amount` OTP = `amount_total` reserve = total order sebelum poin.
+5. Retry outbox: jaringan/5xx, 429, `earn_pending`; 409 lain final (`reservation_expired` → reservasi & order review); 404 release = selesai.
+6. **Deviasi spesifikasi:** `outbox.order_id` tidak wajib untuk `redeem_release` (order draft dihapus `remove_from_ui`; `restrict` akan menggagalkan penghapusan) — dijaga CHECK constraint. `outbox.reservation_id` `ondelete=set null` (autovacuum reservasi). Field UI baris `efn_loyalty_reservation_id` tidak dibuat (frontend memakai produk + field order `efn_loyalty_points_redeemed/redeem_value`, ditimpa server). Parameter `efn.pos.loyalty.timeout_seconds` tidak dibuat (klien `efn_core` memakai `efn.pos.otp_timeout_seconds`; mengubah klien di luar batas). Rate limit saldo per sesi bersifat in-process per worker.
+7. `pos_self_order` (terpasang lewat `efn_setup_pos`) membatalkan, bukan menghapus, order di `remove_from_ui` — release tetap diantre (temuan dari test).
+
+## Validasi (container, DB sementara)
+- Harness unit `odoo-test-loy.sh` (salinan dengan image/container `-loy`): **250 test, 0 failed, 0 error, 0 baris ERROR**; `efn_pos_loyalty_ledger` 51 test, `efn_pos_otp_gate` +6 test; `efn_setup_security` ter-install. `check-odoo-deps`: 12 modul, 0 terlarang.
+- Tour `odoo-tour-loy.sh`: **9/9** (5 lama + 4 baru: sukses, OTP salah, batal→release, offline diblok), 0 ERROR, 0 skip browser.
+- ruff check + format --check (`services/`, `scripts/smoke/`): lolos.
+
+## Belum / sisa
+- Integrasi dengan BFF nyata belum dijalankan (stack dev tidak di-restart; modul belum terpasang di DB dev). Langkah smoke `loy_*` ditambahkan tetapi belum dirangkai di `run-e2e-smoke.sh` (di luar batas).
+- Tour skenario refund (penyesuaian otomatis di layar refund) belum ada; logika server teruji unit (`efn_loyalty_refund_preview` + validasi sync). Refund berpoin saat offline → review.
+- Perlakuan PPN poin (P-8) dan nilai bisnis poin (Q-13) masih placeholder; `totalFactor` promo `pos_loyalty` bila promo dihitung ulang setelah poin terpasang belum diuji.
+- Upgrade `efn_pos_otp_gate` 1.5→1.6 di volume dev belum diuji (kolom baru dengan default; tanpa skrip migrasi).

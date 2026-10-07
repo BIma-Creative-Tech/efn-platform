@@ -6,7 +6,10 @@
 # Nomor HP berasal dari env (dibuat acak per run oleh orkestrator; nomor fiktif, bukan data pribadi).
 #
 # Env: SMOKE_STEP (setup|otp_request|otp_verify|sync|gw_create|gw_simulate|gw_status|erasure_cron|partner|
-#      audit|audit_partner|balance)
+#      audit|audit_partner|balance|loy_config|loy_otp_request|loy_otp_verify|loy_reserve|loy_sync|loy_outbox)
+#      Langkah `loy_*` (Gelombang 13b, butuh modul efn_pos_loyalty_ledger terpasang di DB dev): urutan
+#      loy_config -> loy_otp_request -> loy_otp_verify (SMOKE_CODE) -> loy_reserve (SMOKE_POINTS) -> loy_sync
+#      -> loy_outbox. Belum dirangkai di run-e2e-smoke.sh.
 #      dan parameter per langkah (lihat fungsi). Keluaran: satu baris `SMOKE_RESULT <json>`.
 # Dipakai hanya di DB dev (`efn_odoo` dev); ditolak bila APP_ENV bukan dev.
 # R2 (docs/04 §8.13): skrip ini tidak pernah menaruh nomor HP/token di URL. Saldo poin (bila dicek) wajib lewat
@@ -439,6 +442,103 @@ def step_balance():
     )
 
 
+def step_loy_config():
+    e, st = ctx_env()
+    config = e["pos.config"].browse(st["config_id"])
+    config.write({"efn_loyalty_earn_enabled": True, "efn_loyalty_redeem_enabled": True})
+    env.cr.commit()
+    out(ok=True, points_product=config.efn_loyalty_points_product)
+
+
+def step_loy_otp_request():
+    e, st = ctx_env()
+    config = e["pos.config"].browse(st["config_id"])
+    partner_id = st["partners"][os.environ["SMOKE_PARTNER"]]
+    res = config.efn_otp_request(
+        os.environ["SMOKE_ORDER_UUID"], float(os.environ["SMOKE_AMOUNT"]), partner_id, "pos_redeem"
+    )
+    env.cr.commit()
+    out(**res)
+
+
+def step_loy_otp_verify():
+    e, st = ctx_env()
+    config = e["pos.config"].browse(st["config_id"])
+    res = config.efn_otp_verify(os.environ["SMOKE_ORDER_UUID"], os.environ["SMOKE_CODE"], "pos_redeem")
+    env.cr.commit()
+    out(**res)
+
+
+def step_loy_reserve():
+    e, st = ctx_env()
+    config = e["pos.config"].browse(st["config_id"])
+    partner_id = st["partners"][os.environ["SMOKE_PARTNER"]]
+    res = config.efn_loyalty_redeem_reserve(
+        os.environ["SMOKE_ORDER_UUID"],
+        partner_id,
+        int(os.environ.get("SMOKE_POINTS", "50")),
+        float(os.environ["SMOKE_AMOUNT"]),
+    )
+    env.cr.commit()
+    out(**res)
+
+
+def step_loy_sync():
+    """Order berbayar dengan baris Poin EFN (tanpa pajak) senilai reservasi aktif order ini."""
+    e, st = ctx_env()
+    uuid = os.environ["SMOKE_ORDER_UUID"]
+    partner_id = st["partners"][os.environ["SMOKE_PARTNER"]]
+    data, total = _order_data(e, st, uuid, partner_id, int(os.environ.get("SMOKE_QTY", "1")), False, None)
+    reservation = e["efn.pos.loyalty.reservation"].sudo().search([("order_uuid", "=", uuid)], limit=1)
+    value = reservation.value_idr if reservation else 0
+    if value:
+        points = e.ref("efn_pos_loyalty_ledger.product_efn_points")
+        data["lines"].append(
+            (
+                0,
+                0,
+                {
+                    "id": random.randint(1, 1_000_000),  # noqa: S311
+                    "pack_lot_ids": [],
+                    "price_unit": -value,
+                    "product_id": points.id,
+                    "price_subtotal": -value,
+                    "price_subtotal_incl": -value,
+                    "qty": 1,
+                    "tax_ids": [(6, 0, [])],
+                    "price_type": "automatic",
+                },
+            )
+        )
+        total -= value
+        data["amount_total"] = data["amount_paid"] = total
+        data["payment_ids"][0][2]["amount"] = total
+    try:
+        e["pos.order"].sync_from_ui([data])
+        env.cr.commit()
+    except Exception as exc:  # noqa: BLE001 - laporan smoke
+        env.cr.rollback()
+        out(ok=False, error=type(exc).__name__, message=str(exc)[:300])
+        return
+    order = e["pos.order"].search([("uuid", "=", uuid)], limit=1)
+    outbox = e["efn.pos.loyalty.outbox"].sudo().search([("order_id", "=", order.id)])
+    out(ok=True, total=total, loyalty_state=order.efn_loyalty_state, outbox=sorted(outbox.mapped("kind")))
+
+
+def step_loy_outbox():
+    e, _st = ctx_env()
+    uuid = os.environ["SMOKE_ORDER_UUID"]
+    e["efn.pos.loyalty.outbox"]._efn_process_due()
+    env.cr.commit()
+    order = e["pos.order"].search([("uuid", "=", uuid)], limit=1)
+    outbox = e["efn.pos.loyalty.outbox"].sudo().search([("order_id", "=", order.id)])
+    out(
+        loyalty_state=order.efn_loyalty_state,
+        points_earned=order.efn_loyalty_points_earned,
+        outbox={rec.kind: [rec.state, rec.last_error, rec.points_delta] for rec in outbox},
+    )
+
+
 {
     "audit": step_audit,
     "audit_partner": step_audit_partner,
@@ -452,4 +552,10 @@ def step_balance():
     "gw_status": step_gw_status,
     "erasure_cron": step_erasure_cron,
     "partner": step_partner,
+    "loy_config": step_loy_config,
+    "loy_otp_request": step_loy_otp_request,
+    "loy_otp_verify": step_loy_otp_verify,
+    "loy_reserve": step_loy_reserve,
+    "loy_sync": step_loy_sync,
+    "loy_outbox": step_loy_outbox,
 }[STEP]()

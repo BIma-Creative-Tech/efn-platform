@@ -24,6 +24,8 @@ from odoo.addons.efn_core.models.efn_bff_client import (
     partner_member_ref,
 )
 
+from .efn_pos_otp_challenge import OTP_PURPOSE_KEYS, PURPOSE_PROMO
+
 _logger = logging.getLogger(__name__)
 
 OTP_REQUEST_PATH = "/v1/pos/otp/request"
@@ -101,8 +103,12 @@ class PosConfig(models.Model):
         return partner
 
     # --------------------------------------------------------------------- RPC
-    def efn_otp_request(self, order_ref, amount, partner_id):
+    def efn_otp_request(self, order_ref, amount, partner_id, purpose=PURPOSE_PROMO):
         """Minta OTP ke BFF untuk order POS ini, ke nomor HP pelanggan order.
+
+        E-23 (docs/04 §9.3): ``purpose`` = ``pos_promo`` (default, gate promo) atau
+        ``pos_redeem`` (tukar poin EFN). Dikirim ke BFF dan dicatat di challenge sehingga
+        challenge satu tujuan tidak bisa dipakai tujuan lain.
 
         :param str order_ref: `uuid` order POS.
         :param float amount: total order (Rupiah).
@@ -112,6 +118,8 @@ class PosConfig(models.Model):
             ``{"ok": False, "error_code", "message"}``.
         """
         self._efn_check_otp_caller()
+        if purpose not in OTP_PURPOSE_KEYS:
+            return self._efn_error("invalid_purpose", _("Tujuan OTP tidak valid."))
         partner = self._efn_resolve_partner(partner_id)
         member, member_error = partner_member_ref(partner)
         if not member:
@@ -137,6 +145,7 @@ class PosConfig(models.Model):
             "amount": int(round(amount_value)),
             "company_code": company_code,
             "pos_config_id": self.id,
+            "purpose": purpose,
         }
         try:
             response = self.env["efn.bff.client"].post(
@@ -158,7 +167,12 @@ class PosConfig(models.Model):
         Challenge = self.env["efn.pos.otp.challenge"].sudo()
         # Challenge lama yang belum selesai untuk order yang sama dianggap gugur.
         Challenge.search(
-            [("config_id", "=", self.id), ("order_ref", "=", order_ref), ("state", "=", "requested")]
+            [
+                ("config_id", "=", self.id),
+                ("order_ref", "=", order_ref),
+                ("state", "=", "requested"),
+                ("purpose", "=", purpose),
+            ]
         ).write({"state": "failed", "failure_reason": "superseded"})
         Challenge.create(
             {
@@ -169,6 +183,7 @@ class PosConfig(models.Model):
                 "member_ref_masked": masked,
                 "amount": int(round(amount_value)),
                 "bff_challenge_id": challenge_id,
+                "purpose": purpose,
             }
         )
         expires_in = response.data.get("expires_in")
@@ -178,13 +193,15 @@ class PosConfig(models.Model):
             "expires_in": expires_in if isinstance(expires_in, int) else 180,
         }
 
-    def efn_otp_verify(self, order_ref, code):
+    def efn_otp_verify(self, order_ref, code, purpose=PURPOSE_PROMO):
         """Verifikasi OTP; bila sukses token disimpan server-side (tidak dikirim ke browser).
 
         :returns: ``{"ok": True, "member_masked"}`` atau
             ``{"ok": False, "reason"|"error_code", "attempts_left"?, "message"}``.
         """
         self._efn_check_otp_caller()
+        if purpose not in OTP_PURPOSE_KEYS:
+            return self._efn_error("invalid_purpose", _("Tujuan OTP tidak valid."))
         if not isinstance(order_ref, str) or not _ORDER_REF_RE.match(order_ref):
             return self._efn_error("invalid_order", _("Order tidak valid."))
         code = (code or "").strip() if isinstance(code, str) else ""
@@ -192,7 +209,7 @@ class PosConfig(models.Model):
             return {"ok": False, "reason": "invalid", "message": _("Kode OTP harus 6 digit.")}
 
         Challenge = self.env["efn.pos.otp.challenge"]
-        challenge = Challenge._efn_find_latest(self, order_ref, ["requested"])
+        challenge = Challenge._efn_find_latest(self, order_ref, ["requested"], purpose=purpose)
         if not challenge:
             return self._efn_error("no_challenge", _("Minta OTP terlebih dahulu."))
 

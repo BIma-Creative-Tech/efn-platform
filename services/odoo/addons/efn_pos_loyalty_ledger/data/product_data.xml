@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Produk khusus "Poin EFN" (docs/08 §6.3 B). Baris order dengan produk ini = penukaran poin
+     (nilai negatif) atau penyesuaian poin pada refund (nilai positif). Server mendeteksi baris
+     poin dari produk ini, bukan flag klien (SEC-12).
+     default_code EFN-POINTS = konvensi ETL (env ETL_POINTS_PRODUCT_CODES) untuk memisahkan baris
+     poin di fact_sales_line. Tanpa pajak default: pajak baris diisi per kelompok pajak saat redeem.
+     Tanpa company (dipakai semua PT); tanpa kategori POS (tidak tampil di grid, dimuat lewat
+     pos.config._get_special_products). -->
+<odoo noupdate="1">
+    <record id="product_efn_points" model="product.product">
+        <field name="name">Poin EFN</field>
+        <field name="default_code">EFN-POINTS</field>
+        <field name="type">service</field>
+        <field name="sale_ok" eval="True"/>
+        <field name="purchase_ok" eval="False"/>
+        <field name="available_in_pos" eval="True"/>
+        <field name="list_price">0.0</field>
+        <field name="taxes_id" eval="[Command.clear()]"/>
+        <field name="supplier_taxes_id" eval="[Command.clear()]"/>
+        <field name="company_id" eval="False"/>
+    </record>
+</odoo>

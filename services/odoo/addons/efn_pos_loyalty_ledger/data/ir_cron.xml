@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- Outbox loyalty: dipicu segera setelah sync order (_trigger); jadwal ini cadangan. -->
+    <record id="ir_cron_efn_loyalty_outbox" model="ir.cron">
+        <field name="name">EFN Loyalty: kirim outbox poin POS ke BFF</field>
+        <field name="model_id" ref="model_efn_pos_loyalty_outbox"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_loyalty_outbox_run()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">1</field>
+        <field name="interval_type">minutes</field>
+        <field name="active" eval="True"/>
+    </record>
+    <record id="ir_cron_efn_loyalty_housekeeping" model="ir.cron">
+        <field name="name">EFN Loyalty: reservasi kedaluwarsa &amp; outbox tertunda</field>
+        <field name="model_id" ref="model_efn_pos_loyalty_reservation"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_loyalty_housekeeping()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="active" eval="True"/>
+    </record>
+</odoo>

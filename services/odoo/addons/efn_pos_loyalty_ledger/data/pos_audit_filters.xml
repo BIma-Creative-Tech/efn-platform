@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- E-24: pengganti filter efn_setup_pos "Baris negatif non-promo" yang mengecualikan baris
+     "Poin EFN" (penukaran poin sah, divalidasi server terhadap reservasi). Filter lama
+     dinonaktifkan oleh post_init_hook (hooks.py) dan diaktifkan lagi saat uninstall. -->
+<odoo noupdate="1">
+    <record id="filter_pos_line_negative_non_reward_no_points" model="ir.filters">
+        <field name="name">EFN Audit: Baris negatif non-promo (diskon global/manual, tanpa Poin EFN)</field>
+        <field name="model_id">pos.order.line</field>
+        <field name="domain" eval="str([('price_subtotal', '&lt;', 0), ('is_reward_line', '=', False), ('refunded_orderline_id', '=', False), ('product_id', '!=', ref('product_efn_points'))])"/>
+        <field name="context">{'group_by': ['order_id']}</field>
+        <field name="sort">[]</field>
+    </record>
+    <!-- Penukaran poin per user POS untuk audit (tanpa depends pos_hr). -->
+    <record id="filter_pos_order_points_redeemed" model="ir.filters">
+        <field name="name">EFN Audit: Order dengan tukar Poin EFN</field>
+        <field name="model_id">pos.order</field>
+        <field name="domain">[('efn_loyalty_points_redeemed', '&gt;', 0)]</field>
+        <field name="context">{'group_by': ['user_id']}</field>
+        <field name="sort">[]</field>
+    </record>
+</odoo>

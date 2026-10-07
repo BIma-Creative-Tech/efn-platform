@@ -23,7 +23,10 @@
     </record>
 
     <!-- Baris bernilai negatif yang bukan reward promo & bukan refund: diskon global (pos_discount)
-         atau produk "diskon" yang diinput manual. -->
+         atau produk "diskon" yang diinput manual.
+         E-24: baris "Poin EFN" (efn_pos_loyalty_ledger) juga bernilai negatif. Modul itu memasang
+         filter pengganti yang mengecualikan produk poin dan menonaktifkan filter ini (post_init_hook;
+         aktif lagi saat uninstall). Modul ini tidak bisa me-ref produk poin (tidak depends). -->
     <record id="filter_pos_line_negative_non_reward" model="ir.filters">
         <field name="name">EFN Audit: Baris negatif non-promo (diskon global/manual)</field>
         <field name="model_id">pos.order.line</field>

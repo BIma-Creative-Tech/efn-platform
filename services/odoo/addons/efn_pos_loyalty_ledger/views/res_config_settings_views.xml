@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="res_config_settings_view_form_inherit_efn_loyalty" model="ir.ui.view">
+        <field name="name">res.config.settings.view.form.inherit.efn.loyalty</field>
+        <field name="model">res.config.settings</field>
+        <field name="inherit_id" ref="point_of_sale.res_config_settings_view_form"/>
+        <field name="arch" type="xml">
+            <setting id="pos-loyalty" position="after">
+                <setting id="efn_loyalty_points" string="Poin EFN (ledger BFF)"
+                         help="Earn poin dari penjualan dan tukar poin ber-OTP di layar pembayaran. Saldo disimpan di BFF, bukan Odoo.">
+                    <div class="content-group">
+                        <div class="row mt8">
+                            <field name="pos_efn_loyalty_earn_enabled" class="col-lg-1"/>
+                            <label for="pos_efn_loyalty_earn_enabled" string="Earn poin" class="col-lg-4 o_light_label"/>
+                        </div>
+                        <div class="row">
+                            <field name="pos_efn_loyalty_redeem_enabled" class="col-lg-1"/>
+                            <label for="pos_efn_loyalty_redeem_enabled" string="Tukar poin (OTP, online saja)" class="col-lg-4 o_light_label"/>
+                        </div>
+                    </div>
+                </setting>
+            </setting>
+        </field>
+    </record>
+</odoo>

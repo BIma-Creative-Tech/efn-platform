@@ -1,0 +1,7 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_pos_loyalty_reservation_pos_manager,efn.pos.loyalty.reservation pos manager,model_efn_pos_loyalty_reservation,point_of_sale.group_pos_manager,1,0,0,0
+access_efn_pos_loyalty_reservation_account_manager,efn.pos.loyalty.reservation accountant,model_efn_pos_loyalty_reservation,account.group_account_manager,1,0,0,0
+access_efn_pos_loyalty_reservation_system,efn.pos.loyalty.reservation system,model_efn_pos_loyalty_reservation,base.group_system,1,1,1,1
+access_efn_pos_loyalty_outbox_pos_manager,efn.pos.loyalty.outbox pos manager,model_efn_pos_loyalty_outbox,point_of_sale.group_pos_manager,1,0,0,0
+access_efn_pos_loyalty_outbox_account_manager,efn.pos.loyalty.outbox accountant,model_efn_pos_loyalty_outbox,account.group_account_manager,1,0,0,0
+access_efn_pos_loyalty_outbox_system,efn.pos.loyalty.outbox system,model_efn_pos_loyalty_outbox,base.group_system,1,1,1,1

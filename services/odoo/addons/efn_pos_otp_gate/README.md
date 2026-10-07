@@ -17,6 +17,9 @@ Promo/loyalty POS yang ditandai **Wajib OTP** hanya berlaku setelah pelanggan me
    - order **berbayar** tanpa OTP terverifikasi untuk uuid ini → **ditolak** (`UserError`, rollback);
    - order **berbayar** dengan OTP terverifikasi → `POST /v1/pos/discount-token/consume` dengan `member_ref` dari **partner FINAL order** dan `amount_total` order final (Rupiah bulat, docs/04 §8.8). Sukses → `efn_otp_gate_state = consumed`. Gagal (`already_used`/`expired`/`order_mismatch`/`member_mismatch`/`amount_mismatch`/`invalid`), BFF tidak terjangkau/TLS gagal, atau order final tanpa pelanggan ber-HP (`member_missing:<kode>`, tanpa consume) → order tetap tersimpan, `efn_otp_gate_state = review` (ADR-017 #2: tidak dibatalkan otomatis). Menu *Point of Sale → Orders → Review OTP Promo* (manajer POS).
 
+## Tujuan OTP / `purpose` (E-23, Gelombang 13b, versi 19.0.1.6.0)
+`efn.pos.otp.challenge.purpose` = `pos_promo` (default, gate promo) | `pos_redeem` (tukar Poin EFN, modul `efn_pos_loyalty_ledger`). `pos.config.efn_otp_request(order_ref, amount, partner_id, purpose="pos_promo")` mengirim `purpose` ke BFF (`docs/04 §9.3`); `efn_otp_verify(order_ref, code, purpose="pos_promo")` hanya memverifikasi challenge dengan tujuan sama. `_efn_find_latest`/`_efn_find_valid_verified` default `pos_promo`, sehingga gate promo **tidak pernah** menerima challenge tukar poin dan sebaliknya (test lintas-purpose di `tests/test_otp_gate.py`). `efn_otp_flow.js` menerima opsi `{ purpose, amount }`; untuk `pos_redeem` penanda promo order tidak disentuh. Purpose tidak dikenal → `invalid_purpose` tanpa panggilan BFF.
+
 ## Deteksi baris ber-OTP di server (SEC-12)
 Flag klien `is_reward_line`/`reward_id` tidak dipercaya. Sebuah baris dianggap reward ber-OTP bila:
 - `reward_id.program_id.efn_requires_otp` (apa pun nilai `is_reward_line`), **atau**

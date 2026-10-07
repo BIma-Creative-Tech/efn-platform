@@ -501,3 +501,65 @@ class TestEfnPosOtpGate(TestPoSCommon):
             order = self._sync(self._order_data(reward=self.reward))
         self.assertEqual(order.state, "paid")
         self.assertFalse(self.calls)
+
+    # ------------------------------------------------------- E-23 (purpose)
+    def test_request_sends_purpose_default_promo(self):
+        uuid = self.create_random_uid()
+        with self._patch_bff():
+            self._verify_otp_for(uuid)
+        self.assertEqual(self.calls[0][1]["purpose"], "pos_promo")
+        self.assertEqual(self._challenge(uuid).purpose, "pos_promo")
+
+    def test_invalid_purpose_is_rejected(self):
+        with self._patch_bff():
+            res = self.config.efn_otp_request(self.create_random_uid(), 100.0, self.member_a.id, "login")
+            res2 = self.config.efn_otp_verify(self.create_random_uid(), "123456", "dsar")
+        self.assertEqual(res["error_code"], "invalid_purpose")
+        self.assertEqual(res2["error_code"], "invalid_purpose")
+        self.assertFalse(self.calls)
+
+    def _verify_redeem_otp_for(self, uuid):
+        self.responses[REQUEST] = BffResponse(202, {"challenge_id": "chal-r", "expires_in": 180})
+        self.responses[VERIFY] = BffResponse(200, {"ok": True, "discount_token": DUMMY_TOKEN, "expires_in": 600})
+        res = self.config.efn_otp_request(uuid, 90.0, self.member_a.id, "pos_redeem")
+        self.assertTrue(res["ok"], res)
+        res = self.config.efn_otp_verify(uuid, "123456", "pos_redeem")
+        self.assertTrue(res["ok"], res)
+
+    def test_redeem_challenge_does_not_open_promo_gate(self):
+        """Challenge `pos_redeem` terverifikasi tidak boleh membuka reward ber-OTP."""
+        uuid = self.create_random_uid()
+        with self._patch_bff():
+            self._verify_redeem_otp_for(uuid)
+            self.assertEqual(self.calls[0][1]["purpose"], "pos_redeem")
+            self.responses[CONSUME] = BffResponse(200, {"ok": True})
+            with self.assertRaises(UserError):
+                self._sync(self._order_data(reward=self.reward, uuid=uuid))
+        self.assertFalse(self._consume_calls())
+        challenge = self._challenge(uuid)
+        self.assertEqual(challenge.purpose, "pos_redeem")
+        self.assertEqual(challenge.state, "verified")
+
+    def test_redeem_challenge_not_stripping_exempt_on_draft(self):
+        uuid = self.create_random_uid()
+        with self._patch_bff():
+            self._verify_redeem_otp_for(uuid)
+            order = self._sync(self._order_data(reward=self.reward, draft=True, uuid=uuid))
+        self.assertFalse(order.lines.filtered("is_reward_line"), "challenge tukar poin tidak membuka promo")
+
+    def test_promo_challenge_not_found_for_redeem(self):
+        uuid = self.create_random_uid()
+        with self._patch_bff():
+            self._verify_otp_for(uuid)
+        Challenge = self.env["efn.pos.otp.challenge"]
+        self.assertTrue(Challenge._efn_find_valid_verified(self.config, uuid))
+        self.assertFalse(Challenge._efn_find_valid_verified(self.config, uuid, purpose="pos_redeem"))
+
+    def test_verify_uses_challenge_of_same_purpose(self):
+        """Request promo lalu verify dengan purpose redeem -> tidak ada challenge."""
+        uuid = self.create_random_uid()
+        with self._patch_bff():
+            self.responses[REQUEST] = BffResponse(202, {"challenge_id": "chal-x", "expires_in": 180})
+            self.config.efn_otp_request(uuid, 90.0, self.member_a.id)
+            res = self.config.efn_otp_verify(uuid, "123456", "pos_redeem")
+        self.assertEqual(res["error_code"], "no_challenge")

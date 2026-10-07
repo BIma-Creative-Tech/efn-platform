@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="template" xml:space="preserve">
+    <!-- Struk: poin ditukar dicetak; poin diperoleh dihitung server setelah sync (tidak dicetak). -->
+    <t t-name="efn_pos_loyalty_ledger.OrderReceipt" t-inherit="point_of_sale.OrderReceipt" t-inherit-mode="extension">
+        <xpath expr="//div[hasclass('pos-receipt')]//div[hasclass('before-footer')]" position="inside">
+            <div t-if="order.efn_loyalty_points_redeemed" class="efn-loyalty-receipt pt-2 text-center">
+                Poin EFN ditukar: <t t-esc="order.efn_loyalty_points_redeemed"/> poin
+            </div>
+            <div t-if="order.config.efn_loyalty_earn_enabled and order.getPartner() and !order.isRefund" class="efn-loyalty-receipt-note pt-1 text-center small">
+                Poin EFN masuk setelah transaksi tersinkron.
+            </div>
+        </xpath>
+    </t>
+</templates>

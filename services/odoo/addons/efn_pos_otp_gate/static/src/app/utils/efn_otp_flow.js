@@ -4,6 +4,9 @@
  * Kasir TIDAK mengetik nomor HP; OTP dikirim ke nomor yang tercatat pada pelanggan order.
  * Browser TIDAK pernah menerima challenge_id maupun discount_token; keduanya disimpan
  * server-side (efn.pos.otp.challenge). Browser hanya menerima ok + nomor ter-mask.
+ *
+ * E-23: `purpose` = "pos_promo" (default, gate promo) | "pos_redeem" (tukar Poin EFN,
+ * modul efn_pos_loyalty_ledger). Untuk `pos_redeem` penanda promo order TIDAK disentuh.
  */
 import { _t } from "@web/core/l10n/translation";
 import { NumberPopup } from "@point_of_sale/app/components/popups/number_popup/number_popup";
@@ -20,11 +23,21 @@ async function callServer(pos, method, args) {
 }
 
 /**
- * @returns {Promise<boolean>} true bila OTP terverifikasi dan order sudah ditandai.
+ * @param {Object} [options]
+ * @param {"pos_promo"|"pos_redeem"} [options.purpose="pos_promo"]
+ * @returns {Promise<boolean>} true bila OTP terverifikasi (untuk pos_promo order sudah ditandai).
  */
-export async function efnRunOtpFlow({ pos, dialog, notification }, order) {
+export async function efnRunOtpFlow({ pos, dialog, notification }, order, options = {}) {
+    const purpose = options.purpose === "pos_redeem" ? "pos_redeem" : "pos_promo";
+    const isPromo = purpose === "pos_promo";
+    const featureLabel = isPromo ? _t("promo") : _t("tukar poin");
     if (efnIsOffline(pos)) {
-        notification.add(_t("Promo ber-OTP tidak tersedia saat POS offline."), { type: "warning" });
+        notification.add(
+            isPromo
+                ? _t("Promo ber-OTP tidak tersedia saat POS offline.")
+                : _t("Tukar poin tidak tersedia saat POS offline."),
+            { type: "warning" }
+        );
         return false;
     }
     let partner = order.getPartner();
@@ -50,11 +63,12 @@ export async function efnRunOtpFlow({ pos, dialog, notification }, order) {
     try {
         requestResult = await callServer(pos, "efn_otp_request", [
             order.uuid,
-            order.priceIncl,
+            options.amount ?? order.priceIncl,
             partner.id,
+            purpose,
         ]);
     } catch {
-        notification.add(_t("Layanan OTP tidak dapat dihubungi. Lanjutkan tanpa promo."), {
+        notification.add(_t("Layanan OTP tidak dapat dihubungi. Lanjutkan tanpa %s.", featureLabel), {
             type: "danger",
         });
         return false;
@@ -76,17 +90,23 @@ export async function efnRunOtpFlow({ pos, dialog, notification }, order) {
             return false;
         }
         if (efnIsOffline(pos)) {
-            notification.add(_t("POS offline. Promo ber-OTP dibatalkan."), { type: "warning" });
+            notification.add(_t("POS offline. Verifikasi OTP %s dibatalkan.", featureLabel), {
+                type: "warning",
+            });
             return false;
         }
         let verifyResult;
         try {
-            verifyResult = await callServer(pos, "efn_otp_verify", [order.uuid, String(code)]);
+            verifyResult = await callServer(pos, "efn_otp_verify", [order.uuid, String(code), purpose]);
         } catch {
-            notification.add(_t("Layanan OTP tidak dapat dihubungi. Lanjutkan tanpa promo."), {
+            notification.add(_t("Layanan OTP tidak dapat dihubungi. Lanjutkan tanpa %s.", featureLabel), {
                 type: "danger",
             });
             return false;
+        }
+        if (verifyResult?.ok && !isPromo) {
+            notification.add(_t("OTP terverifikasi."), { type: "success" });
+            return true;
         }
         if (verifyResult?.ok) {
             // Penanda UI saja; server memverifikasi ulang dari data challenge miliknya.

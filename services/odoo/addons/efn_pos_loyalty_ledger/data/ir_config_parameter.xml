@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Parameter Poin EFN (docs/08 §6.3 B). Nilai bisnis poin (nilai per poin, minimum, maks %)
+     milik BFF (docs/04 §9.1, PLACEHOLDER Q-13/Finance) dan dibaca lewat GET /v1/pos/loyalty/params. -->
+<odoo noupdate="1">
+    <!-- Timeout HTTP: klien efn_core memakai efn.pos.otp_timeout_seconds (bersama). -->
+    <record id="param_loyalty_outbox_max_hours" model="ir.config_parameter">
+        <field name="key">efn.pos.loyalty.outbox_max_hours</field>
+        <field name="value">48</field>
+    </record>
+    <!-- PLACEHOLDER Finance (retensi bukti penukaran poin). -->
+    <record id="param_loyalty_reservation_retention_days" model="ir.config_parameter">
+        <field name="key">efn.pos.loyalty.reservation_retention_days</field>
+        <field name="value">400</field>
+    </record>
+    <record id="param_loyalty_balance_rate" model="ir.config_parameter">
+        <field name="key">efn.pos.loyalty.balance_rate_per_minute</field>
+        <field name="value">20</field>
+    </record>
+</odoo>
