@@ -8,11 +8,13 @@ validasi di `Settings.from_env` sehingga ETL gagal start bila TLS tidak terkonfi
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Self
 from urllib.parse import urlsplit
 
-from efn_etl.tls import TlsConfigError, ca_file, pg_ssl_settings, plaintext_allowed
+from efn_etl.sink import load_key
+from efn_etl.tls import TlsConfigError, ca_file, pg_ssl_settings, plaintext_allowed, require_readable_file
 
 _TRUE = {"1", "true", "yes", "on"}
 
@@ -40,6 +42,15 @@ def _int(env: Mapping[str, str], name: str, default: int) -> int:
 
 def _bool(env: Mapping[str, str], name: str, default: bool) -> bool:
     return _str(env, name, "true" if default else "false").strip().lower() in _TRUE
+
+
+def _datetime(env: Mapping[str, str], name: str) -> datetime | None:
+    """ISO 8601; tanpa zona = UTC. Kosong = None."""
+    raw = _str(env, name, "")
+    if not raw:
+        return None
+    value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 @dataclass(frozen=True)
@@ -93,6 +104,24 @@ class Settings:
     stock_snapshot_interval_seconds: int = 3600
     # default_code produk "Poin EFN" (docs/04 §9.3) -> line_kind=points di fact_sales_line.
     points_product_codes: frozenset[str] = frozenset({"EFN-POINTS"})
+    # Gelombang 14 (SEC-51/52): verifikasi sink audit Odoo + jangkar rantai lewat Loki (mTLS CN etl -> loki-tls).
+    # Default aktif bila salinan audit aktif DAN LOKI_URL di-set; kunci/sertifikat wajib ada (gagal start bila tidak).
+    audit_sink_enabled: bool = False
+    loki_url: str = ""
+    loki_ca_file: str | None = None
+    loki_client_cert_file: str | None = None
+    loki_client_key_file: str | None = None
+    audit_sink_key: bytes = field(default=b"", repr=False)
+    audit_sink_window_seconds: int = 90_000
+    audit_anchor_lookback_seconds: int = 691_200
+    # Gelombang 14 (sisa SEC-61): rekonsiliasi ledger poin BFF <-> pos.order Odoo (efn_etl/loyalty_recon.py).
+    loyalty_recon_enabled: bool = False
+    loyalty_recon_interval_seconds: int = 86_400
+    loyalty_recon_lookback_hours: int = 72
+    loyalty_recon_settle_hours: int = 6
+    loyalty_recon_aged_hours: int = 24
+    loyalty_recon_open_days: int = 30
+    loyalty_recon_not_before: datetime | None = None
 
     @property
     def amqp_user(self) -> str:
@@ -150,6 +179,25 @@ class Settings:
             if not parts.username:
                 raise TlsConfigError("AMQP_URL wajib memuat user (efn-etl)")
         odoo_enabled = _bool(e, "ETL_ENABLE_ODOO", False)
+        audit_copy_enabled = _bool(e, "ETL_AUDIT_COPY_ENABLED", False)
+        loki_url = _str(e, "LOKI_URL", "")
+        sink_enabled = _bool(e, "ETL_AUDIT_SINK_ENABLED", audit_copy_enabled and bool(loki_url))
+        loki_ca: str | None = None
+        loki_cert: str | None = None
+        loki_key: str | None = None
+        sink_key = b""
+        if sink_enabled:
+            if not audit_copy_enabled:
+                raise RuntimeError("ETL_AUDIT_SINK_ENABLED membutuhkan ETL_AUDIT_COPY_ENABLED=true")
+            scheme = urlsplit(loki_url).scheme
+            if scheme == "https":
+                loki_ca = ca_file(e, "LOKI_CA_FILE")
+                # loki-tls hanya menerima klien bersertifikat (allowlist CN) -> mTLS wajib.
+                loki_cert = require_readable_file(_str(e, "LOKI_CLIENT_CERT_FILE", ""), "LOKI_CLIENT_CERT_FILE")
+                loki_key = require_readable_file(_str(e, "LOKI_CLIENT_KEY_FILE", ""), "LOKI_CLIENT_KEY_FILE")
+            elif not (scheme == "http" and allow_plain):
+                raise TlsConfigError("LOKI_URL wajib https:// (http:// hanya dengan EFN_ALLOW_PLAINTEXT)")
+            sink_key = load_key(read_secret("EFN_AUDIT_SINK_KEY", e).encode("utf-8"))
         points_codes = frozenset(
             code.strip() for code in _str(e, "ETL_POINTS_PRODUCT_CODES", "EFN-POINTS").split(",") if code.strip()
         )
@@ -177,7 +225,7 @@ class Settings:
             amqp_password=read_secret("RABBITMQ_PASSWORD", e) if erasure_enabled else "",
             amqp_ca_file=amqp_ca,
             gl_enabled=_bool(e, "ETL_ENABLE_GL", False),
-            audit_copy_enabled=_bool(e, "ETL_AUDIT_COPY_ENABLED", False),
+            audit_copy_enabled=audit_copy_enabled,
             audit_settle_seconds=_int(e, "ETL_AUDIT_SETTLE_SECONDS", 600),
             audit_late_window_seconds=_int(e, "ETL_AUDIT_LATE_WINDOW_SECONDS", 86_400),
             audit_batch_size=_int(e, "ETL_AUDIT_BATCH_SIZE", 2000),
@@ -186,4 +234,19 @@ class Settings:
             stock_enabled=_bool(e, "ETL_ENABLE_STOCK", odoo_enabled),
             stock_snapshot_interval_seconds=_int(e, "ETL_STOCK_SNAPSHOT_INTERVAL_SECONDS", 3600),
             points_product_codes=points_codes,
+            audit_sink_enabled=sink_enabled,
+            loki_url=loki_url,
+            loki_ca_file=loki_ca,
+            loki_client_cert_file=loki_cert,
+            loki_client_key_file=loki_key,
+            audit_sink_key=sink_key,
+            audit_sink_window_seconds=_int(e, "ETL_AUDIT_SINK_WINDOW_SECONDS", 90_000),
+            audit_anchor_lookback_seconds=_int(e, "ETL_AUDIT_ANCHOR_LOOKBACK_SECONDS", 691_200),
+            loyalty_recon_enabled=_bool(e, "ETL_LOYALTY_RECON_ENABLED", odoo_enabled),
+            loyalty_recon_interval_seconds=_int(e, "ETL_LOYALTY_RECON_INTERVAL_SECONDS", 86_400),
+            loyalty_recon_lookback_hours=_int(e, "ETL_LOYALTY_RECON_LOOKBACK_HOURS", 72),
+            loyalty_recon_settle_hours=_int(e, "ETL_LOYALTY_RECON_SETTLE_HOURS", 6),
+            loyalty_recon_aged_hours=_int(e, "ETL_LOYALTY_RECON_AGED_HOURS", 24),
+            loyalty_recon_open_days=_int(e, "ETL_LOYALTY_RECON_OPEN_DAYS", 30),
+            loyalty_recon_not_before=_datetime(e, "ETL_LOYALTY_RECON_NOT_BEFORE"),
         )

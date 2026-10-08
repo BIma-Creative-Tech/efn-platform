@@ -57,6 +57,13 @@ GRANT SELECT ON efn_dwh.fact_stock_snapshot TO metabase_reader;
 GRANT SELECT ON efn_dwh.fact_orderpoint_snapshot TO metabase_reader;
 GRANT SELECT ON efn_dwh.stock_snapshot_run TO metabase_reader;
 GRANT SELECT ON efn_dwh.etl_job_run TO metabase_reader;
+-- Gelombang 14: rekonsiliasi loyalty (hitungan + id order Odoo sampel; tanpa member/partner) dan ringkasan
+-- rekonsiliasi audit (hitungan saja).
+GRANT SELECT ON efn_dwh.v_loyalty_recon_latest TO metabase_reader;
+GRANT SELECT ON efn_dwh.v_loyalty_recon_daily TO metabase_reader;
+GRANT SELECT ON efn_dwh.v_audit_recon_daily TO metabase_reader;
+GRANT SELECT ON efn_dwh.loyalty_recon_run TO metabase_reader;
+GRANT SELECT ON efn_dwh.loyalty_recon_finding TO metabase_reader;
 -- Kolom baru fact_sales_line (tetap TANPA customer_id).
 GRANT SELECT(order_id, is_refund, line_kind, discount_amount) ON efn_dwh.fact_sales_line TO metabase_reader;
 

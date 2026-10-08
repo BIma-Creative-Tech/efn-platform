@@ -170,6 +170,17 @@ class ClickHouseRunStore:
             return None
         return normalize_watermark(rows[0][0])
 
+    def last_loyalty_recon(self) -> datetime | None:
+        """Run rekonsiliasi loyalty terakhir yang selesai (penanda `loyalty_recon_run`, G14)."""
+        rows = self._client.query("SELECT max(run_at), count() FROM loyalty_recon_run").result_rows
+        if not rows or not rows[0][1]:
+            return None
+        return normalize_watermark(rows[0][0])
+
+    def insert(self, table: str, columns: Sequence[str], rows: list[list[Any]]) -> None:
+        if rows:
+            self._client.insert(table, rows, column_names=list(columns), database=self._database)
+
 
 class ClickHouseAuditStore:
     """Salinan audit append-only (Gelombang 12). Hak efn_etl: SELECT+INSERT saja pada tabel audit_* (tanpa ALTER/
@@ -247,6 +258,26 @@ class ClickHouseAuditStore:
             {"c": company, "s": after_seq, "n": limit},
         )
         return [ChainRow(int(a), int(b), int(c), str(d), str(e), str(f)) for a, b, c, d, e, f in rows]
+
+    def copied_log_ids(self, log_ids: Sequence[int]) -> set[int]:
+        """Id yang pernah tersalin (verifikasi sink G14: log sah dihapus retensi tetap punya jejak salinan)."""
+        if not log_ids:
+            return set()
+        rows = self._rows(
+            "SELECT DISTINCT log_id FROM audit_log_copy WHERE log_id IN {ids:Array(UInt64)}", {"ids": list(log_ids)}
+        )
+        return {int(r[0]) for r in rows}
+
+    def chain_hashes(self, company: int, seqs: Sequence[int]) -> dict[int, str]:
+        """row_hash salinan untuk (company, seq) yang dijangkarkan di Loki (SEC-52 butir 3)."""
+        if not seqs:
+            return {}
+        rows = self._rows(
+            "SELECT chain_seq, row_hash FROM audit_log_copy "
+            "WHERE chain_company = {c:UInt32} AND chain_seq IN {s:Array(UInt64)}",
+            {"c": company, "s": list(seqs)},
+        )
+        return {int(a): str(b) for a, b in rows}
 
     def last_recon_at(self) -> datetime | None:
         rows = self._rows("SELECT max(run_at), count() FROM audit_recon_run")

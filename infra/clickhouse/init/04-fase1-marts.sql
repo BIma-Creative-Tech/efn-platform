@@ -159,7 +159,11 @@ SETTINGS ttl_only_drop_parts = 1;
 --   line_discount : diskon persen di baris produk
 --   promo_discount: baris produk diskon global POS + reward loyalty Odoo (nilai positif)
 --   points_redeemed_idr: baris "Poin EFN" (nilai positif)
---   refunds       : nilai retur/refund (positif), dihitung dari order is_refund / baris refunded_orderline_id
+--   refunds       : uang retur/refund (positif), dihitung dari order is_refund / baris refunded_orderline_id
+--                   = refund_goods - points_returned_idr
+--   refund_goods  : nilai barang yang diretur (positif), tanpa baris penyesuaian poin (G14, QA G13.5)
+--   points_returned_idr: nilai baris "Poin EFN" pada order refund (positif) = bagian refund yang dikembalikan sebagai
+--                   poin, bukan uang (restore poin BFF §9.4)
 --   net_sales     : SUM(subtotal) semua baris = gross - diskon - promo - poin - refund
 CREATE OR REPLACE VIEW efn_dwh.v_pos_sales_daily AS
 SELECT
@@ -168,7 +172,8 @@ SELECT
     s.category AS category,
     s.gross_sales AS gross_sales, s.line_discount AS line_discount, s.promo_discount AS promo_discount,
     s.points_redeemed_idr AS points_redeemed_idr, s.refunds AS refunds, s.net_sales AS net_sales,
-    s.tax AS tax, s.cogs AS cogs, s.qty_sold AS qty_sold, s.qty_returned AS qty_returned, s.lines AS lines
+    s.tax AS tax, s.cogs AS cogs, s.qty_sold AS qty_sold, s.qty_returned AS qty_returned, s.lines AS lines,
+    s.refund_goods AS refund_goods, s.points_returned_idr AS points_returned_idr
 FROM
 (
     SELECT
@@ -178,6 +183,8 @@ FROM
         -sumIf(subtotal, line_kind IN ('discount', 'reward') AND is_refund = 0)       AS promo_discount,
         -sumIf(subtotal, line_kind = 'points' AND is_refund = 0)                      AS points_redeemed_idr,
         -sumIf(subtotal, is_refund = 1)                                               AS refunds,
+        -sumIf(subtotal, is_refund = 1 AND line_kind != 'points')                     AS refund_goods,
+        sumIf(subtotal, is_refund = 1 AND line_kind = 'points')                       AS points_returned_idr,
         sum(subtotal)                                                                 AS net_sales,
         sum(tax_amount)                                                               AS tax,
         sumIf(cost_total, line_kind = 'product')                                      AS cogs,
@@ -197,7 +204,8 @@ SELECT
     s.store_id AS store_id, if(o.name = '', concat('POS #', toString(s.store_id)), o.name) AS store_name,
     s.orders AS orders, s.refund_orders AS refund_orders, s.net_sales AS net_sales, s.gross_sales AS gross_sales,
     s.discounts AS discounts, s.points_redeemed_idr AS points_redeemed_idr, s.refunds AS refunds,
-    if(s.orders = 0, NULL, round(s.sales_excl_refund / s.orders, 0)) AS avg_basket
+    if(s.orders = 0, NULL, round(s.sales_excl_refund / s.orders, 0)) AS avg_basket,
+    s.refund_goods AS refund_goods, s.points_returned_idr AS points_returned_idr
 FROM
 (
     SELECT
@@ -210,7 +218,9 @@ FROM
         sumIf(discount_amount, line_kind = 'product' AND is_refund = 0)
             - sumIf(subtotal, line_kind IN ('discount', 'reward') AND is_refund = 0) AS discounts,
         -sumIf(subtotal, line_kind = 'points' AND is_refund = 0)                     AS points_redeemed_idr,
-        -sumIf(subtotal, is_refund = 1)                                              AS refunds
+        -sumIf(subtotal, is_refund = 1)                                              AS refunds,
+        -sumIf(subtotal, is_refund = 1 AND line_kind != 'points')                    AS refund_goods,
+        sumIf(subtotal, is_refund = 1 AND line_kind = 'points')                      AS points_returned_idr
     FROM efn_dwh.fact_sales_line FINAL
     WHERE source = 'pos'
     GROUP BY day, company_id, company_name, brand, store_id

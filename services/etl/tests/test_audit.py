@@ -436,3 +436,35 @@ def test_recon_detects_rewritten_copy_chain() -> None:
     store.logs[1]["payload_hash"] = "0" * 64
     result = run_audit_recon(source, store, CFG, NOW)
     assert result.chain_problems >= 1 and result.alert
+
+
+def test_recon_merges_sink_check_and_flags_sink_error(caplog: pytest.LogCaptureFixture) -> None:
+    """G14 (SEC-51/52): hasil sink digabung; Loki gagal = sink_error=1 + WARNING, rekonsiliasi tetap jalan."""
+    from efn_etl.sink import AnchorResult, SinkCheckResult, SinkReconResult
+
+    source, store = _fixture()
+    run_audit_copy(source, store, CFG, NOW)
+
+    def broken(now: datetime) -> SinkCheckResult:
+        raise ConnectionError("loki down")
+
+    with caplog.at_level("INFO"):
+        run_audit_recon(source, store, CFG, NOW, broken)
+    row = store.tables["audit_recon_run"][-1]
+    assert row["sink_checked"] == 1 and row["sink_error"] == 1
+    recon = [r for r in caplog.records if "EFN_AUDIT_RECON" in r.getMessage()][-1]
+    assert recon.levelname == "WARNING" and recon.getMessage().startswith('EFN_AUDIT_RECON {"max_log_id":')
+
+    def clean(now: datetime) -> SinkCheckResult:
+        return SinkCheckResult(SinkReconResult(sink_lines=4), AnchorResult(anchors_checked=2))
+
+    caplog.clear()
+    with caplog.at_level("INFO"):
+        run_audit_recon(source, store, CFG, NOW, clean)
+    row = store.tables["audit_recon_run"][-1]
+    assert (row["sink_error"], row["sink_lines"], row["anchors_checked"]) == (0, 4, 2)
+    recon = [r for r in caplog.records if "EFN_AUDIT_RECON" in r.getMessage()][-1]
+    assert recon.levelname == "INFO" and '"anchors_checked":2' in recon.getMessage()
+
+    run_audit_recon(source, store, CFG, NOW)
+    assert store.tables["audit_recon_run"][-1]["sink_checked"] == 0

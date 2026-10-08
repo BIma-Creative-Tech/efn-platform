@@ -108,3 +108,16 @@ GRANT SELECT (id, company_id, warehouse_id, location_id, product_id, product_min
 -- Index cursor pembayaran (R-O03): pos_payment.write_date tidak ber-index bawaan.
 CREATE INDEX CONCURRENTLY IF NOT EXISTS efn_etl_pos_payment_write_date_id_idx
     ON public.pos_payment (write_date, id);
+
+-- ===================================================================== Gelombang 14 (efn-data-ai-engineer, sisa SEC-61)
+-- Rekonsiliasi ledger poin BFF <-> pos.order (services/etl/efn_etl/loyalty_recon.py). Kolom diverifikasi di DB dev
+-- Odoo CE 19.0 + efn_pos_loyalty_ledger 19.0.1.1.0 (information_schema, 8 Okt 2026). Butuh modul efn_pos_loyalty_ledger
+-- terpasang; script gagal (ON_ERROR_STOP) bila belum, sengaja.
+-- pos_order.uuid = order_ref BFF (opak, bukan PII). TIDAK di-grant: efn_pos_loyalty_reservation.partner_id,
+-- member_ref_masked, bff_reservation_id, otp_challenge_id, note; outbox.last_error/idempotency_key tidak dibaca.
+GRANT SELECT (uuid, efn_loyalty_state) ON public.pos_order TO efn_etl;
+GRANT SELECT (efn_loyalty_earn_enabled) ON public.pos_config TO efn_etl;
+GRANT SELECT (id, company_id, order_id, original_order_id, kind, state, create_date)
+    ON public.efn_pos_loyalty_outbox TO efn_etl;
+GRANT SELECT (id, company_id, order_id, order_uuid, points, value_idr, state, create_date)
+    ON public.efn_pos_loyalty_reservation TO efn_etl;

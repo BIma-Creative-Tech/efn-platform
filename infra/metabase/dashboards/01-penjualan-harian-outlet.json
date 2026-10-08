@@ -1,7 +1,7 @@
 {
   "key": "penjualan-harian-outlet",
   "name": "Penjualan Harian Outlet",
-  "description": "Fase 1: penjualan POS per hari/outlet/PT/kategori/jam, metode bayar, diskon/poin, retur. Nilai uang tanpa pajak. Zona waktu WIB. Sumber: view efn_dwh.v_pos_* (ETL 15 menit).",
+  "description": "Fase 1: penjualan POS per hari/outlet/PT/kategori/jam, metode bayar, diskon/poin, retur (uang vs poin dikembalikan), anomali rekonsiliasi poin EFN. Nilai uang tanpa pajak. Zona waktu WIB. Sumber: view efn_dwh.v_pos_* (ETL 15 menit).",
   "parameters": [
     {
       "slug": "date_from",
@@ -57,13 +57,14 @@
     },
     {
       "key": "kpi-refund",
-      "name": "Retur / refund",
+      "name": "Retur / refund (uang)",
       "display": "scalar",
       "row": 0,
       "col": 18,
       "size_x": 6,
       "size_y": 3,
-      "sql": "SELECT sum(refunds) AS refund FROM efn_dwh.v_pos_outlet_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND (positionCaseInsensitive(company_name, {{company}}) > 0 OR brand = upper({{company}}))]] [[AND positionCaseInsensitive(store_name, {{outlet}}) > 0]]"
+      "sql": "SELECT sum(refunds) AS refund FROM efn_dwh.v_pos_outlet_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND (positionCaseInsensitive(company_name, {{company}}) > 0 OR brand = upper({{company}}))]] [[AND positionCaseInsensitive(store_name, {{outlet}}) > 0]]",
+      "description": "Uang yang dikembalikan ke pelanggan = barang diretur - poin EFN yang dikembalikan sebagai poin."
     },
     {
       "key": "tren-harian",
@@ -143,7 +144,7 @@
       "col": 0,
       "size_x": 24,
       "size_y": 6,
-      "sql": "SELECT day, sum(line_discount) AS diskon_baris, sum(promo_discount) AS promo, sum(points_redeemed_idr) AS poin_efn, sum(refunds) AS refund FROM efn_dwh.v_pos_sales_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND (positionCaseInsensitive(company_name, {{company}}) > 0 OR brand = upper({{company}}))]] [[AND positionCaseInsensitive(store_name, {{outlet}}) > 0]] GROUP BY day ORDER BY day",
+      "sql": "SELECT day, sum(line_discount) AS diskon_baris, sum(promo_discount) AS promo, sum(points_redeemed_idr) AS poin_efn, sum(refunds) AS refund_uang, sum(points_returned_idr) AS poin_dikembalikan FROM efn_dwh.v_pos_sales_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND (positionCaseInsensitive(company_name, {{company}}) > 0 OR brand = upper({{company}}))]] [[AND positionCaseInsensitive(store_name, {{outlet}}) > 0]] GROUP BY day ORDER BY day",
       "visualization_settings": {
         "graph.dimensions": [
           "day"
@@ -152,10 +153,12 @@
           "diskon_baris",
           "promo",
           "poin_efn",
-          "refund"
+          "refund_uang",
+          "poin_dikembalikan"
         ],
         "stackable.stack_type": "stacked"
-      }
+      },
+      "description": "refund_uang = uang yang dikembalikan; poin_dikembalikan = nilai baris Poin EFN pada order refund (dikembalikan sebagai poin, bukan uang)."
     },
     {
       "key": "tabel-outlet-harian",
@@ -165,7 +168,7 @@
       "col": 0,
       "size_x": 24,
       "size_y": 7,
-      "sql": "SELECT day AS tanggal, company_name AS pt, store_name AS outlet, orders AS jumlah_order, refund_orders AS order_refund, gross_sales AS penjualan_kotor, discounts AS diskon_promo, points_redeemed_idr AS poin_efn, refunds AS refund, net_sales AS penjualan_bersih, avg_basket AS rata_rata_basket FROM efn_dwh.v_pos_outlet_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND (positionCaseInsensitive(company_name, {{company}}) > 0 OR brand = upper({{company}}))]] [[AND positionCaseInsensitive(store_name, {{outlet}}) > 0]] ORDER BY tanggal DESC, outlet LIMIT 500"
+      "sql": "SELECT day AS tanggal, company_name AS pt, store_name AS outlet, orders AS jumlah_order, refund_orders AS order_refund, gross_sales AS penjualan_kotor, discounts AS diskon_promo, points_redeemed_idr AS poin_efn, refund_goods AS refund_barang, points_returned_idr AS poin_dikembalikan, refunds AS refund_uang, net_sales AS penjualan_bersih, avg_basket AS rata_rata_basket FROM efn_dwh.v_pos_outlet_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND (positionCaseInsensitive(company_name, {{company}}) > 0 OR brand = upper({{company}}))]] [[AND positionCaseInsensitive(store_name, {{outlet}}) > 0]] ORDER BY tanggal DESC, outlet LIMIT 500"
     },
     {
       "key": "kesegaran-data",
@@ -176,7 +179,62 @@
       "size_x": 24,
       "size_y": 4,
       "description": "Heartbeat ETL (SEC-52). Data dianggap basi bila menit_sejak_sukses > 30.",
-      "sql": "SELECT job, last_ok_at AS sukses_terakhir_utc, minutes_since_ok AS menit_sejak_sukses, last_status AS status_terakhir, failures_24h AS gagal_24_jam FROM efn_dwh.v_etl_freshness WHERE job IN ('cycle', 'pos_outlets', 'pos_payments', 'products', 'sales_fact_pos') ORDER BY job"
+      "sql": "SELECT job, last_ok_at AS sukses_terakhir_utc, minutes_since_ok AS menit_sejak_sukses, last_status AS status_terakhir, failures_24h AS gagal_24_jam FROM efn_dwh.v_etl_freshness WHERE job IN ('cycle', 'pos_outlets', 'pos_payments', 'products', 'sales_fact_pos', 'loyalty_recon') ORDER BY job"
+    },
+    {
+      "key": "kpi-poin-dikembalikan",
+      "name": "Poin dikembalikan saat refund (Rp)",
+      "display": "scalar",
+      "row": 32,
+      "col": 0,
+      "size_x": 6,
+      "size_y": 3,
+      "description": "Nilai baris Poin EFN pada order refund: bagian refund yang dikembalikan sebagai poin (restore BFF), terpisah dari refund uang.",
+      "sql": "SELECT sum(points_returned_idr) AS poin_dikembalikan FROM efn_dwh.v_pos_outlet_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND (positionCaseInsensitive(company_name, {{company}}) > 0 OR brand = upper({{company}}))]] [[AND positionCaseInsensitive(store_name, {{outlet}}) > 0]]"
+    },
+    {
+      "key": "kpi-refund-barang",
+      "name": "Barang diretur (Rp)",
+      "display": "scalar",
+      "row": 32,
+      "col": 6,
+      "size_x": 6,
+      "size_y": 3,
+      "description": "Nilai barang yang diretur sebelum dikurangi poin yang dikembalikan (= refund uang + poin dikembalikan).",
+      "sql": "SELECT sum(refund_goods) AS refund_barang FROM efn_dwh.v_pos_outlet_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND (positionCaseInsensitive(company_name, {{company}}) > 0 OR brand = upper({{company}}))]] [[AND positionCaseInsensitive(store_name, {{outlet}}) > 0]]"
+    },
+    {
+      "key": "kpi-anomali-loyalty",
+      "name": "Anomali poin EFN (rekonsiliasi terakhir)",
+      "display": "scalar",
+      "row": 32,
+      "col": 12,
+      "size_x": 6,
+      "size_y": 3,
+      "description": "Rekonsiliasi harian ETL ledger poin BFF vs order POS Odoo (SEC-61). > 0 = periksa (alert critical).",
+      "sql": "SELECT anomalies AS anomali_kritis FROM efn_dwh.v_loyalty_recon_daily ORDER BY day DESC LIMIT 1"
+    },
+    {
+      "key": "kpi-open-item-loyalty",
+      "name": "Antrean poin perlu review",
+      "display": "scalar",
+      "row": 32,
+      "col": 18,
+      "size_x": 6,
+      "size_y": 3,
+      "description": "Outbox ditahan/gagal/tertunda dan order/reservasi berstatus review yang menua (POS manager / Finance).",
+      "sql": "SELECT open_items AS perlu_review FROM efn_dwh.v_loyalty_recon_daily ORDER BY day DESC LIMIT 1"
+    },
+    {
+      "key": "tabel-anomali-loyalty",
+      "name": "Temuan rekonsiliasi poin EFN (run terakhir)",
+      "display": "table",
+      "row": 35,
+      "col": 0,
+      "size_x": 24,
+      "size_y": 6,
+      "description": "Per jenis temuan dan PT. Sampel = id order Odoo (cari di Point of Sale > Orders). Tanpa data pelanggan.",
+      "sql": "SELECT run_at AS waktu_run_utc, severity AS tingkat, kind AS jenis, company_code AS pt, findings AS jumlah, arrayStringConcat(arrayMap(x -> toString(x), sample_order_ids), ', ') AS contoh_order_id FROM efn_dwh.v_loyalty_recon_latest WHERE 1 = 1 [[AND company_code = upper({{company}})]] ORDER BY tingkat, jumlah DESC LIMIT 200"
     }
   ]
 }

@@ -6,6 +6,9 @@ Alur per siklus ETL (bila `ETL_AUDIT_COPY_ENABLED`):
 2. *new pass*: id > max id tersalin, `create_date < now - ETL_AUDIT_SETTLE_SECONDS` (memberi waktu transaksi commit);
 3. setiap `ETL_AUDIT_RECON_INTERVAL_SECONDS`: rekonsiliasi PG vs salinan + verifikasi rantai -> baris
    `audit_recon_run` + log `EFN_AUDIT_RECON {json}` (WARNING bila ada anomali; untuk alert Loki).
+   Gelombang 14 (SEC-51/52): bila `sink_check` diberikan, rekonsiliasi juga memverifikasi baris sink Odoo di Loki
+   (`sink_mac_invalid`, `sink_missing_log`, `log_missing_sink`) dan jangkar kepala rantai antar hari
+   (`anchor_mismatch`, `anchor_missing`, `anchor_absent`) — efn_etl/sink.py. Gagal ambil Loki = `sink_error=1` (alert).
 
 Kepala rantai dibaca dari ClickHouse setiap siklus (satu instance ETL saja; dua instance = rantai bercabang, terdeteksi
 verifikasi sebagai `seq_gap`/`prev_mismatch`). Kepala dicatat ke log (`EFN_AUDIT_CHAIN_HEAD`) -> Loki = jangkar
@@ -15,7 +18,7 @@ eksternal: penulisan ulang salinan oleh admin ClickHouse terdeteksi dengan memba
 import json
 import logging
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Protocol
@@ -34,6 +37,7 @@ from efn_etl.audit import (
     compare_content,
     verify_chain,
 )
+from efn_etl.sink import SinkCheckResult
 from efn_etl.watermark import EPOCH
 
 log = logging.getLogger(__name__)
@@ -53,7 +57,20 @@ RECON_COLUMNS = (
     "erasure_redacted",
     "chain_problems",
     "sample_ids",
+    # Gelombang 14 (05-loyalty-recon.sql menambah kolom): verifikasi sink Loki + jangkar rantai.
+    "sink_checked",
+    "sink_error",
+    "sink_lines",
+    "sink_mac_invalid",
+    "sink_missing_log",
+    "log_missing_sink",
+    "anchors_checked",
+    "anchor_mismatch",
+    "anchor_missing",
+    "anchor_absent",
 )
+
+SinkCheck = Callable[[datetime], SinkCheckResult]
 
 # Kolom sumber = grant di sql/odoo-readonly-grants.sql. origin_user_id: efn_audit >= 19.0.1.2.0 (SEC-46).
 SQL_AUDIT_NEW = """
@@ -214,8 +231,17 @@ def _verify_chains(store: AuditStore, companies: Sequence[int], page: int, resul
                 break
 
 
-def run_audit_recon(source: AuditSource, store: AuditStore, cfg: AuditSettings, now: datetime) -> ReconResult:
-    """Bandingkan seluruh id 1..max_id tersalin dengan PostgreSQL per jendela id; klasifikasi selisih."""
+def run_audit_recon(
+    source: AuditSource,
+    store: AuditStore,
+    cfg: AuditSettings,
+    now: datetime,
+    sink_check: SinkCheck | None = None,
+) -> ReconResult:
+    """Bandingkan seluruh id 1..max_id tersalin dengan PostgreSQL per jendela id; klasifikasi selisih.
+
+    `sink_check` (opsional): verifikasi sink Loki + jangkar; hasilnya digabung ke log & baris `audit_recon_run`.
+    """
     result = ReconResult()
     purges = [
         PurgeLog(str(r["model_name"]), str(r["note"] or ""), r["create_date"])
@@ -250,8 +276,23 @@ def run_audit_recon(source: AuditSource, store: AuditStore, cfg: AuditSettings, 
         lo = hi
     classify_missing(missing, budget, now, result)
     _verify_chains(store, sorted(store.heads()), max(cfg.batch_size, 1000), result)
-    payload = {"max_log_id": max_id, **result.as_dict()}
-    if result.alert:
+    sink: SinkCheckResult | None = None
+    sink_error = False
+    if sink_check is not None:
+        try:
+            sink = sink_check(now)
+        except Exception as exc:
+            # Pesan tanpa isi baris log (LokiError/psycopg); verifikasi tidak berjalan = alert, bukan diam.
+            sink_error = True
+            log.warning("job=audit_recon verifikasi sink gagal: %s", type(exc).__name__)
+    # Kunci pertama WAJIB "max_log_id" (regex promtail stream efn_audit_anchor, audit_event=recon).
+    payload: dict[str, Any] = {"max_log_id": max_id, **result.as_dict()}
+    if sink_check is not None:
+        payload["sink_error"] = int(sink_error)
+        if sink is not None:
+            payload.update(sink.as_dict())
+    alert = result.alert or sink_error or (sink is not None and sink.alert)
+    if alert:
         log.warning("EFN_AUDIT_RECON %s", json.dumps(payload, separators=(",", ":")))
     else:
         log.info("EFN_AUDIT_RECON %s", json.dumps(payload, separators=(",", ":")))
@@ -271,6 +312,16 @@ def run_audit_recon(source: AuditSource, store: AuditStore, cfg: AuditSettings, 
                 result.erasure_redacted,
                 result.chain_problems,
                 list(result.sample_ids),
+                int(sink_check is not None),
+                int(sink_error),
+                sink.sink.sink_lines if sink else 0,
+                sink.sink.sink_mac_invalid if sink else 0,
+                sink.sink.sink_missing_log if sink else 0,
+                sink.sink.log_missing_sink if sink else 0,
+                sink.anchors.anchors_checked if sink else 0,
+                sink.anchors.anchor_mismatch if sink else 0,
+                sink.anchors.anchor_missing if sink else 0,
+                sink.anchors.anchor_absent if sink else 0,
             ]
         ],
     )

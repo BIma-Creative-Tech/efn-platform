@@ -115,3 +115,64 @@ def test_password_not_in_repr(tls_env: dict[str, str], tmp_path: Path) -> None:
     secret.write_text("very-secret-value", encoding="utf-8")
     settings = Settings.from_env({**tls_env, "PG_PASSWORD_FILE": str(secret), "CH_PASSWORD_FILE": str(secret)})
     assert "very-secret-value" not in repr(settings)
+
+
+# ---------------------------------------------------------------- G14: verifikasi sink Loki + rekonsiliasi loyalty
+
+
+@pytest.fixture
+def sink_env(tls_env: dict[str, str], tmp_path: Path) -> dict[str, str]:
+    for name in ("crt", "key"):
+        (tmp_path / f"etl.{name}").write_text("dummy\n", encoding="utf-8")
+    (tmp_path / "sink.key").write_text("k" * 40 + "\n", encoding="utf-8")
+    return {
+        **tls_env,
+        "ETL_AUDIT_COPY_ENABLED": "true",
+        "LOKI_URL": "https://loki:3100",
+        "LOKI_CA_FILE": tls_env["CH_CA_FILE"],
+        "LOKI_CLIENT_CERT_FILE": str(tmp_path / "etl.crt"),
+        "LOKI_CLIENT_KEY_FILE": str(tmp_path / "etl.key"),
+        "EFN_AUDIT_SINK_KEY_FILE": str(tmp_path / "sink.key"),
+    }
+
+
+def test_sink_verification_enabled_with_mtls(sink_env: dict[str, str]) -> None:
+    settings = Settings.from_env(sink_env)
+    assert settings.audit_sink_enabled and settings.audit_sink_key == b"k" * 40
+    assert settings.loki_client_cert_file and settings.loki_client_key_file
+    assert "kkkk" not in repr(settings)
+    # Default: mati bila LOKI_URL kosong atau salinan audit mati
+    assert not Settings.from_env({**sink_env, "LOKI_URL": ""}).audit_sink_enabled
+    assert not Settings.from_env({**sink_env, "ETL_AUDIT_COPY_ENABLED": "false"}).audit_sink_enabled
+
+
+@pytest.mark.parametrize(
+    ("override", "error"),
+    [
+        ({"LOKI_URL": "http://loki:3100"}, TlsConfigError),
+        ({"LOKI_CLIENT_CERT_FILE": ""}, TlsConfigError),
+        ({"LOKI_CLIENT_KEY_FILE": "/nope"}, TlsConfigError),
+        ({"EFN_AUDIT_SINK_KEY_FILE": "/nope"}, RuntimeError),
+        ({"ETL_AUDIT_SINK_ENABLED": "true", "ETL_AUDIT_COPY_ENABLED": "false"}, RuntimeError),
+    ],
+)
+def test_sink_verification_fails_closed(sink_env: dict[str, str], override: dict[str, str], error: type) -> None:
+    with pytest.raises(error):
+        Settings.from_env({**sink_env, **override})
+
+
+def test_short_sink_key_rejected(sink_env: dict[str, str], tmp_path: Path) -> None:
+    short = tmp_path / "short.key"
+    short.write_text("pendek", encoding="utf-8")
+    with pytest.raises(ValueError):
+        Settings.from_env({**sink_env, "EFN_AUDIT_SINK_KEY_FILE": str(short)})
+
+
+def test_loyalty_recon_defaults_follow_odoo(tls_env: dict[str, str]) -> None:
+    assert not Settings.from_env(tls_env).loyalty_recon_enabled
+    settings = Settings.from_env({**tls_env, "ETL_ENABLE_ODOO": "true", "ETL_LOYALTY_RECON_SETTLE_HOURS": "4"})
+    assert settings.loyalty_recon_enabled and settings.loyalty_recon_settle_hours == 4
+    assert settings.loyalty_recon_lookback_hours == 72 and settings.loyalty_recon_interval_seconds == 86_400
+    assert settings.loyalty_recon_not_before is None
+    cutoff = Settings.from_env({**tls_env, "ETL_LOYALTY_RECON_NOT_BEFORE": "2026-10-07T07:09:00Z"})
+    assert cutoff.loyalty_recon_not_before is not None and cutoff.loyalty_recon_not_before.hour == 7

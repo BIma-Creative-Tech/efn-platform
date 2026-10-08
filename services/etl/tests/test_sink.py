@@ -3,13 +3,23 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from efn_etl.loki import LokiError, to_ns
 from efn_etl.sink import (
+    ANCHOR_QUERY,
+    SINK_QUERY,
+    SQL_SINK_PG_BY_IDS,
+    SQL_SINK_PG_WINDOW,
+    Anchor,
     PgControlLog,
+    SinkCheckSettings,
     load_key,
+    parse_anchor_line,
     parse_sink_line,
     reconcile_sink,
+    run_sink_check,
     sink_canonical,
     sink_mac,
+    verify_anchors,
 )
 
 KEY = b"k" * 32
@@ -115,3 +125,103 @@ def test_control_log_without_sink_flagged_after_settle() -> None:
 
 def test_purge_always_expected() -> None:
     assert _reconcile([], [_pg(5, model="res.partner", operation="purge")]).log_missing_sink == 1
+
+
+# ---------------------------------------------------------------- G14: jangkar rantai + wiring Loki
+
+
+ANCHOR_PREFIX_LINE = "2026-10-07 03:00:01,123 INFO efn_etl.audit_job EFN_AUDIT_CHAIN_HEAD "
+
+
+def _anchor_line(company: int, seq: int, digest: str) -> str:
+    return ANCHOR_PREFIX_LINE + json.dumps({"company": company, "seq": seq, "row_hash": digest}, separators=(",", ":"))
+
+
+def test_parse_anchor_line_strict() -> None:
+    anchor = parse_anchor_line(_anchor_line(1, 10, "a" * 64))
+    assert anchor == Anchor(1, 10, "a" * 64)
+    assert parse_anchor_line(_anchor_line(1, 10, "A" * 64)) is None  # bukan hex kecil
+    assert parse_anchor_line(_anchor_line(1, 10, "a" * 64).replace(" INFO ", " WARNING ")) is None
+    assert parse_anchor_line(_anchor_line(1, 10, "a" * 64) + ' {"x":1}') is None
+
+
+def test_verify_anchors_detects_rewrite_deletion_fork_and_absence() -> None:
+    h1, h2 = "1" * 64, "2" * 64
+    anchors = [
+        Anchor(1, 10, h1),
+        Anchor(1, 10, h1),
+        Anchor(1, 20, h1),
+        Anchor(2, 5, h1),
+        Anchor(2, 6, h1),
+        Anchor(2, 6, h2),
+    ]
+    current = {(1, 10): h1, (1, 20): h2, (2, 6): h1}
+    result = verify_anchors(anchors, current, [1, 2])
+    # (1,10) ok; (1,20) ditulis ulang; (2,5) hilang; (2,6) dua hash berbeda di Loki
+    assert result.anchors_checked == 4 and result.anchor_mismatch == 2 and result.anchor_missing == 1
+    assert result.alert and "2:5" in result.samples
+    assert verify_anchors([], {}, [1]).anchor_absent == 1
+    assert not verify_anchors([], {}, []).alert
+
+
+class FakeLoki:
+    def __init__(self, sink: list[str], anchors: list[str]) -> None:
+        self.streams = {SINK_QUERY: sink, ANCHOR_QUERY: anchors}
+        self.fail = False
+
+    def get_json(self, path: str, params: dict[str, str]) -> object:
+        if self.fail:
+            raise LokiError("Loki tidak terjangkau")
+        lines = self.streams[params["query"]]
+        start = int(params["start"])
+        values = [[str(start + i), line] for i, line in enumerate(lines)]
+        if start != to_ns(T0 - timedelta(hours=25, minutes=15)) and start != to_ns(T0 - timedelta(days=8)):
+            values = []  # halaman kedua: kosong
+        return {"status": "success", "data": {"resultType": "streams", "result": [{"stream": {}, "values": values}]}}
+
+
+class FakeAuditSource:
+    def __init__(self, logs: list[PgControlLog]) -> None:
+        self.logs = {p.log_id: p for p in logs}
+
+    def query(self, sql: str, params: dict) -> list[dict]:
+        def row(p: PgControlLog) -> dict:
+            return {"id": p.log_id, "model_name": p.model, "operation": p.operation, "create_date": p.create_date}
+
+        if sql == SQL_SINK_PG_WINDOW:
+            return [row(p) for p in self.logs.values() if params["start"] <= p.create_date < params["end"]]
+        if sql == SQL_SINK_PG_BY_IDS:
+            return [row(self.logs[i]) for i in params["ids"] if i in self.logs]
+        raise AssertionError(sql)
+
+
+class FakeSinkStore:
+    def __init__(self, chain: dict[tuple[int, int], str], copied: set[int] = frozenset()) -> None:
+        self.chain = chain
+        self.copied = set(copied)
+
+    def copied_log_ids(self, log_ids: list[int]) -> set[int]:
+        return self.copied & set(log_ids)
+
+    def chain_hashes(self, company: int, seqs: list[int]) -> dict[int, str]:
+        return {s: h for (c, s), h in self.chain.items() if c == company and s in seqs}
+
+    def heads(self) -> dict[int, object]:
+        return {c: object() for c, _s in self.chain}
+
+
+def test_run_sink_check_clean_and_anomalies() -> None:
+    h = "a" * 64
+    cfg = SinkCheckSettings(settle=timedelta(minutes=15))
+    old_log = PgControlLog(3, "res.users", "write", T0 - timedelta(days=3))  # di luar jendela, dicari per id
+    loki = FakeLoki([_line(_event(7)), _line(_event(3, model="res.users"))], [_anchor_line(1, 4, h)])
+    source = FakeAuditSource([_pg(7), old_log])
+    result = run_sink_check(loki, source, FakeSinkStore({(1, 4): h}), KEY, T0, cfg)
+    assert not result.alert, result.as_dict()
+    assert result.sink.sink_lines == 2 and result.anchors.anchors_checked == 1
+
+    loki = FakeLoki([_line(_event(7), key=b"z" * 32)], [_anchor_line(1, 4, h)])
+    source = FakeAuditSource([_pg(7), _pg(8, model="ir.cron")])
+    result = run_sink_check(loki, source, FakeSinkStore({(1, 4): "b" * 64}), KEY, T0, cfg)
+    data = result.as_dict()
+    assert data["sink_mac_invalid"] == 1 and data["log_missing_sink"] == 2 and data["anchor_mismatch"] == 1

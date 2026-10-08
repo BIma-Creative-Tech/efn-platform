@@ -15,6 +15,7 @@
 | `companies`, `gl_accounts`, `gl_lines`, `gl_lines_by_move` (`ETL_ENABLE_GL=true`, G12) | Odoo `res_company`, `account_account` (+ rel company), `account_move_line` + `account_move` | `dim_company`, `dim_gl_account`, `fact_gl_line` | `write_date` (`gl_lines_by_move`: `account_move.write_date`) |
 | `audit_copy` (`ETL_AUDIT_COPY_ENABLED=true`, G12) | Odoo `efn_audit_log` + `efn_audit_log_line` | `audit_log_copy`, `audit_log_line_copy` (MergeTree append-only), `audit_recon_run` | id (keyset) + jendela settle/late |
 | `pos_outlets`, `products`, `pos_payments` (`ETL_ENABLE_ODOO=true`, G13) | Odoo `pos_config`; `product_product`+`product_template`; `pos_payment`+`pos_payment_method` | `dim_outlet`, `dim_product`, `fact_pos_payment` | `write_date` (produk: `GREATEST(variant, template)`) |
+| `loyalty_recon` (`ETL_LOYALTY_RECON_ENABLED`, default = `ETL_ENABLE_ODOO`, G14) | platform `loyalty_pos_earn`, `loyalty_ledger` (`pos_*`), `loyalty_reservation` + Odoo `pos_order`, baris Poin EFN, `efn_pos_loyalty_outbox`, `efn_pos_loyalty_reservation` | `loyalty_recon_run`, `loyalty_recon_finding` + log `EFN_LOYALTY_RECON_ETL` | harian (`ETL_LOYALTY_RECON_INTERVAL_SECONDS`), jendela 72 jam |
 | `stock_snapshot` (`ETL_ENABLE_STOCK`, default = `ETL_ENABLE_ODOO`, G13) | Odoo `stock_quant` (lokasi internal) + `stock_lot` + `stock_warehouse_orderpoint` | `fact_stock_snapshot`, `fact_orderpoint_snapshot`, penanda `stock_snapshot_run` | snapshot penuh tiap `ETL_STOCK_SNAPSHOT_INTERVAL_SECONDS` (3600) + saat ganti tanggal WIB |
 
 ### Mart Fase 1 (Gelombang 13) — docs/01 §7 "ETL dasar + 3 dashboard Metabase"
@@ -34,8 +35,35 @@ EFN_ETL_HEARTBEAT job=<job> status=<ok|error|partial> rows=<n> pages=<n> duratio
 `job` ∈ `cycle` (loop hidup; selalu `ok`), `competitor_prices`, `loyalty_events`, `sales_fact_pos`, `pos_outlets`, `products`, `pos_payments`, `companies`, `gl_accounts`, `gl_lines`, `gl_lines_by_move`, `stock_snapshot`, `audit_copy`, `audit_recon` (hanya saat rekonsiliasi jatuh tempo, default harian), `privacy_erasure` (`partial` bila ada request gagal). Nama job divalidasi `^[a-z0-9_]{1,64}$` (anti log injection). Alert yang diusulkan (Loki ruler, devsecops), contoh:
 `absent_over_time({service="etl"} |= "EFN_ETL_HEARTBEAT" | logfmt | job="audit_copy" | status="ok" [1h])` (prod), `job="cycle"` 45m, `job="sales_fact_pos"` 45m, `job="stock_snapshot"` 3h, `job="audit_recon"` 26h. Kartu "Kesegaran data ETL" di Metabase membaca `v_etl_freshness`.
 
-### Verifikasi sink audit v2 (SEC-51/52) — logika saja
-`efn_etl/sink.py`: verifikasi `mac` HMAC-SHA256 baris `EFN_AUDIT_SINK` (format kanonik efn_audit) dan rekonsiliasi sink ↔ log PostgreSQL → `sink_mac_invalid`, `sink_missing_log`, `log_missing_sink`. **Belum di-wire**: butuh pembaca Loki (query_range via loki-tls mTLS) + secret `efn_audit_sink_key` di container ETL (spesifikasi: laporan efn-data-ai-engineer Gelombang 13).
+### Verifikasi sink audit + jangkar rantai (SEC-51/52) — Gelombang 14
+`efn_etl/sink.py` + `efn_etl/loki.py`, dijalankan di dalam rekonsiliasi audit harian (`audit_recon`) bila
+`ETL_AUDIT_SINK_ENABLED` (default: aktif bila `ETL_AUDIT_COPY_ENABLED=true` dan `LOKI_URL` di-set):
+- Loki `query_range` lewat `LOKI_URL` (`https://loki:3100` = loki-tls) dengan mTLS: sertifikat klien CN `etl`
+  (`LOKI_CLIENT_CERT_FILE`/`LOKI_CLIENT_KEY_FILE`), CA internal (`LOKI_CA_FILE`), hostname diverifikasi. Kunci HMAC dari
+  `EFN_AUDIT_SINK_KEY_FILE` (>= 32 byte). Konfigurasi tidak lengkap = ETL gagal start (fail closed).
+- Stream `{stream="efn_audit_sink"}` jendela `ETL_AUDIT_SINK_WINDOW_SECONDS` (default 25 jam): `sink_mac_invalid`
+  (mac salah/null/JSON rusak), `sink_missing_log` (sink valid tanpa log di PG maupun salinan), `log_missing_sink` (log
+  model kontrol/purge di PG, lebih tua dari settle, tanpa sink valid). Paginasi tidak lengkap = `sink_truncated` (alert).
+- Stream `{stream="efn_audit_anchor", audit_event="chain_head"}` `ETL_AUDIT_ANCHOR_LOOKBACK_SECONDS` (8 hari):
+  setiap (company, seq) yang pernah dijangkarkan dibandingkan dengan `row_hash` salinan saat ini — `anchor_mismatch`
+  (ditulis ulang / dua hash untuk seq sama), `anchor_missing` (baris hilang), `anchor_absent` (tidak ada jangkar).
+- Hasil masuk `EFN_AUDIT_RECON {json}` (kunci pertama tetap `max_log_id`; WARNING bila anomali atau `sink_error=1`
+  = Loki/PG gagal) dan kolom baru `audit_recon_run` (`05-loyalty-recon.sql`). View `v_audit_recon_daily`.
+- Batas: baris jangkar tidak ber-HMAC — jangkar palsu (injeksi log) hanya menimbulkan alarm palsu, tidak bisa
+  menyembunyikan penulisan ulang. Sink dari proses Odoo di luar container utama (mis. `odoo shell` via `docker exec`)
+  tidak tertangkap promtail -> `log_missing_sink` (benar: jalur itu memang tidak ter-sink).
+
+### Rekonsiliasi loyalty ledger <-> pos.order (sisa SEC-61) — Gelombang 14
+`efn_etl/loyalty_recon.py` (docstring = daftar lengkap `kind`). Critical (`anomalies`, alert): `earn_without_paid_order`
+(order fiktif — tidak terlihat recon BFF), `paid_member_order_without_earn` (> `ETL_LOYALTY_RECON_SETTLE_HOURS`, 6),
+`redeem_without_points_line`, `points_line_value_mismatch` (toleransi Rp1/baris), `points_line_without_redeem`,
+`redeem_points_mismatch`, `reverse_without_refund_order`. Warning (`open_items`): outbox `hold`/`pending` menua
+(`ETL_LOYALTY_RECON_AGED_HOURS`, 24), outbox `failed`, order/reservasi `review` menua (dalam
+`ETL_LOYALTY_RECON_OPEN_DAYS`, 30). `ETL_LOYALTY_RECON_NOT_BEFORE` (ISO UTC) = go-live loyalty POS; order lama (tanpa
+hook) tidak dibandingkan. Log: `<ts> (INFO|WARNING) efn_etl.loyalty_recon EFN_LOYALTY_RECON_ETL {"status":"ok",...}`
+(ERROR `{"status":"error","error":"<Tipe>"}` bila gagal), tanpa PII: hanya kind, kode PT, hitungan, id order Odoo / id
+ledger sampel. Tabel `loyalty_recon_run` (penanda, ditulis terakhir) + `loyalty_recon_finding`, retensi 400 hari; view
+`v_loyalty_recon_latest`, `v_loyalty_recon_daily`. Grant Odoo baru: `sql/odoo-readonly-grants.sql` bagian G14.
 
 ### Erasure DSAR (docs/04 §8.4)
 `efn_etl/erasure.py`: per request hitung baris `user_hash`/`member_hash` cocok → `ALTER TABLE ... DELETE` (mutation, `mutations_sync=2`; menghapus fisik, bukan sekadar mask seperti lightweight `DELETE`) → verifikasi `count()=0` → publish `{schema_version: 2, idempotency_key: "erasure:<request_id>:clickhouse", request_id, store: "clickhouse"}` (amqps, user `efn-etl`, properti `user_id`/`message_id`). Belum 0 / error → request tetap `processing`, diulang siklus berikutnya. Hash yang sedang dihapus dikecualikan dari job incremental pada siklus itu (overlap window tidak memuat ulang); bila `dsar_request` tidak terbaca, job ber-hash dilewati (fail closed). ETL tidak mendeklarasikan queue (milik BFF).
@@ -90,6 +118,9 @@ PDP (SEC-16, docs/04 §7.2): ETL **tidak memegang `otp_pepper`** dan tidak mengh
 | `ETL_ENABLE_GL` | `false` (butuh grant G12) |
 | `ETL_AUDIT_COPY_ENABLED`, `ETL_AUDIT_SETTLE_SECONDS`, `ETL_AUDIT_LATE_WINDOW_SECONDS`, `ETL_AUDIT_BATCH_SIZE` | `false`, `600`, `86400`, `2000` |
 | `ETL_AUDIT_RECON_INTERVAL_SECONDS`, `ETL_AUDIT_RECON_CONTENT` | `86400`, `true` (bandingkan hash isi; `false` = hanya id) |
+| `ETL_AUDIT_SINK_ENABLED`, `LOKI_URL`, `LOKI_CA_FILE`, `LOKI_CLIENT_CERT_FILE`, `LOKI_CLIENT_KEY_FILE`, `EFN_AUDIT_SINK_KEY_FILE` | aktif bila audit copy + `LOKI_URL`; secret `tls_etl_crt/key`, `efn_audit_sink_key` |
+| `ETL_AUDIT_SINK_WINDOW_SECONDS`, `ETL_AUDIT_ANCHOR_LOOKBACK_SECONDS` | `90000`, `691200` |
+| `ETL_LOYALTY_RECON_ENABLED`, `ETL_LOYALTY_RECON_INTERVAL_SECONDS`, `ETL_LOYALTY_RECON_LOOKBACK_HOURS`, `ETL_LOYALTY_RECON_SETTLE_HOURS`, `ETL_LOYALTY_RECON_AGED_HOURS`, `ETL_LOYALTY_RECON_OPEN_DAYS`, `ETL_LOYALTY_RECON_NOT_BEFORE` | `ETL_ENABLE_ODOO`, `86400`, `72`, `6`, `24`, `30`, — |
 | `CH_HOST`, `CH_PORT`, `CH_USER`, `CH_PASSWORD_FILE`, `CH_DATABASE`, `CH_SECURE`, `CH_CA_FILE` | `clickhouse`, `8443`, `efn_etl`, secret `clickhouse_password_etl`, `efn_dwh`, `true`, `/run/secrets/efn_ca_crt` |
 | `ETL_INTERVAL_SECONDS`, `ETL_OVERLAP_SECONDS`, `ETL_BATCH_SIZE`, `ETL_MAX_PAGES_PER_RUN` | `900`, `300`, `5000`, `200` |
 | `ETL_STATEMENT_TIMEOUT_MS`, `ETL_RUN_ONCE`, `LOG_LEVEL` | `300000`, `false`, `INFO` |

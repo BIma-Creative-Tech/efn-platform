@@ -1,7 +1,8 @@
 """Entry point: `python -m efn_etl`. Loop setiap ETL_INTERVAL_SECONDS (default 900 = 15 menit, ADR-003/D-02).
 
 Urutan per siklus: (1) job `privacy_erasure` (docs/04 §8.4) bila `ETL_ERASURE_ENABLED`, (2) job incremental dengan
-hash subjek yang sedang dihapus dikecualikan.
+hash subjek yang sedang dihapus dikecualikan, (3) snapshot stok, (4) salinan audit + rekonsiliasi harian (termasuk
+verifikasi sink Loki, G14), (5) rekonsiliasi loyalty ledger <-> pos.order harian (G14, sisa SEC-61).
 """
 
 import logging
@@ -22,13 +23,17 @@ from efn_etl.adapters import (
     build_clickhouse_client,
 )
 from efn_etl.amqp import PikaPublisher, build_connection_params
-from efn_etl.audit_job import AuditSettings, recon_due, run_audit_copy, run_audit_recon
+from efn_etl.audit_job import AuditSettings, SinkCheck, recon_due, run_audit_copy, run_audit_recon
 from efn_etl.config import Settings
 from efn_etl.erasure import SQL_PENDING_ERASURES, excluded_hashes, parse_requests, run_erasure
 from efn_etl.gl import GL_JOBS
 from efn_etl.heartbeat import Heartbeat, JobRun, make_heartbeat
 from efn_etl.jobs import enabled_jobs
+from efn_etl.loki import HttpsLokiTransport
+from efn_etl.loyalty_recon import LoyaltyReconSettings, run_loyalty_recon
+from efn_etl.loyalty_recon import recon_due as loyalty_recon_due
 from efn_etl.runner import run_once
+from efn_etl.sink import SinkCheckResult, SinkCheckSettings, run_sink_check
 from efn_etl.stock import STOCK_JOB, run_stock_snapshot, snapshot_due
 from efn_etl.tls import client_ssl_context
 
@@ -40,7 +45,11 @@ def _ms(started: float) -> int:
 
 
 def run_audit_cycle(
-    source: PgSource, audit_store: ClickHouseAuditStore, cfg: AuditSettings, heartbeat: Heartbeat
+    source: PgSource,
+    audit_store: ClickHouseAuditStore,
+    cfg: AuditSettings,
+    heartbeat: Heartbeat,
+    sink_check: SinkCheck | None = None,
 ) -> None:
     """Salinan audit + rekonsiliasi berkala. Gagal = log ERROR (alert Loki), tidak menghentikan job lain."""
     now = datetime.now(UTC)
@@ -59,7 +68,7 @@ def run_audit_cycle(
     try:
         if not recon_due(audit_store, cfg, now):
             return
-        run_audit_recon(source, audit_store, cfg, now)
+        run_audit_recon(source, audit_store, cfg, now, sink_check)
     except Exception:
         log.exception("job=audit_copy gagal (rekonsiliasi)")
         heartbeat(JobRun("audit_recon", datetime.now(UTC), "error", duration_ms=_ms(started)))
@@ -98,6 +107,41 @@ def run_stock_cycle(
             pages=result.pages,
             duration_ms=_ms(started),
             watermark=result.snapshot_ts,
+        )
+    )
+
+
+def make_sink_check(
+    loki: HttpsLokiTransport, source: PgSource, store: ClickHouseAuditStore, key: bytes, cfg: SinkCheckSettings
+) -> SinkCheck:
+    def check(now: datetime) -> SinkCheckResult:
+        return run_sink_check(loki, source, store, key, now, cfg)
+
+    return check
+
+
+def run_loyalty_recon_cycle(
+    platform: PgSource, odoo: PgSource, run_store: ClickHouseRunStore, cfg: LoyaltyReconSettings, heartbeat: Heartbeat
+) -> None:
+    """Rekonsiliasi loyalty (G14) bila jatuh tempo. Gagal = heartbeat error + log ERROR EFN_LOYALTY_RECON_ETL."""
+    started = time.monotonic()
+    now = datetime.now(UTC)
+    try:
+        if not loyalty_recon_due(run_store, cfg, now):
+            return
+        report = run_loyalty_recon(platform, odoo, run_store, cfg, now)
+    except Exception as exc:
+        # Tanpa pesan exception mentah (bisa memuat potongan SQL/nilai): hanya nama tipe.
+        log.error('EFN_LOYALTY_RECON_ETL {"status":"error","error":"%s"}', type(exc).__name__)
+        heartbeat(JobRun("loyalty_recon", datetime.now(UTC), "error", duration_ms=_ms(started)))
+        return
+    heartbeat(
+        JobRun(
+            "loyalty_recon",
+            datetime.now(UTC),
+            "ok",
+            rows=report.orders_checked + report.ledger_checked,
+            duration_ms=_ms(started),
         )
     )
 
@@ -147,15 +191,42 @@ def main() -> None:
         recon_interval=timedelta(seconds=settings.audit_recon_interval_seconds),
         recon_content=settings.audit_recon_content,
     )
+    sink_check: SinkCheck | None = None
+    if settings.audit_sink_enabled:
+        loki = HttpsLokiTransport(
+            settings.loki_url, settings.loki_ca_file, settings.loki_client_cert_file, settings.loki_client_key_file
+        )
+        sink_cfg = SinkCheckSettings(
+            window=timedelta(seconds=settings.audit_sink_window_seconds),
+            settle=timedelta(seconds=settings.audit_settle_seconds),
+            anchor_lookback=timedelta(seconds=settings.audit_anchor_lookback_seconds),
+        )
+        if audit_store is None:  # dijamin Settings (sink butuh audit_copy_enabled)
+            raise RuntimeError("verifikasi sink butuh salinan audit")
+        sink_check = make_sink_check(loki, sources["odoo"], audit_store, settings.audit_sink_key, sink_cfg)
+    elif settings.audit_copy_enabled:
+        log.warning("verifikasi sink audit (SEC-51) TIDAK aktif: LOKI_URL kosong atau ETL_AUDIT_SINK_ENABLED=false")
+    loyalty_cfg = LoyaltyReconSettings(
+        interval=timedelta(seconds=settings.loyalty_recon_interval_seconds),
+        lookback=timedelta(hours=settings.loyalty_recon_lookback_hours),
+        settle=timedelta(hours=settings.loyalty_recon_settle_hours),
+        aged=timedelta(hours=settings.loyalty_recon_aged_hours),
+        open_window=timedelta(days=settings.loyalty_recon_open_days),
+        points_codes=settings.points_product_codes,
+        not_before=settings.loyalty_recon_not_before,
+    )
     jobs = enabled_jobs(settings.odoo_enabled, settings.points_product_codes)
     if settings.gl_enabled:
         jobs.extend(GL_JOBS)
     overlap = timedelta(seconds=settings.overlap_seconds)
     log.info(
-        "ETL mulai: jobs=%s stock_snapshot=%s audit_copy=%s erasure=%s interval=%ds overlap=%ds",
+        "ETL mulai: jobs=%s stock_snapshot=%s audit_copy=%s audit_sink=%s loyalty_recon=%s erasure=%s interval=%ds "
+        "overlap=%ds",
         [j.name for j in jobs],
         settings.stock_enabled,
         settings.audit_copy_enabled,
+        settings.audit_sink_enabled,
+        settings.loyalty_recon_enabled,
         settings.erasure_enabled,
         settings.interval_seconds,
         settings.overlap_seconds,
@@ -202,7 +273,9 @@ def main() -> None:
                 heartbeat,
             )
         if audit_store is not None:
-            run_audit_cycle(sources["odoo"], audit_store, audit_cfg, heartbeat)
+            run_audit_cycle(sources["odoo"], audit_store, audit_cfg, heartbeat, sink_check)
+        if settings.loyalty_recon_enabled:
+            run_loyalty_recon_cycle(sources["platform"], sources["odoo"], run_store, loyalty_cfg, heartbeat)
         # Heartbeat siklus: bukti loop hidup (status selalu ok; kegagalan job terlihat di heartbeat job masing-masing).
         heartbeat(JobRun("cycle", datetime.now(UTC), "ok", rows=len(results), duration_ms=_ms(cycle_started)))
         if settings.run_once:

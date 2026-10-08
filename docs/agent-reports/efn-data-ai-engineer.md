@@ -377,3 +377,56 @@ Job: `cycle` (loop hidup), `competitor_prices`, `loyalty_events`, `sales_fact_po
 - Q-47 (dashboard C-level), Q-54 (SSO/password Metabase), izin per grup pada collection.
 - WITA/WIT per outlet belum dibedakan; reorder memakai on-hand (bukan forecast Odoo); filter berupa teks (bukan dropdown).
 - View baru belum masuk semantic layer Text-to-SQL.
+
+## Gelombang 14 — Rekonsiliasi loyalty ↔ pos.order (sisa SEC-61), wiring verifikasi sink + jangkar (SEC-51/52), dashboard refund poin (8 Okt 2026)
+
+Tanpa commit. Tidak ada volume yang dihapus.
+
+### File
+- Baru: `services/etl/efn_etl/loki.py` (klien `query_range` stdlib, mTLS CN `etl`, paginasi aman batas timestamp,
+  `truncated` dilaporkan), `services/etl/efn_etl/loyalty_recon.py`, `infra/clickhouse/init/05-loyalty-recon.sql`,
+  `tests/test_loki.py`, `tests/test_loyalty_recon.py`.
+- Diubah: `sink.py` (jangkar `EFN_AUDIT_CHAIN_HEAD` + orkestrasi `run_sink_check`), `audit_job.py` (hasil sink digabung ke
+  `EFN_AUDIT_RECON` + kolom `audit_recon_run`; Loki gagal = `sink_error=1`, WARNING), `config.py`, `adapters.py`,
+  `__main__.py`, `sql/odoo-readonly-grants.sql` (bagian G14), `infra/clickhouse/init/04-fase1-marts.sql`
+  (`refund_goods`, `points_returned_idr` di `v_pos_sales_daily`/`v_pos_outlet_daily`), `access/etl-access.sql`,
+  `access/metabase-access.sql`, `infra/metabase/dashboards/01-penjualan-harian-outlet.json`, README ETL, tes.
+
+### Kontrak untuk devsecops (nama baris / alert yang diusulkan)
+- Baris loyalty: `<YYYY-MM-DD HH:MM:SS,mmm> (INFO|WARNING|ERROR) efn_etl.loyalty_recon EFN_LOYALTY_RECON_ETL {"status":"ok"|"error",...}`
+  dari `{service="etl"}`. Usul promtail: stream `efn_loyalty`, label `loyalty_event="etl_recon"` (regex berjangkar,
+  kunci pertama `"status"`). Field: `anomalies` (critical), `open_items` (warning), `kinds{kind:n}`, `sample_order_ids`,
+  `sample_ledger_ids` (angka saja). Alert: `| json | anomalies > 0` → critical (Finance); `open_items > 0` → warning
+  harian; dead-man `job="loyalty_recon" status="ok"` absen 26 jam (heartbeat `EFN_ETL_HEARTBEAT`).
+- `EFN_AUDIT_RECON` tetap diawali `{"max_log_id":` (regex promtail lama cocok); field baru `sink_error`, `sink_*`,
+  `anchor_*`. Alert lama (WARNING) sudah menangkap anomali sink/jangkar.
+- Compose dev: tambahkan `ETL_LOYALTY_RECON_NOT_BEFORE` (go-live loyalty POS; dev `2026-10-07T07:09:00Z`) — tanpa itu
+  42 order smoke lama (sebelum `efn_pos_loyalty_ledger` dipasang) muncul sebagai `paid_member_order_without_earn`.
+- `deploy.sh`: grant G14 harus dijalankan setelah `efn_pos_loyalty_ledger` terpasang (ON_ERROR_STOP).
+- Temuan promtail: tahap redaksi nomor HP berjalan SEBELUM tahap sink `efn_audit_sink` → sink yang memuat pola
+  `08xxxxxxxx` (mis. di `note`) akan rusak dan terhitung `sink_mac_invalid`. Usul: cocokkan sink sebelum redaksi
+  (seperti jangkar; sink tidak memuat nilai).
+
+### Uji di stack dev (8 Okt)
+- pytest ETL **192 passed**, metabase **23 passed**; `ruff check` + `ruff format --check` bersih (container python:3.12).
+- Grant G14 diterapkan ke DB dev (sebagai `efn_odoo`); `clickhouse-init` ulang sukses (05 + access).
+- Siklus ETL (`ETL_RUN_ONCE`, recon dipaksa): Loki mTLS berhasil. Tanpa cutoff: `earn_without_paid_order` 30.326 =
+  earn load test BFF tanpa order Odoo (terdeteksi benar; 22 earn asal Odoo cocok dengan 22 outbox `done`),
+  `paid_member_order_without_earn` 42 = order sebelum modul loyalty dipasang. Dengan `NOT_BEFORE`: **anomalies 0**,
+  open_items 3 (2 order `review` — earn_limit & retur tanpa struk dari smoke G13c, 1 outbox `failed` earn_limit).
+- Anomali sengaja: baris Poin EFN order paid #145 diubah −6.000→−9.000 → `points_line_value_mismatch` 1 (WARNING),
+  lalu dikembalikan (−6.000, diverifikasi); run bersih terakhir anomalies 0.
+- Recon audit: `sink_mac_invalid` 3 = baris sink injeksi QA (log_id 990001/990101/990102, mac null/tanpa mac);
+  `log_missing_sink` 5 = log `purge` erasure res.partner id 39/46/55/62/71 yang dibuat lewat `odoo shell`
+  (`docker exec`, stdout tidak tertangkap promtail) — deteksi benar; `anchor_missing` 1 = jangkar palsu injeksi QA
+  (company 990). Setelah jendela 25 jam lewat, sink 0 anomali; 20 jangkar cocok.
+- ClickHouse: `v_pos_outlet_daily` 7 Okt refund uang 341.000 = barang 350.000 − poin dikembalikan 9.000.
+  `metabase-provision` exit 0, semua kartu termasuk 5 kartu baru `completed`.
+- `efn-etl-1` di-recreate dengan image baru (healthy/starting).
+
+### Belum / asumsi
+- Saldo negatif per member, nominal restore/clawback refund (pembulatan BFF), dan earn yang dicatat > lookback setelah
+  order belum dicek. Admin `base.group_system` memanggil `_efn_post` (SEC-61 butir 3) tidak tertutup job ini, hanya
+  terdeteksi bila tidak ada order Odoo yang cocok.
+- Promtail stream/alert untuk `EFN_LOYALTY_RECON_ETL` belum ada (devsecops). Jangkar tidak ber-HMAC (alarm palsu
+  mungkin, penyembunyian tidak). CI GitHub belum dijalankan.
