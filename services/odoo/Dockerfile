@@ -9,7 +9,7 @@
 #                 (HttpCase/tour, tag `efn_tour`). Hanya dibangun dengan `--target test` (CI job
 #                 odoo-tour); tidak pernah di-push/di-deploy.
 #   production -> stage TERAKHIR = target default `docker build` (compose, release). Chrome tidak ikut.
-FROM odoo:19.0@sha256:dd9013e669caaa23d26765dc55814655eaeecca7cfc2c265dbabae913bce22fd AS runtime
+FROM odoo:20.0@sha256:cdd83e8359b3e8c357895d476396c05021fed9975bf420f353bab25fcaed1533 AS runtime
 
 USER root
 
