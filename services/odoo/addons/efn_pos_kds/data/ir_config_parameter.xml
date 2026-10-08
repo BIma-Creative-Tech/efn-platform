@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PLACEHOLDER (docs/08 §7.3): retensi tiket & jendela recall menunggu keputusan klien (Q-19). -->
+<odoo noupdate="1">
+    <record id="param_retention_days" model="ir.config_parameter">
+        <field name="key">efn.kds.retention_days</field>
+        <field name="value">90</field>
+    </record>
+    <record id="param_recall_minutes" model="ir.config_parameter">
+        <field name="key">efn.kds.recall_minutes</field>
+        <field name="value">10</field>
+    </record>
+</odoo>

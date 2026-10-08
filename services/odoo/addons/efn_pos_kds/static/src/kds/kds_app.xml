@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="template" xml:space="preserve">
+    <t t-name="efn_pos_kds.KdsApp">
+        <div class="efn-kds d-flex flex-column vh-100" t-att-class="{'efn-kds-dark': state.dark}">
+            <header class="efn-kds-header d-flex align-items-center gap-3 px-3 py-2">
+                <h1 class="efn-kds-station fs-3 m-0" t-esc="info.name"/>
+                <span t-if="state.offline" class="badge text-bg-danger efn-kds-offline">Terputus — mencoba lagi</span>
+                <div class="ms-auto d-flex align-items-center gap-2">
+                    <select t-if="info.show_course and courses.length > 1" class="form-select form-select-lg efn-kds-course-filter"
+                            t-model="state.courseFilter">
+                        <option value="all">Semua course</option>
+                        <t t-foreach="courses" t-as="course" t-key="course">
+                            <option t-att-value="course">Course <t t-esc="course"/></option>
+                        </t>
+                    </select>
+                    <button class="btn btn-lg btn-secondary efn-kds-dark-toggle" t-on-click="toggleDark">
+                        <i class="fa fa-adjust"/>
+                    </button>
+                </div>
+            </header>
+            <main class="efn-kds-columns d-flex flex-grow-1 overflow-hidden gap-2 p-2">
+                <t t-foreach="columns" t-as="column" t-key="column.state">
+                    <section class="efn-kds-column d-flex flex-column flex-grow-1 overflow-auto" t-att-data-state="column.state">
+                        <h2 class="fs-4 px-2">
+                            <t t-esc="column.title"/>
+                            <span class="badge text-bg-secondary ms-1" t-esc="ticketsFor(column.state).length"/>
+                        </h2>
+                        <t t-foreach="ticketsFor(column.state)" t-as="ticket" t-key="ticket.id">
+                            <article class="efn-kds-ticket card m-2" t-att-class="ageClass(ticket)" t-att-data-ticket-id="ticket.id">
+                                <div class="card-header d-flex align-items-center gap-2">
+                                    <strong class="efn-kds-ticket-title fs-4" t-esc="ticketTitle(ticket)"/>
+                                    <span t-if="ticket.tracking_number and ticket.table_label" class="text-muted">#<t t-esc="ticket.tracking_number"/></span>
+                                    <span t-if="ticket.preset_name" class="badge text-bg-info" t-esc="ticket.preset_name"/>
+                                    <span t-if="info.show_course and ticket.course_index" class="badge text-bg-primary">Course <t t-esc="ticket.course_index"/></span>
+                                    <span t-if="ticket.printed_offline" class="badge text-bg-warning efn-kds-printed">Sudah dicetak</span>
+                                    <span t-if="ticket.is_rush" class="badge text-bg-danger">Rush</span>
+                                    <span class="ms-auto efn-kds-age fw-bold fs-5" t-esc="ageLabel(ticket)"/>
+                                </div>
+                                <ul class="list-group list-group-flush">
+                                    <t t-foreach="ticket.lines" t-as="line" t-key="line.id">
+                                        <li class="list-group-item efn-kds-line"
+                                            t-att-class="{'efn-kds-line-done': line.state === 'done', 'efn-kds-line-cancel': line.qty_delta &lt; 0}"
+                                            t-on-click="() => this.lineDone(line)">
+                                            <span class="fw-bold fs-5 me-2"><t t-if="line.qty_delta &lt; 0">BATAL </t><t t-esc="Math.abs(line.qty_delta)"/> x</span>
+                                            <span class="fs-5 efn-kds-product" t-esc="line.product_name"/>
+                                            <div t-if="line.combo_parent_name" class="small text-muted">(<t t-esc="line.combo_parent_name"/>)</div>
+                                            <div t-if="line.attribute_text" class="small" t-esc="line.attribute_text"/>
+                                            <div t-if="line.note" class="small fst-italic" t-esc="line.note"/>
+                                        </li>
+                                    </t>
+                                </ul>
+                                <div t-if="ticket.internal_note" class="card-body py-1 small fst-italic" t-esc="ticket.internal_note"/>
+                                <div class="card-footer d-flex gap-2">
+                                    <button t-if="ticket.state === 'ready'" class="btn btn-lg btn-outline-secondary efn-kds-recall"
+                                            t-on-click="() => this.recall(ticket)">Recall</button>
+                                    <button class="btn btn-lg btn-primary flex-grow-1 efn-kds-bump" t-att-disabled="state.busy"
+                                            t-on-click="() => this.bump(ticket)" t-esc="nextLabel(ticket)"/>
+                                </div>
+                            </article>
+                        </t>
+                    </section>
+                </t>
+            </main>
+            <footer t-if="recallable.length" class="efn-kds-footer d-flex gap-2 px-3 py-2 overflow-auto">
+                <span class="align-self-center">Baru disajikan:</span>
+                <t t-foreach="recallable" t-as="ticket" t-key="ticket.id">
+                    <button class="btn btn-outline-light efn-kds-recall-served" t-on-click="() => this.recall(ticket)">
+                        <t t-esc="ticketTitle(ticket)"/> ↺
+                    </button>
+                </t>
+            </footer>
+            <MainComponentsContainer/>
+        </div>
+    </t>
+</templates>

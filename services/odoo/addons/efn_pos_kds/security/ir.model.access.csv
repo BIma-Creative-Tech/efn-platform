@@ -1,0 +1,10 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_kds_station_manager,efn.kds.station pos manager,model_efn_kds_station,point_of_sale.group_pos_manager,1,1,1,1
+access_efn_kds_station_pos_user,efn.kds.station pos user,model_efn_kds_station,point_of_sale.group_pos_user,1,0,0,0
+access_efn_kds_station_device,efn.kds.station device,model_efn_kds_station,group_kds_device,1,0,0,0
+access_efn_kds_ticket_manager,efn.kds.ticket pos manager,model_efn_kds_ticket,point_of_sale.group_pos_manager,1,0,0,0
+access_efn_kds_ticket_device,efn.kds.ticket device,model_efn_kds_ticket,group_kds_device,1,0,0,0
+access_efn_kds_ticket_system,efn.kds.ticket system,model_efn_kds_ticket,base.group_system,1,1,1,1
+access_efn_kds_ticket_line_manager,efn.kds.ticket.line pos manager,model_efn_kds_ticket_line,point_of_sale.group_pos_manager,1,0,0,0
+access_efn_kds_ticket_line_device,efn.kds.ticket.line device,model_efn_kds_ticket_line,group_kds_device,1,0,0,0
+access_efn_kds_ticket_line_system,efn.kds.ticket.line system,model_efn_kds_ticket_line,base.group_system,1,1,1,1

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Badge "Siap" di meja (EFN_KDS_READY). Hanya id meja dari bus, tanpa data baru. -->
+<templates id="template" xml:space="preserve">
+    <t t-name="efn_pos_kds.FloorScreen" t-inherit="pos_restaurant.FloorScreen" t-inherit-mode="extension">
+        <xpath expr="//div[hasclass('info')]" position="after">
+            <span t-if="pos.efnKdsTableReady(table)"
+                  class="efn-kds-ready badge text-bg-success position-absolute bottom-0 start-0 m-1 z-2">Siap</span>
+        </xpath>
+    </t>
+</templates>

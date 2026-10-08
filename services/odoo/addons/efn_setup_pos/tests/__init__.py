@@ -1,2 +1,1 @@
-from . import test_barcode_hardening
-from . import test_fnb_defaults
+from . import test_barcode_hardening, test_fnb_defaults

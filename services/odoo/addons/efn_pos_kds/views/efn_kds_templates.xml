@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Halaman layar KDS (pola point_of_sale.customer_display_index CE 19), bundle aset sendiri. -->
+<odoo>
+    <template id="kds_index" name="EFN KDS Screen">
+        &lt;!DOCTYPE html&gt;
+        <html>
+            <head>
+                <meta http-equiv="content-type" content="text/html, charset=utf-8"/>
+                <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no"/>
+                <meta name="mobile-web-app-capable" content="yes"/>
+                <meta name="robots" content="noindex"/>
+                <title>KDS</title>
+                <script type="text/javascript">
+                    var odoo = <t t-out="json.dumps({
+                        'csrf_token': request.csrf_token(None),
+                        '__session_info__': session_info,
+                        'debug': debug,
+                    })"/>;
+                </script>
+                <t t-call-assets="efn_pos_kds.assets_kds"/>
+                <t t-if="'tests' in debug or test_mode_enabled" t-call-assets="efn_pos_kds.assets_kds_tests"/>
+            </head>
+            <body class="efn-kds-body"/>
+        </html>
+    </template>
+</odoo>

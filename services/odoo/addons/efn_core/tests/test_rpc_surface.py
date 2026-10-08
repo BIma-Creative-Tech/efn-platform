@@ -51,6 +51,16 @@ RPC_ALLOWLIST = {
     # efn_pos_loyalty_ledger (SEC-60): tombol supervisor = grup POS manager + record rule + company.
     ("efn.pos.loyalty.outbox", "action_efn_hold_approve"): "_efn_check_hold_decider",
     ("efn.pos.loyalty.outbox", "action_efn_hold_cancel"): "_efn_check_hold_decider",
+    # efn_pos_kds (Gelombang 14, docs/08 §7.3): `_efn_kds_check_device` = grup perangkat KDS
+    # (user perangkat stasiun itu) ATAU POS manager + check_access(read) (record rule company +
+    # stasiun milik perangkat) + company user; tulis via sudo setelah cek.
+    ("efn.kds.station", "efn_kds_load"): "_efn_kds_check_device",
+    ("efn.kds.station", "efn_kds_heartbeat"): "_efn_kds_check_device",
+    ("efn.kds.station", "action_open_screen"): "_efn_kds_check_device (URL saja, tanpa token)",
+    ("efn.kds.station", "action_rotate_token"): "grup POS manager + check_access(write)",
+    ("efn.kds.ticket", "efn_kds_bump"): "_efn_kds_check_ticket_access -> _efn_kds_check_device + record rule",
+    ("efn.kds.ticket.line", "efn_kds_line_done"): "_efn_kds_check_ticket_access + check_access(read) baris",
+    ("pos.config", "efn_kds_station_status"): "grup POS user + check_access(read) config + company user",
     # Override metode publik CE point_of_sale (sudah RPC di standar; efn hanya menambah release).
     ("pos.order", "action_pos_order_cancel"): "override CE",
     ("pos.order", "remove_from_ui"): "override CE",

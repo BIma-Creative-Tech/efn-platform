@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- efn_pos_kds — grup perangkat dapur + record rule (docs/08 §7.3 "Akses perangkat").
+     Perangkat: satu user internal per layar, grup ini SAJA (constraint res.users menolak
+     kombinasi dengan user POS/admin), 2FA wajib (auth_totp employee_required, README),
+     perangkat = peer WireGuard (ADR-023). -->
+<odoo>
+    <record id="res_groups_privilege_efn_kds" model="res.groups.privilege">
+        <field name="name">EFN KDS</field>
+        <field name="category_id" ref="base.module_category_sales"/>
+    </record>
+
+    <record id="group_kds_device" model="res.groups">
+        <field name="name">Perangkat dapur (layar KDS)</field>
+        <field name="comment">Akun layar KDS: hanya membaca stasiun/tiket miliknya dan memanggil RPC bump. Tanpa akses POS, kontak pelanggan, atau akuntansi.</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_kds"/>
+    </record>
+
+    <data noupdate="1">
+        <!-- Multi-company (global). -->
+        <record id="efn_kds_station_rule_company" model="ir.rule">
+            <field name="name">EFN KDS station: multi-company</field>
+            <field name="model_id" ref="model_efn_kds_station"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_kds_ticket_rule_company" model="ir.rule">
+            <field name="name">EFN KDS ticket: multi-company</field>
+            <field name="model_id" ref="model_efn_kds_ticket"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_kds_ticket_line_rule_company" model="ir.rule">
+            <field name="name">EFN KDS ticket line: multi-company</field>
+            <field name="model_id" ref="model_efn_kds_ticket_line"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+
+        <!-- Perangkat dapur: hanya stasiun/tiket miliknya. -->
+        <record id="efn_kds_station_rule_device" model="ir.rule">
+            <field name="name">EFN KDS station: perangkat hanya stasiunnya</field>
+            <field name="model_id" ref="model_efn_kds_station"/>
+            <field name="groups" eval="[Command.link(ref('group_kds_device'))]"/>
+            <field name="domain_force">[('device_user_ids', 'in', user.id)]</field>
+        </record>
+        <record id="efn_kds_ticket_rule_device" model="ir.rule">
+            <field name="name">EFN KDS ticket: perangkat hanya stasiunnya</field>
+            <field name="model_id" ref="model_efn_kds_ticket"/>
+            <field name="groups" eval="[Command.link(ref('group_kds_device'))]"/>
+            <field name="domain_force">[('station_id.device_user_ids', 'in', user.id)]</field>
+        </record>
+        <record id="efn_kds_ticket_line_rule_device" model="ir.rule">
+            <field name="name">EFN KDS ticket line: perangkat hanya stasiunnya</field>
+            <field name="model_id" ref="model_efn_kds_ticket_line"/>
+            <field name="groups" eval="[Command.link(ref('group_kds_device'))]"/>
+            <field name="domain_force">[('ticket_id.station_id.device_user_ids', 'in', user.id)]</field>
+        </record>
+
+        <!-- Perangkat dapur tidak dapat membaca kontak (pelanggan) lewat RPC: hanya partner
+             dirinya dan partner company-nya (UU PDP, minimisasi akses). -->
+        <record id="res_partner_rule_kds_device" model="ir.rule">
+            <field name="name">EFN KDS: perangkat dapur tanpa akses kontak</field>
+            <field name="model_id" ref="base.model_res_partner"/>
+            <field name="groups" eval="[Command.link(ref('group_kds_device'))]"/>
+            <field name="domain_force">['|', ('id', '=', user.partner_id.id), ('id', 'in', user.company_ids.partner_id.ids)]</field>
+        </record>
+    </data>
+</odoo>

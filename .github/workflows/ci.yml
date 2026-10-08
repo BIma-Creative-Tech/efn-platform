@@ -212,7 +212,7 @@ jobs:
       # karena pick() hanya menerima modul di services/odoo/addons.
       EFN_TEST_MODULES: >-
         efn_core efn_audit efn_pos_otp_gate efn_kitting
-        efn_pos_payment_gateway efn_pos_loyalty_ledger efn_privacy
+        efn_pos_payment_gateway efn_pos_loyalty_ledger efn_privacy efn_pos_kds
         efn_setup_company efn_setup_pos efn_setup_mrp efn_setup_audit
       # Di-install SETELAH test, tanpa test: efn_setup_security menaikkan auth_password_policy.minlength ke 12,
       # sedangkan fixture test Odoo (mis. user `accountman` di AccountTestInvoicingCommon) memakai password < 12
@@ -310,10 +310,10 @@ jobs:
           --health-cmd "pg_isready -U odoo"
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
-      EFN_TOUR_MODULES: efn_pos_otp_gate,efn_pos_payment_gateway,efn_pos_loyalty_ledger
+      EFN_TOUR_MODULES: efn_pos_otp_gate,efn_pos_payment_gateway,efn_pos_loyalty_ledger,efn_pos_kds
       # Jumlah test tour yang WAJIB berjalan (HttpCase di-skip diam-diam bila Chrome/websocket tidak ada).
-      # 5 (OTP gate 3 + gateway 2) + 4 Poin EFN (Gelombang 13b).
-      EFN_TOUR_MIN_TESTS: "15"
+      # 5 (OTP gate 3 + gateway 2) + 4 Poin EFN (Gelombang 13b) + 4 KDS efn_pos_kds (Gelombang 14).
+      EFN_TOUR_MIN_TESTS: "19"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Build image target test (runtime + Chrome headless)

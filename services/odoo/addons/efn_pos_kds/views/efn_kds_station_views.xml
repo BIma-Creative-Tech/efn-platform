@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_kds_station_view_list" model="ir.ui.view">
+        <field name="name">efn.kds.station.list</field>
+        <field name="model">efn.kds.station</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="mode"/>
+                <field name="config_ids" widget="many2many_tags"/>
+                <field name="category_ids" widget="many2many_tags"/>
+                <field name="fallback_printer_id"/>
+                <field name="is_online"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_kds_station_view_form" model="ir.ui.view">
+        <field name="name">efn.kds.station.form</field>
+        <field name="model">efn.kds.station</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_open_screen" type="object" string="Buka layar KDS" class="btn-primary"/>
+                    <button name="action_rotate_token" type="object" string="Rotasi token kanal"
+                            confirm="Layar KDS stasiun ini akan memuat ulang. Lanjutkan?"/>
+                </header>
+                <sheet>
+                    <widget name="web_ribbon" title="Arsip" bg_color="text-bg-danger" invisible="active"/>
+                    <group>
+                        <group>
+                            <field name="name"/>
+                            <field name="mode"/>
+                            <field name="config_ids" widget="many2many_tags"/>
+                            <field name="category_ids" widget="many2many_tags" placeholder="Kosong = semua kategori (expo/pass)"/>
+                            <field name="fallback_printer_id"/>
+                        </group>
+                        <group>
+                            <field name="warn_minutes"/>
+                            <field name="late_minutes"/>
+                            <field name="show_course"/>
+                            <field name="device_user_ids" widget="many2many_tags"/>
+                            <field name="last_seen"/>
+                            <field name="is_online"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="active" invisible="1"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="efn_kds_station_action" model="ir.actions.act_window">
+        <field name="name">Stasiun KDS</field>
+        <field name="res_model">efn.kds.station</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <menuitem id="efn_kds_station_menu"
+              name="Stasiun KDS"
+              parent="point_of_sale.menu_point_config_product"
+              action="efn_kds_station_action"
+              groups="point_of_sale.group_pos_manager"
+              sequence="40"/>
+</odoo>

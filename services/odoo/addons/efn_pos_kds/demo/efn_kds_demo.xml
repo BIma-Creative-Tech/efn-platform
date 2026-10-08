@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO (hanya DB demo). Stasiun KDS bergantung Q-19 (daftar stasiun & kategori, target menit).
+     Modul ini tidak bergantung efn_setup_pos, jadi kategori/printer demo F&B tidak dirujuk di
+     sini: hubungkan stasiun ke kategori "Dapur Panas"/"Bar Minuman", printer cadangan, dan
+     pos.config outlet lewat Point of Sale -> Configuration -> Stasiun KDS (README). -->
+<odoo>
+    <record id="demo_station_expo" model="efn.kds.station">
+        <field name="name">Expo / Pass (DEMO)</field>
+        <field name="company_id" ref="base.main_company"/>
+        <field name="sequence">90</field>
+        <field name="mode">kds_printer</field>
+    </record>
+</odoo>
