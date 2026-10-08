@@ -7,7 +7,7 @@
 # Tag di-pin + commit SHA diverifikasi (tag git bisa dipindah; commit tidak).
 # Versi Go mengikuti go.mod kedua repo (go 1.27.1); digest base = yang dipakai Dockerfile.goreleaser SILO.
 # SEC-47: base image dipin tag@digest (build reprodusibel); Dependabot `docker` memperbarui digest per tag.
-FROM golang:1.27.1-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS build
+FROM golang:1.27.1-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS build
 ARG SILO_TAG=RELEASE.2026-09-16T00-00-00Z
 ARG SILO_COMMIT=2a4d51406b7ed87af5fe6fe0f801f3290f96eb3c
 ARG MC_TAG=RELEASE.2026-09-16T00-00-00Z
