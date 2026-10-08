@@ -22,7 +22,7 @@
     "@nestjs/platform-fastify": "^10.4.15",
     "@nestjs/terminus": "^10.2.3",
     "amqplib": "^0.10.5",
-    "fastify": "^4.28.1",
+    "fastify": "^5.12.5",
     "ioredis": "^5.4.2",
     "jsonwebtoken": "^9.0.2",
     "minio": "^8.0.2",
