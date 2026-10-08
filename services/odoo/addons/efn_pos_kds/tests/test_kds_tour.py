@@ -6,9 +6,11 @@ Tour butuh Chrome headless (image target ``test``), sama seperti tour efn_pos_ot
 import json
 import uuid
 from datetime import timedelta
+from unittest.mock import patch
 
 from odoo import Command, fields
 from odoo.tests import HttpCase, new_test_user, tagged
+from odoo.tools import mute_logger
 
 from odoo.addons.pos_restaurant.tests.test_frontend import TestFrontendCommon
 
@@ -131,6 +133,20 @@ class TestEfnKdsTour(TestFrontendCommon):
         _kitchen, bar = self._assert_routed()
         self.assertFalse(bar.printed_offline)
         self.assertEqual(bar.state, "new")
+
+    def test_kds_ticket_failure_forces_fallback_print(self):
+        """SEC-76: layar hidup (printer ditahan) tetapi tiket gagal di server -> cetak cadangan."""
+        self.station_bar.write({"mode": "kds", "last_seen": fields.Datetime.now() + timedelta(minutes=30)})
+        self.pos_config.with_user(self.pos_user).open_ui()
+        ticket_cls = type(self.env["efn.kds.ticket"])
+        with (
+            patch.object(ticket_cls, "_efn_kds_create_for_order", side_effect=ValueError("boom")),
+            mute_logger("odoo.addons.efn_pos_kds.alert"),
+        ):
+            self.start_pos_tour("EfnKdsPosTicketFailedTour")
+        self.assertFalse(self._tickets(self.station_bar))
+        order = self.env["pos.order"].search([("config_id", "=", self.pos_config.id)], order="id desc", limit=1)
+        self.assertTrue(order.efn_kds_ticket_failed)
 
     def test_kds_screen_bump_to_served(self):
         self.pos_config.with_user(self.pos_user).open_ui()

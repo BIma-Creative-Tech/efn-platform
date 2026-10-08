@@ -27,13 +27,14 @@ Fit-gap F-52..F-54, spesifikasi E-26 (`docs/08_ODOO_FIT_GAP.md` §7.3).
   negatif; order dibatalkan → tiket `cancelled`. Induk combo tidak ditiket, anak combo dirutekan
   per kategori (menu lintas stasiun = `type='combo'`, bukan Kit BoM). Course belum di-fire tidak
   dikirim. Idempoten: sinkron ulang tanpa perubahan tidak membuat tiket; kunci unik
-  (order, stasiun, `sequence_no`). Kegagalan KDS dicatat dan **tidak** menggagalkan sinkron order.
+  (order, stasiun, `sequence_no`). Kegagalan KDS **tidak** menggagalkan sinkron order, tetapi
+  memicu alert + cetak cadangan (SEC-76, lihat Gelombang 15).
 - **Status:** `new → in_progress → ready → served` (boleh melompat maju), recall
   `ready → in_progress` dan `served → ready` (≤ `efn.kds.recall_minutes`, default 10).
   Cap waktu per status; `wait_seconds` = terkirim → siap (KPI F-54 lewat ETL, bukan laporan Odoo).
 - **Realtime:** `pos.bus.mixin` → kanal `"<uuid4>-EFN_KDS"`; payload hanya `type`, `ticket_ids`,
   `ts` — isi tiket diambil lewat RPC `efn_kds_load`. Badge "Siap" di denah meja POS lewat
-  `EFN_KDS_READY` pada kanal token `pos.config` standar (id order/meja/tiket + status saja).
+  `EFN_KDS_READY` pada kanal partner kasir (SEC-77; id order/meja/tiket/config + status saja).
   Heartbeat 30 dtk juga menjadi polling cadangan bila websocket terputus.
 - **Cadangan printer (F-53):** routing & format printer dapur standar tidak diubah. POS patch
   `printChanges`: printer cadangan stasiun mode `kds` dilewati hanya bila POS online **dan** layar
@@ -52,9 +53,9 @@ Fit-gap F-52..F-54, spesifikasi E-26 (`docs/08_ODOO_FIT_GAP.md` §7.3).
 - **Kanal bus tidak bisa ditebak** (temuan G14 #31): token uuid4 per stasiun, field `access_token`
   hanya terbaca manager POS, keluar hanya lewat halaman layar setelah cek akses (header
   `Cache-Control: no-store`), tidak dimuat ke data POS. Pola Cybrosys `pos_order_created_{config_id}`
-  sengaja tidak ditiru. Rotasi: tombol *Rotasi token kanal* (manager).
+  sengaja tidak ditiru. Rotasi: tombol *Rotasi token kanal* (manager) + otomatis (SEC-77).
 - **User perangkat:** satu user internal per layar, grup **Perangkat dapur (layar KDS)** saja
-  (constraint menolak kombinasi dengan user POS / admin). Record rule: hanya stasiun & tiket
+  (allowlist SEC-74: grup lain apa pun ditolak, dari form User maupun Grup). Record rule: hanya stasiun & tiket
   miliknya; **tanpa akses kontak** (rule `res.partner` = dirinya + partner company); field
   `order_id`/`config_id`/`session_id` tiket ber-`groups` POS user. Menu backend tidak terlihat.
   **Wajib** 2FA (`auth_totp`, kebijakan *employee_required* di Settings → Permissions) + perangkat
@@ -67,6 +68,39 @@ Fit-gap F-52..F-54, spesifikasi E-26 (`docs/08_ODOO_FIT_GAP.md` §7.3).
   — semuanya cek grup + record rule + company, terdaftar di `efn_core` `RPC_ALLOWLIST`.
 - **Retensi:** tiket > `efn.kds.retention_days` (default 90, PLACEHOLDER) dihapus autovacuum.
 - Multi-company: `company_id` wajib + record rule `company_id in company_ids` di tiga model.
+
+
+## Gelombang 15 (review r8: SEC-74, SEC-76, SEC-77) — versi 19.0.1.1.0
+
+- **SEC-74 allowlist grup:** grup efektif user perangkat harus ⊆ implikasi `base.group_user` +
+  `group_kds_device` (grup lain apa pun ditolak, termasuk yang di-imply). Ditegakkan di
+  `res.users` (constraint `group_ids`) **dan** `res.groups` (create/write `user_ids`/`implied_ids`/
+  `implied_by_ids` → cek ulang semua user perangkat). Membuat user perangkat dari UI: hapus grup
+  bawaan "Default Access Rights" selain Internal User.
+- **SEC-74 sandbox model:** `ir.rule._compute_domain` (models/ir_rule.py) — untuk user perangkat
+  (non-sudo) hanya model allowlist (`efn.kds.*`, `res.users` = diri, `res.partner` = diri + partner
+  company, `res.company/lang/currency/country*`, `res.groups*`, `res.users.settings`,
+  `decimal.precision`, awalan `ir.`/`bus.`/`base.`/`web_tour.`) yang terbaca; model lain = domain
+  FALSE (produk & `standard_price`, `hr.employee(.public)`, `resource.resource`, Discuss, loyalty,
+  dll.), termasuk model dari modul yang dipasang belakangan — tanpa migrasi/noupdate. Diuji runtime
+  terhadap SEMUA model terpasang (`test_kds_security.py::test_device_runtime_surface_no_customer_name`).
+  Rule perangkat XML kini `noupdate=0` (DB lama: `migrations/19.0.1.1.0/pre-migrate.py`).
+- **SEC-76 kegagalan tiket:** tidak lagi ditelan diam-diam. Log satu baris
+  `EFN_KDS_TICKET_FAILED {json}` di logger `odoo.addons.efn_pos_kds.alert` (id order/config/sesi/
+  company, stasiun+mode, `kds_only`, nama tipe exception — tanpa PII/pesan exception; traceback hanya
+  DEBUG) + `pos.order.efn_kds_ticket_failed=True` (milik server; nilai klien dibuang). POS membaca
+  tanda itu di respons sinkron → mencetak perubahan yang ditahan untuk stasiun mode `kds` ke printer
+  cadangan + notifikasi kasir *sticky*. `SerializationFailure`/lock/deadlock naik (Odoo me-retry
+  request); bentrok unik nomor tiket → `ConcurrencyError` (retry). **Rule Loki** (devsecops):
+  `count_over_time({service="odoo"} |= "EFN_KDS_TICKET_FAILED" [5m]) > 0` → on-call outlet.
+- **SEC-77 token & kanal:** token kanal stasiun dirotasi otomatis saat `device_user_ids`/`active`/
+  `company_id` stasiun berubah, saat user perangkatnya dinonaktifkan/dihapus/diubah grup, login,
+  password, atau company, saat dikeluarkan dari grup perangkat lewat form Grup, dan **berkala**
+  (cron harian, token > `efn.kds.token_max_age_days` = 7 hari PLACEHOLDER, min 1). `EFN_KDS_READY`
+  dan `EFN_KDS_STATUS` dikirim di **kanal partner kasir** (penerima: pembuka sesi + user yang memuat
+  POS sesi terbuka, dicatat di override `pos.session.load_data`), bukan kanal token `pos.config`
+  yang ikut ke QR self-order/kiosk. `device_user_ids`, `last_seen`, `token_rotated_at` ber-`groups`
+  manager POS (kasir tidak dapat membaca daftar akun tablet).
 
 ## Cara uji manual
 
@@ -89,11 +123,19 @@ Fit-gap F-52..F-54, spesifikasi E-26 (`docs/08_ODOO_FIT_GAP.md` §7.3).
   bus tanpa data pelanggan, token acak & rotasi, heartbeat/status, constraint grup perangkat.
 - `tests/test_kds_tour.py`: controller (tag `efn`) dan tour (tag `efn_tour`): order POS → tiket di
   stasiun benar; `kds_printer` → printer dipanggil; `kds` layar mati → cetak cadangan & tiket
-  "sudah dicetak"; `kds` layar hidup → printer dilewati; layar KDS bump sampai `served`.
+  "sudah dicetak"; `kds` layar hidup → printer dilewati; `kds` layar hidup + tiket gagal di server
+  → cetak cadangan + notifikasi (SEC-76); layar KDS bump sampai `served`.
+- `tests/test_kds_security.py` (tag `efn`, G15): allowlist grup dua sisi, sandbox model perangkat
+  (runtime semua model), alert/tanda kegagalan tiket + retry konkurensi, rotasi token otomatis &
+  berkala, kanal kasir, field akun tablet tertutup bagi kasir.
 
 ## Batasan / belum
 
-- [B] Badge "Siap" di POS bergantung websocket bus; tidak diuji di tour (payload diuji unit).
+- [B] Badge "Siap" di POS bergantung websocket bus (kanal partner kasir); tidak diuji di tour
+  (payload & penerima diuji unit).
+- [B] Akun perangkat sebagai user *share* (opsi lebih kuat SEC-74) butuh ADR kecil (2FA portal).
+- [B] Kasir yang membuka POS tanpa memanggil `load_data` (mis. cache) dan bukan pembuka sesi tidak
+  menerima badge "Siap" sampai memuat ulang POS.
 - [B] Self-order kiosk: diasumsikan menulis `last_order_preparation_change` (frontend
   `self_order_service` memanggil `updateLastOrderChange`) — belum diuji end-to-end.
 - [B] Printer Epson ePOS HTTPS/DNS sertifikat (Q-56) dan perangkat KDS nyata (Q-24).

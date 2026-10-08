@@ -35,6 +35,7 @@ from .audit_policy import (
     PROTECTED_LOG_MODELS,
     RETENTION_PARAM,
     effective_retention,
+    mask_free_text,
     parse_retention,
 )
 from .base import emit_sink, origin_uid, sink_event
@@ -163,6 +164,8 @@ class EfnAuditLog(models.Model):
     @api.model
     def _efn_audit_write_purge_log(self, model_name, note):
         official = self.env.cr.cache.get(PURGE_PATH_KEY)
+        # SEC-78: catatan = teks bebas -> HP/email/NIK di-mask di sumber (DB + sink, sebelum MAC).
+        note = mask_free_text(note)
         if not official:
             note = f"manual: {note}"
         vals = {

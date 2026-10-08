@@ -163,7 +163,7 @@ Batasi per outlet dengan `pos_config_ids`; **jangan** `program_type = 'loyalty'`
 | 17 | `payment_method_ids` | Tunai, EDC manual, QRIS (EFN Gateway) | Q-23, Q-29 |
 | 18 | `module_pos_hr` + peran | kasir **minimal/basic**, supervisor **manager** (lihat SOP retail) | Q-27 |
 | 19 | `order_edit_tracking` | True (default G13) — void baris setelah kirim ke dapur tercatat | Q-27 |
-| 20 | Self-order | `self_ordering_mode = 'nothing'` sampai Q-23/ADR QR order diputuskan; kiosk hanya di jaringan POS (WireGuard), `pay_after = 'meal'` | Q-23, ADR-023 |
+| 20 | Self-order | `self_ordering_mode = 'nothing'` (**dikunci teknis** SEC-75: ir.default + constraint, `mobile`/`consultation` ditolak) sampai Q-23/ADR QR order diputuskan; kiosk hanya di jaringan POS (WireGuard), `pay_after = 'meal'` | Q-23, ADR-023 |
 | 21 | Promo OTP | program `efn_requires_otp` tidak ditautkan ke config kiosk | — |
 | 22 | Poin EFN | `efn_loyalty_redeem_enabled` False untuk kiosk (constraint) | Q-13 |
 | 23 | Perangkat | kasir + KDS + kiosk = peer WireGuard (B-a ≤ 3 perangkat, B-b > 3) | Q-W1 |
@@ -171,6 +171,21 @@ Batasi per outlet dengan `pos_config_ids`; **jangan** `program_type = 'loyalty'`
 
 ### QR order meja & kiosk (F-49) — **jangan aktifkan `mobile` tanpa keputusan**
 `pos_self_order` mode `consultation`/`mobile` melayani pelanggan lewat route **publik Odoo** (`/pos-self/...`, `/pos-self-order/process-order/...`, `auth='public'`, token `pos.config.access_token` 16 heksa + `restaurant.table.identifier` 8 heksa, tanpa rate limit). Ponsel pelanggan harus menjangkau Odoo → **bertentangan dengan ADR-023/CLAUDE.md** (Odoo tidak diakses dari internet). Mode **kiosk** di jaringan POS (peer WireGuard) aman dipakai. QR dari ponsel pelanggan = keputusan klien + ADR baru (opsi di `docs/08 §7.4`).
+
+**Kunci teknis (Gelombang 15, SEC-75, versi 19.0.1.5.0)** — `models/pos_config.py`,
+`data/pos_self_order_lock.xml` (modul ini kini memuat sedikit Python, khusus penegakan ini):
+- `ir.default pos.config.self_ordering_mode = 'nothing'` (default field 19.0 sudah `nothing` dan
+  `create` tidak mengisi `mobile` — terverifikasi di image 2026-10-09; anggapan PLAUSIBLE r8 tidak
+  berlaku di 19.0, kunci tetap dipasang sebagai pertahanan berlapis).
+- Constraint menolak `mobile`/`consultation` kecuali `ir.config_parameter`
+  `efn.pos.self_order_mobile_allowed` = benar. Parameter hanya bisa diubah `base.group_system` (ACL
+  CE) dan **selalu diaudit** `efn_audit` (parameter kontrol, `CONTROL_SPECS`; log tidak ikut GC).
+  Membuka sakelar = ADR Q-23 dulu.
+- Setiap install/upgrade (data `noupdate=0`) dan saat sakelar dimatikan/dihapus: config ber-mode
+  `mobile`/`consultation` dinormalkan ke `nothing` (log INFO berisi id config).
+- Cek pra-go-live tetap: `SELECT id, name, self_ordering_mode FROM pos_config WHERE
+  self_ordering_mode NOT IN ('nothing','kiosk')` = 0 baris. Test: `tests/test_self_order_lock.py`.
+- Belum: rate-limit khusus `/pos-self` di Traefik (devsecops, SEC-75 butir 5).
 
 ## Keputusan klien yang dibutuhkan
 **F&B (G14):** P-11 outlet pilot, Q-18 (layanan & preset), Q-19 (stasiun & routing), Q-20 (denah, split/merge/open bill), Q-21 (modifier & dampak resep), Q-22 + konsultan pajak (PB1 kota, SC, include/exclude, takeaway), Q-23 (QR order: siapa menutup bill; ponsel pelanggan atau kiosk), Q-24 (printer & cadangan KDS), Q-56/Q-W1 (perangkat). Lihat `docs/08 §7.6`.

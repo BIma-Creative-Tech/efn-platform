@@ -64,6 +64,9 @@ RPC_ALLOWLIST = {
     # Override metode publik CE point_of_sale (sudah RPC di standar; efn hanya menambah release).
     ("pos.order", "action_pos_order_cancel"): "override CE",
     ("pos.order", "remove_from_ui"): "override CE",
+    # efn_pos_kds (Gelombang 15, SEC-77): override CE pos.session.load_data -> super() lalu catat
+    # env.user (grup POS user) sebagai penerima notifikasi kasir KDS; tanpa data tambahan.
+    ("pos.session", "load_data"): "override CE (+ catat penerima notifikasi KDS)",
 }
 
 MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}

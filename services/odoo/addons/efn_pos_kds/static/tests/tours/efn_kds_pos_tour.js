@@ -74,3 +74,19 @@ registry.category("web_tour.tours").add("EfnKdsPosFallbackTour", {
 registry.category("web_tour.tours").add("EfnKdsPosSuppressTour", {
     steps: () => [sendOrderToKitchen(), waitSynced(), printedCount(0), Chrome.endTour()].flat(),
 });
+
+// (3c) SEC-76: stasiun bar mode kds, layar hidup, tetapi server GAGAL membuat tiket -> POS
+// mencetak perubahan yang tadinya ditahan ke printer cadangan + notifikasi kasir.
+registry.category("web_tour.tours").add("EfnKdsPosTicketFailedTour", {
+    steps: () =>
+        [
+            sendOrderToKitchen(),
+            waitSynced(),
+            {
+                content: "notifikasi kasir: layar dapur gagal",
+                trigger: ".o_notification:contains('Layar dapur gagal menerima pesanan')",
+            },
+            printedCount("some"),
+            Chrome.endTour(),
+        ].flat(),
+});

@@ -312,8 +312,9 @@ jobs:
     env:
       EFN_TOUR_MODULES: efn_pos_otp_gate,efn_pos_payment_gateway,efn_pos_loyalty_ledger,efn_pos_kds
       # Jumlah test tour yang WAJIB berjalan (HttpCase di-skip diam-diam bila Chrome/websocket tidak ada).
-      # 5 (OTP gate 3 + gateway 2) + 4 Poin EFN (Gelombang 13b) + 4 KDS efn_pos_kds (Gelombang 14).
-      EFN_TOUR_MIN_TESTS: "19"
+      # 5 (OTP gate 3 + gateway 2) + 4 Poin EFN (Gelombang 13b) + 4 KDS efn_pos_kds (Gelombang 14)
+      # + 1 KDS cetak cadangan saat tiket gagal (Gelombang 15, SEC-76). Total terhitung runner 20.
+      EFN_TOUR_MIN_TESTS: "20"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Build image target test (runtime + Chrome headless)
@@ -352,6 +353,30 @@ jobs:
           name: odoo-tour-log
           path: odoo-tour.log
           retention-days: 7
+
+  # G15 (SEC-72/73/78): uji regresi redaksi PII/rahasia Promtail. Pipeline produksi (promtail.yml + promtail-journal.yml,
+  # disalin yq ke kerangka uji) dijalankan `promtail -dry-run` atas fixture fiktif lalu dibandingkan dengan expected.txt;
+  # nilai SENTINEL* yang lolos atau perbedaan docker vs journal = gagal. Tanpa secret, tanpa jaringan selain pull image.
+  promtail-redaction:
+    name: Promtail redaction regression
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - name: promtail -check-syntax (promtail.yml, promtail-journal.yml)
+        run: |
+          for f in promtail.yml promtail-journal.yml; do
+            docker run --rm -v "$PWD/infra/observability:/cfg:ro" \
+              grafana/promtail:3.2.1@sha256:bf617e9d67e80247a59f717f9c1ad388d7d32dc0a1d29abd5799516d15e0a9b5 \
+              -config.file="/cfg/$f" -check-syntax
+          done
+      - name: Redaksi HP / token / query string (fixture -> expected.txt)
+        run: bash scripts/test-promtail-redaction.sh
 
   infra:
     name: Infra (compose, observability, shellcheck, hadolint, yamllint)
@@ -510,7 +535,7 @@ jobs:
   ci-gate:
     name: CI gate
     if: always()
-    needs: [node, python, pytest, odoo-addons, odoo-test, odoo-tour, infra]
+    needs: [node, python, pytest, odoo-addons, odoo-test, odoo-tour, infra, promtail-redaction]
     runs-on: ubuntu-latest
     permissions: {}
     steps:

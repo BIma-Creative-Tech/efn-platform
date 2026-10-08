@@ -431,16 +431,26 @@ class TestEfnKdsBumpAccess(TestEfnKdsCommon):
         self.assertEqual(set(payload["lines"][0]), LINE_KEYS)
         self.assertEqual(payload["lines"][0]["note"], "tanpa sambal")
         kitchen.with_user(self.device_kitchen).efn_kds_bump("ready")
-        dump = json.dumps([result, self.sent], default=str)
+        # Target kanal partner kasir (repr `res.partner(..)`) bukan isi pesan -> hanya tipe + payload.
+        dump = json.dumps([result, [(kind, msg) for _t, kind, msg in self.sent]], default=str)
         for secret in (CUSTOMER_NAME, CUSTOMER_PHONE, "partner"):
             self.assertNotIn(secret, dump)
         kds_msgs = [m for _t, kind, m in self.sent if kind.endswith("-EFN_KDS")]
         self.assertTrue(kds_msgs)
         for msg in kds_msgs:
             self.assertEqual(set(msg), {"type", "ticket_ids", "ts"})
-        ready = [m for _t, kind, m in self.sent if kind.endswith("-EFN_KDS_READY")]
-        expected = {"order_id": order.id, "table_id": self.table.id, "ticket_id": kitchen.id, "state": "ready"}
-        self.assertEqual(ready[-1], expected)
+        # SEC-77: EFN_KDS_READY di kanal partner kasir (pembuka sesi), bukan kanal token config.
+        self.assertFalse([k for _t, k, _m in self.sent if k.endswith("-EFN_KDS_READY")])
+        ready = [(t, m) for t, kind, m in self.sent if kind == "EFN_KDS_READY"]
+        expected = {
+            "order_id": order.id,
+            "table_id": self.table.id,
+            "ticket_id": kitchen.id,
+            "state": "ready",
+            "config_id": self.config.id,
+        }
+        self.assertEqual(ready[-1][1], expected)
+        self.assertEqual(ready[-1][0], self.config.current_session_id.user_id.partner_id)
 
     def test_channel_uses_random_token_and_rotation(self):
         station = self.station_kitchen.sudo()
@@ -473,7 +483,8 @@ class TestEfnKdsBumpAccess(TestEfnKdsCommon):
         status = {row["id"]: row["is_online"] for row in self.config.with_user(self.cashier).efn_kds_station_status()}
         self.assertTrue(status[self.station_kitchen.id])
         self.assertFalse(status[self.station_bar.id])
-        self.assertTrue(any(k.endswith("-EFN_KDS_STATUS") for _t, k, _m in self.sent))
+        self.assertTrue(any(k == "EFN_KDS_STATUS" for _t, k, _m in self.sent))
+        self.assertFalse(any(k.endswith("-EFN_KDS_STATUS") for _t, k, _m in self.sent))
 
     def test_device_user_cannot_be_pos_user(self):
         with self.assertRaises(ValidationError):

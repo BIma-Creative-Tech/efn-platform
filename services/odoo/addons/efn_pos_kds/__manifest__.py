@@ -1,7 +1,7 @@
 {
     "name": "EFN POS Kitchen Display (KDS)",
     "summary": "Layar dapur per stasiun untuk POS restoran CE 19: tiket per stasiun, bump, SLA, cadangan printer.",
-    "version": "19.0.1.0.0",
+    "version": "19.0.1.1.0",
     "category": "EFN/Point of Sale",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",
@@ -18,6 +18,8 @@
         "security/efn_pos_kds_security.xml",
         "security/ir.model.access.csv",
         "data/ir_config_parameter.xml",
+        # SEC-77: rotasi berkala token kanal stasiun.
+        "data/ir_cron.xml",
         "views/efn_kds_station_views.xml",
         "views/efn_kds_ticket_views.xml",
         "views/efn_kds_templates.xml",

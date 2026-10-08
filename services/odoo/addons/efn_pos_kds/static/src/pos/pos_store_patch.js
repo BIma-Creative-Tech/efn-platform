@@ -9,7 +9,11 @@
  * - POS offline: tombol "Order" mencetak ke printer (standar Odoo menolak saat offline) dan
  *   menandai order `efn_kds_printed_offline` -> tiket dibuat server saat sinkron, langsung
  *   "dimasak" berlabel "sudah dicetak" (dapur tidak memasak ganda).
- * - Badge "Siap" di denah meja dari notifikasi bus `EFN_KDS_READY` (kanal token config standar).
+ * - Badge "Siap" di denah meja dari notifikasi bus `EFN_KDS_READY` di kanal PARTNER kasir
+ *   (SEC-77; bukan kanal token config yang ikut ke QR self-order/kiosk), disaring per `config_id`.
+ * - SEC-76: bila server gagal membuat tiket (`order.efn_kds_ticket_failed` di respons sinkron),
+ *   perubahan yang tadi DITAHAN untuk stasiun mode `kds` dicetak ke printer cadangan + notifikasi
+ *   kasir (sticky). Mode `kds_printer` sudah mencetak; kasir tetap diberi tahu layar tidak lengkap.
  * `updateLastOrderChange`/`last_order_preparation_change` tidak diubah.
  */
 import { patch } from "@web/core/utils/patch";
@@ -50,12 +54,14 @@ patch(PosStore.prototype, {
     async afterProcessServerData() {
         const result = await super.afterProcessServerData(...arguments);
         this.efnKdsReadyTables = {};
-        this.data.connectWebSocket("EFN_KDS_READY", (payload) => this.efnKdsOnReady(payload));
+        this.efnKdsSuppressed = {};
+        // Kanal partner user (dilanggani otomatis oleh sesi websocket ter-autentikasi).
+        this.bus.subscribe("EFN_KDS_READY", (payload) => this.efnKdsOnReady(payload));
         return result;
     },
 
     efnKdsOnReady(payload) {
-        if (!payload || !payload.table_id) {
+        if (!payload || !payload.table_id || payload.config_id !== this.config.id) {
             return;
         }
         const ready = { ...(this.efnKdsReadyTables || {}) };
@@ -129,8 +135,43 @@ patch(PosStore.prototype, {
         if (printed && printedFallback.size) {
             order.efn_kds_printed_offline = true;
         }
+        if (suppressed.size) {
+            // Disimpan sampai respons sinkron: dicetak bila server gagal membuat tiket (SEC-76).
+            this.efnKdsSuppressed = this.efnKdsSuppressed || {};
+            this.efnKdsSuppressed[order.uuid] = { orderChange, printers: [...suppressed] };
+        }
         // Perubahan diterima layar KDS (server) -> dianggap terkirim ke alat persiapan.
         return printed || suppressed.size > 0;
+    },
+
+    async sendOrderInPreparation(order, opts = {}) {
+        const result = await super.sendOrderInPreparation(order, opts);
+        await this.efnKdsAfterSend(order);
+        return result;
+    },
+
+    async efnKdsAfterSend(order) {
+        const pending = this.efnKdsSuppressed?.[order.uuid];
+        if (pending) {
+            delete this.efnKdsSuppressed[order.uuid];
+        }
+        if (!order.efn_kds_ticket_failed || !kdsStations(this.models).length) {
+            return;
+        }
+        let printed = false;
+        if (pending && pending.printers.length) {
+            try {
+                printed = await super.printChanges(order, pending.orderChange, false, pending.printers);
+            } catch {
+                printed = false;
+            }
+        }
+        this.notification.add(
+            printed
+                ? _t("Layar dapur gagal menerima pesanan: pesanan dicetak ke printer dapur cadangan.")
+                : _t("Layar dapur gagal menerima pesanan. Pastikan dapur menerima cetakan / cetak ulang."),
+            { type: "danger", sticky: true }
+        );
     },
 
     async sendOrderInPreparationUpdateLastChange(order, opts = {}) {

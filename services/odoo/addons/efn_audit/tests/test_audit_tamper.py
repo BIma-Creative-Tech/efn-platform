@@ -204,3 +204,13 @@ class TestEfnAuditTamper(EfnAuditCase):
         self.env["res.partner.category"].create({"name": "Bukan Kontrol"})
         with self.assertNoLogs(SINK_LOGGER, "INFO"):
             self.env.cr.postcommit.run()
+
+    def test_self_order_switch_param_is_control(self):
+        """SEC-75: sakelar QR-order ponsel selalu diaudit (spesifikasi bawaan, tanpa aturan admin)."""
+        self.ICP.set_param("efn.pos.self_order_mobile_allowed", "True")
+        self.ICP.set_param("efn.pos.self_order_mobile_allowed", "False")
+        logs = self._param_logs("efn.pos.self_order_mobile_allowed")
+        self.assertEqual(set(logs.mapped("operation")), {"create", "write"})
+        # Parameter efn.pos.* lain tidak otomatis menjadi kontrol.
+        self.ICP.set_param("efn.pos.efn_test_other_flag", "1")
+        self.assertFalse(self._param_logs("efn.pos.efn_test_other_flag"))

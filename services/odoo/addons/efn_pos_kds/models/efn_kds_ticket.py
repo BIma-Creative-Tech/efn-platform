@@ -184,7 +184,9 @@ class EfnKdsTicket(models.Model):
         for ticket in tickets.filtered(lambda t: t.state in ("ready", "served")):
             order = ticket.order_id
             if order.config_id:
-                order.config_id._notify(
+                # SEC-77: kanal partner kasir, bukan kanal token pos.config (semi-publik bila
+                # self-order/kiosk aktif).
+                order.config_id._efn_kds_cashier_send(
                     "EFN_KDS_READY",
                     {
                         "order_id": order.id,

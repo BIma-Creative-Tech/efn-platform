@@ -148,3 +148,29 @@ class TestEfnAuditSink(EfnAuditCase):
             ["Mawar|Blok Z|40123|Sari"],
         )
         self.assertEqual(self.env.cr.fetchone()[0], 0, "alamat/nama orang relasi tidak disimpan")
+
+    # ------------------------------------------------------------- SEC-78 (Gelombang 15)
+    def test_manual_purge_note_masked_before_mac(self):
+        """Catatan purge manual = teks bebas: HP (berbagai format), email, NIK di-mask di sumber."""
+        raw = (
+            "permintaan 0812-3456-7890 / +62 812 3456 7891 / (+62) 812.3456.7892 / 6281234567893 "
+            "budi.santoso@example.co.id NIK 3201234567890123 NPWP 01.234.567.8-901.000 jam 2026-10-09 10:00"
+        )
+        with patch.object(audit_base, "_sink_key", return_value=TEST_KEY):
+            log = self.Log._efn_audit_write_purge_log("res.partner", raw)
+        events = [json.loads(m.split(" ", 1)[1]) for m in self._run_sink()]
+        for text in (log.note, events[0]["note"]):
+            for secret in (
+                "3456-7890",
+                "812 3456 7891",
+                "3456.7892",
+                "6281234567893",
+                "budi.santoso",
+                "3201234567890123",
+                "01.234.567.8-901.000",
+            ):
+                self.assertNotIn(secret, text)
+            self.assertIn("62812****890", text)
+            self.assertIn("b***@example.co.id", text)
+            self.assertIn("2026-10-09 10:00", text, "tanggal/jam tidak ikut di-mask")
+        self.assertEqual(events[0]["mac"], sink_mac(TEST_KEY, events[0]), "MAC atas catatan ter-mask")

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SEC-75 (r8): self-order dikunci ke 'nothing'/'kiosk' sampai ADR Q-23 (models/pos_config.py).
+     noupdate=0: dijalankan setiap install/upgrade -> default ditegakkan ulang dan config lama
+     ber-mode mobile/QR menu dinormalkan (kecuali efn.pos.self_order_mobile_allowed benar). -->
+<odoo>
+    <function model="ir.default" name="set" eval="('pos.config', 'self_ordering_mode', 'nothing')"/>
+    <function model="pos.config" name="_efn_normalize_self_order_mode"/>
+</odoo>

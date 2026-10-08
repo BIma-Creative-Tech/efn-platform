@@ -58,7 +58,12 @@ def effective_retention(days):
 # hanya MENAMBAH (gabungan field, OR filter), tidak bisa mengurangi.
 CONTROL_SPECS = {
     # Parameter retensi & kebijakan audit itu sendiri.
-    "ir.config_parameter": (("key", "value"), "[('key', '=like', 'efn.audit.%')]"),
+    # SEC-75 (Gelombang 15): sakelar pembuka QR-order ponsel (`pos_self_order` mode mobile/QR menu)
+    # juga parameter kontrol: selalu diaudit, log tidak ikut GC.
+    "ir.config_parameter": (
+        ("key", "value"),
+        "['|', ('key', '=like', 'efn.audit.%'), ('key', 'in', ['efn.pos.self_order_mobile_allowed'])]",
+    ),
     # Kode Python yang dijalankan server (jalur yang bisa memanggil metode privat / SQL).
     "ir.actions.server": (None, None),
     # Jadwal cron. nextcall/lastcall/failure_* sengaja tidak dilacak (berubah setiap jalan).
@@ -213,3 +218,22 @@ def mask_value(fname, text, kind=None):
     if any(part in lname for part in _ID_KINDS):
         return mask_identifier(text)
     return f"****({len(text)})"
+
+
+# ------------------------------------------------- teks bebas (SEC-78, Gelombang 15)
+# Catatan purge manual = teks bebas pemanggil/admin -> disimpan di DB + sink Loki (400 hari, stream
+# sink tidak diredaksi Promtail agar MAC utuh). Pola PII di-mask DI SUMBER, sebelum MAC.
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+# HP Indonesia dengan pemisah opsional: 0812-3456-7890, +62 812 3456 7890, (+62) 812..., 6281234567890.
+_PHONE_RE = re.compile(r"(?<![\d+])(?:\(\+?62\)|\+?62|0)[\s.-]?8[1-9](?:[\s.-]?\d){6,11}(?!\d)")
+# NIK (16 digit) / NPWP 15-16 digit polos, dan NPWP berformat 99.999.999.9-999.999.
+_ID_RE = re.compile(r"(?<!\d)(?:\d{15,16}|\d{2}\.\d{3}\.\d{3}\.\d-\d{3}\.\d{3})(?!\d)")
+
+
+def mask_free_text(text):
+    """Mask HP/email/NIK/NPWP di dalam teks bebas (catatan purge). Teks lain dibiarkan."""
+    if not text or not isinstance(text, str):
+        return text
+    text = _EMAIL_RE.sub(lambda m: mask_email(m.group(0)), text)
+    text = _PHONE_RE.sub(lambda m: mask_phone(normalize_member_ref(m.group(0)) or m.group(0)), text)
+    return _ID_RE.sub(lambda m: mask_identifier(m.group(0)), text)

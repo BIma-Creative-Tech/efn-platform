@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SEC-77: rotasi berkala token kanal stasiun KDS (token lebih tua dari
+     efn.kds.token_max_age_days, default 7 hari, minimum 1). Jalan harian; layar KDS memuat ulang
+     sendiri saat sidik token berubah (heartbeat 30 dtk). Jadwal awal 20:00 UTC = 03:00 WIB (di luar
+     jam layanan; sesuaikan per outlet bila perlu). -->
+<odoo>
+    <record id="ir_cron_efn_kds_rotate_tokens" model="ir.cron">
+        <field name="name">EFN KDS: rotasi token kanal stasiun</field>
+        <field name="model_id" ref="model_efn_kds_station"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_kds_rotate_tokens()</field>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="nextcall" eval="(DateTime.now() + timedelta(days=1)).strftime('%Y-%m-%d 20:00:00')"/>
+        <field name="active" eval="True"/>
+    </record>
+</odoo>

@@ -28,6 +28,7 @@ ONLINE_SECONDS = 60  # heartbeat klien tiap 30 dtk; 2x jeda = dianggap mati
 DEVICE_GROUP = "efn_pos_kds.group_kds_device"
 MANAGER_GROUP = "point_of_sale.group_pos_manager"
 ACTIVE_STATES = ("new", "in_progress", "ready")
+DEFAULT_TOKEN_MAX_AGE_DAYS = 7  # PLACEHOLDER (SEC-77): rotasi berkala token kanal
 
 
 def token_fingerprint(token):
@@ -89,6 +90,8 @@ class EfnKdsStation(models.Model):
     warn_minutes = fields.Integer(default=10)
     late_minutes = fields.Integer(default=15)
     show_course = fields.Boolean(default=True)
+    # SEC-77: hanya manager POS yang dapat membaca daftar akun tablet & heartbeat lewat ORM/RPC
+    # (kasir tidak). Record rule perangkat dievaluasi sudo, jadi tetap berlaku.
     device_user_ids = fields.Many2many(
         "res.users",
         "efn_kds_station_device_user_rel",
@@ -96,9 +99,12 @@ class EfnKdsStation(models.Model):
         "user_id",
         string="User perangkat",
         domain=lambda self: [("group_ids", "in", self.env.ref(DEVICE_GROUP).ids)],
-        help="User internal khusus layar (grup 'KDS / Perangkat dapur'), satu per layar.",
+        groups=MANAGER_GROUP,
+        help="User internal khusus layar (grup 'KDS / Perangkat dapur'), satu per layar. Mengubah "
+        "daftar ini merotasi token kanal (layar lama memuat ulang dan butuh login lagi bila dicabut).",
     )
-    last_seen = fields.Datetime(readonly=True, copy=False)
+    last_seen = fields.Datetime(readonly=True, copy=False, groups=MANAGER_GROUP)
+    token_rotated_at = fields.Datetime("Token dirotasi", readonly=True, copy=False, groups=MANAGER_GROUP)
     is_online = fields.Boolean(compute="_compute_is_online")
 
     _minutes_check = models.Constraint(
@@ -240,10 +246,46 @@ class EfnKdsStation(models.Model):
         if not self.env.su and not self.env.user.has_group(MANAGER_GROUP):
             raise AccessError(_("Hanya manager POS yang boleh merotasi token KDS."))
         self.check_access("write")
-        for station in self.sudo():
-            station.access_token = str(uuid.uuid4())
-        _logger.info("EFN KDS: token stasiun %s dirotasi oleh user %s", self.ids, self.env.uid)
+        self._efn_kds_rotate_token("manual")
         return True
+
+    # ------------------------------------------------------------------ rotasi token (SEC-77)
+    def _efn_kds_rotate_token(self, reason):
+        """Token kanal baru (uuid4) + cap waktu. Log tanpa token."""
+        if not self:
+            return
+        now = fields.Datetime.now()
+        for station in self.sudo():
+            station.write({"access_token": str(uuid.uuid4()), "token_rotated_at": now})
+        _logger.info("EFN KDS: token stasiun %s dirotasi (%s) oleh user %s", self.ids, reason, self.env.uid)
+
+    def write(self, vals):
+        res = super().write(vals)
+        # Daftar perangkat / status aktif / company berubah -> pemegang token lama tidak boleh
+        # terus menerima notifikasi kanal (bus Odoo 19 tidak membatasi kanal string).
+        if {"device_user_ids", "active", "company_id"} & set(vals):
+            self._efn_kds_rotate_token("station_changed")
+        return res
+
+    @api.model
+    def _efn_kds_token_max_age_days(self):
+        raw = self.env["ir.config_parameter"].sudo().get_param("efn.kds.token_max_age_days", DEFAULT_TOKEN_MAX_AGE_DAYS)
+        try:
+            days = int(raw)
+        except (TypeError, ValueError):
+            days = DEFAULT_TOKEN_MAX_AGE_DAYS
+        return max(days, 1)  # rotasi berkala tidak dapat dimatikan lewat parameter
+
+    @api.model
+    def _cron_efn_kds_rotate_tokens(self):
+        """Rotasi berkala (cron harian): token lebih tua dari ``efn.kds.token_max_age_days``."""
+        limit = fields.Datetime.now() - timedelta(days=self._efn_kds_token_max_age_days())
+        stations = (
+            self.sudo()
+            .with_context(active_test=False)
+            .search(["|", ("token_rotated_at", "=", False), ("token_rotated_at", "<", limit)])
+        )
+        stations._efn_kds_rotate_token("scheduled")
 
     def action_open_screen(self):
         self.ensure_one()
@@ -266,7 +308,8 @@ class EfnKdsStation(models.Model):
     def _efn_kds_notify_configs_status(self, online):
         for station in self.sudo():
             for config in station.config_ids:
-                config._notify("EFN_KDS_STATUS", {"station_id": station.id, "online": bool(online)})
+                # Kanal kasir (SEC-77), bukan kanal token config.
+                config._efn_kds_cashier_send("EFN_KDS_STATUS", {"station_id": station.id, "online": bool(online)})
 
     def _efn_kds_status(self):
         return [{"id": station.id, "mode": station.mode, "is_online": station.is_online} for station in self.sudo()]

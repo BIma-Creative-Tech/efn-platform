@@ -16,12 +16,18 @@ diperlukan; ``sync_from_ui`` (POS & kiosk self-order) melewatinya.
 import json
 import logging
 
+import psycopg2.errors
+
 from odoo import api, fields, models
+from odoo.exceptions import ConcurrencyError
+from odoo.service.model import PG_CONCURRENCY_EXCEPTIONS_TO_RETRY
 from odoo.tools import float_compare, float_is_zero
 
 from .efn_kds_ticket import note_text
 
 _logger = logging.getLogger(__name__)
+# SEC-76: logger khusus alert (rule Loki: `|= "EFN_KDS_TICKET_FAILED"`). Satu baris JSON tanpa PII.
+_alert_logger = logging.getLogger("odoo.addons.efn_pos_kds.alert")
 
 TICKET_MODES = ("kds", "kds_printer")
 
@@ -57,20 +63,59 @@ class PosOrder(models.Model):
     # Diset frontend POS saat dapur sudah menerima cetakan cadangan (POS offline / KDS mati);
     # dikosongkan server setelah tiket dibuat (tiket langsung "dimasak", label "sudah dicetak").
     efn_kds_printed_offline = fields.Boolean(copy=False)
+    # SEC-76: pembuatan tiket KDS terakhir untuk order ini GAGAL. Hanya server yang mengisi (nilai
+    # dari klien dibuang); dikirim balik ke POS lewat respons sinkron -> POS mencetak perubahan yang
+    # tadinya ditahan (stasiun mode `kds`) ke printer cadangan + notifikasi kasir. Dikosongkan saat
+    # pembuatan tiket berikutnya berhasil.
+    efn_kds_ticket_failed = fields.Boolean(copy=False, readonly=True)
 
     @api.model
     def _process_order(self, order, existing_order):
+        if isinstance(order, dict):
+            order.pop("efn_kds_ticket_failed", None)  # milik server, bukan klien
         before_sig = prep_signature(existing_order.last_order_preparation_change) if existing_order else ""
         before_fired = set(existing_order.course_ids.filtered("fired").ids) if existing_order else set()
         order_id = super()._process_order(order, existing_order)
         pos_order = self.browse(order_id)
         try:
-            pos_order._efn_kds_after_sync(before_sig, before_fired)
-        except Exception:
-            # KDS di luar jalur transaksi kas: kegagalan tiket tidak boleh menggagalkan sinkron
-            # order (printer dapur standar tetap jalan). Savepoint menjaga transaksi tetap sehat.
-            _logger.exception("EFN KDS: gagal membuat tiket untuk pos.order #%s", order_id)
+            attempted = pos_order._efn_kds_after_sync(before_sig, before_fired)
+        except PG_CONCURRENCY_EXCEPTIONS_TO_RETRY:
+            # Konflik serialisasi/lock: biarkan naik -> Odoo me-retry seluruh request sinkron.
+            raise
+        except psycopg2.errors.UniqueViolation as exc:
+            # Unik (order, station, sequence_no) = dua sinkron paralel order yang sama -> retry.
+            raise ConcurrencyError("EFN KDS: konflik nomor tiket, sinkron diulang") from exc
+        except Exception as exc:  # noqa: BLE001 - KDS di luar jalur transaksi kas (lihat bawah)
+            # Kegagalan tiket tidak boleh menggagalkan sinkron order (printer dapur tetap jalan);
+            # savepoint menjaga transaksi sehat. TIDAK ditelan diam-diam: alert + tanda order.
+            pos_order._efn_kds_mark_ticket_failed(exc)
+        else:
+            if attempted and pos_order.efn_kds_ticket_failed:
+                pos_order.sudo().efn_kds_ticket_failed = False
         return order_id
+
+    def _efn_kds_mark_ticket_failed(self, exc):
+        """Log alert terstruktur TANPA PII (id + nama tipe exception) + tandai order (SEC-76)."""
+        self.ensure_one()
+        try:
+            stations = self._efn_kds_stations()
+            station_info = [{"id": s.id, "mode": s.mode} for s in stations]
+        except Exception:  # noqa: BLE001 - log alert tetap harus keluar
+            station_info = []
+        event = {
+            "event": "EFN_KDS_TICKET_FAILED",
+            "order_id": self.id,
+            "config_id": self.config_id.id or None,
+            "session_id": self.session_id.id or None,
+            "company_id": self.company_id.id or None,
+            "stations": station_info,
+            "kds_only": any(s["mode"] == "kds" for s in station_info),
+            "error": type(exc).__name__,
+        }
+        _alert_logger.error("EFN_KDS_TICKET_FAILED %s", json.dumps(event, sort_keys=True))
+        # Traceback hanya level DEBUG (pesan exception bisa memuat teks catatan dapur).
+        _logger.debug("EFN KDS: detail kegagalan tiket pos.order #%s", self.id, exc_info=exc)
+        self.sudo().efn_kds_ticket_failed = True
 
     # ------------------------------------------------------------------ routing
     def _efn_kds_stations(self):
@@ -102,16 +147,18 @@ class PosOrder(models.Model):
         return specific | catch_all
 
     def _efn_kds_after_sync(self, before_sig, before_fired):
+        """Buat tiket bila ada pengiriman dapur baru. True = pembuatan tiket dicoba (dan berhasil)."""
         self.ensure_one()
         stations = self._efn_kds_stations()
         if not stations:
-            return
+            return False
         sig_changed = prep_signature(self.last_order_preparation_change) != before_sig
         newly_fired = self.course_ids.filtered(lambda c: c.fired and c.id not in before_fired)
         if not sig_changed and not newly_fired:
-            return
+            return False
         with self.env.cr.savepoint():
             self.sudo()._efn_kds_make_tickets(stations, sig_changed, newly_fired)
+        return True
 
     def _efn_kds_sent_by_uuid(self):
         self.env["efn.kds.ticket.line"].flush_model()

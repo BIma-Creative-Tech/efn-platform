@@ -534,3 +534,52 @@ Sesuai `docs/08` §7.3; README berisi ADR-013/023/031, risiko, uji manual, batas
 - Atribut kustom (teks bebas klien) tidak ditampilkan. Status online untuk mode `kds` dicek per pengiriman (RPC), bukan via bus.
 - ETL `efn_kds_ticket` → ClickHouse (KPI waktu tunggu) — efn-data-ai-engineer; `docs/04`/`docs/08` belum diperbarui dengan keputusan desain di atas (hook `_process_order`, pemicu tanpa `metadata`) — efn-lead/efn-odoo-functional.
 - Upgrade DB dev (modul baru) belum dijalankan di volume dev. Untuk security-reviewer: rule `res.partner` perangkat, constraint grup, `try/except` hook (log + savepoint).
+
+# Gelombang 15 — perbaikan review r8 (SEC-74..SEC-79 bagian Odoo), 2026-10-09
+
+Batas file: `services/odoo/addons/**`, `.github/workflows/ci.yml` (hanya `EFN_TOUR_MIN_TESTS` 19 → 20), laporan ini. Tanpa commit; stack dev tidak disentuh (harness `odoo-test-g15.sh` / `odoo-tour-g15.sh`, image & container `-g15`).
+
+## 1. SEC-75 — `efn_setup_pos` 19.0.1.5.0 (self-order dikunci)
+- **Verifikasi image 19.0:** field `pos.config.self_ordering_mode` default `nothing`; `create`/`_prepare_self_order_splash_screen` tidak mengisi `mobile`; satu-satunya skenario yang menulis mode = `load_onboarding_kiosk_scenario` (`kiosk`). Anggapan PLAUSIBLE r8 ("restoran baru otomatis `mobile`") **tidak berlaku** di 19.0. Kunci tetap dipasang.
+- `data/pos_self_order_lock.xml` (noupdate=0, jalan tiap install/upgrade): `ir.default.set('pos.config','self_ordering_mode','nothing')` + `_efn_normalize_self_order_mode` (config `mobile`/`consultation` → `nothing`, log INFO id).
+- `models/pos_config.py`: constraint menolak `mobile`/`consultation` (create & write, termasuk lewat Settings) kecuali `efn.pos.self_order_mobile_allowed` benar. `models/ir_config_parameter.py`: sakelar dimatikan/dihapus → normalisasi seketika. Parameter hanya `base.group_system` (ACL CE) dan masuk `efn_audit` `CONTROL_SPECS` (selalu diaudit, log tidak ikut GC). Modul ini kini memuat sedikit Python (dicatat di README).
+- Test `test_self_order_lock.py` (4): config restoran baru `nothing` + ir.default, mobile/QR menu ditolak (create & write), sakelar on → mobile boleh / off → dinormalkan, normalisasi DB lama + query pra-go-live = 0.
+
+## 2. SEC-74 — akun perangkat KDS (`efn_pos_kds` 19.0.1.1.0)
+- **Allowlist grup** (`models/res_users.py`): grup efektif ⊆ `base.group_user.all_implied_ids` ∪ {`group_kds_device`} (grup yang di-imply KE grup perangkat juga ditolak). Ditegakkan di `res.users` (constraint `group_ids`) dan `res.groups` create/write (`user_ids`/`implied_ids`/`implied_by_ids` → cek ulang semua user perangkat, dari relasi tersimpan).
+- **Sandbox model** (`models/ir_rule.py`, override `ir.rule._compute_domain`, non-sudo, user perangkat): hanya `efn.kds.*`, `res.users` (diri), `res.partner` (diri + partner company, AND — tidak bisa di-OR rule grup lain), `res.company/lang/currency/country(.state)`, `res.groups(.privilege)`, `res.users.settings`, `decimal.precision`, awalan `ir.`/`bus.`/`base.`/`web_tour.`; model lain domain FALSE → produk & `standard_price`, `hr.employee(.public)`, `resource.resource`, Discuss/`mail.message`, loyalty, dst. tidak terbaca, termasuk model modul yang dipasang belakangan (tanpa migrasi). Dipilih karena rule grup biasa di-OR dengan rule `base.group_user` dan `hr` tidak ada di dependency `efn_pos_kds`.
+- **Uji runtime** (`test_device_runtime_surface_no_customer_name`): sebagai user perangkat, iterasi SEMUA model terpasang ber-ACL baca (DB 12 modul + CE ±105 modul): model di luar allowlist = 0 record; model allowlist dengan many2one `res.partner` tidak menampilkan nama pelanggan (order ber-partner dibuat dulu) → **lolos** (menjawab PLAUSIBLE `display_name` r8 untuk set modul ini). Layar KDS (tour Chrome, login perangkat) tetap jalan di bawah sandbox.
+- Rule perangkat XML dipindah ke luar `noupdate` + `migrations/19.0.1.1.0/pre-migrate.py` membalik flag `ir_model_data.noupdate` 4 xmlid (rule company tetap noupdate).
+- Temuan saat implementasi: ORM 19 menerapkan `domain` field many2many saat mencari `device_user_ids in ids` → user yang baru dicabut dari grup tidak ketemu; pencarian stasiun untuk rotasi memakai tabel relasi langsung (SQL berparameter).
+
+## 3. SEC-76 — kegagalan tiket
+- `pos.order._process_order`: `SerializationFailure`/lock/deadlock (`PG_CONCURRENCY_EXCEPTIONS_TO_RETRY`) naik → Odoo retry; `UniqueViolation` (nomor tiket) → `ConcurrencyError` (retry); exception lain → log `EFN_KDS_TICKET_FAILED {json}` (logger `odoo.addons.efn_pos_kds.alert`, level ERROR: order/config/sesi/company id, stasiun+mode, `kds_only`, nama tipe exception; tanpa PII/pesan exception; traceback hanya DEBUG) + `pos.order.efn_kds_ticket_failed=True` (readonly, nilai dari klien dibuang; dikosongkan saat pembuatan berikutnya berhasil).
+- POS (`pos_store_patch.js`): perubahan yang ditahan untuk stasiun `kds` disimpan per order; setelah sinkron di `sendOrderInPreparation`, bila tanda gagal → `printChanges` CE ke printer yang ditahan + notifikasi kasir sticky (juga untuk `kds_printer`: pesan "pastikan dapur menerima cetakan").
+- Test: 4 unit (alert JSON tanpa nama/HP/catatan/pesan exception + tanda + pulih, tanda klien dibuang, serialisasi naik, unik → ConcurrencyError) + tour baru `EfnKdsPosTicketFailedTour` (layar hidup, server gagal → printer cadangan dipanggil + notifikasi).
+- **Untuk devsecops:** rule Loki `count_over_time({service="odoo"} |= "EFN_KDS_TICKET_FAILED" [5m]) > 0` → on-call outlet (belum dibuat; di luar batas file).
+
+## 4. SEC-77 — token kanal & kanal kasir
+- Rotasi otomatis (`_efn_kds_rotate_token`, log tanpa token): stasiun `device_user_ids`/`active`/`company_id` berubah; user perangkat `active`/`group_ids`/`login`/`password`/`company(_ids)` berubah atau dihapus; dicabut dari grup perangkat lewat form Grup; **berkala** cron harian `EFN KDS: rotasi token kanal stasiun` (token > `efn.kds.token_max_age_days` = 7, PLACEHOLDER, min 1; nextcall 20:00 UTC). Field baru `token_rotated_at`.
+- `EFN_KDS_READY` dan `EFN_KDS_STATUS` → kanal **partner kasir** (`_bus_send`, kanal yang hanya dilanggani sesi websocket ter-autentikasi user itu): penerima = pembuka sesi terbuka + user POS yang memanggil `pos.session.load_data` (override CE, dicatat di `efn_kds_listener_user_ids`, ber-`groups` manager), aktif, internal, grup POS user, company cocok. Payload + `config_id`; POS menyaring per config (`this.bus.subscribe`). Tidak ada lagi notifikasi KDS di kanal token `pos.config` (QR self-order/kiosk).
+- `device_user_ids`, `last_seen`, `token_rotated_at` ber-`groups` POS manager → kasir tidak membaca akun tablet.
+- `RPC_ALLOWLIST` +1: `("pos.session","load_data")` (override CE).
+
+## 5. SEC-78 (Odoo) — `efn_audit`
+- `audit_policy.mask_free_text`: HP Indonesia dengan/tanpa pemisah (`0812-3456-7890`, `+62 812 …`, `(+62) 812.…`, `628…`) → `62812****890`, email → `b***@domain`, NIK/NPWP 15–16 digit & NPWP berformat → `****123`; tanggal/jam tidak tersentuh. Dipakai `_efn_audit_write_purge_log` **sebelum** create, MAC, dan sink. Test baru di `test_audit_sink.py` (+ MAC valid atas teks ter-mask) dan `test_audit_tamper.py` (sakelar SEC-75 = parameter kontrol, `efn.pos.*` lain tidak).
+
+## 6. SEC-79 — gerbang `http.route`
+- `efn_core/tests/test_route_surface.py` (BaseCase, AST, tanpa DB): setiap `@http.route`/`@route` di `efn_*` (luar tests/migrations) wajib `(path, auth)` persis di `ROUTE_ALLOWLIST`; `auth` default `user`; `public`/`none`/`bearer` butuh `PREAUTH_REVIEWED`; `csrf=False` butuh `CSRF_EXEMPT_REVIEWED`; override tanpa path (`@http.route()`) dan path dinamis ikut dicatat & wajib allowlist; entri basi gagal; uji-diri scanner pada sumber sintetis. Allowlist saat ini: `/efn_kds/<int:station_id>` (user).
+
+## 7. Validasi (container, DB sementara; detail angka di bawah)
+- Unit `odoo-test-g15.sh` (12 modul + `efn_setup_security`): **337 test, 0 failed, 0 error, 0 baris ERROR** (sebelumnya 304; +33: efn_pos_kds 61, efn_core 61 termasuk 7 gerbang route, efn_audit 79, efn_setup_pos 16). Jenis WARNING sama dengan baseline G14 (tidak ada jenis baru).
+- `check-odoo-deps`: 13 modul, 0 dependensi terlarang. Gerbang RPC (`test_rpc_surface`) dan route (`test_route_surface`) hijau.
+- Tour `odoo-tour-g15.sh`: **20/20**, 0 ERROR, 0 skip browser (termasuk layar KDS login perangkat di bawah sandbox dan tour baru SEC-76) → `EFN_TOUR_MIN_TESTS` 19 → **20** di `ci.yml`.
+- ruff 0.16.10 check + format + compileall `services/odoo/addons`: lolos.
+- Iterasi: 3 kegagalan run pertama diperbaiki (dump bus memuat repr target partner; allowlist sempat ikut menerima grup yang di-imply ke grup perangkat; pencarian stasiun terfilter domain field m2m — lihat §2).
+
+## 8. Belum / sisa
+- [B] Upgrade DB lama (pre-migrate noupdate, `ir.default`, normalisasi self-order) diuji lewat unit/simulasi SQL, **belum** `-u` pada DB hasil versi sebelumnya (dev/staging).
+- [B] Badge "Siap" lewat kanal partner kasir tidak diuji end-to-end websocket (payload & penerima diuji unit). Kasir yang tidak memanggil `load_data` dan bukan pembuka sesi baru menerima setelah memuat ulang POS.
+- [B] Sandbox perangkat diuji pada set 12 modul CI; modul CE lain yang dipasang belakangan otomatis tertolak (default deny), tetapi bila suatu saat layar KDS butuh model baru, allowlist `DEVICE_MODELS` harus ditambah (kode).
+- Akun perangkat sebagai user *share* (opsi lebih kuat r8) butuh ADR kecil. Rate-limit `/pos-self` Traefik, rule Loki `EFN_KDS_TICKET_FAILED` dan deteksi HP di `efn_audit_sink` = devsecops. Inventaris PDP v5 (SEC-79 bagian dokumen) = architect/lead.
+- Cron rotasi berjalan 20:00 UTC; rotasi menyebabkan layar KDS memuat ulang (~detik). Mengubah daftar perangkat stasiun juga memuat ulang layar lain di stasiun yang sama.
