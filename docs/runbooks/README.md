@@ -34,7 +34,8 @@ Layout host: `/opt/efn/{compose,traefik,observability,backup,minio,clickhouse,po
 
 | Alert | Severity | Runbook |
 |---|---|---|
-| EfnAuditCriticalAccessChange (G13), EfnAuditControlChange, EfnAuditUnexpectedPurge, EfnAuditRetentionPurgeBurst, EfnAuditSinkUnsigned (G13) (sink audit Odoo v2) | critical / warning / critical / warning / warning | [audit-sink-alerts.md](audit-sink-alerts.md) |
+| EfnAuditCriticalAccessChange (G13), EfnAuditControlChange, EfnAuditUnexpectedPurge, EfnAuditRetentionPurgeBurst, EfnAuditSinkUnsigned (G13), EfnAuditSinkPiiPattern (G15b, deteksi PII lolos mask) (sink audit Odoo v2) | critical / warning / critical / warning / warning / warning | [audit-sink-alerts.md](audit-sink-alerts.md) |
+| EfnKdsTicketFailed, EfnKdsTicketFailedSpike, EfnKdsAlertFormatUnrecognized (tiket Kitchen Display gagal, G15b SEC-76) | warning / critical / warning | [kds-ticket-failed.md](kds-ticket-failed.md) |
 | EfnAuditReconAnomaly, EfnAuditCopyFailing (salinan audit tamper-evident ETL) | critical / warning | [etl-audit-copy.md](etl-audit-copy.md) |
 | EfnEtlCycleMissing, EfnEtlSalesFactStale, EfnEtlStockSnapshotStale, EfnAuditCopyMissing, EfnAuditReconMissing (dead-man heartbeat ETL, G13) | warning / warning / warning / warning / critical | [etl-audit-copy.md](etl-audit-copy.md#dead-man-etl-gelombang-13-sec-52-butir-1) |
 | EfnS3GatewayDeniedBurst (burst 403 filter object storage) | warning | [s3-gateway-denied.md](s3-gateway-denied.md) |

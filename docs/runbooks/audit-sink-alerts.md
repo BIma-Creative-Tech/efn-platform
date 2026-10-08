@@ -85,3 +85,40 @@ manual (`purge_manual`). Langkah: (1) cocokkan dengan change request yang disetu
 Baris sink `"mac": null` = Odoo tidak membaca `/run/secrets/efn_audit_sink_key` (secret tidak ter-mount / kurang dari
 32 byte). Periksa `docker compose config` service `odoo` (secret `efn_audit_sink_key`, env `EFN_AUDIT_SINK_KEY_FILE`)
 dan log Odoo `EFN audit sink: kunci HMAC tidak tersedia`. Dev/CI tanpa secret: wajar.
+
+## EfnAuditSinkPiiPattern
+G15b (SEC-78 sisi observability). Stream `efn_audit_sink` **tidak diredaksi** Promtail karena redaksi akan merusak MAC
+dan memicu alarm tamper palsu. Stream ini juga disimpan **400 hari**. Karena itu Odoo wajib me-mask teks bebas sebelum
+create, MAC, dan sink (`efn_audit` `audit_policy.mask_free_text`):
+
+- HP → `62812****890`;
+- email → `b***@domain`;
+- NIK/NPWP → `****123`.
+
+Rule ini mendeteksi pola yang **lolos** mask di payload sink:
+
+- HP Indonesia (pola sama dengan redaksi Promtail tahap (d));
+- email;
+- deret 15–16 digit (NIK/NPWP);
+- NPWP berformat `99.999.999.9-999.999`.
+
+Field `mac` (hex 64) dibuang dulu sebelum pencocokan. Hasil yang diharapkan **selalu 0**. Label alert `log_id` + `model`
+menunjuk barisnya.
+
+1. Lihat barisnya (Grafana Explore):
+   `{stream="efn_audit_sink"} |= "\"log_id\": <log_id>,"`.
+   Tentukan field-nya, biasanya `note` (catatan purge/erasure).
+2. Bila positif palsu (mis. ID numerik 15–16 digit yang sah), catat polanya dan usulkan pengecualian sempit lewat PR
+   (`loki-rules/efn-audit-sink.yml` + runbook ini). Jangan melonggarkan pola secara umum.
+3. Bila benar data pribadi:
+   - perlakukan sebagai dugaan kegagalan pelindungan data pribadi → [breach-response-72h.md](breach-response-72h.md)
+     (catat T0; skalanya biasanya kecil: satu baris log internal);
+   - perbaiki mask di `efn_audit` (tim Odoo, sertakan contoh pola **tanpa** nilai aslinya);
+   - hapus baris dari Loki dengan delete API ([log-redaction.md](log-redaction.md) §4, selector
+     `{stream="efn_audit_sink"} |= "\"log_id\": <log_id>,"`). Catat penghapusan di berita acara, karena stream ini
+     adalah bukti audit;
+   - log audit di Odoo dan salinannya di ClickHouse (ETL `audit_copy`) kemungkinan memuat teks yang sama (periksa):
+     koordinasikan dengan data-AI/Odoo untuk koreksi lewat jalur resmi (erasure), bukan UPDATE manual.
+4. Uji G15b: query diuji di Loki sekali pakai dengan baris fiktif. HP berpemisah, `+62 …`, email, NIK 16 digit, dan
+   NPWP berformat terdeteksi. Bentuk ter-mask, tanggal, ID kecil, dan `mac` berisi deret angka tidak terdeteksi. Di
+   dev nyata: 16 baris sink dalam 7 hari, 0 temuan.

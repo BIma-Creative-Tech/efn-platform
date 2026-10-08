@@ -75,6 +75,28 @@ scrape_configs:
             - labels:
                 audit_op:
                 critical:
+      # (2b) Gelombang 15b (SEC-76, efn_pos_kds >= G15): kegagalan pembuatan tiket dapur -> stream="efn_kds" (retensi
+      #      default 30 hari; operasional, bukan bukti audit), alert loki-rules/efn-kds.yml, runbook
+      #      docs/runbooks/kds-ticket-failed.md. Format Odoo (logger KHUSUS odoo.addons.efn_pos_kds.alert, level ERROR):
+      #      "<tgl> <jam>,<ms> <pid> ERROR <db> odoo.addons.efn_pos_kds.alert: EFN_KDS_TICKET_FAILED {json}". JSON
+      #      json.dumps(sort_keys=True), separator default ", "/": ": company_id, config_id, error (NAMA TIPE exception),
+      #      event, kds_only, order_id, session_id, stations [{id, mode}]. Regex BERJANGKAR PENUH dan skema KETAT (hanya
+      #      angka/null/boolean, mode dari selection tetap, error = identifier Python) -> tidak ada teks bebas/PII yang
+      #      bisa masuk stream ini, dan baris lain yang sekadar memuat teks "EFN_KDS_TICKET_FAILED" (mis. catatan dapur,
+      #      pesan login) TIDAK masuk. Dicocokkan SEBELUM redaksi (redaksi HP bisa mengubah ID besar berawalan 628...
+      #      dan membuat baris tidak lagi cocok = alert hilang); redaksi tetap diterapkan sesudahnya (pertahanan
+      #      berlapis). Hanya container service=odoo. Label rendah kardinalitas: kds_event (tetap) + kds_only (true|false);
+      #      company/config/order/error dibaca di query (`| json`), bukan label.
+      - match:
+          selector: '{service="odoo"} |~ "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2},\\d{3} \\d+ ERROR \\S+ odoo\\.addons\\.efn_pos_kds\\.alert: EFN_KDS_TICKET_FAILED \\{\"company_id\": (\\d+|null), \"config_id\": (\\d+|null), \"error\": \"[A-Za-z_][A-Za-z0-9_]{0,79}\", \"event\": \"EFN_KDS_TICKET_FAILED\", \"kds_only\": (true|false), \"order_id\": \\d+, \"session_id\": (\\d+|null), \"stations\": \\[(\\{\"id\": \\d+, \"mode\": \"(kds|kds_printer|printer)\"\\}(, )?){0,50}\\]\\}\\s*$"'
+          stages:
+            - regex:
+                expression: ' EFN_KDS_TICKET_FAILED \{.*"kds_only": (?P<kds_only>true|false), '
+            - static_labels:
+                stream: efn_kds
+                kds_event: ticket_failed
+            - labels:
+                kds_only:
       # Redaksi dasar: nomor HP Indonesia dan token Bearer tidak boleh masuk log (UU PDP, R-L01). Semua baris KECUALI
       # kepala rantai (1) dan sink audit (2), yang dicocokkan di atas SEBELUM redaksi:
       #   - kepala rantai: isi dibatasi regex (angka + hex);

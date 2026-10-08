@@ -72,3 +72,38 @@ UDP 51820 terbuka dari internet. TCP 443 publik hanya dari Cloudflare ([origin-f
 | Sertifikat `erp.` tidak valid | Log Traefik `letsencrypt-dns`; token DNS (`acme_dns_api_token`) atau `ACME_DNS_PROVIDER` salah |
 | Compose gagal bind `10.88.0.1:443` | `wg0` belum naik sebelum docker (drop-in systemd), atau `EFN_PUBLIC_BIND` kosong (0.0.0.0:443 bentrok) |
 | Login 429 | `ratelimit-odoo-login` (10/menit per outlet) |
+| Kiosk self-order 429 / "koneksi terputus" | `ratelimit-odoo-pos-self` (lihat §Self-order kiosk) |
+
+## Self-order kiosk
+G15b. Router Traefik `odoo-pos-self@file` (`infra/traefik/dynamic/odoo-self-order.yml`) ada **hanya** di entrypoint
+`wg-https`, dengan middleware `internal-only`. Router ini menangani semua route `auth="public"` modul CE
+`pos_self_order`:
+
+- `/pos-self/…`
+- `/pos-self-order/…`
+- `/pos_self_order/…`
+- `/kiosk/…`
+
+Rate limit `ratelimit-odoo-pos-self`: rata-rata 5 req/s, burst 40, sumber RemoteAddr = satu IP per outlet ber-NAT.
+Nilai ini PLACEHOLDER dan dikalibrasi saat pilot. Aset (`/web/assets`, `/web/image`) dan websocket tetap memakai
+`ratelimit-odoo`.
+
+- **Mode QR/ponsel (`mobile`) dikunci di Odoo.** `efn_setup_pos` hanya mengizinkan `self_ordering_mode` = `nothing`/`kiosk`
+  selama parameter `efn.pos.self_order_mobile_allowed` belum dibuka (SEC-75, menunggu ADR Q-23). Klien sah jalur ini
+  hanya tablet kiosk di LAN outlet. Ponsel pelanggan tidak punya rute ke `erp.` (bukan subnet WireGuard). Bila mode
+  mobile dibuka kelak, jalurnya lewat BFF/ADR, **bukan** dengan memindahkan router ini ke entrypoint publik.
+- **429 sah saat jam sibuk** (banyak kiosk di satu outlet): cek di log Traefik.
+
+  ```logql
+  sum by (ClientHost) (count_over_time({service="traefik"} | json | RouterName="odoo-pos-self@file" | DownstreamStatus="429" [5m]))
+  ```
+
+  Bila memang beban sah, naikkan `average`/`burst` lewat PR. Traefik membaca ulang provider file. Pada bind mount
+  Docker Desktop (Windows), perubahan baru terbaca setelah `restart traefik`.
+- **429 dari satu outlet tanpa beban nyata** = skrip atau perangkat yang membanjiri `process-order`/`validate-partner`.
+  Identifikasi perangkat di LAN outlet, lalu ikuti [security-incident.md](security-incident.md) bila tidak terjelaskan.
+- Uji G15b (dev): 150 POST paralel ke `/pos-self/ping` → 85×200, 65×429. `/web/health` di router `odoo` tetap 150×200.
+  `/pos-selfish` dan `/pos/ui` tidak tertangkap router ini.
+- Saat Traefik boot, log mencatat `the service "odoo@docker" does not exist` selama beberapa detik, sampai provider
+  Docker termuat. Ini sementara dan router aktif setelahnya. Tidak ada jalur tanpa allowlist selama jeda itu: router
+  yang gagal tidak melayani, sehingga request jatuh ke router `odoo` yang juga `internal-only`.

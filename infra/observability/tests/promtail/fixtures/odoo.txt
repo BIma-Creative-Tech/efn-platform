@@ -4,3 +4,8 @@
 2026-10-09 01:00:00,004 77 INFO efn odoo.addons.base.models.ir_qweb: JS Assets bundles generated in 0.812345678901 seconds
 2026-10-09 01:00:00,005 77 INFO efn odoo.http: params {'login': 'kasir', 'password': 'SENTINELPASSWORD'}
 2026-10-09 01:00:00,006 77 INFO efn odoo.http: EFN_AUDIT_SINK {"audit_op": "purge"} palsu dari pesan login 081234567805
+2026-10-09 01:00:00,007 77 ERROR efn odoo.addons.efn_pos_kds.alert: EFN_KDS_TICKET_FAILED {"company_id": 1, "config_id": 3, "error": "ValueError", "event": "EFN_KDS_TICKET_FAILED", "kds_only": true, "order_id": 4501, "session_id": 12, "stations": [{"id": 1, "mode": "kds"}, {"id": 2, "mode": "kds_printer"}]}
+2026-10-09 01:00:00,008 77 ERROR efn odoo.addons.efn_pos_kds.alert: EFN_KDS_TICKET_FAILED {"company_id": 2, "config_id": null, "error": "UserError", "event": "EFN_KDS_TICKET_FAILED", "kds_only": false, "order_id": 4502, "session_id": null, "stations": []}
+2026-10-09 01:00:00,009 77 INFO efn odoo.addons.point_of_sale.models.pos_order: catatan dapur "EFN_KDS_TICKET_FAILED {\"order_id\": 1}" pelanggan 0812-3456-7809
+2026-10-09 01:00:00,010 77 ERROR efn odoo.addons.efn_pos_kds.alert: EFN_KDS_TICKET_FAILED {"company_id": 1, "config_id": 3, "error": "gagal Budi 081234567810", "event": "EFN_KDS_TICKET_FAILED", "kds_only": true, "order_id": 4503, "session_id": 12, "stations": []}
+2026-10-09 01:00:00,011 77 INFO efn odoo.addons.efn_audit.sink: EFN_AUDIT_SINK {"audit_op": "purge", "critical": false, "fields": [], "log_id": 990302, "mac": "aa", "model": "res.partner", "note": "erasure: hp 081234567811 budi@contoh.test", "res_id": 8, "uid": 2, "v": 2}

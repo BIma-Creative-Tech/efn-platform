@@ -1,0 +1,46 @@
+# Gelombang 15b (SEC-75/SEC-76 r8, sisi edge): router KHUSUS self-order Odoo (`pos_self_order`, kiosk) di entrypoint
+# internal wg-https dengan rate limit sendiri. Router utama `odoo` (label Docker, infra/compose/docker-compose.yml)
+# tetap menangani path lain; router ini menang karena prioritas lebih tinggi (odoo-login 200 < ini 220 < odoo-ws 250 <
+# odoo-rpc-block 300; path tidak beririsan dengan login/ws/rpc-block).
+#
+# Cakupan path = SEMUA route auth="public" modul CE pos_self_order 19.0 (diverifikasi di image efn/odoo:dev
+# 2026-10-09, addons/pos_self_order/controllers/*.py):
+#   /pos-self/<config_id>[/<subpath>], /pos-self/data/<id>, /pos-self/relations/<id>, /pos-self/ping   -> /pos-self/
+#   /pos-self-order/{process-order,get-order,validate-partner,remove-order,send_self_order_receipt,
+#                    get-user-data,change-printer-status,get-slots}                                  -> /pos-self-order/
+#   /pos_self_order/kiosk/increment_nb_print/                                                         -> /pos_self_order/
+#   /kiosk/payment/<config_id>/<device_type>                                                          -> /kiosk/
+# Aset (/web/assets, /web/image) dan websocket (/websocket, router odoo-ws) tidak termasuk: tetap ratelimit-odoo.
+#
+# Mode QR/ponsel (`mobile`) DIKUNCI di Odoo: efn_setup_pos pos.config constraint `self_ordering_mode` hanya
+# nothing|kiosk selama parameter efn.pos.self_order_mobile_allowed belum dibuka (SEC-75, menunggu ADR Q-23). Jadi klien
+# sah jalur ini hanya tablet kiosk di LAN outlet lewat WireGuard. Bila mode mobile kelak dibuka untuk ponsel pelanggan,
+# endpoint ini TETAP tidak boleh dipindah ke entrypoint publik tanpa ADR (Odoo tidak pernah diakses langsung dari
+# internet; jalur pelanggan = BFF). Runbook 429 / kalibrasi: docs/runbooks/wireguard-outlet.md §Self-order kiosk.
+#
+# Sumber rate limit = RemoteAddr (peer WireGuard; wg-https tidak memercayai XFF). Satu outlet ber-NAT = satu IP, jadi
+# batas berlaku per outlet untuk semua kiosk-nya. Ambang PLACEHOLDER (kalibrasi saat pilot): satu sesi kiosk ±5-15
+# RPC per pesanan + 3 RPC saat memuat; 5 req/s rata-rata, burst 40 cukup untuk 2-3 kiosk sibuk, tetapi memotong skrip
+# yang membanjiri process-order / validate-partner (enumerasi pelanggan) / get-order. Melebihi batas = 429.
+http:
+  routers:
+    odoo-pos-self:
+      rule: >-
+        Host(`erp.{{ env "TRAEFIK_DOMAIN" | default "efn.local" }}`)
+        && (PathPrefix(`/pos-self/`) || PathPrefix(`/pos-self-order/`) || PathPrefix(`/pos_self_order/`) || PathPrefix(`/kiosk/`))
+      priority: 220
+      entryPoints:
+        - wg-https
+      tls: {}   # sertifikat dari acme-dns (SEC-37), bukan resolver Traefik - sama dengan router odoo
+      middlewares:
+        - internal-only@file
+        - secure-headers@file
+        - ratelimit-odoo-pos-self@file
+      service: odoo@docker
+
+  middlewares:
+    ratelimit-odoo-pos-self:
+      rateLimit:
+        average: 5
+        burst: 40
+        period: 1s

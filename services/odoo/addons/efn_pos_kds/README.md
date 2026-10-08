@@ -92,7 +92,7 @@ Fit-gap F-52..F-54, spesifikasi E-26 (`docs/08_ODOO_FIT_GAP.md` §7.3).
   tanda itu di respons sinkron → mencetak perubahan yang ditahan untuk stasiun mode `kds` ke printer
   cadangan + notifikasi kasir *sticky*. `SerializationFailure`/lock/deadlock naik (Odoo me-retry
   request); bentrok unik nomor tiket → `ConcurrencyError` (retry). **Rule Loki** (devsecops):
-  `count_over_time({service="odoo"} |= "EFN_KDS_TICKET_FAILED" [5m]) > 0` → on-call outlet.
+  Alert sudah dipasang di Loki (stream `efn_kds`, rule `EfnKdsTicketFailed` / `EfnKdsTicketFailedSpike` / `EfnKdsAlertFormatUnrecognized` di `infra/observability/loki-rules/efn-kds.yml`); runbook `docs/runbooks/kds-ticket-failed.md`.
 - **SEC-77 token & kanal:** token kanal stasiun dirotasi otomatis saat `device_user_ids`/`active`/
   `company_id` stasiun berubah, saat user perangkatnya dinonaktifkan/dihapus/diubah grup, login,
   password, atau company, saat dikeluarkan dari grup perangkat lewat form Grup, dan **berkala**

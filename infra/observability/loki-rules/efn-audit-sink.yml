@@ -80,3 +80,26 @@ groups:
           summary: "Odoo: baris sink audit tanpa tanda tangan HMAC (mac null)"
           description: "Secret efn_audit_sink_key tidak terbaca oleh Odoo; keaslian baris sink tidak dapat diverifikasi (SEC-51)."
           runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/audit-sink-alerts.md#efnauditsinkunsigned"
+      # G15b (SEC-78 sisi observability): stream efn_audit_sink SENGAJA dikecualikan dari redaksi Promtail (redaksi =
+      # MAC rusak = alarm tamper palsu) dan disimpan 400 hari -> Odoo wajib me-mask di sumber (efn_audit
+      # audit_policy.mask_free_text: HP -> 62812****890, email -> b***@domain, NIK/NPWP -> ****123). Rule ini adalah
+      # DETEKTOR kegagalan mask: pola HP Indonesia (sama dengan redaksi promtail.yml tahap (d)), email, NIK/NPWP 15-16
+      # digit atau NPWP berformat 99.999.999.9-999.999. Harus SELALU 0. Field `mac` (hex 64, dapat memuat deret angka
+      # mirip HP/NIK) dibuang dulu dari payload sebelum dicocokkan; prefiks tanggal/pid tidak ikut dicocokkan.
+      # log_id + model sebagai label -> operator langsung tahu baris mana (kardinalitas: seharusnya nol).
+      - alert: EfnAuditSinkPiiPattern
+        expr: |
+          sum by (log_id, model) (
+            count_over_time({stream="efn_audit_sink"}
+              | regexp `EFN_AUDIT_SINK (?P<payload>[{].*[}])`
+              | line_format `{{ regexReplaceAll "\"mac\": (\"[0-9a-fA-F]*\"|null)" .payload "\"mac\": \"-\"" }}`
+              | json log_id="log_id", model="model"
+              |~ `(^|[^0-9A-Za-z+])((\+?62\)?[\s.-]{0,2}|0)8[1-9][0-9]{1,2}[\s.-]?[0-9]{3,4}[\s.-]?[0-9]{3,5})([^0-9A-Za-z]|$)|[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}|(^|[^0-9])[0-9]{15,16}([^0-9]|$)|[0-9]{2}\.[0-9]{3}\.[0-9]{3}\.[0-9]-[0-9]{3}\.[0-9]{3}` [15m])
+          ) > 0
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Odoo: sink audit memuat pola data pribadi (log_id {{ $labels.log_id }}, model {{ $labels.model }})"
+          description: "Baris EFN_AUDIT_SINK memuat pola nomor HP/email/NIK/NPWP yang tidak ter-mask. Stream ini tidak diredaksi dan disimpan 400 hari (UU PDP). Perbaiki mask di efn_audit; tangani baris sesuai runbook (SEC-78)."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/audit-sink-alerts.md#efnauditsinkpiipattern"

@@ -12,6 +12,13 @@ Berlaku untuk semua stream container, kecuali `efn_audit_sink` dan `efn_audit_an
 bertanda tangan HMAC/hash, sehingga redaksi akan merusak verifikasi. PII di sana wajib dicegah di sumber (SEC-78,
 Odoo). Pola yang sama dipakai di `promtail-journal.yml` (journal host, prod).
 
+G15b menambahkan dua hal:
+
+- **Detektor.** Kegagalan mask di sumber untuk `efn_audit_sink` kini memicu alert `EfnAuditSinkPiiPattern`
+  ([audit-sink-alerts.md](audit-sink-alerts.md#efnauditsinkpiipattern)). Pola yang diperiksa: HP, email, NIK/NPWP.
+- **Stream `efn_kds`.** Baris `EFN_KDS_TICKET_FAILED` diklasifikasikan **sebelum** redaksi, dengan regex berjangkar
+  dan skema hanya angka/enum, lalu **tetap** diredaksi sesudahnya. Lihat [kds-ticket-failed.md](kds-ticket-failed.md).
+
 | Tahap | Pola (ringkas) | Hasil |
 |---|---|---|
 | (a) query/logfmt | `token`, `access_token`, `refresh_token`, `id_token`, `auth_token`, `password`, `passwd`, `pwd`, `csrf_token`, `secret`, `client_secret`, `api_key`, `apikey`, `signature`, `x-amz-signature`, `x-amz-credential`, `x-amz-security-token`, `otp`, `otp_code` `=nilai`; prefiks `?`, `&`, spasi, `\u0026` (JSON Traefik), `%3F`/`%26`; `=` boleh `%3D` | `token=[REDACTED]` |

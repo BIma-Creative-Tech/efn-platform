@@ -1,0 +1,53 @@
+# Aturan ruler Loki Gelombang 15b (SEC-76, efn_pos_kds): kegagalan pembuatan tiket Kitchen Display.
+# Odoo TIDAK menggagalkan sinkron order bila tiket KDS gagal (KDS di luar jalur kas; savepoint), tetapi menulis
+# `EFN_KDS_TICKET_FAILED {json}` (logger khusus odoo.addons.efn_pos_kds.alert, ERROR, tanpa PII) dan menandai order
+# `efn_kds_ticket_failed`. Promtail (promtail.yml tahap (2b)) memasukkan baris berformat persis ke stream="efn_kds"
+# (label kds_event, kds_only). Tanpa alert, pesanan dapur bisa hilang diam-diam di outlet yang stasiunnya mode `kds`
+# (printer hanya cadangan). Runbook: docs/runbooks/kds-ticket-failed.md.
+groups:
+  - name: efn-kds
+    interval: 1m
+    rules:
+      # Satu kegagalan pun perlu ditindaklanjuti outlet (pesanan mungkin tidak tampil di layar dapur). Per company +
+      # config POS agar on-call langsung tahu outlet/kasir mana. kds_only=true = semua stasiun order itu mode layar.
+      - alert: EfnKdsTicketFailed
+        expr: |
+          sum by (company_id, config_id, kds_only) (
+            count_over_time({stream="efn_kds", kds_event="ticket_failed"}
+              | regexp `"company_id": (?P<company_id>\d+|null), "config_id": (?P<config_id>\d+|null), ` [5m])
+          ) >= 1
+        labels:
+          severity: warning
+          team: ops-outlet
+        annotations:
+          summary: "KDS: tiket dapur gagal dibuat (company {{ $labels.company_id }}, POS config {{ $labels.config_id }}, kds_only={{ $labels.kds_only }})"
+          description: "Order tersinkron ke Odoo tetapi tiket Kitchen Display gagal dibuat ({{ $value }} kali dalam 5 menit). Hubungi outlet: pastikan pesanan dibuat dapur (struk printer / kirim ulang dari POS). Order bertanda efn_kds_ticket_failed."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/kds-ticket-failed.md#efnkdsticketfailed"
+      # Lonjakan: kegagalan sistemik (deploy/migrasi efn_pos_kds, constraint DB, stasiun salah konfigurasi) di satu
+      # company. Ambang PLACEHOLDER (10/15 menit), sesuaikan setelah pilot KDS.
+      - alert: EfnKdsTicketFailedSpike
+        expr: |
+          sum by (company_id) (
+            count_over_time({stream="efn_kds", kds_event="ticket_failed"}
+              | regexp `"company_id": (?P<company_id>\d+|null), ` [15m])
+          ) >= 10
+        labels:
+          severity: critical
+          team: ops-outlet
+        annotations:
+          summary: "KDS: lonjakan kegagalan tiket dapur (company {{ $labels.company_id }}, {{ $value }} dalam 15 menit)"
+          description: "Kegagalan tiket KDS sistemik. Outlet beralih ke printer dapur / prosedur manual; periksa deploy terakhir efn_pos_kds dan log Odoo (DEBUG) sesuai runbook."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/kds-ticket-failed.md#efnkdsticketfailedspike"
+      # Penjaga format: baris dari logger alert KDS yang TIDAK masuk stream efn_kds (skema berubah di Odoo, teks bebas di
+      # field `error`, payload tak dikenal) -> dua alert di atas buta. stream="" = baris tanpa label stream (Loki
+      # memperlakukan label kosong = tidak ada). Hanya service=odoo (label Docker).
+      - alert: EfnKdsAlertFormatUnrecognized
+        expr: |
+          sum (count_over_time({service="odoo", stream=""} |= "odoo.addons.efn_pos_kds.alert: EFN_KDS_TICKET_FAILED" [15m])) > 0
+        labels:
+          severity: warning
+          team: ops-outlet
+        annotations:
+          summary: "KDS: baris EFN_KDS_TICKET_FAILED berformat tidak dikenal (alert KDS buta)"
+          description: "Logger odoo.addons.efn_pos_kds.alert menulis baris yang tidak cocok regex berjangkar promtail.yml (2b). Samakan format Odoo dan Promtail; anggap ada kegagalan tiket KDS yang belum ditangani."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/kds-ticket-failed.md#efnkdsalertformatunrecognized"

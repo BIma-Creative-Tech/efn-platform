@@ -1075,3 +1075,95 @@ request + query tidak dicatat.
 - SEC-78 sisi Odoo (mask `note` purge sebelum MAC) belum. Rule deteksi `{stream="efn_audit_sink"} |~ HP` → warning
   belum dibuat (kandidat G16).
 - Sebelum staging pertama menerima log: jalankan query §3 `log-redaction.md` di staging.
+
+# Gelombang 15b (9 Okt 2026): alert KDS, detektor PII sink audit, rate limit self-order (SEC-75/76/78 sisi infra)
+
+Masukan: laporan efn-odoo-engineer G15, bagian "Untuk devsecops". Tidak ada commit.
+
+## G15b.1 Perubahan
+- **Alert `EFN_KDS_TICKET_FAILED` (SEC-76).**
+  - Ditambahkan tahap **(2b)** di `infra/observability/promtail.yml`. Tahap ini berjalan **sebelum** redaksi dan hanya
+    untuk `service=odoo`.
+  - Regex berjangkar penuh pada format log Odoo: logger `odoo.addons.efn_pos_kds.alert`, level ERROR, kunci JSON
+    `sort_keys` persis.
+  - Skema ketat: hanya angka/`null`/boolean, `mode` ∈ {kds, kds_printer, printer}, dan `error` berupa identifier
+    Python ≤ 80 karakter.
+  - Baris yang cocok masuk `stream="efn_kds"` (`kds_event="ticket_failed"`, label `kds_only`, retensi default 30
+    hari).
+  - Redaksi **tetap** diterapkan sesudahnya. `promtail-journal.yml` tidak berubah (tahap ini tidak relevan untuk
+    journal host).
+  - Rule baru `loki-rules/efn-kds.yml`:
+    - `EfnKdsTicketFailed`: warning, ≥ 1 kejadian dalam 5 menit, `by (company_id, config_id, kds_only)`;
+    - `EfnKdsTicketFailedSpike`: critical, ≥ 10 kejadian dalam 15 menit per company (PLACEHOLDER);
+    - `EfnKdsAlertFormatUnrecognized`: warning, untuk baris dari logger alert yang tidak masuk stream (format berubah
+      atau teks bebas di `error`). Penjaga ini dipasang supaya alert KDS tidak buta diam-diam.
+  - Rule ini menggantikan usulan `|= "EFN_KDS_TICKET_FAILED"` yang tidak berjangkar. Dengan usulan itu, teks tersebut
+    di catatan dapur atau pesan login sudah memicu alert.
+- **Detektor PII sink audit (SEC-78).** Rule `EfnAuditSinkPiiPattern` ditambahkan di
+  `loki-rules/efn-audit-sink.yml` (warning, `team: security`, `by (log_id, model)`, jendela 15 menit).
+  - Pipeline:
+    1. ambil payload;
+    2. buang `"mac": "<hex>"`, karena hex 64 dapat memuat deret mirip HP/NIK;
+    3. `| json log_id, model`;
+    4. cocokkan HP Indonesia (pola = redaksi tahap (d)), email, 15–16 digit, dan NPWP berformat.
+  - Hasil yang diharapkan selalu 0.
+- **Rate limit self-order (Traefik).** File baru `infra/traefik/dynamic/odoo-self-order.yml` berisi:
+  - router `odoo-pos-self@file`, **hanya** di `wg-https`, prioritas 220;
+  - middleware `internal-only` + `secure-headers` + `ratelimit-odoo-pos-self` (5 req/s, burst 40, per RemoteAddr =
+    per outlet; PLACEHOLDER);
+  - service `odoo@docker` (https + serversTransport CA internal, tidak ada jalur plaintext baru).
+  - Path yang ditangkap: `/pos-self/`, `/pos-self-order/`, `/pos_self_order/`, `/kiosk/`. Ini = seluruh 15 route
+    `auth="public"` `pos_self_order` CE 19, diverifikasi dari kode di image `efn/odoo:dev`.
+  - Komentar file dan runbook mencatat bahwa mode `mobile` dikunci di Odoo (`efn_setup_pos`, parameter
+    `efn.pos.self_order_mobile_allowed`, SEC-75). Bila mode itu dibuka, jalurnya lewat BFF/ADR, bukan entrypoint
+    publik.
+  - Label compose tidak diubah (`infra/compose` di luar batas file). Router file-provider merujuk service docker.
+- **Fixture** `tests/promtail/fixtures/odoo.txt` (+5 baris fiktif) dan `expected.txt` (62 → 67 entri):
+  - 2 baris KDS valid → `efn_kds`;
+  - teks `EFN_KDS_TICKET_FAILED` di catatan dapur → bukan `efn_kds`, HP teredaksi;
+  - baris logger alert dengan `error` berisi nama + HP → bukan `efn_kds`, HP teredaksi;
+  - baris sink audit berisi HP + email → tetap utuh di `efn_audit_sink`. Ini dokumentasi bahwa sink sengaja tidak
+    diredaksi dan bahwa detektor yang menangkapnya.
+- **Runbook:**
+  - baru: `kds-ticket-failed.md`;
+  - `audit-sink-alerts.md` §EfnAuditSinkPiiPattern;
+  - `wireguard-outlet.md` §Self-order kiosk + baris troubleshooting 429;
+  - `log-redaction.md` (catatan G15b);
+  - `README.md` (indeks).
+
+## G15b.2 Validasi
+| Cek | Hasil |
+|---|---|
+| `promtail -check-syntax` (promtail.yml, promtail-journal.yml; 3.2.1) | Valid |
+| `scripts/test-promtail-redaction.sh` | OK, 67 entri (docker + journal, 0 SENTINEL). Run pertama sebelum `--update` gagal tepat pada 5 baris baru (diff ditinjau) |
+| LogQL di Loki 3.2.1 sekali pakai (baris fiktif, push API) | KDS: warning (company 1/config 3 = 11; company 2/config null = 1), spike company 1 = 11, format = 1 (baris palsu di logger lain tidak terhitung). PII: log_id 2–6 terdeteksi (HP berpemisah, `+62 …`, email, NIK 16, NPWP berformat); log_id 1/7/8 tidak terdeteksi (ter-mask, `mac` berisi deret angka, tanggal, ID kecil, `mac: null`) |
+| Ruler Loki dev | rule baru termuat otomatis tanpa restart Loki, tanpa error/warn ruler |
+| E2E dev (container sintetis `efn-g15b-synth`, `service=odoo`, company/config 999) | promtail → `efn_kds` → ruler → Alertmanager (mTLS): **EfnKdsTicketFailed, EfnKdsTicketFailedSpike, EfnKdsAlertFormatUnrecognized aktif**. Container dihapus; alert resolve sendiri setelah jendela 5/15 menit |
+| `EfnAuditSinkPiiPattern` pada stream sink dev nyata | 0 (jendela 15 menit dan varian 7 hari: 16 baris sink, 0 temuan) |
+| Traefik dev (v3.7.13, restart) | 150 POST paralel `/pos-self/ping` → 85×200 + 65×429; `/web/health` (router `odoo`) 150×200; RouterName `odoo-pos-self@file` untuk `/pos-self/1`, `/pos-self-order/get-slots`, `/pos_self_order/kiosk/…`, `/kiosk/payment/…`; `/pos-selfish` dan `/pos/ui` → `odoo@docker` |
+| promtool check rules `alert-rules.yml` | SUCCESS, 28 (tidak berubah) |
+| yamllint 1.35.1 (loki-rules, promtail, tests, traefik) | 0 error, hanya warning line-length (regex) |
+| `scripts/check-encryption.sh` (docker:27-cli) | OK |
+
+## G15b.3 Restart stack dev (UTC, 8 Okt)
+- 18:41 dan 18:44: `traefik` (provider file di bind mount Windows tidak hot-reload). Routing kembali dalam ±20 detik.
+- 18:45: `promtail`. Baca ulang log: entri lebih tua dari ±1 jam ditolak Loki (`too far behind`), dan sebagian kecil
+  entri terkirim ulang (duplikat, dev saja).
+- Loki dan Alertmanager tidak di-restart.
+
+## G15b.4 Sisa / butuh pihak lain
+- **README `efn_pos_kds` (Odoo engineer):** masih menyebut rule `|= "EFN_KDS_TICKET_FAILED"`. Perlu diganti dengan
+  rujukan ke `loki-rules/efn-kds.yml` dan stream `efn_kds`.
+- **Kontrak format log:** bila payload `EFN_KDS_TICKET_FAILED` berubah (kunci, separator `json.dumps`, mode stasiun
+  baru), regex `promtail.yml` (2b) dan fixture wajib diubah bersamaan. Penjaga `EfnKdsAlertFormatUnrecognized` akan
+  menyala.
+- **Ambang dan routing:** ambang spike (10/15 menit), rate limit kiosk (5/s, burst 40), dan label `team: ops-outlet`
+  masih PLACEHOLDER. Kalibrasi saat pilot KDS. Alertmanager masih punya satu penerima generik.
+- **Label compose:** `traefik.http.routers.odoo.*` tidak disentuh. Router file-provider bergantung pada nama service
+  docker `odoo`. Bila nama itu diganti di compose, router ini error (terlihat di log Traefik) dan `/pos-self` jatuh ke
+  router `odoo` (tetap `internal-only`, limit 50/s).
+- **Belum diuji:**
+  - kiosk nyata di bawah beban (ambang);
+  - path ter-encode (`/pos%2Dself/`). Traefik v3 menolak atau menormalkan sebagian; kasus yang lolos hanya mendapat
+    limit `ratelimit-odoo`, bukan bypass allowlist.
+- Delete API Loki untuk baris lama (G15.4) masih menunggu operator.
