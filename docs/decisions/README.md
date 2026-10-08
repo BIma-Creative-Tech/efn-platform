@@ -10,6 +10,8 @@
 >
 > **Pembaruan 7 Okt 2026 (gelombang 14, Fase 1).** Fitur poin di kasir sudah selesai dan diuji di lingkungan pengembangan. Reviewer keamanan (r7) memberi **GO bersyarat** untuk mengaktifkan poin di **satu outlet pilot** dengan 7 syarat (bagian "Syarat GO pilot loyalty" di bawah). Tabel keputusan terbuka ditambah **P-1..P-10** (pertanyaan pilot dari fit-gap Odoo), **Q-13** (nilai & batas poin oleh Finance), dan **Q-P12..Q-P14** (UU PDP, inventaris v4). Belum ada ADR baru; belum ada ADR yang Accepted.
 >
+> **Pembaruan 9 Okt 2026 (gelombang 15, Fase 2 F&B).** Layar dapur (KDS) selesai dibangun dan diuji di lingkungan pengembangan. Reviewer keamanan (r8) memberi **GO bersyarat** untuk **satu outlet F&B pilot** dengan 8 syarat (bagian "Syarat GO pilot KDS" di bawah); perbaikan teknis Gelombang 15 sudah menutup sebagian besar syarat di sisi kode, sisanya menunggu staging dan keputusan/tindakan klien. **Dua ADR baru (Proposed):** ADR-032 (QR order dari ponsel: kiosk dulu, Super-App + BFF bila wajib ponsel) dan ADR-033 (akun tablet dapur). Tabel keputusan terbuka ditambah **P-11..P-18** (pilot F&B), **Q-QR1..Q-QR5**, **Q-KD1..Q-KD4**, dan **Q-P15..Q-P16** (inventaris PDP v5). Total kini **33 ADR**; belum ada yang Accepted penuh.
+>
 > **Ringkasan manajemen (awal).** Ada 25 keputusan arsitektur yang menunggu tanda tangan klien. Semuanya berstatus **Proposed**: tim boleh mulai mengikuti rekomendasi, tetapi tidak boleh mengunci pilihan yang mahal dibalik sebelum disetujui. **ADR-022 (enkripsi) dan ADR-025 (model tim agent) berasal dari instruksi klien 5 Okt 2026** — prinsipnya sudah wajib; yang ditandatangani adalah caranya. Tujuh keputusan di **Gelombang 1** memblokir Fase 1 dan perlu ditandatangani dalam 2 minggu pertama; ADR-022/023/024 (keamanan) ditandatangani paralel karena memblokir staging publik. Keputusan pajak dan legal (MGM, unified cart) butuh konsultan eksternal sehingga harus **dimulai** sekarang.
 
 Status: `Proposed` = belum disetujui klien · `Accepted` = disetujui (catat nama & tanggal) · `Superseded by ADR-xxx`.
@@ -50,6 +52,8 @@ Sumber: `docs/01_REVIEW_RISK_GAP_ANALYSIS.md` (D-xx, R-xxx, Q-xx). Template: `AD
 | [029](ADR-029-identitas-member-opak.md) | Identitas member opak: JWT `sub` = UUID | R-L01 | Proposed | IT + Legal/DPO | R-L01 |
 | [030](ADR-030-sumber-image-object-storage.md) | Object storage: MinIO community diarsipkan → build SILO (fork) dari source + filter L7; PoC SeaweedFS sebagai jalur keluar | R-S02, R-S08 (usulan R-S13) | Proposed — jangka pendek **diterapkan di dev** (SILO + s3-gateway, SEC-41 fixed) | IT + Security (Finance bila opsi berbayar) | R-S02, R-S08, R-T08, R-L01 |
 | [031](ADR-031-tanpa-dependency-modul-odoo-pihak-ketiga.md) | Tanpa dependency modul Odoo pihak ketiga; OCA & Cybrosys sebagai referensi; gap = `efn_*` LGPL-3 (clean implementation) | D-15, R-T04, R-L08 | **Diputuskan klien 6 Okt 2026** (prinsip); rincian Q-V1..Q-V6 Proposed | Klien; rincian: IT + Finance + Legal | R-T04, R-L08, R-B09, R-S10, usulan R-T13 |
+| [032](ADR-032-qr-order-dari-ponsel.md) | QR order dari ponsel: pilot = kiosk; bila wajib ponsel = Super-App + BFF (E-27); `pos_self_order` mobile ditolak (ADR-023) | F-49, Q-23/P-17 | Proposed — menunggu Q-QR1 (Q-23) | PO + Ops F&B + Finance + IT/Security | R-S03, R-B01, R-L03, R-L01 |
+| [033](ADR-033-akun-perangkat-kds.md) | Akun perangkat KDS: user internal tersandbox (pilot) vs user *share* (sebelum outlet ke-2) | SEC-74, SEC-77 | Proposed | IT + Security (+ Ops F&B) | R-S03, R-S10, R-S12, R-T04 |
 
 Catatan pemetaan: D-09 dipetakan ke ADR-001 (sudah ada) sehingga ADR-009 dipakai untuk D-08. D-10 dibahas di ADR-010 dan juga disinggung ADR-001.
 
@@ -64,6 +68,7 @@ Belum ada ADR berstatus Accepted. Sudah dijawab klien: Q-E1 (kustodi = Superadmi
 | 4 | ADR-024, ADR-028, ADR-029 | Teknis, biaya Rp0 — dapat ditandatangani sekaligus | IT (+ DPO untuk 028/029) |
 | 4a | **ADR-030** | Q-OS1 (terima fork komunitas tanpa SLA), Q-OS3 (object lock COMPLIANCE), Q-OS2 PoC SeaweedFS; **memblokir staging publik** karena CVE High terbuka di build saat ini — tandatangani bersama ADR-024 | IT + Security |
 | 4b | **ADR-031** (rincian) | Q-V2 lisensi LGPL-3; Q-V4 anggaran/jadwal (+10–16 minggu-engineer); Q-V3 laporan keuangan per PT; Q-V1/Q-V5/Q-V6 ruang lingkup referensi — **memblokir mulai `efn_audit` & `efn_intercompany` (Fase 1)** | IT + Finance + Legal |
+| 4c | **ADR-032, ADR-033** (baru 9 Okt) | Q-QR1 (kiosk vs ponsel) dan Q-KD1/Q-KD3 (akun tablet dapur) — **sebelum pilot F&B** | PO + Ops F&B + IT/Security |
 | 5 | **Paket UU PDP**: `docs/compliance/*` (DPO, retensi, Q-P1..P8), `PDP_TRANSFER_LINTAS_NEGARA.md` (Q-T1..T6) | Penetapan DPO lebih dulu; tanpa DPO, retensi tetap default usulan | DPO + Legal |
 | 6 | ADR-027 | Daftar kota/tarif & kebijakan include/exclude (konsultan pajak) — sebelum go-live F&B | Finance + Tax |
 | 7 | ADR-026 → ADR-016 | Prinsip abstraksi sekarang; pemilihan vendor dengan kriteria ADR-026 sebelum Fase 3 (KYB tiap PT) | Finance + Legal + IT |
@@ -82,10 +87,52 @@ Sumber: `docs/reviews/SECURITY_REVIEW_2026-10-07-r7.md` §"Rekomendasi go/no-go"
 | G-3 | Hak akses: `base.group_system` hanya Superadmin; akun perangkat kasir **tanpa** grup POS Manager | **IT klien** + Ops Outlet | **Belum** (keputusan klien 6 Okt sudah menetapkan prinsip "hanya Superadmin"; daftar nama belum) | Ya — daftar nama Superadmin (Q-E1a) |
 | G-4 | Operasional: supervisor meninjau "Review Poin" + outbox `hold` setiap hari; on-call menerima alert kritis; dead-man rekonsiliasi diamati sekali di staging | **Ops Outlet** + devsecops | **Belum** | Ya — siapa supervisor & on-call |
 | G-5 | Inventaris UU PDP v4 | architect | **Selesai** (`docs/compliance/PDP_DATA_INVENTORY.md` v4, Gelombang 14) | DPO meninjau (Q-P12..Q-P14) |
-| G-6 | CI: `EFN_TOUR_MIN_TESTS` 9 → 15 | devsecops | **Belum** (±10 menit) | Tidak |
+| G-6 | CI: `EFN_TOUR_MIN_TESTS` 9 → 15 | devsecops | **Selesai** (per 9 Okt kini `20`, `ci.yml:317`) | Tidak |
 | G-7 | SOP: retur tanpa struk wajib supervisor sampai SEC-68 / Q-27 diputuskan | **Ops Outlet** | **Belum** | Ya — P-3 (Q-27) |
 
 Kondisi berhenti (NO-GO): alert `earn_ledger_orphan`, `earn_ledger_mismatch`, `ledger_unknown_source`, `restore_exceeds_redeem`, atau `earn_limit_company_hour` tanpa penjelasan → matikan flag poin di config POS (kasir tetap jalan tanpa poin), ikuti `docs/runbooks/loyalty-anomaly.md`.
+
+## Syarat GO pilot KDS (review keamanan r8, 9 Okt 2026)
+
+Sumber: `docs/reviews/SECURITY_REVIEW_2026-10-09-r8.md` §"Rekomendasi go/no-go". Rekomendasi reviewer: **GO bersyarat** untuk mengaktifkan `efn_pos_kds` di **satu outlet F&B pilot**. Status di bawah berasal dari laporan agent Gelombang 15 (odoo-engineer, devsecops) dan **belum di-review ulang** oleh security-reviewer (r9). Syarat GO loyalty (G-1..G-7) tetap berlaku bila outlet F&B juga menyalakan poin.
+
+| # | Syarat sebelum KDS dinyalakan | Siapa | Status 9 Okt (G15) | Butuh keputusan klien? |
+|---|---|---|---|---|
+| K-1 | Semua stasiun pilot mode **`kds_printer`** (printer dapur tetap mencetak); mode `kds` tidak dipakai di pilot | Ops F&B + IT (konfigurasi) | Kode SEC-76 **selesai** (alert log `EFN_KDS_TICKET_FAILED`, tanda order, cetak ulang + notifikasi kasir; tour baru). Rule alert Loki **belum** (devsecops). Syarat konfigurasi tetap berlaku | Tidak (konfigurasi) |
+| K-2 | **Self-order terkunci**: query `self_ordering_mode NOT IN ('nothing','kiosk')` = 0 baris di DB pilot; QR meja ponsel tidak aktif sebelum ADR-032 diputuskan | odoo-engineer + devsecops | Kunci teknis **selesai** (`efn_setup_pos` 19.0.1.5.0: `ir.default`, constraint, normalisasi, 4 test). Query pra-go-live tetap dijalankan di DB pilot. Rate limit Traefik `/pos-self` **belum** | **Ya — Q-QR1 (Q-23)** |
+| K-3 | **Akun tablet dapur**: satu user per layar, grup hanya `base.group_user` + `group_kds_device` (verifikasi query), 2FA aktif, tablet = peer WireGuard sendiri, browser mode kiosk, login tidak dipakai untuk hal lain | odoo-engineer + **IT klien** + Ops F&B | Allowlist grup (termasuk lewat form Grup) + sandbox model + uji runtime **selesai** (`efn_pos_kds` 19.0.1.1.0). 2FA, peer WG, mode kiosk = tindakan IT saat instalasi | **Ya — Q-KD1, Q-KD3** (ADR-033) |
+| K-4 | **Uji staging**: upgrade modul, tour lengkap, `/efn_kds/<id>` dari peer non-perangkat → 404, uji runtime akun perangkat | devsecops + QA | **Belum** (staging belum ada). Versi kini `efn_pos_kds` 19.0.1.1.0 + `efn_setup_pos` 19.0.1.5.0, tour **20/20** di dev; upgrade `-u` dari DB lama belum diuji | Ya, tidak langsung: server staging (ADR-004) |
+| K-5 | **Pergantian perangkat**: rotasi token kanal setiap tablet diganti/dicabut/hilang + cabut peer WireGuard | Ops F&B + IT | Rotasi token **otomatis** saat perangkat/stasiun berubah + cron 7 hari (SEC-77). SOP cabut peer WG **belum** ditulis untuk outlet | Ya — Q-KD3 (siapa pemegang perangkat) |
+| K-6 | **SOP kasir**: tidak menulis nama/HP pelanggan di catatan dapur; masuk pelatihan pilot | **Ops F&B** | **Belum** (materi pelatihan) | Ya — Q-P15(b) |
+| K-7 | **Log**: uji regresi redaksi Promtail + redaksi parameter token aktif sebelum staging menerima log nyata | devsecops | **Selesai di kode/CI** (job `promtail-redaction` di `ci-gate`, redaksi query string). Query deteksi wajib dijalankan di staging sebelum menerima log | Tidak |
+| K-8 | **Dokumen**: inventaris PDP v5 memuat tiket KDS; keputusan Q-19 (stasiun, target menit, retensi) dan Q-24 (perangkat/printer) dicatat | architect + **Ops F&B** | Inventaris **v5 selesai** (9 Okt). Q-19 / Q-24 **belum** (default PLACEHOLDER) | **Ya — P-13, P-18** |
+
+Kondisi berhenti (NO-GO / kembali ke printer saja): layar menampilkan data pelanggan, perangkat dapat membuka stasiun/PT lain, atau log `EFN_KDS_TICKET_FAILED` berulang → ubah mode stasiun ke `printer` (perilaku CE standar); POS tetap jalan.
+
+## Keputusan klien yang masih terbuka (gabungan, per 9 Okt 2026 — Gelombang 15)
+
+### Pilot POS F&B + KDS (baru, Gelombang 15)
+Sumber: `docs/08_ODOO_FIT_GAP.md` §7.6 (functional G14), review r8, ADR-032, ADR-033. Semua memblokir **outlet pilot F&B**, bukan pengembangan.
+
+| Prioritas | ID | Pertanyaan | Pemutus | Default bila tidak dijawab | Memblokir |
+|---|---|---|---|---|---|
+| **A** | P-11 | Outlet F&B pilot: alamat/kota, jam buka, jumlah meja & lantai, jumlah kasir/KDS/kiosk | PO + Ops F&B | — | Semua persiapan; PB1 kota; pola WireGuard B-a/B-b |
+| **A** | P-13 (Q-19) | Stasiun dapur & kategori menu per stasiun; target menit per stasiun; perlu stasiun *expo/pass*?; retensi tiket | Ops F&B | Demo: Dapur Panas + Bar; warn 10 / late 15 menit; retensi 90 h (PLACEHOLDER) | K-8; konfigurasi stasiun |
+| **A** | P-16 (Q-22 + konsultan pajak) | Tarif PB1 kota pilot, service charge (ada? %? masuk DPP PB1? takeaway kena SC?), harga menu include/exclude | Finance + Tax | Configurable (ADR-027), belum ada nilai | Go-live F&B (struk & pajak) |
+| **A** | P-17 (Q-23) = **Q-QR1** | QR order: kiosk cukup, atau wajib ponsel pelanggan? | PO + Ops F&B | Kiosk saja (ADR-032 opsi A) | K-2; pengadaan kiosk; penjadwalan E-27 (±3–4 minggu-engineer) |
+| **A** | P-18 (Q-24/Q-56) | Model printer dapur & struk (Epson ePOS? sertifikat otomatis?), layar KDS (tablet/monitor + OS), kebijakan cetak cadangan | IT + Ops F&B | Epson ePOS; `kds_printer` (cetak selalu) | K-1, K-8; pengadaan perangkat |
+| **A** | Q-KD1 / Q-KD3 | Terima akun tablet internal tersandbox untuk pilot (ADR-033)? Siapa pemegang 2FA tablet & yang boleh login ulang? | IT + Security + Ops F&B | Ya / supervisor outlet | K-3, K-5 |
+| B | P-12 (Q-18) | Layanan: dine-in, takeaway, delivery telepon/ojol? takeaway beda pajak/SC? | PO + Ops F&B | Dine-in + takeaway; delivery lewat Super-App (nanti) | Preset & fiscal position |
+| B | P-14 (Q-20) | Split/gabung/pindah meja, course, open bill — peran siapa? | Ops F&B | Standar CE (semua kasir) | Hak akses kasir |
+| B | P-15 (Q-21) | Daftar modifier; mana yang memakai bahan (harga tambahan, stok)? menu paket pilihan vs tetap | Ops F&B + CK | Modifier = atribut tanpa stok; berbahan = add-on/combo | Master menu |
+| B | Q-QR2..Q-QR5 | Bila ponsel: bayar di kasir/online; tamu vs login; QR dinamis vs statis + PIN; jumlah & model kiosk | PO + Finance + Ops F&B | Bayar di kasir; tamu; QR dinamis; 1 kiosk | E-27 (bila Q-QR1 = ponsel) |
+| B | Q-KD2 / Q-KD4 | Akan ada user portal Odoo? (efek 2FA opsi share); rotasi token 7 hari cukup? | IT | Tidak ada / 7 hari | ADR-033 opsi B (sebelum outlet ke-2) |
+
+### UU PDP — tambahan inventaris v5 (baru, Gelombang 15)
+| Prioritas | ID | Pertanyaan | Pemutus | Default bila tidak dijawab | Memblokir |
+|---|---|---|---|---|---|
+| B | Q-P15 | Retensi tiket KDS (90 h vs lebih pendek) dan SOP catatan dapur vs masking teknis (±0,5–1 hari) | DPO + Ops F&B | 90 h + SOP | K-6 (SOP) |
+| B | Q-P16 | Near-miss redaksi log dev: setujui klasifikasi "tidak wajib notifikasi"; hapus baris dev sekarang (delete API) atau tunggu retensi ±7 Nov; pemilik register insiden | DPO | Tunggu retensi; register sementara di `PDP_DATA_INVENTORY.md` §6 | — |
 
 ## Keputusan klien yang masih terbuka (gabungan, per 7 Okt 2026 — Gelombang 14)
 

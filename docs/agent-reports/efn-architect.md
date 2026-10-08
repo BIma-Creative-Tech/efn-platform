@@ -311,3 +311,54 @@ Daftar data pribadi kini mencakup semua data fitur poin di kasir, sehingga syara
   - `host-journal` di host nyata;
   - nomor pasal UU PDP;
   - apakah sistem lama klien memakai id yang dapat dipetakan ke HP (bergantung P-9).
+
+# Gelombang 15 — Inventaris PDP v5 (F&B/KDS, recon, near-miss), ADR-032/033, syarat GO KDS (2026-10-09)
+
+Basis: `39f6074`, review r8 (SEC-72, SEC-74, SEC-75, SEC-77, SEC-79, syarat GO KDS 1–8), laporan G14/G15 odoo-engineer, devsecops, data-AI, odoo-functional, `docs/08` §7. Hanya dokumen; tidak ada kode diubah, tidak ada commit.
+
+## Ringkasan (untuk manajemen)
+Daftar data pribadi kini mencakup layar dapur dan hasil pencocokan poin. Keduanya tanpa identitas pelanggan; satu-satunya celah adalah catatan dapur yang diketik bebas oleh kasir, dan celah ini ditangani dengan SOP. Near-miss log dev (nomor fiktif) dicatat di register baru. Dua keputusan baru menunggu klien: QR order dari ponsel (ADR-032, rekomendasi kiosk dulu) dan model akun tablet dapur (ADR-033, rekomendasi akun internal tersandbox untuk pilot). Indeks keputusan memuat 8 syarat GO KDS beserta statusnya.
+
+## File dibuat / diubah
+| File | Perubahan |
+|---|---|
+| `docs/compliance/PDP_DATA_INVENTORY.md` | **v5**: ringkasan v5; §1 kategori operasional dapur / akun perangkat / hasil rekonsiliasi; §2.2b baru (`efn.kds.ticket(.line)` 90 h tanpa PII/harga + risiko `internal_note`/`note` teks bebas, `efn.kds.station`, akun perangkat tersandbox, `pos.session.efn_kds_listener_user_ids`, flag `pos.order`, kunci self-order); §2.4 `loyalty_recon_run/finding` (400 h, sampel id numerik) + kolom sink/jangkar `audit_recon_run`; §2.6 redaksi G15 + uji CI, koreksi klaim "0 baris HP", `EFN_KDS_TICKET_FAILED`, `etl_recon`, `mac` sink sudah di-wire; §2.7 tablet KDS & kiosk; §3 matriks; **Q-P15, Q-P16**; §5; **§6 register near-miss** (NM-2026-01 = SEC-72) |
+| `docs/decisions/ADR-032-qr-order-dari-ponsel.md` | **Baru, Proposed**: A kiosk (pilot) / B Super-App + BFF E-27 (draf kontrak API + RPC + queue `fnb.order.status_changed`) / C `pos_self_order` mobile ditolak (ADR-023) / D Wi-Fi tamu ditolak; Q-QR1..Q-QR5 |
+| `docs/decisions/ADR-033-akun-perangkat-kds.md` | **Baru, Proposed**: A user internal + allowlist + sandbox `ir.rule` (pilot) / B user share (spike sebelum outlet ke-2) / C token URL ditolak / D akun bersama ditolak; Q-KD1..Q-KD4 |
+| `docs/decisions/README.md` | Catatan G15; indeks ADR-032/033 (total 33); urutan tanda tangan 4c; **Syarat GO pilot KDS K-1..K-8** + status G15; keputusan terbuka P-11..P-18, Q-QR, Q-KD, Q-P15/16; G-6 → selesai (`ci.yml:317` = 20) |
+| `docs/STATUS_MANAJEMEN.md` | Ditulis ulang per 9 Okt: Fase 1 + Fase 2 (KDS siap pilot bersyarat), tabel 8 syarat, risiko, kebutuhan manajemen, biaya |
+
+## Temuan saat menulis (untuk lead)
+1. **Catatan dapur = data kesehatan potensial.** Catatan seperti "alergi kacang" yang dikaitkan dengan orang dapat tergolong data spesifik (kesehatan). Mitigasi saat ini hanya SOP. Masking teknis memakai `audit_policy.mask_free_text` (±0,5–1 hari odoo-engineer) tidak menangkap nama orang; tercatat di Q-P15.
+2. **Tidak ada stream Loki `efn_kds`.** `EFN_KDS_TICKET_FAILED` masuk stream umum 30 h dan rule alert belum ada. Inventaris mencatat keadaan sebenarnya (devsecops G16).
+3. **ETL tiket KDS → ClickHouse belum ada.** Bila dibuat, `internal_note`/`note` tidak boleh disalin (dicatat di §2.2b).
+4. **Q23 asli docs/01** ("siapa yang menutup bill QRIS di meja") berbeda dari Q-23 versi `docs/08` P-17. ADR-032 memakai versi P-17 dan menyebut perbedaannya.
+5. `pos.session.efn_kds_listener_user_ids` (uid kasir) tidak dipurge dan ikut umur `pos.session`. Dampaknya kecil (data karyawan, akses manager); dicatat di inventaris.
+6. Status syarat K-1..K-8 diambil dari laporan agent G15 dan **belum** di-review ulang security (r9).
+
+## Keputusan yang butuh tanda tangan klien
+- **ADR-032 / Q-QR1 (= Q-23, P-17)**: kiosk vs ponsel; Q-QR2..5 bila ponsel.
+- **ADR-033 / Q-KD1, Q-KD3**: akun tablet internal tersandbox untuk pilot; pemegang 2FA. Q-KD2/Q-KD4.
+- **P-11..P-18**: outlet F&B, stasiun & target menit (Q-19), PB1/SC (P-16), perangkat & printer (Q-24).
+- **Q-P15** retensi tiket KDS + SOP catatan; **Q-P16** near-miss (klasifikasi, hapus baris dev, pemilik register).
+- Yang lama tetap terbuka: Q-13, Q-P1, Q-P12..Q-P14, server staging.
+
+## Terverifikasi / belum terverifikasi
+- **Terverifikasi dengan membaca repo:**
+  - `efn_kds_ticket.py` (field, `DEFAULT_RETENTION_DAYS=90`, autovacuum berdasarkan `sent_at`, `NOTE_MAX=500`);
+  - `ir.model.access.csv` KDS;
+  - `pos_config.py` (`efn_kds_listener_user_ids` ber-`groups` manager);
+  - manifest `efn_pos_kds` 19.0.1.1.0 / `efn_setup_pos` 19.0.1.5.0;
+  - `05-loyalty-recon.sql` (TTL 400 h, kolom), `metabase-access.sql`, `etl-access.sql`;
+  - `promtail.yml` (`etl_recon`, tidak ada `efn_kds`);
+  - `ci.yml` (`EFN_TOUR_MIN_TESTS: "20"`, job `promtail-redaction` di `ci-gate`);
+  - tidak ada referensi KDS di `efn_privacy`/ETL.
+- **Sumber primer:** `odoo/odoo@19.0` `addons/auth_totp_mail/models/res_config_settings.py` → `auth_totp.policy` ∈ {`employee_required`, `all_required`} (dipakai di ADR-033 opsi B).
+- **Dari laporan agent (tidak saya jalankan):** 337 unit / tour 20/20, uji runtime sandbox, dry-run & CI redaksi, siklus ETL recon, hitungan near-miss.
+- **Belum terverifikasi:**
+  - layar KDS untuk user share di 19.0;
+  - kiosk 19.0 meminta nama/HP dan menulis `last_order_preparation_change`;
+  - upgrade `-u` dari DB lama;
+  - harga kiosk/tablet dan estimasi Rupiah E-27 (turunan tarif ADR-031);
+  - nomor pasal UU PDP (Pasal 46 dikutip dari r8);
+  - Mermaid tidak dirender.
