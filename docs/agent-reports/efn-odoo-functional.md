@@ -193,3 +193,40 @@ Toko pilot & jumlah SKU; Q-25 timbangan & format label; Q-27 peran kasir/refund/
 
 ### Asumsi belum terverifikasi (Gelombang 13)
 Install modul dengan data baru belum dijalankan (`<delete>` pada blok noupdate, penulisan `nomenclature_id` ke company milik modul lain, `eval` `obj(...)` untuk `taxes_id` demo); check digit barcode demo dihitung manual; perilaku POS untuk barcode kemasan `product.uom`, FEFO otomatis tanpa lot, layar timbangan/IoT, monitor pelanggan, offline dengan 20.000 produk; format xmlid pajak per company (`account.<id>_tax_ST4`); akun selisih jurnal tunai `l10n_id`; produk khusus `_get_special_products` dimuat walau tanpa kategori POS. Tidak ada test/CI yang dijalankan oleh agent ini.
+
+## Gelombang 14 — 2026-10-08 (Fase 2: POS F&B + KDS + QR order 1 outlet, kitting CK)
+
+Detail: `docs/08_ODOO_FIT_GAP.md` §7 (F-43..F-54, temuan #29–35, E-26 spesifikasi §7.3, opsi QR §7.4, P-11..P-18).
+
+### Konfigurasi diterapkan (`efn_setup_pos` 19.0.1.3.0 → 19.0.1.4.0)
+| File | Isi | Mengapa |
+|---|---|---|
+| `data/pos_fnb_defaults.xml` (baru, noupdate) | preset master Delivery `available_in_self=False`; Takeout `use_timing=False` | pesan-antar lewat Super-App/BFF + minimisasi alamat; slot takeout bawaan = kalender demo Odoo (Selasa–Sabtu, main company) |
+| `demo/pos_fnb_demo.xml` (baru) | lantai Teras (3 meja), atribut no_variant Level Pedas/Permintaan Dapur/Gula, 2 menu ber-PB1 default (Dapur Panas, Bar), preset *Bungkus – Kota Contoh* | Q-18..Q-22 belum dijawab |
+| `tests/test_fnb_defaults.py` (baru) | 3 test default preset | regresi data |
+| `README.md` | tabel SOP restoran standar CE 19, aturan preset × fiscal position, printer HTTPS, checklist outlet F&B pilot (24 langkah), peringatan QR order | |
+
+### Temuan standar CE 19 (terverifikasi source 19.0)
+- Meja/denah, open bill, split, pindah/gabung meja (`transferOrder`, `mergeTableOrders`, `restaurant.table.parent_id`), **course** (`restaurant.order.course`), catatan baris/order, modifier atribut, combo, preset dine-in/takeout/delivery: semua standar.
+- **Service charge tetap tidak ada** di CE 19 (cek ulang `res.config.settings` point_of_sale & pos_restaurant).
+- `setPreset()` mengganti fiscal position config (tidak digabung) → **preset takeaway per kota**.
+- `pos.printer` CE hanya `iot`/`epson_epos`; HTTPS ke printer lewat domain sertifikat Epson dari nomor seri (`omnilinkcert.epson.biz`) — [B].
+- **QR order ponsel** (`pos_self_order` mobile/consultation) = route `auth='public'` di Odoo, tanpa rate limit → **bertentangan ADR-023/CLAUDE.md**; kiosk di jaringan WireGuard aman. `pos_self_order` ter-auto-install bersama `pos_restaurant`.
+- **Bus Odoo 19 tidak membatasi kanal string** → kanal KDS wajib token acak (`pos.bus.mixin`); pola Cybrosys (`pos_order_created_{config_id}`) tidak aman — **untuk efn-security-reviewer**.
+
+### Rekomendasi untuk efn-odoo-engineer
+- **E-26 (Fase 2, WAJIB) `efn_pos_kds`** — `docs/08 §7.3`: `efn.kds.station` (pos.bus.mixin, kategori, mode `kds`/`kds_printer`/`printer`, printer cadangan, SLA, user perangkat, heartbeat), `efn.kds.ticket`(+line) per order × stasiun × pengiriman, delta qty dihitung server (`pos.order.line.efn_kds_sent_qty`) di `_process_saved_order` saat `last_order_preparation_change` berubah, course yang di-*fire*, bump/recall via RPC dengan cek user perangkat, `_notify` ke kanal token, layar OWL `/efn_kds/<id>` `auth='user'`, grup `group_kds_device` + 2FA, fallback printer di `sendOrderInPreparation`, autovacuum, tanpa data pelanggan; test & tour terdaftar.
+- **E-27 (opsional, menunggu Q-23 + ADR)** QR order via Super-App/BFF (`efn.pos.bff.order.create`) — opsi B §7.4; jangan dikerjakan sebelum ADR.
+- **Jangan dikustom:** service charge, routing printer, model meja/denah/preset, status `pos.order`, `updateLastOrderChange`.
+- **Audit modul yang ada:** `efn_kitting` tetap (guard paket vs phantom; tidak menduplikasi `pos_mrp`). Saran: menu lintas stasiun pakai `type='combo'`, bukan Kit BoM (Kit tercetak/ditiket sebagai satu menu di satu stasiun).
+
+### Untuk efn-lead
+- Hapus file sisa sesi terputus: `services/odoo/addons/efn_setup_pos/README.md.tmp.30200.6cb4dbb0441e` (duplikat README; agent ini tidak bisa menghapus file).
+- ADR baru QR order ponsel (opsi §7.4) — pemilik efn-architect.
+- ETL `efn_kds_ticket` → ClickHouse untuk KPI dapur (efn-data-ai-engineer) setelah E-26.
+
+### Pertanyaan klien (P-11..P-18, `docs/08 §7.6`)
+Outlet pilot & perangkat; layanan & takeaway (Q-18); stasiun & target menit (Q-19); peran split/gabung/course (Q-20); modifier berbahan (Q-21); PB1 kota/SC/include (Q-22, konsultan pajak); QR kiosk vs ponsel, bayar di kasir vs online (Q-23); printer Epson ePOS & layar KDS, kebijakan cetak cadangan (Q-24/Q-56).
+
+### Asumsi belum terverifikasi (Gelombang 14)
+Install data/demo baru belum dijalankan (penulisan field `pos_self_order` ke xmlid `pos_restaurant`; `taxes_id` ref PB1; atribut line pada template demo); picking anak combo & lot paket CK di POS; self-order menulis `last_order_preparation_change`; tombol UI rotasi token QR; HTTPS printer Epson + DNS; saklar UI course; perilaku multi-perangkat meja saat offline. Tidak ada test/CI yang dijalankan.

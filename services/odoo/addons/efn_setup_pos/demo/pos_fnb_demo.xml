@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO outlet F&B (Gelombang 14, Fase 2) — hanya DB demo. Bergantung keputusan klien:
+     Q-18 (layanan & preset), Q-19 (stasiun), Q-20 (denah), Q-21 (modifier), Q-22 (PB1/SC).
+     Fit-gap: docs/08 §7 (F-43..F-52). ADR-013, ADR-018, ADR-027.
+
+     Field terverifikasi odoo/odoo 19.0 (2026-10-07): restaurant.floor (name, sequence; tanpa
+     company_id), restaurant.table (floor_id, table_number, seats, shape, position_h/v, width,
+     height), product.attribute (create_variant 'no_variant', display_type 'radio'/'multi'),
+     product.attribute.value (attribute_id, sequence, is_custom, default_extra_price),
+     product.template.attribute.line (product_tmpl_id, attribute_id, value_ids), pos.preset
+     (name, fiscal_position_id, identification, color; service_at/available_in_self dari
+     pos_self_order). Stasiun dapur = pos.category di pos_demo.xml (Dapur Panas, Bar Minuman).
+     efn.kds.station TIDAK dibuat di sini (model belum ada; demo stasiun KDS milik efn_pos_kds). -->
+<odoo>
+    <!-- Denah kedua: area teras dengan meja bulat (pindah/gabung meja diuji lintas lantai). -->
+    <record id="floor_terrace" model="restaurant.floor">
+        <field name="name">Teras (DEMO)</field>
+        <field name="sequence">2</field>
+    </record>
+    <record id="table_t1" model="restaurant.table">
+        <field name="floor_id" ref="floor_terrace"/>
+        <field name="table_number">11</field>
+        <field name="seats">2</field>
+        <field name="shape">round</field>
+        <field name="position_h">50</field>
+        <field name="position_v">50</field>
+    </record>
+    <record id="table_t2" model="restaurant.table">
+        <field name="floor_id" ref="floor_terrace"/>
+        <field name="table_number">12</field>
+        <field name="seats">2</field>
+        <field name="shape">round</field>
+        <field name="position_h">150</field>
+        <field name="position_v">50</field>
+    </record>
+    <record id="table_t3" model="restaurant.table">
+        <field name="floor_id" ref="floor_terrace"/>
+        <field name="table_number">13</field>
+        <field name="seats">6</field>
+        <field name="shape">square</field>
+        <field name="width">120</field>
+        <field name="position_h">250</field>
+        <field name="position_v">50</field>
+    </record>
+
+    <!-- Modifier TANPA dampak stok (Q-21): atribut no_variant -> tersimpan di
+         pos.order.line.attribute_value_ids, tercetak di tiket dapur. Modifier yang memakai
+         bahan (extra telur/keju) = produk tambahan (add-on) atau item combo, bukan atribut. -->
+    <record id="attr_spicy_level" model="product.attribute">
+        <field name="name">Level Pedas (DEMO)</field>
+        <field name="create_variant">no_variant</field>
+        <field name="display_type">radio</field>
+    </record>
+    <record id="attr_spicy_0" model="product.attribute.value">
+        <field name="attribute_id" ref="attr_spicy_level"/>
+        <field name="name">Tidak pedas</field>
+        <field name="sequence">1</field>
+    </record>
+    <record id="attr_spicy_1" model="product.attribute.value">
+        <field name="attribute_id" ref="attr_spicy_level"/>
+        <field name="name">Sedang</field>
+        <field name="sequence">2</field>
+    </record>
+    <record id="attr_spicy_2" model="product.attribute.value">
+        <field name="attribute_id" ref="attr_spicy_level"/>
+        <field name="name">Pedas</field>
+        <field name="sequence">3</field>
+    </record>
+
+    <record id="attr_kitchen_without" model="product.attribute">
+        <field name="name">Permintaan Dapur (DEMO)</field>
+        <field name="create_variant">no_variant</field>
+        <field name="display_type">multi</field>
+    </record>
+    <record id="attr_without_onion" model="product.attribute.value">
+        <field name="attribute_id" ref="attr_kitchen_without"/>
+        <field name="name">Tanpa bawang</field>
+        <field name="sequence">1</field>
+    </record>
+    <record id="attr_without_msg" model="product.attribute.value">
+        <field name="attribute_id" ref="attr_kitchen_without"/>
+        <field name="name">Tanpa MSG</field>
+        <field name="sequence">2</field>
+    </record>
+
+    <record id="attr_sugar" model="product.attribute">
+        <field name="name">Gula (DEMO)</field>
+        <field name="create_variant">no_variant</field>
+        <field name="display_type">radio</field>
+    </record>
+    <record id="attr_sugar_normal" model="product.attribute.value">
+        <field name="attribute_id" ref="attr_sugar"/>
+        <field name="name">Normal</field>
+        <field name="sequence">1</field>
+    </record>
+    <record id="attr_sugar_less" model="product.attribute.value">
+        <field name="attribute_id" ref="attr_sugar"/>
+        <field name="name">Sedikit gula</field>
+        <field name="sequence">2</field>
+    </record>
+    <record id="attr_sugar_none" model="product.attribute.value">
+        <field name="attribute_id" ref="attr_sugar"/>
+        <field name="name">Tanpa gula</field>
+        <field name="sequence">3</field>
+    </record>
+
+    <!-- Menu dimasak di outlet (bukan paket CK): consu tanpa stok. Pajak = PB1 default PT F&B
+         (data efn_setup_company, PLACEHOLDER tarif). Harga = PLACEHOLDER. -->
+    <record id="product_demo_fried_rice" model="product.template">
+        <field name="name">Nasi Goreng EFN (DEMO)</field>
+        <field name="type">consu</field>
+        <field name="available_in_pos" eval="True"/>
+        <field name="list_price">35000</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="pos_categ_ids" eval="[(6, 0, [ref('pos_categ_hot_kitchen')])]"/>
+        <field name="taxes_id" eval="[(6, 0, [ref('efn_setup_company.tax_pb1_10_fnb')])]"/>
+    </record>
+    <record id="ptal_fried_rice_spicy" model="product.template.attribute.line">
+        <field name="product_tmpl_id" ref="product_demo_fried_rice"/>
+        <field name="attribute_id" ref="attr_spicy_level"/>
+        <field name="value_ids" eval="[(6, 0, [ref('attr_spicy_0'), ref('attr_spicy_1'), ref('attr_spicy_2')])]"/>
+    </record>
+    <record id="ptal_fried_rice_without" model="product.template.attribute.line">
+        <field name="product_tmpl_id" ref="product_demo_fried_rice"/>
+        <field name="attribute_id" ref="attr_kitchen_without"/>
+        <field name="value_ids" eval="[(6, 0, [ref('attr_without_onion'), ref('attr_without_msg')])]"/>
+    </record>
+
+    <record id="product_demo_iced_coffee" model="product.template">
+        <field name="name">Es Kopi Susu (DEMO)</field>
+        <field name="type">consu</field>
+        <field name="available_in_pos" eval="True"/>
+        <field name="list_price">25000</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="pos_categ_ids" eval="[(6, 0, [ref('pos_categ_bar')])]"/>
+        <field name="taxes_id" eval="[(6, 0, [ref('efn_setup_company.tax_pb1_10_fnb')])]"/>
+    </record>
+    <record id="ptal_iced_coffee_sugar" model="product.template.attribute.line">
+        <field name="product_tmpl_id" ref="product_demo_iced_coffee"/>
+        <field name="attribute_id" ref="attr_sugar"/>
+        <field name="value_ids" eval="[(6, 0, [ref('attr_sugar_normal'), ref('attr_sugar_less'), ref('attr_sugar_none')])]"/>
+    </record>
+
+    <!-- Preset takeaway per KOTA (temuan G14): pos_order.js setPreset() memakai
+         preset.fiscal_position_id ATAU config.default_fiscal_position_id (tidak digabung).
+         Preset ber-fiscal-position menggantikan fiscal position kota outlet, sehingga fiscal
+         position preset harus memuat pemetaan PB1 kota itu juga. pos.preset tanpa company_id ->
+         batasi lewat pos.config.available_preset_ids. Contoh memakai fiscal position demo
+         efn_setup_company (PB1 Kota Contoh); varian takeaway sebenarnya menunggu Q-22/Q-TX2. -->
+    <record id="preset_takeaway_kota_contoh" model="pos.preset">
+        <field name="name">Bungkus - Kota Contoh (DEMO)</field>
+        <field name="color">3</field>
+        <field name="identification">none</field>
+        <field name="fiscal_position_id" ref="efn_setup_company.fiscal_position_kota_contoh_fnb"/>
+        <field name="service_at">counter</field>
+        <field name="available_in_self" eval="False"/>
+    </record>
+</odoo>

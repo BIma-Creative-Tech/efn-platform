@@ -1,7 +1,7 @@
 {
     "name": "EFN Setup - Point of Sale (Retail & Restoran)",
     "summary": "Bundel modul POS CE 19 untuk retail & F&B; demo stasiun dapur, printer dapur, denah meja.",
-    "version": "19.0.1.3.0",
+    "version": "19.0.1.4.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",
@@ -31,10 +31,14 @@
         # SEC-63: noupdate=0 -> aturan barcode diskon dinetralkan di SEMUA nomenklatur tiap upgrade.
         "data/barcode_hardening_data.xml",
         "data/pos_bill_idr_data.xml",
+        # Gelombang 14 (Fase 2 F&B): preset delivery tidak di self-order (BFF/ADR-019, UU PDP),
+        # slot takeout bawaan Odoo dimatikan (jam buka demo main company). docs/08 §7.
+        "data/pos_fnb_defaults.xml",
     ],
     "demo": [
         "demo/pos_demo.xml",
         "demo/pos_retail_demo.xml",
+        "demo/pos_fnb_demo.xml",
     ],
     "installable": True,
     "application": False,

@@ -3,7 +3,7 @@
 Modul konfigurasi untuk POS **retail (PT Retail)** dan **restoran (PT F&B)** di Odoo CE 19. Isinya **bundel dependensi** (modul CE yang benar) + data konfigurasi objektif + data demo; pengaturan `pos.config` per outlet dilakukan lewat UI mengikuti checklist di bawah karena bergantung keputusan klien.
 
 - **ADR:** ADR-013 (printer dapur dulu, KDS custom fase 2, kiosk *pay after meal*), ADR-017 (promo/poin ber-OTP mati saat offline), ADR-020 (poin member di ledger BFF, bukan Odoo), ADR-026 (gateway-agnostic), ADR-031 (tanpa modul pihak ketiga). Semua *Proposed*.
-- **Fit-gap:** `docs/08_ODOO_FIT_GAP.md` F-04..F-11, F-23, **§6 Fase 1 pilot retail (F-31..F-40)**.
+- **Fit-gap:** `docs/08_ODOO_FIT_GAP.md` F-04..F-11, F-23, **§6 Fase 1 pilot retail (F-31..F-42)**, **§7 Fase 2 F&B/KDS/QR order (F-43..F-54, Gelombang 14)**.
 - **Risiko dimitigasi:** R-O05 (void/refund), R-O06 (cash management), R-B06/SEC-12 (fraud diskon/harga kasir), R-O02 (migrasi, lihat `docs/templates/migrasi/`).
 
 ## Modul yang di-install (semua terverifikasi ada di 19.0)
@@ -18,12 +18,14 @@ Modul konfigurasi untuk POS **retail (PT Retail)** dan **restoran (PT F&B)** di 
 | `pos_payment_method_data.xml` | *Kartu Debit/Kredit (EDC manual)* RTL & FNB. Tunai dibuat otomatis per outlet. QRIS `id_qr` tidak dikonfigurasi (pakai `efn_pos_payment_gateway`) | `pos_payment_method.py` |
 | `barcode_nomenclature_data.xml` (G13) | Nomenklatur **EFN Retail (IDR)**, dipasang ke PT Retail: `23.....{NNNNN}` harga Rupiah bulat, `21.....{NNDDD}` berat kg, `042` pelanggan, `041` karyawan, `043\|044` kupon, `.*` produk. **Tanpa** aturan diskon `22{NN}` (vektor fraud: memberi diskon tanpa cek peran/`manual_discount`) dan tanpa aturan lot `10` (salah baca EAN impor) | `barcodes`, `point_of_sale`/`stock`/`pos_loyalty` `default_barcode_patterns.xml`, `product_screen.js` |
 | `barcode_hardening_data.xml` (13c, **noupdate=0**) | SEC-63: setiap `barcode.rule` bertipe `discount` di **semua** nomenklatur (termasuk default `point_of_sale.barcode_rule_discount` `22{NN}` yang dipakai PT F&B/EFN/FARM dan aturan buatan admin) diubah menjadi aturan **produk** berawalan `22` → barcode `22..` hanya dicari sebagai barcode produk, tidak pernah memberi diskon. Dijalankan ulang setiap install/upgrade modul (berlaku juga untuk DB yang sudah memasang modul). Record tidak dihapus (record noupdate `point_of_sale` yang dihapus dibuat ulang saat upgrade) | `barcodes/models/barcode_rule.py` (tanpa field `active`), `product_screen.js` `_barcodeDiscountAction` |
+| `pos_fnb_defaults.xml` (G14, noupdate) | Preset master `pos_restaurant.pos_delivery_preset` → `available_in_self = False` (pesan-antar lewat Super-App/BFF, alamat pelanggan tidak dikumpulkan di halaman self-order); `pos_restaurant.pos_takeout_preset` → `use_timing = False` (slot bawaan memakai kalender demo Odoo Selasa–Sabtu milik main company) | `pos_restaurant/data/scenarios/restaurant_preset.xml` (data manifest), `pos_self_order/data/preset_data.xml`, `pos_preset.py` |
 | `pos_bill_idr_data.xml` (G13) | Pecahan Rupiah (Rp100..Rp100.000) untuk hitung kas buka/tutup; 13 pecahan USD bawaan dihapus (`forcecreate="0"` → tidak muncul lagi saat upgrade) | `pos_bill.py`, `point_of_sale_data.xml` |
 
 **Catatan upgrade:** semua blok `noupdate` (termasuk `<function>` dan penetapan nomenklatur PT Retail) hanya dijalankan saat **install**. DB yang sudah memasang `efn_setup_pos` 19.0.1.1.0: filter audit baru ikut dibuat saat `-u`, tetapi default/nomenklatur/pecahan harus diterapkan manual (Settings POS) atau DB pilot di-install bersih.
 
 ## Demo (`demo/`, hanya DB demo)
 - `pos_demo.xml` (F&B): kategori stasiun dapur, 2 printer ePOS (IP placeholder), denah meja.
+- `pos_fnb_demo.xml` (G14): lantai *Teras* (3 meja), modifier tanpa stok sebagai atribut `no_variant` (*Level Pedas*, *Permintaan Dapur* multi, *Gula*), menu *Nasi Goreng EFN* (Dapur Panas) & *Es Kopi Susu* (Bar) ber-PB1 default, preset *Bungkus – Kota Contoh* (fiscal position kota demo; ilustrasi aturan preset per kota).
 - `pos_retail_demo.xml` (G13): kategori *Fresh (Timbang)*; *Tomat Merah per kg* (barcode berat `2100001000004`, label 1,250 kg = `2100001012502`); *Daging Sapi* berlabel harga (`2300002000007`, label Rp45.500 = `2300002455005`); pricelist *Harga Member (DEMO)* 5% (PLACEHOLDER).
 
 ## SOP kasir retail — apa yang standar CE 19 (terverifikasi source 19.0, 2026-10-07)
@@ -117,21 +119,63 @@ Batasi per outlet dengan `pos_config_ids`; **jangan** `program_type = 'loyalty'`
 | User terminal POS | tanpa *Contacts: Creation*, 2FA aktif | SEC-07 |
 | Uji offline | buka sesi online → putus jaringan → scan 10 SKU, bayar tunai/EDC → online → order tersinkron | Q-55 |
 
-## Checklist `pos.config` restoran (PT F&B)
-| Field | Nilai usulan | Catatan |
+## SOP restoran — apa yang standar CE 19 (terverifikasi source 19.0, 2026-10-07; detail `docs/08 §7`)
+| Kebutuhan | Standar CE 19 | Sumber |
 |---|---|---|
-| `module_pos_restaurant` | True | |
-| `default_fiscal_position_id` | fiscal position kota outlet; kosong bila tarif = PB1 default | README `efn_setup_company` |
-| `fiscal_position_ids` / `tax_regime_selection` | kosong / False | |
-| `use_presets`, `available_preset_ids` | Q-18 | preset tanpa `company_id` |
-| `payment_method_ids` | Tunai, EDC manual, QRIS (EFN Gateway) | |
-| `floor_ids`, `iface_splitbill`, `iface_printbill`, `default_screen` | Q-20/Q-18 | |
-| `is_order_printer`, `printer_ids` | Q-19, Q-24 | |
-| `self_ordering_mode` / `_service_mode` / `_pay_after` | `mobile`/`kiosk`, `table`/`counter`, **`meal`** | ADR-013 |
-| Promo OTP | program `efn_requires_otp` tidak ditautkan ke config kiosk | |
+| Denah & meja | `restaurant.floor` (tanpa `company_id`) + `restaurant.table` (`table_number`, `seats`, `shape`, posisi); `pos.config.floor_ids`, `default_screen = tables` | `pos_restaurant/models/pos_restaurant.py`, `pos_config.py` |
+| Open bill | order `draft` menempel ke meja (`pos.order.table_id`, `customer_count`) sampai dibayar; *Bill* sebelum bayar = `iface_printbill` | `pos_order.py`, `pos_config.py` |
+| Split bill | `iface_splitbill` (layar split → order terpisah) | `pos_config.py`, `pos_store.js continueSplitting` |
+| Pindah / gabung meja | frontend `transferOrder`, `mergeTableOrders`, `mergeOrders`; gabung fisik meja = `restaurant.table.parent_id` | `pos_restaurant/static/src/app/services/pos_store.js` |
+| Course (hidangan bertahap) | `restaurant.order.course` (`index`, `fired`, `fired_date`, `line_ids`); frontend `addCourse`, `fireCourse`, `printCourseTicket` | `restaurant_order_course.py` |
+| Catatan | baris: `note` (dapur), `customer_note`; order: `internal_note`, `general_customer_note` | `pos_order.py` |
+| Modifier | atribut `no_variant` → `pos.order.line.attribute_value_ids` (+ `custom_attribute_value_ids` untuk teks bebas); **tidak** mengubah stok/BoM | `product_attribute.py`, `pos_order.py` |
+| Paket/combo pilihan | produk `type = 'combo'` + `product.combo`/`product.combo.item` (`extra_price`) → baris anak `combo_parent_id`/`combo_line_ids`, tiap anak dirutekan ke stasiun sesuai kategorinya | `product_combo*.py`, `pos_order.py` |
+| Dine-in / takeaway / delivery | `pos.preset` master (Dine In/Takeout/Delivery, tidak bisa dihapus), `use_presets`, `default_preset_id`, `available_preset_ids`; preset bisa membawa `fiscal_position_id`/`pricelist_id` | `pos_preset.py`, `restaurant_preset.xml` |
+| Printer dapur | `pos.printer` `printer_type` **hanya** `iot` (IoT box, tidak dipakai) atau `epson_epos`; routing `product_categories_ids`; `is_order_printer` + `printer_ids` | `point_of_sale/models/pos_printer.py` |
+| Service charge | **tidak ada** di CE 19 (diverifikasi ulang G14: tidak ada field di `pos.config`/`res.config.settings` `point_of_sale` & `pos_restaurant`) → pajak SC (demo `efn_setup_company`) | F-28 |
+| Tip | `iface_tipproduct` + `tip_product_id`; `set_tip_after_payment` (terminal) | `pos_config.py` |
+
+**Aturan preset & pajak (temuan G14):** `setPreset()` memakai `preset.fiscal_position_id` **atau** `config.default_fiscal_position_id` — tidak digabung. Preset ber-fiscal-position (mis. takeaway tanpa SC) harus memuat pemetaan **PB1 kota** juga → satu preset takeaway **per kota** (contoh demo *Bungkus – Kota Contoh*). Preset tanpa fiscal position mengikuti fiscal position kota outlet. Preset tidak punya `company_id`: batasi dengan `available_preset_ids`.
+
+**Printer dapur & enkripsi:** POS dibuka lewat HTTPS → browser hanya boleh mengirim ke printer lewat **HTTPS** (mixed content). Epson ePOS mendukung sertifikat otomatis: isi `epson_printer_ip` dengan **nomor seri** printer (opsi *Automatic Certificate Update* di printer) → Odoo mengubahnya ke domain `<hash>.omnilinkcert.epson.biz` (`format_epson_certified_domain`). Butuh resolusi DNS domain Epson dari perangkat kasir & dukungan model printer — **[B] PoC perangkat** (Q-24/Q-56). Jangan pakai HTTP polos ke printer. Printer non-Epson (ESC/POS biasa) **tidak** didukung CE tanpa IoT box.
+
+**Offline:** order, cetak dapur (browser → printer LAN), split/pindah meja di perangkat yang sama tetap jalan; perangkat kasir lain tidak melihat perubahan meja sampai online; KDS (`efn_pos_kds`) dan QR order butuh server.
+
+## Checklist outlet F&B pilot (PT F&B, Fase 2)
+| # | Langkah / field | Nilai usulan | Keputusan |
+|---|---|---|---|
+| 1 | Company aktif PT F&B; buat `pos.config` lewat UI | 1 config per kasir/area | P-11 |
+| 2 | `module_pos_restaurant` | True | — |
+| 3 | `floor_ids`, `default_screen` | denah outlet; `tables` (dine-in dominan) / `register` (takeaway dominan) | Q-20 |
+| 4 | `iface_printbill`, `iface_splitbill` | True / True | Q-20 |
+| 5 | `use_presets`, `default_preset_id`, `available_preset_ids` | Dine In (+ takeaway kota outlet); Delivery hanya bila kasir menerima pesan-antar telepon | Q-18, Q-TX2 |
+| 6 | `default_fiscal_position_id` | fiscal position kota outlet (kosong bila tarif = PB1 default) | Q-22 |
+| 7 | `fiscal_position_ids` / `tax_regime_selection` | kosong / False (kasir tidak memilih pajak) | — |
+| 8 | Pajak menu | PB1 default (+ SC bila Q-22 ya) di setiap produk menu & produk anak combo | Q-22 |
+| 9 | `res.company.account_price_include` PT F&B | sesuai kebijakan harga menu; set **sebelum** isi harga | Q-22 |
+| 10 | `iface_tax_included` | `total` bila harga termasuk pajak | Q-22 |
+| 11 | Kategori POS = stasiun dapur | 1 kategori per stasiun (Dapur Panas, Bar, …) | Q-19 |
+| 12 | `pos.printer` per stasiun (company PT F&B) | `epson_epos`, nomor seri/IP, `product_categories_ids` stasiun | Q-24, Q-56 |
+| 13 | `is_order_printer`, `printer_ids` | True; semua printer stasiun (tetap aktif sebagai cadangan saat KDS ada) | Q-24 |
+| 14 | Modifier | atribut `no_variant` untuk instruksi; add-on berbahan = produk/combo | Q-21 |
+| 15 | Menu paket | combo pilihan = `type='combo'`; menu tetap dari paket CK = Kit BoM (`efn_kitting`) | Q-21, ADR-018 |
+| 16 | `res.company.point_of_sale_update_stock_quantities` | `real` (default) agar stok paket CK turun per transaksi | Q-35 |
+| 17 | `payment_method_ids` | Tunai, EDC manual, QRIS (EFN Gateway) | Q-23, Q-29 |
+| 18 | `module_pos_hr` + peran | kasir **minimal/basic**, supervisor **manager** (lihat SOP retail) | Q-27 |
+| 19 | `order_edit_tracking` | True (default G13) — void baris setelah kirim ke dapur tercatat | Q-27 |
+| 20 | Self-order | `self_ordering_mode = 'nothing'` sampai Q-23/ADR QR order diputuskan; kiosk hanya di jaringan POS (WireGuard), `pay_after = 'meal'` | Q-23, ADR-023 |
+| 21 | Promo OTP | program `efn_requires_otp` tidak ditautkan ke config kiosk | — |
+| 22 | Poin EFN | `efn_loyalty_redeem_enabled` False untuk kiosk (constraint) | Q-13 |
+| 23 | Perangkat | kasir + KDS + kiosk = peer WireGuard (B-a ≤ 3 perangkat, B-b > 3) | Q-W1 |
+| 24 | Uji pilot | dine-in 2 course + split + pindah meja; takeaway kota; printer mati → pesan ulang; offline 15 menit → sinkron; PB1/SC di struk & jurnal | PoC |
+
+### QR order meja & kiosk (F-49) — **jangan aktifkan `mobile` tanpa keputusan**
+`pos_self_order` mode `consultation`/`mobile` melayani pelanggan lewat route **publik Odoo** (`/pos-self/...`, `/pos-self-order/process-order/...`, `auth='public'`, token `pos.config.access_token` 16 heksa + `restaurant.table.identifier` 8 heksa, tanpa rate limit). Ponsel pelanggan harus menjangkau Odoo → **bertentangan dengan ADR-023/CLAUDE.md** (Odoo tidak diakses dari internet). Mode **kiosk** di jaringan POS (peer WireGuard) aman dipakai. QR dari ponsel pelanggan = keputusan klien + ADR baru (opsi di `docs/08 §7.4`).
 
 ## Keputusan klien yang dibutuhkan
-Q-7 (jumlah SKU → `limited_product_count`), Q-9, Q-25 (timbangan & format label), Q-27 (peran kasir, refund/void wajib supervisor?, toleransi selisih kas, pecahan), Q-28 (mekanik promo), Q-29 (metode bayar, pembulatan tunai, refund ke metode asal), Q-34 (lot di kasir), Q-55, Q-56 (perangkat, timbangan, laci, printer), toko pilot.
+**F&B (G14):** P-11 outlet pilot, Q-18 (layanan & preset), Q-19 (stasiun & routing), Q-20 (denah, split/merge/open bill), Q-21 (modifier & dampak resep), Q-22 + konsultan pajak (PB1 kota, SC, include/exclude, takeaway), Q-23 (QR order: siapa menutup bill; ponsel pelanggan atau kiosk), Q-24 (printer & cadangan KDS), Q-56/Q-W1 (perangkat). Lihat `docs/08 §7.6`.
+
+**Retail:** Q-7 (jumlah SKU → `limited_product_count`), Q-9, Q-25 (timbangan & format label), Q-27 (peran kasir, refund/void wajib supervisor?, toleransi selisih kas, pecahan), Q-28 (mekanik promo), Q-29 (metode bayar, pembulatan tunai, refund ke metode asal), Q-34 (lot di kasir), Q-55, Q-56 (perangkat, timbangan, laci, printer), toko pilot.
 
 ## Cara install
 ```bash

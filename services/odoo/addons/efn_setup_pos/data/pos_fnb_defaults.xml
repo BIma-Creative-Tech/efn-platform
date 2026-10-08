@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Default objektif outlet F&B (Gelombang 14, Fase 2). ADR-013, ADR-019, ADR-023, ADR-027.
+     Fit-gap: docs/08 §7 (F-43, F-45, F-50). noupdate="1": hanya saat install; admin boleh
+     mengubah lewat Point of Sale -> Configuration -> Presets.
+
+     Sumber 19.0 (diverifikasi 2026-10-07):
+     - pos_restaurant/data/scenarios/restaurant_preset.xml (dimuat sebagai DATA di manifest
+       pos_restaurant): preset master pos_takein_preset ("Dine In"), pos_takeout_preset
+       ("Takeout", identification=name, use_timing=True dengan kalender "Opening time" milik
+       base.main_company: Selasa-Sabtu 12-15 & 18-22), pos_delivery_preset ("Delivery",
+       identification=address). Ketiganya tidak bisa dihapus (_unlink_except_master_presets).
+     - pos_self_order/data/preset_data.xml: ketiganya available_in_self=True; delivery
+       service_at='delivery'.
+     - point_of_sale/models/pos_preset.py: use_timing, resource_calendar_id, identification. -->
+<odoo noupdate="1">
+    <!-- Delivery TIDAK lewat self-order Odoo: pesan-antar EFN berjalan di Super-App/BFF
+         (ADR-019, Odoo tidak diakses dari internet ADR-023), dan preset ini meminta alamat
+         pelanggan (identification=address) di halaman publik pos_self_order -> minimisasi data
+         pribadi (UU PDP). Kasir tetap bisa memakai preset Delivery di POS bila klien mau (Q-18). -->
+    <record id="pos_restaurant.pos_delivery_preset" model="pos.preset">
+        <field name="available_in_self" eval="False"/>
+    </record>
+
+    <!-- Slot waktu takeout bawaan memakai jam buka demo Odoo (Selasa-Sabtu, milik main company),
+         bukan jam outlet EFN -> pemesanan takeout dibatasi slot yang salah. Matikan sampai jam
+         buka & kapasitas outlet diketahui (Q-18, P-11). -->
+    <record id="pos_restaurant.pos_takeout_preset" model="pos.preset">
+        <field name="use_timing" eval="False"/>
+    </record>
+</odoo>
