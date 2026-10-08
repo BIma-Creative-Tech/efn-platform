@@ -4,7 +4,7 @@ psycopg[binary]==3.2.3
 minio==7.2.12
 requests==2.32.4
 # Dipakai langsung untuk http_client MinIO (TLS + CA internal); kompatibel minio 7.2 & requests 2.32.
-urllib3==2.5.0
+urllib3==2.8.0
 Pillow==11.3.0
 ImageHash==4.3.1
 rapidfuzz==3.10.1
