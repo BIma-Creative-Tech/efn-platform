@@ -20,9 +20,10 @@ EFN_RELEASE_CONFIG_VARS=(ACME_EMAIL PAYMENT_PROVIDER PG_SUPERUSER WHATSAPP_ENABL
   WHATSAPP_OTP_TEMPLATE ACME_DNS_PROVIDER ACME_DNS_TOKEN_ENV ACME_SERVER RABBITMQ_STRICT_PERMISSIONS
   MARKET_SCOUT_PHOTO_RETENTION_DAYS CH_MART_RETENTION_YEARS CONSENT_LOCATION_VERSION CONSENT_LOCATION_TEXT_SHA256
   CONSENT_MARKETING_VERSION CONSENT_MARKETING_TEXT_SHA256 DSAR_DELETE_GRACE_DAYS ETL_ENABLE_ODOO ETL_ENABLE_GL
-  ETL_AUDIT_COPY_ENABLED OLLAMA_VISION_MODEL MIGRATION_ENABLED METABASE_ADMIN_EMAIL)
+  ETL_AUDIT_COPY_ENABLED OLLAMA_VISION_MODEL MIGRATION_ENABLED METABASE_ADMIN_EMAIL ETL_LOYALTY_RECON_NOT_BEFORE)
 # Kontrol keamanan yang di production hanya boleh `false` bila nama-nya ada di EFN_ALLOW_CONTROL_OFF (deploy.conf)
-EFN_SECURITY_CONTROLS=(RABBITMQ_STRICT_PERMISSIONS ETL_AUDIT_COPY_ENABLED)
+# (ETL_LOYALTY_RECON_NOT_BEFORE: bukan boolean; izin = boleh MEMAJUKAN cutoff di production, dicek scripts/deploy.sh)
+EFN_SECURITY_CONTROLS=(RABBITMQ_STRICT_PERMISSIONS ETL_AUDIT_COPY_ENABLED ETL_LOYALTY_RECON_NOT_BEFORE)
 # Profil compose yang dikenal; production wajib memuat core,data,observability (alert/Loki/salinan audit)
 EFN_KNOWN_PROFILES=(core data ai observability ops)
 EFN_REQUIRED_PROD_PROFILES=(core data observability)
@@ -154,6 +155,13 @@ efn_validate_config() { # app_env
   for v in WHATSAPP_ENABLED RABBITMQ_STRICT_PERMISSIONS ETL_ENABLE_ODOO ETL_ENABLE_GL ETL_AUDIT_COPY_ENABLED MIGRATION_ENABLED; do
     _efn_re "$v" '^(true|false)$' || return 1
   done
+  # G14: go-live loyalty POS untuk rekonsiliasi ledger poin vs pos.order (ETL). UTC kanonik saja (perbandingan
+  # leksikal = kronologis). Masa depan ditolak: cutoff > sekarang = rekonsiliasi buta (kontrol detektif mati diam-diam).
+  _efn_re ETL_LOYALTY_RECON_NOT_BEFORE \
+    '^20[0-9]{2}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$' || return 1
+  if [[ -n "${ETL_LOYALTY_RECON_NOT_BEFORE:-}" && "$ETL_LOYALTY_RECON_NOT_BEFORE" > "$(date -u +%Y-%m-%dT%H:%M:%SZ)" ]]; then
+    _efn_err "ETL_LOYALTY_RECON_NOT_BEFORE di masa depan (rekonsiliasi poin akan buta)"; return 1
+  fi
   local p ver sha
   for p in LOCATION MARKETING; do
     ver="CONSENT_${p}_VERSION"; sha="CONSENT_${p}_TEXT_SHA256"

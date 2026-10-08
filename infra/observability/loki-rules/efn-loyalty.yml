@@ -65,3 +65,61 @@ groups:
           summary: "Poin EFN: job rekonsiliasi gagal >= 2 kali dalam 3 jam"
           description: "Query rekonsiliasi gagal (DB, grant, timeout). Lihat log LoyaltyReconService di BFF."
           runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-anomaly.md#efnloyaltyreconmissing"
+
+  # G14 (data-AI, sisa SEC-61): rekonsiliasi HARIAN ledger poin BFF <-> pos.order Odoo oleh ETL
+  # (services/etl/efn_etl/loyalty_recon.py; ETL_LOYALTY_RECON_INTERVAL_SECONDS default 86400). Baris
+  # `EFN_LOYALTY_RECON_ETL {"status":"ok","anomalies":N,"open_items":M,"kinds":{..},...}` -> promtail.yml tahap 5 ->
+  # {stream="efn_loyalty", loyalty_event="etl_recon", recon_status="ok|error"}. Karena hanya satu baris per hari, alert
+  # memakai NILAI TERAKHIR dalam 26 jam (last_over_time): tetap menyala sampai run berikutnya bersih (anomali ditangani
+  # atau keluar jendela/NOT_BEFORE), bukan padam setelah 15 menit. Angka diambil dengan `| regexp` berjangkar pada
+  # urutan kunci tetap (summary_payload: status, anomalies, open_items, ...): baris diawali timestamp Python sehingga
+  # `| json` gagal (JSONParserErr), dan regexp tidak membuat label kinds_*/sample_* (kardinalitas tetap).
+  # Runbook: docs/runbooks/loyalty-anomaly.md.
+  - name: efn-loyalty-etl-recon
+    interval: 5m
+    rules:
+      # anomalies > 0 = ledger poin vs order POS tidak cocok (earn tanpa order paid, order paid member tanpa earn,
+      # nilai baris Poin EFN beda dengan redeem, dst.) -> dugaan manipulasi/bug sampai terbukti sebaliknya.
+      - alert: EfnLoyaltyEtlReconAnomaly
+        expr: |
+          max(
+            last_over_time({stream="efn_loyalty", loyalty_event="etl_recon", recon_status="ok"}
+              | regexp `^\S+ \S+ \S+ efn_etl\.loyalty_recon EFN_LOYALTY_RECON_ETL [{]"status":"ok","anomalies":(?P<anomalies>\d+),"open_items":(?P<open_items>\d+),`
+              | unwrap anomalies | __error__="" [26h]) by (loyalty_event)
+          ) > 0
+        labels:
+          severity: critical
+          team: finance
+        annotations:
+          summary: "Poin EFN: rekonsiliasi harian ledger vs order POS menemukan {{ $value }} anomali"
+          description: "Ledger poin BFF dan order POS Odoo tidak konsisten (field kinds/sample_* baris EFN_LOYALTY_RECON_ETL; ClickHouse efn_dwh.loyalty_recon_finding). Jangan koreksi ledger tanpa CR Finance."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-anomaly.md#efnloyaltyetlreconanomaly"
+      # open_items > 0 = pekerjaan tertunda (order review, outbox hold/pending > 24 jam, outbox failed) -> ringkasan
+      # harian Finance/supervisor, bukan page.
+      - alert: EfnLoyaltyEtlReconOpenItems
+        expr: |
+          max(
+            last_over_time({stream="efn_loyalty", loyalty_event="etl_recon", recon_status="ok"}
+              | regexp `^\S+ \S+ \S+ efn_etl\.loyalty_recon EFN_LOYALTY_RECON_ETL [{]"status":"ok","anomalies":(?P<anomalies>\d+),"open_items":(?P<open_items>\d+),`
+              | unwrap open_items | __error__="" [26h]) by (loyalty_event)
+          ) > 0
+        labels:
+          severity: warning
+          team: finance
+        annotations:
+          summary: "Poin EFN: {{ $value }} item poin POS tertunda (review/outbox) menunggu tindak lanjut"
+          description: "Order berstatus review, outbox earn/clawback hold/pending > 24 jam, atau outbox failed. Tinjau di Odoo Point of Sale > Review Poin."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-anomaly.md#efnloyaltyetlreconopenitems"
+      # DEAD-MAN: tidak ada status ok selama 26 jam = job mati/gagal terus (grant G14, modul efn_pos_loyalty_ledger,
+      # DB), ETL berhenti, ETL_LOYALTY_RECON_ENABLED=false, ATAU format log berubah (alert anomali ikut buta).
+      - alert: EfnLoyaltyEtlReconMissing
+        expr: |
+          absent_over_time({stream="efn_loyalty", loyalty_event="etl_recon", recon_status="ok"} [26h])
+        for: 15m
+        labels:
+          severity: warning
+          team: data
+        annotations:
+          summary: "Poin EFN: rekonsiliasi harian ETL (loyalty_recon) tidak sukses > 26 jam (atau baris tidak dikenali)"
+          description: "Kontrol detektif ledger poin vs order POS tidak berjalan. Cek log ETL (EFN_LOYALTY_RECON_ETL status error / heartbeat job=loyalty_recon)."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-anomaly.md#efnloyaltyetlreconmissing"

@@ -50,10 +50,12 @@ scrape_configs:
         target_label: level
       - source_labels: [__journal__hostname]
         target_label: host
+    # G14: stage `replace` hanya mengganti CAPTURE GROUP (bukan seluruh kecocokan) -> nilai sensitif = satu grup luar,
+    # grup dalam non-capturing. Ekspresi lama membocorkan sisa nomor HP dan tidak meredaksi Bearer (promtail.yml).
     pipeline_stages:
       - replace:
-          expression: '(\+?62|0)8[1-9][0-9]{7,11}'
+          expression: '((?:\+?62|0)8[1-9][0-9]{7,11})'
           replace: '[PHONE_REDACTED]'
       - replace:
-          expression: '(?i)bearer\s+[a-z0-9\-_\.]+'
-          replace: 'Bearer [REDACTED]'
+          expression: '(?i)bearer\s+([a-z0-9\-_\.~+/]+=*)'
+          replace: '[REDACTED]'

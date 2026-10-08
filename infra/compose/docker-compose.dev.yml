@@ -154,6 +154,9 @@ services:
       # G12: butuh grant terbaru (efn_audit >= 19.0.1.2.0 di DB dev; sebelum itu job audit_copy mencatat gagal)
       ETL_ENABLE_GL: "true"
       ETL_AUDIT_COPY_ENABLED: "true"
+      # G14: go-live loyalty POS di DB dev (efn_pos_loyalty_ledger dipasang 7 Okt). Tanpa ini 42 order smoke lama
+      # muncul sebagai anomali `paid_member_order_without_earn` (EfnLoyaltyEtlReconAnomaly palsu).
+      ETL_LOYALTY_RECON_NOT_BEFORE: "2026-10-07T07:09:00Z"
 
   ocr-worker:
     image: efn/ai-ocr-worker:dev

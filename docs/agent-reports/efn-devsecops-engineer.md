@@ -915,3 +915,72 @@ prometheus; 08:08–08:10 promtail restart loop (selector salah, diperbaiki); 08
   menyala (didokumentasikan di runbook). Opsi lebih kuat: logger JSON di BFF (backlog BFF).
 - CI: `EFN_TOUR_MIN_TESTS` 9 → 15 (usul odoo-engineer) dan `docs/04` §6 `efn.bff.client.get` → `_efn_get` belum diubah
   (di luar batas file).
+
+---
+
+# Gelombang 14 (8 Okt 2026) — loyalty recon ETL, bug redaksi Promtail, cutoff & urutan grant G14
+
+## G14.1 Perubahan
+- `infra/observability/promtail.yml`
+  - Tahap sink audit (2) dipindah **sebelum** redaksi; redaksi kini `stream!~"efn_audit_anchor|efn_audit_sink"`
+    (sink tidak memuat PII by design; redaksi merusak MAC → `sink_mac_invalid` palsu).
+  - **Bug PII baru ditemukan saat uji**: stage `replace` Promtail hanya mengganti *capture group*. Ekspresi lama
+    `(\+?62|0)8[1-9][0-9]{7,11}` hanya mengganti awalan `0`/`62` → sisa nomor HP **masuk Loki**
+    (`[PHONE_REDACTED]81298765432`); ekspresi Bearer tanpa grup **tidak meredaksi apa pun**. Diperbaiki:
+    `((?:\+?62|0)8[1-9][0-9]{7,11})` dan `(?i)bearer\s+([a-z0-9\-_\.~+/]+=*)`. Sama di `promtail-journal.yml`.
+  - Tahap 5 baru: `EFN_LOYALTY_RECON_ETL` dari `service=etl`, regex berjangkar
+    `<ts> ((INFO|WARNING) efn_etl.loyalty_recon|ERROR efn_etl) EFN_LOYALTY_RECON_ETL {"status":"(ok|error)"...}`
+    → `stream=efn_loyalty`, `loyalty_event=etl_recon`, label `recon_status`. Catatan: baris error dicetak logger
+    `efn_etl` (`__main__`), bukan `efn_etl.loyalty_recon` — regex mengikuti kode.
+- `infra/observability/loki-rules/efn-loyalty.yml` grup `efn-loyalty-etl-recon` (5m): `EfnLoyaltyEtlReconAnomaly`
+  (critical, `last_over_time(...unwrap anomalies [26h]) > 0`), `EfnLoyaltyEtlReconOpenItems` (warning, open_items),
+  dead-man `EfnLoyaltyEtlReconMissing` (`absent_over_time` status ok 26h, for 15m). Angka diambil dengan `| regexp`
+  (baris diawali timestamp → `| json` gagal JSONParserErr; regexp juga tidak membuat label kinds_*).
+- `infra/compose/docker-compose.dev.yml`: `ETL_LOYALTY_RECON_NOT_BEFORE=2026-10-07T07:09:00Z`.
+  `infra/compose/docker-compose.yml` (etl): `ETL_LOYALTY_RECON_NOT_BEFORE: ${ETL_LOYALTY_RECON_NOT_BEFORE:-}`.
+- SEC-50: `scripts/lib/deploy-validate.sh` — var masuk `EFN_RELEASE_CONFIG_VARS` (manifest bertanda tangan) dan
+  `EFN_SECURITY_CONTROLS`; validasi UTC kanonik `YYYY-MM-DDTHH:MM:SSZ`, masa depan ditolak (cutoff di masa depan =
+  rekonsiliasi buta). `scripts/deploy.sh`: nilai manifest → else `.env` lama (pola R5); production menolak
+  **memajukan** cutoff tanpa `EFN_ALLOW_CONTROL_OFF` berisi `ETL_LOYALTY_RECON_NOT_BEFORE`; ditulis ke `.env`.
+- `scripts/deploy.sh`: sebelum file grant, cek 5 kolom G14 (`pos_order.uuid/efn_loyalty_state`,
+  `pos_config.efn_loyalty_earn_enabled`, `efn_pos_loyalty_outbox.original_order_id`,
+  `efn_pos_loyalty_reservation.order_uuid`) → `die` jelas "efn_pos_loyalty_ledger belum terpasang (n/5)".
+- `scripts/host/test-efn-deploy.sh`: uji 75–79 (format sah, spasi, offset +07:00, masa depan, bulan 13).
+- Runbook: `loyalty-anomaly.md` §Rekonsiliasi harian ETL (3 alert + Batas diperbarui); `audit-sink-alerts.md`
+  catatan G14 (sink sebelum redaksi; `sink_mac_invalid` lama pada baris berpola nomor = mungkin artefak).
+
+## G14.2 Validasi
+| Cek | Hasil |
+|---|---|
+| promtail `-check-syntax` (promtail.yml, promtail-journal.yml) | OK |
+| Promtail **dry-run** terisolasi (docker_sd filter label `efn_test=g14`, tanpa push ke Loki) | sink → `efn_audit_sink` utuh; baris biasa: `+62…`, `62857…`, `0812…` → `[PHONE_REDACTED]`, `62812****789` tetap, Bearer → `Bearer [REDACTED]`; ETL ok/warning/error → `etl_recon` + `recon_status`; logger `efn_etl.other` & sisipan teks ditolak |
+| MAC sink setelah pipeline (`efn_etl.sink.parse_sink_line`, image `efn/etl:dev`, kunci dev) | `valid=True`; varian ter-redaksi `valid=False` |
+| promtool check rules (28) / amtool check-config | SUCCESS |
+| yamllint `infra .github` | 0 error |
+| shellcheck v0.11.0 (`scripts/*.sh scripts/lib/*.sh` + host) | bersih |
+| `test-efn-deploy.sh` (python:3.12 container) | PASS 79 / FAIL 0 |
+| compose config dev & prod (semua profil) | OK; var muncul di etl |
+| `scripts/check-encryption.sh` (container docker-cli) | OK |
+| Cek kolom G14 terhadap DB dev | 5 (terpasang); kolom fiktif → 0 |
+| Runtime dev: baris sintetis `anomalies:2, open_items:1` (container `service=etl`) | `EfnLoyaltyEtlReconAnomaly` (critical) + `OpenItems` diterima Alertmanager ±5 menit |
+| Run ETL nyata sekali (`ETL_RUN_ONCE`, NOT_BEFORE aktif) | `anomalies 0, open_items 3` (2 order review + 1 outbox failed, sama dengan data-AI); query nilai terakhir = 0 / 3 |
+
+## G14.3 Restart stack dev (UTC)
+16:16 restart `promtail` (config baru); 16:26 recreate `etl` (env NOT_BEFORE); 16:26 & 16:34 run ETL sekali
+(`compose run`, container sementara). Container uji `efn-g14-*` sudah dihapus.
+**Jejak sintetis di Loki dev**: 1 baris `etl_recon` palsu (container `efn-g14-synth1`, kind `g14_synthetic_test`)
+tetap di stream 400 hari (tidak bisa dihapus tanpa delete API); sudah disusul baris nyata sehingga alert anomali
+padam pada evaluasi 16:40 (terverifikasi di Alertmanager). `EfnLoyaltyEtlReconOpenItems` (3) tetap menyala = kondisi dev nyata.
+Sink audit TIDAK diinjeksi ke Loki (uji dry-run) → tidak ada `sink_*` anomali baru.
+
+## G14.4 Sisa / butuh pihak lain
+- **Lead/.github**: `deploy.yml` belum mengirim `CFG_ETL_LOYALTY_RECON_NOT_BEFORE: ${{ vars.ETL_LOYALTY_RECON_NOT_BEFORE }}`
+  (di luar batas file). Tanpa itu production memakai nilai `.env` lama / kosong (semua order dalam lookback).
+- **PDP/keamanan (baru)**: bug redaksi berarti log Loki ≤ 30 hari (dan journal host) sebelum 8 Okt 16:16 UTC dapat
+  memuat nomor HP hampir utuh dan token Bearer. Dev: 34 baris pola `[PHONE_REDACTED]\d{6}` dalam 30 hari. Bila
+  staging/production sudah menerima log: nilai sebagai insiden PDP (breach-response-72h.md), pertimbangkan delete
+  API Loki / tunggu retensi 30 hari. Stream 400 hari (`efn_loyalty`, `efn_audit_*`) berisi payload ber-skema tanpa HP.
+- Dead-man ETL belum ditunggu 26 jam nyata (hanya query `absent_over_time` diverifikasi). Setelah deploy pertama G14
+  dead-man bisa menyala sekali (runbook §EfnLoyaltyEtlReconMissing butir 4).
+- Data-AI: regexp rule bergantung urutan kunci `status, anomalies, open_items` di `summary_payload` (kontrak; ubah
+  bersama). Odoo: `note` sink jangan pernah memuat PII (kini tidak diredaksi).

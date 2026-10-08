@@ -65,6 +65,13 @@ log yang dihapus (`note`).
 - Batas: baris palsu UTUH tetap mungkin bila teks pengguna bisa menyisipkan newline di logger Odoo lain. Odoo v2
   meng-escape newline di isi sink, dan `mac` (HMAC, secret `efn_audit_sink_key`) diverifikasi ETL di luar Odoo.
   Selama verifikasi ETL belum aktif, perlakukan alert sebagai indikasi; cocokkan `log_id` dengan `efn_audit_log`.
+- G14: baris sink dicocokkan **sebelum** tahap redaksi nomor HP/Bearer dan stream `efn_audit_sink` dikecualikan dari
+  redaksi. Sebelumnya redaksi mengubah isi sink yang memuat pola `08…`/`62 8…` (mis. di `note`) sehingga ETL
+  menghitung `sink_mac_invalid` palsu. Diuji dengan baris sintetis ber-MAC (kunci dev) berisi `0812…` dan `+628…`:
+  setelah pipeline Promtail, `efn_etl.sink.parse_sink_line` → `valid=True`; varian yang diredaksi → `valid=False`.
+  Konsekuensi: sink tidak boleh memuat PII (by design `emit_sink`); bila memuat, perbaiki di `efn_audit`.
+  `sink_mac_invalid` dari periode sebelum G14 pada baris berpola nomor = kemungkinan artefak redaksi, bukan tamper —
+  verifikasi dengan `efn_audit_log` (sumber) sebelum eskalasi.
 
 ## EfnAuditCriticalAccessChange
 Odoo menandai `critical=true`: grant (langsung/implied) `base.group_system`, `base.group_erp_manager`,

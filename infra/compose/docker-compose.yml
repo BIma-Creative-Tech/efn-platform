@@ -1411,6 +1411,9 @@ services:
       # deploy.sh mengaktifkan otomatis setelah grant sukses. Dev override: true.
       ETL_ENABLE_GL: ${ETL_ENABLE_GL:-false}
       ETL_AUDIT_COPY_ENABLED: ${ETL_AUDIT_COPY_ENABLED:-false}
+      # G14: rekonsiliasi ledger poin vs pos.order mulai dari go-live loyalty POS (UTC, YYYY-MM-DDTHH:MM:SSZ). Nilai dari
+      # manifest rilis bertanda tangan (SEC-50, deploy-validate.sh); kosong = semua order dalam jendela lookback.
+      ETL_LOYALTY_RECON_NOT_BEFORE: ${ETL_LOYALTY_RECON_NOT_BEFORE:-}
       # DSAR ClickHouse (docs/04 §8.4): publish privacy.erasure.completed sebagai efn-etl (write amq.default saja)
       AMQP_URL: amqps://efn-etl@rabbitmq:5671
       RABBITMQ_PASSWORD_FILE: /run/secrets/rabbitmq_password_etl

@@ -166,6 +166,7 @@ jobs:
           # Wajib eksplisit (tanpa default): production menolak mock (docs/04 §8.3)
           CFG_PAYMENT_PROVIDER: ${{ vars.PAYMENT_PROVIDER }}
           CFG_PG_SUPERUSER: ${{ vars.PG_SUPERUSER || 'postgres' }}
+          CFG_ETL_LOYALTY_RECON_NOT_BEFORE: ${{ vars.ETL_LOYALTY_RECON_NOT_BEFORE }}
           CFG_WHATSAPP_ENABLED: ${{ vars.WHATSAPP_ENABLED || 'false' }}
           CFG_WHATSAPP_PHONE_NUMBER_ID: ${{ vars.WHATSAPP_PHONE_NUMBER_ID }}
           CFG_WHATSAPP_OTP_TEMPLATE: ${{ vars.WHATSAPP_OTP_TEMPLATE || 'efn_otp' }}

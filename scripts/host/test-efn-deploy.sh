@@ -312,6 +312,13 @@ u "73 pin deploy.conf world-writable ditolak" 1 bash -c "source '$SRC/scripts/li
 rm -rf "$DOT"
 u "74 staging boleh ETL_AUDIT_COPY_ENABLED=false" 0 env ACME_EMAIL=a@b.co PAYMENT_PROVIDER=mock ETL_AUDIT_COPY_ENABLED=false \
   bash -c "source '$SRC/scripts/lib/deploy-validate.sh'; efn_validate_config staging"
+# G14: cutoff rekonsiliasi loyalty (manifest config) - UTC kanonik, tidak di masa depan
+for c in "75|0|2026-10-07T07:09:00Z" "76|1|2026-10-07 07:09:00" "77|1|2026-10-07T07:09:00+07:00" "78|1|2099-01-01T00:00:00Z" \
+  "79|1|2026-13-01T00:00:00Z"; do
+  IFS='|' read -r n want val <<< "$c"
+  u "$n ETL_LOYALTY_RECON_NOT_BEFORE=$val" "$want" env ACME_EMAIL=a@b.co PAYMENT_PROVIDER=disabled \
+    ETL_LOYALTY_RECON_NOT_BEFORE="$val" bash -c "source '$SRC/scripts/lib/deploy-validate.sh'; efn_validate_config production"
+done
 
 echo "RINGKASAN efn-deploy: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]

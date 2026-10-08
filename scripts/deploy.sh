@@ -33,6 +33,7 @@
 #               EFN_PKI_EXTRA_TRUST (PEM CA lama selama rotasi CA) RABBITMQ_STRICT_PERMISSIONS
 #               MARKET_SCOUT_PHOTO_RETENTION_DAYS CH_MART_RETENTION_YEARS PG_SUPERUSER ETL_ENABLE_ODOO (true|false)
 #               ETL_ENABLE_GL ETL_AUDIT_COPY_ENABLED (true|false; kosong = aktif otomatis setelah grant, G12)
+#               ETL_LOYALTY_RECON_NOT_BEFORE (UTC YYYY-MM-DDTHH:MM:SSZ, go-live loyalty POS; kosong = nilai .env lama, G14)
 set -euo pipefail
 
 BASE=/opt/efn
@@ -211,6 +212,19 @@ for v in ETL_ENABLE_GL ETL_AUDIT_COPY_ENABLED; do
   printf -v "${v}_EFF" '%s' "${!v:-${prev:-false}}"
 done
 
+# G14 (data-AI): cutoff rekonsiliasi ledger poin vs pos.order (go-live loyalty POS, UTC). Pola R5: nilai manifest
+# (tervalidasi efn_validate_config: format UTC kanonik, tidak di masa depan) menang, lalu nilai .env sebelumnya, default
+# kosong (= semua order dalam jendela lookback). Production: MEMAJUKAN cutoff yang sudah ada = menyembunyikan periode
+# dari rekonsiliasi -> hanya dengan izin Superadmin EFN_ALLOW_CONTROL_OFF='... ETL_LOYALTY_RECON_NOT_BEFORE' di
+# /etc/efn/deploy.conf (SEC-50c). Memundurkan (lebih ketat) selalu boleh.
+PREV_LOYALTY_NB=$(sed -n 's/^ETL_LOYALTY_RECON_NOT_BEFORE=\([0-9T:Z-]*\)$/\1/p' "$COMPOSE_DIR/.env" 2> /dev/null || true)
+ETL_LOYALTY_RECON_NOT_BEFORE_EFF="${ETL_LOYALTY_RECON_NOT_BEFORE:-${PREV_LOYALTY_NB}}"
+if [[ "$APP_ENV" == production && -n "$PREV_LOYALTY_NB" && "$ETL_LOYALTY_RECON_NOT_BEFORE_EFF" > "$PREV_LOYALTY_NB" ]]; then
+  read -r -a _allow_off <<< "${EFN_ALLOW_CONTROL_OFF:-}"
+  efn_list_has ETL_LOYALTY_RECON_NOT_BEFORE "${_allow_off[@]}" \
+    || die "ETL_LOYALTY_RECON_NOT_BEFORE dimajukan (${PREV_LOYALTY_NB} -> ${ETL_LOYALTY_RECON_NOT_BEFORE_EFF}): ditolak di production tanpa EFN_ALLOW_CONTROL_OFF (SEC-50c)"
+fi
+
 echo "==> Menulis .env (non-secret)"
 # SEC-50b: satu kunci satu baris; nilai dengan karakter kontrol ditolak; jumlah baris diverifikasi
 DOTENV=(
@@ -262,6 +276,7 @@ DOTENV=(
   "ETL_ENABLE_ODOO=${ETL_ENABLE_ODOO_EFF}"
   "ETL_ENABLE_GL=${ETL_ENABLE_GL_EFF}"
   "ETL_AUDIT_COPY_ENABLED=${ETL_AUDIT_COPY_ENABLED_EFF}"
+  "ETL_LOYALTY_RECON_NOT_BEFORE=${ETL_LOYALTY_RECON_NOT_BEFORE_EFF}"
   "MIGRATION_ENABLED=${MIGRATION_ENABLED:-false}"
   "METABASE_ADMIN_EMAIL=${METABASE_ADMIN_EMAIL:-${ACME_EMAIL}}"
 )
@@ -406,6 +421,18 @@ if [[ -s "$ETL_GRANTS_SQL" ]]; then
       "SELECT 1 FROM information_schema.columns WHERE table_name='efn_audit_log' AND column_name='origin_user_id'" \
       | grep -qx 1 || die "efn_audit belum >= 19.0.1.2.0 (kolom origin_user_id tidak ada): jalankan upgrade modul
     (docs/runbooks/dev-stack-boot.md §3a / runbook rilis Odoo) lalu ulangi deploy - grant ETL & job GL/audit menunggu"
+    # G14: blok grant rekonsiliasi loyalty butuh efn_pos_loyalty_ledger TERPASANG (kolom pos_order.efn_loyalty_state,
+    # pos_config.efn_loyalty_earn_enabled, tabel outbox/reservation). Dicek SEBELUM menjalankan file grant: tanpa
+    # ini psql berhenti di tengah file (ON_ERROR_STOP) dengan pesan "column does not exist" yang membingungkan.
+    # Urutan wajib: install/upgrade efn_pos_loyalty_ledger -> deploy (grant) -> job loyalty_recon ETL jalan.
+    g14_cols=$("${DC[@]}" exec -T postgres psql -X -q -t -A -U efn_odoo -d efn_odoo -c \
+      "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND (
+         (table_name='pos_order' AND column_name IN ('uuid','efn_loyalty_state'))
+         OR (table_name='pos_config' AND column_name='efn_loyalty_earn_enabled')
+         OR (table_name='efn_pos_loyalty_outbox' AND column_name='original_order_id')
+         OR (table_name='efn_pos_loyalty_reservation' AND column_name='order_uuid'))" | tr -d '[:space:]')
+    [[ "$g14_cols" == 5 ]] || die "efn_pos_loyalty_ledger belum terpasang di DB efn_odoo (${g14_cols:-0}/5 kolom G14):
+    install/upgrade modul dulu (runbook rilis Odoo), lalu ulangi deploy - grant ETL (termasuk G14) belum diterapkan"
     echo "==> Grant ETL di DB Odoo ($(basename "$ETL_GRANTS_SQL"))"
     "${DC[@]}" exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U efn_odoo -d efn_odoo -f - < "$ETL_GRANTS_SQL" \
       || die "grant ETL di DB Odoo gagal"

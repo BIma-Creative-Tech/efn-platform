@@ -76,8 +76,61 @@ siklus gagal ≥ 2 kali dalam 3 jam.
 3. `status":"error"` → pesan error setelah JSON (koneksi DB, timeout). Job READ ONLY; tidak memengaruhi transaksi.
 4. `LOYALTY_RECON_INTERVAL_MS=0` mematikan job (jangan di produksi).
 
+## Rekonsiliasi harian ETL: ledger ↔ `pos.order` (G14)
+Sumber: ETL (`services/etl/efn_etl/loyalty_recon.py`), sekali per `ETL_LOYALTY_RECON_INTERVAL_SECONDS` (default 24 jam),
+jendela `ETL_LOYALTY_RECON_LOOKBACK_HOURS` (72) dan hanya data sejak `ETL_LOYALTY_RECON_NOT_BEFORE` (go-live loyalty
+POS, UTC). Baris (tanpa PII; `sample_*` = id numerik):
+
+```
+<YYYY-MM-DD HH:MM:SS,mmm> INFO|WARNING efn_etl.loyalty_recon EFN_LOYALTY_RECON_ETL {"status":"ok","anomalies":N,"open_items":M,"kinds":{..},"sample_order_ids":..,"sample_ledger_ids":..}
+<YYYY-MM-DD HH:MM:SS,mmm> ERROR efn_etl EFN_LOYALTY_RECON_ETL {"status":"error","error":"<NamaTipeException>"}
+```
+
+Jalur: stdout ETL → Promtail (`promtail.yml` tahap 5, regex berjangkar, hanya `service=etl`) →
+`{stream="efn_loyalty", loyalty_event="etl_recon", recon_status="ok|error"}` (400 hari) → ruler grup
+`efn-loyalty-etl-recon`. Detail per temuan: ClickHouse `efn_dwh.loyalty_recon_finding` / `loyalty_recon_run`.
+Karena satu baris per hari, alert memakai **nilai terakhir dalam 26 jam**: menyala sampai run berikutnya bersih.
+
+```logql
+{stream="efn_loyalty", loyalty_event="etl_recon"}
+```
+
+### EfnLoyaltyEtlReconAnomaly
+Severity **critical**, tim Finance (+ keamanan bila pola fraud). `anomalies > 0`: ledger poin BFF dan order POS Odoo
+tidak cocok (`kinds` mis. `earn_without_paid_order`, `paid_member_order_without_earn`, `points_line_value_mismatch`).
+1. Ambil `kinds` dan `sample_order_ids`/`sample_ledger_ids` dari baris terakhir; detail lengkap dari
+   `efn_dwh.loyalty_recon_finding` (Metabase, kartu rekonsiliasi loyalty).
+2. Simpan bukti dulu (ekspor query Loki + finding ClickHouse ke lokasi bukti terenkripsi), lalu buka order di Odoo
+   (Point of Sale → Orders, id = `sample_order_ids`) dan entri ledger BFF terkait.
+3. Banyak `paid_member_order_without_earn` sekaligus setelah go-live/migrasi = cutoff salah: cek
+   `ETL_LOYALTY_RECON_NOT_BEFORE` (manifest rilis). **Memajukan** cutoff di production butuh izin Superadmin
+   `EFN_ALLOW_CONTROL_OFF='... ETL_LOYALTY_RECON_NOT_BEFORE'` di `/etc/efn/deploy.conf` (deploy.sh menolak tanpa itu),
+   karena cutoff yang dimajukan menyembunyikan periode dari rekonsiliasi.
+4. Indikasi manipulasi → [security-incident.md](security-incident.md); koreksi hanya lewat entri penyesuaian ber-CR
+   Finance. Alert padam setelah run berikutnya `anomalies: 0`.
+
+### EfnLoyaltyEtlReconOpenItems
+Severity **warning** (ringkasan harian). `open_items > 0`: order berstatus *review* > 24 jam, outbox earn/clawback
+`hold`/`pending` > `ETL_LOYALTY_RECON_AGED_HOURS`, atau outbox `failed` (mis. `earn_limit_exceeded`) dalam 30 hari.
+Supervisor/Finance menindaklanjuti di Odoo (Point of Sale → Review Poin) sesuai §EfnLoyaltyAnomalyWarning. Item `failed`
+tetap terhitung sampai keluar jendela 30 hari (by design: jejak keputusan Finance).
+
+### EfnLoyaltyEtlReconMissing
+Severity **warning**, tim data. Tidak ada `status":"ok"` selama 26 jam (+15 menit).
+1. `$DC logs --since 30h etl | grep -E 'EFN_LOYALTY_RECON_ETL|job=loyalty_recon'`. `status":"error"` dengan
+   `UndefinedColumn`/`InsufficientPrivilege` = grant G14 belum diterapkan atau `efn_pos_loyalty_ledger` belum
+   terpasang: urutan wajib **install/upgrade modul → deploy (grant) → job jalan**; `deploy.sh` berhenti dengan pesan
+   "efn_pos_loyalty_ledger belum terpasang" bila urutan terbalik.
+2. ETL hidup tetapi tidak ada baris: `ETL_LOYALTY_RECON_ENABLED=false` atau `ETL_ENABLE_ODOO=false` (job ikut mati).
+3. Baris ada di log container tetapi tidak di stream `efn_loyalty` → format log ETL berubah (logger/level/urutan
+   kunci); sesuaikan regex `promtail.yml` tahap 5 + regexp di rule. Selama itu alert anomali buta.
+4. Setelah deploy pertama G14 alert ini dapat menyala sekali (run terakhir < 24 jam sebelum Promtail mengenali
+   baris): tunggu run harian berikutnya atau jalankan sekali (dev: `ETL_RUN_ONCE=true`, `ETL_LOYALTY_RECON_INTERVAL_SECONDS=60`).
+
 ## Batas
-- Rekonsiliasi hanya melihat data BFF; order yang tidak pernah ada di Odoo tidak terdeteksi (rekonsiliasi
-  ledger ↔ `pos.order` lewat ETL = backlog data-AI, SEC-61 rekomendasi 3).
+- Rekonsiliasi BFF per jam hanya melihat data BFF; order yang tidak pernah ada di Odoo dideteksi oleh rekonsiliasi
+  harian ETL di atas (G14), dengan latensi hingga 24 jam + `settle_hours` (6).
+- Admin `base.group_system` yang memanggil `_efn_post` langsung (SEC-61 butir 3) hanya terdeteksi bila tidak ada
+  order Odoo yang cocok.
 - Seperti sink audit, baris log palsu utuh hanya mungkin bila input pemanggil berisi newline yang dicetak mentah
   oleh logger lain di BFF; regex berjangkar + label container membatasi ini ke proses BFF sendiri.

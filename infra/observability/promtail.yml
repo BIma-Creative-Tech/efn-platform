@@ -52,18 +52,7 @@ scrape_configs:
             - static_labels:
                 stream: efn_audit_anchor
                 audit_event: chain_head
-      # Redaksi dasar: nomor HP Indonesia dan token Bearer tidak boleh masuk log (UU PDP, R-L01). Semua baris kecuali
-      # kepala rantai (isi kepala rantai sudah dibatasi regex: hanya angka + hex).
-      - match:
-          selector: '{container=~".+", stream!="efn_audit_anchor"}'
-          stages:
-            - replace:
-                expression: '(\+?62|0)8[1-9][0-9]{7,11}'
-                replace: '[PHONE_REDACTED]'
-            - replace:
-                expression: '(?i)bearer\s+[a-z0-9\-_\.]+'
-                replace: 'Bearer [REDACTED]'
-      # (2) Gelombang 11 (SEC-43) + 13 (SEC-49/SEC-51): baris sink audit Odoo v2 (efn_audit >= 19.0.1.3.0) ->
+      # (2) Gelombang 11 (SEC-43) + 13 (SEC-49/SEC-51) + 14 (dipindah SEBELUM redaksi): baris sink audit Odoo v2 (efn_audit >= 19.0.1.3.0) ->
       #     stream="efn_audit_sink" (retensi 400 hari, alert loki-rules/efn-audit-sink.yml). Format Odoo:
       #     "<tgl> <jam>,<ms> <pid> INFO <db> odoo.addons.efn_audit.sink: EFN_AUDIT_SINK {json}". JSON sort_keys +
       #     ensure_ascii (newline di nilai selalu di-escape): wajib diawali "audit_op", "critical", memuat "log_id"
@@ -86,6 +75,27 @@ scrape_configs:
             - labels:
                 audit_op:
                 critical:
+      # Redaksi dasar: nomor HP Indonesia dan token Bearer tidak boleh masuk log (UU PDP, R-L01). Semua baris KECUALI
+      # kepala rantai (1) dan sink audit (2), yang dicocokkan di atas SEBELUM redaksi:
+      #   - kepala rantai: isi dibatasi regex (angka + hex);
+      #   - sink audit (G14, bug data-AI): baris bertanda tangan HMAC `mac` atas JSON kanonik. Redaksi mengubah isi
+      #     (mis. `note` atau nilai lain berpola 08xxxxxxxx) -> ETL menghitung `sink_mac_invalid` palsu. Sink tidak memuat
+      #     PII by design (efn_audit emit_sink: id, model, uid, nama field, catatan purge - tanpa nilai lama/baru;
+      #     nama/nomor orang di-mask di sumber, SEC-45). Bila suatu saat sink memuat nomor HP, itu bug di efn_audit
+      #     (perbaiki di sumber), bukan alasan meredaksi di sini (redaksi = MAC rusak = alarm tamper palsu).
+      - match:
+          selector: '{container=~".+", stream!~"efn_audit_anchor|efn_audit_sink"}'
+          # G14 (bug ditemukan saat uji dry-run): stage `replace` Promtail hanya mengganti CAPTURE GROUP, bukan seluruh
+          # kecocokan. Ekspresi lama `(\+?62|0)8...` hanya mengganti awalan "0"/"62" -> sisa nomor HP BOCOR ke Loki
+          # ("[PHONE_REDACTED]81298765432"), dan ekspresi Bearer tanpa grup tidak mengganti apa pun. Sekarang seluruh
+          # nilai sensitif = satu grup luar; grup dalam non-capturing (?:...).
+          stages:
+            - replace:
+                expression: '((?:\+?62|0)8[1-9][0-9]{7,11})'
+                replace: '[PHONE_REDACTED]'
+            - replace:
+                expression: '(?i)bearer\s+([a-z0-9\-_\.~+/]+=*)'
+                replace: '[REDACTED]'
       # (3) Hasil rekonsiliasi harian salinan audit (ETL) -> stream jangkar 400 hari + dead-man (SEC-52 butir 1).
       - match:
           selector: '{service="etl"} |~ "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2},\\d{3} (INFO|WARNING) efn_etl\\.audit_job EFN_AUDIT_RECON \\{\"max_log_id\":.*\\}\\s*$"'
@@ -134,3 +144,20 @@ scrape_configs:
             - static_labels:
                 stream: efn_loyalty
                 loyalty_event: migration
+      # (5) G14 (data-AI, sisa SEC-61): rekonsiliasi harian ledger poin BFF <-> pos.order oleh ETL
+      #     (services/etl/efn_etl/loyalty_recon.py) -> stream="efn_loyalty" (400 hari), loyalty_event="etl_recon",
+      #     label recon_status (ok|error). Format Python logging: "<YYYY-MM-DD HH:MM:SS,mmm> <LEVEL> <logger> {json}".
+      #     ok: INFO (anomalies 0) / WARNING (anomalies > 0) dari logger efn_etl.loyalty_recon; error: ERROR dari logger
+      #     efn_etl (__main__.run_loyalty_recon_cycle, payload {"status":"error","error":"<NamaTipe>"}). Regex BERJANGKAR:
+      #     timestamp, level, logger, tag tepat setelah logger, kunci pertama "status". Hanya service=etl. Payload hanya
+      #     angka/kind (sample_* = id numerik) -> redaksi di atas tidak mengubahnya. Alert: loki-rules/efn-loyalty.yml.
+      - match:
+          selector: '{service="etl"} |~ "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2},\\d{3} ((INFO|WARNING) efn_etl\\.loyalty_recon|ERROR efn_etl) EFN_LOYALTY_RECON_ETL \\{\"status\":\"(ok|error)\"[^\\n]*\\}\\s*$"'
+          stages:
+            - regex:
+                expression: ' EFN_LOYALTY_RECON_ETL \{"status":"(?P<recon_status>ok|error)"'
+            - static_labels:
+                stream: efn_loyalty
+                loyalty_event: etl_recon
+            - labels:
+                recon_status:
