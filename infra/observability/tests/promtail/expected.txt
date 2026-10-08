@@ -1,0 +1,62 @@
+{audit_event="chain_head", container="efn-etl-1", filename="/fixtures/etl.txt", service="etl", stream="efn_audit_anchor"} 2026-10-09 01:00:00,010 INFO efn_etl.audit_job EFN_AUDIT_CHAIN_HEAD {"company":1,"seq":7,"row_hash":"081234567890081234567890081234567890081234567890081234567890abcd"}
+{audit_event="recon", container="efn-etl-1", filename="/fixtures/etl.txt", service="etl", stream="efn_audit_anchor"} 2026-10-09 01:00:00,012 INFO efn_etl.audit_job EFN_AUDIT_RECON {"max_log_id":812345678,"missing":0}
+{audit_op="purge", container="efn-odoo-1", critical="false", filename="/fixtures/odoo.txt", service="odoo", stream="efn_audit_sink"} 2026-10-09 01:00:00,001 77 INFO efn odoo.addons.efn_audit.sink: EFN_AUDIT_SINK {"audit_op": "purge", "critical": false, "fields": [], "log_id": 990301, "mac": "0812345678900812345678900812345678900812345678900812345678901234", "model": "res.partner", "note": "manual: retensi", "res_id": 7, "uid": 2, "v": 2}
+{container="efn-api-gateway-1", filename="/fixtures/api-gateway.txt", kind="burst_earn", loyalty_event="anomaly", service="api-gateway", severity="warning", stream="efn_loyalty"} [Nest] 41  - 10/09/2026, 1:00:00 AM    WARN [PosLoyaltyService] EFN_LOYALTY_ANOMALY {"kind":"burst_earn","severity":"warning","company":"EFN","order_ref":"00042-001-0007"}
+{container="efn-api-gateway-1", filename="/fixtures/api-gateway.txt", service="api-gateway"} [Nest] 41  - 10/09/2026, 1:00:01 AM     LOG [MarketScoutService] Report af73a9ae-17d1-4fc0-b470-0819152600bd diterima dari 62899****279
+{container="efn-api-gateway-1", filename="/fixtures/api-gateway.txt", service="api-gateway"} [Nest] 41  - 10/09/2026, 1:00:02 AM   ERROR [OtpService] gagal kirim ke [PHONE_REDACTED] Authorization: Bearer [REDACTED]
+{container="efn-api-gateway-1", filename="/fixtures/api-gateway.txt", service="api-gateway"} [Nest] 41  - 10/09/2026, 1:00:03 AM   DEBUG [ConnectorService] upstream Authorization: Basic [REDACTED]
+{container="efn-etl-1", filename="/fixtures/etl.txt", loyalty_event="etl_recon", recon_status="ok", service="etl", stream="efn_loyalty"} 2026-10-09 01:00:00,011 INFO efn_etl.loyalty_recon EFN_LOYALTY_RECON_ETL {"status":"ok","anomalies":0,"open_items":0}
+{container="efn-etl-1", filename="/fixtures/etl.txt", service="etl"} 2026-10-09 01:00:00,013 WARNING efn_etl.other EFN_AUDIT_CHAIN_HEAD {"company":1,"seq":8} hp [PHONE_REDACTED]
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} berurutan [PHONE_REDACTED] [PHONE_REDACTED],[PHONE_REDACTED]/[PHONE_REDACTED]
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} docker containerID=9ded32642bcea4225660dd173b0857593858a821c1267380c21e36d18d76b649
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} encoded /cb?next=%2Fweb%3Ftoken%3D[REDACTED]&x=1
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} header authorization=Bearer [REDACTED] selesai
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} hp ([PHONE_REDACTED] kurung
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} hp [PHONE_REDACTED] berspasi
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} hp [PHONE_REDACTED] format internasional
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} hp [PHONE_REDACTED] format lokal
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} hp [PHONE_REDACTED] spasi lokal
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} hp [PHONE_REDACTED] strip
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} hp [PHONE_REDACTED] strip lokal
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} hp [PHONE_REDACTED] tanpa plus
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} hp [PHONE_REDACTED] titik
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} json {"phone":"[PHONE_REDACTED]","mobile":"[PHONE_REDACTED]"}
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} json-secret {"token": "[REDACTED]", "otp": "[REDACTED]"}
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} logfmt level=info user=kasir password=[REDACTED] status code=200 latency=0.812345678s
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} masked 62812****789 tetap utuh
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} prose Basic authentication gagal, token expired, kode akses ditolak
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} sql INSERT INTO res_partner (name, phone) VALUES ('SMOKE Member A', '[PHONE_REDACTED]')
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} url /api/m?member_ref=%2B[PHONE_REDACTED]&x=1
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} uuid report=af73a9ae-17d1-4fc0-b470-0819152600bd thread=12862081234567827 durasi 10.6081234567828 detik
+{container="efn-odoo-1", filename="/fixtures/odoo.txt", service="odoo"} 2026-10-09 01:00:00,002 77 INFO efn werkzeug: 10.8.0.2 - - [09/Oct/2026 01:00:00] "GET /web/reset_password?db=efn&token=[REDACTED] HTTP/1.1" 200 - 5 0.004 0.010
+{container="efn-odoo-1", filename="/fixtures/odoo.txt", service="odoo"} 2026-10-09 01:00:00,003 77 INFO efn odoo.addons.base.models.res_partner: partner hp=[PHONE_REDACTED] dibuat
+{container="efn-odoo-1", filename="/fixtures/odoo.txt", service="odoo"} 2026-10-09 01:00:00,004 77 INFO efn odoo.addons.base.models.ir_qweb: JS Assets bundles generated in 0.812345678901 seconds
+{container="efn-odoo-1", filename="/fixtures/odoo.txt", service="odoo"} 2026-10-09 01:00:00,005 77 INFO efn odoo.http: params {'login': 'kasir', 'password': '[REDACTED]'}
+{container="efn-odoo-1", filename="/fixtures/odoo.txt", service="odoo"} 2026-10-09 01:00:00,006 77 INFO efn odoo.http: EFN_AUDIT_SINK {"audit_op": "purge"} palsu dari pesan login [PHONE_REDACTED]
+{container="efn-traefik-1", filename="/fixtures/traefik.txt", service="traefik"} {"ClientHost":"10.8.0.2","RequestHost":"erp.efn.local","RequestMethod":"GET","RequestPath":"/web/reset_password?db=efn\u0026token=[REDACTED]\u0026redirect=%2Fodoo","DownstreamStatus":200,"level":"info","msg":"","time":"2026-10-09T01:00:00Z"}
+{container="efn-traefik-1", filename="/fixtures/traefik.txt", service="traefik"} {"ClientHost":"10.8.0.3","RequestHost":"erp.efn.local","RequestMethod":"GET","RequestPath":"/pos-self/1?access_token=[REDACTED]\u0026table_identifier=T5","DownstreamStatus":200,"level":"info","msg":"","time":"2026-10-09T01:00:01Z"}
+{container="efn-traefik-1", filename="/fixtures/traefik.txt", service="traefik"} {"ClientHost":"172.30.0.3","RequestHost":"api.efn.local","RequestMethod":"GET","RequestPath":"/v1/auth/callback?code=[REDACTED]\u0026state=abc","DownstreamStatus":302,"level":"info","msg":"","time":"2026-10-09T01:00:03Z"}
+{container="efn-traefik-1", filename="/fixtures/traefik.txt", service="traefik"} {"ClientHost":"172.30.0.3","RequestHost":"api.efn.local","RequestMethod":"GET","RequestPath":"/v1/pos/member?member_ref=%2B[PHONE_REDACTED]\u0026company=EFN","DownstreamStatus":200,"level":"info","msg":"","time":"2026-10-09T01:00:02Z"}
+{container="efn-traefik-1", filename="/fixtures/traefik.txt", service="traefik"} {"ClientHost":"172.30.0.3","RequestHost":"erp.efn.local","RequestMethod":"GET","RequestPath":"/web/login/totp?redirect=%2Fodoo","DownstreamStatus":200,"level":"info","msg":"","time":"2026-10-09T01:00:05Z"}
+{container="efn-traefik-1", filename="/fixtures/traefik.txt", service="traefik"} {"ClientHost":"172.30.0.3","RequestHost":"files.efn.local","RequestMethod":"GET","RequestPath":"/b/a.jpg?X-Amz-Credential=[REDACTED]\u0026X-Amz-Signature=[REDACTED]\u0026X-Amz-Expires=300","DownstreamStatus":200,"level":"info","msg":"","time":"2026-10-09T01:00:04Z"}
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} berurutan [PHONE_REDACTED] [PHONE_REDACTED],[PHONE_REDACTED]/[PHONE_REDACTED]
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} docker containerID=9ded32642bcea4225660dd173b0857593858a821c1267380c21e36d18d76b649
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} encoded /cb?next=%2Fweb%3Ftoken%3D[REDACTED]&x=1
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} header authorization=Bearer [REDACTED] selesai
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} hp ([PHONE_REDACTED] kurung
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} hp [PHONE_REDACTED] berspasi
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} hp [PHONE_REDACTED] format internasional
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} hp [PHONE_REDACTED] format lokal
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} hp [PHONE_REDACTED] spasi lokal
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} hp [PHONE_REDACTED] strip
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} hp [PHONE_REDACTED] strip lokal
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} hp [PHONE_REDACTED] tanpa plus
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} hp [PHONE_REDACTED] titik
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} json {"phone":"[PHONE_REDACTED]","mobile":"[PHONE_REDACTED]"}
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} json-secret {"token": "[REDACTED]", "otp": "[REDACTED]"}
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} logfmt level=info user=kasir password=[REDACTED] status code=200 latency=0.812345678s
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} masked 62812****789 tetap utuh
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} prose Basic authentication gagal, token expired, kode akses ditolak
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} sql INSERT INTO res_partner (name, phone) VALUES ('SMOKE Member A', '[PHONE_REDACTED]')
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} url /api/m?member_ref=%2B[PHONE_REDACTED]&x=1
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} uuid report=af73a9ae-17d1-4fc0-b470-0819152600bd thread=12862081234567827 durasi 10.6081234567828 detik

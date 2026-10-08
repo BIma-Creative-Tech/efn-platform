@@ -38,7 +38,10 @@ services:
       - -c
       - shared_preload_libraries=pg_stat_statements
       - -c
-      - log_statement=all
+      # G15 (SEC-72): sumber utama nomor HP mentah di Loki dev = log_statement=all (Odoo/psycopg2 menginterpolasi
+      # parameter di klien -> INSERT res_partner.phone/pos_order.mobile tercetak utuh). Default kini `ddl`;
+      # debugging SQL: PG_LOG_STATEMENT=all di .env + recreate postgres, kembalikan setelah selesai.
+      - log_statement=${PG_LOG_STATEMENT:-ddl}
       - -c
       - log_parameter_max_length=0
       - -c

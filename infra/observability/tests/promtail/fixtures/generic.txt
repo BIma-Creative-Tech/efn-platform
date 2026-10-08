@@ -1,0 +1,21 @@
+hp 081234567810 format lokal
+hp +6281234567811 format internasional
+hp 6281234567812 tanpa plus
+hp +62 812 3456 7813 berspasi
+hp 62-812-3456-7814 strip
+hp 0812-3456-7815 strip lokal
+hp 0812 3456 7816 spasi lokal
+hp (+62) 812-3456-7817 kurung
+hp 0812.3456.7818 titik
+url /api/m?member_ref=%2B6281234567819&x=1
+json {"phone":"081234567820","mobile":"+6285712345621"}
+berurutan 081234567822 085712345623,085712345624/085712345625
+masked 62812****789 tetap utuh
+sql INSERT INTO res_partner (name, phone) VALUES ('SMOKE Member A', '081234567826')
+logfmt level=info user=kasir password=SENTINELPW1 status code=200 latency=0.812345678s
+prose Basic authentication gagal, token expired, kode akses ditolak
+header authorization=Bearer SENTINELOPAQUETOKEN1 selesai
+json-secret {"token": "SENTINELJSONTOKEN", "otp": "SENTINELOTP"}
+docker containerID=9ded32642bcea4225660dd173b0857593858a821c1267380c21e36d18d76b649
+uuid report=af73a9ae-17d1-4fc0-b470-0819152600bd thread=12862081234567827 durasi 10.6081234567828 detik
+encoded /cb?next=%2Fweb%3Ftoken%3DSENTINELENCODED&x=1

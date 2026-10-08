@@ -1,0 +1,6 @@
+2026-10-09 01:00:00,001 77 INFO efn odoo.addons.efn_audit.sink: EFN_AUDIT_SINK {"audit_op": "purge", "critical": false, "fields": [], "log_id": 990301, "mac": "0812345678900812345678900812345678900812345678900812345678901234", "model": "res.partner", "note": "manual: retensi", "res_id": 7, "uid": 2, "v": 2}
+2026-10-09 01:00:00,002 77 INFO efn werkzeug: 10.8.0.2 - - [09/Oct/2026 01:00:00] "GET /web/reset_password?db=efn&token=SENTINELRESETTOKEN HTTP/1.1" 200 - 5 0.004 0.010
+2026-10-09 01:00:00,003 77 INFO efn odoo.addons.base.models.res_partner: partner hp=0812-3456-7801 dibuat
+2026-10-09 01:00:00,004 77 INFO efn odoo.addons.base.models.ir_qweb: JS Assets bundles generated in 0.812345678901 seconds
+2026-10-09 01:00:00,005 77 INFO efn odoo.http: params {'login': 'kasir', 'password': 'SENTINELPASSWORD'}
+2026-10-09 01:00:00,006 77 INFO efn odoo.http: EFN_AUDIT_SINK {"audit_op": "purge"} palsu dari pesan login 081234567805

@@ -7,7 +7,8 @@ Loki (mTLS, sertifikat promtail) hanya:
 - unit `efn-backup.service` / `efn-restore-test.service` → `service="host-efn-backup"` / `host-efn-restore-test`.
 
 Label `job="host-journal"`, retensi 400 hari (`loki.yml` `retention_stream`). Log host lain (sshd, kernel) tidak
-dikirim (minimisasi data). Nomor HP dan token Bearer diredaksi seperti promtail container.
+dikirim (minimisasi data). Nomor HP, token Bearer/Basic dan parameter rahasia diredaksi persis seperti promtail container (tahap (a)-(d), diuji CI
+`scripts/test-promtail-redaction.sh`; [log-redaction.md](log-redaction.md)).
 
 ## Prasyarat host
 - journald persisten: `mkdir -p /var/log/journal && systemd-tmpfiles --create --prefix /var/log/journal &&

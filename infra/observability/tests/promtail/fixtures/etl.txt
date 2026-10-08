@@ -1,0 +1,4 @@
+2026-10-09 01:00:00,010 INFO efn_etl.audit_job EFN_AUDIT_CHAIN_HEAD {"company":1,"seq":7,"row_hash":"081234567890081234567890081234567890081234567890081234567890abcd"}
+2026-10-09 01:00:00,011 INFO efn_etl.loyalty_recon EFN_LOYALTY_RECON_ETL {"status":"ok","anomalies":0,"open_items":0}
+2026-10-09 01:00:00,012 INFO efn_etl.audit_job EFN_AUDIT_RECON {"max_log_id":812345678,"missing":0}
+2026-10-09 01:00:00,013 WARNING efn_etl.other EFN_AUDIT_CHAIN_HEAD {"company":1,"seq":8} hp 081234567806

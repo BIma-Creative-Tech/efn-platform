@@ -191,8 +191,10 @@ Sebelum grant, job `sales_fact_pos` gagal per siklus (permission denied) tanpa m
   `up -d --force-recreate <x> <x>-tls` bersamaan (gelombang 11).
 - Docker Desktop: propagasi `rslave` untuk `/` ditolak, sehingga dev override node-exporter memakai `/:/host:ro`.
 - `nest start --watch` butuh heap lebih dari 250 MB. Dev override memberi `NODE_OPTIONS=--max-old-space-size=1024` + limit 1536M.
-- Dev Postgres memakai `log_statement=all`. Odoo (psycopg2) menginterpolasi parameter di sisi klien, jadi nilai
-  literal (bisa berisi nomor HP) tercetak di log dev. Jangan pakai data pribadi asli di dev.
+- Dev Postgres: `log_statement=${PG_LOG_STATEMENT:-ddl}` (G15, SEC-72; sebelumnya `all`). Odoo (psycopg2)
+  menginterpolasi parameter di sisi klien, jadi dengan `all` nilai literal (nomor HP) tercetak ke log dan Loki. Untuk
+  debugging SQL set `PG_LOG_STATEMENT=all` di `.env` + `up -d --force-recreate postgres`, lalu kembalikan. Jangan pakai
+  data pribadi asli di dev ([log-redaction.md](log-redaction.md)).
 - Ollama yang bind ke loopback (pola sidecar) menolak `403` setiap request dengan Host selain localhost/hostname
   container. Service `ollama` wajib `hostname: ollama` (sudah di base compose sejak gelombang 8); tanpa itu semua
   panggilan VLM dari ocr-worker gagal diam-diam menjadi `flagged/vlm_unavailable`.

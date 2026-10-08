@@ -984,3 +984,94 @@ Sink audit TIDAK diinjeksi ke Loki (uji dry-run) → tidak ada `sink_*` anomali 
   dead-man bisa menyala sekali (runbook §EfnLoyaltyEtlReconMissing butir 4).
 - Data-AI: regexp rule bergantung urutan kunci `status, anomalies, open_items` di `summary_payload` (kontrak; ubah
   bersama). Odoo: `note` sink jangan pernah memuat PII (kini tidak diredaksi).
+
+---
+
+# Gelombang 15 (9 Okt 2026): redaksi log, uji regresi Promtail, token di query string (SEC-72, SEC-73, SEC-78 infra)
+
+## G15.1 Temuan pelacakan sumber (SEC-72a, Loki dev, 30 hari)
+Query `sum by (service, container) (count_over_time({container=~".+"} |~ "\[PHONE_REDACTED\]\d{6}" [30d]))`.
+Setiap kemunculan diklasifikasi menurut karakter sebelum `[PHONE_REDACTED]`: alfanumerik berarti potongan hex/ID.
+
+| Sumber | Kemunculan | Sifat |
+|---|---|---|
+| `postgres` (dev `log_statement=all`) | ±300 | **Nomor HP fixture nyata-format.** INSERT `res_partner.phone` / `pos_order.mobile` "SMOKE Member A–N" (fiktif). Odoo menginterpolasi parameter di klien |
+| `efn-g14-odoo`, `efn-g14-promtail` | 39 | Baris uji sintetis G14 (fiktif) |
+| ocr-worker, api-gateway, s3-gateway, cadvisor, docker-socket-proxy, promtail, loki, etl, container test Odoo | ±200 | **False positive** pola lama: UUID report, ID container, ID thread, durasi, `row_hash` |
+| traefik | 0 | Tidak ada HP. Juga tidak ada `token=`/`password=`/`code=`/`signature=`/`key=`/`secret=` di traefik/odoo/BFF/s3-gateway |
+
+Probe R2 `member_ref=` tidak ditemukan lagi di Loki. Odoo werkzeug sudah `WARNING` (`odoo.conf.tpl:26`), sehingga baris
+request + query tidak dicatat.
+
+## G15.2 Perubahan
+- `infra/observability/promtail.yml` + `promtail-journal.yml` (salinan persis): redaksi baru, urutan (a)–(d):
+  - **(a)** parameter rahasia query/logfmt:
+    - nama: `token`, `access_token`, `refresh_token`, `id_token`, `auth_token`, `password`, `passwd`, `pwd`,
+      `csrf_token`, `secret`, `client_secret`, `api_key`, `apikey`, `signature`, `x-amz-*`, `otp`, `otp_code`;
+    - prefiks: non-word, `\u0026` (Traefik JSON **meng-escape `&`**, diverifikasi dengan Traefik v3.7.13 nyata), `%3F`, `%26`;
+    - `=` boleh `%3D`.
+  - **(a2)** `code`, `key`, `sig`, `auth`, `session_id`, `sid`, hanya sebagai parameter query.
+  - **(b)** kunci JSON/dict: `"password": "…"`.
+  - **(c)** `Bearer` dan `Basic` (base64 wajib memuat digit/`+`/`/`/`=`).
+  - **(d)** HP berpemisah spasi/titik/strip, `(+62)`, `%2B62`:
+    - struktur `8[1-9]x(x)[sep]xxx(x)[sep]xxx(xx)`;
+    - batas kiri & kanan non-alfanumerik, sehingga UUID/hash/ID tidak lagi terganti dan report_id bisa dikorelasikan lagi;
+    - stage dijalankan **2×** karena batas kanan mengonsumsi satu karakter (nomor berurutan).
+- `infra/traefik/traefik.yml`: `accessLog.fields.headers.defaultMode: drop` dibuat eksplisit. Komentar mencatat bahwa
+  RequestPath memuat query dan redaksinya dilakukan di Promtail. Static config diuji boot dengan `traefik:v3.7.13`.
+- **Perbaikan di sumber (SEC-72):** `docker-compose.dev.yml` postgres `log_statement=${PG_LOG_STATEMENT:-ddl}` (sebelumnya
+  `all`), `.env.example` `PG_LOG_STATEMENT=ddl`. **Belum berlaku di stack dev yang berjalan**, karena postgres tidak
+  di-recreate (dipakai agent lain). Berlaku saat recreate berikutnya.
+- **Uji regresi CI baru:**
+  - `scripts/test-promtail-redaction.sh`:
+    - yq menyalin `pipeline_stages` produksi ke `infra/observability/tests/promtail/harness.yml`;
+    - `promtail -dry-run` (image digest compose) atas `fixtures/{odoo,etl,api-gateway,traefik,generic}.txt`, 41 baris
+      fiktif; `generic.txt` juga lewat pipeline journal;
+    - keluaran dinormalisasi, lalu `diff` dengan `expected.txt` (62 entri).
+  - Penjaga independen: tidak ada `SENTINEL*`, keluaran docker == journal, jumlah entri lengkap. `--update` untuk regenerasi.
+  - Fixture mencakup:
+    - HP format `08…`, `+62…`, `62…`, `+62 812 3456 …`, `62-812-…`, `0812-3456-…`, `0812 3456 …`, `(+62) …`,
+      `0812.3456.…`, `%2B62…`, JSON, SQL, nomor berurutan;
+    - Bearer, Basic, `access_token=`, `token=`, `password=`, `code=`, `X-Amz-Signature`, `%3Ftoken%3D`, JSON secret;
+    - harus utuh: sink audit, jangkar, recon, loyalty, mask `62812****789`, UUID/ID/durasi, prosa.
+- `.github/workflows/ci.yml`: job baru `promtail-redaction` (`-check-syntax` kedua config + skrip uji, `contents: read`,
+  path-filter `infra`), ditambahkan ke `ci-gate.needs`. Baris modul Odoo tidak disentuh.
+- Runbook baru `docs/runbooks/log-redaction.md`:
+  - pola dan batasnya;
+  - prosedur ubah pola + uji;
+  - query deteksi staging/prod;
+  - prosedur delete API Loki;
+  - status near-miss dev.
+- Runbook lain:
+  - `security-incident.md:107` dikoreksi: Traefik mencatat query string, nilai rahasia diredaksi, s3-gateway tanpa query;
+  - `dev-stack-boot.md` (`PG_LOG_STATEMENT`);
+  - `host-journal-loki.md`;
+  - `README.md` (indeks).
+
+## G15.3 Validasi
+| Cek | Hasil |
+|---|---|
+| `promtail -check-syntax` (promtail.yml, promtail-journal.yml; 3.2.1) | Valid |
+| `scripts/test-promtail-redaction.sh` | OK, 62 entri. **Uji negatif:** pola HP lama dipasang → gagal (diff UUID/ID/thread + journal ≠ docker) |
+| Runtime dev | promtail di-recreate 17:46 UTC. Hasil di Loki (dev): |
+| — container sintetis `efn-g15-synth` (31 baris fixture) | 0 `SENTINEL`, semua HP/token teredaksi |
+| — probe nyata ke Traefik dev `?member_ref=%2B62…&token=SENTINEL…` | `member_ref=%2B[PHONE_REDACTED]\u0026token=[REDACTED]` |
+| shellcheck v0.11.0 (`-x`) | bersih |
+| actionlint 1.7.7 `ci.yml` | bersih |
+| yamllint 1.35.1 `infra .github` | 0 error (warning line-length lama) |
+| gitleaks v8.21.2 (`infra/observability`, skrip) | no leaks |
+| `docker compose config` dev & prod (semua profil) | OK (dev: `log_statement=ddl`) |
+| `scripts/check-encryption.sh` (container docker-cli) | OK |
+
+## G15.4 Sisa / butuh pihak lain
+- **Hapus baris lama Loki dev (SEC-72c):** permintaan delete API **ditolak permission classifier di sesi agent**.
+  Perintah siap pakai ada di `log-redaction.md` §4 (selector `stream=""`, end 2026-10-08T17:46Z). Pilihannya: operator
+  menjalankan perintah itu, atau membiarkan retensi habis (±7 Nov 2026).
+- Recreate promtail membaca ulang log container (posisi di tmpfs):
+  - entri yang lebih tua ±3 jam ditolak Loki (`too far behind`);
+  - entri ±3 jam terakhir terkirim ulang dengan redaksi baru, sehingga muncul duplikat berbeda isi (dev saja).
+- Postgres dev perlu `up -d --force-recreate postgres` agar `log_statement=ddl` aktif (koordinasi lead).
+- Log mentah container di host (`json-file`) tetap tidak teredaksi. Itu batas Promtail, bukan regresi.
+- SEC-78 sisi Odoo (mask `note` purge sebelum MAC) belum. Rule deteksi `{stream="efn_audit_sink"} |~ HP` → warning
+  belum dibuat (kandidat G16).
+- Sebelum staging pertama menerima log: jalankan query §3 `log-redaction.md` di staging.

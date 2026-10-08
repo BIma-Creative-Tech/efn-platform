@@ -55,6 +55,7 @@ Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-inciden
 | Firewall origin (443 hanya Cloudflare + WireGuard) | [origin-firewall.md](origin-firewall.md) |
 | Enkripsi disk host (LUKS2) | [luks-disk.md](luks-disk.md) |
 | Kegagalan pelindungan data pribadi 3×24 jam (UU PDP) | [breach-response-72h.md](breach-response-72h.md) |
+| Redaksi PII/rahasia di log (Promtail), uji regresi, deteksi & hapus baris bocor di Loki | [log-redaction.md](log-redaction.md) |
 | Insiden keamanan (deteksi, severity, containment, forensik) — pintu masuk | [security-incident.md](security-incident.md) |
 | Token DNS ACME, service `acme-dns` (sertifikat wg-https), uji staging LE | [acme-dns-token.md](acme-dns-token.md) |
 | Ubah grup/hak user Odoo (UI/RPC, bukan `odoo shell`); traceback JSON-RPC (sisa SEC-22) | [odoo-access-changes.md](odoo-access-changes.md) |

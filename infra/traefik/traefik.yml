@@ -7,10 +7,16 @@ log:
   level: INFO
   format: json
 
+# Access log (stdout -> Promtail -> Loki 30 hari). Header TIDAK dicatat (defaultMode drop, eksplisit; Authorization/
+# Cookie tetap di-drop walau defaultMode diubah). `RequestPath` MEMUAT QUERY STRING (mis. ?token= reset password Odoo,
+# ?access_token= self-order) dan Traefik tidak bisa meredaksi per-parameter atau per-router: nilai parameter rahasia
+# diredaksi di Promtail (promtail.yml tahap (a), "&" tertulis \u0026 di JSON ini), diuji CI
+# scripts/test-promtail-redaction.sh (G15, SEC-73). Log container mentah di host (json-file 20m x 5) belum teredaksi.
 accessLog:
   format: json
   fields:
     headers:
+      defaultMode: drop
       names:
         Authorization: drop
         Cookie: drop

@@ -1,0 +1,4 @@
+[Nest] 41  - 10/09/2026, 1:00:00 AM    WARN [PosLoyaltyService] EFN_LOYALTY_ANOMALY {"kind":"burst_earn","severity":"warning","company":"EFN","order_ref":"00042-001-0007"}
+[Nest] 41  - 10/09/2026, 1:00:01 AM     LOG [MarketScoutService] Report af73a9ae-17d1-4fc0-b470-0819152600bd diterima dari 62899****279
+[Nest] 41  - 10/09/2026, 1:00:02 AM   ERROR [OtpService] gagal kirim ke +62 899-1234-5607 Authorization: Bearer SENTINEL.BEARER-JWT_x~y+z/w==
+[Nest] 41  - 10/09/2026, 1:00:03 AM   DEBUG [ConnectorService] upstream Authorization: Basic U0VOVElORUw6U0VOVElORUwx

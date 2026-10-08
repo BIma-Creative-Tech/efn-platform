@@ -51,11 +51,43 @@ scrape_configs:
       - source_labels: [__journal__hostname]
         target_label: host
     # G14: stage `replace` hanya mengganti CAPTURE GROUP (bukan seluruh kecocokan) -> nilai sensitif = satu grup luar,
-    # grup dalam non-capturing. Ekspresi lama membocorkan sisa nomor HP dan tidak meredaksi Bearer (promtail.yml).
+    # grup dalam non-capturing. G15 (SEC-72/73/78): SALINAN PERSIS tahap redaksi promtail.yml (a)-(d); CI
+    # (scripts/test-promtail-redaction.sh) menjalankan kedua pipeline atas fixture yang sama dan menolak perbedaan.
     pipeline_stages:
+      # (a) Parameter rahasia di query string / logfmt (SEC-73): token reset password Odoo, access_token
+      #     self-order, presigned S3, dll. Traefik JSON menulis "&" sebagai "\u0026" (encoding/json) -> ikut
+      #     dikenali; "?"/"&"/"=" boleh URL-encoded (%3F/%26/%3D, mis. redirect=%2Fweb%3Ftoken%3D...). Nilai = sampai &, spasi, kutip, backslash, #.
       - replace:
-          expression: '((?:\+?62|0)8[1-9][0-9]{7,11})'
+          expression: '(?i)(?:^|[^a-z0-9_]|\\u0026|%3f|%26)(?:access_token|refresh_token|id_token|auth_token|token|password|passwd|pwd|csrf_token|secret|client_secret|api_key|apikey|signature|x-amz-signature|x-amz-credential|x-amz-security-token|otp|otp_code)(?:=|%3d)([^&\s"''\\#]+)'
+          replace: '[REDACTED]'
+      #     Nama generik (code OAuth/OTP, key, sig) HANYA sebagai parameter query (?/&/;/\u0026) agar
+      #     logfmt "code=200" di log Go tidak ikut diganti.
+      - replace:
+          expression: '(?i)(?:[?&;]|\\u0026|%3f|%26)(?:code|key|sig|auth|session_id|sid)(?:=|%3d)([^&\s"''\\#]+)'
+          replace: '[REDACTED]'
+      # (b) Rahasia sebagai kunci JSON / dict Python ("password": "...", 'token': '...').
+      - replace:
+          expression: '(?i)["''](?:password|passwd|token|access_token|refresh_token|secret|client_secret|api_key|otp|otp_code)["'']\s*:\s*["'']([^"'']+)["'']'
+          replace: '[REDACTED]'
+      # (c) Skema Authorization: Bearer (JWT/opaque) dan Basic (base64; wajib memuat digit/+/=/"/" agar kata
+      #     biasa seperti "Basic authentication" tidak terganti).
+      - replace:
+          expression: '(?i)\bbearer\s+([a-z0-9\-_.~+/]+=*)'
+          replace: '[REDACTED]'
+      - replace:
+          expression: '(?i)\bbasic\s+([a-z0-9+/]*[0-9+/=][a-z0-9+/=]*)'
+          replace: '[REDACTED]'
+      # (d) Nomor HP Indonesia (SEC-78): 08…, 62…, +62…, (+62)…, %2B62…, dengan pemisah opsional spasi/titik/
+      #     strip ("0812-3456-7890", "+62 812 3456 7890"). Struktur 8[1-9]x(x) [sep] xxx(x) [sep] xxx(xx) =
+      #     7..11 digit setelah "8[1-9]" (sama dengan pola lama) dan blok terakhir tanpa pemisah -> tidak
+      #     "menelan" nomor berikutnya. Batas kiri DAN kanan non-alfanumerik (di luar grup): potongan UUID/hash/
+      #     ID container/ID thread tidak lagi terganti (false positive G14 merusak korelasi report_id antar-
+      #     service). "0" harus langsung diikuti "8" -> durasi "0.85…" aman. Bentuk ter-mask "62812****789"
+      #     (BFF) tidak cocok -> dibiarkan. Batas kanan MENGONSUMSI satu karakter -> nomor yang dipisah SATU
+      #     karakter dari nomor sebelumnya kehilangan batas kirinya -> tahap yang sama dijalankan DUA kali.
+      - replace:
+          expression: '(?:^|[^0-9A-Za-z+]|%2[Bb])((?:\+?62\)?[\s.-]{0,2}|0)8[1-9][0-9]{1,2}[\s.-]?[0-9]{3,4}[\s.-]?[0-9]{3,5})(?:[^0-9A-Za-z]|$)'
           replace: '[PHONE_REDACTED]'
       - replace:
-          expression: '(?i)bearer\s+([a-z0-9\-_\.~+/]+=*)'
-          replace: '[REDACTED]'
+          expression: '(?:^|[^0-9A-Za-z+]|%2[Bb])((?:\+?62\)?[\s.-]{0,2}|0)8[1-9][0-9]{1,2}[\s.-]?[0-9]{3,4}[\s.-]?[0-9]{3,5})(?:[^0-9A-Za-z]|$)'
+          replace: '[PHONE_REDACTED]'

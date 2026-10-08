@@ -104,7 +104,7 @@ Containment yang menghentikan layanan publik butuh persetujuan IC.
 ### 5.2 Sumber bukti
 | Sumber | Isi | Retensi | Catatan |
 |---|---|---|---|
-| Loki (umum) | Log semua container, HP ter-mask, access log Traefik & s3-gateway (tanpa query string) | 30 h | Query via Grafana (mTLS). Ekspor sebelum habis |
+| Loki (umum) | Log semua container: HP & rahasia diredaksi Promtail ([log-redaction.md](log-redaction.md)); access log Traefik **dengan** query string (nilai `token`/`access_token`/`password`/`code`/`signature`… → `[REDACTED]`); s3-gateway tanpa query string (`%HPO`) | 30 h | Query via Grafana (mTLS). Ekspor sebelum habis. Log mentah container di host (json-file) tidak teredaksi |
 | Loki `{stream="efn_audit_sink"}` | Perubahan model kontrol & purge log audit (tanpa nilai) | 400 h | Di luar kendali admin Odoo; bukan WORM |
 | Odoo `efn.audit.log` | Siapa mengubah harga/promo/partner/kontrol; nilai lama/baru ter-mask; `is_sudo`, `prev_company_id` | 730 h (min 365) | Menu Pengaturan → Audit; auditor per PT. Bandingkan dengan sink untuk mendeteksi penghapusan |
 | Salinan audit ClickHouse | Salinan append-only + `row_hash` berantai, rekonsiliasi id hilang | Usulan ≥ 730 h | **Sedang dibangun (data-AI)** — bila belum tersedia, gunakan PITR |

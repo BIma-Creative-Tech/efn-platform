@@ -1,0 +1,29 @@
+# Kerangka uji regresi redaksi Promtail (G15, SEC-72/73/78). Dipakai scripts/test-promtail-redaction.sh:
+# pipeline_stages DIISI dari infra/observability/promtail.yml (scrape docker) dan promtail-journal.yml (journal)
+# dengan yq -> yang diuji adalah konfigurasi produksi apa adanya, bukan salinan. Label statis meniru relabel
+# docker_sd (service, container) agar selector `match` sama dengan runtime. Tanpa push (promtail -dry-run).
+server:
+  disable: true
+positions:
+  filename: /tmp/positions.yaml
+clients:
+  - url: http://127.0.0.1:9/loki/api/v1/push   # tidak dipakai (-dry-run mencetak ke stdout)
+scrape_configs:
+  - job_name: docker
+    static_configs:
+      - targets: [localhost]
+        labels: {__path__: /fixtures/odoo.txt, service: odoo, container: efn-odoo-1}
+      - targets: [localhost]
+        labels: {__path__: /fixtures/etl.txt, service: etl, container: efn-etl-1}
+      - targets: [localhost]
+        labels: {__path__: /fixtures/api-gateway.txt, service: api-gateway, container: efn-api-gateway-1}
+      - targets: [localhost]
+        labels: {__path__: /fixtures/traefik.txt, service: traefik, container: efn-traefik-1}
+      - targets: [localhost]
+        labels: {__path__: /fixtures/generic.txt, service: fixture, container: efn-fixture-1}
+    pipeline_stages: []
+  - job_name: host-journal
+    static_configs:
+      - targets: [localhost]
+        labels: {__path__: /journal/generic.txt, service: host-efn-deploy, job: host-journal}
+    pipeline_stages: []
