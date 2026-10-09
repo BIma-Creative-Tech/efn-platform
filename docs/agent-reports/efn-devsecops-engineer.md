@@ -1316,3 +1316,53 @@ FAIL) · pytest `infra/metabase` 23 passed + ruff check/format bersih.
   `efn_odoo_pre_g13c.dump` (data dev; usul lead: hapus bila tidak dibutuhkan untuk rollback).
 - Belum: rotasi kunci kedua (old→new) belum diuji; uji di staging saat ada. Build image di CI (build-push) belum dijalankan
   untuk perubahan ini (hanya build lokal). `metabase-provision` tidak memeriksa status enkripsi (cek DB manual di README).
+
+---
+
+# Gelombang 16c (9 Okt 2026): perbaikan Security Review r9 (SEC-80..88)
+
+Branch `chore/wave-16b-followups`, belum di-commit. Status per temuan + bukti: `docs/reviews/SECURITY_REVIEW_2026-10-09_r9.md`
+§*Status perbaikan G16c* (8 Fixed, 1 Partial).
+
+## G16c.1 Perubahan
+
+| File | Isi |
+|---|---|
+| `scripts/verify-commit-gates.sh` (baru) | Gerbang rilis SEC-80: Actions API (`actions: read`), run per file workflow + `head_sha` + event push, job wajib `success`; `--preset release` = `ci.yml` `CI gate` + 4 job `security.yml`; polling, timeout, run absen = gagal. |
+| `.github/workflows/build-push.yml` | Job `scan-pr` (PR, `contents: read`, cache baca saja) · job `gate` (non-PR, `needs` build) · job `build`: push sekali → Trivy BY DIGEST → Syft → cosign sign/attest (SEC-81/83); `DOCKER_BUILD_RECORD_UPLOAD=false`. |
+| `.github/workflows/deploy.yml` | `resolve`: filter `workflow_run` event push + repo sendiri + main (SEC-82), SHA penuh, gerbang rilis + Build & Push success, output `git_sha`; `cosign verify --certificate-github-workflow-sha/-repository`; manifest `git_sha` = SHA yang dideploy. |
+| `.github/workflows/ci.yml` | `persist-credentials: false` (kecuali `changes`, alasan dikomentari), `npm ci` + cache npm, pin `pip-audit==2.10.1`/`pylint-odoo==10.0.11`, `CI gate` `needs: changes` (lubang: paths-filter gagal → gate lolos). |
+| `.github/workflows/security.yml` | Komentar header akurat (blokir rilis, bukan merge); label checkov "Dockerfile, GitHub Actions". |
+| `infra/compose/docker-compose.yml` | `metabase`: `cap_drop: [ALL]` + `cap_add: [CHOWN, SETUID, SETGID]`, tanpa `clickhouse_password_metabase` (SEC-85). |
+| `.trivyignore.yaml` | Statement DS-0002 faktual (perlu persetujuan ulang pemilik proyek). |
+| `scripts/check-encryption.sh`, `scripts/deploy.sh`, `scripts/smoke/run-e2e-smoke.sh` | SEC-86: `entrypoint == null`, tolak image `metabase/metabase`; cek runtime `.Config.Entrypoint`. |
+| `infra/metabase/README.md`, `docs/runbooks/secret-rotation.md` | SEC-87: prosedur rotasi jujur (argv terlihat `ps` host; mitigasi). |
+| `docs/runbooks/ci-github-free-plan.md`, `docs/03_DEVSECOPS_PIPELINE.md` | Gerbang rilis, fakta Rekor (SEC-84), alur PR, pin digest checkov lokal. |
+
+## G16c.2 Verifikasi nyata
+
+- Gerbang rilis terhadap API GitHub nyata (read-only): ef346a0 → exit 0; 7c33351 (CI failure) → exit 1; SHA tanpa run →
+  exit 1; nama job salah → `absent` exit 1.
+- Rekor (publik, read-only): entri 3155542984 (`dsse`) = hash + sertifikat saja, `attestation: null`; 3155540831
+  (`hashedrekord`). Sertifikat memuat repo, workflow@ref, SHA commit.
+- Log run 62b1bf1: trivy-action 0.35.0 "Using YAML ignorefile" + "Some vulnerabilities have been ignored/suppressed".
+- Metabase dev: recreate + restart dengan cap baru → healthy, `CapBnd=0xc1`, "correctly configured", `metabase-provision`
+  exit 0; sidecar `metabase-tls` di-recreate (healthy).
+- `docker compose config --format json`: key `entrypoint` selalu ada; `[]`/`''` → `[]`, absen/`null` → `null`.
+  check-encryption (docker:27-cli + jq): asli OK, `entrypoint: []` FAIL, `image: metabase/metabase` FAIL.
+- Java `@argfile` di image Metabase TIDAK menyembunyikan argumen (`/proc/self/cmdline` terekspansi).
+- actionlint 1.7.7 bersih · shellcheck (scripts, lib, host, smoke, metabase) bersih · yamllint 0 error ·
+  checkov 3.3.21 (digest + argumen security.yml) 0 FAILED · `docker compose config -q` dev/prod OK ·
+  secrets compose == `secrets.list`.
+
+## G16c.3 Belum terverifikasi / sisa
+
+- Workflow baru belum pernah berjalan di GitHub (butuh push/merge ke `main`): job `gate`, Trivy remote by digest
+  (auth lewat `docker login`), `cosign verify --certificate-github-workflow-sha`, `head_branch` untuk run tag `v*`.
+- Rollback ke rilis sebelum G16c lewat `workflow_dispatch` akan ditolak gerbang (nama job checkov lama → `absent`). Belum
+  ada rilis, jadi tidak berdampak sekarang.
+- Prosedur rotasi kunci Metabase (lama → baru) belum diuji end-to-end: rotasi kunci dev ditolak permission sesi.
+- Host `efn-deploy` belum mengikat `cosign verify` ke `git_sha` manifest (hanya `deploy.yml`). Usul gelombang berikut,
+  dengan kasus uji `test-efn-deploy.sh`.
+- Merge/push dengan check merah tetap mungkin secara teknis (paket gratis). Opsi: hook `pre-push` lokal atau org berbayar
+  + ruleset.

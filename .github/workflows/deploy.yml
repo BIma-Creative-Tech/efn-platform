@@ -34,15 +34,29 @@ jobs:
     name: Resolve target
     # Deploy otomatis ke staging hanya bila host staging sudah disiapkan Superadmin (variable STAGING_DEPLOY_ENABLED=true);
     # tanpa itu setiap push ke main akan gagal di SSH/verifikasi (G16). Tag v* dan workflow_dispatch tidak terpengaruh.
+    # SEC-82 (r9): workflow_run hanya dari run `push` ke main di repo ini (bukan pull_request / fork ber-branch `main`).
     if: >-
       github.event_name != 'workflow_run' ||
-      (github.event.workflow_run.conclusion == 'success' && vars.STAGING_DEPLOY_ENABLED == 'true')
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       vars.STAGING_DEPLOY_ENABLED == 'true')
     runs-on: ubuntu-latest
+    # Tag v*: menunggu Build & Push commit yang sama (yang sendiri menunggu CI + Security, SEC-80) selesai.
+    timeout-minutes: 100
+    permissions:
+      contents: read
+      actions: read   # scripts/verify-commit-gates.sh (Actions API)
     outputs:
       environment: ${{ steps.r.outputs.environment }}
       image_tag: ${{ steps.r.outputs.image_tag }}
       signer_ref: ${{ steps.r.outputs.signer_ref }}
+      git_sha: ${{ steps.r.outputs.git_sha }}
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
       # Input pengguna TIDAK diinterpolasi ke skrip; lewat env lalu divalidasi regex (SEC-10).
       - id: r
         env:
@@ -51,32 +65,59 @@ jobs:
           IN_TAG: ${{ inputs.image_tag }}
           REF_NAME: ${{ github.ref_name }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          PUSH_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           case "$EVENT" in
-            workflow_dispatch) env_name="$IN_ENV"; tag="$IN_TAG" ;;
-            push)              env_name="production"; tag="$REF_NAME" ;;
-            *)                 env_name="staging"; tag="sha-${RUN_SHA:0:7}" ;;
+            workflow_dispatch) env_name="$IN_ENV"; tag="$IN_TAG"; sha="" ;;
+            push)              env_name="production"; tag="$REF_NAME"; sha="$PUSH_SHA" ;;
+            *)                 env_name="staging"; tag="sha-${RUN_SHA:0:7}"; sha="$RUN_SHA" ;;
           esac
           [[ "$env_name" =~ ^(staging|production)$ ]] || { echo "::error::environment tidak valid"; exit 1; }
-          if [[ "$tag" =~ ^sha-[0-9a-f]{7}$ ]]; then
+          if [[ "$tag" =~ ^sha-([0-9a-f]{7})$ ]]; then
             # Build dari main: identitas penanda tangan = build-push.yml @ refs/heads/main
             signer_ref="refs/heads/main"
+            ref_for_sha="${BASH_REMATCH[1]}"
           elif [[ "$tag" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
             # Rilis: tag image = X.Y.Z (metadata-action semver), penanda tangan = build-push.yml @ refs/tags/vX.Y.Z
             tag="${BASH_REMATCH[1]}"
             signer_ref="refs/tags/v${tag}"
+            ref_for_sha="v${tag}"
           else
             echo "::error::image_tag harus sha-<7 hex> atau X.Y.Z / vX.Y.Z"; exit 1
           fi
           if [[ "$env_name" == "production" && "$signer_ref" != refs/tags/v* ]]; then
             echo "::error::production hanya menerima image rilis bertanda tangan dari tag v*"; exit 1
           fi
+          # SEC-82: SHA PENUH commit yang dideploy. workflow_run/push: dari event; dispatch: resolusi prefix/tag lewat
+          # API (prefix ambigu -> API menolak -> gagal). Digest diikat ke SHA ini di cosign verify
+          # (--certificate-github-workflow-sha): tabrakan prefix 7 hex tidak bisa memilih image commit lain.
+          if [[ -z "$sha" ]]; then
+            sha=$(gh api "repos/${REPO}/commits/${ref_for_sha}" --jq .sha) \
+              || { echo "::error::commit untuk ${ref_for_sha} tidak ditemukan/ambigu"; exit 1; }
+          fi
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::SHA commit tidak valid"; exit 1; }
+          if [[ "$signer_ref" == refs/heads/main && "$sha" != "${ref_for_sha}"* ]]; then
+            echo "::error::SHA commit tidak cocok dengan tag image"; exit 1
+          fi
           {
             echo "environment=$env_name"
             echo "image_tag=$tag"
             echo "signer_ref=$signer_ref"
+            echo "git_sha=$sha"
           } >> "$GITHUB_OUTPUT"
+      # SEC-80 (pertahanan berlapis, juga untuk workflow_dispatch): CI + Security commit yang dideploy = success, dan
+      # Build & Push commit itu selesai success (tag v*: deploy dipicu bersamaan dengan build -> ditunggu di sini).
+      - name: Gerbang rilis (CI, Security, Build & Push = success untuk commit ini)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.r.outputs.git_sha }}
+          WAIT_MIN: ${{ github.event_name == 'push' && '90' || '5' }}
+        run: >-
+          bash scripts/verify-commit-gates.sh --sha "$SHA" --preset release --require 'build-push.yml@*'
+          --timeout-min "$WAIT_MIN" --absent-min "$WAIT_MIN"
 
   deploy:
     name: Deploy ${{ needs.resolve.outputs.environment }} (${{ needs.resolve.outputs.image_tag }})
@@ -108,12 +149,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Verifikasi signature lalu ambil DIGEST yang terverifikasi; host mem-pull digest itu (bukan tag) -> tidak ada
-      # TOCTOU antara verifikasi dan pull (SEC-10). Identitas dikunci ke workflow + ref spesifik (bukan @.*).
+      # TOCTOU antara verifikasi dan pull (SEC-10). Identitas dikunci ke workflow + ref spesifik (bukan @.*) dan ke SHA
+      # commit penuh (ekstensi sertifikat Fulcio "GitHub Workflow SHA", SEC-82 r9).
       - name: Verifikasi signature & resolve digest (R-S08)
         id: digests
         env:
           TAG: ${{ needs.resolve.outputs.image_tag }}
           SIGNER_REF: ${{ needs.resolve.outputs.signer_ref }}
+          GIT_SHA: ${{ needs.resolve.outputs.git_sha }}
           REPO: ${{ github.repository }}
           OWNER: ${{ github.repository_owner }}
         run: |
@@ -126,6 +169,8 @@ jobs:
             digest=$(cosign verify \
                 --certificate-identity "$identity" \
                 --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+                --certificate-github-workflow-sha "$GIT_SHA" \
+                --certificate-github-workflow-repository "$REPO" \
                 --output json "$ref" \
               | jq -r '[.[].critical.image."docker-manifest-digest"] | unique | if length == 1 then .[0] else error("digest ganda") end')
             [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "::error::digest tidak valid untuk $svc"; exit 1; }
@@ -161,7 +206,7 @@ jobs:
           VERSION: ${{ needs.resolve.outputs.image_tag }}
           SIGNER_REF: ${{ needs.resolve.outputs.signer_ref }}
           SEQ: ${{ github.run_number }}
-          GIT_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          GIT_SHA: ${{ needs.resolve.outputs.git_sha }}
           EFN_PKI_ROOT_CRT: ${{ secrets.EFN_PKI_ROOT_CRT }}
           EFN_PKI_EXTRA_TRUST: ${{ secrets.EFN_PKI_EXTRA_TRUST }}
           IMAGE_POSTGRES: ${{ steps.digests.outputs.IMAGE_POSTGRES }}

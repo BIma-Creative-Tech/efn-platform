@@ -28,12 +28,13 @@ flowchart LR
 | PR | Semgrep rulesets OWASP, secrets, docker, TS, Python | `security.yml` | R-S04, R-S05, R-S06 |
 | PR | Trivy fs: vuln + secret + misconfig (Dockerfile, compose) | `security.yml` | R-S02 |
 | PR | Dependency review: blok severity high & lisensi GPL/AGPL untuk dependensi NPM/Py | `security.yml` | R-S02, R-L08 |
-| PR | Checkov: Dockerfile, GitHub Actions, YAML | `security.yml` | R-S07 |
+| PR | Checkov: Dockerfile, GitHub Actions (hardening compose: `check-encryption.sh` + cek CI job `infra`) | `security.yml` | R-S07 |
 | PR | CodeQL security-extended | `codeql.yml` | R-S05 |
-| Build | Image di-load lokal dan di-scan Trivy sebelum push; HIGH/CRITICAL memblokir | `build-push.yml` | R-S02 |
-| Build | SBOM SPDX (Syft) sebagai artifact + attestation buildx | `build-push.yml` | audit supply chain |
+| Build | Gerbang rilis: job `gate` menunggu CI (`CI gate`) + Security (gitleaks, semgrep, Trivy fs, checkov) commit yang sama = success sebelum push/sign (SEC-80, `scripts/verify-commit-gates.sh`) | `build-push.yml` | R-S07, R-S08 |
+| Build | Push sekali, Trivy image BY DIGEST hasil push; HIGH/CRITICAL memblokir tanda tangan (SEC-83). PR: job `scan-pr` build + load + scan, token `contents: read` saja (SEC-81) | `build-push.yml` | R-S02 |
+| Build | SBOM SPDX tingkat paket (Syft) di-attest cosign ke registry (bukan artifact) + SBOM buildx; Rekor publik hanya menyimpan hash + sertifikat (SEC-84) | `build-push.yml` | audit supply chain |
 | Build | Cosign keyless (OIDC GitHub) + `attest-build-provenance` (SLSA) | `build-push.yml` | R-S08 |
-| Deploy | `cosign verify` identitas workflow sebelum pull | `deploy.yml` | R-S08 |
+| Deploy | Gerbang rilis ulang (CI, Security, Build & Push success untuk SHA penuh) + `cosign verify` identitas workflow + ref + SHA commit sebelum pull; `workflow_run` hanya dari push repo sendiri (SEC-80/82) | `deploy.yml` | R-S07, R-S08 |
 | Deploy | Secrets dari GitHub Environments (lewat stdin SSH ke `sudo -n bash -s`; `deploy.sh` berjalan sebagai **root**) → file `/opt/efn/secrets/*.txt` (direktori `root:efn-superadmin 0750`, file 0444 — docs/04 §8.6, `docs/runbooks/key-custody.md`) → Docker secrets. Leaf TLS diterbitkan di host dari intermediate (`EFN_PKI_*`); `member_hash_pepper` & `minio_prometheus_token` diturunkan di host (`derive-secrets.sh`). Daftar tunggal: `scripts/secrets.list` | `deploy.yml`, `scripts/deploy.sh` | R-S01 |
 | Deploy | Environment `production` dengan required reviewers | GitHub Settings | perubahan tidak disetujui |
 | Deploy | Smoke test health endpoint, rollback dengan re-deploy tag sebelumnya (`workflow_dispatch`) | `deploy.yml` | downtime |

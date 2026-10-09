@@ -89,7 +89,10 @@ misconfigurations:
       - "infra/metabase/Dockerfile"
     statement: >-
       Image resmi Metabase: run_metabase.sh mulai sebagai root hanya untuk menyiapkan user `metabase` (MUID/MGID)
-      lalu menjalankan JVM sebagai user tersebut; USER di Dockerfile mematahkan langkah itu. Di compose: cap_drop ALL,
-      no-new-privileges, hanya loopback + sidecar TLS. Sama dengan checkov:skip CKV_DOCKER_3 di Dockerfile.
+      lalu menjalankan JVM sebagai user tersebut (uid 2000, PID 1); USER di Dockerfile mematahkan langkah itu. Di
+      compose (SEC-85, diuji 9 Okt 2026): cap_drop ALL + cap_add hanya CHOWN, SETUID, SETGID (dibutuhkan
+      adduser/chown/su); no-new-privileges; tidak read_only (run_metabase.sh menulis /etc/passwd, /metabase.db);
+      Jetty hanya loopback, akses lewat sidecar TLS mTLS. Sama dengan checkov:skip CKV_DOCKER_3 di Dockerfile.
+      Pernyataan sebelumnya ("cap_drop ALL") keliru saat disetujui -> perlu persetujuan ulang pemilik proyek.
     expired_at: 2027-01-07
 secrets: []

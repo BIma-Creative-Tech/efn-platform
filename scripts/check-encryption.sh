@@ -12,7 +12,7 @@
 #   - web-config exporter tanpa client_auth_type RequireAndVerifyClientCert; Loki tidak loopback (SEC-35)
 #   - filter L7 s3-gateway (HAProxy) tanpa TLS masuk atau tanpa `ssl verify required` ke storage (ADR-030)
 #   - (at rest) service metabase tanpa secret metabase_encryption_key / dengan MB_ENCRYPTION_SECRET_KEY di env /
-#     dengan override entrypoint (G16b)
+#     dengan override entrypoint apa pun termasuk `[]`/`''` / dengan image resmi metabase/metabase (G16b, SEC-86)
 # Pengecualian hanya lewat ADR-022; tambahkan di sini dengan komentar alasan.
 set -euo pipefail
 
@@ -120,8 +120,15 @@ check_compose() {
       || err "[$label] metabase: secret metabase_encryption_key tidak di-mount (detail koneksi tersimpan plaintext)"
     jq -e '(.services.metabase.environment // {}) | has("MB_ENCRYPTION_SECRET_KEY") | not' <<< "$json" > /dev/null \
       || err "[$label] metabase: MB_ENCRYPTION_SECRET_KEY di environment dilarang (pakai secret file)"
-    jq -e '((.services.metabase.entrypoint // []) | length) == 0' <<< "$json" > /dev/null \
-      || err "[$label] metabase: override entrypoint melewati efn-metabase-entrypoint (kunci enkripsi at rest)"
+    # SEC-86: `docker compose config --format json` SELALU memuat key `entrypoint` (null = ENTRYPOINT image). Nilai
+    # apa pun selain null adalah override, termasuk `entrypoint: []` / `''` (keduanya ter-render `[]` = MENGHAPUS
+    # ENTRYPOINT image -> run_metabase.sh tanpa kunci). Diuji docker compose v2 (9 Okt 2026).
+    jq -e '.services.metabase.entrypoint == null' <<< "$json" > /dev/null \
+      || err "[$label] metabase: override entrypoint (termasuk [] / '') melewati efn-metabase-entrypoint (kunci enkripsi at rest)"
+    # Image resmi metabase/metabase tidak memuat wrapper -> tanpa kunci. Hanya image EFN (infra/metabase/Dockerfile).
+    jq -e '(.services.metabase.image // "") | test("^(docker\\.io/)?(library/)?metabase/metabase([:@]|$)") | not' \
+      <<< "$json" > /dev/null \
+      || err "[$label] metabase: image resmi metabase/metabase tanpa efn-metabase-entrypoint (pakai image EFN)"
   fi
 
   echo "check-encryption: compose ${label} diperiksa"

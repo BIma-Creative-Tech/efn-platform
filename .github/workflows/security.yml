@@ -1,4 +1,9 @@
-# Security (shift-left): secret scanning, SAST, dependency & IaC scanning. Memblokir merge pada temuan HIGH/CRITICAL.
+# Security (shift-left): secret scanning, SAST, dependency & IaC scanning. Gagal (exit != 0) pada temuan di atas ambang.
+# Yang DIBLOKIR (SEC-80, r9): RILIS. Di repo privat paket gratis branch protection tidak tersedia, jadi workflow ini
+# TIDAK memblokir merge/push secara teknis (pada push ke main hasilnya keluar setelah commit masuk). Pemblokirnya:
+# build-push.yml job `gate` + deploy.yml job `resolve` (scripts/verify-commit-gates.sh --preset release) menolak
+# push/sign/deploy image untuk commit yang job gitleaks/semgrep/Trivy fs/checkov-nya tidak success.
+# PERHATIAN: nama job (`name:`) di bawah dipakai PRESET_RELEASE scripts/verify-commit-gates.sh; ganti keduanya.
 # Semua `uses:` dipin ke commit SHA (SEC-10).
 #
 # G16 (CI GitHub, 9 Okt 2026) — repo privat di paket gratis:
@@ -173,7 +178,10 @@ jobs:
   checkov:
     # G16: bridgecrewio/checkov-action@2fb0e6d… tidak bisa di-resolve lagi (SHA hilang dari repo action). Diganti image
     # resmi checkov dipin tag@digest (tanpa action pihak ketiga; sama persis dengan validasi lokal di runbook).
-    name: "IaC (checkov: compose, Dockerfile, GitHub Actions)"
+    # SEC-88: label akurat. Checkov/Trivy tidak punya kebijakan bawaan Docker Compose (framework `yaml` hanya kebijakan
+    # kustom, saat ini tidak ada). Hardening compose ditegakkan CI job `infra`: check-encryption.sh, port publish,
+    # token DNS Traefik, secrets.list.
+    name: "IaC (checkov: Dockerfile, GitHub Actions)"
     runs-on: ubuntu-latest
     permissions:
       contents: read

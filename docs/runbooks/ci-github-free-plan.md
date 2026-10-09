@@ -12,8 +12,28 @@ setelah run pertama CI/Security/Build gagal karena batas paket, bukan karena kod
 | Code scanning (CodeQL, upload SARIF) | Tidak tersedia tanpa GitHub Advanced Security (GHAS) di repo privat | `Resource not accessible by integration` | CodeQL & upload SARIF hanya bila repo publik atau `CODE_SCANNING_ENABLED=true`; hasil scanner ditulis ke log + job summary |
 
 Gate keamanan **tidak dilemahkan**: semgrep (`--error`), Trivy fs/image (`exit-code: 1`, HIGH/CRITICAL fixed), checkov,
-gitleaks, dependency-review, `npm audit`/`pip-audit` tetap memblokir merge/push. Yang hilang tanpa code scanning hanya
-**tampilan** temuan di tab Security; temuan tetap terlihat di log job dan di ringkasan run (Summary).
+gitleaks, dependency-review, `npm audit`/`pip-audit` tetap gagal (merah) pada temuan. Yang hilang tanpa code scanning
+hanya **tampilan** temuan di tab Security; temuan tetap terlihat di log job dan di ringkasan run (Summary).
+
+**Apa yang benar-benar diblokir (SEC-80, r9).** Tanpa branch protection (paket gratis), check merah **tidak** mencegah
+merge atau push langsung ke `main`; pada push ke `main` hasil CI/Security keluar *setelah* commit masuk. Yang diblokir
+secara teknis adalah **rilis**:
+- `build-push.yml` job `Gate (CI & Security hijau untuk commit ini)` menunggu (maks. 60 menit, polling 30 dtk) lalu
+  memverifikasi lewat Actions API bahwa untuk **commit yang sama** (event push, branch `main`) workflow `ci.yml`
+  (job `CI gate`: test, lint, `npm audit`, `pip-audit`, infra) dan `security.yml` (job `Secret scan (gitleaks)`,
+  `SAST (semgrep)`, `Trivy filesystem (vuln, secret, misconfig)`, `IaC (checkov: Dockerfile, GitHub Actions)`)
+  selesai `success`. Gagal/absen/batas waktu habis -> tidak ada push, scan, maupun tanda tangan image.
+- `deploy.yml` job `Resolve target` mengulang verifikasi itu (+ `Build & Push Images` success) untuk SHA penuh commit
+  yang dideploy, termasuk tag `v*` dan `workflow_dispatch`, lalu `cosign verify` mengikat digest ke SHA tersebut
+  (`--certificate-github-workflow-sha`).
+- Daftar job wajib ada di satu tempat: `scripts/verify-commit-gates.sh` (`PRESET_RELEASE`). Mengganti `name:` job di
+  `ci.yml`/`security.yml` tanpa memperbarui preset = gate gagal-tertutup ("absent").
+- Tag `v*` hanya untuk commit yang sudah melewati CI + Security sebagai push ke `main` (biasanya HEAD `main`). Bila
+  run CI commit itu dibatalkan (`cancel-in-progress` karena push berikutnya), tag commit terbaru saja.
+- Biaya: job gate memakai menit runner selama menunggu CI (umumnya 3-15 menit per push ke `main`).
+- Pilihan yang ditolak: memicu `build-push` lewat `workflow_run` setelah CI + Security. Workflow_run berjalan di
+  konteks default branch (identitas cosign untuk tag rilis `build-push.yml@refs/tags/vX.Y.Z` hilang) dan dua workflow
+  sumber memicu dua run yang harus saling menunggu.
 
 ## 2. Repository variables (Settings > Secrets and variables > Actions > Variables)
 
@@ -28,8 +48,19 @@ gitleaks, dependency-review, `npm audit`/`pip-audit` tetap memblokir merge/push.
 
 Catatan: artifact attestation GitHub tidak tersedia untuk repo privat milik akun pribadi ("Feature not available for
 user-owned private repositories"). Signature cosign keyless + attestation SBOM (SPDX tingkat paket, ±2 MB) tetap
-dibuat dan disimpan di GHCR. Keyless sigstore mencatat identitas workflow (nama repo, ref) dan digest image di log
-transparansi publik Rekor; isi image dan SBOM tidak dipublikasikan.
+dibuat dan disimpan di GHCR. Urutan per image (SEC-83): build & push sekali -> Trivy atas `<repo>@<digest>` hasil push
+-> SBOM -> `cosign sign` + `cosign attest`. Image yang gagal Trivy tetap ada di GHCR tetapi **tidak bertanda tangan**,
+sehingga ditolak `cosign verify` di deploy.
+
+**Apa yang publik di Rekor (SEC-84, diverifikasi 9 Okt 2026).** Entri run `62b1bf1` image metabase
+(`sha256:4d64a938…`): sign = log index 3155540831 (`hashedrekord`), attest SBOM = 3155542984 (`dsse`). API publik
+`https://rekor.sigstore.dev/api/v1/log/entries?logIndex=<idx>` mengembalikan untuk entri `dsse` hanya `envelopeHash`,
+`payloadHash`, signature, dan sertifikat Fulcio; field `attestation` kosong (isi SBOM **tidak** disimpan/disajikan).
+Yang **publik permanen** lewat sertifikat: nama repo `bctech-adm/efn-platform` (+ owner), path workflow + ref
+(`build-push.yml@refs/heads/main` / tag), SHA commit, event pemicu, waktu, dan hash. Daftar paket/versi image tetap
+privat (GHCR). Catatan: saat `cosign attest`, envelope lengkap **dikirim** ke server Rekor (untuk verifikasi
+signature) lalu tidak disimpan; batas ukuran itulah yang menolak SBOM 58 MB. Cek ulang:
+`curl -s "https://rekor.sigstore.dev/api/v1/log/entries?logIndex=<idx>" | jq '.[] | {attestation, kind: (.body|@base64d|fromjson|.kind), spec: (.body|@base64d|fromjson|.spec|keys)}'`.
 
 ## 3. Membersihkan kuota storage artifact (sekali, setelah merge G16)
 
@@ -83,7 +114,7 @@ docker run --rm -v "$W:/repo:ro" -w /repo rhysd/actionlint:1.7.7 -color=false
 docker run --rm -v "$W:/mnt:ro" -w /mnt --entrypoint sh koalaman/shellcheck-alpine:v0.9.0 -c 'shellcheck -x tests/load/*.sh scripts/smoke/*.sh'
 docker run --rm -v "$W:/src" -w /src semgrep/semgrep:1.179.0 semgrep scan --config p/owasp-top-ten --config p/secrets \
   --config p/dockerfile --config p/typescript --config p/python --config p/nodejs --severity ERROR --severity WARNING --error
-docker run --rm -v "$W:/src:ro" -w /src bridgecrew/checkov:3.3.21 -d . --framework dockerfile,github_actions,yaml \
+docker run --rm -v "$W:/src:ro" -w /src bridgecrew/checkov:3.3.21@sha256:9aefe56582004ebdac112fe85c3268dc4d3658231a8f023fb714ba9d29539d53 -d . --framework dockerfile,github_actions,yaml \
   --skip-check CKV_DOCKER_2 --skip-path secrets --compact --quiet
 docker run --rm -v trivy-cache:/root/.cache -v "$W:/src:ro" -w /src aquasec/trivy:0.69.3 fs --timeout 30m \
   --scanners vuln,secret,misconfig --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore.yaml \
@@ -111,8 +142,10 @@ protection / ruleset tidak bisa memaksakan ini, jadi disiplin ini adalah gerbang
 
 1. Buka `https://github.com/bctech-adm/efn-platform/pulls` > PR terbaru.
 2. Tab **Conversation**: baca ringkasan (apa berubah, apa yang sudah/belum diverifikasi, keputusan yang diminta).
-3. Tab **Checks**: pastikan semua hijau — `CI gate`, `Security`, `Build & Push Images` (di PR hanya build + scan,
-   tanpa push), `CodeQL` (notice bila code scanning tidak aktif). Klik job merah > **Summary** untuk temuan.
+3. Tab **Checks**: pastikan semua hijau — `CI gate`, `Security`, `Build & Push Images` (di PR hanya job
+   `scan <service>`: build + scan dengan token baca saja, tanpa push), `CodeQL` (notice bila code scanning tidak
+   aktif). Klik job merah > **Summary** untuk temuan. Merge dengan check merah tetap mungkin secara teknis, tetapi
+   image commit itu tidak akan di-push/ditandatangani/dideploy (gerbang rilis bagian 1).
 4. Tab **Files changed**: perhatikan khusus `.github/workflows/**`, `.trivyignore.yaml`, `.gitleaksignore`,
    `infra/compose/**`, `scripts/host/**`, dan file `security/` Odoo — perubahan di sini menyentuh gerbang keamanan.
 5. **Merge pull request** > pilih **Squash and merge** (satu commit per gelombang di `main`) > Confirm.

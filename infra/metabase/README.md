@@ -37,7 +37,13 @@ Metabase mengenkripsi detail koneksi (`metabase_database.details`, termasuk pass
 setting sensitif dengan `MB_ENCRYPTION_SECRET_KEY` (AES-256 + HMAC, dokumentasi resmi "Encrypting your database
 connection details at rest"). Kunci = secret `metabase_encryption_key` (`b64key32`, kustodi **Superadmin** -
 `docs/runbooks/key-custody.md`), di-mount **hanya** ke service `metabase`; `scripts/check-encryption.sh` menolak compose
-yang tidak me-mount secret ini, membawa `MB_ENCRYPTION_SECRET_KEY` di environment, atau meng-override `entrypoint`.
+yang tidak me-mount secret ini, membawa `MB_ENCRYPTION_SECRET_KEY` di environment, meng-override `entrypoint` (apa pun,
+termasuk `[]`/`''` yang menghapus ENTRYPOINT image, SEC-86) atau memakai image resmi `metabase/metabase`;
+`deploy.sh` dan smoke e2e memeriksa `docker inspect .Config.Entrypoint` container yang berjalan.
+
+Container `metabase` (SEC-85): `cap_drop: [ALL]` + `cap_add: [CHOWN, SETUID, SETGID]` (adduser/chown/`su metabase`
+pada `run_metabase.sh` resmi), `no-new-privileges`; secret yang di-mount hanya `pg_password_metabase`,
+`metabase_encryption_key`, `efn_ca_crt` (password ClickHouse hanya di `metabase-provision`, lalu tersimpan terenkripsi).
 
 **Mengenkripsi instance yang sudah ada (sekali; sudah dilakukan di dev 9 Okt 2026).** Staging/prod belum pernah jalan
 tanpa kunci (belum deploy) → di sana kunci aktif sejak start pertama, langkah ini tidak perlu.
@@ -51,9 +57,41 @@ $DC run --rm --no-deps -T --entrypoint /bin/sh metabase -c 'set -eu; unset MB_EN
 $DC up -d --no-deps --force-recreate metabase metabase-tls    # log: "Database encrypted and MB_ENCRYPTION_SECRET_KEY correctly configured"
 $DC run --rm --no-deps metabase-provision                     # exit 0, semua kartu completed
 ```
-Rotasi kunci berikutnya: sama, tetapi `MB_ENCRYPTION_SECRET_KEY` = kunci LAMA di env one-off dan kunci BARU sebagai
-argumen (baca keduanya dari file, jangan ketik di shell); lalu ganti secret + recreate. Kunci baru hanya terlihat di
-argv proses java di dalam container one-off (PID namespace sendiri, `--rm`); tidak masuk log maupun `docker inspect`.
+**Rotasi kunci berikutnya (SEC-87).** Perintah resmi Metabase hanya menerima kunci BARU sebagai argumen
+(`MB_ENCRYPTION_SECRET_KEY=<lama> java -jar metabase.jar rotate-encryption-key <baru>`); tidak ada varian env/file.
+Akibatnya kunci baru **terlihat di `/proc/<pid>/cmdline` proses java selama rotasi berjalan (±30-60 dtk), dan dari
+HOST dapat dibaca user host mana pun lewat `ps -ef`** (PID namespace container tidak menyembunyikan proses dari
+host). Java `@argfile` TIDAK menolong: diuji 9 Okt 2026 di image ini (JRE 21 Alpine), `/proc/self/cmdline` tetap
+memuat argumen yang sudah diekspansi. Kunci LAMA lewat env proses one-off (`/proc/<pid>/environ` hanya terbaca
+root/uid yang sama, tidak masuk `docker inspect` karena di-set di dalam `sh -c`). Mitigasi wajib:
+1. Jalankan di host prod (akses hanya admin) saat tidak ada sesi user lain (`who` kosong selain operator), atau
+   dengan `/proc` ber-`hidepid=2` (`mount -o remount,hidepid=2 /proc`; kembalikan setelahnya bila ada layanan host
+   yang membutuhkannya).
+2. Kunci tidak pernah diketik di shell/argumen `docker` (tidak masuk history/`docker inspect`): kunci baru dibaca dari
+   file di DALAM container one-off.
+3. Kunci tidak pernah dicetak (log Metabase hanya "Encryption key rotation OK.").
+```bash
+# Superadmin (root di host prod; dev: user biasa). Kunci LAMA = secret aktif metabase_encryption_key.
+SECRETS_DIR=/opt/efn/secrets   # prod (BASE deploy.sh); dev: SECRETS_DIR=secrets (root repo)
+( umask 077; openssl rand -base64 32 | tr -d '\n' > "$SECRETS_DIR/metabase_encryption_key.new" )   # 44 karakter
+$DC stop metabase-tls metabase
+$DC run --rm --no-deps -T -v "$SECRETS_DIR/metabase_encryption_key.new:/run/efn-new-key:ro" \
+  --entrypoint /bin/sh metabase -c 'set -eu
+  MB_ENCRYPTION_SECRET_KEY="$(cat /run/secrets/metabase_encryption_key)"; export MB_ENCRYPTION_SECRET_KEY
+  MB_DB_PASS="$(cat /run/secrets/pg_password_metabase)"; export MB_DB_PASS; unset MB_DB_PASS_FILE
+  exec /opt/java/openjdk/bin/java --add-opens java.base/java.nio=ALL-UNNAMED -jar /app/metabase.jar \
+    rotate-encryption-key "$(cat /run/efn-new-key)"'                   # log: "Encryption key rotation OK."
+# Ganti secret: prod = GitHub Environment METABASE_ENCRYPTION_KEY (kustodi Superadmin, key-custody.md) lalu deploy;
+# dev = mv metabase_encryption_key.new -> secrets/metabase_encryption_key.txt. Arsipkan kunci lama (offline).
+$DC up -d --no-deps --force-recreate metabase metabase-tls             # "MB_ENCRYPTION_SECRET_KEY correctly configured"
+$DC run --rm --no-deps metabase-provision                              # exit 0
+shred -u "$SECRETS_DIR/metabase_encryption_key.new" 2>/dev/null || rm -f "$SECRETS_DIR/metabase_encryption_key.new"
+```
+File kunci baru milik root 0600 tetap terbaca root di container walau `cap_drop: [ALL]` (pemilik file = uid 0, tanpa
+DAC_OVERRIDE). Jangan `docker compose up` sebelum secret diganti: wrapper akan memakai kunci LAMA dan Metabase gagal
+membaca detail koneksi (fail-closed, bukan plaintext).
+Status uji (9 Okt 2026): enkripsi awal (blok di atas) diuji di dev; prosedur ROTASI ini belum diuji end-to-end
+(rotasi kunci dev perlu persetujuan Superadmin) -> uji di dev sebelum dipakai di staging/prod.
 
 Verifikasi tanpa mencetak nilai (dev G16b: kedua baris `f|f`, password ClickHouse tidak ditemukan di `details`/`setting`):
 ```bash

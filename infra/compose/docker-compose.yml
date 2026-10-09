@@ -1258,9 +1258,15 @@ services:
       service: clickhouse-init
 
   # Metabase: Jetty listen 127.0.0.1:3000, TLS oleh sidecar metabase-tls (:3443). DB aplikasi: user efn_metabase
-  # lewat JDBC sslmode=verify-full. Koneksi ke ClickHouse dibuat di UI: HTTPS 8443, user efn_metabase,
-  # password = secret clickhouse_password_metabase, CA internal (runbook internal-pki.md).
-  # Tidak cap_drop/read_only: run_metabase.sh dapat chown direktori data dan menulis plugins ke /plugins.
+  # lewat JDBC sslmode=verify-full. Koneksi ke ClickHouse (HTTPS 8443, user efn_metabase, CA internal) dibuat oleh
+  # metabase-provision lewat API dan disimpan TERENKRIPSI di DB `metabase` (G16b) -> service ini TIDAK me-mount
+  # clickhouse_password_metabase (SEC-85, least privilege).
+  # Capability (SEC-85, diuji di stack dev 9 Okt 2026): cap_drop ALL + minimum untuk run_metabase.sh resmi yang mulai
+  # sebagai root: adduser/addgroup + chown /metabase.db & home (CHOWN), `su metabase` busybox (SETUID, SETGID).
+  # no-new-privileges (x-common) kompatibel: su dijalankan oleh root (tanpa elevasi setuid). Log start memuat
+  # "adduser: /home/metabase: Operation not permitted" (chmod g+s home tanpa FOWNER): diharapkan, home tidak dipakai;
+  # hasil uji: healthy, "MB_ENCRYPTION_SECRET_KEY correctly configured", metabase-provision exit 0. Tidak read_only:
+  # run_metabase.sh menulis /etc/passwd, /metabase.db dan Metabase menulis /plugins (sample DB) saat start.
   metabase:
     <<: *common
     # G13/G16: image sendiri = metabase v0.58.35 LTS (digest; driver ClickHouse bawaan) - infra/metabase/Dockerfile.
@@ -1284,7 +1290,9 @@ services:
       MB_DB_USER: efn_metabase
       MB_DB_PASS_FILE: /run/secrets/pg_password_metabase
       JAVA_TIMEZONE: Asia/Jakarta
-    secrets: [pg_password_metabase, clickhouse_password_metabase, metabase_encryption_key, efn_ca_crt]
+    secrets: [pg_password_metabase, metabase_encryption_key, efn_ca_crt]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
     volumes:
       - metabase-data:/metabase-data
     networks: [internal, data]
