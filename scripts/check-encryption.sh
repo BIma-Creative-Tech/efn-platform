@@ -11,6 +11,8 @@
 #   - sidecar ghostunnel dengan --disable-authentication atau tanpa --cacert/--allow-cn (mTLS, docs/04 §8.5)
 #   - web-config exporter tanpa client_auth_type RequireAndVerifyClientCert; Loki tidak loopback (SEC-35)
 #   - filter L7 s3-gateway (HAProxy) tanpa TLS masuk atau tanpa `ssl verify required` ke storage (ADR-030)
+#   - (at rest) service metabase tanpa secret metabase_encryption_key / dengan MB_ENCRYPTION_SECRET_KEY di env /
+#     dengan override entrypoint apa pun termasuk `[]`/`''` / dengan image resmi metabase/metabase (G16b, SEC-86)
 # Pengecualian hanya lewat ADR-022; tambahkan di sini dengan komentar alasan.
 set -euo pipefail
 
@@ -109,6 +111,29 @@ check_compose() {
        (if ([$c[] | select(startswith("--cacert="))] | length) > 0 then "1" else "0" end),
        ([$c[] | select(startswith("--verify-cn="))] | length | tostring),
        (if ([$c[] | select(startswith("--listen=127.0.0.1:"))] | length) > 0 then "1" else "0" end)] | @tsv' <<< "$json")
+
+  # 4) At rest Metabase (G16b): service metabase wajib me-mount secret metabase_encryption_key, tidak boleh membawa
+  #    MB_ENCRYPTION_SECRET_KEY di environment (terlihat di docker inspect), dan tidak boleh meng-override entrypoint
+  #    image (efn-metabase-entrypoint = satu-satunya jalur kunci -> env, fail-closed).
+  if jq -e '.services.metabase != null' <<< "$json" > /dev/null; then
+    jq -e '[.services.metabase.secrets[]? | (.source // .)] | index("metabase_encryption_key") != null' <<< "$json" > /dev/null \
+      || err "[$label] metabase: secret metabase_encryption_key tidak di-mount (detail koneksi tersimpan plaintext)"
+    jq -e '(.services.metabase.environment // {}) | has("MB_ENCRYPTION_SECRET_KEY") | not' <<< "$json" > /dev/null \
+      || err "[$label] metabase: MB_ENCRYPTION_SECRET_KEY di environment dilarang (pakai secret file)"
+    # SEC-86: `docker compose config --format json` SELALU memuat key `entrypoint` (null = ENTRYPOINT image). Nilai
+    # apa pun selain null adalah override, termasuk `entrypoint: []` / `''` (keduanya ter-render `[]` = MENGHAPUS
+    # ENTRYPOINT image -> run_metabase.sh tanpa kunci). Diuji docker compose v2 (9 Okt 2026).
+    jq -e '.services.metabase.entrypoint == null' <<< "$json" > /dev/null \
+      || err "[$label] metabase: override entrypoint (termasuk [] / '') melewati efn-metabase-entrypoint (kunci enkripsi at rest)"
+    # Image resmi metabase/metabase tidak memuat wrapper -> tanpa kunci. Hanya image EFN (infra/metabase/Dockerfile).
+    jq -e '(.services.metabase.image // "") | test("^(docker\\.io/)?(library/)?metabase/metabase([:@]|$)") | not' \
+      <<< "$json" > /dev/null \
+      || err "[$label] metabase: image resmi metabase/metabase tanpa efn-metabase-entrypoint (pakai image EFN)"
+    # Pengecualian Trivy DS-0002 (.trivyignore.yaml) bergantung pada ini (SEC-85, re-review G16c)
+    jq -e '(.services.metabase.cap_drop // []) as $d | (.services.metabase.cap_add // []) as $a
+           | ($d | index("ALL")) != null and (($a - ["CHOWN", "SETUID", "SETGID"]) | length) == 0' <<< "$json" > /dev/null \
+      || err "[$label] metabase: wajib cap_drop [ALL] dan cap_add hanya CHOWN/SETUID/SETGID (dasar pengecualian DS-0002)"
+  fi
 
   echo "check-encryption: compose ${label} diperiksa"
 }

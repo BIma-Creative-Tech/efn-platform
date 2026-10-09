@@ -251,6 +251,9 @@ scenario_f() {
   check "f.ch_fact_sales_line" "$([[ "$n3" -ge 1 ]] && echo 1 || echo 0)" "rows=$n3 (pos, dimuat 24 jam terakhir)"
   mb="$(docker inspect "${P}-metabase-1" --format '{{.State.Health.Status}}')/$(docker inspect "${P}-metabase-tls-1" --format '{{.State.Health.Status}}')"
   check "f.metabase_healthy" "$([[ "$mb" == healthy/healthy ]] && echo 1 || echo 0)" "metabase/metabase-tls=$mb"
+  # SEC-86: wrapper kunci enkripsi at rest benar-benar dipakai container yang berjalan
+  mbep="$(docker inspect "${P}-metabase-1" --format '{{json .Config.Entrypoint}}')"
+  check "f.metabase_entrypoint" "$([[ "$mbep" == '["/usr/local/bin/efn-metabase-entrypoint"]' ]] && echo 1 || echo 0)" "entrypoint=$mbep"
   echo "$mh" > "${WORK}/member_hash"
 }
 

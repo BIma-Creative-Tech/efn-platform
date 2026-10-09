@@ -1256,3 +1256,136 @@ shellcheck, Dependabot 33 PR. Runbook baru: `docs/runbooks/ci-github-free-plan.m
    pastikan Dependency graph aktif (dependency-review).
 4. Persetujuan risk acceptance G16.3 (WAL-G, Metabase) atau perintah membangun WAL-G dari source.
 5. Upgrade Metabase 0.52 -> 0.58 (migrasi DB aplikasi tidak bisa dibalik): setujui sebelum dipakai di lingkungan berdata.
+
+# Gelombang 16b — Enkripsi at rest DB aplikasi Metabase — 9 Okt 2026
+
+Temuan (pelanggaran prinsip enkripsi at rest): Metabase v0.58.35 dev berjalan tanpa `MB_ENCRYPTION_SECRET_KEY` →
+`metabase_database.details` (termasuk password ClickHouse `efn_metabase`, read-only) plaintext di DB `metabase` dan di
+dump backup pra-upgrade.
+
+## G16b.1 Perubahan
+
+| File | Perubahan |
+|---|---|
+| `scripts/secrets.list` | Secret baru `metabase_encryption_key b64key32 [SA]` (32 byte acak base64). `gen-secrets.sh`, `deploy.sh`, `deploy.yml` membaca daftar ini otomatis → GitHub Environment `METABASE_ENCRYPTION_KEY` (staging/prod) **wajib diisi Superadmin sebelum deploy berikutnya** (deploy.sh `die` bila kosong). |
+| `infra/compose/docker-compose.yml` | Secret top-level + mount **hanya** ke `metabase`. Override `entrypoint` shell inline dihapus → ENTRYPOINT image; `MB_DB_PASS_FILE` (didukung `run_metabase.sh` resmi, `file_env`) menggantikan `export MB_DB_PASS=$(cat …)`. |
+| `infra/metabase/efn-entrypoint.sh` (baru) | POSIX sh: secret → `MB_ENCRYPTION_SECRET_KEY` → `exec /app/run_metabase.sh "$@"` (perilaku resmi root → `su metabase` uid 2000 dipertahankan; diverifikasi `docker top`: java uid 2000). **Fail-closed di semua lingkungan** (lebih ketat dari brief "selain dev-eksplisit": dev juga punya kunci dari gen-secrets, dan instance yang sudah terenkripsi memang tidak bisa jalan tanpa kunci): file tidak ada/tidak terbaca/kosong/< 32 karakter/berisi CR-spasi, atau kunci diberikan via env → exit 1. Nilai tidak pernah dicetak. |
+| `infra/metabase/Dockerfile` | `COPY --chmod=0755 efn-entrypoint.sh` + `ENTRYPOINT ["/usr/local/bin/efn-metabase-entrypoint"]`. |
+| `scripts/check-encryption.sh` | Cek baru (compose dev+prod): metabase wajib mount `metabase_encryption_key`, tanpa `MB_ENCRYPTION_SECRET_KEY` di environment, tanpa override `entrypoint`. |
+| `.github/workflows/ci.yml` | shellcheck `-s sh` mencakup `infra/metabase/*.sh`. |
+| `infra/metabase/README.md` | Baris `efn-entrypoint.sh`; bagian *Enkripsi at rest* (prosedur rotate one-off, verifikasi tanpa mencetak nilai, rotasi berikutnya); backup DB `metabase` kini **pg_dump \| age** (tidak ada dump plaintext di disk); jalur rollback v0.52.4 setelah dump dihapus; item *Belum* diperbarui. |
+| `docs/runbooks/key-custody.md` | Baris kustodi `metabase_encryption_key` (Superadmin, keputusan klien 6 Okt). |
+| `docs/runbooks/secret-rotation.md` | Baris rotasi `metabase_encryption_key` (rotate-encryption-key, bukan sekadar ganti nilai); `clickhouse_password_metabase` kini lewat `metabase-provision`, bukan UI. |
+| `docs/runbooks/dev-stack-boot.md` | §2e migrasi stack dev lama (sekali). |
+
+## G16b.2 Enkripsi data yang sudah ada (stack dev, nyata)
+
+1. `bash scripts/gen-secrets.sh` → `secrets/metabase_encryption_key.txt` (44 karakter, tanpa CR).
+2. `build metabase` → `stop metabase-tls metabase` → one-off resmi `java -jar metabase.jar rotate-encryption-key <kunci dari file>`
+   (tanpa kunci lama = instance plaintext): log `Encryption key rotation OK.`, exit 0. Log tidak memuat kunci maupun
+   password ClickHouse (grep -F -f file secret = 0).
+3. `up -d --no-deps --force-recreate metabase metabase-tls` → healthy, restart 0, log `Database encrypted and
+   MB_ENCRYPTION_SECRET_KEY correctly configured`.
+4. DB (tanpa mencetak nilai): sebelum = `EFN DWH (ClickHouse)` `details LIKE '%password%'` **t**, JSON **t**; sesudah =
+   **f / f** (Sample Database juga f/f). `strpos(details|setting.value, <password CH dari stdin>)` = **0** baris.
+5. `metabase-provision` dua kali: exit 0 / exit 0, **33/33 kartu `completed`** tiap run (idempoten; PUT koneksi tetap
+   tersimpan terenkripsi, dicek ulang f/f).
+6. Fail-closed diuji pada image baru: tanpa secret, kunci via env, kunci 5 karakter, kunci ber-CRLF, file kosong →
+   semuanya exit 1 dengan pesan jelas.
+7. Dump plaintext `scratchpad/metabase-backup/metabase-pre-v0.58.dump` (514 KB) di-`shred -u` + direktori dihapus setelah
+   langkah 1–6 lolos (catatan jujur: shred di NTFS/SSD tidak menjamin penghapusan fisik). Tag sementara
+   `efn/metabase:pre-g16b-encrypt` dihapus; `efn/metabase:rollback-v0.52.4` dipertahankan (README: rollback = image
+   itu + wrapper + DB kosong + provision ulang).
+
+## G16b.3 Validasi lokal (container)
+
+shellcheck v0.10.0 (`-s sh` wrapper; `-x` check-encryption/gen-secrets) bersih · hadolint v2.14.0 (digest CI) bersih ·
+checkov 3.3.21 (digest & argumen = security.yml) exit 0, 0 FAILED · `docker compose config -q` dev & prod dengan
+`.env.example` OK · secrets top-level == `scripts/secrets.list` (104) · `check-encryption.sh` OK (dijalankan di
+container docker:27-cli + jq; host tanpa jq) + uji negatif jq rule baru (tanpa secret / env / entrypoint → ketiganya
+FAIL) · pytest `infra/metabase` 23 passed + ruff check/format bersih.
+
+## G16b.4 Rekomendasi & sisa
+
+- **Rotasi password `clickhouse_password_metabase`** (ClickHouse read-only `efn_metabase`): sempat plaintext di DB dev dan
+  dump dev (kini dihapus). Dev: opsional (hapus file → gen-secrets → clickhouse-init → metabase-provision). Staging/prod:
+  tidak terdampak — belum pernah deploy, kunci aktif sejak start pertama.
+- **Superadmin**: isi GitHub Environment `METABASE_ENCRYPTION_KEY` (`openssl rand -base64 32`) di staging & production
+  sebelum deploy berikutnya + salinan offline (key-custody §1).
+- Ditemukan di luar lingkup: scratchpad sesi masih berisi dump Odoo plaintext `efn_odoo_pre_g10.dump`,
+  `efn_odoo_pre_g13c.dump` (data dev; usul lead: hapus bila tidak dibutuhkan untuk rollback).
+- Belum: rotasi kunci kedua (old→new) belum diuji; uji di staging saat ada. Build image di CI (build-push) belum dijalankan
+  untuk perubahan ini (hanya build lokal). `metabase-provision` tidak memeriksa status enkripsi (cek DB manual di README).
+
+---
+
+# Gelombang 16c (9 Okt 2026): perbaikan Security Review r9 (SEC-80..88)
+
+Branch `chore/wave-16b-followups`, belum di-commit. Status per temuan + bukti: `docs/reviews/SECURITY_REVIEW_2026-10-09_r9.md`
+§*Status perbaikan G16c* (8 Fixed, 1 Partial).
+
+## G16c.1 Perubahan
+
+| File | Isi |
+|---|---|
+| `scripts/verify-commit-gates.sh` (baru) | Gerbang rilis SEC-80: Actions API (`actions: read`), run per file workflow + `head_sha` + event push, job wajib `success`; `--preset release` = `ci.yml` `CI gate` + 4 job `security.yml`; polling, timeout, run absen = gagal. |
+| `.github/workflows/build-push.yml` | Job `scan-pr` (PR, `contents: read`, cache baca saja) · job `gate` (non-PR, `needs` build) · job `build`: push sekali → Trivy BY DIGEST → Syft → cosign sign/attest (SEC-81/83); `DOCKER_BUILD_RECORD_UPLOAD=false`. |
+| `.github/workflows/deploy.yml` | `resolve`: filter `workflow_run` event push + repo sendiri + main (SEC-82), SHA penuh, gerbang rilis + Build & Push success, output `git_sha`; `cosign verify --certificate-github-workflow-sha/-repository`; manifest `git_sha` = SHA yang dideploy. |
+| `.github/workflows/ci.yml` | `persist-credentials: false` (kecuali `changes`, alasan dikomentari), `npm ci` + cache npm, pin `pip-audit==2.10.1`/`pylint-odoo==10.0.11`, `CI gate` `needs: changes` (lubang: paths-filter gagal → gate lolos). |
+| `.github/workflows/security.yml` | Komentar header akurat (blokir rilis, bukan merge); label checkov "Dockerfile, GitHub Actions". |
+| `infra/compose/docker-compose.yml` | `metabase`: `cap_drop: [ALL]` + `cap_add: [CHOWN, SETUID, SETGID]`, tanpa `clickhouse_password_metabase` (SEC-85). |
+| `.trivyignore.yaml` | Statement DS-0002 faktual (perlu persetujuan ulang pemilik proyek). |
+| `scripts/check-encryption.sh`, `scripts/deploy.sh`, `scripts/smoke/run-e2e-smoke.sh` | SEC-86: `entrypoint == null`, tolak image `metabase/metabase`; cek runtime `.Config.Entrypoint`. |
+| `infra/metabase/README.md`, `docs/runbooks/secret-rotation.md` | SEC-87: prosedur rotasi jujur (argv terlihat `ps` host; mitigasi). |
+| `docs/runbooks/ci-github-free-plan.md`, `docs/03_DEVSECOPS_PIPELINE.md` | Gerbang rilis, fakta Rekor (SEC-84), alur PR, pin digest checkov lokal. |
+
+## G16c.2 Verifikasi nyata
+
+- Gerbang rilis terhadap API GitHub nyata (read-only): ef346a0 → exit 0; 7c33351 (CI failure) → exit 1; SHA tanpa run →
+  exit 1; nama job salah → `absent` exit 1.
+- Rekor (publik, read-only): entri 3155542984 (`dsse`) = hash + sertifikat saja, `attestation: null`; 3155540831
+  (`hashedrekord`). Sertifikat memuat repo, workflow@ref, SHA commit.
+- Log run 62b1bf1: trivy-action 0.35.0 "Using YAML ignorefile" + "Some vulnerabilities have been ignored/suppressed".
+- Metabase dev: recreate + restart dengan cap baru → healthy, `CapBnd=0xc1`, "correctly configured", `metabase-provision`
+  exit 0; sidecar `metabase-tls` di-recreate (healthy).
+- `docker compose config --format json`: key `entrypoint` selalu ada; `[]`/`''` → `[]`, absen/`null` → `null`.
+  check-encryption (docker:27-cli + jq): asli OK, `entrypoint: []` FAIL, `image: metabase/metabase` FAIL.
+- Java `@argfile` di image Metabase TIDAK menyembunyikan argumen (`/proc/self/cmdline` terekspansi).
+- actionlint 1.7.7 bersih · shellcheck (scripts, lib, host, smoke, metabase) bersih · yamllint 0 error ·
+  checkov 3.3.21 (digest + argumen security.yml) 0 FAILED · `docker compose config -q` dev/prod OK ·
+  secrets compose == `secrets.list`.
+
+## G16c.3 Belum terverifikasi / sisa
+
+- Workflow baru belum pernah berjalan di GitHub (butuh push/merge ke `main`): job `gate`, Trivy remote by digest
+  (auth lewat `docker login`), `cosign verify --certificate-github-workflow-sha`, `head_branch` untuk run tag `v*`.
+- Rollback ke rilis sebelum G16c lewat `workflow_dispatch` akan ditolak gerbang (nama job checkov lama → `absent`). Belum
+  ada rilis, jadi tidak berdampak sekarang.
+- Prosedur rotasi kunci Metabase (lama → baru) belum diuji end-to-end: rotasi kunci dev ditolak permission sesi.
+- Host `efn-deploy` belum mengikat `cosign verify` ke `git_sha` manifest (hanya `deploy.yml`). Usul gelombang berikut,
+  dengan kasus uji `test-efn-deploy.sh`.
+- Merge/push dengan check merah tetap mungkin secara teknis (paket gratis). Opsi: hook `pre-push` lokal atau org berbayar
+  + ruleset.
+
+## G16c.4 Lanjutan: re-review G16c (SEC-89..94), di atas commit `4996aa8`, belum di-commit
+
+| ID | Perubahan | Bukti |
+|---|---|---|
+| SEC-89 | CI: semua job pada push ke `main` (filter path hanya PR, tanpa checkout di `changes`); gitleaks riwayat penuh pada push/jadwal (image v8.30.1 ber-digest); gate 75 mnt; runbook: aturan tag + estimasi menit | gitleaks lokal 67 commit bersih; actionlint/checkov bersih |
+| SEC-90 | push by digest tanpa tag → scan → sign → `imagetools create` tag + verifikasi digest; `sha-*` hanya dari main | uji registry lokal: digest index tetap sama setelah tag |
+| SEC-91 | `efn-deploy` `cosign verify` terikat `git_sha` manifest + repo | test-efn-deploy 87/87 PASS (80, 81 baru) |
+| SEC-92 | `efn-deploy` production wajib `/etc/efn/approved-release` (`<X.Y.Z> <git_sha>`); key-custody §4d | kasus 82-87 PASS; API environments: production tanpa required reviewers |
+| SEC-93 | concurrency Security per event | actionlint |
+| SEC-94 | deploy memilih run build-push per ref (`main`/`vX.Y.Z`); izin `build` tanpa security-events/attestations | API nyata `@main` lolos, `@v1.0.0` gagal |
+| (saran SEC-85) | check-encryption: cap metabase dikunci | negatif SYS_ADMIN → FAIL |
+
+Validasi: actionlint 1.7.7, shellcheck (scripts/lib/host/smoke/metabase), yamllint 0 error, checkov 3.3.21 0 FAILED
+(github_actions 658 passed), `docker compose config -q` dev/prod, check-encryption (asli OK + 3 negatif FAIL),
+test-efn-deploy 87/87.
+
+Belum / perlu tindakan:
+- Job Odoo test/tour belum pernah selesai di GitHub; run CI penuh pertama di `main` bisa merah → gerbang rilis tertahan
+  sampai hijau. Estimasi biaya ±135-195 menit runner per merge ke `main` (kuota 2.000/bulan ≈ 10-14 merge).
+- Superadmin: pasang ulang `efn-deploy` di host (sha256 dari PR), isi `/etc/efn/approved-release` sebelum rilis
+  production; admin repo: Environment `staging` → deployment branch `main` saja (saat ini tanpa aturan).
+- `head_branch` = nama tag untuk run push tag (SEC-94) dan seluruh alur build/tag/deploy baru belum terbukti di run nyata.

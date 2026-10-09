@@ -407,6 +407,10 @@ if [[ ",${COMPOSE_PROFILES}," == *",data,"* ]]; then
     sleep 5
   done
   check_oneshot metabase-provision || die "metabase-provision gagal - Metabase JANGAN dibiarkan belum ter-setup (runbook)"
+  # SEC-86: container yang BERJALAN memakai wrapper kunci enkripsi at rest (bukan hanya konfigurasi compose).
+  mb_ep=$(docker inspect --format '{{json .Config.Entrypoint}}' "$("${DC[@]}" ps -q metabase)")
+  [[ "$mb_ep" == '["/usr/local/bin/efn-metabase-entrypoint"]' ]] \
+    || die "metabase berjalan tanpa efn-metabase-entrypoint (entrypoint=$mb_ep): enkripsi at rest tidak terjamin"
 fi
 [[ "${MIGRATION_ENABLED:-false}" != true ]]   || echo "PERINGATAN: MIGRATION_ENABLED=true (endpoint migrasi K-7 aktif) - matikan lagi setelah migrasi selesai" >&2
 

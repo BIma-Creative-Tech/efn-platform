@@ -2,6 +2,8 @@
 # ATURAN: setiap entri wajib `statement` (alasan) + `expired_at` (tanggal tinjau, maks. 90 hari). Setelah lewat
 # tanggal, entri tidak berlaku lagi dan gate kembali gagal -> tinjau ulang, perpanjang dengan alasan, atau perbaiki.
 # CVE dependency aplikasi (npm/pip) TIDAK di-ignore di sini: perbaiki versinya. Runbook: docs/runbooks/ci-github-free-plan.md
+# Persetujuan: pengecualian WAL-G 3.0.9 dan Metabase v0.58.35 di bawah DISETUJUI pemilik proyek pada 9 Okt 2026
+# (sampai expired_at). Entri baru di luar daftar ini butuh persetujuan baru.
 vulnerabilities:
   # WAL-G v3.0.9 (rilis terbaru upstream, 20 Agu 2026; image postgres R-T08). Binary resmi dibangun Go 1.25.11 +
   # grpc 1.83.0. Belum ada rilis perbaikan. Paparan rendah: wal-g = klien CLI (archive_command / backup-fetch) ke
@@ -87,7 +89,10 @@ misconfigurations:
       - "infra/metabase/Dockerfile"
     statement: >-
       Image resmi Metabase: run_metabase.sh mulai sebagai root hanya untuk menyiapkan user `metabase` (MUID/MGID)
-      lalu menjalankan JVM sebagai user tersebut; USER di Dockerfile mematahkan langkah itu. Di compose: cap_drop ALL,
-      no-new-privileges, hanya loopback + sidecar TLS. Sama dengan checkov:skip CKV_DOCKER_3 di Dockerfile.
+      lalu menjalankan JVM sebagai user tersebut (uid 2000, PID 1); USER di Dockerfile mematahkan langkah itu. Di
+      compose (SEC-85, diuji 9 Okt 2026): cap_drop ALL + cap_add hanya CHOWN, SETUID, SETGID (dibutuhkan
+      adduser/chown/su); no-new-privileges; tidak read_only (run_metabase.sh menulis /etc/passwd, /metabase.db);
+      Jetty hanya loopback, akses lewat sidecar TLS mTLS. Sama dengan checkov:skip CKV_DOCKER_3 di Dockerfile.
+      Pernyataan sebelumnya ("cap_drop ALL") keliru saat disetujui -> perlu persetujuan ulang pemilik proyek.
     expired_at: 2027-01-07
 secrets: []
