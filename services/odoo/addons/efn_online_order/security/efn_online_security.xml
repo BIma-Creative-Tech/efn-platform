@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- efn_online_order (E-28): grup user teknis kanal online + record rule multi-company.
+     Grup user teknis SENGAJA tanpa ACL dokumen dan tanpa menu: BFF hanya memanggil 10 metode khusus
+     (docs/04 §10.4.3) yang mengecek pemanggil lalu menulis lewat sudo. `/json/2/sale.order/create` dengan
+     key ini ditolak ACL. api_key_duration (masa berlaku API key) diatur efn_setup_online (PLACEHOLDER 90 hari);
+     tanpa itu Odoo memakai 1 hari (base/models/res_users.py, temuan #42). -->
+<odoo>
+    <record id="res_groups_privilege_efn_online" model="res.groups.privilege">
+        <field name="name">EFN Kanal Online</field>
+        <field name="category_id" ref="base.module_category_sales"/>
+    </record>
+
+    <record id="group_online_channel" model="res.groups">
+        <field name="name">Kanal online (user teknis BFF)</field>
+        <field name="comment">User teknis per PT untuk BFF Super-App (/json/2 lewat odoo-rpc-gateway). Hanya Internal User + grup ini, satu company, tanpa grup Sales/Inventory/Accounting. Tanpa akses dokumen langsung.</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_online"/>
+    </record>
+
+    <data noupdate="1">
+        <record id="efn_online_channel_rule_company" model="ir.rule">
+            <field name="name">EFN online channel: multi-company</field>
+            <field name="model_id" ref="model_efn_online_channel"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_online_outlet_rule_company" model="ir.rule">
+            <field name="name">EFN online outlet: multi-company</field>
+            <field name="model_id" ref="model_efn_online_outlet"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_online_order_rule_company" model="ir.rule">
+            <field name="name">EFN online order: multi-company</field>
+            <field name="model_id" ref="model_efn_online_order"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_online_refund_rule_company" model="ir.rule">
+            <field name="name">EFN online refund: multi-company</field>
+            <field name="model_id" ref="model_efn_online_refund"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_online_event_outbox_rule_company" model="ir.rule">
+            <field name="name">EFN online outbox: multi-company</field>
+            <field name="model_id" ref="model_efn_online_event_outbox"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+    </data>
+</odoo>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_efn_online_order"
+              name="Pesanan online"
+              parent="sale.sale_order_menu"
+              action="action_efn_online_order"
+              groups="sales_team.group_sale_salesman,stock.group_stock_user"
+              sequence="40"/>
+    <menuitem id="menu_efn_online_channel"
+              name="Kanal online"
+              parent="sale.menu_sale_config"
+              action="action_efn_online_channel"
+              groups="sales_team.group_sale_manager"
+              sequence="60"/>
+</odoo>

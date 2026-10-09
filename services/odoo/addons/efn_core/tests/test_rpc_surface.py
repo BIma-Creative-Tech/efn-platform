@@ -67,6 +67,24 @@ RPC_ALLOWLIST = {
     # efn_pos_kds (Gelombang 15, SEC-77): override CE pos.session.load_data -> super() lalu catat
     # env.user (grup POS user) sebagai penerima notifikasi kasir KDS; tanpa data tambahan.
     ("pos.session", "load_data"): "override CE (+ catat penerima notifikasi KDS)",
+    # efn_online_order (Gelombang 17, E-28, docs/04 §10.4.3 + §10.12): 10 metode BFF lewat odoo-rpc-gateway.
+    # `_efn_online_check_caller` = grup group_online_channel + user ∈ channel.user_ids + company kanal ∈ company
+    # user + kanal aktif; context klien dibuang kecuali lang; tulis via sudo setelah cek; input divalidasi manual.
+    ("efn.online.channel", "efn_online_catalog"): "_efn_online_check_caller (baca, field whitelist)",
+    ("efn.online.channel", "efn_online_stock"): "_efn_online_check_caller (baca)",
+    ("efn.online.channel", "efn_online_image"): "_efn_online_check_caller (baca, hanya produk kanal)",
+    ("efn.online.channel", "efn_online_quote"): "_efn_online_check_caller (baca, new() tanpa tulis DB)",
+    ("efn.online.order", "efn_online_place"): "_efn_online_check_caller + idempotency_key/payload_sha256/quote_hash",
+    ("efn.online.order", "efn_online_mark_paid"): "_efn_online_check_caller + FOR UPDATE + idempotency_key",
+    ("efn.online.order", "efn_online_cancel"): "_efn_online_check_caller + FOR UPDATE (ref asing -> absent)",
+    ("efn.online.order", "efn_online_refund"): "_efn_online_check_caller + idempotency_key + kumulatif <= dibayar",
+    ("efn.online.order", "efn_online_refund_settled"): "_efn_online_check_caller + refund milik kanal + idempotensi",
+    ("efn.online.order", "efn_online_status"): "_efn_online_check_caller (baca, hanya ref kanal itu)",
+    # 3 metode UI staf (web client lewat WireGuard, bukan gateway).
+    ("efn.online.order", "action_efn_ready"): "grup stock.group_stock_user + check_access(read) + company user",
+    ("efn.online.order", "action_efn_retry_events"): "grup sales_team.group_sale_manager + check_access + company",
+    ("efn.online.handover.wizard", "action_confirm"): "grup stock user + check_access(read) order + company; "
+    "kode = verifikasi pbkdf2, 5x salah -> review",
 }
 
 MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}

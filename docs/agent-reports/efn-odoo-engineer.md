@@ -583,3 +583,44 @@ Batas file: `services/odoo/addons/**`, `.github/workflows/ci.yml` (hanya `EFN_TO
 - [B] Sandbox perangkat diuji pada set 12 modul CI; modul CE lain yang dipasang belakangan otomatis tertolak (default deny), tetapi bila suatu saat layar KDS butuh model baru, allowlist `DEVICE_MODELS` harus ditambah (kode).
 - Akun perangkat sebagai user *share* (opsi lebih kuat r8) butuh ADR kecil. Rate-limit `/pos-self` Traefik, rule Loki `EFN_KDS_TICKET_FAILED` dan deteksi HP di `efn_audit_sink` = devsecops. Inventaris PDP v5 (SEC-79 bagian dokumen) = architect/lead.
 - Cron rotasi berjalan 20:00 UTC; rotasi menyebabkan layar KDS memuat ulang (~detik). Mengubah daftar perangkat stasiun juga memuat ulang layar lain di stasiun yang sama.
+
+---
+
+# Gelombang 17 — E-28 `efn_online_order` + `efn_setup_online` (9 Okt 2026)
+
+Kontrak: docs/04 §10 v5.0 (delta §10.4.4 + L-1..L-7 menang atas docs/08 §8.3) + **L-11 (§10.17)**: blok `channel` di katalog. Batas file: `services/odoo/addons/efn_online_order/**`, `services/odoo/addons/efn_setup_online/**`, `efn_core/tests/test_rpc_surface.py` (hanya 13 entri `RPC_ALLOWLIST`), laporan ini. Tanpa commit/push; stack dev & DB `efn_odoo` tidak disentuh (harness `odoo-test-g17.sh`/`odoo-tour-g17.sh`/`demo.sh`, image `-g17`, container & DB sementara, sudah dibersihkan). Sesi sempat terputus (Docker Desktop mati); dilanjutkan dari working tree.
+
+## 1. Modul
+- **`efn_online_order` 19.0.1.0.0** (depends `sale_stock`, `point_of_sale`, `mail`, `efn_core`): model `efn.online.channel`, `efn.online.outlet`, `efn.online.order`, `efn.online.refund`, `efn.online.event.outbox`, wizard `efn.online.handover.wizard`; field `product.template.efn_online_*`, `sale.order.efn_online_order_id`; constraint partner generik tanpa PII juga di `res.partner`. Grup `group_online_channel` tanpa ACL dokumen; record rule company di 5 model; ACL lengkap (staf baca saja; tulis state hanya lewat metode).
+- 10 metode BFF + 3 metode staf (lihat README). `_efn_online_check_caller`: context klien dibuang **sebelum** operasi ORM (lang tak valid pun tidak dievaluasi), grup + `user_ids` + company, AccessError seragam, `channel_inactive`.
+- Idempotensi: place (advisory lock + unik; `payload_sha256` tanpa kode ambil; `quote_hash` dihitung ulang dari `sale.order.new()` dan dari SO tersimpan), mark_paid/cancel/refund/refund_settled berkunci. UniqueViolation → `ConcurrencyError`.
+- Bayar: FOR UPDATE, nominal ≠ payable/intent kedua → `review`, SO batal → `refund_required: full`, stok kurang → `stock_short`, konfirmasi dalam savepoint (total berubah → rollback + `review`), faktur + `invoice_cash_rounding_id` + `account.payment.register` di jurnal titipan (`_efn_register_payment` = titik ganti tunggal ADR-019).
+- Refund: reversal faktur standar + qty disesuaikan, kumulatif ≤ dibayar per SO; batal setelah faktur = nota kredit penuh; batal dari UI SO (ops) = event `cancelled` `initiator=odoo` + refund.
+- Outbox: TLS via helper `efn.bff.client` (https, CA internal, tanpa redirect) + `X-EFN-Service-Key` + `X-EFN-Signature` HMAC-SHA256 (`EFN_ONLINE_EVENT_HMAC_FILE`), tanpa fallback unsigned; urutan `seq`; 400/401/403/404/409/422 final; retry 1 m→1 j; 48 j → gagal + aktivitas; autovacuum `done` > 30 hari.
+- Kode ambil: pbkdf2-sha512 (passlib), tidak di payload hash/log, dihapus saat final; wizard tidak raise saat salah (counter ter-commit), 5× → `review`.
+- **L-11**: `efn_online_catalog` → `channel: {code, name, company_code, currency, outlets:[{code, public_name, pickup_enabled, prep_minutes, active}]}` dari `efn.online.outlet` (termasuk nonaktif), di setiap halaman. Test `test_catalog_channel_block_lists_all_outlets` + asersi di test demo `efn_setup_online`.
+- **`efn_setup_online` 19.0.1.0.0** (depends `sale_stock`, `sale_loyalty`, `efn_online_order`, `efn_setup_company`): `api_key_duration` 90, partner generik + tim Super-App RTL/FNB, `ir.default loyalty.program.sale_ok=False` + `post_init_hook`; demo kanal RTL (outlet TOKO-01, gudang demo OL01, 25 menit), FNB nonaktif (FP kota), jurnal titipan, pembulatan Rupiah, 3 produk (PPN `tax_ST4`), user teknis tanpa API key.
+
+## 2. Validasi (Odoo 19 nyata, container, DB sementara)
+- Baseline 12 modul + `sale_stock` (auto-install `sale_loyalty`, `sale_mrp`, `sale_stock_product_expiry`; `pos_sale` tidak ter-install karena `sale_management` tidak ada): **337 test, 0 failed, 0 error, 0 ERROR** → tidak ada regresi dari `sale`.
+- Penuh 14 modul (+ `efn_setup_security` install terpisah): **390 test, 0 failed, 0 error(s), 0 baris ERROR/CRITICAL** (efn_online_order + efn_setup_online menambah 53; `test_demo_channels` di-skip karena CI tanpa demo).
+- Demo (`--with-demo`, efn_setup_pos + efn_setup_online, tag `/efn_setup_online,/efn_online_order`): **53 test, 0 failed, 0 error, 0 skip**.
+- Tour (5 modul tour + `efn_online_order` → `sale_stock`/`sale_loyalty` terpasang): **20/20, 0 ERROR, 0 skip browser**.
+- `check-odoo-deps`: 15 modul, 0 dependensi terlarang. ruff 0.16.10 check + format: lolos. Gerbang RPC (`RPC_ALLOWLIST` +13) & route (tanpa route baru) hijau.
+
+## 3. Penyimpangan dari kontrak (dengan alasan)
+1. `action_efn_ready` memakai `check_access('read')` + grup + company (bukan `check_access('write')`): staf gudang sengaja tidak diberi ACL tulis `efn.online.order` agar state tidak bisa diubah lewat ORM generik.
+2. Delta `deleted` katalog dihitung dari produk company kanal/global yang berubah sejak `since` dan tidak lagi terpublikasi (maks 2 000, halaman pertama saja); bisa memuat id yang belum pernah dikirim (BFF mengabaikan).
+3. Quote mengembalikan `issues` (`not_found`/`out_of_stock`/`order_limit`) alih-alih error; place mengubahnya jadi `not_found`/`out_of_stock`/`invalid_input`. `efn_online_status` mengembalikan `state:"absent"` untuk ref tak dikenal (konsisten dengan cancel).
+4. `efn_online_stock` tidak mengembalikan produk di luar katalog kanal.
+5. Event `paid` dan `refunded` (initiator `bff`) ikut dikirim (ada di daftar event §10.5; BFF memetakan/mengabaikan).
+6. Temuan verifikasi 19.0: promosi otomatis `sale_ok=True` **tanpa** reward yang sudah diklaim tidak menambah diskon saat `action_confirm` (diuji: tetap `confirmed`). Guard total tetap dipasang; test regresi #37 mensimulasikan perubahan total lewat override `_action_confirm`.
+
+## 4. Belum / [B]
+- `/json/2` nyata lewat `odoo-rpc-gateway` + API key (HttpCase bearer menggantung di harness) — integrasi/QA smoke.
+- Dua place paralel di dua cursor nyata (diuji simulasi UniqueViolation → ConcurrencyError).
+- Reservasi stok (`confirm`) & delivery ditolak constraint; `restock` refund hanya aktivitas; Σ refund parsial bisa selisih Rp1 akibat pembulatan per nota kredit → ditolak `amount_mismatch`.
+- `review` diselesaikan via BFF (`efn_online_cancel reason=review`) atau admin; tidak ada tombol "lanjutkan" (di luar 13 metode).
+- Demo pembulatan pakai `biggest_tax` (tanpa akun selisih); akun titipan Holding & pemetaan akun = Finance (Q-2/Q-ON6).
+- Temuan lain (bukan dari modul ini): demo `efn_setup_pos` gagal dimuat di DB `--with-demo` (barcode `2100001000004` bentrok dengan demo CE "Newspaper Rack") — CI tidak memuat demo jadi tidak terlihat; untuk efn-odoo-functional.
+- Untuk devsecops/CI: tambah `efn_online_order efn_setup_online` ke `EFN_TEST_MODULES` dan `efn_online_order` ke `EFN_TOUR_MODULES` (tour tetap 20); mount `odoo_online_event_hmac` ke Odoo (`EFN_ONLINE_EVENT_HMAC_FILE`).

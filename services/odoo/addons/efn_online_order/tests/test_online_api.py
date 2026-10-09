@@ -1,0 +1,640 @@
+"""E-28: metode BFF (docs/04 §10.4.3 + delta §10.4.4, docs/08 §8.3 F)."""
+
+import json
+import uuid
+from datetime import timedelta
+from unittest.mock import patch
+
+from odoo import fields
+from odoo.exceptions import AccessError, UserError, ValidationError
+from odoo.fields import Command
+from odoo.tests import new_test_user, tagged
+from odoo.tools import mute_logger
+
+from .common import PICKUP_CODE, EfnOnlineCommon
+
+
+def _code(exc):
+    return str(exc.exception.args[0]) if hasattr(exc, "exception") else str(exc)
+
+
+@tagged("post_install", "-at_install", "efn")
+class TestEfnOnlineCaller(EfnOnlineCommon):
+    def test_caller_without_group_denied(self):
+        plain = new_test_user(
+            self.env,
+            login="efn_online_plain",
+            groups="base.group_user",
+            company_id=self.company.id,
+            company_ids=[Command.set(self.company.ids)],
+        )
+        with self.assertRaises(AccessError):
+            self.channel_api(plain).efn_online_quote("TST", "TOKO-T1", "pickup", [{"product_id": 1, "qty": 1}])
+
+    def test_caller_not_in_channel_users_denied(self):
+        # User teknis PT lain (grup benar) tidak boleh memakai kanal TST, dan sebaliknya.
+        with self.assertRaises(AccessError):
+            self.channel_api(self.tech_user_2).efn_online_stock("TST", "TOKO-T1", [self.p_rice.id])
+        with self.assertRaises(AccessError):
+            self.channel_api(self.tech_user).efn_online_stock("TSB", "TOKO-T1", [self.p_rice.id])
+        with self.assertRaises(AccessError):
+            self.order_api(self.tech_user_2).efn_online_status("TST", [str(uuid.uuid4())])
+
+    def test_caller_unknown_channel_same_error(self):
+        with self.assertRaises(AccessError):
+            self.channel_api().efn_online_stock("NOPE", "TOKO-T1", [self.p_rice.id])
+        with self.assertRaises(AccessError):
+            self.channel_api().efn_online_stock("bad code", "TOKO-T1", [self.p_rice.id])
+
+    def test_channel_inactive(self):
+        self.channel.active = False
+        with self.assertRaises(UserError) as exc:
+            self.quote()
+        self.assertEqual(_code(exc), "efn_online:channel_inactive")
+
+    def test_technical_user_has_no_document_access(self):
+        user_env = self.env(user=self.tech_user)
+        for model in ("sale.order", "efn.online.order", "efn.online.channel", "account.move", "stock.picking"):
+            with self.subTest(model=model), self.assertRaises(AccessError):
+                user_env[model].check_access("read")
+        with self.assertRaises(AccessError):
+            user_env["sale.order"].create({"partner_id": self.channel.partner_id.id})
+
+    def test_channel_user_must_have_group_and_single_company(self):
+        plain = new_test_user(
+            self.env,
+            login="efn_online_plain2",
+            groups="base.group_user",
+            company_id=self.company.id,
+            company_ids=[Command.set(self.company.ids)],
+        )
+        with self.assertRaises(ValidationError):
+            self.channel.user_ids = [Command.link(plain.id)]
+        multi = new_test_user(
+            self.env,
+            login="efn_online_multi",
+            groups="base.group_user,efn_online_order.group_online_channel",
+            company_id=self.company.id,
+            company_ids=[Command.set((self.company | self.company_2).ids)],
+        )
+        with self.assertRaises(ValidationError):
+            self.channel.user_ids = [Command.link(multi.id)]
+
+    def test_generic_partner_without_pii(self):
+        with self.assertRaises(ValidationError):
+            self.channel.partner_id.phone = "081234567890"
+
+    def test_client_context_is_discarded(self):
+        """active_test/allowed_company_ids dari klien /json/2 tidak berlaku (delta §10.4.4 no. 4)."""
+        archived = self.env["product.product"].create(
+            {
+                "name": "Arsip Online",
+                "type": "consu",
+                "list_price": 100.0,
+                "company_id": self.company.id,
+                "taxes_id": [Command.set(self.tax.ids)],
+                "efn_online_channel_ids": [Command.set(self.channel.ids)],
+            }
+        )
+        archived.active = False
+        api = self.channel_api().with_context(
+            active_test=False, allowed_company_ids=[self.company_2.id], lang="fr_FR", efn_online_internal=True
+        )
+        catalog = api.efn_online_catalog("TST")
+        ids = {item["product_id"] for item in catalog["items"]}
+        self.assertNotIn(archived.id, ids)
+        self.assertIn(self.p_rice.id, ids)
+        quote = api.efn_online_quote("TST", "TOKO-T1", "pickup", [{"product_id": archived.id, "qty": 1}])
+        self.assertEqual(quote["issues"], [{"product_id": archived.id, "code": "not_found"}])
+
+
+@tagged("post_install", "-at_install", "efn")
+class TestEfnOnlineCatalog(EfnOnlineCommon):
+    def test_catalog_only_channel_products_whitelisted_fields(self):
+        catalog = self.channel_api().efn_online_catalog("TST")
+        ids = {item["product_id"] for item in catalog["items"]}
+        self.assertEqual(ids, {self.p_rice.id, self.p_bag.id})
+        item = next(i for i in catalog["items"] if i["product_id"] == self.p_rice.id)
+        self.assertEqual(
+            set(item),
+            {
+                "product_id",
+                "tmpl_id",
+                "name",
+                "description",
+                "categ",
+                "uom",
+                "image_sha",
+                "sequence",
+                "prices",
+                "max_qty",
+            },
+        )
+        self.assertNotIn("standard_price", json.dumps(catalog))
+        price = item["prices"][0]
+        self.assertIsNone(price["outlet_code"])
+        self.assertAlmostEqual(price["price_excl"], 9999.0)
+        self.assertAlmostEqual(price["price_incl"], 11098.89)
+        self.assertEqual(price["tax_labels"], ["PPN 11%"])
+        self.assertIsNone(catalog["next_cursor"])
+        self.assertTrue(catalog["server_time"].endswith("Z"))
+
+    def test_catalog_channel_block_lists_all_outlets(self):
+        """L-11 (docs/04 §10.17): blok `channel` + outlet dari efn.online.outlet, bukan dari prices[]."""
+        self.env["efn.online.outlet"].create(
+            {
+                "channel_id": self.channel.id,
+                "code": "TOKO-T2",
+                "public_name": "Toko Dua",
+                "sequence": 20,
+                "warehouse_id": self.warehouse.id,
+                "pickup_enabled": False,
+                "prep_minutes": 30,
+                "active": False,
+            }
+        )
+        catalog = self.channel_api().efn_online_catalog("TST")
+        block = catalog["channel"]
+        self.assertEqual(set(block), {"code", "name", "company_code", "currency", "outlets"})
+        self.assertEqual(block["code"], "TST")
+        self.assertEqual(block["name"], "Kanal TST")
+        self.assertEqual(block["currency"], self.currency.name)
+        self.assertEqual(
+            block["outlets"],
+            [
+                {
+                    "code": "TOKO-T1",
+                    "public_name": "Toko Uji",
+                    "pickup_enabled": True,
+                    "prep_minutes": 15,
+                    "active": True,
+                },
+                {
+                    "code": "TOKO-T2",
+                    "public_name": "Toko Dua",
+                    "pickup_enabled": False,
+                    "prep_minutes": 30,
+                    "active": False,
+                },
+            ],
+        )
+        # Tanpa fiscal position outlet, prices[] hanya berisi harga dasar -> outlet tetap ada di blok channel.
+        self.assertEqual({p["outlet_code"] for i in catalog["items"] for p in i["prices"]}, {None})
+        # Halaman berikutnya membawa blok yang sama.
+        page = self.channel_api().efn_online_catalog("TST", limit=1)
+        self.assertEqual(page["channel"], block)
+
+    def test_catalog_pagination_and_delta(self):
+        page = self.channel_api().efn_online_catalog("TST", limit=1)
+        self.assertEqual(len(page["items"]), 1)
+        self.assertTrue(page["next_cursor"])
+        page2 = self.channel_api().efn_online_catalog("TST", cursor=page["next_cursor"], limit=1)
+        self.assertEqual(len(page2["items"]), 1)
+        self.assertNotEqual(page["items"][0]["product_id"], page2["items"][0]["product_id"])
+        since = (self.env.cr.now() - timedelta(seconds=1)).replace(microsecond=0).isoformat() + "Z"
+        self.p_bag.product_tmpl_id.write({"efn_online_channel_ids": [Command.clear()]})
+        self.env.flush_all()
+        with patch.object(type(self.env["efn.online.channel"]), "_efn_online_changed_since", return_value=False):
+            delta = self.channel_api().efn_online_catalog("TST", since=since)
+        self.assertIn(self.p_bag.id, delta["deleted"])
+        self.assertNotIn(self.p_bag.id, {i["product_id"] for i in delta["items"]})
+
+    def test_catalog_input_validation(self):
+        for kwargs in ({"limit": 0}, {"limit": 201}, {"cursor": "x"}, {"since": "kemarin"}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(UserError) as exc:
+                self.channel_api().efn_online_catalog("TST", **kwargs)
+            self.assertEqual(_code(exc), "efn_online:invalid_input")
+
+    def test_other_company_product_cannot_be_published(self):
+        with self.assertRaises(ValidationError):
+            self.env["product.product"].create(
+                {
+                    "name": "Produk PT lain",
+                    "company_id": self.company_2.id,
+                    "efn_online_channel_ids": [Command.set(self.channel.ids)],
+                }
+            )
+
+    def test_description_plain_text_only(self):
+        with self.assertRaises(ValidationError):
+            self.p_rice.efn_online_description = "<script>alert(1)</script>"
+
+    def test_stock_status(self):
+        result = self.channel_api().efn_online_stock(
+            "TST", "TOKO-T1", [self.p_rice.id, self.p_bag.id, self.p_hidden.id]
+        )
+        self.assertEqual(
+            result,
+            [{"product_id": self.p_rice.id, "status": "in_stock"}, {"product_id": self.p_bag.id, "status": "in_stock"}],
+        )
+        self.channel.stock_buffer = 6.0
+        low = self.channel_api().efn_online_stock("TST", "TOKO-T1", [self.p_rice.id])
+        self.assertEqual(low[0]["status"], "low")
+        with self.assertRaises(UserError) as exc:
+            self.channel_api().efn_online_stock("TST", "NOPE", [self.p_rice.id])
+        self.assertEqual(_code(exc), "efn_online:not_found")
+
+    def test_image_only_published(self):
+        with self.assertRaises(UserError) as exc:
+            self.channel_api().efn_online_image("TST", self.p_hidden.product_tmpl_id.id, 512)
+        self.assertEqual(_code(exc), "efn_online:not_found")
+        with self.assertRaises(UserError):
+            self.channel_api().efn_online_image("TST", self.p_rice.product_tmpl_id.id, 300)
+
+
+@tagged("post_install", "-at_install", "efn")
+class TestEfnOnlineQuotePlace(EfnOnlineCommon):
+    def test_quote_amounts_and_no_db_write(self):
+        count = self.env["sale.order"].sudo().search_count([])
+        quote = self.quote()
+        self.assertEqual(self.env["sale.order"].sudo().search_count([]), count)
+        self.assertEqual(quote["channel_code"], "TST")
+        line = quote["lines"][0]
+        self.assertEqual(line["qty"], 3)
+        self.assertAlmostEqual(line["subtotal_excl"], 29997.0)
+        self.assertAlmostEqual(line["subtotal_incl"], 33296.67)
+        self.assertTrue(line["available"])
+        self.assertAlmostEqual(quote["amount_total"], 33296.67)
+        self.assertEqual(quote["amount_payable"], 33297)
+        self.assertIsInstance(quote["amount_payable"], int)
+        self.assertEqual(quote["tax_groups"][0]["amount"], 3299.67)
+        self.assertEqual(len(quote["quote_hash"]), 64)
+        self.assertEqual(quote["issues"], [])
+
+    def test_quote_issues(self):
+        quote = self.quote([{"product_id": self.p_rice.id, "qty": 11}, {"product_id": self.p_hidden.id, "qty": 1}])
+        self.assertIn({"product_id": self.p_hidden.id, "code": "not_found"}, quote["issues"])
+        self.assertIn({"product_id": self.p_rice.id, "code": "out_of_stock"}, quote["issues"])
+        self.assertFalse(quote["lines"][0]["available"])
+
+    def test_quote_input_validation(self):
+        bad = [
+            [],
+            [{"product_id": self.p_rice.id, "qty": 0}],
+            [{"product_id": self.p_rice.id, "qty": 1.5}],
+            [{"product_id": self.p_rice.id, "qty": 100}],
+            [{"product_id": self.p_rice.id, "qty": 1}, {"product_id": self.p_rice.id, "qty": 1}],
+            [{"product_id": self.p_rice.id, "qty": 1, "price_unit": 1}],
+        ]
+        for lines in bad:
+            with self.subTest(lines=lines), self.assertRaises(UserError) as exc:
+                self.quote(lines)
+            self.assertEqual(_code(exc), "efn_online:invalid_input")
+        with self.assertRaises(UserError):
+            self.channel_api().efn_online_quote(
+                "TST", "TOKO-T1", "delivery", [{"product_id": self.p_rice.id, "qty": 1}]
+            )
+
+    def test_place_matches_quote_and_is_idempotent(self):
+        quote = self.quote()
+        part, payload, result = self.place(quote_hash=quote["quote_hash"])
+        order = self.record(part)
+        self.assertEqual(result["order_state"], "placed")
+        self.assertEqual(result["amount_payable"], quote["amount_payable"])
+        self.assertAlmostEqual(result["amount_total"], quote["amount_total"])
+        self.assertEqual(result["sale_order_name"], order.sale_order_id.name)
+        self.assertTrue(result["expires_at"].endswith("Z"))
+        so = order.sale_order_id
+        self.assertEqual(so.state, "draft")
+        self.assertEqual(so.client_order_ref, part)
+        self.assertEqual(so.partner_id, self.channel.partner_id)
+        self.assertEqual(so.warehouse_id, self.warehouse)
+        self.assertEqual(so.efn_online_order_id, order)
+        delta = order.expires_at - fields.Datetime.now()
+        self.assertTrue(timedelta(minutes=24) < delta <= timedelta(minutes=25), delta)
+        # Retry identik -> hasil sama, tidak ada SO baru.
+        again = self.order_api().efn_online_place("TST", payload)
+        self.assertEqual(again, result)
+        self.assertEqual(self.env["sale.order"].sudo().search_count([("client_order_ref", "=", part)]), 1)
+        # Kunci sama, payload beda -> konflik.
+        changed = dict(payload, lines=[{"product_id": self.p_rice.id, "qty": 2}])
+        with self.assertRaises(UserError) as exc:
+            self.order_api().efn_online_place("TST", changed)
+        self.assertEqual(_code(exc), "efn_online:idempotency_conflict")
+        # Ref sama dengan kunci lain -> konflik.
+        with self.assertRaises(UserError) as exc:
+            self.order_api().efn_online_place("TST", dict(payload, idempotency_key="online:place:other-key-1"))
+        self.assertEqual(_code(exc), "efn_online:idempotency_conflict")
+
+    def test_pickup_code_never_stored_in_plaintext(self):
+        part, _payload, _result = self.place()
+        order = self.record(part)
+        self.assertTrue(order.pickup_code_hash.startswith("$pbkdf2-sha512$"))
+        self.env.flush_all()
+        self.env.cr.execute("SELECT row_to_json(o)::text FROM efn_online_order o WHERE id = %s", (order.id,))
+        self.assertNotIn(PICKUP_CODE, self.env.cr.fetchone()[0])
+        self.env.cr.execute(
+            "SELECT count(*) FROM sale_order s WHERE s.id = %s AND row_to_json(s)::text LIKE %s",
+            (order.sale_order_id.id, f"%{PICKUP_CODE}%"),
+        )
+        self.assertEqual(self.env.cr.fetchone()[0], 0)
+
+    def test_place_rejects_bad_pickup_code_and_input(self):
+        for code in ("ABCD-2345", "abcd2345", "ABCD234", "ABCD1234", 12345678):
+            with self.subTest(code=code), self.assertRaises(UserError):
+                self.place(code=code)
+
+    def test_price_change_between_quote_and_place(self):
+        quote = self.quote()
+        self.env["product.pricelist.item"].create(
+            {
+                "pricelist_id": self.pricelist.id,
+                "applied_on": "1_product",
+                "product_tmpl_id": self.p_rice.product_tmpl_id.id,
+                "compute_price": "fixed",
+                "fixed_price": 9000.0,
+            }
+        )
+        self.assertNotEqual(self.quote()["quote_hash"], quote["quote_hash"])
+        count = self.env["sale.order"].sudo().search_count([])
+        with self.assertRaises(UserError) as exc:
+            self.place(quote_hash=quote["quote_hash"])
+        self.assertEqual(_code(exc), "efn_online:price_changed")
+        self.assertEqual(self.env["sale.order"].sudo().search_count([]), count)
+
+    def test_place_out_of_stock_and_not_found(self):
+        with self.assertRaises(UserError) as exc:
+            self.place(lines=[{"product_id": self.p_rice.id, "qty": 11}], quote_hash="0" * 64)
+        self.assertEqual(_code(exc), "efn_online:out_of_stock")
+        with self.assertRaises(UserError) as exc:
+            self.place(lines=[{"product_id": self.p_hidden.id, "qty": 1}], quote_hash="0" * 64)
+        self.assertEqual(_code(exc), "efn_online:not_found")
+
+    def test_place_unique_violation_becomes_concurrency_error(self):
+        """Place paralel (kunci sama, transaksi lain sudah commit) -> ConcurrencyError -> Odoo mengulang request."""
+        from odoo.exceptions import ConcurrencyError
+
+        part, payload, _result = self.place()
+        Order = type(self.env["efn.online.order"])
+        original_search = Order.search
+
+        def blind_search(records, domain, *args, **kwargs):
+            if any(isinstance(t, (list, tuple)) and t[0] in ("idempotency_key", "platform_order_ref") for t in domain):
+                return records.browse()
+            return original_search(records, domain, *args, **kwargs)
+
+        with patch.object(Order, "search", blind_search), patch.object(Order, "search_count", return_value=0):
+            with self.assertRaises(ConcurrencyError), mute_logger("odoo.sql_db"):
+                self.order_api().efn_online_place("TST", payload)
+
+
+@tagged("post_install", "-at_install", "efn")
+class TestEfnOnlinePaidCancelRefund(EfnOnlineCommon):
+    def test_mark_paid_confirms_invoices_and_pays_titipan(self):
+        part, _payload, _result = self.place()
+        payment_ref = str(uuid.uuid4())
+        result = self.pay(part, payment_ref=payment_ref)
+        self.assertEqual(result, {"order_state": "confirmed"})
+        order = self.record(part)
+        so = order.sale_order_id
+        self.assertEqual(so.state, "sale")
+        invoice = order.invoice_id
+        self.assertEqual(invoice.state, "posted")
+        self.assertEqual(invoice.amount_total, 33297.0)
+        self.assertIn(invoice.payment_state, ("paid", "in_payment"))
+        self.assertEqual(invoice.matched_payment_ids.journal_id, self.channel.journal_titipan_id)
+        self.assertTrue(so.picking_ids)
+        # Idempoten: kunci & intent sama -> hasil sama, tidak ada faktur/pembayaran kedua.
+        again = self.pay(part, payment_ref=payment_ref)
+        self.assertEqual(again, {"order_state": "confirmed"})
+        self.assertEqual(len(so.invoice_ids), 1)
+
+    def test_mark_paid_amount_mismatch_review(self):
+        part, _payload, _result = self.place()
+        result = self.pay(part, amount=1000)
+        self.assertEqual(result, {"order_state": "review"})
+        order = self.record(part)
+        self.assertEqual(order.review_reason, "amount_mismatch")
+        self.assertEqual(order.sale_order_id.state, "draft")
+
+    def test_mark_paid_second_intent_review(self):
+        part, _payload, _result = self.place()
+        self.pay(part)
+        result = self.pay(part, payment_ref=str(uuid.uuid4()))
+        self.assertEqual(result["order_state"], "review")
+        self.assertEqual(self.record(part).review_reason, "duplicate_payment")
+
+    def test_mark_paid_after_expiry_requires_refund(self):
+        part, _payload, _result = self.place()
+        order = self.record(part)
+        order.expires_at = fields.Datetime.now() - timedelta(minutes=1)
+        self.env["efn.online.order"]._cron_efn_online_expire()
+        self.assertEqual(order.state, "cancelled")
+        self.assertEqual(order.cancel_reason, "payment_expired")
+        self.assertEqual(order.sale_order_id.state, "cancel")
+        self.assertFalse(order.pickup_code_hash)
+        result = self.pay(part)
+        self.assertEqual(result, {"order_state": "cancelled", "refund_required": "full"})
+
+    def test_stock_short_after_payment(self):
+        part, _payload, _result = self.place()
+        self.env["stock.quant"]._update_available_quantity(self.p_rice, self.warehouse.lot_stock_id, -9.0)
+        result = self.pay(part)
+        self.assertEqual(result["order_state"], "stock_short")
+        self.assertEqual(result["short_lines"], [{"product_id": self.p_rice.id, "requested": 3.0, "available": 1.0}])
+        order = self.record(part)
+        self.assertEqual(order.sale_order_id.state, "draft")
+        cancel = self.order_api().efn_online_cancel("TST", part, "stock_short", f"online:cancel:{part}")
+        self.assertEqual(cancel, {"order_state": "cancelled"})
+        self.assertEqual(order.sale_order_id.state, "cancel")
+
+    def test_sale_loyalty_total_change_goes_to_review(self):
+        """Regresi temuan #37: total SO berubah saat konfirmasi (mis. reward sale_loyalty) -> rollback + review.
+
+        Catatan verifikasi 19.0: promosi otomatis `sale_ok=True` TANPA reward yang sudah diklaim tidak menambah baris
+        diskon saat `action_confirm` (diuji di bawah: tetap `confirmed`). Perubahan total disimulasikan dengan
+        override `_action_confirm` yang mengubah diskon baris (perilaku `_update_programs_and_rewards` bila reward ada).
+        """
+        part, _payload, _result = self.place()
+        if "sale_ok" in self.env["loyalty.program"]._fields:
+            self.env["loyalty.program"].create(
+                {
+                    "name": "Promo uji 10%",
+                    "program_type": "promotion",
+                    "trigger": "auto",
+                    "applies_on": "current",
+                    "company_id": self.company.id,
+                    "sale_ok": True,
+                    "rule_ids": [
+                        Command.create({"minimum_amount": 0, "reward_point_amount": 1, "reward_point_mode": "order"})
+                    ],
+                    "reward_ids": [
+                        Command.create(
+                            {
+                                "reward_type": "discount",
+                                "discount": 10,
+                                "discount_mode": "percent",
+                                "discount_applicability": "order",
+                                "required_points": 1,
+                            }
+                        )
+                    ],
+                }
+            )
+        SaleOrder = type(self.env["sale.order"])
+        original = SaleOrder._action_confirm
+
+        def discounting_confirm(orders):
+            orders.order_line.write({"discount": 10.0})
+            return original(orders)
+
+        with (
+            patch.object(SaleOrder, "_action_confirm", discounting_confirm),
+            mute_logger("odoo.addons.efn_online_order.models.efn_online_order"),
+        ):
+            result = self.pay(part)
+        self.assertEqual(result, {"order_state": "review"})
+        order = self.record(part)
+        self.assertEqual(order.review_reason, "total_changed_on_confirm")
+        self.assertEqual(order.sale_order_id.state, "draft")
+        self.assertFalse(order.sale_order_id.invoice_ids)
+        self.assertEqual(order.sale_order_id.amount_total, order.amount_total)
+        self.assertFalse(order.sale_order_id.order_line.filtered("discount"))
+        # Promosi otomatis saja (tanpa simulasi) tidak mengubah total di 19.0 -> pesanan lain tetap terkonfirmasi.
+        part2, _p2, _r2 = self.place(lines=[{"product_id": self.p_bag.id, "qty": 1}])
+        self.assertEqual(self.pay(part2), {"order_state": "confirmed"})
+
+    def test_cancel_absent_and_before_payment(self):
+        absent = self.order_api().efn_online_cancel("TST", str(uuid.uuid4()), "place_failed", "online:cancel:absent-1")
+        self.assertEqual(absent, {"order_state": "absent"})
+        part, _payload, _result = self.place()
+        result = self.order_api().efn_online_cancel("TST", part, "customer", f"online:cancel:{part}")
+        self.assertEqual(result, {"order_state": "cancelled"})
+        self.assertEqual(self.record(part).sale_order_id.state, "cancel")
+        again = self.order_api().efn_online_cancel("TST", part, "customer", f"online:cancel:{part}")
+        self.assertEqual(again, result)
+        with self.assertRaises(UserError) as exc:
+            self.order_api().efn_online_cancel("TST", part, "bogus", f"online:cancel:{part}")
+        self.assertEqual(_code(exc), "efn_online:invalid_input")
+
+    def test_cancel_after_invoice_full_credit_note(self):
+        part, _payload, _result = self.place()
+        self.pay(part)
+        result = self.order_api().efn_online_cancel("TST", part, "review", f"online:cancel:{part}")
+        self.assertEqual(result["order_state"], "cancelled")
+        self.assertEqual(result["refund"]["amount"], 33297)
+        refund = self.record(part).refund_ids
+        self.assertEqual(refund.credit_note_id.move_type, "out_refund")
+        self.assertEqual(refund.credit_note_id.state, "posted")
+        self.assertEqual(refund.credit_note_id.amount_total, 33297.0)
+        self.assertEqual(result["refund"]["refund_ref"], refund.refund_ref)
+        again = self.order_api().efn_online_cancel("TST", part, "review", f"online:cancel:{part}")
+        self.assertEqual(again, result)
+
+    def test_partial_refund_cumulative_and_settle(self):
+        part, _payload, _result = self.place()
+        other_part, _p2, _r2 = self.place(lines=[{"product_id": self.p_bag.id, "qty": 2}])
+        self.pay(part)
+        self.pay(other_part)
+        other_before = self.record(other_part).sale_order_id.amount_total
+        api = self.order_api()
+        refund_payload = {
+            "idempotency_key": f"online:refund:{uuid.uuid4()}",
+            "lines": [{"product_id": self.p_rice.id, "qty": 1}],
+            "restock": False,
+            "reason": "customer_cs",
+        }
+        first = api.efn_online_refund("TST", part, refund_payload)
+        self.assertEqual(first["amount"], 11099)
+        self.assertTrue(first["credit_note"])
+        self.assertEqual(api.efn_online_refund("TST", part, refund_payload), first)
+        with self.assertRaises(UserError) as exc:
+            api.efn_online_refund("TST", part, dict(refund_payload, reason="review"))
+        self.assertEqual(_code(exc), "efn_online:idempotency_conflict")
+        # Qty melebihi sisa -> ditolak.
+        with self.assertRaises(UserError) as exc:
+            api.efn_online_refund(
+                "TST",
+                part,
+                {
+                    "idempotency_key": f"online:refund:{uuid.uuid4()}",
+                    "lines": [{"product_id": self.p_rice.id, "qty": 3}],
+                    "reason": "customer_cs",
+                },
+            )
+        self.assertEqual(_code(exc), "efn_online:invalid_input")
+        rest = api.efn_online_refund(
+            "TST", part, {"idempotency_key": f"online:refund:{uuid.uuid4()}", "full": True, "reason": "customer_cs"}
+        )
+        self.assertEqual(first["amount"] + rest["amount"], 33297)
+        with self.assertRaises(UserError) as exc:
+            api.efn_online_refund(
+                "TST", part, {"idempotency_key": f"online:refund:{uuid.uuid4()}", "full": True, "reason": "customer_cs"}
+            )
+        self.assertEqual(_code(exc), "efn_online:invalid_state")
+        # SO PT/bagian lain tidak tersentuh.
+        self.assertEqual(self.record(other_part).sale_order_id.amount_total, other_before)
+        self.assertFalse(self.record(other_part).refund_ids)
+        # Settle: pembayaran keluar via jurnal titipan, idempoten.
+        settle = {
+            "provider_refund_ref": "mock-refund-1",
+            "settled_at": "2026-10-09T11:00:00Z",
+            "ok": True,
+            "idempotency_key": f"online:refund_settled:{first['refund_ref']}",
+        }
+        self.assertEqual(api.efn_online_refund_settled("TST", first["refund_ref"], settle), {"state": "settled"})
+        self.assertEqual(api.efn_online_refund_settled("TST", first["refund_ref"], settle), {"state": "settled"})
+        refund = self.env["efn.online.refund"].sudo().search([("refund_ref", "=", first["refund_ref"])])
+        self.assertIn(refund.credit_note_id.payment_state, ("paid", "in_payment"))
+        self.assertEqual(refund.settled_payment_id.journal_id, self.channel.journal_titipan_id)
+        failed = api.efn_online_refund_settled(
+            "TST",
+            rest["refund_ref"],
+            dict(settle, ok=False, idempotency_key=f"online:refund_settled:{rest['refund_ref']}"),
+        )
+        self.assertEqual(failed, {"state": "failed"})
+        with self.assertRaises(UserError):
+            api.efn_online_refund_settled("TST", str(uuid.uuid4()), settle)
+
+    def test_refund_requires_invoice(self):
+        part, _payload, _result = self.place()
+        with self.assertRaises(UserError) as exc:
+            self.order_api().efn_online_refund(
+                "TST", part, {"idempotency_key": f"online:refund:{uuid.uuid4()}", "full": True, "reason": "customer_cs"}
+            )
+        self.assertEqual(_code(exc), "efn_online:invalid_state")
+
+    def test_status(self):
+        part, _payload, _result = self.place()
+        unknown = str(uuid.uuid4())
+        result = self.order_api().efn_online_status("TST", [part, unknown])
+        self.assertEqual(result[0]["platform_order_ref"], part)
+        self.assertEqual(result[0]["state"], "placed")
+        self.assertEqual(result[0]["seq"], 1)
+        self.assertEqual(result[0]["refunds"], [])
+        self.assertEqual(result[1], {"platform_order_ref": unknown, "state": "absent"})
+        with self.assertRaises(UserError):
+            self.order_api().efn_online_status("TST", [str(uuid.uuid4()) for _i in range(101)])
+        # Bagian kanal lain tidak terlihat lewat kanal TSB walau ref-nya diketahui.
+        other = self.order_api(self.tech_user_2).efn_online_status("TSB", [part])
+        self.assertEqual(other, [{"platform_order_ref": part, "state": "absent"}])
+
+    def test_ops_cancel_from_sale_order_ui(self):
+        part, _payload, _result = self.place()
+        self.pay(part)
+        order = self.record(part)
+        order.sale_order_id.with_context(disable_cancel_warning=True).action_cancel()
+        self.assertEqual(order.state, "cancelled")
+        self.assertEqual(order.cancel_reason, "ops")
+        event = order.event_ids.sorted("seq")[-1]
+        self.assertEqual(event.event, "cancelled")
+        self.assertEqual(event.refund_id.initiator, "odoo")
+        self.assertEqual(event.refund_id.amount, 33297.0)
+
+    def test_record_rules_multi_company(self):
+        part, _payload, _result = self.place()
+        manager_2 = new_test_user(
+            self.env,
+            login="efn_online_mgr2",
+            groups="sales_team.group_sale_manager,stock.group_stock_user",
+            company_id=self.company_2.id,
+            company_ids=[Command.set(self.company_2.ids)],
+        )
+        orders = self.env["efn.online.order"].with_user(manager_2).search([])
+        self.assertNotIn(self.record(part), orders)
+        self.assertFalse(self.env["efn.online.channel"].with_user(manager_2).search([("code", "=", "TST")]))
+        self.assertFalse(
+            self.env["efn.online.event.outbox"]
+            .with_user(manager_2)
+            .search([("order_id.platform_order_ref", "=", part)])
+        )

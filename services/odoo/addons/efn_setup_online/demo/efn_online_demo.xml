@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO kanal online (bergantung keputusan klien Q-ON1..Q-ON13). Semua = PLACEHOLDER.
+     - Kanal RTL aktif, pickup 1 outlet (gudang demo OL01), batas bayar Odoo 25 menit (L-1).
+     - Kanal FNB ADA tetapi active=False (Q-ON2); outlet wajib fiscal position kota (ADR-027 §2).
+     - Jurnal bank "Titipan Online - Holding" per PT (ADR-019 A1). Akun default jurnal dibuat otomatis Odoo;
+       pemetaan ke akun "Piutang dana titipan Holding" = keputusan Finance (Q-2, tanpa kode akun di kode).
+     - Pembulatan Rp1 (strategi biggest_tax: tanpa akun selisih; Q-ON6 Finance).
+     - User teknis demo TANPA API key (key dibuat lewat runbook, tidak pernah di data/repo). -->
+<odoo>
+    <record id="cash_rounding_idr_1" model="account.cash.rounding">
+        <field name="name">Rupiah bulat (DEMO, Q-ON6)</field>
+        <field name="rounding">1.0</field>
+        <field name="strategy">biggest_tax</field>
+        <field name="rounding_method">HALF-UP</field>
+    </record>
+
+    <!-- ===== PT Retail ===== -->
+    <!-- Gudang outlet contoh (pickup = gudang outlet tanpa carrier, temuan #39). -->
+    <record id="warehouse_online_rtl" model="stock.warehouse">
+        <field name="name">Toko Contoh Online (DEMO)</field>
+        <field name="code">OL01</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+    </record>
+    <record id="journal_titipan_rtl" model="account.journal">
+        <field name="name">Titipan Online - Holding</field>
+        <field name="code">TTPO</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+    </record>
+    <record id="pricelist_online_rtl" model="product.pricelist">
+        <field name="name">Online Super-App (Retail, DEMO)</field>
+        <field name="currency_id" ref="base.IDR"/>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+    </record>
+    <record id="user_online_rtl" model="res.users">
+        <field name="name">Kanal online RTL (user teknis)</field>
+        <field name="login">efn_online_rtl</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="company_ids" eval="[Command.set([ref('efn_setup_company.company_rtl')])]"/>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_online_order.group_online_channel')])]"/>
+    </record>
+    <record id="channel_rtl" model="efn.online.channel">
+        <field name="name">Super-App Retail</field>
+        <field name="code">RTL</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="pricelist_id" ref="pricelist_online_rtl"/>
+        <field name="partner_id" ref="partner_superapp_rtl"/>
+        <field name="team_id" ref="team_superapp_rtl"/>
+        <field name="cash_rounding_id" ref="cash_rounding_idr_1"/>
+        <field name="journal_titipan_id" ref="journal_titipan_rtl"/>
+        <field name="payment_timeout_minutes">25</field>
+        <field name="user_ids" eval="[Command.set([ref('user_online_rtl')])]"/>
+    </record>
+    <record id="outlet_rtl_toko01" model="efn.online.outlet">
+        <field name="channel_id" ref="channel_rtl"/>
+        <field name="code">TOKO-01</field>
+        <field name="public_name">Toko Contoh (DEMO)</field>
+        <field name="warehouse_id" ref="warehouse_online_rtl"/>
+        <field name="prep_minutes">15</field>
+    </record>
+
+    <!-- 3 produk demo terpublikasi. Pajak = PPN l10n_id template (tax_ST4) milik PT Retail. -->
+    <record id="product_online_rice" model="product.product">
+        <field name="name">Beras Premium 5 kg (DEMO online)</field>
+        <field name="type">consu</field>
+        <field name="is_storable" eval="True"/>
+        <field name="list_price">78900</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="taxes_id" eval="[Command.set([ref('account.%s_tax_ST4' % ref('efn_setup_company.company_rtl'))])]"/>
+        <field name="efn_online_channel_ids" eval="[Command.set([ref('channel_rtl')])]"/>
+        <field name="efn_online_description">Beras premium kemasan 5 kg. Data contoh.</field>
+    </record>
+    <record id="product_online_oil" model="product.product">
+        <field name="name">Minyak Goreng 2 L (DEMO online)</field>
+        <field name="type">consu</field>
+        <field name="is_storable" eval="True"/>
+        <field name="list_price">36500</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="taxes_id" eval="[Command.set([ref('account.%s_tax_ST4' % ref('efn_setup_company.company_rtl'))])]"/>
+        <field name="efn_online_channel_ids" eval="[Command.set([ref('channel_rtl')])]"/>
+    </record>
+    <record id="product_online_bag" model="product.product">
+        <field name="name">Tas Belanja (DEMO online)</field>
+        <field name="type">consu</field>
+        <field name="list_price">5000</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="taxes_id" eval="[Command.set([ref('account.%s_tax_ST4' % ref('efn_setup_company.company_rtl'))])]"/>
+        <field name="efn_online_channel_ids" eval="[Command.set([ref('channel_rtl')])]"/>
+    </record>
+
+    <!-- ===== PT F&B (kanal nonaktif, Q-ON2) ===== -->
+    <record id="warehouse_online_fnb" model="stock.warehouse">
+        <field name="name">Resto Contoh Online (DEMO)</field>
+        <field name="code">OL02</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+    </record>
+    <record id="journal_titipan_fnb" model="account.journal">
+        <field name="name">Titipan Online - Holding</field>
+        <field name="code">TTPO</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+    </record>
+    <record id="pricelist_online_fnb" model="product.pricelist">
+        <field name="name">Online Super-App (F&amp;B, DEMO)</field>
+        <field name="currency_id" ref="base.IDR"/>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+    </record>
+    <record id="channel_fnb" model="efn.online.channel">
+        <field name="name">Super-App F&amp;B</field>
+        <field name="code">FNB</field>
+        <field name="active" eval="False"/>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="pricelist_id" ref="pricelist_online_fnb"/>
+        <field name="partner_id" ref="partner_superapp_fnb"/>
+        <field name="team_id" ref="team_superapp_fnb"/>
+        <field name="cash_rounding_id" ref="cash_rounding_idr_1"/>
+        <field name="journal_titipan_id" ref="journal_titipan_fnb"/>
+        <field name="require_outlet_fiscal_position" eval="True"/>
+        <field name="stock_check">none</field>
+    </record>
+    <record id="outlet_fnb_resto01" model="efn.online.outlet">
+        <field name="channel_id" ref="channel_fnb"/>
+        <field name="code">RESTO-01</field>
+        <field name="public_name">Resto Kota Contoh (DEMO)</field>
+        <field name="warehouse_id" ref="warehouse_online_fnb"/>
+        <field name="fiscal_position_id" ref="efn_setup_company.fiscal_position_kota_contoh_fnb"/>
+    </record>
+</odoo>

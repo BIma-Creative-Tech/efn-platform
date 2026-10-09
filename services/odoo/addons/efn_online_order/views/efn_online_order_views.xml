@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_online_order_view_list" model="ir.ui.view">
+        <field name="name">efn.online.order.list</field>
+        <field name="model">efn.online.order</field>
+        <field name="arch" type="xml">
+            <list create="false" delete="false" decoration-danger="state == 'review'" decoration-muted="state in ('cancelled', 'picked_up')">
+                <field name="name"/>
+                <field name="channel_id"/>
+                <field name="outlet_id"/>
+                <field name="state"/>
+                <field name="amount_payable"/>
+                <field name="paid_at"/>
+                <field name="ready_at" optional="show"/>
+                <field name="picked_up_at" optional="hide"/>
+                <field name="review_reason" optional="show"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_online_order_view_search" model="ir.ui.view">
+        <field name="name">efn.online.order.search</field>
+        <field name="model">efn.online.order</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="channel_id"/>
+                <field name="outlet_id"/>
+                <filter name="to_prepare" string="Perlu disiapkan" domain="[('state', '=', 'confirmed')]"/>
+                <filter name="ready" string="Siap diambil" domain="[('state', '=', 'ready')]"/>
+                <filter name="review" string="Perlu ditinjau" domain="[('state', 'in', ('review', 'stock_short'))]"/>
+                <group>
+                    <filter name="group_state" string="Status" context="{'group_by': 'state'}"/>
+                    <filter name="group_outlet" string="Outlet" context="{'group_by': 'outlet_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="efn_online_order_view_form" model="ir.ui.view">
+        <field name="name">efn.online.order.form</field>
+        <field name="model">efn.online.order</field>
+        <field name="arch" type="xml">
+            <form create="false" delete="false" edit="false">
+                <header>
+                    <button name="action_efn_ready" type="object" string="Siap diambil" class="btn-primary"
+                            invisible="state != 'confirmed'" groups="stock.group_stock_user"/>
+                    <button name="%(action_efn_online_handover_wizard)d" type="action" string="Serahkan (kode ambil)"
+                            class="btn-primary" invisible="state not in ('confirmed', 'ready')"
+                            context="{'default_order_id': id}" groups="stock.group_stock_user"/>
+                    <button name="action_efn_retry_events" type="object" string="Kirim ulang event gagal"
+                            groups="sales_team.group_sale_manager"/>
+                    <field name="state" widget="statusbar" statusbar_visible="placed,confirmed,ready,picked_up"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="name"/>
+                            <field name="sale_order_id"/>
+                            <field name="channel_id"/>
+                            <field name="outlet_id"/>
+                            <field name="fulfilment"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                        <group>
+                            <field name="currency_id" invisible="1"/>
+                            <field name="amount_total"/>
+                            <field name="amount_payable"/>
+                            <field name="paid_amount"/>
+                            <field name="paid_at"/>
+                            <field name="expires_at"/>
+                            <field name="invoice_id"/>
+                        </group>
+                        <group>
+                            <field name="ready_at"/>
+                            <field name="picked_up_at"/>
+                            <field name="pickup_attempts"/>
+                            <field name="cancel_reason"/>
+                            <field name="cancelled_at"/>
+                            <field name="review_reason"/>
+                        </group>
+                        <group groups="base.group_no_one">
+                            <field name="platform_order_ref"/>
+                            <field name="checkout_ref"/>
+                            <field name="event_seq"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Refund" name="refunds">
+                            <field name="refund_ids">
+                                <list>
+                                    <field name="refund_ref"/>
+                                    <field name="kind"/>
+                                    <field name="origin"/>
+                                    <field name="initiator"/>
+                                    <field name="reason"/>
+                                    <field name="amount"/>
+                                    <field name="credit_note_id"/>
+                                    <field name="state"/>
+                                    <field name="currency_id" column_invisible="1"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Event ke BFF" name="events" groups="sales_team.group_sale_manager">
+                            <field name="event_ids">
+                                <list>
+                                    <field name="seq"/>
+                                    <field name="event"/>
+                                    <field name="state"/>
+                                    <field name="attempt_count"/>
+                                    <field name="last_error"/>
+                                    <field name="occurred_at"/>
+                                    <field name="done_at"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_efn_online_order" model="ir.actions.act_window">
+        <field name="name">Pesanan online</field>
+        <field name="res_model">efn.online.order</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{'search_default_to_prepare': 1}</field>
+    </record>
+</odoo>
