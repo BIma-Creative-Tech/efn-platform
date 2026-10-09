@@ -23,6 +23,9 @@
 #   COMPOSE_PROFILES=core,data,ai,observability,ops  (opsional; production wajib memuat core,data,observability)
 #   EFN_ALLOW_CONTROL_OFF=''                    (opsional, darurat Superadmin: nama kontrol yang boleh `false` di
 #                                                production: RABBITMQ_STRICT_PERMISSIONS ETL_AUDIT_COPY_ENABLED)
+# Production saja (SEC-92): /etc/efn/approved-release (root; 0644/0600/0444/0400) baris `<X.Y.Z> <git_sha>` per rilis
+#   yang disetujui Superadmin SETELAH memeriksa bahwa commit tag ada di `main` dan CI/Security hijau
+#   (docs/runbooks/key-custody.md §4d). Tanda tangan CI saja tidak cukup untuk production.
 # sudoers : deploy ALL=(root) NOPASSWD: /usr/local/sbin/efn-deploy        (TANPA argumen, TANPA bash -s)
 # authorized_keys user deploy (kunci CI):
 #   restrict,command="sudo -n /usr/local/sbin/efn-deploy" ssh-ed25519 AAAA... efn-ci
@@ -62,6 +65,10 @@ CONF=/etc/efn/deploy.conf
 STATE_DIR=/var/lib/efn
 STATE="$STATE_DIR/last-release"
 ALLOW_DOWNGRADE=/etc/efn/allow-downgrade
+# SEC-92 (r9): persetujuan rilis production out-of-band oleh Superadmin (root, tidak bisa ditulis group/other).
+# Satu baris per rilis yang disetujui: `<X.Y.Z> <git_sha 40 hex>`; '#' = komentar. Tidak dihapus setelah dipakai
+# (deploy ulang/rollback rilis yang sama tetap boleh). Tanpa file / tanpa baris cocok -> production DITOLAK.
+APPROVED_RELEASE=/etc/efn/approved-release
 IMAGE_VARS=(IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_MINIO IMAGE_METABASE)
 log() { logger -t efn-deploy -- "$*" 2> /dev/null || true; echo "efn-deploy: $*" >&2; }
 die() { log "GAGAL: $*"; exit 1; }
@@ -198,6 +205,21 @@ if [[ -n "$downgrade" ]]; then
     die "rilis ditolak (anti-downgrade): ${downgrade}"
   fi
 fi
+# SEC-92: production hanya untuk (versi, SHA commit) yang disetujui Superadmin out-of-band. Menutup tag `v*` dari
+# commit di luar `main` yang membawa workflow tanpa gerbang (identitas tanda tangan tetap sah dalam kasus itu).
+if [[ "$EFN_APP_ENV" == "production" ]]; then
+  [[ -f "$APPROVED_RELEASE" && ! -L "$APPROVED_RELEASE" ]] \
+    || die "persetujuan rilis production tidak ada ($APPROVED_RELEASE; Superadmin: key-custody.md §4d)"
+  [[ "$(stat -c '%u:%a' "$APPROVED_RELEASE")" =~ ^0:(6[04]4|600|4[04]4|400)$ ]] \
+    || die "$APPROVED_RELEASE harus milik root dan tidak bisa ditulis group/other"
+  approved=""
+  while read -r a_ver a_sha _; do
+    [[ -z "$a_ver" || "$a_ver" == \#* ]] && continue
+    if [[ "$a_ver" == "$M_VER" && "${a_sha,,}" == "$M_GIT" ]]; then approved=1; break; fi
+  done < "$APPROVED_RELEASE"
+  [[ -n "$approved" ]] || die "persetujuan rilis production tidak cocok: ${M_VER} @ ${M_GIT} tidak ada di $APPROVED_RELEASE"
+  log "rilis ${M_VER} @ ${M_GIT:0:12} disetujui Superadmin ($APPROVED_RELEASE)"
+fi
 
 # ── 5. Env tervalidasi (allowlist dari rilis TERVERIFIKASI, bukan dari input) ─────────────────────────────────
 # IMAGE_* TIDAK ada di allowlist: image hanya dari manifest bertanda tangan (SEC-42).
@@ -283,10 +305,13 @@ for v in "${IMAGE_VARS[@]}"; do
   img=$(jq -r --arg k "$v" '.images[$k] // empty' "$MAN")
   [[ "$img" == "${EFN_IMAGE_PREFIX}${svc}@sha256:"* && "${img#"${EFN_IMAGE_PREFIX}${svc}@"}" =~ ^sha256:[a-f0-9]{64}$ ]] \
     || die "$v di manifest tidak sesuai ${EFN_IMAGE_PREFIX}${svc}@sha256:<64 hex>"
+  # SEC-91: image juga diikat ke SHA commit manifest + repo (ekstensi Fulcio GitHub Workflow SHA/Repository).
   DOCKER_CONFIG="$WORK/docker" "$COSIGN_BIN" verify \
     --certificate-identity "$img_identity" \
     --certificate-oidc-issuer "$EFN_SIGNER_ISSUER" \
-    "$img" > /dev/null 2>&1 || die "cosign verify GAGAL untuk $v (${svc}; identitas build-push.yml@${M_REF})"
+    --certificate-github-workflow-sha "$M_GIT" \
+    --certificate-github-workflow-repository "$EFN_GITHUB_REPO" \
+    "$img" > /dev/null 2>&1 || die "cosign verify GAGAL untuk $v (${svc}; identitas build-push.yml@${M_REF}, commit ${M_GIT:0:12})"
   export "$v=$img"
 done
 log "${#IMAGE_VARS[@]} image terverifikasi cosign di host (build-push.yml@${M_REF})"

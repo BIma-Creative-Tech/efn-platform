@@ -57,12 +57,14 @@ check_req() {
   local -a want
   wf="${spec%%=*}"; jobs_spec=""
   [[ "$spec" == *=* ]] && jobs_spec="${spec#*=}"
-  branch="${wf#*@}"; wf="${wf%%@*}"
+  branch="*"; [[ "$wf" == *@* ]] && branch="${wf#*@}"; wf="${wf%%@*}"
   [[ "$wf" =~ ^[A-Za-z0-9_.-]+\.ya?ml$ ]] || { echo "::error::file workflow tidak valid: $wf"; return 1; }
+  # Branch/tag (head_branch run; untuk push tag = nama tag, mis. v1.2.3) atau * = semua
+  [[ "$branch" == "*" || "$branch" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::branch tidak valid: $branch"; return 1; }
   q="head_sha=${SHA}&event=push&per_page=20"
   [[ "$branch" != "*" && -n "$branch" ]] && q="${q}&branch=${branch}"
   run_json=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf}/runs?${q}" \
-    --jq '[.workflow_runs[] | select(.head_sha == "'"$SHA"'")] | sort_by(.created_at) | last // empty') || {
+    --jq '[.workflow_runs[] | select(.head_sha == "'"$SHA"'" and ("'"$branch"'" == "*" or .head_branch == "'"$branch"'"))] | sort_by(.created_at) | last // empty') || {
     echo "  ${wf}: API gagal (dicoba lagi)"; return 3; }
   if [[ -z "$run_json" ]]; then
     if (( SECONDS >= absent_deadline )); then

@@ -28,24 +28,36 @@ cat > /usr/local/bin/cosign <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 cmd="$1"; shift
-bundle="" ident="" last=""
+bundle="" ident="" last="" wsha="" wrepo=""
 while (($#)); do
   case "$1" in
     --bundle) bundle="$2"; shift 2 ;;
     --certificate-identity) ident="$2"; shift 2 ;;
+    --certificate-github-workflow-sha) wsha="$2"; shift 2 ;;
+    --certificate-github-workflow-repository) wrepo="$2"; shift 2 ;;
     --certificate-identity-regexp|--certificate-oidc-issuer) shift 2 ;;
     *) last="$1"; shift ;;
   esac
 done
+# SEC-91: image "ditandatangani" oleh build commit /etc/fake-cosign/sha di repo /etc/fake-cosign/repo; flag wajib ada.
 case "$cmd" in
   verify-blob) [[ "$(cat "$bundle")" == "VALID:$(sha256sum "$last" | cut -d' ' -f1)" ]] ;;
   verify) grep -qxF "$last" /etc/fake-cosign/signed && [[ "$ident" == "$(cat /etc/fake-cosign/identity)" ]] \
+            && [[ -n "$wsha" && "$wsha" == "$(cat /etc/fake-cosign/sha)" ]] \
+            && [[ -n "$wrepo" && "$wrepo" == "$(cat /etc/fake-cosign/repo)" ]] \
             && [[ -d "${DOCKER_CONFIG:-/nonexistent}" ]] ;;
   *) exit 1 ;;
 esac
 EOF
 chmod 0755 /usr/local/bin/cosign
 echo "$ID_OK" > /etc/fake-cosign/identity
+GIT_OK=$(printf 'a%.0s' {1..40})
+echo "$GIT_OK" > /etc/fake-cosign/sha
+echo "$REPO" > /etc/fake-cosign/repo
+# SEC-92: persetujuan rilis production out-of-band (Superadmin) untuk versi yang dipakai kasus uji
+mkdir -p /etc/efn
+approve() { printf '# disetujui Superadmin (uji)\n'; for v in "$@"; do printf '%s %s\n' "$v" "$GIT_OK"; done; }
+approve 1.2.0 1.1.0 1.3.0 > /etc/efn/approved-release; chmod 0644 /etc/efn/approved-release
 
 # ── PKI uji: root sah, root lama (rotasi), root penyerang, intermediate ───────────────────────────────────────
 mkca() { # nama issuer_key issuer_crt
@@ -281,6 +293,49 @@ if grep -qxF 'EFN_WG_BIND=10.89.0.1' /tmp/deploy-ran 2> /dev/null && grep -qxF '
 SEQ=$((SEQ + 1)); make_release "N$SEQ" "$SEQ" 1.3.0 '.config.RABBITMQ_STRICT_PERMISSIONS = "false"'; make_env "N$SEQ"; run "N$SEQ"
 expect_fail "62 izin satu kontrol tidak membuka kontrol lain" "config manifest rilis tidak valid"
 write_conf
+
+# ── SEC-91 / SEC-92 (r9 re-review G16c): image terikat SHA commit; persetujuan rilis production out-of-band ──────
+# (a) image bertanda tangan sah tetapi dari build commit lain (manifest menunjuk commit c..c yang disetujui)
+GIT_C=$(printf 'c%.0s' {1..40})
+{ approve 1.2.0 1.1.0 1.3.0; echo "1.3.0 ${GIT_C}"; } > /etc/efn/approved-release
+SEQ=$((SEQ + 1)); make_release "N$SEQ" "$SEQ" 1.3.0 ".git_sha = \"${GIT_C}\""; make_env "N$SEQ"; run "N$SEQ"
+expect_fail "80 image dari build commit lain (sha manifest != sertifikat) ditolak" "cosign verify GAGAL untuk IMAGE_POSTGRES"
+approve 1.2.0 1.1.0 1.3.0 > /etc/efn/approved-release
+# (b) repo di sertifikat berbeda (fork/repo lain dengan nama workflow sama)
+echo "evil/efn-platform" > /etc/fake-cosign/repo
+SEQ=$((SEQ + 1)); make_release "N$SEQ" "$SEQ" 1.3.0; make_env "N$SEQ"; run "N$SEQ"
+expect_fail "81 image dari repo lain ditolak" "cosign verify GAGAL"
+echo "$REPO" > /etc/fake-cosign/repo
+# (c) tanpa file persetujuan -> production ditolak
+mv /etc/efn/approved-release /etc/efn/approved-release.bak
+SEQ=$((SEQ + 1)); make_release "N$SEQ" "$SEQ" 1.3.0; make_env "N$SEQ"; run "N$SEQ"
+expect_fail "82 production tanpa /etc/efn/approved-release ditolak" "persetujuan rilis production tidak ada"
+mv /etc/efn/approved-release.bak /etc/efn/approved-release
+# (d) versi disetujui tetapi SHA commit lain (tag v* dari commit di luar main)
+SEQ=$((SEQ + 1)); make_release "N$SEQ" "$SEQ" 1.3.0 ".git_sha = \"${GIT_C}\""; make_env "N$SEQ"; run "N$SEQ"
+expect_fail "83 SHA commit tidak disetujui ditolak" "persetujuan rilis production tidak cocok"
+# (e) versi tidak disetujui (SHA sama)
+echo "https://github.com/${REPO}/.github/workflows/build-push.yml@refs/tags/v1.4.0" > /etc/fake-cosign/identity
+SEQ=$((SEQ + 1)); make_release "N$SEQ" "$SEQ" 1.4.0; make_env "N$SEQ"; run "N$SEQ"
+expect_fail "84 versi tidak disetujui ditolak" "persetujuan rilis production tidak cocok"
+# (f) file persetujuan bisa ditulis group/other -> ditolak
+{ approve 1.2.0 1.1.0 1.3.0 1.4.0; } > /etc/efn/approved-release; chmod 0666 /etc/efn/approved-release
+SEQ=$((SEQ + 1)); make_release "N$SEQ" "$SEQ" 1.4.0; make_env "N$SEQ"; run "N$SEQ"
+expect_fail "85 approved-release world-writable ditolak" "tidak bisa ditulis group/other"
+# (g) setelah disetujui (0644 root) -> diterima
+chmod 0644 /etc/efn/approved-release
+SEQ=$((SEQ + 1)); make_release "N$SEQ" "$SEQ" 1.4.0; make_env "N$SEQ"; run "N$SEQ"
+expect_ok "86 rilis 1.4.0 disetujui (versi + SHA) diterima"
+# (h) staging tidak butuh persetujuan (stage: main sha-*), tetap terikat SHA commit
+write_conf "" ; sed -i 's/^EFN_APP_ENV=production$/EFN_APP_ENV=staging/' /etc/efn/deploy.conf
+rm -f /etc/efn/approved-release
+echo "https://github.com/${REPO}/.github/workflows/build-push.yml@refs/heads/main" > /etc/fake-cosign/identity
+SEQ=$((SEQ + 1))
+make_release "N$SEQ" "$SEQ" 1.4.0 '.app_env = "staging" | .version = "sha-aaaaaaa" | .signer_ref = "refs/heads/main" | .config.PAYMENT_PROVIDER = "mock"'
+make_env "N$SEQ"; run "N$SEQ"
+expect_ok "87 staging (main) tanpa approved-release diterima"
+echo "$ID_OK" > /etc/fake-cosign/identity
+write_conf; approve 1.2.0 1.1.0 1.3.0 1.4.0 > /etc/efn/approved-release; chmod 0644 /etc/efn/approved-release
 
 # ── Unit: scripts/lib/deploy-validate.sh (dipakai deploy.sh juga) ──────────────────────────────────────────────
 # shellcheck source=scripts/lib/deploy-validate.sh

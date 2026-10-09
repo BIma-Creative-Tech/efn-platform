@@ -44,7 +44,7 @@ jobs:
        vars.STAGING_DEPLOY_ENABLED == 'true')
     runs-on: ubuntu-latest
     # Tag v*: menunggu Build & Push commit yang sama (yang sendiri menunggu CI + Security, SEC-80) selesai.
-    timeout-minutes: 100
+    timeout-minutes: 120
     permissions:
       contents: read
       actions: read   # scripts/verify-commit-gates.sh (Actions API)
@@ -79,12 +79,12 @@ jobs:
           if [[ "$tag" =~ ^sha-([0-9a-f]{7})$ ]]; then
             # Build dari main: identitas penanda tangan = build-push.yml @ refs/heads/main
             signer_ref="refs/heads/main"
-            ref_for_sha="${BASH_REMATCH[1]}"
+            ref_for_sha="${BASH_REMATCH[1]}"; build_branch="main"
           elif [[ "$tag" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
             # Rilis: tag image = X.Y.Z (metadata-action semver), penanda tangan = build-push.yml @ refs/tags/vX.Y.Z
             tag="${BASH_REMATCH[1]}"
             signer_ref="refs/tags/v${tag}"
-            ref_for_sha="v${tag}"
+            ref_for_sha="v${tag}"; build_branch="v${tag}"
           else
             echo "::error::image_tag harus sha-<7 hex> atau X.Y.Z / vX.Y.Z"; exit 1
           fi
@@ -107,6 +107,7 @@ jobs:
             echo "image_tag=$tag"
             echo "signer_ref=$signer_ref"
             echo "git_sha=$sha"
+            echo "build_branch=$build_branch"
           } >> "$GITHUB_OUTPUT"
       # SEC-80 (pertahanan berlapis, juga untuk workflow_dispatch): CI + Security commit yang dideploy = success, dan
       # Build & Push commit itu selesai success (tag v*: deploy dipicu bersamaan dengan build -> ditunggu di sini).
@@ -114,9 +115,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ steps.r.outputs.git_sha }}
-          WAIT_MIN: ${{ github.event_name == 'push' && '90' || '5' }}
+          WAIT_MIN: ${{ github.event_name == 'push' && '110' || '5' }}
+          # SEC-94: run Build & Push dengan ref yang tepat (main untuk sha-*, vX.Y.Z untuk rilis), bukan run apa pun
+          BUILD_BRANCH: ${{ steps.r.outputs.build_branch }}
         run: >-
-          bash scripts/verify-commit-gates.sh --sha "$SHA" --preset release --require 'build-push.yml@*'
+          bash scripts/verify-commit-gates.sh --sha "$SHA" --preset release --require "build-push.yml@${BUILD_BRANCH}"
           --timeout-min "$WAIT_MIN" --absent-min "$WAIT_MIN"
 
   deploy:

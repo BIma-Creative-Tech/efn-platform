@@ -12,6 +12,9 @@
 # - SEC-83: image di-build & di-push SATU kali; Trivy memindai `REGISTRY/<svc>@<digest>` hasil push itu; hanya bila
 #   lolos, SBOM + `cosign sign/attest` dijalankan atas digest yang sama. Image yang gagal scan ada di registry tetapi
 #   TIDAK bertanda tangan -> ditolak deploy (cosign verify di deploy.yml + host efn-deploy).
+# Re-review G16c: SEC-90 push BY DIGEST tanpa tag; tag (`main`, `sha-*` hanya dari main, `X.Y.Z`, `X.Y`, `latest`)
+#   dipasang SETELAH sign atas digest yang sama. SEC-94 job `build` tanpa `security-events`/`attestations: write`.
+#   SEC-89 gate menunggu CI penuh (semua job pada push ke main) -> batas 75 menit.
 #
 # G16 (CI GitHub, 9 Okt 2026), repo privat paket gratis:
 # - Tanpa artifact (kuota storage 500 MB): SBOM Syft TIDAK diunggah sebagai artifact; SBOM di-attest (cosign keyless)
@@ -121,7 +124,7 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     # CI terlama (Odoo test/tour) <= 45 menit per job, paralel; jeda polling 30 dtk. Menunggu = menit runner terpakai.
-    timeout-minutes: 70
+    timeout-minutes: 85
     permissions:
       contents: read
       actions: read
@@ -133,7 +136,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.sha }}
-        run: bash scripts/verify-commit-gates.sh --sha "$SHA" --preset release --timeout-min 60 --absent-min 10
+        run: bash scripts/verify-commit-gates.sh --sha "$SHA" --preset release --timeout-min 75 --absent-min 10
 
   # ── Non-PR: push sekali -> scan by digest -> SBOM -> sign (SEC-81/83) ─────────────────────────────────────────────
   build:
@@ -141,12 +144,14 @@ jobs:
     needs: gate
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    # SEC-94 (r9): hanya izin yang dipakai di paket gratis. `security-events: write` (upload SARIF) dan
+    # `attestations: write` (attest-build-provenance) TIDAK diminta: kedua langkah itu kondisional
+    # (CODE_SCANNING_ENABLED / ATTESTATIONS_ENABLED) dan tidak aktif di repo privat akun pribadi. Saat variable itu
+    # diaktifkan, tambahkan izin yang sesuai di sini (tanpa itu langkahnya gagal terlihat, bukan diam-diam).
     permissions:
       contents: read
       packages: write
       id-token: write         # cosign keyless (OIDC)
-      attestations: write     # build provenance
-      security-events: write  # hanya terpakai bila CODE_SCANNING == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -183,8 +188,9 @@ jobs:
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5.10.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NS }}/${{ matrix.service }}
+          # SEC-90: `sha-<short>` hanya dari build main (identitas refs/heads/main); run tag v* tidak menimpanya.
           tags: |
-            type=sha,prefix=sha-,format=short
+            type=sha,prefix=sha-,format=short,enable=${{ github.ref == 'refs/heads/main' }}
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -194,14 +200,15 @@ jobs:
             org.opencontainers.image.title=efn-${{ matrix.service }}
 
       # SATU build: hasil push (digest) = yang di-scan, di-SBOM, dan ditandatangani (SEC-83).
-      - name: Build & push (sekali)
+      # SEC-90: push BY DIGEST tanpa tag -> image yang gagal Trivy tidak pernah mendapat tag (`main`, `latest`, `X.Y.Z`,
+      # `sha-*`); tag dipasang di langkah terakhir atas digest yang sudah ditandatangani.
+      - name: Build & push by digest (tanpa tag)
         id: push
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
         with:
           context: ${{ matrix.context }}
           target: ${{ (matrix.service == 'api-gateway' || matrix.service == 'superapp-web') && 'runtime' || '' }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          outputs: type=image,name=${{ env.IMAGE_REPO }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,scope=${{ matrix.service }},mode=max
@@ -286,6 +293,31 @@ jobs:
           retry() { for i in 1 2 3 4; do "$@" && return 0; echo "percobaan $i gagal, ulangi dalam $((i * 20)) dtk"; sleep $((i * 20)); done; return 1; }
           retry cosign sign "$IMAGE"
           retry cosign attest --type spdxjson --predicate "$SBOM" "$IMAGE"
+
+      # SEC-90: tag hanya untuk digest yang sudah lolos Trivy + ditandatangani. `imagetools create` dengan satu sumber
+      # memasang tag ke manifest/index YANG SAMA (digest tidak berubah; diuji 9 Okt 2026 dengan registry lokal: index
+      # provenance+sbom tetap sha256 yang sama). Digest tiap tag diverifikasi ulang -> tanda tangan berlaku untuk tag.
+      - name: Pasang tag atas digest bertanda tangan
+        env:
+          IMAGE: ${{ env.IMAGE_REPO }}@${{ steps.push.outputs.digest }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r t; do
+            [ -n "$t" ] || continue
+            [[ "$t" == "${IMAGE_REPO}:"* ]] || { echo "::error::tag di luar repo image: $t"; exit 1; }
+            args+=(-t "$t")
+          done <<< "$TAGS"
+          [ "${#args[@]}" -gt 0 ] || { echo "::error::tidak ada tag"; exit 1; }
+          docker buildx imagetools create "${args[@]}" "$IMAGE"
+          while IFS= read -r t; do
+            [ -n "$t" ] || continue
+            got=$(docker buildx imagetools inspect "$t" --format '{{json .Manifest}}' | jq -r .digest)
+            [ "$got" = "$DIGEST" ] || { echo "::error::$t -> $got, bukan $DIGEST"; exit 1; }
+            echo "OK $t -> $DIGEST"
+          done <<< "$TAGS"
 
       - name: Attest build provenance (GitHub)
         # Artifact attestation GitHub tidak tersedia untuk repo privat milik akun pribadi (paket gratis) -> hanya bila repo

@@ -1366,3 +1366,26 @@ Branch `chore/wave-16b-followups`, belum di-commit. Status per temuan + bukti: `
   dengan kasus uji `test-efn-deploy.sh`.
 - Merge/push dengan check merah tetap mungkin secara teknis (paket gratis). Opsi: hook `pre-push` lokal atau org berbayar
   + ruleset.
+
+## G16c.4 Lanjutan: re-review G16c (SEC-89..94), di atas commit `4996aa8`, belum di-commit
+
+| ID | Perubahan | Bukti |
+|---|---|---|
+| SEC-89 | CI: semua job pada push ke `main` (filter path hanya PR, tanpa checkout di `changes`); gitleaks riwayat penuh pada push/jadwal (image v8.30.1 ber-digest); gate 75 mnt; runbook: aturan tag + estimasi menit | gitleaks lokal 67 commit bersih; actionlint/checkov bersih |
+| SEC-90 | push by digest tanpa tag → scan → sign → `imagetools create` tag + verifikasi digest; `sha-*` hanya dari main | uji registry lokal: digest index tetap sama setelah tag |
+| SEC-91 | `efn-deploy` `cosign verify` terikat `git_sha` manifest + repo | test-efn-deploy 87/87 PASS (80, 81 baru) |
+| SEC-92 | `efn-deploy` production wajib `/etc/efn/approved-release` (`<X.Y.Z> <git_sha>`); key-custody §4d | kasus 82-87 PASS; API environments: production tanpa required reviewers |
+| SEC-93 | concurrency Security per event | actionlint |
+| SEC-94 | deploy memilih run build-push per ref (`main`/`vX.Y.Z`); izin `build` tanpa security-events/attestations | API nyata `@main` lolos, `@v1.0.0` gagal |
+| (saran SEC-85) | check-encryption: cap metabase dikunci | negatif SYS_ADMIN → FAIL |
+
+Validasi: actionlint 1.7.7, shellcheck (scripts/lib/host/smoke/metabase), yamllint 0 error, checkov 3.3.21 0 FAILED
+(github_actions 658 passed), `docker compose config -q` dev/prod, check-encryption (asli OK + 3 negatif FAIL),
+test-efn-deploy 87/87.
+
+Belum / perlu tindakan:
+- Job Odoo test/tour belum pernah selesai di GitHub; run CI penuh pertama di `main` bisa merah → gerbang rilis tertahan
+  sampai hijau. Estimasi biaya ±135-195 menit runner per merge ke `main` (kuota 2.000/bulan ≈ 10-14 merge).
+- Superadmin: pasang ulang `efn-deploy` di host (sha256 dari PR), isi `/etc/efn/approved-release` sebelum rilis
+  production; admin repo: Environment `staging` → deployment branch `main` saja (saat ini tanpa aturan).
+- `head_branch` = nama tag untuk run push tag (SEC-94) dan seluruh alur build/tag/deploy baru belum terbukti di run nyata.

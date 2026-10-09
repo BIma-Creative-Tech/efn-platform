@@ -48,6 +48,11 @@ Metode: reviewer hanya membaca kode dan konfigurasi, tidak menjalankan apa pun (
 *Status perbaikan G16c* di akhir dokumen. Belum di-commit (branch `chore/wave-16b-followups`); perilaku workflow baru
 baru terbukti penuh setelah run GitHub pertama di `main`.
 
+**Status setelah re-review G16c (efn-security-reviewer, 9 Okt 2026, commit `4996aa8`):** SEC-80 → **Partial**
+(mekanisme gate benar dan gagal-tertutup, tetapi cakupan CI per commit hanya delta push: SEC-89), SEC-81..86 dan
+SEC-88 terverifikasi **Fixed**, SEC-87 tetap **Partial**. Temuan baru: **1 Medium (SEC-89), 3 Low (SEC-90..92), 2 Info
+(SEC-93..94)**. Detail: bagian *Re-review G16c* di akhir dokumen.
+
 ---
 
 ## Detail temuan
@@ -271,3 +276,155 @@ Ditambahkan oleh implementer, bukan reviewer. Review ulang oleh `efn-security-re
 
 Tambahan di luar temuan: `DOCKER_BUILD_RECORD_UPLOAD=false` di build-push (log run 62b1bf1: "Failed to CreateArtifact: Artifact storage quota has been hit" dari build record buildx).
 
+---
+
+## Re-review G16c (efn-security-reviewer, 9 Okt 2026, commit `4996aa8`)
+
+Read-only. File: `scripts/verify-commit-gates.sh`, `.github/workflows/{build-push,deploy,ci,security}.yml`,
+`.trivyignore.yaml` (DS-0002), `infra/compose/docker-compose{,.prod,.dev}.yml` (metabase), `scripts/check-encryption.sh`,
+`scripts/deploy.sh:386-414`, `scripts/host/efn-deploy:110-172,275-292`, `docs/runbooks/ci-github-free-plan.md:1-37`.
+Tidak ada run GitHub yang dijalankan reviewer; perilaku API GitHub yang tidak bisa dipastikan dari kode ditandai PLAUSIBLE.
+
+### Ringkasan eksekutif
+- Mekanisme gerbang rilis yang baru **benar dan gagal-tertutup**: status `neutral`/`skipped`/`cancelled`/`absent`/`duplicate`
+  semuanya ditolak, tidak ada injeksi dari input/ref ke shell, dan tanda tangan hanya terjadi atas digest yang lolos Trivy.
+- Celah utama tersisa (**SEC-89, Medium**): `CI gate` untuk sebuah commit hanya menguji file yang berubah di *push itu*.
+  Commit yang test-nya merah atau dibatalkan bisa ikut dirilis lewat commit berikutnya yang hanya mengubah dokumen.
+  Scanner Security (semgrep, Trivy fs, checkov) memindai seluruh repo sehingga tidak terdampak.
+- Sisa lain (Low/Info): tag image mutable dipasang sebelum scan, host belum mengikat image ke SHA commit, tag `v*` dari
+  commit yang belum masuk `main` dapat membawa workflow yang gate-nya dihapus, dan bentrok `concurrency` Security.
+
+### Status per SEC (terverifikasi)
+
+| ID | Status re-review | Catatan verifikasi |
+|---|---|---|
+| SEC-80 | **Partial** | Benar: run dipilih per file workflow + `head_sha` + `event=push` (+ `branch=main` untuk CI/Security), `sort_by(created_at) \| last`, `jobs?filter=latest` (attempt terbaru), job wajib harus tepat satu dan `success` (`verify-commit-gates.sh:62-91`). `neutral`/`skipped`/`cancelled` → gagal; run belum dibuat → tunggu ≤ `--absent-min` lalu gagal; API error → coba lagi sampai timeout (gagal-tertutup). Injeksi: `--sha` regex 40 hex, file workflow regex, nama job lewat `jq --arg`, input dispatch lewat env + regex. `CI gate` kini `needs: changes`. `build` `needs: gate`. **Sisa:** cakupan CI per push (SEC-89) dan gate yang hidup di commit yang sama (SEC-92). |
+| SEC-81 | **Fixed** | `scan-pr` hanya `contents: read`, tanpa login/OIDC, `cache-from` saja; `build`/`gate` `if: != pull_request`. Catatan kecil: `build` tetap meminta `security-events: write` dan `attestations: write` walau keduanya kondisional (SEC-94). |
+| SEC-82 | **Fixed** (sisi CI) | `resolve.if` memfilter `event == push`, `head_branch == main`, `head_repository == github.repository`. `cosign verify` mengikat `--certificate-github-workflow-sha` dan `-repository`. Untuk tag: `github.sha` = commit tag dan resolusi API `commits/vX.Y.Z` mengembalikan commit, jadi konsisten dengan ekstensi Fulcio. Host belum mengikat SHA: SEC-91. |
+| SEC-83 | **Fixed** | Satu `build-push-action` → `Digest valid` → Trivy `@digest` (remote) → Syft → `cosign sign/attest` `@digest`. Langkah SBOM, sign, dan attest-provenance tidak memakai `always()` (default `success()` berlaku), sehingga tidak berjalan setelah Trivy gagal. Digest = index (provenance + sbom) dan konsisten dengan yang di-resolve deploy dari tag. Sisa: tag mutable dipasang sebelum scan (SEC-90). |
+| SEC-84 | **Fixed** (dok) | Bukti entri Rekor `dsse`/`hashedrekord` dari implementer diterima; tidak diulang reviewer. |
+| SEC-85 | **Fixed** (kode) | `cap_drop: [ALL]`, `cap_add: [CHOWN, SETUID, SETGID]` (`docker-compose.yml:1294-1295`), secret ClickHouse dilepas (`:1293`), overlay prod/dev tidak menimpa. `CapBnd=0xc1` konsisten dengan tiga capability. Statement DS-0002 kini akurat (`.trivyignore.yaml:87-97`, `expired_at` 2027-01-07). **Masih menunggu persetujuan ulang pemilik proyek.** Saran: tambah cek `cap_drop` metabase di `check-encryption.sh` atau job `infra`, karena pengecualian DS-0002 kini bergantung padanya. |
+| SEC-86 | **Fixed** | `check-encryption.sh:126` `entrypoint == null` + tolak image resmi (`:129`); `deploy.sh:411-413` dan smoke memeriksa `.Config.Entrypoint` container berjalan. Catatan: cek `deploy.sh` terjadi setelah `metabase-provision` (post-hoc); pencegah utamanya tetap cek compose di CI + image bertanda tangan. |
+| SEC-87 | **Partial** | Diterima sebagai risiko residual terdokumentasi. |
+| SEC-88 | **Fixed** | Semua checkout `ci.yml` `persist-credentials: false` kecuali `changes` (hanya paths-filter, tidak menjalankan kode repo). Label checkov akurat. |
+
+### Temuan baru
+
+| ID | Severity | Judul | Lokasi | Risiko | Status (G16c-2) |
+|---|---|---|---|---|---|
+| SEC-89 | **Medium** | `CI gate` per commit hanya menguji delta push → commit merah/dibatalkan dirilis lewat commit berikutnya | `ci.yml:14-16,33-47,563-572`, `verify-commit-gates.sh:26`, runbook `:31-32` | R-S07 | **Fixed** (kode; run nyata belum) |
+| SEC-90 | Low | Tag mutable (`main`, `latest`, `X.Y`, `X.Y.Z`, `sha-*`) dipasang sebelum Trivy; run tag menimpa `sha-<short>` | `build-push.yml:186-191,197-209` | R-S08 | **Fixed** |
+| SEC-91 | Low | Host `efn-deploy` memverifikasi image tanpa `--certificate-github-workflow-sha` = `git_sha` manifest | `scripts/host/efn-deploy:280-289` | R-S08 | **Fixed** |
+| SEC-92 | Low (PLAUSIBLE) | Tag `v*` dari commit di luar `main` dapat membawa `build-push.yml`/`deploy.yml` tanpa gate; host menerima `deploy.yml@refs/tags/v*` dari commit mana pun | `efn-deploy:9,117-121`, `deploy.yml:12-13`, `build-push.yml:26-29` | R-S07, R-S08 | **Fixed** (host; pasang ulang efn-deploy + file persetujuan oleh Superadmin) |
+| SEC-93 | Info | `concurrency` Security sama untuk `push`/`schedule`/`workflow_dispatch` di `main` → run push bisa dibatalkan scan mingguan (dan sebaliknya) | `security.yml:18-33` | R-S07 (ketersediaan) | **Fixed** |
+| SEC-94 | Info | Deploy tag memakai `build-push.yml@*` (bisa memilih run `main` saat run tag belum dibuat); izin `build` tidak kondisional | `deploy.yml:119`, `build-push.yml:144-149` | R-S08 | **Fixed** |
+
+#### SEC-89: Medium: `CI gate` hanya mencerminkan delta push
+- `dorny/paths-filter` di job `changes` (`ci.yml:36-47`) tidak memakai `base`. Pada event `push`, pembandingnya adalah
+  `github.event.before`, sehingga hanya file yang berubah di push itu yang memicu job. Job yang tidak terpicu menjadi
+  `skipped`, dan `CI gate` menganggap `skipped` lolos (`ci.yml:572`).
+- `concurrency: ci-${{ github.ref }}` + `cancel-in-progress` (`:14-16`) membatalkan CI commit sebelumnya saat ada push baru.
+  Runbook (`:31-32`) bahkan menyarankan "tag commit terbaru saja" untuk kasus ini.
+- **Skenario:** push A mengubah `services/odoo/**` dan test record rule multi-company gagal (atau CI A dibatalkan karena
+  push B masuk 2 menit kemudian). Push B hanya mengubah `docs/`. CI B: semua job `skipped` → `CI gate` = success.
+  Security B hijau, karena scanner memindai seluruh repo. Gate `build-push` B lolos, lalu image berisi kode A yang belum
+  pernah lolos test (`npm audit`/`pip-audit`, test OTP/HMAC/record rule) ditandatangani dan dideploy ke staging. Hal ini
+  terjadi tanpa niat jahat, cukup dengan alur kerja normal.
+- Hal yang sama (PLAUSIBLE) berlaku untuk gitleaks-action pada `push`, yang memindai rentang commit push, bukan seluruh
+  riwayat. Secret di commit A yang run Security-nya dibatalkan tidak dipindai gitleaks pada run B. Trivy fs `secret` hanya
+  menangkapnya bila secret masih ada di tree.
+- **Rekomendasi:**
+  1. Pada `push` ke `main`, jalankan semua job CI tanpa filter. Contohnya, `changes` mengeluarkan `true` untuk semua
+     filter bila `github.event_name == 'push'`. Biaya menit naik, tetapi menit per push ke `main` relatif kecil
+     dibanding PR.
+  2. Alternatif yang lebih hemat: set `base` paths-filter ke SHA terakhir yang `Build & Push`-nya success di `main`.
+     SHA itu dicari lewat Actions API di job `changes`, dan kalau tidak ditemukan, semua filter diisi `true`.
+  3. Gitleaks pada `push`: jalankan `gitleaks git` dengan rentang dari rilis terakhir, atau scan penuh di job terjadwal
+     yang juga diwajibkan preset.
+
+#### SEC-90: Low: Tag mutable sebelum scan; tag rilis menimpa `sha-*`
+- `build-push.yml:203-204` mendorong semua tag `metadata-action` **sebelum** Trivy. Akibatnya, image yang gagal scan
+  tetap dipasang sebagai `main`/`latest`/`X.Y`/`X.Y.Z`/`sha-<short>`, tanpa tanda tangan. Deploy aman karena
+  `cosign verify` menolak image tanpa tanda tangan, tetapi konsumen yang menarik image berdasarkan tag tanpa verifikasi
+  (dev, uji manual, Metabase/ops ad hoc) mendapat image yang gagal gate.
+- `type=sha` (`:187`) juga aktif pada run tag. Run `vX.Y.Z` menimpa `sha-<short>` commit yang sama dengan digest baru
+  (build tidak reproducible), yang ditandatangani identitas `refs/tags/vX.Y.Z`. Deploy ulang atau rollback staging dengan
+  `sha-<short>` itu (identitas `refs/heads/main`) kemudian gagal `cosign verify`. Kegagalannya tertutup, tetapi rollback
+  macet. Hal yang sama terjadi bila `workflow_dispatch` dijalankan dari branch lain yang HEAD-nya commit `main`.
+- **Rekomendasi:** push by digest saja (`outputs: type=image,push-by-digest=true,name-canonical=true,push=true`), lalu
+  pasang tag dengan `docker buildx imagetools create -t … <repo>@<digest>` setelah `cosign sign` berhasil. Selain itu,
+  batasi `type=sha` ke `enable=${{ github.ref == 'refs/heads/main' }}`.
+
+#### SEC-91: Low: Host tidak mengikat image ke SHA commit manifest
+- `deploy.yml` (CI) memakai `--certificate-github-workflow-sha "$GIT_SHA"`, tetapi `efn-deploy:286-289` (trust anchor
+  terakhir) hanya memeriksa identitas `build-push.yml@${M_REF}` + issuer.
+- **Skenario:** job `deploy` yang disusupi (action pihak ketiga, runner) menandatangani manifest yang berisi digest
+  image `main` lama yang sah, misalnya build sebelum gate SEC-80 ada atau commit yang CI-nya merah. Host menerimanya
+  karena identitasnya cocok, dan `M_GIT` di manifest tidak pernah dicocokkan dengan sertifikat image.
+- **Rekomendasi:** tambahkan `--certificate-github-workflow-sha "$M_GIT"` dan
+  `--certificate-github-workflow-repository "$EFN_GITHUB_REPO"` di `efn-deploy`. Ini murah dan menyamakan host dengan CI.
+
+#### SEC-92: Low (PLAUSIBLE): Tag `v*` dari commit di luar `main` melewati gate di dalam repo
+- Pada `push` tag, GitHub menjalankan `build-push.yml` dan `deploy.yml` **dari commit tag**. Pemilik hak tulis dapat
+  membuat commit di branch fitur yang menghapus job `gate`/langkah gerbang, men-tag-nya `v9.9.9`, lalu mendorong tag
+  tersebut. Image ditandatangani `build-push.yml@refs/tags/v9.9.9` dengan SHA yang cocok, dan bundel ditandatangani
+  `deploy.yml@refs/tags/v9.9.9`. Host menerima ini karena regexp identitas (`efn-deploy:9`) mengizinkan tag apa pun.
+- Penghalang yang tersisa hanyalah approval Environment `production`. **PLAUSIBLE:** untuk repo privat, ketersediaan
+  required reviewers bergantung pada paket akun, jadi verifikasi di Settings > Environments.
+- Ini sisa inheren dari ketiadaan branch/tag protection (SEC-80 rekomendasi 4), tetapi gate SEC-80 tidak menutupnya.
+  Tanpa mitigasi ini, gate hanya efektif terhadap kelalaian, bukan terhadap insider.
+- **Rekomendasi:** persetujuan out-of-band di host production. Superadmin menulis SHA commit rilis yang disetujui ke
+  `/etc/efn/approved-release` (pola sama dengan `allow-downgrade`), lalu `efn-deploy` menolak bila `M_GIT` berbeda.
+  Alternatif: `efn-deploy` memanggil `verify-commit-gates.sh` sendiri dengan token baca milik host, plus cek bahwa
+  `M_GIT` adalah ancestor `main` (`compare` API). Jangka panjang: ruleset tag (Team/org).
+
+#### SEC-93: Info: Bentrok `concurrency` Security
+- `group: security-${{ github.ref }}` dipakai bersama oleh `push`, `schedule` (ref = default branch), dan
+  `workflow_dispatch` di `main`. Scan mingguan Senin 02:17 UTC atau dispatch manual dapat membatalkan run push yang
+  sedang berjalan. Akibatnya gate rilis commit itu gagal (tertutup, tetapi rilis tertahan sampai run diulang). Sebaliknya,
+  push dapat membatalkan scan mingguan tanpa tanda.
+- **Rekomendasi:** `group: security-${{ github.event_name }}-${{ github.ref }}`.
+
+#### SEC-94: Info: Pemilihan run tag dan izin `build`
+- `deploy.yml:119` `--require 'build-push.yml@*'` memilih run push **terbaru** untuk SHA. Untuk tag, run `main` commit
+  yang sama juga cocok. Bila `resolve` memeriksa sebelum run tag dibuat (PLAUSIBLE, jendela detik), gate lolos memakai run
+  `main`, lalu `cosign verify` tag `X.Y.Z` gagal karena image belum ada. Kegagalannya tertutup, hanya masalah keandalan.
+  Rekomendasi: `build-push.yml@v${tag}` untuk tag dan `@main` untuk `sha-*` (parameter `branch` API mencocokkan
+  `head_branch`, yang untuk push tag berisi nama tag).
+- `build` selalu meminta `security-events: write` dan `attestations: write`, padahal keduanya hanya dipakai saat
+  kondisional. Dampaknya kecil karena job hanya berjalan non-PR setelah gate. Pisahkan ke job terpisah bila suatu saat
+  code scanning atau attestations diaktifkan.
+
+### Kontrol yang sudah benar (re-review)
+- Tidak ada `pull_request_target`, dan job PR (`scan-pr`, CI, Security) tanpa izin tulis atau OIDC.
+- `CI gate` gagal bila `changes` gagal atau dibatalkan, dan tidak lolos karena "semua skipped" akibat paths-filter error.
+- Deploy `workflow_run` hanya dari run `push` ke `main` di repo ini dengan `conclusion == success`. Run
+  `workflow_dispatch`/PR tidak memicu.
+- Production: hanya `refs/tags/vX.Y.Z` (CI `deploy.yml:91-93` dan host `efn-deploy:165-167`), dan digest diikat ke SHA
+  penuh di CI.
+- Metabase: capability minimum terbukti di dev, secret ClickHouse dilepas, entrypoint diperiksa di compose dan
+  container berjalan.
+
+### Prioritas re-review
+1. Sebelum `STAGING_DEPLOY_ENABLED=true` / tag `v*` pertama: **SEC-89** (tanpa ini gate CI dapat lolos dengan alur
+   kerja normal) dan **SEC-91** (satu baris).
+2. Sebelum rilis production pertama: **SEC-92** (keputusan Superadmin: approval out-of-band di host) dan persetujuan
+   ulang DS-0002 (SEC-85).
+3. Backlog: SEC-90, SEC-93, SEC-94.
+
+### Status perbaikan re-review (G16c-2, efn-devsecops-engineer, 9 Okt 2026, di atas `4996aa8`, belum di-commit)
+
+Ditambahkan implementer; perlu review ulang `efn-security-reviewer`.
+
+| ID | Status | Perubahan | Bukti |
+|---|---|---|---|
+| SEC-89 | Fixed | `ci.yml` job `changes`: output semua `true` (pyservices = 3 service) bila `event_name == push`; paths-filter hanya untuk pull_request, tanpa checkout (API PR) → tidak ada kredensial git tersimpan di CI. `security.yml` gitleaks: push/schedule/dispatch = `gitleaks git` riwayat penuh (image `zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0…`), PR = action. Gate build-push 75 menit (job 85), deploy tag 110 (job 120). Runbook §1: saran "tag commit terbaru saja" diganti aturan run hijau milik commit itu sendiri + estimasi menit. | actionlint, yamllint, checkov 0 FAILED. gitleaks riwayat penuh lokal (perintah = workflow): 67 commit, "no leaks found", ±37 dtk. Catatan: job Odoo test/tour **belum pernah selesai** di GitHub (riwayat 100 run CI: hanya skipped/cancelled) → run penuh pertama bisa merah (gagal-tertutup). |
+| SEC-90 | Fixed | Push `outputs: type=image,name=<repo>,push-by-digest=true,name-canonical=true,push=true` tanpa tag → Trivy → SBOM → sign/attest → `docker buildx imagetools create -t …` atas digest, lalu digest setiap tag diverifikasi sama. `type=sha` hanya `refs/heads/main`. | Uji registry lokal (`registry:2` + builder docker-container): index provenance+sbom push-by-digest `sha256:85bdc772…`; `imagetools create -t :main -t :sha-abc` → kedua tag = digest yang sama (inspect + header `Docker-Content-Digest`). |
+| SEC-91 | Fixed | `efn-deploy` `cosign verify` + `--certificate-github-workflow-sha "$M_GIT"` + `--certificate-github-workflow-repository "$EFN_GITHUB_REPO"`. | `test-efn-deploy.sh` (cosign palsu kini mewajibkan kedua flag + mencocokkan nilai): 87/87 PASS, termasuk 80 (image build commit lain) dan 81 (repo lain) ditolak. |
+| SEC-92 | Fixed (host) | `efn-deploy` production mewajibkan baris `<X.Y.Z> <git_sha>` di `/etc/efn/approved-release` (root, tidak bisa ditulis group/other), dicek setelah anti-downgrade, sebelum cosign verify image. Staging tidak terpengaruh. Runbook key-custody §4d (cek `compare/<sha>...main`, gate, tag, tulis baris) + §3 dikoreksi. | Kasus 82-87 PASS (tanpa file, SHA lain, versi lain, file 0666 ditolak; disetujui diterima; staging tanpa file diterima). `gh api …/environments` (read-only): `production` hanya `branch_policy` tag `v*` (tanpa required reviewers); `staging` tanpa aturan → rekomendasi admin: staging hanya `main`. |
+| SEC-93 | Fixed | `concurrency.group: security-${{ github.event_name }}-${{ github.ref }}`. | actionlint. |
+| SEC-94 | Fixed | `resolve` output `build_branch` (`main` / `vX.Y.Z`) → `--require build-push.yml@<ref>`; skrip memfilter `head_branch` juga di jq + validasi nama ref; spesifikasi tanpa `@` = semua ref (bug lama: dulu dianggap nama branch). Job `build` tanpa `security-events`/`attestations: write` (langkah kondisional akan gagal terlihat bila variable diaktifkan tanpa menambah izin; dikomentari). | API nyata: `build-push.yml@main` untuk ef346a0 lolos; `build-push.yml@v1.0.0` gagal (tidak ada run). `head_branch` = nama tag untuk run push tag: PLAUSIBLE (belum ada tag di repo). |
+| SEC-85 (saran) | Ditambah | `check-encryption.sh`: metabase wajib `cap_drop` ALL dan `cap_add` ⊆ {CHOWN, SETUID, SETGID}. | Uji negatif `cap_add` + SYS_ADMIN → FAIL; konfigurasi asli OK. |
+
+Sisa: `efn-deploy` di host wajib dipasang ulang manual oleh Superadmin (sha256 dari PR) + file `approved-release` sebelum
+rilis production pertama; persetujuan ulang DS-0002; semua perilaku workflow baru menunggu run GitHub nyata.

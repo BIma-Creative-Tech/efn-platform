@@ -22,28 +22,32 @@ jobs:
     permissions:
       contents: read
       pull-requests: read   # dorny/paths-filter membaca daftar file PR via API
+    # SEC-89 (r9): filter path HANYA untuk pull_request. Pada push ke main SEMUA job berjalan, sehingga `CI gate` sebuah
+    # commit = hasil uji seluruh kode di commit itu (bukan delta push). Tanpa ini commit merah/dibatalkan bisa ikut
+    # dirilis lewat commit berikutnya yang hanya mengubah dokumen. Biaya menit: docs/runbooks/ci-github-free-plan.md §1.
     outputs:
-      api: ${{ steps.filter.outputs.api }}
-      web: ${{ steps.filter.outputs.web }}
-      odoo: ${{ steps.filter.outputs.odoo }}
-      python: ${{ steps.filter.outputs.python }}
-      pyservices: ${{ steps.filter.outputs.changes }}
-      infra: ${{ steps.filter.outputs.infra }}
+      api: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.api }}
+      web: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.web }}
+      odoo: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.odoo }}
+      python: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.python }}
+      pyservices: ${{ github.event_name == 'push' && '["ai-ocr-worker","etl","text2sql"]' || steps.filter.outputs.changes }}
+      infra: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.infra }}
     steps:
-      # Satu-satunya checkout dengan kredensial tersimpan (SEC-88): pada event push paths-filter menjalankan
-      # `git fetch` commit dasar (repo privat butuh token). Job ini tidak menjalankan npm/pip/kode repo.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      # Tanpa checkout: pada pull_request paths-filter membaca daftar file lewat API (pull-requests: read); pada push
+      # langkah ini dilewati. Tidak ada kredensial git tersimpan di job mana pun (SEC-88).
       - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad  # v3.0.4
+        if: github.event_name == 'pull_request'
         id: filter
+        # Perubahan ci.yml sendiri menjalankan SEMUA job di PR: workflow baru terbukti sebelum merge manual.
         with:
           filters: |
-            api:    ['services/api-gateway/**']
-            web:    ['services/superapp-web/**']
-            odoo:   ['services/odoo/**', 'scripts/check-odoo-deps.sh']
-            python: ['services/ai-ocr-worker/**', 'services/etl/**', 'services/text2sql/**']
-            ai-ocr-worker: ['services/ai-ocr-worker/**']
-            etl:           ['services/etl/**']
-            text2sql:      ['services/text2sql/**']
+            api:    ['services/api-gateway/**', '.github/workflows/ci.yml']
+            web:    ['services/superapp-web/**', '.github/workflows/ci.yml']
+            odoo:   ['services/odoo/**', 'scripts/check-odoo-deps.sh', '.github/workflows/ci.yml']
+            python: ['services/ai-ocr-worker/**', 'services/etl/**', 'services/text2sql/**', '.github/workflows/ci.yml']
+            ai-ocr-worker: ['services/ai-ocr-worker/**', '.github/workflows/ci.yml']
+            etl:           ['services/etl/**', '.github/workflows/ci.yml']
+            text2sql:      ['services/text2sql/**', '.github/workflows/ci.yml']
             infra:  ['infra/**', 'services/**/Dockerfile', '.github/workflows/**', 'scripts/**', 'Makefile']
 
   node:
@@ -521,9 +525,10 @@ jobs:
             -v "$PWD/secrets/efn_ca_crt.txt:/run/secrets/efn_ca_crt:ro" \
             haproxy:3.2.25-alpine@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be \
             haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
-      # SEC-36/SEC-42/SEC-50: wrapper deploy host diuji dengan cosign palsu di container sekali pakai (74 kasus: replay/
+      # SEC-36/SEC-42/SEC-50: wrapper deploy host diuji dengan cosign palsu di container sekali pakai (87 kasus: replay/
       # downgrade, IMAGE_* lewat env, registry asing, trust anchor PKI, tanda tangan, allowlist env, topologi dipin di
-      # deploy.conf, config manifest, karakter kontrol/multi-baris, kontrol keamanan production, lib deploy-validate)
+      # deploy.conf, config manifest, karakter kontrol/multi-baris, kontrol keamanan production, lib deploy-validate,
+      # image terikat SHA commit (SEC-91), persetujuan rilis production approved-release (SEC-92))
       - name: efn-deploy regression (cosign palsu)
         run: |
           docker run --rm -v "$PWD:/src:ro" \

@@ -18,19 +18,36 @@ hanya **tampilan** temuan di tab Security; temuan tetap terlihat di log job dan 
 **Apa yang benar-benar diblokir (SEC-80, r9).** Tanpa branch protection (paket gratis), check merah **tidak** mencegah
 merge atau push langsung ke `main`; pada push ke `main` hasil CI/Security keluar *setelah* commit masuk. Yang diblokir
 secara teknis adalah **rilis**:
-- `build-push.yml` job `Gate (CI & Security hijau untuk commit ini)` menunggu (maks. 60 menit, polling 30 dtk) lalu
+- `build-push.yml` job `Gate (CI & Security hijau untuk commit ini)` menunggu (maks. 75 menit, polling 30 dtk) lalu
   memverifikasi lewat Actions API bahwa untuk **commit yang sama** (event push, branch `main`) workflow `ci.yml`
   (job `CI gate`: test, lint, `npm audit`, `pip-audit`, infra) dan `security.yml` (job `Secret scan (gitleaks)`,
   `SAST (semgrep)`, `Trivy filesystem (vuln, secret, misconfig)`, `IaC (checkov: Dockerfile, GitHub Actions)`)
   selesai `success`. Gagal/absen/batas waktu habis -> tidak ada push, scan, maupun tanda tangan image.
 - `deploy.yml` job `Resolve target` mengulang verifikasi itu (+ `Build & Push Images` success) untuk SHA penuh commit
   yang dideploy, termasuk tag `v*` dan `workflow_dispatch`, lalu `cosign verify` mengikat digest ke SHA tersebut
-  (`--certificate-github-workflow-sha`).
+  (`--certificate-github-workflow-sha`). Run Build & Push dipilih per ref: `main` untuk `sha-*`, `vX.Y.Z` untuk rilis
+  (SEC-94). Host `efn-deploy` mengulang ikatan SHA (SEC-91) dan, untuk production, mewajibkan persetujuan
+  out-of-band Superadmin `/etc/efn/approved-release` (SEC-92, [key-custody.md §4d](key-custody.md)).
+- **CI penuh pada push ke `main` (SEC-89).** Filter path (`dorny/paths-filter`) hanya berlaku untuk pull_request. Pada
+  push ke `main` semua job CI berjalan, sehingga `CI gate` commit X = hasil uji seluruh kode di X, bukan hanya file
+  yang berubah di push itu. Tanpa ini, commit A yang test-nya merah/dibatalkan bisa ikut dirilis lewat commit B yang
+  hanya mengubah dokumen. Gitleaks pada push/jadwal memindai **seluruh riwayat** (bukan rentang push); semgrep, Trivy
+  fs, dan checkov memang selalu memindai seluruh tree.
 - Daftar job wajib ada di satu tempat: `scripts/verify-commit-gates.sh` (`PRESET_RELEASE`). Mengganti `name:` job di
   `ci.yml`/`security.yml` tanpa memperbarui preset = gate gagal-tertutup ("absent").
-- Tag `v*` hanya untuk commit yang sudah melewati CI + Security sebagai push ke `main` (biasanya HEAD `main`). Bila
-  run CI commit itu dibatalkan (`cancel-in-progress` karena push berikutnya), tag commit terbaru saja.
-- Biaya: job gate memakai menit runner selama menunggu CI (umumnya 3-15 menit per push ke `main`).
+- Tag `v*` hanya untuk commit di `main` yang **run CI penuh + Security-nya sendiri** `success` (cek:
+  `bash scripts/verify-commit-gates.sh --sha <SHA> --preset release --timeout-min 0 --absent-min 0`). Bila run CI
+  commit itu dibatalkan (`cancel-in-progress` karena push berikutnya), jangan men-tag commit itu: tunggu run CI penuh
+  commit berikutnya selesai hijau lalu tag commit tersebut (gate menolak commit tanpa run hijau miliknya sendiri).
+  Production juga butuh baris persetujuan di host (key-custody §4d).
+- **Biaya menit (perkiraan, belum diukur di GitHub):** satu push ke `main` = CI penuh ±60-110 menit runner (Odoo test
+  dan tour masing-masing hingga 45 menit, Infra ±3, Node 2×, Python + pytest 3×, promtail; berjalan paralel, wall
+  clock ≤ ±45 menit) + Security ±10 + Build & Push 8 image ±20-30 + job gate menunggu (= durasi CI, ±45). Total ±135-195
+  menit per merge ke `main`. Dengan kuota 2.000 menit/bulan: ±10-14 merge/bulan, di luar menit run PR. Alur satu PR
+  per gelombang (bagian 9) wajib dipertahankan; bila kuota habis, pilihan: runner self-hosted untuk job Odoo atau
+  menit tambahan (bagian 8). **Catatan:** job Odoo test/tour belum pernah selesai di GitHub (semua run sebelumnya
+  `skipped`/`cancelled`); push pertama setelah perubahan ini adalah run penuh pertama, dan gerbang rilis tetap merah
+  sampai job itu hijau (gagal-tertutup).
 - Pilihan yang ditolak: memicu `build-push` lewat `workflow_run` setelah CI + Security. Workflow_run berjalan di
   konteks default branch (identitas cosign untuk tag rilis `build-push.yml@refs/tags/vX.Y.Z` hilang) dan dua workflow
   sumber memicu dua run yang harus saling menunggu.
@@ -48,9 +65,11 @@ secara teknis adalah **rilis**:
 
 Catatan: artifact attestation GitHub tidak tersedia untuk repo privat milik akun pribadi ("Feature not available for
 user-owned private repositories"). Signature cosign keyless + attestation SBOM (SPDX tingkat paket, ±2 MB) tetap
-dibuat dan disimpan di GHCR. Urutan per image (SEC-83): build & push sekali -> Trivy atas `<repo>@<digest>` hasil push
--> SBOM -> `cosign sign` + `cosign attest`. Image yang gagal Trivy tetap ada di GHCR tetapi **tidak bertanda tangan**,
-sehingga ditolak `cosign verify` di deploy.
+dibuat dan disimpan di GHCR. Urutan per image (SEC-83/90): build & push **by digest tanpa tag** -> Trivy atas
+`<repo>@<digest>` -> SBOM -> `cosign sign` + `cosign attest` -> baru pasang tag (`main`, `sha-<short>` hanya dari main,
+`X.Y.Z`, `X.Y`, `latest`) atas digest itu (`docker buildx imagetools create`, digest diverifikasi sama). Image yang gagal
+Trivy hanya ada di GHCR sebagai digest tanpa tag dan **tanpa tanda tangan**, sehingga ditolak `cosign verify` di deploy
+dan tidak terambil oleh `docker pull <tag>`. Digest yatim itu boleh dihapus berkala (bagian 3, catatan GHCR).
 
 **Apa yang publik di Rekor (SEC-84, diverifikasi 9 Okt 2026).** Entri run `62b1bf1` image metabase
 (`sha256:4d64a938…`): sign = log index 3155540831 (`hashedrekord`), attest SBOM = 3155542984 (`dsse`). API publik

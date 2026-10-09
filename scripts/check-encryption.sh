@@ -129,6 +129,10 @@ check_compose() {
     jq -e '(.services.metabase.image // "") | test("^(docker\\.io/)?(library/)?metabase/metabase([:@]|$)") | not' \
       <<< "$json" > /dev/null \
       || err "[$label] metabase: image resmi metabase/metabase tanpa efn-metabase-entrypoint (pakai image EFN)"
+    # Pengecualian Trivy DS-0002 (.trivyignore.yaml) bergantung pada ini (SEC-85, re-review G16c)
+    jq -e '(.services.metabase.cap_drop // []) as $d | (.services.metabase.cap_add // []) as $a
+           | ($d | index("ALL")) != null and (($a - ["CHOWN", "SETUID", "SETGID"]) | length) == 0' <<< "$json" > /dev/null \
+      || err "[$label] metabase: wajib cap_drop [ALL] dan cap_add hanya CHOWN/SETUID/SETGID (dasar pengecualian DS-0002)"
   fi
 
   echo "check-encryption: compose ${label} diperiksa"

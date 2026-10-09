@@ -28,7 +28,7 @@ Secret operasional lain (password service, token WhatsApp, kunci API payment, to
 
 ## 3. GitHub
 
-1. Settings → Environments → `production`: **Required reviewers = Superadmin** (semua orang Superadmin; centang "Prevent self-review"). **Deployment branches and tags = Selected**: hanya tag `v*` (SEC-30). `staging`: hanya branch `main`.
+1. Settings → Environments → `production`: **Required reviewers = Superadmin** (TIDAK tersedia di repo privat paket gratis, dicek 9 Okt 2026 → pengganti: persetujuan out-of-band di host §4d) (semua orang Superadmin; centang "Prevent self-review"). **Deployment branches and tags = Selected**: hanya tag `v*` (SEC-30). `staging`: hanya branch `main`.
 2. Environment secrets `production`/`staging` hanya bisa diubah admin repo → admin repo = Superadmin saja; developer lain role `Write`/`Maintain` (tanpa `Admin`).
 3. Secret PKI per lingkungan: `EFN_PKI_INTERMEDIATE_KEY`, `EFN_PKI_INTERMEDIATE_CRT`, `EFN_PKI_ROOT_CRT` (+ `EFN_PKI_EXTRA_TRUST` hanya selama rotasi CA). Sertifikat leaf **tidak lagi** disimpan di GitHub (diterbitkan di host).
 4. Variables (non-rahasia, wajib): `PAYMENT_PROVIDER` (eksplisit), `EFN_PUBLIC_BIND`, `TRAEFIK_DOMAIN`, `ACME_EMAIL`; opsional `EFN_WG_*`, `ACME_DNS_PROVIDER`, `ACME_DNS_TOKEN_ENV`.
@@ -123,14 +123,14 @@ sidik jari root CA + CA transisi. `efn-deploy` di host:
 
 | Cek | Penolakan bila |
 |---|---|
-| `IMAGE_*` | dikirim lewat env (tidak lagi di allowlist); di manifest bukan `${EFN_IMAGE_PREFIX}<svc>@sha256:<64 hex>`; `cosign verify` **di host** gagal untuk identitas `build-push.yml@<signer_ref>` |
+| `IMAGE_*` | dikirim lewat env (tidak lagi di allowlist); di manifest bukan `${EFN_IMAGE_PREFIX}<svc>@sha256:<64 hex>`; `cosign verify` **di host** gagal untuk identitas `build-push.yml@<signer_ref>` + SHA commit `git_sha` manifest + repo `EFN_GITHUB_REPO` (SEC-91) |
 | Trust anchor | `EFN_PKI_ROOT_CRT` ≠ tepat 1 sertifikat atau sidik jari ≠ `EFN_PKI_ROOT_SHA256`; root di manifest ≠ pin; intermediate tidak diterbitkan root yang dipin / bukan CA; setiap sertifikat `EFN_PKI_EXTRA_TRUST` tidak ada di `EFN_PKI_EXTRA_TRUST_SHA256` **dan** manifest |
 | Lingkungan | manifest `app_env` ≠ `EFN_APP_ENV`; `APP_ENV` dikirim lewat stdin (G13: `APP_ENV` = `EFN_APP_ENV`); production bukan `X.Y.Z` dari `refs/tags/vX.Y.Z` |
 | Konfigurasi (G13, SEC-50) | lihat §4c |
 | Anti-replay/downgrade | `seq` < `seq` terakhir di `/var/lib/efn/last-release` (root 0600); `seq` sama tetapi isi berbeda; production: versi semver turun. Rilis identik (sha256 sama) boleh di-deploy ulang |
 
 Tidak ada yang ditulis ke `/opt/efn` sebelum semua cek lolos. Uji regresi: `scripts/host/test-efn-deploy.sh`
-(cosign palsu, 74 kasus sejak gelombang 13; CI job `infra`).
+(cosign palsu, 87 kasus sejak G16c; CI job `infra`).
 
 **Rollback ke rilis lama (sengaja):** jalankan workflow Deploy dengan tag lama → seq baru, versi lebih rendah →
 ditolak. Superadmin di host mengizinkan **sekali** untuk arsip tertentu:
@@ -183,6 +183,31 @@ tetap ada (TRAEFIK_DOMAIN dipakai smoke test workflow) tetapi tidak lagi dikirim
 **Secret baru G13** di GitHub Environment: `EFN_AUDIT_SINK_KEY` (≥ 32 byte acak, [SA]), `METABASE_ADMIN_PASSWORD`,
 `MIGRATION_API_KEY` (hex, berbeda dari `ODOO_BFF_API_KEY`). PKI: service baru `etl`, `metabase-provision` →
 intermediate staging/prod diterbitkan ulang ([internal-pki.md](internal-pki.md#service-baru)).
+
+### 4d. Persetujuan rilis production out-of-band (SEC-92, G16c)
+
+Konteks: di repo privat paket gratis **Required reviewers Environment tidak tersedia** (dicek 9 Okt 2026 lewat
+`gh api repos/bctech-adm/efn-platform/environments`: `production` hanya punya `branch_policy` = tag `v*`; `staging`
+tanpa aturan apa pun). Tag `v*` bisa dibuat dari commit di luar `main` yang membawa `build-push.yml`/`deploy.yml` tanpa
+gerbang; tanda tangannya tetap sah. Karena itu host production **tidak** menerima rilis hanya karena tanda tangan CI:
+`efn-deploy` mewajibkan baris `<X.Y.Z> <git_sha>` di `/etc/efn/approved-release` (root, tidak bisa ditulis
+group/other). Staging tidak memakai file ini.
+
+Prosedur Superadmin per rilis (sebelum push tag, atau sebelum menyetujui deploy):
+```bash
+R=bctech-adm/efn-platform; V=1.2.3; SHA=<40 hex commit yang akan di-tag>
+gh api "repos/$R/compare/$SHA...main" --jq .status          # harus "ahead" atau "identical" (commit ada di main)
+bash scripts/verify-commit-gates.sh --sha "$SHA" --preset release --timeout-min 0 --absent-min 0   # CI + Security hijau
+git tag -s "v$V" "$SHA" && git push origin "v$V"              # atau buat tag dari UI pada SHA itu
+# di host production (root):
+echo "$V $SHA" >> /etc/efn/approved-release && chmod 0644 /etc/efn/approved-release && chown root:root /etc/efn/approved-release
+```
+Baris tidak dihapus setelah dipakai (deploy ulang/rollback rilis yang sama tetap bisa; rollback ke versi lebih rendah
+juga butuh `allow-downgrade` §4b). Hapus baris rilis yang ditarik. Penolakan tercatat di log `efn-deploy`
+("persetujuan rilis production tidak ada/tidak cocok").
+
+Rekomendasi admin repo (gratis, belum diterapkan, butuh hak admin): Environment `staging` → Deployment branches =
+`main` saja (saat ini kosong: `workflow_dispatch` dari branch mana pun bisa memakai secret staging).
 
 ### Mekanisme uid: kenapa file secret 0444 di dalam direktori 0750
 
