@@ -1,5 +1,5 @@
 # Runtime OCR worker (Python 3.12). Versi di-pin; diaudit pip-audit di CI.
-pika==1.3.2
+pika==1.4.4
 psycopg[binary]==3.2.3
 minio==7.2.12
 requests==2.34.2
