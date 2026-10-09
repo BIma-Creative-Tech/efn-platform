@@ -15,7 +15,11 @@ permissions:
 
 jobs:
   zap:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    # G16: tanpa staging (variable STAGING_DOMAIN kosong) tidak ada target -> job dilewati, bukan gagal/menghabiskan menit.
+    # Catatan kuota: zaproxy/action-baseline mengunggah laporan sebagai artifact (zap_scan) -> perhatikan kuota storage.
+    if: >-
+      vars.STAGING_DOMAIN != '' &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     # STAGING_DOMAIN adalah repository variable (bukan environment-scoped) agar bisa dipakai di matrix
     strategy:

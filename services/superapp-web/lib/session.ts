@@ -107,7 +107,7 @@ export function getDsarReceiptFromRequest(req: NextRequest): string | null {
   return isPlausibleReceipt(v) ? v : null;
 }
 
-/** Untuk Server Components (Next 15: cookies() async). */
+/** Untuk Server Components (Next 15+: cookies() async). */
 export async function getSessionToken(): Promise<string | null> {
   const store = await cookies();
   return store.get(SESSION_COOKIE)?.value || null;

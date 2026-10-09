@@ -1167,3 +1167,92 @@ Masukan: laporan efn-odoo-engineer G15, bagian "Untuk devsecops". Tidak ada comm
   - path ter-encode (`/pos%2Dself/`). Traefik v3 menolak atau menormalkan sebagian; kasus yang lolos hanya mendapat
     limit `ratelimit-odoo`, bukan bypass allowlist.
 - Delete API Loki untuk baris lama (G15.4) masih menunggu operator.
+
+---
+
+# Gelombang 16 — CI GitHub (repo privat, paket gratis) — 9 Okt 2026
+
+Input: run pertama di `bctech-adm/efn-platform` (CI 37857432863, Security 37857433065, Build 37857432866, CodeQL
+37857432889). Penyebab gagal: kuota artifact 500 MB, code scanning tidak tersedia, temuan scanner, gate Trivy image,
+shellcheck, Dependabot 33 PR. Runbook baru: `docs/runbooks/ci-github-free-plan.md` (+ indeks README).
+
+## G16.1 Perubahan
+
+| Area | File | Isi |
+|---|---|---|
+| Artifact | `ci.yml`, `e2e-nightly.yml` | upload log hanya `if: failure()`, `continue-on-error: true`, retensi 2-3 hari, `if-no-files-found: ignore` -> kuota habis tidak menggagalkan test |
+| Artifact | `build-push.yml` | SBOM Syft tidak lagi artifact (`upload-artifact: false`); di-`cosign attest --type spdxjson` (keyless) ke registry |
+| Artifact | `security.yml` | gitleaks `GITLEAKS_ENABLE_UPLOAD_ARTIFACT=false` (temuan tetap redacted di log + summary) |
+| Code scanning | `codeql.yml` | analisis hanya bila repo publik / `vars.CODE_SCANNING_ENABLED=true`; selain itu job notice. SAST tetap semgrep |
+| Code scanning | `security.yml`, `build-push.yml` | semgrep `--json-output` + `--sarif-output`, ringkasan `file:baris/rule` (tanpa potongan kode) ke summary; Trivy fs/image: tabel gate -> log + summary; SARIF + upload hanya bila code scanning ada. Gate (exit 1) tidak berubah |
+| Checkov | `security.yml` | SHA `bridgecrewio/checkov-action@2fb0e6d…` tidak bisa di-resolve lagi -> image `bridgecrew/checkov:3.3.21@sha256:9aefe565…` via `docker run` (tanpa action pihak ketiga) |
+| Menit | `security.yml`, `codeql.yml`, `build-push.yml` | `concurrency` cancel-in-progress; izin per job (`security-events` hanya di job SARIF) |
+| Menit | `e2e-nightly.yml`, `dast.yml` | jadwal E2E hanya bila `vars.E2E_NIGHTLY_ENABLED=true` (dispatch manual tetap); DAST hanya bila `vars.STAGING_DOMAIN` ada |
+| Dependabot | `dependabot.yml` | grup minor+patch per ekosistem/aplikasi, grup security update, `directories` (docker 8 dir, pip 4 dir), limit 1-2, cooldown 7/14 hari, jadwal Senin WIB; tambah `/infra/metabase` |
+| Shellcheck | `tests/load/run.sh`, `scripts/smoke/run-e2e-smoke.sh`, `infra/acme/acme-{dns,publish}.sh` | SC2317/SC2329 (trap), SC2015 -> `if`, SC2120 `bal()` tanpa argumen. Bersih di shellcheck 0.9.0 (versi runner) dan 0.11.0 |
+| Base image | Dockerfile | node 22.12 (Des 2024) -> `22.23-alpine@0a7108bf…`; python `3.12-slim@05cda977…`; postgres 16.6 -> `16.15-bookworm@0ea6700a…` (+ service ci.yml, smoke, komentar compose); golang 1.27.1 -> `1.27.2-alpine@85dc1069…` (builder minio); metabase 0.52.4 -> `v0.58.35@a84b5dd5…` (LTS) |
+| Hardening | `services/{api-gateway,superapp-web}/Dockerfile` | stage dev/build `USER node` (semgrep missing-user); runtime: hapus npm/npx/corepack/yarn (10 CVE HIGH di npm bawaan, tidak dipakai runtime) |
+| Hardening | `infra/backup/postgres/Dockerfile` | hapus `gosu` (Go lama, 22 CVE; image selalu USER postgres) + kunci snakeoil ssl-cert (temuan secret Trivy) |
+| Metabase | `infra/metabase/Dockerfile`, README | v0.58 membawa driver ClickHouse bawaan -> ADD jar 1.52.0 dihapus |
+| Suppression | `.trivyignore.yaml` (baru), `nosemgrep`, `checkov:skip` | semua dengan alasan + `expired_at` (G16.3) |
+
+## G16.2 Validasi lokal (container)
+
+| Alat | Hasil |
+|---|---|
+| actionlint 1.7.7 | 0 temuan (termasuk info SC2153 lama di deploy.yml, diperbaiki) |
+| yamllint 1.37.1 (`.github`, `infra`, `.trivyignore.yaml`) | 0 error (hanya warning line-length lama) |
+| shellcheck 0.9.0 + 0.11.0, perintah persis CI | bersih |
+| hadolint 2.14.0 semua Dockerfile | lulus (2 info DL3059 lama) |
+| semgrep 1.179.0 (konfigurasi CI) | 3 temuan -> 0 (2 Dockerfile diperbaiki, 1 FP Odoo di-`nosemgrep`); flag `--json-output/--sarif-output` diverifikasi |
+| checkov 3.3.21 | 4 FAILED -> 0 (3 skip beralasan) |
+| Trivy 0.69.3 fs (vuln+secret+misconfig) | 0 dengan `.trivyignore.yaml` (lockfile/requirements di working tree saat ini, yang sedang diubah agent lain) |
+| Trivy image: base node setelah strip npm, python slim baru, alpine 3.24, postgres hasil build, metabase hasil build, `odoo:19.0` base | semua 0 HIGH/CRITICAL fixed (postgres & metabase dengan pengecualian G16.3) |
+
+## G16.3 Pengecualian (alasan + tanggal tinjau) — perlu persetujuan lead
+
+- `.trivyignore.yaml`:
+  - WAL-G v3.0.9 (`usr/local/bin/wal-g`): 10 CVE (stdlib Go 1.25.11, grpc 1.83.0) s.d. **2026-11-09**. Rilis terbaru
+    upstream; klien CLI tanpa listener. Alternatif tanpa ignore: bangun WAL-G dari source dengan Go 1.27.2 (multi-stage,
+    cgo libsodium), belum dikerjakan karena jalur backup R-T08 butuh uji restore penuh.
+  - CVE-2021-38599 wal-g: FP (pseudo-version `v0.0.0-…+dirty`), s.d. 2027-01-07.
+  - Metabase v0.58.35 `app/metabase.jar`: 6 CVE dependency Java upstream (lz4-java, httpcore5, httpcore5-h2,
+    mssql-jdbc, zookeeper x2) s.d. **2026-11-09**.
+  - Misconfig DS-0002 `infra/metabase/Dockerfile` (root di Dockerfile; `run_metabase.sh` turun ke `su metabase`,
+    diverifikasi di image) s.d. 2027-01-07.
+- `checkov:skip`: CKV_DOCKER_3 metabase (alasan sama); CKV_GHA_7 di `deploy.yml` & `e2e-nightly.yml` (input dispatch
+  tidak memengaruhi build).
+- `nosemgrep`: `services/odoo/addons/efn_pos_kds/models/efn_kds_station.py:262`, FP logger-credential-disclosure (yang
+  di-log id stasiun/alasan/uid, bukan token). Satu-satunya sentuhan file aplikasi (komentar saja).
+
+## G16.4 Temuan untuk agent lain (tidak diubah)
+
+- `npm audit` api-gateway & superapp-web, `pip-audit` (job Python): dependency aplikasi, sedang dikerjakan agent lain.
+- Gate Trivy image tetap gagal bila dependency aplikasi di image rentan: `node_modules` (api-gateway, superapp-web), pip
+  `services/{etl,ai-ocr-worker}/requirements.txt`, `services/odoo/requirements.txt` (base `odoo:19.0` sendiri 0 temuan).
+- `infra/metabase/provision.py` (efn-data-ai-engineer): verifikasi ulang terhadap Metabase 0.58 + driver ClickHouse bawaan
+  (kunci `details` koneksi: `ssl`, `sslmode=strict`, `sslrootcert`).
+- Stack dev yang sedang jalan belum di-rebuild dengan base image/Dockerfile baru.
+
+## G16.5 Belum terverifikasi / sisa
+
+- Belum ada run GitHub dengan perubahan ini (tidak di-push). Perlu dilihat di run pertama: ekspresi
+  `github.event.repository.visibility`, `skip-setup-trivy` pada step SARIF (hanya jalan bila code scanning aktif), input
+  `upload-artifact: false` sbom-action v0.24.3, `cosign attest`.
+- Image minio (SILO + mc dari source, Go 1.27.2) tidak dibangun/di-scan lokal; temuan modul Go upstream SILO/mc bisa
+  tetap muncul -> lihat summary run Build.
+- Image odoo/etl/ai-ocr-worker/api-gateway/superapp-web lengkap tidak dibangun lokal (dependency sedang diubah agent lain).
+- Dev stage `USER node`: `start:dev`/`next dev` dengan bind mount read-only belum diuji ulang di stack dev.
+- `dependabot.yml` (`cooldown`, `directories`, `applies-to`) belum divalidasi oleh GitHub; error konfigurasi tampil di
+  Insights > Dependency graph > Dependabot.
+- DAST: `zaproxy/action-baseline` tetap mengunggah artifact `zap_scan` (kuota) bila staging diaktifkan.
+
+## G16.6 Butuh keputusan / paket berbayar
+
+1. Code scanning repo privat = GitHub Advanced Security (berbayar) atau repo publik, lalu set
+   `CODE_SCANNING_ENABLED=true`. Tanpa itu CodeQL tidak berjalan (SAST hanya semgrep).
+2. Kuota menit 2.000/bulan: E2E nightly penuh butuh runner self-hosted (`E2E_RUNNER`) atau spending limit.
+3. Admin repo (sekali, setelah merge): hapus artifact lama dan tutup 33 PR Dependabot lama (perintah di runbook §3, §6);
+   pastikan Dependency graph aktif (dependency-review).
+4. Persetujuan risk acceptance G16.3 (WAL-G, Metabase) atau perintah membangun WAL-G dari source.
+5. Upgrade Metabase 0.52 -> 0.58 (migrasi DB aplikasi tidak bisa dibalik): setujui sebelum dipakai di lingkungan berdata.

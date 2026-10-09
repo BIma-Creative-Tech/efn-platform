@@ -1,60 +1,107 @@
 version: 2
 # SEC-47: semua base image Dockerfile dan image compose dipin tag@digest; ekosistem docker/docker-compose di bawah
 # memperbarui digest (dan tag) lewat PR. Image di workflow CI/smoke (docker run) diperbarui manual saat review.
+#
+# G16 (9 Okt 2026): repo privat paket gratis = 2.000 menit Actions/bulan. Run pertama Dependabot membuka 33 PR
+# sekaligus dan menghabiskan antrean. Aturan sekarang:
+# - Satu PR per ekosistem/aplikasi per minggu: minor+patch dikelompokkan (`groups`), mayor terpisah (perlu review).
+# - Security update juga dikelompokkan (`applies-to: security-updates`).
+# - `open-pull-requests-limit` kecil; PR baru menunggu PR lama di-merge/ditutup.
+# - `cooldown`: versi baru baru diusulkan setelah 7 hari (mitigasi rilis berbahaya/supply chain, mis. insiden
+#   trivy-action Maret 2026); mayor 14 hari.
+# - Jadwal mingguan (Senin pagi WIB) agar CI PR Dependabot tidak bertumpuk dengan kerja harian.
+# - CI di PR Dependabot: concurrency cancel-in-progress (ci.yml, security.yml, codeql.yml) membatalkan run lama
+#   saat Dependabot me-rebase PR.
+# Runbook: docs/runbooks/ci-github-free-plan.md
 updates:
   - package-ecosystem: github-actions
     directory: /
-    schedule: { interval: weekly, day: monday }
+    schedule: { interval: weekly, day: monday, time: "02:00", timezone: Asia/Jakarta }
+    open-pull-requests-limit: 1
+    cooldown: { default-days: 7, semver-major-days: 14 }
     groups:
-      actions: { patterns: ["*"] }
+      actions:
+        applies-to: version-updates
+        patterns: ["*"]
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
 
+  # Semua Dockerfile (base image) dalam satu entri multi-direktori -> satu PR berkelompok.
   - package-ecosystem: docker
-    directory: /services/odoo
-    schedule: { interval: weekly }
-  - package-ecosystem: docker
-    directory: /services/api-gateway
-    schedule: { interval: weekly }
-  - package-ecosystem: docker
-    directory: /services/superapp-web
-    schedule: { interval: weekly }
-  - package-ecosystem: docker
-    directory: /services/ai-ocr-worker
-    schedule: { interval: weekly }
-  - package-ecosystem: docker
-    directory: /services/etl
-    schedule: { interval: weekly }
-  - package-ecosystem: docker
-    directory: /infra/backup/postgres
-    schedule: { interval: weekly }
-  - package-ecosystem: docker
-    directory: /infra/minio
-    schedule: { interval: weekly }
+    directories:
+      - /services/odoo
+      - /services/api-gateway
+      - /services/superapp-web
+      - /services/ai-ocr-worker
+      - /services/etl
+      - /infra/backup/postgres
+      - /infra/minio
+      - /infra/metabase
+    schedule: { interval: weekly, day: monday, time: "02:30", timezone: Asia/Jakarta }
+    open-pull-requests-limit: 2
+    cooldown: { default-days: 7, semver-major-days: 14 }
+    groups:
+      base-images:
+        applies-to: version-updates
+        update-types: [minor, patch]
+        patterns: ["*"]
+      base-images-security:
+        applies-to: security-updates
+        patterns: ["*"]
   - package-ecosystem: docker-compose
     directory: /infra/compose
-    schedule: { interval: weekly }
+    schedule: { interval: weekly, day: monday, time: "02:30", timezone: Asia/Jakarta }
+    open-pull-requests-limit: 1
+    cooldown: { default-days: 7, semver-major-days: 14 }
+    groups:
+      compose-images:
+        applies-to: version-updates
+        update-types: [minor, patch]
+        patterns: ["*"]
 
   - package-ecosystem: npm
     directory: /services/api-gateway
-    schedule: { interval: weekly }
+    schedule: { interval: weekly, day: monday, time: "03:00", timezone: Asia/Jakarta }
+    open-pull-requests-limit: 2
+    cooldown: { default-days: 7, semver-major-days: 14 }
     groups:
-      nestjs: { patterns: ["@nestjs/*"] }
-      dev: { dependency-type: development }
+      api-gateway-minor-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+        patterns: ["*"]
+      api-gateway-security:
+        applies-to: security-updates
+        patterns: ["*"]
   - package-ecosystem: npm
     directory: /services/superapp-web
-    schedule: { interval: weekly }
+    schedule: { interval: weekly, day: monday, time: "03:00", timezone: Asia/Jakarta }
+    open-pull-requests-limit: 2
+    cooldown: { default-days: 7, semver-major-days: 14 }
     groups:
-      next: { patterns: ["next", "react", "react-dom", "eslint-config-next"] }
-      dev: { dependency-type: development }
+      superapp-web-minor-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+        patterns: ["*"]
+      superapp-web-security:
+        applies-to: security-updates
+        patterns: ["*"]
 
+  # Semua requirements Python dalam satu entri multi-direktori -> satu PR berkelompok.
   - package-ecosystem: pip
-    directory: /services/ai-ocr-worker
-    schedule: { interval: weekly }
-  - package-ecosystem: pip
-    directory: /services/etl
-    schedule: { interval: weekly }
-  - package-ecosystem: pip
-    directory: /services/text2sql
-    schedule: { interval: weekly }
-  - package-ecosystem: pip
-    directory: /services/odoo
-    schedule: { interval: weekly }
+    directories:
+      - /services/ai-ocr-worker
+      - /services/etl
+      - /services/text2sql
+      - /services/odoo
+    schedule: { interval: weekly, day: monday, time: "03:30", timezone: Asia/Jakarta }
+    open-pull-requests-limit: 2
+    cooldown: { default-days: 7, semver-major-days: 14 }
+    groups:
+      python-minor-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+        patterns: ["*"]
+      python-security:
+        applies-to: security-updates
+        patterns: ["*"]

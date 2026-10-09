@@ -2,7 +2,7 @@
 # syntax=docker/dockerfile:1.7
 
 # SEC-47: base image dipin tag@digest (build reprodusibel); Dependabot `docker` memperbarui digest per tag.
-FROM node:22.12-alpine@sha256:51eff88af6dff26f59316b6e356188ffa2c422bd3c3b76f2556a2e7e89d080bd AS base
+FROM node:22.23-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS base
 WORKDIR /app
 ENV NPM_CONFIG_UPDATE_NOTIFIER=false NPM_CONFIG_FUND=false
 COPY package*.json ./
@@ -12,19 +12,27 @@ RUN --mount=type=cache,target=/root/.npm \
     if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi
 
 FROM base AS dev
-RUN --mount=type=cache,target=/root/.npm \
+# G16 (semgrep dockerfile.security.missing-user): stage dev/build berjalan sebagai user `node` (uid 1000 bawaan image),
+# bukan root. /app milik node agar `start:dev` dan build dapat menulis dist/; runtime tetap user `app`.
+RUN chown node:node /app
+USER node
+RUN --mount=type=cache,target=/home/node/.npm,uid=1000,gid=1000 \
     if [ -f package-lock.json ]; then npm ci; else npm install; fi
-COPY . .
+COPY --chown=node:node . .
 EXPOSE 3000
 CMD ["npm", "run", "start:dev"]
 
 FROM dev AS build
 RUN npm run build && npm prune --omit=dev
 
-FROM node:22.12-alpine@sha256:51eff88af6dff26f59316b6e356188ffa2c422bd3c3b76f2556a2e7e89d080bd AS runtime
+FROM node:22.23-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS runtime
 WORKDIR /app
 ENV NODE_ENV=production PORT=3000
-RUN addgroup -S app && adduser -S app -G app
+# G16 (Trivy image gate): runtime hanya butuh `node`. npm/npx/corepack/yarn bawaan image membawa dependensi rentan
+# (brace-expansion, picomatch, pacote, ip-address, sigstore - CVE HIGH 2026) dan tidak dipakai saat runtime -> dihapus.
+RUN addgroup -S app && adduser -S app -G app \
+    && rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+              /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-v*
 COPY --from=build --chown=app:app /app/dist ./dist
 COPY --from=deps  --chown=app:app /app/node_modules ./node_modules
 COPY --chown=app:app package.json healthcheck.js ./

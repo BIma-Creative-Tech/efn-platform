@@ -5,9 +5,9 @@
 # Kompatibilitas (klaim SILO, diuji gelombang 9 di stack dev): env MINIO_*, format .minio.sys, route /minio/*,
 # metrik minio_*. SILO tidak memasang alias biner `minio` -> image ini membuat symlink agar compose/runbook lama jalan.
 # Tag di-pin + commit SHA diverifikasi (tag git bisa dipindah; commit tidak).
-# Versi Go mengikuti go.mod kedua repo (go 1.27.1); digest base = yang dipakai Dockerfile.goreleaser SILO.
+# Versi Go: go.mod kedua repo menuntut go 1.27.1; builder dinaikkan ke 1.27.2 (patch stdlib, CVE Go; G16 CI 9 Okt 2026).
 # SEC-47: base image dipin tag@digest (build reprodusibel); Dependabot `docker` memperbarui digest per tag.
-FROM golang:1.27.1-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS build
+FROM golang:1.27.2-alpine@sha256:85dc1069ac644ea3c527b177303a406eb3358192816cd7f9e5848eb658851673 AS build
 ARG SILO_TAG=RELEASE.2026-09-16T00-00-00Z
 ARG SILO_COMMIT=2a4d51406b7ed87af5fe6fe0f801f3290f96eb3c
 ARG MC_TAG=RELEASE.2026-09-16T00-00-00Z

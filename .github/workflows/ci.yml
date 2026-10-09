@@ -194,7 +194,7 @@ jobs:
     timeout-minutes: 45
     services:
       postgres:
-        image: postgres:16.6-bookworm@sha256:557fea37a744d5f4c8faab304b0a90858b53ab119735a88c131fd19dab802f36
+        image: postgres:16.15-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4
         env:
           POSTGRES_USER: odoo
           POSTGRES_PASSWORD: odoo-ci-only   # kredensial DB sementara CI, bukan secret
@@ -278,12 +278,16 @@ jobs:
             echo "::error::Odoo test/instalasi melaporkan ERROR"; exit 1
           fi
           grep -E 'tests? (when loading|in [0-9.]+s)|Ran [0-9]+ test' odoo-test.log || true
+      # G16: log diagnostik hanya saat gagal, retensi 2 hari, kegagalan upload (mis. kuota storage 500 MB paket
+      # gratis habis) TIDAK menggagalkan job -- hasil test ditentukan langkah "Periksa log" di atas.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
-        if: always()
+        if: failure()
+        continue-on-error: true
         with:
           name: odoo-test-log
           path: odoo-test.log
-          retention-days: 7
+          retention-days: 2
+          if-no-files-found: ignore
 
   odoo-tour:
     # Gelombang 12: test UI POS (OWL) nyata — HttpCase + tour di Chrome headless (tag efn_tour): OTP gate
@@ -300,7 +304,7 @@ jobs:
     timeout-minutes: 45
     services:
       postgres:
-        image: postgres:16.6-bookworm@sha256:557fea37a744d5f4c8faab304b0a90858b53ab119735a88c131fd19dab802f36
+        image: postgres:16.15-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4
         env:
           POSTGRES_USER: odoo
           POSTGRES_PASSWORD: odoo-ci-only   # kredensial DB sementara CI, bukan secret
@@ -347,12 +351,16 @@ jobs:
             echo "::error::hanya ${ran:-0} test tour berjalan (minimal $EFN_TOUR_MIN_TESTS)"; exit 1
           fi
           echo "tour: $ran test lolos"
+      # G16: log diagnostik hanya saat gagal, retensi 2 hari, kegagalan upload (mis. kuota storage 500 MB paket
+      # gratis habis) TIDAK menggagalkan job -- hasil test ditentukan langkah "Periksa log" di atas.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
-        if: always()
+        if: failure()
+        continue-on-error: true
         with:
           name: odoo-tour-log
           path: odoo-tour.log
-          retention-days: 7
+          retention-days: 2
+          if-no-files-found: ignore
 
   # G15 (SEC-72/73/78): uji regresi redaksi PII/rahasia Promtail. Pipeline produksi (promtail.yml + promtail-journal.yml,
   # disalin yq ke kerangka uji) dijalankan `promtail -dry-run` atas fixture fiktif lalu dibandingkan dengan expected.txt;

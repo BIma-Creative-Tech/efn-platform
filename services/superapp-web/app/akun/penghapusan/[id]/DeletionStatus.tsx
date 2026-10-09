@@ -41,23 +41,34 @@ export function DeletionStatus({
   const [cancelled, setCancelled] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
 
-  const fetchStatus = useCallback(async () => {
-    setLoad({ kind: 'loading' });
+  /** Ambil status terbaru; tidak menyentuh state (dipakai effect & handler). */
+  const loadStatus = useCallback(async (): Promise<Load> => {
     try {
       const res = await fetch(`/api/dsar/requests/${encodeURIComponent(id)}`, { cache: 'no-store' });
-      if (res.ok) {
-        setLoad({ kind: 'ok', view: (await res.json()) as DeletionStatusView });
-      } else {
-        setLoad({ kind: 'error', text: await errorMessage(res, 'Status belum dapat dimuat. Silakan coba lagi.') });
-      }
+      if (res.ok) return { kind: 'ok', view: (await res.json()) as DeletionStatusView };
+      return { kind: 'error', text: await errorMessage(res, 'Status belum dapat dimuat. Silakan coba lagi.') };
     } catch {
-      setLoad({ kind: 'error', text: 'Koneksi bermasalah. Periksa internet Anda lalu coba lagi.' });
+      return { kind: 'error', text: 'Koneksi bermasalah. Periksa internet Anda lalu coba lagi.' };
     }
   }, [id]);
 
+  /** Muat ulang dari handler (klik/setelah batal): tampilkan "memuat" lalu hasil. */
+  const fetchStatus = useCallback(async () => {
+    setLoad({ kind: 'loading' });
+    setLoad(await loadStatus());
+  }, [loadStatus]);
+
+  // Muat awal: state awal sudah `loading`, jadi setState hanya di callback async (react-hooks/set-state-in-effect).
+  // `active` mencegah update setelah unmount / pergantian `id`.
   useEffect(() => {
-    void fetchStatus();
-  }, [fetchStatus]);
+    let active = true;
+    void loadStatus().then((next) => {
+      if (active) setLoad(next);
+    });
+    return () => {
+      active = false;
+    };
+  }, [loadStatus]);
 
   async function cancelDeletion() {
     setBusy(true);

@@ -1,5 +1,13 @@
 # Security (shift-left): secret scanning, SAST, dependency & IaC scanning. Memblokir merge pada temuan HIGH/CRITICAL.
 # Semua `uses:` dipin ke commit SHA (SEC-10).
+#
+# G16 (CI GitHub, 9 Okt 2026) — repo privat di paket gratis:
+# - Code scanning (upload SARIF ke tab Security) TIDAK tersedia tanpa GitHub Advanced Security. Upload SARIF hanya
+#   dijalankan bila repo publik ATAU repository variable CODE_SCANNING_ENABLED=true. Tanpa itu hasil tiap scanner
+#   ditulis ke log + ringkasan job ($GITHUB_STEP_SUMMARY). GATE TIDAK DILEMAHKAN: setiap scanner tetap exit != 0
+#   pada temuan di atas ambang, terlepas dari ada/tidaknya code scanning.
+# - Tidak ada artefak (kuota storage 500 MB): gitleaks-action tidak mengunggah SARIF sebagai artifact.
+# Runbook: docs/runbooks/ci-github-free-plan.md
 name: Security
 
 on:
@@ -9,16 +17,28 @@ on:
     branches: [main]
   schedule:
     - cron: "17 2 * * 1"   # Senin 02:17 UTC: scan ulang dependensi walau tidak ada perubahan
+  workflow_dispatch:
 
 permissions:
   contents: read
-  security-events: write
-  pull-requests: read
+
+# Hemat menit Actions (kuota 2.000 menit/bulan repo privat): run lama untuk ref yang sama dibatalkan.
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 'true' hanya bila code scanning benar-benar tersedia (repo publik atau GHAS diaktifkan + variable di-set).
+  # Event schedule tidak membawa github.event.repository -> hanya variable yang berlaku.
+  CODE_SCANNING: ${{ vars.CODE_SCANNING_ENABLED == 'true' || github.event.repository.visibility == 'public' }}
 
 jobs:
   gitleaks:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
@@ -27,10 +47,16 @@ jobs:
       - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Temuan sudah di-redact di log + job summary; tidak perlu artifact (kuota storage).
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_ENABLE_SUMMARY: "true"
 
   semgrep:
     name: SAST (semgrep)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # hanya terpakai bila CODE_SCANNING == 'true'
     container:
       # SEC-30 (gelombang 9): dipin ke digest index rilis 1.179.0 (dicek `docker buildx imagetools inspect`, 6 Okt
       # 2026). Bump manual/Dependabot (docker): ganti tag + digest bersamaan.
@@ -40,13 +66,33 @@ jobs:
         with:
           persist-credentials: false
       - name: Semgrep (OWASP Top 10, secrets, docker, typescript, python)
+        # Gate: --error -> exit 1 bila ada temuan ERROR/WARNING. Log/summary hanya path:baris + rule (tanpa potongan
+        # kode, karena rule p/secrets bisa menampilkan nilai rahasia).
         run: |
           semgrep scan \
             --config p/owasp-top-ten --config p/secrets --config p/dockerfile \
             --config p/typescript --config p/python --config p/nodejs \
-            --sarif --output semgrep.sarif --error --severity ERROR --severity WARNING
-      - uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52  # v3.38.2
+            --severity ERROR --severity WARNING --metrics off \
+            --json-output semgrep.json --sarif-output semgrep.sarif --quiet --error > /dev/null
+      - name: Ringkasan temuan (log + job summary)
         if: always()
+        run: |
+          [ -f semgrep.json ] || { echo "semgrep.json tidak ada (scan gagal sebelum selesai)"; exit 0; }
+          python3 - semgrep.json <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          r = d.get("results", [])
+          print(f"### Semgrep: {len(r)} temuan (ERROR/WARNING)\n")
+          if r:
+              print("| File:baris | Rule | Severity | Pesan |\n|---|---|---|---|")
+          for x in r:
+              msg = x["extra"].get("message", "").replace("\n", " ").replace("|", "/")[:160]
+              print(f"| `{x['path']}:{x['start']['line']}` | `{x['check_id']}` | {x['extra'].get('severity')} | {msg} |")
+          for e in d.get("errors", [])[:20]:
+              print(f"\n- error scanner: {str(e.get('message', e))[:200]}")
+          PY
+      - uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52  # v3.38.2
+        if: always() && env.CODE_SCANNING == 'true' && hashFiles('semgrep.sarif') != ''
         with:
           sarif_file: semgrep.sarif
           category: semgrep
@@ -54,12 +100,17 @@ jobs:
   trivy-fs:
     name: Trivy filesystem (vuln, secret, misconfig)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # hanya terpakai bila CODE_SCANNING == 'true'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           persist-credentials: false
       # 0.35.0: tag aman pasca insiden supply chain Maret 2026 (CVE-2026-33634); binary Trivy dipin.
-      - uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
+      # Gate: tabel (secret di-mask Trivy) -> file -> log + summary. Pengecualian terdokumentasi: .trivyignore.yaml.
+      - name: Trivy fs (gate HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
         with:
           version: v0.69.3
           scan-type: fs
@@ -67,20 +118,48 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
-          format: sarif
-          output: trivy-fs.sarif
+          format: table
+          output: trivy-fs.txt
+          trivyignores: .trivyignore.yaml
           # secrets/ (dev, gen-secrets) tidak pernah di-commit; dikecualikan bila ada di workspace
           skip-dirs: secrets
-      - uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52  # v3.38.2
+      - name: Ringkasan temuan (log + job summary)
         if: always()
+        run: |
+          [ -f trivy-fs.txt ] || exit 0
+          cat trivy-fs.txt
+          { echo '### Trivy fs (HIGH/CRITICAL, fixed only)'; echo '```'; head -c 900000 trivy-fs.txt; echo '```'; } \
+            >> "$GITHUB_STEP_SUMMARY"
+      - name: Trivy fs SARIF (hanya bila code scanning tersedia)
+        if: always() && env.CODE_SCANNING == 'true'
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
+        with:
+          version: v0.69.3
+          skip-setup-trivy: true
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+          format: sarif
+          output: trivy-fs.sarif
+          trivyignores: .trivyignore.yaml
+          skip-dirs: secrets
+      - uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52  # v3.38.2
+        if: always() && env.CODE_SCANNING == 'true' && hashFiles('trivy-fs.sarif') != ''
         with:
           sarif_file: trivy-fs.sarif
           category: trivy-fs
 
   dependency-review:
+    # Butuh dependency graph (tersedia gratis untuk repo privat). Bila API menolak (fitur dimatikan), job gagal ->
+    # aktifkan Settings > Code security > Dependency graph.
     name: Dependency review (PR)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
@@ -92,22 +171,35 @@ jobs:
           allow-dependencies-licenses: pkg:pypi/odoo
 
   checkov:
+    # G16: bridgecrewio/checkov-action@2fb0e6d… tidak bisa di-resolve lagi (SHA hilang dari repo action). Diganti image
+    # resmi checkov dipin tag@digest (tanpa action pihak ketiga; sama persis dengan validasi lokal di runbook).
     name: "IaC (checkov: compose, Dockerfile, GitHub Actions)"
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # hanya terpakai bila CODE_SCANNING == 'true'
+    env:
+      CHECKOV_IMAGE: bridgecrew/checkov:3.3.21@sha256:9aefe56582004ebdac112fe85c3268dc4d3658231a8f023fb714ba9d29539d53
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           persist-credentials: false
-      - uses: bridgecrewio/checkov-action@2fb0e6d652cf09a76a42a9c62a5f4bb06f7d1b6e  # v12.1237.0
-        with:
-          directory: .
-          framework: dockerfile,github_actions,yaml
-          soft_fail: false
-          output_format: cli,sarif
-          output_file_path: console,checkov.sarif
-          skip_check: CKV_DOCKER_2   # HEALTHCHECK dicek di compose, bukan di setiap Dockerfile
-      - uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52  # v3.38.2
+      - name: Checkov (gate semua check FAILED)
+        # CKV_DOCKER_2: HEALTHCHECK dicek di compose, bukan di setiap Dockerfile. Pengecualian lain: komentar
+        # `# checkov:skip=<ID>: <alasan>` di file terkait.
+        run: |
+          set -o pipefail
+          docker run --rm -v "$PWD:/src" -w /src "$CHECKOV_IMAGE" \
+            -d . --framework dockerfile,github_actions,yaml --skip-check CKV_DOCKER_2 --skip-path secrets \
+            --compact --no-guide --quiet -o cli -o sarif --output-file-path console,checkov.sarif \
+            | tee checkov.txt
+      - name: Ringkasan temuan (job summary)
         if: always()
+        run: |
+          [ -f checkov.txt ] || exit 0
+          { echo '### Checkov (FAILED saja)'; echo '```'; head -c 900000 checkov.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52  # v3.38.2
+        if: always() && env.CODE_SCANNING == 'true' && hashFiles('checkov.sarif/results_sarif.sarif', 'checkov.sarif') != ''
         with:
           sarif_file: checkov.sarif
           category: checkov

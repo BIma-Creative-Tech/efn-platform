@@ -19,7 +19,7 @@
 const SENTINEL_ORIGIN = 'https://x.invalid';
 const MAX_LENGTH = 1024;
 /** Kontrol C0/C1, DEL, backslash, dan seluruh whitespace Unicode. */
-// eslint-disable-next-line no-control-regex -- sengaja mencocokkan karakter kontrol
+// Karakter kontrol sengaja dicocokkan (ditulis sebagai escape, aturan no-control-regex ESLint 9 tidak memicu).
 const FORBIDDEN = /[\u0000-\u001f\u007f-\u009f\\\s]/u;
 
 export const DEFAULT_NEXT_PATH = '/akun';

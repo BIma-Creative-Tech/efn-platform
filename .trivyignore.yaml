@@ -1,0 +1,93 @@
+# Pengecualian Trivy (fs + image) - G16, 9 Okt 2026. Dipakai security.yml & build-push.yml (input `trivyignores`).
+# ATURAN: setiap entri wajib `statement` (alasan) + `expired_at` (tanggal tinjau, maks. 90 hari). Setelah lewat
+# tanggal, entri tidak berlaku lagi dan gate kembali gagal -> tinjau ulang, perpanjang dengan alasan, atau perbaiki.
+# CVE dependency aplikasi (npm/pip) TIDAK di-ignore di sini: perbaiki versinya. Runbook: docs/runbooks/ci-github-free-plan.md
+vulnerabilities:
+  # WAL-G v3.0.9 (rilis terbaru upstream, 20 Agu 2026; image postgres R-T08). Binary resmi dibangun Go 1.25.11 +
+  # grpc 1.83.0. Belum ada rilis perbaikan. Paparan rendah: wal-g = klien CLI (archive_command / backup-fetch) ke
+  # MinIO internal lewat TLS terverifikasi; tidak membuka listener HTTP/2/gRPC, tidak merender html/template.
+  # Tindak lanjut (keputusan lead): bangun WAL-G dari source tag v3.0.9 dengan Go >= 1.27.2 + grpc >= 1.83.2, atau
+  # naikkan ke rilis upstream berikutnya. Tinjau ulang paling lambat tanggal expired_at.
+  - id: CVE-2026-84304
+    paths: ["usr/local/bin/wal-g"]
+    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
+    expired_at: 2026-11-09
+  - id: CVE-2026-84445
+    paths: ["usr/local/bin/wal-g"]
+    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
+    expired_at: 2026-11-09
+  - id: CVE-2026-33818
+    paths: ["usr/local/bin/wal-g"]
+    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
+    expired_at: 2026-11-09
+  - id: CVE-2026-39821
+    paths: ["usr/local/bin/wal-g"]
+    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
+    expired_at: 2026-11-09
+  - id: CVE-2026-39822
+    paths: ["usr/local/bin/wal-g"]
+    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
+    expired_at: 2026-11-09
+  - id: CVE-2026-56853
+    paths: ["usr/local/bin/wal-g"]
+    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
+    expired_at: 2026-11-09
+  - id: CVE-2026-56858
+    paths: ["usr/local/bin/wal-g"]
+    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
+    expired_at: 2026-11-09
+  - id: CVE-2026-56859
+    paths: ["usr/local/bin/wal-g"]
+    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
+    expired_at: 2026-11-09
+  - id: CVE-2026-56860
+    paths: ["usr/local/bin/wal-g"]
+    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
+    expired_at: 2026-11-09
+  - id: CVE-2026-56862
+    paths: ["usr/local/bin/wal-g"]
+    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
+    expired_at: 2026-11-09
+  # Bukan kerentanan versi ini: Trivy membaca versi modul wal-g sebagai pseudo-version "v0.0.0-...+dirty" (< 1.1)
+  # sehingga CVE 2021 (diperbaiki di wal-g 1.1) tercocokkan. Binary = v3.0.9.
+  - id: CVE-2021-38599
+    paths: ["usr/local/bin/wal-g"]
+    statement: "False positive: pseudo-version v0.0.0-...+dirty; binary sebenarnya wal-g v3.0.9 (perbaikan sejak 1.1). G16."
+    expired_at: 2027-01-07
+  # Metabase v0.58.35 LTS (image terbaru jalur LTS, 30 Sep 2026): dependency Java upstream di app/metabase.jar, belum
+  # ada rilis Metabase yang memperbaikinya. Paparan: Metabase hanya internal (wg-https + allowlist staf, ADR-023),
+  # koneksi DB hanya PostgreSQL & ClickHouse (driver mssql/zookeeper tidak dipakai). Tinjau saat bump Metabase.
+  - id: CVE-2026-106451
+    paths: ["app/metabase.jar"]
+    statement: "Metabase v0.58.35 LTS upstream: lz4-java 1.10.1; belum ada rilis perbaikan; BI internal saja. G16."
+    expired_at: 2026-11-09
+  - id: CVE-2025-59250
+    paths: ["app/metabase.jar"]
+    statement: "Metabase v0.58.35 LTS upstream: mssql-jdbc 13.2.1 (driver tidak dipakai; kemungkinan FP sufiks .jre11); belum ada rilis perbaikan; BI internal saja. G16."
+    expired_at: 2026-11-09
+  - id: CVE-2026-54399
+    paths: ["app/metabase.jar"]
+    statement: "Metabase v0.58.35 LTS upstream: httpcore5 5.3.1; belum ada rilis perbaikan; BI internal saja. G16."
+    expired_at: 2026-11-09
+  - id: CVE-2026-54428
+    paths: ["app/metabase.jar"]
+    statement: "Metabase v0.58.35 LTS upstream: httpcore5-h2 5.2.4; belum ada rilis perbaikan; BI internal saja. G16."
+    expired_at: 2026-11-09
+  - id: CVE-2026-24281
+    paths: ["app/metabase.jar"]
+    statement: "Metabase v0.58.35 LTS upstream: zookeeper 3.8.4 (tidak dipakai); belum ada rilis perbaikan; BI internal saja. G16."
+    expired_at: 2026-11-09
+  - id: CVE-2026-24308
+    paths: ["app/metabase.jar"]
+    statement: "Metabase v0.58.35 LTS upstream: zookeeper 3.8.4 (tidak dipakai); belum ada rilis perbaikan; BI internal saja. G16."
+    expired_at: 2026-11-09
+misconfigurations:
+  - id: DS-0002
+    paths:
+      - "infra/metabase/Dockerfile"
+    statement: >-
+      Image resmi Metabase: run_metabase.sh mulai sebagai root hanya untuk menyiapkan user `metabase` (MUID/MGID)
+      lalu menjalankan JVM sebagai user tersebut; USER di Dockerfile mematahkan langkah itu. Di compose: cap_drop ALL,
+      no-new-privileges, hanya loopback + sidecar TLS. Sama dengan checkov:skip CKV_DOCKER_3 di Dockerfile.
+    expired_at: 2027-01-07
+secrets: []

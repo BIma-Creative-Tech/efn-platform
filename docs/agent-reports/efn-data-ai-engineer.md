@@ -430,3 +430,33 @@ Tanpa commit. Tidak ada volume yang dihapus.
   terdeteksi bila tidak ada order Odoo yang cocok.
 - Promtail stream/alert untuk `EFN_LOYALTY_RECON_ETL` belum ada (devsecops). Jangkar tidak ber-HMAC (alarm palsu
   mungkin, penyembunyian tidak). CI GitHub belum dijalankan.
+
+## Gelombang 16 — pip-audit CI merah: Pillow 12, requests, urllib3, pytest (9 Okt 2026)
+
+**Pemicu:** job CI `Python (ruff, compile, pip-audit)` gagal di `services/ai-ocr-worker/requirements.txt`
+(47 temuan di 3 paket). Audit ulang semua requirements di container menemukan juga pytest (dev) dan `services/odoo`.
+
+### Versi
+| File | Paket | Lama | Baru | Advisory |
+|---|---|---|---|---|
+| ai-ocr-worker/requirements.txt | Pillow | 11.3.0 | **12.3.0** | PYSEC-2026-165, -2249..-2257, -2874, -3451/3453/3454, -3493..-3496 |
+| ai-ocr-worker/requirements.txt | requests | 2.32.4 | **2.34.2** | PYSEC-2026-2275 (fix 2.33.0) |
+| ai-ocr-worker/requirements.txt | urllib3 | 2.5.0 | **2.8.0** | PYSEC-2026-141, -1994, -1996, -1998, -4175, -4177 |
+| {ai-ocr-worker,etl,text2sql}/requirements-dev.txt | pytest | 8.3.4 | **9.0.3** | PYSEC-2026-1845 |
+
+etl & text2sql runtime: tidak ada temuan. Dependensi transitif terpasang: ImageHash 4.3.1, numpy 2.5.3, scipy 1.18.1, PyWavelets 1.10.0, minio 7.2.12.
+
+### Perubahan kode
+Tidak ada. `efn_ocr/imaging.py` sudah memakai `Image.Resampling.LANCZOS` (konstanta lama `Image.ANTIALIAS`/`LANCZOS`
+top-level tidak dipakai); `Image.open`, `ImageOps`, `ImageChops`, `DecompressionBombError`, `MAX_IMAGE_PIXELS` kompatibel
+Pillow 12. Klien urllib3 MinIO (`PoolManager`, `Timeout`, `Retry`, `cert_reqs`/`ca_certs`) dan `requests.Session` kompatibel.
+
+### Validasi (container `python:3.12-slim@sha256:05cda977…`, digest Dockerfile terbaru, Python 3.12.15)
+`ruff==0.16.10 check` + `format --check` bersih · `compileall` OK · pytest: ai-ocr-worker **184 passed**, etl **192 passed**,
+text2sql **93 passed** · `pip-audit -r requirements.txt --strict` dan `-r requirements-dev.txt --strict`: **No known vulnerabilities** untuk ketiga service.
+
+### Sisa (di luar batas file saya)
+- `services/odoo/requirements.txt`: `requests==2.32.3` rentan (PYSEC-2026-1872 fix 2.32.4, PYSEC-2026-2275 fix 2.33.0) →
+  job pip-audit CI akan tetap merah setelah ai-ocr-worker lolos. Perlu dinaikkan ke `requests==2.34.2` oleh pemilik Odoo
+  (cek kompatibilitas dengan urllib3 bawaan image odoo:19.0).
+- Test OCR end-to-end dengan Tesseract/PaddleOCR + Pillow 12 di image runtime belum dijalankan (hanya unit test).

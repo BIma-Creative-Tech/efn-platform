@@ -4,7 +4,7 @@
  * ADR terkait: ADR multi-tenant by domain & unified cart lintas PT (status Proposed).
  * Risiko dimitigasi: R-T14 (duplikasi komponen per brand) — tema hanya lewat CSS custom properties.
  *
- * File ini dipakai oleh middleware (Edge runtime), jadi HARUS murni data/fungsi tanpa
+ * File ini dipakai oleh proxy.ts (Next 16: runtime Node.js; dulu middleware Edge), jadi HARUS murni data/fungsi tanpa
  * import Node.js. Brand tidak dikenal -> brand default (`efn`), bukan error.
  */
 

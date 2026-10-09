@@ -186,3 +186,51 @@ Container `node:22-bookworm` (`npm ci && npm run lint && npm test && npm run bui
 - Tidak ada halaman status tanpa id (`/akun/penghapusan`): pengguna yang kehilangan URL harus masuk kembali (selama akun masih ada) atau memakai tautan dari layar konfirmasi. Bila perlu, opsi: simpan `request_id` di cookie yang sama.
 - Pembatalan dari halaman status memakai `POST /api/me/delete/cancel` yang ada (tanpa step-up; perilaku BFF tidak berubah gelombang ini).
 - Cookie receipt tidak dihapus otomatis saat status `completed`/`cancelled` (berakhir sendiri ≤ 30 hari; tidak memuat PII).
+
+## Gelombang 16 — Upgrade Next.js 16 + altcha 3 (npm audit CI merah) (9 Okt 2026)
+
+**Pemicu:** job CI `Node (superapp-web)` gagal di `npm audit --omit=dev --audit-level=high`: PostCSS ≤ 8.5.22
+(high, GHSA-qx2v-qp2m-jg93 / 6g55-p6wh-862q / fxqj-rqcc-2cmp / r28c-9q8g-f849, lewat `next` ≤ 16.3.0-preview) dan
+`altcha` 0.8–2.2.4 (moderate, GHSA-mpmc-qchh-r9q8, mode obfuscation — fitur yang tidak kita pakai, tetap di-upgrade).
+
+### Versi
+| Paket | Lama | Baru |
+|---|---|---|
+| `next` | ^15.1.2 | ^16.4.0 (postcss 8.5.23) |
+| `eslint-config-next` | ^15.1.2 | ^16.4.0 (flat config native) |
+| `altcha` | ^1.0.0 | ^3.3.0 |
+| `react` / `react-dom` (lock) | 19.0.x | 19.3.0 (range tetap ^19.0.0) |
+| `vitest` (dev) | ^3.0.0 | ^5.0.3 — menutup tinypool (critical, GHSA-5gmw-xhrv-c9v3/85c8-ppgw-ccpr) & @vitest/mocker (moderate) di dev deps |
+| `@eslint/eslintrc` (dev) | ^3.2.0 | dihapus (FlatCompat tidak diperlukan) |
+
+`package-lock.json` diregenerasi di Linux (container node:22-alpine, digest dari Dockerfile).
+
+### Perubahan kode
+- `middleware.ts` → **`proxy.ts`** (konvensi Next 16; fungsi `middleware` → `proxy`, `config.matcher` sama). Catatan:
+  proxy Next 16 berjalan di runtime **Node.js**, bukan Edge; `lib/brands.ts` tetap murni. Build menampilkan `ƒ Proxy (Middleware)`.
+- `components/AltchaWidget.tsx` (altcha v3): atribut `challengeurl` → `challenge`; `strings` dihapus → teks Indonesia
+  didaftarkan ke registry `$altcha.i18n` (`id`, di atas default `en`) + `language="id"`; `hidefooter` → atribut JSON
+  `configuration` `{hideFooter: true, humanInteractionSignature: false}` (HIS dimatikan: widget tidak mengumpulkan
+  event pointer/scroll — minimisasi data UU PDP). Event `statechange` `{state, payload}` tidak berubah.
+  **Kontrak BFF tidak berubah:** widget v3 mendeteksi challenge v1 (`{algorithm, challenge, salt, signature, maxnumber}`)
+  dan mengirim payload v1 `base64({algorithm, challenge, number, salt, signature, took})` (diverifikasi dari kode
+  `createChallengeFromV1`/`createPayloadV1` di bundle altcha 3.3.0) → `lib/altcha.ts` + test tetap.
+- `eslint.config.mjs`: impor langsung `eslint-config-next/core-web-vitals` + `/typescript` (Next 16 juga tidak lagi lint saat build).
+- `app/akun/penghapusan/[id]/DeletionStatus.tsx`: aturan baru `react-hooks/set-state-in-effect` (error) — muat awal
+  kini `loadStatus()` murni + setState di callback async dengan guard `active` (juga mencegah update setelah unmount).
+- `tsconfig.json`: `jsx: react-jsx` dan include `.next/dev/types/**/*.ts` (perubahan wajib Next 16; disimpan agar build tidak memodifikasi file).
+- `lib/safe-next.ts`: hapus `eslint-disable` yang kini tidak terpakai. Komentar Next 15 → 15+/16 di beberapa file, README.
+- Async `params`/`cookies()`/`headers()` sudah dipakai sejak Next 15 → tidak perlu perubahan.
+
+### Validasi (container `node:22.23-alpine@sha256:0a7108bf…`, digest Dockerfile terbaru)
+`npm ci` OK · `npm run lint` 0 error (9 warning `no-location-assign-relative-destination`, aturan baru — `window.location.assign`
+sengaja dipakai untuk redirect penuh setelah sesi kedaluwarsa) · `tsc --noEmit` OK · `npm test` **219 passed** ·
+`npm run build` OK (Turbopack, standalone `server.js` ada, tsconfig stabil) · `npm audit --omit=dev --audit-level=high` **0 vulnerabilities**.
+
+### Sisa / belum diverifikasi
+- `npm audit` penuh (termasuk dev): 5 high `braces` (via eslint-config-next → eslint-plugin-import/micromatch); belum ada
+  versi perbaikan (`fix` npm menyarankan downgrade ke eslint-config-next 14 — tidak diambil). Dev-only, tidak di bundle.
+- `eslint@9.39.5` ditandai deprecated oleh npm (ESLint 10 tersedia); belum di-upgrade (di luar lingkup).
+- Widget ALTCHA v3 **belum diuji di browser** (E2E/manual): tampilan, teks Indonesia, CSP (`style-src 'unsafe-inline'`,
+  `worker-src blob:` sudah ada) dan verifikasi payload v1 oleh BFF `altcha-lib` perlu smoke login OTP di stack dev.
+- Proxy di runtime Node: belum diuji di stack dev (perilaku host→brand seharusnya identik).

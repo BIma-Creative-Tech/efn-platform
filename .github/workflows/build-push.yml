@@ -1,5 +1,12 @@
 # Build image per service -> scan (Trivy) -> SBOM (Syft) -> sign (Cosign keyless) -> attest provenance -> push GHCR.
 # Dipicu oleh push ke main (tag: sha-<short>, main) dan tag v* (tag: vX.Y.Z, latest).
+#
+# G16 (CI GitHub, 9 Okt 2026), repo privat paket gratis:
+# - Tanpa artifact (kuota storage 500 MB): SBOM Syft TIDAK diunggah sebagai artifact; SBOM di-attest (cosign keyless)
+#   dan disimpan di registry bersama image (+ SBOM BuildKit `sbom: true`). Ambil: `cosign download attestation`.
+# - Hasil Trivy = tabel di log + job summary; SARIF/upload code scanning hanya bila repo publik atau
+#   CODE_SCANNING_ENABLED=true. Gate HIGH/CRITICAL (fixed) tetap memblokir push. Pengecualian: .trivyignore.yaml.
+# Runbook: docs/runbooks/ci-github-free-plan.md
 name: Build & Push Images
 
 on:
@@ -10,19 +17,27 @@ on:
 
 permissions:
   contents: read
-  packages: write
-  id-token: write       # cosign keyless (OIDC)
-  attestations: write   # build provenance
-  security-events: write
+
+# Build terbaru untuk ref yang sama menggantikan yang lama (hemat menit); tag rilis punya ref sendiri.
+concurrency:
+  group: build-push-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NS: ${{ github.repository_owner }}
+  CODE_SCANNING: ${{ vars.CODE_SCANNING_ENABLED == 'true' || github.event.repository.visibility == 'public' }}
 
 jobs:
   build:
     name: ${{ matrix.service }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write         # cosign keyless (OIDC)
+      attestations: write     # build provenance
+      security-events: write  # hanya terpakai bila CODE_SCANNING == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -88,10 +103,32 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+          format: table
+          output: trivy-${{ matrix.service }}.txt
+          trivyignores: .trivyignore.yaml
+      - name: Ringkasan Trivy (log + job summary)
+        if: always()
+        env:
+          SVC: ${{ matrix.service }}
+        run: |
+          [ -f "trivy-${SVC}.txt" ] || exit 0
+          cat "trivy-${SVC}.txt"
+          { echo "### Trivy image ${SVC} (HIGH/CRITICAL, fixed only)"; echo '```'; head -c 900000 "trivy-${SVC}.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Trivy SARIF (hanya bila code scanning tersedia)
+        if: always() && env.CODE_SCANNING == 'true'
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
+        with:
+          version: v0.69.3
+          skip-setup-trivy: true
+          image-ref: local/${{ matrix.service }}:scan
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
           format: sarif
           output: trivy-${{ matrix.service }}.sarif
+          trivyignores: .trivyignore.yaml
       - uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52  # v3.38.2
-        if: always()
+        if: always() && env.CODE_SCANNING == 'true' && hashFiles(format('trivy-{0}.sarif', matrix.service)) != ''
         with:
           sarif_file: trivy-${{ matrix.service }}.sarif
           category: trivy-image-${{ matrix.service }}
@@ -109,20 +146,25 @@ jobs:
           provenance: mode=max
           sbom: true
 
-      - name: SBOM (Syft, SPDX) sebagai artifact
+      - name: SBOM (Syft, SPDX) - file lokal, bukan artifact
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
         with:
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NS }}/${{ matrix.service }}@${{ steps.push.outputs.digest }}
           format: spdx-json
-          artifact-name: sbom-${{ matrix.service }}.spdx.json
+          output-file: sbom-${{ matrix.service }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
 
       - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
 
-      - name: Cosign sign (keyless, OIDC)
+      - name: Cosign sign + attest SBOM (keyless, OIDC; disimpan di registry)
         env:
           COSIGN_YES: "true"
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NS }}/${{ matrix.service }}@${{ steps.push.outputs.digest }}
-        run: cosign sign "$IMAGE"
+          SBOM: sbom-${{ matrix.service }}.spdx.json
+        run: |
+          cosign sign "$IMAGE"
+          cosign attest --type spdxjson --predicate "$SBOM" "$IMAGE"
 
       - name: Attest build provenance (GitHub)
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2.4.0

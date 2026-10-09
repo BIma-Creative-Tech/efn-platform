@@ -441,3 +441,35 @@ SEC-29 **Fixed** (semua secret BFF; spec statis + verifikasi runtime). SEC-34 **
 - Env baru: `LOYALTY_EARN_DAILY_MAX_POINTS` 2000, `LOYALTY_EARN_COMPANY_HOURLY_MAX_POINTS` 50000, `LOYALTY_EARN_POS_CONFIG_HOURLY_MAX_POINTS` 10000, `LOYALTY_RECON_INTERVAL_MS`, `LOYALTY_RECON_LOOKBACK_HOURS`, `LOYALTY_MIGRATION_ANOMALY_POINTS`, `ERASURE_SUPPRESSION_DAYS` 90, `ALTCHA_FAIL_MIN_SAMPLE` 5 (semua placeholder Finance/DPO).
 - Validasi: tsc/nest build OK, eslint 0 error, jest 31 suite / 430 test; SQL 06 + query baru diuji di Postgres dev dalam transaksi ROLLBACK.
 - Belum: 06 belum diterapkan permanen di dev, BFF dev belum di-rebuild, recon belum diamati di runtime. Tindak lanjut: devsecops (06 di deploy, rule Loki `EFN_LOYALTY_ANOMALY` + dead-man `EFN_LOYALTY_RECON`, `NO_COLOR=1`), odoo (kirim `pos_config_id` di earn), data-AI (rekonsiliasi ledger ↔ pos.order).
+
+## Gelombang 16 — `npm audit` api-gateway (gerbang CI `--omit=dev --audit-level=high`)
+
+**Pemicu:** CI GitHub pertama gagal: 16 vuln prod (10 moderate, 5 high, 1 critical) — `@fastify/middie` (critical, via `@nestjs/platform-fastify` 10), `fastify` 4 / `find-my-way` (high), `sharp` 0.33 (libvips/libheif/librsvg, high), `lodash` (high, via `@nestjs/config` 3), `file-type`/`ajv` (moderate, via Nest 10), `stream-json`/`query-string`/`decode-uri-component` (moderate, via `minio`).
+
+**Upgrade (semua naik, tidak ada downgrade):**
+
+| Paket | Lama | Baru |
+|---|---|---|
+| `@nestjs/common` / `core` / `platform-fastify` / `testing` | ^10.4.15 | ^11.2.7 |
+| `@nestjs/config` | ^3.3.0 | ^4.0.4 (lodash 4.18.1) |
+| `@nestjs/terminus` | ^10.2.3 | ^11.1.1 |
+| `@nestjs/cli` / `schematics` | ^10 | ^11.0.24 / ^11.1.0 |
+| `fastify` | ^4.28.1 | ^5.12.5 |
+| `@fastify/helmet` / `@fastify/multipart` | ^11 / ^8 | ^13.1.2 / ^10.1.3 |
+| `sharp` | ^0.33.5 | ^0.35.5 (libvips 8.18.7) |
+| `minio` | ^8.0.2 | ^8.0.7 (terbaru) |
+
+- `overrides: { "@nestjs/platform-fastify": { "fastify": "$fastify" } }` — `platform-fastify@11.2.7` mem-pin `fastify@5.11.3` (rentan, 7 advisory high). Override memaksa satu salinan `fastify@5.12.5` (beda minor, API sama). Hapus override begitu `platform-fastify` 11.x berikutnya mem-pin ≥ 5.12.5.
+- **Sengaja TIDAK ke NestJS 12**: Nest 12 berubah menjadi paket ESM murni (`"type": "module"`), yang berarti migrasi CJS→ESM untuk build, ts-jest, dan seluruh import — ini bukan perbaikan dependency. Nest 11 (CJS) sudah menutup semua advisory high/critical. Migrasi ke Nest 12 sebaiknya dijadwalkan sebagai paket kerja terpisah.
+- Kode `src/**` **tidak berubah**: build TypeScript bersih pada Nest 11/Fastify 5; tidak ada route wildcard (path-to-regexp v8) dan tidak ada middleware `forRoutes('*')`.
+- `package-lock.json` dibuat ulang dari nol di Linux (container node alpine); transitive dalam rentang caret ikut naik.
+
+**Sisa (moderate, tanpa fix yang kompatibel):** `npm audit --omit=dev` → 4 moderate, 0 high/critical.
+- `stream-json` ≤3.5 (GHSA-528h, -hqr4, -mjw6) dan `query-string` 7 → `decode-uri-component` ≤0.4.2 (GHSA-vcc3), semuanya via `minio@8.0.7` (versi terbaru). Versi yang memperbaiki (`stream-json` ≥3.6, `decode-uri-component` 0.5, `query-string` ≥9.4.2) hanya tersedia sebagai ESM dan tidak bisa di-override untuk `require()` CJS milik minio tanpa risiko rusak. Saran `npm audit fix --force` = **downgrade** ke `minio@7.1.3` → ditolak.
+- Mitigasi/eksposur: BFF hanya memanggil `putObject`/`removeObject` dengan bucket & key buatan server (`object-storage.ts`). `stream-json` hanya dipakai minio di `notification.js` (`listenBucketNotification`) yang tidak dipanggil; `query-string` dipakai untuk membangun/mem-parse query permintaan S3 milik minio sendiri, bukan input pengguna. Endpoint MinIO internal + TLS verify-full (docs/04 §7.1). Ambang CI tidak diubah. Tindak lanjut: pantau rilis `minio` (atau pertimbangkan klien S3 alternatif / panggilan S3 SigV4 minimal bila tetap tak diperbaiki).
+- Dev-only (tidak digerbang CI): `npm audit` penuh masih melaporkan temuan high di toolchain dev (mis. `braces`, `sprintf-js` lewat jest/eslint/nest-cli). Tidak masuk image runtime (`npm prune --omit=dev`). Di luar cakupan gelombang ini.
+
+**Validasi (container):**
+- Iterasi di `node:22.12-alpine@sha256:51eff88a…`; validasi akhir rantai CI di `node:22.23-alpine@sha256:0a7108bf…` (digest Dockerfile terbaru): `npm ci` → `npm run build` → `npm run lint` (0 error, 2 warning lama `no-control-regex`) → `CI=true npm test` (31 suite / 430 test lulus) → `npm audit --omit=dev --audit-level=high` exit 0.
+- Smoke Nest 11 + Fastify 5 (skrip sementara, tidak di-commit): `rawBody` untuk HMAC webhook terisi, `trustProxy` CIDR → `req.ip` dari XFF hanya dari hop tepercaya, `@fastify/helmet` header aktif, `@fastify/multipart` batas `fileSize` → 413, global prefix + exclude bekerja, sharp 0.35 pipeline `failOn/limitInputPixels/rotate/resize/jpeg` OK.
+- **Belum**: image Docker api-gateway belum di-build ulang dan stack dev belum di-redeploy; smoke E2E (`bff_smoke.py`) belum dijalankan terhadap BFF baru. Peringatan `EBADENGINE` dari `eslint-visitor-keys` hanya muncul di node 22.12 (butuh ≥ 22.13) — hilang di node 22.23.

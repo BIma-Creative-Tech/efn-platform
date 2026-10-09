@@ -1,5 +1,11 @@
 name: CodeQL
 # `uses:` dipin ke commit SHA (SEC-10).
+#
+# G16 (CI GitHub, 9 Okt 2026): CodeQL membutuhkan code scanning. Di repo privat paket gratis (tanpa GitHub Advanced
+# Security) init/analyze gagal "Resource not accessible by integration". Analisis hanya dijalankan bila repo publik
+# ATAU repository variable CODE_SCANNING_ENABLED=true; selain itu job `skipped-notice` mencatat bahwa CodeQL
+# dilewati. SAST tetap ditegakkan oleh semgrep (security.yml) yang tidak bergantung pada code scanning.
+# Runbook: docs/runbooks/ci-github-free-plan.md
 
 on:
   push:
@@ -8,15 +14,36 @@ on:
     branches: [main]
   schedule:
     - cron: "33 3 * * 3"
+  workflow_dispatch:
 
 permissions:
   contents: read
-  security-events: write
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  skipped-notice:
+    name: CodeQL dilewati (code scanning tidak tersedia)
+    if: vars.CODE_SCANNING_ENABLED != 'true' && github.event.repository.visibility != 'public'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Notice
+        run: |
+          msg="CodeQL dilewati: code scanning tidak tersedia (repo privat tanpa GHAS). SAST tetap lewat semgrep."
+          echo "::notice title=CodeQL::${msg} Aktifkan dengan repository variable CODE_SCANNING_ENABLED=true."
+          echo "### CodeQL dilewati" >> "$GITHUB_STEP_SUMMARY"
+          echo "${msg}" >> "$GITHUB_STEP_SUMMARY"
+
   analyze:
     name: Analyze (${{ matrix.language }})
+    if: vars.CODE_SCANNING_ENABLED == 'true' || github.event.repository.visibility == 'public'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     strategy:
       fail-fast: false
       matrix:

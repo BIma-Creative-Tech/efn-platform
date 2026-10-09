@@ -1,15 +1,12 @@
-// ESLint 9 flat config. eslint-config-next 15 masih format eslintrc -> dibungkus FlatCompat
-// (pola resmi create-next-app 15). Dipakai oleh `npm run lint` (eslint .) dan oleh `next build`.
-import { dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { FlatCompat } from '@eslint/eslintrc';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const compat = new FlatCompat({ baseDirectory: __dirname });
+// ESLint 9 flat config. eslint-config-next 16 sudah native flat config (tanpa FlatCompat/@eslint/eslintrc).
+// Dipakai oleh `npm run lint` (eslint .). Next 16 tidak lagi menjalankan lint saat `next build`.
+import nextVitals from 'eslint-config-next/core-web-vitals';
+import nextTs from 'eslint-config-next/typescript';
 
 const config = [
   { ignores: ['.next/**', 'node_modules/**', 'next-env.d.ts', 'coverage/**'] },
-  ...compat.extends('next/core-web-vitals', 'next/typescript'),
+  ...nextVitals,
+  ...nextTs,
 ];
 
 export default config;

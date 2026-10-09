@@ -47,8 +47,8 @@ printf '%s' "$ACME_SERVER" | grep -Eq '^https://[A-Za-z0-9.:/_-]+$' || die "ACME
 printf '%s' "$ACME_DNS_RESOLVERS" | grep -Eq '^[A-Za-z0-9.:-]+(,[A-Za-z0-9.:-]+)*$' || die "ACME_DNS_RESOLVERS tidak valid"
 [ -z "$ACME_EXTRA_ARGS" ] || printf '%s' "$ACME_EXTRA_ARGS" | grep -Eq '^(--[a-z.-]+(=[A-Za-z0-9.:/_-]+)?( |$))+$' \
   || die "ACME_EXTRA_ARGS tidak valid"
-[ -d "$ACME_DATA" ] && [ -w "$ACME_DATA" ] || die "$ACME_DATA tidak dapat ditulis (acme-dns-init sudah jalan?)"
-[ -d "$ACME_OUT" ] && [ -w "$ACME_OUT" ] || die "$ACME_OUT tidak dapat ditulis (acme-dns-init sudah jalan?)"
+if [ ! -d "$ACME_DATA" ] || [ ! -w "$ACME_DATA" ]; then die "$ACME_DATA tidak dapat ditulis (acme-dns-init sudah jalan?)"; fi
+if [ ! -d "$ACME_OUT" ] || [ ! -w "$ACME_OUT" ]; then die "$ACME_OUT tidak dapat ditulis (acme-dns-init sudah jalan?)"; fi
 
 token=$(head -c 64 "$ACME_TOKEN_FILE" 2> /dev/null || true)
 if [ "$ACME_DNS_PROVIDER" != exec ] && { [ -z "$token" ] || [ "$token" = disabled ]; }; then
@@ -68,7 +68,7 @@ printf '%s' "$ACME_EMAIL" | grep -Eq '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z
 deploy_cert() {
   crt="$ACME_DATA/certificates/$ACME_CERT_NAME.crt"
   key="$ACME_DATA/certificates/$ACME_CERT_NAME.key"
-  [ -s "$crt" ] && [ -s "$key" ] || { log "belum ada sertifikat di $ACME_DATA/certificates"; return 0; }
+  if [ ! -s "$crt" ] || [ ! -s "$key" ]; then log "belum ada sertifikat di $ACME_DATA/certificates"; return 0; fi
   if cmp -s "$crt" "$ACME_OUT/$ACME_CERT_NAME.crt" && cmp -s "$key" "$ACME_OUT/$ACME_CERT_NAME.key"; then
     return 0
   fi

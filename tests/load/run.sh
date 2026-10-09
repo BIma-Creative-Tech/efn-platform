@@ -31,10 +31,10 @@ OUT="$ROOT/tests/load/results/$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$OUT"
 WORK=$(mktemp -d)
 STATS_PID=""; LOG_PID=""
-# shellcheck disable=SC2329  # dipanggil lewat trap EXIT
+# shellcheck disable=SC2317,SC2329  # dipanggil lewat trap EXIT (SC2317 = shellcheck 0.9 di runner, SC2329 = >=0.10)
 restore() {
-  [[ -n "$STATS_PID" ]] && kill "$STATS_PID" 2> /dev/null || true
-  [[ -n "$LOG_PID" ]] && kill "$LOG_PID" 2> /dev/null || true
+  if [[ -n "$STATS_PID" ]]; then kill "$STATS_PID" 2> /dev/null || true; fi
+  if [[ -n "$LOG_PID" ]]; then kill "$LOG_PID" 2> /dev/null || true; fi
   # Budget OTP global per jam (Redis rl:otp:budget:*) habis oleh load test -> login dev lain (smoke) 429 sampai jam
   # berikutnya (temuan G13). Hapus counter itu (dev saja; batas per IP/member tidak disentuh).
   docker exec efn-redis-1 sh -c 'A="redis-cli --tls --cacert /run/secrets/efn_ca_crt -h redis -p 6379 --user efn-bff

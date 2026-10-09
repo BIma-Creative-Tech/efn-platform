@@ -10,26 +10,60 @@
  *   custom element React 19 dan tidak dirender saat SSR (modul altcha butuh `HTMLElement`/`customElements`).
  * - Payload hanya diteruskan ke parent lewat `onPayload`; parent mengirimnya bersama `phone`.
  *   Untuk challenge baru (sekali pakai), parent me-remount komponen ini dengan `key` baru.
+ *
+ * altcha v3 (Gelombang 16, GHSA-mpmc-qchh-r9q8): atribut `challengeurl` -> `challenge`, `strings` dihapus
+ * (teks lewat registry global `$altcha.i18n` + `language`), opsi lain lewat atribut JSON `configuration`.
+ * Widget v3 tetap menerima challenge format v1 dari BFF (`{algorithm, challenge, salt, signature}`) dan
+ * mengirim payload v1 (`base64({algorithm, challenge, number, salt, signature, took})`) — kontrak BFF
+ * dan `lib/altcha.ts` tidak berubah. Event `statechange` tetap `{ state, payload }`.
+ * `humanInteractionSignature: false`: widget tidak mengumpulkan event pointer/scroll (minimisasi data, UU PDP).
  */
 import { useEffect, useRef, useState } from 'react';
 
-type AltchaState = 'unverified' | 'verifying' | 'verified' | 'expired' | 'error';
+type AltchaState = 'unverified' | 'verifying' | 'verified' | 'expired' | 'error' | 'code';
 
 interface StateChangeDetail {
   state?: AltchaState;
   payload?: string;
 }
 
-const STRINGS_ID = JSON.stringify({
+/** Bagian registry global yang didaftarkan modul `altcha` v3 (lihat altcha/types `AltchaGlobal`). */
+interface AltchaI18nRegistry {
+  i18n: {
+    get: (lang: string) => Record<string, string> | undefined;
+    set: (lang: string, strings: Record<string, string>) => void;
+  };
+}
+
+const LANGUAGE = 'id';
+
+const STRINGS_ID: Record<string, string> = {
   ariaLinkLabel: 'Kunjungi altcha.org',
+  cancel: 'Batal',
   error: 'Verifikasi gagal. Coba lagi.',
   expired: 'Verifikasi kedaluwarsa. Coba lagi.',
   footer: '',
   label: 'Saya bukan robot',
+  loading: 'Memuat…',
+  reload: 'Muat ulang',
+  verify: 'Verifikasi',
+  verificationRequired: 'Verifikasi diperlukan.',
   verified: 'Terverifikasi',
   verifying: 'Memverifikasi…',
   waitAlert: 'Sedang memverifikasi… mohon tunggu.',
+};
+
+const WIDGET_CONFIGURATION = JSON.stringify({
+  hideFooter: true,
+  humanInteractionSignature: false,
 });
+
+/** Daftarkan teks Bahasa Indonesia (di atas default `en` agar kunci yang tidak diterjemahkan tetap ada). */
+function registerIndonesianStrings(): void {
+  const registry = (globalThis as unknown as { $altcha?: AltchaI18nRegistry }).$altcha;
+  if (!registry) return;
+  registry.i18n.set(LANGUAGE, { ...(registry.i18n.get('en') ?? {}), ...STRINGS_ID });
+}
 
 export function AltchaWidget({
   onPayload,
@@ -59,13 +93,14 @@ export function AltchaWidget({
     import('altcha')
       .then(() => {
         if (cancelled || !hostRef.current) return;
+        registerIndonesianStrings();
         el = document.createElement('altcha-widget');
-        el.setAttribute('challengeurl', challengeUrl);
+        el.setAttribute('challenge', challengeUrl);
         el.setAttribute('name', 'altcha');
+        el.setAttribute('language', LANGUAGE);
         // Mulai menghitung proof-of-work saat pengguna fokus ke form (bukan saat halaman dimuat).
         el.setAttribute('auto', 'onfocus');
-        el.setAttribute('hidefooter', '');
-        el.setAttribute('strings', STRINGS_ID);
+        el.setAttribute('configuration', WIDGET_CONFIGURATION);
         el.addEventListener('statechange', listener);
         hostRef.current.appendChild(el);
       })

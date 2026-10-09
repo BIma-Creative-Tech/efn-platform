@@ -12,6 +12,7 @@ on:
   schedule:
     - cron: "0 19 * * *"   # 02:00 WIB
   workflow_dispatch:
+    # checkov:skip=CKV_GHA_7: input hanya memilih skenario smoke (divalidasi regex ^[a-g ]+$); tidak ada artefak build.
     inputs:
       scenarios:
         description: "Skenario (spasi), kosong = semua: a b c d f e g"
@@ -28,6 +29,10 @@ concurrency:
 jobs:
   e2e:
     name: Stack dev + smoke E2E
+    # G16: jadwal nightly (hingga 150 menit/run) menghabiskan kuota 2.000 menit/bulan repo privat paket gratis bila
+    # memakai runner GitHub-hosted. Jadwal hanya aktif bila variable E2E_NIGHTLY_ENABLED=true (disarankan bersama
+    # E2E_RUNNER self-hosted, menit gratis); workflow_dispatch manual selalu boleh.
+    if: github.event_name == 'workflow_dispatch' || vars.E2E_NIGHTLY_ENABLED == 'true'
     runs-on: ${{ vars.E2E_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 150
     permissions:
@@ -125,12 +130,15 @@ jobs:
           # shellcheck disable=SC2086
           docker compose $DC_FILES $PROFILES logs --no-color --tail=300 > "$RUNNER_TEMP/e2e/compose-logs.txt" 2>&1 || true
 
+      # G16: artefak diagnostik hanya saat gagal, retensi 3 hari; kegagalan upload (kuota storage) tidak menggagalkan job.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
-        if: always()
+        if: failure()
+        continue-on-error: true
         with:
           name: e2e-smoke-${{ github.run_id }}
           path: ${{ runner.temp }}/e2e
-          retention-days: 7
+          retention-days: 3
+          if-no-files-found: ignore
 
       - name: Hancurkan stack
         if: always()

@@ -1,4 +1,4 @@
-# superapp-web — EFN Super-App & brand sites (Next.js 15 App Router)
+# superapp-web — EFN Super-App & brand sites (Next.js 16 App Router)
 
 **Tujuan:** satu codebase untuk Super-App holding (`app.`) dan situs brand (`mart.`, `kitchen.`), tema per brand lewat CSS custom properties.
 **ADR terkait (Proposed):** multi-tenant by domain, unified cart lintas PT (cart dipisah per PT: PPN vs PB1), OTP login via BFF.
@@ -8,7 +8,7 @@
 
 | Path | Isi |
 |---|---|
-| `middleware.ts` | Host -> brand, set request header `x-efn-brand` (dev: `?brand=efn-mart`) |
+| `proxy.ts` | (Next 16, dulu `middleware.ts`) Host -> brand, set request header `x-efn-brand` (dev: `?brand=efn-mart`) |
 | `lib/brands.ts` | Konfigurasi brand & company (RTL/FNB, tarif pajak placeholder) |
 | `lib/bff.ts` | Klien BFF server-side (`BFF_INTERNAL_URL`), tipe kontrak docs/04 |
 | `lib/bff-config.ts` | Guard transport BFF (https wajib, CA internal) — murni, diuji unit |

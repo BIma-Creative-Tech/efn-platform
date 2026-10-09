@@ -10,7 +10,7 @@ pelanggan di mart/kartu). Daftar dashboard final menunggu **Q-47** (10 dashboard
 
 | File | Fungsi |
 |---|---|
-| `Dockerfile` | `metabase/metabase:v0.52.4@sha256` + driver ClickHouse resmi 1.52.0 (Apache-2.0, sha256 dipin). Metabase OSS tidak membawa driver ClickHouse. |
+| `Dockerfile` | `metabase/metabase:v0.58.35@sha256` (LTS). G16: driver ClickHouse sudah bawaan Metabase sejak v0.54 -> jar eksternal 1.52.0 dihapus. **Belum diverifikasi** dengan `provision.py` (kunci `details` koneksi ClickHouse driver bawaan) dan migrasi DB aplikasi 0.52 -> 0.58 (otomatis, tidak bisa dibalik: backup DB `metabase` dulu). |
 | `provision.py` | Skrip idempoten (stdlib saja): setup awal (admin dari file secret), setting (tanpa telemetri, zona Asia/Jakarta, locale id), koneksi `EFN DWH (ClickHouse)`, collection `EFN Fase 1`, kartu & dashboard, lalu menjalankan setiap kartu sekali (`--no-verify-cards` untuk melewati). |
 | `dashboards/*.json` | Definisi dashboard: parameter (tanggal, PT, outlet/gudang, pesaing, produk) + kartu SQL native. |
 | `tests/test_provision.py` | pytest: validasi definisi repo, SQL hanya `efn_dwh.v_*`, mapping filter, TLS wajib. |

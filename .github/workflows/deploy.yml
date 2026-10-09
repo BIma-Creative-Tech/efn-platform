@@ -12,6 +12,7 @@ on:
   push:
     tags: ["v*.*.*"]
   workflow_dispatch:
+    # checkov:skip=CKV_GHA_7: input = pilihan environment + tag image yang SUDAH dibangun/ditandatangani; tidak memengaruhi build (cosign verify).
     inputs:
       environment:
         description: Target environment
@@ -106,6 +107,7 @@ jobs:
           OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
+          # shellcheck disable=SC2153  # OWNER berasal dari env step, bukan salah ketik `owner`
           owner="${OWNER,,}"
           identity="https://github.com/${REPO}/.github/workflows/build-push.yml@${SIGNER_REF}"
           for svc in postgres odoo api-gateway superapp-web ai-ocr-worker etl minio metabase; do

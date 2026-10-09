@@ -6,7 +6,7 @@
 # Basis Debian (bookworm), bukan alpine: binary rilis WAL-G di-link ke glibc. Konsekuensi: volume data dari image
 # alpine lama (uid 70, collation musl) TIDAK kompatibel -> pindahkan via dump/restore (runbook bagian "Migrasi").
 # SEC-47: base image dipin tag@digest (build reprodusibel); Dependabot `docker` memperbarui digest per tag.
-FROM postgres:16.6-bookworm@sha256:557fea37a744d5f4c8faab304b0a90858b53ab119735a88c131fd19dab802f36
+FROM postgres:16.15-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4
 
 ARG WALG_VERSION=v3.0.9
 # Isi dengan sha256 resmi saat bump versi (supply chain). Bila kosong, hanya diverifikasi dengan file .sha256 rilis.
@@ -28,6 +28,10 @@ RUN set -eux; \
     rm -f "/tmp/${asset}" "/tmp/${asset}.sha256"; \
     apt-get purge -y --auto-remove curl; \
     rm -rf /var/lib/apt/lists/*; \
+    # G16 (Trivy image gate): gosu image resmi dibangun dengan Go lama (CVE stdlib HIGH/CRITICAL) dan hanya dipakai
+    # entrypoint bila container start sebagai root; image ini selalu USER postgres -> dihapus (start sebagai root akan
+    # gagal eksplisit). Sertifikat snakeoil paket ssl-cert tidak dipakai (TLS dari /run/secrets) -> kunci privat dihapus.
+    rm -f /usr/local/bin/gosu /etc/ssl/private/ssl-cert-snakeoil.key /etc/ssl/certs/ssl-cert-snakeoil.pem; \
     wal-g --version
 
 COPY --chmod=0755 efn-walg.sh /usr/local/bin/efn-walg

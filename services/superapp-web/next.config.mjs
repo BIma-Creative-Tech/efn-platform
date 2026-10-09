@@ -2,7 +2,7 @@
  * Header keamanan Super-App.
  * - CSP tanpa nonce: Next.js App Router menyisipkan inline script untuk hydration, sehingga
  *   `script-src 'unsafe-inline'` masih diperlukan. Peningkatan berikutnya: CSP berbasis nonce
- *   via middleware (membuat semua halaman dinamis — sudah dinamis karena multi-tenant).
+ *   via proxy.ts (membuat semua halaman dinamis — sudah dinamis karena multi-tenant).
  * - Browser hanya bicara ke origin sendiri (Route Handler -> BFF), jadi connect-src 'self'.
  * - Nilai dihitung saat `next build` (NODE_ENV=production) / `next dev` (development).
  * Traefik juga memasang middleware `secure-headers@file`; header duplikat dengan nilai sama aman.

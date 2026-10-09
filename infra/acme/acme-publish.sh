@@ -34,7 +34,7 @@ MAX_BYTES=32768
 printf '%s' "$ACME_CERT_NAME" | grep -Eq '^[a-z0-9-]+$' || die "ACME_CERT_NAME tidak valid"
 printf '%s' "$ACME_TRAEFIK_DIR" | grep -Eq '^/[A-Za-z0-9/_.-]+$' || die "ACME_TRAEFIK_DIR tidak valid"
 printf '%s' "$ACME_PUBLISH_INTERVAL" | grep -Eq '^[1-9][0-9]*$' || die "ACME_PUBLISH_INTERVAL harus angka"
-[ -d "$ACME_DYN" ] && [ -w "$ACME_DYN" ] || die "$ACME_DYN tidak dapat ditulis (acme-dns-init sudah jalan?)"
+if [ ! -d "$ACME_DYN" ] || [ ! -w "$ACME_DYN" ]; then die "$ACME_DYN tidak dapat ditulis (acme-dns-init sudah jalan?)"; fi
 
 # pem_ok <file> <label-regex> <min-blok> <max-blok>: hanya baris BEGIN/END label + base64 (+ baris kosong di luar blok)
 pem_ok() {

@@ -257,6 +257,8 @@ class EfnKdsStation(models.Model):
         now = fields.Datetime.now()
         for station in self.sudo():
             station.write({"access_token": str(uuid.uuid4()), "token_rotated_at": now})
+        # FP semgrep (G16): yang di-log hanya id stasiun, alasan, dan uid; nilai token TIDAK pernah di-log.
+        # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
         _logger.info("EFN KDS: token stasiun %s dirotasi (%s) oleh user %s", self.ids, reason, self.env.uid)
 
     def write(self, vals):

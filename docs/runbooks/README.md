@@ -62,6 +62,7 @@ Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-inciden
 | Ubah grup/hak user Odoo (UI/RPC, bukan `odoo shell`); traceback JSON-RPC (sisa SEC-22) | [odoo-access-changes.md](odoo-access-changes.md) |
 | journald host (efn-deploy, backup) → Loki | [host-journal-loki.md](host-journal-loki.md) |
 | Boot stack dev di laptop (Docker Desktop/WSL2), upgrade modul Odoo dev | [dev-stack-boot.md](dev-stack-boot.md) |
+| CI GitHub di repo privat paket gratis: kuota artifact/menit, code scanning, suppression scanner, Dependabot | [ci-github-free-plan.md](ci-github-free-plan.md) |
 
 ## Baseline hardening container (`infra/compose/docker-compose.yml`)
 

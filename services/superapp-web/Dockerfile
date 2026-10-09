@@ -11,16 +11,22 @@
 # Catatan: Docker men-set HOSTNAME = id container secara default; ENV di bawah menimpanya.
 
 # SEC-47: base image dipin tag@digest (build reprodusibel); Dependabot `docker` memperbarui digest per tag.
-FROM node:22.12-alpine@sha256:51eff88af6dff26f59316b6e356188ffa2c422bd3c3b76f2556a2e7e89d080bd AS base
+FROM node:22.23-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS base
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1 NPM_CONFIG_UPDATE_NOTIFIER=false NPM_CONFIG_FUND=false \
     PORT=3001 HOSTNAME=0.0.0.0
 COPY package*.json ./
 
 FROM base AS dev
-RUN --mount=type=cache,target=/root/.npm \
+# G16 (semgrep dockerfile.security.missing-user): stage dev/build berjalan sebagai user `node` (uid 1000 bawaan image),
+# bukan root. /app milik node agar `next dev` dan `next build` dapat menulis .next/; runtime tetap user `app`.
+RUN chown node:node /app
+USER node
+RUN --mount=type=cache,target=/home/node/.npm,uid=1000,gid=1000 \
     if [ -f package-lock.json ]; then npm ci; else npm install; fi
-COPY . .
+COPY --chown=node:node . .
+# .next/ dibuat sebagai node: tmpfs /app/.next/cache (compose) kalau tidak membuat parent-nya milik root (EACCES).
+RUN mkdir -p .next/cache
 EXPOSE 3001
 # `next dev` tidak membaca env HOSTNAME -> diteruskan eksplisit lewat -H.
 CMD ["sh", "-c", "exec node_modules/.bin/next dev -p \"${PORT:-3001}\" -H \"${HOSTNAME:-0.0.0.0}\""]
@@ -29,11 +35,15 @@ FROM dev AS build
 # Browser tidak memanggil BFF langsung (connect-src 'self'); URL BFF hanya runtime server-side (BFF_INTERNAL_URL).
 RUN npm run build
 
-FROM node:22.12-alpine@sha256:51eff88af6dff26f59316b6e356188ffa2c422bd3c3b76f2556a2e7e89d080bd AS runtime
+FROM node:22.23-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS runtime
 WORKDIR /app
 # server.js standalone membaca PORT & HOSTNAME saat start.
 ENV NODE_ENV=production PORT=3001 HOSTNAME=0.0.0.0 NEXT_TELEMETRY_DISABLED=1
-RUN addgroup -S app && adduser -S app -G app
+# G16 (Trivy image gate): runtime hanya butuh `node`. npm/npx/corepack/yarn bawaan image membawa dependensi rentan
+# (brace-expansion, picomatch, pacote, ip-address, sigstore - CVE HIGH 2026) dan tidak dipakai saat runtime -> dihapus.
+RUN addgroup -S app && adduser -S app -G app \
+    && rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+              /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-v*
 COPY --from=build --chown=app:app /app/.next/standalone ./
 COPY --from=build --chown=app:app /app/.next/static ./.next/static
 COPY --from=build --chown=app:app /app/public ./public

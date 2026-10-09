@@ -234,8 +234,8 @@ scenario_f() {
   local mh n1 n2 n3 mb g
   # R5 (gelombang 9): grant baca level-kolom efn_etl di DB Odoo (sama dengan langkah deploy.sh; idempoten, sebagai
   # pemilik tabel efn_odoo lewat socket lokal). Job sales_fact_pos aktif di dev (ETL_ENABLE_ODOO=true).
-  g="$(MSYS_NO_PATHCONV=1 docker exec -i "$PG" psql -X -q -v ON_ERROR_STOP=1 -U efn_odoo -d efn_odoo -f - \
-        < "${ROOT}/services/etl/sql/odoo-readonly-grants.sql" 2>&1 && echo GRANT_OK || true)"
+  g="$(if MSYS_NO_PATHCONV=1 docker exec -i "$PG" psql -X -q -v ON_ERROR_STOP=1 -U efn_odoo -d efn_odoo -f - \
+        < "${ROOT}/services/etl/sql/odoo-readonly-grants.sql" 2>&1; then echo GRANT_OK; fi)"
   check "f.odoo_etl_grants" "$([[ "$g" == *GRANT_OK* ]] && echo 1 || echo 0)" "$(tail -c 160 <<< "$g")"
   mh="$(psql_platform -c "select user_hash from platform.price_hunter_report where status='valid' order by created_at desc limit 1")"
   for _ in $(seq 1 30); do
@@ -326,7 +326,7 @@ scenario_e() {
 scenario_g() {
   echo "== g. Negatif enkripsi (regresi)"
   local out
-  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data postgres:16.6-bookworm@sha256:557fea37a744d5f4c8faab304b0a90858b53ab119735a88c131fd19dab802f36 psql "host=postgres dbname=efn_platform user=efn_bff sslmode=disable connect_timeout=5" -c 'select 1' 2>&1 || true)"
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data postgres:16.15-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4 psql "host=postgres dbname=efn_platform user=efn_bff sslmode=disable connect_timeout=5" -c 'select 1' 2>&1 || true)"
   check "g.pg_plaintext_rejected" "$([[ "$out" == *"no encryption"* || "$out" == *"pg_hba"* ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
   out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -m 5 -o /dev/null -w '%{http_code}' https://odoo:8443/web/login --cacert /dev/null -k 2>&1 || true)"
   check "g.odoo_tls_without_client_cert_rejected" "$([[ "$out" != 200 ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
@@ -423,7 +423,7 @@ scenario_l() { # Gelombang 13: Poin EFN di POS (docs/04 §9) — Odoo efn_pos_lo
 
   ledger() { psql_platform -c "select coalesce(sum(delta_points),0) from platform.loyalty_ledger where source='$1' and source_ref='$2'${3:+ and $3}"; }
   resv() { psql_platform -c "select status||'/'||points||'/'||value_idr from platform.loyalty_reservation where order_ref='$1' order by created_at desc limit 1"; }
-  bal() { field points_balance "$(odoo -e SMOKE_STEP=loy_balance -e SMOKE_PARTNER="${1:-L}")"; }
+  bal() { field points_balance "$(odoo -e SMOKE_STEP=loy_balance -e SMOKE_PARTNER=L)"; }  # saldo partner uji L
   redeem_otp() { # uuid partner amount -> 1 bila OTP pos_redeem terverifikasi
     local rr mm cc
     rr="$(odoo -e SMOKE_STEP=loy_otp_request -e SMOKE_ORDER_UUID="$1" -e SMOKE_PARTNER="$2" -e SMOKE_AMOUNT="$3")"

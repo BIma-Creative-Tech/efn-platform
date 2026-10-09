@@ -19,7 +19,7 @@ const STATUS_TEXT: Record<ReportStatus, { label: string; detail: string }> = {
   flagged: { label: 'Perlu pemeriksaan manual', detail: 'Tim kami akan memeriksa laporan ini secara manual.' },
 };
 
-/** Next 15: params berupa Promise. Kontrak: GET /v1/market-scout/reports/:id (docs/04 §3.3). */
+/** Next 15+: params berupa Promise. Kontrak: GET /v1/market-scout/reports/:id (docs/04 §3.3). */
 export default async function ReportStatusPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   if (!UUID_RE.test(id)) notFound();
