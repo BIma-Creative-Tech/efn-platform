@@ -176,10 +176,13 @@ jobs:
           category: trivy-fs
 
   dependency-review:
-    # Butuh dependency graph (tersedia gratis untuk repo privat). Bila API menolak (fitur dimatikan), job gagal ->
-    # aktifkan Settings > Code security > Dependency graph.
+    # Repo privat: dependency review butuh GitHub Advanced Security ("Dependency review is not supported on this
+    # repository", PR #35, 9 Okt 2026) -> hanya bila code scanning/GHAS tersedia. Tanpa GHAS, kerentanan dependency
+    # tetap digerbangi npm audit / pip-audit (CI gate) dan Trivy fs; cek lisensi GPL/AGPL tidak berjalan (runbook §1).
     name: Dependency review (PR)
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request' &&
+      (vars.CODE_SCANNING_ENABLED == 'true' || github.event.repository.visibility == 'public')
     runs-on: ubuntu-latest
     permissions:
       contents: read
