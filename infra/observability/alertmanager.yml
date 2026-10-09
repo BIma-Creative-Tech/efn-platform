@@ -30,6 +30,10 @@ inhibit_rules:
   # G13c: dead-man loyalty berbasis log (Loki) menekan pasangan berbasis gauge (Prometheus)
   - source_matchers: ['alertname="EfnLoyaltyReconMissing"']
     target_matchers: ['alertname="EfnLoyaltyReconStale"']
+  # G17: API key online - critical menekan warning
+  - source_matchers: ['alertname="EfnOnlineApiKeyExpiryCritical"']
+    target_matchers: ['alertname="EfnOnlineApiKeyExpiringSoon"']
+    equal: [channel]
   - source_matchers: ['alertname="EfnDiskUsageCritical"']
     target_matchers: ['alertname="EfnDiskUsageHigh"']
     equal: [instance, mountpoint]

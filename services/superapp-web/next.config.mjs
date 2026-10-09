@@ -48,7 +48,12 @@ const nextConfig = {
   async headers() {
     return [
       { source: '/:path*', headers: securityHeaders },
-      { source: '/api/:path*', headers: [{ key: 'Cache-Control', value: 'no-store' }] },
+      // G17: header next.config MENIMPA Cache-Control yang di-set Route Handler (diverifikasi di runtime standalone).
+      // Jadi `no-store` default berlaku untuk semua `/api/*` KECUALI katalog publik (`/api/catalog/**`), yang men-set
+      // cache sendiri: daftar/detail `public, max-age=60`, gambar `immutable`, error `no-store`.
+      // Stok live tetap dipaksa `no-store` di sini (lapis kedua selain handler). Data member (cart/orders/pickup-code) tetap no-store.
+      { source: '/api/:path((?!catalog(?:/|$)).*)', headers: [{ key: 'Cache-Control', value: 'no-store' }] },
+      { source: '/api/catalog/stock', headers: [{ key: 'Cache-Control', value: 'no-store' }] },
     ];
   },
 };

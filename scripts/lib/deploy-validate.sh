@@ -20,7 +20,13 @@ EFN_RELEASE_CONFIG_VARS=(ACME_EMAIL PAYMENT_PROVIDER PG_SUPERUSER WHATSAPP_ENABL
   WHATSAPP_OTP_TEMPLATE ACME_DNS_PROVIDER ACME_DNS_TOKEN_ENV ACME_SERVER RABBITMQ_STRICT_PERMISSIONS
   MARKET_SCOUT_PHOTO_RETENTION_DAYS CH_MART_RETENTION_YEARS CONSENT_LOCATION_VERSION CONSENT_LOCATION_TEXT_SHA256
   CONSENT_MARKETING_VERSION CONSENT_MARKETING_TEXT_SHA256 DSAR_DELETE_GRACE_DAYS ETL_ENABLE_ODOO ETL_ENABLE_GL
-  ETL_AUDIT_COPY_ENABLED OLLAMA_VISION_MODEL MIGRATION_ENABLED METABASE_ADMIN_EMAIL ETL_LOYALTY_RECON_NOT_BEFORE)
+  ETL_AUDIT_COPY_ENABLED OLLAMA_VISION_MODEL MIGRATION_ENABLED METABASE_ADMIN_EMAIL ETL_LOYALTY_RECON_NOT_BEFORE
+  ONLINE_ENABLED ONLINE_CATALOG_ENABLED ONLINE_CHANNELS ONLINE_FULFILMENTS ONLINE_PAYMENT_TIMEOUT_SECONDS
+  ONLINE_QUOTE_TTL_SECONDS ONLINE_MAX_OPEN_ORDERS_PER_MEMBER ONLINE_CATALOG_SYNC_SECONDS ONLINE_PICKUP_CODE_MAX_DAYS
+  ONLINE_ORDER_MEMBER_LINK_DAYS ONLINE_EVENT_RETENTION_DAYS ODOO_RPC_TIMEOUT_MS)
+# G17 (docs/04 §10.13): saklar KHUSUS dev/test. Bukan konfigurasi rilis (kunci manifest tidak dikenal = ditolak
+# efn-deploy); efn_validate_config juga menolak nilai true di staging/production lewat jalur manual deploy.sh.
+EFN_DEV_ONLY_SWITCHES=(ODOO_ONLINE_MOCK EFN_PAYMENT_SIMULATOR)
 # Kontrol keamanan yang di production hanya boleh `false` bila nama-nya ada di EFN_ALLOW_CONTROL_OFF (deploy.conf)
 # (ETL_LOYALTY_RECON_NOT_BEFORE: bukan boolean; izin = boleh MEMAJUKAN cutoff di production, dicek scripts/deploy.sh)
 EFN_SECURITY_CONTROLS=(RABBITMQ_STRICT_PERMISSIONS ETL_AUDIT_COPY_ENABLED ETL_LOYALTY_RECON_NOT_BEFORE)
@@ -152,8 +158,33 @@ efn_validate_config() { # app_env
   for v in MARKET_SCOUT_PHOTO_RETENTION_DAYS CH_MART_RETENTION_YEARS DSAR_DELETE_GRACE_DAYS; do
     _efn_re "$v" '^[0-9]{1,5}$' || return 1
   done
-  for v in WHATSAPP_ENABLED RABBITMQ_STRICT_PERMISSIONS ETL_ENABLE_ODOO ETL_ENABLE_GL ETL_AUDIT_COPY_ENABLED MIGRATION_ENABLED; do
+  for v in WHATSAPP_ENABLED RABBITMQ_STRICT_PERMISSIONS ETL_ENABLE_ODOO ETL_ENABLE_GL ETL_AUDIT_COPY_ENABLED MIGRATION_ENABLED \
+           ONLINE_ENABLED ONLINE_CATALOG_ENABLED; do
     _efn_re "$v" '^(true|false)$' || return 1
+  done
+  # G17 penjualan online (docs/04 §10.1/§10.13; angka PLACEHOLDER pilot). Kosong = default compose (online MATI).
+  _efn_re ONLINE_CHANNELS '^[A-Z][A-Z0-9-]{1,15}(,[A-Z][A-Z0-9-]{1,15}){0,7}$' || return 1
+  _efn_re ONLINE_FULFILMENTS '^(pickup|delivery)(,(pickup|delivery))?$' || return 1
+  local spec name lo hi
+  for spec in ONLINE_PAYMENT_TIMEOUT_SECONDS:60:3600 ONLINE_QUOTE_TTL_SECONDS:60:3600 \
+              ONLINE_MAX_OPEN_ORDERS_PER_MEMBER:1:20 ONLINE_CATALOG_SYNC_SECONDS:60:86400 \
+              ONLINE_PICKUP_CODE_MAX_DAYS:1:30 ONLINE_ORDER_MEMBER_LINK_DAYS:1:3650 \
+              ONLINE_EVENT_RETENTION_DAYS:1:3650 ODOO_RPC_TIMEOUT_MS:1000:30000; do
+    IFS=: read -r name lo hi <<< "$spec"
+    [[ -z "${!name:-}" ]] && continue
+    [[ "${!name}" =~ ^[1-9][0-9]{0,5}$ ]] && (( ${!name} >= lo && ${!name} <= hi )) \
+      || _efn_err "$name harus bilangan bulat ${lo}..${hi}" || return 1
+  done
+  # Online di production butuh payment provider nyata: mock ditolak di atas, `disabled` = checkout pasti gagal.
+  if [[ "$app_env" == production && "${ONLINE_ENABLED:-false}" == true && ! "${PAYMENT_PROVIDER}" =~ ^(xendit|midtrans)$ ]]; then
+    _efn_err "production ONLINE_ENABLED=true butuh PAYMENT_PROVIDER xendit|midtrans (bukan ${PAYMENT_PROVIDER})"; return 1
+  fi
+  # Saklar dev/test (stub json2 BFF L-7, simulator bayar frontend) tidak boleh aktif di staging/production
+  for v in "${EFN_DEV_ONLY_SWITCHES[@]}"; do
+    efn_no_cntrl "$v" "${!v:-}" || return 1
+    if [[ -n "${!v:-}" && "${!v}" != false ]]; then
+      _efn_err "${v}=${!v} ditolak di ${app_env} (hanya dev/test)"; return 1
+    fi
   done
   # G14: go-live loyalty POS untuk rekonsiliasi ledger poin vs pos.order (ETL). UTC kanonik saja (perbandingan
   # leksikal = kronologis). Masa depan ditolak: cutoff > sekarang = rekonsiliasi buta (kontrol detektif mati diam-diam).

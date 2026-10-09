@@ -253,6 +253,7 @@ neg_env "38 secret multi-baris (injeksi .env) ditolak" "karakter kontrol" \
 neg_env "39 secret dengan CR/ESC ditolak" "karakter kontrol" "JWT_SECRET=$(printf 'abc\r\033[2Jx')"
 neg_man "40 config manifest multi-baris ditolak" "skema" '.config.RABBITMQ_STRICT_PERMISSIONS = "true\nIMAGE_ODOO=evil"'
 neg_man "41 kunci config manifest tidak dikenal ditolak" "skema" '.config.IMAGE_ODOO = "evil.example/odoo"'
+neg_man "101 saklar dev ODOO_ONLINE_MOCK di config manifest ditolak (G17)" "skema" '.config.ODOO_ONLINE_MOCK = "true"'
 neg_man "42 manifest schema 1 (tanpa config) ditolak" "skema" '.schema = 1 | del(.config)'
 neg_man "43 config bukan string ditolak" "skema" '.config.ETL_ENABLE_GL = true'
 # shellcheck disable=SC2016 # literal $(id) disengaja
@@ -374,6 +375,27 @@ for c in "75|0|2026-10-07T07:09:00Z" "76|1|2026-10-07 07:09:00" "77|1|2026-10-07
   u "$n ETL_LOYALTY_RECON_NOT_BEFORE=$val" "$want" env ACME_EMAIL=a@b.co PAYMENT_PROVIDER=disabled \
     ETL_LOYALTY_RECON_NOT_BEFORE="$val" bash -c "source '$SRC/scripts/lib/deploy-validate.sh'; efn_validate_config production"
 done
+
+# G17 (docs/04 §10.13): konfigurasi penjualan online di manifest rilis
+vc() { # nama harapan app_env VAR=nilai...
+  local n="$1" w="$2" e="$3"; shift 3
+  u "$n" "$w" env ACME_EMAIL=a@b.co PAYMENT_PROVIDER="${PP:-disabled}" "$@" \
+    bash -c "source '$SRC/scripts/lib/deploy-validate.sh'; efn_validate_config $e"
+}
+vc "88 production ONLINE_ENABLED=true dengan PAYMENT_PROVIDER=disabled ditolak" 1 production ONLINE_ENABLED=true
+PP=xendit vc "89 production ONLINE_ENABLED=true dengan provider nyata diterima" 0 production ONLINE_ENABLED=true ONLINE_CHANNELS=RTL
+vc "90 ONLINE_ENABLED bukan boolean ditolak" 1 staging ONLINE_ENABLED=yes
+vc "91 ONLINE_CHANNELS huruf kecil ditolak" 1 staging ONLINE_CHANNELS=rtl
+vc "92 ONLINE_CHANNELS RTL,FNB-BAKSO diterima" 0 staging ONLINE_CHANNELS=RTL,FNB-BAKSO
+vc "93 ONLINE_FULFILMENTS di luar allowlist ditolak" 1 staging ONLINE_FULFILMENTS=pickup,shipping
+vc "94 ONLINE_PAYMENT_TIMEOUT_SECONDS < 60 ditolak" 1 staging ONLINE_PAYMENT_TIMEOUT_SECONDS=30
+vc "95 ONLINE_PAYMENT_TIMEOUT_SECONDS nol di depan ditolak" 1 staging ONLINE_PAYMENT_TIMEOUT_SECONDS=0900
+vc "96 angka online dalam rentang diterima" 0 staging ONLINE_PAYMENT_TIMEOUT_SECONDS=900 ONLINE_QUOTE_TTL_SECONDS=600 \
+  ONLINE_MAX_OPEN_ORDERS_PER_MEMBER=3 ODOO_RPC_TIMEOUT_MS=8000 ONLINE_EVENT_RETENTION_DAYS=180
+vc "97 ODOO_RPC_TIMEOUT_MS > 30000 (timeout gateway) ditolak" 1 staging ODOO_RPC_TIMEOUT_MS=60000
+vc "98 production ODOO_ONLINE_MOCK=true ditolak (L-7)" 1 production ODOO_ONLINE_MOCK=true
+vc "99 staging EFN_PAYMENT_SIMULATOR=true ditolak (hanya dev)" 1 staging EFN_PAYMENT_SIMULATOR=true
+vc "100 default online (semua kosong) diterima" 0 production
 
 echo "RINGKASAN efn-deploy: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]

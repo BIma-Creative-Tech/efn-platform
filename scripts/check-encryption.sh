@@ -11,6 +11,9 @@
 #   - sidecar ghostunnel dengan --disable-authentication atau tanpa --cacert/--allow-cn (mTLS, docs/04 §8.5)
 #   - web-config exporter tanpa client_auth_type RequireAndVerifyClientCert; Loki tidak loopback (SEC-35)
 #   - filter L7 s3-gateway (HAProxy) tanpa TLS masuk atau tanpa `ssl verify required` ke storage (ADR-030)
+#   - (G17) filter odoo-rpc-gateway tanpa mTLS masuk (CN api-gateway) / mTLS keluar verify ke odoo-tls; BFF ke Odoo
+#     tidak lewat gateway; gateway di-label Traefik / publish port; secret API key online / HMAC event di-mount ke
+#     service selain BFF (+ Odoo untuk HMAC); saklar dev EFN_PAYMENT_SIMULATOR / ODOO_ONLINE_MOCK aktif di render prod
 #   - (at rest) service metabase tanpa secret metabase_encryption_key / dengan MB_ENCRYPTION_SECRET_KEY di env /
 #     dengan override entrypoint apa pun termasuk `[]`/`''` / dengan image resmi metabase/metabase (G16b, SEC-86)
 # Pengecualian hanya lewat ADR-022; tambahkan di sini dengan komentar alasan.
@@ -135,6 +138,41 @@ check_compose() {
       || err "[$label] metabase: wajib cap_drop [ALL] dan cap_add hanya CHOWN/SETUID/SETGID (dasar pengecualian DS-0002)"
   fi
 
+  # 5) G17 (docs/04 §10.4.1/§10.10, ADR-034): jalur BFF -> Odoo /json/2 hanya lewat filter odoo-rpc-gateway.
+  if jq -e '.services["odoo-rpc-gateway"] != null' <<< "$json" > /dev/null; then
+    jq -e '(.services["api-gateway"].environment.ODOO_RPC_URL // "") == "https://odoo-rpc-gateway:8443"' <<< "$json" > /dev/null \
+      || err "[$label] api-gateway: ODOO_RPC_URL wajib https://odoo-rpc-gateway:8443 (bukan Odoo langsung / plaintext)"
+    jq -e '(.services["odoo-rpc-gateway"].labels // {}) | keys | map(select(startswith("traefik."))) | length == 0' \
+      <<< "$json" > /dev/null || err "[$label] odoo-rpc-gateway: tidak boleh di-label Traefik (internal saja)"
+    jq -e '(.services["odoo-rpc-gateway"].ports // []) | length == 0' <<< "$json" > /dev/null \
+      || err "[$label] odoo-rpc-gateway: tidak boleh mem-publish port"
+    jq -e '[.services["odoo-tls"].command[]? | select(. == "--allow-cn=odoo-rpc-gateway")] | length == 1' <<< "$json" > /dev/null \
+      || err "[$label] odoo-tls: --allow-cn=odoo-rpc-gateway hilang (gateway tidak bisa mTLS ke Odoo)"
+    # BFF tidak boleh diizinkan langsung ke sidecar Odoo (melewati filter 10 path)
+    if jq -e '[.services | to_entries[] | select(.key | test("^odoo(-ws)?-tls$")) | .value.command[]?
+               | select(. == "--allow-cn=api-gateway")] | length > 0' <<< "$json" > /dev/null; then
+      err "[$label] odoo-tls/odoo-ws-tls: --allow-cn=api-gateway dilarang (BFF wajib lewat odoo-rpc-gateway)"
+    fi
+  fi
+  # 6) Least privilege secret online (docs/04 §10.10): API key Odoo kanal hanya BFF; HMAC event hanya Odoo + BFF.
+  local sec allowed
+  for sec in odoo_api_key_online_rtl odoo_api_key_online_fnb odoo_online_event_hmac; do
+    allowed='["api-gateway"]'
+    [[ "$sec" == "odoo_online_event_hmac" ]] && allowed='["api-gateway","odoo"]'
+    jq -e --arg s "$sec" --argjson ok "$allowed" '
+        [.services | to_entries[] | select([.value.secrets[]? | (.source // .)] | index($s) != null) | .key]
+        | (. - $ok) | length == 0' <<< "$json" > /dev/null \
+      || err "[$label] secret $sec di-mount ke service selain $allowed (least privilege, docs/04 §10.10)"
+  done
+
+  # 7) G17: saklar khusus dev tidak boleh aktif di render prod (simulator bayar frontend, stub json2 BFF L-7)
+  if [[ "$label" == prod ]]; then
+    jq -e '(.services["superapp-web"].environment.EFN_PAYMENT_SIMULATOR // "false") == "false"' <<< "$json" > /dev/null \
+      || err "[$label] superapp-web: EFN_PAYMENT_SIMULATOR harus false di prod (simulator pembayaran hanya dev)"
+    jq -e '(.services["api-gateway"].environment.ODOO_ONLINE_MOCK // "false") == "false"' <<< "$json" > /dev/null \
+      || err "[$label] api-gateway: ODOO_ONLINE_MOCK dilarang di prod (stub json2 hanya dev/test, L-7)"
+  fi
+
   echo "check-encryption: compose ${label} diperiksa"
 }
 
@@ -181,6 +219,17 @@ check_files() {
   grep -qE '^[[:space:]]*bind[[:space:]]+:9000[[:space:]]+ssl[[:space:]]' "$hap" \
     || err "infra/s3-gateway/haproxy.cfg: listener :9000 tanpa ssl"
   if grep -qE 'verify[[:space:]]+none' "$hap"; then err "infra/s3-gateway/haproxy.cfg: verify none dilarang"; fi
+  # G17 (docs/04 §10.4.1): filter /json/2 - mTLS masuk (verify required + CA) dan mTLS keluar ke odoo-tls
+  hap="${ROOT_DIR}/infra/odoo-rpc-gateway/haproxy.cfg"
+  grep -qE '^[[:space:]]*bind[[:space:]]+:8443[[:space:]]+ssl[[:space:]].*ca-file[[:space:]]+/run/secrets/efn_ca_crt[[:space:]]+verify[[:space:]]+required' "$hap" \
+    || err "infra/odoo-rpc-gateway/haproxy.cfg: listener :8443 tanpa ssl + 'ca-file ... verify required' (mTLS)"
+  grep -qE '^[[:space:]]*acl[[:space:]]+cn_bff[[:space:]]+ssl_c_s_dn\(CN\)[[:space:]]+-m[[:space:]]+str[[:space:]]+api-gateway$' "$hap" \
+    || err "infra/odoo-rpc-gateway/haproxy.cfg: allowlist CN klien harus persis api-gateway"
+  grep -qE '^[[:space:]]*server[[:space:]].*[[:space:]]ssl[[:space:]]+verify[[:space:]]+required[[:space:]]+ca-file[[:space:]].*[[:space:]]crt[[:space:]].*[[:space:]]verifyhost[[:space:]]+odoo([[:space:]]|$)' "$hap" \
+    || err "infra/odoo-rpc-gateway/haproxy.cfg: backend Odoo tanpa 'ssl verify required ca-file .. crt .. verifyhost odoo'"
+  if grep -qE 'verify[[:space:]]+none|^[[:space:]]*(stats|option[[:space:]]+forwardfor)' "$hap"; then
+    err "infra/odoo-rpc-gateway/haproxy.cfg: verify none / stats / forwardfor dilarang"
+  fi
   echo "check-encryption: file konfigurasi infra diperiksa"
 }
 

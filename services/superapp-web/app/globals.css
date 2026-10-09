@@ -101,6 +101,14 @@ a {
   color: var(--color-primary-contrast);
   text-decoration: none;
   font-weight: 600;
+  /* Target sentuh ≥ 44px tinggi di ponsel (WCAG 2.5.5); menu membungkus ke baris berikut bila sempit. */
+  display: inline-block;
+  padding: 0.625rem 0.25rem;
+}
+@media (max-width: 30rem) {
+  .site-nav ul {
+    gap: 0 0.75rem;
+  }
 }
 .site-nav a:hover {
   text-decoration: underline;

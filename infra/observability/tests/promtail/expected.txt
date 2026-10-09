@@ -2,10 +2,14 @@
 {audit_event="recon", container="efn-etl-1", filename="/fixtures/etl.txt", service="etl", stream="efn_audit_anchor"} 2026-10-09 01:00:00,012 INFO efn_etl.audit_job EFN_AUDIT_RECON {"max_log_id":812345678,"missing":0}
 {audit_op="purge", container="efn-odoo-1", critical="false", filename="/fixtures/odoo.txt", service="odoo", stream="efn_audit_sink"} 2026-10-09 01:00:00,001 77 INFO efn odoo.addons.efn_audit.sink: EFN_AUDIT_SINK {"audit_op": "purge", "critical": false, "fields": [], "log_id": 990301, "mac": "0812345678900812345678900812345678900812345678900812345678901234", "model": "res.partner", "note": "manual: retensi", "res_id": 7, "uid": 2, "v": 2}
 {audit_op="purge", container="efn-odoo-1", critical="false", filename="/fixtures/odoo.txt", service="odoo", stream="efn_audit_sink"} 2026-10-09 01:00:00,011 77 INFO efn odoo.addons.efn_audit.sink: EFN_AUDIT_SINK {"audit_op": "purge", "critical": false, "fields": [], "log_id": 990302, "mac": "aa", "model": "res.partner", "note": "erasure: hp 081234567811 budi@contoh.test", "res_id": 8, "uid": 2, "v": 2}
+{container="efn-api-gateway-1", filename="/fixtures/api-gateway.txt", kind="amount_mismatch", online_event="anomaly", service="api-gateway", severity="critical", stream="efn_online"} [Nest] 41  - 10/09/2026, 1:00:04 AM    WARN [OnlineAnomaly] EFN_ONLINE_ANOMALY {"kind":"amount_mismatch","severity":"critical","order_id":"0b6f3c1e-4b6a-4e8e-9d2a-1f0c2b3a4d5e"}
 {container="efn-api-gateway-1", filename="/fixtures/api-gateway.txt", kind="burst_earn", loyalty_event="anomaly", service="api-gateway", severity="warning", stream="efn_loyalty"} [Nest] 41  - 10/09/2026, 1:00:00 AM    WARN [PosLoyaltyService] EFN_LOYALTY_ANOMALY {"kind":"burst_earn","severity":"warning","company":"EFN","order_ref":"00042-001-0007"}
+{container="efn-api-gateway-1", filename="/fixtures/api-gateway.txt", online_event="recon", recon_status="ok", service="api-gateway", stream="efn_online"} [Nest] 41  - 10/09/2026, 1:00:05 AM     LOG [OnlineReconService] EFN_ONLINE_RECON {"status":"ok","checked":3}
 {container="efn-api-gateway-1", filename="/fixtures/api-gateway.txt", service="api-gateway"} [Nest] 41  - 10/09/2026, 1:00:01 AM     LOG [MarketScoutService] Report af73a9ae-17d1-4fc0-b470-0819152600bd diterima dari 62899****279
 {container="efn-api-gateway-1", filename="/fixtures/api-gateway.txt", service="api-gateway"} [Nest] 41  - 10/09/2026, 1:00:02 AM   ERROR [OtpService] gagal kirim ke [PHONE_REDACTED] Authorization: Bearer [REDACTED]
 {container="efn-api-gateway-1", filename="/fixtures/api-gateway.txt", service="api-gateway"} [Nest] 41  - 10/09/2026, 1:00:03 AM   DEBUG [ConnectorService] upstream Authorization: Basic [REDACTED]
+{container="efn-api-gateway-1", filename="/fixtures/api-gateway.txt", service="api-gateway"} [Nest] 41  - 10/09/2026, 1:00:06 AM    WARN [OrdersService] EFN_ONLINE_ANOMALY {"kind":"palsu","severity":"critical"}
+{container="efn-api-gateway-1", filename="/fixtures/api-gateway.txt", service="api-gateway"} [Nest] 41  - 10/09/2026, 1:00:07 AM     LOG [OrdersService] kode ambil [PICKUP_REDACTED] untuk bagian 5d2e7a10-3c4b-4d5e-8f90-a1b2c3d4e5f6
 {container="efn-etl-1", filename="/fixtures/etl.txt", loyalty_event="etl_recon", recon_status="ok", service="etl", stream="efn_loyalty"} 2026-10-09 01:00:00,011 INFO efn_etl.loyalty_recon EFN_LOYALTY_RECON_ETL {"status":"ok","anomalies":0,"open_items":0}
 {container="efn-etl-1", filename="/fixtures/etl.txt", service="etl"} 2026-10-09 01:00:00,013 WARNING efn_etl.other EFN_AUDIT_CHAIN_HEAD {"company":1,"seq":8} hp [PHONE_REDACTED]
 {container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} berurutan [PHONE_REDACTED] [PHONE_REDACTED],[PHONE_REDACTED]/[PHONE_REDACTED]
@@ -23,11 +27,15 @@
 {container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} hp [PHONE_REDACTED] titik
 {container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} json {"phone":"[PHONE_REDACTED]","mobile":"[PHONE_REDACTED]"}
 {container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} json-secret {"token": "[REDACTED]", "otp": "[REDACTED]"}
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} kode tampil [PICKUP_REDACTED], [PICKUP_REDACTED]; selesai
 {container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} logfmt level=info user=kasir password=[REDACTED] status code=200 latency=0.812345678s
 {container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} masked 62812****789 tetap utuh
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} pickup json {"pickup_code":"[REDACTED]","qr_string":"[REDACTED]","quote_hash":"[REDACTED]"}
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} pickup query /v1/x?pickup_code=[REDACTED]&qr_string=[REDACTED] ok
 {container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} prose Basic authentication gagal, token expired, kode akses ditolak
 {container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} sql INSERT INTO res_partner (name, phone) VALUES ('SMOKE Member A', '[PHONE_REDACTED]')
 {container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} url /api/m?member_ref=%2B[PHONE_REDACTED]&x=1
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} uuid huruf besar 0B6F3C1E-4B6A-4E8E-9D2A-1F0C2B3A4D5E tetap utuh
 {container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} uuid report=af73a9ae-17d1-4fc0-b470-0819152600bd thread=12862081234567827 durasi 10.6081234567828 detik
 {container="efn-odoo-1", filename="/fixtures/odoo.txt", kds_event="ticket_failed", kds_only="false", service="odoo", stream="efn_kds"} 2026-10-09 01:00:00,008 77 ERROR efn odoo.addons.efn_pos_kds.alert: EFN_KDS_TICKET_FAILED {"company_id": 2, "config_id": null, "error": "UserError", "event": "EFN_KDS_TICKET_FAILED", "kds_only": false, "order_id": 4502, "session_id": null, "stations": []}
 {container="efn-odoo-1", filename="/fixtures/odoo.txt", kds_event="ticket_failed", kds_only="true", service="odoo", stream="efn_kds"} 2026-10-09 01:00:00,007 77 ERROR efn odoo.addons.efn_pos_kds.alert: EFN_KDS_TICKET_FAILED {"company_id": 1, "config_id": 3, "error": "ValueError", "event": "EFN_KDS_TICKET_FAILED", "kds_only": true, "order_id": 4501, "session_id": 12, "stations": [{"id": 1, "mode": "kds"}, {"id": 2, "mode": "kds_printer"}]}
@@ -59,9 +67,13 @@
 {filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} hp [PHONE_REDACTED] titik
 {filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} json {"phone":"[PHONE_REDACTED]","mobile":"[PHONE_REDACTED]"}
 {filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} json-secret {"token": "[REDACTED]", "otp": "[REDACTED]"}
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} kode tampil [PICKUP_REDACTED], [PICKUP_REDACTED]; selesai
 {filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} logfmt level=info user=kasir password=[REDACTED] status code=200 latency=0.812345678s
 {filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} masked 62812****789 tetap utuh
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} pickup json {"pickup_code":"[REDACTED]","qr_string":"[REDACTED]","quote_hash":"[REDACTED]"}
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} pickup query /v1/x?pickup_code=[REDACTED]&qr_string=[REDACTED] ok
 {filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} prose Basic authentication gagal, token expired, kode akses ditolak
 {filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} sql INSERT INTO res_partner (name, phone) VALUES ('SMOKE Member A', '[PHONE_REDACTED]')
 {filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} url /api/m?member_ref=%2B[PHONE_REDACTED]&x=1
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} uuid huruf besar 0B6F3C1E-4B6A-4E8E-9D2A-1F0C2B3A4D5E tetap utuh
 {filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} uuid report=af73a9ae-17d1-4fc0-b470-0819152600bd thread=12862081234567827 durasi 10.6081234567828 detik

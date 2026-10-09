@@ -1389,3 +1389,110 @@ Belum / perlu tindakan:
 - Superadmin: pasang ulang `efn-deploy` di host (sha256 dari PR), isi `/etc/efn/approved-release` sebelum rilis
   production; admin repo: Environment `staging` → deployment branch `main` saja (saat ini tanpa aturan).
 - `head_branch` = nama tag untuk run push tag (SEC-94) dan seluruh alur build/tag/deploy baru belum terbukti di run nyata.
+
+---
+
+# Gelombang 17 — infra penjualan online Fase 3 (docs/04 §10, ADR-034 Proposed), 9 Okt 2026, belum di-commit
+
+> **Ringkasan manajemen.** Jalur aman Super-App → Odoo untuk pesanan online sudah dibangun dan diuji nyata: BFF hanya
+> bisa memanggil 10 fungsi pesanan online di Odoo lewat penjaga khusus (`odoo-rpc-gateway`) dengan sertifikat di kedua
+> sisi; 97 uji penyimpangan/serangan berperilaku sesuai harapan (ditolak), 10 fungsi sah lolos. Antrean pesanan, kunci
+> rahasia baru, alert, dan runbook (rotasi kunci API, operasi pesanan) siap. Online tetap **mati** di produksi
+> (`ONLINE_ENABLED=false`).
+
+## G17.1 File (batas §10.15)
+- **Baru:** `infra/odoo-rpc-gateway/{haproxy.cfg,entrypoint.sh,test-gateway.sh,README.md}`,
+  `infra/compose/docker-compose.online-fnb.yml` (mount key FNB hanya saat kanal FNB aktif, pola payment overlay),
+  `infra/observability/loki-rules/efn-online.yml`, `docs/runbooks/online-orders.md`, `docs/runbooks/odoo-online-api-key.md`.
+- **Ubah:** `infra/compose/docker-compose.yml` (service `odoo-rpc-gateway`; `odoo-tls --allow-cn=odoo-rpc-gateway`;
+  env BFF §10.13 + secret; Odoo `EFN_ONLINE_EVENT_HMAC_FILE`; `MINIO_BUCKET_CATALOG`; superapp-web
+  `EFN_PAYMENT_SIMULATOR: "false"` bernilai tetap), `docker-compose.dev.yml` (superapp-web `EFN_PAYMENT_SIMULATOR: "true"`),
+  `infra/rabbitmq/rabbitmq-entrypoint.sh`, `infra/redis/redis-entrypoint.sh` (`~cart:* ~oq:* ~ocat:*`),
+  `infra/minio/minio-init.sh` (bucket `catalog` SSE-S3 + policy BFF), `infra/observability/{alert-rules.yml,
+  alertmanager.yml, promtail.yml, promtail-journal.yml, tests/promtail/*}`, `scripts/{secrets.list, gen-pki.sh,
+  check-encryption.sh}`, `.github/workflows/ci.yml`.
+
+## G17.2 Keputusan teknis
+- **PKI:** `odoo-rpc-gateway|both` (server untuk BFF, klien ke odoo-tls); `api-gateway` server → **both** (sertifikat
+  BFF dipakai sebagai klien CN `api-gateway`; tidak perlu secret `tls_api_gateway_client_*`). Konsekuensi staging/prod:
+  **intermediate wajib diterbitkan ulang** (nameConstraints belum memuat `odoo-rpc-gateway`; gen-pki.sh menolak di
+  staging/prod sampai Superadmin `make pki-intermediate`, runbook internal-pki.md#service-baru). Dev: CA dev dibuat ulang.
+- **Secret baru:** `odoo_api_key_online_rtl`, `odoo_api_key_online_fnb` (`literal:disabled`; key dibuat DI Odoo lewat
+  runbook), `odoo_online_event_hmac` (`random`; mount odoo + api-gateway saja, dicek check-encryption). **Kunci
+  enkripsi kode ambil:** kontrak §10.3.6 = AES-256-GCM §7.2 = key ring `pii_encryption_key` (AAD
+  `efn:online_order_part.pickup_code_enc:v1`) → tidak ada secret baru.
+- **Gateway:** pola s3-gateway; path dicocokkan MENTAH (tanpa decode) dengan 10 string; allowlist header (PCRE2);
+  `X-Odoo-Database` dipaksa; penolakan membawa `X-EFN-Gateway-Deny: <alasan>` + log `why=`.
+- **RabbitMQ:** 4 queue §10.9 quorum + DLQ + `x-delivery-limit: 10`; `efn-bff` read 4 queue (strict), write tetap
+  `amq.default`. Argumen queue lama tidak diubah.
+- **Alert:** grup Prometheus `efn-online` (OrderStuck, AmountMismatch, DlqNotEmpty, OdooAuthFailure, CircuitOpen,
+  CatalogStale, RefundPending [proposed], ApiKeyExpiringSoon/Critical/Unknown — R-T15 lewat metrik textfile
+  `efn_odoo_api_key_expiry_timestamp_seconds{channel}` yang ditulis runbook); `EfnDeadLetterNotEmpty` mengecualikan
+  `order.*`; Loki: `EfnOnlineReconDeadman` (20 m; hanya bila heartbeat ada dalam 24 j), `EfnOnlineAnomaly*`,
+  `EfnOdooRpcGatewayDenied`. Promtail tahap 6 (`stream="efn_online"`) + redaksi kode ambil `ABCD-EFGH`
+  (`[PICKUP_REDACTED]`) dan kunci `pickup_code|qr_string|quote_hash` (query/JSON). Idempotency-Key tidak diredaksi
+  (bukan rahasia; deterministik dari id yang boleh di-log).
+- **Tambahan lead:** `EFN_PAYMENT_SIMULATOR` true hanya dev; base bernilai tetap `"false"` (bukan `${..}`, tidak bisa
+  diubah lewat .env, tidak ada di allowlist deploy-validate); `check-encryption.sh` menolak render prod dengan nilai
+  selain false dan menolak `ODOO_ONLINE_MOCK` di api-gateway prod.
+
+## G17.3 Verifikasi nyata (stack dev, Docker Desktop 29.8.1)
+- CA dev dibuat ulang (service PKI baru) → seluruh stack `up --force-recreate`: semua container healthy; `minio-init`
+  membuat bucket `catalog` (SSE-S3).
+- `test-gateway.sh`: **97/97 PASS** (diulang setelah Docker Desktop restart): tanpa sertifikat / CA asing (CN
+  api-gateway) / sertifikat EKU server saja / HTTP polos / BFF langsung ke `odoo:8443` → handshake gagal; CN traefik →
+  403 `cn`; 6 method → 405; 23 path lain (search_read, write, action_efn_ready, handover wizard, call_kw, jsonrpc,
+  xmlrpc, trailing slash, huruf besar, `//`, dot segment, `;`, backslash) + 14 varian encoded (`%61`, `%2F`, `%2e%2e`,
+  `%252e`, `%00`, `%c0%ae`, `%3F`, `%23`, …) → 403; query/fragment/absolute-form/HTTP 1.0 → ditolak; kasus header
+  (method override ×3, X-Original-URL, X-Rewrite-URL, X-Openerp-Session-Id, Upgrade h2c/websocket, TE, Expect,
+  Proxy-Authorization, header asing, Host salah ×2, Content-Type salah/ganda, Authorization hilang/ganda/Basic/pendek)
+  → ditolak; body 300 KB → 413; 10 path sah + Cookie/X-Forwarded-*/X-Odoo-Database klien (dibuang) → sampai Odoo
+  (401 dari Odoo karena token uji). Health check backend = mTLS CN odoo-rpc-gateway ke odoo-tls.
+- **Bug ditemukan uji & diperbaiki:** regex `^bearer [..]` di HAProxy (spasi = pemisah argumen → pola OR) meloloskan
+  `Authorization: Basic …`; kini `\x20`. Upgrade tanpa `Connection: upgrade` dibuang parser H1 HAProxy sebelum aturan
+  (diverifikasi dengan HAProxy echo terpisah).
+- Loki: log gateway tanpa token (query `bearer|token uji` = 0); query `EfnOdooRpcGatewayDenied` mengelompokkan alasan
+  dengan benar; ruler mengevaluasi 4 rule baru. Prometheus memuat 10 rule `EfnOnline*`.
+- RabbitMQ 3.13.7: 8 queue dengan argumen benar; uji nyata publish + 11× reject-requeue → pesan pindah ke
+  `order.compensate.dlq` dengan `x-first-death-reason: delivery_limit` (butir §10.14 "dukungan x-delivery-limit" =
+  **terverifikasi**; batas 10 = maksimal 11 kali pengiriman). Izin `efn-bff` sesuai.
+- Lint: shellcheck (bash + sh) OK, actionlint 1.7.7 OK, yamllint OK (warning panjang baris pola lama), hadolint OK,
+  checkov 3.3.21 (argumen security.yml) 0 FAILED, promtool 38 rule OK, amtool OK, `haproxy -c` OK,
+  `docker compose config -q` dev/prod OK, secrets compose (+payment +online-fnb) == secrets.list, prod hanya publish
+  traefik, `check-encryption.sh` OK (jq dalam container; host tanpa jq), `test-promtail-redaction.sh` 79 entri OK.
+
+## G17.4 Belum / untuk lead
+- **Staging/prod:** terbitkan ulang intermediate PKI sebelum deploy G17; isi GitHub Environment
+  `ODOO_API_KEY_ONLINE_RTL`, `ODOO_API_KEY_ONLINE_FNB` (boleh `disabled`), `ODOO_ONLINE_EVENT_HMAC`.
+- ~~Config rilis `ONLINE_*`, `.env.example`, indeks runbook~~ → selesai di G17.5.
+- BFF: heartbeat `EFN_ONLINE_RECON {"status":"ok|error",…}` (konteks logger `Online*`, level LOG/ERROR) belum ada di
+  kode BFF — tanpa itu `EfnOnlineReconDeadman` tidak aktif (aman, tetapi buta). Gauge refund terbuka per status
+  diusulkan. Placeholder secret `disabled` ditolak BFF (terlalu pendek) saat kanal aktif — dev memakai
+  `ODOO_ONLINE_MOCK` atau key nyata.
+- Uji gateway belum di CI (butuh stack + Odoo); CI hanya `haproxy -c`. Respons 200 dari E-28 terpasang belum diuji.
+- `EfnOdooRpcGatewayDenied` menyala di dev setelah `test-gateway.sh` (sengaja).
+- Odoo test CI: `efn_online_order efn_setup_online` ditambahkan ke `EFN_TEST_MODULES` (dilewati bila belum ada).
+
+## G17.5 Lanjutan (batas file diperluas lead): config rilis online
+- `scripts/lib/deploy-validate.sh`: 12 variabel (`ONLINE_ENABLED`, `ONLINE_CATALOG_ENABLED`, `ONLINE_CHANNELS`,
+  `ONLINE_FULFILMENTS`, 7 angka `ONLINE_*`, `ODOO_RPC_TIMEOUT_MS`) masuk `EFN_RELEASE_CONFIG_VARS`. Validasi: boolean
+  `true|false`; kanal `^[A-Z][A-Z0-9-]{1,15}` (≤ 8, koma); fulfilment allowlist `pickup|delivery`; angka bulat tanpa
+  nol depan dengan rentang (timeout bayar & TTL quote 60..3600, order terbuka 1..20, sinkron katalog 60..86400,
+  kode ambil 1..30 hari, retensi 1..3650 hari, `ODOO_RPC_TIMEOUT_MS` 1000..30000 = di bawah timeout gateway 30 s).
+  Production `ONLINE_ENABLED=true` hanya dengan `PAYMENT_PROVIDER` xendit|midtrans. `EFN_DEV_ONLY_SWITCHES`
+  (`ODOO_ONLINE_MOCK`, `EFN_PAYMENT_SIMULATOR`) ditolak bila bukan false di staging/production (jalur manual), dan
+  sebagai kunci manifest tetap ditolak skema (kunci tidak dikenal).
+- `scripts/deploy.sh` (dibutuhkan agar config sampai ke compose): baris `.env` `ONLINE_*` (default mati, angka kosong =
+  default compose); `ONLINE_ENABLED=true` → setiap kanal wajib punya key non-placeholder; kanal `FNB` → overlay
+  `docker-compose.online-fnb.yml` (kanal brand `FNB-<X>` butuh overlay baru — dicatat di komentar).
+- `.github/workflows/deploy.yml`: `CFG_ONLINE_*` + `CFG_ODOO_RPC_TIMEOUT_MS` dari GitHub variables (default
+  `false`/`RTL`/`pickup`, angka kosong).
+- `infra/compose/.env.example`: blok G17 dengan komentar rentang (diverifikasi `docker compose --env-file .env.example
+  config`: komentar inline tidak ikut nilai).
+- `docs/runbooks/README.md`: 4 baris alert (Prometheus + Loki), 2 prosedur, baseline hardening `odoo-rpc-gateway`.
+  `online-orders.md`: kill switch staging/prod via config rilis + syarat menyalakan di production.
+- `scripts/host/test-efn-deploy.sh`: +14 kasus (88–101: online prod tanpa provider nyata ditolak, provider nyata
+  diterima, boolean/kanal/fulfilment/angka/rentang tidak valid ditolak, default diterima, mock/simulator ditolak,
+  kunci manifest `ODOO_ONLINE_MOCK` ditolak). **PASS=101 FAIL=0** (container python:3.12-bookworm seperti CI).
+- Ulang validasi: shellcheck (seluruh `scripts/*.sh scripts/lib scripts/host` + infra) OK (SC2015 baru di deploy.sh
+  diperbaiki), actionlint OK, yamllint 0 error, checkov 0 FAILED, compose config dev/prod OK, `check-encryption.sh` OK.

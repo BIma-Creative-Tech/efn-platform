@@ -122,7 +122,7 @@ scrape_configs:
             #     self-order, presigned S3, dll. Traefik JSON menulis "&" sebagai "\u0026" (encoding/json) -> ikut
             #     dikenali; "?"/"&"/"=" boleh URL-encoded (%3F/%26/%3D, mis. redirect=%2Fweb%3Ftoken%3D...). Nilai = sampai &, spasi, kutip, backslash, #.
             - replace:
-                expression: '(?i)(?:^|[^a-z0-9_]|\\u0026|%3f|%26)(?:access_token|refresh_token|id_token|auth_token|token|password|passwd|pwd|csrf_token|secret|client_secret|api_key|apikey|signature|x-amz-signature|x-amz-credential|x-amz-security-token|otp|otp_code)(?:=|%3d)([^&\s"''\\#]+)'
+                expression: '(?i)(?:^|[^a-z0-9_]|\\u0026|%3f|%26)(?:access_token|refresh_token|id_token|auth_token|token|password|passwd|pwd|csrf_token|secret|client_secret|api_key|apikey|signature|x-amz-signature|x-amz-credential|x-amz-security-token|otp|otp_code|pickup_code|qr_string|quote_hash)(?:=|%3d)([^&\s"''\\#]+)'
                 replace: '[REDACTED]'
             #     Nama generik (code OAuth/OTP, key, sig) HANYA sebagai parameter query (?/&/;/\u0026) agar
             #     logfmt "code=200" di log Go tidak ikut diganti.
@@ -131,7 +131,7 @@ scrape_configs:
                 replace: '[REDACTED]'
             # (b) Rahasia sebagai kunci JSON / dict Python ("password": "...", 'token': '...').
             - replace:
-                expression: '(?i)["''](?:password|passwd|token|access_token|refresh_token|secret|client_secret|api_key|otp|otp_code)["'']\s*:\s*["'']([^"'']+)["'']'
+                expression: '(?i)["''](?:password|passwd|token|access_token|refresh_token|secret|client_secret|api_key|otp|otp_code|pickup_code|qr_string|quote_hash)["'']\s*:\s*["'']([^"'']+)["'']'
                 replace: '[REDACTED]'
             # (c) Skema Authorization: Bearer (JWT/opaque) dan Basic (base64; wajib memuat digit/+/=/"/" agar kata
             #     biasa seperti "Basic authentication" tidak terganti).
@@ -141,6 +141,13 @@ scrape_configs:
             - replace:
                 expression: '(?i)\bbasic\s+([a-z0-9+/]*[0-9+/=][a-z0-9+/=]*)'
                 replace: '[REDACTED]'
+            # (c2) G17 (docs/04 §10.11): kode ambil pesanan online tampilan `ABCD-EFGH` (alfabet tanpa I/L/O/0/1; pola
+            #      kontrak [A-HJ-NP-Z2-9] sedikit lebih luas). Batas kiri/kanan bukan alfanumerik dan bukan '-' -> segmen
+            #      UUID huruf besar tidak terkena. Bentuk tanpa strip tidak diredaksi (terlalu banyak false positive kata
+            #      8 huruf); BFF tidak pernah me-log kode, dan key query/JSON pickup_code/qr_string/quote_hash di (a)/(b).
+            - replace:
+                expression: '(?:^|[^0-9A-Za-z-])([A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4})(?:[^0-9A-Za-z-]|$)'
+                replace: '[PICKUP_REDACTED]'
             # (d) Nomor HP Indonesia (SEC-78): 08…, 62…, +62…, (+62)…, %2B62…, dengan pemisah opsional spasi/titik/
             #     strip ("0812-3456-7890", "+62 812 3456 7890"). Struktur 8[1-9]x(x) [sep] xxx(x) [sep] xxx(xx) =
             #     7..11 digit setelah "8[1-9]" (sama dengan pola lama) dan blok terakhir tanpa pemisah -> tidak
@@ -218,5 +225,34 @@ scrape_configs:
             - static_labels:
                 stream: efn_loyalty
                 loyalty_event: etl_recon
+            - labels:
+                recon_status:
+      # (6) G17 (docs/04 §10.11): baris penjualan online BFF -> stream="efn_online" (retensi default 30 hari;
+      #     operasional, bukan bukti audit), alert loki-rules/efn-online.yml, runbook docs/runbooks/online-orders.md.
+      #     Format NestJS ConsoleLogger (NO_COLOR=1), regex BERJANGKAR penuh, hanya service=api-gateway:
+      #     - anomali  : "... WARN [OnlineAnomaly] EFN_ONLINE_ANOMALY {"kind":"<a-z_>","severity":"warning|critical",...}"
+      #                  (services/api-gateway/src/odoo-rpc/online-metrics.ts; JSON.stringify kind lalu severity)
+      #     - heartbeat: "... LOG|ERROR [Online<Nama>] EFN_ONLINE_RECON {"status":"ok|error",...}" (rekonsiliasi
+      #                  efn_online_status §10.6.5, tiap siklus) -> dead-man EfnOnlineReconDeadman (20 menit).
+      #     Label rendah kardinalitas: online_event (anomaly|recon), kind, severity, recon_status.
+      - match:
+          selector: '{service="api-gateway"} |~ "^\\[Nest\\] \\d+  - \\d{1,2}/\\d{1,2}/\\d{4}, \\d{1,2}:\\d{2}:\\d{2} (AM|PM) +WARN \\[OnlineAnomaly\\] EFN_ONLINE_ANOMALY \\{\"kind\":\"[a-z_]{1,40}\",\"severity\":\"(warning|critical)\"[^\\n]*\\}\\s*$"'
+          stages:
+            - regex:
+                expression: ' EFN_ONLINE_ANOMALY \{"kind":"(?P<kind>[a-z_]{1,40})","severity":"(?P<severity>warning|critical)"'
+            - static_labels:
+                stream: efn_online
+                online_event: anomaly
+            - labels:
+                kind:
+                severity:
+      - match:
+          selector: '{service="api-gateway"} |~ "^\\[Nest\\] \\d+  - \\d{1,2}/\\d{1,2}/\\d{4}, \\d{1,2}:\\d{2}:\\d{2} (AM|PM) +(LOG|ERROR) \\[Online[A-Za-z]{0,40}\\] EFN_ONLINE_RECON \\{\"status\":\"(ok|error)\"[^\\n]*$"'
+          stages:
+            - regex:
+                expression: ' EFN_ONLINE_RECON \{"status":"(?P<recon_status>ok|error)"'
+            - static_labels:
+                stream: efn_online
+                online_event: recon
             - labels:
                 recon_status:

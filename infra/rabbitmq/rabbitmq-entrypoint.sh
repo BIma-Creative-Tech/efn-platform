@@ -42,13 +42,17 @@ ETL_HASH="$(hash_pw /run/secrets/rabbitmq_password_etl)"
 #  - efn-etl (DSAR ClickHouse): write `amq.default` saja, configure/read kosong (ETL tidak men-declare/konsumsi).
 #    Batas: write ke default exchange tidak bisa dibatasi per routing key -> kontrol nyata = properti `user_id`
 #    (divalidasi broker) + allowlist sumber di consumer BFF (SEC-08).
-Q='^(ocr\\.requested|loyalty\\.earn\\.requested|notify\\.push|privacy\\.erasure\\.completed)(\\.dlq)?$'
+# G17 (docs/04 §10.9): saga penjualan online - publisher & consumer sama-sama BFF (outbox -> queue -> consumer):
+#   order.paid, order.unpaid_closed, order.compensate, order.refund.requested (+ .dlq), argumen tambahan
+#   x-delivery-limit 10 (quorum: setelah 10 kali redelivery pesan di-dead-letter ke DLQ, bukan loop poison message).
+#   Diverifikasi di RabbitMQ 3.13.7 (image dipin) - laporan devsecops G17.
+Q='^(ocr\\.requested|loyalty\\.earn\\.requested|notify\\.push|privacy\\.erasure\\.completed|order\\.(paid|unpaid_closed|compensate|refund\\.requested))(\\.dlq)?$'
 W='^amq\\.default$'
 # G6 QA (SEC-25): default STRICT. Passive queue.declare tidak memeriksa izin configure di RabbitMQ (handler passive
 # rabbit_channel tidak memanggil check_configure_permitted) - PLAUSIBLE, verifikasi di staging. Bila klien gagal
 # start dengan ACCESS_REFUSED saat checkQueue, set RABBITMQ_STRICT_PERMISSIONS=false (fallback lama).
 if [ "${RABBITMQ_STRICT_PERMISSIONS:-true}" != "false" ]; then
-  BFF_CONF='^$'; BFF_READ='^(loyalty\\.earn\\.requested|notify\\.push|privacy\\.erasure\\.completed)$'
+  BFF_CONF='^$'; BFF_READ='^(loyalty\\.earn\\.requested|notify\\.push|privacy\\.erasure\\.completed|order\\.(paid|unpaid_closed|compensate|refund\\.requested))$'
   OCR_CONF='^$'; OCR_READ='^ocr\\.requested$'
 else
   BFF_CONF="$Q"; BFF_READ="$Q"
@@ -59,6 +63,13 @@ queue_defs() {
   # $1 = nama queue -> deklarasi DLQ + queue utama (quorum, DLX default exchange)
   printf '    {"name": "%s.dlq", "vhost": "/", "durable": true, "auto_delete": false, "arguments": {"x-queue-type": "quorum"}},\n' "$1"
   printf '    {"name": "%s", "vhost": "/", "durable": true, "auto_delete": false, "arguments": {"x-queue-type": "quorum", "x-dead-letter-exchange": "", "x-dead-letter-routing-key": "%s.dlq"}}' "$1" "$1"
+}
+
+queue_defs_limited() {
+  # $1 = nama queue, $2 = x-delivery-limit (G17 §10.9). Argumen queue tidak bisa diubah setelah queue ada -> hanya
+  # untuk queue baru; queue lama (§4/§8.4) tetap tanpa argumen ini (ubah = hapus + buat ulang queue, rencanakan).
+  printf '    {"name": "%s.dlq", "vhost": "/", "durable": true, "auto_delete": false, "arguments": {"x-queue-type": "quorum"}},\n' "$1"
+  printf '    {"name": "%s", "vhost": "/", "durable": true, "auto_delete": false, "arguments": {"x-queue-type": "quorum", "x-dead-letter-exchange": "", "x-dead-letter-routing-key": "%s.dlq", "x-delivery-limit": %s}}' "$1" "$1" "$2"
 }
 
 cat > "$WORK/defs.json" <<EOF
@@ -80,7 +91,11 @@ cat > "$WORK/defs.json" <<EOF
 $(queue_defs ocr.requested),
 $(queue_defs loyalty.earn.requested),
 $(queue_defs notify.push),
-$(queue_defs privacy.erasure.completed)
+$(queue_defs privacy.erasure.completed),
+$(queue_defs_limited order.paid 10),
+$(queue_defs_limited order.unpaid_closed 10),
+$(queue_defs_limited order.compensate 10),
+$(queue_defs_limited order.refund.requested 10)
   ]
 }
 EOF

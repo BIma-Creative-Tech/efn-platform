@@ -234,3 +234,90 @@ sengaja dipakai untuk redirect penuh setelah sesi kedaluwarsa) · `tsc --noEmit`
 - Widget ALTCHA v3 **belum diuji di browser** (E2E/manual): tampilan, teks Indonesia, CSP (`style-src 'unsafe-inline'`,
   `worker-src blob:` sudah ada) dan verifikasi payload v1 oleh BFF `altcha-lib` perlu smoke login OTP di stack dev.
 - Proxy di runtime Node: belum diuji di stack dev (perilaku host→brand seharusnya identik).
+
+## Gelombang 17 — Belanja online Fase 3: katalog, keranjang per PT, checkout, pesanan, kode ambil (9 Okt 2026)
+
+Dasar: docs/04 §10 (v5.0), keputusan lead L-1..L-7 (§10.16), batas file §10.15. BFF belum ada → dikembangkan terhadap kontrak; route handler diuji dengan `bffFetch` di-mock. Tidak ada commit/push.
+
+### Halaman (Bahasa Indonesia, mobile-first, CSS module `components/online/online.module.css` memakai variabel tema brand)
+| Halaman | Isi |
+|---|---|
+| `/belanja` | Daftar produk per kanal (brand membatasi PT via `brand.companies`), chip kategori, cari (`q` ≤ 64), halaman berikut via cursor opak. Harga `price_incl` + label pajak dari BFF; "total akhir dihitung saat checkout" |
+| `/belanja/[id]` | Detail, gambar 1024 via proxy, deskripsi teks polos (`white-space: pre-line`), pilih toko ambil + status stok per toko (`/api/catalog/stock`), jumlah 1..`max_qty`, tambah ke keranjang (tamu → `localStorage` tanpa harga; member → `PUT /api/cart` dengan versi, retry sekali pada `cart_version_conflict`) |
+| `/keranjang` | Gabung keranjang tamu setelah login → `GET /api/cart` → `POST /api/cart/quote`. Grup per PT/kanal ("pesanan 1 dari 2"), baris dari quote (harga satuan & subtotal termasuk pajak, issue per barang), total per PT + rincian `tax_groups` + pembulatan, ringkasan total bayar; tombol Bayar nonaktif bila ada issue. Error `price_changed/quote_expired/cart_changed/out_of_stock/item_unavailable/cart_has_issues` → quote ulang otomatis + pesan |
+| `/pesanan` | Daftar milik member, status Indonesia, cursor |
+| `/pesanan/[id]` | Status order & per bagian (PT, toko, `sale_order_name`, baris, pajak, refund, alasan batal); halaman bayar: QR **dirender lokal** (`qrcode-generator` 2.0.4 → SVG React), hitung mundur ke `payment.expires_at` (koreksi selisih jam dari header `Date`), batal sebelum bayar (konfirmasi dua langkah), simulator mock (dev/staging). Polling 3 dtk saat `awaiting_payment`, 30 dtk setelahnya, berhenti di status final, maks. 400 kali, jeda saat tab tersembunyi |
+| Kode ambil | `PickupCodePanel`: tombol "Tampilkan kode ambil" hanya bila ada bagian `confirmed|ready`; kode di memori komponen saja, auto-sembunyi 2 menit / saat tab disembunyikan; tidak dirender server-side, tidak di URL/storage/log; peringatan "jangan bagikan" |
+| Kill switch | 503 `online_unavailable` (katalog, cart, quote, order) → `OnlineUnavailable` ("Belanja online sedang istirahat… tetap bisa belanja di toko") |
+| `/` (beranda) | `CartDemo`/`mock-catalog` diganti tautan Belanja / Keranjang / Pesanan saya |
+
+### Route handler → BFF (kontrak yang diasumsikan = §10.3 apa adanya)
+| Next | BFF | Guard / header |
+|---|---|---|
+| `GET /api/catalog/channels`, `categories?channel`, `products?channel&category&q&cursor&limit`, `products/:id?channel` | `/v1/catalog/*` | publik, tanpa Bearer; query dibangun ulang dari input tervalidasi; allowlist respons; `public, max-age=60` |
+| `GET /api/catalog/stock?channel&outlet&ids` | `/v1/catalog/stock` | publik, ≤ 50 id, `no-store` |
+| `GET /api/catalog/images/:sha?size=512\|1024` | `/v1/catalog/images/:sha` | stream; hanya `image/jpeg`, ≤ 2 MB (bila `content-length` ada), `immutable`, `nosniff`, CSP `sandbox`; transport memakai `bffBaseUrl()` (https + CA internal, fail-closed 503) |
+| `GET/PUT/DELETE /api/cart` | `/v1/cart` | Bearer dari cookie; PUT/DELETE `isSameOrigin`; GET `isNotCrossSite`; body ≤ 16 KB; body di-allowlist `{version, groups[{channel_code,outlet_code,fulfilment,lines[{product_id,qty}]}]}` (harga klien dibuang) |
+| `POST /api/cart/quote` | `/v1/cart/quote` `{}` | body klien diabaikan; `quote_hash` tidak pernah ke browser; payable non-bulat → 502 |
+| `GET /api/orders`, `POST /api/orders` | `/v1/orders` | POST: `{quote_id (UUID), accept_total (int ≥ 0)}` + **`Idempotency-Key` dibuat server-side** (lihat di bawah); browser hanya menerima `{order_id, status}` |
+| `GET /api/orders/:id`, `POST …/cancel`, `GET …/pickup-code` | `/v1/orders/:id…` | UUID wajib (selain itu 404 tanpa BFF); pickup-code `no-store, max-age=0` + `Pragma: no-cache` + `Referrer-Policy: no-referrer` |
+| `POST /api/orders/:id/simulate-payment` | `/v1/orders/:id/simulate-payment` (§10.7) | hanya bila `EFN_PAYMENT_SIMULATOR=true` dan bukan production (`APP_ENV`), selain itu 404 tanpa BFF |
+
+**Peta error (K-ON5, `lib/orders.ts` + `mapOnlineFailure`)**: 400/404/409/422/429 → status sama, pesan Indonesia dari peta (pesan BFF **tidak** diteruskan; kode tak dikenal → `invalid_request`/`not_found`/`rate_limited`); 401 → cookie sesi dihapus; 503 `online_unavailable` → 503 ramah; `payment_provider_error|unavailable` → 502/503; BFF tak terjangkau → 503 `service_unavailable`; 5xx lain → 502 generik.
+
+### Asumsi kontrak / penyimpangan (untuk lead)
+1. **Idempotency-Key**: §10.3.5/§10.15 menyebut `crypto.randomUUID()` di `sessionStorage`; instruksi lead G17 = dibuat server-side di route handler. Diterapkan: `chk1_` + base64url(SHA-256(`efn:checkout:v1:` + quote_id)) (48 karakter, cocok `^[A-Za-z0-9_-]{16,64}$`). Deterministik per quote → klik ganda/reload/retry = key sama = satu order; quote baru = key baru. Header dari browser diabaikan. **Mohon §10.3.5 diralat** agar QA/BFF tidak mengharapkan key acak per percobaan.
+2. `image_sha` = hex huruf kecil 40 (SHA-1, checksum lampiran Odoo) atau 64 (SHA-256) karakter — kontrak tidak menyebut format.
+3. Kanal per brand: `channels.company_code ∈ brand.companies` (brand `efn-mart` hanya RTL).
+4. Rate limit per IP: halaman server meneruskan `x-forwarded-for` permintaan asli ke BFF; BFF harus mempercayai XFF hanya dari jaringan internal (asumsi lama `lib/bff.ts`).
+5. Daftar order menampilkan nama PT dari `channel_code` (kontrak daftar tidak memuat `company_code`; benar untuk pilot RTL).
+6. Header cache: lihat lanjutan G17 (diverifikasi di runtime standalone, konfigurasi diperbaiki). CSP tidak perlu diubah: gambar & QR same-origin/inline SVG (`img-src 'self'` sudah ada).
+
+### Dependency
+`qrcode-generator` **2.0.4** (pinned exact, MIT, tanpa dependency, tipe bawaan) — lock diregenerasi di container node:22.23-alpine (digest Dockerfile).
+
+### Validasi (container `node:22.23-alpine@sha256:0a7108bf…`)
+`npm ci` OK · `npm run lint` 0 error (10 warning lama `no-location-assign-relative-destination`, termasuk 1 baru di `lib/cart-client.ts` — redirect penuh ke `/masuk` disengaja) · `tsc --noEmit` OK · `npm test` **296 passed** (219 → 296; baru: `catalog` 13, `cart` 13, `orders` 10, `online-routes` 41) · `npm run build` OK (`server.js` standalone ada) · `npm audit --omit=dev --audit-level=high` **0 vulnerabilities**.
+
+### Di luar batas file (perlu pemilik lain / lead)
+Ditangani di lanjutan G17 di bawah (batas file diperluas oleh lead).
+
+### Belum diverifikasi
+- **Belum ada uji browser nyata** (rendering, hydration, QR terpindai aplikasi bank, hitung mundur, polling, keyboard/pembaca layar, layar 320 px) dan belum ada integrasi dengan BFF sungguhan — hanya unit/route test dengan mock.
+- Kecocokan bentuk respons BFF aktual (mis. `201` checkout, `204` DELETE cart, `warnings`) dengan allowlist frontend → tunggu smoke QA.
+- (ditutup di lanjutan G17) batas stream gambar tanpa `content-length`.
+
+### Lanjutan G17 (9 Okt 2026) — permintaan lead: header, pembersihan, README, verifikasi cache, batas stream
+Batas file diperluas khusus untuk tugas ini. Tidak ada commit/push.
+
+1. **`components/SiteHeader.tsx`**: tautan Belanja, Keranjang, dan Pesanan (hanya bila login) di `<nav aria-label="Navigasi utama">`. `app/globals.css`: tautan nav diberi `display:inline-block; padding .625rem .25rem` (target sentuh ±44 px), dan jarak menyempit di layar ≤ 30rem. Menu membungkus ke baris berikut.
+2. **Dihapus** setelah `grep` import (hanya saling merujuk satu sama lain): `components/CartDemo.tsx`, `lib/mock-catalog.ts`, `lib/tax.ts`, `tests/tax.test.ts`. Komentar yang merujuk file itu di `lib/brands.ts` dan `app/page.tsx` diperbarui. Penghapusan hanya di working tree (tidak di-stage). Kelas CSS `.cart-group/.cart-table` di `globals.css` kini tidak terpakai, tetapi dibiarkan.
+3. **README superapp-web**: tabel struktur diperbarui, ditambah bagian "Belanja online (Fase 3, G17)" (kontrak, ADR, risiko, path, catatan cache) dan baris env `EFN_PAYMENT_SIMULATOR`. `components/online/README.md` dihapus (isinya pindah ke README utama).
+4. **Verifikasi header cache, runtime standalone.** Uji dijalankan dengan `node server.js` hasil `next build`, `NODE_ENV=production`, di container node:22.23-alpine. BFF tiruannya HTTPS dengan CA uji sekali pakai lewat `NODE_EXTRA_CA_CERTS`; CA, kunci, skrip mock, dan skrip probe hanya ada di scratchpad, tidak di repo.
+   - **Sebelum perbaikan:** semua `/api/*` menghasilkan `Cache-Control: no-store`. Aturan `headers()` di `next.config.mjs` **menimpa** header yang di-set Route Handler, sehingga katalog dan gambar tidak pernah ter-cache.
+   - **Perbaikan di `next.config.mjs`:** `source: '/api/:path((?!catalog(?:/|$)).*)'` → `no-store`, ditambah `'/api/catalog/stock'` → `no-store` sebagai lapis kedua.
+   - **Hasil setelah perbaikan:**
+
+     | Route | Cache-Control |
+     |---|---|
+     | `/api/catalog/channels`, `categories`, `products`, `products/11` | `public, max-age=60` |
+     | `/api/catalog/images/:sha` | `public, max-age=31536000, immutable` |
+     | `/api/catalog/stock` | `no-store` |
+     | `/api/cart`, `/api/orders`, `/api/orders/:id`, `/api/orders/:id/pickup-code`, `/api/health` | `no-store` |
+     | `/belanja` (halaman) | `private, no-cache, no-store, max-age=0, must-revalidate` (bawaan Next untuk halaman dinamis) |
+
+   - Catatan: nilai efektif pickup-code adalah `no-store`, karena config menimpa nilai handler `no-store, max-age=0`. Keduanya setara.
+5. **Batas stream gambar**: `MAX_IMAGE_BYTES` = **5 MB**, ditegakkan juga saat respons tidak membawa `content-length`. Stream dibungkus `limitStream` (`lib/catalog-route.ts`). Begitu melewati batas, upstream di-`cancel` (koneksi ke BFF ditutup), stream ke browser di-error, dan tercatat log `[catalog] gambar melewati batas … req=<id>` tanpa data sensitif. `content-length` di atas 5 MB tetap ditolak dengan 502 sebelum stream.
+   - **Runtime:** mock BFF mengirim 6 MB chunked, dan klien menerima tepat 5.242.880 byte lalu koneksi `terminated`.
+   - **Test baru:** chunked tak berujung terputus dan upstream dibatalkan; `content-length` > 5 MB → 502; `limitStream` meneruskan utuh bila ≤ batas dan error bila > batas.
+6. **Compose tidak diubah.** Env yang dibutuhkan devsecops untuk simulator: `EFN_PAYMENT_SIMULATOR=true` pada `superapp-web`, hanya dev/staging. Di staging (build production) wajib juga `APP_ENV=staging`; tanpa `APP_ENV`, atau dengan `APP_ENV=production`, simulator selalu mati. Di sisi BFF tetap dibutuhkan `PAYMENT_PROVIDER=mock`, dan endpoint simulate BFF 404 di production.
+
+**Validasi ulang** (container `node:22.23-alpine@sha256:0a7108bf…`):
+- `npm ci`: OK.
+- `npm run lint`: 0 error (10 warning lama `no-location-assign-relative-destination`).
+- `tsc --noEmit`: OK.
+- `npm test`: **272 passed**, 13 file. Angka ini 296 − 27 test `tax.test.ts` yang dihapus + 3 test batas stream baru.
+- `npm run build`: OK.
+- `npm audit --omit=dev --audit-level=high`: **0 vulnerabilities**.
+
+**Masih belum:** uji browser nyata (tampilan header di ponsel, pembaca layar, QR, polling) dan integrasi dengan BFF sungguhan.

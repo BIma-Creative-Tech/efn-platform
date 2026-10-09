@@ -124,6 +124,8 @@ services:
     environment:
       NODE_ENV: development
       APP_ENV: dev
+      # G17: simulator pembayaran online (QR mock) HANYA dev; base = "false", render prod dicek check-encryption.sh
+      EFN_PAYMENT_SIMULATOR: "true"
       # Dev via https://app.efn.local (Traefik) -> cookie Secure tetap jalan; COOKIE_INSECURE diabaikan di production.
     volumes:
       - ../../services/superapp-web/app:/app/app:ro

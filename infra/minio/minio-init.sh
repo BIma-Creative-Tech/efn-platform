@@ -8,7 +8,9 @@
 #  - bucket pg-backup    : repo WAL-G, privat, SSE-S3, versioning + OBJECT LOCK (GOVERNANCE) + expiry versi lama
 #                          (object lock HANYA bisa diaktifkan saat bucket DIBUAT -> lihat docs/runbooks/internal-pki.md
 #                          bagian MinIO untuk migrasi bucket lama)
-#  - user backup (WAL-G), bff (Put/Delete market-scout/reports/*), ocr (Get market-scout/reports/*)
+#  - bucket catalog      : (G17, docs/04 §10.10) gambar katalog online yang disalin BFF dari Odoo; privat, SSE-S3,
+#                          tanpa lifecycle (retensi = job BFF: aktif + 30 hari setelah deleted_at, docs/04 §10.8)
+#  - user backup (WAL-G), bff (Put/Delete market-scout/reports/*; Get/Put/Delete catalog/*), ocr (Get market-scout/reports/*)
 #    `user add` = upsert -> juga dipakai untuk rotasi password.
 #  - Access key (nama user) = SECRET ACAK (docs/04 §8.12, ADR-030): minio_{backup,bff,ocr,prometheus}_access_key.
 #    Nama lama yang mudah ditebak (pgbackup, efn-bff, efn-ocr, efn-prometheus) DIHAPUS bila masih ada (migrasi).
@@ -39,6 +41,7 @@ LEGACY_USERS="pgbackup efn-bff efn-ocr efn-prometheus"
 MINIO_URL="${MINIO_URL:-https://minio:9000}"
 MS_BUCKET="${MINIO_BUCKET_MARKET_SCOUT:-market-scout}"
 PG_BUCKET="${MINIO_BUCKET_PG_BACKUP:-pg-backup}"
+CAT_BUCKET="${MINIO_BUCKET_CATALOG:-catalog}"
 LOCK_DAYS="${MINIO_PG_BACKUP_LOCK_DAYS:-15}"
 NONCURRENT_DAYS="${MINIO_PG_BACKUP_NONCURRENT_DAYS:-35}"
 PHOTO_DAYS="${MINIO_MARKET_SCOUT_EXPIRE_DAYS:-90}"
@@ -63,6 +66,8 @@ done
 # ── Bucket ──────────────────────────────────────────────────────────────────────
 mc mb --ignore-existing "efn/${MS_BUCKET}"
 mc anonymous set none "efn/${MS_BUCKET}"
+mc mb --ignore-existing "efn/${CAT_BUCKET}"
+mc anonymous set none "efn/${CAT_BUCKET}"
 
 if mc stat "efn/${PG_BUCKET}" > /dev/null 2>&1; then
   if mc retention info --default "efn/${PG_BUCKET}" 2> /dev/null | grep -qi 'GOVERNANCE\|COMPLIANCE'; then
@@ -85,6 +90,7 @@ mc retention set --default GOVERNANCE "${LOCK_DAYS}d" "efn/${PG_BUCKET}" > /dev/
 # ── Enkripsi at rest SSE-S3 (kunci MINIO_KMS_SECRET_KEY_FILE = secret minio_kms_key) ────────────────
 mc encrypt set sse-s3 "efn/${MS_BUCKET}"
 mc encrypt set sse-s3 "efn/${PG_BUCKET}"
+mc encrypt set sse-s3 "efn/${CAT_BUCKET}"
 
 # ── Lifecycle (import = ganti seluruh konfigurasi -> idempoten) ──────────────────────
 cat > /tmp/ilm-ms.json <<EOF
@@ -127,7 +133,11 @@ cat > /tmp/bff-policy.json <<EOF
     {"Effect": "Allow", "Action": ["s3:GetBucketLocation"],
      "Resource": ["arn:aws:s3:::${MS_BUCKET}"]},
     {"Effect": "Allow", "Action": ["s3:PutObject", "s3:DeleteObject"],
-     "Resource": ["arn:aws:s3:::${MS_BUCKET}/reports/*"]}
+     "Resource": ["arn:aws:s3:::${MS_BUCKET}/reports/*"]},
+    {"Effect": "Allow", "Action": ["s3:GetBucketLocation"],
+     "Resource": ["arn:aws:s3:::${CAT_BUCKET}"]},
+    {"Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+     "Resource": ["arn:aws:s3:::${CAT_BUCKET}/*"]}
   ]
 }
 EOF
@@ -190,5 +200,5 @@ fi
 
 rm -f /tmp/*-policy.json /tmp/ilm-*.json
 echo "minio-init: TLS OK; bucket ${MS_BUCKET} (SSE-S3, expiry reports/ ${PHOTO_DAYS} hari), ${PG_BUCKET} (SSE-S3, versioning," \
-  "lock GOVERNANCE ${LOCK_DAYS} hari); user backup/bff/ocr (access key acak) siap; user metrik ${PROM_STATE};" \
+  "lock GOVERNANCE ${LOCK_DAYS} hari), ${CAT_BUCKET} (SSE-S3); user backup/bff/ocr (access key acak) siap; user metrik ${PROM_STATE};" \
   "user lama bernama tetap dihapus: ${REMOVED}"

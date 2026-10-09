@@ -19,3 +19,7 @@ json-secret {"token": "SENTINELJSONTOKEN", "otp": "SENTINELOTP"}
 docker containerID=9ded32642bcea4225660dd173b0857593858a821c1267380c21e36d18d76b649
 uuid report=af73a9ae-17d1-4fc0-b470-0819152600bd thread=12862081234567827 durasi 10.6081234567828 detik
 encoded /cb?next=%2Fweb%3Ftoken%3DSENTINELENCODED&x=1
+pickup json {"pickup_code":"SENTINELPICK","qr_string":"00020101SENTINELQR","quote_hash":"SENTINELQH"}
+pickup query /v1/x?pickup_code=SENTINELPC&qr_string=SENTINELQ2 ok
+uuid huruf besar 0B6F3C1E-4B6A-4E8E-9D2A-1F0C2B3A4D5E tetap utuh
+kode tampil ABCD-EFGH, XY23-ZW45; selesai

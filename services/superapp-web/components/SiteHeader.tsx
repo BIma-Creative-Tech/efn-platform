@@ -17,6 +17,17 @@ export async function SiteHeader({ brand }: { brand: Brand }) {
               <Link href="/">Beranda</Link>
             </li>
             <li>
+              <Link href="/belanja">Belanja</Link>
+            </li>
+            <li>
+              <Link href="/keranjang">Keranjang</Link>
+            </li>
+            {loggedIn && (
+              <li>
+                <Link href="/pesanan">Pesanan</Link>
+              </li>
+            )}
+            <li>
               <Link href="/pantau-harga">Pantau Harga</Link>
             </li>
             <li>{loggedIn ? <Link href="/akun">Akun</Link> : <Link href="/masuk">Masuk</Link>}</li>

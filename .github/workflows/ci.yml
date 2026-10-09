@@ -229,6 +229,9 @@ jobs:
         efn_core efn_audit efn_pos_otp_gate efn_kitting
         efn_pos_payment_gateway efn_pos_loyalty_ledger efn_privacy efn_pos_kds
         efn_setup_company efn_setup_pos efn_setup_mrp efn_setup_audit
+        efn_online_order efn_setup_online
+      # G17 (docs/04 §10.15): efn_online_order menarik sale_stock (CE) lewat depends -> auto-install
+      # sale_loyalty/pos_sale ikut terpasang di DB test yang sama, sehingga regresi POS teruji bersama modul online.
       # Di-install SETELAH test, tanpa test: efn_setup_security menaikkan auth_password_policy.minlength ke 12,
       # sedangkan fixture test Odoo (mis. user `accountman` di AccountTestInvoicingCommon) memakai password < 12
       # karakter -> setUpClass test POS akan gagal bila modul ini terpasang lebih dulu. Langkah terpisah tetap
@@ -432,7 +435,8 @@ jobs:
           openssl x509 -in secrets/tls_api_gateway_crt.txt -noout -ext subjectAltName | grep -q 'DNS:api-gateway'
           openssl x509 -in secrets/tls_clickhouse_crt.txt -noout -ext subjectAltName | grep -q 'IP Address:127.0.0.1'
           # Klien mTLS (docs/04 §8.5) punya clientAuth; server murni TIDAK
-          for s in traefik prometheus grafana promtail ocr_worker blackbox_exporter cadvisor etl metabase_provision; do
+          for s in traefik prometheus grafana promtail ocr_worker blackbox_exporter cadvisor etl metabase_provision \
+                   api_gateway odoo_rpc_gateway; do
             openssl x509 -in "secrets/tls_${s}_crt.txt" -noout -ext extendedKeyUsage | grep -q 'Client Authentication'
           done
           if openssl x509 -in secrets/tls_postgres_crt.txt -noout -ext extendedKeyUsage | grep -q 'Client Authentication'; then
@@ -477,9 +481,11 @@ jobs:
       - name: Setiap secret yang direferensikan service didefinisikan & ada di secrets.list
         working-directory: infra/compose
         # docker compose config membuang secret top-level yang tak direferensikan service; payment_provider_api_key
-        # hanya di-mount oleh docker-compose.payment.yml -> overlay itu wajib ikut agar perbandingan lengkap.
+        # hanya di-mount oleh docker-compose.payment.yml (dan odoo_api_key_online_fnb oleh docker-compose.online-fnb.yml,
+        # G17) -> overlay itu wajib ikut agar perbandingan lengkap.
         run: |
           cfg=$(docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.payment.yml \
+            -f docker-compose.online-fnb.yml \
             --profile core --profile data --profile ai --profile observability --profile ops config --format json)
           defined=$(echo "$cfg" | jq -r '.secrets | keys[]' | sort)
           listed=$(awk '!/^[[:space:]]*#/ && NF {print $1}' ../../scripts/secrets.list | sort)
@@ -513,6 +519,8 @@ jobs:
           shellcheck --version
           shellcheck -x scripts/*.sh scripts/lib/*.sh scripts/host/efn-deploy scripts/host/*.sh scripts/smoke/*.sh tests/load/*.sh infra/backup/postgres/*.sh \
             infra/postgres/init/*.sh infra/wireguard/*.sh
+          shellcheck -x infra/odoo-rpc-gateway/test-gateway.sh
+          shellcheck -s sh infra/odoo-rpc-gateway/entrypoint.sh
           shellcheck -s sh infra/minio/*.sh infra/redis/*.sh infra/rabbitmq/*.sh infra/clickhouse/*.sh infra/s3-gateway/*.sh \
             infra/acme/*.sh scripts/acme-test/*.sh infra/metabase/*.sh
       # Filter L7 object storage (ADR-030): sintaks HAProxy valid dengan sertifikat dummy dari gen-pki.sh
@@ -525,10 +533,23 @@ jobs:
             -v "$PWD/secrets/efn_ca_crt.txt:/run/secrets/efn_ca_crt:ro" \
             haproxy:3.2.25-alpine@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be \
             haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
+      # G17 (docs/04 §10.4.1): filter BFF -> Odoo /json/2. Uji negatif nyata (mTLS, 10 path, encoded, header) butuh
+      # stack berjalan: infra/odoo-rpc-gateway/test-gateway.sh (lokal/staging); di sini sintaks + ODOO_DB.
+      - name: haproxy -c (infra/odoo-rpc-gateway/haproxy.cfg)
+        run: |
+          cat secrets/tls_odoo_rpc_gateway_crt.txt secrets/tls_odoo_rpc_gateway_key.txt > /tmp/odoo-rpc-gateway.pem
+          chmod 644 /tmp/odoo-rpc-gateway.pem
+          docker run --rm -e ODOO_DB=efn_odoo \
+            -v "$PWD/infra/odoo-rpc-gateway/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
+            -v /tmp/odoo-rpc-gateway.pem:/tmp/haproxy/odoo-rpc-gateway.pem:ro \
+            -v "$PWD/secrets/efn_ca_crt.txt:/run/secrets/efn_ca_crt:ro" \
+            haproxy:3.2.25-alpine@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be \
+            haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
       # SEC-36/SEC-42/SEC-50: wrapper deploy host diuji dengan cosign palsu di container sekali pakai (87 kasus: replay/
       # downgrade, IMAGE_* lewat env, registry asing, trust anchor PKI, tanda tangan, allowlist env, topologi dipin di
       # deploy.conf, config manifest, karakter kontrol/multi-baris, kontrol keamanan production, lib deploy-validate,
-      # image terikat SHA commit (SEC-91), persetujuan rilis production approved-release (SEC-92))
+      # image terikat SHA commit (SEC-91), persetujuan rilis production approved-release (SEC-92); G17: 101 kasus,
+      # termasuk config penjualan online ONLINE_* dan penolakan saklar dev ODOO_ONLINE_MOCK/EFN_PAYMENT_SIMULATOR)
       - name: efn-deploy regression (cosign palsu)
         run: |
           docker run --rm -v "$PWD:/src:ro" \
