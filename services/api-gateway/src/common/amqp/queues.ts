@@ -12,6 +12,11 @@ export const QUEUES = {
   NOTIFY_PUSH: 'notify.push',
   /** docs/04 §8.4: publisher efn-etl (store clickhouse), consumer BFF. */
   PRIVACY_ERASURE_COMPLETED: 'privacy.erasure.completed',
+  // Fase 3 — saga penjualan online (docs/04 §10.9): publisher & consumer = BFF
+  ORDER_PAID: 'order.paid',
+  ORDER_UNPAID_CLOSED: 'order.unpaid_closed',
+  ORDER_COMPENSATE: 'order.compensate',
+  ORDER_REFUND_REQUESTED: 'order.refund.requested',
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
@@ -21,17 +26,31 @@ export const ALL_QUEUES: readonly QueueName[] = [
   QUEUES.LOYALTY_EARN_REQUESTED,
   QUEUES.NOTIFY_PUSH,
   QUEUES.PRIVACY_ERASURE_COMPLETED,
+  QUEUES.ORDER_PAID,
+  QUEUES.ORDER_UNPAID_CLOSED,
+  QUEUES.ORDER_COMPENSATE,
+  QUEUES.ORDER_REFUND_REQUESTED,
 ];
+
+/** docs/04 §10.9: queue saga online memakai argumen tambahan `x-delivery-limit` (dideklarasikan broker). */
+export const ONLINE_QUEUES: readonly QueueName[] = [
+  QUEUES.ORDER_PAID,
+  QUEUES.ORDER_UNPAID_CLOSED,
+  QUEUES.ORDER_COMPENSATE,
+  QUEUES.ORDER_REFUND_REQUESTED,
+];
+export const ONLINE_DELIVERY_LIMIT = 10;
 
 export function dlqName(queue: string): string {
   return `${queue}.dlq`;
 }
 
-export function mainQueueArguments(queue: string): Record<string, string> {
+export function mainQueueArguments(queue: string): Record<string, string | number> {
   return {
     'x-queue-type': 'quorum',
     'x-dead-letter-exchange': '',
     'x-dead-letter-routing-key': dlqName(queue),
+    ...((ONLINE_QUEUES as readonly string[]).includes(queue) ? { 'x-delivery-limit': ONLINE_DELIVERY_LIMIT } : {}),
   };
 }
 
@@ -66,7 +85,7 @@ export async function checkQueueWithDlq(ch: QueueChecker, queue: string): Promis
 
 /** @deprecated Deklarasi aktif (sebelum §8.10). Dipertahankan untuk spec argumen kontrak; tidak dipakai runtime. */
 export interface QueueAsserter {
-  assertQueue(queue: string, options: { durable: boolean; arguments: Record<string, string> }): Promise<unknown>;
+  assertQueue(queue: string, options: { durable: boolean; arguments: Record<string, string | number> }): Promise<unknown>;
 }
 
 /** Declare DLQ dulu, lalu queue utama (urutan tidak wajib, tetapi DLQ harus ada sebelum pesan mati). */

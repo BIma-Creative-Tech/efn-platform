@@ -79,7 +79,10 @@ describe('re-encrypt PII (U2)', () => {
       'otp_audit.ip_enc',
       'member.member_ref_enc',
       'consent.ip_enc',
+      'online_order_part.pickup_code_enc',
     ]);
+    expect(PII_AAD.ONLINE_PICKUP_CODE).toBe('efn:online_order_part.pickup_code_enc:v1');
+    expect(findPiiColumns('online_order_part.pickup_code_enc')[0]).toMatchObject({ pk: 'id', aad: PII_AAD.ONLINE_PICKUP_CODE });
     expect(PII_AAD.MEMBER_REF).toBe('efn:member.member_ref_enc:v1');
     expect(PII_AAD.CONSENT_IP).toBe('efn:consent.ip_enc:v1');
     expect(findPiiColumns('consent.ip_enc')).toHaveLength(1);

@@ -16,3 +16,6 @@ Kontrak: `docs/04` §4 (v2) & §7.2. Mengirim template WhatsApp (Cloud API resmi
 
 ## Belum
 - Push app (FCM), preferensi/opt-out (consent UU PDP), pemetaan `reason` teknis → kalimat pelanggan.
+
+## Fase 3 — `source: "online_order"` (docs/04 §10.9)
+Template `online_order_ready|online_order_cancelled|online_order_refunded` → WA `efn_online_order_*` **tanpa parameter** (tanpa kode ambil/nominal; "buka aplikasi"). Publisher hanya `efn-bff`; template harus sesuai sumber. Penerima: `online_order_part(source_ref) → online_order.member_id → member.member_ref_enc` (hash diverifikasi); tautan sudah dilepas → `skipped` (ack). Template WA perlu didaftarkan di WhatsApp Manager.

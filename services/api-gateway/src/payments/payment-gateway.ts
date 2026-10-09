@@ -6,6 +6,18 @@ export type PaymentStatus = 'pending' | 'paid' | 'expired' | 'failed' | 'cancell
 export const PAYMENT_STATUSES: readonly PaymentStatus[] = ['pending', 'paid', 'expired', 'failed', 'cancelled'];
 export type GatewayName = 'mock' | 'xendit' | 'midtrans';
 
+export type PaymentPurpose = 'pos' | 'online';
+
+/**
+ * Porsi per bagian (docs/04 §10.7, ADR-019): `mock` mengabaikannya; kelak adapter split (ADR-019 opsi C) memakainya
+ * tanpa perubahan kontrak publik.
+ */
+export interface PaymentPortion {
+  reference: string;
+  companyCode: string;
+  amount: number;
+}
+
 export interface CreateQrisInput {
   paymentId: string;
   orderRef: string;
@@ -13,6 +25,9 @@ export interface CreateQrisInput {
   currency: 'IDR';
   companyCode: string;
   expiresAt: Date;
+  /** §10.7: default `pos` (perilaku POS tidak berubah). */
+  purpose?: PaymentPurpose;
+  portions?: PaymentPortion[];
 }
 
 export interface CreateQrisResult {
@@ -50,7 +65,18 @@ export interface WebhookEvent {
   amount: number | null;
 }
 
-/** Operasi tidak didukung provider (mis. cancel QR dinamis). */
+/** §10.7: refund ke gateway (selalu terikat satu refund platform; Σ refund ≤ amount intent). */
+export interface RefundRequest {
+  refundId: string;
+  amount: number;
+  reason: string;
+}
+export interface RefundOutcome {
+  status: 'succeeded' | 'pending' | 'failed';
+  providerRefundRef: string | null;
+}
+
+/** Operasi tidak didukung provider (mis. cancel QR dinamis, refund pada adapter kerangka). */
 export class PaymentOperationUnsupportedError extends Error {}
 /** Respons provider tidak sesuai harapan / HTTP gagal. Pesan tanpa secret. */
 export class PaymentProviderError extends Error {}
@@ -60,6 +86,11 @@ export interface PaymentGateway {
   createQris(input: CreateQrisInput): Promise<CreateQrisResult>;
   getStatus(intent: IntentRef): Promise<ProviderStatus>;
   cancel(intent: IntentRef): Promise<{ status: PaymentStatus }>;
+  /**
+   * §10.7: refund (idempoten per `refundId`). `mock` mendukung (sinkron, Σ refund ≤ amount); adapter yang belum
+   * mendukung melempar `PaymentOperationUnsupportedError` → BFF menandai `manual_required`.
+   */
+  refund(intent: IntentRef, req: RefundRequest): Promise<RefundOutcome>;
   /** Verifikasi keaslian webhook (signature/token + replay window bila provider menyediakan timestamp). */
   verifyWebhook(req: WebhookRequest, nowSeconds: number): WebhookVerifyResult;
   /** Parse body yang SUDAH terverifikasi. Melempar bila bentuk tidak dikenal. */

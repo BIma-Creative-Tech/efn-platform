@@ -196,6 +196,11 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
         WHERE member_id = $1 AND id <> $2 AND member_hash IS NOT NULL`,
       [memberId, requestId],
     );
+    // 6b. Fase 3 (§10.8.3): order online tetap (baris keuangan 10 th) tanpa tautan ke member
+    await q.query(
+      `UPDATE platform.online_order SET member_id = NULL, member_unlinked_at = now(), updated_at = now() WHERE member_id = $1`,
+      [memberId],
+    );
     // 7. Member
     await q.query(`DELETE FROM platform.member WHERE id = $1`, [memberId]);
   }

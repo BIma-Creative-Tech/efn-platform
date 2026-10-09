@@ -1,8 +1,8 @@
-import { ALL_QUEUES, QueueAsserter, QueueMissingError, assertQueueWithDlq, checkQueueWithDlq } from './queues';
+import { ALL_QUEUES, QueueAsserter, mainQueueArguments, QueueMissingError, assertQueueWithDlq, checkQueueWithDlq } from './queues';
 
 describe('topologi RabbitMQ (kontrak §4)', () => {
   it('queue quorum durable + DLQ <queue>.dlq via default exchange', async () => {
-    const calls: { queue: string; options: { durable: boolean; arguments: Record<string, string> } }[] = [];
+    const calls: { queue: string; options: { durable: boolean; arguments: Record<string, string | number> } }[] = [];
     const ch: QueueAsserter = {
       assertQueue: async (queue, options) => {
         calls.push({ queue, options });
@@ -43,6 +43,20 @@ describe('topologi RabbitMQ (kontrak §4)', () => {
   });
 
   it('nama queue sesuai kontrak', () => {
-    expect([...ALL_QUEUES]).toEqual(['ocr.requested', 'loyalty.earn.requested', 'notify.push', 'privacy.erasure.completed']);
+    expect([...ALL_QUEUES]).toEqual([
+      'ocr.requested',
+      'loyalty.earn.requested',
+      'notify.push',
+      'privacy.erasure.completed',
+      'order.paid',
+      'order.unpaid_closed',
+      'order.compensate',
+      'order.refund.requested',
+    ]);
+  });
+
+  it('§10.9: queue saga online membawa x-delivery-limit 10; queue lama tidak', () => {
+    expect(mainQueueArguments('order.paid')).toMatchObject({ 'x-delivery-limit': 10, 'x-dead-letter-routing-key': 'order.paid.dlq' });
+    expect(mainQueueArguments('notify.push')).not.toHaveProperty('x-delivery-limit');
   });
 });

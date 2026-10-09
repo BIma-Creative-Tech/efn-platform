@@ -98,6 +98,11 @@ services:
       NODE_OPTIONS: --max-old-space-size=1024
       WHATSAPP_ENABLED: "false"
       PAYMENT_PROVIDER: mock
+      # G17: penjualan online AKTIF di dev terhadap E-28 nyata lewat odoo-rpc-gateway (ODOO_ONLINE_MOCK sengaja tidak
+      # diset). Butuh secrets/odoo_api_key_online_rtl.txt berisi key nyata (docs/runbooks/odoo-online-api-key.md §1);
+      # placeholder `disabled` -> BFF menolak konfigurasi kanal. Base/prod tetap default false.
+      ONLINE_ENABLED: "true"
+      ONLINE_CATALOG_ENABLED: "true"
       # G13c: rekonsiliasi loyalty tiap 5 menit di dev (default 1 jam) agar heartbeat EFN_LOYALTY_RECON & anomali
       # rekonsiliasi teramati oleh smoke dalam satu run.
       LOYALTY_RECON_INTERVAL_MS: "300000"

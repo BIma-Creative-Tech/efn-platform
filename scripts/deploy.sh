@@ -370,8 +370,10 @@ wait_healthy postgres || die "postgres tidak sehat"
 # lama hanya lewat langkah ini. Dijalankan sebagai superuser lewat socket lokal, SEBELUM BFF baru start.
 echo "==> Migrasi skema idempoten (infra/postgres/init/[0-9][0-9]-*.sql >= 04)"
 # G13c: migrasi yang WAJIB ada sebelum BFF rilis ini start (bundel tidak lengkap = gagal, bukan dilewati diam-diam):
-# 05 = loyalty POS (G13), 06 = pagar earn + daftar tolak erasure (SEC-61/SEC-65; tanpa 06 job erasure BFF gagal).
-for req in 04-platform-v3-6.sql 05-platform-loyalty-pos.sql 06-platform-loyalty-guard.sql; do
+# 05 = loyalty POS (G13), 06 = pagar earn + daftar tolak erasure (SEC-61/SEC-65; tanpa 06 job erasure BFF gagal),
+# 07 = penjualan online G17 (docs/04 §10.7/§10.8: payment_intent.purpose + tabel online_*; dibutuhkan BFF G17
+# termasuk saat ONLINE_ENABLED=false).
+for req in 04-platform-v3-6.sql 05-platform-loyalty-pos.sql 06-platform-loyalty-guard.sql 07-platform-online.sql; do
   [[ -s "$BASE/postgres/init/$req" ]] || die "migrasi wajib $req tidak ada di $BASE/postgres/init (bundel rilis tidak lengkap)"
 done
 for mig in "$BASE"/postgres/init/[0-9][0-9]-*.sql; do

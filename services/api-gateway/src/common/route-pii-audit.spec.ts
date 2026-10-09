@@ -1,6 +1,9 @@
 import { ROUTE_ARGS_METADATA } from '@nestjs/common/constants';
 import { RouteParamtypes } from '@nestjs/common/enums/route-paramtypes.enum';
 import { AuthController } from '../auth/auth.controller';
+import { CartController } from '../cart/cart.controller';
+import { CatalogController } from '../catalog/catalog.controller';
+import { OrderEventsController, OrdersController } from '../orders/orders.controller';
 import { MeController } from '../auth/me.controller';
 import { HealthController } from '../health/health.controller';
 import { MarketScoutController } from '../market-scout/market-scout.controller';
@@ -16,8 +19,9 @@ import { ConsentController, DsarController, DsarReceiptController } from '../pri
  * Audit statis: setiap `@Query()`/`@Param()` di semua controller harus ada di allowlist berisi pengenal NON-PII
  * (UUID request/payment, enum). Menambah parameter URL baru = tinjau dulu lalu tambahkan di sini.
  */
-const ALLOWED_QUERY = new Set(['store']); // GET /v1/pos/privacy/erasures?store=odoo (enum)
-const ALLOWED_PARAM = new Set(['id', 'payment_id', 'provider', 'request_id', 'purpose']);
+// Fase 3 (§10.3): kode kanal/outlet, id kategori/produk Odoo, teks pencarian katalog, cursor opak, ukuran gambar.
+const ALLOWED_QUERY = new Set(['store', 'channel', 'category', 'q', 'cursor', 'limit', 'size', 'outlet', 'ids']);
+const ALLOWED_PARAM = new Set(['id', 'payment_id', 'provider', 'request_id', 'purpose', 'product_id', 'image_sha', 'order_id']);
 
 const CONTROLLERS: (new (...args: never[]) => unknown)[] = [
   AuthController,
@@ -33,6 +37,10 @@ const CONTROLLERS: (new (...args: never[]) => unknown)[] = [
   ConsentController,
   DsarController,
   DsarReceiptController,
+  CatalogController,
+  CartController,
+  OrdersController,
+  OrderEventsController,
 ];
 
 describe('Audit URL tanpa PII (R2)', () => {
@@ -57,7 +65,9 @@ describe('Audit URL tanpa PII (R2)', () => {
       }
     }
     // Sanity: audit benar-benar membaca metadata (bukan lolos karena kosong)
-    expect(found).toEqual(expect.arrayContaining(['PosPrivacyController.list:query:store', 'DsarReceiptController.status:param:id']));
+    expect(found).toEqual(
+      expect.arrayContaining(['PosPrivacyController.list:query:store', 'DsarReceiptController.status:param:id', 'OrdersController.get:param:order_id']),
+    );
     expect(found.some((f) => f.includes('member_ref'))).toBe(false);
   });
 });

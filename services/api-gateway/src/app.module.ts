@@ -3,6 +3,8 @@ import { APP_FILTER } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { TerminusModule } from '@nestjs/terminus';
 import { AuthModule } from './auth/auth.module';
+import { CartModule } from './cart/cart.module';
+import { CatalogModule } from './catalog/catalog.module';
 import { CommonModule } from './common/common.module';
 import { ContractExceptionFilter } from './common/errors/contract-exception.filter';
 import { HealthController } from './health/health.controller';
@@ -10,6 +12,7 @@ import { LoyaltyModule } from './loyalty/loyalty.module';
 import { MarketScoutModule } from './market-scout/market-scout.module';
 import { MigrationModule } from './migration/migration.module';
 import { NotificationModule } from './notification/notification.module';
+import { OrdersModule } from './orders/orders.module';
 import { OtpModule } from './otp/otp.module';
 import { PaymentsModule } from './payments/payments.module';
 import { PosModule } from './pos/pos.module';
@@ -19,7 +22,7 @@ import { PrivacyModule } from './privacy/privacy.module';
  * Modul root. Bounded context (docs/04_SERVICE_CONTRACTS.md):
  * pos (§3.1/§3.4), auth (§3.2, §8.1–8.2), market-scout (§3.3), loyalty + notification (consumer §4),
  * privacy (§8.4/§8.7/§8.9: consent, DSAR, erasure), payments (§8.3), migration (§9.6 K-7, internal).
- * Modul berikutnya (cart-checkout, mgm, connectors/webhook) ditambahkan sesuai roadmap (docs/01 §7).
+ * catalog/cart/orders/odoo-rpc (§10, Fase 3 online). Modul berikutnya (mgm, connectors/webhook) ditambahkan sesuai roadmap (docs/01 §7).
  */
 @Module({
   imports: [
@@ -37,6 +40,10 @@ import { PrivacyModule } from './privacy/privacy.module';
     PrivacyModule,
     PaymentsModule,
     MigrationModule,
+    // Fase 3 penjualan online (docs/04 §10, ADR-034 Proposed): kill switch ONLINE_ENABLED / ONLINE_CATALOG_ENABLED
+    CatalogModule,
+    CartModule,
+    OrdersModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_FILTER, useClass: ContractExceptionFilter }],

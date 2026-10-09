@@ -1496,3 +1496,8 @@ Belum / perlu tindakan:
   kunci manifest `ODOO_ONLINE_MOCK` ditolak). **PASS=101 FAIL=0** (container python:3.12-bookworm seperti CI).
 - Ulang validasi: shellcheck (seluruh `scripts/*.sh scripts/lib scripts/host` + infra) OK (SC2015 baru di deploy.sh
   diperbaiki), actionlint OK, yamllint 0 error, checkov 0 FAILED, compose config dev/prod OK, `check-encryption.sh` OK.
+- Tambahan lead #2: `07-platform-online.sql` masuk daftar migrasi WAJIB `deploy.sh` (bundel tanpa 07 = deploy gagal);
+  dev `api-gateway` `ONLINE_ENABLED=true` + `ONLINE_CATALOG_ENABLED=true` (render prod tetap false; `ODOO_ONLINE_MOCK`
+  absen di dev dan prod). Validasi: compose config dev/prod OK, check-encryption OK, shellcheck OK, efn-deploy 101/101.
+  Container `api-gateway` dev BELUM di-recreate: perlu key RTL nyata di `secrets/odoo_api_key_online_rtl.txt` (runbook
+  odoo-online-api-key §1, setelah E-28 + user teknis `efn_online_rtl` ada) dan migrasi 07 di volume dev lama.

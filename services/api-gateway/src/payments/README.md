@@ -29,3 +29,8 @@ Egress vendor memakai `createPublicHttp()` (SEC-23: root store publik saja).
 
 ## Belum
 Refund (`/refund` dicadangkan), settlement/rekonsiliasi per PT, checkout online (Super-App), metrik payment, uji sandbox vendor (format waktu `settlement_time` Midtrans, event Xendit terbaru, idempotency header Xendit).
+
+## Fase 3 — online (docs/04 §10.7, G17)
+- `payment_intent.purpose` (`pos` default | `online`) + `online_order_id`; tabel `payment_intent_portion` (porsi per bagian, Σ = amount). `createOnlineIntent` (port `OnlinePaymentsPort`, `online-payments.ts`): `company_code=EFN`, idempoten `online:intent:<order_id>`.
+- `PaymentGateway.refund(intent, {refundId, amount, reason})`: `mock` sinkron, idempoten per `refundId`, Σ ≤ amount; `xendit`/`midtrans` → `PaymentOperationUnsupportedError` (BFF → `manual_required`).
+- Hook saga online dipanggil DI DALAM transaksi transisi intent (`setOnlineHook`, didaftarkan `orders`), termasuk nominal beda (status tidak berubah). Perilaku POS tidak berubah.

@@ -10,6 +10,7 @@ import {
   PaymentProviderError,
   PaymentStatus,
   ProviderStatus,
+  RefundOutcome,
   WebhookEvent,
   WebhookRequest,
   WebhookVerifyResult,
@@ -107,6 +108,11 @@ export class XenditGateway implements PaymentGateway {
 
   async cancel(): Promise<{ status: PaymentStatus }> {
     throw new PaymentOperationUnsupportedError('Xendit QR dinamis tidak mendukung pembatalan');
+  }
+
+  /** §10.7: refund belum didukung kerangka adapter (menunggu ADR-016 + uji sandbox) → BFF menandai manual_required. */
+  async refund(): Promise<RefundOutcome> {
+    throw new PaymentOperationUnsupportedError('Xendit: refund belum didukung adapter (ADR-016)');
   }
 
   verifyWebhook(req: WebhookRequest): WebhookVerifyResult {

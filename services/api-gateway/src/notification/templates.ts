@@ -11,6 +11,10 @@ export interface NotifyTemplate {
 export const NOTIFY_TEMPLATES: Readonly<Record<string, NotifyTemplate>> = {
   price_hunter_valid: { waTemplate: 'efn_price_hunter_valid', params: ['product_name', 'points'] },
   price_hunter_rejected: { waTemplate: 'efn_price_hunter_rejected', params: ['product_name', 'reason'] },
+  // Fase 3 (docs/04 §10.3.6): pesan WA TANPA kode ambil/nominal — hanya "buka aplikasi" (template UTILITY tanpa parameter)
+  online_order_ready: { waTemplate: 'efn_online_order_ready', params: [] },
+  online_order_cancelled: { waTemplate: 'efn_online_order_cancelled', params: [] },
+  online_order_refunded: { waTemplate: 'efn_online_order_refunded', params: [] },
 };
 
 const MAX_PARAM_LENGTH = 100;

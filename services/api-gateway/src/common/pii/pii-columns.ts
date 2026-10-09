@@ -19,6 +19,8 @@ export const PII_COLUMNS: readonly PiiColumn[] = [
   { table: 'otp_audit', column: 'ip_enc', pk: 'id', aad: PII_AAD.OTP_AUDIT_IP },
   { table: 'member', column: 'member_ref_enc', pk: 'id', aad: PII_AAD.MEMBER_REF },
   { table: 'consent', column: 'ip_enc', pk: 'id', aad: PII_AAD.CONSENT_IP },
+  // L-13 (docs/04 §10.17): kode ambil online ikut rotasi/re-encrypt & cek kunci pensiun saat start
+  { table: 'online_order_part', column: 'pickup_code_enc', pk: 'id', aad: PII_AAD.ONLINE_PICKUP_CODE },
 ];
 
 const IDENT_RE = /^[a-z_][a-z0-9_]*$/;

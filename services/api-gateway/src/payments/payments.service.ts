@@ -13,9 +13,12 @@ import {
   PaymentGateway,
   PaymentOperationUnsupportedError,
   PaymentStatus,
+  RefundOutcome,
+  RefundRequest,
   WebhookEvent,
   WebhookRequest,
 } from './payment-gateway';
+import { OnlineIntent, OnlineIntentHook, OnlineIntentInput, OnlinePaymentsPort } from './online-payments';
 
 export const PAYMENT_GATEWAY = Symbol('PAYMENT_GATEWAY');
 
@@ -51,9 +54,13 @@ interface IntentRow {
   qr_string: string | null;
   expires_at: Date | string | null;
   paid_at: Date | string | null;
+  /** §10.7 (07-platform-online.sql). Baris tanpa kolom (test lama) → dianggap 'pos'. */
+  purpose?: 'pos' | 'online' | null;
+  online_order_id?: string | null;
 }
 
-const INTENT_COLUMNS = `id::text AS id, provider, provider_ref, order_ref, company_code, amount, status, qr_string, expires_at, paid_at`;
+const INTENT_COLUMNS = `id::text AS id, provider, provider_ref, order_ref, company_code, amount, status, qr_string, expires_at, paid_at,
+  purpose, online_order_id::text AS online_order_id`;
 
 function iso(v: Date | string | null): string | null {
   return v === null ? null : (v instanceof Date ? v : new Date(v)).toISOString();
@@ -83,9 +90,15 @@ export function canTransition(from: PaymentStatus, to: PaymentStatus): boolean {
  *   Nominal webhook ≠ intent → status TIDAK diubah, log error (review manual).
  */
 @Injectable()
-export class PaymentsService {
+export class PaymentsService implements OnlinePaymentsPort {
   private readonly logger = new Logger(PaymentsService.name);
   now: () => number = () => Date.now();
+  /** Hook saga online (didaftarkan OrdersModule) — dipanggil DI DALAM transaksi transisi intent `purpose=online`. */
+  private onlineHook: OnlineIntentHook | null = null;
+
+  setOnlineHook(hook: OnlineIntentHook): void {
+    this.onlineHook = hook;
+  }
 
   constructor(
     private readonly config: AppConfig,
@@ -271,8 +284,13 @@ export class PaymentsService {
     const res = await q.query<IntentRow>(`SELECT ${INTENT_COLUMNS} FROM platform.payment_intent WHERE id = $1 FOR UPDATE`, [id]);
     const row = res.rows[0];
     if (!row || !canTransition(row.status, ev.status)) return;
+    const online = row.purpose === 'online' && row.online_order_id ? row.online_order_id : null;
+    const from = row.status;
     if (ev.status === 'paid' && ev.amount !== null && Math.abs(ev.amount - Number(row.amount)) > 0.005) {
       this.logger.error(`Nominal ${via} untuk ${id} tidak sama dengan intent — status tidak diubah (review manual)`);
+      if (online && this.onlineHook) {
+        await this.onlineHook(q, { paymentId: id, onlineOrderId: online, from: row.status, to: ev.status, amountMismatch: true });
+      }
       return;
     }
     if (ev.status === 'paid' && row.status !== 'pending') {
@@ -285,6 +303,111 @@ export class PaymentsService {
       [id, ev.status, paidAt, row.status],
     );
     this.logger.log(`Payment ${id}: ${row.status} → ${ev.status} (${via})`);
+    // §10.7: hook saga online DALAM transaksi yang sama (order paid / bayar terlambat)
+    if (online && this.onlineHook) {
+      await this.onlineHook(q, { paymentId: id, onlineOrderId: online, from, to: ev.status, amountMismatch: false });
+    }
+  }
+
+  // ───────────── Kanal online (docs/04 §10.7) ─────────────
+  /**
+   * Satu intent per platform order: `purpose=online`, `company_code=EFN` (pemegang akun gateway, ADR-019),
+   * `order_ref = order_id`, porsi per bagian (Σ porsi = amount, dicek di sini dan di rekonsiliasi). Idempoten per
+   * `online:intent:<order_id>` (UNIQUE idempotency_key + UNIQUE online_order_id).
+   */
+  async createOnlineIntent(input: OnlineIntentInput): Promise<OnlineIntent> {
+    const gw = this.gateway();
+    const sum = input.portions.reduce((a, p) => a + p.amount, 0);
+    if (input.portions.length === 0 || sum !== input.amount || !Number.isInteger(input.amount) || input.amount <= 0) {
+      throw new Error('porsi intent online tidak konsisten');
+    }
+    const id = randomUUID();
+    const created = await this.db.tx(async (q) => {
+      const ins = await q.query<{ id: string }>(
+        `INSERT INTO platform.payment_intent
+           (id, provider, order_ref, company_code, amount, currency, method, status, expires_at, idempotency_key, purpose, online_order_id)
+         VALUES ($1, $2, $3, 'EFN', $4, 'IDR', 'qris', 'pending', $5, $6, 'online', $7)
+         ON CONFLICT DO NOTHING
+         RETURNING id::text AS id`,
+        [id, gw.name, input.orderId, input.amount, input.expiresAt.toISOString(), input.idempotencyKey, input.orderId],
+      );
+      if (!ins.rows[0]) return false;
+      for (const p of input.portions) {
+        await q.query(
+          `INSERT INTO platform.payment_intent_portion (payment_intent_id, part_id, channel_code, company_code, amount)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [id, p.partId, p.channelCode, p.companyCode, p.amount],
+        );
+      }
+      return true;
+    });
+    if (!created) {
+      const res = await this.db.query<IntentRow>(`SELECT ${INTENT_COLUMNS} FROM platform.payment_intent WHERE idempotency_key = $1`, [
+        input.idempotencyKey,
+      ]);
+      const row = res.rows[0];
+      if (!row || row.online_order_id !== input.orderId || Number(row.amount) !== input.amount) {
+        throw Errors.conflict('idempotency_conflict', 'idempotency_key sudah dipakai untuk pembayaran lain.');
+      }
+      if (row.status === 'pending' && row.qr_string === null) throw Errors.conflict('payment_in_progress', 'Pembayaran sedang dibuat.');
+      return this.toOnline(row);
+    }
+    try {
+      const r = await gw.createQris({
+        paymentId: id,
+        orderRef: input.orderId,
+        amount: input.amount,
+        currency: 'IDR',
+        companyCode: 'EFN',
+        expiresAt: input.expiresAt,
+        purpose: 'online',
+        portions: input.portions.map((p) => ({ reference: p.partId, companyCode: p.companyCode, amount: p.amount })),
+      });
+      await this.db.query(
+        `UPDATE platform.payment_intent SET provider_ref = $2, qr_string = $3, expires_at = $4, updated_at = now() WHERE id = $1`,
+        [id, r.providerRef, r.qrString, r.expiresAt.toISOString()],
+      );
+      this.logger.log(`Payment intent online ${id} dibuat (${gw.name})`);
+      return { paymentId: id, provider: gw.name, status: 'pending', qrString: r.qrString, expiresAt: r.expiresAt, paidAt: null, amount: input.amount };
+    } catch (err) {
+      await this.db
+        .query(`UPDATE platform.payment_intent SET status = 'failed', updated_at = now() WHERE id = $1 AND status = 'pending'`, [id])
+        .catch(() => undefined);
+      this.logger.error(`Provider ${gw.name} gagal membuat QR online ${id}: ${err instanceof Error ? err.message : String(err)}`);
+      throw Errors.paymentProviderError();
+    }
+  }
+
+  async getIntent(paymentId: string): Promise<OnlineIntent | null> {
+    const res = await this.db.query<IntentRow>(`SELECT ${INTENT_COLUMNS} FROM platform.payment_intent WHERE id = $1`, [paymentId]);
+    return res.rows[0] ? this.toOnline(res.rows[0]) : null;
+  }
+
+  async cancelIntent(paymentId: string): Promise<PaymentStatus> {
+    return (await this.cancel(paymentId)).status;
+  }
+
+  /** §10.7: refund ke gateway untuk intent yang sudah `paid`. Unsupported → diteruskan (pemanggil → manual_required). */
+  async refund(paymentId: string, req: RefundRequest): Promise<RefundOutcome> {
+    const row = await this.load(paymentId);
+    if (row.status !== 'paid') return { status: 'failed', providerRefundRef: null };
+    const gw = this.gateway();
+    if (gw.name !== row.provider) throw new PaymentOperationUnsupportedError('provider intent bukan provider aktif');
+    const out = await gw.refund(this.ref(row), req);
+    this.logger.log(`Refund ${req.refundId} untuk payment ${paymentId}: ${out.status}`);
+    return out;
+  }
+
+  private toOnline(row: IntentRow): OnlineIntent {
+    return {
+      paymentId: row.id,
+      provider: row.provider,
+      status: row.status,
+      qrString: row.qr_string,
+      expiresAt: row.expires_at === null ? null : new Date(row.expires_at),
+      paidAt: row.paid_at === null ? null : new Date(row.paid_at),
+      amount: Number(row.amount),
+    };
   }
 
   private async load(paymentId: string): Promise<IntentRow> {

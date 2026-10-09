@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { LoyaltyModule } from '../loyalty/loyalty.module';
 import { objectStorageProvider } from '../market-scout/storage/object-storage';
 import { OtpModule } from '../otp/otp.module';
+import { OrdersModule } from '../orders/orders.module';
 import { ConsentService } from './consent.service';
 import { DsarService } from './dsar.service';
 import { ErasureCompletedConsumer } from './erasure-completed.consumer';
@@ -12,7 +13,7 @@ import { DsarReceiptService } from './dsar-receipt.service';
 
 /** Privasi UU PDP (docs/04 §8.4, §8.7, §8.9): consent, DSAR, erasure lintas-store. */
 @Module({
-  imports: [OtpModule, LoyaltyModule],
+  imports: [OtpModule, LoyaltyModule, OrdersModule],
   controllers: [ConsentController, DsarController, DsarReceiptController, PosPrivacyController],
   providers: [ConsentService, DsarService, DsarReceiptService, ErasureService, ErasureCompletedConsumer, objectStorageProvider],
   exports: [ConsentService],
