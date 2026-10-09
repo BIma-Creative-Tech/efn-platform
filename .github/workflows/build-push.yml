@@ -162,11 +162,17 @@ jobs:
           COSIGN_YES: "true"
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NS }}/${{ matrix.service }}@${{ steps.push.outputs.digest }}
           SBOM: sbom-${{ matrix.service }}.spdx.json
+        # Rekor publik (sigstore) kadang timeout: retry dengan jeda; sign/attest idempoten per digest.
         run: |
-          cosign sign "$IMAGE"
-          cosign attest --type spdxjson --predicate "$SBOM" "$IMAGE"
+          retry() { for i in 1 2 3 4; do "$@" && return 0; echo "percobaan $i gagal, ulangi dalam $((i * 20)) dtk"; sleep $((i * 20)); done; return 1; }
+          retry cosign sign "$IMAGE"
+          retry cosign attest --type spdxjson --predicate "$SBOM" "$IMAGE"
 
       - name: Attest build provenance (GitHub)
+        # Artifact attestation GitHub tidak tersedia untuk repo privat milik akun pribadi (paket gratis) -> hanya bila repo
+        # publik atau variable ATTESTATIONS_ENABLED=true (org/Enterprise). Deploy tidak bergantung padanya: host memakai
+        # `cosign verify` (langkah di atas), lihat scripts/host/efn-deploy.
+        if: vars.ATTESTATIONS_ENABLED == 'true' || github.event.repository.visibility == 'public'
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2.4.0
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NS }}/${{ matrix.service }}

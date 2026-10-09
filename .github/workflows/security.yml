@@ -191,7 +191,7 @@ jobs:
           set -o pipefail
           docker run --rm -v "$PWD:/src" -w /src "$CHECKOV_IMAGE" \
             -d . --framework dockerfile,github_actions,yaml --skip-check CKV_DOCKER_2 --skip-path secrets \
-            --compact --no-guide --quiet -o cli -o sarif --output-file-path console,checkov.sarif \
+            --compact --quiet -o cli -o sarif --output-file-path console,checkov.sarif \
             | tee checkov.txt
       - name: Ringkasan temuan (job summary)
         if: always()
