@@ -584,26 +584,25 @@ class EfnOnlineOrder(models.Model):
         payload_sha = canonical_sha256(
             {"order": order.id, "full": full, "lines": lines, "restock": restock, "reason": refund["reason"]}
         )
-        existing = self.env["efn.online.refund"].sudo().search([("idempotency_key", "=", key)], limit=1)
+        # QA G17: pakai env kanal (context klien sudah dibuang, §10.4.4 no. 4) — `self.env` masih membawa `lang` klien;
+        # bahasa yang tidak terpasang (id_ID di DB tanpa bahasa Indonesia) -> env.lang -> UserError 422.
+        Refunds = order.env["efn.online.refund"].sudo()
+        existing = Refunds.search([("idempotency_key", "=", key)], limit=1)
         if existing:
             if existing.order_id != order or existing.payload_sha256 != payload_sha:
                 raise online_error("idempotency_conflict")
             return existing._efn_result()
         if order.state not in ("confirmed", "ready", "picked_up", "review") or not order._efn_posted_invoice():
             raise online_error("invalid_state")
-        record = (
-            self.env["efn.online.refund"]
-            .sudo()
-            ._efn_create(
-                order,
-                idempotency_key=key,
-                lines=lines,
-                restock=restock,
-                reason=refund["reason"],
-                initiator="bff",
-                origin="refund",
-                payload_sha256=payload_sha,
-            )
+        record = Refunds._efn_create(
+            order,
+            idempotency_key=key,
+            lines=lines,
+            restock=restock,
+            reason=refund["reason"],
+            initiator="bff",
+            origin="refund",
+            payload_sha256=payload_sha,
         )
         order._efn_emit("refunded", refund=record)
         return record._efn_result()
@@ -620,7 +619,7 @@ class EfnOnlineOrder(models.Model):
         ok = settlement["ok"]
         require(isinstance(ok, bool))
         record = (
-            self.env["efn.online.refund"]
+            channel.env["efn.online.refund"]  # env kanal: tanpa context klien (QA G17, lihat efn_online_refund)
             .sudo()
             .search([("refund_ref", "=", refund_ref.lower()), ("order_id.channel_id", "=", channel.id)], limit=1)
         )

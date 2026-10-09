@@ -73,7 +73,9 @@ export class DsarService {
     private readonly receipts: DsarReceiptService,
     @Inject(KV_STORE) private readonly kv: KvStore,
     /** Fase 3 (§10.8.3, L-4): export order online + pra-hapus akun. Opsional agar modul lain/test lama tetap jalan. */
-    @Optional() private readonly online: OnlinePrivacyService | null = null,
+    // QA G17: token eksplisit WAJIB — tipe union `X | null` diserialisasi TypeScript sebagai `Object` di
+    // design:paramtypes, sehingga @Optional() tanpa @Inject selalu menyuntik undefined (L-4 409 diam-diam mati).
+    @Optional() @Inject(OnlinePrivacyService) private readonly online: OnlinePrivacyService | null = null,
   ) {}
 
   requireStepUp(user: AuthUser, token: string | undefined): void {

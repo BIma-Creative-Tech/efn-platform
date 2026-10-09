@@ -387,3 +387,53 @@ Dijalankan bersama peran devsecops (satu agent), runtime dev nyata (bukan hanya 
 - Belum: frontend POS OWL (tour refund berpoin / order berpoin ditolak sync), `/json/2` dengan API key, CI GitHub.
 - Data QA baru di DB dev: user `smoke_rpc_internal`, `smoke_rpc_cashier` (password/TOTP acak per run, tidak tersimpan
   di host), partner `SMOKE Member O`, order 20 juta (review) + retur tanpa struk.
+
+# Gelombang 17 — Integrasi nyata & smoke penjualan online (2026-10-09)
+
+Berbeda dari catatan "tanpa runtime" di definisi agent: gelombang ini dijalankan di **stack dev nyata** (Docker Desktop),
+atas instruksi efn-lead. Detail lengkap: `docs/testing/E2E_SMOKE_REPORT.md` bagian Gelombang 17.
+
+## G17.1 Hasil
+- Integrasi: build ulang odoo/api-gateway/superapp-web; `efn_online_order efn_setup_online` terpasang di `efn_odoo`
+  (0 ERROR); kanal RTL dev dikonfigurasi lewat `odoo_online_smoke.py setup`; API key user teknis dibuat dengan prosedur
+  runbook `odoo-online-api-key.md` §1 (runbook bekerja apa adanya); migrasi 07; recreate 7 container, semua healthy.
+- `test-gateway.sh` 97/97; dengan key nyata 10 path `/json/2` menjawab aplikasi (200 / 422 `efn_online:<kode>`).
+- Smoke penuh `a b c d f e g l o`: **PASS=241 FAIL=1** — tahap lama 151/151, tahap baru `o` 90/1.
+
+## G17.2 Konsistensi kontrak Odoo ↔ BFF ↔ frontend (diuji runtime)
+| Sambungan | Status |
+|---|---|
+| BFF json2 → gateway → E-28 (10 metode, argumen bernama, error `efn_online:<kode>` HTTP 422) | cocok; lihat G17-QA-02 untuk `context.lang` |
+| Blok `channel` katalog (L-11) → `GET /v1/catalog/channels` | cocok (company_code, outlet, fulfilment) |
+| Event Odoo → BFF (`X-EFN-Service-Key` + `X-EFN-Signature`, `seq`, idempotency key) | cocok untuk placed/paid/confirmed/ready/picked_up/cancelled/refunded; **`review` dari `confirmed|ready` tidak diterapkan** (G17-QA-03) |
+| Saga paid → mark_paid → confirmed/stock_short; unpaid_closed; compensate; refund.requested → refund_settled | cocok (stock_short, late_payment, refund CS settled) |
+| Next.js `app/api/{catalog,cart,orders}` ↔ BFF `/v1` | cocok: bentuk respons, 201 checkout, key server-side L-8, allowlist body cart, `isSameOrigin` 403 |
+| `DELETE /v1/me` ↔ L-4 | **tidak cocok sebelum perbaikan** (G17-QA-01) |
+
+## G17.3 Perbaikan (produk)
+- **G17-QA-01** `services/api-gateway/src/privacy/dsar.service.ts:76-78`: `@Optional() @Inject(OnlinePrivacyService)`.
+  Tanpa token eksplisit, metadata tipe `OnlinePrivacyService | null` = `Object` → service tidak pernah disuntik →
+  `DELETE /v1/me` menjadwalkan hapus akun walau ada pesanan online dibayar (pelanggaran L-4/PDP). Test baru
+  `src/privacy/dsar-injection.spec.ts`. Jest 42 suite / 501 test, build & lint 0 error.
+- **G17-QA-02** `services/odoo/addons/efn_online_order/models/efn_online_order.py` (`efn_online_refund` ±587–607,
+  `efn_online_refund_settled` ±620): pakai env order/kanal (context klien dibuang, §10.4.4 no. 4), bukan `self.env`.
+  Sebelumnya `context.lang=id_ID` dari BFF → `Invalid language code` 422 bila id_ID tidak terpasang → refund CS dan
+  `refund_settled` selalu gagal. Test baru `test_refund_with_bff_lang_context_not_installed`; 68 test modul online
+  0 gagal di container; ruff lolos.
+
+## G17.4 Test/harness ditambah
+- `scripts/smoke/online_smoke.py` (klien publik + subperintah `events` internal), `scripts/smoke/odoo_online_smoke.py`
+  (setup kanal dev, stok, staf ready/handover, outbox, apikey), tahap `o` di `run-e2e-smoke.sh` (default kini
+  `a b c d f e g l o`), README smoke. Tanpa secret di skrip (key/HMAC/service key dibaca di dalam container dari
+  `secrets/` read-only); HP fiktif acak; OTP dari log BFF dev.
+
+## G17.5 Sisa / untuk lead
+- **G17-QA-03 (lead → BFF):** status `review` dari `confirmed|ready` diabaikan BFF (peringkat sama) tetapi dicatat
+  `applied`; pelanggan tetap melihat `confirmed` dan bisa meminta kode. Butuh keputusan kontrak §10.6.2.
+- **G17-QA-04 (efn-odoo-functional):** label pajak `Non-luxury Good Taxes` (Inggris) ke pelanggan; pasang id_ID /
+  `invoice_label`.
+- **G17-QA-05 (devsecops):** watch mode BFF dev tidak menangkap perubahan bind mount Windows → perlu recreate (runbook).
+- **G17-QA-06 (lead):** butir §10.14 "status HTTP json2 per exception" bisa ditutup (UserError = 422, terverifikasi).
+- Artefak dev: refund Odoo `RINV/2026/00001` di `S00001` dibuat manual saat diagnosis, tidak tercatat di BFF.
+- Belum: browser nyata, notifikasi WA/push, circuit breaker/alert online, CLI `online-resolve`/`online-refund-settle`,
+  provider non-mock, place paralel lintas proses.

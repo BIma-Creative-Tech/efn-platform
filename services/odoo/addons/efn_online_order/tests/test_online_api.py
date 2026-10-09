@@ -586,6 +586,30 @@ class TestEfnOnlinePaidCancelRefund(EfnOnlineCommon):
         with self.assertRaises(UserError):
             api.efn_online_refund_settled("TST", str(uuid.uuid4()), settle)
 
+    def test_refund_with_bff_lang_context_not_installed(self):
+        """QA G17 (smoke nyata): BFF selalu mengirim context `lang: id_ID`. Di DB tanpa bahasa Indonesia, refund &
+        refund_settled dulu memakai `self.env` (context klien) -> env.lang -> UserError 'Invalid language code'."""
+        if self.env["res.lang"]._get_data(code="id_ID"):
+            self.skipTest("id_ID terpasang di DB test; kasus bahasa tidak terpasang tidak bisa direproduksi")
+        part, _payload, _result = self.place()
+        self.pay(part)
+        api = self.order_api().with_context(lang="id_ID")
+        payload = {
+            "idempotency_key": f"online:refund:{uuid.uuid4()}",
+            "lines": [{"product_id": self.p_rice.id, "qty": 1}],
+            "restock": False,
+            "reason": "customer_cs",
+        }
+        first = api.efn_online_refund("TST", part, payload)
+        self.assertEqual(api.efn_online_refund("TST", part, payload), first)
+        settle = {
+            "provider_refund_ref": "mock-refund-lang",
+            "settled_at": "2026-10-09T11:00:00Z",
+            "ok": True,
+            "idempotency_key": f"online:refund_settled:{first['refund_ref']}",
+        }
+        self.assertEqual(api.efn_online_refund_settled("TST", first["refund_ref"], settle), {"state": "settled"})
+
     def test_refund_requires_invoice(self):
         part, _payload, _result = self.place()
         with self.assertRaises(UserError) as exc:

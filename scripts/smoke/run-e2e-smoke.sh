@@ -9,8 +9,9 @@
 # Tidak ada secret di skrip: password dibaca DI DALAM container dari /run/secrets. Nomor HP = nomor fiktif acak.
 # Idempoten: setiap run memakai nomor, order, dan foto baru; data Odoo smoke (config/produk/metode) dipakai ulang.
 #
-# Pemakaian (Git Bash/Linux):  bash scripts/smoke/run-e2e-smoke.sh [a b c d e f g l v]   (default: a b c d f e g l;
-#   v = jalur VLM nyata, opsional, butuh model OLLAMA_VISION_MODEL di Ollama)
+# Pemakaian (Git Bash/Linux):  bash scripts/smoke/run-e2e-smoke.sh [a b c d e f g l o v]   (default: a b c d f e g l o;
+#   v = jalur VLM nyata, opsional, butuh model OLLAMA_VISION_MODEL di Ollama; o = penjualan online G17, terakhir
+#   karena me-recreate api-gateway untuk uji kill switch)
 # Keluaran: baris `SMOKE_RESULT {...}` + ringkasan PASS/FAIL; exit 1 bila ada FAIL.
 set -euo pipefail
 
@@ -25,13 +26,13 @@ command -v openssl > /dev/null || { echo "openssl dibutuhkan" >&2; exit 2; }
 
 P="efn"
 BFF="${P}-api-gateway-1"; ODOO="${P}-odoo-1"; PG="${P}-postgres-1"; CH="${P}-clickhouse-1"
-SCENARIOS=("$@"); [[ ${#SCENARIOS[@]} -eq 0 ]] && SCENARIOS=(a b c d f e g l)
+SCENARIOS=("$@"); [[ ${#SCENARIOS[@]} -eq 0 ]] && SCENARIOS=(a b c d f e g l o)
 
 WORK="$(mktemp -d)"
 RESULTS="${WORK}/results.txt"
 : > "$RESULTS"
 cp "${ROOT}/secrets/dev_edge_crt.txt" "${WORK}/edge_ca.crt"
-cp "${SMOKE_DIR}/bff_smoke.py" "${SMOKE_DIR}/odoo_rpc_smoke.py" "${SMOKE_DIR}/obs_smoke.py" "${WORK}/"
+cp "${SMOKE_DIR}/bff_smoke.py" "${SMOKE_DIR}/odoo_rpc_smoke.py" "${SMOKE_DIR}/obs_smoke.py" "${SMOKE_DIR}/online_smoke.py" "${WORK}/"
 WORK_W="$WORK"; command -v cygpath > /dev/null && WORK_W="$(cygpath -w "$WORK")"
 SECRETS_W="${ROOT}/secrets"; command -v cygpath > /dev/null && SECRETS_W="$(cygpath -w "$SECRETS_W")"
 PY_IMAGE="python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea"
@@ -577,6 +578,232 @@ scenario_l() { # Gelombang 13: Poin EFN di POS (docs/04 §9) — Odoo efn_pos_lo
   done
   check "l.etl_points_and_refund_lines" "$([[ "$r" == 1/-6000/* && "${r##*/}" -ge 1 ]] && echo 1 || echo 0)" "points_lines/points_subtotal/refund_lines=$r"
   echo "$u2 $ur $o2 $orr" > "${WORK}/loyalty_orders"
+}
+
+scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-App/BFF -> odoo-rpc-gateway -> E-28 nyata
+  echo "== o. Online: katalog -> cart -> quote -> checkout -> bayar mock -> confirmed -> ready -> ambil; negatif & PDP"
+  local r part main_oid code pa pb pc pw ok n
+  oodoo() { # -e K=V ... -> satu baris SMOKE_RESULT (langkah odoo_online_smoke.py)
+    local o
+    o="$(MSYS_NO_PATHCONV=1 docker exec -i "$@" "$ODOO" odoo shell -d efn_odoo --no-http --log-level=warn \
+      < "${SMOKE_DIR}/odoo_online_smoke.py" 2>&1 | grep -E '^SMOKE_RESULT|Error|errors\.' | tail -1 || true)"
+    if [[ -n "$o" ]]; then echo "$o"; else echo 'SMOKE_RESULT {"ok": false, "error": "odoo_shell_no_result"}'; fi
+  }
+  opy() { # <hp> <member> <subperintah> [arg...]  (klien publik via Traefik, state per member)
+    local phone="$1" who="$2"; shift 2
+    MSYS_NO_PATHCONV=1 docker run --rm --network efn_edge \
+      --add-host "api.efn.local:${TRAEFIK_IP}" --add-host "app.efn.local:${TRAEFIK_IP}" \
+      -v "${WORK_W}:/work" -e SMOKE_PHONE="$phone" -e SMOKE_STATE="/work/online_${who}.json" -e SMOKE_BFF_LOG=/work/bff.log \
+      "$PY_IMAGE" python /work/online_smoke.py "$@" 2>&1 | grep '^SMOKE_RESULT' | tee -a "$RESULTS" || true
+  }
+  python_free_json() { grep -oE "\"$2\": \\{[^}]*\"$3\": \"[^\"]+\"" "${WORK}/online_$1.json" | sed -nE "s/.*\"$3\": \"([^\"]+)\"/\\1/p" | head -1; }
+  part_of() { psql_platform -c "select id from platform.online_order_part where order_id='$1' limit 1"; }
+
+  # 0. Konfigurasi kanal dev (idempoten) + API key nyata user teknis (runbook odoo-online-api-key §1)
+  r="$(oodoo -e SMOKE_STEP=setup)"
+  check "o.odoo_channel_setup" "$([[ "$(field ok "$r")" == true && "$(field tech_user_groups_ok "$r")" == true && "$(field staff_is_admin "$r")" == false ]] && echo 1 || echo 0)" "$r"
+  n="$(tr -d '\r\n' < "${ROOT}/secrets/odoo_api_key_online_rtl.txt" | grep -cE '^[0-9a-f]{40}$' || true)"
+  check "o.api_key_real_not_placeholder" "$([[ "$n" == 1 ]] && echo 1 || echo 0)" "secrets/odoo_api_key_online_rtl.txt 40 hex (nilai tidak dicetak)"
+
+  # 0b. Gateway + key nyata: 10 path sah -> jawaban APLIKASI Odoo (200 / galat bisnis), bukan 401/403 atau deny filter.
+  #     Key dibaca DI DALAM container curl (header file), tidak lewat argv/log.
+  cp "${ROOT}/secrets/efn_ca_crt.txt" "${WORK}/efn_ca.crt"
+  r="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal -v "${WORK_W}:/work:ro" \
+      -v "${SECRETS_W}/odoo_api_key_online_rtl.txt:/s/k:ro" -v "${SECRETS_W}/tls_api_gateway_crt.txt:/s/c:ro" \
+      -v "${SECRETS_W}/tls_api_gateway_key.txt:/s/ck:ro" --entrypoint /bin/sh \
+      curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -c '
+    printf "Authorization: bearer %s\n" "$(tr -d "\r\n" < /s/k)" > /tmp/h
+    U=00000000-0000-4000-8000-000000000001
+    for pb in "efn.online.channel/efn_online_catalog|{\"channel_code\":\"RTL\",\"limit\":1}" \
+      "efn.online.channel/efn_online_stock|{\"channel_code\":\"RTL\",\"outlet_code\":\"TOKO-01\",\"product_ids\":[1]}" \
+      "efn.online.channel/efn_online_image|{\"channel_code\":\"RTL\",\"tmpl_id\":1,\"size\":512}" \
+      "efn.online.channel/efn_online_quote|{\"channel_code\":\"RTL\",\"outlet_code\":\"TOKO-01\",\"fulfilment\":\"pickup\",\"lines\":[]}" \
+      "efn.online.order/efn_online_place|{\"channel_code\":\"RTL\",\"order\":{}}" \
+      "efn.online.order/efn_online_mark_paid|{\"channel_code\":\"RTL\",\"platform_order_ref\":\"$U\",\"payment\":{}}" \
+      "efn.online.order/efn_online_cancel|{\"channel_code\":\"RTL\",\"platform_order_ref\":\"$U\",\"reason\":\"ops\",\"idempotency_key\":\"online:cancel:$U\"}" \
+      "efn.online.order/efn_online_refund|{\"channel_code\":\"RTL\",\"platform_order_ref\":\"$U\",\"refund\":{}}" \
+      "efn.online.order/efn_online_refund_settled|{\"channel_code\":\"RTL\",\"refund_ref\":\"$U\",\"settlement\":{}}" \
+      "efn.online.order/efn_online_status|{\"channel_code\":\"RTL\",\"platform_order_refs\":[\"$U\"]}"; do
+      p="${pb%%|*}"; d="${pb#*|}"
+      c=$(curl -sS -o /tmp/b -D /tmp/hd -m 20 --cacert /work/efn_ca.crt --cert /s/c --key /s/ck -X POST \
+        -H "Content-Type: application/json" -H @/tmp/h --data "$d" "https://odoo-rpc-gateway:8443/json/2/$p" -w "%{http_code}")
+      deny=$(grep -ci "^x-efn-gateway-deny" /tmp/hd)
+      app=$(grep -c "efn_online:" /tmp/b)
+      echo "${p#*/}=$c/deny$deny/app$app"
+    done; rm -f /tmp/h' 2>&1 | tr '\n' ' ')"
+  ok=1; for x in $r; do [[ "$x" =~ =(200|4[0-9][0-9]|5[0-9][0-9])/deny0/app([0-9]+)$ ]] || ok=0
+    [[ "$x" =~ =(401|403)/ ]] && ok=0; [[ "$x" =~ =200/ || "$x" =~ /app[1-9] ]] || ok=0; done
+  check "o.gateway_10_paths_real_key_app_response" "$([[ "$ok" == 1 && $(wc -w <<< "$r") == 10 ]] && echo 1 || echo 0)" "$r"
+
+  # Katalog BFF tersinkron dari E-28 (job tiap ONLINE_CATALOG_SYNC_SECONDS; setup baru -> tunggu siklus berikut)
+  for _ in $(seq 1 40); do
+    n="$(psql_platform -c "select count(*) from platform.online_catalog_item where channel_code='RTL' and deleted_at is null and data->>'name' like 'SMOKE %'")"
+    [[ "$n" -ge 4 ]] && break; sleep 10
+  done
+  check "o.catalog_synced_from_odoo" "$([[ "$n" -ge 4 ]] && echo 1 || echo 0)" "item SMOKE di salinan katalog BFF=$n"
+
+  pa="62812$(rand8)"; pb="62812$(rand8)"; pc="62812$(rand8)"; pw="62812$(rand8)"
+  echo "$pa $pb $pc $pw" > "${WORK}/online_phones"
+  opy "$pa" a login; opy "$pb" b login; opy "$pc" c login
+  opy "$pa" a catalog
+
+  # 1. Alur utama (member A) + idempotensi L-8 + accept_total salah
+  opy "$pa" a quote rice:2,bag:1 main
+  opy "$pa" a checkout main
+  main_oid="$(python_free_json a main order_id)"; part="$(part_of "$main_oid")"
+  opy "$pa" a pickup_unavailable main
+  r="$(oodoo -e SMOKE_STEP=order -e SMOKE_PART="$part")"
+  check "o.odoo_so_draft_with_code_hash" "$([[ "$(field state "$r")" == placed && "$(field so_state "$r")" == draft && "$(field pickup_hash_present "$r")" == true && "$(field checkout_ref "$r")" == "$main_oid" ]] && echo 1 || echo 0)" "$r"
+  r="$(psql_platform -c "select count(*) || '/' || bool_and(pickup_code_enc is not null and get_byte(pickup_code_enc,0)=1) from platform.online_order_part where order_id='$main_oid'")"
+  check "o.bff_pickup_code_encrypted" "$([[ "$r" == 1/true ]] && echo 1 || echo 0)" "bagian/pickup_code_enc AES-GCM v1=$r"
+  opy "$pa" a pay main paid
+  opy "$pa" a wait main fulfilling confirmed
+  r="$(oodoo -e SMOKE_STEP=order -e SMOKE_PART="$part")"
+  check "o.odoo_confirmed_invoiced" "$([[ "$(field state "$r")" == confirmed && "$(field so_state "$r")" == sale && "$r" == *'"invoices": ["posted"]'* ]] && echo 1 || echo 0)" "$r"
+  opy "$pa" a pickup main
+  opy "$pb" b anti_enum /work/online_a.json main
+  # L-4: DSAR hapus akun ditolak selama ada bagian confirmed (akun tetap aktif)
+  opy "$pa" a dsar_open
+  r="$(oodoo -e SMOKE_STEP=ready -e SMOKE_PART="$part")"
+  check "o.odoo_staff_ready_event" "$([[ "$(field ok "$r")" == true && "$(field state "$r")" == ready && "$r" == *'ready:done'* ]] && echo 1 || echo 0)" "$r"
+  opy "$pa" a wait main fulfilling ready
+  code="$(python_free_json a main pickup_code)"
+  r="$(oodoo -e SMOKE_STEP=handover -e SMOKE_PART="$part" -e SMOKE_CODE="$code")"
+  check "o.odoo_handover_code_ok" "$([[ "$(field "done" "$r")" == true && "$(field state "$r")" == picked_up && "$(field pickup_hash_present "$r")" == false && "$(field pickings_done "$r")" -ge 1 && "$r" == *'picked_up:done'* ]] && echo 1 || echo 0)" "$(sed 's/"message": "[^"]*"/"message": "…"/' <<< "$r")"
+  opy "$pa" a wait main completed handed_over
+  r="$(psql_platform -c "select count(*) filter (where pickup_code_enc is null) || '/' || count(*) from platform.online_order_part where order_id='$main_oid'")"
+  check "o.bff_pickup_code_purged_after_handover" "$([[ "$r" == 1/1 ]] && echo 1 || echo 0)" "pickup_code_enc NULL/bagian=$r"
+  echo "$code" > "${WORK}/online_codes"
+
+  # 1b. Refund parsial CS lewat CLI teraudit (L-3): 1 tas belanja; refund > porsi ditolak
+  local bag rice before
+  bag="$(sed -nE 's/.*"bag": ([0-9]+).*/\1/p' "${WORK}/online_catalog.json")"; rice="$(sed -nE 's/.*"rice": ([0-9]+).*/\1/p' "${WORK}/online_catalog.json")"
+  r="$(MSYS_NO_PATHCONV=1 docker exec "$BFF" node dist/cli/online-refund.js --part="$part" --lines="${bag}:1" --actor=smoke-qa --reason="smoke refund parsial" 2>&1 | tail -2 | tr '\n' ' ' || true)"
+  for _ in $(seq 1 30); do
+    n="$(psql_platform -c "select status || '/' || amount::bigint from platform.online_refund where part_id='$part' and kind='lines' order by created_at desc limit 1")"
+    [[ "$n" == settled/* ]] && break; sleep 3
+  done
+  before="$(psql_platform -c "select refunded_amount::bigint || '/' || amount_payable::bigint from platform.online_order_part where id='$part'")"
+  check "o.cli_partial_refund_settled" "$([[ "$n" == settled/* && "${n#*/}" -gt 0 && "${before%/*}" == "${n#*/}" ]] && echo 1 || echo 0)" "refund=$n refunded/porsi=$before cli=$(head -c 160 <<< "$r")"
+  r="$(MSYS_NO_PATHCONV=1 docker exec "$BFF" node dist/cli/online-refund.js --part="$part" --lines="${rice}:50" --actor=smoke-qa --reason="smoke refund melebihi porsi" 2>&1; echo "exit=$?")"
+  n="$(psql_platform -c "select refunded_amount::bigint || '/' || amount_payable::bigint from platform.online_order_part where id='$part'")"
+  check "o.cli_refund_over_portion_rejected" "$([[ "$r" == *exit=1* && "$n" == "$before" ]] && echo 1 || echo 0)" "$(tail -c 160 <<< "$r" | tr '\n' ' ') refunded/porsi=$n"
+  r="$(psql_platform -c "select count(*) from platform.online_admin_audit where created_at > now() - interval '15 minutes'")"
+  check "o.cli_audit_recorded" "$([[ "$r" -ge 1 ]] && echo 1 || echo 0)" "online_admin_audit baris baru=$r"
+  r="$(oodoo -e SMOKE_STEP=order -e SMOKE_PART="$part")"
+  check "o.odoo_credit_note_partial" "$([[ "$(field credit_notes "$r")" -ge 1 && "$(field state "$r")" == picked_up ]] && echo 1 || echo 0)" "$r"
+
+  # 2. Batas bayar (member B): kedaluwarsa dipercepat lewat DB dev -> sweeper -> SO batal; bayar terlambat -> refund
+  local tmo tpart
+  opy "$pb" b quote oil:1 tmo
+  opy "$pb" b checkout_only tmo
+  tmo="$(python_free_json b tmo order_id)"; tpart="$(part_of "$tmo")"
+  psql_platform -c "update platform.online_order set expires_at = now() - interval '1 minute' where id='$tmo' and status='awaiting_payment'" > /dev/null
+  opy "$pb" b wait tmo expired cancelled 150
+  for _ in $(seq 1 20); do r="$(oodoo -e SMOKE_STEP=order -e SMOKE_PART="$tpart")"; [[ "$(field state "$r")" == cancelled ]] && break; sleep 5; done
+  check "o.timeout_odoo_so_cancelled" "$([[ "$(field state "$r")" == cancelled && "$(field cancel_reason "$r")" == payment_expired && "$(field so_state "$r")" == cancel ]] && echo 1 || echo 0)" "$r"
+  opy "$pb" b pay tmo paid
+  for _ in $(seq 1 30); do
+    n="$(psql_platform -c "select kind || '/' || status || '/' || amount::bigint from platform.online_refund where part_id='$tpart' order by created_at desc limit 1")"
+    [[ "$n" == late_payment/gateway_done/* || "$n" == late_payment/settled/* ]] && break; sleep 3
+  done
+  r="$(psql_platform -c "select o.status || '/' || p.amount_payable::bigint from platform.online_order o join platform.online_order_part p on p.order_id=o.id where o.id='$tmo'")"
+  check "o.late_payment_refunded" "$([[ ( "$n" == late_payment/gateway_done/* || "$n" == late_payment/settled/* ) && "$r" == expired/"${n##*/}" ]] && echo 1 || echo 0)" "refund=$n order/porsi=$r"
+
+  # 3. Stok kurang setelah bayar (member C): stok dihabiskan antara checkout dan bayar -> stock_short -> batal + refund porsi
+  local short spart
+  oodoo -e SMOKE_STEP=stock -e SMOKE_PRODUCT=scarce -e SMOKE_QTY=50 > /dev/null
+  opy "$pc" c quote scarce:5 short
+  opy "$pc" c checkout_only short
+  short="$(python_free_json c short order_id)"; spart="$(part_of "$short")"
+  oodoo -e SMOKE_STEP=stock -e SMOKE_PRODUCT=scarce -e SMOKE_QTY=0 > /dev/null
+  opy "$pc" c pay short paid
+  opy "$pc" c wait short cancelled cancelled 150
+  r="$(oodoo -e SMOKE_STEP=order -e SMOKE_PART="$spart")"
+  n="$(psql_platform -c "select p.refunded_amount::bigint || '/' || p.amount_payable::bigint || '/' || coalesce((select kind || ':' || status from platform.online_refund where part_id=p.id order by created_at desc limit 1),'-') from platform.online_order_part p where p.id='$spart'")"
+  check "o.stock_short_cancel_refund_portion" "$([[ "$(field state "$r")" == cancelled && "$(field cancel_reason "$r")" == stock_short && "${n%%/*}" -gt 0 && "$n" == "${n%%/*}/${n%%/*}/full:"* ]] && echo 1 || echo 0)" "odoo=$(field state "$r")/$(field cancel_reason "$r")/so=$(field so_state "$r") refunded/porsi/refund=$n"
+  oodoo -e SMOKE_STEP=stock -e SMOKE_PRODUCT=scarce -e SMOKE_QTY=50 > /dev/null
+
+  # 4. Kode ambil salah 5x (member C, order kedua) -> review (Odoo) -> event -> bagian review di BFF
+  local wrong wpart
+  opy "$pc" c quote oil:1 wrong
+  opy "$pc" c checkout_only wrong
+  wrong="$(python_free_json c wrong order_id)"; wpart="$(part_of "$wrong")"
+  opy "$pc" c pay wrong paid
+  opy "$pc" c wait wrong fulfilling confirmed
+  for _ in 1 2 3 4 5; do r="$(oodoo -e SMOKE_STEP=handover -e SMOKE_PART="$wpart" -e SMOKE_CODE="AAAA-AAAA")"; done
+  check "o.pickup_wrong_5x_review" "$([[ "$(field "done" "$r")" == false && "$(field state "$r")" == review && "$(field review_reason "$r")" == pickup_code_attempts && "$(field pickup_attempts "$r")" == 5 ]] && echo 1 || echo 0)" "$(sed 's/"message": "[^"]*"/"message": "…"/' <<< "$r")"
+  opy "$pc" c wait wrong fulfilling review
+
+  # 5. Event Odoo -> BFF: HMAC salah / tanpa tanda tangan / di luar window / body diubah -> 401; duplikat & seq lama
+  MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal -v "${WORK_W}:/work" \
+    -v "${SECRETS_W}/efn_ca_crt.txt:/s/efn_ca_crt.txt:ro" -v "${SECRETS_W}/odoo_bff_api_key.txt:/s/odoo_bff_api_key.txt:ro" \
+    -v "${SECRETS_W}/odoo_online_event_hmac.txt:/s/odoo_online_event_hmac.txt:ro" \
+    "$PY_IMAGE" python /work/online_smoke.py events "$part" "$main_oid" 2>&1 | grep '^SMOKE_RESULT' | tee -a "$RESULTS" || true
+
+  # 6. Kontrak FE <-> BFF lewat route handler Next.js (https://app.efn.local/api/*)
+  opy "$pw" w web_flow
+  sed -nE 's/.*"pickup_code": "([^"]+)".*/\1/p' "${WORK}/online_web.json" >> "${WORK}/online_codes" 2>/dev/null || true
+
+  # 7. PDP / rahasia: kode ambil & HP tidak ada di log BFF, Odoo, gateway, Traefik, maupun Loki
+  local hits=0 c ph
+  while read -r c; do
+    [[ -z "$c" ]] && continue
+    for v in "$c" "${c/-/}"; do
+      hits=$(( hits + $(grep -cF "$v" "${WORK}/bff.log" || true) ))
+      hits=$(( hits + $(docker logs --since 30m "$ODOO" 2>&1 | grep -cF "$v" || true) ))
+      hits=$(( hits + $(docker logs --since 30m "${P}-odoo-rpc-gateway-1" 2>&1 | grep -cF "$v" || true) ))
+      hits=$(( hits + $(docker logs --since 30m "${P}-traefik-1" 2>&1 | grep -cF "$v" || true) ))
+    done
+  done < "${WORK}/online_codes"
+  check "o.pickup_code_not_in_logs" "$([[ "$hits" == 0 && $(grep -c . "${WORK}/online_codes") -ge 1 ]] && echo 1 || echo 0)" "hits=$hits untuk $(grep -c . "${WORK}/online_codes") kode (log BFF, Odoo, odoo-rpc-gateway, Traefik)"
+  hits=0
+  for ph in $pa $pb $pc $pw; do
+    hits=$(( hits + $(grep -cF "${ph:4}" "${WORK}/bff.log" || true) + $(docker logs --since 30m "$ODOO" 2>&1 | grep -cF "${ph:4}" || true) ))
+  done
+  check "o.phone_not_in_logs" "$([[ "$hits" == 0 ]] && echo 1 || echo 0)" "hits=$hits (8 digit akhir 4 HP fiktif; log BFF & Odoo)"
+  r="$(MSYS_NO_PATHCONV=1 docker exec "$PG" sh -c "pg_dump -U postgres -d efn_odoo --data-only -t 'efn_online_*' -t sale_order" | grep -cE "$(paste -sd'|' "${WORK}/online_codes")" || true)"
+  check "o.pickup_code_not_in_odoo_db" "$([[ "$r" == 0 ]] && echo 1 || echo 0)" "hits=$r (pg_dump efn_online_* + sale_order: hanya hash KDF)"
+  for _ in $(seq 1 6); do
+    n="$(obs loki '{service="api-gateway"}' 30)"
+    [[ "$(field lines "$n")" -ge 1 ]] && break; sleep 10
+  done
+  r=0
+  while read -r c; do [[ -z "$c" ]] && continue
+    x="$(obs loki "{service=~\"api-gateway|odoo|odoo-rpc-gateway|traefik\"} |= \"${c}\"" 60)"; r=$(( r + $(field lines "$x") ))
+    x="$(obs loki "{service=~\"api-gateway|odoo|odoo-rpc-gateway|traefik\"} |= \"${c/-/}\"" 60)"; r=$(( r + $(field lines "$x") ))
+  done < "${WORK}/online_codes"
+  for ph in $pa $pb $pc $pw; do x="$(obs loki "{service=~\"api-gateway|odoo\"} |= \"${ph:4}\"" 60)"; r=$(( r + $(field lines "$x") )); done
+  check "o.loki_no_pickup_code_or_phone" "$([[ "$r" == 0 && "$(field lines "$n")" -ge 1 ]] && echo 1 || echo 0)" "hits=$r; kontrol positif log api-gateway di Loki=$(field lines "$n")"
+  r="$(obs loki '{stream="efn_online", online_event="recon"}' 60)"
+  check "o.recon_heartbeat_in_loki" "$([[ "$(field lines "$r")" -ge 1 ]] && echo 1 || echo 0)" "$(head -c 200 <<< "$r")"
+
+  # 8. Kill switch: ONLINE_ENABLED=false (overlay sementara; dev compose menyalakan online secara literal) -> 503
+  local ov ovw
+  ov="${WORK}/killswitch.override.yml"
+  printf 'services:\n  api-gateway:\n    environment:\n      ONLINE_ENABLED: "false"\n' > "$ov"
+  ovw="$ov"; command -v cygpath > /dev/null && ovw="$(cygpath -m "$ov")"
+  kill_bff_recreate() { # [overlay]
+    (cd "$ROOT" && docker compose -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.dev.yml ${1:+-f "$1"} \
+      --env-file infra/compose/.env --profile core up -d --no-deps --force-recreate api-gateway > /dev/null 2>&1)
+    for _ in $(seq 1 60); do [[ "$(docker inspect "$BFF" --format '{{.State.Health.Status}}' 2>/dev/null)" == healthy ]] && break; sleep 5; done
+    # Traefik (provider docker) butuh beberapa detik memasang router container baru: sebelum itu 404 tanpa origin.
+    for _ in $(seq 1 30); do
+      [[ "$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_edge --add-host "api.efn.local:${TRAEFIK_IP}" -v "${WORK_W}:/work" \
+        curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -o /dev/null \
+        -w '%{http_code}' --cacert /work/edge_ca.crt https://api.efn.local/v1/auth/challenge 2>/dev/null)" == 200 ]] && break
+      sleep 3
+    done
+    docker logs -f --since 1s "$BFF" >> "${WORK}/bff.log" 2>&1 &
+    LOGPID="$LOGPID $!"
+  }
+  kill_bff_recreate "$ovw"
+  opy "$pa" a killswitch
+  kill_bff_recreate
+  r="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_edge --add-host "api.efn.local:${TRAEFIK_IP}" -v "${WORK_W}:/work" \
+    curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -o /dev/null -w '%{http_code}' \
+    --cacert /work/edge_ca.crt https://api.efn.local/v1/catalog/channels 2>&1 || true)"
+  check "o.killswitch_restored" "$([[ "$r" == 200 && "$(docker inspect "$BFF" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -cx 'ONLINE_ENABLED=true')" == 1 ]] && echo 1 || echo 0)" "katalog=$r setelah recreate tanpa overlay"
 }
 
 for s in "${SCENARIOS[@]}"; do "scenario_${s}"; done
