@@ -100,3 +100,51 @@ Trivy DB (±120 MB) di jaringan lambat: unduh dulu `trivy image --download-db-on
   tidak untuk PR dari fork).
 - **Repo publik**: code scanning gratis, tetapi seluruh kode & riwayat terbuka — tidak disarankan sebelum review
   kepatuhan (UU PDP, rahasia bisnis).
+
+## 9. Alur PR manual (pengganti required reviewers di paket gratis)
+
+Keputusan pemilik proyek (9 Okt 2026): tidak ada push langsung ke `main`. Setiap gelombang kerja dikumpulkan di **satu
+branch dan satu PR**, lalu di-review dan di-merge manual oleh pemilik proyek. Di repo privat paket gratis, branch
+protection / ruleset tidak bisa memaksakan ini, jadi disiplin ini adalah gerbangnya.
+
+### 9.1 Review & merge (web)
+
+1. Buka `https://github.com/bctech-adm/efn-platform/pulls` > PR terbaru.
+2. Tab **Conversation**: baca ringkasan (apa berubah, apa yang sudah/belum diverifikasi, keputusan yang diminta).
+3. Tab **Checks**: pastikan semua hijau — `CI gate`, `Security`, `Build & Push Images` (di PR hanya build + scan,
+   tanpa push), `CodeQL` (notice bila code scanning tidak aktif). Klik job merah > **Summary** untuk temuan.
+4. Tab **Files changed**: perhatikan khusus `.github/workflows/**`, `.trivyignore.yaml`, `.gitleaksignore`,
+   `infra/compose/**`, `scripts/host/**`, dan file `security/` Odoo — perubahan di sini menyentuh gerbang keamanan.
+5. **Merge pull request** > pilih **Squash and merge** (satu commit per gelombang di `main`) > Confirm.
+6. Setelah merge: tab **Actions** — run di `main` (CI, Security, Build & Push) harus hijau. Deploy staging hanya
+   jalan bila `STAGING_DEPLOY_ENABLED=true`.
+
+### 9.2 Review & merge (PowerShell, gh CLI)
+
+```powershell
+$gh = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\GitHub.cli_Microsoft.Winget.Source_8wekyb3d8bbwe\bin\gh.exe"
+$R  = "bctech-adm/efn-platform"
+& $gh pr list -R $R                       # daftar PR terbuka
+& $gh pr view <nomor> -R $R               # ringkasan
+& $gh pr checks <nomor> -R $R --watch     # tunggu semua check
+& $gh pr diff <nomor> -R $R               # lihat perubahan
+& $gh pr merge <nomor> -R $R --squash --delete-branch
+```
+
+### 9.3 Pembersihan sekali jalan setelah G16 (PowerShell)
+
+```powershell
+# Tutup PR Dependabot lama (akan dibuat ulang berkelompok oleh konfigurasi baru)
+& $gh pr list -R $R --author "app/dependabot" --state open --limit 100 --json number --jq ".[].number" |
+  ForEach-Object { & $gh pr close $_ -R $R --delete-branch -c "Ditutup: Dependabot kini dikelompokkan (G16)." }
+
+# Hapus semua artifact lama (log CI/SBOM; tidak ada data produksi). Kuota dihitung ulang 6-12 jam kemudian.
+& $gh api --paginate "repos/$R/actions/artifacts?per_page=100" --jq ".artifacts[].id" |
+  ForEach-Object { & $gh api -X DELETE "repos/$R/actions/artifacts/$_" }
+```
+
+### 9.4 Disarankan (gratis): aktifkan di Settings
+
+- **Settings > General > Pull Requests**: centang hanya *Allow squash merging*; centang *Automatically delete head
+  branches*.
+- **Settings > Code security**: *Dependency graph* ON, *Dependabot alerts* ON, *Dependabot security updates* ON.

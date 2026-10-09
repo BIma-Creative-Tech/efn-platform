@@ -13,6 +13,17 @@ on:
   push:
     branches: [main]
     tags: ["v*.*.*"]
+  # PR: hanya build + gate Trivy image (tanpa login, push, SBOM, sign) agar gate terlihat SEBELUM merge manual
+  # (alur satu PR, runbook ci-github-free-plan.md bagian 9). Dibatasi path agar hemat menit.
+  pull_request:
+    branches: [main]
+    paths:
+      - "services/**"
+      - "infra/backup/postgres/**"
+      - "infra/minio/**"
+      - "infra/metabase/**"
+      - ".trivyignore.yaml"
+      - ".github/workflows/build-push.yml"
   workflow_dispatch:
 
 permissions:
@@ -62,6 +73,7 @@ jobs:
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
 
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
+        if: github.event_name != 'pull_request'
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -135,6 +147,7 @@ jobs:
 
       - name: Push
         id: push
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
         with:
           context: ${{ matrix.context }}
@@ -147,6 +160,7 @@ jobs:
           sbom: true
 
       - name: SBOM (Syft, SPDX) - file lokal, bukan artifact
+        if: github.event_name != 'pull_request'
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
         # SBOM tingkat paket (tanpa daftar file + relasi kepemilikan file): SPDX odoo default 58 MB (74 rb file) ditolak
         # Rekor publik saat `cosign attest`; versi ramping ±2 MB dengan daftar paket yang sama (diukur 9 Okt 2026).
@@ -163,8 +177,10 @@ jobs:
           upload-release-assets: false
 
       - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
+        if: github.event_name != 'pull_request'
 
       - name: Cosign sign + attest SBOM (keyless, OIDC; disimpan di registry)
+        if: github.event_name != 'pull_request'
         env:
           COSIGN_YES: "true"
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NS }}/${{ matrix.service }}@${{ steps.push.outputs.digest }}
@@ -179,7 +195,9 @@ jobs:
         # Artifact attestation GitHub tidak tersedia untuk repo privat milik akun pribadi (paket gratis) -> hanya bila repo
         # publik atau variable ATTESTATIONS_ENABLED=true (org/Enterprise). Deploy tidak bergantung padanya: host memakai
         # `cosign verify` (langkah di atas), lihat scripts/host/efn-deploy.
-        if: vars.ATTESTATIONS_ENABLED == 'true' || github.event.repository.visibility == 'public'
+        if: >-
+          github.event_name != 'pull_request' &&
+          (vars.ATTESTATIONS_ENABLED == 'true' || github.event.repository.visibility == 'public')
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2.4.0
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NS }}/${{ matrix.service }}
