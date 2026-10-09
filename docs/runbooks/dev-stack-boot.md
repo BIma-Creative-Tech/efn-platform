@@ -82,6 +82,14 @@ exist` tiap menit dan erasure DSAR tertunda. Upgrade mencetak 13 `WARNING Skippi
 point_of_sale.<pecahan>` (data CE, kosmetik). Compose baru: `NO_COLOR=1` di api-gateway (baris log tanpa kode ANSI
 untuk regex promtail loyalty) dan, khusus dev, `LOYALTY_RECON_INTERVAL_MS=300000`.
 
+### 2e. Gelombang 16b: enkripsi at rest Metabase (sekali per volume `pg-data` lama)
+
+Metabase kini **menolak start** (exit 1, log `efn-metabase-entrypoint: secret ... tidak ada`) tanpa
+`secrets/metabase_encryption_key.txt`. Stack dev yang DB `metabase`-nya dibuat sebelum 9 Okt 2026 menyimpan detail
+koneksi plaintext → `bash scripts/gen-secrets.sh`, lalu ikuti `infra/metabase/README.md` §Enkripsi at rest
+(`stop` → one-off `rotate-encryption-key` → `up --force-recreate metabase metabase-tls` → `metabase-provision`).
+Volume baru tidak perlu langkah ini (kunci aktif sejak start pertama).
+
 ## 3. Inisialisasi database Odoo (sekali per volume `pg-data`)
 
 `list_db = False` + `dbfilter ^efn_.*$`. Tanpa database `efn_odoo`, `/web/login` mengarah ke `/web/database/selector`,

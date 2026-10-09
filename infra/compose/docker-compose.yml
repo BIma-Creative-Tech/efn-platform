@@ -146,6 +146,8 @@ secrets:
   # G13: HMAC baris sink audit Odoo (SEC-51; hanya odoo + etl), admin Metabase (provision), endpoint migrasi BFF (K-7)
   efn_audit_sink_key: { file: ../../secrets/efn_audit_sink_key.txt }
   metabase_admin_password: { file: ../../secrets/metabase_admin_password.txt }
+  # G16b: kunci enkripsi at rest DB aplikasi Metabase (MB_ENCRYPTION_SECRET_KEY; hanya service metabase) [SA]
+  metabase_encryption_key: { file: ../../secrets/metabase_encryption_key.txt }
   migration_api_key: { file: ../../secrets/migration_api_key.txt }
   # turunan (scripts/derive-secrets.sh)
   member_hash_pepper: { file: ../../secrets/member_hash_pepper.txt }
@@ -1270,16 +1272,19 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    # image tidak mendukung *_FILE: baca secret di entrypoint wrapper
-    entrypoint: ["/bin/sh", "-c", "export MB_DB_PASS=\"$$(cat /run/secrets/pg_password_metabase)\"; exec /app/run_metabase.sh"]
+    # G16b: ENTRYPOINT image = efn-metabase-entrypoint (infra/metabase/efn-entrypoint.sh): membaca
+    # metabase_encryption_key -> MB_ENCRYPTION_SECRET_KEY (enkripsi at rest detail koneksi di DB `metabase`;
+    # FAIL-CLOSED bila secret tidak ada/pendek). JANGAN override `entrypoint:` di sini (dicek check-encryption.sh).
+    # Password DB: MB_DB_PASS_FILE didukung run_metabase.sh resmi (file_env).
     environment:
       MB_JETTY_HOST: 127.0.0.1
       MB_JETTY_PORT: "3000"
       MB_DB_TYPE: postgres
       MB_DB_CONNECTION_URI: "jdbc:postgresql://postgres:5432/metabase?ssl=true&sslmode=verify-full&sslrootcert=/run/secrets/efn_ca_crt"
       MB_DB_USER: efn_metabase
+      MB_DB_PASS_FILE: /run/secrets/pg_password_metabase
       JAVA_TIMEZONE: Asia/Jakarta
-    secrets: [pg_password_metabase, clickhouse_password_metabase, efn_ca_crt]
+    secrets: [pg_password_metabase, clickhouse_password_metabase, metabase_encryption_key, efn_ca_crt]
     volumes:
       - metabase-data:/metabase-data
     networks: [internal, data]

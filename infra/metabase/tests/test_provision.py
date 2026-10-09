@@ -129,6 +129,9 @@ def test_clickhouse_details_force_tls_verification() -> None:
     assert details["ssl"] is True
     assert details["additional-options"] == "sslmode=strict&sslrootcert=/run/secrets/efn_ca_crt"
     assert details["user"] == "efn_metabase" and details["dbname"] == "efn_dwh"
+    # driver bawaan v0.58 (plugin 1.53): default enable-multiple-db=True akan menyinkron semua database
+    assert details["enable-multiple-db"] is False
+    assert "scan-all-databases" not in details
 
 
 def test_client_requires_https() -> None:

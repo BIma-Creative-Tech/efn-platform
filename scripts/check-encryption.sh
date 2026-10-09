@@ -11,6 +11,8 @@
 #   - sidecar ghostunnel dengan --disable-authentication atau tanpa --cacert/--allow-cn (mTLS, docs/04 §8.5)
 #   - web-config exporter tanpa client_auth_type RequireAndVerifyClientCert; Loki tidak loopback (SEC-35)
 #   - filter L7 s3-gateway (HAProxy) tanpa TLS masuk atau tanpa `ssl verify required` ke storage (ADR-030)
+#   - (at rest) service metabase tanpa secret metabase_encryption_key / dengan MB_ENCRYPTION_SECRET_KEY di env /
+#     dengan override entrypoint (G16b)
 # Pengecualian hanya lewat ADR-022; tambahkan di sini dengan komentar alasan.
 set -euo pipefail
 
@@ -109,6 +111,18 @@ check_compose() {
        (if ([$c[] | select(startswith("--cacert="))] | length) > 0 then "1" else "0" end),
        ([$c[] | select(startswith("--verify-cn="))] | length | tostring),
        (if ([$c[] | select(startswith("--listen=127.0.0.1:"))] | length) > 0 then "1" else "0" end)] | @tsv' <<< "$json")
+
+  # 4) At rest Metabase (G16b): service metabase wajib me-mount secret metabase_encryption_key, tidak boleh membawa
+  #    MB_ENCRYPTION_SECRET_KEY di environment (terlihat di docker inspect), dan tidak boleh meng-override entrypoint
+  #    image (efn-metabase-entrypoint = satu-satunya jalur kunci -> env, fail-closed).
+  if jq -e '.services.metabase != null' <<< "$json" > /dev/null; then
+    jq -e '[.services.metabase.secrets[]? | (.source // .)] | index("metabase_encryption_key") != null' <<< "$json" > /dev/null \
+      || err "[$label] metabase: secret metabase_encryption_key tidak di-mount (detail koneksi tersimpan plaintext)"
+    jq -e '(.services.metabase.environment // {}) | has("MB_ENCRYPTION_SECRET_KEY") | not' <<< "$json" > /dev/null \
+      || err "[$label] metabase: MB_ENCRYPTION_SECRET_KEY di environment dilarang (pakai secret file)"
+    jq -e '((.services.metabase.entrypoint // []) | length) == 0' <<< "$json" > /dev/null \
+      || err "[$label] metabase: override entrypoint melewati efn-metabase-entrypoint (kunci enkripsi at rest)"
+  fi
 
   echo "check-encryption: compose ${label} diperiksa"
 }

@@ -460,3 +460,40 @@ text2sql **93 passed** · `pip-audit -r requirements.txt --strict` dan `-r requi
   job pip-audit CI akan tetap merah setelah ai-ocr-worker lolos. Perlu dinaikkan ke `requests==2.34.2` oleh pemilik Odoo
   (cek kompatibilitas dengan urllib3 bawaan image odoo:19.0).
 - Test OCR end-to-end dengan Tesseract/PaddleOCR + Pillow 12 di image runtime belum dijalankan (hanya unit test).
+
+## Gelombang 16b — Upgrade Metabase 0.52.4 → v0.58.35 LTS di stack dev (9 Okt 2026)
+
+**Pemicu:** user menyetujui upgrade (gate Trivy G16). Dockerfile sudah di v0.58.35 (driver ClickHouse bawaan) sejak 7c048b4.
+
+### Langkah & hasil nyata
+1. **Backup** DB aplikasi `metabase`: `pg_dump -Fc` di container postgres → scratchpad sesi (di luar repo)
+   `metabase-backup/metabase-pre-v0.58.dump` (514 081 byte, sha256 `1b23087d…fc5e48`, sama di container & host);
+   `pg_restore --list` terbaca (1057 baris). Isi sebelum migrasi: 440 changeset Liquibase, 70 kartu, 4 dashboard.
+   Image lama di-tag `efn/metabase:rollback-v0.52.4` (v0.52.4 + jar driver 1.52.0).
+2. **Build + recreate** `metabase` + `metabase-tls` (`--no-deps --force-recreate`): Liquibase "Migration complete in
+   14.1 s", "Initialization COMPLETE in 24.2 s", healthy; health check koneksi lama `EFN DWH (ClickHouse)` sukses.
+   Satu-satunya ERROR = `/api/health 503` sesaat sebelum init selesai; WARN = penghapusan job Quartz lama (normal).
+3. **Driver bawaan** = plugin `Metabase ClickHouse Driver 1.53.3` (`metabase/clickhouse/metabase-plugin.yaml` di
+   metabase.jar). Perbedaan kunci `details`: `scan-all-databases` **dihapus**, diganti `enable-multiple-db` (default
+   TRUE = sinkron semua database selain system). `ssl`, `dbname`, `additional-options` (ditempel ke URL JDBC) tetap.
+   → `provision.clickhouse_details` kini mengirim `enable-multiple-db: False`. TLS tidak berubah: `ssl=true`,
+   `sslmode=strict&sslrootcert=/run/secrets/efn_ca_crt`.
+4. **Provision** (`$DC --profile core --profile data run --rm --no-deps metabase-provision`, python:3.12-bookworm digest
+   compose, mTLS ke sidecar): exit 0, database diperbarui (id=2), 3 dashboard (16/8/9 kartu), **33/33 kartu
+   `completed`**. Run kedua (idempoten) exit 0, tetap 33 kartu bertag + 4 dashboard aktif.
+5. **Uji TLS** (skrip sekali pakai via `/api/database/validate`): CA internal → valid; CA sistem (salah) →
+   "Failed to create connection". Detail tersimpan: `enable-multiple-db=false`, `ssl=true`; metadata hanya skema `efn_dwh`.
+6. `tests/test_provision.py`: assert `enable-multiple-db is False` + `scan-all-databases` tidak dikirim. CI-equivalent
+   (python:3.12-bookworm, ruff 0.16.10, pytest 8.3.4): ruff check/format bersih, **23 passed**.
+
+### File diubah
+`infra/metabase/provision.py` (details driver 1.53), `infra/metabase/tests/test_provision.py`,
+`infra/metabase/README.md` (status terverifikasi, prosedur upgrade/backup/rollback, item "Belum" yang basi dihapus).
+
+### Belum diverifikasi / risiko sisa
+- Rollback (restore dump + image lama) **tidak diuji coba** — migrasi sukses sehingga tidak dijalankan.
+- `MB_ENCRYPTION_SECRET_KEY` tidak diset → detail koneksi (password ClickHouse read-only) plaintext di DB aplikasi dan
+  di dump backup; bertentangan dengan prinsip enkripsi at rest → devsecops (secret baru + entrypoint wrapper).
+- Dump backup di scratchpad sesi tidak terenkripsi; hapus setelah upgrade dinyatakan stabil.
+- Rendering UI dashboard di browser (filter, visualisasi) tidak dicek — hanya eksekusi kartu via API.
+- Staging/prod belum di-upgrade; ikuti urutan README (backup dulu).

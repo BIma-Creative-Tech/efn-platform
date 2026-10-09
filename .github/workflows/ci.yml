@@ -493,7 +493,7 @@ jobs:
           shellcheck -x scripts/*.sh scripts/lib/*.sh scripts/host/efn-deploy scripts/host/*.sh scripts/smoke/*.sh tests/load/*.sh infra/backup/postgres/*.sh \
             infra/postgres/init/*.sh infra/wireguard/*.sh
           shellcheck -s sh infra/minio/*.sh infra/redis/*.sh infra/rabbitmq/*.sh infra/clickhouse/*.sh infra/s3-gateway/*.sh \
-            infra/acme/*.sh scripts/acme-test/*.sh
+            infra/acme/*.sh scripts/acme-test/*.sh infra/metabase/*.sh
       # Filter L7 object storage (ADR-030): sintaks HAProxy valid dengan sertifikat dummy dari gen-pki.sh
       - name: haproxy -c (infra/s3-gateway/haproxy.cfg)
         run: |

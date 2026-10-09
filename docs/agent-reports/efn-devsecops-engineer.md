@@ -1256,3 +1256,63 @@ shellcheck, Dependabot 33 PR. Runbook baru: `docs/runbooks/ci-github-free-plan.m
    pastikan Dependency graph aktif (dependency-review).
 4. Persetujuan risk acceptance G16.3 (WAL-G, Metabase) atau perintah membangun WAL-G dari source.
 5. Upgrade Metabase 0.52 -> 0.58 (migrasi DB aplikasi tidak bisa dibalik): setujui sebelum dipakai di lingkungan berdata.
+
+# Gelombang 16b — Enkripsi at rest DB aplikasi Metabase — 9 Okt 2026
+
+Temuan (pelanggaran prinsip enkripsi at rest): Metabase v0.58.35 dev berjalan tanpa `MB_ENCRYPTION_SECRET_KEY` →
+`metabase_database.details` (termasuk password ClickHouse `efn_metabase`, read-only) plaintext di DB `metabase` dan di
+dump backup pra-upgrade.
+
+## G16b.1 Perubahan
+
+| File | Perubahan |
+|---|---|
+| `scripts/secrets.list` | Secret baru `metabase_encryption_key b64key32 [SA]` (32 byte acak base64). `gen-secrets.sh`, `deploy.sh`, `deploy.yml` membaca daftar ini otomatis → GitHub Environment `METABASE_ENCRYPTION_KEY` (staging/prod) **wajib diisi Superadmin sebelum deploy berikutnya** (deploy.sh `die` bila kosong). |
+| `infra/compose/docker-compose.yml` | Secret top-level + mount **hanya** ke `metabase`. Override `entrypoint` shell inline dihapus → ENTRYPOINT image; `MB_DB_PASS_FILE` (didukung `run_metabase.sh` resmi, `file_env`) menggantikan `export MB_DB_PASS=$(cat …)`. |
+| `infra/metabase/efn-entrypoint.sh` (baru) | POSIX sh: secret → `MB_ENCRYPTION_SECRET_KEY` → `exec /app/run_metabase.sh "$@"` (perilaku resmi root → `su metabase` uid 2000 dipertahankan; diverifikasi `docker top`: java uid 2000). **Fail-closed di semua lingkungan** (lebih ketat dari brief "selain dev-eksplisit": dev juga punya kunci dari gen-secrets, dan instance yang sudah terenkripsi memang tidak bisa jalan tanpa kunci): file tidak ada/tidak terbaca/kosong/< 32 karakter/berisi CR-spasi, atau kunci diberikan via env → exit 1. Nilai tidak pernah dicetak. |
+| `infra/metabase/Dockerfile` | `COPY --chmod=0755 efn-entrypoint.sh` + `ENTRYPOINT ["/usr/local/bin/efn-metabase-entrypoint"]`. |
+| `scripts/check-encryption.sh` | Cek baru (compose dev+prod): metabase wajib mount `metabase_encryption_key`, tanpa `MB_ENCRYPTION_SECRET_KEY` di environment, tanpa override `entrypoint`. |
+| `.github/workflows/ci.yml` | shellcheck `-s sh` mencakup `infra/metabase/*.sh`. |
+| `infra/metabase/README.md` | Baris `efn-entrypoint.sh`; bagian *Enkripsi at rest* (prosedur rotate one-off, verifikasi tanpa mencetak nilai, rotasi berikutnya); backup DB `metabase` kini **pg_dump \| age** (tidak ada dump plaintext di disk); jalur rollback v0.52.4 setelah dump dihapus; item *Belum* diperbarui. |
+| `docs/runbooks/key-custody.md` | Baris kustodi `metabase_encryption_key` (Superadmin, keputusan klien 6 Okt). |
+| `docs/runbooks/secret-rotation.md` | Baris rotasi `metabase_encryption_key` (rotate-encryption-key, bukan sekadar ganti nilai); `clickhouse_password_metabase` kini lewat `metabase-provision`, bukan UI. |
+| `docs/runbooks/dev-stack-boot.md` | §2e migrasi stack dev lama (sekali). |
+
+## G16b.2 Enkripsi data yang sudah ada (stack dev, nyata)
+
+1. `bash scripts/gen-secrets.sh` → `secrets/metabase_encryption_key.txt` (44 karakter, tanpa CR).
+2. `build metabase` → `stop metabase-tls metabase` → one-off resmi `java -jar metabase.jar rotate-encryption-key <kunci dari file>`
+   (tanpa kunci lama = instance plaintext): log `Encryption key rotation OK.`, exit 0. Log tidak memuat kunci maupun
+   password ClickHouse (grep -F -f file secret = 0).
+3. `up -d --no-deps --force-recreate metabase metabase-tls` → healthy, restart 0, log `Database encrypted and
+   MB_ENCRYPTION_SECRET_KEY correctly configured`.
+4. DB (tanpa mencetak nilai): sebelum = `EFN DWH (ClickHouse)` `details LIKE '%password%'` **t**, JSON **t**; sesudah =
+   **f / f** (Sample Database juga f/f). `strpos(details|setting.value, <password CH dari stdin>)` = **0** baris.
+5. `metabase-provision` dua kali: exit 0 / exit 0, **33/33 kartu `completed`** tiap run (idempoten; PUT koneksi tetap
+   tersimpan terenkripsi, dicek ulang f/f).
+6. Fail-closed diuji pada image baru: tanpa secret, kunci via env, kunci 5 karakter, kunci ber-CRLF, file kosong →
+   semuanya exit 1 dengan pesan jelas.
+7. Dump plaintext `scratchpad/metabase-backup/metabase-pre-v0.58.dump` (514 KB) di-`shred -u` + direktori dihapus setelah
+   langkah 1–6 lolos (catatan jujur: shred di NTFS/SSD tidak menjamin penghapusan fisik). Tag sementara
+   `efn/metabase:pre-g16b-encrypt` dihapus; `efn/metabase:rollback-v0.52.4` dipertahankan (README: rollback = image
+   itu + wrapper + DB kosong + provision ulang).
+
+## G16b.3 Validasi lokal (container)
+
+shellcheck v0.10.0 (`-s sh` wrapper; `-x` check-encryption/gen-secrets) bersih · hadolint v2.14.0 (digest CI) bersih ·
+checkov 3.3.21 (digest & argumen = security.yml) exit 0, 0 FAILED · `docker compose config -q` dev & prod dengan
+`.env.example` OK · secrets top-level == `scripts/secrets.list` (104) · `check-encryption.sh` OK (dijalankan di
+container docker:27-cli + jq; host tanpa jq) + uji negatif jq rule baru (tanpa secret / env / entrypoint → ketiganya
+FAIL) · pytest `infra/metabase` 23 passed + ruff check/format bersih.
+
+## G16b.4 Rekomendasi & sisa
+
+- **Rotasi password `clickhouse_password_metabase`** (ClickHouse read-only `efn_metabase`): sempat plaintext di DB dev dan
+  dump dev (kini dihapus). Dev: opsional (hapus file → gen-secrets → clickhouse-init → metabase-provision). Staging/prod:
+  tidak terdampak — belum pernah deploy, kunci aktif sejak start pertama.
+- **Superadmin**: isi GitHub Environment `METABASE_ENCRYPTION_KEY` (`openssl rand -base64 32`) di staging & production
+  sebelum deploy berikutnya + salinan offline (key-custody §1).
+- Ditemukan di luar lingkup: scratchpad sesi masih berisi dump Odoo plaintext `efn_odoo_pre_g10.dump`,
+  `efn_odoo_pre_g13c.dump` (data dev; usul lead: hapus bila tidak dibutuhkan untuk rollback).
+- Belum: rotasi kunci kedua (old→new) belum diuji; uji di staging saat ada. Build image di CI (build-push) belum dijalankan
+  untuk perubahan ini (hanya build lokal). `metabase-provision` tidak memeriksa status enkripsi (cek DB manual di README).

@@ -8,3 +8,9 @@
 # Pengecualian checkov terdokumentasi (tinjau ulang saat bump Metabase):
 # checkov:skip=CKV_DOCKER_3: run_metabase.sh image resmi mulai sebagai root lalu `su metabase` (MUID/MGID, uid 2000) setelah chown data; USER di sini mematahkan langkah itu.
 FROM metabase/metabase:v0.58.35@sha256:a84b5dd5db15edac289af7204ff897e8b2dd441f579db445e0c7579402a5d77d
+
+# G16b (efn-devsecops-engineer): enkripsi at rest detail koneksi di DB aplikasi `metabase`. Wrapper membaca Docker
+# secret metabase_encryption_key -> MB_ENCRYPTION_SECRET_KEY (fail-closed) lalu exec /app/run_metabase.sh resmi
+# (perilaku root -> `su metabase` dipertahankan). Lihat efn-entrypoint.sh dan README "Enkripsi at rest".
+COPY --chmod=0755 efn-entrypoint.sh /usr/local/bin/efn-metabase-entrypoint
+ENTRYPOINT ["/usr/local/bin/efn-metabase-entrypoint"]

@@ -255,14 +255,19 @@ def dashcards(dash: DashboardDef, card_ids: dict[str, int]) -> list[dict[str, An
 def clickhouse_details(
     password: str, host: str, port: int, ca_path: str, database: str = "efn_dwh", user: str = "efn_metabase"
 ) -> dict[str, Any]:
-    """Detail koneksi driver ClickHouse 1.52 (JDBC clickhouse-java 0.8): TLS wajib + verifikasi CA internal."""
+    """Detail koneksi driver ClickHouse BAWAAN Metabase v0.58 (plugin 1.53.x): TLS wajib + verifikasi CA internal.
+
+    `ssl` -> JDBC `ssl=true`; `additional-options` ditempel ke URL JDBC (`sslmode=strict` = verifikasi rantai CA +
+    hostname, `sslrootcert` = CA internal di container Metabase). Driver 1.53 mengganti `scan-all-databases` dengan
+    `enable-multiple-db` yang default-nya TRUE (sinkron semua database) -> dipaksa False agar hanya `dbname`.
+    """
     return {
         "host": host,
         "port": port,
         "user": user,
         "password": password,
         "dbname": database,
-        "scan-all-databases": False,
+        "enable-multiple-db": False,
         "ssl": True,
         "additional-options": f"sslmode=strict&sslrootcert={ca_path}",
         "advanced-options": False,

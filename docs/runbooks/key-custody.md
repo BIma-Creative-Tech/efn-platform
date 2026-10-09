@@ -13,6 +13,7 @@ Kontrak: `docs/04_SERVICE_CONTRACTS.md` §8.6 (keputusan user: **kunci hanya dip
 | `pii_encryption_key*` | 32 byte | GitHub Environment → `/opt/efn/secrets` → BFF | **Wajib** offline | Data PII tidak terbaca permanen |
 | `walg_libsodium_key` | 32 byte | idem → postgres | **Wajib** offline | Backup tidak bisa dipulihkan |
 | `minio_kms_key` | 32 byte | idem → MinIO | **Wajib** offline | Objek MinIO tidak terbaca |
+| `metabase_encryption_key` (G16b) | 32 byte base64 (44 karakter) | GitHub Environment → `/opt/efn/secrets` → **hanya** service metabase (`MB_ENCRYPTION_SECRET_KEY`, fail-closed) | Disarankan offline (kunci lama diarsipkan saat rotasi selama dump `metabase` lama masih dalam retensi) | Detail koneksi DB di Metabase tidak terbaca → `metabase-provision` membuat ulang koneksi ClickHouse; dashboard/kartu tetap (tidak terenkripsi) |
 | `clickhouse_disk_key` | hex | idem → ClickHouse | Disarankan | Rebuild DWH dari PostgreSQL |
 | `otp_pepper` → `member_hash_pepper` | random; turunan HKDF | `otp_pepper` di GitHub Environment; `member_hash_pepper` **diturunkan di host** (`derive-secrets.sh`), tidak disimpan di GitHub | **Wajib** offline (`otp_pepper`) | Semua `member_hash` berubah → ledger/DSAR tidak tersambung |
 | Passphrase LUKS per node | passphrase | Keyslot disk | **Wajib** offline | Disk tidak terbuka → restore |
