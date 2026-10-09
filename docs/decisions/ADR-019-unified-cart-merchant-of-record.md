@@ -4,7 +4,7 @@
 - **Tanggal:** 2026-10-05
 - **Pemutus (klien):** Finance + Tax + Legal (struktur), PO (UX checkout)
 - **Referensi review:** §3.3, R-T10, R-L03, R-L04, R-O05, R-S09
-- **Terkait:** ADR-001, ADR-016, ADR-020, ADR-026 (gateway-agnostic; split settlement multi-PT = kriteria pemilihan vendor), ADR-027 (pajak configurable), `docs/02 §3.4`
+- **Terkait:** ADR-001, ADR-016, ADR-020, ADR-026 (gateway-agnostic; split settlement multi-PT = kriteria pemilihan vendor), ADR-027 (pajak configurable), ADR-034 (kanal online BFF + json2), `docs/02 §3.4`, `docs/04 §10`
 
 > **Ringkasan manajemen.** Pelanggan bisa mengisi satu keranjang berisi barang supermarket (PT Retail, kena PPN) dan makanan (PT F&B, kena PB1), lalu membayar **sekali**. Di belakang layar sistem memecahnya menjadi pesanan, struk, dan pajak **per PT**. Uang diterima satu akun gateway milik PT Holding yang bertindak sebagai **agen penagih** dan meneruskan dana ke masing-masing PT; PT Holding **tidak** menjadi penjual. Struktur ini harus dikonfirmasi konsultan pajak karena menyangkut PPN, PB1, dan faktur.
 
@@ -44,3 +44,16 @@ R-L03 (PB1 vs PPN, skor 16), R-L04 (transfer pricing), R-T10 (saga, skor 16), R-
 
 ## Kapan ditinjau ulang
 Setelah opini pajak/legal diterima (sebelum fase 3), dan setelah 100 order online pertama (rekonsiliasi 100% cocok).
+
+## Catatan revisi 2026-10-09 (Gelombang 17 — Fase 3) — status tetap Proposed
+Sumber: `docs/08_ODOO_FIT_GAP.md` §8.5 (F-70, temuan #40–#41), kontrak `docs/04 §10`, ADR-034. **Bukan keputusan klien**; opini pajak & legal tetap syarat Accepted.
+
+Opsi A dipecah menjadi dua cara pencatatan; keduanya mempertahankan *penjual = PT pemilik barang* dan tidak mengubah kontrak BFF:
+
+| Varian | Cara | Status | Biaya / waktu |
+|---|---|---|---|
+| **A1 — default pilot** | Di PT penjual: faktur saat paid + `account.payment` pada jurnal bank "Titipan Online – Holding" (akun **Piutang dana titipan Holding**) yang dikonfigurasi di kanal Odoo (`journal_titipan_id`). Di Holding: jurnal umum harian dari laporan settlement BFF (impor CSV standar) *Bank/Piutang gateway / Utang titipan PT*. Settlement Holding → PT manual. **Tidak ada kode akun di kode** (CoA Q-2 PLACEHOLDER). | Bisa sekarang (konfigurasi + E-28) | termasuk E-28; pembukuan Holding manual harian (beban Finance ±15–30 menit/hari, asumsi) |
+| **A2 — kandidat PoC** | Modul CE 19 **`account_payment_interco`** (standar Odoo, bukan pihak ketiga; tidak auto-install): saat faktur PT dibayar oleh `payment.transaction`/`account.payment` milik Holding, modul membuat jurnal kliring otomatis di kedua company (temuan #41). | **PoC setelah opini pajak**; belum terverifikasi lintas company (`check_company`, faktur tetap milik PT) | PoC ±3–5 hari engineer Odoo; bila lolos, hanya metode privat `_efn_online_register_payment` E-28 yang berubah |
+| **C — bila gateway mendukung split** | Dana langsung ke sub-akun per PT; `journal_titipan_id` diganti jurnal bank PT; baris Holding hilang. | Menunggu ADR-016 (kriteria vendor) | konfigurasi + adapter gateway; kontrak sudah menyediakan `portions` per PT di payment intent (`docs/04 §10.7`) |
+
+Penegasan desain wajib (melengkapi bagian Keputusan): (5) payment intent online milik Holding (`company_code=EFN`) **membawa porsi per PT/SO**; Σ porsi = nominal intent; (6) refund parsial selalu menyebut bagian (`part_id`/SO) dan ≤ porsi bagian itu (R-O05); (7) jalur F&B online (SO + jembatan KDS vs `pos.order` lewat E-27) diputuskan bersama ADR-032 lewat **Q-ON2** — kontrak kanal tetap sama; (8) MDR, bukti potong, dan periode settlement = **Q-ON9** (+ Q-4) untuk konsultan pajak.

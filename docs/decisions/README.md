@@ -12,6 +12,8 @@
 >
 > **Pembaruan 9 Okt 2026 (gelombang 15, Fase 2 F&B).** Layar dapur (KDS) selesai dibangun dan diuji di lingkungan pengembangan. Reviewer keamanan (r8) memberi **GO bersyarat** untuk **satu outlet F&B pilot** dengan 8 syarat (bagian "Syarat GO pilot KDS" di bawah); perbaikan teknis Gelombang 15 sudah menutup sebagian besar syarat di sisi kode, sisanya menunggu staging dan keputusan/tindakan klien. **Dua ADR baru (Proposed):** ADR-032 (QR order dari ponsel: kiosk dulu, Super-App + BFF bila wajib ponsel) dan ADR-033 (akun tablet dapur). Tabel keputusan terbuka ditambah **P-11..P-18** (pilot F&B), **Q-QR1..Q-QR5**, **Q-KD1..Q-KD4**, dan **Q-P15..Q-P16** (inventaris PDP v5). Total kini **33 ADR**; belum ada yang Accepted penuh.
 >
+> **Pembaruan 9 Okt 2026 (gelombang 17, Fase 3 penjualan online).** Kontrak penjualan online Super-App ditulis (`docs/04 §10`, v5.0): pilot PT Retail, ambil di 1 toko, bayar sekali (provider `mock`), Odoo tetap sumber harga & pajak dan tidak terbuka ke internet. **ADR baru (Proposed): ADR-034** — kanal online lewat BFF + 10 fungsi Odoo khusus melalui jalur internal terfilter (bukan toko online bawaan Odoo). **ADR-019** mendapat catatan revisi: A1 (jurnal titipan manual) default pilot, A2 (`account_payment_interco` CE 19) kandidat PoC setelah opini pajak, C bila gateway mendukung split. Tabel keputusan terbuka ditambah **Q-ON1..Q-ON13**. Perkiraan ±6–7 minggu kalender (paralel). Total kini **34 ADR**; belum ada yang Accepted penuh.
+>
 > **Ringkasan manajemen (awal).** Ada 25 keputusan arsitektur yang menunggu tanda tangan klien. Semuanya berstatus **Proposed**: tim boleh mulai mengikuti rekomendasi, tetapi tidak boleh mengunci pilihan yang mahal dibalik sebelum disetujui. **ADR-022 (enkripsi) dan ADR-025 (model tim agent) berasal dari instruksi klien 5 Okt 2026** — prinsipnya sudah wajib; yang ditandatangani adalah caranya. Tujuh keputusan di **Gelombang 1** memblokir Fase 1 dan perlu ditandatangani dalam 2 minggu pertama; ADR-022/023/024 (keamanan) ditandatangani paralel karena memblokir staging publik. Keputusan pajak dan legal (MGM, unified cart) butuh konsultan eksternal sehingga harus **dimulai** sekarang.
 
 Status: `Proposed` = belum disetujui klien · `Accepted` = disetujui (catat nama & tanggal) · `Superseded by ADR-xxx`.
@@ -54,6 +56,7 @@ Sumber: `docs/01_REVIEW_RISK_GAP_ANALYSIS.md` (D-xx, R-xxx, Q-xx). Template: `AD
 | [031](ADR-031-tanpa-dependency-modul-odoo-pihak-ketiga.md) | Tanpa dependency modul Odoo pihak ketiga; OCA & Cybrosys sebagai referensi; gap = `efn_*` LGPL-3 (clean implementation) | D-15, R-T04, R-L08 | **Diputuskan klien 6 Okt 2026** (prinsip); rincian Q-V1..Q-V6 Proposed | Klien; rincian: IT + Finance + Legal | R-T04, R-L08, R-B09, R-S10, usulan R-T13 |
 | [032](ADR-032-qr-order-dari-ponsel.md) | QR order dari ponsel: pilot = kiosk; bila wajib ponsel = Super-App + BFF (E-27); `pos_self_order` mobile ditolak (ADR-023) | F-49, Q-23/P-17 | Proposed — menunggu Q-QR1 (Q-23) | PO + Ops F&B + Finance + IT/Security | R-S03, R-B01, R-L03, R-L01 |
 | [033](ADR-033-akun-perangkat-kds.md) | Akun perangkat KDS: user internal tersandbox (pilot) vs user *share* (sebelum outlet ke-2) | SEC-74, SEC-77 | Proposed | IT + Security (+ Ops F&B) | R-S03, R-S10, R-S12, R-T04 |
+| [034](ADR-034-kanal-online-bff-json2-terfilter.md) | Kanal penjualan online: BFF + `efn_online_order` (10 metode) lewat `/json/2` terfilter (`odoo-rpc-gateway` mTLS); `website_sale` ditolak; katalog pull delta 5 menit | F-55..F-74, §3.3 | Proposed | IT + Security; PO (lingkup); Finance + Tax (bagian ADR-019) | R-T10, R-S03, R-S09, R-O05, R-L03, usulan R-T15 |
 
 Catatan pemetaan: D-09 dipetakan ke ADR-001 (sudah ada) sehingga ADR-009 dipakai untuk D-08. D-10 dibahas di ADR-010 dan juga disinggung ADR-001.
 
@@ -72,7 +75,8 @@ Belum ada ADR berstatus Accepted. Sudah dijawab klien: Q-E1 (kustodi = Superadmi
 | 5 | **Paket UU PDP**: `docs/compliance/*` (DPO, retensi, Q-P1..P8), `PDP_TRANSFER_LINTAS_NEGARA.md` (Q-T1..T6) | Penetapan DPO lebih dulu; tanpa DPO, retensi tetap default usulan | DPO + Legal |
 | 6 | ADR-027 | Daftar kota/tarif & kebijakan include/exclude (konsultan pajak) — sebelum go-live F&B | Finance + Tax |
 | 7 | ADR-026 → ADR-016 | Prinsip abstraksi sekarang; pemilihan vendor dengan kriteria ADR-026 sebelum Fase 3 (KYB tiap PT) | Finance + Legal + IT |
-| 8 | ADR-019 | Opini pajak & legal (lead time panjang) | Finance + Tax + Legal |
+| 8 | ADR-019 (+ catatan revisi 9 Okt) | Opini pajak & legal (lead time panjang); A1 vs A2 vs C; Q-ON9 | Finance + Tax + Legal |
+| 8a | **ADR-034** (baru 9 Okt) | Arsitektur kanal online (BFF + json2 terfilter); masa berlaku & pemegang rotasi API key kanal; Q-ON1/Q-ON2/Q-ON4/Q-ON12 — **sebelum pilot online** | IT + Security + PO |
 | 9 | ADR-025 | Formalitas | Athera + PO |
 | 10 | Gelombang 2 & 3 lainnya | Seperti di bawah | — |
 
@@ -108,6 +112,27 @@ Sumber: `docs/reviews/SECURITY_REVIEW_2026-10-09-r8.md` §"Rekomendasi go/no-go"
 | K-8 | **Dokumen**: inventaris PDP v5 memuat tiket KDS; keputusan Q-19 (stasiun, target menit, retensi) dan Q-24 (perangkat/printer) dicatat | architect + **Ops F&B** | Inventaris **v5 selesai** (9 Okt). Q-19 / Q-24 **belum** (default PLACEHOLDER) | **Ya — P-13, P-18** |
 
 Kondisi berhenti (NO-GO / kembali ke printer saja): layar menampilkan data pelanggan, perangkat dapat membuka stasiun/PT lain, atau log `EFN_KDS_TICKET_FAILED` berulang → ubah mode stasiun ke `printer` (perilaku CE standar); POS tetap jalan.
+
+## Keputusan klien yang masih terbuka — Fase 3 penjualan online (baru, Gelombang 17, 9 Okt 2026)
+Sumber: `docs/08_ODOO_FIT_GAP.md` §8.7 (functional G17), `docs/04 §10.1`, ADR-034, ADR-019 (catatan revisi). Semua memblokir **pilot online**, bukan pengembangan; kolom default = yang dipakai tim sekarang (keputusan lead 9 Okt, configurable).
+
+| Prioritas | ID | Pertanyaan | Pemutus | Default bila tidak dijawab | Memblokir |
+|---|---|---|---|---|---|
+| **A** | Q-ON1 | PT & outlet pilot online, jam ambil, jumlah SKU online | PO + Ops | PT Retail, toko pilot Fase 1 | data kanal/outlet |
+| **A** | Q-ON4 | Reservasi stok saat checkout atau cek saja? Batas bayar? Stok kurang setelah bayar: batal + refund penuh / refund baris / hubungi pelanggan? | PO + Ops + Finance | cek saja, 15 menit, batal + refund penuh porsi PT | saga, UX |
+| **A** | Q-ON8 | Faktur online dibuat saat bayar atau saat diambil? | Finance + Tax | saat bayar | E-28 `invoice_on_paid` |
+| **A** | Q-ON9 (+ Q-1, Q-2, Q-4) | Dana titipan: MDR ditanggung siapa, bukti potong, periode settlement Holding → PT, jurnal Holding manual (A1) atau otomatis (A2)? | Finance + Tax + Legal | A1 manual harian; akun PLACEHOLDER | ADR-019; go-live online |
+| **A** | Q-ON6 | Pembulatan Rupiah: presisi IDR global ke 1 atau pembulatan kas per faktur? | Finance | pembulatan kas Rp1 | `amount_payable` bulat |
+| B | Q-ON2 | F&B online: SO + jembatan KDS (E-29a) atau `pos.order` lewat E-27 (E-29b)? Kapan? | PO + Ops F&B + IT | F&B online mati | E-29, ADR-032 |
+| B | Q-ON3 (= Q-39/Q-40) | Pesan-antar: zona, ongkir, subsidi, slot & kapasitas, 3PL | PO + Ops + Finance | mati | delivery |
+| B | Q-ON5 | Harga tampil termasuk pajak? Label PB1/PPN di bukti order? | Finance + Tax | termasuk pajak + label | tampilan |
+| B | Q-ON7 | Pelanggan online butuh faktur atas nama/NPWP sendiri? Data apa yang boleh disimpan di Odoo? | Finance + DPO | tidak (partner generik) | PII di Odoo |
+| B | Q-ON10 | Promo online cukup pricelist atau perlu kupon/beli X gratis Y? | PO + Marketing | pricelist saja | E-28 (assert total) |
+| B | Q-ON11 | Refund: siapa menyetujui, batas waktu, retur setelah diambil, hanya ke metode asal, dampak poin | Ops + Finance | CS menyetujui, ≤ 2×24 j, ke metode asal; tanpa poin | CLI refund, UI CS |
+| B | Q-ON12 (+ Q-8) | Katalog per PT atau per brand dalam PT? Pricelist per PT atau per outlet? | PO + Ops | per PT, satu pricelist | kanal |
+| B | Q-ON13 | Pesanan tidak diambil: lama ditahan, batal otomatis dengan/tanpa refund? | Ops + Finance | ditahan sampai tutup toko H+1, tanpa batal otomatis | cron E-28 |
+| B | (IT) | Masa berlaku API key kanal online (PLACEHOLDER 90 hari) & pemegang rotasi | IT + Security | 90 hari, Superadmin | runbook rotasi |
+| C | (Finance) | Poin online: earn saat diambil? redeem di checkout online? | Finance + PO | ditunda (tidak ada poin online di pilot) | §10.14 |
 
 ## Keputusan klien yang masih terbuka (gabungan, per 9 Okt 2026 — Gelombang 15)
 

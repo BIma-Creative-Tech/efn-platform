@@ -8,6 +8,8 @@ Revisi 2026-10-06 (v3, keputusan klien 6 Okt): kustodi kunci hanya Superadmin & 
 
 Revisi 2026-10-06 (v4, Gelombang 12): object storage = **SILO** (fork komunitas MinIO, dibangun dari source) di belakang filter L7 **`s3-gateway`** (ADR-030); **tanpa modul Odoo pihak ketiga** — OCA/Cybrosys hanya referensi, gap = `efn_*` (ADR-031): inter-company = `efn_intercompany` (rencana Fase 1), audit = `efn_audit` + sink Loki 400 hari + salinan ClickHouse append-only (sedang dibangun); mTLS Loki→Alertmanager. Lihat §5.5.
 
+Revisi 2026-10-09 (v5, Gelombang 17): penjualan online Super-App = BFF + modul `efn_online_order` lewat `/json/2` terfilter (`odoo-rpc-gateway`, mTLS), tanpa `website_sale` (ADR-034, Proposed); kontrak `docs/04 §10`; diagram §3.4 diperbarui.
+
 ## 1. Context Diagram
 
 ```mermaid
@@ -193,16 +195,27 @@ flowchart LR
 
 ### 3.4 Checkout Unified Cart lintas PT
 
+Revisi 2026-10-09 (Gelombang 17): alur mengikuti kontrak `docs/04 §10` (v5.0) dan ADR-034 (Proposed). Pilot = kanal PT Retail saja, ambil di toko; F&B online, delivery/3PL, dan reservasi stok **belum** aktif (menunggu Q-ON2/Q-ON3/Q-ON4) — tetapi struktur sudah per kanal sehingga kanal F&B kelak ditambahkan tanpa mengubah kontrak. Ini **bukan** keputusan klien; ADR-019 & ADR-034 masih Proposed.
+
 ```mermaid
 flowchart TB
-  CART[Cart: item PT Retail + item PT F&B] --> SPLIT[Split by company & fulfilment]
-  SPLIT --> O1[Odoo SO PT Retail<br/>PPN, slot same-day]
-  SPLIT --> O2[Odoo SO PT F&B<br/>PB1, instant]
-  O1 & O2 --> PAY[Satu pembayaran gateway<br/>Akun merchant: PT Holding sebagai agen penagih<br/>penjual tetap tiap PT - ADR-019]
-  PAY -- webhook paid (HMAC verified, idempotent) --> SAGA[Saga: confirm SO, reserve stock, dispatch 3PL]
-  SAGA -- gagal dispatch --> COMP[Kompensasi: unreserve, refund parsial, notif]
-  PAY --> ICB[Settlement dana titipan Holding -> PT Retail, PT F&B]
+  APP[Super-App Next.js] -- "cookie sesi, Bearer OTP" --> BFF[NestJS BFF]
+  BFF -- "katalog: pull delta 5 menit<br/>(salinan BFF + gambar di object storage)" --> GWO
+  BFF -- "cart Redis per member<br/>(tanpa harga)" --> BFF
+  BFF -- "quote / place per kanal<br/>/json/2 + API key per PT" --> GWO[odoo-rpc-gateway<br/>mTLS, allowlist 10 metode]
+  GWO --> O1[Odoo E-28 kanal RTL<br/>SO PT Retail, PPN dari FP outlet]
+  GWO -.-> O2[Odoo kanal FNB - nonaktif<br/>Q-ON2: SO+KDS atau pos.order E-27]
+  BFF -- "1 payment intent = Σ amount_payable<br/>porsi per PT - ADR-019/026" --> PAY[Payment gateway<br/>pemegang akun: Holding sebagai agen penagih<br/>provider mock - ADR-016 ditunda]
+  PAY -- "webhook paid (HMAC + replay + idempotensi)" --> BFF
+  BFF -- "order.paid (RabbitMQ) -> mark_paid per SO" --> GWO
+  O1 -- "konfirmasi + faktur + pembayaran jurnal titipan (A1)" --> O1
+  O1 -- "event ready / picked_up / cancelled<br/>HTTPS + service key + HMAC" --> BFF
+  BFF -- "notify.push (WA Cloud API)" --> APP
+  BFF -- "stok kurang / batal / bayar terlambat" --> COMP[Kompensasi per SO:<br/>batal + refund porsi PT itu saja]
+  PAY -. "settlement dana titipan (manual A1; A2/C kelak)" .-> ICB[Holding -> PT Retail / PT F&B]
 ```
+
+Pelanggan mengambil barang dengan **kode ambil** (rahasia: terenkripsi di BFF, hash KDF di Odoo). Delivery & dispatch 3PL (diagram lama) menjadi fase lanjut (Q-39/Q-40/Q-ON3).
 
 ## 4. Environments
 

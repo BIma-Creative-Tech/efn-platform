@@ -362,3 +362,44 @@ Daftar data pribadi kini mencakup layar dapur dan hasil pencocokan poin. Keduany
   - harga kiosk/tablet dan estimasi Rupiah E-27 (turunan tarif ADR-031);
   - nomor pasal UU PDP (Pasal 46 dikutip dari r8);
   - Mermaid tidak dirender.
+
+# Gelombang 17 — Kontrak v5.0 Fase 3 (penjualan online Super-App), ADR-034, revisi ADR-019 (2026-10-09)
+
+## Ringkasan (untuk manajemen)
+Kontrak penjualan online ditulis lengkap di `docs/04 §10`. Pilot: PT Retail, ambil di 1 toko, bayar sekali lewat QRIS (provider masih `mock`). Odoo tetap sumber harga, pajak, stok, dan faktur, dan tetap tidak terbuka ke internet: BFF hanya memanggil 10 fungsi khusus Odoo lewat jalur internal yang menolak semua fungsi lain. Pekerjaan dibagi ke 5 agent dengan batas file yang jelas. Perkiraan ±6–7 minggu kalender bila paralel (Odoo E-28 ±4–5 minggu adalah jalur kritis). Belum ada keputusan klien atas Q-ON1..Q-ON13; semua angka PLACEHOLDER dan configurable.
+
+## File dibuat / diubah
+| File | Isi |
+|---|---|
+| `docs/04_SERVICE_CONTRACTS.md` | Judul → v5.0; **§10 baru** (10.1 prinsip & default pilot, 10.2 identitas, 10.3 API pelanggan: katalog/stok/gambar, cart Redis, quote, checkout `Idempotency-Key` + `accept_total`, status/daftar/batal, kode ambil, peta error K-ON5; 10.4 transport json2 + `odoo-rpc-gateway` + 10 metode + **delta E-28** §10.4.4; 10.5 event Odoo → BFF K-ON1 (service key + HMAC + replay + `seq`); 10.6 saga: state order & bagian (Mermaid), sequence, kunci idempotensi K-ON3, timeout/bayar terlambat/rekonsiliasi, kompensasi & refund per bagian; 10.7 payment `purpose`/porsi K-ON4/`refund()`; 10.8 tabel BFF + retensi + DSAR; 10.9 queue; 10.10 kredensial; 10.11 metrik & alert; 10.12 keamanan; 10.13 env; 10.14 ditunda/belum terverifikasi; **10.15 Paket kerja G17**). §1–§9 hanya ditambah rujukan (akhir §7.3, §8.3). |
+| `docs/decisions/ADR-034-kanal-online-bff-json2-terfilter.md` | **Baru, Proposed**: kanal (website_sale / BFF+E-28 / ORM generik / portal), transport (xmlrpc-jsonrpc / json2 / controller custom), katalog (proxy / pull / push); keputusan B + json2 + pull; konsekuensi, biaya, usulan R-T15 |
+| `docs/decisions/ADR-019-unified-cart-merchant-of-record.md` | Catatan revisi 9 Okt: A1 default pilot, A2 `account_payment_interco` PoC setelah opini pajak, C bila gateway split; desain wajib 5–8 (porsi, refund per bagian, Q-ON2, Q-ON9). Status tetap Proposed |
+| `docs/decisions/README.md` | Catatan G17, indeks ADR-034 (total 34), urutan tanda tangan 8/8a, **tabel Q-ON1..Q-ON13** + pertanyaan IT (masa key) & Finance (poin online) |
+| `docs/02_TARGET_ARCHITECTURE.md` | Baris revisi v5; diagram §3.4 diganti sesuai kontrak (tanpa klaim keputusan klien) |
+
+## Keputusan teknis kunci (usulan architect, dalam batas keputusan lead)
+1. **Bagian per kanal** (`channel_code`), bukan per `company_code`: F&B/brand kelak = kanal baru tanpa breaking change. `checkout_ref` = `order_id`, `platform_order_ref` = `part_id` (satu per SO).
+2. **Router internal `odoo-rpc-gateway`** (HAProxy, pola `s3-gateway`): mTLS CN `api-gateway`, POST ke **10 path persis** (bukan wildcard `efn.online.*` — wildcard akan meloloskan `action_efn_ready` dll.), DB header dipaksa, cookie dibuang. 3 metode UI staf tetap lewat web client WireGuard.
+3. **Kode ambil**: dibuat BFF, AES-GCM di BFF (harus bisa ditampilkan ulang), **hash KDF lambat di Odoo** (mengubah spec E-28 Char(8) polos), endpoint terpisah `GET /v1/orders/:id/pickup-code` agar polling status tidak membawanya.
+4. **Event Odoo → BFF = service key + HMAC body (secret baru `odoo_online_event_hmac`)** agar replay window bermakna; `seq` per order untuk menolak event basi; 404/409 final.
+5. **Bayar terlambat tidak memanggil `mark_paid`** (mencegah race dengan pembatalan); langsung refund gateway penuh.
+6. **Checkout sinkron sampai place + intent** (pelanggan menunggu ≤ ±10 s), sisanya async lewat 4 queue baru: `order.paid`, `order.unpaid_closed`, `order.compensate`, `order.refund.requested` (+ `notify.push` yang ada); timeout lewat sweeper DB (RabbitMQ tanpa delayed plugin).
+7. Delta E-28 lain: error `UserError("efn_online:<kode>")`, cancel ref tak dikenal → `absent`, context dibersihkan kecuali `lang`, `payment_timeout_minutes` default 25 (BFF 15 + margin).
+8. Gateway interface + `refund()` (mock saja; vendor → `manual_required`) dan `portions` (siap ADR-019 opsi C).
+
+## Hal yang butuh keputusan lead
+- **L-1** Setujui delta E-28 §10.4.4 (terutama hash kode ambil & HMAC event) — mengubah spesifikasi functional docs/08 §8.3; functional perlu diberi tahu.
+- **L-2** Secret baru `odoo_online_event_hmac` vs cukup service key yang ada (tanpa replay window bermakna).
+- **L-3** Refund CS pilot lewat **CLI BFF** (tanpa UI) — cukup untuk pilot?
+- **L-4** DSAR: `DELETE /v1/me` ditolak `409 open_online_orders` selama ada pesanan dibayar yang belum selesai (alternatif: tetap hapus, pelanggan kehilangan akses kode ambil).
+- **L-5** Retensi usulan (tautan member 730 hari, event 180 hari, baris keuangan 10 th) → masuk paket DPO; inventaris PDP versi berikut dijadwalkan setelah implementasi.
+- **L-6** Usulan risiko **R-T15** (API key kanal kedaluwarsa → checkout berhenti) ke register docs/01; R-T13 di docs/01 terpakai dua kali (perlu dinomori ulang oleh pemilik register).
+- **L-7** Paket kerja: frontend dapat mulai paralel dengan mock BFF; BFF memerlukan mock Odoo json2 di Jest sampai E-28 tersedia.
+
+## Keputusan yang butuh tanda tangan klien
+ADR-034 (arsitektur kanal; IT + Security + PO), ADR-019 revisi (A1/A2/C; Finance + Tax + Legal), Q-ON1..Q-ON13 (tabel di `docs/decisions/README.md`), masa berlaku & pemegang rotasi API key kanal (IT), poin online (Finance).
+
+## Terverifikasi / belum terverifikasi
+- **Terverifikasi dengan membaca repo:** `services/api-gateway/src/payments/**` (transisi monoton, `expired→paid` diterima, nominal beda tidak diubah, `simulate` dev-only, adapter vendor eksperimental), `03-platform-v3.sql` (DDL `payment_intent`, CHECK `company_code`/`method`), `02-platform-loyalty.sql` (`outbox`), `common/amqp/queues.ts` (queue & argumen DLQ), `infra/rabbitmq/rabbitmq-entrypoint.sh` (definitions broker), `docker-compose.yml` (`odoo-tls --allow-cn=traefik,blackbox-exporter`; router Traefik `api` publik kecuali `/v1/pos`, `/internal`, `/metrics`, webhook POST), `infra/s3-gateway/README.md` (pola filter L7 + pelajaran SEC-41), `superapp-web/lib/request-guard.ts` (`isSameOrigin`), `lib/mock-catalog.ts`/`CartDemo` (masih mock).
+- **Dari docs/08 §8 (functional, tidak saya ulang verifikasi di source):** temuan #36–#45, bentuk 10 metode E-28, `api_key_duration` default 1 hari.
+- **Belum terverifikasi:** status HTTP error `/json/2` per exception di 19.0; perlu/tidaknya `X-Odoo-Database`; CryptContext/pbkdf2 dari addon untuk hash kode ambil; `x-delivery-limit` pada versi RabbitMQ yang dipin; deprecation XML-RPC/JSON-RPC di 19.0 (dari dokumentasi Odoo, bukan source); estimasi minggu-engineer BFF/frontend/devsecops (asumsi architect); Mermaid tidak dirender. Tidak ada kode/test yang dijalankan.
