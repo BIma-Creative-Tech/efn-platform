@@ -32,7 +32,11 @@ permissions:
 jobs:
   resolve:
     name: Resolve target
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    # Deploy otomatis ke staging hanya bila host staging sudah disiapkan Superadmin (variable STAGING_DEPLOY_ENABLED=true);
+    # tanpa itu setiap push ke main akan gagal di SSH/verifikasi (G16). Tag v* dan workflow_dispatch tidak terpengaruh.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' && vars.STAGING_DEPLOY_ENABLED == 'true')
     runs-on: ubuntu-latest
     outputs:
       environment: ${{ steps.r.outputs.environment }}
@@ -95,6 +99,13 @@ jobs:
           persist-credentials: false
 
       - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
+
+      # Package GHCR privat (repo privat): cosign verify butuh kredensial baca registry (GITHUB_TOKEN, packages: read).
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # Verifikasi signature lalu ambil DIGEST yang terverifikasi; host mem-pull digest itu (bukan tag) -> tidak ada
       # TOCTOU antara verifikasi dan pull (SEC-10). Identitas dikunci ke workflow + ref spesifik (bukan @.*).

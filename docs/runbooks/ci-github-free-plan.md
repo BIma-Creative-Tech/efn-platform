@@ -23,6 +23,13 @@ gitleaks, dependency-review, `npm audit`/`pip-audit` tetap memblokir merge/push.
 | `E2E_NIGHTLY_ENABLED` | `true` hanya bila memakai runner self-hosted (`E2E_RUNNER`) atau kuota menit cukup | Jadwal E2E nightly (hingga 150 menit/run) aktif |
 | `E2E_RUNNER` | label runner self-hosted | E2E tidak memakai menit GitHub-hosted |
 | `STAGING_DOMAIN` | domain staging | DAST ZAP berjalan (tanpa ini job dilewati) |
+| `STAGING_DEPLOY_ENABLED` | `true` setelah host staging disiapkan Superadmin (efn-deploy, deploy.conf, secrets environment `staging`) | Deploy otomatis ke staging setelah Build & Push di main (tanpa ini dilewati; tag `v*` dan dispatch manual tetap jalan) |
+| `ATTESTATIONS_ENABLED` | `true` hanya bila repo di organisasi berbayar / publik | Build provenance GitHub (`attest-build-provenance`); deploy tidak bergantung padanya (host memakai `cosign verify`) |
+
+Catatan: artifact attestation GitHub tidak tersedia untuk repo privat milik akun pribadi ("Feature not available for
+user-owned private repositories"). Signature cosign keyless + attestation SBOM (SPDX tingkat paket, ±2 MB) tetap
+dibuat dan disimpan di GHCR. Keyless sigstore mencatat identitas workflow (nama repo, ref) dan digest image di log
+transparansi publik Rekor; isi image dan SBOM tidak dipublikasikan.
 
 ## 3. Membersihkan kuota storage artifact (sekali, setelah merge G16)
 
