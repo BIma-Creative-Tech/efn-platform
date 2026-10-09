@@ -93,6 +93,7 @@ misconfigurations:
       compose (SEC-85, diuji 9 Okt 2026): cap_drop ALL + cap_add hanya CHOWN, SETUID, SETGID (dibutuhkan
       adduser/chown/su); no-new-privileges; tidak read_only (run_metabase.sh menulis /etc/passwd, /metabase.db);
       Jetty hanya loopback, akses lewat sidecar TLS mTLS. Sama dengan checkov:skip CKV_DOCKER_3 di Dockerfile.
-      Pernyataan sebelumnya ("cap_drop ALL") keliru saat disetujui -> perlu persetujuan ulang pemilik proyek.
+      Pernyataan sebelumnya ("cap_drop ALL") keliru saat disetujui; pernyataan faktual ini DISETUJUI ULANG pemilik
+      proyek pada 9 Okt 2026 (setelah merge PR #35).
     expired_at: 2027-01-07
 secrets: []
