@@ -77,28 +77,30 @@ docker run -d --name "$cname" \
   -v "$(hostpath "$work/journal"):/journal:ro" \
   "$PROMTAIL_IMAGE" -config.file=/w/promtail-test.yml -dry-run -log.level=warn > /dev/null
 
-# Baris entri dry-run: "<RFC3339 timestamp>\t{label=...}<\t?>baris"
-is_entry='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[^[:space:]]+[[:space:]]+[{]'
+# Baris entri dry-run: "<RFC3339 timestamp>\t{label=...}<\t?>baris". Promtail -dry-run menulis timestamp, tab, label,
+# dan baris sebagai write terpisah dari beberapa goroutine: tab pemisah kadang berpindah ke entri lain (CI flaky
+# 9 Okt 2026, 66/67 entri). Fixture tidak mengandung tab -> semua tab dibuang sebelum dihitung/dinormalisasi.
+is_entry='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(Z|[+-][0-9]{2}:?[0-9]{2})[{]'
 got_n=0
 for _ in $(seq 1 "$WAIT_SECONDS"); do
-  got_n="$(docker logs "$cname" 2> /dev/null | grep -cE "$is_entry" || true)"
+  got_n="$(docker logs "$cname" 2> /dev/null | tr -d '\t' | grep -cE "$is_entry" || true)"
   [ "$got_n" -ge "$expected_n" ] && break
   sleep 1
 done
-docker logs "$cname" > "$work/out.raw" 2> "$work/err.raw"
+docker logs "$cname" 2> "$work/err.raw" | tr -d '\t' > "$work/out.raw"
 docker rm -f "$cname" > /dev/null 2>&1 || true
+
+# 3. Normalisasi: buang timestamp; "{labels}baris" -> "{labels} baris"; urutkan stabil
+grep -E "$is_entry" "$work/out.raw" \
+  | sed -E 's/^[0-9T:.Z+-]*([{][^}]*[}])/\1 /' \
+  | LC_ALL=C sort > "$work/actual.txt"
 
 if [ "$got_n" -ne "$expected_n" ]; then
   echo "::error::Promtail menghasilkan $got_n entri, diharapkan $expected_n (baris hilang/tertelan pipeline?)" >&2
+  diff "$tdir/expected.txt" "$work/actual.txt" >&2 || true
   sed -n '1,40p' "$work/err.raw" >&2
   exit 1
 fi
-
-# 3. Normalisasi: buang timestamp; "{labels}<tab opsional>baris" -> "{labels} baris"; urutkan stabil
-tab="$(printf '\t')"
-grep -E "$is_entry" "$work/out.raw" \
-  | sed -E "s/^[^${tab}]*${tab}([{][^}]*[}])${tab}?/\\1 /" \
-  | LC_ALL=C sort > "$work/actual.txt"
 
 if [ "$update" -eq 1 ]; then
   cp "$work/actual.txt" "$tdir/expected.txt"

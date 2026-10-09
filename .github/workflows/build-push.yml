@@ -148,6 +148,13 @@ jobs:
 
       - name: SBOM (Syft, SPDX) - file lokal, bukan artifact
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
+        # SBOM tingkat paket (tanpa daftar file + relasi kepemilikan file): SPDX odoo default 58 MB (74 rb file) ditolak
+        # Rekor publik saat `cosign attest`; versi ramping ±2 MB dengan daftar paket yang sama (diukur 9 Okt 2026).
+        env:
+          SYFT_FILE_METADATA_SELECTION: none
+          SYFT_RELATIONSHIPS_PACKAGE_FILE_OWNERSHIP: "false"
+          SYFT_RELATIONSHIPS_PACKAGE_FILE_OWNERSHIP_OVERLAP: "false"
+          SYFT_PACKAGE_EXCLUDE_BINARY_OVERLAP_BY_OWNERSHIP: "false"
         with:
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NS }}/${{ matrix.service }}@${{ steps.push.outputs.digest }}
           format: spdx-json
