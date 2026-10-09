@@ -7,7 +7,7 @@ requests==2.34.2
 urllib3==2.8.0
 Pillow==12.3.0
 ImageHash==4.3.1
-rapidfuzz==3.10.1
+rapidfuzz==3.14.6
 pytesseract==0.3.13
 # >= 0.17.0 wajib: start_http_server(certfile=, keyfile=) untuk endpoint metrik HTTPS.
 prometheus-client==0.21.1
