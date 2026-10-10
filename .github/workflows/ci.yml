@@ -520,7 +520,7 @@ jobs:
           shellcheck --version
           shellcheck -x scripts/*.sh scripts/lib/*.sh scripts/host/efn-deploy scripts/host/efn-online-cs scripts/host/*.sh scripts/smoke/*.sh tests/load/*.sh infra/backup/postgres/*.sh \
             infra/postgres/init/*.sh infra/wireguard/*.sh
-          shellcheck -x infra/odoo-rpc-gateway/test-gateway.sh
+          shellcheck -x infra/odoo-rpc-gateway/test-gateway.sh infra/odoo-rpc-gateway/test-gateway-load.sh
           shellcheck -s sh infra/odoo-rpc-gateway/entrypoint.sh
           shellcheck -s sh infra/minio/*.sh infra/redis/*.sh infra/rabbitmq/*.sh infra/clickhouse/*.sh infra/s3-gateway/*.sh \
             infra/acme/*.sh scripts/acme-test/*.sh infra/metabase/*.sh

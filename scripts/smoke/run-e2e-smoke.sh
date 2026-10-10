@@ -105,6 +105,8 @@ otp_code() { # masked -> kode terakhir di log BFF (console sender dev)
 }
 
 field() { sed -nE "s/.*\"$1\": \"?([^\",}]*)\"?.*/\1/p" <<< "$2" | head -1; }
+# Detail check tanpa isi `message` Odoo (teks bebas, bisa memuat PII). `sed -E` + fungsi -> satu tempat.
+nomsg() { sed -E 's/"message": "[^"]*"/"message": "…"/' <<< "$1"; }
 
 pos_otp() { # uuid partner amount -> verify
   local r m code
@@ -669,7 +671,7 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   opy "$pa" a wait main fulfilling ready
   code="$(python_free_json a main pickup_code)"
   r="$(oodoo -e SMOKE_STEP=handover -e SMOKE_PART="$part" -e SMOKE_CODE="$code")"
-  check "o.odoo_handover_code_ok" "$([[ "$(field "done" "$r")" == true && "$(field state "$r")" == picked_up && "$(field pickup_hash_present "$r")" == false && "$(field pickings_done "$r")" -ge 1 && "$r" == *'picked_up:done'* ]] && echo 1 || echo 0)" "$(sed 's/"message": "[^"]*"/"message": "…"/' <<< "$r")"
+  check "o.odoo_handover_code_ok" "$([[ "$(field "done" "$r")" == true && "$(field state "$r")" == picked_up && "$(field pickup_hash_present "$r")" == false && "$(field pickings_done "$r")" -ge 1 && "$r" == *'picked_up:done'* ]] && echo 1 || echo 0)" "$(nomsg "$r")"
   opy "$pa" a wait main completed handed_over
   r="$(psql_platform -c "select count(*) filter (where pickup_code_enc is null) || '/' || count(*) from platform.online_order_part where order_id='$main_oid'")"
   check "o.bff_pickup_code_purged_after_handover" "$([[ "$r" == 1/1 ]] && echo 1 || echo 0)" "pickup_code_enc NULL/bagian=$r"
@@ -754,7 +756,7 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   opy "$pc" c pay wrong paid
   opy "$pc" c wait wrong fulfilling confirmed
   for _ in 1 2 3 4 5; do r="$(oodoo -e SMOKE_STEP=handover -e SMOKE_PART="$wpart" -e SMOKE_CODE="AAAA-AAAA")"; done
-  check "o.pickup_wrong_5x_review" "$([[ "$(field "done" "$r")" == false && "$(field state "$r")" == review && "$(field review_reason "$r")" == pickup_code_attempts && "$(field pickup_attempts "$r")" == 5 ]] && echo 1 || echo 0)" "$(sed 's/"message": "[^"]*"/"message": "…"/' <<< "$r")"
+  check "o.pickup_wrong_5x_review" "$([[ "$(field "done" "$r")" == false && "$(field state "$r")" == review && "$(field review_reason "$r")" == pickup_code_attempts && "$(field pickup_attempts "$r")" == 5 ]] && echo 1 || echo 0)" "$(nomsg "$r")"
   opy "$pc" c wait wrong review review
   opy "$pc" c pickup_in_review wrong   # L-14: kode ambil ditahan selama review
 

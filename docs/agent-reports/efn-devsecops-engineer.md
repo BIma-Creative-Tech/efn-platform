@@ -1502,6 +1502,24 @@ Belum / perlu tindakan:
   Container `api-gateway` dev BELUM di-recreate: perlu key RTL nyata di `secrets/odoo_api_key_online_rtl.txt` (runbook
   odoo-online-api-key §1, setelah E-28 + user teknis `efn_online_rtl` ada) dan migrasi 07 di volume dev lama.
 
+## G17.10 Perbaikan CI PR #36 (HEAD a522da6), 10 Okt 2026
+- **ruff 0.16.10:** `services/odoo/addons/efn_setup_company/tests/__init__.py` (I001, import digabung; perilaku sama).
+- **shellcheck 0.9.0 (versi CI):** `scripts/smoke/run-e2e-smoke.sh` SC2001 ×2 → helper `nomsg()` (`sed -E`, perilaku
+  sama: isi `message` Odoo disamarkan di detail check). CI kini juga shellcheck `test-gateway-load.sh`.
+- **gitleaks 8.24.3:** 1 FP `services/superapp-web/tests/online-routes.test.ts:270` (`idempotency-key:
+  'dipilih-klien-1234567'`, fixture Vitest) → `.gitleaksignore` + alasan. Bukan secret. Re-scan rentang PR: no leaks.
+- **semgrep 1.179.0:** 1 FP `efn_online_event_outbox.py:222` (log nama env var HMAC, bukan nilai) → `nosemgrep` +
+  alasan (pola sama dengan efn_kds_station.py). Re-scan penuh `--error`: rc 0.
+- **Trivy 0.69.3 image postgres:** CVE baru HIGH di binary rilis WAL-G v3.0.9 (stdlib Go 1.25.11 CVE-2026-78667/
+  78669/97031, x/net 0.58.0 CVE-2026-78669) → **diperbaiki**: WAL-G dibangun dari source tag v3.0.9 (commit
+  3e49318 diverifikasi) dengan Go 1.27.2 + x/net 0.60.0 + grpc 1.83.2, tag `libsodium`. Trivy bersih (hanya FP lama
+  CVE-2021-38599 yang sudah disetujui); **10 pengecualian WAL-G G16 dihapus** dari `.trivyignore.yaml`. Uji fungsional:
+  `wal-g --version` v3.0.9, `efn-walg backup-list` + `wal-fetch` (dekripsi libsodium) terhadap backup dev OK.
+- **Trivy image minio:** x/net 0.59.0 (CVE-2026-78669) di `silo` & `mc` → `go get golang.org/x/net@v0.60.0` sebelum build;
+  Trivy bersih; versi biner tetap (RELEASE.2026-09-16, commit sama).
+- hadolint, checkov 0 FAILED, actionlint OK. Tidak ada pengecualian baru. Image dev `efn/postgres:dev` & `efn/minio:dev`
+  di-tag ulang dari build baru; container dev belum di-recreate.
+
 ## G17.9 Re-review G17: SEC-107 (L-19c) + SEC-108 (L-19e) di wrapper
 - **Peran:** grup host `efn-cs-approver` terpisah dari `efn-cs`; wrapper menetapkan `EFN_CS_ROLE=cs|approver` dari
   keanggotaan grup (env pemanggil ditimpa); `online-refund-approve` hanya peran approver; akun di kedua grup ditolak

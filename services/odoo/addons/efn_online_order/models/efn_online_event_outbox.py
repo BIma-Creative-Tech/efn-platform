@@ -219,6 +219,8 @@ class EfnOnlineEventOutbox(models.Model):
             verify = client._get_verify(base_url)
             service_key = client._read_api_key()
         except EfnOnlineHmacMissing:
+            # FP semgrep (G17): yang di-log hanya NAMA env var (konstanta HMAC_FILE_ENV), nilai secret tidak pernah.
+            # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
             _logger.error(
                 "EFN online outbox: secret HMAC event tidak terbaca (cek env %s); tidak dikirim", HMAC_FILE_ENV
             )
