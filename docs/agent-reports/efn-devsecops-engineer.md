@@ -1506,8 +1506,8 @@ Belum / perlu tindakan:
 - **ruff 0.16.10:** `services/odoo/addons/efn_setup_company/tests/__init__.py` (I001, import digabung; perilaku sama).
 - **shellcheck 0.9.0 (versi CI):** `scripts/smoke/run-e2e-smoke.sh` SC2001 ×2 → helper `nomsg()` (`sed -E`, perilaku
   sama: isi `message` Odoo disamarkan di detail check). CI kini juga shellcheck `test-gateway-load.sh`.
-- **gitleaks 8.24.3:** 1 FP `services/superapp-web/tests/online-routes.test.ts:270` (`idempotency-key:
-  'dipilih-klien-1234567'`, fixture Vitest) → `.gitleaksignore` + alasan. Bukan secret. Re-scan rentang PR: no leaks.
+- **gitleaks 8.24.3:** 1 FP `services/superapp-web/tests/online-routes.test.ts:270` (header Idempotency-Key
+  buatan klien, fixture Vitest) → `.gitleaksignore` + alasan. Bukan secret. Re-scan rentang PR: no leaks.
 - **semgrep 1.179.0:** 1 FP `efn_online_event_outbox.py:222` (log nama env var HMAC, bukan nilai) → `nosemgrep` +
   alasan (pola sama dengan efn_kds_station.py). Re-scan penuh `--error`: rc 0.
 - **Trivy 0.69.3 image postgres:** CVE baru HIGH di binary rilis WAL-G v3.0.9 (stdlib Go 1.25.11 CVE-2026-78667/
