@@ -1,6 +1,6 @@
 # ADR-032: QR Order dari Ponsel Pelanggan (F-49) — Kiosk Dulu, Super-App + BFF Bila Wajib Ponsel
 
-- **Status:** Proposed — **menunggu jawaban Q-23 / P-17** (klien). Tidak ada kode E-27 yang boleh dimulai sebelum ADR ini Accepted.
+- **Status:** **Accepted — opsi B** — pemilik proyek, 2026-10-10 (sesi tanya-jawab via efn-lead, butir 16: "WAJIB QR ponsel"; nama & jabatan penandatangan dilengkapi klien). Sebelumnya: Proposed dengan rekomendasi opsi A untuk pilot. E-27 **boleh dimulai** setelah fit-gap efn-odoo-functional (paket W-07 di `docs/10_RENCANA_GELOMBANG_18_PLUS.md`) dan wajib review security sebelum aktif. Lihat bagian "Keputusan pemilik proyek 10 Okt 2026" di bawah.
 - **Tanggal:** 2026-10-09
 - **Pemutus (klien):** PO + Ops F&B + Finance (bila bayar online) + IT/Security
 - **Referensi review:** R-S03 (skor 20), R-S01, R-B01 (skor 25), R-T03, R-L03, R-L01, R-S12; SEC-75, SEC-73, SEC-77 (`docs/reviews/SECURITY_REVIEW_2026-10-09-r8.md`); docs/01 §5.4 pertanyaan 23; `docs/08_ODOO_FIT_GAP.md` §7.1 F-49, §7.2 temuan 29–31, §7.4, §7.6 P-17
@@ -72,9 +72,23 @@ sequenceDiagram
 - **Event (asinkron, opsional, untuk notifikasi status ke ponsel):** queue `fnb.order.status_changed` (DLQ `fnb.order.status_changed.dlq`), payload `{"event_id":"uuid","order_ref":"uuid","table_session_id":"uuid","status":"in_kitchen|ready|served","occurred_at":"RFC3339"}`, idempotency key = `event_id`; tanpa PII. Pengiriman order ke Odoo tetap **sinkron** (pelanggan perlu konfirmasi); bila Odoo mati → 503, bukan antre diam-diam.
 - **PDP:** default **tamu tanpa login** (tidak ada HP/nama). Login Super-App hanya bila klien ingin poin dari QR order (Q-QR3) — jalur loyalty POS yang ada (ADR-020) dipakai, bukan jalur baru.
 
-## Keputusan (rekomendasi)
+## Keputusan (rekomendasi awal 9 Okt — untuk pilot digantikan keputusan pemilik proyek 10 Okt di bawah)
 
 **Opsi A untuk pilot Fase 2**: QR order dari ponsel **tidak** diaktifkan; self-order hanya mode `kiosk` di perangkat peer WireGuard, `self_ordering_mode` tetap terkunci (`efn_setup_pos` 19.0.1.5.0), sakelar `efn.pos.self_order_mobile_allowed` tetap `False`. **Bila Q-QR1 dijawab "wajib ponsel"**, jalurnya **opsi B (E-27)** dan sakelar tetap `False` (opsi B tidak memakai mode `mobile`). Opsi C dan D ditolak; C hanya dapat dibuka lewat ADR pengecualian terpisah yang disetujui klien dan direview security. Alasan utama: A memenuhi kebutuhan "pesan sendiri tanpa antre kasir" dengan biaya software Rp0 tanpa mengubah batas keamanan; B memenuhi kebutuhan ponsel tanpa membuka Odoo.
+
+## Keputusan pemilik proyek 10 Okt 2026 (mengikat; menggantikan rekomendasi opsi A untuk pilot)
+
+**Opsi B (E-27) dipilih dan wajib tersedia sebelum pilot F&B.** Kiosk (opsi A) tetap dipakai berdampingan. Opsi C dan D tetap ditolak; sakelar `efn.pos.self_order_mobile_allowed` tetap `False` (opsi B tidak memakai mode `mobile` Odoo).
+
+| ID | Jawaban | Dampak desain |
+|---|---|---|
+| Q-QR1 | **Wajib** pesan dari ponsel pelanggan | E-27 dibangun (±3–4 minggu-engineer, ±Rp15–36 jt indikatif) dan menjadi **prasyarat pilot F&B** |
+| Q-QR2 | **Keduanya**: bayar di kasir (tersedia sejak awal) **dan** bayar online di ponsel | Bayar online aktif **setelah vendor payment dipilih** (A-4, ADR-016/026) dan mengikuti agen penagih ADR-019 (+±1 minggu setelah vendor). Tahap 1 E-27 = bayar di kasir |
+| Q-QR3 | **Tamu**; login OTP **opsional** untuk mendapat poin | Default tanpa PII; bila login, jalur loyalty yang ada dipakai (ADR-020, redeem = alat bayar P-8) |
+| Q-QR4 | **QR dinamis per sesi meja** | Sesuai rancangan di atas (token opak 128-bit / HMAC, `exp` ≤ 4 jam, dicabut saat meja ditutup); printer slip meja = printer struk Epson ePOS (P-18) |
+| Q-QR5 | Kiosk **tetap dipakai**, jumlah per outlet **configurable (boleh > 1)** | Tiap kiosk = peer WireGuard sendiri + browser mode kiosk; rate limit Traefik `/pos-self*` (SEC-75 butir 5) tetap utang devsecops |
+
+Dampak lain: F&B online (Q-ON2) memakai **SO + jembatan KDS (E-29a)**, bukan E-29b, sehingga E-27 tidak menjadi jalur F&B online. Kontrak BFF `fnb` (`docs/04`) ditulis lead sebelum implementasi, memakai draf di atas sebagai dasar.
 
 ## Konsekuensi
 
@@ -100,6 +114,8 @@ sequenceDiagram
 | R-S12 (perangkat tak terkelola) | Kiosk wajib mode kiosk browser + peer WG sendiri |
 
 ## Pertanyaan terbuka untuk klien
+**Semua Q-QR1..Q-QR5 terjawab 10 Okt 2026** (lihat bagian keputusan di atas). Tabel asli dipertahankan sebagai jejak. Yang masih menunggu: jumlah & model kiosk per outlet pilot (data klien, P-11/P-18).
+
 | ID | Pertanyaan | Default bila tidak dijawab | Memblokir |
 |---|---|---|---|
 | **Q-QR1** (= Q-23/P-17) | Pilot F&B: kiosk cukup, atau **wajib** pesan dari ponsel pelanggan? | Kiosk saja (A) | Pengadaan kiosk; penjadwalan E-27 |

@@ -1,113 +1,83 @@
 # Status Proyek EFN Platform — Ringkasan Satu Halaman untuk Manajemen
 
-**Per 10 Oktober 2026 · Fase 1 (poin EFN di kasir retail), Fase 2 (restoran + layar dapur), Fase 3 (belanja online Super-App) · Disusun oleh tim arsitektur (Athera)**
+**Per 10 Oktober 2026 (sore) · Fase 1 (poin di kasir ritel), Fase 2 (restoran + layar dapur), Fase 3 (belanja online Super-App) · Disusun oleh tim arsitektur (Athera)**
 
 ## Ringkasan
-**Fase 3, belanja online, selesai dibangun dan lulus uji** di lingkungan pengembangan. Pelanggan memilih barang di Super-App, membayar sekali, lalu mengambil barang di toko dengan kode ambil. Reviewer keamanan menyatakan **aman untuk digabung ke kode utama**. Fitur ini **sengaja dimatikan di produksi** sampai 7 syarat aktivasi terpenuhi; yang terpenting adalah **pemilihan payment gateway** dan **server staging**. Fase 1 dan Fase 2 tidak berubah: siap pilot secara teknis dan menunggu staging serta keputusan klien.
+**Pemilik proyek sudah menjawab semua pertanyaan terbuka (60 butir) pada 10 Oktober 2026.** Delapan keputusan arsitektur kini **disetujui** (termasuk QR order dari ponsel). Sebagian besar jawaban sesuai dengan yang sudah dibangun, tetapi sekitar 25 jawaban **menambah atau mengubah pekerjaan**, sehingga tim menyusun **rencana 28 paket kerja** (`docs/10_RENCANA_GELOMBANG_18_PLUS.md`, ±52–79 minggu-engineer, sebagian paralel). Usulan urutan: **pilot ritel Grand Lucky lebih dulu**, lalu restoran (Paris Baguette, kafe Bacha), lalu pesan-antar dan portal vendor. Fase 1–3 tetap **siap secara teknis** di lingkungan pengembangan; penghambat utama tetap **server staging**, **pilihan payment gateway**, dan **opini konsultan pajak**.
 
-## 1. Fase 3 belanja online: apa yang sudah ada
-Semua bukti berasal dari lingkungan pengembangan karena staging belum ada.
-- **Alur lengkap berjalan:** katalog → keranjang → harga final → bayar (QRIS **simulasi**; gateway sungguhan belum dipilih) → pesanan disiapkan toko → pelanggan mengambil dengan kode ambil.
-- **Bila ada masalah:** pembayaran terlambat, stok habis setelah bayar, atau pesanan dibatalkan otomatis berujung **refund** ke pelanggan. Refund oleh CS **wajib disetujui orang kedua**.
-- **Harga dan pajak selalu dihitung Odoo**, tidak pernah dari aplikasi pelanggan. Odoo tetap **tidak terbuka ke internet**.
-- **Data pribadi minim:** Odoo tidak menerima nama/HP/alamat pembeli online. Kode ambil disimpan terenkripsi dan dihapus setelah pesanan selesai.
-- **Kasir (POS) dilindungi:** online hanya boleh memakai sebagian kecil kapasitas server Odoo, sehingga lonjakan pesanan online tidak memperlambat kasir.
-- **Hasil uji:** uji menyeluruh **267 skenario lulus, 0 gagal** (termasuk semua perbaikan keamanan).
-- **Review keamanan:** 3 putaran. Semua temuan tingkat sedang sudah ditutup. Sisa 3 temuan ringan: satu sudah diperbaiki, satu sedang dikerjakan, dan satu ditangani lewat aturan akses (lihat §3, syarat no. 5). Hasil akhir: **GO merge**, online tetap mati di produksi.
-- **Tombol darurat:** online bisa dimatikan seketika tanpa memengaruhi kasir.
-
-## 2. Keputusan yang sudah diambil (10 Oktober 2026, pemilik proyek)
-| Keputusan | Artinya | Biaya |
+## 1. Keputusan pemilik proyek 10 Oktober 2026 (sesi tanya-jawab)
+| Bidang | Keputusan | Akibatnya |
 |---|---|---|
-| **Kapasitas server pilot: opsi B** | Server Odoo tetap 6 "jalur kerja": 4 untuk kasir, 2 untuk online. Cukup untuk pilot bervolume rendah. Bila online ramai, pelanggan online bisa diminta mencoba lagi, tetapi kasir tetap lancar | Rp0 (tanpa tambah server) |
-| **Bahasa Indonesia di layar Odoo belum diaktifkan** | Layar staf Odoo tetap berbahasa Inggris. Label pajak untuk pelanggan tetap Bahasa Indonesia. Mengaktifkan bahasa sekarang akan merusak label pajak yang sudah dibuat | Rp0; bila nanti diminta ±1–2 hari kerja |
+| Persetujuan arsitektur | 7 keputusan dasar (satu database Odoo, versi Odoo 19, kitting dapur pusat, poin saat kasir offline, 4 server, jadwal ±12 bulan, lingkup kasir restoran) **disetujui** | Fase 1 tidak lagi menunggu tanda tangan |
+| Brand & perusahaan | Grand Lucky = PT Retail; Paris Baguette = PT F&B; **Bacha Coffee = dua PT** (butik di PT Retail, kafe di PT F&B, kasir terpisah). Dapur pusat bagian dari PT F&B | Katalog & harga online **per brand** |
+| Poin | Penukaran poin = **alat bayar** (seperti uang), di kasir **dan** online; poin juga **didapat** dari belanja online | **Perubahan desain** poin di kasir (±3–4 minggu) — harus selesai sebelum pilot ritel |
+| Pembulatan Rupiah | Semua nominal dibulatkan ke **Rp1** di seluruh sistem | Dikerjakan **sekarang**, sebelum ada data nyata (±1,5–2,5 minggu + uji ulang semua) |
+| Belanja online | Stok **dipesan 1 jam** saat checkout; promo online lengkap (kupon, beli X gratis Y); restoran online **bersamaan** dengan pilot ritel; **pesan-antar (3PL + kurir sendiri)**; faktur atas nama/NPWP pembeli **bila diminta** | Beberapa paket kerja baru (lihat rencana) |
+| Restoran | QR order **dari ponsel wajib** (tamu, login opsional untuk poin; bayar di kasir sekarang, online setelah gateway dipilih); layar dapur = monitor + mini PC; stasiun Roti/Pastry + Kopi; PB1 10 % + service charge 5 % untuk makan di tempat | QR ponsel ±3–4 minggu sebelum pilot restoran. **Pajak untuk bawa pulang perlu konsultan pajak** (lihat risiko) |
+| Keamanan | Pemegang kunci tetap **1 Superadmin** + salinan tersegel di **brankas Direksi**; disk server terenkripsi wajib; **data pribadi di Odoo dienkripsi**; kunci akses online diganti **otomatis tiap 30 hari** | Risiko "satu orang" **diterima** dan dicatat; enkripsi Odoo = pekerjaan baru (±3–5 minggu) |
+| Portal | Akan ada akses untuk **pelanggan** (faktur/riwayat), **vendor** (PO & tagihan), **franchisee** (laporan), **karyawan luar kantor** | Keputusan arsitektur baru **ADR-035** (menunggu tanda tangan): hanya portal vendor yang dibuka ke internet, dengan pengaman berlapis |
+| UU PDP | **Legal = DPO sementara**; semua masa simpan data **ditetapkan**; member tidak aktif 24 bulan dianonimkan; hapus akun boleh ditunda maks 14 hari; DPIA wajib sebelum go-live publik | Inventaris data pribadi **v7** |
 
-Keputusan arsitektur online (ADR-034) **tetap menunggu tanda tangan** IT + Security + PO.
+Keputusan sebelumnya hari ini (kapasitas server pilot opsi B; bahasa Indonesia di layar Odoo belum diaktifkan) tetap berlaku.
 
-## 3. Syarat sebelum belanja online dinyalakan di produksi
+## 2. Rencana kerja berikutnya (usulan, menunggu persetujuan lead/PO)
+| Gelombang | Isi | Membuka |
+|---|---|---|
+| **G18** (±3–4 minggu) | Pembulatan Rp1, poin sebagai alat bayar, masa simpan data baru, rotasi kunci otomatis, promo & refund kasir, migrasi member; analisis fungsional semua paket Odoo | Pilot ritel (poin di kasir) |
+| **G19** (±3–4 minggu) | Stok dipesan 1 jam, promo online, katalog per brand, enkripsi data pribadi di Odoo, pajak restoran | Pilot online ritel |
+| **G20** (±4–5 minggu) | QR ponsel restoran, restoran online, poin online, faktur atas nama pembeli | Pilot restoran + restoran online |
+| **G21+** | Pesan-antar (setelah 3PL dipilih), portal vendor, transaksi antar-PT + harga transfer, laporan keuangan per PT, anonimisasi member tidak aktif | Produksi penuh |
+
+Restoran online "bersamaan pilot ritel" hanya realistis bila konsultan pajak dan outlet restoran siap tepat waktu; bila tidak, menyusul paling lambat satu gelombang.
+
+## 3. Syarat sebelum belanja online dinyalakan di produksi (diperbarui)
 | # | Syarat | Pemilik | Status |
 |---|---|---|---|
-| 1 | Uji otomatis Odoo lengkap (termasuk modul kasir–penjualan) lulus | Tim teknis | Menunggu hasil CI |
-| 2 | Uji penerimaan: barang online tidak bisa keluar tanpa kode ambil; kasir tidak bisa menyelesaikan pesanan online | Tim teknis (QA) | Sebagian lulus; jalur kasir belum diuji |
-| 3 | Kapasitas server diputuskan, lalu uji beban di staging dengan kasir aktif | Pemilik proyek (**selesai**), tim teknis | Keputusan **selesai**; uji menunggu **staging** |
-| 4 | **Payment gateway sungguhan dipilih** dan dihubungkan (refund tidak boleh terkirim dua kali) | **Finance + Legal + IT klien** | **Belum dipilih** |
-| 5 | Pemisahan tugas: **orang yang boleh membatalkan pesanan di Odoo (Sales Manager) tidak boleh sama dengan orang yang menyetujui refund**; review akses tiap bulan | **Superadmin + Finance** (aturan & prosedur sudah ditulis) | Prosedur **siap**; daftar orang & review pertama **belum** |
-| 6 | Penguatan tambahan di gudang (perubahan tujuan barang ditolak) | Tim teknis | Sedang dikerjakan |
-| 7 | Keputusan bisnis minimum pilot + persetujuan DPO atas masa simpan data online | **PO, Ops, Finance, Tax, Legal/DPO** | **Belum** (sementara memakai usulan tim) |
+| 1 | Uji otomatis Odoo lengkap lulus | Tim teknis | Menunggu CI |
+| 2 | Uji penerimaan jalur kasir untuk pesanan online | Tim teknis (QA) | Sebagian |
+| 3 | Uji beban di staging dengan kasir aktif | Tim teknis | Menunggu **staging** |
+| 4 | **Payment gateway dipilih** (kini wajib: perjanjian data + pemrosesan di Indonesia) | **Finance + Legal + IT klien** | **Belum dipilih** |
+| 5 | Nama Sales Manager Odoo & penyetuju refund (orang berbeda) + review akses bulanan | **Superadmin + Finance** | Prosedur siap; **nama belum** |
+| 6 | Penguatan gudang | Tim teknis | Dikerjakan |
+| 7 | Keputusan bisnis minimum | Pemilik proyek | **Dijawab 10 Okt** — tetapi stok 1 jam & pembulatan Rp1 harus **dibangun dulu** (G18–G19), plus rotasi kunci 30 hari dan batas penundaan hapus akun 14 hari |
 
-## 4. Pertanyaan klien yang masih terbuka untuk belanja online (Q-ON1..Q-ON13)
-**Prioritas A (dibutuhkan sebelum pilot online):**
-- **Q-ON1:** PT/toko pilot, jam ambil, jumlah barang online. *(PO + Ops)*
-- **Q-ON4:** stok dipesan saat checkout atau cukup dicek; batas waktu bayar; bila stok habis setelah bayar → batal + refund penuh? *(PO + Ops + Finance)*
-- **Q-ON6:** aturan pembulatan Rupiah. *(Finance)*
-- **Q-ON8:** faktur dibuat saat bayar atau saat diambil. *(Finance + Tax)*
-- **Q-ON9:** dana titipan: siapa menanggung biaya gateway, bukti potong, jadwal setoran Holding → PT. *(Finance + Tax + Legal)*
-
-**Prioritas B:**
-- **Q-ON2:** restoran online. *(PO + Ops F&B + IT)*
-- **Q-ON3:** pesan-antar dan ongkir. *(PO + Ops + Finance)*
-- **Q-ON5:** harga tampil termasuk pajak. *(Finance + Tax)*
-- **Q-ON7:** faktur atas nama/NPWP pembeli. *(Finance + DPO)*
-- **Q-ON10:** kupon/promo. *(PO + Marketing)*
-- **Q-ON11:** aturan refund dan siapa yang menyetujui. *(Ops + Finance)*
-- **Q-ON12:** katalog per PT atau per brand. *(PO + Ops)*
-- **Q-ON13:** berapa lama pesanan yang tidak diambil ditahan. *(Ops + Finance)*
-
-Jawaban sementara (default) tim tercantum di `docs/decisions/README.md`, bagian Fase 3.
-
-**DPO / Legal:**
-- 5 pertanyaan baru, **Q-P17..Q-P21**: masa simpan riwayat pesanan, penundaan hapus akun selama pesanan belum selesai, catatan CS, perjanjian data dengan payment gateway, dan data pembeli di faktur.
-- Tidak ada kebocoran atau near-miss data pribadi dari Fase 3.
-
-## 5. Fase 1 dan 2 (tidak berubah sejak 9 Okt)
-- **Poin di kasir retail:** siap pilot. Menunggu staging, batas poin dari Finance (Q-13), daftar Superadmin, supervisor/petugas jaga, dan SOP retur.
-- **Layar dapur F&B:** siap pilot. Menunggu staging, outlet dan stasiun dapur, perangkat, pelatihan kasir (catatan dapur tanpa nama/HP), dan SOP tablet hilang.
-
-## 6. Risiko utama
+## 4. Risiko utama (diperbarui)
 | Risiko | Dampak bila terjadi | Penanganan |
 |---|---|---|
-| **Belum ada staging dan server produksi** | Ketiga pilot tidak bisa dimulai | Pengadaan server (ADR-004) |
-| **Payment gateway belum dipilih** | Belanja online tidak bisa dinyalakan | Pilih vendor (ADR-016/026); KYB tiap PT memakan waktu, jadi mulai sekarang |
-| **DPO belum ditunjuk**; masa simpan data belum ditetapkan | Kepatuhan UU PDP belum bisa dinyatakan | Keputusan Direksi |
-| Satu orang memegang peran pembatal dan penyetuju refund | Refund fiktif tanpa empat mata | Aturan + review akses bulanan (sudah ditulis); kontrol otomatis ±1–2 hari bila diinginkan |
-| Kunci akses online Odoo kedaluwarsa (90 hari) | Checkout online berhenti, kasir tidak terdampak | Alert sisa umur kunci + prosedur rotasi |
-| **Pemegang kunci (Superadmin) mungkin hanya satu orang** | Backup tidak bisa dipulihkan bila orang itu tidak ada | Tunjuk minimal 2 orang |
-| Online ramai melebihi kapasitas pilot (opsi B) | Pelanggan online menunggu atau diminta mencoba lagi | Pantau; naikkan ke opsi A (tambah jalur kerja, tanpa beli server) |
+| **Belum ada staging/produksi** | Ketiga pilot tidak bisa dimulai | Pengadaan server (disk terenkripsi wajib) |
+| **Payment gateway belum dipilih** | Online & bayar QR di meja tidak bisa dinyalakan | Pilih vendor (kriteria: perjanjian data, Indonesia) |
+| **Pajak restoran untuk bawa pulang** (baru) | Bila Perda tetap mengenakan PB1 untuk bawa pulang: kurang setor + denda | Konsultan pajak per kota **sebelum** go-live restoran; pengaturan bisa diubah tanpa program |
+| **Hanya 1 pemegang kunci** (diterima pemilik proyek) | Bila orang itu tidak ada saat darurat, pemulihan tertunda | Salinan tersegel di brankas Direksi, prosedur darurat, uji pemulihan 2×/tahun disaksikan |
+| **Data pembeli di Odoo** (baru) | Data pribadi lebih banyak tersimpan | Hanya bila pembeli meminta faktur; dienkripsi; ditinjau Legal |
+| **Pembulatan Rp1** (baru) | Selisih Rupiah di pajak/laporan bila tidak diuji menyeluruh | Dikerjakan sebelum ada data nyata + uji ulang semua |
+| **Portal vendor** (baru) | Pintu masuk baru dari internet | Gerbang khusus, verifikasi 2 langkah, firewall aplikasi, uji penetrasi sebelum dibuka; sementara vendor lewat email |
+| Jumlah pekerjaan bertambah | Jadwal mundur | Urutan bertahap per pilot; engineer Odoo kedua sangat disarankan |
 
-## 7. Yang dibutuhkan dari manajemen (urut prioritas)
-1. **Server staging** (ADR-004). Ini penghambat utama ketiga pilot; staging siap ±1–2 minggu setelah server ada.
-2. **Finance + Legal + IT:** pilih **payment gateway** (memblokir online).
-3. **Finance / Tax:** Q-ON6, Q-ON8, Q-ON9, nilai & batas poin (Q-13), dan tarif PB1 kota pilot.
-4. **PO + Ops:** Q-ON1 dan Q-ON4 (toko pilot online, aturan stok & bayar), outlet pilot retail dan F&B.
-5. **IT klien / Superadmin:**
-   - daftar Superadmin (minimal 2);
-   - tunjuk **Sales Manager Odoo** dan **penyetuju refund** (orang berbeda);
-   - jadwalkan review akses bulanan dengan saksi Finance;
-   - pemegang rotasi kunci akses online.
-6. **DPO / Legal:** tunjuk DPO; Q-P17..Q-P21 (online), Q-P13 (sebelum impor saldo), Q-P15 dan Q-P16.
-7. **Tanda tangan ADR-034** (arsitektur kanal online) dan keputusan Fase 0 yang masih terbuka.
+## 5. Yang masih dibutuhkan dari klien
+1. **Server staging** (penghambat utama).
+2. **Payment gateway** dan **vendor 3PL** (Finance + Legal + IT).
+3. **Konsultan pajak:** poin sebagai alat bayar, **PB1 untuk bawa pulang**, tarif PB1 kota outlet, harga transfer antar-PT, struktur dana titipan Holding.
+4. **Data outlet:** alamat, jam buka, kasir, jumlah barang untuk Grand Lucky, Paris Baguette, Bacha (butik & kafe).
+5. **Model perangkat:** PC kasir, mini PC dapur, printer, scanner, timbangan, router/4G, kiosk.
+6. **Daftar promo** (Marketing) dan **daftar modifier menu** (Ops F&B).
+7. **Nama:** Superadmin, Sales Manager Odoo, penyetuju refund, anggota auditor lintas PT (Legal + Internal Audit), auditor eksternal.
+8. **Finance:** nilai & batas poin final, markup harga transfer, aturan poin hangus saat akun dianonimkan.
+9. **Tanda tangan** ADR-035 (portal) dan ADR-034 (kanal online).
 
-## 8. Biaya & waktu indikatif (belum termasuk server)
+## 6. Biaya & waktu indikatif (belum termasuk server)
 | Pos | Perkiraan |
 |---|---|
 | Lisensi perangkat lunak | **Rp0** (semua open source) |
-| Belanja online (Fase 3) | Sudah dibangun; tanpa lisensi (toko online bawaan Odoo tidak dipakai) |
-| Integrasi payment gateway sungguhan | Belum diestimasi (bergantung vendor) |
-| Kontrol otomatis pemisahan peran refund (opsional) | ±1–2 hari |
-| Faktur atas nama pembeli online (hanya bila Q-ON7 = ya) | ±1–2 minggu (perkiraan kasar, belum dirinci) |
-| Modul Odoo buatan sendiri pengganti OCA | ±10–16 minggu-engineer (±Rp50–145 jt); tidak berubah |
-| QR order restoran dari ponsel (hanya bila diwajibkan) | ±3–4 minggu-engineer (±Rp15–36 jt) |
-| Konektivitas outlet (WireGuard) | Rp0 per outlet kecil; ±Rp0,4–0,9 jt per outlet besar |
+| 28 paket kerja baru dari keputusan 10 Okt | **±52–79 minggu-engineer** (±Rp0,26–0,71 M, tarif asumsi); ±7–10 minggu di antaranya sudah dianggarkan sebelumnya |
+| — terbesar: pesan-antar | ±6–10 minggu (bergantung vendor 3PL) |
+| — portal (empat kelompok) | ±5–6,5 minggu |
+| — restoran online / QR ponsel | ±4–5 / ±3–4 minggu |
+| — enkripsi data pribadi di Odoo | ±3–5 minggu |
+| Uji penetrasi portal vendor (pihak ketiga) | Belum diestimasi |
 
-## 9. Rekomendasi langkah berikutnya
-1. Gabungkan PR Gelombang 17 ke kode utama (online tetap mati di produksi).
-2. Paralel, karena prosesnya lama: **pilih payment gateway** dan mulai KYB tiap PT; tunjuk DPO.
-3. Setelah server staging ada: pasang dan uji ulang ketiga fase (±1–2 minggu), termasuk uji beban online bersama kasir.
-4. Nyalakan berurutan: **poin di 1 toko → layar dapur di 1 outlet F&B → belanja online di 1 toko**. Evaluasi 2 minggu di tiap langkah.
-
-Daftar lengkap: `docs/decisions/README.md`, bagian "Keputusan pemilik proyek 10 Okt 2026", "Syarat aktivasi produksi online", "Syarat GO pilot loyalty", "Syarat GO pilot KDS", dan "Keputusan klien yang masih terbuka".
+Rincian per paket, agent penanggung jawab, prasyarat, dan alasan urutan: `docs/10_RENCANA_GELOMBANG_18_PLUS.md`. Daftar keputusan lengkap: `docs/decisions/README.md`, bagian "Keputusan pemilik proyek 10 Okt 2026 (sesi tanya-jawab)".
 
 *Catatan jujur:*
-- Angka biaya adalah perkiraan arsitek dan perlu divalidasi.
-- Semua bukti "berjalan" berasal dari lingkungan pengembangan dengan pembayaran simulasi.
-- Perbaikan terakhir (settle refund manual hanya oleh penyetuju, dan penguatan gudang) dibuat setelah review akhir dan belum dibaca ulang reviewer keamanan.
+- Estimasi adalah perkiraan arsitek sebelum analisis fungsional rinci; akan divalidasi di G18.
+- Dua jawaban ditafsirkan tim dan perlu konfirmasi: masa simpan data analitik (10 tahun, identitas samaran dihapus setelah 5 tahun) dan "laporan keuangan resmi dari Odoo" (modul laporan baru ±4–6 minggu).
+- Semua bukti "berjalan" masih dari lingkungan pengembangan dengan pembayaran simulasi.

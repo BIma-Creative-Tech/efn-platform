@@ -1,6 +1,7 @@
 # ADR-005: Re-phasing Roadmap menjadi ~12 Bulan dengan Go-Live Bertahap
 
-- **Status:** Proposed
+- **Status:** **Accepted** — pemilik proyek, 2026-10-10 (sesi tanya-jawab via efn-lead, butir 5 "ADR Gelombang 1: Accepted semua"; nama & jabatan penandatangan dilengkapi klien di register keputusan). Sebelumnya: Proposed.
+  - **Catatan penerimaan 10 Okt 2026:** pemilik proyek menerima jadwal mundur **2–4 minggu** akibat ADR-031 (Q-V4). Pekerjaan baru dari sesi 10 Okt (presisi IDR global, reservasi stok, QR ponsel E-27, F&B online, delivery, portal vendor, enkripsi kolom PII Odoo, dll.) belum masuk baseline 12 bulan — urutan & estimasi di `docs/10_RENCANA_GELOMBANG_18_PLUS.md`; dampak ke tanggal go-live wajib ditinjau ulang lead + PO.
 - **Tanggal:** 2026-10-05
 - **Pemutus (klien):** PO + Direksi (sponsor), Finance (anggaran)
 - **Referensi review:** D-04, §7, R-B01, R-B08, R-B09

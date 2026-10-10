@@ -57,3 +57,16 @@ Opsi A dipecah menjadi dua cara pencatatan; keduanya mempertahankan *penjual = P
 | **C — bila gateway mendukung split** | Dana langsung ke sub-akun per PT; `journal_titipan_id` diganti jurnal bank PT; baris Holding hilang. | Menunggu ADR-016 (kriteria vendor) | konfigurasi + adapter gateway; kontrak sudah menyediakan `portions` per PT di payment intent (`docs/04 §10.7`) |
 
 Penegasan desain wajib (melengkapi bagian Keputusan): (5) payment intent online milik Holding (`company_code=EFN`) **membawa porsi per PT/SO**; Σ porsi = nominal intent; (6) refund parsial selalu menyebut bagian (`part_id`/SO) dan ≤ porsi bagian itu (R-O05); (7) jalur F&B online (SO + jembatan KDS vs `pos.order` lewat E-27) diputuskan bersama ADR-032 lewat **Q-ON2** — kontrak kanal tetap sama; (8) MDR, bukti potong, dan periode settlement = **Q-ON9** (+ Q-4) untuk konsultan pajak.
+
+## Catatan 2026-10-10 — keputusan pemilik proyek atas Q-ON9 (status tetap Proposed)
+Sumber: sesi tanya-jawab pemilik proyek 10 Okt 2026 (`docs/decisions/README.md` bagian "Keputusan pemilik proyek 10 Okt 2026 (sesi tanya-jawab)").
+
+| Hal | Keputusan | Dampak |
+|---|---|---|
+| MDR (biaya gateway) | **Ditanggung PT penjual**, proporsional terhadap porsi PT dalam satu pembayaran | Laporan settlement BFF wajib memuat MDR per porsi; jurnal di PT penjual = beban MDR. Rumus alokasi pembulatan (sisa Rupiah ke porsi terbesar) ditetapkan Finance — **belum** di kontrak §10.7 |
+| Periode settlement Holding → PT | **Harian** | Sesuai default A1 |
+| Pencatatan Holding | **A1 manual/impor CSV** (default pilot). **A2** (`account_payment_interco`) baru dipertimbangkan **setelah opini konsultan pajak** | Tidak ada perubahan kode; beban Finance ±15–30 menit/hari (asumsi) |
+| Faktur online (Q-ON8) | Dibuat **saat bayar** (sesuai yang dibangun) | Tidak ada perubahan |
+| Settlement poin lintas brand (Q-4) | **Bulanan** via jurnal inter-company (PT penerbit menanggung nilai redeem di PT lain; netting Finance pusat) | Masuk paket W-15 (`efn_intercompany` + laporan BFF) |
+
+**Status tetap Proposed:** opini konsultan pajak & legal atas struktur agen penagih (dan bukti potong) masih menjadi syarat Accepted. Redeem poin online sebagai **alat bayar** (P-8 / keputusan Finance 10 Okt) menambah satu "porsi" pembayaran non-tunai yang tidak melewati gateway — perlakuannya di laporan settlement ikut dikonfirmasi konsultan pajak.
