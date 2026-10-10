@@ -9,7 +9,7 @@ import { MockOdooOnline } from '../odoo-rpc/odoo-online.mock';
 import { OdooRpcError } from '../odoo-rpc/odoo-online.types';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
 import { parseCompensate, parseOrderPaid, parseRefundRequested, parseUnpaidClosed } from './online-consumers';
-import { OnlineAdminService } from './online-admin.service';
+import { OnlineAdminService, sameActor } from './online-admin.service';
 import { OnlineJobsService } from './online-jobs.service';
 import { OnlinePrivacyService } from './online-privacy.service';
 import { OnlineSagaService } from './online-saga.service';
@@ -526,6 +526,35 @@ describe('Event Odoo → BFF (§10.5)', () => {
     }
   });
 
+  it('SEC-95 empat mata: penyetuju = pemicu (login Odoo / pembuat CS) ditolak + teraudit; uid/NULL tidak memblokir', async () => {
+    const { ctx, part } = await confirmed();
+    const ev = ctx.event(part.id, 'cancelled', 10, {
+      refund: { refund_ref: 'RINV/0002', amount: 159_800, kind: 'full', initiator: 'odoo', initiator_uid: 7, initiator_login: 'Budi.Ops' },
+    });
+    await ctx.events.handle(ev);
+    const [rf] = [...ctx.repo.state.refunds.values()];
+    expect(rf.initiated_by).toBe('odoo-uid:7'); // uid diutamakan (bukan PII)
+    // login (bila uid tidak ada) disimpan huruf kecil; email diabaikan, tidak menolak event
+    expect(parseOdooEvent(Buffer.from(JSON.stringify({ ...okEvent(), refund: { refund_ref: 'R', amount: 1, kind: 'full', initiator: 'odoo', initiator_login: 'Budi.Ops' } }))).refund?.initiated_by).toBe('odoo-login:budi.ops');
+    expect(parseOdooEvent(Buffer.from(JSON.stringify({ ...okEvent(), refund: { refund_ref: 'R', amount: 1, kind: 'full', initiator: 'odoo', initiator_login: 'budi@efn.co.id' } }))).refund?.initiated_by).toBeNull();
+    // uid tidak bisa dipetakan ke user OS → tidak memblokir
+    expect(await ctx.admin.approveRefund(rf.id, 'budi.ops/h1', 'tiket ok')).toEqual({ status: 'odoo_done' });
+    // pemicu login sama dengan user OS penyetuju → ditolak, status tetap, audit tercatat
+    ctx.repo.state.refunds.get(rf.id)!.status = 'approval_required';
+    ctx.repo.state.refunds.get(rf.id)!.initiated_by = 'odoo-login:budi.ops';
+    await expect(ctx.admin.approveRefund(rf.id, 'Budi.Ops/efn-prod-01', 'coba setujui sendiri')).rejects.toThrow('empat mata');
+    expect(ctx.repo.state.refunds.get(rf.id)!.status).toBe('approval_required');
+    expect(ctx.repo.state.audits.at(-1)).toMatchObject({ action: 'refund_approve', actor: 'Budi.Ops/efn-prod-01', outcome: 'rejected_same_actor' });
+    // pembuat CS yang sama juga ditolak; data lama tanpa pembuat tidak pernah ditolak
+    ctx.repo.state.refunds.get(rf.id)!.initiated_by = 'cs_ani/host-a';
+    await expect(ctx.admin.approveRefund(rf.id, 'cs_ani/host-b', 'x y z')).rejects.toThrow('empat mata');
+    ctx.repo.state.refunds.get(rf.id)!.initiated_by = null;
+    expect(await ctx.admin.approveRefund(rf.id, 'cs_ani/host-b', 'data lama')).toEqual({ status: 'odoo_done' });
+    expect(sameActor(null, 'a/b')).toBe(false);
+    expect(sameActor('odoo-uid:7', 'odoo-uid:7')).toBe(false);
+    expect(sameActor('odoo-login:sari', 'SARI/h')).toBe(true);
+  });
+
   it('validasi skema: schema_version/seq/kunci/ukuran salah → 400', async () => {
     const ok = { schema_version: 1, idempotency_key: 'online:1:ready:2', seq: 2, platform_order_ref: MEMBER, checkout_ref: OTHER, channel_code: 'RTL', company_code: 'RTL', event: 'ready', state: 'ready', occurred_at: null, refund: null };
     expect(parseOdooEvent(Buffer.from(JSON.stringify(ok))).seq).toBe(2);
@@ -710,3 +739,7 @@ describe('Review r10 (L-16)', () => {
     expect(pickupCodeAad(part.id)).toBe(`efn:online_order_part.pickup_code_enc:v2:${part.id}`);
   });
 });
+
+function okEvent(): Record<string, unknown> {
+  return { schema_version: 1, idempotency_key: 'online:1:cancelled:2', seq: 2, platform_order_ref: MEMBER, checkout_ref: OTHER, channel_code: 'RTL', company_code: 'RTL', event: 'cancelled', state: 'cancelled', occurred_at: null };
+}

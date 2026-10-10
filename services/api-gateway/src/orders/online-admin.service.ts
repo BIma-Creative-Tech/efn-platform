@@ -26,6 +26,20 @@ export interface CsRefundInput {
   note: string;
 }
 
+/**
+ * SEC-95: apakah aktor penyetuju (`<user>/<host>`) = pembuat/pemicu refund. Dibandingkan bagian user (huruf kecil):
+ * aktor CS `<user>/<host>` dan `odoo-login:<login>`. `odoo-uid:<n>` tidak bisa dipetakan ke user OS → tidak cocok.
+ * Pembuat NULL (sistem/data lama) → false (tidak pernah menolak karena data lama).
+ */
+export function sameActor(initiatedBy: string | null, approver: string): boolean {
+  if (!initiatedBy) return false;
+  const user = (v: string): string => v.split('/')[0].toLowerCase();
+  const approverUser = user(approver);
+  if (initiatedBy.startsWith('odoo-login:')) return initiatedBy.slice('odoo-login:'.length).toLowerCase() === approverUser;
+  if (initiatedBy.startsWith('odoo-uid:')) return false;
+  return user(initiatedBy) === approverUser;
+}
+
 /** Refund yang belum gagal mengikat porsi (pre-check sebelum nota kredit Odoo, SEC-98). */
 function committedOf(refunds: readonly RefundRow[], exceptId?: string): number {
   return refunds.filter((x) => x.id !== exceptId && x.status !== 'failed').reduce((s, x) => s + (x.amount ?? 0), 0);
@@ -110,6 +124,7 @@ export class OnlineAdminService {
         odoo_refund_ref: res.refund_ref,
         status: over ? 'failed' : 'odoo_done',
         requested_by: 'cs',
+        initiated_by: input.actor,
       });
       if (over) {
         await r.updateRefund(rf.id, { failure_reason: 'refund_exceeds_portion' });
@@ -144,6 +159,11 @@ export class OnlineAdminService {
       if (rf.status !== 'approval_required') throw new AdminError(`status refund ${rf.status} tidak menunggu persetujuan`);
       const p = await r.getPart(rf.part_id, true);
       if (!p) throw new AdminError('bagian hilang');
+      // SEC-95: empat mata — penyetuju ≠ pembuat/pemicu (pembuat tidak diketahui → tidak ditolak)
+      if (sameActor(rf.initiated_by, actor)) {
+        await r.audit({ action: 'refund_approve', actor, reason: note, order_id: p.order_id, part_id: p.id, refund_id: rf.id, amount: rf.amount, outcome: 'rejected_same_actor' });
+        return 'rejected_same_actor';
+      }
       const committed = committedOf((await r.refundsOfPart(p.id)).filter((x) => x.status !== 'approval_required'), rf.id);
       if ((rf.amount ?? 0) <= 0 || committed + (rf.amount ?? 0) > p.amount_payable) {
         await r.updateRefund(rf.id, { status: 'failed', failure_reason: 'refund_exceeds_portion' });
@@ -156,8 +176,9 @@ export class OnlineAdminService {
       await r.audit({ action: 'refund_approve', actor, reason: note, order_id: p.order_id, part_id: p.id, refund_id: rf.id, amount: rf.amount, outcome: 'odoo_done' });
       return 'odoo_done';
     });
-    this.metrics.refund(out);
     this.logAudit({ action: 'refund_approve', actor, refund_id: refundId, outcome: out });
+    if (out === 'rejected_same_actor') throw new AdminError('penyetuju tidak boleh sama dengan pembuat/pemicu refund (empat mata)');
+    this.metrics.refund(out);
     return { status: out };
   }
 

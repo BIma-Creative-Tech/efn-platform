@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS platform.online_refund (
   status               text NOT NULL CHECK (status IN ('requested', 'odoo_done', 'approval_required', 'gateway_in_flight',
                                                         'gateway_pending', 'gateway_done', 'settled', 'manual_required', 'failed')),
   failure_reason       text NULL CHECK (failure_reason IS NULL OR failure_reason ~ '^[a-z_]{1,40}$'),
+  initiated_by         text NULL CHECK (initiated_by IS NULL OR initiated_by ~ '^[A-Za-z0-9._:/-]{1,140}$'),
   requested_by         text NOT NULL CHECK (requested_by IN ('system', 'cs')),
   created_at           timestamptz NOT NULL DEFAULT now(),
   updated_at           timestamptz NOT NULL DEFAULT now(),
@@ -224,6 +225,9 @@ CREATE INDEX IF NOT EXISTS ix_online_admin_audit_part ON platform.online_admin_a
 -- eksklusif sebelum memanggil gateway); SEC-98: `failure_reason` (tolak settle manual untuk refund melebihi porsi),
 -- aksi `refund_approve`, aktor `<user OS>/<host>` tanpa email. Nama constraint = nama otomatis CHECK inline.
 ALTER TABLE platform.online_refund ADD COLUMN IF NOT EXISTS failure_reason text NULL;
+-- SEC-95 (lanjutan L-16): pembuat/pemicu refund (aktor CS `<user>/<host>` atau `odoo-uid:<n>` / `odoo-login:<login>`),
+-- untuk menolak persetujuan oleh aktor yang sama. NULL = data lama/sistem (tidak pernah jadi alasan menolak).
+ALTER TABLE platform.online_refund ADD COLUMN IF NOT EXISTS initiated_by text NULL;
 DO $$
 BEGIN
   ALTER TABLE platform.online_refund DROP CONSTRAINT IF EXISTS online_refund_status_check;
@@ -232,6 +236,8 @@ BEGIN
   ALTER TABLE platform.online_refund DROP CONSTRAINT IF EXISTS online_refund_failure_reason_check;
   ALTER TABLE platform.online_refund ADD CONSTRAINT online_refund_failure_reason_check
     CHECK (failure_reason IS NULL OR failure_reason ~ '^[a-z_]{1,40}$');
+  ALTER TABLE platform.online_refund DROP CONSTRAINT IF EXISTS online_refund_initiated_by_check;
+  ALTER TABLE platform.online_refund ADD CONSTRAINT online_refund_initiated_by_check CHECK (initiated_by IS NULL OR initiated_by ~ '^[A-Za-z0-9._:/-]{1,140}$');
   ALTER TABLE platform.online_admin_audit DROP CONSTRAINT IF EXISTS online_admin_audit_action_check;
   ALTER TABLE platform.online_admin_audit ADD CONSTRAINT online_admin_audit_action_check
     CHECK (action IN ('refund', 'refund_settle', 'refund_approve', 'resolve_cancel', 'resolve_sync'));

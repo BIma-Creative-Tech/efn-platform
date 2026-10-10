@@ -161,7 +161,7 @@ export class MemoryOnlineRepo implements OnlineRepo {
         (r.odoo_refund_ref === null && r.requested_by === 'system' && x.requested_by === 'system' && x.odoo_refund_ref === null && x.part_id === r.part_id && x.reason === r.reason),
     );
     if (existing) return clone(existing);
-    const row: RefundRow = { ...r, provider_refund_ref: null, failure_reason: null, created_at: this.d(), updated_at: this.d(), settled_at: null };
+    const row: RefundRow = { ...r, initiated_by: r.initiated_by ?? null, provider_refund_ref: null, failure_reason: null, created_at: this.d(), updated_at: this.d(), settled_at: null };
     this.state.refunds.set(r.id, row);
     return clone(row);
   }

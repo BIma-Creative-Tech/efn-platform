@@ -21,7 +21,7 @@ export interface OdooOrderEvent {
   event: string;
   state: string;
   occurred_at: Date | null;
-  refund: { refund_ref: string; amount: number; kind: 'full' | 'lines'; initiator: 'bff' | 'odoo' } | null;
+  refund: { refund_ref: string; amount: number; kind: 'full' | 'lines'; initiator: 'bff' | 'odoo'; initiated_by: string | null } | null;
 }
 
 export type EventOutcome = 'applied' | 'duplicate' | 'ignored_stale' | 'ignored_unknown_event';
@@ -61,7 +61,11 @@ export function parseOdooEvent(raw: Buffer | undefined): OdooOrderEvent {
     if (typeof rf.amount !== 'number' || !Number.isSafeInteger(rf.amount) || rf.amount < 0) throw Errors.invalidRequest();
     if (rf.kind !== 'full' && rf.kind !== 'lines') throw Errors.invalidRequest();
     if (rf.initiator !== 'bff' && rf.initiator !== 'odoo') throw Errors.invalidRequest();
-    refund = { refund_ref: rf.refund_ref, amount: rf.amount, kind: rf.kind, initiator: rf.initiator };
+    // SEC-95: identitas user Odoo pemicu (uid / login non-email) — opsional; bentuk lain diabaikan (tidak ditolak)
+    let by: string | null = null;
+    if (typeof rf.initiator_uid === 'number' && Number.isSafeInteger(rf.initiator_uid) && rf.initiator_uid > 0) by = `odoo-uid:${rf.initiator_uid}`;
+    else if (typeof rf.initiator_login === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(rf.initiator_login)) by = `odoo-login:${rf.initiator_login.toLowerCase()}`;
+    refund = { refund_ref: rf.refund_ref, amount: rf.amount, kind: rf.kind, initiator: rf.initiator, initiated_by: by };
   }
   return {
     idempotency_key: key,
@@ -147,6 +151,7 @@ export class OrderEventsService {
               // SEC-95 / L-16: TIDAK otomatis — pemisahan tugas; CS menyetujui lewat CLI online-refund-approve
               status: 'approval_required',
               requested_by: 'system',
+              initiated_by: ev.refund.initiated_by,
             });
             if (rf.status === 'approval_required') {
               this.metrics.refund('approval_required');

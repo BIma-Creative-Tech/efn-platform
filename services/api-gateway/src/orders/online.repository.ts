@@ -31,7 +31,9 @@ export type NewPart = Omit<
   | 'cancelled_at'
   | 'cancel_reason'
 >;
-export type NewRefund = Omit<RefundRow, 'created_at' | 'updated_at' | 'settled_at' | 'provider_refund_ref' | 'failure_reason'>;
+export type NewRefund = Omit<RefundRow, 'created_at' | 'updated_at' | 'settled_at' | 'provider_refund_ref' | 'failure_reason' | 'initiated_by'> & {
+  initiated_by?: string | null;
+};
 
 export interface OnlineEventRecord {
   part_id: string;
@@ -145,7 +147,7 @@ const PART_COLS = `id::text AS id, order_id::text AS order_id, channel_code, com
   amount_total, amount_payable, quote_hash, sale_order_name, odoo_state, last_seq, pickup_code_enc, refunded_amount, confirmed_at, ready_at,
   handed_over_at, cancelled_at, cancel_reason, created_at, updated_at`;
 const REFUND_COLS = `id::text AS id, part_id::text AS part_id, payment_intent_id::text AS payment_intent_id, kind, reason, lines, amount,
-  odoo_refund_ref, provider_refund_ref, status, failure_reason, requested_by, created_at, updated_at, settled_at`;
+  odoo_refund_ref, provider_refund_ref, status, failure_reason, initiated_by, requested_by, created_at, updated_at, settled_at`;
 
 type Raw = Record<string, unknown>;
 const d = (v: unknown): Date | null => (v === null || v === undefined ? null : v instanceof Date ? v : new Date(String(v)));
@@ -213,6 +215,7 @@ function toRefund(r: Raw): RefundRow {
     provider_refund_ref: (r.provider_refund_ref ?? null) as string | null,
     status: r.status as RefundStatus,
     failure_reason: (r.failure_reason ?? null) as string | null,
+    initiated_by: (r.initiated_by ?? null) as string | null,
     requested_by: r.requested_by as RefundRow['requested_by'],
     created_at: d(r.created_at) as Date,
     updated_at: d(r.updated_at) as Date,
@@ -390,11 +393,11 @@ export class PgOnlineRepo implements OnlineRepo {
   async insertRefund(r: NewRefund): Promise<RefundRow> {
     const ins = await this.q.query<Raw>(
       `INSERT INTO platform.online_refund
-         (id, part_id, payment_intent_id, kind, reason, lines, amount, odoo_refund_ref, status, requested_by)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)
+         (id, part_id, payment_intent_id, kind, reason, lines, amount, odoo_refund_ref, status, requested_by, initiated_by)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11)
        ON CONFLICT DO NOTHING
        RETURNING ${REFUND_COLS}`,
-      [r.id, r.part_id, r.payment_intent_id, r.kind, r.reason, r.lines === null ? null : JSON.stringify(r.lines), r.amount, r.odoo_refund_ref, r.status, r.requested_by],
+      [r.id, r.part_id, r.payment_intent_id, r.kind, r.reason, r.lines === null ? null : JSON.stringify(r.lines), r.amount, r.odoo_refund_ref, r.status, r.requested_by, r.initiated_by ?? null],
     );
     if (ins.rows[0]) return toRefund(ins.rows[0]);
     const existing =

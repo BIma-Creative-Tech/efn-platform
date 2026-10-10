@@ -61,8 +61,9 @@ bila berubah). Penyebab umum: circuit terbuka, key kedaluwarsa, bucket `catalog`
 
 ### EfnOnlineRefundPending (warning) {#efnonlinerefundpending}
 Refund `manual_required|failed`. Pilot (provider `mock`, ADR-016/026): refund diselesaikan manual oleh Finance di luar
-sistem lalu dicatat dengan CLI BFF `online-refund-settle` (aktor, alasan, order, porsi teraudit — L-3). Refund parsial
-CS: CLI `online-refund` (nominal ≤ porsi bagian; BFF menolak di atas porsi).
+sistem lalu dicatat dengan `sudo efn-online-cs online-refund-settle` (aktor dari sudo, alasan, order, porsi teraudit —
+L-3/SEC-98, [§CLI CS](#cli-cs)). Refund parsial CS: `sudo efn-online-cs online-refund` (nominal ≤ porsi bagian; BFF
+menolak di atas porsi).
 
 ### EfnOnlineReconDeadman (warning, Loki) {#efnonlinerecondeadman}
 Tidak ada `EFN_ONLINE_RECON {"status":"ok"}` 20 menit (hanya bila heartbeat pernah ada dalam 24 jam). Penyebab: BFF
@@ -125,7 +126,48 @@ SEC-96 / L-16b (docs/04 §10.17): online tidak boleh menghabiskan worker HTTP Od
   Penolakan `why=busy` tidak memicu `EfnOdooRpcGatewayDenied` (kapasitas, bukan pelanggaran filter); pantau lewat
   `EfnOnlineCircuitOpen` dan latensi `efn_online_odoo_request_seconds`.
 
+## CLI CS lewat wrapper host `efn-online-cs` {#cli-cs}
+
+L-3 + SEC-98 (L-16d): refund/resolve CS dijalankan **hanya** lewat wrapper root `/usr/local/sbin/efn-online-cs`
+(sumber `scripts/host/efn-online-cs`). Wrapper mengambil identitas operator dari sudo (`SUDO_USER`) dan hostname —
+tidak ada argumen `--actor`, dan env pemanggil (`EFN_CS_OPERATOR`/`EFN_CS_HOST`) selalu ditimpa — lalu meneruskan
+argumen tervalidasi ke `docker exec <api-gateway> node dist/cli/<subcommand>.js`. BFF menyimpan aktor `<user>/<host>`
+di `platform.online_admin_audit`.
+
+**Pasang (Superadmin, sekali per host; ulangi `install` + cek sha256 setiap wrapper berubah):**
+```bash
+install -o root -g root -m 0755 scripts/host/efn-online-cs /usr/local/sbin/efn-online-cs
+sha256sum /usr/local/sbin/efn-online-cs          # cocokkan dengan sha256 di PR yang di-review
+groupadd --system efn-cs                         # sekali
+usermod -aG efn-cs <akun-pribadi-cs>             # akun per orang (bukan akun bersama), BUKAN anggota grup docker
+cat > /etc/sudoers.d/efn-online-cs <<'EOF'
+%efn-cs ALL=(root) NOPASSWD: /usr/local/sbin/efn-online-cs
+Defaults!/usr/local/sbin/efn-online-cs env_reset, !setenv, log_output
+EOF
+chmod 0440 /etc/sudoers.d/efn-online-cs && visudo -cf /etc/sudoers.d/efn-online-cs
+```
+Cabut akses: `gpasswd -d <akun> efn-cs`. Pemisahan tugas (SEC-95): persetujuan refund (`online-refund-approve`)
+dilakukan supervisor CS, bukan operator yang menangani kasus — saat ini **prosedural** (BFF mencatat aktor tetapi belum
+menolak aktor yang sama; diusulkan ke BFF).
+
+**Pakai (operator CS, lewat SSH akun pribadi ke host):**
+```bash
+sudo efn-online-cs online-refund         --part=<part_id> --full --reason="pelanggan batal, tiket CS-123" [--restock]
+sudo efn-online-cs online-refund         --part=<part_id> --lines=<product_id>:<qty>,... --reason="..." [--kind=customer_cs|ops_cancelled]
+sudo efn-online-cs online-refund-approve --refund=<refund_id> --reason="disetujui supervisor, tiket CS-123"
+sudo efn-online-cs online-refund-settle  --refund=<refund_id> --provider-ref=<ref transfer> --reason="transfer manual Finance"
+sudo efn-online-cs online-resolve        --part=<part_id> --action=sync|cancel --reason="..."
+```
+- Hanya 4 subcommand dan flag di atas; UUID/enum/pola divalidasi, karakter kontrol & flag ganda ditolak (exit 2).
+  `--refund-id=<uuid>` pada `online-refund` = mengulang refund yang sama (idempoten).
+- Output = JSON id/status/nominal dari CLI BFF; exit code CLI diteruskan.
+- **Jejak:** journald tag `efn-online-cs` (`journalctl -t efn-online-cs`; juga ke Loki lewat promtail-journal):
+  `MULAI/SELESAI aktor=<user> host=<host> cmd=<subcommand> part=<id>|refund=<id> … rc=<n>` dan `DITOLAK: …`.
+  **Tanpa** isi `--reason` (teks bebas, bisa memuat PII — tulis nomor tiket, bukan nama/HP pelanggan) dan tanpa
+  `--provider-ref`. sudo `log_output` mencatat sesi di `/var/log/sudo-io` (retensi ikut kebijakan log host).
+- Uji regresi: `scripts/host/test-efn-online-cs.sh` (CI job infra, 35 kasus, docker/logger palsu).
+
 ## Belum / batas
-- CLI `online-refund`, `online-refund-settle`, `online-resolve` = paket BFF G17; nama perintah final lihat README BFF.
+- Wrapper belum diuji dengan sudo + docker asli di host staging (uji CI memakai SUDO_USER tersimulasi + docker palsu).
 - Gauge refund terbuka per status belum ada (alert refund memakai counter transisi 1 jam, `metric_status: proposed`).
 - Dashboard Grafana online belum dibuat.

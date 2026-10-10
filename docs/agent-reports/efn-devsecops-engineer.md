@@ -1502,6 +1502,20 @@ Belum / perlu tindakan:
   Container `api-gateway` dev BELUM di-recreate: perlu key RTL nyata di `secrets/odoo_api_key_online_rtl.txt` (runbook
   odoo-online-api-key §1, setelah E-28 + user teknis `efn_online_rtl` ada) dan migrasi 07 di volume dev lama.
 
+## G17.8 SEC-98 (L-16d): wrapper host `efn-online-cs`
+- `scripts/host/efn-online-cs` (root, dipasang manual Superadmin seperti efn-deploy): wajib root lewat sudo,
+  `SUDO_USER` valid (bukan root, konsisten dengan `SUDO_UID`), anggota grup `efn-cs`; `EFN_CS_OPERATOR`=SUDO_USER dan
+  `EFN_CS_HOST`=hostname SELALU ditimpa; hanya `online-refund|online-refund-approve|online-refund-settle|online-resolve`
+  + flag allowlist per subcommand, UUID/enum/pola/panjang divalidasi, tanpa karakter kontrol/flag ganda/argumen posisi;
+  argv ke `docker exec <api-gateway project efn> node dist/cli/<cmd>.js` (tanpa shell); journald `efn-online-cs`
+  MULAI/SELESAI/DITOLAK dengan aktor, host, cmd, id, rc — tanpa `--reason` dan `--provider-ref`; rc CLI diteruskan.
+- `scripts/host/test-efn-online-cs.sh`: 35 kasus (docker/logger palsu, container sekali pakai) **PASS=35 FAIL=0**;
+  CI job infra: langkah baru + shellcheck `scripts/host/efn-online-cs`. shellcheck OK.
+- Runbook `online-orders.md#cli-cs`: pasang (install + sha256, grup `efn-cs`, sudoers `NOPASSWD` + `env_reset,
+  !setenv, log_output`, `visudo -c`), pemakaian 4 subcommand, jejak journald, cabut akses.
+- Catatan untuk BFF: pemisahan tugas approve ≠ pembuat refund belum ditegakkan kode (hanya tercatat) — kini prosedural.
+- Belum: uji dengan sudo + docker asli di host staging.
+
 ## G17.7 Review r10 SEC-96 (L-16b): batas koneksi gateway → Odoo
 - `haproxy.cfg`: `maxconn "${ODOO_RPC_MAXCONN}"` (dari 32 → default **4**; env tak diset = HAProxy gagal parse =
   fail-closed), `timeout queue 2s`, antrean frontend dibatasi 16 (`queue(odoo) ge 16` → `503` seketika, `why=busy`),

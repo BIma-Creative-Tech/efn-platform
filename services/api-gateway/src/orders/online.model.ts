@@ -173,6 +173,11 @@ export interface RefundRow {
   status: RefundStatus;
   /** SEC-98: alasan kegagalan (mis. `refund_exceeds_portion`) — settle manual ditolak untuk alasan ini. */
   failure_reason: string | null;
+  /**
+   * SEC-95: pembuat/pemicu refund — aktor CS `<user>/<host>`, `odoo-uid:<n>`, atau `odoo-login:<login>`. `null` = sistem
+   * atau data lama (tidak pernah menjadi alasan menolak persetujuan).
+   */
+  initiated_by: string | null;
   requested_by: 'system' | 'cs';
   created_at: Date;
   updated_at: Date;
