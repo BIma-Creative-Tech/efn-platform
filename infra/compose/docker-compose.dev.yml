@@ -96,6 +96,12 @@ services:
       APP_ENV: dev
       # `nest start --watch` (tsc) butuh heap > default ~250 MB -> OOM pada limit 512M base (gelombang 7)
       NODE_OPTIONS: --max-old-space-size=1024
+      # G17-QA-05: Docker Desktop (Windows) tidak meneruskan event inotify dari bind mount ./src -> `nest start --watch`
+      # (TypeScript watch API) tidak pernah melihat perubahan; setelah satu kompilasi gagal (mis. 14:20 9 Okt: 4 error
+      # TS saat file BFF setengah diedit) app tidak pernah start ulang -> container `unhealthy` sampai di-recreate.
+      # Watcher TypeScript dipaksa polling (env resmi ts.sys, hanya dev; produksi tidak memakai watch).
+      TSC_WATCHFILE: DynamicPriorityPolling
+      TSC_WATCHDIRECTORY: RecursiveDirectoryUsingDynamicPriorityPolling
       WHATSAPP_ENABLED: "false"
       PAYMENT_PROVIDER: mock
       # G17: penjualan online AKTIF di dev terhadap E-28 nyata lewat odoo-rpc-gateway (ODOO_ONLINE_MOCK sengaja tidak

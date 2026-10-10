@@ -1501,3 +1501,17 @@ Belum / perlu tindakan:
   absen di dev dan prod). Validasi: compose config dev/prod OK, check-encryption OK, shellcheck OK, efn-deploy 101/101.
   Container `api-gateway` dev BELUM di-recreate: perlu key RTL nyata di `secrets/odoo_api_key_online_rtl.txt` (runbook
   odoo-online-api-key §1, setelah E-28 + user teknis `efn_online_rtl` ada) dan migrasi 07 di volume dev lama.
+
+## G17.6 Temuan QA G17-QA-05 (watch BFF dev di Windows)
+- **Penyebab `unhealthy` sebelum integrasi (dari log Loki):** setelah recreate 14:20 (9 Okt) `nest start --watch`
+  mengompilasi `src/` saat paket BFF setengah diedit → `Found 4 errors` (MockGateway belum punya `refund`, TS2420/2741/
+  2322) → app tidak start (tidak ada listener :3000) → healthcheck gagal. Perbaikan file di host tidak terdeteksi karena
+  Docker Desktop (Windows) tidak meneruskan event inotify dari bind mount, jadi container tetap unhealthy sampai
+  di-recreate 15:38.
+- **Perbaikan (hanya `docker-compose.dev.yml`):** env resmi TypeScript `TSC_WATCHFILE=DynamicPriorityPolling` +
+  `TSC_WATCHDIRECTORY=RecursiveDirectoryUsingDynamicPriorityPolling` di api-gateway dev (watcher `nest --watch` = API
+  watch TypeScript → polling). Superapp-web dev belum punya pola polling (tidak ada yang bisa ditiru). Compose prod tidak
+  diubah.
+- **Verifikasi nyata:** recreate api-gateway → healthy ±55 s; tambah satu baris komentar di `src/main.ts` → `File change
+  detected` ±1 s, app start ulang (`successfully started`, ±4 s); file dikembalikan persis (`git diff` bersih) → reload
+  lagi; status akhir healthy. compose config dev OK, check-encryption OK.
