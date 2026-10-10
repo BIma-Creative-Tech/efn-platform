@@ -234,8 +234,10 @@ export class OnlineJobsService implements OnModuleInit, OnModuleDestroy {
         pickupCodeMaxDays: this.config.onlinePickupCodeMaxDays,
         memberLinkDays: this.config.onlineOrderMemberLinkDays,
         eventRetentionDays: this.config.onlineEventRetentionDays,
+        adminAuditRetentionDays: this.config.onlineAdminAuditRetentionDays,
       });
-      const total = res.pickupNulled + res.qrNulled + res.unlinked + res.eventsPurged;
+      this.metrics.retention(res);
+      const total = res.pickupNulled + res.qrNulled + res.unlinked + res.eventsPurged + res.adminAuditPurged;
       if (total > 0) this.logger.log(`Retensi online: ${JSON.stringify(res)}`);
       return res;
     });

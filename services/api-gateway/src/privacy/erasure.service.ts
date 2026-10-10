@@ -1,4 +1,6 @@
-import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
+import { KV_STORE, KvStore } from '../common/redis/kv-store';
+import { purgeMemberOnlineRedis } from '../cart/quote.service';
 import { randomUUID } from 'node:crypto';
 import { AppConfig } from '../config/app-config';
 import { DB, Db, Queryable } from '../common/db/db';
@@ -72,6 +74,8 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
     private readonly config: AppConfig,
     @Inject(DB) private readonly db: Db,
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
+    /** §10.8.3: cart/quote online di Redis milik subjek dihapus setelah commit (best effort; TTL sebagai cadangan). */
+    @Optional() @Inject(KV_STORE) private readonly kv: KvStore | null = null,
   ) {}
 
   onModuleInit(): void {
@@ -166,10 +170,11 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
       );
       await this.erasePlatform(q, requestId, r.member_id, r.member_hash);
       await this.completeStore('platform', requestId, q);
-      return objects.rows.map((o) => o.image_object);
+      return { photos: objects.rows.map((o) => o.image_object), memberId: r.member_id };
     });
     if (result === null) return false;
-    await this.removePhotos(result);
+    await this.removePhotos(result.photos);
+    await this.purgeOnlineRedis(result.memberId);
     return true;
   }
 
@@ -289,6 +294,16 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
       if ((res.rowCount ?? 0) > 0) this.logger.log(`Daftar tolak erasure: ${res.rowCount} tag kedaluwarsa dihapus`);
     } catch (err) {
       this.logger.warn(`Retensi daftar tolak erasure gagal: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private async purgeOnlineRedis(memberId: string): Promise<void> {
+    if (!this.kv) return;
+    try {
+      const n = await purgeMemberOnlineRedis(this.kv, this.config.redisKeyPepper, memberId);
+      if (n > 0) this.logger.log(`Erasure: ${n} key Redis online (cart/quote) dihapus`);
+    } catch (err) {
+      this.logger.warn(`Erasure: hapus cart/quote Redis gagal (TTL membersihkan): ${err instanceof Error ? err.message : 'redis'}`);
     }
   }
 

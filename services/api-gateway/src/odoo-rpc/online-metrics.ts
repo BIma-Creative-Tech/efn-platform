@@ -36,6 +36,7 @@ export class OnlineMetrics {
   readonly catalogSyncAge: Gauge<'channel'>;
   readonly backwardTransitions: Counter<'source'>;
   readonly refundsOpen: Gauge<'status'>;
+  readonly retentionRows: Counter<'kind'>;
 
   constructor(metrics: MetricsService) {
     const registers = [metrics.registry];
@@ -74,6 +75,12 @@ export class OnlineMetrics {
       name: 'efn_online_catalog_sync_age_seconds',
       help: 'Umur sinkron katalog sukses terakhir per kanal',
       labelNames: ['channel'],
+      registers,
+    });
+    this.retentionRows = new Counter({
+      name: 'efn_online_retention_rows_total',
+      help: 'Baris yang dibersihkan job retensi online per jenis (tanpa PII)',
+      labelNames: ['kind'],
       registers,
     });
     this.refundsOpen = new Gauge({
@@ -117,6 +124,17 @@ export class OnlineMetrics {
   }
   backward(source: 'odoo' | 'bff'): void {
     this.backwardTransitions.inc({ source });
+  }
+  /** Hitungan job retensi (§10.8.3): jenis tetap, tanpa id/aktor. */
+  retention(res: { pickupNulled: number; qrNulled: number; unlinked: number; eventsPurged: number; adminAuditPurged: number }): void {
+    const kinds: [string, number][] = [
+      ['pickup_code_nulled', res.pickupNulled],
+      ['qr_nulled', res.qrNulled],
+      ['member_unlinked', res.unlinked],
+      ['event_deleted', res.eventsPurged],
+      ['admin_audit_deleted', res.adminAuditPurged],
+    ];
+    for (const [kind, n] of kinds) if (n > 0) this.retentionRows.inc({ kind }, n);
   }
   setRefundsOpen(counts: Record<string, number>): void {
     for (const s of ['requested', 'odoo_done', 'approval_required', 'gateway_in_flight', 'gateway_pending', 'gateway_done', 'manual_required', 'failed']) {

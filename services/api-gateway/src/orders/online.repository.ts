@@ -63,12 +63,15 @@ export interface RetentionConfig {
   pickupCodeMaxDays: number;
   memberLinkDays: number;
   eventRetentionDays: number;
+  /** Retensi audit CLI CS (hari). */
+  adminAuditRetentionDays: number;
 }
 export interface RetentionResult {
   pickupNulled: number;
   qrNulled: number;
   unlinked: number;
   eventsPurged: number;
+  adminAuditPurged: number;
 }
 
 export interface OrderExportRow {
@@ -598,11 +601,25 @@ export class PgOnlineRepo implements OnlineRepo {
                       WHERE received_at < $1::timestamptz - make_interval(days => $2::int) LIMIT 5000)`,
       [ts, cfg.eventRetentionDays],
     );
+    // Audit CLI CS: hapus bertahap (batch 5000, maks 20 batch per siklus; idempoten — siklus berikut melanjutkan)
+    let adminAuditPurged = 0;
+    for (let i = 0; i < 20; i += 1) {
+      const del = await this.q.query(
+        `DELETE FROM platform.online_admin_audit
+          WHERE id IN (SELECT id FROM platform.online_admin_audit
+                        WHERE created_at < $1::timestamptz - make_interval(days => $2::int) ORDER BY id LIMIT 5000)`,
+        [ts, cfg.adminAuditRetentionDays],
+      );
+      const n = del.rowCount ?? 0;
+      adminAuditPurged += n;
+      if (n < 5000) break;
+    }
     return {
       pickupNulled: pickup.rowCount ?? 0,
       qrNulled: qr.rowCount ?? 0,
       unlinked: unlink.rowCount ?? 0,
       eventsPurged: events.rowCount ?? 0,
+      adminAuditPurged,
     };
   }
 

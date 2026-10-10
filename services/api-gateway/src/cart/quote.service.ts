@@ -2,6 +2,8 @@ import { Inject, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { AppConfig } from '../config/app-config';
 import { KV_STORE, KvStore } from '../common/redis/kv-store';
+import { redisKeyHash } from '../common/pii/pii';
+import { cartKey } from './cart-store';
 import { isUuid } from '../common/validation';
 import { CatalogService } from '../catalog/catalog.service';
 import { ODOO_ONLINE, OdooOnlineApi, OdooRpcError, QuoteIssue, QuoteResult, TaxGroup } from '../odoo-rpc/odoo-online.types';
@@ -50,6 +52,35 @@ export function quoteKey(id: string): string {
 }
 
 /**
+ * Indeks quote per member (untuk erasure): `oq:m:<HMAC(member_id)>` (pola key Redis ber-HMAC §8.16, pepper
+ * `efn:redis_key:v1`) berisi daftar quote_id terakhir; TTL mengikuti TTL quote maksimum.
+ */
+export function quoteIndexKey(pepper: Buffer, memberId: string): string {
+  return `oq:m:${redisKeyHash(pepper, memberId)}`;
+}
+const QUOTE_INDEX_MAX = 20;
+
+/**
+ * Erasure (DSAR delete, §10.8.3): hapus cart `cart:<member_id>`, semua quote `oq:<id>` yang terindeks milik member, dan
+ * indeksnya. Best effort (TTL tetap membersihkan: cart 7 hari, quote ≤ 10 menit). Mengembalikan jumlah key terhapus.
+ */
+export async function purgeMemberOnlineRedis(kv: KvStore, pepper: Buffer, memberId: string): Promise<number> {
+  let n = 0;
+  const idx = quoteIndexKey(pepper, memberId);
+  const raw = await kv.get(idx);
+  let ids: string[] = [];
+  try {
+    ids = raw ? (JSON.parse(raw) as string[]).filter((x) => isUuid(x)) : [];
+  } catch {
+    ids = [];
+  }
+  for (const id of ids) n += await kv.del(quoteKey(id));
+  n += await kv.del(idx);
+  n += await kv.del(cartKey(memberId));
+  return n;
+}
+
+/**
  * `POST /v1/cart/quote` (docs/04 §10.3.4): cart tersimpan → `efn_online_quote` per kanal (paralel, timeout 8 s). Harga,
  * pajak, label = apa adanya dari Odoo; BFF tidak menghitung. Satu kanal gagal → `503 online_unavailable` (quote parsial
  * ditunda). TTL = min(`valid_until` Odoo, `ONLINE_QUOTE_TTL_SECONDS`).
@@ -87,6 +118,15 @@ export class QuoteService {
     };
     const id = randomUUID();
     await this.kv.setEx(quoteKey(id), JSON.stringify(stored), ttl);
+    // indeks per member (key ber-HMAC) agar erasure bisa menghapus quote yang masih hidup
+    const idx = quoteIndexKey(this.config.redisKeyPepper, memberId);
+    let prev: string[] = [];
+    try {
+      prev = JSON.parse((await this.kv.get(idx)) ?? '[]') as string[];
+    } catch {
+      prev = [];
+    }
+    await this.kv.setEx(idx, JSON.stringify([...prev.filter((x) => isUuid(x)), id].slice(-QUOTE_INDEX_MAX)), this.config.onlineQuoteTtlSeconds);
     return {
       quote_id: id,
       valid_until: stored.valid_until,

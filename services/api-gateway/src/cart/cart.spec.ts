@@ -6,7 +6,7 @@ import { OdooRpcError } from '../odoo-rpc/odoo-online.types';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
 import { MemoryCartStore, cartKey, parseStored } from './cart-store';
 import { CartService, parseCartPut } from './cart.service';
-import { QuoteService, quoteKey } from './quote.service';
+import { QuoteService, purgeMemberOnlineRedis, quoteIndexKey, quoteKey } from './quote.service';
 
 const M = '8d7b5a1e-2c3f-4a5b-9c8d-7e6f5a4b3c2d';
 const CH: ChannelInfo = {
@@ -102,5 +102,24 @@ describe('Quote (§10.3.4)', () => {
     expect((await catchApiError(() => ctx.quotes.quote(M))).body).toMatchObject({ error: { code: 'online_unavailable' } });
     ctx.odoo.failNext.set('quote', new OdooRpcError('business', 'not_found'));
     expect((await catchApiError(() => ctx.quotes.quote(M))).body).toMatchObject({ error: { code: 'item_unavailable' } });
+  });
+});
+
+describe('Erasure Redis online (§10.8.3)', () => {
+  it('quote terindeks per member dengan key ber-HMAC; purge menghapus cart, semua quote, dan indeks', async () => {
+    const ctx = setup();
+    await ctx.cart.put(M, parseCartPut({ version: 0, groups: [group([{ product_id: 11, qty: 1 }])] }));
+    const q1 = await ctx.quotes.quote(M);
+    const q2 = await ctx.quotes.quote(M);
+    const idx = quoteIndexKey(ctx.config.redisKeyPepper, M);
+    expect(idx).toMatch(/^oq:m:[0-9a-f]{32}$/);
+    expect(idx).not.toContain(M);
+    expect(JSON.parse((await ctx.kv.get(idx))!)).toEqual([q1.quote_id, q2.quote_id]);
+    // cart Redis nyata memakai hash; FakeKvStore: tulis key cart sebagai string untuk memeriksa penghapusan
+    await ctx.kv.setEx(cartKey(M), '{}', 60);
+    const n = await purgeMemberOnlineRedis(ctx.kv, ctx.config.redisKeyPepper, M);
+    expect(n).toBe(4);
+    for (const k of [quoteKey(q1.quote_id), quoteKey(q2.quote_id), idx, cartKey(M)]) expect(await ctx.kv.get(k)).toBeNull();
+    expect(await purgeMemberOnlineRedis(ctx.kv, ctx.config.redisKeyPepper, M)).toBe(0); // idempoten
   });
 });

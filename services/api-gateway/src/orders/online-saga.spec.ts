@@ -828,3 +828,21 @@ describe('Re-review G17 (L-19)', () => {
     expect(ctx.repo.state.refunds.get(rf.id)).toMatchObject({ status: 'requested', claim_token: null });
   });
 });
+
+describe('Retensi audit CLI CS (ONLINE_ADMIN_AUDIT_RETENTION_DAYS)', () => {
+  it('default 400 hari; baris lebih tua dihapus, yang baru tetap; metrik per jenis tanpa PII; idempoten', async () => {
+    expect(testConfig().onlineAdminAuditRetentionDays).toBe(400);
+    expect(testConfig({ ONLINE_ADMIN_AUDIT_RETENTION_DAYS: '730' }).onlineAdminAuditRetentionDays).toBe(730);
+    expect(() => testConfig({ ONLINE_ADMIN_AUDIT_RETENTION_DAYS: '5' }).onlineAdminAuditRetentionDays).toThrow();
+    const ctx = setup();
+    await ctx.repo.audit({ action: 'refund', actor: 'cs/h', reason: 'lama', order_id: null, part_id: null, refund_id: null, amount: 1, outcome: 'ok' });
+    ctx.clock.advanceSeconds(401 * 86_400);
+    await ctx.repo.audit({ action: 'refund', actor: 'cs/h', reason: 'baru', order_id: null, part_id: null, refund_id: null, amount: 1, outcome: 'ok' });
+    const res = (await ctx.jobs.retentionOnce()) as { adminAuditPurged: number };
+    expect(res.adminAuditPurged).toBe(1);
+    expect(ctx.repo.state.audits.map((a) => a.reason)).toEqual(['baru']);
+    expect(((await ctx.jobs.retentionOnce()) as { adminAuditPurged: number }).adminAuditPurged).toBe(0);
+    const m = await ctx.metrics.retentionRows.get();
+    expect(m.values).toEqual([expect.objectContaining({ labels: { kind: 'admin_audit_deleted' }, value: 1 })]);
+  });
+});

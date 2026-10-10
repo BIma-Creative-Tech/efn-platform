@@ -4,7 +4,7 @@ import { MetricsService } from '../common/metrics/metrics.service';
 import { AmqpService, PermanentMessageError } from '../common/amqp/amqp.service';
 import { PII_AAD } from '../common/pii/crypto';
 import { createHash } from 'node:crypto';
-import { memberHash } from '../common/pii/pii';
+import { memberHash, redisKeyHash } from '../common/pii/pii';
 import { RateLimiter } from '../common/rate-limit/rate-limiter';
 import { AccessTokenService } from '../common/security/access-token.service';
 import {
@@ -528,5 +528,27 @@ describe('SEC-100: erasure & order online terbuka', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('Erasure: cart & quote online di Redis (§10.8.3)', () => {
+  it('setelah erasure platform sukses: cart:<member_id>, oq:<id> terindeks, dan indeks ber-HMAC dihapus', async () => {
+    const config = testConfig();
+    const kv = new FakeKvStore();
+    const idx = `oq:m:${redisKeyHash(config.redisKeyPepper, MEMBER_ID)}`;
+    const qid = '7e0c3a2b-1d4f-4e6a-8b7c-9d0e1f2a3b4c';
+    await kv.setEx(`cart:${MEMBER_ID}`, '{}', 600);
+    await kv.setEx(`oq:${qid}`, '{}', 600);
+    await kv.setEx(idx, JSON.stringify([qid]), 600);
+    await kv.setEx('cart:00000000-0000-4000-8000-000000000001', '{}', 600); // member lain tidak tersentuh
+    const db = new FakeDb((t) => {
+      if (t.includes('pg_try_advisory_xact_lock')) return { rows: [{ ok: true }], rowCount: 1 };
+      if (t.includes("SET status = 'processing'")) return { rows: [{ member_id: MEMBER_ID, member_hash: 'f'.repeat(64) }], rowCount: 1 };
+      return undefined;
+    });
+    const svc = new ErasureService(config, db, { put: jest.fn(), remove: jest.fn() }, kv);
+    expect(await svc.processDue(REQ_ID)).toBe(true);
+    for (const k of [`cart:${MEMBER_ID}`, `oq:${qid}`, idx]) expect(await kv.get(k)).toBeNull();
+    expect(await kv.get('cart:00000000-0000-4000-8000-000000000001')).toBe('{}');
   });
 });

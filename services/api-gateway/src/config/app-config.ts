@@ -1292,6 +1292,13 @@ export class AppConfig {
   get onlineOrderMemberLinkDays(): number {
     return this.int('ONLINE_ORDER_MEMBER_LINK_DAYS', 730, 30, 3650);
   }
+  /**
+   * Retensi `platform.online_admin_audit` (audit CLI CS). Default 400 hari = USULAN (≥ siklus audit tahunan + margin),
+   * menunggu keputusan DPO (Q-P19). Baris memuat aktor staf `<user>/<host>` dan alasan tersamarkan.
+   */
+  get onlineAdminAuditRetentionDays(): number {
+    return this.int('ONLINE_ADMIN_AUDIT_RETENTION_DAYS', 400, 30, 3650);
+  }
   get onlineEventRetentionDays(): number {
     return this.int('ONLINE_EVENT_RETENTION_DAYS', 180, 7, 3650);
   }

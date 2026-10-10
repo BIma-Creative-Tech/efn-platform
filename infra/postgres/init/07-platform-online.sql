@@ -220,6 +220,7 @@ CREATE TABLE IF NOT EXISTS platform.online_admin_audit (
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS ix_online_admin_audit_part ON platform.online_admin_audit (part_id);
+CREATE INDEX IF NOT EXISTS ix_online_admin_audit_created ON platform.online_admin_audit (created_at);
 
 -- ───────────── 4b. Review r10 (L-16): volume yang sudah menjalankan versi awal 07 ─────────────
 -- SEC-95: `approval_required` (refund inisiatif Odoo menunggu persetujuan CS); SEC-97: `gateway_in_flight` (klaim
@@ -264,7 +265,8 @@ GRANT SELECT, INSERT ON platform.payment_intent_portion TO efn_bff;
 -- DELETE hanya untuk job retensi (riwayat event & katalog), §10.8.3
 GRANT SELECT, INSERT, DELETE ON platform.online_order_event TO efn_bff;
 GRANT SELECT, INSERT, UPDATE, DELETE ON platform.online_catalog_item, platform.online_catalog_category, platform.online_catalog_sync TO efn_bff;
-GRANT SELECT, INSERT ON platform.online_admin_audit TO efn_bff;
+-- Retensi audit CS (ONLINE_ADMIN_AUDIT_RETENTION_DAYS, usulan 400 hari, keputusan DPO Q-P19): DELETE hanya untuk job
+GRANT SELECT, INSERT, DELETE ON platform.online_admin_audit TO efn_bff;
 GRANT USAGE, SELECT ON SEQUENCE platform.online_order_event_id_seq, platform.online_admin_audit_id_seq TO efn_bff;
 
 COMMIT;

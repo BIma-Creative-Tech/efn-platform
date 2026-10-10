@@ -28,7 +28,7 @@ export interface MemState {
   events: Map<string, OnlineEventRecord>;
   claims: Set<string>;
   outbox: { queue: string; payload: Record<string, unknown>; messageId: string }[];
-  audits: AdminAuditRecord[];
+  audits: (AdminAuditRecord & { created_at?: Date })[];
   members: Map<string, string>;
   activeDeletes: Set<string>;
   intents: Map<string, OnlineIntent & { onlineOrderId: string }>;
@@ -210,7 +210,7 @@ export class MemoryOnlineRepo implements OnlineRepo {
     this.state.outbox.push({ queue, payload: clone(payload), messageId });
   }
   async audit(a: AdminAuditRecord): Promise<void> {
-    this.state.audits.push(a);
+    this.state.audits.push({ ...a, created_at: this.d() });
   }
 
   async expireCandidates(expiredBefore: Date, createdBefore: Date, limit: number): Promise<OrderRow[]> {
@@ -276,7 +276,10 @@ export class MemoryOnlineRepo implements OnlineRepo {
         unlinked += 1;
       }
     }
-    return { pickupNulled, qrNulled: 0, unlinked, eventsPurged: 0 };
+    const cutoff = now.getTime() - cfg.adminAuditRetentionDays * 86_400_000;
+    const before = this.state.audits.length;
+    this.state.audits = this.state.audits.filter((a) => (a.created_at?.getTime() ?? now.getTime()) >= cutoff);
+    return { pickupNulled, qrNulled: 0, unlinked, eventsPurged: 0, adminAuditPurged: before - this.state.audits.length };
   }
   async memberOpenPaidParts(memberId: string): Promise<number> {
     return [...this.state.parts.values()].filter(

@@ -267,6 +267,7 @@ jobs:
           CFG_ONLINE_PICKUP_CODE_MAX_DAYS: ${{ vars.ONLINE_PICKUP_CODE_MAX_DAYS }}
           CFG_ONLINE_ORDER_MEMBER_LINK_DAYS: ${{ vars.ONLINE_ORDER_MEMBER_LINK_DAYS }}
           CFG_ONLINE_EVENT_RETENTION_DAYS: ${{ vars.ONLINE_EVENT_RETENTION_DAYS }}
+          CFG_ONLINE_ADMIN_AUDIT_RETENTION_DAYS: ${{ vars.ONLINE_ADMIN_AUDIT_RETENTION_DAYS }}
           CFG_ODOO_RPC_TIMEOUT_MS: ${{ vars.ODOO_RPC_TIMEOUT_MS }}
           # SEC-96 / L-16b: koneksi gateway -> Odoo = worker Odoo yang disisihkan untuk online (kosong = 4)
           CFG_ODOO_RPC_MAXCONN: ${{ vars.ODOO_RPC_MAXCONN }}

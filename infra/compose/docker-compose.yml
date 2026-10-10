@@ -1111,6 +1111,7 @@ services:
       # Retensi usulan (L-5, paket DPO - bukan keputusan)
       ONLINE_ORDER_MEMBER_LINK_DAYS: ${ONLINE_ORDER_MEMBER_LINK_DAYS:-730}
       ONLINE_EVENT_RETENTION_DAYS: ${ONLINE_EVENT_RETENTION_DAYS:-180}
+      ONLINE_ADMIN_AUDIT_RETENTION_DAYS: ${ONLINE_ADMIN_AUDIT_RETENTION_DAYS:-400}
       # BFF -> Odoo /json/2 HANYA lewat filter odoo-rpc-gateway (mTLS: klien CN api-gateway = sertifikat BFF ber-EKU
       # server+client, gen-pki.sh profil `both`; verify-full CA internal, hostname odoo-rpc-gateway)
       ODOO_RPC_URL: https://odoo-rpc-gateway:8443
