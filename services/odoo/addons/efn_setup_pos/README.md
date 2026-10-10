@@ -26,7 +26,7 @@ Modul konfigurasi untuk POS **retail (PT Retail)** dan **restoran (PT F&B)** di 
 ## Demo (`demo/`, hanya DB demo)
 - `pos_demo.xml` (F&B): kategori stasiun dapur, 2 printer ePOS (IP placeholder), denah meja.
 - `pos_fnb_demo.xml` (G14): lantai *Teras* (3 meja), modifier tanpa stok sebagai atribut `no_variant` (*Level Pedas*, *Permintaan Dapur* multi, *Gula*), menu *Nasi Goreng EFN* (Dapur Panas) & *Es Kopi Susu* (Bar) ber-PB1 default, preset *Bungkus – Kota Contoh* (fiscal position kota demo; ilustrasi aturan preset per kota).
-- `pos_retail_demo.xml` (G13): kategori *Fresh (Timbang)*; *Tomat Merah per kg* (barcode berat `2100001000004`, label 1,250 kg = `2100001012502`); *Daging Sapi* berlabel harga (`2300002000007`, label Rp45.500 = `2300002455005`); pricelist *Harga Member (DEMO)* 5% (PLACEHOLDER).
+- `pos_retail_demo.xml` (G13): kategori *Fresh (Timbang)*; *Tomat Merah per kg* (barcode berat `2109001000007`, label 1,250 kg = `2109001012505`; G17: semula `2100001000004`, bentrok dengan demo CE "Newspaper Rack"); *Daging Sapi* berlabel harga (`2300002000007`, label Rp45.500 = `2300002455005`); pricelist *Harga Member (DEMO)* 5% (PLACEHOLDER).
 
 ## SOP kasir retail — apa yang standar CE 19 (terverifikasi source 19.0, 2026-10-07)
 
