@@ -36,6 +36,13 @@ Metode: reviewer hanya membaca kode dan konfigurasi. Tidak ada yang dijalankan. 
    - hardening.
 5. **Rekomendasi:** perbaiki SEC-95 dan SEC-96 sebelum `ONLINE_ENABLED=true` di produksi. SEC-97 dan SEC-98 masuk checklist ADR-016 (refund vendor) dan UI CS.
 
+> **Status setelah re-review G17 (commit `e107b07`, 10 Okt 2026):**
+> - SEC-96, 97, 99, 100, 101, 102 dan 103 **Fixed**.
+> - SEC-95 dan SEC-98 **Partial**.
+> - Temuan baru: **3 Medium (SEC-104, SEC-105, SEC-107)**, **2 Low (SEC-106, SEC-108)**, **1 Info (SEC-109)**.
+>
+> Lihat bagian *Re-review G17* di akhir dokumen.
+
 ## Temuan baru
 
 | ID | Severity | Verdict | Judul | Lokasi utama | Risiko |
@@ -238,3 +245,158 @@ Hasil akhir: barang keluar dan uang kembali. Satu-satunya jejak adalah selisih s
 - Apakah UI Odoo 19 memblokir atau sekadar memperingatkan pembatalan SO berfaktur (SEC-95 tetap berlaku karena hook efn berjalan dengan sudo).
 - Kapasitas nyata Odoo di bawah beban stok/quote (SEC-96). Perlu uji beban di staging dengan POS aktif.
 - Perilaku idempotensi refund adapter vendor (SEC-97). Adapter belum ada.
+
+---
+
+# Re-review G17 (efn-security-reviewer, 10 Okt 2026, commit `e107b07`)
+
+Cakupan: perbaikan SEC-95..103 sesuai keputusan L-16..L-18 (`docs/04_SERVICE_CONTRACTS.md` §10.17:766-768).
+- BFF: `31c4410`, `91c46f0`.
+- Gateway: `maxconn` + antrean 503.
+- Wrapper host: `scripts/host/efn-online-cs`.
+- Odoo: `e107b07`.
+
+File yang dibaca ulang:
+- Odoo: `efn_online_order/models/{sale_order,efn_online_order,efn_online_channel,efn_online_event_outbox,res_users}.py`, `wizard/efn_online_handover_wizard.py`.
+- BFF: `orders/{order-events.service,online-saga.service,online-admin.service,online.repository,pickup-code}.ts`, `catalog/catalog.service.ts`, `odoo-rpc/json2-client.ts`, `cli/online-cli.ts`, `privacy/{dsar,erasure}.service.ts`.
+- Infra: `infra/odoo-rpc-gateway/haproxy.cfg`, `infra/observability/promtail-journal.yml`.
+
+Tetap read-only; tidak ada yang dijalankan.
+
+## Ringkasan re-review (manajemen)
+1. **Perbaikan sebagian besar tepat.**
+   - Stok publik tidak lagi bisa membebani Odoo.
+   - Refund diklaim eksklusif.
+   - Kode ambil kedaluwarsa di kedua sisi.
+   - Race hapus akun ditutup.
+   - Hak user teknis dipaksakan.
+   - AAD terikat baris.
+   - Wizard tidak lagi menyimpan kode.
+   - Refund dari pembatalan Odoo kini **menunggu persetujuan CS**, tidak otomatis.
+2. **Masih ada tiga celah Medium baru pada kontrol SEC-95 (pemisahan tugas):**
+   - **SEC-104:** penjaga pembatalan bisa dilewati salesman dengan menambahkan satu flag context dari klien.
+   - **SEC-105 (PLAUSIBLE):** penjaga picking hanya berlaku untuk tipe "outgoing" di level picking. Jalur lain (ubah tipe, pindah move, *settle* SO di POS) masih bisa mengeluarkan barang tanpa kode ambil.
+   - **SEC-107:** aturan empat mata persetujuan refund **tidak pernah aktif** untuk refund dari Odoo, karena BFF selalu menyimpan pemicu sebagai `odoo-uid:<n>` yang tidak pernah dianggap sama dengan operator mana pun.
+3. **Rekomendasi:** SEC-104, SEC-105 dan SEC-107 diperbaiki sebelum `ONLINE_ENABLED=true` di produksi. SEC-106 dan SEC-108 boleh bertahap.
+
+## Status temuan r10
+
+| ID | Status | Bukti (file:line) | Catatan |
+|---|---|---|---|
+| SEC-95 | **Partial** | Odoo: `sale_order.py:31-43` (cek grup memakai user asli), `efn_online_order.py:796-819` (manager + alasan ≥ 10, tolak bila picking keluar `done`), `sale_order.py:46-66` (guard `_action_done` berbasis `cr.cache`, tidak bisa dipalsukan context). BFF: `order-events.service.ts:137-160` (refund `initiator=odoo` → `approval_required`), `online-admin.service.ts:154-183` (CLI approve) | Bypass tersisa: SEC-104 (context klien), SEC-105 (jalur picking lain), SEC-107 (empat mata tidak aktif) |
+| SEC-96 | **Fixed** | `catalog.service.ts:243-245` (id di luar katalog → 404 tanpa Odoo), `:251,266-268` (cache negatif `none` 30 s), `json2-client.ts:64,146,165-178` (semaphore global `ODOO_RPC_MAX_CONCURRENCY`=4, antrean 8×, tunggu 2 s → `busy`), `haproxy.cfg:139-142,155,157` (`maxconn ${ODOO_RPC_MAXCONN}` default 4, antrean ≥ 16 → 503, `timeout queue 2s`) | Sizing `ODOO_WORKERS ≥ worker POS + ODOO_RPC_MAXCONN` masih keputusan sebelum prod (L-17). Residual pembagian slot: SEC-109 |
+| SEC-97 | **Fixed** | `online.repository.ts:426-434` (`claimRefund` UPDATE atomik → `gateway_in_flight`), `online-saga.service.ts:377-397` (klaim + Σ `MONEY_OUT_REFUND` termasuk in-flight di bawah kunci bagian), `:457-469` (`Math.min` diganti `failed` + anomali), L-17 (adapter wajib `refundId` = idempotency key) | Residual: pelepasan klaim tanpa CAS → SEC-106 |
+| SEC-98 | **Partial** | Wrapper `scripts/host/efn-online-cs:40-48,106` (aktor = `SUDO_USER` tervalidasi, env pemanggil diabaikan), `online-admin.service.ts:16,93-102` (regex aktor tanpa `@`; pre-check porsi sebelum nota kredit), `:192-202` (`settle-manual` menolak `refund_exceeds_portion`, Σ termasuk in-flight) | Residual: fallback identitas `node/<container>` bila CLI dijalankan langsung (`online-cli.ts:49-55`). Alasan teks bebas tercatat oleh sudo, lihat SEC-107/SEC-108 |
+| SEC-99 | **Fixed** | BFF `online.repository.ts:561-567` (`COALESCE(ready_at, confirmed_at, updated_at)`, termasuk `review`, `stock_short`). Odoo `efn_online_order.py:195-199` (hash dihapus saat `review`), `:775-793` (cron kedaluwarsa param `efn_online.pickup_code_max_days`), `:705-707` | — |
+| SEC-100 | **Fixed** | `dsar.service.ts:240-248` (`lockAndAssertNoOpenOrders` + INSERT dalam satu transaksi, kunci `efn:online:member:` sama dengan `online.repository.ts:270-271` / `orders.service.ts:128-131`), `erasure.service.ts:150-160` (kunci + cek ulang → `ErasureDeferred`, rollback) | — |
+| SEC-101 | **Fixed** | `efn_online_channel.py:209-225` (grup ⊆ `base.group_user` + grup kanal + implied), `res_users.py:9-22` (cek ulang saat grup/company user atau implied grup berubah) | — |
+| SEC-102 | **Fixed** | `pickup-code.ts:20-23,35-48` (AAD `…:v2:<part_id>`), `orders.service.ts:420` (baris v1 ditulis ulang saat dibaca) | Saran: hapus fallback v1 setelah `pii-reencrypt` dijalankan di semua lingkungan, karena selama fallback ada, ciphertext v1 masih bisa ditukar |
+| SEC-103 | **Fixed** | `efn_online_handover_wizard.py:42-56` (kode dipindah ke variabel lokal, semua jalur gagal ditangkap di savepoint, `code=False` selalu ditulis) | Kode masih ada di DB di antara `web_save` dan `action_confirm`; ini inheren pada pola wizard dan dapat diterima |
+
+## Temuan baru
+
+| ID | Severity | Verdict | Judul | Lokasi | Risiko |
+|---|---|---|---|---|---|
+| SEC-104 | **Medium** | CONFIRMED | Penjaga pembatalan SO online dilewati lewat context klien `efn_online_internal=True` | `sale_order.py:33`, `efn_online_order.py:454,559,723-739` | R-S10, R-O05 |
+| SEC-105 | **Medium** | PLAUSIBLE | Penjaga serah terima hanya di `stock.picking._action_done` untuk `picking_type_code == "outgoing"`. Ubah tipe, pindah move, atau *settle* SO di POS (`pos_sale`) melewati kode ambil | `sale_order.py:49-66`, `efn_online_order.py:723-739` | R-S10 |
+| SEC-106 | Low | PLAUSIBLE | Pelepasan/penulisan status refund setelah panggilan gateway tidak dikondisikan pada klaim (tanpa CAS). Klaim basi 15 menit bisa saling menimpa | `online-saga.service.ts:375,408,414,419,424`, `online.repository.ts:422-425` | R-O05, R-T10 |
+| SEC-107 | **Medium** | CONFIRMED | Aturan empat mata refund inisiatif Odoo tidak pernah menolak. Refund CS tetap satu orang. Identitas aktor fallback bila CLI dijalankan tanpa wrapper | `order-events.service.ts:66-67`, `online-admin.service.ts:34-41,85-151,163`, `online-cli.ts:49-55` | R-S10, R-O05 |
+| SEC-108 | Low | CONFIRMED | Alasan teks bebas CS (bisa memuat PII pelanggan) tercatat sudo di auth log/I/O log host. Jejak audit wrapper tidak dikirim ke Loki | `scripts/host/efn-online-cs:10-11,82,106`, `promtail-journal.yml:36-39` | R-L01, R-S10 |
+| SEC-109 | Info | CONFIRMED | Satu semaphore json2 untuk jalur publik (stok/quote) dan saga tulis. Slot ditahan selama backoff retry | `json2-client.ts:146,165-178` (+ loop retry `callInner`) | R-T11, R-T10 |
+
+**Rekap re-review: 0 Critical · 0 High · 3 Medium · 2 Low · 1 Info baru.** Status r10: 7 Fixed, 2 Partial (SEC-95, SEC-98).
+
+### SEC-104: Medium: Penjaga pembatalan dilewati lewat context klien
+**Fakta:**
+- `SaleOrder._action_cancel` (`sale_order.py:33`) melewati **seluruh** pemeriksaan bila `self.env.context.get("efn_online_internal")` benar:
+  - cek Sales Manager;
+  - alasan wajib;
+  - tolak bila picking keluar `done`;
+  - hook `_efn_ops_cancelled`.
+- Context RPC Odoo (`/web/dataset/call_kw`, `kwargs.context`) sepenuhnya dikendalikan klien. Guard picking (`sale_order.py:52`) sengaja memakai `cr.cache` karena alasan ini, tetapi guard pembatalan masih memakai context.
+
+**Skenario:**
+1. Salesman non-manager memanggil `sale.order.action_cancel` dengan context `{"efn_online_internal": true, "disable_cancel_warning": true}` (lewat devtools/RPC dari sesi web WireGuard).
+2. SO dan picking-nya dibatalkan. `efn.online.order` tetap `confirmed`/`ready`: tidak ada nota kredit, tidak ada event, dan faktur tetap diposting. Akuntansi dan BFF tidak sinkron.
+3. Saat pelanggan datang dengan kode yang benar, `_efn_handover` (`efn_online_order.py:723-739`) hanya memvalidasi picking yang belum `done/cancel`. Karena semua sudah `cancel`, perulangan kosong dan order ditandai `picked_up` tanpa mutasi stok.
+4. Kombinasi dengan SEC-105: barang bisa keluar lewat jalur lain sebelumnya, lalu jejak stok hilang.
+
+Penjaga manager + alasan dari SEC-95 jadi tidak mengikat.
+
+**Rekomendasi:**
+- Ganti penanda context dengan penanda privat yang tidak bisa disuntik klien. Contoh: `self.env.cr.cache["efn_online_cancel_ids"]` yang diisi `_efn_do_cancel` sebelum memanggil `_action_cancel` dan dibersihkan di `finally`, pola yang sama dengan `HANDOVER_CACHE_KEY`. Lakukan hal yang sama untuk `action_confirm` (`efn_online_order.py:454`).
+- Di `_efn_handover`, tolak (`UserError` → review) bila SO tidak punya picking keluar yang tervalidasi/bisa divalidasi, atau bila SO berstatus `cancel`.
+- Pertimbangkan menolak `write({'state': ...})` langsung pada SO ber-`efn_online_order_id` dari non-internal.
+- Tambah test: `action_cancel` oleh salesman dengan context `efn_online_internal=True` → `AccessError`.
+
+### SEC-105: Medium (PLAUSIBLE): Jalur pengeluaran barang di luar penjaga picking
+**Fakta:** Guard (`sale_order.py:49-66`) hanya memeriksa picking dengan `picking_type_code == "outgoing"` dan `picking.sale_id.efn_online_order_id`, di level `stock.picking._action_done`. Jalur yang tidak tercakup (perilaku standar Odoo 19, belum diuji):
+1. **Ubah tipe operasi:** staf Inventory menulis `picking_type_id` picking pengiriman ke tipe internal lewat RPC (field model tidak readonly; batasnya hanya di view), lalu memvalidasi. `picking_type_code` menjadi `internal`, sehingga guard lolos, sementara lokasi tujuan bisa tetap Customers.
+2. **Pindah move:** `write({'picking_id': <picking manual baru>})` pada `stock.move` SO. Picking baru tanpa `sale_id` lolos guard, sedangkan `sale_line_id` tetap ada, sehingga qty terkirim SO tercatat.
+3. **POS `pos_sale` (auto-install bersama POS):** kasir memuat SO online di POS lalu *settle*. Barang keluar lewat picking POS (tipe POS, tanpa `sale_id`), dan `pos_sale` menurunkan/membatalkan move picking SO. Order online tetap `confirmed`; pelanggan asli kemudian ditolak atau mendapat `picked_up` tanpa barang (lihat SEC-104 butir 3). PLAUSIBLE: tergantung domain daftar SO di POS (SO yang sudah difaktur penuh mungkin tersaring di UI, tetapi filternya sisi klien).
+- Backorder, mass action "Validate", dan `stock_picking_batch` melewati `button_validate` → `_action_done`, jadi **tertangkap** guard. Return (tipe incoming) tidak relevan untuk pengeluaran barang.
+
+**Rekomendasi:**
+- Pindahkan penjaga ke `stock.move._action_done`: tolak move dengan `sale_line_id.order_id.efn_online_order_id` dan `location_dest_id.usage in ('customer', 'transit')` kecuali id move ada di penanda `cr.cache` dari `_efn_handover`.
+- Tolak `write` atas `picking_type_id`/`picking_id`/`location_dest_id` pada picking/move SO online kecuali internal.
+- Keluarkan SO ber-`efn_online_order_id` dari pemuatan `pos_sale` (domain server-side di loader data POS) dan tolak `pos.order.line` dengan `sale_order_origin_id` online.
+- Tambah test untuk ketiga jalur.
+
+### SEC-106: Low (PLAUSIBLE): Klaim refund dilepas/ditimpa tanpa compare-and-set
+**Fakta:**
+- Setelah klaim atomik, semua penulisan status berikutnya memakai `updateRefund` tanpa syarat status (`online.repository.ts:422-425`):
+  - pelepasan saat error transien `{status: before}` (`online-saga.service.ts:414`);
+  - `manual_required` (`:408`), `gateway_pending` (`:419`), `failed` (`:424`).
+- Klaim basi direbut ulang setelah 15 menit (`IN_FLIGHT_STALE_MS`, `:42`).
+- Consumer A yang macet > 15 menit lalu gagal bisa menimpa status `gateway_done`/`settled` milik consumer B kembali ke `odoo_done`, sehingga refund diproses ulang.
+- `before` juga kehilangan status asal: `requested`/`gateway_pending` dipulihkan sebagai `odoo_done` bila klaim direbut ulang.
+
+**Dampak:** dana ganda hanya bila adapter provider mengabaikan `refundId` (dilarang L-17). Selebihnya inkonsistensi status dan `refunded_amount` (ditolak `markGatewayDone` → `failed` + anomali).
+
+**Rekomendasi:** kolom `claim_token` (UUID per klaim), lalu semua penulisan pasca-gateway memakai `WHERE id=$1 AND status='gateway_in_flight' AND claim_token=$2`. Simpan status asal di kolom terpisah untuk pelepasan.
+
+### SEC-107: Medium: Empat mata refund tidak efektif
+**Fakta:**
+- Parser event (`order-events.service.ts:66-67`) **mengutamakan** `initiator_uid`, sehingga `initiated_by = "odoo-uid:<n>"` selalu terisi, karena Odoo selalu mengirim uid (`efn_online_event_outbox.py:152-158`).
+- `sameActor` (`online-admin.service.ts:39`) selalu mengembalikan `false` untuk `odoo-uid:`. Akibatnya penolakan `rejected_same_actor` (`:163`) **tidak pernah terjadi** untuk satu-satunya jenis refund yang memerlukan persetujuan.
+- Bahkan dengan login, perbandingan login Odoo ↔ username OS hanya berupa kecocokan string antar dua namespace identitas.
+- Refund yang dibuat CS lewat `online-refund` (`:85-151`) langsung `odoo_done` → gateway tanpa persetujuan kedua, termasuk refund penuh bagian `handed_over`. Satu orang dengan akses grup `efn-cs` cukup untuk mengembalikan dana pesanan yang barangnya sudah diserahkan.
+- `operatorIdentity` (`online-cli.ts:49-55`) jatuh ke `SUDO_USER`/user OS container (`node`) + hostname bila `EFN_CS_OPERATOR` kosong. `docker exec` langsung (anggota grup docker) tetap berjalan dengan aktor generik atau aktor yang dipalsukan lewat `-e EFN_CS_OPERATOR=`.
+
+**Skenario:** Manajer penjualan yang juga anggota `efn-cs` di host membatalkan SO berbayar di Odoo, lalu menyetujui refund-nya sendiri lewat `efn-online-cs online-refund-approve`. Persetujuan lolos.
+
+**Rekomendasi:**
+1. Pemisahan berbasis **peran**, bukan perbandingan string. Persetujuan hanya untuk grup OS `efn-cs-approver` (dicek wrapper, diteruskan sebagai `EFN_CS_ROLE`) yang beranggotakan orang berbeda dari Sales Manager Odoo. Tambahkan tabel pemetaan `odoo_uid ↔ akun OS` yang dikelola Superadmin; tolak persetujuan bila pemicu ada di peta dan sama dengan penyetuju.
+2. Refund CS di atas ambang (PLACEHOLDER Finance) atau untuk bagian `handed_over` → `approval_required` (empat mata yang sama).
+3. CLI menolak berjalan bila `EFN_CS_OPERATOR` kosong (tanpa fallback `node`). Dokumentasikan bahwa anggota grup docker setara root dan di luar kontrol ini.
+4. Test: refund `initiated_by=odoo-uid:N` + penyetuju yang terpetakan ke uid N → ditolak.
+
+### SEC-108: Low: Alasan CS di log host dan audit host tidak terpusat
+**Fakta:**
+- sudoers yang dianjurkan (`efn-online-cs:10-11`) memakai `log_output`. sudo juga selalu mencatat baris perintah lengkap (`COMMAND=… --reason=…`) ke auth log/journald, padahal komentar wrapper (`:25-26`) menyatakan alasan tidak di-log. Alasan teks bebas sampai 800 byte (`:82`) bisa memuat nama/HP pelanggan.
+- Baris `logger -t efn-online-cs` tidak termasuk filter `promtail-journal.yml:36-39` (hanya `efn-deploy` dan unit backup). Jejak audit sisi host hanya lokal dan bisa dihapus oleh pemilik root.
+
+**Rekomendasi:**
+- Baca alasan dari stdin (prompt) alih-alih argv. Pertahankan `log_output` hanya bila output CLI dijamin tanpa PII (saat ini hanya id/status/nominal). Tambahkan peringatan "jangan tulis data pribadi" + scrub pola HP/email di BFF sebelum disimpan ke `online_admin_audit`.
+- Tambahkan identifier `efn-online-cs` ke allowlist `promtail-journal.yml` (alasan tidak ikut bila dibaca dari stdin).
+
+### SEC-109: Info: Slot json2 dibagi antara jalur publik dan saga
+- Semaphore tunggal (`json2-client.ts:146`) melayani stok, quote, place, mark_paid, cancel, dan refund. `callInner` menahan slot selama `sleep` backoff retry.
+- Lonjakan quote dari banyak member terautentikasi bisa membuat place/mark_paid mendapat `busy` (503/nack). Kerugian dana tidak ada, karena saga idempoten dan diulang.
+- Saran: pool terpisah (baca publik vs saga tulis) dan lepas slot selama backoff.
+
+## Yang sudah benar (perubahan G17 r10)
+- Guard picking memakai penanda di `cr.cache` yang hanya diisi `_efn_handover` setelah kode terverifikasi dan dibersihkan di `finally` (`efn_online_order.py:729-736`). Context klien `efn_online_handover_picking_ids` diuji tidak berpengaruh (`tests/test_online_api.py:746-748`).
+- Cek grup pembatalan memakai user asli, bukan sudo (`sale_order.py:34-38`). Pemanggilan `_action_cancel` lewat `sudo()` dari modul lain tetap dicek terhadap user sesi.
+- Refund inisiatif Odoo tidak lagi otomatis (`approval_required`); consumer mengabaikannya sampai disetujui (`online-saga.service.ts:371`). Event membawa kode alasan tanpa teks bebas; login berbentuk email tidak dikirim (L-18).
+- Wrapper host:
+  - root-owned, `env_reset`/`!setenv`;
+  - `SUDO_USER`/`SUDO_UID` dicek konsisten + keanggotaan grup;
+  - allowlist subcommand dan flag, validasi nilai, tolak karakter kontrol dan flag ganda;
+  - argumen diteruskan sebagai argv `docker exec` tanpa shell, `PATH` dipaku.
+  - Tidak ditemukan injeksi argumen/env.
+- Batas kapasitas gateway gagal-cepat dengan header berbeda (`X-EFN-Gateway-Error`), sehingga tidak tertukar dengan penolakan filter.
+
+## Belum terverifikasi (re-review)
+- Perilaku `pos_sale` 19.0 terhadap SO yang sudah difaktur penuh (SEC-105 butir 3) dan apakah `picking_type_id` dapat ditulis RPC pada picking `assigned` (butir 1). Perlu uji di stack dev oleh QA.
+- Sizing `ODOO_WORKERS` produksi terhadap `ODOO_RPC_MAXCONN` (L-17).
