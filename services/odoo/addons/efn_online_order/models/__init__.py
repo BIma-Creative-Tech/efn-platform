@@ -6,5 +6,6 @@ from . import (
     efn_online_refund,
     product_template,
     res_partner,
+    res_users,
     sale_order,
 )

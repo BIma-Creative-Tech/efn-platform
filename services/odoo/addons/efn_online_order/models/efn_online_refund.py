@@ -37,6 +37,12 @@ class EfnOnlineRefund(models.Model):
     kind = fields.Selection([("lines", "Per baris"), ("full", "Penuh")], required=True, readonly=True)
     origin = fields.Selection([("refund", "Refund"), ("cancel", "Pembatalan")], required=True, readonly=True)
     initiator = fields.Selection([("bff", "BFF / CS"), ("odoo", "Odoo / ops")], required=True, readonly=True)
+    initiator_user_id = fields.Many2one(
+        "res.users",
+        string="Dipicu oleh (Odoo)",
+        readonly=True,
+        help="SEC-95/L-16: user Odoo yang memicu refund initiator=odoo (aturan empat mata persetujuan di BFF).",
+    )
     reason = fields.Selection([(r, r) for r in REFUND_REASONS], required=True, readonly=True)
     line_summary = fields.Text(readonly=True, help="JSON {product_id: qty} yang direfund (tanpa data pribadi).")
     restock = fields.Boolean(readonly=True)
@@ -128,6 +134,7 @@ class EfnOnlineRefund(models.Model):
                 "kind": kind,
                 "origin": origin,
                 "initiator": initiator,
+                "initiator_user_id": self.env.uid if initiator == "odoo" else False,
                 "reason": reason,
                 "line_summary": json.dumps({str(pid): qty for pid, qty in sorted(requested.items())}),
                 "restock": restock,

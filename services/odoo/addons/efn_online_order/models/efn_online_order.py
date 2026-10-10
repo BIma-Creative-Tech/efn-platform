@@ -84,6 +84,13 @@ CANCEL_TO_REFUND_REASON = {
     "review": "review",
 }
 PICKUP_KDF_PARAM = "efn_online.pickup_code_kdf_rounds"
+PICKUP_MAX_DAYS_PARAM = "efn_online.pickup_code_max_days"
+DEFAULT_PICKUP_MAX_DAYS = 7
+# SEC-95: penanda picking yang boleh divalidasi (diisi _efn_handover SETELAH kode terverifikasi). Disimpan di
+# cache transaksi cursor (bukan context) sehingga tidak bisa dipalsukan klien RPC.
+HANDOVER_CACHE_KEY = "efn_online_handover_picking_ids"
+PAID_STATES = ("paid", "confirmed", "stock_short", "ready", "review")
+OPS_CANCEL_MIN_REASON = 10
 
 
 class _ReviewNeeded(Exception):
@@ -188,6 +195,8 @@ class EfnOnlineOrder(models.Model):
     def _efn_set_review(self, code):
         self.ensure_one()
         self.write({"state": "review", "review_reason": code})
+        # SEC-99: bagian review tidak bisa diserahkan lagi di Odoo (penyelesaian = batal lewat BFF) -> hash dihapus.
+        self._efn_clear_secret()
         _logger.warning("EFN online order %s -> review (%s)", self.id, code)
         self._efn_schedule_activity(_("Pesanan online perlu ditinjau"), code, "sales_team.group_sale_manager")
         self._efn_emit("review")
@@ -693,6 +702,9 @@ class EfnOnlineOrder(models.Model):
         self._efn_lock()
         if self.state not in ("confirmed", "ready"):
             return False, _("Pesanan tidak dalam status siap diserahkan.")
+        if not self.pickup_code_hash:
+            # SEC-99: kode kedaluwarsa (retensi) -> serah terima lewat verifikasi manual manajer (di luar Odoo).
+            return False, _("Kode ambil pesanan ini sudah kedaluwarsa. Hubungi manajer untuk verifikasi manual.")
         max_attempts = max(self.channel_id.pickup_max_attempts, 1)
         valid = False
         if self.pickup_code_hash and PICKUP_CODE_RE.match(code or ""):
@@ -714,9 +726,14 @@ class EfnOnlineOrder(models.Model):
             for move in picking.move_ids.filtered(lambda m: m.state not in ("done", "cancel")):
                 if move.product_uom.compare(move.quantity, move.product_uom_qty) < 0:  # pickup: barang ada di outlet
                     move.quantity = move.product_uom_qty
-            result = picking.with_context(
-                skip_backorder=True, picking_ids_not_to_backorder=picking.ids
-            ).button_validate()
+            allowed = self.env.cr.cache.setdefault(HANDOVER_CACHE_KEY, set())
+            allowed.add(picking.id)
+            try:
+                result = picking.with_context(
+                    skip_backorder=True, picking_ids_not_to_backorder=picking.ids
+                ).button_validate()
+            finally:
+                allowed.discard(picking.id)
             if result is not True and picking.state != "done":
                 raise UserError(_("Pengiriman %(name)s tidak dapat divalidasi otomatis.", name=picking.name))
         self.write({"state": "picked_up", "picked_up_at": fields.Datetime.now(), "pickup_attempts": 0})
@@ -753,20 +770,76 @@ class EfnOnlineOrder(models.Model):
                     _("Pesanan online belum diambil"), "not_picked_up", "stock.group_stock_user"
                 )
                 order.write({"reminder_flagged": True})
+        self._efn_expire_pickup_codes(now)
+
+    @api.model
+    def _efn_expire_pickup_codes(self, now=None):
+        """SEC-99: hash kode ambil bagian yang tidak diambil dihapus setelah N hari (default 7) sejak siap (atau
+        dibayar bila tidak pernah ditandai siap) + aktivitas staf. Parameter ``efn_online.pickup_code_max_days``."""
+        now = now or fields.Datetime.now()
+        raw = self.env["ir.config_parameter"].sudo().get_param(PICKUP_MAX_DAYS_PARAM, DEFAULT_PICKUP_MAX_DAYS)
+        try:
+            days = max(int(raw), 1)
+        except (TypeError, ValueError):
+            days = DEFAULT_PICKUP_MAX_DAYS
+        limit = now - timedelta(days=days)
+        orders = self.sudo().search([("state", "in", ("confirmed", "ready")), ("pickup_code_hash", "!=", False)])
+        expired = orders.filtered(lambda o: (o.ready_at or o.paid_at or o.create_date) < limit)
+        for order in expired:
+            order._efn_clear_secret()
+            order._efn_schedule_activity(
+                _("Kode ambil pesanan online kedaluwarsa"), "pickup_code_expired", "stock.group_stock_user"
+            )
+        return expired.ids
 
     # ============================================================ hook pembatalan SO
-    def _efn_ops_cancel_check(self):
+    def _efn_ops_cancel_check(self, reason_note=None):
+        """SEC-95: pembatalan dari UI Odoo. Bagian yang sudah dibayar hanya oleh Sales manager + alasan wajib;
+        barang yang sudah keluar (picking done) tidak boleh dibatalkan (gunakan refund/retur)."""
         for order in self:
-            if order.state == "picked_up":
+            pickings = order.sudo().sale_order_id.picking_ids
+            if order.state == "picked_up" or any(
+                p.state == "done" and p.picking_type_code == "outgoing" for p in pickings
+            ):
                 raise UserError(_("Pesanan online yang sudah diambil tidak dapat dibatalkan; gunakan refund (CS)."))
+            if order._efn_is_paid():
+                if not self.env.user.has_group("sales_team.group_sale_manager"):
+                    raise AccessError(_("Pesanan online yang sudah dibayar hanya dapat dibatalkan oleh Sales Manager."))
+                if len((reason_note or "").strip()) < OPS_CANCEL_MIN_REASON:
+                    raise UserError(
+                        _(
+                            "Isi 'Alasan batal (online)' minimal %(n)d karakter sebelum membatalkan pesanan online "
+                            "yang sudah dibayar.",
+                            n=OPS_CANCEL_MIN_REASON,
+                        )
+                    )
 
-    def _efn_ops_cancelled(self):
-        """SO dibatalkan staf dari UI Odoo -> order ``cancelled`` (ops) + nota kredit bila sudah difaktur."""
+    def _efn_is_paid(self):
+        self.ensure_one()
+        return bool(self.sudo().paid_idempotency_key) or self.state in PAID_STATES
+
+    def _efn_ops_cancelled(self, reason_note=None, actor=None):
+        """SO dibatalkan staf dari UI Odoo -> order ``cancelled`` (ops) + nota kredit bila sudah difaktur.
+        Teks alasan hanya di chatter Odoo; ke BFF hanya kode ``ops`` (L-16: refund ``initiator=odoo`` tidak
+        otomatis di BFF, butuh persetujuan CS)."""
+        actor = actor or self.env.user
         for order in self:
             order._efn_lock()
             if order.state == "cancelled":
                 continue
+            paid = order._efn_is_paid()
             order._efn_do_cancel("ops", initiator="odoo", cancel_sale_order=False)
+            if paid:
+                order.message_post(
+                    body=_(
+                        "Dibatalkan dari Odoo oleh %(user)s. Alasan: %(reason)s",
+                        user=actor.name,
+                        reason=(reason_note or "").strip(),
+                    ),
+                    message_type="comment",
+                    subtype_xmlid="mail.mt_note",
+                )
+                _logger.warning("EFN online order %s (berbayar) dibatalkan ops oleh uid=%s", order.id, actor.id)
 
     @api.model
     def _efn_new_refund_ref(self):

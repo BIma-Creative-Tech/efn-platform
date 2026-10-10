@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import requests
 
-from odoo.exceptions import AccessError
+from odoo.exceptions import AccessError, UserError
 from odoo.fields import Command
 from odoo.tests import new_test_user, tagged
 from odoo.tools import mute_logger
@@ -103,6 +103,7 @@ class TestEfnOnlineHandover(EfnOnlineCommon):
         self._handover(order, "WRONG")
         self.assertEqual(order.state, "review")
         self.assertEqual(order.review_reason, "pickup_code_attempts")
+        self.assertFalse(order.pickup_code_hash)  # SEC-99
         # Setelah review, kode benar pun tidak menyerahkan pesanan.
         wizard = self._handover(order, PICKUP_CODE)
         self.assertFalse(wizard.done)
@@ -128,8 +129,30 @@ class TestEfnOnlineHandover(EfnOnlineCommon):
             company_id=self.company_2.id,
             company_ids=[Command.set(self.company_2.ids)],
         )
-        with self.assertRaises(AccessError):
-            self._handover(order, PICKUP_CODE, user=stock_2)
+        # SEC-103: akses ditolak dilaporkan di wizard (tanpa exception) agar kode tidak tertinggal.
+        wizard = self._handover(order, PICKUP_CODE, user=stock_2)
+        self.assertFalse(wizard.sudo().done)
+        self.assertFalse(wizard.sudo().code)
+        self.assertEqual(order.state, "confirmed")
+
+    def test_sec103_code_not_kept_when_validation_fails(self):
+        order = self._paid_order()
+        Order = type(self.env["efn.online.order"])
+        with (
+            patch.object(Order, "_efn_handover", side_effect=UserError("Pengiriman tidak dapat divalidasi")),
+            mute_logger("odoo.addons.efn_online_order"),
+        ):
+            wizard = self._handover(order, PICKUP_CODE)
+        self.assertFalse(wizard.done)
+        self.assertFalse(wizard.code)
+        self.assertIn("tidak dapat divalidasi", wizard.message)
+        self.env.flush_all()
+        self.env.cr.execute("SELECT count(*) FROM efn_online_handover_wizard WHERE code IS NOT NULL")
+        self.assertEqual(self.env.cr.fetchone()[0], 0)
+        # Sukses juga tidak menyimpan kode.
+        ok = self._handover(order, PICKUP_CODE)
+        self.assertTrue(ok.done)
+        self.assertFalse(ok.code)
 
 
 @tagged("post_install", "-at_install", "efn")

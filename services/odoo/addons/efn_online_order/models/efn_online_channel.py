@@ -206,6 +206,29 @@ class EfnOnlineChannel(models.Model):
                     raise ValidationError(
                         _("User teknis %(login)s harus terikat ke tepat satu company (PT kanal ini).", login=user.login)
                     )
+                extra = user.all_group_ids - channel._efn_online_allowed_groups()
+                if extra:
+                    # SEC-101: user teknis hanya Internal User + grup kanal (+ implied keduanya); grup lain
+                    # (Sales/Inventory/Accounting/Settings, dsb.) memperluas ACL bila gateway terlewati.
+                    raise ValidationError(
+                        _(
+                            "User teknis %(login)s hanya boleh memiliki grup 'Internal User' dan grup kanal online "
+                            "(grup lain: %(groups)s).",
+                            login=user.login,
+                            groups=", ".join(sorted(extra.mapped("name"))),
+                        )
+                    )
+
+    @api.model
+    def _efn_online_allowed_groups(self):
+        base = self.env.ref("base.group_user") | self.env.ref(GROUP_XMLID)
+        return base | base.all_implied_ids
+
+    @api.model
+    def _efn_online_recheck_users(self, users):
+        """Dipanggil saat grup/company user berubah (res.users / res.groups) -> constraint kanal dijalankan ulang."""
+        channels = self.sudo().with_context(active_test=False).search([("user_ids", "in", users.ids)])
+        channels._check_efn_users()
 
     # -------------------------------------------------------------- caller / env
     @api.model

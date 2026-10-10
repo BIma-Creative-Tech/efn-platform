@@ -85,6 +85,24 @@ seq, 503/timeout retry, 409 final, secret hilang tidak terkirim, URL http ditola
 Uji manual: Penjualan → Pesanan → **Pesanan online** (filter "Perlu disiapkan") → *Siap diambil* → *Serahkan
 (kode ambil)*; konfigurasi di Penjualan → Konfigurasi → **Kanal online**.
 
+## Review keamanan r10 (L-16, 10 Okt 2026)
+- **SEC-95**: batal SO online dari UI Odoo untuk bagian yang sudah dibayar (`paid/confirmed/stock_short/ready/review`
+  atau sudah ada pembayaran) hanya `sales_team.group_sale_manager` + field **Alasan batal (online)** (min. 10
+  karakter; teks hanya di chatter Odoo). Event `cancelled` membawa `refund.initiator=odoo` + `cancel_reason: "ops"`
+  (kode, tanpa teks bebas) -> BFF tidak me-refund otomatis (L-16). Bagian yang barangnya sudah keluar tidak bisa
+  dibatalkan. Picking keluar SO online hanya bisa divalidasi lewat wizard serah terima: `stock.picking._action_done`
+  menolak tanpa penanda di **cache transaksi cursor** yang diisi `_efn_handover` setelah kode valid (context klien
+  tidak berlaku). Perilaku UI CE 19: tombol *Cancel* SO hanya dialog konfirmasi JS generik ("Are you sure…"),
+  tanpa cek faktur/grup; CE hanya membatalkan faktur draf (faktur ter-posting tetap), juga lewat wizard mass-cancel
+  -> semua jalur lewat `_action_cancel` yang di-hook.
+- **SEC-99**: hash kode ambil dihapus saat `picked_up`, `cancelled`, masuk `review`, dan oleh cron (bagian
+  `confirmed/ready` > `efn_online.pickup_code_max_days`, default 7 hari sejak siap/dibayar) + aktivitas staf;
+  serah terima sesudahnya = verifikasi manual manajer (di luar Odoo).
+- **SEC-101**: user teknis kanal hanya boleh `base.group_user` + `group_online_channel` (+ implied keduanya);
+  ditegakkan di kanal, `res.users` (grup/company berubah), dan `res.groups` (implied/user berubah).
+- **SEC-103**: wizard serah terima tidak melempar exception setelah membaca kode (akses ditolak/kode salah/validasi
+  gagal -> pesan), sehingga `code` selalu dikosongkan dan ter-commit.
+
 ## Belum / batasan
 - `/json/2` nyata lewat `odoo-rpc-gateway` + API key belum diuji end-to-end (HttpCase bearer menggantung di harness,
   catatan SEC-58); status HTTP per exception json2 19.0 [B].

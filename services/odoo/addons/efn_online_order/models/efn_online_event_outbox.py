@@ -20,6 +20,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import time
 from datetime import timedelta
 
@@ -46,6 +47,8 @@ EVENTS = [
 HMAC_FILE_ENV = "EFN_ONLINE_EVENT_HMAC_FILE"
 DEFAULT_HMAC_FILE = "/run/secrets/odoo_online_event_hmac"
 SIGNATURE_HEADER = "X-EFN-Signature"
+# Sama dengan validasi BFF (order-events.service.ts): tanpa '@' -> email tidak pernah dikirim.
+LOGIN_SAFE_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 FINAL_HTTP = frozenset({400, 401, 403, 404, 409, 422})
 DEFAULT_MAX_HOURS = 48
 BACKOFF_BASE_SECONDS = 60
@@ -146,7 +149,14 @@ class EfnOnlineEventOutbox(models.Model):
                 "kind": refund.kind,
                 "initiator": refund.initiator,
             }
-        return {
+            if refund.initiator == "odoo" and refund.initiator_user_id:
+                # SEC-95/L-16: identitas pemicu untuk aturan empat mata di BFF. Hanya id + login non-email
+                # (login berbentuk email/karakter lain = PII -> tidak dikirim, cukup uid).
+                refund_payload["initiator_uid"] = refund.initiator_user_id.id
+                login = refund.initiator_user_id.login or ""
+                if LOGIN_SAFE_RE.match(login):
+                    refund_payload["initiator_login"] = login
+        payload = {
             "schema_version": 1,
             "idempotency_key": self.idempotency_key,
             "seq": self.seq,
@@ -159,6 +169,10 @@ class EfnOnlineEventOutbox(models.Model):
             "occurred_at": self.occurred_at.replace(microsecond=0).isoformat() + "Z",
             "refund": refund_payload,
         }
+        if self.event == "cancelled":
+            # SEC-95/L-16: kode alasan (tanpa teks bebas) agar BFF bisa membedakan batal ops (refund_attention).
+            payload["cancel_reason"] = order.cancel_reason or None
+        return payload
 
     # ----------------------------------------------------------------- runner
     @api.model

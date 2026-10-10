@@ -2,15 +2,21 @@
 
 - Kode dibandingkan dengan hash pbkdf2-sha512 (``passlib.verify``, waktu konstan); teks kode TIDAK disimpan di
   wizard setelah dicek dan tidak pernah di-log.
+- SEC-103: tidak ada exception yang lolos setelah kode dibaca (akses ditolak, kode salah, validasi picking
+  gagal -> pesan di wizard), sehingga ``code`` selalu dikosongkan dan ter-commit.
 - Kode salah TIDAK melempar exception (agar penghitung percobaan ter-commit): wizard dibuka ulang dengan pesan.
   Salah ``pickup_max_attempts`` (default 5) kali -> order ``review`` + aktivitas manajer penjualan.
 - Sukses -> picking keluar standar divalidasi (``button_validate``) -> ``picked_up`` -> event ke BFF.
 """
 
+import logging
+
 from odoo import _, fields, models
-from odoo.exceptions import AccessError, UserError
+from odoo.exceptions import AccessError, UserError, ValidationError
 
 from ..models.efn_online_common import normalize_pickup_code
+
+_logger = logging.getLogger(__name__)
 
 
 class EfnOnlineHandoverWizard(models.TransientModel):
@@ -22,19 +28,31 @@ class EfnOnlineHandoverWizard(models.TransientModel):
     message = fields.Char(readonly=True)
     done = fields.Boolean(readonly=True)
 
-    def action_confirm(self):
-        """Verifikasi kode ambil lalu serahkan pesanan (grup Inventory user + record rule + company)."""
-        self.ensure_one()
+    def _efn_confirm(self, code):
         if not self.env.user.has_group("stock.group_stock_user"):
             raise AccessError(_("Hanya staf gudang/outlet yang dapat menyerahkan pesanan online."))
-        order = self.order_id
+        order = self.sudo().order_id.with_user(self.env.user)
         order.check_access("read")
         if order.company_id not in self.env.user.company_ids:
             raise AccessError(_("Pesanan online milik company lain."))
         if self.done:
             raise UserError(_("Serah terima sudah diproses."))
-        code = normalize_pickup_code(self.code)
-        ok, message = order.sudo()._efn_handover(code)
+        return order.sudo()._efn_handover(code)
+
+    def action_confirm(self):
+        """Verifikasi kode ambil lalu serahkan pesanan (grup Inventory user + record rule + company)."""
+        self.ensure_one()
+        # SEC-103: kode dipindah ke variabel lokal; record wizard SELALU dikosongkan dan transaksi di-commit
+        # (tidak ada exception setelah titik ini), baik akses ditolak, kode salah, maupun validasi gagal.
+        code = normalize_pickup_code(self.sudo().code)
+        ok, message = False, ""
+        try:
+            with self.env.cr.savepoint():
+                ok, message = self._efn_confirm(code)
+        except (AccessError, UserError, ValidationError) as exc:
+            ok = False
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else _("Serah terima gagal.")
+            _logger.warning("EFN online handover wizard %s gagal (%s)", self.id, type(exc).__name__)
         self.sudo().write({"code": False, "message": message, "done": ok})
         return {
             "type": "ir.actions.act_window",

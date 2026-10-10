@@ -624,3 +624,29 @@ Kontrak: docs/04 §10 v5.0 (delta §10.4.4 + L-1..L-7 menang atas docs/08 §8.3)
 - Demo pembulatan pakai `biggest_tax` (tanpa akun selisih); akun titipan Holding & pemetaan akun = Finance (Q-2/Q-ON6).
 - Temuan lain (bukan dari modul ini): demo `efn_setup_pos` gagal dimuat di DB `--with-demo` (barcode `2100001000004` bentrok dengan demo CE "Newspaper Rack") — CI tidak memuat demo jadi tidak terlihat; untuk efn-odoo-functional.
 - Untuk devsecops/CI: tambah `efn_online_order efn_setup_online` ke `EFN_TEST_MODULES` dan `efn_online_order` ke `EFN_TOUR_MODULES` (tour tetap 20); mount `odoo_online_event_hmac` ke Odoo (`EFN_ONLINE_EVENT_HMAC_FILE`).
+
+## Gelombang 17 — perbaikan review keamanan r10 (10 Okt 2026, L-16)
+Batas file: hanya `efn_online_order/**` (tidak menyentuh `efn_setup_company/pos/mrp` yang sedang diubah paralel). Tanpa commit/push.
+- **SEC-95**:
+  - Batal SO online dari UI untuk bagian berbayar (`paid/confirmed/stock_short/ready/review` atau sudah ada pembayaran) hanya `sales_team.group_sale_manager`; grup dicek dengan user asli sebelum hook sudo.
+  - Field `sale.order.efn_online_cancel_note` (min. 10 karakter, grup manager) wajib diisi. Teks hanya di chatter, tidak ke BFF.
+  - Bagian dengan picking keluar `done` ditolak.
+  - Event `cancelled` membawa `refund.initiator=odoo` dan `cancel_reason:"ops"`.
+  - Permintaan lead: blok `refund` ber-initiator `odoo` membawa `initiator_uid`. `initiator_login` hanya dikirim bila cocok `^[A-Za-z0-9._-]{1,64}$` (regex BFF), jadi email tidak pernah terkirim. Field baru `efn.online.refund.initiator_user_id`.
+  - `stock.picking._action_done` menolak validasi picking keluar SO online kecuali penanda di `cr.cache` diisi `_efn_handover` setelah kode valid. Context RPC tidak bisa memalsukannya.
+  - Perilaku CE 19 (source image): tombol *Cancel* SO hanya `confirm=` JS generik tanpa cek grup/faktur. `action_cancel` hanya menolak SO `locked`. `_action_cancel` membatalkan faktur **draf** saja, faktur ter-posting tetap. Wizard mass-cancel juga lewat `action_cancel`. Jadi kontrolnya di hook efn.
+- **SEC-99**: hash kode ambil dihapus saat `picked_up`, `cancelled`, masuk `review`, dan oleh cron pengingat. Cron menghapus `confirmed/ready` yang lebih tua dari `efn_online.pickup_code_max_days` (default 7 hari sejak siap/bayar) dan membuat aktivitas staf. Wizard lalu menjawab "kode kedaluwarsa".
+- **SEC-101**: user teknis hanya `base.group_user` + `group_online_channel` (+ implied). Ditegakkan di constraint kanal, `res.users` (grup/company berubah), dan `res.groups` (implied/user berubah). Install `efn_setup_security` sesudahnya tetap lolos.
+- **SEC-103**: wizard tidak melempar exception setelah membaca kode. Akses ditolak, company lain, kode salah, atau validasi gagal dijawab sebagai pesan; `code` selalu dikosongkan dan ter-commit.
+- **Test baru**:
+  - `TestEfnOnlineSecurityR10` (6).
+  - `test_sec103_code_not_kept_when_validation_fails`.
+  - `TestEfnOnlineInitiatorPayload` (3: uid+login aman; email → uid saja; refund BFF tanpa identitas).
+  - Penyesuaian `test_ops_cancel_from_sale_order_ui` dan `test_handover_other_company_denied`.
+- **Validasi**:
+  - Modul online (run cepat sebelum tambahan initiator): 108 test, 0 failed.
+  - Suite efn penuh 14 modul + `efn_setup_security`: 405 test, 0 failed, 0 error(s), 0 baris ERROR
+  - Tour 20/20.
+  - Demo `--with-demo`: 64 test, 0 failed, 0 skip.
+  - ruff check/format lolos.
+- **Untuk lead**: kunci tambahan `cancel_reason` (event `cancelled`) dan `refund.initiator_uid/initiator_login` belum tertulis di docs/04 §10.5. Parser BFF menerima kunci tambahan; `initiator_*` sudah dibaca BFF.

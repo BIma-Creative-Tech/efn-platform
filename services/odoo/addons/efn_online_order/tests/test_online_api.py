@@ -637,13 +637,26 @@ class TestEfnOnlinePaidCancelRefund(EfnOnlineCommon):
         part, _payload, _result = self.place()
         self.pay(part)
         order = self.record(part)
-        order.sale_order_id.with_context(disable_cancel_warning=True).action_cancel()
+        manager = new_test_user(
+            self.env,
+            login="efn_online_ops_mgr",
+            groups="base.group_user,sales_team.group_sale_manager",
+            company_id=self.company.id,
+            company_ids=[Command.set(self.company.ids)],
+        )
+        so = order.sale_order_id
+        so.efn_online_cancel_note = "Pelanggan minta batal via CS #123"
+        so.with_user(manager).action_cancel()
         self.assertEqual(order.state, "cancelled")
+        self.assertFalse(order.pickup_code_hash)
+        self.assertIn("Pelanggan minta batal", order.message_ids[:1].body)
         self.assertEqual(order.cancel_reason, "ops")
         event = order.event_ids.sorted("seq")[-1]
         self.assertEqual(event.event, "cancelled")
         self.assertEqual(event.refund_id.initiator, "odoo")
         self.assertEqual(event.refund_id.amount, 33297.0)
+        self.assertEqual(event._efn_payload()["cancel_reason"], "ops")
+        self.assertNotIn("Pelanggan", str(event._efn_payload()))
 
     def test_record_rules_multi_company(self):
         part, _payload, _result = self.place()
@@ -662,3 +675,167 @@ class TestEfnOnlinePaidCancelRefund(EfnOnlineCommon):
             .with_user(manager_2)
             .search([("order_id.platform_order_ref", "=", part)])
         )
+
+
+@tagged("post_install", "-at_install", "efn")
+class TestEfnOnlineSecurityR10(EfnOnlineCommon):
+    """Review keamanan r10 (docs/reviews/SECURITY_REVIEW_2026-10-09_r10.md, L-16)."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        common = {"company_id": cls.company.id, "company_ids": [Command.set(cls.company.ids)]}
+        cls.salesman = new_test_user(
+            cls.env,
+            login="efn_r10_sales",
+            groups="base.group_user,sales_team.group_sale_salesman_all_leads",
+            **common,
+        )
+        cls.manager = new_test_user(
+            cls.env, login="efn_r10_mgr", groups="base.group_user,sales_team.group_sale_manager", **common
+        )
+        cls.stock_user = new_test_user(
+            cls.env, login="efn_r10_stock", groups="base.group_user,stock.group_stock_user", **common
+        )
+
+    def _paid(self):
+        part, _payload, _result = self.place()
+        self.pay(part)
+        return self.record(part)
+
+    # ---------------------------------------------------------------- SEC-95
+    def test_sec95_salesman_cannot_cancel_paid_online_so(self):
+        order = self._paid()
+        so = order.sale_order_id
+        so.efn_online_cancel_note = "alasan cukup panjang sekali"
+        with self.assertRaises(AccessError):
+            so.with_user(self.salesman).action_cancel()
+        self.assertEqual(order.state, "confirmed")
+        self.assertEqual(so.state, "sale")
+        self.assertFalse(order.refund_ids)
+
+    def test_sec95_manager_needs_reason(self):
+        order = self._paid()
+        so = order.sale_order_id
+        with self.assertRaises(UserError):
+            so.with_user(self.manager).action_cancel()
+        so.efn_online_cancel_note = "terlalu"
+        with self.assertRaises(UserError):
+            so.with_user(self.manager).action_cancel()
+        self.assertEqual(order.state, "confirmed")
+        so.efn_online_cancel_note = "Stok rusak saat disiapkan, sudah konfirmasi pelanggan"
+        so.with_user(self.manager).action_cancel()
+        self.assertEqual(order.state, "cancelled")
+        event = order.event_ids.sorted("seq")[-1]
+        payload = event._efn_payload()
+        self.assertEqual((payload["event"], payload["cancel_reason"]), ("cancelled", "ops"))
+        self.assertEqual(payload["refund"]["initiator"], "odoo")
+
+    def test_sec95_unpaid_cancel_by_salesman_allowed(self):
+        part, _payload, _result = self.place()
+        order = self.record(part)
+        order.sale_order_id.with_user(self.salesman).action_cancel()
+        self.assertEqual(order.state, "cancelled")
+        self.assertEqual(self.record(part).event_ids.sorted("seq")[-1]._efn_payload()["cancel_reason"], "ops")
+
+    def test_sec95_picking_cannot_be_validated_outside_handover(self):
+        order = self._paid()
+        picking = order.sale_order_id.picking_ids
+        self.assertTrue(picking)
+        picking.move_ids.quantity = 3.0
+        for ctx in ({}, {"efn_online_handover_picking_ids": picking.ids, "efn_online_internal": True}):
+            with self.subTest(ctx=ctx), self.assertRaises(UserError):
+                picking.with_user(self.stock_user).with_context(**ctx).button_validate()
+        self.assertNotEqual(picking.state, "done")
+        # Dan pembatalan setelah barang keluar tetap ditolak (jalur normal lewat wizard -> picked_up).
+        self.assertEqual(order.state, "confirmed")
+
+    # ---------------------------------------------------------------- SEC-99
+    def test_sec99_pickup_hash_cleared_on_final_and_review_and_expiry(self):
+        order = self._paid()
+        self.assertTrue(order.pickup_code_hash)
+        order._efn_set_review("amount_mismatch")
+        self.assertFalse(order.pickup_code_hash)
+        cancelled = self._paid()
+        self.order_api().efn_online_cancel(
+            "TST", cancelled.platform_order_ref, "review", f"online:cancel:{cancelled.platform_order_ref}"
+        )
+        self.assertFalse(cancelled.pickup_code_hash)
+        stale = self._paid()
+        stale.paid_at = fields.Datetime.now() - timedelta(days=8)
+        fresh = self._paid()
+        expired = self.env["efn.online.order"]._efn_expire_pickup_codes()
+        self.assertIn(stale.id, expired)
+        self.assertNotIn(fresh.id, expired)
+        self.assertFalse(stale.pickup_code_hash)
+        self.assertTrue(fresh.pickup_code_hash)
+        ok, message = stale._efn_handover(PICKUP_CODE)
+        self.assertFalse(ok)
+        self.assertIn("kedaluwarsa", message)
+
+    # --------------------------------------------------------------- SEC-101
+    def test_sec101_technical_user_only_channel_groups(self):
+        extra = new_test_user(
+            self.env,
+            login="efn_r10_tech_extra",
+            groups="base.group_user,efn_online_order.group_online_channel,sales_team.group_sale_salesman",
+            company_id=self.company.id,
+            company_ids=[Command.set(self.company.ids)],
+        )
+        with self.assertRaises(ValidationError):
+            self.channel.user_ids = [Command.link(extra.id)]
+        # Grup ditambahkan belakangan ke user teknis yang sudah terpasang di kanal -> ditolak.
+        with self.assertRaises(ValidationError):
+            self.tech_user.group_ids = [Command.link(self.env.ref("stock.group_stock_user").id)]
+        with self.assertRaises(ValidationError):
+            self.env.ref("sales_team.group_sale_salesman").user_ids = [Command.link(self.tech_user.id)]
+        # User teknis fixture (Internal User + grup kanal) tetap sah.
+        self.channel._check_efn_users()
+
+
+@tagged("post_install", "-at_install", "efn")
+class TestEfnOnlineInitiatorPayload(EfnOnlineCommon):
+    """SEC-95/L-16: event cancelled/refunded initiator=odoo membawa initiator_uid (+ login non-email)."""
+
+    def _cancel_as(self, login):
+        part, _payload, _result = self.place()
+        self.pay(part)
+        order = self.record(part)
+        user = new_test_user(
+            self.env,
+            login=login,
+            groups="base.group_user,sales_team.group_sale_manager",
+            company_id=self.company.id,
+            company_ids=[Command.set(self.company.ids)],
+        )
+        order.sale_order_id.efn_online_cancel_note = "Batal ops: barang rusak di rak"
+        order.sale_order_id.with_user(user).action_cancel()
+        return order, user, order.event_ids.sorted("seq")[-1]._efn_payload()
+
+    def test_initiator_uid_and_safe_login(self):
+        order, user, payload = self._cancel_as("ops.manager-01")
+        self.assertEqual(payload["event"], "cancelled")
+        refund = payload["refund"]
+        self.assertEqual(refund["initiator"], "odoo")
+        self.assertEqual(refund["initiator_uid"], user.id)
+        self.assertEqual(refund["initiator_login"], "ops.manager-01")
+        self.assertEqual(order.refund_ids.initiator_user_id, user)
+
+    def test_email_login_sends_uid_only(self):
+        _order, user, payload = self._cancel_as("manajer.ops@example.com")
+        refund = payload["refund"]
+        self.assertEqual(refund["initiator_uid"], user.id)
+        self.assertNotIn("initiator_login", refund)
+        self.assertNotIn("@", json.dumps(payload))
+
+    def test_bff_initiated_refund_has_no_initiator_identity(self):
+        part, _payload, _result = self.place()
+        self.pay(part)
+        self.order_api().efn_online_refund(
+            "TST", part, {"idempotency_key": f"online:refund:{uuid.uuid4()}", "full": True, "reason": "customer_cs"}
+        )
+        payload = self.record(part).event_ids.sorted("seq")[-1]._efn_payload()
+        self.assertEqual(payload["event"], "refunded")
+        self.assertEqual(payload["refund"]["initiator"], "bff")
+        self.assertNotIn("initiator_uid", payload["refund"])
+        self.assertNotIn("initiator_login", payload["refund"])
