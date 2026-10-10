@@ -28,7 +28,7 @@ from efn_etl.config import Settings
 from efn_etl.erasure import SQL_PENDING_ERASURES, excluded_hashes, parse_requests, run_erasure
 from efn_etl.gl import GL_JOBS
 from efn_etl.heartbeat import Heartbeat, JobRun, make_heartbeat
-from efn_etl.jobs import enabled_jobs
+from efn_etl.jobs import AgeOut, enabled_jobs
 from efn_etl.loki import HttpsLokiTransport
 from efn_etl.loyalty_recon import LoyaltyReconSettings, run_loyalty_recon
 from efn_etl.loyalty_recon import recon_due as loyalty_recon_due
@@ -215,7 +215,8 @@ def main() -> None:
         points_codes=settings.points_product_codes,
         not_before=settings.loyalty_recon_not_before,
     )
-    jobs = enabled_jobs(settings.odoo_enabled, settings.points_product_codes)
+    age_out = AgeOut(geo_days=settings.geo_retention_days, pseudonym_years=settings.pseudonym_retention_years)
+    jobs = enabled_jobs(settings.odoo_enabled, settings.points_product_codes, age_out)
     if settings.gl_enabled:
         jobs.extend(GL_JOBS)
     overlap = timedelta(seconds=settings.overlap_seconds)

@@ -176,3 +176,25 @@ def test_loyalty_recon_defaults_follow_odoo(tls_env: dict[str, str]) -> None:
     assert settings.loyalty_recon_not_before is None
     cutoff = Settings.from_env({**tls_env, "ETL_LOYALTY_RECON_NOT_BEFORE": "2026-10-07T07:09:00Z"})
     assert cutoff.loyalty_recon_not_before is not None and cutoff.loyalty_recon_not_before.hour == 7
+
+
+def test_column_retention_defaults_w19(tls_env: dict[str, str]) -> None:
+    # G18/W-19 (PDP v7): pseudonim 5 th, lokasi Price Hunter 90 h — env sama dengan clickhouse-init.
+    settings = Settings.from_env(tls_env)
+    assert (settings.pseudonym_retention_years, settings.geo_retention_days) == (5, 90)
+    custom = Settings.from_env({**tls_env, "CH_PSEUDONYM_RETENTION_YEARS": "3", "CH_GEO_RETENTION_DAYS": "30"})
+    assert (custom.pseudonym_retention_years, custom.geo_retention_days) == (3, 30)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"CH_PSEUDONYM_RETENTION_YEARS": "0"},
+        {"CH_PSEUDONYM_RETENTION_YEARS": "31"},
+        {"CH_GEO_RETENTION_DAYS": "0"},
+        {"CH_GEO_RETENTION_DAYS": "3651"},
+    ],
+)
+def test_column_retention_out_of_range_fails(tls_env: dict[str, str], override: dict[str, str]) -> None:
+    with pytest.raises(RuntimeError):
+        Settings.from_env({**tls_env, **override})

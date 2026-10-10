@@ -40,6 +40,13 @@ def _int(env: Mapping[str, str], name: str, default: int) -> int:
     return int(_str(env, name, str(default)))
 
 
+def _int_range(env: Mapping[str, str], name: str, default: int, low: int, high: int) -> int:
+    value = _int(env, name, default)
+    if not low <= value <= high:
+        raise RuntimeError(f"{name} di luar rentang {low}..{high}")
+    return value
+
+
 def _bool(env: Mapping[str, str], name: str, default: bool) -> bool:
     return _str(env, name, "true" if default else "false").strip().lower() in _TRUE
 
@@ -122,6 +129,10 @@ class Settings:
     loyalty_recon_aged_hours: int = 24
     loyalty_recon_open_days: int = 30
     loyalty_recon_not_before: datetime | None = None
+    # G18/W-19 (PDP v7 Q-P7/Q-P8): umur kolom pribadi saat dimuat (lapisan kedua TTL kolom ClickHouse). Env SAMA
+    # dengan service clickhouse-init agar kedua lapisan konsisten.
+    pseudonym_retention_years: int = 5
+    geo_retention_days: int = 90
 
     @property
     def amqp_user(self) -> str:
@@ -249,4 +260,6 @@ class Settings:
             loyalty_recon_aged_hours=_int(e, "ETL_LOYALTY_RECON_AGED_HOURS", 24),
             loyalty_recon_open_days=_int(e, "ETL_LOYALTY_RECON_OPEN_DAYS", 30),
             loyalty_recon_not_before=_datetime(e, "ETL_LOYALTY_RECON_NOT_BEFORE"),
+            pseudonym_retention_years=_int_range(e, "CH_PSEUDONYM_RETENTION_YEARS", 5, 1, 30),
+            geo_retention_days=_int_range(e, "CH_GEO_RETENTION_DAYS", 90, 1, 3650),
         )

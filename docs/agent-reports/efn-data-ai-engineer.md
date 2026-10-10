@@ -497,3 +497,63 @@ text2sql **93 passed** · `pip-audit -r requirements.txt --strict` dan `-r requi
 - Dump backup di scratchpad sesi tidak terenkripsi; hapus setelah upgrade dinyatakan stabil.
 - Rendering UI dashboard di browser (filter, visualisasi) tidak dicek — hanya eksekusi kartu via API.
 - Staging/prod belum di-upgrade; ikuti urutan README (backup dulu).
+
+## Gelombang 18 — W-19 retensi data (ClickHouse TTL 10 th / pseudonim 5 th, lokasi Price Hunter 90 h, Metabase) (10 Okt 2026)
+
+Sumber: `docs/10_RENCANA_GELOMBANG_18_PLUS.md` W-19, `docs/compliance/PDP_DATA_INVENTORY.md` v7 §0a/§3, keputusan
+Q-6/Q-49 (DWH 10 th), Q-P7 (pseudonim), Q-P8 (lokasi 90 h), Q-P14 (riwayat Metabase 10 th).
+**Penafsiran Q-P7 vs Q-6** = sama dengan usulan lead: *baris fakta 10 th, kolom pseudonim dikosongkan setelah 5 th*.
+Tidak ada penafsiran berbeda.
+
+### File
+| File | Perubahan |
+|---|---|
+| `infra/clickhouse/clickhouse-init.sh` | Blok retensi (milik data-AI) ditulis ulang: `CH_MART_RETENTION_YEARS` default **10**; baru `CH_PSEUDONYM_RETENTION_YEARS` (5, 1..mart) dan `CH_GEO_RETENTION_DAYS` (90, 1..3650); TTL kolom `competitor_prices.user_hash/geo_lat/geo_lng`, `loyalty_events.member_hash`, `fact_sales_line.customer_id`; `MATERIALIZE TTL` sekali per tabel hanya bila definisi berubah (hash `create_table_query`); migrasi sekali `loyalty_events`. Blok salinan audit 10 th **tidak disentuh**. |
+| `infra/clickhouse/init/02-loyalty-etl.sql` | `loyalty_events` (volume baru) `ORDER BY (event_id)` + skip index `bloom_filter` `member_hash` + `ttl_only_drop_parts=1`. |
+| `services/etl/efn_etl/jobs.py` | `AgeOut` (lapisan kedua): saat transformasi, `geo_*` -> None setelah 90 h; `user_hash`/`member_hash` -> '' dan `customer_id` -> None setelah 5 th (validasi hash tetap fail-closed). Job dibangun lewat factory (`competitor_prices_job`, `loyalty_events_job`, `sales_fact_job`). |
+| `services/etl/efn_etl/config.py`, `__main__.py` | Membaca `CH_PSEUDONYM_RETENTION_YEARS` (1..30), `CH_GEO_RETENTION_DAYS` (1..3650); di luar rentang = gagal start. |
+| `services/etl/tests/test_jobs.py`, `test_config.py` | +13 test (batas 90 h / 5 th, 29 Feb, fail-closed pada baris lama, kebijakan custom, rentang env). Test lama kini memakai `now` tetap (tidak membusuk setelah Jan 2027). |
+| `infra/metabase/provision.py` (+ `tests/test_provision.py`, +5 test) | `--deactivate-inactive-days` (default 90, 0 = mati) dan `--housekeeping-only`; `inactive_users()` murni; log hanya id (tanpa email). |
+| `services/etl/README.md` §Retensi, `infra/metabase/README.md` §Retensi riwayat & akun tidak aktif | Dokumentasi. |
+| `services/ai-ocr-worker/**` | **Tidak diubah**: worker hanya memakai `geo_*` saat memproses laporan (geofence, toleran NULL — `tests/test_fraud.py:38`) dan tidak menyimpannya. |
+
+### Temuan teknis (diverifikasi di ClickHouse dev 24.8.14.39)
+1. TTL kolom didukung pada tabel yang ada (`ALTER TABLE ... MODIFY COLUMN <kolom> <tipe SAMA> TTL ...`; tanpa tipe = syntax error karena `TTL` dibaca sebagai nama tipe). Tipe sama = perubahan metadata saja.
+2. **TTL kolom ditolak untuk kolom kunci**: `Trying to set TTL for key column member_hash (ILLEGAL_COLUMN)` -> `loyalty_events` (dulu `ORDER BY (member_hash, event_id)`) dimigrasi ke `ORDER BY (event_id)`.
+3. TTL kolom tetap berlaku dengan `ttl_only_drop_parts=1` (setting itu hanya untuk TTL baris). Insert baris yang TTL kolomnya sudah lewat **tidak** langsung dikosongkan (baru saat merge) -> alasan lapisan ETL `AgeOut`. Baris yang TTL barisnya sudah lewat dibuang saat insert.
+4. Part lama tanpa info TTL tidak otomatis diproses -> `MATERIALIZE TTL` (mutation async) sekali saat definisi berubah.
+
+### Uji nyata (stack dev)
+- `clickhouse-init` (env `CH_MART_RETENTION_YEARS=10 CH_PSEUDONYM_RETENTION_YEARS=5 CH_GEO_RETENTION_DAYS=90` di-override karena `.env` dev masih 5): run 1 exit 0 — migrasi `loyalty_events` (30 440 event unik, `sum(delta_points)` 455 891 sama sebelum/sesudah; tabel lama di-DROP; ETL tetap jalan selama migrasi tanpa kehilangan baris), 7 tabel `MATERIALIZE TTL` (semua `is_done=1`). Run 2 exit 0: tanpa migrasi, tanpa mutation (idempoten).
+- Grant setelah `EXCHANGE TABLES` utuh: `etl_writer` SELECT/INSERT/ALTER DELETE, grant kolom `text2sql_reader`/`metabase_reader` pada `loyalty_events`. `audit_log_copy` tetap `TTL ... + 10 YEAR`, tanpa TTL kolom.
+- Baris uji sintetis: lokasi 100 h -> `geo_*` NULL & hash tetap; 6 th -> `user_hash`/`member_hash` ''; 11 th -> dibuang saat insert; 5 903 baris lokasi baru tetap. Baris uji dihapus.
+- Image ETL dibangun ulang dan container di-recreate: heartbeat `competitor_prices`, `loyalty_events`, `sales_fact_pos`, `cycle` = ok.
+- `metabase-provision` 2x exit 0 (33 kartu completed); akun uji `w19-probe@efn.local` dengan `date_joined` 120 h -> `--housekeeping-only` menonaktifkan (exit 0). Akun uji dibiarkan nonaktif di DB dev.
+- pytest: ETL 205 passed / 1 skipped; Metabase 28 passed. ruff check + format bersih (ETL, Metabase).
+- Data dev: event ledger `4`,`5` sempat ganda di mart (hash lama + hash sumber, sisa data uji lama); kunci baru menyatukannya ke hash lama -> dikoreksi manual ke nilai sumber. Dengan `ORDER BY event_id`, perubahan hash di sumber kini menimpa baris lama (sebelumnya menghasilkan dua baris).
+
+### Metabase 0.58 (Q-P14 & akun tidak aktif)
+- Riwayat query = `query_execution`, dipangkas task OSS `TruncateAuditTables` menurut `audit-max-retention-days`: setting **internal tanpa setter** (API: "Pengaturan :audit-max-retention-days internal") -> **tidak bisa lewat `provision.py`**, hanya env `MB_AUDIT_MAX_RETENTION_DAYS`. OSS hanya memangkas `query_execution`; `audit_log`/`view_log` (Pro/EE) kosong di dev.
+- Akun tidak aktif 90 h: **tidak ada fitur bawaan OSS** -> diemulasikan di `provision.py` (deactivate, bukan hapus). Butuh jadwal harian agar efektif (provision hanya saat deploy).
+
+### Env baru / berubah untuk devsecops
+| Env | Service | Nilai |
+|---|---|---|
+| `CH_MART_RETENTION_YEARS` | `clickhouse-init` | **10** — compose (`:-5`), `.env`, `.env.example`, `deploy.yml` (default '5'), `scripts/deploy.sh:280` masih 5 -> ubah ke 10 (default skrip kini 10) |
+| `CH_PSEUDONYM_RETENTION_YEARS` | `clickhouse-init` **dan** `etl` | 5 (baru) |
+| `CH_GEO_RETENTION_DAYS` | `clickhouse-init` **dan** `etl` | 90 (baru) |
+| `MB_AUDIT_MAX_RETENTION_DAYS` | `metabase` | **3650** (baru) |
+| timer harian | host | `metabase-provision <argumen sama> --housekeeping-only` (akun tidak aktif 90 h) |
+
+Rekomendasi deploy pertama: `stop etl` sebelum `clickhouse-init` (migrasi `loyalty_events`), lalu `up etl`.
+
+### Untuk lead / BFF
+- Pemilik data lokasi di Postgres = BFF (`platform.price_hunter_report`; ETL/OCR hanya baca, tanpa UPDATE — least privilege). Perubahan BFF yang sedang berjalan di branch ini (`retention.service.ts`: `geo_lat/geo_lng = NULL, updated_at = now()` setelah `PRICE_HUNTER_GEO_RETENTION_DAYS`) **cocok** dengan sisi ClickHouse: `updated_at` dinaikkan -> ETL memuat versi tanpa lokasi; TTL kolom + `AgeOut` menutup sisanya.
+- PDP inventory §2/§3 perlu revisi (architect): `competitor_prices`/`loyalty_events`/`fact_sales_line` baris 10 th, kolom pseudonim 5 th, geo 90 h; status Q-P8 sisi ClickHouse = jalan.
+
+### Belum / risiko sisa
+- Env compose/CI/deploy belum diubah (milik devsecops) -> sampai itu, `.env` dev/prod tetap memberi TTL baris **5 th** dan ETL memakai default 5 th/90 h.
+- `MB_AUDIT_MAX_RETENTION_DAYS` belum diset dan efeknya belum diuji (task truncation terjadwal, tidak dipicu manual); default 720 h bersumber dokumentasi upstream, tidak terverifikasi dari jar.
+- Jendela race migrasi: erasure DSAR yang jalan tepat di antara salin dan `EXCHANGE` diulang otomatis (verifikasi `count()=0`), tetapi penyalinan "jendela migrasi" (1 jam, `_loaded_at`) secara teori bisa mengembalikan baris subjek yang dihapus pada menit yang sama -> mitigasi: stop ETL saat deploy itu.
+- Versi sama (`created_at`) di `loyalty_events`: bila hash sumber berubah tanpa mengubah `created_at`, pemenang merge = insert terakhir (reload ETL memperbaikinya).
+- Tidak ada view/semantic layer yang mengekspos `member_hash`/`user_hash`; tidak diubah.

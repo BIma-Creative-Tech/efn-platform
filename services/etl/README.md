@@ -88,9 +88,28 @@ Rekonsiliasi (`ETL_AUDIT_RECON_INTERVAL_SECONDS`, default harian) -> baris `audi
 
 Kebijakan: gap id **di PostgreSQL sendiri** (sequence) bukan indikasi — rollback transaksi Odoo menghabiskan id; yang dibandingkan hanya log yang pernah tersalin. Log yang dihapus sebelum sempat disalin (< settle + interval) tidak terdeteksi oleh salinan; jalur itu ditutup sink Loki `EFN_AUDIT_SINK` untuk model kontrol. Alert Loki yang diusulkan (devsecops): `{service="etl"} |= "EFN_AUDIT_RECON" |= "WARNING"` dan `|= "job=audit_copy gagal"`.
 
-### Retensi
-TTL mart default 5 tahun (`CH_MART_RETENTION_YEARS` di service `clickhouse-init`, 1..30), diterapkan `infra/clickhouse/clickhouse-init.sh` setiap deploy.
-Salinan audit: `CH_AUDIT_COPY_RETENTION_YEARS` (default 10, 2..30; usulan menunggu DPO/Q-49). `fact_gl_line` tanpa TTL (arsip keuangan).
+### Retensi (G18/W-19, PDP v7 §0a/§3 — Q-6/Q-49, Q-P7, Q-P8)
+Diterapkan `infra/clickhouse/clickhouse-init.sh` setiap deploy (idempoten; env di service `clickhouse-init`):
+
+| Env | Default | Rentang | Efek |
+|---|---|---|---|
+| `CH_MART_RETENTION_YEARS` | **10** (sebelumnya 5) | 1..30 | TTL baris semua mart (`competitor_prices`, `loyalty_events`, `fact_sales_line`, `fact_pos_payment`, snapshot stok) |
+| `CH_PSEUDONYM_RETENTION_YEARS` | **5** | 1..`CH_MART_RETENTION_YEARS` | TTL kolom: `competitor_prices.user_hash` & `loyalty_events.member_hash` -> `''`, `fact_sales_line.customer_id` -> NULL |
+| `CH_GEO_RETENTION_DAYS` | **90** | 1..3650 | TTL kolom: `competitor_prices.geo_lat/geo_lng` -> NULL |
+
+- Penafsiran Q-P7 vs Q-6 (rencana G18 §3): *baris fakta 10 th, kolom pseudonim dikosongkan setelah 5 th*.
+- TTL kolom diterapkan server saat merge. Bila definisi TTL berubah, init menjalankan `MATERIALIZE TTL` sekali per
+  tabel (mutation async) agar part lama ikut diproses; deploy ulang dengan env sama = tanpa mutation.
+- **Lapisan kedua di ETL** (`efn_etl/jobs.py` `AgeOut`): baris yang dimuat (ulang) sudah dikosongkan saat transformasi
+  bila melewati batas yang sama, sehingga backfill tidak menghidupkan kembali hash/lokasi lama sampai merge berikutnya.
+  ETL membaca env yang **sama** (`CH_PSEUDONYM_RETENTION_YEARS`, `CH_GEO_RETENTION_DAYS`) — set di service `etl` juga.
+- `loyalty_events` kini `ORDER BY (event_id)` (TTL kolom tidak boleh pada kolom kunci; diuji 24.8.14) + skip index
+  `bloom_filter` pada `member_hash` untuk erasure. Volume lama dimigrasi otomatis oleh init (salin -> `EXCHANGE TABLES`
+  -> salin baris jendela migrasi -> `DROP` tabel lama). **Hentikan `etl` selama deploy pertama yang memuat migrasi ini**
+  (rekomendasi; ETL yang tetap jalan sudah diuji di dev tanpa kehilangan baris).
+- Sumber PostgreSQL: `platform.price_hunter_report.geo_*` di-NULL setelah 90 h oleh job retensi **BFF** (pemilik
+  tabel, `PRICE_HUNTER_GEO_RETENTION_DAYS`), dengan `updated_at` diperbarui sehingga ETL membawa versi tanpa lokasi.
+- Salinan audit: `CH_AUDIT_COPY_RETENTION_YEARS` (default 10, 2..30) — tidak diubah. `fact_gl_line` tanpa TTL (arsip keuangan).
 
 ### Grant Odoo
 `sql/odoo-readonly-grants.sql` — grant kolom minimum + index `(write_date, id)`; dijalankan devsecops pasca-install/upgrade Odoo sebagai `efn_odoo`.
