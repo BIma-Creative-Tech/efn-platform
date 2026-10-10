@@ -905,7 +905,15 @@ class TestEfnOnlineReReviewG17(EfnOnlineCommon):
         picking = order.sale_order_id.picking_ids
         internal = self.warehouse.with_context(active_test=False).int_type_id
         self.assertTrue(internal)
-        picking.with_user(self.stock_user).write({"picking_type_id": internal.id})
+        # SEC-110: tulis lewat ORM kini ditolak; jaring stock.move._action_done diuji dengan perubahan langsung DB.
+        with self.assertRaises(UserError):
+            picking.with_user(self.stock_user).write({"picking_type_id": internal.id})
+        self.env.flush_all()
+        self.env.cr.execute("UPDATE stock_picking SET picking_type_id = %s WHERE id = %s", (internal.id, picking.id))
+        self.env.cr.execute(
+            "UPDATE stock_move SET picking_type_id = %s WHERE picking_id = %s", (internal.id, picking.id)
+        )
+        self.env.invalidate_all()
         picking.move_ids.quantity = 3.0
         with self.assertRaises(UserError):
             picking.with_user(self.stock_user).with_context(efn_online_internal=True).button_validate()
@@ -922,7 +930,12 @@ class TestEfnOnlineReReviewG17(EfnOnlineCommon):
                 "company_id": self.company.id,
             }
         )
-        picking.move_ids.write({"picking_id": manual.id})
+        with self.assertRaises(UserError):
+            picking.move_ids.with_user(self.stock_user).write({"picking_id": manual.id})
+        self.env.flush_all()
+        self.env.cr.execute("UPDATE stock_move SET picking_id = %s WHERE picking_id = %s", (manual.id, picking.id))
+        self.env.cr.execute("UPDATE stock_move_line SET picking_id = %s WHERE picking_id = %s", (manual.id, picking.id))
+        self.env.invalidate_all()
         self.assertNotEqual(manual, picking)
         manual.move_ids.quantity = 3.0
         with self.assertRaises(UserError):
@@ -947,3 +960,117 @@ class TestEfnOnlineReReviewG17(EfnOnlineCommon):
             self.skipTest("pos_sale tidak terpasang")
         with self.assertRaises(UserError):
             PosLine.create([{"sale_order_origin_id": order.sale_order_id.id, "product_id": self.p_rice.id, "qty": 3}])
+
+
+@tagged("post_install", "-at_install", "efn")
+class TestEfnOnlineGuardedFieldsSec110(EfnOnlineCommon):
+    """SEC-110 (re-review akhir r10): field kunci guard serah terima tidak bisa ditulis di luar jalur internal."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.stock_user = new_test_user(
+            cls.env,
+            login="efn_s110_stock",
+            groups="base.group_user,stock.group_stock_manager",
+            company_id=cls.company.id,
+            company_ids=[Command.set(cls.company.ids)],
+        )
+
+    def _paid(self):
+        part, _payload, _result = self.place()
+        self.pay(part)
+        order = self.record(part)
+        picking = order.sale_order_id.picking_ids
+        picking.action_assign()
+        return order, picking, picking.move_ids
+
+    def test_move_guarded_fields_rejected(self):
+        order, picking, move = self._paid()
+        internal_loc = self.warehouse.lot_stock_id
+        internal_type = self.warehouse.with_context(active_test=False).int_type_id
+        manual = self.env["stock.picking"].create(
+            {
+                "picking_type_id": internal_type.id,
+                "location_id": internal_loc.id,
+                "location_dest_id": internal_loc.id,
+                "company_id": self.company.id,
+            }
+        )
+        cases = {
+            "sale_line_id": False,
+            "location_dest_id": internal_loc.id,
+            "location_final_id": internal_loc.id,
+            "picking_type_id": internal_type.id,
+            "picking_id": manual.id,
+        }
+        for fname, value in cases.items():
+            for ctx in ({}, {"efn_online_internal": True, "efn_online_handover_so_ids": order.sale_order_id.ids}):
+                with self.subTest(field=fname, ctx=ctx), self.assertRaises(UserError):
+                    move.with_user(self.stock_user).with_context(**ctx).write({fname: value})
+        self.assertEqual(move.sale_line_id.order_id, order.sale_order_id)
+        self.assertEqual(move.location_dest_id.usage, "customer")
+
+    def test_move_line_guarded_fields_rejected(self):
+        _order, _picking, move = self._paid()
+        line = move.move_line_ids[:1]
+        self.assertTrue(line, "reservasi harus membuat rincian operasi")
+        other_move = self.env["stock.move"].create(
+            {
+                "product_id": self.p_rice.id,
+                "product_uom_qty": 1,
+                "location_id": self.warehouse.lot_stock_id.id,
+                "location_dest_id": self.warehouse.lot_stock_id.id,
+                "company_id": self.company.id,
+            }
+        )
+        for fname, value in (("location_dest_id", self.warehouse.lot_stock_id.id), ("move_id", other_move.id)):
+            with self.subTest(field=fname), self.assertRaises(UserError):
+                line.with_user(self.stock_user).write({fname: value})
+
+    def test_picking_guarded_fields_rejected(self):
+        _order, picking, _move = self._paid()
+        for fname, value in (
+            ("location_dest_id", self.warehouse.lot_stock_id.id),
+            ("picking_type_id", self.warehouse.with_context(active_test=False).int_type_id.id),
+        ):
+            with self.subTest(field=fname), self.assertRaises(UserError):
+                picking.with_user(self.stock_user).write({fname: value})
+
+    def test_attach_foreign_move_to_online_line_rejected(self):
+        order, _picking, move = self._paid()
+        foreign = self.env["stock.move"].create(
+            {
+                "product_id": self.p_rice.id,
+                "product_uom_qty": 1,
+                "location_id": self.warehouse.lot_stock_id.id,
+                "location_dest_id": self.warehouse.lot_stock_id.id,
+                "company_id": self.company.id,
+            }
+        )
+        with self.assertRaises(UserError):
+            foreign.with_user(self.stock_user).write({"sale_line_id": move.sale_line_id.id})
+        self.assertFalse(foreign.sale_line_id)
+
+    def test_harmless_writes_and_standard_flows_allowed(self):
+        order, picking, move = self._paid()
+        # Nilai sama (no-op) dan field lain tetap boleh.
+        move.with_user(self.stock_user).write({"location_dest_id": move.location_dest_id.id, "priority": "1"})
+        picking.with_user(self.stock_user).write({"picking_type_id": picking.picking_type_id.id, "note": "rak B"})
+        # Serah terima lewat wizard (jalur internal) tetap bisa mengeluarkan barang.
+        ok, _message = order._efn_handover(PICKUP_CODE)
+        self.assertTrue(ok)
+        self.assertEqual(picking.state, "done")
+        # Pembatalan oleh manager tetap bisa (picking dibatalkan di dalam jalur internal).
+        other, other_picking, _m = self._paid()
+        manager = new_test_user(
+            self.env,
+            login="efn_s110_mgr",
+            groups="base.group_user,sales_team.group_sale_manager",
+            company_id=self.company.id,
+            company_ids=[Command.set(self.company.ids)],
+        )
+        other.sale_order_id.efn_online_cancel_note = "Barang rusak di rak, sudah konfirmasi pelanggan"
+        other.sale_order_id.with_user(manager).action_cancel()
+        self.assertEqual(other.state, "cancelled")
+        self.assertEqual(other_picking.state, "cancel")

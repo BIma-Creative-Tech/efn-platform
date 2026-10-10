@@ -692,3 +692,7 @@ Batas file: hanya `efn_online_order/**` (tidak menyentuh `efn_setup_company/pos/
   - no-op/field lain boleh; serah terima wizard dan batal manager tetap jalan.
   - Dua test SEC-105 disesuaikan: tulis ORM kini ditolak, jaring `_action_done` diuji lewat perubahan langsung DB.
 
+- **Validasi** (container, DB sementara):
+  - Suite efn penuh (+ `pos_sale`, `efn_online_pos_sale`, lalu `efn_setup_security`): **418 test, 0 failed, 0 error, 0 baris ERROR**. Warning baru `no translation language detected` dari helper guard diperbaiki (`env._`), kini 0.
+  - Tour (+ `pos_sale`, `efn_online_pos_sale`): **20/20, 0 ERROR, 0 skip**.
+  - ruff check/format lolos.

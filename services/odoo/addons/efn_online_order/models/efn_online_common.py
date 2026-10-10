@@ -143,3 +143,14 @@ def internal_scope(env, key, ids):
 def in_scope(env, key, ids):
     ids = set(ids)
     return bool(ids) and ids <= (env.cr.cache.get(key) or set())
+
+
+def in_any_scope(env, ids):
+    """True bila semua SO berada di salah satu jalur internal E-28 (konfirmasi, batal, serah terima)."""
+    ids = set(ids)
+    if not ids:
+        return True
+    allowed = set()
+    for key in (CONFIRM_SCOPE, CANCEL_SCOPE, HANDOVER_SCOPE):
+        allowed |= env.cr.cache.get(key) or set()
+    return ids <= allowed

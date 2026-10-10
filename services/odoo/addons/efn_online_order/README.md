@@ -120,6 +120,15 @@ Uji manual: Penjualan → Pesanan → **Pesanan online** (filter "Perlu disiapka
   `ir_cron_progress_id` (metode cron privat, tidak RPC) dan context standar Odoo (`send_email=False`,
   `skip_backorder`, `mail_create_nosubscribe`) yang tidak membuka guard.
 
+## Re-review akhir r10 (SEC-110)
+- `stock.move.write` menolak perubahan `sale_line_id`, `location_dest_id`, `location_final_id`, `picking_type_id`,
+  `picking_id` pada move milik SO online, juga memasang move lain ke baris SO online. `stock.move.line.write`
+  menolak `location_dest_id`, `picking_id`, `move_id`. `stock.picking.write` menolak `location_dest_id`,
+  `picking_type_id` (field move computed-stored ikut berubah lewat picking).
+- Pengecualian hanya jalur internal E-28 di `cr.cache` (konfirmasi, batal, serah terima: `in_any_scope`); context
+  diabaikan. Tulis nilai yang sama (no-op) dan field lain tetap boleh. Reservasi standar tidak menulis field ini.
+- Guard `stock.move._action_done` (SEC-105) tetap sebagai jaring kedua (diuji dengan perubahan langsung DB).
+
 ## Belum / batasan
 - `/json/2` nyata lewat `odoo-rpc-gateway` + API key belum diuji end-to-end (HttpCase bearer menggantung di harness,
   catatan SEC-58); status HTTP per exception json2 19.0 [B].
