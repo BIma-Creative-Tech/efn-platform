@@ -1502,6 +1502,18 @@ Belum / perlu tindakan:
   Container `api-gateway` dev BELUM di-recreate: perlu key RTL nyata di `secrets/odoo_api_key_online_rtl.txt` (runbook
   odoo-online-api-key §1, setelah E-28 + user teknis `efn_online_rtl` ada) dan migrasi 07 di volume dev lama.
 
+## G17.11 Sizing pilot opsi B (keputusan pemilik proyek 10 Okt 2026)
+- `docker-compose.prod.yml`: gateway `ODOO_RPC_MAXCONN ${..:-2}`; api-gateway `ODOO_RPC_PUBLIC_MAX_CONCURRENCY ${..:-1}`,
+  `ODOO_RPC_SAGA_MAX_CONCURRENCY ${..:-1}`. Base compose: kedua pool `${..:-2}` (dev 2 + 2 = maxconn 4). Render tanpa
+  .env: dev 4/2/2, prod 2/1/1.
+- `deploy-validate.sh`: kedua pool masuk `EFN_RELEASE_CONFIG_VARS` (rentang 1..16) + aturan PUBLIC + SAGA ≤ MAXCONN
+  (default efektif prod 2/1/1); `deploy.sh` `.env`; `deploy.yml` `CFG_ODOO_RPC_{PUBLIC,SAGA}_MAX_CONCURRENCY`;
+  `.env.example`; runbook `online-orders.md#sizing-worker` (keputusan opsi B ditandai, tabel skenario + pool).
+- Uji: efn-deploy **109/109** (+6 kasus 104–109), compose config dev/prod, check-encryption, shellcheck 0.9.0, actionlint OK.
+- Catatan: prod 2 replika BFF → permintaan paralel maks. 2 × (1+1) = 4 ke gateway; Odoo tetap maks. 2 koneksi online,
+  sisanya antre/503 di gateway (aturan per replika sesuai instruksi lead; pertimbangkan replika BFF 1 atau aturan
+  replika × pool ≤ maxconn bila antre sering).
+
 ## G17.10 Perbaikan CI PR #36 (HEAD a522da6), 10 Okt 2026
 - **ruff 0.16.10:** `services/odoo/addons/efn_setup_company/tests/__init__.py` (I001, import digabung; perilaku sama).
 - **shellcheck 0.9.0 (versi CI):** `scripts/smoke/run-e2e-smoke.sh` SC2001 ×2 → helper `nomsg()` (`sed -E`, perilaku

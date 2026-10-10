@@ -677,3 +677,18 @@ Batas file: hanya `efn_online_order/**` (tidak menyentuh `efn_setup_company/pos/
   - Tour dengan `pos_sale` + `efn_online_pos_sale`: **20/20, 0 ERROR, 0 skip browser**.
   - Modul online tanpa `pos_sale`: **118 test, 0 failed** (test POS di-skip dengan benar).
   - ruff check/format lolos.
+
+## Gelombang 17 — re-review akhir r10: SEC-110 (10 Okt 2026)
+- **Kode** (`efn_online_order/models/sale_order.py`): guard tulis pada field kunci serah terima, di luar jalur internal `cr.cache` (`in_any_scope`: konfirmasi/batal/serah terima; context diabaikan).
+  - `stock.move`: `sale_line_id`, `location_dest_id`, `location_final_id`, `picking_type_id`, `picking_id`. Juga memasang move asing ke baris SO online.
+  - `stock.move.line`: `location_dest_id`, `picking_id`, `move_id`.
+  - `stock.picking`: `location_dest_id`, `picking_type_id`. Diperlukan karena field move tersebut computed-stored dan ikut berubah lewat picking.
+  - No-op (nilai sama) dan field lain tetap boleh.
+- **Test** `TestEfnOnlineGuardedFieldsSec110` (5):
+  - tiap field move ditolak, termasuk dengan context palsu;
+  - field move line ditolak;
+  - field picking ditolak;
+  - memasang move asing ke baris SO online ditolak;
+  - no-op/field lain boleh; serah terima wizard dan batal manager tetap jalan.
+  - Dua test SEC-105 disesuaikan: tulis ORM kini ditolak, jaring `_action_done` diuji lewat perubahan langsung DB.
+

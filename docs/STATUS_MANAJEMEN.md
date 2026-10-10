@@ -1,86 +1,113 @@
 # Status Proyek EFN Platform — Ringkasan Satu Halaman untuk Manajemen
 
-**Per 9 Oktober 2026 · Fase 1 (pilot kasir retail + poin EFN) dan Fase 2 (pilot restoran/F&B + layar dapur) · Disusun oleh tim arsitektur (Athera)**
+**Per 10 Oktober 2026 · Fase 1 (poin EFN di kasir retail), Fase 2 (restoran + layar dapur), Fase 3 (belanja online Super-App) · Disusun oleh tim arsitektur (Athera)**
 
 ## Ringkasan
-Fase 1 (poin EFN di kasir retail) sudah siap pilot secara teknis, tetapi masih menunggu **server staging** dan **batas poin dari Finance**. Fase 2 sudah berjalan: **layar dapur (KDS)** selesai dibangun dan diuji di lingkungan pengembangan. Reviewer keamanan menyatakan **GO bersyarat** untuk satu outlet F&B pilot dengan 8 syarat. Perbaikan teknisnya sudah dikerjakan; sisanya menunggu staging dan keputusan klien (outlet pilot, stasiun dapur, perangkat, dan apakah pelanggan boleh memesan dari ponsel).
+**Fase 3, belanja online, selesai dibangun dan lulus uji** di lingkungan pengembangan. Pelanggan memilih barang di Super-App, membayar sekali, lalu mengambil barang di toko dengan kode ambil. Reviewer keamanan menyatakan **aman untuk digabung ke kode utama**. Fitur ini **sengaja dimatikan di produksi** sampai 7 syarat aktivasi terpenuhi; yang terpenting adalah **pemilihan payment gateway** dan **server staging**. Fase 1 dan Fase 2 tidak berubah: siap pilot secara teknis dan menunggu staging serta keputusan klien.
 
-## 1. Apa yang sudah terbukti berjalan (lingkungan pengembangan)
-Staging belum ada. Semua bukti di bawah berasal dari lingkungan pengembangan.
-- **Fase 1, poin EFN di kasir:** dapat poin saat belanja, tukar poin dengan OTP, poin ditarik saat retur, pengaman kecurangan, dan pencocokan otomatis harian antara poin dan transaksi kasir. Peringatan dikirim bila ada kejanggalan. Tidak ada perubahan sejak 7 Okt selain penambahan pencocokan harian.
-- **Fase 2, layar dapur (baru):**
-  - pesanan dari kasir otomatis muncul di layar stasiun yang tepat (dapur panas, bar, dan seterusnya);
-  - juru masak menandai "dimasak / siap / disajikan", lalu kasir mendapat tanda "siap";
-  - **printer dapur tetap mencetak** sebagai cadangan, sehingga bila layar atau internet mati, dapur tetap menerima pesanan;
-  - bila tiket gagal dibuat, kasir mendapat peringatan dan printer mencetak ulang;
-  - layar dapur **tidak menampilkan nama, HP, atau harga**, dan akun tablet dapur hanya bisa melihat tiket stasiunnya;
-  - uji otomatis: **337 uji unit dan 20 skenario layar lolos**.
-- **Fitur restoran standar Odoo** (meja, split bill, gabung/pindah meja, course, modifier, menu paket, takeaway, PB1 per kota) dipakai lewat konfigurasi, tanpa kode tambahan.
-- **Keamanan & UU PDP:**
-  - penyaringan nomor HP dan token di log diperbaiki dan kini **diuji otomatis setiap perubahan kode**;
-  - pesan dari ponsel lewat fitur bawaan Odoo **dikunci** karena akan membuka Odoo ke internet;
-  - daftar data pribadi diperbarui ke **versi 5** dan mencakup layar dapur.
-- **Odoo hanya berisi modul standar dan modul buatan EFN** (tanpa modul pihak ketiga).
+## 1. Fase 3 belanja online: apa yang sudah ada
+Semua bukti berasal dari lingkungan pengembangan karena staging belum ada.
+- **Alur lengkap berjalan:** katalog → keranjang → harga final → bayar (QRIS **simulasi**; gateway sungguhan belum dipilih) → pesanan disiapkan toko → pelanggan mengambil dengan kode ambil.
+- **Bila ada masalah:** pembayaran terlambat, stok habis setelah bayar, atau pesanan dibatalkan otomatis berujung **refund** ke pelanggan. Refund oleh CS **wajib disetujui orang kedua**.
+- **Harga dan pajak selalu dihitung Odoo**, tidak pernah dari aplikasi pelanggan. Odoo tetap **tidak terbuka ke internet**.
+- **Data pribadi minim:** Odoo tidak menerima nama/HP/alamat pembeli online. Kode ambil disimpan terenkripsi dan dihapus setelah pesanan selesai.
+- **Kasir (POS) dilindungi:** online hanya boleh memakai sebagian kecil kapasitas server Odoo, sehingga lonjakan pesanan online tidak memperlambat kasir.
+- **Hasil uji:** uji menyeluruh **267 skenario lulus, 0 gagal** (termasuk semua perbaikan keamanan).
+- **Review keamanan:** 3 putaran. Semua temuan tingkat sedang sudah ditutup. Sisa 3 temuan ringan: satu sudah diperbaiki, satu sedang dikerjakan, dan satu ditangani lewat aturan akses (lihat §3, syarat no. 5). Hasil akhir: **GO merge**, online tetap mati di produksi.
+- **Tombol darurat:** online bisa dimatikan seketika tanpa memengaruhi kasir.
 
-## 2. Status GO pilot
-**Pilot poin (retail), 7 syarat:** syarat no. 5 (daftar data pribadi) dan no. 6 (penguatan uji otomatis) selesai. Yang masih menunggu: staging, batas poin dari Finance, daftar nama Superadmin, penunjukan supervisor/petugas jaga, dan SOP retur.
+## 2. Keputusan yang sudah diambil (10 Oktober 2026, pemilik proyek)
+| Keputusan | Artinya | Biaya |
+|---|---|---|
+| **Kapasitas server pilot: opsi B** | Server Odoo tetap 6 "jalur kerja": 4 untuk kasir, 2 untuk online. Cukup untuk pilot bervolume rendah. Bila online ramai, pelanggan online bisa diminta mencoba lagi, tetapi kasir tetap lancar | Rp0 (tanpa tambah server) |
+| **Bahasa Indonesia di layar Odoo belum diaktifkan** | Layar staf Odoo tetap berbahasa Inggris. Label pajak untuk pelanggan tetap Bahasa Indonesia. Mengaktifkan bahasa sekarang akan merusak label pajak yang sudah dibuat | Rp0; bila nanti diminta ±1–2 hari kerja |
 
-**Pilot layar dapur (F&B), 8 syarat:**
-| # | Syarat | Pihak | Status |
+Keputusan arsitektur online (ADR-034) **tetap menunggu tanda tangan** IT + Security + PO.
+
+## 3. Syarat sebelum belanja online dinyalakan di produksi
+| # | Syarat | Pemilik | Status |
 |---|---|---|---|
-| 1 | Printer dapur tetap mencetak di semua stasiun pilot | Operasional F&B | Siap (pengaturan) |
-| 2 | Pesan dari ponsel lewat Odoo dikunci | Tim teknis | **Selesai** (kunci teknis); cek ulang di outlet pilot |
-| 3 | Akun tablet dapur: satu per layar, 2FA, jaringan privat | Tim teknis + **IT klien** | Kode selesai; pemasangan menunggu perangkat |
-| 4 | Uji ulang di **staging** | Tim teknis, butuh server | **Belum ada server** |
-| 5 | SOP ganti/hilang tablet | **Operasional + IT klien** | Rotasi kunci otomatis selesai; SOP belum |
-| 6 | Pelatihan kasir: jangan tulis nama/HP di catatan dapur | **Operasional F&B** | Menunggu |
-| 7 | Penyaringan log diuji sebelum staging menerima data | Tim teknis | **Selesai** |
-| 8 | Daftar data pribadi v5, keputusan stasiun dapur & perangkat | Tim arsitektur + **Operasional F&B** | Daftar data **selesai**; keputusan stasiun/perangkat menunggu |
+| 1 | Uji otomatis Odoo lengkap (termasuk modul kasir–penjualan) lulus | Tim teknis | Menunggu hasil CI |
+| 2 | Uji penerimaan: barang online tidak bisa keluar tanpa kode ambil; kasir tidak bisa menyelesaikan pesanan online | Tim teknis (QA) | Sebagian lulus; jalur kasir belum diuji |
+| 3 | Kapasitas server diputuskan, lalu uji beban di staging dengan kasir aktif | Pemilik proyek (**selesai**), tim teknis | Keputusan **selesai**; uji menunggu **staging** |
+| 4 | **Payment gateway sungguhan dipilih** dan dihubungkan (refund tidak boleh terkirim dua kali) | **Finance + Legal + IT klien** | **Belum dipilih** |
+| 5 | Pemisahan tugas: **orang yang boleh membatalkan pesanan di Odoo (Sales Manager) tidak boleh sama dengan orang yang menyetujui refund**; review akses tiap bulan | **Superadmin + Finance** (aturan & prosedur sudah ditulis) | Prosedur **siap**; daftar orang & review pertama **belum** |
+| 6 | Penguatan tambahan di gudang (perubahan tujuan barang ditolak) | Tim teknis | Sedang dikerjakan |
+| 7 | Keputusan bisnis minimum pilot + persetujuan DPO atas masa simpan data online | **PO, Ops, Finance, Tax, Legal/DPO** | **Belum** (sementara memakai usulan tim) |
 
-Bila layar dapur bermasalah, stasiun dikembalikan ke **printer saja** (cara kerja standar Odoo). Kasir tetap berjalan.
+## 4. Pertanyaan klien yang masih terbuka untuk belanja online (Q-ON1..Q-ON13)
+**Prioritas A (dibutuhkan sebelum pilot online):**
+- **Q-ON1:** PT/toko pilot, jam ambil, jumlah barang online. *(PO + Ops)*
+- **Q-ON4:** stok dipesan saat checkout atau cukup dicek; batas waktu bayar; bila stok habis setelah bayar → batal + refund penuh? *(PO + Ops + Finance)*
+- **Q-ON6:** aturan pembulatan Rupiah. *(Finance)*
+- **Q-ON8:** faktur dibuat saat bayar atau saat diambil. *(Finance + Tax)*
+- **Q-ON9:** dana titipan: siapa menanggung biaya gateway, bukti potong, jadwal setoran Holding → PT. *(Finance + Tax + Legal)*
 
-## 3. Risiko utama yang tersisa
+**Prioritas B:**
+- **Q-ON2:** restoran online. *(PO + Ops F&B + IT)*
+- **Q-ON3:** pesan-antar dan ongkir. *(PO + Ops + Finance)*
+- **Q-ON5:** harga tampil termasuk pajak. *(Finance + Tax)*
+- **Q-ON7:** faktur atas nama/NPWP pembeli. *(Finance + DPO)*
+- **Q-ON10:** kupon/promo. *(PO + Marketing)*
+- **Q-ON11:** aturan refund dan siapa yang menyetujui. *(Ops + Finance)*
+- **Q-ON12:** katalog per PT atau per brand. *(PO + Ops)*
+- **Q-ON13:** berapa lama pesanan yang tidak diambil ditahan. *(Ops + Finance)*
+
+Jawaban sementara (default) tim tercantum di `docs/decisions/README.md`, bagian Fase 3.
+
+**DPO / Legal:**
+- 5 pertanyaan baru, **Q-P17..Q-P21**: masa simpan riwayat pesanan, penundaan hapus akun selama pesanan belum selesai, catatan CS, perjanjian data dengan payment gateway, dan data pembeli di faktur.
+- Tidak ada kebocoran atau near-miss data pribadi dari Fase 3.
+
+## 5. Fase 1 dan 2 (tidak berubah sejak 9 Okt)
+- **Poin di kasir retail:** siap pilot. Menunggu staging, batas poin dari Finance (Q-13), daftar Superadmin, supervisor/petugas jaga, dan SOP retur.
+- **Layar dapur F&B:** siap pilot. Menunggu staging, outlet dan stasiun dapur, perangkat, pelatihan kasir (catatan dapur tanpa nama/HP), dan SOP tablet hilang.
+
+## 6. Risiko utama
 | Risiko | Dampak bila terjadi | Penanganan |
 |---|---|---|
-| **Belum ada staging dan server produksi** | Kedua pilot tidak bisa dimulai | Pengadaan server (ADR-004) |
+| **Belum ada staging dan server produksi** | Ketiga pilot tidak bisa dimulai | Pengadaan server (ADR-004) |
+| **Payment gateway belum dipilih** | Belanja online tidak bisa dinyalakan | Pilih vendor (ADR-016/026); KYB tiap PT memakan waktu, jadi mulai sekarang |
 | **DPO belum ditunjuk**; masa simpan data belum ditetapkan | Kepatuhan UU PDP belum bisa dinyatakan | Keputusan Direksi |
+| Satu orang memegang peran pembatal dan penyetuju refund | Refund fiktif tanpa empat mata | Aturan + review akses bulanan (sudah ditulis); kontrol otomatis ±1–2 hari bila diinginkan |
+| Kunci akses online Odoo kedaluwarsa (90 hari) | Checkout online berhenti, kasir tidak terdampak | Alert sisa umur kunci + prosedur rotasi |
 | **Pemegang kunci (Superadmin) mungkin hanya satu orang** | Backup tidak bisa dipulihkan bila orang itu tidak ada | Tunjuk minimal 2 orang |
-| Pesan dari ponsel di meja belum tersedia | Kebutuhan "scan QR di meja" belum terpenuhi di pilot | Pilot memakai **kiosk**; jalur ponsel lewat Super-App ±3–4 minggu kerja bila diwajibkan (ADR-032) |
-| Kasir menulis nama/kondisi pelanggan di catatan dapur | Data pribadi tersimpan di tiket dapur hingga 90 hari | Pelatihan + masa simpan pendek; penyaringan otomatis ±0,5–1 hari bila diperlukan |
-| Nilai & batas poin masih angka sementara | Liabilitas poin belum final | Keputusan Finance (Q-13) |
-| Nomor pelanggan sistem lama tersimpan permanen bila dipakai saat impor saldo | Pelanggan terhapus masih bisa dikenali | Putuskan sebelum impor (Q-P13) |
-| Near-miss log (nomor HP **fiktif** data uji masuk log server pengembangan, sudah diperbaiki) | Tidak ada dampak ke pelanggan nyata; tidak wajib dilaporkan | Uji otomatis baru; DPO mengonfirmasi klasifikasi (Q-P16) |
+| Online ramai melebihi kapasitas pilot (opsi B) | Pelanggan online menunggu atau diminta mencoba lagi | Pantau; naikkan ke opsi A (tambah jalur kerja, tanpa beli server) |
 
-## 4. Yang dibutuhkan dari manajemen (urut prioritas)
-1. **Server staging** (ADR-004). Ini penghambat utama kedua pilot. Setelah server ada, staging siap dalam ±1–2 minggu.
-2. **Finance:** nilai & batas poin (Q-13). **Finance + konsultan pajak:** tarif PB1 kota pilot dan service charge (P-16).
-3. **Pilih outlet pilot:** toko retail (P-1) dan outlet F&B (P-11). Sertakan jumlah meja, kasir, layar dapur, dan kiosk.
-4. **Operasional F&B:**
-   - daftar stasiun dapur dan target waktu masak (P-13);
-   - model printer dapur dan tablet/monitor dapur (P-18);
-   - SOP tablet hilang/diganti dan pelatihan catatan dapur.
-5. **PO + Operasional:** QR order cukup lewat **kiosk** di pilot, atau wajib dari **ponsel** pelanggan (Q-23, ADR-032)?
-6. **IT klien:**
+## 7. Yang dibutuhkan dari manajemen (urut prioritas)
+1. **Server staging** (ADR-004). Ini penghambat utama ketiga pilot; staging siap ±1–2 minggu setelah server ada.
+2. **Finance + Legal + IT:** pilih **payment gateway** (memblokir online).
+3. **Finance / Tax:** Q-ON6, Q-ON8, Q-ON9, nilai & batas poin (Q-13), dan tarif PB1 kota pilot.
+4. **PO + Ops:** Q-ON1 dan Q-ON4 (toko pilot online, aturan stok & bayar), outlet pilot retail dan F&B.
+5. **IT klien / Superadmin:**
    - daftar Superadmin (minimal 2);
-   - persetujuan model akun tablet dapur (ADR-033);
-   - siapa pemegang 2FA tablet.
-7. **DPO / Legal:** tunjuk DPO; Q-P13 (sebelum impor saldo); masa simpan tiket dapur (Q-P15); konfirmasi near-miss (Q-P16).
-8. Keputusan Fase 0 yang masih terbuka (Gelombang 1, SILO, anggaran modul buatan sendiri) tetap berlaku.
+   - tunjuk **Sales Manager Odoo** dan **penyetuju refund** (orang berbeda);
+   - jadwalkan review akses bulanan dengan saksi Finance;
+   - pemegang rotasi kunci akses online.
+6. **DPO / Legal:** tunjuk DPO; Q-P17..Q-P21 (online), Q-P13 (sebelum impor saldo), Q-P15 dan Q-P16.
+7. **Tanda tangan ADR-034** (arsitektur kanal online) dan keputusan Fase 0 yang masih terbuka.
 
-Daftar lengkap: `docs/decisions/README.md`, bagian "Syarat GO pilot loyalty", "Syarat GO pilot KDS", dan "Keputusan klien yang masih terbuka".
-
-## 5. Biaya & waktu indikatif (belum termasuk server)
+## 8. Biaya & waktu indikatif (belum termasuk server)
 | Pos | Perkiraan |
 |---|---|
 | Lisensi perangkat lunak | **Rp0** (semua open source) |
+| Belanja online (Fase 3) | Sudah dibangun; tanpa lisensi (toko online bawaan Odoo tidak dipakai) |
+| Integrasi payment gateway sungguhan | Belum diestimasi (bergantung vendor) |
+| Kontrol otomatis pemisahan peran refund (opsional) | ±1–2 hari |
+| Faktur atas nama pembeli online (hanya bila Q-ON7 = ya) | ±1–2 minggu (perkiraan kasar, belum dirinci) |
 | Modul Odoo buatan sendiri pengganti OCA | ±10–16 minggu-engineer (±Rp50–145 jt); tidak berubah |
-| Layar dapur (KDS) | Sudah dibangun; tanpa biaya lisensi (padanan Enterprise tidak dipakai) |
-| QR order dari ponsel lewat Super-App (hanya bila diwajibkan, ADR-032) | ±3–4 minggu-engineer (±Rp15–36 jt) |
-| Akun tablet dapur bertipe portal (opsional, sebelum outlet ke-2, ADR-033) | ±3–5 hari |
-| Perangkat outlet F&B (tablet dapur, kiosk, printer) | Bergantung P-18; harga belum divalidasi |
-| Perbaikan keamanan selama pilot (poin dan dapur) | ±1–2 minggu tim |
+| QR order restoran dari ponsel (hanya bila diwajibkan) | ±3–4 minggu-engineer (±Rp15–36 jt) |
 | Konektivitas outlet (WireGuard) | Rp0 per outlet kecil; ±Rp0,4–0,9 jt per outlet besar |
 
-**Langkah berikutnya:** server staging → pasang dan uji ulang (±1–2 minggu) → penuhi syarat GO → nyalakan poin di satu toko dan layar dapur di satu outlet F&B → evaluasi 2 minggu sebelum outlet lain.
+## 9. Rekomendasi langkah berikutnya
+1. Gabungkan PR Gelombang 17 ke kode utama (online tetap mati di produksi).
+2. Paralel, karena prosesnya lama: **pilih payment gateway** dan mulai KYB tiap PT; tunjuk DPO.
+3. Setelah server staging ada: pasang dan uji ulang ketiga fase (±1–2 minggu), termasuk uji beban online bersama kasir.
+4. Nyalakan berurutan: **poin di 1 toko → layar dapur di 1 outlet F&B → belanja online di 1 toko**. Evaluasi 2 minggu di tiap langkah.
 
-*Catatan jujur: angka biaya adalah perkiraan arsitek dan perlu divalidasi. Semua bukti "berjalan" berasal dari lingkungan pengembangan. Status perbaikan Gelombang 15 berasal dari laporan tim teknis dan belum diperiksa ulang oleh reviewer keamanan.*
+Daftar lengkap: `docs/decisions/README.md`, bagian "Keputusan pemilik proyek 10 Okt 2026", "Syarat aktivasi produksi online", "Syarat GO pilot loyalty", "Syarat GO pilot KDS", dan "Keputusan klien yang masih terbuka".
+
+*Catatan jujur:*
+- Angka biaya adalah perkiraan arsitek dan perlu divalidasi.
+- Semua bukti "berjalan" berasal dari lingkungan pengembangan dengan pembayaran simulasi.
+- Perbaikan terakhir (settle refund manual hanya oleh penyetuju, dan penguatan gudang) dibuat setelah review akhir dan belum dibaca ulang reviewer keamanan.

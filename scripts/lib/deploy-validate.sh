@@ -23,7 +23,8 @@ EFN_RELEASE_CONFIG_VARS=(ACME_EMAIL PAYMENT_PROVIDER PG_SUPERUSER WHATSAPP_ENABL
   ETL_AUDIT_COPY_ENABLED OLLAMA_VISION_MODEL MIGRATION_ENABLED METABASE_ADMIN_EMAIL ETL_LOYALTY_RECON_NOT_BEFORE
   ONLINE_ENABLED ONLINE_CATALOG_ENABLED ONLINE_CHANNELS ONLINE_FULFILMENTS ONLINE_PAYMENT_TIMEOUT_SECONDS
   ONLINE_QUOTE_TTL_SECONDS ONLINE_MAX_OPEN_ORDERS_PER_MEMBER ONLINE_CATALOG_SYNC_SECONDS ONLINE_PICKUP_CODE_MAX_DAYS
-  ONLINE_ORDER_MEMBER_LINK_DAYS ONLINE_EVENT_RETENTION_DAYS ODOO_RPC_TIMEOUT_MS ODOO_RPC_MAXCONN)
+  ONLINE_ORDER_MEMBER_LINK_DAYS ONLINE_EVENT_RETENTION_DAYS ODOO_RPC_TIMEOUT_MS ODOO_RPC_MAXCONN
+  ODOO_RPC_PUBLIC_MAX_CONCURRENCY ODOO_RPC_SAGA_MAX_CONCURRENCY)
 # G17 (docs/04 §10.13): saklar KHUSUS dev/test. Bukan konfigurasi rilis (kunci manifest tidak dikenal = ditolak
 # efn-deploy); efn_validate_config juga menolak nilai true di staging/production lewat jalur manual deploy.sh.
 EFN_DEV_ONLY_SWITCHES=(ODOO_ONLINE_MOCK EFN_PAYMENT_SIMULATOR)
@@ -169,12 +170,21 @@ efn_validate_config() { # app_env
   for spec in ONLINE_PAYMENT_TIMEOUT_SECONDS:60:3600 ONLINE_QUOTE_TTL_SECONDS:60:3600 \
               ONLINE_MAX_OPEN_ORDERS_PER_MEMBER:1:20 ONLINE_CATALOG_SYNC_SECONDS:60:86400 \
               ONLINE_PICKUP_CODE_MAX_DAYS:1:30 ONLINE_ORDER_MEMBER_LINK_DAYS:1:3650 \
-              ONLINE_EVENT_RETENTION_DAYS:1:3650 ODOO_RPC_TIMEOUT_MS:1000:30000 ODOO_RPC_MAXCONN:1:16; do
+              ONLINE_EVENT_RETENTION_DAYS:1:3650 ODOO_RPC_TIMEOUT_MS:1000:30000 ODOO_RPC_MAXCONN:1:16 \
+              ODOO_RPC_PUBLIC_MAX_CONCURRENCY:1:16 ODOO_RPC_SAGA_MAX_CONCURRENCY:1:16; do
     IFS=: read -r name lo hi <<< "$spec"
     [[ -z "${!name:-}" ]] && continue
     [[ "${!name}" =~ ^[1-9][0-9]{0,5}$ ]] && (( ${!name} >= lo && ${!name} <= hi )) \
       || _efn_err "$name harus bilangan bulat ${lo}..${hi}" || return 1
   done
+  # SEC-96/SEC-109 (L-19f), sizing pilot opsi B (10 Okt 2026): pool json2 BFF (publik + saga) tidak boleh melebihi
+  # koneksi gateway ke Odoo (= worker yang disisihkan untuk online). Kosong = default compose PROD (overlay
+  # docker-compose.prod.yml: maxconn 2, pool 1 + 1) - deploy.sh selalu memakai overlay prod (staging juga).
+  local eff_max="${ODOO_RPC_MAXCONN:-2}" eff_pub="${ODOO_RPC_PUBLIC_MAX_CONCURRENCY:-1}" eff_saga="${ODOO_RPC_SAGA_MAX_CONCURRENCY:-1}"
+  if (( eff_pub + eff_saga > eff_max )); then
+    _efn_err "ODOO_RPC_PUBLIC_MAX_CONCURRENCY (${eff_pub}) + ODOO_RPC_SAGA_MAX_CONCURRENCY (${eff_saga}) > ODOO_RPC_MAXCONN (${eff_max}) - worker Odoo POS bisa terpakai online (docs/runbooks/online-orders.md#sizing-worker)"
+    return 1
+  fi
   # Online di production butuh payment provider nyata: mock ditolak di atas, `disabled` = checkout pasti gagal.
   if [[ "$app_env" == production && "${ONLINE_ENABLED:-false}" == true && ! "${PAYMENT_PROVIDER}" =~ ^(xendit|midtrans)$ ]]; then
     _efn_err "production ONLINE_ENABLED=true butuh PAYMENT_PROVIDER xendit|midtrans (bukan ${PAYMENT_PROVIDER})"; return 1

@@ -403,3 +403,61 @@ ADR-034 (arsitektur kanal; IT + Security + PO), ADR-019 revisi (A1/A2/C; Finance
 - **Terverifikasi dengan membaca repo:** `services/api-gateway/src/payments/**` (transisi monoton, `expired→paid` diterima, nominal beda tidak diubah, `simulate` dev-only, adapter vendor eksperimental), `03-platform-v3.sql` (DDL `payment_intent`, CHECK `company_code`/`method`), `02-platform-loyalty.sql` (`outbox`), `common/amqp/queues.ts` (queue & argumen DLQ), `infra/rabbitmq/rabbitmq-entrypoint.sh` (definitions broker), `docker-compose.yml` (`odoo-tls --allow-cn=traefik,blackbox-exporter`; router Traefik `api` publik kecuali `/v1/pos`, `/internal`, `/metrics`, webhook POST), `infra/s3-gateway/README.md` (pola filter L7 + pelajaran SEC-41), `superapp-web/lib/request-guard.ts` (`isSameOrigin`), `lib/mock-catalog.ts`/`CartDemo` (masih mock).
 - **Dari docs/08 §8 (functional, tidak saya ulang verifikasi di source):** temuan #36–#45, bentuk 10 metode E-28, `api_key_duration` default 1 hari.
 - **Belum terverifikasi:** status HTTP error `/json/2` per exception di 19.0; perlu/tidaknya `X-Odoo-Database`; CryptContext/pbkdf2 dari addon untuk hash kode ambil; `x-delivery-limit` pada versi RabbitMQ yang dipin; deprecation XML-RPC/JSON-RPC di 19.0 (dari dokumentasi Odoo, bukan source); estimasi minggu-engineer BFF/frontend/devsecops (asumsi architect); Mermaid tidak dirender. Tidak ada kode/test yang dijalankan.
+
+# Gelombang 17 penutup — Inventaris PDP v6 (belanja online), status manajemen, governance SEC-111, keputusan 10 Okt (2026-10-10)
+
+## Ringkasan (untuk manajemen)
+Daftar data pribadi kini mencakup belanja online. Tambahan data pribadinya kecil: riwayat pesanan yang ditautkan ke akun lewat kode acak. Odoo tidak menerima identitas pembeli, dan kode ambil dihapus setelah pesanan selesai. Masa simpan masih usulan dan butuh keputusan DPO (Q-P17..Q-P21). Aturan "pembatal pesanan di Odoo ≠ penyetuju refund" kini tertulis lengkap dengan prosedur review akses bulanan, dan dicatat sebagai risiko R-S14. Keputusan pemilik proyek 10 Okt (kapasitas opsi B, bahasa id_ID ditunda) dicatat; ADR-034 tetap Proposed.
+
+## File diubah
+| File | Isi |
+|---|---|
+| `docs/compliance/PDP_DATA_INVENTORY.md` | **v6**: ringkasan v6, penanda ⚠ DPO; §1 lima kategori online; **§2.1b** tabel BFF online (tautan `member_id` 730 h, baris keuangan 10 th, `pickup_code_enc` K + AAD per bagian, `qr_string` 1 h, `online_refund.initiated_by` = identitas karyawan, `online_admin_audit` tanpa retensi, event 180 h, katalog non-PII); **§2.2c** Odoo online tanpa PII (partner generik, `pickup_code_hash` KDF dikosongkan saat final, alasan batal di chatter, wizard tanpa simpan kode); §2.3 bucket `catalog`; §2.6 Redis `cart:*`/`oq:*`/`ocat:stk:*`/rate limit IP ter-HMAC, queue `order.*`, Loki `efn_online` (30 h) & `host-efn-online-cs` (400 h), log gateway; §2.7 browser, staf toko, Meta (template online tanpa parameter), payment gateway; §3 matriks; **Q-P17..Q-P21**; §5; §6 **INFO-2026-01** (kutipan fixture di laporan agent, bukan PII/secret) |
+| `docs/STATUS_MANAJEMEN.md` | Ditulis ulang per 10 Okt: Fase 3 (fitur, smoke 267/0, review GO merge, online mati di prod), keputusan PP-1/PP-2, 7 syarat aktivasi + pemilik, Q-ON1..Q-ON13, risiko, permintaan ke manajemen, biaya, langkah berikutnya |
+| `docs/runbooks/online-orders.md` | §CLI CS: approver bukan Sales Manager; **bagian baru `#sec-111`**: aturan 1–5, register peran di luar repo, review akses bulanan (perintah `getent`/`comm` + SQL read-only Sales Manager efektif via grup implied), tindak lanjut pelanggaran, retensi berkas review 13 bulan. (Bagian sizing diperbarui paralel oleh devsecops, tidak saya ubah.) |
+| `docs/runbooks/key-custody.md` | §2 Peran: operator/approver CS online, larangan rangkap Sales Manager ↔ `efn-cs-approver`, Superadmin sebaiknya bukan approver rutin |
+| `docs/01_REVIEW_RISK_GAP_ANALYSIS.md` | **R-T15** (API key kanal kedaluwarsa, L-6); **R-S14** (SEC-111, kontrol prosedural, backlog peta `odoo_uid ↔ akun host`); R-T13 ganda (React Native) dinomori ulang **R-T16** (tidak ada rujukan lain) |
+| `docs/decisions/README.md` | Catatan 10 Okt; baris ADR-034 (tetap Proposed); bagian **Keputusan pemilik proyek 10 Okt** (PP-1 sizing B, PP-2 id_ID ditunda); **Syarat aktivasi produksi online A-1..A-7** + pemilik; tabel UU PDP v6 Q-P17..Q-P21; baris sizing di tabel Fase 3 ditandai diputuskan |
+
+## Keputusan yang dicatat
+- **Pemilik proyek 10 Okt 2026:** PP-1 sizing opsi B (`ODOO_WORKERS=6`, `ODOO_RPC_MAXCONN=2`, pool 1 + 1); PP-2 id_ID Odoo tidak diaktifkan. Keduanya keputusan operasional; **ADR-034 tetap Proposed**.
+
+## Butuh keputusan DPO / klien
+- **DPO/Legal:**
+  - **Q-P17** paket retensi L-5;
+  - **Q-P18** penundaan hapus akun L-4 (sah? batas maksimum?);
+  - **Q-P19** retensi `online_admin_audit` + SOP alasan tanpa nama pelanggan;
+  - **Q-P20** DPA/lokasi/data pembayar payment gateway;
+  - **Q-P21** PII pembeli di Odoo bila Q-ON7 = ya.
+- **Klien (Superadmin/IT + Finance):** nama Sales Manager Odoo dan approver refund (orang berbeda), saksi review akses bulanan, register peran (di luar repo).
+- **Finance + Legal + IT:** vendor payment (A-4).
+- **PO/Ops/Finance/Tax:** Q-ON prioritas A.
+
+## Temuan baru (untuk lead)
+1. `online_admin_audit` tidak punya job retensi (tak terbatas): masuk Q-P19. Bila DPO memilih angka, kerjanya ±0,5 hari bff-engineer.
+2. Erasure tidak menghapus key Redis `cart:<member_id>`. Key tertinggal ≤ 7 hari dengan UUID akun yang sudah dihapus, tanpa identitas lain. Usulan: `DEL` di erasure, ±1 jam bff-engineer (dicatat di Q-P17).
+3. Staf Odoo masih bisa **mengetik** PII secara manual di SO online (chatter/catatan). Kontrolnya hanya SOP.
+
+## Terverifikasi / belum terverifikasi
+- **Dibaca di repo:**
+  - `07-platform-online.sql`;
+  - `online.repository.ts` (`retention`, `memberOpenPaidParts`);
+  - `online-jobs.service.ts`;
+  - `erasure.service.ts` (langkah 6b, SEC-100);
+  - `online-privacy.service.ts` (isi export, batas 1.000);
+  - `cart-store.ts` (TTL 7 hari, key);
+  - `pickup-code.ts` (AAD v2);
+  - `notification/templates.ts` (template online tanpa parameter);
+  - `haproxy.cfg` (`log-format`);
+  - `promtail-journal.yml` (job `host-journal`) dan `loki.yml` (retensi);
+  - README `efn_online_order` dan `efn_online_common`/`sale_order` (alasan batal ke chatter);
+  - alert `EfnOnlineApiKey*` di rules Prometheus;
+  - `.gitleaksignore` dan commit `5e496ef`/`fb1cc9f`.
+- **Belum terverifikasi:**
+  - nama tabel `res_groups_implied_rel` di DB Odoo 19.0 EFN (ditandai di runbook, wajib dicek di staging);
+  - wrapper dan jejak journald di host nyata;
+  - job retensi pada data berumur nyata;
+  - perbaikan SEC-112 (`32686c3`) dan SEC-110 (working tree, belum di-commit) belum dibaca ulang reviewer;
+  - nomor pasal UU PDP;
+  - estimasi Q-ON7 ±1–2 minggu (kasar);
+  - tidak ada kode/test yang saya jalankan.

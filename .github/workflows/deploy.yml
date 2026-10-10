@@ -270,6 +270,10 @@ jobs:
           CFG_ODOO_RPC_TIMEOUT_MS: ${{ vars.ODOO_RPC_TIMEOUT_MS }}
           # SEC-96 / L-16b: koneksi gateway -> Odoo = worker Odoo yang disisihkan untuk online (kosong = 4)
           CFG_ODOO_RPC_MAXCONN: ${{ vars.ODOO_RPC_MAXCONN }}
+          # Sizing pilot opsi B (10 Okt 2026): kosong = default overlay prod (maxconn 2, pool publik 1 + saga 1).
+          # deploy-validate menolak PUBLIC + SAGA > MAXCONN.
+          CFG_ODOO_RPC_PUBLIC_MAX_CONCURRENCY: ${{ vars.ODOO_RPC_PUBLIC_MAX_CONCURRENCY }}
+          CFG_ODOO_RPC_SAGA_MAX_CONCURRENCY: ${{ vars.ODOO_RPC_SAGA_MAX_CONCURRENCY }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/efn-release"

@@ -398,6 +398,13 @@ vc "99 staging EFN_PAYMENT_SIMULATOR=true ditolak (hanya dev)" 1 staging EFN_PAY
 vc "100 default online (semua kosong) diterima" 0 production
 vc "102 ODOO_RPC_MAXCONN > 16 ditolak (SEC-96)" 1 staging ODOO_RPC_MAXCONN=32
 vc "103 ODOO_RPC_MAXCONN=4 diterima (SEC-96)" 0 staging ODOO_RPC_MAXCONN=4
+# Sizing pilot opsi B (10 Okt 2026): pool BFF publik + saga <= maxconn gateway (default efektif prod 1 + 1 <= 2)
+vc "104 default pool prod (1+1 <= maxconn 2) diterima" 0 production
+vc "105 pool publik 2 + saga default 1 > maxconn default 2 ditolak" 1 production ODOO_RPC_PUBLIC_MAX_CONCURRENCY=2
+vc "106 pool 2+2 > maxconn 2 ditolak" 1 staging ODOO_RPC_MAXCONN=2 ODOO_RPC_PUBLIC_MAX_CONCURRENCY=2 ODOO_RPC_SAGA_MAX_CONCURRENCY=2
+vc "107 pool 2+2 = maxconn 4 diterima" 0 staging ODOO_RPC_MAXCONN=4 ODOO_RPC_PUBLIC_MAX_CONCURRENCY=2 ODOO_RPC_SAGA_MAX_CONCURRENCY=2
+vc "108 maxconn 1 dengan pool default 1+1 ditolak" 1 production ODOO_RPC_MAXCONN=1
+vc "109 pool 0 di luar rentang ditolak" 1 staging ODOO_RPC_SAGA_MAX_CONCURRENCY=0
 
 echo "RINGKASAN efn-deploy: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]

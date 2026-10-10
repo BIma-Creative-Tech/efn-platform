@@ -24,6 +24,13 @@ Secret operasional lain (password service, token WhatsApp, kunci API payment, to
 
 - **Superadmin**: satu-satunya yang (a) mengelola secret & reviewer GitHub Environment `production` (dan `staging`), (b) anggota grup host `efn-superadmin` dengan sudo, (c) memegang root CA offline & salinan tersegel, (d) menyetujui deploy produksi.
 - **Ops/IT (non-superadmin)**: akses SSH tanpa sudo dan **bukan** anggota grup `docker` (grup docker setara root). Melihat log lewat Grafana/Loki (`ops.`), bukan host.
+- **Operator CS online (`efn-cs`) dan approver (`efn-cs-approver`)** (G17, SEC-107/111/112): akun host pribadi, sudo
+  **hanya** untuk wrapper `/usr/local/sbin/efn-online-cs`, bukan anggota `docker`, satu orang satu grup. **Pemisahan
+  tugas lintas sistem:** pemegang grup Odoo Sales Manager (`sales_team.group_sale_manager`) **tidak boleh** anggota
+  `efn-cs-approver`. Superadmin memelihara register peran (di luar repo) dan menjalankan **review akses bulanan** dengan
+  saksi Finance/Internal Audit — prosedur & perintah: [online-orders.md#sec-111](online-orders.md#sec-111). Superadmin
+  sendiri sebaiknya tidak menjadi approver refund rutin (pemegang root dapat melewati wrapper); bila terpaksa, setiap
+  persetujuan oleh Superadmin dicatat di register dan diperiksa Finance.
 - *Rekomendasi (bukan keputusan)*: **minimal 2 orang** berperan Superadmin (mencegah *single point of failure* manusia; satu orang sakit/keluar = kunci tidak dapat diakses). Akses ke salinan tersegel memakai prinsip dua orang.
 
 ## 3. GitHub

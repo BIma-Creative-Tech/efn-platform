@@ -100,26 +100,33 @@ daftar path = perubahan kontrak §10.4.3 + `RPC_ALLOWLIST` Odoo). Tanpa deploy �
 
 SEC-96 / L-16b (docs/04 §10.17): online tidak boleh menghabiskan worker HTTP Odoo yang melayani POS.
 
-- **Batas:** `odoo-rpc-gateway` membuka maksimal `ODOO_RPC_MAXCONN` (default **4**, rentang 1..16; GitHub variable
-  `ODOO_RPC_MAXCONN` → deploy-validate) koneksi paralel ke Odoo. Request ke-5 dan seterusnya mengantre di gateway (maks.
+> **Keputusan pilot (pemilik proyek, 10 Okt 2026): opsi B.** Produksi pilot memakai `ODOO_WORKERS=6` = POS 4 +
+> online 2: gateway `ODOO_RPC_MAXCONN=2`, pool json2 BFF `ODOO_RPC_PUBLIC_MAX_CONCURRENCY=1` +
+> `ODOO_RPC_SAGA_MAX_CONCURRENCY=1` (default overlay `docker-compose.prod.yml`; dev/base tetap 4 dan 2 + 2).
+> Ditinjau ulang bila gejala salah sizing di bawah muncul atau volume online naik (opsi A: worker 9, maxconn 4).
+
+- **Batas:** `odoo-rpc-gateway` membuka maksimal `ODOO_RPC_MAXCONN` (prod **2**, dev/base 4, rentang 1..16; GitHub
+  variable `ODOO_RPC_MAXCONN` → deploy-validate) koneksi paralel ke Odoo. Kelebihan mengantre di gateway (maks.
   16 menunggu, tiap request maks. 2 s); lebih dari itu langsung `503` + header `X-EFN-Gateway-Error: unavailable`.
-  BFF juga membatasi konkurensi global panggilan Odoo (default 4, L-16b) dan me-retry 503 dengan backoff + circuit
-  breaker. Uji: `bash infra/odoo-rpc-gateway/test-gateway-load.sh` (dev 10 Okt: 300 request / 200 paralel → 150
+  BFF membatasi konkurensi panggilan Odoo per replika dengan dua pool (SEC-109 / L-19f): publik (katalog/stok/quote)
+  `ODOO_RPC_PUBLIC_MAX_CONCURRENCY` dan saga `ODOO_RPC_SAGA_MAX_CONCURRENCY`, lalu me-retry 503 dengan backoff +
+  circuit breaker. **Aturan deploy:** PUBLIC + SAGA ≤ MAXCONN (deploy-validate menolak rilis yang melanggar).
+  Catatan: prod menjalankan 2 replika BFF, jadi permintaan paralel ke gateway bisa 2 × (1 + 1) = 4 > 2 — kelebihan
+  antre/503 di gateway (Odoo tetap maks. 2 koneksi online); pantau `%Tw`/`why=busy`. Uji: `bash infra/odoo-rpc-gateway/test-gateway-load.sh` (dev 10 Okt: 300 request / 200 paralel → 150
   dilayani Odoo dengan antre ≤ 90–123 ms, 150 ditolak 503 seketika, gateway tetap healthy).
 - **Aturan:** `ODOO_WORKERS` ≥ worker yang dibutuhkan POS + `ODOO_RPC_MAXCONN` (+ cron berjalan di thread terpisah,
   `ODOO_MAX_CRON_THREADS`). Patokan Odoo: worker ≈ 2 × CPU + 1, ±150–300 MB RAM per worker (+ limit memori per worker).
 - **Kebutuhan POS (perkiraan, ukur saat pilot):** 1 worker per ±6 sesi POS aktif yang sinkron bersamaan; minimal 4.
-- **Konfigurasi saat ini:** prod `ODOO_WORKERS=6` (docker-compose.prod.yml, odoo 4 CPU / 6 GB). Dengan
-  `ODOO_RPC_MAXCONN=4` hanya 2 worker tersisa untuk POS — **tidak cukup**. Sebelum `ONLINE_ENABLED=true` di production
-  pilih salah satu: (a) naikkan `ODOO_WORKERS` ke 9 (= 2 × 4 CPU + 1 → POS 5 + online 4; RAM ±9 × 300 MB ≈ 2,7 GB +
-  cache, masih di bawah limit 6 GB), atau (b) turunkan `ODOO_RPC_MAXCONN` ke 2 (POS 4 + online 2) selama pilot volume
-  rendah. Keputusan kapasitas = lead/klien (catat di laporan pilot).
+- **Konfigurasi prod:** `ODOO_WORKERS=6` (docker-compose.prod.yml, odoo 4 CPU / 6 GB) + opsi B di atas. Opsi lain
+  yang dipertimbangkan: (A) `ODOO_WORKERS` 9 (= 2 × 4 CPU + 1 → POS 5 + online 4; RAM ±9 × 300 MB ≈ 2,7 GB + cache).
+  Mengubah sizing = ubah `ODOO_WORKERS` + `ODOO_RPC_MAXCONN` + kedua pool bersamaan (GitHub variables → Deploy).
 
-| Skenario | ODOO_WORKERS | POS | ODOO_RPC_MAXCONN (online) |
-|---|---|---|---|
-| Pilot, online volume rendah | 6 | 4 | 2 |
-| Rekomendasi pilot (4 CPU) | 9 | 5 | 4 (default) |
-| Puncak (8 CPU) | 17 | 13 | 4–8 |
+| Skenario | ODOO_WORKERS | POS | ODOO_RPC_MAXCONN (online) | Pool BFF publik + saga |
+|---|---|---|---|---|
+| **Pilot produksi — DIPILIH (opsi B, 10 Okt 2026)** | 6 | 4 | 2 | 1 + 1 |
+| Opsi A (4 CPU, volume online naik) | 9 | 5 | 4 | 2 + 2 |
+| Puncak (8 CPU) | 17 | 13 | 4–8 | ≤ maxconn |
+| Dev / base compose | 2 (default Odoo dev) | — | 4 | 2 + 2 |
 
 - **Gejala salah sizing:** antre gateway (`%Tw` di log `odoo-rpc-gateway`) sering > 1 s atau banyak `why=busy` →
   online kekurangan slot (naikkan worker + maxconn bersamaan); POS lambat saat promo online → kurangi `ODOO_RPC_MAXCONN`.
@@ -141,10 +148,93 @@ sudo tercatat di auth log). BFF menyimpan aktor `<user>/<host>` + peran di `plat
 - `efn-cs-approver` (supervisor CS/Finance): `online-refund-approve`, `online-refund-settle` (SEC-112: mencatat dana
   keluar), `online-resolve --action=cancel` (L-20: memicu refund) (+ subcommand lain bila perlu). BFF menolak
   persetujuan oleh pembuat refund yang sama; semua refund buatan CS menunggu persetujuan (L-19c,
-  `ONLINE_CS_REFUND_APPROVAL_MIN_IDR`, default 0 = semua).
+  `ONLINE_CS_REFUND_APPROVAL_MIN_IDR`, default 0 = semua). **Approver tidak boleh memegang grup Odoo Sales Manager**
+  ([SEC-111](#sec-111)).
 - **Satu orang = satu grup.** Akun yang berada di kedua grup ditolak wrapper untuk SEMUA subcommand (journald
   `DITOLAK … satu orang satu peran`, alert `EfnOnlineCsDualRole`). Cek berkala:
   `comm -12 <(getent group efn-cs | cut -d: -f4 | tr , '\n' | sort) <(getent group efn-cs-approver | cut -d: -f4 | tr , '\n' | sort)` harus kosong.
+
+### Pemisahan peran Odoo ↔ host (SEC-111, kontrol prosedural) {#sec-111}
+
+**Mengapa.** Pembatalan SO online yang sudah dibayar dari Odoo hanya boleh dilakukan **Sales Manager**
+(`sales_team.group_sale_manager`, SEC-95). Refund hasil pembatalan itu berstatus `approval_required` dan baru diteruskan
+ke gateway setelah `online-refund-approve` oleh anggota `efn-cs-approver` di host. BFF menolak persetujuan bila pembuat =
+penyetuju, tetapi pemicu dari Odoo tercatat sebagai `odoo-uid:<n>` dan **tidak bisa** dicocokkan otomatis dengan akun
+host. Akibatnya satu orang yang memegang kedua peran bisa membatalkan pesanan dan menyetujui refund-nya sendiri
+(empat mata gagal). Sampai ada peta identitas teknis (opsi SEC-111 a, ±1–2 hari BFF + Superadmin), kontrolnya adalah
+**aturan + review akses** berikut. Risiko register: **R-S14** (docs/01 §4.4).
+
+**Aturan (berlaku sejak `ONLINE_ENABLED=true` di lingkungan mana pun yang memakai data nyata):**
+1. Orang yang memegang grup Odoo **Sales Manager** (langsung atau lewat grup yang meng-*imply*-nya) **tidak boleh**
+   menjadi anggota grup host **`efn-cs-approver`**. Sebaliknya juga berlaku.
+2. Operator `efn-cs` dan approver `efn-cs-approver` **bukan** anggota grup host `docker` (grup docker setara root dan bisa
+   memalsukan `EFN_CS_ROLE`, catatan SEC-98).
+3. Superadmin memelihara **register peran** (orang → login Odoo → akun host → grup) di sistem dokumen internal klien yang
+   aksesnya terbatas, **bukan** di repo ini (memuat nama karyawan, UU PDP). Register ini yang menghubungkan login Odoo dan
+   akun host milik orang yang sama; tanpa register, perbandingan otomatis tidak mungkin karena nama akun berbeda.
+4. Pemberian peran baru (Sales Manager atau `efn-cs-approver`) wajib mengecek register lebih dulu. Perubahan grup Odoo
+   tercatat otomatis di `efn_audit` (log kontrol akses, SEC-49); perubahan grup host tercatat di auditd/journald host.
+5. Pengecualian (mis. outlet kecil dengan satu supervisor) **tidak diizinkan** lewat runbook: harus lewat keputusan
+   tertulis pemilik proses Finance, dicatat di register, dan dikompensasi dengan rekonsiliasi refund mingguan oleh Finance.
+
+**Review akses bulanan** (Superadmin + satu saksi dari Finance/Internal Audit; tanggal 1–5 setiap bulan, juga setelah
+mutasi/keluarnya karyawan):
+
+```bash
+# 1) Anggota grup host (di SETIAP host yang menjalankan api-gateway; root/Superadmin)
+install -d -m 0700 -o root -g root /root/efn-review
+getent group efn-cs-approver | cut -d: -f4 | tr , '\n' | sort > /root/efn-review/$(date +%F)-host-approver.txt
+getent group efn-cs          | cut -d: -f4 | tr , '\n' | sort > /root/efn-review/$(date +%F)-host-cs.txt
+getent group docker          | cut -d: -f4 | tr , '\n' | sort > /root/efn-review/$(date +%F)-host-docker.txt
+# satu orang satu peran di host + operator/approver bukan anggota docker → ketiga perintah harus tanpa output
+comm -12 /root/efn-review/$(date +%F)-host-cs.txt /root/efn-review/$(date +%F)-host-approver.txt
+comm -12 /root/efn-review/$(date +%F)-host-approver.txt /root/efn-review/$(date +%F)-host-docker.txt
+comm -12 /root/efn-review/$(date +%F)-host-cs.txt /root/efn-review/$(date +%F)-host-docker.txt
+
+# 2) User Odoo AKTIF yang efektif memegang Sales Manager (langsung atau lewat grup yang meng-imply-nya), read-only.
+#    Superuser postgres hanya untuk operasi manusia Superadmin (aplikasi tidak memakainya, docs/04 §7.3).
+docker exec -i efn-postgres-1 psql -X -q -v ON_ERROR_STOP=1 -U postgres -d efn_odoo -A -F ' ' <<'SQL' \
+  > /root/efn-review/$(date +%F)-odoo-sale-manager.txt
+SET default_transaction_read_only = on;
+WITH RECURSIVE target AS (
+  SELECT res_id AS gid FROM ir_model_data
+   WHERE module = 'sales_team' AND name = 'group_sale_manager' AND model = 'res.groups'
+), carriers(gid) AS (            -- grup yang (transitif) meng-imply Sales Manager, termasuk grup itu sendiri
+  SELECT gid FROM target
+  UNION
+  SELECT r.gid FROM res_groups_implied_rel r JOIN carriers c ON r.hid = c.gid
+)
+SELECT DISTINCT u.id, u.login
+  FROM res_users u
+  JOIN res_groups_users_rel gu ON gu.uid = u.id
+  JOIN carriers c ON c.gid = gu.gid
+ WHERE u.active AND NOT u.share
+ ORDER BY u.login;
+SQL
+chmod 0600 /root/efn-review/*
+```
+
+3) Cocokkan kedua daftar **lewat register peran** (langkah manual): untuk setiap login Odoo di daftar Sales Manager, cari
+   orangnya di register; bila akun host orang itu ada di daftar `efn-cs-approver` → **pelanggaran**. Cabut salah satu
+   peran hari itu juga (`gpasswd -d <akun> efn-cs-approver`, atau cabut grup Sales Manager lewat UI Odoo —
+   [odoo-access-changes.md](odoo-access-changes.md), bukan `odoo shell`), lalu periksa refund `odoo-uid:<n>` milik user
+   itu sejak review sebelumnya: `platform.online_refund.initiated_by` + `platform.online_admin_audit` (aksi
+   `refund_approve`, aktor) — perlakukan sebagai insiden bila approve dilakukan oleh orang yang sama
+   ([security-incident.md](security-incident.md)).
+4) Cocokkan juga: setiap akun di daftar host dan setiap login Odoo masih karyawan aktif dengan peran yang sesuai (akun
+   yatim → cabut).
+5) **Catat hasil** di register peran: tanggal, pelaksana, saksi, jumlah akun per daftar, pelanggaran (ya/tidak) dan
+   tindakannya. Berkas `/root/efn-review/*` memuat login karyawan: simpan di host (root 0600) **maks 13 bulan** (bukti
+   review tahunan), jangan diunggah ke tiket/chat/repo.
+
+Catatan:
+- Nama tabel `res_groups_users_rel` dipakai `efn_audit` (terverifikasi di kode); `res_groups_implied_rel` (kolom `gid`
+  → `hid`) mengikuti skema standar Odoo dan **belum diverifikasi** di DB 19.0 EFN — jalankan sekali di staging dan
+  bandingkan dengan UI Odoo (Pengaturan → Pengguna, filter grup Penjualan / Administrator) sebelum dipakai sebagai bukti.
+- Alternatif tanpa SQL: Odoo UI → Pengaturan → Pengguna & Perusahaan → Grup → "Sales / Administrator" → tab Pengguna
+  (menampilkan anggota langsung; anggota lewat grup turunan tidak selalu tampil — karena itu SQL di atas lebih lengkap).
+- Kontrol pelengkap yang sudah ada: alert `EfnOnlineCsDualRole` (satu akun host di dua grup), `EfnOnlineCsRefundVolumeHigh`,
+  dan rekonsiliasi `provider-ref` refund dengan mutasi bank oleh Finance (SEC-112).
 
 **Pasang (Superadmin, sekali per host; ulangi `install` + cek sha256 setiap wrapper berubah):**
 ```bash

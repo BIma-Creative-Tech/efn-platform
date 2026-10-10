@@ -1116,6 +1116,11 @@ services:
       ODOO_RPC_URL: https://odoo-rpc-gateway:8443
       ODOO_DB: ${ODOO_DB:-efn_odoo}
       ODOO_RPC_TIMEOUT_MS: ${ODOO_RPC_TIMEOUT_MS:-8000}
+      # SEC-96/SEC-109 (L-19f): pool konkurensi json2 BFF terpisah jalur publik (katalog/stok/quote) vs saga.
+      # Aturan: PUBLIC + SAGA <= ODOO_RPC_MAXCONN gateway (deploy-validate). Base/dev: 2 + 2 = maxconn 4;
+      # prod pilot (opsi B, 10 Okt 2026): 1 + 1 = maxconn 2 (docker-compose.prod.yml).
+      ODOO_RPC_PUBLIC_MAX_CONCURRENCY: ${ODOO_RPC_PUBLIC_MAX_CONCURRENCY:-2}
+      ODOO_RPC_SAGA_MAX_CONCURRENCY: ${ODOO_RPC_SAGA_MAX_CONCURRENCY:-2}
       ODOO_RPC_CA_FILE: /run/secrets/efn_ca_crt
       ODOO_RPC_CLIENT_CERT_FILE: /run/secrets/tls_api_gateway_crt
       ODOO_RPC_CLIENT_KEY_FILE: /run/secrets/tls_api_gateway_key
