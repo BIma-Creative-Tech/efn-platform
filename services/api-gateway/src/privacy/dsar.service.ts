@@ -1,4 +1,5 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { OnlinePrivacyService } from '../orders/online-privacy.service';
 import { randomUUID } from 'node:crypto';
 import { AppConfig } from '../config/app-config';
 import { DB, Db } from '../common/db/db';
@@ -71,6 +72,10 @@ export class DsarService {
     private readonly consents: ConsentService,
     private readonly receipts: DsarReceiptService,
     @Inject(KV_STORE) private readonly kv: KvStore,
+    /** Fase 3 (§10.8.3, L-4): export order online + pra-hapus akun. Opsional agar modul lain/test lama tetap jalan. */
+    // QA G17: token eksplisit WAJIB — tipe union `X | null` diserialisasi TypeScript sebagai `Object` di
+    // design:paramtypes, sehingga @Optional() tanpa @Inject selalu menyuntik undefined (L-4 409 diam-diam mati).
+    @Optional() @Inject(OnlinePrivacyService) private readonly online: OnlinePrivacyService | null = null,
   ) {}
 
   requireStepUp(user: AuthUser, token: string | undefined): void {
@@ -165,6 +170,7 @@ export class DsarService {
       [user.memberId, EXPORT_ROW_LIMIT],
     );
     const requests = await this.listRequests(user);
+    const onlineOrders = this.online ? await this.online.exportOrders(user.memberId) : { items: [], truncated: false };
     const truncated = ledger.rows.length > EXPORT_ROW_LIMIT || reports.rows.length > EXPORT_ROW_LIMIT;
 
     await this.db.query(
@@ -214,9 +220,11 @@ export class DsarService {
           created_at: toIso(r.created_at),
         })),
       },
+      // §10.8.3: tanpa kode ambil, QR, id internal Odoo/payment
+      online_orders: onlineOrders.items,
       requests: requests.items,
       processors: DATA_PROCESSORS,
-      truncated,
+      truncated: truncated || onlineOrders.truncated,
     };
   }
 
@@ -224,15 +232,22 @@ export class DsarService {
     const points = await this.loyalty.balanceByHash(user.memberHash);
     const active = await this.findActiveDelete(user.memberId);
     if (active) return this.deleteResponse(active.id, active.scheduledAt, points);
+    // L-4: order belum dibayar dibatalkan otomatis; bagian paying|confirmed|ready|review → 409 open_online_orders
+    if (this.online) await this.online.prepareDelete(user.memberId);
     const id = randomUUID();
     const scheduled = new Date(this.now() + this.config.dsarDeleteGraceDays * 86_400_000);
     try {
-      await this.db.query(
-        `INSERT INTO platform.dsar_request (id, member_id, member_hash, type, status, stores_pending, requested_at, scheduled_at)
-         VALUES ($1, $2, $3, 'delete', 'scheduled', '{}', now(), $4)`,
-        [id, user.memberId, user.memberHash, scheduled.toISOString()],
-      );
+      await this.db.tx(async (q) => {
+        // SEC-100: kunci member yang sama dengan checkout + cek ulang order terbuka, atomik dengan INSERT
+        if (this.online) await this.online.lockAndAssertNoOpenOrders(q, user.memberId);
+        await q.query(
+          `INSERT INTO platform.dsar_request (id, member_id, member_hash, type, status, stores_pending, requested_at, scheduled_at)
+           VALUES ($1, $2, $3, 'delete', 'scheduled', '{}', now(), $4)`,
+          [id, user.memberId, user.memberHash, scheduled.toISOString()],
+        );
+      });
     } catch (err) {
+      if (err instanceof ApiError) throw err;
       // Balapan dua DELETE paralel → unique uq_dsar_active_delete; kembalikan yang menang
       const again = await this.findActiveDelete(user.memberId);
       if (again) return this.deleteResponse(again.id, again.scheduledAt, points);

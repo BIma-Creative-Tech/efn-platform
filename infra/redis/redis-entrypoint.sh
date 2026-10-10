@@ -28,8 +28,10 @@ umask 077
   #   rl:<key>:<bucket> (SEMUA rate limit: rl:otp:*, rl:altcha:ip:*, rl:dsar:export:*, rl:ms:daily:*, rl:paychk:<id>),
   #   altcha:used:<signature> (ALTCHA sekali pakai, docs/04 §8.1/§8.11).
   # ms:* dipertahankan sementara untuk kompatibilitas key lama (tidak lagi ditulis BFF; hapus fase 2).
+  # G17 penjualan online (docs/04 §10.10): cart:<member> (keranjang), oq:<quote_id> (quote tersimpan, TTL),
+  #   ocat:* (salinan/kursor katalog). Lock/rate limit online memakai rl:* yang sudah ada.
   # Tambah prefix baru = ubah baris ini (koordinasi efn-bff-engineer).
-  echo "user efn-bff on >${BFF_PW} resetkeys ~otp:* ~dtok:* ~rl:* ~altcha:used:* ~ms:* resetchannels +@all -@admin -@dangerous +info +client|setname +client|getname +client|id"
+  echo "user efn-bff on >${BFF_PW} resetkeys ~otp:* ~dtok:* ~rl:* ~altcha:used:* ~ms:* ~cart:* ~oq:* ~ocat:* resetchannels +@all -@admin -@dangerous +info +client|setname +client|getname +client|id"
   echo "user efn-exporter on >${EXP_PW} resetkeys resetchannels -@all +@connection +info +ping +select +config|get +client|list +slowlog|get +slowlog|len +latency|latest +latency|histogram +memory|stats"
 } > "$ACL_FILE"
 # chmod SEBELUM chown: setelah chown root tidak lagi pemilik dan tanpa CAP_FOWNER chmod ditolak (gelombang 7)

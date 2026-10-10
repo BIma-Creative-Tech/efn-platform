@@ -7,6 +7,7 @@ import { claimMessage } from '../common/db/processed-message';
 import { PiiCipher } from '../common/pii/crypto';
 import { isMemberHash, maskMsisdn } from '../common/pii/pii';
 import { resolvePriceHunterSubject } from '../common/pii/price-hunter-subject';
+import { resolveOnlineOrderSubject } from './online-order-subject';
 import { isUuid } from '../common/validation';
 import { WHATSAPP_SENDER, WhatsAppSender } from '../otp/whatsapp/whatsapp-sender';
 import { NOTIFY_TEMPLATES, renderTemplateParams } from './templates';
@@ -16,6 +17,14 @@ export const NOTIFY_PUSH_CONSUMER = 'bff.notify-push';
 /** Sumber yang didukung + publisher RabbitMQ (`user_id`) yang boleh mengirim notifikasi untuk sumber itu. */
 export const NOTIFY_SOURCE_PUBLISHERS: Readonly<Record<string, readonly string[]>> = {
   price_hunter: ['efn-ocr', 'efn-bff'],
+  // Fase 3 (docs/04 §10.9): hanya BFF sendiri (outbox saga online)
+  online_order: ['efn-bff'],
+};
+
+/** Template yang boleh dipakai per sumber (template online tidak bisa dikirim dengan source price_hunter dan sebaliknya). */
+export const SOURCE_TEMPLATES: Readonly<Record<string, readonly string[]>> = {
+  price_hunter: ['price_hunter_valid', 'price_hunter_rejected'],
+  online_order: ['online_order_ready', 'online_order_cancelled', 'online_order_refunded'],
 };
 
 /** Payload `notify.push` v2 (kontrak §4): tanpa nomor HP; penerima di-resolve dari baris sumber. */
@@ -48,6 +57,7 @@ export function parseNotifyPushMessage(payload: unknown): NotifyPushMessage {
   if (typeof o.template !== 'string' || !Object.prototype.hasOwnProperty.call(NOTIFY_TEMPLATES, o.template)) {
     throw new PermanentMessageError('template tidak dikenal');
   }
+  if (!SOURCE_TEMPLATES[o.source].includes(o.template)) throw new PermanentMessageError('template tidak sesuai sumber');
   const params =
     typeof o.params === 'object' && o.params !== null && !Array.isArray(o.params) ? (o.params as Record<string, unknown>) : {};
   return {
@@ -61,7 +71,7 @@ export function parseNotifyPushMessage(payload: unknown): NotifyPushMessage {
   };
 }
 
-export type NotifyOutcome = 'sent' | 'duplicate';
+export type NotifyOutcome = 'sent' | 'duplicate' | 'skipped';
 
 /**
  * Consumer `notify.push` v2: kirim template WhatsApp (atau log di mode console).
@@ -106,8 +116,14 @@ export class NotifyPushConsumer implements OnApplicationBootstrap {
     const outcome = await this.db.tx(async (q): Promise<NotifyOutcome> => {
       const fresh = await claimMessage(q, NOTIFY_PUSH_CONSUMER, msg.idempotency_key);
       if (!fresh) return 'duplicate';
-      const subject = await resolvePriceHunterSubject(q, this.cipher, this.config.memberHashPepper, msg.source_ref, msg.member_hash);
-      to = subject.memberRef;
+      if (msg.source === 'online_order') {
+        const ref = await resolveOnlineOrderSubject(q, this.cipher, this.config.memberHashPepper, msg.source_ref, msg.member_hash);
+        if (!ref) return 'skipped'; // tautan member sudah dilepas (retensi/erasure)
+        to = ref;
+      } else {
+        const subject = await resolvePriceHunterSubject(q, this.cipher, this.config.memberHashPepper, msg.source_ref, msg.member_hash);
+        to = subject.memberRef;
+      }
       await this.sender.sendTemplate(to, tpl.waTemplate, renderTemplateParams(tpl, msg.params));
       return 'sent';
     });

@@ -4,3 +4,8 @@ c1b770a966ad72b70d29e2dc278961ba84ea8a87:tests/load/k6/efn-fase1.js:generic-api-
 ce7e2b0a3aaf7d5942d55c1962af4b85c39d902d:infra/acme/acme-dns.sh:generic-api-key:58
 136f689510afc74b341582df794cf03a4439f736:services/api-gateway/src/config/app-config.spec.ts:generic-api-key:34
 136f689510afc74b341582df794cf03a4439f736:services/api-gateway/src/config/app-config.spec.ts:generic-api-key:348
+# G17 (diperiksa devsecops 2026-10-10): nilai Idempotency-Key buatan klien di test Vitest frontend ("dipilih-klien-1234567") -
+# fixture yang membuktikan header dari browser diabaikan BFF. Bukan secret.
+4ec8eade7587a8e961ede0c4b5ad8050c81d7f3c:services/superapp-web/tests/online-routes.test.ts:generic-api-key:270
+# G17 (diperiksa efn-lead 2026-10-10): laporan agent sempat mengutip nilai fixture yang sama (sudah dihapus di commit berikut).
+ea30abd1a31f3cde003d64432a5c8ed5c1e3cedf:docs/agent-reports/efn-devsecops-engineer.md:generic-api-key:1509

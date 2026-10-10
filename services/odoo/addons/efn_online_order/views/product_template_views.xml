@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="product_template_form_view_efn_online" model="ir.ui.view">
+        <field name="name">product.template.form.efn.online</field>
+        <field name="model">product.template</field>
+        <field name="inherit_id" ref="product.product_template_form_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="inside">
+                <page string="Online (Super-App)" name="efn_online" groups="sales_team.group_sale_manager">
+                    <group>
+                        <field name="efn_online_channel_ids" widget="many2many_tags"/>
+                        <field name="efn_online_sequence"/>
+                        <field name="efn_online_description" placeholder="Teks polos, maks. 2.000 karakter"/>
+                    </group>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>

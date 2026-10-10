@@ -1,0 +1,19 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_online_channel_salesman,efn.online.channel salesman,model_efn_online_channel,sales_team.group_sale_salesman,1,0,0,0
+access_efn_online_channel_stock_user,efn.online.channel stock user,model_efn_online_channel,stock.group_stock_user,1,0,0,0
+access_efn_online_channel_sale_manager,efn.online.channel sale manager,model_efn_online_channel,sales_team.group_sale_manager,1,1,0,0
+access_efn_online_channel_system,efn.online.channel system,model_efn_online_channel,base.group_system,1,1,1,1
+access_efn_online_outlet_salesman,efn.online.outlet salesman,model_efn_online_outlet,sales_team.group_sale_salesman,1,0,0,0
+access_efn_online_outlet_stock_user,efn.online.outlet stock user,model_efn_online_outlet,stock.group_stock_user,1,0,0,0
+access_efn_online_outlet_sale_manager,efn.online.outlet sale manager,model_efn_online_outlet,sales_team.group_sale_manager,1,1,1,0
+access_efn_online_outlet_system,efn.online.outlet system,model_efn_online_outlet,base.group_system,1,1,1,1
+access_efn_online_order_salesman,efn.online.order salesman,model_efn_online_order,sales_team.group_sale_salesman,1,0,0,0
+access_efn_online_order_stock_user,efn.online.order stock user,model_efn_online_order,stock.group_stock_user,1,0,0,0
+access_efn_online_order_invoice,efn.online.order billing,model_efn_online_order,account.group_account_invoice,1,0,0,0
+access_efn_online_order_system,efn.online.order system,model_efn_online_order,base.group_system,1,1,0,0
+access_efn_online_refund_sale_manager,efn.online.refund sale manager,model_efn_online_refund,sales_team.group_sale_manager,1,0,0,0
+access_efn_online_refund_invoice,efn.online.refund billing,model_efn_online_refund,account.group_account_invoice,1,0,0,0
+access_efn_online_refund_system,efn.online.refund system,model_efn_online_refund,base.group_system,1,1,0,0
+access_efn_online_event_outbox_sale_manager,efn.online.event.outbox sale manager,model_efn_online_event_outbox,sales_team.group_sale_manager,1,0,0,0
+access_efn_online_event_outbox_system,efn.online.event.outbox system,model_efn_online_event_outbox,base.group_system,1,1,0,1
+access_efn_online_handover_wizard_stock_user,efn.online.handover.wizard stock user,model_efn_online_handover_wizard,stock.group_stock_user,1,1,1,0

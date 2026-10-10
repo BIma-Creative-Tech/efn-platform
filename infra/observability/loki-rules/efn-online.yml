@@ -1,0 +1,102 @@
+# Aturan ruler Loki G17 (docs/04 §10.11): penjualan online BFF. Sumber: stream="efn_online" (promtail.yml tahap 6;
+# regex berjangkar, hanya container service=api-gateway). Runbook: docs/runbooks/online-orders.md.
+# Pasangan metrik Prometheus: alert-rules.yml grup efn-online.
+groups:
+  - name: efn-online
+    interval: 1m
+    rules:
+      # DEAD-MAN §10.11: rekonsiliasi pull efn_online_status (§10.6.5) tidak mencetak status ok selama 20 menit =
+      # job mati, BFF tidak jalan, ATAU format log berubah (anomali online ikut buta). Hanya relevan saat kanal
+      # online aktif: selama ONLINE_ENABLED=false BFF tidak mencetak heartbeat -> alert ini menyala. Karena itu
+      # alert hanya dievaluasi bila dalam 24 jam terakhir pernah ada heartbeat (online pernah aktif); lihat runbook
+      # bila online sengaja dimatikan (silence sampai heartbeat kedaluwarsa).
+      - alert: EfnOnlineReconDeadman
+        expr: |
+          (absent_over_time({stream="efn_online", online_event="recon", recon_status="ok"} [20m]) == 1)
+          and on ()
+          (sum(count_over_time({stream="efn_online", online_event="recon"} [24h])) > 0)
+        for: 5m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Penjualan online: rekonsiliasi status Odoo tidak sukses > 20 menit (atau baris log tidak dikenali)"
+          description: "Event Odoo yang hilang tidak dipulihkan; order bisa tertahan tanpa terdeteksi. Cek log BFF EFN_ONLINE_RECON."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#efnonlinerecondeadman"
+      - alert: EfnOnlineAnomalyCritical
+        expr: |
+          sum by (kind) (count_over_time({stream="efn_online", online_event="anomaly", severity="critical"} [15m])) > 0
+        labels:
+          severity: critical
+          team: ops
+        annotations:
+          summary: "Penjualan online: anomali KRITIS {{ $labels.kind }} ({{ $value }} baris / 15 menit)"
+          description: "Lihat baris EFN_ONLINE_ANOMALY (id order/bagian saja) dan runbook; bagian terkait biasanya berstatus review."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#efnonlineanomaly"
+      - alert: EfnOnlineAnomalyWarning
+        expr: |
+          sum by (kind) (count_over_time({stream="efn_online", online_event="anomaly", severity="warning"} [1h])) > 0
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Penjualan online: {{ $value }} anomali {{ $labels.kind }} dalam 1 jam"
+          description: "Ringkasan jam kerja (transisi mundur ditolak, event tak dikenal, dsb.)."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#efnonlineanomaly"
+
+  # G17 (SEC-108 / L-19e): jejak wrapper CLI CS `efn-online-cs` (journald host, _UID 0 saja, promtail-journal.yml ->
+  # service="host-efn-online-cs"). Baris: `MULAI|SELESAI aktor=<u> peran=<cs|approver> host=<h> cmd=<c> <id..> [rc=<n>]`
+  # dan `DITOLAK: <alasan penolakan> (aktor=<u> peran=<p>)`. Tanpa teks alasan CS. Runbook: online-orders.md#cli-cs.
+  - name: efn-online-cs
+    interval: 1m
+    rules:
+      # Penolakan berulang = salah pakai, uji coba bypass (subcommand/flag lain, --reason di argv, approve oleh peran cs)
+      - alert: EfnOnlineCsDeniedRepeated
+        expr: |
+          sum by (aktor) (count_over_time({service="host-efn-online-cs"} |= `DITOLAK:` | regexp `aktor=(?P<aktor>[a-z_?][a-z0-9_.?-]{0,31})` [15m])) >= 3
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "efn-online-cs: {{ $value }} penolakan untuk aktor {{ $labels.aktor }} dalam 15 menit"
+          description: "Operator mencoba perintah/flag di luar allowlist, approve tanpa peran approver, atau identitas tidak valid. Konfirmasi dengan operator; bila tidak terjelaskan, perlakukan sebagai insiden."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#cli-cs"
+      # Satu akun di DUA grup (efn-cs + efn-cs-approver) = pemisahan tugas rusak di host (SEC-107) -> perbaiki grup segera
+      - alert: EfnOnlineCsDualRole
+        expr: |
+          sum by (host) (count_over_time({service="host-efn-online-cs"} |= `satu orang satu peran` [15m])) > 0
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "efn-online-cs: akun anggota efn-cs DAN efn-cs-approver di host {{ $labels.host }}"
+          description: "Pemisahan tugas refund (SEC-107) rusak di konfigurasi grup host. Wrapper menolak akun ini; Superadmin perbaiki keanggotaan grup."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#cli-cs"
+      # Volume refund/approve CS tidak wajar (ambang PLACEHOLDER pilot): indikasi penyalahgunaan akun CS/approver
+      - alert: EfnOnlineCsRefundVolumeHigh
+        expr: |
+          sum by (cmd) (count_over_time({service="host-efn-online-cs"} |~ `^SELESAI .* cmd=(online-refund|online-refund-approve) .* rc=0$` | regexp ` cmd=(?P<cmd>[a-z-]+) ` [1h])) > 10
+        labels:
+          severity: warning
+          team: finance
+        annotations:
+          summary: "efn-online-cs: {{ $value }} {{ $labels.cmd }} sukses dalam 1 jam"
+          description: "Jumlah refund/persetujuan CS di atas ambang pilot (10/jam). Tinjau audit platform.online_admin_audit per aktor."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#cli-cs"
+
+  - name: efn-odoo-rpc-gateway
+    interval: 1m
+    rules:
+      # Filter /json/2 (odoo-rpc-gateway). Format log: '<ip> cn="<CN>" <method> <path> <status> ... why=<alasan>'.
+      # BFF sah hampir tidak pernah ditolak; penolakan = bug klien BFF ATAU container BFF terkompromi mencoba
+      # metode/ path lain. Satu penolakan pun ditinjau (BFF satu-satunya klien).
+      - alert: EfnOdooRpcGatewayDenied
+        expr: |
+          sum by (why) (count_over_time({service="odoo-rpc-gateway"} |~ ` why=[a-z_]+$` != ` why=-` != ` why=busy` | regexp ` why=(?P<why>[a-z_]+)$` [10m])) > 0
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "odoo-rpc-gateway menolak request BFF (alasan {{ $labels.why }})"
+          description: "Request ke Odoo /json/2 di luar 10 metode/format yang diizinkan. Periksa versi BFF; bila tidak dapat dijelaskan, perlakukan sebagai insiden."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#efnodoorpcgatewaydenied"

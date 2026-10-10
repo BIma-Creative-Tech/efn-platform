@@ -149,6 +149,11 @@ secrets:
   # G16b: kunci enkripsi at rest DB aplikasi Metabase (MB_ENCRYPTION_SECRET_KEY; hanya service metabase) [SA]
   metabase_encryption_key: { file: ../../secrets/metabase_encryption_key.txt }
   migration_api_key: { file: ../../secrets/migration_api_key.txt }
+  # G17 penjualan online (docs/04 §10.10): API key Odoo per kanal (dibuat di Odoo, runbook odoo-online-api-key.md;
+  # `_fnb` TIDAK di-mount selama kanal mati) + HMAC event Odoo -> BFF (L-2; hanya odoo + api-gateway)
+  odoo_api_key_online_rtl: { file: ../../secrets/odoo_api_key_online_rtl.txt }
+  odoo_api_key_online_fnb: { file: ../../secrets/odoo_api_key_online_fnb.txt }
+  odoo_online_event_hmac: { file: ../../secrets/odoo_online_event_hmac.txt }
   # turunan (scripts/derive-secrets.sh)
   member_hash_pepper: { file: ../../secrets/member_hash_pepper.txt }
   minio_prometheus_token: { file: ../../secrets/minio_prometheus_token.txt }
@@ -177,6 +182,8 @@ secrets:
   tls_api_gateway_key: { file: ../../secrets/tls_api_gateway_key.txt }
   tls_odoo_crt: { file: ../../secrets/tls_odoo_crt.txt }
   tls_odoo_key: { file: ../../secrets/tls_odoo_key.txt }
+  tls_odoo_rpc_gateway_crt: { file: ../../secrets/tls_odoo_rpc_gateway_crt.txt }
+  tls_odoo_rpc_gateway_key: { file: ../../secrets/tls_odoo_rpc_gateway_key.txt }
   tls_superapp_web_crt: { file: ../../secrets/tls_superapp_web_crt.txt }
   tls_superapp_web_key: { file: ../../secrets/tls_superapp_web_key.txt }
   tls_ollama_crt: { file: ../../secrets/tls_ollama_crt.txt }
@@ -772,6 +779,8 @@ services:
       MINIO_URL: https://minio:9000
       MINIO_BUCKET_MARKET_SCOUT: market-scout
       MINIO_BUCKET_PG_BACKUP: pg-backup
+      # G17: gambar katalog online (docs/04 §10.10; retensi dikelola job BFF, bukan lifecycle)
+      MINIO_BUCKET_CATALOG: catalog
       # Retensi foto Market Scout (docs/04 §8.4: default 90 hari, menunggu DPO)
       MINIO_MARKET_SCOUT_EXPIRE_DAYS: ${MARKET_SCOUT_PHOTO_RETENTION_DAYS:-90}
       MC_CONFIG_DIR: /tmp/.mc
@@ -829,7 +838,10 @@ services:
       EFN_MEMBER_HASH_PEPPER_FILE: /run/secrets/member_hash_pepper
       # SEC-51 (G13): HMAC per baris sink audit (efn_audit >= 19.0.1.3.0); tanpa secret -> "mac": null + alert
       EFN_AUDIT_SINK_KEY_FILE: /run/secrets/efn_audit_sink_key
-    secrets: [pg_password_odoo, odoo_admin_password, odoo_bff_api_key, member_hash_pepper, efn_audit_sink_key, efn_ca_crt]
+      # G17 (docs/04 §10.5, L-2): HMAC event pesanan online Odoo -> BFF (X-EFN-Signature)
+      EFN_ONLINE_EVENT_HMAC_FILE: /run/secrets/odoo_online_event_hmac
+    secrets:
+      [pg_password_odoo, odoo_admin_password, odoo_bff_api_key, member_hash_pepper, efn_audit_sink_key, odoo_online_event_hmac, efn_ca_crt]
     volumes:
       - odoo-data:/var/lib/odoo
     networks: [internal, data]
@@ -899,10 +911,12 @@ services:
       - --cert=/run/secrets/tls_odoo_crt
       - --key=/run/secrets/tls_odoo_key
       # mTLS (docs/04 §8.5, SEC-20/SEC-22): hanya Traefik (+ probe kesehatan blackbox yang hanya bisa dipicu
-      # Prometheus lewat mTLS). Container lain di network internal/data tidak bisa mencapai Odoo.
+      # Prometheus lewat mTLS) + filter L7 odoo-rpc-gateway (G17, docs/04 §10.4.1: BFF -> /json/2, 10 path saja).
+      # Container lain di network internal/data (termasuk BFF langsung) tidak bisa mencapai Odoo.
       - --cacert=/run/secrets/efn_ca_crt
       - --allow-cn=traefik
       - --allow-cn=blackbox-exporter
+      - --allow-cn=odoo-rpc-gateway
       - --status=http://127.0.0.1:6061
       - --quiet=conns
     secrets: [efn_ca_crt, tls_odoo_crt, tls_odoo_key]
@@ -938,6 +952,42 @@ services:
       retries: 3
     labels:
       service: odoo-ws-tls
+
+  # Filter L7 BFF -> Odoo /json/2 (G17, docs/04 §10.4.1, ADR-034 Proposed; pola s3-gateway). Aturan di
+  # infra/odoo-rpc-gateway/haproxy.cfg: mTLS masuk hanya CN api-gateway, POST ke 10 path persis, header allowlist,
+  # X-Odoo-Database dipaksa; keluar mTLS verify-full ke odoo-tls (CN odoo-rpc-gateway). Tanpa label Traefik, tanpa
+  # port host. Non-root (uid image haproxy), read_only, tanpa capability; PEM crt+key hanya di tmpfs /tmp.
+  odoo-rpc-gateway:
+    <<: *common
+    image: haproxy:3.2.25-alpine@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be
+    profiles: ["core"]
+    depends_on:
+      odoo:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/efn/entrypoint.sh"]
+    environment:
+      ODOO_DB: ${ODOO_DB:-efn_odoo}
+      # SEC-96 / L-16b: koneksi paralel maks. ke Odoo = worker HTTP Odoo yang disisihkan untuk online (1..16).
+      # Kelebihan mengantre 2 s lalu 503. Sizing worker: docs/runbooks/online-orders.md#sizing-worker
+      ODOO_RPC_MAXCONN: ${ODOO_RPC_MAXCONN:-4}
+    secrets: [efn_ca_crt, tls_odoo_rpc_gateway_crt, tls_odoo_rpc_gateway_key]
+    volumes:
+      - ../odoo-rpc-gateway/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ../odoo-rpc-gateway/entrypoint.sh:/efn/entrypoint.sh:ro
+    networks: [internal]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 64M }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8406/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: odoo-rpc-gateway
 
   # ───────────────────────── BFF / API ─────────────────────────
   # HTTPS native di :3000 (TLS_CERT_FILE/TLS_KEY_FILE). Network `egress` untuk WhatsApp Cloud API & payment.
@@ -1047,6 +1097,38 @@ services:
       MINIO_ACCESS_KEY_FILE: /run/secrets/minio_bff_access_key
       MINIO_SECRET_KEY_FILE: /run/secrets/minio_bff_secret
       MINIO_BUCKET_MARKET_SCOUT: market-scout
+      # ── G17 penjualan online (docs/04 §10.13; angka = PLACEHOLDER pilot §10.1, menunggu Q-ON*) ──
+      # Kill switch: default false (production). Dev/staging menyalakan lewat .env (ONLINE_ENABLED=true).
+      ONLINE_ENABLED: ${ONLINE_ENABLED:-false}
+      ONLINE_CATALOG_ENABLED: ${ONLINE_CATALOG_ENABLED:-false}
+      ONLINE_CHANNELS: ${ONLINE_CHANNELS:-RTL}
+      ONLINE_FULFILMENTS: ${ONLINE_FULFILMENTS:-pickup}
+      ONLINE_PAYMENT_TIMEOUT_SECONDS: ${ONLINE_PAYMENT_TIMEOUT_SECONDS:-900}
+      ONLINE_QUOTE_TTL_SECONDS: ${ONLINE_QUOTE_TTL_SECONDS:-600}
+      ONLINE_MAX_OPEN_ORDERS_PER_MEMBER: ${ONLINE_MAX_OPEN_ORDERS_PER_MEMBER:-3}
+      ONLINE_CATALOG_SYNC_SECONDS: ${ONLINE_CATALOG_SYNC_SECONDS:-300}
+      ONLINE_PICKUP_CODE_MAX_DAYS: ${ONLINE_PICKUP_CODE_MAX_DAYS:-7}
+      # Retensi usulan (L-5, paket DPO - bukan keputusan)
+      ONLINE_ORDER_MEMBER_LINK_DAYS: ${ONLINE_ORDER_MEMBER_LINK_DAYS:-730}
+      ONLINE_EVENT_RETENTION_DAYS: ${ONLINE_EVENT_RETENTION_DAYS:-180}
+      ONLINE_ADMIN_AUDIT_RETENTION_DAYS: ${ONLINE_ADMIN_AUDIT_RETENTION_DAYS:-400}
+      # BFF -> Odoo /json/2 HANYA lewat filter odoo-rpc-gateway (mTLS: klien CN api-gateway = sertifikat BFF ber-EKU
+      # server+client, gen-pki.sh profil `both`; verify-full CA internal, hostname odoo-rpc-gateway)
+      ODOO_RPC_URL: https://odoo-rpc-gateway:8443
+      ODOO_DB: ${ODOO_DB:-efn_odoo}
+      ODOO_RPC_TIMEOUT_MS: ${ODOO_RPC_TIMEOUT_MS:-8000}
+      # SEC-96/SEC-109 (L-19f): pool konkurensi json2 BFF terpisah jalur publik (katalog/stok/quote) vs saga.
+      # Aturan: PUBLIC + SAGA <= ODOO_RPC_MAXCONN gateway (deploy-validate). Base/dev: 2 + 2 = maxconn 4;
+      # prod pilot (opsi B, 10 Okt 2026): 1 + 1 = maxconn 2 (docker-compose.prod.yml).
+      ODOO_RPC_PUBLIC_MAX_CONCURRENCY: ${ODOO_RPC_PUBLIC_MAX_CONCURRENCY:-2}
+      ODOO_RPC_SAGA_MAX_CONCURRENCY: ${ODOO_RPC_SAGA_MAX_CONCURRENCY:-2}
+      ODOO_RPC_CA_FILE: /run/secrets/efn_ca_crt
+      ODOO_RPC_CLIENT_CERT_FILE: /run/secrets/tls_api_gateway_crt
+      ODOO_RPC_CLIENT_KEY_FILE: /run/secrets/tls_api_gateway_key
+      # API key per kanal (satu key = satu user teknis = satu PT). FNB: tambah env + secret saat kanal diaktifkan.
+      ODOO_API_KEY_ONLINE_RTL_FILE: /run/secrets/odoo_api_key_online_rtl
+      ODOO_ONLINE_EVENT_HMAC_FILE: /run/secrets/odoo_online_event_hmac
+      MINIO_CATALOG_BUCKET: catalog
     secrets:
       - efn_ca_crt
       - tls_api_gateway_crt
@@ -1065,6 +1147,8 @@ services:
       - pii_encryption_key
       - altcha_hmac_key
       - migration_api_key
+      - odoo_api_key_online_rtl
+      - odoo_online_event_hmac
     networks: [internal, data, cache, egress]
     read_only: true
     tmpfs: [/tmp]
@@ -1127,6 +1211,9 @@ services:
       # CSP dikirim oleh Next.js sendiri; middleware Traefik secure-headers@file sengaja tidak menyetel CSP.
       BFF_INTERNAL_URL: https://api-gateway:3000
       NODE_EXTRA_CA_CERTS: /run/secrets/efn_ca_crt
+      # G17: simulator pembayaran (tombol "simulasikan bayar", lib/orders-server.ts) - nilai TETAP false (bukan ${..}),
+      # hanya docker-compose.dev.yml menyalakannya. check-encryption.sh menolak nilai lain di render prod.
+      EFN_PAYMENT_SIMULATOR: "false"
     secrets: [efn_ca_crt]
     networks: [internal]
     read_only: true

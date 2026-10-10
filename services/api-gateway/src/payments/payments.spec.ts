@@ -126,6 +126,7 @@ describe('PaymentsService (docs/04 §8.3) — mock', () => {
       },
       getStatus: async () => ({ status: 'pending', paidAt: null, amount: null }),
       cancel: async () => ({ status: 'cancelled' }),
+      refund: async () => ({ status: 'failed', providerRefundRef: null }),
       verifyWebhook: () => ({ ok: false, reason: 'x' }),
       parseWebhook: () => {
         throw new Error('x');

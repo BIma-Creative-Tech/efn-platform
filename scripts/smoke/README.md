@@ -9,7 +9,7 @@ ETL, dan regresi negatif enkripsi. Hasil gelombang 8: `docs/testing/E2E_SMOKE_RE
 
 | File | Dijalankan di | Isi |
 |---|---|---|
-| `run-e2e-smoke.sh` | host (Git Bash/Linux) | orkestrator skenario `a b c d f e g l` (default semua; `v` opsional), ringkasan PASS/FAIL, exit 1 bila gagal |
+| `run-e2e-smoke.sh` | host (Git Bash/Linux) | orkestrator skenario `a b c d f e g l o` (default semua; `v` opsional), ringkasan PASS/FAIL, exit 1 bila gagal |
 | `bff_smoke.py` | container `python:3.12` di network `efn_edge` (klien publik, lewat Traefik) | Super-App/BFF: ALTCHA PoW, OTP, JWT, consent, upload foto sintetis (Pillow), DSAR |
 | `odoo_pos_smoke.py` | `odoo shell` di container `efn-odoo-1` | setup POS smoke (company FNB), `efn_otp_request/verify`, `sync_from_ui`, `efn_gateway_*`, cron erasure |
 
@@ -88,3 +88,31 @@ baru (L/M/N) per run; nilai poin memakai default BFF dev (1 poin/Rp10.000, Rp100
 - Jalur VLM dengan model nyata: subperintah `report_vlm` tidak termasuk run default (butuh model `qwen2.5vl:3b`
   ±3,2 GB, lihat E2E_SMOKE_REPORT gelombang 10). `v` boleh dijalankan setelah `e` (`a b c d f e g v`): akun skenario
   `a` sudah dihapus DSAR, sehingga `v` login dengan nomor fiktif baru (gelombang 12).
+
+## Skenario `o` — Penjualan online G17 (docs/04 §10, ADR-034/ADR-019 Proposed)
+| File baru | Dijalankan di | Isi |
+|---|---|---|
+| `online_smoke.py` | container `python:3.12` (efn_edge → Traefik `api.efn.local`/`app.efn.local`; subperintah `events` di efn_internal) | katalog, cart, quote, checkout (Idempotency-Key L-8), simulate bayar, status, kode ambil, anti-enumeration, DSAR L-4, kill switch, alur Next.js, event Odoo→BFF HMAC |
+| `odoo_online_smoke.py` | `odoo shell` di `efn-odoo-1` | `setup` kanal RTL dev (data fiktif `SMOKE`, idempoten), `stock`, `order`, `ready`/`handover` sebagai user staf non-admin, `outbox`, `apikey` |
+
+Prasyarat (sekali per volume dev): `efn_online_order efn_setup_online` terpasang, SQL `07-platform-online.sql`, API key
+nyata user teknis di `secrets/odoo_api_key_online_rtl.txt` (runbook `odoo-online-api-key.md` §1; langkah `setup` membuat
+user `efn_online_rtl` lebih dulu), lalu `up -d --force-recreate api-gateway`.
+- Gateway + key nyata: 10 path `/json/2` → jawaban aplikasi Odoo (200 / `efn_online:<kode>` 422), bukan 401/403/deny.
+- Alur utama: quote → `accept_total` salah 409 → tanpa key 400 → checkout 201 → klik ganda = order sama → body beda 409
+  → bayar (webhook mock HMAC) → `confirmed` (SO + faktur) → `ready` (aksi staf) → serah terima kode ambil → `completed`;
+  kode ambil terenkripsi di BFF, hash KDF di Odoo, keduanya dihapus setelah serah terima.
+- Refund parsial CLI `online-refund` (L-3) → `settled` + nota kredit; refund > sisa ditolak; audit `online_admin_audit`.
+- Batas bayar dipercepat lewat DB dev (`UPDATE platform.online_order SET expires_at = now() - 1 menit`) → `expired`, SO
+  batal; bayar terlambat → refund `late_payment`.
+- Stok dihabiskan antara checkout dan bayar → `stock_short` → batal + refund porsi penuh.
+- Kode ambil salah 5× → Odoo `review` (+ status bagian BFF, lihat E2E_SMOKE_REPORT G17 temuan terbuka).
+- Event Odoo→BFF: tanpa tanda tangan / secret salah / di luar window ±300 s / body diubah / tanpa service key → 401;
+  seq lama → `ignored_stale`; duplikat → `duplicate`; checkout_ref asing 404; company beda 409.
+- PDP: kode ambil & HP tidak ada di log BFF/Odoo/odoo-rpc-gateway/Traefik, Loki, maupun pg_dump tabel online Odoo.
+- Kill switch: overlay sementara `ONLINE_ENABLED=false` → recreate api-gateway → cart/quote/order 503, katalog & `/v1/me`
+  tetap; recreate kembali. Skenario ini me-recreate api-gateway dua kali (±3 menit), karena itu `o` dijalankan terakhir.
+- G17 r10/L-19 (10 Okt): skenario 4b — picking di luar wizard & context `efn_online_internal` palsu ditolak; batal SO
+  oleh manajer `smoke_online_mgr` → refund `approval_required` → CLI approve (peran `cs` ditolak, approver lain →
+  settled); refund CS (`approval_required`, pembuat/peran cs ditolak), settle manual SEC-112; stok non-katalog 404;
+  label pajak `PPN 11%`. Identitas/peran CLI disimulasikan lewat env `EFN_CS_OPERATOR`/`EFN_CS_ROLE` (dev).

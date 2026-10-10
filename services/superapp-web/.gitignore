@@ -1,0 +1,4 @@
+# Artefak build/tooling Next.js & TypeScript (dibuat ulang otomatis oleh `next build`/`next dev`/`tsc`; tidak di-commit)
+next-env.d.ts
+tsconfig.tsbuildinfo
+*.tsbuildinfo

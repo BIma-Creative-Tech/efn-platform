@@ -564,3 +564,154 @@ Semua cek lama (a–g, l) tetap lolos, termasuk PDP (0 kemunculan digit HP partn
 - Log ruler Loki menampilkan `status=500` di baris metrik untuk SEMUA rule (lama dan baru) walau query manual 200 dan
   alert terkirim; tampaknya artefak logging ruler lokal — belum diselidiki.
 - `deploy.sh` (cek migrasi wajib 04/05/06) belum dijalankan di host Linux nyata. CI GitHub belum dijalankan.
+
+# Gelombang 17 — Integrasi nyata penjualan online Fase 3 + smoke `o` (9 Okt 2026)
+
+Dasar: docs/04 §10 (v5.0) + L-1..L-13, ADR-034/ADR-019 (Proposed). Runtime nyata: Docker Desktop (WSL2), stack dev
+profil core + data + ai + observability + ops. Pelaksana: efn-qa-engineer di bawah efn-lead. Tanpa commit/push.
+
+## G17.1 Integrasi stack dev (langkah yang dijalankan)
+1. Backup DB `efn_odoo` + `efn_platform`: `pg_dump -Fc | openssl enc -aes-256-cbc -pbkdf2 -iter 200000` ke scratchpad
+   lokal di luar repo (kunci acak terpisah, tidak di repo). Tidak ada dump plaintext.
+2. Build ulang image `odoo`, `api-gateway`, `superapp-web` (exit 0).
+3. `stop odoo odoo-tls odoo-ws-tls odoo-rpc-gateway` → `run --rm odoo ... -i efn_online_order,efn_setup_online`:
+   exit 0, **0 baris ERROR/CRITICAL**; ikut terpasang `sale`, `sale_stock`, `sale_loyalty`, `sale_mrp`
+   (`pos_sale`/`sale_management` tetap tidak terpasang).
+4. Konfigurasi kanal dev lewat `scripts/smoke/odoo_online_smoke.py setup` (data fiktif `SMOKE`, idempoten, dipakai ulang
+   tiap run): pembulatan Rp1, gudang `SMKOL`, jurnal bank titipan `SMKTT`, pricelist IDR, user teknis `efn_online_rtl`
+   (base.group_user + group_online_channel, satu company RTL), kanal `RTL` (25 menit) + outlet `TOKO-01`, 4 produk
+   (PPN l10n_id, 2 dengan gambar), stok awal, staf outlet `smoke_online_staff` (Inventory user, bukan admin).
+5. API key: **prosedur runbook `odoo-online-api-key.md` §1 dijalankan apa adanya** (heredoc `with_user`, kedaluwarsa
+   +85 hari) → 41 byte (40 hex + LF) → `secrets/odoo_api_key_online_rtl.txt` (git-ignored; nilai tidak pernah dicetak).
+   Runbook terverifikasi bekerja.
+6. Migrasi `07-platform-online.sql` (exit 0; 8 tabel `platform.online_*`).
+7. `up -d --force-recreate` odoo, odoo-tls, odoo-ws-tls, odoo-rpc-gateway, api-gateway, superapp-web, superapp-web-tls:
+   semua healthy. BFF langsung menyinkronkan katalog dari E-28 nyata: `Katalog RTL: 4 item diperbarui, 2 gambar`.
+8. `infra/odoo-rpc-gateway/test-gateway.sh`: **97/97 PASS** (sebelum dan sesudah smoke). Path sah tetap 401 di skrip itu
+   karena token ujinya palsu (desain skrip); dengan **key nyata** ke-10 path diuji di smoke `o` (G17.2 no. 0).
+
+## G17.2 Smoke `o` (`scripts/smoke/run-e2e-smoke.sh o`; file baru `online_smoke.py` + `odoo_online_smoke.py`)
+| # | Skenario §10.15 / permintaan lead | Hasil |
+|---|---|---|
+| 0 | 10 path `/json/2` lewat gateway + key nyata | catalog/stock/cancel (`absent`)/status **200**; image/quote/place/mark_paid/refund/refund_settled dengan argumen sengaja salah → **422 `efn_online:<kode>`** (jawaban aplikasi); 0 deny, 0 × 401/403 |
+| 1 | katalog → cart → quote → checkout → bayar (webhook mock HMAC) → confirmed → ready (aksi staf, user non-admin) → serah terima kode ambil → completed | lulus; SO draft + hash KDF saat place, `pickup_code_enc` AES-GCM v1 di BFF; confirmed = SO `sale` + faktur posted; picking `done`; hash Odoo & ciphertext BFF dihapus setelah serah terima; gambar katalog JPEG re-encode `immutable`; stok tanpa `qty` |
+| 2 | Idempotensi klik ganda (L-8) | key `chk1_…` sama → order sama (201), 1 baris di daftar; body beda → 409 `idempotency_conflict`; tanpa key → 400 `idempotency_key_required` |
+| 3 | `accept_total` salah | 409 `price_changed` |
+| 4 | Timeout 15 menit (dipercepat: `expires_at` di DB dev) | sweeper → order `expired`, bagian `cancelled`; Odoo `cancelled/payment_expired`, SO `cancel` |
+| 5 | Bayar terlambat | intent `cancelled→paid` → refund `late_payment` **settled** = porsi; order tetap `expired` |
+| 6 | Stok kurang setelah bayar | `stock_short` → Odoo `cancelled/stock_short`, SO `cancel` → refund `full` **settled** = porsi penuh |
+| 7 | Kode ambil salah 5× | Odoo `review` (`pickup_code_attempts`, 5 percobaan) ✔; **bagian BFF tetap `confirmed`** ✘ (G17-QA-03) |
+| 8 | Event Odoo HMAC salah / replay | tanpa tanda tangan, secret salah, `t` −600 s dan +600 s, body diubah → 401 `invalid_signature`; tanpa service key → 401; seq lama → 200 `ignored_stale`; duplikat → 200 `duplicate`; `checkout_ref` asing 404; company beda 409 `company_mismatch` |
+| 9 | Kill switch `ONLINE_ENABLED=false` | overlay sementara + recreate: cart GET/PUT, quote, daftar order, checkout → **503 `online_unavailable`**; katalog & `/v1/me` tetap 200; dipulihkan (ONLINE_ENABLED=true, katalog 200) |
+| 10 | Anti-enumeration | GET/cancel/pickup-code/simulate order member lain, UUID acak, non-UUID, `1 or 1=1` → semua **404 `not_found`**; tanpa token 401 |
+| 11 | DSAR `DELETE /v1/me` | **409 `open_online_orders`** (setelah perbaikan G17-QA-01), akun tetap aktif; `GET /v1/me/data` memuat order tanpa kode ambil/QR |
+| 12 | Log tanpa kode ambil/HP | 0 kemunculan kode (dengan & tanpa strip) di log BFF, Odoo, odoo-rpc-gateway, Traefik, Loki (kontrol positif Loki 200 baris); 0 digit HP di log BFF/Odoo/Loki; 0 di `pg_dump` `efn_online_*` + `sale_order`; heartbeat `EFN_ONLINE_RECON` ada di Loki |
+| + | Refund parsial CLI `online-refund` (L-3) | `settled` Rp5.550 + nota kredit Odoo; refund > sisa ditolak (exit 1, `invalid_input`), `refunded_amount` tidak berubah; `online_admin_audit` tercatat (setelah perbaikan G17-QA-02) |
+| + | Next.js `https://app.efn.local/api/*` (FE↔BFF) | login cookie → katalog → PUT cart (harga klien dibuang; Origin asing 403) → quote → `POST /api/orders` 201, klik ganda dengan header browser berbeda → **order sama** (key server-side L-8) → GET order (QR ada) → simulate → confirmed → pickup-code route 200; UUID asing 404 |
+
+## G17.3 Smoke penuh `a b c d f e g l o` (satu run, ±37 menit)
+**PASS=241 FAIL=1.** Per tahap: a 21/0 · b 17/0 · c 15/0 · d 7/0 · f 6/0 · e 24/0 · g 19/0 · l 42/0 (tahap lama
+**151/151**, tanpa regresi setelah `sale`/`sale_stock` terpasang) · **o 90/1**. Satu-satunya FAIL =
+`o.status[wrong]=fulfilling/review` (G17-QA-03, menunggu keputusan kontrak — sengaja dibiarkan merah).
+
+## G17.4 Bug yang ditemukan runtime & diperbaiki QA
+| ID | Bukti | Perbaikan |
+|---|---|---|
+| G17-QA-01 (BFF, **PDP**) | `DELETE /v1/me` → **202**, hapus akun dijadwalkan walau bagian `confirmed`; log tidak pernah memuat `Pra-hapus akun`. `dist/privacy/dsar.service.js`: `design:paramtypes` parameter terakhir = `Object` (tipe `OnlinePrivacyService \| null`) → `@Optional()` menyuntik undefined → L-4 mati diam-diam (unit test membuat service dengan `new`) | `services/api-gateway/src/privacy/dsar.service.ts:76-78` `@Optional() @Inject(OnlinePrivacyService)`; test regresi `src/privacy/dsar-injection.spec.ts`. Runtime: 409 `open_online_orders`. Jest 42 suite / 501 test lulus, build + lint 0 error |
+| G17-QA-02 (Odoo E-28) | CLI `online-refund` → `HTTP 422`, log Odoo `Invalid language code: id_ID`. BFF selalu mengirim `context.lang=id_ID`; `efn_online_refund` / `efn_online_refund_settled` memakai `self.env` (context klien) alih-alih env kanal yang sudah dibersihkan → `env.lang` melempar UserError bila bahasa id_ID tidak terpasang (DB dev: tidak terpasang). Metode lain lolos karena memakai env kanal | `services/odoo/addons/efn_online_order/models/efn_online_order.py` ±587–607 (`order.env[...]`) & ±620 (`channel.env[...]`); test baru `test_refund_with_bff_lang_context_not_installed`. Container test: efn_online_order 61 + efn_setup_online 7 test, **0 failed / 0 error / 0 baris ERROR**; ruff check + format lolos |
+
+Perbaikan harness (bukan produk): ekspektasi `bool_and` → `true`; `|| true` pada substitusi CLI (set -e + pipefail);
+`/v1/me/data` butuh `X-Step-Up-Token`; tunggu router Traefik setelah recreate api-gateway (±10 s 404 tanpa origin
+walau container healthy).
+
+## G17.5 Temuan terbuka (untuk lead / builder)
+| ID | Pemilik | Temuan |
+|---|---|---|
+| G17-QA-03 | lead (kontrak §10.6.2) → BFF | Odoo memindah order `confirmed\|ready → review` (kode ambil salah 5×; docs/08 §8.3) dan mengirim event `review` (outbox `done`), tetapi BFF memberi peringkat sama (`confirmed = review = 3`, `ready = 4`) sehingga transisi diabaikan **namun dicatat `applied`** di `online_order_event`. Akibat: pelanggan masih melihat `confirmed` dan masih bisa meminta kode ambil walau Odoo mengunci pesanan; rekonsiliasi pull tidak memperbaikinya. Diagram §10.6.2 hanya punya `paying → review`. Perlu keputusan: izinkan `confirmed\|ready → review` sebagai pengecualian monoton (seperti `review → confirmed\|cancelled`) + outcome `ignored_stale` bila tidak diterapkan |
+| G17-QA-04 | efn-odoo-functional | Label pajak ke pelanggan = `Non-luxury Good Taxes` (nama pajak l10n_id berbahasa Inggris; `invoice_label` kosong; bahasa id_ID tidak terpasang). Kontrak mencontohkan `PPN 11%`. Pasang bahasa Indonesia / isi `invoice_label` pajak lewat `efn_setup_*`. BFF selalu mengirim `lang=id_ID` — produksi sebaiknya memasang id_ID |
+| G17-QA-05 | devsecops (runbook) | Dev: `nest start --watch` di container **tidak** mendeteksi perubahan bind mount dari Windows (Docker Desktop) → perubahan `src/` butuh `up -d --force-recreate api-gateway`. Sebelum integrasi, BFF dev lama berstatus `unhealthy` (kompilasi TS tertahan di tengah perubahan G17) |
+| G17-QA-06 | lead (§10.14) | Terverifikasi: json2 19.0 memetakan `UserError` → **HTTP 422** dengan body `{"name":"odoo.exceptions.UserError","message":"efn_online:<kode>",…}`; `X-Odoo-Database` paksa gateway bekerja pada server satu DB; `efn_online_cancel` ref tak dikenal → 200 `absent`. Butir "belum terverifikasi" §10.14 terkait bisa ditutup |
+
+## G17.6 Data QA tertinggal di DB dev
+- Odoo `efn_odoo`: kanal `RTL` + outlet `TOKO-01`, produk/gudang/jurnal/pricelist `SMOKE*`, user `efn_online_rtl` (1 API
+  key aktif s.d. +85 hari, nama `efn-online-RTL-20261009`) dan `smoke_online_staff`; SO `S00001..S00010` + faktur/nota
+  kredit. **Artefak diagnosis:** satu refund Odoo `RINV/2026/00001` (Rp5.550) pada SO `S00001` dibuat langsung lewat
+  gateway saat mendiagnosis G17-QA-02 — tidak tercatat di BFF (`online_refund`), sehingga Σ refund Odoo ≠ BFF untuk
+  bagian itu (data dev saja).
+- Platform: order/bagian/refund online; 1 permintaan DSAR terjadwal dari run sebelum perbaikan G17-QA-01 (member
+  fiktif; diproses normal setelah masa tenggang).
+- Rollback: dump terenkripsi pra-G17 di scratchpad lokal, atau reset volume dev.
+
+## G17.7 Belum diverifikasi
+- Browser nyata (render QR, hitung mundur, polling, pembaca layar) — smoke hanya route handler Next.js.
+- Notifikasi WA/push `online_order_ready` ke perangkat (template belum terdaftar; hanya event diterima BFF).
+- Circuit breaker & alert `EfnOnline*` (Odoo mati, key kedaluwarsa → `EfnOnlineOdooAuthFailure`) tidak dipicu.
+- CLI `online-resolve` dan `online-refund-settle` (jalur `manual_required`) tidak dijalankan; provider selain mock.
+- Dua place paralel lintas proses BFF; DLQ `order.*` di bawah beban; retensi 7 hari kode ambil (hanya NULL saat final).
+
+## G17.8 Run akhir setelah L-14..L-20 dan perbaikan r10/re-review (10 Okt 2026, HEAD `32686c3`)
+Kode yang diuji: commit `32686c3` (SEC-95..112: QA-03 review, L-16 refund `approval_required`, label pajak, gateway
+maxconn, watcher polling, L-19/L-20 peran CS + `claim_token` + pool json2 terpisah, guard Odoo `cr.cache` + level
+`stock.move`, SEC-112 settle). Satu-satunya perubahan yang belum di-commit adalah harness smoke QA ini.
+
+**Integrasi:**
+- Image odoo/api-gateway/superapp-web dibangun ulang.
+- `-u efn_online_order,efn_setup_online,efn_setup_company,efn_setup_pos`: exit 0, 0 ERROR.
+- Label pajak dev diisi sekali lewat `odoo shell`, mengikuti tabel README `efn_setup_company` (noupdate). Hasilnya
+  `tax_ST4` = `PPN 11%`, grup `PPN 11%`.
+- Migrasi 07 versi baru (idempoten, termasuk `claim_token`).
+- Recreate odoo, odoo-tls, odoo-ws-tls, odoo-rpc-gateway, api-gateway, superapp-web, superapp-web-tls: semua healthy.
+- `test-gateway.sh` 97/97.
+- `efn_online_pos_sale` tidak dipasang di dev. `pos_sale` tidak terpasang, jadi jalur POS↔SO online tidak diuji smoke.
+
+**Smoke penuh `a b c d f e g l o`: PASS=267 FAIL=0.**
+
+| Tahap | PASS/FAIL |
+|---|---|
+| a | 21/0 |
+| b | 17/0 |
+| c | 15/0 |
+| d | 7/0 |
+| f | 6/0 |
+| e | 24/0 |
+| g | 19/0 |
+| l | 42/0 |
+| **o** | **116/0** |
+
+Cek baru atau berubah di tahap `o`:
+- **Review (QA-03 / L-14):** kode ambil salah 5× membuat order **dan** bagian menjadi `review`. `GET pickup-code`
+  dijawab 409 `order_in_review`.
+- **Label pajak (QA-04):** quote memuat label baris dan grup `PPN 11%`, di 5 quote.
+- **Stok (SEC-96):** id di luar katalog → 404, juga bila dicampur dengan id sah dan saat cache negatif.
+- **Serah terima (SEC-95/104/105):** validasi picking SO online di luar wizard ditolak, dengan maupun tanpa context
+  palsu `efn_online_handover_picking_ids`/`efn_online_internal`.
+- **Context palsu (SEC-104):** staf dengan context `efn_online_internal` palsu gagal membatalkan SO (`AccessError`).
+  Superuser yang menulis `state` SO langsung ditolak (`UserError`).
+- **Batal oleh Odoo (SEC-95):**
+  - Batal tanpa alasan ditolak.
+  - Manajer membatalkan dengan alasan: Odoo `cancelled/ops`, nota kredit terbit, event `initiator=odoo`.
+  - Refund BFF berstatus `approval_required` (pemicu `odoo-uid:<n>`), bagian `cancelled`, `refunded_amount` 0.
+  - Approve oleh peran `cs` ditolak. Approve oleh approver lain → `settled` = porsi penuh. Kedua aksi teraudit.
+- **Refund CS (L-19/L-20):**
+  - Operator `cs` membuat refund → `approval_required`.
+  - Approve oleh pembuat yang sama (walau berperan approver) ditolak `rejected_same_actor`.
+  - Approve oleh peran `cs` lain ditolak `rejected_role`.
+  - Approve oleh approver lain → `settled` Rp5.550 + nota kredit Odoo.
+  - Refund melebihi pesanan ditolak.
+- **Settle manual (SEC-112):** peran `cs` ditolak (`rejected_role`) dan approver yang juga pembuat ditolak
+  (`rejected_same_actor`). Status refund tidak berubah. Identitas dan peran CLI di dev disimulasikan lewat env
+  `EFN_CS_OPERATOR`/`EFN_CS_ROLE`; di host keduanya diisi wrapper `efn-online-cs` (wrapper tidak dijalankan di smoke).
+
+Harness:
+- Skenario 4b, langkah Odoo `ops_cancel`, `picking_direct`, `fake_ctx`, manajer `smoke_online_mgr`.
+- Helper `cs()` untuk menjalankan CLI CS dengan operator dan peran.
+- Recreate api-gateway kini menunggu 5 jawaban 200 berturut-turut lewat Traefik, karena router dilepas ±30–40 s saat
+  status health berubah. Inilah penyebab 404 pada kill switch di run sebelumnya.
+- Catatan: dua run antara (o3, full2) tidak sah. Kode dan skrip berubah saat run berjalan (commit paralel builder dan
+  recreate tepat sebelum run), sehingga hasilnya dibuang.
+
+Sisa:
+- Pemisahan tugas untuk refund dari pembatalan Odoo bertumpu pada peran: pemicu dicatat `odoo-uid`, dan uid Odoo tidak
+  bisa dipetakan ke akun host. Ini sesuai L-19c.
+- `efn_online_pos_sale` dan jalur POS tidak diuji di stack dev.
+- Wrapper host `efn-online-cs` dengan sudo dan docker asli belum diuji.

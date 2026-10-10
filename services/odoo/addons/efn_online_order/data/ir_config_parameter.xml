@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Parameter E-28 (noupdate). Secret HMAC event TIDAK di sini: file EFN_ONLINE_EVENT_HMAC_FILE
+     (default /run/secrets/odoo_online_event_hmac, docs/04 §10.5/§10.13). Putaran KDF kode ambil:
+     `efn_online.pickup_code_kdf_rounds` (default kode 600000; parameter hanya base.group_system). -->
+<odoo noupdate="1">
+    <record id="param_outbox_max_hours" model="ir.config_parameter">
+        <field name="key">efn_online.outbox_max_hours</field>
+        <field name="value">48</field>
+    </record>
+</odoo>

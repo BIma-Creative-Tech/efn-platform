@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Channel, ConfirmChannel, ConsumeMessage, connect, credentials } from 'amqplib';
 import { AppConfig } from '../../config/app-config';
-import { ALL_QUEUES, QueueMissingError, checkQueueWithDlq } from './queues';
+import { ALL_QUEUES, ONLINE_DELIVERY_LIMIT, ONLINE_QUEUES, QueueMissingError, checkQueueWithDlq } from './queues';
 
 type AmqpConnection = Awaited<ReturnType<typeof connect>>;
 
@@ -20,6 +20,36 @@ export interface MessageMeta {
 
 export type MessageHandler = (payload: unknown, meta: MessageMeta) => Promise<void>;
 
+/**
+ * Keputusan nack untuk handler yang gagal (L-13, docs/04 §10.9/§10.17):
+ * - `PermanentMessageError` → DLQ langsung (semua queue);
+ * - queue ber-`x-delivery-limit` broker (saga online) → SELALU requeue; broker (quorum) yang men-dead-letter setelah
+ *   batasnya (`x-delivery-count` > limit). Jeda kecil sebelum requeue (1 s × percobaan, maks 5 s) agar dependensi yang
+ *   mati (Odoo/gateway) tidak dihantam beruntun. Jaring pengaman bila broker salah konfigurasi (tanpa limit):
+ *   `x-delivery-count` ≥ 2 × limit → DLQ oleh BFF;
+ * - queue lama tanpa limit broker (notify.push, loyalty.earn.requested, privacy.erasure.completed): perilaku TIDAK
+ *   berubah — requeue sekali, redelivery berikutnya → DLQ (tanpa limit broker, requeue terus = loop poison message).
+ */
+export function nackDecision(
+  queue: string,
+  permanent: boolean,
+  redelivered: boolean,
+  deliveryCount: number,
+): { requeue: boolean; delayMs: number } {
+  if (permanent) return { requeue: false, delayMs: 0 };
+  if ((ONLINE_QUEUES as readonly string[]).includes(queue)) {
+    if (deliveryCount >= 2 * ONLINE_DELIVERY_LIMIT) return { requeue: false, delayMs: 0 };
+    return { requeue: true, delayMs: Math.min(5000, 1000 * (deliveryCount + 1)) };
+  }
+  return { requeue: !redelivered, delayMs: 0 };
+}
+
+function deliveryCountOf(msg: ConsumeMessage): number {
+  const v = (msg.properties.headers as Record<string, unknown> | undefined)?.['x-delivery-count'];
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -31,8 +61,8 @@ function errMessage(err: unknown): string {
  * - Publish lewat **confirm channel**: `publish()` baru resolve setelah broker ack (persistent, message_id,
  *   `user_id` = username koneksi — divalidasi broker, SEC-08).
  * - Consume lewat channel terpisah dengan prefetch; ack manual.
- * - Kegagalan handler: percobaan pertama di-requeue sekali, redelivery kedua → nack tanpa requeue → DLQ.
- *   `PermanentMessageError` → langsung DLQ.
+ * - Kegagalan handler: lihat `nackDecision` — queue saga online menghormati `x-delivery-limit` broker (L-13);
+ *   queue lama: requeue sekali lalu DLQ. `PermanentMessageError` → langsung DLQ.
  * - Reconnect otomatis dengan backoff eksponensial (maks 30 s); consumer terdaftar dipasang ulang.
  *   Bila broker mati saat start, BFF tetap jalan (OTP/POS tidak bergantung broker); outbox menahan pesan.
  */
@@ -207,11 +237,12 @@ export class AmqpService implements OnModuleInit, OnModuleDestroy {
       }
     } catch (err) {
       const permanent = err instanceof PermanentMessageError;
-      const requeue = !permanent && !msg.fields.redelivered;
+      const d = nackDecision(queue, permanent, msg.fields.redelivered, deliveryCountOf(msg));
       this.logger.error(
-        `Handler ${queue} gagal (${permanent ? 'permanen' : 'transien'}; ${requeue ? 'requeue' : 'DLQ'}): ${errMessage(err)}`,
+        `Handler ${queue} gagal (${permanent ? 'permanen' : 'transien'}; ${d.requeue ? 'requeue' : 'DLQ'}): ${errMessage(err)}`,
       );
-      this.safeNack(ch, msg, requeue);
+      if (d.delayMs > 0) await new Promise((r) => setTimeout(r, d.delayMs).unref());
+      this.safeNack(ch, msg, d.requeue);
     }
   }
 

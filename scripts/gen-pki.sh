@@ -43,7 +43,8 @@ APP_ENV="${APP_ENV:-dev}"
 #   both   : serverAuth + clientAuth (service yang juga menjadi KLIEN mTLS, docs/04 §8.5)
 #   client : clientAuth saja (tidak punya listener jaringan)
 # Klien mTLS = Traefik, Prometheus, Grafana, Promtail, ocr-worker (ke Ollama), blackbox-exporter (probe), cAdvisor,
-# Loki (ruler -> Alertmanager), etl (-> loki-tls) dan metabase-provision (-> metabase-tls) (G13).
+# Loki (ruler -> Alertmanager), etl (-> loki-tls) dan metabase-provision (-> metabase-tls) (G13), api-gateway
+# (-> odoo-rpc-gateway) dan odoo-rpc-gateway (-> odoo-tls) (G17).
 # Sumber kebenaran SAN + nameConstraints intermediate. Tambah service baru = baris di sini + 2 baris `pki` di
 # scripts/secrets.list + TERBITKAN ULANG INTERMEDIATE (nameConstraints memuat daftar ini; lihat runbook internal-pki).
 PKI_SERVICES=(
@@ -53,8 +54,9 @@ PKI_SERVICES=(
   "minio|server"
   "s3-gateway|server"   # filter L7 HAProxy di depan object storage (ADR-030 Keputusan 2, gelombang 9)
   "clickhouse|server"
-  "api-gateway|server"
+  "api-gateway|both"    # G17: juga KLIEN mTLS ke odoo-rpc-gateway (docs/04 §10.4.1, CN api-gateway)
   "odoo|server"
+  "odoo-rpc-gateway|both"  # G17: filter L7 /json/2 (server untuk BFF, klien mTLS ke odoo-tls), docs/04 §10.4.1
   "superapp-web|server"
   "ollama|server"
   "metabase|server"

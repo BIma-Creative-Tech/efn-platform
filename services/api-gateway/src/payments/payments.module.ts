@@ -28,5 +28,6 @@ import { PAYMENT_GATEWAY, PaymentGatewayHolder, PaymentsService } from './paymen
       },
     },
   ],
+  exports: [PaymentsService],
 })
 export class PaymentsModule {}

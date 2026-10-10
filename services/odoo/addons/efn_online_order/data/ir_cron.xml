@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- Outbox event -> BFF: dipicu segera (_trigger) setiap perubahan state; jadwal ini cadangan. -->
+    <record id="ir_cron_efn_online_outbox" model="ir.cron">
+        <field name="name">EFN Online: kirim event pesanan ke BFF</field>
+        <field name="model_id" ref="model_efn_online_event_outbox"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_online_outbox_run()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">1</field>
+        <field name="interval_type">minutes</field>
+        <field name="active" eval="True"/>
+    </record>
+    <!-- Draf lewat batas bayar Odoo (payment_timeout_minutes kanal, default 25) -> batal. -->
+    <record id="ir_cron_efn_online_expire" model="ir.cron">
+        <field name="name">EFN Online: batalkan pesanan belum dibayar yang kedaluwarsa</field>
+        <field name="model_id" ref="model_efn_online_order"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_online_expire()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">2</field>
+        <field name="interval_type">minutes</field>
+        <field name="active" eval="True"/>
+    </record>
+    <!-- Q-ON13: tidak diambil > N jam -> aktivitas (tanpa batal otomatis). -->
+    <record id="ir_cron_efn_online_reminders" model="ir.cron">
+        <field name="name">EFN Online: pengingat pesanan belum diambil</field>
+        <field name="model_id" ref="model_efn_online_order"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_online_reminders()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">1</field>
+        <field name="interval_type">hours</field>
+        <field name="active" eval="True"/>
+    </record>
+</odoo>

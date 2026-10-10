@@ -230,3 +230,61 @@ Outlet pilot & perangkat; layanan & takeaway (Q-18); stasiun & target menit (Q-1
 
 ### Asumsi belum terverifikasi (Gelombang 14)
 Install data/demo baru belum dijalankan (penulisan field `pos_self_order` ke xmlid `pos_restaurant`; `taxes_id` ref PB1; atribut line pada template demo); picking anak combo & lot paket CK di POS; self-order menulis `last_order_preparation_change`; tombol UI rotasi token QR; HTTPS printer Epson + DNS; saklar UI course; perilaku multi-perangkat meja saat offline. Tidak ada test/CI yang dijalankan.
+
+## Gelombang 17 — 2026-10-09 (Fase 3: penjualan online Super-App)
+
+Detail: `docs/08_ODOO_FIT_GAP.md` §8 (F-55..F-74, temuan #36–45, spesifikasi E-28 §8.3, `efn_setup_online` §8.4, titipan Holding §8.5, default pilot §8.6, Q-ON1..Q-ON13 §8.7, usulan kontrak K-ON1..K-ON5 §8.8). Verifikasi dari source Odoo 19 CE di container dev `efn-odoo-1` + query baca-saja DB `efn_odoo` (tanpa perubahan data). Tidak ada modul yang dibuat/diubah di gelombang ini; `efn_setup_online` baru dibuat setelah E-28 ada (bergantung model kanal).
+
+### Standar vs Custom
+- **Standar CE (konfigurasi):** `sale`/`sale_stock` (SO per PT, picking outlet, faktur, nota kredit via qty negatif/retur, `client_order_ref`), pricelist per kanal, mesin pajak + fiscal position **outlet pemenuhan** (PPN RTL / PB1 FNB, ADR-027), `free_qty` per gudang outlet, `pos.category` + `image_1920` untuk katalog, jurnal/akun titipan Holding (A1), `account.cash.rounding`, API key `/json/2` + grup + record rule.
+- **Tidak dipakai:** `website*` (route publik; flag/kategori/pickup website tidak tersedia), `delivery` (pilot pickup), `payment.transaction` jalur sale (1 SO per transaksi), `sale_loyalty` (dimatikan).
+- **Custom wajib:** **E-28 `efn_online_order`** (kanal & outlet, flag katalog, ekspor katalog/stok/gambar, quote, place idempoten, mark_paid saga, cancel, refund parsial + settled, status outbox, kode ambil). **Opsional:** E-29 dapur F&B online (Q-ON2). **Ditunda:** ongkir/slot/3PL (BFF, Q-39/40), otomasi jurnal Holding (A2 `account_payment_interco`, PoC setelah opini pajak).
+
+### Temuan penting (terverifikasi source 19.0)
+- Memasang `sale` meng-auto-install `sale_loyalty`, `pos_sale`(+`sale_management`), `sale_mrp`, `sale_stock_product_expiry`; **`sale_loyalty.action_confirm` dapat mengubah total SO setelah pelanggan membayar** dan `loyalty.program.sale_ok` default True (program POS yang ada ikut berlaku) → `sale_ok=False` + assert total di E-28.
+- `action_cancel` menolak SO `locked` → jangan aktifkan *Lock Confirmed Sales*.
+- API key `/json/2`: masa berlaku maks dari `res.groups.api_key_duration`, **default 1 hari** → grup user teknis wajib mengatur durasi + runbook rotasi.
+- IDR dev `rounding=0.01` → total bersen vs QRIS/VA Rupiah bulat → keputusan Finance (Q-ON6).
+- `account_payment_interco` (CE 19) sudah mengimplementasikan kliring agen penagih lintas company — kandidat otomasi ADR-019 opsi A, [B] perlu PoC.
+- `sale` membawa route portal publik `/my/orders` (aman selama Odoo privat; BFF tidak boleh meneruskan URL portal).
+
+### Rekomendasi untuk efn-odoo-engineer
+- **E-28 `efn_online_order`** sesuai §8.3 (model, metode, alur saga, keamanan, test). Perkiraan 4–5 minggu. Prasyarat lingkungan: `sale_stock` terpasang di DB dev/CI (akan memicu auto-install di atas — jalankan seluruh test `efn` setelahnya).
+- Tambahkan entri `RPC_ALLOWLIST` (efn_core/tests/test_rpc_surface.py) — **13 metode**: `efn.online.channel`: `efn_online_catalog`, `efn_online_stock`, `efn_online_image`, `efn_online_quote`; `efn.online.order`: `efn_online_place`, `efn_online_mark_paid`, `efn_online_cancel`, `efn_online_refund`, `efn_online_refund_settled`, `efn_online_status` (semua `_efn_online_check_caller`), `action_efn_ready` (grup stok + check_access), `action_efn_retry_events` (sales manager); `efn.online.handover.wizard`: `action_confirm` (grup stok + check_access order).
+- Jangan dikustom: harga/pajak, picking/reservasi/retur, faktur/nota kredit, state SO.
+
+### Untuk efn-lead
+- **Kontrak** K-ON1..K-ON5 (§8.8) untuk docs/04 + baris identitas Odoo per service di §7.3.
+- **efn-devsecops:** router internal path-allowlist `/json/2/efn.online.*` (mTLS CN `api-gateway`) di depan `odoo-tls`; secret `odoo_api_key_online_rtl`/`_fnb`; runbook pembuatan & rotasi API key user teknis.
+- **efn-bff-engineer:** klien Odoo (`/json/2`, TLS CA internal, timeout, retry hanya untuk langkah idempoten), saga per SO, cache katalog pull 5 menit, BFF **tidak** menghitung harga/pajak (hanya Σ `amount_payable`).
+- **efn-architect:** catatan di ADR-019 (opsi A1 vs A2 `account_payment_interco`; F&B online = SO atau `pos.order`), keputusan Q-ON2 bersama ADR-032.
+- **efn-security-reviewer:** permukaan `/json/2` user teknis (`base.group_user` masih bisa membaca model umum bila path tidak difilter), kode ambil (brute force), route portal `sale`.
+
+### Keputusan/asumsi default pilot (configurable, §8.6)
+PT Retail saja, pickup 1 toko, delivery & FNB online mati; cek stok tanpa reservasi, batas bayar 15 menit, stok kurang setelah bayar → batal + refund penuh porsi PT; faktur saat bayar; partner generik tanpa PII; promo = pricelist; harga tampil termasuk pajak; pembulatan kas Rp1; jurnal titipan A1 manual di Holding.
+
+### Pertanyaan klien (Q-ON1..Q-ON13, `docs/08 §8.7`)
+PT/outlet pilot & SKU; jalur F&B online; delivery/ongkir/slot (Q-39/40); reservasi stok & kebijakan stok kurang; harga termasuk pajak; pembulatan Rupiah; faktur ber-NPWP; waktu faktur; MDR & settlement titipan; mekanik promo online; kebijakan refund; katalog per PT/brand; pesanan tidak diambil.
+
+### Asumsi belum terverifikasi (Gelombang 17)
+Compute `sale.order.new()` untuk quote di 19; perilaku `account.cash.rounding` pada pembayaran jurnal titipan; retur picking pickup → nota kredit `final=True`; alur A2 `account_payment_interco` lintas company; pembuatan API key user teknis lewat shell & batas `api_key_duration`; dampak auto-install `pos_sale`/`sale_loyalty` terhadap test POS yang ada; OCA `sale_order_type` 19.0 (tidak di-WebFetch). Tidak ada test/CI yang dijalankan.
+
+## Gelombang 17 lanjutan — 2026-10-10 (G17-QA-04 label pajak, demo `--with-demo`)
+
+### G17-QA-04 — label pajak ke pelanggan
+- **Akar masalah (terverifikasi di kode & DB dev):** `efn_online_order` mengambil label baris dari `account.tax.invoice_label` (fallback `name`) dan label subtotal dari `tax_totals.group_name` = `account.tax.group.name`. Field yang dipakai **sudah benar** — tidak ada perubahan modul gap. Template `l10n_id` 19.0 mengisi `invoice_label = "12%"` (bukan kosong seperti tertulis di laporan QA) untuk `tax_ST4` yang tarif efektifnya 11% (12% × DPP 11/12), dan nama grup Inggris "Non-luxury Good Taxes" — yang terakhir itulah yang dilihat QA di `tax_groups`.
+- **Solusi (data-only, ADR-027):** `efn_setup_company/data/account_tax_label_data.xml` (versi 19.0.1.3.0, `noupdate="1"`, dimuat setelah CoA) menimpa nilai en_US di 4 PT: `invoice_label` pajak penjualan (`PPN 11%`, `PPN 12%`, `PPnBM 20%`, `PPN 0%`, `Bebas PPN`) dan nama grup (`PPN 11%`, `PPN 12%`, `PPnBM`, `PPN 0%`, `Bebas PPN`, `Pajak`). PB1 F&B sudah `PB1`. README §"Label pajak ke pelanggan".
+- **Test:** `efn_setup_company/tests/test_tax_labels.py` (4 test: label pajak, nama grup, pajak default per PT termasuk PB1, `group_name` dari mesin `tax_totals`).
+- **Bahasa id_ID — rekomendasi: JANGAN dipasang di gelombang ini (keputusan lead/klien).** Alasan: (1) memasang bahasa memuat terjemahan semua modul dan mengubah teks yang dilihat BFF (`lang=id_ID`) untuk UoM/kategori/dll. — perlu cek kontrak katalog; (2) bila id_ID diaktifkan, `account.chart.template._load_translations` (overwrite=False) akan mengisi versi id_ID nama grup dari template ("Pajak Barang", …) karena modul ini hanya menulis en_US → regresi G17-QA-04 di jalur BFF. `update_field_translations` menolak bahasa yang belum aktif dan `context lang` tidak valid memicu UserError, jadi tidak bisa disiapkan sebelumnya dari data. Bila id_ID diputuskan: aktifkan **sebelum** install `efn_setup_company` di DB baru lalu efn-odoo-engineer menambahkan penulisan terjemahan id_ID, atau admin mengisi terjemahan id_ID setelah aktivasi (README). Staf POS memakai bahasa user masing-masing; tour/test lama memakai user en_US sehingga tidak terdampak oleh aktivasi bahasa saja (belum diuji).
+- **DB dev `efn_odoo` TIDAK diubah** (noupdate → upgrade tidak menerapkan). Untuk smoke ulang, lead dapat menerapkan sekali lewat UI atau `odoo shell` (tulis `invoice_label`/`name` en_US pada record `account.<company_id>_tax_ST4`, `..._l10n_id_tax_group_non_luxury_goods`, dst.).
+
+### Demo `--with-demo`
+- `efn_setup_pos/demo/pos_retail_demo.xml` (19.0.1.5.1): barcode tomat `2100001000004` bentrok dengan demo CE `point_of_sale` "Newspaper Rack" → diganti blok kode 09xxx: `2109001000007` (label 1,250 kg = `2109001012505`, check digit EAN-13 dihitung ulang). README diperbarui.
+- Ditemukan saat verifikasi: `efn_setup_mrp/demo/mrp_demo.xml` (19.0.1.0.1) gagal — company FNB (dibuat sebelum `stock` terpasang) tidak punya gudang (orderpoint `warehouse_id` NOT NULL), dan produk paket `efn_kitting` jatuh ke `base.main_company` (crossover company). Perbaikan data-only: gudang demo `Central Kitchen (DEMO)` (CK01) + orderpoint memakai company **produk** paket dan `warehouse_id` eksplisit.
+- **Verifikasi:** DB baru `--with-demo -i efn_setup_company,efn_setup_pos,efn_setup_mrp,efn_setup_audit,efn_setup_online` → exit 0, tanpa ERROR/"demo data failed"; barcode baru ada, 6 orderpoint, label pajak RTL sesuai tabel.
+
+### Hasil test (container `efn-odoo:ci-g17qa` + addons working tree, PostgreSQL 16.15 terpisah; DB dev tidak disentuh)
+- Suite efn penuh (14 modul `EFN_TEST_MODULES` CI, `--test-tags efn`), DB baru: **0 failed, 0 error dari 405 test** (termasuk 4 test baru `TestTaxLabels`).
+- Run pertama (tepat setelah Docker Desktop restart, working tree sedang diubah agent lain) mencatat 1 fail + 1 error di `efn_online_order` (`test_ops_cancel_from_sale_order_ui`, `test_handover_other_company_denied` — hak akses grup, tidak terkait pajak); tidak terulang pada run ulang DB baru. Baseline HEAD (tanpa perubahan ini): 0 failed dari 391.
+- Load demo DB baru `--with-demo`: exit 0, tanpa ERROR.
+- Belum: `efn_setup_security` install-after (tidak disentuh), tour POS `odoo-tour`, struk POS dengan label baru (dilihat di UI), smoke online ulang di DB dev.

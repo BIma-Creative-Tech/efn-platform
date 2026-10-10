@@ -1,0 +1,11 @@
+# Override kanal online FNB (docs/04 §10.4.1/§10.10, G17). Pola docker-compose.payment.yml: API key Odoo kanal FNB
+# (`odoo_api_key_online_fnb`, user teknis efn_online_fnb) HANYA di-mount ke BFF saat kanal FNB diaktifkan
+# (ONLINE_CHANNELS memuat FNB + kanal Odoo active). Selama kanal mati file ini TIDAK disertakan -> key tidak ada di
+# container mana pun. Rotasi/pembuatan key: docs/runbooks/odoo-online-api-key.md.
+# CI (job infra) menyertakan file ini saat membandingkan secrets compose dengan scripts/secrets.list.
+services:
+  api-gateway:
+    environment:
+      ODOO_API_KEY_ONLINE_FNB_FILE: /run/secrets/odoo_api_key_online_fnb
+    secrets:
+      - odoo_api_key_online_fnb

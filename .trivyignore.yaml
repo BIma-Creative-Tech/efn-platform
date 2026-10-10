@@ -2,54 +2,11 @@
 # ATURAN: setiap entri wajib `statement` (alasan) + `expired_at` (tanggal tinjau, maks. 90 hari). Setelah lewat
 # tanggal, entri tidak berlaku lagi dan gate kembali gagal -> tinjau ulang, perpanjang dengan alasan, atau perbaiki.
 # CVE dependency aplikasi (npm/pip) TIDAK di-ignore di sini: perbaiki versinya. Runbook: docs/runbooks/ci-github-free-plan.md
-# Persetujuan: pengecualian WAL-G 3.0.9 dan Metabase v0.58.35 di bawah DISETUJUI pemilik proyek pada 9 Okt 2026
+# Persetujuan: pengecualian WAL-G (FP CVE-2021-38599) dan Metabase v0.58.35 di bawah DISETUJUI pemilik proyek pada 9 Okt 2026
 # (sampai expired_at). Entri baru di luar daftar ini butuh persetujuan baru.
 vulnerabilities:
-  # WAL-G v3.0.9 (rilis terbaru upstream, 20 Agu 2026; image postgres R-T08). Binary resmi dibangun Go 1.25.11 +
-  # grpc 1.83.0. Belum ada rilis perbaikan. Paparan rendah: wal-g = klien CLI (archive_command / backup-fetch) ke
-  # MinIO internal lewat TLS terverifikasi; tidak membuka listener HTTP/2/gRPC, tidak merender html/template.
-  # Tindak lanjut (keputusan lead): bangun WAL-G dari source tag v3.0.9 dengan Go >= 1.27.2 + grpc >= 1.83.2, atau
-  # naikkan ke rilis upstream berikutnya. Tinjau ulang paling lambat tanggal expired_at.
-  - id: CVE-2026-84304
-    paths: ["usr/local/bin/wal-g"]
-    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
-    expired_at: 2026-11-09
-  - id: CVE-2026-84445
-    paths: ["usr/local/bin/wal-g"]
-    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
-    expired_at: 2026-11-09
-  - id: CVE-2026-33818
-    paths: ["usr/local/bin/wal-g"]
-    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
-    expired_at: 2026-11-09
-  - id: CVE-2026-39821
-    paths: ["usr/local/bin/wal-g"]
-    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
-    expired_at: 2026-11-09
-  - id: CVE-2026-39822
-    paths: ["usr/local/bin/wal-g"]
-    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
-    expired_at: 2026-11-09
-  - id: CVE-2026-56853
-    paths: ["usr/local/bin/wal-g"]
-    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
-    expired_at: 2026-11-09
-  - id: CVE-2026-56858
-    paths: ["usr/local/bin/wal-g"]
-    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
-    expired_at: 2026-11-09
-  - id: CVE-2026-56859
-    paths: ["usr/local/bin/wal-g"]
-    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
-    expired_at: 2026-11-09
-  - id: CVE-2026-56860
-    paths: ["usr/local/bin/wal-g"]
-    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
-    expired_at: 2026-11-09
-  - id: CVE-2026-56862
-    paths: ["usr/local/bin/wal-g"]
-    statement: "WAL-G v3.0.9 resmi (Go 1.25.11/grpc 1.83.0), belum ada rilis perbaikan; klien CLI tanpa listener. G16."
-    expired_at: 2026-11-09
+  # G17 (10 Okt 2026): 10 pengecualian WAL-G v3.0.9 (G16) DIHAPUS - WAL-G kini dibangun dari source (Go 1.27.2,
+  # x/net 0.60.0, grpc 1.83.2; infra/backup/postgres/Dockerfile) dan Trivy image bersih. Tersisa false positive di bawah.
   # Bukan kerentanan versi ini: Trivy membaca versi modul wal-g sebagai pseudo-version "v0.0.0-...+dirty" (< 1.1)
   # sehingga CVE 2021 (diperbaiki di wal-g 1.1) tercocokkan. Binary = v3.0.9.
   - id: CVE-2021-38599
@@ -93,6 +50,7 @@ misconfigurations:
       compose (SEC-85, diuji 9 Okt 2026): cap_drop ALL + cap_add hanya CHOWN, SETUID, SETGID (dibutuhkan
       adduser/chown/su); no-new-privileges; tidak read_only (run_metabase.sh menulis /etc/passwd, /metabase.db);
       Jetty hanya loopback, akses lewat sidecar TLS mTLS. Sama dengan checkov:skip CKV_DOCKER_3 di Dockerfile.
-      Pernyataan sebelumnya ("cap_drop ALL") keliru saat disetujui -> perlu persetujuan ulang pemilik proyek.
+      Pernyataan sebelumnya ("cap_drop ALL") keliru saat disetujui; pernyataan faktual ini DISETUJUI ULANG pemilik
+      proyek pada 9 Okt 2026 (setelah merge PR #35).
     expired_at: 2027-01-07
 secrets: []

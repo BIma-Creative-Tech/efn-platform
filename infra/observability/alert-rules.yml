@@ -99,7 +99,8 @@ groups:
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/rabbitmq-ocr-backlog.md
 
       - alert: EfnDeadLetterNotEmpty
-        expr: sum by (queue) (rabbitmq_queue_messages{queue=~".+\\.dlq"}) > 0
+        # DLQ order.* (penjualan online, G17) ditangani EfnOnlineDlqNotEmpty (runbook online-orders.md)
+        expr: sum by (queue) (rabbitmq_queue_messages{queue=~".+\\.dlq", queue!~"order\\..+"}) > 0
         for: 5m
         labels:
           severity: warning
@@ -184,6 +185,126 @@ groups:
           summary: "Poin EFN: rekonsiliasi ledger terakhir sukses {{ $value | humanizeDuration }} lalu"
           description: "Job LoyaltyReconService tidak sukses > 2 jam; kontrol detektif fraud poin tidak berjalan."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-anomaly.md#efnloyaltyreconmissing
+
+  # ─────────────────────────── Penjualan online (G17, docs/04 §10.11) ───────────────────────────
+  # Metrik BFF (services/api-gateway/src/odoo-rpc/online-metrics.ts), scrape job api-gateway (mTLS :9464). Selama
+  # ONLINE_ENABLED=false seri tidak bertambah -> alert diam. Dead-man rekonsiliasi berbasis log:
+  # loki-rules/efn-online.yml. Runbook: docs/runbooks/online-orders.md, docs/runbooks/odoo-online-api-key.md (R-T15).
+  - name: efn-online
+    rules:
+      - alert: EfnOnlineOrderStuck
+        expr: max by (state) (efn_online_stuck_parts{job="api-gateway"}) > 0
+        for: 15m
+        labels:
+          severity: critical
+          team: ops
+        annotations:
+          summary: "Pesanan online tertahan di state {{ $labels.state }} ({{ $value }} bagian)"
+          description: "Bagian order melewati batas (placing > 2 m, paying > 10 m, awaiting_payment > expires_at + 5 m, refund belum final > 24 j). Pelanggan bisa sudah membayar tanpa pesanan terkonfirmasi."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#efnonlineorderstuck
+
+      - alert: EfnOnlineAmountMismatch
+        expr: sum by (stage) (increase(efn_online_amount_mismatch_total{job="api-gateway"}[15m])) > 0
+        labels:
+          severity: critical
+          team: finance
+        annotations:
+          summary: "Selisih nominal pesanan online di tahap {{ $labels.stage }}"
+          description: "Nominal bayar/porsi tidak sama dengan amount_payable Odoo. Bagian masuk review; jangan refund/konfirmasi manual sebelum diperiksa."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#efnonlineamountmismatch
+
+      - alert: EfnOnlineDlqNotEmpty
+        expr: sum by (queue) (rabbitmq_queue_messages{queue=~"order\\..+\\.dlq"}) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "DLQ saga online {{ $labels.queue }} berisi {{ $value }} pesan"
+          description: "Pesan saga gagal 11 kali (x-delivery-limit 10). Order terkait tertahan sampai pesan diperiksa dan di-replay (consumer idempoten)."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#efnonlinedlqnotempty
+
+      - alert: EfnOnlineOdooAuthFailure
+        expr: sum by (channel) (increase(efn_online_odoo_auth_failures_total{job="api-gateway"}[5m])) > 0
+        labels:
+          severity: critical
+          team: ops
+        annotations:
+          summary: "Odoo menolak API key kanal online {{ $labels.channel }} (401/403)"
+          description: "API key kedaluwarsa/dicabut (R-T15) atau user teknis berubah. Checkout kanal ini berhenti; POS tidak terdampak."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/odoo-online-api-key.md#efnonlineodooauthfailure
+
+      - alert: EfnOnlineCircuitOpen
+        expr: max by (channel) (efn_online_circuit_open{job="api-gateway"}) == 1
+        for: 5m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Circuit breaker Odoo kanal {{ $labels.channel }} terbuka > 5 menit"
+          description: "Quote/checkout online menjawab 503 online_unavailable. Periksa odoo-rpc-gateway, odoo-tls, Odoo."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#efnonlinecircuitopen
+
+      - alert: EfnOnlineCatalogStale
+        expr: max by (channel) (efn_online_catalog_sync_age_seconds{job="api-gateway"}) > 1800
+        for: 10m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Katalog online kanal {{ $labels.channel }} tidak tersinkron {{ $value | humanizeDuration }}"
+          description: "Harga/produk di Super-App basi (harga final tetap dihitung Odoo saat quote/place)."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#efnonlinecatalogstale
+
+      # Kontrak §10.11: "refund manual_required|failed > 0 selama 1 j". BFF hanya mengekspos counter transisi
+      # (efn_online_refunds_total{status}); refund yang MASIH terbuka > 24 j juga muncul di efn_online_stuck_parts.
+      # Pendekatan: transisi ke manual_required/failed dalam 1 jam terakhir -> alert menyala 1 jam (metric_status
+      # proposed: gauge refund terbuka per status = usulan ke BFF).
+      - alert: EfnOnlineRefundPending
+        expr: sum by (status) (increase(efn_online_refunds_total{job="api-gateway", status=~"manual_required|failed"}[1h])) > 0
+        labels:
+          severity: warning
+          team: finance
+          metric_status: proposed
+        annotations:
+          summary: "Refund online berstatus {{ $labels.status }} dalam 1 jam terakhir"
+          description: "Refund gagal/harus manual. Selesaikan lewat CLI BFF (online-refund-settle) setelah dana dikembalikan."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#efnonlinerefundpending
+
+      # R-T15 (L-6): sisa umur API key kanal. Odoo tidak mengekspos masa berlaku key lewat /json/2 -> metrik textfile
+      # node-exporter ditulis runbook saat key dibuat/dirotasi:
+      #   efn_odoo_api_key_expiry_timestamp_seconds{channel="RTL"} <epoch kedaluwarsa>
+      - alert: EfnOnlineApiKeyExpiringSoon
+        expr: min by (channel) (efn_odoo_api_key_expiry_timestamp_seconds) - time() < 14 * 86400
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "API key Odoo kanal online {{ $labels.channel }} kedaluwarsa dalam {{ $value | humanizeDuration }}"
+          description: "Rotasi sekarang (dua kunci, tanpa downtime). Bila kedaluwarsa, checkout kanal berhenti (R-T15)."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/odoo-online-api-key.md#rotasi
+      - alert: EfnOnlineApiKeyExpiryCritical
+        expr: min by (channel) (efn_odoo_api_key_expiry_timestamp_seconds) - time() < 3 * 86400
+        labels:
+          severity: critical
+          team: ops
+        annotations:
+          summary: "API key Odoo kanal online {{ $labels.channel }} kedaluwarsa < 3 hari"
+          description: "Rotasi segera; setelah kedaluwarsa Odoo menjawab 401 dan checkout kanal berhenti (R-T15)."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/odoo-online-api-key.md#rotasi
+      # Kanal dipakai (ada transisi bagian order) tetapi masa berlaku key tidak tercatat -> R-T15 buta.
+      - alert: EfnOnlineApiKeyExpiryUnknown
+        expr: |
+          sum by (channel) (increase(efn_online_parts_total{job="api-gateway"}[1d])) > 0
+          unless on (channel) efn_odoo_api_key_expiry_timestamp_seconds
+        for: 1h
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Masa berlaku API key Odoo kanal {{ $labels.channel }} tidak tercatat"
+          description: "Metrik textfile efn_odoo_api_key_expiry_timestamp_seconds tidak ada; alert kedaluwarsa (R-T15) tidak bisa bekerja."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/odoo-online-api-key.md#metrik-masa-berlaku
 
   # ─────────────────────────── Backup & DR (R-T08) ───────────────────────────
   # Metrik efn_backup_* / efn_restore_test_* ditulis scripts/backup.sh & scripts/restore-test.sh (textfile collector).

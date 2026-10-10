@@ -43,6 +43,8 @@ export const PII_AAD = {
   // v3 (docs/04 §8.2, §8.4)
   MEMBER_REF: piiAad('member', 'member_ref_enc'),
   CONSENT_IP: piiAad('consent', 'ip_enc'),
+  /** Fase 3 (docs/04 §10.3.6, L-13): kode ambil online — rahasia yang harus bisa ditampilkan ulang ke pemilik. */
+  ONLINE_PICKUP_CODE: piiAad('online_order_part', 'pickup_code_enc'),
   /** SEC-24: nomor HP di challenge OTP login (Redis hash `otp:<id>` field `m`) — bukan kolom DB, tidak di-re-encrypt. */
   REDIS_OTP_MEMBER: piiAad('redis_otp', 'm'),
 } as const;

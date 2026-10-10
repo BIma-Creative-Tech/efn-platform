@@ -1,0 +1,353 @@
+/* Belanja online — mobile-first. Warna hanya dari CSS custom properties brand (R-T14). */
+
+.toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.search {
+  display: flex;
+  gap: 0.5rem;
+}
+.search input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--color-text-muted);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.chips {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding: 0.25rem 0;
+  margin: 0;
+  list-style: none;
+  scrollbar-width: thin;
+}
+.chip {
+  display: inline-block;
+  white-space: nowrap;
+  padding: 0.375rem 0.875rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.875rem;
+  min-height: 2.25rem;
+  line-height: 1.5rem;
+}
+.chip[aria-current='page'] {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-primary-contrast);
+}
+
+.productGrid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+@media (min-width: 40rem) {
+  .productGrid {
+    grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+    gap: 1rem;
+  }
+}
+
+.productCard {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  color: inherit;
+  text-decoration: none;
+}
+.productCard:hover .productName {
+  text-decoration: underline;
+}
+.productBody {
+  padding: 0.625rem 0.75rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.productName {
+  font-weight: 600;
+  margin: 0;
+  font-size: 0.9375rem;
+  overflow-wrap: anywhere;
+}
+.price {
+  font-weight: 800;
+  color: var(--color-text);
+}
+.taxNote {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.imageBox {
+  aspect-ratio: 1 / 1;
+  background: var(--color-surface-alt);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+}
+.imageBox img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.detail {
+  display: grid;
+  gap: 1.25rem;
+}
+@media (min-width: 48rem) {
+  .detail {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+.description {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.outletList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.outletOption {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+.outletOption input {
+  margin-top: 0.3rem;
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.stock {
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+.stock_in_stock {
+  color: var(--color-success);
+}
+.stock_low {
+  color: #b54708;
+}
+.stock_out {
+  color: var(--color-danger);
+}
+
+.qty {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.qty button {
+  font: inherit;
+  font-weight: 700;
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 0;
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  cursor: pointer;
+}
+.qty button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.qty output,
+.qty span {
+  min-width: 2.5rem;
+  text-align: center;
+  font-weight: 700;
+}
+
+.group {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  padding: 0.875rem 1rem;
+}
+.groupHeader {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+  align-items: baseline;
+}
+.groupHeader h2,
+.groupHeader h3 {
+  margin: 0;
+  font-size: 1.0625rem;
+}
+
+.lines {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+}
+.line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.25rem 0.75rem;
+  padding: 0.625rem 0;
+  border-top: 1px solid var(--color-border);
+}
+.line:first-child {
+  border-top: 0;
+}
+.lineName {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.lineIssue {
+  color: var(--color-danger);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+.lineControls {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.totals {
+  margin: 0.75rem 0 0;
+  border-top: 1px solid var(--color-border);
+  padding-top: 0.5rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.25rem 1rem;
+  font-size: 0.9375rem;
+}
+.totals dt {
+  color: var(--color-text-muted);
+}
+.totals dd {
+  margin: 0;
+  text-align: right;
+}
+.grand {
+  font-weight: 800;
+  font-size: 1.125rem;
+  color: var(--color-text) !important;
+}
+
+.checkoutBar {
+  position: sticky;
+  bottom: 0;
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  padding: 0.75rem var(--space);
+  margin: 0 calc(-1 * var(--space));
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 2;
+}
+
+.payBox {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  text-align: center;
+}
+.qr {
+  width: min(18rem, 80vw);
+  height: auto;
+  background: #ffffff;
+  padding: 0.5rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+}
+.countdown {
+  font-variant-numeric: tabular-nums;
+  font-size: 2rem;
+  font-weight: 800;
+  color: var(--color-primary);
+}
+.countdownUrgent {
+  color: var(--color-danger);
+}
+
+.pickupCode {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 2.25rem;
+  font-weight: 800;
+  letter-spacing: 0.15em;
+  text-align: center;
+  padding: 0.75rem;
+  border: 2px dashed var(--color-primary);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  user-select: all;
+}
+
+.orderList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.orderLink {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+.orderLink:hover strong {
+  text-decoration: underline;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.unavailable {
+  text-align: center;
+  padding: 2rem 1rem;
+}

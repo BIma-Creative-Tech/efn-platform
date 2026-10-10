@@ -7,6 +7,8 @@ import {
   PaymentGateway,
   PaymentStatus,
   ProviderStatus,
+  RefundOutcome,
+  RefundRequest,
   WebhookEvent,
   WebhookRequest,
   WebhookVerifyResult,
@@ -45,6 +47,20 @@ export class MockGateway implements PaymentGateway {
 
   async cancel(): Promise<{ status: PaymentStatus }> {
     return { status: 'cancelled' };
+  }
+
+  /** Refund per intent (in-memory per proses): idempoten per `refundId`, Σ refund ≤ amount intent (§10.7). */
+  private readonly refunds = new Map<string, Map<string, number>>();
+
+  async refund(intent: IntentRef, req: RefundRequest): Promise<RefundOutcome> {
+    const book = this.refunds.get(intent.paymentId) ?? new Map<string, number>();
+    this.refunds.set(intent.paymentId, book);
+    const ref = `mock_rf_${req.refundId}`;
+    if (book.has(req.refundId)) return { status: 'succeeded', providerRefundRef: ref };
+    const total = [...book.values()].reduce((a, b) => a + b, 0);
+    if (!(req.amount > 0) || total + req.amount > intent.amount + 0.005) return { status: 'failed', providerRefundRef: null };
+    book.set(req.refundId, req.amount);
+    return { status: 'succeeded', providerRefundRef: ref };
   }
 
   verifyWebhook(req: WebhookRequest, nowSeconds: number): WebhookVerifyResult {

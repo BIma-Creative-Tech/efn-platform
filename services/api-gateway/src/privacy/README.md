@@ -73,3 +73,8 @@ Trade-off privasi (untuk DPO):
 - Status `pending_reauth`, `rejected`, `failed` sudah di CHECK, belum dipakai alur otomatis.
 - SEC-31 sisa: (a) korelasi waktu — `erased_at`/`created_at` entri ber-tombstone ≈ `scheduled_at` request dapat menautkan baris ke `request_id`/`member_id`; setelah `completed` request tidak lagi memuat `member_hash` sehingga rantai ke nomor HP terputus. (b) `member_hash` dapat dibalik oleh pemegang pepper selama `processing` (perlakukan sebagai pengenal langsung — PDP_DATA_INVENTORY). (c) Replay erasure setelah restore backup tidak lagi bisa memakai `dsar_request.member_hash` yang sudah NULL — butuh daftar terenkripsi kunci kustodi Superadmin (rekomendasi SEC-31 #2, belum). (d) Baris ClickHouse `loyalty_events` yang sudah dimuat dengan tombstone lama deterministik tidak ikut diganti migrasi (ETL ledger memakai watermark `created_at`) — koordinasi data-ai. (e) Log PostgreSQL dev (`log_statement=all`) memuat parameter query.
 - R6: receipt hilang (cookie dihapus) = status hanya via kanal lain; tidak ada pemulihan receipt.
+
+## Fase 3 — order online (docs/04 §10.8.3, L-4)
+- `GET /v1/me/data` memuat `online_orders` (tanpa kode ambil, QR, id Odoo/payment).
+- `DELETE /v1/me`: order `created|awaiting_payment` dibatalkan otomatis; bagian `paying|confirmed|ready|review` → `409 open_online_orders` (ambil/batalkan lewat CS).
+- Erasure platform: `online_order.member_id` → NULL + `member_unlinked_at` (baris keuangan tetap).

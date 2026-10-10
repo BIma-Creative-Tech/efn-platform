@@ -15,7 +15,7 @@ export type CompanyCode = 'RTL' | 'FNB';
 
 /**
  * Identitas PT saja. Pajak (label, tarif, inklusif/eksklusif) TIDAK di sini — configurable,
- * dibaca dari sumber data (`lib/mock-catalog.ts` MOCK, kelak BFF/Odoo). Lihat `lib/tax.ts`.
+ * dibaca dari BFF/Odoo per baris (label `tax_labels`, `tax_groups` — docs/04 §10.3; frontend tidak menghitung pajak).
  */
 export interface CompanyInfo {
   code: CompanyCode;

@@ -40,14 +40,12 @@ secara teknis adalah **rilis**:
   commit itu dibatalkan (`cancel-in-progress` karena push berikutnya), jangan men-tag commit itu: tunggu run CI penuh
   commit berikutnya selesai hijau lalu tag commit tersebut (gate menolak commit tanpa run hijau miliknya sendiri).
   Production juga butuh baris persetujuan di host (key-custody §4d).
-- **Biaya menit (perkiraan, belum diukur di GitHub):** satu push ke `main` = CI penuh ±60-110 menit runner (Odoo test
-  dan tour masing-masing hingga 45 menit, Infra ±3, Node 2×, Python + pytest 3×, promtail; berjalan paralel, wall
-  clock ≤ ±45 menit) + Security ±10 + Build & Push 8 image ±20-30 + job gate menunggu (= durasi CI, ±45). Total ±135-195
-  menit per merge ke `main`. Dengan kuota 2.000 menit/bulan: ±10-14 merge/bulan, di luar menit run PR. Alur satu PR
-  per gelombang (bagian 9) wajib dipertahankan; bila kuota habis, pilihan: runner self-hosted untuk job Odoo atau
-  menit tambahan (bagian 8). **Catatan:** job Odoo test/tour belum pernah selesai di GitHub (semua run sebelumnya
-  `skipped`/`cancelled`); push pertama setelah perubahan ini adalah run penuh pertama, dan gerbang rilis tetap merah
-  sampai job itu hijau (gagal-tertutup).
+- **Biaya menit (diukur, merge PR #35 = ab0e4aa, 9 Okt 2026):** CI penuh 26 menit runner (Odoo test ±6 dan tour ±6
+  menit), Build & Push termasuk job gate 30, Security 5, CodeQL 1 → **±62 menit per merge ke `main`** (pembulatan
+  ke atas per job). Dengan kuota 2.000 menit/bulan: ±30 merge/bulan, di luar run PR (PR yang mengubah `ci.yml`
+  menjalankan semua job, ±60 menit; PR biasa lebih sedikit karena path-filter). Alur satu PR per gelombang (bagian 9)
+  tetap dipertahankan; bila kuota habis: runner self-hosted untuk job Odoo atau menit tambahan (bagian 8). Perkiraan
+  awal (135-195 menit) terlalu tinggi.
 - Pilihan yang ditolak: memicu `build-push` lewat `workflow_run` setelah CI + Security. Workflow_run berjalan di
   konteks default branch (identitas cosign untuk tag rilis `build-push.yml@refs/tags/vX.Y.Z` hilang) dan dua workflow
   sumber memicu dua run yang harus saling menunggu.

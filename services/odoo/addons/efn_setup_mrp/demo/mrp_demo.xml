@@ -31,18 +31,33 @@
          route_id SENGAJA dikosongkan (QA gelombang 4): xmlid route_warehouse0_manufacture terikat ke
          warehouse/company utama, sedangkan orderpoint ini milik company FNB -> risiko _check_company.
          Dengan route kosong, Odoo memakai route manufacture gudang company FNB (produk punya BoM normal). -->
+    <!-- G17 (load DB with-demo): company FNB dari efn_setup_company dibuat SEBELUM stock terpasang,
+         sehingga belum punya gudang (stock hanya membuat gudang untuk company pertama,
+         res.company.create_missing_warehouse 19.0) -> orderpoint gagal (warehouse_id NOT NULL).
+         Gudang Central Kitchen demo dibuat eksplisit dan dipakai orderpoint. Company gudang &amp; orderpoint =
+         company produk paket efn_kitting (efn_kitting tidak bergantung efn_setup_company, sehingga
+         produknya bisa jatuh ke base.main_company) -> tidak ada crossover company. -->
+    <record id="warehouse_ck_demo" model="stock.warehouse">
+        <field name="name">Central Kitchen (DEMO)</field>
+        <field name="code">CK01</field>
+        <field name="company_id" model="product.product"
+               eval="obj(ref('efn_kitting.product_paket_ayam_geprek')).company_id.id or ref('base.main_company')"/>
+    </record>
+
     <record id="orderpoint_paket_ayam_geprek_ck" model="stock.warehouse.orderpoint">
         <field name="product_id" ref="efn_kitting.product_paket_ayam_geprek"/>
-        <field name="company_id" model="res.company"
-               eval="obj().search([('efn_brand_code', '=', 'FNB')], limit=1).id or ref('base.main_company')"/>
+        <field name="warehouse_id" ref="warehouse_ck_demo"/>
+        <field name="company_id" model="product.product"
+               eval="obj(ref('efn_kitting.product_paket_ayam_geprek')).company_id.id or ref('base.main_company')"/>
         <field name="product_min_qty">20</field>
         <field name="product_max_qty">100</field>
         <field name="trigger">auto</field>
     </record>
     <record id="orderpoint_paket_nasi_putih_ck" model="stock.warehouse.orderpoint">
         <field name="product_id" ref="efn_kitting.product_paket_nasi_putih"/>
-        <field name="company_id" model="res.company"
-               eval="obj().search([('efn_brand_code', '=', 'FNB')], limit=1).id or ref('base.main_company')"/>
+        <field name="warehouse_id" ref="warehouse_ck_demo"/>
+        <field name="company_id" model="product.product"
+               eval="obj(ref('efn_kitting.product_paket_ayam_geprek')).company_id.id or ref('base.main_company')"/>
         <field name="product_min_qty">20</field>
         <field name="product_max_qty">100</field>
         <field name="trigger">manual</field>

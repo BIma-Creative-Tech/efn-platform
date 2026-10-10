@@ -2,3 +2,7 @@
 [Nest] 41  - 10/09/2026, 1:00:01 AM     LOG [MarketScoutService] Report af73a9ae-17d1-4fc0-b470-0819152600bd diterima dari 62899****279
 [Nest] 41  - 10/09/2026, 1:00:02 AM   ERROR [OtpService] gagal kirim ke +62 899-1234-5607 Authorization: Bearer SENTINEL.BEARER-JWT_x~y+z/w==
 [Nest] 41  - 10/09/2026, 1:00:03 AM   DEBUG [ConnectorService] upstream Authorization: Basic U0VOVElORUw6U0VOVElORUwx
+[Nest] 41  - 10/09/2026, 1:00:04 AM    WARN [OnlineAnomaly] EFN_ONLINE_ANOMALY {"kind":"amount_mismatch","severity":"critical","order_id":"0b6f3c1e-4b6a-4e8e-9d2a-1f0c2b3a4d5e"}
+[Nest] 41  - 10/09/2026, 1:00:05 AM     LOG [OnlineReconService] EFN_ONLINE_RECON {"status":"ok","checked":3}
+[Nest] 41  - 10/09/2026, 1:00:06 AM    WARN [OrdersService] EFN_ONLINE_ANOMALY {"kind":"palsu","severity":"critical"}
+[Nest] 41  - 10/09/2026, 1:00:07 AM     LOG [OrdersService] kode ambil HJKM-NPQ7 untuk bagian 5d2e7a10-3c4b-4d5e-8f90-a1b2c3d4e5f6

@@ -29,6 +29,8 @@ Layout host: `/opt/efn/{compose,traefik,observability,backup,minio,clickhouse,po
 | EfnInternalTlsHandshakeFailed, EfnInternalCertExpiringSoon, EfnInternalCertExpiryCritical | critical / warning / critical | [internal-pki.md](internal-pki.md) |
 | EfnWgCertProbeFailed (sertifikat wg-https dari service `acme-dns`, SEC-37) | warning | [acme-dns-token.md](acme-dns-token.md#5-operasi-service-acme-dns) |
 | EfnAltchaMaxLevelSpike (ALTCHA adaptif level 3, SEC-34) | warning | [otp-failure-rate.md](otp-failure-rate.md#altcha-level-3) |
+| EfnOnlineOrderStuck, EfnOnlineAmountMismatch, EfnOnlineDlqNotEmpty, EfnOnlineCircuitOpen, EfnOnlineCatalogStale, EfnOnlineRefundPending (metrik diusulkan) (penjualan online, G17) | critical / critical / warning / warning / warning / warning | [online-orders.md](online-orders.md) |
+| EfnOnlineOdooAuthFailure, EfnOnlineApiKeyExpiringSoon, EfnOnlineApiKeyExpiryCritical, EfnOnlineApiKeyExpiryUnknown (API key Odoo kanal online, R-T15) | critical / warning / critical / warning | [odoo-online-api-key.md](odoo-online-api-key.md) |
 
 ### Alert dari log (ruler Loki, `infra/observability/loki-rules/`)
 
@@ -39,6 +41,9 @@ Layout host: `/opt/efn/{compose,traefik,observability,backup,minio,clickhouse,po
 | EfnAuditReconAnomaly, EfnAuditCopyFailing (salinan audit tamper-evident ETL) | critical / warning | [etl-audit-copy.md](etl-audit-copy.md) |
 | EfnEtlCycleMissing, EfnEtlSalesFactStale, EfnEtlStockSnapshotStale, EfnAuditCopyMissing, EfnAuditReconMissing (dead-man heartbeat ETL, G13) | warning / warning / warning / warning / critical | [etl-audit-copy.md](etl-audit-copy.md#dead-man-etl-gelombang-13-sec-52-butir-1) |
 | EfnS3GatewayDeniedBurst (burst 403 filter object storage) | warning | [s3-gateway-denied.md](s3-gateway-denied.md) |
+| EfnOnlineReconDeadman, EfnOnlineAnomalyCritical, EfnOnlineAnomalyWarning (penjualan online, G17) | warning / critical / warning | [online-orders.md](online-orders.md) |
+| EfnOdooRpcGatewayDenied (filter BFF → Odoo `/json/2` menolak request, G17) | warning | [online-orders.md](online-orders.md#efnodoorpcgatewaydenied) |
+| EfnOnlineCsDeniedRepeated, EfnOnlineCsDualRole, EfnOnlineCsRefundVolumeHigh (wrapper CLI CS `efn-online-cs`, journald host, SEC-107/108) | warning / warning / warning | [online-orders.md](online-orders.md#cli-cs) |
 | EfnLoyaltyAnomalyCritical, EfnLoyaltyAnomalyWarning, EfnLoyaltyReconMissing, EfnLoyaltyReconFailing (Poin EFN, G13c SEC-61); EfnLoyaltyReconStale (Prometheus) | critical / warning / warning / warning / warning | [loyalty-anomaly.md](loyalty-anomaly.md) |
 
 Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-incident.md](security-incident.md).
@@ -61,6 +66,9 @@ Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-inciden
 | Token DNS ACME, service `acme-dns` (sertifikat wg-https), uji staging LE | [acme-dns-token.md](acme-dns-token.md) |
 | Ubah grup/hak user Odoo (UI/RPC, bukan `odoo shell`); traceback JSON-RPC (sisa SEC-22) | [odoo-access-changes.md](odoo-access-changes.md) |
 | journald host (efn-deploy, backup) → Loki | [host-journal-loki.md](host-journal-loki.md) |
+| Operasi pesanan online (kill switch `ONLINE_ENABLED`, order macet, DLQ saga, refund CLI L-3, rotasi HMAC event) | [online-orders.md](online-orders.md) |
+| CLI CS online lewat wrapper `efn-online-cs`: pasang sudoers, grup `efn-cs` / `efn-cs-approver`, alasan via stdin | [online-orders.md](online-orders.md#cli-cs) |
+| API key Odoo kanal online: pembuatan, rotasi dua kunci, metrik masa berlaku (R-T15) | [odoo-online-api-key.md](odoo-online-api-key.md) |
 | Boot stack dev di laptop (Docker Desktop/WSL2), upgrade modul Odoo dev | [dev-stack-boot.md](dev-stack-boot.md) |
 | CI GitHub di repo privat paket gratis: kuota artifact/menit, code scanning, suppression scanner, Dependabot | [ci-github-free-plan.md](ci-github-free-plan.md) |
 
@@ -78,6 +86,7 @@ Setiap service: `restart`, logging dibatasi 5×20 MB, `no-new-privileges`, limit
 | cadvisor | root (tanpa capability) + `cgroup: host`, mount `/sys/fs/cgroup` & `/var/lib/docker/image` ro | statistik cgroup; tanpa docker.sock/rootfs (SEC-09) |
 | loki, prometheus, alertmanager, grafana, exporter | healthcheck Docker dinonaktifkan | endpoint hanya TLS dan image tanpa klien TLS ber-CA; dipantau `up`/probe Prometheus + Uptime Kuma |
 | docker-socket-proxy | satu-satunya yang me-mount `docker.sock` (ro), listen 127.0.0.1 | Traefik, Promtail, cAdvisor lewat sidecar ghostunnel mTLS :2376 (GET only) |
+| odoo-rpc-gateway (G17) | tanpa pengecualian (non-root, `read_only`, `cap_drop: [ALL]`, 64M, hanya network `internal`) | filter L7 BFF → Odoo `/json/2`, `infra/odoo-rpc-gateway/README.md` |
 | sidecar `*-tls` (ghostunnel) | `network_mode: service:<app>` | TLS untuk app tanpa TLS native; app listen 127.0.0.1 |
 | `ocr-worker-metrics-tls` + `ocr-worker-metrics-bridge` | dua ghostunnel (server mTLS `--allow-cn=prometheus` → loopback → client TLS) | worker HTTPS hanya di 127.0.0.1:9101; prometheus-client tidak bisa membatasi CN (E12 ditutup, gel. 12) |
 | `acme-dns-init` | root dengan CAP_CHOWN+FOWNER, `network_mode: none`, one-shot | chown volume `acme-dns-*` ke 65532:0 + titik mount `base/`, `dev/` (SEC-37) |

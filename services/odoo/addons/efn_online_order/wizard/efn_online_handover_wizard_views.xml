@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_online_handover_wizard_view_form" model="ir.ui.view">
+        <field name="name">efn.online.handover.wizard.form</field>
+        <field name="model">efn.online.handover.wizard</field>
+        <field name="arch" type="xml">
+            <form>
+                <group>
+                    <field name="order_id"/>
+                    <field name="code" password="True" invisible="done" placeholder="ABCD-EFGH"/>
+                    <field name="message" invisible="not message"/>
+                    <field name="done" invisible="1"/>
+                </group>
+                <footer>
+                    <button name="action_confirm" type="object" string="Verifikasi &amp; serahkan" class="btn-primary"
+                            invisible="done"/>
+                    <button string="Tutup" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_efn_online_handover_wizard" model="ir.actions.act_window">
+        <field name="name">Serah terima pesanan online</field>
+        <field name="res_model">efn.online.handover.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+</odoo>

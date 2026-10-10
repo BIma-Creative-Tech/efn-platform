@@ -1,4 +1,6 @@
-import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
+import { KV_STORE, KvStore } from '../common/redis/kv-store';
+import { purgeMemberOnlineRedis } from '../cart/quote.service';
 import { randomUUID } from 'node:crypto';
 import { AppConfig } from '../config/app-config';
 import { DB, Db, Queryable } from '../common/db/db';
@@ -9,6 +11,9 @@ import { OBJECT_STORAGE, ObjectStorage } from '../market-scout/storage/object-st
 export const ERASURE_STORES = ['platform', 'odoo', 'clickhouse'] as const;
 export type ErasureStore = (typeof ERASURE_STORES)[number];
 export const ERASURE_LOCK_KEY = 0x45464e45; // 'EFNE'
+
+/** SEC-100: erasure ditunda karena member masih punya order online terbuka (rollback transaksi). */
+export class ErasureDeferred extends Error {}
 const DUE_BATCH = 50;
 
 export type CompleteStoreResult =
@@ -61,6 +66,7 @@ export interface ErasureRunResult {
 @Injectable()
 export class ErasureService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ErasureService.name);
+  private readonly anomalyLog = new Logger('OnlineAnomaly');
   private timer: NodeJS.Timeout | null = null;
   private running = false;
 
@@ -68,6 +74,8 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
     private readonly config: AppConfig,
     @Inject(DB) private readonly db: Db,
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
+    /** §10.8.3: cart/quote online di Redis milik subjek dihapus setelah commit (best effort; TTL sebagai cadangan). */
+    @Optional() @Inject(KV_STORE) private readonly kv: KvStore | null = null,
   ) {}
 
   onModuleInit(): void {
@@ -117,6 +125,17 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
 
   /** @returns false bila request tidak lagi `scheduled` (dibatalkan/diproses replika lain). */
   async processDue(requestId: string): Promise<boolean> {
+    try {
+      return await this.processDueTx(requestId);
+    } catch (err) {
+      if (!(err instanceof ErasureDeferred)) throw err;
+      // Baris berprefiks EFN_ONLINE_ANOMALY dengan logger OnlineAnomaly → alert Loki (selector promtail tahap 6)
+      this.anomalyLog.warn(`EFN_ONLINE_ANOMALY ${JSON.stringify({ kind: 'erasure_deferred_open_orders', severity: 'warning' })}`);
+      return false;
+    }
+  }
+
+  private async processDueTx(requestId: string): Promise<boolean> {
     const result = await this.db.tx(async (q) => {
       const lock = await q.query<{ ok: boolean }>('SELECT pg_try_advisory_xact_lock($1, hashtext($2)) AS ok', [
         ERASURE_LOCK_KEY,
@@ -132,6 +151,17 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
       );
       const r = started.rows[0];
       if (!r) return null;
+      // SEC-100 (L-16): kunci member yang sama dengan checkout lalu cek ulang order online terbuka; ada → tunda + alert
+      await q.query(`SELECT pg_advisory_xact_lock(hashtext('efn:online:member:' || $1::text))`, [r.member_id]);
+      const open = await q.query<{ n: string | number }>(
+        `SELECT count(*) AS n FROM platform.online_order o
+          WHERE o.member_id = $1
+            AND (o.status IN ('created', 'awaiting_payment')
+                 OR EXISTS (SELECT 1 FROM platform.online_order_part p
+                             WHERE p.order_id = o.id AND p.status IN ('paying', 'confirmed', 'ready', 'review')))`,
+        [r.member_id],
+      );
+      if (Number(open.rows[0]?.n ?? 0) > 0) throw new ErasureDeferred('order online terbuka');
       await q.query(`UPDATE platform.member SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL`, [r.member_id]);
       await this.suppress(q, r.member_hash);
       const objects = await q.query<{ image_object: string }>(
@@ -140,10 +170,11 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
       );
       await this.erasePlatform(q, requestId, r.member_id, r.member_hash);
       await this.completeStore('platform', requestId, q);
-      return objects.rows.map((o) => o.image_object);
+      return { photos: objects.rows.map((o) => o.image_object), memberId: r.member_id };
     });
     if (result === null) return false;
-    await this.removePhotos(result);
+    await this.removePhotos(result.photos);
+    await this.purgeOnlineRedis(result.memberId);
     return true;
   }
 
@@ -195,6 +226,11 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
       `UPDATE platform.dsar_request SET member_hash = NULL
         WHERE member_id = $1 AND id <> $2 AND member_hash IS NOT NULL`,
       [memberId, requestId],
+    );
+    // 6b. Fase 3 (§10.8.3): order online tetap (baris keuangan 10 th) tanpa tautan ke member
+    await q.query(
+      `UPDATE platform.online_order SET member_id = NULL, member_unlinked_at = now(), updated_at = now() WHERE member_id = $1`,
+      [memberId],
     );
     // 7. Member
     await q.query(`DELETE FROM platform.member WHERE id = $1`, [memberId]);
@@ -258,6 +294,16 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
       if ((res.rowCount ?? 0) > 0) this.logger.log(`Daftar tolak erasure: ${res.rowCount} tag kedaluwarsa dihapus`);
     } catch (err) {
       this.logger.warn(`Retensi daftar tolak erasure gagal: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private async purgeOnlineRedis(memberId: string): Promise<void> {
+    if (!this.kv) return;
+    try {
+      const n = await purgeMemberOnlineRedis(this.kv, this.config.redisKeyPepper, memberId);
+      if (n > 0) this.logger.log(`Erasure: ${n} key Redis online (cart/quote) dihapus`);
+    } catch (err) {
+      this.logger.warn(`Erasure: hapus cart/quote Redis gagal (TTL membersihkan): ${err instanceof Error ? err.message : 'redis'}`);
     }
   }
 

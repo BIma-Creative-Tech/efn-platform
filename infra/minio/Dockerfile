@@ -6,6 +6,8 @@
 # metrik minio_*. SILO tidak memasang alias biner `minio` -> image ini membuat symlink agar compose/runbook lama jalan.
 # Tag di-pin + commit SHA diverifikasi (tag git bisa dipindah; commit tidak).
 # Versi Go: go.mod kedua repo menuntut go 1.27.1; builder dinaikkan ke 1.27.2 (patch stdlib, CVE Go; G16 CI 9 Okt 2026).
+# G17 (Trivy PR #36): bump minimum golang.org/x/net 0.59.0 -> 0.60.0 (CVE-2026-78669, HTTP/2 SETTINGS DoS) sebelum
+# build; go.sum diverifikasi proxy/sumdb Go. Hapus `go get` ini bila tag SILO/mc berikutnya sudah memuat >= 0.60.0.
 # SEC-47: base image dipin tag@digest (build reprodusibel); Dependabot `docker` memperbarui digest per tag.
 FROM golang:1.27.2-alpine@sha256:85dc1069ac644ea3c527b177303a406eb3358192816cd7f9e5848eb658851673 AS build
 ARG SILO_TAG=RELEASE.2026-09-16T00-00-00Z
@@ -20,11 +22,13 @@ WORKDIR /src/silo
 # hadolint ignore=DL3062  # bukan `go install`: build dari clone tag + commit yang diverifikasi (hadolint >= 2.13)
 RUN git clone --depth 1 --branch "${SILO_TAG}" https://github.com/pgsty/silo.git . \
     && test "$(git rev-parse HEAD)" = "${SILO_COMMIT}" \
+    && go get golang.org/x/net@v0.60.0 \
     && go build -tags kqueue -ldflags "$(go run buildscripts/gen-ldflags.go)" -o /out/silo .
 WORKDIR /src/mc
 # hadolint ignore=DL3062  # bukan `go install`: build dari clone tag + commit yang diverifikasi (hadolint >= 2.13)
 RUN git clone --depth 1 --branch "${MC_TAG}" https://github.com/pgsty/mc.git . \
     && test "$(git rev-parse HEAD)" = "${MC_COMMIT}" \
+    && go get golang.org/x/net@v0.60.0 \
     && go build -tags kqueue -ldflags "$(go run buildscripts/gen-ldflags.go)" -o /out/mc .
 
 FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6

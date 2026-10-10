@@ -8,7 +8,9 @@
 
      Barcode produk berlabel timbangan = base code (bagian nilai diisi 0 + check digit EAN-13
      dihitung ulang, barcode.nomenclature.sanitize_ean):
-       Tomat 21-00001-00000-C -> 2100001000004; label 1,250 kg -> 2100001012502
+       Tomat 21-09001-00000-C -> 2109001000007; label 1,250 kg -> 2109001012505
+       (G17: kode 00001 bentrok dengan demo CE point_of_sale "Newspaper Rack" 2100001000004 ->
+       kode produk demo EFN memakai blok 09xxx agar DB with-demo bisa dimuat)
        Daging 23-00002-00000-C -> 2300002000007; label Rp45.500 -> 2300002455005
      (check digit dihitung manual; uji scan di PoC.) -->
 <odoo>
@@ -27,7 +29,7 @@
         <field name="to_weight" eval="True"/>
         <field name="uom_id" ref="uom.product_uom_kgm"/>
         <field name="list_price">18000</field>
-        <field name="barcode">2100001000004</field>
+        <field name="barcode">2109001000007</field>
         <field name="company_id" ref="efn_setup_company.company_rtl"/>
         <field name="pos_categ_ids" eval="[(6, 0, [ref('pos_categ_fresh_weighed')])]"/>
         <field name="taxes_id" model="res.company"

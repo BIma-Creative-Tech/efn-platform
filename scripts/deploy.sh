@@ -107,6 +107,16 @@ if [[ "$PAYMENT_PROVIDER" =~ ^(xendit|midtrans)$ ]] && grep -qx 'disabled' "$SEC
 fi
 grep -qx 'disabled' "$SECRETS_DIR/acme_dns_api_token.txt" \
   && die "ACME_DNS_API_TOKEN masih placeholder (wajib untuk sertifikat wg-https, ADR-023)"
+# G17 (docs/04 §10.4.1): online aktif = setiap kanal di ONLINE_CHANNELS wajib punya API key Odoo nyata
+if [[ "${ONLINE_ENABLED:-false}" == true ]]; then
+  IFS=, read -r -a ONLINE_CH_LIST <<< "${ONLINE_CHANNELS:-RTL}"
+  for ch in "${ONLINE_CH_LIST[@]}"; do
+    f="$SECRETS_DIR/odoo_api_key_online_$(tr 'A-Z-' 'a-z_' <<< "$ch").txt"
+    if [[ ! -s "$f" ]] || grep -qx 'disabled' "$f"; then
+      die "ONLINE_ENABLED=true tetapi API key kanal ${ch} tidak ada/placeholder (docs/runbooks/odoo-online-api-key.md)"
+    fi
+  done
+fi
 
 echo "==> Secret turunan (member_hash_pepper = HKDF(otp_pepper), token metrik MinIO)"
 bash "$BASE/scripts/derive-secrets.sh" "$SECRETS_DIR"
@@ -279,6 +289,23 @@ DOTENV=(
   "ETL_LOYALTY_RECON_NOT_BEFORE=${ETL_LOYALTY_RECON_NOT_BEFORE_EFF}"
   "MIGRATION_ENABLED=${MIGRATION_ENABLED:-false}"
   "METABASE_ADMIN_EMAIL=${METABASE_ADMIN_EMAIL:-${ACME_EMAIL}}"
+  # G17 penjualan online (docs/04 §10.13): default MATI; angka kosong = default compose (PLACEHOLDER pilot)
+  "ONLINE_ENABLED=${ONLINE_ENABLED:-false}"
+  "ONLINE_CATALOG_ENABLED=${ONLINE_CATALOG_ENABLED:-false}"
+  "ONLINE_CHANNELS=${ONLINE_CHANNELS:-RTL}"
+  "ONLINE_FULFILMENTS=${ONLINE_FULFILMENTS:-pickup}"
+  "ONLINE_PAYMENT_TIMEOUT_SECONDS=${ONLINE_PAYMENT_TIMEOUT_SECONDS:-}"
+  "ONLINE_QUOTE_TTL_SECONDS=${ONLINE_QUOTE_TTL_SECONDS:-}"
+  "ONLINE_MAX_OPEN_ORDERS_PER_MEMBER=${ONLINE_MAX_OPEN_ORDERS_PER_MEMBER:-}"
+  "ONLINE_CATALOG_SYNC_SECONDS=${ONLINE_CATALOG_SYNC_SECONDS:-}"
+  "ONLINE_PICKUP_CODE_MAX_DAYS=${ONLINE_PICKUP_CODE_MAX_DAYS:-}"
+  "ONLINE_ORDER_MEMBER_LINK_DAYS=${ONLINE_ORDER_MEMBER_LINK_DAYS:-}"
+  "ONLINE_EVENT_RETENTION_DAYS=${ONLINE_EVENT_RETENTION_DAYS:-}"
+  "ONLINE_ADMIN_AUDIT_RETENTION_DAYS=${ONLINE_ADMIN_AUDIT_RETENTION_DAYS:-}"
+  "ODOO_RPC_TIMEOUT_MS=${ODOO_RPC_TIMEOUT_MS:-}"
+  "ODOO_RPC_MAXCONN=${ODOO_RPC_MAXCONN:-}"
+  "ODOO_RPC_PUBLIC_MAX_CONCURRENCY=${ODOO_RPC_PUBLIC_MAX_CONCURRENCY:-}"
+  "ODOO_RPC_SAGA_MAX_CONCURRENCY=${ODOO_RPC_SAGA_MAX_CONCURRENCY:-}"
 )
 efn_write_dotenv "$COMPOSE_DIR/.env" "${DOTENV[@]}" || die "gagal menulis .env (SEC-50)"
 
@@ -307,6 +334,8 @@ cd "$COMPOSE_DIR"
 FILES=(-f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.host.yml)
 # Kunci API payment hanya di-mount bila provider nyata (docs/04 §8.3); mock/disabled tidak me-mount kunci
 if [[ "$PAYMENT_PROVIDER" =~ ^(xendit|midtrans)$ ]]; then FILES+=(-f docker-compose.payment.yml); fi
+# G17: API key kanal FNB hanya di-mount bila kanal FNB ada di ONLINE_CHANNELS (kanal brand FNB-<X> butuh overlay baru)
+if [[ ",${ONLINE_CHANNELS:-RTL}," == *,FNB,* ]]; then FILES+=(-f docker-compose.online-fnb.yml); fi
 DC=(docker compose "${FILES[@]}")
 
 echo "==> Validasi konfigurasi"
@@ -345,8 +374,10 @@ wait_healthy postgres || die "postgres tidak sehat"
 # lama hanya lewat langkah ini. Dijalankan sebagai superuser lewat socket lokal, SEBELUM BFF baru start.
 echo "==> Migrasi skema idempoten (infra/postgres/init/[0-9][0-9]-*.sql >= 04)"
 # G13c: migrasi yang WAJIB ada sebelum BFF rilis ini start (bundel tidak lengkap = gagal, bukan dilewati diam-diam):
-# 05 = loyalty POS (G13), 06 = pagar earn + daftar tolak erasure (SEC-61/SEC-65; tanpa 06 job erasure BFF gagal).
-for req in 04-platform-v3-6.sql 05-platform-loyalty-pos.sql 06-platform-loyalty-guard.sql; do
+# 05 = loyalty POS (G13), 06 = pagar earn + daftar tolak erasure (SEC-61/SEC-65; tanpa 06 job erasure BFF gagal),
+# 07 = penjualan online G17 (docs/04 §10.7/§10.8: payment_intent.purpose + tabel online_*; dibutuhkan BFF G17
+# termasuk saat ONLINE_ENABLED=false).
+for req in 04-platform-v3-6.sql 05-platform-loyalty-pos.sql 06-platform-loyalty-guard.sql 07-platform-online.sql; do
   [[ -s "$BASE/postgres/init/$req" ]] || die "migrasi wajib $req tidak ada di $BASE/postgres/init (bundel rilis tidak lengkap)"
 done
 for mig in "$BASE"/postgres/init/[0-9][0-9]-*.sql; do

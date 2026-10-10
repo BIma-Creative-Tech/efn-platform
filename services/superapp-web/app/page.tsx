@@ -1,36 +1,42 @@
 import Link from 'next/link';
 import { getBrand } from '@/lib/brand-server';
 import { COMPANIES } from '@/lib/brands';
-import { loadTaxConfigs, productsForCompanies } from '@/lib/mock-catalog';
-import { CartDemo } from '@/components/CartDemo';
 
+/**
+ * Beranda. G17: demo cart MOCK (dihapus) diganti tautan ke belanja online sungguhan
+ * (`/belanja` -> katalog BFF, `/keranjang`, `/pesanan`). Pajak tidak lagi disebut di sini: label pajak datang dari BFF/Odoo.
+ */
 export default async function HomePage() {
   const brand = await getBrand();
-  const products = productsForCompanies(brand.companies);
-  // Pajak configurable: dibaca server-side dari sumber data (MOCK sekarang, BFF/Odoo kelak).
-  const taxConfigs = await loadTaxConfigs(brand.companies);
-  const companies = brand.companies.map((c) => {
-    const cfg = taxConfigs[c];
-    return `${COMPANIES[c].displayName}${cfg ? ` (${cfg.tax_label})` : ''}`;
-  });
+  const companies = brand.companies.map((c) => COMPANIES[c].displayName);
 
   return (
     <div className="stack">
       <section>
         <h1>{brand.name}</h1>
         <p className="muted">{brand.tagline}</p>
-        <p className="small muted">
-          Dilayani oleh: {companies.join(' dan ')}.
-        </p>
+        <p className="small muted">Dilayani oleh: {companies.join(' dan ')}.</p>
       </section>
 
-      <div className="notice" role="note">
-        <strong>Demo konsep (Fase 0).</strong> Katalog di bawah adalah <strong>data contoh (MOCK)</strong>, bukan
-        produk dan harga sebenarnya. Keranjang hanya memperlihatkan pengelompokan per PT dan pajaknya; checkout dan
-        pembayaran belum tersedia.
-      </div>
-
-      <CartDemo products={products} taxConfigs={taxConfigs} />
+      <section className="card stack" aria-labelledby="belanja-judul">
+        <h2 id="belanja-judul" style={{ margin: 0 }}>
+          Belanja online, ambil di toko
+        </h2>
+        <p style={{ margin: 0 }}>
+          Pilih barang, bayar sekali dengan QRIS, lalu ambil di toko dengan kode ambil. Harga sudah termasuk pajak.
+        </p>
+        <p style={{ margin: 0, display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <Link href="/belanja" className="btn">
+            Mulai belanja
+          </Link>
+          <Link href="/keranjang" className="btn btn-secondary">
+            Keranjang
+          </Link>
+          <Link href="/pesanan" className="btn btn-secondary">
+            Pesanan saya
+          </Link>
+        </p>
+      </section>
 
       <section className="card">
         <h2>Pantau Harga, dapat poin</h2>

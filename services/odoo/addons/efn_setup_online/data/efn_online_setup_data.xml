@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- efn_setup_online (docs/08 §8.4). Semua nilai = PLACEHOLDER yang bisa diubah tanpa kode.
+     - api_key_duration grup user teknis = 90 hari (tanpa ini Odoo membatasi key 1 hari, temuan #42; R-T15).
+     - Partner generik "Pelanggan Super-App" per PT TANPA HP/email/NPWP (UU PDP; constraint kanal E-28).
+     - Tim penjualan "Super-App" per PT.
+     - sale.automatic_invoice TIDAK diset (jalur payment.transaction sale tidak dipakai, temuan #40).
+     - "Lock Confirmed Sales" (sale.group_auto_done_setting) TIDAK diaktifkan: action_cancel menolak SO terkunci
+       (temuan #36). -->
+<odoo>
+    <data noupdate="1">
+        <record id="efn_online_order.group_online_channel" model="res.groups">
+            <field name="api_key_duration">90</field>
+        </record>
+
+        <record id="partner_superapp_rtl" model="res.partner">
+            <field name="name">Pelanggan Super-App - PT Retail</field>
+            <field name="company_id" ref="efn_setup_company.company_rtl"/>
+            <field name="is_company" eval="False"/>
+        </record>
+        <record id="partner_superapp_fnb" model="res.partner">
+            <field name="name">Pelanggan Super-App - PT F&amp;B</field>
+            <field name="company_id" ref="efn_setup_company.company_fnb"/>
+            <field name="is_company" eval="False"/>
+        </record>
+
+        <record id="team_superapp_rtl" model="crm.team">
+            <field name="name">Super-App (Retail)</field>
+            <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        </record>
+        <record id="team_superapp_fnb" model="crm.team">
+            <field name="name">Super-App (F&amp;B)</field>
+            <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        </record>
+    </data>
+
+    <!-- Program loyalty BARU tidak berlaku di SO online (Q-ON10: promo online hanya pricelist). Dijalankan setiap
+         install/upgrade (noupdate=0) agar default tidak bisa hilang diam-diam. -->
+    <function model="ir.default" name="set" eval="('loyalty.program', 'sale_ok', False)"/>
+</odoo>

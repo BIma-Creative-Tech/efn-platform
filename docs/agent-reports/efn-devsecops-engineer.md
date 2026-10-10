@@ -1389,3 +1389,209 @@ Belum / perlu tindakan:
 - Superadmin: pasang ulang `efn-deploy` di host (sha256 dari PR), isi `/etc/efn/approved-release` sebelum rilis
   production; admin repo: Environment `staging` → deployment branch `main` saja (saat ini tanpa aturan).
 - `head_branch` = nama tag untuk run push tag (SEC-94) dan seluruh alur build/tag/deploy baru belum terbukti di run nyata.
+
+---
+
+# Gelombang 17 — infra penjualan online Fase 3 (docs/04 §10, ADR-034 Proposed), 9 Okt 2026, belum di-commit
+
+> **Ringkasan manajemen.** Jalur aman Super-App → Odoo untuk pesanan online sudah dibangun dan diuji nyata: BFF hanya
+> bisa memanggil 10 fungsi pesanan online di Odoo lewat penjaga khusus (`odoo-rpc-gateway`) dengan sertifikat di kedua
+> sisi; 97 uji penyimpangan/serangan berperilaku sesuai harapan (ditolak), 10 fungsi sah lolos. Antrean pesanan, kunci
+> rahasia baru, alert, dan runbook (rotasi kunci API, operasi pesanan) siap. Online tetap **mati** di produksi
+> (`ONLINE_ENABLED=false`).
+
+## G17.1 File (batas §10.15)
+- **Baru:** `infra/odoo-rpc-gateway/{haproxy.cfg,entrypoint.sh,test-gateway.sh,README.md}`,
+  `infra/compose/docker-compose.online-fnb.yml` (mount key FNB hanya saat kanal FNB aktif, pola payment overlay),
+  `infra/observability/loki-rules/efn-online.yml`, `docs/runbooks/online-orders.md`, `docs/runbooks/odoo-online-api-key.md`.
+- **Ubah:** `infra/compose/docker-compose.yml` (service `odoo-rpc-gateway`; `odoo-tls --allow-cn=odoo-rpc-gateway`;
+  env BFF §10.13 + secret; Odoo `EFN_ONLINE_EVENT_HMAC_FILE`; `MINIO_BUCKET_CATALOG`; superapp-web
+  `EFN_PAYMENT_SIMULATOR: "false"` bernilai tetap), `docker-compose.dev.yml` (superapp-web `EFN_PAYMENT_SIMULATOR: "true"`),
+  `infra/rabbitmq/rabbitmq-entrypoint.sh`, `infra/redis/redis-entrypoint.sh` (`~cart:* ~oq:* ~ocat:*`),
+  `infra/minio/minio-init.sh` (bucket `catalog` SSE-S3 + policy BFF), `infra/observability/{alert-rules.yml,
+  alertmanager.yml, promtail.yml, promtail-journal.yml, tests/promtail/*}`, `scripts/{secrets.list, gen-pki.sh,
+  check-encryption.sh}`, `.github/workflows/ci.yml`.
+
+## G17.2 Keputusan teknis
+- **PKI:** `odoo-rpc-gateway|both` (server untuk BFF, klien ke odoo-tls); `api-gateway` server → **both** (sertifikat
+  BFF dipakai sebagai klien CN `api-gateway`; tidak perlu secret `tls_api_gateway_client_*`). Konsekuensi staging/prod:
+  **intermediate wajib diterbitkan ulang** (nameConstraints belum memuat `odoo-rpc-gateway`; gen-pki.sh menolak di
+  staging/prod sampai Superadmin `make pki-intermediate`, runbook internal-pki.md#service-baru). Dev: CA dev dibuat ulang.
+- **Secret baru:** `odoo_api_key_online_rtl`, `odoo_api_key_online_fnb` (`literal:disabled`; key dibuat DI Odoo lewat
+  runbook), `odoo_online_event_hmac` (`random`; mount odoo + api-gateway saja, dicek check-encryption). **Kunci
+  enkripsi kode ambil:** kontrak §10.3.6 = AES-256-GCM §7.2 = key ring `pii_encryption_key` (AAD
+  `efn:online_order_part.pickup_code_enc:v1`) → tidak ada secret baru.
+- **Gateway:** pola s3-gateway; path dicocokkan MENTAH (tanpa decode) dengan 10 string; allowlist header (PCRE2);
+  `X-Odoo-Database` dipaksa; penolakan membawa `X-EFN-Gateway-Deny: <alasan>` + log `why=`.
+- **RabbitMQ:** 4 queue §10.9 quorum + DLQ + `x-delivery-limit: 10`; `efn-bff` read 4 queue (strict), write tetap
+  `amq.default`. Argumen queue lama tidak diubah.
+- **Alert:** grup Prometheus `efn-online` (OrderStuck, AmountMismatch, DlqNotEmpty, OdooAuthFailure, CircuitOpen,
+  CatalogStale, RefundPending [proposed], ApiKeyExpiringSoon/Critical/Unknown — R-T15 lewat metrik textfile
+  `efn_odoo_api_key_expiry_timestamp_seconds{channel}` yang ditulis runbook); `EfnDeadLetterNotEmpty` mengecualikan
+  `order.*`; Loki: `EfnOnlineReconDeadman` (20 m; hanya bila heartbeat ada dalam 24 j), `EfnOnlineAnomaly*`,
+  `EfnOdooRpcGatewayDenied`. Promtail tahap 6 (`stream="efn_online"`) + redaksi kode ambil `ABCD-EFGH`
+  (`[PICKUP_REDACTED]`) dan kunci `pickup_code|qr_string|quote_hash` (query/JSON). Idempotency-Key tidak diredaksi
+  (bukan rahasia; deterministik dari id yang boleh di-log).
+- **Tambahan lead:** `EFN_PAYMENT_SIMULATOR` true hanya dev; base bernilai tetap `"false"` (bukan `${..}`, tidak bisa
+  diubah lewat .env, tidak ada di allowlist deploy-validate); `check-encryption.sh` menolak render prod dengan nilai
+  selain false dan menolak `ODOO_ONLINE_MOCK` di api-gateway prod.
+
+## G17.3 Verifikasi nyata (stack dev, Docker Desktop 29.8.1)
+- CA dev dibuat ulang (service PKI baru) → seluruh stack `up --force-recreate`: semua container healthy; `minio-init`
+  membuat bucket `catalog` (SSE-S3).
+- `test-gateway.sh`: **97/97 PASS** (diulang setelah Docker Desktop restart): tanpa sertifikat / CA asing (CN
+  api-gateway) / sertifikat EKU server saja / HTTP polos / BFF langsung ke `odoo:8443` → handshake gagal; CN traefik →
+  403 `cn`; 6 method → 405; 23 path lain (search_read, write, action_efn_ready, handover wizard, call_kw, jsonrpc,
+  xmlrpc, trailing slash, huruf besar, `//`, dot segment, `;`, backslash) + 14 varian encoded (`%61`, `%2F`, `%2e%2e`,
+  `%252e`, `%00`, `%c0%ae`, `%3F`, `%23`, …) → 403; query/fragment/absolute-form/HTTP 1.0 → ditolak; kasus header
+  (method override ×3, X-Original-URL, X-Rewrite-URL, X-Openerp-Session-Id, Upgrade h2c/websocket, TE, Expect,
+  Proxy-Authorization, header asing, Host salah ×2, Content-Type salah/ganda, Authorization hilang/ganda/Basic/pendek)
+  → ditolak; body 300 KB → 413; 10 path sah + Cookie/X-Forwarded-*/X-Odoo-Database klien (dibuang) → sampai Odoo
+  (401 dari Odoo karena token uji). Health check backend = mTLS CN odoo-rpc-gateway ke odoo-tls.
+- **Bug ditemukan uji & diperbaiki:** regex `^bearer [..]` di HAProxy (spasi = pemisah argumen → pola OR) meloloskan
+  `Authorization: Basic …`; kini `\x20`. Upgrade tanpa `Connection: upgrade` dibuang parser H1 HAProxy sebelum aturan
+  (diverifikasi dengan HAProxy echo terpisah).
+- Loki: log gateway tanpa token (query `bearer|token uji` = 0); query `EfnOdooRpcGatewayDenied` mengelompokkan alasan
+  dengan benar; ruler mengevaluasi 4 rule baru. Prometheus memuat 10 rule `EfnOnline*`.
+- RabbitMQ 3.13.7: 8 queue dengan argumen benar; uji nyata publish + 11× reject-requeue → pesan pindah ke
+  `order.compensate.dlq` dengan `x-first-death-reason: delivery_limit` (butir §10.14 "dukungan x-delivery-limit" =
+  **terverifikasi**; batas 10 = maksimal 11 kali pengiriman). Izin `efn-bff` sesuai.
+- Lint: shellcheck (bash + sh) OK, actionlint 1.7.7 OK, yamllint OK (warning panjang baris pola lama), hadolint OK,
+  checkov 3.3.21 (argumen security.yml) 0 FAILED, promtool 38 rule OK, amtool OK, `haproxy -c` OK,
+  `docker compose config -q` dev/prod OK, secrets compose (+payment +online-fnb) == secrets.list, prod hanya publish
+  traefik, `check-encryption.sh` OK (jq dalam container; host tanpa jq), `test-promtail-redaction.sh` 79 entri OK.
+
+## G17.4 Belum / untuk lead
+- **Staging/prod:** terbitkan ulang intermediate PKI sebelum deploy G17; isi GitHub Environment
+  `ODOO_API_KEY_ONLINE_RTL`, `ODOO_API_KEY_ONLINE_FNB` (boleh `disabled`), `ODOO_ONLINE_EVENT_HMAC`.
+- ~~Config rilis `ONLINE_*`, `.env.example`, indeks runbook~~ → selesai di G17.5.
+- BFF: heartbeat `EFN_ONLINE_RECON {"status":"ok|error",…}` (konteks logger `Online*`, level LOG/ERROR) belum ada di
+  kode BFF — tanpa itu `EfnOnlineReconDeadman` tidak aktif (aman, tetapi buta). Gauge refund terbuka per status
+  diusulkan. Placeholder secret `disabled` ditolak BFF (terlalu pendek) saat kanal aktif — dev memakai
+  `ODOO_ONLINE_MOCK` atau key nyata.
+- Uji gateway belum di CI (butuh stack + Odoo); CI hanya `haproxy -c`. Respons 200 dari E-28 terpasang belum diuji.
+- `EfnOdooRpcGatewayDenied` menyala di dev setelah `test-gateway.sh` (sengaja).
+- Odoo test CI: `efn_online_order efn_setup_online` ditambahkan ke `EFN_TEST_MODULES` (dilewati bila belum ada).
+
+## G17.5 Lanjutan (batas file diperluas lead): config rilis online
+- `scripts/lib/deploy-validate.sh`: 12 variabel (`ONLINE_ENABLED`, `ONLINE_CATALOG_ENABLED`, `ONLINE_CHANNELS`,
+  `ONLINE_FULFILMENTS`, 7 angka `ONLINE_*`, `ODOO_RPC_TIMEOUT_MS`) masuk `EFN_RELEASE_CONFIG_VARS`. Validasi: boolean
+  `true|false`; kanal `^[A-Z][A-Z0-9-]{1,15}` (≤ 8, koma); fulfilment allowlist `pickup|delivery`; angka bulat tanpa
+  nol depan dengan rentang (timeout bayar & TTL quote 60..3600, order terbuka 1..20, sinkron katalog 60..86400,
+  kode ambil 1..30 hari, retensi 1..3650 hari, `ODOO_RPC_TIMEOUT_MS` 1000..30000 = di bawah timeout gateway 30 s).
+  Production `ONLINE_ENABLED=true` hanya dengan `PAYMENT_PROVIDER` xendit|midtrans. `EFN_DEV_ONLY_SWITCHES`
+  (`ODOO_ONLINE_MOCK`, `EFN_PAYMENT_SIMULATOR`) ditolak bila bukan false di staging/production (jalur manual), dan
+  sebagai kunci manifest tetap ditolak skema (kunci tidak dikenal).
+- `scripts/deploy.sh` (dibutuhkan agar config sampai ke compose): baris `.env` `ONLINE_*` (default mati, angka kosong =
+  default compose); `ONLINE_ENABLED=true` → setiap kanal wajib punya key non-placeholder; kanal `FNB` → overlay
+  `docker-compose.online-fnb.yml` (kanal brand `FNB-<X>` butuh overlay baru — dicatat di komentar).
+- `.github/workflows/deploy.yml`: `CFG_ONLINE_*` + `CFG_ODOO_RPC_TIMEOUT_MS` dari GitHub variables (default
+  `false`/`RTL`/`pickup`, angka kosong).
+- `infra/compose/.env.example`: blok G17 dengan komentar rentang (diverifikasi `docker compose --env-file .env.example
+  config`: komentar inline tidak ikut nilai).
+- `docs/runbooks/README.md`: 4 baris alert (Prometheus + Loki), 2 prosedur, baseline hardening `odoo-rpc-gateway`.
+  `online-orders.md`: kill switch staging/prod via config rilis + syarat menyalakan di production.
+- `scripts/host/test-efn-deploy.sh`: +14 kasus (88–101: online prod tanpa provider nyata ditolak, provider nyata
+  diterima, boolean/kanal/fulfilment/angka/rentang tidak valid ditolak, default diterima, mock/simulator ditolak,
+  kunci manifest `ODOO_ONLINE_MOCK` ditolak). **PASS=101 FAIL=0** (container python:3.12-bookworm seperti CI).
+- Ulang validasi: shellcheck (seluruh `scripts/*.sh scripts/lib scripts/host` + infra) OK (SC2015 baru di deploy.sh
+  diperbaiki), actionlint OK, yamllint 0 error, checkov 0 FAILED, compose config dev/prod OK, `check-encryption.sh` OK.
+- Tambahan lead #2: `07-platform-online.sql` masuk daftar migrasi WAJIB `deploy.sh` (bundel tanpa 07 = deploy gagal);
+  dev `api-gateway` `ONLINE_ENABLED=true` + `ONLINE_CATALOG_ENABLED=true` (render prod tetap false; `ODOO_ONLINE_MOCK`
+  absen di dev dan prod). Validasi: compose config dev/prod OK, check-encryption OK, shellcheck OK, efn-deploy 101/101.
+  Container `api-gateway` dev BELUM di-recreate: perlu key RTL nyata di `secrets/odoo_api_key_online_rtl.txt` (runbook
+  odoo-online-api-key §1, setelah E-28 + user teknis `efn_online_rtl` ada) dan migrasi 07 di volume dev lama.
+
+## G17.11 Sizing pilot opsi B (keputusan pemilik proyek 10 Okt 2026)
+- `docker-compose.prod.yml`: gateway `ODOO_RPC_MAXCONN ${..:-2}`; api-gateway `ODOO_RPC_PUBLIC_MAX_CONCURRENCY ${..:-1}`,
+  `ODOO_RPC_SAGA_MAX_CONCURRENCY ${..:-1}`. Base compose: kedua pool `${..:-2}` (dev 2 + 2 = maxconn 4). Render tanpa
+  .env: dev 4/2/2, prod 2/1/1.
+- `deploy-validate.sh`: kedua pool masuk `EFN_RELEASE_CONFIG_VARS` (rentang 1..16) + aturan PUBLIC + SAGA ≤ MAXCONN
+  (default efektif prod 2/1/1); `deploy.sh` `.env`; `deploy.yml` `CFG_ODOO_RPC_{PUBLIC,SAGA}_MAX_CONCURRENCY`;
+  `.env.example`; runbook `online-orders.md#sizing-worker` (keputusan opsi B ditandai, tabel skenario + pool).
+- Uji: efn-deploy **109/109** (+6 kasus 104–109), compose config dev/prod, check-encryption, shellcheck 0.9.0, actionlint OK.
+- Catatan: prod 2 replika BFF → permintaan paralel maks. 2 × (1+1) = 4 ke gateway; Odoo tetap maks. 2 koneksi online,
+  sisanya antre/503 di gateway (aturan per replika sesuai instruksi lead; pertimbangkan replika BFF 1 atau aturan
+  replika × pool ≤ maxconn bila antre sering).
+
+## G17.10 Perbaikan CI PR #36 (HEAD a522da6), 10 Okt 2026
+- **ruff 0.16.10:** `services/odoo/addons/efn_setup_company/tests/__init__.py` (I001, import digabung; perilaku sama).
+- **shellcheck 0.9.0 (versi CI):** `scripts/smoke/run-e2e-smoke.sh` SC2001 ×2 → helper `nomsg()` (`sed -E`, perilaku
+  sama: isi `message` Odoo disamarkan di detail check). CI kini juga shellcheck `test-gateway-load.sh`.
+- **gitleaks 8.24.3:** 1 FP `services/superapp-web/tests/online-routes.test.ts:270` (header Idempotency-Key
+  buatan klien, fixture Vitest) → `.gitleaksignore` + alasan. Bukan secret. Re-scan rentang PR: no leaks.
+- **semgrep 1.179.0:** 1 FP `efn_online_event_outbox.py:222` (log nama env var HMAC, bukan nilai) → `nosemgrep` +
+  alasan (pola sama dengan efn_kds_station.py). Re-scan penuh `--error`: rc 0.
+- **Trivy 0.69.3 image postgres:** CVE baru HIGH di binary rilis WAL-G v3.0.9 (stdlib Go 1.25.11 CVE-2026-78667/
+  78669/97031, x/net 0.58.0 CVE-2026-78669) → **diperbaiki**: WAL-G dibangun dari source tag v3.0.9 (commit
+  3e49318 diverifikasi) dengan Go 1.27.2 + x/net 0.60.0 + grpc 1.83.2, tag `libsodium`. Trivy bersih (hanya FP lama
+  CVE-2021-38599 yang sudah disetujui); **10 pengecualian WAL-G G16 dihapus** dari `.trivyignore.yaml`. Uji fungsional:
+  `wal-g --version` v3.0.9, `efn-walg backup-list` + `wal-fetch` (dekripsi libsodium) terhadap backup dev OK.
+- **Trivy image minio:** x/net 0.59.0 (CVE-2026-78669) di `silo` & `mc` → `go get golang.org/x/net@v0.60.0` sebelum build;
+  Trivy bersih; versi biner tetap (RELEASE.2026-09-16, commit sama).
+- hadolint, checkov 0 FAILED, actionlint OK. Tidak ada pengecualian baru. Image dev `efn/postgres:dev` & `efn/minio:dev`
+  di-tag ulang dari build baru; container dev belum di-recreate.
+
+## G17.9 Re-review G17: SEC-107 (L-19c) + SEC-108 (L-19e) di wrapper
+- **Peran:** grup host `efn-cs-approver` terpisah dari `efn-cs`; wrapper menetapkan `EFN_CS_ROLE=cs|approver` dari
+  keanggotaan grup (env pemanggil ditimpa); `online-refund-approve` hanya peran approver; akun di kedua grup ditolak
+  untuk semua subcommand ("satu orang satu peran").
+- **Alasan via stdin:** `--reason` di argv ditolak; wrapper membaca satu baris stdin (prompt bila TTY; CR akhir
+  dibuang; tanpa karakter kontrol; 3..800 byte) dan meneruskannya lewat `docker exec -i` stdin tanpa flag `--reason`
+  (**kontrak untuk BFF: CLI membaca alasan dari stdin bila `--reason` tidak diberikan**; BFF belum mengimplementasikan
+  saat ini — perlu dicek di laporan BFF/integrasi). sudoers: `Cmnd_Alias`, `%efn-cs, %efn-cs-approver`,
+  `env_reset, !setenv, !log_input, !log_output`.
+- **Loki:** `promtail-journal.yml` mengirim `efn-online-cs` HANYA bila `_UID=0` (field journald tepercaya; user host
+  lain tidak bisa memalsukan) → `service="host-efn-online-cs"`. Rule baru grup `efn-online-cs`:
+  `EfnOnlineCsDeniedRepeated` (≥ 3 DITOLAK per aktor / 15 m), `EfnOnlineCsDualRole`, `EfnOnlineCsRefundVolumeHigh`
+  (> 10/jam, PLACEHOLDER). Approve di luar jam kerja tidak dibuat (LogQL tanpa fungsi jam).
+- **Uji:** `test-efn-online-cs.sh` 45/45 (peran, dua grup, approve oleh cs, alasan stdin literal/kosong/pendek/tab/
+  > 800 byte/multi-baris, `--reason` argv ditolak, journald tanpa alasan); promtail redaksi 83 entri OK (fixture baris
+  wrapper utuh di pipeline docker + journal), `-check-syntax` OK; query LogQL rule baru diparse Loki (status success)
+  dan dievaluasi ruler. shellcheck, actionlint, yamllint 0 error, checkov 0 FAILED, compose dev/prod, check-encryption OK.
+- Runbook `online-orders.md#cli-cs` (peran, larangan dua grup + cek `comm`, sudoers baru, alasan via stdin, alert),
+  `host-journal-loki.md`, indeks `README.md`.
+
+## G17.8 SEC-98 (L-16d): wrapper host `efn-online-cs`
+- `scripts/host/efn-online-cs` (root, dipasang manual Superadmin seperti efn-deploy): wajib root lewat sudo,
+  `SUDO_USER` valid (bukan root, konsisten dengan `SUDO_UID`), anggota grup `efn-cs`; `EFN_CS_OPERATOR`=SUDO_USER dan
+  `EFN_CS_HOST`=hostname SELALU ditimpa; hanya `online-refund|online-refund-approve|online-refund-settle|online-resolve`
+  + flag allowlist per subcommand, UUID/enum/pola/panjang divalidasi, tanpa karakter kontrol/flag ganda/argumen posisi;
+  argv ke `docker exec <api-gateway project efn> node dist/cli/<cmd>.js` (tanpa shell); journald `efn-online-cs`
+  MULAI/SELESAI/DITOLAK dengan aktor, host, cmd, id, rc — tanpa `--reason` dan `--provider-ref`; rc CLI diteruskan.
+- `scripts/host/test-efn-online-cs.sh`: 35 kasus (docker/logger palsu, container sekali pakai) **PASS=35 FAIL=0**;
+  CI job infra: langkah baru + shellcheck `scripts/host/efn-online-cs`. shellcheck OK.
+- Runbook `online-orders.md#cli-cs`: pasang (install + sha256, grup `efn-cs`, sudoers `NOPASSWD` + `env_reset,
+  !setenv, log_output`, `visudo -c`), pemakaian 4 subcommand, jejak journald, cabut akses.
+- Catatan untuk BFF: pemisahan tugas approve ≠ pembuat refund belum ditegakkan kode (hanya tercatat) — kini prosedural.
+- Belum: uji dengan sudo + docker asli di host staging.
+
+## G17.7 Review r10 SEC-96 (L-16b): batas koneksi gateway → Odoo
+- `haproxy.cfg`: `maxconn "${ODOO_RPC_MAXCONN}"` (dari 32 → default **4**; env tak diset = HAProxy gagal parse =
+  fail-closed), `timeout queue 2s`, antrean frontend dibatasi 16 (`queue(odoo) ge 16` → `503` seketika, `why=busy`),
+  `http-error 503` JSON + `X-EFN-Gateway-Error: unavailable` (dibedakan dari `X-EFN-Gateway-Deny`), log + `%Tw`.
+- Konfigurasi: `entrypoint.sh` validasi 1..16 (default 4); compose `ODOO_RPC_MAXCONN: ${ODOO_RPC_MAXCONN:-4}`;
+  deploy-validate (+ rentang 1..16), deploy.sh `.env`, deploy.yml `CFG_ODOO_RPC_MAXCONN`, `.env.example`, CI `haproxy -c`
+  dengan env. Loki `EfnOdooRpcGatewayDenied` mengecualikan `why=busy`.
+- Runbook `online-orders.md#sizing-worker`: aturan `ODOO_WORKERS ≥ POS + ODOO_RPC_MAXCONN`. **Temuan:** prod
+  `ODOO_WORKERS=6` + maxconn 4 menyisakan 2 worker untuk POS → sebelum online prod: workers 9 (4 CPU) atau maxconn 2
+  (keputusan lead/klien; compose prod tidak diubah).
+- Verifikasi: `test-gateway.sh` 97/97; uji beban baru `test-gateway-load.sh 300 200` → 150 dilayani Odoo (antre maks.
+  90–123 ms), 150 × `503 unavailable`, 0 status lain, gateway tetap healthy; efn-deploy 103/103 (+2 kasus maxconn);
+  shellcheck, actionlint, yamllint (0 error), checkov 0 FAILED, compose dev/prod, check-encryption OK.
+- Temuan sampingan: Odoo menjawab `HTTP/1.0`; curl paralel lalu mengirim HTTP/1.0 → ditolak gateway (`why=target`).
+  BFF (undici) tidak terdampak; uji beban memakai `--http1.1` + `Connection: close`.
+
+## G17.6 Temuan QA G17-QA-05 (watch BFF dev di Windows)
+- **Penyebab `unhealthy` sebelum integrasi (dari log Loki):** setelah recreate 14:20 (9 Okt) `nest start --watch`
+  mengompilasi `src/` saat paket BFF setengah diedit → `Found 4 errors` (MockGateway belum punya `refund`, TS2420/2741/
+  2322) → app tidak start (tidak ada listener :3000) → healthcheck gagal. Perbaikan file di host tidak terdeteksi karena
+  Docker Desktop (Windows) tidak meneruskan event inotify dari bind mount, jadi container tetap unhealthy sampai
+  di-recreate 15:38.
+- **Perbaikan (hanya `docker-compose.dev.yml`):** env resmi TypeScript `TSC_WATCHFILE=DynamicPriorityPolling` +
+  `TSC_WATCHDIRECTORY=RecursiveDirectoryUsingDynamicPriorityPolling` di api-gateway dev (watcher `nest --watch` = API
+  watch TypeScript → polling). Superapp-web dev belum punya pola polling (tidak ada yang bisa ditiru). Compose prod tidak
+  diubah.
+- **Verifikasi nyata:** recreate api-gateway → healthy ±55 s; tambah satu baris komentar di `src/main.ts` → `File change
+  detected` ±1 s, app start ulang (`successfully started`, ±4 s); file dikembalikan persis (`git diff` bersih) → reload
+  lagi; status akhir healthy. compose config dev OK, check-encryption OK.

@@ -6,9 +6,11 @@ import {
   CreateQrisResult,
   IntentRef,
   PaymentGateway,
+  PaymentOperationUnsupportedError,
   PaymentProviderError,
   PaymentStatus,
   ProviderStatus,
+  RefundOutcome,
   WebhookEvent,
   WebhookRequest,
   WebhookVerifyResult,
@@ -128,6 +130,11 @@ export class MidtransGateway implements PaymentGateway {
     if (!res.ok) throw new PaymentProviderError(`Midtrans cancel HTTP ${res.status}`);
     const j = (await res.json()) as Record<string, unknown>;
     return { status: mapMidtransStatus(j.transaction_status) };
+  }
+
+  /** §10.7: refund belum didukung kerangka adapter (menunggu ADR-016 + uji sandbox) → BFF menandai manual_required. */
+  async refund(): Promise<RefundOutcome> {
+    throw new PaymentOperationUnsupportedError('Midtrans: refund belum didukung adapter (ADR-016)');
   }
 
   verifyWebhook(req: WebhookRequest): WebhookVerifyResult {

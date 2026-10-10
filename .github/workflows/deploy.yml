@@ -254,6 +254,27 @@ jobs:
           # K-7: endpoint migrasi BFF; hanya `true` sementara selama jendela migrasi (default false)
           CFG_MIGRATION_ENABLED: ${{ vars.MIGRATION_ENABLED || 'false' }}
           CFG_METABASE_ADMIN_EMAIL: ${{ vars.METABASE_ADMIN_EMAIL }}
+          # G17 penjualan online (docs/04 §10.13). Default MATI; production ONLINE_ENABLED=true butuh PAYMENT_PROVIDER
+          # xendit|midtrans + API key kanal nyata (deploy-validate / deploy.sh). Kosong = default compose (PLACEHOLDER).
+          CFG_ONLINE_ENABLED: ${{ vars.ONLINE_ENABLED || 'false' }}
+          CFG_ONLINE_CATALOG_ENABLED: ${{ vars.ONLINE_CATALOG_ENABLED || 'false' }}
+          CFG_ONLINE_CHANNELS: ${{ vars.ONLINE_CHANNELS || 'RTL' }}
+          CFG_ONLINE_FULFILMENTS: ${{ vars.ONLINE_FULFILMENTS || 'pickup' }}
+          CFG_ONLINE_PAYMENT_TIMEOUT_SECONDS: ${{ vars.ONLINE_PAYMENT_TIMEOUT_SECONDS }}
+          CFG_ONLINE_QUOTE_TTL_SECONDS: ${{ vars.ONLINE_QUOTE_TTL_SECONDS }}
+          CFG_ONLINE_MAX_OPEN_ORDERS_PER_MEMBER: ${{ vars.ONLINE_MAX_OPEN_ORDERS_PER_MEMBER }}
+          CFG_ONLINE_CATALOG_SYNC_SECONDS: ${{ vars.ONLINE_CATALOG_SYNC_SECONDS }}
+          CFG_ONLINE_PICKUP_CODE_MAX_DAYS: ${{ vars.ONLINE_PICKUP_CODE_MAX_DAYS }}
+          CFG_ONLINE_ORDER_MEMBER_LINK_DAYS: ${{ vars.ONLINE_ORDER_MEMBER_LINK_DAYS }}
+          CFG_ONLINE_EVENT_RETENTION_DAYS: ${{ vars.ONLINE_EVENT_RETENTION_DAYS }}
+          CFG_ONLINE_ADMIN_AUDIT_RETENTION_DAYS: ${{ vars.ONLINE_ADMIN_AUDIT_RETENTION_DAYS }}
+          CFG_ODOO_RPC_TIMEOUT_MS: ${{ vars.ODOO_RPC_TIMEOUT_MS }}
+          # SEC-96 / L-16b: koneksi gateway -> Odoo = worker Odoo yang disisihkan untuk online (kosong = 4)
+          CFG_ODOO_RPC_MAXCONN: ${{ vars.ODOO_RPC_MAXCONN }}
+          # Sizing pilot opsi B (10 Okt 2026): kosong = default overlay prod (maxconn 2, pool publik 1 + saga 1).
+          # deploy-validate menolak PUBLIC + SAGA > MAXCONN.
+          CFG_ODOO_RPC_PUBLIC_MAX_CONCURRENCY: ${{ vars.ODOO_RPC_PUBLIC_MAX_CONCURRENCY }}
+          CFG_ODOO_RPC_SAGA_MAX_CONCURRENCY: ${{ vars.ODOO_RPC_SAGA_MAX_CONCURRENCY }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/efn-release"

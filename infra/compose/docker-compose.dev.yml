@@ -96,8 +96,19 @@ services:
       APP_ENV: dev
       # `nest start --watch` (tsc) butuh heap > default ~250 MB -> OOM pada limit 512M base (gelombang 7)
       NODE_OPTIONS: --max-old-space-size=1024
+      # G17-QA-05: Docker Desktop (Windows) tidak meneruskan event inotify dari bind mount ./src -> `nest start --watch`
+      # (TypeScript watch API) tidak pernah melihat perubahan; setelah satu kompilasi gagal (mis. 14:20 9 Okt: 4 error
+      # TS saat file BFF setengah diedit) app tidak pernah start ulang -> container `unhealthy` sampai di-recreate.
+      # Watcher TypeScript dipaksa polling (env resmi ts.sys, hanya dev; produksi tidak memakai watch).
+      TSC_WATCHFILE: DynamicPriorityPolling
+      TSC_WATCHDIRECTORY: RecursiveDirectoryUsingDynamicPriorityPolling
       WHATSAPP_ENABLED: "false"
       PAYMENT_PROVIDER: mock
+      # G17: penjualan online AKTIF di dev terhadap E-28 nyata lewat odoo-rpc-gateway (ODOO_ONLINE_MOCK sengaja tidak
+      # diset). Butuh secrets/odoo_api_key_online_rtl.txt berisi key nyata (docs/runbooks/odoo-online-api-key.md §1);
+      # placeholder `disabled` -> BFF menolak konfigurasi kanal. Base/prod tetap default false.
+      ONLINE_ENABLED: "true"
+      ONLINE_CATALOG_ENABLED: "true"
       # G13c: rekonsiliasi loyalty tiap 5 menit di dev (default 1 jam) agar heartbeat EFN_LOYALTY_RECON & anomali
       # rekonsiliasi teramati oleh smoke dalam satu run.
       LOYALTY_RECON_INTERVAL_MS: "300000"
@@ -124,6 +135,8 @@ services:
     environment:
       NODE_ENV: development
       APP_ENV: dev
+      # G17: simulator pembayaran online (QR mock) HANYA dev; base = "false", render prod dicek check-encryption.sh
+      EFN_PAYMENT_SIMULATOR: "true"
       # Dev via https://app.efn.local (Traefik) -> cookie Secure tetap jalan; COOKIE_INSECURE diabaikan di production.
     volumes:
       - ../../services/superapp-web/app:/app/app:ro

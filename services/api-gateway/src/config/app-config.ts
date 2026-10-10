@@ -197,6 +197,8 @@ export class AppConfig {
       if (!this.str('WHATSAPP_PHONE_NUMBER_ID')) problems.push('WHATSAPP_PHONE_NUMBER_ID belum dikonfigurasi');
     }
     if (!this.str('PG_HOST') && !this.str('DATABASE_URL')) problems.push('PG_HOST (atau DATABASE_URL) belum dikonfigurasi');
+    // Fase 3 (docs/04 §10.13): mock json2 ditolak di production; secret kanal & HMAC event wajib bila online aktif
+    problems.push(...this.onlineStartupProblems());
     if (problems.length > 0) throw new ConfigError(`Konfigurasi tidak lengkap: ${problems.join('; ')}`);
   }
 
@@ -230,6 +232,10 @@ export class AppConfig {
     });
     attempt(() => {
       if (this.httpsServerOptions === null) plaintext.push('BFF HTTP server');
+    });
+    // §10.4.1: mTLS ke odoo-rpc-gateway wajib bila kanal online/katalog aktif dan bukan stub dev (tanpa fallback plaintext)
+    attempt(() => {
+      if ((this.onlineEnabled || this.onlineCatalogEnabled) && !this.odooOnlineMock) void this.odooRpcTls;
     });
     if (problems.length > 0) throw new ConfigError(`Konfigurasi TLS tidak valid: ${problems.join('; ')}`);
     return { plaintextChannels: plaintext };
@@ -1234,6 +1240,294 @@ export class AppConfig {
   get midtransQrisAcquirer(): string {
     return this.str('MIDTRANS_QRIS_ACQUIRER') ?? 'gopay';
   }
+
+  // ───────────── Fase 3 — penjualan online (docs/04 §10.13, ADR-034 Proposed) ─────────────
+  /**
+   * Kill switch kanal online (§10.1): `false` → cart/quote/order `503 online_unavailable`. Default `false` di SEMUA
+   * lingkungan (kontrak: production default false; fail safe — dev/staging menyalakan eksplisit lewat env compose).
+   */
+  get onlineEnabled(): boolean {
+    return this.bool('ONLINE_ENABLED', false);
+  }
+  /** Katalog publik diatur terpisah (§10.1). Default = nilai `ONLINE_ENABLED`. */
+  get onlineCatalogEnabled(): boolean {
+    return this.bool('ONLINE_CATALOG_ENABLED', this.onlineEnabled);
+  }
+  /** Kanal aktif di BFF (`ONLINE_CHANNELS=RTL`), format `channel_code` §10.2. */
+  get onlineChannels(): string[] {
+    const raw = this.str('ONLINE_CHANNELS') ?? 'RTL';
+    const out = [...new Set(raw.split(/[\s,;]+/).filter((s) => s.length > 0))];
+    if (out.length === 0 || out.length > 20 || out.some((c) => !ONLINE_CHANNEL_RE.test(c))) {
+      throw new ConfigError('ONLINE_CHANNELS harus daftar kode kanal ^[A-Z][A-Z0-9-]{1,15}$');
+    }
+    return out;
+  }
+  /** Fulfilment yang diizinkan BFF (`ONLINE_FULFILMENTS=pickup`). `delivery` ditunda (Q-ON3). */
+  get onlineFulfilments(): ('pickup' | 'delivery')[] {
+    const raw = this.str('ONLINE_FULFILMENTS') ?? 'pickup';
+    const out = [...new Set(raw.split(/[\s,;]+/).filter((s) => s.length > 0))];
+    if (out.length === 0 || out.some((f) => f !== 'pickup' && f !== 'delivery')) {
+      throw new ConfigError('ONLINE_FULFILMENTS hanya boleh berisi pickup|delivery');
+    }
+    return out as ('pickup' | 'delivery')[];
+  }
+  /** Batas bayar (§10.1, PLACEHOLDER 15 menit). Odoo `payment_timeout_minutes` ≥ nilai ini + 10 menit. */
+  get onlinePaymentTimeoutSeconds(): number {
+    return this.int('ONLINE_PAYMENT_TIMEOUT_SECONDS', 900, 60, 3600);
+  }
+  get onlineQuoteTtlSeconds(): number {
+    return this.int('ONLINE_QUOTE_TTL_SECONDS', 600, 30, 1800);
+  }
+  get onlineMaxOpenOrdersPerMember(): number {
+    return this.int('ONLINE_MAX_OPEN_ORDERS_PER_MEMBER', 3, 1, 50);
+  }
+  /** Interval sinkron katalog (detik). 0 = job mati (test). */
+  get onlineCatalogSyncSeconds(): number {
+    return this.int('ONLINE_CATALOG_SYNC_SECONDS', 300, 0, 86_400);
+  }
+  get onlinePickupCodeMaxDays(): number {
+    return this.int('ONLINE_PICKUP_CODE_MAX_DAYS', 7, 1, 90);
+  }
+  /** Retensi tautan member di order (§10.8.3, usulan menunggu DPO, L-5). */
+  get onlineOrderMemberLinkDays(): number {
+    return this.int('ONLINE_ORDER_MEMBER_LINK_DAYS', 730, 30, 3650);
+  }
+  /**
+   * Retensi `platform.online_admin_audit` (audit CLI CS). Default 400 hari = USULAN (≥ siklus audit tahunan + margin),
+   * menunggu keputusan DPO (Q-P19). Baris memuat aktor staf `<user>/<host>` dan alasan tersamarkan.
+   */
+  get onlineAdminAuditRetentionDays(): number {
+    return this.int('ONLINE_ADMIN_AUDIT_RETENTION_DAYS', 400, 30, 3650);
+  }
+  get onlineEventRetentionDays(): number {
+    return this.int('ONLINE_EVENT_RETENTION_DAYS', 180, 7, 3650);
+  }
+  /** Interval sweeper kedaluwarsa (§10.6.5: 30 s). 0 = mati (test). */
+  get onlineSweepIntervalMs(): number {
+    return this.int('ONLINE_SWEEP_INTERVAL_MS', 30_000, 0, 3_600_000);
+  }
+  /** Interval rekonsiliasi saga (§10.6.5: 5 menit). 0 = mati. */
+  get onlineReconIntervalMs(): number {
+    return this.int('ONLINE_RECON_INTERVAL_MS', 300_000, 0, 24 * 3_600_000);
+  }
+  /** Interval rekonsiliasi pull `efn_online_status` (§10.6.5: 15 menit). 0 = mati. */
+  get onlineStatusReconIntervalMs(): number {
+    return this.int('ONLINE_STATUS_RECON_INTERVAL_MS', 900_000, 0, 24 * 3_600_000);
+  }
+  /** Interval job retensi online (§10.8.3). 0 = mati. Default 1 jam. */
+  get onlineRetentionIntervalMs(): number {
+    return this.int('ONLINE_RETENTION_INTERVAL_MS', 3_600_000, 0, 24 * 3_600_000);
+  }
+  /**
+   * Rate limit §10.3.1 (PLACEHOLDER): `ONLINE_RL_<NAMA>_LIMIT` & `ONLINE_RL_<NAMA>_WINDOW_SECONDS`.
+   * Nama: CATALOG, STOCK, CART, QUOTE, CHECKOUT, ORDERS, PICKUP, CANCEL, EVENTS.
+   */
+  onlineRateLimit(name: OnlineRateLimitName): { limit: number; windowSeconds: number } {
+    const def = ONLINE_RL_DEFAULTS[name];
+    return {
+      limit: this.int(`ONLINE_RL_${name}_LIMIT`, def[0], 1, 1_000_000),
+      windowSeconds: this.int(`ONLINE_RL_${name}_WINDOW_SECONDS`, def[1], 1, 86_400),
+    };
+  }
+  get minioCatalogBucket(): string {
+    const v = this.str('MINIO_CATALOG_BUCKET') ?? 'catalog';
+    if (!/^[a-z0-9][a-z0-9.-]{2,62}$/.test(v)) throw new ConfigError('MINIO_CATALOG_BUCKET tidak valid');
+    return v;
+  }
+
+  /**
+   * L-7: stub json2 (`ODOO_ONLINE_MOCK=true`) HANYA untuk dev/test. Fail-closed: diizinkan bila `APP_ENV` ∈ {dev,test},
+   * atau `APP_ENV` kosong dengan `NODE_ENV` ∈ {development,test}. Selain itu (production, staging, NODE_ENV kosong) →
+   * ConfigError (gagal start).
+   */
+  get odooOnlineMock(): boolean {
+    const on = this.bool('ODOO_ONLINE_MOCK', false);
+    if (!on) return false;
+    const appEnv = this.str('APP_ENV');
+    const devLike = appEnv !== undefined ? appEnv === 'dev' || appEnv === 'test' : this.nodeEnv === 'development' || this.nodeEnv === 'test';
+    if (!devLike || this.isProductionDeployment) {
+      throw new ConfigError('ODOO_ONLINE_MOCK=true hanya untuk APP_ENV=dev/test; ditolak di staging/production (L-7)');
+    }
+    return true;
+  }
+  /** §10.4.1: `ODOO_RPC_URL=https://odoo-rpc-gateway:8443` — wajib https (tanpa fallback plaintext, §7.1). */
+  get odooRpcUrl(): URL {
+    const raw = this.str('ODOO_RPC_URL') ?? 'https://odoo-rpc-gateway:8443';
+    let u: URL;
+    try {
+      u = new URL(raw);
+    } catch {
+      throw new ConfigError('ODOO_RPC_URL bukan URL valid');
+    }
+    if (u.protocol !== 'https:') throw new ConfigError('ODOO_RPC_URL harus https:// (docs/04 §10.4.1)');
+    if (u.username || u.password || u.search || u.hash) throw new ConfigError('ODOO_RPC_URL tidak boleh memuat kredensial/query');
+    return u;
+  }
+  /** Header `X-Odoo-Database` (opsional; gateway tetap memaksa nilainya). */
+  get odooDb(): string | undefined {
+    const v = this.str('ODOO_DB');
+    if (v !== undefined && !/^[A-Za-z0-9_.-]{1,63}$/.test(v)) throw new ConfigError('ODOO_DB tidak valid');
+    return v;
+  }
+  get odooRpcTimeoutMs(): number {
+    return this.int('ODOO_RPC_TIMEOUT_MS', 8000, 500, 60_000);
+  }
+  get odooRpcCatalogTimeoutMs(): number {
+    return this.int('ODOO_RPC_CATALOG_TIMEOUT_MS', 20_000, 1000, 120_000);
+  }
+  /**
+   * SEC-96/SEC-109 (L-16, L-19f): batas konkurensi json2 BFF → Odoo per proses, DIPISAH untuk jalur publik
+   * (katalog/gambar/stok/quote — dipicu pengunjung) dan saga (place/mark_paid/cancel/refund/status). Default 2 + 2
+   * = 4 (≤ `ODOO_RPC_MAXCONN` gateway / worker Odoo untuk kanal online). Lonjakan quote tidak menghabiskan slot saga.
+   * Antrean penuh/menunggu > 2 s → `busy` (503 / retry consumer).
+   */
+  get odooRpcPublicMaxConcurrency(): number {
+    return this.int('ODOO_RPC_PUBLIC_MAX_CONCURRENCY', 2, 1, 64);
+  }
+  get odooRpcSagaMaxConcurrency(): number {
+    return this.int('ODOO_RPC_SAGA_MAX_CONCURRENCY', 2, 1, 64);
+  }
+  /**
+   * SEC-107 (L-19c): refund buatan CS dengan nominal ≥ ambang ini wajib persetujuan approver (`approval_required`).
+   * Default 0 = SEMUA refund CS butuh persetujuan (PLACEHOLDER keputusan Finance).
+   */
+  get onlineCsRefundApprovalMinIdr(): number {
+    return this.int('ONLINE_CS_REFUND_APPROVAL_MIN_IDR', 0, 0, 1_000_000_000);
+  }
+  get odooRpcImageTimeoutMs(): number {
+    return this.int('ODOO_RPC_IMAGE_TIMEOUT_MS', 15_000, 1000, 120_000);
+  }
+  /**
+   * mTLS ke `odoo-rpc-gateway` (§10.4.1, §8.5): CA `ODOO_RPC_CA_FILE` (default CA internal), sertifikat klien CN
+   * `api-gateway` dari `ODOO_RPC_CLIENT_CERT_FILE`/`ODOO_RPC_CLIENT_KEY_FILE` (default `TLS_CERT_FILE`/`TLS_KEY_FILE`
+   * server BFF bila ber-EKU clientAuth). Tidak terbaca → ConfigError (tanpa fallback tanpa sertifikat klien).
+   */
+  get odooRpcTls(): TlsClientOptions & { cert: Buffer; key: Buffer } {
+    const url = this.odooRpcUrl;
+    const base = this.tlsClientOptions('ODOO_RPC_CA_FILE', url.hostname, 'Odoo RPC gateway');
+    const certPath = this.str('ODOO_RPC_CLIENT_CERT_FILE') ?? this.str('TLS_CERT_FILE');
+    const keyPath = this.str('ODOO_RPC_CLIENT_KEY_FILE') ?? this.str('TLS_KEY_FILE');
+    if (!certPath || !keyPath) throw new ConfigError('ODOO_RPC_CLIENT_CERT_FILE/ODOO_RPC_CLIENT_KEY_FILE belum dikonfigurasi (mTLS)');
+    let cert: Buffer;
+    let key: Buffer;
+    try {
+      cert = this.readFile(certPath);
+      key = this.readFile(keyPath);
+    } catch {
+      throw new ConfigError('Sertifikat klien Odoo RPC (ODOO_RPC_CLIENT_CERT_FILE/KEY_FILE) tidak dapat dibaca');
+    }
+    if (!cert.toString('utf8').includes('-----BEGIN CERTIFICATE-----') || !key.toString('utf8').includes('PRIVATE KEY-----')) {
+      throw new ConfigError('Sertifikat klien Odoo RPC bukan PEM yang valid');
+    }
+    return { ...base, cert, key };
+  }
+  /**
+   * API key `/json/2` per kanal (§10.4.1): `ODOO_API_KEY_ONLINE_<CHANNEL>_FILE` → fallback
+   * `${SECRETS_DIR:-/run/secrets}/odoo_api_key_online_<channel huruf kecil>` → literal hanya APP_ENV=dev.
+   * Satu key = satu user teknis = satu PT; tidak pernah dipakai untuk kanal lain.
+   */
+  odooApiKeyOnline(channelCode: string): string {
+    if (!ONLINE_CHANNEL_RE.test(channelCode)) throw new ConfigError('kode kanal tidak valid');
+    const envName = onlineApiKeyEnvName(channelCode);
+    // gen-secrets menulis placeholder `disabled` untuk kanal yang belum punya user teknis; dicek sebelum aturan panjang
+    const raw = this.onlineSecretRaw(envName, `odoo_api_key_online_${channelCode.toLowerCase().replace(/-/g, '_')}`);
+    if (raw !== undefined && raw.trim().toLowerCase() === 'disabled') {
+      throw new ConfigError(`${envName} masih placeholder 'disabled' — kanal ${channelCode} belum boleh aktif (runbook odoo-online-api-key)`);
+    }
+    return this.onlineSecret(envName, `odoo_api_key_online_${channelCode.toLowerCase().replace(/-/g, '_')}`);
+  }
+  /** L-2: secret HMAC event Odoo → BFF (`odoo_online_event_hmac`, env `ODOO_ONLINE_EVENT_HMAC_FILE`). */
+  get odooOnlineEventHmac(): string {
+    const v = this.onlineSecret('ODOO_ONLINE_EVENT_HMAC', 'odoo_online_event_hmac');
+    if (v === this.secretValue('ODOO_BFF_API_KEY')) throw new ConfigError('ODOO_ONLINE_EVENT_HMAC harus berbeda dari ODOO_BFF_API_KEY');
+    return v;
+  }
+
+  private onlineSecretRaw(envName: string, contractName: string): string | undefined {
+    const file = this.str(`${envName}_FILE`);
+    if (file) return this.readSecretFile(file, true, envName);
+    return this.readSecretFile(posix.join(this.str('SECRETS_DIR') ?? '/run/secrets', contractName), false, envName) ?? (this.isDevEnv ? this.str(envName) : undefined);
+  }
+
+  private readonly onlineSecretCache = new Map<string, string>();
+  /** Secret Fase 3 (nama dinamis per kanal — belum di KNOWN_SECRET_FILES); aturan SEC-29 sama dengan `secretValue`. */
+  private onlineSecret(envName: string, contractName: string): string {
+    const cached = this.onlineSecretCache.get(envName);
+    if (cached) return cached;
+    const literal = this.str(envName);
+    if (literal !== undefined && !this.isDevEnv) {
+      throw new ConfigError(`${envName} sebagai env literal ditolak di luar APP_ENV=dev; pakai ${envName}_FILE (SEC-29)`);
+    }
+    const file = this.str(`${envName}_FILE`);
+    let v: string | undefined;
+    if (file) v = this.readSecretFile(file, true, envName);
+    else v = this.readSecretFile(posix.join(this.str('SECRETS_DIR') ?? '/run/secrets', contractName), false, envName) ?? literal;
+    if (!v) throw new ConfigError(`Secret ${envName} belum dikonfigurasi`);
+    if (v.length < MIN_SECRET_LENGTH) throw new ConfigError(`Secret ${envName} terlalu pendek`);
+    this.onlineSecretCache.set(envName, v);
+    return v;
+  }
+
+  /** Validasi konfigurasi online saat start (dipanggil `assertStartupSecrets`). */
+  private onlineStartupProblems(): string[] {
+    const problems: string[] = [];
+    const attempt = (fn: () => void): void => {
+      try {
+        fn();
+      } catch (err) {
+        problems.push(err instanceof Error ? err.message : 'konfigurasi online tidak valid');
+      }
+    };
+    if (!this.isDevEnv) {
+      for (const name of Object.keys(this.env)) {
+        if ((name === 'ODOO_ONLINE_EVENT_HMAC' || /^ODOO_API_KEY_ONLINE_[A-Z0-9_]+$/.test(name)) && this.str(name) !== undefined) {
+          problems.push(`${name} sebagai env literal ditolak di luar APP_ENV=dev; pakai ${name}_FILE (SEC-29)`);
+        }
+      }
+    }
+    for (const getter of [
+      () => this.onlineChannels,
+      () => this.onlineFulfilments,
+      () => this.onlinePaymentTimeoutSeconds,
+      () => this.onlineQuoteTtlSeconds,
+      () => this.onlineMaxOpenOrdersPerMember,
+      () => this.onlineCatalogSyncSeconds,
+      () => this.minioCatalogBucket,
+      () => this.odooOnlineMock,
+    ]) {
+      attempt(() => void getter());
+    }
+    if (problems.length > 0) return problems;
+    if (this.onlineEnabled || this.onlineCatalogEnabled) {
+      attempt(() => void this.odooOnlineEventHmac);
+      if (!this.odooOnlineMock) {
+        attempt(() => void this.odooRpcUrl);
+        for (const ch of this.onlineChannels) attempt(() => void this.odooApiKeyOnline(ch));
+      }
+    }
+    return problems;
+  }
+}
+
+/** `channel_code` (docs/04 §10.2). */
+export const ONLINE_CHANNEL_RE = /^[A-Z][A-Z0-9-]{1,15}$/;
+export type OnlineRateLimitName = 'CATALOG' | 'STOCK' | 'CART' | 'QUOTE' | 'CHECKOUT' | 'ORDERS' | 'PICKUP' | 'CANCEL' | 'EVENTS';
+/** Default §10.3.1 (PLACEHOLDER): [batas, window detik]. EVENTS = pengaman endpoint event Odoo (bukan kontrak). */
+const ONLINE_RL_DEFAULTS: Readonly<Record<OnlineRateLimitName, readonly [number, number]>> = {
+  CATALOG: [120, 60],
+  STOCK: [60, 60],
+  CART: [60, 60],
+  QUOTE: [20, 60],
+  CHECKOUT: [5, 600],
+  ORDERS: [60, 60],
+  PICKUP: [10, 60],
+  CANCEL: [10, 600],
+  EVENTS: [1200, 60],
+};
+
+/** `RTL` → `ODOO_API_KEY_ONLINE_RTL`; `FNB-BAKSO` → `ODOO_API_KEY_ONLINE_FNB_BAKSO`. */
+export function onlineApiKeyEnvName(channelCode: string): string {
+  return `ODOO_API_KEY_ONLINE_${channelCode.replace(/-/g, '_')}`;
 }
 
 /** Entri TRUSTED_PROXIES: kata kunci proxy-addr, atau IPv4/IPv6 dengan prefix opsional (/0..32 atau /0..128). */

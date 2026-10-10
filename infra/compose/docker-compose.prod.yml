@@ -86,10 +86,20 @@ services:
       NODE_ENV: production
       # Wajib eksplisit di staging/prod (deploy.sh menulis .env; production menolak `mock`, docs/04 §8.3)
       PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:?PAYMENT_PROVIDER wajib di-set eksplisit (mock hanya staging)}
+      # Sizing pilot opsi B (keputusan pemilik proyek 10 Okt 2026; runbook online-orders.md#sizing-worker): Odoo 6
+      # worker = POS 4 + online 2 -> gateway ODOO_RPC_MAXCONN 2, pool json2 BFF publik 1 + saga 1 per replika.
+      # Dengan 2 replika BFF, permintaan paralel bisa 4 > 2: kelebihan mengantre di gateway (maks. 2 s lalu 503).
+      ODOO_RPC_PUBLIC_MAX_CONCURRENCY: ${ODOO_RPC_PUBLIC_MAX_CONCURRENCY:-1}
+      ODOO_RPC_SAGA_MAX_CONCURRENCY: ${ODOO_RPC_SAGA_MAX_CONCURRENCY:-1}
     deploy:
       replicas: 2
       resources:
         limits: { cpus: "1", memory: 1G }
+
+  # Filter BFF -> Odoo /json/2: koneksi paralel ke Odoo = worker yang disisihkan untuk online (opsi B pilot: 2 dari 6).
+  odoo-rpc-gateway:
+    environment:
+      ODOO_RPC_MAXCONN: ${ODOO_RPC_MAXCONN:-2}
 
   # Sidecar ghostunnel (network_mode: service:superapp-web) hanya bisa menempel ke SATU container -> replicas 1.
   # Skala horizontal: tambah pasangan service (superapp-web-2 + sidecar) atau TLS native di Next.js (frontend).

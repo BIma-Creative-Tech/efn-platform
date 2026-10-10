@@ -26,6 +26,22 @@ Modul konfigurasi **data-only** (tanpa Python) untuk struktur multi-company EFN 
 - **Tidak ada PB1** dan **tidak ada akun liabilitas PB1/pajak daerah** di CoA template (`account.account-id.csv` 19.0 hanya punya VAT/PPh payable).
 - Template **tidak** men-set `account_price_include` (default CE `tax_excluded`).
 
+### Label pajak ke pelanggan (G17-QA-04, `data/account_tax_label_data.xml`, noupdate: hanya saat install)
+Template `l10n_id` memberi `invoice_label` "12%" pada `tax_ST4` (tarif efektif 11%) dan nama grup berbahasa Inggris ("Non-luxury Good Taxes"). Keduanya tampil ke pelanggan: struk, invoice, katalog & quote online E-28 (label baris = `invoice_label`, label subtotal = nama grup / `tax_totals.group_name`). Modul ini menimpa nilai en_US (bahasa sumber = fallback semua bahasa, termasuk `lang=id_ID` dari BFF selama id_ID belum aktif) di 4 PT:
+
+| Pajak penjualan | `invoice_label` | Grup | Nama grup |
+|---|---|---|---|
+| `tax_ST4`, `tax_ST5` | PPN 11% | `l10n_id_tax_group_non_luxury_goods` | PPN 11% |
+| `tax_ST3`, `tax_ST6` | PPN 12% | `l10n_id_tax_group_luxury_goods` | PPN 12% |
+| `tax_luxury_sales`, `tax_luxury_sales_pemungut_ppn` | PPnBM 20% | `l10n_id_tax_group_stlg` | PPnBM |
+| `tax_ST0`, `tax_ST7` | PPN 0% | `l10n_id_tax_group_0` | PPN 0% |
+| `tax_ST2` | Bebas PPN | `l10n_id_tax_group_exempt` | Bebas PPN |
+| — | — | `default_tax_group` | Pajak |
+
+PB1 PT F&B sudah berlabel `PB1` (grup "PB1 (Pajak Restoran / PBJT)"). Grup dipakai bersama pajak pembelian (nama ikut berubah di vendor bill). Label = PLACEHOLDER yang boleh diubah admin (form Pajak → *Label on Invoices*; form Grup Pajak → *Name*); tarif tetap menunggu konsultan pajak (Q-22, R-L03). DB yang sudah terpasang sebelum 19.0.1.3.0 tidak berubah saat upgrade (noupdate) → isi lewat UI atau langkah satu kali (lihat laporan efn-odoo-functional G17 lanjutan).
+
+**Bila bahasa Indonesia (id_ID) diaktifkan kemudian:** Odoo memuat terjemahan template CoA tanpa menimpa yang sudah ada (`account.chart.template._load_translations`, `overwrite=False`). Karena modul ini hanya mengisi en_US, versi id_ID nama grup menjadi terjemahan l10n_id ("Pajak Barang", "Pajak Barang Mewah", …) dan itu yang terlihat oleh BFF (`lang=id_ID`). Setelah aktivasi id_ID, admin wajib mengisi terjemahan id_ID untuk nama grup & label di atas (ikon bahasa di field). Saat ini id_ID **tidak** dipasang.
+
 ## Model pajak yang dipakai (field terverifikasi 19.0)
 
 | Kebutuhan | Fitur standar | Field |
