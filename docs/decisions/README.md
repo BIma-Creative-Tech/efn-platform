@@ -207,7 +207,7 @@ Sumber: jawaban pemilik proyek atas **semua** pertanyaan terbuka (60 butir, disa
 ### E. UU PDP & retensi
 | # | ID | Jawaban | Dampak | Status | Paket |
 |---|---|---|---|---|---|
-| 22 | Q-P17 | Angka usulan **disetujui**: tautan akun 730 h, event 180 h, keuangan 10 th, kode ambil maks 7 h, cart 7 h + **hapus saat erasure** | Default tetap; `DEL cart:<member_id>` di erasure (±1 jam) | Diputuskan | W-19 |
+| 22 | Q-P17 | Angka usulan **disetujui**: tautan akun 730 h, event 180 h, keuangan 10 th, kode ambil maks 7 h, cart 7 h + **hapus saat erasure** | Default tetap; hapus cart saat erasure **sudah ada sejak G17** (`purgeMemberOnlineRedis`) | Diputuskan | W-19 |
 | 23 | Q-P18 | Penundaan hapus akun sah, **maks 14 hari** | Eskalasi/alert + CS menyelesaikan; setelah 14 h erasure jalan | Diputuskan | **W-18** |
 | 24 | Q-P20 | Vendor payment **wajib DPA** + pemrosesan/penyimpanan **di Indonesia**; data pembayar minimum, tanpa PAN | Kriteria wajib pemilihan vendor (ADR-026) | Diputuskan — perlu data klien (vendor) | — |
 | 35 | Q-P19 | Retensi audit CS **10 tahun** (`ONLINE_ADMIN_AUDIT_RETENTION_DAYS` 400 → **3650**) + SOP alasan tanpa nama pelanggan | Ubah default env | Diputuskan | W-19 |

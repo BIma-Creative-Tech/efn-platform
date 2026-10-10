@@ -522,3 +522,20 @@ Pemilik proyek menjawab semua pertanyaan terbuka (60 butir). Semua jawaban dicat
   - pemodelan service charge sebagai pajak dengan `include_base_amount` di POS 19;
   - aturan PBJT takeaway per Perda (wajib konsultan);
   - nomor pasal UU PDP.
+
+## Gelombang 18 — lanjutan: kontrak privasi L-21, runbook erasure paksa, status PDP v7 (2026-10-10)
+Sumber: laporan efn-bff-engineer dan efn-data-ai-engineer, bagian Gelombang 18. Hanya dokumen; tidak ada commit.
+
+| File | Perubahan |
+|---|---|
+| `docs/04_SERVICE_CONTRACTS.md` | Header v5.1. Isi kontrak baru: L-21 di §10.17, yaitu (a) hapus akun 409 → `?confirm_open_orders=true` → 202 `erasure_deadline`, tunda maks 14 h, eskalasi hari 3/10, lalu erasure paksa; (b) `age_confirmed` 17+; (c) `source_ref` opak; (d) migrasi 08 + env; (e) teks pelanggan menunggu Legal. Penempatan: §3.2 (`age_confirmed`), §8.9 (alur hapus akun), §9.6 setelah K-7 (`source_ref`). §10.8.3: judul "diputuskan 10 Okt", cart dihapus saat erasure, alur DSAR baru. L-4 ditandai "diganti L-21a" |
+| `docs/runbooks/online-orders.md` | Bagian baru `#erasure-paksa`: sinyal hari 3/10/14, `online-erasure-pending` → `online-refund --full` (approver menyetujui) / `online-resolve` (cancel hanya approver) / serah terima setelah verifikasi kanal lain. Kode ambil tidak pernah ditampilkan ke CS. Catatan: subcommand wrapper belum ada |
+| `docs/compliance/PDP_DATA_INVENTORY.md` | §0a "Status kode" diperbarui: Q-P3, P7/6/49, P8, P12, P13, P14 (Metabase), P17 (koreksi: hapus cart sudah sejak G17), P18, P19 = sudah di kode G18. Baris §2.1/§2.4/§3, ringkasan v7, §5 ikut diperbarui. Teks pelanggan ditandai menunggu Legal |
+| `docs/decisions/README.md` | Koreksi baris Q-P17 (hapus cart sudah ada) |
+
+**Belum:**
+- Outbox Odoo GC 10 th dan W-17.
+- Subcommand wrapper `erasure-pending` (devsecops).
+- Smoke E2E BFF G18.
+- Pernyataan usia untuk pendaftaran via kasir POS.
+- `.env` dev lokal masih `CH_MART_RETENTION_YEARS=5`.
