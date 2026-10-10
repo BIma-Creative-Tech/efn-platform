@@ -10,7 +10,7 @@ import { maskMsisdn } from '../common/pii/pii';
 import { reportLoyaltyAnomaly } from '../loyalty/loyalty-anomaly';
 import { LoyaltyService, splitCredit } from '../loyalty/loyalty.service';
 import { expiryFor } from '../pos/pos-loyalty.service';
-import { MigrationMemberDto, OpeningBalanceDto } from './dto/migration.dto';
+import { MigrationMemberDto, OpeningBalanceDto, parseOpaqueSourceRef } from './dto/migration.dto';
 
 export interface MigrationMemberResponse {
   member: 'created' | 'existing';
@@ -40,7 +40,9 @@ const MigrationErrors = {
  *   source_ref sama dengan data berbeda → `409 idempotency_conflict`. Masa berlaku mengikuti
  *   `LOYALTY_POINT_EXPIRY_DAYS` sejak tanggal migrasi (PLACEHOLDER — menunggu Finance/Q-13); bila member berutang,
  *   kredit melunasi utang dulu (sama dengan earn).
- * - Log hanya nomor ter-mask; `source_ref` tidak boleh berisi PII (tanggung jawab skrip migrasi).
+ * - Log hanya nomor ter-mask. W-25 (Q-P13): `source_ref` WAJIB opak (UUID v4 / hex HMAC 32..64, `parseOpaqueSourceRef`)
+ *   — divalidasi di DTO DAN lagi di service (pertahanan berlapis untuk pemanggil internal); selain itu
+ *   `400 invalid_source_ref`. Entri ledger tidak bisa diubah, sehingga id pelanggan lama tidak boleh tersimpan.
  * - SEC-65 (Gelombang 13c): member DAN saldo pembuka ditolak bila subjek sedang/pernah dihapus (DSAR) —
  *   `409 member_deleting` (erasure `scheduled`/`processing`) atau `409 member_erased` (tag di
  *   `platform.erasure_suppression`, masa `ERASURE_SUPPRESSION_DAYS`). Tanpa ini impor ulang file lama menghidupkan
@@ -74,6 +76,7 @@ export class MigrationService {
   }
 
   async importMember(dto: MigrationMemberDto): Promise<MigrationMemberResponse> {
+    if (parseOpaqueSourceRef(dto.sourceRef) !== dto.sourceRef) throw Errors.invalidRequest(); // W-25: hanya bentuk ternormalisasi
     const hash = this.loyalty.hashMember(dto.memberRef);
     return this.db.tx(async (q) => {
       await this.assertNotErased(q, hash, dto.sourceRef, 'member');
@@ -112,6 +115,7 @@ export class MigrationService {
   }
 
   async openingBalance(dto: OpeningBalanceDto): Promise<OpeningBalanceResponse> {
+    if (parseOpaqueSourceRef(dto.sourceRef) !== dto.sourceRef) throw Errors.invalidRequest(); // W-25: hanya bentuk ternormalisasi
     const hash = this.loyalty.hashMember(dto.memberRef);
     const key = `${MIGRATION_SOURCE}:${dto.sourceRef}`;
     const keys = [key, `${key}#2`];

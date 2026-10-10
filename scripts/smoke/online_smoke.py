@@ -83,7 +83,7 @@ def cmd_login():
     off = b.log_offset()
     s, body, _, _ = b.req("POST", "/v1/auth/otp/request", body={"phone": PHONE, "altcha": altcha})
     code = b.wait_otp(b.mask(PHONE), off)
-    s, tok, _, _ = b.req("POST", "/v1/auth/otp/verify", body={"challenge_id": body["challenge_id"], "code": code})
+    s, tok, _, _ = b.req("POST", "/v1/auth/otp/verify", body={"challenge_id": body["challenge_id"], "code": code, "age_confirmed": True})
     st["token"] = tok["access_token"]
     st["phone_masked"] = b.mask(PHONE)
     save(st)
@@ -417,7 +417,11 @@ def cmd_dsar_open():
     s, r3, _, _ = b.req("DELETE", "/v1/me", headers={**auth(st), "X-Step-Up-Token": r2["step_up_token"]})
     b.result(
         "o.dsar_delete_open_online_orders_409",
-        s == 409 and code_of(r3) == "open_online_orders",
+        # W-18 (Q-P18): tanpa ?confirm_open_orders=true tetap 409; teks menyebut batas 14 hari
+        s == 409
+        and code_of(r3) == "open_online_orders"
+        and (r3.get("error") or {}).get("max_defer_days") == 14
+        and "14 hari" in (r3.get("error") or {}).get("message", ""),
         http=s,
         code=code_of(r3),
         body=r3,
@@ -473,7 +477,7 @@ def cmd_web_flow():
         "POST",
         "/api/auth/otp/verify",
         host=host,
-        body={"challenge_id": body["challenge_id"], "code": code},
+        body={"challenge_id": body["challenge_id"], "code": code, "age_confirmed": True},
         headers=origin,
     )
     sess = next((c for c in cookies if c.startswith("efn_session=")), "").split(";")[0]

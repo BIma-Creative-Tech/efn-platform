@@ -1,15 +1,50 @@
-import { Errors } from '../../common/errors/api-error';
+import { ApiError, Errors } from '../../common/errors/api-error';
 import { asRecord, requireInt, requireString } from '../../common/validation';
 import { CompanyCode, isCompanyCode } from '../../loyalty/loyalty.service';
 import { requireMemberRef } from '../../pos/dto/pos.dto';
 
 /** DTO migrasi (docs/04 §9.6 K-7). Validasi manual → 400 `invalid_request` / `invalid_phone`. */
 
-/** `source_ref` = id baris di sistem lama (opak, ASCII tercetak tanpa spasi, ≤ 64). */
+/** UUID versi 4 (acak). v1/v6 (MAC/waktu), v7 (waktu), atau v3/v5 (turunan nama) ditolak. */
+const SOURCE_REF_UUID4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+/** Hex huruf kecil 32..64 (HMAC-SHA256 terpotong ≥ 128 bit, atau penuh 256 bit). */
+const SOURCE_REF_HEX_RE = /^[0-9a-f]{32,64}$/;
+/** Minimal simbol hex berbeda: keluaran HMAC acak 32 hex hampir pasti memuat ≥ 12; pola berulang/padding ditolak. */
+const SOURCE_REF_MIN_DISTINCT = 8;
+
+/**
+ * W-25 (Q-P13, keputusan pemilik proyek 10 Okt 2026): `source_ref` WAJIB opak — entri ledger saldo pembuka tidak dapat
+ * diubah (append-only, 10 th) dan `source_ref` tetap ada setelah akun dihapus, sehingga id pelanggan sistem lama
+ * (nomor HP, nomor pelanggan, email) tidak boleh masuk. Format yang diterima (dinormalkan ke huruf kecil):
+ * - UUID v4 acak, mis. `3f2b6c1e-8a4d-4c2e-9b1f-0a2b3c4d5e6f`; atau
+ * - hex 32..64, mis. `HMAC-SHA256(kunci_migrasi, id_lama)` (kunci dipegang tim migrasi/Finance di luar platform, dibuang
+ *   setelah rekonsiliasi selesai — tanpa kunci, `source_ref` tidak dapat ditautkan ke id lama).
+ * Ditolak (400 `invalid_source_ref`): format lain (termasuk `legacy-001`, nomor HP `62812…`/`0812…`, angka pelanggan,
+ * email), hex yang seluruhnya angka desimal (mis. nomor yang di-padding atau di-hex-kan dari teks angka), atau hex
+ * dengan keragaman simbol rendah (< 8 simbol berbeda).
+ */
+export function parseOpaqueSourceRef(v: unknown): string {
+  if (typeof v !== 'string' || v.length === 0 || v.length > 64) throw invalidSourceRef();
+  const s = v.trim().toLowerCase();
+  if (s.length !== v.length) throw invalidSourceRef();
+  if (SOURCE_REF_UUID4_RE.test(s)) return s;
+  if (!SOURCE_REF_HEX_RE.test(s)) throw invalidSourceRef();
+  if (/^[0-9]+$/.test(s)) throw invalidSourceRef();
+  if (new Set(s).size < SOURCE_REF_MIN_DISTINCT) throw invalidSourceRef();
+  return s;
+}
+
+function invalidSourceRef(): ApiError {
+  return ApiError.of(
+    400,
+    'invalid_source_ref',
+    'source_ref harus opak: UUID v4 acak atau hex 32–64 karakter (HMAC). Nomor HP, nomor pelanggan, atau email tidak diizinkan.',
+  );
+}
+
 function requireSourceRef(o: Record<string, unknown>): string {
-  const v = requireString(o, 'source_ref', 64);
-  if (!/^[\x21-\x7e]{1,64}$/.test(v)) throw Errors.invalidRequest();
-  return v;
+  if (o.source_ref === undefined || o.source_ref === null) throw Errors.invalidRequest();
+  return parseOpaqueSourceRef(o.source_ref);
 }
 
 export interface MigrationConsentDto {

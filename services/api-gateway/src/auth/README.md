@@ -5,7 +5,7 @@ Kontrak: `docs/04` §2 & §3.2. Dipanggil Next.js server-side (token disimpan di
 | Endpoint | Sukses | Gagal |
 |---|---|---|
 | `POST /v1/auth/otp/request` `{ phone }` | `202 { challenge_id, expires_in: 180 }` | `400`, `429`, `503 otp_delivery_failed` |
-| `POST /v1/auth/otp/verify` `{ challenge_id, code }` | `200 { access_token, token_type:"Bearer", expires_in: 3600 }` | `400 { ok:false, reason, attempts_left }`, `429` |
+| `POST /v1/auth/otp/verify` `{ challenge_id, code, age_confirmed: true }` | `200 { access_token, token_type:"Bearer", expires_in: 3600 }` | `400 { ok:false, reason, attempts_left }`, `400 age_confirmation_required` (G18 W-19/Q-P3: `age_confirmed` tidak `true`; dicek sebelum OTP sehingga challenge tidak hangus; pesan menyebut `MEMBER_MIN_AGE` = 17), `400 invalid_request` (`age_confirmed` bukan boolean), `429` |
 | `GET /v1/me` (Bearer) | `200 { member_ref_masked, points_balance }` | `401 unauthorized` |
 
 - Nomor dinormalisasi ke E.164 tanpa `+` (`08xx` → `628xx`). **Hanya nomor Indonesia** `^62[0-9]{8,13}$`; selain itu `400 invalid_phone` (SEC-06). Nomor valid selalu 202 (login = daftar).
@@ -44,3 +44,9 @@ R-S04, R-B06 (1 nomor = 1 akun via OTP), R-L01.
 - **Dampak UX (untuk manajemen & product)**: kondisi normal tidak berubah (level 0 = 500 000 → rata-rata ±1–2,5 s ponsel kelas bawah). Level 1 (×2) ±2–5 s, level 2 (×4) ±4–10 s, level 3 (×8 = cap default 4 000 000) ±8–20 s di ponsel kelas bawah, < 4 s desktop. Siapa yang terkena: (1) satu IP yang sudah memakai ≥ 25 % kuota OTP per 15 menit — termasuk pengguna di belakang **CGNAT operator seluler** atau Wi-Fi publik/kantor yang berbagi IP (≥ 5 permintaan OTP dari IP yang sama dalam 15 menit); (2) semua pengguna saat budget OTP global jam itu ≥ 50 % (indikasi serangan pumping). Kembali normal otomatis di window berikutnya. Pengguna yang berpindah jaringan (Wi-Fi ↔ seluler) di antara verifikasi dan kirim akan mendapat `captcha_required` dan cukup mengulang verifikasi (widget di-reset frontend). Rekomendasi: tampilkan teks "Memverifikasi perangkat…" + progres widget saat level > 0 (frontend, belum).
 - Env: `ALTCHA_HMAC_KEY(_FILE)` (wajib), `ALTCHA_MAX_NUMBER` (500000 = biaya dasar), `ALTCHA_MAX_NUMBER_CAP` (default max(4 000 000, base), ≤ 10 000 000), `ALTCHA_ADAPTIVE` (default `true`), `ALTCHA_TTL_SECONDS` (300), `ALTCHA_CHALLENGE_RL_LIMIT` (120).
 - Risiko dimitigasi: R-S04 (OTP pumping), SEC-06 sisa (bot tanpa proof-of-work), SEC-24 (PII di Redis/AOF). Sisa: proof-of-work memperlambat, bukan mencegah, penyerang ber-CPU besar → budget global & plafon per nomor tetap berlaku.
+
+## G18 — W-19 (Q-P3): usia minimum member 17 tahun
+- Login = daftar, sehingga pernyataan usia diminta di **setiap** verify login Super-App (frontend: checkbox "Saya berusia minimal 17 tahun", tidak dicentang default; kirim `age_confirmed: true`). Tidak ada tanggal lahir yang dikumpulkan (minimisasi data).
+- `platform.member.age_confirmed_at` (migrasi `08-platform-g18-privacy.sql`) diisi saat member dibuat; member lama hasil migrasi/POS dilengkapi sekali saat login Super-App pertama (`WHERE age_confirmed_at IS NULL`), tidak pernah ditimpa. Ikut terhapus bersama baris member saat erasure.
+- `MEMBER_MIN_AGE` (default 17, rentang 17..21) hanya untuk teks pesan.
+- Belum: pendaftaran member oleh kasir POS (W-25, Odoo) — pernyataan usia ditangani SOP/UI kasir (efn-odoo-functional).

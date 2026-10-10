@@ -21,7 +21,7 @@ import { LoyaltyService } from '../loyalty/loyalty.service';
 import { OtpService } from '../otp/otp.service';
 import { AltchaService, solveAltcha } from './altcha.service';
 import { AuthService } from './auth.service';
-import { parseAuthOtpRequest } from './dto/auth.dto';
+import { parseAuthOtpRequest, parseAuthOtpVerify } from './dto/auth.dto';
 
 const PHONE = '6281234567890';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -52,14 +52,14 @@ function setup(overrides: Record<string, string> = {}) {
   const auth = new AuthService(config, otp, limiter, tokens, loyalty, altcha, memberService);
   const captcha = (ip: string | null = null): string => solveAltcha(altcha.createChallenge(ip));
   const request = (phone: string, ip: string | null) => auth.requestOtp({ phone, altcha: captcha(ip) }, ip);
-  return { clock, config, kv, sender, tokens, auth, altcha, members, memberService, cipher, captcha, request };
+  return { clock, config, kv, sender, tokens, auth, altcha, members, memberService, cipher, captcha, request, db };
 }
 
 describe('AuthService', () => {
   it('OTP login → member opak (sub = UUID, bukan HP) → token lolos JwtAuthGuard; /me ter-mask', async () => {
     const ctx = setup();
     const req = await ctx.request(PHONE, '203.0.113.7');
-    const res = await ctx.auth.verifyOtp({ challengeId: req.challenge_id, code: ctx.sender.lastCode() }, '203.0.113.7');
+    const res = await ctx.auth.verifyOtp({ ageConfirmed: true, challengeId: req.challenge_id, code: ctx.sender.lastCode() }, '203.0.113.7');
     expect(res.token_type).toBe('Bearer');
     expect(res.expires_in).toBe(3600);
 
@@ -88,7 +88,7 @@ describe('AuthService', () => {
     const ids: string[] = [];
     for (let i = 0; i < 2; i += 1) {
       const req = await ctx.request(PHONE, '203.0.113.7');
-      const res = await ctx.auth.verifyOtp({ challengeId: req.challenge_id, code: ctx.sender.lastCode() }, '203.0.113.7');
+      const res = await ctx.auth.verifyOtp({ ageConfirmed: true, challengeId: req.challenge_id, code: ctx.sender.lastCode() }, '203.0.113.7');
       ids.push((ctx.tokens.verify(res.access_token) as { memberId: string }).memberId);
     }
     expect(ids[0]).toBe(ids[1]);
@@ -98,7 +98,7 @@ describe('AuthService', () => {
   it('member sedang dihapus (deleted_at) → verify 409 account_deleting dan token lama ditolak guard', async () => {
     const ctx = setup();
     const req = await ctx.request(PHONE, null);
-    const res = await ctx.auth.verifyOtp({ challengeId: req.challenge_id, code: ctx.sender.lastCode() }, null);
+    const res = await ctx.auth.verifyOtp({ ageConfirmed: true, challengeId: req.challenge_id, code: ctx.sender.lastCode() }, null);
     const id = ctx.tokens.verify(res.access_token)!.memberId;
     ctx.members.rows.get(id)!.deleted_at = new Date();
 
@@ -107,7 +107,7 @@ describe('AuthService', () => {
     expect(err.getStatus()).toBe(401);
 
     const req2 = await ctx.request(PHONE, null);
-    const err2 = await catchApiError(() => ctx.auth.verifyOtp({ challengeId: req2.challenge_id, code: ctx.sender.lastCode() }, null));
+    const err2 = await catchApiError(() => ctx.auth.verifyOtp({ ageConfirmed: true, challengeId: req2.challenge_id, code: ctx.sender.lastCode() }, null));
     expect(err2.getStatus()).toBe(409);
     expect(err2.body).toEqual({ error: { code: 'account_deleting', message: expect.any(String) } });
   });
@@ -116,7 +116,7 @@ describe('AuthService', () => {
     const ctx = setup();
     const req = await ctx.request(PHONE, null);
     const bad = ctx.sender.lastCode() === '000000' ? '111111' : '000000';
-    const err = await catchApiError(() => ctx.auth.verifyOtp({ challengeId: req.challenge_id, code: bad }, null));
+    const err = await catchApiError(() => ctx.auth.verifyOtp({ ageConfirmed: true, challengeId: req.challenge_id, code: bad }, null));
     expect(err.getStatus()).toBe(400);
     expect(err.body).toEqual({ ok: false, reason: 'invalid', attempts_left: 2 });
   });
@@ -183,7 +183,7 @@ describe('AuthService', () => {
     const err = await catchApiError(() => ctx.request(PHONE, ATTACKER));
     expect(err.getStatus()).toBe(429);
     await expect(ctx.request(PHONE, VICTIM_IP)).resolves.toBeDefined();
-    const res = await ctx.auth.verifyOtp({ challengeId: victim.challenge_id, code: victimCode }, VICTIM_IP);
+    const res = await ctx.auth.verifyOtp({ ageConfirmed: true, challengeId: victim.challenge_id, code: victimCode }, VICTIM_IP);
     expect(res.token_type).toBe('Bearer');
   });
 
@@ -286,23 +286,23 @@ describe('JwtAuthGuard / AccessTokenService', () => {
     for (let i = 0; i < 4; i += 1) challenges.push((await ctx.request(`62812000002${i}`, IP)).challenge_id);
     for (let i = 0; i < 4; i += 1) {
       const code = ctx.sender.otps[i].code;
-      await ctx.auth.verifyOtp({ challengeId: challenges[i], code }, IP);
+      await ctx.auth.verifyOtp({ ageConfirmed: true, challengeId: challenges[i], code }, IP);
     }
     const wrong = (c: string) => String((Number(c) + 1) % 1_000_000).padStart(6, '0');
     const extra = (await ctx.request('6281200000299', IP)).challenge_id;
     const extraCode = ctx.sender.otps[4].code;
-    await catchApiError(() => ctx.auth.verifyOtp({ challengeId: extra, code: wrong(extraCode) }, IP));
-    await catchApiError(() => ctx.auth.verifyOtp({ challengeId: extra, code: wrong(wrong(extraCode)) }, IP));
+    await catchApiError(() => ctx.auth.verifyOtp({ ageConfirmed: true, challengeId: extra, code: wrong(extraCode) }, IP));
+    await catchApiError(() => ctx.auth.verifyOtp({ ageConfirmed: true, challengeId: extra, code: wrong(wrong(extraCode)) }, IP));
     expect((await ctx.auth.challenge(IP)).maxnumber).toBe(2000);
     // IP CGNAT ramai: 20 verify sukses, 1 gagal (≈5 %) → tetap biaya dasar dari sisi rasio
     const busy = setup({ ALTCHA_MAX_NUMBER_CAP: '8000', OTP_RL_SOURCE_LIMIT: '1000', OTP_RL_VERIFY_LIMIT: '1000' });
     const NAT = '198.51.100.31';
     for (let i = 0; i < 20; i += 1) {
       const id = (await busy.request(`628120001${String(i).padStart(3, '0')}`, NAT)).challenge_id;
-      await busy.auth.verifyOtp({ challengeId: id, code: busy.sender.otps[i].code }, NAT);
+      await busy.auth.verifyOtp({ ageConfirmed: true, challengeId: id, code: busy.sender.otps[i].code }, NAT);
     }
     const id = (await busy.request('6281200019999', NAT)).challenge_id;
-    await catchApiError(() => busy.auth.verifyOtp({ challengeId: id, code: wrong(busy.sender.otps[20].code) }, NAT));
+    await catchApiError(() => busy.auth.verifyOtp({ ageConfirmed: true, challengeId: id, code: wrong(busy.sender.otps[20].code) }, NAT));
     expect((await busy.auth.challenge(NAT)).maxnumber).toBe(1000);
   });
 
@@ -313,5 +313,51 @@ describe('JwtAuthGuard / AccessTokenService', () => {
     const off = setup({ OTP_GLOBAL_HOURLY_BUDGET: '10', ALTCHA_ADAPTIVE: 'false' });
     for (let i = 0; i < 9; i += 1) await off.request(`62812000001${String(i).padStart(2, '0')}`, `203.0.113.${10 + i}`);
     expect((await off.auth.challenge('192.0.2.1')).maxnumber).toBe(1000);
+  });
+});
+
+describe('W-19 (Q-P3): pernyataan usia minimum 17 tahun saat masuk/daftar', () => {
+  const CID = '5e0c3a2b-1d4f-4e6a-8b7c-9d0e1f2a3b4c';
+
+  it('DTO: age_confirmed boolean opsional (tidak ada = false); selain boolean → 400 invalid_request', async () => {
+    expect(parseAuthOtpVerify({ challenge_id: CID, code: '123456', age_confirmed: true }).ageConfirmed).toBe(true);
+    expect(parseAuthOtpVerify({ challenge_id: CID, code: '123456' }).ageConfirmed).toBe(false);
+    expect(parseAuthOtpVerify({ challenge_id: CID, code: '123456', age_confirmed: false }).ageConfirmed).toBe(false);
+    for (const v of ['true', 1, 'ya', {}]) {
+      expect((await catchApiError(() => parseAuthOtpVerify({ challenge_id: CID, code: '123456', age_confirmed: v }))).body).toEqual({
+        error: { code: 'invalid_request', message: expect.any(String) },
+      });
+    }
+  });
+
+  it('tanpa pernyataan → 400 age_confirmation_required (menyebut 17 tahun) dan challenge TIDAK hangus', async () => {
+    const ctx = setup();
+    const req = await ctx.request(PHONE, null);
+    const code = ctx.sender.lastCode();
+    const err = await catchApiError(() => ctx.auth.verifyOtp({ ageConfirmed: false, challengeId: req.challenge_id, code }, null));
+    expect(err.getStatus()).toBe(400);
+    expect(err.body).toEqual({ error: { code: 'age_confirmation_required', message: expect.stringContaining('17 tahun') } });
+    expect(ctx.members.rows.size).toBe(0);
+    // percobaan yang sama dengan pernyataan berhasil (OTP belum dikonsumsi)
+    const ok = await ctx.auth.verifyOtp({ ageConfirmed: true, challengeId: req.challenge_id, code }, null);
+    expect(ok.token_type).toBe('Bearer');
+  });
+
+  it('member baru: age_confirmed_at diisi saat INSERT; member lama (migrasi/POS) dilengkapi sekali, tidak ditimpa', async () => {
+    const ctx = setup({ MEMBER_MIN_AGE: '18' });
+    expect(ctx.config.memberMinAge).toBe(18);
+    const req = await ctx.request(PHONE, null);
+    await ctx.auth.verifyOtp({ ageConfirmed: true, challengeId: req.challenge_id, code: ctx.sender.lastCode() }, null);
+    const ins = ctx.db.find('INSERT INTO platform.member')[0];
+    expect(ins.text).toContain('age_confirmed_at');
+    expect(ins.params[3]).toBe(true);
+    // login kedua: member sudah ada → UPDATE bersyarat age_confirmed_at IS NULL
+    ctx.clock.advanceSeconds(3600);
+    const req2 = await ctx.request(PHONE, '198.51.100.9');
+    await ctx.auth.verifyOtp({ ageConfirmed: true, challengeId: req2.challenge_id, code: ctx.sender.lastCode() }, '198.51.100.9');
+    const upd = ctx.db.find('SET age_confirmed_at = now()');
+    expect(upd).toHaveLength(1);
+    expect(upd[0].text).toContain('age_confirmed_at IS NULL');
+    expect(() => testConfig({ MEMBER_MIN_AGE: '16' }).memberMinAge).toThrow();
   });
 });

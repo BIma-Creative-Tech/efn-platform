@@ -273,8 +273,8 @@ scenario_e() {
   # G13c SEC-65: migrasi K-7 untuk subjek yang sedang DSAR delete -> 409 member_deleting (member & saldo pembuka).
   # Hanya bila BFF dev dijalankan dengan MIGRATION_ENABLED=true (endpoint 404 bila tidak; runbook E2E_SMOKE_REPORT).
   if [[ "$MIGRATION_ON" == 1 ]]; then
-    r="$(migrate members "{\"source_ref\":\"smoke-mig-$(rand8)\",\"member_ref\":\"$PHONE\"}")"
-    r="$r ; $(migrate opening-balance "{\"source_ref\":\"smoke-ob-$(rand8)\",\"member_ref\":\"$PHONE\",\"points\":10,\"company_code\":\"FNB\"}")"
+    r="$(migrate members "{\"source_ref\":\"$(newuuid)\",\"member_ref\":\"$PHONE\"}")"
+    r="$r ; $(migrate opening-balance "{\"source_ref\":\"$(newuuid)\",\"member_ref\":\"$PHONE\",\"points\":10,\"company_code\":\"FNB\"}")"
     check "e.migration_member_deleting_409" "$([[ "$r" == *member_deleting*"|409 ; "*member_deleting*"|409" ]] && echo 1 || echo 0)" "$r"
   else
     echo "   (cek migrasi SEC-65 dilewati: MIGRATION_ENABLED != true di $BFF)"
@@ -312,7 +312,7 @@ scenario_e() {
   check "e.dsar_member_hash_nulled" "$([[ "$mhn" == 1/1 ]] && echo 1 || echo 0)" "member_hash NULL/baris=$mhn"
   if [[ "$MIGRATION_ON" == 1 ]]; then
     # Setelah erasure selesai: subjek ada di platform.erasure_suppression -> 409 member_erased, tidak hidup kembali
-    r="$(migrate members "{\"source_ref\":\"smoke-mig-$(rand8)\",\"member_ref\":\"$PHONE\"}")"
+    r="$(migrate members "{\"source_ref\":\"$(newuuid)\",\"member_ref\":\"$PHONE\"}")"
     local alive
     alive="$(psql_platform -c "select count(*) from platform.member where member_hash='$mh' and deleted_at is null")"
     check "e.migration_member_erased_409" "$([[ "$r" == *member_erased*"|409" && "$alive" == 0 ]] && echo 1 || echo 0)" "$r member_aktif=$alive"

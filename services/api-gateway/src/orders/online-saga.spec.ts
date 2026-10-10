@@ -830,13 +830,13 @@ describe('Re-review G17 (L-19)', () => {
 });
 
 describe('Retensi audit CLI CS (ONLINE_ADMIN_AUDIT_RETENTION_DAYS)', () => {
-  it('default 400 hari; baris lebih tua dihapus, yang baru tetap; metrik per jenis tanpa PII; idempoten', async () => {
-    expect(testConfig().onlineAdminAuditRetentionDays).toBe(400);
+  it('default 3650 hari (W-19); baris lebih tua dihapus, yang baru tetap; metrik per jenis tanpa PII; idempoten', async () => {
+    expect(testConfig().onlineAdminAuditRetentionDays).toBe(3650); // W-19 (Q-P19)
     expect(testConfig({ ONLINE_ADMIN_AUDIT_RETENTION_DAYS: '730' }).onlineAdminAuditRetentionDays).toBe(730);
     expect(() => testConfig({ ONLINE_ADMIN_AUDIT_RETENTION_DAYS: '5' }).onlineAdminAuditRetentionDays).toThrow();
     const ctx = setup();
     await ctx.repo.audit({ action: 'refund', actor: 'cs/h', reason: 'lama', order_id: null, part_id: null, refund_id: null, amount: 1, outcome: 'ok' });
-    ctx.clock.advanceSeconds(401 * 86_400);
+    ctx.clock.advanceSeconds(3651 * 86_400); // W-19: default 3650 hari
     await ctx.repo.audit({ action: 'refund', actor: 'cs/h', reason: 'baru', order_id: null, part_id: null, refund_id: null, amount: 1, outcome: 'ok' });
     const res = (await ctx.jobs.retentionOnce()) as { adminAuditPurged: number };
     expect(res.adminAuditPurged).toBe(1);

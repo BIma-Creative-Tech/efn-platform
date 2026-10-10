@@ -39,14 +39,19 @@ export class MemberService {
   }
 
   /** Dipanggil setelah OTP login terverifikasi (login = daftar). Tidak menimpa `member_ref_enc` yang ada. */
-  async upsertOnLogin(memberRef: string): Promise<UpsertMemberResult> {
+  /**
+   * W-19 (Q-P3): `ageConfirmed` → `age_confirmed_at` diisi (member baru) atau dilengkapi sekali (member lama hasil
+   * migrasi/POS yang belum pernah menyatakan); tidak pernah ditimpa. Tanpa tanggal lahir.
+   */
+  async upsertOnLogin(memberRef: string, opts: { ageConfirmed?: boolean } = {}): Promise<UpsertMemberResult> {
     const hash = this.hash(memberRef);
+    const age = opts.ageConfirmed === true;
     const ins = await this.db.query<{ id: string }>(
-      `INSERT INTO platform.member (id, member_hash, member_ref_enc)
-       VALUES ($1, $2, $3)
+      `INSERT INTO platform.member (id, member_hash, member_ref_enc, age_confirmed_at)
+       VALUES ($1, $2, $3, CASE WHEN $4::boolean THEN now() END)
        ON CONFLICT (member_hash) DO NOTHING
        RETURNING id::text AS id`,
-      [randomUUID(), hash, this.cipher.encrypt(memberRef, PII_AAD.MEMBER_REF)],
+      [randomUUID(), hash, this.cipher.encrypt(memberRef, PII_AAD.MEMBER_REF), age],
     );
     if (ins.rows[0]) return { id: ins.rows[0].id, deleting: false };
     const sel = await this.db.query<{ id: string; deleted_at: Date | string | null }>(
@@ -55,6 +60,9 @@ export class MemberService {
     );
     const row = sel.rows[0];
     if (!row) throw new Error('member hilang setelah konflik upsert');
+    if (age && row.deleted_at === null) {
+      await this.db.query(`UPDATE platform.member SET age_confirmed_at = now() WHERE id = $1 AND age_confirmed_at IS NULL`, [row.id]);
+    }
     return { id: row.id, deleting: row.deleted_at !== null };
   }
 

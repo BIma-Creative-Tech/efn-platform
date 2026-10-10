@@ -528,3 +528,41 @@ SEC-29 **Fixed** (semua secret BFF; spec statis + verifikasi runtime). SEC-34 **
 - **Erasure Redis:** setelah erasure platform commit, BFF menghapus `cart:<member_id>`, semua quote `oq:<id>` milik member, dan indeksnya. Indeks quote baru `oq:m:<HMAC(member_id)>` (pola key ber-HMAC §8.16, prefix `oq:*` sudah ada di ACL) diisi saat quote dibuat (≤ 20 id, TTL = `ONLINE_QUOTE_TTL_SECONDS`). Best effort; TTL tetap jadi cadangan.
 - **Untuk devsecops/lead:** tambahkan `ONLINE_ADMIN_AUDIT_RETENTION_DAYS` ke compose/.env.example dan deploy-validate bila env didaftar eksplisit (opsional, ada default); grant DELETE ikut 07 (sudah otomatis lewat deploy.sh).
 - Validasi: build OK, lint 0 error, **43 suite / 528 test**, audit high lulus.
+
+## Gelombang 18 — W-18, W-19 (BFF), W-25 (BFF) — 10 Okt 2026
+
+Sumber: `docs/10_RENCANA_GELOMBANG_18_PLUS.md` (W-18, W-19, W-25), keputusan pemilik proyek 10 Okt 2026 (Q-P3, Q-P8, Q-P12, Q-P13, Q-P18, Q-P19), `PDP_DATA_INVENTORY` v7 §0a. ADR terkait: ADR-020, ADR-022, ADR-029, ADR-034 (Proposed).
+
+### W-18 (Q-P18) — penundaan hapus akun maks 14 hari
+**Pilihan desain: 409 sebagai langkah informasi + 202 dengan konfirmasi eksplisit.**
+- `409 open_online_orders` permanen (L-4 lama) tidak punya jangkar waktu: permintaan tidak tercatat, sehingga batas 14 hari tidak bisa ditegakkan dan hak hapus bisa tertahan tanpa batas bila CS tidak bertindak → tidak konsisten dengan Q-P18.
+- `202` diam-diam melanggar L-4: pelanggan harus tahu kode ambil akan hilang dari aplikasi.
+- Jadi `DELETE /v1/me` → `409 open_online_orders` (teks menyebut "paling lambat 14 hari sejak permintaan", plus `error.open_parts`, `error.max_defer_days`, `error.confirm_param`) → pelanggan mengonfirmasi → `DELETE /v1/me?confirm_open_orders=true` dengan **token step-up yang sama** (pra-cek 409 dijalankan sebelum jti ditandai terpakai; `requireStepUp` → `precheckDelete` → `consumeStepUp` → `requestDelete`) → `202 { …, open_online_orders, erasure_deadline }`. `dsar_request.open_orders_ack_at` = bukti pilihan sadar. Checkout baru tetap ditolak `409 account_deleting`.
+- Job erasure: jatuh tempo + order terbuka → ditunda (rollback) selama `requested_at` + `DSAR_OPEN_ORDER_MAX_DEFER_DAYS` (default 14, **plafon 14**) belum lewat; alert per siklus 60 s dihapus.
+- Eskalasi CS sekali per tingkat (`dsar_request.defer_escalation`, UPDATE bersyarat → aman multi-replika), dihitung dari `requested_at` termasuk selama masa tenggang: hari 3 `EFN_ONLINE_ANOMALY erasure_deferred_open_orders` **warning**, hari 10 **critical** (masuk alert Loki `EfnOnlineAnomaly*` yang sudah ada, tanpa rule baru). Metrik `efn_dsar_erasure_deferral_total{event=escalation_d3|escalation_d10|forced}`. Log/metrik tanpa HP/member_id/member_hash.
+- Setelah 14 h: erasure **tetap jalan**; `online_order.member_id` NULL (pola erasure lama), order/bagian/refund tetap; anomali `erasure_forced_open_orders` (critical) memuat `part_ids` (maks 20, opak) + `parts_total`. CS menyelesaikan tanpa tautan akun: CLI baru read-only **`online-erasure-pending`** (request tertunda + batas + id bagian; bagian terbuka yang sudah tanpa tautan), lalu `online-refund --full` / `online-resolve` / serah terima Odoo setelah verifikasi kanal lain. Kode ambil tidak pernah ditampilkan ke CS.
+
+### W-19 (BFF) — default retensi & usia
+- `ERASURE_SUPPRESSION_DAYS` 90 → **365** (maks 730); `ONLINE_ADMIN_AUDIT_RETENTION_DAYS` 400 → **3650**.
+- Dari PDP v7 untuk BFF juga: **Q-P8** lokasi Price Hunter `geo_lat/geo_lng` → NULL setelah `PRICE_HUNTER_GEO_RETENTION_DAYS` (baru, default 90) di `RetentionService`, `updated_at` ikut diperbarui agar ETL membawa versi tanpa lokasi (data-ai: pastikan mart ClickHouse menerima NULL lewat watermark). Q-P17 "hapus cart saat erasure" ternyata **sudah** ada sejak G17 (`purgeMemberOnlineRedis`) — inventaris v7 §0a perlu dikoreksi (architect). Default lain BFF sudah sesuai v7 (link order 730 h, event 180 h, kode ambil 7 h, ledger tidak di-purge).
+- **Usia minimum 17 (Q-P3)** — kontrak untuk frontend: `POST /v1/auth/otp/verify` `{ challenge_id, code, age_confirmed: true }`. Tidak ada/`false` → `400 { error: { code: "age_confirmation_required", message: "Konfirmasi bahwa Anda berusia minimal 17 tahun untuk melanjutkan." } }`, dicek **sebelum** OTP sehingga challenge tidak hangus (frontend cukup mengulang dengan checkbox). Non-boolean → `400 invalid_request`. Diminta di setiap login (login = daftar). `member.age_confirmed_at` diisi saat dibuat / dilengkapi sekali untuk member lama; tanpa tanggal lahir. `MEMBER_MIN_AGE` (17..21) hanya untuk teks.
+
+### W-25 (BFF) — `source_ref` opak (Q-P13)
+`parseOpaqueSourceRef` di DTO impor member & saldo pembuka (+ cek ulang di service): hanya **UUID v4** atau **hex huruf kecil 32–64** (HMAC). Ditolak `400 invalid_source_ref`: `legacy-001`, nomor HP (`62…`, `08…`, `+62…`), nomor pelanggan, email, hex seluruhnya angka desimal, hex < 8 simbol berbeda, UUID v1/v3/v5/v6/v7. Skrip migrasi: `source_ref = HMAC-SHA256(kunci_migrasi, id_lama)` dengan kunci di luar platform (dibuang setelah rekonsiliasi) atau UUID v4 + tabel pemetaan offline Finance.
+
+### Migrasi
+`infra/postgres/init/08-platform-g18-privacy.sql` (idempoten, satu transaksi, hanya ADD COLUMN): `dsar_request.open_orders_ack_at`, `dsar_request.defer_escalation` (CHECK 0..2), `member.age_confirmed_at`. Grant `efn_bff` tingkat tabel sudah mencakup; ETL tidak melihat kolom baru. Diuji di `postgres:16.6-bookworm`: volume "lama" (01–07 + data → 08 → 08 lagi) dan volume baru (01–08), CHECK menolak 3, query baru BFF dijalankan sebagai `efn_bff`.
+
+### Validasi (container `node:22.23-alpine@sha256:0a7108bf…`, digest Dockerfile)
+`npm ci` → `npm run build` OK → `npm run lint` 0 error (2 warning lama) → `CI=true npx jest` **43 suite / 557 test lulus** (baru: 17 test W-18/W-19/W-25 + perubahan default) → `npm audit --omit=dev --audit-level=high` tidak ada high (4 moderate lama via minio). **Belum**: smoke E2E di stack dev (skrip smoke sudah disesuaikan: `age_confirmed`, cek 409 menyebut 14 hari, `source_ref` UUID v4, negatif `age_confirmation_required`), uji runtime CLI `online-erasure-pending` terhadap DB nyata via wrapper.
+
+### Untuk agent lain (tidak diubah BFF)
+- **devsecops**: env sudah ada di compose/.env.example/deploy.yml (nama cocok: `DSAR_OPEN_ORDER_MAX_DEFER_DAYS`, `ERASURE_SUPPRESSION_DAYS`, `MEMBER_MIN_AGE`, `PRICE_HUNTER_GEO_RETENTION_DAYS`, `ONLINE_ADMIN_AUDIT_RETENTION_DAYS`). Masih perlu: (1) `scripts/deploy.sh` daftar migrasi wajib tambah `08-platform-g18-privacy.sql` (BFF G18 gagal INSERT DSAR / login tanpa 08); (2) wrapper host `efn-online-cs` subcommand `erasure-pending` → `node dist/cli/online-erasure-pending.js` (read-only, tanpa stdin/alasan, peran `cs`); (3) opsional rule Prometheus atas `efn_dsar_erasure_deferral_total{event="forced"}`.
+- **frontend**: `app/api/auth/otp/verify/route.ts` saat ini hanya meneruskan `challenge_id, code` → tambah `age_confirmed` + checkbox (tidak tercentang default) + tangani `age_confirmation_required`; route hapus akun: tangani `409 open_online_orders` (tampilkan `message`, tombol konfirmasi) lalu panggil ulang dengan `?confirm_open_orders=true` + token step-up yang sama; tampilkan `erasure_deadline`.
+- **architect**: docs/04 §8.9/§10.8.3 + L-4 (kontrak baru 409→konfirmasi→202), runbook CS penyelesaian pesanan tanpa tautan akun (`online-erasure-pending`), PDP v7 §0a status Q-P3/Q-P8/Q-P12/Q-P13/Q-P17/Q-P18/Q-P19 → "Sudah (kode)"; teks pelanggan final perlu Legal.
+- **odoo/functional**: pernyataan usia 17 th untuk pendaftaran member oleh kasir POS (W-25) di luar BFF.
+- **qa**: UAT hari 3/10/14 dengan `DSAR_OPEN_ORDER_MAX_DEFER_DAYS` kecil + manipulasi `requested_at` di DB dev.
+
+### Risiko / sisa
+- Setelah erasure paksa, pelanggan kehilangan akses kode ambil; serah terima butuh verifikasi kanal lain (prosedural, R-L01/R-S14). `part_ids` di log Loki menautkan bagian order ke `request_id` (keduanya opak, tanpa PII) selama retensi Loki.
+- Batas 14 h dihitung dari `requested_at`; bila `DSAR_DELETE_GRACE_DAYS` > 14, erasure tetap menunggu `scheduled_at` (`erasure_deadline` = max keduanya).

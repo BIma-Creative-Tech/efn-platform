@@ -142,7 +142,7 @@ def cmd_login():
     result("auth.otp_request", s == 202 and body.get("challenge_id"), http=s, pow_s=round(time.time() - t0, 2))
     code = wait_otp(mask(PHONE), off)
     result("auth.otp_from_console_log", True, masked=mask(PHONE))
-    s, tok, _, _ = req("POST", "/v1/auth/otp/verify", body={"challenge_id": body["challenge_id"], "code": code})
+    s, tok, _, _ = req("POST", "/v1/auth/otp/verify", body={"challenge_id": body["challenge_id"], "code": code, "age_confirmed": True})
     ok = s == 200 and tok.get("token_type") == "Bearer" and tok.get("access_token")
     result("auth.otp_verify", ok, http=s, expires_in=(tok or {}).get("expires_in"))
     st["token"] = tok["access_token"]
@@ -171,7 +171,7 @@ def cmd_login_web():
         "POST",
         "/api/auth/otp/verify",
         host=WEB_HOST,
-        body={"challenge_id": body["challenge_id"], "code": code},
+        body={"challenge_id": body["challenge_id"], "code": code, "age_confirmed": True},
         headers=origin,
     )
     sess = next((c for c in cookies if c.startswith("efn_session=")), "")
@@ -208,7 +208,10 @@ def cmd_negatives():
     result(
         "neg.captcha_replay", s1 == 202 and s2 == 400 and b2["error"]["code"] == "captcha_required", first=s1, second=s2
     )
+    # W-19 (Q-P3): tanpa pernyataan usia 17 th -> 400 age_confirmation_required, percobaan OTP tidak hangus
     s, b, _, _ = req("POST", "/v1/auth/otp/verify", body={"challenge_id": b1["challenge_id"], "code": "000000"})
+    result("neg.age_confirmation_required", s == 400 and (b.get("error") or {}).get("code") == "age_confirmation_required", http=s)
+    s, b, _, _ = req("POST", "/v1/auth/otp/verify", body={"challenge_id": b1["challenge_id"], "code": "000000", "age_confirmed": True})
     result("neg.otp_wrong", s == 400 and b.get("ok") is False and b.get("attempts_left") == 2, http=s, body=b)
     _, ch, _, _ = req("GET", "/v1/auth/challenge")
     s, b, _, _ = req("POST", "/v1/auth/otp/request", body={"phone": "6591234567", "altcha": solve_altcha(ch)})

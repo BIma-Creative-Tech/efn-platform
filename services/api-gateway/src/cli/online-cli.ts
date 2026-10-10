@@ -21,6 +21,9 @@ import { PaymentsService } from '../payments/payments.service';
  */
 export interface OnlineCli {
   admin: OnlineAdminService;
+  /** W-18: query read-only (daftar kerja erasure CS). */
+  db: PgDb;
+  config: AppConfig;
   close(): Promise<void>;
 }
 
@@ -38,7 +41,7 @@ export function createOnlineCli(): OnlineCli {
   const payments = new PaymentsService(config, db, NO_REDIS, { get: () => (gw === undefined ? (gw = createPaymentGateway(config)) : gw) });
   const repo = new PgOnlineRepo(db, db);
   const saga = new OnlineSagaService(repo, odoo, payments, metrics);
-  return { admin: new OnlineAdminService(repo, odoo, saga, metrics, config), close: () => pool.end() };
+  return { admin: new OnlineAdminService(repo, odoo, saga, metrics, config), db, config, close: () => pool.end() };
 }
 
 /**

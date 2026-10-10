@@ -1,10 +1,10 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Put, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { FastifyReply, FastifyRequest } from 'fastify';
 import { clientIp } from '../common/net/client-ip';
 import { AuthUser } from '../common/security/access-token.service';
 import { CurrentUser, JwtAuthGuard, StepUpToken } from '../common/security/jwt-auth.guard';
 import { ConsentService, ConsentState } from './consent.service';
-import { parseConsentPurpose, parseReauth, parseSetConsent } from './dto/privacy.dto';
+import { parseConfirmOpenOrders, parseConsentPurpose, parseReauth, parseSetConsent } from './dto/privacy.dto';
 import { DSAR_RECEIPT_HEADER, DsarReceiptService } from './dsar-receipt.service';
 import { DeleteAccountResponse, DsarRequestItem, DsarService } from './dsar.service';
 
@@ -52,10 +52,18 @@ export class DsarController {
 
   @Delete()
   @HttpCode(HttpStatus.ACCEPTED)
-  async remove(@CurrentUser() user: AuthUser, @StepUpToken() stepUp: string | undefined): Promise<DeleteAccountResponse> {
+  async remove(
+    @CurrentUser() user: AuthUser,
+    @StepUpToken() stepUp: string | undefined,
+    @Query('confirm_open_orders') confirmRaw: unknown,
+  ): Promise<DeleteAccountResponse> {
+    const opts = { confirmOpenOrders: parseConfirmOpenOrders(confirmRaw) };
+    // W-18 (Q-P18): token diverifikasi dulu, pra-cek 409 open_online_orders SEBELUM jti ditandai terpakai
+    this.dsar.requireStepUp(user, stepUp);
+    await this.dsar.precheckDelete(user, opts);
     // SEC-40: token step-up sekali pakai untuk hapus akun
     await this.dsar.consumeStepUp(user, stepUp);
-    return this.dsar.requestDelete(user);
+    return this.dsar.requestDelete(user, opts);
   }
 
   @Post('delete/cancel')

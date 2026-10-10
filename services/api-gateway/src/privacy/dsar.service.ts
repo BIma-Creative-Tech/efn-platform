@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
-import { OnlinePrivacyService } from '../orders/online-privacy.service';
+import { OnlinePrivacyService, openOnlineOrders } from '../orders/online-privacy.service';
 import { randomUUID } from 'node:crypto';
 import { AppConfig } from '../config/app-config';
 import { DB, Db } from '../common/db/db';
@@ -31,6 +31,18 @@ export interface DeleteAccountResponse {
   points_forfeited: number;
   /** R6 (§8.13): bukti opak untuk `GET /v1/dsar/requests/:id` (header `X-DSAR-Receipt`), 30 hari, tanpa PII. */
   receipt_token: string;
+  /** W-18 (Q-P18): jumlah bagian pesanan online yang belum selesai saat ini (0 = tidak ada penundaan). */
+  open_online_orders: number;
+  /**
+   * W-18 (Q-P18): bila ada pesanan terbuka — batas paling lambat erasure dijalankan (`requested_at` +
+   * `DSAR_OPEN_ORDER_MAX_DEFER_DAYS`, tidak lebih awal dari `scheduled_at`); `null` bila tidak ada penundaan.
+   */
+  erasure_deadline: string | null;
+}
+
+export interface DeleteOptions {
+  /** `?confirm_open_orders=true`: pelanggan menerima penundaan ≤ 14 hari & pelepasan tautan pesanan (W-18). */
+  confirmOpenOrders?: boolean;
 }
 
 /** SEC-40: penanda jti step-up terpakai. Prefix di bawah `otp:*` (sudah ada di ACL Redis `efn-bff`). */
@@ -51,6 +63,11 @@ const EXPORT_ROW_LIMIT = 1000;
  *   → token step-up `purpose: dsar` 10 menit. Challenge harus milik member yang sama (member_hash).
  * - `GET /v1/me/data` & `DELETE /v1/me`: wajib header `X-Step-Up-Token` (hilang → `403 step_up_required`, tidak
  *   valid/kedaluwarsa/milik member lain → `403 step_up_invalid`).
+ * - W-18 (Q-P18): ada bagian pesanan online terbuka → `409 open_online_orders` (teks menyebut batas 14 hari) kecuali
+ *   `?confirm_open_orders=true`; dengan konfirmasi permintaan dicatat (`open_orders_ack_at`) dan erasure ditunda paling
+ *   lama `DSAR_OPEN_ORDER_MAX_DEFER_DAYS` sejak `requested_at` (ErasureService: eskalasi CS hari 3 & 10, lalu tetap jalan).
+ *   Pra-cek 409 dilakukan SEBELUM token step-up sekali pakai ditandai (`precheckDelete`), agar pelanggan tidak perlu
+ *   OTP ulang hanya untuk mengonfirmasi.
  * - `DELETE /v1/me` idempotent: permintaan aktif (scheduled/processing) dikembalikan apa adanya. Login tetap boleh
  *   selama masa tenggang (agar bisa membatalkan); erasure berjalan setelah `scheduled_at` (ErasureService).
  * - Export dicatat sebagai `dsar_request` type `export` status `completed` (audit). Export > batas baris dipotong
@@ -228,41 +245,77 @@ export class DsarService {
     };
   }
 
-  async requestDelete(user: AuthUser): Promise<DeleteAccountResponse> {
+  /**
+   * W-18: pra-cek read-only SEBELUM `consumeStepUp` — ada bagian pesanan terbuka tanpa konfirmasi → 409 (token step-up
+   * tetap bisa dipakai untuk mengulang dengan `?confirm_open_orders=true`). Permintaan aktif → lewati (idempotent).
+   */
+  async precheckDelete(user: AuthUser, opts: DeleteOptions = {}): Promise<void> {
+    if (!this.online || opts.confirmOpenOrders) return;
+    if (await this.findActiveDelete(user.memberId)) return;
+    const open = await this.online.openPaidParts(user.memberId);
+    if (open > 0) throw openOnlineOrders(open, this.config.dsarOpenOrderMaxDeferDays);
+  }
+
+  async requestDelete(user: AuthUser, opts: DeleteOptions = {}): Promise<DeleteAccountResponse> {
+    const confirm = opts.confirmOpenOrders === true;
+    const maxDeferDays = this.config.dsarOpenOrderMaxDeferDays;
     const points = await this.loyalty.balanceByHash(user.memberHash);
     const active = await this.findActiveDelete(user.memberId);
-    if (active) return this.deleteResponse(active.id, active.scheduledAt, points);
+    if (active) return this.deleteResponse(active, points, await this.openPartsOf(user.memberId));
     // L-4: order belum dibayar dibatalkan otomatis; bagian paying|confirmed|ready|review → 409 open_online_orders
-    if (this.online) await this.online.prepareDelete(user.memberId);
+    // kecuali dikonfirmasi (W-18, Q-P18)
+    if (this.online) await this.online.prepareDelete(user.memberId, { confirm, maxDeferDays });
     const id = randomUUID();
-    const scheduled = new Date(this.now() + this.config.dsarDeleteGraceDays * 86_400_000);
+    const nowMs = this.now();
+    const requested = new Date(nowMs).toISOString();
+    const scheduled = new Date(nowMs + this.config.dsarDeleteGraceDays * 86_400_000).toISOString();
+    let open = 0;
     try {
       await this.db.tx(async (q) => {
         // SEC-100: kunci member yang sama dengan checkout + cek ulang order terbuka, atomik dengan INSERT
-        if (this.online) await this.online.lockAndAssertNoOpenOrders(q, user.memberId);
+        if (this.online) open = await this.online.lockAndAssertNoOpenOrders(q, user.memberId, { confirm, maxDeferDays });
         await q.query(
-          `INSERT INTO platform.dsar_request (id, member_id, member_hash, type, status, stores_pending, requested_at, scheduled_at)
-           VALUES ($1, $2, $3, 'delete', 'scheduled', '{}', now(), $4)`,
-          [id, user.memberId, user.memberHash, scheduled.toISOString()],
+          `INSERT INTO platform.dsar_request
+             (id, member_id, member_hash, type, status, stores_pending, requested_at, scheduled_at, open_orders_ack_at)
+           VALUES ($1, $2, $3, 'delete', 'scheduled', '{}', $5::timestamptz, $4, CASE WHEN $6::boolean THEN $5::timestamptz END)`,
+          [id, user.memberId, user.memberHash, scheduled, requested, open > 0],
         );
       });
     } catch (err) {
       if (err instanceof ApiError) throw err;
       // Balapan dua DELETE paralel → unique uq_dsar_active_delete; kembalikan yang menang
       const again = await this.findActiveDelete(user.memberId);
-      if (again) return this.deleteResponse(again.id, again.scheduledAt, points);
+      if (again) return this.deleteResponse(again, points, await this.openPartsOf(user.memberId));
       throw err;
     }
-    this.logger.log(`Permintaan hapus akun ${id} dijadwalkan ${scheduled.toISOString()}`);
-    return this.deleteResponse(id, scheduled.toISOString(), points);
+    const note = open > 0 ? ` (pesanan online terbuka: ${open}, batas ${maxDeferDays} hari)` : '';
+    this.logger.log(`Permintaan hapus akun ${id} dijadwalkan ${scheduled}${note}`);
+    return this.deleteResponse({ id, requestedAt: requested, scheduledAt: scheduled }, points, open);
   }
 
-  private deleteResponse(requestId: string, scheduledAt: string, points: number): DeleteAccountResponse {
+  private async openPartsOf(memberId: string): Promise<number> {
+    return this.online ? this.online.openPaidParts(memberId) : 0;
+  }
+
+  /** Batas erasure W-18: max(requested_at + N hari, scheduled_at). */
+  erasureDeadline(requestedAt: string, scheduledAt: string): string {
+    const byDefer = Date.parse(requestedAt) + this.config.dsarOpenOrderMaxDeferDays * 86_400_000;
+    const sched = Date.parse(scheduledAt);
+    return new Date(Number.isNaN(sched) ? byDefer : Math.max(byDefer, sched)).toISOString();
+  }
+
+  private deleteResponse(
+    req: { id: string; requestedAt: string; scheduledAt: string },
+    points: number,
+    openParts: number,
+  ): DeleteAccountResponse {
     return {
-      request_id: requestId,
-      scheduled_at: scheduledAt,
+      request_id: req.id,
+      scheduled_at: req.scheduledAt,
       points_forfeited: points,
-      receipt_token: this.receipts.issue(requestId),
+      receipt_token: this.receipts.issue(req.id),
+      open_online_orders: openParts,
+      erasure_deadline: openParts > 0 ? this.erasureDeadline(req.requestedAt, req.scheduledAt) : null,
     };
   }
 
@@ -304,14 +357,14 @@ export class DsarService {
     };
   }
 
-  private async findActiveDelete(memberId: string): Promise<{ id: string; scheduledAt: string } | null> {
-    const res = await this.db.query<{ id: string; scheduled_at: Date | string }>(
-      `SELECT id::text AS id, scheduled_at FROM platform.dsar_request
+  private async findActiveDelete(memberId: string): Promise<{ id: string; requestedAt: string; scheduledAt: string } | null> {
+    const res = await this.db.query<{ id: string; requested_at: Date | string; scheduled_at: Date | string }>(
+      `SELECT id::text AS id, requested_at, scheduled_at FROM platform.dsar_request
         WHERE member_id = $1 AND type = 'delete' AND status IN ('scheduled', 'processing')
         LIMIT 1`,
       [memberId],
     );
     const r = res.rows[0];
-    return r ? { id: r.id, scheduledAt: toIso(r.scheduled_at) ?? '' } : null;
+    return r ? { id: r.id, requestedAt: toIso(r.requested_at) ?? '', scheduledAt: toIso(r.scheduled_at) ?? '' } : null;
   }
 }

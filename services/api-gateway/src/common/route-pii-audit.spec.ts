@@ -20,7 +20,7 @@ import { ConsentController, DsarController, DsarReceiptController } from '../pri
  * (UUID request/payment, enum). Menambah parameter URL baru = tinjau dulu lalu tambahkan di sini.
  */
 // Fase 3 (§10.3): kode kanal/outlet, id kategori/produk Odoo, teks pencarian katalog, cursor opak, ukuran gambar.
-const ALLOWED_QUERY = new Set(['store', 'channel', 'category', 'q', 'cursor', 'limit', 'size', 'outlet', 'ids']);
+const ALLOWED_QUERY = new Set(['store', 'channel', 'category', 'q', 'cursor', 'limit', 'size', 'outlet', 'ids', 'confirm_open_orders']); // confirm_open_orders: boolean W-18, non-PII
 const ALLOWED_PARAM = new Set(['id', 'payment_id', 'provider', 'request_id', 'purpose', 'product_id', 'image_sha', 'order_id']);
 
 const CONTROLLERS: (new (...args: never[]) => unknown)[] = [

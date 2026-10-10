@@ -32,6 +32,8 @@ export interface MeResponse {
  *   (`400 captcha_required`). Captcha diverifikasi SEBELUM rate limit agar bot tanpa proof-of-work tidak
  *   menghabiskan kuota nomor korban.
  * - Request selalu 202 untuk nomor Indonesia berformat valid (login = daftar). Nomor non-Indonesia → 400 `invalid_phone`.
+ * - W-19 (Q-P3): verify wajib `age_confirmed: true` (pernyataan usia ≥ `MEMBER_MIN_AGE`, 17) → selain itu
+ *   `400 age_confirmation_required` tanpa menyentuh challenge; waktu pernyataan disimpan `member.age_confirmed_at`.
  * - Sukses verify → upsert `platform.member` → access token JWT HS256 dengan `sub` = member.id (UUID, bukan HP).
  *
  * Rate limit & mitigasi lockout tertarget (SEC-06), nama key TANPA IP mentah (SEC-24: `ipk` = HMAC turunan pepper):
@@ -124,6 +126,15 @@ export class AuthService {
   }
 
   async verifyOtp(dto: AuthOtpVerifyDto, ip: string | null): Promise<AuthOtpVerifyResponse> {
+    // W-19 (Q-P3): pernyataan usia minimum wajib; dicek sebelum OTP diverifikasi (challenge tidak hangus). Pesan sama
+    // untuk nomor terdaftar/tidak (tidak membocorkan keanggotaan).
+    if (!dto.ageConfirmed) {
+      throw ApiError.of(
+        400,
+        'age_confirmation_required',
+        `Konfirmasi bahwa Anda berusia minimal ${this.config.memberMinAge} tahun untuk melanjutkan.`,
+      );
+    }
     await this.limiter.enforce(
       `otp:login:verify-ip:${this.ipKey(ip)}`,
       this.config.otpRateVerifyLimit,
@@ -139,7 +150,7 @@ export class AuthService {
       this.logger.error('Challenge login tanpa member_ref yang dapat dibaca');
       throw new ApiError(400, { ok: false, reason: 'invalid', attempts_left: 0 });
     }
-    const member = await this.members.upsertOnLogin(res.memberRef);
+    const member = await this.members.upsertOnLogin(res.memberRef, { ageConfirmed: true });
     if (member.deleting) {
       // Hanya pemilik nomor (lolos OTP) yang melihat status ini → tidak membocorkan keanggotaan ke pihak lain
       throw Errors.conflict('account_deleting', 'Akun sedang dalam proses penghapusan.');

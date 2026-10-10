@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { Logger } from '@nestjs/common';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import { APP_FILTER } from '@nestjs/core';
@@ -12,13 +13,20 @@ import { memberHash } from '../common/pii/pii';
 import { FakeLoyaltyDb } from '../common/testing/fake-loyalty-db';
 import { FakeClock, FakeDb, catchApiError, randomSecret, testCipher, testConfig } from '../common/testing/fakes';
 import { LoyaltyService } from '../loyalty/loyalty.service';
-import { parseMigrationMember, parseOpeningBalance } from './dto/migration.dto';
+import { parseMigrationMember, parseOpaqueSourceRef, parseOpeningBalance } from './dto/migration.dto';
 import { MIGRATION_KEY_HEADER, MigrationKeyGuard } from './migration-key.guard';
 import { MigrationController } from './migration.controller';
 import { MigrationService } from './migration.service';
 
 const MEMBER = '6281234567890';
 const SHA = 'a'.repeat(64);
+// W-25 (Q-P13): source_ref opak — UUID v4 acak atau HMAC hex
+const SR1 = '3f2b6c1e-8a4d-4c2e-9b1f-0a2b3c4d5e6f';
+const SR2 = '9c1d7e2a-4b5f-4a60-8c7d-1e2f3a4b5c6d';
+const SR9 = 'b7e4d2c1a9f80e3d5c6b7a8f9e0d1c2b';
+const SRX = '0f1e2d3c-4b5a-4968-8776-655443322110';
+const SRY = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
+const SRA = '6d5c4b3a-2f1e-4d0c-9b8a-7f6e5d4c3b2a';
 
 describe('Migrasi (docs/04 §9.6 K-7)', () => {
   describe('opening-balance', () => {
@@ -37,15 +45,15 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
 
     it('entri ledger migration_opening terenkripsi; idempoten per source_ref; data beda → idempotency_conflict', async () => {
       const ctx = setup();
-      const dto = { sourceRef: 'legacy-001', memberRef: MEMBER, points: 250, companyCode: 'RTL' as const };
+      const dto = { sourceRef: SR1, memberRef: MEMBER, points: 250, companyCode: 'RTL' as const };
       expect(await ctx.svc.openingBalance(dto)).toEqual({ applied: true, points_balance: 250 });
       expect(ctx.db.ledger[0]).toMatchObject({
         member_ref_hash: ctx.hash,
         company_code: 'RTL',
         delta_points: 250,
         source: 'migration_opening',
-        source_ref: 'legacy-001',
-        idempotency_key: 'migration_opening:legacy-001',
+        source_ref: SR1,
+        idempotency_key: `migration_opening:${SR1}`,
         reason: 'opening_balance',
       });
       expect(ctx.db.ledger[0].expires_at).not.toBeNull();
@@ -62,8 +70,8 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
       const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
       const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
       try {
-        await ctx.svc.openingBalance({ sourceRef: 'legacy-001', memberRef: MEMBER, points: 250, companyCode: 'RTL' });
-        expect((await ctx.svc.openingBalance({ sourceRef: 'legacy-002', memberRef: MEMBER, points: 6000, companyCode: 'FNB' })).applied).toBe(true);
+        await ctx.svc.openingBalance({ sourceRef: SR1, memberRef: MEMBER, points: 250, companyCode: 'RTL' });
+        expect((await ctx.svc.openingBalance({ sourceRef: SR2, memberRef: MEMBER, points: 6000, companyCode: 'FNB' })).applied).toBe(true);
         const m = await ctx.metrics.loyaltyMigrationPoints.get();
         expect(m.values.map((v) => [v.labels.company, v.value])).toEqual([
           ['RTL', 250],
@@ -71,7 +79,7 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
         ]);
         const lines = log.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('EFN_LOYALTY_MIGRATION '));
         expect(lines).toHaveLength(2);
-        expect(JSON.parse(lines[0].slice('EFN_LOYALTY_MIGRATION '.length))).toEqual({ company: 'RTL', points: 250, source_ref: 'legacy-001' });
+        expect(JSON.parse(lines[0].slice('EFN_LOYALTY_MIGRATION '.length))).toEqual({ company: 'RTL', points: 250, source_ref: SR1 });
         const anomalies = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('EFN_LOYALTY_ANOMALY '));
         expect(anomalies).toHaveLength(1);
         expect(JSON.parse(anomalies[0].slice('EFN_LOYALTY_ANOMALY '.length))).toMatchObject({
@@ -93,7 +101,7 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
 
     it('SEC-65: saldo pembuka untuk subjek yang sedang/pernah dihapus → 409, tanpa entri ledger', async () => {
       const ctx = setup();
-      const dto = { sourceRef: 'legacy-009', memberRef: MEMBER, points: 10, companyCode: 'RTL' as const };
+      const dto = { sourceRef: SR9, memberRef: MEMBER, points: 10, companyCode: 'RTL' as const };
       ctx.db.erasureActive.add(ctx.hash);
       expect((await catchApiError(() => ctx.svc.openingBalance(dto))).body).toEqual({ error: { code: 'member_deleting', message: expect.any(String) } });
       ctx.db.erasureActive.clear();
@@ -145,7 +153,7 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
     it('upsert member (nomor terenkripsi AAD member) + consent ber-bukti sekali; impor ulang tidak menambah baris', async () => {
       const ctx = setup();
       const dto = parseMigrationMember({
-        source_ref: 'legacy-001',
+        source_ref: SR1,
         member_ref: '081234567890',
         consents: [{ purpose: 'marketing', granted: true, version: 'v2019', text_sha256: SHA, recorded_at: '2024-01-02T03:04:05Z' }],
       });
@@ -157,16 +165,16 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
 
     it('member yang sedang dihapus (DSAR) → 409 member_deleting', async () => {
       const ctx = setup();
-      await ctx.svc.importMember(parseMigrationMember({ source_ref: 'x', member_ref: MEMBER }));
+      await ctx.svc.importMember(parseMigrationMember({ source_ref: SRX, member_ref: MEMBER }));
       ctx.members.get(ctx.hash)!.deleted_at = new Date();
-      const err = await catchApiError(() => ctx.svc.importMember(parseMigrationMember({ source_ref: 'x', member_ref: MEMBER })));
+      const err = await catchApiError(() => ctx.svc.importMember(parseMigrationMember({ source_ref: SRX, member_ref: MEMBER })));
       expect(err.getStatus()).toBe(409);
     });
 
     it('SEC-65: member yang dihapus (erasure processing, member sudah DIHAPUS) → 409 member_deleting, tidak dibuat ulang', async () => {
       const ctx = setup();
       ctx.erasure.active.add(ctx.hash);
-      const err = await catchApiError(() => ctx.svc.importMember(parseMigrationMember({ source_ref: 'x', member_ref: MEMBER })));
+      const err = await catchApiError(() => ctx.svc.importMember(parseMigrationMember({ source_ref: SRX, member_ref: MEMBER })));
       expect(err.body).toEqual({ error: { code: 'member_deleting', message: expect.any(String) } });
       expect(ctx.members.size).toBe(0);
       expect(ctx.db.find('INSERT INTO platform.member')).toHaveLength(0);
@@ -180,7 +188,7 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
       ctx.erasure.tags.add(tag);
       const err = await catchApiError(() =>
         ctx.svc.importMember(
-          parseMigrationMember({ source_ref: 'x', member_ref: MEMBER, consents: [{ purpose: 'marketing', granted: true, version: 'v', text_sha256: SHA }] }),
+          parseMigrationMember({ source_ref: SRX, member_ref: MEMBER, consents: [{ purpose: 'marketing', granted: true, version: 'v', text_sha256: SHA }] }),
         ),
       );
       expect(err.body).toEqual({ error: { code: 'member_erased', message: expect.any(String) } });
@@ -190,14 +198,14 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
       const q = ctx.db.find('platform.erasure_suppression')[0];
       expect(q.params.slice(0, 2)).toEqual([ctx.hash, tag]);
       expect(JSON.stringify(q.params)).not.toContain(MEMBER);
-      expect((await ctx.svc.importMember(parseMigrationMember({ source_ref: 'y', member_ref: '6285711112222' }))).member).toBe('created');
+      expect((await ctx.svc.importMember(parseMigrationMember({ source_ref: SRY, member_ref: '6285711112222' }))).member).toBe('created');
     });
 
     it.each([
-      [{ source_ref: 'x', member_ref: MEMBER, consents: [{ purpose: 'ads', granted: true, version: 'v', text_sha256: SHA }] }],
-      [{ source_ref: 'x', member_ref: MEMBER, consents: [{ purpose: 'marketing', granted: 'yes', version: 'v', text_sha256: SHA }] }],
-      [{ source_ref: 'x', member_ref: MEMBER, consents: [{ purpose: 'marketing', granted: true, version: 'v', text_sha256: 'zz' }] }],
-      [{ source_ref: 'x', member_ref: MEMBER, consents: [{ purpose: 'marketing', granted: true, version: 'v', text_sha256: SHA, recorded_at: '2999-01-01T00:00:00Z' }] }],
+      [{ source_ref: SRX, member_ref: MEMBER, consents: [{ purpose: 'ads', granted: true, version: 'v', text_sha256: SHA }] }],
+      [{ source_ref: SRX, member_ref: MEMBER, consents: [{ purpose: 'marketing', granted: 'yes', version: 'v', text_sha256: SHA }] }],
+      [{ source_ref: SRX, member_ref: MEMBER, consents: [{ purpose: 'marketing', granted: true, version: 'v', text_sha256: 'zz' }] }],
+      [{ source_ref: SRX, member_ref: MEMBER, consents: [{ purpose: 'marketing', granted: true, version: 'v', text_sha256: SHA, recorded_at: '2999-01-01T00:00:00Z' }] }],
       [{ source_ref: 'x y', member_ref: MEMBER }],
       [{ member_ref: MEMBER }],
     ])('validasi member → 400 (%j)', async (body) => {
@@ -206,14 +214,66 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
     });
 
     it('validasi opening-balance', async () => {
-      expect(parseOpeningBalance({ source_ref: 'a', member_ref: MEMBER, points: 5, company_code: 'FNB' })).toMatchObject({ points: 5 });
+      expect(parseOpeningBalance({ source_ref: SRA, member_ref: MEMBER, points: 5, company_code: 'FNB' })).toMatchObject({ points: 5 });
       for (const body of [
-        { source_ref: 'a', member_ref: MEMBER, points: 0, company_code: 'FNB' },
-        { source_ref: 'a', member_ref: MEMBER, points: 1.5, company_code: 'FNB' },
-        { source_ref: 'a', member_ref: MEMBER, points: 5, company_code: 'XX' },
+        { source_ref: SRA, member_ref: MEMBER, points: 0, company_code: 'FNB' },
+        { source_ref: SRA, member_ref: MEMBER, points: 1.5, company_code: 'FNB' },
+        { source_ref: SRA, member_ref: MEMBER, points: 5, company_code: 'XX' },
       ]) {
         expect((await catchApiError(() => parseOpeningBalance(body))).getStatus()).toBe(400);
       }
+    });
+  });
+
+  describe('W-25 (Q-P13): source_ref wajib opak', () => {
+    it('diterima: UUID v4 acak & hex HMAC 32..64 (dinormalkan huruf kecil)', () => {
+      expect(parseOpaqueSourceRef(SR1)).toBe(SR1);
+      expect(parseOpaqueSourceRef(SR1.toUpperCase())).toBe(SR1);
+      expect(parseOpaqueSourceRef(SR9)).toBe(SR9);
+      expect(parseOpaqueSourceRef(SRY)).toBe(SRY);
+      // HMAC-SHA256 nyata atas id lama (kunci di luar platform)
+      const h = createHmac('sha256', 'kunci-migrasi-uji').update('CUST-000123').digest('hex');
+      expect(parseOpaqueSourceRef(h)).toBe(h);
+      expect(parseOpaqueSourceRef(h.slice(0, 32))).toBe(h.slice(0, 32));
+    });
+
+    it.each([
+      ['legacy-001'],
+      ['6281234567890'], // nomor HP E.164
+      ['081234567890'], // nomor HP lokal
+      ['+6281234567890'],
+      ['CUST-000123'], // nomor pelanggan lama
+      ['000123'],
+      ['budi@contoh.co.id'], // email
+      ['12345678901234567890123456789012'], // 32 digit desimal (nomor di-padding)
+      ['3632383132333435363738393030303030'], // hex dari teks angka "62812345678900000"
+      ['00000000000000000000000000000abc'], // padding, keragaman rendah
+      ['abababababababababababababababab'],
+      ['3f2b6c1e-8a4d-1c2e-9b1f-0a2b3c4d5e6f'], // UUID v1 (MAC/waktu)
+      ['018f3c1e-8a4d-7c2e-9b1f-0a2b3c4d5e6f'], // UUID v7 (waktu)
+      [' 3f2b6c1e-8a4d-4c2e-9b1f-0a2b3c4d5e6f'], // spasi
+      ['a'.repeat(65)],
+      [''],
+      [12345],
+    ])('ditolak 400 invalid_source_ref: %j', async (v) => {
+      const err = await catchApiError(() => parseOpaqueSourceRef(v));
+      expect(err.getStatus()).toBe(400);
+      expect(err.body).toEqual({ error: { code: 'invalid_source_ref', message: expect.any(String) } });
+    });
+
+    it('jalur impor: DTO member & saldo menolak id lama; service menolak pemanggil internal yang melewati DTO', async () => {
+      for (const parse of [
+        () => parseMigrationMember({ source_ref: '6281234567890', member_ref: MEMBER }),
+        () => parseOpeningBalance({ source_ref: 'CUST-000123', member_ref: MEMBER, points: 5, company_code: 'FNB' }),
+      ]) {
+        expect((await catchApiError(parse)).body).toMatchObject({ error: { code: 'invalid_source_ref' } });
+      }
+      const config = testConfig();
+      const cipher = testCipher(config);
+      const db = new FakeLoyaltyDb();
+      const svc = new MigrationService(config, db, cipher, new LoyaltyService(config, db, cipher), new MetricsService());
+      expect((await catchApiError(() => svc.openingBalance({ sourceRef: 'legacy-001', memberRef: MEMBER, points: 5, companyCode: 'FNB' }))).getStatus()).toBe(400);
+      expect((await catchApiError(() => svc.importMember({ sourceRef: SR1.toUpperCase(), memberRef: MEMBER, consents: [] }))).getStatus()).toBe(400);
     });
   });
 
@@ -239,7 +299,7 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
       await app.getHttpAdapter().getInstance().ready();
       return { app, svc, config };
     }
-    const body = { source_ref: 'a', member_ref: MEMBER, points: 5, company_code: 'FNB' };
+    const body = { source_ref: SRA, member_ref: MEMBER, points: 5, company_code: 'FNB' };
 
     it('MIGRATION_ENABLED=false (default) → 404 meski kunci benar', async () => {
       const key = randomSecret();

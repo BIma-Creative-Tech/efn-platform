@@ -185,6 +185,9 @@ export class AppConfig {
       attempt(() => void getter(), 'parameter LOYALTY_* tidak valid');
     }
     attempt(() => void this.erasureSuppressionDays, 'ERASURE_SUPPRESSION_DAYS tidak valid');
+    attempt(() => void this.dsarOpenOrderMaxDeferDays, 'DSAR_OPEN_ORDER_MAX_DEFER_DAYS tidak valid (1..14, Q-P18)');
+    attempt(() => void this.memberMinAge, 'MEMBER_MIN_AGE tidak valid (17..21, Q-P3)');
+    attempt(() => void this.priceHunterGeoRetentionDays, 'PRICE_HUNTER_GEO_RETENTION_DAYS tidak valid');
     attempt(() => void this.altchaFailMinSample, 'ALTCHA_FAIL_MIN_SAMPLE tidak valid');
     if (this.migrationEnabled) {
       check('MIGRATION_API_KEY');
@@ -779,12 +782,28 @@ export class AppConfig {
     return this.int('DSAR_EXPORT_HOURLY_LIMIT', 10, 1, 1000);
   }
   /**
+   * W-18 (Q-P18, keputusan pemilik proyek 10 Okt 2026): batas maksimum penundaan erasure karena pesanan online
+   * terbuka, dihitung dari `requested_at`. Setelah lewat, erasure tetap dijalankan (tautan member di order dilepas;
+   * CS menyelesaikan pesanan tanpa tautan akun). Plafon 14 = keputusan; nilai lebih kecil boleh (mis. uji).
+   */
+  get dsarOpenOrderMaxDeferDays(): number {
+    return this.int('DSAR_OPEN_ORDER_MAX_DEFER_DAYS', 14, 1, 14);
+  }
+  /**
    * SEC-65 (Gelombang 13c): lama (hari) tag HMAC subjek yang sudah dihapus disimpan di `platform.erasure_suppression`
-   * agar impor migrasi K-7 tidak menghidupkannya kembali. Default 90 (PLACEHOLDER — keputusan DPO; set ≥ sisa masa
-   * migrasi). 0 = tidak menyimpan tag (migrasi hanya ditolak selama erasure masih `scheduled`/`processing`).
+   * agar impor migrasi K-7 tidak menghidupkannya kembali. Default **365** (W-19, Q-P12 diputuskan pemilik proyek
+   * 10 Okt 2026; risiko uji keanggotaan oleh pemegang pepper diterima). 0 = tidak menyimpan tag (migrasi hanya
+   * ditolak selama erasure masih `scheduled`/`processing`).
    */
   get erasureSuppressionDays(): number {
-    return this.int('ERASURE_SUPPRESSION_DAYS', 90, 0, 730);
+    return this.int('ERASURE_SUPPRESSION_DAYS', 365, 0, 730);
+  }
+  /**
+   * W-19 (Q-P3): usia minimum member Super-App. Pendaftaran (= login OTP pertama) wajib menyertakan pernyataan
+   * `age_confirmed: true`. Hanya untuk teks pesan; tidak ada tanggal lahir yang disimpan. Rentang 17..21.
+   */
+  get memberMinAge(): number {
+    return this.int('MEMBER_MIN_AGE', 17, 17, 21);
   }
   /**
    * docs/04 §8.7/§8.9: versi & SHA-256 teks consent AKTIF per purpose: `CONSENT_<PURPOSE>_VERSION`,
@@ -949,6 +968,13 @@ export class AppConfig {
   /** docs/04 §8.4: `price_hunter_report.user_enc` di-null-kan setelah N hari (default 90). */
   get priceHunterUserEncRetentionDays(): number {
     return this.int('PRICE_HUNTER_USER_ENC_RETENTION_DAYS', 90, 1, 3650);
+  }
+  /**
+   * W-19 (Q-P8, keputusan pemilik proyek 10 Okt 2026): `price_hunter_report.geo_lat/geo_lng` di-NULL-kan setelah N hari
+   * (default 90; sebelumnya ikut umur baris 730 h). `updated_at` ikut diperbarui agar ETL membawa versi tanpa lokasi.
+   */
+  get priceHunterGeoRetentionDays(): number {
+    return this.int('PRICE_HUNTER_GEO_RETENTION_DAYS', 90, 1, 3650);
   }
   /** docs/04 §8.4: baris `price_hunter_report` dihapus setelah N hari (default 730 = 2 th). */
   get priceHunterReportRetentionDays(): number {
@@ -1293,11 +1319,12 @@ export class AppConfig {
     return this.int('ONLINE_ORDER_MEMBER_LINK_DAYS', 730, 30, 3650);
   }
   /**
-   * Retensi `platform.online_admin_audit` (audit CLI CS). Default 400 hari = USULAN (≥ siklus audit tahunan + margin),
-   * menunggu keputusan DPO (Q-P19). Baris memuat aktor staf `<user>/<host>` dan alasan tersamarkan.
+   * Retensi `platform.online_admin_audit` (audit CLI CS). Default **3650 hari (10 th)** — W-19, Q-P19 diputuskan
+   * pemilik proyek 10 Okt 2026 (sama dengan dokumen keuangan). Baris memuat aktor staf `<user>/<host>` dan alasan
+   * tersamarkan (SOP: alasan tanpa nama pelanggan).
    */
   get onlineAdminAuditRetentionDays(): number {
-    return this.int('ONLINE_ADMIN_AUDIT_RETENTION_DAYS', 400, 30, 3650);
+    return this.int('ONLINE_ADMIN_AUDIT_RETENTION_DAYS', 3650, 30, 3650);
   }
   get onlineEventRetentionDays(): number {
     return this.int('ONLINE_EVENT_RETENTION_DAYS', 180, 7, 3650);
