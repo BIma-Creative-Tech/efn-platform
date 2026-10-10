@@ -32,8 +32,11 @@ from odoo.tools import float_compare
 from .efn_online_channel import iso_utc, parse_iso_utc
 from .efn_online_common import (
     CANCEL_REASONS,
+    CANCEL_SCOPE,
+    CONFIRM_SCOPE,
     DEFAULT_PICKUP_KDF_ROUNDS,
     FULFILMENTS,
+    HANDOVER_SCOPE,
     IDEMPOTENCY_KEY_RE,
     MAX_STATUS_REFS,
     OPAQUE_REF_RE,
@@ -44,6 +47,7 @@ from .efn_online_common import (
     canonical_sha256,
     check_amount_int,
     check_str,
+    internal_scope,
     lines_payload,
     online_error,
     pickup_crypt_context,
@@ -86,11 +90,15 @@ CANCEL_TO_REFUND_REASON = {
 PICKUP_KDF_PARAM = "efn_online.pickup_code_kdf_rounds"
 PICKUP_MAX_DAYS_PARAM = "efn_online.pickup_code_max_days"
 DEFAULT_PICKUP_MAX_DAYS = 7
-# SEC-95: penanda picking yang boleh divalidasi (diisi _efn_handover SETELAH kode terverifikasi). Disimpan di
-# cache transaksi cursor (bukan context) sehingga tidak bisa dipalsukan klien RPC.
-HANDOVER_CACHE_KEY = "efn_online_handover_picking_ids"
 PAID_STATES = ("paid", "confirmed", "stock_short", "ready", "review")
 OPS_CANCEL_MIN_REASON = 10
+
+
+def _efn_is_customer_move(move):
+    """Move yang mengeluarkan barang ke pelanggan (atau transit) — dipakai guard SEC-105 dan serah terima."""
+    usages = ("customer", "transit")
+    final = move.location_final_id if "location_final_id" in move._fields else move.location_dest_id
+    return move.location_dest_id.usage in usages or final.usage in usages
 
 
 class _ReviewNeeded(Exception):
@@ -451,7 +459,8 @@ class EfnOnlineOrder(models.Model):
         before = sale_order.amount_total
         try:
             with self.env.cr.savepoint():
-                sale_order.with_context(efn_online_internal=True, send_email=False).action_confirm()
+                with internal_scope(self.env, CONFIRM_SCOPE, sale_order.ids):
+                    sale_order.with_context(send_email=False).action_confirm()
                 sale_order.flush_recordset()
                 sale_order.invalidate_recordset(["amount_total"])
                 if sale_order.state != "sale" or currency.compare_amounts(sale_order.amount_total, before) != 0:
@@ -556,7 +565,8 @@ class EfnOnlineOrder(models.Model):
         if cancel_sale_order and sale_order and sale_order.state != "cancel":
             if sale_order.locked:
                 sale_order.sudo().action_unlock()
-            sale_order.with_context(efn_online_internal=True, disable_cancel_warning=True)._action_cancel()
+            with internal_scope(self.env, CANCEL_SCOPE, sale_order.ids):
+                sale_order._action_cancel()
         self.write(
             {
                 "state": "cancelled",
@@ -720,22 +730,28 @@ class EfnOnlineOrder(models.Model):
                 self._efn_set_review("pickup_code_attempts")
                 return False, _("Kode salah %(n)d kali. Pesanan dikunci untuk ditinjau.", n=attempts)
             return False, _("Kode ambil salah. Sisa percobaan: %(n)d.", n=max_attempts - attempts)
-        pickings = self.sale_order_id.picking_ids.filtered(lambda p: p.state not in ("done", "cancel"))
-        for picking in pickings:
-            picking.action_assign()
-            for move in picking.move_ids.filtered(lambda m: m.state not in ("done", "cancel")):
-                if move.product_uom.compare(move.quantity, move.product_uom_qty) < 0:  # pickup: barang ada di outlet
-                    move.quantity = move.product_uom_qty
-            allowed = self.env.cr.cache.setdefault(HANDOVER_CACHE_KEY, set())
-            allowed.add(picking.id)
-            try:
+        # SEC-104: serah terima WAJIB mengeluarkan barang lewat move SO ke lokasi pelanggan di sini. SO batal /
+        # tanpa move pelanggan yang masih terbuka (mis. picking dibatalkan/dikeluarkan lewat jalur lain) -> review.
+        sale_order = self.sale_order_id
+        customer_moves = sale_order.order_line.move_ids.filtered(
+            lambda m: m.state != "cancel" and _efn_is_customer_move(m)
+        )
+        if sale_order.state != "sale" or not customer_moves or any(m.state == "done" for m in customer_moves):
+            self._efn_set_review("handover_no_picking")
+            return False, _("Pengiriman pesanan ini tidak valid untuk diserahkan. Pesanan dikunci untuk ditinjau.")
+        with internal_scope(self.env, HANDOVER_SCOPE, sale_order.ids):
+            for picking in customer_moves.picking_id:
+                picking.action_assign()
+                for move in picking.move_ids.filtered(lambda m: m.state not in ("done", "cancel")):
+                    if move.product_uom.compare(move.quantity, move.product_uom_qty) < 0:  # pickup: barang di outlet
+                        move.quantity = move.product_uom_qty
                 result = picking.with_context(
                     skip_backorder=True, picking_ids_not_to_backorder=picking.ids
                 ).button_validate()
-            finally:
-                allowed.discard(picking.id)
-            if result is not True and picking.state != "done":
-                raise UserError(_("Pengiriman %(name)s tidak dapat divalidasi otomatis.", name=picking.name))
+                if result is not True and picking.state != "done":
+                    raise UserError(_("Pengiriman %(name)s tidak dapat divalidasi otomatis.", name=picking.name))
+        if any(m.state != "done" for m in customer_moves):
+            raise UserError(_("Sebagian barang pesanan ini belum dapat dikeluarkan."))
         self.write({"state": "picked_up", "picked_up_at": fields.Datetime.now(), "pickup_attempts": 0})
         self._efn_clear_secret()
         self._efn_emit("picked_up")

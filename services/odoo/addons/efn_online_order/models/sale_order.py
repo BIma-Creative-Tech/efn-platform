@@ -1,16 +1,24 @@
-"""Tautan SO <-> pesanan online + hook pembatalan dari UI Odoo (event ``cancelled`` initiator ``odoo``).
+"""Tautan SO <-> pesanan online + guard pembatalan, perubahan state, dan pengeluaran barang SO online.
 
-Tidak ada metode publik baru (gerbang SEC-58): hanya override privat ``_action_cancel`` / ``_action_done``.
-SEC-95 (r10): batal bagian berbayar hanya Sales manager + alasan; picking keluar SO online hanya divalidasi lewat
-wizard serah terima (kode ambil). UI CE 19: tombol *Cancel* SO hanya dialog konfirmasi JS generik (tanpa cek
-faktur/grup); faktur ter-posting tidak dibatalkan CE (hanya draf) -> kontrol ada di hook ini.
+Tidak ada metode publik baru (gerbang SEC-58): hanya override privat/ORM (``_action_cancel``, ``write``,
+``stock.move._action_done``, ``pos.order.line.create``).
+- SEC-95 (r10): batal bagian berbayar hanya Sales manager + alasan. UI CE 19: tombol *Cancel* SO hanya dialog
+  konfirmasi JS generik (tanpa cek faktur/grup); faktur ter-posting tidak dibatalkan CE (hanya draf).
+- SEC-104 (re-review G17, L-19): jalur internal E-28 (konfirmasi/batal dari saga) ditandai lewat ``cr.cache``
+  (``internal_scope``), BUKAN context -> ``efn_online_internal`` dari context RPC tidak berpengaruh.
+  ``write({'state': ...})`` langsung pada SO online di luar jalur itu ditolak.
+- SEC-105: guard serah terima di level ``stock.move._action_done``: move ber-``sale_line_id`` SO online menuju
+  lokasi pelanggan/transit hanya boleh selesai di dalam ``_efn_handover`` (setelah kode valid). Menangkap ubah
+  tipe operasi, pindah move ke picking manual, backorder, batch. ``pos_sale`` (bila terpasang): SO online tidak
+  dimuat di POS dan baris POS yang menautkan SO online ditolak (settle/uang muka).
 BFF tidak pernah memakai ``get_portal_url``/``access_token`` SO (route portal ``/my/orders``, temuan #38).
 """
 
-from odoo import _, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 
-from .efn_online_order import HANDOVER_CACHE_KEY
+from .efn_online_common import CANCEL_SCOPE, CONFIRM_SCOPE, HANDOVER_SCOPE, in_scope, internal_scope
+from .efn_online_order import _efn_is_customer_move
 
 
 class SaleOrder(models.Model):
@@ -28,39 +36,65 @@ class SaleOrder(models.Model):
         "Hanya tercatat di Odoo; tidak dikirim ke BFF.",
     )
 
+    def _efn_online_orders(self):
+        return self.filtered(lambda so: so.sudo().efn_online_order_id)
+
     def _action_cancel(self):
         online_by_so = {}
-        if not self.env.context.get("efn_online_internal"):
+        external = self._efn_online_orders().filtered(lambda so: not in_scope(self.env, CANCEL_SCOPE, so.ids))
+        for order in external:
             # SEC-95: cek grup memakai user ASLI (bukan sudo) sebelum hook berjalan dengan sudo.
-            for order in self.filtered(lambda so: so.sudo().efn_online_order_id):
-                note = order.sudo().efn_online_cancel_note
-                online = order.sudo().efn_online_order_id
-                online.with_user(self.env.user)._efn_ops_cancel_check(note)
-                online_by_so[order.id] = (online, note)
-        result = super()._action_cancel()
+            note = order.sudo().efn_online_cancel_note
+            online = order.sudo().efn_online_order_id
+            online.with_user(self.env.user)._efn_ops_cancel_check(note)
+            online_by_so[order.id] = (online, note)
+        with internal_scope(self.env, CANCEL_SCOPE, external.ids):
+            result = super()._action_cancel()
         for online, note in online_by_so.values():
             online._efn_ops_cancelled(reason_note=note, actor=self.env.user)
         return result
 
+    def write(self, vals):
+        if "state" in vals:
+            for order in self._efn_online_orders():
+                allowed = (vals["state"] == "cancel" and in_scope(self.env, CANCEL_SCOPE, order.ids)) or (
+                    vals["state"] == "sale" and in_scope(self.env, CONFIRM_SCOPE, order.ids)
+                )
+                if not allowed:
+                    raise UserError(
+                        _("Status pesanan online %(name)s hanya berubah lewat alur kanal online.", name=order.name)
+                    )
+        return super().write(vals)
 
-class StockPicking(models.Model):
-    _inherit = "stock.picking"
 
-    def _action_done(self):
-        """SEC-95: pengiriman SO online tidak boleh divalidasi di luar wizard serah terima (melewati kode ambil).
-        Penanda ada di cache transaksi cursor (diisi ``_efn_handover`` setelah kode valid), bukan context klien."""
-        allowed = self.env.cr.cache.get(HANDOVER_CACHE_KEY) or set()
-        for picking in self:
+class StockMove(models.Model):
+    _inherit = "stock.move"
+
+    def _action_done(self, cancel_backorder=False):
+        """SEC-105: barang SO online ke pelanggan hanya keluar lewat wizard serah terima (kode ambil)."""
+        for move in self:
+            order = move.sudo().sale_line_id.order_id
             if (
-                picking.picking_type_code == "outgoing"
-                and picking.sudo().sale_id.efn_online_order_id
-                and picking.id not in allowed
+                order.efn_online_order_id
+                and _efn_is_customer_move(move.sudo())
+                and not in_scope(self.env, HANDOVER_SCOPE, order.ids)
             ):
                 raise UserError(
                     _(
-                        "Pengiriman %(name)s milik pesanan online hanya dapat divalidasi lewat "
-                        "'Serahkan (kode ambil)'.",
-                        name=picking.name,
+                        "Barang pesanan online %(name)s hanya dapat dikeluarkan lewat 'Serahkan (kode ambil)'.",
+                        name=order.name,
                     )
                 )
-        return super()._action_done()
+        return super()._action_done(cancel_backorder=cancel_backorder)
+
+
+class PosOrderLine(models.Model):
+    _inherit = "pos.order.line"
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        """SEC-105: ``pos_sale`` (settle/uang muka SO di POS) tidak boleh menautkan SO online."""
+        so_ids = {vals.get("sale_order_origin_id") for vals in vals_list if vals.get("sale_order_origin_id")}
+        if so_ids and self.env["sale.order"].sudo().browse(list(so_ids)).filtered("efn_online_order_id"):
+            raise UserError(_("Pesanan online tidak dapat diproses di POS; serahkan lewat 'Serahkan (kode ambil)'."))
+        return super().create(vals_list)

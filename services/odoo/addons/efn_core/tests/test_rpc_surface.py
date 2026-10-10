@@ -83,6 +83,9 @@ RPC_ALLOWLIST = {
     # 3 metode UI staf (web client lewat WireGuard, bukan gateway).
     ("efn.online.order", "action_efn_ready"): "grup stock.group_stock_user + check_access(read) + company user",
     ("efn.online.order", "action_efn_retry_events"): "grup sales_team.group_sale_manager + check_access + company",
+    # efn_online_pos_sale (re-review G17 SEC-105): override metode publik CE pos_sale; hanya MENOLAK SO online
+    # lalu super() (hak akses tetap ACL/record rule CE pos_sale).
+    ("sale.order", "load_sale_order_from_pos"): "override CE pos_sale (tolak SO online)",
     ("efn.online.handover.wizard", "action_confirm"): "grup stock user + check_access(read) order + company; "
     "kode = verifikasi pbkdf2, 5x salah -> review",
 }

@@ -103,6 +103,23 @@ Uji manual: Penjualan → Pesanan → **Pesanan online** (filter "Perlu disiapka
 - **SEC-103**: wizard serah terima tidak melempar exception setelah membaca kode (akses ditolak/kode salah/validasi
   gagal -> pesan), sehingga `code` selalu dikosongkan dan ter-commit.
 
+## Re-review G17 (SEC-104/105, L-19)
+- **SEC-104**: tidak ada lagi penanda internal berbasis context. Konfirmasi/batal dari saga ditandai lewat
+  `internal_scope(env, CONFIRM_SCOPE|CANCEL_SCOPE, so_ids)` di `cr.cache` (hanya kode server di transaksi yang sama,
+  dibersihkan di `finally`). `efn_online_internal` dari context RPC diabaikan. `sale.order.write({'state': ...})`
+  pada SO online di luar scope ditolak. `_efn_handover` menolak (order -> `review`, kode `handover_no_picking`)
+  bila SO bukan `sale`, tidak punya move ke pelanggan yang masih terbuka, atau sebagian sudah keluar; sukses hanya
+  bila semua move pelanggan `done` di dalam wizard.
+- **SEC-105**: guard serah terima pindah ke `stock.move._action_done`: move ber-`sale_line_id` SO online menuju
+  lokasi `customer`/`transit` (`location_dest_id` atau `location_final_id`) hanya boleh selesai dalam
+  `HANDOVER_SCOPE` (diisi `_efn_handover` setelah kode valid). Tertangkap: ubah `picking_type_id`, pindah move ke
+  picking manual, backorder/parsial, batch/mass validate. `pos.order.line.create` menolak `sale_order_origin_id` SO
+  online (settle/uang muka `pos_sale`). Modul jembatan auto-install **`efn_online_pos_sale`** (bila `pos_sale`
+  terpasang) mengeluarkan SO online dari data POS dan menolak `load_sale_order_from_pos`.
+- Audit pola serupa di modul ini: context yang tersisa hanya `lang` (whitelist, dibersihkan di caller check),
+  `ir_cron_progress_id` (metode cron privat, tidak RPC) dan context standar Odoo (`send_email=False`,
+  `skip_backorder`, `mail_create_nosubscribe`) yang tidak membuka guard.
+
 ## Belum / batasan
 - `/json/2` nyata lewat `odoo-rpc-gateway` + API key belum diuji end-to-end (HttpCase bearer menggantung di harness,
   catatan SEC-58); status HTTP per exception json2 19.0 [B].

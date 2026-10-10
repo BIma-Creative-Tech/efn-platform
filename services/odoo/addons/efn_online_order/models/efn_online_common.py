@@ -7,6 +7,7 @@ PERSIS ``efn_online:<kode>``), §10.3.6 (kode ambil = rahasia; Odoo hanya menyim
 import hashlib
 import json
 import re
+from contextlib import contextmanager
 
 from passlib.context import CryptContext
 
@@ -116,3 +117,29 @@ def lines_payload(lines, max_lines):
         require(product_id not in result)
         result[product_id] = qty
     return sorted(result.items())
+
+
+# SEC-104/L-19: penanda "jalur internal" (melewati guard) TIDAK boleh berbasis context (context RPC dikendalikan
+# klien: /web/dataset/call_kw kwargs.context). Penanda disimpan di cache transaksi cursor (`cr.cache`), yang hanya
+# bisa diisi kode server di transaksi yang sama, dan dibersihkan di `finally`.
+CANCEL_SCOPE = "efn_online_internal_cancel_so_ids"
+CONFIRM_SCOPE = "efn_online_internal_confirm_so_ids"
+HANDOVER_SCOPE = "efn_online_handover_so_ids"
+
+
+@contextmanager
+def internal_scope(env, key, ids):
+    bucket = env.cr.cache.setdefault(key, set())
+    added = set(ids) - bucket
+    bucket.update(added)
+    try:
+        yield
+    finally:
+        current = env.cr.cache.get(key)
+        if current is not None:
+            current.difference_update(added)
+
+
+def in_scope(env, key, ids):
+    ids = set(ids)
+    return bool(ids) and ids <= (env.cr.cache.get(key) or set())

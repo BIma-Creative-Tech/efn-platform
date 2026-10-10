@@ -224,12 +224,13 @@ jobs:
       # atas konfigurasi nyata (4 company, POS, MRP/FEFO, aturan audit). Tanpa modul OCA/vendor (ADR-031):
       # hanya Odoo CE 19 + efn_* (gerbang check-odoo-deps di bawah).
       # efn_privacy menarik privacy_lookup (CE, depends manifest) otomatis; tidak didaftarkan di sini
-      # karena pick() hanya menerima modul di services/odoo/addons.
+      # karena pick() hanya menerima modul di services/odoo/addons. Sama: efn_online_pos_sale menarik pos_sale
+      # (+ sale_management) agar jalur POS SEC-105 teruji di CI.
       EFN_TEST_MODULES: >-
         efn_core efn_audit efn_pos_otp_gate efn_kitting
         efn_pos_payment_gateway efn_pos_loyalty_ledger efn_privacy efn_pos_kds
         efn_setup_company efn_setup_pos efn_setup_mrp efn_setup_audit
-        efn_online_order efn_setup_online
+        efn_online_order efn_setup_online efn_online_pos_sale
       # G17 (docs/04 §10.15): efn_online_order menarik sale_stock (CE) lewat depends -> auto-install
       # sale_loyalty/pos_sale ikut terpasang di DB test yang sama, sehingga regresi POS teruji bersama modul online.
       # Di-install SETELAH test, tanpa test: efn_setup_security menaikkan auth_password_policy.minlength ke 12,

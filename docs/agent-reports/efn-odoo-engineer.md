@@ -650,3 +650,30 @@ Batas file: hanya `efn_online_order/**` (tidak menyentuh `efn_setup_company/pos/
   - Demo `--with-demo`: 64 test, 0 failed, 0 skip.
   - ruff check/format lolos.
 - **Untuk lead**: kunci tambahan `cancel_reason` (event `cancelled`) dan `refund.initiator_uid/initiator_login` belum tertulis di docs/04 §10.5. Parser BFF menerima kunci tambahan; `initiator_*` sudah dibaca BFF.
+
+## Gelombang 17 — re-review G17: SEC-104 / SEC-105 (10 Okt 2026, L-19)
+- **SEC-104**: semua penanda internal berbasis context diganti `cr.cache`.
+  - `internal_scope`/`in_scope` di `efn_online_common`, dengan scope `CONFIRM`/`CANCEL`/`HANDOVER`.
+  - Penanda lama `efn_online_internal` (confirm & cancel) dihapus.
+  - `sale.order.write` state SO online di luar scope ditolak.
+  - `_efn_handover` menolak SO batal, tanpa move pelanggan terbuka, atau yang sudah sebagian keluar (order -> `review`).
+- **SEC-105**: guard pindah ke `stock.move._action_done` (move `sale_line_id` SO online -> lokasi customer/transit) dan menggantikan guard `stock.picking`.
+  - `pos.order.line.create` menolak `sale_order_origin_id` SO online.
+  - Modul jembatan baru **`efn_online_pos_sale`** (auto-install, depends `efn_online_order` + `pos_sale`): domain loader POS mengecualikan SO online; override `load_sale_order_from_pos` menolak SO online (+1 entri `RPC_ALLOWLIST`, override CE).
+  - Alasan modul terpisah: override `pos_sale` hanya efektif di atas `pos_sale` dalam MRO, sedangkan `efn_online_order` tidak boleh menarik `pos_sale`/`sale_management`. Ini di luar batas file awal (folder baru); disetujui konteks tugas L-19 (b).
+- **Test baru** (`TestEfnOnlineReReviewG17`, 7 + `efn_online_pos_sale` 1):
+  - context `efn_online_internal`/kunci cache palsu tidak membuka guard batal;
+  - write state langsung ditolak;
+  - handover setelah picking dibatalkan -> review;
+  - ubah tipe operasi lalu validasi ditolak;
+  - pindah move ke picking manual ditolak;
+  - parsial/backorder ditolak;
+  - baris POS ber-SO online ditolak;
+  - loader/`load_sale_order_from_pos` POS mengecualikan SO online.
+- **Untuk devsecops/CI**: tambahkan `pos_sale efn_online_pos_sale` ke `EFN_TEST_MODULES` agar jalur POS teruji (menarik `sale_management`).
+
+- **Validasi** (container, DB sementara):
+  - Suite efn penuh 16 modul (+ `pos_sale` → `sale_management`, + `efn_online_pos_sale`), lalu `efn_setup_security`: **413 test, 0 failed, 0 error, 0 baris ERROR**.
+  - Tour dengan `pos_sale` + `efn_online_pos_sale`: **20/20, 0 ERROR, 0 skip browser**.
+  - Modul online tanpa `pos_sale`: **118 test, 0 failed** (test POS di-skip dengan benar).
+  - ruff check/format lolos.

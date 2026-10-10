@@ -743,7 +743,7 @@ class TestEfnOnlineSecurityR10(EfnOnlineCommon):
         picking = order.sale_order_id.picking_ids
         self.assertTrue(picking)
         picking.move_ids.quantity = 3.0
-        for ctx in ({}, {"efn_online_handover_picking_ids": picking.ids, "efn_online_internal": True}):
+        for ctx in ({}, {"efn_online_handover_so_ids": order.sale_order_id.ids, "efn_online_internal": True}):
             with self.subTest(ctx=ctx), self.assertRaises(UserError):
                 picking.with_user(self.stock_user).with_context(**ctx).button_validate()
         self.assertNotEqual(picking.state, "done")
@@ -839,3 +839,111 @@ class TestEfnOnlineInitiatorPayload(EfnOnlineCommon):
         self.assertEqual(payload["refund"]["initiator"], "bff")
         self.assertNotIn("initiator_uid", payload["refund"])
         self.assertNotIn("initiator_login", payload["refund"])
+
+
+@tagged("post_install", "-at_install", "efn")
+class TestEfnOnlineReReviewG17(EfnOnlineCommon):
+    """Re-review G17 (SEC-104/SEC-105, L-19): bypass lewat context RPC dan jalur pengeluaran barang lain."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        common = {"company_id": cls.company.id, "company_ids": [Command.set(cls.company.ids)]}
+        cls.salesman = new_test_user(
+            cls.env,
+            login="efn_rr_sales",
+            groups="base.group_user,sales_team.group_sale_salesman_all_leads",
+            **common,
+        )
+        cls.stock_user = new_test_user(
+            cls.env, login="efn_rr_stock", groups="base.group_user,stock.group_stock_manager", **common
+        )
+
+    def _paid(self):
+        part, _payload, _result = self.place()
+        self.pay(part)
+        return self.record(part)
+
+    def _assert_not_shipped(self, order):
+        moves = order.sale_order_id.order_line.move_ids
+        self.assertFalse(moves.filtered(lambda m: m.state == "done"))
+        self.assertEqual(order.state, "confirmed")
+
+    # ---------------------------------------------------------------- SEC-104
+    def test_sec104_context_flag_does_not_bypass_cancel_guard(self):
+        order = self._paid()
+        so = order.sale_order_id
+        for ctx in (
+            {"efn_online_internal": True, "disable_cancel_warning": True},
+            {"efn_online_internal_cancel_so_ids": so.ids},
+        ):
+            with self.subTest(ctx=ctx), self.assertRaises(AccessError):
+                so.with_user(self.salesman).with_context(**ctx).action_cancel()
+        self.assertEqual(so.state, "sale")
+        self.assertEqual(order.state, "confirmed")
+
+    def test_sec104_direct_state_write_rejected(self):
+        order = self._paid()
+        so = order.sale_order_id
+        for state in ("cancel", "draft", "sent"):
+            with self.subTest(state=state), self.assertRaises(UserError):
+                so.with_context(efn_online_internal=True).write({"state": state})
+        self.assertEqual(so.state, "sale")
+
+    def test_sec104_handover_refused_when_pickings_cancelled(self):
+        order = self._paid()
+        order.sale_order_id.picking_ids.with_user(self.stock_user).action_cancel()
+        ok, _message = order._efn_handover(PICKUP_CODE)
+        self.assertFalse(ok)
+        self.assertEqual(order.state, "review")
+        self.assertEqual(order.review_reason, "handover_no_picking")
+        self.assertFalse(order.picked_up_at)
+
+    # ---------------------------------------------------------------- SEC-105
+    def test_sec105_change_picking_type_then_validate_rejected(self):
+        order = self._paid()
+        picking = order.sale_order_id.picking_ids
+        internal = self.warehouse.with_context(active_test=False).int_type_id
+        self.assertTrue(internal)
+        picking.with_user(self.stock_user).write({"picking_type_id": internal.id})
+        picking.move_ids.quantity = 3.0
+        with self.assertRaises(UserError):
+            picking.with_user(self.stock_user).with_context(efn_online_internal=True).button_validate()
+        self._assert_not_shipped(order)
+
+    def test_sec105_move_to_manual_picking_rejected(self):
+        order = self._paid()
+        picking = order.sale_order_id.picking_ids
+        manual = self.env["stock.picking"].create(
+            {
+                "picking_type_id": picking.picking_type_id.id,
+                "location_id": picking.location_id.id,
+                "location_dest_id": picking.location_dest_id.id,
+                "company_id": self.company.id,
+            }
+        )
+        picking.move_ids.write({"picking_id": manual.id})
+        self.assertNotEqual(manual, picking)
+        manual.move_ids.quantity = 3.0
+        with self.assertRaises(UserError):
+            manual.with_user(self.stock_user).button_validate()
+        self._assert_not_shipped(order)
+
+    def test_sec105_partial_backorder_rejected(self):
+        order = self._paid()
+        picking = order.sale_order_id.picking_ids
+        picking.move_ids.quantity = 1.0
+        with self.assertRaises(UserError):
+            picking.with_user(self.stock_user).with_context(
+                skip_backorder=True, picking_ids_not_to_backorder=picking.ids
+            ).button_validate()
+        self._assert_not_shipped(order)
+
+    def test_sec105_pos_line_cannot_link_online_so(self):
+        """Jaring terakhir di efn_online_order (domain/loader POS diuji di efn_online_pos_sale)."""
+        order = self._paid()
+        PosLine = self.env["pos.order.line"]
+        if "sale_order_origin_id" not in PosLine._fields:
+            self.skipTest("pos_sale tidak terpasang")
+        with self.assertRaises(UserError):
+            PosLine.create([{"sale_order_origin_id": order.sale_order_id.id, "product_id": self.p_rice.id, "qty": 3}])

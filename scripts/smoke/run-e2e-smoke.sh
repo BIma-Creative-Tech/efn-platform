@@ -840,11 +840,17 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
     (cd "$ROOT" && docker compose -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.dev.yml ${1:+-f "$1"} \
       --env-file infra/compose/.env --profile core up -d --no-deps --force-recreate api-gateway > /dev/null 2>&1)
     for _ in $(seq 1 60); do [[ "$(docker inspect "$BFF" --format '{{.State.Health.Status}}' 2>/dev/null)" == healthy ]] && break; sleep 5; done
-    # Traefik (provider docker) butuh beberapa detik memasang router container baru: sebelum itu 404 tanpa origin.
-    for _ in $(seq 1 30); do
-      [[ "$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_edge --add-host "api.efn.local:${TRAEFIK_IP}" -v "${WORK_W}:/work" \
+    # Traefik (provider docker): selama transisi status health container (starting -> healthy) router api dilepas
+    # ±30-40 s (404 tanpa origin), walau container sudah menjawab. Tunggu 5 jawaban 200 berturut-turut (jeda 3 s).
+    local ok200=0
+    for _ in $(seq 1 60); do
+      if [[ "$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_edge --add-host "api.efn.local:${TRAEFIK_IP}" -v "${WORK_W}:/work" \
         curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -o /dev/null \
-        -w '%{http_code}' --cacert /work/edge_ca.crt https://api.efn.local/v1/auth/challenge 2>/dev/null)" == 200 ]] && break
+        -w '%{http_code}' --cacert /work/edge_ca.crt https://api.efn.local/v1/auth/challenge 2>/dev/null)" == 200 ]]; then
+        ok200=$((ok200 + 1)); [[ "$ok200" -ge 5 ]] && break
+      else
+        ok200=0
+      fi
       sleep 3
     done
     docker logs -f --since 1s "$BFF" >> "${WORK}/bff.log" 2>&1 &
