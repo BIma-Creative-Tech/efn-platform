@@ -112,3 +112,7 @@ user `efn_online_rtl` lebih dulu), lalu `up -d --force-recreate api-gateway`.
 - PDP: kode ambil & HP tidak ada di log BFF/Odoo/odoo-rpc-gateway/Traefik, Loki, maupun pg_dump tabel online Odoo.
 - Kill switch: overlay sementara `ONLINE_ENABLED=false` → recreate api-gateway → cart/quote/order 503, katalog & `/v1/me`
   tetap; recreate kembali. Skenario ini me-recreate api-gateway dua kali (±3 menit), karena itu `o` dijalankan terakhir.
+- G17 r10/L-19 (10 Okt): skenario 4b — picking di luar wizard & context `efn_online_internal` palsu ditolak; batal SO
+  oleh manajer `smoke_online_mgr` → refund `approval_required` → CLI approve (peran `cs` ditolak, approver lain →
+  settled); refund CS (`approval_required`, pembuat/peran cs ditolak), settle manual SEC-112; stok non-katalog 404;
+  label pajak `PPN 11%`. Identitas/peran CLI disimulasikan lewat env `EFN_CS_OPERATOR`/`EFN_CS_ROLE` (dev).

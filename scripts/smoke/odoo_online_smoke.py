@@ -13,6 +13,7 @@
 #   - `outbox`   : proses outbox event yang jatuh tempo sekarang (tanpa menunggu cron 1 menit).
 #   - `ops_cancel`: manajer `smoke_online_mgr` membatalkan SO berbayar dari UI (SEC-95, alasan wajib).
 #   - `picking_direct`: staf memvalidasi picking keluar SO online di luar wizard (harus ditolak, SEC-95).
+#   - `fake_ctx`: context `efn_online_internal` palsu (staf batal, superuser tulis state) -> ditolak (SEC-104).
 #   - `apikey`   : buat API key user teknis lewat prosedur runbook (with_user, scope global, kedaluwarsa < durasi
 #                  grup). Key ditulis ke /tmp/efn_online_key (0600) di container, BUKAN ke stdout.
 # Tidak ada secret di file ini; tidak ada data pribadi (kanal online memakai partner generik tanpa HP/email).
@@ -356,6 +357,36 @@ def step_picking_direct():
     out(ok=bool(ids), attempts=results, picking_state=picking.sudo().state, **describe(order))
 
 
+def step_fake_ctx():
+    """SEC-104 (L-19a): context `efn_online_internal` palsu tidak membuka guard (penanda internal = cr.cache).
+
+    (1) staf non-manajer: action_cancel SO online berbayar; (2) superuser: tulis `state` SO langsung."""
+    se = staff_env()
+    order = find_order(env(su=True))
+    so_id = order.sale_order_id.id
+    results = {}
+    attempts = {
+        # alasan diisi superuser agar yang diuji hanya guard grup/penanda internal, bukan alasan kosong
+        "staff_cancel": lambda: (
+            env["sale.order"].sudo().browse(so_id).write({"efn_online_cancel_note": "konteks palsu SMOKE-CTX"}),
+            se["sale.order"].browse(so_id).with_context(efn_online_internal=True).action_cancel(),
+        ),
+        "sudo_write_state": lambda: (
+            env["sale.order"].sudo().browse(so_id).with_context(efn_online_internal=True).write({"state": "cancel"})
+        ),
+    }
+    for name, fn in attempts.items():
+        try:
+            fn()
+            env.cr.commit()
+            results[name] = "allowed"
+        except Exception as exc:  # noqa: BLE001 - dilaporkan sebagai hasil smoke
+            env.cr.rollback()
+            results[name] = type(exc).__name__
+    order = find_order(env(su=True))
+    out(ok=True, results=results, **describe(order))
+
+
 def step_apikey():
     st = load_state()
     user = env["res.users"].browse(st["user_id"])
@@ -384,4 +415,5 @@ def step_apikey():
     "apikey": step_apikey,
     "ops_cancel": step_ops_cancel,
     "picking_direct": step_picking_direct,
+    "fake_ctx": step_fake_ctx,
 }[STEP]()

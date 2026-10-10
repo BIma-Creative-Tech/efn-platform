@@ -707,6 +707,11 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   check "o.cli_refund_over_portion_rejected" "$([[ "$r" == *exit=1* && "$n" == "$before" ]] && echo 1 || echo 0)" "$(tail -c 160 <<< "$r") refunded/porsi=$n"
   r="$(psql_platform -c "select string_agg(action || ':' || outcome || ':' || actor, ',' order by id) from platform.online_admin_audit where refund_id='$crid'")"
   check "o.cli_audit_recorded" "$([[ "$r" == *'refund:'*'smoke-cs-op/smoke'* && "$r" == *'refund_approve:'*'smoke-cs-sup/smoke'* && "$r" == *rejected* ]] && echo 1 || echo 0)" "$r"
+  # SEC-112: settle manual hanya peran approver yang bukan pembuat refund (dicek sebelum status refund)
+  r="$(cs smoke-cs-other cs online-refund-settle --refund="$crid" --provider-ref=SMOKE-TRF-1 --reason="smoke settle peran cs")"
+  r="$r | $(cs smoke-cs-op approver online-refund-settle --refund="$crid" --provider-ref=SMOKE-TRF-2 --reason="smoke settle pembuat")"
+  n="$(psql_platform -c "select string_agg(outcome || ':' || actor, ',' order by id) from platform.online_admin_audit where refund_id='$crid' and action='refund_settle'")"
+  check "o.cli_settle_role_and_creator_rejected" "$([[ "$r" == *exit=1*'|'*exit=1* && "$n" == *'rejected_role:smoke-cs-other/smoke'* && "$n" == *'rejected_same_actor:smoke-cs-op/smoke'* && "$(psql_platform -c "select status from platform.online_refund where id='$crid'")" == settled ]] && echo 1 || echo 0)" "audit=$n cli=$(tail -c 160 <<< "$r")"
   r="$(oodoo -e SMOKE_STEP=order -e SMOKE_PART="$part")"
   check "o.odoo_credit_note_partial" "$([[ "$(field credit_notes "$r")" -ge 1 && "$(field state "$r")" == picked_up ]] && echo 1 || echo 0)" "$r"
 
@@ -764,6 +769,8 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   opy "$pc" c wait opc fulfilling confirmed
   r="$(oodoo -e SMOKE_STEP=picking_direct -e SMOKE_PART="$opart")"
   check "o.picking_outside_wizard_rejected" "$([[ "$r" == *'"attempts": ["UserError", "UserError"]'* && "$(field picking_state "$r")" != "done" && "$(field state "$r")" == confirmed ]] && echo 1 || echo 0)" "$r"
+  r="$(oodoo -e SMOKE_STEP=fake_ctx -e SMOKE_PART="$opart")"
+  check "o.fake_internal_context_rejected" "$([[ "$r" == *'"staff_cancel": "'*Error'"'* && "$r" == *'"sudo_write_state": "'*Error'"'* && "$(field state "$r")" == confirmed && "$(field so_state "$r")" == sale ]] && echo 1 || echo 0)" "$r"
   r="$(oodoo -e SMOKE_STEP=ops_cancel -e SMOKE_PART="$opart" -e SMOKE_NOTE=0)"
   check "o.ops_cancel_without_reason_rejected" "$([[ "$(field ok "$r")" == false && "$(field state "$r")" == confirmed ]] && echo 1 || echo 0)" "$r"
   r="$(oodoo -e SMOKE_STEP=ops_cancel -e SMOKE_PART="$opart")"

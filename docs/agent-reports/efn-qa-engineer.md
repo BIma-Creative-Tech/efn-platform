@@ -437,3 +437,36 @@ atas instruksi efn-lead. Detail lengkap: `docs/testing/E2E_SMOKE_REPORT.md` bagi
 - Artefak dev: refund Odoo `RINV/2026/00001` di `S00001` dibuat manual saat diagnosis, tidak tercatat di BFF.
 - Belum: browser nyata, notifikasi WA/push, circuit breaker/alert online, CLI `online-resolve`/`online-refund-settle`,
   provider non-mock, place paralel lintas proses.
+
+## G17.6 Run akhir (2026-10-10, HEAD `32686c3`)
+- **Smoke penuh: PASS=267 FAIL=0.**
+
+  | Tahap | PASS/FAIL |
+  |---|---|
+  | a | 21/0 |
+  | b | 17/0 |
+  | c | 15/0 |
+  | d | 7/0 |
+  | f | 6/0 |
+  | e | 24/0 |
+  | g | 19/0 |
+  | l | 42/0 |
+  | o | 116/0 |
+
+- `test-gateway.sh` 97/97. Detail: `docs/testing/E2E_SMOKE_REPORT.md` §G17.8.
+- **Status temuan sebelumnya:**
+  - G17-QA-03 (review) tertutup lewat L-14: status `review` dan pickup-code 409 `order_in_review`.
+  - G17-QA-04 (label pajak) tertutup: label `PPN 11%`. Di DB dev lama label diisi sekali lewat shell karena data
+    modul noupdate.
+  - G17-QA-05 (watcher dev) tertutup lewat watcher polling.
+- **Skenario baru di tahap `o`:**
+  - SEC-95/104/105: picking di luar wizard dan context `efn_online_internal` palsu ditolak; batal dari Odoo tanpa
+    alasan ditolak.
+  - Batal oleh manajer menghasilkan refund `approval_required`. Approve oleh peran `cs` ditolak; approve oleh approver
+    lain → settled.
+  - L-19/L-20: refund CS selalu butuh approve. Pembuat yang sama dan peran `cs` ditolak; approver lain → settled.
+  - SEC-112: settle manual oleh peran `cs` atau oleh pembuat refund ditolak.
+  - SEC-96: stok di luar katalog → 404.
+- **Bug produk baru:** tidak ada pada run akhir.
+- **Belum diuji:** jalur POS `efn_online_pos_sale` (`pos_sale` tidak terpasang di dev), dan wrapper host
+  `efn-online-cs` dengan sudo + docker asli.

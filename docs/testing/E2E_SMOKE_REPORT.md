@@ -648,3 +648,70 @@ walau container healthy).
 - Circuit breaker & alert `EfnOnline*` (Odoo mati, key kedaluwarsa → `EfnOnlineOdooAuthFailure`) tidak dipicu.
 - CLI `online-resolve` dan `online-refund-settle` (jalur `manual_required`) tidak dijalankan; provider selain mock.
 - Dua place paralel lintas proses BFF; DLQ `order.*` di bawah beban; retensi 7 hari kode ambil (hanya NULL saat final).
+
+## G17.8 Run akhir setelah L-14..L-20 dan perbaikan r10/re-review (10 Okt 2026, HEAD `32686c3`)
+Kode yang diuji: commit `32686c3` (SEC-95..112: QA-03 review, L-16 refund `approval_required`, label pajak, gateway
+maxconn, watcher polling, L-19/L-20 peran CS + `claim_token` + pool json2 terpisah, guard Odoo `cr.cache` + level
+`stock.move`, SEC-112 settle). Satu-satunya perubahan yang belum di-commit adalah harness smoke QA ini.
+
+**Integrasi:**
+- Image odoo/api-gateway/superapp-web dibangun ulang.
+- `-u efn_online_order,efn_setup_online,efn_setup_company,efn_setup_pos`: exit 0, 0 ERROR.
+- Label pajak dev diisi sekali lewat `odoo shell`, mengikuti tabel README `efn_setup_company` (noupdate). Hasilnya
+  `tax_ST4` = `PPN 11%`, grup `PPN 11%`.
+- Migrasi 07 versi baru (idempoten, termasuk `claim_token`).
+- Recreate odoo, odoo-tls, odoo-ws-tls, odoo-rpc-gateway, api-gateway, superapp-web, superapp-web-tls: semua healthy.
+- `test-gateway.sh` 97/97.
+- `efn_online_pos_sale` tidak dipasang di dev. `pos_sale` tidak terpasang, jadi jalur POS↔SO online tidak diuji smoke.
+
+**Smoke penuh `a b c d f e g l o`: PASS=267 FAIL=0.**
+
+| Tahap | PASS/FAIL |
+|---|---|
+| a | 21/0 |
+| b | 17/0 |
+| c | 15/0 |
+| d | 7/0 |
+| f | 6/0 |
+| e | 24/0 |
+| g | 19/0 |
+| l | 42/0 |
+| **o** | **116/0** |
+
+Cek baru atau berubah di tahap `o`:
+- **Review (QA-03 / L-14):** kode ambil salah 5× membuat order **dan** bagian menjadi `review`. `GET pickup-code`
+  dijawab 409 `order_in_review`.
+- **Label pajak (QA-04):** quote memuat label baris dan grup `PPN 11%`, di 5 quote.
+- **Stok (SEC-96):** id di luar katalog → 404, juga bila dicampur dengan id sah dan saat cache negatif.
+- **Serah terima (SEC-95/104/105):** validasi picking SO online di luar wizard ditolak, dengan maupun tanpa context
+  palsu `efn_online_handover_picking_ids`/`efn_online_internal`.
+- **Context palsu (SEC-104):** staf dengan context `efn_online_internal` palsu gagal membatalkan SO (`AccessError`).
+  Superuser yang menulis `state` SO langsung ditolak (`UserError`).
+- **Batal oleh Odoo (SEC-95):**
+  - Batal tanpa alasan ditolak.
+  - Manajer membatalkan dengan alasan: Odoo `cancelled/ops`, nota kredit terbit, event `initiator=odoo`.
+  - Refund BFF berstatus `approval_required` (pemicu `odoo-uid:<n>`), bagian `cancelled`, `refunded_amount` 0.
+  - Approve oleh peran `cs` ditolak. Approve oleh approver lain → `settled` = porsi penuh. Kedua aksi teraudit.
+- **Refund CS (L-19/L-20):**
+  - Operator `cs` membuat refund → `approval_required`.
+  - Approve oleh pembuat yang sama (walau berperan approver) ditolak `rejected_same_actor`.
+  - Approve oleh peran `cs` lain ditolak `rejected_role`.
+  - Approve oleh approver lain → `settled` Rp5.550 + nota kredit Odoo.
+  - Refund melebihi pesanan ditolak.
+- **Settle manual (SEC-112):** peran `cs` ditolak (`rejected_role`) dan approver yang juga pembuat ditolak
+  (`rejected_same_actor`). Status refund tidak berubah. Identitas dan peran CLI di dev disimulasikan lewat env
+  `EFN_CS_OPERATOR`/`EFN_CS_ROLE`; di host keduanya diisi wrapper `efn-online-cs` (wrapper tidak dijalankan di smoke).
+
+Harness:
+- Skenario 4b, langkah Odoo `ops_cancel`, `picking_direct`, `fake_ctx`, manajer `smoke_online_mgr`.
+- Helper `cs()` untuk menjalankan CLI CS dengan operator dan peran.
+- Recreate api-gateway kini menunggu 5 jawaban 200 berturut-turut lewat Traefik, karena router dilepas ±30–40 s saat
+  status health berubah. Inilah penyebab 404 pada kill switch di run sebelumnya.
+- Catatan: dua run antara (o3, full2) tidak sah. Kode dan skrip berubah saat run berjalan (commit paralel builder dan
+  recreate tepat sebelum run), sehingga hasilnya dibuang.
+
+Sisa:
+- Pemisahan tugas untuk refund dari pembatalan Odoo bertumpu pada peran: pemicu dicatat `odoo-uid`, dan uid Odoo tidak
+  bisa dipetakan ke akun host. Ini sesuai L-19c.
+- `efn_online_pos_sale` dan jalur POS tidak diuji di stack dev.
+- Wrapper host `efn-online-cs` dengan sudo dan docker asli belum diuji.
