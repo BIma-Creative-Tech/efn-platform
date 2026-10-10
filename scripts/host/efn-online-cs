@@ -1,59 +1,78 @@
 #!/usr/bin/env bash
-# efn-online-cs - wrapper host milik ROOT untuk CLI CS penjualan online BFF (L-3, SEC-98 / L-16d; docs/04 §10.6.6,
-# §10.17). Pola scripts/host/efn-deploy: identitas operator diambil dari sudo, BUKAN dari argumen/env pemanggil.
+# efn-online-cs - wrapper host milik ROOT untuk CLI CS penjualan online BFF (L-3, SEC-98 / L-16d, SEC-107/SEC-108 /
+# L-19c/e; docs/04 §10.6.6, §10.17). Pola scripts/host/efn-deploy: identitas DAN peran operator diambil dari sudo +
+# keanggotaan grup host, BUKAN dari argumen/env pemanggil.
 #
 # DIPASANG MANUAL oleh Superadmin (salinan repo = sumber review):
 #   install -o root -g root -m 0755 scripts/host/efn-online-cs /usr/local/sbin/efn-online-cs
 #   sha256sum /usr/local/sbin/efn-online-cs     # cocokkan dengan sha256 di PR yang di-review
-#   groupadd --system efn-cs && usermod -aG efn-cs <akun-cs-pribadi>   (akun per orang, bukan akun bersama)
-# sudoers (visudo -f /etc/sudoers.d/efn-online-cs, 0440):
-#   %efn-cs ALL=(root) NOPASSWD: /usr/local/sbin/efn-online-cs
-#   Defaults!/usr/local/sbin/efn-online-cs env_reset, !setenv, log_output
+#   groupadd --system efn-cs; groupadd --system efn-cs-approver
+#   usermod -aG efn-cs <akun-cs>   /   usermod -aG efn-cs-approver <akun-supervisor>   (SATU orang = SATU grup)
+# sudoers (visudo -f /etc/sudoers.d/efn-online-cs, 0440) - TANPA log_input (SEC-108: alasan dibaca dari stdin):
+#   Cmnd_Alias EFN_ONLINE_CS = /usr/local/sbin/efn-online-cs
+#   %efn-cs, %efn-cs-approver ALL=(root) NOPASSWD: EFN_ONLINE_CS
+#   Defaults!EFN_ONLINE_CS env_reset, !setenv, !log_input, !log_output
 # Operator CS BUKAN anggota grup docker dan tidak punya akses /opt/efn/secrets.
 #
-# Pemakaian (docs/runbooks/online-orders.md#cli-cs):
-#   sudo efn-online-cs online-refund         --part=<uuid> (--full | --lines=<pid>:<qty>,...) --reason="..." [--kind=customer_cs|ops_cancelled] [--restock] [--refund-id=<uuid>]
-#   sudo efn-online-cs online-refund-approve --refund=<uuid> --reason="..."
-#   sudo efn-online-cs online-refund-settle  --refund=<uuid> --provider-ref=<ref> --reason="..."
-#   sudo efn-online-cs online-resolve        --part=<uuid> --action=cancel|sync --reason="..."
+# Pemakaian (docs/runbooks/online-orders.md#cli-cs). ALASAN dibaca dari STDIN (satu baris; prompt bila terminal),
+# tidak pernah dari argv (argv sudo tercatat di auth log):
+#   sudo efn-online-cs online-refund         --part=<uuid> (--full | --lines=<pid>:<qty>,...) [--kind=customer_cs|ops_cancelled] [--restock] [--refund-id=<uuid>]
+#   sudo efn-online-cs online-refund-approve --refund=<uuid>                      (HANYA grup efn-cs-approver)
+#   sudo efn-online-cs online-refund-settle  --refund=<uuid> --provider-ref=<ref>
+#   sudo efn-online-cs online-resolve        --part=<uuid> --action=cancel|sync
+#   contoh non-interaktif: printf '%s\n' 'tiket CS-123' | sudo efn-online-cs online-resolve --part=<uuid> --action=sync
 #
 # Yang dijaga:
-#   - hanya root lewat sudo, pemanggil (SUDO_USER/SUDO_UID konsisten, bukan root) anggota grup efn-cs;
-#   - EFN_CS_OPERATOR = SUDO_USER dan EFN_CS_HOST = hostname host, SELALU ditimpa (env pemanggil diabaikan);
-#   - hanya 4 subcommand allowlist + flag allowlist per subcommand, nilai divalidasi (UUID, enum, pola), tanpa
-#     karakter kontrol, tanpa flag ganda; argumen diteruskan sebagai argv `docker exec` (tidak lewat shell);
-#   - journald (tag efn-online-cs): aktor, host, subcommand, id bagian/refund, kode keluar. TANPA alasan (teks bebas,
-#     bisa memuat PII), tanpa provider-ref. Output CLI BFF (id/status/nominal saja) diteruskan ke operator.
+#   - hanya root lewat sudo, pemanggil (SUDO_USER/SUDO_UID konsisten, bukan root) anggota TEPAT SATU dari grup efn-cs
+#     (peran cs) atau efn-cs-approver (peran approver); anggota keduanya DITOLAK (pemisahan tugas, SEC-107);
+#   - EFN_CS_OPERATOR = SUDO_USER, EFN_CS_HOST = hostname, EFN_CS_ROLE = peran dari grup: SELALU ditimpa;
+#   - online-refund-approve hanya peran approver (BFF juga menolak approver = pembuat refund);
+#   - hanya 4 subcommand + flag allowlist per subcommand, nilai divalidasi (UUID, enum, pola), tanpa karakter kontrol,
+#     flag ganda, argumen posisi, atau `--reason` di argv; argv ke `docker exec` (tidak lewat shell), alasan lewat
+#     stdin `docker exec -i` (kontrak CLI BFF: tanpa `--reason` -> alasan dibaca dari stdin);
+#   - journald (tag efn-online-cs, _UID 0 -> Loki lewat promtail-journal): aktor, peran, host, subcommand, id, rc.
+#     TANPA alasan dan provider-ref. Output CLI BFF (id/status/nominal saja) diteruskan ke operator.
 set -euo pipefail
 umask 077
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
 
 CS_GROUP=efn-cs
+APPROVER_GROUP=efn-cs-approver
 COMPOSE_PROJECT=efn
 SERVICE=api-gateway
 
 log() { logger -t efn-online-cs -- "$*" 2> /dev/null || true; }
-die() { log "DITOLAK: $* (aktor=${ACTOR:-?})"; echo "efn-online-cs: $*" >&2; exit 2; }
+die() { log "DITOLAK: $* (aktor=${ACTOR:-?} peran=${ROLE:-?})"; echo "efn-online-cs: $*" >&2; exit 2; }
 
-ACTOR=""
+ACTOR=""; ROLE=""
 [[ "${EUID}" -eq 0 ]] || die "jalankan lewat sudo: sudo efn-online-cs <subcommand> ..."
 [[ "${SUDO_USER:-}" =~ ^[a-z_][a-z0-9_.-]{1,31}$ ]] || die "SUDO_USER tidak ada/tidak valid (wajib lewat sudo dari akun pribadi)"
 [[ "${SUDO_USER}" != root ]] || die "root langsung ditolak; pakai akun CS pribadi"
 [[ "${SUDO_UID:-}" =~ ^[1-9][0-9]{0,9}$ ]] || die "SUDO_UID tidak valid"
 [[ "$(id -u -- "$SUDO_USER" 2> /dev/null)" == "$SUDO_UID" ]] || die "SUDO_USER dan SUDO_UID tidak konsisten"
 ACTOR="$SUDO_USER"
-id -nG -- "$SUDO_USER" | tr ' ' '\n' | grep -qx "$CS_GROUP" || die "$SUDO_USER bukan anggota grup $CS_GROUP"
+GROUPS_OF="$(id -nG -- "$SUDO_USER" | tr ' ' '\n')"
+in_cs=0; in_appr=0
+grep -qx "$CS_GROUP" <<< "$GROUPS_OF" && in_cs=1
+grep -qx "$APPROVER_GROUP" <<< "$GROUPS_OF" && in_appr=1
+if ((in_cs && in_appr)); then
+  die "$SUDO_USER anggota $CS_GROUP DAN $APPROVER_GROUP (pemisahan tugas SEC-107: satu orang satu peran)"
+elif ((in_appr)); then ROLE=approver
+elif ((in_cs)); then ROLE=cs
+else die "$SUDO_USER bukan anggota grup $CS_GROUP / $APPROVER_GROUP"
+fi
 HOST_ID="$(hostname -s 2> /dev/null || hostname)"
 [[ "$HOST_ID" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "hostname tidak valid"
 
 (($# >= 1)) || die "subcommand wajib: online-refund | online-refund-approve | online-refund-settle | online-resolve"
 CMD="$1"; shift
 case "$CMD" in
-  online-refund)         ALLOWED=(part full lines reason kind restock refund-id); REQUIRED=(part reason) ;;
-  online-refund-approve) ALLOWED=(refund reason); REQUIRED=(refund reason) ;;
-  online-refund-settle)  ALLOWED=(refund provider-ref reason); REQUIRED=(refund provider-ref reason) ;;
-  online-resolve)        ALLOWED=(part action reason); REQUIRED=(part action reason) ;;
+  online-refund)         ALLOWED=(part full lines kind restock refund-id); REQUIRED=(part) ;;
+  online-refund-approve) ALLOWED=(refund); REQUIRED=(refund)
+                         [[ "$ROLE" == approver ]] || die "online-refund-approve hanya untuk grup $APPROVER_GROUP" ;;
+  online-refund-settle)  ALLOWED=(refund provider-ref); REQUIRED=(refund provider-ref) ;;
+  online-resolve)        ALLOWED=(part action); REQUIRED=(part action) ;;
   *) die "subcommand tidak diizinkan: $(printf '%q' "$CMD" | head -c 40)" ;;
 esac
 
@@ -64,6 +83,7 @@ for a in "$@"; do
   [[ "$a" != *[[:cntrl:]]* ]] || die "argumen memuat karakter kontrol"
   [[ "$a" =~ ^--([a-z-]+)(=(.*))?$ ]] || die "argumen harus --nama=nilai atau --flag"
   name="${BASH_REMATCH[1]}"; has_val="${BASH_REMATCH[2]}"; val="${BASH_REMATCH[3]}"
+  [[ "$name" != reason ]] || die "--reason tidak boleh di argv (tercatat sudo/auth log); ketik alasan di prompt / stdin"
   ok=0; for n in "${ALLOWED[@]}"; do [[ "$n" == "$name" ]] && ok=1; done
   ((ok)) || die "flag --$name tidak diizinkan untuk $CMD"
   [[ -z "${SEEN[$name]:-}" ]] || die "flag --$name ganda"
@@ -76,10 +96,10 @@ for a in "$@"; do
     part|refund|refund-id) [[ "$val" =~ $UUID_RE ]] || die "--$name harus UUID" ;;
     lines)        [[ "$val" =~ ^[0-9]{1,10}:[0-9]{1,4}(,[0-9]{1,10}:[0-9]{1,4}){0,49}$ ]] || die "--lines format <product_id>:<qty>,..." ;;
     kind)         [[ "$val" =~ ^(customer_cs|ops_cancelled)$ ]] || die "--kind customer_cs|ops_cancelled" ;;
-    action)       [[ "$val" =~ ^(cancel|sync)$ ]] || die "--action cancel|sync" ;;
+    action)       [[ "$val" =~ ^(cancel|sync)$ ]] || die "--action cancel|sync"
+                  # L-20: cancel memicu refund -> hanya peran approver (BFF juga menolak; lapis kedua)
+                  [[ "$val" != cancel || "$ROLE" == approver ]] || die "online-resolve --action=cancel hanya untuk grup $APPROVER_GROUP" ;;
     provider-ref) [[ "$val" =~ ^[A-Za-z0-9._:/-]{1,64}$ ]] || die "--provider-ref hanya [A-Za-z0-9._:/-], maks 64" ;;
-    # LC_ALL=C -> panjang dalam BYTE (UTF-8 maks. 4 byte/karakter); batas 3..200 karakter dicek ulang BFF
-    reason)       (( ${#val} >= 3 && ${#val} <= 800 )) || die "--reason wajib 3..200 karakter" ;;
   esac
   ARGS+=("$a")
 done
@@ -89,6 +109,15 @@ if [[ "$CMD" == online-refund ]]; then
   [[ -n "${SEEN[lines]:-}" ]] && l=1 || l=0
   (( f + l == 1 )) || die "pilih salah satu: --full atau --lines"
 fi
+
+# Alasan (SEC-108): satu baris dari stdin (prompt bila terminal). Tidak di argv, tidak di journald.
+[[ -t 0 ]] && printf 'Alasan (nomor tiket/alasan singkat, TANPA nama/HP pelanggan): ' >&2
+REASON=""
+IFS= read -r -n 801 REASON || true
+REASON="${REASON%$'\r'}"
+[[ "$REASON" != *[[:cntrl:]]* ]] || die "alasan memuat karakter kontrol"
+# LC_ALL=C -> panjang dalam BYTE (UTF-8 maks. 4 byte/karakter); batas 3..200 karakter dicek ulang BFF
+(( ${#REASON} >= 3 && ${#REASON} <= 800 )) || die "alasan wajib 3..200 karakter (stdin/prompt)"
 
 # Id untuk jejak audit (tanpa alasan / provider-ref)
 IDS=""
@@ -101,10 +130,12 @@ CID="$(docker ps -q --filter "label=com.docker.compose.project=${COMPOSE_PROJECT
         --filter "label=com.docker.compose.service=${SERVICE}" --filter status=running | head -n1)"
 [[ "$CID" =~ ^[0-9a-f]{12,64}$ ]] || die "container ${SERVICE} (project ${COMPOSE_PROJECT}) tidak berjalan"
 
-log "MULAI aktor=${ACTOR} host=${HOST_ID} cmd=${CMD}${IDS}"
+log "MULAI aktor=${ACTOR} peran=${ROLE} host=${HOST_ID} cmd=${CMD}${IDS}"
 set +e
-docker exec -w /app -e "EFN_CS_OPERATOR=${ACTOR}" -e "EFN_CS_HOST=${HOST_ID}" "$CID" node "dist/cli/${CMD}.js" "${ARGS[@]}"
+printf '%s\n' "$REASON" | docker exec -i -w /app -e "EFN_CS_OPERATOR=${ACTOR}" -e "EFN_CS_HOST=${HOST_ID}" \
+  -e "EFN_CS_ROLE=${ROLE}" "$CID" node "dist/cli/${CMD}.js" "${ARGS[@]}"
 rc=$?
 set -e
-log "SELESAI aktor=${ACTOR} host=${HOST_ID} cmd=${CMD}${IDS} rc=${rc}"
+unset REASON
+log "SELESAI aktor=${ACTOR} peran=${ROLE} host=${HOST_ID} cmd=${CMD}${IDS} rc=${rc}"
 exit "$rc"

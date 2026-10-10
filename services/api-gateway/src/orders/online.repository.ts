@@ -31,7 +31,10 @@ export type NewPart = Omit<
   | 'cancelled_at'
   | 'cancel_reason'
 >;
-export type NewRefund = Omit<RefundRow, 'created_at' | 'updated_at' | 'settled_at' | 'provider_refund_ref' | 'failure_reason' | 'initiated_by'> & {
+export type NewRefund = Omit<
+  RefundRow,
+  'created_at' | 'updated_at' | 'settled_at' | 'provider_refund_ref' | 'failure_reason' | 'initiated_by' | 'claim_token'
+> & {
   initiated_by?: string | null;
 };
 
@@ -110,7 +113,9 @@ export interface OnlineRepo {
    * SEC-97: klaim eksklusif atomik → `gateway_in_flight` dari `from` (atau `gateway_in_flight` basi sebelum `staleBefore`,
    * mis. proses mati di tengah). `null` bila sudah diklaim pihak lain / status lain.
    */
-  claimRefund(id: string, from: readonly RefundStatus[], staleBefore: Date): Promise<RefundRow | null>;
+  claimRefund(id: string, from: readonly RefundStatus[], staleBefore: Date, token: string): Promise<RefundRow | null>;
+  /** SEC-106: tulis status pasca-gateway HANYA bila klaim masih milik `token` (status `gateway_in_flight`); token dihapus. */
+  updateRefundIfClaimed(id: string, token: string, patch: RefundPatch): Promise<boolean>;
   refundsOfPart(partId: string): Promise<RefundRow[]>;
 
   portionsOf(intentId: string): Promise<PortionRow[]>;
@@ -147,7 +152,7 @@ const PART_COLS = `id::text AS id, order_id::text AS order_id, channel_code, com
   amount_total, amount_payable, quote_hash, sale_order_name, odoo_state, last_seq, pickup_code_enc, refunded_amount, confirmed_at, ready_at,
   handed_over_at, cancelled_at, cancel_reason, created_at, updated_at`;
 const REFUND_COLS = `id::text AS id, part_id::text AS part_id, payment_intent_id::text AS payment_intent_id, kind, reason, lines, amount,
-  odoo_refund_ref, provider_refund_ref, status, failure_reason, initiated_by, requested_by, created_at, updated_at, settled_at`;
+  odoo_refund_ref, provider_refund_ref, status, failure_reason, initiated_by, claim_token::text AS claim_token, requested_by, created_at, updated_at, settled_at`;
 
 type Raw = Record<string, unknown>;
 const d = (v: unknown): Date | null => (v === null || v === undefined ? null : v instanceof Date ? v : new Date(String(v)));
@@ -216,6 +221,7 @@ function toRefund(r: Raw): RefundRow {
     status: r.status as RefundStatus,
     failure_reason: (r.failure_reason ?? null) as string | null,
     initiated_by: (r.initiated_by ?? null) as string | null,
+    claim_token: (r.claim_token ?? null) as string | null,
     requested_by: r.requested_by as RefundRow['requested_by'],
     created_at: d(r.created_at) as Date,
     updated_at: d(r.updated_at) as Date,
@@ -239,7 +245,7 @@ const PART_PATCH_COLS = new Set([
   'amount_total',
   'amount_payable',
 ]);
-const REFUND_PATCH_COLS = new Set(['status', 'amount', 'odoo_refund_ref', 'provider_refund_ref', 'settled_at', 'failure_reason']);
+const REFUND_PATCH_COLS = new Set(['status', 'amount', 'odoo_refund_ref', 'provider_refund_ref', 'settled_at', 'failure_reason', 'claim_token']);
 
 /** SET klausa dari patch (nama kolom HANYA dari whitelist konstan, nilai selalu parameter). */
 function setClause(patch: Record<string, unknown>, allowed: ReadonlySet<string>, offset: number): { sql: string; params: unknown[] } {
@@ -391,6 +397,7 @@ export class PgOnlineRepo implements OnlineRepo {
   }
 
   async insertRefund(r: NewRefund): Promise<RefundRow> {
+    // claim_token selalu NULL saat dibuat
     const ins = await this.q.query<Raw>(
       `INSERT INTO platform.online_refund
          (id, part_id, payment_intent_id, kind, reason, lines, amount, odoo_refund_ref, status, requested_by, initiated_by)
@@ -423,14 +430,23 @@ export class PgOnlineRepo implements OnlineRepo {
     const s = setClause(patch, REFUND_PATCH_COLS, 1);
     await this.q.query(`UPDATE platform.online_refund SET ${s.sql} WHERE id = $1`, [id, ...s.params]);
   }
-  async claimRefund(id: string, from: readonly RefundStatus[], staleBefore: Date): Promise<RefundRow | null> {
+  async claimRefund(id: string, from: readonly RefundStatus[], staleBefore: Date, token: string): Promise<RefundRow | null> {
     const r = await this.q.query<Raw>(
-      `UPDATE platform.online_refund SET status = 'gateway_in_flight', updated_at = now()
+      `UPDATE platform.online_refund SET status = 'gateway_in_flight', claim_token = $4::uuid, updated_at = now()
         WHERE id = $1 AND (status = ANY($2::text[]) OR (status = 'gateway_in_flight' AND updated_at < $3))
         RETURNING ${REFUND_COLS}`,
-      [id, [...from], staleBefore.toISOString()],
+      [id, [...from], staleBefore.toISOString(), token],
     );
     return r.rows[0] ? toRefund(r.rows[0]) : null;
+  }
+  async updateRefundIfClaimed(id: string, token: string, patch: RefundPatch): Promise<boolean> {
+    const s = setClause(patch, REFUND_PATCH_COLS, 2);
+    const r = await this.q.query(
+      `UPDATE platform.online_refund SET ${s.sql}, claim_token = NULL
+        WHERE id = $1 AND claim_token = $2::uuid AND status = 'gateway_in_flight'`,
+      [id, token, ...s.params],
+    );
+    return (r.rowCount ?? 0) > 0;
   }
   async refundsOfPart(partId: string): Promise<RefundRow[]> {
     const r = await this.q.query<Raw>(`SELECT ${REFUND_COLS} FROM platform.online_refund WHERE part_id = $1 ORDER BY created_at`, [partId]);

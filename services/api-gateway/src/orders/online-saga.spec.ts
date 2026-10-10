@@ -378,7 +378,11 @@ describe('Timeout, bayar terlambat, stok kurang, refund (§10.6.5–10.6.6)', ()
     await ctx.drain();
     const part = ctx.partsOf(order.order_id)[0];
     const r1 = await ctx.admin.refund({ partId: part.id, lines: [{ product_id: 11, qty: 1 }], full: false, restock: true, reason: 'customer_cs', actor: 'cs.budi', note: 'barang rusak' });
-    expect(r1).toMatchObject({ amount: 79_900, status: 'odoo_done' });
+    // L-19c: SEMUA refund CS menunggu approver (ambang default 0); tanpa persetujuan tidak ada gateway
+    expect(r1).toMatchObject({ amount: 79_900, status: 'approval_required' });
+    await ctx.drain();
+    expect(ctx.payments.refunds).toHaveLength(0);
+    expect(await ctx.admin.approveRefund(r1.refund_id, { actor: 'spv.sari/h1', role: 'approver' }, 'disetujui supervisor')).toEqual({ status: 'odoo_done' });
     await ctx.drain();
     expect(ctx.repo.state.refunds.get(r1.refund_id)!.status).toBe('settled');
     expect(ctx.odoo.calls.filter((c) => c.method === 'refundSettled')).toHaveLength(1);
@@ -434,7 +438,8 @@ describe('Timeout, bayar terlambat, stok kurang, refund (§10.6.5–10.6.6)', ()
     await ctx.payments.pay(ctx.orderRow(order.order_id).payment_intent_id!);
     await ctx.drain();
     expect(ctx.partsOf(order.order_id)[0].status).toBe('review');
-    expect(await ctx.admin.resolve(part.id, 'cancel', 'ops.sari', 'nominal tidak cocok')).toEqual({ status: 'cancelled' });
+    await expect(ctx.admin.resolve(part.id, 'cancel', 'ops.sari', 'nominal tidak cocok')).rejects.toThrow('approver'); // L-19c
+    expect(await ctx.admin.resolve(part.id, 'cancel', { actor: 'ops.sari', role: 'approver' }, 'nominal tidak cocok')).toEqual({ status: 'cancelled' });
     await ctx.drain();
     expect([...ctx.repo.state.refunds.values()][0]).toMatchObject({ reason: 'review', status: 'settled' });
   });
@@ -514,12 +519,16 @@ describe('Event Odoo → BFF (§10.5)', () => {
       expect(ctx.repo.state.outbox.filter((m) => m.queue === 'order.refund.requested')).toHaveLength(0);
       expect((await ctx.metrics.stuck.get()).values.find((v) => v.labels.state === 'refund_attention')?.value).toBe(1);
       // persetujuan CS (aktor = identitas OS/host)
-      expect(await ctx.admin.approveRefund(rf.id, 'cs_budi/efn-prod-01', 'tiket CS-77 disetujui')).toEqual({ status: 'odoo_done' });
+      // L-19c: peran cs ditolak (teraudit); refund dari Odoo (odoo-uid) cukup syarat peran approver
+      await expect(ctx.admin.approveRefund(rf.id, 'cs_budi/efn-prod-01', 'tiket CS-77')).rejects.toThrow('peran approver');
+      expect(ctx.repo.state.audits.at(-1)).toMatchObject({ outcome: 'rejected_role' });
+      expect(ctx.repo.state.refunds.get(rf.id)!.status).toBe('approval_required');
+      expect(await ctx.admin.approveRefund(rf.id, { actor: 'cs_budi/efn-prod-01', role: 'approver' }, 'tiket CS-77 disetujui')).toEqual({ status: 'odoo_done' });
       await ctx.drain();
       expect(ctx.repo.state.refunds.get(rf.id)!.status).toBe('settled');
       expect(ctx.odoo.calls.filter((c) => c.method === 'refundSettled')).toHaveLength(1);
-      expect(ctx.repo.state.audits).toEqual([expect.objectContaining({ action: 'refund_approve', actor: 'cs_budi/efn-prod-01', refund_id: rf.id })]);
-      await expect(ctx.admin.approveRefund(rf.id, 'cs_budi/efn-prod-01', 'ulang')).rejects.toThrow('tidak menunggu persetujuan');
+      expect(ctx.repo.state.audits.at(-1)).toMatchObject({ action: 'refund_approve', actor: 'cs_budi/efn-prod-01', refund_id: rf.id, outcome: 'odoo_done' });
+      await expect(ctx.admin.approveRefund(rf.id, { actor: 'cs_budi/efn-prod-01', role: 'approver' }, 'ulang')).rejects.toThrow('tidak menunggu persetujuan');
       await expect(ctx.admin.approveRefund(rf.id, 'ani@efn.co.id', 'email ditolak')).rejects.toThrow('operator');
     } finally {
       warn.mockRestore();
@@ -538,18 +547,18 @@ describe('Event Odoo → BFF (§10.5)', () => {
     expect(parseOdooEvent(Buffer.from(JSON.stringify({ ...okEvent(), refund: { refund_ref: 'R', amount: 1, kind: 'full', initiator: 'odoo', initiator_login: 'Budi.Ops' } }))).refund?.initiated_by).toBe('odoo-login:budi.ops');
     expect(parseOdooEvent(Buffer.from(JSON.stringify({ ...okEvent(), refund: { refund_ref: 'R', amount: 1, kind: 'full', initiator: 'odoo', initiator_login: 'budi@efn.co.id' } }))).refund?.initiated_by).toBeNull();
     // uid tidak bisa dipetakan ke user OS → tidak memblokir
-    expect(await ctx.admin.approveRefund(rf.id, 'budi.ops/h1', 'tiket ok')).toEqual({ status: 'odoo_done' });
+    expect(await ctx.admin.approveRefund(rf.id, { actor: 'budi.ops/h1', role: 'approver' }, 'tiket ok')).toEqual({ status: 'odoo_done' });
     // pemicu login sama dengan user OS penyetuju → ditolak, status tetap, audit tercatat
     ctx.repo.state.refunds.get(rf.id)!.status = 'approval_required';
     ctx.repo.state.refunds.get(rf.id)!.initiated_by = 'odoo-login:budi.ops';
-    await expect(ctx.admin.approveRefund(rf.id, 'Budi.Ops/efn-prod-01', 'coba setujui sendiri')).rejects.toThrow('empat mata');
+    await expect(ctx.admin.approveRefund(rf.id, { actor: 'Budi.Ops/efn-prod-01', role: 'approver' }, 'coba setujui sendiri')).rejects.toThrow('empat mata');
     expect(ctx.repo.state.refunds.get(rf.id)!.status).toBe('approval_required');
     expect(ctx.repo.state.audits.at(-1)).toMatchObject({ action: 'refund_approve', actor: 'Budi.Ops/efn-prod-01', outcome: 'rejected_same_actor' });
     // pembuat CS yang sama juga ditolak; data lama tanpa pembuat tidak pernah ditolak
     ctx.repo.state.refunds.get(rf.id)!.initiated_by = 'cs_ani/host-a';
-    await expect(ctx.admin.approveRefund(rf.id, 'cs_ani/host-b', 'x y z')).rejects.toThrow('empat mata');
+    await expect(ctx.admin.approveRefund(rf.id, { actor: 'cs_ani/host-b', role: 'approver' }, 'x y z')).rejects.toThrow('empat mata');
     ctx.repo.state.refunds.get(rf.id)!.initiated_by = null;
-    expect(await ctx.admin.approveRefund(rf.id, 'cs_ani/host-b', 'data lama')).toEqual({ status: 'odoo_done' });
+    expect(await ctx.admin.approveRefund(rf.id, { actor: 'cs_ani/host-b', role: 'approver' }, 'data lama')).toEqual({ status: 'odoo_done' });
     expect(sameActor(null, 'a/b')).toBe(false);
     expect(sameActor('odoo-uid:7', 'odoo-uid:7')).toBe(false);
     expect(sameActor('odoo-login:sari', 'SARI/h')).toBe(true);
@@ -743,3 +752,61 @@ describe('Review r10 (L-16)', () => {
 function okEvent(): Record<string, unknown> {
   return { schema_version: 1, idempotency_key: 'online:1:cancelled:2', seq: 2, platform_order_ref: MEMBER, checkout_ref: OTHER, channel_code: 'RTL', company_code: 'RTL', event: 'cancelled', state: 'cancelled', occurred_at: null };
 }
+
+describe('Re-review G17 (L-19)', () => {
+  async function paid() {
+    const ctx = setup();
+    const { order } = await ctx.checkout([{ product_id: 11, qty: 2 }]);
+    const intentId = ctx.orderRow(order.order_id).payment_intent_id!;
+    await ctx.payments.pay(intentId);
+    await ctx.drain();
+    return { ctx, intentId, part: ctx.partsOf(order.order_id)[0] };
+  }
+
+  it('SEC-107: refund buatan CS — pembuat yang sama (meski berperan approver) tidak boleh menyetujui; approver lain boleh; alasan disamarkan', async () => {
+    const { ctx, part } = await paid();
+    const r = await ctx.admin.refund({ partId: part.id, lines: [{ product_id: 11, qty: 1 }], full: false, restock: false, reason: 'customer_cs', actor: 'sari/h1', role: 'approver', note: 'pelanggan 081234567890 budi@mail.com' });
+    expect(r.status).toBe('approval_required');
+    expect(ctx.repo.state.refunds.get(r.refund_id)!.initiated_by).toBe('sari/h1');
+    expect(ctx.repo.state.audits.at(-1)!.reason).toBe('pelanggan [disamarkan] [disamarkan]');
+    await expect(ctx.admin.approveRefund(r.refund_id, { actor: 'sari/h2', role: 'approver' }, 'setujui sendiri')).rejects.toThrow('empat mata');
+    expect(await ctx.admin.approveRefund(r.refund_id, { actor: 'dodi/h2', role: 'approver' }, 'ok supervisor')).toEqual({ status: 'odoo_done' });
+  });
+
+  it('SEC-107: ambang ONLINE_CS_REFUND_APPROVAL_MIN_IDR — di bawah ambang langsung ke gateway', async () => {
+    const { ctx, part } = await paid();
+    const admin = new OnlineAdminService(ctx.repo, ctx.odoo, ctx.saga, ctx.metrics, testConfig({ ONLINE_CS_REFUND_APPROVAL_MIN_IDR: '100000' }));
+    const r = await admin.refund({ partId: part.id, lines: [{ product_id: 11, qty: 1 }], full: false, restock: false, reason: 'customer_cs', actor: 'cs/h', note: 'kecil' });
+    expect(r.status).toBe('odoo_done');
+    await ctx.drain();
+    expect(ctx.repo.state.refunds.get(r.refund_id)!.status).toBe('settled');
+    expect(testConfig().onlineCsRefundApprovalMinIdr).toBe(0);
+  });
+
+  it('SEC-106: klaim direbut setelah 15 menit — hasil gateway konsumen lama TIDAK menimpa status (claim_token)', async () => {
+    const { ctx, part, intentId } = await paid();
+    const rf = await ctx.repo.insertRefund({ id: 'a1111111-1111-4111-8111-111111111111', part_id: part.id, payment_intent_id: intentId, kind: 'lines', reason: 'customer_cs', lines: null, amount: 10_000, odoo_refund_ref: 'R/1', status: 'odoo_done', requested_by: 'cs' });
+    let finishA: ((v: { status: 'failed'; providerRefundRef: null }) => void) | null = null;
+    const spy = jest.spyOn(ctx.payments, 'refund').mockImplementationOnce(() => new Promise((res) => (finishA = res)));
+    const a = ctx.saga.handleRefundRequested({ schema_version: 1, idempotency_key: 'kA', refund_id: rf.id });
+    for (let k = 0; k < 5; k += 1) await new Promise((res) => setImmediate(res));
+    expect(ctx.repo.state.refunds.get(rf.id)!.status).toBe('gateway_in_flight');
+    const tokenA = ctx.repo.state.refunds.get(rf.id)!.claim_token;
+    expect(tokenA).toMatch(/^[0-9a-f-]{36}$/);
+    ctx.clock.advanceSeconds(16 * 60);
+    expect(await ctx.saga.handleRefundRequested({ schema_version: 1, idempotency_key: 'kB', refund_id: rf.id })).toBe('done');
+    expect(ctx.repo.state.refunds.get(rf.id)).toMatchObject({ status: 'settled', claim_token: null });
+    (finishA as unknown as (v: { status: 'failed'; providerRefundRef: null }) => void)({ status: 'failed', providerRefundRef: null });
+    expect(await a).toBe('pending');
+    expect(ctx.repo.state.refunds.get(rf.id)!.status).toBe('settled'); // tidak ditimpa 'failed'
+    spy.mockRestore();
+  });
+
+  it('SEC-106: pelepasan klaim pada error transien hanya dengan token; status asal dipertahankan', async () => {
+    const { ctx, part, intentId } = await paid();
+    const rf = await ctx.repo.insertRefund({ id: 'b1111111-1111-4111-8111-111111111111', part_id: part.id, payment_intent_id: intentId, kind: 'lines', reason: 'customer_cs', lines: null, amount: 10_000, odoo_refund_ref: null, status: 'requested', requested_by: 'cs' });
+    jest.spyOn(ctx.payments, 'refund').mockRejectedValueOnce(new Error('ETIMEDOUT'));
+    await expect(ctx.saga.handleRefundRequested({ schema_version: 1, idempotency_key: 'kC', refund_id: rf.id })).rejects.toThrow('ETIMEDOUT');
+    expect(ctx.repo.state.refunds.get(rf.id)).toMatchObject({ status: 'requested', claim_token: null });
+  });
+});

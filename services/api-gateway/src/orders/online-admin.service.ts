@@ -1,4 +1,5 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { AppConfig } from '../config/app-config';
 import { randomUUID } from 'node:crypto';
 import { QUEUES } from '../common/amqp/queues';
 import { ODOO_ONLINE, OdooOnlineApi, QuoteLineIn } from '../odoo-rpc/odoo-online.types';
@@ -15,6 +16,27 @@ export class AdminError extends Error {}
  */
 export const ACTOR_RE = /^[A-Za-z0-9._-]{2,64}(\/[A-Za-z0-9._-]{1,64})?$/;
 
+/** SEC-107 (L-19c): peran dari wrapper host (`EFN_CS_ROLE`, grup efn-cs / efn-cs-approver), tidak bisa ditimpa pemanggil. */
+export type CsRole = 'cs' | 'approver';
+export interface Operator {
+  actor: string;
+  role: CsRole;
+}
+/** String polos = aktor berperan `cs` (hak paling kecil). */
+export function toOperator(op: string | Operator): Operator {
+  return typeof op === 'string' ? { actor: op, role: 'cs' } : op;
+}
+
+/**
+ * SEC-108: alasan CS disimpan ke audit setelah pola HP/email disamarkan (alasan bisa tidak sengaja memuat PII pelanggan).
+ */
+export function scrubReason(reason: string): string {
+  return reason
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[disamarkan]')
+    .replace(/\+?\d[\d\s.-]{6,}\d/g, '[disamarkan]')
+    .slice(0, 200);
+}
+
 export interface CsRefundInput {
   partId: string;
   refundId?: string;
@@ -23,6 +45,8 @@ export interface CsRefundInput {
   restock: boolean;
   reason: 'customer_cs' | 'ops_cancelled';
   actor: string;
+  /** SEC-107: default `cs`. */
+  role?: CsRole;
   note: string;
 }
 
@@ -71,7 +95,12 @@ export class OnlineAdminService {
     @Inject(ODOO_ONLINE) private readonly odoo: OdooOnlineApi,
     private readonly saga: OnlineSagaService,
     private readonly metrics: OnlineMetrics,
+    @Optional() private readonly config: AppConfig | null = null,
   ) {}
+
+  private get approvalMinIdr(): number {
+    return this.config ? this.config.onlineCsRefundApprovalMinIdr : 0;
+  }
 
   private checkActor(actor: string, reason: string): void {
     if (!ACTOR_RE.test(actor)) throw new AdminError('identitas operator tidak valid (wrapper host wajib menyetel EFN_CS_OPERATOR)');
@@ -113,6 +142,8 @@ export class OnlineAdminService {
       if (!p) throw new AdminError('bagian hilang');
       const committed = committedOf((await r.refundsOfPart(p.id)).filter((x) => x.odoo_refund_ref !== res.refund_ref));
       const over = committed + res.amount > p.amount_payable;
+      // SEC-107 (L-19c): refund CS ≥ ambang (default 0 = semua) menunggu approver; di bawah ambang langsung ke gateway
+      const needsApproval = res.amount >= this.approvalMinIdr;
       const rf = await r.insertRefund({
         id: refundId,
         part_id: p.id,
@@ -122,26 +153,26 @@ export class OnlineAdminService {
         lines: input.full ? null : input.lines,
         amount: res.amount,
         odoo_refund_ref: res.refund_ref,
-        status: over ? 'failed' : 'odoo_done',
+        status: over ? 'failed' : needsApproval ? 'approval_required' : 'odoo_done',
         requested_by: 'cs',
         initiated_by: input.actor,
       });
       if (over) {
         await r.updateRefund(rf.id, { failure_reason: 'refund_exceeds_portion' });
         this.metrics.anomaly('refund_exceeds_portion', 'critical', { part_id: p.id, refund_id: rf.id, expected: p.amount_payable, actual: committed + res.amount });
-      } else {
+      } else if (!needsApproval) {
         const m = refundRequestedMessage(rf.id);
         await r.enqueue(QUEUES.ORDER_REFUND_REQUESTED, { ...m }, m.idempotency_key);
       }
       await r.audit({
         action: 'refund',
         actor: input.actor,
-        reason: input.note,
+        reason: scrubReason(input.note),
         order_id: p.order_id,
         part_id: p.id,
         refund_id: rf.id,
         amount: res.amount,
-        outcome: over ? 'refund_exceeds_portion' : 'odoo_done',
+        outcome: over ? 'refund_exceeds_portion' : rf.status,
       });
       return { refund_id: rf.id, amount: res.amount, status: over ? 'failed' : rf.status };
     });
@@ -151,7 +182,8 @@ export class OnlineAdminService {
   }
 
   /** SEC-95 (L-16): persetujuan CS atas refund inisiatif Odoo (`approval_required` → `odoo_done` → gateway). */
-  async approveRefund(refundId: string, actor: string, note: string): Promise<{ status: string }> {
+  async approveRefund(refundId: string, operator: string | Operator, note: string): Promise<{ status: string }> {
+    const { actor, role } = toOperator(operator);
     this.checkActor(actor, note);
     const out = await this.repo.tx(async (r) => {
       const rf = await r.getRefund(refundId, true);
@@ -159,31 +191,38 @@ export class OnlineAdminService {
       if (rf.status !== 'approval_required') throw new AdminError(`status refund ${rf.status} tidak menunggu persetujuan`);
       const p = await r.getPart(rf.part_id, true);
       if (!p) throw new AdminError('bagian hilang');
+      // SEC-107 (L-19c): hanya peran approver (grup host efn-cs-approver) — termasuk refund dari Odoo (odoo-uid)
+      if (role !== 'approver') {
+        await r.audit({ action: 'refund_approve', actor, reason: scrubReason(note), order_id: p.order_id, part_id: p.id, refund_id: rf.id, amount: rf.amount, outcome: 'rejected_role' });
+        return 'rejected_role';
+      }
       // SEC-95: empat mata — penyetuju ≠ pembuat/pemicu (pembuat tidak diketahui → tidak ditolak)
       if (sameActor(rf.initiated_by, actor)) {
-        await r.audit({ action: 'refund_approve', actor, reason: note, order_id: p.order_id, part_id: p.id, refund_id: rf.id, amount: rf.amount, outcome: 'rejected_same_actor' });
+        await r.audit({ action: 'refund_approve', actor, reason: scrubReason(note), order_id: p.order_id, part_id: p.id, refund_id: rf.id, amount: rf.amount, outcome: 'rejected_same_actor' });
         return 'rejected_same_actor';
       }
       const committed = committedOf((await r.refundsOfPart(p.id)).filter((x) => x.status !== 'approval_required'), rf.id);
       if ((rf.amount ?? 0) <= 0 || committed + (rf.amount ?? 0) > p.amount_payable) {
         await r.updateRefund(rf.id, { status: 'failed', failure_reason: 'refund_exceeds_portion' });
-        await r.audit({ action: 'refund_approve', actor, reason: note, order_id: p.order_id, part_id: p.id, refund_id: rf.id, amount: rf.amount, outcome: 'refund_exceeds_portion' });
+        await r.audit({ action: 'refund_approve', actor, reason: scrubReason(note), order_id: p.order_id, part_id: p.id, refund_id: rf.id, amount: rf.amount, outcome: 'refund_exceeds_portion' });
         return 'failed';
       }
       await r.updateRefund(rf.id, { status: 'odoo_done' });
       const m = refundRequestedMessage(rf.id);
       await r.enqueue(QUEUES.ORDER_REFUND_REQUESTED, { ...m }, m.idempotency_key);
-      await r.audit({ action: 'refund_approve', actor, reason: note, order_id: p.order_id, part_id: p.id, refund_id: rf.id, amount: rf.amount, outcome: 'odoo_done' });
+      await r.audit({ action: 'refund_approve', actor, reason: scrubReason(note), order_id: p.order_id, part_id: p.id, refund_id: rf.id, amount: rf.amount, outcome: 'odoo_done' });
       return 'odoo_done';
     });
     this.logAudit({ action: 'refund_approve', actor, refund_id: refundId, outcome: out });
+    if (out === 'rejected_role') throw new AdminError('persetujuan refund hanya untuk peran approver (grup efn-cs-approver)');
     if (out === 'rejected_same_actor') throw new AdminError('penyetuju tidak boleh sama dengan pembuat/pemicu refund (empat mata)');
     this.metrics.refund(out);
     return { status: out };
   }
 
   /** Dana dikembalikan manual oleh Finance (gateway tak mendukung refund) → `gateway_done` → settle Odoo → `settled`. */
-  async settleManual(refundId: string, providerRef: string, actor: string, note: string): Promise<{ status: string }> {
+  async settleManual(refundId: string, providerRef: string, operator: string | Operator, note: string): Promise<{ status: string }> {
+    const { actor } = toOperator(operator);
     this.checkActor(actor, note);
     if (!/^[A-Za-z0-9._:/-]{3,128}$/.test(providerRef)) throw new AdminError('--provider-ref tidak valid');
     const rf = await this.repo.getRefund(refundId);
@@ -206,15 +245,18 @@ export class OnlineAdminService {
     const outcome = await this.saga.handleRefundRequested({ ...msg, idempotency_key: `${msg.idempotency_key}:manual` });
     const fresh = await this.repo.getRefund(rf.id);
     await this.repo.tx(async (r) =>
-      r.audit({ action: 'refund_settle', actor, reason: note, order_id: part.order_id, part_id: part.id, refund_id: rf.id, amount: rf.amount, outcome: fresh?.status ?? outcome }),
+      r.audit({ action: 'refund_settle', actor, reason: scrubReason(note), order_id: part.order_id, part_id: part.id, refund_id: rf.id, amount: rf.amount, outcome: fresh?.status ?? outcome }),
     );
     this.logAudit({ action: 'refund_settle', actor, refund_id: rf.id, outcome: fresh?.status ?? outcome });
     return { status: fresh?.status ?? 'unknown' };
   }
 
   /** Bagian `review`: `cancel` → kompensasi review (batal Odoo + refund); `sync` → tarik state Odoo dan terapkan. */
-  async resolve(partId: string, action: 'cancel' | 'sync', actor: string, note: string): Promise<{ status: string }> {
+  async resolve(partId: string, action: 'cancel' | 'sync', operator: string | Operator, note: string): Promise<{ status: string }> {
+    const { actor, role } = toOperator(operator);
     this.checkActor(actor, note);
+    // SEC-107: batal bagian review memicu refund → hanya approver
+    if (action === 'cancel' && role !== 'approver') throw new AdminError('resolve --action=cancel (memicu refund) hanya untuk peran approver');
     const part = await this.repo.getPart(partId);
     if (!part) throw new AdminError('bagian tidak ditemukan');
     if (action === 'cancel') {
@@ -238,7 +280,7 @@ export class OnlineAdminService {
       r.audit({
         action: action === 'cancel' ? 'resolve_cancel' : 'resolve_sync',
         actor,
-        reason: note,
+        reason: scrubReason(note),
         order_id: part.order_id,
         part_id: part.id,
         refund_id: null,

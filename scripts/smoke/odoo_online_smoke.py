@@ -11,6 +11,8 @@
 #   - `ready`    : aksi staf `action_efn_ready` sebagai user staf (bukan admin) -> kirim outbox sekarang.
 #   - `handover` : wizard serah terima sebagai user staf dengan SMOKE_CODE -> kirim outbox sekarang.
 #   - `outbox`   : proses outbox event yang jatuh tempo sekarang (tanpa menunggu cron 1 menit).
+#   - `ops_cancel`: manajer `smoke_online_mgr` membatalkan SO berbayar dari UI (SEC-95, alasan wajib).
+#   - `picking_direct`: staf memvalidasi picking keluar SO online di luar wizard (harus ditolak, SEC-95).
 #   - `apikey`   : buat API key user teknis lewat prosedur runbook (with_user, scope global, kedaluwarsa < durasi
 #                  grup). Key ditulis ke /tmp/efn_online_key (0600) di container, BUKAN ke stdout.
 # Tidak ada secret di file ini; tidak ada data pribadi (kanal online memakai partner generik tanpa HP/email).
@@ -114,6 +116,24 @@ def step_setup():
                 }
             )
         )
+    # SEC-95 (L-16): batal SO online berbayar dari UI hanya manajer penjualan (login aman -> initiated_by odoo-login:)
+    mgr = su["res.users"].with_context(active_test=False).search([("login", "=", "smoke_online_mgr")], limit=1)
+    if not mgr:
+        mgr = (
+            su["res.users"]
+            .with_context(no_reset_password=True)
+            .create(
+                {
+                    "name": "SMOKE manajer penjualan online",
+                    "login": "smoke_online_mgr",
+                    "company_id": company.id,
+                    "company_ids": [Command.set([company.id])],
+                    "group_ids": [
+                        Command.set([env.ref("base.group_user").id, env.ref("sales_team.group_sale_manager").id])
+                    ],
+                }
+            )
+        )
     Channel = su["efn.online.channel"].with_context(active_test=False)
     channel = Channel.search([("code", "=", "RTL")], limit=1)
     vals = {
@@ -173,6 +193,7 @@ def step_setup():
         "warehouse_id": wh.id,
         "user_id": user.id,
         "staff_id": staff.id,
+        "manager_id": mgr.id,
         "products": ids,
     }
     save_state(st)
@@ -185,6 +206,8 @@ def step_setup():
         products=ids,
         tech_user_groups_ok=user.has_group("efn_online_order.group_online_channel"),
         staff_is_admin=staff.has_group("base.group_system"),
+        tax_label=tax.invoice_label,
+        tax_group=tax.tax_group_id.name,
     )
 
 
@@ -284,6 +307,55 @@ def step_outbox():
     out(ok=True, **(describe(order) if order else {}))
 
 
+def step_ops_cancel():
+    """SEC-95: manajer membatalkan SO online berbayar dari UI Odoo (alasan wajib) -> event cancelled initiator=odoo."""
+    st = load_state()
+    mgr = env["res.users"].browse(st["manager_id"])
+    me = env(user=mgr, context={"allowed_company_ids": [st["company_id"]]})
+    order = find_order(env(su=True))
+    so = me["sale.order"].browse(order.sale_order_id.id)
+    error = None
+    try:
+        if os.environ.get("SMOKE_NOTE", "1") == "1":
+            so.write({"efn_online_cancel_note": "Pelanggan minta batal, tiket SMOKE-CS-001"})
+        so.action_cancel()
+        env.cr.commit()
+    except Exception as exc:  # noqa: BLE001 - dilaporkan sebagai hasil smoke
+        env.cr.rollback()
+        error = type(exc).__name__
+    process_outbox()
+    order = find_order(env(su=True))
+    refund = order.refund_ids.sorted("id")[-1:]
+    out(
+        ok=error is None,
+        error=error,
+        refund_initiator=refund.initiator or None,
+        refund_amount=refund.amount or None,
+        **describe(order),
+    )
+
+
+def step_picking_direct():
+    """SEC-95: picking keluar SO online divalidasi di luar wizard serah terima -> ditolak (juga context palsu)."""
+    se = staff_env()
+    order = find_order(env(su=True))
+    ids = order.sale_order_id.picking_ids.filtered(lambda p: p.state not in ("done", "cancel")).ids[:1]
+    picking = se["stock.picking"].browse(ids)
+    results = []
+    for ctx in ({}, {"efn_online_handover_picking_ids": picking.ids, "efn_online_internal": True}):
+        try:
+            for move in picking.sudo().move_ids:
+                move.quantity = move.product_uom_qty
+            picking.with_context(**ctx).button_validate()
+            env.cr.commit()
+            results.append("validated")
+        except Exception as exc:  # noqa: BLE001 - dilaporkan sebagai hasil smoke
+            env.cr.rollback()
+            results.append(type(exc).__name__)
+    order = find_order(env(su=True))
+    out(ok=bool(ids), attempts=results, picking_state=picking.sudo().state, **describe(order))
+
+
 def step_apikey():
     st = load_state()
     user = env["res.users"].browse(st["user_id"])
@@ -310,4 +382,6 @@ def step_apikey():
     "handover": step_handover,
     "outbox": step_outbox,
     "apikey": step_apikey,
+    "ops_cancel": step_ops_cancel,
+    "picking_direct": step_picking_direct,
 }[STEP]()

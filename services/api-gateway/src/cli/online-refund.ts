@@ -9,9 +9,10 @@
  * jaringan putus (idempoten `online:refund:<refund_id>`). Exit 0 sukses, 1 gagal, 2 argumen salah.
  */
 import { isUuid } from '../common/validation';
-import { operatorIdentity, parseFlags, required, runCli } from './online-cli';
+import { Operator } from '../orders/online-admin.service';
+import { cliMain, parseFlags, reasonOf, required } from './online-cli';
 
-export function parseRefundArgs(argv: readonly string[], actor: string = operatorIdentity()): {
+export function parseRefundArgs(argv: readonly string[], op: Operator, stdinReason?: string): {
   partId: string;
   refundId?: string;
   lines: { product_id: number; qty: number }[] | null;
@@ -19,10 +20,11 @@ export function parseRefundArgs(argv: readonly string[], actor: string = operato
   restock: boolean;
   reason: 'customer_cs' | 'ops_cancelled';
   actor: string;
+  role: Operator['role'];
   note: string;
 } {
   // SEC-98: tidak ada --actor (identitas dari OS/host)
-  const f = parseFlags(argv, ['part', 'full', 'lines', 'reason', 'kind', 'restock', 'refund-id']);
+  const f = parseFlags(argv, ['part', 'full', 'lines', 'reason', 'reason-stdin', 'kind', 'restock', 'refund-id']);
   const partId = required(f, 'part');
   if (!isUuid(partId)) throw new Error('--part harus UUID');
   const refundId = f.get('refund-id');
@@ -48,18 +50,12 @@ export function parseRefundArgs(argv: readonly string[], actor: string = operato
     full,
     restock: f.get('restock') === 'true',
     reason: kind,
-    actor,
-    note: required(f, 'reason'),
+    actor: op.actor,
+    role: op.role,
+    note: reasonOf(f, stdinReason),
   };
 }
 
 if (require.main === module) {
-  let args: ReturnType<typeof parseRefundArgs>;
-  try {
-    args = parseRefundArgs(process.argv.slice(2));
-  } catch (err) {
-    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
-    process.exit(2);
-  }
-  void runCli('online-refund', (cli) => cli.admin.refund(args));
+  void cliMain('online-refund', process.argv.slice(2), parseRefundArgs, (cli, a) => cli.admin.refund(a));
 }

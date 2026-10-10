@@ -37,3 +37,4 @@ Risiko dimitigasi: R-T10 (saga), R-O05 (refund ≤ porsi per bagian), R-S09 (web
 - SEC-99: kode ambil dihapus saat `stock_short`/final; retensi `confirmed|ready|review` memakai `COALESCE(ready_at, confirmed_at)`.
 - SEC-100: `DELETE /v1/me` mengambil kunci member checkout + cek ulang order terbuka dalam transaksi INSERT; erasure ditunda (+ `EFN_ONLINE_ANOMALY erasure_deferred_open_orders`) bila masih ada order terbuka.
 - SEC-102: AAD kode ambil `efn:online_order_part.pickup_code_enc:v2:<part_id>`; baris AAD v1 tetap terbaca lalu ditulis ulang (baca kode ambil & `pii-reencrypt`).
+- L-19: peran CS (`EFN_CS_ROLE` cs|approver) — semua refund CS `approval_required` (ambang `ONLINE_CS_REFUND_APPROVAL_MIN_IDR`), approve/resolve-cancel hanya approver ≠ pembuat; `claim_token` CAS untuk penulisan pasca-gateway (SEC-106); pool json2 publik/saga terpisah (SEC-109); alasan CLI dari stdin (tanpa `--reason=`, atau `--reason-stdin`).

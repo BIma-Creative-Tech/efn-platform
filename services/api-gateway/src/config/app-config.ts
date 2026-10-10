@@ -1369,11 +1369,23 @@ export class AppConfig {
     return this.int('ODOO_RPC_CATALOG_TIMEOUT_MS', 20_000, 1000, 120_000);
   }
   /**
-   * SEC-96 (L-16): batas konkurensi GLOBAL panggilan json2 BFF → Odoo per proses (default 4, ≤ worker Odoo yang
-   * disisihkan untuk kanal online). Antrean penuh/menunggu terlalu lama → `503 online_unavailable` (POS terlindungi).
+   * SEC-96/SEC-109 (L-16, L-19f): batas konkurensi json2 BFF → Odoo per proses, DIPISAH untuk jalur publik
+   * (katalog/gambar/stok/quote — dipicu pengunjung) dan saga (place/mark_paid/cancel/refund/status). Default 2 + 2
+   * = 4 (≤ `ODOO_RPC_MAXCONN` gateway / worker Odoo untuk kanal online). Lonjakan quote tidak menghabiskan slot saga.
+   * Antrean penuh/menunggu > 2 s → `busy` (503 / retry consumer).
    */
-  get odooRpcMaxConcurrency(): number {
-    return this.int('ODOO_RPC_MAX_CONCURRENCY', 4, 1, 64);
+  get odooRpcPublicMaxConcurrency(): number {
+    return this.int('ODOO_RPC_PUBLIC_MAX_CONCURRENCY', 2, 1, 64);
+  }
+  get odooRpcSagaMaxConcurrency(): number {
+    return this.int('ODOO_RPC_SAGA_MAX_CONCURRENCY', 2, 1, 64);
+  }
+  /**
+   * SEC-107 (L-19c): refund buatan CS dengan nominal ≥ ambang ini wajib persetujuan approver (`approval_required`).
+   * Default 0 = SEMUA refund CS butuh persetujuan (PLACEHOLDER keputusan Finance).
+   */
+  get onlineCsRefundApprovalMinIdr(): number {
+    return this.int('ONLINE_CS_REFUND_APPROVAL_MIN_IDR', 0, 0, 1_000_000_000);
   }
   get odooRpcImageTimeoutMs(): number {
     return this.int('ODOO_RPC_IMAGE_TIMEOUT_MS', 15_000, 1000, 120_000);

@@ -128,44 +128,63 @@ SEC-96 / L-16b (docs/04 §10.17): online tidak boleh menghabiskan worker HTTP Od
 
 ## CLI CS lewat wrapper host `efn-online-cs` {#cli-cs}
 
-L-3 + SEC-98 (L-16d): refund/resolve CS dijalankan **hanya** lewat wrapper root `/usr/local/sbin/efn-online-cs`
-(sumber `scripts/host/efn-online-cs`). Wrapper mengambil identitas operator dari sudo (`SUDO_USER`) dan hostname —
-tidak ada argumen `--actor`, dan env pemanggil (`EFN_CS_OPERATOR`/`EFN_CS_HOST`) selalu ditimpa — lalu meneruskan
-argumen tervalidasi ke `docker exec <api-gateway> node dist/cli/<subcommand>.js`. BFF menyimpan aktor `<user>/<host>`
-di `platform.online_admin_audit`.
+L-3 + SEC-98 (L-16d) + SEC-107/SEC-108 (L-19c/e): refund/resolve CS dijalankan **hanya** lewat wrapper root
+`/usr/local/sbin/efn-online-cs` (sumber `scripts/host/efn-online-cs`). Wrapper menentukan dari sudo + grup host:
+identitas (`EFN_CS_OPERATOR` = `SUDO_USER`), host (`EFN_CS_HOST`) dan **peran** (`EFN_CS_ROLE` = `cs` untuk grup
+`efn-cs`, `approver` untuk grup `efn-cs-approver`) — tidak ada argumen `--actor`/`--role`, env pemanggil selalu
+ditimpa — lalu meneruskan argumen tervalidasi ke `docker exec -i <api-gateway> node dist/cli/<subcommand>.js`.
+**Alasan** dibaca dari stdin (prompt bila terminal) dan diteruskan ke CLI lewat stdin, tidak pernah lewat argv (argv
+sudo tercatat di auth log). BFF menyimpan aktor `<user>/<host>` + peran di `platform.online_admin_audit`.
+
+**Peran (SEC-107, pemisahan tugas):**
+- `efn-cs` (operator CS): `online-refund`, `online-refund-settle`, `online-resolve`.
+- `efn-cs-approver` (supervisor CS/Finance): `online-refund-approve` (+ subcommand lain bila perlu). BFF menolak
+  persetujuan oleh pembuat refund yang sama; semua refund buatan CS menunggu persetujuan (L-19c,
+  `ONLINE_CS_REFUND_APPROVAL_MIN_IDR`, default 0 = semua).
+- **Satu orang = satu grup.** Akun yang berada di kedua grup ditolak wrapper untuk SEMUA subcommand (journald
+  `DITOLAK … satu orang satu peran`, alert `EfnOnlineCsDualRole`). Cek berkala:
+  `comm -12 <(getent group efn-cs | cut -d: -f4 | tr , '\n' | sort) <(getent group efn-cs-approver | cut -d: -f4 | tr , '\n' | sort)` harus kosong.
 
 **Pasang (Superadmin, sekali per host; ulangi `install` + cek sha256 setiap wrapper berubah):**
 ```bash
 install -o root -g root -m 0755 scripts/host/efn-online-cs /usr/local/sbin/efn-online-cs
 sha256sum /usr/local/sbin/efn-online-cs          # cocokkan dengan sha256 di PR yang di-review
-groupadd --system efn-cs                         # sekali
-usermod -aG efn-cs <akun-pribadi-cs>             # akun per orang (bukan akun bersama), BUKAN anggota grup docker
+groupadd --system efn-cs; groupadd --system efn-cs-approver   # sekali
+usermod -aG efn-cs <akun-cs>                     # operator CS: akun per orang, BUKAN anggota grup docker
+usermod -aG efn-cs-approver <akun-supervisor>    # approver: orang LAIN dari operator (jangan di kedua grup)
 cat > /etc/sudoers.d/efn-online-cs <<'EOF'
-%efn-cs ALL=(root) NOPASSWD: /usr/local/sbin/efn-online-cs
-Defaults!/usr/local/sbin/efn-online-cs env_reset, !setenv, log_output
+Cmnd_Alias EFN_ONLINE_CS = /usr/local/sbin/efn-online-cs
+%efn-cs, %efn-cs-approver ALL=(root) NOPASSWD: EFN_ONLINE_CS
+Defaults!EFN_ONLINE_CS env_reset, !setenv, !log_input, !log_output
 EOF
 chmod 0440 /etc/sudoers.d/efn-online-cs && visudo -cf /etc/sudoers.d/efn-online-cs
 ```
-Cabut akses: `gpasswd -d <akun> efn-cs`. Pemisahan tugas (SEC-95): persetujuan refund (`online-refund-approve`)
-dilakukan supervisor CS, bukan operator yang menangani kasus — saat ini **prosedural** (BFF mencatat aktor tetapi belum
-menolak aktor yang sama; diusulkan ke BFF).
+`!log_input`/`!log_output` (SEC-108): alasan diketik di stdin/terminal dan tidak boleh terekam I/O log sudo; jejak
+audit resmi = journald wrapper (tanpa alasan) + `platform.online_admin_audit` (alasan, terenkripsi DB/backup).
+Cabut akses: `gpasswd -d <akun> efn-cs` / `gpasswd -d <akun> efn-cs-approver`.
 
-**Pakai (operator CS, lewat SSH akun pribadi ke host):**
+**Pakai (lewat SSH akun pribadi ke host; alasan diminta di prompt atau disalurkan lewat stdin):**
 ```bash
-sudo efn-online-cs online-refund         --part=<part_id> --full --reason="pelanggan batal, tiket CS-123" [--restock]
-sudo efn-online-cs online-refund         --part=<part_id> --lines=<product_id>:<qty>,... --reason="..." [--kind=customer_cs|ops_cancelled]
-sudo efn-online-cs online-refund-approve --refund=<refund_id> --reason="disetujui supervisor, tiket CS-123"
-sudo efn-online-cs online-refund-settle  --refund=<refund_id> --provider-ref=<ref transfer> --reason="transfer manual Finance"
-sudo efn-online-cs online-resolve        --part=<part_id> --action=sync|cancel --reason="..."
+sudo efn-online-cs online-refund         --part=<part_id> --full [--restock]
+sudo efn-online-cs online-refund         --part=<part_id> --lines=<product_id>:<qty>,... [--kind=customer_cs|ops_cancelled]
+sudo efn-online-cs online-refund-settle  --refund=<refund_id> --provider-ref=<ref transfer>
+sudo efn-online-cs online-resolve        --part=<part_id> --action=sync|cancel
+sudo efn-online-cs online-refund-approve --refund=<refund_id>              # HANYA grup efn-cs-approver
+printf '%s\n' 'tiket CS-123' | sudo efn-online-cs online-resolve --part=<part_id> --action=sync   # non-interaktif
 ```
+- Alasan: satu baris, 3..200 karakter, berisi **nomor tiket/alasan singkat — tanpa nama/HP pelanggan**. `--reason=`
+  di argv ditolak.
 - Hanya 4 subcommand dan flag di atas; UUID/enum/pola divalidasi, karakter kontrol & flag ganda ditolak (exit 2).
   `--refund-id=<uuid>` pada `online-refund` = mengulang refund yang sama (idempoten).
 - Output = JSON id/status/nominal dari CLI BFF; exit code CLI diteruskan.
-- **Jejak:** journald tag `efn-online-cs` (`journalctl -t efn-online-cs`; juga ke Loki lewat promtail-journal):
-  `MULAI/SELESAI aktor=<user> host=<host> cmd=<subcommand> part=<id>|refund=<id> … rc=<n>` dan `DITOLAK: …`.
-  **Tanpa** isi `--reason` (teks bebas, bisa memuat PII — tulis nomor tiket, bukan nama/HP pelanggan) dan tanpa
-  `--provider-ref`. sudo `log_output` mencatat sesi di `/var/log/sudo-io` (retensi ikut kebijakan log host).
-- Uji regresi: `scripts/host/test-efn-online-cs.sh` (CI job infra, 35 kasus, docker/logger palsu).
+- **Jejak:** journald tag `efn-online-cs` (`journalctl -t efn-online-cs`) → Loki lewat promtail-journal
+  (`{service="host-efn-online-cs"}`, hanya entri `_UID=0` sehingga tidak bisa dipalsukan user host lain; redaksi
+  standar ikut diterapkan): `MULAI/SELESAI aktor=<user> peran=<cs|approver> host=<host> cmd=<subcommand> part=<id>|refund=<id> … rc=<n>`
+  dan `DITOLAK: …`. Tanpa alasan dan tanpa `--provider-ref`.
+- **Alert (Loki, grup `efn-online-cs`):** `EfnOnlineCsDeniedRepeated` (≥ 3 penolakan per aktor / 15 m),
+  `EfnOnlineCsDualRole` (akun di dua grup), `EfnOnlineCsRefundVolumeHigh` (> 10 refund/approve sukses per jam,
+  ambang PLACEHOLDER). Alert "approve di luar jam kerja" belum: LogQL tidak punya fungsi jam; kandidat Grafana/ETL.
+- Uji regresi: `scripts/host/test-efn-online-cs.sh` (CI job infra, 45 kasus, docker/logger palsu).
 
 ## Belum / batas
 - Wrapper belum diuji dengan sudo + docker asli di host staging (uji CI memakai SUDO_USER tersimulasi + docker palsu).

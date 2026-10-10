@@ -4,7 +4,9 @@ Gelombang 12 (sisa G11.8). Service `promtail-journal` (hanya `docker-compose.pro
 konfigurasi `infra/observability/promtail-journal.yml`) membaca `/var/log/journal` host **read-only** dan mengirim ke
 Loki (mTLS, sertifikat promtail) hanya:
 - `SYSLOG_IDENTIFIER=efn-deploy` (wrapper deploy root, `logger -t efn-deploy`) → `service="host-efn-deploy"`;
-- unit `efn-backup.service` / `efn-restore-test.service` → `service="host-efn-backup"` / `host-efn-restore-test`.
+- unit `efn-backup.service` / `efn-restore-test.service` → `service="host-efn-backup"` / `host-efn-restore-test`;
+- (G17, SEC-108) `SYSLOG_IDENTIFIER=efn-online-cs` **dengan `_UID=0`** (wrapper CLI CS online) →
+  `service="host-efn-online-cs"`; baris tanpa alasan CS. Alert & pemakaian: [online-orders.md](online-orders.md#cli-cs).
 
 Label `job="host-journal"`, retensi 400 hari (`loki.yml` `retention_stream`). Log host lain (sshd, kernel) tidak
 dikirim (minimisasi data). Nomor HP, token Bearer/Basic dan parameter rahasia diredaksi persis seperti promtail container (tahap (a)-(d), diuji CI

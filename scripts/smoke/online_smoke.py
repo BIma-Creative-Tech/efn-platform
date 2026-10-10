@@ -167,6 +167,15 @@ def cmd_catalog():
         http=s,
         statuses=statuses,
     )
+    # SEC-96 (L-16b): stok hanya untuk produk katalog kanal; id lain -> 404 (tanpa memanggil Odoo), juga bila dicampur
+    s1, b1, _, _ = b.req("GET", f"/v1/catalog/stock?channel={CHANNEL}&outlet={OUTLET}&ids=999999")
+    s2, b2, _, _ = b.req("GET", f"/v1/catalog/stock?channel={CHANNEL}&outlet={OUTLET}&ids={ids},999998")
+    s3, b3, _, _ = b.req("GET", f"/v1/catalog/stock?channel={CHANNEL}&outlet={OUTLET}&ids=999999")  # cache negatif
+    b.result(
+        "o.catalog_stock_non_catalog_404",
+        (s1, s2, s3) == (404, 404, 404) and code_of(b1) == code_of(b2) == "not_found",
+        http=[s1, s2, s3],
+    )
     with open("/work/online_catalog.json", "w", encoding="utf-8") as fh:
         json.dump({k: (v or {}).get("product_id") for k, v in found.items()}, fh)
 
@@ -206,6 +215,15 @@ def cmd_quote(spec, label="main"):
     )
     b.result(
         f"o.quote[{label}]", ok, http=s, total=(q or {}).get("amount_payable_total"), tax_groups=g.get("tax_groups")
+    )
+    # G17-QA-04: label pajak ke pelanggan dari Odoo = "PPN 11%" (baris + grup), bukan nama template Inggris
+    labels = {lb for ln in g.get("lines", []) for lb in ln.get("tax_labels", [])}
+    groups = {tg.get("label") for tg in g.get("tax_groups", [])}
+    b.result(
+        f"o.quote_tax_label_ppn11[{label}]",
+        labels == {"PPN 11%"} and groups == {"PPN 11%"},
+        lines=sorted(labels),
+        groups=sorted(groups),
     )
     st.setdefault("orders", {})[label] = {"quote_id": q.get("quote_id"), "total": q.get("amount_payable_total")}
     save(st)
@@ -338,6 +356,19 @@ def cmd_pickup(label="main"):
     )
     st["orders"][label]["pickup_code"] = code
     save(st)
+
+
+def cmd_pickup_in_review(label="main"):
+    """L-14: bagian `review` -> kode ambil ditahan (409 order_in_review)."""
+    st = load()
+    oid = st["orders"][label]["order_id"]
+    s, body, _, _ = b.req("GET", f"/v1/orders/{oid}/pickup-code", headers=auth(st))
+    b.result(
+        f"o.pickup_code_in_review_409[{label}]",
+        s == 409 and code_of(body) == "order_in_review",
+        http=s,
+        code=code_of(body),
+    )
 
 
 def cmd_pickup_unavailable(label="main"):
@@ -614,6 +645,7 @@ if __name__ == "__main__":
         "wait": cmd_wait,
         "pickup": cmd_pickup,
         "pickup_unavailable": cmd_pickup_unavailable,
+        "pickup_in_review": cmd_pickup_in_review,
         "anti_enum": cmd_anti_enum,
         "dsar_open": cmd_dsar_open,
         "killswitch": cmd_killswitch,

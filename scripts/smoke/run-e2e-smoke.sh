@@ -675,21 +675,38 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   check "o.bff_pickup_code_purged_after_handover" "$([[ "$r" == 1/1 ]] && echo 1 || echo 0)" "pickup_code_enc NULL/bagian=$r"
   echo "$code" > "${WORK}/online_codes"
 
-  # 1b. Refund parsial CS lewat CLI teraudit (L-3): 1 tas belanja; refund > porsi ditolak
-  local bag rice before
+  # 1b. Refund parsial CS lewat CLI teraudit (L-3, L-19c): operator `cs` membuat -> `approval_required` (ambang dev 0)
+  #     -> pembuat yang sama (walau peran approver) ditolak, peran `cs` lain ditolak, approver lain -> settled.
+  #     Identitas/peran = env yang pada host diisi wrapper efn-online-cs (dev: disimulasikan, APP_ENV=dev).
+  cs() { # <operator> <peran> <skrip cli> [arg...] -> keluaran + "exit=<rc>"
+    local op="$1" role="$2" cli="$3"; shift 3
+    MSYS_NO_PATHCONV=1 docker exec -e EFN_CS_OPERATOR="$op" -e EFN_CS_HOST=smoke -e EFN_CS_ROLE="$role" "$BFF" \
+      node "dist/cli/${cli}.js" "$@" 2>&1 | tr '\n' ' '; echo "exit=${PIPESTATUS[0]}"
+  }
+  local bag rice before crid
   bag="$(sed -nE 's/.*"bag": ([0-9]+).*/\1/p' "${WORK}/online_catalog.json")"; rice="$(sed -nE 's/.*"rice": ([0-9]+).*/\1/p' "${WORK}/online_catalog.json")"
-  r="$(MSYS_NO_PATHCONV=1 docker exec "$BFF" node dist/cli/online-refund.js --part="$part" --lines="${bag}:1" --actor=smoke-qa --reason="smoke refund parsial" 2>&1 | tail -2 | tr '\n' ' ' || true)"
+  r="$(cs smoke-cs-op cs online-refund --part="$part" --lines="${bag}:1" --reason="smoke refund parsial SMOKE-CS-002")"
+  n="$(psql_platform -c "select id || '|' || status || '|' || coalesce(initiated_by,'-') || '|' || coalesce(amount::bigint::text,'-') from platform.online_refund where part_id='$part' and kind='lines' order by created_at desc limit 1")"
+  crid="${n%%|*}"
+  check "o.cli_cs_refund_needs_approval" "$([[ "$r" == *exit=0* && "$n" == *'|approval_required|smoke-cs-op/smoke|'* ]] && echo 1 || echo 0)" "refund=${n#*|} cli=$(tail -c 160 <<< "$r")"
+  r="$(cs smoke-cs-op approver online-refund-approve --refund="$crid" --reason="smoke setujui sendiri")"
+  n="$(psql_platform -c "select status from platform.online_refund where id='$crid'")"
+  check "o.cli_approve_same_actor_rejected" "$([[ "$r" == *exit=1* && "$n" == approval_required ]] && echo 1 || echo 0)" "$(tail -c 160 <<< "$r") status=$n"
+  r="$(cs smoke-cs-other cs online-refund-approve --refund="$crid" --reason="smoke peran cs")"
+  n="$(psql_platform -c "select status from platform.online_refund where id='$crid'")"
+  check "o.cli_approve_role_cs_rejected" "$([[ "$r" == *exit=1* && "$n" == approval_required ]] && echo 1 || echo 0)" "$(tail -c 160 <<< "$r") status=$n"
+  r="$(cs smoke-cs-sup approver online-refund-approve --refund="$crid" --reason="smoke disetujui supervisor SMOKE-CS-002")"
   for _ in $(seq 1 30); do
-    n="$(psql_platform -c "select status || '/' || amount::bigint from platform.online_refund where part_id='$part' and kind='lines' order by created_at desc limit 1")"
+    n="$(psql_platform -c "select status || '/' || amount::bigint from platform.online_refund where id='$crid'")"
     [[ "$n" == settled/* ]] && break; sleep 3
   done
   before="$(psql_platform -c "select refunded_amount::bigint || '/' || amount_payable::bigint from platform.online_order_part where id='$part'")"
-  check "o.cli_partial_refund_settled" "$([[ "$n" == settled/* && "${n#*/}" -gt 0 && "${before%/*}" == "${n#*/}" ]] && echo 1 || echo 0)" "refund=$n refunded/porsi=$before cli=$(head -c 160 <<< "$r")"
-  r="$(MSYS_NO_PATHCONV=1 docker exec "$BFF" node dist/cli/online-refund.js --part="$part" --lines="${rice}:50" --actor=smoke-qa --reason="smoke refund melebihi porsi" 2>&1; echo "exit=$?")"
+  check "o.cli_partial_refund_settled" "$([[ "$r" == *exit=0* && "$n" == settled/* && "${n#*/}" -gt 0 && "${before%/*}" == "${n#*/}" ]] && echo 1 || echo 0)" "refund=$n refunded/porsi=$before cli=$(tail -c 120 <<< "$r")"
+  r="$(cs smoke-cs-op cs online-refund --part="$part" --lines="${rice}:50" --reason="smoke refund melebihi porsi")"
   n="$(psql_platform -c "select refunded_amount::bigint || '/' || amount_payable::bigint from platform.online_order_part where id='$part'")"
-  check "o.cli_refund_over_portion_rejected" "$([[ "$r" == *exit=1* && "$n" == "$before" ]] && echo 1 || echo 0)" "$(tail -c 160 <<< "$r" | tr '\n' ' ') refunded/porsi=$n"
-  r="$(psql_platform -c "select count(*) from platform.online_admin_audit where created_at > now() - interval '15 minutes'")"
-  check "o.cli_audit_recorded" "$([[ "$r" -ge 1 ]] && echo 1 || echo 0)" "online_admin_audit baris baru=$r"
+  check "o.cli_refund_over_portion_rejected" "$([[ "$r" == *exit=1* && "$n" == "$before" ]] && echo 1 || echo 0)" "$(tail -c 160 <<< "$r") refunded/porsi=$n"
+  r="$(psql_platform -c "select string_agg(action || ':' || outcome || ':' || actor, ',' order by id) from platform.online_admin_audit where refund_id='$crid'")"
+  check "o.cli_audit_recorded" "$([[ "$r" == *'refund:'*'smoke-cs-op/smoke'* && "$r" == *'refund_approve:'*'smoke-cs-sup/smoke'* && "$r" == *rejected* ]] && echo 1 || echo 0)" "$r"
   r="$(oodoo -e SMOKE_STEP=order -e SMOKE_PART="$part")"
   check "o.odoo_credit_note_partial" "$([[ "$(field credit_notes "$r")" -ge 1 && "$(field state "$r")" == picked_up ]] && echo 1 || echo 0)" "$r"
 
@@ -733,7 +750,43 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   opy "$pc" c wait wrong fulfilling confirmed
   for _ in 1 2 3 4 5; do r="$(oodoo -e SMOKE_STEP=handover -e SMOKE_PART="$wpart" -e SMOKE_CODE="AAAA-AAAA")"; done
   check "o.pickup_wrong_5x_review" "$([[ "$(field "done" "$r")" == false && "$(field state "$r")" == review && "$(field review_reason "$r")" == pickup_code_attempts && "$(field pickup_attempts "$r")" == 5 ]] && echo 1 || echo 0)" "$(sed 's/"message": "[^"]*"/"message": "…"/' <<< "$r")"
-  opy "$pc" c wait wrong fulfilling review
+  opy "$pc" c wait wrong review review
+  opy "$pc" c pickup_in_review wrong   # L-14: kode ambil ditahan selama review
+
+  # 4b. SEC-95 (L-16): picking di luar wizard ditolak; batal SO berbayar dari Odoo oleh manajer -> refund
+  #     `approval_required` (pemicu = odoo-uid) -> CLI online-refund-approve: peran cs ditolak, approver -> settled
+  #     (L-19c: pemisahan tugas Odoo-vs-host berbasis peran; uid Odoo tidak bisa dipetakan ke akun host).
+  local opc opart rid
+  opy "$pc" c quote oil:1 opc
+  opy "$pc" c checkout_only opc
+  opc="$(python_free_json c opc order_id)"; opart="$(part_of "$opc")"
+  opy "$pc" c pay opc paid
+  opy "$pc" c wait opc fulfilling confirmed
+  r="$(oodoo -e SMOKE_STEP=picking_direct -e SMOKE_PART="$opart")"
+  check "o.picking_outside_wizard_rejected" "$([[ "$r" == *'"attempts": ["UserError", "UserError"]'* && "$(field picking_state "$r")" != "done" && "$(field state "$r")" == confirmed ]] && echo 1 || echo 0)" "$r"
+  r="$(oodoo -e SMOKE_STEP=ops_cancel -e SMOKE_PART="$opart" -e SMOKE_NOTE=0)"
+  check "o.ops_cancel_without_reason_rejected" "$([[ "$(field ok "$r")" == false && "$(field state "$r")" == confirmed ]] && echo 1 || echo 0)" "$r"
+  r="$(oodoo -e SMOKE_STEP=ops_cancel -e SMOKE_PART="$opart")"
+  check "o.ops_cancel_by_manager" "$([[ "$(field ok "$r")" == true && "$(field state "$r")" == cancelled && "$(field cancel_reason "$r")" == ops && "$(field refund_initiator "$r")" == odoo && "$(field credit_notes "$r")" -ge 1 && "$r" == *'cancelled:done'* ]] && echo 1 || echo 0)" "$r"
+  for _ in $(seq 1 20); do
+    n="$(psql_platform -c "select id || '|' || status || '|' || coalesce(initiated_by,'-') || '|' || amount::bigint from platform.online_refund where part_id='$opart' order by created_at desc limit 1")"
+    [[ "$n" == *'|approval_required|'* ]] && break; sleep 3
+  done
+  rid="${n%%|*}"
+  r="$(psql_platform -c "select status || '/' || refunded_amount::bigint from platform.online_order_part where id='$opart'")"
+  check "o.ops_cancel_refund_awaits_approval" "$([[ "$n" =~ \|approval_required\|odoo-(uid:[0-9]+|login:smoke_online_mgr)\| && "$r" == cancelled/0 ]] && echo 1 || echo 0)" "refund=${n#*|} bagian=$r"
+  r="$(cs smoke-cs-op cs online-refund-approve --refund="$rid" --reason="smoke peran cs SMOKE-CS-001")"
+  n="$(psql_platform -c "select status from platform.online_refund where id='$rid'")"
+  check "o.ops_refund_approve_role_cs_rejected" "$([[ "$r" == *exit=1* && "$n" == approval_required ]] && echo 1 || echo 0)" "$(tail -c 200 <<< "$r") status=$n"
+  r="$(cs smoke-cs-sup approver online-refund-approve --refund="$rid" --reason="smoke disetujui supervisor SMOKE-CS-001")"
+  for _ in $(seq 1 30); do
+    n="$(psql_platform -c "select r.status || '/' || r.amount::bigint || '/' || p.refunded_amount::bigint || '/' || p.amount_payable::bigint from platform.online_refund r join platform.online_order_part p on p.id=r.part_id where r.id='$rid'")"
+    [[ "$n" == settled/* ]] && break; sleep 3
+  done
+  check "o.ops_refund_approved_settled" "$([[ "$r" == *exit=0* && "$n" =~ ^settled/([0-9]+)/([0-9]+)/([0-9]+)$ && "${BASH_REMATCH[1]}" == "${BASH_REMATCH[3]}" && "${BASH_REMATCH[2]}" == "${BASH_REMATCH[3]}" ]] && echo 1 || echo 0)" "refund/refunded/porsi=$n"
+  r="$(psql_platform -c "select string_agg(action || ':' || outcome || ':' || actor, ',' order by id) from platform.online_admin_audit where refund_id='$rid'")"
+  check "o.ops_refund_approve_audit" "$([[ "$r" == *'refund_approve:rejected_role:smoke-cs-op/smoke'* && "$r" == *'refund_approve:odoo_done:smoke-cs-sup/smoke'* ]] && echo 1 || echo 0)" "$r"
+  opy "$pc" c wait opc cancelled cancelled 60
 
   # 5. Event Odoo -> BFF: HMAC salah / tanpa tanda tangan / di luar window / body diubah -> 401; duplikat & seq lama
   MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal -v "${WORK_W}:/work" \

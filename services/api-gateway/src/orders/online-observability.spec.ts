@@ -73,7 +73,7 @@ describe('Observability online (§10.11)', () => {
     const ctx = jobs();
     ctx.repo.state.refunds.set('r1', {
       id: 'r1', part_id: 'p', payment_intent_id: 'i', kind: 'full', reason: 'stock_short', lines: null, amount: 1, odoo_refund_ref: null,
-      provider_refund_ref: null, status: 'manual_required', failure_reason: null, initiated_by: null, requested_by: 'system', created_at: new Date(0), updated_at: new Date(0), settled_at: null,
+      provider_refund_ref: null, status: 'manual_required', failure_reason: null, initiated_by: null, claim_token: null, requested_by: 'system', created_at: new Date(0), updated_at: new Date(0), settled_at: null,
     });
     await ctx.svc.reconOnce();
     const open = await ctx.metrics.refundsOpen.get();

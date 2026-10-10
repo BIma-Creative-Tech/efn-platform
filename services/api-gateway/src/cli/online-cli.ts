@@ -8,7 +8,7 @@ import { Json2OdooOnlineClient, createJson2Transport } from '../odoo-rpc/json2-c
 import { MockOdooOnline } from '../odoo-rpc/odoo-online.mock';
 import { OdooOnlineApi } from '../odoo-rpc/odoo-online.types';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
-import { OnlineAdminService } from '../orders/online-admin.service';
+import { CsRole, OnlineAdminService, Operator } from '../orders/online-admin.service';
 import { PgOnlineRepo } from '../orders/online.repository';
 import { OnlineSagaService } from '../orders/online-saga.service';
 import { createPaymentGateway } from '../payments/payment-gateway.factory';
@@ -38,20 +38,80 @@ export function createOnlineCli(): OnlineCli {
   const payments = new PaymentsService(config, db, NO_REDIS, { get: () => (gw === undefined ? (gw = createPaymentGateway(config)) : gw) });
   const repo = new PgOnlineRepo(db, db);
   const saga = new OnlineSagaService(repo, odoo, payments, metrics);
-  return { admin: new OnlineAdminService(repo, odoo, saga, metrics), close: () => pool.end() };
+  return { admin: new OnlineAdminService(repo, odoo, saga, metrics, config), close: () => pool.end() };
 }
 
 /**
- * SEC-98 (L-16): identitas operator dari lingkungan OS/host, BUKAN argumen `--actor`. Wrapper host `efn-online-cs`
- * (devsecops) menyetel `EFN_CS_OPERATOR` dari `SUDO_USER`/akun SSH (tercatat di journald) dan `EFN_CS_HOST`; bila tidak
- * ada, dipakai `SUDO_USER` lalu user OS proses + hostname. Format `<user>/<host>`, karakter [A-Za-z0-9._-] (tanpa email).
+ * SEC-98/SEC-107 (L-16, L-19c): identitas & PERAN operator dari wrapper host `efn-online-cs` (root, sudo): `EFN_CS_OPERATOR`
+ * (= SUDO_USER), `EFN_CS_HOST`, `EFN_CS_ROLE` (`cs` | `approver`, dari grup efn-cs / efn-cs-approver). Tanpa operator +
+ * peran → CLI MENOLAK jalan (tidak ada cadangan `node/<container>`), kecuali `APP_ENV=dev|test` (cadangan user OS,
+ * peran `cs` kecuali `EFN_CS_ROLE` diisi). Format aktor `<user>/<host>`, karakter [A-Za-z0-9._-] (tanpa email).
  */
-export function operatorIdentity(env: NodeJS.ProcessEnv = process.env, osUser: () => string = () => userInfo().username, host: () => string = hostname): string {
+export function operatorIdentity(
+  env: NodeJS.ProcessEnv = process.env,
+  osUser: () => string = () => userInfo().username,
+  host: () => string = hostname,
+): Operator {
   const clean = (v: string): string => v.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64);
-  const user = env.EFN_CS_OPERATOR || env.SUDO_USER || osUser();
+  const devLike = env.APP_ENV === 'dev' || env.APP_ENV === 'test';
+  const roleRaw = env.EFN_CS_ROLE;
+  const role: CsRole | null = roleRaw === 'cs' || roleRaw === 'approver' ? roleRaw : null;
+  if (!devLike && (!env.EFN_CS_OPERATOR || !role)) {
+    throw new Error('identitas/peran operator tidak tersedia: jalankan lewat wrapper host efn-online-cs (EFN_CS_OPERATOR, EFN_CS_ROLE)');
+  }
+  const user = env.EFN_CS_OPERATOR || (devLike ? env.SUDO_USER || osUser() : '');
   const h = env.EFN_CS_HOST || host();
   if (!user || clean(user).length < 2) throw new Error('identitas operator tidak tersedia (jalankan lewat wrapper efn-online-cs)');
-  return `${clean(user)}/${clean(h) || 'unknown'}`;
+  return { actor: `${clean(user)}/${clean(h) || 'unknown'}`, role: role ?? 'cs' };
+}
+
+/**
+ * SEC-108 (L-19e): alasan dibaca dari stdin (wrapper mengirimnya lewat `docker exec -i`, tidak di argv/log sudo).
+ * Dibaca bila `--reason-stdin` diberikan, atau bila `--reason=` tidak ada dan stdin bukan terminal. Satu baris, ≤ 2 KB.
+ */
+export async function reasonFromStdin(
+  argv: readonly string[],
+  stdin: NodeJS.ReadableStream & { isTTY?: boolean } = process.stdin,
+): Promise<string | undefined> {
+  if (argv.some((a) => a.startsWith('--reason='))) return undefined;
+  if (!argv.includes('--reason-stdin') && stdin.isTTY) return undefined;
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const c of stdin) {
+    const b = Buffer.isBuffer(c) ? c : Buffer.from(String(c));
+    size += b.length;
+    if (size > 2048) throw new Error('alasan dari stdin terlalu panjang');
+    chunks.push(b);
+  }
+  const line = Buffer.concat(chunks).toString('utf8').split(/\r?\n/)[0]?.trim() ?? '';
+  return line.length > 0 ? line : undefined;
+}
+
+/** Alasan: `--reason=` atau dari stdin (`reason-stdin` hanya penanda). */
+export function reasonOf(f: Map<string, string>, stdinReason: string | undefined): string {
+  const v = f.get('reason');
+  if (v && v !== 'true') return v;
+  if (stdinReason) return stdinReason;
+  throw new Error('alasan wajib (--reason=… atau lewat stdin)');
+}
+
+/** Jalankan CLI: baca alasan stdin + identitas wrapper, parse (gagal → exit 2), lalu eksekusi. */
+export async function cliMain<T>(
+  name: string,
+  argv: readonly string[],
+  parse: (argv: readonly string[], op: Operator, stdinReason: string | undefined) => T,
+  run: (cli: OnlineCli, args: T) => Promise<Record<string, unknown>>,
+): Promise<void> {
+  let args: T;
+  try {
+    const reason = await reasonFromStdin(argv);
+    args = parse(argv, operatorIdentity(), reason);
+  } catch (err) {
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    process.exitCode = 2;
+    return;
+  }
+  await runCli(name, (cli) => run(cli, args));
 }
 
 /** Parser argumen `--nama=nilai` / `--flag` (tanpa nilai bebas yang tidak dikenal). */

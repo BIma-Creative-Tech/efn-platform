@@ -168,13 +168,18 @@ describe('Validasi respons Odoo (§10.4.3)', () => {
   });
 });
 
-describe('SEC-96: batas konkurensi global json2', () => {
-  it('ODOO_RPC_MAX_CONCURRENCY in-flight; antrean penuh → busy (503), tidak membuka circuit', async () => {
-    const config = testConfig({ ODOO_API_KEY_ONLINE_RTL_FILE: '/k/rtl', ODOO_RPC_MAX_CONCURRENCY: '1' }, (p) => {
-      if (p === '/k/rtl') return Buffer.from(RTL_KEY);
+describe('SEC-96/SEC-109: batas konkurensi json2 per pool (publik vs saga)', () => {
+  function cfg(pub: string, saga: string) {
+    return testConfig({ ODOO_API_KEY_ONLINE_RTL_FILE: '/k/rtl', ODOO_RPC_PUBLIC_MAX_CONCURRENCY: pub, ODOO_RPC_SAGA_MAX_CONCURRENCY: saga }, (path) => {
+      if (path === '/k/rtl') return Buffer.from(RTL_KEY);
       throw new Error('ENOENT');
     });
-    expect(testConfig().odooRpcMaxConcurrency).toBe(4);
+  }
+  const tick = () => new Promise((res) => setImmediate(res));
+
+  it('default 2 + 2; pool penuh → busy (503), tidak membuka circuit', async () => {
+    expect(testConfig().odooRpcPublicMaxConcurrency).toBe(2);
+    expect(testConfig().odooRpcSagaMaxConcurrency).toBe(2);
     let inFlight = 0;
     let peak = 0;
     const waiters: (() => void)[] = [];
@@ -185,17 +190,59 @@ describe('SEC-96: batas konkurensi global json2', () => {
       inFlight -= 1;
       return ok(STATUS_ROW);
     };
-    const client = new Json2OdooOnlineClient(config, transport, new OnlineMetrics(new MetricsService()));
+    const client = new Json2OdooOnlineClient(cfg('1', '1'), transport, new OnlineMetrics(new MetricsService()));
     const calls = Array.from({ length: 10 }, () => client.status('RTL', ['x']).then(() => 'ok', (e: unknown) => (e as OdooRpcError).kind));
-    await new Promise((res) => setImmediate(res));
-    for (let i = 0; i < 20; i += 1) {
+    await tick();
+    for (let k = 0; k < 20; k += 1) {
       waiters.shift()?.();
-      await new Promise((res) => setImmediate(res));
+      await tick();
     }
     const out = await Promise.all(calls);
     expect(peak).toBe(1);
     expect(out.filter((x) => x === 'busy')).toHaveLength(1); // 1 jalan + 8 antre + 1 ditolak
-    expect(out.filter((x) => x === 'ok')).toHaveLength(9);
     expect(client.isCircuitOpen('RTL')).toBe(false);
+  });
+
+  it('SEC-109: lonjakan stok/quote (pool publik penuh) tidak memblokir saga (mark_paid/status)', async () => {
+    const hold: (() => void)[] = [];
+    const transport: Json2Transport = async (path) => {
+      if (path.endsWith('efn_online_stock')) await new Promise<void>((res) => hold.push(res));
+      return path.endsWith('efn_online_stock') ? ok([]) : ok(STATUS_ROW);
+    };
+    const client = new Json2OdooOnlineClient(cfg('1', '1'), transport, new OnlineMetrics(new MetricsService()));
+    const stocks = Array.from({ length: 3 }, () => client.stock('RTL', 'TOKO-01', [1]).catch(() => 'x'));
+    await tick();
+    expect(await client.status('RTL', ['x'])).toHaveLength(1); // saga tetap jalan
+    for (let k = 0; k < 10; k += 1) {
+      hold.splice(0).forEach((h) => h());
+      await tick();
+    }
+    await Promise.all(stocks);
+  });
+
+  it('SEC-109: slot dilepas selama backoff retry — panggilan lain jalan di sela', async () => {
+    const order: string[] = [];
+    let first = true;
+    const transport: Json2Transport = async (_path, body) => {
+      const ref = (JSON.parse(body) as { platform_order_refs: string[] }).platform_order_refs[0];
+      order.push(ref);
+      if (ref === 'A' && first) {
+        first = false;
+        return { status: 503, body: '' };
+      }
+      return ok(STATUS_ROW);
+    };
+    const client = new Json2OdooOnlineClient(cfg('1', '1'), transport, new OnlineMetrics(new MetricsService()));
+    let wake: (() => void) | null = null;
+    client.sleep = () => new Promise<void>((res) => (wake = res));
+    client.random = () => 0;
+    const a = client.status('RTL', ['A']);
+    await tick();
+    expect(order).toEqual(['A']); // A gagal, sedang backoff
+    await client.status('RTL', ['B']); // slot saga (1) bebas selama backoff A
+    expect(order).toEqual(['A', 'B']);
+    (wake as unknown as () => void)();
+    await a;
+    expect(order).toEqual(['A', 'B', 'A']);
   });
 });

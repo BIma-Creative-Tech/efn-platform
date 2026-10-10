@@ -1502,6 +1502,26 @@ Belum / perlu tindakan:
   Container `api-gateway` dev BELUM di-recreate: perlu key RTL nyata di `secrets/odoo_api_key_online_rtl.txt` (runbook
   odoo-online-api-key §1, setelah E-28 + user teknis `efn_online_rtl` ada) dan migrasi 07 di volume dev lama.
 
+## G17.9 Re-review G17: SEC-107 (L-19c) + SEC-108 (L-19e) di wrapper
+- **Peran:** grup host `efn-cs-approver` terpisah dari `efn-cs`; wrapper menetapkan `EFN_CS_ROLE=cs|approver` dari
+  keanggotaan grup (env pemanggil ditimpa); `online-refund-approve` hanya peran approver; akun di kedua grup ditolak
+  untuk semua subcommand ("satu orang satu peran").
+- **Alasan via stdin:** `--reason` di argv ditolak; wrapper membaca satu baris stdin (prompt bila TTY; CR akhir
+  dibuang; tanpa karakter kontrol; 3..800 byte) dan meneruskannya lewat `docker exec -i` stdin tanpa flag `--reason`
+  (**kontrak untuk BFF: CLI membaca alasan dari stdin bila `--reason` tidak diberikan**; BFF belum mengimplementasikan
+  saat ini — perlu dicek di laporan BFF/integrasi). sudoers: `Cmnd_Alias`, `%efn-cs, %efn-cs-approver`,
+  `env_reset, !setenv, !log_input, !log_output`.
+- **Loki:** `promtail-journal.yml` mengirim `efn-online-cs` HANYA bila `_UID=0` (field journald tepercaya; user host
+  lain tidak bisa memalsukan) → `service="host-efn-online-cs"`. Rule baru grup `efn-online-cs`:
+  `EfnOnlineCsDeniedRepeated` (≥ 3 DITOLAK per aktor / 15 m), `EfnOnlineCsDualRole`, `EfnOnlineCsRefundVolumeHigh`
+  (> 10/jam, PLACEHOLDER). Approve di luar jam kerja tidak dibuat (LogQL tanpa fungsi jam).
+- **Uji:** `test-efn-online-cs.sh` 45/45 (peran, dua grup, approve oleh cs, alasan stdin literal/kosong/pendek/tab/
+  > 800 byte/multi-baris, `--reason` argv ditolak, journald tanpa alasan); promtail redaksi 83 entri OK (fixture baris
+  wrapper utuh di pipeline docker + journal), `-check-syntax` OK; query LogQL rule baru diparse Loki (status success)
+  dan dievaluasi ruler. shellcheck, actionlint, yamllint 0 error, checkov 0 FAILED, compose dev/prod, check-encryption OK.
+- Runbook `online-orders.md#cli-cs` (peran, larangan dua grup + cek `comm`, sudoers baru, alasan via stdin, alert),
+  `host-journal-loki.md`, indeks `README.md`.
+
 ## G17.8 SEC-98 (L-16d): wrapper host `efn-online-cs`
 - `scripts/host/efn-online-cs` (root, dipasang manual Superadmin seperti efn-deploy): wajib root lewat sudo,
   `SUDO_USER` valid (bukan root, konsisten dengan `SUDO_UID`), anggota grup `efn-cs`; `EFN_CS_OPERATOR`=SUDO_USER dan

@@ -556,7 +556,7 @@ jobs:
             python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea \
             bash /src/scripts/host/test-efn-deploy.sh
       # G17 (SEC-98 / L-16d): wrapper CS online (aktor dari sudo, allowlist subcommand/argumen, journald tanpa PII)
-      # diuji dengan docker/logger palsu di container sekali pakai (35 kasus).
+      # diuji dengan docker/logger palsu di container sekali pakai (45 kasus; + peran SEC-107, alasan stdin SEC-108).
       - name: efn-online-cs regression (docker palsu)
         run: |
           docker run --rm -v "$PWD:/src:ro" \

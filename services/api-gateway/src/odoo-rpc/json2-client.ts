@@ -51,6 +51,8 @@ export type Json2Transport = (path: string, body: string, headers: Record<string
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const BUSINESS_RE = /^efn_online:([a-z_]{1,40})$/;
 const BACKOFF_MS = [500, 1000, 2000];
+/** SEC-109: metode yang dipicu pengunjung (pool publik); sisanya pool saga. */
+const PUBLIC_METHODS: ReadonlySet<OdooOnlineMethod> = new Set<OdooOnlineMethod>(['catalog', 'image', 'stock', 'quote']);
 
 /**
  * Transport https + mTLS ke `odoo-rpc-gateway` (docs/04 §10.4.1): verify-full terhadap CA internal (servername = host),
@@ -61,7 +63,7 @@ export function createJson2Transport(config: AppConfig): Json2Transport {
   const tls = config.odooRpcTls;
   const agent = new Agent({
     keepAlive: true,
-    maxSockets: config.odooRpcMaxConcurrency, // SEC-96: ≤ batas konkurensi global
+    maxSockets: config.odooRpcPublicMaxConcurrency + config.odooRpcSagaMaxConcurrency, // SEC-96/109
     ca: tls.ca,
     cert: tls.cert,
     key: tls.key,
@@ -132,8 +134,8 @@ interface CallOptions {
 export class Json2OdooOnlineClient implements OdooOnlineApi {
   private readonly logger = new Logger('OdooJson2');
   private readonly breakers = new Map<string, CircuitBreaker>();
-  /** SEC-96: semaphore global semua panggilan json2 (antrean pendek). */
-  private readonly gate: Semaphore;
+  /** SEC-96/SEC-109: semaphore terpisah jalur publik vs saga (antrean pendek); slot hanya ditahan selama request. */
+  private readonly gates: Record<'public' | 'saga', Semaphore>;
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms).unref());
   now: () => number = () => Date.now();
   random: () => number = Math.random;
@@ -143,7 +145,9 @@ export class Json2OdooOnlineClient implements OdooOnlineApi {
     private readonly transport: Json2Transport,
     private readonly metrics: OnlineMetrics,
   ) {
-    this.gate = new Semaphore(config.odooRpcMaxConcurrency, config.odooRpcMaxConcurrency * 8, 2_000);
+    const pub = config.odooRpcPublicMaxConcurrency;
+    const saga = config.odooRpcSagaMaxConcurrency;
+    this.gates = { public: new Semaphore(pub, pub * 8, 2_000), saga: new Semaphore(saga, saga * 8, 2_000) };
   }
 
   isCircuitOpen(channel: string): boolean {
@@ -162,28 +166,46 @@ export class Json2OdooOnlineClient implements OdooOnlineApi {
     return b;
   }
 
-  private async call(method: OdooOnlineMethod, channel: string, args: Record<string, unknown>, opts: CallOptions): Promise<unknown> {
-    let release: () => void;
+  /** Slot pool untuk satu percobaan; antrean penuh/timeout → `busy`. */
+  private async slot(method: OdooOnlineMethod): Promise<() => void> {
     try {
-      release = await this.gate.acquire();
+      return await this.gates[PUBLIC_METHODS.has(method) ? 'public' : 'saga'].acquire();
     } catch {
       this.metrics.odoo(method, 'busy', 0);
       throw new OdooRpcError('busy');
     }
-    try {
-      return await this.callInner(method, channel, args, opts);
-    } finally {
-      release();
-    }
   }
 
-  private async callInner(method: OdooOnlineMethod, channel: string, args: Record<string, unknown>, opts: CallOptions): Promise<unknown> {
+  private async call(method: OdooOnlineMethod, channel: string, args: Record<string, unknown>, opts: CallOptions): Promise<unknown> {
     const breaker = this.breaker(channel);
     const started = this.now();
+    // slot diambil SEBELUM izin circuit (busy tidak mengganggu percobaan half-open)
+    let release: (() => void) | null = await this.slot(method);
     if (!breaker.allow()) {
+      release();
       this.metrics.odoo(method, 'circuit_open', 0);
       throw new OdooRpcError('circuit_open');
     }
+    try {
+      return await this.callAttempts(method, channel, args, opts, breaker, started, () => {
+        const r = release;
+        release = null;
+        r?.();
+      });
+    } finally {
+      release?.();
+    }
+  }
+
+  private async callAttempts(
+    method: OdooOnlineMethod,
+    channel: string,
+    args: Record<string, unknown>,
+    opts: CallOptions,
+    breaker: CircuitBreaker,
+    started: number,
+    releaseFirst: () => void,
+  ): Promise<unknown> {
     let apiKey: string;
     try {
       apiKey = this.config.odooApiKeyOnline(channel);
@@ -203,8 +225,10 @@ export class Json2OdooOnlineClient implements OdooOnlineApi {
     if (db) headers['X-Odoo-Database'] = db;
     const body = JSON.stringify({ ...args, context: { lang: 'id_ID' } });
 
+    let held: (() => void) | null = releaseFirst;
     for (let attempt = 0; ; attempt += 1) {
       let err: OdooRpcError;
+      if (!held) held = await this.slot(method); // SEC-109: slot diambil ulang per percobaan (dilepas selama backoff)
       try {
         const res = await this.transport(ODOO_ONLINE_PATHS[method], body, headers, opts.timeoutMs);
         const out = this.classify(res);
@@ -216,6 +240,9 @@ export class Json2OdooOnlineClient implements OdooOnlineApi {
         err = out;
       } catch (e) {
         err = new OdooRpcError('transport', null, e instanceof Error && e.name === 'TimeoutError' ? 'timeout' : 'network');
+      } finally {
+        held();
+        held = null;
       }
       if (err.kind !== 'transport') {
         breaker.neutral();

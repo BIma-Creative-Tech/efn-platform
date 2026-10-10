@@ -372,18 +372,23 @@ export class OnlineSagaService {
 
     if (CLAIMABLE.includes(refund.status) || refund.status === 'gateway_in_flight') {
       // SEC-97: klaim eksklusif atomik + cek porsi (termasuk refund in-flight) di bawah kunci bagian, SEBELUM gateway
-      const before = refund.status === 'gateway_in_flight' ? 'odoo_done' : refund.status;
       const stale = new Date(this.now() - IN_FLIGHT_STALE_MS);
+      const token = randomUUID(); // SEC-106: CAS penulisan pasca-gateway
+      let before: RefundStatus = 'odoo_done';
       const claim = await this.repo.tx(async (r) => {
         const p = await r.getPart(part.id, true);
         if (!p) return null;
-        const mine = await r.claimRefund(msg.refund_id, CLAIMABLE, stale);
+        const cur = await r.getRefund(msg.refund_id, true);
+        if (!cur) return null;
+        // status asal untuk pelepasan klaim; klaim basi direbut → turunkan dari data yang ada (bukan selalu odoo_done)
+        before = cur.status !== 'gateway_in_flight' ? cur.status : cur.provider_refund_ref ? 'gateway_pending' : cur.odoo_refund_ref ? 'odoo_done' : 'requested';
+        const mine = await r.claimRefund(msg.refund_id, CLAIMABLE, stale, token);
         if (!mine) return null;
         const amount = mine.amount ?? 0;
         const out = (await r.refundsOfPart(p.id)).filter((x) => x.id !== mine.id && MONEY_OUT_REFUND.includes(x.status));
         const committed = out.reduce((s, x) => s + (x.amount ?? 0), 0);
         if (amount <= 0 || committed + amount > p.amount_payable) {
-          await r.updateRefund(mine.id, { status: 'failed', failure_reason: 'refund_exceeds_portion' });
+          await r.updateRefundIfClaimed(mine.id, token, { status: 'failed', failure_reason: 'refund_exceeds_portion' });
           this.metrics.mismatch('portion');
           this.metrics.anomaly('refund_exceeds_portion', 'critical', {
             refund_id: mine.id,
@@ -405,28 +410,28 @@ export class OnlineSagaService {
         res = await this.payments.refund(claim.payment_intent_id, { refundId: claim.id, amount: claim.amount ?? 0, reason: claim.reason });
       } catch (err) {
         if (err instanceof PaymentOperationUnsupportedError) {
-          await this.repo.tx(async (r) => r.updateRefund(msg.refund_id, { status: 'manual_required' }));
+          if (!(await this.casWrite(msg.refund_id, token, { status: 'manual_required' }))) return 'pending';
           this.metrics.refund('manual_required');
           this.metrics.anomaly('refund_manual_required', 'warning', { refund_id: msg.refund_id, part_id: part.id });
           return this.claimed(CONSUMER.REFUND, msg.idempotency_key);
         }
         // transien: lepas klaim agar bisa dicoba ulang (idempotensi provider per refundId)
-        await this.repo.tx(async (r) => r.updateRefund(msg.refund_id, { status: before }));
+        await this.casWrite(msg.refund_id, token, { status: before });
         throw err;
       }
       if (res.status === 'pending') {
         const ref = res.providerRefundRef;
-        await this.repo.tx(async (r) => r.updateRefund(msg.refund_id, { status: 'gateway_pending', provider_refund_ref: ref }));
+        if (!(await this.casWrite(msg.refund_id, token, { status: 'gateway_pending', provider_refund_ref: ref }))) return 'pending';
         this.metrics.refund('gateway_pending');
         return 'pending';
       }
       if (res.status === 'failed') {
-        await this.repo.tx(async (r) => r.updateRefund(msg.refund_id, { status: 'failed', failure_reason: 'gateway_failed' }));
+        if (!(await this.casWrite(msg.refund_id, token, { status: 'failed', failure_reason: 'gateway_failed' }))) return 'pending';
         this.metrics.refund('failed');
         this.metrics.anomaly('refund_gateway_failed', 'critical', { refund_id: msg.refund_id, part_id: part.id });
         return this.claimed(CONSUMER.REFUND, msg.idempotency_key);
       }
-      await this.markGatewayDone(msg.refund_id, res.providerRefundRef ?? `gw:${msg.refund_id}`);
+      if (!(await this.markGatewayDone(msg.refund_id, res.providerRefundRef ?? `gw:${msg.refund_id}`, token))) return 'pending';
       refund = await this.repo.getRefund(msg.refund_id);
       if (!refund) throw new PermanentMessageError('refund hilang');
     }
@@ -454,15 +459,26 @@ export class OnlineSagaService {
    * `gateway_done` + `refunded_amount` bagian (satu transaksi, sekali per refund). Dipakai consumer & CLI settle manual.
    * SEC-97: melebihi porsi → TIDAK dipotong diam-diam; refund `failed` (`refund_exceeds_portion`) + anomali critical.
    */
-  async markGatewayDone(refundId: string, providerRef: string): Promise<void> {
-    await this.repo.tx(async (r) => {
+  /** SEC-106: penulisan pasca-gateway bersyarat token; klaim hilang (direbut) → anomali, tidak menimpa. */
+  private async casWrite(refundId: string, token: string, patch: Parameters<OnlineRepo['updateRefund']>[1]): Promise<boolean> {
+    const ok = await this.repo.tx(async (r) => r.updateRefundIfClaimed(refundId, token, patch));
+    if (!ok) this.metrics.anomaly('refund_claim_lost', 'warning', { refund_id: refundId });
+    return ok;
+  }
+
+  async markGatewayDone(refundId: string, providerRef: string, token?: string): Promise<boolean> {
+    return this.repo.tx(async (r) => {
       const rf = await r.getRefund(refundId, true);
-      if (!rf || rf.status === 'gateway_done' || rf.status === 'settled') return;
+      if (!rf || rf.status === 'gateway_done' || rf.status === 'settled') return false;
+      if (token !== undefined && (rf.claim_token !== token || rf.status !== 'gateway_in_flight')) {
+        this.metrics.anomaly('refund_claim_lost', 'warning', { refund_id: refundId });
+        return false;
+      }
       const p = await r.getPart(rf.part_id, true);
-      if (!p) return;
+      if (!p) return false;
       const amount = rf.amount ?? 0;
       if (p.refunded_amount + amount > p.amount_payable) {
-        await r.updateRefund(refundId, { status: 'failed', failure_reason: 'refund_exceeds_portion', provider_refund_ref: providerRef.slice(0, 128) });
+        await r.updateRefund(refundId, { status: 'failed', failure_reason: 'refund_exceeds_portion', provider_refund_ref: providerRef.slice(0, 128), claim_token: null });
         this.metrics.refund('failed');
         this.metrics.anomaly('refund_exceeds_portion', 'critical', {
           refund_id: refundId,
@@ -470,13 +486,14 @@ export class OnlineSagaService {
           expected: p.amount_payable,
           actual: p.refunded_amount + amount,
         });
-        return;
+        return false;
       }
-      await r.updateRefund(refundId, { status: 'gateway_done', provider_refund_ref: providerRef.slice(0, 128) });
+      await r.updateRefund(refundId, { status: 'gateway_done', provider_refund_ref: providerRef.slice(0, 128), claim_token: null });
       await r.updatePart(p.id, { refunded_amount: p.refunded_amount + amount });
       this.metrics.refund('gateway_done');
       const order = await r.getOrder(p.order_id);
       if (order) await this.notify(r, order, p, 'online_order_refunded');
+      return true;
     });
   }
 }

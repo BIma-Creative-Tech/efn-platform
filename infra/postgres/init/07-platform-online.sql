@@ -140,6 +140,7 @@ CREATE TABLE IF NOT EXISTS platform.online_refund (
                                                         'gateway_pending', 'gateway_done', 'settled', 'manual_required', 'failed')),
   failure_reason       text NULL CHECK (failure_reason IS NULL OR failure_reason ~ '^[a-z_]{1,40}$'),
   initiated_by         text NULL CHECK (initiated_by IS NULL OR initiated_by ~ '^[A-Za-z0-9._:/-]{1,140}$'),
+  claim_token          uuid NULL,
   requested_by         text NOT NULL CHECK (requested_by IN ('system', 'cs')),
   created_at           timestamptz NOT NULL DEFAULT now(),
   updated_at           timestamptz NOT NULL DEFAULT now(),
@@ -228,6 +229,8 @@ ALTER TABLE platform.online_refund ADD COLUMN IF NOT EXISTS failure_reason text 
 -- SEC-95 (lanjutan L-16): pembuat/pemicu refund (aktor CS `<user>/<host>` atau `odoo-uid:<n>` / `odoo-login:<login>`),
 -- untuk menolak persetujuan oleh aktor yang sama. NULL = data lama/sistem (tidak pernah jadi alasan menolak).
 ALTER TABLE platform.online_refund ADD COLUMN IF NOT EXISTS initiated_by text NULL;
+-- SEC-106 (L-19d): token klaim per pemanggilan gateway; penulisan status pasca-gateway hanya bila token cocok (CAS).
+ALTER TABLE platform.online_refund ADD COLUMN IF NOT EXISTS claim_token uuid NULL;
 DO $$
 BEGIN
   ALTER TABLE platform.online_refund DROP CONSTRAINT IF EXISTS online_refund_status_check;

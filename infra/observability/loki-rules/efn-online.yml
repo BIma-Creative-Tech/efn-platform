@@ -44,6 +44,46 @@ groups:
           description: "Ringkasan jam kerja (transisi mundur ditolak, event tak dikenal, dsb.)."
           runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#efnonlineanomaly"
 
+  # G17 (SEC-108 / L-19e): jejak wrapper CLI CS `efn-online-cs` (journald host, _UID 0 saja, promtail-journal.yml ->
+  # service="host-efn-online-cs"). Baris: `MULAI|SELESAI aktor=<u> peran=<cs|approver> host=<h> cmd=<c> <id..> [rc=<n>]`
+  # dan `DITOLAK: <alasan penolakan> (aktor=<u> peran=<p>)`. Tanpa teks alasan CS. Runbook: online-orders.md#cli-cs.
+  - name: efn-online-cs
+    interval: 1m
+    rules:
+      # Penolakan berulang = salah pakai, uji coba bypass (subcommand/flag lain, --reason di argv, approve oleh peran cs)
+      - alert: EfnOnlineCsDeniedRepeated
+        expr: |
+          sum by (aktor) (count_over_time({service="host-efn-online-cs"} |= `DITOLAK:` | regexp `aktor=(?P<aktor>[a-z_?][a-z0-9_.?-]{0,31})` [15m])) >= 3
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "efn-online-cs: {{ $value }} penolakan untuk aktor {{ $labels.aktor }} dalam 15 menit"
+          description: "Operator mencoba perintah/flag di luar allowlist, approve tanpa peran approver, atau identitas tidak valid. Konfirmasi dengan operator; bila tidak terjelaskan, perlakukan sebagai insiden."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#cli-cs"
+      # Satu akun di DUA grup (efn-cs + efn-cs-approver) = pemisahan tugas rusak di host (SEC-107) -> perbaiki grup segera
+      - alert: EfnOnlineCsDualRole
+        expr: |
+          sum by (host) (count_over_time({service="host-efn-online-cs"} |= `satu orang satu peran` [15m])) > 0
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "efn-online-cs: akun anggota efn-cs DAN efn-cs-approver di host {{ $labels.host }}"
+          description: "Pemisahan tugas refund (SEC-107) rusak di konfigurasi grup host. Wrapper menolak akun ini; Superadmin perbaiki keanggotaan grup."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#cli-cs"
+      # Volume refund/approve CS tidak wajar (ambang PLACEHOLDER pilot): indikasi penyalahgunaan akun CS/approver
+      - alert: EfnOnlineCsRefundVolumeHigh
+        expr: |
+          sum by (cmd) (count_over_time({service="host-efn-online-cs"} |~ `^SELESAI .* cmd=(online-refund|online-refund-approve) .* rc=0$` | regexp ` cmd=(?P<cmd>[a-z-]+) ` [1h])) > 10
+        labels:
+          severity: warning
+          team: finance
+        annotations:
+          summary: "efn-online-cs: {{ $value }} {{ $labels.cmd }} sukses dalam 1 jam"
+          description: "Jumlah refund/persetujuan CS di atas ambang pilot (10/jam). Tinjau audit platform.online_admin_audit per aktor."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#cli-cs"
+
   - name: efn-odoo-rpc-gateway
     interval: 1m
     rules:

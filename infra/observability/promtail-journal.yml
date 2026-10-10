@@ -3,6 +3,8 @@
 #   - efn-deploy (wrapper deploy root, `logger -t efn-deploy`, SEC-36/SEC-42): verifikasi tanda tangan, anti-replay,
 #     penolakan rilis -> jejak deploy di luar host (host bisa dihapus penyerang yang mendapat root).
 #   - efn-backup / efn-restore-test (systemd timer infra/backup/systemd): kegagalan sebelum metrik textfile ditulis.
+#   - efn-online-cs (G17, wrapper CLI CS online): MULAI/SELESAI/DITOLAK aktor, host, subcommand, id (tanpa alasan),
+#     alert loki-rules/efn-online.yml grup efn-online-cs.
 # Bukan seluruh journal: log sistem lain (sshd, kernel) tetap di host (minimisasi data; IP admin = data pribadi).
 # Runbook: docs/runbooks/host-journal-loki.md.
 server:
@@ -33,15 +35,22 @@ scrape_configs:
         job: host-journal
     relabel_configs:
       # Hanya identifier/unit EFN; sisanya dibuang SEBELUM dikirim.
-      - source_labels: [__journal_syslog_identifier, __journal__systemd_unit]
+      # G17 (SEC-108 / L-19e): + efn-online-cs (wrapper CS online, root) HANYA bila _UID journald = 0. _UID diisi
+      # journald (field tepercaya), bukan oleh pengirim -> user non-root di host tidak bisa memalsukan baris audit CS
+      # lewat `logger -t efn-online-cs`.
+      - source_labels: [__journal_syslog_identifier, __journal__systemd_unit, __journal__uid]
         separator: ";"
-        regex: '(efn-deploy;.*|.*;efn-(backup|restore-test)\.service)'
+        regex: '(efn-deploy;.*;.*|.*;efn-(backup|restore-test)\.service;.*|efn-online-cs;.*;0)'
         action: keep
       # Label `service` diawali host- -> tidak bisa bertabrakan dengan label container (efn_audit_sink, alert ruler).
       - source_labels: [__journal_syslog_identifier]
         regex: 'efn-deploy'
         target_label: service
         replacement: host-efn-deploy
+      - source_labels: [__journal_syslog_identifier]
+        regex: 'efn-online-cs'
+        target_label: service
+        replacement: host-efn-online-cs
       - source_labels: [__journal__systemd_unit]
         regex: '(efn-backup|efn-restore-test)\.service'
         target_label: service

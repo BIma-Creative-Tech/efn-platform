@@ -178,6 +178,8 @@ export interface RefundRow {
    * atau data lama (tidak pernah menjadi alasan menolak persetujuan).
    */
   initiated_by: string | null;
+  /** SEC-106: token klaim `gateway_in_flight` (CAS penulisan pasca-gateway); NULL di luar klaim. */
+  claim_token: string | null;
   requested_by: 'system' | 'cs';
   created_at: Date;
   updated_at: Date;
@@ -214,7 +216,9 @@ export type PartPatch = Partial<
 export type OrderPatch = Partial<
   Pick<OrderRow, 'status' | 'payment_intent_id' | 'paid_at' | 'closed_at' | 'close_reason' | 'amount_payable' | 'expires_at'>
 >;
-export type RefundPatch = Partial<Pick<RefundRow, 'status' | 'amount' | 'odoo_refund_ref' | 'provider_refund_ref' | 'settled_at' | 'failure_reason'>>;
+export type RefundPatch = Partial<
+  Pick<RefundRow, 'status' | 'amount' | 'odoo_refund_ref' | 'provider_refund_ref' | 'settled_at' | 'failure_reason' | 'claim_token'>
+>;
 
 /** Pesan RabbitMQ saga (§10.9), `schema_version: 1`, tanpa PII. */
 export interface OrderPaidMessage {

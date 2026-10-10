@@ -161,7 +161,7 @@ export class MemoryOnlineRepo implements OnlineRepo {
         (r.odoo_refund_ref === null && r.requested_by === 'system' && x.requested_by === 'system' && x.odoo_refund_ref === null && x.part_id === r.part_id && x.reason === r.reason),
     );
     if (existing) return clone(existing);
-    const row: RefundRow = { ...r, initiated_by: r.initiated_by ?? null, provider_refund_ref: null, failure_reason: null, created_at: this.d(), updated_at: this.d(), settled_at: null };
+    const row: RefundRow = { ...r, initiated_by: r.initiated_by ?? null, claim_token: null, provider_refund_ref: null, failure_reason: null, created_at: this.d(), updated_at: this.d(), settled_at: null };
     this.state.refunds.set(r.id, row);
     return clone(row);
   }
@@ -172,12 +172,18 @@ export class MemoryOnlineRepo implements OnlineRepo {
     const r = this.state.refunds.get(id);
     if (r) Object.assign(r, patch, { updated_at: this.d() });
   }
-  async claimRefund(id: string, from: readonly RefundStatus[], staleBefore: Date): Promise<RefundRow | null> {
+  async claimRefund(id: string, from: readonly RefundStatus[], staleBefore: Date, token: string): Promise<RefundRow | null> {
     const r = this.state.refunds.get(id);
     if (!r) return null;
     if (!(from.includes(r.status) || (r.status === 'gateway_in_flight' && r.updated_at < staleBefore))) return null;
-    Object.assign(r, { status: 'gateway_in_flight', updated_at: this.d() });
+    Object.assign(r, { status: 'gateway_in_flight', claim_token: token, updated_at: this.d() });
     return clone(r);
+  }
+  async updateRefundIfClaimed(id: string, token: string, patch: RefundPatch): Promise<boolean> {
+    const r = this.state.refunds.get(id);
+    if (!r || r.claim_token !== token || r.status !== 'gateway_in_flight') return false;
+    Object.assign(r, patch, { claim_token: null, updated_at: this.d() });
+    return true;
   }
   async refundsOfPart(partId: string): Promise<RefundRow[]> {
     return [...this.state.refunds.values()].filter((r) => r.part_id === partId).map(clone);

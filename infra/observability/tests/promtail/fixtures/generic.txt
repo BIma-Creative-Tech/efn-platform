@@ -23,3 +23,5 @@ pickup json {"pickup_code":"SENTINELPICK","qr_string":"00020101SENTINELQR","quot
 pickup query /v1/x?pickup_code=SENTINELPC&qr_string=SENTINELQ2 ok
 uuid huruf besar 0B6F3C1E-4B6A-4E8E-9D2A-1F0C2B3A4D5E tetap utuh
 kode tampil ABCD-EFGH, XY23-ZW45; selesai
+MULAI aktor=cs1 peran=cs host=efn-prod-1 cmd=online-refund part=0b6f3c1e-4b6a-4e8e-9d2a-1f0c2b3a4d5e full restock
+DITOLAK: online-refund-approve hanya untuk grup efn-cs-approver (aktor=cs1 peran=cs)

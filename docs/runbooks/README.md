@@ -43,6 +43,7 @@ Layout host: `/opt/efn/{compose,traefik,observability,backup,minio,clickhouse,po
 | EfnS3GatewayDeniedBurst (burst 403 filter object storage) | warning | [s3-gateway-denied.md](s3-gateway-denied.md) |
 | EfnOnlineReconDeadman, EfnOnlineAnomalyCritical, EfnOnlineAnomalyWarning (penjualan online, G17) | warning / critical / warning | [online-orders.md](online-orders.md) |
 | EfnOdooRpcGatewayDenied (filter BFF → Odoo `/json/2` menolak request, G17) | warning | [online-orders.md](online-orders.md#efnodoorpcgatewaydenied) |
+| EfnOnlineCsDeniedRepeated, EfnOnlineCsDualRole, EfnOnlineCsRefundVolumeHigh (wrapper CLI CS `efn-online-cs`, journald host, SEC-107/108) | warning / warning / warning | [online-orders.md](online-orders.md#cli-cs) |
 | EfnLoyaltyAnomalyCritical, EfnLoyaltyAnomalyWarning, EfnLoyaltyReconMissing, EfnLoyaltyReconFailing (Poin EFN, G13c SEC-61); EfnLoyaltyReconStale (Prometheus) | critical / warning / warning / warning / warning | [loyalty-anomaly.md](loyalty-anomaly.md) |
 
 Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-incident.md](security-incident.md).
@@ -66,6 +67,7 @@ Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-inciden
 | Ubah grup/hak user Odoo (UI/RPC, bukan `odoo shell`); traceback JSON-RPC (sisa SEC-22) | [odoo-access-changes.md](odoo-access-changes.md) |
 | journald host (efn-deploy, backup) → Loki | [host-journal-loki.md](host-journal-loki.md) |
 | Operasi pesanan online (kill switch `ONLINE_ENABLED`, order macet, DLQ saga, refund CLI L-3, rotasi HMAC event) | [online-orders.md](online-orders.md) |
+| CLI CS online lewat wrapper `efn-online-cs`: pasang sudoers, grup `efn-cs` / `efn-cs-approver`, alasan via stdin | [online-orders.md](online-orders.md#cli-cs) |
 | API key Odoo kanal online: pembuatan, rotasi dua kunci, metrik masa berlaku (R-T15) | [odoo-online-api-key.md](odoo-online-api-key.md) |
 | Boot stack dev di laptop (Docker Desktop/WSL2), upgrade modul Odoo dev | [dev-stack-boot.md](dev-stack-boot.md) |
 | CI GitHub di repo privat paket gratis: kuota artifact/menit, code scanning, suppression scanner, Dependabot | [ci-github-free-plan.md](ci-github-free-plan.md) |

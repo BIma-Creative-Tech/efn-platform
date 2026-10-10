@@ -12,6 +12,8 @@
 {container="efn-api-gateway-1", filename="/fixtures/api-gateway.txt", service="api-gateway"} [Nest] 41  - 10/09/2026, 1:00:07 AM     LOG [OrdersService] kode ambil [PICKUP_REDACTED] untuk bagian 5d2e7a10-3c4b-4d5e-8f90-a1b2c3d4e5f6
 {container="efn-etl-1", filename="/fixtures/etl.txt", loyalty_event="etl_recon", recon_status="ok", service="etl", stream="efn_loyalty"} 2026-10-09 01:00:00,011 INFO efn_etl.loyalty_recon EFN_LOYALTY_RECON_ETL {"status":"ok","anomalies":0,"open_items":0}
 {container="efn-etl-1", filename="/fixtures/etl.txt", service="etl"} 2026-10-09 01:00:00,013 WARNING efn_etl.other EFN_AUDIT_CHAIN_HEAD {"company":1,"seq":8} hp [PHONE_REDACTED]
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} DITOLAK: online-refund-approve hanya untuk grup efn-cs-approver (aktor=cs1 peran=cs)
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} MULAI aktor=cs1 peran=cs host=efn-prod-1 cmd=online-refund part=0b6f3c1e-4b6a-4e8e-9d2a-1f0c2b3a4d5e full restock
 {container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} berurutan [PHONE_REDACTED] [PHONE_REDACTED],[PHONE_REDACTED]/[PHONE_REDACTED]
 {container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} docker containerID=9ded32642bcea4225660dd173b0857593858a821c1267380c21e36d18d76b649
 {container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} encoded /cb?next=%2Fweb%3Ftoken%3D[REDACTED]&x=1
@@ -52,6 +54,8 @@
 {container="efn-traefik-1", filename="/fixtures/traefik.txt", service="traefik"} {"ClientHost":"172.30.0.3","RequestHost":"api.efn.local","RequestMethod":"GET","RequestPath":"/v1/pos/member?member_ref=%2B[PHONE_REDACTED]\u0026company=EFN","DownstreamStatus":200,"level":"info","msg":"","time":"2026-10-09T01:00:02Z"}
 {container="efn-traefik-1", filename="/fixtures/traefik.txt", service="traefik"} {"ClientHost":"172.30.0.3","RequestHost":"erp.efn.local","RequestMethod":"GET","RequestPath":"/web/login/totp?redirect=%2Fodoo","DownstreamStatus":200,"level":"info","msg":"","time":"2026-10-09T01:00:05Z"}
 {container="efn-traefik-1", filename="/fixtures/traefik.txt", service="traefik"} {"ClientHost":"172.30.0.3","RequestHost":"files.efn.local","RequestMethod":"GET","RequestPath":"/b/a.jpg?X-Amz-Credential=[REDACTED]\u0026X-Amz-Signature=[REDACTED]\u0026X-Amz-Expires=300","DownstreamStatus":200,"level":"info","msg":"","time":"2026-10-09T01:00:04Z"}
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} DITOLAK: online-refund-approve hanya untuk grup efn-cs-approver (aktor=cs1 peran=cs)
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} MULAI aktor=cs1 peran=cs host=efn-prod-1 cmd=online-refund part=0b6f3c1e-4b6a-4e8e-9d2a-1f0c2b3a4d5e full restock
 {filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} berurutan [PHONE_REDACTED] [PHONE_REDACTED],[PHONE_REDACTED]/[PHONE_REDACTED]
 {filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} docker containerID=9ded32642bcea4225660dd173b0857593858a821c1267380c21e36d18d76b649
 {filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} encoded /cb?next=%2Fweb%3Ftoken%3D[REDACTED]&x=1
