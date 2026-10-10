@@ -129,3 +129,22 @@ describe('key ring PII tanpa v1 (U2)', () => {
     await expect(new PiiKeyRingCheck(cfg, cipher, down).onApplicationBootstrap()).resolves.toBeUndefined();
   });
 });
+
+describe('SEC-102: kolom ber-AAD per baris (pickup_code_enc)', () => {
+  it('re-encrypt membaca AAD v2 per baris atau AAD lama v1, menulis AAD v2 terikat id', async () => {
+    const col = PII_COLUMNS.find((c) => c.table === 'online_order_part')!;
+    const old = new PiiCipher(new Map([[1, K1]]), 1);
+    const idA = '11111111-1111-4111-8111-111111111111';
+    const idB = '22222222-2222-4222-8222-222222222222';
+    const rows = new Map<string, Buffer>([
+      [idA, old.encrypt('ABCDEFGH', col.aad)], // format lama (AAD kolom)
+      [idB, old.encrypt('HGFEDCBA', col.rowAad!(idB))], // format v2
+    ]);
+    const next = new PiiCipher(new Map([[1, K1], [2, K2]]), 2);
+    const rep = await reencryptColumn(fakeTable(rows), next, col, 10, false);
+    expect(rep).toMatchObject({ reencrypted: 2, failed: 0 });
+    expect(next.decrypt(rows.get(idA)!, col.rowAad!(idA))).toBe('ABCDEFGH');
+    expect(next.decrypt(rows.get(idB)!, col.rowAad!(idB))).toBe('HGFEDCBA');
+    expect(() => next.decrypt(rows.get(idA)!, col.rowAad!(idB))).toThrow(); // tidak bisa ditukar antar-baris
+  });
+});

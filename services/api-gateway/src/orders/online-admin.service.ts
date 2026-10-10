@@ -3,13 +3,17 @@ import { randomUUID } from 'node:crypto';
 import { QUEUES } from '../common/amqp/queues';
 import { ODOO_ONLINE, OdooOnlineApi, QuoteLineIn } from '../odoo-rpc/odoo-online.types';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
-import { partStatusFromOdoo, refundRequestedMessage } from './online.model';
+import { PartRow, RefundRow, partStatusFromOdoo, refundRequestedMessage } from './online.model';
 import { ONLINE_REPO, OnlineRepo } from './online.repository';
 import { OnlineSagaService } from './online-saga.service';
 
 export class AdminError extends Error {}
 
-export const ACTOR_RE = /^[A-Za-z0-9._@-]{2,64}$/;
+/**
+ * SEC-98 (L-16): aktor = identitas OS/host `<user>/<host>` yang diisi CLI dari lingkungan (wrapper host
+ * `EFN_CS_OPERATOR`/`SUDO_USER`), BUKAN argumen bebas; tanpa `@` (bukan email karyawan).
+ */
+export const ACTOR_RE = /^[A-Za-z0-9._-]{2,64}(\/[A-Za-z0-9._-]{1,64})?$/;
 
 export interface CsRefundInput {
   partId: string;
@@ -22,10 +26,26 @@ export interface CsRefundInput {
   note: string;
 }
 
+/** Refund yang belum gagal mengikat porsi (pre-check sebelum nota kredit Odoo, SEC-98). */
+function committedOf(refunds: readonly RefundRow[], exceptId?: string): number {
+  return refunds.filter((x) => x.id !== exceptId && x.status !== 'failed').reduce((s, x) => s + (x.amount ?? 0), 0);
+}
+
+/** Perkiraan nominal refund baris dari snapshot harga quote (pre-check; nominal final tetap dari nota kredit Odoo). */
+export function estimateLinesAmount(part: PartRow, lines: readonly QuoteLineIn[]): number {
+  let total = 0;
+  for (const l of lines) {
+    const orig = part.lines.find((x) => x.product_id === l.product_id);
+    if (!orig || l.qty < 1 || l.qty > orig.qty) throw new AdminError(`baris produk ${l.product_id} tidak ada di bagian atau qty melebihi pesanan`);
+    total += orig.price_unit_incl * l.qty;
+  }
+  return Math.round(total);
+}
+
 /**
- * Operasi CS/ops lewat CLI (L-3, docs/04 §10.6.6): refund parsial/penuh, settle refund manual, resolve `review`.
- * Setiap aksi dicatat di `platform.online_admin_audit` (aktor, alasan, order, bagian, nominal) + baris log
- * `EFN_ONLINE_CS_AUDIT {json}` — tanpa PII pelanggan. Refund selalu terikat SATU bagian dan ≤ porsi − refund sebelumnya.
+ * Operasi CS/ops lewat CLI (L-3, L-16, docs/04 §10.6.6): refund parsial/penuh, persetujuan refund inisiatif Odoo,
+ * settle refund manual, resolve `review`. Setiap aksi dicatat di `platform.online_admin_audit` + log
+ * `EFN_ONLINE_CS_AUDIT {json}` — tanpa PII pelanggan. Refund selalu terikat SATU bagian dan ≤ porsi − refund lain.
  */
 @Injectable()
 export class OnlineAdminService {
@@ -40,7 +60,7 @@ export class OnlineAdminService {
   ) {}
 
   private checkActor(actor: string, reason: string): void {
-    if (!ACTOR_RE.test(actor)) throw new AdminError('--actor tidak valid (2–64 karakter [A-Za-z0-9._@-])');
+    if (!ACTOR_RE.test(actor)) throw new AdminError('identitas operator tidak valid (wrapper host wajib menyetel EFN_CS_OPERATOR)');
     if (reason.trim().length < 3 || reason.length > 200) throw new AdminError('--reason wajib 3–200 karakter');
   }
 
@@ -56,6 +76,16 @@ export class OnlineAdminService {
     if (!['confirmed', 'ready', 'handed_over'].includes(part.status)) throw new AdminError(`status bagian ${part.status} tidak dapat direfund lewat CLI`);
     const order = await this.repo.getOrder(part.order_id);
     if (!order?.payment_intent_id) throw new AdminError('order tanpa pembayaran');
+    // SEC-98: cek porsi di bawah kunci bagian SEBELUM meminta nota kredit (Odoo memposting dokumen akuntansi)
+    await this.repo.tx(async (r) => {
+      const p = await r.getPart(part.id, true);
+      if (!p) throw new AdminError('bagian hilang');
+      const committed = committedOf(await r.refundsOfPart(p.id), input.refundId);
+      const estimate = input.full ? p.amount_payable - committed : estimateLinesAmount(p, input.lines ?? []);
+      if (estimate <= 0 || committed + estimate > p.amount_payable) {
+        throw new AdminError(`refund melebihi sisa porsi bagian (sisa ${p.amount_payable - committed})`);
+      }
+    });
     const refundId = input.refundId ?? randomUUID();
     const res = await this.odoo.refund(part.channel_code, part.id, {
       idempotency_key: `online:refund:${refundId}`,
@@ -67,8 +97,7 @@ export class OnlineAdminService {
     const out = await this.repo.tx(async (r) => {
       const p = await r.getPart(part.id, true);
       if (!p) throw new AdminError('bagian hilang');
-      const open = (await r.refundsOfPart(p.id)).filter((x) => x.status !== 'failed' && x.odoo_refund_ref !== res.refund_ref);
-      const committed = open.reduce((s, x) => s + (x.amount ?? 0), 0);
+      const committed = committedOf((await r.refundsOfPart(p.id)).filter((x) => x.odoo_refund_ref !== res.refund_ref));
       const over = committed + res.amount > p.amount_payable;
       const rf = await r.insertRefund({
         id: refundId,
@@ -82,8 +111,10 @@ export class OnlineAdminService {
         status: over ? 'failed' : 'odoo_done',
         requested_by: 'cs',
       });
-      if (over) this.metrics.anomaly('refund_exceeds_portion', 'critical', { part_id: p.id, refund_id: rf.id, expected: p.amount_payable, actual: committed + res.amount });
-      else {
+      if (over) {
+        await r.updateRefund(rf.id, { failure_reason: 'refund_exceeds_portion' });
+        this.metrics.anomaly('refund_exceeds_portion', 'critical', { part_id: p.id, refund_id: rf.id, expected: p.amount_payable, actual: committed + res.amount });
+      } else {
         const m = refundRequestedMessage(rf.id);
         await r.enqueue(QUEUES.ORDER_REFUND_REQUESTED, { ...m }, m.idempotency_key);
       }
@@ -97,11 +128,37 @@ export class OnlineAdminService {
         amount: res.amount,
         outcome: over ? 'refund_exceeds_portion' : 'odoo_done',
       });
-      return { refund_id: rf.id, amount: res.amount, status: rf.status };
+      return { refund_id: rf.id, amount: res.amount, status: over ? 'failed' : rf.status };
     });
     this.metrics.refund(out.status);
     this.logAudit({ action: 'refund', actor: input.actor, part_id: part.id, refund_id: out.refund_id, amount: out.amount, outcome: out.status });
     return out;
+  }
+
+  /** SEC-95 (L-16): persetujuan CS atas refund inisiatif Odoo (`approval_required` → `odoo_done` → gateway). */
+  async approveRefund(refundId: string, actor: string, note: string): Promise<{ status: string }> {
+    this.checkActor(actor, note);
+    const out = await this.repo.tx(async (r) => {
+      const rf = await r.getRefund(refundId, true);
+      if (!rf) throw new AdminError('refund tidak ditemukan');
+      if (rf.status !== 'approval_required') throw new AdminError(`status refund ${rf.status} tidak menunggu persetujuan`);
+      const p = await r.getPart(rf.part_id, true);
+      if (!p) throw new AdminError('bagian hilang');
+      const committed = committedOf((await r.refundsOfPart(p.id)).filter((x) => x.status !== 'approval_required'), rf.id);
+      if ((rf.amount ?? 0) <= 0 || committed + (rf.amount ?? 0) > p.amount_payable) {
+        await r.updateRefund(rf.id, { status: 'failed', failure_reason: 'refund_exceeds_portion' });
+        await r.audit({ action: 'refund_approve', actor, reason: note, order_id: p.order_id, part_id: p.id, refund_id: rf.id, amount: rf.amount, outcome: 'refund_exceeds_portion' });
+        return 'failed';
+      }
+      await r.updateRefund(rf.id, { status: 'odoo_done' });
+      const m = refundRequestedMessage(rf.id);
+      await r.enqueue(QUEUES.ORDER_REFUND_REQUESTED, { ...m }, m.idempotency_key);
+      await r.audit({ action: 'refund_approve', actor, reason: note, order_id: p.order_id, part_id: p.id, refund_id: rf.id, amount: rf.amount, outcome: 'odoo_done' });
+      return 'odoo_done';
+    });
+    this.metrics.refund(out);
+    this.logAudit({ action: 'refund_approve', actor, refund_id: refundId, outcome: out });
+    return { status: out };
   }
 
   /** Dana dikembalikan manual oleh Finance (gateway tak mendukung refund) → `gateway_done` → settle Odoo → `settled`. */
@@ -111,10 +168,16 @@ export class OnlineAdminService {
     const rf = await this.repo.getRefund(refundId);
     if (!rf) throw new AdminError('refund tidak ditemukan');
     if (!['manual_required', 'failed', 'gateway_pending', 'gateway_done'].includes(rf.status)) throw new AdminError(`status refund ${rf.status} tidak dapat di-settle manual`);
+    // SEC-98: refund yang gagal karena melebihi porsi tidak boleh di-settle
+    if (rf.failure_reason === 'refund_exceeds_portion') throw new AdminError('refund ditolak karena melebihi porsi; tidak dapat di-settle');
     const part = await this.repo.getPart(rf.part_id);
     if (!part) throw new AdminError('bagian hilang');
-    if ((rf.amount ?? 0) + part.refunded_amount > part.amount_payable && rf.status !== 'gateway_done') {
-      throw new AdminError('refund melebihi porsi bagian');
+    if (rf.status !== 'gateway_done') {
+      const out = (await this.repo.refundsOfPart(part.id)).filter(
+        (x) => x.id !== rf.id && ['gateway_in_flight', 'gateway_pending', 'gateway_done', 'settled'].includes(x.status),
+      );
+      const committed = out.reduce((s, x) => s + (x.amount ?? 0), 0);
+      if ((rf.amount ?? 0) + committed > part.amount_payable) throw new AdminError('refund melebihi porsi bagian');
     }
     await this.saga.markGatewayDone(rf.id, providerRef);
     const msg = refundRequestedMessage(rf.id);

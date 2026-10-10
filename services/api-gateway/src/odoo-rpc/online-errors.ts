@@ -26,6 +26,9 @@ export const OnlineErrors = {
     ApiError.of(429, 'too_many_open_orders', 'Masih ada pesanan yang menunggu pembayaran. Selesaikan atau batalkan dulu.'),
   fulfilmentUnavailable: (): ApiError => ApiError.of(422, 'fulfilment_unavailable', 'Metode pengambilan belum tersedia.'),
   pickupCodeUnavailable: (): ApiError => ApiError.of(409, 'pickup_code_unavailable', 'Kode ambil belum tersedia untuk pesanan ini.'),
+  /** L-14: bagian sedang diperiksa (mis. kode ambil salah 5×) — kode ambil ditahan. */
+  orderInReview: (): ApiError =>
+    ApiError.of(409, 'order_in_review', 'Pesanan sedang diperiksa tim kami. Kode ambil ditahan sementara; hubungi layanan pelanggan bila perlu.'),
   accountDeleting: (): ApiError => ApiError.of(409, 'account_deleting', 'Akun sedang dijadwalkan untuk dihapus.'),
 };
 

@@ -116,9 +116,13 @@ describe('CatalogService (§10.3.2)', () => {
     expect((await catchApiError(() => ctx.svc.image(SHA, 1024))).getStatus()).toBe(404);
   });
 
-  it('stok: cache Redis ocat:stk 30 s, qty tidak diteruskan; outlet asing → 404; circuit terbuka → 503', async () => {
-    const ctx = setup();
-    const r1 = await ctx.svc.stock('RTL', 'TOKO-01', [11, 12, 999]);
+  it('stok: cache Redis ocat:stk 30 s, qty tidak diteruskan; outlet asing → 404; Odoo gagal → 503', async () => {
+    const ctx = setup((t, p) =>
+      t.includes('product_id = ANY($2::int[])')
+        ? { rows: (p[1] as number[]).filter((id) => [11, 12, 13, 15].includes(id)).map((id) => itemRow(id)), rowCount: 1 }
+        : undefined,
+    );
+    const r1 = await ctx.svc.stock('RTL', 'TOKO-01', [11, 12]);
     expect(r1.items).toEqual([
       { product_id: 11, status: 'in_stock' },
       { product_id: 12, status: 'low' },
@@ -130,6 +134,21 @@ describe('CatalogService (§10.3.2)', () => {
     expect((await catchApiError(() => ctx.svc.stock('RTL', 'TOKO-99', [11]))).getStatus()).toBe(404);
     ctx.odoo.failNext.set('stock', new OdooRpcError('transport'));
     expect((await catchApiError(() => ctx.svc.stock('RTL', 'TOKO-01', [13]))).body).toMatchObject({ error: { code: 'online_unavailable' } });
+  });
+
+  it('SEC-96: id di luar katalog kanal → 404 TANPA memanggil Odoo; status kosong dari Odoo → cache negatif 30 s', async () => {
+    const ctx = setup((t, p) =>
+      t.includes('product_id = ANY($2::int[])')
+        ? { rows: (p[1] as number[]).filter((id) => [11, 15].includes(id)).map((id) => itemRow(id)), rowCount: 1 }
+        : undefined,
+    );
+    expect((await catchApiError(() => ctx.svc.stock('RTL', 'TOKO-01', [11, 987654]))).getStatus()).toBe(404);
+    expect(ctx.odoo.calls.filter((c) => c.method === 'stock')).toHaveLength(0);
+    // 15 ada di salinan katalog BFF tetapi Odoo tidak mengembalikan statusnya → cache negatif
+    expect((await ctx.svc.stock('RTL', 'TOKO-01', [15])).items).toEqual([]);
+    expect(await ctx.kv.get('ocat:stk:RTL:TOKO-01:15')).toBe('none');
+    for (let i = 0; i < 5; i += 1) await ctx.svc.stock('RTL', 'TOKO-01', [15]);
+    expect(ctx.odoo.calls.filter((c) => c.method === 'stock')).toHaveLength(1);
   });
 });
 

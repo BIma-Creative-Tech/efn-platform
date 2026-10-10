@@ -119,7 +119,7 @@ export class OnlineMetrics {
     this.backwardTransitions.inc({ source });
   }
   setRefundsOpen(counts: Record<string, number>): void {
-    for (const s of ['requested', 'odoo_done', 'gateway_pending', 'gateway_done', 'manual_required', 'failed']) {
+    for (const s of ['requested', 'odoo_done', 'approval_required', 'gateway_in_flight', 'gateway_pending', 'gateway_done', 'manual_required', 'failed']) {
       this.refundsOpen.set({ status: s }, counts[s] ?? 0);
     }
   }

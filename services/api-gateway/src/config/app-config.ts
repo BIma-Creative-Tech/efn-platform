@@ -1368,6 +1368,13 @@ export class AppConfig {
   get odooRpcCatalogTimeoutMs(): number {
     return this.int('ODOO_RPC_CATALOG_TIMEOUT_MS', 20_000, 1000, 120_000);
   }
+  /**
+   * SEC-96 (L-16): batas konkurensi GLOBAL panggilan json2 BFF → Odoo per proses (default 4, ≤ worker Odoo yang
+   * disisihkan untuk kanal online). Antrean penuh/menunggu terlalu lama → `503 online_unavailable` (POS terlindungi).
+   */
+  get odooRpcMaxConcurrency(): number {
+    return this.int('ODOO_RPC_MAX_CONCURRENCY', 4, 1, 64);
+  }
   get odooRpcImageTimeoutMs(): number {
     return this.int('ODOO_RPC_IMAGE_TIMEOUT_MS', 15_000, 1000, 120_000);
   }

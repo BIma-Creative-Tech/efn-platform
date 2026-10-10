@@ -11,6 +11,11 @@ export interface PiiColumn {
   column: string;
   pk: string;
   aad: string;
+  /**
+   * SEC-102: AAD per baris (mis. terikat id). Bila ada, re-encrypt menulis dengan AAD ini dan membaca dengan AAD ini
+   * lalu `aad` (format lama) sebagai cadangan.
+   */
+  rowAad?: (pk: string) => string;
 }
 
 export const PII_COLUMNS: readonly PiiColumn[] = [
@@ -20,7 +25,13 @@ export const PII_COLUMNS: readonly PiiColumn[] = [
   { table: 'member', column: 'member_ref_enc', pk: 'id', aad: PII_AAD.MEMBER_REF },
   { table: 'consent', column: 'ip_enc', pk: 'id', aad: PII_AAD.CONSENT_IP },
   // L-13 (docs/04 §10.17): kode ambil online ikut rotasi/re-encrypt & cek kunci pensiun saat start
-  { table: 'online_order_part', column: 'pickup_code_enc', pk: 'id', aad: PII_AAD.ONLINE_PICKUP_CODE },
+  {
+    table: 'online_order_part',
+    column: 'pickup_code_enc',
+    pk: 'id',
+    aad: PII_AAD.ONLINE_PICKUP_CODE,
+    rowAad: (pk) => `efn:online_order_part.pickup_code_enc:v2:${pk.toLowerCase()}`,
+  },
 ];
 
 const IDENT_RE = /^[a-z_][a-z0-9_]*$/;

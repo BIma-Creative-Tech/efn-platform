@@ -55,6 +55,16 @@ export interface OrderView {
 
 const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);
 
+/**
+ * L-14: status yang dilihat pelanggan. Bila order `paid|fulfilling` punya bagian `review`, pelanggan melihat `review`
+ * ("sedang diperiksa"). Hanya tampilan — status DB tetap diturunkan dari bagian (§10.6.1) agar pulih otomatis saat
+ * ops menyelesaikan pemeriksaan.
+ */
+export function customerStatus(order: OrderRow, parts: readonly PartRow[]): OrderStatus {
+  if ((order.status === 'paid' || order.status === 'fulfilling') && parts.some((p) => p.status === 'review')) return 'review';
+  return order.status;
+}
+
 export function requestSha256(input: CheckoutInput): string {
   return createHash('sha256').update(JSON.stringify({ quote_id: input.quoteId, accept_total: input.acceptTotal }), 'utf8').digest('hex');
 }
@@ -155,7 +165,7 @@ export class OrdersService {
           amount_total: g.amount_total,
           amount_payable: g.amount_payable,
           quote_hash: g.quote_hash,
-          pickup_code_enc: encryptPickupCode(this.cipher, code),
+          pickup_code_enc: encryptPickupCode(this.cipher, code, partId),
         });
       }
       return null;
@@ -304,7 +314,7 @@ export class OrdersService {
     return {
       items: page.map((o) => ({
         order_id: o.id,
-        status: o.status,
+        status: customerStatus(o, parts.filter((p) => p.order_id === o.id)),
         created_at: o.created_at.toISOString(),
         amount_payable: o.amount_payable,
         parts: parts
@@ -332,7 +342,7 @@ export class OrdersService {
     if (order.status === 'awaiting_payment' && intent?.status === 'pending' && intent.qrString) payment.qr_string = intent.qrString;
     return {
       order_id: order.id,
-      status: order.status,
+      status: customerStatus(order, parts),
       created_at: order.created_at.toISOString(),
       expires_at: order.expires_at.toISOString(),
       paid_at: iso(order.paid_at),
@@ -398,17 +408,25 @@ export class OrdersService {
   async pickupCodes(memberId: string, orderId: string): Promise<{ items: { channel_code: string; outlet_code: string; outlet_name: string; pickup_code: string }[] }> {
     const order = await this.repo.getOrderOfMember(orderId, memberId);
     if (!order) throw Errors.notFound();
-    const parts = (await this.repo.getParts(orderId)).filter((p) => (p.status === 'confirmed' || p.status === 'ready') && p.pickup_code_enc);
+    const all = await this.repo.getParts(orderId);
+    // L-14: selama ada bagian `review`, kode ambil tidak ditampilkan sama sekali
+    if (all.some((p) => p.status === 'review')) throw OnlineErrors.orderInReview();
+    const parts = all.filter((p) => (p.status === 'confirmed' || p.status === 'ready') && p.pickup_code_enc);
     if (parts.length === 0) throw OnlineErrors.pickupCodeUnavailable();
     const channels = await this.catalog.channels().catch(() => []);
-    return {
-      items: parts.map((p) => ({
+    const items = [];
+    for (const p of parts) {
+      const dec = decryptPickupCode(this.cipher, p.pickup_code_enc as Buffer, p.id);
+      // SEC-102: baris lama (AAD v1 per kolom) ditulis ulang ke AAD v2 terikat part_id (best effort, optimistik)
+      if (dec.legacy) await this.repo.updatePart(p.id, { pickup_code_enc: encryptPickupCode(this.cipher, dec.code, p.id) }).catch(() => undefined);
+      items.push({
         channel_code: p.channel_code,
         outlet_code: p.outlet_code,
         outlet_name: channels.find((c) => c.channel_code === p.channel_code)?.outlets.find((o) => o.outlet_code === p.outlet_code)?.public_name ?? p.outlet_code,
-        pickup_code: formatPickupCode(decryptPickupCode(this.cipher, p.pickup_code_enc as Buffer)),
-      })),
-    };
+        pickup_code: formatPickupCode(dec.code),
+      });
+    }
+    return { items };
   }
 
   // ───────────── simulasi bayar (dev/staging) ─────────────

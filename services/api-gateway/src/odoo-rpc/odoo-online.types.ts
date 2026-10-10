@@ -36,9 +36,10 @@ export type OdooBusinessCode = (typeof ODOO_BUSINESS_CODES)[number];
  * - `not_found` — 404 (metode/route tidak ada: salah konfigurasi);
  * - `transport` — jaringan/timeout/429/5xx (di-retry, dihitung circuit breaker);
  * - `circuit_open` — circuit kanal terbuka;
- * - `invalid_response` — respons tidak sesuai kontrak (bug/konfigurasi).
+ * - `invalid_response` — respons tidak sesuai kontrak (bug/konfigurasi);
+ * - `busy` — batas konkurensi global BFF → Odoo penuh (SEC-96), tidak dihitung circuit breaker.
  */
-export type OdooErrorKind = 'business' | 'auth' | 'not_found' | 'transport' | 'circuit_open' | 'invalid_response';
+export type OdooErrorKind = 'business' | 'auth' | 'not_found' | 'transport' | 'circuit_open' | 'invalid_response' | 'busy';
 
 export class OdooRpcError extends Error {
   constructor(

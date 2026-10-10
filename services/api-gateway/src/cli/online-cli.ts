@@ -1,3 +1,4 @@
+import { hostname, userInfo } from 'node:os';
 import { AppConfig } from '../config/app-config';
 import { PgDb } from '../common/db/db';
 import { createPgPool } from '../common/db/pg.provider';
@@ -38,6 +39,19 @@ export function createOnlineCli(): OnlineCli {
   const repo = new PgOnlineRepo(db, db);
   const saga = new OnlineSagaService(repo, odoo, payments, metrics);
   return { admin: new OnlineAdminService(repo, odoo, saga, metrics), close: () => pool.end() };
+}
+
+/**
+ * SEC-98 (L-16): identitas operator dari lingkungan OS/host, BUKAN argumen `--actor`. Wrapper host `efn-online-cs`
+ * (devsecops) menyetel `EFN_CS_OPERATOR` dari `SUDO_USER`/akun SSH (tercatat di journald) dan `EFN_CS_HOST`; bila tidak
+ * ada, dipakai `SUDO_USER` lalu user OS proses + hostname. Format `<user>/<host>`, karakter [A-Za-z0-9._-] (tanpa email).
+ */
+export function operatorIdentity(env: NodeJS.ProcessEnv = process.env, osUser: () => string = () => userInfo().username, host: () => string = hostname): string {
+  const clean = (v: string): string => v.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64);
+  const user = env.EFN_CS_OPERATOR || env.SUDO_USER || osUser();
+  const h = env.EFN_CS_HOST || host();
+  if (!user || clean(user).length < 2) throw new Error('identitas operator tidak tersedia (jalankan lewat wrapper efn-online-cs)');
+  return `${clean(user)}/${clean(h) || 'unknown'}`;
 }
 
 /** Parser argumen `--nama=nilai` / `--flag` (tanpa nilai bebas yang tidak dikenal). */

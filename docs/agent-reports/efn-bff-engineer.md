@@ -498,3 +498,18 @@ SEC-29 **Fixed** (semua secret BFF; spec statis + verifikasi runtime). SEC-34 **
 - **Audit URL**: controller online didaftarkan di `common/route-pii-audit.spec.ts` (query `channel|category|q|cursor|limit|size|outlet|ids`, param `product_id|image_sha|order_id`).
 - **L-11**: blok `channel` `{code,name,company_code,currency,outlets:[{code,public_name,pickup_enabled,prep_minutes,active}]}` dikonsumsi (kunci `outlet_code` tetap diterima). Cadangan prefiks kode kanal **dihapus**: blok tidak ada / kode beda / PT tak dikenal / mata uang ≠ IDR → kanal disembunyikan + log warn (fail-closed). Catatan: per 9 Okt E-28 di working tree belum mengirim blok ini → sampai odoo-engineer menambahkannya, `GET /v1/catalog/channels` kosong dan cart/checkout menolak kanal.
 - Validasi: `npm ci` → build OK → lint 0 error → **41 suite / 500 test lulus** → audit high lulus.
+
+### G17-QA-03 (L-14) — review dari Odoo
+`confirmed|ready → review` selalu diterapkan (pengecualian monoton); selama `review` → `409 order_in_review` di pickup-code dan status order pelanggan `review` ("Sedang diperiksa tim kami", tampilan saja); event tak diterapkan dicatat `ignored_stale`. Frontend: pesan `order_in_review` di `superapp-web/lib/orders.ts` + test. `services/superapp-web/.gitignore` baru (`next-env.d.ts`, `*.tsbuildinfo`). Validasi frontend: lint 0 error, tsc, vitest 13 file / 273 test, `next build`, audit high — lulus.
+
+### Review r10 (L-16) — SEC-95..100, 102 sisi BFF
+- SEC-95 refund inisiatif Odoo → `approval_required`, CLI baru `online-refund-approve` (teraudit `refund_approve`), gauge `refund_attention`.
+- SEC-96 stok hanya produk katalog (404 tanpa Odoo), cache negatif, semaphore global json2 (`ODOO_RPC_MAX_CONCURRENCY`=4, antrean 8×, tunggu 2 s → 503).
+- SEC-97 klaim atomik `gateway_in_flight` + in-flight dalam porsi; tanpa pemotongan diam-diam.
+- SEC-98 aktor dari OS/host (`EFN_CS_OPERATOR` diset wrapper host devsecops), cek porsi sebelum nota kredit, settle menolak `refund_exceeds_portion`.
+- SEC-99 kode ambil dihapus saat stock_short/final; retensi 7 hari dari `COALESCE(ready_at, confirmed_at)` termasuk `review`.
+- SEC-100 kunci member + cek ulang dalam transaksi DSAR; erasure ditunda + anomali bila order terbuka.
+- SEC-102 AAD v2 per `part_id`, baca v1 + tulis ulang; `pii-columns` mendukung AAD per baris.
+- Migrasi 07 diperluas idempoten (status `approval_required|gateway_in_flight`, `failure_reason`, aksi `refund_approve`, aktor `<user>/<host>` — `NOT VALID` agar baris audit lama tetap); diuji: volume baru 01–07 dan upgrade dari 07 versi commit (2×).
+- Validasi: build OK, lint 0 error, **43 suite / 516 test**, audit high lulus; E2E SQL PostgreSQL 16 sebagai `efn_bff` (termasuk SEC-95 approve, klaim refund, SEC-100 lock) lulus.
+- Tindak lanjut di luar BFF: wrapper host `efn-online-cs` yang menyetel `EFN_CS_OPERATOR`/`EFN_CS_HOST` + journald (devsecops); `maxconn` gateway ≤ 4; hash kode ambil & SEC-101/103 di Odoo; adapter vendor wajib memakai `refundId` sebagai idempotency key provider (ADR-016).

@@ -1,9 +1,8 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { QUEUES } from '../common/amqp/queues';
 import { ApiError, Errors } from '../common/errors/api-error';
 import { isUuid } from '../common/validation';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
-import { PartStatus, partStatusFromOdoo, refundRequestedMessage } from './online.model';
+import { PartStatus, partStatusFromOdoo } from './online.model';
 import { ONLINE_REPO, OnlineRepo } from './online.repository';
 import { OnlineSagaService } from './online-saga.service';
 import { randomUUID } from 'node:crypto';
@@ -122,7 +121,9 @@ export class OrderEventsService {
 
         const target: PartStatus | null = ev.event === 'refunded' ? null : partStatusFromOdoo(ev.event === 'picked_up' ? 'picked_up' : ev.event);
         if (target) {
-          await this.saga.applyPart(r, part, target, { source: 'odoo', odooState: ev.state, seq: ev.seq, cancelReason: 'ops' });
+          // L-14: transisi yang tidak diterapkan (mundur/sama) dicatat `ignored_stale`, bukan `applied` (seq tetap maju)
+          const applied = await this.saga.applyPart(r, part, target, { source: 'odoo', odooState: ev.state, seq: ev.seq, cancelReason: 'ops' });
+          if (!applied) return record('ignored_stale');
         } else {
           await r.updatePart(part.id, { last_seq: ev.seq, odoo_state: ev.state });
         }
@@ -143,13 +144,13 @@ export class OrderEventsService {
               lines: null,
               amount: ev.refund.amount,
               odoo_refund_ref: ev.refund.refund_ref,
-              status: 'odoo_done',
+              // SEC-95 / L-16: TIDAK otomatis — pemisahan tugas; CS menyetujui lewat CLI online-refund-approve
+              status: 'approval_required',
               requested_by: 'system',
             });
-            if (rf.status === 'odoo_done') {
-              this.metrics.refund('odoo_done');
-              const m = refundRequestedMessage(rf.id);
-              await r.enqueue(QUEUES.ORDER_REFUND_REQUESTED, { ...m }, m.idempotency_key);
+            if (rf.status === 'approval_required') {
+              this.metrics.refund('approval_required');
+              this.metrics.anomaly('odoo_refund_needs_approval', 'warning', { refund_id: rf.id, part_id: part.id, actual: ev.refund.amount });
             }
           }
         }

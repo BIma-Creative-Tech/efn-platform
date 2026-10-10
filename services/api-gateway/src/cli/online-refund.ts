@@ -1,7 +1,7 @@
 /**
  * Refund CS online (L-3, docs/04 §10.6.6) — teraudit (`platform.online_admin_audit` + log `EFN_ONLINE_CS_AUDIT`).
  *
- *   node dist/cli/online-refund.js --part=<part_id> (--full | --lines=<product_id>:<qty>,...) --actor=<petugas> \
+ *   node dist/cli/online-refund.js --part=<part_id> (--full | --lines=<product_id>:<qty>,...) \
  *     --reason="<alasan>" [--kind=customer_cs|ops_cancelled] [--restock] [--refund-id=<uuid untuk mengulang>]
  *
  * `efn_online_refund` (Odoo, sinkron, nominal = nota kredit) → `online_refund(odoo_done)` → outbox
@@ -9,9 +9,9 @@
  * jaringan putus (idempoten `online:refund:<refund_id>`). Exit 0 sukses, 1 gagal, 2 argumen salah.
  */
 import { isUuid } from '../common/validation';
-import { parseFlags, required, runCli } from './online-cli';
+import { operatorIdentity, parseFlags, required, runCli } from './online-cli';
 
-export function parseRefundArgs(argv: readonly string[]): {
+export function parseRefundArgs(argv: readonly string[], actor: string = operatorIdentity()): {
   partId: string;
   refundId?: string;
   lines: { product_id: number; qty: number }[] | null;
@@ -21,7 +21,8 @@ export function parseRefundArgs(argv: readonly string[]): {
   actor: string;
   note: string;
 } {
-  const f = parseFlags(argv, ['part', 'full', 'lines', 'actor', 'reason', 'kind', 'restock', 'refund-id']);
+  // SEC-98: tidak ada --actor (identitas dari OS/host)
+  const f = parseFlags(argv, ['part', 'full', 'lines', 'reason', 'kind', 'restock', 'refund-id']);
   const partId = required(f, 'part');
   if (!isUuid(partId)) throw new Error('--part harus UUID');
   const refundId = f.get('refund-id');
@@ -47,7 +48,7 @@ export function parseRefundArgs(argv: readonly string[]): {
     full,
     restock: f.get('restock') === 'true',
     reason: kind,
-    actor: required(f, 'actor'),
+    actor,
     note: required(f, 'reason'),
   };
 }

@@ -38,6 +38,7 @@ const K_ON5_CODES = [
   'too_many_open_orders',
   'fulfilment_unavailable',
   'pickup_code_unavailable',
+  'order_in_review',
   'rate_limited',
 ];
 
@@ -54,6 +55,9 @@ describe('peta error K-ON5 -> Bahasa Indonesia', () => {
     expect(onlineErrorMessage('odoo_traceback')).toBe(GENERIC_ONLINE_ERROR);
     expect(onlineErrorMessage(undefined)).toBe(GENERIC_ONLINE_ERROR);
     expect(onlineErrorMessage('toString')).toBe(GENERIC_ONLINE_ERROR);
+  });
+  it('L-14: order_in_review menjelaskan kode ambil ditahan', () => {
+    expect(onlineErrorMessage('order_in_review')).toMatch(/sedang diperiksa.*kode ambil ditahan/);
   });
   it('kill switch ramah', () => {
     expect(onlineErrorMessage('online_unavailable')).toMatch(/tidak tersedia.*toko/);

@@ -136,16 +136,15 @@ CREATE TABLE IF NOT EXISTS platform.online_refund (
   amount               numeric(14,2) NULL CHECK (amount IS NULL OR (amount > 0 AND amount = trunc(amount))),
   odoo_refund_ref      text NULL CHECK (odoo_refund_ref IS NULL OR length(odoo_refund_ref) BETWEEN 1 AND 128),
   provider_refund_ref  text NULL CHECK (provider_refund_ref IS NULL OR length(provider_refund_ref) BETWEEN 1 AND 128),
-  status               text NOT NULL CHECK (status IN ('requested', 'odoo_done', 'gateway_pending', 'gateway_done', 'settled',
-                                                        'manual_required', 'failed')),
+  status               text NOT NULL CHECK (status IN ('requested', 'odoo_done', 'approval_required', 'gateway_in_flight',
+                                                        'gateway_pending', 'gateway_done', 'settled', 'manual_required', 'failed')),
+  failure_reason       text NULL CHECK (failure_reason IS NULL OR failure_reason ~ '^[a-z_]{1,40}$'),
   requested_by         text NOT NULL CHECK (requested_by IN ('system', 'cs')),
   created_at           timestamptz NOT NULL DEFAULT now(),
   updated_at           timestamptz NOT NULL DEFAULT now(),
   settled_at           timestamptz
 );
 CREATE INDEX IF NOT EXISTS ix_online_refund_part ON platform.online_refund (part_id);
-CREATE INDEX IF NOT EXISTS ix_online_refund_open ON platform.online_refund (status, updated_at)
-  WHERE status IN ('requested', 'odoo_done', 'gateway_pending', 'gateway_done', 'manual_required', 'failed');
 -- Idempotensi refund otomatis: satu refund sistem per (bagian, alasan) bila tanpa dokumen Odoo; satu per dokumen Odoo.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_online_refund_system ON platform.online_refund (part_id, reason)
   WHERE requested_by = 'system' AND odoo_refund_ref IS NULL;
@@ -208,8 +207,8 @@ CREATE TABLE IF NOT EXISTS platform.online_catalog_sync (
 -- ───────────── 4. Audit CLI refund/resolve CS (L-3) ─────────────
 CREATE TABLE IF NOT EXISTS platform.online_admin_audit (
   id          bigserial PRIMARY KEY,
-  action      text NOT NULL CHECK (action IN ('refund', 'refund_settle', 'resolve_cancel', 'resolve_sync')),
-  actor       text NOT NULL CHECK (actor ~ '^[A-Za-z0-9._@-]{2,64}$'),
+  action      text NOT NULL CHECK (action IN ('refund', 'refund_settle', 'refund_approve', 'resolve_cancel', 'resolve_sync')),
+  actor       text NOT NULL CHECK (actor ~ '^[A-Za-z0-9._-]{2,64}(/[A-Za-z0-9._-]{1,64})?$'),
   reason      text NOT NULL CHECK (length(reason) BETWEEN 3 AND 200),
   order_id    uuid NULL,
   part_id     uuid NULL,
@@ -219,6 +218,30 @@ CREATE TABLE IF NOT EXISTS platform.online_admin_audit (
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS ix_online_admin_audit_part ON platform.online_admin_audit (part_id);
+
+-- ───────────── 4b. Review r10 (L-16): volume yang sudah menjalankan versi awal 07 ─────────────
+-- SEC-95: `approval_required` (refund inisiatif Odoo menunggu persetujuan CS); SEC-97: `gateway_in_flight` (klaim
+-- eksklusif sebelum memanggil gateway); SEC-98: `failure_reason` (tolak settle manual untuk refund melebihi porsi),
+-- aksi `refund_approve`, aktor `<user OS>/<host>` tanpa email. Nama constraint = nama otomatis CHECK inline.
+ALTER TABLE platform.online_refund ADD COLUMN IF NOT EXISTS failure_reason text NULL;
+DO $$
+BEGIN
+  ALTER TABLE platform.online_refund DROP CONSTRAINT IF EXISTS online_refund_status_check;
+  ALTER TABLE platform.online_refund ADD CONSTRAINT online_refund_status_check CHECK (status IN ('requested', 'odoo_done',
+    'approval_required', 'gateway_in_flight', 'gateway_pending', 'gateway_done', 'settled', 'manual_required', 'failed'));
+  ALTER TABLE platform.online_refund DROP CONSTRAINT IF EXISTS online_refund_failure_reason_check;
+  ALTER TABLE platform.online_refund ADD CONSTRAINT online_refund_failure_reason_check
+    CHECK (failure_reason IS NULL OR failure_reason ~ '^[a-z_]{1,40}$');
+  ALTER TABLE platform.online_admin_audit DROP CONSTRAINT IF EXISTS online_admin_audit_action_check;
+  ALTER TABLE platform.online_admin_audit ADD CONSTRAINT online_admin_audit_action_check
+    CHECK (action IN ('refund', 'refund_settle', 'refund_approve', 'resolve_cancel', 'resolve_sync'));
+  ALTER TABLE platform.online_admin_audit DROP CONSTRAINT IF EXISTS online_admin_audit_actor_check;
+  ALTER TABLE platform.online_admin_audit ADD CONSTRAINT online_admin_audit_actor_check
+    CHECK (actor ~ '^[A-Za-z0-9._-]{2,64}(/[A-Za-z0-9._-]{1,64})?$') NOT VALID;
+END $$;
+DROP INDEX IF EXISTS platform.ix_online_refund_open;
+CREATE INDEX IF NOT EXISTS ix_online_refund_open2 ON platform.online_refund (status, updated_at)
+  WHERE status NOT IN ('settled');
 
 RESET ROLE;
 

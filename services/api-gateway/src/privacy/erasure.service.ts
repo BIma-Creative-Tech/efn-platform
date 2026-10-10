@@ -9,6 +9,9 @@ import { OBJECT_STORAGE, ObjectStorage } from '../market-scout/storage/object-st
 export const ERASURE_STORES = ['platform', 'odoo', 'clickhouse'] as const;
 export type ErasureStore = (typeof ERASURE_STORES)[number];
 export const ERASURE_LOCK_KEY = 0x45464e45; // 'EFNE'
+
+/** SEC-100: erasure ditunda karena member masih punya order online terbuka (rollback transaksi). */
+export class ErasureDeferred extends Error {}
 const DUE_BATCH = 50;
 
 export type CompleteStoreResult =
@@ -61,6 +64,7 @@ export interface ErasureRunResult {
 @Injectable()
 export class ErasureService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ErasureService.name);
+  private readonly anomalyLog = new Logger('OnlineAnomaly');
   private timer: NodeJS.Timeout | null = null;
   private running = false;
 
@@ -117,6 +121,17 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
 
   /** @returns false bila request tidak lagi `scheduled` (dibatalkan/diproses replika lain). */
   async processDue(requestId: string): Promise<boolean> {
+    try {
+      return await this.processDueTx(requestId);
+    } catch (err) {
+      if (!(err instanceof ErasureDeferred)) throw err;
+      // Baris berprefiks EFN_ONLINE_ANOMALY dengan logger OnlineAnomaly → alert Loki (selector promtail tahap 6)
+      this.anomalyLog.warn(`EFN_ONLINE_ANOMALY ${JSON.stringify({ kind: 'erasure_deferred_open_orders', severity: 'warning' })}`);
+      return false;
+    }
+  }
+
+  private async processDueTx(requestId: string): Promise<boolean> {
     const result = await this.db.tx(async (q) => {
       const lock = await q.query<{ ok: boolean }>('SELECT pg_try_advisory_xact_lock($1, hashtext($2)) AS ok', [
         ERASURE_LOCK_KEY,
@@ -132,6 +147,17 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
       );
       const r = started.rows[0];
       if (!r) return null;
+      // SEC-100 (L-16): kunci member yang sama dengan checkout lalu cek ulang order online terbuka; ada → tunda + alert
+      await q.query(`SELECT pg_advisory_xact_lock(hashtext('efn:online:member:' || $1::text))`, [r.member_id]);
+      const open = await q.query<{ n: string | number }>(
+        `SELECT count(*) AS n FROM platform.online_order o
+          WHERE o.member_id = $1
+            AND (o.status IN ('created', 'awaiting_payment')
+                 OR EXISTS (SELECT 1 FROM platform.online_order_part p
+                             WHERE p.order_id = o.id AND p.status IN ('paying', 'confirmed', 'ready', 'review')))`,
+        [r.member_id],
+      );
+      if (Number(open.rows[0]?.n ?? 0) > 0) throw new ErasureDeferred('order online terbuka');
       await q.query(`UPDATE platform.member SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL`, [r.member_id]);
       await this.suppress(q, r.member_hash);
       const objects = await q.query<{ image_object: string }>(

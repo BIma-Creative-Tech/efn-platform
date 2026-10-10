@@ -167,3 +167,35 @@ describe('Validasi respons Odoo (§10.4.3)', () => {
     expect(() => parseCatalogPage({ items: [], server_time: 'now', channel: { code: 'RTL', name: 'x', company_code: 'RTL', outlets: [] } })).toThrow(OdooRpcError);
   });
 });
+
+describe('SEC-96: batas konkurensi global json2', () => {
+  it('ODOO_RPC_MAX_CONCURRENCY in-flight; antrean penuh → busy (503), tidak membuka circuit', async () => {
+    const config = testConfig({ ODOO_API_KEY_ONLINE_RTL_FILE: '/k/rtl', ODOO_RPC_MAX_CONCURRENCY: '1' }, (p) => {
+      if (p === '/k/rtl') return Buffer.from(RTL_KEY);
+      throw new Error('ENOENT');
+    });
+    expect(testConfig().odooRpcMaxConcurrency).toBe(4);
+    let inFlight = 0;
+    let peak = 0;
+    const waiters: (() => void)[] = [];
+    const transport: Json2Transport = async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise<void>((res) => waiters.push(res));
+      inFlight -= 1;
+      return ok(STATUS_ROW);
+    };
+    const client = new Json2OdooOnlineClient(config, transport, new OnlineMetrics(new MetricsService()));
+    const calls = Array.from({ length: 10 }, () => client.status('RTL', ['x']).then(() => 'ok', (e: unknown) => (e as OdooRpcError).kind));
+    await new Promise((res) => setImmediate(res));
+    for (let i = 0; i < 20; i += 1) {
+      waiters.shift()?.();
+      await new Promise((res) => setImmediate(res));
+    }
+    const out = await Promise.all(calls);
+    expect(peak).toBe(1);
+    expect(out.filter((x) => x === 'busy')).toHaveLength(1); // 1 jalan + 8 antre + 1 ditolak
+    expect(out.filter((x) => x === 'ok')).toHaveLength(9);
+    expect(client.isCircuitOpen('RTL')).toBe(false);
+  });
+});

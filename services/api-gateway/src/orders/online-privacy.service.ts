@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Queryable } from '../common/db/db';
 import { ApiError } from '../common/errors/api-error';
-import { ONLINE_REPO, OnlineRepo } from './online.repository';
+import { ONLINE_REPO, OnlineRepo, PgOnlineRepo } from './online.repository';
 import { OrdersService } from './orders.service';
 
 export const EXPORT_ORDER_LIMIT = 1000;
@@ -49,6 +50,17 @@ export class OnlinePrivacyService {
     };
   }
 
+  /**
+   * SEC-100 (L-16): DI DALAM transaksi pembuat `dsar_request` — ambil kunci member yang SAMA dengan checkout
+   * (`lockMember`), lalu cek ulang: masih ada order belum dibayar atau bagian terbuka → 409. Checkout yang menunggu
+   * kunci ini kemudian melihat `hasActiveDelete` dan ditolak (`409 account_deleting`) — atomik.
+   */
+  async lockAndAssertNoOpenOrders(q: Queryable, memberId: string): Promise<void> {
+    const r = new PgOnlineRepo(q);
+    await r.lockMember(memberId);
+    if ((await r.memberUnpaidOrders(memberId)).length > 0 || (await r.memberOpenPaidParts(memberId)) > 0) throw openOnlineOrders();
+  }
+
   /** Dipanggil `DELETE /v1/me` sebelum permintaan hapus dibuat. */
   async prepareDelete(memberId: string): Promise<void> {
     for (const o of await this.repo.memberUnpaidOrders(memberId)) {
@@ -59,13 +71,15 @@ export class OnlinePrivacyService {
         if (!(err instanceof ApiError)) throw err;
       }
     }
-    if ((await this.repo.memberOpenPaidParts(memberId)) > 0) {
-      throw ApiError.of(
-        409,
-        'open_online_orders',
-        'Masih ada pesanan online yang sedang diproses. Ambil pesanan atau minta pembatalan lewat layanan pelanggan, lalu ulangi penghapusan akun.',
-      );
-    }
+    if ((await this.repo.memberOpenPaidParts(memberId)) > 0) throw openOnlineOrders();
     this.logger.log('Pra-hapus akun: tidak ada pesanan online terbuka');
   }
+}
+
+export function openOnlineOrders(): ApiError {
+  return ApiError.of(
+    409,
+    'open_online_orders',
+    'Masih ada pesanan online yang sedang diproses. Ambil pesanan atau minta pembatalan lewat layanan pelanggan, lalu ulangi penghapusan akun.',
+  );
 }

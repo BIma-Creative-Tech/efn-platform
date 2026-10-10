@@ -240,12 +240,15 @@ export class CatalogService {
     const info = await this.requireChannel(channel);
     if (!info.outlets.some((o) => o.outlet_code === outlet)) throw Errors.notFound();
     const uniq = [...new Set(ids)];
+    // SEC-96: hanya produk aktif katalog kanal; id lain → 404 TANPA memanggil Odoo
+    const known = await this.productsByIds(channel, uniq);
+    if (uniq.some((id) => !known.has(id))) throw Errors.notFound();
     const out = new Map<number, StockStatus>();
     const missing: number[] = [];
     for (const id of uniq) {
       const v = await this.kv.get(`ocat:stk:${channel}:${outlet}:${id}`);
       if (v === 'in_stock' || v === 'low' || v === 'out') out.set(id, v);
-      else missing.push(id);
+      else if (v !== 'none') missing.push(id); // 'none' = cache negatif (Odoo tidak mengembalikan status)
     }
     if (missing.length > 0) {
       if (this.odoo.isCircuitOpen(channel)) throw OnlineErrors.unavailable();
@@ -259,6 +262,9 @@ export class CatalogService {
         if (!missing.includes(r.product_id)) continue;
         out.set(r.product_id, r.status);
         await this.kv.setEx(`ocat:stk:${channel}:${outlet}:${r.product_id}`, r.status, STOCK_TTL_SECONDS);
+      }
+      for (const id of missing) {
+        if (!out.has(id)) await this.kv.setEx(`ocat:stk:${channel}:${outlet}:${id}`, 'none', STOCK_TTL_SECONDS);
       }
     }
     return {

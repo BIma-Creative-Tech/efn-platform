@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { MemberService } from '../common/member/member.service';
 import { MetricsService } from '../common/metrics/metrics.service';
 import { AmqpService, PermanentMessageError } from '../common/amqp/amqp.service';
@@ -505,5 +506,27 @@ describe('DsarReceiptService (R6, §8.13)', () => {
     const b = receiptSetup();
     expect(b.receipts.verify(REQ_ID, a.receipts.issue(REQ_ID))).toBe(false);
     expect(a.config.dsarReceiptKey.equals(Buffer.from(a.config.jwtSecret))).toBe(false);
+  });
+});
+
+describe('SEC-100: erasure & order online terbuka', () => {
+  it('kunci member yang sama dengan checkout + cek ulang; masih ada order terbuka → ditunda (rollback), anomali, member tidak dihapus', async () => {
+    const db = new FakeDb((t) => {
+      if (t.includes('pg_try_advisory_xact_lock')) return { rows: [{ ok: true }], rowCount: 1 };
+      if (t.includes("SET status = 'processing'")) return { rows: [{ member_id: MEMBER_ID, member_hash: 'e'.repeat(64) }], rowCount: 1 };
+      if (t.includes('FROM platform.online_order o')) return { rows: [{ n: '1' }], rowCount: 1 };
+      return undefined;
+    });
+    const svc = new ErasureService(testConfig(), db, { put: jest.fn(), remove: jest.fn() });
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(await svc.processDue(REQ_ID)).toBe(false);
+      expect(db.find("pg_advisory_xact_lock(hashtext('efn:online:member:'")[0].params).toEqual([MEMBER_ID]);
+      expect(db.find('DELETE FROM platform.member')).toHaveLength(0);
+      expect(db.find('UPDATE platform.member SET deleted_at')).toHaveLength(0);
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('erasure_deferred_open_orders'))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

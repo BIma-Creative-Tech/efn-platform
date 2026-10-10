@@ -18,7 +18,22 @@ export type CloseReason = 'payment_expired' | 'customer' | 'place_failed' | 'sto
 export type PartCancelReason = CloseReason | 'late_payment';
 export type RefundKind = 'full' | 'lines' | 'late_payment';
 export type RefundReason = 'stock_short' | 'customer_cs' | 'ops_cancelled' | 'review' | 'late_payment';
-export type RefundStatus = 'requested' | 'odoo_done' | 'gateway_pending' | 'gateway_done' | 'settled' | 'manual_required' | 'failed';
+/**
+ * `approval_required` (SEC-95/L-16): refund inisiatif Odoo menunggu persetujuan CS (CLI). `gateway_in_flight` (SEC-97):
+ * klaim eksklusif sebelum memanggil gateway.
+ */
+export type RefundStatus =
+  | 'requested'
+  | 'odoo_done'
+  | 'approval_required'
+  | 'gateway_in_flight'
+  | 'gateway_pending'
+  | 'gateway_done'
+  | 'settled'
+  | 'manual_required'
+  | 'failed';
+/** SEC-97: refund yang dananya sudah/sedang keluar — ikut dihitung dalam batas porsi. */
+export const MONEY_OUT_REFUND: readonly RefundStatus[] = ['gateway_in_flight', 'gateway_pending', 'gateway_done', 'settled'];
 
 export const FINAL_ORDER: ReadonlySet<OrderStatus> = new Set(['completed', 'cancelled', 'expired', 'failed']);
 export const UNPAID_OPEN: readonly OrderStatus[] = ['created', 'awaiting_payment'];
@@ -41,9 +56,15 @@ export const PART_RANK: Readonly<Record<PartStatus, number>> = {
   place_failed: 5,
 };
 
-/** Transisi bagian yang diizinkan: naik peringkat, kecuali `review → confirmed|cancelled` (diselesaikan ops). */
+/**
+ * Transisi bagian yang diizinkan: naik peringkat, dengan dua pengecualian:
+ * - `review → confirmed|cancelled` (diselesaikan ops);
+ * - L-14 (docs/04 §10.17, G17-QA-03): `confirmed|ready → review` dari Odoo SELALU diterapkan (mis. kode ambil salah 5×)
+ *   walau peringkatnya turun — kode ambil ditahan selama pemeriksaan.
+ */
 export function canTransitionPart(from: PartStatus, to: PartStatus): boolean {
   if (from === to) return false;
+  if (to === 'review' && (from === 'confirmed' || from === 'ready')) return true;
   if (from === 'review' && (to === 'confirmed' || to === 'cancelled')) return true;
   return PART_RANK[to] > PART_RANK[from];
 }
@@ -150,6 +171,8 @@ export interface RefundRow {
   odoo_refund_ref: string | null;
   provider_refund_ref: string | null;
   status: RefundStatus;
+  /** SEC-98: alasan kegagalan (mis. `refund_exceeds_portion`) — settle manual ditolak untuk alasan ini. */
+  failure_reason: string | null;
   requested_by: 'system' | 'cs';
   created_at: Date;
   updated_at: Date;
@@ -186,7 +209,7 @@ export type PartPatch = Partial<
 export type OrderPatch = Partial<
   Pick<OrderRow, 'status' | 'payment_intent_id' | 'paid_at' | 'closed_at' | 'close_reason' | 'amount_payable' | 'expires_at'>
 >;
-export type RefundPatch = Partial<Pick<RefundRow, 'status' | 'amount' | 'odoo_refund_ref' | 'provider_refund_ref' | 'settled_at'>>;
+export type RefundPatch = Partial<Pick<RefundRow, 'status' | 'amount' | 'odoo_refund_ref' | 'provider_refund_ref' | 'settled_at' | 'failure_reason'>>;
 
 /** Pesan RabbitMQ saga (§10.9), `schema_version: 1`, tanpa PII. */
 export interface OrderPaidMessage {

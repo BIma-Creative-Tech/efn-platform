@@ -10,6 +10,7 @@ import {
   CompensateMessage,
   FINAL_ORDER,
   FINAL_REFUND,
+  MONEY_OUT_REFUND,
   OnlineNotifyTemplate,
   OrderPaidMessage,
   OrderRow,
@@ -19,6 +20,7 @@ import {
   PartStatus,
   RefundRequestedMessage,
   RefundRow,
+  RefundStatus,
   UnpaidClosedMessage,
   canTransitionPart,
   compensateMessage,
@@ -34,6 +36,10 @@ export const CONSUMER = {
   COMPENSATE: 'bff.order-compensate',
   REFUND: 'bff.order-refund',
 } as const;
+
+/** SEC-97: status refund yang boleh diklaim untuk dikirim ke gateway; klaim in-flight basi setelah 15 menit. */
+const CLAIMABLE: readonly RefundStatus[] = ['requested', 'odoo_done', 'gateway_pending'];
+const IN_FLIGHT_STALE_MS = 15 * 60_000;
 
 export interface ApplyOptions {
   source: 'odoo' | 'bff';
@@ -79,6 +85,8 @@ export class OnlineSagaService {
       patch.handed_over_at = at;
       patch.pickup_code_enc = null; // §10.3.6: di-NULL-kan saat final
     }
+    // SEC-99: kode ambil dihapus saat bagian final / stok kurang (akan dibatalkan)
+    if (to === 'stock_short') patch.pickup_code_enc = null;
     if (to === 'cancelled' || to === 'place_failed') {
       patch.cancelled_at = at;
       patch.cancel_reason = o.cancelReason ?? 'ops';
@@ -360,23 +368,41 @@ export class OnlineSagaService {
     if (!refund) throw new PermanentMessageError('refund tidak ada');
     const part = await this.repo.getPart(refund.part_id);
     if (!part) throw new PermanentMessageError('bagian tidak ada');
+    if (refund.status === 'approval_required') return 'pending'; // SEC-95: menunggu persetujuan CS (CLI)
 
-    if (refund.status === 'requested' || refund.status === 'odoo_done' || refund.status === 'gateway_pending') {
-      const amount = refund.amount ?? 0;
-      const others = (await this.repo.refundsOfPart(part.id)).filter(
-        (x) => x.id !== refund?.id && (x.status === 'gateway_done' || x.status === 'settled'),
-      );
-      const already = others.reduce((s, x) => s + (x.amount ?? 0), 0);
-      if (amount <= 0 || already + amount > part.amount_payable) {
-        await this.repo.tx(async (r) => r.updateRefund(msg.refund_id, { status: 'failed' }));
+    if (CLAIMABLE.includes(refund.status) || refund.status === 'gateway_in_flight') {
+      // SEC-97: klaim eksklusif atomik + cek porsi (termasuk refund in-flight) di bawah kunci bagian, SEBELUM gateway
+      const before = refund.status === 'gateway_in_flight' ? 'odoo_done' : refund.status;
+      const stale = new Date(this.now() - IN_FLIGHT_STALE_MS);
+      const claim = await this.repo.tx(async (r) => {
+        const p = await r.getPart(part.id, true);
+        if (!p) return null;
+        const mine = await r.claimRefund(msg.refund_id, CLAIMABLE, stale);
+        if (!mine) return null;
+        const amount = mine.amount ?? 0;
+        const out = (await r.refundsOfPart(p.id)).filter((x) => x.id !== mine.id && MONEY_OUT_REFUND.includes(x.status));
+        const committed = out.reduce((s, x) => s + (x.amount ?? 0), 0);
+        if (amount <= 0 || committed + amount > p.amount_payable) {
+          await r.updateRefund(mine.id, { status: 'failed', failure_reason: 'refund_exceeds_portion' });
+          this.metrics.mismatch('portion');
+          this.metrics.anomaly('refund_exceeds_portion', 'critical', {
+            refund_id: mine.id,
+            part_id: p.id,
+            expected: p.amount_payable,
+            actual: committed + amount,
+          });
+          return 'rejected' as const;
+        }
+        return mine;
+      });
+      if (claim === null) return 'pending'; // diklaim consumer/replika lain
+      if (claim === 'rejected') {
         this.metrics.refund('failed');
-        this.metrics.mismatch('portion');
-        this.metrics.anomaly('refund_exceeds_portion', 'critical', { refund_id: msg.refund_id, part_id: part.id, expected: part.amount_payable, actual: already + amount });
         return this.claimed(CONSUMER.REFUND, msg.idempotency_key);
       }
-      let out;
+      let res;
       try {
-        out = await this.payments.refund(refund.payment_intent_id, { refundId: refund.id, amount, reason: refund.reason });
+        res = await this.payments.refund(claim.payment_intent_id, { refundId: claim.id, amount: claim.amount ?? 0, reason: claim.reason });
       } catch (err) {
         if (err instanceof PaymentOperationUnsupportedError) {
           await this.repo.tx(async (r) => r.updateRefund(msg.refund_id, { status: 'manual_required' }));
@@ -384,20 +410,23 @@ export class OnlineSagaService {
           this.metrics.anomaly('refund_manual_required', 'warning', { refund_id: msg.refund_id, part_id: part.id });
           return this.claimed(CONSUMER.REFUND, msg.idempotency_key);
         }
+        // transien: lepas klaim agar bisa dicoba ulang (idempotensi provider per refundId)
+        await this.repo.tx(async (r) => r.updateRefund(msg.refund_id, { status: before }));
         throw err;
       }
-      if (out.status === 'pending') {
-        await this.repo.tx(async (r) => r.updateRefund(msg.refund_id, { status: 'gateway_pending', provider_refund_ref: out.providerRefundRef }));
+      if (res.status === 'pending') {
+        const ref = res.providerRefundRef;
+        await this.repo.tx(async (r) => r.updateRefund(msg.refund_id, { status: 'gateway_pending', provider_refund_ref: ref }));
         this.metrics.refund('gateway_pending');
         return 'pending';
       }
-      if (out.status === 'failed') {
-        await this.repo.tx(async (r) => r.updateRefund(msg.refund_id, { status: 'failed' }));
+      if (res.status === 'failed') {
+        await this.repo.tx(async (r) => r.updateRefund(msg.refund_id, { status: 'failed', failure_reason: 'gateway_failed' }));
         this.metrics.refund('failed');
         this.metrics.anomaly('refund_gateway_failed', 'critical', { refund_id: msg.refund_id, part_id: part.id });
         return this.claimed(CONSUMER.REFUND, msg.idempotency_key);
       }
-      await this.markGatewayDone(refund.id, out.providerRefundRef ?? `gw:${refund.id}`);
+      await this.markGatewayDone(msg.refund_id, res.providerRefundRef ?? `gw:${msg.refund_id}`);
       refund = await this.repo.getRefund(msg.refund_id);
       if (!refund) throw new PermanentMessageError('refund hilang');
     }
@@ -413,11 +442,18 @@ export class OnlineSagaService {
       }
       await this.repo.tx(async (r) => r.updateRefund(msg.refund_id, { status: 'settled', settled_at: new Date(this.now()) }));
       this.metrics.refund('settled');
+      return this.claimed(CONSUMER.REFUND, msg.idempotency_key);
     }
-    return this.claimed(CONSUMER.REFUND, msg.idempotency_key);
+    if (refund.status === 'failed' || refund.status === 'manual_required' || refund.status === 'settled') {
+      return this.claimed(CONSUMER.REFUND, msg.idempotency_key);
+    }
+    return 'pending';
   }
 
-  /** `gateway_done` + `refunded_amount` bagian (satu transaksi, sekali per refund). Dipakai consumer & CLI settle manual. */
+  /**
+   * `gateway_done` + `refunded_amount` bagian (satu transaksi, sekali per refund). Dipakai consumer & CLI settle manual.
+   * SEC-97: melebihi porsi → TIDAK dipotong diam-diam; refund `failed` (`refund_exceeds_portion`) + anomali critical.
+   */
   async markGatewayDone(refundId: string, providerRef: string): Promise<void> {
     await this.repo.tx(async (r) => {
       const rf = await r.getRefund(refundId, true);
@@ -425,8 +461,19 @@ export class OnlineSagaService {
       const p = await r.getPart(rf.part_id, true);
       if (!p) return;
       const amount = rf.amount ?? 0;
+      if (p.refunded_amount + amount > p.amount_payable) {
+        await r.updateRefund(refundId, { status: 'failed', failure_reason: 'refund_exceeds_portion', provider_refund_ref: providerRef.slice(0, 128) });
+        this.metrics.refund('failed');
+        this.metrics.anomaly('refund_exceeds_portion', 'critical', {
+          refund_id: refundId,
+          part_id: p.id,
+          expected: p.amount_payable,
+          actual: p.refunded_amount + amount,
+        });
+        return;
+      }
       await r.updateRefund(refundId, { status: 'gateway_done', provider_refund_ref: providerRef.slice(0, 128) });
-      await r.updatePart(p.id, { refunded_amount: Math.min(p.amount_payable, p.refunded_amount + amount) });
+      await r.updatePart(p.id, { refunded_amount: p.refunded_amount + amount });
       this.metrics.refund('gateway_done');
       const order = await r.getOrder(p.order_id);
       if (order) await this.notify(r, order, p, 'online_order_refunded');

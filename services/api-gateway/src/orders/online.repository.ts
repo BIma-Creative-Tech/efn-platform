@@ -31,7 +31,7 @@ export type NewPart = Omit<
   | 'cancelled_at'
   | 'cancel_reason'
 >;
-export type NewRefund = Omit<RefundRow, 'created_at' | 'updated_at' | 'settled_at' | 'provider_refund_ref'>;
+export type NewRefund = Omit<RefundRow, 'created_at' | 'updated_at' | 'settled_at' | 'provider_refund_ref' | 'failure_reason'>;
 
 export interface OnlineEventRecord {
   part_id: string;
@@ -44,7 +44,7 @@ export interface OnlineEventRecord {
 }
 
 export interface AdminAuditRecord {
-  action: 'refund' | 'refund_settle' | 'resolve_cancel' | 'resolve_sync';
+  action: 'refund' | 'refund_settle' | 'refund_approve' | 'resolve_cancel' | 'resolve_sync';
   actor: string;
   reason: string;
   order_id: string | null;
@@ -104,6 +104,11 @@ export interface OnlineRepo {
   insertRefund(r: NewRefund): Promise<RefundRow>;
   getRefund(id: string, forUpdate?: boolean): Promise<RefundRow | null>;
   updateRefund(id: string, patch: RefundPatch): Promise<void>;
+  /**
+   * SEC-97: klaim eksklusif atomik → `gateway_in_flight` dari `from` (atau `gateway_in_flight` basi sebelum `staleBefore`,
+   * mis. proses mati di tengah). `null` bila sudah diklaim pihak lain / status lain.
+   */
+  claimRefund(id: string, from: readonly RefundStatus[], staleBefore: Date): Promise<RefundRow | null>;
   refundsOfPart(partId: string): Promise<RefundRow[]>;
 
   portionsOf(intentId: string): Promise<PortionRow[]>;
@@ -140,7 +145,7 @@ const PART_COLS = `id::text AS id, order_id::text AS order_id, channel_code, com
   amount_total, amount_payable, quote_hash, sale_order_name, odoo_state, last_seq, pickup_code_enc, refunded_amount, confirmed_at, ready_at,
   handed_over_at, cancelled_at, cancel_reason, created_at, updated_at`;
 const REFUND_COLS = `id::text AS id, part_id::text AS part_id, payment_intent_id::text AS payment_intent_id, kind, reason, lines, amount,
-  odoo_refund_ref, provider_refund_ref, status, requested_by, created_at, updated_at, settled_at`;
+  odoo_refund_ref, provider_refund_ref, status, failure_reason, requested_by, created_at, updated_at, settled_at`;
 
 type Raw = Record<string, unknown>;
 const d = (v: unknown): Date | null => (v === null || v === undefined ? null : v instanceof Date ? v : new Date(String(v)));
@@ -207,6 +212,7 @@ function toRefund(r: Raw): RefundRow {
     odoo_refund_ref: (r.odoo_refund_ref ?? null) as string | null,
     provider_refund_ref: (r.provider_refund_ref ?? null) as string | null,
     status: r.status as RefundStatus,
+    failure_reason: (r.failure_reason ?? null) as string | null,
     requested_by: r.requested_by as RefundRow['requested_by'],
     created_at: d(r.created_at) as Date,
     updated_at: d(r.updated_at) as Date,
@@ -230,7 +236,7 @@ const PART_PATCH_COLS = new Set([
   'amount_total',
   'amount_payable',
 ]);
-const REFUND_PATCH_COLS = new Set(['status', 'amount', 'odoo_refund_ref', 'provider_refund_ref', 'settled_at']);
+const REFUND_PATCH_COLS = new Set(['status', 'amount', 'odoo_refund_ref', 'provider_refund_ref', 'settled_at', 'failure_reason']);
 
 /** SET klausa dari patch (nama kolom HANYA dari whitelist konstan, nilai selalu parameter). */
 function setClause(patch: Record<string, unknown>, allowed: ReadonlySet<string>, offset: number): { sql: string; params: unknown[] } {
@@ -414,6 +420,15 @@ export class PgOnlineRepo implements OnlineRepo {
     const s = setClause(patch, REFUND_PATCH_COLS, 1);
     await this.q.query(`UPDATE platform.online_refund SET ${s.sql} WHERE id = $1`, [id, ...s.params]);
   }
+  async claimRefund(id: string, from: readonly RefundStatus[], staleBefore: Date): Promise<RefundRow | null> {
+    const r = await this.q.query<Raw>(
+      `UPDATE platform.online_refund SET status = 'gateway_in_flight', updated_at = now()
+        WHERE id = $1 AND (status = ANY($2::text[]) OR (status = 'gateway_in_flight' AND updated_at < $3))
+        RETURNING ${REFUND_COLS}`,
+      [id, [...from], staleBefore.toISOString()],
+    );
+    return r.rows[0] ? toRefund(r.rows[0]) : null;
+  }
   async refundsOfPart(partId: string): Promise<RefundRow[]> {
     const r = await this.q.query<Raw>(`SELECT ${REFUND_COLS} FROM platform.online_refund WHERE part_id = $1 ORDER BY created_at`, [partId]);
     return r.rows.map(toRefund);
@@ -501,7 +516,7 @@ export class PgOnlineRepo implements OnlineRepo {
          (SELECT count(*) FROM platform.online_order_part WHERE status = 'paying' AND updated_at < $1::timestamptz - interval '10 minutes') AS paying,
          (SELECT count(*) FROM platform.online_order WHERE status = 'awaiting_payment' AND expires_at < $1::timestamptz - interval '5 minutes') AS awaiting,
          (SELECT count(*) FROM platform.online_refund WHERE status NOT IN ('settled', 'failed', 'manual_required') AND created_at < $1::timestamptz - interval '24 hours') AS refund,
-         (SELECT count(*) FROM platform.online_refund WHERE status IN ('failed', 'manual_required')) AS attention`,
+         (SELECT count(*) FROM platform.online_refund WHERE status IN ('failed', 'manual_required', 'approval_required')) AS attention`,
       [now.toISOString()],
     );
     const row = r.rows[0];
@@ -543,8 +558,9 @@ export class PgOnlineRepo implements OnlineRepo {
     const pickup = await this.q.query(
       `UPDATE platform.online_order_part SET pickup_code_enc = NULL, updated_at = now()
         WHERE pickup_code_enc IS NOT NULL
-          AND (status IN ('handed_over', 'cancelled', 'place_failed')
-               OR (ready_at IS NOT NULL AND ready_at < $1::timestamptz - make_interval(days => $2::int)))`,
+          AND (status IN ('handed_over', 'cancelled', 'place_failed', 'stock_short')
+               OR (status IN ('confirmed', 'ready', 'review')
+                   AND COALESCE(ready_at, confirmed_at, updated_at) < $1::timestamptz - make_interval(days => $2::int)))`,
       [ts, cfg.pickupCodeMaxDays],
     );
     const qr = await this.q.query(

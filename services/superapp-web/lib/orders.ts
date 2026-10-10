@@ -107,6 +107,8 @@ export const ONLINE_ERROR_MESSAGES: Record<string, string> = {
   too_many_open_orders: 'Anda masih punya beberapa pesanan yang belum dibayar. Selesaikan atau batalkan dulu sebelum membuat pesanan baru.',
   fulfilment_unavailable: 'Pengantaran belum tersedia. Silakan pilih ambil di toko.',
   pickup_code_unavailable: 'Kode ambil tersedia setelah pesanan dikonfirmasi toko.',
+  // L-14 (G17-QA-03): bagian pesanan sedang diperiksa; kode ambil ditahan
+  order_in_review: 'Pesanan Anda sedang diperiksa tim kami, jadi kode ambil ditahan sementara. Hubungi layanan pelanggan bila perlu bantuan.',
   rate_limited: 'Terlalu banyak permintaan. Tunggu sebentar lalu coba lagi.',
   unauthenticated: 'Sesi berakhir. Silakan masuk kembali.',
 };

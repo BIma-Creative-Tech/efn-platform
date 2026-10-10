@@ -71,7 +71,15 @@ export async function reencryptColumn(
     for (const row of batch.rows) {
       let next: Buffer;
       try {
-        next = cipher.encrypt(cipher.decrypt(row.blob, c.aad), c.aad);
+        const target = c.rowAad ? c.rowAad(row.pk) : c.aad;
+        let plain: string;
+        try {
+          plain = cipher.decrypt(row.blob, target);
+        } catch (e) {
+          if (!(e instanceof PiiDecryptError) || !c.rowAad) throw e;
+          plain = cipher.decrypt(row.blob, c.aad); // SEC-102: format lama → ditulis ulang dengan AAD per baris
+        }
+        next = cipher.encrypt(plain, target);
       } catch (err) {
         if (!(err instanceof PiiDecryptError)) throw err;
         report.failed += 1;

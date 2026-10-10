@@ -539,7 +539,7 @@ jobs:
         run: |
           cat secrets/tls_odoo_rpc_gateway_crt.txt secrets/tls_odoo_rpc_gateway_key.txt > /tmp/odoo-rpc-gateway.pem
           chmod 644 /tmp/odoo-rpc-gateway.pem
-          docker run --rm -e ODOO_DB=efn_odoo \
+          docker run --rm -e ODOO_DB=efn_odoo -e ODOO_RPC_MAXCONN=4 \
             -v "$PWD/infra/odoo-rpc-gateway/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
             -v /tmp/odoo-rpc-gateway.pem:/tmp/haproxy/odoo-rpc-gateway.pem:ro \
             -v "$PWD/secrets/efn_ca_crt.txt:/run/secrets/efn_ca_crt:ro" \

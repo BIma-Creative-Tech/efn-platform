@@ -52,7 +52,7 @@ groups:
       # metode/ path lain. Satu penolakan pun ditinjau (BFF satu-satunya klien).
       - alert: EfnOdooRpcGatewayDenied
         expr: |
-          sum by (why) (count_over_time({service="odoo-rpc-gateway"} |~ ` why=[a-z_]+$` != ` why=-` | regexp ` why=(?P<why>[a-z_]+)$` [10m])) > 0
+          sum by (why) (count_over_time({service="odoo-rpc-gateway"} |~ ` why=[a-z_]+$` != ` why=-` != ` why=busy` | regexp ` why=(?P<why>[a-z_]+)$` [10m])) > 0
         labels:
           severity: warning
           team: security

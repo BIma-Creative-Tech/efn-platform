@@ -1502,6 +1502,22 @@ Belum / perlu tindakan:
   Container `api-gateway` dev BELUM di-recreate: perlu key RTL nyata di `secrets/odoo_api_key_online_rtl.txt` (runbook
   odoo-online-api-key §1, setelah E-28 + user teknis `efn_online_rtl` ada) dan migrasi 07 di volume dev lama.
 
+## G17.7 Review r10 SEC-96 (L-16b): batas koneksi gateway → Odoo
+- `haproxy.cfg`: `maxconn "${ODOO_RPC_MAXCONN}"` (dari 32 → default **4**; env tak diset = HAProxy gagal parse =
+  fail-closed), `timeout queue 2s`, antrean frontend dibatasi 16 (`queue(odoo) ge 16` → `503` seketika, `why=busy`),
+  `http-error 503` JSON + `X-EFN-Gateway-Error: unavailable` (dibedakan dari `X-EFN-Gateway-Deny`), log + `%Tw`.
+- Konfigurasi: `entrypoint.sh` validasi 1..16 (default 4); compose `ODOO_RPC_MAXCONN: ${ODOO_RPC_MAXCONN:-4}`;
+  deploy-validate (+ rentang 1..16), deploy.sh `.env`, deploy.yml `CFG_ODOO_RPC_MAXCONN`, `.env.example`, CI `haproxy -c`
+  dengan env. Loki `EfnOdooRpcGatewayDenied` mengecualikan `why=busy`.
+- Runbook `online-orders.md#sizing-worker`: aturan `ODOO_WORKERS ≥ POS + ODOO_RPC_MAXCONN`. **Temuan:** prod
+  `ODOO_WORKERS=6` + maxconn 4 menyisakan 2 worker untuk POS → sebelum online prod: workers 9 (4 CPU) atau maxconn 2
+  (keputusan lead/klien; compose prod tidak diubah).
+- Verifikasi: `test-gateway.sh` 97/97; uji beban baru `test-gateway-load.sh 300 200` → 150 dilayani Odoo (antre maks.
+  90–123 ms), 150 × `503 unavailable`, 0 status lain, gateway tetap healthy; efn-deploy 103/103 (+2 kasus maxconn);
+  shellcheck, actionlint, yamllint (0 error), checkov 0 FAILED, compose dev/prod, check-encryption OK.
+- Temuan sampingan: Odoo menjawab `HTTP/1.0`; curl paralel lalu mengirim HTTP/1.0 → ditolak gateway (`why=target`).
+  BFF (undici) tidak terdampak; uji beban memakai `--http1.1` + `Connection: close`.
+
 ## G17.6 Temuan QA G17-QA-05 (watch BFF dev di Windows)
 - **Penyebab `unhealthy` sebelum integrasi (dari log Loki):** setelah recreate 14:20 (9 Okt) `nest start --watch`
   mengompilasi `src/` saat paket BFF setengah diedit → `Found 4 errors` (MockGateway belum punya `refund`, TS2420/2741/

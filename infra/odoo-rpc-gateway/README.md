@@ -17,7 +17,14 @@
   Host `odoo-rpc-gateway[:8443]` · `Content-Type: application/json` · `Authorization: bearer <token>` tepat satu ·
   `Content-Length` ≤ 256 KB tanpa chunked · `X-Odoo-Database` dipaksa `${ODOO_DB}` · `Cookie`, `X-Forwarded-*`,
   `Forwarded`, `X-Real-IP`, `Accept-Language`, `Sec-Fetch-*` dibuang · `Set-Cookie` respons dibuang · timeout 30 s ·
-  maks 32 koneksi ke Odoo · log tanpa body/header/query (`why=<alasan>`), penolakan membawa `X-EFN-Gateway-Deny`.
+  log tanpa body/header/query (`why=<alasan>`, `%Tw` = waktu antre), penolakan membawa `X-EFN-Gateway-Deny`.
+- **Kapasitas (SEC-96 / L-16b):** maks. `ODOO_RPC_MAXCONN` (default 4, 1..16, divalidasi entrypoint & deploy-validate)
+  koneksi paralel ke Odoo = worker yang disisihkan untuk online; antrean maks. 16 request × 2 s di gateway, lalu `503`
+  + `X-EFN-Gateway-Error: unavailable` (`why=busy`, tidak memicu alert penolakan). Sizing worker:
+  `docs/runbooks/online-orders.md#sizing-worker`. Uji: `test-gateway-load.sh` (10 Okt: 300 req / 200 paralel → 150
+  dilayani, antre maks. 90–123 ms, 150 × 503 seketika, gateway tetap healthy).
+- **Catatan protokol:** Odoo (werkzeug) menjawab `HTTP/1.0`; gateway meneruskannya apa adanya. Klien yang menurunkan
+  versi request berikutnya ke HTTP/1.0 (curl mode paralel) ditolak `why=target`; BFF (undici) selalu HTTP/1.1.
 - **Kontrak untuk BFF:** kirim hanya header di allowlist (undici `fetch` default lolos: `accept-language`/`sec-fetch-mode`
   dibuang gateway). Header baru = ubah allowlist di sini (koordinasi devsecops). Respons dengan header
   `X-EFN-Gateway-Deny` = bug klien (jangan retry).

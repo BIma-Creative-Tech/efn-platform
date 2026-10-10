@@ -137,7 +137,7 @@ export class OnlineJobsService implements OnModuleInit, OnModuleDestroy {
         await r.enqueue(QUEUES.ORDER_PAID, { ...m }, m.idempotency_key);
         stats.paid += 1;
       }
-      for (const rf of await r.refundsInStatusBefore(['requested', 'odoo_done', 'gateway_pending', 'gateway_done'], minus(15 * MIN), BATCH)) {
+      for (const rf of await r.refundsInStatusBefore(['requested', 'odoo_done', 'gateway_in_flight', 'gateway_pending', 'gateway_done'], minus(15 * MIN), BATCH)) {
         const m = refundRequestedMessage(rf.id);
         await r.enqueue(QUEUES.ORDER_REFUND_REQUESTED, { ...m }, m.idempotency_key);
         stats.refunds += 1;
@@ -165,7 +165,7 @@ export class OnlineJobsService implements OnModuleInit, OnModuleDestroy {
       const stuck = await r.stuckCounts(now);
       for (const [k, v] of Object.entries(stuck)) this.metrics.setStuck(k as StuckKind, v);
       const open: Record<string, number> = {};
-      for (const rf of await r.refundsInStatusBefore(['requested', 'odoo_done', 'gateway_pending', 'gateway_done', 'manual_required', 'failed'], new Date(now.getTime() + 1), 10_000)) {
+      for (const rf of await r.refundsInStatusBefore(['requested', 'odoo_done', 'approval_required', 'gateway_in_flight', 'gateway_pending', 'gateway_done', 'manual_required', 'failed'], new Date(now.getTime() + 1), 10_000)) {
         open[rf.status] = (open[rf.status] ?? 0) + 1;
       }
       this.metrics.setRefundsOpen(open);

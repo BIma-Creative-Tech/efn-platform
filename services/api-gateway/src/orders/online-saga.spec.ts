@@ -15,7 +15,7 @@ import { OnlinePrivacyService } from './online-privacy.service';
 import { OnlineSagaService } from './online-saga.service';
 import { OrderEventsService, parseOdooEvent } from './order-events.service';
 import { OrdersService } from './orders.service';
-import { PICKUP_CODE_RE, decryptPickupCode } from './pickup-code';
+import { PICKUP_CODE_AAD_LEGACY, PICKUP_CODE_RE, decryptPickupCode, pickupCodeAad } from './pickup-code';
 import { FakeOnlinePayments, MemoryOnlineRepo } from './testing/online-fakes';
 
 const MEMBER = '8d7b5a1e-2c3f-4a5b-9c8d-7e6f5a4b3c2d';
@@ -141,7 +141,7 @@ describe('Checkout online (docs/04 §10.3.5)', () => {
     // Odoo menerima kunci deterministik & kode ambil sekali; BFF hanya menyimpan ciphertext
     const placed = ctx.odoo.orders.get(part.id)!;
     expect(placed.key).toBe(`online:place:${part.id}`);
-    const code = decryptPickupCode(ctx.cipher, part.pickup_code_enc as Buffer);
+    const code = decryptPickupCode(ctx.cipher, part.pickup_code_enc as Buffer, part.id).code;
     expect(code).toMatch(PICKUP_CODE_RE);
     expect(part.pickup_code_enc!.toString('latin1')).not.toContain(code);
     expect(JSON.stringify(order)).not.toContain(code);
@@ -456,10 +456,34 @@ describe('Event Odoo → BFF (§10.5)', () => {
     expect((await ctx.events.handle(ready)).status).toBe('duplicate');
     expect((await ctx.events.handle(ctx.event(part.id, 'confirmed', 4))).status).toBe('ignored_stale');
     expect((await ctx.events.handle(ctx.event(part.id, 'teleported', 6))).status).toBe('ignored_unknown_event');
-    expect((await ctx.events.handle(ctx.event(part.id, 'confirmed', 7))).status).toBe('applied'); // seq baru, transisi mundur diabaikan
+    // L-14: seq baru tetapi transisi mundur tidak diterapkan → dicatat ignored_stale (seq tetap maju)
+    expect((await ctx.events.handle(ctx.event(part.id, 'confirmed', 7))).status).toBe('ignored_stale');
     expect(ctx.partsOf(part.order_id)[0]).toMatchObject({ status: 'ready', last_seq: 7 });
     expect((await ctx.metrics.backwardTransitions.get()).values[0].value).toBe(1);
-    expect([...ctx.repo.state.events.values()].map((e) => e.outcome)).toEqual(['applied', 'ignored_stale', 'ignored_unknown_event', 'applied']);
+    expect([...ctx.repo.state.events.values()].map((e) => e.outcome)).toEqual(['applied', 'ignored_stale', 'ignored_unknown_event', 'ignored_stale']);
+  });
+
+  it('L-14: confirmed|ready → review dari Odoo SELALU diterapkan; selama review kode ambil → 409 order_in_review; selesai → kode kembali', async () => {
+    const { ctx, part } = await confirmed();
+    expect((await ctx.orders.pickupCodes(MEMBER, part.order_id)).items).toHaveLength(1);
+    expect((await ctx.events.handle(ctx.event(part.id, 'ready', 5))).status).toBe('applied');
+    expect((await ctx.events.handle(ctx.event(part.id, 'review', 6))).status).toBe('applied');
+    expect(ctx.partsOf(part.order_id)[0]).toMatchObject({ status: 'review', last_seq: 6 });
+    const view = await ctx.orders.get(MEMBER, part.order_id);
+    expect(view.parts[0].status).toBe('review'); // frontend: "Sedang diperiksa tim kami"
+    expect(view.status).toBe('review'); // status pelanggan (tampilan); DB tetap fulfilling
+    expect(ctx.orderRow(part.order_id).status).toBe('fulfilling');
+    expect((await ctx.orders.list(MEMBER, null, 20)).items[0]).toMatchObject({ status: 'review' });
+    const err = await catchApiError(() => ctx.orders.pickupCodes(MEMBER, part.order_id));
+    expect(err.getStatus()).toBe(409);
+    expect(err.body).toEqual({ error: { code: 'order_in_review', message: expect.any(String) } });
+    // ops menyelesaikan → confirmed; kode ambil tersedia lagi (tidak dihapus saat review)
+    expect((await ctx.events.handle(ctx.event(part.id, 'confirmed', 7))).status).toBe('applied');
+    expect((await ctx.orders.pickupCodes(MEMBER, part.order_id)).items).toHaveLength(1);
+    expect((await ctx.orders.get(MEMBER, part.order_id)).status).toBe('fulfilling');
+    // dari confirmed langsung ke review juga diterapkan
+    expect((await ctx.events.handle(ctx.event(part.id, 'review', 8))).status).toBe('applied');
+    expect(ctx.partsOf(part.order_id)[0].status).toBe('review');
   });
 
   it('bagian tidak ada → 404 (klaim rollback); kanal/PT beda → 409 company_mismatch', async () => {
@@ -472,14 +496,34 @@ describe('Event Odoo → BFF (§10.5)', () => {
     expect((await ctx.events.handle(ev)).status).toBe('applied');
   });
 
-  it('cancelled inisiatif Odoo membawa refund → online_refund(odoo_done) → gateway → refund_settled', async () => {
+  it('SEC-95: cancelled inisiatif Odoo atas bagian berbayar → refund approval_required (TANPA gateway); CS menyetujui lewat CLI → settled', async () => {
     const { ctx, part } = await confirmed();
-    const ev = ctx.event(part.id, 'cancelled', 10, { refund: { refund_ref: 'RINV/0001', amount: 159_800, kind: 'full', initiator: 'odoo' } });
-    expect((await ctx.events.handle(ev)).status).toBe('applied');
-    await ctx.drain();
-    expect([...ctx.repo.state.refunds.values()]).toEqual([expect.objectContaining({ odoo_refund_ref: 'RINV/0001', reason: 'ops_cancelled', status: 'settled' })]);
-    expect(ctx.odoo.calls.filter((c) => c.method === 'refundSettled')).toHaveLength(1);
-    expect(ctx.orderRow(part.order_id).status).toBe('cancelled');
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const ev = ctx.event(part.id, 'cancelled', 10, { refund: { refund_ref: 'RINV/0001', amount: 159_800, kind: 'full', initiator: 'odoo' } });
+      expect((await ctx.events.handle(ev)).status).toBe('applied');
+      await ctx.drain();
+      const [rf] = [...ctx.repo.state.refunds.values()];
+      expect(rf).toMatchObject({ odoo_refund_ref: 'RINV/0001', reason: 'ops_cancelled', status: 'approval_required' });
+      expect(ctx.payments.refunds).toHaveLength(0);
+      expect(ctx.repo.state.outbox.filter((m) => m.queue === 'order.refund.requested')).toHaveLength(0);
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('odoo_refund_needs_approval'))).toBe(true);
+      // rekonsiliasi TIDAK menerbitkan pesan refund untuk approval_required
+      ctx.clock.advanceSeconds(20 * 60);
+      await ctx.jobs.reconOnce();
+      expect(ctx.repo.state.outbox.filter((m) => m.queue === 'order.refund.requested')).toHaveLength(0);
+      expect((await ctx.metrics.stuck.get()).values.find((v) => v.labels.state === 'refund_attention')?.value).toBe(1);
+      // persetujuan CS (aktor = identitas OS/host)
+      expect(await ctx.admin.approveRefund(rf.id, 'cs_budi/efn-prod-01', 'tiket CS-77 disetujui')).toEqual({ status: 'odoo_done' });
+      await ctx.drain();
+      expect(ctx.repo.state.refunds.get(rf.id)!.status).toBe('settled');
+      expect(ctx.odoo.calls.filter((c) => c.method === 'refundSettled')).toHaveLength(1);
+      expect(ctx.repo.state.audits).toEqual([expect.objectContaining({ action: 'refund_approve', actor: 'cs_budi/efn-prod-01', refund_id: rf.id })]);
+      await expect(ctx.admin.approveRefund(rf.id, 'cs_budi/efn-prod-01', 'ulang')).rejects.toThrow('tidak menunggu persetujuan');
+      await expect(ctx.admin.approveRefund(rf.id, 'ani@efn.co.id', 'email ditolak')).rejects.toThrow('operator');
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('validasi skema: schema_version/seq/kunci/ukuran salah → 400', async () => {
@@ -552,5 +596,117 @@ describe('Anti-enumeration, privasi, retensi', () => {
     } finally {
       spies.forEach((s) => s.mockRestore());
     }
+  });
+});
+
+describe('Review r10 (L-16)', () => {
+  async function paidConfirmed(lines = [{ product_id: 11, qty: 2 }]) {
+    const ctx = setup();
+    const { order } = await ctx.checkout(lines);
+    const intentId = ctx.orderRow(order.order_id).payment_intent_id!;
+    await ctx.payments.pay(intentId);
+    await ctx.drain();
+    return { ctx, order, intentId, part: ctx.partsOf(order.order_id)[0] };
+  }
+  function newRefund(ctx: ReturnType<typeof setup>, partId: string, intentId: string, id: string, amount: number, status: 'requested' | 'odoo_done' = 'requested') {
+    return ctx.repo.insertRefund({ id, part_id: partId, payment_intent_id: intentId, kind: 'lines', reason: 'customer_cs', lines: null, amount, odoo_refund_ref: `R/${id.slice(0, 4)}`, status, requested_by: 'cs' });
+  }
+
+  it('SEC-97: klaim eksklusif — pesan refund ganda/paralel memanggil gateway SEKALI', async () => {
+    const { ctx, part, intentId } = await paidConfirmed();
+    const rf = await newRefund(ctx, part.id, intentId, '21111111-1111-4111-8111-111111111111', 10_000);
+    const msg = { schema_version: 1 as const, idempotency_key: 'k1', refund_id: rf.id };
+    const [a, b] = await Promise.all([ctx.saga.handleRefundRequested(msg), ctx.saga.handleRefundRequested({ ...msg, idempotency_key: 'k2' })]);
+    expect([a, b].sort()).toEqual(['done', 'pending']);
+    expect(ctx.payments.refunds).toHaveLength(1);
+    expect(ctx.repo.state.refunds.get(rf.id)!.status).toBe('settled');
+    // klaim in-flight lain (belum basi) tidak dapat diambil
+    const rf2 = await newRefund(ctx, part.id, intentId, '31111111-1111-4111-8111-111111111111', 10_000);
+    ctx.repo.state.refunds.get(rf2.id)!.status = 'gateway_in_flight';
+    expect(await ctx.saga.handleRefundRequested({ ...msg, idempotency_key: 'k3', refund_id: rf2.id })).toBe('pending');
+    expect(ctx.payments.refunds).toHaveLength(1);
+    // basi > 15 menit (proses mati) → boleh diklaim ulang
+    ctx.clock.advanceSeconds(16 * 60);
+    expect(await ctx.saga.handleRefundRequested({ ...msg, idempotency_key: 'k4', refund_id: rf2.id })).toBe('done');
+    expect(ctx.payments.refunds).toHaveLength(2);
+  });
+
+  it('SEC-97: refund in-flight ikut dihitung dalam batas porsi → yang melebihi ditolak (failed, refund_exceeds_portion), tanpa gateway', async () => {
+    const { ctx, part, intentId } = await paidConfirmed();
+    const r1 = await newRefund(ctx, part.id, intentId, '41111111-1111-4111-8111-111111111111', 100_000);
+    ctx.repo.state.refunds.get(r1.id)!.status = 'gateway_pending'; // sedang di gateway
+    const r2 = await newRefund(ctx, part.id, intentId, '51111111-1111-4111-8111-111111111111', 60_000);
+    expect(await ctx.saga.handleRefundRequested({ schema_version: 1, idempotency_key: 'x', refund_id: r2.id })).toBe('done');
+    expect(ctx.repo.state.refunds.get(r2.id)).toMatchObject({ status: 'failed', failure_reason: 'refund_exceeds_portion' });
+    expect(ctx.payments.refunds).toHaveLength(0);
+    // transien di gateway → klaim dilepas (status semula), bisa dicoba ulang
+    const r3 = await newRefund(ctx, part.id, intentId, '61111111-1111-4111-8111-111111111111', 10_000, 'odoo_done');
+    jest.spyOn(ctx.payments, 'refund').mockRejectedValueOnce(new Error('ETIMEDOUT'));
+    await expect(ctx.saga.handleRefundRequested({ schema_version: 1, idempotency_key: 'y', refund_id: r3.id })).rejects.toThrow('ETIMEDOUT');
+    expect(ctx.repo.state.refunds.get(r3.id)!.status).toBe('odoo_done');
+  });
+
+  it('SEC-98: CLI refund — cek porsi SEBELUM nota kredit Odoo; settle manual menolak refund_exceeds_portion', async () => {
+    const { ctx, part, intentId } = await paidConfirmed();
+    await newRefund(ctx, part.id, intentId, '71111111-1111-4111-8111-111111111111', 150_000, 'odoo_done');
+    await expect(
+      ctx.admin.refund({ partId: part.id, lines: [{ product_id: 11, qty: 1 }], full: false, restock: false, reason: 'customer_cs', actor: 'cs_budi/h1', note: 'cek porsi' }),
+    ).rejects.toThrow('melebihi sisa porsi');
+    expect(ctx.odoo.calls.filter((c) => c.method === 'refund')).toHaveLength(0);
+    const bad = await newRefund(ctx, part.id, intentId, '81111111-1111-4111-8111-111111111111', 5_000);
+    ctx.repo.state.refunds.get(bad.id)!.status = 'failed';
+    ctx.repo.state.refunds.get(bad.id)!.failure_reason = 'refund_exceeds_portion';
+    await expect(ctx.admin.settleManual(bad.id, 'TRF-1', 'finance_ani/h1', 'manual')).rejects.toThrow('melebihi porsi');
+    await expect(ctx.admin.refund({ partId: part.id, lines: null, full: true, restock: false, reason: 'customer_cs', actor: 'free text actor!', note: 'abc' })).rejects.toThrow('operator');
+  });
+
+  it('SEC-99: kode ambil dihapus saat stock_short/cancelled; confirmed/review tanpa ready dihapus retensi 7 hari (COALESCE(ready_at, confirmed_at))', async () => {
+    const { ctx, part } = await paidConfirmed();
+    expect(part.pickup_code_enc).not.toBeNull();
+    await ctx.events.handle(ctx.event(part.id, 'review', 9));
+    ctx.clock.advanceSeconds(6 * 86_400);
+    await ctx.jobs.retentionOnce();
+    expect(ctx.partsOf(part.order_id)[0].pickup_code_enc).not.toBeNull();
+    ctx.clock.advanceSeconds(2 * 86_400);
+    await ctx.jobs.retentionOnce();
+    expect(ctx.partsOf(part.order_id)[0].pickup_code_enc).toBeNull();
+    const s = setup();
+    const o = (await s.checkout([{ product_id: 13, qty: 1 }])).order;
+    await s.payments.pay(s.orderRow(o.order_id).payment_intent_id!);
+    const msg = s.repo.state.outbox.shift()!;
+    await s.saga.handleOrderPaid(parseOrderPaid(msg.payload));
+    expect(s.partsOf(o.order_id)[0]).toMatchObject({ status: 'stock_short', pickup_code_enc: null });
+  });
+
+  it('SEC-100: erasure/DSAR mengunci member & cek ulang order terbuka (lockAndAssertNoOpenOrders); checkout ditolak setelah hapus terjadwal', async () => {
+    const ctx = setup();
+    const { order } = await ctx.checkout();
+    const q = { query: jest.fn().mockResolvedValue({ rows: [{ n: '0' }], rowCount: 1 }) };
+    // jalur SQL: kunci advisory member yang sama dengan checkout dipanggil lebih dulu
+    await ctx.privacy.lockAndAssertNoOpenOrders(q, MEMBER).catch(() => undefined);
+    expect(String(q.query.mock.calls[0][0])).toContain("pg_advisory_xact_lock(hashtext('efn:online:member:'");
+    expect(q.query.mock.calls[0][1]).toEqual([MEMBER]);
+    // order belum dibayar masih ada → 409 (dibatalkan dulu oleh prepareDelete)
+    const q2 = { query: jest.fn().mockImplementation(async (t: string) => (t.includes("status IN ('created', 'awaiting_payment')") ? { rows: [{ id: order.order_id }], rowCount: 1 } : { rows: [{ n: '0' }], rowCount: 1 })) };
+    await expect(ctx.privacy.lockAndAssertNoOpenOrders(q2, MEMBER)).rejects.toMatchObject({ body: { error: { code: 'open_online_orders' } } });
+    ctx.repo.state.activeDeletes.add(MEMBER);
+    expect((await catchApiError(() => ctx.checkout([{ product_id: 12, qty: 1 }], 'chk1_DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD'))).body).toMatchObject({ error: { code: 'account_deleting' } });
+  });
+
+  it('SEC-102: AAD kode ambil terikat part_id (salin antar-bagian gagal); baris lama AAD v1 terbaca lalu ditulis ulang v2', async () => {
+    const ctx = setup();
+    const { order } = await ctx.checkout();
+    await ctx.payments.pay(ctx.orderRow(order.order_id).payment_intent_id!);
+    await ctx.drain();
+    const part = ctx.partsOf(order.order_id)[0];
+    const other = '91111111-1111-4111-8111-111111111111';
+    expect(() => decryptPickupCode(ctx.cipher, part.pickup_code_enc as Buffer, other)).toThrow();
+    const legacy = ctx.cipher.encrypt('ABCDEFGH', PICKUP_CODE_AAD_LEGACY);
+    ctx.repo.state.parts.get(part.id)!.pickup_code_enc = legacy;
+    expect((await ctx.orders.pickupCodes(MEMBER, order.order_id)).items[0].pickup_code).toBe('ABCD-EFGH');
+    const rewritten = ctx.repo.state.parts.get(part.id)!.pickup_code_enc as Buffer;
+    expect(Buffer.compare(Buffer.from(rewritten), legacy)).not.toBe(0);
+    expect(decryptPickupCode(ctx.cipher, rewritten, part.id)).toEqual({ code: 'ABCDEFGH', legacy: false });
+    expect(pickupCodeAad(part.id)).toBe(`efn:online_order_part.pickup_code_enc:v2:${part.id}`);
   });
 });

@@ -27,3 +27,13 @@ Risiko dimitigasi: R-T10 (saga), R-O05 (refund ≤ porsi per bagian), R-S09 (web
 
 ## Belum
 - Poin online, delivery, F&B online, UI CS, webhook refund vendor (§10.14).
+
+## G17-QA-03 (L-14) & review r10 (L-16)
+- L-14: `confirmed|ready → review` dari Odoo selalu diterapkan; selama ada bagian `review` → `GET …/pickup-code` `409 order_in_review` dan status order pelanggan `review` (tampilan saja; status DB tetap diturunkan dari bagian). Event yang tidak diterapkan dicatat `ignored_stale`.
+- SEC-95: refund inisiatif Odoo (event `cancelled|refunded`, `initiator=odoo`) → `approval_required` (tanpa gateway); CS menyetujui lewat `node dist/cli/online-refund-approve.js --refund=<id> --reason=…`.
+- SEC-96: stok hanya untuk produk katalog kanal (selain itu 404 tanpa Odoo), cache negatif `none` 30 s; semaphore global json2 `ODOO_RPC_MAX_CONCURRENCY` (default 4) → `busy` → 503.
+- SEC-97: klaim refund atomik `gateway_in_flight` (basi 15 menit) + refund in-flight dihitung dalam porsi; melebihi → `failed` + `failure_reason=refund_exceeds_portion` (tanpa `Math.min`).
+- SEC-98: aktor CLI = `EFN_CS_OPERATOR`/`SUDO_USER`/user OS + host (`--actor` dihapus); cek porsi sebelum nota kredit Odoo; `online-refund-settle` menolak `refund_exceeds_portion`.
+- SEC-99: kode ambil dihapus saat `stock_short`/final; retensi `confirmed|ready|review` memakai `COALESCE(ready_at, confirmed_at)`.
+- SEC-100: `DELETE /v1/me` mengambil kunci member checkout + cek ulang order terbuka dalam transaksi INSERT; erasure ditunda (+ `EFN_ONLINE_ANOMALY erasure_deferred_open_orders`) bila masih ada order terbuka.
+- SEC-102: AAD kode ambil `efn:online_order_part.pickup_code_enc:v2:<part_id>`; baris AAD v1 tetap terbaca lalu ditulis ulang (baca kode ambil & `pii-reencrypt`).

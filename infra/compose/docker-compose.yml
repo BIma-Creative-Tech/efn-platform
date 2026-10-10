@@ -967,6 +967,9 @@ services:
     entrypoint: ["/bin/sh", "/efn/entrypoint.sh"]
     environment:
       ODOO_DB: ${ODOO_DB:-efn_odoo}
+      # SEC-96 / L-16b: koneksi paralel maks. ke Odoo = worker HTTP Odoo yang disisihkan untuk online (1..16).
+      # Kelebihan mengantre 2 s lalu 503. Sizing worker: docs/runbooks/online-orders.md#sizing-worker
+      ODOO_RPC_MAXCONN: ${ODOO_RPC_MAXCONN:-4}
     secrets: [efn_ca_crt, tls_odoo_rpc_gateway_crt, tls_odoo_rpc_gateway_key]
     volumes:
       - ../odoo-rpc-gateway/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro

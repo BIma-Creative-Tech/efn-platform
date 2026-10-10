@@ -237,12 +237,17 @@ export class DsarService {
     const id = randomUUID();
     const scheduled = new Date(this.now() + this.config.dsarDeleteGraceDays * 86_400_000);
     try {
-      await this.db.query(
-        `INSERT INTO platform.dsar_request (id, member_id, member_hash, type, status, stores_pending, requested_at, scheduled_at)
-         VALUES ($1, $2, $3, 'delete', 'scheduled', '{}', now(), $4)`,
-        [id, user.memberId, user.memberHash, scheduled.toISOString()],
-      );
+      await this.db.tx(async (q) => {
+        // SEC-100: kunci member yang sama dengan checkout + cek ulang order terbuka, atomik dengan INSERT
+        if (this.online) await this.online.lockAndAssertNoOpenOrders(q, user.memberId);
+        await q.query(
+          `INSERT INTO platform.dsar_request (id, member_id, member_hash, type, status, stores_pending, requested_at, scheduled_at)
+           VALUES ($1, $2, $3, 'delete', 'scheduled', '{}', now(), $4)`,
+          [id, user.memberId, user.memberHash, scheduled.toISOString()],
+        );
+      });
     } catch (err) {
+      if (err instanceof ApiError) throw err;
       // Balapan dua DELETE paralel → unique uq_dsar_active_delete; kembalikan yang menang
       const again = await this.findActiveDelete(user.memberId);
       if (again) return this.deleteResponse(again.id, again.scheduledAt, points);

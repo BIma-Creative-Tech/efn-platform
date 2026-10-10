@@ -396,6 +396,8 @@ vc "97 ODOO_RPC_TIMEOUT_MS > 30000 (timeout gateway) ditolak" 1 staging ODOO_RPC
 vc "98 production ODOO_ONLINE_MOCK=true ditolak (L-7)" 1 production ODOO_ONLINE_MOCK=true
 vc "99 staging EFN_PAYMENT_SIMULATOR=true ditolak (hanya dev)" 1 staging EFN_PAYMENT_SIMULATOR=true
 vc "100 default online (semua kosong) diterima" 0 production
+vc "102 ODOO_RPC_MAXCONN > 16 ditolak (SEC-96)" 1 staging ODOO_RPC_MAXCONN=32
+vc "103 ODOO_RPC_MAXCONN=4 diterima (SEC-96)" 0 staging ODOO_RPC_MAXCONN=4
 
 echo "RINGKASAN efn-deploy: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]

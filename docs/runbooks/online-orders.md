@@ -95,6 +95,36 @@ daftar path = perubahan kontrak §10.4.3 + `RPC_ALLOWLIST` Odoo). Tanpa deploy �
 - **Bucket `catalog`:** dibuat `minio-init` (SSE-S3, privat, tanpa lifecycle; retensi = job BFF). Hanya user BFF
   (Get/Put/Delete objek + GetBucketLocation).
 
+## Sizing worker Odoo: kanal online vs POS {#sizing-worker}
+
+SEC-96 / L-16b (docs/04 §10.17): online tidak boleh menghabiskan worker HTTP Odoo yang melayani POS.
+
+- **Batas:** `odoo-rpc-gateway` membuka maksimal `ODOO_RPC_MAXCONN` (default **4**, rentang 1..16; GitHub variable
+  `ODOO_RPC_MAXCONN` → deploy-validate) koneksi paralel ke Odoo. Request ke-5 dan seterusnya mengantre di gateway (maks.
+  16 menunggu, tiap request maks. 2 s); lebih dari itu langsung `503` + header `X-EFN-Gateway-Error: unavailable`.
+  BFF juga membatasi konkurensi global panggilan Odoo (default 4, L-16b) dan me-retry 503 dengan backoff + circuit
+  breaker. Uji: `bash infra/odoo-rpc-gateway/test-gateway-load.sh` (dev 10 Okt: 300 request / 200 paralel → 150
+  dilayani Odoo dengan antre ≤ 90–123 ms, 150 ditolak 503 seketika, gateway tetap healthy).
+- **Aturan:** `ODOO_WORKERS` ≥ worker yang dibutuhkan POS + `ODOO_RPC_MAXCONN` (+ cron berjalan di thread terpisah,
+  `ODOO_MAX_CRON_THREADS`). Patokan Odoo: worker ≈ 2 × CPU + 1, ±150–300 MB RAM per worker (+ limit memori per worker).
+- **Kebutuhan POS (perkiraan, ukur saat pilot):** 1 worker per ±6 sesi POS aktif yang sinkron bersamaan; minimal 4.
+- **Konfigurasi saat ini:** prod `ODOO_WORKERS=6` (docker-compose.prod.yml, odoo 4 CPU / 6 GB). Dengan
+  `ODOO_RPC_MAXCONN=4` hanya 2 worker tersisa untuk POS — **tidak cukup**. Sebelum `ONLINE_ENABLED=true` di production
+  pilih salah satu: (a) naikkan `ODOO_WORKERS` ke 9 (= 2 × 4 CPU + 1 → POS 5 + online 4; RAM ±9 × 300 MB ≈ 2,7 GB +
+  cache, masih di bawah limit 6 GB), atau (b) turunkan `ODOO_RPC_MAXCONN` ke 2 (POS 4 + online 2) selama pilot volume
+  rendah. Keputusan kapasitas = lead/klien (catat di laporan pilot).
+
+| Skenario | ODOO_WORKERS | POS | ODOO_RPC_MAXCONN (online) |
+|---|---|---|---|
+| Pilot, online volume rendah | 6 | 4 | 2 |
+| Rekomendasi pilot (4 CPU) | 9 | 5 | 4 (default) |
+| Puncak (8 CPU) | 17 | 13 | 4–8 |
+
+- **Gejala salah sizing:** antre gateway (`%Tw` di log `odoo-rpc-gateway`) sering > 1 s atau banyak `why=busy` →
+  online kekurangan slot (naikkan worker + maxconn bersamaan); POS lambat saat promo online → kurangi `ODOO_RPC_MAXCONN`.
+  Penolakan `why=busy` tidak memicu `EfnOdooRpcGatewayDenied` (kapasitas, bukan pelanggaran filter); pantau lewat
+  `EfnOnlineCircuitOpen` dan latensi `efn_online_odoo_request_seconds`.
+
 ## Belum / batas
 - CLI `online-refund`, `online-refund-settle`, `online-resolve` = paket BFF G17; nama perintah final lihat README BFF.
 - Gauge refund terbuka per status belum ada (alert refund memakai counter transisi 1 jam, `metric_status: proposed`).

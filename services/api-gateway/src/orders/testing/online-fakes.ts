@@ -161,7 +161,7 @@ export class MemoryOnlineRepo implements OnlineRepo {
         (r.odoo_refund_ref === null && r.requested_by === 'system' && x.requested_by === 'system' && x.odoo_refund_ref === null && x.part_id === r.part_id && x.reason === r.reason),
     );
     if (existing) return clone(existing);
-    const row: RefundRow = { ...r, provider_refund_ref: null, created_at: this.d(), updated_at: this.d(), settled_at: null };
+    const row: RefundRow = { ...r, provider_refund_ref: null, failure_reason: null, created_at: this.d(), updated_at: this.d(), settled_at: null };
     this.state.refunds.set(r.id, row);
     return clone(row);
   }
@@ -171,6 +171,13 @@ export class MemoryOnlineRepo implements OnlineRepo {
   async updateRefund(id: string, patch: RefundPatch): Promise<void> {
     const r = this.state.refunds.get(id);
     if (r) Object.assign(r, patch, { updated_at: this.d() });
+  }
+  async claimRefund(id: string, from: readonly RefundStatus[], staleBefore: Date): Promise<RefundRow | null> {
+    const r = this.state.refunds.get(id);
+    if (!r) return null;
+    if (!(from.includes(r.status) || (r.status === 'gateway_in_flight' && r.updated_at < staleBefore))) return null;
+    Object.assign(r, { status: 'gateway_in_flight', updated_at: this.d() });
+    return clone(r);
   }
   async refundsOfPart(partId: string): Promise<RefundRow[]> {
     return [...this.state.refunds.values()].filter((r) => r.part_id === partId).map(clone);
@@ -232,7 +239,7 @@ export class MemoryOnlineRepo implements OnlineRepo {
       paying: parts.filter((p) => p.status === 'paying' && p.updated_at.getTime() < ago(600_000)).length,
       awaiting_payment: [...this.state.orders.values()].filter((o) => o.status === 'awaiting_payment' && o.expires_at.getTime() < ago(300_000)).length,
       refund: [...this.state.refunds.values()].filter((r) => !['settled', 'failed', 'manual_required'].includes(r.status) && r.created_at.getTime() < ago(86_400_000)).length,
-      refund_attention: [...this.state.refunds.values()].filter((r) => r.status === 'failed' || r.status === 'manual_required').length,
+      refund_attention: [...this.state.refunds.values()].filter((r) => ['failed', 'manual_required', 'approval_required'].includes(r.status)).length,
     };
   }
   async portionMismatches(): Promise<{ payment_id: string; expected: number; actual: number }[]> {
@@ -248,7 +255,10 @@ export class MemoryOnlineRepo implements OnlineRepo {
     for (const p of this.state.parts.values()) {
       if (!p.pickup_code_enc) continue;
       const old = p.ready_at !== null && p.ready_at.getTime() < now.getTime() - cfg.pickupCodeMaxDays * 86_400_000;
-      if (['handed_over', 'cancelled', 'place_failed'].includes(p.status) || old) {
+      const anchor = p.ready_at ?? p.confirmed_at ?? p.updated_at;
+      const stale = ['confirmed', 'ready', 'review'].includes(p.status) && anchor.getTime() < now.getTime() - cfg.pickupCodeMaxDays * 86_400_000;
+      void old;
+      if (['handed_over', 'cancelled', 'place_failed', 'stock_short'].includes(p.status) || stale) {
         p.pickup_code_enc = null;
         pickupNulled += 1;
       }
