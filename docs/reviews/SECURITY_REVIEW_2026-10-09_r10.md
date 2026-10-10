@@ -43,6 +43,15 @@ Metode: reviewer hanya membaca kode dan konfigurasi. Tidak ada yang dijalankan. 
 >
 > Lihat bagian *Re-review G17* di akhir dokumen.
 
+> **Status setelah re-review akhir G17 (HEAD `15ad832`, 10 Okt 2026):**
+> - Status per temuan:
+>   - SEC-95, 98, 104, 105, 106, 108, 109: **Fixed**;
+>   - SEC-107: **Partial** (residual SEC-111).
+> - Temuan baru: **3 Low (SEC-110..112)**, tidak ada Critical/High/Medium terbuka.
+> - **Rekomendasi: GO merge ke `main`** (online tetap `false` di prod), dengan syarat sebelum `ONLINE_ENABLED=true`.
+>
+> Lihat bagian *Re-review akhir G17*.
+
 ## Temuan baru
 
 | ID | Severity | Verdict | Judul | Lokasi utama | Risiko |
@@ -400,3 +409,104 @@ Penjaga manager + alasan dari SEC-95 jadi tidak mengikat.
 ## Belum terverifikasi (re-review)
 - Perilaku `pos_sale` 19.0 terhadap SO yang sudah difaktur penuh (SEC-105 butir 3) dan apakah `picking_type_id` dapat ditulis RPC pada picking `assigned` (butir 1). Perlu uji di stack dev oleh QA.
 - Sizing `ODOO_WORKERS` produksi terhadap `ODOO_RPC_MAXCONN` (L-17).
+
+---
+
+# Re-review akhir G17 (efn-security-reviewer, 10 Okt 2026, HEAD `15ad832`)
+
+Cakupan: perbaikan SEC-104..109 + sisa SEC-95/SEC-98 sesuai L-19/L-20 (`docs/04_SERVICE_CONTRACTS.md` §10.17:769-770).
+- BFF/wrapper: `599c843`.
+- Odoo: `15ad832`, termasuk modul jembatan baru `efn_online_pos_sale`.
+
+File yang dibaca ulang:
+- Odoo:
+  - `efn_online_order/models/{sale_order,efn_online_common,efn_online_order}.py`;
+  - `efn_online_order/__manifest__.py`;
+  - `efn_online_pos_sale/{__manifest__.py,models/sale_order.py,tests/test_pos_sale_guard.py}`.
+- BFF: `orders/{online-admin.service,online-saga.service,online.repository}.ts`, `cli/online-cli.ts`, `odoo-rpc/json2-client.ts`.
+- Infra: `scripts/host/efn-online-cs`, `infra/observability/{promtail-journal.yml,loki-rules/efn-online.yml}`.
+
+Read-only; tidak ada yang dijalankan.
+
+## Ringkasan (manajemen)
+1. **Semua temuan Medium sudah ditutup.**
+   - Penanda jalur internal Odoo kini tidak bisa dipalsukan klien.
+   - Penjaga serah terima pindah ke level pergerakan stok dan menutup POS.
+   - Refund CS dan refund dari Odoo sama-sama butuh persetujuan peran **approver** yang terpisah dari CS di host.
+   - Klaim refund memakai token.
+   - Alasan CS tidak lagi masuk log sudo, dan jejak wrapper dikirim ke Loki dengan alert.
+2. **Sisa tiga Low** (SEC-110..112). Ketiganya butuh insider dengan akses Odoo/host, meninggalkan jejak (anomali `review`, audit), dan tidak memindahkan dana tanpa approver.
+3. **GO untuk merge ke `main`.** Fitur online tetap mati di produksi secara default (`ONLINE_ENABLED=false`). Syarat sebelum mengaktifkan online di produksi ada di akhir bagian ini.
+
+## Status
+
+| ID | Status | Bukti (file:line) | Catatan |
+|---|---|---|---|
+| SEC-95 | **Fixed** | `efn_online_order/models/sale_order.py:42-55` (cek manager + alasan untuk SO online non-internal, user asli), `:57-67` (`write` state SO online hanya dalam scope internal), `:70-88` (guard `stock.move._action_done`), BFF approval (lihat SEC-107) | Residual Low: SEC-110, SEC-111 |
+| SEC-98 | **Fixed** | `cli/online-cli.ts:50-66` (tanpa `EFN_CS_OPERATOR` + `EFN_CS_ROLE` → CLI menolak, kecuali `APP_ENV=dev|test`), wrapper `efn-online-cs:49-64,135-136` (identitas & peran dari sudo + grup host, selalu ditimpa) | Anggota grup docker tetap bisa `docker exec -e EFN_CS_ROLE=approver`. Setara root, sudah diterima di luar kontrol ini; pastikan operator CS bukan anggota docker (runbook `:15`) |
+| SEC-104 | **Fixed** | `efn_online_common.py:123-145` (`internal_scope`/`in_scope` di `cr.cache`, dibersihkan `finally`), `efn_online_order.py:462,568` (konfirmasi/batal saga di dalam scope), `sale_order.py:44,57-67` (tanpa context; `write` state ditolak di luar scope), `efn_online_order.py:733-741` (serah terima tanpa move pelanggan terbuka / SO bukan `sale` → `review`), `:753-754` | Tidak ada lagi pembacaan `efn_online_internal` dari context (grep `context.get` di `models/`: hanya `ir_cron_progress_id`, `lang`) |
+| SEC-105 | **Fixed** | `sale_order.py:70-88` (guard di `stock.move._action_done` berdasarkan `sale_line_id.order_id` + `_efn_is_customer_move`, `efn_online_order.py:97-101` termasuk `location_final_id`), menangkap ubah tipe operasi, pindah move ke picking lain, backorder, batch. `sale_order.py:91-100` (`pos.order.line.create` menolak `sale_order_origin_id` SO online; `point_of_sale` sudah di `depends`), `efn_online_pos_sale/models/sale_order.py:17-24` (domain loader POS + `load_sale_order_from_pos`), auto-install | Residual: SEC-110. Signature `_load_pos_data_domain(data, config)`/`load_sale_order_from_pos` 19.0 belum terverifikasi reviewer (jaring `pos.order.line.create` tetap berlaku) |
+| SEC-106 | **Fixed** | `online.repository.ts:433-450` (`claim_token` saat klaim; `updateRefundIfClaimed` `WHERE claim_token=$2 AND status='gateway_in_flight'`), `online-saga.service.ts:376-391,413-434` (semua penulisan pasca-gateway lewat `casWrite`, klaim hilang → anomali `refund_claim_lost`, tidak menimpa), `:384` (status asal diturunkan dari data), `:469-476` (`markGatewayDone` bertoken) | — |
+| SEC-107 | **Partial** | Wrapper `efn-online-cs:55-64` (satu orang satu peran: anggota `efn-cs` **dan** `efn-cs-approver` ditolak), `:72-73,99-101` (approve & `resolve --action=cancel` hanya approver), `online-admin.service.ts:145-166` (refund CS ≥ `ONLINE_CS_REFUND_APPROVAL_MIN_IDR`, default 0 = semua → `approval_required`), `:194-203` (approve hanya peran approver + pembuat ≠ penyetuju), `:259` (resolve cancel approver), alert Loki `loki-rules/efn-online.yml:50-83` | Residual SEC-111 (identitas Odoo ↔ host tidak dipetakan) |
+| SEC-108 | **Fixed** | Wrapper `:11-14` (`!log_input, !log_output`), `:86` (tolak `--reason` di argv), `:113-120,135` (alasan dari stdin → `docker exec -i`), `online-admin.service.ts:33-38` (`scrubReason` HP/email sebelum audit), `promtail-journal.yml:38-53` (identifier `efn-online-cs` hanya `_UID 0` → Loki) | — |
+| SEC-109 | **Fixed** | `json2-client.ts:55,148-150,170-177` (pool `public` vs `saga`, L-20), `:228-246` (slot dilepas tiap percobaan, diambil ulang setelah backoff) | Jumlah kedua pool ≤ `ODOO_RPC_MAXCONN` (L-20) per proses; beberapa replika BFF dibatasi gateway |
+
+## Temuan baru
+
+| ID | Severity | Verdict | Judul | Lokasi | Risiko |
+|---|---|---|---|---|---|
+| SEC-110 | Low | PLAUSIBLE | Guard `stock.move` bergantung pada field yang bisa ditulis staf Inventory (`sale_line_id`, `location_dest_id`/`location_final_id`) | `sale_order.py:73-88`, `efn_online_order.py:97-101` | R-S10 |
+| SEC-111 | Low | CONFIRMED | Pemicu refund Odoo (`odoo-uid:<n>`) tidak dipetakan ke akun host. Orang yang sama yang memegang Sales Manager Odoo **dan** akun `efn-cs-approver` bisa menyetujui pembatalannya sendiri | `online-admin.service.ts:58-65,200`, `order-events.service.ts:66-67` | R-S10, R-O05 |
+| SEC-112 | Low | CONFIRMED | `online-refund-settle` (catat dana dikembalikan manual + pembayaran keluar Odoo) bisa dijalankan peran `cs` sendirian, tanpa approver | wrapper `efn-online-cs:74`, `online-admin.service.ts:224-252` | R-S10, R-O05 |
+
+**Rekap re-review akhir: 0 Critical · 0 High · 0 Medium · 3 Low baru.**
+
+### SEC-110: Low (PLAUSIBLE): Field kunci guard bisa ditulis
+- Guard menilai `move.sale_line_id.order_id.efn_online_order_id` dan usage lokasi tujuan **pada saat validasi**.
+- Staf Inventory (ACL tulis `stock.move`) bisa menulis `sale_line_id=False`, atau mengubah `location_dest_id`/`location_final_id` ke lokasi internal, lewat RPC sebelum validasi. Guard pun lolos dan barang keluar dari stok tanpa kode ambil.
+- Dampak terbatas:
+  - `_efn_handover` kemudian tidak menemukan move pelanggan terbuka, sehingga order masuk `review` (`handover_no_picking`, `efn_online_order.py:739-741`);
+  - pelepasan dana setelahnya butuh approver;
+  - stok selisih terlihat di lokasi internal/opname.
+- Rekomendasi:
+  - tolak `write` atas `sale_line_id`, `location_dest_id`, `location_final_id`, `picking_id`, `picking_type_id` pada move/picking SO online di luar scope internal;
+  - jadikan `review: handover_no_picking` alert critical (indikasi bypass), bukan hanya aktivitas.
+
+### SEC-111: Low: Peta identitas Odoo ↔ host belum ada
+- Pemisahan peran di host efektif untuk refund buatan CS.
+- Untuk refund dari pembatalan Odoo, pemicu adalah user Odoo (`odoo-uid`). `sameActor` tidak pernah mencocokkannya, sehingga kontrolnya bergantung pada governance: Sales Manager Odoo tidak boleh memegang akun `efn-cs-approver`.
+- Rekomendasi:
+  - tambahkan tabel peta `odoo_uid ↔ akun host` yang dikelola Superadmin, lalu tolak persetujuan bila cocok;
+  - atau, minimal, cantumkan larangan itu di runbook + review akses berkala (R-S10).
+
+### SEC-112: Low: Settle manual tanpa empat mata
+- `online-refund-settle` menandai refund `gateway_done` → `settled` dan memposting pembayaran keluar di jurnal titipan Odoo (`_efn_register_payment`) atas dasar `--provider-ref` yang diketik operator. Peran `cs` boleh menjalankannya sendirian.
+- Perintah ini tidak memindahkan dana. Namun ia bisa menyamarkan refund yang tidak pernah dibayar (pelanggan dianggap sudah menerima dana) atau mencatat pembayaran keluar fiktif.
+- Rekomendasi: batasi ke peran approver/Finance, atau wajibkan persetujuan kedua. Rekonsiliasi `provider-ref` dengan mutasi bank oleh Finance.
+
+## Yang sudah benar (re-review akhir)
+- **Penanda `cr.cache` tidak bisa disuntik:** hanya kode server di transaksi yang sama yang mengisinya, dan dibersihkan di `finally` (`efn_online_common.py:130-145`). Scope serah terima per SO hanya aktif di dalam `_efn_handover` setelah kode valid (`efn_online_order.py:742`).
+- **Override `sudo()` dari modul lain tidak membuka bypass:** `sudo` tidak mengubah `env.user`, dan state SO online tidak bisa ditulis langsung di luar scope (`sale_order.py:57-67`).
+- **Wrapper:**
+  - satu orang satu peran;
+  - peran ditimpa wrapper;
+  - alasan lewat stdin (tidak di argv/sudo log);
+  - allowlist flag per subcommand, tolak `--reason` di argv dan karakter kontrol;
+  - `docker exec` tanpa shell.
+  - Tidak ditemukan injeksi argumen/env.
+- **Klaim refund:** token + CAS menutup race klaim basi. Idempotensi provider tetap diwajibkan L-17.
+
+## Rekomendasi merge: **GO** ke `main`
+Alasannya:
+- tidak ada Critical/High/Medium terbuka;
+- online mati secara default di produksi (`ONLINE_ENABLED=false`, `deploy-validate.sh` menolak online prod tanpa provider nyata dan API key kanal).
+
+**Syarat sebelum `ONLINE_ENABLED=true` di produksi (NO-GO aktivasi sampai terpenuhi):**
+1. CI `odoo-test` hijau dengan `sale_stock` + `pos_sale` terpasang, termasuk `efn_online_pos_sale` (memverifikasi signature `_load_pos_data_domain`/`load_sale_order_from_pos` 19.0) dan test guard `stock.move`.
+2. Smoke/UAT QA:
+   - picking SO online tidak bisa divalidasi di luar wizard lewat ubah tipe / pindah move;
+   - POS menolak settle SO online.
+3. Sizing `ODOO_WORKERS ≥ worker POS + ODOO_RPC_MAXCONN` diputuskan (L-17), lalu uji beban stok/quote di staging dengan POS aktif.
+4. Adapter vendor payment memakai `refundId` sebagai idempotency key (L-17, ADR-016).
+5. Governance SEC-111/SEC-112: pemisahan akun Sales Manager Odoo vs `efn-cs-approver` di runbook, dan `settle-manual` dibatasi ke approver/Finance.
+6. SEC-110 (penolakan tulis field kunci move) dijadwalkan; boleh menyusul aktivasi bila alert `handover_no_picking` aktif.
