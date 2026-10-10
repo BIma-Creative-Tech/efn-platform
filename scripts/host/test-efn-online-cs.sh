@@ -69,8 +69,10 @@ expect_ok "05 online-refund --lines sah"
 as_user ap1 "$UIDA" online-refund-approve --refund=$R
 expect_ok "06 online-refund-approve oleh approver sah"
 if grep -qx "EFN_CS_ROLE=approver" /tmp/exec.log && grep -qx "EFN_CS_OPERATOR=ap1" /tmp/exec.log; then ok "07 peran approver diteruskan"; else bad "07 peran approver"; fi
-as_cs1 online-refund-settle --refund=$R --provider-ref=TRF/2026-10/001
-expect_ok "08 online-refund-settle sah"
+as_user ap1 "$UIDA" online-refund-settle --refund=$R --provider-ref=TRF/2026-10/001
+expect_ok "08 online-refund-settle oleh approver sah"
+as_cs1 online-refund-settle --refund=$R --provider-ref=TRF/2026-10/002
+expect_deny "08b online-refund-settle oleh peran cs ditolak (SEC-112)" "online-refund-settle hanya"
 if ! grep -q 'TRF/2026' /tmp/journal.log; then ok "09 provider-ref tidak dicatat journald"; else bad "09 provider-ref"; fi
 as_cs1 online-resolve --part=$P --action=sync
 expect_ok "10 online-resolve sah"
@@ -128,7 +130,7 @@ as_cs1 online-refund --part=$P --lines='1:1;rm';                         expect_
 as_cs1 online-refund --part=$P --full --kind=gratis;                     expect_deny "37 --kind di luar enum ditolak" "kind"
 as_cs1 online-refund --part=$P --full "--kind=$(printf 'a\nb')";         expect_deny "38 karakter kontrol di argv ditolak" "kontrol"
 as_cs1 online-refund --part=$P;                                          expect_deny "39 --full/--lines wajib" "salah satu"
-as_cs1 online-refund-settle --refund=$R --provider-ref='a b';            expect_deny "40 provider-ref berspasi ditolak" "provider-ref"
+as_user ap1 "$UIDA" online-refund-settle --refund=$R --provider-ref='a b';            expect_deny "40 provider-ref berspasi ditolak" "provider-ref"
 as_cs1 online-resolve --part=$P --action=delete;                         expect_deny "41 --action di luar enum ditolak" "action"
 as_cs1 online-resolve --part=$P --action=sync extra;                     expect_deny "42 argumen posisi bebas ditolak" "nama=nilai"
 as_user ap1 "$UIDA" online-refund-approve --refund=$R -e;                expect_deny "43 opsi pendek (-e) ditolak" "nama=nilai"

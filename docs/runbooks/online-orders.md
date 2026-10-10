@@ -137,8 +137,9 @@ ditimpa — lalu meneruskan argumen tervalidasi ke `docker exec -i <api-gateway>
 sudo tercatat di auth log). BFF menyimpan aktor `<user>/<host>` + peran di `platform.online_admin_audit`.
 
 **Peran (SEC-107, pemisahan tugas):**
-- `efn-cs` (operator CS): `online-refund`, `online-refund-settle`, `online-resolve`.
-- `efn-cs-approver` (supervisor CS/Finance): `online-refund-approve` (+ subcommand lain bila perlu). BFF menolak
+- `efn-cs` (operator CS): `online-refund`, `online-resolve --action=sync`.
+- `efn-cs-approver` (supervisor CS/Finance): `online-refund-approve`, `online-refund-settle` (SEC-112: mencatat dana
+  keluar), `online-resolve --action=cancel` (L-20: memicu refund) (+ subcommand lain bila perlu). BFF menolak
   persetujuan oleh pembuat refund yang sama; semua refund buatan CS menunggu persetujuan (L-19c,
   `ONLINE_CS_REFUND_APPROVAL_MIN_IDR`, default 0 = semua).
 - **Satu orang = satu grup.** Akun yang berada di kedua grup ditolak wrapper untuk SEMUA subcommand (journald

@@ -18,7 +18,7 @@
 # tidak pernah dari argv (argv sudo tercatat di auth log):
 #   sudo efn-online-cs online-refund         --part=<uuid> (--full | --lines=<pid>:<qty>,...) [--kind=customer_cs|ops_cancelled] [--restock] [--refund-id=<uuid>]
 #   sudo efn-online-cs online-refund-approve --refund=<uuid>                      (HANYA grup efn-cs-approver)
-#   sudo efn-online-cs online-refund-settle  --refund=<uuid> --provider-ref=<ref>
+#   sudo efn-online-cs online-refund-settle  --refund=<uuid> --provider-ref=<ref>  (HANYA grup efn-cs-approver, SEC-112)
 #   sudo efn-online-cs online-resolve        --part=<uuid> --action=cancel|sync
 #   contoh non-interaktif: printf '%s\n' 'tiket CS-123' | sudo efn-online-cs online-resolve --part=<uuid> --action=sync
 #
@@ -71,7 +71,9 @@ case "$CMD" in
   online-refund)         ALLOWED=(part full lines kind restock refund-id); REQUIRED=(part) ;;
   online-refund-approve) ALLOWED=(refund); REQUIRED=(refund)
                          [[ "$ROLE" == approver ]] || die "online-refund-approve hanya untuk grup $APPROVER_GROUP" ;;
-  online-refund-settle)  ALLOWED=(refund provider-ref); REQUIRED=(refund provider-ref) ;;
+  online-refund-settle)  ALLOWED=(refund provider-ref); REQUIRED=(refund provider-ref)
+                         # SEC-112: settle-manual mencatat dana keluar -> hanya approver (BFF juga menolak pembuat refund)
+                         [[ "$ROLE" == approver ]] || die "online-refund-settle hanya untuk grup $APPROVER_GROUP" ;;
   online-resolve)        ALLOWED=(part action); REQUIRED=(part action) ;;
   *) die "subcommand tidak diizinkan: $(printf '%q' "$CMD" | head -c 40)" ;;
 esac

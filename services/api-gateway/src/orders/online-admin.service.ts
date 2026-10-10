@@ -222,11 +222,25 @@ export class OnlineAdminService {
 
   /** Dana dikembalikan manual oleh Finance (gateway tak mendukung refund) → `gateway_done` → settle Odoo → `settled`. */
   async settleManual(refundId: string, providerRef: string, operator: string | Operator, note: string): Promise<{ status: string }> {
-    const { actor } = toOperator(operator);
+    const { actor, role } = toOperator(operator);
     this.checkActor(actor, note);
     if (!/^[A-Za-z0-9._:/-]{3,128}$/.test(providerRef)) throw new AdminError('--provider-ref tidak valid');
     const rf = await this.repo.getRefund(refundId);
     if (!rf) throw new AdminError('refund tidak ditemukan');
+    // SEC-112: settle manual mencatat dana keluar (+ pembayaran keluar Odoo) → hanya approver, bukan pembuat refund
+    const denied = role !== 'approver' ? 'rejected_role' : sameActor(rf.initiated_by, actor) ? 'rejected_same_actor' : null;
+    if (denied) {
+      const p0 = await this.repo.getPart(rf.part_id);
+      await this.repo.tx(async (r) =>
+        r.audit({ action: 'refund_settle', actor, reason: scrubReason(note), order_id: p0?.order_id ?? null, part_id: rf.part_id, refund_id: rf.id, amount: rf.amount, outcome: denied }),
+      );
+      this.logAudit({ action: 'refund_settle', actor, refund_id: rf.id, outcome: denied });
+      throw new AdminError(
+        denied === 'rejected_role'
+          ? 'settle manual refund hanya untuk peran approver (grup efn-cs-approver)'
+          : 'penyetuju tidak boleh sama dengan pembuat/pemicu refund (empat mata)',
+      );
+    }
     if (!['manual_required', 'failed', 'gateway_pending', 'gateway_done'].includes(rf.status)) throw new AdminError(`status refund ${rf.status} tidak dapat di-settle manual`);
     // SEC-98: refund yang gagal karena melebihi porsi tidak boleh di-settle
     if (rf.failure_reason === 'refund_exceeds_portion') throw new AdminError('refund ditolak karena melebihi porsi; tidak dapat di-settle');

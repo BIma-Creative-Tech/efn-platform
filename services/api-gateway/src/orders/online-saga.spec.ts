@@ -363,7 +363,12 @@ describe('Timeout, bayar terlambat, stok kurang, refund (§10.6.5–10.6.6)', ()
       const rf = [...ctx.repo.state.refunds.values()][0];
       expect(rf.status).toBe('manual_required');
       expect(warn.mock.calls.map((c) => String(c[0])).some((l) => l.startsWith('EFN_ONLINE_ANOMALY') && l.includes('refund_manual_required'))).toBe(true);
-      expect(await ctx.admin.settleManual(rf.id, 'TRF-2026-001', 'finance.ani', 'transfer manual ke rekening pelanggan')).toEqual({ status: 'settled' });
+      // SEC-112: peran cs ditolak (teraudit), approver boleh
+      await expect(ctx.admin.settleManual(rf.id, 'TRF-2026-001', 'finance.ani', 'transfer manual')).rejects.toThrow('peran approver');
+      expect(ctx.repo.state.audits.at(-1)).toMatchObject({ action: 'refund_settle', outcome: 'rejected_role' });
+      expect(ctx.repo.state.refunds.get(rf.id)!.status).toBe('manual_required');
+      ctx.repo.state.audits.length = 0;
+      expect(await ctx.admin.settleManual(rf.id, 'TRF-2026-001', { actor: 'finance.ani', role: 'approver' }, 'transfer manual ke rekening pelanggan')).toEqual({ status: 'settled' });
       expect(ctx.repo.state.refunds.get(rf.id)).toMatchObject({ status: 'settled', provider_refund_ref: 'TRF-2026-001' });
       expect(ctx.repo.state.audits).toEqual([expect.objectContaining({ action: 'refund_settle', actor: 'finance.ani', refund_id: rf.id, outcome: 'settled' })]);
     } finally {
@@ -694,7 +699,7 @@ describe('Review r10 (L-16)', () => {
     const bad = await newRefund(ctx, part.id, intentId, '81111111-1111-4111-8111-111111111111', 5_000);
     ctx.repo.state.refunds.get(bad.id)!.status = 'failed';
     ctx.repo.state.refunds.get(bad.id)!.failure_reason = 'refund_exceeds_portion';
-    await expect(ctx.admin.settleManual(bad.id, 'TRF-1', 'finance_ani/h1', 'manual')).rejects.toThrow('melebihi porsi');
+    await expect(ctx.admin.settleManual(bad.id, 'TRF-1', { actor: 'finance_ani/h1', role: 'approver' }, 'manual')).rejects.toThrow('melebihi porsi');
     await expect(ctx.admin.refund({ partId: part.id, lines: null, full: true, restock: false, reason: 'customer_cs', actor: 'free text actor!', note: 'abc' })).rejects.toThrow('operator');
   });
 
@@ -800,6 +805,19 @@ describe('Re-review G17 (L-19)', () => {
     expect(await a).toBe('pending');
     expect(ctx.repo.state.refunds.get(rf.id)!.status).toBe('settled'); // tidak ditimpa 'failed'
     spy.mockRestore();
+  });
+
+  it('SEC-112: settle manual oleh pembuat refund yang sama ditolak (rejected_same_actor, teraudit); approver lain boleh', async () => {
+    const { ctx, part } = await paid();
+    ctx.payments.refundMode = 'unsupported';
+    const r = await ctx.admin.refund({ partId: part.id, lines: [{ product_id: 11, qty: 1 }], full: false, restock: false, reason: 'customer_cs', actor: 'sari/h1', role: 'approver', note: 'barang cacat' });
+    await ctx.admin.approveRefund(r.refund_id, { actor: 'dodi/h2', role: 'approver' }, 'ok supervisor');
+    await ctx.drain();
+    expect(ctx.repo.state.refunds.get(r.refund_id)!.status).toBe('manual_required');
+    await expect(ctx.admin.settleManual(r.refund_id, 'TRF-9', { actor: 'sari/h3', role: 'approver' }, 'saya transfer')).rejects.toThrow('empat mata');
+    expect(ctx.repo.state.audits.at(-1)).toMatchObject({ action: 'refund_settle', actor: 'sari/h3', outcome: 'rejected_same_actor' });
+    expect(ctx.repo.state.refunds.get(r.refund_id)!.status).toBe('manual_required');
+    expect(await ctx.admin.settleManual(r.refund_id, 'TRF-9', { actor: 'dodi/h2', role: 'approver' }, 'transfer finance')).toEqual({ status: 'settled' });
   });
 
   it('SEC-106: pelepasan klaim pada error transien hanya dengan token; status asal dipertahankan', async () => {
