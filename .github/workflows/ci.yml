@@ -230,7 +230,7 @@ jobs:
         efn_core efn_audit efn_pos_otp_gate efn_kitting
         efn_pos_payment_gateway efn_pos_loyalty_ledger efn_privacy efn_pos_kds
         efn_setup_company efn_setup_pos efn_setup_mrp efn_setup_audit
-        efn_online_order efn_setup_online efn_online_pos_sale
+        efn_online_order efn_setup_online efn_online_pos_sale efn_pos_refund_origin
       # G17 (docs/04 §10.15): efn_online_order menarik sale_stock (CE) lewat depends -> auto-install
       # sale_loyalty/pos_sale ikut terpasang di DB test yang sama, sehingga regresi POS teruji bersama modul online.
       # Di-install SETELAH test, tanpa test: efn_setup_security menaikkan auth_password_policy.minlength ke 12,
@@ -335,11 +335,11 @@ jobs:
           --health-cmd "pg_isready -U odoo"
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
-      EFN_TOUR_MODULES: efn_pos_otp_gate,efn_pos_payment_gateway,efn_pos_loyalty_ledger,efn_pos_kds,efn_online_order
+      EFN_TOUR_MODULES: efn_pos_otp_gate,efn_pos_payment_gateway,efn_pos_loyalty_ledger,efn_pos_kds,efn_online_order,efn_pos_refund_origin
       # Jumlah test tour yang WAJIB berjalan (HttpCase di-skip diam-diam bila Chrome/websocket tidak ada).
       # 5 (OTP gate 3 + gateway 2) + 4 Poin EFN (Gelombang 13b) + 4 KDS efn_pos_kds (Gelombang 14)
       # + 1 KDS cetak cadangan saat tiket gagal (Gelombang 15, SEC-76). Total terhitung runner 20.
-      EFN_TOUR_MIN_TESTS: "20"
+      EFN_TOUR_MIN_TESTS: "22"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
