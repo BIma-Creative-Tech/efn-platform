@@ -19,7 +19,8 @@
 | `app/masuk`, `app/keluar`, `app/akun`, `app/pantau-harga`, `app/pantau-harga/[id]`, `app/privasi` | Halaman |
 | `app/api/auth/challenge`, `components/AltchaWidget.tsx`, `lib/altcha.ts` | Captcha ALTCHA self-hosted (docs/04 §8.1) |
 | `app/akun/privasi`, `app/api/me/consents`, `lib/consent.ts` | Consent lokasi & marketing (docs/04 §8.4) |
-| `app/akun/data-saya`, `app/api/me/{data,reauth,requests,delete/cancel}`, `app/api/me` (DELETE), `lib/dsar.ts` | DSAR: unduh data, hapus akun (re-OTP step-up), batal, riwayat |
+| `app/akun/data-saya`, `app/api/me/{data,reauth,requests,delete/cancel}`, `app/api/me` (DELETE), `lib/dsar.ts` | DSAR: unduh data, hapus akun (re-OTP step-up), batal, riwayat. G18 W-18: `409 open_online_orders` → penjelasan → konfirmasi `confirm_open_orders` (step-up sama) → 202 dengan `erasure_deadline` (maks 14 hari) |
+| `lib/auth-age.ts`, `app/masuk/LoginForm.tsx`, `app/api/auth/otp/verify` | G18 W-19 (Q-P3): checkbox "Saya berusia 17 tahun atau lebih" (tidak tercentang default) → `age_confirmed: true`; tanpa tanggal lahir |
 | `app/akun/penghapusan/[id]`, `app/api/dsar/requests/[id]`, `lib/dsar-receipt.ts` | R6 (docs/04 §8.13): status hapus akun tanpa sesi via cookie HttpOnly `efn_dsar_receipt` (Path `/api/dsar`, SameSite=Strict, ≤ 30 hari) |
 | `app/belanja`, `app/belanja/[id]`, `app/keranjang`, `app/pesanan`, `app/pesanan/[id]`, `components/online/**` | Belanja online Fase 3 (lihat bagian di bawah) |
 | `app/api/catalog/**`, `app/api/cart/**`, `app/api/orders/**`, `lib/{catalog,cart,orders}*.ts` | Route Handler & modul belanja online |
@@ -57,6 +58,12 @@ Catatan: `next.config.mjs` menimpa `Cache-Control` Route Handler, jadi aturan `n
 ## Skrip
 
 `npm test` (Vitest: `tests/*.test.ts`), `npm run lint` (ESLint 9 flat, `eslint.config.mjs`), `npm run typecheck`.
+
+## Teks menunggu persetujuan Legal (G18)
+
+Teks pelanggan berikut adalah **DRAF**. Tidak boleh dianggap final sebelum disetujui Legal/DPO; ubah hanya di satu tempat:
+- Konfirmasi usia: `AGE_CHECKBOX_LABEL`, `AGE_REQUIRED_MESSAGE` (`lib/auth-age.ts`) dan teks bantuan di `app/masuk/LoginForm.tsx`.
+- Hapus akun dengan pesanan online terbuka: `openOrdersExplanation()` (`lib/dsar.ts`), panel "Masih ada pesanan online yang belum selesai" dan catatan batas penghapusan di `app/akun/data-saya/DataSaya.tsx`, label "Paling lambat dihapus" di `app/akun/penghapusan/[id]/DeletionStatus.tsx`.
 
 ## Belum
 

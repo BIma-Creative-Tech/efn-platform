@@ -57,6 +57,8 @@ describe('DELETE /api/me', () => {
       request_id: ID,
       scheduled_at: '2026-10-13T03:00:00.000Z',
       points_forfeited: 120,
+      open_online_orders: 0,
+      erasure_deadline: null,
       status_available: true,
     });
 

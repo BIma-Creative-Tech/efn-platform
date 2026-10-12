@@ -10,14 +10,18 @@ import { useRouter } from 'next/navigation';
 import {
   DELETE_CONFIRM_WORD,
   daysUntil,
+  deletionStatusHref,
   dsarStatusLabel,
   dsarTypeLabel,
   findPendingDeletion,
   formatDateId,
+  openOrdersExplanation,
+  parseOpenOrdersConflict,
   safeDownloadUrl,
   type DeleteAcceptedParsed,
   type DsarRequest,
   type ExportAccepted,
+  type OpenOrdersConflict,
 } from '@/lib/dsar';
 import { formatNumber } from '@/lib/format';
 
@@ -27,6 +31,7 @@ type DeleteStep =
   | { kind: 'idle' }
   | { kind: 'otp'; challengeId: string }
   | { kind: 'confirm' }
+  | { kind: 'open_orders'; conflict: OpenOrdersConflict }
   | { kind: 'done'; result: DeleteAcceptedParsed & { status_available?: boolean } };
 
 async function errorMessage(res: Response, fallback: string): Promise<string> {
@@ -178,7 +183,7 @@ export function DataSaya({
 
   useEffect(() => {
     if (step.kind === 'otp') otpRef.current?.focus();
-    if (step.kind === 'confirm' || step.kind === 'done') confirmHeadingRef.current?.focus();
+    if (step.kind === 'confirm' || step.kind === 'open_orders' || step.kind === 'done') confirmHeadingRef.current?.focus();
   }, [step.kind]);
 
   function resetDelete(message: Msg = null) {
@@ -271,16 +276,40 @@ export function DataSaya({
       setMsg({ kind: 'error', text: `Centang pernyataan dan ketik ${DELETE_CONFIRM_WORD} untuk melanjutkan.` });
       return;
     }
+    await sendDelete(false);
+  }
+
+  /**
+   * Kirim DELETE. `confirmOpenOrders` = pelanggan sudah membaca penjelasan 409 open_online_orders (G18 W-18) dan tetap
+   * ingin menghapus; token step-up yang sama dipakai ulang (cookie HttpOnly; BFF belum menandainya terpakai pada 409).
+   */
+  async function sendDelete(confirmOpenOrders: boolean) {
+    setMsg(null);
     setBusy(true);
     try {
       const res = await fetch('/api/me', {
         method: 'DELETE',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ confirm: DELETE_CONFIRM_WORD, acknowledge_points: true }),
+        body: JSON.stringify({
+          confirm: DELETE_CONFIRM_WORD,
+          acknowledge_points: true,
+          ...(confirmOpenOrders ? { confirm_open_orders: true } : {}),
+        }),
       });
       if (res.status === 202) {
         const result = (await res.json()) as DeleteAcceptedParsed & { status_available?: boolean };
         setStep({ kind: 'done', result });
+        return;
+      }
+      if (res.status === 409) {
+        const body: unknown = await res.json().catch(() => null);
+        const conflict = parseOpenOrdersConflict(body);
+        if (conflict && !confirmOpenOrders) {
+          setStep({ kind: 'open_orders', conflict });
+          return;
+        }
+        const m = (body as { error?: { message?: unknown } } | null)?.error?.message;
+        setMsg({ kind: 'error', text: typeof m === 'string' ? m : 'Permintaan hapus akun belum dapat diproses.' });
         return;
       }
       if (res.status === 403) {
@@ -589,6 +618,37 @@ export function DataSaya({
               </form>
             )}
 
+            {step.kind === 'open_orders' && (
+              <div className="stack">
+                <h3 ref={confirmHeadingRef} tabIndex={-1} style={{ margin: 0 }}>
+                  Masih ada pesanan online yang belum selesai
+                </h3>
+                {/* Teks DRAF — menunggu persetujuan Legal (README). */}
+                <p className="notice" style={{ margin: 0 }}>
+                  {openOrdersExplanation(step.conflict)}
+                </p>
+                <ul style={{ margin: 0 }}>
+                  <li>
+                    Kode ambil untuk pesanan tersebut <strong>tidak akan tampil lagi</strong> di aplikasi setelah akun dihapus.
+                  </li>
+                  <li>
+                    Akun dihapus <strong>paling lambat {step.conflict.max_defer_days} hari</strong> sejak permintaan ini.
+                  </li>
+                </ul>
+                <p style={{ margin: 0 }}>
+                  Ingin menyelesaikan pesanan dulu? Lihat <Link href="/pesanan">Pesanan Saya</Link>, lalu ulangi penghapusan.
+                </p>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <button type="button" className="btn btn-danger" onClick={() => void sendDelete(true)} disabled={busy}>
+                    {busy ? 'Memproses…' : 'Tetap hapus akun saya'}
+                  </button>
+                  <button type="button" className="btn btn-secondary" onClick={() => resetDelete()} disabled={busy}>
+                    Batal
+                  </button>
+                </div>
+              </div>
+            )}
+
             {step.kind === 'done' && (
               <div className="stack" role="status">
                 <h3 ref={confirmHeadingRef} tabIndex={-1} style={{ margin: 0 }}>
@@ -598,6 +658,13 @@ export function DataSaya({
                   Akun dijadwalkan dihapus pada <strong>{formatDateId(step.result.scheduled_at)}</strong>.{' '}
                   {formatNumber(step.result.points_forfeited)} poin hangus. Nomor permintaan: {step.result.request_id}.
                 </p>
+                {step.result.open_online_orders > 0 && (
+                  <p className="notice" style={{ margin: 0 }}>
+                    Ada {step.result.open_online_orders} pesanan online yang belum selesai. Penghapusan menunggu pesanan
+                    diselesaikan layanan pelanggan, paling lambat{' '}
+                    <strong>{formatDateId(step.result.erasure_deadline)}</strong>. Kode ambil tidak lagi tampil di aplikasi.
+                  </p>
+                )}
                 <p style={{ margin: 0 }}>
                   Anda telah keluar. Berubah pikiran? Masuk kembali sebelum tanggal tersebut dan buka{' '}
                   <strong>Akun &rarr; Data Saya</strong> untuk membatalkan.
@@ -610,7 +677,7 @@ export function DataSaya({
                 <p style={{ margin: 0 }}>
                   {step.result.status_available && (
                     <>
-                      <Link href={`/akun/penghapusan/${encodeURIComponent(step.result.request_id)}`} className="btn">
+                      <Link href={deletionStatusHref(step.result.request_id, step.result.erasure_deadline)} className="btn">
                         Lihat status penghapusan
                       </Link>{' '}
                     </>

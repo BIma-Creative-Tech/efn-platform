@@ -321,3 +321,53 @@ Batas file diperluas khusus untuk tugas ini. Tidak ada commit/push.
 - `npm audit --omit=dev --audit-level=high`: **0 vulnerabilities**.
 
 **Masih belum:** uji browser nyata (tampilan header di ponsel, pembaca layar, QR, polling) dan integrasi dengan BFF sungguhan.
+
+## Gelombang 18 — konfirmasi usia 17+ & hapus akun dengan pesanan online terbuka (W-19, W-18) (10–12 Okt 2026)
+
+Dasar: kontrak BFF di `docs/agent-reports/efn-bff-engineer.md` bagian "Gelombang 18" (Q-P3, Q-P18). Branch `chore/wave-18`; tidak ada commit/push.
+
+### W-19 (Q-P3) — usia minimum 17 saat login/daftar
+- `lib/auth-age.ts` (baru, murni): `MIN_AGE = 17` (hanya untuk teks; aturan di BFF `MEMBER_MIN_AGE`), label, pesan, dan `isAgeConfirmed` (hanya boolean `true` persis).
+- `app/masuk/LoginForm.tsx`: checkbox **"Saya berusia 17 tahun atau lebih"** di langkah kode OTP, **tidak tercentang default**, `aria-required`, teks bantuan (tanpa tanggal lahir). Kirim tanpa centang → pesan + fokus ke checkbox. Respons `400 age_confirmation_required` → pesan Indonesia; challenge tidak hangus, jadi pengguna cukup mencentang lalu mengirim kode yang sama lagi. Diminta di setiap login (login = daftar).
+- `app/api/auth/otp/verify/route.ts`: `age_confirmed` bukan `true` → `400 age_confirmation_required` **tanpa memanggil BFF**. Bila dicentang, diteruskan sebagai `age_confirmed: true`. BFF `400 age_confirmation_required` dipetakan ke error yang sama (sebelumnya semua 400 dianggap "kode tidak cocok").
+
+### W-18 (Q-P18) — hapus akun saat ada pesanan online terbuka
+- `lib/dsar.ts`:
+  - `parseDeleteAccepted` + `open_online_orders`, `erasure_deadline` (ISO tervalidasi; null bila tidak ada pesanan terbuka).
+  - `parseOpenOrdersConflict` (allowlist `open_parts`, `max_defer_days` dibatasi 1..14).
+  - `openOrdersExplanation` (draf teks).
+  - `isoDateOrNull`, `deletionStatusHref`.
+- `app/api/me/route.ts` (DELETE):
+  - Body opsional `confirm_open_orders: true` (boolean persis) → BFF `DELETE /v1/me?confirm_open_orders=true`. Path dibangun di route; token step-up dari cookie yang sama.
+  - `409 open_online_orders` → `{ error: { code, message (teks frontend), open_parts, max_defer_days } }`. Pesan BFF tidak diteruskan. Cookie step-up **tidak** dihapus (BFF belum menandai jti terpakai pada pra-cek 409), cookie sesi tetap.
+  - 202 kini membawa `open_online_orders` + `erasure_deadline`.
+- `app/akun/data-saya/DataSaya.tsx`:
+  - Langkah baru `open_orders`: judul fokus, penjelasan bahwa ada pesanan belum selesai, **kode ambil tidak lagi tampil di aplikasi**, dan **penghapusan paling lambat N (≤ 14) hari**. Ada tautan ke `/pesanan`, tombol **"Tetap hapus akun saya"** (`sendDelete(true)`, token step-up yang sama), dan tombol Batal.
+  - Panel selesai menampilkan jumlah pesanan terbuka + batas paling lambat.
+- Halaman status `app/akun/penghapusan/[id]`: baris "Paling lambat dihapus (ada pesanan online belum selesai)" dari query `?batas=<ISO>`. Tautannya dibuat dari respons 202; nilainya divalidasi ulang dan hanya untuk tampilan.
+- README: bagian **"Teks menunggu persetujuan Legal (G18)"** mendaftar semua teks draf (usia & hapus akun).
+
+### Asumsi / permintaan ke pihak lain
+- **BFF:** `GET /v1/dsar/requests/:id` belum memuat `erasure_deadline`/`open_online_orders`, sehingga halaman status memakai query `?batas=` dari respons 202. Bila tautan dibuka tanpa query (mis. dari riwayat), baris batas tidak tampil. Usul: tambahkan kedua field ke respons status agar sumbernya server.
+- Teks pelanggan = **draf, menunggu Legal/DPO**.
+
+### Test
+- Baru `tests/g18-privacy.test.ts` (14 test):
+  - usia: lib, route tanpa centang/bukan boolean → 400 tanpa BFF, dicentang → diteruskan, BFF 400 age → pesan, OTP salah tetap seperti dulu;
+  - W-18: parser 409 + plafon 14, teks memuat kode ambil & batas hari, parse 202, validasi ISO/tautan;
+  - DELETE: 409 → penjelasan + step-up tidak dihapus, konfirmasi → `?confirm_open_orders=true` + header step-up sama + 202 dengan deadline, nilai non-boolean tidak memicu query, 409 lain diteruskan.
+- `tests/dsar.test.ts` & `tests/dsar-routes.test.ts` disesuaikan dengan 2 field baru di 202.
+
+### Validasi (container `node:22.23-alpine@sha256:0a7108bf…`, 12 Okt 2026)
+- `npm ci`: OK.
+- `npm run lint`: 0 error (10 warning lama `no-location-assign-relative-destination`).
+- `tsc --noEmit`: OK.
+- `npm test`: **286 passed**, 14 file (272 + 14 baru).
+- `npm run build`: OK (`server.js` standalone ada).
+- `npm audit --omit=dev --audit-level=high`: **0 vulnerabilities**.
+
+Validasi sempat tertunda karena Docker Desktop mati setelah sesi terputus; Docker dijalankan ulang lalu seluruh rangkaian diulang dari `npm ci`.
+
+### Belum diverifikasi
+- Uji browser nyata: checkbox usia (keyboard, pembaca layar) dan alur 409 → konfirmasi → 202 terhadap BFF G18 sungguhan (perlu migrasi `08-platform-g18-privacy.sql` di stack dev).
+- Teks pelanggan masih draf, menunggu Legal.

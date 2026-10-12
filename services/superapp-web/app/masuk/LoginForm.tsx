@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { AltchaWidget } from '@/components/AltchaWidget';
+import { AGE_CHECKBOX_LABEL, AGE_REQUIRED_MESSAGE, MIN_AGE } from '@/lib/auth-age';
 import { normalizeIndonesianPhone } from '@/lib/phone';
 import { safeNextPath } from '@/lib/safe-next';
 
@@ -30,6 +31,9 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
   const [altchaPayload, setAltchaPayload] = useState<string | null>(null);
   const [altchaKey, setAltchaKey] = useState(0);
   const otpRef = useRef<HTMLInputElement>(null);
+  // G18 (Q-P3): konfirmasi usia, TIDAK tercentang secara default, diminta di setiap login (login = daftar).
+  const [ageConfirmed, setAgeConfirmed] = useState(false);
+  const ageRef = useRef<HTMLInputElement>(null);
   const onAltchaPayload = useCallback((p: string | null) => setAltchaPayload(p), []);
 
   /** Challenge sudah terpakai (atau ditolak) -> minta challenge baru. */
@@ -104,12 +108,17 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
       setError('Masukkan 6 digit kode.');
       return;
     }
+    if (!ageConfirmed) {
+      setError(AGE_REQUIRED_MESSAGE);
+      ageRef.current?.focus();
+      return;
+    }
     setBusy(true);
     try {
       const res = await fetch('/api/auth/otp/verify', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ challenge_id: challengeId, code }),
+        body: JSON.stringify({ challenge_id: challengeId, code, age_confirmed: ageConfirmed }),
       });
       if (res.ok) {
         // Lapis kedua SEC-13: validasi ulang di client walau server sudah menyaring.
@@ -118,8 +127,16 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
         return;
       }
       if (res.status === 400) {
-        const data = (await res.json().catch(() => ({}))) as { reason?: string; attempts_left?: number };
-        if (data.reason === 'expired') setError('Kode sudah kedaluwarsa. Silakan minta kode baru.');
+        const data = (await res.json().catch(() => ({}))) as {
+          reason?: string;
+          attempts_left?: number;
+          error?: { code?: string };
+        };
+        // Challenge tidak hangus: cukup centang lalu kirim lagi dengan kode yang sama.
+        if (data.error?.code === 'age_confirmation_required') {
+          setError(AGE_REQUIRED_MESSAGE);
+          ageRef.current?.focus();
+        } else if (data.reason === 'expired') setError('Kode sudah kedaluwarsa. Silakan minta kode baru.');
         else if (data.reason === 'locked') setError('Terlalu banyak percobaan. Silakan minta kode baru.');
         else
           setError(
@@ -198,6 +215,24 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
               required
             />
           </div>
+          <div className="checkbox">
+            <input
+              ref={ageRef}
+              id="age-confirmed"
+              name="age_confirmed"
+              type="checkbox"
+              checked={ageConfirmed}
+              onChange={(e) => setAgeConfirmed(e.target.checked)}
+              required
+              aria-required="true"
+              aria-describedby="age-hint"
+            />
+            <label htmlFor="age-confirmed">{AGE_CHECKBOX_LABEL}</label>
+          </div>
+          <span id="age-hint" className="hint" style={{ marginTop: '0.25rem' }}>
+            Wajib untuk masuk atau mendaftar. Layanan ini hanya untuk pengguna berusia {MIN_AGE} tahun ke atas; kami tidak
+            meminta tanggal lahir.
+          </span>
           <button type="submit" className="btn" disabled={busy}>
             {busy ? 'Memeriksa…' : 'Masuk'}
           </button>

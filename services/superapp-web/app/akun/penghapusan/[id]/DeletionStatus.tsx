@@ -31,10 +31,13 @@ export function DeletionStatus({
   id,
   sessionCanCancel,
   signedIn,
+  deferredUntil = null,
 }: {
   id: string;
   sessionCanCancel: boolean;
   signedIn: boolean;
+  /** G18 W-18: batas paling lambat erasure karena ada pesanan online terbuka (dari respons 202; hanya tampilan). */
+  deferredUntil?: string | null;
 }) {
   const [load, setLoad] = useState<Load>({ kind: 'loading' });
   const [busy, setBusy] = useState(false);
@@ -130,6 +133,12 @@ export function DeletionStatus({
             <dd style={{ marginLeft: 0 }}>{formatDateId(load.view.requested_at)}</dd>
             <dt className="muted small">Jadwal penghapusan</dt>
             <dd style={{ marginLeft: 0 }}>{formatDateId(load.view.scheduled_at)}</dd>
+            {deferredUntil && !load.view.completed_at && (
+              <>
+                <dt className="muted small">Paling lambat dihapus (ada pesanan online belum selesai)</dt>
+                <dd style={{ marginLeft: 0 }}>{formatDateId(deferredUntil)}</dd>
+              </>
+            )}
             {load.view.completed_at && (
               <>
                 <dt className="muted small">Selesai</dt>

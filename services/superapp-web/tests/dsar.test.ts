@@ -79,7 +79,13 @@ describe('parseDeleteAccepted / parseExportAccepted', () => {
   it('202 hapus akun', () => {
     expect(
       parseDeleteAccepted({ request_id: 'r1', scheduled_at: '2026-10-13T00:00:00Z', points_forfeited: 1200 }),
-    ).toEqual({ request_id: 'r1', scheduled_at: '2026-10-13T00:00:00Z', points_forfeited: 1200 });
+    ).toEqual({
+      request_id: 'r1',
+      scheduled_at: '2026-10-13T00:00:00Z',
+      points_forfeited: 1200,
+      open_online_orders: 0,
+      erasure_deadline: null,
+    });
   });
   it('poin tidak valid -> 0; tanpa request_id -> null', () => {
     expect(parseDeleteAccepted({ request_id: 'r1', points_forfeited: 'banyak' })?.points_forfeited).toBe(0);
