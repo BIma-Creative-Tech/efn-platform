@@ -1,7 +1,7 @@
 {
     "name": "EFN Setup - Point of Sale (Retail & Restoran)",
     "summary": "Bundel modul POS CE 19 untuk retail & F&B; demo stasiun dapur, printer dapur, denah meja.",
-    "version": "19.0.1.7.0",
+    "version": "19.0.1.8.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",
@@ -23,6 +23,8 @@
         "efn_pos_kds",
         # G18: W-25 grup kasir boleh membuat pelanggan -> kunci HP member (SEC-07/SEC-44) WAJIB ikut terpasang.
         "efn_pos_otp_gate",
+        # G18 W-01/E-30: field penanda metode Poin EFN (pos.payment.method.efn_is_loyalty_points).
+        "efn_pos_loyalty_ledger",
     ],
     # Gelombang 13 (Fase 1 pilot retail): nomenklatur barcode IDR (Q-25), pecahan Rupiah,
     # default SOP kas/void (R-O05, R-O06, Q-27), batas muat produk offline (Q-7).
@@ -46,6 +48,9 @@
         "data/pos_cashier_groups.xml",
         # G18 L-23 (Q-F18-7): harga member = promo pos_loyalty ber-OTP (template nonaktif), bukan pricelist POS.
         "data/pos_member_price_data.xml",
+        # G18 W-01/E-30: metode bayar "Poin EFN" per PT (jurnal bank + akun poin PLACEHOLDER Q-F18-3) + tautan ke POS.
+        "data/pos_loyalty_points_payment.xml",
+        "data/pos_loyalty_points_link.xml",
     ],
     "demo": [
         "demo/pos_demo.xml",

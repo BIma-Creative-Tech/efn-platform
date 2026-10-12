@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G18 W-01 / E-30: setiap install/upgrade (noupdate=0) tautkan metode Poin EFN PT ke POS redeem-aktif yang belum
+     punya (models/pos_config_points.py; POS bersesi terbuka dilewati + log). Hanya menambah, tidak menghapus. -->
+<odoo>
+    <function model="pos.config" name="_efn_setup_link_points_methods_all"/>
+</odoo>

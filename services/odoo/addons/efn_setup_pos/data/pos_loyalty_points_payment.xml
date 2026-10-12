@@ -1,16 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- DRAF (BELUM dimuat: tidak terdaftar di __manifest__.py, ekstensi .draft). G18 W-01 / E-30 — docs/08 §9.2.
-     Diaktifkan efn-odoo-functional SETELAH efn-odoo-engineer menyelesaikan E-30 (field penanda metode bayar Poin EFN
-     di pos.payment.method) dan lead memberi tahu nama field final. Langkah aktivasi:
-       1. ganti nama file -> data/pos_loyalty_points_payment.xml, daftarkan di "data" manifest SETELAH
-          pos_payment_method_data.xml; efn_setup_pos depends + "efn_pos_loyalty_ledger" (pemilik field);
-       2. ganti penanda __E30_FLAG_FIELD__ dengan nama field final dari E-30 (draf memakai usulan
-          efn_is_loyalty_points, BELUM ada di kode);
-       3. kode akun final dari Finance (Q-F18-3) -> sekarang PLACEHOLDER 2199xxxx (cek bentrok CoA l10n_id);
-       4. test: metode per PT ada, jurnal bank, outstanding = akun liabilitas, bukan tunai, tanpa terminal,
-          tidak ditautkan ke pos.config kiosk; tour E-30 lulus.
-     JANGAN dimuat sebelum field E-30 ada: metode bank tanpa penanda = alat bayar bebas yang bisa dipilih kasir
-     tanpa reservasi poin (R-B06).
+<!-- G18 W-01 / E-30 (docs/08 §9.2; kontrak docs/04 §9.9 K-18-1): metode bayar "Poin EFN" per PT POS (Retail, F&amp;B).
+     Penanda pos.payment.method.efn_is_loyalty_points milik efn_pos_loyalty_ledger (E-30, depends modul ini): server
+     hanya menerima pembayaran poin dari metode ini lewat tombol "Tukar Poin EFN" (OTP + reservasi BFF); kasir tidak
+     bisa memilihnya manual. Penautan ke pos.config.payment_method_ids: models/pos_config_points.py (POS redeem-aktif,
+     saat create/write dan setiap install/upgrade) + README checklist.
+     Akun = PLACEHOLDER (kode 21990091, nama "Liabilitas / Kliring Poin EFN") sampai Finance memutuskan (Q-F18-3);
+     noupdate: akun/kode/nama yang diubah Finance tidak ditimpa saat upgrade.
 
      Desain (PoC 10 Okt, DB uji): jurnal bank "Poin EFN" + payment_method_type 'none' + outstanding_account_id = akun
      liabilitas -> tutup sesi: Dr Liabilitas Poin / Cr Piutang PoS; penjualan & PPN atas harga penuh (P-8 #11).
@@ -41,7 +36,7 @@
         <field name="payment_method_type">none</field>
         <field name="split_transactions" eval="False"/>
         <field name="outstanding_account_id" ref="account_points_liability_rtl"/>
-        <field name="__E30_FLAG_FIELD__" eval="True"/>
+        <field name="efn_is_loyalty_points" eval="True"/>
     </record>
 
     <!-- ===== PT F&B ===== -->
@@ -65,7 +60,7 @@
         <field name="payment_method_type">none</field>
         <field name="split_transactions" eval="False"/>
         <field name="outstanding_account_id" ref="account_points_liability_fnb"/>
-        <field name="__E30_FLAG_FIELD__" eval="True"/>
+        <field name="efn_is_loyalty_points" eval="True"/>
     </record>
     <!-- Holding & Farming tidak punya POS -> tidak dibuat. -->
 </odoo>

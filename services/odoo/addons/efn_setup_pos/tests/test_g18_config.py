@@ -118,3 +118,52 @@ class TestEfnMemberPriceOtp(TransactionCase):
         configs = self.env["pos.config"].search([])
         offered = configs.available_pricelist_ids.filtered(lambda p: "member" in (p.name or "").lower())
         self.assertFalse(offered, offered.mapped("name"))
+
+
+@tagged("post_install", "-at_install", "efn")
+class TestEfnPointsPaymentMethodData(TransactionCase):
+    """G18 W-01/E-30: metode bayar "Poin EFN" per PT + penautan ke POS redeem-aktif (data efn_setup_pos)."""
+
+    def _method(self, suffix):
+        return self.env.ref(f"efn_setup_pos.pos_payment_method_points_{suffix}")
+
+    def _new_config(self, company, **vals):
+        return self.env["pos.config"].with_company(company).create({"name": "POS Uji Poin", **vals})
+
+    def test_points_method_per_pt(self):
+        for suffix, company_xmlid in (("rtl", "company_rtl"), ("fnb", "company_fnb")):
+            with self.subTest(pt=suffix):
+                method = self._method(suffix)
+                self.assertEqual(method.company_id, self.env.ref(f"efn_setup_company.{company_xmlid}"))
+                self.assertTrue(method.efn_is_loyalty_points)
+                self.assertTrue(method.active)
+                self.assertEqual(method.payment_method_type, "none")
+                self.assertFalse(method.split_transactions)
+                self.assertFalse(method.is_cash_count)
+                self.assertFalse(method.use_payment_terminal)
+                self.assertEqual(method.journal_id.type, "bank")
+                self.assertEqual(method.journal_id.company_id, method.company_id)
+                self.assertFalse(method.journal_id.bank_account_id)
+                self.assertEqual(method.outstanding_account_id.account_type, "liability_current")
+
+    def test_redeem_enabled_config_gets_points_method(self):
+        company = self.env.ref("efn_setup_company.company_rtl")
+        config = self._new_config(company, efn_loyalty_redeem_enabled=True)
+        self.assertIn(self._method("rtl"), config.payment_method_ids)
+        self.assertEqual(config._efn_loyalty_points_method_record(), self._method("rtl"))
+
+    def test_points_method_linked_when_redeem_enabled_later(self):
+        company = self.env.ref("efn_setup_company.company_fnb")
+        config = self._new_config(company)
+        self.assertNotIn(self._method("fnb"), config.payment_method_ids)
+        config.efn_loyalty_redeem_enabled = True
+        self.assertIn(self._method("fnb"), config.payment_method_ids)
+        self.assertNotIn(self._method("rtl"), config.payment_method_ids)
+
+    def test_upgrade_function_relinks_missing_method(self):
+        company = self.env.ref("efn_setup_company.company_rtl")
+        config = self._new_config(company, efn_loyalty_redeem_enabled=True)
+        config.payment_method_ids = [Command.unlink(self._method("rtl").id)]
+        self.assertFalse(config._efn_loyalty_points_method_record())
+        self.env["pos.config"]._efn_setup_link_points_methods_all()
+        self.assertIn(self._method("rtl"), config.payment_method_ids)

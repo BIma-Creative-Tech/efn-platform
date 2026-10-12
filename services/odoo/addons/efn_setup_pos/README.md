@@ -22,7 +22,7 @@ Modul konfigurasi untuk POS **retail (PT Retail)** dan **restoran (PT F&B)** di 
 | `pos_bill_idr_data.xml` (G13) | Pecahan Rupiah (Rp100..Rp100.000) untuk hitung kas buka/tutup; 13 pecahan USD bawaan dihapus (`forcecreate="0"` → tidak muncul lagi saat upgrade) | `pos_bill.py`, `point_of_sale_data.xml` |
 | `pos_kds_defaults.xml` (G18, W-22) | `ir.default` stasiun KDS baru: `warn_minutes = 5`, `late_minutes = 10` (keputusan pemilik proyek #14, P-13); retensi tiket 90 h tetap parameter `efn.kds.retention_days` milik `efn_pos_kds`; **tanpa stasiun expo** | `efn_pos_kds/models/efn_kds_station.py` |
 | `pos_member_price_data.xml` (G18, L-23) | **Harga member = promo `pos_loyalty` ber-OTP** (`efn_requires_otp`), bukan pricelist pilihan kasir: template *Harga Member 5% - wajib OTP (PLACEHOLDER)* PT Retail, `promotion` otomatis, diskon 5 % order, **nonaktif** (`active=False`, `pos_ok=False`) sampai admin menautkan POS kasir (constraint `efn_pos_otp_gate`). Pricelist demo *Harga Member* diarsipkan | `loyalty`, `efn_pos_otp_gate/models/loyalty_program.py` |
-| `drafts/pos_loyalty_points_payment.xml.draft` (G18, W-01) | **Draf, tidak dimuat**: metode bayar "Poin EFN" per PT (jurnal bank PEFN, akun liabilitas/kliring PLACEHOLDER Q-F18-3). Diaktifkan setelah E-30 menyediakan field penanda (lihat komentar file) | `pos_payment_method.py` |
+| `pos_loyalty_points_payment.xml` + `pos_loyalty_points_link.xml` (G18, W-01/E-30, 19.0.1.8.0) | Metode bayar **"Poin EFN"** per PT Retail & F&B: jurnal bank *Poin EFN* (PEFN, tanpa rekening), akun `liability_current` *Liabilitas / Kliring Poin EFN* 21990091 (**PLACEHOLDER Q-F18-3**) sebagai `outstanding_account_id`, `efn_is_loyalty_points=True`, `payment_method_type=none`, tanpa split (noupdate). Penautan ke `payment_method_ids` POS yang `efn_loyalty_redeem_enabled`: otomatis saat POS dibuat/diubah dan setiap install/upgrade (`models/pos_config_points.py`; POS bersesi terbuka dilewati + log; hanya menambah). Default CE `_default_payment_methods` (semua metode non-tunai company ke POS baru) dikecualikan untuk Poin EFN, sehingga POS tanpa redeem/kiosk tidak mendapatkannya. Tanpa metode di POS, redeem ditolak server | `efn_pos_loyalty_ledger/models/pos_payment_method.py`, `pos_session.py` |
 | `pos_cashier_groups.xml` (G18, W-25) | Grup **"Kasir: boleh membuat pelanggan"** (`group_efn_cashier_contact_creation`) = POS User + *Contact Creation*. Diberikan hanya ke akun kasir yang ditunjuk (bukan akun perangkat KDS / user teknis online). HP partner member tetap terkunci (`efn_pos_otp_gate`, SEC-07/SEC-44; karenanya modul ini `depends` `efn_pos_otp_gate`) | `base/security/ir.model.access.csv` (`res.partner` create/write = `base.group_partner_manager`) |
 
 **Catatan upgrade:** semua blok `noupdate` (termasuk `<function>` dan penetapan nomenklatur PT Retail) hanya dijalankan saat **install**. DB yang sudah memasang `efn_setup_pos` 19.0.1.1.0: filter audit baru ikut dibuat saat `-u`, tetapi default/nomenklatur/pecahan harus diterapkan manual (Settings POS) atau DB pilot di-install bersih.
@@ -118,7 +118,7 @@ Batasi per outlet dengan `pos_config_ids`; **jangan** `program_type = 'loyalty'`
 | `iface_tax_included` | `total` | harga rak termasuk PPN (Q-9) |
 | `pricelist_id`, `available_pricelist_ids` | **umum saja** — pricelist member TIDAK dimasukkan (L-23, R-B06: tombol Pricelist bisa dipakai kasir siapa pun) | harga member = promo OTP (baris berikut) |
 | Harga member (L-23) | aktifkan template *Harga Member 5% - wajib OTP* (`loyalty_program_member_price_rtl`): Active, Point of Sale, `pos_config_ids` = POS kasir (bukan kiosk), nilai dari Marketing/Finance | `efn_pos_otp_gate`; offline otomatis mati |
-| `payment_method_ids` | Tunai (otomatis), EDC manual, QRIS (EFN Gateway) | QRIS mati saat offline |
+| `payment_method_ids` | Tunai (otomatis), EDC manual, QRIS (EFN Gateway), **Poin EFN** (otomatis bila redeem aktif; jangan dihapus manual) | QRIS & Poin EFN mati saat offline |
 | `iface_electronic_scale` | sesuai Q-25/Q-56 | |
 | `limit_categories` / `iface_available_categ_ids` | opsional | |
 | `iface_print_auto`, `iface_cashdrawer`, `epson_printer_ip` | sesuai perangkat (Q-56) | |
@@ -169,7 +169,7 @@ Batasi per outlet dengan `pos_config_ids`; **jangan** `program_type = 'loyalty'`
 | 14 | Modifier | atribut `no_variant` untuk instruksi; add-on berbahan = produk/combo | Q-21 |
 | 15 | Menu paket | combo pilihan = `type='combo'`; menu tetap dari paket CK = Kit BoM (`efn_kitting`) | Q-21, ADR-018 |
 | 16 | `res.company.point_of_sale_update_stock_quantities` | `real` (default) agar stok paket CK turun per transaksi | Q-35 |
-| 17 | `payment_method_ids` | Tunai, EDC manual, QRIS (EFN Gateway) | Q-23, Q-29 |
+| 17 | `payment_method_ids` | Tunai, EDC manual, QRIS (EFN Gateway), Poin EFN (otomatis bila redeem aktif) | Q-23, Q-29 |
 | 18 | `module_pos_hr` + peran | kasir **minimal/basic**, supervisor **manager** (lihat SOP retail) | Q-27 |
 | 19 | `order_edit_tracking` | True (default G13) — void baris setelah kirim ke dapur tercatat | Q-27 |
 | 20 | Self-order | `self_ordering_mode = 'nothing'` (**dikunci teknis** SEC-75: ir.default + constraint, `mobile`/`consultation` ditolak) sampai Q-23/ADR QR order diputuskan; kiosk hanya di jaringan POS (WireGuard), `pay_after = 'meal'` | Q-23, ADR-023 |

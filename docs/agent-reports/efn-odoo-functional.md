@@ -369,3 +369,21 @@ Usulan kontrak §9 v6: K-18-1..K-18-7, ditambah K-18-8 (`age_confirmed` untuk PO
   - **Working tree penuh:** suite 440 test → 2 failed + 2 error, tour 3 failed dari 20. Semua kegagalan ada di kode E-30 yang sedang dikerjakan engineer: `test_rpc_surface` (metode publik baru belum di-allowlist), 3 test `test_loyalty_ledger`, 3 tour Poin EFN (tombol `.efn-redeem-points` sudah tidak ada). **Tidak ada yang terkait `efn_setup_*`.**
   - **Isolasi** (HEAD untuk semua modul + `efn_setup_company`/`efn_setup_pos`/`efn_setup_online` dari working tree): suite **0 failed / 0 error dari 433 test**, `efn_setup_security` install-after exit 0, tour **0 failed / 0 error dari 20 test**, ruff bersih.
   - Container, network, DB uji, dan salinan addons isolasi sudah dihapus.
+
+### Gelombang 18 lanjutan 2 — 2026-10-12 (data Poin EFN final setelah E-30 `fe56a07`)
+- `efn_setup_pos` 19.0.1.8.0, depends baru `efn_pos_loyalty_ledger`:
+  - `data/pos_loyalty_points_payment.xml` (noupdate), per PT Retail & PT F&B: jurnal bank *Poin EFN* (PEFN, tanpa rekening), akun `liability_current` 21990091 *Liabilitas / Kliring Poin EFN* (PLACEHOLDER Q-F18-3) sebagai `outstanding_account_id`, dan metode "Poin EFN" (`efn_is_loyalty_points=True`, `payment_method_type='none'`, tanpa split).
+  - Penautan ke POS yang redeem-nya aktif (pos.config tidak dibuat lewat XML) ada di `models/pos_config_points.py`:
+    - otomatis saat POS dibuat atau diubah dengan `efn_loyalty_redeem_enabled`;
+    - `data/pos_loyalty_points_link.xml` (noupdate=0) menautkan ulang setiap install/upgrade;
+    - POS dengan sesi terbuka dilewati (dicatat di log); hanya menambah, tidak pernah menghapus.
+  - Override `_default_payment_methods`: default CE memasang semua metode non-tunai company ke POS baru (ditemukan dari test yang gagal), sehingga Poin EFN dikecualikan dan POS tanpa redeem/kiosk tidak mendapatkannya.
+  - Draf `.xml.draft` dihapus. README (tabel data + checklist) dan `docs/08 §9.6` diperbarui.
+  - Test `TestEfnPointsPaymentMethodData` (4): metode per PT, ditautkan saat dibuat, ditautkan saat redeem diaktifkan belakangan (bukan sebelumnya, dan bukan metode PT lain), fungsi upgrade menautkan ulang.
+- **Hasil uji** (working tree, DB baru, PostgreSQL 16.15 terpisah):
+  - suite efn penuh 16 modul (termasuk `efn_pos_refund_origin`): **0 failed / 0 error dari 456 test**;
+  - `efn_setup_security` install-after: exit 0;
+  - tour 6 modul CI: **0 failed / 0 error dari 22 test**. Tour dijalankan sebelum override `_default_payment_methods`; DB tour tidak memasang `efn_setup_pos`, jadi tidak terdampak;
+  - ruff bersih (182 file).
+- Container, network, dan DB uji sudah dihapus.
+- Catatan: rename draf sempat ter-stage oleh `git mv`; index sudah dikembalikan (`git restore --staged`), sehingga perubahan hanya ada di working tree. Working tree juga berisi `efn_pos_loyalty_ledger/static/tests/tours/efn_loyalty_tour.js` yang diubah agent lain (bukan saya).
