@@ -1,4 +1,4 @@
-"""Test Poin EFN POS (E-22/E-23) dengan BFF di-mock (tanpa HTTP sungguhan).
+"""Test Poin EFN POS (E-22/E-23; G18 E-30 redeem = metode bayar) dengan BFF di-mock (tanpa HTTP sungguhan).
 
 Memakai TestPoSCommon (sesi POS nyata + sync_from_ui) agar hook `_process_saved_order` teruji
 sama seperti sync dari frontend. Nomor HP fiktif khusus test.
@@ -13,8 +13,8 @@ from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tests import new_test_user, tagged
 
 from odoo.addons.efn_core.models.efn_bff_client import BffResponse, EfnBffError
-from odoo.addons.efn_pos_loyalty_ledger import hooks
 from odoo.addons.efn_pos_loyalty_ledger.models import pos_config as loyalty_pos_config
+from odoo.addons.efn_pos_loyalty_ledger.tests.test_loyalty_tour import create_points_method
 from odoo.addons.point_of_sale.tests.common import TestPoSCommon
 
 REQUEST = "/v1/pos/otp/request"
@@ -61,7 +61,9 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
             "Produk Pajak Uji", cls.categ_basic, 10000.0, tax_ids=cls.taxes["tax7"].ids
         )
         cls.product_excluded = cls.create_product("Produk Tanpa Poin", cls.categ_excluded_child, 20000.0)
-        cls.points_product = cls.env.ref("efn_pos_loyalty_ledger.product_efn_points")
+        cls.points_pm = create_points_method(cls.env, company)
+        cls.config.write({"payment_method_ids": [Command.link(cls.points_pm.id)]})
+        cls.legacy_points_product = cls.env.ref("efn_pos_loyalty_ledger.product_efn_points")
         cls.promo = cls.env["loyalty.program"].create(
             {
                 "name": "Promo Bebas Uji Poin",
@@ -125,37 +127,31 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         return [payload for p, payload in self.calls if p == path]
 
     # --------------------------------------------------------------- helpers
-    def _points_line(self, value, taxes=None):
-        """Baris Poin EFN seperti dikirim frontend (total incl = -value)."""
-        taxes = taxes or self.env["account.tax"]
-        price_unit = -value
-        if taxes:
-            rate = sum(taxes.mapped("amount")) / 100.0
-            price_unit = -value / (1 + rate)
-        res = (
-            taxes.compute_all(price_unit, self.currency, 1)
-            if taxes
-            else {"total_excluded": price_unit, "total_included": price_unit}
-        )
-        return {
-            "product": self.points_product,
-            "quantity": 1,
-            "price_unit": price_unit,
-            "price_subtotal": res["total_excluded"],
-            "price_subtotal_incl": res["total_included"],
-            "tax_ids": [(6, 0, taxes.ids)],
-            "price_type": "automatic",
-        }
+    def _total(self, lines):
+        """Total incl. pajak seperti dihitung TestPoSCommon.create_ui_order_data (untuk menyusun pembayaran)."""
+        data = self.create_ui_order_data(lines, customer=self.member_a)
+        return sum(line[2]["price_subtotal_incl"] for line in data["lines"])
 
-    def _order_data(self, lines, uuid=None, customer=None, draft=False, extra=None):
+    def _order_data(self, lines, uuid=None, customer=None, draft=False, extra=None, points=0, payments=None):
+        """Order UI. `points` > 0 -> pembayaran Poin EFN senilai `points` + sisa tunai (redeem); `points` < 0
+        -> refund dengan pengembalian Poin EFN |points| + sisa tunai."""
         kwargs = {"uuid": uuid, "customer": customer if customer is not None else self.member_a}
         if draft:
             kwargs["payments"] = []
+        elif payments is not None:
+            kwargs["payments"] = payments
+        elif points:
+            total = self._total(lines)
+            kwargs["payments"] = [(self.points_pm, points), (self.cash_pm1, total - points)]
         if extra:
             kwargs["pos_order_ui_args"] = extra
         data = self.create_ui_order_data(lines, **kwargs)
         if draft:
             data["state"] = "draft"
+            if points:
+                data["payment_ids"] = [
+                    (0, 0, {"amount": points, "name": fields.Datetime.now(), "payment_method_id": self.points_pm.id})
+                ]
         if customer is False:
             data["partner_id"] = False
         return data
@@ -460,9 +456,17 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         challenge = self.env["efn.pos.otp.challenge"].sudo().search([("order_ref", "=", uuid)])
         self.assertEqual(challenge.state, "consumed")
         self.assertFalse(challenge.discount_token)
-        # Reservasi kedua untuk order yang sama ditolak lokal.
         res2 = self.config.efn_loyalty_redeem_reserve(uuid, self.member_a.id, 100, 50000)
         self.assertEqual(res2["error_code"], "reservation_exists")
+
+    def test_reserve_requires_points_method_on_config(self):
+        config_cls = type(self.env["pos.config"])
+        empty = self.env["pos.payment.method"]
+        with (
+            patch.object(config_cls, "_efn_loyalty_points_method_record", return_value=empty),
+            self.assertRaises(AccessError),
+        ):
+            self.config.efn_loyalty_redeem_reserve(self.create_random_uid(), self.member_a.id, 100, 50000)
 
     def test_redeem_challenge_does_not_open_promo(self):
         """Challenge pos_redeem tidak membuka gate promo (E-23)."""
@@ -493,21 +497,24 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
             "reward_id": reward.id,
         }
         with self.assertRaises(UserError):
-            self._sync(self._order_data([(self.product, 1), reward_line, self._points_line(10000)], uuid=uuid))
+            self._sync(self._order_data([(self.product, 1), reward_line], uuid=uuid, points=10000))
         self.assertFalse(self._calls_to(CONSUME))
 
     def test_redeem_full_flow_commit(self):
+        """K-18-1..K-18-4: pembayaran Poin EFN, harga & pajak tetap penuh, commit membawa payment_amount."""
         uuid = self.create_random_uid()
         self._reserve(uuid)
-        order = self._sync(self._order_data([(self.product, 1), self._points_line(10000)], uuid=uuid))
+        order = self._sync(self._order_data([(self.product, 1)], uuid=uuid, points=10000))
         self.assertEqual(order.state, "paid")
+        self.assertEqual(order.amount_total, 50000.0, "P-8: total order tidak berkurang oleh poin")
+        self.assertEqual(
+            sum(order.payment_ids.filtered(lambda p: p.payment_method_id == self.points_pm).mapped("amount")), 10000.0
+        )
         self.assertEqual(order.efn_loyalty_points_redeemed, 100)
         self.assertEqual(order.efn_loyalty_redeem_value, 10000)
         commit = self._outbox(order, "redeem_commit")
         self.assertEqual(commit.idempotency_key, f"pos_redeem:{uuid}")
-        self.assertEqual(
-            self._outbox(order, "earn").eligible_amount, 40000, "K-1: porsi yang dibayar poin tidak menghasilkan poin"
-        )
+        self.assertEqual(self._outbox(order, "earn").eligible_amount, 40000, "K-18-4: 50.000 x (1 - 10.000/50.000)")
         self.responses[COMMIT] = BffResponse(200, {"points_redeemed": 100, "points_balance": 50})
         self.responses[EARN] = self._ok_earn(4)
         self._run_outbox()
@@ -519,6 +526,7 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
                     "order_ref": uuid,
                     "member_ref": MEMBER_A,
                     "value_idr": 10000,
+                    "payment_amount": 10000,
                     "idempotency_key": f"pos_redeem:{uuid}",
                 }
             ],
@@ -529,43 +537,63 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         self.assertEqual(reservation.state, "committed")
         self.assertEqual(reservation.order_id, order)
         self.assertEqual(order.efn_loyalty_state, "done")
-        # Idempoten: menjalankan lagi tidak mengirim ulang.
         self._run_outbox()
         self.assertEqual(len(self._calls_to(COMMIT)), 1)
 
-    def test_redeem_tax_groups_split(self):
-        """Baris poin per kelompok pajak (incl. pajak = value_idr) diterima server."""
+    def test_earn_factor_with_taxes_and_param(self):
+        """K-18-4: faktor dari total incl. pajak; parameter configurable (default true)."""
         uuid = self.create_random_uid()
+        # 50.000 (tanpa pajak) + 10.700 (10.000 + 7%) = 60.700 incl. pajak.
         self._reserve(uuid, value=10000, amount=60700)
-        # Produk 50000 (tanpa pajak) + 10000 (+7%) = 60700; porsi poin proporsional.
-        share_taxed = round(10000 * 10700 / 60700, 2)
-        share_free = 10000 - share_taxed
-        lines = [
-            (self.product, 1),
-            (self.product_taxed, 1),
-            self._points_line(share_free),
-            self._points_line(share_taxed, taxes=self.taxes["tax7"]),
-        ]
-        order = self._sync(self._order_data(lines, uuid=uuid))
-        self.assertTrue(self._outbox(order, "redeem_commit"))
-        self.assertNotEqual(order.efn_loyalty_state, "review")
-        points_excl = sum(
-            order._efn_line_raw_amounts(line)[0] for line in order.lines if line.product_id == self.points_product
-        )
-        self.assertAlmostEqual(self._outbox(order, "earn").eligible_amount, 60000 + points_excl, delta=1.5)
+        lines = [(self.product, 1), (self.product_taxed, 1)]
+        order = self._sync(self._order_data(lines, uuid=uuid, points=10000))
+        expected = int(60000 * (1 - 10000 / 60700))
+        self.assertEqual(self._outbox(order, "earn").eligible_amount, expected)
+        self.env["ir.config_parameter"].sudo().set_param("efn.pos.loyalty.earn_exclude_point_payment", "False")
+        self.assertEqual(order._efn_loyalty_eligible_amount(), 60000)
+        # L-24: flag BFF (cache params) menang atas parameter lokal.
+        self.env["ir.config_parameter"].sudo().set_param("efn.pos.loyalty.earn_exclude_point_payment", "True")
+        loyalty_pos_config._PARAMS_CACHE.clear()
+        self.responses[PARAMS] = BffResponse(200, {"point_value_idr": 100, "earn_exclude_point_payment": False})
+        self.config._efn_loyalty_params()
+        self.assertEqual(order._efn_loyalty_eligible_amount(), 60000)
+        self.responses[BALANCE] = BffResponse(200, {"points_balance": 1})
+        self.assertNotIn("earn_exclude_point_payment", self.config.efn_loyalty_balance(self.member_a.id))
 
-    def test_points_line_without_reservation_is_rejected(self):
-        data = self._order_data([(self.product, 1), self._points_line(10000)])
+    def test_commit_payment_mismatch_holds_order_for_review(self):
+        """L-24: BFF `409 payment_mismatch` pada commit -> final, reservasi & order review (pola SEC-60)."""
+        uuid = self.create_random_uid()
+        self._reserve(uuid)
+        order = self._sync(self._order_data([(self.product, 1)], uuid=uuid, points=10000))
+        self.responses[COMMIT] = BffResponse(409, {"error": {"code": "payment_mismatch", "message": "x"}})
+        self.responses[EARN] = self._ok_earn()
+        self._run_outbox()
+        commit = self._outbox(order, "redeem_commit")
+        self.assertEqual((commit.state, commit.last_error), ("failed", "payment_mismatch"))
+        self.assertEqual(self._reservation(uuid).state, "review")
+        self.assertEqual(order.efn_loyalty_state, "review")
+        self.assertTrue(commit.activity_flagged)
+
+    def test_points_payment_without_reservation_is_rejected(self):
+        data = self._order_data([(self.product, 1)], points=10000)
         data["efn_loyalty_points_redeemed"] = 100  # dipalsukan browser
         with self.assertRaises(UserError):
             self._sync(data)
         self.assertFalse(self.env["pos.order"].search([("uuid", "=", data["uuid"])]))
 
-    def test_points_line_with_spoofed_flags_is_rejected(self):
-        line = self._points_line(10000)
-        line.update({"is_reward_line": True, "reward_id": self.promo_reward.id, "price_type": "original"})
+    def test_legacy_points_product_line_is_rejected(self):
+        """Desain lama (baris produk diskon Poin EFN) tidak lagi diterima server."""
+        self.assertFalse(self.legacy_points_product.active)
+        legacy = {
+            "product": self.legacy_points_product,
+            "quantity": 1,
+            "price_unit": -10000.0,
+            "price_subtotal": -10000.0,
+            "price_subtotal_incl": -10000.0,
+            "tax_ids": [(6, 0, [])],
+        }
         with self.assertRaises(UserError):
-            self._sync(self._order_data([(self.product, 1), line]))
+            self._sync(self._order_data([(self.product, 1), legacy]))
 
     def _assert_sync_rejected(self, data, uuid):
         """SEC-62: sync ditolak (rollback), reservasi tetap `reserved` (dilepas kasir/expired)."""
@@ -575,22 +603,24 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         self.assertEqual(self._reservation(uuid).state, "reserved")
         self.assertFalse(self._calls_to(COMMIT))
 
-    def test_value_mismatch_rejected(self):
+    def test_value_mismatch_rejected_tolerance_zero(self):
         uuid = self.create_random_uid()
         self._reserve(uuid, value=10000)
-        self._assert_sync_rejected(self._order_data([(self.product, 1), self._points_line(15000)], uuid=uuid), uuid)
+        for value in (10001, 9999, 15000):
+            with self.subTest(value=value):
+                self._assert_sync_rejected(self._order_data([(self.product, 1)], uuid=uuid, points=value), uuid)
 
     def test_partner_changed_rejected(self):
         uuid = self.create_random_uid()
         self._reserve(uuid)
-        data = self._order_data([(self.product, 1), self._points_line(10000)], uuid=uuid, customer=self.member_b)
+        data = self._order_data([(self.product, 1)], uuid=uuid, customer=self.member_b, points=10000)
         self._assert_sync_rejected(data, uuid)
 
-    def test_positive_points_line_rejected(self):
-        """SEC-62: baris poin bertanda positif (menambah tagihan, `abs()` dulu meloloskan)."""
+    def test_negative_points_payment_on_sale_rejected(self):
         uuid = self.create_random_uid()
         self._reserve(uuid)
-        self._assert_sync_rejected(self._order_data([(self.product, 1), self._points_line(-10000)], uuid=uuid), uuid)
+        payments = [(self.points_pm, 10000), (self.points_pm, -10000), (self.cash_pm1, 50000)]
+        self._assert_sync_rejected(self._order_data([(self.product, 1)], uuid=uuid, payments=payments), uuid)
 
     def test_points_over_max_pct_of_server_total_rejected(self):
         """SEC-62: OTP/reserve dengan amount_total klien besar, order akhir jauh lebih kecil."""
@@ -598,8 +628,16 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         self._reserve(uuid, value=10000, amount=50000)
         self.assertEqual(self._reservation(uuid).redeem_max_pct, 50)
         # Barang 10.700 (incl. pajak); 50% = 5.350 < 10.000 poin.
-        data = self._order_data([(self.product_taxed, 1), self._points_line(10000)], uuid=uuid)
+        payments = [(self.points_pm, 10000), (self.cash_pm1, 700)]
+        data = self._order_data([(self.product_taxed, 1)], uuid=uuid, payments=payments)
         self._assert_sync_rejected(data, uuid)
+
+    def test_change_only_from_cash(self):
+        """Kembalian tidak boleh berasal dari porsi non-tunai (poin + bank > total)."""
+        uuid = self.create_random_uid()
+        self._reserve(uuid)
+        payments = [(self.points_pm, 10000), (self.bank_pm1, 45000)]
+        self._assert_sync_rejected(self._order_data([(self.product, 1)], uuid=uuid, payments=payments), uuid)
 
     def test_max_pct_from_bff_params(self):
         self.responses[PARAMS] = BffResponse(
@@ -612,7 +650,7 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
     def test_commit_reservation_expired_is_final_review(self):
         uuid = self.create_random_uid()
         self._reserve(uuid)
-        order = self._sync(self._order_data([(self.product, 1), self._points_line(10000)], uuid=uuid))
+        order = self._sync(self._order_data([(self.product, 1)], uuid=uuid, points=10000))
         self.responses[COMMIT] = BffResponse(409, {"error": {"code": "reservation_expired", "message": "x"}})
         self.responses[EARN] = self._ok_earn()
         self._run_outbox()
@@ -621,7 +659,7 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         self.assertEqual(self._reservation(uuid).state, "review")
         self.assertEqual(order.efn_loyalty_state, "review")
 
-    def test_reservation_without_points_line_is_released(self):
+    def test_reservation_without_points_payment_is_released(self):
         uuid = self.create_random_uid()
         self._reserve(uuid)
         order = self._sync(self._order_data([(self.product, 1)], uuid=uuid))
@@ -634,19 +672,17 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         self.assertEqual(self._reservation(uuid).state, "released")
         self.assertEqual(order.efn_loyalty_points_redeemed, 0)
 
-    def test_draft_points_line_stripped_without_reservation(self):
-        order = self._sync(self._order_data([(self.product, 1), self._points_line(10000)], draft=True))
+    def test_draft_points_payment_stripped_without_reservation(self):
+        order = self._sync(self._order_data([(self.product, 1)], draft=True, points=10000))
         self.assertEqual(order.state, "draft")
-        self.assertFalse(order.lines.filtered(lambda line: line.product_id == self.points_product))
+        self.assertFalse(order.payment_ids.filtered(lambda p: p.payment_method_id == self.points_pm))
 
     def test_release_on_remove_from_ui(self):
         uuid = self.create_random_uid()
         self._reserve(uuid)
-        order = self._sync(self._order_data([(self.product, 1), self._points_line(10000)], uuid=uuid, draft=True))
-        self.assertTrue(order.lines.filtered(lambda line: line.product_id == self.points_product))
+        order = self._sync(self._order_data([(self.product, 1)], uuid=uuid, draft=True, points=10000))
         reservation = self._reservation(uuid)
         self.env["pos.order"].remove_from_ui([order.id])
-        # Core menghapus order draft; pos_self_order (terpasang lewat efn_setup_pos) hanya membatalkan.
         self.assertTrue(not order.exists() or order.state == "cancel")
         release = self.env["efn.pos.loyalty.outbox"].sudo().search([("reservation_id", "=", reservation.id)])
         self.assertEqual(release.kind, "redeem_release")
@@ -659,7 +695,7 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
     def test_release_on_cancel_draft(self):
         uuid = self.create_random_uid()
         self._reserve(uuid)
-        order = self._sync(self._order_data([(self.product, 1), self._points_line(10000)], uuid=uuid, draft=True))
+        order = self._sync(self._order_data([(self.product, 1)], uuid=uuid, draft=True, points=10000))
         order.action_pos_order_cancel()
         self.assertEqual(self._outbox(order, "redeem_release").reservation_id, self._reservation(uuid))
 
@@ -704,21 +740,17 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         lines = [(self.product, 2)]
         if points_value:
             self._reserve(uuid, value=points_value, amount=100000)
-            lines.append(self._points_line(points_value))
-        order = self._sync(self._order_data(lines, uuid=uuid))
+        order = self._sync(self._order_data(lines, uuid=uuid, points=points_value))
         self.responses[EARN] = self._ok_earn(10)
         self.responses[COMMIT] = BffResponse(200, {"points_redeemed": 100, "points_balance": 0})
         self._run_outbox()
         self.assertEqual(self._outbox(order, "earn").state, "done")
         return order
 
-    def _refund_data(self, original, qty=1, adjustment=None):
+    def _refund_data(self, original, qty=1, points_restore=0, payments=None):
         product_line = original.lines.filtered(lambda line: line.product_id == self.product)
         lines = [{"product": self.product, "quantity": -qty, "refunded_orderline_id": product_line.id}]
-        if adjustment:
-            line = self._points_line(-adjustment)
-            lines.append(line)
-        return self._order_data(lines, extra={"is_refund": True})
+        return self._order_data(lines, extra={"is_refund": True}, points=-points_restore, payments=payments)
 
     def test_refund_half_ratio(self):
         original = self._paid_original()
@@ -726,6 +758,7 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         reverse = self._outbox(refund, "reverse")
         self.assertEqual(reverse.refund_ratio, 0.5)
         self.assertEqual(reverse.eligible_amount, 50000)
+        self.assertEqual(reverse.points_restored_value, 0)
         self.assertFalse(self._outbox(refund, "earn"), "refund tidak menghasilkan earn")
         self.responses[REVERSE] = BffResponse(200, {"points_clawed_back": 5, "points_restored": 0, "points_balance": 5})
         self._run_outbox()
@@ -739,6 +772,7 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
                     "member_ref": MEMBER_A,
                     "refunded_eligible_amount": 50000,
                     "refund_ratio": 0.5,
+                    "points_restored_value": 0,
                 }
             ],
         )
@@ -766,7 +800,6 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         earn.next_attempt_at = fields.Datetime.now() - timedelta(seconds=1)
         reverse.next_attempt_at = fields.Datetime.now() - timedelta(seconds=1)
         self.responses[EARN] = self._ok_earn()
-        # BFF masih memproses earn -> 409 earn_pending (K-6) dicoba ulang, bukan final.
         self.responses[REVERSE] = BffResponse(409, {"error": {"code": "earn_pending", "message": "x"}})
         self._run_outbox()
         self.assertEqual(earn.state, "done")
@@ -782,12 +815,34 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
             self.env, login=login, groups="point_of_sale.group_pos_manager", company_id=self.env.company.id
         )
 
-    def test_refund_of_points_order_without_adjustment_is_held(self):
-        """SEC-60: uang kembali penuh tanpa baris penyesuaian -> reverse DITAHAN (tidak dikirim)."""
+    def test_refund_of_points_order_proportional_restore(self):
+        """K-18-5 / Q-F18-4: refund setengah order berpoin -> Poin EFN negatif proporsional, reverse membawa nilai."""
+        original = self._paid_original(points_value=10000)
+        self.assertEqual(self._outbox(original, "earn").eligible_amount, 90000, "100.000 x (1 - 10.000/100.000)")
+        product_line = original.lines.filtered(lambda line: line.product_id == self.product)
+        preview = self.config.efn_loyalty_refund_preview(original.id, [[product_line.id, 1]])
+        self.assertEqual(preview, {"ok": True, "ratio": 0.5, "value_idr": 5000})
+        refund = self._sync(self._refund_data(original, qty=1, points_restore=5000))
+        self.assertNotEqual(refund.efn_loyalty_state, "review")
+        reverse = self._outbox(refund, "reverse")
+        self.assertEqual(reverse.refund_ratio, 0.5)
+        self.assertEqual(reverse.eligible_amount, 45000, "faktor uang order asal (90%)")
+        self.assertEqual(reverse.points_restored_value, 5000)
+        self.responses[REVERSE] = BffResponse(200, {"points_clawed_back": 5, "points_restored": 50})
+        self._run_outbox()
+        self.assertEqual(self._calls_to(REVERSE)[0]["points_restored_value"], 5000)
+        # Refund kedua (sisa): kumulatif -> 5.000 lagi, total = 10.000 = poin asal.
+        preview2 = self.config.efn_loyalty_refund_preview(original.id, [[product_line.id, 1]])
+        self.assertEqual(preview2["value_idr"], 5000)
+        refund2 = self._sync(self._refund_data(original, qty=1, points_restore=5000))
+        self.assertEqual(self._outbox(refund2, "reverse").points_restored_value, 5000)
+
+    def test_refund_of_points_order_without_restore_is_held(self):
+        """SEC-60: uang kembali penuh tanpa pengembalian Poin EFN -> reverse DITAHAN (tidak dikirim)."""
         original = self._paid_original(points_value=10000)
         refund = self._sync(self._refund_data(original, qty=1))
         self.assertEqual(refund.efn_loyalty_state, "review")
-        self.assertEqual(refund.efn_loyalty_note, "refund_points_adjustment_mismatch")
+        self.assertEqual(refund.efn_loyalty_note, "refund_points_allocation_mismatch")
         reverse = self._outbox(refund, "reverse")
         self.assertEqual(reverse.state, "hold")
         self.assertTrue(reverse.activity_flagged)
@@ -795,9 +850,35 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         self._run_outbox()
         self.assertFalse(self._calls_to(REVERSE), "restore poin tidak boleh terkirim sebelum supervisor")
         self.assertEqual(reverse.state, "hold")
-        self.assertEqual(refund.efn_loyalty_state, "review")
-        # Rasio yang ditahan tetap dihitung dalam batas kumulatif (tidak bisa diulang refund lain).
         self.assertEqual(original._efn_loyalty_refund_ratio(-50000, -50000), 0.5)
+
+    def test_refund_points_restore_mismatch_held(self):
+        original = self._paid_original(points_value=10000)
+        refund = self._sync(self._refund_data(original, qty=1, points_restore=3000))
+        reverse = self._outbox(refund, "reverse")
+        self.assertEqual(reverse.state, "hold")
+        self.assertEqual(reverse.points_restored_value, 3000)
+
+    def test_refund_points_restore_over_redeemed_rejected(self):
+        original = self._paid_original(points_value=10000)
+        with self.assertRaises(UserError):
+            self._sync(self._refund_data(original, qty=1, points_restore=12000))
+
+    def test_refund_positive_points_payment_rejected(self):
+        original = self._paid_original(points_value=10000)
+        payments = [(self.points_pm, 5000), (self.cash_pm1, -55000)]
+        with self.assertRaises(UserError):
+            self._sync(self._refund_data(original, qty=1, payments=payments))
+
+    def test_refund_points_payment_without_redeem_rejected(self):
+        original = self._paid_original()
+        with self.assertRaises(UserError):
+            self._sync(self._refund_data(original, qty=1, points_restore=5000))
+
+    def test_unlinked_return_with_points_payment_rejected(self):
+        payments = [(self.points_pm, -5000), (self.cash_pm1, -45000)]
+        with self.assertRaises(UserError):
+            self._sync(self._order_data([(self.product, -1)], payments=payments))
 
     def test_held_reverse_cashier_cannot_decide_manager_approves(self):
         original = self._paid_original(points_value=10000)
@@ -905,29 +986,9 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         self.assertFalse(self._outbox(refund))
         self.assertEqual(refund.efn_loyalty_note, "refund_ambiguous")
 
-    def test_refund_of_points_order_with_adjustment_ok(self):
+    def test_refund_preview_rejects_foreign_lines(self):
         original = self._paid_original(points_value=10000)
-        preview = self.config.efn_loyalty_refund_preview(
-            original.id, [[original.lines.filtered(lambda line: line.product_id == self.product).id, 1]]
-        )
-        self.assertEqual(preview, {"ok": True, "ratio": 0.5, "value_idr": 5000})
-        refund = self._sync(self._refund_data(original, qty=1, adjustment=preview["value_idr"]))
-        self.assertNotEqual(refund.efn_loyalty_state, "review")
-        reverse = self._outbox(refund, "reverse")
-        self.assertEqual(reverse.refund_ratio, 0.5)
-        self.assertEqual(reverse.eligible_amount, 45000, "faktor uang order asal (90%)")
-        self.assertEqual(self._outbox(original, "earn").eligible_amount, 90000)
-
-    def test_refund_with_negative_points_line_is_rejected(self):
-        original = self._paid_original(points_value=10000)
-        data = self._refund_data(original, qty=1, adjustment=-5000)  # menambah uang kembali
-        with self.assertRaises(UserError):
-            self._sync(data)
-
-    def test_refund_preview_rejects_points_line_and_foreign_order(self):
-        original = self._paid_original(points_value=10000)
-        points_line = original.lines.filtered(lambda line: line.product_id == self.points_product)
-        res = self.config.efn_loyalty_refund_preview(original.id, [[points_line.id, 1]])
+        res = self.config.efn_loyalty_refund_preview(original.id, [[999999999, 1]])
         self.assertEqual(res["error_code"], "invalid_lines")
         res = self.config.efn_loyalty_refund_preview(original.id, "bukan list")
         self.assertEqual(res["error_code"], "invalid_lines")
@@ -971,12 +1032,29 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         self.assertEqual(res["error_code"], "bff_unavailable")
 
     # ================================================= KONFIGURASI & SECURITY
-    def test_points_product_is_special_and_coded(self):
-        self.assertEqual(self.points_product.default_code, "EFN-POINTS")
-        self.assertEqual(self.points_product.type, "service")
-        self.assertFalse(self.points_product.taxes_id)
-        self.assertIn(self.points_product, self.config._get_special_products())
-        self.assertEqual(self.config.efn_loyalty_points_product, self.points_product.id)
+    def test_points_method_constraints_and_pos_fields(self):
+        """E-30: metode Poin EFN = jurnal bank tanpa terminal, satu aktif per company, dimuat ke POS."""
+        self.assertEqual(self.config.efn_loyalty_points_method, self.points_pm.id)
+        self.assertIn("efn_is_loyalty_points", self.env["pos.payment.method"]._load_pos_data_fields(self.config))
+        config_fields = self.env["pos.config"]._load_pos_data_fields(self.config)
+        self.assertTrue(not config_fields or "efn_loyalty_points_method" in config_fields, "[] = semua field")
+        with self.assertRaises(ValidationError):
+            self.points_pm.copy({"name": "Poin EFN 2", "efn_is_loyalty_points": True})
+        with self.assertRaises(ValidationError):
+            self.cash_pm1.copy({"name": "Kas poin", "efn_is_loyalty_points": True})
+        with self.assertRaises(ValidationError):
+            self.points_pm.copy({"name": "Poin EFN split", "efn_is_loyalty_points": True, "split_transactions": True})
+        self.assertNotIn(self.legacy_points_product, self.config._get_special_products())
+
+    def test_session_close_rejects_points_difference(self):
+        """E-30: selisih tutup sesi untuk metode Poin EFN ditolak."""
+        uuid = self.create_random_uid()
+        self._reserve(uuid)
+        self._sync(self._order_data([(self.product, 1)], uuid=uuid, points=10000))
+        session = self.config.current_session_id
+        with self.assertRaises(UserError):
+            session._validate_session(bank_payment_method_diffs={self.points_pm.id: 500.0})
+        self.assertEqual(session.state, "opened")
 
     def test_category_flag_includes_children(self):
         excluded = self.env["product.category"]._efn_loyalty_excluded_ids()
@@ -1000,7 +1078,7 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
     def test_acl_pos_user(self):
         uuid = self.create_random_uid()
         self._reserve(uuid)
-        order = self._sync(self._order_data([(self.product, 1), self._points_line(10000)], uuid=uuid))
+        order = self._sync(self._order_data([(self.product, 1)], uuid=uuid, points=10000))
         cashier = new_test_user(
             self.env,
             login="efn_loyalty_cashier",
@@ -1013,6 +1091,8 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         outbox = self._outbox(order).with_user(cashier)
         with self.assertRaises(AccessError):
             outbox.write({"state": "done"})
+        with self.assertRaises(AccessError):
+            self.points_pm.with_user(cashier).check_access("write")
         manager = new_test_user(
             self.env,
             login="efn_loyalty_manager",
@@ -1038,16 +1118,14 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         self.assertFalse(Outbox.search([("order_id", "=", order.id)]))
         self.assertTrue(self._outbox(order))
 
-    def test_audit_filter_e24(self):
-        new_filter = self.env.ref("efn_pos_loyalty_ledger.filter_pos_line_negative_non_reward_no_points")
-        self.assertIn(str(self.points_product.id), new_filter.domain)
-        old_filter = self.env.ref(hooks.OLD_FILTER_XMLID, raise_if_not_found=False)
-        if not old_filter:
-            self.skipTest("efn_setup_pos tidak terpasang")
-        hooks.post_init_hook(self.env)
-        self.assertFalse(old_filter.active)
-        hooks.uninstall_hook(self.env)
-        self.assertTrue(old_filter.active)
+    def test_audit_filter_e24_retired(self):
+        """G18: filter pengganti E-24 tidak diperlukan (poin = metode bayar)."""
+        self.assertFalse(
+            self.env.ref(
+                "efn_pos_loyalty_ledger.filter_pos_line_negative_non_reward_no_points", raise_if_not_found=False
+            )
+        )
+        self.assertTrue(self.env.ref("efn_pos_loyalty_ledger.filter_pos_order_points_redeemed"))
 
     def test_payment_logging_masks_phone(self):
         """Log RPC hanya memuat nomor ter-mask."""

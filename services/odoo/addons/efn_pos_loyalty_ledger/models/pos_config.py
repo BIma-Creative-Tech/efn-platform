@@ -1,4 +1,7 @@
-"""Konfigurasi & RPC Poin EFN untuk POS (docs/08 §6.3 B/F, kontrak docs/04 §9 v4.1).
+"""Konfigurasi & RPC Poin EFN untuk POS (docs/08 §6.3 B/F + §9.2 E-30, kontrak docs/04 §9 v6 / §9.9).
+
+G18 (E-30, K-18-1): redeem = baris pembayaran metode "Poin EFN" (`pos.payment.method.efn_is_loyalty_points`)
+senilai `value_idr`, bukan lagi produk diskon. Config mengekspos id metode itu ke frontend.
 
 RPC dipanggil frontend via `pos.data.call("pos.config", ...)` dengan pola `efn_otp_request`:
 user POS dengan sesi terbuka pada config ini, partner dibaca server (record rule berlaku),
@@ -76,15 +79,20 @@ class PosConfig(models.Model):
         help="Tombol 'Tukar Poin EFN' di layar pembayaran (wajib OTP pelanggan, hanya saat online). "
         "Tidak tersedia untuk kiosk self-order.",
     )
-    efn_loyalty_points_product = fields.Integer(
-        compute="_compute_efn_loyalty_points_product",
-        help="Id produk 'Poin EFN' (untuk frontend POS; server tetap mendeteksi baris poin dari produk).",
+    efn_loyalty_points_method = fields.Integer(
+        compute="_compute_efn_loyalty_points_method",
+        help="Id metode bayar 'Poin EFN' di POS ini (0 = tidak ada; tombol tukar poin disembunyikan). "
+        "Server tetap mendeteksi pembayaran poin dari metode, bukan dari klien.",
     )
 
-    def _compute_efn_loyalty_points_product(self):
-        product = self.env["pos.order"]._efn_points_product()
+    @api.depends("payment_method_ids", "payment_method_ids.efn_is_loyalty_points")
+    def _compute_efn_loyalty_points_method(self):
         for config in self:
-            config.efn_loyalty_points_product = product.id or 0
+            config.efn_loyalty_points_method = config._efn_loyalty_points_method_record().id or 0
+
+    def _efn_loyalty_points_method_record(self):
+        self.ensure_one()
+        return self.sudo().payment_method_ids.filtered(lambda m: m.efn_is_loyalty_points and m.active)[:1]
 
     @api.constrains("efn_loyalty_redeem_enabled")
     def _check_efn_loyalty_redeem_kiosk(self):
@@ -100,13 +108,9 @@ class PosConfig(models.Model):
     def _load_pos_data_fields(self, config):
         fields_list = super()._load_pos_data_fields(config)
         if fields_list:
-            extra = ["efn_loyalty_earn_enabled", "efn_loyalty_redeem_enabled", "efn_loyalty_points_product"]
+            extra = ["efn_loyalty_earn_enabled", "efn_loyalty_redeem_enabled", "efn_loyalty_points_method"]
             fields_list = [*fields_list, *[f for f in extra if f not in fields_list]]
         return fields_list
-
-    def _get_special_products(self):
-        # Produk "Poin EFN" dimuat ke POS walau tidak tampil di grid produk.
-        return super()._get_special_products() | self.env["pos.order"]._efn_points_product()
 
     # ------------------------------------------------------------- helpers
     def _efn_loyalty_partner_member(self, partner_id):
@@ -157,8 +161,19 @@ class PosConfig(models.Model):
             for k in ("point_value_idr", "redeem_min_points", "redeem_max_pct_of_order")
             if isinstance(response.data.get(k), (int, float)) and not isinstance(response.data.get(k), bool)
         }
+        # K-18-4 / L-24: flag dasar earn dari BFF (faktor dihitung Odoo; BFF hanya pagar kasar).
+        if isinstance(response.data.get("earn_exclude_point_payment"), bool):
+            params["earn_exclude_point_payment"] = response.data["earn_exclude_point_payment"]
         _PARAMS_CACHE[key] = (time.monotonic(), params)
         return params
+
+    def _efn_loyalty_cached_params(self):
+        """Parameter §9.1 dari cache saja (tanpa panggilan BFF) -- dipakai saat sync order agar sync tidak
+        bergantung/menunggu BFF. Cache diisi saat cek saldo/reserve (TTL 5 menit, per worker)."""
+        cached = _PARAMS_CACHE.get(self.env.cr.dbname)
+        if cached and time.monotonic() - cached[0] < PARAMS_CACHE_SECONDS:
+            return cached[1]
+        return {}
 
     def _efn_loyalty_redeem_max_pct(self):
         """SEC-62: batas % dari parameter BFF (cache/GET §9.1), fallback ir.config_parameter."""
@@ -179,6 +194,8 @@ class PosConfig(models.Model):
         self._efn_check_otp_caller()
         if not self.efn_loyalty_redeem_enabled:
             raise AccessError(_("Tukar Poin EFN tidak aktif untuk Point of Sale ini."))
+        if not self._efn_loyalty_points_method_record():
+            raise AccessError(_("Metode bayar 'Poin EFN' belum dipasang di Point of Sale ini."))
 
     @api.model
     def _efn_reserve_message(self, reason):
@@ -226,7 +243,7 @@ class PosConfig(models.Model):
                 return self._efn_error("rate_limited", _("Terlalu sering cek poin. Coba lagi sebentar."))
             return self._efn_error("balance_failed", _("Gagal membaca saldo poin."))
         result = {"ok": True, "points_balance": balance, "member_masked": masked}
-        result.update(self._efn_loyalty_params())
+        result.update({k: v for k, v in self._efn_loyalty_params().items() if k != "earn_exclude_point_payment"})
         return result
 
     def efn_loyalty_redeem_reserve(self, order_uuid, partner_id, points, amount_total):
@@ -358,11 +375,12 @@ class PosConfig(models.Model):
         return {"ok": True}
 
     def efn_loyalty_refund_preview(self, original_order_id, refund_lines):
-        """Nilai baris penyesuaian Poin EFN untuk refund order berpoin (docs/08 §6.3 H).
+        """Nilai pembayaran Poin EFN negatif untuk refund order berpoin (E-30, K-18-5, Q-F18-4 proporsional).
 
         :param int original_order_id: order asal (dimuat di layar Orders/refund POS).
         :param list refund_lines: ``[[orderline_id_asal, qty_refund], ...]`` (qty positif).
-        :returns: ``{"ok": True, "ratio", "value_idr"}`` atau ``{"ok": False, ...}``.
+        :returns: ``{"ok": True, "ratio", "value_idr"}`` (``value_idr`` = poin yang dikembalikan, Rupiah bulat,
+            dihitung server secara kumulatif atas refund sebelumnya) atau ``{"ok": False, ...}``.
         """
         self._efn_check_otp_caller()
         if isinstance(original_order_id, bool) or not isinstance(original_order_id, int):
@@ -379,7 +397,6 @@ class PosConfig(models.Model):
             return self._efn_error("invalid_order", _("Order tidak valid."))
         if not isinstance(refund_lines, list):
             return self._efn_error("invalid_lines", _("Baris refund tidak valid."))
-        points_product = original._efn_points_product()
         excluded = self.env["product.category"]._efn_loyalty_excluded_ids()
         eligible = 0.0
         goods = 0.0
@@ -390,11 +407,11 @@ class PosConfig(models.Model):
             if isinstance(line_id, bool) or not isinstance(line_id, int) or not isinstance(qty, (int, float)):
                 return self._efn_error("invalid_lines", _("Baris refund tidak valid."))
             line = original.lines.filtered(lambda line, line_id=line_id: line.id == line_id)
-            if not line or line.product_id == points_product or qty <= 0 or qty > abs(line.qty):
+            if not line or qty <= 0 or qty > abs(line.qty):
                 return self._efn_error("invalid_lines", _("Baris refund tidak valid."))
             excl, incl = original._efn_line_raw_amounts(line, qty=qty)
             goods += incl
-            if original._efn_line_is_eligible(line, points_product, excluded):
+            if original._efn_line_is_eligible(line, excluded):
                 eligible += excl
         ratio = original._efn_loyalty_refund_ratio(eligible, goods)
-        return {"ok": True, "ratio": ratio, "value_idr": original._efn_loyalty_expected_adjustment(ratio)}
+        return {"ok": True, "ratio": ratio, "value_idr": original._efn_loyalty_expected_points_restore(goods)}

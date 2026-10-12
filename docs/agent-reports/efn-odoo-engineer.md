@@ -696,3 +696,36 @@ Batas file: hanya `efn_online_order/**` (tidak menyentuh `efn_setup_company/pos/
   - Suite efn penuh (+ `pos_sale`, `efn_online_pos_sale`, lalu `efn_setup_security`): **418 test, 0 failed, 0 error, 0 baris ERROR**. Warning baru `no translation language detected` dari helper guard diperbaiki (`env._`), kini 0.
   - Tour (+ `pos_sale`, `efn_online_pos_sale`): **20/20, 0 ERROR, 0 skip**.
   - ruff check/format lolos.
+
+---
+
+# Gelombang 18 — E-30 (poin = alat bayar), E-31 (refund ke metode asal), E-34 (daftar member 17+) (12 Okt 2026)
+
+Kontrak `docs/04 §9.9` v6 (K-18-1..K-18-8, L-23, L-24 BFF), fit-gap `docs/08 §9.2/§9.3/§9.5`, keputusan P-8. Branch `chore/wave-18`; tanpa commit/push. Folder `efn_setup_*` tidak disentuh (functional paralel). Validasi di container/DB sementara (harness `odoo-test-g17.sh`/`odoo-tour-g17.sh`); DB dev tidak disentuh.
+
+## E-30 — `efn_pos_loyalty_ledger` 19.0.2.0.0
+- `pos.payment.method.efn_is_loyalty_points` + constraint (jurnal bank, bukan kas, tanpa terminal/QR, tanpa split, satu aktif per company), dimuat ke POS; `pos.config.efn_loyalty_points_method` (id).
+- Frontend: tukar poin (OTP `pos_redeem` tetap) -> baris **pembayaran** Poin EFN senilai `value_idr` (metode tidak tampil manual, numpad tidak mengubah nominal, hapus baris = batal + release); offline nonaktif; refund berpoin menambah pembayaran Poin EFN negatif proporsional (preview server kumulatif).
+- Server saat sync (toleransi 0): tanpa reservasi / nominal beda / <= 0 / partner beda / > batas % total incl. pajak / kembalian dari porsi non-tunai -> `UserError`; refund: hanya negatif, hanya bila asal berpoin, tidak melebihi sisa poin asal; selisih alokasi > Rp1 -> reverse `hold` + review. Baris produk lama ditolak.
+- Outbox: `commit` + `payment_amount` (L-24: `409 payment_mismatch` -> final, reservasi & order review — diuji); `reverse` + `points_restored_value` (int >= 0). Earn K-18-4 `Σ eligible × (1 − poin ÷ total incl)`; flag `earn_exclude_point_payment` dibaca dari `GET /v1/pos/loyalty/params` (cache, tanpa panggil BFF saat sync), fallback `ir.config_parameter`.
+- Tutup sesi: selisih metode Poin EFN ditolak (`_validate_session`).
+- Migrasi: produk diskon lama diarsipkan (data lama dibiarkan, belum ada produksi), filter audit pengganti E-24 dihapus + filter `efn_setup_pos` dipulihkan, hook E-24 dihapus (`migrations/19.0.2.0.0`). 4 tour Poin EFN diganti (redeem, OTP salah, batal [hapus baris + kembali], offline).
+- **Kebutuhan data untuk functional (`efn_setup_pos`)**: per PT jurnal bank "Poin EFN" (tanpa rekening), akun liabilitas/kliring poin (PLACEHOLDER Q-F18-3) sebagai `outstanding_account_id`, metode "Poin EFN" (`efn_is_loyalty_points=True`, `payment_method_type='none'`, tanpa split) dimasukkan ke `payment_method_ids` config ber-redeem. Tanpa itu tombol tukar tersembunyi & reserve ditolak.
+
+## E-31 — `efn_pos_refund_origin` 19.0.1.0.0 (baru, LGPL-3, ADR-031, README)
+- Server: pembayaran negatif refund ⊆ metode order asal, ≤ dibayar bersih per metode − refund sebelumnya; retur tanpa struk tunai saja (`efn.pos.refund.unlinked_return_mode` cash|deny); QRIS statis dicatat atas metode asal.
+- RPC `pos.config.efn_refund_origin_allocation` (alokasi proporsional kumulatif) — **+1 entri `RPC_ALLOWLIST`**. Frontend: hanya metode asal (retur tanpa struk: tunai), nominal otomatis.
+
+## E-34 — `efn_pos_otp_gate` 19.0.1.8.0
+- Purpose `pos_enroll`; tombol "Daftar Member" + dialog centang wajib usia 17+; server menolak selain `age_confirmed is True` (`age_confirmation_required`, tanpa panggil BFF); `age_confirmed: true` dikirim di request & verify; verify `{ok, enrolled}` tanpa token -> challenge `consumed`; Odoo tidak menyimpan usia.
+
+## Validasi
+- Suite efn penuh pola CI (+ `pos_sale`, `efn_online_pos_sale`, `efn_pos_refund_origin`, lalu `efn_setup_security`): **452 test, 0 failed, 0 error, 0 baris ERROR**; check-odoo-deps 17 modul 0 terlarang; tanpa warning baru dari kode G18.
+- Tour (5 modul POS + online + pos_sale + E-31): **22/22, 0 ERROR, 0 skip** (20 lama/diganti + E-31 + E-34).
+- ruff check/format lolos.
+
+## Untuk lead / tim lain
+- CI: tambah `efn_pos_refund_origin` ke `EFN_TEST_MODULES` & `EFN_TOUR_MODULES`; `EFN_TOUR_MIN_TESTS` 20 -> 22 (devsecops).
+- `scripts/smoke/odoo_pos_smoke.py` masih memakai desain lama (`efn_loyalty_points_product`, produk Poin EFN) -> perlu diperbarui QA (di luar batas file).
+- Numpad saat baris Poin EFN terpilih diabaikan (tidak diuji tour: penekanan numpad pada baris terkunci membuat tour validasi gagal pada percobaan pertama; diganti asersi nominal).
+- Belum: supervisor untuk retur tanpa struk (Q-F18-5); jurnal akrual liabilitas poin (Q-F18-3); refund order lama berbaris produk poin (manual).

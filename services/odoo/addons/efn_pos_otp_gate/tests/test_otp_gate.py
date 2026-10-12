@@ -563,3 +563,55 @@ class TestEfnPosOtpGate(TestPoSCommon):
             self.config.efn_otp_request(uuid, 90.0, self.member_a.id)
             res = self.config.efn_otp_verify(uuid, "123456", "pos_redeem")
         self.assertEqual(res["error_code"], "no_challenge")
+
+    # ------------------------------------------------------- E-34 pos_enroll
+    def test_enroll_requires_age_confirmed_true(self):
+        """K-18-8: tanpa `age_confirmed` True persis -> ditolak server tanpa memanggil BFF."""
+        uuid = self.create_random_uid()
+        with self._patch_bff():
+            for value in (False, None, "true", 1):
+                with self.subTest(value=value):
+                    res = self.config.efn_otp_request(uuid, 0, self.member_a.id, "pos_enroll", value)
+                    self.assertFalse(res["ok"])
+                    self.assertEqual(res["error_code"], "age_confirmation_required")
+                    res = self.config.efn_otp_verify(uuid, "123456", "pos_enroll", value)
+                    self.assertEqual(res["error_code"], "age_confirmation_required")
+        self.assertEqual(self.calls, [])
+
+    def test_enroll_flow_forwards_age_and_stores_no_age(self):
+        uuid = self.create_random_uid()
+        with self._patch_bff():
+            self.responses[REQUEST] = BffResponse(202, {"challenge_id": "chal-e", "expires_in": 180})
+            self.responses[VERIFY] = BffResponse(200, {"ok": True})
+            res = self.config.efn_otp_request(uuid, 0, self.member_a.id, "pos_enroll", True)
+            self.assertTrue(res["ok"], res)
+            res = self.config.efn_otp_verify(uuid, "123456", "pos_enroll", True)
+            self.assertTrue(res["ok"], res)
+        self.assertEqual(self.calls[0][1]["purpose"], "pos_enroll")
+        self.assertIs(self.calls[0][1]["age_confirmed"], True)
+        self.assertEqual(
+            self.calls[1][1], {"challenge_id": "chal-e", "order_ref": uuid, "code": "123456", "age_confirmed": True}
+        )
+        challenge = self._challenge(uuid)
+        self.assertEqual(challenge.purpose, "pos_enroll")
+        self.assertEqual(challenge.state, "consumed")
+        self.assertFalse(challenge.sudo().discount_token)
+        self.assertFalse([name for name in challenge._fields if "age" in name or "birth" in name])
+        # Challenge pos_enroll tidak membuka promo ber-OTP.
+        with self._patch_bff():
+            with self.assertRaises(UserError):
+                self._sync(self._order_data(reward=self.reward, uuid=uuid))
+
+    def test_enroll_bff_age_rejection_mapped(self):
+        uuid = self.create_random_uid()
+        with self._patch_bff():
+            self.responses[REQUEST] = BffResponse(400, {"error": {"code": "age_confirmation_required"}})
+            res = self.config.efn_otp_request(uuid, 0, self.member_a.id, "pos_enroll", True)
+        self.assertEqual(res["error_code"], "age_confirmation_required")
+
+    def test_promo_payload_has_no_age_field(self):
+        uuid = self.create_random_uid()
+        with self._patch_bff():
+            self._verify_otp_for(uuid)
+        self.assertNotIn("age_confirmed", self.calls[0][1])
+        self.assertNotIn("age_confirmed", self.calls[1][1])

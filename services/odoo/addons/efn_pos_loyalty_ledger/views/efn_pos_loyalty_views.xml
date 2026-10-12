@@ -116,6 +116,7 @@
                         <group>
                             <field name="eligible_amount"/>
                             <field name="refund_ratio" invisible="kind != 'reverse'"/>
+                            <field name="points_restored_value" invisible="kind != 'reverse'"/>
                             <field name="attempt_count"/>
                             <field name="next_attempt_at"/>
                             <field name="last_error"/>

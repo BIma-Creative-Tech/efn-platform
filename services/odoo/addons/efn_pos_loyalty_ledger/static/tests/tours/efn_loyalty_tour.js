@@ -1,6 +1,6 @@
 /* global posmodel */
 /**
- * Tour UI POS Poin EFN (E-22). Dijalankan tests/test_loyalty_tour.py (tag `efn_tour`, Chrome
+ * Tour UI POS Poin EFN (E-22; G18 E-30: redeem = baris pembayaran metode "Poin EFN"). Dijalankan tests/test_loyalty_tour.py (tag `efn_tour`, Chrome
  * headless). BFF di-mock server-side: saldo 500 poin, 1 poin = Rp100, kode OTP benar = 123456.
  * Nomor HP data uji fiktif.
  */
@@ -18,6 +18,7 @@ const PRODUCT = "Produk Tour Poin";
 const MEMBER = "Member Tour Poin";
 const MEMBER_MASKED = "62812****890";
 const REDEEM_BUTTON = ".payment-screen .efn-redeem-points";
+const POINTS_METHOD = "Poin EFN";
 
 function notificationContains(text) {
     return { content: `notifikasi: ${text}`, trigger: `.o_notification:contains("${text}")` };
@@ -40,30 +41,38 @@ function waitNetwork(offline) {
     };
 }
 
-function pointsLines(expected) {
+function pointsPayments(expected) {
     return {
-        content: `order punya ${expected} baris Poin EFN`,
+        content: `order punya ${expected} pembayaran Poin EFN`,
         trigger: "body",
         run: async () => {
             // RPC verify -> reserve berjalan async setelah klik; tunggu (maks 5 dtk) agar tidak race.
-            let lines = posmodel.getOrder().efnPointsLines();
+            let lines = posmodel.getOrder().efnPointsPayments();
             for (let i = 0; i < 50 && lines.length !== expected; i++) {
                 await new Promise((resolve) => setTimeout(resolve, 100));
-                lines = posmodel.getOrder().efnPointsLines();
+                lines = posmodel.getOrder().efnPointsPayments();
             }
             if (lines.length !== expected) {
-                throw new Error(`baris poin ${lines.length} != ${expected}`);
+                throw new Error(`pembayaran poin ${lines.length} != ${expected}`);
             }
             if (expected) {
-                const total = lines.reduce((sum, line) => sum + line.priceIncl, 0);
-                if (Math.abs(total + 10000) > 0.01) {
-                    throw new Error(`total baris poin ${total} != -10000`);
+                const total = lines.reduce((sum, line) => sum + line.amount, 0);
+                if (Math.abs(total - 10000) > 0.001) {
+                    throw new Error(`total pembayaran poin ${total} != 10000`);
                 }
-                if (lines.some((line) => line.price_type !== "automatic")) {
-                    throw new Error("price_type baris poin harus automatic");
+                const order = posmodel.getOrder();
+                if (Math.abs(order.priceIncl - 50000) > 0.001) {
+                    throw new Error(`total order berubah: ${order.priceIncl} (harga & pajak tetap penuh, P-8)`);
                 }
             }
         },
+    };
+}
+
+function pointsMethodNotSelectable() {
+    return {
+        content: "metode Poin EFN tidak bisa dipilih manual",
+        trigger: negate(`.paymentmethods .button.paymentmethod .payment-name:contains("${POINTS_METHOD}")`),
     };
 }
 
@@ -121,13 +130,22 @@ registry.category("web_tour.tours").add("EfnPosLoyaltyRedeemTour", {
     steps: () =>
         [
             startWithMemberOnPayment(),
+            pointsMethodNotSelectable(),
             { content: "klik Cek Poin", trigger: ".payment-screen .efn-check-points", run: "click" },
             notificationContains("500 poin"),
             redeemPoints("100"),
             submitOtp("123456"),
             notificationContains("100 poin ditukar"),
-            pointsLines(1),
+            pointsPayments(1),
+            {
+                content: "baris pembayaran Poin EFN tampil",
+                trigger: `.paymentlines .paymentline .payment-name:contains("${POINTS_METHOD}")`,
+            },
             { content: "tombol tukar hilang setelah redeem", trigger: negate(REDEEM_BUTTON) },
+            {
+                content: "baris Poin EFN bernilai 10.000 (dari reservasi)",
+                trigger: `.paymentlines .paymentline .payment-infos:contains("${POINTS_METHOD}"):has(.payment-amount:contains("10,000"))`,
+            },
             payBankAndSync(),
             Chrome.endTour(),
         ].flat(),
@@ -145,7 +163,7 @@ registry.category("web_tour.tours").add("EfnPosLoyaltyWrongOtpTour", {
             notificationContains("Kode OTP salah"),
             submitOtp("333333"),
             { content: "popup OTP tertutup", trigger: negate(".modal .subtitle") },
-            pointsLines(0),
+            pointsPayments(0),
             PaymentScreen.clickPaymentMethod("Bank"),
             PaymentScreen.clickValidate(),
             ReceiptScreen.isShown(),
@@ -154,21 +172,29 @@ registry.category("web_tour.tours").add("EfnPosLoyaltyWrongOtpTour", {
         ].flat(),
 });
 
-// (3) Batal: redeem lalu kembali ke layar produk -> dialog -> release, baris hilang.
+// (3) Batal: redeem lalu hapus baris pembayaran Poin EFN -> dialog -> release; kembali ke produk juga.
 registry.category("web_tour.tours").add("EfnPosLoyaltyCancelTour", {
     steps: () =>
         [
             startWithMemberOnPayment(),
             redeemPoints("100"),
             submitOtp("123456"),
-            pointsLines(1),
+            pointsPayments(1),
+            PaymentScreen.clickPaymentlineDelButton(POINTS_METHOD, "10,000"),
+            Dialog.is({ title: "Batalkan tukar poin?" }),
+            Dialog.confirm("Batalkan tukar poin"),
+            pointsPayments(0),
+            { content: "tombol tukar muncul lagi", trigger: REDEEM_BUTTON },
+            redeemPoints("100"),
+            submitOtp("123456"),
+            pointsPayments(1),
             PaymentScreen.clickBackToProductScreen(),
             Dialog.is({ title: "Batalkan tukar poin?" }),
             Dialog.confirm("Batalkan tukar poin"),
             ProductScreen.isShown(),
-            pointsLines(0),
+            pointsPayments(0),
             ProductScreen.clickPayButton(),
-            { content: "tombol tukar muncul lagi", trigger: REDEEM_BUTTON },
+            { content: "tombol tukar muncul lagi (2)", trigger: REDEEM_BUTTON },
             PaymentScreen.clickPaymentMethod("Bank"),
             PaymentScreen.clickValidate(),
             ReceiptScreen.isShown(),
@@ -190,7 +216,7 @@ registry.category("web_tour.tours").add("EfnPosLoyaltyOfflineTour", {
             waitNetwork(false),
             redeemPoints("100"),
             submitOtp("123456"),
-            pointsLines(1),
+            pointsPayments(1),
             OfflineUtil.setOfflineMode(),
             waitNetwork(true),
             PaymentScreen.clickPaymentMethod("Bank"),
@@ -198,7 +224,7 @@ registry.category("web_tour.tours").add("EfnPosLoyaltyOfflineTour", {
             { content: "validasi diblok saat offline", trigger: `.modal-body:contains("POS sedang offline")` },
             Dialog.confirm("Tunggu online", ".btn-secondary"),
             PaymentScreen.isShown(),
-            pointsLines(1),
+            pointsPayments(1),
             OfflineUtil.setOnlineMode(),
             waitNetwork(false),
             PaymentScreen.clickValidate(),

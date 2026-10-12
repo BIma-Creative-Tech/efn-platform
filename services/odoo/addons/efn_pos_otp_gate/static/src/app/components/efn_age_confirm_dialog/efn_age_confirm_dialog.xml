@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="template" xml:space="preserve">
+    <t t-name="efn_pos_otp_gate.EfnAgeConfirmDialog">
+        <Dialog title="props.title" size="'md'">
+            <p class="efn-age-confirm-body" t-esc="props.body"/>
+            <div class="form-check">
+                <input type="checkbox" class="form-check-input efn-age-confirm-checkbox" id="efn_age_confirm" t-model="state.confirmed"/>
+                <label class="form-check-label" for="efn_age_confirm">Pelanggan menyatakan berusia minimal 17 tahun</label>
+            </div>
+            <t t-set-slot="footer">
+                <button class="btn btn-primary btn-lg lh-lg efn-age-confirm-submit" t-att-disabled="!state.confirmed" t-on-click="confirm">Kirim OTP</button>
+                <button class="btn btn-secondary btn-lg lh-lg" t-on-click="props.close">Batal</button>
+            </t>
+        </Dialog>
+    </t>
+</templates>

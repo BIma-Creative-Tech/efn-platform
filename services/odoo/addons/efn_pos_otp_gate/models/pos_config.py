@@ -24,7 +24,7 @@ from odoo.addons.efn_core.models.efn_bff_client import (
     partner_member_ref,
 )
 
-from .efn_pos_otp_challenge import OTP_PURPOSE_KEYS, PURPOSE_PROMO
+from .efn_pos_otp_challenge import OTP_PURPOSE_KEYS, PURPOSE_ENROLL, PURPOSE_PROMO
 
 _logger = logging.getLogger(__name__)
 
@@ -112,7 +112,18 @@ class PosConfig(models.Model):
         return partner
 
     # --------------------------------------------------------------------- RPC
-    def efn_otp_request(self, order_ref, amount, partner_id, purpose=PURPOSE_PROMO):
+    def _efn_age_confirmation_error(self, purpose, age_confirmed):
+        """E-34 / K-18-8: `pos_enroll` wajib `age_confirmed` bernilai boolean `True` persis (centang kasir).
+        Nilai diteruskan apa adanya ke BFF (yang juga menolak `400 age_confirmation_required`); Odoo tidak
+        menyimpan usia."""
+        if purpose != PURPOSE_ENROLL or age_confirmed is True:
+            return None
+        return self._efn_error(
+            "age_confirmation_required",
+            _("Centang pernyataan bahwa pelanggan berusia minimal 17 tahun sebelum mendaftarkan member."),
+        )
+
+    def efn_otp_request(self, order_ref, amount, partner_id, purpose=PURPOSE_PROMO, age_confirmed=False):
         """Minta OTP ke BFF untuk order POS ini, ke nomor HP pelanggan order.
 
         E-23 (docs/04 §9.3): ``purpose`` = ``pos_promo`` (default, gate promo) atau
@@ -129,6 +140,9 @@ class PosConfig(models.Model):
         self._efn_check_otp_caller()
         if purpose not in OTP_PURPOSE_KEYS:
             return self._efn_error("invalid_purpose", _("Tujuan OTP tidak valid."))
+        age_error = self._efn_age_confirmation_error(purpose, age_confirmed)
+        if age_error:
+            return age_error
         partner = self._efn_resolve_partner(partner_id)
         member, member_error = partner_member_ref(partner)
         if not member:
@@ -156,6 +170,8 @@ class PosConfig(models.Model):
             "pos_config_id": self.id,
             "purpose": purpose,
         }
+        if purpose == PURPOSE_ENROLL:
+            payload["age_confirmed"] = True
         try:
             response = self.env["efn.bff.client"]._efn_post(
                 OTP_REQUEST_PATH, payload, log_context={"member": masked, "order_ref": order_ref}
@@ -169,6 +185,8 @@ class PosConfig(models.Model):
         error_code = error.get("code") if isinstance(error, dict) else None
         if response.status == 400 and error_code == "invalid_phone":
             return self._efn_error("invalid_phone", self._efn_member_error_message("invalid_phone"))
+        if response.status == 400 and error_code == "age_confirmation_required":
+            return self._efn_age_confirmation_error(PURPOSE_ENROLL, False)
         challenge_id = response.data.get("challenge_id")
         if response.status not in (200, 202) or not isinstance(challenge_id, str) or not challenge_id:
             return self._efn_error("otp_request_failed", _("Gagal meminta OTP."))
@@ -202,7 +220,7 @@ class PosConfig(models.Model):
             "expires_in": expires_in if isinstance(expires_in, int) else 180,
         }
 
-    def efn_otp_verify(self, order_ref, code, purpose=PURPOSE_PROMO):
+    def efn_otp_verify(self, order_ref, code, purpose=PURPOSE_PROMO, age_confirmed=False):
         """Verifikasi OTP; bila sukses token disimpan server-side (tidak dikirim ke browser).
 
         :returns: ``{"ok": True, "member_masked"}`` atau
@@ -211,6 +229,9 @@ class PosConfig(models.Model):
         self._efn_check_otp_caller()
         if purpose not in OTP_PURPOSE_KEYS:
             return self._efn_error("invalid_purpose", _("Tujuan OTP tidak valid."))
+        age_error = self._efn_age_confirmation_error(purpose, age_confirmed)
+        if age_error:
+            return age_error
         if not isinstance(order_ref, str) or not _ORDER_REF_RE.match(order_ref):
             return self._efn_error("invalid_order", _("Order tidak valid."))
         code = (code or "").strip() if isinstance(code, str) else ""
@@ -227,6 +248,8 @@ class PosConfig(models.Model):
             "order_ref": order_ref,
             "code": code,
         }
+        if purpose == PURPOSE_ENROLL:
+            payload["age_confirmed"] = True
         try:
             response = self.env["efn.bff.client"]._efn_post(
                 OTP_VERIFY_PATH,
@@ -237,6 +260,11 @@ class PosConfig(models.Model):
             return self._efn_error("bff_unavailable", _("Layanan OTP tidak tersedia. Lanjutkan tanpa promo."))
 
         data = response.data
+        if purpose == PURPOSE_ENROLL and response.status == 200 and data.get("ok") is True:
+            # E-34: pendaftaran member selesai di BFF (member.age_confirmed_at + source=pos). Tidak ada token
+            # yang disimpan Odoo; challenge ditutup.
+            challenge.write({"state": "consumed", "bff_challenge_id": False, "discount_token": False})
+            return {"ok": True, "member_masked": challenge.member_ref_masked}
         token = data.get("discount_token")
         if response.status == 200 and data.get("ok") is True and isinstance(token, str) and token:
             expires_in = data.get("expires_in")

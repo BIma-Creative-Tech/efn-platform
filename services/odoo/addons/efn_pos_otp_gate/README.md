@@ -36,6 +36,18 @@ Baris refund (`refunded_orderline_id` dengan qty < 0) dikecualikan. Baris yang f
 ## `order_ref`
 Odoo 19 membuat `pos_reference` **di server saat order pertama kali di-sync** (`_complete_values_from_session`), sehingga belum ada saat kasir meminta OTP. Modul ini memakai **`pos.order.uuid`** (dibuat di frontend, stabil, unik) sebagai `order_ref`. Kontrak `docs/04 §1` perlu disesuaikan (BFF harus memperlakukan `order_ref` sebagai string opaque ≤ 64 karakter).
 
+## E-34 — daftar member dengan pernyataan usia 17+ (G18, versi 19.0.1.8.0)
+- Kontrak `docs/04 §9.9` K-18-8 (+ L-24 BFF), fit-gap `docs/08 §9.5`. Tujuan OTP baru `pos_enroll`.
+- POS: tombol **Daftar Member** (menu tombol lain; online saja) -> dialog centang wajib "Pelanggan menyatakan berusia
+  minimal 17 tahun" (tombol kirim nonaktif sampai dicentang; teks menunggu Legal) -> OTP `pos_enroll` ke nomor
+  pelanggan order.
+- Server: `efn_otp_request(..., purpose="pos_enroll", age_confirmed=True)` dan `efn_otp_verify(..., age_confirmed=True)`;
+  nilai selain boolean `True` -> `age_confirmation_required` tanpa memanggil BFF. `age_confirmed: true` diteruskan ke
+  `POST /v1/pos/otp/request|verify`; verify BFF `{ok: true, enrolled: true}` (tanpa token) -> challenge `consumed`.
+  BFF mengisi `member.age_confirmed_at` + `source=pos`. **Odoo tidak menyimpan usia/tanggal lahir/bendera usia**
+  (hanya `purpose` di challenge). Challenge `pos_enroll` tidak membuka promo maupun tukar poin.
+- Keterbatasan: pernyataan pelanggan + centang kasir = kontrol prosedural (SOP kasir), dicatat untuk DPO.
+
 ## Konfigurasi
 | Parameter | Default | Arti |
 |---|---|---|

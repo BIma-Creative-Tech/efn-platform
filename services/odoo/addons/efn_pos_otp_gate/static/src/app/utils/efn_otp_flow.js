@@ -6,11 +6,13 @@
  * server-side (efn.pos.otp.challenge). Browser hanya menerima ok + nomor ter-mask.
  *
  * E-23: `purpose` = "pos_promo" (default, gate promo) | "pos_redeem" (tukar Poin EFN,
- * modul efn_pos_loyalty_ledger). Untuk `pos_redeem` penanda promo order TIDAK disentuh.
+ * modul efn_pos_loyalty_ledger) | "pos_enroll" (E-34: kasir mendaftarkan member; wajib centang pernyataan usia
+ * 17+ -> `age_confirmed: true`, Odoo tidak menyimpan usia). Selain `pos_promo` penanda promo order TIDAK disentuh.
  */
 import { _t } from "@web/core/l10n/translation";
 import { NumberPopup } from "@point_of_sale/app/components/popups/number_popup/number_popup";
 import { makeAwaitable } from "@point_of_sale/app/utils/make_awaitable_dialog";
+import { EfnAgeConfirmDialog } from "@efn_pos_otp_gate/app/components/efn_age_confirm_dialog/efn_age_confirm_dialog";
 
 const MAX_CODE_ATTEMPTS = 3;
 
@@ -24,20 +26,21 @@ async function callServer(pos, method, args) {
 
 /**
  * @param {Object} [options]
- * @param {"pos_promo"|"pos_redeem"} [options.purpose="pos_promo"]
+ * @param {"pos_promo"|"pos_redeem"|"pos_enroll"} [options.purpose="pos_promo"]
+ * @param {boolean} [options.ageConfirmed] wajib true untuk "pos_enroll" (server menolak selain true)
  * @returns {Promise<boolean>} true bila OTP terverifikasi (untuk pos_promo order sudah ditandai).
  */
 export async function efnRunOtpFlow({ pos, dialog, notification }, order, options = {}) {
-    const purpose = options.purpose === "pos_redeem" ? "pos_redeem" : "pos_promo";
+    const purpose = ["pos_redeem", "pos_enroll"].includes(options.purpose) ? options.purpose : "pos_promo";
     const isPromo = purpose === "pos_promo";
-    const featureLabel = isPromo ? _t("promo") : _t("tukar poin");
+    const ageConfirmed = purpose === "pos_enroll" && options.ageConfirmed === true;
+    const featureLabel = {
+        pos_promo: _t("promo"),
+        pos_redeem: _t("tukar poin"),
+        pos_enroll: _t("pendaftaran member"),
+    }[purpose];
     if (efnIsOffline(pos)) {
-        notification.add(
-            isPromo
-                ? _t("Promo ber-OTP tidak tersedia saat POS offline.")
-                : _t("Tukar poin tidak tersedia saat POS offline."),
-            { type: "warning" }
-        );
+        notification.add(_t("Fitur %s tidak tersedia saat POS offline.", featureLabel), { type: "warning" });
         return false;
     }
     let partner = order.getPartner();
@@ -66,6 +69,7 @@ export async function efnRunOtpFlow({ pos, dialog, notification }, order, option
             options.amount ?? order.priceIncl,
             partner.id,
             purpose,
+            ageConfirmed,
         ]);
     } catch {
         notification.add(_t("Layanan OTP tidak dapat dihubungi. Lanjutkan tanpa %s.", featureLabel), {
@@ -97,7 +101,12 @@ export async function efnRunOtpFlow({ pos, dialog, notification }, order, option
         }
         let verifyResult;
         try {
-            verifyResult = await callServer(pos, "efn_otp_verify", [order.uuid, String(code), purpose]);
+            verifyResult = await callServer(pos, "efn_otp_verify", [
+                order.uuid,
+                String(code),
+                purpose,
+                ageConfirmed,
+            ]);
         } catch {
             notification.add(_t("Layanan OTP tidak dapat dihubungi. Lanjutkan tanpa %s.", featureLabel), {
                 type: "danger",
@@ -105,7 +114,10 @@ export async function efnRunOtpFlow({ pos, dialog, notification }, order, option
             return false;
         }
         if (verifyResult?.ok && !isPromo) {
-            notification.add(_t("OTP terverifikasi."), { type: "success" });
+            notification.add(
+                purpose === "pos_enroll" ? _t("Member terdaftar (OTP terverifikasi).") : _t("OTP terverifikasi."),
+                { type: "success" }
+            );
             return true;
         }
         if (verifyResult?.ok) {
@@ -126,4 +138,38 @@ export async function efnRunOtpFlow({ pos, dialog, notification }, order, option
         }
     }
     return false;
+}
+
+/**
+ * E-34 (K-18-8): kasir mendaftarkan pelanggan order sebagai member. Centang wajib pernyataan usia 17+ (teks
+ * menunggu Legal) -> OTP `pos_enroll` dengan `age_confirmed: true`. Offline: tidak tersedia.
+ * @returns {Promise<boolean>}
+ */
+export async function efnRunEnrollFlow({ pos, dialog, notification }, order) {
+    if (efnIsOffline(pos)) {
+        notification.add(_t("Pendaftaran member tidak tersedia saat POS offline."), { type: "warning" });
+        return false;
+    }
+    if (!order.getPartner()) {
+        notification.add(_t("Pilih pelanggan yang akan didaftarkan sebagai member."), { type: "info" });
+        await pos.selectPartner(order);
+        if (!order.getPartner()) {
+            return false;
+        }
+    }
+    const confirmed = await makeAwaitable(dialog, EfnAgeConfirmDialog, {
+        title: _t("Daftarkan member"),
+        body: _t(
+            "Tanyakan kepada pelanggan dan centang bila pelanggan menyatakan berusia minimal 17 tahun. " +
+                "Usia tidak disimpan di POS."
+        ),
+    });
+    if (confirmed !== true) {
+        return false;
+    }
+    return await efnRunOtpFlow({ pos, dialog, notification }, order, {
+        purpose: "pos_enroll",
+        ageConfirmed: true,
+        amount: 0,
+    });
 }

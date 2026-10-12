@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="template" xml:space="preserve">
+    <!-- E-34: tombol "Daftar Member" di menu tombol lain (hanya online; butuh OTP pelanggan). -->
+    <t t-name="efn_pos_otp_gate.ControlButtons" t-inherit="point_of_sale.ControlButtons" t-inherit-mode="extension">
+        <xpath expr="//div[hasclass('control-buttons-modal')]" position="inside">
+            <button t-if="efnShowEnroll" t-att-class="buttonClass" class="efn-enroll-member" t-on-click="() => this.efnEnrollMember()">
+                <i class="fa fa-id-card me-2" role="img" aria-label="Daftar Member" title="Daftar Member"/>Daftar Member
+            </button>
+        </xpath>
+    </t>
+</templates>

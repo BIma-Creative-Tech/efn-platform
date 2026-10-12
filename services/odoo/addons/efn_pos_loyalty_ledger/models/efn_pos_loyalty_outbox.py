@@ -116,6 +116,8 @@ class EfnPosLoyaltyOutbox(models.Model):
     )
     eligible_amount = fields.Integer(string="Dasar poin (Rp)", readonly=True)
     refund_ratio = fields.Float(digits=(16, 6), readonly=True)
+    # K-18-5 (G18, E-30): nilai Poin EFN (Rupiah bulat) yang dikembalikan lewat pembayaran Poin EFN negatif refund.
+    points_restored_value = fields.Integer(string="Poin dikembalikan (Rp)", readonly=True)
     state = fields.Selection(STATES, required=True, default="pending", index=True, readonly=True, tracking=True)
     attempt_count = fields.Integer(readonly=True)
     next_attempt_at = fields.Datetime(index=True, readonly=True, default=fields.Datetime.now)
@@ -322,6 +324,8 @@ class EfnPosLoyaltyOutbox(models.Model):
                     "order_ref": order.uuid,
                     "member_ref": member,
                     "value_idr": reservation.value_idr,
+                    # K-18-3: nilai pembayaran Poin EFN pada order (= value_idr, divalidasi server saat sync).
+                    "payment_amount": reservation.value_idr,
                     "idempotency_key": self.idempotency_key,
                 },
                 {"member": mask_phone(member), "order_ref": order.uuid},
@@ -338,6 +342,7 @@ class EfnPosLoyaltyOutbox(models.Model):
                     "member_ref": member,
                     "refunded_eligible_amount": self.eligible_amount,
                     "refund_ratio": round(self.refund_ratio, 6),
+                    "points_restored_value": max(int(self.points_restored_value or 0), 0),
                 },
                 {"member": mask_phone(member), "order_ref": order.uuid},
             )

@@ -175,3 +175,30 @@ registry.category("web_tour.tours").add("EfnPosOtpOfflineTour", {
             Chrome.endTour(),
         ].flat(),
 });
+
+// E-34 (K-18-8): daftar member -> centang wajib pernyataan usia 17+ -> OTP pos_enroll -> sukses.
+registry.category("web_tour.tours").add("EfnPosOtpEnrollTour", {
+    steps: () =>
+        [
+            Chrome.startPoS(),
+            Dialog.confirm("Open Register"),
+            ProductScreen.addOrderline(PRODUCT, "1"),
+            ProductScreen.clickPartnerButton(),
+            ProductScreen.clickCustomer(MEMBER),
+            ProductScreen.clickControlButton("Daftar Member"),
+            {
+                content: "dialog pernyataan usia tampil, tombol kirim nonaktif",
+                trigger: ".modal .efn-age-confirm-submit[disabled]",
+            },
+            { content: "centang pernyataan usia", trigger: ".modal .efn-age-confirm-checkbox", run: "click" },
+            {
+                content: "kirim OTP setelah dicentang",
+                trigger: ".modal .efn-age-confirm-submit:not([disabled])",
+                run: "click",
+            },
+            otpPopupShown(),
+            submitOtp("123456"),
+            notificationContains("Member terdaftar"),
+            Chrome.endTour(),
+        ].flat(),
+});
