@@ -11,6 +11,7 @@ import signal
 import threading
 import time
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from efn_etl.adapters import (
@@ -214,20 +215,28 @@ def main() -> None:
         open_window=timedelta(days=settings.loyalty_recon_open_days),
         points_codes=settings.points_product_codes,
         not_before=settings.loyalty_recon_not_before,
+        points_mode=settings.loyalty_points_mode,
+        points_tolerance_idr=Decimal(settings.loyalty_points_tolerance_idr),
     )
     age_out = AgeOut(geo_days=settings.geo_retention_days, pseudonym_years=settings.pseudonym_retention_years)
-    jobs = enabled_jobs(settings.odoo_enabled, settings.points_product_codes, age_out)
+    jobs = enabled_jobs(
+        settings.odoo_enabled,
+        settings.points_product_codes,
+        age_out,
+        points_payment=settings.loyalty_points_mode == "payment",
+    )
     if settings.gl_enabled:
         jobs.extend(GL_JOBS)
     overlap = timedelta(seconds=settings.overlap_seconds)
     log.info(
-        "ETL mulai: jobs=%s stock_snapshot=%s audit_copy=%s audit_sink=%s loyalty_recon=%s erasure=%s interval=%ds "
-        "overlap=%ds",
+        "ETL mulai: jobs=%s stock_snapshot=%s audit_copy=%s audit_sink=%s loyalty_recon=%s points_mode=%s erasure=%s "
+        "interval=%ds overlap=%ds",
         [j.name for j in jobs],
         settings.stock_enabled,
         settings.audit_copy_enabled,
         settings.audit_sink_enabled,
         settings.loyalty_recon_enabled,
+        settings.loyalty_points_mode,
         settings.erasure_enabled,
         settings.interval_seconds,
         settings.overlap_seconds,

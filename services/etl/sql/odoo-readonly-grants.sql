@@ -121,3 +121,22 @@ GRANT SELECT (id, company_id, order_id, original_order_id, kind, state, create_d
     ON public.efn_pos_loyalty_outbox TO efn_etl;
 GRANT SELECT (id, company_id, order_id, order_uuid, points, value_idr, state, create_date)
     ON public.efn_pos_loyalty_reservation TO efn_etl;
+
+-- ===================================================================== Gelombang 18 (efn-data-ai-engineer, K-18-6)
+-- Redeem poin = pembayaran metode "Poin EFN" (docs/04 §9.9, Odoo E-30 `efn_pos_loyalty_ledger` 19.0.2.0.0): ETL
+-- membaca penanda `pos_payment_method.efn_is_loyalty_points` (ETL_LOYALTY_POINTS_MODE=payment). Kolom baru ada
+-- SETELAH E-30 terpasang -> grant bersyarat agar skrip tetap lolos sebelum E-30 (satu-satunya pengecualian pola
+-- "gagal bila kolom tidak ada"; jalankan ulang skrip setelah upgrade modul E-30). pos_payment & pos_order.uuid sudah
+-- di-grant di atas.
+DO $grant_g18$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_payment_method' AND column_name = 'efn_is_loyalty_points'
+    ) THEN
+        EXECUTE 'GRANT SELECT (efn_is_loyalty_points) ON public.pos_payment_method TO efn_etl';
+    ELSE
+        RAISE NOTICE 'efn_is_loyalty_points belum ada (E-30 belum terpasang): grant G18 dilewati';
+    END IF;
+END
+$grant_g18$;

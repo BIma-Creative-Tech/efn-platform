@@ -47,6 +47,13 @@ def _int_range(env: Mapping[str, str], name: str, default: int, low: int, high: 
     return value
 
 
+def _points_mode(env: Mapping[str, str]) -> str:
+    value = _str(env, "ETL_LOYALTY_POINTS_MODE", "product").strip().lower()
+    if value not in ("product", "payment"):
+        raise RuntimeError("ETL_LOYALTY_POINTS_MODE harus product|payment")
+    return value
+
+
 def _bool(env: Mapping[str, str], name: str, default: bool) -> bool:
     return _str(env, name, "true" if default else "false").strip().lower() in _TRUE
 
@@ -129,6 +136,9 @@ class Settings:
     loyalty_recon_aged_hours: int = 24
     loyalty_recon_open_days: int = 30
     loyalty_recon_not_before: datetime | None = None
+    # G18 (docs/04 §9.9 K-18-1/K-18-6, E-30): `product` (default, sampai E-30 terpasang) | `payment`.
+    loyalty_points_mode: str = "product"
+    loyalty_points_tolerance_idr: int = 0
     # G18/W-19 (PDP v7 Q-P7/Q-P8): umur kolom pribadi saat dimuat (lapisan kedua TTL kolom ClickHouse). Env SAMA
     # dengan service clickhouse-init agar kedua lapisan konsisten.
     pseudonym_retention_years: int = 5
@@ -260,6 +270,8 @@ class Settings:
             loyalty_recon_aged_hours=_int(e, "ETL_LOYALTY_RECON_AGED_HOURS", 24),
             loyalty_recon_open_days=_int(e, "ETL_LOYALTY_RECON_OPEN_DAYS", 30),
             loyalty_recon_not_before=_datetime(e, "ETL_LOYALTY_RECON_NOT_BEFORE"),
+            loyalty_points_mode=_points_mode(e),
+            loyalty_points_tolerance_idr=_int_range(e, "ETL_LOYALTY_POINTS_TOLERANCE_IDR", 0, 0, 1000),
             pseudonym_retention_years=_int_range(e, "CH_PSEUDONYM_RETENTION_YEARS", 5, 1, 30),
             geo_retention_days=_int_range(e, "CH_GEO_RETENTION_DAYS", 90, 1, 3650),
         )

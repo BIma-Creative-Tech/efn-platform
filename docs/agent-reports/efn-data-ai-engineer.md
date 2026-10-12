@@ -557,3 +557,41 @@ Rekomendasi deploy pertama: `stop etl` sebelum `clickhouse-init` (migrasi `loyal
 - Jendela race migrasi: erasure DSAR yang jalan tepat di antara salin dan `EXCHANGE` diulang otomatis (verifikasi `count()=0`), tetapi penyalinan "jendela migrasi" (1 jam, `_loaded_at`) secara teori bisa mengembalikan baris subjek yang dihapus pada menit yang sama -> mitigasi: stop ETL saat deploy itu.
 - Versi sama (`created_at`) di `loyalty_events`: bila hash sumber berubah tanpa mengubah `created_at`, pemenang merge = insert terakhir (reload ETL memperbaikinya).
 - Tidak ada view/semantic layer yang mengekspos `member_hash`/`user_hash`; tidak diubah.
+
+## Gelombang 18b — Rekonsiliasi pembayaran Poin EFN K-18-6 (E-30) (12 Okt 2026)
+
+Kontrak: `docs/04_SERVICE_CONTRACTS.md` §9.9 K-18-1, K-18-5, K-18-6; desain Odoo `docs/08_ODOO_FIT_GAP.md` §9.2 (E-30).
+E-30 **belum** ada di DB dev -> logika diuji dengan fixture; uji nyata mode `payment` menunggu lead.
+
+### File
+| File | Perubahan |
+|---|---|
+| `services/etl/efn_etl/loyalty_recon.py` | `LoyaltyReconSettings.points_mode` (`product`/`payment`) + `points_tolerance_idr`. Mode `payment`: kind 3-5 memakai `SQL_ODOO_POINTS_PAYMENTS` (metode `efn_is_loyalty_points`) dengan toleransi tetap (default 0). Baru: `settled_days`, `daily_points_recon`, `add_daily_findings`, `run_daily_points`, kind critical `points_payment_daily_mismatch`, kunci log `points_daily`, tabel `loyalty_points_daily`. |
+| `services/etl/efn_etl/pos.py`, `jobs.py` | `fact_pos_payment.is_loyalty_points` (SQL membaca penanda hanya di mode `payment`; mode `product` = konstanta FALSE). |
+| `services/etl/efn_etl/config.py`, `__main__.py` | Env `ETL_LOYALTY_POINTS_MODE` (default `product`), `ETL_LOYALTY_POINTS_TOLERANCE_IDR` (default 0, 0..1000); log start memuat `points_mode`. |
+| `services/etl/sql/odoo-readonly-grants.sql` | Grant bersyarat (DO block) `pos_payment_method.efn_is_loyalty_points` — lolos sebelum E-30 (NOTICE), aktif saat dijalankan ulang setelah E-30. Diuji di dev: exit 0. |
+| `infra/clickhouse/init/06-loyalty-points-payment.sql` | Kolom `fact_pos_payment.is_loyalty_points`, tabel `loyalty_points_daily` (TTL 400 h, tanpa PII), view `v_loyalty_points_daily`. |
+| `infra/clickhouse/access/{etl,metabase}-access.sql` | `etl_writer` SELECT/INSERT tabel harian; `metabase_reader` view + tabel. |
+| Test | `test_loyalty_recon.py` +11 (hari settle, atribusi lewat tengah malam, selisih per order/BFF-only/Odoo-only, toleransi, order di luar jendela, end-to-end mode payment, mode product tanpa harian), `test_pos.py` +1, `test_config.py` +1. |
+| `services/etl/README.md` | Bagian "Redeem poin = pembayaran Poin EFN". |
+
+### Desain
+- Rumus K-18-6 per PT x hari WIB: Σ `pos.payment` Poin EFN (order `paid/done`, refund negatif) − (Σ `value_idr` reservasi `committed` − Σ `points_restored_value`) = 0 (toleransi 0).
+- Hari = tanggal WIB pembayaran Poin EFN di Odoo; nilai BFF **diatribusikan ke order Odoo-nya** (`order_ref` = `pos.order.uuid`; restore memakai uuid order refund). Order offline yang di-commit BFF lewat tengah malam tidak memicu alarm palsu. Nilai BFF tanpa order Odoo memakai tanggal/PT BFF (= anomali). Hari yang dicek = hari utuh dalam lookback (72 j) yang sudah lewat settle (6 j).
+- PDP: tidak membaca member/partner/kartu; sampel = id order Odoo.
+
+### Butuh keputusan / pekerjaan pihak lain
+1. **BFF (usulan kontrak, belum ada):** `points_restored_value` (K-18-5) belum disimpan BFF; ETL mengasumsikan tabel `platform.loyalty_pos_reverse` (`refund_order_ref` PK/unik, `original_order_ref`, `company_code`, `points_restored_value` bigint, `created_at`) + `GRANT SELECT` kolom tersebut ke `efn_readonly`. Bila lead memilih bentuk lain, cukup ubah `_PLATFORM_RESTORE_ROWS`.
+2. **Odoo E-30:** `pos_payment_method.efn_is_loyalty_points` (boolean). Setelah terpasang: jalankan ulang grant Odoo, set `ETL_LOYALTY_POINTS_MODE=payment` di service `etl` (devsecops), lalu uji nyata.
+3. Redeem BFF diambil dari `loyalty_reservation` (retensi 30 h) — cukup untuk jendela 72 j.
+
+### Verifikasi
+- pytest ETL 216 passed / 1 skipped; ruff check + format bersih.
+- `clickhouse-init` dev exit 0 (06 diterapkan, idempoten pada run ke-2); ETL di-rebuild (mode `product`): `pos_payments` ok, `is_loyalty_points` = 0.
+- Query BFF redeem & join Odoo pembayaran diuji sebagai role `efn_etl` di dev (grant cukup, tanpa kolom penanda).
+- Catatan dev: `infra/compose/.env` lokal (gitignored) masih `CH_MART_RETENTION_YEARS=5` sehingga run init tanpa override sempat mengembalikan TTL baris ke 5 th; diubah ke 10 dan init dijalankan ulang (tidak ada data > 5 th di dev).
+
+### Belum terverifikasi
+- Mode `payment` terhadap Odoo/BFF nyata (E-30 + tabel reverse BFF belum ada).
+- Perbandingan `payment_date` (timestamp tanpa zona, UTC) dengan parameter timestamptz mengikuti pola query recon yang ada (session TZ UTC).
+- Kartu Metabase untuk `v_loyalty_points_daily` belum dibuat (view + grant sudah siap).

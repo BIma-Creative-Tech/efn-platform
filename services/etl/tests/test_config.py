@@ -198,3 +198,14 @@ def test_column_retention_defaults_w19(tls_env: dict[str, str]) -> None:
 def test_column_retention_out_of_range_fails(tls_env: dict[str, str], override: dict[str, str]) -> None:
     with pytest.raises(RuntimeError):
         Settings.from_env({**tls_env, **override})
+
+
+def test_loyalty_points_mode_w18(tls_env: dict[str, str]) -> None:
+    # G18 (docs/04 §9.9, E-30): default `product` sampai E-30 terpasang; toleransi default 0 (K-18-1).
+    settings = Settings.from_env(tls_env)
+    assert (settings.loyalty_points_mode, settings.loyalty_points_tolerance_idr) == ("product", 0)
+    paid = Settings.from_env({**tls_env, "ETL_LOYALTY_POINTS_MODE": "Payment"})
+    assert paid.loyalty_points_mode == "payment"
+    for bad in ({"ETL_LOYALTY_POINTS_MODE": "diskon"}, {"ETL_LOYALTY_POINTS_TOLERANCE_IDR": "-1"}):
+        with pytest.raises(RuntimeError):
+            Settings.from_env({**tls_env, **bad})

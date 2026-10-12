@@ -18,12 +18,13 @@ from efn_etl.watermark import to_utc
 
 # ---------------------------------------------------------------- pos_payment -> fact_pos_payment
 
-SQL_POS_PAYMENTS = """
+_SQL_POS_PAYMENTS = """
 SELECT p.id AS payment_id, p.pos_order_id AS order_id, o.company_id, c.name AS company_name, o.config_id AS store_id,
        COALESCE(p.payment_date, o.date_order) AS payment_date, p.amount, p.payment_method_id,
        COALESCE(pm.name ->> 'id_ID', pm.name ->> 'en_US', '') AS method_name,
        COALESCE(pm.payment_method_type, '') AS method_type, COALESCE(pm.is_cash_count, FALSE) AS is_cash,
        COALESCE(p.is_change, FALSE) AS is_change, COALESCE(o.is_refund, FALSE) AS is_refund, p.write_date,
+       {points_flag} AS is_loyalty_points,
        p.write_date AS _cursor_ts, p.id::text AS _cursor_key
 FROM pos_payment p
 JOIN pos_order o ON o.id = p.pos_order_id
@@ -35,6 +36,17 @@ WHERE o.state IN ('paid', 'done')
 ORDER BY p.write_date, p.id::text
 LIMIT %(limit)s
 """
+# G18 (docs/04 §9.9, E-30): penanda metode "Poin EFN". Kolom Odoo `pos_payment_method.efn_is_loyalty_points` baru ada
+# setelah E-30 terpasang -> dibaca hanya bila ETL_LOYALTY_POINTS_MODE=payment; sebelumnya FALSE (kolom mart 0).
+POINTS_FLAG_PAYMENT = "COALESCE(pm.efn_is_loyalty_points, FALSE)"
+POINTS_FLAG_PRODUCT = "FALSE"
+
+
+def pos_payments_sql(points_payment: bool = False) -> str:
+    return _SQL_POS_PAYMENTS.format(points_flag=POINTS_FLAG_PAYMENT if points_payment else POINTS_FLAG_PRODUCT)
+
+
+SQL_POS_PAYMENTS = pos_payments_sql()
 POS_PAYMENT_COLUMNS = (
     "payment_id",
     "order_id",
@@ -50,6 +62,7 @@ POS_PAYMENT_COLUMNS = (
     "is_change",
     "is_refund",
     "write_date",
+    "is_loyalty_points",
 )
 
 
@@ -69,6 +82,7 @@ def transform_pos_payment(row: dict[str, Any]) -> list[Any]:
         1 if row["is_change"] else 0,
         1 if row["is_refund"] else 0,
         to_utc(row["write_date"]),
+        1 if row.get("is_loyalty_points") else 0,
     ]
 
 
@@ -161,9 +175,22 @@ def transform_product(row: dict[str, Any]) -> list[Any]:
     ]
 
 
-POS_PAYMENTS = Job(
-    "pos_payments", "odoo", SQL_POS_PAYMENTS, "fact_pos_payment", POS_PAYMENT_COLUMNS, transform_pos_payment
-)
+def pos_payments_job(points_payment: bool = False) -> Job:
+    return Job(
+        "pos_payments",
+        "odoo",
+        pos_payments_sql(points_payment),
+        "fact_pos_payment",
+        POS_PAYMENT_COLUMNS,
+        transform_pos_payment,
+    )
+
+
+POS_PAYMENTS = pos_payments_job()
 POS_OUTLETS = Job("pos_outlets", "odoo", SQL_POS_OUTLETS, "dim_outlet", OUTLET_COLUMNS, transform_outlet)
 PRODUCTS = Job("products", "odoo", SQL_PRODUCTS, "dim_product", PRODUCT_COLUMNS, transform_product)
 POS_JOBS = (POS_OUTLETS, PRODUCTS, POS_PAYMENTS)
+
+
+def pos_jobs(points_payment: bool = False) -> tuple[Job, ...]:
+    return (POS_OUTLETS, PRODUCTS, pos_payments_job(points_payment))

@@ -40,6 +40,8 @@ GRANT SELECT, INSERT ON efn_dwh.etl_job_run TO etl_writer;
 -- Gelombang 14 (sisa SEC-61): hasil rekonsiliasi loyalty ledger <-> pos.order (append-only, tanpa PII).
 GRANT SELECT, INSERT ON efn_dwh.loyalty_recon_run TO etl_writer;
 GRANT SELECT, INSERT ON efn_dwh.loyalty_recon_finding TO etl_writer;
+-- Gelombang 18 (K-18-6): rekonsiliasi harian pembayaran Poin EFN (append-only, tanpa PII).
+GRANT SELECT, INSERT ON efn_dwh.loyalty_points_daily TO etl_writer;
 -- Salinan audit tamper-evident: HANYA SELECT + INSERT. Sengaja TANPA ALTER DELETE/UPDATE, TRUNCATE, DROP, OPTIMIZE:
 -- ETL (atau kredensial efn_etl yang bocor) tidak bisa menghapus/mengubah salinan; perubahan hanya oleh admin ClickHouse
 -- (terdeteksi lewat kepala rantai di Loki). Bila suatu saat ada `GRANT ALL`/wildcard ke etl_writer, cabut dulu.

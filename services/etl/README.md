@@ -65,6 +65,21 @@ hook) tidak dibandingkan. Log: `<ts> (INFO|WARNING) efn_etl.loyalty_recon EFN_LO
 ledger sampel. Tabel `loyalty_recon_run` (penanda, ditulis terakhir) + `loyalty_recon_finding`, retensi 400 hari; view
 `v_loyalty_recon_latest`, `v_loyalty_recon_daily`. Grant Odoo baru: `sql/odoo-readonly-grants.sql` bagian G14.
 
+### Redeem poin = pembayaran Poin EFN (docs/04 §9.9 K-18-1/K-18-6, Odoo E-30) — Gelombang 18
+`ETL_LOYALTY_POINTS_MODE` = `product` (default; redeem = baris produk Poin EFN, G13) | `payment` (setelah E-30 terpasang
+dan grant `efn_is_loyalty_points` diterapkan ulang dari `sql/odoo-readonly-grants.sql`). Mode `payment`:
+- kind `redeem_without_points_line`, `points_line_value_mismatch`, `points_line_without_redeem` memakai pembayaran
+  metode `pos_payment_method.efn_is_loyalty_points` (toleransi `ETL_LOYALTY_POINTS_TOLERANCE_IDR`, default 0, 0..1000);
+- **K-18-6 harian**: per PT x hari WIB yang sudah utuh + settle, Σ `pos.payment` Poin EFN (refund negatif) =
+  Σ `value_idr` reservasi committed − Σ `points_restored_value`. Sisi BFF diatribusikan ke hari/PT order Odoo
+  (`order_ref` = `pos.order.uuid`), sehingga commit BFF lewat tengah malam (order offline) tidak memicu alarm palsu.
+  Beda → kind critical `points_payment_daily_mismatch` di log `EFN_LOYALTY_RECON_ETL` (WARNING, kunci `points_daily`)
+  dan `loyalty_recon_finding`; semua hari ditulis ke `loyalty_points_daily` / view `v_loyalty_points_daily` (dashboard);
+- `fact_pos_payment.is_loyalty_points` = 1 untuk pembayaran Poin EFN (mode `product`: selalu 0).
+**Ketergantungan BFF (usulan kontrak, belum ada):** `platform.loyalty_pos_reverse` (`refund_order_ref`,
+`original_order_ref`, `company_code`, `points_restored_value` bigint, `created_at`) + grant SELECT kolom ke `efn_readonly`.
+Tanpa tabel itu mode `payment` gagal di siklus recon (heartbeat `loyalty_recon` error), job lain tetap jalan.
+
 ### Erasure DSAR (docs/04 §8.4)
 `efn_etl/erasure.py`: per request hitung baris `user_hash`/`member_hash` cocok → `ALTER TABLE ... DELETE` (mutation, `mutations_sync=2`; menghapus fisik, bukan sekadar mask seperti lightweight `DELETE`) → verifikasi `count()=0` → publish `{schema_version: 2, idempotency_key: "erasure:<request_id>:clickhouse", request_id, store: "clickhouse"}` (amqps, user `efn-etl`, properti `user_id`/`message_id`). Belum 0 / error → request tetap `processing`, diulang siklus berikutnya. Hash yang sedang dihapus dikecualikan dari job incremental pada siklus itu (overlap window tidak memuat ulang); bila `dsar_request` tidak terbaca, job ber-hash dilewati (fail closed). ETL tidak mendeklarasikan queue (milik BFF).
 

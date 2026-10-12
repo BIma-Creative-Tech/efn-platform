@@ -399,13 +399,14 @@ def enabled_jobs(
     odoo_enabled: bool,
     points_codes: frozenset[str] = DEFAULT_POINTS_PRODUCT_CODES,
     age_out: AgeOut = DEFAULT_AGE_OUT,
+    points_payment: bool = False,
 ) -> list[Job]:
     """Job incremental. Odoo: penjualan POS + (Gelombang 13) pembayaran POS, outlet, produk (efn_etl/pos.py)."""
     jobs = [competitor_prices_job(age_out), loyalty_events_job(age_out)]
     if odoo_enabled:
         # Import lokal: pos.py mengimpor helper dari modul ini.
-        from efn_etl.pos import POS_JOBS
+        from efn_etl.pos import pos_jobs
 
         jobs.append(sales_fact_job(points_codes, age_out))
-        jobs.extend(POS_JOBS)
+        jobs.extend(pos_jobs(points_payment))
     return jobs
