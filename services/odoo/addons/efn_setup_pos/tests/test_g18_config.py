@@ -4,7 +4,7 @@ Nomor HP di bawah fiktif khusus test (bukan data pribadi nyata).
 """
 
 from odoo import Command
-from odoo.exceptions import AccessError
+from odoo.exceptions import AccessError, ValidationError
 from odoo.tests import TransactionCase, tagged
 
 
@@ -77,3 +77,44 @@ class TestEfnG18Config(TransactionCase):
             member.with_user(self.cashier).write({"phone": "0813-9999-2525"})
         # Field lain tetap boleh (koreksi nama).
         member.with_user(self.cashier).write({"name": "Member Uji W-25 (koreksi)"})
+
+
+@tagged("post_install", "-at_install", "efn")
+class TestEfnMemberPriceOtp(TransactionCase):
+    """G18 L-23 (Q-F18-7): harga member = promo ber-OTP (template nonaktif), bukan pricelist pilihan kasir."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.company = cls.env.ref("efn_setup_company.company_rtl")
+        cls.program = cls.env.ref("efn_setup_pos.loyalty_program_member_price_rtl")
+
+    def _cashier_config(self):
+        return self.env["pos.config"].search([("company_id", "=", self.company.id)], limit=1) or self.env[
+            "pos.config"
+        ].with_company(self.company).create({"name": "POS Uji L-23", "company_id": self.company.id})
+
+    def test_template_is_inactive_otp_promotion(self):
+        program = self.program
+        self.assertFalse(program.active)
+        self.assertFalse(program.pos_ok)
+        self.assertTrue(program.efn_requires_otp)
+        self.assertEqual(program.program_type, "promotion")
+        self.assertEqual(program.company_id, self.company)
+        reward = program.with_context(active_test=False).reward_ids
+        self.assertEqual(len(reward), 1)
+        self.assertEqual((reward.reward_type, reward.discount, reward.discount_mode), ("discount", 5, "percent"))
+
+    def test_activation_requires_cashier_pos(self):
+        with self.assertRaises(ValidationError):
+            self.program.write({"active": True, "pos_ok": True})
+        config = self._cashier_config()
+        self.program.write({"active": True, "pos_ok": True, "pos_config_ids": [Command.set(config.ids)]})
+        self.assertTrue(self.program.active)
+        self.assertEqual(self.program.pos_config_ids, config)
+
+    def test_no_member_pricelist_offered_to_cashiers(self):
+        """Tidak ada pricelist 'Member' aktif di daftar pilihan kasir POS mana pun (R-B06)."""
+        configs = self.env["pos.config"].search([])
+        offered = configs.available_pricelist_ids.filtered(lambda p: "member" in (p.name or "").lower())
+        self.assertFalse(offered, offered.mapped("name"))

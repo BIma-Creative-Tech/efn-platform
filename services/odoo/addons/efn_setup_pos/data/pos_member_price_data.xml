@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G18 L-23 (keputusan lead atas Q-F18-7; butir pemilik proyek #42 "pricelist member 5 % + promo ber-OTP"):
+     HARGA MEMBER di POS = promo STANDAR pos_loyalty ber-OTP, BUKAN pricelist pilihan kasir.
+     Alasan (R-B06, docs/08 §9.6): tombol Pricelist POS (point_of_sale control_buttons.js) menampilkan semua
+     pos.config.available_pricelist_ids ke kasir mana pun tanpa cek member/peran -> harga member bisa diberikan ke
+     siapa saja. Promo ber-OTP (efn_pos_otp_gate, efn_requires_otp) hanya berlaku setelah pelanggan order memverifikasi
+     OTP WhatsApp lewat BFF; server menolak order berbayar yang membawa reward ini tanpa token valid; otomatis mati
+     saat POS offline (ADR-017 opsi a).
+
+     Record = TEMPLATE NONAKTIF (PLACEHOLDER 5 %, configurable):
+     - active=False: tidak berlaku di mana pun sampai admin mengaktifkannya (juga mencegah sale_loyalty menerapkannya
+       ke SO bila efn_setup_online belum terpasang; sale_ok tidak diset di sini karena field milik sale_loyalty).
+     - pos_ok=False: constraint efn_pos_otp_gate mewajibkan program OTP dibatasi ke POS kasir (pos_config_ids), dan
+       pos.config tidak dibuat lewat XML. Aktivasi per outlet (README checklist): Active, Point of Sale = centang,
+       pos_config_ids = POS kasir PT Retail (BUKAN kiosk), nilai diskon dari Marketing/Finance.
+     - company PT Retail; tipe promotion (EFN_OTP_PROGRAM_TYPES), trigger otomatis, diskon % atas order.
+     noupdate: nilai/aktivasi yang diubah admin tidak ditimpa saat upgrade. Field terverifikasi loyalty/models
+     (loyalty_program.py, loyalty_rule.py, loyalty_reward.py) 19.0 dan efn_pos_otp_gate/models/loyalty_program.py. -->
+<odoo noupdate="1">
+    <record id="loyalty_program_member_price_rtl" model="loyalty.program">
+        <field name="name">Harga Member 5% - wajib OTP (PLACEHOLDER)</field>
+        <field name="program_type">promotion</field>
+        <field name="applies_on">current</field>
+        <field name="trigger">auto</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="pos_ok" eval="False"/>
+        <field name="efn_requires_otp" eval="True"/>
+        <field name="active" eval="False"/>
+    </record>
+    <record id="loyalty_rule_member_price_rtl" model="loyalty.rule">
+        <field name="program_id" ref="loyalty_program_member_price_rtl"/>
+        <field name="minimum_amount">0</field>
+    </record>
+    <record id="loyalty_reward_member_price_rtl" model="loyalty.reward">
+        <field name="program_id" ref="loyalty_program_member_price_rtl"/>
+        <field name="reward_type">discount</field>
+        <field name="discount">5</field>
+        <field name="discount_mode">percent</field>
+        <field name="discount_applicability">order</field>
+    </record>
+</odoo>

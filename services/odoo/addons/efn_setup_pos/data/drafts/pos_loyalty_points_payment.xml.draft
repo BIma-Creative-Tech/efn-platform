@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DRAF (BELUM dimuat: tidak terdaftar di __manifest__.py, ekstensi .draft). G18 W-01 / E-30 — docs/08 §9.2.
+     Diaktifkan efn-odoo-functional SETELAH efn-odoo-engineer menyelesaikan E-30 (field penanda metode bayar Poin EFN
+     di pos.payment.method) dan lead memberi tahu nama field final. Langkah aktivasi:
+       1. ganti nama file -> data/pos_loyalty_points_payment.xml, daftarkan di "data" manifest SETELAH
+          pos_payment_method_data.xml; efn_setup_pos depends + "efn_pos_loyalty_ledger" (pemilik field);
+       2. ganti penanda __E30_FLAG_FIELD__ dengan nama field final dari E-30 (draf memakai usulan
+          efn_is_loyalty_points, BELUM ada di kode);
+       3. kode akun final dari Finance (Q-F18-3) -> sekarang PLACEHOLDER 2199xxxx (cek bentrok CoA l10n_id);
+       4. test: metode per PT ada, jurnal bank, outstanding = akun liabilitas, bukan tunai, tanpa terminal,
+          tidak ditautkan ke pos.config kiosk; tour E-30 lulus.
+     JANGAN dimuat sebelum field E-30 ada: metode bank tanpa penanda = alat bayar bebas yang bisa dipilih kasir
+     tanpa reservasi poin (R-B06).
+
+     Desain (PoC 10 Okt, DB uji): jurnal bank "Poin EFN" + payment_method_type 'none' + outstanding_account_id = akun
+     liabilitas -> tutup sesi: Dr Liabilitas Poin / Cr Piutang PoS; penjualan & PPN atas harga penuh (P-8 #11).
+     Field terverifikasi 19.0: pos.payment.method (name, company_id, journal_id, payment_method_type,
+     outstanding_account_id, split_transactions), account.journal (name, code, type, company_id),
+     account.account (name, code, account_type, reconcile, company_ids).
+     Lintas brand (#58): bila poin diterbitkan PT lain, PT penjual mendebit akun KLIRING (bukan liabilitas sendiri);
+     settlement bulanan inter-company (W-15). Pilot 1 PT: satu akun per PT; Finance memutuskan (Q-F18-3). -->
+<odoo noupdate="1">
+    <!-- ===== PT Retail ===== -->
+    <record id="account_points_liability_rtl" model="account.account">
+        <field name="name">Liabilitas / Kliring Poin EFN (PLACEHOLDER Q-F18-3)</field>
+        <field name="code">21990091</field>
+        <field name="account_type">liability_current</field>
+        <field name="reconcile" eval="False"/>
+        <field name="company_ids" eval="[(6, 0, [ref('efn_setup_company.company_rtl')])]"/>
+    </record>
+    <record id="journal_points_rtl" model="account.journal">
+        <field name="name">Poin EFN</field>
+        <field name="code">PEFN</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+    </record>
+    <record id="pos_payment_method_points_rtl" model="pos.payment.method">
+        <field name="name">Poin EFN</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="journal_id" ref="journal_points_rtl"/>
+        <field name="payment_method_type">none</field>
+        <field name="split_transactions" eval="False"/>
+        <field name="outstanding_account_id" ref="account_points_liability_rtl"/>
+        <field name="__E30_FLAG_FIELD__" eval="True"/>
+    </record>
+
+    <!-- ===== PT F&B ===== -->
+    <record id="account_points_liability_fnb" model="account.account">
+        <field name="name">Liabilitas / Kliring Poin EFN (PLACEHOLDER Q-F18-3)</field>
+        <field name="code">21990091</field>
+        <field name="account_type">liability_current</field>
+        <field name="reconcile" eval="False"/>
+        <field name="company_ids" eval="[(6, 0, [ref('efn_setup_company.company_fnb')])]"/>
+    </record>
+    <record id="journal_points_fnb" model="account.journal">
+        <field name="name">Poin EFN</field>
+        <field name="code">PEFN</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+    </record>
+    <record id="pos_payment_method_points_fnb" model="pos.payment.method">
+        <field name="name">Poin EFN</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="journal_id" ref="journal_points_fnb"/>
+        <field name="payment_method_type">none</field>
+        <field name="split_transactions" eval="False"/>
+        <field name="outstanding_account_id" ref="account_points_liability_fnb"/>
+        <field name="__E30_FLAG_FIELD__" eval="True"/>
+    </record>
+    <!-- Holding & Farming tidak punya POS -> tidak dibuat. -->
+</odoo>

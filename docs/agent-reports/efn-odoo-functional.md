@@ -351,3 +351,21 @@ Usulan kontrak §9 v6: K-18-1..K-18-7, ditambah K-18-8 (`age_confirmed` untuk PO
 - Belum diuji: smoke online BFF di atas IDR Rp1 (bff/QA), struk POS di UI, rumus dua tahap `account_tax_python` (Q-F18-2), FEFO pada picking POS tanpa lot.
 - `scripts/check-odoo-deps.sh` tidak bisa dijalankan lokal karena butuh Python di host. Depends baru hanya `efn_*`.
 - Pertanyaan klien: Q-F18-1..7 (`docs/08 §9.9`).
+
+### Gelombang 18 lanjutan — 2026-10-12 (L-23 harga member = promo OTP; draf data Poin EFN)
+- **L-23 (Q-F18-7)** di `efn_setup_pos` 19.0.1.7.0:
+  - `data/pos_member_price_data.xml` berisi template promo *Harga Member 5% - wajib OTP (PLACEHOLDER)* untuk PT Retail: `promotion` otomatis, diskon 5 % per order, `efn_requires_otp`.
+  - Template **nonaktif** (`active=False`, `pos_ok=False`). Alasannya, constraint `efn_pos_otp_gate` mewajibkan program OTP ditautkan ke `pos_config_ids` POS kasir, sedangkan pos.config tidak dibuat lewat XML. Nonaktif juga mencegah `sale_loyalty` menerapkannya ke SO.
+  - Pricelist demo *Harga Member* diarsipkan. Checklist README: `available_pricelist_ids` = pricelist umum saja; promo diaktifkan per outlet.
+  - Test `TestEfnMemberPriceOtp` (3): bentuk template, aktivasi wajib POS kasir, tidak ada pricelist "member" yang ditawarkan ke POS mana pun.
+  - E-32 tidak diperlukan.
+  - Sisa risiko: admin POS masih bisa menambahkan pricelist apa pun ke POS (kontrol prosedural + review akses).
+- **Draf data Poin EFN (W-01/E-30):** `efn_setup_pos/data/drafts/pos_loyalty_points_payment.xml.draft`, **tidak dimuat** manifest.
+  - Isi per PT Retail & PT F&B: jurnal bank PEFN, akun `liability_current` PLACEHOLDER (Q-F18-3), metode "Poin EFN" (`none`, bukan tunai, `outstanding_account_id` = akun poin).
+  - Penanda field E-30 masih `__E30_FLAG_FIELD__`. Working tree E-30 saat ini memakai `efn_is_loyalty_points`, tetapi belum final, jadi tidak saya kunci.
+  - Draf (tanpa baris penanda) sudah dicoba dimuat via `convert_file` di DB uji lalu di-rollback: OK, jurnal bank, akun liabilitas, bukan tunai.
+  - Langkah aktivasi ada di komentar file.
+- **Verifikasi** (DB baru, PostgreSQL 16.15 terpisah). Working tree saat itu memuat pekerjaan engineer lain yang sedang berjalan: E-30 di `efn_pos_loyalty_ledger`, E-31 `efn_pos_refund_origin` baru, perubahan `efn_pos_otp_gate`, dan test `efn_core`.
+  - **Working tree penuh:** suite 440 test → 2 failed + 2 error, tour 3 failed dari 20. Semua kegagalan ada di kode E-30 yang sedang dikerjakan engineer: `test_rpc_surface` (metode publik baru belum di-allowlist), 3 test `test_loyalty_ledger`, 3 tour Poin EFN (tombol `.efn-redeem-points` sudah tidak ada). **Tidak ada yang terkait `efn_setup_*`.**
+  - **Isolasi** (HEAD untuk semua modul + `efn_setup_company`/`efn_setup_pos`/`efn_setup_online` dari working tree): suite **0 failed / 0 error dari 433 test**, `efn_setup_security` install-after exit 0, tour **0 failed / 0 error dari 20 test**, ruff bersih.
+  - Container, network, DB uji, dan salinan addons isolasi sudah dihapus.
