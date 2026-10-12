@@ -566,3 +566,11 @@ Sumber: `docs/10_RENCANA_GELOMBANG_18_PLUS.md` (W-18, W-19, W-25), keputusan pem
 ### Risiko / sisa
 - Setelah erasure paksa, pelanggan kehilangan akses kode ambil; serah terima butuh verifikasi kanal lain (prosedural, R-L01/R-S14). `part_ids` di log Loki menautkan bagian order ke `request_id` (keduanya opak, tanpa PII) selama retensi Loki.
 - Batas 14 h dihitung dari `requested_at`; bila `DSAR_DELETE_GRACE_DAYS` > 14, erasure tetap menunggu `scheduled_at` (`erasure_deadline` = max keduanya).
+
+### G18 tambahan (permintaan lead, 12 Okt) — status hapus akun memuat batas penundaan
+- `GET /v1/dsar/requests/:id` (jalur `X-DSAR-Receipt`, tanpa sesi) dan `GET /v1/me/requests` (jalur sesi) kini mengembalikan dua field tambahan per item:
+  - `open_online_orders: number` — jumlah bagian pesanan online terbuka (`paying|confirmed|ready|review`), dihitung hanya untuk hapus berstatus `scheduled`; lainnya `0`. Tanpa id atau detail order.
+  - `erasure_deadline: string | null` — `max(requested_at + DSAR_OPEN_ORDER_MAX_DEFER_DAYS, scheduled_at)` bila `open_online_orders > 0`, selain itu `null`. Rumus sama dengan respons `DELETE /v1/me` (helper bersama `privacy/erasure-deferral.ts`).
+- Kontrak usulan untuk docs/04 §8.9/§8.13 (dicatat lead): item DSAR = `{ id, type, status, requested_at, scheduled_at, completed_at, open_online_orders, erasure_deadline }`. Kedua field selalu ada (aditif, tidak memutus klien lama). Frontend dapat berhenti memakai fallback query `?batas=`.
+- Test: 2 test baru (receipt: batas 14 h, kasus selesai → 0/null, env 10 h; sesi: masa tenggang 30 h → batas = `scheduled_at`, item export → 0/null) + penyesuaian 2 test lama. Query subkolom dijalankan di PostgreSQL 16 sebagai `efn_bff` (lulus).
+- Validasi ulang: build OK, lint 0 error, **43 suite / 559 test lulus**, audit tanpa high.

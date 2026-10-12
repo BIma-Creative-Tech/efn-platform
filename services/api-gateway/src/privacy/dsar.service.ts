@@ -15,6 +15,7 @@ import { OtpService } from '../otp/otp.service';
 import { ConsentService, toIso } from './consent.service';
 import { ReauthInput } from './dto/privacy.dto';
 import { DsarReceiptService } from './dsar-receipt.service';
+import { OPEN_PARTS_COLUMN, dsarItem, erasureDeadlineIso } from './erasure-deferral';
 
 export interface DsarRequestItem {
   id: string;
@@ -23,6 +24,10 @@ export interface DsarRequestItem {
   requested_at: string | null;
   scheduled_at: string | null;
   completed_at: string | null;
+  /** W-18 (Q-P18): jumlah bagian pesanan online terbuka (hanya hapus `scheduled`; lainnya 0). Tanpa detail order. */
+  open_online_orders: number;
+  /** W-18: batas paling lambat erasure bila `open_online_orders` > 0, selain itu `null`. */
+  erasure_deadline: string | null;
 }
 
 export interface DeleteAccountResponse {
@@ -299,9 +304,7 @@ export class DsarService {
 
   /** Batas erasure W-18: max(requested_at + N hari, scheduled_at). */
   erasureDeadline(requestedAt: string, scheduledAt: string): string {
-    const byDefer = Date.parse(requestedAt) + this.config.dsarOpenOrderMaxDeferDays * 86_400_000;
-    const sched = Date.parse(scheduledAt);
-    return new Date(Number.isNaN(sched) ? byDefer : Math.max(byDefer, sched)).toISOString();
+    return erasureDeadlineIso(requestedAt, scheduledAt, 1, this.config.dsarOpenOrderMaxDeferDays) ?? scheduledAt;
   }
 
   private deleteResponse(
@@ -339,22 +342,15 @@ export class DsarService {
       requested_at: Date | string;
       scheduled_at: Date | string | null;
       completed_at: Date | string | null;
+      open_n?: number | string | null;
     }>(
-      `SELECT id::text AS id, type, status, requested_at, scheduled_at, completed_at
-         FROM platform.dsar_request WHERE member_id = $1
-        ORDER BY requested_at DESC LIMIT 50`,
+      `SELECT d.id::text AS id, d.type, d.status, d.requested_at, d.scheduled_at, d.completed_at,
+              ${OPEN_PARTS_COLUMN}
+         FROM platform.dsar_request d WHERE d.member_id = $1
+        ORDER BY d.requested_at DESC LIMIT 50`,
       [user.memberId],
     );
-    return {
-      items: res.rows.map((r) => ({
-        id: r.id,
-        type: r.type,
-        status: r.status,
-        requested_at: toIso(r.requested_at),
-        scheduled_at: toIso(r.scheduled_at),
-        completed_at: toIso(r.completed_at),
-      })),
-    };
+    return { items: res.rows.map((r) => dsarItem(r, this.config.dsarOpenOrderMaxDeferDays)) };
   }
 
   private async findActiveDelete(memberId: string): Promise<{ id: string; requestedAt: string; scheduledAt: string } | null> {
@@ -368,3 +364,4 @@ export class DsarService {
     return r ? { id: r.id, requestedAt: toIso(r.requested_at) ?? '', scheduledAt: toIso(r.scheduled_at) ?? '' } : null;
   }
 }
+

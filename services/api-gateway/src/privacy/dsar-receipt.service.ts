@@ -6,8 +6,8 @@ import { Errors } from '../common/errors/api-error';
 import { redisKeyHash } from '../common/pii/pii';
 import { RateLimiter } from '../common/rate-limit/rate-limiter';
 import { isUuid } from '../common/validation';
-import { toIso } from './consent.service';
 import type { DsarRequestItem } from './dsar.service';
+import { OPEN_PARTS_COLUMN, dsarItem } from './erasure-deferral';
 
 export const DSAR_RECEIPT_HEADER = 'x-dsar-receipt';
 export const DSAR_RECEIPT_PURPOSE = 'dsar_receipt';
@@ -22,7 +22,8 @@ const RECEIPT_RL_WINDOW_SECONDS = 900;
  * terikat `request_id` (HMAC), berlaku `DSAR_RECEIPT_TTL_DAYS` (default 30). Tidak disimpan di server (stateless) —
  * tidak ada tabel yang menautkan receipt ke subjek.
  *
- * `GET /v1/dsar/requests/:id` + header `X-DSAR-Receipt` → `{ id, type, status, requested_at, scheduled_at, completed_at }`.
+ * `GET /v1/dsar/requests/:id` + header `X-DSAR-Receipt` → `{ id, type, status, requested_at, scheduled_at, completed_at,
+ * open_online_orders, erasure_deadline }` (W-18: jumlah bagian pesanan terbuka saja, tanpa detail order).
  * Token hilang/salah/kedaluwarsa/milik request lain, id bukan UUID, atau request tidak ada → `404 not_found` generik
  * (tidak membocorkan keberadaan request). Rate limit per IP (hash HMAC, SEC-24) `DSAR_RECEIPT_RL_LIMIT` / 15 menit.
  */
@@ -67,21 +68,16 @@ export class DsarReceiptService {
       requested_at: Date | string;
       scheduled_at: Date | string | null;
       completed_at: Date | string | null;
+      open_n?: number | string | null;
     }>(
-      `SELECT id::text AS id, type, status, requested_at, scheduled_at, completed_at
-         FROM platform.dsar_request WHERE id = $1 AND type = 'delete'`,
+      `SELECT d.id::text AS id, d.type, d.status, d.requested_at, d.scheduled_at, d.completed_at,
+              ${OPEN_PARTS_COLUMN}
+         FROM platform.dsar_request d WHERE d.id = $1 AND d.type = 'delete'`,
       [requestId.toLowerCase()],
     );
     const r = res.rows[0];
     if (!r) throw Errors.notFound();
-    return {
-      id: r.id,
-      type: r.type,
-      status: r.status,
-      requested_at: toIso(r.requested_at),
-      scheduled_at: toIso(r.scheduled_at),
-      completed_at: toIso(r.completed_at),
-    };
+    return dsarItem(r, this.config.dsarOpenOrderMaxDeferDays);
   }
 
   private mac(requestId: string, exp: number): Buffer {

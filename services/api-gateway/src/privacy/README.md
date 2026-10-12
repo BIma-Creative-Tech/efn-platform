@@ -14,12 +14,12 @@ Build/lint/test dijalankan di container `node:22-bookworm` (gelombang 9: 313 tes
 | `GET /v1/me/data` + `X-Step-Up-Token` | `200` JSON export (profil + nomor penuh, poin, laporan Price Hunter, consent + riwayat, permintaan, daftar pemroses, `truncated`) | `403 step_up_required` / `403 step_up_invalid`, `429` (`DSAR_EXPORT_HOURLY_LIMIT`/jam) |
 | `DELETE /v1/me[?confirm_open_orders=true]` + `X-Step-Up-Token` | `202 { request_id, scheduled_at, points_forfeited, receipt_token, open_online_orders, erasure_deadline }` (idempotent: permintaan aktif dikembalikan, receipt baru; G18 W-18: `open_online_orders` = jumlah bagian pesanan terbuka, `erasure_deadline` = batas paling lambat erasure bila > 0, selain itu `null`) | `409 open_online_orders` (G18 W-18: ada bagian pesanan terbuka tanpa `confirm_open_orders=true`; body `error.{code,message,open_parts,max_defer_days,confirm_param}`, teks menyebut batas 14 hari; dikirim SEBELUM token step-up ditandai terpakai → ulangi dengan token yang sama + `?confirm_open_orders=true`), `400` nilai query lain, `403 step_up_required\|step_up_invalid` (v3.6 SEC-40: token step-up **sekali pakai** untuk DELETE — jti di Redis `otp:stepup-used:<jti>` sampai exp; ekspor tetap boleh memakai token yang sama) |
 | `POST /v1/me/delete/cancel` | `200 { request_id, status:"cancelled" }` | `404` (tidak ada yang `scheduled`) |
-| `GET /v1/me/requests` | `200 { items: [{ id, type, status, requested_at, scheduled_at, completed_at }] }` | `401` |
+| `GET /v1/me/requests` | `200 { items: [{ id, type, status, requested_at, scheduled_at, completed_at, open_online_orders, erasure_deadline }] }` (G18 W-18: jumlah bagian pesanan terbuka untuk hapus `scheduled`, lainnya `0` / `null`) | `401` |
 
 ## Endpoint status hapus akun tanpa sesi (R6, v3.6 §8.13)
 | Endpoint | Sukses | Gagal |
 |---|---|---|
-| `GET /v1/dsar/requests/:id` + header `X-DSAR-Receipt: <receipt_token>` (publik via Traefik `api.`, tanpa Bearer) | `200 { id, type, status, requested_at, scheduled_at, completed_at }` (tanpa PII) | `404 not_found` generik (receipt hilang/salah/kedaluwarsa/milik request lain, id bukan UUID, request tidak ada), `429` (`DSAR_RECEIPT_RL_LIMIT`/15 menit per IP-hash, default 30) |
+| `GET /v1/dsar/requests/:id` + header `X-DSAR-Receipt: <receipt_token>` (publik via Traefik `api.`, tanpa Bearer) | `200 { id, type, status, requested_at, scheduled_at, completed_at, open_online_orders, erasure_deadline }` (tanpa PII; G18 W-18: jumlah saja, tanpa detail order) | `404 not_found` generik (receipt hilang/salah/kedaluwarsa/milik request lain, id bukan UUID, request tidak ada), `429` (`DSAR_RECEIPT_RL_LIMIT`/15 menit per IP-hash, default 30) |
 
 `receipt_token` = `v1.<exp>.<base64url(HMAC-SHA256(k, "dsar_receipt
 <request_id>

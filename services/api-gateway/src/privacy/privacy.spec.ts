@@ -216,7 +216,7 @@ describe('DsarService (§8.9)', () => {
         cancelled = true;
         return { rows: [{ id: REQ_ID }], rowCount: 1 };
       }
-      if (t.includes('ORDER BY requested_at DESC LIMIT 50')) {
+      if (t.includes('requested_at DESC LIMIT 50')) {
         return {
           rows: [{ id: REQ_ID, type: 'delete', status: 'cancelled', requested_at: new Date(0), scheduled_at: new Date(0), completed_at: null }],
           rowCount: 1,
@@ -234,6 +234,8 @@ describe('DsarService (§8.9)', () => {
       requested_at: '1970-01-01T00:00:00.000Z',
       scheduled_at: '1970-01-01T00:00:00.000Z',
       completed_at: null,
+      open_online_orders: 0,
+      erasure_deadline: null,
     });
   });
 
@@ -441,7 +443,7 @@ describe('DsarReceiptService (R6, §8.13)', () => {
   const OTHER_ID = '6f1d2c3b-4a5e-4f60-9a7b-8c9d0e1f2a3b';
   function receiptSetup(overrides: Record<string, string> = {}) {
     const ctx = setup(overrides, (t, p) =>
-      t.includes("FROM platform.dsar_request WHERE id = $1 AND type = 'delete'") && (p[0] === REQ_ID || p[0] === OTHER_ID)
+      t.includes("FROM platform.dsar_request d WHERE d.id = $1 AND d.type = 'delete'") && (p[0] === REQ_ID || p[0] === OTHER_ID)
         ? {
             rows: [{ id: p[0], type: 'delete', status: 'completed', requested_at: new Date(0), scheduled_at: new Date(0), completed_at: new Date(1000) }],
             rowCount: 1,
@@ -463,6 +465,8 @@ describe('DsarReceiptService (R6, §8.13)', () => {
       requested_at: '1970-01-01T00:00:00.000Z',
       scheduled_at: '1970-01-01T00:00:00.000Z',
       completed_at: '1970-01-01T00:00:01.000Z',
+      open_online_orders: 0,
+      erasure_deadline: null,
     });
     expect(Object.keys(res)).not.toEqual(expect.arrayContaining(['member_hash']));
   });
@@ -815,5 +819,60 @@ describe('W-18: job erasure — tunda ≤ 14 hari, eskalasi hari 3/10, lalu eras
     expect(db.queries[0].params).toEqual([14, 500]);
     expect(parseErasurePendingArgs([])).toEqual({});
     expect(() => parseErasurePendingArgs(['--member=x'])).toThrow();
+  });
+});
+
+describe('W-18 tambahan: status permintaan hapus memuat open_online_orders & erasure_deadline (sesi + receipt)', () => {
+  const T0 = Date.UTC(2026, 9, 10, 0, 0, 0);
+  const row = (open: number | string, status = 'scheduled') => ({
+    id: REQ_ID,
+    type: 'delete',
+    status,
+    requested_at: new Date(T0),
+    scheduled_at: new Date(T0 + 7 * 86_400_000),
+    completed_at: null,
+    open_n: open,
+  });
+
+  it('receipt X-DSAR-Receipt: jumlah bagian terbuka + batas (requested_at + 14 hari); tanpa detail order', async () => {
+    let current: Record<string, unknown> = row('2');
+    const ctx = setup({}, (t) =>
+      t.includes("FROM platform.dsar_request d WHERE d.id = $1 AND d.type = 'delete'") ? { rows: [current], rowCount: 1 } : undefined,
+    );
+    const res = await ctx.receipts.status(REQ_ID, ctx.receipts.issue(REQ_ID), null);
+    expect(res).toEqual({
+      id: REQ_ID,
+      type: 'delete',
+      status: 'scheduled',
+      requested_at: new Date(T0).toISOString(),
+      scheduled_at: new Date(T0 + 7 * 86_400_000).toISOString(),
+      completed_at: null,
+      open_online_orders: 2,
+      erasure_deadline: new Date(T0 + 14 * 86_400_000).toISOString(),
+    });
+    const q = ctx.db.find('FROM platform.dsar_request d WHERE d.id')[0];
+    expect(q.text).toContain("p.status IN ('paying', 'confirmed', 'ready', 'review')");
+    expect(q.text).toContain("d.status = 'scheduled'");
+    expect(q.text).not.toMatch(/pickup_code|member_hash|sale_order_name|lines/);
+    // tanpa pesanan terbuka / sudah selesai → 0 & null
+    current = row(0, 'completed');
+    expect(await ctx.receipts.status(REQ_ID, ctx.receipts.issue(REQ_ID), null)).toMatchObject({ open_online_orders: 0, erasure_deadline: null });
+    // env lebih kecil ikut dipakai
+    const short = setup({ DSAR_OPEN_ORDER_MAX_DEFER_DAYS: '10' }, (t) =>
+      t.includes("FROM platform.dsar_request d WHERE d.id = $1") ? { rows: [row(1)], rowCount: 1 } : undefined,
+    );
+    expect((await short.receipts.status(REQ_ID, short.receipts.issue(REQ_ID), null)).erasure_deadline).toBe(new Date(T0 + 10 * 86_400_000).toISOString());
+  });
+
+  it('sesi GET /v1/me/requests: field sama; masa tenggang > batas → batas = scheduled_at', async () => {
+    const ctx = setup({ DSAR_DELETE_GRACE_DAYS: '30' }, (t) =>
+      t.includes('requested_at DESC LIMIT 50')
+        ? { rows: [{ ...row(1), scheduled_at: new Date(T0 + 30 * 86_400_000) }, { ...row(0, 'completed'), type: 'export' }], rowCount: 2 }
+        : undefined,
+    );
+    const list = await ctx.dsar.listRequests(ctx.user);
+    expect(list.items[0]).toMatchObject({ open_online_orders: 1, erasure_deadline: new Date(T0 + 30 * 86_400_000).toISOString() });
+    expect(list.items[1]).toMatchObject({ type: 'export', open_online_orders: 0, erasure_deadline: null });
+    expect(ctx.db.find('requested_at DESC LIMIT 50')[0].params).toEqual([MEMBER_ID]);
   });
 });
