@@ -19,7 +19,7 @@
 | `app/masuk`, `app/keluar`, `app/akun`, `app/pantau-harga`, `app/pantau-harga/[id]`, `app/privasi` | Halaman |
 | `app/api/auth/challenge`, `components/AltchaWidget.tsx`, `lib/altcha.ts` | Captcha ALTCHA self-hosted (docs/04 §8.1) |
 | `app/akun/privasi`, `app/api/me/consents`, `lib/consent.ts` | Consent lokasi & marketing (docs/04 §8.4) |
-| `app/akun/data-saya`, `app/api/me/{data,reauth,requests,delete/cancel}`, `app/api/me` (DELETE), `lib/dsar.ts` | DSAR: unduh data, hapus akun (re-OTP step-up), batal, riwayat. G18 W-18: `409 open_online_orders` → penjelasan → konfirmasi `confirm_open_orders` (step-up sama) → 202 dengan `erasure_deadline` (maks 14 hari) |
+| `app/akun/data-saya`, `app/api/me/{data,reauth,requests,delete/cancel}`, `app/api/me` (DELETE), `lib/dsar.ts` | DSAR: unduh data, hapus akun (re-OTP step-up), batal, riwayat. G18 W-18: `409 open_online_orders` → penjelasan → konfirmasi `confirm_open_orders` (step-up sama) → 202 dengan `erasure_deadline` (maks 14 hari). L-22: status (`/api/dsar/requests/:id`, `/api/me/requests`) membawa `open_online_orders` + `erasure_deadline` dari BFF; `?batas=` hanya cadangan BFF lama |
 | `lib/auth-age.ts`, `app/masuk/LoginForm.tsx`, `app/api/auth/otp/verify` | G18 W-19 (Q-P3): checkbox "Saya berusia 17 tahun atau lebih" (tidak tercentang default) → `age_confirmed: true`; tanpa tanggal lahir |
 | `app/akun/penghapusan/[id]`, `app/api/dsar/requests/[id]`, `lib/dsar-receipt.ts` | R6 (docs/04 §8.13): status hapus akun tanpa sesi via cookie HttpOnly `efn_dsar_receipt` (Path `/api/dsar`, SameSite=Strict, ≤ 30 hari) |
 | `app/belanja`, `app/belanja/[id]`, `app/keranjang`, `app/pesanan`, `app/pesanan/[id]`, `components/online/**` | Belanja online Fase 3 (lihat bagian di bawah) |

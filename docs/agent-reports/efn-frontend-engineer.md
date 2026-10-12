@@ -371,3 +371,39 @@ Validasi sempat tertunda karena Docker Desktop mati setelah sesi terputus; Docke
 ### Belum diverifikasi
 - Uji browser nyata: checkbox usia (keyboard, pembaca layar) dan alur 409 → konfirmasi → 202 terhadap BFF G18 sungguhan (perlu migrasi `08-platform-g18-privacy.sql` di stack dev).
 - Teks pelanggan masih draf, menunggu Legal.
+
+### Lanjutan G18 — L-22: batas erasure dari respons status BFF (12 Okt 2026)
+Kontrak: docs/04 §10.17 L-22 (BFF c5a2b3b). Status DSAR jalur receipt dan `GET /v1/me/requests` kini membawa `open_online_orders` dan `erasure_deadline`. Tidak ada commit/push.
+
+**Allowlist route**
+- `lib/dsar-receipt.ts` `parseDeletionStatus` (dipakai `/api/dsar/requests/:id`):
+  - `open_online_orders` lewat `openOrdersCount`: bilangan bulat ≥ 0, maks 999, selain itu 0.
+  - `erasure_deadline`: ISO tervalidasi atau `null`. Bila field **tidak dikirim** (BFF lama), nilainya `undefined` dan tidak ikut di JSON.
+  - Field lain, mis. `part_ids` atau `member_id`, tetap dibuang.
+- `lib/dsar.ts` `parseDsarRequests` (dipakai `/api/me/requests`, halaman Data Saya, dan halaman status): kedua field ditambahkan, dengan default 0/null.
+
+**Sumber tanggal di halaman status** (`resolveErasureDeadline`, murni):
+1. Field dari respons status BFF. Termasuk `null`: artinya BFF menyatakan tidak ada penundaan, misalnya pesanan sudah selesai, sehingga tanggal basi dari query tidak ditampilkan.
+2. Item `GET /v1/me/requests` milik sesi, bila pengguna masuk.
+3. `?batas=` sebagai cadangan, hanya untuk BFF lama.
+
+Status selesai/dibatalkan tidak menampilkan batas. Label kini menyebut jumlah pesanan terbuka.
+
+**Data Saya:** pemberitahuan penghapusan tertunda kini menampilkan jumlah pesanan terbuka dan batas paling lambatnya.
+
+**Test:** baru `tests/l22-dsar-status.test.ts` (9 test):
+- parser: angka dan ISO; field ada / null / rusak / tidak ada;
+- urutan sumber, termasuk "null dari BFF menang atas query" dan status final;
+- allowlist kedua route.
+
+`dsar.test.ts`, `dsar-receipt.test.ts`, dan `dsar-routes.test.ts` disesuaikan.
+
+**Validasi** (container `node:22.23-alpine@sha256:0a7108bf…`):
+- `npm ci`: OK.
+- `npm run lint`: 0 error (10 warning lama).
+- `tsc --noEmit`: OK.
+- `npm test`: **295 passed**, 15 file.
+- `npm run build`: OK.
+- `npm audit --omit=dev --audit-level=high`: 0 vulnerabilities.
+
+**Belum diverifikasi:** uji browser nyata terhadap BFF G18; teks pelanggan masih draf menunggu Legal.
