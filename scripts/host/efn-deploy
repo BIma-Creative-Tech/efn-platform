@@ -227,7 +227,8 @@ fi
 # non-rahasia (manifest `config`) DITOLAK dari stdin.
 allowed_names() {
   printf '%s\n' GHCR_USER GHCR_TOKEN EFN_PKI_INTERMEDIATE_KEY EFN_PKI_INTERMEDIATE_CRT EFN_PKI_ROOT_CRT EFN_PKI_EXTRA_TRUST
-  awk '!/^[[:space:]]*#/ && NF && $2 != "pki" && $2 !~ /^derived:/ { print toupper($1) }' "$REL_TMP/scripts/secrets.list"
+  # W-11: jenis host:* dikelola di host (efn-rotate-online-key) -> tidak diterima dari stdin
+  awk '!/^[[:space:]]*#/ && NF && $2 != "pki" && $2 !~ /^(derived|host):/ { print toupper($1) }' "$REL_TMP/scripts/secrets.list"
 }
 mapfile -t ALLOWED < <(allowed_names)
 declare -A OK=()

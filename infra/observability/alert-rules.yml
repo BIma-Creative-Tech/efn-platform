@@ -271,17 +271,19 @@ groups:
           description: "Refund gagal/harus manual. Selesaikan lewat CLI BFF (online-refund-settle) setelah dana dikembalikan."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#efnonlinerefundpending
 
-      # R-T15 (L-6): sisa umur API key kanal. Odoo tidak mengekspos masa berlaku key lewat /json/2 -> metrik textfile
-      # node-exporter ditulis runbook saat key dibuat/dirotasi:
-      #   efn_odoo_api_key_expiry_timestamp_seconds{channel="RTL"} <epoch kedaluwarsa>
+      # R-T15 (L-6; W-11 key 30 hari + rotasi otomatis): Odoo tidak mengekspos masa berlaku key lewat /json/2 ->
+      # metrik textfile node-exporter ditulis scripts/host/efn-rotate-online-key (timer harian, rotasi saat sisa < 10 h):
+      #   efn_odoo_api_key_expiry_timestamp_seconds / _active_keys / _rotation_last_run_ok /
+      #   _rotation_last_run_timestamp_seconds / _rotation_last_success_timestamp_seconds  {channel="RTL"}
+      # Sisa < 7 hari = timer sudah gagal >= 3 hari berturut-turut (normal: rotasi di sisa 10 hari).
       - alert: EfnOnlineApiKeyExpiringSoon
-        expr: min by (channel) (efn_odoo_api_key_expiry_timestamp_seconds) - time() < 14 * 86400
+        expr: min by (channel) (efn_odoo_api_key_expiry_timestamp_seconds) - time() < 7 * 86400
         labels:
           severity: warning
           team: ops
         annotations:
           summary: "API key Odoo kanal online {{ $labels.channel }} kedaluwarsa dalam {{ $value | humanizeDuration }}"
-          description: "Rotasi sekarang (dua kunci, tanpa downtime). Bila kedaluwarsa, checkout kanal berhenti (R-T15)."
+          description: "Rotasi otomatis tidak berhasil beberapa hari. Cek journald efn-rotate-online-key; bila kedaluwarsa, checkout kanal berhenti (R-T15)."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/odoo-online-api-key.md#rotasi
       - alert: EfnOnlineApiKeyExpiryCritical
         expr: min by (channel) (efn_odoo_api_key_expiry_timestamp_seconds) - time() < 3 * 86400
@@ -290,7 +292,7 @@ groups:
           team: ops
         annotations:
           summary: "API key Odoo kanal online {{ $labels.channel }} kedaluwarsa < 3 hari"
-          description: "Rotasi segera; setelah kedaluwarsa Odoo menjawab 401 dan checkout kanal berhenti (R-T15)."
+          description: "Rotasi segera (sudo efn-rotate-online-key --channel=<KANAL> --force); setelah kedaluwarsa Odoo menjawab 401 dan checkout kanal berhenti (R-T15)."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/odoo-online-api-key.md#rotasi
       # Kanal dipakai (ada transisi bagian order) tetapi masa berlaku key tidak tercatat -> R-T15 buta.
       - alert: EfnOnlineApiKeyExpiryUnknown
@@ -303,8 +305,52 @@ groups:
           team: ops
         annotations:
           summary: "Masa berlaku API key Odoo kanal {{ $labels.channel }} tidak tercatat"
-          description: "Metrik textfile efn_odoo_api_key_expiry_timestamp_seconds tidak ada; alert kedaluwarsa (R-T15) tidak bisa bekerja."
+          description: "Metrik textfile efn_odoo_api_key_expiry_timestamp_seconds tidak ada (timer rotasi belum dipasang / state hilang); alert kedaluwarsa (R-T15) tidak bisa bekerja."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/odoo-online-api-key.md#metrik-masa-berlaku
+      # W-11: run rotasi terakhir gagal (rollback, Odoo menolak pembuatan, pencabutan gagal/tidak efektif). Satu kali
+      # gagal = warning (timer mencoba ulang besok); ROLLBACK GAGAL = critical lewat ruler Loki (efn-online.yml).
+      - alert: EfnOnlineApiKeyRotationFailed
+        expr: max by (channel) (efn_odoo_api_key_rotation_last_run_ok) == 0
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Rotasi API key Odoo kanal {{ $labels.channel }} gagal pada run terakhir"
+          description: "Key lama tetap terpasang bila rollback sukses. Lihat journald/Loki service=host-efn-rotate-online-key (baris GAGAL/ROLLBACK)."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/odoo-online-api-key.md#rotasi-gagal
+      # Timer harian tidak berjalan (unit dimatikan, host mati, skrip ditolak sebelum menulis metrik).
+      - alert: EfnOnlineApiKeyRotationNotRunning
+        expr: time() - max by (channel) (efn_odoo_api_key_rotation_last_run_timestamp_seconds) > 2 * 86400 + 3600
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Timer rotasi API key kanal {{ $labels.channel }} tidak berjalan > 2 hari"
+          description: "systemctl status efn-rotate-online-key@{{ $labels.channel }}.timer; journalctl -u efn-rotate-online-key@{{ $labels.channel }}."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/odoo-online-api-key.md#rotasi-gagal
+      # Lebih dari satu key aktif setelah overlap (1 jam) + cabut tertunda harian = kredensial lama masih sah.
+      - alert: EfnOnlineApiKeyExtraKeys
+        expr: max by (channel) (efn_odoo_api_key_active_keys) > 1
+        for: 26h
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "User teknis kanal {{ $labels.channel }} punya {{ $value }} API key aktif"
+          description: "Key lama belum dicabut (atau ada key buatan manual). Cabut lewat efn-rotate-online-key / runbook §4."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/odoo-online-api-key.md#rotasi-gagal
+      # W-18 (Q-P18): erasure DIPAKSA setelah 14 hari walau pesanan online masih terbuka -> tautan akun dilepas,
+      # pelanggan kehilangan kode ambil di aplikasi; CS wajib menindaklanjuti bagian terbuka (online-erasure-pending).
+      # Pasangan log: EFN_ONLINE_ANOMALY kind=erasure_forced_open_orders (ruler Loki). Counter tanpa label subjek.
+      - alert: EfnDsarErasureForcedOpenOrders
+        expr: sum(increase(efn_dsar_erasure_deferral_total{job="api-gateway",event="forced"}[1h])) > 0
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Erasure dipaksa setelah 14 hari dengan pesanan online terbuka ({{ $value | humanize }} dalam 1 jam)"
+          description: "Jalankan sudo efn-online-cs online-erasure-pending; selesaikan unlinked_open_parts (refund/serah terima terverifikasi)."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#erasure-paksa
 
   # ─────────────────────────── Backup & DR (R-T08) ───────────────────────────
   # Metrik efn_backup_* / efn_restore_test_* ditulis scripts/backup.sh & scripts/restore-test.sh (textfile collector).
@@ -406,6 +452,18 @@ groups:
           summary: "Disk {{ $labels.mountpoint }} hampir penuh ({{ $value | humanizePercentage }})"
           description: "Tindakan segera: risiko PostgreSQL/RabbitMQ berhenti."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/disk-usage.md
+
+      # W-19 (Q-P14): akun Metabase tidak aktif 90 hari dinonaktifkan oleh timer host efn-metabase-housekeeping.
+      # Hanya bila metrik pernah ditulis (timer terpasang); gagal/tidak berjalan > 3 hari = minimisasi akses tertunda.
+      - alert: EfnMetabaseHousekeepingStale
+        expr: time() - max(efn_metabase_housekeeping_last_success_timestamp_seconds) > 3 * 86400
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Housekeeping Metabase (akun tidak aktif 90 hari) tidak sukses > 3 hari"
+          description: "journalctl -u efn-metabase-housekeeping; jalankan ulang setelah Metabase sehat."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/retention.md#metabase-housekeeping
 
   # ─────────────────────────── TLS ───────────────────────────
   - name: efn-tls

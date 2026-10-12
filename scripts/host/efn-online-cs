@@ -20,6 +20,8 @@
 #   sudo efn-online-cs online-refund-approve --refund=<uuid>                      (HANYA grup efn-cs-approver)
 #   sudo efn-online-cs online-refund-settle  --refund=<uuid> --provider-ref=<ref>  (HANYA grup efn-cs-approver, SEC-112)
 #   sudo efn-online-cs online-resolve        --part=<uuid> --action=cancel|sync
+#   sudo efn-online-cs online-erasure-pending (alias erasure-pending; W-18: daftar erasure tertahan pesanan online;
+#                                             read-only, TANPA alasan/stdin, peran cs & approver)
 #   contoh non-interaktif: printf '%s\n' 'tiket CS-123' | sudo efn-online-cs online-resolve --part=<uuid> --action=sync
 #
 # Yang dijaga:
@@ -27,7 +29,7 @@
 #     (peran cs) atau efn-cs-approver (peran approver); anggota keduanya DITOLAK (pemisahan tugas, SEC-107);
 #   - EFN_CS_OPERATOR = SUDO_USER, EFN_CS_HOST = hostname, EFN_CS_ROLE = peran dari grup: SELALU ditimpa;
 #   - online-refund-approve hanya peran approver (BFF juga menolak approver = pembuat refund);
-#   - hanya 4 subcommand + flag allowlist per subcommand, nilai divalidasi (UUID, enum, pola), tanpa karakter kontrol,
+#   - hanya 5 subcommand + flag allowlist per subcommand, nilai divalidasi (UUID, enum, pola), tanpa karakter kontrol,
 #     flag ganda, argumen posisi, atau `--reason` di argv; argv ke `docker exec` (tidak lewat shell), alasan lewat
 #     stdin `docker exec -i` (kontrak CLI BFF: tanpa `--reason` -> alasan dibaca dari stdin);
 #   - journald (tag efn-online-cs, _UID 0 -> Loki lewat promtail-journal): aktor, peran, host, subcommand, id, rc.
@@ -65,8 +67,9 @@ fi
 HOST_ID="$(hostname -s 2> /dev/null || hostname)"
 [[ "$HOST_ID" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "hostname tidak valid"
 
-(($# >= 1)) || die "subcommand wajib: online-refund | online-refund-approve | online-refund-settle | online-resolve"
+(($# >= 1)) || die "subcommand wajib: online-refund | online-refund-approve | online-refund-settle | online-resolve | online-erasure-pending"
 CMD="$1"; shift
+NEEDS_REASON=1; SCRIPT="$CMD"
 case "$CMD" in
   online-refund)         ALLOWED=(part full lines kind restock refund-id); REQUIRED=(part) ;;
   online-refund-approve) ALLOWED=(refund); REQUIRED=(refund)
@@ -75,6 +78,9 @@ case "$CMD" in
                          # SEC-112: settle-manual mencatat dana keluar -> hanya approver (BFF juga menolak pembuat refund)
                          [[ "$ROLE" == approver ]] || die "online-refund-settle hanya untuk grup $APPROVER_GROUP" ;;
   online-resolve)        ALLOWED=(part action); REQUIRED=(part action) ;;
+  # W-18 (Q-P18): daftar kerja erasure tertahan pesanan online - READ-ONLY, tanpa flag, tanpa alasan/stdin; cs & approver
+  online-erasure-pending|erasure-pending)
+                         ALLOWED=(); REQUIRED=(); NEEDS_REASON=0; SCRIPT=online-erasure-pending ;;
   *) die "subcommand tidak diizinkan: $(printf '%q' "$CMD" | head -c 40)" ;;
 esac
 
@@ -113,13 +119,15 @@ if [[ "$CMD" == online-refund ]]; then
 fi
 
 # Alasan (SEC-108): satu baris dari stdin (prompt bila terminal). Tidak di argv, tidak di journald.
-[[ -t 0 ]] && printf 'Alasan (nomor tiket/alasan singkat, TANPA nama/HP pelanggan): ' >&2
 REASON=""
-IFS= read -r -n 801 REASON || true
-REASON="${REASON%$'\r'}"
-[[ "$REASON" != *[[:cntrl:]]* ]] || die "alasan memuat karakter kontrol"
-# LC_ALL=C -> panjang dalam BYTE (UTF-8 maks. 4 byte/karakter); batas 3..200 karakter dicek ulang BFF
-(( ${#REASON} >= 3 && ${#REASON} <= 800 )) || die "alasan wajib 3..200 karakter (stdin/prompt)"
+if ((NEEDS_REASON)); then
+  [[ -t 0 ]] && printf 'Alasan (nomor tiket/alasan singkat, TANPA nama/HP pelanggan): ' >&2
+  IFS= read -r -n 801 REASON || true
+  REASON="${REASON%$'\r'}"
+  [[ "$REASON" != *[[:cntrl:]]* ]] || die "alasan memuat karakter kontrol"
+  # LC_ALL=C -> panjang dalam BYTE (UTF-8 maks. 4 byte/karakter); batas 3..200 karakter dicek ulang BFF
+  (( ${#REASON} >= 3 && ${#REASON} <= 800 )) || die "alasan wajib 3..200 karakter (stdin/prompt)"
+fi
 
 # Id untuk jejak audit (tanpa alasan / provider-ref)
 IDS=""
@@ -134,9 +142,16 @@ CID="$(docker ps -q --filter "label=com.docker.compose.project=${COMPOSE_PROJECT
 
 log "MULAI aktor=${ACTOR} peran=${ROLE} host=${HOST_ID} cmd=${CMD}${IDS}"
 set +e
-printf '%s\n' "$REASON" | docker exec -i -w /app -e "EFN_CS_OPERATOR=${ACTOR}" -e "EFN_CS_HOST=${HOST_ID}" \
-  -e "EFN_CS_ROLE=${ROLE}" "$CID" node "dist/cli/${CMD}.js" "${ARGS[@]}"
-rc=$?
+if ((NEEDS_REASON)); then
+  printf '%s\n' "$REASON" | docker exec -i -w /app -e "EFN_CS_OPERATOR=${ACTOR}" -e "EFN_CS_HOST=${HOST_ID}" \
+    -e "EFN_CS_ROLE=${ROLE}" "$CID" node "dist/cli/${SCRIPT}.js" "${ARGS[@]}"
+  rc=$?
+else
+  # read-only: tanpa stdin (bukan -i), tanpa argumen
+  docker exec -w /app -e "EFN_CS_OPERATOR=${ACTOR}" -e "EFN_CS_HOST=${HOST_ID}" -e "EFN_CS_ROLE=${ROLE}" "$CID" \
+    node "dist/cli/${SCRIPT}.js" < /dev/null
+  rc=$?
+fi
 set -e
 unset REASON
 log "SELESAI aktor=${ACTOR} peran=${ROLE} host=${HOST_ID} cmd=${CMD}${IDS} rc=${rc}"

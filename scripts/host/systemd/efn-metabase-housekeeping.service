@@ -1,0 +1,22 @@
+# Housekeeping harian Metabase (W-19, Q-P14): akun tidak login > 90 hari dinonaktifkan (provision.py --housekeeping-only).
+# Pasang & alert: docs/runbooks/retention.md#metabase-housekeeping.
+# root: /opt/efn/secrets root:efn-superadmin 0750 (compose run me-mount secret admin Metabase).
+[Unit]
+Description=EFN housekeeping Metabase (nonaktifkan akun tidak aktif 90 hari)
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Environment=COMPOSE_PROJECT=efn
+Environment=COMPOSE_DIR=/opt/efn/compose
+Environment=TEXTFILE_DIR=/var/lib/efn/node-exporter
+ExecStart=/bin/bash /opt/efn/scripts/metabase-housekeeping.sh
+TimeoutStartSec=15m
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+Nice=10

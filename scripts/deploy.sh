@@ -23,7 +23,7 @@
 #               manifest rilis bertanda tangan + `cosign verify` di host (SEC-42); env CI tidak bisa mengisinya.
 #             Pin root CA: EFN_PKI_ROOT_SHA256 (dari efn-deploy, atau dibaca dari /etc/efn/deploy.conf saat manual)
 #             EFN_PKI_INTERMEDIATE_KEY EFN_PKI_INTERMEDIATE_CRT EFN_PKI_ROOT_CRT (PKI 3 tingkat, ADR-022 W1)
-#             + satu env UPPERCASE per baris scripts/secrets.list yang BUKAN `pki`/`derived:*`
+#             + satu env UPPERCASE per baris scripts/secrets.list yang BUKAN `pki`/`derived:*`/`host:*` (W-11)
 # Env opsional: WHATSAPP_ENABLED WHATSAPP_PHONE_NUMBER_ID WHATSAPP_OTP_TEMPLATE OLLAMA_VISION_MODEL
 #               COMPOSE_PROFILES (default core,data,ai,observability,ops; production wajib core,data,observability)
 #               EFN_WG_BIND (default 10.88.0.1; WAJIB IP di interface wg0) EFN_WG_HTTPS_PORT (default 443)
@@ -91,6 +91,17 @@ for row in "${SECRET_ROWS[@]}"; do
   name="${row%% *}"; kind="${row##* }"
   SECRET_NAMES+=("$name")
   [[ "$kind" == "pki" || "$kind" == derived:* ]] && continue
+  # W-11: secret yang dikelola di host (API key Odoo kanal online; dirotasi efn-rotate-online-key) TIDAK ditimpa.
+  # Belum ada -> nilai awal (placeholder) agar compose bisa me-mount-nya.
+  if [[ "$kind" == host:* ]]; then
+    if [[ ! -s "$SECRETS_DIR/${name}.txt" ]]; then
+      tmp=$(mktemp "$SECRETS_DIR/.${name}.XXXXXX")
+      printf '%s' "${kind#host:}" > "$tmp"
+      chmod "$SECRET_FILE_MODE" "$tmp"
+      mv -f "$tmp" "$SECRETS_DIR/${name}.txt"
+    fi
+    continue
+  fi
   var=$(tr '[:lower:]' '[:upper:]' <<< "$name")
   [[ -n "${!var:-}" ]] || die "secret $var kosong (tambahkan ke GitHub Environment)"
   tmp=$(mktemp "$SECRETS_DIR/.${name}.XXXXXX")
@@ -277,7 +288,11 @@ DOTENV=(
   "ACME_DNS_TOKEN_ENV=${ACME_DNS_TOKEN_ENV}"
   "ACME_SERVER=${ACME_SERVER}"
   "MARKET_SCOUT_PHOTO_RETENTION_DAYS=${MARKET_SCOUT_PHOTO_RETENTION_DAYS:-90}"
-  "CH_MART_RETENTION_YEARS=${CH_MART_RETENTION_YEARS:-5}"
+  "CH_MART_RETENTION_YEARS=${CH_MART_RETENTION_YEARS:-10}"
+  # W-19 (data-AI): kosong = default compose (5 th / 90 h / 3650 h)
+  "CH_PSEUDONYM_RETENTION_YEARS=${CH_PSEUDONYM_RETENTION_YEARS:-}"
+  "CH_GEO_RETENTION_DAYS=${CH_GEO_RETENTION_DAYS:-}"
+  "MB_AUDIT_MAX_RETENTION_DAYS=${MB_AUDIT_MAX_RETENTION_DAYS:-}"
   "CONSENT_LOCATION_VERSION=${CONSENT_LOCATION_VERSION:-}"
   "CONSENT_LOCATION_TEXT_SHA256=${CONSENT_LOCATION_TEXT_SHA256:-}"
   "CONSENT_MARKETING_VERSION=${CONSENT_MARKETING_VERSION:-}"
@@ -306,6 +321,11 @@ DOTENV=(
   "ODOO_RPC_MAXCONN=${ODOO_RPC_MAXCONN:-}"
   "ODOO_RPC_PUBLIC_MAX_CONCURRENCY=${ODOO_RPC_PUBLIC_MAX_CONCURRENCY:-}"
   "ODOO_RPC_SAGA_MAX_CONCURRENCY=${ODOO_RPC_SAGA_MAX_CONCURRENCY:-}"
+  # W-18/W-19 (10 Okt 2026): kosong = default compose (= keputusan: 14 / 365 / 17 / 90)
+  "DSAR_OPEN_ORDER_MAX_DEFER_DAYS=${DSAR_OPEN_ORDER_MAX_DEFER_DAYS:-}"
+  "ERASURE_SUPPRESSION_DAYS=${ERASURE_SUPPRESSION_DAYS:-}"
+  "MEMBER_MIN_AGE=${MEMBER_MIN_AGE:-}"
+  "PRICE_HUNTER_GEO_RETENTION_DAYS=${PRICE_HUNTER_GEO_RETENTION_DAYS:-}"
 )
 efn_write_dotenv "$COMPOSE_DIR/.env" "${DOTENV[@]}" || die "gagal menulis .env (SEC-50)"
 
@@ -337,6 +357,8 @@ if [[ "$PAYMENT_PROVIDER" =~ ^(xendit|midtrans)$ ]]; then FILES+=(-f docker-comp
 # G17: API key kanal FNB hanya di-mount bila kanal FNB ada di ONLINE_CHANNELS (kanal brand FNB-<X> butuh overlay baru)
 if [[ ",${ONLINE_CHANNELS:-RTL}," == *,FNB,* ]]; then FILES+=(-f docker-compose.online-fnb.yml); fi
 DC=(docker compose "${FILES[@]}")
+# W-11: daftar file compose untuk skrip host lain (efn-rotate-online-key me-recreate BFF dengan konfigurasi yang SAMA)
+printf '%s\n' "${FILES[@]}" | grep -v '^-f$' > .efn-compose-files.tmp && mv -f .efn-compose-files.tmp .efn-compose-files
 
 echo "==> Validasi konfigurasi"
 "${DC[@]}" config -q
@@ -376,8 +398,10 @@ echo "==> Migrasi skema idempoten (infra/postgres/init/[0-9][0-9]-*.sql >= 04)"
 # G13c: migrasi yang WAJIB ada sebelum BFF rilis ini start (bundel tidak lengkap = gagal, bukan dilewati diam-diam):
 # 05 = loyalty POS (G13), 06 = pagar earn + daftar tolak erasure (SEC-61/SEC-65; tanpa 06 job erasure BFF gagal),
 # 07 = penjualan online G17 (docs/04 §10.7/§10.8: payment_intent.purpose + tabel online_*; dibutuhkan BFF G17
-# termasuk saat ONLINE_ENABLED=false).
-for req in 04-platform-v3-6.sql 05-platform-loyalty-pos.sql 06-platform-loyalty-guard.sql 07-platform-online.sql; do
+# termasuk saat ONLINE_ENABLED=false). 08 = privasi G18 (W-18/W-19: dsar_request.open_orders_ack_at/defer_escalation,
+# member.age_confirmed_at; dibutuhkan BFF G18).
+for req in 04-platform-v3-6.sql 05-platform-loyalty-pos.sql 06-platform-loyalty-guard.sql 07-platform-online.sql \
+           08-platform-g18-privacy.sql; do
   [[ -s "$BASE/postgres/init/$req" ]] || die "migrasi wajib $req tidak ada di $BASE/postgres/init (bundel rilis tidak lengkap)"
 done
 for mig in "$BASE"/postgres/init/[0-9][0-9]-*.sql; do
@@ -388,6 +412,15 @@ for mig in "$BASE"/postgres/init/[0-9][0-9]-*.sql; do
   "${DC[@]}" exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U "${PG_SUPERUSER:-postgres}" -d postgres \
     -f "/docker-entrypoint-initdb.d/$(basename "$mig")" || die "migrasi $(basename "$mig") gagal"
 done
+
+# W-19 (data-AI G18): clickhouse-init dapat memigrasi tabel (loyalty_events: salin + EXCHANGE, jendela 1 jam). ETL lama
+# yang masih berjalan selama itu bisa menyalin ulang baris subjek yang baru dihapus -> hentikan ETL dulu; `up -d`
+# menyalakannya lagi SETELAH clickhouse-init exit 0 (depends_on service_completed_successfully). ETL inkremental:
+# jeda beberapa menit tidak kehilangan data.
+if [[ ",${COMPOSE_PROFILES}," == *",data,"* ]]; then
+  echo "==> Stop etl selama clickhouse-init (migrasi/TTL ClickHouse)"
+  "${DC[@]}" stop etl > /dev/null 2>&1 || true
+fi
 
 echo "==> Up (--no-build: host hanya memakai image bertanda tangan dari GHCR)"
 "${DC[@]}" up -d --remove-orphans --no-build

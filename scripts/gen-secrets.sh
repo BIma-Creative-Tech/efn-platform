@@ -29,6 +29,7 @@ gen_value() {
     b64key32)  openssl rand -base64 32 | tr -d '\r\n' ;;
     minio_kms) printf 'efn-sse-key:%s' "$(openssl rand -base64 32 | tr -d '\r\n')" ;;
     literal:*) printf '%s' "${kind#literal:}" ;;
+    host:*)    printf '%s' "${kind#host:}" ;;   # W-11: nilai awal; staging/prod dikelola di host
     *) echo "generator tidak dikenal: $kind" >&2; return 1 ;;
   esac
 }

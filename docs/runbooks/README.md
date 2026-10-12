@@ -30,7 +30,9 @@ Layout host: `/opt/efn/{compose,traefik,observability,backup,minio,clickhouse,po
 | EfnWgCertProbeFailed (sertifikat wg-https dari service `acme-dns`, SEC-37) | warning | [acme-dns-token.md](acme-dns-token.md#5-operasi-service-acme-dns) |
 | EfnAltchaMaxLevelSpike (ALTCHA adaptif level 3, SEC-34) | warning | [otp-failure-rate.md](otp-failure-rate.md#altcha-level-3) |
 | EfnOnlineOrderStuck, EfnOnlineAmountMismatch, EfnOnlineDlqNotEmpty, EfnOnlineCircuitOpen, EfnOnlineCatalogStale, EfnOnlineRefundPending (metrik diusulkan) (penjualan online, G17) | critical / critical / warning / warning / warning / warning | [online-orders.md](online-orders.md) |
-| EfnOnlineOdooAuthFailure, EfnOnlineApiKeyExpiringSoon, EfnOnlineApiKeyExpiryCritical, EfnOnlineApiKeyExpiryUnknown (API key Odoo kanal online, R-T15) | critical / warning / critical / warning | [odoo-online-api-key.md](odoo-online-api-key.md) |
+| EfnOnlineOdooAuthFailure, EfnOnlineApiKeyExpiringSoon, EfnOnlineApiKeyExpiryCritical, EfnOnlineApiKeyExpiryUnknown, EfnOnlineApiKeyRotationFailed, EfnOnlineApiKeyRotationNotRunning, EfnOnlineApiKeyExtraKeys (API key Odoo kanal online, R-T15, rotasi otomatis W-11) | critical / warning / critical / warning / warning / warning / warning | [odoo-online-api-key.md](odoo-online-api-key.md) |
+| EfnDsarErasureForcedOpenOrders (erasure dipaksa setelah 14 hari, W-18) | warning | [online-orders.md](online-orders.md#erasure-paksa) |
+| EfnMetabaseHousekeepingStale (akun Metabase tidak aktif 90 hari, W-19) | warning | [retention.md](retention.md#metabase-housekeeping) |
 
 ### Alert dari log (ruler Loki, `infra/observability/loki-rules/`)
 
@@ -44,6 +46,7 @@ Layout host: `/opt/efn/{compose,traefik,observability,backup,minio,clickhouse,po
 | EfnOnlineReconDeadman, EfnOnlineAnomalyCritical, EfnOnlineAnomalyWarning (penjualan online, G17) | warning / critical / warning | [online-orders.md](online-orders.md) |
 | EfnOdooRpcGatewayDenied (filter BFF → Odoo `/json/2` menolak request, G17) | warning | [online-orders.md](online-orders.md#efnodoorpcgatewaydenied) |
 | EfnOnlineCsDeniedRepeated, EfnOnlineCsDualRole, EfnOnlineCsRefundVolumeHigh (wrapper CLI CS `efn-online-cs`, journald host, SEC-107/108) | warning / warning / warning | [online-orders.md](online-orders.md#cli-cs) |
+| EfnOnlineApiKeyRollbackFailed, EfnOnlineApiKeyOldKeyStillAccepted (timer `efn-rotate-online-key`, journald host, W-11) | critical / warning | [odoo-online-api-key.md](odoo-online-api-key.md#rollback-gagal) |
 | EfnLoyaltyAnomalyCritical, EfnLoyaltyAnomalyWarning, EfnLoyaltyReconMissing, EfnLoyaltyReconFailing (Poin EFN, G13c SEC-61); EfnLoyaltyReconStale (Prometheus) | critical / warning / warning / warning / warning | [loyalty-anomaly.md](loyalty-anomaly.md) |
 
 Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-incident.md](security-incident.md).
@@ -55,7 +58,7 @@ Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-inciden
 | Backup, restore test, pemulihan bencana (DR), migrasi volume PostgreSQL | [backup-restore.md](backup-restore.md) |
 | Rotasi secret (semua secret di `scripts/secrets.list`) | [secret-rotation.md](secret-rotation.md) |
 | PKI internal 3 tingkat & mTLS: rotasi leaf (otomatis)/intermediate/root, migrasi | [internal-pki.md](internal-pki.md) |
-| Kustodi kunci Superadmin, root CA offline, break-glass, audit akses secret | [key-custody.md](key-custody.md) |
+| Kustodi kunci Superadmin, root CA offline, break-glass, audit akses secret; paket segel brankas Direksi, log brankas, uji pemulihan disaksikan, Superadmin tidak tersedia (W-28, R-B11) | [key-custody.md](key-custody.md#brankas-direksi) |
 | Rotasi kunci enkripsi PII (key ring, re-encrypt) | [pii-key-rotation.md](pii-key-rotation.md) |
 | Hub WireGuard + firewall nftables, onboarding outlet (OpenWrt / klien POS) & staf, VLAN Wi-Fi tamu | [wireguard-outlet.md](wireguard-outlet.md) |
 | Firewall origin (443 hanya Cloudflare + WireGuard) | [origin-firewall.md](origin-firewall.md) |
@@ -68,7 +71,8 @@ Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-inciden
 | journald host (efn-deploy, backup) → Loki | [host-journal-loki.md](host-journal-loki.md) |
 | Operasi pesanan online (kill switch `ONLINE_ENABLED`, order macet, DLQ saga, refund CLI L-3, rotasi HMAC event) | [online-orders.md](online-orders.md) |
 | CLI CS online lewat wrapper `efn-online-cs`: pasang sudoers, grup `efn-cs` / `efn-cs-approver`, alasan via stdin | [online-orders.md](online-orders.md#cli-cs) |
-| API key Odoo kanal online: pembuatan, rotasi dua kunci, metrik masa berlaku (R-T15) | [odoo-online-api-key.md](odoo-online-api-key.md) |
+| API key Odoo kanal online: pemasangan timer rotasi otomatis 30 hari `efn-rotate-online-key`, rotasi darurat, metrik (R-T15, W-11) | [odoo-online-api-key.md](odoo-online-api-key.md) |
+| Retensi data W-19 (env default, deploy pertama G18 / stop ETL, timer housekeeping Metabase) | [retention.md](retention.md) |
 | Boot stack dev di laptop (Docker Desktop/WSL2), upgrade modul Odoo dev | [dev-stack-boot.md](dev-stack-boot.md) |
 | CI GitHub di repo privat paket gratis: kuota artifact/menit, code scanning, suppression scanner, Dependabot | [ci-github-free-plan.md](ci-github-free-plan.md) |
 

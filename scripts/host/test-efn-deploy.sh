@@ -251,6 +251,9 @@ neg_env "37 PAYMENT_PROVIDER lewat stdin ditolak" "variabel tidak diizinkan: PAY
 neg_env "38 secret multi-baris (injeksi .env) ditolak" "karakter kontrol" \
   "JWT_SECRET=$(printf 'abc\nIMAGE_ODOO=evil.example/odoo@sha256:%s' "$(dg evil)")"
 neg_env "39 secret dengan CR/ESC ditolak" "karakter kontrol" "JWT_SECRET=$(printf 'abc\r\033[2Jx')"
+# W-11: API key Odoo kanal online dikelola DI HOST (secrets.list host:*) -> tidak boleh datang dari stdin CI
+neg_env "110 ODOO_API_KEY_ONLINE_RTL lewat stdin ditolak (W-11, host:*)" "variabel tidak diizinkan: ODOO_API_KEY_ONLINE_RTL" \
+  "ODOO_API_KEY_ONLINE_RTL=0123456789abcdef0123456789abcdef01234567"
 neg_man "40 config manifest multi-baris ditolak" "skema" '.config.RABBITMQ_STRICT_PERMISSIONS = "true\nIMAGE_ODOO=evil"'
 neg_man "41 kunci config manifest tidak dikenal ditolak" "skema" '.config.IMAGE_ODOO = "evil.example/odoo"'
 neg_man "101 saklar dev ODOO_ONLINE_MOCK di config manifest ditolak (G17)" "skema" '.config.ODOO_ONLINE_MOCK = "true"'
@@ -405,6 +408,22 @@ vc "106 pool 2+2 > maxconn 2 ditolak" 1 staging ODOO_RPC_MAXCONN=2 ODOO_RPC_PUBL
 vc "107 pool 2+2 = maxconn 4 diterima" 0 staging ODOO_RPC_MAXCONN=4 ODOO_RPC_PUBLIC_MAX_CONCURRENCY=2 ODOO_RPC_SAGA_MAX_CONCURRENCY=2
 vc "108 maxconn 1 dengan pool default 1+1 ditolak" 1 production ODOO_RPC_MAXCONN=1
 vc "109 pool 0 di luar rentang ditolak" 1 staging ODOO_RPC_SAGA_MAX_CONCURRENCY=0
+# W-18/W-19 (keputusan 10 Okt 2026): rentang env retensi baru
+vc "111 ERASURE_SUPPRESSION_DAYS=0 diterima (tidak disimpan)" 0 production ERASURE_SUPPRESSION_DAYS=0
+vc "112 ERASURE_SUPPRESSION_DAYS=365 diterima" 0 production ERASURE_SUPPRESSION_DAYS=365
+vc "113 ERASURE_SUPPRESSION_DAYS=731 ditolak" 1 production ERASURE_SUPPRESSION_DAYS=731
+vc "114 ERASURE_SUPPRESSION_DAYS=007 ditolak" 1 production ERASURE_SUPPRESSION_DAYS=007
+vc "115 ONLINE_ADMIN_AUDIT_RETENTION_DAYS=3650 diterima" 0 production ONLINE_ADMIN_AUDIT_RETENTION_DAYS=3650
+vc "116 ONLINE_ADMIN_AUDIT_RETENTION_DAYS=3651 ditolak" 1 production ONLINE_ADMIN_AUDIT_RETENTION_DAYS=3651
+vc "117 DSAR_OPEN_ORDER_MAX_DEFER_DAYS=15 ditolak (plafon 14)" 1 production DSAR_OPEN_ORDER_MAX_DEFER_DAYS=15
+vc "118 MEMBER_MIN_AGE=16 ditolak" 1 production MEMBER_MIN_AGE=16
+vc "119 PRICE_HUNTER_GEO_RETENTION_DAYS=90 diterima" 0 production PRICE_HUNTER_GEO_RETENTION_DAYS=90
+vc "120 CH 10 th / pseudonim 5 / geo 90 / Metabase 3650 diterima" 0 production CH_MART_RETENTION_YEARS=10 \
+  CH_PSEUDONYM_RETENTION_YEARS=5 CH_GEO_RETENTION_DAYS=90 MB_AUDIT_MAX_RETENTION_DAYS=3650
+vc "121 pseudonim > baris mart ditolak" 1 production CH_MART_RETENTION_YEARS=5 CH_PSEUDONYM_RETENTION_YEARS=6
+vc "122 pseudonim 11 > default mart 10 ditolak" 1 production CH_PSEUDONYM_RETENTION_YEARS=11
+vc "123 CH_MART_RETENTION_YEARS=31 ditolak" 1 production CH_MART_RETENTION_YEARS=31
+vc "124 MB_AUDIT_MAX_RETENTION_DAYS=20 ditolak (min 30)" 1 production MB_AUDIT_MAX_RETENTION_DAYS=20
 
 echo "RINGKASAN efn-deploy: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]

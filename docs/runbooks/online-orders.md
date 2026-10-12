@@ -275,7 +275,7 @@ printf '%s\n' 'tiket CS-123' | sudo efn-online-cs online-resolve --part=<part_id
 - **Alert (Loki, grup `efn-online-cs`):** `EfnOnlineCsDeniedRepeated` (≥ 3 penolakan per aktor / 15 m),
   `EfnOnlineCsDualRole` (akun di dua grup), `EfnOnlineCsRefundVolumeHigh` (> 10 refund/approve sukses per jam,
   ambang PLACEHOLDER). Alert "approve di luar jam kerja" belum: LogQL tidak punya fungsi jam; kandidat Grafana/ETL.
-- Uji regresi: `scripts/host/test-efn-online-cs.sh` (CI job infra, 45 kasus, docker/logger palsu).
+- Uji regresi: `scripts/host/test-efn-online-cs.sh` (CI job infra, 54 kasus termasuk `online-erasure-pending` G18, docker/logger palsu).
 
 ## Hapus akun dengan pesanan terbuka & erasure paksa (W-18, Q-P18, L-21a) {#erasure-paksa}
 
@@ -294,9 +294,9 @@ Konsekuensinya, pelanggan **kehilangan akses kode ambil di aplikasi**.
 
 **Langkah CS (peran `cs`, kecuali disebut lain):**
 1. **Lihat daftar kerja** (read-only, tanpa alasan):
-   `sudo efn-online-cs online-erasure-pending`.
-   ⚠ Subcommand ini **belum** ada di wrapper host (devsecops G18). Sampai ditambahkan, Superadmin menjalankan
-   `docker exec <api-gateway> node dist/cli/online-erasure-pending.js` dan mencatatnya di tiket.
+   `sudo efn-online-cs online-erasure-pending` (alias `erasure-pending`; peran `cs` dan `approver`; tanpa flag,
+   tanpa alasan/stdin — wrapper G18). Wrapper host lama (sebelum dipasang ulang dari rilis G18) menolak subcommand
+   ini → Superadmin memasang ulang `/usr/local/sbin/efn-online-cs` (cocokkan sha256 PR).
    Output JSON:
    - `deferred[]`: `request_id`, `requested_at`, `scheduled_at`, `erasure_deadline`, `escalation`, `part_ids`. Ini
      penghapusan yang masih tertunda; selesaikan sebelum `erasure_deadline`.

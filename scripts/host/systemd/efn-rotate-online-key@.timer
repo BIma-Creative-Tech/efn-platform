@@ -1,0 +1,13 @@
+# Cek harian; skrip hanya merotasi bila sisa masa berlaku key < ROTATE_BEFORE_DAYS (default 10 dari 30 hari) ->
+# kegagalan dicoba ulang setiap hari sebelum alert EfnOnlineApiKeyExpiringSoon (< 7 hari).
+# Jam 03:15 WIB: di luar jam operasional; recreate BFF singkat (healthcheck) - checkout online bisa 503 beberapa detik.
+[Unit]
+Description=Jadwal harian rotasi API key Odoo kanal online %i
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 Asia/Jakarta
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

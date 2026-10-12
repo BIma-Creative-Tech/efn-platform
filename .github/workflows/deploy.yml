@@ -238,7 +238,11 @@ jobs:
           # production menolak false kecuali EFN_ALLOW_CONTROL_OFF di deploy.conf host
           CFG_RABBITMQ_STRICT_PERMISSIONS: ${{ vars.RABBITMQ_STRICT_PERMISSIONS || 'true' }}
           CFG_MARKET_SCOUT_PHOTO_RETENTION_DAYS: ${{ vars.MARKET_SCOUT_PHOTO_RETENTION_DAYS || '90' }}
-          CFG_CH_MART_RETENTION_YEARS: ${{ vars.CH_MART_RETENTION_YEARS || '5' }}
+          # W-19 (10 Okt 2026): baris mart 10 th, kolom pseudonim 5 th, koordinat Price Hunter 90 h, riwayat query Metabase 10 th
+          CFG_CH_MART_RETENTION_YEARS: ${{ vars.CH_MART_RETENTION_YEARS || '10' }}
+          CFG_CH_PSEUDONYM_RETENTION_YEARS: ${{ vars.CH_PSEUDONYM_RETENTION_YEARS }}
+          CFG_CH_GEO_RETENTION_DAYS: ${{ vars.CH_GEO_RETENTION_DAYS }}
+          CFG_MB_AUDIT_MAX_RETENTION_DAYS: ${{ vars.MB_AUDIT_MAX_RETENTION_DAYS }}
           # Teks consent aktif (docs/04 §8.9): versi = superapp-web lib/consent.ts, sha256 = UTF-8 body persis. Kosong -> grant consent 503.
           CFG_CONSENT_LOCATION_VERSION: ${{ vars.CONSENT_LOCATION_VERSION }}
           CFG_CONSENT_LOCATION_TEXT_SHA256: ${{ vars.CONSENT_LOCATION_TEXT_SHA256 }}
@@ -275,6 +279,12 @@ jobs:
           # deploy-validate menolak PUBLIC + SAGA > MAXCONN.
           CFG_ODOO_RPC_PUBLIC_MAX_CONCURRENCY: ${{ vars.ODOO_RPC_PUBLIC_MAX_CONCURRENCY }}
           CFG_ODOO_RPC_SAGA_MAX_CONCURRENCY: ${{ vars.ODOO_RPC_SAGA_MAX_CONCURRENCY }}
+          # W-18/W-19 (keputusan 10 Okt 2026, PDP v7). Kosong = default compose (14 / 365 / 17 / 90); rentang divalidasi
+          # scripts/lib/deploy-validate.sh (defer 1..14, suppression 0..730, usia 17..21, geo 1..3650).
+          CFG_DSAR_OPEN_ORDER_MAX_DEFER_DAYS: ${{ vars.DSAR_OPEN_ORDER_MAX_DEFER_DAYS }}
+          CFG_ERASURE_SUPPRESSION_DAYS: ${{ vars.ERASURE_SUPPRESSION_DAYS }}
+          CFG_MEMBER_MIN_AGE: ${{ vars.MEMBER_MIN_AGE }}
+          CFG_PRICE_HUNTER_GEO_RETENTION_DAYS: ${{ vars.PRICE_HUNTER_GEO_RETENTION_DAYS }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/efn-release"
@@ -320,7 +330,8 @@ jobs:
 
       # Secret & variabel dikirim lewat stdin (bukan argumen ssh), di-encode base64 per baris (tanpa eval di host).
       # Daftar secret = scripts/secrets.list; nilai diambil dari toJSON(secrets) (GitHub Environment, UPPERCASE),
-      # sehingga menambah secret tidak butuh mengedit workflow ini. Jenis `pki`/`derived:*` TIDAK dikirim.
+      # sehingga menambah secret tidak butuh mengedit workflow ini. Jenis `pki`/`derived:*`/`host:*` (W-11, dikelola
+      # di host: API key Odoo kanal online, efn-rotate-online-key) TIDAK dikirim.
       - name: Deploy (efn-deploy di host -> compose pull & up by digest)
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
@@ -348,7 +359,7 @@ jobs:
             while read -r name kind _; do
               [ -z "$name" ] && continue
               case "$name" in \#*) continue ;; esac
-              case "$kind" in pki|derived:*) continue ;; esac
+              case "$kind" in pki|derived:*|host:*) continue ;; esac
               up="$(echo "$name" | tr '[:lower:]' '[:upper:]')"
               val="$(jq -r --arg k "$up" '.[$k] // empty' <<< "$ALL_SECRETS")"
               printf '%s=%s\n' "$up" "$(printf '%s' "$val" | base64 -w0)"

@@ -1595,3 +1595,59 @@ Belum / perlu tindakan:
 - **Verifikasi nyata:** recreate api-gateway → healthy ±55 s; tambah satu baris komentar di `src/main.ts` → `File change
   detected` ±1 s, app start ulang (`successfully started`, ±4 s); file dikembalikan persis (`git diff` bersih) → reload
   lagi; status akhir healthy. compose config dev OK, check-encryption OK.
+
+# Gelombang 18 — W-11 rotasi API key, W-19 env retensi, W-28 kustodi brankas (10–12 Okt 2026, belum di-commit)
+
+Sumber: `docs/10_RENCANA_GELOMBANG_18_PLUS.md` (W-11, W-19, W-28), keputusan 10 Okt (`docs/decisions/README.md` #33,
+Q-E1a/b/c, bagian E), R-T15, R-B11; permintaan lead (env data-AI, BFF: migrasi 08, `online-erasure-pending`, alert forced).
+
+## G18.1 W-11 — rotasi otomatis API key kanal online (ADR-024/034 Proposed, R-T15)
+
+| File | Isi |
+|---|---|
+| `scripts/host/efn-rotate-online-key` (baru) | Skrip root fail-closed (pola efn-deploy/efn-online-cs): identitas root/systemd/sudo `efn-superadmin`; flag allowlist (`--channel --force --status --overlap-seconds`); konfigurasi `/etc/efn/online-key-rotation.conf` tidak di-source (allowlist + validasi, milik root, tidak group/world-writable); flock per kanal. Alur: list key (`odoo shell` exec di container odoo) → rotasi bila sisa < 10 h / state tak dikenal / tanpa kedaluwarsa / `--force` → key baru `with_user(efn_online_<kanal>)._generate(None, 'efn-online-<KANAL>-<UTC>', +30 h)` → tulis atomik ke file secret yang di-mount compose (path dari `compose config`, wajib di SECRETS_DIR; `root:efn-superadmin` + mode deploy.sh) → recreate pemakai secret + sidecar → tunggu sehat → verifikasi json2 `efn_online_catalog` limit 1 lewat odoo-rpc-gateway (mTLS) di **setiap** replika BFF → gagal: rollback + cabut key baru (rc 1; rc 3 bila rollback gagal) / sukses: overlap 1 jam → verifikasi ulang → cabut semua key lain → **bukti 401** key lama → hancurkan salinan. Cabut tertunda diselesaikan run berikutnya. Nilai key tidak pernah di stdout/stderr/journald/argv; stderr Odoo disaring. Metrik textfile `efn_odoo_api_key_*` (multi-kanal satu file). |
+| `scripts/host/systemd/efn-rotate-online-key@.{service,timer}` (baru) | Template per kanal, harian 03:15 WIB, `Persistent`, hardening systemd ringan. |
+| `scripts/host/test-efn-rotate-online-key.sh` (baru) + CI step | 42 kasus docker/Odoo/BFF palsu: bootstrap, tidak-perlu, `--force`, rollback, unhealthy → rc 3, create gagal, cabut tidak efektif, cabut tertunda/overlap, sisa < 10 h, key tanpa exp, `--status`, penolakan identitas/argumen/konfigurasi/flock, penjaga kebocoran key. |
+| `scripts/secrets.list` + `gen-secrets.sh`, `deploy.sh`, `deploy.yml`, `efn-deploy` | Jenis secret baru **`host:<awal>`** untuk `odoo_api_key_online_{rtl,fnb}`: tidak dikirim deploy.yml, ditolak efn-deploy dari stdin (test 110), **tidak ditimpa** deploy.sh (file belum ada → placeholder). Tanpa ini deploy berikutnya menimpa key hasil rotasi dengan nilai GitHub lama (yang sudah dicabut) → outage. `deploy.sh` menulis `/opt/efn/compose/.efn-compose-files` (dipakai skrip host). |
+| `alert-rules.yml` | ExpiringSoon 14 → **7 h** (rotasi normal di sisa 10 h); baru `EfnOnlineApiKeyRotationFailed`, `…RotationNotRunning`, `…ExtraKeys`. |
+| `loki-rules/efn-online.yml`, `promtail-journal.yml` | Grup `efn-online-key-rotation`: `EfnOnlineApiKeyRollbackFailed` (critical), `…OldKeyStillAccepted`; journald `efn-rotate-online-key` hanya `_UID 0` → `service="host-efn-rotate-online-key"`. |
+| `docs/runbooks/odoo-online-api-key.md` (ditulis ulang), `docs/04` baris identitas Odoo | Pemasangan, cara kerja, alert, rotasi gagal, ROLLBACK GAGAL, darurat. |
+
+**Uji NYATA stack dev (10 Okt):** skrip dijalankan di container `docker:27-cli` (socket + repo di `/run/desktop/mnt/host/e/...`): `--status` → rotasi (key id 1 → id 2, 30 h, verifikasi 200 di BFF sebelum & sesudah, key 1 dicabut, **401 terbukti**) → run kedua "TIDAK PERLU" → metrik lengkap; `efn-api-gateway-1` sehat. `secrets/odoo_api_key_online_rtl.txt` dev kini berisi key id 2 (berlaku s.d. 9 Nov 2026).
+
+**Selaras functional:** `api_key_duration` grup teknis 35 h (efn_setup_online) ≥ KEY_DAYS 30. ⚠ **Temuan:** Odoo memakai **maksimum** durasi dari *semua* grup user (`all_group_ids`); di DB dev grup "Role / User" juga ber-`api_key_duration` 90 → batas efektif user teknis tetap 90 h. Perlu dicek efn-odoo-functional (jangan beri durasi di grup umum).
+
+**Deviasi dari brief:** file secret ditulis mode **0444** (bukan 0400) di direktori 0750 `root:efn-superadmin` — sama dengan deploy.sh; 0400 root membuat BFF (uid 1000) tidak bisa membaca bind mount (key-custody "Mekanisme uid"). Salinan kerja di `/var/lib/efn/online-key` = 0400 root.
+
+## G18.2 W-19 — env retensi (+ data-AI, BFF)
+
+compose / `.env.example` / `deploy-validate` (release config + rentang) / `deploy.yml` `CFG_*` / `deploy.sh` `.env`:
+`ONLINE_ADMIN_AUDIT_RETENTION_DAYS` 3650 (30..3650), `ERASURE_SUPPRESSION_DAYS` 365 (0..730), `DSAR_OPEN_ORDER_MAX_DEFER_DAYS` 14 (1..14), `MEMBER_MIN_AGE` 17 (17..21), `PRICE_HUNTER_GEO_RETENTION_DAYS` 90, `CH_MART_RETENTION_YEARS` **10** (1..30), `CH_PSEUDONYM_RETENTION_YEARS` 5 (clickhouse-init + etl; ≤ mart), `CH_GEO_RETENTION_DAYS` 90 (clickhouse-init + etl), `MB_AUDIT_MAX_RETENTION_DAYS` 3650 (metabase, 30..3650). Batas bawah `ONLINE_ORDER_MEMBER_LINK_DAYS` 30 / `ONLINE_EVENT_RETENTION_DAYS` 7 diselaraskan dengan BFF. Test efn-deploy +15 kasus (110–124).
+
+- **Deploy G18:** `deploy.sh` kini `stop etl` sebelum `up -d` (profil data) → ETL baru jalan setelah `clickhouse-init` exit 0 (depends_on) — mitigasi jendela migrasi `loyalty_events` (data-AI), otomatis setiap deploy.
+- Migrasi `08-platform-g18-privacy.sql` masuk daftar **wajib** deploy.sh.
+- Housekeeping Metabase: `scripts/metabase-housekeeping.sh` + `scripts/host/systemd/efn-metabase-housekeeping.{service,timer}` (harian 04:00 WIB, `metabase-provision <argumen compose> --housekeeping-only`, file compose deploy terakhir), metrik + alert `EfnMetabaseHousekeepingStale`, journald unit → Loki.
+- Runbook baru `docs/runbooks/retention.md` (tabel env, deploy pertama G18, housekeeping).
+- ⚠ Variabel GitHub Environment lama (`ONLINE_ADMIN_AUDIT_RETENTION_DAYS=400`, `CH_MART_RETENTION_YEARS=5` bila diset) **menimpa** default baru — Superadmin hapus sebelum deploy G18. `infra/compose/.env` dev lokal juga masih bernilai lama.
+
+## G18.3 Permintaan BFF
+
+- Wrapper `efn-online-cs`: subcommand **`online-erasure-pending`** (alias `erasure-pending`, nama kanonik mengikuti runbook BFF) → `node dist/cli/online-erasure-pending.js`; read-only, tanpa flag, tanpa alasan, **tanpa stdin** (`docker exec` tanpa `-i`, `< /dev/null`), peran cs & approver; pemisahan peran tetap. Test 54/54. ⚠ sha256 wrapper berubah → Superadmin pasang ulang. Runbook online-orders.md diperbarui.
+- Alert `EfnDsarErasureForcedOpenOrders`: `increase(efn_dsar_erasure_deferral_total{event="forced"}[1h]) > 0` (warning, runbook online-orders.md#erasure-paksa).
+
+## G18.4 W-28 kick-off — kustodi brankas Direksi (R-B11)
+
+`docs/runbooks/key-custody.md` §8 (baru) + penyesuaian §1/§2/§5/§6/§7 ke keputusan 1 Superadmin: isi Paket A (arsip `age` terenkripsi passphrase P-A di 2 flashdisk: root CA dir, pii key ring, walg, minio KMS, clickhouse disk, metabase, otp_pepper, audit sink, LUKS passphrase + header backup, kode pemulihan GitHub, kunci SSH break-glass, kanari PII, register SHA-256), Amplop B terpisah (P-A + passphrase root; rekomendasi lokasi kedua), pengemasan & penyegelan bernomor + berita acara, log brankas + pemeriksaan segel kuartalan, pemicu pembaruan paket, **uji pemulihan disaksikan 2×/tahun** (restore nyata dengan kunci dari paket, oleh staf selain Superadmin), prosedur Superadmin tidak tersedia (pemicu 4 jam / 2 minggu / keluar), Shamir sebagai opsi masa depan (tidak diwajibkan). Index `docs/runbooks/README.md` diperbarui.
+
+## G18.5 Validasi (lokal, container)
+
+shellcheck v0.10.0 (semua skrip CI + baru) bersih · `docker compose config` dev & prod OK · `check-encryption.sh` OK · promtool `check rules` SUCCESS · yamllint OK (1 warning lama: baris pytest metabase milik data-AI) · actionlint rc 0 · checkov 0 failed · test-efn-deploy **124/124** · test-efn-online-cs **54/54** · test-efn-rotate-online-key **42/42** · test-promtail-redaction OK (83 entri) · uji nyata rotasi di dev (G18.1).
+
+## G18.6 Belum / risiko
+
+- Belum diuji di host Linux dengan systemd/journald/promtail-journal nyata (staging belum ada, ADR-004); timer housekeeping & `stop etl` di deploy.sh belum dijalankan nyata.
+- Rollback rotasi hanya diuji dengan docker palsu; jalur sukses diuji nyata.
+- Recreate BFF (2 replika prod) serentak → 503 beberapa detik saat rotasi (03:15 WIB).
+- `efn-online-cs`, `efn-deploy` (allowlist `host:`), skrip baru: sha256 berubah → pemasangan ulang manual Superadmin.
+- Container `efn-fg18-suite`/`efn-fg18-pg` (image `efn-odoo:ci`, dimulai ±10 menit sebelum laporan) **bukan** milik devsecops dan tampak dipakai agent lain → tidak dihapus. Container uji devsecops semuanya `--rm` (tidak ada sisa).
+- W-28 lanjutan (DPIA, off-site backup, PoC SeaweedFS) → G20. Nama Superadmin/pemegang brankas/saksi belum ditetapkan (G-3).
