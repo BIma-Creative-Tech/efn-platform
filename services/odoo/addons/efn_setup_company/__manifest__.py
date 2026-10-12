@@ -4,13 +4,13 @@
         "Konfigurasi data-only: 4 company (EFN/RTL/FNB/FARM), IDR, CoA l10n_id; "
         "PB1 configurable (grup + default + fiscal position per kota)."
     ),
-    "version": "19.0.1.3.0",
+    "version": "19.0.1.4.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",
     "website": "https://github.com/efn/efn-platform",
     # ADR-001 (satu DB multi-company, Proposed), ADR-019 (unified cart / agen penagih, Proposed).
-    # Data-only: tidak ada model/logika Python. Lihat README.md.
+    # Data-only: tidak ada model. Satu hook kecil (hooks.py, W-03): presisi IDR Rp1 sebelum jurnal pertama.
     # depends terverifikasi di odoo/odoo 19.0 (2026-10-05): l10n_id (account, base_iban, base_vat).
     "depends": [
         "efn_core",
@@ -31,6 +31,7 @@
     "demo": [
         "demo/account_tax_demo.xml",
     ],
+    "pre_init_hook": "pre_init_hook",
     "installable": True,
     "application": False,
 }

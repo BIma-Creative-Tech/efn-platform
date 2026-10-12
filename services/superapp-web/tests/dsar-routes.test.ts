@@ -134,6 +134,7 @@ describe('GET /api/dsar/requests/:id', () => {
       requested_at: '2026-10-06T03:00:00.000Z',
       scheduled_at: '2026-10-13T03:00:00.000Z',
       completed_at: null,
+      open_online_orders: 0,
     });
     expect(res.headers.get('cache-control')).toBe('no-store');
     const [path, opts] = bffFetch.mock.calls[0]!;

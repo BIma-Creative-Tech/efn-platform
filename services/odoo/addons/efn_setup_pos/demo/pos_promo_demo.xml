@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO W-10 (Gelombang 18) — mesin promo STANDAR pos_loyalty untuk pilot ritel (keputusan pemilik proyek 10 Okt 2026
+     #42, P-4/Q-28): promo otomatis, kode promo/kupon, beli X gratis Y + pricelist member 5 % (PLACEHOLDER, lihat
+     pos_retail_demo.xml). Tipe "loyalty"/"ewallet" (poin Odoo) TIDAK dipakai (ADR-020: poin member = ledger BFF).
+     Daftar promo nyata menunggu Marketing (data klien) -> hanya DB demo. Pola record mengikuti loyalty/data/
+     loyalty_demo.xml 19.0 (program -> rule -> reward terpisah). Promo ber-OTP: centang "Wajib OTP member"
+     (efn_requires_otp, efn_pos_otp_gate) di form program; tidak diisi di sini.
+     Semua program dibatasi company PT Retail (company_id) dan berlaku di semua POS PT Retail kecuali
+     pos_config_ids diisi admin. sale_ok TIDAK diset di sini (field sale_loyalty; efn_setup_online memaksa
+     sale_ok=False untuk program baru). -->
+<odoo>
+    <record id="product_demo_water" model="product.product">
+        <field name="name">Air Mineral 600 ml (DEMO)</field>
+        <field name="type">consu</field>
+        <field name="available_in_pos" eval="True"/>
+        <field name="list_price">4500</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="taxes_id" model="res.company"
+               eval="[(6, 0, obj(ref('efn_setup_company.company_rtl')).account_sale_tax_id.ids)]"/>
+    </record>
+
+    <!-- 1. Beli 2 gratis 1 (buy_x_get_y). -->
+    <record id="promo_demo_b2g1" model="loyalty.program">
+        <field name="name">Beli 2 Gratis 1 Air Mineral (DEMO)</field>
+        <field name="program_type">buy_x_get_y</field>
+        <field name="applies_on">current</field>
+        <field name="trigger">auto</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="pos_ok" eval="True"/>
+    </record>
+    <record id="promo_demo_b2g1_rule" model="loyalty.rule">
+        <field name="program_id" ref="promo_demo_b2g1"/>
+        <field name="minimum_qty">2</field>
+        <field name="reward_point_mode">unit</field>
+        <field name="reward_point_amount">1</field>
+        <field name="product_ids" eval="[(6, 0, [ref('product_demo_water')])]"/>
+    </record>
+    <record id="promo_demo_b2g1_reward" model="loyalty.reward">
+        <field name="program_id" ref="promo_demo_b2g1"/>
+        <field name="reward_type">product</field>
+        <field name="reward_product_id" ref="product_demo_water"/>
+        <field name="required_points">2</field>
+    </record>
+
+    <!-- 2. Promo otomatis: belanja >= Rp200.000 -> diskon 5 % order (periode diisi Marketing). -->
+    <record id="promo_demo_min_spend" model="loyalty.program">
+        <field name="name">Belanja Rp200 rb Diskon 5% (DEMO)</field>
+        <field name="program_type">promotion</field>
+        <field name="applies_on">current</field>
+        <field name="trigger">auto</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="pos_ok" eval="True"/>
+    </record>
+    <record id="promo_demo_min_spend_rule" model="loyalty.rule">
+        <field name="program_id" ref="promo_demo_min_spend"/>
+        <field name="minimum_amount">200000</field>
+        <field name="minimum_amount_tax_mode">incl</field>
+    </record>
+    <record id="promo_demo_min_spend_reward" model="loyalty.reward">
+        <field name="program_id" ref="promo_demo_min_spend"/>
+        <field name="reward_type">discount</field>
+        <field name="discount">5</field>
+        <field name="discount_mode">percent</field>
+        <field name="discount_applicability">order</field>
+    </record>
+
+    <!-- 3. Kode promo (dibagikan Marketing; kode DEMO, bukan rahasia). -->
+    <record id="promo_demo_code" model="loyalty.program">
+        <field name="name">Kode Promo 10% (DEMO)</field>
+        <field name="program_type">promo_code</field>
+        <field name="applies_on">current</field>
+        <field name="trigger">with_code</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="pos_ok" eval="True"/>
+    </record>
+    <record id="promo_demo_code_rule" model="loyalty.rule">
+        <field name="program_id" ref="promo_demo_code"/>
+        <field name="mode">with_code</field>
+        <field name="code">EFNDEMO10</field>
+    </record>
+    <record id="promo_demo_code_reward" model="loyalty.reward">
+        <field name="program_id" ref="promo_demo_code"/>
+        <field name="reward_type">discount</field>
+        <field name="discount">10</field>
+        <field name="discount_mode">percent</field>
+        <field name="discount_applicability">order</field>
+    </record>
+</odoo>

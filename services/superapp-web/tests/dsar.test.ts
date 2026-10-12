@@ -59,7 +59,16 @@ describe('parseDsarRequests', () => {
 });
 
 describe('penghapusan tertunda', () => {
-  const base = { id: 'd', type: 'delete', status: 'scheduled', requested_at: null, completed_at: null, download_url: null };
+  const base = {
+    id: 'd',
+    type: 'delete',
+    status: 'scheduled',
+    requested_at: null,
+    completed_at: null,
+    download_url: null,
+    open_online_orders: 0,
+    erasure_deadline: null,
+  };
   it('dapat dibatalkan sebelum scheduled_at', () => {
     expect(isCancellableDeletion({ ...base, scheduled_at: '2026-10-10T00:00:00Z' }, NOW)).toBe(true);
   });

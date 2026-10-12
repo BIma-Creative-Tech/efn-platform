@@ -1,6 +1,6 @@
 # FIT-GAP ODOO CE 19 — KEBUTUHAN FASE 1–2
 
-- **Tanggal:** 2026-10-05 · **Revisi Gelombang 5:** 2026-10-06 (pajak configurable, payment gateway-agnostic, privasi UU PDP) · **Revisi Gelombang 10:** 2026-10-06 (tanpa dependency OCA/vendor; kolom *Referensi*) · **Revisi Gelombang 13:** 2026-10-07 (Fase 1 pilot POS retail, loyalty POS §9, migrasi data — §6) · **Revisi Gelombang 14:** 2026-10-08 (Fase 2 POS F&B, KDS, QR order, kitting — §7) · **Revisi Gelombang 17:** 2026-10-09 (Fase 3 penjualan online Super-App — §8) · **Penyusun:** efn-odoo-functional
+- **Tanggal:** 2026-10-05 · **Revisi Gelombang 5:** 2026-10-06 (pajak configurable, payment gateway-agnostic, privasi UU PDP) · **Revisi Gelombang 10:** 2026-10-06 (tanpa dependency OCA/vendor; kolom *Referensi*) · **Revisi Gelombang 13:** 2026-10-07 (Fase 1 pilot POS retail, loyalty POS §9, migrasi data — §6) · **Revisi Gelombang 14:** 2026-10-08 (Fase 2 POS F&B, KDS, QR order, kitting — §7) · **Revisi Gelombang 17:** 2026-10-09 (Fase 3 penjualan online Super-App — §8) · **Revisi Gelombang 18:** 2026-10-10 (presisi IDR Rp1, poin = alat bayar, refund metode asal, GS1, konfigurasi pilot — §9) · **Penyusun:** efn-odoo-functional
 - **Metode:** verifikasi source primer `raw.githubusercontent.com/odoo/odoo/19.0/...`; referensi desain di `OCA/<repo>/19.0` dan `CybroOdoo/CybroAddons/19.0` (WebFetch `__manifest__.py`/model). Melengkapi `docs/06_ODOO_CE19_MODULE_AUDIT.md` (ketersediaan modul) dengan **setting/field persis** dan keputusan konfigurasi.
 - **Prinsip (Gelombang 10, CLAUDE.md, ADR-031 *Proposed*):** konfigurasi **Standar CE 19** dulu → bila gap, **modul `efn_*` sendiri**. Modul OCA & Cybrosys **bukan dependency** — hanya *referensi desain* (ide model/alur), **kode tidak disalin** (sebagian besar AGPL-3; menyalin ke modul LGPL-3 melanggar lisensi). Semua ADR masih *Proposed*.
 - **Modul konfigurasi:** `efn_setup_company`, `efn_setup_security`, `efn_setup_audit`, `efn_setup_pos`, `efn_setup_mrp` (`services/odoo/addons/`). Ter-install di CI sejak Gelombang 7, kecuali `efn_setup_audit` yang sejak Gelombang 10 menunggu `efn_audit` (`installable: False`).
@@ -532,3 +532,162 @@ Yang sengaja **tidak** dikunci: tidak ada akun/kode akun di kode; jurnal titipan
 - **K-ON3** `platform_order_ref` = id order BFF (UUID, ≤ 64), `checkout_ref` = id checkout/payment intent; `idempotency_key` per langkah: `online:place:<platform_order_ref>`, `online:paid:<platform_order_ref>:<payment_id>`, `online:cancel:<platform_order_ref>`, `online:refund:<refund uuid BFF>`.
 - **K-ON4** Payment intent online (ADR-026) membawa porsi `{company_code, platform_order_ref, amount}`; Σ porsi = nominal intent; refund parsial wajib menyebut `platform_order_ref` (ADR-019 §3).
 - **K-ON5** Kode error Odoo (`price_changed`, `out_of_stock`, `amount_mismatch`, `invalid_state`, `idempotency_conflict`, `not_found`) dipetakan BFF ke pesan generik pelanggan (§3).
+
+## 9. Gelombang 18 — fondasi Rupiah, poin = alat bayar, pilot ritel (2026-10-10)
+
+Lingkup: paket **W-03, W-01, W-24, W-20, W-25** (fit-gap) dan **W-22, W-10, W-11, W-25, W-03** (konfigurasi data-only) dari `docs/10_RENCANA_GELOMBANG_18_PLUS.md`, berdasarkan keputusan pemilik proyek 10 Okt 2026 (`docs/decisions/README.md` butir #11, #12, #14, #19, #33, #41–#44). ADR: ADR-020 (poin = alat bayar, catatan 10 Okt), ADR-027, ADR-031 (semua *Proposed*). Risiko: R-T17 (presisi mata uang setelah ada jurnal), R-B06 (fraud kasir), R-T15 (API key kanal), R-L09.
+Verifikasi: source Odoo 19 CE di container dev `efn-odoo-1` + **PoC nyata** di PostgreSQL 16.15 terpisah (network `efn-fg18`, DB `efn_fg18_*`; DB dev `efn_odoo` tidak disentuh). Skrip PoC (odoo shell, tidak di-commit): install `efn_setup_company, efn_setup_pos, efn_pos_loyalty_ledger, efn_online_order, efn_setup_online, efn_pos_kds, sale_management` → DB **A** (IDR 0,01, kondisi HEAD) dan salinan **B** dengan `base.IDR.rounding = 1` sebelum ada jurnal → transaksi identik di keduanya.
+
+> **Ringkasan manajemen (Gelombang 18).** (1) **Rupiah tanpa sen (W-03)** aman dan murah **sekarang**: uji nyata faktur PPN, faktur restoran PB1 + service charge, pesanan penjualan dengan harga member, dan transaksi kasir (tunai, EDC, poin) semuanya menghasilkan nilai Rupiah bulat dan jurnal seimbang; kasir tidak lagi menagih "Rp84.346,25" yang tidak bisa dibayar tunai. Setelah ada jurnal, Odoo **menolak** perubahan ini — jadi harus masuk sebelum database produksi dibuat (sudah diterapkan di modul konfigurasi). Satu catatan pajak: e-Faktur Coretax menghitung PPN dari DPP 11/12 per baris sehingga bisa selisih **Rp1** pada sebagian baris dibanding jurnal Odoo — perlu sikap Finance/konsultan pajak. (2) **Tukar poin = alat bayar (W-01)** cocok dengan fitur standar: "Poin EFN" menjadi metode bayar kasir seperti EDC, harga & PPN tetap atas harga penuh, dan jurnal penukaran langsung mengurangi liabilitas poin; dibuktikan di uji nyata. Yang perlu dibangun: validasi server & tombol kasir (±1,5–2 minggu). (3) **Refund ke metode asal (W-24)** tidak ditegakkan Odoo standar → modul kecil (±1 minggu). (4) **Label GS1** (lot + kedaluwarsa + berat) **didukung standar** di kasir dan bisa berdampingan dengan label timbangan 21/23 yang ada; label harga GS1 dan blokir barang kedaluwarsa tidak didukung. (5) Konfigurasi pilot yang tidak menunggu keputusan sudah diterapkan: stasiun dapur Bakery/Pastry + Bar Kopi (5/10 menit), promo standar (demo), grup kasir yang boleh mendaftarkan pelanggan (HP member tetap terkunci), API key kanal online maksimal 35 hari.
+
+### 9.1 W-03 — presisi IDR global Rp1 (Q-ON6, butir #19)
+
+**Standar CE 19 (terverifikasi):**
+- `base/data/res_currency_data.xml`: IDR `rounding = 0.01` (noupdate) → `decimal_places` 2 (`_compute_decimal_places`, `base/models/res_currency.py:162`). `rounding = 1` → `decimal_places` 0; `currency.round()`, `compare_amounts`, `is_zero`, format angka, dan POS (mata uang dimuat ke frontend dengan `decimal_places`) ikut.
+- **Penjaga R-T17:** `account/models/res_currency.py:26` `write()` menolak menaikkan `rounding` bila `_has_accounting_entries()` (ada `account.move.line` ber-IDR). Perubahan **hanya** bisa sebelum jurnal pertama; DB yang sudah berjurnal harus dibuat ulang (dev/staging) — migrasi in-place tidak direkomendasikan.
+- Presisi harga satuan terpisah: `decimal.precision` "Product Price" tetap 2 → harga per kg & hasil diskon pricelist (11.727,75) tetap bisa bersen; **total baris & dokumen** dibulatkan ke Rupiah.
+- `res.company.tax_calculation_rounding_method` default = `round_globally` (semua company EFN, dicek di DB PoC). l10n_id `tax_ST4` = percent **11** (bukan 12 % × 11/12 dua tahap).
+- `l10n_id_efaktur_coretax` (CE 19, belum dipasang): `models/account_move_line.py:57-70` → `TaxBase = idr.round(price_subtotal)`, `OtherTaxBase = idr.round(price_subtotal × 11/12)`, `VAT = idr.round(OtherTaxBase × 12 %)` **per baris**, desimal XML mengikuti `currency.decimal_places`.
+
+**Hasil PoC (A = 0,01 · B = Rp1; transaksi identik):**
+
+| Transaksi | A (IDR 0,01) | B (IDR Rp1) | Catatan |
+|---|---|---|---|
+| Faktur PT Retail, PPN 11 % **exclude**: 12.345×3, 7.777, 1.499×7, 33.333 | DPP 88.638,00 · PPN 9.750,18 · total **98.388,18** | DPP 88.638 · PPN 9.750 · total **98.388** | `round_per_line` = `round_globally` pada sampel; Coretax Σ VAT = 9.750 (cocok) |
+| Faktur PT Retail, PPN **include** (harga rak): 12.990×3, 7.500, 1.499×7, 25.000 | DPP 73.840,54 · PPN 8.122,46 · total 81.963,00 | DPP 73.841 · PPN 8.122 · total 81.963 | **Coretax Σ VAT = 8.123 → selisih Rp1** dengan jurnal (pembulatan 11/12 per baris) |
+| Faktur PT F&B: SC 5 % (`include_base_amount`) + PB1 10 % exclude: 27.500, 18.900×2, 12.345 | SC 3.882,25 · DPP PB1 81.527,25 · PB1 8.152,73 · total 89.679,98 | SC 3.882 · DPP PB1 81.527 · PB1 8.153 · total **89.680** | SC tetap masuk DPP PB1 (ADR-027, P-16) |
+| SO PT Retail + pricelist member 5 % (harga incl) | harga satuan 11.727,75 / 17.090,50 · PPN 5.180,28 · total 52.273,75 | harga satuan sama · PPN 5.181 · total **52.274** | `amount_payable` E-28 otomatis bulat |
+| POS #1 tunai: Teh×3, Gula, Tomat 1,25 kg @23.457 | total **84.346,25** (tak bisa dibayar tunai) · PPN 8.358,64 | total **84.346** · PPN 8.359 | tanpa `account.cash.rounding` |
+| POS #2 split: **Poin EFN 5.000** (PoC W-01) + EDC | total 54.620,75 · EDC 49.620,75 | total 54.621 · EDC 49.621 | — |
+| Tutup sesi POS (2 order) | sukses, seimbang; Penjualan 125.195,50 · PPN 13.771,50 | sukses, seimbang; Penjualan 125.195 · PPN 13.772 · Piutang PoS 138.967 | PPN sesi = Σ PPN order |
+
+**Dampak & rekomendasi per area:**
+
+| Area | Dampak Rp1 | Rekomendasi |
+|---|---|---|
+| Pajak `round_per_line` vs `round_globally` | Sampel tidak berbeda; umumnya selisih ≤ Rp1 per dokumen | Tetap default CE sampai Finance memutuskan; bila jurnal harus = Σ PPN per baris struk, set `round_per_line` di 4 PT sebelum go-live (Settings → Accounting). **Q-F18-1** |
+| PPN 12 % × DPP nilai lain 11/12 (Coretax) | Jurnal = 11 % × DPP; Coretax = 12 % × round(DPP×11/12) per baris → **±Rp1** pada sebagian baris (terbukti 8.122 vs 8.123) | (a) terima + rekonsiliasi PPN Keluaran vs SPT bulanan (SOP Finance); (b) PoC `account_tax_python` (CE, `amount_type='code'`) rumus dua tahap — **[B]** apakah `round()` lolos `check_formula`; (c) modul e-Faktur sendiri. **Q-F18-2** (konsultan pajak). Tidak memblokir pilot ritel B2C |
+| PB1 + SC | Bulat per grup; SC tetap masuk DPP PB1 | — |
+| Cash rounding POS (`pos.config.cash_rounding`) | **Tidak perlu** untuk Rupiah bulat; tetap tersedia bila Finance ingin pembulatan tunai Rp100 | Jangan aktifkan untuk pilot (checklist README `efn_setup_pos` diperbarui) |
+| Kanal online `cash_rounding_id` (E-28; demo `efn_setup_online` 1,0 HALF-UP) | No-op di atas IDR Rp1 | Boleh tetap (jaring pengaman) atau dikosongkan; `amount_payable` = `amount_total` |
+| `value_idr` poin (§9 kontrak) | Integer; toleransi Rp1×baris di `efn_pos_loyalty_ledger` bisa menjadi 0 | Lewat E-30 (W-01) |
+| Faktur, nota kredit, laporan (Z report, aged, PPN) | Tampil tanpa desimal; kolom tetap `numeric` | Tidak ada laporan custom di `efn_*` |
+| BFF / ETL | Nominal JSON dari Odoo kini tanpa pecahan | **bff-engineer**: cek asumsi 2 desimal/`Decimal` di `src/orders`, `src/cart/quote.service.ts`, `src/odoo-rpc/odoo-online.parse.ts`, `src/pos/dto/pos-loyalty.dto.ts` (validasi integer IDR), smoke online ulang. **data-ai**: kolom mart Decimal tetap kompatibel; cek format tampilan Metabase |
+| DB dev `efn_odoo` | Sudah berjurnal → upgrade **tidak** mengubah (noupdate) dan perubahan manual ditolak Odoo | **lead/devsecops**: buat ulang DB dev/staging setelah merge (atau terima dev 0,01 sampai reset). **DB produksi wajib dibuat dari versi ini** |
+
+**Tempat perubahan (diterapkan):** `efn_setup_company` 19.0.1.4.0 — `hooks.py` `pre_init_hook` menulis `base.IDR.rounding = 1` **sebelum** data modul & `try_loading` CoA (belum ada jurnal). Semula ditulis di XML data, tetapi uji `--with-demo` gagal: demo `l10n_id` sudah membuat jurnal IDR untuk "ID Company" sebelum modul ini → `UserError` dan install batal. Hook kecil (satu-satunya Python modul) melewati perubahan dengan WARNING bila IDR sudah berjurnal (DB demo/lama), sehingga DB demo tetap bisa dibuat (presisi 0,01) sedangkan DB baru tanpa demo (CI, produksi) mendapat Rp1. Cek pra-go-live: `SELECT rounding FROM res_currency WHERE name='IDR'` = 1. Test `tests/test_currency_idr.py`.
+**Modul/test yang diuji ulang:** semua yang bernilai uang — `efn_pos_loyalty_ledger` (nilai poin, toleransi, rasio refund), `efn_pos_otp_gate` (`amount_total` consume), `efn_pos_payment_gateway` (`pos_payment_method.py:109` nominal ke BFF, kini selalu integer), `efn_online_order` + `efn_online_pos_sale` (quote, `amount_payable`, refund), `efn_setup_online`, `efn_kitting`; tour POS `efn_tour`; smoke online BFF (bff/QA). Hasil: §9.8.
+
+### 9.2 W-01 — redeem poin = alat bayar POS (P-8, butir #11; ADR-020)
+
+**Standar CE 19 (terverifikasi + PoC):**
+- `pos.payment.method` dengan `journal_id` bertipe **bank** dan `payment_method_type = 'none'` (tanpa terminal) → saat tutup sesi Odoo membuat `account.payment` per metode di jurnal itu dengan akun **`outstanding_account_id`** metode (`point_of_sale/models/pos_session.py:1161`, `_create_bank_payment_moves`). Field itu tanpa domain → dapat diarahkan ke akun **liabilitas**. Jurnal `cash` tidak cocok (ikut hitung kas laci & selisih kas).
+- PoC (DB B): jurnal bank "Poin EFN" + metode "Poin EFN" (`outstanding_account_id` = akun `liability_current` "Liabilitas Poin EFN") → order split Poin 5.000 + EDC 49.621 tersinkron, sesi ditutup sukses, jurnal **Dr Liabilitas Poin EFN 5.000 / Cr Piutang PoS 5.000**; jurnal penjualan tetap Penjualan + PPN atas **harga penuh** (PPN sesi 13.772 = Σ PPN order). DPP/PPN tidak berubah → sesuai P-8.
+- Refund POS membuat `pos.payment` negatif pada metode yang dipilih kasir (tanpa pembatasan, lihat §9.3).
+
+**Desain usulan (E-30, perubahan `efn_pos_loyalty_ledger` → 19.0.2.0.0):**
+
+| Aspek | Desain |
+|---|---|
+| Metode bayar | Satu `pos.payment.method` "Poin EFN" **per PT**: jurnal bank "Poin EFN" (tanpa rekening), `payment_method_type='none'`, `split_transactions=False`, `outstanding_account_id` = akun liabilitas/kliring poin PT (PLACEHOLDER, Q-F18-3). Field baru `efn_is_loyalty_points` + constraint: jurnal bank saja, bukan `is_cash_count`, tanpa terminal, maks satu per company. Data jurnal/akun/metode masuk `efn_setup_pos` **setelah** E-30 (butuh field penanda; functional 0,5 hari). |
+| Akuntansi | Penukaran: Dr Liabilitas Poin (atau **kliring poin antar-PT** bila poin diterbitkan PT lain, butir #58 → settlement bulanan W-15) / Cr Piutang PoS. Pembentukan liabilitas saat earn tidak dijurnal Odoo hari ini (ledger BFF) — **Q-F18-3**: impor jurnal akrual harian dari BFF atau cukup rekonsiliasi saldo. |
+| UI kasir | Tombol "Tukar Poin EFN" (tetap OTP `pos_redeem`, ADR-017) → reserve → **menambah baris pembayaran** metode Poin EFN senilai `value_idr` (bukan baris produk). Metode Poin EFN **disembunyikan** dari pilihan manual; nominal tidak bisa diubah (hapus baris = release reservasi). Offline: tombol & metode disembunyikan (tetap ADR-017 opsi a). Kiosk/self-order: tidak tersedia. |
+| Validasi server (sync `paid`) | Deteksi dari `payment_method_id.efn_is_loyalty_points` (bukan flag klien, pola SEC-12): Σ pembayaran Poin EFN **= `value_idr` reservasi** (toleransi **0** setelah W-03), reservasi `reserved` untuk (config, uuid), partner order = partner reservasi, ≤ `redeem_max_pct` × `amount_total` (incl pajak, dihitung server), kembalian hanya dari porsi tunai. Pelanggaran → `UserError` (sync ditolak, pola SEC-62); reservasi aktif tanpa pembayaran poin → `redeem_release`; pembayaran Poin EFN tanpa reservasi → tolak. |
+| Tutup sesi | Poin EFN muncul di bagian non-tunai popup tutup; **selisih (`bank_payment_method_diffs`) untuk metode poin ditolak server** (override kecil `close_session_from_ui`). Laporan Z memisahkan Poin EFN → rekonsiliasi harian Σ Poin EFN per PT vs Σ `pos_redeem` ledger BFF. |
+| Refund | Refund order berpoin: frontend mengisi otomatis baris **negatif** Poin EFN = `round(nilai_refund × bayar_poin_asal ÷ total_asal)` (alokasi proporsional — **Q-F18-4**); sisanya ke metode uang asal (E-31). Server memvalidasi (toleransi Rp1) → outbox `reverse` membawa `points_restored_value`; BFF mengembalikan poin = nilai ÷ nilai poin. Selisih → `hold` + review (pola SEC-60). |
+| Earn porsi non-poin | Usulan `eligible_amount = Σ eligible tanpa pajak × (1 − bayar_poin ÷ amount_total)` (`amount_total` incl pajak; faktor lama `1 + points/goods` tidak berlaku karena poin tidak lagi mengurangi DPP). Contoh PoC #2: eligible 49.208, total 54.621, poin 5.000 → faktor 0,90846 → **44.703**. **Keputusan Finance** (sudah tercatat di bagian G keputusan 10 Okt). Satu fungsi `_efn_loyalty_money_factor`. |
+| Struk | Baris pembayaran "Poin EFN (N poin)"; tidak ada baris diskon. |
+| Data lama | Belum ada produksi → jalur produk "Poin EFN" dihapus; produk diarsipkan di DB dev; test & 4 tour Poin EFN diganti. Filter audit pengganti E-24 tidak diperlukan lagi. |
+
+**Perbandingan dengan desain sekarang:**
+
+| | Diskon per kelompok pajak (G13, sekarang) | Alat bayar (W-01) |
+|---|---|---|
+| DPP/PPN | turun | **tetap atas harga penuh** (keputusan #11) |
+| Bentuk di order | baris produk "Poin EFN" negatif per kelompok pajak | `pos.payment` metode Poin EFN |
+| Jurnal | penjualan neto | penjualan bruto + Dr liabilitas poin |
+| Validasi server | baris vs reservasi (toleransi Rp1 × baris) | pembayaran vs reservasi (toleransi 0) |
+| Earn | faktor dari nilai baris poin tanpa pajak | faktor dari porsi bayar (incl pajak) |
+| Refund | baris penyesuaian produk | pembayaran poin negatif (metode asal) |
+| Audit E-24 | butuh pengecualian produk poin | tidak relevan |
+| UI | hitung per pajak | satu baris bayar |
+
+**Usulan kontrak §9 v6 (untuk efn-lead — `docs/04` belum diubah):**
+- **K-18-1** §9.3 kalimat terakhir diganti: "Odoo menambahkan **baris pembayaran** metode *Poin EFN* senilai `value_idr`; server Odoo memvalidasi pembayaran itu terhadap reservasi saat sync". Produk "Poin EFN" dihapus dari kontrak.
+- **K-18-2** `reserve`: `amount_total` = total order **incl pajak** (dasar `LOYALTY_REDEEM_MAX_PCT_OF_ORDER`); `value_idr` **integer** Rupiah (W-03).
+- **K-18-3** `commit` membawa `payment_amount` (= `value_idr`, diverifikasi BFF) selain field K-3.
+- **K-18-4** §9.2/§9.6 K-1: `eligible_amount = Σ subtotal tanpa pajak baris eligible × (1 − bayar_poin ÷ amount_total)` — **menunggu Finance**; rumus v4.2 usang.
+- **K-18-5** §9.4 `reverse`: tambah `points_restored_value` (IDR integer, dari pembayaran poin negatif refund) — BFF memakai nilai ini (bukan `refund_ratio`) untuk mengembalikan poin redeem; `refund_ratio` tetap untuk clawback earn.
+- **K-18-6** Rekonsiliasi harian: Σ `pos.payment` Poin EFN per PT/tanggal (Odoo) = Σ `pos_redeem` − Σ `points_restored_value` (BFF) → alert `EFN_LOYALTY_RECON` bila beda.
+- **K-18-7** Online (W-12, G20) memakai model sama: porsi "poin" pada payment intent tidak lewat gateway; E-28 mencatat payment line poin — dirinci saat W-12.
+
+### 9.3 W-24 — refund ke metode asal (G13-4, butir #43) + metode bayar pilot
+
+| Kebutuhan | Standar CE 19 | Gap / konfigurasi |
+|---|---|---|
+| Tunai | Otomatis per `pos.config` (jurnal kas per outlet, `_check_cash_method_single_shop`) | — |
+| EDC manual (debit/kredit) | Jurnal bank, `payment_method_type='none'` (`efn_setup_pos` RTL & FNB) | — (tanpa PAN) |
+| **QRIS statis** (stiker QR merchant) | Tidak ada konsep khusus; `l10n_id_pos` `qr_code_method='id_qr'` = QR **dinamis** qris.online + API key di `res.partner.bank` → **tidak dipakai** (E-13, secret) | Metode "QRIS (statis)" jurnal bank `none`; kasir mencocokkan notifikasi dashboard merchant (SOP). Data dibuat saat akun merchant/bank diketahui (data klien). QRIS dinamis tetap lewat `efn_pos_payment_gateway` setelah vendor dipilih |
+| Split payment | Standar (beberapa `pos.payment`; kembalian dari tunai) | — |
+| Pembulatan | Rp1 (W-03), tanpa cash rounding | — |
+| **Refund wajib ke metode asal** | **Tidak ditegakkan**: layar bayar refund menampilkan semua metode; server menerima metode apa pun (G13, §6.5) | **E-31** (wajib) |
+
+**Spesifikasi E-31 `efn_pos_refund_origin` (±1 minggu: odoo 0,7 + QA 0,3):** (1) server, pada sync order refund (baris ber-`refunded_orderline_id`; jenis ditentukan server seperti SEC-59): metode bayar refund ⊆ metode order asal; nominal per metode ≤ dibayar per metode di order asal − refund sebelumnya; alokasi default proporsional (konsisten W-01); retur tanpa struk → hanya tunai atau ditolak (**Q-F18-5**); pelanggaran → `UserError`. (2) frontend: layar bayar refund hanya menampilkan metode asal dan mengisi nominal otomatis. (3) Metode yang tidak bisa dibalik di kanalnya (QRIS statis, `efn_gateway` `supports_reversals=false`) tetap dicatat **atas metode asal**; pengembalian dana fisik = transfer manual sesuai SOP Finance (**Q-F18-6**). (4) Test: refund penuh/parsial/split, refund berulang, ganti metode ditolak, retur tanpa struk, refund berpoin (gabung E-30). Referensi desain: OCA/pos (modul retur POS) — **belum di-WebFetch 19.0**, hanya ide.
+
+### 9.4 W-20 — lot fresh GS1 di kasir + timbangan (P-10 #44, P-2 #41)
+
+**Standar CE 19 (terverifikasi source + PoC parser):**
+- `barcodes_gs1_nomenclature` (CE, terpasang bersama POS) menyediakan *Default GS1 Nomenclature* (`is_gs1_nomenclature`, `gs1_separator_fnc1`) dengan AI: (01)/(02) GTIN → `product`, **(10) lot / (21) serial → `lot`**, **(17) kedaluwarsa → `expiration_date`**, (15) best before, (13) pack date, **(310y) berat kg → `quantity`**, (30)/(37) jumlah. **Tidak ada AI harga (392n/393n).**
+- POS (`point_of_sale/static/src/app/services/barcode_reader_service.js`): parse dengan nomenklatur company; bila hasil GS1 tanpa produk atau bukan GS1 → **`pos.config.fallback_nomenclature_id`**. `product_screen.js _barcodeGS1Action`: produk dari GTIN (juga cocok dengan EAN-13 tanpa nol depan), **qty dari (310y)** bila UoM produk = UoM aturan, **lot dari (10)** (dipakai bila produk ber-`tracking`). **(17) diabaikan POS** (tidak memblokir penjualan kedaluwarsa).
+- Picking POS (`point_of_sale/models/stock_picking.py` `_create_production_lots_for_pos_order`): lot hasil scan dicari di `stock.lot`; dibuat bila picking type `use_create_lots`. Tanpa lot → reservasi standar memilih lot (FEFO bila kategori `removal_strategy` FEFO, `efn_setup_mrp`) — **[B] uji PoC stok**.
+
+**PoC parser (DB B, `barcode.nomenclature.parse_barcode`; logika setara JS):**
+
+| Barcode | GS1 nomenclature | EFN Retail (IDR) | Di POS: GS1 utama + EFN Retail fallback |
+|---|---|---|---|
+| `(01)08991234567891(3103)001250(17)261031(10)LOT-A1` | GTIN, qty **1,25 kg**, exp 2026-10-31, lot LOT-A1 | produk (string utuh, tak dikenal) | produk + 1,25 kg + lot ✔ (exp tidak dicek) |
+| `(01)…(17)261031(10)L2610` | GTIN, exp, lot | — | ✔ |
+| `(01)…(10)L2610<GS>(17)261031` | ✔ — lot di tengah **wajib** separator FNC1/GS | — | ✔ bila scanner 2D mengirim GS |
+| `2109001012505` (label berat 21) | hanya "serial (21)", tanpa produk | **berat 1,25 kg**, base `2109001000007` | fallback → ✔ |
+| `2300002455005` (label harga 23) | tidak terurai | **harga Rp45.500** | fallback → ✔ |
+| EAN-13 `8991234567891` | tidak terurai | produk | fallback → ✔ |
+
+**Rekomendasi konfigurasi (setelah data klien):** per PT Retail `res.company.nomenclature_id` = *Default GS1 Nomenclature* dan `pos.config.fallback_nomenclature_id` = *EFN Retail (IDR)* — urutan wajib (EFN Retail punya aturan `.*` sehingga tidak pernah gagal; bila dijadikan fallback GS1 tak pernah dicoba). Produk fresh wajib lot: `tracking='lot'` + `use_expiration_date` (`product_expiry`). Label prepack: **GS1-128/DataBar Expanded (01)+(310y)+(10)+(17)** bila timbangan mampu; label **harga** tetap EAN-13 `23`. Tanpa GS1 → FEFO di picking. **Belum diterapkan** di `efn_setup_pos`: memindah nomenklatur PT Retail mengubah perilaku scan semua produk → tunggu model scanner/timbangan & contoh label supplier, lalu PoC scan nyata (scanner 2D, FNC1, tour).
+**Gap opsional E-33 (±1,5–2 minggu bila diminta):** (a) tolak/peringatkan lot kedaluwarsa dari (17) atau `stock.lot.expiration_date` di POS; (b) AI harga (392n) bila timbangan hanya bisa label harga GS1. Referensi: OCA/stock-logistics-barcode — **belum diverifikasi 19.0**.
+
+### 9.5 W-25 — kasir boleh membuat pelanggan, HP member tetap terkunci (#12, SEC-07/44)
+
+- Standar: create/write `res.partner` hanya `base.group_partner_manager` (*Contact Creation*), biner (buat **dan** ubah semua partner). Kunci HP member sudah ada (`efn_pos_otp_gate/models/res_partner.py`: partner dengan riwayat OTP → ubah/kosongkan HP hanya POS Manager/Settings, juga lewat `sudo()`, SEC-44).
+- **Diterapkan:** grup `efn_setup_pos.group_efn_cashier_contact_creation` "Kasir: boleh membuat pelanggan" (implied `point_of_sale.group_pos_user` + `base.group_partner_manager`). Grup standar **tidak** diubah, sehingga akun perangkat KDS (allowlist SEC-74) dan user teknis kanal online tidak ikut. `efn_setup_pos` kini `depends` `efn_pos_otp_gate` (kunci HP wajib ada bila grup dipakai). Test: kasir membuat pelanggan ✔, mengubah HP member → `AccessError`, koreksi nama ✔.
+- **Pernyataan usia 17+ saat kasir mendaftarkan member (tambahan BFF G18, butir #53, kontrak §3.2 v5.1 L-21b):** CE 19 tidak punya field usia/pernyataan usia di `res.partner` (tanggal lahir hanya `hr.employee.birthday`) → **tidak bisa dengan konfigurasi**. Prinsip minimisasi: Odoo **tidak** menyimpan tanggal lahir maupun bendera usia; bukti disimpan di registri member BFF (`member.age_confirmed_at`, sudah ada untuk login Super-App). Usulan gap kecil **E-34** (perluasan `efn_pos_otp_gate`, ±2 hari odoo + 0,5 hari BFF + QA): (1) tujuan OTP baru `pos_enroll` (pola E-23 `purpose`) yang dipakai kasir saat mendaftarkan member baru; (2) dialog OTP POS menampilkan centang wajib "Pelanggan menyatakan berusia minimal 17 tahun" (teks dari Legal, `MEMBER_MIN_AGE` hanya teks) — tombol kirim OTP nonaktif sampai dicentang; (3) frontend mengirim `age_confirmed: true` ke RPC Odoo → server Odoo menolak permintaan `pos_enroll` tanpa nilai `true` (bukan flag yang dipercaya diam-diam: nilai diteruskan apa adanya ke BFF, yang mengembalikan `400 age_confirmation_required`) dan meneruskannya ke `POST /v1/pos/otp/request|verify`; BFF mengisi `member.age_confirmed_at` + `source=pos` dan `pos_config_id` (jejak kasir). (4) Odoo hanya mencatat di `efn.pos.otp.challenge` (`purpose`, tanpa usia). Usulan kontrak **K-18-8** untuk lead: §9.3/§3.1 POS — body `age_confirmed` wajib untuk `purpose: "pos_enroll"`, kode error sama dengan §3.2. Offline: pendaftaran member dinonaktifkan (butuh OTP). Pernyataan diucapkan pelanggan dan dicentang kasir = **kontrol prosedural** (SOP kasir; kasir tidak memeriksa KTP kecuali diminta Legal) — dicatat sebagai keterbatasan untuk DPO.
+- Sisa (bukan Odoo): validator `source_ref` opak (E-25, bff-engineer); consent ulang via OTP. Risiko diterima: kasir ber-*Contact Creation* dapat mengubah nama/email/alamat partner mana pun (HP diaudit `efn_audit`; nama/email belum — usulan aturan tambahan `efn_setup_audit`, keputusan DPO).
+
+### 9.6 W-22, W-10, W-11 — konfigurasi (diterapkan)
+- **W-22 KDS** (`efn_setup_pos` 19.0.1.6.0): `data/pos_kds_defaults.xml` — `ir.default` `efn.kds.station.warn_minutes = 5`, `late_minutes = 10` (stasiun baru; noupdate); retensi 90 h = parameter `efn.kds.retention_days` milik `efn_pos_kds` (tetap). `demo/pos_kds_demo.xml`: kategori POS *Bakery / Pastry* & *Bar Kopi*, printer cadangan ePOS (IP RFC 5737), stasiun *Bakery / Pastry (DEMO)* & *Bar Kopi (DEMO)* (PT F&B, `kds_printer`, 5/10), stasiun expo demo `efn_pos_kds` diarsipkan (**tanpa expo**). `efn_setup_pos` kini `depends` `efn_pos_kds`.
+- **W-10 promo** (`demo/pos_promo_demo.xml`): *Beli 2 Gratis 1* (`buy_x_get_y`), *Belanja Rp200 rb diskon 5 %* (`promotion` otomatis), *Kode Promo 10 %* (`promo_code`, kode demo) di PT Retail; pricelist member 5 % tetap di `demo/pos_retail_demo.xml` (PLACEHOLDER). Tipe `loyalty`/`ewallet` tidak dipakai (ADR-020). **Temuan R-B06:** pricelist member dipilih kasir lewat tombol *Pricelist* (`control_buttons.js`, semua `available_pricelist_ids`) tanpa cek member/peran → harga member bisa diberikan ke siapa saja. Mitigasi: (a) **harga member sebagai promo ber-OTP** (`efn_requires_otp`, sesuai butir #42 "promo ber-OTP") — direkomendasikan; atau (b) gap kecil **E-32**. **Q-F18-7**.
+- **W-11** (`efn_setup_online` 19.0.1.1.0): `group_online_channel.api_key_duration = 35` (30 h + margin 5 h), **noupdate=0** (90 → 35 saat upgrade). Key yang sudah ada tetap berlaku sampai `expiration_date`-nya → rotasi pertama segera setelah upgrade (runbook devsecops W-11). **Temuan devsecops (12 Okt):** Odoo memakai **maksimum** durasi dari semua grup user (`base/models/res_users.py:1585`), dan CE memberi `base.group_user` 90 hari (`base/security/base_groups.xml`, tanpa noupdate) → user teknis efektif 90. Perbaikan data: `base.group_user.api_key_duration = 0` (noupdate=0; `-u base` meng-upgrade modul dependen sehingga dinormalkan lagi) → efektif 35 (user teknis hanya Internal User + grup kanal, SEC-101). **Dampak staf:** API key user internal tanpa grup berdurasi maksimal 1 hari (fallback CE); admin/`sudo()` dikecualikan Odoo (`is_system`), jadi pembuatan key wajib `with_user(user teknis)`. Test `TestEfnOnlineApiKeyDuration` (efektif 35, tolak 36 h, staf 1 h). Smoke default `SMOKE_KEY_DAYS` 85 → 30.
+
+### 9.7 Gap untuk efn-odoo-engineer (Gelombang 18)
+
+| Kode | Isi | Wajib? | Estimasi | Prasyarat |
+|---|---|---|---|---|
+| **E-30** | `efn_pos_loyalty_ledger` 19.0.2.0.0: redeem = `pos.payment.method` Poin EFN (§9.2): field penanda + constraint, frontend tombol → baris pembayaran, validasi server, larangan selisih tutup sesi, refund poin negatif + `points_restored_value`, faktor earn baru, test & tour (ganti 4 tour Poin EFN) | Ya (W-01, sebelum pilot ritel) | 1,5–2 minggu (+ functional 0,5 hari data metode/akun setelahnya) | Kontrak §9 v6 (lead); Finance: dasar earn, Q-F18-3/4 |
+| **E-31** | `efn_pos_refund_origin` (§9.3) | Ya (W-24) | 1 minggu | E-30 (refund berpoin); Q-F18-5/6 |
+| **E-32** | Server: pricelist member hanya untuk partner member | Opsional (bila harga member tetap pricelist) | 2–3 hari | Q-F18-7 |
+| **E-33** | POS: cek kedaluwarsa lot + AI harga GS1 | Opsional (W-20) | 1,5–2 minggu | label supplier/timbangan |
+| **E-34** | `efn_pos_otp_gate`: tujuan OTP `pos_enroll` + centang wajib pernyataan usia 17+ → `age_confirmed` ke BFF (§9.5) | Ya (W-25, sebelum kasir mendaftarkan member) | 2 hari odoo (+0,5 hari BFF, QA 0,5) | Kontrak K-18-8 (lead); teks Legal |
+| — | W-03: tidak ada kode Odoo; regresi suite + tour + smoke online; DB dev dibuat ulang | — | 0,5 hari QA | — |
+
+### 9.8 Hasil verifikasi Gelombang 18
+Lihat `docs/agent-reports/efn-odoo-functional.md` bagian "Gelombang 18" (suite efn penuh pola CI, tour, ruff, install demo).
+
+### 9.9 Pertanyaan klien baru (Q-F18)
+| ID | Pertanyaan | Pemutus | Default sementara |
+|---|---|---|---|
+| Q-F18-1 | Metode pembulatan pajak: `round_globally` (default CE) atau `round_per_line` (jurnal = Σ PPN per baris struk)? | Finance | `round_globally` |
+| Q-F18-2 | Selisih ±Rp1 PPN jurnal (11 %) vs e-Faktur Coretax (12 % × DPP 11/12 per baris): terima + rekonsiliasi, atau PoC rumus pajak dua tahap? | Finance + konsultan pajak | terima + SOP rekonsiliasi |
+| Q-F18-3 | Jurnal pembentukan liabilitas poin (earn) per PT di Odoo (impor harian dari BFF) atau cukup rekonsiliasi saldo? Akun liabilitas & kliring antar-PT | Finance | akun PLACEHOLDER, tanpa jurnal earn |
+| Q-F18-4 | Refund order yang sebagian dibayar poin: alokasi proporsional, poin dulu, atau uang dulu? | Finance | proporsional |
+| Q-F18-5 | Retur tanpa struk: hanya tunai, atau dilarang? | Ops + Finance | hanya tunai + supervisor |
+| Q-F18-6 | Refund QRIS statis/EDC yang tidak bisa dibalik di kanalnya: transfer bank manual dicatat atas metode asal? | Finance | ya |
+| Q-F18-7 | Harga member: promo ber-OTP (direkomendasikan) atau pricelist + kontrol server E-32? | Marketing + Ops | promo ber-OTP |

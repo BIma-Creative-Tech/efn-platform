@@ -69,8 +69,11 @@ describe('parseDeletionStatus', () => {
       requested_at: base.requested_at,
       scheduled_at: base.scheduled_at,
       completed_at: null,
+      open_online_orders: 0,
     });
     expect(Object.keys(v!)).not.toContain('member_hash');
+    // BFF lama tanpa field L-22: erasure_deadline tidak ada (undefined), bukan null.
+    expect(Object.keys(v!)).not.toContain('erasure_deadline');
   });
   it('id harus sama (tanpa peduli huruf besar) dan type delete', () => {
     expect(parseDeletionStatus(base, ID.toUpperCase())).not.toBeNull();

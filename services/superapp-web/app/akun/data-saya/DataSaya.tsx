@@ -493,6 +493,15 @@ export function DataSaya({
               {daysUntil(pending.scheduled_at) !== null ? ` (${daysUntil(pending.scheduled_at)} hari lagi)` : ''}. Anda
               masih dapat membatalkannya sebelum tanggal tersebut.
             </p>
+            {pending.erasure_deadline && (
+              <p className="notice" role="note" style={{ margin: 0 }}>
+                {pending.open_online_orders > 0
+                  ? `Ada ${pending.open_online_orders} pesanan online yang belum selesai. `
+                  : 'Ada pesanan online yang belum selesai. '}
+                Penghapusan menunggu pesanan diselesaikan layanan pelanggan, paling lambat{' '}
+                <strong>{formatDateId(pending.erasure_deadline)}</strong>. Kode ambil tidak lagi tampil di aplikasi.
+              </p>
+            )}
             <div aria-live="polite">
               {cancelMsg && (
                 <p className={`alert ${cancelMsg.kind === 'ok' ? 'alert-success' : 'alert-error'}`} role="status">

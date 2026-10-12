@@ -391,7 +391,8 @@ def step_apikey():
     st = load_state()
     user = env["res.users"].browse(st["user_id"])
     assert user.has_group("efn_online_order.group_online_channel"), "user teknis efn_online_rtl belum ada"
-    days = int(os.environ.get("SMOKE_KEY_DAYS", "85"))
+    # W-11 (G18): batas efektif user teknis = 35 hari (efn_setup_online) -> default 30 seperti rotasi produksi.
+    days = int(os.environ.get("SMOKE_KEY_DAYS", "30"))
     exp = datetime.utcnow().replace(microsecond=0) + timedelta(days=days)
     name = "efn-online-RTL-" + datetime.utcnow().strftime("%Y%m%d%H%M")
     key = env["res.users.apikeys"].with_user(user)._generate(None, name, exp)

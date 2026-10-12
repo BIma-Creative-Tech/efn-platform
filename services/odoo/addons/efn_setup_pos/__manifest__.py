@@ -1,7 +1,7 @@
 {
     "name": "EFN Setup - Point of Sale (Retail & Restoran)",
     "summary": "Bundel modul POS CE 19 untuk retail & F&B; demo stasiun dapur, printer dapur, denah meja.",
-    "version": "19.0.1.5.1",
+    "version": "19.0.1.6.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",
@@ -19,6 +19,10 @@
         "pos_hr",
         "pos_discount",
         "efn_setup_company",
+        # G18: W-22 default stasiun KDS (ir.default ke field efn_pos_kds) + demo stasiun pilot.
+        "efn_pos_kds",
+        # G18: W-25 grup kasir boleh membuat pelanggan -> kunci HP member (SEC-07/SEC-44) WAJIB ikut terpasang.
+        "efn_pos_otp_gate",
     ],
     # Gelombang 13 (Fase 1 pilot retail): nomenklatur barcode IDR (Q-25), pecahan Rupiah,
     # default SOP kas/void (R-O05, R-O06, Q-27), batas muat produk offline (Q-7).
@@ -37,11 +41,17 @@
         # Gelombang 15 (SEC-75): self-order dikunci ke nothing/kiosk (ir.default + constraint +
         # normalisasi tiap upgrade). Membuka QR-order ponsel = ADR Q-23 + parameter Superadmin.
         "data/pos_self_order_lock.xml",
+        # Gelombang 18 (docs/08 §9): W-22 default KDS warn 5 / late 10; W-25 grup kasir pembuat pelanggan.
+        "data/pos_kds_defaults.xml",
+        "data/pos_cashier_groups.xml",
     ],
     "demo": [
         "demo/pos_demo.xml",
         "demo/pos_retail_demo.xml",
         "demo/pos_fnb_demo.xml",
+        # G18: W-22 stasiun Bakery/Pastry + Bar Kopi (tanpa expo); W-10 promo standar pos_loyalty.
+        "demo/pos_kds_demo.xml",
+        "demo/pos_promo_demo.xml",
     ],
     "installable": True,
     "application": False,

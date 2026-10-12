@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- W-22 (Gelombang 18) — default stasiun KDS sesuai keputusan pemilik proyek 10 Okt 2026 (#14, P-13/Q-19):
+     target per outlet warn 5 menit / late 10 menit (default model efn_pos_kds = 10/15), tanpa stasiun expo,
+     retensi tiket 90 hari (= parameter efn.kds.retention_days milik efn_pos_kds, tidak diubah di sini).
+     ir.default hanya mengisi stasiun BARU; stasiun yang sudah ada tidak diubah. Field terverifikasi:
+     efn_pos_kds/models/efn_kds_station.py (warn_minutes, late_minutes). noupdate: admin boleh mengubah default
+     (Settings -> Technical -> User-defined Defaults) atau nilai per stasiun. -->
+<odoo noupdate="1">
+    <record id="ir_default_kds_warn_minutes" model="ir.default">
+        <field name="field_id" ref="efn_pos_kds.field_efn_kds_station__warn_minutes"/>
+        <field name="json_value">5</field>
+    </record>
+    <record id="ir_default_kds_late_minutes" model="ir.default">
+        <field name="field_id" ref="efn_pos_kds.field_efn_kds_station__late_minutes"/>
+        <field name="json_value">10</field>
+    </record>
+</odoo>

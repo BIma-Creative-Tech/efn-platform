@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- efn_setup_online (docs/08 §8.4). Semua nilai = PLACEHOLDER yang bisa diubah tanpa kode.
-     - api_key_duration grup user teknis = 90 hari (tanpa ini Odoo membatasi key 1 hari, temuan #42; R-T15).
+     - api_key_duration grup user teknis = 35 hari (W-11, keputusan pemilik proyek 10 Okt 2026 #33: key 30 hari + rotasi
+       otomatis; 5 hari margin agar key yang gagal dirotasi tepat waktu tidak langsung mati -> alert dulu). Tanpa ini
+       Odoo membatasi key 1 hari (temuan #42; R-T15). Ditegakkan di blok noupdate=0 di bawah (nilai lama 90 diturunkan
+       saat upgrade).
      - Partner generik "Pelanggan Super-App" per PT TANPA HP/email/NPWP (UU PDP; constraint kanal E-28).
      - Tim penjualan "Super-App" per PT.
      - sale.automatic_invoice TIDAK diset (jalur payment.transaction sale tidak dipakai, temuan #40).
@@ -8,10 +11,6 @@
        (temuan #36). -->
 <odoo>
     <data noupdate="1">
-        <record id="efn_online_order.group_online_channel" model="res.groups">
-            <field name="api_key_duration">90</field>
-        </record>
-
         <record id="partner_superapp_rtl" model="res.partner">
             <field name="name">Pelanggan Super-App - PT Retail</field>
             <field name="company_id" ref="efn_setup_company.company_rtl"/>
@@ -32,6 +31,25 @@
             <field name="company_id" ref="efn_setup_company.company_fnb"/>
         </record>
     </data>
+
+    <!-- W-11 (noupdate=0, kebijakan keamanan): batas masa berlaku API key user teknis kanal = 35 hari (30 h rotasi +
+         margin 5 h). Diterapkan setiap install/upgrade agar nilai lama (90 h, 19.0.1.0.0) atau perubahan manual yang
+         lebih panjang tidak bertahan diam-diam. Key yang SUDAH dibuat dengan masa berlaku lebih panjang tidak berubah
+         (expiration_date disimpan per key) -> rotasi pertama setelah upgrade wajib (runbook odoo-online-api-key.md). -->
+    <record id="efn_online_order.group_online_channel" model="res.groups">
+        <field name="api_key_duration">35</field>
+    </record>
+    <!-- W-11 (temuan devsecops G18): Odoo memakai MAKSIMUM api_key_duration dari SEMUA grup user
+         (base/models/res_users.py _check_expiration_date: max(group.api_key_duration for group in all_group_ids)).
+         CE 19 memberi base.group_user ("Role / User") 90 hari (base/security/base_groups.xml, blok TANPA noupdate)
+         -> user teknis kanal (Internal User + grup kanal, SEC-101) efektif 90 hari, bukan 35. Durasi grup umum
+         dikosongkan (0); hanya grup teknis kanal yang mengatur durasi. Dampak ke staf: user internal biasa kini
+         maksimal 1 hari (fallback Odoo `or 1.0`) bila tidak punya grup lain berdurasi; admin/Settings dan sudo tetap
+         dikecualikan Odoo (is_system). Karena record base tidak noupdate, `-u base` mengembalikan 90 -> record ini
+         noupdate=0 dan efn_setup_online ikut ter-upgrade (dependen base), sehingga nilai dinormalkan lagi. -->
+    <record id="base.group_user" model="res.groups">
+        <field name="api_key_duration">0</field>
+    </record>
 
     <!-- Program loyalty BARU tidak berlaku di SO online (Q-ON10: promo online hanya pricelist). Dijalankan setiap
          install/upgrade (noupdate=0) agar default tidak bisa hilang diam-diam. -->

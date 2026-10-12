@@ -5,6 +5,7 @@
  * Bentuk respons yang TIDAK dirinci kontrak diperlakukan toleran (field opsional) dan dicatat sebagai
  * asumsi di laporan Gelombang 5.
  */
+import { openOrdersCount } from './dsar-receipt';
 
 export type DsarType = 'access' | 'rectify' | 'delete' | 'phone_change' | 'object';
 
@@ -17,6 +18,10 @@ export interface DsarRequest {
   completed_at: string | null;
   /** ASUMSI: tautan unduh (presigned, TTL 24 jam) untuk export besar yang sudah siap. */
   download_url: string | null;
+  /** L-22 (G18): jumlah bagian pesanan online terbuka (hapus akun); 0 bila tidak ada. */
+  open_online_orders: number;
+  /** L-22 (G18): batas paling lambat erasure bila ada pesanan terbuka; null bila tidak ada. */
+  erasure_deadline: string | null;
 }
 
 export interface ExportAccepted {
@@ -95,6 +100,9 @@ export function parseDsarRequests(data: unknown): DsarRequest[] {
       scheduled_at: str(r.scheduled_at),
       completed_at: str(r.completed_at),
       download_url: safeDownloadUrl(r.download_url),
+      // L-22 (G18): aditif; BFF lama -> 0 / null.
+      open_online_orders: openOrdersCount(r.open_online_orders),
+      erasure_deadline: isoDateOrNull(r.erasure_deadline),
     });
   }
   // Terbaru di atas.

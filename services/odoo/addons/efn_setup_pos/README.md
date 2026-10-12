@@ -20,6 +20,8 @@ Modul konfigurasi untuk POS **retail (PT Retail)** dan **restoran (PT F&B)** di 
 | `barcode_hardening_data.xml` (13c, **noupdate=0**) | SEC-63: setiap `barcode.rule` bertipe `discount` di **semua** nomenklatur (termasuk default `point_of_sale.barcode_rule_discount` `22{NN}` yang dipakai PT F&B/EFN/FARM dan aturan buatan admin) diubah menjadi aturan **produk** berawalan `22` → barcode `22..` hanya dicari sebagai barcode produk, tidak pernah memberi diskon. Dijalankan ulang setiap install/upgrade modul (berlaku juga untuk DB yang sudah memasang modul). Record tidak dihapus (record noupdate `point_of_sale` yang dihapus dibuat ulang saat upgrade) | `barcodes/models/barcode_rule.py` (tanpa field `active`), `product_screen.js` `_barcodeDiscountAction` |
 | `pos_fnb_defaults.xml` (G14, noupdate) | Preset master `pos_restaurant.pos_delivery_preset` → `available_in_self = False` (pesan-antar lewat Super-App/BFF, alamat pelanggan tidak dikumpulkan di halaman self-order); `pos_restaurant.pos_takeout_preset` → `use_timing = False` (slot bawaan memakai kalender demo Odoo Selasa–Sabtu milik main company) | `pos_restaurant/data/scenarios/restaurant_preset.xml` (data manifest), `pos_self_order/data/preset_data.xml`, `pos_preset.py` |
 | `pos_bill_idr_data.xml` (G13) | Pecahan Rupiah (Rp100..Rp100.000) untuk hitung kas buka/tutup; 13 pecahan USD bawaan dihapus (`forcecreate="0"` → tidak muncul lagi saat upgrade) | `pos_bill.py`, `point_of_sale_data.xml` |
+| `pos_kds_defaults.xml` (G18, W-22) | `ir.default` stasiun KDS baru: `warn_minutes = 5`, `late_minutes = 10` (keputusan pemilik proyek #14, P-13); retensi tiket 90 h tetap parameter `efn.kds.retention_days` milik `efn_pos_kds`; **tanpa stasiun expo** | `efn_pos_kds/models/efn_kds_station.py` |
+| `pos_cashier_groups.xml` (G18, W-25) | Grup **"Kasir: boleh membuat pelanggan"** (`group_efn_cashier_contact_creation`) = POS User + *Contact Creation*. Diberikan hanya ke akun kasir yang ditunjuk (bukan akun perangkat KDS / user teknis online). HP partner member tetap terkunci (`efn_pos_otp_gate`, SEC-07/SEC-44; karenanya modul ini `depends` `efn_pos_otp_gate`) | `base/security/ir.model.access.csv` (`res.partner` create/write = `base.group_partner_manager`) |
 
 **Catatan upgrade:** semua blok `noupdate` (termasuk `<function>` dan penetapan nomenklatur PT Retail) hanya dijalankan saat **install**. DB yang sudah memasang `efn_setup_pos` 19.0.1.1.0: filter audit baru ikut dibuat saat `-u`, tetapi default/nomenklatur/pecahan harus diterapkan manual (Settings POS) atau DB pilot di-install bersih.
 
@@ -27,6 +29,10 @@ Modul konfigurasi untuk POS **retail (PT Retail)** dan **restoran (PT F&B)** di 
 - `pos_demo.xml` (F&B): kategori stasiun dapur, 2 printer ePOS (IP placeholder), denah meja.
 - `pos_fnb_demo.xml` (G14): lantai *Teras* (3 meja), modifier tanpa stok sebagai atribut `no_variant` (*Level Pedas*, *Permintaan Dapur* multi, *Gula*), menu *Nasi Goreng EFN* (Dapur Panas) & *Es Kopi Susu* (Bar) ber-PB1 default, preset *Bungkus – Kota Contoh* (fiscal position kota demo; ilustrasi aturan preset per kota).
 - `pos_retail_demo.xml` (G13): kategori *Fresh (Timbang)*; *Tomat Merah per kg* (barcode berat `2109001000007`, label 1,250 kg = `2109001012505`; G17: semula `2100001000004`, bentrok dengan demo CE "Newspaper Rack"); *Daging Sapi* berlabel harga (`2300002000007`, label Rp45.500 = `2300002455005`); pricelist *Harga Member (DEMO)* 5% (PLACEHOLDER).
+- `pos_kds_demo.xml` (G18, W-22): kategori *Bakery / Pastry* & *Bar Kopi*, printer cadangan ePOS per stasiun (IP placeholder), stasiun KDS *Bakery / Pastry (DEMO)* & *Bar Kopi (DEMO)* (PT F&B, `kds_printer`, warn 5 / late 10); stasiun expo demo `efn_pos_kds` diarsipkan (tanpa expo).
+- `pos_promo_demo.xml` (G18, W-10): promo standar `pos_loyalty` PT Retail — *Beli 2 Gratis 1 Air Mineral*, *Belanja Rp200 rb diskon 5%* (otomatis), *Kode Promo 10%* (`EFNDEMO10`, kode demo). Daftar promo nyata dari Marketing. **Catatan R-B06:** pricelist member bisa dipilih kasir lewat tombol *Pricelist* tanpa cek member → rekomendasi harga member sebagai promo ber-OTP (`efn_requires_otp`) atau gap E-32 (`docs/08 §9.6`, Q-F18-7).
+
+**Gelombang 18 (`docs/08 §9`):** depends baru `efn_pos_kds` (default stasiun) dan `efn_pos_otp_gate` (kunci HP member untuk grup kasir pembuat pelanggan). Presisi IDR Rp1 (W-03, `efn_setup_company` 19.0.1.4.0) membuat `cash_rounding` POS tidak diperlukan. Test: `tests/test_g18_config.py`.
 
 ## SOP kasir retail — apa yang standar CE 19 (terverifikasi source 19.0, 2026-10-07)
 
@@ -106,7 +112,7 @@ Batasi per outlet dengan `pos_config_ids`; **jangan** `program_type = 'loyalty'`
 | `order_edit_tracking` | True (default G13) | |
 | `set_maximum_difference` / `amount_authorized_diff` | True / 0 → nilai Q-27 | ditegakkan di frontend saja |
 | `default_bill_ids` | kosong (pecahan IDR global) | |
-| `cash_rounding` / `rounding_method` / `only_round_cash_method` | sesuai kebijakan pembulatan tunai (Q-29) | `account.cash.rounding` |
+| `cash_rounding` / `rounding_method` / `only_round_cash_method` | **False** — IDR sudah Rp1 (W-03, keputusan #19/#43); aktifkan hanya bila Finance meminta pembulatan tunai Rp100 | `account.cash.rounding` |
 | `iface_tax_included` | `total` | harga rak termasuk PPN (Q-9) |
 | `pricelist_id`, `available_pricelist_ids` | umum + member | Q-9 |
 | `payment_method_ids` | Tunai (otomatis), EDC manual, QRIS (EFN Gateway) | QRIS mati saat offline |
@@ -116,7 +122,7 @@ Batasi per outlet dengan `pos_config_ids`; **jangan** `program_type = 'loyalty'`
 | `receipt_header` / `receipt_footer` | nama PT, NPWP, alamat, kebijakan retur | Q-1 |
 | `default_fiscal_position_id` | kosong | PPN dari pajak produk |
 | Company PT Retail → Barcode nomenclature | *EFN Retail (IDR)* (otomatis saat install) | |
-| User terminal POS | tanpa *Contacts: Creation*, 2FA aktif | SEC-07 |
+| User terminal POS | kasir yang mendaftarkan pelanggan: grup **Kasir: boleh membuat pelanggan** (W-25); lainnya POS User saja; 2FA aktif | SEC-07/SEC-44 (HP member terkunci) |
 | Uji offline | buka sesi online → putus jaringan → scan 10 SKU, bayar tunai/EDC → online → order tersinkron | Q-55 |
 
 ## SOP restoran — apa yang standar CE 19 (terverifikasi source 19.0, 2026-10-07; detail `docs/08 §7`)

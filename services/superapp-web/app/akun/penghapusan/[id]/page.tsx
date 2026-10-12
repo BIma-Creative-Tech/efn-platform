@@ -29,29 +29,33 @@ export default async function DeletionStatusPage({
   const { id: rawId } = await params;
   if (!isDsarRequestId(rawId)) notFound();
   const id = rawId.toLowerCase();
-  // G18 W-18: batas erasure (ada pesanan online terbuka) dari respons 202, diteruskan lewat query karena GET status
-  // BFF belum memuatnya. Hanya tanggal untuk tampilan; nilai tidak valid diabaikan.
+  // G18 W-18 / L-22: batas erasure kini dikirim BFF di respons status (dibaca DeletionStatus). Query `?batas=` dari
+  // respons 202 hanya CADANGAN untuk BFF lama (lib/dsar-receipt.ts resolveErasureDeadline). Nilai tidak valid diabaikan.
   const sp = await searchParams;
   const rawDeadline = sp[DEFER_DEADLINE_PARAM];
-  const deferredUntil = isoDateOrNull(Array.isArray(rawDeadline) ? rawDeadline[0] : rawDeadline);
+  const queryDeadline = isoDateOrNull(Array.isArray(rawDeadline) ? rawDeadline[0] : rawDeadline);
 
   let sessionCanCancel = false;
   let signedIn = false;
+  let sessionDeadline: string | null = null;
   const token = await getSessionToken();
   if (token) {
     const reqs = await bffFetch<unknown>('/v1/me/requests', { token });
     if (reqs.ok) {
       signedIn = true;
-      sessionCanCancel = parseDsarRequests(reqs.data).some(
-        (r) => r.id.toLowerCase() === id && isCancellableDeletion(r),
-      );
+      const mine = parseDsarRequests(reqs.data).find((r) => r.id.toLowerCase() === id);
+      sessionCanCancel = Boolean(mine && isCancellableDeletion(mine));
+      sessionDeadline = mine?.erasure_deadline ?? null;
     }
   }
 
   return (
     <div className="stack" style={{ maxWidth: '36rem', margin: '0 auto' }}>
       <h1>Status Penghapusan Akun</h1>
-      <DeletionStatus id={id} sessionCanCancel={sessionCanCancel} signedIn={signedIn} deferredUntil={deferredUntil} />
+      <DeletionStatus id={id} sessionCanCancel={sessionCanCancel} signedIn={signedIn}
+        sessionDeadline={sessionDeadline}
+        queryDeadline={queryDeadline}
+      />
       <p className="muted small">
         Halaman ini tidak menampilkan data pribadi. Bukti status disimpan aman di peramban ini selama 30 hari. Hak Anda
         menurut UU No. 27 Tahun 2022: lihat <Link href="/privasi">Kebijakan Privasi</Link>.

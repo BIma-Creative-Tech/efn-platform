@@ -45,6 +45,36 @@ export interface DeletionStatusView {
   requested_at: string | null;
   scheduled_at: string | null;
   completed_at: string | null;
+  /** L-22 (G18): jumlah bagian pesanan online yang masih terbuka (0 bila tidak ada / BFF lama). */
+  open_online_orders: number;
+  /**
+   * L-22 (G18): batas paling lambat erasure bila ada pesanan terbuka. `null` = BFF menyatakan tidak ada penundaan;
+   * `undefined` (field tidak dikirim) = BFF lama -> UI boleh memakai cadangan (`?batas=`).
+   */
+  erasure_deadline?: string | null;
+}
+
+/**
+ * Batas erasure yang ditampilkan di halaman status. Urutan sumber:
+ * 1. respons status jalur receipt (`view.erasure_deadline`) bila field ada — termasuk `null` (tidak ada penundaan,
+ *    mis. pesanan sudah selesai: cadangan lama TIDAK dipakai agar tidak menampilkan tanggal basi);
+ * 2. item `GET /v1/me/requests` milik sesi (sumber server yang sama);
+ * 3. query `?batas=` dari respons 202 (cadangan untuk BFF lama).
+ * Status final (selesai/dibatalkan) -> tidak ada batas.
+ */
+export function resolveErasureDeadline(
+  view: Pick<DeletionStatusView, 'status' | 'erasure_deadline'>,
+  sessionDeadline: string | null,
+  queryDeadline: string | null,
+): string | null {
+  if (view.status === 'completed' || view.status === 'cancelled') return null;
+  if (view.erasure_deadline !== undefined) return view.erasure_deadline;
+  return sessionDeadline ?? queryDeadline;
+}
+
+/** Bilangan bulat ≥ 0 dari BFF; selain itu 0 (klien lama/field rusak). Dibatasi agar tidak menampilkan angka aneh. */
+export function openOrdersCount(v: unknown): number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 ? Math.min(v, 999) : 0;
 }
 
 const KNOWN: ReadonlySet<string> = new Set(['scheduled', 'processing', 'completed', 'cancelled']);
@@ -55,7 +85,8 @@ function isoOrNull(v: unknown): string | null {
 }
 
 /**
- * `GET /v1/dsar/requests/:id` -> `{ id, type, status, requested_at, scheduled_at, completed_at }`.
+ * `GET /v1/dsar/requests/:id` -> `{ id, type, status, requested_at, scheduled_at, completed_at, open_online_orders,
+ * erasure_deadline }` (dua field terakhir: L-22, aditif — BFF lama tidak mengirimnya -> 0 / null).
  * Hanya field allowlist yang diteruskan ke browser; `type` wajib `delete` dan `id` wajib sama dengan yang diminta.
  */
 export function parseDeletionStatus(data: unknown, expectedId: string): DeletionStatusView | null {
@@ -70,6 +101,9 @@ export function parseDeletionStatus(data: unknown, expectedId: string): Deletion
     requested_at: isoOrNull(r.requested_at),
     scheduled_at: isoOrNull(r.scheduled_at),
     completed_at: isoOrNull(r.completed_at),
+    open_online_orders: openOrdersCount(r.open_online_orders),
+    // Field ada -> ISO tervalidasi atau null; field tidak ada (BFF lama) -> undefined (tidak ikut di JSON).
+    ...('erasure_deadline' in r ? { erasure_deadline: isoOrNull(r.erasure_deadline) } : {}),
   };
 }
 
