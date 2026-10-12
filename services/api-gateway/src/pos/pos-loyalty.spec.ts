@@ -1,4 +1,6 @@
+import { Logger } from '@nestjs/common';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
+import { MemberService } from '../common/member/member.service';
 import { MetricsService } from '../common/metrics/metrics.service';
 import { PII_AAD } from '../common/pii/crypto';
 import { memberHash } from '../common/pii/pii';
@@ -9,6 +11,7 @@ import {
   FakeClock,
   FakeDb,
   FakeKvStore,
+  FakeMemberTable,
   FakeWhatsAppSender,
   catchApiError,
   testCipher,
@@ -17,12 +20,12 @@ import {
 import { LoyaltyService, allocateDebit, splitCredit } from '../loyalty/loyalty.service';
 import { OtpService } from '../otp/otp.service';
 import { DiscountTokenService } from './discount-token.service';
-import { parsePosOtpRequest } from './dto/pos.dto';
+import { parsePosOtpRequest, parsePosOtpVerify } from './dto/pos.dto';
 import { parsePosEarn, parsePosReverse, parseRedeemCommit, parseRedeemReserve } from './dto/pos-loyalty.dto';
 import { LoyaltyReservationSweeper } from './loyalty-reservation.sweeper';
 import { PosLoyaltyController } from './pos-loyalty.controller';
 import { PosLoyaltyService, expiryFor } from './pos-loyalty.service';
-import { PosService } from './pos.service';
+import { PosOtpVerifyResponse, PosService } from './pos.service';
 
 const MEMBER = '6281234567890';
 const OTHER = '6285711112222';
@@ -74,16 +77,17 @@ function setup(overrides: Record<string, string> = {}) {
     reservationId: string,
     orderRef: string,
     key = `pos_redeem:${orderRef}`,
-    opts: { memberRef?: string; valueIdr?: number } = {},
+    opts: { memberRef?: string; valueIdr?: number; paymentAmount?: number } = {},
   ) =>
     svc.commit({
       reservationId,
       orderRef,
       memberRef: opts.memberRef ?? MEMBER,
       valueIdr: opts.valueIdr ?? db.reservations.get(reservationId)?.value_idr ?? 0,
+      paymentAmount: opts.paymentAmount ?? opts.valueIdr ?? db.reservations.get(reservationId)?.value_idr ?? 0,
       idempotencyKey: key,
     });
-  const reverse = (refund: string, original: string, ratio: number, memberRef = MEMBER) =>
+  const reverse = (refund: string, original: string, ratio: number, memberRef = MEMBER, restoredValue: number | null = null) =>
     svc.reverse({
       idempotencyKey: `pos_reverse:${refund}`,
       originalOrderRef: original,
@@ -91,6 +95,7 @@ function setup(overrides: Record<string, string> = {}) {
       memberRef,
       refundedEligibleAmount: 0,
       refundRatio: ratio,
+      pointsRestoredValue: restoredValue,
     });
   const now = () => new Date(clock.now());
   return { clock, config, cipher, kv, metrics, db, loyalty, tokens, svc, sweeper, hash, earn, token, reserve, commit, reverse, now };
@@ -569,7 +574,7 @@ describe('OTP purpose pos_redeem end-to-end (PosService → token → reserve / 
       null,
     );
     const res = await ctx.pos.verifyOtp({ challengeId: req.challenge_id, orderRef: ORDER_A, code: ctx.sender.lastCode() }, null);
-    return res.discount_token;
+    return (res as PosOtpVerifyResponse).discount_token;
   }
 
   it('token pos_redeem → reserve OK, tetapi consume promo menolak (invalid)', async () => {
@@ -676,5 +681,174 @@ describe('DTO & controller loyalty POS', () => {
       expect(await bad(() => parsePosReverse({ ...rev, refund_ratio }))).toBe('400 invalid_request');
     }
     expect(await bad(() => parsePosReverse({ ...rev, refund_order_ref: ORDER_A }))).toBe('400 invalid_request');
+  });
+});
+
+describe('G18 kontrak §9.9 v6 — poin = alat bayar (K-18-2..K-18-5)', () => {
+  it('K-18-2 / Rp1: amount_total reserve, value_idr, payment_amount, points_restored_value wajib integer; dasar earn/refund dibulatkan ke bawah', async () => {
+    const reserveBody = { discount_token: 't', order_ref: ORDER_A, member_ref: MEMBER, points: 10, amount_total: 125_000 };
+    expect(parseRedeemReserve(reserveBody).amountTotal).toBe(125_000);
+    expect((await catchApiError(() => parseRedeemReserve({ ...reserveBody, amount_total: 125_000.5 }))).getStatus()).toBe(400);
+    const earnBody = { idempotency_key: `pos_earn:${ORDER_A}`, order_ref: ORDER_A, member_ref: MEMBER, company_code: 'FNB', eligible_amount: 44_703.97 };
+    expect(parsePosEarn(earnBody).eligibleAmount).toBe(44_703);
+    const commitBody = {
+      reservation_id: '11111111-2222-4333-8444-555555555555',
+      order_ref: ORDER_A,
+      member_ref: MEMBER,
+      value_idr: 5000,
+      payment_amount: 5000,
+      idempotency_key: `pos_redeem:${ORDER_A}`,
+    };
+    expect(parseRedeemCommit(commitBody).paymentAmount).toBe(5000);
+    const noPayment: Record<string, unknown> = { ...commitBody };
+    delete noPayment.payment_amount;
+    expect((await catchApiError(() => parseRedeemCommit(noPayment))).getStatus()).toBe(400);
+    expect((await catchApiError(() => parseRedeemCommit({ ...commitBody, payment_amount: 4999.5 }))).getStatus()).toBe(400);
+    const rev = {
+      idempotency_key: `pos_reverse:${REFUND_1}`,
+      original_order_ref: ORDER_A,
+      refund_order_ref: REFUND_1,
+      member_ref: MEMBER,
+      refunded_eligible_amount: 10_000.7,
+      refund_ratio: 0.5,
+    };
+    expect(parsePosReverse(rev)).toMatchObject({ pointsRestoredValue: null, refundedEligibleAmount: 10_000 });
+    expect(parsePosReverse({ ...rev, points_restored_value: 2550 }).pointsRestoredValue).toBe(2550);
+    for (const v of [-1, 10.5, '2550']) {
+      expect((await catchApiError(() => parsePosReverse({ ...rev, points_restored_value: v }))).getStatus()).toBe(400);
+    }
+  });
+
+  it('K-18-3: payment_amount ≠ value_idr reservasi → 409 payment_mismatch + anomali critical; reservasi tetap reserved', async () => {
+    const ctx = setup({ LOYALTY_REDEEM_MIN_POINTS: '1' });
+    await ctx.earn(ORDER_C, 1_000_000);
+    const r = await ctx.reserve(ORDER_A, 50); // value 5000
+    expect(r.value_idr).toBe(5000);
+    expect(await code(ctx.commit(r.reservation_id, ORDER_A, undefined, { paymentAmount: 4900 }))).toBe('409 payment_mismatch');
+    expect(ctx.db.reservations.get(r.reservation_id)?.status).toBe('reserved');
+    expect(await ctx.metrics.render()).toContain('efn_loyalty_anomaly_total{kind="commit_payment_mismatch",severity="critical"} 1');
+    expect((await ctx.commit(r.reservation_id, ORDER_A)).points_redeemed).toBe(50);
+  });
+
+  it('K-18-4: flag true → earn > porsi uang order berpoin ditolak; flag false → pagar mati; params memuat flag', async () => {
+    const ctx = setup({ LOYALTY_REDEEM_MIN_POINTS: '1' });
+    expect(ctx.svc.params().earn_exclude_point_payment).toBe(true);
+    await ctx.earn(ORDER_C, 1_000_000);
+    const r = await ctx.reserve(ORDER_A, 50, { amountTotal: 125_000 });
+    await ctx.commit(r.reservation_id, ORDER_A);
+    // batas = floor(125000 × 1,20) − 5000 = 145000
+    expect(await code(ctx.earn(ORDER_A, 145_001))).toBe('409 earn_limit_exceeded');
+    expect(await ctx.metrics.render()).toContain('efn_loyalty_anomaly_total{kind="earn_exceeds_money_portion",severity="warning"} 1');
+    // contoh PoC #2 skala: eligible × faktor jauh di bawah batas → diterima
+    expect((await ctx.earn(ORDER_A, 100_000)).points_earned).toBe(10);
+    // order tanpa redeem tidak terpengaruh
+    expect((await ctx.earn(ORDER_B, 300_000)).points_earned).toBe(30);
+
+    const off = setup({ LOYALTY_REDEEM_MIN_POINTS: '1', LOYALTY_EARN_EXCLUDE_POINT_PAYMENT: 'false' });
+    expect(off.svc.params().earn_exclude_point_payment).toBe(false);
+    await off.earn(ORDER_C, 1_000_000);
+    const r2 = await off.reserve(ORDER_A, 50, { amountTotal: 125_000 });
+    await off.commit(r2.reservation_id, ORDER_A);
+    expect((await off.earn(ORDER_A, 200_000)).points_earned).toBe(20);
+  });
+
+  it('K-18-5: restore dari points_restored_value (floor ÷ nilai poin), clawback tetap refund_ratio; melebihi sisa → dipotong + anomali; event lama tanpa field → ratio', async () => {
+    const ctx = setup({ LOYALTY_REDEEM_MIN_POINTS: '1' });
+    await ctx.earn(ORDER_C, 1_000_000);
+    const r = await ctx.reserve(ORDER_A, 50); // 5000 IDR
+    await ctx.commit(r.reservation_id, ORDER_A);
+    await ctx.earn(ORDER_A, 100_000); // +10
+    const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      // refund sebagian: nilai poin 2550 → 25 poin (sisa Rp50 memihak PT), clawback ceil(10 × 0,5) = 5
+      const a = await ctx.reverse(REFUND_1, ORDER_A, 0.5, MEMBER, 2550);
+      expect(a).toMatchObject({ points_restored: 25, points_clawed_back: 5 });
+      const line = log.mock.calls.map((c) => String(c[0])).find((l) => l.startsWith('EFN_LOYALTY_RESTORE '))!;
+      expect(JSON.parse(line.slice('EFN_LOYALTY_RESTORE '.length))).toEqual({ order_ref: ORDER_A, value_idr: 2550, points: 25, remainder_idr: 50 });
+      expect(line).not.toContain(MEMBER);
+      // refund kedua mengklaim nilai penuh 5000 (50 poin) padahal sisa 25 → dipotong 25 + anomali
+      const b = await ctx.reverse(REFUND_2, ORDER_A, 0.5, MEMBER, 5000);
+      expect(b.points_restored).toBe(25);
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('"kind":"restore_exceeds_redeem"'))).toBe(true);
+      const restored = ctx.db.ledger.filter((l) => l.reason === 'pos_refund_restore').reduce((s, l) => s + l.delta_points, 0);
+      expect(restored).toBe(50);
+      // K-18-6: tersimpan persisten untuk rekonsiliasi ETL (bentuk _PLATFORM_RESTORE_ROWS)
+      expect(ctx.db.reverses.get(REFUND_1)).toMatchObject({ original_order_ref: ORDER_A, company_code: 'FNB', points_restored_value: 2550, points_restored: 25 });
+      expect(ctx.db.reverses.get(REFUND_2)).toMatchObject({ points_restored_value: 5000, points_restored: 25 });
+      // retry identik → replay; retry dengan nilai berbeda → 409 idempotency_conflict
+      expect((await ctx.reverse(REFUND_1, ORDER_A, 0.5, MEMBER, 2550)).points_restored).toBe(25);
+      expect(await code(ctx.reverse(REFUND_1, ORDER_A, 0.5, MEMBER, 9999))).toBe('409 idempotency_conflict');
+      expect(ctx.db.reverses.size).toBe(2);
+      expect(ctx.db.ledger.every((l) => Number.isInteger(l.delta_points))).toBe(true);
+    } finally {
+      log.mockRestore();
+      warn.mockRestore();
+    }
+
+    // event lama tanpa points_restored_value → refund_ratio (kompatibel mundur)
+    const old = setup({ LOYALTY_REDEEM_MIN_POINTS: '1' });
+    await old.earn(ORDER_C, 1_000_000);
+    const r2 = await old.reserve(ORDER_A, 50);
+    await old.commit(r2.reservation_id, ORDER_A);
+    await old.earn(ORDER_A, 100_000);
+    expect(await old.reverse(REFUND_1, ORDER_A, 0.5)).toMatchObject({ points_restored: 25, points_clawed_back: 5 });
+    expect(old.db.reverses.size).toBe(0); // event v4 tanpa nilai: tidak ada baris rekonsiliasi
+
+    // refund tanpa porsi poin (nilai 0) → tidak ada restore walau ratio 1
+    const zero = setup({ LOYALTY_REDEEM_MIN_POINTS: '1' });
+    await zero.earn(ORDER_C, 1_000_000);
+    const r3 = await zero.reserve(ORDER_A, 50);
+    await zero.commit(r3.reservation_id, ORDER_A);
+    await zero.earn(ORDER_A, 100_000);
+    expect(await zero.reverse(REFUND_1, ORDER_A, 1, MEMBER, 0)).toMatchObject({ points_restored: 0, points_clawed_back: 10 });
+    expect(zero.db.reverses.get(REFUND_1)).toMatchObject({ points_restored_value: 0, points_restored: 0 });
+  });
+});
+
+describe('G18 K-18-8: OTP POS pos_enroll — pernyataan usia 17+ saat kasir mendaftarkan member', () => {
+  function enrollSetup() {
+    const ctx = setup();
+    const sender = new FakeWhatsAppSender();
+    const limiter = new RateLimiter(ctx.kv);
+    limiter.now = ctx.clock.now;
+    const members = new FakeMemberTable();
+    const db = new FakeDb((t, p) => members.handle(t, p));
+    const otp = new OtpService(ctx.config, ctx.kv, db, sender, ctx.metrics, limiter, ctx.cipher);
+    otp.now = ctx.clock.now;
+    const pos = new PosService(ctx.config, otp, ctx.tokens, limiter, ctx.loyalty, new MemberService(ctx.config, db, ctx.cipher));
+    return { ...ctx, sender, pos, members, mdb: db };
+  }
+  const body = { member_ref: MEMBER, order_ref: ORDER_A, amount: 0, company_code: 'RTL', pos_config_id: 7, purpose: 'pos_enroll' };
+
+  it('tanpa age_confirmed → 400 age_confirmation_required, OTP tidak dikirim; bukan boolean → 400 invalid_request', async () => {
+    const ctx = enrollSetup();
+    const err = await catchApiError(() => ctx.pos.requestOtp(parsePosOtpRequest(body), null));
+    expect(err.getStatus()).toBe(400);
+    expect(err.body).toEqual({ error: { code: 'age_confirmation_required', message: expect.stringContaining('17 tahun') } });
+    expect(ctx.sender.otps).toHaveLength(0);
+    expect((await catchApiError(() => parsePosOtpRequest({ ...body, age_confirmed: 'ya' }))).body).toEqual({
+      error: { code: 'invalid_request', message: expect.any(String) },
+    });
+    // purpose lain tidak butuh pernyataan
+    await expect(ctx.pos.requestOtp(parsePosOtpRequest({ ...body, purpose: 'pos_promo' }), null)).resolves.toBeDefined();
+  });
+
+  it('dengan age_confirmed → verify mendaftarkan member (age_confirmed_at, source=pos, pos_config_id); tanpa discount_token', async () => {
+    const ctx = enrollSetup();
+    const req = await ctx.pos.requestOtp(parsePosOtpRequest({ ...body, age_confirmed: true }), null);
+    const res = await ctx.pos.verifyOtp(parsePosOtpVerify({ challenge_id: req.challenge_id, order_ref: ORDER_A, code: ctx.sender.lastCode(), age_confirmed: true }), null);
+    expect(res).toEqual({ ok: true, enrolled: true });
+    const ins = ctx.mdb.find('INSERT INTO platform.member')[0];
+    expect(ins.text).toContain('age_confirmed_source');
+    expect(ins.params.slice(3)).toEqual([true, 'pos', 7]);
+    expect(ctx.members.byHash(memberHash(ctx.config.memberHashPepper, MEMBER))).toBeDefined();
+    // member lama tanpa pernyataan dilengkapi sekali (UPDATE bersyarat)
+    ctx.clock.advanceSeconds(3600);
+    const req2 = await ctx.pos.requestOtp(parsePosOtpRequest({ ...body, age_confirmed: true, pos_config_id: 9 }), null);
+    await ctx.pos.verifyOtp(parsePosOtpVerify({ challenge_id: req2.challenge_id, order_ref: ORDER_A, code: ctx.sender.lastCode() }), null);
+    const upd = ctx.mdb.find('SET age_confirmed_at = now()');
+    expect(upd[0].params).toEqual([expect.any(String), 'pos', 9]);
+    expect(upd[0].text).toContain('age_confirmed_at IS NULL');
   });
 });

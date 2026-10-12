@@ -72,6 +72,7 @@ describe('OtpService', () => {
       purpose: 'pos_promo',
       memberHash: memberHash(config.memberHashPepper, MEMBER),
       memberRef: null,
+      posConfigId: null,
       orderRef: ORDER,
       companyCode: 'FNB',
       amount: null,

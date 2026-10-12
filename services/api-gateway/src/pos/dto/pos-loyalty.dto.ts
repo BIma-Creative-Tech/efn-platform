@@ -8,6 +8,15 @@ import { requireMemberRef, requireOrderRef } from './pos.dto';
  * `member_ref` hanya di BODY (R2: tidak pernah di URL/query).
  */
 
+/**
+ * G18 (W-03 presisi IDR Rp1, kontrak §9.9 v6): semua nilai Rupiah poin INTEGER. Nilai yang dibandingkan persis
+ * (`amount_total` reserve, `value_idr`, `payment_amount`, `points_restored_value`) wajib integer → selain itu 400;
+ * dasar earn/refund (`eligible_amount`, `refunded_eligible_amount`) dibulatkan ke BAWAH ke Rupiah (memihak PT).
+ */
+function floorIdr(o: Record<string, unknown>, key: string): number {
+  return Math.floor(requireNumber(o, key, 0, MAX_AMOUNT_IDR) + 1e-9);
+}
+
 /** Rupiah maksimum yang diterima (Rp10 miliar) — batas sanity, bukan aturan bisnis. */
 export const MAX_AMOUNT_IDR = 10_000_000_000;
 const MAX_POINTS = 1_000_000;
@@ -51,7 +60,7 @@ export function parsePosEarn(body: unknown): PosEarnDto {
     orderRef: requireOrderRef(o),
     memberRef,
     companyCode: o.company_code,
-    eligibleAmount: requireNumber(o, 'eligible_amount', 0, MAX_AMOUNT_IDR),
+    eligibleAmount: floorIdr(o, 'eligible_amount'),
     posConfigId: o.pos_config_id === undefined || o.pos_config_id === null ? null : requireInt(o, 'pos_config_id', 1, 2_147_483_647),
   };
 }
@@ -61,10 +70,11 @@ export interface RedeemReserveDto {
   orderRef: string;
   memberRef: string;
   points: number;
+  /** K-18-2: total order TERMASUK pajak (dasar `LOYALTY_REDEEM_MAX_PCT_OF_ORDER`), integer Rupiah. */
   amountTotal: number;
 }
 
-/** §9.3 `{ discount_token, order_ref, member_ref, points, amount_total }`. */
+/** §9.3 `{ discount_token, order_ref, member_ref, points, amount_total }` (K-18-2: `amount_total` integer incl pajak). */
 export function parseRedeemReserve(body: unknown): RedeemReserveDto {
   const o = asRecord(body);
   const discountToken = requireString(o, 'discount_token', 4096);
@@ -75,7 +85,7 @@ export function parseRedeemReserve(body: unknown): RedeemReserveDto {
     orderRef,
     memberRef,
     points: requireInt(o, 'points', 1, MAX_POINTS),
-    amountTotal: requireNumber(o, 'amount_total', 0, MAX_AMOUNT_IDR),
+    amountTotal: requireInt(o, 'amount_total', 0, MAX_AMOUNT_IDR),
   };
 }
 
@@ -86,10 +96,15 @@ export interface RedeemCommitDto {
   memberRef: string;
   /** K-3: harus sama dengan value_idr reservasi (value_mismatch). */
   valueIdr: number;
+  /** K-18-3: nilai baris pembayaran Poin EFN di order (integer Rupiah) — wajib sama dengan `value_idr` reservasi. */
+  paymentAmount: number;
   idempotencyKey: string;
 }
 
-/** §9.3 + §9.6 K-3 `{ reservation_id, order_ref, member_ref, value_idr, idempotency_key: "pos_redeem:<order_uuid>" }`. */
+/**
+ * §9.3 + §9.6 K-3 + §9.9 K-18-3 `{ reservation_id, order_ref, member_ref, value_idr, payment_amount,
+ * idempotency_key: "pos_redeem:<order_uuid>" }`.
+ */
 export function parseRedeemCommit(body: unknown): RedeemCommitDto {
   const o = asRecord(body);
   const memberRef = requireMemberRef(o.member_ref);
@@ -98,6 +113,7 @@ export function parseRedeemCommit(body: unknown): RedeemCommitDto {
     orderRef: requireOrderRef(o),
     memberRef,
     valueIdr: requireInt(o, 'value_idr', 0, MAX_AMOUNT_IDR),
+    paymentAmount: requireInt(o, 'payment_amount', 0, MAX_AMOUNT_IDR),
     idempotencyKey: requireIdempotencyKey(o, 'pos_redeem'),
   };
 }
@@ -113,13 +129,18 @@ export interface PosReverseDto {
   refundOrderRef: string;
   memberRef: string;
   refundedEligibleAmount: number;
-  /** 0 < r ≤ 1. */
+  /** 0 < r ≤ 1. Tetap dasar clawback earn (K-18-5). */
   refundRatio: number;
+  /**
+   * K-18-5: nilai Rupiah (integer ≥ 0) baris pembayaran Poin EFN negatif pada refund. Ada → poin redeem dikembalikan
+   * = floor(nilai ÷ `LOYALTY_POINT_VALUE_IDR`); tidak ada (event lama) → `refund_ratio` seperti v4.
+   */
+  pointsRestoredValue: number | null;
 }
 
 /**
  * §9.4 `{ idempotency_key: "pos_reverse:<refund_order_uuid>", original_order_ref, refund_order_ref, member_ref,
- * refunded_eligible_amount, refund_ratio }`.
+ * refunded_eligible_amount, refund_ratio, points_restored_value? }` (K-18-5).
  */
 export function parsePosReverse(body: unknown): PosReverseDto {
   const o = asRecord(body);
@@ -134,7 +155,9 @@ export function parsePosReverse(body: unknown): PosReverseDto {
     originalOrderRef,
     refundOrderRef,
     memberRef,
-    refundedEligibleAmount: requireNumber(o, 'refunded_eligible_amount', 0, MAX_AMOUNT_IDR),
+    refundedEligibleAmount: floorIdr(o, 'refunded_eligible_amount'),
     refundRatio,
+    pointsRestoredValue:
+      o.points_restored_value === undefined || o.points_restored_value === null ? null : requireInt(o, 'points_restored_value', 0, MAX_AMOUNT_IDR),
   };
 }

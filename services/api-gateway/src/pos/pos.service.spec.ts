@@ -14,7 +14,7 @@ import { LoyaltyService } from '../loyalty/loyalty.service';
 import { OtpService } from '../otp/otp.service';
 import { DiscountTokenService } from './discount-token.service';
 import { parseDiscountTokenConsume, parsePosOtpRequest } from './dto/pos.dto';
-import { PosService } from './pos.service';
+import { PosOtpVerifyResponse, PosService } from './pos.service';
 
 const MEMBER = '6281234567890';
 const OTHER_MEMBER = '6285711112222';
@@ -50,7 +50,7 @@ async function obtainToken(ctx: ReturnType<typeof setup>, orderRef = ORDER): Pro
     { challengeId: req.challenge_id, orderRef, code: ctx.sender.lastCode() },
     '10.0.0.5',
   );
-  return res.discount_token;
+  return (res as PosOtpVerifyResponse).discount_token;
 }
 
 function consume(ctx: ReturnType<typeof setup>, token: string, orderRef = ORDER, memberRef = MEMBER, amountTotal = 125000) {
@@ -69,9 +69,9 @@ describe('PosService', () => {
 
     const verified = await ctx.pos.verifyOtp({ challengeId: req.challenge_id, orderRef: ORDER, code: ctx.sender.lastCode() }, null);
     expect(verified.ok).toBe(true);
-    expect(verified.expires_in).toBe(600);
+    expect((verified as PosOtpVerifyResponse).expires_in).toBe(600);
 
-    expect(await consume(ctx, verified.discount_token)).toEqual({ ok: true });
+    expect(await consume(ctx, (verified as PosOtpVerifyResponse).discount_token)).toEqual({ ok: true });
   });
 
   it('consume ulang dengan jti + order_ref + member yang sama → 200 idempotent (retry Odoo)', async () => {

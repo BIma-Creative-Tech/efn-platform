@@ -17,9 +17,12 @@ import { WHATSAPP_SENDER, WhatsAppSender } from './whatsapp/whatsapp-sender';
  * `dsar` = re-OTP step-up untuk aksi DSAR (docs/04 §8.4). `pos_redeem` = OTP redeem poin di POS (docs/04 §9.3) — token
  * hasilnya tidak bisa dipakai untuk consume promo (`pos_promo`) dan sebaliknya.
  */
-export type OtpPurpose = 'pos_promo' | 'pos_redeem' | 'login' | 'dsar';
-/** Purpose kanal kasir (rate limit/budget POS, challenge terikat `order_ref`). */
-export const POS_OTP_PURPOSES = ['pos_promo', 'pos_redeem'] as const;
+export type OtpPurpose = 'pos_promo' | 'pos_redeem' | 'pos_enroll' | 'login' | 'dsar';
+/**
+ * Purpose kanal kasir (rate limit/budget POS, challenge terikat `order_ref`). `pos_enroll` (G18 K-18-8) = kasir
+ * mendaftarkan member baru; wajib pernyataan usia, TIDAK menghasilkan discount_token.
+ */
+export const POS_OTP_PURPOSES = ['pos_promo', 'pos_redeem', 'pos_enroll'] as const;
 export type PosOtpPurpose = (typeof POS_OTP_PURPOSES)[number];
 
 export function isPosOtpPurpose(v: unknown): v is PosOtpPurpose {
@@ -35,6 +38,8 @@ export interface IssueOtpInput {
   companyCode?: string | null;
   /** SEC-07: nilai order saat OTP POS diminta (diikat ke discount_token). */
   amount?: number | null;
+  /** K-18-8: pos.config peminta (disimpan di challenge `pos_enroll` untuk jejak pernyataan usia). */
+  posConfigId?: number | null;
   ip?: string | null;
 }
 
@@ -67,6 +72,8 @@ export type VerifyOtpResult =
       orderRef: string | null;
       companyCode: string | null;
       amount: number | null;
+      /** K-18-8: pos.config dari challenge (`pos_enroll`), selain itu null. */
+      posConfigId: number | null;
     }
   | { ok: false; reason: OtpFailureReason; attemptsLeft: number };
 
@@ -128,7 +135,11 @@ export class OtpService {
       e: String(this.nowSec() + ttl),
     };
     if (typeof input.amount === 'number' && Number.isFinite(input.amount)) fields.t = String(input.amount);
-    if (input.purpose === 'login') fields.m = this.cipher.encrypt(input.memberRef, PII_AAD.REDIS_OTP_MEMBER).toString('base64');
+    // login & pos_enroll butuh nomor untuk upsert member setelah verify (terenkripsi, SEC-24)
+    if (input.purpose === 'login' || input.purpose === 'pos_enroll') {
+      fields.m = this.cipher.encrypt(input.memberRef, PII_AAD.REDIS_OTP_MEMBER).toString('base64');
+    }
+    if (input.purpose === 'pos_enroll' && typeof input.posConfigId === 'number') fields.g = String(input.posConfigId);
     const key = this.key(challengeId);
     await this.kv.hsetEx(key, fields, ttl + OTP_TOMBSTONE_GRACE_SECONDS);
 
@@ -216,6 +227,7 @@ export class OtpService {
         orderRef: storedOrderRef,
         companyCode: st.c ? st.c : null,
         amount: st.t !== undefined && st.t !== '' && Number.isFinite(Number(st.t)) ? Number(st.t) : null,
+        posConfigId: st.g !== undefined && /^[0-9]{1,10}$/.test(st.g) ? Number(st.g) : null,
       };
     }
 

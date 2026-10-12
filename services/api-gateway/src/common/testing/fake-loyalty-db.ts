@@ -71,6 +71,8 @@ export interface FakeEarnRow {
 export class FakeLoyaltyDb implements Db {
   readonly ledger: FakeLedgerRow[] = [];
   readonly earns = new Map<string, FakeEarnRow>();
+  /** G18 K-18-6: `platform.loyalty_pos_reverse` (PK refund_order_ref, UNIQUE idempotency_key). */
+  readonly reverses = new Map<string, Record<string, unknown>>();
   readonly reservations = new Map<string, FakeReservationRow>();
   readonly queries: string[] = [];
   /** SEC-65 (`erasureBlock`): member_hash dengan DSAR delete aktif; tag daftar tolak → expires_at ISO. */
@@ -273,6 +275,33 @@ export class FakeLoyaltyDb implements Db {
         .filter((r) => r.member_hash === p[0] && r.status === 'reserved' && ms(r.hold_until) > ms(String(p[1])))
         .reduce((s, r) => s + r.points, 0);
       return ok([{ held: String(held) }]);
+    }
+    if (text.includes('INSERT INTO platform.loyalty_pos_reverse')) {
+      const row = {
+        refund_order_ref: String(p[0]),
+        original_order_ref: String(p[1]),
+        company_code: String(p[2]),
+        points_restored_value: Number(p[3]),
+        points_restored: Number(p[4]),
+        idempotency_key: String(p[5]),
+        created_at: String(p[6]),
+      };
+      if (this.reverses.has(row.refund_order_ref) || [...this.reverses.values()].some((r) => r.idempotency_key === row.idempotency_key)) {
+        return ok([], 0);
+      }
+      this.reverses.set(row.refund_order_ref, row);
+      undo.push(() => this.reverses.delete(row.refund_order_ref));
+      return ok([], 1);
+    }
+    if (text.includes('FROM platform.loyalty_pos_reverse')) {
+      return ok([...this.reverses.values()].filter((r) => r.refund_order_ref === p[0] || r.idempotency_key === p[1]).map((r) => ({ ...r })));
+    }
+    if (text.includes('SELECT value_idr, amount_total FROM platform.loyalty_reservation WHERE order_ref = $1 AND status = \'committed\'')) {
+      return ok(
+        [...this.reservations.values()]
+          .filter((r) => r.order_ref === p[0] && r.status === 'committed')
+          .map((r) => ({ value_idr: String(r.value_idr), amount_total: String(r.amount_total) })),
+      );
     }
     if (text.includes('INSERT INTO platform.loyalty_reservation')) {
       const row: FakeReservationRow = {

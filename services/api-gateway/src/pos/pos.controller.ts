@@ -8,7 +8,7 @@ import {
   parsePosOtpRequest,
   parsePosOtpVerify,
 } from './dto/pos.dto';
-import { PosOtpRequestResponse, PosOtpVerifyResponse, PosService } from './pos.service';
+import { PosEnrollVerifyResponse, PosOtpRequestResponse, PosOtpVerifyResponse, PosService } from './pos.service';
 
 /** Endpoint server-to-server Odoo → BFF (kontrak §3.1, §3.4). Prefix global `v1` → `/v1/pos/*`. */
 @Controller('pos')
@@ -24,7 +24,7 @@ export class PosController {
 
   @Post('otp/verify')
   @HttpCode(HttpStatus.OK)
-  verifyOtp(@Body() body: unknown, @Req() req: FastifyRequest): Promise<PosOtpVerifyResponse> {
+  verifyOtp(@Body() body: unknown, @Req() req: FastifyRequest): Promise<PosOtpVerifyResponse | PosEnrollVerifyResponse> {
     return this.pos.verifyOtp(parsePosOtpVerify(body), clientIp(req));
   }
 

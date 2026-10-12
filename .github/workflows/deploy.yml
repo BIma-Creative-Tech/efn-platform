@@ -262,6 +262,8 @@ jobs:
           # xendit|midtrans + API key kanal nyata (deploy-validate / deploy.sh). Kosong = default compose (PLACEHOLDER).
           CFG_ONLINE_ENABLED: ${{ vars.ONLINE_ENABLED || 'false' }}
           CFG_ONLINE_CATALOG_ENABLED: ${{ vars.ONLINE_CATALOG_ENABLED || 'false' }}
+          CFG_LOYALTY_EARN_EXCLUDE_POINT_PAYMENT: ${{ vars.LOYALTY_EARN_EXCLUDE_POINT_PAYMENT || 'true' }}
+          CFG_ETL_LOYALTY_POINTS_MODE: ${{ vars.ETL_LOYALTY_POINTS_MODE || 'product' }}
           CFG_ONLINE_CHANNELS: ${{ vars.ONLINE_CHANNELS || 'RTL' }}
           CFG_ONLINE_FULFILMENTS: ${{ vars.ONLINE_FULFILMENTS || 'pickup' }}
           CFG_ONLINE_PAYMENT_TIMEOUT_SECONDS: ${{ vars.ONLINE_PAYMENT_TIMEOUT_SECONDS }}

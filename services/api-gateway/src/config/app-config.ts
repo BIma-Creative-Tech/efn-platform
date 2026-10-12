@@ -861,6 +861,15 @@ export class AppConfig {
     return this.int('LOYALTY_REDEEM_MIN_POINTS', 50, 1, 1_000_000);
   }
   /** Nilai redeem maksimum sebagai persen `amount_total` order (1..100). */
+  /**
+   * G18 kontrak §9.9 K-18-4 (default sementara, keputusan final Finance): true = porsi yang dibayar poin TIDAK
+   * menghasilkan poin — Odoo menghitung `eligible_amount = Σ eligible tanpa pajak × (1 − bayar_poin ÷ amount_total)`
+   * (nilai flag dibaca Odoo dari `GET /v1/pos/loyalty/params`), BFF menolak earn yang melebihi porsi uang order.
+   * false = earn atas seluruh eligible (tanpa faktor; pagar porsi uang BFF tidak dijalankan).
+   */
+  get loyaltyEarnExcludePointPayment(): boolean {
+    return this.bool('LOYALTY_EARN_EXCLUDE_POINT_PAYMENT', true);
+  }
   get loyaltyRedeemMaxPctOfOrder(): number {
     return this.int('LOYALTY_REDEEM_MAX_PCT_OF_ORDER', 50, 1, 100);
   }

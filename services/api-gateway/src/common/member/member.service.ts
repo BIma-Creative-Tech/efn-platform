@@ -10,6 +10,14 @@ export interface ActiveMember {
   memberHash: string;
 }
 
+export interface UpsertMemberOptions {
+  ageConfirmed?: boolean;
+  /** Kanal pernyataan usia (default `app`). */
+  ageSource?: 'app' | 'pos';
+  /** K-18-8: pos.config kasir yang mencentang pernyataan (jejak, bukan PII). */
+  posConfigId?: number | null;
+}
+
 export interface UpsertMemberResult {
   id: string;
   /** true = akun sedang dihapus (DSAR `processing`), login ditolak. */
@@ -40,18 +48,21 @@ export class MemberService {
 
   /** Dipanggil setelah OTP login terverifikasi (login = daftar). Tidak menimpa `member_ref_enc` yang ada. */
   /**
-   * W-19 (Q-P3): `ageConfirmed` → `age_confirmed_at` diisi (member baru) atau dilengkapi sekali (member lama hasil
-   * migrasi/POS yang belum pernah menyatakan); tidak pernah ditimpa. Tanpa tanggal lahir.
+   * W-19 (Q-P3) / K-18-8: `ageConfirmed` → `age_confirmed_at` + `age_confirmed_source` (`app` login Super-App |
+   * `pos` kasir, + `age_confirmed_pos_config_id`) diisi (member baru) atau dilengkapi sekali (member lama hasil
+   * migrasi yang belum pernah menyatakan); tidak pernah ditimpa. Tanpa tanggal lahir.
    */
-  async upsertOnLogin(memberRef: string, opts: { ageConfirmed?: boolean } = {}): Promise<UpsertMemberResult> {
+  async upsertOnLogin(memberRef: string, opts: UpsertMemberOptions = {}): Promise<UpsertMemberResult> {
     const hash = this.hash(memberRef);
     const age = opts.ageConfirmed === true;
+    const source = age ? (opts.ageSource ?? 'app') : null;
+    const cfg = age && source === 'pos' ? (opts.posConfigId ?? null) : null;
     const ins = await this.db.query<{ id: string }>(
-      `INSERT INTO platform.member (id, member_hash, member_ref_enc, age_confirmed_at)
-       VALUES ($1, $2, $3, CASE WHEN $4::boolean THEN now() END)
+      `INSERT INTO platform.member (id, member_hash, member_ref_enc, age_confirmed_at, age_confirmed_source, age_confirmed_pos_config_id)
+       VALUES ($1, $2, $3, CASE WHEN $4::boolean THEN now() END, $5, $6)
        ON CONFLICT (member_hash) DO NOTHING
        RETURNING id::text AS id`,
-      [randomUUID(), hash, this.cipher.encrypt(memberRef, PII_AAD.MEMBER_REF), age],
+      [randomUUID(), hash, this.cipher.encrypt(memberRef, PII_AAD.MEMBER_REF), age, source, cfg],
     );
     if (ins.rows[0]) return { id: ins.rows[0].id, deleting: false };
     const sel = await this.db.query<{ id: string; deleted_at: Date | string | null }>(
@@ -61,7 +72,11 @@ export class MemberService {
     const row = sel.rows[0];
     if (!row) throw new Error('member hilang setelah konflik upsert');
     if (age && row.deleted_at === null) {
-      await this.db.query(`UPDATE platform.member SET age_confirmed_at = now() WHERE id = $1 AND age_confirmed_at IS NULL`, [row.id]);
+      await this.db.query(
+        `UPDATE platform.member SET age_confirmed_at = now(), age_confirmed_source = $2, age_confirmed_pos_config_id = $3
+          WHERE id = $1 AND age_confirmed_at IS NULL`,
+        [row.id, source, cfg],
+      );
     }
     return { id: row.id, deleting: row.deleted_at !== null };
   }

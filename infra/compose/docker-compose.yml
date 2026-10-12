@@ -1108,6 +1108,7 @@ services:
       # Kill switch: default false (production). Dev/staging menyalakan lewat .env (ONLINE_ENABLED=true).
       ONLINE_ENABLED: ${ONLINE_ENABLED:-false}
       ONLINE_CATALOG_ENABLED: ${ONLINE_CATALOG_ENABLED:-false}
+      LOYALTY_EARN_EXCLUDE_POINT_PAYMENT: ${LOYALTY_EARN_EXCLUDE_POINT_PAYMENT:-true}
       ONLINE_CHANNELS: ${ONLINE_CHANNELS:-RTL}
       ONLINE_FULFILMENTS: ${ONLINE_FULFILMENTS:-pickup}
       ONLINE_PAYMENT_TIMEOUT_SECONDS: ${ONLINE_PAYMENT_TIMEOUT_SECONDS:-900}
@@ -1527,6 +1528,7 @@ services:
       # G14: rekonsiliasi ledger poin vs pos.order mulai dari go-live loyalty POS (UTC, YYYY-MM-DDTHH:MM:SSZ). Nilai dari
       # manifest rilis bertanda tangan (SEC-50, deploy-validate.sh); kosong = semua order dalam jendela lookback.
       ETL_LOYALTY_RECON_NOT_BEFORE: ${ETL_LOYALTY_RECON_NOT_BEFORE:-}
+      ETL_LOYALTY_POINTS_MODE: ${ETL_LOYALTY_POINTS_MODE:-product}
       # W-19: harus sama dengan clickhouse-init (TTL kolom pseudonim / geo; ETL gagal start bila di luar rentang)
       CH_PSEUDONYM_RETENTION_YEARS: ${CH_PSEUDONYM_RETENTION_YEARS:-5}
       CH_GEO_RETENTION_DAYS: ${CH_GEO_RETENTION_DAYS:-90}

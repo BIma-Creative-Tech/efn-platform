@@ -12,10 +12,15 @@
 --    (`DELETE /v1/me?confirm_open_orders=true`); bukti pilihan sadar (L-4 + Q-P18). NULL = tidak ada pesanan terbuka.
 -- 2. `dsar_request.defer_escalation` — tingkat eskalasi CS yang sudah dikirim (0 = belum, 1 = hari 3, 2 = hari 10)
 --    selama erasure tertahan pesanan online terbuka; mencegah alert berulang tiap siklus job (multi-replika aman).
--- 3. `member.age_confirmed_at` — waktu pernyataan usia minimum (17 th, Q-P3) saat login/daftar Super-App. Tanpa tanggal
---    lahir (minimisasi data). Ikut terhapus bersama baris member saat erasure. Member hasil migrasi/POS: NULL sampai
---    login pertama di Super-App.
--- PII: tidak ada kolom PII baru (stempel waktu saja). Risiko: R-L01.
+-- 3. `member.age_confirmed_at` (+ `age_confirmed_source`, `age_confirmed_pos_config_id`, §9.9 K-18-8) — waktu & kanal pernyataan usia minimum (17 th, Q-P3) saat login Super-App atau pendaftaran kasir POS. Tanpa tanggal
+--    lahir (minimisasi data). Ikut terhapus bersama baris member saat erasure. Member hasil migrasi: NULL sampai
+--    login Super-App atau pendaftaran ulang lewat kasir (`pos_enroll`).
+-- 5. (§9.9 K-18-5/K-18-6) `platform.loyalty_pos_reverse` — satu baris per refund POS ber-member: nilai Rupiah baris
+--    pembayaran Poin EFN negatif yang dilaporkan Odoo (`points_restored_value`) + poin yang benar-benar dikembalikan.
+--    Dibaca ETL rekonsiliasi harian (`services/etl/efn_etl/loyalty_recon.py` `_PLATFORM_RESTORE_ROWS`). Ditulis BFF di
+--    transaksi yang sama dengan pengembalian poin (idempoten per `refund_order_ref`). Retensi = data keuangan 10 th
+--    (Q-P2): BFF TIDAK mem-purge (sama dengan ledger). Tanpa PII (tanpa member_hash; order_ref opak).
+-- PII: tidak ada kolom PII baru (stempel waktu saja). Risiko: R-L01, R-B05 (rekonsiliasi poin).
 
 \connect efn_platform
 \set ON_ERROR_STOP on
@@ -36,8 +41,41 @@ BEGIN
 END $$;
 
 ALTER TABLE platform.member ADD COLUMN IF NOT EXISTS age_confirmed_at timestamptz;
+-- 4. (§9.9 K-18-8) kanal pernyataan usia: 'app' (login Super-App) | 'pos' (kasir, OTP `pos_enroll`) + pos.config kasir
+--    yang mencentang (jejak prosedural, bukan PII). NULL bila belum ada pernyataan.
+ALTER TABLE platform.member ADD COLUMN IF NOT EXISTS age_confirmed_source text;
+ALTER TABLE platform.member ADD COLUMN IF NOT EXISTS age_confirmed_pos_config_id integer;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_member_age_confirmed_source'
+                   AND conrelid = 'platform.member'::regclass) THEN
+    ALTER TABLE platform.member ADD CONSTRAINT ck_member_age_confirmed_source CHECK (
+      (age_confirmed_source IS NULL OR age_confirmed_source IN ('app', 'pos'))
+      AND (age_confirmed_pos_config_id IS NULL OR (age_confirmed_source = 'pos' AND age_confirmed_pos_config_id > 0)));
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS platform.loyalty_pos_reverse (
+  refund_order_ref      text        PRIMARY KEY CHECK (refund_order_ref ~ '^[\x20-\x7e]{1,64}$'),
+  original_order_ref    text        NOT NULL CHECK (original_order_ref ~ '^[\x20-\x7e]{1,64}$'),
+  company_code          text        NOT NULL CHECK (company_code IN ('EFN', 'RTL', 'FNB', 'FARM')),
+  points_restored_value bigint      NOT NULL CHECK (points_restored_value >= 0),
+  points_restored       integer     NOT NULL CHECK (points_restored >= 0),
+  idempotency_key       text        NOT NULL UNIQUE CHECK (char_length(idempotency_key) <= 128),
+  created_at            timestamptz NOT NULL DEFAULT now(),
+  CHECK (refund_order_ref <> original_order_ref)
+);
+CREATE INDEX IF NOT EXISTS ix_loyalty_pos_reverse_created ON platform.loyalty_pos_reverse (created_at);
+CREATE INDEX IF NOT EXISTS ix_loyalty_pos_reverse_original ON platform.loyalty_pos_reverse (original_order_ref);
 
 RESET ROLE;
+
+-- loyalty_pos_reverse: efn_bff hanya SELECT/INSERT (append-only, tanpa UPDATE/DELETE — catatan keuangan 10 th);
+-- efn_readonly (ETL rekonsiliasi, anggota: efn_etl) kolom non-PII.
+REVOKE ALL ON platform.loyalty_pos_reverse FROM PUBLIC, efn_bff, efn_readonly, efn_ocr, efn_etl;
+GRANT SELECT, INSERT ON platform.loyalty_pos_reverse TO efn_bff;
+GRANT SELECT (refund_order_ref, original_order_ref, company_code, points_restored_value, points_restored, created_at)
+  ON platform.loyalty_pos_reverse TO efn_readonly;
 
 -- Hak akses: efn_bff sudah SELECT/INSERT/UPDATE tingkat tabel (04-platform-v3-6.sql) → kolom baru tercakup.
 -- efn_etl hanya SELECT kolom tertentu dsar_request (03) → kolom baru TIDAK terlihat ETL (sengaja).

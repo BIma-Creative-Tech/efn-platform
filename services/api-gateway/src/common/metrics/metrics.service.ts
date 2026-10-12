@@ -1,7 +1,7 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { Counter, Gauge, Registry, collectDefaultMetrics } from 'prom-client';
 
-export type OtpPurposeLabel = 'pos_promo' | 'pos_redeem' | 'login' | 'dsar';
+export type OtpPurposeLabel = 'pos_promo' | 'pos_redeem' | 'pos_enroll' | 'login' | 'dsar';
 /** `budget_exhausted` = budget global per jam habis (SEC-06) — kandidat alert DevSecOps. */
 export type OtpRequestOutcome = 'sent' | 'delivery_failed' | 'rate_limited' | 'budget_exhausted';
 export type OtpVerifyOutcome = 'verified' | 'invalid' | 'expired' | 'locked';
