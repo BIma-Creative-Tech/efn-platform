@@ -46,7 +46,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -67,7 +67,7 @@ jobs:
         run: |
           [ -f gitleaks.txt ] || exit 0
           { echo '### gitleaks (riwayat penuh, redacted)'; echo '```'; head -c 200000 gitleaks.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
         if: github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -86,7 +86,7 @@ jobs:
       # 2026). Bump manual/Dependabot (docker): ganti tag + digest bersamaan.
       image: semgrep/semgrep:1.179.0@sha256:93963d9295a366f59e4850127b1550400ee7b388f04fe144e4a1f6325d96e01b
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       - name: Semgrep (OWASP Top 10, secrets, docker, typescript, python)
@@ -115,7 +115,7 @@ jobs:
           for e in d.get("errors", [])[:20]:
               print(f"\n- error scanner: {str(e.get('message', e))[:200]}")
           PY
-      - uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52  # v3.38.2
+      - uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d  # v4.38.3
         if: always() && env.CODE_SCANNING == 'true' && hashFiles('semgrep.sarif') != ''
         with:
           sarif_file: semgrep.sarif
@@ -128,13 +128,13 @@ jobs:
       contents: read
       security-events: write   # hanya terpakai bila CODE_SCANNING == 'true'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       # 0.35.0: tag aman pasca insiden supply chain Maret 2026 (CVE-2026-33634); binary Trivy dipin.
       # Gate: tabel (secret di-mask Trivy) -> file -> log + summary. Pengecualian terdokumentasi: .trivyignore.yaml.
       - name: Trivy fs (gate HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # 0.36.0
         with:
           version: v0.69.3
           scan-type: fs
@@ -156,7 +156,7 @@ jobs:
             >> "$GITHUB_STEP_SUMMARY"
       - name: Trivy fs SARIF (hanya bila code scanning tersedia)
         if: always() && env.CODE_SCANNING == 'true'
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # 0.36.0
         with:
           version: v0.69.3
           skip-setup-trivy: true
@@ -169,7 +169,7 @@ jobs:
           output: trivy-fs.sarif
           trivyignores: .trivyignore.yaml
           skip-dirs: secrets
-      - uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52  # v3.38.2
+      - uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d  # v4.38.3
         if: always() && env.CODE_SCANNING == 'true' && hashFiles('trivy-fs.sarif') != ''
         with:
           sarif_file: trivy-fs.sarif
@@ -188,10 +188,10 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48  # v4.9.0
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294  # v5.0.0
         with:
           fail-on-severity: high
           deny-licenses: GPL-3.0-only, AGPL-3.0-only   # untuk dependensi NPM/Py; addons Odoo sendiri AGPL dan dikecualikan
@@ -211,7 +211,7 @@ jobs:
     env:
       CHECKOV_IMAGE: bridgecrew/checkov:3.3.21@sha256:9aefe56582004ebdac112fe85c3268dc4d3658231a8f023fb714ba9d29539d53
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       - name: Checkov (gate semua check FAILED)
@@ -228,7 +228,7 @@ jobs:
         run: |
           [ -f checkov.txt ] || exit 0
           { echo '### Checkov (FAILED saja)'; echo '```'; head -c 900000 checkov.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52  # v3.38.2
+      - uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d  # v4.38.3
         if: always() && env.CODE_SCANNING == 'true' && hashFiles('checkov.sarif/results_sarif.sarif', 'checkov.sarif') != ''
         with:
           sarif_file: checkov.sarif
