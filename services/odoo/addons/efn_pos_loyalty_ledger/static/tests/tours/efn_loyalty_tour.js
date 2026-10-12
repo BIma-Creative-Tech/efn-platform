@@ -139,14 +139,37 @@ registry.category("web_tour.tours").add("EfnPosLoyaltyRedeemTour", {
             pointsPayments(1),
             {
                 content: "baris pembayaran Poin EFN tampil",
-                trigger: `.paymentlines .paymentline .payment-name:contains("${POINTS_METHOD}")`,
+                trigger: `.paymentlines .paymentline .payment-infos:contains("${POINTS_METHOD}")`,
             },
             { content: "tombol tukar hilang setelah redeem", trigger: negate(REDEEM_BUTTON) },
             {
                 content: "baris Poin EFN bernilai 10.000 (dari reservasi)",
                 trigger: `.paymentlines .paymentline .payment-infos:contains("${POINTS_METHOD}"):has(.payment-amount:contains("10,000"))`,
             },
-            payBankAndSync(),
+            // Regresi: numpad saat baris Poin EFN terpilih tidak mengubah nominal & kasir tidak terjebak.
+            PaymentScreen.clickPaymentline(POINTS_METHOD, "10,000"),
+            PaymentScreen.clickNumpad("5"),
+            pointsPayments(1),
+            PaymentScreen.clickPaymentMethod("Bank"),
+            {
+                content: "baris Poin EFN tidak terpilih & Bank membawa sisa tagihan 40.000",
+                trigger: "body",
+                run: () => {
+                    const order = posmodel.getOrder();
+                    const selected = order.getSelectedPaymentline();
+                    if (selected?.payment_method_id?.efn_is_loyalty_points) {
+                        throw new Error("baris Poin EFN masih terpilih");
+                    }
+                    const bank = order.payment_ids.find((l) => l.payment_method_id.name === "Bank");
+                    if (!bank || Math.abs(bank.amount - 40000) > 0.001 || !order.isPaid()) {
+                        throw new Error(`Bank ${bank?.amount}, lunas=${order.isPaid()}`);
+                    }
+                },
+            },
+            PaymentScreen.clickValidate(),
+            ReceiptScreen.isShown(),
+            { content: "struk mencetak poin ditukar", trigger: `.pos-receipt .efn-loyalty-receipt:contains("100 poin")` },
+            Chrome.isSynced(),
             Chrome.endTour(),
         ].flat(),
 });

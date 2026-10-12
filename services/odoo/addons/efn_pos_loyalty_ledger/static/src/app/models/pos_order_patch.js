@@ -43,6 +43,8 @@ patch(PosOrder.prototype, {
             return false;
         }
         result.data.setAmount(valueIdr);
+        // Baris poin tidak boleh menjadi baris terpilih (read-only terhadap numpad).
+        this.selectPaymentline(undefined);
         this.efn_loyalty_points_redeemed = points || 0;
         this.efn_loyalty_redeem_value = valueIdr;
         return true;
@@ -58,6 +60,7 @@ patch(PosOrder.prototype, {
             return false;
         }
         result.data.setAmount(-valueIdr);
+        this.selectPaymentline(undefined);
         return true;
     },
 

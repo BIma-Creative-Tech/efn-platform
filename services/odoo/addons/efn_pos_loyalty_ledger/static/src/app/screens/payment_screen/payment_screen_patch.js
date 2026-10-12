@@ -53,12 +53,47 @@ patch(PaymentScreen.prototype, {
         );
     },
 
+    /**
+     * Baris Poin EFN READ-ONLY terhadap numpad (nominal = reservasi BFF; server menolak selisih).
+     * Akar bug G18: bila baris poin terpilih, input numpad yang diabaikan tetap tertahan di number buffer dan
+     * diterapkan ke baris berikutnya yang dipilih (mis. Bank menjadi Rp5) -> order kurang bayar, Validasi diam.
+     * Karena itu baris poin TIDAK PERNAH menjadi baris terpilih (pemilihan diabaikan, buffer dikosongkan) dan
+     * tombol tertunda diproses (`capture`) sebelum baris baru ditambahkan.
+     */
+    efnReleasePointsSelection() {
+        const order = this.currentOrder;
+        if (efnIsPointsPayment(order?.getSelectedPaymentline())) {
+            order.selectPaymentline(undefined);
+        }
+        this.numberBuffer.reset();
+    },
+
+    selectPaymentLine(uuid) {
+        const line = this.paymentLines.find((l) => l.uuid === uuid);
+        if (efnIsPointsPayment(line)) {
+            this.numberBuffer.capture();
+            this.efnReleasePointsSelection();
+            this.notification.add(_t("Nominal Poin EFN terkunci (sesuai penukaran)."), { type: "info" });
+            return;
+        }
+        return super.selectPaymentLine(...arguments);
+    },
+
     updateSelectedPaymentline(amount = false) {
-        if (efnIsPointsPayment(this.selectedPaymentLine)) {
-            // Nominal Poin EFN terkunci (= reservasi BFF; server menolak selisih).
+        const selected = this.selectedPaymentLine;
+        if (efnIsPointsPayment(selected) || (!selected && this.currentOrder?.efnPointsPayments().length)) {
+            // Input numpad saat baris poin (atau tidak ada baris) terpilih dibuang.
+            this.efnReleasePointsSelection();
             return;
         }
         return super.updateSelectedPaymentline(...arguments);
+    },
+
+    async addNewPaymentLine(paymentMethod) {
+        // Number buffer memproses tombol numpad secara tertunda (timeout). Tanpa capture, tombol yang ditekan saat
+        // baris poin terpilih diterapkan ke baris BARU (Bank = Rp5). Proses dulu terhadap seleksi saat ini.
+        this.numberBuffer.capture();
+        return await super.addNewPaymentLine(...arguments);
     },
 
     async deletePaymentLine(uuid) {
@@ -200,7 +235,7 @@ patch(PaymentScreen.prototype, {
             this.notification.add(_t("Order berubah; penukaran poin dibatalkan."), { type: "warning" });
             return;
         }
-        this.numberBuffer.reset();
+        this.efnReleasePointsSelection();
         this.notification.add(
             _t("%(points)s poin ditukar (%(value)s).", {
                 points: reserve.points,
