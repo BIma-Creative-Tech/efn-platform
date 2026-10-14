@@ -147,3 +147,71 @@ class TestEfnPosPaymentIntegrityRpc(TestPointOfSaleHttpCommon):
             "EFN r11 probe SEC-121 (Contact Creation membuat res.partner.bank): %s",
             "ditolak" if "error" in result else "DIIZINKAN",
         )
+
+    # --------------------------------------------------------- re-review G18
+    @staticmethod
+    def _error_name(payload):
+        """Nama exception dari respons JSON-RPC (None = diterima)."""
+        error = payload.get("error")
+        return (error.get("data") or {}).get("name", "error") if error else None
+
+    @staticmethod
+    def _jsonable(payload):
+        return json.loads(json.dumps(payload, default=str))
+
+    def test_sec125_cashier_rpc_cannot_mark_paid_outside_save(self):
+        draft_payload = self._order_payload([{"amount": 100.0, "payment_method_id": self.cash.id}])
+        draft_payload["state"] = "draft"
+        draft = self._sync_as_cashier(draft_payload)
+        self.assertEqual(draft.state, "draft")
+        new_paid = self._jsonable(self._order_payload([{"amount": 100.0, "payment_method_id": self.cash.id}]))
+        new_paid.pop("payment_ids")
+        original = self._sync_as_cashier(self._order_payload([{"amount": 100.0, "payment_method_id": self.bank.id}]))
+        refund = self.env["pos.order"].browse(original.refund()["res_id"])
+        self.authenticate("pos_user", "pos_user")
+        results = {}
+        with mute_logger("odoo.http"):
+            results["action_pos_order_paid"] = self._call_kw("pos.order", "action_pos_order_paid", [draft.ids])
+            results["write_state"] = self._call_kw("pos.order", "write", [draft.ids, {"state": "paid"}])
+            results["create_paid"] = self._call_kw("pos.order", "create", [new_paid])
+        # Wizard Payment backend = POS manager saja (ACL CE); jalur itu menjalankan validasi E-31 (tunai ditolak).
+        self.authenticate("pos_admin", "pos_admin")
+        with mute_logger("odoo.http"):
+            wizard = self._call_kw(
+                "pos.make.payment",
+                "create",
+                [{"payment_method_id": self.cash.id, "amount": refund.amount_total}],
+                {"context": {"active_id": refund.id}},
+            )
+            self.assertIn("result", wizard, wizard.get("error"))
+            results["wizard_refund_cash_manager"] = self._call_kw(
+                "pos.make.payment", "check", [[wizard["result"]]], {"context": {"active_id": refund.id}}
+            )
+        denied = {name: self._error_name(payload) for name, payload in results.items()}
+        _logger.info("EFN re-review probe SEC-125 (call_kw, jenis penolakan): %s", denied)
+        # Ditolak guard/validasi bisnis (UserError), bukan sekadar ACL.
+        self.assertEqual(denied, dict.fromkeys(results, "odoo.exceptions.UserError"))
+        self.assertEqual((draft.state, refund.state), ("draft", "draft"))
+        self.assertFalse(self.env["pos.order"].search([("uuid", "=", new_paid["uuid"])]))
+
+    def test_sec126_cashier_rpc_sync_foreign_commands_rejected(self):
+        paid = self._sync_as_cashier(self._order_payload([{"amount": 100.0, "payment_method_id": self.cash.id}]))
+        foreign = paid.payment_ids
+        self.authenticate("pos_user", "pos_user")
+        commands = {
+            "update": [1, foreign.id, {"payment_method_id": self.bank.id}],
+            "delete": [2, foreign.id],
+            "link": [4, foreign.id],
+        }
+        results = {}
+        for name, command in commands.items():
+            payload = self._jsonable(self._order_payload([{"amount": 100.0, "payment_method_id": self.cash.id}]))
+            payload["payment_ids"].append(command)
+            with mute_logger("odoo.http"):
+                results[name] = self._error_name(self._call_kw("pos.order", "sync_from_ui", [[payload]]))
+        _logger.info("EFN re-review probe SEC-126 (kasir sync_from_ui perintah asing): %s", results)
+        self.assertEqual(results, dict.fromkeys(commands, "odoo.exceptions.UserError"))
+        foreign.invalidate_recordset()
+        self.assertEqual(
+            (foreign.exists(), foreign.pos_order_id, foreign.payment_method_id), (foreign, paid, self.cash)
+        )

@@ -51,6 +51,8 @@ RPC_ALLOWLIST = {
     # efn_pos_loyalty_ledger (SEC-60): tombol supervisor = grup POS manager + record rule + company.
     ("efn.pos.loyalty.outbox", "action_efn_hold_approve"): "_efn_check_hold_decider",
     ("efn.pos.loyalty.outbox", "action_efn_hold_cancel"): "_efn_check_hold_decider",
+    # L-26 (SEC-128): supervisor menyetujui nilai restore yang ditolak BFF -> kirim ulang `restore_approved`.
+    ("efn.pos.loyalty.outbox", "action_efn_restore_approve"): "_efn_check_hold_decider",
     # efn_pos_refund_origin (G18, E-31): `_efn_refund_check_caller` = grup POS user + check_access(read) config +
     # company user + sesi terbuka; order asal dibaca dengan hak user (record rule) + cek company; hanya id metode &
     # nominal alokasi (tanpa data pelanggan).

@@ -89,6 +89,11 @@ Mematikan parameter ini (False) **membuka semua promo ber-OTP tanpa verifikasi**
   menandai. Alur resmi ganti nomor oleh pelanggan (OTP nomor lama + baru) **belum ada** di Odoo; sampai ada, perubahan
   lewat admin (SOP).
 
+### Re-review G18 SEC-125 (versi 19.0.1.10.0)
+Dependency `efn_pos_refund_origin`. Order dengan reward ber-OTP tidak bisa dilunasi di luar `_process_saved_order`
+(`action_pos_order_paid` / write state lewat RPC ditolak). Wizard Payment backend menjalankan gerbang OTP yang sama
+seperti sync (reward ber-OTP tanpa OTP terverifikasi -> ditolak).
+
 ## Data pribadi
 Nomor HP mentah tidak disimpan di modul ini (nomor sumber tetap di `res.partner`; challenge hanya menyimpan mask `62812****890` + referensi `partner_id`); token dihapus setelah consume/kedaluwarsa; challenge dihapus setelah 30 hari. Log hanya memuat nomor ter-mask.
 

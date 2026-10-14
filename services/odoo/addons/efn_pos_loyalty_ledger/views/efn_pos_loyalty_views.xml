@@ -97,8 +97,14 @@
                 <header>
                     <!-- SEC-60: keputusan supervisor atas reverse yang ditahan (cek grup & company di server). -->
                     <button name="action_efn_hold_approve" type="object" string="Setujui &amp; kirim reverse"
-                            class="btn-primary" invisible="state != 'hold'" groups="point_of_sale.group_pos_manager"
+                            class="btn-primary" invisible="state != 'hold' or last_error == 'restore_value_mismatch'"
+                            groups="point_of_sale.group_pos_manager"
                             confirm="Reverse akan dikirim apa adanya, termasuk pengembalian poin yang ditukar. Lanjutkan?"/>
+                    <!-- L-26: BFF menolak nilai restore poin; supervisor menyetujui nilai (restore_approved). -->
+                    <button name="action_efn_restore_approve" type="object" string="Setujui nilai restore"
+                            class="btn-primary" invisible="state != 'hold' or last_error != 'restore_value_mismatch'"
+                            groups="point_of_sale.group_pos_manager"
+                            confirm="BFF menolak nilai pengembalian poin. Reverse dikirim ulang dengan persetujuan Anda (dibatasi sisa poin yang ditukar, tercatat). Lanjutkan?"/>
                     <button name="action_efn_hold_cancel" type="object" string="Batalkan reverse"
                             invisible="state != 'hold'" groups="point_of_sale.group_pos_manager"
                             confirm="Tidak ada clawback/restore otomatis; penyesuaian poin dilakukan manual. Lanjutkan?"/>
@@ -117,6 +123,7 @@
                             <field name="eligible_amount"/>
                             <field name="refund_ratio" invisible="kind != 'reverse'"/>
                             <field name="points_restored_value" invisible="kind != 'reverse'"/>
+                            <field name="restore_approved" invisible="kind != 'reverse'"/>
                             <field name="attempt_count"/>
                             <field name="next_attempt_at"/>
                             <field name="last_error"/>

@@ -530,6 +530,7 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
                     "value_idr": 10000,
                     "payment_amount": 10000,
                     "idempotency_key": f"pos_redeem:{uuid}",
+                    "order_goods_incl": 50000,
                 }
             ],
         )
@@ -679,6 +680,65 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         self.assertEqual(order.state, "draft")
         self.assertFalse(order.payment_ids.filtered(lambda p: p.payment_method_id == self.points_pm))
 
+    def test_sec125_draft_points_amount_must_match_reservation(self):
+        """Re-review SEC-125: draft dengan reservasi aktif tetapi nominal Poin EFN != value_idr -> dihapus."""
+        uuid = self.create_random_uid()
+        self._reserve(uuid)  # value_idr 10.000
+        Order = self.env["pos.order"]
+
+        def sync(**kwargs):
+            # Sync ulang draft: core menghapus `uuid` dari dict payload -> cari dengan uuid tetap.
+            Order.sync_from_ui([self._order_data([(self.product, 1)], uuid=uuid, draft=True, **kwargs)])
+            return Order.search([("uuid", "=", uuid)])
+
+        for points in (20000, 9000):
+            order = sync(points=points)
+            with self.subTest(points=points):
+                self.assertFalse(order.payment_ids.filtered(lambda p: p.payment_method_id == self.points_pm))
+        order = sync(points=10000, customer=self.member_b)
+        self.assertFalse(
+            order.payment_ids.filtered(lambda p: p.payment_method_id == self.points_pm),
+            "partner berbeda dari reservasi -> dihapus",
+        )
+        order = sync(points=10000)
+        points_lines = order.payment_ids.filtered(lambda p: p.payment_method_id == self.points_pm)
+        self.assertEqual(points_lines.mapped("amount"), [10000.0], "cocok reservasi -> dipertahankan")
+
+    def test_sec125_points_draft_paid_only_through_validated_save(self):
+        """Skenario A review: draft berpoin sah tidak bisa dilunasi lewat action_pos_order_paid/write state; wizard
+        Payment backend menjalankan validasi E-30 lengkap dan commit redeem."""
+        uuid = self.create_random_uid()
+        self._reserve(uuid)
+        order = self._sync(self._order_data([(self.product, 1)], uuid=uuid, draft=True, points=10000))
+        cashier = self._cashier("efn_rr_loy_kasir")
+        manager = new_test_user(
+            self.env,
+            login="efn_rr_loy_mgr",
+            groups="base.group_user,point_of_sale.group_pos_manager",
+            company_id=self.env.company.id,
+        )
+        # Sisa tunai dicatat (sudo/server) sehingga order lunas secara nominal; transisinya yang diuji.
+        order.add_payment({"pos_order_id": order.id, "payment_method_id": self.cash_pm1.id, "amount": 40000.0})
+        for user in (cashier, manager):
+            for attempt in (
+                lambda u=user: order.with_user(u).action_pos_order_paid(),
+                lambda u=user: order.with_user(u).write({"state": "paid"}),
+            ):
+                with self.assertRaises(UserError) as caught:
+                    attempt()
+                self.assertNotIsInstance(caught.exception, AccessError)
+        self.assertEqual(order.state, "draft")
+        self.assertFalse(self._outbox(order, "redeem_commit"))
+        wizard = (
+            self.env["pos.make.payment"]
+            .with_user(manager)  # ACL CE: wizard Payment backend hanya POS manager
+            .with_context(active_id=order.id)
+            .create({"payment_method_id": self.cash_pm1.id, "amount": 0})
+        )
+        wizard.check()
+        self.assertEqual(order.state, "paid")
+        self.assertTrue(self._outbox(order, "redeem_commit"), "validasi & pemrosesan Poin EFN berjalan")
+
     def test_release_on_remove_from_ui(self):
         uuid = self.create_random_uid()
         self._reserve(uuid)
@@ -775,6 +835,7 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
                     "refunded_eligible_amount": 50000,
                     "refund_ratio": 0.5,
                     "points_restored_value": 0,
+                    "refund_goods_incl": 50000,
                 }
             ],
         )
@@ -1140,7 +1201,10 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
     # ============================================================ review r11
     def _cashier(self, login="efn_r11_loy_kasir"):
         return new_test_user(
-            self.env, login=login, groups="point_of_sale.group_pos_user", company_id=self.env.company.id
+            self.env,
+            login=login,
+            groups="base.group_user,point_of_sale.group_pos_user",
+            company_id=self.env.company.id,
         )
 
     def _redeem_order(self):
@@ -1211,9 +1275,9 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
             refund = self._sync(self._refund_data(original, qty=1, points_restore=5000))
         self.assertEqual(refund.state, "paid")
         self.assertEqual(locked, [original.id])
-        with patch.object(self.env.cr, "execute", wraps=self.env.cr.execute) as spy:
+        with patch("odoo.addons.efn_pos_loyalty_ledger.models.pos_order.touch_row") as touch:
             self.env["pos.order"]._efn_loyalty_lock_origin(original)
-        self.assertIn("FOR UPDATE", str(spy.call_args.args[0]))
+        touch.assert_called_once_with(self.env.cr, "pos_order", original.id)  # SEC-127: UPDATE no-op
 
     def test_sec118_commit_sends_actual_points_payment(self):
         """SEC-118: `payment_amount` = Σ baris pembayaran Poin EFN aktual, bukan salinan reservasi."""
@@ -1272,3 +1336,66 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         # Field lain tetap bisa diubah.
         self.points_pm.with_user(manager).write({"name": "Poin EFN (ganti nama)"})
         self.assertTrue(self.points_pm.efn_is_loyalty_points and self.points_pm.active)
+
+    # ======================================================= L-26 (SEC-128)
+    def _mismatch_reverse(self):
+        original = self._paid_original(points_value=10000)
+        refund = self._sync(self._refund_data(original, qty=1, points_restore=5000))
+        reverse = self._outbox(refund, "reverse")
+        self.responses[REVERSE] = BffResponse(409, {"error": {"code": "restore_value_mismatch", "message": "x"}})
+        self._run_outbox()
+        return refund, reverse
+
+    def test_l26_commit_and_reverse_send_goods_incl(self):
+        original = self._paid_original(points_value=10000)
+        (commit,) = self._calls_to(COMMIT)
+        self.assertEqual(commit["order_goods_incl"], 100000)
+        refund = self._sync(self._refund_data(original, qty=1, points_restore=5000))
+        self.responses[REVERSE] = BffResponse(200, {"points_clawed_back": 5, "points_restored": 50})
+        self._run_outbox()
+        (payload,) = self._calls_to(REVERSE)
+        self.assertEqual((payload["refund_goods_incl"], payload["points_restored_value"]), (50000, 5000))
+        self.assertNotIn("restore_approved", payload)
+        self.assertEqual(self._outbox(refund, "reverse").state, "done")
+
+    def test_l26_restore_mismatch_held_then_supervisor_approves(self):
+        refund, reverse = self._mismatch_reverse()
+        self.assertEqual((reverse.state, reverse.last_error), ("hold", "restore_value_mismatch"))
+        self.assertEqual(refund.efn_loyalty_state, "review")
+        self.assertTrue(reverse.activity_flagged)
+        cashier = self._cashier("efn_l26_kasir")
+        with self.assertRaises(AccessError):
+            reverse.with_user(cashier).action_efn_restore_approve()
+        with self.assertRaises(AccessError):
+            reverse.with_user(cashier).write({"restore_approved": True})
+        manager = self._manager("efn_l26_mgr")
+        with self.assertRaises(UserError):
+            reverse.with_user(manager).action_efn_hold_approve()  # kirim apa adanya = 409 lagi
+        with self.assertRaises(AccessError):
+            reverse.with_user(manager).write({"restore_approved": True})
+        reverse.with_user(manager).action_efn_restore_approve()
+        self.assertEqual((reverse.state, reverse.restore_approved), ("pending", True))
+        self.assertTrue(
+            reverse.message_ids.filtered(lambda m: "restore_approved" in str(m.body)), "persetujuan tercatat"
+        )
+        self.responses[REVERSE] = BffResponse(200, {"points_clawed_back": 5, "points_restored": 50})
+        self._run_outbox()
+        last = self._calls_to(REVERSE)[-1]
+        self.assertIs(last["restore_approved"], True)
+        self.assertEqual(reverse.state, "done")
+        with self.assertRaises(UserError):
+            reverse.with_user(manager).action_efn_restore_approve()
+
+    def test_l26_restore_mismatch_supervisor_rejects(self):
+        _refund, reverse = self._mismatch_reverse()
+        reverse.with_user(self._manager("efn_l26_mgr2")).action_efn_hold_cancel()
+        self.assertEqual((reverse.state, reverse.last_error), ("skipped", "supervisor_cancelled"))
+        self._run_outbox()
+        self.assertEqual(len(self._calls_to(REVERSE)), 1, "tidak dikirim ulang")
+
+    def test_l26_restore_approve_only_for_mismatch_hold(self):
+        original = self._paid_original(points_value=10000)
+        held = self._outbox(self._sync(self._refund_data(original, qty=1)), "reverse")  # hold SEC-60
+        self.assertEqual(held.state, "hold")
+        with self.assertRaises(UserError):
+            held.with_user(self._manager("efn_l26_mgr3")).action_efn_restore_approve()

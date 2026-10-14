@@ -22,6 +22,12 @@ Fondasi addons EFN di Odoo CE 19 (satu database multi-company, ADR-001). TLS/kre
   klien `call_kw`/`/json/2`); dibersihkan di `finally`. Bukan model, jadi tidak menambah metode RPC.
 - Dipakai `POS_PAYMENT_SYNC_SCOPE` (`pos.order._process_order`) oleh guard `pos.payment` di `efn_pos_refund_origin`
   dan `efn_pos_loyalty_ledger`.
+- Re-review G18:
+  - Setiap penanda membawa **token** (`scope_tokens`), mis. `("id", order.id)` / `("uuid", uuid)` (SEC-126). Guard
+    memeriksa kepemilikan record, bukan hanya `in_scope`.
+  - `POS_ORDER_SAVE_SCOPE`: order yang sedang divalidasi `_process_saved_order` (SEC-125).
+  - `touch_row(cr, table, id)`: UPDATE no-op untuk menyerialkan transaksi di REPEATABLE READ (SEC-127). Diuji dengan
+    dua koneksi nyata, termasuk kontrol bahwa `SELECT … FOR UPDATE` saja tidak cukup.
 
 ## SEC-58 (r6, High) — tidak ada metode RPC publik (Gelombang 13c, versi 19.0.1.6.0)
 - `efn.bff.client` adalah proxy **service key BFF**. Odoo mengekspos setiap metode tanpa awalan `_` (dan tanpa `@api.private`) ke `/web/dataset/call_kw` dan `/json/2` hanya dengan `browse(ids)` — tanpa cek grup/record rule/company (`odoo/service/model.py::get_public_method`, diverifikasi di image 19.0). Dulu `post`/`get` publik → kasir mana pun bisa mencetak poin, me-restore poin, mengirim OTP ke nomor sembarang, dan memalsukan penyelesaian erasure.

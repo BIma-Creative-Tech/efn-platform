@@ -14,6 +14,19 @@ NEGATIF (uang keluar) order:
   `efn.pos.refund.unlinked_return_mode` = ``cash`` | ``deny`` (``deny``: retur tanpa struk ditolak).
 - Pelanggaran -> `UserError` (sync ditolak; kasir memperbaiki pembayaran). Jenis order ditentukan server dari
   baris (bukan flag klien `is_refund`, pola SEC-59).
+
+Integritas order POS (re-review G18, berlaku untuk semua modul efn POS; modul ini `auto_install` dan menjadi
+dependency `efn_pos_loyalty_ledger`/`efn_pos_otp_gate`):
+
+- **SEC-125:** order hanya boleh berpindah dari draft/cancel ke paid/done/invoiced di dalam
+  `_process_saved_order` (sync POS atau wizard pembayaran backend `pos.make.payment`), tempat seluruh validasi
+  E-30 (Poin EFN), E-31 (metode asal), SEC-116 (`is_change`) dan gerbang OTP promo berjalan. Jalur lain
+  (`action_pos_order_paid` lewat RPC, `write({'state': 'paid'})`, `create` order ber-state paid di luar sync)
+  ditolak untuk non-superuser. `amount_paid` dihitung ulang dari pembayaran nyata sebelum validasi.
+- **SEC-126:** penanda sync membawa token order yang sedang disinkron (id order lama / uuid order baru).
+  Perintah `payment_ids`/`lines` payload yang menunjuk record milik order lain (`[1|2|3|4, id]`, `[6, 0, ids]`)
+  ditolak sebelum diproses core; guard `pos.payment` memeriksa kepemilikan record yang disentuh.
+- **SEC-127:** order asal "disentuh" (`UPDATE ... SET write_date = write_date`) sebelum sisa per metode dihitung.
 """
 
 import logging
@@ -21,13 +34,22 @@ import logging
 from odoo import _, api, models
 from odoo.exceptions import UserError
 
-from odoo.addons.efn_core.scope import POS_PAYMENT_SYNC_SCOPE, internal_scope
+from odoo.addons.efn_core.scope import (
+    POS_ORDER_SAVE_SCOPE,
+    POS_PAYMENT_SYNC_SCOPE,
+    internal_scope,
+    scope_tokens,
+    touch_row,
+)
 
 _logger = logging.getLogger(__name__)
 
 UNLINKED_MODE_PARAM = "efn.pos.refund.unlinked_return_mode"
 UNLINKED_MODES = ("cash", "deny")
 PAID_STATES = ("paid", "done", "invoiced")
+OPEN_STATES = ("draft", "cancel")
+# Field x2many payload sync yang diperiksa kepemilikannya (SEC-126).
+GUARDED_X2M = ("payment_ids", "lines")
 
 
 class PosOrder(models.Model):
@@ -140,8 +162,9 @@ class PosOrder(models.Model):
             invalid.write({"is_change": False})
 
     def _efn_lock_origin(self, origin):
-        """SEC-117 (L-25e): serialkan refund paralel atas order asal yang sama sebelum menghitung sisa per metode."""
-        self.env.cr.execute("SELECT id FROM pos_order WHERE id = %s FOR UPDATE", (origin.id,))
+        """SEC-117/SEC-127: serialkan refund paralel atas order asal yang sama sebelum menghitung sisa per metode
+        (UPDATE no-op -> transaksi kedua gagal serialisasi dan di-retry Odoo dengan snapshot baru)."""
+        touch_row(self.env.cr, "pos_order", origin.id)
 
     def _efn_refund_origin_validate(self):
         self.ensure_one()
@@ -198,13 +221,93 @@ class PosOrder(models.Model):
 
     def _process_saved_order(self, draft):
         self.ensure_one()
-        if not draft and self.state != "cancel":
-            self._efn_refund_origin_validate()
-        elif draft:
-            self._efn_recompute_change_flags()
-        return super()._process_saved_order(draft)
+        # SEC-125: satu-satunya titik transisi ke paid/done (sync & wizard pembayaran backend memanggil ini).
+        with internal_scope(self.env, POS_ORDER_SAVE_SCOPE, {("id", self.id)}):
+            if not draft and self.state != "cancel":
+                # `amount_paid` bisa ditulis klien (RPC) -> selalu dari pembayaran nyata sebelum cek lunas core.
+                paid = self._compute_amount_paid()
+                if self.currency_id.compare_amounts(paid, self.amount_paid) != 0:
+                    self.write({"amount_paid": paid})
+                self._efn_refund_origin_validate()
+            elif draft:
+                self._efn_recompute_change_flags()
+            return super()._process_saved_order(draft)
 
     def _process_order(self, order, existing_order):
-        # SEC-113: jalur sync resmi -> pembayaran boleh dibuat/diubah (guard pos.payment di luar jalur ini).
-        with internal_scope(self.env, POS_PAYMENT_SYNC_SCOPE):
+        # SEC-113/SEC-126: jalur sync resmi, terbatas pada order yang sedang disinkron.
+        self._efn_check_sync_commands(order, existing_order)
+        tokens = set()
+        if existing_order:
+            tokens.add(("id", existing_order.id))
+        if order.get("uuid"):
+            tokens.add(("uuid", order["uuid"]))
+        with internal_scope(self.env, POS_PAYMENT_SYNC_SCOPE, tokens):
             return super()._process_order(order, existing_order)
+
+    @api.model
+    def _efn_check_sync_commands(self, order, existing_order):
+        """SEC-126: perintah x2many payload hanya boleh menyentuh record milik order yang disinkron.
+
+        CREATE (0) selalu boleh (inverse dipaksa core ke order ini). UPDATE/DELETE/UNLINK/LINK (1/2/3/4) dan SET
+        (6) hanya untuk id yang sudah menjadi milik `existing_order`; order baru tidak punya record lama. CLEAR (5)
+        hanya menyentuh milik order sendiri.
+        """
+        for fname in GUARDED_X2M:
+            commands = order.get(fname) or []
+            if not isinstance(commands, (list, tuple)):
+                self._efn_sync_command_reject(fname, "format")
+            own = set(existing_order[fname].ids) if existing_order else set()
+            for command in commands:
+                if not isinstance(command, (list, tuple)) or not command:
+                    self._efn_sync_command_reject(fname, "format")
+                op = command[0]
+                if op in (0, 5):
+                    continue
+                if op in (1, 2, 3, 4):
+                    ids = [command[1]] if len(command) > 1 else [None]
+                elif op == 6:
+                    ids = list(command[2] or []) if len(command) > 2 else [None]
+                else:
+                    self._efn_sync_command_reject(fname, f"op_{op}")
+                if any(not isinstance(i, int) or i not in own for i in ids):
+                    self._efn_sync_command_reject(fname, f"foreign_{op}")
+
+    @api.model
+    def _efn_sync_command_reject(self, fname, code):
+        _logger.warning("EFN POS: perintah %s payload sync ditolak (%s, SEC-126)", fname, code)
+        raise UserError(_("Data order tidak sah: baris/pembayaran milik order lain tidak dapat diubah."))
+
+    # ------------------------------------------------- SEC-125 transisi state
+    def _efn_transition_allowed(self):
+        """Order yang sedang divalidasi `_process_saved_order` (penanda per cursor, bukan context)."""
+        if self.env.su:
+            return True
+        tokens = scope_tokens(self.env, POS_ORDER_SAVE_SCOPE)
+        return all(("id", order.id) in tokens for order in self)
+
+    def _efn_transition_reject(self):
+        _logger.warning(
+            "EFN POS: user %s mencoba menandai order %s lunas di luar alur resmi (SEC-125)", self.env.uid, self.ids
+        )
+        raise UserError(
+            _(
+                "Order POS hanya bisa dilunasi lewat layar kasir atau tombol Payment (validasi Poin EFN, refund, "
+                "dan OTP promo wajib berjalan)."
+            )
+        )
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        if not self.env.su:
+            tokens = scope_tokens(self.env, POS_PAYMENT_SYNC_SCOPE)
+            for vals in vals_list:
+                if vals.get("state") in PAID_STATES and ("uuid", vals.get("uuid")) not in tokens:
+                    self._efn_transition_reject()
+        return super().create(vals_list)
+
+    def write(self, vals):
+        if vals.get("state") in PAID_STATES:
+            pending = self.filtered(lambda o: o.state in OPEN_STATES)
+            if pending and not pending._efn_transition_allowed():
+                pending._efn_transition_reject()
+        return super().write(vals)

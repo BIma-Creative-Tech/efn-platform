@@ -339,7 +339,7 @@ jobs:
       # Jumlah test tour yang WAJIB berjalan (HttpCase di-skip diam-diam bila Chrome/websocket tidak ada).
       # 5 (OTP gate 3 + gateway 2) + 4 Poin EFN (Gelombang 13b) + 4 KDS efn_pos_kds (Gelombang 14)
       # + 1 KDS cetak cadangan saat tiket gagal (Gelombang 15, SEC-76). Total terhitung runner 20.
-      EFN_TOUR_MIN_TESTS: "27"
+      EFN_TOUR_MIN_TESTS: "29"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:

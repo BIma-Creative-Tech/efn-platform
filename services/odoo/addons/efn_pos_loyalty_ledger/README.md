@@ -39,6 +39,24 @@ Poin EFN di POS Odoo CE 19: **earn** dari penjualan, **tukar poin** (wajib OTP p
   (`migrations/19.0.2.0.0/post-migrate.py`). Hook install/uninstall E-24 dihapus.
 - **Rekonsiliasi (K-18-6):** Σ `pos.payment` Poin EFN per PT/tanggal vs ledger BFF -> ETL (`loyalty_recon.py`).
 
+## Re-review G18 + L-26 (versi 19.0.2.2.0)
+- **Dependency `efn_pos_refund_origin`** (SEC-125/126/129): guard transisi lunas dan kepemilikan pembayaran di sync.
+  Penanda sync milik modul ini dihapus; pakai penanda bertoken dari `efn_pos_refund_origin`.
+- **SEC-125:** draft dengan pembayaran Poin EFN dipertahankan hanya bila cocok dengan reservasi aktif order. Syaratnya:
+  partner sama, setiap baris positif, dan jumlah = `value_idr` (toleransi 0). Selain itu baris poin dihapus
+  (`_efn_loyalty_draft_mismatch`). Draft berpoin tidak bisa dilunasi lewat `action_pos_order_paid`/write state.
+  Wizard Payment backend menjalankan validasi E-30 lengkap dan commit.
+- **SEC-127:** `_efn_loyalty_lock_origin` = `touch_row` (UPDATE no-op).
+- **L-26 (SEC-128):**
+  - `commit` mengirim `order_goods_incl` (Rp bulat > 0 = nilai barang incl. pajak order, hitung server).
+  - `reverse` mengirim `refund_goods_incl` (Rp >= 0).
+  - `409 restore_value_mismatch` pada reverse -> outbox `hold` (order `review`, aktivitas supervisor), bukan `failed`.
+  - POS manager menyetujui lewat **`action_efn_restore_approve`** (tombol "Setujui nilai restore", masuk
+    `RPC_ALLOWLIST`, tercatat di chatter + log). Reverse lalu dikirim ulang dengan `restore_approved: true`.
+  - Menolak = `action_efn_hold_cancel` (batal).
+  - `action_efn_hold_approve` menolak hold jenis ini, karena kirim apa adanya akan ditolak lagi.
+  - Kasir tidak punya ACL outbox, jadi tidak bisa mengisi `restore_approved` (field hanya diisi aksi supervisor).
+
 ## Review r11 (L-25a/c/e/f/g, versi 19.0.2.1.0)
 - **SEC-113:** pembayaran metode Poin EFN hanya dibuat/diubah/dihapus di jalur sync resmi (`models/pos_payment.py`,
   penanda per cursor `efn_core/scope.py`), **juga pada order draft** (wizard pembayaran backend tidak bisa "membayar

@@ -11,8 +11,8 @@ program reward di server, bukan flag klien).
 from unittest.mock import patch
 
 from odoo import Command
-from odoo.exceptions import UserError, ValidationError
-from odoo.tests import tagged
+from odoo.exceptions import AccessError, UserError, ValidationError
+from odoo.tests import new_test_user, tagged
 
 from odoo.addons.efn_core.models.efn_bff_client import BffResponse, EfnBffError
 from odoo.addons.point_of_sale.tests.common import TestPoSCommon
@@ -409,6 +409,58 @@ class TestEfnPosOtpGate(TestPoSCommon):
             with self.assertRaises(UserError):
                 self._sync(data)
         self.assertFalse(self.env["pos.order"].search([("uuid", "=", data["uuid"])]))
+        self.assertFalse(self._consume_calls())
+
+    def test_sec125_gated_reward_cannot_skip_gate_outside_sync(self):
+        """Skenario C re-review G18: reward ber-OTP yang ditambahkan kasir ke draft lewat RPC tidak bisa dilunasi
+        tanpa OTP, baik lewat action_pos_order_paid/write state (ditolak) maupun wizard Payment (gerbang berjalan)."""
+        cashier = new_test_user(
+            self.env,
+            login="efn_rr_otp_kasir",
+            groups="base.group_user,point_of_sale.group_pos_user",
+            company_id=self.env.company.id,
+        )
+        manager = new_test_user(
+            self.env,
+            login="efn_rr_otp_mgr",
+            groups="base.group_user,point_of_sale.group_pos_manager",
+            company_id=self.env.company.id,
+        )
+        with self._patch_bff():
+            order = self._sync(self._order_data(draft=True))
+            self.env["pos.order.line"].with_user(cashier).create(
+                {
+                    "order_id": order.id,
+                    "product_id": self.reward.discount_line_product_id.id,
+                    "qty": 1,
+                    "price_unit": -10.0,
+                    "price_subtotal": -10.0,
+                    "price_subtotal_incl": -10.0,
+                    "is_reward_line": True,
+                    "reward_id": self.reward.id,
+                }
+            )
+            order.add_payment(
+                {"pos_order_id": order.id, "payment_method_id": self.cash_pm1.id, "amount": order.amount_total}
+            )
+            for attempt in (
+                lambda: order.with_user(cashier).action_pos_order_paid(),
+                lambda: order.with_user(cashier).write({"state": "paid"}),
+            ):
+                with self.assertRaises(UserError) as caught:
+                    attempt()
+                self.assertNotIsInstance(caught.exception, AccessError)
+            wizard = (
+                self.env["pos.make.payment"]
+                .with_user(manager)
+                .with_context(active_id=order.id)
+                .create({"payment_method_id": self.cash_pm1.id, "amount": 0})
+            )
+            with self.assertRaises(UserError) as caught:
+                wizard.check()
+            self.assertNotIsInstance(caught.exception, AccessError)
+            self.assertIn("OTP", str(caught.exception))
+        self.assertEqual(order.state, "draft")
         self.assertFalse(self._consume_calls())
 
     def test_browser_flag_alone_is_not_trusted(self):

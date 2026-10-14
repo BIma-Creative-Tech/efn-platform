@@ -1,16 +1,20 @@
 """Review r11 (L-25): integritas pembayaran POS di luar sync (SEC-113), `is_change` dihitung ulang (SEC-116),
 kunci order asal saat refund (SEC-117), dan modul terpasang otomatis (SEC-122).
+Re-review G18: transisi ke paid hanya lewat `_process_saved_order` (SEC-125), penanda sync terbatas pada order
+yang disinkron (SEC-126), kunci order asal = UPDATE no-op (SEC-127; uji dua koneksi nyata di
+``efn_core/tests/test_scope.py``), dependency/instal di DB lama (SEC-129).
 
 Percobaan lewat RPC nyata kasir (``/web/dataset/call_kw``) ada di ``test_payment_integrity_rpc.py`` (tag
 ``efn_tour``); di sini ORM dengan ``with_user(kasir)`` = hak yang sama dengan RPC (ACL + override, tanpa sudo).
 """
 
+from contextlib import contextmanager
 from unittest.mock import patch
 
-from odoo.exceptions import UserError
+from odoo.exceptions import AccessError, UserError
 from odoo.tests import new_test_user, tagged
 
-from odoo.addons.efn_core.scope import POS_PAYMENT_SYNC_SCOPE, in_scope
+from odoo.addons.efn_core.scope import POS_PAYMENT_SYNC_SCOPE, in_scope, internal_scope
 from odoo.addons.point_of_sale.tests.common import TestPoSCommon
 
 
@@ -23,16 +27,26 @@ class TestEfnPosPaymentIntegrity(TestPoSCommon):
         cls.product = cls.create_product("Produk Integritas Uji", cls.categ_basic, 50000.0)
         company = cls.config.company_id
         cls.cashier = new_test_user(
-            cls.env, login="efn_r11_kasir", groups="point_of_sale.group_pos_user", company_id=company.id
+            cls.env, login="efn_r11_kasir", groups="base.group_user,point_of_sale.group_pos_user", company_id=company.id
         )
         cls.pos_manager = new_test_user(
-            cls.env, login="efn_r11_manajer", groups="point_of_sale.group_pos_manager", company_id=company.id
+            cls.env,
+            login="efn_r11_manajer",
+            groups="base.group_user,point_of_sale.group_pos_manager",
+            company_id=company.id,
         )
 
     def setUp(self):
         super().setUp()
         self.open_new_session()
         self.env["ir.config_parameter"].sudo().set_param("efn.pos.refund.unlinked_return_mode", "cash")
+
+    @contextmanager
+    def assertGuard(self):
+        """Ditolak guard efn (`UserError` bisnis), bukan kebetulan oleh ACL (`AccessError` turunan UserError)."""
+        with self.assertRaises(UserError) as caught:
+            yield
+        self.assertNotIsInstance(caught.exception, AccessError, str(caught.exception))
 
     def _sync(self, data):
         self.env["pos.order"].sync_from_ui([data])
@@ -59,20 +73,20 @@ class TestEfnPosPaymentIntegrity(TestPoSCommon):
         payment = order.payment_ids
         for user in (self.cashier, self.pos_manager):
             as_user = payment.with_user(user)
-            with self.assertRaises(UserError):
+            with self.assertGuard():
                 as_user.write({"payment_method_id": self.bank_pm1.id})
-            with self.assertRaises(UserError):
+            with self.assertGuard():
                 as_user.write({"amount": 1.0})
-            with self.assertRaises(UserError):
+            with self.assertGuard():
                 as_user.write({"is_change": True})
-            with self.assertRaises(UserError):
+            with self.assertGuard():
                 self.env["pos.payment"].with_user(user).create(
                     {"pos_order_id": order.id, "payment_method_id": self.cash_pm1.id, "amount": 1000.0}
                 )
-            with self.assertRaises(UserError):
+            with self.assertGuard():
                 as_user.unlink()
         # Context RPC tidak bisa membuka jalur sync (penanda per cursor, bukan context).
-        with self.assertRaises(UserError):
+        with self.assertGuard():
             payment.with_user(self.cashier).with_context(**{POS_PAYMENT_SYNC_SCOPE: True}).write({"amount": 1.0})
         self.assertFalse(in_scope(self.env, POS_PAYMENT_SYNC_SCOPE), "penanda tidak tertinggal setelah sync")
         payment.invalidate_recordset()
@@ -84,7 +98,7 @@ class TestEfnPosPaymentIntegrity(TestPoSCommon):
         draft_data["state"] = "draft"
         draft = self._sync(draft_data)
         self.assertEqual(draft.state, "draft")
-        with self.assertRaises(UserError):
+        with self.assertGuard():
             draft.payment_ids.with_user(self.cashier).write({"pos_order_id": paid.id})
 
     def test_sec113_draft_order_and_server_paths_unaffected(self):
@@ -185,16 +199,126 @@ class TestEfnPosPaymentIntegrity(TestPoSCommon):
         self.assertEqual(refund.state, "paid")
         self.assertEqual(calls[:2], [("lock", original.id), ("remaining", original.id)])
 
-    def test_sec117_lock_statement_is_for_update(self):
+    def test_sec127_lock_touches_origin_row(self):
+        """SEC-127: kunci = UPDATE no-op baris order asal (`efn_core.scope.touch_row`), bukan SELECT FOR UPDATE."""
         original = self._sale([(self.cash_pm1, 50000)])
-        with patch.object(self.env.cr, "execute", wraps=self.env.cr.execute) as spy:
+        target = "odoo.addons.efn_pos_refund_origin.models.pos_order.touch_row"
+        with patch(target) as touch:
             self.env["pos.order"]._efn_lock_origin(original)
-        locks = [c.args for c in spy.call_args_list if "FOR UPDATE" in str(c.args[0])]
-        self.assertEqual(locks, [("SELECT id FROM pos_order WHERE id = %s FOR UPDATE", (original.id,))])
+        touch.assert_called_once_with(self.env.cr, "pos_order", original.id)
+        before = original.write_date
+        self.env["pos.order"]._efn_lock_origin(original)  # SQL nyata: tidak mengubah nilai apa pun
+        original.invalidate_recordset()
+        self.assertEqual(original.write_date, before)
 
-    # ------------------------------------------------------------- SEC-122
+    # ------------------------------------------------------------- SEC-122/129
     def test_sec122_auto_install(self):
         module = self.env["ir.module.module"].search([("name", "=", "efn_pos_refund_origin")])
         self.assertTrue(module.auto_install)
         self.assertEqual(module.state, "installed")
         self.assertEqual(set(module.dependencies_id.mapped("name")), {"point_of_sale", "efn_core"})
+        # SEC-129: modul POS efn yang memakai guard menjadikannya dependency (ikut terpasang saat `-u` DB lama).
+        dependents = self.env["ir.module.module.dependency"].search([("name", "=", "efn_pos_refund_origin")])
+        self.assertLessEqual({"efn_pos_loyalty_ledger", "efn_pos_otp_gate"}, set(dependents.module_id.mapped("name")))
+
+    # ------------------------------------------------------------- SEC-125
+    def _draft(self, payments):
+        data = self.create_ui_order_data([(self.product, 1)], payments=payments)
+        data["state"] = "draft"
+        return self._sync(data)
+
+    def _wizard(self, order, user, method, amount):
+        return (
+            self.env["pos.make.payment"]
+            .with_user(user)
+            .with_context(active_id=order.id)
+            .create({"payment_method_id": method.id, "amount": amount})
+        )
+
+    def test_sec125_paid_only_through_validated_save(self):
+        draft = self._draft([(self.cash_pm1, 50000)])
+        for user in (self.cashier, self.pos_manager):
+            with self.assertGuard():
+                draft.with_user(user).action_pos_order_paid()
+            for state in ("paid", "done", "invoiced"):
+                with self.assertGuard():
+                    draft.with_user(user).write({"state": state})
+        self.assertEqual(draft.state, "draft")
+        data = self.create_ui_order_data([(self.product, 1)])
+        vals = {key: data[key] for key in ("session_id", "uuid", "amount_total", "amount_tax", "amount_paid", "lines")}
+        with self.assertGuard():
+            self.env["pos.order"].with_user(self.cashier).create(dict(vals, amount_return=0, state="paid"))
+        # Jalur resmi: wizard Payment backend -> `_process_saved_order` (validasi lengkap) -> lunas.
+        self._wizard(draft, self.pos_manager, self.cash_pm1, 0).check()
+        self.assertEqual(draft.state, "paid")
+
+    def test_sec125_backend_refund_payment_validated(self):
+        """Skenario B review: refund dari backend dibayar lewat wizard dengan tunai padahal asal dibayar bank."""
+        original = self._sale([(self.bank_pm1, 100000)], qty=2)
+        refund = self.env["pos.order"].browse(original.refund()["res_id"])
+        self.assertEqual(refund.state, "draft")
+        with self.assertGuard():
+            self._wizard(refund, self.pos_manager, self.cash_pm1, refund.amount_total).check()
+        self.assertEqual(refund.state, "draft")
+        self._wizard(refund, self.pos_manager, self.bank_pm1, refund.amount_total).check()
+        self.assertEqual(refund.state, "paid")
+
+    def test_sec125_forged_amount_paid_does_not_pay(self):
+        draft = self._draft([])
+        draft.with_user(self.cashier).write({"amount_paid": 50000})
+        with self.assertGuard():
+            self._wizard(draft, self.pos_manager, self.cash_pm1, 0).check()
+        self.assertEqual(draft.state, "draft")
+
+    # ------------------------------------------------------------- SEC-126
+    def test_sec126_foreign_commands_in_sync_rejected(self):
+        paid = self._sale([(self.cash_pm1, 50000)])
+        foreign, foreign_line = paid.payment_ids, paid.lines
+        commands = {
+            "update": ("payment_ids", [1, foreign.id, {"payment_method_id": self.bank_pm1.id}]),
+            "delete": ("payment_ids", [2, foreign.id]),
+            "unlink": ("payment_ids", [3, foreign.id]),
+            "link": ("payment_ids", [4, foreign.id]),
+            "set": ("payment_ids", [6, 0, [foreign.id]]),
+            "line_update": ("lines", [1, foreign_line.id, {"price_unit": 0.0}]),
+        }
+        for name, (fname, command) in commands.items():
+            data = self.create_ui_order_data([(self.product, 1)], payments=[(self.cash_pm1, 50000)])
+            data[fname].append(command)
+            with self.subTest(command=name), self.assertGuard():
+                self.env["pos.order"].with_user(self.cashier).sync_from_ui([data])
+        # Gadget `relations_uuid_mapping` core: memindahkan pembayaran order lain ke order baru.
+        data = self.create_ui_order_data([(self.product, 1)], payments=[(self.cash_pm1, 50000)])
+        data["relations_uuid_mapping"] = {"pos.payment": {foreign.uuid: {"pos_order_id": data["uuid"]}}}
+        with self.assertGuard():
+            self.env["pos.order"].with_user(self.cashier).sync_from_ui([data])
+        foreign.invalidate_recordset()
+        foreign_line.invalidate_recordset()
+        self.assertEqual((foreign.pos_order_id, foreign.payment_method_id), (paid, self.cash_pm1))
+        self.assertEqual(foreign_line.price_unit, 50000)
+
+    def test_sec126_own_commands_on_draft_resync_allowed(self):
+        draft = self._draft([(self.cash_pm1, 40000)])
+        own = draft.payment_ids
+        data = self.create_ui_order_data([(self.product, 1)], payments=[], uuid=draft.uuid)
+        data.update({"state": "draft", "payment_ids": [[1, own.id, {"amount": 50000}]]})
+        self.env["pos.order"].with_user(self.cashier).sync_from_ui([data])
+        self.assertEqual(own.amount, 50000)
+
+    def test_sec126_guard_checks_ownership_inside_sync(self):
+        """Lapis kedua: di dalam penanda sync order A, pembayaran order B tetap terkunci."""
+        order_a = self._draft([(self.cash_pm1, 50000)])
+        order_b = self._sale([(self.cash_pm1, 50000)])
+        Payment = self.env["pos.payment"].with_user(self.cashier)
+        with internal_scope(self.env, POS_PAYMENT_SYNC_SCOPE, {("id", order_a.id)}):
+            order_a.payment_ids.with_user(self.cashier).write({"amount": 45000})
+            for action in (
+                lambda: order_b.payment_ids.with_user(self.cashier).write({"amount": 1.0}),
+                lambda: order_b.payment_ids.with_user(self.cashier).unlink(),
+                lambda: order_a.payment_ids.with_user(self.cashier).write({"pos_order_id": order_b.id}),
+                lambda: Payment.create(
+                    {"pos_order_id": order_b.id, "payment_method_id": self.cash_pm1.id, "amount": 1}
+                ),
+            ):
+                with self.assertGuard():
+                    action()

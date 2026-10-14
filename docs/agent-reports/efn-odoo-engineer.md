@@ -781,3 +781,65 @@ Dasar: `docs/reviews/SECURITY_REVIEW_2026-10-12_r11.md`, keputusan L-25 (`docs/0
 - Migrasi 19.0.1.9.0 / 19.0.2.1.0 (SQL penanda) belum diuji lewat upgrade DB lama.
 - SEC-117 hanya diuji dengan spy. Uji dua koneksi nyata tidak mungkin di TransactionCase.
 - CI: `EFN_TOUR_MIN_TESTS` 22 → 27 (devsecops).
+
+---
+
+# Re-review G18: SEC-125/126/127/129 + L-26 (SEC-128) sisi Odoo (14 Okt 2026)
+
+Dasar: bagian "Re-review G18" di `docs/reviews/SECURITY_REVIEW_2026-10-12_r11.md` dan L-26 (`docs/04 §9.9`). Branch `chore/wave-18`, tanpa commit/push. Stack dev tidak disentuh; semua uji memakai DB/container sementara.
+
+## Fakta core CE 19 (dibaca dari image `efn-odoo:ci`)
+- `pos.make.payment.check()` memanggil `order._process_saved_order(False)`. Akibatnya validasi efn sebenarnya sudah ikut berjalan di wizard. Wizard itu hanya untuk POS manager (ACL CE `access_pos_make_payment`).
+- Jalur yang benar-benar terbuka sebelum perbaikan ada tiga:
+  - `action_pos_order_paid` lewat RPC;
+  - `write({'state': 'paid'|'done'|'invoiced'})`;
+  - `create` order ber-state paid. Order baru dari sync memang dibuat langsung ber-state `paid` oleh `_process_order`.
+- Ada dua celah tambahan:
+  - `amount_paid` bisa ditulis kasir dan dipakai cek lunas wizard;
+  - `relations_uuid_mapping` di payload sync bisa menulis field record lain berdasarkan uuid. Ini gadget SEC-126.
+
+## Perbaikan
+- **SEC-125** (`efn_pos_refund_origin`):
+  - Transisi draft/cancel ke paid/done/invoiced hanya diizinkan di dalam `_process_saved_order` (penanda per cursor `POS_ORDER_SAVE_SCOPE`). Aturan ini berlaku untuk `write` dan `create`, juga untuk POS manager. Superuser/sudo dikecualikan.
+  - `amount_paid` dihitung ulang dari pembayaran nyata sebelum cek lunas.
+  - Loyalty: draft berpoin hanya dipertahankan bila partner sama dengan reservasi, setiap baris positif, dan jumlahnya = `value_idr` reservasi. Selain itu baris poin dihapus.
+- **SEC-126:** penanda sync kini membawa token (id order lama / uuid order baru).
+  - `_efn_check_sync_commands` menolak perintah `payment_ids`/`lines` `[1|2|3|4, id]` dan `[6,0,ids]` yang menunjuk record milik order lain.
+  - Guard `pos.payment` (umum dan Poin EFN) memeriksa kepemilikan record yang disentuh, termasuk lewat `relations_uuid_mapping`.
+  - Penanda sync loyalty yang lama dihapus.
+- **SEC-127:** `efn_core.scope.touch_row` = `UPDATE <tabel> SET write_date = write_date WHERE id = …`. Dipakai `_efn_lock_origin` dan `_efn_loyalty_lock_origin`.
+- **SEC-129:** `efn_pos_refund_origin` kini menjadi dependency `efn_pos_loyalty_ledger` dan `efn_pos_otp_gate`. Dipilih karena deklaratif dan sekaligus menjamin guard SEC-125/126 hadir; tidak perlu skrip migrasi yang mengubah state modul. Versi: refund_origin 19.0.1.2.0, loyalty 19.0.2.2.0, otp 19.0.1.10.0.
+- **L-26:**
+  - `commit` mengirim `order_goods_incl` (`round(abs(_efn_goods_incl_raw()))`, dikirim bila > 0); `reverse` mengirim `refund_goods_incl` (>= 0).
+  - `409 restore_value_mismatch` pada reverse → `hold` (order `review` + aktivitas).
+  - Aksi baru `action_efn_restore_approve` (POS manager, cek company, masuk `RPC_ALLOWLIST`, tercatat di chatter + log) mengirim ulang dengan `restore_approved: true`. Tolak = `action_efn_hold_cancel`.
+  - `action_efn_hold_approve` menolak hold jenis ini, karena kirim apa adanya akan ditolak lagi.
+  - Field baru `restore_approved` hanya bisa diisi aksi supervisor; kasir tidak punya ACL outbox.
+
+## Verifikasi
+- **Probe `call_kw` (HttpCase, tag efn_tour):**
+  - Kasir: `action_pos_order_paid`, `write state`, dan `create` ber-state paid semuanya ditolak `UserError`.
+  - Manajer `pos_admin`: wizard refund tunai atas order asal yang dibayar bank → `UserError` E-31.
+  - Kasir `sync_from_ui` dengan perintah `[1]`/`[2]`/`[4]` atas pembayaran order lain → `UserError`; pembayaran asing tidak berubah.
+- **Unit:** semua penolakan diuji bukan `AccessError`. `AccessError` adalah turunan `UserError`, dan ini sempat menutupi hasil palsu pada user uji tanpa `base.group_user`.
+  - Refund backend + wizard;
+  - `amount_paid` palsu;
+  - perintah asing (termasuk `[3]`, `[6]`, `lines`, `relations_uuid_mapping`), perintah milik sendiri yang sah, dan guard di dalam penanda sync;
+  - draft Poin EFN dengan nominal/partner yang tidak cocok;
+  - skenario A (draft berpoin) dan C (reward ber-OTP yang ditambahkan lewat RPC);
+  - L-26: payload, hold, setuju, tolak.
+- **SEC-127 dengan dua koneksi PostgreSQL nyata** (`efn_core/tests/test_scope.py`, commit sungguhan):
+  - snapshot B diambil lebih dulu → A touch + commit → B touch gagal `SerializationFailure`, lalu retry berhasil;
+  - varian B menunggu kunci A → setelah A commit, B gagal serialisasi;
+  - kontrol: `SELECT … FOR UPDATE` + commit → B lanjut tanpa error (membuktikan temuan).
+- **SEC-129 (DB lama nyata):** addons 8291cfc di-install (otp + loyalty); `efn_pos_refund_origin` berstatus `uninstalled`. Setelah `-u efn_pos_otp_gate,efn_pos_loyalty_ledger` dengan kode sekarang, modul itu `installed` 19.0.1.2.0.
+  - Migrasi r11 otp 19.0.1.9.0 dan loyalty 19.0.2.1.0 ikut berjalan tanpa error dan kolom `efn_member_locked_at` terbentuk. Datanya kosong, jadi isi backfill sendiri belum teruji.
+  - Cek untuk runbook deploy / pra-go-live: `SELECT state FROM ir_module_module WHERE name='efn_pos_refund_origin'` harus `installed`.
+- **Suite efn penuh:** 496 test, 0 failed, 0 error, 0 baris ERROR. check-odoo-deps: 17 modul, 0 terlarang. Warning baru hanya log penolakan/hold yang diharapkan.
+- **Tour/HttpCase:** 29/29, 0 ERROR, 0 skip (27 + 2 probe baru).
+- **ruff** lolos.
+
+## Untuk lead / tim lain
+- CI: `EFN_TOUR_MIN_TESTS` 27 → 29.
+- Deploy: tambahkan cek `installed` di atas ke `deploy-validate` (devsecops).
+- Residual (tidak diminta): `outstanding_account_id` metode Poin EFN masih bisa diubah POS Manager (catatan Info SEC-119).

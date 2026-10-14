@@ -168,6 +168,7 @@ class TestEfnPosLoyaltyTour(TestPointOfSaleHttpCommon):
         self.env["efn.pos.loyalty.outbox"]._efn_process_due()
         self.assertEqual(self._payloads(COMMIT)[0]["value_idr"], 10000)
         self.assertEqual(self._payloads(COMMIT)[0]["payment_amount"], 10000, "K-18-3")
+        self.assertEqual(self._payloads(COMMIT)[0]["order_goods_incl"], 50000, "L-26")
         self.assertEqual(
             self._payloads(EARN)[0]["eligible_amount"], 40000, "K-18-4: porsi poin tidak menghasilkan poin"
         )

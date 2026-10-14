@@ -10,6 +10,28 @@
 - **Risiko dimitigasi:** R-O05 (retur/refund), R-B06 (fraud kasir: refund kartu dicairkan tunai).
 - **Depends:** `point_of_sale`, `efn_core` (CE + efn_*). LGPL-3. **`auto_install: True`** (SEC-122, versi 19.0.1.1.0).
 
+## Re-review G18 (SEC-125/126/127/129, versi 19.0.1.2.0)
+Modul ini menjadi lapis **integritas order & pembayaran POS** untuk semua modul efn POS (dependency
+`efn_pos_loyalty_ledger` dan `efn_pos_otp_gate`).
+- **SEC-125: lunas hanya lewat `_process_saved_order`.** Sync POS dan wizard Payment backend (`pos.make.payment`,
+  ACL CE: POS manager) memanggilnya. Di sana seluruh validasi berjalan: E-30 Poin EFN, E-31 metode asal, SEC-116
+  `is_change`, dan gerbang OTP promo. Order draft/cancel yang berpindah ke `paid`/`done`/`invoiced` di luar penanda
+  `POS_ORDER_SAVE_SCOPE` ditolak (`UserError`), juga untuk POS manager. Ini menutup `action_pos_order_paid` lewat
+  RPC dan `write({'state': ...})`. Hal yang sama berlaku untuk `create` order ber-state paid di luar sync. `amount_paid`
+  dihitung ulang dari pembayaran nyata sebelum cek lunas, sehingga `amount_paid` yang ditulis lewat RPC tidak
+  melunasi order. Superuser/sudo dikecualikan.
+- **SEC-126: penanda sync bertoken.** `_process_order` hanya mengizinkan order yang sedang disinkron (id order lama
+  / uuid order baru). Perintah `payment_ids`/`lines` payload yang menunjuk record order lain
+  (`[1|2|3|4, id]`, `[6, 0, ids]`) ditolak sebelum diproses core. Guard `pos.payment` juga memeriksa kepemilikan record
+  yang disentuh di dalam sync, termasuk lewat `relations_uuid_mapping` core.
+- **SEC-127:** kunci order asal = `UPDATE pos_order SET write_date = write_date WHERE id = …` (`efn_core.scope.touch_row`).
+  Refund paralel kedua gagal `SerializationFailure` lalu Odoo me-retry RPC dengan snapshot baru. Diuji dengan dua
+  koneksi PostgreSQL nyata (`efn_core/tests/test_scope.py`).
+- **SEC-129: DB lama.** `auto_install` saja tidak memasang modul ini saat `-u` (dikonfirmasi: DB dengan addons
+  8291cfc + `-u efn_pos_otp_gate,efn_pos_loyalty_ledger`). Karena kini menjadi dependency kedua modul itu, `-u`
+  ikut memasangnya (terverifikasi: state `installed`, 19.0.1.2.0). Cek pra-go-live/runbook deploy:
+  `SELECT state FROM ir_module_module WHERE name = 'efn_pos_refund_origin'` harus `installed`.
+
 ## Review r11 (L-25a/d/e/j, versi 19.0.1.1.0)
 - **SEC-122: terpasang otomatis.** Dipilih `auto_install` (bukan dependency `efn_setup_pos`): modul ikut terpasang di
   setiap DB yang punya `point_of_sale` + `efn_core` (semua DB POS EFN), tidak bergantung pada modul konfigurasi

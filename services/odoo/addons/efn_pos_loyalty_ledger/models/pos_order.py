@@ -35,7 +35,7 @@ from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 
 from odoo.addons.efn_core.models.efn_bff_client import mask_phone, partner_member_ref
-from odoo.addons.efn_core.scope import POS_PAYMENT_SYNC_SCOPE, internal_scope
+from odoo.addons.efn_core.scope import touch_row
 
 _logger = logging.getLogger(__name__)
 
@@ -234,7 +234,10 @@ class PosOrder(models.Model):
 
     # ----------------------------------------------------------------- sync
     def _efn_loyalty_strip_draft(self):
-        """Draft: pembayaran poin tanpa reservasi aktif dihapus; baris produk poin lama juga dihapus."""
+        """Draft: pembayaran poin tanpa reservasi aktif yang cocok dihapus; baris produk poin lama juga dihapus.
+
+        Re-review SEC-125: "cocok" = reservasi aktif order ini, partner sama, setiap baris positif, dan jumlah baris
+        Poin EFN = `value_idr` reservasi (toleransi 0). Validasi lengkap tetap saat order dilunasi."""
         self.ensure_one()
         legacy = self._efn_legacy_points_lines()
         if legacy:
@@ -245,13 +248,26 @@ class PosOrder(models.Model):
         payments = self._efn_points_payments()
         if not payments:
             return
-        if self.env["efn.pos.loyalty.reservation"]._efn_find_active(self.config_id, self.uuid):
+        reservation = self.env["efn.pos.loyalty.reservation"]._efn_find_active(self.config_id, self.uuid)
+        reason = self._efn_loyalty_draft_mismatch(reservation, payments)
+        if not reason:
             return
         _logger.warning(
-            "EFN loyalty: %d pembayaran Poin EFN tanpa reservasi dihapus dari draft %s", len(payments), self.uuid
+            "EFN loyalty: %d pembayaran Poin EFN dihapus dari draft %s (%s)", len(payments), self.uuid, reason
         )
         payments.unlink()
         self.write({"efn_loyalty_points_redeemed": 0, "efn_loyalty_redeem_value": 0.0})
+
+    def _efn_loyalty_draft_mismatch(self, reservation, payments):
+        if not reservation:
+            return "no_reservation"
+        if reservation.partner_id != self.partner_id:
+            return "partner_mismatch"
+        if any(self._efn_currency_compare(amount, 0.0) <= 0 for amount in payments.mapped("amount")):
+            return "non_positive"
+        if self._efn_currency_compare(sum(payments.mapped("amount")), reservation.value_idr) != 0:
+            return "value_mismatch"
+        return False
 
     def _efn_loyalty_reject(self, reason, message=None):
         _logger.warning("EFN loyalty: order %s ditolak saat sync (%s)", self.uuid, reason)
@@ -320,8 +336,9 @@ class PosOrder(models.Model):
         return None
 
     def _efn_loyalty_lock_origin(self, original):
-        """SEC-117 (L-25e): serialkan refund paralel atas order asal sebelum menghitung sisa Poin EFN."""
-        self.env.cr.execute("SELECT id FROM pos_order WHERE id = %s FOR UPDATE", (original.id,))
+        """SEC-117/SEC-127: serialkan refund paralel atas order asal sebelum menghitung sisa Poin EFN (UPDATE no-op,
+        transaksi kedua gagal serialisasi lalu di-retry Odoo dengan snapshot baru)."""
+        touch_row(self.env.cr, "pos_order", original.id)
 
     def _efn_loyalty_validate_refund_payments(self, origins, payments):
         original = origins[:1]
@@ -553,11 +570,6 @@ class PosOrder(models.Model):
             record._efn_schedule_activity(hold_reason or record.last_error)
 
     # ------------------------------------------------------------------ hooks
-    def _process_order(self, order, existing_order):
-        # SEC-113: jalur sync resmi (pembayaran Poin EFN boleh dibuat di sini saja).
-        with internal_scope(self.env, POS_PAYMENT_SYNC_SCOPE):
-            return super()._process_order(order, existing_order)
-
     def _process_saved_order(self, draft):
         self.ensure_one()
         if draft:
