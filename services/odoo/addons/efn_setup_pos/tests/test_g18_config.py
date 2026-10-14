@@ -1,4 +1,4 @@
-"""Gelombang 18 (docs/08 §9): W-22 default stasiun KDS, W-25 grup kasir pembuat pelanggan + kunci HP member.
+"""Gelombang 18 (docs/08 §9): W-22 default stasiun KDS, W-25 grup kasir pembuat pelanggan (sempit, SEC-121).
 
 Nomor HP di bawah fiktif khusus test (bukan data pribadi nyata).
 """
@@ -43,40 +43,69 @@ class TestEfnG18Config(TransactionCase):
         value = self.env["ir.config_parameter"].sudo().get_param("efn.kds.retention_days")
         self.assertEqual(value, "90")
 
-    # ------------------------------------------------------------------ W-25
-    def test_cashier_group_implies_pos_user_and_contact_creation(self):
+    # ------------------------------------------------------------------ W-25 / SEC-121 (L-25i)
+    def _as_cashier(self, model):
+        return self.env[model].with_user(self.cashier).with_company(self.company)
+
+    def test_cashier_group_is_narrow(self):
+        """SEC-121: grup kasir = POS User + buat pelanggan saja, TIDAK mewarisi Contact Creation standar."""
         self.assertTrue(self.cashier.has_group("point_of_sale.group_pos_user"))
-        self.assertTrue(self.cashier.has_group("base.group_partner_manager"))
+        self.assertFalse(self.cashier.has_group("base.group_partner_manager"))
         self.assertFalse(self.cashier.has_group("point_of_sale.group_pos_manager"))
+        self.assertNotIn(self.env.ref("base.group_partner_manager"), self.group.all_implied_ids)
 
-    def test_cashier_can_create_customer(self):
-        partner = (
-            self.env["res.partner"]
-            .with_user(self.cashier)
-            .create({"name": "Pelanggan Baru W-25", "phone": "0812-0000-2525"})
-        )
-        self.assertTrue(partner)
+    def test_cashier_creates_individual_customer_in_own_company(self):
+        partner = self._as_cashier("res.partner").create({"name": "Pelanggan Baru W-25", "phone": "0812-0000-2525"})
+        self.assertEqual(partner.company_id, self.company)
+        self.assertFalse(partner.is_company)
+        defaults = self._as_cashier("res.partner").default_get(["company_id"])  # form POS memakai default ini
+        self.assertEqual(defaults.get("company_id"), self.company.id)
 
-    def test_member_phone_stays_locked_for_cashier(self):
-        """SEC-07/SEC-44: partner dengan riwayat OTP -> HP tidak bisa diubah kasir walau punya Contact Creation."""
-        member = self.env["res.partner"].create({"name": "Member Uji W-25", "phone": "0812-3456-2525"})
-        config = self.env["pos.config"].search([("company_id", "=", self.company.id)], limit=1) or self.env[
-            "pos.config"
-        ].with_company(self.company).create({"name": "POS Uji W-25", "company_id": self.company.id})
-        self.env["efn.pos.otp.challenge"].create(
-            {
-                "company_id": self.company.id,
-                "config_id": config.id,
-                "order_ref": "w25-lock-test",
-                "partner_id": member.id,
-                "member_ref_masked": "62812****525",
-                "state": "verified",
-            }
-        )
+    def test_cashier_cannot_create_company_shared_or_other_pt_partner(self):
+        Partner = self._as_cashier("res.partner")
+        other_pt = self.env.ref("efn_setup_company.company_rtl")
+        parent = self.env["res.partner"].create({"name": "Induk Uji SEC-121", "company_id": self.company.id})
+        for vals in (
+            {"name": "PT Pemasok Uji", "is_company": True},
+            {"name": "Partner Bersama Uji", "company_id": False},
+            {"name": "Partner PT Lain Uji", "company_id": other_pt.id},
+            {"name": "Kontak Anak Uji", "parent_id": parent.id},
+        ):
+            with self.subTest(vals=vals), self.assertRaises(AccessError):
+                Partner.create(vals)
+
+    def test_cashier_cannot_write_or_unlink_existing_partners(self):
+        own = self.env["res.partner"].create({"name": "Pelanggan Lama W-25", "company_id": self.company.id})
+        shared = self.env["res.partner"].create({"name": "Partner Bersama Lama", "company_id": False})
+        for partner in (own, shared):
+            with self.subTest(partner=partner.name):
+                with self.assertRaises(AccessError):
+                    partner.with_user(self.cashier).write({"name": "Diubah kasir"})
+                with self.assertRaises(AccessError):
+                    partner.with_user(self.cashier).write({"phone": "0813-9999-2525"})
+                with self.assertRaises(AccessError):
+                    partner.with_user(self.cashier).unlink()
+
+    def test_cashier_has_no_bank_account_write(self):
+        partner = self.env["res.partner"].create({"name": "Pemasok Rekening Uji", "company_id": self.company.id})
+        bank = self.env["res.partner.bank"].create({"partner_id": partner.id, "acc_number": "SEC121-0001"})
         with self.assertRaises(AccessError):
-            member.with_user(self.cashier).write({"phone": "0813-9999-2525"})
-        # Field lain tetap boleh (koreksi nama).
-        member.with_user(self.cashier).write({"name": "Member Uji W-25 (koreksi)"})
+            self._as_cashier("res.partner.bank").create({"partner_id": partner.id, "acc_number": "SEC121-0002"})
+        with self.assertRaises(AccessError):
+            bank.with_user(self.cashier).write({"acc_number": "SEC121-0003"})
+        with self.assertRaises(AccessError):
+            bank.with_user(self.cashier).unlink()
+
+    def test_partner_manager_in_cashier_group_not_restricted(self):
+        """Rule grup di-OR: Contact Creation standar + grup kasir tetap boleh partner bersama & company."""
+        self.cashier.group_ids = [Command.link(self.env.ref("base.group_partner_manager").id)]
+        shared = self._as_cashier("res.partner").create(
+            {"name": "Pemasok Bersama", "is_company": True, "company_id": False}
+        )
+        shared.with_user(self.cashier).write({"name": "Pemasok Bersama (ubah)"})
+        self.assertFalse(shared.company_id)
+        # Default CE (partner bersama) tetap untuk user Contact Creation standar.
+        self.assertFalse(self._as_cashier("res.partner").default_get(["company_id"]).get("company_id"))
 
 
 @tagged("post_install", "-at_install", "efn")

@@ -387,3 +387,17 @@ Usulan kontrak §9 v6: K-18-1..K-18-7, ditambah K-18-8 (`age_confirmed` untuk PO
   - ruff bersih (182 file).
 - Container, network, dan DB uji sudah dihapus.
 - Catatan: rename draf sempat ter-stage oleh `git mv`; index sudah dikembalikan (`git restore --staged`), sehingga perubahan hanya ada di working tree. Working tree juga berisi `efn_pos_loyalty_ledger/static/tests/tours/efn_loyalty_tour.js` yang diubah agent lain (bukan saya).
+
+### Gelombang 18 — SEC-121 (review r11, L-25i), 2026-10-14
+- **`efn_setup_pos` 19.0.1.9.0:** grup "Kasir: boleh membuat pelanggan" tidak lagi mewarisi `base.group_partner_manager` (`implied_ids` di-set ulang ke POS User saja, sehingga user lama ikut kehilangan hak saat upgrade).
+  - ACL `res.partner` grup ini: baca + buat (tanpa write/unlink).
+  - Record rule grup: partner yang dibuat wajib individu, tanpa induk, dan `company_id` = company POS aktif.
+  - Rule pembanding (domain semua) untuk `base.group_partner_manager` menjaga user Contact Creation standar tetap tidak dibatasi.
+  - `models/res_partner.py`: default field `company_id` = company aktif khusus kasir ber-grup sempit. Hanya default; nilai kiriman klien tidak diubah. Override field (bukan `default_get`) dipilih agar tidak menambah metode publik — `efn_core` `test_rpc_surface` sempat menolak `default_get`.
+- **Cek kebutuhan POS standar:** alur kasir CE 19 tidak menulis partner; pelanggan baru dibuat via form → `web_save` (create). Karena itu tidak ada field yang perlu dibuka untuk write. Mengedit pelanggan lama = supervisor/back office.
+- **Verifikasi `call_kw` HTTP sebagai kasir** (login nyata, image `efn-odoo:ci`, DB uji terpisah):
+  - diizinkan: `default_get` company = PT F&B; `web_save` pelanggan individu → partner PT F&B; read partner;
+  - ditolak `AccessError`: create perusahaan, partner bersama, partner PT lain, kontak anak; write nama/HP partner sendiri dan partner bersama; unlink; create/write `res.partner.bank`.
+- **Test** `TestEfnG18Config` (6 test SEC-121 baru, menggantikan 3 test W-25 lama). Kunci HP member (SEC-115) milik engineer di `efn_pos_otp_gate`, tidak saya sentuh.
+- **Tidak dicek eksplisit:** cashier yang punya akses lebih dari satu company (field company tampil di form) — default tetap company aktif, tetapi bisa diubah ke PT lain lalu ditolak rule.
+- **Hasil uji:** suite efn penuh 16 modul (working tree, termasuk WIP engineer SEC-113/115) **479 test: 0 failed, 1 error** di `efn_pos_loyalty_ledger` `test_sec113_points_payment_only_via_sync` (AccessError `res.currency` pada user uji test itu — WIP engineer, bukan partner/grup kasir); seluruh test `efn_setup_pos` (termasuk 6 SEC-121) dan `efn_core` `test_rpc_surface` lulus. `efn_setup_security` install-after exit 0. Tour 6 modul CI **0 failed dari 25** (DB tour tidak memasang `efn_setup_pos`). ruff `efn_setup_pos` bersih; `efn_pos_refund_origin/tests/test_payment_integrity_rpc.py` (WIP agent lain) E501. Container/DB uji dihapus.

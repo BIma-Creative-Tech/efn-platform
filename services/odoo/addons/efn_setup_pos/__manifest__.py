@@ -1,7 +1,7 @@
 {
     "name": "EFN Setup - Point of Sale (Retail & Restoran)",
     "summary": "Bundel modul POS CE 19 untuk retail & F&B; demo stasiun dapur, printer dapur, denah meja.",
-    "version": "19.0.1.8.0",
+    "version": "19.0.1.9.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",
