@@ -21,8 +21,9 @@ export interface SweepResult {
  * - `reserved` dengan `hold_until <= now` (K-3: default 24 jam, bukan TTL UI 15 menit) → `expired` (bertahap per batch).
  *   Saldo tersedia sudah mengabaikan reservasi lewat hold_until; job ini merapikan status, mengosongkan indeks unik per order, dan mencatat metrik
  *   `efn_loyalty_reservation_expired_total`.
- * - Baris berstatus akhir (`committed|released|expired`) dengan `updated_at` > `LOYALTY_RESERVATION_RETENTION_DAYS`
- *   dihapus (data transien; catatan finansial ada di ledger). `loyalty_pos_earn` dihapus setelah `LOYALTY_POS_EARN_RETENTION_DAYS`.
+ * - Baris `released|expired` dengan `updated_at` > `LOYALTY_RESERVATION_RETENTION_DAYS` dihapus (transien). SEC-124
+ *   (L-25l): baris `committed` = nilai keuangan redeem (sisi BFF rekonsiliasi K-18-6) → baru dihapus setelah
+ *   `LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS` (10 th, Q-P2). `loyalty_pos_earn` dihapus setelah `LOYALTY_POS_EARN_RETENTION_DAYS`.
  * - Multi-replika: satu replika per siklus (`pg_try_advisory_xact_lock`), pola sama dengan `RetentionService`.
  */
 @Injectable()
@@ -76,15 +77,17 @@ export class LoyaltyReservationSweeper implements OnModuleInit, OnModuleDestroy 
           if (n < BATCH_SIZE) break;
         }
         const cutoff = new Date(now.getTime() - this.config.loyaltyReservationRetentionDays * 86_400_000);
+        const committedCutoff = new Date(now.getTime() - this.config.loyaltyCommittedReservationRetentionDays * 86_400_000);
         let purged = 0;
         for (let i = 0; i < MAX_BATCHES; i += 1) {
           const r = await q.query(
             `DELETE FROM platform.loyalty_reservation
               WHERE id IN (SELECT id FROM platform.loyalty_reservation
-                            WHERE status <> 'reserved' AND updated_at < $1
+                            WHERE (status IN ('released', 'expired') AND updated_at < $1)
+                               OR (status = 'committed' AND updated_at < $3)
                             LIMIT $2
                             FOR UPDATE SKIP LOCKED)`,
-            [cutoff.toISOString(), BATCH_SIZE],
+            [cutoff.toISOString(), BATCH_SIZE, committedCutoff.toISOString()],
           );
           const n = r.rowCount ?? 0;
           purged += n;

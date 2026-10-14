@@ -948,9 +948,25 @@ export class AppConfig {
   get loyaltyReservationSweepIntervalMs(): number {
     return this.int('LOYALTY_RESERVATION_SWEEP_INTERVAL_MS', 60_000, 0, 24 * 3600 * 1000);
   }
-  /** Reservasi berstatus akhir (committed/released/expired) dihapus setelah N hari (data transien; ledger tetap). */
+  /** Reservasi `released`/`expired` (tanpa nilai keuangan) dihapus setelah N hari. */
   get loyaltyReservationRetentionDays(): number {
     return this.int('LOYALTY_RESERVATION_RETENTION_DAYS', 30, 1, 3650);
+  }
+  /**
+   * SEC-124 (L-25l): reservasi `committed` = nilai keuangan redeem (sisi BFF rekonsiliasi K-18-6) → disimpan seperti data
+   * keuangan (Q-P2, 10 th). Minimum 3650.
+   */
+  get loyaltyCommittedReservationRetentionDays(): number {
+    return this.int('LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS', 3650, 3650, 7300);
+  }
+  /**
+   * SEC-118 (L-25f): toleransi selisih `points_restored_value` Odoo terhadap restore yang diharapkan BFF
+   * (`nilai redeem × rasio refund kumulatif` − restore sebelumnya), dalam % nilai redeem order asal; minimum 1 nilai
+   * poin (pembulatan). Rasio BFF berbasis eligible (tanpa pajak) sedangkan alokasi Odoo berbasis nilai incl pajak →
+   * toleransi menampung beda campuran tarif pajak/kategori dikecualikan. Default 10.
+   */
+  get loyaltyRestoreTolerancePct(): number {
+    return this.int('LOYALTY_RESTORE_TOLERANCE_PCT', 10, 0, 100);
   }
   /** K-6: catatan earn per order (`loyalty_pos_earn`) dihapus setelah N hari (≥ masa retur). Default 400. */
   get loyaltyPosEarnRetentionDays(): number {

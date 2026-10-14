@@ -285,6 +285,7 @@ export class FakeLoyaltyDb implements Db {
         points_restored: Number(p[4]),
         idempotency_key: String(p[5]),
         created_at: String(p[6]),
+        refund_ratio: Number(p[7] ?? 0),
       };
       if (this.reverses.has(row.refund_order_ref) || [...this.reverses.values()].some((r) => r.idempotency_key === row.idempotency_key)) {
         return ok([], 0);
@@ -292,6 +293,26 @@ export class FakeLoyaltyDb implements Db {
       this.reverses.set(row.refund_order_ref, row);
       undo.push(() => this.reverses.delete(row.refund_order_ref));
       return ok([], 1);
+    }
+    if (text.includes('FROM platform.loyalty_pos_reverse WHERE original_order_ref = $1')) {
+      const rows = [...this.reverses.values()].filter((r) => r.original_order_ref === p[0] && r.refund_order_ref !== p[1]);
+      return ok([
+        {
+          ratio: rows.reduce((s, r) => s + Number(r.refund_ratio ?? 0), 0),
+          restored: String(rows.reduce((s, r) => s + Number(r.points_restored_value), 0)),
+        },
+      ]);
+    }
+    if (text.includes('SUM(value_idr), 0)::bigint AS v FROM platform.loyalty_reservation')) {
+      const v = [...this.reservations.values()].filter((r) => r.order_ref === p[0] && r.status === 'committed').reduce((s, r) => s + r.value_idr, 0);
+      return ok([{ v: String(v) }]);
+    }
+    if (text.includes('SELECT 1 AS pending FROM platform.loyalty_reservation')) {
+      return ok(
+        [...this.reservations.values()]
+          .filter((r) => r.order_ref === p[0] && r.status === 'reserved' && ms(r.hold_until) > ms(String(p[1])))
+          .map(() => ({ n: 1 })),
+      );
     }
     if (text.includes('FROM platform.loyalty_pos_reverse')) {
       return ok([...this.reverses.values()].filter((r) => r.refund_order_ref === p[0] || r.idempotency_key === p[1]).map((r) => ({ ...r })));
@@ -359,7 +380,11 @@ export class FakeLoyaltyDb implements Db {
     if (text.includes('DELETE FROM platform.loyalty_reservation') && text.includes('updated_at < $1')) {
       const limit = Number(p[1]);
       const old = [...this.reservations.values()]
-        .filter((r) => r.status !== 'reserved' && ms(r.updated_at) < ms(String(p[0])))
+        .filter(
+          (r) =>
+            ((r.status === 'released' || r.status === 'expired') && ms(r.updated_at) < ms(String(p[0]))) ||
+            (r.status === 'committed' && p[2] !== undefined && ms(r.updated_at) < ms(String(p[2]))),
+        )
         .slice(0, limit);
       for (const r of old) {
         this.reservations.delete(r.id);

@@ -67,6 +67,18 @@ CREATE TABLE IF NOT EXISTS platform.loyalty_pos_reverse (
 );
 CREATE INDEX IF NOT EXISTS ix_loyalty_pos_reverse_created ON platform.loyalty_pos_reverse (created_at);
 CREATE INDEX IF NOT EXISTS ix_loyalty_pos_reverse_original ON platform.loyalty_pos_reverse (original_order_ref);
+-- 6. (review r11 SEC-118, L-25f) rasio refund (eligible) per reverse: BFF menghitung restore yang diharapkan secara
+--    kumulatif (Σ rasio × nilai redeem − Σ nilai restore sebelumnya) dari data miliknya sendiri. Kolom ditambah idempoten
+--    agar volume yang sudah menjalankan 08 versi sebelumnya ikut.
+ALTER TABLE platform.loyalty_pos_reverse ADD COLUMN IF NOT EXISTS refund_ratio numeric(9,6) NOT NULL DEFAULT 0;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_loyalty_pos_reverse_ratio'
+                   AND conrelid = 'platform.loyalty_pos_reverse'::regclass) THEN
+    ALTER TABLE platform.loyalty_pos_reverse
+      ADD CONSTRAINT ck_loyalty_pos_reverse_ratio CHECK (refund_ratio >= 0 AND refund_ratio <= 1);
+  END IF;
+END $$;
 
 RESET ROLE;
 
@@ -76,6 +88,10 @@ REVOKE ALL ON platform.loyalty_pos_reverse FROM PUBLIC, efn_bff, efn_readonly, e
 GRANT SELECT, INSERT ON platform.loyalty_pos_reverse TO efn_bff;
 GRANT SELECT (refund_order_ref, original_order_ref, company_code, points_restored_value, points_restored, created_at)
   ON platform.loyalty_pos_reverse TO efn_readonly;
+
+-- 7. (review r11 SEC-124, L-25l) erasure DSAR TIDAK lagi menghapus reservasi `committed` (nilai keuangan redeem, sisi BFF
+--    rekonsiliasi K-18-6, retensi 10 th) — hanya `member_hash` → tombstone acak. Hak UPDATE kolom itu saja.
+GRANT UPDATE (member_hash) ON platform.loyalty_reservation TO efn_bff;
 
 -- Hak akses: efn_bff sudah SELECT/INSERT/UPDATE tingkat tabel (04-platform-v3-6.sql) → kolom baru tercakup.
 -- efn_etl hanya SELECT kolom tertentu dsar_request (03) → kolom baru TIDAK terlihat ETL (sengaja).

@@ -310,6 +310,10 @@ describe('ErasureService (§8.4)', () => {
     const report = ctx.db.find('UPDATE platform.price_hunter_report')[0];
     expect(report.text).toMatch(/user_enc = NULL.*geo_lat = NULL/s);
     expect(ctx.db.find('UPDATE platform.otp_audit')[0].params).toEqual([ctx.hash, tomb]);
+    // SEC-124: reservasi committed (nilai keuangan, rekonsiliasi K-18-6) dipertahankan, tautan → tombstone SEBELUM DELETE sisanya
+    const keep = ctx.db.find("UPDATE platform.loyalty_reservation SET member_hash = $2 WHERE member_hash = $1 AND status = 'committed'");
+    expect(keep[0].params).toEqual([ctx.hash, tomb]);
+    expect(ctx.db.queries.indexOf(keep[0])).toBeLessThan(ctx.db.queries.findIndex((q) => q.text.includes('DELETE FROM platform.loyalty_reservation')));
     expect(ctx.db.find('DELETE FROM platform.loyalty_reservation')[0].params).toEqual([ctx.hash]);
     expect(ctx.db.find('DELETE FROM platform.loyalty_pos_earn')[0].params).toEqual([ctx.hash]);
     expect(ctx.db.find('UPDATE platform.consent SET ip_enc = NULL')[0].params).toEqual([MEMBER_ID]);

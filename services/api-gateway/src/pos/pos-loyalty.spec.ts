@@ -767,15 +767,16 @@ describe('G18 kontrak §9.9 v6 — poin = alat bayar (K-18-2..K-18-5)', () => {
       const line = log.mock.calls.map((c) => String(c[0])).find((l) => l.startsWith('EFN_LOYALTY_RESTORE '))!;
       expect(JSON.parse(line.slice('EFN_LOYALTY_RESTORE '.length))).toEqual({ order_ref: ORDER_A, value_idr: 2550, points: 25, remainder_idr: 50 });
       expect(line).not.toContain(MEMBER);
-      // refund kedua mengklaim nilai penuh 5000 (50 poin) padahal sisa 25 → dipotong 25 + anomali
-      const b = await ctx.reverse(REFUND_2, ORDER_A, 0.5, MEMBER, 5000);
+      // refund kedua 2950 (diharapkan 5000 − 2550 = 2450, dalam toleransi 10 % = Rp500) → 29 poin diminta, sisa 25 →
+      // dipotong 25 + anomali restore_exceeds_redeem
+      const b = await ctx.reverse(REFUND_2, ORDER_A, 0.5, MEMBER, 2950);
       expect(b.points_restored).toBe(25);
       expect(warn.mock.calls.some((c) => String(c[0]).includes('"kind":"restore_exceeds_redeem"'))).toBe(true);
       const restored = ctx.db.ledger.filter((l) => l.reason === 'pos_refund_restore').reduce((s, l) => s + l.delta_points, 0);
       expect(restored).toBe(50);
       // K-18-6: tersimpan persisten untuk rekonsiliasi ETL (bentuk _PLATFORM_RESTORE_ROWS)
       expect(ctx.db.reverses.get(REFUND_1)).toMatchObject({ original_order_ref: ORDER_A, company_code: 'FNB', points_restored_value: 2550, points_restored: 25 });
-      expect(ctx.db.reverses.get(REFUND_2)).toMatchObject({ points_restored_value: 5000, points_restored: 25 });
+      expect(ctx.db.reverses.get(REFUND_2)).toMatchObject({ points_restored_value: 2950, points_restored: 25, refund_ratio: 0.5 });
       // retry identik → replay; retry dengan nilai berbeda → 409 idempotency_conflict
       expect((await ctx.reverse(REFUND_1, ORDER_A, 0.5, MEMBER, 2550)).points_restored).toBe(25);
       expect(await code(ctx.reverse(REFUND_1, ORDER_A, 0.5, MEMBER, 9999))).toBe('409 idempotency_conflict');
@@ -795,11 +796,8 @@ describe('G18 kontrak §9.9 v6 — poin = alat bayar (K-18-2..K-18-5)', () => {
     expect(await old.reverse(REFUND_1, ORDER_A, 0.5)).toMatchObject({ points_restored: 25, points_clawed_back: 5 });
     expect(old.db.reverses.size).toBe(0); // event v4 tanpa nilai: tidak ada baris rekonsiliasi
 
-    // refund tanpa porsi poin (nilai 0) → tidak ada restore walau ratio 1
+    // order asal tanpa redeem: refund nilai poin 0 → tidak ada restore walau ratio 1
     const zero = setup({ LOYALTY_REDEEM_MIN_POINTS: '1' });
-    await zero.earn(ORDER_C, 1_000_000);
-    const r3 = await zero.reserve(ORDER_A, 50);
-    await zero.commit(r3.reservation_id, ORDER_A);
     await zero.earn(ORDER_A, 100_000);
     expect(await zero.reverse(REFUND_1, ORDER_A, 1, MEMBER, 0)).toMatchObject({ points_restored: 0, points_clawed_back: 10 });
     expect(zero.db.reverses.get(REFUND_1)).toMatchObject({ points_restored_value: 0, points_restored: 0 });
@@ -850,5 +848,85 @@ describe('G18 K-18-8: OTP POS pos_enroll — pernyataan usia 17+ saat kasir mend
     const upd = ctx.mdb.find('SET age_confirmed_at = now()');
     expect(upd[0].params).toEqual([expect.any(String), 'pos', 9]);
     expect(upd[0].text).toContain('age_confirmed_at IS NULL');
+  });
+});
+
+describe('Review r11 — SEC-118 / SEC-123 / SEC-124 (L-25f/k/l)', () => {
+  async function redeemed(ctx: ReturnType<typeof setup>) {
+    await ctx.earn(ORDER_C, 1_000_000);
+    const r = await ctx.reserve(ORDER_A, 50); // V = 5000
+    await ctx.commit(r.reservation_id, ORDER_A);
+    await ctx.earn(ORDER_A, 100_000);
+    return r;
+  }
+
+  it('SEC-118: points_restored_value dibandingkan restore yang diharapkan BFF (V × rasio kumulatif − restore lalu); di luar toleransi → 409 + anomali, tanpa entri', async () => {
+    const ctx = setup({ LOYALTY_REDEEM_MIN_POINTS: '1' });
+    await redeemed(ctx);
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const before = ctx.db.ledger.length;
+      // rasio 0,2 → diharapkan 1000; Odoo melaporkan 4000 (selisih 3000 > max(100, 500))
+      expect(await code(ctx.reverse(REFUND_1, ORDER_A, 0.2, MEMBER, 4000))).toBe('409 restore_value_mismatch');
+      expect(ctx.db.ledger).toHaveLength(before);
+      expect(ctx.db.reverses.size).toBe(0);
+      const line = warn.mock.calls.map((c) => String(c[0])).find((l) => l.includes('restore_value_unexpected'))!;
+      expect(JSON.parse(line.slice('EFN_LOYALTY_ANOMALY '.length))).toMatchObject({
+        severity: 'critical',
+        points_restored_value: 4000,
+        expected_value: 1000,
+        tolerance: 500,
+      });
+      expect(line).not.toContain(MEMBER);
+      // nilai benar (dalam toleransi) diterima; rasio kumulatif ikut dihitung untuk refund berikutnya
+      expect((await ctx.reverse(REFUND_1, ORDER_A, 0.2, MEMBER, 1000)).points_restored).toBe(10);
+      // refund ke-2 rasio 0,8 → kumulatif 1 → diharapkan 5000 − 1000 = 4000
+      expect(await code(ctx.reverse(REFUND_2, ORDER_A, 0.8, MEMBER, 1000))).toBe('409 restore_value_mismatch');
+      expect((await ctx.reverse(REFUND_2, ORDER_A, 0.8, MEMBER, 4000)).points_restored).toBe(40);
+    } finally {
+      warn.mockRestore();
+    }
+    // order tanpa redeem: Odoo melaporkan nilai poin > 0 → ditahan
+    const none = setup({ LOYALTY_REDEEM_MIN_POINTS: '1' });
+    await none.earn(ORDER_A, 100_000);
+    const w2 = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(await code(none.reverse(REFUND_1, ORDER_A, 1, MEMBER, 2000))).toBe('409 restore_value_mismatch');
+    } finally {
+      w2.mockRestore();
+    }
+    expect(() => testConfig({ LOYALTY_RESTORE_TOLERANCE_PCT: '101' }).loyaltyRestoreTolerancePct).toThrow();
+  });
+
+  it('SEC-123: earn order yang commit redeem-nya belum masuk (reservasi reserved) → 409 earn_pending; setelah commit → pagar porsi uang berlaku', async () => {
+    const ctx = setup({ LOYALTY_REDEEM_MIN_POINTS: '1' });
+    await ctx.earn(ORDER_C, 1_000_000);
+    const r = await ctx.reserve(ORDER_A, 50, { amountTotal: 125_000 });
+    expect(await code(ctx.earn(ORDER_A, 200_000))).toBe('409 earn_pending');
+    expect(ctx.db.earns.has(ORDER_A)).toBe(false);
+    await ctx.commit(r.reservation_id, ORDER_A);
+    expect(await code(ctx.earn(ORDER_A, 200_000))).toBe('409 earn_limit_exceeded');
+    expect((await ctx.earn(ORDER_A, 100_000)).points_earned).toBe(10);
+    // reservasi lewat hold_until (tidak akan di-commit) tidak menahan earn order lain
+    const r2 = await ctx.reserve(ORDER_B, 10);
+    ctx.clock.advanceSeconds(2 * DAY);
+    expect((await ctx.earn(ORDER_B, 50_000)).points_earned).toBe(5);
+    expect(r2.reservation_id).toBeDefined();
+  });
+
+  it('SEC-124: sweeper hanya mem-purge released/expired setelah retensi; committed disimpan 10 th', async () => {
+    const ctx = setup({ LOYALTY_REDEEM_MIN_POINTS: '1', LOYALTY_RESERVATION_RETENTION_DAYS: '1' });
+    const r = await redeemed(ctx);
+    const rel = await ctx.reserve(ORDER_B, 10);
+    await ctx.svc.release(rel.reservation_id);
+    ctx.clock.advanceSeconds(400 * DAY);
+    await ctx.sweeper.sweepOnce();
+    expect(ctx.db.reservations.has(rel.reservation_id)).toBe(false);
+    expect(ctx.db.reservations.get(r.reservation_id)?.status).toBe('committed');
+    ctx.clock.advanceSeconds(3651 * DAY);
+    await ctx.sweeper.sweepOnce();
+    expect(ctx.db.reservations.has(r.reservation_id)).toBe(false);
+    expect(testConfig().loyaltyCommittedReservationRetentionDays).toBe(3650);
+    expect(() => testConfig({ LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS: '30' }).loyaltyCommittedReservationRetentionDays).toThrow();
   });
 });

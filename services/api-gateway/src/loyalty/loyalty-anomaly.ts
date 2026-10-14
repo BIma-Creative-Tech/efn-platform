@@ -39,6 +39,8 @@ export const LOYALTY_ANOMALY_KINDS = {
   // ── G18 kontrak §9.9 v6 (poin = alat bayar) ──
   /** K-18-3: `payment_amount` commit ≠ `value_idr` reservasi → commit ditolak (Odoo menahan order untuk review). */
   commit_payment_mismatch: 'critical',
+  /** SEC-118: `points_restored_value` Odoo menyimpang dari restore yang diharapkan BFF → reverse ditahan (409). */
+  restore_value_unexpected: 'critical',
   /** K-18-4: `eligible_amount` > porsi uang order (amount_total reservasi × (1+toleransi) − nilai poin) → earn ditolak. */
   earn_exceeds_money_portion: 'warning',
   /** Entri ledger dengan `source` di luar daftar penulis BFF (admin/SQL manual/server action). */

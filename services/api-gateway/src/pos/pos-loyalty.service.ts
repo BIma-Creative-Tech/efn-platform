@@ -101,6 +101,8 @@ const LoyaltyErrors = {
   memberMismatch: (): ApiError => Errors.conflict('member_mismatch', 'Pelanggan tidak sesuai dengan verifikasi OTP.'),
   amountMismatch: (): ApiError => Errors.conflict('amount_mismatch', 'Total transaksi berubah terlalu jauh sejak OTP. Minta OTP baru.'),
   valueMismatch: (): ApiError => Errors.conflict('value_mismatch', 'Nilai poin tidak sesuai dengan reservasi.'),
+  restoreValueMismatch: (): ApiError =>
+    Errors.conflict('restore_value_mismatch', 'Nilai pengembalian poin tidak sesuai dengan penukaran asal. Perlu ditinjau.'),
   paymentMismatch: (): ApiError => Errors.conflict('payment_mismatch', 'Nilai pembayaran poin tidak sesuai dengan reservasi.'),
   reservationExists: (): ApiError => Errors.conflict('reservation_exists', 'Transaksi ini sudah memiliki penukaran poin aktif.'),
   reservationNotFound: (): ApiError => ApiError.of(404, 'reservation_not_found', 'Reservasi poin tidak ditemukan.'),
@@ -520,6 +522,7 @@ export class PosLoyaltyService {
         const priorClaw = -this.sumBy(priorRows, REVERSE_REASON.CLAWBACK);
         const priorRestore = this.sumBy(priorRows, REVERSE_REASON.RESTORE);
         const full = dto.refundRatio >= 1;
+        if (dto.pointsRestoredValue !== null) await this.assertExpectedRestore(q, dto, redeemed);
         const restore = this.restorePoints(dto, redeemed, priorRestore, full);
         const claw = Math.max(0, Math.min(earned - priorClaw, full ? earned : Math.ceil(earned * dto.refundRatio - EPS)));
 
@@ -577,6 +580,43 @@ export class PosLoyaltyService {
   // ───────────────────────── helper ─────────────────────────
 
   /**
+   * SEC-118 (L-25f): restore yang diharapkan dihitung dari data BFF sendiri — nilai redeem order asal V (Σ `value_idr`
+   * reservasi committed; tidak ada → poin redeem ledger × nilai poin) × rasio refund kumulatif (Σ `refund_ratio` reverse
+   * sebelumnya + rasio ini, ≤ 1) − Σ `points_restored_value` reverse sebelumnya. Selisih dengan nilai Odoo >
+   * max(nilai poin, `LOYALTY_RESTORE_TOLERANCE_PCT` % × V) → anomali `restore_value_unexpected` (critical) + 409
+   * `restore_value_mismatch` (Odoo menahan outbox untuk review; tidak ada entri yang ditulis).
+   */
+  private async assertExpectedRestore(q: Queryable, dto: PosReverseDto, redeemedPoints: number): Promise<void> {
+    const res = await q.query<{ v: string | number | null }>(
+      `SELECT COALESCE(SUM(value_idr), 0)::bigint AS v FROM platform.loyalty_reservation WHERE order_ref = $1 AND status = 'committed'`,
+      [dto.originalOrderRef],
+    );
+    const pv = this.config.loyaltyPointValueIdr;
+    const fromReservation = Number(res.rows[0]?.v ?? 0);
+    const value = fromReservation > 0 ? fromReservation : redeemedPoints * pv;
+    const prior = await q.query<{ ratio: string | number | null; restored: string | number | null }>(
+      `SELECT COALESCE(SUM(refund_ratio), 0) AS ratio, COALESCE(SUM(points_restored_value), 0)::bigint AS restored
+         FROM platform.loyalty_pos_reverse WHERE original_order_ref = $1 AND refund_order_ref <> $2`,
+      [dto.originalOrderRef, dto.refundOrderRef],
+    );
+    const priorRatio = Number(prior.rows[0]?.ratio ?? 0);
+    const priorValue = Number(prior.rows[0]?.restored ?? 0);
+    const cumulative = Math.min(1, priorRatio + dto.refundRatio);
+    const expected = Math.max(0, Math.round(value * cumulative) - priorValue);
+    const tolerance = Math.max(pv, Math.ceil((value * this.config.loyaltyRestoreTolerancePct) / 100));
+    const reported = dto.pointsRestoredValue ?? 0;
+    if (Math.abs(reported - expected) <= tolerance) return;
+    reportLoyaltyAnomaly(this.logger, this.metrics, 'restore_value_unexpected', {
+      order_ref: dto.originalOrderRef,
+      refund_order_ref: dto.refundOrderRef,
+      points_restored_value: reported,
+      expected_value: expected,
+      tolerance,
+    });
+    throw LoyaltyErrors.restoreValueMismatch();
+  }
+
+  /**
    * K-18-6: `platform.loyalty_pos_reverse` (append-only, retensi 10 th, tanpa PII). Idempoten per `refund_order_ref` /
    * `idempotency_key`: konflik dengan data sama → no-op; data berbeda → 409 `idempotency_conflict` (rollback).
    */
@@ -584,10 +624,11 @@ export class PosLoyaltyService {
     const value = dto.pointsRestoredValue ?? 0;
     const ins = await q.query(
       `INSERT INTO platform.loyalty_pos_reverse
-         (refund_order_ref, original_order_ref, company_code, points_restored_value, points_restored, idempotency_key, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+         (refund_order_ref, original_order_ref, company_code, points_restored_value, points_restored, idempotency_key, created_at,
+          refund_ratio)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT DO NOTHING`,
-      [dto.refundOrderRef, dto.originalOrderRef, company, value, restored, dto.idempotencyKey, new Date(this.now()).toISOString()],
+      [dto.refundOrderRef, dto.originalOrderRef, company, value, restored, dto.idempotencyKey, new Date(this.now()).toISOString(), dto.refundRatio],
     );
     if ((ins.rowCount ?? 0) > 0) return;
     const cur = await q.query<{ original_order_ref: string; points_restored_value: string | number; idempotency_key: string }>(
@@ -646,6 +687,13 @@ export class PosLoyaltyService {
    */
   private async enforceMoneyPortion(q: Queryable, dto: PosEarnDto, points: number): Promise<void> {
     if (!this.config.loyaltyEarnExcludePointPayment) return;
+    // SEC-123 (L-25k): commit redeem order ini belum masuk (mis. sedang retry) → earn ditunda (retryable), agar pagar
+    // porsi uang tidak terlewat karena urutan outbox
+    const pending = await q.query<{ pending: number }>(
+      `SELECT 1 AS pending FROM platform.loyalty_reservation WHERE order_ref = $1 AND status = 'reserved' AND hold_until > $2`,
+      [dto.orderRef, new Date(this.now()).toISOString()],
+    );
+    if ((pending.rowCount ?? 0) > 0) throw LoyaltyErrors.earnPending();
     const res = await q.query<{ value_idr: string | number; amount_total: string | number }>(
       `SELECT value_idr, amount_total FROM platform.loyalty_reservation WHERE order_ref = $1 AND status = 'committed'`,
       [dto.orderRef],
