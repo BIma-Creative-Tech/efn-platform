@@ -15,6 +15,9 @@ from odoo.exceptions import AccessError, UserError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
+# SEC-119 residual: pemetaan akuntansi metode Poin EFN (jurnal bank Poin EFN, akun liabilitas/kliring poin).
+POINTS_ACCOUNTING_FIELDS = ("journal_id", "outstanding_account_id")
+
 
 class PosPaymentMethod(models.Model):
     _inherit = "pos.payment.method"
@@ -65,10 +68,11 @@ class PosPaymentMethod(models.Model):
         return super().create(vals_list)
 
     def write(self, vals):
-        """SEC-119 (L-25g): flag Poin EFN hanya diubah admin (Settings, tercatat log), dan tidak bisa diubah oleh
-        siapa pun (dua arah) bila metode sudah punya pembayaran; metode Poin EFN berpembayaran juga tidak bisa
-        diarsipkan atau diganti jurnalnya (deteksi server & rekonsiliasi ETL retroaktif bergantung pada flag ini).
-        Hanya superuser (migrasi/data modul) yang dikecualikan."""
+        """SEC-119 (L-25g + residual re-review G18): pada metode Poin EFN, flag, jurnal (`journal_id`), dan akun
+        kliring/liabilitas (`outstanding_account_id`) hanya diubah admin (Settings, tercatat log). Bila metode sudah
+        punya pembayaran, flag (dua arah), jurnal, akun, dan status aktif dibekukan untuk siapa pun (deteksi server,
+        jurnal akuntansi & rekonsiliasi ETL retroaktif bergantung padanya). Hanya superuser (migrasi/data modul)
+        yang dikecualikan."""
         if not self.env.user._is_superuser():
             flag_changed = self.filtered(
                 lambda m: (
@@ -76,34 +80,40 @@ class PosPaymentMethod(models.Model):
                     and bool(vals["efn_is_loyalty_points"]) != bool(m.efn_is_loyalty_points)
                 )
             )
-            if flag_changed:
+            account_changed = self.filtered(
+                lambda m: (m.efn_is_loyalty_points or m in flag_changed) and m._efn_points_accounting_changed(vals)
+            )
+            if flag_changed or account_changed:
                 self._efn_check_points_flag_admin()
             for method in self:
-                points_change = method.efn_is_loyalty_points and (
-                    ("active" in vals and not vals["active"])
-                    or ("journal_id" in vals and vals["journal_id"] != method.journal_id.id)
-                )
-                if (method in flag_changed or points_change) and method._efn_has_payments():
+                archived = method.efn_is_loyalty_points and "active" in vals and not vals["active"]
+                if (method in flag_changed or method in account_changed or archived) and method._efn_has_payments():
                     raise UserError(
                         _(
-                            "Metode %(name)s sudah dipakai pembayaran; penanda Poin EFN, jurnal, dan status aktifnya "
-                            "tidak dapat diubah (SEC-119).",
+                            "Metode %(name)s sudah dipakai pembayaran; penanda Poin EFN, jurnal, akun, dan status "
+                            "aktifnya tidak dapat diubah (SEC-119).",
                             name=method.name,
                         )
                     )
-            if flag_changed:
+            if flag_changed or account_changed:
                 _logger.warning(
-                    "EFN Poin: user %s mengubah penanda Poin EFN metode %s -> %s (SEC-119)",
+                    "EFN Poin: user %s mengubah %s metode Poin EFN %s (SEC-119)",
                     self.env.uid,
-                    flag_changed.ids,
-                    bool(vals["efn_is_loyalty_points"]),
+                    sorted(set(vals) & {"efn_is_loyalty_points", *POINTS_ACCOUNTING_FIELDS}),
+                    (flag_changed | account_changed).ids,
                 )
         return super().write(vals)
+
+    def _efn_points_accounting_changed(self, vals):
+        self.ensure_one()
+        return any(
+            fname in vals and (vals[fname] or False) != (self[fname].id or False) for fname in POINTS_ACCOUNTING_FIELDS
+        )
 
     def _efn_check_points_flag_admin(self):
         user = self.env.user
         if not (user._is_superuser() or user.has_group("base.group_system")):
-            raise AccessError(_("Penanda metode Poin EFN hanya dapat diatur admin (SEC-119)."))
+            raise AccessError(_("Penanda, jurnal, dan akun metode Poin EFN hanya dapat diatur admin (SEC-119)."))
 
     def _efn_has_payments(self):
         self.ensure_one()

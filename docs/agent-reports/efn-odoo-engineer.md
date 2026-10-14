@@ -842,4 +842,4 @@ Dasar: bagian "Re-review G18" di `docs/reviews/SECURITY_REVIEW_2026-10-12_r11.md
 ## Untuk lead / tim lain
 - CI: `EFN_TOUR_MIN_TESTS` 27 → 29.
 - Deploy: tambahkan cek `installed` di atas ke `deploy-validate` (devsecops).
-- Residual (tidak diminta): `outstanding_account_id` metode Poin EFN masih bisa diubah POS Manager (catatan Info SEC-119).
+- Residual SEC-119 (ditutup setelah commit 64e10d6): pada metode Poin EFN, `journal_id` dan `outstanding_account_id` hanya bisa diubah admin (`base.group_system`), dan dibekukan untuk semua non-superuser bila metode sudah punya pembayaran. Test: `test_sec119_points_accounting_mapping_admin_only_and_frozen`.

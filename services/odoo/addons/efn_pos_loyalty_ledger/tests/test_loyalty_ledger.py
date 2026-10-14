@@ -1337,6 +1337,62 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         self.points_pm.with_user(manager).write({"name": "Poin EFN (ganti nama)"})
         self.assertTrue(self.points_pm.efn_is_loyalty_points and self.points_pm.active)
 
+    def test_sec119_points_accounting_mapping_admin_only_and_frozen(self):
+        """Residual SEC-119: jurnal & akun kliring/liabilitas metode Poin EFN hanya admin; beku bila sudah dipakai."""
+        manager = self._manager("efn_rr_loy_mgr119")
+        admin = new_test_user(
+            self.env,
+            login="efn_rr_loy_admin119",
+            groups="base.group_system,point_of_sale.group_pos_manager",
+            company_id=self.env.company.id,
+        )
+        company = self.env.company
+        journal = self.env["account.journal"].create(
+            {"name": "Poin EFN lain (uji)", "type": "bank", "code": "PEFL", "company_id": company.id}
+        )
+        account = self.env["account.account"].create(
+            {
+                "name": "Kliring poin lain (uji)",
+                "code": "219902",
+                "account_type": "liability_current",
+                "company_ids": [Command.set(company.ids)],
+            }
+        )
+        Method = self.env["pos.payment.method"]
+        # Metode Poin EFN cadangan tanpa pembayaran (nonaktif: "satu aktif per company"; tidak di sesi terbuka).
+        spare_journal = self.env["account.journal"].create(
+            {"name": "Poin EFN cadangan 119", "type": "bank", "code": "PEFD", "company_id": company.id}
+        )
+        spare = Method.create(
+            {
+                "name": "Poin cadangan 119",
+                "journal_id": spare_journal.id,
+                "active": False,
+                "efn_is_loyalty_points": True,
+            }
+        )
+        for vals in ({"journal_id": journal.id}, {"outstanding_account_id": account.id}):
+            with self.subTest(vals=vals), self.assertRaises(AccessError):
+                spare.with_user(manager).write(vals)
+        spare.with_user(admin).write({"journal_id": journal.id, "outstanding_account_id": account.id})
+        self.assertEqual((spare.journal_id, spare.outstanding_account_id), (journal, account))
+        # Nilai sama (tanpa perubahan) dan metode biasa tidak terpengaruh.
+        spare.with_user(manager).write({"journal_id": journal.id, "name": "Poin cadangan 119b"})
+        plain = Method.create({"name": "Bank biasa 119", "journal_id": spare_journal.id, "active": False})
+        plain.with_user(manager).write({"outstanding_account_id": account.id})
+        # Metode berpembayaran: beku untuk admin juga (sesi ditutup agar aturan core sesi terbuka tidak menutupi).
+        self._redeem_order()
+        self.pos_session.action_pos_session_closing_control()
+        self.assertEqual(self.pos_session.state, "closed")
+        for vals in ({"journal_id": journal.id}, {"outstanding_account_id": account.id}):
+            with self.subTest(user="manager", vals=vals), self.assertRaises(AccessError):
+                self.points_pm.with_user(manager).write(vals)
+            with self.subTest(user="admin", vals=vals), self.assertRaises(UserError) as caught:
+                self.points_pm.with_user(admin).write(vals)
+            self.assertNotIsInstance(caught.exception, AccessError)
+        self.assertNotEqual(self.points_pm.outstanding_account_id, account)
+        self.assertNotEqual(self.points_pm.journal_id, journal)
+
     # ======================================================= L-26 (SEC-128)
     def _mismatch_reverse(self):
         original = self._paid_original(points_value=10000)

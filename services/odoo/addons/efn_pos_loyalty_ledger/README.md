@@ -47,6 +47,9 @@ Poin EFN di POS Odoo CE 19: **earn** dari penjualan, **tukar poin** (wajib OTP p
   (`_efn_loyalty_draft_mismatch`). Draft berpoin tidak bisa dilunasi lewat `action_pos_order_paid`/write state.
   Wizard Payment backend menjalankan validasi E-30 lengkap dan commit.
 - **SEC-127:** `_efn_loyalty_lock_origin` = `touch_row` (UPDATE no-op).
+- **SEC-119 residual:** pada metode Poin EFN, `journal_id` dan `outstanding_account_id` (akun kliring/liabilitas poin)
+  diperlakukan sama dengan flag. Keduanya hanya bisa diubah admin (`base.group_system`, log peringatan), dan dibekukan
+  untuk siapa pun selain superuser bila metode sudah punya pembayaran. Metode bayar biasa tidak terpengaruh.
 - **L-26 (SEC-128):**
   - `commit` mengirim `order_goods_incl` (Rp bulat > 0 = nilai barang incl. pajak order, hitung server).
   - `reverse` mengirim `refund_goods_incl` (Rp >= 0).
