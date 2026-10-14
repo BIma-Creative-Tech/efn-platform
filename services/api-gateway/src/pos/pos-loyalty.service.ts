@@ -381,6 +381,16 @@ export class PosLoyaltyService {
             });
             throw LoyaltyErrors.paymentMismatch();
           }
+          // SEC-128: total order final harus ≥ nilai poin yang dibayarkan (penyebut alokasi restore)
+          if (dto.orderGoodsIncl !== null && dto.orderGoodsIncl < dto.paymentAmount) {
+            reportLoyaltyAnomaly(this.logger, this.metrics, 'commit_payment_mismatch', {
+              order_ref: r.order_ref,
+              company: r.company_code,
+              payment_amount: dto.paymentAmount,
+              order_goods_incl: dto.orderGoodsIncl,
+            });
+            throw LoyaltyErrors.paymentMismatch();
+          }
           const points = Number(r.points);
 
           if (r.status === 'committed') {
@@ -413,9 +423,10 @@ export class PosLoyaltyService {
           }));
           await q.query(
             `UPDATE platform.loyalty_reservation
-                SET status = 'committed', committed_at = $2, commit_idempotency_key = $3, updated_at = $2
+                SET status = 'committed', committed_at = $2, commit_idempotency_key = $3, updated_at = $2,
+                    order_goods_incl = $4
               WHERE id = $1`,
-            [r.id, now.toISOString(), dto.idempotencyKey],
+            [r.id, now.toISOString(), dto.idempotencyKey, dto.orderGoodsIncl],
           );
           const balance = await this.loyalty.balanceByHash(hash, q);
           if (balance < 0) this.logger.warn(`commit redeem order ${r.order_ref}: saldo member negatif (${balance})`);
@@ -587,32 +598,84 @@ export class PosLoyaltyService {
    * `restore_value_mismatch` (Odoo menahan outbox untuk review; tidak ada entri yang ditulis).
    */
   private async assertExpectedRestore(q: Queryable, dto: PosReverseDto, redeemedPoints: number): Promise<void> {
-    const res = await q.query<{ v: string | number | null }>(
-      `SELECT COALESCE(SUM(value_idr), 0)::bigint AS v FROM platform.loyalty_reservation WHERE order_ref = $1 AND status = 'committed'`,
+    const res = await q.query<{ v: string | number | null; t: string | number | null; t_missing: string | number | null; amt: string | number | null }>(
+      `SELECT COALESCE(SUM(value_idr), 0)::bigint AS v, COALESCE(SUM(order_goods_incl), 0)::bigint AS t,
+              COUNT(*) FILTER (WHERE order_goods_incl IS NULL) AS t_missing, COALESCE(SUM(amount_total), 0) AS amt
+         FROM platform.loyalty_reservation WHERE order_ref = $1 AND status = 'committed'`,
       [dto.originalOrderRef],
     );
     const pv = this.config.loyaltyPointValueIdr;
-    const fromReservation = Number(res.rows[0]?.v ?? 0);
+    const row = res.rows[0];
+    const fromReservation = Number(row?.v ?? 0);
     const value = fromReservation > 0 ? fromReservation : redeemedPoints * pv;
-    const prior = await q.query<{ ratio: string | number | null; restored: string | number | null }>(
-      `SELECT COALESCE(SUM(refund_ratio), 0) AS ratio, COALESCE(SUM(points_restored_value), 0)::bigint AS restored
+    const prior = await q.query<{
+      ratio: string | number | null;
+      restored: string | number | null;
+      goods: string | number | null;
+      goods_missing: string | number | null;
+    }>(
+      `SELECT COALESCE(SUM(refund_ratio), 0) AS ratio, COALESCE(SUM(points_restored_value), 0)::bigint AS restored,
+              COALESCE(SUM(refund_goods_incl), 0)::bigint AS goods, COUNT(*) FILTER (WHERE refund_goods_incl IS NULL) AS goods_missing
          FROM platform.loyalty_pos_reverse WHERE original_order_ref = $1 AND refund_order_ref <> $2`,
       [dto.originalOrderRef, dto.refundOrderRef],
     );
-    const priorRatio = Number(prior.rows[0]?.ratio ?? 0);
-    const priorValue = Number(prior.rows[0]?.restored ?? 0);
-    const cumulative = Math.min(1, priorRatio + dto.refundRatio);
-    const expected = Math.max(0, Math.round(value * cumulative) - priorValue);
-    const tolerance = Math.max(pv, Math.ceil((value * this.config.loyaltyRestoreTolerancePct) / 100));
+    const p = prior.rows[0];
+    const priorValue = Number(p?.restored ?? 0);
     const reported = dto.pointsRestoredValue ?? 0;
+
+    let expected: number;
+    let tolerance: number;
+    let basis: string;
+    if (dto.refundGoodsIncl !== null && Number(p?.goods_missing ?? 0) === 0) {
+      // SEC-128: rasio NILAI incl pajak (tidak bergantung kategori earn) — rumus sama dengan alokasi Odoo Q-F18-4:
+      // round(min(Σ refund incl, T) × V ÷ T) − restore sebelumnya. Penyebut T = total order final saat commit
+      // (`order_goods_incl`); belum ada (commit lama) → `amount_total` reservasi (saat reserve, bisa bergeser).
+      const exactT = Number(row?.t_missing ?? 1) === 0 && Number(row?.t ?? 0) > 0;
+      const total = exactT ? Number(row?.t) : Number(row?.amt ?? 0);
+      if (total <= 0) {
+        expected = 0;
+        tolerance = 1;
+      } else {
+        const cumulative = Math.min(Number(p?.goods ?? 0) + dto.refundGoodsIncl, total);
+        expected = Math.max(0, Math.round((cumulative * value) / total) - priorValue);
+        tolerance = exactT
+          ? 1 // pembulatan Rupiah (sama dengan toleransi validasi server Odoo)
+          : Math.max(pv, Math.ceil((value * this.config.posOtpAmountTolerancePct) / 100));
+      }
+      basis = exactT ? 'goods_incl' : 'goods_incl_reserve_total';
+    } else if (dto.refundRatio > 0) {
+      // Event lama (tanpa refund_goods_incl): rasio eligible Odoo, toleransi longgar
+      const cumulative = Math.min(1, Number(p?.ratio ?? 0) + dto.refundRatio);
+      expected = Math.max(0, Math.round(value * cumulative) - priorValue);
+      tolerance = Math.max(pv, Math.ceil((value * this.config.loyaltyRestoreTolerancePct) / 100));
+      basis = 'eligible_ratio';
+    } else {
+      // Event lama, refund hanya barang dikecualikan dari earn (rasio eligible 0): tidak bisa dicek tanpa nilai incl pajak.
+      // Tidak ditolak (SEC-128: refund sah); restore tetap dibatasi sisa redeem; dicatat untuk ditinjau.
+      if (reported > 0) {
+        reportLoyaltyAnomaly(this.logger, this.metrics, 'restore_value_unverified', {
+          order_ref: dto.originalOrderRef,
+          refund_order_ref: dto.refundOrderRef,
+          points_restored_value: reported,
+        });
+      }
+      return;
+    }
     if (Math.abs(reported - expected) <= tolerance) return;
-    reportLoyaltyAnomaly(this.logger, this.metrics, 'restore_value_unexpected', {
+    const fields = {
       order_ref: dto.originalOrderRef,
       refund_order_ref: dto.refundOrderRef,
       points_restored_value: reported,
       expected_value: expected,
       tolerance,
-    });
+      basis,
+    };
+    if (dto.restoreApproved) {
+      // SEC-128: hold/review — persetujuan supervisor Odoo; dibatasi sisa redeem (restorePoints) dan selalu dicatat
+      reportLoyaltyAnomaly(this.logger, this.metrics, 'restore_value_override', fields);
+      return;
+    }
+    reportLoyaltyAnomaly(this.logger, this.metrics, 'restore_value_unexpected', fields);
     throw LoyaltyErrors.restoreValueMismatch();
   }
 
@@ -625,10 +688,21 @@ export class PosLoyaltyService {
     const ins = await q.query(
       `INSERT INTO platform.loyalty_pos_reverse
          (refund_order_ref, original_order_ref, company_code, points_restored_value, points_restored, idempotency_key, created_at,
-          refund_ratio)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          refund_ratio, refund_goods_incl, restore_approved)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        ON CONFLICT DO NOTHING`,
-      [dto.refundOrderRef, dto.originalOrderRef, company, value, restored, dto.idempotencyKey, new Date(this.now()).toISOString(), dto.refundRatio],
+      [
+        dto.refundOrderRef,
+        dto.originalOrderRef,
+        company,
+        value,
+        restored,
+        dto.idempotencyKey,
+        new Date(this.now()).toISOString(),
+        dto.refundRatio,
+        dto.refundGoodsIncl,
+        dto.restoreApproved,
+      ],
     );
     if ((ins.rowCount ?? 0) > 0) return;
     const cur = await q.query<{ original_order_ref: string; points_restored_value: string | number; idempotency_key: string }>(

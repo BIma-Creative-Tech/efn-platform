@@ -42,6 +42,7 @@ export interface FakeReservationRow {
   updated_at: string;
   committed_at: string | null;
   commit_idempotency_key: string | null;
+  order_goods_incl?: number | null;
 }
 
 type Undo = () => void;
@@ -286,6 +287,8 @@ export class FakeLoyaltyDb implements Db {
         idempotency_key: String(p[5]),
         created_at: String(p[6]),
         refund_ratio: Number(p[7] ?? 0),
+        refund_goods_incl: p[8] === null || p[8] === undefined ? null : Number(p[8]),
+        restore_approved: p[9] === true,
       };
       if (this.reverses.has(row.refund_order_ref) || [...this.reverses.values()].some((r) => r.idempotency_key === row.idempotency_key)) {
         return ok([], 0);
@@ -300,12 +303,21 @@ export class FakeLoyaltyDb implements Db {
         {
           ratio: rows.reduce((s, r) => s + Number(r.refund_ratio ?? 0), 0),
           restored: String(rows.reduce((s, r) => s + Number(r.points_restored_value), 0)),
+          goods: String(rows.reduce((s, r) => s + Number(r.refund_goods_incl ?? 0), 0)),
+          goods_missing: String(rows.filter((r) => r.refund_goods_incl === null || r.refund_goods_incl === undefined).length),
         },
       ]);
     }
-    if (text.includes('SUM(value_idr), 0)::bigint AS v FROM platform.loyalty_reservation')) {
-      const v = [...this.reservations.values()].filter((r) => r.order_ref === p[0] && r.status === 'committed').reduce((s, r) => s + r.value_idr, 0);
-      return ok([{ v: String(v) }]);
+    if (text.includes('SUM(value_idr), 0)::bigint AS v') && text.includes('FROM platform.loyalty_reservation')) {
+      const rows = [...this.reservations.values()].filter((r) => r.order_ref === p[0] && r.status === 'committed');
+      return ok([
+        {
+          v: String(rows.reduce((s, r) => s + r.value_idr, 0)),
+          t: String(rows.reduce((s, r) => s + Number(r.order_goods_incl ?? 0), 0)),
+          t_missing: String(rows.filter((r) => r.order_goods_incl === null || r.order_goods_incl === undefined).length),
+          amt: String(rows.reduce((s, r) => s + r.amount_total, 0)),
+        },
+      ]);
     }
     if (text.includes('SELECT 1 AS pending FROM platform.loyalty_reservation')) {
       return ok(
@@ -356,7 +368,17 @@ export class FakeLoyaltyDb implements Db {
       if (!r) return ok([], 0);
       const next = { ...r, status: 'committed' as const };
       this.checkUnique(next, r.id);
-      this.setStatus(r, { status: 'committed', committed_at: String(p[1]), commit_idempotency_key: String(p[2]), updated_at: String(p[1]) }, undo);
+      this.setStatus(
+        r,
+        {
+          status: 'committed',
+          committed_at: String(p[1]),
+          commit_idempotency_key: String(p[2]),
+          updated_at: String(p[1]),
+          order_goods_incl: p[3] === null || p[3] === undefined ? null : Number(p[3]),
+        },
+        undo,
+      );
       return ok([], 1);
     }
     if (text.includes("SET status = 'released'")) {

@@ -77,7 +77,7 @@ function setup(overrides: Record<string, string> = {}) {
     reservationId: string,
     orderRef: string,
     key = `pos_redeem:${orderRef}`,
-    opts: { memberRef?: string; valueIdr?: number; paymentAmount?: number } = {},
+    opts: { memberRef?: string; valueIdr?: number; paymentAmount?: number; orderGoodsIncl?: number | null } = {},
   ) =>
     svc.commit({
       reservationId,
@@ -85,9 +85,17 @@ function setup(overrides: Record<string, string> = {}) {
       memberRef: opts.memberRef ?? MEMBER,
       valueIdr: opts.valueIdr ?? db.reservations.get(reservationId)?.value_idr ?? 0,
       paymentAmount: opts.paymentAmount ?? opts.valueIdr ?? db.reservations.get(reservationId)?.value_idr ?? 0,
+      orderGoodsIncl: opts.orderGoodsIncl ?? null,
       idempotencyKey: key,
     });
-  const reverse = (refund: string, original: string, ratio: number, memberRef = MEMBER, restoredValue: number | null = null) =>
+  const reverse = (
+    refund: string,
+    original: string,
+    ratio: number,
+    memberRef = MEMBER,
+    restoredValue: number | null = null,
+    extra: { refundGoodsIncl?: number | null; restoreApproved?: boolean } = {},
+  ) =>
     svc.reverse({
       idempotencyKey: `pos_reverse:${refund}`,
       originalOrderRef: original,
@@ -96,6 +104,8 @@ function setup(overrides: Record<string, string> = {}) {
       refundedEligibleAmount: 0,
       refundRatio: ratio,
       pointsRestoredValue: restoredValue,
+      refundGoodsIncl: extra.refundGoodsIncl ?? null,
+      restoreApproved: extra.restoreApproved ?? false,
     });
   const now = () => new Date(clock.now());
   return { clock, config, cipher, kv, metrics, db, loyalty, tokens, svc, sweeper, hash, earn, token, reserve, commit, reverse, now };
@@ -928,5 +938,111 @@ describe('Review r11 — SEC-118 / SEC-123 / SEC-124 (L-25f/k/l)', () => {
     expect(ctx.db.reservations.has(r.reservation_id)).toBe(false);
     expect(testConfig().loyaltyCommittedReservationRetentionDays).toBe(3650);
     expect(() => testConfig({ LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS: '30' }).loyaltyCommittedReservationRetentionDays).toThrow();
+  });
+});
+
+describe('Re-review G18 SEC-128 — cek restore berbasis nilai incl pajak, tidak bergantung kategori earn', () => {
+  async function sale(ctx: ReturnType<typeof setup>, orderGoodsIncl: number | null = 125_000) {
+    await ctx.earn(ORDER_C, 1_000_000);
+    const r = await ctx.reserve(ORDER_A, 50, { amountTotal: 125_000 }); // V = 5000
+    await ctx.commit(r.reservation_id, ORDER_A, undefined, { orderGoodsIncl });
+    await ctx.earn(ORDER_A, 100_000);
+    return r;
+  }
+  const spyWarn = () => jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+  it('DTO: order_goods_incl (commit) & refund_goods_incl / restore_approved (reverse) opsional, integer/boolean', async () => {
+    const commitBody = {
+      reservation_id: '11111111-2222-4333-8444-555555555555',
+      order_ref: ORDER_A,
+      member_ref: MEMBER,
+      value_idr: 5000,
+      payment_amount: 5000,
+      idempotency_key: `pos_redeem:${ORDER_A}`,
+    };
+    expect(parseRedeemCommit(commitBody).orderGoodsIncl).toBeNull();
+    expect(parseRedeemCommit({ ...commitBody, order_goods_incl: 125_000 }).orderGoodsIncl).toBe(125_000);
+    for (const v of [0, 1.5, '125000']) expect((await catchApiError(() => parseRedeemCommit({ ...commitBody, order_goods_incl: v }))).getStatus()).toBe(400);
+    const rev = {
+      idempotency_key: `pos_reverse:${REFUND_1}`,
+      original_order_ref: ORDER_A,
+      refund_order_ref: REFUND_1,
+      member_ref: MEMBER,
+      refunded_eligible_amount: 0,
+      refund_ratio: 0.000001,
+    };
+    expect(parsePosReverse(rev)).toMatchObject({ refundGoodsIncl: null, restoreApproved: false });
+    expect(parsePosReverse({ ...rev, refund_goods_incl: 25_000, restore_approved: true })).toMatchObject({ refundGoodsIncl: 25_000, restoreApproved: true });
+    for (const bad of [{ refund_goods_incl: -1 }, { refund_goods_incl: 2.5 }, { restore_approved: 'ya' }]) {
+      expect((await catchApiError(() => parsePosReverse({ ...rev, ...bad }))).getStatus()).toBe(400);
+    }
+  });
+
+  it('refund hanya barang dikecualikan earn (rasio eligible 0) → diterima bila nilai sesuai proporsi incl pajak; toleransi Rp1; kumulatif', async () => {
+    const ctx = setup({ LOYALTY_REDEEM_MIN_POINTS: '1' });
+    await sale(ctx);
+    const warn = spyWarn();
+    try {
+      // refund rokok Rp25.000 (incl pajak) dari order Rp125.000 → round(25000 × 5000 / 125000) = 1000
+      expect(await code(ctx.reverse(REFUND_1, ORDER_A, 0.000001, MEMBER, 1002, { refundGoodsIncl: 25_000 }))).toBe('409 restore_value_mismatch');
+      const line = warn.mock.calls.map((c) => String(c[0])).find((l) => l.includes('restore_value_unexpected'))!;
+      expect(JSON.parse(line.slice('EFN_LOYALTY_ANOMALY '.length))).toMatchObject({ expected_value: 1000, tolerance: 1, basis: 'goods_incl' });
+      const a = await ctx.reverse(REFUND_1, ORDER_A, 0.000001, MEMBER, 1001, { refundGoodsIncl: 25_000 });
+      expect(a).toMatchObject({ points_restored: 10, points_clawed_back: 1 });
+      expect(ctx.db.reverses.get(REFUND_1)).toMatchObject({ refund_goods_incl: 25_000, restore_approved: false });
+      // sisa Rp100.000 → kumulatif 125.000 → 5000 − 1001 = 3999
+      expect(await code(ctx.reverse(REFUND_2, ORDER_A, 0.5, MEMBER, 2500, { refundGoodsIncl: 100_000 }))).toBe('409 restore_value_mismatch');
+      expect((await ctx.reverse(REFUND_2, ORDER_A, 0.5, MEMBER, 3999, { refundGoodsIncl: 100_000 })).points_restored).toBe(39);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('hold/review: restore_approved (persetujuan supervisor Odoo) melewati cek nilai, tetap dibatasi sisa redeem, selalu dicatat', async () => {
+    const ctx = setup({ LOYALTY_REDEEM_MIN_POINTS: '1' });
+    await sale(ctx);
+    const warn = spyWarn();
+    try {
+      expect(await code(ctx.reverse(REFUND_1, ORDER_A, 0.2, MEMBER, 9000, { refundGoodsIncl: 25_000 }))).toBe('409 restore_value_mismatch');
+      const res = await ctx.reverse(REFUND_1, ORDER_A, 0.2, MEMBER, 9000, { refundGoodsIncl: 25_000, restoreApproved: true });
+      expect(res.points_restored).toBe(50); // diminta 90, dibatasi sisa redeem 50
+      const kinds = warn.mock.calls.map((c) => String(c[0]));
+      expect(kinds.some((l) => l.includes('"kind":"restore_value_override"'))).toBe(true);
+      expect(kinds.some((l) => l.includes('"kind":"restore_exceeds_redeem"'))).toBe(true);
+      expect(ctx.db.reverses.get(REFUND_1)).toMatchObject({ restore_approved: true, points_restored: 50 });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('event lama tanpa refund_goods_incl: rasio eligible 0 → tidak ditolak (anomali unverified); commit lama tanpa order_goods_incl → penyebut amount_total + toleransi', async () => {
+    const legacy = setup({ LOYALTY_REDEEM_MIN_POINTS: '1' });
+    await sale(legacy, null);
+    const warn = spyWarn();
+    try {
+      expect((await legacy.reverse(REFUND_1, ORDER_A, 0, MEMBER, 1000)).points_restored).toBe(10);
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('"kind":"restore_value_unverified"'))).toBe(true);
+      // penyebut amount_total reservasi (125.000), toleransi max(nilai poin, 20 % × V = 1000)
+      const fb = setup({ LOYALTY_REDEEM_MIN_POINTS: '1' });
+      await sale(fb, null);
+      expect((await fb.reverse(REFUND_1, ORDER_A, 0.1, MEMBER, 1800, { refundGoodsIncl: 25_000 })).points_restored).toBe(18);
+      expect(await code(fb.reverse(REFUND_2, ORDER_A, 0.1, MEMBER, 4000, { refundGoodsIncl: 10_000 }))).toBe('409 restore_value_mismatch');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('commit: order_goods_incl < payment_amount → 409 payment_mismatch; disimpan sebagai penyebut', async () => {
+    const ctx = setup({ LOYALTY_REDEEM_MIN_POINTS: '1' });
+    await ctx.earn(ORDER_C, 1_000_000);
+    const r = await ctx.reserve(ORDER_A, 50);
+    const warn = spyWarn();
+    try {
+      expect(await code(ctx.commit(r.reservation_id, ORDER_A, undefined, { orderGoodsIncl: 4999 }))).toBe('409 payment_mismatch');
+    } finally {
+      warn.mockRestore();
+    }
+    await ctx.commit(r.reservation_id, ORDER_A, undefined, { orderGoodsIncl: 120_000 });
+    expect(ctx.db.reservations.get(r.reservation_id)?.order_goods_incl).toBe(120_000);
   });
 });

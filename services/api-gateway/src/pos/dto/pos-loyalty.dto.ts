@@ -17,6 +17,17 @@ function floorIdr(o: Record<string, unknown>, key: string): number {
   return Math.floor(requireNumber(o, key, 0, MAX_AMOUNT_IDR) + 1e-9);
 }
 
+function optionalInt(o: Record<string, unknown>, key: string, min: number): number | null {
+  return o[key] === undefined || o[key] === null ? null : requireInt(o, key, min, MAX_AMOUNT_IDR);
+}
+
+function optionalBool(o: Record<string, unknown>, key: string): boolean {
+  const v = o[key];
+  if (v === undefined || v === null) return false;
+  if (typeof v !== 'boolean') throw Errors.invalidRequest();
+  return v;
+}
+
 /** Rupiah maksimum yang diterima (Rp10 miliar) — batas sanity, bukan aturan bisnis. */
 export const MAX_AMOUNT_IDR = 10_000_000_000;
 const MAX_POINTS = 1_000_000;
@@ -98,6 +109,11 @@ export interface RedeemCommitDto {
   valueIdr: number;
   /** K-18-3: nilai baris pembayaran Poin EFN di order (integer Rupiah) — wajib sama dengan `value_idr` reservasi. */
   paymentAmount: number;
+  /**
+   * SEC-128 (opsional, usulan kontrak): total nilai barang order FINAL termasuk pajak (integer Rupiah, = Odoo
+   * `abs(_efn_goods_incl_raw())`). Disimpan di reservasi sebagai penyebut alokasi restore proporsional. Tidak ada → null.
+   */
+  orderGoodsIncl: number | null;
   idempotencyKey: string;
 }
 
@@ -114,6 +130,7 @@ export function parseRedeemCommit(body: unknown): RedeemCommitDto {
     memberRef,
     valueIdr: requireInt(o, 'value_idr', 0, MAX_AMOUNT_IDR),
     paymentAmount: requireInt(o, 'payment_amount', 0, MAX_AMOUNT_IDR),
+    orderGoodsIncl: optionalInt(o, 'order_goods_incl', 1),
     idempotencyKey: requireIdempotencyKey(o, 'pos_redeem'),
   };
 }
@@ -136,6 +153,16 @@ export interface PosReverseDto {
    * = floor(nilai ÷ `LOYALTY_POINT_VALUE_IDR`); tidak ada (event lama) → `refund_ratio` seperti v4.
    */
   pointsRestoredValue: number | null;
+  /**
+   * SEC-128 (opsional, usulan kontrak): nilai barang refund INI termasuk pajak (integer Rupiah, absolut, = Odoo
+   * `abs(refund._efn_goods_incl_raw(goods))`). Ada → cek restore proporsional ketat (Rp1) tanpa bergantung kategori earn.
+   */
+  refundGoodsIncl: number | null;
+  /**
+   * SEC-128: hold/review — supervisor Odoo menyetujui reverse yang sebelumnya ditolak `restore_value_mismatch`. BFF
+   * melewati cek nilai (restore tetap dibatasi sisa redeem) dan mencatat anomali `restore_value_override`.
+   */
+  restoreApproved: boolean;
 }
 
 /**
@@ -159,5 +186,7 @@ export function parsePosReverse(body: unknown): PosReverseDto {
     refundRatio,
     pointsRestoredValue:
       o.points_restored_value === undefined || o.points_restored_value === null ? null : requireInt(o, 'points_restored_value', 0, MAX_AMOUNT_IDR),
+    refundGoodsIncl: optionalInt(o, 'refund_goods_incl', 0),
+    restoreApproved: optionalBool(o, 'restore_approved'),
   };
 }

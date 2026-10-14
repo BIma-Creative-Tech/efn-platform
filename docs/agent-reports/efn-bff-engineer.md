@@ -593,3 +593,15 @@ Sumber: `docs/10_RENCANA_GELOMBANG_18_PLUS.md` (W-18, W-19, W-25), keputusan pem
 - **SEC-124:** erasure melepas tautan reservasi `committed` (`member_hash` → tombstone acak yang sama dengan ledger) alih-alih menghapus; reservasi lain tetap dihapus. Sweeper tidak lagi mem-purge `committed` setelah 30 h; retensi `committed` = `LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS` (default/min 3650, maks 7300). `loyalty_pos_reverse` tidak di-purge. Grant `UPDATE (member_hash)` ke `efn_bff`.
 - **Env baru (devsecops):** `LOYALTY_RESTORE_TOLERANCE_PCT=10`, `LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS=3650`. Tidak ada file migrasi baru (08 diperluas idempoten).
 - Validasi: build OK, lint 0 error, **43 suite / 568 test lulus** (3 test baru + penyesuaian), audit tanpa high. Migrasi diuji di PostgreSQL 16: 01–07 → 08 baru 2×, dan 01–07 + 08 versi HEAD → 08 baru 2× (upgrade); query baru dijalankan sebagai `efn_bff` (termasuk UPDATE member_hash), SELECT ETL sebagai `efn_etl`.
+
+### Re-review G18 — SEC-128 (14 Okt)
+- Cek restore dirancang ulang: basis utama **nilai barang incl pajak** (tidak bergantung kategori earn) dengan rumus yang sama dengan alokasi Odoo Q-F18-4, toleransi **Rp1**: `round(min(Σ refund_goods_incl, T) × V ÷ T) − Σ restore sebelumnya`, V = Σ `value_idr` committed, T = total order final dari commit (disimpan BFF).
+- **Usulan field baru untuk Odoo (opsional, kompatibel mundur):**
+  1. `POST /v1/pos/loyalty/redeem/commit` → `order_goods_incl` (integer Rupiah, > 0) = `round(abs(order._efn_goods_incl_raw()))` order yang dibayar.
+  2. `POST /v1/pos/loyalty/reverse` → `refund_goods_incl` (integer Rupiah, ≥ 0) = `round(abs(refund._efn_goods_incl_raw(goods)))` refund ini.
+  3. `reverse` → `restore_approved: true` hanya saat supervisor menyetujui outbox yang ditahan (lihat 4).
+  4. Outbox Odoo: kode `restore_value_mismatch` → state **`hold`** (review supervisor, pola SEC-60) alih-alih `failed`; tombol setuju mengirim ulang dengan `restore_approved: true`, tolak → batal. Dengan itu refund sah yang gagal cek tidak final permanen.
+- Tanpa field baru: rasio eligible > 0 → cek lama (toleransi 10 %); rasio 0 (refund hanya barang dikecualikan) → diterima + anomali `restore_value_unverified`; commit lama tanpa `order_goods_incl` → penyebut `amount_total` reservasi dengan toleransi `POS_OTP_AMOUNT_TOLERANCE_PCT`. Setelah Odoo mengirim field baru, `LOYALTY_RESTORE_TOLERANCE_PCT` hanya berlaku untuk event lama.
+- Sisa risiko: `restore_approved` dapat dikirim pemegang service key mana pun → dibatasi sisa redeem order asal, selalu tercatat (anomali + kolom), dipantau alert anomali loyalty.
+- Migrasi 08 (idempoten): `loyalty_reservation.order_goods_incl` (CHECK > 0, `GRANT UPDATE` kolom ke `efn_bff`), `loyalty_pos_reverse.refund_goods_incl` (CHECK ≥ 0), `restore_approved` (default false); grant SELECT kolom ke `efn_readonly`. Diuji PostgreSQL 16: 01–07 → 08 baru 2× dan 08 HEAD → 08 baru 2×; query baru sebagai `efn_bff`.
+- Validasi: build OK, lint 0 error, **43 suite / 573 test lulus** (5 test baru: refund barang dikecualikan, Rp1, kumulatif, hold/override, fallback, commit), audit tanpa high.

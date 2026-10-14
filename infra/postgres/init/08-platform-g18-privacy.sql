@@ -80,6 +80,26 @@ BEGIN
   END IF;
 END $$;
 
+-- 8. (re-review G18 SEC-128) cek restore berbasis NILAI incl pajak, tidak bergantung kategori earn:
+--    reservasi committed menyimpan total barang order final incl pajak (`order_goods_incl`, dari commit), reverse menyimpan
+--    nilai barang refund incl pajak (`refund_goods_incl`) dan persetujuan supervisor hold/review (`restore_approved`).
+ALTER TABLE platform.loyalty_reservation ADD COLUMN IF NOT EXISTS order_goods_incl bigint;
+ALTER TABLE platform.loyalty_pos_reverse ADD COLUMN IF NOT EXISTS refund_goods_incl bigint;
+ALTER TABLE platform.loyalty_pos_reverse ADD COLUMN IF NOT EXISTS restore_approved boolean NOT NULL DEFAULT false;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_loyalty_reservation_order_goods'
+                   AND conrelid = 'platform.loyalty_reservation'::regclass) THEN
+    ALTER TABLE platform.loyalty_reservation
+      ADD CONSTRAINT ck_loyalty_reservation_order_goods CHECK (order_goods_incl IS NULL OR order_goods_incl > 0);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_loyalty_pos_reverse_goods'
+                   AND conrelid = 'platform.loyalty_pos_reverse'::regclass) THEN
+    ALTER TABLE platform.loyalty_pos_reverse
+      ADD CONSTRAINT ck_loyalty_pos_reverse_goods CHECK (refund_goods_incl IS NULL OR refund_goods_incl >= 0);
+  END IF;
+END $$;
+
 RESET ROLE;
 
 -- loyalty_pos_reverse: efn_bff hanya SELECT/INSERT (append-only, tanpa UPDATE/DELETE — catatan keuangan 10 th);
@@ -92,6 +112,10 @@ GRANT SELECT (refund_order_ref, original_order_ref, company_code, points_restore
 -- 7. (review r11 SEC-124, L-25l) erasure DSAR TIDAK lagi menghapus reservasi `committed` (nilai keuangan redeem, sisi BFF
 --    rekonsiliasi K-18-6, retensi 10 th) — hanya `member_hash` → tombstone acak. Hak UPDATE kolom itu saja.
 GRANT UPDATE (member_hash) ON platform.loyalty_reservation TO efn_bff;
+-- SEC-128: commit mengisi total order final (sekali, bersama status committed)
+GRANT UPDATE (order_goods_incl) ON platform.loyalty_reservation TO efn_bff;
+GRANT SELECT (order_goods_incl) ON platform.loyalty_reservation TO efn_readonly;
+GRANT SELECT (refund_ratio, refund_goods_incl, restore_approved) ON platform.loyalty_pos_reverse TO efn_readonly;
 
 -- Hak akses: efn_bff sudah SELECT/INSERT/UPDATE tingkat tabel (04-platform-v3-6.sql) → kolom baru tercakup.
 -- efn_etl hanya SELECT kolom tertentu dsar_request (03) → kolom baru TIDAK terlihat ETL (sengaja).
