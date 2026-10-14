@@ -1109,6 +1109,7 @@ services:
       ONLINE_ENABLED: ${ONLINE_ENABLED:-false}
       ONLINE_CATALOG_ENABLED: ${ONLINE_CATALOG_ENABLED:-false}
       LOYALTY_EARN_EXCLUDE_POINT_PAYMENT: ${LOYALTY_EARN_EXCLUDE_POINT_PAYMENT:-true}
+      LOYALTY_POINT_VALUE_IDR: ${LOYALTY_POINT_VALUE_IDR:-100}   # nilai 1 poin (Rp), Q-13 Finance; dibaca juga etl (SEC-118)
       # r11 (L-25f/l, SEC-118/124): toleransi nilai restore poin (% nilai redeem; 0..50 di deploy-validate) dan retensi
       # reservasi committed (nilai keuangan, >= 10 th, Q-P2) - rekonsiliasi K-18-6 tidak positif palsu setelah erasure.
       LOYALTY_RESTORE_TOLERANCE_PCT: ${LOYALTY_RESTORE_TOLERANCE_PCT:-10}
@@ -1534,6 +1535,7 @@ services:
       ETL_LOYALTY_RECON_NOT_BEFORE: ${ETL_LOYALTY_RECON_NOT_BEFORE:-}
       # SEC-114 (L-25b): default payment (E-30 = desain G18); product hanya data historis (ditolak deploy-validate di production)
       ETL_LOYALTY_POINTS_MODE: ${ETL_LOYALTY_POINTS_MODE:-payment}
+      LOYALTY_POINT_VALUE_IDR: ${LOYALTY_POINT_VALUE_IDR:-100}   # SEC-118: wajib sama dengan api-gateway
       # W-19: harus sama dengan clickhouse-init (TTL kolom pseudonim / geo; ETL gagal start bila di luar rentang)
       CH_PSEUDONYM_RETENTION_YEARS: ${CH_PSEUDONYM_RETENTION_YEARS:-5}
       CH_GEO_RETENTION_DAYS: ${CH_GEO_RETENTION_DAYS:-90}

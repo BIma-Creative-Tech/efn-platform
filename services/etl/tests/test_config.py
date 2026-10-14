@@ -216,3 +216,11 @@ def test_loyalty_points_mode_w18(tls_env: dict[str, str]) -> None:
     for bad in ({"ETL_LOYALTY_POINTS_MODE": "diskon"}, {"ETL_LOYALTY_POINTS_TOLERANCE_IDR": "-1"}):
         with pytest.raises(RuntimeError):
             Settings.from_env({**tls_env, **bad})
+
+
+def test_loyalty_point_value_sec118(tls_env: dict[str, str]) -> None:
+    # SEC-118: nilai 1 poin sama dengan BFF (`LOYALTY_POINT_VALUE_IDR`, default 100).
+    assert Settings.from_env(tls_env).loyalty_point_value_idr == 100
+    assert Settings.from_env({**tls_env, "LOYALTY_POINT_VALUE_IDR": "250"}).loyalty_point_value_idr == 250
+    with pytest.raises(RuntimeError):
+        Settings.from_env({**tls_env, "LOYALTY_POINT_VALUE_IDR": "0"})

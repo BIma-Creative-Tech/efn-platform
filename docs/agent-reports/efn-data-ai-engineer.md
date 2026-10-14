@@ -614,3 +614,24 @@ E-30 **belum** ada di DB dev -> logika diuji dengan fixture; uji nyata mode `pay
 
 ### SEC-124 (BFF)
 Rekonsiliasi harian membaca `value_idr` reservasi `committed` (sisi redeem). Saat ini `erasure.service.ts` masih `DELETE FROM platform.loyalty_reservation WHERE member_hash = $1` dan sweeper retensi menghapus reservasi terminal setelah 30 h. Setelah SEC-124 (lepas tautan member, nilai keuangan committed tetap), erasure tidak lagi menghasilkan `points_payment_daily_mismatch`/`redeem_points_mismatch` palsu. Retensi 30 h tetap aman untuk jendela recon 72 j. Tidak ada perubahan ETL yang dibutuhkan untuk SEC-124 (kolom yang dibaca: `order_ref, company_code, value_idr, committed_at, status, points`).
+
+## Gelombang 18d — SEC-118 sisi ETL (re-review G18) (14 Okt 2026)
+
+Rekonsiliasi harian kini juga membandingkan **poin yang benar-benar dikembalikan BFF** dengan **nilai Rupiah dari Odoo**
+per order refund: `points_restored_value − points_restored × LOYALTY_POINT_VALUE_IDR` harus di `[0, nilai 1 poin)`
+(sisa pembulatan floor BFF). Di luar itu → kind critical **`points_restore_value_mismatch`**, terpisah dari
+`points_payment_daily_mismatch` (selisih pembayaran).
+
+| File | Perubahan |
+|---|---|
+| `services/etl/efn_etl/loyalty_recon.py` | `SQL_PLATFORM_RESTORES_*` membaca `loyalty_pos_reverse.points_restored`; `BffPointsMove.points`; `daily_points_recon(..., point_value_idr)` mengisi `restored_points_idr`, `restore_mismatched`, sampel id order refund Odoo; `add_daily_findings` menambah kind baru (hitungan = order); payload `points_daily.restore_mismatched`; `LoyaltyReconSettings.point_value_idr` (default 100, ≥ 1). |
+| `services/etl/efn_etl/config.py`, `__main__.py` | Env `LOYALTY_POINT_VALUE_IDR` (default 100, 1..10^9) — **nama & nilai sama dengan BFF**. |
+| `infra/clickhouse/init/06-loyalty-points-payment.sql` | `loyalty_points_daily.bff_restored_points_idr`, `restore_value_mismatched` (ADD COLUMN IF NOT EXISTS) + view `v_loyalty_points_daily` diperbarui. |
+| Test | `test_loyalty_recon.py` +5 (jendela pembulatan: sisa Rp50 cocok, poin berlebih/kurang ≥ 1 poin ditandai; temuan terpisah dari selisih pembayaran; dilewati bila poin/nilai tidak ada; nilai poin custom; end-to-end mode payment; SQL membaca `points_restored`), `test_config.py` +1. |
+
+Verifikasi: pytest ETL **225 passed / 1 skipped**; ruff check + format bersih; `clickhouse-init` dev 2x exit 0 (kolom baru ada,
+view terbaca); ETL di-rebuild + recreate (`cycle` ok); dry-run recon terhadap DB dev: query restore ke tabel nyata
+`loyalty_pos_reverse` berjalan (dev belum punya baris refund berpoin; Odoo dev masih 0 order -> temuan lain = data dev lama).
+
+Untuk devsecops: set `LOYALTY_POINT_VALUE_IDR` di service `etl` dari nilai yang sama dengan `api-gateway` (bila BFF
+memakai nilai non-default, ETL dengan default 100 akan menghasilkan positif palsu `points_restore_value_mismatch`).

@@ -33,6 +33,11 @@ ORDER BY (day, company_code, run_at)
 TTL day + INTERVAL 400 DAY
 SETTINGS ttl_only_drop_parts = 1;
 
+-- SEC-118 (re-review G18): Σ points_restored x nilai poin (poin yang benar-benar dikembalikan BFF) dan jumlah order
+-- refund yang points_restored_value (Odoo) − poin x nilai di luar sisa pembulatan [0, nilai 1 poin).
+ALTER TABLE efn_dwh.loyalty_points_daily ADD COLUMN IF NOT EXISTS bff_restored_points_idr Decimal(18, 2) DEFAULT 0;
+ALTER TABLE efn_dwh.loyalty_points_daily ADD COLUMN IF NOT EXISTS restore_value_mismatched UInt32 DEFAULT 0;
+
 -- Hasil terakhir per hari x PT (hari yang sama direkonsiliasi ulang oleh run berikutnya selama masih di lookback).
 CREATE OR REPLACE VIEW efn_dwh.v_loyalty_points_daily AS
 SELECT
@@ -44,6 +49,8 @@ SELECT
     argMax(bff_restored_idr, run_at)         AS bff_restored_idr,
     argMax(diff_idr, run_at)                 AS diff_idr,
     argMax(orders, run_at)                   AS orders,
-    argMax(orders_mismatched, run_at)        AS orders_mismatched
+    argMax(orders_mismatched, run_at)        AS orders_mismatched,
+    argMax(bff_restored_points_idr, run_at)  AS bff_restored_points_idr,
+    argMax(restore_value_mismatched, run_at) AS restore_value_mismatched
 FROM efn_dwh.loyalty_points_daily
 GROUP BY day, company_code;

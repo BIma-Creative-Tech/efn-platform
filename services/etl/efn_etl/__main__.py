@@ -217,6 +217,7 @@ def main() -> None:
         not_before=settings.loyalty_recon_not_before,
         points_mode=settings.loyalty_points_mode,
         points_tolerance_idr=Decimal(settings.loyalty_points_tolerance_idr),
+        point_value_idr=settings.loyalty_point_value_idr,
     )
     age_out = AgeOut(geo_days=settings.geo_retention_days, pseudonym_years=settings.pseudonym_retention_years)
     jobs = enabled_jobs(

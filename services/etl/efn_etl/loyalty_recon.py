@@ -85,6 +85,7 @@ CRITICAL_KINDS = (
     "redeem_points_mismatch",
     "reverse_without_refund_order",
     "points_payment_daily_mismatch",
+    "points_restore_value_mismatch",
 )
 WARNING_KINDS = (
     "outbox_hold_aged",
@@ -114,6 +115,8 @@ DAILY_COLUMNS = (
     "diff_idr",
     "orders",
     "orders_mismatched",
+    "bff_restored_points_idr",
+    "restore_value_mismatched",
 )
 
 # ---------------------------------------------------------------- SQL platform (efn_readonly, kolom non-PII)
@@ -191,7 +194,8 @@ SQL_PLATFORM_REDEEMS_BY_REF = _PLATFORM_REDEEM_ROWS + "  AND order_ref = ANY(%(r
 # Restore = points_restored_value reverse (K-18-5). USULAN KONTRAK (belum ada di BFF, lihat laporan G18): tabel
 # `platform.loyalty_pos_reverse`, satu baris per order refund (idempoten), grant SELECT kolom ini ke efn_readonly.
 _PLATFORM_RESTORE_ROWS = """
-SELECT refund_order_ref AS order_ref, company_code, points_restored_value AS value_idr, created_at AS at
+SELECT refund_order_ref AS order_ref, company_code, points_restored_value AS value_idr, points_restored AS points,
+       created_at AS at
 FROM platform.loyalty_pos_reverse
 WHERE points_restored_value > 0
 """
@@ -442,6 +446,8 @@ class BffPointsMove:
     at: datetime
     value_idr: int
     kind: str  # redeem | restore
+    # Restore saja (SEC-118): poin yang benar-benar dikembalikan BFF (`loyalty_pos_reverse.points_restored`).
+    points: int | None = None
 
     @property
     def signed(self) -> Decimal:
@@ -458,6 +464,11 @@ class DailyPoints:
     orders: set[str] = field(default_factory=set)
     mismatched: set[str] = field(default_factory=set)
     sample_order_ids: list[int] = field(default_factory=list)
+    # SEC-118: Σ points_restored x nilai poin (yang benar-benar dikembalikan BFF) dan order refund yang selisihnya
+    # terhadap points_restored_value (Odoo) di luar sisa pembulatan [0, nilai 1 poin).
+    restored_points_idr: Decimal = Decimal(0)
+    restore_mismatched: set[str] = field(default_factory=set)
+    restore_sample_order_ids: list[int] = field(default_factory=list)
 
     @property
     def diff(self) -> Decimal:
@@ -489,8 +500,14 @@ def daily_points_recon(
     day_from: date,
     day_to: date,
     tolerance: Decimal = Decimal(0),
+    point_value_idr: int | None = None,
 ) -> list[DailyPoints]:
     """Σ pembayaran Poin EFN Odoo per PT x hari WIB vs Σ redeem − Σ restore BFF (K-18-6).
+
+    SEC-118 (bila `point_value_idr` diberikan): per order refund, `points_restored_value` (nilai Rupiah dari Odoo) −
+    `points_restored` x nilai poin harus berada di [0, nilai 1 poin) — sisa pembulatan floor BFF. Di luar itu (BFF
+    mengembalikan poin lebih banyak, atau jauh lebih sedikit dari nilai Odoo) -> `restore_mismatched`, terpisah dari
+    selisih pembayaran.
 
     `payments` = pembayaran di jendela hari (dedup id). `order_days` = uuid -> (hari WIB pembayaran poin pertama, PT,
     id order Odoo) untuk SEMUA order yang diketahui (termasuk di luar jendela). Sisi BFF diatribusikan ke hari & PT
@@ -531,6 +548,14 @@ def daily_points_recon(
             b.redeem_idr += Decimal(m.value_idr)
         else:
             b.restored_idr += Decimal(m.value_idr)
+            if point_value_idr and m.points is not None:
+                points_idr = m.points * point_value_idr
+                b.restored_points_idr += Decimal(points_idr)
+                if not 0 <= m.value_idr - points_idr < point_value_idr:
+                    b.restore_mismatched.add(m.order_ref)
+                    oid = known[2] if known else 0
+                    if oid and len(b.restore_sample_order_ids) < SAMPLE_LIMIT:
+                        b.restore_sample_order_ids.append(oid)
         b.orders.add(m.order_ref)
         per_order_bff[m.order_ref] += m.signed
         order_bucket.setdefault(m.order_ref, (day, b.company_code))
@@ -545,8 +570,15 @@ def daily_points_recon(
 
 
 def add_daily_findings(report: ReconReport, days: Iterable[DailyPoints], tolerance: Decimal = Decimal(0)) -> None:
-    """Satu temuan critical per PT x hari yang selisihnya > toleransi; sampel = id order Odoo yang tidak cocok."""
+    """Satu temuan critical per PT x hari yang selisihnya > toleransi; sampel = id order Odoo yang tidak cocok.
+    SEC-118: `points_restore_value_mismatch` terpisah, hitungan = jumlah order refund yang tidak cocok."""
     for d in days:
+        if d.restore_mismatched:
+            report.add("points_restore_value_mismatch", d.company_code, count=len(d.restore_mismatched))
+            restore = report.findings[("points_restore_value_mismatch", d.company_code)]
+            for oid in d.restore_sample_order_ids:
+                if len(restore.order_ids) < SAMPLE_LIMIT and oid not in restore.order_ids:
+                    restore.order_ids.append(oid)
         if abs(d.diff) <= tolerance:
             continue
         report.add("points_payment_daily_mismatch", d.company_code)
@@ -615,12 +647,16 @@ class LoyaltyReconSettings:
     # untuk data historis pra-E-30.
     points_mode: str = "payment"
     points_tolerance_idr: Decimal = Decimal(0)
+    # SEC-118: nilai 1 poin (Rp), sama dengan BFF `LOYALTY_POINT_VALUE_IDR` (default 100).
+    point_value_idr: int = 100
 
     def __post_init__(self) -> None:
         if self.points_mode not in POINTS_MODES:
             raise ValueError(f"points_mode harus salah satu {POINTS_MODES}")
         if self.points_tolerance_idr < 0:
             raise ValueError("points_tolerance_idr negatif")
+        if self.point_value_idr < 1:
+            raise ValueError("point_value_idr harus >= 1")
 
     @property
     def payment_mode(self) -> bool:
@@ -740,7 +776,14 @@ def _points_payment(row: Mapping[str, Any], companies: Mapping[int, str]) -> Poi
 
 def _moves(rows: Iterable[Mapping[str, Any]], kind: str) -> list[BffPointsMove]:
     return [
-        BffPointsMove(str(r["order_ref"]), str(r["company_code"]), r["at"], int(r["value_idr"]), kind)
+        BffPointsMove(
+            str(r["order_ref"]),
+            str(r["company_code"]),
+            r["at"],
+            int(r["value_idr"]),
+            kind,
+            int(r["points"]) if r.get("points") is not None else None,
+        )
         for r in rows
         if r["order_ref"] and r["at"] is not None
     ]
@@ -782,7 +825,9 @@ def run_daily_points(
     order_days: dict[str, tuple[date, str, int]] = {}
     for p in sorted(known, key=lambda x: (to_utc(x.paid_at), x.id)):
         order_days.setdefault(p.uuid, (wib_day(p.paid_at), p.company_code, p.order_id))
-    return daily_points_recon(payments, order_days, moves, day_from, day_to, cfg.points_tolerance_idr)
+    return daily_points_recon(
+        payments, order_days, moves, day_from, day_to, cfg.points_tolerance_idr, cfg.point_value_idr
+    )
 
 
 def daily_payload(days: Sequence[DailyPoints], tolerance: Decimal = Decimal(0)) -> dict[str, Any]:
@@ -792,6 +837,12 @@ def daily_payload(days: Sequence[DailyPoints], tolerance: Decimal = Decimal(0)) 
         "mismatched": [
             {"day": d.day.isoformat(), "company": d.company_code, "diff_idr": str(d.diff), "orders": len(d.mismatched)}
             for d in bad
+        ],
+        # SEC-118: terpisah dari selisih pembayaran.
+        "restore_mismatched": [
+            {"day": d.day.isoformat(), "company": d.company_code, "orders": len(d.restore_mismatched)}
+            for d in days
+            if d.restore_mismatched
         ],
     }
 
@@ -808,6 +859,8 @@ def daily_rows(days: Sequence[DailyPoints], run_at: datetime) -> list[list[Any]]
             d.diff,
             len(d.orders),
             len(d.mismatched),
+            d.restored_points_idr,
+            len(d.restore_mismatched),
         ]
         for d in days
     ]

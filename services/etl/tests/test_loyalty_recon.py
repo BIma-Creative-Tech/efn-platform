@@ -375,7 +375,8 @@ def test_daily_points_clean_redeem_and_refund_with_cross_midnight_commit() -> No
     lr.add_daily_findings(report, days)
     assert report.anomalies == 0
     rows = lr.daily_rows(days, NOW)
-    assert rows[0] == [NOW, D6, FNB, Decimal("6000.00"), Decimal(6000), Decimal(0), Decimal(0), 1, 0]
+    assert rows[0] == [NOW, D6, FNB, Decimal("6000.00"), Decimal(6000), Decimal(0), Decimal(0), 1, 0, Decimal(0), 0]
+    assert len(rows[0]) == len(lr.DAILY_COLUMNS)
 
 
 def test_daily_points_mismatches() -> None:
@@ -465,7 +466,10 @@ class FakePlatformPayment(FakePlatform):
                 continue
             if "since" in params and not params["since"] <= m.at < params["until"]:
                 continue
-            out.append({"order_ref": m.order_ref, "company_code": m.company_code, "value_idr": m.value_idr, "at": m.at})
+            row = {"order_ref": m.order_ref, "company_code": m.company_code, "value_idr": m.value_idr, "at": m.at}
+            if kind == "restore":
+                row["points"] = m.points
+            out.append(row)
         return out
 
     def query(self, sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -604,3 +608,81 @@ def test_daily_excludes_legacy_orders() -> None:
     report = run_loyalty_recon(platform, odoo, store, LoyaltyReconSettings(), NOW)
     assert "points_payment_daily_mismatch" not in report.by_kind()
     assert lr.DAILY_TABLE not in store.rows  # tidak ada hari dengan nilai -> tidak ada baris harian
+
+
+# ---------------------------------------------------------------- SEC-118: poin dikembalikan vs points_restored_value
+
+
+def _restore(ref: str, value: int, points: int | None, at: datetime | None = None) -> lr.BffPointsMove:
+    return lr.BffPointsMove(ref, FNB, at or _wib(7, 10, 5), value, "restore", points)
+
+
+def test_restore_points_vs_value_rounding_window() -> None:
+    """Nilai poin Rp100: sisa pembulatan floor BFF 0..99 -> cocok; poin berlebih atau kurang >= 1 poin -> temuan
+    `points_restore_value_mismatch`, terpisah dari selisih pembayaran (pembayaran tetap cocok)."""
+    payments = [
+        _pay(1, 3, "u-r-ok", _wib(7, 10), "-3050"),
+        _pay(2, 4, "u-r-over", _wib(7, 11), "-3000"),
+        _pay(3, 5, "u-r-under", _wib(7, 12), "-3200"),
+        _pay(4, 6, "u-r-exact", _wib(7, 13), "-1000"),
+    ]
+    moves = [
+        _restore("u-r-ok", 3050, 30),  # sisa Rp50 < 1 poin
+        _restore("u-r-over", 3000, 31),  # BFF mengembalikan Rp3.100 > nilai Odoo
+        _restore("u-r-under", 3200, 30),  # kurang 2 poin
+        _restore("u-r-exact", 1000, 10),
+    ]
+    days = lr.daily_points_recon(payments, _days_of(payments), moves, D6, D8, point_value_idr=100)
+    (d7,) = days
+    assert d7.diff == 0  # pembayaran vs points_restored_value cocok
+    assert d7.restored_points_idr == Decimal(3000 + 3100 + 3000 + 1000)
+    assert d7.restore_mismatched == {"u-r-over", "u-r-under"}
+    assert sorted(d7.restore_sample_order_ids) == [4, 5]
+    report = ReconReport()
+    lr.add_daily_findings(report, days)
+    assert report.by_kind() == {"points_restore_value_mismatch": 2}
+    assert sorted(report.findings[("points_restore_value_mismatch", FNB)].order_ids) == [4, 5]
+    payload = lr.daily_payload(days)
+    assert payload["mismatched"] == []
+    assert payload["restore_mismatched"] == [{"day": "2026-10-07", "company": FNB, "orders": 2}]
+    row = dict(zip(lr.DAILY_COLUMNS, lr.daily_rows(days, NOW)[0], strict=True))
+    assert row["bff_restored_points_idr"] == Decimal(10100) and row["restore_value_mismatched"] == 2
+
+
+def test_restore_check_skipped_without_points_or_point_value() -> None:
+    payments = [_pay(1, 3, "u-r", _wib(7, 10), "-3000")]
+    moves = [_restore("u-r", 3000, 99)]
+    assert lr.daily_points_recon(payments, _days_of(payments), moves, D6, D8)[0].restore_mismatched == set()
+    no_points = [_restore("u-r", 3000, None)]
+    days = lr.daily_points_recon(payments, _days_of(payments), no_points, D6, D8, point_value_idr=100)
+    assert days[0].restore_mismatched == set() and days[0].restored_points_idr == 0
+
+
+def test_restore_check_custom_point_value() -> None:
+    payments = [_pay(1, 3, "u-r", _wib(7, 10), "-2499")]
+    ok = lr.daily_points_recon(payments, _days_of(payments), [_restore("u-r", 2499, 9)], D6, D8, point_value_idr=250)
+    bad = lr.daily_points_recon(payments, _days_of(payments), [_restore("u-r", 2499, 8)], D6, D8, point_value_idr=250)
+    assert ok[0].restore_mismatched == set() and bad[0].restore_mismatched == {"u-r"}
+
+
+def test_run_payment_mode_reports_restore_mismatch_separately() -> None:
+    inputs = _clean_inputs()
+    payments = [_pay(2, 3, "u-refund", _wib(7, 10), "-3000")]
+    moves = [lr.BffPointsMove("u-refund", FNB, _wib(7, 10, 5), 3000, "restore", 35)]  # 35 poin = Rp3.500 > Rp3.000
+    store = FakeStore()
+    odoo = FakeOdooPayment(inputs, {"u-earn", "u-nomember"}, payments)
+    report = run_loyalty_recon(FakePlatformPayment(inputs, moves), odoo, store, LoyaltyReconSettings(), NOW)
+    kinds = report.by_kind()
+    assert kinds.get("points_restore_value_mismatch") == 1
+    assert "points_payment_daily_mismatch" not in kinds
+    assert report.findings[("points_restore_value_mismatch", FNB)].order_ids == [3]
+    (row,) = store.rows[lr.DAILY_TABLE]
+    assert dict(zip(lr.DAILY_COLUMNS, row, strict=True))["restore_value_mismatched"] == 1
+    assert LoyaltyReconSettings().point_value_idr == 100
+    with pytest.raises(ValueError):
+        LoyaltyReconSettings(point_value_idr=0)
+
+
+def test_restore_sql_reads_points_restored() -> None:
+    for sql in (lr.SQL_PLATFORM_RESTORES_WINDOW, lr.SQL_PLATFORM_RESTORES_BY_REF):
+        assert "points_restored AS points" in sql and "member" not in sql

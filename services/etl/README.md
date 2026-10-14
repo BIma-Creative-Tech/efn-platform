@@ -78,6 +78,11 @@ production** oleh ETL dan `deploy-validate`). Mode `payment`:
   (`order_ref` = `pos.order.uuid`), sehingga commit BFF lewat tengah malam (order offline) tidak memicu alarm palsu.
   Beda → kind critical `points_payment_daily_mismatch` di log `EFN_LOYALTY_RECON_ETL` (WARNING, kunci `points_daily`)
   dan `loyalty_recon_finding`; semua hari ditulis ke `loyalty_points_daily` / view `v_loyalty_points_daily` (dashboard);
+- **SEC-118**: per order refund, `points_restored_value` (Rupiah dari Odoo) − `points_restored` x `LOYALTY_POINT_VALUE_IDR`
+  (poin yang benar-benar dikembalikan BFF, `platform.loyalty_pos_reverse`) harus di [0, nilai 1 poin) = sisa pembulatan
+  floor BFF. Di luar itu -> kind critical terpisah `points_restore_value_mismatch` (sampel id order refund Odoo), kunci
+  log `points_daily.restore_mismatched`, kolom `bff_restored_points_idr` / `restore_value_mismatched` di
+  `loyalty_points_daily`. Env `LOYALTY_POINT_VALUE_IDR` (default 100, 1..10^9) **harus sama** dengan BFF.
 - `fact_pos_payment.is_loyalty_points` = 1 untuk pembayaran Poin EFN (mode `product`: selalu 0).
 **Ketergantungan BFF (usulan kontrak, belum ada):** `platform.loyalty_pos_reverse` (`refund_order_ref`,
 `original_order_ref`, `company_code`, `points_restored_value` bigint, `created_at`) + grant SELECT kolom ke `efn_readonly`.

@@ -150,6 +150,8 @@ class Settings:
     # G18 (docs/04 §9.9 K-18-1/K-18-6, E-30; SEC-114): `payment` (default) | `product` (data historis, non-production).
     loyalty_points_mode: str = "payment"
     loyalty_points_tolerance_idr: int = 0
+    # SEC-118: nilai 1 poin (Rp) — env SAMA dengan BFF `LOYALTY_POINT_VALUE_IDR`.
+    loyalty_point_value_idr: int = 100
     # G18/W-19 (PDP v7 Q-P7/Q-P8): umur kolom pribadi saat dimuat (lapisan kedua TTL kolom ClickHouse). Env SAMA
     # dengan service clickhouse-init agar kedua lapisan konsisten.
     pseudonym_retention_years: int = 5
@@ -283,6 +285,7 @@ class Settings:
             loyalty_recon_not_before=_datetime(e, "ETL_LOYALTY_RECON_NOT_BEFORE"),
             loyalty_points_mode=_points_mode(e),
             loyalty_points_tolerance_idr=_int_range(e, "ETL_LOYALTY_POINTS_TOLERANCE_IDR", 0, 0, 1000),
+            loyalty_point_value_idr=_int_range(e, "LOYALTY_POINT_VALUE_IDR", 100, 1, 1_000_000_000),
             pseudonym_retention_years=_int_range(e, "CH_PSEUDONYM_RETENTION_YEARS", 5, 1, 30),
             geo_retention_days=_int_range(e, "CH_GEO_RETENTION_DAYS", 90, 1, 3650),
         )
