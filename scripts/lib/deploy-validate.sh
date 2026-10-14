@@ -27,7 +27,8 @@ EFN_RELEASE_CONFIG_VARS=(ACME_EMAIL PAYMENT_PROVIDER PG_SUPERUSER WHATSAPP_ENABL
   ODOO_RPC_PUBLIC_MAX_CONCURRENCY ODOO_RPC_SAGA_MAX_CONCURRENCY
   ERASURE_SUPPRESSION_DAYS DSAR_OPEN_ORDER_MAX_DEFER_DAYS MEMBER_MIN_AGE PRICE_HUNTER_GEO_RETENTION_DAYS
   CH_PSEUDONYM_RETENTION_YEARS CH_GEO_RETENTION_DAYS MB_AUDIT_MAX_RETENTION_DAYS
-  LOYALTY_EARN_EXCLUDE_POINT_PAYMENT ETL_LOYALTY_POINTS_MODE)
+  LOYALTY_EARN_EXCLUDE_POINT_PAYMENT ETL_LOYALTY_POINTS_MODE LOYALTY_RESTORE_TOLERANCE_PCT
+  LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS)
 # G17 (docs/04 §10.13): saklar KHUSUS dev/test. Bukan konfigurasi rilis (kunci manifest tidak dikenal = ditolak
 # efn-deploy); efn_validate_config juga menolak nilai true di staging/production lewat jalur manual deploy.sh.
 EFN_DEV_ONLY_SWITCHES=(ODOO_ONLINE_MOCK EFN_PAYMENT_SIMULATOR)
@@ -170,6 +171,11 @@ efn_validate_config() { # app_env
   _efn_re ONLINE_CHANNELS '^[A-Z][A-Z0-9-]{1,15}(,[A-Z][A-Z0-9-]{1,15}){0,7}$' || return 1
   _efn_re ONLINE_FULFILMENTS '^(pickup|delivery)(,(pickup|delivery))?$' || return 1
   _efn_re ETL_LOYALTY_POINTS_MODE '^(product|payment)$' || return 1
+  # SEC-114 (L-25b): mode `product` mematikan rekonsiliasi harian K-18-6 dan membuat redeem sah menjadi anomali palsu
+  # (Odoo G18 menolak produk poin). Hanya untuk data historis di staging/dev.
+  if [[ "$app_env" == production && "${ETL_LOYALTY_POINTS_MODE:-payment}" == product ]]; then
+    _efn_err "production menolak ETL_LOYALTY_POINTS_MODE=product (SEC-114; pakai payment)"; return 1
+  fi
   local spec name lo hi
   for spec in ONLINE_PAYMENT_TIMEOUT_SECONDS:60:3600 ONLINE_QUOTE_TTL_SECONDS:60:3600 \
               ONLINE_MAX_OPEN_ORDERS_PER_MEMBER:1:20 ONLINE_CATALOG_SYNC_SECONDS:60:86400 \
@@ -184,6 +190,17 @@ efn_validate_config() { # app_env
     [[ "${!name}" =~ ^[1-9][0-9]{0,5}$ ]] && (( ${!name} >= lo && ${!name} <= hi )) \
       || _efn_err "$name harus bilangan bulat ${lo}..${hi}" || return 1
   done
+  # r11 (SEC-118/124, L-25f/l): toleransi restore poin 0..50 % (0 sah: harus persis); retensi reservasi committed
+  # = catatan keuangan, minimal 10 th (BFF menolak < 3650, plafon 7300)
+  if [[ -n "${LOYALTY_RESTORE_TOLERANCE_PCT:-}" ]]; then
+    [[ "$LOYALTY_RESTORE_TOLERANCE_PCT" =~ ^(0|[1-9][0-9]?)$ ]] && (( LOYALTY_RESTORE_TOLERANCE_PCT <= 50 )) \
+      || _efn_err "LOYALTY_RESTORE_TOLERANCE_PCT harus bilangan bulat 0..50" || return 1
+  fi
+  if [[ -n "${LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS:-}" ]]; then
+    [[ "$LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS" =~ ^[1-9][0-9]{3}$ ]] \
+      && (( LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS >= 3650 && LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS <= 7300 )) \
+      || _efn_err "LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS harus bilangan bulat 3650..7300" || return 1
+  fi
   # W-19 (Q-P12, 10 Okt 2026): daftar tolak erasure 365 h (default BFF); 0 = tidak disimpan, plafon BFF 730
   if [[ -n "${ERASURE_SUPPRESSION_DAYS:-}" ]]; then
     [[ "$ERASURE_SUPPRESSION_DAYS" =~ ^(0|[1-9][0-9]{0,2})$ ]] && (( ERASURE_SUPPRESSION_DAYS <= 730 )) \

@@ -16,6 +16,7 @@
 #   OVERLAP_SECONDS=3600     key lama tetap sah selama N detik setelah key baru terverifikasi (0..86400)
 #   VERIFY_ATTEMPTS=3        percobaan verifikasi json2 per container (1..10, jeda 10 s)
 #   HEALTH_TIMEOUT_SECONDS=300  ODOO_DB=efn_odoo  COMPOSE_PROJECT=efn
+#   HOST_LOCK_WAIT_SECONDS=900  tunggu kunci host bersama deploy (/run/efn/deploy.lock, SEC-120; 10..3600)
 #   COMPOSE_DIR=/opt/efn/compose  COMPOSE_FILES=<nama,...>  (default: daftar yang ditulis deploy.sh ke
 #                            $COMPOSE_DIR/.efn-compose-files)  SECRETS_DIR=/opt/efn/secrets  SECRET_GROUP=efn-superadmin
 #   SECRET_FILE_MODE=0444    (sama dengan deploy.sh; lihat key-custody.md "Mekanisme uid")
@@ -96,7 +97,7 @@ SECRET="odoo_api_key_online_${CH_LC}"
 LOGIN="efn_online_${CH_LC}"
 
 # ── 2. Konfigurasi (root-only, tidak di-source) ──────────────────────────────────────────────────────────────
-KEY_DAYS=30; ROTATE_BEFORE_DAYS=10; OVERLAP_SECONDS=3600; VERIFY_ATTEMPTS=3; HEALTH_TIMEOUT_SECONDS=300
+KEY_DAYS=30; ROTATE_BEFORE_DAYS=10; OVERLAP_SECONDS=3600; VERIFY_ATTEMPTS=3; HEALTH_TIMEOUT_SECONDS=300; HOST_LOCK_WAIT_SECONDS=900
 ODOO_DB=efn_odoo; COMPOSE_PROJECT=efn; COMPOSE_DIR=/opt/efn/compose; COMPOSE_FILES=""; SECRETS_DIR=/opt/efn/secrets
 SECRET_GROUP="$ADMIN_GROUP"; SECRET_FILE_MODE=0444; STATE_DIR=/var/lib/efn/online-key; TEXTFILE_DIR=/var/lib/efn/node-exporter
 if [[ -e "$CONF" ]]; then
@@ -108,7 +109,7 @@ if [[ -e "$CONF" ]]; then
     [[ "$line" =~ ^([A-Z_]{1,32})=([A-Za-z0-9_./,-]{0,200})$ ]] || die "$CONF: baris tidak valid"
     k="${BASH_REMATCH[1]}"; v="${BASH_REMATCH[2]}"
     case "$k" in
-      KEY_DAYS|ROTATE_BEFORE_DAYS|OVERLAP_SECONDS|VERIFY_ATTEMPTS|HEALTH_TIMEOUT_SECONDS|ODOO_DB|COMPOSE_PROJECT|\
+      KEY_DAYS|ROTATE_BEFORE_DAYS|OVERLAP_SECONDS|VERIFY_ATTEMPTS|HEALTH_TIMEOUT_SECONDS|HOST_LOCK_WAIT_SECONDS|ODOO_DB|COMPOSE_PROJECT|\
       COMPOSE_DIR|COMPOSE_FILES|SECRETS_DIR|SECRET_GROUP|SECRET_FILE_MODE|STATE_DIR|TEXTFILE_DIR) printf -v "$k" '%s' "$v" ;;
       *) die "$CONF: kunci $k tidak dikenal" ;;
     esac
@@ -120,6 +121,7 @@ num_in "$ROTATE_BEFORE_DAYS" 1 $((10#$KEY_DAYS - 1)) || die "ROTATE_BEFORE_DAYS 
 num_in "$OVERLAP_SECONDS" 0 86400 || die "OVERLAP_SECONDS 0..86400"
 num_in "$VERIFY_ATTEMPTS" 1 10 || die "VERIFY_ATTEMPTS 1..10"
 num_in "$HEALTH_TIMEOUT_SECONDS" 30 1800 || die "HEALTH_TIMEOUT_SECONDS 30..1800"
+num_in "$HOST_LOCK_WAIT_SECONDS" 10 3600 || die "HOST_LOCK_WAIT_SECONDS 10..3600"
 [[ -n "$OVERLAP_ARG" ]] && OVERLAP_SECONDS="$OVERLAP_ARG"
 [[ "$ODOO_DB" =~ ^[a-z][a-z0-9_]{0,62}$ ]] || die "ODOO_DB tidak valid"
 [[ "$COMPOSE_PROJECT" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]] || die "COMPOSE_PROJECT tidak valid"
@@ -197,9 +199,22 @@ else:
         elif OP == "revoke":
             only = int(os.environ.get("EFN_REVOKE_ID") or 0)
             keep = int(os.environ.get("EFN_KEEP_ID") or 0)
-            if not (only or keep):
+            # SEC-120: cabut per NAMA berversi (key run ini yang keluarannya gagal diparse / create tidak tuntas)
+            by_name = os.environ.get("EFN_REVOKE_NAME") or ""
+            dom = [("user_id", "=", U.id)]
+            if by_name:
+                if not re.fullmatch(r"efn-online-[A-Z0-9-]{2,16}-[0-9]{8}T[0-9]{6}Z", by_name):
+                    raise ValueError("bad_name")
+                dom.append(("name", "=", by_name))
+                if keep:  # jangan pernah mencabut key yang sedang terpasang (nama sama dalam detik yang sama)
+                    dom.append(("id", "!=", keep))
+            elif only:
+                dom.append(("id", "=", only))
+            elif keep:
+                dom.append(("id", "!=", keep))
+            else:
                 raise ValueError("keep_or_only_required")
-            recs = K.search([("user_id", "=", U.id), ("id", "=", only) if only else ("id", "!=", keep)])
+            recs = K.search(dom)
             gone = [(r.id, clean(r.name)) for r in recs]
             recs._remove()
             env.cr.commit()
@@ -366,8 +381,29 @@ if [[ "$MODE" == status ]]; then
   write_metrics 1; exit 0
 fi
 
+# SEC-120 (L-25h): kunci host BERSAMA efn-deploy/deploy.sh (/run/efn/deploy.lock) selama fase yang menyentuh compose /
+# file secret / verifikasi (bukan selama overlap) -> rotasi tidak pernah paralel dengan deploy.
+HOST_LOCK=/run/efn/deploy.lock
+host_lock() {
+  install -d -o root -g root -m 0700 "$(dirname "$HOST_LOCK")"
+  exec 7> "$HOST_LOCK"
+  if ! flock -w "$HOST_LOCK_WAIT_SECONDS" 7; then
+    exec 7>&-
+    log "GAGAL: kunci host ${HOST_LOCK} dipegang deploy > ${HOST_LOCK_WAIT_SECONDS} s (kanal=${CH}); coba lagi run berikutnya"
+    return 1
+  fi
+}
+host_unlock() { flock -u 7 2> /dev/null || true; exec 7>&-; }
+
 # Cabut key lama SETELAH overlap: semua key user teknis selain CUR_ID. Wajib: key terpasang terverifikasi dulu.
 revoke_others() {
+  local rc=0
+  host_lock || return 1
+  _revoke_others_locked || rc=$?
+  host_unlock
+  return "$rc"
+}
+_revoke_others_locked() {
   local st cid
   verify_mounted || { log "GAGAL: key terpasang tidak lolos verifikasi - key lain TIDAK dicabut (kanal=${CH})"; return 1; }
   odoo_call revoke -e "EFN_KEEP_ID=$CUR_ID" || { log "GAGAL: pencabutan key lama (kanal=${CH})"; return 1; }
@@ -405,6 +441,7 @@ fi
 # ── 7. Rotasi ─────────────────────────────────────────────────────────────────────────────────────────────────
 log "ROTASI kanal=${CH} alasan=${WHY}"
 [[ -f "$SECRET_FILE" ]] || die "file secret ${SECRET_FILE} tidak ada"
+host_lock || exit 1   # dilepas sebelum overlap; exit melepas otomatis (fd ditutup)
 OLD_OK=0
 if grep -qx disabled "$SECRET_FILE"; then log "key terpasang = placeholder (pemasangan pertama)"
 elif verify_mounted; then OLD_OK=1
@@ -412,11 +449,25 @@ else log "key terpasang TIDAK lolos verifikasi sebelum rotasi (kedaluwarsa/dicab
 fi
 
 KEY_NAME="efn-online-${CH}-$(date -u +%Y%m%dT%H%M%SZ)"
-odoo_call create -e "EFN_KEY_NAME=$KEY_NAME" -e "EFN_KEY_DAYS=$((10#$KEY_DAYS))" || { log "GAGAL: key baru tidak dibuat (kanal=${CH}; KEY_DAYS > api_key_duration grup?)"; exit 1; }
+# SEC-120 (L-25h): Odoo meng-commit key SEBELUM keluaran diparse -> setiap kegagalan setelah titik ini mencabut key
+# run ini berdasarkan NAMA berversi (unik per detik), agar tidak ada key 30 hari yatim yang sah.
+revoke_by_name() {
+  if odoo_call revoke -e "EFN_REVOKE_NAME=$KEY_NAME" -e "EFN_KEEP_ID=${CUR_ID:-0}"; then
+    log "DICABUT kanal=${CH} nama=${KEY_NAME} (key run ini tidak dipakai: $1)"
+  else
+    log "GAGAL: key ${KEY_NAME} mungkin tertinggal - cabut manual (runbook §4) (kanal=${CH})"
+  fi
+}
+if ! odoo_call create -e "EFN_KEY_NAME=$KEY_NAME" -e "EFN_KEY_DAYS=$((10#$KEY_DAYS))"; then
+  ODOO_OUT=""
+  log "GAGAL: key baru tidak dibuat/tidak tuntas (kanal=${CH}; KEY_DAYS > api_key_duration grup?)"
+  revoke_by_name "create gagal"; exit 1
+fi
 NEW_LINE="$(grep -E '^EFN_ROT NEW ' <<< "$ODOO_OUT" | head -n1 || true)"
 ODOO_OUT=""
 if [[ ! "$NEW_LINE" =~ ^EFN_ROT\ NEW\ ([1-9][0-9]*)\ ([0-9]+)\ ([0-9a-f]{40})$ ]]; then
-  NEW_LINE=""; log "GAGAL: keluaran pembuatan key tidak dikenali (kanal=${CH})"; exit 1
+  NEW_LINE=""; log "GAGAL: keluaran pembuatan key tidak dikenali (kanal=${CH})"
+  revoke_by_name "keluaran tidak dikenali"; exit 1
 fi
 NEW_ID="${BASH_REMATCH[1]}"; NEW_EXP="${BASH_REMATCH[2]}"
 NEWF="$(mktemp "$STATE_DIR/.new-key.XXXXXX")"
@@ -465,6 +516,7 @@ odoo_call list || true
 write_metrics 1
 log "ROTASI OK kanal=${CH} id=${NEW_ID} kedaluwarsa=$(fmt_ts "$NEW_EXP") cabut_key_lama_setelah=${OVERLAP_SECONDS}s"
 
+host_unlock   # overlap tanpa kunci host: deploy boleh jalan (me-mount key baru yang sama)
 ((OVERLAP_SECONDS > 0)) && sleep "$OVERLAP_SECONDS"
 revoke_others || { odoo_call list || true; exit 1; }
 odoo_call list || true

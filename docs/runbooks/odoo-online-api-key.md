@@ -73,6 +73,13 @@ Migrasi dari pemasangan G17 (key manual via `gh secret set`): langkah 3 membuat 
    lain user teknis, buktikan key lama ditolak (**401**), hancurkan salinan key lama. Bila proses mati saat overlap,
    run harian berikutnya menyelesaikan pencabutan tertunda.
 
+**Koordinasi dengan deploy (SEC-120, L-25h):** langkah 2–6 (dan pencabutan setelah overlap) memegang kunci host
+`/run/efn/deploy.lock` yang juga dipegang `efn-deploy`/`deploy.sh` → rotasi dan deploy tidak pernah paralel. Rotasi
+menunggu maks `HOST_LOCK_WAIT_SECONDS` (900 s), lalu gagal **tanpa** membuat key (alert, dicoba lagi besok); deploy
+menunggu maks 900 s. Overlap 1 jam berjalan **tanpa** kunci. Bila Odoo sudah meng-commit key tetapi keluarannya gagal
+diparse / galat setelah commit, key run itu **dicabut per nama** (`efn-online-<KANAL>-<UTC>`, tidak pernah key yang
+terpasang) → tidak ada key 30 hari yatim.
+
 Jejak: journald `efn-rotate-online-key` (hanya root, `_UID 0`) → `promtail-journal` → Loki
 `{service="host-efn-rotate-online-key"}`: `MULAI`, `ROTASI`, `KEY BARU id= nama= kedaluwarsa=`, `VERIFIKASI OK|GAGAL`,
 `ROLLBACK OK|GAGAL`, `DICABUT`, `KEY LAMA DITOLAK`, `SELESAI rc=`. **Nilai key tidak pernah dicetak** (stdout/stderr/
@@ -136,7 +143,7 @@ Odoo menjawab 401/403 untuk kanal → key kedaluwarsa, dicabut, user teknis dino
 ## 7. Dev / uji
 
 - Dev: `scripts/smoke/run-e2e-smoke.sh` langkah setup membuat key dev (skrip smoke) — tidak memakai timer.
-- Uji regresi skrip (docker/Odoo/BFF palsu, 42 kasus, CI job infra):
+- Uji regresi skrip (docker/Odoo/BFF palsu, 48 kasus, CI job infra):
   `docker run --rm -v "$PWD:/src:ro" python:3.12-bookworm@sha256:e91fec3d… bash /src/scripts/host/test-efn-rotate-online-key.sh`.
 - Uji nyata stack dev (Docker Desktop, 10 Okt 2026): skrip dijalankan di container `docker:27-cli` (socket Docker +
   repo di-mount pada `/run/desktop/mnt/host/e/...` agar path bind compose valid), `/etc/efn/online-key-rotation.conf`

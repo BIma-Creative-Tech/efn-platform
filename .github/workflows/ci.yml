@@ -566,7 +566,8 @@ jobs:
             python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea \
             bash /src/scripts/host/test-efn-online-cs.sh
       # G18 (W-11, R-T15): rotasi otomatis API key Odoo kanal online - docker/Odoo/BFF palsu (rotasi, rollback, cabut
-      # tertunda, bukti 401, penolakan identitas/argumen/konfigurasi, tanpa kebocoran nilai key; 42 kasus).
+      # tertunda, bukti 401, penolakan identitas/argumen/konfigurasi, tanpa kebocoran nilai key; r11 SEC-120: kunci host
+      # bersama deploy + cabut key yatim per nama; 48 kasus).
       - name: efn-rotate-online-key regression (docker palsu)
         run: |
           docker run --rm -v "$PWD:/src:ro" \

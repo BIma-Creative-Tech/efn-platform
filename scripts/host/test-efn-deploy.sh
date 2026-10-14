@@ -113,6 +113,8 @@ make_release() {
   cat > "$d/r/scripts/deploy.sh" <<'EOF'
 #!/usr/bin/env bash
 { env | grep -E '^(IMAGE_|APP_ENV=|EFN_RELEASE_|WHATSAPP_OTP_TEMPLATE=|EFN_WG_|EFN_PUBLIC_BIND=|COMPOSE_PROFILES=|TRAEFIK_DOMAIN=|PAYMENT_PROVIDER=|JWT_SECRET=)' | sort; } > /tmp/deploy-ran
+# SEC-120: kunci host bersama dipegang efn-deploy (fd 8 diwarisi) selama deploy.sh berjalan
+if flock -n /run/efn/deploy.lock true; then echo LOCK=free; else echo LOCK=held; fi >> /tmp/deploy-ran
 EOF
   local imgs
   imgs=$(for s in "${SVCS[@]}"; do v="IMAGE_$(echo "$s" | tr 'a-z-' 'A-Z_')"; printf '%s\t%s\n' "$v" "${PREFIX}${s}@sha256:$(dg "$s-1")"; done \
@@ -159,6 +161,7 @@ marker() { cat /opt/efn/compose/marker.txt 2> /dev/null || echo none; }
 # 1. Rilis sah seq 10 v1.2.0 -> deploy.sh jalan, IMAGE_* dari manifest, state tercatat
 make_release A 10 1.2.0; make_env A; run A; expect_ok "01 rilis sah diterima"
 if grep -q "IMAGE_ODOO=${PREFIX}odoo@sha256:$(dg odoo-1)" /tmp/deploy-ran 2> /dev/null; then ok "02 IMAGE_ODOO dari manifest"; else bad "02 IMAGE_ODOO dari manifest"; fi
+if grep -qx 'LOCK=held' /tmp/deploy-ran 2> /dev/null; then ok "02b kunci host /run/efn/deploy.lock dipegang selama deploy.sh (SEC-120)"; else bad "02b kunci host"; fi
 if grep -q '^seq=10$' /var/lib/efn/last-release && [[ "$(stat -c %a /var/lib/efn/last-release)" == 600 ]]; then
   ok "03 state last-release seq=10 (0600)"; else bad "03 state last-release"; fi
 # 2. Rilis yang sama di-deploy ulang (re-run job) -> diterima
@@ -254,6 +257,11 @@ neg_env "39 secret dengan CR/ESC ditolak" "karakter kontrol" "JWT_SECRET=$(print
 # W-11: API key Odoo kanal online dikelola DI HOST (secrets.list host:*) -> tidak boleh datang dari stdin CI
 neg_env "110 ODOO_API_KEY_ONLINE_RTL lewat stdin ditolak (W-11, host:*)" "variabel tidak diizinkan: ODOO_API_KEY_ONLINE_RTL" \
   "ODOO_API_KEY_ONLINE_RTL=0123456789abcdef0123456789abcdef01234567"
+# SEC-120 (L-25h): rotasi API key memegang kunci host -> efn-deploy menunggu lalu gagal, /opt/efn tidak disentuh
+install -d -m 0700 /run/efn; exec 6> /run/efn/deploy.lock; flock -n 6
+SEQ=$((SEQ + 1)); make_release "N$SEQ" "$SEQ" 1.3.0; make_env "N$SEQ"; EFN_DEPLOY_LOCK_WAIT=2 run "N$SEQ"
+expect_fail "110b kunci host dipegang rotasi -> deploy ditolak setelah menunggu (SEC-120)" "dipegang proses lain"
+exec 6>&-
 neg_man "40 config manifest multi-baris ditolak" "skema" '.config.RABBITMQ_STRICT_PERMISSIONS = "true\nIMAGE_ODOO=evil"'
 neg_man "41 kunci config manifest tidak dikenal ditolak" "skema" '.config.IMAGE_ODOO = "evil.example/odoo"'
 neg_man "101 saklar dev ODOO_ONLINE_MOCK di config manifest ditolak (G17)" "skema" '.config.ODOO_ONLINE_MOCK = "true"'
@@ -424,6 +432,13 @@ vc "121 pseudonim > baris mart ditolak" 1 production CH_MART_RETENTION_YEARS=5 C
 vc "122 pseudonim 11 > default mart 10 ditolak" 1 production CH_PSEUDONYM_RETENTION_YEARS=11
 vc "123 CH_MART_RETENTION_YEARS=31 ditolak" 1 production CH_MART_RETENTION_YEARS=31
 vc "124 MB_AUDIT_MAX_RETENTION_DAYS=20 ditolak (min 30)" 1 production MB_AUDIT_MAX_RETENTION_DAYS=20
+vc "125 production ETL_LOYALTY_POINTS_MODE=product ditolak (SEC-114)" 1 production ETL_LOYALTY_POINTS_MODE=product
+vc "126 staging ETL_LOYALTY_POINTS_MODE=product diterima (data historis)" 0 staging ETL_LOYALTY_POINTS_MODE=product
+vc "127 production ETL_LOYALTY_POINTS_MODE=payment diterima" 0 production ETL_LOYALTY_POINTS_MODE=payment
+vc "128 LOYALTY_RESTORE_TOLERANCE_PCT=0 diterima" 0 production LOYALTY_RESTORE_TOLERANCE_PCT=0
+vc "129 LOYALTY_RESTORE_TOLERANCE_PCT=51 ditolak" 1 production LOYALTY_RESTORE_TOLERANCE_PCT=51
+vc "130 LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS=3649 ditolak (min 10 th)" 1 production LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS=3649
+vc "131 LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS=3650 diterima" 0 production LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS=3650
 
 echo "RINGKASAN efn-deploy: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]

@@ -1651,3 +1651,32 @@ shellcheck v0.10.0 (semua skrip CI + baru) bersih · `docker compose config` dev
 - `efn-online-cs`, `efn-deploy` (allowlist `host:`), skrip baru: sha256 berubah → pemasangan ulang manual Superadmin.
 - Container `efn-fg18-suite`/`efn-fg18-pg` (image `efn-odoo:ci`, dimulai ±10 menit sebelum laporan) **bukan** milik devsecops dan tampak dipakai agent lain → tidak dihapus. Container uji devsecops semuanya `--rm` (tidak ada sisa).
 - W-28 lanjutan (DPIA, off-site backup, PoC SeaweedFS) → G20. Nama Superadmin/pemegang brankas/saksi belum ditetapkan (G-3).
+
+## G18.7 Perbaikan review r11 (SEC-114, SEC-120; L-25b/h) + env BFF r11 (14 Okt 2026, belum di-commit)
+
+- **SEC-114 (L-25b):** default `ETL_LOYALTY_POINTS_MODE` = **`payment`** di compose (etl), `.env.example`, `deploy.yml`
+  (`CFG_*`), `deploy.sh`. `deploy-validate` menolak `product` di **production** (staging/dev boleh untuk data historis).
+  Test efn-deploy 125–127. ⚠ Default di kode ETL (`services/etl/efn_etl/config.py:51`, `loyalty_recon.py:613`) masih
+  `product` — milik data-AI (lead meneruskan). Selama compose selalu mengisi env, kode default tidak dipakai.
+- **SEC-120 (L-25h):** kunci host bersama **`/run/efn/deploy.lock`**:
+  - `efn-deploy` mengambil kunci (fd 8, tunggu ≤ 900 s, `EFN_DEPLOY_LOCK_WAIT` hanya untuk test; sudo env_reset) sebelum
+    sinkron ke `/opt/efn`; fd diwarisi `deploy.sh` lewat exec. `deploy.sh` jalur manual membuka & menunggu kunci yang
+    sama (jalur efn-deploy: `flock -n` pada deskripsi warisan).
+  - `efn-rotate-online-key` memegang kunci selama precheck → create → pasang → recreate → verifikasi/rollback, dan
+    selama pencabutan setelah overlap (juga cabut tertunda); **overlap 1 jam tanpa kunci**. Kunci tidak didapat dalam
+    `HOST_LOCK_WAIT_SECONDS` (default 900, 10..3600) → gagal **sebelum** membuat key (metrik 0, alert, coba lagi besok).
+  - Key yatim: create gagal/galat setelah commit atau baris `NEW` tidak dikenali → op Odoo `revoke` per **nama berversi**
+    `efn-online-<KANAL>-<UTC>` (nama divalidasi regex di sisi Python; key terpasang `CUR_ID` dikecualikan).
+  - Test: rotasi +6 (43–48: keluaran rusak, galat setelah commit, kunci dipegang deploy, cabut tertunda menunggu kunci,
+    kunci dilepas setelah sukses); efn-deploy 02b (kunci dipegang selama deploy.sh) dan 110b (kunci dipegang rotasi →
+    deploy ditolak setelah menunggu).
+  - ⚠ sha256 `efn-deploy` dan `efn-rotate-online-key` berubah lagi → pasang ulang manual Superadmin.
+- **Env BFF r11:** `LOYALTY_RESTORE_TOLERANCE_PCT` (10; deploy-validate 0..50, BFF menerima 0..100) dan
+  `LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS` (3650; 3650..7300) di compose api-gateway, `.env.example`,
+  `deploy-validate` (release config + rentang), `deploy.yml`, `deploy.sh`. Test efn-deploy 128–131. Runbook
+  `retention.md` + `odoo-online-api-key.md` (koordinasi deploy) diperbarui.
+- **Validasi:** shellcheck bersih · compose config dev/prod OK · check-encryption OK · actionlint rc 0 · yamllint OK
+  (1 warning lama baris pytest metabase) · checkov 0 failed · test-efn-deploy **133/133** · test-efn-rotate-online-key
+  **48/48** · test-efn-online-cs **54/54**.
+- **Belum:** perilaku flock lintas efn-deploy → exec deploy.sh hanya diuji dengan stub deploy.sh (bukan deploy.sh asli)
+  dan belum di host Linux/systemd nyata.

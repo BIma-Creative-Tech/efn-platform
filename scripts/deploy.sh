@@ -56,6 +56,16 @@ source "$BASE/scripts/lib/deploy-validate.sh"
 
 # ── 0. Validasi input non-rahasia (SEC-10/SEC-30: tidak ada nilai tak tervalidasi ke shell/compose/sed) ───────
 [[ "${EUID}" -eq 0 ]] || die "harus dijalankan sebagai root (sudo); lihat docs/runbooks/key-custody.md"
+# SEC-120 (L-25h): kunci host bersama efn-deploy / efn-rotate-online-key. Lewat efn-deploy kunci sudah dipegang di fd 8
+# (diwarisi exec) -> flock pada deskripsi yang sama langsung berhasil; jalur manual Superadmin membuka & menunggu.
+EFN_HOST_LOCK=/run/efn/deploy.lock
+if [[ "$(readlink "/proc/$$/fd/8" 2> /dev/null)" == "$EFN_HOST_LOCK" ]]; then
+  flock -n 8 || die "kunci host ${EFN_HOST_LOCK} tidak dapat diambil"
+else
+  install -d -o root -g root -m 0700 /run/efn
+  exec 8> "$EFN_HOST_LOCK"
+  flock -w 900 8 || die "kunci host ${EFN_HOST_LOCK} dipegang proses lain (rotasi API key?) > 900 s"
+fi
 [[ -z "${PKI_SOURCE:-}" || "${PKI_SOURCE}" == "intermediate" ]] \
   || die "PKI_SOURCE=${PKI_SOURCE} sudah dihapus (SEC-23); leaf selalu diterbitkan dari intermediate"
 DIGEST_RE='^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$'
@@ -308,7 +318,9 @@ DOTENV=(
   "ONLINE_ENABLED=${ONLINE_ENABLED:-false}"
   "ONLINE_CATALOG_ENABLED=${ONLINE_CATALOG_ENABLED:-false}"
   "LOYALTY_EARN_EXCLUDE_POINT_PAYMENT=${LOYALTY_EARN_EXCLUDE_POINT_PAYMENT:-true}"
-  "ETL_LOYALTY_POINTS_MODE=${ETL_LOYALTY_POINTS_MODE:-product}"
+  "LOYALTY_RESTORE_TOLERANCE_PCT=${LOYALTY_RESTORE_TOLERANCE_PCT:-}"
+  "LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS=${LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS:-}"
+  "ETL_LOYALTY_POINTS_MODE=${ETL_LOYALTY_POINTS_MODE:-payment}"   # SEC-114 (L-25b)
   "ONLINE_CHANNELS=${ONLINE_CHANNELS:-RTL}"
   "ONLINE_FULFILMENTS=${ONLINE_FULFILMENTS:-pickup}"
   "ONLINE_PAYMENT_TIMEOUT_SECONDS=${ONLINE_PAYMENT_TIMEOUT_SECONDS:-}"

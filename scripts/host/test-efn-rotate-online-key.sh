@@ -80,11 +80,15 @@ if [[ "$cid" == aaaaaaaaaaaa ]]; then           # odoo shell
       exp=$(( $(date +%s) + ${E[EFN_KEY_DAYS]} * 86400 ))
       echo "$id $exp ${E[EFN_KEY_NAME]} $key 0" >> $db; echo "$key" >> /tmp/allkeys
       [[ -e $FK/fail-next-new ]] && { echo "$key" >> $FK/bad; rm -f $FK/fail-next-new; }
+      # SEC-120: key sudah di-commit, tetapi keluaran rusak / galat setelah commit
+      [[ -e $FK/garbled-new ]] && { echo "EFN_ROT NEW $id $exp ${key:0:39}"; rm -f $FK/garbled-new; echo "EFN_ROT OK"; exit 0; }
+      [[ -e $FK/err-after-commit ]] && { echo "EFN_ROT ERR OperationalError"; rm -f $FK/err-after-commit; exit 0; }
       echo "EFN_ROT NEW $id $exp $key" ;;
     revoke)
       while read -r id exp name key rv; do
-        if [[ "$rv" == 0 ]] && { [[ -n "${E[EFN_REVOKE_ID]:-}" && "$id" == "${E[EFN_REVOKE_ID]}" ]] ||
-                                 [[ -z "${E[EFN_REVOKE_ID]:-}" && "$id" != "${E[EFN_KEEP_ID]}" ]]; }; then
+        if [[ "$rv" == 0 ]] && { [[ -n "${E[EFN_REVOKE_NAME]:-}" && "$name" == "${E[EFN_REVOKE_NAME]}" && "$id" != "${E[EFN_KEEP_ID]:-0}" ]] ||
+                                 [[ -z "${E[EFN_REVOKE_NAME]:-}" && -n "${E[EFN_REVOKE_ID]:-}" && "$id" == "${E[EFN_REVOKE_ID]}" ]] ||
+                                 [[ -z "${E[EFN_REVOKE_NAME]:-}${E[EFN_REVOKE_ID]:-}" && "$id" != "${E[EFN_KEEP_ID]}" ]]; }; then
           echo "EFN_ROT REVOKED $id $name"; [[ -e $FK/revoke-ineffective ]] || rv=1
         fi
         echo "$id $exp $name $key $rv"
@@ -231,6 +235,34 @@ if [[ $RC -eq 1 ]] && grep -q 'odoo list: user_missing' /tmp/journal.log && ! gr
 exec 8> /var/lib/efn/online-key/.lock.rtl; flock -n 8; rot; exec 8>&-
 if [[ $RC -eq 2 ]] && grep -q 'sedang berjalan' /tmp/journal.log; then ok "41 run paralel kanal sama ditolak (flock)"; else bad "41 flock"; fi
 
+# ── 11b. SEC-120 (L-25h): key yatim dicabut per nama; kunci host bersama deploy ──────────────────────────────
+fresh; rot; BEFORE=$(cat "$SECRET")
+: > /tmp/journal.log; touch /tmp/fk/garbled-new; rot --force
+if [[ $RC -eq 1 && "$(cat "$SECRET")" == "$BEFORE" && "$(active)" == 1 ]] && awk '$1==2 {exit !($5==1)}' /tmp/fk/keys.db \
+   && grep -q 'DICABUT kanal=RTL nama=efn-online-RTL-.*keluaran tidak dikenali' /tmp/journal.log; then
+  ok "43 keluaran NEW rusak -> key run ini dicabut per nama, secret tidak disentuh (SEC-120)"; else bad "43 key yatim parse"; fi
+: > /tmp/journal.log; touch /tmp/fk/err-after-commit; rot --force
+if [[ $RC -eq 1 && "$(cat "$SECRET")" == "$BEFORE" && "$(active)" == 1 ]] && awk '$1==3 {exit !($5==1)}' /tmp/fk/keys.db \
+   && grep -q 'DICABUT kanal=RTL nama=efn-online-RTL-.*create gagal' /tmp/journal.log; then
+  ok "44 galat setelah commit -> key run ini dicabut per nama (SEC-120)"; else bad "44 key yatim err"; fi
+install -d -m 0700 /run/efn; exec 6> /run/efn/deploy.lock; flock -n 6
+conf OVERLAP_SECONDS=0 HOST_LOCK_WAIT_SECONDS=10; N0=$(wc -l < /tmp/fk/keys.db); : > /tmp/journal.log; rot --force
+if [[ $RC -eq 1 && "$(wc -l < /tmp/fk/keys.db)" == "$N0" ]] && grep -q 'kunci host /run/efn/deploy.lock dipegang deploy' /tmp/journal.log \
+   && [[ "$(metric rotation_last_run_ok)" == 0 ]]; then
+  ok "45 deploy memegang kunci host -> rotasi menunggu lalu gagal TANPA membuat key (SEC-120)"; else bad "45 kunci host"; fi
+echo "9 $(( $(date +%s) + 86400 * 30 )) efn-online-RTL-x $(od -An -tx1 -N20 /dev/urandom | tr -d ' \n') 0" >> /tmp/fk/keys.db
+sed -i 's/^PENDING_AFTER=.*/PENDING_AFTER=1/' /var/lib/efn/online-key/rtl.state
+: > /tmp/journal.log; rot
+if [[ $RC -eq 1 ]] && awk '$1==9 {exit !($5==0)}' /tmp/fk/keys.db && grep -q 'dipegang deploy' /tmp/journal.log; then
+  ok "46 cabut tertunda juga menunggu kunci host (tidak mencabut saat deploy)"; else bad "46 tertunda + kunci"; fi
+exec 6>&-
+: > /tmp/journal.log; rot
+if [[ $RC -eq 0 ]] && awk '$1==9 {exit !($5==1)}' /tmp/fk/keys.db; then ok "47 kunci dilepas -> cabut tertunda selesai"; else bad "47 setelah kunci"; fi
+: > /tmp/journal.log; rot --force
+if [[ $RC -eq 0 ]] && [[ ! -e /proc/$$/fd/6 ]] && flock -n /run/efn/deploy.lock true; then
+  ok "48 rotasi sukses melepas kunci host (deploy berikutnya tidak tertahan)"; else bad "48 kunci tidak dilepas"; fi
+conf OVERLAP_SECONDS=0
+
 # ── 12. Penjaga independen: nilai key TIDAK PERNAH muncul di journald / keluaran ─────────────────────────────
 leak=0
 while read -r key; do
@@ -238,7 +270,7 @@ while read -r key; do
   grep -qF "$key" <<< "$ALL_OUT" && { echo "bocor: keluaran"; leak=1; }
   grep -rqF "$key" /var/lib/efn/node-exporter /etc/efn && { echo "bocor: file"; leak=1; }
 done < /tmp/allkeys
-if (($(wc -l < /tmp/allkeys) >= 5 && leak == 0)); then ok "42 tidak ada nilai key ($(wc -l < /tmp/allkeys) key dibuat) di journald/stdout/stderr/metrik"; else bad "42 KEBOCORAN key"; fi
+if (($(wc -l < /tmp/allkeys) >= 5 && leak == 0)); then ok "49 tidak ada nilai key ($(wc -l < /tmp/allkeys) key dibuat) di journald/stdout/stderr/metrik"; else bad "49 KEBOCORAN key"; fi
 
 echo "RINGKASAN efn-rotate-online-key: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]

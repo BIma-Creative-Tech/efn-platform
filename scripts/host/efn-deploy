@@ -74,7 +74,7 @@ log() { logger -t efn-deploy -- "$*" 2> /dev/null || true; echo "efn-deploy: $*"
 die() { log "GAGAL: $*"; exit 1; }
 
 [[ "${EUID}" -eq 0 ]] || die "harus root (sudo -n /usr/local/sbin/efn-deploy)"
-for c in jq openssl rsync sha256sum base64 tar sort; do command -v "$c" > /dev/null || die "$c tidak ada di host"; done
+for c in jq openssl rsync sha256sum base64 tar sort flock; do command -v "$c" > /dev/null || die "$c tidak ada di host"; done
 [[ -f "$CONF" && ! -L "$CONF" ]] || die "$CONF tidak ada"
 [[ "$(stat -c '%u:%a' "$CONF")" =~ ^0:(6[04]4|600|640)$ ]] || die "$CONF harus milik root dan tidak bisa ditulis group/other"
 COSIGN_BIN="" EFN_SIGNER_IDENTITY_REGEXP="" EFN_SIGNER_ISSUER="" EFN_APP_ENV="" EFN_GITHUB_REPO="" EFN_IMAGE_PREFIX=""
@@ -318,6 +318,14 @@ done
 log "${#IMAGE_VARS[@]} image terverifikasi cosign di host (build-push.yml@${M_REF})"
 
 # ── 8. Semua cek lolos: pasang rilis, sinkron ke /opt/efn, catat rilis terakhir ────────────────────────────────
+# SEC-120 (L-25h): kunci host bersama dengan efn-rotate-online-key (dan deploy.sh manual): tidak ada sinkron/compose
+# paralel dengan rotasi API key. fd 8 diwarisi deploy.sh lewat exec (deploy.sh memakai kunci yang sama, tidak mengunci
+# ulang). Tunggu maks EFN_DEPLOY_LOCK_WAIT detik (default 900; env sudo di-reset -> default di produksi).
+LOCK_WAIT="${EFN_DEPLOY_LOCK_WAIT:-900}"
+[[ "$LOCK_WAIT" =~ ^[1-9][0-9]{0,3}$ ]] || die "EFN_DEPLOY_LOCK_WAIT tidak valid"
+install -d -o root -g root -m 0700 /run/efn
+exec 8> /run/efn/deploy.lock
+flock -w "$LOCK_WAIT" 8 || die "kunci host /run/efn/deploy.lock dipegang proses lain (rotasi API key?) > ${LOCK_WAIT} s"
 umask 022
 rm -rf "$REL"; mv "$REL_TMP" "$REL"; REL_TMP=""
 # Sinkron ke layout /opt/efn (milik root). File milik host tidak disentuh.

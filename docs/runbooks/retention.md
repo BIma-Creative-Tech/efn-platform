@@ -28,6 +28,9 @@ hapus/ubah sebelum deploy G18.
 | `CH_PSEUDONYM_RETENTION_YEARS` | clickhouse-init + etl | **5** | 1..30 dan ≤ `CH_MART_RETENTION_YEARS` | Q-P7 (⚠ penafsiran, docs/10 §3) |
 | `CH_GEO_RETENTION_DAYS` | clickhouse-init + etl | **90** | 1..3650 | Q-P8 |
 | `MB_AUDIT_MAX_RETENTION_DAYS` | metabase | **3650** | 30..3650 | Q-P14 (riwayat query) |
+| `LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS` | api-gateway | **3650** | 3650..7300 | Q-P2; r11 SEC-124 (nilai keuangan reservasi committed tidak dihapus erasure) |
+| `LOYALTY_RESTORE_TOLERANCE_PCT` (bukan retensi) | api-gateway | 10 | 0..50 | r11 SEC-118 |
+| `ETL_LOYALTY_POINTS_MODE` (bukan retensi) | etl | **payment** | payment atau product; production menolak `product` | r11 SEC-114 (rekonsiliasi harian K-18-6) |
 
 Di luar env (bukan devsecops): GC outbox poin Odoo 10 th (efn-odoo-engineer), log audit Odoo 730 h (konfigurasi).
 Dev: `infra/compose/.env` lokal lama masih bisa berisi nilai lama (mis. `CH_MART_RETENTION_YEARS=5`) — samakan dengan
