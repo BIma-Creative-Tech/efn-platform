@@ -201,11 +201,18 @@ def test_column_retention_out_of_range_fails(tls_env: dict[str, str], override: 
 
 
 def test_loyalty_points_mode_w18(tls_env: dict[str, str]) -> None:
-    # G18 (docs/04 §9.9, E-30): default `product` sampai E-30 terpasang; toleransi default 0 (K-18-1).
+    # SEC-114 (L-25b): default `payment`; toleransi default 0 (K-18-1).
     settings = Settings.from_env(tls_env)
-    assert (settings.loyalty_points_mode, settings.loyalty_points_tolerance_idr) == ("product", 0)
+    assert (settings.loyalty_points_mode, settings.loyalty_points_tolerance_idr) == ("payment", 0)
     paid = Settings.from_env({**tls_env, "ETL_LOYALTY_POINTS_MODE": "Payment"})
     assert paid.loyalty_points_mode == "payment"
+    # `product` (data historis) ditolak di production (APP_ENV production / kosong), boleh di non-production.
+    with pytest.raises(RuntimeError):
+        Settings.from_env({**tls_env, "ETL_LOYALTY_POINTS_MODE": "product"})
+    with pytest.raises(RuntimeError):
+        Settings.from_env({**tls_env, "APP_ENV": "", "ETL_LOYALTY_POINTS_MODE": "product"})
+    dev = Settings.from_env({**tls_env, "APP_ENV": "development", "ETL_LOYALTY_POINTS_MODE": "product"})
+    assert dev.loyalty_points_mode == "product"
     for bad in ({"ETL_LOYALTY_POINTS_MODE": "diskon"}, {"ETL_LOYALTY_POINTS_TOLERANCE_IDR": "-1"}):
         with pytest.raises(RuntimeError):
             Settings.from_env({**tls_env, **bad})

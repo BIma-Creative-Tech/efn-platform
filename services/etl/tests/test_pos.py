@@ -206,11 +206,13 @@ def test_product_sql_versions_on_variant_and_template() -> None:
 
 
 def test_points_payment_flag_only_in_payment_mode() -> None:
-    # G18 (E-30): kolom Odoo efn_is_loyalty_points baru ada setelah E-30 -> mode produk tidak menyentuhnya.
+    # SEC-114: default mode payment membaca penanda E-30; mode produk (historis) tidak menyentuhnya.
     from efn_etl.pos import pos_jobs, pos_payments_job
 
-    assert "efn_is_loyalty_points" not in POS_PAYMENTS.sql
-    assert "FALSE AS is_loyalty_points" in POS_PAYMENTS.sql
+    product = pos_payments_job(points_payment=False)
+    assert "efn_is_loyalty_points" not in product.sql
+    assert "FALSE AS is_loyalty_points" in product.sql
+    assert "efn_is_loyalty_points" in POS_PAYMENTS.sql
     payment = pos_payments_job(points_payment=True)
     assert "COALESCE(pm.efn_is_loyalty_points, FALSE) AS is_loyalty_points" in payment.sql
     assert "{" not in payment.sql and "%(cursor_ts)s" in payment.sql

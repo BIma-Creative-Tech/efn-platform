@@ -399,7 +399,7 @@ def enabled_jobs(
     odoo_enabled: bool,
     points_codes: frozenset[str] = DEFAULT_POINTS_PRODUCT_CODES,
     age_out: AgeOut = DEFAULT_AGE_OUT,
-    points_payment: bool = False,
+    points_payment: bool = True,
 ) -> list[Job]:
     """Job incremental. Odoo: penjualan POS + (Gelombang 13) pembayaran POS, outlet, produk (efn_etl/pos.py)."""
     jobs = [competitor_prices_job(age_out), loyalty_events_job(age_out)]

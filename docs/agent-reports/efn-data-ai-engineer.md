@@ -595,3 +595,22 @@ E-30 **belum** ada di DB dev -> logika diuji dengan fixture; uji nyata mode `pay
 - Mode `payment` terhadap Odoo/BFF nyata (E-30 + tabel reverse BFF belum ada).
 - Perbandingan `payment_date` (timestamp tanpa zona, UTC) dengan parameter timestamptz mengikuti pola query recon yang ada (session TZ UTC).
 - Kartu Metabase untuk `v_loyalty_points_daily` belum dibuat (view + grant sudah siap).
+
+## Gelombang 18c — Perbaikan review r11: SEC-114 (L-25b), koordinasi SEC-124 (14 Okt 2026)
+
+### Perubahan
+| File | Isi |
+|---|---|
+| `services/etl/efn_etl/config.py` | `ETL_LOYALTY_POINTS_MODE` default **`payment`**; `product` ditolak bila `is_production` (APP_ENV production/kosong) — lapisan kedua `deploy-validate`. |
+| `services/etl/efn_etl/loyalty_recon.py` | `LoyaltyReconSettings.points_mode` default `payment`. Mode payment: order **tanpa** pembayaran Poin EFN jatuh ke baris produk lama (`PointsLines.legacy=True`, toleransi Rp1 x baris) -> order pra-E-30 di jendela lookback tidak memicu `redeem_without_points_line` palsu; order legacy (termasuk order refund-nya) dikeluarkan dari perbandingan harian K-18-6. Order tanpa pembayaran poin DAN tanpa baris produk tetap ditandai. |
+| `services/etl/efn_etl/pos.py`, `jobs.py` | Default `points_payment=True` (`fact_pos_payment.is_loyalty_points` dari penanda E-30). |
+| Test | `test_loyalty_recon.py` (+3: legacy tanpa alarm palsu, redeem tanpa pembayaran/baris tetap critical, legacy keluar dari harian; test mode produk lama memakai `PRODUCT` eksplisit), `test_config.py` (default payment, product ditolak di production/APP_ENV kosong, boleh di development), `test_pos.py`. |
+| `services/etl/README.md` | Default & aturan production. |
+
+### Verifikasi
+- pytest ETL **219 passed / 1 skipped**; ruff check + format bersih.
+- Dev: E-30 kini terpasang (`pos_payment_method.efn_is_loyalty_points` ada) dan `platform.loyalty_pos_reverse` (BFF, `08-platform-g18-privacy.sql`) cocok dengan kolom yang dibaca ETL. Grant Odoo dijalankan ulang (exit 0, tanpa NOTICE = grant penanda diterapkan). Image ETL di-rebuild + recreate: log start `points_mode=payment`, job `pos_payments` ok dengan SQL penanda.
+- Uji kering (dry-run, tanpa menulis ClickHouse) rekonsiliasi mode payment terhadap DB dev: berjalan tanpa error, tetapi **DB Odoo dev kosong (0 `pos_order`)** sementara ledger BFF masih berisi data uji lama (termasuk ±30 rb event bench) -> semua temuan (`earn_without_paid_order`, 7 `redeem_without_points_line`, 3 hari selisih) adalah ketidakkonsistenan data dev (order Odoo sudah tidak ada), bukan positif palsu logika. Uji nyata bermakna butuh order POS E-30 baru di Odoo dev + `ETL_LOYALTY_RECON_NOT_BEFORE` setelah reset data.
+
+### SEC-124 (BFF)
+Rekonsiliasi harian membaca `value_idr` reservasi `committed` (sisi redeem). Saat ini `erasure.service.ts` masih `DELETE FROM platform.loyalty_reservation WHERE member_hash = $1` dan sweeper retensi menghapus reservasi terminal setelah 30 h. Setelah SEC-124 (lepas tautan member, nilai keuangan committed tetap), erasure tidak lagi menghasilkan `points_payment_daily_mismatch`/`redeem_points_mismatch` palsu. Retensi 30 h tetap aman untuk jendela recon 72 j. Tidak ada perubahan ETL yang dibutuhkan untuk SEC-124 (kolom yang dibaca: `order_ref, company_code, value_idr, committed_at, status, points`).

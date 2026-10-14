@@ -259,6 +259,8 @@ class Reservation:
 class PointsLines:
     count: int
     total_incl: Decimal
+    # Mode payment: order pra-E-30 (redeem masih baris produk Poin EFN) -> toleransi lama Rp1 x baris.
+    legacy: bool = False
 
 
 @dataclass
@@ -400,7 +402,7 @@ def reconcile(
             if order.loyalty_state != "review" and to_utc(order.date_order) < settled_before:
                 report.add("points_line_without_redeem", order.company_code, order.id)
             continue
-        tolerance = Decimal(lines.count) if points_tolerance is None else points_tolerance
+        tolerance = Decimal(lines.count) if points_tolerance is None or lines.legacy else points_tolerance
         if abs(abs(lines.total_incl) - Decimal(reservation.value_idr)) > tolerance:
             report.add("points_line_value_mismatch", order.company_code, order.id)
 
@@ -609,8 +611,9 @@ class LoyaltyReconSettings:
     # tidak pernah melewati hook efn_pos_loyalty_ledger -> positif palsu `paid_member_order_without_earn`).
     not_before: datetime | None = None
     # G18 (docs/04 §9.9, E-30): `product` = redeem sebagai baris produk Poin EFN (G13); `payment` = metode bayar
-    # Poin EFN (`efn_is_loyalty_points`) + rekonsiliasi harian K-18-6. Ganti ke `payment` SETELAH E-30 terpasang.
-    points_mode: str = "product"
+    # Poin EFN (`efn_is_loyalty_points`) + rekonsiliasi harian K-18-6 — default sejak SEC-114 (L-25b); `product` hanya
+    # untuk data historis pra-E-30.
+    points_mode: str = "payment"
     points_tolerance_idr: Decimal = Decimal(0)
 
     def __post_init__(self) -> None:
@@ -698,13 +701,19 @@ def load_inputs(
     points_lines: dict[int, PointsLines] = {}
     outbox: dict[int, set[str]] = defaultdict(set)
     for chunk in _chunks(order_ids):
-        points_rows = (
-            odoo.query(SQL_ODOO_POINTS_PAYMENTS, {"ids": chunk})
-            if cfg.payment_mode
-            else odoo.query(SQL_ODOO_POINTS_LINES, {"codes": sorted(cfg.points_codes), "ids": chunk})
-        )
-        for row in points_rows:
-            points_lines[int(row["order_id"])] = PointsLines(int(row["n"]), Decimal(str(row["total"])))
+        if cfg.payment_mode:
+            for row in odoo.query(SQL_ODOO_POINTS_PAYMENTS, {"ids": chunk}):
+                points_lines[int(row["order_id"])] = PointsLines(int(row["n"]), Decimal(str(row["total"])))
+        # Mode product: sumber utama. Mode payment: cadangan untuk order tanpa pembayaran Poin EFN — order pra-E-30 di
+        # jendela lookback masih ber-redeem baris produk; tanpa ini muncul `redeem_without_points_line` palsu (SEC-114).
+        product_ids = [i for i in chunk if i not in points_lines]
+        if product_ids:
+            codes = sorted(cfg.points_codes)
+            for row in odoo.query(SQL_ODOO_POINTS_LINES, {"codes": codes, "ids": product_ids}):
+                if int(row["n"]):
+                    points_lines[int(row["order_id"])] = PointsLines(
+                        int(row["n"]), Decimal(str(row["total"])), legacy=cfg.payment_mode
+                    )
         for row in odoo.query(SQL_ODOO_OUTBOX_BY_ORDERS, {"ids": chunk}):
             if row["kind"] == "earn" and row["order_id"]:
                 outbox[int(row["order_id"])].add(str(row["state"]))
@@ -738,10 +747,17 @@ def _moves(rows: Iterable[Mapping[str, Any]], kind: str) -> list[BffPointsMove]:
 
 
 def run_daily_points(
-    platform: Source, odoo: Source, cfg: LoyaltyReconSettings, now: datetime, companies: Mapping[int, str]
+    platform: Source,
+    odoo: Source,
+    cfg: LoyaltyReconSettings,
+    now: datetime,
+    companies: Mapping[int, str],
+    legacy_refs: frozenset[str] = frozenset(),
 ) -> list[DailyPoints]:
     """K-18-6. Muat pembayaran Poin EFN (Odoo) & redeem/restore (BFF) untuk hari WIB yang sudah settle, lalu
-    `daily_points_recon`. Order di luar jendela diambil per uuid hanya untuk menentukan harinya (bukan dijumlah)."""
+    `daily_points_recon`. Order di luar jendela diambil per uuid hanya untuk menentukan harinya (bukan dijumlah).
+    `legacy_refs` = order pra-E-30 (redeem/refund berupa baris produk Poin EFN): nilai BFF-nya tidak punya pasangan
+    `pos.payment`, jadi dikeluarkan dari perbandingan harian (sudah dicek per order oleh kind 3-5)."""
     day_from, day_to = settled_days(cfg.since(now), now, cfg.settle)
     if day_from >= day_to:
         return []
@@ -749,13 +765,14 @@ def run_daily_points(
     payments = [_points_payment(r, companies) for r in odoo.query(SQL_ODOO_POINTS_PAYMENTS_WINDOW, window)]
     moves = _moves(platform.query(SQL_PLATFORM_REDEEMS_WINDOW, window), "redeem")
     moves += _moves(platform.query(SQL_PLATFORM_RESTORES_WINDOW, window), "restore")
+    moves = [m for m in moves if m.order_ref not in legacy_refs]
     # Sisi BFF untuk order Odoo jendela yang dicatat BFF di luar jendela (commit setelah tengah malam).
     have = {(m.kind, m.order_ref) for m in moves}
     refs = sorted({p.uuid for p in payments if p.uuid})
     for chunk in _chunks(refs):
         for kind, sql in (("redeem", SQL_PLATFORM_REDEEMS_BY_REF), ("restore", SQL_PLATFORM_RESTORES_BY_REF)):
             for m in _moves(platform.query(sql, {"refs": chunk}), kind):
-                if (m.kind, m.order_ref) not in have:
+                if (m.kind, m.order_ref) not in have and m.order_ref not in legacy_refs:
                     have.add((m.kind, m.order_ref))
                     moves.append(m)
     known: list[PointsPayment] = list(payments)
@@ -804,7 +821,10 @@ def run_loyalty_recon(
     report = reconcile(inputs, now, cfg.settle, points_tolerance=cfg.points_tolerance_idr if cfg.payment_mode else None)
     daily: list[DailyPoints] = []
     if cfg.payment_mode:
-        daily = run_daily_points(platform, odoo, cfg, now, companies)
+        legacy = frozenset(
+            o.uuid for o in inputs.orders_by_uuid.values() if (pl := inputs.points_lines.get(o.id)) and pl.legacy
+        )
+        daily = run_daily_points(platform, odoo, cfg, now, companies, legacy)
         add_daily_findings(report, daily, cfg.points_tolerance_idr)
     open_since = now - cfg.open_window
     if cfg.not_before:

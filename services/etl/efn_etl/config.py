@@ -14,7 +14,14 @@ from typing import Self
 from urllib.parse import urlsplit
 
 from efn_etl.sink import load_key
-from efn_etl.tls import TlsConfigError, ca_file, pg_ssl_settings, plaintext_allowed, require_readable_file
+from efn_etl.tls import (
+    TlsConfigError,
+    ca_file,
+    is_production,
+    pg_ssl_settings,
+    plaintext_allowed,
+    require_readable_file,
+)
 
 _TRUE = {"1", "true", "yes", "on"}
 
@@ -48,9 +55,13 @@ def _int_range(env: Mapping[str, str], name: str, default: int, low: int, high: 
 
 
 def _points_mode(env: Mapping[str, str]) -> str:
-    value = _str(env, "ETL_LOYALTY_POINTS_MODE", "product").strip().lower()
+    value = _str(env, "ETL_LOYALTY_POINTS_MODE", "payment").strip().lower()
     if value not in ("product", "payment"):
         raise RuntimeError("ETL_LOYALTY_POINTS_MODE harus product|payment")
+    # SEC-114 (L-25b): mode `product` (redeem = baris produk, pra-E-30) hanya untuk data historis; Odoo G18 menolak
+    # produk poin. Ditolak di production (fail closed, selaras deploy-validate).
+    if value == "product" and is_production(env):
+        raise RuntimeError("ETL_LOYALTY_POINTS_MODE=product ditolak di production (SEC-114); gunakan payment")
     return value
 
 
@@ -136,8 +147,8 @@ class Settings:
     loyalty_recon_aged_hours: int = 24
     loyalty_recon_open_days: int = 30
     loyalty_recon_not_before: datetime | None = None
-    # G18 (docs/04 §9.9 K-18-1/K-18-6, E-30): `product` (default, sampai E-30 terpasang) | `payment`.
-    loyalty_points_mode: str = "product"
+    # G18 (docs/04 §9.9 K-18-1/K-18-6, E-30; SEC-114): `payment` (default) | `product` (data historis, non-production).
+    loyalty_points_mode: str = "payment"
     loyalty_points_tolerance_idr: int = 0
     # G18/W-19 (PDP v7 Q-P7/Q-P8): umur kolom pribadi saat dimuat (lapisan kedua TTL kolom ClickHouse). Env SAMA
     # dengan service clickhouse-init agar kedua lapisan konsisten.

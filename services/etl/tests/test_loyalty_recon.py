@@ -28,6 +28,8 @@ from efn_etl.loyalty_recon import (
 NOW = datetime(2026, 10, 8, 12, 0, tzinfo=UTC)
 OLD = NOW - timedelta(hours=10)
 SETTLE = timedelta(hours=6)
+# Mode produk (redeem = baris produk, data historis pra-E-30); default sejak SEC-114 = payment.
+PRODUCT = LoyaltyReconSettings(points_mode="product")
 
 
 def _order(oid: int, uuid: str, **kw: Any) -> OdooOrder:
@@ -289,7 +291,7 @@ def test_run_loyalty_recon_end_to_end(caplog: pytest.LogCaptureFixture) -> None:
     inputs = _clean_inputs()
     # Order asal redeem di luar jendela (diambil per uuid dari ledger)
     platform, odoo, store = FakePlatform(inputs), FakeOdoo(inputs, {"u-earn", "u-nomember"}), FakeStore()
-    cfg = LoyaltyReconSettings()
+    cfg = PRODUCT
     assert recon_due(store, cfg, NOW)
     with caplog.at_level(logging.INFO, logger="efn_etl.loyalty_recon"):
         report = run_loyalty_recon(platform, odoo, store, cfg, NOW)
@@ -310,9 +312,7 @@ def test_run_logs_warning_on_anomaly(caplog: pytest.LogCaptureFixture) -> None:
     inputs = _clean_inputs()
     inputs.earn_refs["u-ghost"] = "FNB"
     with caplog.at_level(logging.INFO, logger="efn_etl.loyalty_recon"):
-        report = run_loyalty_recon(
-            FakePlatform(inputs), FakeOdoo(inputs, set()), FakeStore(), LoyaltyReconSettings(), NOW
-        )
+        report = run_loyalty_recon(FakePlatform(inputs), FakeOdoo(inputs, set()), FakeStore(), PRODUCT, NOW)
     assert report.anomalies == 1
     record = next(r for r in caplog.records if lr.RECON_MARKER in r.getMessage())
     assert record.levelno == logging.WARNING
@@ -430,8 +430,8 @@ def test_payment_mode_value_check_has_zero_tolerance() -> None:
 
 
 def test_points_mode_validation() -> None:
-    assert LoyaltyReconSettings().payment_mode is False
-    assert LoyaltyReconSettings(points_mode="payment").payment_mode is True
+    assert LoyaltyReconSettings().payment_mode is True  # SEC-114: default payment
+    assert LoyaltyReconSettings(points_mode="product").payment_mode is False
     with pytest.raises(ValueError):
         LoyaltyReconSettings(points_mode="diskon")
     with pytest.raises(ValueError):
@@ -477,9 +477,16 @@ class FakePlatformPayment(FakePlatform):
 
 
 class FakeOdooPayment(FakeOdoo):
-    def __init__(self, inputs: ReconInputs, window_only: set[str], payments: list[lr.PointsPayment]) -> None:
+    def __init__(
+        self,
+        inputs: ReconInputs,
+        window_only: set[str],
+        payments: list[lr.PointsPayment],
+        legacy_lines: dict[int, PointsLines] | None = None,
+    ) -> None:
         super().__init__(inputs, window_only)
         self.payments = payments
+        self.legacy_lines = legacy_lines or {}
         self.seen_sql: list[str] = []
 
     def _prow(self, p: lr.PointsPayment) -> dict[str, Any]:
@@ -495,7 +502,13 @@ class FakeOdooPayment(FakeOdoo):
     def query(self, sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         self.seen_sql.append(sql)
         if sql == lr.SQL_ODOO_POINTS_LINES:
-            raise AssertionError("mode payment tidak membaca baris produk")
+            # Cadangan order pra-E-30: hanya ditanya untuk order TANPA pembayaran Poin EFN.
+            assert not set(params["ids"]) & {i for i in self.inputs.points_lines}
+            return [
+                {"order_id": i, "n": p.count, "total": p.total_incl}
+                for i, p in self.legacy_lines.items()
+                if i in params["ids"]
+            ]
         if sql == lr.SQL_ODOO_POINTS_PAYMENTS:
             return [
                 {"order_id": i, "n": p.count, "total": abs(p.total_incl)}
@@ -546,5 +559,48 @@ def test_run_payment_mode_end_to_end(caplog: pytest.LogCaptureFixture) -> None:
 def test_product_mode_skips_daily() -> None:
     inputs = _clean_inputs()
     store = FakeStore()
-    run_loyalty_recon(FakePlatform(inputs), FakeOdoo(inputs, set()), store, LoyaltyReconSettings(), NOW)
+    run_loyalty_recon(FakePlatform(inputs), FakeOdoo(inputs, set()), store, PRODUCT, NOW)
     assert lr.DAILY_TABLE not in store.rows
+
+
+# ---------------------------------------------------------------- SEC-114: default payment tanpa alert palsu
+
+
+def test_default_payment_mode_legacy_order_no_false_redeem_alert() -> None:
+    """Order pra-E-30 di jendela lookback (redeem = baris produk) tidak memicu `redeem_without_points_line` palsu;
+    order E-30 (pembayaran Poin EFN) tetap dicek dengan toleransi 0."""
+    inputs = _clean_inputs()
+    legacy = {2: inputs.points_lines.pop(2)}  # u-redeem: hanya baris produk -6000 (Rp1 x baris)
+    inputs.points_lines.pop(3)  # order refund pra-E-30: baris produk +3000 juga lewat cadangan
+    legacy[3] = PointsLines(1, Decimal("3000.00"))
+    platform, store = FakePlatformPayment(inputs, []), FakeStore()
+    odoo = FakeOdooPayment(inputs, {"u-earn", "u-nomember"}, [], legacy_lines=legacy)
+    report = run_loyalty_recon(platform, odoo, store, LoyaltyReconSettings(), NOW)
+    assert report.anomalies == 0
+    assert lr.SQL_ODOO_POINTS_PAYMENTS in odoo.seen_sql and lr.SQL_ODOO_POINTS_LINES in odoo.seen_sql
+
+    # Baris produk legacy: toleransi lama Rp1 x baris, bukan 0.
+    inputs = _clean_inputs()
+    inputs.points_lines[2] = PointsLines(1, Decimal("-5999.00"), legacy=True)
+    assert _kinds(reconcile(inputs, NOW, SETTLE, points_tolerance=Decimal(0))) == {}
+    inputs.points_lines[2] = PointsLines(1, Decimal("5999.00"))  # pembayaran E-30: toleransi 0
+    assert _kinds(reconcile(inputs, NOW, SETTLE, points_tolerance=Decimal(0))) == {"points_line_value_mismatch": 1}
+
+
+def test_payment_mode_still_flags_redeem_without_any_points_line() -> None:
+    inputs = _clean_inputs()
+    inputs.points_lines.pop(2)  # tidak ada pembayaran Poin EFN DAN tidak ada baris produk
+    odoo = FakeOdooPayment(inputs, {"u-earn", "u-nomember"}, [])
+    report = run_loyalty_recon(FakePlatformPayment(inputs, []), odoo, FakeStore(), LoyaltyReconSettings(), NOW)
+    assert report.by_kind().get("redeem_without_points_line") == 1
+
+
+def test_daily_excludes_legacy_orders() -> None:
+    inputs = _clean_inputs()
+    legacy = {2: inputs.points_lines.pop(2)}
+    moves = [lr.BffPointsMove("u-redeem", FNB, _wib(7, 9), 6000, "redeem")]  # redeem pra-E-30, tanpa pos.payment
+    platform, store = FakePlatformPayment(inputs, moves), FakeStore()
+    odoo = FakeOdooPayment(inputs, {"u-earn", "u-nomember"}, [], legacy_lines=legacy)
+    report = run_loyalty_recon(platform, odoo, store, LoyaltyReconSettings(), NOW)
+    assert "points_payment_daily_mismatch" not in report.by_kind()
+    assert lr.DAILY_TABLE not in store.rows  # tidak ada hari dengan nilai -> tidak ada baris harian

@@ -37,12 +37,13 @@ ORDER BY p.write_date, p.id::text
 LIMIT %(limit)s
 """
 # G18 (docs/04 §9.9, E-30): penanda metode "Poin EFN". Kolom Odoo `pos_payment_method.efn_is_loyalty_points` baru ada
-# setelah E-30 terpasang -> dibaca hanya bila ETL_LOYALTY_POINTS_MODE=payment; sebelumnya FALSE (kolom mart 0).
+# setelah E-30 terpasang -> dibaca bila ETL_LOYALTY_POINTS_MODE=payment (default, SEC-114);
+# mode product = FALSE (kolom mart 0).
 POINTS_FLAG_PAYMENT = "COALESCE(pm.efn_is_loyalty_points, FALSE)"
 POINTS_FLAG_PRODUCT = "FALSE"
 
 
-def pos_payments_sql(points_payment: bool = False) -> str:
+def pos_payments_sql(points_payment: bool = True) -> str:
     return _SQL_POS_PAYMENTS.format(points_flag=POINTS_FLAG_PAYMENT if points_payment else POINTS_FLAG_PRODUCT)
 
 
@@ -175,7 +176,7 @@ def transform_product(row: dict[str, Any]) -> list[Any]:
     ]
 
 
-def pos_payments_job(points_payment: bool = False) -> Job:
+def pos_payments_job(points_payment: bool = True) -> Job:
     return Job(
         "pos_payments",
         "odoo",
@@ -192,5 +193,5 @@ PRODUCTS = Job("products", "odoo", SQL_PRODUCTS, "dim_product", PRODUCT_COLUMNS,
 POS_JOBS = (POS_OUTLETS, PRODUCTS, POS_PAYMENTS)
 
 
-def pos_jobs(points_payment: bool = False) -> tuple[Job, ...]:
+def pos_jobs(points_payment: bool = True) -> tuple[Job, ...]:
     return (POS_OUTLETS, PRODUCTS, pos_payments_job(points_payment))

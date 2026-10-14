@@ -66,10 +66,13 @@ ledger sampel. Tabel `loyalty_recon_run` (penanda, ditulis terakhir) + `loyalty_
 `v_loyalty_recon_latest`, `v_loyalty_recon_daily`. Grant Odoo baru: `sql/odoo-readonly-grants.sql` bagian G14.
 
 ### Redeem poin = pembayaran Poin EFN (docs/04 §9.9 K-18-1/K-18-6, Odoo E-30) — Gelombang 18
-`ETL_LOYALTY_POINTS_MODE` = `product` (default; redeem = baris produk Poin EFN, G13) | `payment` (setelah E-30 terpasang
-dan grant `efn_is_loyalty_points` diterapkan ulang dari `sql/odoo-readonly-grants.sql`). Mode `payment`:
+`ETL_LOYALTY_POINTS_MODE` = `payment` (**default sejak SEC-114 / L-25b**; butuh E-30 + grant `efn_is_loyalty_points` dari
+`sql/odoo-readonly-grants.sql`) | `product` (redeem = baris produk Poin EFN, hanya data historis pra-E-30; **ditolak di
+production** oleh ETL dan `deploy-validate`). Mode `payment`:
 - kind `redeem_without_points_line`, `points_line_value_mismatch`, `points_line_without_redeem` memakai pembayaran
   metode `pos_payment_method.efn_is_loyalty_points` (toleransi `ETL_LOYALTY_POINTS_TOLERANCE_IDR`, default 0, 0..1000);
+  order tanpa pembayaran Poin EFN jatuh ke baris produk lama (order pra-E-30 di jendela lookback, toleransi Rp1 x baris)
+  sehingga tidak ada `redeem_without_points_line` palsu; order itu juga dikeluarkan dari perbandingan harian;
 - **K-18-6 harian**: per PT x hari WIB yang sudah utuh + settle, Σ `pos.payment` Poin EFN (refund negatif) =
   Σ `value_idr` reservasi committed − Σ `points_restored_value`. Sisi BFF diatribusikan ke hari/PT order Odoo
   (`order_ref` = `pos.order.uuid`), sehingga commit BFF lewat tengah malam (order offline) tidak memicu alarm palsu.
