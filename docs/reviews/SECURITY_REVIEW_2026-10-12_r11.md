@@ -39,6 +39,19 @@ Metode: reviewer hanya membaca kode dan konfigurasi. Tidak ada yang dijalankan. 
 4. **Temuan lain: 5 Low dan 3 Info.** Isinya pengerasan dan konsistensi.
 5. **Rekomendasi:** perbaiki SEC-113..116 sebelum metode Poin EFN dan refund-asal diaktifkan di outlet pilot. SEC-114 cukup dengan perubahan konfigurasi deploy.
 
+> **Status setelah re-review G18 (14 Okt 2026, perbaikan L-25: `e881ae1`, `a045a0a`, `e0d3f2e`, `751dd89`, commit Odoo terakhir):**
+> - Status temuan r11:
+>   - **Fixed:** SEC-113, 114, 115, 116, 119, 120, 121, 123, 124;
+>   - **Partial:** SEC-118 (rekonsiliasi ETL belum memakai `points_restored`), SEC-122 (perlu cek `installed` di DB lama);
+>   - **Reopened:** SEC-117, karena `FOR UPDATE` tanpa UPDATE tidak menyegarkan snapshot REPEATABLE READ.
+> - **Temuan baru:**
+>   - 2 Medium PLAUSIBLE: **SEC-125** (order dibayar di luar `_process_saved_order`: `action_pos_order_paid`, `write({'state': 'paid'})`, wizard `pos.make.payment`) dan **SEC-126** (penanda sync berlaku untuk seluruh `_process_order`, termasuk perintah x2many atas pembayaran order lain);
+>   - 2 Low: SEC-127 (= SEC-117 reopened) dan SEC-128 (cek restore BFF berbasis rasio eligible menolak refund barang yang dikecualikan dari earn; toleransi 10 %);
+>   - 1 Info: SEC-129.
+> - **Rekomendasi: GO bersyarat untuk merge ke `main`.** Tetap **NO-GO** untuk mengaktifkan tukar Poin EFN (`efn_loyalty_redeem_enabled`) dan mengandalkan E-31 di outlet pilot sampai SEC-125, SEC-126, dan SEC-127 Fixed.
+>
+> Lihat bagian *Re-review G18* di akhir dokumen.
+
 ## Temuan baru
 
 | ID | Severity | Verdict | Judul | Lokasi utama | Risiko |
@@ -319,3 +332,202 @@ Rekomendasi: saat erasure, pseudonimkan reservasi committed (`member_hash` → N
 
   Verifikasi di image `efn-odoo:ci` dengan `call_kw` sebagai kasir.
 - Tidak ada test/tour/skrip yang dijalankan reviewer. Klaim test di laporan agent G18 tidak diperiksa ulang.
+
+---
+
+## Re-review G18 (14 Okt 2026)
+
+Cakupan: branch `chore/wave-18` HEAD terbaru, yang memuat perbaikan L-25 (`docs/04` §9.9): `e881ae1` (ETL), `a045a0a` (BFF), `e0d3f2e` (ops), `751dd89` (SEC-121), dan commit Odoo terakhir (SEC-113/115..119/122).
+
+Dasar tambahan: laporan `docs/agent-reports/efn-odoo-engineer.md` bagian "Review r11" dan `efn-bff-engineer.md` bagian "Review r11 sisi BFF". Menurut laporan engineer, ketiga temuan PLAUSIBLE (ACL `pos.payment`, `is_change` dari klien, `res.partner.bank` untuk `group_partner_manager`) sudah dikonfirmasi lewat `call_kw` sebagai kasir di Odoo 19. Reviewer menerima konfirmasi itu, tetapi tidak menjalankannya ulang.
+
+File yang dibaca ulang:
+- Odoo:
+  - `efn_core/scope.py`;
+  - `efn_pos_refund_origin/{models/pos_order.py,models/pos_payment.py,__manifest__.py}`;
+  - `efn_pos_loyalty_ledger/models/{pos_payment.py,pos_payment_method.py,pos_order.py:236-435}`, `efn_pos_loyalty_outbox.py` (payload commit), `migrations/19.0.2.1.0`;
+  - `efn_pos_otp_gate/{models/res_partner.py,migrations/19.0.1.9.0}`;
+  - `efn_setup_pos/{data/pos_cashier_groups.xml,models/res_partner.py}`.
+- BFF: `pos/pos-loyalty.service.ts:500-715`, `pos/loyalty-reservation.sweeper.ts`, `privacy/erasure.service.ts:300-320`, `infra/postgres/init/08-platform-g18-privacy.sql`.
+- ETL/ops: `services/etl/efn_etl/{config,loyalty_recon}.py`, `scripts/{deploy.sh,lib/deploy-validate.sh}`, `scripts/host/{efn-deploy,efn-rotate-online-key}`, `.github/workflows/deploy.yml`, `infra/compose/{docker-compose.yml,.env.example}`.
+
+### Status temuan r11
+
+| ID | Status | Bukti (file:line) | Catatan |
+|---|---|---|---|
+| SEC-113 | **Fixed** (dengan residual SEC-125/126) | `efn_pos_refund_origin/models/pos_payment.py:27-61`; `efn_pos_loyalty_ledger/models/pos_payment.py:18-44`; `efn_core/scope.py:22-42`; scope di `refund_origin/models/pos_order.py:207-210` & `loyalty_ledger/models/pos_order.py:556-558` | Create/write field finansial/unlink `pos.payment` order non-draft ditolak di luar jalur sync. Poin EFN ditolak juga untuk draft. Penanda disimpan di atribut cursor, bukan context RPC. |
+| SEC-114 | **Fixed** | `config.py:57-65,151`; `loyalty_recon.py:616`; `docker-compose.yml:1536`; `deploy.yml:268`; `deploy.sh:323`; `deploy-validate.sh:173-177` | Default `payment` di semua jalur. Mode `product` ditolak di production oleh ETL maupun deploy-validate. |
+| SEC-115 | **Fixed** | `efn_pos_otp_gate/models/res_partner.py:73-91,141-172`; penandaan di `efn_pos_otp_gate/models/pos_config.py:205`, `loyalty_ledger/models/pos_config.py:318`, `pos_order.py:431`; migrasi `otp_gate 19.0.1.9.0`, `loyalty 19.0.2.1.0` | Penanda `efn_member_locked_at` tahan lama dan hanya bisa ditulis server. HP member hanya bisa diubah `base.group_system`. Kasir kini juga tanpa hak write partner (SEC-121). Lihat analisis pemalsuan/backfill di bawah. |
+| SEC-116 | **Fixed** (selama order melewati `_process_saved_order`, lihat SEC-125) | `refund_origin/models/pos_order.py:105-140,148,203-204` | `is_change` hanya sah untuk tunai negatif yang tertutup tender tunai. Untuk refund, allowance = 0. |
+| SEC-117 | **Reopened → SEC-127** | `refund_origin/models/pos_order.py:142-144,173`; `loyalty_ledger/models/pos_order.py:322-328` | `SELECT … FOR UPDATE` saja tidak cukup di REPEATABLE READ. Lihat SEC-127. |
+| SEC-118 | **Partial** | Odoo: `efn_pos_loyalty_outbox.py:329` (`payment_amount = round(_efn_points_paid())`). BFF: `pos-loyalty.service.ts:525,589-617` (expected restore independen) | Cek commit K-18-3 kini bermakna. Sisa: `loyalty_recon.py` belum membandingkan `points_restored × nilai poin` (grep `points_restored`: nihil). Cek BFF tetap memakai `refund_ratio` kiriman Odoo (lihat SEC-128). |
+| SEC-119 | **Fixed** | `pos_payment_method.py:60-110` | Flag hanya diubah admin. Flag, jurnal, dan arsip metode berpembayaran terkunci. Residual Info: `outstanding_account_id` metode Poin EFN berpembayaran masih bisa diubah POS Manager (pemetaan akun; tercatat audit bila aturan `efn_setup_audit` ditambahkan). |
+| SEC-120 | **Fixed** | `deploy.sh:60-67`; `efn-deploy:327-328`; `efn-rotate-online-key:384-405,444,452-471,200-206` | Lock bersama `/run/efn/deploy.lock` (dir 0700 root, `flock -w`), dipegang selama fase compose/secret/verifikasi dan dilepas selama overlap. Key yatim dicabut per nama berversi yang divalidasi regex. |
+| SEC-121 | **Fixed** | `efn_setup_pos/data/pos_cashier_groups.xml:28-66`; `models/res_partner.py:21-27` | Grup tidak lagi mewarisi `group_partner_manager`. ACL hanya read+create; rule create hanya individu tanpa induk dengan `company_id` = company aktif. `res.partner.bank` tetap read-only, sehingga nested create `bank_ids`/`child_ids` ditolak ACL/rule. |
+| SEC-122 | **Partial** | `efn_pos_refund_origin/__manifest__.py:28-30` (`auto_install: True`) | DB baru: aman. DB lama yang sudah punya `point_of_sale` + `efn_core`: `auto_install` tidak selalu memasang modul baru saat `-u` (PLAUSIBLE). Cek `state = installed` di staging, lalu jadikan cek pra-go-live. |
+| SEC-123 | **Fixed** | `pos-loyalty.service.ts:688-696` | Earn ditunda (`409 earn_pending`, retryable) selama reservasi order masih `reserved` dan `hold_until` belum lewat. |
+| SEC-124 | **Fixed** | `erasure.service.ts:314-315`; `loyalty-reservation.sweeper.ts:84-89`; `08-platform-g18-privacy.sql:94` | Reservasi committed dipertahankan dengan tombstone acak; retensi committed minimal 3650 hari; grant hanya `UPDATE (member_hash)`. |
+
+### Analisis fokus re-review
+
+**1. Bypass penanda `efn_core/scope.py`**
+- Atribut cursor tidak bisa diisi lewat context, `/web/dataset/call_kw`, atau `/json/2`. `_process_order`/`_process_saved_order` berawalan `_` sehingga tidak bisa dipanggil lewat RPC. Penanda dibersihkan di `finally` dan pencacahnya aman bila bersarang. Sampai di sini benar.
+- Kelemahannya, penanda berlaku untuk **seluruh** isi `_process_order`, bukan hanya untuk pembayaran milik order yang sedang disinkron. Lihat **SEC-126**.
+- Guard juga dilewati oleh `env.su`, artinya semua kode server ber-`sudo()`. Di addon efn tidak ada jalur sudo yang menulis `pos.payment` dari input klien (grep: nihil). Jalur sudo inti, misalnya pembayaran online/kiosk, memerlukan transaksi provider nyata.
+
+**2. Jalur lain ke `pos.payment` dan status order**
+- `account.payment` dan wizard tutup sesi (`close_session_from_ui` / `_validate_session`) hanya membuat jurnal, pembayaran akuntansi, dan selisih kas. Keduanya tidak mengubah `amount`/`payment_method_id` `pos.payment`. Selisih metode Poin EFN tetap ditolak (`pos_session.py`).
+- `pos.make.payment` (wizard "Payment" di backend order), RPC publik `pos.order.add_payment`, `pos.order.action_pos_order_paid`, dan `pos.order.write({'state': 'paid'})` adalah jalur yang **tidak** melewati `_process_saved_order`. Lihat **SEC-125**.
+
+**3. `efn_member_locked_at`: pemalsuan dan backfill**
+- **Menghapus atau mengosongkan:** ditolak untuk non-superuser (`res_partner.py:89-91`). Kasir juga tidak punya hak write partner (SEC-121).
+- **Mengisi lewat `create`:** `create` tidak dijaga, jadi pembuat partner bisa mengisi penanda sendiri. Dampaknya hanya over-lock (HP partner baru terkunci), tanpa keuntungan. Info, tidak dicatat sebagai temuan.
+- **Backfill:**
+  - Migrasi hanya berjalan saat upgrade (`if not version: return`) dan memakai `now()`, bukan tanggal riwayat. Selisih tanggal ini kosmetik.
+  - Member yang riwayatnya sudah dibersihkan sebelum upgrade (challenge > 30 hari tanpa reservasi atau order loyalty) tidak ter-backfill.
+  - Order dengan earn `skipped` (HP asing) juga ikut ditandai. Ini over-lock dan aman.
+  - Karena belum ada produksi, dampaknya nihil. Untuk staging lama, cukup jalankan cek manual.
+- **Merge partner:** wizard merge memerlukan hak write partner, yang kini tidak dimiliki kasir.
+
+**4. Grup kasir sempit vs `company_id` multi-company**
+- Rule `('company_id', '=', company_id)` dievaluasi terhadap company aktif, yang selalu berada di `company_ids` user. Partner bersama (company kosong) dan partner PT lain ditolak.
+- Efek fungsional: pelanggan yang didaftarkan di PT Retail tidak terlihat oleh POS PT F&B (rule global multi-company), sehingga member perlu didaftarkan ulang per PT. Identitas poin tetap nomor HP, jadi tidak ada risiko keamanan. Catat sebagai keputusan fungsional (duplikasi partner per PT).
+- Field `property_product_pricelist` saat create: kasir bisa memberi pricelist apa pun yang tersedia di POS ke pelanggan baru. Risiko ini setara dengan tombol Pricelist POS yang sudah dikenal (R-B06), jadi tidak ada temuan baru.
+
+**5. Toleransi 10 % restore BFF:** lihat **SEC-128**.
+- Over-restore tetap dibatasi `left` (sisa poin redeem) dan validasi Odoo Rp1. Dampak maksimum per refund adalah kelebihan ≤ 10 % × nilai redeem, dan itu hanya terjadi bila payload Odoo/outbox dipalsukan (pemegang service key).
+- Masalah yang lebih nyata adalah positif palsu pada refund barang yang dikecualikan dari earn.
+
+**6. Lock host deploy/rotasi**
+- `/run/efn` dibuat 0700 root, sehingga pengguna non-root tidak bisa menanam symlink.
+- Lock dilepas selama overlap 1 jam, jadi deploy tidak tertahan.
+- Pewarisan fd 8 dari `efn-deploy` memakai pemeriksaan `readlink /proc/$$/fd/8`, lalu `flock -n`. Bila deskripsi bukan milik pemegang lock, `-n` gagal. Implementasi benar.
+
+### Temuan baru
+
+| ID | Severity | Verdict | Judul | Lokasi utama | Risiko |
+|---|---|---|---|---|---|
+| SEC-125 | **Medium** | PLAUSIBLE (metode publik & isi wizard inti CE 19); ketiadaan guard efn CONFIRMED | Order bisa menjadi `paid` tanpa `_process_saved_order`, sehingga E-30, E-31, SEC-116, dan gerbang OTP promo tidak berjalan | Tidak ada override `action_pos_order_paid`/`pos.order.write(state)` di addon efn (grep); `loyalty_ledger/models/pos_order.py:236-254` (draft tanpa cek nominal); `refund_origin/models/pos_payment.py:30-31` (draft dikecualikan) | R-S10, R-B05, R-B06 |
+| SEC-126 | **Medium** | PLAUSIBLE (perintah x2many inti tanpa cek kepemilikan) | Penanda sync berlaku untuk seluruh `_process_order`. Perintah `payment_ids` di payload yang menunjuk pembayaran order lain (`[1,id,…]`, `[2,id]`, `[4,id]`) lolos guard SEC-113 | `efn_core/scope.py:22-42`; `refund_origin/models/pos_payment.py:27-28`; `loyalty_ledger/models/pos_payment.py:18-19` | R-S10 |
+| SEC-127 | Low | CONFIRMED (semantik PostgreSQL) | (= SEC-117 reopened) `SELECT … FOR UPDATE` dalam transaksi REPEATABLE READ Odoo tidak melihat refund paralel yang baru di-commit. Race tetap ada | `refund_origin/models/pos_order.py:142-144`; `loyalty_ledger/models/pos_order.py:322-324` | R-S10 |
+| SEC-128 | Low | CONFIRMED | Cek restore BFF memakai `refund_ratio` berbasis **eligible** (kiriman Odoo), sedangkan restore Odoo berbasis nilai incl pajak. Refund barang yang dikecualikan dari earn ditolak final `409 restore_value_mismatch`. Toleransi 10 % lebar dan rasio tidak independen | `pos-loyalty.service.ts:589-617`; `loyalty_ledger/models/pos_order.py:485-508` (`_efn_loyalty_refund_ratio`); `efn_pos_loyalty_outbox.py:65` (`RETRYABLE_REASONS`) | R-B05 |
+| SEC-129 | Info | PLAUSIBLE | `auto_install` (SEC-122) tidak menjamin modul terpasang di DB lama | `efn_pos_refund_origin/__manifest__.py:30` | R-S10 |
+
+**Rekap re-review: 0 Critical · 0 High · 2 Medium · 2 Low · 1 Info.**
+
+#### SEC-125: Medium: Order dibayar di luar jalur sync tidak divalidasi
+
+**Fakta:**
+- Seluruh validasi dan pemrosesan E-30/E-31/SEC-116 (dan gerbang OTP promo `efn_pos_otp_gate`) hanya ada di `_process_saved_order`.
+- Guard SEC-113 sengaja mengizinkan perubahan pembayaran order **draft** (`refund_origin/models/pos_payment.py:30-31`). Untuk draft, guard Poin EFN hanya menolak pembuatan baris poin di luar sync. Draft yang **di-sync** dengan reservasi aktif tetap boleh membawa baris Poin EFN bernominal **berapa pun**, karena `_efn_loyalty_strip_draft` (`pos_order.py:236-254`) hanya mengecek keberadaan reservasi.
+- Addon efn tidak meng-override `action_pos_order_paid` maupun `write` status `pos.order` (grep `def action_pos_order_paid|def write` di `models/pos_*.py`: hanya `pos.payment`/`pos.payment.method`/`pos.config`).
+
+**Asumsi (PLAUSIBLE, source inti tidak di repo):**
+- `pos.order.action_pos_order_paid` dan `pos.order.add_payment` adalah metode publik, sehingga bisa dipanggil `call_kw` oleh `group_pos_user` yang memiliki hak write `pos.order`.
+- Wizard `pos.make.payment.check()` memanggil `action_pos_order_paid()`, bukan `_process_saved_order`.
+- `pos.order.write({'state': 'paid'})` tidak dijaga inti.
+
+**Skenario A (Poin EFN):**
+1. Kasir yang juga member meminta OTP tukar poin ke HP-nya sendiri atas order pelanggan (reservasi Rp10.000).
+2. Kasir sync order sebagai **draft** dengan baris Poin EFN Rp500.000. Baris itu lolos karena reservasi ada.
+3. Pelanggan membayar Rp500.000 tunai, tetapi kasir tidak mencatatnya.
+4. Kasir memanggil `pos.order.action_pos_order_paid([id])`. Order menjadi paid tanpa validasi nominal dan tanpa outbox `redeem_commit`.
+5. Reservasi kedaluwarsa sehingga poin kasir kembali. Kasir mengantongi Rp500.000. Rekonsiliasi K-18-6 (sekarang aktif, SEC-114) akan mendeteksinya keesokan hari.
+
+**Skenario B (E-31):**
+1. Kasir membuat refund dari backend (tombol Refund → order refund draft).
+2. Kasir membayarnya lewat wizard Payment dengan metode **Tunai**, padahal order asal dibayar kartu.
+3. Order menjadi paid tanpa `_efn_refund_origin_validate`.
+
+**Skenario C:** order draft dengan reward promo ber-OTP dibuat paid tanpa konsumsi token (gerbang R-B06 terlewati).
+
+**Rekomendasi:**
+- Override `action_pos_order_paid` (dan `_process_saved_order` tetap) agar validasi E-30/E-31/SEC-116 serta `_efn_loyalty_process_paid`/konsumsi OTP berjalan tepat sekali, apa pun jalurnya. Cara sederhana: pindahkan validasi ke `action_pos_order_paid` yang dipanggil `_process_saved_order` inti.
+- Tolak `pos.order.write` atas `state` (ke `paid`/`done`/`invoiced`), `amount_paid`, dan `amount_return` untuk non-superuser di luar penanda sync atau di luar `action_pos_order_paid` itu sendiri.
+- Di `_efn_loyalty_strip_draft`, tolak atau hapus baris Poin EFN yang nominalnya ≠ `value_idr` reservasi.
+- Test `call_kw` kasir untuk ketiga skenario.
+
+#### SEC-126: Medium: Penanda sync terlalu luas, perintah x2many atas pembayaran order lain
+
+**Fakta:**
+- `internal_scope(POS_PAYMENT_SYNC_SCOPE)` aktif selama seluruh `_process_order`. Kedua guard `pos.payment` mengembalikan "tidak aktif" untuk **semua** record dalam rentang itu (`pos_payment.py:27-28` dan `18-19`), tanpa mengecek bahwa record tersebut milik order yang sedang disinkron.
+
+**Asumsi (PLAUSIBLE):**
+- `_process_order` CE 19 menulis `payment_ids` dari payload browser lewat ORM.
+- Perintah One2many `UPDATE`/`DELETE`/`LINK` (`[1, id, vals]`, `[2, id]`, `[4, id]`) menjalankan `write`/`unlink` pada id mana pun tanpa memeriksa kepemilikan oleh order induk.
+
+**Skenario:** kasir menyusun payload sync order baru (draft atau paid) yang memuat `payment_ids: [[1, <id pembayaran tunai order paid lain>, {"payment_method_id": <Poin EFN>}]]`. Guard dilewati karena berada di scope. Order lain itu tidak divalidasi ulang. Hasilnya sama dengan SEC-113 sebelum perbaikan.
+
+**Rekomendasi:**
+- Simpan id order yang sedang disinkron di dalam scope (atau uuid sebelum create).
+- Di guard, untuk `write`/`unlink`, izinkan hanya record yang `pos_order_id`-nya berada dalam himpunan itu. Untuk `create`, izinkan hanya `pos_order_id` dalam himpunan atau kosong selama create order.
+- Alternatif: sanitasi `order['payment_ids']` di awal `_process_order` sehingga hanya `Command.CREATE` yang diterima.
+- Tambahkan probe `call_kw sync_from_ui` dengan perintah `[1, id_asing, …]`.
+
+#### SEC-127: Low: Kunci order asal tidak efektif di REPEATABLE READ (SEC-117 reopened)
+
+**Fakta:**
+- Odoo membuka transaksi dengan isolasi REPEATABLE READ. Snapshot terbentuk pada query pertama permintaan, jauh sebelum `_efn_lock_origin`.
+- Bila transaksi A memegang `FOR UPDATE` lalu commit tanpa **mengubah** baris order asal (refund hanya menyisipkan order/baris/pembayaran baru, dan FK ke baris asal hanya mengambil `FOR KEY SHARE`), transaksi B yang menunggu memperoleh kunci tanpa serialization error (dokumentasi PostgreSQL: rollback hanya bila baris *di-update/di-delete*, bukan hanya dikunci).
+- Transaksi B kemudian membaca "refund sebelumnya" dari snapshot lama, sehingga race tetap terjadi.
+- Test spy (`test_payment_integrity.py:169-193`) hanya memastikan SQL dipanggil.
+
+**Rekomendasi:**
+- Ganti dengan `UPDATE pos_order SET write_date = write_date WHERE id = %s` (atau UPDATE kolom penanda) di kedua modul.
+- Transaksi kedua akan gagal dengan `SerializationFailure`, lalu Odoo mengulang RPC (`service.model.retrying`) dengan snapshot baru dan menolak refund berlebih.
+- Uji dengan dua koneksi nyata (skrip staging), bukan spy.
+
+#### SEC-128: Low: Cek restore BFF berbasis rasio eligible, toleransi 10 %
+
+**Fakta:**
+- `assertExpectedRestore` menghitung `expected = V × min(1, Σ refund_ratio) − Σ nilai sebelumnya`, dengan `refund_ratio` yang **dikirim Odoo**.
+- Di Odoo, `_efn_loyalty_refund_ratio` (`pos_order.py:485-508`) berbasis subtotal **eligible** (tanpa kategori yang dikecualikan). Untuk refund yang hanya berisi barang dikecualikan (misalnya rokok) atas order yang juga punya barang eligible, rasionya = 0. Sementara itu Odoo mengembalikan poin secara proporsional terhadap nilai incl pajak (> 0).
+- Selisih > max(nilai poin, 10 % × V) → `409 restore_value_mismatch`. Kode ini tidak masuk `RETRYABLE_REASONS` outbox (`efn_pos_loyalty_outbox.py:65`), sehingga outbox `failed` dan order masuk review. Refund sah gagal otomatis.
+- Sebaliknya, karena rasio berasal dari Odoo, pemalsu payload bisa menyelaraskan rasio dan nilai. Toleransi 10 % hanya menambah ruang. Kerugian dibatasi `left` dan validasi Odoo Rp1.
+
+**Rekomendasi:**
+- Odoo mengirim rasio nilai barang incl pajak (`refund_value_ratio`) terpisah dari rasio clawback eligible. BFF memakainya untuk cek restore dengan toleransi beberapa Rupiah per baris (atau ≤ 1 nilai poin + 1 %).
+- Turunkan `LOYALTY_RESTORE_TOLERANCE_PCT` setelah itu.
+- Tambahkan test refund kategori dikecualikan.
+
+#### SEC-129: Info: `auto_install` pada DB lama
+
+Untuk DB yang sudah memasang `point_of_sale` + `efn_core` sebelum modul ini ada, `-u` tidak selalu memasang modul `auto_install` baru (PLAUSIBLE, perilaku loader inti).
+
+Rekomendasi:
+- Cek `ir_module_module.state = 'installed'` untuk `efn_pos_refund_origin` di skrip pra-go-live/`deploy-validate`.
+- Atau tambahkan modul ini ke `depends` `efn_setup_pos`.
+
+### Yang sudah benar (perbaikan L-25)
+
+**Kontrol pembayaran dan restore poin**
+- Guard `pos.payment` berlapis: umum untuk order non-draft, ditambah khusus Poin EFN yang berlaku juga untuk draft.
+- Penanda sync tidak bisa diisi dari RPC. Pesan galat tidak membocorkan detail.
+- `payment_amount` commit memakai nilai aktual. Cek BFF K-18-3 kini bermakna.
+- BFF menolak restore yang tidak konsisten, tanpa entri ledger (rollback), dengan anomali critical.
+- Earn ditunda selama commit belum masuk.
+
+**Kunci member dan grup kasir**
+- Kunci HP member tahan lama dan hanya bisa diubah admin.
+- Grup kasir sempit: tanpa write/unlink partner, tanpa rekening bank, partner terikat ke company aktif.
+
+**Privasi dan retensi**
+- Reservasi committed dipertahankan secara pseudonim (tombstone acak) selama 10 tahun. Erasure tetap memutus tautan ke member.
+
+**Operasional**
+- Mode rekonsiliasi `payment` sebagai default dan dikunci di production.
+- Lock host bersama deploy/rotasi. Key yatim dicabut berdasarkan nama tervalidasi.
+
+### Rekomendasi GO/NO-GO
+
+**GO bersyarat untuk merge `chore/wave-18` → `main`.** Alasannya:
+- Perbaikan L-25 menutup seluruh Medium r11.
+- Celah SEC-125/126 bukan regresi; jalur yang sama sudah ada di `main` (G13: validasi produk poin juga hanya di `_process_saved_order`).
+- Belum ada produksi.
+
+**NO-GO untuk mengaktifkan tukar Poin EFN (`efn_loyalty_redeem_enabled`) dan mengandalkan E-31 di outlet pilot** sampai syarat berikut terpenuhi:
+- SEC-125 dan SEC-126 Fixed. Keduanya perlu dikonfirmasi dulu dengan probe `call_kw` kasir, seperti yang sudah dilakukan untuk SEC-113.
+- SEC-127 diganti dengan UPDATE + retry serialisasi.
+- SEC-122/129 diverifikasi `installed` di DB target.
+
+SEC-118 (sisi ETL) dan SEC-128 boleh menyusul sebelum go-live.
