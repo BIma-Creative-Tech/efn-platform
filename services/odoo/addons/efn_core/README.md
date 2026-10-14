@@ -16,6 +16,13 @@ Fondasi addons EFN di Odoo CE 19 (satu database multi-company, ADR-001). TLS/kre
 - `ir.http._handle_error` (Gelombang 12b, SEC-22; `models/ir_http.py`): respons error **JSON-RPC** dan **`/json/2`** untuk user bukan `base.group_system` (kasir/POS, portal, publik, tanpa sesi) tidak lagi memuat traceback — `debug` dikosongkan (tetap string; web client & POS memakainya sebagai string). Exception bisnis (`UserError` & turunannya, `RedirectWarning`, `SessionExpiredException`, HTTPException) mempertahankan `name`/`message`/`arguments` (dialog POS/web tidak berubah); exception tak terduga → pesan generik, `name`=`Exception`, tanpa argumen/konteks. Admin sistem (uid **sesi**, bukan `request.env.uid` yang bisa dinaikkan controller; API key untuk `/json/2`) tetap mendapat `debug`. Gagal cek group / gagal parse → fail closed. Log server tidak berubah. Route `type='http'` tidak disentuh. Batasan: request tanpa DB (`_serve_nodb`) tidak lewat `ir.http`.
 - Parameter default (noupdate): `efn.bff_url`, `efn.pos.otp_required_for_promo`, `efn.pos.promo_disabled_when_offline`, `efn.pos.otp_timeout_seconds`. Migrasi `19.0.1.2.0` mengubah nilai lama `http://api-gateway:3000` → `https://…`.
 
+## `scope.py`: penanda jalur internal per cursor (review r11 SEC-113)
+- `internal_scope(env, key)` (context manager, bisa bersarang) dan `in_scope(env, key)`. Disimpan sebagai atribut objek
+  cursor (bukan `cr.cache` yang dikosongkan saat rollback savepoint di tengah sync, dan bukan context yang bisa diisi
+  klien `call_kw`/`/json/2`); dibersihkan di `finally`. Bukan model, jadi tidak menambah metode RPC.
+- Dipakai `POS_PAYMENT_SYNC_SCOPE` (`pos.order._process_order`) oleh guard `pos.payment` di `efn_pos_refund_origin`
+  dan `efn_pos_loyalty_ledger`.
+
 ## SEC-58 (r6, High) — tidak ada metode RPC publik (Gelombang 13c, versi 19.0.1.6.0)
 - `efn.bff.client` adalah proxy **service key BFF**. Odoo mengekspos setiap metode tanpa awalan `_` (dan tanpa `@api.private`) ke `/web/dataset/call_kw` dan `/json/2` hanya dengan `browse(ids)` — tanpa cek grup/record rule/company (`odoo/service/model.py::get_public_method`, diverifikasi di image 19.0). Dulu `post`/`get` publik → kasir mana pun bisa mencetak poin, me-restore poin, mengirim OTP ke nomor sembarang, dan memalsukan penyelesaian erasure.
 - Sekarang **semua** metode klien berawalan `_` (`_efn_post`, `_efn_get`, `_efn_request`, `_read_api_key`, …); pemanggil di `efn_pos_otp_gate`, `efn_pos_loyalty_ledger`, `efn_pos_payment_gateway`, `efn_privacy`, `scripts/smoke/odoo_pos_smoke.py` diperbarui. `@api.private` tersedia di 19.0 tetapi awalan `_` dipilih (ditolak lebih awal, tanpa lookup MRO).

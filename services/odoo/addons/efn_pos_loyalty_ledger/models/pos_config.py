@@ -315,6 +315,7 @@ class PosConfig(models.Model):
             challenge.write({"state": "failed", "failure_reason": "reserve_bad_response", "discount_token": False})
             return self._efn_error("reserve_failed", self._efn_reserve_message("reserve_failed"))
         expires_at = parse_bff_datetime(data.get("expires_at"))
+        partner._efn_mark_member()  # SEC-115: kunci HP member permanen
         reservation = Reservation.sudo().create(
             {
                 "company_id": self.company_id.id,

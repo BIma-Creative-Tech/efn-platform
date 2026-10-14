@@ -729,3 +729,55 @@ Kontrak `docs/04 §9.9` v6 (K-18-1..K-18-8, L-23, L-24 BFF), fit-gap `docs/08 §
 - `scripts/smoke/odoo_pos_smoke.py` masih memakai desain lama (`efn_loyalty_points_product`, produk Poin EFN) -> perlu diperbarui QA (di luar batas file).
 - **Bug numpad baris Poin EFN (diperbaiki setelah fe56a07):** akar masalah = number buffer POS memproses tombol numpad secara tertunda (timeout); tombol yang ditekan saat baris poin terpilih (diabaikan) diterapkan ke baris BARU yang ditambahkan sesudahnya (Bank = Rp5) -> order kurang bayar -> Validasi diam (`isPaid()` false). Perbaikan (`payment_screen_patch.js` + `pos_order_patch.js`): baris Poin EFN tidak pernah menjadi baris terpilih (pemilihan diabaikan + notifikasi "nominal terkunci", dideseleksi setelah ditambahkan), input numpad saat baris poin/tanpa baris terpilih dibuang, dan `numberBuffer.capture()` sebelum menambah baris pembayaran baru. Langkah numpad dikembalikan di `EfnPosLoyaltyRedeemTour` sebagai regresi (cek: baris poin tidak terpilih, Bank = 40.000, lunas, struk). Validasi: modul (loyalty/otp/refund/core) 181 test 0 failed; tour 22/22 0 ERROR; ruff lolos.
 - Belum: supervisor untuk retur tanpa struk (Q-F18-5); jurnal akrual liabilitas poin (Q-F18-3); refund order lama berbaris produk poin (manual).
+
+---
+
+# Review r11 — perbaikan sisi Odoo (SEC-113, 115, 116, 117, 118, 119, 122) (14 Okt 2026)
+
+Dasar: `docs/reviews/SECURITY_REVIEW_2026-10-12_r11.md`, keputusan L-25 (`docs/04 §9.9`). Branch `chore/wave-18`, tanpa commit/push. `efn_setup_*` tidak disentuh (SEC-121 dikerjakan functional secara paralel).
+
+## Verifikasi status PLAUSIBLE (Odoo 19 nyata, `/web/dataset/call_kw` sebagai kasir `pos_user`, sebelum perbaikan)
+- **ACL `pos.payment`:** pada order paid, write `payment_method_id`, write `amount`, create, dan unlink semuanya **DITERIMA**. SEC-113 terkonfirmasi.
+- **`is_change` dari payload sync:** pembayaran bank 200 ditambah tunai −100 `is_change: true` tersimpan `is_change=True`. SEC-116 terkonfirmasi. Catatan: core juga membuat baris kembalian dari `amount_return` payload.
+- **`res.partner.bank`:** pemegang `base.group_partner_manager` bisa membuat rekening (**DIIZINKAN**). SEC-121 terkonfirmasi; perbaikannya milik functional.
+- Setelah perbaikan, probe yang sama mencatat: SEC-113 semua ditolak, `is_change` palsu bernilai False. Probe SEC-121 masih DIIZINKAN karena fixture HttpCase memberi `base.group_partner_manager` secara langsung, bukan lewat grup sempit milik functional.
+
+## Perbaikan
+- **efn_core** `scope.py` (baru): penanda jalur internal per cursor (`internal_scope`, `in_scope`).
+  - Disimpan sebagai atribut cursor. `cr.cache` tidak dipakai karena dikosongkan saat rollback savepoint di tengah sync.
+  - Tidak bisa diisi lewat context RPC, dan bukan model sehingga tidak ada metode RPC baru.
+- **SEC-113** (`efn_pos_refund_origin/models/pos_payment.py`): create, unlink, dan write field finansial pembayaran order non-draft ditolak, kecuali di `pos.order._process_order` (sync) atau oleh kode server ber-sudo. Untuk Poin EFN (`efn_pos_loyalty_ledger/models/pos_payment.py`) aturannya lebih ketat: berlaku juga untuk order draft, termasuk mengganti metode baris lain menjadi Poin EFN.
+- **SEC-115** (`efn_pos_otp_gate` 19.0.1.9.0):
+  - Penanda tahan lama `res.partner.efn_member_locked_at`, diisi server saat OTP diterima BFF (semua purpose, termasuk `pos_enroll`), saat reservasi redeem, dan saat earn non-skipped.
+  - Klien tidak bisa menulis penanda ini (`AccessError`).
+  - HP member hanya bisa diubah `base.group_system` (chatter + efn_audit) atau OdooBot. Manajer POS tidak lagi cukup.
+  - Migrasi otp 19.0.1.9.0 dan loyalty 19.0.2.1.0 mengisi penanda dari riwayat.
+  - "Event BFF": saat ini belum ada event member dari BFF ke Odoo.
+  - Alur resmi ganti nomor (OTP nomor lama + baru) belum ada di Odoo.
+- **SEC-116:** `_efn_recompute_change_flags` (draft & final, sebelum E-31). `is_change` hanya sah untuk tunai negatif dengan kumulatif ≤ min(Σ tender tunai, Σ tender − total baris), ditambah satu satuan cash rounding. Di luar itu `is_change` diset False dan pembayaran dinilai sebagai uang keluar.
+- **SEC-117:** `SELECT … FOR UPDATE` pada order asal sebelum menghitung sisa, di `_efn_lock_origin` (refund_origin) dan `_efn_loyalty_lock_origin` (loyalty).
+- **SEC-118:** commit `payment_amount = round(order._efn_points_paid())`.
+- **SEC-119:**
+  - Flag `efn_is_loyalty_points` (create/write) hanya oleh admin `base.group_system`, dengan log peringatan.
+  - Bila metode sudah punya pembayaran: flag (dua arah), jurnal, dan arsip metode poin tidak bisa diubah siapa pun selain superuser.
+  - Field tidak diberi `groups=`, karena POS memuatnya sebagai kasir.
+  - Aturan audit `pos.payment.method` di `efn_setup_audit` disarankan ke functional.
+- **SEC-122:** `efn_pos_refund_origin` diberi `auto_install: True` (19.0.1.1.0), sehingga terpasang otomatis di setiap DB yang punya `point_of_sale` + `efn_core`, tanpa bergantung pada modul setup functional.
+
+## Test baru
+- `efn_pos_refund_origin/tests/test_payment_integrity.py` (efn): SEC-113 ×3, SEC-116 ×5 (refund kartu dengan is_change/amount_return palsu ditolak, kembalian sah tetap), SEC-117 ×2 (spy urutan kunci + SQL), SEC-122.
+- `efn_pos_refund_origin/tests/test_payment_integrity_rpc.py` (efn_tour, call_kw kasir): SEC-113, SEC-116, probe SEC-121.
+- `efn_pos_loyalty_ledger`:
+  - unit: SEC-113 Poin EFN, SEC-115 penandaan (OTP, reserve, earn; skipped tidak ditandai), SEC-117, SEC-118, SEC-119;
+  - RPC kasir (`test_rpc_access.py`): HP member / penanda ditolak, buat pembayaran poin ditolak.
+- `efn_pos_otp_gate`: penandaan saat `pos_enroll`, OTP gagal tidak menandai, manajer POS ditolak, kunci tetap berlaku setelah challenge dihapus, penanda server-only & idempoten. Fixture "manager" kini admin.
+
+## Validasi
+- Suite efn penuh pola CI (17 modul + `efn_setup_security`): **479 test, 0 failed, 0 error, 0 baris ERROR**. check-odoo-deps: 17 modul, 0 terlarang. Warning baru hanya log yang memang diharapkan (SEC-116/119).
+- Tour/HttpCase `efn_tour`: **27/27, 0 ERROR, 0 skip** (22 tour + 5 test RPC kasir baru).
+- ruff check/format lolos.
+
+## Belum / catatan
+- Migrasi 19.0.1.9.0 / 19.0.2.1.0 (SQL penanda) belum diuji lewat upgrade DB lama.
+- SEC-117 hanya diuji dengan spy. Uji dua koneksi nyata tidak mungkin di TransactionCase.
+- CI: `EFN_TOUR_MIN_TESTS` 22 → 27 (devsecops).

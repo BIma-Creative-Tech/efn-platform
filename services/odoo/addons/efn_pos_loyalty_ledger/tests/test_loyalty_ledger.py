@@ -174,7 +174,7 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
     def _ok_earn(self, points=5):
         return BffResponse(200, {"points_earned": points, "points_balance": 100 + points})
 
-    def _reserve(self, uuid, points=100, value=10000, amount=50000, partner=None):
+    def _reserve(self, uuid, points=100, value=10000, amount=50000, partner=None, before_reserve=None):
         partner = partner or self.member_a
         self.responses[REQUEST] = BffResponse(202, {"challenge_id": "chal-r", "expires_in": 180})
         self.responses[VERIFY] = BffResponse(200, {"ok": True, "discount_token": DUMMY_TOKEN, "expires_in": 600})
@@ -192,6 +192,8 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         self.assertTrue(res["ok"], res)
         res = self.config.efn_otp_verify(uuid, "123456", "pos_redeem")
         self.assertTrue(res["ok"], res)
+        if before_reserve:
+            before_reserve()
         res = self.config.efn_loyalty_redeem_reserve(uuid, partner.id, points, amount)
         self.assertTrue(res["ok"], res)
         return res
@@ -1134,3 +1136,139 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
             logging.getLogger("odoo.addons.efn_pos_loyalty_ledger").debug("cek log")
             self.config.efn_loyalty_balance(self.member_a.id)
         self.assertNotIn(MEMBER_A, "\n".join(logs.output))
+
+    # ============================================================ review r11
+    def _cashier(self, login="efn_r11_loy_kasir"):
+        return new_test_user(
+            self.env, login=login, groups="point_of_sale.group_pos_user", company_id=self.env.company.id
+        )
+
+    def _redeem_order(self):
+        uuid = self.create_random_uid()
+        self._reserve(uuid)
+        return self._sync(self._order_data([(self.product, 1)], uuid=uuid, points=10000))
+
+    def test_sec113_points_payment_only_via_sync(self):
+        """SEC-113: pembayaran Poin EFN tidak bisa dibuat/diubah/dihapus di luar sync (juga pada order draft)."""
+        cashier, manager = self._cashier(), self._manager("efn_r11_loy_mgr")
+        draft = self._sync(self._order_data([(self.product, 1)], draft=True))
+        self.assertEqual(draft.state, "draft")
+        cash_draft = self.env["pos.payment"].create(
+            {"pos_order_id": draft.id, "payment_method_id": self.cash_pm1.id, "amount": 1000.0}
+        )
+        order = self._redeem_order()
+        points = order.payment_ids.filtered(lambda p: p.payment_method_id == self.points_pm)
+        cash = order.payment_ids - points
+        for user in (cashier, manager):
+            with self.assertRaises(UserError):
+                self.env["pos.payment"].with_user(user).create(
+                    {"pos_order_id": draft.id, "payment_method_id": self.points_pm.id, "amount": 10000.0}
+                )
+            with self.assertRaises(UserError):
+                cash_draft.with_user(user).write({"payment_method_id": self.points_pm.id})
+            with self.assertRaises(UserError):
+                points.with_user(user).write({"amount": 20000.0})
+            with self.assertRaises(UserError):
+                cash.with_user(user).write({"payment_method_id": self.points_pm.id})
+            with self.assertRaises(UserError):
+                points.with_user(user).unlink()
+        points.invalidate_recordset()
+        self.assertEqual(points.amount, 10000.0)
+
+    def test_sec115_member_marked_on_reserve_and_earn(self):
+        """SEC-115: penanda member tahan lama diisi saat OTP, reservasi redeem, dan earn (bukan untuk skipped)."""
+        Partner = self.env["res.partner"]
+        redeemer = Partner.create({"name": "Member Tanda Redeem", "phone": "0812-1111-3333"})
+        earner = Partner.create({"name": "Member Tanda Earn", "phone": "0812-1111-4444"})
+        self.assertFalse(redeemer.efn_member_locked_at or earner.efn_member_locked_at)
+        marked_after_otp = []
+
+        def clear_after_otp():
+            # OTP sudah menandai; kosongkan (sudo) agar terlihat reservasi sendiri juga menandai.
+            marked_after_otp.append(bool(redeemer.efn_member_locked_at))
+            redeemer.sudo().write({"efn_member_locked_at": False})
+
+        self._reserve(self.create_random_uid(), partner=redeemer, before_reserve=clear_after_otp)
+        self.assertEqual(marked_after_otp, [True], "OTP pos_redeem menandai member")
+        self.assertTrue(redeemer.efn_member_locked_at, "reservasi redeem menandai member")
+        self.responses[EARN] = self._ok_earn()
+        self._sync(self._order_data([(self.product, 1)], customer=earner))
+        self.assertTrue(earner.efn_member_locked_at, "earn non-skipped menandai member")
+        self._sync(self._order_data([(self.product, 1)], customer=self.partner_foreign))
+        self.assertFalse(self.partner_foreign.efn_member_locked_at, "earn skipped (HP asing) tidak menandai")
+
+    def test_sec117_points_refund_locks_origin(self):
+        original = self._paid_original(points_value=10000)
+        Order = type(self.env["pos.order"])
+        real_lock = Order._efn_loyalty_lock_origin
+        locked = []
+
+        def lock_spy(order, origin):
+            locked.append(origin.id)
+            return real_lock(order, origin)
+
+        with patch.object(Order, "_efn_loyalty_lock_origin", lock_spy):
+            refund = self._sync(self._refund_data(original, qty=1, points_restore=5000))
+        self.assertEqual(refund.state, "paid")
+        self.assertEqual(locked, [original.id])
+        with patch.object(self.env.cr, "execute", wraps=self.env.cr.execute) as spy:
+            self.env["pos.order"]._efn_loyalty_lock_origin(original)
+        self.assertIn("FOR UPDATE", str(spy.call_args.args[0]))
+
+    def test_sec118_commit_sends_actual_points_payment(self):
+        """SEC-118: `payment_amount` = Σ baris pembayaran Poin EFN aktual, bukan salinan reservasi."""
+        order = self._redeem_order()
+        points = order.payment_ids.filtered(lambda p: p.payment_method_id == self.points_pm)
+        # Simulasi data yang menyimpang dari reservasi (mis. diubah di DB): nilai aktual yang dikirim.
+        self.env.cr.execute("UPDATE pos_payment SET amount = 9000 WHERE id = %s", (points.id,))
+        points.invalidate_recordset()
+        self.responses[COMMIT] = BffResponse(409, {"error": {"code": "payment_mismatch", "message": "x"}})
+        self.responses[EARN] = self._ok_earn()
+        self._run_outbox()
+        (payload,) = self._calls_to(COMMIT)
+        self.assertEqual((payload["payment_amount"], payload["value_idr"]), (9000, 10000))
+        self.assertEqual(self._reservation(order.uuid).state, "review")
+
+    def test_sec119_points_flag_locked(self):
+        """SEC-119: flag Poin EFN hanya admin; tidak bisa diubah siapa pun bila metode sudah punya pembayaran."""
+        manager = self._manager("efn_r11_loy_mgr2")
+        admin = new_test_user(
+            self.env,
+            login="efn_r11_loy_admin",
+            groups="base.group_system,point_of_sale.group_pos_manager",
+            company_id=self.env.company.id,
+        )
+        Method = self.env["pos.payment.method"]
+        spare_journal = self.env["account.journal"].create(
+            {"name": "Poin EFN cadangan (uji)", "type": "bank", "code": "PEFC", "company_id": self.env.company.id}
+        )
+        # Metode cadangan (tanpa pembayaran, tidak di sesi terbuka; nonaktif agar lolos "satu aktif per company").
+        spare = Method.create({"name": "Poin cadangan", "journal_id": spare_journal.id, "active": False})
+        with self.assertRaises(AccessError):
+            spare.with_user(manager).write({"efn_is_loyalty_points": True})
+        with self.assertRaises(AccessError):
+            Method.with_user(manager).create(
+                {"name": "Poin palsu", "journal_id": spare_journal.id, "efn_is_loyalty_points": True}
+            )
+        spare.with_user(admin).write({"efn_is_loyalty_points": True})
+        spare.with_user(admin).write({"efn_is_loyalty_points": False})
+        # Metode berpembayaran (sesi ditutup agar aturan core "sesi terbuka" tidak menutupi aturan SEC-119).
+        self._redeem_order()
+        self.pos_session.action_pos_session_closing_control()
+        self.assertEqual(self.pos_session.state, "closed")
+        with self.assertRaises(AccessError):
+            self.points_pm.with_user(manager).write({"efn_is_loyalty_points": False})
+        with self.assertRaises(AccessError):
+            self.cash_pm1.with_user(manager).write({"efn_is_loyalty_points": True})
+        for user in (admin, manager):
+            with self.assertRaises(UserError):
+                self.points_pm.with_user(user).write({"active": False})
+            with self.assertRaises(UserError):
+                self.points_pm.with_user(user).write({"journal_id": spare_journal.id})
+        with self.assertRaises(UserError):
+            self.points_pm.with_user(admin).write({"efn_is_loyalty_points": False})
+        with self.assertRaises(UserError):
+            self.cash_pm1.with_user(admin).write({"efn_is_loyalty_points": True})
+        # Field lain tetap bisa diubah.
+        self.points_pm.with_user(manager).write({"name": "Poin EFN (ganti nama)"})
+        self.assertTrue(self.points_pm.efn_is_loyalty_points and self.points_pm.active)

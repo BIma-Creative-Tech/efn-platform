@@ -201,6 +201,8 @@ class PosConfig(models.Model):
                 ("purpose", "=", purpose),
             ]
         ).write({"state": "failed", "failure_reason": "superseded"})
+        # SEC-115: penanda member tahan lama (kunci HP permanen), tanpa PII.
+        partner._efn_mark_member()
         Challenge.create(
             {
                 "company_id": self.company_id.id,

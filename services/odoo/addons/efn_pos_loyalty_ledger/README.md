@@ -39,6 +39,22 @@ Poin EFN di POS Odoo CE 19: **earn** dari penjualan, **tukar poin** (wajib OTP p
   (`migrations/19.0.2.0.0/post-migrate.py`). Hook install/uninstall E-24 dihapus.
 - **Rekonsiliasi (K-18-6):** Σ `pos.payment` Poin EFN per PT/tanggal vs ledger BFF -> ETL (`loyalty_recon.py`).
 
+## Review r11 (L-25a/c/e/f/g, versi 19.0.2.1.0)
+- **SEC-113:** pembayaran metode Poin EFN hanya dibuat/diubah/dihapus di jalur sync resmi (`models/pos_payment.py`,
+  penanda per cursor `efn_core/scope.py`), **juga pada order draft** (wizard pembayaran backend tidak bisa "membayar
+  dengan poin" tanpa OTP + reservasi), termasuk mengganti metode baris lain menjadi Poin EFN. Kode server ber-sudo
+  dikecualikan. Guard umum order non-draft: `efn_pos_refund_origin` (auto_install).
+- **SEC-115:** reservasi redeem dan earn non-skipped menandai partner sebagai member (`efn_member_locked_at`,
+  `efn_pos_otp_gate`); migrasi `19.0.2.1.0` mengisi penanda dari reservasi/order berpoin yang ada.
+- **SEC-117:** validasi pembayaran Poin EFN pada refund mengunci order asal (`_efn_loyalty_lock_origin`, `FOR UPDATE`)
+  sebelum menghitung sisa poin.
+- **SEC-118:** commit mengirim `payment_amount = round(jumlah pembayaran Poin EFN aktual order)` (bukan `value_idr`
+  reservasi), sehingga cek BFF `payment_amount == value_idr` (K-18-3) membandingkan dua sumber berbeda.
+- **SEC-119:** `efn_is_loyalty_points` hanya bisa diisi/diubah admin (`base.group_system`, log peringatan; create ber-flag
+  juga); bila metode sudah punya pembayaran, flag (dua arah), jurnal, dan pengarsipan metode Poin EFN tidak bisa diubah
+  siapa pun selain superuser (migrasi/data modul). Aturan audit `pos.payment.method` di `efn_setup_audit` (rekomendasi
+  review) = ranah functional, belum ditambahkan.
+
 ## Data & konfigurasi
 - Produk **"Poin EFN"** (`product_efn_points`, desain G13): **diarsipkan sejak 19.0.2.0.0** (lihat bagian G18); tidak lagi dimuat ke POS.
 - **Kategori tanpa poin (K-2):** field `product.category.efn_loyalty_earn_excluded` (Boolean, berlaku untuk subkategori). Field ini juga sumber ETL untuk memisahkan penjualan tanpa poin.

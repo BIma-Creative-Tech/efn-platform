@@ -35,6 +35,7 @@ from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 
 from odoo.addons.efn_core.models.efn_bff_client import mask_phone, partner_member_ref
+from odoo.addons.efn_core.scope import POS_PAYMENT_SYNC_SCOPE, internal_scope
 
 _logger = logging.getLogger(__name__)
 
@@ -318,8 +319,13 @@ class PosOrder(models.Model):
             return "change_from_points"
         return None
 
+    def _efn_loyalty_lock_origin(self, original):
+        """SEC-117 (L-25e): serialkan refund paralel atas order asal sebelum menghitung sisa Poin EFN."""
+        self.env.cr.execute("SELECT id FROM pos_order WHERE id = %s FOR UPDATE", (original.id,))
+
     def _efn_loyalty_validate_refund_payments(self, origins, payments):
         original = origins[:1]
+        self._efn_loyalty_lock_origin(original)
         amounts = payments.mapped("amount")
         if any(self._efn_currency_compare(amount, 0.0) >= 0 for amount in amounts):
             self._efn_loyalty_reject(
@@ -421,6 +427,8 @@ class PosOrder(models.Model):
         if not member:
             # Partner tanpa HP Indonesia / sudah dianonimkan: dicatat, tidak dikirim.
             vals.update({"state": "skipped", "last_error": f"member_missing:{member_error}"})
+        else:
+            self.partner_id._efn_mark_member()  # SEC-115: kunci HP member permanen
         # §9.7: earn dikirim untuk SETIAP order ber-member, termasuk eligible 0 (BFF mencatatnya
         # sebagai dasar reverse).
         self.env["efn.pos.loyalty.outbox"]._efn_enqueue(vals)
@@ -545,6 +553,11 @@ class PosOrder(models.Model):
             record._efn_schedule_activity(hold_reason or record.last_error)
 
     # ------------------------------------------------------------------ hooks
+    def _process_order(self, order, existing_order):
+        # SEC-113: jalur sync resmi (pembayaran Poin EFN boleh dibuat di sini saja).
+        with internal_scope(self.env, POS_PAYMENT_SYNC_SCOPE):
+            return super()._process_order(order, existing_order)
+
     def _process_saved_order(self, draft):
         self.ensure_one()
         if draft:

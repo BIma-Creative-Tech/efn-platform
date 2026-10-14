@@ -580,6 +580,7 @@ class TestEfnPosOtpGate(TestPoSCommon):
 
     def test_enroll_flow_forwards_age_and_stores_no_age(self):
         uuid = self.create_random_uid()
+        self.assertFalse(self.member_a.efn_member_locked_at)
         with self._patch_bff():
             self.responses[REQUEST] = BffResponse(202, {"challenge_id": "chal-e", "expires_in": 180})
             self.responses[VERIFY] = BffResponse(200, {"ok": True})
@@ -597,10 +598,24 @@ class TestEfnPosOtpGate(TestPoSCommon):
         self.assertEqual(challenge.state, "consumed")
         self.assertFalse(challenge.sudo().discount_token)
         self.assertFalse([name for name in challenge._fields if "age" in name or "birth" in name])
+        # SEC-115: pendaftaran (pos_enroll) menandai member secara permanen, tanpa PII.
+        self.assertTrue(self.member_a.efn_member_locked_at)
         # Challenge pos_enroll tidak membuka promo ber-OTP.
         with self._patch_bff():
             with self.assertRaises(UserError):
                 self._sync(self._order_data(reward=self.reward, uuid=uuid))
+
+    def test_sec115_failed_request_does_not_mark(self):
+        """Penanda hanya diisi bila BFF menerima permintaan OTP (nomor benar-benar dipakai sebagai member)."""
+        uuid = self.create_random_uid()
+        with self._patch_bff():
+            self.responses[REQUEST] = BffResponse(400, {"error": {"code": "invalid_phone"}})
+            self.config.efn_otp_request(uuid, 1000, self.member_a.id)
+        self.assertFalse(self.member_a.efn_member_locked_at)
+        with self._patch_bff():
+            self.responses[REQUEST] = BffResponse(202, {"challenge_id": "chal-p", "expires_in": 180})
+            self.assertTrue(self.config.efn_otp_request(uuid, 1000, self.member_a.id)["ok"])
+        self.assertTrue(self.member_a.efn_member_locked_at)
 
     def test_enroll_bff_age_rejection_mapped(self):
         uuid = self.create_random_uid()

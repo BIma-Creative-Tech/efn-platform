@@ -1,1 +1,1 @@
-from . import test_refund_origin, test_refund_origin_tour
+from . import test_payment_integrity, test_payment_integrity_rpc, test_refund_origin, test_refund_origin_tour

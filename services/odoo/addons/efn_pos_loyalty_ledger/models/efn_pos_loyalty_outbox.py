@@ -324,8 +324,9 @@ class EfnPosLoyaltyOutbox(models.Model):
                     "order_ref": order.uuid,
                     "member_ref": member,
                     "value_idr": reservation.value_idr,
-                    # K-18-3: nilai pembayaran Poin EFN pada order (= value_idr, divalidasi server saat sync).
-                    "payment_amount": reservation.value_idr,
+                    # K-18-3 / SEC-118 (L-25f): jumlah AKTUAL baris pembayaran Poin EFN order (bukan salinan
+                    # reservasi), sehingga cek BFF payment_amount == value_idr bermakna.
+                    "payment_amount": int(round(order._efn_points_paid())),
                     "idempotency_key": self.idempotency_key,
                 },
                 {"member": mask_phone(member), "order_ref": order.uuid},

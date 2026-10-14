@@ -8,8 +8,12 @@ Konfigurasi akuntansi (jurnal bank "Poin EFN" tanpa rekening, `outstanding_accou
 Server mendeteksi pembayaran poin dari metode ini (SEC-12: bukan flag klien).
 """
 
+import logging
+
 from odoo import _, api, fields, models
-from odoo.exceptions import ValidationError
+from odoo.exceptions import AccessError, UserError, ValidationError
+
+_logger = logging.getLogger(__name__)
 
 
 class PosPaymentMethod(models.Model):
@@ -52,6 +56,58 @@ class PosPaymentMethod(models.Model):
             )
             if others:
                 raise ValidationError(_("Hanya boleh ada satu metode Poin EFN aktif per company."))
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        """SEC-119: metode baru ber-flag Poin EFN hanya dibuat admin (Settings) atau data modul."""
+        if any(vals.get("efn_is_loyalty_points") for vals in vals_list):
+            self._efn_check_points_flag_admin()
+        return super().create(vals_list)
+
+    def write(self, vals):
+        """SEC-119 (L-25g): flag Poin EFN hanya diubah admin (Settings, tercatat log), dan tidak bisa diubah oleh
+        siapa pun (dua arah) bila metode sudah punya pembayaran; metode Poin EFN berpembayaran juga tidak bisa
+        diarsipkan atau diganti jurnalnya (deteksi server & rekonsiliasi ETL retroaktif bergantung pada flag ini).
+        Hanya superuser (migrasi/data modul) yang dikecualikan."""
+        if not self.env.user._is_superuser():
+            flag_changed = self.filtered(
+                lambda m: (
+                    "efn_is_loyalty_points" in vals
+                    and bool(vals["efn_is_loyalty_points"]) != bool(m.efn_is_loyalty_points)
+                )
+            )
+            if flag_changed:
+                self._efn_check_points_flag_admin()
+            for method in self:
+                points_change = method.efn_is_loyalty_points and (
+                    ("active" in vals and not vals["active"])
+                    or ("journal_id" in vals and vals["journal_id"] != method.journal_id.id)
+                )
+                if (method in flag_changed or points_change) and method._efn_has_payments():
+                    raise UserError(
+                        _(
+                            "Metode %(name)s sudah dipakai pembayaran; penanda Poin EFN, jurnal, dan status aktifnya "
+                            "tidak dapat diubah (SEC-119).",
+                            name=method.name,
+                        )
+                    )
+            if flag_changed:
+                _logger.warning(
+                    "EFN Poin: user %s mengubah penanda Poin EFN metode %s -> %s (SEC-119)",
+                    self.env.uid,
+                    flag_changed.ids,
+                    bool(vals["efn_is_loyalty_points"]),
+                )
+        return super().write(vals)
+
+    def _efn_check_points_flag_admin(self):
+        user = self.env.user
+        if not (user._is_superuser() or user.has_group("base.group_system")):
+            raise AccessError(_("Penanda metode Poin EFN hanya dapat diatur admin (SEC-119)."))
+
+    def _efn_has_payments(self):
+        self.ensure_one()
+        return bool(self.env["pos.payment"].sudo().search_count([("payment_method_id", "=", self.id)], limit=1))
 
     @api.model
     def _load_pos_data_fields(self, config):

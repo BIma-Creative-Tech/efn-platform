@@ -1,4 +1,6 @@
-"""SEC-07 sisa: HP partner yang sudah dipakai member hanya bisa diubah manajer POS.
+"""SEC-07 sisa / SEC-115 (review r11, L-25c): HP partner member hanya bisa diubah admin teraudit
+(`base.group_system`; Manajer POS tidak lagi cukup). Status member = penanda tahan lama `efn_member_locked_at`
+(diisi OTP/redeem/earn) atau riwayat OTP/order.
 
 Nomor di bawah fiktif khusus test (bukan data pribadi nyata).
 """
@@ -33,13 +35,24 @@ class TestEfnPartnerPhoneLock(TestPoSCommon):
                 "group_ids": [Command.set(base_groups + [cls.env.ref("point_of_sale.group_pos_user").id])],
             }
         )
+        pos_manager_group = cls.env.ref("point_of_sale.group_pos_manager").id
+        # `manager` = admin teraudit (Settings) yang sah mengubah HP member (SEC-115).
         cls.manager = Users.create(
             {
-                "name": "Manajer Uji SEC07",
+                "name": "Admin Uji SEC07",
                 "login": "manajer.uji.sec07",
                 "company_id": company.id,
                 "company_ids": [Command.set(company.ids)],
-                "group_ids": [Command.set(base_groups + [cls.env.ref("point_of_sale.group_pos_manager").id])],
+                "group_ids": [Command.set(base_groups + [pos_manager_group, cls.env.ref("base.group_system").id])],
+            }
+        )
+        cls.pos_manager = Users.create(
+            {
+                "name": "Manajer POS Uji SEC115",
+                "login": "manajer.pos.uji.sec115",
+                "company_id": company.id,
+                "company_ids": [Command.set(company.ids)],
+                "group_ids": [Command.set(base_groups + [pos_manager_group])],
             }
         )
 
@@ -198,3 +211,43 @@ class TestEfnPartnerPhoneLock(TestPoSCommon):
         self.member.with_user(SUPERUSER_ID).sudo().write({"phone": False})
         self.assertFalse(self.member.phone)
         self.assertFalse(self._notes(self.member))
+
+    # ------------------------------------------------------------- SEC-115
+    def test_sec115_pos_manager_denied(self):
+        """Manajer POS (tanpa Settings) tidak lagi boleh mengubah HP member."""
+        self.assertFalse(self.member.with_user(self.pos_manager)._efn_can_change_member_phone())
+        with self.assertRaises(AccessError):
+            self.member.with_user(self.pos_manager).write({"phone": PHONE_NEW})
+        with self.assertRaises(AccessError):
+            self.member.with_user(self.pos_manager).sudo().write({"phone": PHONE_NEW})
+        self.member.invalidate_recordset()
+        self.assertEqual(self.member.phone, PHONE_MEMBER)
+
+    def test_sec115_lock_survives_challenge_purge(self):
+        """Kunci tidak bergantung umur challenge OTP (autovacuum 30 hari): penanda partner tahan lama."""
+        member = self.env["res.partner"].create({"name": "Member Enroll SEC115", "phone": "0812-4444-5555"})
+        self.assertFalse(member._efn_otp_member_partners())
+        member._efn_mark_member()
+        self.assertFalse(self.env["efn.pos.otp.challenge"].sudo().search([("partner_id", "=", member.id)]))
+        self.assertEqual(member._efn_otp_member_partners(), member)
+        for user in (self.cashier, self.pos_manager):
+            with self.assertRaises(AccessError):
+                member.with_user(user).write({"phone": PHONE_NEW})
+        member.with_user(self.manager).write({"phone": PHONE_NEW})
+        self.assertEqual(member.phone, PHONE_NEW)
+        self.assertTrue(self._notes(member), "perubahan admin tercatat di chatter")
+
+    def test_sec115_flag_server_only_and_idempotent(self):
+        member = self.env["res.partner"].create({"name": "Member Penanda SEC115", "phone": "0812-6666-7777"})
+        member._efn_mark_member()
+        first = member.efn_member_locked_at
+        self.assertTrue(first)
+        member._efn_mark_member()
+        self.assertEqual(member.efn_member_locked_at, first, "idempoten (tanggal pertama dipertahankan)")
+        for user in (self.cashier, self.pos_manager, self.manager):
+            with self.assertRaises(AccessError):
+                member.with_user(user).write({"efn_member_locked_at": False})
+            with self.assertRaises(AccessError):
+                self.plain.with_user(user).write({"efn_member_locked_at": "2026-01-01 00:00:00"})
+        # Kasir (grup POS) boleh membaca penanda (UI), tetapi tidak pernah menulis.
+        self.assertTrue(member.with_user(self.cashier).efn_member_locked_at)

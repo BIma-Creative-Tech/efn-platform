@@ -1,7 +1,7 @@
 {
     "name": "EFN POS Loyalty Ledger",
     "summary": "Earn, tukar (OTP), dan clawback Poin EFN di POS lewat ledger BFF (outbox transaksional).",
-    "version": "19.0.2.0.0",
+    "version": "19.0.2.1.0",
     "category": "EFN/Point of Sale",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",

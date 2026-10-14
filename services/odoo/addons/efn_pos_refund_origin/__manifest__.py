@@ -2,7 +2,7 @@
     "name": "EFN POS Refund ke Metode Asal",
     "summary": "E-31: refund POS hanya ke metode bayar order asal (nominal ≤ dibayar per metode, alokasi "
     "proporsional); retur tanpa struk tunai saja.",
-    "version": "19.0.1.0.0",
+    "version": "19.0.1.1.0",
     "category": "EFN/Point of Sale",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031): hanya Odoo CE 19 + efn_*.
@@ -25,6 +25,9 @@
             "efn_pos_refund_origin/static/tests/tours/**/*",
         ],
     },
+    # SEC-122 (L-25j): terpasang otomatis begitu point_of_sale + efn_core ada (semua DB POS EFN), tanpa
+    # bergantung pada modul konfigurasi functional; kontrol E-31/SEC-113/116/117 tidak bisa absen diam-diam.
+    "auto_install": True,
     "installable": True,
     "application": False,
 }

@@ -21,6 +21,8 @@ import logging
 from odoo import _, api, models
 from odoo.exceptions import UserError
 
+from odoo.addons.efn_core.scope import POS_PAYMENT_SYNC_SCOPE, internal_scope
+
 _logger = logging.getLogger(__name__)
 
 UNLINKED_MODE_PARAM = "efn.pos.refund.unlinked_return_mode"
@@ -100,8 +102,50 @@ class PosOrder(models.Model):
         raise UserError(message)
 
     # ---------------------------------------------------------- validation
+    def _efn_recompute_change_flags(self):
+        """SEC-116 (L-25d): `is_change` dari payload browser tidak dipercaya. Sah hanya untuk pembayaran TUNAI
+        negatif yang tertutup tender: kumulatif |kembalian| ≤ min(Σ tender tunai positif, Σ tender positif − total
+        order hitung server). Selebihnya `is_change` = False sehingga dinilai aturan E-31 sebagai uang keluar."""
+        self.ensure_one()
+        currency = self.currency_id
+        payments = self.payment_ids.sudo()
+        flagged = payments.filtered("is_change")
+        if not flagged:
+            return
+        total = sum(self.lines.sudo().mapped("price_subtotal_incl"))
+        positive = payments.filtered(lambda p: currency.compare_amounts(p.amount, 0.0) > 0)
+        cash_tender = sum(positive.filtered(lambda p: p.payment_method_id.is_cash_count).mapped("amount"))
+        allowance = min(cash_tender, sum(positive.mapped("amount")) - total)
+        config = self.config_id.sudo()
+        if config.cash_rounding and config.rounding_method:
+            # Pembulatan tunai (total dibulatkan turun) boleh menambah kembalian maksimal satu satuan pembulatan.
+            allowance = min(cash_tender, allowance + config.rounding_method.rounding)
+        used = 0.0
+        invalid = self.env["pos.payment"]
+        for payment in flagged.sorted("id"):
+            amount = -payment.amount
+            legit = (
+                payment.payment_method_id.is_cash_count
+                and currency.compare_amounts(amount, 0.0) > 0
+                and currency.compare_amounts(used + amount, allowance) <= 0
+            )
+            if legit:
+                used += amount
+            else:
+                invalid |= payment
+        if invalid:
+            _logger.warning(
+                "EFN refund origin: order %s %d is_change tidak sah dihapus (SEC-116)", self.uuid, len(invalid)
+            )
+            invalid.write({"is_change": False})
+
+    def _efn_lock_origin(self, origin):
+        """SEC-117 (L-25e): serialkan refund paralel atas order asal yang sama sebelum menghitung sisa per metode."""
+        self.env.cr.execute("SELECT id FROM pos_order WHERE id = %s FOR UPDATE", (origin.id,))
+
     def _efn_refund_origin_validate(self):
         self.ensure_one()
+        self._efn_recompute_change_flags()
         outgoing = self.payment_ids.sudo().filtered(
             lambda p: not p.is_change and self.currency_id.compare_amounts(p.amount, 0.0) < 0
         )
@@ -126,6 +170,7 @@ class PosOrder(models.Model):
         if len(origins) != 1:
             self._efn_refund_reject("multiple_origins", _("Refund hanya boleh atas satu order asal."))
         origin = origins
+        self._efn_lock_origin(origin)
         paid = origin._efn_paid_by_method()
         refunded = origin._efn_refunded_by_method(exclude=self)
         per_method = {}
@@ -155,4 +200,11 @@ class PosOrder(models.Model):
         self.ensure_one()
         if not draft and self.state != "cancel":
             self._efn_refund_origin_validate()
+        elif draft:
+            self._efn_recompute_change_flags()
         return super()._process_saved_order(draft)
+
+    def _process_order(self, order, existing_order):
+        # SEC-113: jalur sync resmi -> pembayaran boleh dibuat/diubah (guard pos.payment di luar jalur ini).
+        with internal_scope(self.env, POS_PAYMENT_SYNC_SCOPE):
+            return super()._process_order(order, existing_order)
