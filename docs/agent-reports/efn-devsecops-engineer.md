@@ -1680,3 +1680,10 @@ shellcheck v0.10.0 (semua skrip CI + baru) bersih · `docker compose config` dev
   **48/48** · test-efn-online-cs **54/54**.
 - **Belum:** perilaku flock lintas efn-deploy → exec deploy.sh hanya diuji dengan stub deploy.sh (bukan deploy.sh asli)
   dan belum di host Linux/systemd nyata.
+
+## G18.8 SEC-129 (r11): modul Odoo wajib dicek saat deploy (14 Okt 2026, belum di-commit)
+
+- `deploy-validate.sh`: `EFN_REQUIRED_ODOO_MODULES=(efn_pos_refund_origin)` + `efn_odoo_modules_missing` (stdin `nama|state`, fail-closed: kosong/absent/state lain = gagal).
+- `deploy.sh`: bila DB `efn_odoo` sudah ter-install (`pos_order` ada), sebelum grant ETL: `SELECT name || '|' || state FROM ir_module_module WHERE name IN (...)` lewat jalur DB deploy (user `efn_odoo`, socket container postgres) -> deploy gagal dengan pesan `<modul>=<state>` + runbook. Catatan: `deploy.sh` tidak meng-upgrade modul Odoo (install/upgrade = langkah manual runbook); cek dipasang di blok Odoo yang sudah ada.
+- Runbook baru `docs/runbooks/deploy-odoo-modules.md` (+ index README). Test efn-deploy 132-138 -> **140/140**; shellcheck bersih. Query diuji nyata di DB dev (`efn_pos_refund_origin|installed` -> lulus).
+- Belum: perintah install di runbook (`odoo ... -u base -i efn_pos_refund_origin --stop-after-init` lewat entrypoint EFN) belum dijalankan di staging.

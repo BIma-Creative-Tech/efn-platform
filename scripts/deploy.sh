@@ -498,6 +498,15 @@ fi
 if [[ -s "$ETL_GRANTS_SQL" ]]; then
   if "${DC[@]}" exec -T postgres psql -X -q -t -A -U efn_odoo -d efn_odoo \
        -c "SELECT to_regclass('public.pos_order') IS NOT NULL" 2> /dev/null | grep -qx t; then
+    # SEC-129 (r11): modul efn wajib (EFN_REQUIRED_ODOO_MODULES, deploy-validate.sh) harus `installed` - tanpa
+    # efn_pos_refund_origin, refund POS tidak lagi dipaksa ke metode bayar asal (E-31) dan tidak ada yang tahu (SEC-122).
+    mods_sql=$(printf "'%s'," "${EFN_REQUIRED_ODOO_MODULES[@]}"); mods_sql="${mods_sql%,}"
+    missing=$("${DC[@]}" exec -T postgres psql -X -q -t -A -U efn_odoo -d efn_odoo \
+      -c "SELECT name || '|' || state FROM ir_module_module WHERE name IN (${mods_sql})" \
+      | efn_odoo_modules_missing | tr '\n' ' ') \
+      || die "modul Odoo wajib belum terpasang di efn_odoo: ${missing}- install/upgrade lewat runbook rilis Odoo
+    (docs/runbooks/deploy-odoo-modules.md), lalu ulangi deploy"
+    echo "==> Modul Odoo wajib terpasang: ${EFN_REQUIRED_ODOO_MODULES[*]}"
     # G12: grant memuat efn_audit_log.origin_user_id (efn_audit >= 19.0.1.2.0). Pesan jelas bila modul belum
     # di-upgrade (grant sengaja gagal ON_ERROR_STOP; job lama tetap jalan dengan grant sebelumnya).
     "${DC[@]}" exec -T postgres psql -X -q -t -A -U efn_odoo -d efn_odoo -c \

@@ -297,3 +297,23 @@ efn_write_dotenv() { # file KEY=val...
   chmod 0640 "$tmp"
   mv -f "$tmp" "$f"
 }
+
+# SEC-129 (r11): modul Odoo efn WAJIB berstatus `installed` di DB efn_odoo. Tanpa efn_pos_refund_origin kontrol E-31
+# (refund ke metode asal) tidak aktif tanpa terdeteksi (SEC-122). Tambah modul wajib lain di sini.
+EFN_REQUIRED_ODOO_MODULES=(efn_pos_refund_origin)
+# stdin: baris `<nama>|<state>` hasil query ir_module_module. Cetak modul yang hilang/tidak `installed`
+# (`<nama>=<state|absent>`); return 1 bila ada.
+efn_odoo_modules_missing() {
+  local line name state m bad=0
+  declare -A st=()
+  while IFS= read -r line; do
+    line="${line%$'\r'}"
+    [[ "$line" =~ ^([a-z0-9_]{1,64})\|([a-z\ ]{1,32})$ ]] || continue
+    name="${BASH_REMATCH[1]}"; state="${BASH_REMATCH[2]}"
+    st["$name"]="$state"
+  done
+  for m in "${EFN_REQUIRED_ODOO_MODULES[@]}"; do
+    if [[ "${st[$m]:-absent}" != installed ]]; then echo "${m}=${st[$m]:-absent}"; bad=1; fi
+  done
+  return "$bad"
+}

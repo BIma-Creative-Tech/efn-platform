@@ -439,6 +439,16 @@ vc "128 LOYALTY_RESTORE_TOLERANCE_PCT=0 diterima" 0 production LOYALTY_RESTORE_T
 vc "129 LOYALTY_RESTORE_TOLERANCE_PCT=51 ditolak" 1 production LOYALTY_RESTORE_TOLERANCE_PCT=51
 vc "130 LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS=3649 ditolak (min 10 th)" 1 production LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS=3649
 vc "131 LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS=3650 diterima" 0 production LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS=3650
+# SEC-129 (r11): modul Odoo wajib (efn_pos_refund_origin) harus `installed`
+mods() { printf '%b' "$1" | efn_odoo_modules_missing > /dev/null; }
+u "132 modul wajib installed -> lulus (SEC-129)" 0 mods 'efn_pos_refund_origin|installed\n'
+u "133 modul wajib uninstalled -> deploy gagal" 1 mods 'efn_pos_refund_origin|uninstalled\n'
+u "134 modul wajib 'to upgrade' -> deploy gagal" 1 mods 'efn_pos_refund_origin|to upgrade\n'
+u "135 modul wajib tidak ada di ir_module_module -> deploy gagal" 1 mods 'efn_core|installed\n'
+u "136 keluaran psql kosong -> deploy gagal (fail-closed)" 1 mods ''
+u "137 baris CRLF/spasi tetap dikenali" 0 mods 'efn_pos_refund_origin|installed\r\n'
+if [[ "$(printf 'efn_pos_refund_origin|to install\n' | efn_odoo_modules_missing)" == "efn_pos_refund_origin=to install" ]]; then
+  ok "138 pesan menyebut modul + state"; else bad "138 pesan modul"; fi
 
 echo "RINGKASAN efn-deploy: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]
