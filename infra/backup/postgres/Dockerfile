@@ -30,7 +30,7 @@ RUN git clone --depth 1 --branch "${WALG_VERSION}" https://github.com/wal-g/wal-
          -ldflags "-s -w -X github.com/wal-g/wal-g/cmd/pg.walgVersion=${WALG_VERSION} -X github.com/wal-g/wal-g/cmd/pg.gitRevision=${WALG_COMMIT}" \
          ./main/pg
 
-FROM postgres:16.15-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4
+FROM postgres:18.6-bookworm@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
