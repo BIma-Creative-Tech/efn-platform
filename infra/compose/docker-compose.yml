@@ -1890,7 +1890,7 @@ services:
   # Tidak cap_drop: entrypoint melakukan chown data.
   uptime-kuma:
     <<: *common
-    image: louislam/uptime-kuma:1.23.16@sha256:431fee3be822b04861cf0e35daf4beef6b7cb37391c5f26c3ad6e12ce280fe18
+    image: louislam/uptime-kuma:2.5.6@sha256:9912da7d7d9b6ddc0c2d904beb84d24689c1ed9c33b81419eb9008663a92a329
     profiles: ["observability"]
     environment:
       UPTIME_KUMA_SSL_CERT: /run/secrets/tls_uptime_kuma_crt
