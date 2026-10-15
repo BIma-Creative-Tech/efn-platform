@@ -1,3 +1,3 @@
 # Dependensi tambahan addons EFN (pin versi, di-scan pip-audit di CI)
 requests==2.34.2
-phonenumbers==8.13.50
+phonenumbers==9.0.41
