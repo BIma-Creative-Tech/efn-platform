@@ -197,6 +197,10 @@ export class MemoryOnlineRepo implements OnlineRepo {
     this.state.events.set(e.idempotency_key, e);
     return true;
   }
+  async findEvent(key: string): Promise<{ part_id: string; event: string; seq: number | null; payload_sha256: string | null } | null> {
+    const e = this.state.events.get(key);
+    return e ? { part_id: e.part_id, event: e.event, seq: e.seq, payload_sha256: e.payload_sha256 ?? null } : null;
+  }
   async claim(consumer: string, key: string): Promise<boolean> {
     const k = `${consumer}|${key}`;
     if (this.state.claims.has(k)) return false;

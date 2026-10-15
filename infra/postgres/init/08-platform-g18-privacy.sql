@@ -100,6 +100,20 @@ BEGIN
   END IF;
 END $$;
 
+-- 9. (QA G18-QA-01) event Odoo→BFF: kunci idempotensi baris = kunci STABIL BFF `odoo-ev:<platform_order_ref>:<event>:<seq>[:<event_id>]`
+--    (bukan id lokal Odoo yang terpakai ulang setelah restore/rebuild DB). `payload_sha256` = sidik isi (kunci sama isi beda →
+--    409 + anomali), `source_key` = kunci asli Odoo (audit, kompatibilitas format lama). NULL untuk baris lama.
+ALTER TABLE platform.online_order_event ADD COLUMN IF NOT EXISTS payload_sha256 char(64);
+ALTER TABLE platform.online_order_event ADD COLUMN IF NOT EXISTS source_key text;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_online_order_event_payload'
+                   AND conrelid = 'platform.online_order_event'::regclass) THEN
+    ALTER TABLE platform.online_order_event ADD CONSTRAINT ck_online_order_event_payload CHECK (
+      (payload_sha256 IS NULL OR payload_sha256 ~ '^[0-9a-f]{64}$') AND (source_key IS NULL OR length(source_key) BETWEEN 1 AND 200));
+  END IF;
+END $$;
+
 RESET ROLE;
 
 -- loyalty_pos_reverse: efn_bff hanya SELECT/INSERT (append-only, tanpa UPDATE/DELETE — catatan keuangan 10 th);
