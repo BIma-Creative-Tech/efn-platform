@@ -2129,7 +2129,7 @@ services:
   # Probe health (HTTPS internal), handshake TLS semua listener internal, dan HTTPS publik (sertifikat ACME).
   blackbox-exporter:
     <<: *common
-    image: prom/blackbox-exporter:v0.25.0@sha256:b04a9fef4fa086a02fc7fcd8dcdbc4b7b35cc30cdee860fdc6a19dd8b208d63e
+    image: prom/blackbox-exporter:v0.29.0@sha256:9613f2884689b6fad9f1939f6a3b0388c93a022cfaededb19545b329b5c83dea
     profiles: ["ops"]
     command:
       - --config.file=/etc/blackbox/blackbox.yml
