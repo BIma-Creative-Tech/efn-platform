@@ -1,6 +1,6 @@
 # Runtime OCR worker (Python 3.12). Versi di-pin; diaudit pip-audit di CI.
 pika==1.3.2
-psycopg[binary]==3.2.3
+psycopg[binary]==3.3.6
 minio==7.2.12
 requests==2.34.2
 # Dipakai langsung untuk http_client MinIO (TLS + CA internal); kompatibel minio 7.2 & requests 2.34 (pip-audit 2026-10: urllib3 < 2.8 rentan).
