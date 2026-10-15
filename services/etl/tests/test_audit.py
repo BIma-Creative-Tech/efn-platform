@@ -14,22 +14,29 @@ from efn_etl.audit import (
     ChainHead,
     ChainRow,
     CopiedLog,
+    DivergenceCheck,
+    EpochRecord,
     PurgeBudget,
     PurgeLog,
     ReconResult,
     build_copy,
     chain_hash,
     classify_missing,
+    decide_epoch,
     payload_hash,
+    validate_marker,
     verify_chain,
 )
 from efn_etl.audit_job import (
     SQL_AUDIT_BY_IDS,
+    SQL_AUDIT_EPOCH_MARKER,
     SQL_AUDIT_IDS_RANGE,
     SQL_AUDIT_LINES,
+    SQL_AUDIT_MAX_ID,
     SQL_AUDIT_NEW,
     SQL_AUDIT_PURGES,
     SQL_AUDIT_RANGE,
+    AuditEpochBlocked,
     AuditSettings,
     recon_due,
     run_audit_copy,
@@ -248,14 +255,19 @@ def test_purge_budget_ignores_foreign_notes() -> None:
 
 
 class FakeSource:
-    def __init__(self, logs: list[dict[str, Any]], lines: list[dict[str, Any]]) -> None:
+    def __init__(self, logs: list[dict[str, Any]], lines: list[dict[str, Any]], marker: str | None = None) -> None:
         self.logs = {int(r["id"]): r for r in logs}
         self.lines = lines
+        self.marker = marker  # ir.config_parameter efn_audit.chain_epoch (None = belum di-set)
         self.calls: list[str] = []
 
     def query(self, sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         self.calls.append(sql)
         ordered = [self.logs[k] for k in sorted(self.logs)]
+        if sql == SQL_AUDIT_EPOCH_MARKER:
+            return [] if self.marker is None else [{"marker": self.marker}]
+        if sql == SQL_AUDIT_MAX_ID:
+            return [{"max_id": max(self.logs, default=0)}]
         if sql == SQL_AUDIT_NEW:
             settle = params["settle_before"].replace(tzinfo=None)
             rows = [r for r in ordered if r["id"] > params["after_id"] and r["create_date"] < settle]
@@ -277,6 +289,7 @@ class FakeStore:
             "audit_log_copy": [],
             "audit_log_line_copy": [],
             "audit_recon_run": [],
+            "audit_chain_epoch": [],
         }
         self.fail_on: str | None = None
 
@@ -290,44 +303,57 @@ class FakeStore:
     def logs(self) -> list[dict[str, Any]]:
         return self.tables["audit_log_copy"]
 
-    def heads(self) -> dict[int, ChainHead]:
+    def _logs(self, epoch: int) -> list[dict[str, Any]]:
+        return [r for r in self.logs if r.get("chain_epoch", 0) == epoch]
+
+    def _lines(self, epoch: int) -> list[dict[str, Any]]:
+        return [r for r in self.tables["audit_log_line_copy"] if r.get("chain_epoch", 0) == epoch]
+
+    def epochs(self) -> list[EpochRecord]:
+        rows = sorted(self.tables["audit_chain_epoch"], key=lambda r: (r["epoch"], r["started_at"]))
+        return [EpochRecord(r["epoch"], r["marker"], r["reason"], r["started_at"]) for r in rows]
+
+    def heads(self, epoch: int = 0) -> dict[int, ChainHead]:
         out: dict[int, ChainHead] = {}
-        for r in self.logs:
+        for r in self._logs(epoch):
             cur = out.get(r["chain_company"])
             if cur is None or r["chain_seq"] > cur.seq:
                 out[r["chain_company"]] = ChainHead(r["chain_seq"], r["row_hash"])
         return out
 
-    def max_log_id(self) -> int:
-        return max((r["log_id"] for r in self.logs), default=0)
+    def max_log_id(self, epoch: int = 0) -> int:
+        return max((r["log_id"] for r in self._logs(epoch)), default=0)
 
-    def min_log_id_since(self, since: datetime) -> int | None:
-        ids = [r["log_id"] for r in self.logs if r["create_date"] >= since]
+    def min_log_id_since(self, since: datetime, epoch: int = 0) -> int | None:
+        ids = [r["log_id"] for r in self._logs(epoch) if r["create_date"] >= since]
         return min(ids) if ids else None
 
-    def log_ids_between(self, lo: int, hi: int) -> set[int]:
-        return {r["log_id"] for r in self.logs if lo < r["log_id"] <= hi}
+    def log_ids_between(self, lo: int, hi: int, epoch: int = 0) -> set[int]:
+        return {r["log_id"] for r in self._logs(epoch) if lo < r["log_id"] <= hi}
 
-    def logs_with_lines(self, log_ids: Any) -> set[int]:
-        return {r["log_id"] for r in self.tables["audit_log_line_copy"] if r["log_id"] in set(log_ids)}
+    def logs_with_lines(self, log_ids: Any, epoch: int = 0) -> set[int]:
+        return {r["log_id"] for r in self._lines(epoch) if r["log_id"] in set(log_ids)}
 
-    def copied_range(self, lo: int, hi: int) -> list[CopiedLog]:
-        return [
-            CopiedLog(r["log_id"], r["create_date"], r["model_name"], r["operation"], r["payload_hash"])
-            for r in self.logs
-            if lo < r["log_id"] <= hi
-        ]
+    def _copied(self, r: dict[str, Any]) -> CopiedLog:
+        return CopiedLog(r["log_id"], r["create_date"], r["model_name"], r["operation"], r["payload_hash"])
 
-    def line_hashes(self, log_ids: Any) -> dict[int, dict[int, str]]:
+    def copied_range(self, lo: int, hi: int, epoch: int = 0) -> list[CopiedLog]:
+        return [self._copied(r) for r in self._logs(epoch) if lo < r["log_id"] <= hi]
+
+    def recent_copies(self, epoch: int, limit: int) -> list[CopiedLog]:
+        rows = sorted(self._logs(epoch), key=lambda r: r["log_id"], reverse=True)
+        return [self._copied(r) for r in rows[:limit]]
+
+    def line_hashes(self, log_ids: Any, epoch: int = 0) -> dict[int, dict[int, str]]:
         out: dict[int, dict[int, str]] = {}
-        for r in self.tables["audit_log_line_copy"]:
+        for r in self._lines(epoch):
             if r["log_id"] in set(log_ids):
                 out.setdefault(r["log_id"], {})[r["line_id"]] = r["line_hash"]
         return out
 
-    def chain_rows(self, company: int, after_seq: int, limit: int) -> list[ChainRow]:
+    def chain_rows(self, company: int, after_seq: int, limit: int, epoch: int = 0) -> list[ChainRow]:
         rows = sorted(
-            (r for r in self.logs if r["chain_company"] == company and r["chain_seq"] > after_seq),
+            (r for r in self._logs(epoch) if r["chain_company"] == company and r["chain_seq"] > after_seq),
             key=lambda r: r["chain_seq"],
         )
         return [
@@ -468,3 +494,147 @@ def test_recon_merges_sink_check_and_flags_sink_error(caplog: pytest.LogCaptureF
 
     run_audit_recon(source, store, CFG, NOW)
     assert store.tables["audit_recon_run"][-1]["sink_checked"] == 0
+
+
+# ------------------------------------------------------------------ chain epoch (restore DB Odoo)
+
+
+def _restore(source: FakeSource, keep_upto: int, new_ids: range) -> None:
+    """Simulasi restore DB Odoo: log > keep_upto hilang; log baru memakai ulang id (create_date lebih baru)."""
+    for log_id in [i for i in source.logs if i > keep_upto]:
+        del source.logs[log_id]
+    source.lines = [ln for ln in source.lines if ln["log_id"] <= keep_upto]
+    for log_id in new_ids:
+        created = (NOW - timedelta(minutes=30)).replace(tzinfo=None) + timedelta(seconds=log_id)
+        source.logs[log_id] = _log(log_id, model="stock.picking", create_date=created)
+        source.lines.append(_line(500 + log_id, log_id, create_date=created))
+
+
+def _epoch_events(caplog: pytest.LogCaptureFixture) -> list[tuple[str, dict[str, Any]]]:
+    import json as _json
+
+    out = []
+    for r in caplog.records:
+        msg = r.getMessage()
+        if msg.startswith("EFN_AUDIT_EPOCH "):
+            out.append((r.levelname, _json.loads(msg.split(" ", 1)[1])))
+    return out
+
+
+def test_decide_epoch_rules() -> None:
+    rec = EpochRecord(0, "", "init", NOW)
+    clean = DivergenceCheck(6, 7, 5, 5)
+    regressed = DivergenceCheck(6, 4, 4, 4)
+    reused = DivergenceCheck(6, 9, 5, 4, head_reused=True)
+    assert decide_epoch(None, "", clean, False).action == "register"
+    assert decide_epoch(None, "r-1", clean, False) == decide_epoch(None, "r-1", clean, False)
+    assert decide_epoch(None, "r-1", clean, False).action == "register"  # penanda pertama di sistem sehat
+    assert decide_epoch(rec, "", clean, False).action == "continue"
+    assert decide_epoch(rec, "r-1", clean, False).action == "new"  # runbook menyatakan restore
+    assert decide_epoch(rec, "r-1", regressed, False) == decide_epoch(rec, "r-1", regressed, True)
+    assert decide_epoch(rec, "r-1", regressed, False).reason == "marker"
+    blocked = decide_epoch(rec, "", regressed, False)
+    assert (blocked.action, blocked.epoch, blocked.reason) == ("block", 0, "auto:id_regressed")
+    assert decide_epoch(rec, "", reused, False).reason == "auto:head_reused"
+    auto = decide_epoch(rec, "", reused, True)
+    assert (auto.action, auto.epoch) == ("new", 1)
+    assert decide_epoch(None, "", regressed, False).action == "block"  # salinan lama belum terdaftar
+
+
+def test_validate_marker() -> None:
+    assert validate_marker(None) == "" and validate_marker(False) == ""
+    assert validate_marker(" restore-2026-10-15T03:00Z ") == "restore-2026-10-15T03:00Z"
+    for bad in ("a b", "x" * 65, "r;drop", "é"):
+        with pytest.raises(ValueError):
+            validate_marker(bad)
+
+
+def test_first_run_registers_epoch_zero_without_breaking_chain() -> None:
+    source, store = _fixture()
+    result = run_audit_copy(source, store, CFG, NOW)
+    assert result.epoch == 0 and result.new_rows == 6
+    (rec,) = store.tables["audit_chain_epoch"]
+    assert (rec["epoch"], rec["marker"], rec["reason"]) == (0, "", "init")
+    assert {r["chain_epoch"] for r in store.logs} == {0}
+    assert {r["chain_epoch"] for r in store.tables["audit_log_line_copy"]} == {0}
+    run_audit_copy(source, store, CFG, NOW)
+    assert len(store.tables["audit_chain_epoch"]) == 1  # registrasi sekali
+
+
+def test_restore_without_marker_is_blocked_fail_closed(caplog: pytest.LogCaptureFixture) -> None:
+    source, store = _fixture()
+    run_audit_copy(source, store, CFG, NOW)
+    _restore(source, keep_upto=4, new_ids=range(5, 6))  # id 5 dipakai ulang, 6 belum ada -> max(id) mundur
+    with caplog.at_level("INFO"), pytest.raises(AuditEpochBlocked):
+        run_audit_copy(source, store, CFG, NOW)
+    level, event = _epoch_events(caplog)[-1]
+    assert level == "ERROR" and event["event"] == "divergence_blocked"
+    assert event["reason"] == "auto:id_regressed" and event["prev_max_log_id"] == 6 and event["source_max_log_id"] == 5
+    assert len(store.logs) == 6  # tidak ada penyalinan
+    # Id baru sudah melewati watermark: tetap terdeteksi lewat id yang dipakai ulang (head_reused).
+    _restore(source, keep_upto=4, new_ids=range(5, 9))
+    with pytest.raises(AuditEpochBlocked):
+        run_audit_copy(source, store, CFG, NOW)
+    assert len(store.logs) == 6 and len(store.tables["audit_chain_epoch"]) == 1
+
+
+def test_restore_with_marker_starts_new_epoch_and_keeps_old_copy(caplog: pytest.LogCaptureFixture) -> None:
+    source, store = _fixture()
+    run_audit_copy(source, store, CFG, NOW)
+    old = [dict(r) for r in store.logs]
+    _restore(source, keep_upto=4, new_ids=range(5, 8))
+    source.marker = "restore-20261015"  # runbook restore
+    with caplog.at_level("INFO"):
+        result = run_audit_copy(source, store, CFG, NOW)
+    assert result.epoch == 1 and result.new_rows == 7  # salin ulang seluruh sumber (1..4 lama + 5..7 baru)
+    level, event = _epoch_events(caplog)[-1]
+    assert level == "WARNING" and event["event"] == "new_epoch" and event["reason"] == "marker"
+    assert event["marker"] == "restore-20261015" and event["prev_max_log_id"] == 6
+    # Bukti epoch 0 utuh; epoch 1 rantai sendiri dari GENESIS.
+    assert [r for r in store.logs if r["chain_epoch"] == 0] == old
+    epoch1 = [r for r in store.logs if r["chain_epoch"] == 1]
+    assert sorted(r["log_id"] for r in epoch1) == [1, 2, 3, 4, 5, 6, 7]
+    for company in (2, 3):
+        rows = store.chain_rows(company, 0, 100, 1)
+        assert rows[0].chain_seq == 1 and rows[0].prev_hash == GENESIS
+        assert verify_chain(rows)[0] == []
+    heads = [r.getMessage() for r in caplog.records if r.getMessage().startswith("EFN_AUDIT_CHAIN_HEAD")]
+    assert heads and all(h.endswith(',"epoch":1}') for h in heads)
+    # Siklus berikutnya: lanjut di epoch 1, tanpa epoch baru; rekonsiliasi epoch 1 bersih walau epoch 0 berbeda.
+    again = run_audit_copy(source, store, CFG, NOW)
+    assert (again.epoch, again.new_rows) == (1, 0) and len(store.tables["audit_chain_epoch"]) == 2
+    recon = run_audit_recon(source, store, CFG, NOW)
+    assert not recon.alert and recon.checked == 7
+    assert store.tables["audit_recon_run"][-1]["chain_epoch"] == 1
+
+
+def test_old_epoch_tamper_still_detected_after_new_epoch() -> None:
+    source, store = _fixture()
+    run_audit_copy(source, store, CFG, NOW)
+    _restore(source, keep_upto=4, new_ids=range(5, 7))
+    source.marker = "r1"
+    run_audit_copy(source, store, CFG, NOW)
+    next(r for r in store.logs if r["chain_epoch"] == 0 and r["log_id"] == 2)["payload_hash"] = "0" * 64
+    result = run_audit_recon(source, store, CFG, NOW)
+    assert result.chain_problems >= 1 and result.alert
+
+
+def test_auto_epoch_for_dev_reset_and_erasure_is_not_divergence() -> None:
+    source, store = _fixture()
+    run_audit_copy(source, store, CFG, NOW)
+    _restore(source, keep_upto=2, new_ids=range(3, 5))
+    auto = AuditSettings(batch_size=2, max_pages=50, epoch_auto=True)
+    result = run_audit_copy(source, store, auto, NOW)
+    assert result.epoch == 1 and store.tables["audit_chain_epoch"][-1]["reason"] == "auto:id_regressed"
+
+    # Erasure: log model orang terbaru dihapus + purge log -> bukan restore (anchor model orang disaring).
+    source, store = _fixture()
+    source.logs[7] = _log(7, model="res.partner", is_personal=True)
+    run_audit_copy(source, store, CFG, NOW)
+    del source.logs[7]
+    source.logs[8] = _log(8, model="res.partner", operation="purge", note="erasure: 1 log dihapus")
+    assert run_audit_copy(source, store, CFG, NOW).epoch == 0
+    # Penghapusan log non-orang terbaru TANPA id mundur: bukan restore (rekonsiliasi yang menandai), tidak memblokir.
+    del source.logs[6]
+    assert run_audit_copy(source, store, CFG, NOW).epoch == 0
+    assert run_audit_recon(source, store, CFG, NOW).unexplained == 1

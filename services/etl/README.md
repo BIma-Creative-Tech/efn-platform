@@ -134,6 +134,28 @@ Diterapkan `infra/clickhouse/clickhouse-init.sh` setiap deploy (idempoten; env d
   tabel, `PRICE_HUNTER_GEO_RETENTION_DAYS`), dengan `updated_at` diperbarui sehingga ETL membawa versi tanpa lokasi.
 - Salinan audit: `CH_AUDIT_COPY_RETENTION_YEARS` (default 10, 2..30) — tidak diubah. `fact_gl_line` tanpa TTL (arsip keuangan).
 
+### Chain epoch salinan audit — restore DB Odoo (Gelombang 18)
+Setelah DB Odoo dipulihkan, id `efn.audit.log` mundur; tanpa epoch, log baru ber-id ≤ watermark tidak pernah tersalin.
+`efn_etl/audit.py` `decide_epoch` + `audit_job.resolve_epoch` (setiap siklus, sebelum penyalinan):
+- **Penanda runbook**: `ir.config_parameter` `efn_audit.chain_epoch` (`^[A-Za-z0-9_.:-]{1,64}$`), dibaca lewat view
+  baris-tunggal `efn_etl_audit_epoch` (`sql/odoo-readonly-grants.sql`; efn_etl tidak punya akses ke
+  `ir_config_parameter`). Penanda berubah -> **epoch baru**: rantai hash dari GENESIS + watermark baru, seluruh log
+  sumber disalin ulang; salinan epoch lama tetap (bukti) dan rantainya tetap diverifikasi rekonsiliasi.
+- **Deteksi otomatis**: `max(id)` sumber < watermark epoch (`id_regressed`), atau log tersalin terbaru (bukan model
+  orang) ada di sumber dengan identitas lain (`create_date`/model/operasi; `head_reused` = id dipakai ulang).
+  Tanpa perubahan penanda -> **diblokir**: ERROR `EFN_AUDIT_EPOCH {"event":"divergence_blocked",...}`, heartbeat
+  `audit_copy` error, tidak ada penyalinan sampai runbook mengubah penanda. Log terbaru yang hanya HILANG (tanpa id
+  mundur) bukan restore: penyalinan lanjut, rekonsiliasi menandai `unexplained`.
+- `ETL_AUDIT_EPOCH_AUTO=true` (default false; **ditolak di production**) = epoch baru otomatis saat divergensi (reset DB
+  dev). `ETL_AUDIT_EPOCH_ANCHORS` (20) = jumlah log terbaru yang dicek identitasnya.
+- Epoch baru: WARNING `EFN_AUDIT_EPOCH {"event":"new_epoch","epoch":N,"reason":"marker",...}` (alert Loki yang
+  diusulkan: `|= "EFN_AUDIT_EPOCH"`). Riwayat: tabel `audit_chain_epoch`; kolom `chain_epoch` di `audit_log_copy`,
+  `audit_log_line_copy`, `audit_recon_run` (`infra/clickhouse/init/07-audit-epoch.sql`). Jangkar Loki epoch ≥ 1:
+  `EFN_AUDIT_CHAIN_HEAD {"company":..,"seq":..,"row_hash":"..","epoch":N}` (epoch 0 = format lama).
+- Runbook restore (setelah DB pulih, sebelum ETL jalan lagi): jalankan ulang `sql/odoo-readonly-grants.sql`, lalu
+  `odoo shell`: `env['ir.config_parameter'].sudo().set_param('efn_audit.chain_epoch', 'restore-<UTC>'); env.cr.commit()`
+  (lewat ORM agar tercatat di log audit sebagai model kontrol).
+
 ### Grant Odoo
 `sql/odoo-readonly-grants.sql` — grant kolom minimum + index `(write_date, id)`; dijalankan devsecops pasca-install/upgrade Odoo sebagai `efn_odoo`.
 

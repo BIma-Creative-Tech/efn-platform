@@ -140,3 +140,14 @@ BEGIN
     END IF;
 END
 $grant_g18$;
+
+-- ===================================================================== Gelombang 18 (efn-data-ai-engineer, chain epoch)
+-- Penanda restore untuk salinan audit (efn_etl/audit.py `decide_epoch`): runbook restore mengubah
+-- ir.config_parameter `efn_audit.chain_epoch` SETELAH DB Odoo dipulihkan. efn_etl TIDAK diberi akses ke
+-- ir_config_parameter (memuat rahasia, mis. database.secret): view baris-tunggal milik efn_odoo (dijalankan dengan hak
+-- pemilik) + security_barrier (predikat/fungsi pemanggil tidak didorong ke dalam view). Dibuat ulang tiap deploy
+-- (idempoten) — juga setelah restore, karena view ikut DB yang dipulihkan atau hilang bila DB dibuat ulang.
+CREATE OR REPLACE VIEW public.efn_etl_audit_epoch WITH (security_barrier) AS
+    SELECT value::text AS marker FROM public.ir_config_parameter WHERE key = 'efn_audit.chain_epoch';
+REVOKE ALL ON public.efn_etl_audit_epoch FROM PUBLIC;
+GRANT SELECT ON public.efn_etl_audit_epoch TO efn_etl;

@@ -224,3 +224,15 @@ def test_loyalty_point_value_sec118(tls_env: dict[str, str]) -> None:
     assert Settings.from_env({**tls_env, "LOYALTY_POINT_VALUE_IDR": "250"}).loyalty_point_value_idr == 250
     with pytest.raises(RuntimeError):
         Settings.from_env({**tls_env, "LOYALTY_POINT_VALUE_IDR": "0"})
+
+
+def test_audit_epoch_settings(tls_env: dict[str, str]) -> None:
+    # Chain epoch: auto (epoch baru tanpa penanda runbook) hanya non-production; anchor 1..1000.
+    settings = Settings.from_env(tls_env)
+    assert (settings.audit_epoch_auto, settings.audit_epoch_anchors) == (False, 20)
+    with pytest.raises(RuntimeError):
+        Settings.from_env({**tls_env, "ETL_AUDIT_EPOCH_AUTO": "true"})
+    dev = Settings.from_env({**tls_env, "APP_ENV": "development", "ETL_AUDIT_EPOCH_AUTO": "true"})
+    assert dev.audit_epoch_auto is True
+    with pytest.raises(RuntimeError):
+        Settings.from_env({**tls_env, "ETL_AUDIT_EPOCH_ANCHORS": "0"})

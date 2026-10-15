@@ -65,6 +65,14 @@ def _points_mode(env: Mapping[str, str]) -> str:
     return value
 
 
+def _epoch_auto(env: Mapping[str, str]) -> bool:
+    value = _bool(env, "ETL_AUDIT_EPOCH_AUTO", False)
+    # Fail closed: di production epoch baru HANYA lewat penanda `efn_audit.chain_epoch` dari runbook restore.
+    if value and is_production(env):
+        raise RuntimeError("ETL_AUDIT_EPOCH_AUTO=true ditolak di production; ubah penanda efn_audit.chain_epoch")
+    return value
+
+
 def _bool(env: Mapping[str, str], name: str, default: bool) -> bool:
     return _str(env, name, "true" if default else "false").strip().lower() in _TRUE
 
@@ -124,6 +132,9 @@ class Settings:
     audit_batch_size: int = 2000
     audit_recon_interval_seconds: int = 86_400
     audit_recon_content: bool = True
+    # Chain epoch (restore DB Odoo, audit.decide_epoch): auto = epoch baru tanpa penanda (DITOLAK di production).
+    audit_epoch_auto: bool = False
+    audit_epoch_anchors: int = 20
     # Gelombang 13 (Fase 1): snapshot stok & kedaluwarsa (efn_etl/stock.py). Default = ETL_ENABLE_ODOO (grant sama).
     stock_enabled: bool = False
     stock_snapshot_interval_seconds: int = 3600
@@ -265,6 +276,8 @@ class Settings:
             audit_batch_size=_int(e, "ETL_AUDIT_BATCH_SIZE", 2000),
             audit_recon_interval_seconds=_int(e, "ETL_AUDIT_RECON_INTERVAL_SECONDS", 86_400),
             audit_recon_content=_bool(e, "ETL_AUDIT_RECON_CONTENT", True),
+            audit_epoch_auto=_epoch_auto(e),
+            audit_epoch_anchors=_int_range(e, "ETL_AUDIT_EPOCH_ANCHORS", 20, 1, 1000),
             stock_enabled=_bool(e, "ETL_ENABLE_STOCK", odoo_enabled),
             stock_snapshot_interval_seconds=_int(e, "ETL_STOCK_SNAPSHOT_INTERVAL_SECONDS", 3600),
             points_product_codes=points_codes,

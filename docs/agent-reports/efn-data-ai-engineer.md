@@ -635,3 +635,66 @@ view terbaca); ETL di-rebuild + recreate (`cycle` ok); dry-run recon terhadap DB
 
 Untuk devsecops: set `LOYALTY_POINT_VALUE_IDR` di service `etl` dari nilai yang sama dengan `api-gateway` (bila BFF
 memakai nilai non-default, ETL dengan default 100 akan menghasilkan positif palsu `points_restore_value_mismatch`).
+
+## Gelombang 18e — Chain epoch salinan audit (restore DB Odoo) (15 Okt 2026)
+
+Celah (devsecops, runbook restore): setelah restore DB Odoo, id `efn.audit.log` mundur; `audit_copy` melanjutkan dari
+`max(log_id)` tersalin sehingga log baru ber-id ≤ watermark tidak pernah tersalin, dan rekonsiliasi beranomali.
+
+### Desain
+- **Epoch** = garis keturunan sumber. Kolom `chain_epoch` (default 0 = salinan lama) di `audit_log_copy`,
+  `audit_log_line_copy`, `audit_recon_run`; riwayat di tabel append-only `audit_chain_epoch`
+  (`infra/clickhouse/init/07-audit-epoch.sql`). Rantai hash (GENESIS per company), watermark, late pass, rekonsiliasi
+  isi = **per epoch**. Epoch baru menyalin ulang seluruh log sumber; salinan epoch lama **tidak disentuh** (bukti) dan
+  rantainya tetap diverifikasi setiap rekonsiliasi (tamper epoch lama tetap `chain_problems`).
+- **Pemicu**: penanda eksplisit `ir.config_parameter` `efn_audit.chain_epoch` (diubah runbook restore) berbeda dari
+  penanda epoch berjalan -> epoch baru (WARNING `EFN_AUDIT_EPOCH` `new_epoch`). Dibaca lewat view
+  `efn_etl_audit_epoch` (milik efn_odoo, `security_barrier`, satu kunci) — efn_etl tetap tanpa akses
+  `ir_config_parameter` (memuat rahasia). **Tanpa perubahan kode/dependency Odoo.**
+- **Deteksi otomatis + fail-closed**: `id_regressed` (`max(id)` sumber < watermark) atau `head_reused` (log tersalin
+  terbaru non-orang ada di sumber dengan create_date/model/operasi lain = id dipakai ulang). Tanpa perubahan penanda
+  -> **diblokir** (ERROR `EFN_AUDIT_EPOCH` `divergence_blocked`, `AuditEpochBlocked`, heartbeat `audit_copy` error,
+  tidak ada penyalinan). Penghapusan log terbaru tanpa id mundur (tamper/erasure) TIDAK dianggap restore: salinan
+  lanjut, rekonsiliasi menandai. Log model orang disaring dari anchor (erasure UU PDP sah). `ETL_AUDIT_EPOCH_AUTO=true`
+  hanya non-production (config menolak di production).
+- **Jangkar Loki**: epoch ≥ 1 menambah `"epoch":N` di `EFN_AUDIT_CHAIN_HEAD`; `sink.verify_anchors` mencocokkan per
+  (epoch, company, seq). Epoch 0 = format lama.
+
+### File
+`services/etl/efn_etl/audit.py` (`chain_epoch` di baris salinan, `EpochRecord`, `DivergenceCheck`, `anchor_matches`,
+`decide_epoch`, `validate_marker`), `audit_job.py` (`resolve_epoch`, `check_divergence`, `AuditEpochBlocked`, semua
+langkah per epoch, `chain_epoch` di recon), `adapters.py` (query ClickHouse ber-`chain_epoch`, `epochs`,
+`recent_copies`), `sink.py` (jangkar per epoch), `config.py` / `__main__.py` (`ETL_AUDIT_EPOCH_AUTO`,
+`ETL_AUDIT_EPOCH_ANCHORS`), `sql/odoo-readonly-grants.sql` (view), `infra/clickhouse/init/07-audit-epoch.sql`,
+`infra/clickhouse/access/etl-access.sql` (SELECT+INSERT `audit_chain_epoch`, REVOKE ubah/hapus, `audit_copy_reader`),
+README ETL. Test: `test_audit.py` +7 (aturan keputusan, penanda, registrasi epoch 0, restore tanpa penanda diblokir
+untuk id mundur & id dipakai ulang, restore dengan penanda = epoch baru + bukti lama utuh + rantai GENESIS + recon
+bersih, tamper epoch lama terdeteksi, auto dev + erasure/penghapusan bukan divergensi), `test_sink.py` +1,
+`test_config.py` +1.
+
+### Verifikasi
+- pytest ETL **234 passed / 1 skipped**; ruff check + format bersih.
+- ClickHouse dev: `clickhouse-init` 2x exit 0 (kolom + tabel + grant; baris lama `chain_epoch=0`).
+- Grant Odoo dijalankan ulang: `efn_etl` membaca view (0 baris), `ir_config_parameter` tetap `permission denied`.
+- **Uji nyata kasus sebenarnya** (DB Odoo dev memang sudah di-reset: salinan max log_id 158, sumber max 87):
+  1. ETL baru -> ERROR `divergence_blocked` (`id_regressed`, anchors 20/0 cocok), tidak ada penyalinan;
+  2. runbook: `odoo shell` `set_param('efn_audit.chain_epoch','dev-reset-20261015')` -> siklus berikut WARNING
+     `new_epoch` epoch 1, 78 log disalin ulang (rantai baru dari seq 1), salinan epoch 0 (119 log) utuh;
+  3. siklus berikutnya `epoch=1 new=0` (stabil); rekonsiliasi (one-off) epoch 1: `checked=78`, 0 anomali,
+     `chain_problems=0` (rantai epoch 0 + 1 terverifikasi).
+
+### Butuh pihak lain
+- **devsecops**: (1) regex promtail stream `efn_audit_anchor` (`infra/observability/promtail.yml:50`) harus menerima
+  kunci opsional `,"epoch":\d+` sebelum `}` — tanpa ini jangkar epoch ≥ 1 tidak masuk Loki (penulisan ulang salinan
+  epoch baru tidak terdeteksi lewat jangkar); (2) alert Loki `|= "EFN_AUDIT_EPOCH"` (WARNING new_epoch = info
+  terjadwal restore, ERROR divergence_blocked = page); (3) runbook restore: setelah DB pulih jalankan ulang
+  `odoo-readonly-grants.sql`, set penanda via `odoo shell` (ORM -> tercatat di log audit), lalu ETL; (4) dev reset
+  boleh `ETL_AUDIT_EPOCH_AUTO=true` di `docker-compose.dev.yml`.
+- **Odoo engineer**: tidak wajib. Opsional: tombol/wizard admin teraudit untuk mengubah penanda (saat ini `odoo shell`).
+
+### Batas / risiko sisa
+- Pemegang hak tulis DB Odoo bisa mengubah penanda untuk "memulai ulang" rantai; mitigasi: WARNING `new_epoch` selalu
+  muncul, epoch lama + jangkar Loki lama tetap ada sebagai bukti, dan perubahan via ORM tercatat di log audit.
+- Restore yang tidak menghilangkan log apa pun (tidak ada aktivitas sejak backup) tidak terdeteksi otomatis — tidak
+  perlu (tidak ada id yang dipakai ulang).
+- Epoch baru menyalin ulang seluruh sumber (volume log audit kecil; dibatasi `max_pages` per siklus).

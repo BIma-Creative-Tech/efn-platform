@@ -57,7 +57,13 @@ def run_audit_cycle(
     started = time.monotonic()
     try:
         result = run_audit_copy(source, audit_store, cfg, now)
-        log.info("job=audit_copy new=%d late=%d chains=%d", result.new_rows, result.late_rows, len(result.heads))
+        log.info(
+            "job=audit_copy new=%d late=%d chains=%d epoch=%d",
+            result.new_rows,
+            result.late_rows,
+            len(result.heads),
+            result.epoch,
+        )
     except Exception:
         log.exception("job=audit_copy gagal")
         heartbeat(JobRun("audit_copy", datetime.now(UTC), "error", duration_ms=_ms(started)))
@@ -191,6 +197,8 @@ def main() -> None:
         max_pages=settings.max_pages_per_run,
         recon_interval=timedelta(seconds=settings.audit_recon_interval_seconds),
         recon_content=settings.audit_recon_content,
+        epoch_auto=settings.audit_epoch_auto,
+        epoch_anchors=settings.audit_epoch_anchors,
     )
     sink_check: SinkCheck | None = None
     if settings.audit_sink_enabled:

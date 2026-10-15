@@ -155,7 +155,7 @@ def test_verify_anchors_detects_rewrite_deletion_fork_and_absence() -> None:
         Anchor(2, 6, h1),
         Anchor(2, 6, h2),
     ]
-    current = {(1, 10): h1, (1, 20): h2, (2, 6): h1}
+    current = {(0, 1, 10): h1, (0, 1, 20): h2, (0, 2, 6): h1}
     result = verify_anchors(anchors, current, [1, 2])
     # (1,10) ok; (1,20) ditulis ulang; (2,5) hilang; (2,6) dua hash berbeda di Loki
     assert result.anchors_checked == 4 and result.anchor_mismatch == 2 and result.anchor_missing == 1
@@ -203,8 +203,9 @@ class FakeSinkStore:
     def copied_log_ids(self, log_ids: list[int]) -> set[int]:
         return self.copied & set(log_ids)
 
-    def chain_hashes(self, company: int, seqs: list[int]) -> dict[int, str]:
-        return {s: h for (c, s), h in self.chain.items() if c == company and s in seqs}
+    def chain_hashes(self, company: int, seqs: list[int], epoch: int = 0) -> dict[int, str]:
+        # Rantai fake = epoch 0; epoch lain kosong.
+        return {s: h for (c, s), h in self.chain.items() if epoch == 0 and c == company and s in seqs}
 
     def heads(self) -> dict[int, object]:
         return {c: object() for c, _s in self.chain}
@@ -225,3 +226,18 @@ def test_run_sink_check_clean_and_anomalies() -> None:
     result = run_sink_check(loki, source, FakeSinkStore({(1, 4): "b" * 64}), KEY, T0, cfg)
     data = result.as_dict()
     assert data["sink_mac_invalid"] == 1 and data["log_missing_sink"] == 2 and data["anchor_mismatch"] == 1
+
+
+def test_anchor_epoch_parsed_and_matched_per_epoch() -> None:
+    """Chain epoch (restore DB Odoo): seq dimulai ulang per epoch -> jangkar dicocokkan per (epoch, company, seq)."""
+    h0, h1 = "0" * 63 + "1", "f" * 64
+    line = _anchor_line(1, 10, h1).replace('"}', '","epoch":2}')
+    assert parse_anchor_line(line) == Anchor(1, 10, h1, 2)
+    assert parse_anchor_line(_anchor_line(1, 10, h0)) == Anchor(1, 10, h0, 0)
+    assert parse_anchor_line(line.replace('"epoch":2', '"epoch":"2"')) is None  # format ketat
+    anchors = [Anchor(1, 10, h0), Anchor(1, 10, h1, 2)]
+    ok = verify_anchors(anchors, {(0, 1, 10): h0, (2, 1, 10): h1}, [1])
+    assert ok.anchors_checked == 2 and not ok.alert
+    # Epoch lama dihapus/ditulis ulang tetap terdeteksi.
+    bad = verify_anchors(anchors, {(2, 1, 10): h1}, [1])
+    assert bad.anchor_missing == 1 and bad.samples == ["1:10"]
