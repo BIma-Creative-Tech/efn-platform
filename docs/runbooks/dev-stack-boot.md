@@ -175,6 +175,57 @@ smoke skenario `f` (dan oleh `deploy.sh` di staging/prod). Manual:
 `MSYS_NO_PATHCONV=1 docker exec -i efn-postgres-1 psql -X -q -v ON_ERROR_STOP=1 -U efn_odoo -d efn_odoo -f - < services/etl/sql/odoo-readonly-grants.sql`.
 Sebelum grant, job `sales_fact_pos` gagal per siklus (permission denied) tanpa memengaruhi job lain.
 
+## 3e. Reset DB Odoo dev (DROP `efn_odoo`) — reset data turunan juga (G18-QA-02) {#reset-db-odoo}
+
+Setelah `DROP DATABASE efn_odoo` + install ulang (§3), id Odoo mulai lagi dari 1. Data turunan lama yang memakai id
+Odoo **bertabrakan** dengan id baru: katalog BFF menampilkan produk lama, mart ClickHouse menghitung penjualan hantu
+(kunci `fact_sales_line` = company/store/**order_date**/line_id → baris lama tidak tertimpa), event online baru ditolak
+sebagai `duplicate` (G18-QA-01), rekonsiliasi loyalty menandai order uji lama. Urutan (dev saja; produksi = DR
+[backup-restore.md §4](backup-restore.md#4-disaster-recovery-produksi)):
+
+```bash
+# Git Bash: export MSYS_NO_PATHCONV=1 dulu (docker exec tanpa konversi path)
+# 0. Cadangan terenkripsi (pola E2E_SMOKE_REPORT G18.1), lalu hentikan penulis data turunan
+$DC stop etl api-gateway
+# 1. DB Odoo baru (§3), migrasi BFF 07/08 & grant ETL (§3d) - seperti biasa
+# 2. BFF (efn_platform): katalog online + data uji online + inbox event yang memakai id Odoo lama
+docker exec -i efn-postgres-1 psql -X -q -v ON_ERROR_STOP=1 -U postgres -d efn_platform <<'SQL'
+BEGIN;
+DELETE FROM platform.online_catalog_item; DELETE FROM platform.online_catalog_category; DELETE FROM platform.online_catalog_sync;
+-- data uji online (JANGAN `TRUNCATE online_order CASCADE`: FK melingkar ikut mengosongkan SEMUA payment_intent)
+DELETE FROM platform.online_order_event;
+DELETE FROM platform.online_refund;
+DELETE FROM platform.payment_intent_portion WHERE part_id IN (SELECT id FROM platform.online_order_part);
+UPDATE platform.online_order SET payment_intent_id = NULL WHERE payment_intent_id IS NOT NULL;
+DELETE FROM platform.payment_intent WHERE online_order_id IS NOT NULL;
+DELETE FROM platform.online_order_part;
+DELETE FROM platform.online_order;
+DELETE FROM platform.processed_message WHERE consumer = 'online.order-events';   -- inbox event Odoo (G18-QA-01)
+COMMIT;
+SQL
+# 3. ClickHouse: mart sumber Odoo + watermark (job Odoo dimuat ulang penuh; BFF-sourced ikut dimuat ulang, idempoten)
+chq() { $DC exec -T clickhouse sh -c 'CLICKHOUSE_USER="${CLICKHOUSE_USER:-efn}" CLICKHOUSE_PASSWORD="$(cat /run/secrets/clickhouse_password)" clickhouse-client --host clickhouse --multiquery'; }
+chq <<'SQL'
+TRUNCATE TABLE efn_dwh.fact_sales_line; TRUNCATE TABLE efn_dwh.fact_pos_payment; TRUNCATE TABLE efn_dwh.dim_outlet;
+TRUNCATE TABLE efn_dwh.dim_product; TRUNCATE TABLE efn_dwh.fact_gl_line; TRUNCATE TABLE efn_dwh.dim_gl_account;
+TRUNCATE TABLE efn_dwh.dim_company; TRUNCATE TABLE efn_dwh.fact_stock_snapshot; TRUNCATE TABLE efn_dwh.fact_orderpoint_snapshot;
+TRUNCATE TABLE efn_dwh.stock_snapshot_run; TRUNCATE TABLE efn_dwh.loyalty_recon_finding; TRUNCATE TABLE efn_dwh.loyalty_points_daily;
+TRUNCATE TABLE efn_dwh.audit_log_copy; TRUNCATE TABLE efn_dwh.audit_log_line_copy;   -- dev saja: rantai audit dimulai ulang
+TRUNCATE TABLE efn_dwh.etl_watermark;
+SQL
+# 4. Batas rekonsiliasi loyalty = waktu reset (order uji BFF lama tidak dianggap anomali)
+#    infra/compose/.env:  ETL_LOYALTY_RECON_NOT_BEFORE=<UTC sekarang, format 2026-10-15T08:00:00Z>
+# 5. Nyalakan lagi; katalog BFF tersinkron ulang pada siklus berikut (ONLINE_CATALOG_SYNC_SECONDS)
+$DC up -d api-gateway etl
+chq <<< "SELECT job, argMax(watermark, updated_at) FROM efn_dwh.etl_watermark GROUP BY job FORMAT TSV"
+```
+
+Tidak perlu direset: `loyalty_events`/`competitor_prices` (sumber BFF, id sendiri), reservasi/earn loyalty POS (kunci
+UUID order POS). Redis menyimpan cache katalog (`ocat:`), quote (`oq:`) dan keranjang (`cart:`) ber-id produk Odoo
+lama → kosongkan bersama langkah 2: `$DC stop redis && docker volume rm efn_redis-data && $DC up -d redis` (sebelum
+langkah 5). Kunci API kanal online lama ikut hilang bersama DB →
+buat ulang (`odoo_online_smoke.py setup` atau [odoo-online-api-key.md](odoo-online-api-key.md)).
+
 ## 3c. Smoke E2E
 
 `bash scripts/smoke/run-e2e-smoke.sh` (±15 menit, dev saja; lihat `scripts/smoke/README.md`).

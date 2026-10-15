@@ -68,9 +68,60 @@ Keputusan memulihkan diambil Head IT. Estimasi: fetch base backup (ukuran DB / b
    PITR: tambahkan ke `$PGDATA/postgresql.auto.conf` → `recovery_target_time = '2026-10-05 10:15:00+07'`, `recovery_target_action = 'promote'`, `restore_command = '/usr/local/bin/efn-walg wal-fetch %f %p'`.
    Tanpa PITR: `restore_command` saja (replay sampai WAL terakhir).
 4. Arahkan service `postgres` ke volume baru (ubah `volumes:` lewat file override host sementara), `$DC up -d postgres`, tunggu promote (`SELECT pg_is_in_recovery();` = `f`).
-5. Verifikasi seperti §3 langkah 5, lalu `$DC up -d`. Uji POS sinkron, login OTP, saldo poin.
-6. **Segera** jalankan base backup baru (timeline baru): `sudo systemctl start efn-backup.service`.
-7. Post-mortem + perbarui runbook.
+5. **Catat titik pulih T** (UTC): target PITR, atau baris log postgres `last completed transaction was at log time …`
+   saat promote. Semua yang terjadi setelah T **hilang** dari PostgreSQL (Odoo **dan** BFF — satu cluster, jadi
+   keduanya konsisten satu sama lain) tetapi **masih ada** di data turunan di luar PostgreSQL. Sequence id Odoo/BFF mundur
+   ke T → id yang sudah dipakai sesudah T akan dipakai ulang (G18-QA-01/02).
+6. **Data turunan** (sebelum menyalakan `etl`, `api-gateway`, `odoo`) — `chq` = klien ClickHouse admin di container
+   (TLS, password dari secret, tidak di argv host):
+   ```bash
+   chq() { $DC exec -T clickhouse sh -c 'CLICKHOUSE_USER="${CLICKHOUSE_USER:-efn}" CLICKHOUSE_PASSWORD="$(cat /run/secrets/clickhouse_password)" clickhouse-client --host clickhouse --multiquery'; }
+   T='2026-10-05 03:15:00'   # UTC, titik pulih
+   chq <<SQL
+   SET mutations_sync = 2;
+   -- a) baris turunan transaksi yang hilang (versi > T) -> hapus; sisanya dimuat ulang penuh di langkah b
+   ALTER TABLE efn_dwh.fact_sales_line DELETE WHERE write_date > '$T';
+   ALTER TABLE efn_dwh.fact_pos_payment DELETE WHERE write_date > '$T';
+   ALTER TABLE efn_dwh.dim_outlet DELETE WHERE write_date > '$T';
+   ALTER TABLE efn_dwh.dim_company DELETE WHERE write_date > '$T';
+   ALTER TABLE efn_dwh.dim_gl_account DELETE WHERE write_date > '$T';
+   ALTER TABLE efn_dwh.dim_product DELETE WHERE version_ts > '$T';
+   ALTER TABLE efn_dwh.fact_gl_line DELETE WHERE version_ts > '$T';
+   ALTER TABLE efn_dwh.loyalty_events DELETE WHERE created_at > '$T';
+   ALTER TABLE efn_dwh.competitor_prices DELETE WHERE updated_at > '$T';
+   ALTER TABLE efn_dwh.fact_stock_snapshot DELETE WHERE snapshot_ts > '$T';
+   ALTER TABLE efn_dwh.fact_orderpoint_snapshot DELETE WHERE snapshot_ts > '$T';
+   -- b) watermark semua job inkremental -> epoch: muat ulang PENUH dari DB pulih (ReplacingMergeTree = idempoten).
+   --    Wajib, bukan "T - overlap": versi lama baris yang diubah setelah T bisa sudah ter-merge hilang di ClickHouse.
+   INSERT INTO efn_dwh.etl_watermark (job, watermark, rows_loaded, updated_at)
+   SELECT job, toDateTime64('1970-01-01 00:00:00', 6, 'UTC'), 0, now64(6) FROM efn_dwh.etl_watermark GROUP BY job;
+   SQL
+   ```
+   - **Jangan** mengubah `audit_log_copy`/`audit_log_line_copy`/`*_recon_*`/`loyalty_points_daily` (salinan
+     tamper-evident & riwayat = bukti). ⚠ **Celah terbuka (data-AI):** job `audit_copy` melanjutkan dari `max(id)`
+     tersalin → log audit Odoo baru ber-id ≤ id lama **tidak tersalin** dan rekonsiliasi audit akan anomali
+     (`EfnAuditReconAnomaly`) — sampai ada prosedur "epoch rantai" dari data-AI, catat jendela ini di register insiden;
+     jejak sink audit di Loki (`{stream="efn_audit_sink"}`) tetap berjalan.
+   - **Redis** (cache, bukan sumber kebenaran; prefiks `otp:` `dtok:` `rl:` `altcha:used:` `ms:` `cart:` `oq:` `ocat:`):
+     token/kuota/keranjang/quote/cache katalog yang dibuat setelah T menunjuk data yang hilang. Tidak ada user ACL
+     Redis dengan `FLUSHALL` (sengaja) → kosongkan volume AOF: `$DC stop redis && docker volume rm efn_redis-data &&
+     $DC up -d redis` (ACL dibangkitkan ulang dari secret). Efek: OTP/keranjang/quote berjalan harus diulang.
+   - **RabbitMQ**: pesan/DLQ yang menunjuk id setelah T → setelah naik, tinjau DLQ ([rabbitmq-dlq.md](rabbitmq-dlq.md));
+     consumer idempoten, tetapi kunci inbox event online memakai id Odoo lokal (G18-QA-01, perbaikan di odoo-engineer/BFF)
+     → event sah bisa tercatat `duplicate`; cocokkan status bagian online dengan Odoo (`online-resolve --action=sync`).
+   - **Katalog BFF** (`online_catalog_*`) dan event online ikut pulih konsisten dengan Odoo (cluster sama) — tidak perlu
+     reset. **Payment provider**: pembayaran setelah T ada di provider tetapi tidak di BFF → rekonsiliasi laporan
+     provider vs `payment_intent`, refund/selesaikan manual ([online-orders.md](online-orders.md)).
+   - `ETL_LOYALTY_RECON_NOT_BEFORE` **tidak dimajukan** di produksi (menyembunyikan temuan); temuan rekonsiliasi di
+     jendela (T, sekarang) ditinjau manual terhadap order POS offline yang tersinkron ulang.
+7. Nyalakan: `$DC up -d` (ETL terakhir: `$DC up -d etl` setelah `clickhouse-init` exit 0). Verifikasi seperti §3
+   langkah 5; uji POS sinkron, login OTP, saldo poin. Tunggu muat ulang penuh ETL (`v_etl_freshness` semua `ok`,
+   `etl_watermark` maju) lalu **satu siklus rekonsiliasi** loyalty (`ETL_LOYALTY_RECON_INTERVAL_SECONDS`) + audit;
+   tinjau `loyalty_recon_finding` & `EFN_AUDIT_RECON` sebelum membuka kembali kanal online (`ONLINE_ENABLED`).
+8. **Segera** jalankan base backup baru (timeline baru): `sudo systemctl start efn-backup.service`.
+9. Post-mortem + perbarui runbook.
+
+Reset DB Odoo di **dev** (bukan restore): [dev-stack-boot.md §3e](dev-stack-boot.md#reset-db-odoo).
 
 ## 5. Migrasi volume dari image alpine lama
 
