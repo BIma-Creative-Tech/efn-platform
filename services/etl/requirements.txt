@@ -1,6 +1,6 @@
 # Runtime ETL (Python 3.12). Versi di-pin; diaudit pip-audit di CI.
 # cryptography dihapus (SEC-16): ETL tidak lagi menurunkan member hash dari otp_pepper.
 psycopg[binary]==3.2.3
-clickhouse-connect==0.8.9
+clickhouse-connect==1.10.0
 # Publish privacy.erasure.completed (docs/04 §8.4) lewat amqps; versi sama dengan ai-ocr-worker.
 pika==1.3.2
