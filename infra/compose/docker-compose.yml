@@ -1530,6 +1530,10 @@ services:
       # deploy.sh mengaktifkan otomatis setelah grant sukses. Dev override: true.
       ETL_ENABLE_GL: ${ETL_ENABLE_GL:-false}
       ETL_AUDIT_COPY_ENABLED: ${ETL_AUDIT_COPY_ENABLED:-false}
+      # G18 (data-AI, epoch rantai): ETL_AUDIT_EPOCH_AUTO TETAP false di base/prod (restore produksi = penanda
+      # efn_audit.chain_epoch lewat ORM, backup-restore.md §4); jumlah log terbaru yang dicek identitasnya (1..1000).
+      ETL_AUDIT_EPOCH_AUTO: "false"
+      ETL_AUDIT_EPOCH_ANCHORS: ${ETL_AUDIT_EPOCH_ANCHORS:-20}
       # G14: rekonsiliasi ledger poin vs pos.order mulai dari go-live loyalty POS (UTC, YYYY-MM-DDTHH:MM:SSZ). Nilai dari
       # manifest rilis bertanda tangan (SEC-50, deploy-validate.sh); kosong = semua order dalam jendela lookback.
       ETL_LOYALTY_RECON_NOT_BEFORE: ${ETL_LOYALTY_RECON_NOT_BEFORE:-}

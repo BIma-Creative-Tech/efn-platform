@@ -265,6 +265,7 @@ exec 6>&-
 neg_man "40 config manifest multi-baris ditolak" "skema" '.config.RABBITMQ_STRICT_PERMISSIONS = "true\nIMAGE_ODOO=evil"'
 neg_man "41 kunci config manifest tidak dikenal ditolak" "skema" '.config.IMAGE_ODOO = "evil.example/odoo"'
 neg_man "101 saklar dev ODOO_ONLINE_MOCK di config manifest ditolak (G17)" "skema" '.config.ODOO_ONLINE_MOCK = "true"'
+neg_man "101b saklar dev ETL_AUDIT_EPOCH_AUTO di config manifest ditolak (G18)" "skema" '.config.ETL_AUDIT_EPOCH_AUTO = "true"'
 neg_man "42 manifest schema 1 (tanpa config) ditolak" "skema" '.schema = 1 | del(.config)'
 neg_man "43 config bukan string ditolak" "skema" '.config.ETL_ENABLE_GL = true'
 # shellcheck disable=SC2016 # literal $(id) disengaja
@@ -439,6 +440,10 @@ vc "128 LOYALTY_RESTORE_TOLERANCE_PCT=0 diterima" 0 production LOYALTY_RESTORE_T
 vc "129 LOYALTY_RESTORE_TOLERANCE_PCT=51 ditolak" 1 production LOYALTY_RESTORE_TOLERANCE_PCT=51
 vc "130 LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS=3649 ditolak (min 10 th)" 1 production LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS=3649
 vc "131 LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS=3650 diterima" 0 production LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS=3650
+vc "131b production ETL_AUDIT_EPOCH_AUTO=true ditolak (dev saja, G18)" 1 production ETL_AUDIT_EPOCH_AUTO=true
+vc "131c staging ETL_AUDIT_EPOCH_AUTO=true ditolak (dev saja, G18)" 1 staging ETL_AUDIT_EPOCH_AUTO=true
+vc "131d ETL_AUDIT_EPOCH_ANCHORS=20 diterima" 0 production ETL_AUDIT_EPOCH_ANCHORS=20
+vc "131e ETL_AUDIT_EPOCH_ANCHORS=1001 ditolak" 1 production ETL_AUDIT_EPOCH_ANCHORS=1001
 # SEC-129 (r11): modul Odoo wajib (efn_pos_refund_origin) harus `installed`
 mods() { printf '%b' "$1" | efn_odoo_modules_missing > /dev/null; }
 u "132 modul wajib installed -> lulus (SEC-129)" 0 mods 'efn_pos_refund_origin|installed\n'

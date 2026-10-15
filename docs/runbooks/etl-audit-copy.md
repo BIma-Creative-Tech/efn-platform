@@ -19,6 +19,27 @@ Log audit Odoo dan salinannya berbeda: log hilang/berubah di Odoo, celah `chain_
    salinan ClickHouse (`audit_log_copy`) sebagai bukti. Jangan mengubah tabel salinan (user ETL memang tanpa
    ALTER/DELETE).
 
+## Epoch rantai salinan audit (G18, data-AI) {#epoch}
+
+Setelah DB Odoo dipulihkan/di-reset, id `efn_audit_log` mundur dan dipakai ulang. ETL membandingkan identitas
+`ETL_AUDIT_EPOCH_ANCHORS` (default 20) log terbaru salinan dengan Odoo. Penanda `ir.config_parameter`
+`efn_audit.chain_epoch` berubah → **epoch baru** (rantai baru per company, salinan lama tetap utuh sebagai bukti).
+Divergensi **tanpa** penanda → salinan **diblokir** (fail-closed). `ETL_AUDIT_EPOCH_AUTO=true` (epoch otomatis) hanya
+dev; `deploy-validate` menolaknya di staging/production. Detail: `services/etl/README.md`.
+
+### EfnAuditEpochDivergenceBlocked (critical) {#efnauditepochdivergenceblocked}
+`EFN_AUDIT_EPOCH {"event":"divergence_blocked",...}`: log audit Odoo tidak cocok dengan salinan dan penanda tidak berubah.
+1. Ada restore/reset DB Odoo terencana (change request)? Ya → penanda lupa diubah: jalankan langkah penanda di
+   [backup-restore.md §4](backup-restore.md#4-disaster-recovery-produksi) langkah 6c; ETL membuat epoch baru pada
+   siklus berikut (`EfnAuditEpochNew`).
+2. Tidak ada restore → **insiden** ([security-incident.md](security-incident.md)): log audit Odoo ditulis ulang/dihapus.
+   Jangan mengubah penanda sebelum bukti diamankan (salinan ClickHouse + jangkar Loki `{stream="efn_audit_anchor"}`).
+
+### EfnAuditEpochNew (warning) {#efnauditepochnew}
+`EFN_AUDIT_EPOCH {"event":"new_epoch","epoch":N,"marker":"restore-<UTC>",...}`: cocokkan `marker` dengan change request
+restore. Perubahan penanda tercatat di log audit Odoo (diubah lewat ORM) dan sink audit Loki
+([audit-sink-alerts.md](audit-sink-alerts.md)). Tanpa restore terencana = insiden.
+
 ## EfnAuditCopyFailing (warning)
 `job=audit_copy gagal` ≥ 2 kali/jam. Log Odoo tetap aman, tetapi jejak eksternal tertunda.
 1. `$DC logs --tail=200 etl | grep -A20 'job=audit_copy gagal'`.

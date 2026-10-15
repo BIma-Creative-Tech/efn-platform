@@ -31,6 +31,34 @@ groups:
           description: "Salinan audit tamper-evident tidak berjalan (grant, versi efn_audit, ClickHouse). Log Odoo tetap aman, tetapi jejak eksternal tertunda."
           runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/etl-audit-copy.md#efnauditcopyfailing"
 
+  # G18 (data-AI, epoch rantai salinan audit): `EFN_AUDIT_EPOCH {"event":...}` dari efn_etl.audit_job, berjangkar di
+  # stream jangkar (promtail.yml tahap 3b). divergence_blocked = DB Odoo mundur (restore/reset) TANPA penanda
+  # efn_audit.chain_epoch -> salinan berhenti (fail-closed) -> page. new_epoch = epoch baru setelah penanda diubah
+  # (restore terencana) -> notifikasi (harus cocok dengan change request restore).
+  - name: efn-audit-epoch
+    interval: 1m
+    rules:
+      - alert: EfnAuditEpochDivergenceBlocked
+        expr: |
+          sum (count_over_time({stream="efn_audit_anchor", audit_event="epoch"} |= "EFN_AUDIT_EPOCH" |= `"event":"divergence_blocked"` [15m])) > 0
+        labels:
+          severity: critical
+          team: security
+        annotations:
+          summary: "ETL: salinan audit DIBLOKIR - log audit Odoo menyimpang dari salinan tanpa penanda epoch"
+          description: "DB Odoo dipulihkan/di-reset tanpa efn_audit.chain_epoch, atau log audit ditulis ulang. Salinan tamper-evident berhenti sampai diputuskan."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/etl-audit-copy.md#efnauditepochdivergenceblocked"
+      - alert: EfnAuditEpochNew
+        expr: |
+          sum (count_over_time({stream="efn_audit_anchor", audit_event="epoch"} |= "EFN_AUDIT_EPOCH" |= `"event":"new_epoch"` [1h])) > 0
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "ETL: epoch baru rantai salinan audit (restore DB Odoo)"
+          description: "Cocokkan dengan change request restore (backup-restore.md §4). Epoch tanpa restore terencana = insiden."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/etl-audit-copy.md#efnauditepochnew"
+
   # G13 (SEC-52 butir 1): DEAD-MAN ETL dari heartbeat data-AI (services/etl/efn_etl/heartbeat.py):
   # `<ts> INFO efn_etl.heartbeat EFN_ETL_HEARTBEAT job=<job> status=<ok|error|partial> ...` (logfmt). Dicocokkan
   # BERJANGKAR (logger efn_etl.heartbeat di awal baris), bukan substring. Absennya status=ok untuk job X selama ambang

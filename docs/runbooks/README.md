@@ -47,6 +47,7 @@ Layout host: `/opt/efn/{compose,traefik,observability,backup,minio,clickhouse,po
 | EfnOdooRpcGatewayDenied (filter BFF → Odoo `/json/2` menolak request, G17) | warning | [online-orders.md](online-orders.md#efnodoorpcgatewaydenied) |
 | EfnOnlineCsDeniedRepeated, EfnOnlineCsDualRole, EfnOnlineCsRefundVolumeHigh (wrapper CLI CS `efn-online-cs`, journald host, SEC-107/108) | warning / warning / warning | [online-orders.md](online-orders.md#cli-cs) |
 | EfnOnlineApiKeyRollbackFailed, EfnOnlineApiKeyOldKeyStillAccepted (timer `efn-rotate-online-key`, journald host, W-11) | critical / warning | [odoo-online-api-key.md](odoo-online-api-key.md#rollback-gagal) |
+| EfnAuditEpochDivergenceBlocked, EfnAuditEpochNew (epoch rantai salinan audit setelah restore DB Odoo, G18) | critical / warning | [etl-audit-copy.md](etl-audit-copy.md#epoch) |
 | EfnLoyaltyAnomalyCritical, EfnLoyaltyAnomalyWarning, EfnLoyaltyReconMissing, EfnLoyaltyReconFailing (Poin EFN, G13c SEC-61); EfnLoyaltyReconStale (Prometheus) | critical / warning / warning / warning / warning | [loyalty-anomaly.md](loyalty-anomaly.md) |
 
 Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-incident.md](security-incident.md).

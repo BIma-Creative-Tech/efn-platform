@@ -98,10 +98,21 @@ Keputusan memulihkan diambil Head IT. Estimasi: fetch base backup (ukuran DB / b
    SQL
    ```
    - **Jangan** mengubah `audit_log_copy`/`audit_log_line_copy`/`*_recon_*`/`loyalty_points_daily` (salinan
-     tamper-evident & riwayat = bukti). ⚠ **Celah terbuka (data-AI):** job `audit_copy` melanjutkan dari `max(id)`
-     tersalin → log audit Odoo baru ber-id ≤ id lama **tidak tersalin** dan rekonsiliasi audit akan anomali
-     (`EfnAuditReconAnomaly`) — sampai ada prosedur "epoch rantai" dari data-AI, catat jendela ini di register insiden;
-     jejak sink audit di Loki (`{stream="efn_audit_sink"}`) tetap berjalan.
+     tamper-evident & riwayat = bukti). Salinan audit melanjutkan di **epoch baru** (langkah c).
+   - **c) Epoch rantai salinan audit** (G18, data-AI; [etl-audit-copy.md#epoch](etl-audit-copy.md#epoch)) — setelah
+     postgres pulih, **sebelum** `odoo`/`etl` dinyalakan (container sekali pakai, tanpa trafik POS):
+     ```bash
+     # grant baca efn_etl di DB Odoo pulih (idempoten; sama dengan deploy.sh)
+     $DC exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U efn_odoo -d efn_odoo -f - < /opt/efn/etl-sql/odoo-readonly-grants.sql
+     # penanda epoch lewat ORM (bukan SQL) -> perubahan tercatat log audit Odoo + sink Loki
+     M="restore-$(date -u +%Y%m%dT%H%M%SZ)"
+     $DC run --rm --no-deps -T odoo odoo shell -d efn_odoo --no-http --log-level=warn <<PY
+     env['ir.config_parameter'].sudo().set_param('efn_audit.chain_epoch', '$M'); env.cr.commit()
+     PY
+     ```
+     Catat `M` di change request. Siklus ETL pertama: `EFN_AUDIT_EPOCH new_epoch` (alert `EfnAuditEpochNew`,
+     diharapkan). Tanpa langkah ini ETL memblokir salinan (`EfnAuditEpochDivergenceBlocked`, critical) — benar,
+     tetapi berarti langkah ini terlewat. `ETL_AUDIT_EPOCH_AUTO` **tidak** dipakai di produksi (ditolak deploy-validate).
    - **Redis** (cache, bukan sumber kebenaran; prefiks `otp:` `dtok:` `rl:` `altcha:used:` `ms:` `cart:` `oq:` `ocat:`):
      token/kuota/keranjang/quote/cache katalog yang dibuat setelah T menunjuk data yang hilang. Tidak ada user ACL
      Redis dengan `FLUSHALL` (sengaja) → kosongkan volume AOF: `$DC stop redis && docker volume rm efn_redis-data &&
