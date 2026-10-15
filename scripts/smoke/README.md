@@ -9,7 +9,7 @@ ETL, dan regresi negatif enkripsi. Hasil gelombang 8: `docs/testing/E2E_SMOKE_RE
 
 | File | Dijalankan di | Isi |
 |---|---|---|
-| `run-e2e-smoke.sh` | host (Git Bash/Linux) | orkestrator skenario `a b c d f e g l o` (default semua; `v` opsional), ringkasan PASS/FAIL, exit 1 bila gagal |
+| `run-e2e-smoke.sh` | host (Git Bash/Linux) | orkestrator skenario `a b c d f e g l p o` (default semua; `v` opsional), ringkasan PASS/FAIL, exit 1 bila gagal |
 | `bff_smoke.py` | container `python:3.12` di network `efn_edge` (klien publik, lewat Traefik) | Super-App/BFF: ALTCHA PoW, OTP, JWT, consent, upload foto sintetis (Pillow), DSAR |
 | `odoo_pos_smoke.py` | `odoo shell` di container `efn-odoo-1` | setup POS smoke (company FNB), `efn_otp_request/verify`, `sync_from_ui`, `efn_gateway_*`, cron erasure |
 
@@ -116,3 +116,14 @@ user `efn_online_rtl` lebih dulu), lalu `up -d --force-recreate api-gateway`.
   oleh manajer `smoke_online_mgr` → refund `approval_required` → CLI approve (peran `cs` ditolak, approver lain →
   settled); refund CS (`approval_required`, pembuat/peran cs ditolak), settle manual SEC-112; stok non-katalog 404;
   label pajak `PPN 11%`. Identitas/peran CLI disimulasikan lewat env `EFN_CS_OPERATOR`/`EFN_CS_ROLE` (dev).
+
+## Skenario `p` — G18 POS (docs/04 §9.9 K-18, L-23..L-26; review r11/re-review)
+Butuh DB Odoo baru (IDR `rounding = 1`) dengan `efn_pos_refund_origin` terpasang, migrasi 08, dan `.env` mode
+`ETL_LOYALTY_POINTS_MODE=payment`. Langkah Odoo `g18_*` di `odoo_pos_smoke.py`; probe RPC kasir di `odoo_rpc_smoke.py`
+(id target lewat pipe stdin yang sama, tanpa PII); rekonsiliasi harian hari ini lewat `etl_points_recon_smoke.py`
+(dijalankan di container ETL, read-only, `now` disimulasikan besok 07:00 WIB; dinilai: order berpoin RUN INI).
+- Rp1 + pajak bulat; redeem = pembayaran Poin EFN dgn pajak tetap; refund ke metode asal (EDC ditolak, tunai berlebih
+  ditolak); retur tanpa struk hanya tunai; L-26 hold -> BFF 409 -> restore_approve; barang excluded; draft nominal
+  poin salah dibuang; `is_change` palsu; `pos_enroll` usia 17+; probe kasir SEC-113/115/121/125/126.
+- Reset DB Odoo dev: reset juga salinan katalog BFF, mart ClickHouse sumber Odoo + watermark, dan event online lama
+  (E2E_SMOKE_REPORT G18-QA-01/02), lalu set `ETL_LOYALTY_RECON_NOT_BEFORE` di `.env`.

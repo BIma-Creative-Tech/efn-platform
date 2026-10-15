@@ -142,7 +142,9 @@ def cmd_login():
     result("auth.otp_request", s == 202 and body.get("challenge_id"), http=s, pow_s=round(time.time() - t0, 2))
     code = wait_otp(mask(PHONE), off)
     result("auth.otp_from_console_log", True, masked=mask(PHONE))
-    s, tok, _, _ = req("POST", "/v1/auth/otp/verify", body={"challenge_id": body["challenge_id"], "code": code, "age_confirmed": True})
+    s, tok, _, _ = req(
+        "POST", "/v1/auth/otp/verify", body={"challenge_id": body["challenge_id"], "code": code, "age_confirmed": True}
+    )
     ok = s == 200 and tok.get("token_type") == "Bearer" and tok.get("access_token")
     result("auth.otp_verify", ok, http=s, expires_in=(tok or {}).get("expires_in"))
     st["token"] = tok["access_token"]
@@ -210,8 +212,16 @@ def cmd_negatives():
     )
     # W-19 (Q-P3): tanpa pernyataan usia 17 th -> 400 age_confirmation_required, percobaan OTP tidak hangus
     s, b, _, _ = req("POST", "/v1/auth/otp/verify", body={"challenge_id": b1["challenge_id"], "code": "000000"})
-    result("neg.age_confirmation_required", s == 400 and (b.get("error") or {}).get("code") == "age_confirmation_required", http=s)
-    s, b, _, _ = req("POST", "/v1/auth/otp/verify", body={"challenge_id": b1["challenge_id"], "code": "000000", "age_confirmed": True})
+    result(
+        "neg.age_confirmation_required",
+        s == 400 and (b.get("error") or {}).get("code") == "age_confirmation_required",
+        http=s,
+    )
+    s, b, _, _ = req(
+        "POST",
+        "/v1/auth/otp/verify",
+        body={"challenge_id": b1["challenge_id"], "code": "000000", "age_confirmed": True},
+    )
     result("neg.otp_wrong", s == 400 and b.get("ok") is False and b.get("attempts_left") == 2, http=s, body=b)
     _, ch, _, _ = req("GET", "/v1/auth/challenge")
     s, b, _, _ = req("POST", "/v1/auth/otp/request", body={"phone": "6591234567", "altcha": solve_altcha(ch)})
@@ -254,6 +264,9 @@ def make_jpeg(name, price_text, seed, noisy=False):
     dx, dy, gap = (rnd >> 8) % 300, (rnd >> 20) % 200, 180 + (rnd >> 32) % 120
     d.text((30 + dx, 60 + dy), name, fill="black", font=font)
     d.text((30 + (rnd >> 40) % 500, 60 + dy + gap), price_text, fill="black", font=font)
+    small = ImageFont.load_default(size=36 + (rnd >> 52) % 20)
+    token = "".join(chr(65 + int(c, 16)) for c in seed)  # huruf saja (tidak terbaca sebagai harga)
+    d.text((40 + (rnd >> 60) % 700, 60 + dy + gap + 130 + (rnd >> 70) % 40), token, fill="black", font=small)
     if noisy:  # batang hitam -> confidence Tesseract < 0.80 -> tahap 2 VLM (Ollama)
         for i in range(24):
             x = (rnd >> (i * 5)) % 1100
@@ -387,7 +400,16 @@ def cmd_requests():
         result("dsar.receipt_status", False, reason="receipt belum ada (jalankan delete dulu)")
         return
     s, b, _, _ = req("GET", f"/v1/dsar/requests/{rid}", headers={"X-DSAR-Receipt": receipt})
-    keys = {"id", "type", "status", "requested_at", "scheduled_at", "completed_at"}
+    keys = {
+        "id",
+        "type",
+        "status",
+        "requested_at",
+        "scheduled_at",
+        "completed_at",
+        "open_online_orders",
+        "erasure_deadline",
+    }
     ok = s == 200 and isinstance(b, dict) and b.get("id") == rid and set(b) == keys
     result("dsar.receipt_status", ok, http=s, status=(b or {}).get("status") if isinstance(b, dict) else None)
     receipt_body = b
@@ -404,7 +426,15 @@ def cmd_requests():
     same = {"Sec-Fetch-Site": "same-origin"}
     path = f"/api/dsar/requests/{rid}"
     s, b, _, _ = req("GET", path, host=WEB_HOST, headers={**same, "Cookie": f"efn_dsar_receipt={receipt}"})
-    web_keys = {"id", "status", "requested_at", "scheduled_at", "completed_at"}
+    web_keys = {
+        "id",
+        "status",
+        "requested_at",
+        "scheduled_at",
+        "completed_at",
+        "open_online_orders",
+        "erasure_deadline",
+    }
     ok = s == 200 and isinstance(b, dict) and b.get("id") == rid and set(b) <= web_keys
     ok = ok and not any(p in json.dumps(b) for p in pii) and receipt not in json.dumps(b)
     result("web.dsar_receipt_status", ok, http=s, keys=sorted(b) if isinstance(b, dict) else None)

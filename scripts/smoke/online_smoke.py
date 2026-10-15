@@ -83,7 +83,9 @@ def cmd_login():
     off = b.log_offset()
     s, body, _, _ = b.req("POST", "/v1/auth/otp/request", body={"phone": PHONE, "altcha": altcha})
     code = b.wait_otp(b.mask(PHONE), off)
-    s, tok, _, _ = b.req("POST", "/v1/auth/otp/verify", body={"challenge_id": body["challenge_id"], "code": code, "age_confirmed": True})
+    s, tok, _, _ = b.req(
+        "POST", "/v1/auth/otp/verify", body={"challenge_id": body["challenge_id"], "code": code, "age_confirmed": True}
+    )
     st["token"] = tok["access_token"]
     st["phone_masked"] = b.mask(PHONE)
     save(st)
@@ -251,13 +253,6 @@ def cmd_checkout(label="main", negatives=True):
             http=s,
             code=code_of(body),
         )
-        s, body, _, _ = checkout(st, label, key=False)
-        b.result(
-            "o.checkout_without_key_400",
-            s == 400 and code_of(body) == "idempotency_key_required",
-            http=s,
-            code=code_of(body),
-        )
     s, body, _, _ = checkout(st, label)
     pay = (body or {}).get("payment") or {}
     part = ((body or {}).get("parts") or [{}])[0]
@@ -296,6 +291,17 @@ def cmd_checkout(label="main", negatives=True):
     s4, l4, _, _ = b.req("GET", "/v1/orders?limit=20", headers=auth(st))
     n = sum(1 for it in (l4 or {}).get("items", []) if it.get("order_id") == o["order_id"])
     b.result("o.checkout_single_order_in_list", s4 == 200 and n == 1, http=s4, occurrences=n)
+
+
+def cmd_checkout_nokey(label="main"):
+    st = load()
+    s, body, _, _ = checkout(st, label, key=False)
+    b.result(
+        "o.checkout_without_key_400",
+        s == 400 and code_of(body) == "idempotency_key_required",
+        http=s,
+        code=code_of(body),
+    )
 
 
 def cmd_pay(label="main", status="paid"):
@@ -408,6 +414,11 @@ def cmd_anti_enum(other_state, label="main"):
 
 def cmd_dsar_open():
     st = load()
+    # Quote sah disiapkan SEBELUM hapus akun dikonfirmasi: checkout dengan quote ini setelah 202 harus ditolak
+    # karena akun sedang dihapus (bukan karena quote tidak ada).
+    cat = catalog_state()
+    put_cart(st, [{"product_id": cat["bag"], "qty": 1}])
+    _, pre_q, _, _ = b.req("POST", "/v1/cart/quote", body={}, headers=auth(st))
     off = b.log_offset()
     s, r1, _, _ = b.req("POST", "/v1/me/reauth", body={}, headers=auth(st))
     code = b.wait_otp(st["phone_masked"], off)
@@ -438,6 +449,49 @@ def cmd_dsar_open():
         http=s,
         has_orders=has_orders,
         no_secret=no_secret,
+    )
+    # W-18 / L-21a: konfirmasi eksplisit (token step-up yang sama) -> 202 + batas paling lambat 14 hari
+    s, r4, _, _ = b.req(
+        "DELETE", "/v1/me?confirm_open_orders=true", headers={**auth(st), "X-Step-Up-Token": r2["step_up_token"]}
+    )
+    deadline = (r4 or {}).get("erasure_deadline")
+    b.result(
+        "o.dsar_delete_confirmed_202_deadline",
+        s == 202
+        and (r4 or {}).get("open_online_orders", 0) >= 1
+        and isinstance(deadline, str)
+        and r4.get("request_id"),
+        http=s,
+        open_online_orders=(r4 or {}).get("open_online_orders"),
+        erasure_deadline=deadline,
+    )
+    rid, receipt = (r4 or {}).get("request_id"), (r4 or {}).get("receipt_token")
+    # L-22: status lewat receipt (tanpa sesi) dan daftar permintaan member memuat batas yang sama
+    s5, r5, _, _ = b.req("GET", f"/v1/dsar/requests/{rid}", headers={"X-DSAR-Receipt": receipt or "x"})
+    s6, r6, _, _ = b.req("GET", "/v1/me/requests", headers=auth(st))
+    items = r6 if isinstance(r6, list) else (r6 or {}).get("items", [])
+    mine = next((i for i in items if isinstance(i, dict) and i.get("id") == rid), {})
+    b.result(
+        "o.dsar_status_erasure_deadline",
+        s5 == 200
+        and (r5 or {}).get("erasure_deadline") == deadline
+        and (r5 or {}).get("open_online_orders", 0) >= 1
+        and s6 == 200
+        and mine.get("erasure_deadline") == deadline,
+        receipt_http=s5,
+        receipt_deadline=(r5 or {}).get("erasure_deadline"),
+        list_http=s6,
+        list_deadline=mine.get("erasure_deadline"),
+    )
+    # Checkout baru selama permintaan hapus aktif ditolak (L-21a: 409 account_deleting)
+    s7, r7, _, _ = b.req(
+        "POST",
+        "/v1/orders",
+        body={"quote_id": (pre_q or {}).get("quote_id"), "accept_total": (pre_q or {}).get("amount_payable_total")},
+        headers={**auth(st), "Idempotency-Key": "smoke-deleting-" + uuid.uuid4().hex[:12]},
+    )
+    b.result(
+        "o.dsar_checkout_while_deleting_409", s7 == 409 and code_of(r7) == "account_deleting", http=s7, code=code_of(r7)
     )
 
 
@@ -644,6 +698,7 @@ if __name__ == "__main__":
         "catalog": cmd_catalog,
         "quote": cmd_quote,
         "checkout": cmd_checkout,
+        "checkout_nokey": cmd_checkout_nokey,
         "checkout_only": lambda label="main": cmd_checkout(label, negatives=False),
         "pay": cmd_pay,
         "wait": cmd_wait,
