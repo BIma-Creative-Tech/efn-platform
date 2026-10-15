@@ -1,8 +1,12 @@
 """Outbox event pesanan online Odoo -> BFF (docs/04 §10.5, K-ON1; pola outbox ``efn_pos_loyalty_ledger``).
 
 - Record dibuat DI DALAM transaksi perubahan state order (``efn.online.order._efn_emit``) -> event tidak pernah
-  hilang/terkirim untuk perubahan yang di-rollback. ``seq`` naik monoton per order; ``idempotency_key`` unik
-  ``online:<efn.online.order id>:<event>:<seq>``.
+  hilang/terkirim untuk perubahan yang di-rollback. ``seq`` naik monoton per order.
+- **G18-QA-01** (kontrak BFF bf5c5f9): ``idempotency_key`` = ``online:<platform_order_ref>:<event>:<seq>`` (tanpa id
+  lokal Odoo, yang terpakai ulang setelah DB dibuat ulang / dipulihkan) dan ``event_id`` = UUID v4 acak per baris
+  outbox (dibuat sekali saat enqueue, disimpan, unik). Retry mengirim ``event_id`` & kunci yang sama (dibaca dari
+  record). ``seq`` berbasis waktu (lihat ``efn.online.order._efn_next_seq``) sehingga tetap naik setelah restore.
+  ``409 event_conflict`` (kunci sama, isi beda) = final + pesanan ``review``.
 - **Payload tidak disimpan**; dibangun saat kirim dari order + snapshot state (tanpa PII, tanpa kode ambil).
 - Kirim ``POST <efn.bff_url>/v1/pos/online/order-events`` lewat TLS dengan verifikasi CA internal (helper
   ``efn.bff.client``: URL https wajib, CA ``EFN_CA_FILE``, tanpa redirect) + header ``X-EFN-Service-Key`` +
@@ -22,6 +26,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from datetime import timedelta
 
 import requests
@@ -73,6 +78,11 @@ def read_event_hmac_secret():
     return secret.encode("utf-8")
 
 
+def event_key(platform_order_ref, event, seq):
+    """Kunci idempotensi event (G18-QA-01): tanpa id lokal Odoo (format divalidasi BFF ``KEY_RE``)."""
+    return f"online:{platform_order_ref}:{event}:{seq}"
+
+
 def sign_body(secret, timestamp, raw_body):
     message = str(timestamp).encode("ascii") + b"." + raw_body
     return hmac.new(secret, message, hashlib.sha256).hexdigest()
@@ -96,6 +106,8 @@ class EfnOnlineEventOutbox(models.Model):
     initiator = fields.Selection([("bff", "bff"), ("odoo", "odoo")], readonly=True)
     occurred_at = fields.Datetime(required=True, readonly=True, default=fields.Datetime.now)
     idempotency_key = fields.Char(required=True, readonly=True, copy=False)
+    # G18-QA-01: identitas event global (bukan id lokal); dibuat sekali saat enqueue, dipakai ulang saat retry.
+    event_id = fields.Char(required=True, readonly=True, copy=False, index=True)
     state = fields.Selection(
         [("pending", "Menunggu"), ("done", "Terkirim"), ("failed", "Gagal")],
         required=True,
@@ -109,12 +121,14 @@ class EfnOnlineEventOutbox(models.Model):
     done_at = fields.Datetime(readonly=True)
 
     _idempotency_key_unique = models.Constraint("unique (idempotency_key)", "Kunci idempotensi event harus unik.")
+    _event_id_unique = models.Constraint("unique (event_id)", "event_id event harus unik.")
     _order_seq_unique = models.Constraint("unique (order_id, seq)", "seq event harus unik per pesanan.")
 
     # ---------------------------------------------------------------- enqueue
     @api.model
     def _efn_enqueue(self, order, event, seq, refund=None):
         refund = refund or self.env["efn.online.refund"]
+        event_id = str(uuid.uuid4())
         record = self.sudo().create(
             {
                 "company_id": order.company_id.id,
@@ -124,7 +138,8 @@ class EfnOnlineEventOutbox(models.Model):
                 "seq": seq,
                 "state_snapshot": order.state,
                 "initiator": refund.initiator or False,
-                "idempotency_key": f"online:{order.id}:{event}:{seq}",
+                "event_id": event_id,
+                "idempotency_key": event_key(order.platform_order_ref, event, seq),
             }
         )
         self._efn_trigger()
@@ -159,6 +174,7 @@ class EfnOnlineEventOutbox(models.Model):
         payload = {
             "schema_version": 1,
             "idempotency_key": self.idempotency_key,
+            "event_id": self.event_id,
             "seq": self.seq,
             "platform_order_ref": order.platform_order_ref,
             "checkout_ref": order.checkout_ref,
@@ -272,10 +288,28 @@ class EfnOnlineEventOutbox(models.Model):
             )
             _logger.info("EFN online outbox %s (%s seq %s) -> %s", self.id, self.event, self.seq, status)
             return
+        if status == 409 and self._efn_error_code(response) == "event_conflict":
+            # G18-QA-01: BFF punya event berkunci sama dengan isi berbeda (mis. Odoo dipulihkan) -> final + review.
+            self._efn_finish("failed", "event_conflict")
+            order = self.order_id.sudo()
+            if order.state not in ("review", "picked_up", "cancelled"):
+                order._efn_set_review("event_conflict")
+            return
         if status in FINAL_HTTP:
             self._efn_finish("failed", f"http_{status}")
             return
         self._efn_retry_or_fail(f"http_{status}")
+
+    @staticmethod
+    def _efn_error_code(response):
+        """Kode error snake_case dari body BFF (``{"error": {"code": ...}}``); selain itu None."""
+        try:
+            data = response.json()
+        except ValueError:
+            return None
+        error = data.get("error") if isinstance(data, dict) else None
+        code = error.get("code") if isinstance(error, dict) else None
+        return code if isinstance(code, str) and re.fullmatch(r"[a-z_]{1,64}", code) else None
 
     def _efn_max_hours(self):
         raw = self.env["ir.config_parameter"].sudo().get_param("efn_online.outbox_max_hours", DEFAULT_MAX_HOURS)

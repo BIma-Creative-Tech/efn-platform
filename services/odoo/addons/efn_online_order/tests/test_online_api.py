@@ -624,7 +624,7 @@ class TestEfnOnlinePaidCancelRefund(EfnOnlineCommon):
         result = self.order_api().efn_online_status("TST", [part, unknown])
         self.assertEqual(result[0]["platform_order_ref"], part)
         self.assertEqual(result[0]["state"], "placed")
-        self.assertEqual(result[0]["seq"], 1)
+        self.assertEqual(result[0]["seq"], self.record(part).event_seq)
         self.assertEqual(result[0]["refunds"], [])
         self.assertEqual(result[1], {"platform_order_ref": unknown, "state": "absent"})
         with self.assertRaises(UserError):

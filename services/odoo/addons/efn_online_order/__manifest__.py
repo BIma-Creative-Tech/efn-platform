@@ -2,7 +2,7 @@
     "name": "EFN Online Order (kanal Super-App)",
     "summary": "E-28: kanal penjualan online per PT lewat BFF (/json/2 terfilter): katalog, quote, SO idempoten, "
     "saga bayar-konfirmasi-ambil, refund per SO, outbox event bertanda tangan HMAC.",
-    "version": "19.0.1.0.0",
+    "version": "19.0.1.1.0",
     "category": "EFN/Sales",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031): hanya Odoo CE 19 + efn_*.

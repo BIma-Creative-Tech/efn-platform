@@ -1455,3 +1455,14 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         self.assertEqual(held.state, "hold")
         with self.assertRaises(UserError):
             held.with_user(self._manager("efn_l26_mgr3")).action_efn_restore_approve()
+
+    def test_qa01_release_key_not_local_id(self):
+        """G18-QA-01: kunci outbox release memakai id BFF reservasi (UUID), bukan id lokal Odoo."""
+        uuid = self.create_random_uid()
+        self._reserve(uuid)
+        reservation = self._reservation(uuid)
+        self.responses[RELEASE] = EfnBffError("bff_timeout")
+        self.config.efn_loyalty_redeem_release(uuid)
+        release = self._outbox(kind="redeem_release").filtered(lambda r: r.reservation_id == reservation)
+        self.assertEqual(release.idempotency_key, f"pos_release:{BFF_RES_ID}")
+        self.assertNotEqual(release.idempotency_key, f"pos_release:{reservation.id}")

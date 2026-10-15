@@ -399,7 +399,7 @@ class PosOrder(models.Model):
                         "company_id": reservation.company_id.id,
                         "order_id": self.id,
                         "kind": "redeem_release",
-                        "idempotency_key": f"pos_release:{reservation.id}",
+                        "idempotency_key": reservation._efn_release_key(),
                         "reservation_id": reservation.id,
                     }
                 )
@@ -596,7 +596,7 @@ class PosOrder(models.Model):
                     "company_id": reservation.company_id.id,
                     "order_id": order.id if keep_order_link else False,
                     "kind": "redeem_release",
-                    "idempotency_key": f"pos_release:{reservation.id}",
+                    "idempotency_key": reservation._efn_release_key(),
                     "reservation_id": reservation.id,
                 }
             )

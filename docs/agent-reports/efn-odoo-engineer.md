@@ -843,3 +843,28 @@ Dasar: bagian "Re-review G18" di `docs/reviews/SECURITY_REVIEW_2026-10-12_r11.md
 - CI: `EFN_TOUR_MIN_TESTS` 27 → 29.
 - Deploy: tambahkan cek `installed` di atas ke `deploy-validate` (devsecops).
 - Residual SEC-119 (ditutup setelah commit 64e10d6): pada metode Poin EFN, `journal_id` dan `outstanding_account_id` hanya bisa diubah admin (`base.group_system`), dan dibekukan untuk semua non-superuser bila metode sudah punya pembayaran. Test: `test_sec119_points_accounting_mapping_admin_only_and_frozen`.
+
+---
+
+# G18-QA-01: kunci idempotensi event tanpa id lokal (15 Okt 2026)
+
+Tanpa commit/push. Mengikuti kontrak BFF bf5c5f9: `KEY_RE` menerima `online:<uuid>:<event>:<seq>`, dedup memakai kunci stabil + `event_id` + sidik isi, dan event dengan `seq <= last_seq` diabaikan.
+
+- **`efn_online_order` 19.0.1.1.0:**
+  - **Kunci:** `idempotency_key` = `online:<platform_order_ref>:<event>:<seq>`, tanpa id lokal Odoo.
+  - **`event_id`:** UUID v4 per baris outbox, dibuat sekali saat enqueue, disimpan dengan constraint unik, dan dikirim di payload. Retry membaca dari record sehingga `event_id` dan kunci yang dikirim sama persis.
+  - **`seq`:** `max(event_seq + 1, detik sejak 2026-01-01 UTC)`. Ini pilihan paling aman: tidak ada panggilan jaringan di dalam transaksi perubahan state, dan tetap naik setelah DB dipulihkan meskipun `event_seq` ikut mundur. Alternatif ditolak: watermark dari BFF (BFF mati berarti state tidak bisa berubah) dan watermark lokal (ikut hilang saat restore).
+    - Asumsi: jam server disinkron NTP. Event dalam detik yang sama memakai +1, sehingga seq bisa mendahului jam beberapa detik; aman selama restore lebih lama dari itu.
+    - Muat 9 digit sampai ~2057.
+  - **`409 event_conflict`:** outbox `failed` + pesanan `review` (kecuali sudah final/review); 409 lain tetap final biasa.
+  - **Migrasi:** pre-migrate mengisi `event_id` (`gen_random_uuid`) sebelum constraint dibuat, dan mengganti kunci event `pending` ke format baru.
+- **Loyalty POS:** kunci outbox release = `pos_release:<bff_reservation_id>` (`_efn_release_key`), bukan id lokal reservasi. Kunci earn/commit/reverse sudah memakai uuid order.
+- **Test:**
+  - payload/kunci/`event_id` (UUID v4, sama dengan record);
+  - retry dengan `event_id` dan kunci yang sama;
+  - `event_id` unik dan `seq` naik ketat;
+  - simulasi restore (event & `event_seq` mundur) menghasilkan seq > maksimum yang terkirim;
+  - `409 event_conflict` → review, 409 lain tidak mengubah state;
+  - `efn_online_status` mengikuti `event_seq`;
+  - kunci release loyalty = id BFF.
+- **Catatan QA:** `scripts/smoke/online_smoke.py` (event sintetis langsung ke BFF) masih memakai `online:<nonce>:ready:1` dan `seq` 1. BFF tetap menerima format lama.
