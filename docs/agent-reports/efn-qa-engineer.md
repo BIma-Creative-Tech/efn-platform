@@ -526,3 +526,35 @@ Detail di `docs/testing/E2E_SMOKE_REPORT.md` §G18. Dijalankan di stack dev nyat
 - Rotasi key via systemd di host nyata.
 - Housekeeping Metabase dan TTL ClickHouse pada data nyata.
 - UI jalur POS ↔ SO online.
+
+## G18.7 Run konfirmasi sebelum PR (2026-10-18, HEAD `bea9be4`)
+- **Suite Odoo pola CI** (DB uji terpisah):
+  - unit: **501 test, 0 failed / 0 error / 0 ERROR**;
+  - `check-odoo-deps`: 17 modul, 0 terlarang;
+  - `efn_setup_security` install-after: exit 0;
+  - tour: **29/29**, 0 skip browser.
+- **Stack dev:**
+  - rebuild odoo, api-gateway, etl;
+  - `-u efn_online_order` (19.0.1.1.0), `efn_pos_loyalty_ledger`, `efn_pos_otp_gate`: 0 ERROR;
+  - migrasi 08 jalan;
+  - ETL di epoch audit 1, tanpa `divergence_blocked`.
+- **`online_smoke.py`:** event sintetis memakai kunci `online:<platform_order_ref>:<event>:<seq>` + `event_id`. Skenario baru:
+  - kunci sama dengan isi berbeda → 409 `event_conflict`;
+  - kunci lama (id lokal Odoo) milik bagian lain → diproses + anomali `odoo_event_key_reused`.
+- **Smoke penuh: PASS=307, FAIL=0.**
+
+  | Tahap | PASS/FAIL |
+  |---|---|
+  | a | 22/0 |
+  | b | 17/0 |
+  | c | 15/0 |
+  | d | 7/0 |
+  | f | 6/0 |
+  | e | 24/0 |
+  | g | 19/0 |
+  | l | 43/0 |
+  | p | 31/0 |
+  | o | 123/0 |
+
+- **Status temuan:** G18-QA-01 dan G18-QA-02 ditutup. Tidak ada bug baru.
+- **Catatan:** Docker Desktop di mesin dev berhenti sendiri dua kali (15 Okt); run diulang penuh setelah stack di-recreate.

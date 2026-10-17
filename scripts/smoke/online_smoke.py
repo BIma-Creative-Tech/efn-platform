@@ -618,9 +618,11 @@ def cmd_web_flow():
 
 
 # ------------------------------------------------------------------- event Odoo -> BFF (jaringan internal)
-def cmd_events(part_id, order_id):
+def cmd_events(part_id, order_id, legacy_key=""):
     """Dijalankan di network efn_internal dengan /s/{efn_ca_crt,odoo_bff_api_key,odoo_online_event_hmac}.txt
-    di-mount read-only (secret dibaca di container, tidak dicetak). §10.5: service key + HMAC + replay 300 s."""
+    di-mount read-only (secret dibaca di container, tidak dicetak). §10.5: service key + HMAC + replay 300 s.
+    G18-QA-01: kunci event `online:<platform_order_ref>:<event>:<seq>` + `event_id` uuid; seq berbasis waktu.
+    `legacy_key` = kunci format lama (id lokal Odoo) milik bagian LAIN yang sudah tercatat di BFF (simulasi restore)."""
     import hmac
     import http.client
     import ssl
@@ -634,7 +636,7 @@ def cmd_events(part_id, order_id):
         ts = int(time.time()) if t is None else t
         sig = hmac.new(secret.encode(), f"{ts}.".encode() + raw, hashlib.sha256).hexdigest()
         if tamper:
-            raw = raw.replace(b'"seq":1', b'"seq":9')
+            raw = raw.replace(b'"seq":1,', b'"seq":9,')
         h = {"Content-Type": "application/json"}
         if key:
             h["X-EFN-Service-Key"] = key
@@ -650,20 +652,24 @@ def cmd_events(part_id, order_id):
         except ValueError:
             return r.status, None
 
-    nonce = int(time.time()) % 900000 + 100000
-    ev = {
-        "schema_version": 1,
-        "idempotency_key": f"online:{nonce}:ready:1",
-        "seq": 1,
-        "platform_order_ref": part_id,
-        "checkout_ref": order_id,
-        "channel_code": CHANNEL,
-        "company_code": "RTL",
-        "event": "ready",
-        "state": "ready",
-        "occurred_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "refund": None,
-    }
+    def event(evname, state, seq, **extra):
+        return {
+            "schema_version": 1,
+            "idempotency_key": f"online:{part_id}:{evname}:{seq}",
+            "event_id": str(uuid.uuid4()),
+            "seq": seq,
+            "platform_order_ref": part_id,
+            "checkout_ref": order_id,
+            "channel_code": CHANNEL,
+            "company_code": "RTL",
+            "event": evname,
+            "state": state,
+            "occurred_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "refund": None,
+            **extra,
+        }
+
+    ev = event("ready", "ready", 1)
     res = {
         "unsigned": post(ev, sign=False),
         "wrong_secret": post(ev, secret="x" * 64),
@@ -683,12 +689,45 @@ def cmd_events(part_id, order_id):
         body=b1,
     )
     b.result("o.event_duplicate_idempotent", s2 == 200 and (b2 or {}).get("status") == "duplicate", http=s2, body=b2)
-    s, body = post({**ev, "idempotency_key": f"online:{nonce}:ready:2", "checkout_ref": str(uuid.uuid4())})
+    s, body = post({**event("ready", "ready", 2), "checkout_ref": str(uuid.uuid4())})
     b.result("o.event_unknown_checkout_404", s == 404, http=s, code=code_of(body))
-    s, body = post({**ev, "idempotency_key": f"online:{nonce}:ready:3", "company_code": "FNB"})
+    s, body = post(event("ready", "ready", 3, company_code="FNB"))
     b.result(
         "o.event_company_mismatch_409", s == 409 and code_of(body) == "company_mismatch", http=s, code=code_of(body)
     )
+    # G18-QA-01: kunci sama (ref + event + seq + event_id), isi berbeda -> 409 event_conflict (bukan duplikat diam)
+    now_seq = int(time.time()) - 1767225600 + 100000  # di depan seq berbasis waktu Odoo (detik sejak 2026-01-01)
+    base = event("ready", "ready", now_seq)
+    s1, b1 = post(base)
+    s2, b2 = post({**base, "state": "review"})
+    b.result(
+        "o.event_same_key_other_payload_409",
+        s1 == 200 and s2 == 409 and code_of(b2) == "event_conflict",
+        first=(s1, (b1 or {}).get("status")),
+        second=(s2, code_of(b2)),
+    )
+    # G18-QA-01: restore DB Odoo -> id lokal terpakai ulang: kunci lama milik bagian lain tetap diproses + anomali
+    if legacy_key:
+        off = b.log_offset()
+        s, body = post({**event("picked_up", "picked_up", now_seq + 1), "idempotency_key": legacy_key})
+        anomaly = False
+        for _ in range(20):
+            with open(b.LOG, "rb") as fh:
+                fh.seek(off)
+                text = fh.read().decode("utf-8", "replace")
+            if 'EFN_ONLINE_ANOMALY {"kind":"odoo_event_key_reused"' in text and part_id in text:
+                anomaly = True
+                break
+            time.sleep(0.5)
+        b.result(
+            "o.event_legacy_key_reused_processed_with_anomaly",
+            s == 200 and (body or {}).get("status") in ("applied", "ignored_stale") and anomaly,
+            http=s,
+            status=(body or {}).get("status"),
+            anomaly=anomaly,
+        )
+    else:
+        b.result("o.event_legacy_key_reused_processed_with_anomaly", False, reason="tidak ada kunci lama di BFF")
 
 
 if __name__ == "__main__":

@@ -807,11 +807,14 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   check "o.ops_refund_approve_audit" "$([[ "$r" == *'refund_approve:rejected_role:smoke-cs-op/smoke'* && "$r" == *'refund_approve:odoo_done:smoke-cs-sup/smoke'* ]] && echo 1 || echo 0)" "$r"
   opy "$pc" c wait opc cancelled cancelled 60
 
+  # G18-QA-01: kunci event format lama (id lokal Odoo) milik bagian LAIN yang sudah tercatat BFF = simulasi restore
+  local legacy
+  legacy="$(psql_platform -c "select idempotency_key from platform.online_order_event where idempotency_key ~ '^online:[0-9]+:[a-z_]+:[0-9]+$' and part_id <> '$part' order by received_at desc limit 1")"
   # 5. Event Odoo -> BFF: HMAC salah / tanpa tanda tangan / di luar window / body diubah -> 401; duplikat & seq lama
   MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal -v "${WORK_W}:/work" \
     -v "${SECRETS_W}/efn_ca_crt.txt:/s/efn_ca_crt.txt:ro" -v "${SECRETS_W}/odoo_bff_api_key.txt:/s/odoo_bff_api_key.txt:ro" \
     -v "${SECRETS_W}/odoo_online_event_hmac.txt:/s/odoo_online_event_hmac.txt:ro" \
-    "$PY_IMAGE" python /work/online_smoke.py events "$part" "$main_oid" 2>&1 | grep '^SMOKE_RESULT' | tee -a "$RESULTS" || true
+    -e SMOKE_BFF_LOG=/work/bff.log "$PY_IMAGE" python /work/online_smoke.py events "$part" "$main_oid" "$legacy" 2>&1 | grep '^SMOKE_RESULT' | tee -a "$RESULTS" || true
 
   # 6. Kontrak FE <-> BFF lewat route handler Next.js (https://app.efn.local/api/*)
   opy "$pw" w web_flow

@@ -873,3 +873,64 @@ dev penuh. Pelaksana: efn-qa-engineer. Tanpa commit/push.
 - Housekeeping Metabase harian dan TTL kolom ClickHouse 5 th/90 h pada data nyata.
 - Jalur POS ↔ SO online `efn_online_pos_sale` lewat UI.
 - Akrual jurnal liabilitas poin (Q-F18-3).
+
+## G18.8 Run konfirmasi sebelum PR (15 Okt 2026, HEAD `bea9be4`)
+
+Perubahan sejak run 305/0:
+- **G18-QA-01, BFF** (`bf5c5f9`): dedup event memakai `odoo-ev:<platform_order_ref>:<event>:<seq>[:<event_id>]` dan sidik
+  isi. Kunci sama dengan isi berbeda menghasilkan `409 event_conflict`. Kunci lama yang terpakai ulang diproses dengan
+  anomali `odoo_event_key_reused`.
+- **G18-QA-01, Odoo** (`bea9be4`): kunci `online:<platform_order_ref>:<event>:<seq>`, `event_id` uuid persisten, dan seq
+  berbasis waktu.
+- **Epoch rantai audit** di ETL dan ops (`a769202`, `b817aa8`).
+- **Runbook reset dev dan DR** (`fd6d862`).
+
+**1. Suite Odoo pola CI** (image dibangun dari HEAD, PostgreSQL 16.6 terpisah)
+
+| Bagian | Hasil |
+|---|---|
+| Unit | 16 modul `EFN_TEST_MODULES` (termasuk `efn_online_pos_sale` + `pos_sale`, `efn_pos_refund_origin`) + `sale_stock`, tag `efn`: **501 test, 0 failed, 0 error, 0 baris ERROR** |
+| `check-odoo-deps` | 17 modul, 0 terlarang |
+| `efn_setup_security` (install-after) | exit 0 |
+| Tour | 6 modul `EFN_TOUR_MODULES`, tag `efn_tour`: **29 test, 0 failed, 0 error, 0 ERROR, 0 skip browser** |
+
+**2. Stack dev**
+- Image odoo, api-gateway, dan etl dibangun ulang.
+- `-u efn_online_order` (19.0.1.1.0), `efn_pos_loyalty_ledger`, `efn_pos_otp_gate` selesai dengan exit 0 dan 0 ERROR.
+- Migrasi 08 (versi diperluas) exit 0; grant ETL diulang.
+- ETL berjalan di **epoch audit 1** (`job=audit_copy … epoch=1`, status ok, tanpa `divergence_blocked`).
+- Docker Desktop sempat mati di tengah run pertama. Stack dinyalakan ulang dan di-recreate penuh (sidecar `-tls` bersama
+  service utamanya). Network uji lama `efn-tourci-*` dibersihkan.
+
+**3. Smoke `online_smoke.py events` dengan format kunci baru**
+
+| Kasus | Hasil |
+|---|---|
+| Tanpa tanda tangan, secret salah, di luar window ±600 s, body diubah, tanpa service key | 401 |
+| seq lama | `ignored_stale` |
+| Duplikat (event_id sama) | `duplicate` |
+| `checkout_ref` asing | 404 |
+| PT beda | 409 `company_mismatch` |
+| **Baru:** kunci sama (ref + event + seq + event_id) dengan isi berbeda | **409 `event_conflict`** |
+| **Baru:** kunci format lama (id lokal) milik bagian lain yang sudah tercatat BFF (simulasi restore) | diproses (200) + anomali **`odoo_event_key_reused`** di log BFF |
+
+**4. Smoke penuh** `a b c d f e g l p o` (run 18 Okt 2026): **PASS=307, FAIL=0**.
+
+| Tahap | PASS/FAIL |
+|---|---|
+| a | 22/0 |
+| b | 17/0 |
+| c | 15/0 |
+| d | 7/0 |
+| f | 6/0 |
+| e | 24/0 |
+| g | 19/0 |
+| l | 43/0 |
+| p | 31/0 |
+| o | 123/0 |
+
+Tahap `o` bertambah 2 cek (`event_same_key_other_payload_409`, `event_legacy_key_reused_processed_with_anomaly`). Rekonsiliasi harian Poin EFN (mode payment): 0 selisih untuk order run ini.
+
+Docker Desktop dua kali berhenti sendiri di tengah run pada 15 Okt. Run ke-6 terhenti di tahap `o` dengan **296 PASS / 0 FAIL** sampai titik itu (termasuk ketujuh cek event baru). Run ini lalu diulang penuh setelah stack di-recreate.
+
+**Bug produk baru: tidak ada.** Temuan G18-QA-01 (kunci event) dan G18-QA-02 (runbook reset) **ditutup**: perbaikannya terverifikasi di runtime, dan runbook reset/DR sudah ada (`fd6d862`).
