@@ -42,7 +42,7 @@ jobs:
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository &&
        vars.STAGING_DEPLOY_ENABLED == 'true')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Tag v*: menunggu Build & Push commit yang sama (yang sendiri menunggu CI + Security, SEC-80) selesai.
     timeout-minutes: 120
     permissions:
@@ -125,7 +125,7 @@ jobs:
   deploy:
     name: Deploy ${{ needs.resolve.outputs.environment }} (${{ needs.resolve.outputs.image_tag }})
     needs: resolve
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # id-token: write HANYA untuk cosign sign-blob keyless atas bundel rilis (SEC-36); diverifikasi efn-deploy di host.
     permissions:
       contents: read

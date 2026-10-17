@@ -27,7 +27,7 @@ jobs:
   skipped-notice:
     name: CodeQL dilewati (code scanning tidak tersedia)
     if: vars.CODE_SCANNING_ENABLED != 'true' && github.event.repository.visibility != 'public'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions: {}
     steps:
       - name: Notice
@@ -40,7 +40,7 @@ jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
     if: vars.CODE_SCANNING_ENABLED == 'true' || github.event.repository.visibility == 'public'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       security-events: write

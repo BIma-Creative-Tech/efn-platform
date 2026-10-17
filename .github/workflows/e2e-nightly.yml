@@ -3,7 +3,7 @@
 # secret DUMMY dari scripts/gen-secrets.sh (tidak ada secret GitHub yang dipakai), memasang modul Odoo efn_*, lalu
 # menjalankan scripts/smoke/run-e2e-smoke.sh dan mengunggah hasilnya. Semua data = fiktif; stack dihancurkan di akhir.
 #
-# Runner: default ubuntu-latest. Stack penuh butuh ±12-16 GB RAM; repo privat (runner 2 vCPU/7 GB) sebaiknya memakai
+# Runner: default ubuntu-24.04. Stack penuh butuh ±12-16 GB RAM; repo privat (runner 2 vCPU/7 GB) sebaiknya memakai
 # runner self-hosted/larger lewat variable repo E2E_RUNNER (mis. "self-hosted" atau label larger runner).
 # Semua `uses:` dipin ke commit SHA 40 karakter (komentar = versi).
 name: E2E smoke (nightly)
@@ -33,7 +33,7 @@ jobs:
     # memakai runner GitHub-hosted. Jadwal hanya aktif bila variable E2E_NIGHTLY_ENABLED=true (disarankan bersama
     # E2E_RUNNER self-hosted, menit gratis); workflow_dispatch manual selalu boleh.
     if: github.event_name == 'workflow_dispatch' || vars.E2E_NIGHTLY_ENABLED == 'true'
-    runs-on: ${{ vars.E2E_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ vars.E2E_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 150
     permissions:
       contents: read

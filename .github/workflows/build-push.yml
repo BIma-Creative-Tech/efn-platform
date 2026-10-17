@@ -62,7 +62,7 @@ jobs:
   scan-pr:
     name: scan ${{ matrix.service }}
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     strategy:
@@ -122,7 +122,7 @@ jobs:
   gate:
     name: Gate (CI & Security hijau untuk commit ini)
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # CI terlama (Odoo test/tour) <= 45 menit per job, paralel; jeda polling 30 dtk. Menunggu = menit runner terpakai.
     timeout-minutes: 85
     permissions:
@@ -143,7 +143,7 @@ jobs:
     name: ${{ matrix.service }}
     needs: gate
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # SEC-94 (r9): hanya izin yang dipakai di paket gratis. `security-events: write` (upload SARIF) dan
     # `attestations: write` (attest-build-provenance) TIDAK diminta: kedua langkah itu kondisional
     # (CODE_SCANNING_ENABLED / ATTESTATIONS_ENABLED) dan tidak aktif di repo privat akun pribadi. Saat variable itu

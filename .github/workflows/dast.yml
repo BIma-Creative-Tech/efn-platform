@@ -20,7 +20,7 @@ jobs:
     if: >-
       vars.STAGING_DOMAIN != '' &&
       (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # STAGING_DOMAIN adalah repository variable (bukan environment-scoped) agar bisa dipakai di matrix
     strategy:
       fail-fast: false

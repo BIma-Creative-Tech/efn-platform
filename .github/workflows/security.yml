@@ -41,7 +41,7 @@ env:
 jobs:
   gitleaks:
     name: Secret scan (gitleaks)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: read
@@ -77,7 +77,7 @@ jobs:
 
   semgrep:
     name: SAST (semgrep)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       security-events: write   # hanya terpakai bila CODE_SCANNING == 'true'
@@ -123,7 +123,7 @@ jobs:
 
   trivy-fs:
     name: Trivy filesystem (vuln, secret, misconfig)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       security-events: write   # hanya terpakai bila CODE_SCANNING == 'true'
@@ -183,7 +183,7 @@ jobs:
     if: >-
       github.event_name == 'pull_request' &&
       (vars.CODE_SCANNING_ENABLED == 'true' || github.event.repository.visibility == 'public')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: read
@@ -204,7 +204,7 @@ jobs:
     # kustom, saat ini tidak ada). Hardening compose ditegakkan CI job `infra`: check-encryption.sh, port publish,
     # token DNS Traefik, secrets.list.
     name: "IaC (checkov: Dockerfile, GitHub Actions)"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       security-events: write   # hanya terpakai bila CODE_SCANNING == 'true'
