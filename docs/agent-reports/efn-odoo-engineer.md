@@ -868,3 +868,18 @@ Tanpa commit/push. Mengikuti kontrak BFF bf5c5f9: `KEY_RE` menerima `online:<uui
   - `efn_online_status` mengikuti `event_seq`;
   - kunci release loyalty = id BFF.
 - **Catatan QA:** `scripts/smoke/online_smoke.py` (event sintetis langsung ke BFF) masih memakai `online:<nonce>:ready:1` dan `seq` 1. BFF tetap menerima format lama.
+
+---
+
+# CI PR #60: `test_sec99_pickup_hash_cleared_on_final_and_review_and_expiry` (18 Okt 2026)
+
+- **Akar masalah:** "bom waktu" di fixture test, bukan bug zona waktu dan bukan bug produk.
+  - `tests/common.py::pay()` mengirim `paid_at` tetap `2026-10-09T10:00:00Z`.
+  - Kedaluwarsa kode ambil = 7 × 24 jam sejak `ready_at`/`paid_at`. Sejak 2026-10-16 10:00 UTC, order "fresh" (id 28) ikut kedaluwarsa.
+  - Run lokal yang lulus terjadi sebelum batas itu.
+- **Logika produk benar:** `_efn_expire_pickup_codes` membandingkan datetime UTC naif (`now - timedelta(days)`), tanpa tanggal kalender atau zona waktu. Kode tidak diubah.
+- **Perbaikan test:**
+  - `pay()` kini memakai waktu sekarang (UTC), dengan parameter `paid_at` opsional.
+  - Test SEC-99 menyuntikkan `now` tetap (waktu run CI yang gagal).
+  - Test baru menguji batas ±1 detik di 23:59:59/00:00 WIB dan 23:59:59/00:00 UTC, serta prioritas `ready_at` di atas `paid_at`.
+- **Validasi:** suite modul online (efn_online_order, efn_setup_online, efn_online_pos_sale) 85 test, 0 failed; ruff lolos.

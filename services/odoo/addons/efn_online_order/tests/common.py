@@ -4,6 +4,7 @@ kode modul)."""
 
 import uuid
 
+from odoo import fields
 from odoo.fields import Command
 from odoo.tests import new_test_user
 
@@ -150,7 +151,7 @@ class EfnOnlineCommon(AccountTestInvoicingCommon):
     def record(self, part):
         return self.env["efn.online.order"].sudo().search([("platform_order_ref", "=", part)])
 
-    def pay(self, part, amount=None, payment_ref=None, key=None):
+    def pay(self, part, amount=None, payment_ref=None, key=None, paid_at=None):
         order = self.record(part)
         payment_ref = payment_ref or str(uuid.uuid4())
         return self.order_api().efn_online_mark_paid(
@@ -159,7 +160,9 @@ class EfnOnlineCommon(AccountTestInvoicingCommon):
             {
                 "payment_ref": payment_ref,
                 "amount_paid": order.amount_payable if amount is None else amount,
-                "paid_at": "2026-10-09T10:00:00Z",
+                # Waktu bayar = sekarang (UTC). Dulu tanggal tetap 2026-10-09 -> test kedaluwarsa kode ambil (7 hari)
+                # mulai gagal setelah 2026-10-16 (bom waktu, bukan bug zona waktu).
+                "paid_at": paid_at or fields.Datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "idempotency_key": key or f"online:paid:{part}:{payment_ref}",
             },
         )

@@ -2,7 +2,7 @@
 
 import json
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from odoo import fields
@@ -761,10 +761,12 @@ class TestEfnOnlineSecurityR10(EfnOnlineCommon):
             "TST", cancelled.platform_order_ref, "review", f"online:cancel:{cancelled.platform_order_ref}"
         )
         self.assertFalse(cancelled.pickup_code_hash)
-        stale = self._paid()
-        stale.paid_at = fields.Datetime.now() - timedelta(days=8)
-        fresh = self._paid()
-        expired = self.env["efn.online.order"]._efn_expire_pickup_codes()
+        # Deterministik: jam disuntikkan lewat parameter `now` (cron meneruskan Datetime.now() UTC naif).
+        now = datetime(2026, 10, 17, 21, 13, 0)  # waktu run CI yang gagal (04:13 WIB keesokan hari)
+        stale, fresh = self._paid(), self._paid()
+        stale.paid_at = now - timedelta(days=8)
+        fresh.paid_at = now - timedelta(days=1)
+        expired = self.env["efn.online.order"]._efn_expire_pickup_codes(now=now)
         self.assertIn(stale.id, expired)
         self.assertNotIn(fresh.id, expired)
         self.assertFalse(stale.pickup_code_hash)
@@ -772,6 +774,37 @@ class TestEfnOnlineSecurityR10(EfnOnlineCommon):
         ok, message = stale._efn_handover(PICKUP_CODE)
         self.assertFalse(ok)
         self.assertIn("kedaluwarsa", message)
+
+    def test_sec99_pickup_expiry_boundary_around_midnight_utc_and_wib(self):
+        """Batas 7 x 24 jam dihitung dalam datetime UTC naif (tanpa tanggal kalender/zona): hasil sama di sekitar
+        tengah malam UTC (07:00 WIB) dan tengah malam WIB (17:00 UTC)."""
+        Order = self.env["efn.online.order"]
+        # Dua pesanan saja (stok fixture terbatas); hash dipulihkan tiap putaran.
+        just_expired, just_fresh = self._paid(), self._paid()
+        hashes = {order: order.sudo().pickup_code_hash for order in (just_expired, just_fresh)}
+        for now in (
+            datetime(2026, 10, 17, 16, 59, 59),  # 23:59:59 WIB
+            datetime(2026, 10, 17, 17, 0, 0),  # 00:00 WIB
+            datetime(2026, 10, 17, 23, 59, 59),  # 23:59:59 UTC
+            datetime(2026, 10, 18, 0, 0, 0),  # 00:00 UTC
+            datetime(2026, 10, 17, 21, 13, 0),  # run CI
+        ):
+            with self.subTest(now=now):
+                limit = now - timedelta(days=7)
+                for order, value in hashes.items():
+                    order.sudo().write({"pickup_code_hash": value})
+                just_expired.paid_at = limit - timedelta(seconds=1)
+                just_fresh.paid_at = limit + timedelta(seconds=1)
+                expired = Order._efn_expire_pickup_codes(now=now)
+                self.assertIn(just_expired.id, expired)
+                self.assertNotIn(just_fresh.id, expired)
+                self.assertTrue(just_fresh.pickup_code_hash)
+        # ready_at (bila ada) menjadi acuan, bukan paid_at.
+        now = datetime(2026, 10, 18, 0, 0, 0)
+        ready = just_fresh
+        ready.sudo().write({"pickup_code_hash": hashes[ready]})
+        ready.write({"paid_at": now - timedelta(days=30), "ready_at": now - timedelta(days=2)})
+        self.assertNotIn(ready.id, Order._efn_expire_pickup_codes(now=now))
 
     # --------------------------------------------------------------- SEC-101
     def test_sec101_technical_user_only_channel_groups(self):
