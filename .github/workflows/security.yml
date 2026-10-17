@@ -11,7 +11,7 @@
 #   dijalankan bila repo publik ATAU repository variable CODE_SCANNING_ENABLED=true. Tanpa itu hasil tiap scanner
 #   ditulis ke log + ringkasan job ($GITHUB_STEP_SUMMARY). GATE TIDAK DILEMAHKAN: setiap scanner tetap exit != 0
 #   pada temuan di atas ambang, terlepas dari ada/tidaknya code scanning.
-# - Tidak ada artefak (kuota storage 500 MB): gitleaks-action tidak mengunggah SARIF sebagai artifact.
+# - Tidak ada artefak (kuota storage 500 MB). gitleaks memakai CLI (image dipin digest), bukan gitleaks-action (G18).
 # Runbook: docs/runbooks/ci-github-free-plan.md
 name: Security
 
@@ -44,36 +44,41 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      pull-requests: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           fetch-depth: 0
           persist-credentials: false
-      # PR: action (rentang commit PR). Push/schedule/dispatch (SEC-89, r9): SELURUH riwayat, bukan hanya rentang push,
-      # agar secret di commit yang run Security-nya dibatalkan tetap tertangkap pada run berikutnya. Diuji lokal
-      # 9 Okt 2026: 67 commit, ±37 dtk, "no leaks found" (dengan .gitleaksignore).
-      - name: gitleaks riwayat penuh (push/schedule/dispatch)
-        if: github.event_name != 'pull_request'
+      # Satu jalur CLI (image dipin digest) untuk semua event. gitleaks-action DIHAPUS (G18, repo pindah ke organisasi:
+      # action mewajibkan lisensi berbayar untuk akun organisasi -> "missing gitleaks license").
+      # - PR: rentang commit PR saja (base..head, --log-opts). SHA dari payload event lewat env, divalidasi 40 hex.
+      # - Push/schedule/dispatch (SEC-89, r9): SELURUH riwayat, agar secret di commit yang run Security-nya dibatalkan
+      #   tetap tertangkap pada run berikutnya. Diuji lokal 9 Okt 2026: 67 commit, ±37 dtk, "no leaks found".
+      - name: gitleaks (PR = rentang commit PR; lainnya = riwayat penuh)
         env:
           GITLEAKS_IMAGE: zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          set -o pipefail
+          set -euo pipefail
+          range=()
+          if [ "$EVENT_NAME" = pull_request ]; then
+            [[ "$PR_BASE_SHA" =~ ^[0-9a-f]{40}$ && "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "SHA PR tidak valid"; exit 1; }
+            git cat-file -e "${PR_HEAD_SHA}^{commit}" && git cat-file -e "${PR_BASE_SHA}^{commit}"
+            range=(--log-opts="${PR_BASE_SHA}..${PR_HEAD_SHA}")
+            echo "rentang PR: $(git rev-list --count "${PR_BASE_SHA}..${PR_HEAD_SHA}") commit"
+          fi
           docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo:ro" -w /repo \
             -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo \
-            "$GITLEAKS_IMAGE" git . --redact --no-banner --no-color --exit-code 1 2>&1 | tee gitleaks.txt
-      - name: Ringkasan gitleaks riwayat penuh (job summary)
-        if: always() && github.event_name != 'pull_request'
+            "$GITLEAKS_IMAGE" git . "${range[@]}" --redact --no-banner --no-color --exit-code 1 2>&1 | tee gitleaks.txt
+      - name: Ringkasan gitleaks (job summary)
+        if: always()
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           [ -f gitleaks.txt ] || exit 0
-          { echo '### gitleaks (riwayat penuh, redacted)'; echo '```'; head -c 200000 gitleaks.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
-        if: github.event_name == 'pull_request'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Temuan sudah di-redact di log + job summary; tidak perlu artifact (kuota storage).
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
-          GITLEAKS_ENABLE_SUMMARY: "true"
+          { echo "### gitleaks (${EVENT_NAME}, redacted)"; echo '```'; head -c 200000 gitleaks.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
   semgrep:
     name: SAST (semgrep)
@@ -176,7 +181,8 @@ jobs:
           category: trivy-fs
 
   dependency-review:
-    # Repo privat: dependency review butuh GitHub Advanced Security ("Dependency review is not supported on this
+    # G18 (repo publik di organisasi): butuh "Dependency graph" aktif di repo (tindakan admin org, runbook
+    # ci-github-free-plan.md §0). Sebelumnya, repo privat: dependency review butuh GitHub Advanced Security ("Dependency review is not supported on this
     # repository", PR #35, 9 Okt 2026) -> hanya bila code scanning/GHAS tersedia. Tanpa GHAS, kerentanan dependency
     # tetap digerbangi npm audit / pip-audit (CI gate) dan Trivy fs; cek lisensi GPL/AGPL tidak berjalan (runbook §1).
     name: Dependency review (PR)

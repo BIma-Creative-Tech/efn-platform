@@ -13,7 +13,8 @@
 #   lolos, SBOM + `cosign sign/attest` dijalankan atas digest yang sama. Image yang gagal scan ada di registry tetapi
 #   TIDAK bertanda tangan -> ditolak deploy (cosign verify di deploy.yml + host efn-deploy).
 # Re-review G16c: SEC-90 push BY DIGEST tanpa tag; tag (`main`, `sha-*` hanya dari main, `X.Y.Z`, `X.Y`, `latest`)
-#   dipasang SETELAH sign atas digest yang sama. SEC-94 job `build` tanpa `security-events`/`attestations: write`.
+#   dipasang SETELAH sign atas digest yang sama. SEC-94: job `build` meminta `security-events`/`attestations: write`
+#   hanya karena repo publik (G18); scan-pr tetap read-only.
 #   SEC-89 gate menunggu CI penuh (semua job pada push ke main) -> batas 75 menit.
 #
 # G16 (CI GitHub, 9 Okt 2026), repo privat paket gratis:
@@ -53,7 +54,6 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NS: ${{ github.repository_owner }}
   CODE_SCANNING: ${{ vars.CODE_SCANNING_ENABLED == 'true' || github.event.repository.visibility == 'public' }}
   DOCKER_BUILD_RECORD_UPLOAD: "false"
 
@@ -144,14 +144,15 @@ jobs:
     needs: gate
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
-    # SEC-94 (r9): hanya izin yang dipakai di paket gratis. `security-events: write` (upload SARIF) dan
-    # `attestations: write` (attest-build-provenance) TIDAK diminta: kedua langkah itu kondisional
-    # (CODE_SCANNING_ENABLED / ATTESTATIONS_ENABLED) dan tidak aktif di repo privat akun pribadi. Saat variable itu
-    # diaktifkan, tambahkan izin yang sesuai di sini (tanpa itu langkahnya gagal terlihat, bukan diam-diam).
+    # SEC-94 (r9) diperbarui G18 (repo PUBLIK di organisasi BIma-Creative-Tech, 18 Okt 2026): CODE_SCANNING dan
+    # attestation kini aktif lewat ekspresi visibility -> izin yang dipakai langkah itu diminta di sini (job non-PR
+    # saja; scan-pr tetap contents: read). Tanpa izin langkahnya gagal terlihat (403), bukan diam-diam.
     permissions:
       contents: read
       packages: write
-      id-token: write         # cosign keyless (OIDC)
+      id-token: write         # cosign keyless (OIDC) + attest-build-provenance (Sigstore)
+      security-events: write  # upload SARIF Trivy image (CODE_SCANNING == 'true')
+      attestations: write     # actions/attest-build-provenance (repo publik / ATTESTATIONS_ENABLED)
     strategy:
       fail-fast: false
       matrix:
@@ -168,12 +169,22 @@ jobs:
           - { service: minio, context: infra/minio }
           # G13: Metabase + driver ClickHouse ber-checksum (infra/metabase/Dockerfile)
           - { service: metabase, context: infra/metabase }
-    env:
-      IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           persist-credentials: false
+
+      # G18: owner organisasi `BIma-Creative-Tech` mengandung huruf besar; referensi image OCI wajib huruf kecil
+      # (ekspresi Actions tidak punya lower()). IMAGE_REPO dipakai buildx push-by-digest, Trivy, Syft, cosign, attest.
+      - name: Nama repo image (huruf kecil)
+        env:
+          OWNER: ${{ github.repository_owner }}
+          SVC: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          repo="ghcr.io/${OWNER,,}/${SVC}"
+          [[ "$repo" =~ ^ghcr\.io/[a-z0-9._-]+/[a-z0-9._-]+$ ]] || { echo "::error::nama image tidak valid: $repo"; exit 1; }
+          echo "IMAGE_REPO=$repo" >> "$GITHUB_ENV"
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
 
@@ -187,7 +198,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5.10.0
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NS }}/${{ matrix.service }}
+          images: ${{ env.IMAGE_REPO }}
           # SEC-90: `sha-<short>` hanya dari build main (identitas refs/heads/main); run tag v* tidak menimpanya.
           tags: |
             type=sha,prefix=sha-,format=short,enable=${{ github.ref == 'refs/heads/main' }}
@@ -326,6 +337,6 @@ jobs:
         if: vars.ATTESTATIONS_ENABLED == 'true' || github.event.repository.visibility == 'public'
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2.4.0
         with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NS }}/${{ matrix.service }}
+          subject-name: ${{ env.IMAGE_REPO }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
