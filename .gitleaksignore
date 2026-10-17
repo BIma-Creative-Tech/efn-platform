@@ -9,3 +9,8 @@ ce7e2b0a3aaf7d5942d55c1962af4b85c39d902d:infra/acme/acme-dns.sh:generic-api-key:
 4ec8eade7587a8e961ede0c4b5ad8050c81d7f3c:services/superapp-web/tests/online-routes.test.ts:generic-api-key:270
 # G17 (diperiksa efn-lead 2026-10-10): laporan agent sempat mengutip nilai fixture yang sama (sudah dihapus di commit berikut).
 ea30abd1a31f3cde003d64432a5c8ed5c1e3cedf:docs/agent-reports/efn-devsecops-engineer.md:generic-api-key:1509
+# Repo dipublikasikan 18 Okt 2026 (diperiksa efn-lead): fixture palsu, bukan secret.
+# - test-efn-deploy.sh: kunci uji 0123456789abcdef... untuk memastikan API key online ditolak dari stdin CI (W-11).
+# - online-routes.test.ts: fixture Idempotency-Key yang sama dengan entri G17 di atas, fingerprint baru setelah squash merge PR #36.
+633330eebcd5e04da46834ef683e9e318c74d8a8:scripts/host/test-efn-deploy.sh:generic-api-key:256
+98469c5569b142ca541cf5ac2f984370557f1d22:services/superapp-web/tests/online-routes.test.ts:generic-api-key:270
