@@ -290,3 +290,126 @@ Wajib sebelum mengaktifkan fitur (boleh setelah merge):
 - E-38 penuh (G20): **SEC-136**, **SEC-137**, **SEC-138**, plus syarat L-39 (a)–(d).
 
 Info SEC-135, SEC-140, SEC-141: tidak memblokir.
+
+---
+
+## Re-review r12 (f7d699b)
+
+Cakupan: commit `f7d699b` di `chore/wave-19` (putaran perbaikan r12). Keputusan lead L-40..L-46 di `docs/04_SERVICE_CONTRACTS.md` §11.7 (baris 865-871).
+
+File yang dibaca:
+- Odoo: `efn_online_order/models/{efn_online_channel.py, efn_online_order.py, sale_order.py, efn_online_common.py}`, `migrations/19.0.1.3.0/post-migrate.py`, `__manifest__.py` (versi), `tests/test_online_g19.py` (kelas `TestEfnOnlineSecurityR12`, baris 614-911); `efn_setup_online/demo/efn_online_demo.xml` (grep); `efn_core/tests/test_rpc_surface.py:80-85`; `efn_pii/models/res_partner.py:140-210`.
+- BFF: `config/app-config.ts:1295-1620`, `config/online-config.spec.ts:60-115`, `catalog/online-http.ts` (`consumePromoCodeQuota`), `common/rate-limit/rate-limiter.ts`, `cart/cart.controller.ts`, `cart/quote.service.ts:110-250`, `odoo-rpc/promo-codes.ts`, `odoo-rpc/odoo-online.parse.ts` (grep issue).
+- Frontend: `components/online/CartView.tsx` (alur promo/requote), `lib/cart.ts` (grep).
+- Laporan `docs/agent-reports/efn-odoo-engineer.md:1060-1102` (API Odoo 19 yang diverifikasi engineer dan asumsi).
+
+Hasil test nyata (dijalankan lead, tidak diulang reviewer): Odoo 556/0, BFF 630/630, frontend 17 file OK.
+
+### Ringkasan eksekutif re-review (untuk manajemen)
+
+1. **SEC-133, satu-satunya pemblokir merge, sudah diperbaiki dan diuji.** BFF kini bisa start di staging/produksi dengan secret `*_FILE`.
+2. **Perbaikan jalur online benar secara desain:** kuota promo dikunci saat checkout (SEC-130), batas nominal dan qty untuk reservasi stok (SEC-131), log tanpa tag kode (SEC-132), rate limit per kode (SEC-134), dan order yang belum dibayar tidak bisa difakturkan atau di-refund (SEC-139).
+3. **Tiga temuan baru, tidak ada yang memblokir merge.** Dua Low: kunci kuota promo otomatis membuat semua checkout satu kanal antre (SEC-142), dan pelanggan sah yang mengubah keranjang beberapa kali bisa kehilangan diskon karena kodenya dihitung ulang setiap quote (SEC-143). Satu Info soal L-46 (SEC-144).
+4. **PoC PII (SEC-136/137/138/140) ditunda ke G20 sesuai L-45.** Modul tidak terpasang di produksi.
+5. **Verdict: GO untuk merge** dengan online tetap OFF di produksi. Syarat aktivasi fitur tercantum di bawah.
+
+### Status SEC-130..141
+
+| ID | Status | Bukti (file:baris) | Catatan sisa |
+|---|---|---|---|
+| SEC-130 | **Fixed** (desain benar; konkurensi nyata belum diuji dua koneksi) | `efn_online_channel.py:774-809` (`UPDATE loyalty_program SET write_date = write_date`, id terurut, error konkurensi tidak ditangkap); dipanggil sebelum SO dibuat di `efn_online_order.py:393-397`; docstring/komentar lama diralat (`:811-815`, `:821-823`). Test `test_place_locks_quota_code_program_before_promotions`, `test_place_locks_automatic_quota_promo_and_quota_still_enforced` (spy urutan + `xmin` berubah) | Semantik REPEATABLE READ: UPDATE atas baris yang di-UPDATE transaksi lain yang commit setelah snapshot memicu `SerializationFailure`, sehingga Odoo mengulang request. Test hanya berurutan. Bukti paralel (dua cursor, staging) tetap **wajib sebelum promo berkuota diaktifkan**. Efek samping ketersediaan: **SEC-142**. Batasan yang diakui: SO manual staf tidak mengunci program |
+| SEC-131 | **Partial** (syarat L-41 terpenuhi) | Constraint `max_order_amount > 0` di mode confirm + `max_line_qty` 1..9999 (`efn_online_channel.py:251-265`); issue `qty_limit` (`:989-993`) → place `invalid_input` (`efn_online_order.py:344-350`); `order_limit` di quote (`:1020-1021`) + cek ulang di place (`:414-415`); katalog `max_qty` = min(99, 20) (`:404-409`); migrasi placeholder Rp5.000.000 (`19.0.1.3.0/post-migrate.py`); demo + smoke diisi; BFF meneruskan `qty_limit` dan menolak isu produk tanpa `product_id` (`odoo-online.parse.ts:242-248`, `quote.service.ts:199-206`) | Belum ada: batas akumulatif per member/SKU lintas order, dan metrik qty tercadang per outlet / rasio kedaluwarsa per member. Qty baris **reward** (beli X gratis Y) tidak dihitung `max_line_qty` (diakui engineer), padahal ikut tercadang. Sisa griefing per akun: 2 order × Rp5 juta. Wajib metrik/alert sebelum mode `confirm` dibuka di kanal publik |
+| SEC-132 | **Fixed** | `promo_code_ref` dihapus (`efn_online_common.py:134-135`); log Odoo hanya `codes=%d applied=%d` (`efn_online_channel.py:917-920`); BFF `promoCodeTag` dihapus (`promo-codes.ts:6-7`, test `promo.spec.ts:100`), log debug hanya jumlah (`quote.service.ts:148-149`); test Odoo memastikan tidak ada `refs=` (`test_online_g19.py:513`) | Level log Nest di produksi masih tanpa filter (`main.ts:39`). Isinya kini tidak sensitif, jadi tidak memblokir |
+| SEC-133 | **Fixed** | `app-config.ts:1546-1547` (`!name.endsWith('_FILE')`); test `online-config.spec.ts:73-114` (produksi + `RTL_FILE` + `RTL_GL_FILE`, online OFF dan ON; literal tetap ditolak tanpa nilai di pesan). L-46: `ONLINE_CHANNELS` menolak akhiran `-FILE` (`app-config.ts:1311`, test `:19`) | Lihat SEC-144 (L-46 hanya di BFF) |
+| SEC-134 | **Fixed** | `cart.controller.ts:74-75` → `consumePromoCodeQuota` (`online-http.ts:47-72`): n kode = n unit di member DAN IP, penolakan dikompensasi (`rate-limiter.ts:50-60`), unit member dikembalikan bila IP menolak/Redis gagal. Fail-closed | Cara hitung berdampak ke pengguna sah: **SEC-143** |
+| SEC-135 | Open (Info, diterima) | Tidak berubah | Tidak memblokir |
+| SEC-136 | **Deferred-G20** (L-45) | Tidak berubah. `copy_data` (`efn_pii/models/res_partner.py:158-167`) tetap hanya menangani duplikat | Syarat E-38 penuh. Modul tidak terpasang di CI/produksi |
+| SEC-137 | **Deferred-G20** (L-45) | Tidak berubah | Syarat E-38 penuh |
+| SEC-138 | **Deferred-G20** (L-45) | Tidak berubah | Syarat E-38 penuh (keputusan ADR-036) |
+| SEC-139 | **Fixed** (jalur uang muka PLAUSIBLE) | Guard `_prepare_invoice`: SO online tanpa `paid_idempotency_key` ditolak (`sale_order.py:65-81`); dasar guard = pembayaran tercatat, bukan state. `_efn_do_cancel` tidak membuat refund/nota kredit untuk order tanpa pembayaran, hanya aktivitas Accounting (`efn_online_order.py:663-682`). Test `test_unpaid_confirm_order_cannot_be_invoiced` (`_create_invoices`, `_prepare_invoice`, wizard `delivered`) dan `test_cancel_or_expiry_of_unpaid_order_never_refunds` (batal BFF + cron kedaluwarsa; tanpa refund, tanpa nota kredit, stok kembali) | Wizard uang muka (persentase/nominal) hanya dibuktikan lewat `_prepare_invoice`. Engineer memverifikasi bahwa source CE 19 memanggil `_prepare_invoice`, tetapi reviewer tidak membacanya (PLAUSIBLE). Bila guard memblokir, transaksi wizard di-rollback, termasuk baris uang muka di SO |
+| SEC-140 | Deferred-G20 (Info) | Tidak berubah | Catat di ADR-036 |
+| SEC-141 | **Fixed** | `test_rpc_surface.py:82-84` kini menyebut SO di savepoint, nomor urut terpakai, `FOR UPDATE NOWAIT` program, dan rollback kartu/poin; docstring `efn_online_quote` (`efn_online_channel.py:1026-1029`) | – |
+
+### Temuan baru (re-review)
+
+| ID | Severity | Verdict | Judul | Lokasi utama | Risiko | Memblokir |
+|---|---|---|---|---|---|---|
+| SEC-142 | Low (ketersediaan) | CONFIRMED (cakupan kunci); dampak PLAUSIBLE | Kunci kuota L-40 diambil **sebelum** kelayakan diketahui. Promo otomatis berkuota membuat semua place kanal antre lalu gagal serialisasi berulang, dan quote berkode kuota bisa terkena `LockNotAvailable` selama ada place berjalan | `efn_online_channel.py:787-807`; `efn_online_order.py:393-397` | R-B06, R-S10 | Aktivasi promo berkuota (bersama bukti paralel SEC-130) |
+| SEC-143 | Low (bisnis/UX) | CONFIRMED (pembacaan kode) | Rate limit per kode menghitung ulang kode yang sama di setiap requote. Pelanggan sah dengan 3 kode terkena 429 setelah sekitar 3 perubahan keranjang dalam 15 menit, lalu quote jatuh ke total **tanpa diskon** dan tombol Bayar tetap aktif | `online-http.ts:47-72`; `cart.controller.ts:75`; `CartView.tsx:56-65,164-177,222-235` | R-B06 | Go-live online |
+| SEC-144 | Info | CONFIRMED | L-46 (kode kanal tanpa akhiran `-FILE`) hanya ditegakkan di `ONLINE_CHANNELS` BFF. Constraint Odoo (`CHANNEL_CODE_RE`), `efn-rotate-online-key`, dan `deploy.sh` masih menerima `X-FILE`. Akibatnya fail-closed (BFF gagal start, deploy rollback), bukan kebocoran | `app-config.ts:1311`; `efn_online_common.py:30`; `scripts/` (grep `-FILE` kosong) | R-T15 | – |
+
+**Rekap re-review: 0 Critical · 0 High · 0 Medium baru · 2 Low · 1 Info.**
+
+#### SEC-142: Low: Cakupan kunci kuota terlalu awal dan terlalu lebar
+
+**Fakta:**
+- `_efn_online_lock_quota_programs` mengunci **semua** program otomatis ber-`limit_usage` milik kanal (`targets = quota.filtered(lambda p: p.trigger == "auto")`, `:790`), plus pemilik kode yang dikirim. Kunci ini diambil sebelum SO dibuat (`efn_online_order.py:397`), tanpa memeriksa apakah order memenuhi aturan program.
+- UPDATE menunggu tanpa `NOWAIT` atau `lock_timeout`, dan kunci baris ditahan sampai commit place. Rentang ini mencakup `action_confirm`, reservasi stok, dan outbox.
+- Engineer memverifikasi bahwa `_try_apply_code` CE 19 mengambil `FOR UPDATE NOWAIT` pada program (`docs/agent-reports/efn-odoo-engineer.md:1074`), dan efek sampingnya diakui di `:1093-1094`.
+
+**Skenario (PLAUSIBLE):**
+1. Marketing memasang promo otomatis "diskon 10 % untuk 500 pesanan pertama di atas Rp200.000" di kanal RTL.
+2. Saat jam ramai, 10 checkout RTL berjalan bersamaan. Banyak di antaranya tidak memenuhi syarat (< Rp200.000).
+3. Semua 10 transaksi meng-UPDATE baris program yang sama. Setiap commit membuat seluruh waiter dengan snapshot lama gagal `SerializationFailure`.
+4. Odoo mengulang hingga 5 kali dengan backoff acak (sampai belasan detik), sambil menahan worker Odoo yang juga dipakai POS.
+5. BFF berhenti menunggu setelah `ODOO_RPC_TIMEOUT_MS` 8 detik, sehingga checkout menjadi 503 atau perlu rekonsiliasi.
+6. Di sisi lain, quote dengan kode kuota yang datang selama ada place berjalan gagal `LockNotAvailable` dan ikut diulang Odoo. Antrean publik BFF (2 slot) cepat penuh sehingga quote menjawab 503 `busy`.
+
+Penyerang tidak mendapat keuntungan finansial. Dampaknya degradasi checkout saat promo ramai, yang justru menjadi momen paling sensitif bagi bisnis.
+
+**Kenapa kunci bisa dipindah:** di REPEATABLE READ, `SerializationFailure` muncul pada UPDATE baris yang di-UPDATE transaksi lain yang commit setelah snapshot, **kapan pun** UPDATE itu dijalankan sebelum commit. Kunci tidak harus diambil sebelum hitungan dibaca.
+
+**Rekomendasi:**
+- Pindahkan UPDATE ke **setelah** `_efn_online_apply_promotions` dan sebelum konfirmasi. Kunci hanya program ber-`limit_usage` yang benar-benar diklaim SO, yaitu `sale_order.order_line.reward_id.program_id.filtered("limit_usage")` (urut id). Kebenaran kuota tetap terjaga, dan place yang tidak mendapat promo kuota tidak lagi antre.
+- Tambahkan `SET LOCAL lock_timeout = '2s'` sebelum UPDATE agar place tidak menahan worker lama. `LockNotAvailable` juga termasuk error yang diulang Odoo.
+- Uji paralel di staging bersama SEC-130: 2 place memperebutkan sisa kuota 1, dan 10 place tidak layak dengan 1 program otomatis berkuota. Ukur p95 dan jumlah 503.
+- Sampai salah satu dilakukan: checklist Marketing melarang promo **otomatis** ber-`limit_usage` di kanal online. Promo berkode berkuota boleh setelah bukti paralel SEC-130.
+
+#### SEC-143: Low: Pelanggan sah kehilangan diskon karena requote dihitung sebagai percobaan kode baru
+
+**Fakta:**
+- `consumePromoCodeQuota` mengonsumsi `promoCodes.length` unit di **setiap** `POST /v1/cart/quote` (`cart.controller.ts:75`), termasuk kode yang sudah diterapkan di quote sebelumnya.
+- Frontend mengirim ulang semua kode tersimpan setiap kali keranjang berubah (`CartView.tsx:222-235` → `requote` → `fetchQuote(promoRef.current)`, `:164-177`), saat kode dihapus (`:210-216`), dan saat checkout meminta quote ulang (`:265-267`).
+- Bila BFF menjawab 429, frontend menghitung ulang **tanpa kode** dan menampilkan total tanpa diskon dengan pesan generik (`:62-65`, `:148-155`). Tombol Bayar tidak diblokir (`:306`).
+- Default `PROMO_MEMBER` adalah 10 unit per 15 menit (`app-config.ts:1602`).
+
+**Skenario:** pelanggan memasukkan 3 kode (3 unit), lalu mengubah qty 3 kali (9 unit) dan menghapus satu barang (12 unit > 10). Ia mendapat 429, quote dihitung tanpa diskon, dan bila ia menekan Bayar tanpa membaca pesan, ia membayar harga penuh. Dampaknya keluhan atau permintaan refund ke CS, bukan kebocoran. Rekomendasi r12 SEC-134 ("hanya kode **baru**") belum diikuti.
+
+**Rekomendasi:**
+- Hitung hanya kode yang belum ada di `promo_codes` quote terakhir member, karena quote tersimpan di Redis dan terindeks per member (`quote.service.ts:151-169`). Alternatif: set Redis per member per window berisi HMAC kode (pepper `redisKeyPepper`), lalu konsumsi hanya untuk anggota baru. Batas enumerasi tetap n kode berbeda per window.
+- Frontend: saat `promoNotice` aktif dan ada kode tersimpan, minta konfirmasi eksplisit sebelum Bayar ("Total belum termasuk kode promo").
+- Test: 3 kode yang sama di-quote 5 kali berturut-turut tidak memicu 429.
+
+#### SEC-144: Info: L-46 hanya di BFF
+
+`ONLINE_CHANNELS` menolak kode berakhiran `-FILE` (`app-config.ts:1311`). Namun constraint Odoo `_check_efn_code` (`CHANNEL_CODE_RE`, `efn_online_common.py:30`) dan skrip host (`efn-rotate-online-key`, `deploy.sh`) tidak memeriksa akhiran ini. Operator bisa membuat kanal `RTL-FILE` di Odoo dan mem-bootstrap secret serta overlay-nya, lalu deploy gagal karena BFF menolak start (fail-closed). Tidak ada kebocoran.
+
+Rekomendasi: tolak akhiran `-FILE` juga di constraint Odoo dan di validasi CHANNELS skrip host, supaya kesalahan konfigurasi tertangkap lebih awal. Catatan kecil terkait: komentar `odoo-online.parse.ts:209` menyebut `max_qty_per_line`, padahal batas reservasi L-41 adalah `max_line_qty`. Ini hanya soal dokumentasi.
+
+### Hal yang sudah benar dalam putaran perbaikan
+
+- **Jalur internal tidak terbuka.** Kunci kuota, guard `_prepare_invoice`, dan pembatalan tanpa refund tidak menambah metode publik (gerbang SEC-58 tetap). Guard membaca `paid_idempotency_key` lewat `sudo()` pada record tautan, sehingga field `groups=base.group_system` tetap tersembunyi dari staf. Penanda tidak berbasis context.
+- **Error konkurensi tidak ditelan.** `_efn_online_try_code` dan `_efn_online_claim_auto_rewards` hanya menangkap `_PromoRejected`/`UserError`/`ValidationError`, sehingga `SerializationFailure`/`LockNotAvailable` naik ke mekanisme retry Odoo.
+- **Rollback quote melepas kunci.** Kunci `FOR UPDATE NOWAIT` quote diambil di savepoint yang selalu di-rollback, jadi kuncinya lepas sebelum request quote selesai. Test memastikan `xmin` program tidak berubah oleh quote.
+- **Batas L-41 berlapis.** Constraint (termasuk saat mode diganti ke `confirm`), issue di quote, penolakan di place, cek nominal ulang dari SO tersimpan, dan `max_qty` katalog. Mode `none` tetap boleh `max_order_amount` 0.
+- **Migrasi placeholder aman.** Hanya kanal `confirm` dengan nominal ≤ 0 yang disentuh, setiap kanal dicatat WARNING berisi kode kanal saja (tanpa PII), `if not version: return` untuk instal baru, dan versi manifest `19.0.1.3.0` cocok. Nilai Rp5.000.000 adalah placeholder bisnis: masukkan ke checklist go-live.
+- **Rate limit promo fail-closed dan konsisten.** Penolakan tidak memakan kuota, unit member dikembalikan bila IP menolak atau Redis gagal, dan key IP di-hash dengan pepper.
+- **SEC-133 diuji di tiga arah:** start produksi dengan `*_FILE` (online OFF/ON), literal tetap ditolak, dan pesan error tidak memuat nilai secret.
+
+### Yang belum terverifikasi (re-review)
+
+- Konkurensi nyata L-40 (dua koneksi atau lebih): kebenaran kuota (SEC-130) dan dampak ketersediaan (SEC-142).
+- Jalur wizard uang muka `sale.advance.payment.inv` (persentase/nominal) terhadap guard `_prepare_invoice` (SEC-139). Reviewer tidak membaca source CE 19.
+- Perilaku retry `/json/2` Odoo 19 untuk `SerializationFailure`/`LockNotAvailable` (diasumsikan sama dengan `service.model.retrying`).
+- Reviewer tidak menjalankan test. Angka 556/630/17 berasal dari lead.
+
+### Verdict re-review
+
+**GO untuk merge `chore/wave-19` → `main`**, dengan online tetap OFF di produksi. Pemblokir merge r12 (SEC-133) sudah ditutup, dan tidak ada temuan baru yang memblokir merge.
+
+Syarat sebelum mengaktifkan fitur (boleh setelah merge):
+- **Promo berkuota (`limit_usage`) online:** bukti paralel staging SEC-130 + perbaikan cakupan kunci **SEC-142**. Sampai itu selesai, larang promo otomatis berkuota di kanal online.
+- **Mode `confirm` di kanal publik:** metrik/alert qty tercadang per outlet dan rasio kedaluwarsa per member (sisa SEC-131), nilai `max_order_amount`/`max_line_qty` bisnis menggantikan placeholder, dan keputusan atas qty reward.
+- **Go-live online:** **SEC-143** (hitung hanya kode baru, atau konfirmasi sebelum Bayar saat diskon tidak terhitung).
+- **E-38 penuh (G20):** SEC-136, SEC-137, SEC-138, SEC-140, plus syarat L-39 (a)–(d).
+- Info SEC-135, SEC-144: tidak memblokir.
