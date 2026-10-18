@@ -13,12 +13,18 @@ ADR-027, ADR-031 (semua *Proposed*). Risiko: R-T15 (API key kedaluwarsa), temuan
   (SO terkunci tidak bisa dibatalkan, temuan #36).
 
 ## Demo (PLACEHOLDER, menunggu Q-ON1..Q-ON13)
-Kanal `RTL` aktif (outlet `TOKO-01` = gudang demo `OL01` PT Retail, batas bayar Odoo 25 menit = BFF 15 + 10, L-1),
+Kanal `RTL` aktif (outlet `TOKO-01` = gudang demo `OL01` PT Retail, batas bayar Odoo **70 menit** sejak G19 = BFF 60 + 10; semula 25 = L-1),
 kanal `FNB` **nonaktif** (outlet `RESTO-01` wajib FP kota contoh), jurnal bank "Titipan Online - Holding" per PT
 (akun default dibuat Odoo; pemetaan ke akun piutang titipan = Finance, Q-2), pembulatan Rupiah bulat
 (`biggest_tax`, Q-ON6), pricelist online per PT, 3 produk RTL (pajak PPN template l10n_id `tax_ST4`), user teknis
 `efn_online_rtl` **tanpa API key** (key dibuat lewat runbook `docs/runbooks/odoo-online-api-key.md`, tidak pernah di
 repo).
+
+### G19 (19.0.1.2.0, docs/08 §10)
+- **W-02:** kanal demo memakai `payment_timeout_minutes = 70` (BFF `ONLINE_PAYMENT_TIMEOUT_SECONDS=3600` + margin 10, keputusan #18). Default field (25) **tidak** diubah lewat `ir.default` (berlaku DB-wide dan mengubah kanal test `efn_online_order`) → default + validasi "≥ batas BFF + 10" = gap **E-35** engineer. Kanal produksi: isi 70 di checklist. Smoke `scripts/smoke/odoo_online_smoke.py` masih menulis 25 — ikut diubah saat BFF pindah ke 3600 (bff/QA).
+- **W-21:** 4 kanal **per brand** (demo, nonaktif, tanpa outlet): `RTL-GL` Grand Lucky, `RTL-BACHA` Bacha butik (PT Retail), `FNB-PB` Paris Baguette, `FNB-BACHA` Bacha kafe (PT F&B); pricelist & tim penjualan per brand; partner generik & jurnal titipan per PT dipakai bersama. Kode kanal = **usulan** (kontrak docs/04 §10, lead). Kanal lama `RTL`/`FNB` tetap.
+- **W-14:** outlet kanal F&B wajib fiscal position **non-dine-in** kota outlet (tanpa SC; PB1 TODO R-L09) — `efn_setup_company` 19.0.1.5.0.
+- Test baru: `test_demo_fnb_outlet_is_non_dine_in`, `TestEfnOnlineBrandChannels` (bentuk kanal per brand; katalog GL vs Bacha terpisah dalam satu PT).
 
 ## Checklist go-live kanal
 User teknis per PT (hanya Internal User + grup kanal, satu company, 2FA kebijakan) → API key via runbook → secret BFF

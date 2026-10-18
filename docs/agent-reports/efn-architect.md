@@ -539,3 +539,51 @@ Sumber: laporan efn-bff-engineer dan efn-data-ai-engineer, bagian Gelombang 18. 
 - Smoke E2E BFF G18.
 - Pernyataan usia untuk pendaftaran via kasir POS.
 - `.env` dev lokal masih `CH_MART_RETENTION_YEARS=5`.
+
+# Gelombang 19 — ADR-036 enkripsi kolom PII Odoo (W-08) (2026-10-18)
+Branch `chore/wave-19`. Hanya dokumen, tanpa commit (commit oleh lead). ADR-022, `docs/04`, inventaris PDP, dan dokumen bisnis asli **tidak** diubah; perubahannya ditulis sebagai usulan di ADR-036.
+
+## Ringkasan (untuk manajemen)
+HP, email, NPWP/NIK, dan alamat pelanggan di Odoo akan dienkripsi oleh Odoo sebelum masuk database, dengan pola kunci yang sama seperti BFF. Database, backup, atau akun baca yang bocor tidak lagi membuka data itu. Kasir hanya bisa mencari pelanggan dengan HP/email/NPWP **lengkap**. Biaya ±4–6 minggu-engineer (±Rp20–54 jt), lisensi Rp0, didahului uji coba teknis 3 hari. Rekomendasi: pasang sejak DB produksi pertama dibuat, sehingga pengecualian E14 tidak perlu dipakai.
+
+## File dibuat / diubah
+| File | Perubahan |
+|---|---|
+| `docs/decisions/ADR-036-enkripsi-kolom-pii-odoo.md` | **Baru (Proposed).** Konteks + fakta CE 19.0 terverifikasi; model ancaman; 5 opsi (disk saja, pgcrypto, ORM, TDE, vault BFF) dengan biaya; keputusan opsi C; cakupan S1; format `efnpii1:` + blob §7.2; key ring `odoo_pii_key_v<n>`; blind index HKDF/HMAC `odoo_pii_bidx_key`; perilaku pencarian/POS; mode terkunci; yang tidak didukung; Coretax; laporan; ETL; backup; rotasi; migrasi in-place (+ query verifikasi, VACUUM FULL/REINDEX, residu backup); erasure; skema log `EFN_PII_KEYRING`; usulan revisi ADR-022 (Keputusan 5, tabel kunci, kustodi, E14); usulan kontrak K-36-1..K-36-8; keputusan lead L-36-1..6; spesifikasi engineer (PoC gerbang, 3 modul, 11 test); Q-PII1..6; usulan R-T18 |
+| `docs/decisions/README.md` | Catatan pembaruan 18 Okt; baris indeks ADR-036; baris urutan tanda tangan 2a |
+| `docs/agent-reports/efn-architect.md` | Bagian ini |
+
+## Keputusan yang butuh lead / PO
+- **L-36-1 jadwal:** PP-3 tetap. Bila DB produksi dibuat setelah W-08 merge, W-08 dipasang sejak awal. Bila pilot mulai lebih dulu: E14 versi baru (larangan W-06, rehearsal migrasi) berakhir pada salah satu dari: migrasi terverifikasi, outlet ke-2, W-06, atau 31 Jan 2027, mana yang lebih dulu.
+- L-36-2 cakupan S1.
+- L-36-3 partner terlindungi tidak dipreload ke POS.
+- L-36-4 `pos.order.email/mobile` tidak disalin.
+- L-36-5 estimasi 3–5 → 4–6 minggu.
+- L-36-6 gerbang PoC.
+
+## Keputusan yang butuh tanda tangan klien
+ADR-036 (IT + Security; Legal/DPO; Finance + Tax; PO + Ops) dan Q-PII1..Q-PII6:
+- nama tetap plaintext;
+- salinan kontak order POS dihapus;
+- kasir mencari dengan HP lengkap;
+- retensi backup off-site;
+- kapan tahap 2 (vendor/karyawan);
+- penyimpanan XML Coretax.
+
+## Temuan untuk agent lain (lewat lead)
+- **Fit-gap W-08 belum ada di `docs/08`** (G18 tidak mencakupnya walau direncanakan). Functional perlu mengerjakannya sebelum engineer (ADR-036 §8.1).
+- Odoo 19.0 menyimpan **salinan plaintext** yang tidak disebut di `docs/10`: `email_normalized` (mail), `phone_sanitized` + indeks ekspresi (phone_validation), `pos.order.email/mobile` (compute stored). `vat` ber-index btree. `l10n_id_efaktur_coretax` menambah `l10n_id_nik` dan `l10n_id_buyer_document_number`. Field `mobile` tidak ada di `res.partner` 19.0.
+- `member_hash_pepper` juga dipegang ETL, jadi tidak boleh dipakai sebagai kunci blind index Odoo.
+
+## Terverifikasi / belum terverifikasi
+- **Terverifikasi** (sumber primer `github.com/odoo/odoo` branch 19.0): field `res.partner` base, `_rec_names_search`, `_compute_same_vat_partner_id`, `email_normalized` stored (mail.thread.blacklist), `phone_sanitized` stored + SQL `REGEXP_REPLACE` (mail.thread.phone), `_load_pos_data_fields` / `get_new_partner` POS, `pos.order.email/mobile`, manifest + field partner `l10n_id_efaktur_coretax`, `cryptography==42.0.8` di requirements.
+- **Terverifikasi di repo:** format/AAD/key ring BFF (`common/pii/*.ts`), `efn_member_hash` (sha256 + pepper, groups system), grant ETL tanpa `res_partner`, Dockerfile Odoo tanpa `cryptography` eksplisit.
+- **Belum terverifikasi:**
+  - hook ORM 19.0 yang menangkap semua jalur tulis (PoC);
+  - domain pencarian klien POS;
+  - cara generator Coretax membaca partner;
+  - tracking field partner;
+  - `cryptography` di image resmi;
+  - durasi `VACUUM FULL`;
+  - overhead dekripsi;
+  - retensi off-site.

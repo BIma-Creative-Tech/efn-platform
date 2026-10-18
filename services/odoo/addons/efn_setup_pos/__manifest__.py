@@ -1,7 +1,7 @@
 {
     "name": "EFN Setup - Point of Sale (Retail & Restoran)",
     "summary": "Bundel modul POS CE 19 untuk retail & F&B; demo stasiun dapur, printer dapur, denah meja.",
-    "version": "19.0.1.9.0",
+    "version": "19.0.1.10.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",
@@ -51,6 +51,8 @@
         # G18 W-01/E-30: metode bayar "Poin EFN" per PT (jurnal bank + akun poin PLACEHOLDER Q-F18-3) + tautan ke POS.
         "data/pos_loyalty_points_payment.xml",
         "data/pos_loyalty_points_link.xml",
+        # G19 W-14: preset F&B per layanan (dine-in = PB1 + SC 5%, bawa pulang = tanpa SC; PB1 non-dine-in TODO R-L09).
+        "data/pos_fnb_service_presets.xml",
     ],
     "demo": [
         "demo/pos_demo.xml",

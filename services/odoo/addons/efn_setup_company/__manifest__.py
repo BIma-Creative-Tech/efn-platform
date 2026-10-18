@@ -4,7 +4,7 @@
         "Konfigurasi data-only: 4 company (EFN/RTL/FNB/FARM), IDR, CoA l10n_id; "
         "PB1 configurable (grup + default + fiscal position per kota)."
     ),
-    "version": "19.0.1.4.0",
+    "version": "19.0.1.5.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",
@@ -25,6 +25,8 @@
         "data/no_egress.xml",
         # Harus SETELAH res_company_data.xml (butuh CoA/fiscal country dari try_loading).
         "data/account_tax_pb1_data.xml",
+        # G19 W-14: SC 5% dine-in + fiscal position per layanan (dine-in / non-dine-in), setelah PB1 default.
+        "data/account_tax_fnb_service_data.xml",
         # G17-QA-04: label pajak ke pelanggan (invoice_label + nama grup), setelah CoA dimuat.
         "data/account_tax_label_data.xml",
     ],

@@ -400,4 +400,52 @@ Usulan kontrak §9 v6: K-18-1..K-18-7, ditambah K-18-8 (`age_confirmed` untuk PO
   - ditolak `AccessError`: create perusahaan, partner bersama, partner PT lain, kontak anak; write nama/HP partner sendiri dan partner bersama; unlink; create/write `res.partner.bank`.
 - **Test** `TestEfnG18Config` (6 test SEC-121 baru, menggantikan 3 test W-25 lama). Kunci HP member (SEC-115) milik engineer di `efn_pos_otp_gate`, tidak saya sentuh.
 - **Tidak dicek eksplisit:** cashier yang punya akses lebih dari satu company (field company tampil di form) — default tetap company aktif, tetapi bisa diubah ke PT lain lalu ditolak rule.
-- **Hasil uji:** suite efn penuh 16 modul (working tree, termasuk WIP engineer SEC-113/115) **479 test: 0 failed, 1 error** di `efn_pos_loyalty_ledger` `test_sec113_points_payment_only_via_sync` (AccessError `res.currency` pada user uji test itu — WIP engineer, bukan partner/grup kasir); seluruh test `efn_setup_pos` (termasuk 6 SEC-121) dan `efn_core` `test_rpc_surface` lulus. `efn_setup_security` install-after exit 0. Tour 6 modul CI **0 failed dari 25** (DB tour tidak memasang `efn_setup_pos`). ruff `efn_setup_pos` bersih; `efn_pos_refund_origin/tests/test_payment_integrity_rpc.py` (WIP agent lain) E501. Container/DB uji dihapus.
+- **Hasil uji (SEC-121):** suite efn penuh 16 modul (working tree, termasuk WIP engineer SEC-113/115) **479 test: 0 failed, 1 error** di `efn_pos_loyalty_ledger` `test_sec113_points_payment_only_via_sync` (AccessError `res.currency` pada user uji test itu — WIP engineer, bukan partner/grup kasir); seluruh test `efn_setup_pos` (termasuk 6 SEC-121) dan `efn_core` `test_rpc_surface` lulus. `efn_setup_security` install-after exit 0. Tour 6 modul CI **0 failed dari 25** (DB tour tidak memasang `efn_setup_pos`). ruff `efn_setup_pos` bersih; `efn_pos_refund_origin/tests/test_payment_integrity_rpc.py` (WIP agent lain) E501. Container/DB uji dihapus.
+
+## Gelombang 19 — 2026-10-18 (pilot online ritel: W-02, W-09, W-21, W-14, W-08; ringkas W-04, W-06)
+
+Detail: `docs/08_ODOO_FIT_GAP.md` §10. Verifikasi = source odoo/odoo 19.0 via WebFetch. **Sesi ini tidak punya akses shell/Docker → tidak ada PoC dan test belum dijalankan** (lihat "Belum").
+
+### Ringkasan per paket
+| Paket | Standar vs gap | Estimasi tervalidasi | Status konfigurasi |
+|---|---|---|---|
+| W-02 reservasi 1 jam | Standar: konfirmasi SO saat place → picking `at_confirm` tercadang, batal melepas (`_do_unreserve`). Gap kecil **E-35** di `efn_online_order` (mode `confirm` masih ditolak constraint; cek stok saat bayar harus pakai status move, bukan `free_qty`). **POS dapat mencabut reservasi** lewat `_free_reservation` (kecuali move `picked`) | 1–1,5 mg (sesuai) | Demo kanal 70 menit |
+| W-09 promo online | Standar `sale_loyalty` (tanpa website), batas per brand via `loyalty.program.pricelist_ids`. Gap **E-36**: klaim reward otomatis (pola CE `website_sale_loyalty._auto_apply_rewards`), kode promo di quote/place, hash, constraint tipe program. Quote tidak boleh `new()` (loyalty.card dibuat dengan `order_id`) | 1,5–2 mg (ujung atas) | — (data Marketing) |
+| W-21 kanal per brand | Standar + E-28: kanal = brand, pricelist & tim per brand, Bacha = 2 kanal 2 PT. Opsional **E-37** `brand_code` | 1–2 mg (turun) | Demo 4 kanal brand |
+| W-14 pajak F&B | Standar: SC ditambahkan fiscal position dine-in (PB1 → SC + PB1 Dine-in), non-dine-in tanpa SC; preset POS per layanan. PB1 non-dine-in **TODO R-L09** (default tetap dipungut) | 0,5–1 mg sisa (tour POS, kota) | **Diterapkan (data)** |
+| W-08 PII | Dampak: `email_normalized`, `phone_sanitized`, `mail.tracking.value`, `_rec_names_search`, `same_vat_partner_id`, POS loader, Coretax (baca ORM) | 3–5 mg, kemungkinan 4–5 | — (ADR architect) |
+| W-04 F&B online | E-29a: tiket KDS dengan sumber SO (skema `efn.kds.ticket` `order_id` wajib → opsional + sumber online, unik, migrasi), outlet→POS config, sinkron ready | 4–5,5 mg | — |
+| W-06 faktur pembeli | Coretax: NPWP dari `commercial_partner_id`, nama/alamat dari `partner_id` → partner pembeli mandiri + `partner_invoice_id`; **E-39** setelah E-38 | 2–3 mg (sesuai) | — |
+
+### Konfigurasi diterapkan (belum di-commit; lead yang commit)
+| Modul | Versi | Perubahan |
+|---|---|---|
+| `efn_setup_company` | 19.0.1.4.0 → **19.0.1.5.0** | `data/account_tax_fnb_service_data.xml` (baru, noupdate): `account_price_include=tax_excluded` PT F&B; grup + pajak *Service Charge 5% (dine-in)* (xmlid lama, dipindah dari demo; `include_base_amount`, Replaces PB1 default); *PB1 Dine-in 10%*; *PB1 Non-Dine-in 10% (TODO R-L09)*; FP *F&B Dine-in (PB1 + SC 5%)* & *F&B Non-Dine-in*. Demo: SC dihapus dari demo, tambah pasangan dine-in kota contoh. Test `tests/test_fnb_service_taxes.py` (8). README |
+| `efn_setup_pos` | 19.0.1.9.0 → **19.0.1.10.0** | `data/pos_fnb_service_presets.xml` (baru): preset *Makan di tempat (F&B)* & *Bawa pulang (F&B)*. Demo: preset dine-in kota contoh. Test `TestEfnFnbServicePresets` (2). README (data + checklist F&B no. 5,6,8,9) |
+| `efn_setup_online` | 19.0.1.1.0 → **19.0.1.2.0** | Demo: kanal `RTL` 25 → 70 menit; 4 kanal brand `RTL-GL`, `RTL-BACHA`, `FNB-PB`, `FNB-BACHA` (nonaktif) + pricelist & tim per brand. Data: hanya komentar (ir.default 70 sengaja **tidak** dipakai, lihat bawah). Test: `test_demo_channels` (70), `test_demo_fnb_outlet_is_non_dine_in`, `TestEfnOnlineBrandChannels` (2). README |
+
+**Keputusan teknis yang perlu diketahui lead:**
+- `ir.default efn.online.channel.payment_timeout_minutes = 70` sempat ditulis lalu **dibatalkan**: suite CI memasang semua modul di satu DB, sehingga default itu mengubah kanal yang dibuat `efn_online_order/tests/common.py` dan menggagalkan `test_online_api.py:304` (mengharapkan 24–25 menit). Default field = E-35 (engineer, sekalian memperbarui test itu).
+- Urutan aktivasi W-02: Odoo kanal 70 dulu, baru BFF `ONLINE_PAYMENT_TIMEOUT_SECONDS=3600`. `scripts/smoke/odoo_online_smoke.py:148` masih menulis 25 (bff/QA mengubah saat BFF pindah).
+- DB demo/dev lama yang sudah punya SC dari demo: xmlid noupdate → SC lama tanpa "Replaces" → FP dine-in hanya memetakan PB1 (tanpa SC). DB dev memang harus dibuat ulang (W-03).
+
+### Rekomendasi untuk efn-odoo-engineer
+| Kode | Isi | Estimasi |
+|---|---|---|
+| E-35 | Reservasi saat place, cek move `assigned` saat bayar, `picked` saat siap, default batas bayar 70 + update `test_online_api.py` | 3–4 hari |
+| E-36 | Promo `sale_loyalty` di quote (SO nyata dalam savepoint) & place, `promo_codes`, hash, constraint program online, satu kode error generik | 5–6 hari |
+| E-37 | (opsional) `brand_code` kanal; pricelist per outlet nanti | 0,5 + 1 hari |
+| E-38 | Enkripsi PII partner (setelah ADR) | 3–4 minggu |
+| E-29a | `efn_online_kds_bridge` (G20) | 2,5–3 minggu |
+| E-39 | Partner pembeli + `partner_invoice_id` (G20, setelah E-38) | 1–1,5 minggu |
+Tidak ada yang perlu dihapus dari modul `efn_*` yang ada: reservasi, promo, pajak, dan katalog per brand semuanya memakai mesin standar; E-28 tidak menduplikasi fitur CE.
+
+### Pertanyaan klien
+Q-F19-1..Q-F19-6 (`docs/08 §10.10`): PB1 bawa pulang (konsultan pajak), SOP penyisihan barang tercadang, aturan kode promo, akses merchandising per brand, kode kanal & domain per brand, NIK untuk faktur tanpa NPWP.
+
+### Belum / tidak terverifikasi
+- **Semua test G19 belum dijalankan** (12 test baru/diubah) dan ruff belum dijalankan; perlu suite CI (`--test-tags efn`, DB terpisah) + install `--with-demo` untuk test demo.
+- PoC POS `include_base_amount` SC→PB1 hanya level source + test server; **tour POS & tutup sesi belum**.
+- Perilaku `sale_loyalty` pada `sale.order.new()` dan nomor SO yang terpakai saat quote berpromo ([B]).
+- Apakah `phone_validation` (sumber `phone_sanitized`) terpasang di DB EFN ([B]).
+- Mekanisme persis mematikan tracking `email`/`phone` di `res.partner` ([B], untuk ADR W-08).

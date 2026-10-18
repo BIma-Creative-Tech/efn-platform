@@ -155,4 +155,14 @@
         <field name="service_at">counter</field>
         <field name="available_in_self" eval="False"/>
     </record>
+    <!-- G19 W-14: pasangan dine-in kota contoh (PB1 kota + SC 5%). FP "Outlet Kota Contoh" di atas = non-dine-in
+         (tanpa SC). Preset kota default (tanpa demo) ada di data/pos_fnb_service_presets.xml. -->
+    <record id="preset_dine_in_kota_contoh" model="pos.preset">
+        <field name="name">Makan di tempat - Kota Contoh (DEMO)</field>
+        <field name="color">1</field>
+        <field name="identification">none</field>
+        <field name="fiscal_position_id" ref="efn_setup_company.fiscal_position_kota_contoh_dine_in_fnb"/>
+        <field name="service_at">table</field>
+        <field name="available_in_self" eval="False"/>
+    </record>
 </odoo>
