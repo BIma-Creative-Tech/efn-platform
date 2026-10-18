@@ -110,6 +110,8 @@ export const ONLINE_ERROR_MESSAGES: Record<string, string> = {
   // L-14 (G17-QA-03): bagian pesanan sedang diperiksa; kode ambil ditahan
   order_in_review: 'Pesanan Anda sedang diperiksa tim kami, jadi kode ambil ditahan sementara. Hubungi layanan pelanggan bila perlu bantuan.',
   rate_limited: 'Terlalu banyak permintaan. Tunggu sebentar lalu coba lagi.',
+  // §11.2: satu pesan untuk semua penyebab kode promo tidak berlaku (anti-enumerasi)
+  promo_invalid: 'Kode promo tidak dapat digunakan',
   unauthenticated: 'Sesi berakhir. Silakan masuk kembali.',
 };
 

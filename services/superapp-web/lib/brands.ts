@@ -51,6 +51,12 @@ export interface Brand {
   hosts: string[];
   /** Company yang katalognya ditampilkan di brand ini. */
   companies: CompanyCode[];
+  /**
+   * Kode brand katalog (non-rahasia; docs/04 §11.3 no. 4) = `efn.online.channel.brand_code` (mis. `GL`, `BACHA`, `PB`).
+   * Dipakai sebagai `?brand=` saat memuat kanal di domain brand. null = semua kanal (brand holding).
+   * Pembatasan UI saja — BFF tidak mempercayai domain. Nilai di sini ASUMSI sampai klien menetapkan pemetaan domain.
+   */
+  brandCode: string | null;
   theme: BrandTheme;
 }
 
@@ -65,6 +71,7 @@ export const BRANDS: Record<BrandId, Brand> = {
     subdomain: 'app',
     hosts: ['app.efn.local', 'efn.local', 'localhost'],
     companies: ['RTL', 'FNB'],
+    brandCode: null,
     theme: {
       primary: '#0b5d4b',
       primaryContrast: '#ffffff',
@@ -84,6 +91,7 @@ export const BRANDS: Record<BrandId, Brand> = {
     subdomain: 'mart',
     hosts: ['mart.efn.local'],
     companies: ['RTL'],
+    brandCode: null, // G19 L-33: menunggu Q-F19-5 (domain → brand_code); 'GL' setelah kanal RTL-GL aktif
     theme: {
       primary: '#1d4ed8',
       primaryContrast: '#ffffff',
@@ -103,6 +111,7 @@ export const BRANDS: Record<BrandId, Brand> = {
     subdomain: 'kitchen',
     hosts: ['kitchen.efn.local'],
     companies: ['FNB'],
+    brandCode: null, // G19 L-33: menunggu Q-F19-5; 'PB' setelah kanal FNB-PB aktif
     theme: {
       primary: '#b42318',
       primaryContrast: '#ffffff',

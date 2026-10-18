@@ -370,8 +370,17 @@ cd "$COMPOSE_DIR"
 FILES=(-f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.host.yml)
 # Kunci API payment hanya di-mount bila provider nyata (docs/04 §8.3); mock/disabled tidak me-mount kunci
 if [[ "$PAYMENT_PROVIDER" =~ ^(xendit|midtrans)$ ]]; then FILES+=(-f docker-compose.payment.yml); fi
-# G17: API key kanal FNB hanya di-mount bila kanal FNB ada di ONLINE_CHANNELS (kanal brand FNB-<X> butuh overlay baru)
-if [[ ",${ONLINE_CHANNELS:-RTL}," == *,FNB,* ]]; then FILES+=(-f docker-compose.online-fnb.yml); fi
+# G17/G19 (docs/04 §11.3): API key kanal selain RTL (base) hanya di-mount bila kanal ada di ONLINE_CHANNELS: satu
+# overlay per kanal docker-compose.online-<kode huruf kecil>.yml (FNB -> online-fnb, RTL-GL -> online-rtl-gl).
+# Kanal tanpa overlay = konfigurasi salah -> gagal (BFF akan menolak kanal tanpa key; lebih baik berhenti di sini).
+IFS=, read -r -a ONLINE_OVERLAY_CH <<< "${ONLINE_CHANNELS:-RTL}"
+for ch in "${ONLINE_OVERLAY_CH[@]}"; do
+  [[ "$ch" =~ ^[A-Z][A-Z0-9-]{1,15}$ ]] || die "ONLINE_CHANNELS: kode kanal tidak valid"
+  [[ "$ch" == RTL ]] && continue
+  ov="docker-compose.online-$(tr '[:upper:]' '[:lower:]' <<< "$ch").yml"
+  [[ -f "$ov" ]] || die "kanal ${ch} di ONLINE_CHANNELS tanpa overlay infra/compose/${ov} (docs/runbooks/odoo-online-api-key.md#kanal-baru)"
+  [[ " ${FILES[*]} " == *" ${ov} "* ]] || FILES+=(-f "$ov")
+done
 DC=(docker compose "${FILES[@]}")
 # W-11: daftar file compose untuk skrip host lain (efn-rotate-online-key me-recreate BFF dengan konfigurasi yang SAMA)
 printf '%s\n' "${FILES[@]}" | grep -v '^-f$' > .efn-compose-files.tmp && mv -f .efn-compose-files.tmp .efn-compose-files

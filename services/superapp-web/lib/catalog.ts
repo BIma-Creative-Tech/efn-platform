@@ -36,6 +36,8 @@ export interface CatalogChannel {
   channel_code: string;
   company_code: string;
   name: string;
+  /** Kode brand non-rahasia (§11.3 no. 2); null bila kanal tidak berbrand. */
+  brand_code: string | null;
   fulfilment: { pickup: boolean; delivery: boolean };
   outlets: CatalogOutlet[];
 }
@@ -76,6 +78,18 @@ export interface StockItem {
 }
 
 // ---------- validator input ----------
+
+/** `efn.online.channel.brand_code` (docs/04 §11.3 no. 2). */
+export const BRAND_CODE_RE = /^[A-Z][A-Z0-9]{1,9}$/;
+
+export function isBrandCode(v: unknown): v is string {
+  return typeof v === 'string' && BRAND_CODE_RE.test(v);
+}
+
+/** Path BFF daftar kanal; `?brand=` hanya bila kode valid (null/salah format -> semua kanal). */
+export function channelsPath(brandCode: string | null | undefined): string {
+  return isBrandCode(brandCode) ? `/v1/catalog/channels?${new URLSearchParams({ brand: brandCode })}` : '/v1/catalog/channels';
+}
 
 export function isChannelCode(v: unknown): v is string {
   return typeof v === 'string' && CHANNEL_RE.test(v);
@@ -236,6 +250,7 @@ export function parseChannels(v: unknown): CatalogChannel[] | null {
       channel_code: c.channel_code,
       company_code: str(c.company_code, 16) ?? c.channel_code,
       name: str(c.name, 120) ?? c.channel_code,
+      brand_code: isBrandCode(c.brand_code) ? c.brand_code : null,
       fulfilment: { pickup: f.pickup === true, delivery: f.delivery === true },
       outlets,
     });

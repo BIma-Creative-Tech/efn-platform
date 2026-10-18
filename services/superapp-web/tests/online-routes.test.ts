@@ -238,6 +238,54 @@ describe('keranjang', () => {
     expect(JSON.stringify(await res.json())).not.toContain('quote_hash');
     expect(bffFetch.mock.calls[0]![1].json).toEqual({});
   });
+  const okQuote = {
+    ok: true,
+    status: 200,
+    data: {
+      quote_id: QUOTE_ID,
+      cart_version: 1,
+      groups: [{ channel_code: 'RTL', company_code: 'RTL', outlet_code: 'TOKO-01', fulfilment: 'pickup', lines: [], tax_groups: [], amount_total: 0, amount_payable: 0, issues: [] }],
+      amount_payable_total: 0,
+      promo: { applied: ['HEMAT5'], invalid: [] },
+    },
+  };
+  it('quote promo: kode dinormalisasi, duplikat dibuang, diteruskan ke BFF; respons memuat promo', async () => {
+    bffFetch.mockResolvedValue(okQuote);
+    const res = await postQuote(req('/api/cart/quote', { method: 'POST', body: { promo_codes: [' hemat5 ', 'HEMAT5'], amount_payable_total: 1 } }));
+    expect(res.status).toBe(200);
+    expect(bffFetch.mock.calls[0]![1].json).toEqual({ promo_codes: ['HEMAT5'] });
+    expect((await res.json()).promo).toEqual({ applied: ['HEMAT5'], invalid: [] });
+  });
+  it('quote promo: format salah / lebih dari 3 -> 400 pesan generik tanpa memanggil BFF', async () => {
+    for (const promo_codes of [['bad code'], ['a', 'b', 'c', 'd'], 'A']) {
+      const res = await postQuote(req('/api/cart/quote', { method: 'POST', body: { promo_codes } }));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.message).toBe('Kode promo tidak dapat digunakan');
+    }
+    expect(bffFetch).not.toHaveBeenCalled();
+  });
+  it('quote promo: 429 dari BFF -> 429 rate_limited; pesan BFF tidak diteruskan', async () => {
+    bffFetch.mockResolvedValue(fail(429, 'rate_limited'));
+    const res = await postQuote(req('/api/cart/quote', { method: 'POST', body: { promo_codes: ['A'] } }));
+    expect(res.status).toBe(429);
+    const body = await res.json();
+    expect(body.error.code).toBe('rate_limited');
+    expect(JSON.stringify(body)).not.toContain('pesan internal BFF');
+  });
+});
+
+describe('katalog per brand (§11.3)', () => {
+  it('channels?brand= valid diteruskan ke BFF; format salah -> 400 tanpa BFF', async () => {
+    bffFetch.mockResolvedValue({ ok: true, status: 200, data: { items: [{ channel_code: 'RTL-GL', company_code: 'RTL', name: 'GL', brand_code: 'GL', fulfilment: {}, outlets: [] }] } });
+    const res = await getChannels(req('/api/catalog/channels?brand=GL'));
+    expect(res.status).toBe(200);
+    expect(bffFetch.mock.calls[0]![0]).toBe('/v1/catalog/channels?brand=GL');
+    expect((await res.json()).items[0].brand_code).toBe('GL');
+    bffFetch.mockClear();
+    expect((await getChannels(req('/api/catalog/channels?brand=gl'))).status).toBe(400);
+    expect((await getChannels(req('/api/catalog/channels?brand=A%26x=1'))).status).toBe(400);
+    expect(bffFetch).not.toHaveBeenCalled();
+  });
 });
 
 describe('checkout & Idempotency-Key server-side', () => {

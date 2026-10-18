@@ -1,13 +1,18 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   countItems,
   issueLabel,
+  MAX_PROMO_CODES,
+  normalizePromoCode,
   parseQuote,
+  PROMO_INVALID_MESSAGE,
+  PROMO_RATE_LIMIT_MESSAGE,
   quoteHasIssues,
+  retainPromoCodes,
   setOutlet,
   setQty,
   type Cart,
@@ -41,13 +46,30 @@ type View =
 
 type Msg = { kind: 'success' | 'error'; text: string } | null;
 
-async function fetchQuote(): Promise<{ quote: Quote | null; error: string | null; unavailable: boolean; status: number }> {
-  const r = await apiFetch<unknown>('/api/cart/quote', { method: 'POST', body: '{}' });
-  if (!r.ok) return { quote: null, error: r.message, unavailable: r.code === 'online_unavailable', status: r.status };
+type QuoteFetch = { quote: Quote | null; error: string | null; unavailable: boolean; status: number; promoNotice: string | null };
+
+/**
+ * Ambil quote. `codes` = kode promo (dikirim lewat body POST saja — tidak pernah di URL/log/analytics, §11.2).
+ * Bila quote dengan kode ditolak karena 429 (rate limit promo) atau 400, dan `fallback` aktif, hitung ulang TANPA kode
+ * supaya checkout tidak terblokir; `promoNotice` memuat pesan generik untuk ditampilkan di area promo.
+ */
+async function fetchQuote(codes: string[] = [], fallback = true): Promise<QuoteFetch> {
+  const r = await apiFetch<unknown>('/api/cart/quote', {
+    method: 'POST',
+    body: JSON.stringify(codes.length > 0 ? { promo_codes: codes } : {}),
+  });
+  if (!r.ok) {
+    if (codes.length > 0 && (r.status === 429 || r.status === 400)) {
+      const notice = r.status === 429 ? PROMO_RATE_LIMIT_MESSAGE : PROMO_INVALID_MESSAGE;
+      if (fallback) return { ...(await fetchQuote([], false)), promoNotice: notice };
+      return { quote: null, error: null, unavailable: false, status: r.status, promoNotice: notice };
+    }
+    return { quote: null, error: r.message, unavailable: r.code === 'online_unavailable', status: r.status, promoNotice: null };
+  }
   const quote = parseQuote(r.data);
   return quote
-    ? { quote, error: null, unavailable: false, status: r.status }
-    : { quote: null, error: onlineErrorMessage(null), unavailable: false, status: 502 };
+    ? { quote, error: null, unavailable: false, status: r.status, promoNotice: null }
+    : { quote: null, error: onlineErrorMessage(null), unavailable: false, status: 502, promoNotice: null };
 }
 
 /** Muat awal (tanpa menyentuh state): gabung keranjang tamu -> ambil keranjang -> quote server. */
@@ -98,6 +120,16 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
   const [busy, setBusy] = useState(false);
   const [paying, setPaying] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
+  // Kode promo hanya di memori komponen (bukan URL, localStorage, atau analytics). Hilang saat halaman dimuat ulang.
+  const promoRef = useRef<string[]>([]);
+  // Salinan untuk render (ref tidak boleh dibaca saat render); diperbarui bersama ref lewat setCodes.
+  const [heldCodes, setHeldCodes] = useState<string[]>([]);
+  const setCodes = useCallback((next: string[]) => {
+    promoRef.current = next;
+    setHeldCodes(next);
+  }, []);
+  const [promoInput, setPromoInput] = useState('');
+  const [promoMsg, setPromoMsg] = useState<Msg>(null);
 
   useEffect(() => {
     let active = true;
@@ -111,16 +143,81 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
     };
   }, [loggedIn]);
 
-  const requote = useCallback(async (cart: Cart, notice: string | null = null) => {
-    if (cart.groups.length === 0) {
-      setView({ kind: 'member', cart, quote: null, quoteError: null, notice });
+  /** Sinkronkan kode promo terpakai + pesan generik dari hasil quote. Kode tidak berlaku tidak dibedakan penyebabnya. */
+  const settlePromo = useCallback((q: QuoteFetch, sent: string[], explicit: boolean) => {
+    if (q.promoNotice) {
+      // Fallback tanpa kode (429/400): kode tetap disimpan di memori untuk percobaan berikutnya.
+      setCodes(retainPromoCodes(promoRef.current, null, true));
+      setPromoMsg({
+        kind: 'error',
+        text: promoRef.current.length > 0 ? `${q.promoNotice} Kode Anda tetap tersimpan; ringkasan sementara dihitung tanpa kode.` : q.promoNotice,
+      });
       return;
     }
-    const q = await fetchQuote();
-    if (q.status === 401) return goToLogin('/keranjang');
-    if (q.unavailable) return setView({ kind: 'unavailable' });
-    setView({ kind: 'member', cart, quote: q.quote, quoteError: q.error, notice });
+    if (!q.quote) return;
+    setCodes(retainPromoCodes(promoRef.current, q.quote.promo.applied, false));
+    if (q.quote.promo.invalid.length > 0) setPromoMsg({ kind: 'error', text: PROMO_INVALID_MESSAGE });
+    else if (explicit && sent.length > 0) setPromoMsg({ kind: 'success', text: 'Kode promo diterapkan.' });
+    else if (sent.length === 0) setPromoMsg(null);
   }, []);
+
+  const requote = useCallback(
+    async (cart: Cart, notice: string | null = null) => {
+      if (cart.groups.length === 0) {
+        setCodes([]);
+        setPromoMsg(null);
+        setView({ kind: 'member', cart, quote: null, quoteError: null, notice });
+        return;
+      }
+      const sent = promoRef.current;
+      const q = await fetchQuote(sent);
+      if (q.status === 401) return goToLogin('/keranjang');
+      if (q.unavailable) return setView({ kind: 'unavailable' });
+      settlePromo(q, sent, false);
+      setView({ kind: 'member', cart, quote: q.quote, quoteError: q.error, notice });
+    },
+    [settlePromo],
+  );
+
+  async function applyPromo() {
+    if (view.kind !== 'member' || busy || paying) return;
+    const code = normalizePromoCode(promoInput);
+    if (code === null) return setPromoMsg({ kind: 'error', text: PROMO_INVALID_MESSAGE });
+    if (promoRef.current.includes(code)) return setPromoMsg({ kind: 'error', text: 'Kode promo ini sudah dimasukkan.' });
+    if (promoRef.current.length >= MAX_PROMO_CODES) {
+      return setPromoMsg({ kind: 'error', text: `Maksimal ${MAX_PROMO_CODES} kode promo.` });
+    }
+    const sent = [...promoRef.current, code];
+    setBusy(true);
+    setPromoMsg(null);
+    try {
+      const q = await fetchQuote(sent, false);
+      if (q.status === 401) return goToLogin('/keranjang');
+      if (q.unavailable) return setView({ kind: 'unavailable' });
+      if (!q.quote) {
+        // 429/400/galat lain: pertahankan ringkasan lama; checkout tidak terblokir.
+        setPromoMsg({ kind: 'error', text: q.promoNotice ?? q.error ?? PROMO_INVALID_MESSAGE });
+        return;
+      }
+      settlePromo(q, sent, true);
+      setPromoInput('');
+      setView({ kind: 'member', cart: view.cart, quote: q.quote, quoteError: null, notice: view.notice });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removePromo(code: string) {
+    if (view.kind !== 'member' || busy || paying) return;
+    setBusy(true);
+    setPromoMsg(null);
+    try {
+      setCodes(promoRef.current.filter((c) => c !== code));
+      await requote(view.cart, view.notice);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   /** Ubah keranjang member (PUT versi) lalu hitung ulang quote di server. */
   async function mutateMember(fn: (groups: CartGroup[]) => CartGroup[]) {
@@ -208,6 +305,8 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
   const quote = view.kind === 'member' ? view.quote : null;
   const blocked = !quote || quoteHasIssues(quote);
   const quoteGroup = (code: string): QuoteGroup | null => quote?.groups.find((g) => g.channel_code === code) ?? null;
+  // Saat fallback tanpa kode, quote.promo.applied kosong; tetap tampilkan kode yang disimpan agar bisa dihapus.
+  const shownCodes = quote ? (quote.promo.applied.length > 0 ? quote.promo.applied : heldCodes) : [];
   const mutate = view.kind === 'guest' ? mutateGuest : (fn: (g: CartGroup[]) => CartGroup[]) => void mutateMember(fn);
 
   return (
@@ -257,7 +356,7 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
 
             <ul className={styles.lines}>
               {g.lines.map((l) => {
-                const ql = qg?.lines.find((x) => x.product_id === l.product_id);
+                const ql = qg?.lines.find((x) => !x.reward && x.product_id === l.product_id);
                 const issue = qg?.issues.find((i) => i.product_id === l.product_id);
                 const name = ql?.name ?? (view.kind === 'guest' ? view.guest.names[String(l.product_id)] : undefined) ?? `Produk #${l.product_id}`;
                 return (
@@ -310,6 +409,20 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
                   </li>
                 );
               })}
+              {(qg?.lines ?? [])
+                .filter((rl) => rl.reward)
+                .map((rl, ri) => (
+                  <li key={`reward-${ri}`} className={`${styles.line} ${styles.rewardLine}`}>
+                    <span>
+                      <span className={styles.lineName}>{rl.name}</span>
+                      <span className="small muted">
+                        <br />
+                        Diskon promo
+                      </span>
+                    </span>
+                    <span className={styles.price}>{formatRupiah(rl.subtotal_incl)}</span>
+                  </li>
+                ))}
             </ul>
 
             {qg && (
@@ -350,6 +463,54 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
               <h2 id="ringkasan" style={{ marginTop: 0, fontSize: '1.0625rem' }}>
                 Ringkasan pembayaran
               </h2>
+              <div className={styles.promo}>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void applyPromo();
+                  }}
+                  noValidate
+                >
+                  <label htmlFor="promo-code">Kode promo (opsional)</label>
+                  <div className={styles.promoRow}>
+                    <input
+                      id="promo-code"
+                      name="promo"
+                      type="text"
+                      value={promoInput}
+                      maxLength={40}
+                      autoComplete="off"
+                      autoCapitalize="characters"
+                      spellCheck={false}
+                      enterKeyHint="done"
+                      aria-describedby="promo-status promo-hint"
+                      disabled={busy || paying || shownCodes.length >= MAX_PROMO_CODES}
+                      onChange={(e) => setPromoInput(e.target.value)}
+                    />
+                    <button type="submit" className="btn btn-secondary" disabled={busy || paying || promoInput.trim() === '' || shownCodes.length >= MAX_PROMO_CODES}>
+                      Terapkan
+                    </button>
+                  </div>
+                </form>
+                <p id="promo-hint" className="hint" style={{ margin: '0.25rem 0 0' }}>
+                  Maksimal {MAX_PROMO_CODES} kode. Kode yang tidak berlaku tidak menghalangi pembayaran.
+                </p>
+                <div id="promo-status" aria-live="polite" role="status">
+                  {promoMsg && <p className={`alert ${promoMsg.kind === 'success' ? 'alert-success' : 'alert-error'}`}>{promoMsg.text}</p>}
+                </div>
+                {shownCodes.length > 0 && (
+                  <ul className={styles.promoApplied} aria-label="Kode promo terpakai">
+                    {shownCodes.map((c) => (
+                      <li key={c}>
+                        <span className={styles.promoCode}>{c}</span>
+                        <button type="button" className="btn btn-secondary btn-small" disabled={busy || paying} aria-label={`Hapus kode promo ${c}`} onClick={() => void removePromo(c)}>
+                          Hapus
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
               <dl className={styles.totals} style={{ borderTop: 0, marginTop: 0 }}>
                 {quote.groups.map((qg) => (
                   <PairRow key={qg.channel_code} label={companyDisplayName(qg.company_code)} value={formatRupiah(qg.amount_payable)} />
@@ -358,8 +519,8 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
                 <dd className={styles.grand}>{formatRupiah(quote.amount_payable_total)}</dd>
               </dl>
               <p className="hint" style={{ marginBottom: 0 }}>
-                Harga sudah termasuk pajak dan dihitung oleh sistem toko. Pembayaran lewat QRIS, batas waktu 15 menit setelah
-                pesanan dibuat. Stok dicek lagi setelah pembayaran; bila habis, bagian itu dibatalkan dan dana dikembalikan.
+                Harga sudah termasuk pajak dan dihitung oleh sistem toko. Pembayaran lewat QRIS; batas waktu bayar (hitung
+                mundur) ditampilkan di halaman pesanan setelah pesanan dibuat. Stok dicek lagi setelah pembayaran; bila habis, bagian itu dibatalkan dan dana dikembalikan.
               </p>
             </section>
           )}

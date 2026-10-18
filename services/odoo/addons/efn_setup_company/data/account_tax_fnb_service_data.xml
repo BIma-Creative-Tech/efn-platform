@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- W-14 (Gelombang 19): pajak F&B per LAYANAN dengan fiscal position standar CE 19.
+     Keputusan pemilik proyek 10 Okt 2026 #15 (P-16) dan #37 (P-12): PB1 10 % + service charge (SC) 5 % hanya
+     dine-in; SC MASUK DPP PB1; harga menu EXCLUDE; takeaway/3PL/pickup/online TANPA SC.
+     PB1 untuk non-dine-in: pemilik proyek menjawab "tidak dikenakan", TETAPI UU HKPD umumnya mengenakan PBJT juga
+     atas bawa pulang -> WAJIB konfirmasi konsultan pajak (R-L09). Modul ini TIDAK memutuskan: pajak
+     "PB1 Non-Dine-in" dibuat dengan tarif SAMA dengan PB1 default (default aman = tetap dipungut) dan ditandai TODO.
+     Bila konsultan menyatakan tidak terutang: admin mengubah Amount pajak itu ke 0 (atau mengganti pajak di fiscal
+     position) -> tanpa kode. ADR-027, ADR-015, docs/08 §10.4.
+
+     Mekanisme (terverifikasi source odoo/odoo 19.0, 2026-10-18):
+     - account/models/partner.py _compute_tax_map: tax_map[src] = semua pajak tujuan di fp.tax_ids yang
+       original_tax_ids ("Replaces")-nya memuat src. map_tax: pajak yang TIDAK ada di tax_map dipertahankan.
+     - account/models/account_tax.py: original_tax_ids hanya boleh berisi pajak domestik (is_domestic = pajak yang
+       tidak berada di fiscal position mana pun) -> sumber = PB1 default (pajak produk), tujuan = pajak di bawah ini.
+     - SC sequence 5 + include_base_amount=True, PB1 sequence 10 + is_base_affected=True -> SC masuk DPP PB1
+       (helper JS account/static/src/helpers/account_tax.js yang dipakai POS menerapkan aturan yang sama).
+     - POS: point_of_sale/static/src/app/models/account_fiscal_position.js getTaxesAfterFiscalPosition = cermin
+       map_tax; fiscal position preset/config dimuat ke POS (models/account_fiscal_position.py).
+
+     Pola:
+     - Produk menu cukup memakai PB1 default (pajak penjualan default PT F&B) -> tanpa fiscal position = tanpa SC.
+     - Dine-in: fiscal position "F&B Dine-in" memetakan PB1 default -> [SC 5 %, PB1 Dine-in].
+     - Non-dine-in (bawa pulang, 3PL, pickup, online Super-App): fiscal position "F&B Non-Dine-in" memetakan
+       PB1 default -> [PB1 Non-Dine-in] (tanpa SC).
+     - Kota dengan tarif PB1 lain: admin membuat sepasang pajak + fiscal position kota (dine-in & non-dine-in),
+       lihat README "Panduan admin". Contoh di demo/account_tax_demo.xml.
+     noupdate="1": tarif/nama/akun yang diubah admin tidak ditimpa upgrade.
+     GO-LIVE BLOCKER (tetap, Q-2): akun liabilitas PB1 dan akun pendapatan SC di baris repartisi. Tanpa akun,
+     nilai pajak jatuh ke akun pendapatan baris (jurnal tetap seimbang, PoC G18). -->
+<odoo noupdate="1">
+    <!-- Harga menu EXCLUDE pajak (#15). Default CE juga tax_excluded; ditulis eksplisit sebagai keputusan. Ubah
+         HANYA sebelum harga menu diisi (mengubah arti list_price semua produk PT F&B). -->
+    <record id="company_fnb" model="res.company">
+        <field name="account_price_include">tax_excluded</field>
+    </record>
+
+    <!-- xmlid tax_group_service_charge_fnb / tax_service_charge_5_fnb dipindah dari demo (G14) ke data (G19):
+         SC 5 % dine-in sudah diputuskan pemilik proyek. DB demo lama tidak berubah (noupdate). -->
+    <record id="tax_group_service_charge_fnb" model="account.tax.group">
+        <field name="name">Service Charge</field>
+        <field name="company_id" ref="company_fnb"/>
+        <field name="sequence">15</field>
+    </record>
+    <record id="tax_service_charge_5_fnb" model="account.tax">
+        <field name="name">Service Charge 5% (dine-in)</field>
+        <field name="invoice_label">Service Charge</field>
+        <field name="type_tax_use">sale</field>
+        <field name="amount_type">percent</field>
+        <field name="amount">5.0</field>
+        <field name="sequence">5</field>
+        <!-- SC masuk DPP PB1 (#15). Bila konsultan pajak menyatakan sebaliknya: include_base_amount = False. -->
+        <field name="include_base_amount" eval="True"/>
+        <field name="company_id" ref="company_fnb"/>
+        <field name="tax_group_id" ref="tax_group_service_charge_fnb"/>
+        <field name="original_tax_ids" eval="[(6, 0, [ref('tax_pb1_10_fnb')])]"/>
+        <field name="description">&lt;p&gt;Service charge dine-in (bukan pajak negara). Hanya lewat fiscal position "F&amp;amp;B Dine-in". Akun pendapatan SC: Finance (Q-2).&lt;/p&gt;</field>
+    </record>
+
+    <record id="tax_pb1_dine_in_fnb" model="account.tax">
+        <field name="name">PB1 Dine-in 10% (PLACEHOLDER)</field>
+        <field name="invoice_label">PB1</field>
+        <field name="type_tax_use">sale</field>
+        <field name="amount_type">percent</field>
+        <field name="amount">10.0</field>
+        <field name="sequence">10</field>
+        <field name="is_base_affected" eval="True"/>
+        <field name="company_id" ref="company_fnb"/>
+        <field name="tax_group_id" ref="tax_group_pb1_fnb"/>
+        <field name="original_tax_ids" eval="[(6, 0, [ref('tax_pb1_10_fnb')])]"/>
+        <field name="description">&lt;p&gt;PB1 dine-in kota default. Tarif = PB1 default (PLACEHOLDER, Q-22). DPP termasuk service charge.&lt;/p&gt;</field>
+    </record>
+
+    <!-- TODO R-L09 (konsultan pajak): PB1 atas bawa pulang/3PL/pickup/online. Tarif sengaja = PB1 default. -->
+    <record id="tax_pb1_non_dine_in_fnb" model="account.tax">
+        <field name="name">PB1 Non-Dine-in 10% (PLACEHOLDER - TODO konsultan pajak R-L09)</field>
+        <field name="invoice_label">PB1</field>
+        <field name="type_tax_use">sale</field>
+        <field name="amount_type">percent</field>
+        <field name="amount">10.0</field>
+        <field name="sequence">10</field>
+        <field name="is_base_affected" eval="True"/>
+        <field name="company_id" ref="company_fnb"/>
+        <field name="tax_group_id" ref="tax_group_pb1_fnb"/>
+        <field name="original_tax_ids" eval="[(6, 0, [ref('tax_pb1_10_fnb')])]"/>
+        <field name="description">&lt;p&gt;TODO R-L09: pemilik proyek menyatakan non-dine-in tidak dikenakan PB1, tetapi UU HKPD umumnya mengenakan PBJT atas bawa pulang. Tarif dipertahankan sama dengan PB1 default sampai opini konsultan pajak. Bila tidak terutang: ubah Amount menjadi 0.&lt;/p&gt;</field>
+    </record>
+
+    <record id="fiscal_position_fnb_dine_in" model="account.fiscal.position">
+        <field name="name">F&amp;B Dine-in (PB1 + SC 5%)</field>
+        <field name="company_id" ref="company_fnb"/>
+        <field name="sequence">20</field>
+        <field name="auto_apply" eval="False"/>
+        <field name="tax_ids" eval="[(6, 0, [ref('tax_service_charge_5_fnb'), ref('tax_pb1_dine_in_fnb')])]"/>
+        <field name="note">&lt;p&gt;Dine-in kota default: PB1 + service charge 5% (SC masuk DPP PB1). Pasang di preset POS "Makan di tempat (F&amp;amp;B)". Jangan dipakai untuk kanal online.&lt;/p&gt;</field>
+    </record>
+    <record id="fiscal_position_fnb_non_dine_in" model="account.fiscal.position">
+        <field name="name">F&amp;B Non-Dine-in (tanpa SC; PB1 TODO R-L09)</field>
+        <field name="company_id" ref="company_fnb"/>
+        <field name="sequence">21</field>
+        <field name="auto_apply" eval="False"/>
+        <field name="tax_ids" eval="[(6, 0, [ref('tax_pb1_non_dine_in_fnb')])]"/>
+        <field name="note">&lt;p&gt;Bawa pulang, 3PL, pickup, online Super-App kota default: tanpa service charge. PB1 menunggu konsultan pajak (R-L09). Dipakai preset POS "Bawa pulang (F&amp;amp;B)" dan fiscal position outlet kanal online F&amp;amp;B.&lt;/p&gt;</field>
+    </record>
+</odoo>

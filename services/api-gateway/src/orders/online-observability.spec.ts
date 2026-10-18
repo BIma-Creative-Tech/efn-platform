@@ -91,6 +91,8 @@ describe('Observability online (§10.11)', () => {
     expect(() => testConfig({ ODOO_API_KEY_ONLINE_RTL_FILE: '/k' }, reader('disabled\n')).odooApiKeyOnline('RTL')).toThrow(/placeholder 'disabled'/);
     const startup = testConfig({ ONLINE_ENABLED: 'true', ODOO_API_KEY_ONLINE_RTL_FILE: '/k', ODOO_ONLINE_EVENT_HMAC_FILE: '/k' }, reader('disabled'));
     expect(() => startup.assertStartupSecrets()).toThrow(ConfigError);
+    // SEC-133: penyebabnya placeholder, bukan `…_FILE` yang salah dianggap env literal
+    expect(() => startup.assertStartupSecrets()).not.toThrow(/sebagai env literal/);
     const same = randomSecret();
     expect(() => testConfig({ ODOO_BFF_API_KEY: same, ODOO_ONLINE_EVENT_HMAC_FILE: '/k' }, reader(same)).odooOnlineEventHmac).toThrow(/berbeda/);
     // kanal mati (default) → secret online tidak diperlukan untuk start

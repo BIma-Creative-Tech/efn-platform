@@ -51,6 +51,11 @@
         <field name="api_key_duration">0</field>
     </record>
 
+    <!-- W-02 (keputusan #18): batas bayar Odoo 70 menit (BFF 3600 s + margin 10) SENGAJA tidak dipasang sebagai
+         ir.default di sini: ir.default berlaku DB-wide dan mengubah default kanal yang dibuat test efn_online_order
+         (suite CI memasang semua modul di satu DB). Default field = tugas engineer (E-35, docs/08 §10.1); kanal demo
+         memakai 70 secara eksplisit, kanal produksi diisi lewat checklist README. -->
+
     <!-- Program loyalty BARU tidak berlaku di SO online (Q-ON10: promo online hanya pricelist). Dijalankan setiap
          install/upgrade (noupdate=0) agar default tidak bisa hilang diam-diam. -->
     <function model="ir.default" name="set" eval="('loyalty.program', 'sale_ok', False)"/>

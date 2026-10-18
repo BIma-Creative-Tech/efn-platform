@@ -3,7 +3,7 @@ import { randomSecret, testConfig } from '../common/testing/fakes';
 import { ConfigError } from '../config/app-config';
 import { CircuitBreaker } from './circuit-breaker';
 import { Json2OdooOnlineClient, Json2Transport, TransportResponse, businessCode } from './json2-client';
-import { parseCatalogPage, parsePlace, parseQuote } from './odoo-online.parse';
+import { PRODUCT_ISSUE_CODES, parseCatalogPage, parsePlace, parseQuote } from './odoo-online.parse';
 import { ODOO_ONLINE_PATHS, OdooRpcError } from './odoo-online.types';
 import { OnlineMetrics } from './online-metrics';
 
@@ -161,10 +161,87 @@ describe('Validasi respons Odoo (§10.4.3)', () => {
       channel: { code: 'RTL', name: 'Retail', company_code: 'RTL', currency: 'IDR', outlets: [{ code: 'TOKO-01', public_name: 'Toko 1', pickup_enabled: true, prep_minutes: 15, active: true }] },
     });
     expect(withCh.channel).toEqual({
-      code: 'RTL', name: 'Retail', company_code: 'RTL', currency: 'IDR', active: true, fulfilment: { pickup: true, delivery: false },
+      code: 'RTL', name: 'Retail', company_code: 'RTL', brand_code: null, currency: 'IDR', active: true, fulfilment: { pickup: true, delivery: false },
       outlets: [{ outlet_code: 'TOKO-01', public_name: 'Toko 1', pickup_enabled: true, prep_minutes: 15, active: true }],
     });
     expect(() => parseCatalogPage({ items: [], server_time: 'now', channel: { code: 'RTL', name: 'x', company_code: 'RTL', outlets: [] } })).toThrow(OdooRpcError);
+  });
+});
+
+describe('G19 §11.2: promo di json2 (quote/place) & baris reward', () => {
+  const QUOTE_OK = {
+    company_code: 'RTL',
+    lines: [
+      { product_id: 11, name: 'Beras', qty: 1, price_unit_incl: 79_900, subtotal_incl: 79_900, tax_labels: ['PPN 11%'], available: true },
+      { product_id: 9001, name: 'Promo Gajian', qty: 1, price_unit_incl: -5_000, subtotal_incl: -5_000, tax_labels: ['PPN 11%'], available: true, reward: true, reward_id: 3 },
+    ],
+    tax_groups: [{ label: 'PPN 11%', base: 67_477.48, amount: 7_422.52 }],
+    amount_total: 74_900,
+    amount_payable: 74_900,
+    quote_hash: 'h1',
+    valid_until: false,
+    issues: [],
+    promo_applied: ['gajian'],
+    promo_rejected: ['NOPE42'],
+  };
+
+  it('quote mengirim promo_codes (selalu, [] bila kosong); place mengirim order.promo_codes', async () => {
+    const ctx = setup([ok(QUOTE_OK), ok({ ...QUOTE_OK, promo_applied: [], promo_rejected: [], lines: [QUOTE_OK.lines[0]], amount_total: 79_900, amount_payable: 79_900 }), ok({ order_state: 'placed', sale_order_name: 'S1', amount_total: 74_900, amount_payable: 74_900, expires_at: '2026-10-18 04:10:00' })]);
+    await ctx.client.quote('RTL', 'TOKO-01', 'pickup', [{ product_id: 11, qty: 1 }], ['GAJIAN', 'NOPE42']);
+    expect(ctx.calls[0].body).toEqual({
+      channel_code: 'RTL', outlet_code: 'TOKO-01', fulfilment: 'pickup', lines: [{ product_id: 11, qty: 1 }], promo_codes: ['GAJIAN', 'NOPE42'], context: { lang: 'id_ID' },
+    });
+    await ctx.client.quote('RTL', 'TOKO-01', 'pickup', [{ product_id: 11, qty: 1 }], []);
+    expect((ctx.calls[1].body as Record<string, unknown>).promo_codes).toEqual([]);
+    await ctx.client.place('RTL', {
+      idempotency_key: 'online:place:p', platform_order_ref: 'p', checkout_ref: 'o', outlet_code: 'TOKO-01', fulfilment: 'pickup',
+      lines: [{ product_id: 11, qty: 1 }], quote_hash: 'h1', pickup_code: 'ABCDEFGH', promo_codes: ['GAJIAN'],
+    });
+    expect((ctx.calls[2].body as { order: Record<string, unknown> }).order.promo_codes).toEqual(['GAJIAN']);
+  });
+
+  it('kanal berhifen: bearer dari ODOO_API_KEY_ONLINE_RTL_GL_FILE, tidak pernah key kanal lain', async () => {
+    const glKey = randomSecret();
+    const config = testConfig({ ODOO_API_KEY_ONLINE_RTL_FILE: '/k/rtl', ODOO_API_KEY_ONLINE_RTL_GL_FILE: '/k/rtl-gl' }, (p) => {
+      if (p === '/k/rtl') return Buffer.from(RTL_KEY);
+      if (p === '/k/rtl-gl') return Buffer.from(glKey);
+      throw new Error('ENOENT');
+    });
+    const seen: string[] = [];
+    const transport: Json2Transport = async (_path, _body, headers) => {
+      seen.push(headers.Authorization);
+      return ok(STATUS_ROW);
+    };
+    const client = new Json2OdooOnlineClient(config, transport, new OnlineMetrics(new MetricsService()));
+    await client.status('RTL-GL', ['x']);
+    await client.status('RTL', ['x']);
+    expect(seen).toEqual([`bearer ${glKey}`, `bearer ${RTL_KEY}`]);
+    await expect(client.status('RTL-BACHA', ['x'])).rejects.toMatchObject({ kind: 'auth' }); // tanpa key → tidak memakai key lain
+    expect(seen).toHaveLength(2);
+  });
+
+  it('parse: baris reward negatif diterima (reward:true, field lain dibuang), promo_applied dinormalisasi huruf besar', () => {
+    const q = parseQuote(QUOTE_OK);
+    expect(q.lines[1]).toEqual({ product_id: 9001, name: 'Promo Gajian', qty: 1, price_unit_incl: -5_000, subtotal_incl: -5_000, tax_labels: ['PPN 11%'], available: true, reward: true });
+    expect(q.lines[0].reward).toBe(false);
+    expect(q.promo_applied).toEqual(['GAJIAN']);
+    expect(q.promo_rejected).toEqual(['NOPE42']);
+    // Odoo lama tanpa field promo → [] (semua kode dianggap tidak terpakai)
+    const legacy = parseQuote({ ...QUOTE_OK, promo_applied: undefined, promo_rejected: false, lines: [QUOTE_OK.lines[0]] });
+    expect([legacy.promo_applied, legacy.promo_rejected]).toEqual([[], []]);
+  });
+
+  it('parse: bentuk salah → invalid_response (reward positif, harga negatif tanpa reward, kode berbentuk salah, applied ∩ rejected)', () => {
+    const bad: Record<string, unknown>[] = [
+      { ...QUOTE_OK, lines: [QUOTE_OK.lines[0], { ...QUOTE_OK.lines[1], subtotal_incl: 5_000, price_unit_incl: 5_000 }] },
+      { ...QUOTE_OK, lines: [{ ...QUOTE_OK.lines[0], subtotal_incl: -1 }] },
+      { ...QUOTE_OK, lines: [{ ...QUOTE_OK.lines[1], reward: 'yes' }] },
+      { ...QUOTE_OK, promo_applied: ['KODE BOCOR'] },
+      { ...QUOTE_OK, promo_applied: 'GAJIAN' },
+      { ...QUOTE_OK, promo_applied: ['GAJIAN'], promo_rejected: ['gajian'] },
+      { ...QUOTE_OK, promo_rejected: ['A'.repeat(41)] },
+    ];
+    for (const b of bad) expect(() => parseQuote(b)).toThrow(OdooRpcError);
   });
 });
 
@@ -244,5 +321,41 @@ describe('SEC-96/SEC-109: batas konkurensi json2 per pool (publik vs saga)', () 
     (wake as unknown as () => void)();
     await a;
     expect(order).toEqual(['A', 'B', 'A']);
+  });
+});
+
+describe('L-35 / QA G19: tagihan < Rp1 ditolak sebagai konfigurasi salah', () => {
+  it('quote tanpa issue dengan amount_payable 0 → OdooRpcError; place 0 → OdooRpcError', () => {
+    expect(() => parseQuote({ lines: [], amount_total: 0, amount_payable: 0, quote_hash: 'h' })).toThrow(/amount_payable < 1/);
+    expect(() =>
+      parsePlace({ order_state: 'placed', sale_order_name: 'S1', amount_total: 0, amount_payable: 0, expires_at: '2026-10-09 03:25:00' }),
+    ).toThrow(/amount_payable < 1/);
+  });
+
+  it('quote amount_payable 0 DENGAN issue (mis. qty_limit / out_of_stock) diterima — quote tetap terblokir di checkout', () => {
+    const q = parseQuote({ lines: [], amount_total: 0, amount_payable: 0, quote_hash: 'h', issues: [{ product_id: 11, code: 'qty_limit' }] });
+    expect(q.issues).toEqual([{ product_id: 11, code: 'qty_limit' }]);
+  });
+});
+
+describe('G19 SEC-131: issue quote `qty_limit` di parser', () => {
+  const line = { product_id: 11, name: 'Beras', qty: 25, price_unit_incl: 79_900, subtotal_incl: 1_997_500, tax_labels: [], available: true };
+  const base = { company_code: 'RTL', lines: [line], amount_total: 1_997_500, amount_payable: 1_997_500, quote_hash: 'h' };
+
+  it('qty_limit per produk diterima di samping out_of_stock; code diteruskan apa adanya', () => {
+    const q = parseQuote({ ...base, issues: [{ product_id: 11, code: 'qty_limit' }, { product_id: 14, code: 'out_of_stock' }] });
+    expect(q.issues).toEqual([{ product_id: 11, code: 'qty_limit' }, { product_id: 14, code: 'out_of_stock' }]);
+    expect(PRODUCT_ISSUE_CODES).toEqual(['out_of_stock', 'qty_limit']);
+  });
+
+  it('qty_limit / out_of_stock tanpa product_id → invalid_response; isu tingkat order (order_limit) tetap boleh null', () => {
+    for (const pid of [null, false, undefined]) {
+      expect(() => parseQuote({ ...base, issues: [{ product_id: pid, code: 'qty_limit' }] })).toThrow(/qty_limit tanpa product_id/);
+      expect(() => parseQuote({ ...base, issues: [{ product_id: pid, code: 'out_of_stock' }] })).toThrow(OdooRpcError);
+    }
+    expect(parseQuote({ ...base, issues: [{ product_id: null, code: 'order_limit' }] }).issues).toEqual([{ product_id: null, code: 'order_limit' }]);
+    // bentuk kode tetap diperiksa
+    expect(() => parseQuote({ ...base, issues: [{ product_id: 11, code: 'QTY-LIMIT' }] })).toThrow(OdooRpcError);
+    expect(() => parseQuote({ ...base, issues: [{ product_id: 0, code: 'qty_limit' }] })).toThrow(OdooRpcError);
   });
 });

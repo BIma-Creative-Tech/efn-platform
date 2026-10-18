@@ -95,6 +95,32 @@ daftar path = perubahan kontrak §10.4.3 + `RPC_ALLOWLIST` Odoo). Tanpa deploy �
   (retry 1 m → 1 j) — tidak ada event hilang. Prosedur umum: [secret-rotation.md](secret-rotation.md).
 - **Bucket `catalog`:** dibuat `minio-init` (SSE-S3, privat, tanpa lifecycle; retensi = job BFF). Hanya user BFF
   (Get/Put/Delete objek + GetBucketLocation).
+- **Menambah kanal brand** (`RTL-GL`, `RTL-BACHA`, `FNB-PB`, `FNB-BACHA`, docs/04 §11.3): key & user teknis per kanal
+  → [odoo-online-api-key.md#kanal-baru](odoo-online-api-key.md#kanal-baru). Kanal masuk `ONLINE_CHANNELS` **terakhir**.
+
+## Aktivasi reservasi stok 1 jam (G19 W-02, docs/04 §11.1) {#aktivasi-reservasi-1-jam}
+
+> **Ringkasan manajemen.** Sejak G19 pesanan online mengunci stok selama 1 jam menunggu pembayaran. Pengaturannya ada
+> di dua tempat (Odoo dan Super-App) dan **harus diubah berurutan**: Odoo dulu, baru Super-App. Bila terbalik, checkout
+> online ditolak sampai Odoo diperbaiki (aman, tidak ada uang/stok yang salah) — tetapi pelanggan tidak bisa memesan.
+
+Aturan: `payment_timeout_minutes` kanal Odoo ≥ `ONLINE_PAYMENT_TIMEOUT_SECONDS`/60 + 10. Target: Odoo **70**, BFF **3600**.
+Default compose BFF sejak G19 = **3600** dan `ONLINE_MAX_OPEN_ORDERS_PER_MEMBER` = **2** (L-32).
+
+1. **Odoo dulu** (setiap kanal di `ONLINE_CHANNELS`): Penjualan Online → Kanal → `payment_timeout_minutes = 70`
+   (`stock_hold_mode = confirm` untuk kanal ritel, data `efn_setup_online`). Cek read-only:
+   `SELECT code, active, payment_timeout_minutes FROM efn_online_channel;` → semua kanal aktif ≥ 70.
+2. **Baru BFF:** GitHub variable `ONLINE_PAYMENT_TIMEOUT_SECONDS` kosong (= default 3600) atau `3600`, dan
+   `ONLINE_MAX_OPEN_ORDERS_PER_MEMBER` kosong/`2` → workflow Deploy (me-recreate `api-gateway`).
+   **Lingkungan yang Odoo-nya belum 70:** set `ONLINE_PAYMENT_TIMEOUT_SECONDS=900` eksplisit di config rilis **sebelum**
+   men-deploy G19, karena default compose sudah 3600.
+3. Verifikasi: checkout uji → `expires_at` order ≈ +60 menit; SO Odoo tercadang (picking `assigned`). Pengaman BFF
+   §10.3.5 no. 5 (`expires_at` Odoo ≥ order + 5 menit) menolak checkout bila langkah 1 terlewat — gejala: checkout
+   gagal untuk semua pelanggan kanal itu setelah deploy → kembalikan BFF ke 900 atau selesaikan langkah 1.
+4. **Mundur:** BFF dulu (900), baru Odoo (25). Order yang sudah dibuat tetap memakai batas lamanya.
+
+Rate limit kode promo (G19 W-09, §11.2 no. 6): `ONLINE_RL_PROMO_MEMBER_LIMIT/WINDOW_SECONDS` (10 / 900 s) dan
+`ONLINE_RL_PROMO_IP_LIMIT/WINDOW_SECONDS` (30 / 900 s) di compose base; tidak lewat config rilis (ubah = PR).
 
 ## Sizing worker Odoo: kanal online vs POS {#sizing-worker}
 
@@ -322,6 +348,9 @@ Konsekuensinya, pelanggan **kehilangan akses kode ambil di aplikasi**.
 persetujuan Legal (DPO sementara)**.
 
 ## Belum / batas
+- Belum ada gerbang otomatis di deploy yang membandingkan `payment_timeout_minutes` Odoo dengan
+  `ONLINE_PAYMENT_TIMEOUT_SECONDS` (urutan aktivasi §[aktivasi](#aktivasi-reservasi-1-jam) masih prosedural; pengaman
+  runtime = cek `expires_at` di BFF).
 - Wrapper belum diuji dengan sudo + docker asli di host staging (uji CI memakai SUDO_USER tersimulasi + docker palsu).
 - Gauge refund terbuka per status belum ada (alert refund memakai counter transisi 1 jam, `metric_status: proposed`).
 - Dashboard Grafana online belum dibuat.

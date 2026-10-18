@@ -155,8 +155,9 @@ class TestEfnOnlineCatalog(EfnOnlineCommon):
         )
         catalog = self.channel_api().efn_online_catalog("TST")
         block = catalog["channel"]
-        self.assertEqual(set(block), {"code", "name", "company_code", "currency", "outlets"})
+        self.assertEqual(set(block), {"code", "name", "brand_code", "company_code", "currency", "outlets"})
         self.assertEqual(block["code"], "TST")
+        self.assertIsNone(block["brand_code"])  # G19 E-37a: kosong -> null
         self.assertEqual(block["name"], "Kanal TST")
         self.assertEqual(block["currency"], self.currency.name)
         self.assertEqual(
@@ -301,7 +302,8 @@ class TestEfnOnlineQuotePlace(EfnOnlineCommon):
         self.assertEqual(so.warehouse_id, self.warehouse)
         self.assertEqual(so.efn_online_order_id, order)
         delta = order.expires_at - fields.Datetime.now()
-        self.assertTrue(timedelta(minutes=24) < delta <= timedelta(minutes=25), delta)
+        # G19 E-35 (docs/04 §11.1): default batas bayar Odoo 70 menit (BFF 3600 s + 10), semula 25.
+        self.assertTrue(timedelta(minutes=69) < delta <= timedelta(minutes=70), delta)
         # Retry identik -> hasil sama, tidak ada SO baru.
         again = self.order_api().efn_online_place("TST", payload)
         self.assertEqual(again, result)
@@ -441,9 +443,9 @@ class TestEfnOnlinePaidCancelRefund(EfnOnlineCommon):
     def test_sale_loyalty_total_change_goes_to_review(self):
         """Regresi temuan #37: total SO berubah saat konfirmasi (mis. reward sale_loyalty) -> rollback + review.
 
-        Catatan verifikasi 19.0: promosi otomatis `sale_ok=True` TANPA reward yang sudah diklaim tidak menambah baris
-        diskon saat `action_confirm` (diuji di bawah: tetap `confirmed`). Perubahan total disimulasikan dengan
-        override `_action_confirm` yang mengubah diskon baris (perilaku `_update_programs_and_rewards` bila reward ada).
+        Catatan verifikasi 19.0: perubahan total disimulasikan dengan override `_action_confirm` yang mengubah diskon
+        baris (perilaku `_update_programs_and_rewards` bila reward berubah). G19 E-36: promo otomatis pricelist kanal
+        kini DIKLAIM saat quote & place (pesanan kedua di bawah) dan `action_confirm` tidak mengubah totalnya.
         """
         part, _payload, _result = self.place()
         if "sale_ok" in self.env["loyalty.program"]._fields:
@@ -455,6 +457,7 @@ class TestEfnOnlinePaidCancelRefund(EfnOnlineCommon):
                     "applies_on": "current",
                     "company_id": self.company.id,
                     "sale_ok": True,
+                    "pricelist_ids": [Command.set(self.pricelist.ids)],  # G19: wajib (constraint program online)
                     "rule_ids": [
                         Command.create({"minimum_amount": 0, "reward_point_amount": 1, "reward_point_mode": "order"})
                     ],
@@ -490,9 +493,13 @@ class TestEfnOnlinePaidCancelRefund(EfnOnlineCommon):
         self.assertFalse(order.sale_order_id.invoice_ids)
         self.assertEqual(order.sale_order_id.amount_total, order.amount_total)
         self.assertFalse(order.sale_order_id.order_line.filtered("discount"))
-        # Promosi otomatis saja (tanpa simulasi) tidak mengubah total di 19.0 -> pesanan lain tetap terkonfirmasi.
-        part2, _p2, _r2 = self.place(lines=[{"product_id": self.p_bag.id, "qty": 1}])
+        # Promosi otomatis (diklaim saat quote & place, G19) tidak mengubah total saat konfirmasi -> confirmed.
+        part2, _p2, result2 = self.place(lines=[{"product_id": self.p_bag.id, "qty": 1}])
+        order2 = self.record(part2)
+        self.assertTrue(order2.sale_order_id.order_line.filtered("reward_id"))
         self.assertEqual(self.pay(part2), {"order_state": "confirmed"})
+        self.assertEqual(order2.sale_order_id.amount_total, order2.amount_total)
+        self.assertEqual(order2.invoice_id.amount_total, result2["amount_payable"])
 
     def test_cancel_absent_and_before_payment(self):
         absent = self.order_api().efn_online_cancel("TST", str(uuid.uuid4()), "place_failed", "online:cancel:absent-1")

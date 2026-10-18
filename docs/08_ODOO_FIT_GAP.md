@@ -1,6 +1,6 @@
 # FIT-GAP ODOO CE 19 — KEBUTUHAN FASE 1–2
 
-- **Tanggal:** 2026-10-05 · **Revisi Gelombang 5:** 2026-10-06 (pajak configurable, payment gateway-agnostic, privasi UU PDP) · **Revisi Gelombang 10:** 2026-10-06 (tanpa dependency OCA/vendor; kolom *Referensi*) · **Revisi Gelombang 13:** 2026-10-07 (Fase 1 pilot POS retail, loyalty POS §9, migrasi data — §6) · **Revisi Gelombang 14:** 2026-10-08 (Fase 2 POS F&B, KDS, QR order, kitting — §7) · **Revisi Gelombang 17:** 2026-10-09 (Fase 3 penjualan online Super-App — §8) · **Revisi Gelombang 18:** 2026-10-10 (presisi IDR Rp1, poin = alat bayar, refund metode asal, GS1, konfigurasi pilot — §9) · **Penyusun:** efn-odoo-functional
+- **Tanggal:** 2026-10-05 · **Revisi Gelombang 5:** 2026-10-06 (pajak configurable, payment gateway-agnostic, privasi UU PDP) · **Revisi Gelombang 10:** 2026-10-06 (tanpa dependency OCA/vendor; kolom *Referensi*) · **Revisi Gelombang 13:** 2026-10-07 (Fase 1 pilot POS retail, loyalty POS §9, migrasi data — §6) · **Revisi Gelombang 14:** 2026-10-08 (Fase 2 POS F&B, KDS, QR order, kitting — §7) · **Revisi Gelombang 17:** 2026-10-09 (Fase 3 penjualan online Super-App — §8) · **Revisi Gelombang 18:** 2026-10-10 (presisi IDR Rp1, poin = alat bayar, refund metode asal, GS1, konfigurasi pilot — §9) · **Revisi Gelombang 19:** 2026-10-18 (reservasi stok 1 jam, promo online, kanal per brand, pajak F&B per layanan, dampak enkripsi PII, F&B online & faktur pembeli — §10) · **Penyusun:** efn-odoo-functional
 - **Metode:** verifikasi source primer `raw.githubusercontent.com/odoo/odoo/19.0/...`; referensi desain di `OCA/<repo>/19.0` dan `CybroOdoo/CybroAddons/19.0` (WebFetch `__manifest__.py`/model). Melengkapi `docs/06_ODOO_CE19_MODULE_AUDIT.md` (ketersediaan modul) dengan **setting/field persis** dan keputusan konfigurasi.
 - **Prinsip (Gelombang 10, CLAUDE.md, ADR-031 *Proposed*):** konfigurasi **Standar CE 19** dulu → bila gap, **modul `efn_*` sendiri**. Modul OCA & Cybrosys **bukan dependency** — hanya *referensi desain* (ide model/alur), **kode tidak disalin** (sebagian besar AGPL-3; menyalin ke modul LGPL-3 melanggar lisensi). Semua ADR masih *Proposed*.
 - **Modul konfigurasi:** `efn_setup_company`, `efn_setup_security`, `efn_setup_audit`, `efn_setup_pos`, `efn_setup_mrp` (`services/odoo/addons/`). Ter-install di CI sejak Gelombang 7, kecuali `efn_setup_audit` yang sejak Gelombang 10 menunggu `efn_audit` (`installable: False`).
@@ -712,3 +712,178 @@ Lihat `docs/agent-reports/efn-odoo-functional.md` bagian "Gelombang 18" (suite e
 | Q-F18-5 | Retur tanpa struk: hanya tunai, atau dilarang? | Ops + Finance | hanya tunai + supervisor |
 | Q-F18-6 | Refund QRIS statis/EDC yang tidak bisa dibalik di kanalnya: transfer bank manual dicatat atas metode asal? | Finance | ya |
 | Q-F18-7 | Harga member: promo ber-OTP (direkomendasikan) atau pricelist + kontrol server E-32? | Marketing + Ops | promo ber-OTP |
+
+## 10. Gelombang 19 — pilot online ritel per brand (2026-10-18)
+
+Lingkup: fit-gap **W-02, W-09, W-21, W-14, W-08** (+ ringkas **W-04, W-06** untuk estimasi G20) dari `docs/10_RENCANA_GELOMBANG_18_PLUS.md`, berdasarkan keputusan pemilik proyek 10 Okt 2026 (`docs/decisions/README.md` butir #7–#9, #15, #18, #25, #27–#29, #31, #36, #37, #50, #60; PP-3, PP-4). ADR: ADR-019, ADR-020, ADR-022, ADR-027, ADR-031, ADR-032, ADR-034 (*Proposed*, kecuali ADR-032 Accepted). Risiko: R-L09, R-L10, R-T10, R-T14, R-B06, R-S09.
+Verifikasi: source `raw.githubusercontent.com/odoo/odoo/19.0` lewat WebFetch (2026-10-18; file disebut per temuan) + kode `efn_*` di working tree. **Tidak ada PoC/uji runtime di gelombang ini**: sesi functional G19 tidak punya akses shell/Docker, sehingga test Odoo yang ditulis **belum dijalankan** (lihat §10.9). Referensi OCA/Cybrosys tidak dipakai di gelombang ini; satu referensi desain berasal dari Odoo CE sendiri (`website_sale_loyalty`, tidak dipasang).
+
+> **Ringkasan manajemen (Gelombang 19).** (1) **Stok ditahan 1 jam saat checkout (W-02)** bisa memakai mekanisme standar Odoo: pesanan online langsung "dikonfirmasi" saat pelanggan menekan bayar, sehingga stok tercadang untuk kanal online lain; bila tidak dibayar dalam 70 menit pesanan otomatis batal dan stok kembali. Catatan penting: **kasir toko tetap bisa menjual barang yang sedang dicadangkan** (kasir Odoo tidak memeriksa stok), jadi staf perlu menyisihkan barang begitu pesanan dibayar. Perlu perubahan kecil di modul online (±1–1,5 minggu termasuk BFF & QA). (2) **Promo online (W-09)** — kode promo, promo otomatis, beli X gratis Y, harga promo — tersedia di Odoo standar dan bisa dibatasi per brand lewat daftar harga; yang perlu dibangun adalah penerapan otomatisnya di keranjang Super-App dan penguncian nilai promo saat checkout (±1,5–2 minggu). (3) **Kanal & katalog per brand (W-21)** tidak butuh fitur baru di Odoo: satu kanal per brand (Grand Lucky, Paris Baguette, Bacha butik, Bacha kafe) dengan daftar harga dan tim penjualan sendiri; contoh kanal sudah disiapkan. (4) **Pajak restoran (W-14)** sudah dikonfigurasi: makan di tempat = PB1 10 % + service charge 5 % (service charge ikut dikenai PB1), bawa pulang/online = tanpa service charge. **PB1 untuk bawa pulang tetap dipungut** sampai konsultan pajak menjawab (pemilik proyek ingin tidak dipungut, tetapi aturan daerah umumnya memungut) — mengubahnya cukup satu angka. (5) **Enkripsi data pribadi di Odoo (W-08)** berdampak lebih luas dari dugaan: Odoo menyimpan **salinan** email/HP untuk pencarian dan **riwayat perubahan** email/HP dalam teks biasa, dan kasir memuat data pelanggan ke perangkat. Estimasi tetap 3–5 minggu, kemungkinan di ujung atas. (6) Restoran online (W-04) dan faktur atas nama pembeli (W-06) **sesuai estimasi** G20.
+
+### 10.1 W-02 — reservasi stok 1 jam saat checkout (Q-ON4, butir #18)
+
+**Standar CE 19 (terverifikasi source):**
+- Reservasi hanya untuk *move* terkonfirmasi. `stock/models/stock_move.py` `_action_confirm`: move dengan `picking_type_id.reservation_method == 'at_confirm'` (default tipe operasi, G17 #44) langsung `_action_assign()` (`_should_assign_at_confirm`). Quotation (`sale.order` draft) **tidak** mereservasi.
+- `sale_stock` `action_confirm` → aturan stok → picking keluar gudang outlet → reservasi. `free_qty` = on hand − reserved (G17 #44) → **kanal online lain & SO lain** melihat stok berkurang.
+- Pelepasan: `stock.move._action_cancel` → `_do_unreserve()` (move line tak *picked* dihapus). `sale_loyalty` `_action_cancel` mengembalikan poin/kupon yang dipakai SO. Jalur batal E-28 (`_efn_do_cancel` → `sale.order._action_cancel`) sudah memanggil keduanya.
+- **Dampak ke POS:** POS 19 tidak memeriksa/memblokir stok (tidak ada field ketersediaan di `pos.config`, diperiksa). Saat order POS divalidasi dengan kuantitas paksa dan kuant menjadi kurang dari yang dicadangkan, `stock.move.line._action_done` memanggil `_free_reservation` yang **mencabut reservasi move lain yang belum `picked`** (domain `('picked', '=', False)`) lalu mencoba reservasi ulang. Artinya reservasi online **tidak** melindungi dari penjualan kasir walk-in; hanya baris yang sudah `picked` yang aman.
+
+**Opsi yang dinilai:**
+
+| Opsi | Cara | Kelebihan | Kekurangan | Rekomendasi |
+|---|---|---|---|---|
+| **A. Konfirmasi SO saat place** (`stock_hold_mode='confirm'`, desain G17 §8.3 D.7) | `efn_online_place` memanggil `action_confirm` (savepoint + cek total, sudah ada di `_efn_confirm_sale_order`) → picking `at_confirm` tercadang; `mark_paid` tidak mengonfirmasi ulang; cron batal melepas | 100 % standar (stok, laporan stok, ramalan); kupon sekali pakai **terkonsumsi sebelum bayar** (W-09, mencegah dobel pakai); `free_qty` turun di semua kanal | SO berstatus `sale` sebelum dibayar (ikut `sale.report` ≤ 70 menit; filter laporan online pakai state `efn.online.order`); picking belum dibayar tampil di Inventory (SEC-105/110 tetap menjaga) | **Dipakai** |
+| B. *Soft hold* di `efn_online_order` | `free_qty` online − Σ qty order `placed` per gudang | Tidak menyentuh stok/akuntansi | Logika custom; tidak terlihat gudang; kupon tetap baru terkonsumsi saat bayar | Ditolak |
+| C. Picking internal ke lokasi "Tahan online" | Pindah stok ke sub-lokasi | Terlihat fisik | Dua picking per order, rumit saat batal/serah terima | Ditolak |
+
+**Batas waktu:** BFF `ONLINE_PAYMENT_TIMEOUT_SECONDS=3600` (batas atas config BFF = 3600, cukup) dan Odoo `payment_timeout_minutes = 70` (aturan "Odoo ≥ BFF + 10", docs/04 §10.4.4 no. 6; constraint kanal 5..1440 sudah mengizinkan). Cron `_cron_efn_online_expire` (tiap 2 menit) sudah membatalkan order `placed` lewat `expires_at` → pada mode A otomatis melepas reservasi; **tidak perlu cron baru**. Urutan aman: naikkan Odoo dulu (70), baru BFF ke 3600 — kebalikannya membuat Odoo membatalkan order yang masih ditunggu BFF (`refund_required`). Stock griefing (bot menahan stok 1 jam): kode `400 captcha_required` sudah dicadangkan di docs/04 untuk mode ini + batas order terbuka per member (BFF).
+
+**Spesifikasi gap E-35 (efn-odoo-engineer, `efn_online_order` 19.0.1.2.0):**
+1. Constraint `_check_efn_unsupported`: izinkan `stock_hold_mode='confirm'` (label "Reservasi saat place"); delivery tetap ditolak.
+2. `efn_online_place` (mode confirm): setelah SO dibuat & `quote_hash` cocok → `_efn_confirm_sale_order()`; lalu periksa semua move storable SO `state == 'assigned'` (reservasi penuh); kurang → rollback savepoint + `out_of_stock` (bukan SO setengah tercadang). Total berubah → `price_changed`/`review` sesuai kode yang ada.
+3. `efn_online_mark_paid` (mode confirm): **jangan** `_efn_short_lines()` berbasis `free_qty` (reservasi sendiri mengurangi `free_qty` → salah "stok kurang"); ganti dengan cek move SO masih `assigned` (bisa dicabut `_free_reservation` oleh POS). Tidak penuh → coba `action_assign()`; tetap kurang → `stock_short` (alur kompensasi yang ada). Konfirmasi ulang dilewati (SO sudah `sale`); faktur & pembayaran titipan tetap.
+4. `action_efn_ready`: set `picked = True` pada move SO (barang sudah disisihkan) agar penjualan POS berikutnya tidak mencabut reservasinya (`_free_reservation` mengabaikan `picked`).
+5. Default field `payment_timeout_minutes` 25 → **70** (help: "≥ batas BFF + 10"); opsional constraint ≥ parameter `efn_online.bff_payment_timeout_minutes` (default 60).
+6. `SaleOrder.write` guard: transisi `state='sale'` saat place sudah lewat `CONFIRM_SCOPE` — pastikan scope dipasang di jalur place.
+7. **Test:** place mode confirm → SO `sale`, picking `assigned`, `free_qty` gudang turun; place kedua melebihi sisa → `out_of_stock` tanpa SO; cron lewat `expires_at` → SO `cancel`, move `cancel`, `free_qty` pulih, kupon (W-09) dikembalikan; bayar terlambat → `refund_required`; POS menjual stok yang tercadang → mark_paid → `stock_short` (bukan `review`); order `ready` (picked) tidak tercabut oleh penjualan POS; mode `none` tetap seperti sekarang (regresi); kanal default baru = 70.
+- **Estimasi tervalidasi: 1–1,5 minggu** (odoo 3–4 hari, BFF 1–2 hari: env 3600 + smoke + batas order terbuka/captcha, QA 1–2 hari). Sesuai docs/10.
+- **Konfigurasi diterapkan (data-only):** kanal demo `RTL` + 4 kanal brand = 70 menit (`efn_setup_online` 19.0.1.2.0). `ir.default` sengaja **tidak** dipakai: berlaku DB-wide dan mengubah kanal test `efn_online_order` (suite CI satu DB) → default field = E-35 no. 5. Tipe operasi keluar gudang outlet = `at_confirm` (default CE) → masuk checklist outlet, tidak diubah data.
+
+### 10.2 W-09 — promo online standar di `sale.order` tanpa website (Q-ON10, butir #29)
+
+**Standar CE 19 (`sale_loyalty/models/sale_order.py`, `loyalty/models/loyalty_program.py`, terverifikasi):**
+- `sale_loyalty` **tidak** memakai `website`/`request` → dapat dipanggil dari metode E-28. Tipe program: `promotion`, `promo_code`, `buy_x_get_y`, `coupons`, `next_order_coupons`, `gift_card`, `loyalty`, `ewallet`; `trigger` `auto`/`with_code`.
+- **Pembatasan per brand standar:** `_get_program_domain`/`_get_trigger_domain` memfilter `active`, `sale_ok`, company (+ induk), **pricelist** (`loyalty.program.pricelist_ids` "This program is specific to this pricelist set") dan tanggal → promo per brand = `pricelist_ids` = pricelist kanal brand. Tidak perlu field baru.
+- **Kode kupon/promo:** `_try_apply_code(code)` → dict `{'error': <pesan>}` (kode tak dikenal: + `not_found: True`) atau reward yang bisa diklaim per kupon — pesan Odoo membedakan "tidak valid" vs "kedaluwarsa/terpakai", jadi E-28 **wajib** memetakan semuanya ke satu kode generik (anti-enumerasi kupon); mengunci baris program `FOR UPDATE NOWAIT` dan cek `limit_usage`.
+- **Promo otomatis:** `_update_programs_and_rewards()` menghitung poin program `auto` dan memperbarui reward yang **sudah** ada di SO, tetapi **tidak** mengklaim reward baru. Di backend user menekan tombol *Promotions* (`action_open_reward_wizard`: klaim otomatis bila tepat satu reward non-`multi_product`). Klaim otomatis keranjang hanya ada di `website_sale_loyalty._auto_apply_rewards` (CE, depends `website`, **tidak dipasang**) — dijadikan **referensi desain**: lewati program dengan > 1 reward, nominatif, reward produk `multi_product`, reward yang sudah ada; panggil `_apply_program_reward(reward, coupon)` (kembali `{}` atau `{'error': ...}`).
+- **Beli X gratis Y:** reward `product` → baris SO harga penuh + baris reward negatif (`_get_reward_values_product`); total & pajak dihitung mesin standar.
+- `action_confirm` sale_loyalty: tolak bila poin kupon negatif (`ValidationError`), lalu `_update_programs_and_rewards()` (sumber temuan #37 — guard total E-28 tetap). `_action_cancel`: hapus riwayat/reward & kembalikan poin kupon.
+- **Bahaya quote `new()`:** `__try_apply_program` membuat `loyalty.card` dengan `order_id = self.id` (sudo) → pada record `new()` id = NewId. **[B]** perilaku pasti belum diuji → quote berpromo harus memakai SO nyata di savepoint yang di-rollback (nomor SO dari sequence bisa ikut terpakai/bolong — SO bukan dokumen pajak, diterima; **[B]**).
+- **Poin Odoo tidak dipakai (ADR-020):** tipe `loyalty`, `ewallet`, `gift_card`, `next_order_coupons` dilarang `sale_ok` (partner generik kanal akan mengumpulkan kartu/poin; `_allow_nominative_programs` = True).
+
+**Pembekuan ke `quote_hash`:** `hash_lines` E-28 sudah memuat semua baris non-display (termasuk baris reward: produk diskon, harga negatif, pajak) + `amount_total`. Tambahan: kode yang diterapkan (dinormalisasi, urut) dan `reward_id` per baris masuk hash; place menerapkan ulang kode yang sama → hash beda (promo kedaluwarsa, kuota habis, kupon terpakai) → `price_changed` + quote baru.
+
+**Spesifikasi gap E-36 (efn-odoo-engineer, `efn_online_order`; bff + frontend untuk input kode):**
+1. Kontrak: `efn_online_quote(..., promo_codes=[]≤3)` dan `efn_online_place` payload `promo_codes` (masuk `payload_sha256`); kode = string ≤ 40, `[A-Za-z0-9_-]`. Kode tidak valid/kedaluwarsa/terpakai → satu kode `issues:[{code:'promo_invalid'}]` tanpa detail; BFF rate-limit percobaan kode per member.
+2. `_efn_online_apply_promotions(order, codes)`: `_update_programs_and_rewards()` → `_try_apply_code` per kode → klaim reward deterministik (pola `_auto_apply_rewards`, urutan program `sequence, id`) → `_update_programs_and_rewards()` lagi. Dipanggil di quote (SO nyata dalam savepoint di-rollback) dan di place (SO tersimpan).
+3. Mode W-02 confirm: kupon sekali pakai terkonsumsi saat place; batal/kedaluwarsa → `_action_cancel` mengembalikan. Mode `none`: kupon baru terkonsumsi saat bayar → dobel pakai antar-checkout bisa lolos sampai `action_confirm` menolak (→ `review` + refund) — **W-09 sebaiknya dirilis bersama W-02**.
+4. Constraint `loyalty.program` (di `efn_online_order` atau `efn_setup_online` bila cukup data): `sale_ok=True` hanya untuk `promotion`/`promo_code`/`buy_x_get_y`/`coupons`, `pricelist_ids` wajib & ⊆ pricelist kanal online company itu, bukan `efn_requires_otp` (OTP hanya POS), `portal_visible` False.
+5. `efn_setup_online`: `ir.default sale_ok=False` + hook **tetap** (program POS tidak bocor ke SO); program online dibuat Marketing dengan `sale_ok=True` eksplisit (README).
+6. Kontrak quote menampilkan baris promo (`lines[].reward=true`, label program) untuk Super-App.
+7. **Test:** promo otomatis % pada pricelist brand A tidak berlaku di brand B; `promo_code` benar/salah/kedaluwarsa/kuota; buy X get Y menambah baris reward & pajak benar (PPN incl RTL, PB1 excl FNB); hash berubah bila promo berakhir di antara quote & place → `price_changed`; kupon sekali pakai: dua place paralel → satu sukses (mode confirm), batal → kupon pulih; program `loyalty`/`ewallet` `sale_ok=True` → ditolak constraint; program POS lama tetap `sale_ok=False`; total tidak berubah saat konfirmasi (regresi #37).
+- **Estimasi tervalidasi: 1,5–2 minggu** (odoo 1–1,2; BFF 0,3; FE 0,3; QA 0,3) — ujung atas docs/10 karena quote berpromo tidak bisa memakai `new()`. Prasyarat W-02.
+- **Konfigurasi diterapkan:** tidak ada (daftar promo = data Marketing; `sale_ok=False` default sudah ada).
+
+### 10.3 W-21 — kanal & katalog per brand + Bacha dua PT (Q-ON12, Q-8, butir #7–#9, #31, #60)
+
+| Kebutuhan | Standar CE 19 / E-28 yang sudah ada | Gap |
+|---|---|---|
+| Katalog per brand | `efn.online.channel` = brand (bukan PT): `product.template.efn_online_channel_ids` per kanal; constraint company produk = company kanal | — |
+| Pricelist per brand | `efn.online.channel.pricelist_id` (`check_company`) | Override per outlet = **nanti** (`efn.online.outlet.pricelist_id` opsional; ikut `quote_hash`) — E-37 b |
+| Laporan per brand | `crm.team` per kanal → `sale.report` group by tim (standar) | — |
+| Promo per brand | `loyalty.program.pricelist_ids` (§10.2) | — |
+| Bacha dua PT | Dua kanal: `RTL-BACHA` (PT Retail, PPN) + `FNB-BACHA` (PT F&B, PB1); cart per kanal, satu pembayaran (ADR-019 opsi A, sudah) | — |
+| POS per brand | `pos.config.limit_categories` + `iface_available_categ_ids` (terverifikasi 19.0); kategori POS per brand | Data klien |
+| Pemilik data = merchandising tiap brand | Tidak ada ACL produk per kategori di CE; dua brand dalam satu PT (Grand Lucky & Bacha butik) berbagi `product.template` | Opsional: record rule tulis per kategori brand untuk grup merchandiser (data-only, tetapi rule grup di-OR → hanya untuk akun merchandiser murni) — menunggu daftar peran (Q-F19-4) |
+| Super-App per domain/brand (R-T14) | BFF memetakan domain → daftar `channel_code` | E-37 a (opsional): `brand_code` di kanal |
+
+**Spesifikasi gap E-37 (kecil, opsional):** (a) `efn.online.channel.brand_code` Char (pola `^[A-Z][A-Z0-9]{1,9}$`, tidak unik — Bacha dipakai dua kanal) dikirim di blok `channel` katalog → BFF mengelompokkan kanal per domain tanpa salinan konfigurasi (0,5 hari + test). Tanpa ini BFF memegang peta domain → kode kanal di config. (b) override pricelist per outlet (G21+, 1 hari). **Estimasi tervalidasi: 1–2 minggu** total paket (Odoo ≤ 0,5 minggu; sisanya BFF/frontend multi-domain R-T14 dan data master) — turun dari 1,5–2,5.
+**Konfigurasi diterapkan (demo, `efn_setup_online` 19.0.1.2.0):** kanal `RTL-GL`, `RTL-BACHA`, `FNB-PB`, `FNB-BACHA` (nonaktif, tanpa outlet), pricelist & tim per brand, partner generik & jurnal titipan per PT dipakai bersama; kanal F&B `require_outlet_fiscal_position`. **Kode kanal = usulan** untuk kontrak docs/04 §10 (lead) — kanal lama `RTL`/`FNB` dipertahankan untuk smoke/BFF dev. Test `TestEfnOnlineBrandChannels` (katalog GL vs Bacha terpisah dalam satu PT).
+
+### 10.4 W-14 — pajak F&B per layanan & outlet (P-12, P-16, Q-8/Q-22; butir #15, #37, #60)
+
+**Standar CE 19 (terverifikasi source):**
+- `account/models/partner.py`: `_compute_tax_map` → `tax_map[src] = [pajak tujuan di fp.tax_ids yang original_tax_ids-nya memuat src]`; `map_tax` **mengganti** pajak sumber yang dipetakan dan mempertahankan yang tidak. Model `account.fiscal.position.tax` tidak ada di 19.
+- `account/models/account_tax.py`: `original_tax_ids` ("Replaces") ber-domain `is_domestic=True` (pajak yang tidak berada di fiscal position mana pun); `include_base_amount` (default False) dan `is_base_affected` (default True); `compute_all` tetap ada.
+- POS: `point_of_sale/static/src/app/models/account_fiscal_position.js` `getTaxesAfterFiscalPosition` = cermin `map_tax`; `pos_order_line_accounting.js` menerapkan fiscal position order lalu `accountTaxHelpers.prepare_base_line_for_taxes_computation`; helper `account/static/src/helpers/account_tax.js` menangani `include_base_amount`/`is_base_affected`; `account.tax` dimuat ke POS dengan `include_base_amount`, `is_base_affected`, `sequence`, `fiscal_position_ids` (`point_of_sale/models/account_tax.py`); fiscal position dari config, preset, dan partner dimuat (`models/account_fiscal_position.py`).
+- `pos.preset` (19.0): `fiscal_position_id`, `identification`, `service_at` (`pos_self_order`, wajib, default `counter`), `available_in_self` (default False); tanpa `company_id`.
+
+**Desain (diterapkan):** produk menu cukup **PB1 default** (pajak penjualan default PT F&B). SC **ditambahkan fiscal position dine-in**, bukan dipasang di produk — sehingga tanpa fiscal position (kanal online, kiosk bawa pulang, produk kemasan) tidak pernah kena SC.
+
+| Layanan | Fiscal position (data `efn_setup_company` 19.0.1.5.0) | Hasil pemetaan PB1 default | Harga 100.000 exclude |
+|---|---|---|---|
+| Tanpa FP | — | PB1 default 10 % | 110.000 |
+| **Dine-in** | *F&B Dine-in (PB1 + SC 5%)* | **SC 5 %** (seq 5, `include_base_amount`) + **PB1 Dine-in 10 %** (seq 10, `is_base_affected`) → DPP PB1 105.000 | **115.500** |
+| **Bawa pulang / 3PL / pickup / online** | *F&B Non-Dine-in (tanpa SC; PB1 TODO R-L09)* | **PB1 Non-Dine-in 10 %** | 110.000 |
+
+- **PB1 non-dine-in ⚠ R-L09 — tidak diputuskan:** pemilik proyek menjawab "selain dine-in tidak dikenakan pajak"; UU HKPD umumnya mengenakan PBJT juga atas bawa pulang. Default aman = **tetap dipungut** (tarif sama PB1 default), nama pajak bertanda TODO. Bila konsultan menyatakan tidak terutang: *Amount* pajak *PB1 Non-Dine-in* → 0 (atau ganti pajak tujuan di FP non-dine-in). Tanpa kode, tanpa migrasi. **Q-F19-1** (konsultan pajak).
+- Pajak tujuan **harus terpisah per FP**: satu pajak tujuan yang "Replaces" PB1 default memetakan PB1 di setiap FP yang memuatnya. Karena itu ada PB1 Dine-in **dan** PB1 Non-Dine-in; per kota lain admin membuat **dua** pajak + **dua** FP (README `efn_setup_company`). PB1 default tidak boleh dimasukkan ke FP mana pun (kehilangan status domestik → tidak bisa jadi sumber).
+- Harga menu **exclude**: `res.company.account_price_include = tax_excluded` PT F&B ditulis eksplisit (default CE sama).
+- POS: preset data `efn_setup_pos` 19.0.1.10.0 *Makan di tempat (F&B)* (`table`, FP dine-in) dan *Bawa pulang (F&B)* (`counter`, FP non-dine-in), `available_in_self=False` (SEC-75). Preset bawaan *Dine In*/*Takeout* tanpa FP **jangan** ditawarkan di POS F&B (jatuh ke `default_fiscal_position_id` config, temuan G14). `pos.config.default_fiscal_position_id` POS F&B = FP dine-in kota outlet (checklist).
+- Online F&B: FP outlet kanal FNB = FP non-dine-in kota outlet (constraint `auto_apply=False` E-28 sudah); demo `RESTO-01` memakai FP kota contoh (non-dine-in) — test memastikan tanpa SC.
+- Demo: pasangan dine-in kota contoh (*PB1 Kota Contoh Dine-in 5%* + FP *Outlet Kota Contoh Dine-in*) dan preset *Makan di tempat - Kota Contoh (DEMO)*. SC (grup + pajak, xmlid tetap) dipindah dari demo ke data.
+- **PoC POS `include_base_amount` SC→PB1:** diverifikasi **source** (JS POS memakai helper pajak yang sama dengan backend; field dimuat) + test server (`compute_all`, `map_tax`). **Tour POS belum dijalankan** (tanpa shell di sesi ini) → QA: tour order dine-in Rp100.000 → struk SC 5.000, PB1 10.500, total 115.500; bawa pulang → 110.000; tutup sesi → jurnal seimbang. **[B]**
+- Catatan upgrade: DB demo lama sudah punya xmlid SC dari demo (noupdate) → SC lama tanpa "Replaces" → FP dine-in di DB itu hanya memetakan PB1. DB dev dibuat ulang (sudah wajib karena W-03).
+- **Gap: tidak ada.** **Estimasi tervalidasi: 0,5–1 minggu** sisa (tour POS + PoC tutup sesi 1–2 hari QA; pajak & FP per kota oleh admin setelah data outlet; akun liabilitas PB1/pendapatan SC Q-2).
+
+### 10.5 W-08 — enkripsi kolom PII Odoo: daftar field & dampak (Q-E3, butir #50; input ADR efn-architect)
+
+Hanya analisis dampak; desain kunci/cakupan = ADR architect (revisi ADR-022 Keputusan 5). Sumber: `odoo/addons/base/models/res_partner.py`, `mail/models/res_partner.py`, `phone_validation/models/res_partner.py`, `point_of_sale/models/res_partner.py`, `l10n_id_efaktur_coretax/models/{res_partner,account_move}.py` (19.0).
+
+**Usulan field tahap 1 (partner bertanda member/pembeli; partner perusahaan/vendor tidak):**
+
+| Field `res.partner` | Isi | Kenapa | Salinan/turunan yang ikut bocor bila hanya kolom ini dienkripsi |
+|---|---|---|---|
+| `phone` | HP | PII utama (member POS, pembeli) | **`phone_sanitized`** (stored, `mail.thread.phone` dari `phone_validation` — **[B]** apakah modul terpasang di DB EFN); **`mail.tracking.value`** (`phone` `tracking=2` di `mail`) |
+| `email` | email | pembeli W-06 | **`email_normalized`** (stored, `mail.thread.blacklist`, dipakai `find_or_create`/`_find_or_create_from_emails`); `mail.tracking.value` (`email` `tracking=1`); `mail.blacklist` (email) |
+| `vat` | NPWP | faktur pembeli | index btree; `same_vat_partner_id` (cek duplikat NPWP) |
+| `street`, `street2` | alamat | faktur/delivery | `contact_address` (compute non-stored, aman) |
+| `l10n_id_nik`, `l10n_id_buyer_document_number` | NIK/paspor (Coretax pembeli non-NPWP) | lebih sensitif dari NPWP; hanya bila W-06 mengumpulkan | — |
+| (opsional) `zip`, `city` | — | sensitivitas rendah; dibutuhkan laporan wilayah | — |
+
+Tidak dienkripsi: `name` (dipakai `complete_name` stored+index, `display_name`, semua laporan & dokumen; minimisasi lewat partner generik/anonimisasi erasure), `country_id`, `state_id`, `l10n_id_pkp` (boolean).
+
+**Dampak per area:**
+
+| Area | Dampak bila kolom berisi ciphertext | Mitigasi yang perlu masuk ADR/desain |
+|---|---|---|
+| Pencarian back office | `_rec_names_search = ['complete_name','email','ref','vat','company_registry']` → cari partner via email/NPWP tidak menemukan; filter `ilike` pada kolom terenkripsi kosong | blind index HMAC (exact match ter-normalisasi) untuk `vat`, `email`, `phone`; pencarian bebas tidak didukung (sudah asumsi docs/10) |
+| Duplikat NPWP | `same_vat_partner_id` (search `vat =`) tidak berfungsi | override pakai blind index |
+| Mail/notifikasi | `email_normalized` & `phone_sanitized` = salinan **plaintext** ber-index | ikut dienkripsi/di-blind-index atau dikosongkan untuk partner terlindungi; email ke pembeli memang tidak dikirim Odoo (BFF/WA) |
+| Chatter | `tracking` email/phone menulis nilai lama/baru plaintext ke `mail.tracking.value` | matikan tracking field ini (redefinisi field tanpa `tracking`, metode persis **belum terverifikasi**) + bersihkan riwayat `mail.tracking.value` saat migrasi |
+| POS | `_load_pos_data_fields` partner memuat `phone, email, vat, street, street2, zip, city` ke browser kasir (cache offline IndexedDB di PC kasir); pencarian pelanggan POS (`get_new_partner` dengan domain klien) memakai `ilike` di server → tidak menemukan | jangan memuat field terenkripsi ke POS untuk partner terlindungi (kosong/masked); cari member lewat `efn_member_hash` (sudah); `pos.config.limited_partners_*` |
+| e-Faktur Coretax | `_l10n_id_coretax_build_invoice_vals` membaca lewat ORM: `commercial_partner_id.vat`, `l10n_id_buyer_document_number`, `partner_id.name`, `partner_id.contact_address`, `email`; validasi `download_efaktur` mewajibkan `vat`, `country_id`, `l10n_id_pkp` | **dekripsi transparan di ORM** (baca field = plaintext untuk user berhak) → ekspor tetap jalan; enkripsi di level SQL/kolom saja **merusak** ekspor. Akses ekspor = grup Accounting (audit `efn_audit`) |
+| Laporan standar (PDF faktur, aged receivable, pivot) | QWeb/ORM membaca nilai → aman bila dekripsi di ORM; `read_group`/pivot group-by kolom terenkripsi tidak bermakna | pastikan tidak ada laporan/filter tersimpan `efn_*` yang group-by kolom ini (**belum dicek**) |
+| ETL/ClickHouse | `etl` membaca tabel Odoo lewat SQL → mendapat ciphertext | sudah sesuai minimisasi: ETL tidak boleh menyalin PII; pastikan kolom tidak masuk mart |
+| Erasure `efn_privacy` | anonimisasi menulis kolom | tulis lewat ORM (enkripsi otomatis) + hapus blind index; data wajib faktur 10 th tetap (Q-P21) |
+| Backup / `pg_dump` | ciphertext di dump (tujuan utama) | kunci tidak di DB (Docker secret Superadmin) |
+
+**Rekomendasi desain untuk ADR (bukan keputusan):** dekripsi di lapisan ORM (field custom/compute-inverse) **atau** model sidecar `efn.partner.pii` 1-1 (kolom standar dikosongkan untuk partner terlindungi, field standar menjadi compute non-stored untuk partner itu). Sidecar lebih sedikit menyentuh semantik field standar (`email_normalized`, tracking, index) tetapi semua kode yang `search` field standar harus diarahkan; kolom bertipe ganda (plaintext untuk vendor, ciphertext untuk member) di tabel yang sama **tidak** disarankan.
+- **Estimasi tervalidasi: 3–5 minggu, kemungkinan 4–5** karena turunan `email_normalized`/`phone_sanitized`, riwayat tracking, POS loader, dan blind index duplikat NPWP — di luar 6 field asumsi docs/10.
+- **Konfigurasi diterapkan:** tidak ada (menunggu ADR).
+
+### 10.6 W-04 — F&B online via SO + jembatan KDS (E-29a; ringkas untuk G20)
+- **Standar:** SO F&B per outlet (kanal `FNB-PB`/`FNB-BACHA`, FP outlet non-dine-in §10.4) — **sudah** di E-28; produk menu non-storable → stok tidak dicek (kanal `stock_check='none'`). Tampilan PB1 (+ SC bila kelak dine-in online) exclude dengan rincian = `tax_groups` quote (sudah ada; label "PB1"/"Service Charge").
+- **Gap E-29a `efn_online_kds_bridge`** (dikonfirmasi dari kode `efn_pos_kds`): `efn.kds.ticket.order_id` saat ini `required` + unik `(order_id, station_id, sequence_no)` + payload & notifikasi POS memakai `pos.order`/`config_id`. Perlu: `order_id` opsional + `efn_online_order_id` (constraint tepat satu sumber; unik per sumber; migrasi), `efn.online.outlet.kds_config_id` (POS outlet) → stasiun = `config_ids` ∋ config dan `category_ids` ∩ `pos_categ_ids` produk; tiket dibuat saat `confirmed` (setelah bayar), label = nomor SO/`tracking_number` pendek, **tanpa** data pelanggan; KDS `ready` semua stasiun → `action_efn_ready` order online (event `ready` ke BFF); batal/refund → tiket `cancelled`. Retensi tiket 90 h ikut `efn_pos_kds`.
+- **Estimasi tervalidasi: 4–5,5 minggu** (odoo 2,5–3 karena perubahan skema tiket + sinkron ready; BFF 1; FE 1; QA 0,5). Tetap G20 (PP-4); prasyarat W-14 (selesai konfigurasi), W-21, ⚠ R-L09.
+
+### 10.7 W-06 — faktur atas nama/NPWP pembeli (Q-ON7, Q-P21; ringkas untuk G20)
+- **Standar:** Coretax mengambil **NPWP dari `commercial_partner_id`** faktur dan **nama/alamat dari `partner_id`** faktur (`_l10n_id_coretax_build_invoice_vals`) → pembeli **harus partner sendiri** (tanpa induk). Kontak anak dari partner generik **tidak bisa** (NPWP terbaca dari partner generik = kosong). SO cukup `partner_invoice_id` = partner pembeli, `partner_id` tetap generik (minimisasi; faktur memakai `partner_invoice_id`). Field Coretax: `vat`, `l10n_id_buyer_document_type`/`_number` (NIK/paspor bila tanpa NPWP), `l10n_id_tku`, `l10n_id_pkp` (compute dari `vat`). PT F&B (PB1, bukan PPN) → hanya faktur komersial atas nama pembeli, tanpa e-Faktur.
+- **Gap E-39** (setelah W-08): metode E-28 `efn_online_set_invoice_party(channel_code, platform_order_ref, profile, idempotency_key)` sebelum `mark_paid` (bukan di `place`, agar PII tidak masuk `payload_sha256`/log); cari-atau-buat partner pembeli per company lewat blind index NPWP/NIK; `partner_invoice_id` SO; erasure menganonimkan kecuali data wajib faktur 10 th; tanpa PII di outbox/log.
+- **Estimasi tervalidasi: 2–3 minggu** (odoo 1–1,5; BFF 0,5; FE 0,5; QA/security 0,5). Prasyarat W-08 + tinjauan Legal (R-L10).
+
+### 10.8 Gap untuk efn-odoo-engineer (Gelombang 19–20)
+
+| Kode | Isi | Wajib? | Estimasi (odoo) | Prasyarat |
+|---|---|---|---|---|
+| **E-35** | `efn_online_order`: reservasi saat place (`stock_hold_mode='confirm'`), cek reservasi saat bayar, `picked` saat siap, default batas bayar 70 (§10.1) | Ya (W-02, syarat A-7) | 3–4 hari | kontrak §10.6 (lead) |
+| **E-36** | `efn_online_order`: promo `sale_loyalty` di quote/place + kode promo + constraint program online (§10.2) | Ya (W-09) | 5–6 hari | E-35; kontrak §10 `promo_codes` |
+| **E-37** | (a) `brand_code` kanal; (b) pricelist override per outlet (§10.3) | Opsional | 0,5 + 1 hari | keputusan lead/bff |
+| **E-38** | Enkripsi PII `res.partner` + blind index + turunan (§10.5) | Ya (W-08, PP-3) | 3–4 minggu | ADR architect |
+| **E-29a** | `efn_online_kds_bridge` (§10.6) | Ya G20 (W-04) | 2,5–3 minggu | W-14, W-21, R-L09 |
+| **E-39** | Partner pembeli + `partner_invoice_id` (§10.7) | Ya G20 (W-06) | 1–1,5 minggu | E-38, Legal |
+
+### 10.9 Hasil verifikasi Gelombang 19
+- Source 19.0 diverifikasi via WebFetch: berkas di §10.1–§10.7.
+- **Test Odoo belum dijalankan**: sesi efn-odoo-functional G19 tidak memiliki akses shell/Docker. Test baru/diubah: `efn_setup_company/tests/test_fnb_service_taxes.py` (8), `efn_setup_pos/tests/test_fnb_defaults.py` `TestEfnFnbServicePresets` (2), `efn_setup_online/tests/test_setup_online.py` (`test_demo_channels` 25→70, `test_demo_fnb_outlet_is_non_dine_in`, `TestEfnOnlineBrandChannels` 2). Wajib dijalankan lead/QA dengan pola CI (DB uji terpisah, `--test-tags efn`, plus install `--with-demo` untuk test demo) sebelum commit.
+- ruff belum dijalankan (ditulis mengikuti gaya `ruff format`).
+
+### 10.10 Pertanyaan klien baru (Q-F19)
+| ID | Pertanyaan | Pemutus | Default sementara |
+|---|---|---|---|
+| Q-F19-1 | PB1/PBJT atas bawa pulang, 3PL, pickup, dan online di kota tiap outlet: terutang atau tidak? (melanjutkan P-12, R-L09) | Konsultan pajak + Finance | **tetap dipungut** (tarif = PB1 default) |
+| Q-F19-2 | Barang yang dicadangkan pesanan online: staf menyisihkan barang segera setelah dibayar (SOP), atau boleh tetap di rak sampai disiapkan? (kasir Odoo tidak memblokir penjualan stok tercadang) | Ops ritel | sisihkan setelah dibayar + `stock_buffer` per kanal |
+| Q-F19-3 | Promo online: boleh memakai lebih dari satu kode per pesanan? Promo online & toko boleh program yang sama atau selalu terpisah? | Marketing | maks 3 kode; program online terpisah dari POS |
+| Q-F19-4 | Merchandising per brand dalam satu PT (Grand Lucky vs Bacha butik): perlu pembatasan akses ubah produk per brand di Odoo? Siapa orangnya? | PO + merchandising | tanpa pembatasan (SOP + log audit `efn_audit`) |
+| Q-F19-5 | Kode kanal per brand (`RTL-GL`, `RTL-BACHA`, `FNB-PB`, `FNB-BACHA`) dan domain Super-App per brand | PO + lead | usulan di demo |
+| Q-F19-6 | Faktur atas nama pembeli tanpa NPWP: perlu NIK/paspor (Coretax) atau cukup nama + alamat (faktur komersial)? | Finance + Legal | NPWP saja; NIK tidak dikumpulkan |

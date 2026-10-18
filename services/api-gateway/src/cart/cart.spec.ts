@@ -12,6 +12,7 @@ const M = '8d7b5a1e-2c3f-4a5b-9c8d-7e6f5a4b3c2d';
 const CH: ChannelInfo = {
   channel_code: 'RTL',
   company_code: 'RTL',
+  brand_code: null,
   name: 'Retail',
   fulfilment: { pickup: true, delivery: false },
   outlets: [

@@ -50,6 +50,15 @@ describe('isBrandId / getBrandById', () => {
     expect(isBrandId('toString')).toBe(false);
     expect(getBrandById('constructor').id).toBe('efn');
   });
+  it('brandCode non-rahasia & valid (G19 §11.3); default = semua kanal', async () => {
+    const { BRANDS } = await import('../lib/brands');
+    const { isBrandCode, channelsPath } = await import('../lib/catalog');
+    expect(BRANDS.efn.brandCode).toBeNull();
+    for (const b of Object.values(BRANDS)) expect(b.brandCode === null || isBrandCode(b.brandCode)).toBe(true);
+    expect(channelsPath(null)).toBe('/v1/catalog/channels');
+    expect(channelsPath('GL')).toBe('/v1/catalog/channels?brand=GL');
+    expect(channelsPath('gl')).toBe('/v1/catalog/channels');
+  });
   it('id valid', () => {
     expect(isBrandId('efn-mart')).toBe(true);
     expect(getBrandById('efn-kitchen').companies).toEqual(['FNB']);

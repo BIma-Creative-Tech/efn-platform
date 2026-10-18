@@ -42,7 +42,7 @@ function formatTime(iso: string | null): string {
 }
 
 /**
- * Status pesanan + halaman bayar (QR lokal, hitung mundur 15 menit, batal sebelum bayar) + kode ambil.
+ * Status pesanan + halaman bayar (QR lokal, hitung mundur dari expires_at server (batas bayar hingga 60 menit, §11.1; tanpa angka hardcode), batal sebelum bayar) + kode ambil.
  * Polling `/api/orders/:id`: 3 dtk saat menunggu bayar, 30 dtk sesudahnya, berhenti di status final (docs/04 §10.3.6).
  */
 export function OrderView({ initial, simulator }: { initial: OrderDetail; simulator: boolean }) {

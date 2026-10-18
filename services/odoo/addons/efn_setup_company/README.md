@@ -15,8 +15,8 @@ Modul konfigurasi **data-only** (Python hanya `hooks.py`: presisi IDR Rp1, W-03)
 | Akses admin | `base.user_admin` mendapat ke-4 company | `data/res_company_data.xml` | noupdate |
 | Fiscal localization | `account.chart.template.try_loading('id', company)` → CoA `l10n_id`, jurnal (Cash, Bank, Sales, …), pajak PPN template | `data/res_company_data.xml` | hanya saat install |
 | **PB1 (PT F&B)** | Grup pajak **PB1** (`tax_group_pb1_fnb`), pajak **PB1 Default 10% (PLACEHOLDER)** (`tax_pb1_10_fnb`, `price_include_override` kosong = ikut setting company) dan dijadikan `account_sale_tax_id` PT F&B | `data/account_tax_pb1_data.xml` | noupdate — tarif/nama/akun boleh diubah admin |
-| Ilustrasi PB1 per kota | Pajak *PB1 Kota Contoh 5% (DEMO)* (`original_tax_ids` = PB1 default) + fiscal position *Outlet Kota Contoh (DEMO)* | `demo/` | hanya DB demo; 5% = angka ilustrasi |
-| Ilustrasi service charge | Grup *Service Charge* + pajak *Service Charge 5% (DEMO)* (`sequence` 5, `include_base_amount` True → masuk dasar PB1) | `demo/` | menunggu Q-22 |
+| **Pajak F&B per layanan (W-14, G19, sejak 19.0.1.5.0)** | Harga menu PT F&B **exclude** (`account_price_include`); grup + pajak **Service Charge 5% (dine-in)** (`sequence` 5, `include_base_amount` → masuk DPP PB1); **PB1 Dine-in 10%** dan **PB1 Non-Dine-in 10% (TODO R-L09)**; fiscal position **F&B Dine-in (PB1 + SC 5%)** dan **F&B Non-Dine-in (tanpa SC)**, keduanya `auto_apply` mati. Produk menu cukup memakai PB1 default | `data/account_tax_fnb_service_data.xml` | noupdate — tarif PLACEHOLDER; PB1 non-dine-in **menunggu konsultan pajak** (default = tetap dipungut) |
+| Ilustrasi PB1 per kota | Pajak *PB1 Kota Contoh 5% (DEMO)* + fiscal position *Outlet Kota Contoh (DEMO)* (= non-dine-in kota contoh); pasangan dine-in: *PB1 Kota Contoh Dine-in 5% (DEMO)* + *Outlet Kota Contoh Dine-in (DEMO)* (PB1 kota + SC) | `demo/` | hanya DB demo; 5% = angka ilustrasi |
 | Harga termasuk pajak | `account_price_include = tax_included` di PT Retail | `demo/` | menunggu Q-9/Q-28 |
 | Agen penagih | `efn_is_merchant_of_record = True` di Holding | `demo/` | menunggu Q-1, ADR-019 |
 
@@ -80,8 +80,22 @@ Kota yang memakai tarif sama dengan PB1 default **tidak** perlu fiscal position.
 - Pengecualian per pajak: field *Included in Price* pada pajak.
 - Pemetaan fiscal position antara pajak *include* dan *exclude* mengubah total yang dibayar pelanggan — pakai perlakuan yang sama untuk PB1 default dan PB1 kota.
 
-### Service charge
-CE 19 **tidak** punya fitur service charge POS (modul di Apps Store adalah pihak ketiga; OCA/pos 19.0 tidak menyediakan). Opsi standar yang disarankan: **"pajak" Service Charge** (lihat demo) yang dipasang di produk menu bersama PB1. Alternatif tanpa efek ke PB1: produk "Service Charge" yang ditambahkan manual oleh kasir (rawan lupa/fraud) atau produk tip (`pos.config.iface_tipproduct`) — keduanya tidak masuk dasar PB1 otomatis. Keputusan masuk/tidaknya SC ke DPP PB1 = konsultan pajak (Q-22).
+### Service charge & pajak per layanan (W-14, keputusan pemilik proyek #15/#37)
+CE 19 **tidak** punya fitur service charge POS (modul di Apps Store adalah pihak ketiga; OCA/pos 19.0 tidak menyediakan). Dipakai **"pajak" Service Charge** non-negara yang **ditambahkan oleh fiscal position dine-in**, bukan dipasang di produk:
+
+| Layanan | Fiscal position | Pajak hasil pemetaan (dari PB1 default produk) | Contoh harga 100.000 |
+|---|---|---|---|
+| Tanpa fiscal position | — | PB1 default | 110.000 |
+| Dine-in | *F&B Dine-in (PB1 + SC 5%)* | SC 5% → PB1 Dine-in 10% (DPP 105.000) | **115.500** |
+| Bawa pulang / 3PL / pickup / online | *F&B Non-Dine-in (tanpa SC; PB1 TODO R-L09)* | PB1 Non-Dine-in 10% | 110.000 |
+
+- Cara kerja (19.0): `tax_map[src] = pajak di fiscal position yang "Replaces"-nya memuat src`; pajak sumber yang dipetakan **diganti**, sehingga PB1 dine-in harus pajak tersendiri. Sumber wajib pajak domestik (tidak berada di fiscal position mana pun) → **jangan** memasukkan PB1 default ke fiscal position.
+- **PB1 non-dine-in ⚠ R-L09**: pemilik proyek menjawab tidak dikenakan; UU HKPD umumnya mengenakan PBJT atas bawa pulang. Modul **tidak memutuskan**: tarif = PB1 default (tetap dipungut) sampai opini konsultan pajak. Bila tidak terutang: *Amount* pajak *PB1 Non-Dine-in* → 0 (atau ganti pajak di fiscal position). Tanpa kode.
+- POS: preset *Makan di tempat (F&B)* dan *Bawa pulang (F&B)* (`efn_setup_pos` data) membawa fiscal position di atas; pos.config PT F&B memakai preset itu, **bukan** preset bawaan Takeout/Dine In (tanpa fiscal position → jatuh ke default config). Kanal online F&B: fiscal position outlet = non-dine-in kota outlet.
+- SC masuk DPP PB1: bila konsultan menyatakan sebaliknya, `include_base_amount` SC = False.
+- Akun: baris repartisi SC → akun *Pendapatan Service Charge*; PB1 (3 pajak) → akun liabilitas PB1 (Q-2, go-live blocker).
+- **Kota lain:** per kota buat **dua** pajak (Dine-in & Non-Dine-in, "Replaces" = PB1 default) + **dua** fiscal position (*Dine-in <Kota>* = SC + PB1 kota dine-in; *Non-Dine-in <Kota>* = PB1 kota non-dine-in) + dua preset POS. Satu pajak kota tidak boleh dipakai di kedua fiscal position (tax_map dihitung dari pajak tujuan).
+- Alternatif tanpa efek ke PB1 (tidak dipakai): produk "Service Charge" manual (rawan lupa/fraud) atau produk tip (`pos.config.iface_tipproduct`).
 
 ## Tanpa egress internet (R3, Gelombang 9)
 Odoo EFN tidak punya akses internet (hanya jaringan internal, SEC-01). Fitur standar yang memanggil layanan Odoo S.A. dimatikan lewat **konfigurasi** (`data/no_egress.xml`, `noupdate="0"` agar diterapkan ulang setiap upgrade):
@@ -109,7 +123,7 @@ Prasyarat: `efn_core` (≥ 19.0.1.2.0) di addons path. Install pada DB **baru** 
 
 ## Batasan / belum terverifikasi
 - **Belum pernah di-install** (tidak ada Odoo lokal). Nama field/model diverifikasi terhadap source `odoo/odoo` 19.0 (2026-10-06); perilaku runtime belum.
-- Perilaku POS: penerapan `default_fiscal_position_id` pada pajak yang dipetakan, interaksi preset vs default fiscal position, perhitungan `include_base_amount` di frontend POS, dan posting SC tanpa akun → **uji di PoC**.
+- Perilaku POS: penerapan `default_fiscal_position_id` pada pajak yang dipetakan, interaksi preset vs default fiscal position, perhitungan `include_base_amount` di frontend POS, dan posting SC tanpa akun → **uji di PoC**. G19: pemetaan & perhitungan SC→PB1 diverifikasi di **source** 19.0 (JS POS = cermin `map_tax`, helper pajak bersama) dan diuji di sisi server (`tests/test_fnb_service_taxes.py`); **tour POS belum dijalankan** (docs/08 §10.4).
 - `pos.preset` tidak punya `company_id`: preset yang memakai fiscal position PT F&B jangan dipasang di POS PT lain.
 - `try_loading` saat instalasi modul mencetak peringatan "without a fully loaded registry"; bila CI gagal, pindahkan ke `post_init_hook` (E-11, efn-odoo-engineer).
 - Konflik demo `efn_kitting` (E-7) sudah diselesaikan engineer: demo `efn_kitting` mencari company `efn_brand_code = 'FNB'` yang ada.

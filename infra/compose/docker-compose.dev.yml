@@ -85,6 +85,13 @@ services:
     environment:
       APP_ENV: dev
       ODOO_DEV_MODE: "all"
+      # G19 E-38 PoC (docs/04 §11.5, ADR-036 Proposed opsi C): kunci PII Odoo HANYA untuk container odoo (bukan BFF,
+      # ETL, OCR, Metabase, odoo-rpc-gateway). Dev/test saja; staging/production belum (PoC belum lulus, K-36-* belum
+      # masuk kontrak) -> tidak ada di scripts/secrets.list / deploy. Tanpa modul efn_pii terpasang, env ini tidak dipakai.
+      EFN_ODOO_PII_KEY_V1_FILE: /run/secrets/odoo_pii_key_v1
+      EFN_ODOO_PII_ACTIVE_KEY_VERSION: "1"
+      EFN_ODOO_PII_BIDX_KEY_FILE: /run/secrets/odoo_pii_bidx_key
+    secrets: [odoo_pii_key_v1, odoo_pii_bidx_key]   # digabung dengan daftar secret base
 
   api-gateway:
     image: efn/api-gateway:dev
@@ -196,3 +203,7 @@ services:
 secrets:
   dev_edge_crt: { file: ../../secrets/dev_edge_crt.txt }
   dev_edge_key: { file: ../../secrets/dev_edge_key.txt }
+  # G19 E-38 PoC (ADR-036): 32 byte acak base64 dari scripts/gen-secrets.sh (bagian "PoC PII Odoo"). Kunci DEV saja:
+  # data PII dev terenkripsi dengan kunci ini -> menghapus file = data partner terlindungi di DB dev tidak terbaca.
+  odoo_pii_key_v1: { file: ../../secrets/odoo_pii_key_v1.txt }
+  odoo_pii_bidx_key: { file: ../../secrets/odoo_pii_bidx_key.txt }

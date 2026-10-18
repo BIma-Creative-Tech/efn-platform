@@ -10,6 +10,7 @@ import type { Brand } from './brands';
 import {
   buildProductQuery,
   channelsForBrand,
+  channelsPath,
   isChannelCode,
   parseCategories,
   parseChannels,
@@ -35,7 +36,7 @@ async function load<T>(path: string, parse: (v: unknown) => T | null): Promise<L
 }
 
 export async function loadChannels(brand: Brand): Promise<Loaded<CatalogChannel[]>> {
-  const r = await load('/v1/catalog/channels', parseChannels);
+  const r = await load(channelsPath(brand.brandCode), parseChannels);
   if (!r.ok) return r;
   return { ok: true, data: channelsForBrand(r.data, brand.companies) };
 }

@@ -248,6 +248,51 @@
   flex-wrap: wrap;
 }
 
+.rewardLine .price {
+  color: var(--color-success);
+}
+
+.promo {
+  margin-bottom: 0.75rem;
+}
+.promo label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+.promoRow {
+  display: flex;
+  gap: 0.5rem;
+}
+.promoRow input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  text-transform: uppercase;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--color-text-muted);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.promoApplied {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.promoApplied li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.promoCode {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 700;
+}
+
 .totals {
   margin: 0.75rem 0 0;
   border-top: 1px solid var(--color-border);

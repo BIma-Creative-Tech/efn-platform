@@ -45,3 +45,9 @@ Risiko dimitigasi: R-T10 (saga), R-O05 (refund ≤ porsi per bagian), R-S09 (web
 - Kompatibel mundur: baris lama yang tercatat dengan kunci Odoo lama → `duplicate` hanya bila milik bagian/event/seq yang sama; milik bagian lain (id lokal terpakai ulang) → diproses + anomali `odoo_event_key_reused` (warning).
 - Body: `idempotency_key` menerima `online:<id lokal>|<uuid bagian>:<event>:<seq>`; `event_id` (uuid) opsional.
 - Sisa (DR): setelah restore, `seq` Odoo bisa mundur di bawah `last_seq` BFF → event tercatat `ignored_stale` (tidak diam: ada baris + metrik); status dipulihkan oleh rekonsiliasi pull `efn_online_status` (15 menit).
+
+## G19 (docs/04 §11.1–11.2, W-02/W-09)
+- **Reservasi 1 jam**: `ONLINE_PAYMENT_TIMEOUT_SECONDS` default **3600** (batas config 60..3600 tetap) = lama SO tercadang di Odoo (`stock_hold_mode=confirm`). Pengaman §10.3.5 no. 5 tetap: `expires_at` SO < batas order + 5 menit → batal + `503 online_unavailable` + anomali `odoo_expiry_too_short`. Dengan Odoo `payment_timeout_minutes` 70 → selisih ±10 menit (lolos); Odoo masih 25 → semua checkout ditolak. **Urutan aktivasi: Odoo 70 dulu, baru BFF 3600.**
+- **Anti stock griefing**: `ONLINE_MAX_OPEN_ORDERS_PER_MEMBER` default **2** (L-32). `400 captcha_required` tetap dicadangkan (belum aktif).
+- **Promo saat place**: `efn_online_place.order.promo_codes` = `promo_applied` grup dari quote tersimpan (bukan dari klien), `lines` = baris produk saja (`placeLines`); promo berakhir/kuota habis di antara quote & place → Odoo `price_changed` → `409 price_changed` + kompensasi. Baris reward (`reward: true`) disimpan di `online_order_part.lines` dan tampil di `GET /v1/orders/:id`; tidak dihitung sebagai baris refund CS.
+- Kupon sekali pakai dikonsumsi Odoo saat place dan dikembalikan saat batal/kedaluwarsa (cron Odoo) — BFF tidak menyimpan status kupon.

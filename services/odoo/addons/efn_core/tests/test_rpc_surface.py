@@ -31,7 +31,7 @@ from odoo.tools import mute_logger
 ADDONS_DIR = pathlib.Path(__file__).resolve().parents[2]
 
 # Override metode ORM/CE yang memang publik di Odoo standar (hak akses = ACL + record rule CE).
-ORM_OVERRIDES = frozenset({"create", "write", "unlink", "copy", "read", "search", "name_create"})
+ORM_OVERRIDES = frozenset({"create", "write", "unlink", "copy", "copy_data", "read", "search", "name_create"})
 
 # (model, metode) -> cek akses eksplisit di server. WAJIB ditinjau security sebelum ditambah.
 RPC_ALLOWLIST = {
@@ -79,7 +79,9 @@ RPC_ALLOWLIST = {
     ("efn.online.channel", "efn_online_catalog"): "_efn_online_check_caller (baca, field whitelist)",
     ("efn.online.channel", "efn_online_stock"): "_efn_online_check_caller (baca)",
     ("efn.online.channel", "efn_online_image"): "_efn_online_check_caller (baca, hanya produk kanal)",
-    ("efn.online.channel", "efn_online_quote"): "_efn_online_check_caller (baca, new() tanpa tulis DB)",
+    ("efn.online.channel", "efn_online_quote"): "_efn_online_check_caller; tanpa promo new() tanpa tulis DB; dengan "
+    "promo SO nyata di savepoint yang di-rollback (nomor urut SO terpakai, FOR UPDATE NOWAIT program sale_loyalty, "
+    "kartu/poin ikut rollback; SEC-141)",
     ("efn.online.order", "efn_online_place"): "_efn_online_check_caller + idempotency_key/payload_sha256/quote_hash",
     ("efn.online.order", "efn_online_mark_paid"): "_efn_online_check_caller + FOR UPDATE + idempotency_key",
     ("efn.online.order", "efn_online_cancel"): "_efn_online_check_caller + FOR UPDATE (ref asing -> absent)",

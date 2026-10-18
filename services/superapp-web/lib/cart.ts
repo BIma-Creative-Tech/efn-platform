@@ -219,6 +219,8 @@ export interface QuoteLine {
   subtotal_incl: number;
   tax_labels: string[];
   available: boolean;
+  /** Baris reward promo (§11.2): nilai negatif, dari Odoo, tidak pernah dari keranjang/klien. Ditampilkan sebagai diskon. */
+  reward: boolean;
 }
 
 export interface TaxGroup {
@@ -250,6 +252,54 @@ export interface Quote {
   cart_version: number;
   groups: QuoteGroup[];
   amount_payable_total: number;
+  /** Hasil kode promo (§11.2 no. 4). `invalid` tidak dibedakan penyebabnya dan tidak memblokir checkout. */
+  promo: PromoResult;
+}
+
+export interface PromoResult {
+  applied: string[];
+  invalid: string[];
+}
+
+// ---------- kode promo (docs/04 §11.2) ----------
+
+export const MAX_PROMO_CODES = 3;
+export const PROMO_CODE_RE = /^[A-Za-z0-9_-]{1,40}$/;
+/** Satu pesan untuk SEMUA penyebab (anti-enumerasi kupon, §11.2 no. 4). Jangan dibedakan. */
+export const PROMO_INVALID_MESSAGE = 'Kode promo tidak dapat digunakan';
+export const PROMO_RATE_LIMIT_MESSAGE = 'Terlalu banyak percobaan kode promo. Coba lagi nanti.';
+
+/** Normalisasi satu kode (trim + huruf besar); null bila format salah. Validasi final tetap di BFF. */
+export function normalizePromoCode(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const t = raw.trim();
+  return PROMO_CODE_RE.test(t) ? t.toUpperCase() : null;
+}
+
+/** Daftar kode -> dinormalisasi, duplikat dibuang. null bila ada kode salah format atau lebih dari 3. */
+export function sanitizePromoCodes(v: unknown): string[] | null {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v) || v.length > MAX_PROMO_CODES) return null;
+  const out: string[] = [];
+  for (const c of v) {
+    const n = normalizePromoCode(c);
+    if (n === null) return null;
+    if (!out.includes(n)) out.push(n);
+  }
+  return out;
+}
+
+function parsePromo(v: unknown): PromoResult {
+  const pick = (x: unknown): string[] => {
+    if (!Array.isArray(x)) return [];
+    const out: string[] = [];
+    for (const c of x) {
+      const n = normalizePromoCode(c);
+      if (n !== null && !out.includes(n) && out.length < MAX_PROMO_CODES) out.push(n);
+    }
+    return out;
+  };
+  return isObj(v) ? { applied: pick(v.applied), invalid: pick(v.invalid) } : { applied: [], invalid: [] };
 }
 
 function num(v: unknown): number | null {
@@ -273,14 +323,28 @@ function parseTaxGroups(v: unknown): TaxGroup[] {
   return out;
 }
 
+/** Allowlist kode issue dari BFF. Kode tak dikenal tetap menjadi issue (tetap memblokir checkout) tetapi dinormalkan. */
+export const KNOWN_ISSUE_CODES = ['out_of_stock', 'item_unavailable', 'qty_exceeds_max', 'qty_limit', 'price_changed'] as const;
+export const UNKNOWN_ISSUE_CODE = 'unknown_issue';
+
 export function parseIssues(v: unknown): QuoteIssue[] {
   if (!Array.isArray(v)) return [];
   const out: QuoteIssue[] = [];
   for (const i of v) {
     if (!isObj(i) || typeof i.code !== 'string') continue;
-    out.push({ product_id: parsePositiveInt(i.product_id), code: i.code.slice(0, 40) });
+    const code = (KNOWN_ISSUE_CODES as readonly string[]).includes(i.code) ? i.code : UNKNOWN_ISSUE_CODE;
+    out.push({ product_id: parsePositiveInt(i.product_id), code });
   }
   return out;
+}
+
+/**
+ * Kode promo yang dipertahankan setelah hitung ulang (murni). Bila quote gagal/jatuh ke fallback tanpa kode
+ * (429/400), daftar lama TETAP dipakai untuk percobaan berikutnya; selain itu ikuti `applied` dari server.
+ */
+export function retainPromoCodes(current: string[], applied: string[] | null, fellBack: boolean): string[] {
+  if (fellBack || applied === null) return [...current];
+  return [...applied];
 }
 
 export function parseQuoteLines(v: unknown): QuoteLine[] {
@@ -301,6 +365,7 @@ export function parseQuoteLines(v: unknown): QuoteLine[] {
       subtotal_incl: sub,
       tax_labels: Array.isArray(l.tax_labels) ? l.tax_labels.filter((x): x is string => typeof x === 'string').slice(0, 8) : [],
       available: l.available !== false,
+      reward: l.reward === true,
     });
   }
   return out;
@@ -337,17 +402,19 @@ export function parseQuote(v: unknown): Quote | null {
     cart_version: typeof v.cart_version === 'number' && Number.isSafeInteger(v.cart_version) ? v.cart_version : 0,
     groups,
     amount_payable_total: total,
+    promo: parsePromo(v.promo),
   };
 }
 
 export function quoteHasIssues(q: Quote): boolean {
-  return q.groups.some((g) => g.issues.length > 0 || g.lines.some((l) => !l.available));
+  return q.groups.some((g) => g.issues.length > 0 || g.lines.some((l) => !l.reward && !l.available));
 }
 
 export const ISSUE_LABEL: Record<string, string> = {
   out_of_stock: 'Stok habis',
   item_unavailable: 'Tidak tersedia',
   qty_exceeds_max: 'Melebihi jumlah maksimum',
+  qty_limit: 'Jumlah melebihi batas pembelian. Kurangi jumlah barang ini.',
   price_changed: 'Harga berubah',
 };
 

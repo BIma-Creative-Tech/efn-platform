@@ -113,6 +113,11 @@ export interface PartLine {
   price_unit_incl: number;
   subtotal_incl: number;
   tax_labels: string[];
+  /**
+   * G19 §11.2 no. 3: baris reward promo/kupon dari Odoo (harga ≤ 0). Hanya ada bila `true` (baris produk tidak membawa
+   * field ini). Tidak pernah dikirim ke `efn_online_place` dan tidak dihitung sebagai baris refund.
+   */
+  reward?: true;
 }
 
 export interface OrderRow {

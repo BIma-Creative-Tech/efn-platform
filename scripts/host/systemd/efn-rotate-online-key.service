@@ -1,0 +1,26 @@
+# G19 (docs/04 §11.3): rotasi otomatis API key Odoo SEMUA kanal online yang dikonfigurasi (CHANNELS di
+# /etc/efn/online-key-rotation.conf, atau ONLINE_CHANNELS hasil deploy). Pasang: docs/runbooks/odoo-online-api-key.md §1.
+# Menggantikan instance per kanal efn-rotate-online-key@<KANAL>.timer - JANGAN aktifkan keduanya untuk kanal yang sama
+# (kunci per kanal membuat salah satunya gagal "sedang berjalan" -> alert palsu).
+# Jalan sebagai ROOT (menulis /opt/efn/secrets, recreate container); log -> journald (_UID 0) -> promtail-journal -> Loki.
+[Unit]
+Description=EFN rotasi API key Odoo semua kanal online
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/efn-rotate-online-key --all
+# Per kanal: kunci host (maks 900 s) + recreate/verifikasi; lalu SATU overlap (default 1 jam) + cabut tertunda per kanal.
+# 8 kanal x ~20 menit terburuk + overlap 1 jam < 6 jam. OVERLAP_SECONDS > 3 jam: cabut lama oleh run harian berikutnya.
+TimeoutStartSec=6h
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+Nice=5

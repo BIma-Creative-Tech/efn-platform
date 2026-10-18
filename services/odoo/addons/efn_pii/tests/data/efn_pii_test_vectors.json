@@ -1,0 +1,44 @@
+{
+  "description": "Test vector bersama BFF <-> Odoo untuk format blob PII (docs/04 §7.2, ADR-036 §4.2). Semua nilai hex. BUKAN kunci nyata: sumber publik (spesifikasi GCM McGrew & Viega, RFC 5869).",
+  "format": {
+    "blob": "versi_kunci (1 byte) || iv (12 byte) || ciphertext || tag (16 byte)",
+    "odoo_text": "\"efnpii1:\" + base64 standar (blob)",
+    "bff_bytea": "blob apa adanya (kolom bytea)",
+    "odoo_aad": "efn:odoo:<tabel>.<kolom>:v1 (UTF-8)",
+    "k_hex": "kunci AES-256 vektor publik (nama field sengaja bukan 'key' agar pemindai secret tidak salah tandai)"
+  },
+  "aead_vectors": [
+    {
+      "name": "gcm-spec-tc14-aes256-zero-key",
+      "source": "McGrew & Viega, The Galois/Counter Mode of Operation, Test Case 14 (juga pycryptodome SelfTest test_GCM.py)",
+      "key_version": 1,
+      "k_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "iv_hex": "000000000000000000000000",
+      "plaintext_hex": "00000000000000000000000000000000",
+      "aad_hex": "",
+      "expected_blob_hex": "01000000000000000000000000cea7403d4d606b6e074ec5d3baf39d18d0d1c8a799996bf0265b98b5d48ab919",
+      "note": "plaintext = 16 byte NUL (UTF-8 sah), AAD kosong: bisa dipakai lewat API publik PiiCipher.decrypt(blob, '') BFF"
+    },
+    {
+      "name": "gcm-spec-tc16-aes256-aad-keyversion2",
+      "source": "McGrew & Viega, Test Case 16 (IV 96-bit, AAD 20 byte)",
+      "key_version": 2,
+      "k_hex": "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308",
+      "iv_hex": "cafebabefacedbaddecaf888",
+      "plaintext_hex": "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39",
+      "aad_hex": "feedfacedeadbeeffeedfacedeadbeefabaddad2",
+      "expected_blob_hex": "02cafebabefacedbaddecaf888522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f66276fc6ece0f4e1768cddf8853bb2d551b",
+      "note": "plaintext/AAD biner (bukan UTF-8): BFF memakai node:crypto createDecipheriv langsung atas tata letak blob; byte versi 0x02 menguji pemilihan kunci key ring"
+    }
+  ],
+  "hkdf_vectors": [
+    {
+      "name": "rfc5869-a3-sha256-empty-salt-info",
+      "source": "RFC 5869 Appendix A.3",
+      "ikm_hex": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+      "info_hex": "",
+      "length": 42,
+      "expected_okm_hex": "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8"
+    }
+  ]
+}

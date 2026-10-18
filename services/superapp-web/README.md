@@ -46,12 +46,14 @@ Risiko dimitigasi: manipulasi harga dari klien (cart hanya `product_id`+`qty`, t
 |---|---|
 | `app/belanja`, `app/belanja/[id]` | Daftar/kategori/cari/halaman (`?channel=&category=&q=&cursor=`); detail + toko ambil + stok per toko + tambah ke keranjang |
 | `app/keranjang` (`components/online/CartView.tsx`) | Grup per PT/kanal, quote server (harga & pajak termasuk), ringkasan per PT, bayar. Tamu: `localStorage` tanpa harga, digabung setelah login |
-| `app/pesanan`, `app/pesanan/[id]` (`OrderView`, `PickupCodePanel`, `QrCode`) | Daftar; status (polling 3 dtk/30 dtk), QR lokal (`qrcode-generator`), hitung mundur 15 menit, batal sebelum bayar, kode ambil on-demand |
+| `app/pesanan`, `app/pesanan/[id]` (`OrderView`, `PickupCodePanel`, `QrCode`) | Daftar; status (polling 3 dtk/30 dtk), QR lokal (`qrcode-generator`), hitung mundur dari `expires_at` server (batas bayar hingga 60 menit, §11.1), batal sebelum bayar, kode ambil on-demand |
 | `app/api/catalog/**` | Proxy publik tanpa Bearer. Cache `public, max-age=60`; stok `no-store`; gambar stream `image/jpeg` ≤ 5 MB, `immutable` |
 | `app/api/cart/**`, `app/api/orders/**` | Proxy member: cookie -> Bearer, `isSameOrigin` untuk tulis, `isNotCrossSite` untuk baca, body ≤ 16 KB, `no-store`, error K-ON5 -> pesan Indonesia |
 | `lib/catalog.ts`, `lib/cart.ts`, `lib/orders.ts` | Modul murni: tipe kontrak, validator, allowlist respons, peta error |
 | `lib/catalog-route.ts`, `lib/orders-route.ts`, `lib/catalog-server.ts`, `lib/orders-server.ts` | Helper server-only (proxy, Idempotency-Key, guard, simulator) |
 | `lib/cart-client.ts` | Helper browser (fetch same-origin, keranjang tamu) |
+
+G19 (§11.2, §11.3): kolom kode promo di ringkasan keranjang (maks 3; dikirim hanya lewat body `POST /api/cart/quote`, disimpan di memori komponen, tidak di URL/storage/log), baris reward `reward: true` tampil sebagai "Diskon promo", satu pesan generik "Kode promo tidak dapat digunakan"; `Brand.brandCode` (non-rahasia) -> katalog memanggil `?brand=` di domain brand (UI saja).
 
 Catatan: `next.config.mjs` menimpa `Cache-Control` Route Handler, jadi aturan `no-store` default mengecualikan `/api/catalog/**` (diverifikasi di runtime standalone, laporan G17). Kill switch BFF (`ONLINE_ENABLED=false`) -> 503 `online_unavailable` -> pesan ramah.
 

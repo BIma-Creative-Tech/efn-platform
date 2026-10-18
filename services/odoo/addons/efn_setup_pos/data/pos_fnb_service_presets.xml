@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- W-14 (Gelombang 19): preset POS F&B per layanan untuk kota default PT F&B. docs/08 §10.4, ADR-027.
+     Fiscal position dari efn_setup_company (data/account_tax_fnb_service_data.xml):
+     - dine-in      -> PB1 + service charge 5 % (SC masuk DPP PB1);
+     - bawa pulang  -> tanpa SC; PB1 non-dine-in = TODO konsultan pajak (R-L09).
+     Kenapa preset baru, bukan preset bawaan pos_restaurant (Dine In / Takeout): preset bawaan tanpa fiscal position
+     memakai pos.config.default_fiscal_position_id (pos_order.js setPreset: preset.fiscal_position_id ATAU default
+     config, temuan G14) sehingga "Takeout" ikut kena SC bila default config = dine-in. pos.preset tidak punya
+     company_id -> pasang preset ini HANYA di pos.config PT F&B (available_preset_ids / default_preset_id; README).
+     Field terverifikasi 19.0: point_of_sale/models/pos_preset.py (name, fiscal_position_id, identification, color),
+     pos_self_order/models/pos_preset.py (service_at counter/table/delivery, available_in_self default False).
+     available_in_self False: self-order dikunci (SEC-75); QR ponsel E-27 memakai jalur sendiri (ADR-032).
+     noupdate="1": admin boleh mengganti nama/warna/fiscal position. -->
+<odoo noupdate="1">
+    <record id="preset_fnb_dine_in" model="pos.preset">
+        <field name="name">Makan di tempat (F&amp;B)</field>
+        <field name="color">1</field>
+        <field name="identification">none</field>
+        <field name="fiscal_position_id" ref="efn_setup_company.fiscal_position_fnb_dine_in"/>
+        <field name="service_at">table</field>
+        <field name="available_in_self" eval="False"/>
+    </record>
+    <record id="preset_fnb_takeaway" model="pos.preset">
+        <field name="name">Bawa pulang (F&amp;B)</field>
+        <field name="color">3</field>
+        <field name="identification">none</field>
+        <field name="fiscal_position_id" ref="efn_setup_company.fiscal_position_fnb_non_dine_in"/>
+        <field name="service_at">counter</field>
+        <field name="available_in_self" eval="False"/>
+    </record>
+</odoo>

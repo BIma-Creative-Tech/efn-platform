@@ -3,6 +3,8 @@ import { FastifyReply, FastifyRequest } from 'fastify';
 import { AppConfig, ONLINE_CHANNEL_RE } from '../config/app-config';
 import { Errors } from '../common/errors/api-error';
 import { RateLimiter } from '../common/rate-limit/rate-limiter';
+import { BRAND_CODE_RE } from '../odoo-rpc/odoo-online.parse';
+import { OnlineErrors } from '../odoo-rpc/online-errors';
 import { CatalogService, ChannelInfo, ProductSummary } from './catalog.service';
 import { limitByIp, requireCatalog } from './online-http';
 
@@ -11,6 +13,12 @@ const CONTROL_RE = /[\u0000-\u001f\u007f]/;
 
 function channelParam(v: unknown): string {
   if (typeof v !== 'string' || !ONLINE_CHANNEL_RE.test(v)) throw Errors.invalidRequest();
+  return v;
+}
+/** `?brand=` (§11.3 no. 3): tidak ada → null; ada tetapi bukan string berbentuk brand_code → 400 invalid_request. */
+export function brandParam(v: unknown): string | null {
+  if (v === undefined) return null;
+  if (typeof v !== 'string' || !BRAND_CODE_RE.test(v)) throw OnlineErrors.invalidInput();
   return v;
 }
 function optInt(v: unknown, min: number, max: number): number | null {
@@ -39,10 +47,19 @@ export class CatalogController {
     void reply.header('Cache-Control', name === 'STOCK' ? 'no-store' : 'public, max-age=60');
   }
 
+  /**
+   * G19 §11.3 no. 3: `?brand=<brand_code>` opsional (tanpa parameter = semua kanal aktif). Nilai tidak cocok
+   * `^[A-Z][A-Z0-9]{1,9}$` (termasuk kosong, huruf kecil, atau parameter berulang) → `400 invalid_request`. Pembatasan UI
+   * saja: cart/quote/order tidak bergantung pada parameter ini.
+   */
   @Get('channels')
-  async channels(@Req() req: FastifyRequest, @Res({ passthrough: true }) reply: FastifyReply): Promise<{ items: ChannelInfo[] }> {
+  async channels(
+    @Query('brand') brand: unknown,
+    @Req() req: FastifyRequest,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ): Promise<{ items: ChannelInfo[] }> {
     await this.guard(req, reply);
-    return { items: await this.catalog.channels() };
+    return { items: await this.catalog.channels(brandParam(brand)) };
   }
 
   @Get('categories')

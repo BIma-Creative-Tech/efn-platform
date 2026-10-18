@@ -6,7 +6,7 @@ import { KV_STORE, KvStore } from '../common/redis/kv-store';
 import { CatalogChannelInfo, CatalogPrice, ODOO_ONLINE, OdooOnlineApi, StockStatus } from '../odoo-rpc/odoo-online.types';
 import { OnlineErrors, mapOdooError } from '../odoo-rpc/online-errors';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
-import { IMAGE_SHA_RE } from '../odoo-rpc/odoo-online.parse';
+import { BRAND_CODE_RE, IMAGE_SHA_RE } from '../odoo-rpc/odoo-online.parse';
 import { CATALOG_STORAGE, CatalogStorage, catalogImageKey } from './catalog-storage';
 
 export interface OutletInfo {
@@ -18,6 +18,8 @@ export interface OutletInfo {
 export interface ChannelInfo {
   channel_code: string;
   company_code: string;
+  /** G19 §11.3 no. 2: brand kanal (`GL`, `BACHA`, `PB`) atau `null`. Tidak unik; hanya pembatasan UI (bukan otorisasi). */
+  brand_code: string | null;
   name: string;
   fulfilment: { pickup: boolean; delivery: boolean };
   outlets: OutletInfo[];
@@ -84,8 +86,16 @@ export class CatalogService {
     this.channelCache = null;
   }
 
-  /** Kanal aktif yang juga ada di `ONLINE_CHANNELS`, fulfilment dipotong `ONLINE_FULFILMENTS`. */
-  async channels(): Promise<ChannelInfo[]> {
+  /**
+   * Kanal aktif yang juga ada di `ONLINE_CHANNELS`, fulfilment dipotong `ONLINE_FULFILMENTS`. `brand` (sudah
+   * divalidasi controller, §11.3 no. 3) menyaring kanal ber-`brand_code` sama; `undefined`/`null` = semua kanal.
+   */
+  async channels(brand?: string | null): Promise<ChannelInfo[]> {
+    const all = await this.allChannels();
+    return brand === undefined || brand === null ? all : all.filter((c) => c.brand_code === brand);
+  }
+
+  private async allChannels(): Promise<ChannelInfo[]> {
     if (this.channelCache && this.now() - this.channelCache.at < CHANNEL_CACHE_MS) return this.channelCache.items;
     const allowed = this.config.onlineChannels;
     const res = await this.db.query<{ channel_code: string; channel_data: CatalogChannelInfo | null; last_ok_at: Date | null }>(
@@ -111,9 +121,12 @@ export class CatalogService {
 
   private fromOdoo(code: string, c: CatalogChannelInfo): ChannelInfo | null {
     if (c.code !== code || !c.active || !COMPANY_CODES.has(c.company_code) || c.currency !== 'IDR') return null;
+    // `channel_data` hasil sinkron sebelum G19 tidak memuat brand_code → null (kanal tetap tampil tanpa brand)
+    const brand: unknown = (c as { brand_code?: unknown }).brand_code;
     return {
       channel_code: c.code,
       company_code: c.company_code,
+      brand_code: typeof brand === 'string' && BRAND_CODE_RE.test(brand) ? brand : null,
       name: c.name,
       fulfilment: { ...c.fulfilment },
       outlets: c.outlets
@@ -123,7 +136,7 @@ export class CatalogService {
   }
 
   async channel(code: string): Promise<ChannelInfo | null> {
-    return (await this.channels()).find((c) => c.channel_code === code) ?? null;
+    return (await this.allChannels()).find((c) => c.channel_code === code) ?? null;
   }
 
   private async requireChannel(code: string): Promise<ChannelInfo> {

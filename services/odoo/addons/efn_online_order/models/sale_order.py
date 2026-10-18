@@ -1,7 +1,8 @@
 """Tautan SO <-> pesanan online + guard pembatalan, perubahan state, dan pengeluaran barang SO online.
 
-Tidak ada metode publik baru (gerbang SEC-58): hanya override privat/ORM (``_action_cancel``, ``write``,
-``stock.move._action_done``, ``pos.order.line.create``).
+Tidak ada metode publik baru (gerbang SEC-58): hanya override privat/ORM (``_action_cancel``, ``_prepare_invoice``,
+``write``, ``stock.move._action_done``, ``pos.order.line.create``).
+- SEC-139 (r12, L-43): SO online tanpa pembayaran tercatat tidak bisa difakturkan (faktur biasa maupun uang muka).
 - SEC-95 (r10): batal bagian berbayar hanya Sales manager + alasan. UI CE 19: tombol *Cancel* SO hanya dialog
   konfirmasi JS generik (tanpa cek faktur/grup); faktur ter-posting tidak dibatalkan CE (hanya draf).
 - SEC-104 (re-review G17, L-19): jalur internal E-28 (konfirmasi/batal dari saga) ditandai lewat ``cr.cache``
@@ -60,6 +61,24 @@ class SaleOrder(models.Model):
         for online, note in online_by_so.values():
             online._efn_ops_cancelled(reason_note=note, actor=self.env.user)
         return result
+
+    def _prepare_invoice(self):
+        """L-43 / SEC-139: SO online yang belum dibayar (mode confirm: SO ``sale`` sejak place) tidak boleh
+        difakturkan. ``_prepare_invoice`` dipakai ``_create_invoices`` (faktur biasa) DAN wizard uang muka
+        (``sale.advance.payment.inv`` membuat ``account.move`` langsung dari ``_prepare_invoice``) -> satu titik
+        guard untuk keduanya. Jalur saga (``_efn_invoice_and_register_payment``) berjalan setelah ``mark_paid``
+        mengisi ``paid_idempotency_key``. Dasar guard = pembayaran tercatat, bukan state (``review`` bisa terjadi
+        sebelum bayar, mis. event ``placed`` ditolak BFF 409)."""
+        for order in self:
+            online = order.sudo().efn_online_order_id
+            if online and not online.paid_idempotency_key:
+                raise UserError(
+                    _(
+                        "Pesanan online %(name)s belum dibayar; faktur dibuat otomatis setelah pembayaran.",
+                        name=order.name,
+                    )
+                )
+        return super()._prepare_invoice()
 
     def write(self, vals):
         if "state" in vals:

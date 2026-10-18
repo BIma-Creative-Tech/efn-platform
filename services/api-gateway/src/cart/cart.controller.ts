@@ -4,9 +4,9 @@ import { AppConfig } from '../config/app-config';
 import { RateLimiter } from '../common/rate-limit/rate-limiter';
 import { AuthUser } from '../common/security/access-token.service';
 import { CurrentUser, JwtAuthGuard } from '../common/security/jwt-auth.guard';
-import { asRecord } from '../common/validation';
-import { Errors } from '../common/errors/api-error';
-import { assertBodySize, limitByMember, noStore, requireOnline } from '../catalog/online-http';
+import { assertBodySize, consumePromoCodeQuota, limitByMember, noStore, requireOnline } from '../catalog/online-http';
+import { OnlineErrors } from '../odoo-rpc/online-errors';
+import { PromoCodesInvalid, normalizePromoCodes } from '../odoo-rpc/promo-codes';
 import { Cart } from './cart-store';
 import { CartService, CartWarning, parseCartPut } from './cart.service';
 import { QuoteService, QuoteView } from './quote.service';
@@ -54,6 +54,10 @@ export class CartController {
     await this.cart.clear(user.memberId);
   }
 
+  /**
+   * `POST /v1/cart/quote` body `{}` atau `{ "promo_codes": ["KODE1"] }` (G19 §11.2 no. 1). Format salah / kunci lain →
+   * `400 invalid_request`. Setiap KODE dihitung di rate limit `PROMO_MEMBER` + `PROMO_IP` (SEC-134; → `429 rate_limited`).
+   */
   @Post('quote')
   @HttpCode(HttpStatus.OK)
   async quote(
@@ -65,8 +69,24 @@ export class CartController {
     requireOnline(this.config);
     noStore(reply);
     assertBodySize(req);
-    if (body !== undefined && body !== null && Object.keys(asRecord(body)).length > 0) throw Errors.invalidRequest();
+    const promoCodes = parseQuoteBody(body);
     await limitByMember(this.limiter, this.config, 'QUOTE', user.memberId);
-    return this.quotes.quote(user.memberId);
+    // SEC-134 (L-45): kuota promo dihitung per KODE (n kode = n unit di member & IP), bukan per quote
+    await consumePromoCodeQuota(this.limiter, this.config, user.memberId, req, promoCodes.length);
+    return this.quotes.quote(user.memberId, promoCodes);
+  }
+}
+
+/** Body quote §11.2 no. 1: hanya kunci `promo_codes` (opsional). Hasil: kode ternormalisasi (huruf besar, unik, ≤ 3). */
+export function parseQuoteBody(body: unknown): string[] {
+  if (body === undefined || body === null) return [];
+  if (typeof body !== 'object' || Array.isArray(body)) throw OnlineErrors.invalidInput();
+  const rec = body as Record<string, unknown>;
+  if (Object.keys(rec).some((k) => k !== 'promo_codes')) throw OnlineErrors.invalidInput();
+  try {
+    return normalizePromoCodes(rec.promo_codes);
+  } catch (err) {
+    if (err instanceof PromoCodesInvalid) throw OnlineErrors.invalidInput();
+    throw err;
   }
 }

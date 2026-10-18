@@ -1,5 +1,57 @@
 # Laporan Agent: efn-devsecops-engineer
 
+## G19 (18 Okt 2026, branch chore/wave-19) — secret kanal berhifen, rotasi multi-kanal, env BFF, PoC PII Odoo
+
+Kontrak: docs/04 §11.1, §11.2 no. 6, §11.3 no. 3, §11.5. Tidak di-commit. **Tidak ada yang dijalankan** oleh agent ini
+(tanpa shell); semua di bawah wajib dijalankan lead.
+
+### File diubah / baru
+- `infra/compose/docker-compose.yml` — secret top-level `odoo_api_key_online_{rtl_gl,rtl_bacha,fnb_pb,fnb_bacha}`; BFF
+  `ONLINE_PAYMENT_TIMEOUT_SECONDS` default 3600, `ONLINE_MAX_OPEN_ORDERS_PER_MEMBER` 2, `ONLINE_RL_PROMO_MEMBER_LIMIT=10`,
+  `_MEMBER_WINDOW_SECONDS=900`, `ONLINE_RL_PROMO_IP_LIMIT=30`, `_IP_WINDOW_SECONDS=900` (nama = `ONLINE_RL_<NAMA>_LIMIT|WINDOW_SECONDS` app-config BFF).
+- **Baru** `infra/compose/docker-compose.online-{rtl-gl,rtl-bacha,fnb-pb,fnb-bacha}.yml` — mount secret + `ODOO_API_KEY_ONLINE_<KANAL>_FILE` hanya ke api-gateway.
+- `infra/compose/docker-compose.dev.yml` — PoC E-38: secret dev `odoo_pii_key_v1`, `odoo_pii_bidx_key` (top-level dev saja), mount HANYA `odoo`, env `EFN_ODOO_PII_KEY_V1_FILE`, `EFN_ODOO_PII_ACTIVE_KEY_VERSION=1`, `EFN_ODOO_PII_BIDX_KEY_FILE`.
+- `infra/compose/.env.example` — 3600 / 2 / 4 env promo RL, catatan kanal berhifen + urutan aktivasi.
+- `infra/observability/alert-rules.yml` — komentar/deskripsi alert rotasi untuk `--all` (tanpa alert baru).
+- `scripts/secrets.list` — 4 baris `host:disabled` kanal brand.
+- `scripts/gen-secrets.sh` — bagian PoC PII Odoo (b64key32, idempoten, di LUAR secrets.list → tidak diwajibkan deploy/production; pola `dev_edge_*`).
+- `scripts/host/efn-rotate-online-key` — `--all` (CHANNELS di conf, fallback `ONLINE_CHANNELS` dari `/opt/efn/compose/.env` milik root), anak per kanal berurutan, satu overlap + cabut tertunda, `mark_failed` per kanal (metrik `last_run_ok=0` walau anak gagal sebelum menulis metrik), `--no-wait`, `--bootstrap` (overlay kanal ikut sementara, hanya bila secret masih `disabled`), validasi CHANNELS (regex kontrak, unik, maks 8), precheck Python `user_not_in_channel` / `user_shared`, `EFN_CH` ke odoo shell, `render_prom` dipisah.
+- **Baru** `scripts/host/systemd/efn-rotate-online-key.{service,timer}` (`--all`, TimeoutStartSec 6h). Unit `@` lama dipertahankan.
+- `scripts/host/test-efn-rotate-online-key.sh` — kasus 1–49 lama dipertahankan (docker palsu diperluas, semantik sama); kasus baru 50–84 termasuk blok Python odoo shell dieksekusi nyata terhadap env Odoo palsu.
+- **Di luar daftar cakupan (perlu agar konsisten; mohon lead tinjau/revert bila tidak setuju):**
+  `scripts/deploy.sh` (overlay per kanal `docker-compose.online-<kanal>.yml` untuk setiap kanal ≠ RTL di ONLINE_CHANNELS, gagal bila overlay tidak ada — sebelumnya hanya `FNB`),
+  `scripts/check-encryption.sh` (least privilege generik: semua `odoo_api_key_online_*` hanya api-gateway, `odoo_pii_*` hanya odoo; render tambahan `prod-online` dengan semua overlay),
+  `.github/workflows/ci.yml` (diff secrets.list↔compose menyertakan semua `docker-compose.online-*.yml` — TANPA ini CI infra gagal karena secret baru tidak ter-render).
+- Runbook: `docs/runbooks/odoo-online-api-key.md` (tabel pemetaan kanal, §1 timer `--all`, §1b `#kanal-baru`, galat baru, batas), `docs/runbooks/online-orders.md` (`#aktivasi-reservasi-1-jam`: Odoo 70 dulu, baru BFF 3600; mundur kebalikannya).
+
+### Cara menguji (perintah persis, Git Bash dari root repo)
+```bash
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/src:ro" python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea bash /src/scripts/host/test-efn-rotate-online-key.sh
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/src:ro" python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea bash /src/scripts/host/test-efn-deploy.sh
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/mnt:ro" koalaman/shellcheck:stable -x /mnt/scripts/host/efn-rotate-online-key /mnt/scripts/host/test-efn-rotate-online-key.sh /mnt/scripts/deploy.sh /mnt/scripts/gen-secrets.sh /mnt/scripts/check-encryption.sh
+bash scripts/gen-secrets.sh            # membuat secrets/odoo_api_key_online_*_*.txt (disabled) + odoo_pii_*.txt
+cd infra/compose && cp -n .env.example .env
+docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile core --profile data --profile ai --profile observability --profile ops config -q
+docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile core --profile data --profile ai --profile observability --profile ops config -q
+docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.payment.yml $(for f in docker-compose.online-*.yml; do printf -- '-f %s ' "$f"; done) --profile core --profile data --profile ai --profile observability --profile ops config --format json | jq -r '.secrets|keys[]' | sort | diff - <(awk '!/^[[:space:]]*#/ && NF {print $1}' ../../scripts/secrets.list | sort)
+cd ../.. && bash scripts/check-encryption.sh   # butuh docker + jq (di CI job infra)
+```
+(Shellcheck juga dijalankan CI job infra. `.env` lokal yang sudah ada TIDAK diubah: dev lama masih 900/3 sampai disalin ulang.)
+
+### Temuan untuk lead (penting)
+1. **Data demo `efn_setup_online` G19 menghubungkan `RTL-GL` dan `RTL-BACHA` ke user `efn_online_rtl`** (user bersama). Dengan secret per kanal (§11.3) ini membuat rotasi satu kanal mencabut key kanal lain, dan key satu brand bisa dipakai brand lain. Skrip kini menolak (`user_shared`, fail-closed). Rekomendasi ke efn-odoo-engineer (A)/functional: user teknis khusus per kanal (`efn_online_rtl_gl`, …) — produksi wajib (runbook §1b).
+2. Default compose BFF sekarang 3600: lingkungan yang Odoo kanalnya belum 70 harus set `ONLINE_PAYMENT_TIMEOUT_SECONDS=900` eksplisit di config rilis sebelum deploy G19 (pengaman BFF menolak checkout, bukan korupsi data).
+3. Env promo RL ditambahkan ke compose walau RL online lain tidak terdaftar di sana (default sama dengan kontrak/BFF; deploy.sh tidak meneruskannya → ubah lewat PR).
+
+### Yang belum / tidak terverifikasi
+- Tidak satu pun perintah di atas dijalankan oleh agent ini; YAML & shell diperiksa manual (indentasi, referensi secret: setiap secret overlay didefinisikan top-level base; secret PoC didefinisikan top-level dev).
+- `--all`/`--bootstrap`/`user_shared` belum diuji terhadap Odoo/BFF/systemd sungguhan. Kode HTTP json2 untuk `channel_inactive` (diduga 422) belum diverifikasi.
+- PoC PII: secret tidak ada di staging/production, tidak di `deploy-validate`, tidak di key-custody (sengaja, §11.5). Nama env mengikuti ADR-036 §5; perlu dicocokkan dengan modul `efn_pii` builder B.
+- Belum ada gerbang deploy otomatis yang membandingkan `payment_timeout_minutes` Odoo dengan BFF (prosedural, runbook).
+- `.github/workflows/deploy.yml` tidak diubah (secret `host:*` memang tidak dikirim; `CFG_ONLINE_CHANNELS` sudah menerima kode berhifen lewat deploy-validate).
+
+---
+
 Tanggal: 2026-10-05. Cakupan: secrets kontrak docs/04 §2, hardening compose, observability + alerting, backup & DR (R-T08), CI, runbook. **Tidak ada yang dijalankan** (mesin penulis tanpa Docker/Git/Python); semua validasi terjadi di CI job `infra` dan `odoo-test`. Lihat bagian "Belum terverifikasi".
 
 ## 1. Tabel secret → service → env var (untuk QA)

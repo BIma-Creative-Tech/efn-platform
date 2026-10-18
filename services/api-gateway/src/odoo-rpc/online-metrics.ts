@@ -37,9 +37,17 @@ export class OnlineMetrics {
   readonly backwardTransitions: Counter<'source'>;
   readonly refundsOpen: Gauge<'status'>;
   readonly retentionRows: Counter<'kind'>;
+  readonly promoCodes: Counter<'result'>;
 
   constructor(metrics: MetricsService) {
     const registers = [metrics.registry];
+    // §11.2 no. 6: TANPA label kode (kardinalitas & privasi kupon)
+    this.promoCodes = new Counter({
+      name: 'efn_online_promo_codes_total',
+      help: 'Kode promo pada quote online per hasil (applied = terpakai di ≥ 1 grup, invalid = tidak terpakai)',
+      labelNames: ['result'],
+      registers,
+    });
     this.orders = new Counter({ name: 'efn_online_orders_total', help: 'Transisi status platform order online', labelNames: ['status'], registers });
     this.parts = new Counter({ name: 'efn_online_parts_total', help: 'Transisi status bagian order per kanal', labelNames: ['channel', 'status'], registers });
     this.stuck = new Gauge({ name: 'efn_online_stuck_parts', help: 'Bagian/order/refund online yang tertahan melewati batas', labelNames: ['state'], registers });
@@ -121,6 +129,9 @@ export class OnlineMetrics {
   }
   refund(status: string): void {
     this.refunds.inc({ status: lbl(status) });
+  }
+  promo(result: 'applied' | 'invalid', n: number): void {
+    if (n > 0) this.promoCodes.inc({ result }, n);
   }
   backward(source: 'odoo' | 'bff'): void {
     this.backwardTransitions.inc({ source });

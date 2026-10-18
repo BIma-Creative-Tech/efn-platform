@@ -30,6 +30,11 @@ export const OnlineErrors = {
   orderInReview: (): ApiError =>
     ApiError.of(409, 'order_in_review', 'Pesanan sedang diperiksa tim kami. Kode ambil ditahan sementara; hubungi layanan pelanggan bila perlu.'),
   accountDeleting: (): ApiError => ApiError.of(409, 'account_deleting', 'Akun sedang dijadwalkan untuk dihapus.'),
+  /**
+   * G19 §11.2 no. 1 / §11.3 no. 3 (L-36): format `promo_codes` atau `?brand=` salah → `400 invalid_request` (sama dengan
+   * validasi BFF lain §10.3.7). Pesan tidak menyebut kode mana yang salah.
+   */
+  invalidInput: (): ApiError => ApiError.of(400, 'invalid_request', 'Data yang dikirim tidak valid.'),
 };
 
 /**
