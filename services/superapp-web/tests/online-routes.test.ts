@@ -267,7 +267,7 @@ describe('checkout & Idempotency-Key server-side', () => {
     bffFetch.mockResolvedValue({ ok: true, status: 201, data: { order_id: ID, status: 'awaiting_payment' } });
     const r = new NextRequest(`https://${HOST}/api/orders`, {
       method: 'POST',
-      headers: { host: HOST, origin: `https://${HOST}`, cookie: 'efn_session=tok', 'idempotency-key': 'dipilih-klien-1234567' },
+      headers: { host: HOST, origin: `https://${HOST}`, cookie: 'efn_session=tok', 'idempotency-key': 'dipilih-klien-1234567' }, // gitleaks:allow (fixture, bukan secret)
       body: JSON.stringify({ quote_id: QUOTE_ID, accept_total: 1 }),
     });
     await postOrder(r);
