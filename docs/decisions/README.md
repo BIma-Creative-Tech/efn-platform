@@ -246,6 +246,76 @@ Sumber: jawaban pemilik proyek atas **semua** pertanyaan terbuka (60 butir, disa
 | Markup TP per pasangan PT; dasar earn bila sebagian dibayar poin; syarat hangus poin (Q-P11) | Finance | W-15, W-01, W-17 |
 | Q-PT1..Q-PT6 (ADR-035: vendor yang butuh portal, fungsi vendor, franchisee, HP dinas/BYOD, domain, pentest) | IT + Procurement + PO | W-13 |
 
+
+## Keputusan pemilik proyek 18 Okt 2026 (jawaban atas pertanyaan terbuka G18–G19)
+
+Dicatat efn-lead dari jawaban pemilik proyek di sesi 18 Okt 2026. Kolom **Tindak lanjut** = paket kerja (rencana G20+, `docs/10`). "Configurable" = nilai diatur pengguna berwenang di sistem (bukan di kode), dengan default placeholder dan log audit perubahan.
+
+### A. Pajak
+
+| # | Q | Keputusan | Dampak / tindak lanjut |
+|---|---|---|---|
+| 18-1 | Q-F19-1 / P-12 / R-L09 | **PB1 hanya untuk dine-in.** Bawa pulang, 3PL, ambil sendiri, dan online **tidak** dikenakan PB1 | `efn_setup_company`: pajak *PB1 Non-Dine-in* → 0 % (fiscal position non-dine-in tetap ada sehingga bisa diubah tanpa kode). **Risiko diterima pemilik proyek** (R-L09: UU HKPD/perda kota umumnya mengenakan PBJT atas bawa pulang) — disarankan tetap dikonfirmasi tertulis konsultan pajak per kota sebelum go-live |
+| 18-2 | P-8 | **Poin = alat pembayaran** (dikonfirmasi) | Sudah dibangun G18 (E-30). Tidak ada perubahan |
+| 18-3 | Q-3 | Central Kitchen di bawah PT F&B (transfer internal tanpa TP). **Transfer pricing hanya bila satu brand punya bisnis ritel + F&B di entitas berbeda** (mis. Bacha) | `efn_intercompany` (W-15): TP cost-plus per pasangan entitas, markup configurable |
+| 18-4 | ADR-019 | Holding sebagai agen penagih: **ikuti rekomendasi yang aman** | Tetap A1 (jurnal titipan, Holding bukan penjual; PT penjual menerbitkan faktur). A2/C hanya setelah opini pajak |
+| 18-5 | Q-F18-2 | Selisih ±Rp1 PPN Odoo vs Coretax **ditangani Odoo sebagai pembulatan, dicatat ke akun beban (COA expense)** | Fit-gap G20: PPN dihitung dengan rumus Coretax (12 % × DPP 11/12 per baris) dan selisih terhadap total ke akun *Selisih Pembulatan Pajak* (configurable per PT) |
+| 18-6 | Q-F18-1 | Pembulatan pajak **per dokumen** (`round_globally`, default CE) | Konfigurasi 4 PT (`efn_setup_company`) |
+| 18-7 | Q-F19-6 | **B2C langsung tanpa minta identitas** (pajak digunggung). NPWP/NIK hanya untuk pembeli yang **meminta faktur pajak** atau **B2B** | W-06: profil pembeli opsional + NIK hanya di jalur permintaan faktur |
+| 18-8 | Q-PII6 | **File XML Coretax disimpan** di Odoo | Retensi 10 th; masuk cakupan enkripsi/inventaris PDP (lihat E) |
+
+### B. Poin & refund
+
+| # | Q | Keputusan | Dampak / tindak lanjut |
+|---|---|---|---|
+| 18-9 | Q-13 | Nilai 1 poin, batas earn per transaksi/hari, batas redeem = **configurable oleh pengguna** (modul loyalty, sesuai rekomendasi) | Rekomendasi lead: pengaturan per PT di Odoo (`efn_pos_loyalty_ledger`, grup Finance/Loyalty Manager, teraudit) → dikirim ke BFF (sumber kebenaran ledger) lewat event bertanda tangan; BFF menolak nilai di luar plafon keamanan. Paket baru **W-29** |
+| 18-10 | dasar earn | Mengikuti 18-9: earn hanya atas **porsi uang** (porsi poin tidak menghasilkan poin) — rumus G18 tetap, faktor configurable | — |
+| 18-11 | Q-F18-3 | Liabilitas poin: **ikuti rekomendasi** | Rekomendasi: jurnal **akrual harian** per PT dari ledger BFF (impor teraudit, idempoten) + rekonsiliasi saldo; akun liabilitas & kliring antar-PT configurable per PT. W-29 |
+| 18-12 | Q-F18-4 | Refund berpoin **proporsional sesuai tipe pembayaran** | Sudah default G18 (E-31) |
+| 18-13 | Q-F18-6 | Refund QRIS statis/EDC yang tidak bisa dibalik: **ikuti rekomendasi** | Transfer bank manual, dicatat atas metode asal + SOP Finance (sudah default G18) |
+| 18-14 | Q-P11 | **Poin hangus bila member tidak aktif 12 bulan**, member dianonimkan, dan **penyesuaian di COA** | Meralat usulan 24 bulan. W-17: job 12 bulan (configurable), notifikasi WA 30 h sebelumnya, jurnal *breakage* (liabilitas poin → pendapatan poin kedaluwarsa, akun configurable). Perlu teks syarat program (Legal) |
+| 18-15 | Q-F18-5 | Retur tanpa struk **diblokir, kecuali disetujui Store Manager** | Ubah E-31: retur tanpa struk butuh persetujuan peran Store Manager (PIN/login di POS), tetap hanya ke tunai; teraudit |
+
+### C. Penjualan online & operasional
+
+| # | Q | Keputusan | Dampak / tindak lanjut |
+|---|---|---|---|
+| 18-16 | G19 L-41 | Batas pesanan online per kanal **configurable**, umumnya disesuaikan **berat** | Tambah batas berat per pesanan (`product.weight`) di kanal, selain nominal & qty per baris (E-35b) |
+| 18-17 | Q-F19-2 | Barang pesanan online **dipisahkan sesuai instruksi kerja (WI)** | SOP/WI ritel; sistem tetap menandai `picked` saat siap |
+| 18-18 | A-4 | Vendor payment **belum diputuskan**. Tahap 1: fitur **bayar di kasir** (pelanggan dipanggil/datang ke kasir untuk membayar) | Paket baru **W-30**: metode online "bayar di kasir" — pesanan online/QR ditarik ke POS outlet dan dibayar di kasir (tunai/EDC/QRIS statis); reservasi & batas waktu tetap |
+| 18-19 | Q-ON3 | Vendor 3PL **belum diputuskan**; tambahkan opsi **kurir internal** | W-05 dimulai dari kurir internal (penugasan, status, tanpa vendor) |
+| 18-20 | Q-F19-3 + promo | Jumlah kode & daftar promo **mengikuti mesin promo standar Odoo** | Batas 3 kode BFF tetap sebagai pengaman teknis; aturan promo diatur di program Odoo. Catatan L-47: promo otomatis berkuota belum untuk kanal online |
+| 18-21 | data outlet | Belum diputuskan; **configurable di sistem** | Sudah standar Odoo (company/outlet/POS/kanal); checklist master data |
+| 18-22 | modifier | Menunggu master data; **configurable** | Atribut produk & combo standar Odoo (W-27) |
+| 18-23 | perangkat | Tambahkan opsi **PC kasir dual screen**, **single screen**, dan **perangkat tablet** | Profil perangkat per POS (layar pelanggan, tablet) di `efn_setup_pos` + ADR-023 per outlet (W-23) |
+| 18-24 | A-5 | Sales Manager & approver refund diputuskan nanti; **buatkan struktur organisasi (OC) di Odoo** | Struktur departemen/jabatan Odoo (modul HR CE: `hr` department/job) per PT dipetakan ke grup akses (peran), termasuk pemisahan tugas. Paket baru **W-31** |
+| 18-25 | Q-6 / W-16 | Auditor eksternal & konsolidasi: **ikuti rekomendasi** sesuai fitur multi-company & inter-company Odoo | W-16 + W-15 (laporan per PT + eliminasi antar-PT; mart konsolidasi yang sudah ada) |
+| 18-26 | Q-PT1..6 | Portal **configurable di master vendor Odoo** | W-13: penanda & fungsi portal per vendor di `res.partner` vendor |
+| 18-27 | Q-F19-4 / Q-E18-1 | **Setiap brand punya PT sendiri**: PT Grand Lucky (ritel), PT Paris Baguette (F&B), **dua entitas Bacha Coffee** — Bacha Coffee Retail dan Bacha Coffee F&B — ditambah Holding EFN dan FARM. Kategori ritel/F&B hanya pengelompokan. Central Kitchen berada di dalam PT F&B brand-nya. Akses produk dibatasi **per entitas PT** yang dipetakan ke user | **Meralat butir #8–#9 (10 Okt)** (sebelumnya: PT Retail & PT F&B bersama). Multi-company: produk per company + record rule standar; `efn_setup_company`, kanal online, dan pajak (PPN untuk PT ritel, PB1 untuk PT F&B) per PT. TP hanya antar-entitas Bacha (dan Holding ↔ PT). **Kanal online berganti kode per PT** |
+| 18-28 | server | Staging/produksi **belum disiapkan** (proyek masih tahap usulan/demo) | Uji yang butuh staging (kuota paralel, DR, rotasi systemd) tetap tertunda |
+| 18-29 | domain | Domain Super-App per brand **belum ada** (tahap usulan) | Q-F19-5 menunggu; L-33 tetap |
+
+### D. Privasi (UU PDP) & enkripsi
+
+| # | Q | Keputusan | Dampak / tindak lanjut |
+|---|---|---|---|
+| 18-30 | Q-PII3 | Kasir mencari member dengan **HP lengkap**; data pelanggan tidak dimuat ke PC kasir sebelum dicari — **setuju** | L-36-3 |
+| 18-31 | Q-PII2 | Pemilik proyek bertanya apakah email/HP boleh tetap disimpan di order POS | Jawaban lead: **boleh, asalkan ikut dienkripsi** (kolom `pos.order.email/mobile` masuk cakupan `efn_pii_pos`). Struk email tetap bisa dari Odoo. Meralat L-36-4 |
+| 18-32 | Q-PII1 / Q-E18-2 | **Nama, alamat, kota, kode pos ikut dienkripsi di tahap 1**; pencarian tetap bisa dengan **nama lengkap**, **HP lengkap**, dan **nama dengan wildcard** | Meralat rekomendasi ADR-036. Rekomendasi lead untuk wildcard: blind index per **kata** + **awalan kata ≥ 3 huruf** (mis. `budi*`, `sant*`); wildcard di tengah kata (`*anto*`) tidak didukung kecuali diminta (butuh indeks trigram, kebocoran pola lebih besar). Laporan per kota lewat data warehouse dengan kode wilayah. Estimasi ±7–9 minggu-engineer |
+| 18-33 | Q-PII5 | Kontak vendor individu, karyawan, akun portal vendor **ikut tahap 1** | Meralat ADR-036 (tahap 2 → tahap 1). Dampak besar → Q-E18-2 |
+| 18-34 | ADR-036 | **Disetujui sesuai rekomendasi** (dengan ralat 18-31..18-33) | ADR-036 → **Accepted** dengan revisi cakupan (18-31..18-33); architect merevisi ADR |
+| 18-35 | Q-PII4 | Retensi backup off-site: **ikuti rekomendasi** | Rekomendasi: 35 hari (5 minggu, mencakup tutup buku bulanan) + base backup bulanan 12 bulan; kunci pensiun disimpan ≥ retensi terpanjang + 30 h |
+| 18-36 | teks pelanggan | Pernyataan usia 17+ & pesan hapus akun 14 hari: **ikuti rekomendasi** | Draf L-21e menjadi teks final pilot |
+| 18-37 | DPIA | Pemilik proyek bertanya apa itu DPIA | Dijelaskan lead; draf DPIA disiapkan architect (W-28) |
+| 18-38 | Q-P10 | Grup auditor lintas PT | **Belum diputuskan** |
+
+### E. Pertanyaan konfirmasi baru (dari keputusan di atas)
+
+| ID | Pertanyaan | Kenapa |
+|---|---|---|
+| ~~Q-E18-1~~ | Terjawab 18 Okt (18-27) | — |
+| ~~Q-E18-2~~ | Terjawab 18 Okt (18-32) | — |
+
 ## Syarat aktivasi produksi online (review r10 re-review akhir, 10 Okt 2026)
 
 Sumber: `docs/reviews/SECURITY_REVIEW_2026-10-09_r10.md` §"Rekomendasi merge". **GO merge ke `main`**; `ONLINE_ENABLED=true` di produksi **NO-GO** sampai semua butir di bawah terpenuhi. Teknis: `deploy-validate` menolak online prod tanpa provider payment nyata dan API key kanal nyata.
