@@ -587,3 +587,69 @@ ADR-036 (IT + Security; Legal/DPO; Finance + Tax; PO + Ops) dan Q-PII1..Q-PII6:
   - durasi `VACUUM FULL`;
   - overhead dekripsi;
   - retensi off-site.
+
+# Gelombang 20 (perencanaan) — ADR-036 Accepted, ADR-001 6 entitas, rencana G20+, draf DPIA (2026-10-18)
+Branch `chore/wave-20`. Hanya dokumen, tanpa commit. Dokumen bisnis asli dan `docs/04` (milik lead) **tidak** diubah; usulan kontrak ditulis di ADR-036 §0.9 dan `docs/10` §A.2.
+
+## Ringkasan (untuk manajemen)
+- **Enkripsi data pribadi di Odoo disetujui** dengan cakupan yang lebih luas: pelanggan, vendor perorangan, karyawan, dan portal vendor; nama dan alamat ikut dienkripsi.
+- **Pencarian** tetap bisa dengan nama lengkap, HP lengkap, dan awalan kata ≥ 3 huruf. Pencarian potongan di tengah kata dan urutan abjad tidak didukung.
+- **Biaya hasil verifikasi** ±9–11,5 minggu-engineer, bukan 7–9. Selesai ±5–6 minggu dengan 2 engineer Odoo.
+- **Struktur 6 perusahaan** dicatat di ADR-001. Biayanya murah sekarang (±2–3,5 minggu) dan mahal setelah ada data produksi.
+- **Rencana G20:** struktur perusahaan, enkripsi pelanggan, dan bayar di kasir. Restoran mundur ke G22.
+- **Draf DPIA** siap diisi DPO.
+
+## File dibuat / diubah
+| File | Perubahan |
+|---|---|
+| `docs/decisions/ADR-036-enkripsi-kolom-pii-odoo.md` | Status **Accepted 18 Okt**. Ringkasan baru. **§0 baru** (menang atas §1–§14): dasar keputusan; cakupan S1+ (kelas P/V/A/K, protect-by-default, pengecualian K-a); tabel field per model (termasuk `email_normalized` terenkripsi + blind index, `pos.order` selalu terenkripsi, `account.move.invoice_partner_display_name`, `hr.employee`/`hr.version`, XML Coretax); SEC-138 → `efnpii2:` terikat id (rebind pasca-insert); kunci ketiga `odoo_pii_name_key`; desain token nama (normalisasi, f/w/p, HMAC-128, padding 16, kolom + GIN, fallback tabel, ukuran, kebocoran diterima, tanpa trigram); dampak per area; `efn_region` + view ETL; XML Coretax terenkripsi; ralat ADR-022 & K-36 (+K-36-9..11); status L-36; **AC-1..AC-14** (L-39 a–d, SEC-136/137/138/140); estimasi ±9–11,5; Q-PII7..12; risiko R-T18/R-T19/R-O07. Penanda "⚠ Diralat" di §4.1, 4.2, 4.4, 4.5, 4.7, 4.8, 4.10, 4.11, 5, 6, 7, 8.3, 9, 12, 14 |
+| `docs/decisions/ADR-022-enkripsi-in-transit-at-rest.md` | Status: revisi 18 Okt. Keputusan 5 "Batas cakupan" dicoret → teks baru. Tabel kunci +3 baris. E14 direvisi. Q-E3 ditutup. ADR tetap Proposed |
+| `docs/decisions/ADR-001-single-odoo-multicompany.md` | Catatan revisi 18 Okt: 6 entitas sebagai company root (bukti cabang Odoo 19); TP; pajak; kode kanal per PT; member/poin (penerbit, FIFO, akrual, breakage); ETL/konsolidasi; W-32; Q-AD1-1..7. Status tetap Accepted |
+| `docs/decisions/ADR-019-…md`, `ADR-020-…md` | Catatan 18 Okt (header) |
+| `docs/10_RENCANA_GELOMBANG_18_PLUS.md` | **Bagian A baru**: status G18 (PR #60 merged) / G19 (PR #62 menunggu merge); paket baru W-29..W-34 + kontrak usulan W-29/W-30; paket berubah (E-38a/b, W-14b, W-24b, W-17, W-05, W-06, W-13, W-15, W-16, W-19, W-23, W-28, F&B → G22); estimasi per gelombang; graf dependensi; urutan G20–G23+; tabel "tidak bisa sebelum staging"; keputusan yang dibutuhkan |
+| `docs/compliance/DPIA_DRAFT.md` | **Baru**: kerangka Pasal 34 (teks diverifikasi), pemicu a–g, 14 kegiatan, minimisasi, 22 risiko (inheren/residu), 10 mitigasi terbuka, residu, konsultasi, isian DPO D-1..D-11 |
+| `docs/decisions/README.md` | Catatan 18 Okt; baris indeks 001/022/036; urutan tanda tangan 2a dicoret; Q-PII7..12, Q-AD1, Q-DPIA di tabel E |
+
+## Estimasi & urutan yang direkomendasikan
+- **E-38 penuh ±9–11,5 minggu-engineer** (E-38a 7,25–9,25; E-38b 1,75–2,25).
+  - Angka lead 7–9 hanya tercapai bila XML Coretax tetap plaintext, data karyawan ditunda, dan laporan kota hanya per outlet. Ketiganya meralat keputusan pemilik proyek.
+- **G20 (±17–22 minggu-engineer, ±5 minggu kalender):** W-32 (pertama), E-38a (paralel), W-30, W-33, W-14b, W-24b, teks pelanggan, fit-gap W-29/W-31/W-34/W-23.
+- **G21:** E-38b, W-29, W-31, W-34, W-06, W-23, W-26.
+- **G22:** restoran (W-07, W-04, W-27, W-12, W-17).
+- **G23+:** W-15, W-16, W-05, W-13.
+- **Sisa total ±57–79 minggu-engineer.**
+
+## Keputusan yang butuh tanda tangan / konfirmasi klien
+- **Q-PII7..12** (DPO/Finance/PO): nama karyawan plaintext, login portal opak, rekening bank tahap 1b, kode wilayah kab/kota, urutan non-abjad, XML terenkripsi.
+- **Q-AD1-1..7** (Finance/Tax/Legal/PO): harga FARM & antar-brand, PPN FARM, NITKU outlet, produk lintas entitas, pengendali data member, nilai tukar poin seragam, kode final.
+- **Q-DPIA-1..4** + isian DPO D-1..D-11; 18-38 grup auditor.
+- **Lead/PO:** L-G20-1 (urutan G20, F&B ke G22), L-G20-2 (terima estimasi E-38 ±9–11,5).
+
+## Usulan untuk agent lain (lewat lead)
+- **Lead:** `docs/04` — K-36-1..11 (ADR-036 §0.9), kode entitas/kanal (§1, §11.3), kontrak W-29/W-30 (`docs/10` §A.2); masukkan **R-T18** ke register `docs/01` + usulan R-T19, R-O07.
+- **efn-odoo-functional:** fit-gap lanjutan E-38 (ADR-036 §0.15 & §0.12 baris 1), W-32, W-29, W-31, W-34, W-30 (faktur ganda pos_sale), W-23.
+- **efn-data-ai-engineer:** view `efn_etl.partner_region`, `dim_region`, `dim_company` 6 entitas.
+- **architect (berikut):** inventaris PDP **v8** (cakupan ADR-036 S1+, XML Coretax, HR, region, off-site 35 h/12 bln).
+
+## Terverifikasi / belum terverifikasi
+- **Terverifikasi (sumber primer `raw.githubusercontent.com/odoo/odoo/19.0`, 18 Okt):**
+  - `res.partner`: `_order = "complete_name ASC, id DESC"`, `_rec_names_search`, `name` (index), `complete_name` (compute stored index, depends), `display_name` depends, `_commercial_fields`/`_synced_commercial_fields = ['vat']`, `ADDRESS_FIELDS`;
+  - `res.company`: `parent_id`/`child_ids` "Branches", "The company hierarchy cannot be changed", delegasi `currency_id`; `account` company: template COA dari induk, lock date `child_of`;
+  - `account.move.invoice_partner_display_name` stored + `_rec_names_search = ['name','partner_id.name','ref']`;
+  - `hr.employee` `_inherits hr.version`, `private_phone/email`, `emergency_*`; `hr.version` field privat (`tracking=True`, `groups hr.group_hr_user`);
+  - POS `get_new_partner`, `_load_pos_data_domain`/`fields`, `get_limited_partners_loading` (SQL `ORDER BY order_count DESC, name`);
+  - Coretax `efaktur_document.py` (`ir.qweb._render`, `ir.attachment` `raw`, `message_post`, route unduh).
+- **Terverifikasi (pasal.id):** UU 27/2022 Pasal 34 ayat (1)–(3), Pasal 20 ayat (1)–(2) huruf a–f (ringkas).
+- **Belum terverifikasi:**
+  - flush compute `complete_name` dengan `EfnPiiChar`;
+  - kinerja GIN token pada 200 rb–1 jt baris;
+  - UX cari POS 19 (otomatis ke server?);
+  - `filter_domain` view faktur/PO;
+  - titik override Coretax;
+  - `auth_signup` reset via email;
+  - `mail.mail` auto_delete struk;
+  - layar pelanggan POS CE 19 (W-23);
+  - sumber/lisensi kode wilayah Kemendagri;
+  - status PP pelaksana UU PDP;
+  - semua estimasi = perkiraan architect;
+  - Mermaid tidak dirender.

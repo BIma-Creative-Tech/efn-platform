@@ -2,6 +2,12 @@
 
 - **Status:** Proposed
   - **Catatan 10 Okt 2026 (pemilik proyek; status tetap Proposed):** (1) **redeem poin = alat bayar** (P-8): di POS menjadi *payment method* "Poin EFN", bukan baris diskon per kelompok pajak — DPP tidak berkurang (⚠ konfirmasi konsultan pajak tetap disarankan); (2) **poin online earn + redeem** (redeem online juga alat bayar); (3) settlement poin lintas brand **bulanan** via jurnal inter-company (Q-4); (4) parameter poin tetap placeholder configurable (Q-13). Ledger tetap di PG platform (ADR ini tidak berubah). Paket kerja W-01, W-12, W-15 di `docs/10_RENCANA_GELOMBANG_18_PLUS.md`.
+  - **Catatan 18 Okt 2026 (pemilik proyek 18-9..18-14; status tetap Proposed):**
+    - Parameter poin **configurable per PT di Odoo** → dikirim ke BFF. BFF menolak nilai di luar plafon keamanan (W-29).
+    - Liabilitas = **jurnal akrual harian per PT** dari ledger (W-29).
+    - Poin **hangus bila member tidak aktif 12 bulan** + jurnal breakage (W-17).
+    - Earn hanya atas porsi uang.
+    - Struktur 6 entitas (ADR-001 revisi 18 Okt): penerbit = PT tempat earn; redeem lintas PT memerlukan **alokasi FIFO per lot earn** di ledger (usulan perubahan skema, lihat ADR-001 §5 dan `docs/10` W-29).
 - **Tanggal:** 2026-10-05
 - **Pemutus (klien):** Finance (liabilitas poin & settlement antar-PT) + IT Lead + PO
 - **Referensi review:** D-05, §3.3 (poin lintas-brand = liabilitas), R-B03, R-B05, R-B06, R-S10, R-L01

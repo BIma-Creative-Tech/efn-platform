@@ -1,6 +1,10 @@
 # ADR-019: Unified Cart Lintas PT — Satu Pembayaran, Order & Dokumen Pajak per PT, PT Holding sebagai Agen Penagih
 
 - **Status:** Proposed — **wajib opini konsultan pajak & legal sebelum Accepted**
+  - **Catatan 18 Okt 2026:**
+    - Pemilik proyek: "ikuti rekomendasi yang aman" (18-4) → tetap **A1**.
+    - Penjual kini **4 PT** (GL, PB, BCR, BCF; ADR-001 revisi 18 Okt). `company_code` `RTL`/`FNB` di §Keputusan 1 diganti kode entitas baru.
+    - **Bayar di kasir** (W-30, 18-18) hanya untuk pesanan satu PT.
 - **Tanggal:** 2026-10-05
 - **Pemutus (klien):** Finance + Tax + Legal (struktur), PO (UX checkout)
 - **Referensi review:** §3.3, R-T10, R-L03, R-L04, R-O05, R-S09
