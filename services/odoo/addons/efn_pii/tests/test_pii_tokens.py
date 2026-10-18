@@ -125,7 +125,9 @@ class TestEfnNameTokenSearch(PiiKeyMixin, TransactionCase):
             "budi sant": self.budi,
             "santoso budi": self.budi,
             "%budi%": self.budi,
-            "*sant*": self.budi | self.plain,
+            # `*` = pemisah kata untuk partner terlindungi (awalan "sant"); untuk partner tidak terlindungi
+            # Odoo standar memperlakukan `*` sebagai karakter literal, jadi "CV Santoso Jaya" TIDAK cocok
+            "*sant*": self.budi,
             "jose": self.jose,
             "müller": self.jose,
             "muller": self.jose,

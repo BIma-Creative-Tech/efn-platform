@@ -330,6 +330,8 @@ export const KNOWN_ISSUE_CODES = [
   'qty_exceeds_max',
   'qty_limit',
   'price_changed',
+  // Odoo `order_limit` (L-41, batas nilai pesanan kanal; product_id null) — QA G20: sebelumnya jatuh ke `unknown_issue`.
+  'order_limit',
   // §12.3 (W-33): `weight_limit` = tingkat grup/PT (product_id null); `weight_missing` = per produk.
   'weight_limit',
   'weight_missing',
@@ -425,6 +427,7 @@ export const ISSUE_LABEL: Record<string, string> = {
   qty_exceeds_max: 'Melebihi jumlah maksimum',
   qty_limit: 'Jumlah melebihi batas pembelian. Kurangi jumlah barang ini.',
   price_changed: 'Harga berubah',
+  order_limit: 'Nilai pesanan melebihi batas untuk PT ini. Kurangi barang, lalu coba lagi.',
   weight_limit: 'Total berat pesanan melebihi batas untuk PT ini. Kurangi jumlah atau hapus beberapa barang, lalu coba lagi.',
   weight_missing: 'Berat barang ini belum tercatat sehingga belum bisa dipesan online. Hapus barang ini atau beli langsung di toko.',
 };

@@ -99,8 +99,8 @@ Prasyarat (sekali per volume dev): `efn_online_order efn_setup_online` terpasang
 `09-platform-g20.sql`, API key nyata user teknis di `secrets/odoo_api_key_online_gl.txt` (runbook `odoo-online-api-key.md`
 §1; langkah `setup` membuat user `efn_online_gl` lebih dulu), lalu `up -d --force-recreate api-gateway`.
 G20 (docs/04 §12.1): kanal/company smoke = `GL` (kode PT; dulu `RTL`), company pembanding event silang = `PB` (dulu `FNB`).
-`run-e2e-smoke.sh` dan `online_smoke.py` sudah memakai kode baru; `odoo_online_smoke.py`/`odoo_pos_smoke.py` milik
-builder Odoo harus mengikuti (kanal `GL`, user `efn_online_gl`, `efn_brand_code` `PB`).
+Semua skrip smoke (`run-e2e-smoke.sh`, `online_smoke.py`, `odoo_online_smoke.py`, `odoo_pos_smoke.py`) sudah memakai kode
+baru (kanal `GL`, user `efn_online_gl`, `efn_brand_code` `PB`).
 - Gateway + key nyata: 10 path `/json/2` → jawaban aplikasi Odoo (200 / `efn_online:<kode>` 422), bukan 401/403/deny.
 - Alur utama: quote → `accept_total` salah 409 → tanpa key 400 → checkout 201 → klik ganda = order sama → body beda 409
   → bayar (webhook mock HMAC) → `confirmed` (SO + faktur) → `ready` (aksi staf) → serah terima kode ambil → `completed`;
@@ -119,6 +119,25 @@ builder Odoo harus mengikuti (kanal `GL`, user `efn_online_gl`, `efn_brand_code`
   oleh manajer `smoke_online_mgr` → refund `approval_required` → CLI approve (peran `cs` ditolak, approver lain →
   settled); refund CS (`approval_required`, pembuat/peran cs ditolak), settle manual SEC-112; stok non-katalog 404;
   label pajak `PPN 11%`. Identitas/peran CLI disimulasikan lewat env `EFN_CS_OPERATOR`/`EFN_CS_ROLE` (dev).
+
+## Skenario `q` — G20 bayar di kasir (docs/04 §12.2, L-50..L-58) — ditulis QA, BELUM dijalankan
+
+Dijalankan setelah `o` di stack yang sama (memakai API key kanal GL + gateway; `q` menjalankan ulang `setup` yang idempoten).
+Langkah baru: `online_smoke.py` `counter_channel|checkout_counter|counter_view|counter_cancel`; `odoo_online_smoke.py`
+`counter_setup|counter_lookup|counter_pay|counter_refund` (kasir `smoke_counter_cashier` = POS user non-admin, POS config
+di gudang outlet SMKOL, sesi dibuka). Alur: katalog mengiklankan `counter` → checkout `counter` (metode asing 400, replay =
+kode sama; `payment` PERSIS `{method,counter_code,expires_at}`) → kode bayar terenkripsi di BFF / hanya digest di Odoo →
+lookup POS salah = `not_found`, benar = persis `{order_label, amount_payable}` → sync order POS pelunasan (tunai) →
+`confirmed` + faktur lunas + pembayaran di jurnal kliring, re-sync idempoten → BFF `fulfilling` & kode bayar dihapus →
+kode ambil ≠ kode bayar → serah terima → `completed`. Refund L-58: CLI `online-refund --full` + approve → `manual_required`
+(`counter_refund_via_pos`, belum settled) → refund order POS → event `refund_settled` → BFF `settled` (`pos:<uuid>`).
+Bayar setelah batal (L-57): lookup → pelanggan batal → kasir tetap bayar → Odoo `review`
+(`counter_paid_after_cancel`, tanpa faktur) → BFF bagian `review`, order DB tetap `cancelled`, pelanggan melihat `review`.
+Sebelum `q` pertama: Odoo modul `efn_online_pos_counter` terpasang, `ONLINE_PAYMENT_METHODS` berisi `counter` (default dev).
+
+`l` langkah 8b' (G20 E-41, `odoo_pos_smoke.py ret_approval`): retur tanpa struk dengan PIN Store Manager — tanpa persetujuan
+ditolak, kasir bukan approver, PIN salah, PIN benar sekali pakai (token tidak keluar), nominal melebihi, 5 salah = terkunci.
+`setup` POS menyetel mode `cash` agar langkah SEC-59 (`loy_refund_noreceipt`) tetap menguji loyalty, bukan persetujuan.
 
 ## Skenario `p` — G18 POS (docs/04 §9.9 K-18, L-23..L-26; review r11/re-review)
 Butuh DB Odoo baru (IDR `rounding = 1`) dengan `efn_pos_refund_origin` terpasang, migrasi 08, dan `.env` mode

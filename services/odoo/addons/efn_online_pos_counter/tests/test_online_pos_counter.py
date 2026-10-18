@@ -327,6 +327,10 @@ class TestEfnOnlinePosCounter(TestPoSCommon):
         self.assertEqual(pos_order.state, "paid")
         self.assertEqual((online.state, online.review_reason), ("review", "counter_paid_after_expiry"))
         self.assertFalse(online.invoice_id)
+        # QA G20 / L-57: event `review` WAJIB membawa alasan, kalau tidak BFF mengabaikannya (ignored_stale).
+        review = online.event_ids.filtered(lambda e: e.event == "review")
+        self.assertEqual(len(review), 1)
+        self.assertEqual(review._efn_payload()["review_reason"], "counter_paid_after_expiry")
 
     def test_paid_after_cancel_goes_to_review_then_pos_refund(self):
         online, _payload, _result = self._place()
@@ -338,6 +342,8 @@ class TestEfnOnlinePosCounter(TestPoSCommon):
         pos_order = self._sync(self._settle_data(online))
         self.assertEqual((online.state, online.review_reason), ("review", "counter_paid_after_cancel"))
         self.assertTrue(online.paid_idempotency_key)
+        review = online.event_ids.filtered(lambda e: e.event == "review")
+        self.assertEqual(review.sorted("seq")[-1]._efn_payload()["review_reason"], "counter_paid_after_cancel")
         # Penyelesaian review lewat BFF = batal; dana kembali lewat refund order POS pelunasan.
         self.env["efn.online.order"].with_user(self.fx["tech"]).efn_online_cancel(
             "TCT", online.platform_order_ref, "review", f"online:cancel_review:{online.platform_order_ref}"

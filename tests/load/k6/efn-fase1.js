@@ -134,7 +134,7 @@ export function pos() {
   const hdr = { 'Content-Type': 'application/json', 'X-EFN-Service-Key': SERVICE_KEY };
   const member = msisdn('628999');
   const order = uuid4();
-  const company = ['EFN', 'RTL', 'FNB'][rnd(3)];
+  const company = ['EFN', 'GL', 'PB', 'BCR', 'BCF'][rnd(5)]; // G20 docs/04 §12.1 (RTL/FNB dihapus)
   const posConfig = 100000 + exec.vu.idInTest * 1000 + rnd(1000);
   const o = http.post(`${BFF}/v1/pos/otp/request`, JSON.stringify({
     member_ref: member, order_ref: order, amount: 150000, company_code: company, pos_config_id: posConfig,

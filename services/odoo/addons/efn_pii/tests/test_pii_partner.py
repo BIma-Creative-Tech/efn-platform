@@ -272,17 +272,58 @@ class TestEfnPiiPartner(PiiKeyMixin, TransactionCase):
         self.assertTrue(self._flag(holder), "partner di bawah partner terlindungi ikut terlindungi")
         self.env.cr.execute(
             SQL(
-                "SELECT old_value_char, new_value_char FROM mail_tracking_value WHERE create_date >= %s",
+                """SELECT f.model, f.name, v.old_value_char, v.new_value_char
+                     FROM mail_tracking_value v LEFT JOIN ir_model_fields f ON f.id = v.field_id
+                    WHERE v.create_date >= %s""",
                 protected.create_date,
             )
         )
-        values = {v for row in self.env.cr.fetchall() for v in row if v}
+        rows = self.env.cr.fetchall()
+        values = {v for row in rows for v in row[2:] if v}
         for plain in ("0811 0000 0001", "0811 0000 0003", "Budi Baru", NAME, "Jl. Baru 3"):
-            self.assertNotIn(plain, values)
+            leaking = sorted(f"{m}.{f}" for m, f, old, new in rows if plain in (old or "") or plain in (new or ""))
+            self.assertFalse(leaking, f"{plain!r} bocor lewat tracking field {leaking}")
         self.assertFalse([v for v in values if "Budi" in v])
+        # field turunan non-EfnPiiChar milik record terlindungi (mis. parent_name/commercial_company_name holder)
+        holder_fields = {f for m, f, old, new in rows if m == "res.partner" and (old or new)}
+        self.assertLessEqual(holder_fields, {"phone", "parent_id"}, holder_fields)
         self.assertIn(f"{pm.REDACTED_LABEL}{protected.id}", values)
         # kontrol: tracking standar tetap aktif untuk partner tidak terlindungi
         self.assertIn("0811 0000 0004", values)
+
+    def test_tracking_values_redacted_at_creation_point(self):
+        """Lapis kedua: tracking field cakupan dari modul mana pun (mis. account `name` tracking=True)."""
+        protected = self._create_protected()
+        company = self.Partner.create({"name": "PT Biasa", "is_company": True})
+        Tracking = self.env["mail.tracking.value"]
+        info = self.Partner.fields_get(["name", "phone", "parent_id"])
+        vals = Tracking._create_tracking_values("Budi Lama", "Budi Baru", "name", info["name"], protected)
+        self.assertFalse(vals.get("old_value_char"))
+        self.assertFalse(vals.get("new_value_char"))
+        vals = Tracking._create_tracking_values("0811", "0812", "phone", info["phone"], protected)
+        self.assertFalse(vals.get("old_value_char") or vals.get("new_value_char"))
+        vals = Tracking._create_tracking_values(False, protected, "parent_id", info["parent_id"], company)
+        self.assertEqual(vals["new_value_char"], f"{pm.REDACTED_LABEL}{protected.id}")
+        # kontrol: partner tidak terlindungi tetap ter-track apa adanya
+        vals = Tracking._create_tracking_values("PT Lama", "PT Biasa", "name", info["name"], company)
+        self.assertEqual(vals["new_value_char"], "PT Biasa")
+        # field turunan non-EfnPiiChar (parent_name related ke nama induk) pada record terlindungi -> kosong
+        child = self.Partner.create({"name": "Anak", "parent_id": protected.id, "type": "delivery"})
+        info_pn = self.Partner.fields_get(["parent_name"])["parent_name"]
+        vals = Tracking._create_tracking_values(False, NAME, "parent_name", info_pn, child)
+        self.assertFalse(vals.get("new_value_char"))
+        # record TIDAK terlindungi yang menyimpan nama partner terlindungi terkait -> kosong; nilai lain tetap
+        info_ref = self.Partner.fields_get(["ref"])["ref"]
+        vals = Tracking._create_tracking_values(False, f"Ref {NAME}", "ref", info_ref, company)
+        self.assertEqual(vals.get("new_value_char"), f"Ref {NAME}")  # tidak terkait partner terlindungi
+        # record tidak terlindungi yang terkait partner terlindungi (induk dipasang lewat SQL = data lama)
+        sale_like = self.Partner.create({"name": "PT Terkait", "is_company": True})
+        self.env.cr.execute(SQL("UPDATE res_partner SET parent_id = %s WHERE id = %s", protected.id, sale_like.id))
+        sale_like.invalidate_recordset(["parent_id"])
+        vals = Tracking._create_tracking_values(False, f"Ref {NAME}", "ref", info_ref, sale_like)
+        self.assertFalse(vals.get("new_value_char"))
+        vals = Tracking._create_tracking_values(False, "REF-001", "ref", info_ref, sale_like)
+        self.assertEqual(vals.get("new_value_char"), "REF-001")
 
     # ----------------------------------------------------------------- baca
     def test_orm_read_paths_return_plaintext(self):

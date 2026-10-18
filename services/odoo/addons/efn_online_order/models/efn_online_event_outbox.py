@@ -197,6 +197,10 @@ class EfnOnlineEventOutbox(models.Model):
             # G20 E-45 (docs/04 §12.2 no. 7): metode saja, tanpa identitas kasir/sesi/POS. QRIS tidak membawa kunci
             # ini (payload & sidik event pra-G20 tidak berubah).
             payload["payment"] = {"method": "counter"}
+        if self.event == "review":
+            # L-57 (QA G20): BFF hanya menerima `cancelled -> review` untuk pelunasan kasir terlambat bila event membawa
+            # alasannya (`counter_paid_after_cancel|expiry`); BFF mengabaikan kode lain (-> null). Kode saja, tanpa PII.
+            payload["review_reason"] = order.review_reason or None
         if self.event == "cancelled":
             # SEC-95/L-16: kode alasan (tanpa teks bebas) agar BFF bisa membedakan batal ops (refund_attention).
             payload["cancel_reason"] = order.cancel_reason or None

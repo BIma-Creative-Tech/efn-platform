@@ -1369,6 +1369,42 @@ kode `unbound_ciphertext`/`plaintext_in_protected`/`field_not_encrypted` sudah a
 - **devsecops**: env `EFN_ODOO_PII_NAME_KEY_FILE` dipakai persis; `deploy-validate` cukup memeriksa tiga file.
 - **efn_core (lead)**: tidak perlu entri `RPC_ALLOWLIST` baru.
 
+## Putaran perbaikan setelah run nyata lead (66 test: 3 failed 3 error; gabungan 690: 3 failed 4 error, semua efn_pii*)
+`efn_pii_account` (buatan lead, `name = EfnPiiChar()` atas `account/models/partner.py`) tidak diubah. Belum dijalankan ulang.
+1. **Kebocoran nyata tracking** (`test_tracking_never_stores_protected_plaintext`, 'Budi Baru'): akar masalah = label
+   many2one; `col_info` 19.0 (hasil `fields_get`) **tidak** memuat `relation`, sehingga override saya tidak pernah aktif
+   dan `display_name` partner terlindungi tersimpan di `new_value_char` (`parent_id`). Perbaikan
+   `efn_pii/models/mail_tracking_value.py`: pengecekan di titik pembuatan, tanpa daftar statis — (a) field `EfnPiiChar`
+   record terlindungi (penanda atau `_efn_pii_always`) → char/text dikosongkan, apa pun modul yang menambah `tracking=`
+   (mis. `account` `name tracking=True`); (b) nilai many2one berupa partner terlindungi → `Kontak terlindungi #<id>`.
+   Test baru `test_tracking_values_redacted_at_creation_point`. Nilai '0811 0000 0002/0004' di run = HP partner
+   perusahaan kontrol (tidak terlindungi, sah); HP partner terlindungi ('…0001/…0003') sudah tidak ada di run itu.
+2. `*sant*`: kontrak = awalan kata. Partner kedua (`CV Santoso Jaya`) **tidak terlindungi**, dicari SQL standar Odoo yang
+   memperlakukan `*` sebagai literal → tidak cocok. Test diperbaiki (harapan: hanya partner terlindungi), README dicatat.
+3. `efn_pii_pos`: (a) `order.mobile` kosong: `_compute_contact_details` memformat lewat `_phone_format` dengan negara
+   partner/company; nomor lokal tanpa negara → False. Test memakai HP internasional + negara ID (dan tulis eksplisit
+   sebagai cadangan). (b) locked: compute token tertunda dari `setUp` di-flush sesudah kunci dicabut → `flush_all()`
+   sebelum mengunci. (c) `assertRaises` tuple → try/except. (d) `pos_online_payment_self_order.create` butuh
+   `session_id` → test SEC-137 memakai `write` pada order nyata. (e) tearDownClass `_patch_dict` → `_pii_class_env`
+   tidak lagi memakai `patch.dict` (simpan/pulihkan `os.environ` manual via class cleanup).
+
+### Putaran 2 (run gabungan 691: 1 gagal, 'Budi Baru' masih di tracking)
+- Analisis: nilai hanya muncul sebagai nilai BARU (nama lama 'Budi Santoso' tidak ada) dan label m2o sudah teredaksi →
+  sumbernya field turunan non-`EfnPiiChar` di record `holder` (yang menjadi terlindungi), kemungkinan `parent_name`
+  (related `parent_id.name`) atau sejenis; field persisnya belum dikonfirmasi (test kini mencetak `model.field`).
+- Perbaikan umum `mail_tracking_value.py` (`_redact`, dipakai dua lapis):
+  1. record yang di-track terlindungi → **semua** nilai char/text dikosongkan (field apa pun, bukan hanya EfnPiiChar);
+     sisi many2one ke partner terlindungi diberi label;
+  2. record tidak terlindungi → nilai char/text yang sama dengan/memuat plaintext PII (+ display_name) partner
+     terlindungi yang terkait (nilai m2o lama/baru, semua field m2o `res.partner` tersimpan pada record, `parent_id`,
+     `commercial_partner_id`) dikosongkan;
+  3. lapis baru `mail.tracking.value.create`: jalur yang tidak memakai `_create_tracking_values` tetap diredaksi
+     berdasarkan `field_id` + record pesan (`mail_message_id`).
+- Test: query tracking kini join `ir_model_fields` dan pesan gagal menyebut `model.field` yang bocor; tambahan assert
+  hanya `phone`/`parent_id` yang bernilai di partner; `test_tracking_values_redacted_at_creation_point` menguji
+  `parent_name` pada record terlindungi dan pencocokan isi pada record tidak terlindungi yang terkait.
+- Konsekuensi: over-redaksi mungkin (mis. tracking dokumen lain yang kebetulan memuat kota partner terlindungi terkait).
+
 ---
 
 # G20 builder C — E-45 bayar di kasir (18 Okt 2026; kontrak docs/04 §12.2 + L-50/L-52/L-55 + ralat L-56)

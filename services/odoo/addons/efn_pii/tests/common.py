@@ -59,9 +59,17 @@ class PiiKeyMixin:
         """Kunci untuk seluruh kelas (dipakai bila setUpClass sudah membuat partner perorangan)."""
         folder, keys, bidx_key, name_key = make_key_dir()
         cls.addClassCleanup(shutil.rmtree, folder, True)
-        env_patch = patch.dict(os.environ, key_env(folder), clear=True)
-        env_patch.start()
-        cls.addClassCleanup(env_patch.stop)
+        # Bukan patch.dict: harness Odoo memeriksa patcher aktif di tearDownClass (sebelum class cleanup) dan
+        # `_patch_dict` tidak punya atribut `target` -> error. Simpan/pulihkan os.environ manual.
+        saved = dict(os.environ)
+
+        def _restore_environ():
+            os.environ.clear()
+            os.environ.update(saved)
+
+        os.environ.clear()
+        os.environ.update(key_env(folder))
+        cls.addClassCleanup(_restore_environ)
         cls.addClassCleanup(kr.restore_keyring_cache, kr.snapshot_keyring_cache())
         kr.reset_keyring_cache()
         return keys, bidx_key, name_key

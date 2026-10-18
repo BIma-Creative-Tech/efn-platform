@@ -40,9 +40,12 @@ Turunan & SEC-136:
   partner terlindungi;
 - `email_normalized` **dienkripsi + blind index** (bukan dikosongkan) → `find_or_create` /
   `_find_or_create_from_emails` (email masuk) menemukan pemilik terlindungi, tidak membuat duplikat;
-- `mail.tracking.value`: nilai field cakupan (+ `contact_address_inline`) partner terlindungi tidak ditulis; label
-  many2one ke partner terlindungi (mis. `parent_id`, `partner_id` dokumen lain) = `Kontak terlindungi #<id>`;
-  riwayat lama diredaksi saat partner menjadi terlindungi.
+- `mail.tracking.value`: dicegat di titik pembuatan (`_create_tracking_values`), bukan daftar statis per modul —
+  nilai field `EfnPiiChar` record terlindungi dikosongkan apa pun modul yang menambah `tracking=` (mis. `account`
+  memberi `name` `tracking=True`); label many2one ke partner terlindungi (mis. `parent_id`, `partner_id` dokumen lain)
+  = `Kontak terlindungi #<id>`. Lapis pertama tetap `_mail_track` (field cakupan + `contact_address_inline`).
+  Riwayat lama diredaksi saat partner menjadi terlindungi. (Run nyata G20 menemukan nama partner terlindungi di
+  label many2one karena `col_info` 19.0 tidak memuat `relation`; diperbaiki.)
 
 ## Field (ADR-036 §0.2 tabel field, tahap 1a)
 | Field | Perlakuan |
@@ -53,8 +56,8 @@ Turunan & SEC-136:
 | `email_normalized` (compute stored, `mail`) | E + blind index `efn_email_bidx` (subkunci `email`, normalisasi sama) |
 | `phone_sanitized` | dikosongkan (K) |
 
-NIK / dokumen pembeli (`l10n_id_*`), `account.move.invoice_partner_display_name`, XML Coretax = `efn_pii_l10n_id` /
-`efn_pii_account` (**belum**, sisa E-38a).
+NIK / dokumen pembeli (`l10n_id_*`), XML Coretax = `efn_pii_l10n_id`; `account.move.invoice_partner_display_name` =
+perluasan `efn_pii_account` (**belum**, sisa E-38a).
 
 ## Mekanisme (M1, ADR-036 §8.2)
 `models/fields_pii.py` `EfnPiiChar(fields.Char)` didefinisikan ulang di `_inherit` (tanpa monkeypatch):
@@ -72,7 +75,8 @@ NIK / dokumen pembeli (`l10n_id_*`), `account.move.invoice_partner_display_name`
 mendefinisikan ulang), `create`/`write` yang menyentuh record terlindungi (langsung atau lewat dependensi compute
 stored) **ditolak** (`UserError` + CRITICAL `field_not_encrypted`); partner tidak terlindungi tetap bisa ditulis.
 `_register_hook` mencatat CRITICAL saat registry dimuat. Modul penghubung per modul CE yang mendefinisikan ulang
-field: `efn_pii_base_vat` (`vat`). Run gabungan wajib (AC-4) untuk menemukan yang lain.
+field: `efn_pii_base_vat` (`vat`), `efn_pii_account` (`name`, `account/models/partner.py`, dibuat lead G20). Audit CE
+lead: hanya `mail`, `base_vat`, `account` yang mendefinisikan ulang field cakupan. Run gabungan wajib (AC-4).
 
 ## Format (ADR-036 §0.3)
 - Blob (identik BFF): `versi_kunci(1) || IV(12) || ciphertext || tag(16)`, AES-256-GCM.
@@ -89,7 +93,7 @@ field: `efn_pii_base_vat` (`vat`). Run gabungan wajib (AC-4) untuk menemukan yan
 | `ilike`/`like` berisi nilai **lengkap** (email ber-`@`, HP ≥ 9 digit, NPWP 15/16 digit) | blind index |
 | `phone_mobile_search` (pencarian angka POS 19) | hasil SQL mentah **tanpa** partner terlindungi (cegah cocok kebetulan atas base64) + blind index bila HP lengkap |
 | `name`/`complete_name`/`display_name` `=`, `in`, `=ilike` tanpa wildcard | token `f` nama lengkap ternormalisasi |
-| `name`/`complete_name`/`display_name` `ilike`/`like` | token `p`: setiap kata ≥ 3 huruf = awalan, **AND**, urutan bebas; wildcard `% * _` = pemisah; tanpa infiks ("anto" tidak menemukan "Santoso") |
+| `name`/`complete_name`/`display_name` `ilike`/`like` | token `p`: setiap kata ≥ 3 huruf = awalan, **AND**, urutan bebas; wildcard `% * _` = pemisah; tanpa infiks ("anto" tidak menemukan "Santoso"). Catatan: untuk partner TIDAK terlindungi Odoo standar memperlakukan `*` sebagai karakter literal, jadi `*sant*` hanya menemukan partner terlindungi berkata awalan "sant" |
 | `not …` | negasi semantik |
 | street/street2/city/zip, operator lain | tidak cocok (tanpa error) |
 
