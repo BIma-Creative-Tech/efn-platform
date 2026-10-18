@@ -328,6 +328,15 @@ Dicatat efn-lead dari jawaban pemilik proyek di sesi 18 Okt 2026. Kolom **Tindak
 | Q-AD1-1..Q-AD1-7 | Struktur 6 entitas: harga FARM & antar-brand, PPN FARM, NITKU outlet, produk lintas entitas, pengendali data member, nilai tukar poin seragam, kode entitas/kanal final | ADR-001 §8; memblokir W-32 final, W-15, W-29 |
 | Q-DPIA-1..Q-DPIA-4 | Pengendali per kegiatan, pemberitahuan privasi grup, status PP pelaksana Pasal 34(3), enkripsi disk perangkat outlet | `docs/compliance/DPIA_DRAFT.md` §10 |
 
+### F. Konfirmasi lanjutan 18 Okt 2026 (setelah rencana architect)
+
+| # | Keputusan | Sumber |
+|---|---|---|
+| 18-39 | **Urutan gelombang disetujui**: G20 = 6 entitas (W-32) + enkripsi data pelanggan (E-38a) + bayar di kasir (W-30) + batas berat (W-33) + PB1 non-dine-in 0 % (W-14b) + retur tanpa struk dengan approval Store Manager (W-24b); G21 = E-38b vendor/karyawan, W-29 poin per PT, W-31 struktur organisasi, W-34 PPN Coretax, W-06, W-23, W-26; G22 = restoran (W-07, W-04, W-27, W-12, W-17) | L-G20-1 (docs/10 §A) |
+| 18-40 | **Nama karyawan/user internal tetap plaintext** (identitas kerja); data pribadi karyawan lain (HP pribadi, alamat rumah, NIK, dsb.) dienkripsi | Q-PII7 / K-a ADR-036 |
+| 18-41 | Kode entitas: **EFN, GL, PB, BCR, BCF, FARM**; kode kanal online = kode PT (`GL`, `PB`, `BCR`, `BCF`). Diganti sekarang karena belum ada data produksi (keputusan lead, menggantikan usulan mempertahankan RTL/FNB) | K-20-1, ADR-001 |
+| 18-42 | Q-PII8..12 dan Q-AD1-1..7: **default ADR dipakai** (configurable bila memungkinkan) sampai pemilik proyek/klien menjawab | ADR-036 §0.13, ADR-001 |
+
 ## Syarat aktivasi produksi online (review r10 re-review akhir, 10 Okt 2026)
 
 Sumber: `docs/reviews/SECURITY_REVIEW_2026-10-09_r10.md` §"Rekomendasi merge". **GO merge ke `main`**; `ONLINE_ENABLED=true` di produksi **NO-GO** sampai semua butir di bawah terpenuhi. Teknis: `deploy-validate` menolak online prod tanpa provider payment nyata dan API key kanal nyata.
