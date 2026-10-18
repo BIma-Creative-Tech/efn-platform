@@ -1,10 +1,12 @@
 {
     "name": "EFN Setup - Company & Pajak",
     "summary": (
-        "Konfigurasi data-only: 4 company (EFN/RTL/FNB/FARM), IDR, CoA l10n_id; "
-        "PB1 configurable (grup + default + fiscal position per kota)."
+        "Konfigurasi data-only: 4 company (Holding EFN, PT Grand Lucky, PT Paris Baguette, FARM), IDR, CoA l10n_id; "
+        "PB1 configurable (grup + default + fiscal position per kota/layanan); pembulatan pajak per dokumen."
     ),
-    "version": "19.0.1.5.0",
+    # G20 (keputusan pemilik proyek 18 Okt 2026): 18-1 PB1 Non-Dine-in 0 %, 18-6 round_globally eksplisit,
+    # 18-27 nama tampilan company (struktur entitas Bacha = rencana, docs/08 §11.3).
+    "version": "19.0.1.6.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",
@@ -29,6 +31,8 @@
         "data/account_tax_fnb_service_data.xml",
         # G17-QA-04: label pajak ke pelanggan (invoice_label + nama grup), setelah CoA dimuat.
         "data/account_tax_label_data.xml",
+        # G20 18-6: tax_calculation_rounding_method = round_globally eksplisit di semua PT (noupdate).
+        "data/account_tax_rounding_data.xml",
     ],
     "demo": [
         "demo/account_tax_demo.xml",

@@ -18,9 +18,15 @@
     </record>
 
     <!-- 4 PT = 4 company terpisah (badan hukum berbeda). JANGAN memakai parent_id
-         (fitur "Branches" Odoo): cabang berbagi CoA/pajak induk, tidak cocok untuk PT berbeda. -->
+         (fitur "Branches" Odoo): cabang berbagi CoA/pajak induk, tidak cocok untuk PT berbeda.
+         G20 (keputusan pemilik proyek 18 Okt 2026, 18-27: setiap brand punya PT sendiri): nama tampilan mengikuti
+         struktur baru -> company_rtl = PT Grand Lucky (ritel, PPN), company_fnb = PT Paris Baguette (F&B, PB1, + CK).
+         xmlid & efn_brand_code (RTL/FNB) SENGAJA tidak diubah: kode adalah kontrak BFF/ETL (docs/04 §1).
+         Dua entitas Bacha Coffee (Retail & F&B) BELUM ditambahkan: butuh kode company baru di efn_core
+         (Selection) + kontrak docs/04 §1 + BFF/ETL -> rencana migrasi docs/08 §11.3. Nama tetap PLACEHOLDER
+         nama legal (noupdate: DB yang sudah ada tidak berubah; ubah lewat UI). -->
     <record id="company_efn" model="res.company">
-        <field name="name">PT EFN Holding (PLACEHOLDER nama legal)</field>
+        <field name="name">Holding EFN (PLACEHOLDER nama legal)</field>
         <field name="sequence">1</field>
         <field name="efn_brand_code">EFN</field>
         <field name="country_id" ref="base.id"/>
@@ -30,7 +36,7 @@
     </record>
 
     <record id="company_rtl" model="res.company">
-        <field name="name">PT EFN Retail (PLACEHOLDER nama legal)</field>
+        <field name="name">PT Grand Lucky (PLACEHOLDER nama legal)</field>
         <field name="sequence">2</field>
         <field name="efn_brand_code">RTL</field>
         <field name="country_id" ref="base.id"/>
@@ -40,7 +46,7 @@
     </record>
 
     <record id="company_fnb" model="res.company">
-        <field name="name">PT EFN F&amp;B (PLACEHOLDER nama legal)</field>
+        <field name="name">PT Paris Baguette (PLACEHOLDER nama legal)</field>
         <field name="sequence">3</field>
         <field name="efn_brand_code">FNB</field>
         <field name="country_id" ref="base.id"/>
@@ -50,7 +56,7 @@
     </record>
 
     <record id="company_farm" model="res.company">
-        <field name="name">PT EFN Farming (PLACEHOLDER nama legal)</field>
+        <field name="name">FARM (PLACEHOLDER nama legal)</field>
         <field name="sequence">4</field>
         <field name="efn_brand_code">FARM</field>
         <field name="country_id" ref="base.id"/>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 18-6 (keputusan pemilik proyek 18 Okt 2026, Q-F18-1): pembulatan pajak PER DOKUMEN untuk semua PT.
+     Field terverifikasi odoo/odoo 19.0 account/models/company.py (2026-10-18):
+       tax_calculation_rounding_method = Selection([('round_globally', 'Round per Tax'),
+                                                    ('round_per_line', 'Round per Line')], default='round_globally')
+     Default CE sudah round_globally dan template l10n_id (_get_id_res_company) TIDAK mengubahnya; ditulis
+     eksplisit sebagai keputusan agar tidak bergeser bila default CE/template berubah.
+     Selisih Rp1 PPN Odoo vs Coretax (12 % x DPP 11/12 per baris) BUKAN urusan setting ini -> gap E-40
+     (docs/08 §11.2): selisih ke akun beban pembulatan per PT.
+     noupdate="1": Finance boleh mengubahnya lewat Settings -> Accounting -> Taxes (Rounding Method); upgrade tidak
+     menimpa. Company baru (18-27) wajib ditambahkan ke daftar di bawah. -->
+<odoo noupdate="1">
+    <function model="res.company" name="write"
+              eval="[[ref(c) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_farm')], {'tax_calculation_rounding_method': 'round_globally'}]"/>
+</odoo>

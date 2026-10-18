@@ -2,7 +2,7 @@
 <!-- W-14 (Gelombang 19): preset POS F&B per layanan untuk kota default PT F&B. docs/08 §10.4, ADR-027.
      Fiscal position dari efn_setup_company (data/account_tax_fnb_service_data.xml):
      - dine-in      -> PB1 + service charge 5 % (SC masuk DPP PB1);
-     - bawa pulang  -> tanpa SC; PB1 non-dine-in = TODO konsultan pajak (R-L09).
+     - bawa pulang  -> tanpa SC; PB1 non-dine-in 0 % (keputusan pemilik proyek 18 Okt 2026, 18-1; configurable).
      Kenapa preset baru, bukan preset bawaan pos_restaurant (Dine In / Takeout): preset bawaan tanpa fiscal position
      memakai pos.config.default_fiscal_position_id (pos_order.js setPreset: preset.fiscal_position_id ATAU default
      config, temuan G14) sehingga "Takeout" ikut kena SC bila default config = dine-in. pos.preset tidak punya

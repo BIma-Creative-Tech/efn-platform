@@ -140,8 +140,10 @@
          di BFF (cart per kanal, ADR-019 opsi A). Kode kanal = PLACEHOLDER usulan (kontrak docs/04 §10, lead):
          RTL-GL (Grand Lucky), RTL-BACHA (Bacha butik), FNB-PB (Paris Baguette), FNB-BACHA (Bacha kafe).
          Semua NONAKTIF tanpa outlet: alamat/jam/SKU outlet dari klien. Kanal F&B: outlet wajib fiscal position
-         NON-DINE-IN kota outlet (tanpa SC; PB1 TODO R-L09, efn_setup_company W-14). Kanal lama RTL/FNB tetap (dipakai
-         smoke/BFF dev) sampai lead memutuskan migrasi kode kanal.
+         NON-DINE-IN kota outlet (tanpa SC; PB1 0 % sesuai keputusan 18-1, efn_setup_company W-14). Kanal lama RTL/FNB
+         tetap (dipakai smoke/BFF dev) sampai lead memutuskan migrasi kode kanal.
+         G20 (18-27, setiap brand punya PT sendiri): RTL-BACHA / FNB-BACHA akan pindah ke company Bacha Coffee Retail /
+         Bacha Coffee F&amp;B dengan kode kanal baru: rencana migrasi docs/08 §11.3 (BELUM diterapkan).
          G19: brand_code (E-37a) GL / BACHA / PB; kanal ritel stock_hold_mode=confirm (E-35); L-37: SATU user teknis
          per kanal (API key per kanal), grup sama dengan efn_online_rtl (Internal User + grup kanal, SEC-101),
          tanpa API key di data. -->

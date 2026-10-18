@@ -5,18 +5,21 @@
      SC 5% + fiscal position dine-in/non-dine-in kota default di data/account_tax_fnb_service_data.xml (G19 W-14).
 
      Ilustrasi pola "PB1 per kota tanpa developer" (lihat README):
-     - pajak "PB1 Kota Contoh 5% (DEMO)" dengan Replaces (original_tax_ids) = PB1 default;
-     - fiscal position "Outlet Kota Contoh (DEMO)" berisi pajak tersebut (tax_ids);
-     - pos.config outlet di kota itu memakai Default Fiscal Position = FP ini (diisi lewat UI,
+     - pajak "PB1 Kota Contoh Non-Dine-in 0% (DEMO)" dengan Replaces (original_tax_ids) = PB1 default;
+     - fiscal position "Outlet Kota Contoh (DEMO)" (= non-dine-in kota contoh) berisi pajak tersebut (tax_ids);
+     - dine-in kota contoh: "PB1 Kota Contoh Dine-in 5% (DEMO)" + FP "Outlet Kota Contoh Dine-in (DEMO)";
+     - pos.config outlet di kota itu memakai Default Fiscal Position = FP dine-in kota (diisi lewat UI,
        pos.config tidak dibuat via XML — lihat efn_setup_pos).
-     Tarif 5% hanyalah angka ilustrasi, BUKAN tarif Perda mana pun. -->
+     Tarif 5% hanyalah angka ilustrasi, BUKAN tarif Perda mana pun. Non-dine-in 0 % = keputusan 18-1. -->
 <odoo>
+    <!-- G20 (18-1): xmlid tetap, tetapi pajak ini = NON-DINE-IN kota contoh -> 0 % (PB1 hanya dine-in). Kota yang
+         memungut PBJT bawa pulang: admin mengubah Amount (tanpa kode). -->
     <record id="tax_pb1_kota_contoh_fnb" model="account.tax">
-        <field name="name">PB1 Kota Contoh 5% (DEMO)</field>
+        <field name="name">PB1 Kota Contoh Non-Dine-in 0% (DEMO)</field>
         <field name="invoice_label">PB1</field>
         <field name="type_tax_use">sale</field>
         <field name="amount_type">percent</field>
-        <field name="amount">5.0</field>
+        <field name="amount">0.0</field>
         <field name="sequence">10</field>
         <field name="company_id" ref="company_fnb"/>
         <field name="tax_group_id" ref="tax_group_pb1_fnb"/>
@@ -31,7 +34,7 @@
              bukan dari alamat pelanggan. -->
         <field name="auto_apply" eval="False"/>
         <field name="tax_ids" eval="[(6, 0, [ref('tax_pb1_kota_contoh_fnb')])]"/>
-        <field name="note">&lt;p&gt;DEMO: memetakan PB1 default ke PB1 kota contoh.&lt;/p&gt;</field>
+        <field name="note">&lt;p&gt;DEMO: non-dine-in kota contoh, memetakan PB1 default ke PB1 kota contoh non-dine-in (0 %, 18-1).&lt;/p&gt;</field>
     </record>
 
     <!-- G19 W-14: fiscal position "Outlet Kota Contoh (DEMO)" di atas bermakna NON-DINE-IN kota contoh (tanpa SC;

@@ -1,7 +1,8 @@
 """G19 W-14: pajak F&B per layanan (data/account_tax_fnb_service_data.xml), docs/08 §10.4.
 
 Keputusan #15/#37: PB1 + SC 5 % hanya dine-in, SC masuk DPP PB1, harga exclude; non-dine-in tanpa SC.
-PB1 non-dine-in = TODO konsultan pajak (R-L09): tarif sengaja sama dengan PB1 default sampai ada opini.
+Keputusan pemilik proyek 18 Okt 2026 (18-1): PB1 hanya dine-in -> PB1 Non-Dine-in 0 % (bisa diubah tanpa kode;
+risiko R-L09 diterima pemilik proyek). docs/08 §11.1.
 Nominal dipilih bulat agar hasil sama pada IDR Rp1 (DB baru) maupun 0,01 (DB demo).
 """
 
@@ -68,17 +69,32 @@ class TestFnbServiceTaxes(TransactionCase):
         self.assertAmount(res["total_excluded"], PRICE)
         self.assertAmount(res["total_included"], 115500.0)
 
-    def test_non_dine_in_without_service_charge(self):
+    def test_non_dine_in_without_service_charge_nor_pb1(self):
+        # 18-1: bawa pulang / 3PL / pickup / online = tanpa SC dan tanpa PB1 -> total = harga menu.
         taxes, res, by_tax = self._compute(self.fp_non_dine_in)
         self.assertEqual(taxes, self.pb1_non_dine_in)
         self.assertNotIn(self.sc.id, by_tax)
-        self.assertAmount(res["total_included"], 110000.0)
+        self.assertAmount(sum(t["amount"] for t in res["taxes"]), 0.0)
+        self.assertAmount(res["total_included"], PRICE)
 
-    def test_non_dine_in_pb1_is_todo_placeholder(self):
-        # R-L09: modul tidak memutuskan PB1 bawa pulang -> tarif = PB1 default + tanda TODO di nama.
-        self.assertEqual(self.pb1_non_dine_in.amount, self.pb1.amount)
-        self.assertIn("TODO", self.pb1_non_dine_in.name)
+    def test_non_dine_in_pb1_zero_and_configurable(self):
+        # 18-1: default 0 %, label TODO R-L09 dihapus; pajak & FP tetap ada (ubah Amount = tanpa kode, grup PB1 sama).
+        self.assertEqual(self.pb1_non_dine_in.amount, 0.0)
+        self.assertEqual(self.pb1_non_dine_in.amount_type, "percent")
+        self.assertTrue(self.pb1_non_dine_in.active)
+        self.assertNotIn("TODO", self.pb1_non_dine_in.name)
+        self.assertNotIn("TODO", self.fp_non_dine_in.name)
         self.assertEqual(self.pb1_non_dine_in.tax_group_id, self.pb1.tax_group_id)
+        self.assertIn(self.pb1_non_dine_in, self.fp_non_dine_in.tax_ids)
+        self.assertIn(self.pb1, self.pb1_non_dine_in.original_tax_ids)
+        # Dine-in tidak terpengaruh: PB1 dine-in tetap = PB1 default.
+        self.assertEqual(self.pb1_dine_in.amount, self.pb1.amount)
+
+    def test_non_dine_in_rate_change_needs_no_code(self):
+        # Bila perda kota memungut PBJT bawa pulang: cukup ubah Amount (savepoint test, tidak permanen).
+        self.pb1_non_dine_in.amount = 10.0
+        _taxes, res, _by_tax = self._compute(self.fp_non_dine_in)
+        self.assertAmount(res["total_included"], 110000.0)
 
     def test_service_charge_shape(self):
         self.assertTrue(self.sc.include_base_amount)

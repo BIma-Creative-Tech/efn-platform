@@ -51,7 +51,7 @@
         # G18 W-01/E-30: metode bayar "Poin EFN" per PT (jurnal bank + akun poin PLACEHOLDER Q-F18-3) + tautan ke POS.
         "data/pos_loyalty_points_payment.xml",
         "data/pos_loyalty_points_link.xml",
-        # G19 W-14: preset F&B per layanan (dine-in = PB1 + SC 5%, bawa pulang = tanpa SC; PB1 non-dine-in TODO R-L09).
+        # G19 W-14: preset F&B per layanan (dine-in = PB1 + SC 5%, bawa pulang = tanpa SC, PB1 0 % sesuai 18-1).
         "data/pos_fnb_service_presets.xml",
     ],
     "demo": [
