@@ -256,7 +256,7 @@ neg_env "38 secret multi-baris (injeksi .env) ditolak" "karakter kontrol" \
 neg_env "39 secret dengan CR/ESC ditolak" "karakter kontrol" "JWT_SECRET=$(printf 'abc\r\033[2Jx')"
 # W-11: API key Odoo kanal online dikelola DI HOST (secrets.list host:*) -> tidak boleh datang dari stdin CI
 neg_env "110 ODOO_API_KEY_ONLINE_RTL lewat stdin ditolak (W-11, host:*)" "variabel tidak diizinkan: ODOO_API_KEY_ONLINE_RTL" \
-  "ODOO_API_KEY_ONLINE_RTL=0123456789abcdef0123456789abcdef01234567"
+  "ODOO_API_KEY_ONLINE_RTL=0123456789abcdef0123456789abcdef01234567"  # gitleaks:allow (kunci uji palsu)
 # SEC-120 (L-25h): rotasi API key memegang kunci host -> efn-deploy menunggu lalu gagal, /opt/efn tidak disentuh
 install -d -m 0700 /run/efn; exec 6> /run/efn/deploy.lock; flock -n 6
 SEQ=$((SEQ + 1)); make_release "N$SEQ" "$SEQ" 1.3.0; make_env "N$SEQ"; EFN_DEPLOY_LOCK_WAIT=2 run "N$SEQ"

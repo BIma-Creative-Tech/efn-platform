@@ -14,3 +14,5 @@ ea30abd1a31f3cde003d64432a5c8ed5c1e3cedf:docs/agent-reports/efn-devsecops-engine
 # - online-routes.test.ts: fixture Idempotency-Key yang sama dengan entri G17 di atas, fingerprint baru setelah squash merge PR #36.
 633330eebcd5e04da46834ef683e9e318c74d8a8:scripts/host/test-efn-deploy.sh:generic-api-key:256
 98469c5569b142ca541cf5ac2f984370557f1d22:services/superapp-web/tests/online-routes.test.ts:generic-api-key:270
+# Squash merge PR #60 (a28096a): fixture uji palsu yang sama (kini juga diberi anotasi inline gitleaks:allow).
+a28096a0d4f543563a7e865f3ba7466190a3855f:scripts/host/test-efn-deploy.sh:generic-api-key:259
