@@ -1322,15 +1322,21 @@ export class AppConfig {
     }
     return out as ('pickup' | 'delivery')[];
   }
-  /** Batas bayar (§10.1, PLACEHOLDER 15 menit). Odoo `payment_timeout_minutes` ≥ nilai ini + 10 menit. */
+  /**
+   * Batas bayar = lama reservasi stok (G19 §11.1, W-02/E-35, keputusan Q-ON4 "1 jam"): default **3600** (batas 60..3600
+   * tidak berubah). Odoo `payment_timeout_minutes` kanal ≥ nilai ini + 10 menit (default field 70). **Urutan aktivasi:
+   * Odoo 70 dulu, baru BFF 3600** — pengaman tetap: checkout menolak bila `expires_at` SO < batas order + 5 menit
+   * (§10.3.5 no. 5 → `503 online_unavailable` + anomali `odoo_expiry_too_short`).
+   */
   get onlinePaymentTimeoutSeconds(): number {
-    return this.int('ONLINE_PAYMENT_TIMEOUT_SECONDS', 900, 60, 3600);
+    return this.int('ONLINE_PAYMENT_TIMEOUT_SECONDS', 3600, 60, 3600);
   }
   get onlineQuoteTtlSeconds(): number {
     return this.int('ONLINE_QUOTE_TTL_SECONDS', 600, 30, 1800);
   }
+  /** G19 §11.1 / L-32: default **2** (dari 3) sejak reservasi stok aktif — anti *stock griefing*. */
   get onlineMaxOpenOrdersPerMember(): number {
-    return this.int('ONLINE_MAX_OPEN_ORDERS_PER_MEMBER', 3, 1, 50);
+    return this.int('ONLINE_MAX_OPEN_ORDERS_PER_MEMBER', 2, 1, 50);
   }
   /** Interval sinkron katalog (detik). 0 = job mati (test). */
   get onlineCatalogSyncSeconds(): number {
@@ -1372,7 +1378,9 @@ export class AppConfig {
   }
   /**
    * Rate limit §10.3.1 (PLACEHOLDER): `ONLINE_RL_<NAMA>_LIMIT` & `ONLINE_RL_<NAMA>_WINDOW_SECONDS`.
-   * Nama: CATALOG, STOCK, CART, QUOTE, CHECKOUT, ORDERS, PICKUP, CANCEL, EVENTS.
+   * Nama: CATALOG, STOCK, CART, QUOTE, CHECKOUT, ORDERS, PICKUP, CANCEL, EVENTS, PROMO_MEMBER, PROMO_IP.
+   * G19 §11.2 no. 6: quote yang membawa `promo_codes` juga dihitung `PROMO_MEMBER` (10 / 15 menit / member) dan
+   * `PROMO_IP` (30 / 15 menit / IP) — terpisah dari `QUOTE` (anti-enumerasi kupon).
    */
   onlineRateLimit(name: OnlineRateLimitName): { limit: number; windowSeconds: number } {
     const def = ONLINE_RL_DEFAULTS[name];
@@ -1479,14 +1487,17 @@ export class AppConfig {
    * Satu key = satu user teknis = satu PT; tidak pernah dipakai untuk kanal lain.
    */
   odooApiKeyOnline(channelCode: string): string {
-    if (!ONLINE_CHANNEL_RE.test(channelCode)) throw new ConfigError('kode kanal tidak valid');
+    // G19 §11.3 no. 3: kode berhifen (`RTL-GL`) → env `ODOO_API_KEY_ONLINE_RTL_GL_FILE`, secret `odoo_api_key_online_rtl_gl`.
+    // Kedua nama diturunkan HANYA dari kode yang lolos regex §10.2 (tanpa `/`, `.`, `_`) → tidak ada path traversal,
+    // dan pemetaan `-`→`_` injektif (kode kanal tidak boleh memuat `_`).
     const envName = onlineApiKeyEnvName(channelCode);
+    const contractName = onlineApiKeySecretName(channelCode);
     // gen-secrets menulis placeholder `disabled` untuk kanal yang belum punya user teknis; dicek sebelum aturan panjang
-    const raw = this.onlineSecretRaw(envName, `odoo_api_key_online_${channelCode.toLowerCase().replace(/-/g, '_')}`);
+    const raw = this.onlineSecretRaw(envName, contractName);
     if (raw !== undefined && raw.trim().toLowerCase() === 'disabled') {
       throw new ConfigError(`${envName} masih placeholder 'disabled' — kanal ${channelCode} belum boleh aktif (runbook odoo-online-api-key)`);
     }
-    return this.onlineSecret(envName, `odoo_api_key_online_${channelCode.toLowerCase().replace(/-/g, '_')}`);
+    return this.onlineSecret(envName, contractName);
   }
   /** L-2: secret HMAC event Odoo → BFF (`odoo_online_event_hmac`, env `ODOO_ONLINE_EVENT_HMAC_FILE`). */
   get odooOnlineEventHmac(): string {
@@ -1563,7 +1574,18 @@ export class AppConfig {
 
 /** `channel_code` (docs/04 §10.2). */
 export const ONLINE_CHANNEL_RE = /^[A-Z][A-Z0-9-]{1,15}$/;
-export type OnlineRateLimitName = 'CATALOG' | 'STOCK' | 'CART' | 'QUOTE' | 'CHECKOUT' | 'ORDERS' | 'PICKUP' | 'CANCEL' | 'EVENTS';
+export type OnlineRateLimitName =
+  | 'CATALOG'
+  | 'STOCK'
+  | 'CART'
+  | 'QUOTE'
+  | 'CHECKOUT'
+  | 'ORDERS'
+  | 'PICKUP'
+  | 'CANCEL'
+  | 'EVENTS'
+  | 'PROMO_MEMBER'
+  | 'PROMO_IP';
 /** Default §10.3.1 (PLACEHOLDER): [batas, window detik]. EVENTS = pengaman endpoint event Odoo (bukan kontrak). */
 const ONLINE_RL_DEFAULTS: Readonly<Record<OnlineRateLimitName, readonly [number, number]>> = {
   CATALOG: [120, 60],
@@ -1575,11 +1597,25 @@ const ONLINE_RL_DEFAULTS: Readonly<Record<OnlineRateLimitName, readonly [number,
   PICKUP: [10, 60],
   CANCEL: [10, 600],
   EVENTS: [1200, 60],
+  PROMO_MEMBER: [10, 900],
+  PROMO_IP: [30, 900],
 };
 
-/** `RTL` → `ODOO_API_KEY_ONLINE_RTL`; `FNB-BAKSO` → `ODOO_API_KEY_ONLINE_FNB_BAKSO`. */
+/**
+ * `RTL` → `ODOO_API_KEY_ONLINE_RTL`; `RTL-GL` → `ODOO_API_KEY_ONLINE_RTL_GL` (file: `…_FILE`). Kode yang tidak lolos
+ * regex §10.2 → ConfigError (tidak pernah dipakai membentuk nama env/path).
+ */
 export function onlineApiKeyEnvName(channelCode: string): string {
+  if (!ONLINE_CHANNEL_RE.test(channelCode)) throw new ConfigError('kode kanal tidak valid');
   return `ODOO_API_KEY_ONLINE_${channelCode.replace(/-/g, '_')}`;
+}
+/** Nama secret Docker per kanal: `RTL-GL` → `odoo_api_key_online_rtl_gl` (di bawah `${SECRETS_DIR:-/run/secrets}`). */
+export function onlineApiKeySecretName(channelCode: string): string {
+  if (!ONLINE_CHANNEL_RE.test(channelCode)) throw new ConfigError('kode kanal tidak valid');
+  const name = `odoo_api_key_online_${channelCode.toLowerCase().replace(/-/g, '_')}`;
+  // pertahanan berlapis: hanya [a-z0-9_] — tidak mungkin memuat pemisah path atau segmen titik
+  if (!/^odoo_api_key_online_[a-z][a-z0-9_]{1,15}$/.test(name)) throw new ConfigError('kode kanal tidak valid');
+  return name;
 }
 
 /** Entri TRUSTED_PROXIES: kata kunci proxy-addr, atau IPv4/IPv6 dengan prefix opsional (/0..32 atau /0..128). */

@@ -126,14 +126,17 @@ class EfnOnlineCommon(AccountTestInvoicingCommon):
     def order_api(self, user=None):
         return self.env["efn.online.order"].with_user(user or self.tech_user)
 
-    def quote(self, lines=None, user=None):
+    def quote(self, lines=None, user=None, promo_codes=None):
         lines = lines if lines is not None else [{"product_id": self.p_rice.id, "qty": 3}]
-        return self.channel_api(user).efn_online_quote("TST", "TOKO-T1", "pickup", lines)
+        if promo_codes is None:
+            return self.channel_api(user).efn_online_quote("TST", "TOKO-T1", "pickup", lines)
+        return self.channel_api(user).efn_online_quote("TST", "TOKO-T1", "pickup", lines, promo_codes=promo_codes)
 
-    def place(self, lines=None, quote_hash=None, part=None, key=None, code=PICKUP_CODE):
+    def place(self, lines=None, quote_hash=None, part=None, key=None, code=PICKUP_CODE, promo_codes=None):
+        """``promo_codes`` = kode yang dikirim BFF saat place (§11.2 no. 5: ``promo_applied`` grup dari quote)."""
         lines = lines if lines is not None else [{"product_id": self.p_rice.id, "qty": 3}]
         if quote_hash is None:
-            quote_hash = self.quote(lines)["quote_hash"]
+            quote_hash = self.quote(lines, promo_codes=promo_codes)["quote_hash"]
         part = part or str(uuid.uuid4())
         payload = {
             "idempotency_key": key or f"online:place:{part}",
@@ -145,6 +148,8 @@ class EfnOnlineCommon(AccountTestInvoicingCommon):
             "quote_hash": quote_hash,
             "pickup_code": code,
         }
+        if promo_codes is not None:
+            payload["promo_codes"] = promo_codes
         result = self.order_api().efn_online_place("TST", payload)
         return part, payload, result
 

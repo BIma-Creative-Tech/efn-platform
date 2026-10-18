@@ -38,6 +38,16 @@ OPAQUE_REF_RE = re.compile(r"^[A-Za-z0-9_:.\-]{1,128}$")
 PICKUP_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 PICKUP_CODE_RE = re.compile(rf"^[{PICKUP_ALPHABET}]{{8}}$")
 
+# G19 E-37a (docs/04 §11.3 no. 2): kode brand kanal, tidak unik (Bacha dipakai dua kanal), boleh kosong.
+BRAND_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,9}$")
+
+# G19 E-36 (docs/04 §11.2 no. 1): kode promo dari BFF; maks 3, dinormalisasi huruf besar, duplikat dibuang.
+PROMO_CODE_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+MAX_PROMO_CODES = 3
+# docs/04 §11.2 no. 7 (ADR-020): hanya tipe ini yang boleh `sale_ok=True` (kanal online). Poin/dompet/gift card/kupon
+# pesanan berikut ditolak: partner generik kanal akan mengumpulkan kartu/poin.
+ONLINE_PROGRAM_TYPES = ("promotion", "promo_code", "buy_x_get_y", "coupons")
+
 CANCEL_REASONS = ("payment_expired", "customer", "place_failed", "stock_short", "ops", "review")
 REFUND_REASONS = ("stock_short", "customer_cs", "ops_cancelled", "review")
 FULFILMENTS = ("pickup", "delivery")
@@ -104,6 +114,31 @@ def normalize_pickup_code(value):
 def pickup_crypt_context(rounds):
     rounds = max(int(rounds), MIN_PICKUP_KDF_ROUNDS)
     return CryptContext(schemes=["pbkdf2_sha512"], pbkdf2_sha512__rounds=rounds)
+
+
+def promo_codes_payload(value):
+    """Validasi ``promo_codes`` (input BFF, §11.2 no. 1). ``None`` = tanpa kode. Hasil: huruf besar, urutan input,
+    duplikat dibuang. Kode promo = rahasia ringan (anti-enumerasi kupon): tidak pernah di-log dalam bentuk asli."""
+    if value is None:
+        return []
+    require(isinstance(value, list) and len(value) <= MAX_PROMO_CODES)
+    result = []
+    for code in value:
+        check_str(code, PROMO_CODE_RE, 40)
+        code = code.upper()
+        if code not in result:
+            result.append(code)
+    return result
+
+
+def promo_code_ref(code):
+    """Referensi korelasi log: 8 karakter heks pertama SHA-256 (§11.2 no. 6), bukan kode asli."""
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()[:8]
+
+
+def like_escape(value):
+    """Escape wildcard LIKE/ILIKE (``\\``, ``%``, ``_``) agar ``=ilike`` = sama persis tanpa beda huruf besar/kecil."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def lines_payload(lines, max_lines):

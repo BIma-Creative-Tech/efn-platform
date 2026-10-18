@@ -407,3 +407,11 @@ Status selesai/dibatalkan tidak menampilkan batas. Label kini menyebut jumlah pe
 - `npm audit --omit=dev --audit-level=high`: 0 vulnerabilities.
 
 **Belum diverifikasi:** uji browser nyata terhadap BFF G18; teks pelanggan masih draf menunggu Legal.
+
+## Gelombang 19 — 2026-10-18 (promo online, batas bayar 60 menit, katalog per brand; ditulis lead dari laporan agent)
+
+- **Promo (docs/04 §11.2):** panel "Kode promo (opsional)" di `CartView` (maks 3 kode, `aria-live`, kode hanya di `useRef` — tidak di URL/storage/log); baris reward tampil "Diskon promo"; `promo.invalid` → satu pesan generik, checkout tidak diblokir; 429/400 → pesan, ringkasan lama dipertahankan. Route `app/api/cart/quote` menormalisasi & membatasi `promo_codes` (body ≤ 2 KB), format salah → 400 tanpa memanggil BFF.
+- **Batas bayar:** teks "15 menit" dihapus; hitung mundur memakai `expires_at` server.
+- **Brand (§11.3):** `Brand.brandCode`, `channelsPath`, `?brand=` tervalidasi di route channels. **L-33:** tenant yang ada memakai `brandCode: null` sampai Q-F19-5.
+- **Test:** `tests/promo.test.ts` (baru), tambahan di `online-routes.test.ts`, `brands.test.ts`. Dijalankan lead di container node:22: lint OK, 16 file test lulus, `next build` OK.
+- **Belum:** test komponen React CartView (alur aria-live/fallback 429), tampilan nominal negatif di browser nyata, kode promo hilang saat reload (disengaja).

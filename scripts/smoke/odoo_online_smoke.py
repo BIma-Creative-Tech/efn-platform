@@ -6,6 +6,8 @@
 #                  Rupiah, gudang outlet SMKOL, jurnal titipan bank, pricelist IDR, user teknis `efn_online_rtl`
 #                  (TANPA API key — key dibuat lewat runbook odoo-online-api-key §1), kanal RTL + outlet TOKO-01,
 #                  4 produk online (PPN l10n_id), stok awal, dan user staf outlet `smoke_online_staff`.
+#                  G19: kanal RTL batas bayar 70 menit + `stock_hold_mode=confirm` (SO `sale` + stok tercadang sejak
+#                  place), promo kode dev `SMOKE10` (diskon 10 %, pricelist SMOKE), satu user teknis per kanal (L-37).
 #   - `stock`    : set stok bebas satu produk smoke di gudang outlet (inventory mode standar).
 #   - `order`    : baca state efn.online.order + SO + faktur (tanpa kode ambil; hanya boolean ada/tidaknya hash).
 #   - `ready`    : aksi staf `action_efn_ready` sebagai user staf (bukan admin) -> kirim outbox sekarang.
@@ -145,14 +147,60 @@ def step_setup():
         "team_id": env.ref("efn_setup_online.team_superapp_rtl").id,
         "cash_rounding_id": rounding.id,
         "journal_titipan_id": journal.id,
-        "payment_timeout_minutes": 25,
+        # G19 (docs/04 §11.1): Odoo 70 menit (BFF 3600 s + 10) + reservasi stok saat place (E-35).
+        "payment_timeout_minutes": 70,
+        "stock_hold_mode": "confirm",
         "active": True,
     }
     if channel:
         channel.write(vals)
     else:
         channel = Channel.create({**vals, "code": "RTL"})
+    # L-37: satu user teknis per kanal -> lepas efn_online_rtl dari kanal lain (DB dev lama: demo brand G19 awal).
+    for other in Channel.search([("id", "!=", channel.id), ("user_ids", "in", user.ids)]):
+        other.write({"user_ids": [Command.unlink(user.id)]})
     channel.write({"user_ids": [Command.set([user.id])]})
+    # E-36: promo kode dev (FIKTIF) pada pricelist SMOKE -> BFF/QA dapat menguji promo_codes (SMOKE10 = diskon 10 %).
+    promo = (
+        su["loyalty.program"]
+        .with_context(active_test=False)
+        .search([("name", "=", "SMOKE Promo Kode 10%"), ("company_id", "=", company.id)], limit=1)
+    )
+    if not promo:
+        promo = su["loyalty.program"].create(
+            {
+                "name": "SMOKE Promo Kode 10%",
+                "program_type": "promo_code",
+                "trigger": "with_code",
+                "applies_on": "current",
+                "company_id": company.id,
+                "sale_ok": True,
+                **({"pos_ok": False} if "pos_ok" in su["loyalty.program"]._fields else {}),
+                "pricelist_ids": [Command.set([pricelist.id])],
+                "rule_ids": [
+                    Command.create(
+                        {
+                            "mode": "with_code",
+                            "code": "SMOKE10",
+                            "minimum_amount": 0,
+                            "reward_point_amount": 1,
+                            "reward_point_mode": "order",
+                        }
+                    )
+                ],
+                "reward_ids": [
+                    Command.create(
+                        {
+                            "reward_type": "discount",
+                            "discount": 10,
+                            "discount_mode": "percent",
+                            "discount_applicability": "order",
+                            "required_points": 1,
+                        }
+                    )
+                ],
+            }
+        )
     outlet = su["efn.online.outlet"].with_context(active_test=False).search(
         [("channel_id", "=", channel.id), ("code", "=", "TOKO-01")], limit=1
     ) or su["efn.online.outlet"].create(
@@ -202,6 +250,10 @@ def step_setup():
     out(
         ok=True,
         channel=channel.code,
+        stock_hold_mode=channel.stock_hold_mode,
+        payment_timeout_minutes=channel.payment_timeout_minutes,
+        promo_code="SMOKE10",
+        promo_program_ok=bool(promo.sale_ok and promo.active),
         company_code=company.efn_brand_code,
         outlet=outlet.code,
         products=ids,
@@ -257,6 +309,12 @@ def describe(order):
         "invoices": sorted(set(invoices.filtered(lambda m: m.move_type == "out_invoice").mapped("state"))),
         "credit_notes": len(invoices.filtered(lambda m: m.move_type == "out_refund")),
         "pickings_done": len(so.picking_ids.filtered(lambda p: p.state == "done")),
+        # G19 E-35: mode confirm -> SO `sale` sejak place dan move storable tercadang (`assigned`) sampai keluar.
+        "reserved": bool(order)
+        and bool(order._efn_reservation_moves())
+        and all(m.state == "assigned" for m in order._efn_reservation_moves()),
+        "reserved_picked": bool(order) and any(m.picked for m in order._efn_reservation_moves()),
+        "reward_lines": len(so.order_line.filtered("reward_id")) if "reward_id" in so.order_line._fields else 0,
         "outbox": sorted(f"{e.event}:{e.state}" for e in order.event_ids) if "event_ids" in order._fields else [],
     }
 

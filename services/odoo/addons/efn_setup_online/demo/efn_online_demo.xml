@@ -51,6 +51,8 @@
         <field name="cash_rounding_id" ref="cash_rounding_idr_1"/>
         <field name="journal_titipan_id" ref="journal_titipan_rtl"/>
         <field name="payment_timeout_minutes">70</field>
+        <!-- G19 E-35 (docs/04 §11.1): kanal ritel mencadangkan stok saat checkout. -->
+        <field name="stock_hold_mode">confirm</field>
         <field name="user_ids" eval="[Command.set([ref('user_online_rtl')])]"/>
     </record>
     <record id="outlet_rtl_toko01" model="efn.online.outlet">
@@ -136,7 +138,39 @@
          RTL-GL (Grand Lucky), RTL-BACHA (Bacha butik), FNB-PB (Paris Baguette), FNB-BACHA (Bacha kafe).
          Semua NONAKTIF tanpa outlet: alamat/jam/SKU outlet dari klien. Kanal F&B: outlet wajib fiscal position
          NON-DINE-IN kota outlet (tanpa SC; PB1 TODO R-L09, efn_setup_company W-14). Kanal lama RTL/FNB tetap (dipakai
-         smoke/BFF dev) sampai lead memutuskan migrasi kode kanal. -->
+         smoke/BFF dev) sampai lead memutuskan migrasi kode kanal.
+         G19: brand_code (E-37a) GL / BACHA / PB; kanal ritel stock_hold_mode=confirm (E-35); L-37: SATU user teknis
+         per kanal (API key per kanal), grup sama dengan efn_online_rtl (Internal User + grup kanal, SEC-101),
+         tanpa API key di data. -->
+    <record id="user_online_rtl_gl" model="res.users">
+        <field name="name">Kanal online RTL-GL (user teknis)</field>
+        <field name="login">efn_online_rtl_gl</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="company_ids" eval="[Command.set([ref('efn_setup_company.company_rtl')])]"/>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_online_order.group_online_channel')])]"/>
+    </record>
+    <record id="user_online_rtl_bacha" model="res.users">
+        <field name="name">Kanal online RTL-BACHA (user teknis)</field>
+        <field name="login">efn_online_rtl_bacha</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="company_ids" eval="[Command.set([ref('efn_setup_company.company_rtl')])]"/>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_online_order.group_online_channel')])]"/>
+    </record>
+    <record id="user_online_fnb_pb" model="res.users">
+        <field name="name">Kanal online FNB-PB (user teknis)</field>
+        <field name="login">efn_online_fnb_pb</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="company_ids" eval="[Command.set([ref('efn_setup_company.company_fnb')])]"/>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_online_order.group_online_channel')])]"/>
+    </record>
+    <record id="user_online_fnb_bacha" model="res.users">
+        <field name="name">Kanal online FNB-BACHA (user teknis)</field>
+        <field name="login">efn_online_fnb_bacha</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="company_ids" eval="[Command.set([ref('efn_setup_company.company_fnb')])]"/>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_online_order.group_online_channel')])]"/>
+    </record>
+
     <record id="team_superapp_rtl_gl" model="crm.team">
         <field name="name">Super-App Grand Lucky</field>
         <field name="company_id" ref="efn_setup_company.company_rtl"/>
@@ -149,6 +183,7 @@
     <record id="channel_rtl_gl" model="efn.online.channel">
         <field name="name">Super-App Grand Lucky</field>
         <field name="code">RTL-GL</field>
+        <field name="brand_code">GL</field>
         <field name="active" eval="False"/>
         <field name="company_id" ref="efn_setup_company.company_rtl"/>
         <field name="pricelist_id" ref="pricelist_online_rtl_gl"/>
@@ -156,7 +191,8 @@
         <field name="team_id" ref="team_superapp_rtl_gl"/>
         <field name="journal_titipan_id" ref="journal_titipan_rtl"/>
         <field name="payment_timeout_minutes">70</field>
-        <field name="user_ids" eval="[Command.set([ref('user_online_rtl')])]"/>
+        <field name="stock_hold_mode">confirm</field>
+        <field name="user_ids" eval="[Command.set([ref('user_online_rtl_gl')])]"/>
     </record>
 
     <record id="team_superapp_rtl_bacha" model="crm.team">
@@ -171,6 +207,7 @@
     <record id="channel_rtl_bacha" model="efn.online.channel">
         <field name="name">Super-App Bacha (butik)</field>
         <field name="code">RTL-BACHA</field>
+        <field name="brand_code">BACHA</field>
         <field name="active" eval="False"/>
         <field name="company_id" ref="efn_setup_company.company_rtl"/>
         <field name="pricelist_id" ref="pricelist_online_rtl_bacha"/>
@@ -178,7 +215,8 @@
         <field name="team_id" ref="team_superapp_rtl_bacha"/>
         <field name="journal_titipan_id" ref="journal_titipan_rtl"/>
         <field name="payment_timeout_minutes">70</field>
-        <field name="user_ids" eval="[Command.set([ref('user_online_rtl')])]"/>
+        <field name="stock_hold_mode">confirm</field>
+        <field name="user_ids" eval="[Command.set([ref('user_online_rtl_bacha')])]"/>
     </record>
 
     <record id="team_superapp_fnb_pb" model="crm.team">
@@ -193,6 +231,7 @@
     <record id="channel_fnb_pb" model="efn.online.channel">
         <field name="name">Super-App Paris Baguette</field>
         <field name="code">FNB-PB</field>
+        <field name="brand_code">PB</field>
         <field name="active" eval="False"/>
         <field name="company_id" ref="efn_setup_company.company_fnb"/>
         <field name="pricelist_id" ref="pricelist_online_fnb_pb"/>
@@ -202,6 +241,7 @@
         <field name="require_outlet_fiscal_position" eval="True"/>
         <field name="stock_check">none</field>
         <field name="payment_timeout_minutes">70</field>
+        <field name="user_ids" eval="[Command.set([ref('user_online_fnb_pb')])]"/>
     </record>
 
     <record id="team_superapp_fnb_bacha" model="crm.team">
@@ -216,6 +256,7 @@
     <record id="channel_fnb_bacha" model="efn.online.channel">
         <field name="name">Super-App Bacha (kafe)</field>
         <field name="code">FNB-BACHA</field>
+        <field name="brand_code">BACHA</field>
         <field name="active" eval="False"/>
         <field name="company_id" ref="efn_setup_company.company_fnb"/>
         <field name="pricelist_id" ref="pricelist_online_fnb_bacha"/>
@@ -225,5 +266,6 @@
         <field name="require_outlet_fiscal_position" eval="True"/>
         <field name="stock_check">none</field>
         <field name="payment_timeout_minutes">70</field>
+        <field name="user_ids" eval="[Command.set([ref('user_online_fnb_bacha')])]"/>
     </record>
 </odoo>

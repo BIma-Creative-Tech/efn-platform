@@ -7,10 +7,13 @@
 # DIPASANG MANUAL oleh Superadmin (salinan repo = sumber review; runbook docs/runbooks/odoo-online-api-key.md §2):
 #   install -o root -g root -m 0755 scripts/host/efn-rotate-online-key /usr/local/sbin/efn-rotate-online-key
 #   sha256sum /usr/local/sbin/efn-rotate-online-key           # cocokkan dengan sha256 di PR yang di-review
-#   install -o root -g root -m 0644 scripts/host/systemd/efn-rotate-online-key@.{service,timer} /etc/systemd/system/
-#   systemctl daemon-reload && systemctl enable --now efn-rotate-online-key@RTL.timer
+#   install -o root -g root -m 0644 scripts/host/systemd/efn-rotate-online-key.{service,timer} /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now efn-rotate-online-key.timer          # G19: semua kanal (--all)
+#   (alternatif lama, satu timer per kanal: efn-rotate-online-key@<KANAL>.timer - JANGAN digabung dengan --all)
 # Konfigurasi opsional /etc/efn/online-key-rotation.conf (milik root, tidak boleh ditulis grup/lainnya). Baris
 # KUNCI=nilai (TIDAK di-source; kunci allowlist, nilai divalidasi):
+#   CHANNELS=RTL-GL,RTL-BACHA  kanal yang dirotasi --all (G19, docs/04 §11.3; kode ^[A-Z][A-Z0-9-]{1,15}$, unik, maks 8).
+#                            Kosong -> ONLINE_CHANNELS dari $COMPOSE_DIR/.env (ditulis deploy.sh = kanal yang di-deploy).
 #   KEY_DAYS=30              masa berlaku key baru (2..90; WAJIB <= api_key_duration grup teknis efn_setup_online)
 #   ROTATE_BEFORE_DAYS=10    rotasi bila sisa masa berlaku < N hari (1..KEY_DAYS-1). Timer harian -> N-1 kali coba ulang
 #   OVERLAP_SECONDS=3600     key lama tetap sah selama N detik setelah key baru terverifikasi (0..86400)
@@ -27,6 +30,16 @@
 #   efn-rotate-online-key --channel=RTL --force         rotasi sekarang (mis. dugaan kebocoran)
 #   efn-rotate-online-key --channel=RTL --force --overlap-seconds=0   + cabut key lama segera setelah verifikasi
 #   efn-rotate-online-key --channel=RTL --status        daftar key (id, nama, kedaluwarsa; TANPA nilai) + metrik
+#   efn-rotate-online-key --all [--status]              G19: setiap kanal CHANNELS berurutan (proses anak per kanal;
+#                            satu kanal gagal tidak menghentikan kanal lain; metrik/alert per kanal). Overlap: anak
+#                            --no-wait, induk menunggu sekali lalu menjalankan cabut tertunda per kanal.
+#   efn-rotate-online-key --channel=RTL-GL --no-wait    rotasi tanpa menunggu overlap (key lama dicabut run berikutnya)
+#   efn-rotate-online-key --channel=RTL-GL --bootstrap  key PERTAMA kanal yang belum ada di ONLINE_CHANNELS (secret masih
+#                            placeholder): overlay docker-compose.online-<kanal>.yml ikut di-mount sementara agar key
+#                            bisa diverifikasi di BFF sebelum kanal diaktifkan (runbook odoo-online-api-key.md#kanal-baru)
+# Kode kanal -> nama: '-' -> '_' huruf kecil. RTL-GL -> secret odoo_api_key_online_rtl_gl, user teknis efn_online_rtl_gl,
+# env BFF ODOO_API_KEY_ONLINE_RTL_GL_FILE (docs/04 §11.3). Satu user teknis = SATU kanal: user yang terhubung ke kanal
+# lain DITOLAK (`user_shared`) karena pencabutan key lain user itu akan mematikan kanal tersebut.
 #
 # Langkah rotasi: (1) daftar key user teknis efn_online_<kanal> lewat `odoo shell` di container Odoo yang berjalan;
 # (2) key BARU dibuat `with_user(<user teknis>)._generate(None, 'efn-online-<KANAL>-<UTC>', now+KEY_DAYS)` (scope
@@ -74,7 +87,7 @@ else ACTOR=root
 fi
 
 # ── 1. Argumen (allowlist) ───────────────────────────────────────────────────────────────────────────────────
-MODE=rotate; FORCE=0; OVERLAP_ARG=""
+MODE=rotate; FORCE=0; OVERLAP_ARG=""; ALL=0; NO_WAIT=0; BOOTSTRAP=0
 declare -A SEEN=()
 for a in "$@"; do
   [[ "$a" != *[[:cntrl:]]* ]] || die "argumen memuat karakter kontrol"
@@ -87,11 +100,21 @@ for a in "$@"; do
     status)          [[ -z "$hv" ]] || die "--status tanpa nilai"; MODE=status ;;
     overlap-seconds) [[ -n "$hv" && "$v" =~ ^[0-9]{1,5}$ ]] && ((10#$v <= 86400)) || die "--overlap-seconds 0..86400"
                      OVERLAP_ARG=$((10#$v)) ;;
+    all)             [[ -z "$hv" ]] || die "--all tanpa nilai"; ALL=1 ;;
+    no-wait)         [[ -z "$hv" ]] || die "--no-wait tanpa nilai"; NO_WAIT=1 ;;
+    bootstrap)       [[ -z "$hv" ]] || die "--bootstrap tanpa nilai"; BOOTSTRAP=1 ;;
     *) die "flag --$n tidak dikenal" ;;
   esac
 done
-[[ "$CH" != "?" ]] || die "--channel wajib"
-[[ "$MODE" != status || ($FORCE -eq 0 && -z "$OVERLAP_ARG") ]] || die "--status tidak bisa digabung --force/--overlap-seconds"
+if ((ALL)); then
+  [[ "$CH" == "?" && $FORCE -eq 0 && -z "$OVERLAP_ARG" && $NO_WAIT -eq 0 && $BOOTSTRAP -eq 0 ]] \
+    || die "--all hanya boleh digabung --status (rotasi paksa/bootstrap per kanal: --channel=<KODE>)"
+else
+  [[ "$CH" != "?" ]] || die "--channel wajib (atau --all)"
+fi
+[[ "$MODE" != status || ($FORCE -eq 0 && -z "$OVERLAP_ARG" && $NO_WAIT -eq 0 && $BOOTSTRAP -eq 0) ]] \
+  || die "--status tidak bisa digabung --force/--overlap-seconds/--no-wait/--bootstrap"
+# Pemetaan kode -> nama (docs/04 §11.3): regex di atas menolak '_', '/', '.', spasi -> pemetaan '-' -> '_' injektif
 CH_LC="$(tr 'A-Z-' 'a-z_' <<< "$CH")"
 SECRET="odoo_api_key_online_${CH_LC}"
 LOGIN="efn_online_${CH_LC}"
@@ -100,6 +123,7 @@ LOGIN="efn_online_${CH_LC}"
 KEY_DAYS=30; ROTATE_BEFORE_DAYS=10; OVERLAP_SECONDS=3600; VERIFY_ATTEMPTS=3; HEALTH_TIMEOUT_SECONDS=300; HOST_LOCK_WAIT_SECONDS=900
 ODOO_DB=efn_odoo; COMPOSE_PROJECT=efn; COMPOSE_DIR=/opt/efn/compose; COMPOSE_FILES=""; SECRETS_DIR=/opt/efn/secrets
 SECRET_GROUP="$ADMIN_GROUP"; SECRET_FILE_MODE=0444; STATE_DIR=/var/lib/efn/online-key; TEXTFILE_DIR=/var/lib/efn/node-exporter
+CHANNELS=""
 if [[ -e "$CONF" ]]; then
   [[ -f "$CONF" && ! -L "$CONF" ]] || die "$CONF bukan file biasa"
   read -r c_uid c_mode < <(stat -c '%u %a' -- "$CONF")
@@ -110,7 +134,7 @@ if [[ -e "$CONF" ]]; then
     k="${BASH_REMATCH[1]}"; v="${BASH_REMATCH[2]}"
     case "$k" in
       KEY_DAYS|ROTATE_BEFORE_DAYS|OVERLAP_SECONDS|VERIFY_ATTEMPTS|HEALTH_TIMEOUT_SECONDS|HOST_LOCK_WAIT_SECONDS|ODOO_DB|COMPOSE_PROJECT|\
-      COMPOSE_DIR|COMPOSE_FILES|SECRETS_DIR|SECRET_GROUP|SECRET_FILE_MODE|STATE_DIR|TEXTFILE_DIR) printf -v "$k" '%s' "$v" ;;
+      COMPOSE_DIR|COMPOSE_FILES|SECRETS_DIR|SECRET_GROUP|SECRET_FILE_MODE|STATE_DIR|TEXTFILE_DIR|CHANNELS) printf -v "$k" '%s' "$v" ;;
       *) die "$CONF: kunci $k tidak dikenal" ;;
     esac
   done < "$CONF"
@@ -131,8 +155,124 @@ for d in COMPOSE_DIR SECRETS_DIR STATE_DIR TEXTFILE_DIR; do
   [[ "${!d}" =~ ^/[A-Za-z0-9_./-]+$ && "${!d}" != *..* ]] || die "$d harus path absolut tanpa '..'"
 done
 [[ -d "$COMPOSE_DIR" && -d "$SECRETS_DIR" ]] || die "COMPOSE_DIR/SECRETS_DIR tidak ada"
+# G19: daftar kanal (CHANNELS / ONLINE_CHANNELS) - setiap kode divalidasi regex kontrak (tanpa '/', '.', '_', spasi ->
+# tidak ada path traversal / injeksi nama secret), unik, maks 8 (= batas ONLINE_CHANNELS deploy-validate).
+CH_LIST=()
+parse_channels() { # $1 = daftar koma -> CH_LIST; rc 1 bila tidak valid
+  local raw="$1" c
+  local -A uniq=()
+  CH_LIST=()
+  [[ "$raw" =~ ^[A-Z][A-Z0-9-]{1,15}(,[A-Z][A-Z0-9-]{1,15}){0,7}$ ]] || return 1
+  IFS=, read -r -a CH_LIST <<< "$raw"
+  for c in "${CH_LIST[@]}"; do
+    [[ -z "${uniq[$c]:-}" ]] || return 1
+    uniq[$c]=1
+  done
+}
+if [[ -n "$CHANNELS" ]]; then
+  parse_channels "$CHANNELS" || die "$CONF: CHANNELS harus kode kanal unik ^[A-Z][A-Z0-9-]{1,15}\$ dipisah koma (maks 8)"
+fi
 install -d -o root -g root -m 0700 "$STATE_DIR"
 command -v docker > /dev/null && command -v jq > /dev/null && command -v flock > /dev/null || die "butuh docker, jq, flock"
+
+# Metrik textfile gabungan semua kanal (dari $STATE_DIR/<kanal>.metrics) - dipakai run per kanal dan --all.
+render_prom() {
+  local tmp fam
+  [[ -d "$TEXTFILE_DIR" ]] || { log "TEXTFILE_DIR ${TEXTFILE_DIR} tidak ada - metrik R-T15 tidak ditulis"; return 0; }
+  tmp="$(mktemp "$TEXTFILE_DIR/.efn_odoo_api_key.XXXXXX")"
+  for fam in "expiry_timestamp_seconds:Masa berlaku API key Odoo kanal online (R-T15)" \
+             "active_keys:Jumlah API key aktif user teknis kanal (normal 1; 2 selama overlap)" \
+             "rotation_last_run_timestamp_seconds:Waktu run terakhir efn-rotate-online-key" \
+             "rotation_last_run_ok:Hasil run terakhir efn-rotate-online-key (1 sukses/tidak perlu, 0 gagal)" \
+             "rotation_last_success_timestamp_seconds:Waktu rotasi sukses terakhir"; do
+    printf '# HELP efn_odoo_api_key_%s %s\n# TYPE efn_odoo_api_key_%s gauge\n' "${fam%%:*}" "${fam#*:}" "${fam%%:*}"
+    cat "$STATE_DIR"/*.metrics 2> /dev/null | grep "^efn_odoo_api_key_${fam%%:*}{" || true
+  done > "$tmp"
+  chmod 0644 "$tmp" && mv -f "$tmp" "$TEXTFILE_DIR/efn_odoo_api_key.prom"
+}
+
+# ── 2b. --all (G19): setiap kanal sebagai proses anak berurutan; kegagalan satu kanal tidak menghentikan lainnya ──
+if ((ALL)); then
+  SELF="$(readlink -f -- "$0")"
+  [[ -f "$SELF" && ! -L "$0" ]] || die "--all: path skrip tidak dapat ditentukan"
+  read -r s_uid s_mode < <(stat -c '%u %a' -- "$SELF")
+  [[ "$s_uid" == 0 && $((8#$s_mode & 8#022)) -eq 0 ]] || die "--all: $SELF harus milik root dan tidak dapat ditulis grup/lainnya"
+  CH_SOURCE="$CONF CHANNELS"
+  if [[ -z "$CHANNELS" ]]; then
+    # Fallback = kanal yang di-deploy (deploy.sh menulis ONLINE_CHANNELS ke .env, 0640 root) -> satu sumber kebenaran
+    envf="$COMPOSE_DIR/.env"
+    [[ -f "$envf" && ! -L "$envf" ]] || die "--all: CHANNELS kosong di $CONF dan $envf tidak ada (daftar kanal kosong)"
+    read -r e_uid e_mode < <(stat -c '%u %a' -- "$envf")
+    [[ "$e_uid" == 0 && $((8#$e_mode & 8#022)) -eq 0 ]] || die "$envf harus milik root dan tidak dapat ditulis grup/lainnya"
+    # kosong/tidak ada = default compose RTL (sama dengan deploy.sh); nilai lain WAJIB valid (tanpa fallback diam-diam)
+    v="$(sed -nE 's/^ONLINE_CHANNELS=(.{0,200})$/\1/p' "$envf" | tail -n1)"
+    parse_channels "${v:-RTL}" || die "$envf: ONLINE_CHANNELS tidak valid"
+    CH_SOURCE="$envf ONLINE_CHANNELS"
+  fi
+  ((${#CH_LIST[@]} > 0)) || die "--all: daftar kanal kosong"
+  exec 9> "$STATE_DIR/.lock.all"
+  flock -n 9 || die "efn-rotate-online-key --all lain sedang berjalan"
+  ch_lc() { tr 'A-Z-' 'a-z_' <<< "$1"; }
+  # Anak gagal SEBELUM menulis metrik (mis. secret tidak di-mount, konfigurasi) -> induk menandai last_run_ok=0 agar
+  # EfnOnlineApiKeyRotationFailed menyala PER KANAL (bukan diam). Metrik expiry/active_keys lama dipertahankan.
+  mark_failed() { # kanal t0
+    local c="$1" t0="$2" f
+    f="$STATE_DIR/$(ch_lc "$c").metrics"
+    if [[ -f "$f" && "$(stat -c %Y -- "$f")" -ge "$t0" ]]; then return 0; fi
+    {
+      if [[ -f "$f" ]]; then
+        grep -E '^efn_odoo_api_key_(expiry_timestamp_seconds|active_keys|rotation_last_success_timestamp_seconds)\{' -- "$f" || true
+      fi
+      printf 'efn_odoo_api_key_rotation_last_run_timestamp_seconds{channel="%s"} %s\n' "$c" "$(date +%s)"
+      printf 'efn_odoo_api_key_rotation_last_run_ok{channel="%s"} 0\n' "$c"
+    } > "$f.tmp" && mv -f "$f.tmp" "$f"
+  }
+  WORST=0
+  run_child() { # kanal arg... -> rc anak (fd 9 = kunci --all tidak diwariskan)
+    local c="$1" t0 rc=0; shift
+    t0="$(date +%s)"
+    "$SELF" "--channel=$c" "$@" 9>&- || rc=$?
+    ((rc == 0)) || mark_failed "$c" "$t0"
+    if ((rc == 3)); then WORST=3; elif ((rc != 0 && WORST != 3)); then WORST=1; fi
+    log "HASIL --all kanal=${c} argumen=${*:-(rotasi)} rc=${rc}"
+    return "$rc"
+  }
+  log "MULAI --all kanal=${CH_LIST[*]} sumber=${CH_SOURCE} aktor=${ACTOR} mode=${MODE}"
+  declare -A OK1=()
+  for c in "${CH_LIST[@]}"; do
+    if [[ "$MODE" == status ]]; then
+      printf '== kanal %s ==\n' "$c"
+      run_child "$c" --status || true
+    else
+      if run_child "$c" --no-wait; then OK1[$c]=1; fi
+    fi
+  done
+  if [[ "$MODE" != status ]]; then
+    # Cabut tertunda: tunggu SEKALI sampai overlap terlama (yang <= OVERLAP_SECONDS + 5 menit) lalu jalankan anak biasa
+    # (jalur "cabut tertunda" yang sudah ada). Overlap lebih panjang (rotasi manual --overlap-seconds) -> run harian.
+    now="$(date +%s)"; until_ts=0; PEND=()
+    for c in "${CH_LIST[@]}"; do
+      [[ -n "${OK1[$c]:-}" ]] || continue
+      st="$STATE_DIR/$(ch_lc "$c").state"
+      [[ -f "$st" ]] || continue
+      p="$(sed -nE 's/^PENDING_AFTER=([0-9]{1,12})$/\1/p' "$st" | tail -n1)"; p="${p:-0}"
+      ((p > 0)) || continue
+      if ((p > now + 10#$OVERLAP_SECONDS + 300)); then
+        log "cabut tertunda kanal=${c} setelah $(date -u -d "@$p" '+%Y-%m-%dT%H:%M:%SZ') -> run berikutnya"; continue
+      fi
+      PEND+=("$c"); ((p > until_ts)) && until_ts=$p
+    done
+    if ((${#PEND[@]} > 0)); then
+      wait_s=$((until_ts + 1 - $(date +%s)))
+      log "--all menunggu overlap ${wait_s}s lalu mencabut key lama kanal=${PEND[*]}"
+      ((wait_s > 0)) && sleep "$wait_s"
+      for c in "${PEND[@]}"; do run_child "$c" || true; done
+    fi
+  fi
+  render_prom || true
+  log "SELESAI --all kanal=${CH_LIST[*]} aktor=${ACTOR} mode=${MODE} rc=${WORST}"
+  exit "$WORST"
+fi
 
 exec 9> "$STATE_DIR/.lock.${CH_LC}"
 flock -n 9 || die "rotasi kanal ${CH} lain sedang berjalan"
@@ -148,13 +288,24 @@ for f in "${CF_LIST[@]}"; do
   [[ "$f" =~ ^docker-compose[A-Za-z0-9.-]*\.ya?ml$ && -f "$COMPOSE_DIR/$f" ]] || die "file compose tidak valid: $(printf '%q' "$f" | head -c 60)"
   DC+=(-f "$COMPOSE_DIR/$f")
 done
+# G19 --bootstrap: kanal baru belum ada di ONLINE_CHANNELS -> overlay kanal belum di-mount deploy. Overlay ikut HANYA di
+# run ini (recreate BFF + verifikasi); deploy berikutnya kembali ke daftar deploy. Nama overlay dari kode tervalidasi.
+if ((BOOTSTRAP)) && [[ "$CH" != RTL ]]; then
+  OV="docker-compose.online-${CH,,}.yml"
+  [[ -f "$COMPOSE_DIR/$OV" && ! -L "$COMPOSE_DIR/$OV" ]] || die "--bootstrap: overlay ${OV} tidak ada di ${COMPOSE_DIR} (rilis G19+?)"
+  [[ ",${COMPOSE_FILES}," == *",${OV},"* ]] || DC+=(-f "$COMPOSE_DIR/$OV")
+fi
 CFG_JSON="$("${DC[@]}" config --format json 2> /dev/null)" || die "docker compose config gagal"
 SECRET_FILE="$(jq -r --arg s "$SECRET" '.secrets[$s].file // empty' <<< "$CFG_JSON")"
 [[ -n "$SECRET_FILE" && "$(dirname -- "$SECRET_FILE")" == "$SECRETS_DIR" ]] \
   || die "secret ${SECRET} tidak didefinisikan compose atau di luar SECRETS_DIR"
+if ((BOOTSTRAP)); then
+  [[ -f "$SECRET_FILE" ]] && grep -qx disabled "$SECRET_FILE" \
+    || die "--bootstrap hanya untuk key pertama (file secret ${SECRET} harus masih placeholder 'disabled'); rotasi biasa tanpa --bootstrap"
+fi
 mapfile -t DIRECT < <(jq -r --arg s "$SECRET" '.services | to_entries[]
     | select([.value.secrets[]? | (.source // .)] | index($s) != null) | .key' <<< "$CFG_JSON")
-((${#DIRECT[@]} > 0)) || die "tidak ada service yang me-mount ${SECRET} (kanal ${CH} tidak aktif?)"
+((${#DIRECT[@]} > 0)) || die "tidak ada service yang me-mount ${SECRET} (kanal ${CH} tidak di ONLINE_CHANNELS? key pertama: --bootstrap)"
 mapfile -t RECREATE < <(jq -r --argjson d "$(printf '%s\n' "${DIRECT[@]}" | jq -R . | jq -sc .)" '
     .services as $s | ($d + [ $s | to_entries[] | select((.value.network_mode // "") | startswith("service:"))
       | select((.value.network_mode | ltrimstr("service:")) as $p | $d | index($p)) | .key ]) | unique[]' <<< "$CFG_JSON")
@@ -175,16 +326,30 @@ def clean(s):
     return re.sub(r"[^A-Za-z0-9._-]", "_", s or "")[:64] or "-"
 def epoch(dt):
     return int(dt.replace(tzinfo=datetime.timezone.utc).timestamp()) if dt else 0
+CH = os.environ.get("EFN_CH", "")
 U = env["res.users"].sudo().with_context(active_test=False).search([("login", "=", os.environ["EFN_LOGIN"])], limit=1)
 K = env["res.users.apikeys"].sudo()
-if not U:
-    say("ERR user_missing")
-elif not U.active:
-    say("ERR user_inactive")
-elif not U.has_group(GROUP):
-    say("ERR user_not_channel")
-elif U.has_group("base.group_system") or U.has_group("base.group_erp_manager"):
-    say("ERR user_privileged")
+def precheck():
+    if not U:
+        return "user_missing"
+    if not U.active:
+        return "user_inactive"
+    if not U.has_group(GROUP):
+        return "user_not_channel"
+    if U.has_group("base.group_system") or U.has_group("base.group_erp_manager"):
+        return "user_privileged"
+    # G19 (docs/04 §11.3): satu user teknis = SATU kanal. Setelah overlap SEMUA key lain user ini dicabut -> user yang
+    # juga melayani kanal lain (mis. data demo: RTL-GL/RTL-BACHA memakai efn_online_rtl) akan mematikan key kanal itu.
+    codes = set(env["efn.online.channel"].sudo().with_context(active_test=False)
+                .search([("user_ids", "in", U.ids)]).mapped("code"))
+    if CH not in codes:
+        return "user_not_in_channel"
+    if codes != {CH}:
+        return "user_shared"
+    return ""
+ERR = precheck()
+if ERR:
+    say("ERR", ERR)
 else:
     try:
         if OP == "create":
@@ -237,7 +402,7 @@ ODOO_OUT=""; KEY_IDS=(); KEY_EXPS=(); KEY_NAMES=()
 odoo_call() { # EFN_OP [env...] -> ODOO_OUT (baris EFN_ROT), KEY_* ; rc 0 bila "OK"
   local op="$1" errf rc=0 line; shift
   errf="$(mktemp "$STATE_DIR/.odoo-err.XXXXXX")"
-  ODOO_OUT="$(printf '%s\n' "$PY" | docker exec -i -e "EFN_OP=$op" -e "EFN_LOGIN=$LOGIN" "$@" "$ODOO_CID" \
+  ODOO_OUT="$(printf '%s\n' "$PY" | docker exec -i -e "EFN_OP=$op" -e "EFN_LOGIN=$LOGIN" -e "EFN_CH=$CH" "$@" "$ODOO_CID" \
                odoo shell -d "$ODOO_DB" --no-http --log-level=error 2> "$errf" | grep '^EFN_ROT ' || true)"
   KEY_IDS=(); KEY_EXPS=(); KEY_NAMES=()
   while IFS= read -r line; do
@@ -339,7 +504,7 @@ LAST_SUCCESS=0
 LAST_SUCCESS="${LAST_SUCCESS:-0}"
 cur_exp() { local i; for i in "${!KEY_IDS[@]}"; do [[ "${KEY_IDS[$i]}" == "$CUR_ID" ]] && { echo "${KEY_EXPS[$i]}"; return 0; }; done; return 1; }
 write_metrics() { # $1 = 1|0 (hasil run ini)
-  local f="$STATE_DIR/${CH_LC}.metrics" exp tmp fam
+  local f="$STATE_DIR/${CH_LC}.metrics" exp
   [[ -d "$TEXTFILE_DIR" ]] || { log "TEXTFILE_DIR ${TEXTFILE_DIR} tidak ada - metrik R-T15 tidak ditulis"; return 0; }
   {
     exp="$(cur_exp || true)"
@@ -349,26 +514,17 @@ write_metrics() { # $1 = 1|0 (hasil run ini)
     printf 'efn_odoo_api_key_rotation_last_run_ok{channel="%s"} %s\n' "$CH" "$1"
     printf 'efn_odoo_api_key_rotation_last_success_timestamp_seconds{channel="%s"} %s\n' "$CH" "$LAST_SUCCESS"
   } > "$f.tmp" && mv -f "$f.tmp" "$f"
-  tmp="$(mktemp "$TEXTFILE_DIR/.efn_odoo_api_key.XXXXXX")"
-  for fam in "expiry_timestamp_seconds:Masa berlaku API key Odoo kanal online (R-T15)" \
-             "active_keys:Jumlah API key aktif user teknis kanal (normal 1; 2 selama overlap)" \
-             "rotation_last_run_timestamp_seconds:Waktu run terakhir efn-rotate-online-key" \
-             "rotation_last_run_ok:Hasil run terakhir efn-rotate-online-key (1 sukses/tidak perlu, 0 gagal)" \
-             "rotation_last_success_timestamp_seconds:Waktu rotasi sukses terakhir"; do
-    printf '# HELP efn_odoo_api_key_%s %s\n# TYPE efn_odoo_api_key_%s gauge\n' "${fam%%:*}" "${fam#*:}" "${fam%%:*}"
-    cat "$STATE_DIR"/*.metrics 2> /dev/null | grep "^efn_odoo_api_key_${fam%%:*}{" || true
-  done > "$tmp"
-  chmod 0644 "$tmp" && mv -f "$tmp" "$TEXTFILE_DIR/efn_odoo_api_key.prom"
+  render_prom
 }
 
-# shellcheck disable=SC2317  # dipanggil lewat trap EXIT
+# shellcheck disable=SC2317,SC2329  # dipanggil lewat trap EXIT
 on_exit() {
   local rc=$?
   if ((rc != 0)); then write_metrics 0 2> /dev/null || true; fi
   log "SELESAI kanal=${CH} aktor=${ACTOR} mode=${MODE} rc=${rc}"
 }
 trap on_exit EXIT
-log "MULAI kanal=${CH} aktor=${ACTOR} mode=${MODE} force=${FORCE} overlap=${OVERLAP_SECONDS}s key_hari=${KEY_DAYS}"
+log "MULAI kanal=${CH} aktor=${ACTOR} mode=${MODE} force=${FORCE} overlap=${OVERLAP_SECONDS}s key_hari=${KEY_DAYS} no_wait=${NO_WAIT} bootstrap=${BOOTSTRAP}"
 
 odoo_call list || { echo "user teknis ${LOGIN} / Odoo tidak siap" >&2; exit 1; }
 
@@ -517,6 +673,11 @@ write_metrics 1
 log "ROTASI OK kanal=${CH} id=${NEW_ID} kedaluwarsa=$(fmt_ts "$NEW_EXP") cabut_key_lama_setelah=${OVERLAP_SECONDS}s"
 
 host_unlock   # overlap tanpa kunci host: deploy boleh jalan (me-mount key baru yang sama)
+if ((NO_WAIT && OVERLAP_SECONDS > 0)); then
+  # G19 --no-wait (--all): key lama tetap sah sampai cabut tertunda (induk --all setelah overlap, atau run harian)
+  log "OVERLAP kanal=${CH}: key lama dicabut run berikutnya setelah $(fmt_ts "$PENDING_AFTER") (--no-wait)"
+  exit 0
+fi
 ((OVERLAP_SECONDS > 0)) && sleep "$OVERLAP_SECONDS"
 revoke_others || { odoo_call list || true; exit 1; }
 odoo_call list || true

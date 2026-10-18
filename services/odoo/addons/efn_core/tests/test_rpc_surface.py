@@ -31,7 +31,7 @@ from odoo.tools import mute_logger
 ADDONS_DIR = pathlib.Path(__file__).resolve().parents[2]
 
 # Override metode ORM/CE yang memang publik di Odoo standar (hak akses = ACL + record rule CE).
-ORM_OVERRIDES = frozenset({"create", "write", "unlink", "copy", "read", "search", "name_create"})
+ORM_OVERRIDES = frozenset({"create", "write", "unlink", "copy", "copy_data", "read", "search", "name_create"})
 
 # (model, metode) -> cek akses eksplisit di server. WAJIB ditinjau security sebelum ditambah.
 RPC_ALLOWLIST = {

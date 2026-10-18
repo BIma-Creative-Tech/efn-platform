@@ -103,6 +103,25 @@ class TestEfnOnlineBrandChannels(TransactionCase):
         self.assertEqual(len(pricelists), 4, "pricelist per brand")
         self.assertEqual(len(teams), 4, "tim penjualan per brand")
 
+    def test_brand_codes_hold_mode_and_one_user_per_channel(self):
+        """G19: brand_code (E-37a), reservasi kanal ritel (E-35), satu user teknis per kanal (L-37)."""
+        expected = {
+            "channel_rtl_gl": ("GL", "confirm"),
+            "channel_rtl_bacha": ("BACHA", "confirm"),
+            "channel_fnb_pb": ("PB", "none"),
+            "channel_fnb_bacha": ("BACHA", "none"),
+        }
+        for xmlid, (brand, hold) in expected.items():
+            with self.subTest(channel=xmlid):
+                channel = self._channel(xmlid)
+                self.assertEqual(channel.brand_code, brand)
+                self.assertEqual(channel.stock_hold_mode, hold)
+                self.assertEqual(len(channel.user_ids), 1)
+        self.assertEqual(self.env.ref("efn_setup_online.channel_rtl").stock_hold_mode, "confirm")
+        channels = self.env["efn.online.channel"].with_context(active_test=False).search([])
+        users = channels.mapped("user_ids")
+        self.assertEqual(len(users), sum(len(c.user_ids) for c in channels), "user teknis dipakai > 1 kanal")
+
     def test_catalog_per_brand_same_company(self):
         rtl = self.env.ref("efn_setup_company.company_rtl")
         gl = self._channel("channel_rtl_gl")
@@ -127,9 +146,20 @@ class TestEfnOnlineBrandChannels(TransactionCase):
                 "efn_online_channel_ids": [Command.set(bacha.ids)],
             }
         )
-        api = self.env["efn.online.channel"].with_user(self.env.ref("efn_setup_online.user_online_rtl"))
-        gl_ids = {item["product_id"] for item in api.efn_online_catalog("RTL-GL")["items"]}
-        bacha_ids = {item["product_id"] for item in api.efn_online_catalog("RTL-BACHA")["items"]}
+        # L-37: satu user teknis per kanal.
+        Channel = self.env["efn.online.channel"]
+        gl_ids = {
+            item["product_id"]
+            for item in Channel.with_user(self.env.ref("efn_setup_online.user_online_rtl_gl")).efn_online_catalog(
+                "RTL-GL"
+            )["items"]
+        }
+        bacha_ids = {
+            item["product_id"]
+            for item in Channel.with_user(self.env.ref("efn_setup_online.user_online_rtl_bacha")).efn_online_catalog(
+                "RTL-BACHA"
+            )["items"]
+        }
         self.assertIn(p_gl.id, gl_ids)
         self.assertNotIn(p_bacha.id, gl_ids)
         self.assertIn(p_bacha.id, bacha_ids)

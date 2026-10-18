@@ -84,6 +84,8 @@ export interface CatalogItem {
 export interface CatalogChannelInfo {
   code: string;
   company_code: string;
+  /** G19 §11.3 (E-37a): `efn.online.channel.brand_code` `^[A-Z][A-Z0-9]{1,9}$`, tidak unik; `null` bila kosong. */
+  brand_code: string | null;
   name: string;
   currency: string;
   active: boolean;
@@ -120,6 +122,11 @@ export interface QuoteLine {
   subtotal_incl: number;
   tax_labels: string[];
   available: boolean;
+  /**
+   * G19 §11.2 no. 3: baris reward promo/kupon dari Odoo (`reward: true`; harga ≤ 0, produk reward Odoo). Diteruskan
+   * apa adanya ke klien; TIDAK pernah dikirim balik ke Odoo saat place dan tidak pernah diterima dari klien/cart.
+   */
+  reward: boolean;
 }
 export interface TaxGroup {
   label: string;
@@ -140,6 +147,10 @@ export interface QuoteResult {
   quote_hash: string;
   valid_until: Date | null;
   issues: QuoteIssue[];
+  /** G19 §11.2 no. 3: kode yang terpakai di grup (kanal) ini — dinormalisasi huruf besar oleh parser. */
+  promo_applied: string[];
+  /** Kode yang tidak berlaku di grup ini (apa pun sebabnya — Odoo tidak membedakan, anti-enumerasi). */
+  promo_rejected: string[];
 }
 export interface PlaceInput {
   idempotency_key: string;
@@ -147,8 +158,11 @@ export interface PlaceInput {
   checkout_ref: string;
   outlet_code: string;
   fulfilment: Fulfilment;
+  /** Hanya baris produk cart (tanpa baris reward). */
   lines: QuoteLineIn[];
   quote_hash: string;
+  /** G19 §11.2 no. 2/5: `promo_applied` grup dari quote tersimpan (bukan dari klien); masuk `payload_sha256` Odoo. */
+  promo_codes: string[];
   /** Rahasia: hanya dikirim sekali ke Odoo (TLS + mTLS), tidak pernah di-log (§10.3.6). */
   pickup_code: string;
 }
@@ -207,7 +221,8 @@ export interface OdooOnlineApi {
   catalog(channel: string, since: string | null, cursor: string | null, limit: number): Promise<CatalogPage>;
   stock(channel: string, outlet: string, productIds: number[]): Promise<StockRow[]>;
   image(channel: string, tmplId: number, size: 512 | 1024): Promise<ImageResult>;
-  quote(channel: string, outlet: string, fulfilment: Fulfilment, lines: QuoteLineIn[]): Promise<QuoteResult>;
+  /** `promoCodes` = kode ternormalisasi (huruf besar, unik, ≤ 3); dikirim sama ke setiap kanal (§11.2 no. 2). */
+  quote(channel: string, outlet: string, fulfilment: Fulfilment, lines: QuoteLineIn[], promoCodes: string[]): Promise<QuoteResult>;
   place(channel: string, order: PlaceInput): Promise<PlaceResult>;
   markPaid(channel: string, platformOrderRef: string, payment: MarkPaidInput): Promise<MarkPaidResult>;
   cancel(channel: string, platformOrderRef: string, reason: CancelReason, idempotencyKey: string): Promise<CancelResult>;

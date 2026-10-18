@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { AppConfig } from '../config/app-config';
 import { KV_STORE, KvStore } from '../common/redis/kv-store';
@@ -9,6 +9,7 @@ import { CatalogService } from '../catalog/catalog.service';
 import { ODOO_ONLINE, OdooOnlineApi, OdooRpcError, QuoteIssue, QuoteResult, TaxGroup } from '../odoo-rpc/odoo-online.types';
 import { OnlineErrors, mapOdooError } from '../odoo-rpc/online-errors';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
+import { promoCodeTag } from '../odoo-rpc/promo-codes';
 import { PartLine } from '../orders/online.model';
 import { CartGroup } from './cart-store';
 import { CartService } from './cart.service';
@@ -18,11 +19,17 @@ export interface QuoteGroupView {
   company_code: string;
   outlet_code: string;
   fulfilment: 'pickup' | 'delivery';
+  /** Baris produk cart + (G19 §11.2) baris reward Odoo `reward: true` (harga ≤ 0) apa adanya. */
   lines: (PartLine & { available: boolean })[];
   tax_groups: TaxGroup[];
   amount_total: number;
   amount_payable: number;
   issues: QuoteIssue[];
+}
+/** G19 §11.2 no. 4: `invalid` = kode yang tidak terpakai di grup MANA PUN (satu kategori untuk semua penyebab). */
+export interface PromoView {
+  applied: string[];
+  invalid: string[];
 }
 export interface QuoteView {
   quote_id: string;
@@ -30,22 +37,39 @@ export interface QuoteView {
   cart_version: number;
   groups: QuoteGroupView[];
   amount_payable_total: number;
+  promo: PromoView;
 }
-/** Disimpan di Redis `oq:<quote_id>` — `quote_hash` TIDAK pernah dikirim ke klien. */
+export type StoredQuoteGroup = QuoteGroupView & {
+  quote_hash: string;
+  /** §11.2 no. 5: kode terpakai di grup ini — dikirim saat place (bukan dari klien). Quote lama (pra-G19) tanpa field = []. */
+  promo_applied?: string[];
+};
+/** Disimpan di Redis `oq:<quote_id>` — `quote_hash` & `promo_applied` per grup TIDAK pernah dikirim ke klien. */
 export interface StoredQuote {
   member_id: string;
   cart_version: number;
   valid_until: string;
-  groups: (QuoteGroupView & { quote_hash: string })[];
+  groups: StoredQuoteGroup[];
   amount_payable_total: number;
+  /** §11.2 no. 5: kode hasil normalisasi yang diminta klien. */
+  promo_codes?: string[];
 }
 
-/** Bentuk publik grup quote: `quote_hash` dibuang (tidak pernah ke klien). */
-export function toView(g: QuoteGroupView & { quote_hash: string }): QuoteGroupView {
-  const view: QuoteGroupView & { quote_hash?: string } = { ...g };
+/** Bentuk publik grup quote: `quote_hash` & `promo_applied` dibuang (tidak pernah ke klien). */
+export function toView(g: StoredQuoteGroup): QuoteGroupView {
+  const view: QuoteGroupView & { quote_hash?: string; promo_applied?: string[] } = { ...g };
   delete view.quote_hash;
+  delete view.promo_applied;
   return view;
 }
+
+/** Baris yang dikirim ke `efn_online_place`: hanya produk cart (baris reward dihitung ulang Odoo dari kode). */
+export function placeLines(g: Pick<QuoteGroupView, 'lines'>): { product_id: number; qty: number }[] {
+  return g.lines.filter((l) => l.reward !== true).map((l) => ({ product_id: l.product_id, qty: l.qty }));
+}
+
+/** Batas jumlah baris reward per grup (pengaman bentuk respons Odoo). */
+const MAX_REWARD_LINES = 20;
 
 export function quoteKey(id: string): string {
   return `oq:${id}`;
@@ -87,6 +111,7 @@ export async function purgeMemberOnlineRedis(kv: KvStore, pepper: Buffer, member
  */
 @Injectable()
 export class QuoteService {
+  private readonly logger = new Logger('OnlineQuote');
   now: () => number = () => Date.now();
 
   constructor(
@@ -98,23 +123,39 @@ export class QuoteService {
     private readonly metrics: OnlineMetrics,
   ) {}
 
-  async quote(memberId: string): Promise<QuoteView> {
+  /**
+   * `promoCodes` = hasil `normalizePromoCodes` (controller). Kode yang sama dikirim ke SETIAP kanal (§11.2 no. 2);
+   * Odoo hanya menerapkan program milik pricelist kanal itu. Respons `promo.invalid` = tidak terpakai di grup mana pun.
+   */
+  async quote(memberId: string, promoCodes: readonly string[] = []): Promise<QuoteView> {
     const cart = await this.cart.get(memberId);
     if (cart.groups.length === 0 || cart.groups.every((g) => g.lines.length === 0)) throw OnlineErrors.cartEmpty();
     for (const g of cart.groups) if (this.odoo.isCircuitOpen(g.channel_code)) throw OnlineErrors.unavailable();
-    const results = await Promise.all(cart.groups.map((g) => this.quoteGroup(g)));
+    const codes = [...promoCodes];
+    const results = await Promise.all(cart.groups.map((g) => this.quoteGroup(g, codes)));
     const nowMs = this.now();
     let validUntil = nowMs + this.config.onlineQuoteTtlSeconds * 1000;
     for (const r of results) if (r.valid !== null) validUntil = Math.min(validUntil, r.valid);
     const ttl = Math.floor((validUntil - nowMs) / 1000);
     if (ttl < 5) throw OnlineErrors.unavailable();
     const groups = results.map((r) => r.group);
+    const promo: PromoView = {
+      applied: codes.filter((c) => groups.some((g) => (g.promo_applied ?? []).includes(c))),
+      invalid: codes.filter((c) => !groups.some((g) => (g.promo_applied ?? []).includes(c))),
+    };
+    if (codes.length > 0) {
+      this.metrics.promo('applied', promo.applied.length);
+      this.metrics.promo('invalid', promo.invalid.length);
+      // §11.2 no. 6: kode TIDAK PERNAH di-log asli — hanya tag 8 heks SHA-256 (debug) untuk korelasi
+      this.logger.debug(`Quote promo: terpakai [${promo.applied.map(promoCodeTag).join(',')}], tidak terpakai [${promo.invalid.map(promoCodeTag).join(',')}]`);
+    }
     const stored: StoredQuote = {
       member_id: memberId,
       cart_version: cart.version,
       valid_until: new Date(validUntil).toISOString(),
       groups,
       amount_payable_total: groups.reduce((s, g) => s + g.amount_payable, 0),
+      promo_codes: codes,
     };
     const id = randomUUID();
     await this.kv.setEx(quoteKey(id), JSON.stringify(stored), ttl);
@@ -133,37 +174,41 @@ export class QuoteService {
       cart_version: cart.version,
       groups: groups.map(toView),
       amount_payable_total: stored.amount_payable_total,
+      promo,
     };
   }
 
-  private async quoteGroup(g: CartGroup): Promise<{ group: QuoteGroupView & { quote_hash: string }; valid: number | null }> {
+  private async quoteGroup(g: CartGroup, codes: string[]): Promise<{ group: StoredQuoteGroup; valid: number | null }> {
     const ch = await this.catalog.channel(g.channel_code);
     if (!ch) throw OnlineErrors.itemUnavailable();
     let q: QuoteResult;
     try {
-      q = await this.odoo.quote(g.channel_code, g.outlet_code, g.fulfilment, g.lines);
+      q = await this.odoo.quote(g.channel_code, g.outlet_code, g.fulfilment, g.lines, codes);
     } catch (err) {
       throw mapOdooError(err, this.metrics, { method: 'quote', channel: g.channel_code });
     }
-    // Baris quote harus persis baris cart (produk & qty); selain itu respons Odoo tidak dipercaya
+    const invalid = (why: string): never => {
+      throw mapOdooError(new OdooRpcError('invalid_response', null, why), this.metrics, { method: 'quote', channel: g.channel_code });
+    };
+    // Baris PRODUK quote harus persis baris cart (produk & qty); selain itu respons Odoo tidak dipercaya.
+    // Baris reward (§11.2 no. 3) dinilai terpisah: boleh memakai produk yang sama (mis. buy_x_get_y), harga ≤ 0 (parser).
+    const productLines = q.lines.filter((l) => !l.reward);
+    const rewardLines = q.lines.filter((l) => l.reward);
+    if (rewardLines.length > MAX_REWARD_LINES) invalid('baris reward terlalu banyak');
     const want = new Map(g.lines.map((l) => [l.product_id, l.qty]));
     const issuesById = new Set(q.issues.map((i) => i.product_id));
     const seen = new Set<number>();
-    for (const l of q.lines) {
-      if (want.get(l.product_id) !== l.qty || seen.has(l.product_id)) {
-        throw mapOdooError(new OdooRpcError('invalid_response', null, 'baris quote ≠ cart'), this.metrics, { method: 'quote', channel: g.channel_code });
-      }
+    for (const l of productLines) {
+      if (want.get(l.product_id) !== l.qty || seen.has(l.product_id)) invalid('baris quote ≠ cart');
       seen.add(l.product_id);
     }
     for (const pid of want.keys()) {
-      if (!seen.has(pid) && !issuesById.has(pid)) {
-        throw mapOdooError(new OdooRpcError('invalid_response', null, 'baris quote hilang'), this.metrics, { method: 'quote', channel: g.channel_code });
-      }
+      if (!seen.has(pid) && !issuesById.has(pid)) invalid('baris quote hilang');
     }
-    const names = await this.catalog.productsByIds(g.channel_code, q.lines.map((l) => l.product_id));
-    if (q.company_code !== null && q.company_code !== ch.company_code) {
-      throw mapOdooError(new OdooRpcError('invalid_response', null, 'company_code quote ≠ kanal'), this.metrics, { method: 'quote', channel: g.channel_code });
-    }
+    // §11.2 no. 3/5: Odoo hanya boleh melaporkan kode yang DIMINTA (kode lain = bug/konfigurasi, fail-closed)
+    if (q.promo_applied.some((c) => !codes.includes(c)) || q.promo_rejected.some((c) => !codes.includes(c))) invalid('promo di luar permintaan');
+    const names = await this.catalog.productsByIds(g.channel_code, productLines.map((l) => l.product_id));
+    if (q.company_code !== null && q.company_code !== ch.company_code) invalid('company_code quote ≠ kanal');
     return {
       valid: q.valid_until ? q.valid_until.getTime() : null,
       group: {
@@ -173,18 +218,21 @@ export class QuoteService {
         fulfilment: g.fulfilment,
         lines: q.lines.map((l) => ({
           product_id: l.product_id,
-          name: l.name ?? names.get(l.product_id)?.name ?? '',
+          name: l.reward ? (l.name ?? 'Promo') : (l.name ?? names.get(l.product_id)?.name ?? ''),
           qty: l.qty,
           price_unit_incl: l.price_unit_incl,
           subtotal_incl: l.subtotal_incl,
           tax_labels: l.tax_labels,
           available: l.available,
+          ...(l.reward ? { reward: true as const } : {}),
         })),
         tax_groups: q.tax_groups,
         amount_total: q.amount_total,
         amount_payable: q.amount_payable,
         issues: q.issues,
         quote_hash: q.quote_hash,
+        // urutan mengikuti permintaan klien (deterministik untuk payload place)
+        promo_applied: codes.filter((c) => q.promo_applied.includes(c)),
       },
     };
   }

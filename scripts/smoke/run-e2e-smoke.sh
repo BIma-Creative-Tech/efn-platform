@@ -664,7 +664,7 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   main_oid="$(python_free_json a main order_id)"; part="$(part_of "$main_oid")"
   opy "$pa" a pickup_unavailable main
   r="$(oodoo -e SMOKE_STEP=order -e SMOKE_PART="$part")"
-  check "o.odoo_so_draft_with_code_hash" "$([[ "$(field state "$r")" == placed && "$(field so_state "$r")" == draft && "$(field pickup_hash_present "$r")" == true && "$(field checkout_ref "$r")" == "$main_oid" ]] && echo 1 || echo 0)" "$r"
+  check "o.odoo_so_reserved_with_code_hash" "$([[ "$(field state "$r")" == placed && "$(field so_state "$r")" == sale && "$(field reserved "$r")" == true && "$(field pickup_hash_present "$r")" == true && "$(field checkout_ref "$r")" == "$main_oid" ]] && echo 1 || echo 0)" "$r"
   r="$(psql_platform -c "select count(*) || '/' || bool_and(pickup_code_enc is not null and get_byte(pickup_code_enc,0)=1) from platform.online_order_part where order_id='$main_oid'")"
   check "o.bff_pickup_code_encrypted" "$([[ "$r" == 1/true ]] && echo 1 || echo 0)" "bagian/pickup_code_enc AES-GCM v1=$r"
   opy "$pa" a pay main paid

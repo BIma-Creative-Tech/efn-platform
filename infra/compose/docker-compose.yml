@@ -153,6 +153,12 @@ secrets:
   # `_fnb` TIDAK di-mount selama kanal mati) + HMAC event Odoo -> BFF (L-2; hanya odoo + api-gateway)
   odoo_api_key_online_rtl: { file: ../../secrets/odoo_api_key_online_rtl.txt }
   odoo_api_key_online_fnb: { file: ../../secrets/odoo_api_key_online_fnb.txt }
+  # G19 (docs/04 §11.3): kanal per brand, nama = odoo_api_key_online_<kode kanal huruf kecil, '-' -> '_'>. Masing-masing
+  # HANYA di-mount oleh overlay docker-compose.online-<kanal>.yml saat kanal ada di ONLINE_CHANNELS (deploy.sh).
+  odoo_api_key_online_rtl_gl: { file: ../../secrets/odoo_api_key_online_rtl_gl.txt }
+  odoo_api_key_online_rtl_bacha: { file: ../../secrets/odoo_api_key_online_rtl_bacha.txt }
+  odoo_api_key_online_fnb_pb: { file: ../../secrets/odoo_api_key_online_fnb_pb.txt }
+  odoo_api_key_online_fnb_bacha: { file: ../../secrets/odoo_api_key_online_fnb_bacha.txt }
   odoo_online_event_hmac: { file: ../../secrets/odoo_online_event_hmac.txt }
   # turunan (scripts/derive-secrets.sh)
   member_hash_pepper: { file: ../../secrets/member_hash_pepper.txt }
@@ -1116,9 +1122,18 @@ services:
       LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS: ${LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS:-3650}
       ONLINE_CHANNELS: ${ONLINE_CHANNELS:-RTL}
       ONLINE_FULFILMENTS: ${ONLINE_FULFILMENTS:-pickup}
-      ONLINE_PAYMENT_TIMEOUT_SECONDS: ${ONLINE_PAYMENT_TIMEOUT_SECONDS:-900}
+      # G19 W-02 (docs/04 §11.1): reservasi stok 1 jam. URUTAN AKTIVASI: payment_timeout_minutes kanal Odoo = 70 DULU,
+      # baru BFF 3600 (aturan Odoo >= BFF + 10 menit; runbook online-orders.md#aktivasi-reservasi-1-jam). Lingkungan
+      # yang Odoo-nya belum 70: set ONLINE_PAYMENT_TIMEOUT_SECONDS=900 eksplisit (config rilis) sampai Odoo diubah.
+      ONLINE_PAYMENT_TIMEOUT_SECONDS: ${ONLINE_PAYMENT_TIMEOUT_SECONDS:-3600}
       ONLINE_QUOTE_TTL_SECONDS: ${ONLINE_QUOTE_TTL_SECONDS:-600}
-      ONLINE_MAX_OPEN_ORDERS_PER_MEMBER: ${ONLINE_MAX_OPEN_ORDERS_PER_MEMBER:-3}
+      # L-32: maks 2 order terbuka per member sejak reservasi aktif (anti stock griefing)
+      ONLINE_MAX_OPEN_ORDERS_PER_MEMBER: ${ONLINE_MAX_OPEN_ORDERS_PER_MEMBER:-2}
+      # G19 W-09 (docs/04 §11.2 no. 6): quote ber-promo_codes dihitung terpisah (anti-enumerasi kupon) -> 429 rate_limited
+      ONLINE_RL_PROMO_MEMBER_LIMIT: ${ONLINE_RL_PROMO_MEMBER_LIMIT:-10}
+      ONLINE_RL_PROMO_MEMBER_WINDOW_SECONDS: ${ONLINE_RL_PROMO_MEMBER_WINDOW_SECONDS:-900}
+      ONLINE_RL_PROMO_IP_LIMIT: ${ONLINE_RL_PROMO_IP_LIMIT:-30}
+      ONLINE_RL_PROMO_IP_WINDOW_SECONDS: ${ONLINE_RL_PROMO_IP_WINDOW_SECONDS:-900}
       ONLINE_CATALOG_SYNC_SECONDS: ${ONLINE_CATALOG_SYNC_SECONDS:-300}
       ONLINE_PICKUP_CODE_MAX_DAYS: ${ONLINE_PICKUP_CODE_MAX_DAYS:-7}
       # Retensi (L-5; Q-P17 diputuskan 10 Okt 2026: tautan 730 h, event 180 h)
@@ -1139,7 +1154,8 @@ services:
       ODOO_RPC_CA_FILE: /run/secrets/efn_ca_crt
       ODOO_RPC_CLIENT_CERT_FILE: /run/secrets/tls_api_gateway_crt
       ODOO_RPC_CLIENT_KEY_FILE: /run/secrets/tls_api_gateway_key
-      # API key per kanal (satu key = satu user teknis = satu PT). FNB: tambah env + secret saat kanal diaktifkan.
+      # API key per kanal (satu key = satu user teknis = satu kanal). Kanal lain: env ODOO_API_KEY_ONLINE_<KANAL>_FILE
+      # ('-' -> '_') + secret di overlay docker-compose.online-<kanal>.yml (docs/04 §11.3).
       ODOO_API_KEY_ONLINE_RTL_FILE: /run/secrets/odoo_api_key_online_rtl
       ODOO_ONLINE_EVENT_HMAC_FILE: /run/secrets/odoo_online_event_hmac
       MINIO_CATALOG_BUCKET: catalog

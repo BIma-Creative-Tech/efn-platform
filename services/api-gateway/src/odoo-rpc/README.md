@@ -9,7 +9,12 @@ Kontrak: `docs/04` §10.4 (+ delta §10.4.4), §10.10, §10.11. ADR-034 (**Propo
 | Validasi respons | `odoo-online.parse.ts` | Bentuk & tipe dicek; `amount_payable`/refund wajib bilangan bulat Rupiah; `image_sha` hex 40/64 (L-9); qty stok tidak diteruskan. Gagal → `invalid_response` → 503 + anomali `online_config_error`. |
 | Peta error | `online-errors.ts` | §10.3.7 (K-ON5). Pesan generik; detail/traceback Odoo tidak pernah diteruskan/di-log. |
 | Metrik & anomali | `online-metrics.ts` | Semua metrik §10.11 + `efn_online_refunds_open{status}`, `efn_online_backward_transitions_total{source}`; log `EFN_ONLINE_ANOMALY {json}` (logger `OnlineAnomaly`, field whitelist). |
-| Stub dev | `odoo-online.mock.ts` | `ODOO_ONLINE_MOCK=true` **hanya** `APP_ENV=dev|test` (fail-closed: staging/production → gagal start, L-7). Data demo PLACEHOLDER: produk 13 → `stock_short` saat bayar, 14 → `out_of_stock` saat quote. |
+| Stub dev | `odoo-online.mock.ts` | `ODOO_ONLINE_MOCK=true` **hanya** `APP_ENV=dev|test` (fail-closed: staging/production → gagal start, L-7). Data demo PLACEHOLDER: produk 13 → `stock_short` saat bayar, 14 → `out_of_stock` saat quote. G19: kanal `RTL`, `RTL-GL` (GL), `RTL-BACHA`, `FNB-PB`, `FNB-BACHA` (BACHA/PB); `expires_at` place +70 menit; promo demo `DEMO5K` (−Rp5.000 bila subtotal ≥ Rp50.000, semua kanal) dan `DEMOGL10` (−10 %, hanya brand GL); kode lain → `promo_rejected`. |
+| Kode promo | `promo-codes.ts` | Regex/normalisasi kode §11.2 (dipakai body klien & parser hasil Odoo) + `promoCodeTag` (8 heks SHA-256, satu-satunya bentuk kode di log). |
+
+## G19 (docs/04 §11)
+- `efn_online_quote(..., promo_codes)` selalu dikirim (`[]` bila kosong); `efn_online_place(order: { ..., promo_codes })`. Hasil quote: `promo_applied`/`promo_rejected` (dinormalisasi huruf besar, ⊆ permintaan, tidak beririsan) dan baris `reward: true` (nominal ≤ 0; baris non-reward tetap ≥ 0). Field tambahan Odoo (mis. `reward_id`) tidak diteruskan.
+- Blok `channel` katalog + `brand_code` (§11.3). API key kanal berhifen: `ODOO_API_KEY_ONLINE_RTL_GL_FILE` / secret `odoo_api_key_online_rtl_gl`; nama env/path hanya diturunkan dari kode yang lolos regex §10.2 (tanpa traversal).
 
 Risiko: R-T10 (saga), R-S03 (Odoo publik — dicegah), R-T15 (API key kedaluwarsa → `efn_online_odoo_auth_failures_total`).
 

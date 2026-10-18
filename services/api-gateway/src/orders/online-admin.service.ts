@@ -73,7 +73,8 @@ function committedOf(refunds: readonly RefundRow[], exceptId?: string): number {
 export function estimateLinesAmount(part: PartRow, lines: readonly QuoteLineIn[]): number {
   let total = 0;
   for (const l of lines) {
-    const orig = part.lines.find((x) => x.product_id === l.product_id);
+    // G19: baris reward promo (harga ≤ 0) bukan baris yang bisa direfund; perkiraan memakai harga baris produk
+    const orig = part.lines.find((x) => x.product_id === l.product_id && x.reward !== true);
     if (!orig || l.qty < 1 || l.qty > orig.qty) throw new AdminError(`baris produk ${l.product_id} tidak ada di bagian atau qty melebihi pesanan`);
     total += orig.price_unit_incl * l.qty;
   }

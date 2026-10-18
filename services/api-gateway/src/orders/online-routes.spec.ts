@@ -81,8 +81,57 @@ async function boot(over: Record<string, string> = {}) {
   await app.init();
   await app.getHttpAdapter().getInstance().ready();
   const bearer = { authorization: `Bearer ${tokens.issue(MEMBER).accessToken}` };
-  return { app, config, orders, catalog, cart, events, bearer, clock };
+  return { app, config, orders, catalog, cart, quotes, events, bearer, clock };
 }
+
+describe('Route G19 (§11.2 promo, §11.3 brand) — Fastify nyata', () => {
+  it('GET /v1/catalog/channels?brand=: valid → diteruskan; tanpa → null; salah/berulang/kosong → 400 invalid_request', async () => {
+    const { app, catalog } = await boot();
+    expect((await app.inject({ method: 'GET', url: '/v1/catalog/channels?brand=BACHA' })).statusCode).toBe(200);
+    expect(catalog.channels).toHaveBeenLastCalledWith('BACHA');
+    expect((await app.inject({ method: 'GET', url: '/v1/catalog/channels' })).statusCode).toBe(200);
+    expect(catalog.channels).toHaveBeenLastCalledWith(null);
+    for (const q of ['brand=', 'brand=gl', 'brand=GL-1', 'brand=GL&brand=PB', 'brand=%2E%2E%2FGL', 'brand=ABCDEFGHIJK']) {
+      const r = await app.inject({ method: 'GET', url: `/v1/catalog/channels?${q}` });
+      expect(r.statusCode).toBe(400);
+      expect(r.json()).toEqual({ error: { code: 'invalid_request', message: expect.any(String) } });
+    }
+    expect(catalog.channels).toHaveBeenCalledTimes(2);
+    await app.close();
+  });
+
+  it('POST /v1/cart/quote: tanpa body / {} → []; promo_codes dinormalisasi; format salah → 400 invalid_request tanpa memanggil quote', async () => {
+    const { app, bearer, quotes } = await boot();
+    expect((await app.inject({ method: 'POST', url: '/v1/cart/quote', headers: bearer })).statusCode).toBe(200);
+    expect(quotes.quote).toHaveBeenLastCalledWith(MEMBER, []);
+    expect((await app.inject({ method: 'POST', url: '/v1/cart/quote', headers: bearer, payload: {} })).statusCode).toBe(200);
+    expect(quotes.quote).toHaveBeenLastCalledWith(MEMBER, []);
+    const ok = await app.inject({ method: 'POST', url: '/v1/cart/quote', headers: bearer, payload: { promo_codes: ['demo5k', 'DEMO5K', 'gajian'] } });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.headers['cache-control']).toBe('no-store');
+    expect(quotes.quote).toHaveBeenLastCalledWith(MEMBER, ['DEMO5K', 'GAJIAN']);
+    const calls = quotes.quote.mock.calls.length;
+    for (const payload of [{ promo_codes: ['A', 'B', 'C', 'D'] }, { promo_codes: ['A B'] }, { promo_codes: 'A' }, { foo: 1 }]) {
+      const r = await app.inject({ method: 'POST', url: '/v1/cart/quote', headers: bearer, payload });
+      expect(r.statusCode).toBe(400);
+      expect(r.json()).toEqual({ error: { code: 'invalid_request', message: expect.any(String) } });
+    }
+    expect(quotes.quote.mock.calls.length).toBe(calls);
+    await app.close();
+  });
+
+  it('rate limit promo per member terpisah dari QUOTE → 429 rate_limited + Retry-After', async () => {
+    const { app, bearer, quotes } = await boot({ ONLINE_RL_PROMO_MEMBER_LIMIT: '1' });
+    expect((await app.inject({ method: 'POST', url: '/v1/cart/quote', headers: bearer, payload: { promo_codes: ['X1'] } })).statusCode).toBe(200);
+    const r = await app.inject({ method: 'POST', url: '/v1/cart/quote', headers: bearer, payload: { promo_codes: ['X2'] } });
+    expect(r.statusCode).toBe(429);
+    expect(r.json()).toMatchObject({ error: { code: 'rate_limited' } });
+    expect(r.headers['retry-after']).toBeDefined();
+    expect((await app.inject({ method: 'POST', url: '/v1/cart/quote', headers: bearer, payload: {} })).statusCode).toBe(200);
+    expect(quotes.quote).toHaveBeenCalledTimes(2);
+    await app.close();
+  });
+});
 
 describe('Route online (Fastify nyata, prefix /v1)', () => {
   it('katalog publik: tanpa login, Cache-Control public; gambar immutable image/jpeg; validasi query', async () => {
@@ -178,7 +227,7 @@ describe('Route online (Fastify nyata, prefix /v1)', () => {
   });
 
   it('R2: parameter URL online hanya id opak/enum/teks pencarian — tanpa PII', () => {
-    const allowedQuery = new Set(['channel', 'category', 'q', 'cursor', 'limit', 'size', 'outlet', 'ids']);
+    const allowedQuery = new Set(['channel', 'category', 'q', 'cursor', 'limit', 'size', 'outlet', 'ids', 'brand']);
     const allowedParam = new Set(['product_id', 'image_sha', 'order_id']);
     for (const ctrl of [CatalogController, CartController, OrdersController, OrderEventsController]) {
       for (const m of Object.getOwnPropertyNames(ctrl.prototype)) {

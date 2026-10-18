@@ -274,7 +274,9 @@ groups:
       # R-T15 (L-6; W-11 key 30 hari + rotasi otomatis): Odoo tidak mengekspos masa berlaku key lewat /json/2 ->
       # metrik textfile node-exporter ditulis scripts/host/efn-rotate-online-key (timer harian, rotasi saat sisa < 10 h):
       #   efn_odoo_api_key_expiry_timestamp_seconds / _active_keys / _rotation_last_run_ok /
-      #   _rotation_last_run_timestamp_seconds / _rotation_last_success_timestamp_seconds  {channel="RTL"}
+      #   _rotation_last_run_timestamp_seconds / _rotation_last_success_timestamp_seconds  {channel="RTL"|"RTL-GL"|...}
+      # G19 (docs/04 §11.3): satu deret per kanal; `--all` menandai last_run_ok=0 juga untuk kanal yang gagal sebelum
+      # sempat menulis metrik (secret tidak di-mount, user teknis bersama) -> EfnOnlineApiKeyRotationFailed per kanal.
       # Sisa < 7 hari = timer sudah gagal >= 3 hari berturut-turut (normal: rotasi di sisa 10 hari).
       - alert: EfnOnlineApiKeyExpiringSoon
         expr: min by (channel) (efn_odoo_api_key_expiry_timestamp_seconds) - time() < 7 * 86400
@@ -326,7 +328,7 @@ groups:
           team: ops
         annotations:
           summary: "Timer rotasi API key kanal {{ $labels.channel }} tidak berjalan > 2 hari"
-          description: "systemctl status efn-rotate-online-key@{{ $labels.channel }}.timer; journalctl -u efn-rotate-online-key@{{ $labels.channel }}."
+          description: "G19: systemctl status efn-rotate-online-key.timer (semua kanal, --all) atau efn-rotate-online-key@{{ $labels.channel }}.timer; kanal masih di CHANNELS/ONLINE_CHANNELS? Kanal yang sengaja dihentikan: hapus /var/lib/efn/online-key/<kanal>.* (runbook)."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/odoo-online-api-key.md#rotasi-gagal
       # Lebih dari satu key aktif setelah overlap (1 jam) + cabut tertunda harian = kredensial lama masih sah.
       - alert: EfnOnlineApiKeyExtraKeys

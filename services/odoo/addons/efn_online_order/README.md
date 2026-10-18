@@ -4,12 +4,16 @@
 > internet dan tanpa toko online bawaan Odoo. BFF memanggil 10 fungsi khusus; Odoo menghitung harga & pajak,
 > membuat pesanan penjualan per PT, membuat faktur saat dibayar, dan memberi kabar status (siap/diambil/batal)
 > ke BFF dengan pesan bertanda tangan. Kode ambil pelanggan hanya disimpan sebagai hash. Semua angka (batas bayar
-> 25 menit, batas jumlah, pembulatan) adalah konfigurasi kanal, bukan kode.
+> 70 menit, batas jumlah, pembulatan) adalah konfigurasi kanal, bukan kode. Sejak G19 pesanan online bisa
+> **mencadangkan stok** sejak checkout, menerima **kode promo** (promo otomatis per brand ikut dihitung Odoo), dan
+> setiap kanal punya **kode brand**.
 
-- Versi `19.0.1.0.0`, LGPL-3, `depends`: `sale_stock`, `point_of_sale` (hanya `pos.category`), `mail`, `efn_core`.
+- Versi `19.0.1.2.0`, LGPL-3, `depends`: `sale_stock`, `sale_loyalty` (CE, mesin promo E-36; baru di 19.0.1.2.0 —
+  upgrade memasangnya bila belum), `point_of_sale` (hanya `pos.category`), `mail`, `efn_core`.
   Tanpa `website*`, `delivery`, `payment_*`, tanpa modul pihak ketiga (ADR-031; `check-odoo-deps.sh`).
-- Kontrak: `docs/04_SERVICE_CONTRACTS.md` §10 (v5.0) — **delta §10.4.4 + keputusan L-1..L-7 menang atas
-  `docs/08` §8.3**. Fit-gap: `docs/08` §8 (F-55..F-73).
+- Kontrak: `docs/04_SERVICE_CONTRACTS.md` §10 (v5.0) + **§11 (v6.0, G19) yang menang atas §10 dan docs/08**;
+  delta §10.4.4 + keputusan L-1..L-7 menang atas `docs/08` §8.3. Fit-gap: `docs/08` §8 (F-55..F-73), §10.1-§10.3
+  (E-35, E-36, E-37a). Keputusan lead G19: L-27, L-28, L-29, L-34, L-35, L-37.
 - ADR: ADR-034 (*Proposed*, kanal = BFF + `/json/2` terfilter), ADR-019 (*Proposed* + catatan revisi; dana titipan
   A1), ADR-026 (provider `mock`), ADR-027 (pajak dari Odoo, tanpa tarif di kode), ADR-029 (tanpa PII), ADR-024
   (kredensial per PT), ADR-031. Risiko: R-T10 (saga), R-O05 (refund per SO), R-L03 (pajak per PT), R-T15 (key
@@ -17,10 +21,58 @@
 - Referensi desain (tidak disalin, tidak di-WebFetch): pola internal `efn_pos_loyalty_ledger` (outbox) dan
   `efn_pos_payment_gateway`; OCA/sale-workflow `sale_order_type` hanya konsep "kanal = record konfigurasi".
 
+## G19 (19.0.1.2.0) — reservasi stok, promo online, kanal per brand
+Risiko: R-T10 (saga), R-O05 (refund per SO), R-B06 (promo bocor lintas kanal/POS), R-T14 (multi-domain brand),
+R-T15 (key per kanal). ADR: ADR-020 (poin Odoo tidak dipakai), ADR-019, ADR-034, ADR-031.
+
+**E-35 reservasi saat place** (`stock_hold_mode='confirm'`, L-27). `efn_online_place`: SO dibuat → promo diterapkan →
+`quote_hash` dicocokkan → `action_confirm` di savepoint (`CONFIRM_SCOPE`, total berubah/kupon ditolak →
+`price_changed`) → semua move storable kepala rantai wajib `assigned` (dicoba `_action_assign` sekali). Kurang →
+**seluruh savepoint place di-rollback** + `efn_online:out_of_stock` (tidak ada `efn.online.order`/SO/reservasi/kupon
+terpakai). `mark_paid` untuk SO yang sudah `sale`: cek move masih `assigned` (bukan `free_qty`), dicabut POS →
+`_action_assign`, tetap kurang → `stock_short` + `short_lines` (`available` = qty yang masih tercadang) → alur
+kompensasi lama (cancel `stock_short` membatalkan SO `sale` + melepas reservasi). Konfirmasi ulang dilewati; total
+SO ≠ total place → `review`. `action_efn_ready` menandai move tercadang `picked=True` (`_free_reservation` tidak
+mencabut baris picked); serah terima menandai semua move picked sebelum validasi (tanpa backorder terpisah).
+Kedaluwarsa/batal = cron/alur lama (`_action_cancel` melepas reservasi + mengembalikan kupon). Default
+`payment_timeout_minutes` **70**; kanal lama mempertahankan nilai tersimpan. Mode `none` tidak berubah.
+
+**E-36 promo online** (L-28, L-34, L-35). `efn_online_quote(..., promo_codes=None)` dan `efn_online_place` payload
+`promo_codes` opsional (≤ 3, `^[A-Za-z0-9_-]{1,40}$`, huruf besar, duplikat dibuang; masuk `payload_sha256` hanya
+bila tidak kosong). Program yang berlaku = `sale_ok` + tipe online + company kanal + `pricelist_ids` ∋ pricelist
+kanal + bukan `efn_requires_otp` + bukan `portal_visible` (program tanpa pricelist TIDAK berlaku walau standar
+`sale_loyalty` menganggapnya global). Tanpa program → `sale.order.new()` (perilaku lama). Dengan program → SO nyata
+di savepoint yang selalu di-rollback (nomor SO bolong diterima). Urutan: `_update_programs_and_rewards` → tiap kode
+(savepoint; kode dicocokkan case-insensitive ke `loyalty.rule.code`/`loyalty.card.code` milik program kanal —
+kupon buatan Odoo berhuruf kecil tetap terpakai; `_try_apply_code` → tepat satu reward non-multi per kupon →
+`_apply_program_reward`; galat apa pun → kode ditolak) → klaim reward otomatis deterministik (urutan `sequence, id`;
+lewati program > 1 reward, nominatif, produk multi, reward yang sudah ada) → hitung ulang. **L-35**: tagihan grup < Rp1,
+> 20 baris reward, atau baris reward positif → semua reward dari kode di-rollback, kode masuk `promo_rejected`.
+Kanal mode `none` → semua kode ditolak (promo otomatis tetap). Kode tidak pernah di-log asli (hanya 8 heks SHA-256).
+Error `FOR UPDATE NOWAIT` program (`sale_loyalty`) tidak ditangkap → Odoo mengulang request (kupon sekali pakai).
+Constraint `loyalty.program` (§11.2 no. 7) + default `sale_ok=False` + `post_init_hook`/post-migrate 19.0.1.2.0
+mematikan `sale_ok` program lama yang melanggar.
+
+**E-37a** `efn.online.channel.brand_code` (`^[A-Z][A-Z0-9]{1,9}$`, tidak unik, opsional) → blok `channel` katalog
+`brand_code` (`null` bila kosong). **L-37**: satu user teknis hanya untuk satu kanal (constraint `_check_efn_users`).
+
+Bentuk respons json2 (aditif): quote per grup + `promo_applied: [str]`, `promo_rejected: [str]` (selalu ada;
+gabungan = `promo_codes` ternormalisasi, tidak beririsan); baris reward di `lines[]` membawa `reward: true` (baris
+biasa tanpa kunci `reward`), `name` = nama program, `subtotal_incl ≤ 0`, `available: true`. `quote_hash` memuat kode
+terpakai (urut) + `reward_id` per baris reward hanya bila ada (tanpa promo hash sama dengan 19.0.1.1.0). Place:
+bentuk sama; mode confirm → SO `sale` sejak place.
+
+Referensi desain (tidak disalin): `website_sale_loyalty` (CE 19.0, `_auto_apply_rewards`, `_try_pending_coupon`) —
+pola klaim otomatis ditulis ulang; tidak ada kode OCA/Cybrosys.
+
+Uji manual G19: Konfigurasi → Kanal online → *Reservasi saat place*; buat program *Promo Code* `sale_ok` dengan
+pricelist kanal; quote `promo_codes` lewat smoke `SMOKE10` (`scripts/smoke/odoo_online_smoke.py setup`); place →
+Inventory menampilkan picking `Ready`; jual barang yang sama di POS → bayar → `stock_short`; tandai siap → move picked.
+
 ## Model
 | Model | Isi |
 |---|---|
-| `efn.online.channel` | kanal per PT/brand (`code` unik, pricelist, partner generik tanpa HP/email/NPWP, tim, `cash_rounding_id`, `journal_titipan_id`, cek stok `free_qty` + buffer + ambang "low", `payment_timeout_minutes` 25, batas baris/qty/nominal, `invoice_on_paid`, `user_ids` user teknis [hanya `base.group_system`], `pickup_max_attempts` 5, `pickup_reminder_hours` 48). Delivery & reservasi stok ditolak constraint (belum didukung). |
+| `efn.online.channel` | kanal per PT/brand (`code` unik, pricelist, partner generik tanpa HP/email/NPWP, tim, `cash_rounding_id`, `journal_titipan_id`, cek stok `free_qty` + buffer + ambang "low", `payment_timeout_minutes` 70 (G19), `stock_hold_mode` none/confirm, `brand_code`, batas baris/qty/nominal, `invoice_on_paid`, `user_ids` user teknis [hanya `base.group_system`; satu user = satu kanal, L-37], `pickup_max_attempts` 5, `pickup_reminder_hours` 48). Delivery ditolak constraint (belum didukung). |
 | `efn.online.outlet` | outlet per kanal (`code` unik per kanal, gudang, fiscal position outlet — wajib bila kanal `require_outlet_fiscal_position`, tidak boleh auto-apply). |
 | `efn.online.order` | satu bagian = satu SO: refs BFF (`platform_order_ref`=part_id, `checkout_ref`=order_id), `idempotency_key` + `payload_sha256` + `quote_hash`, state `placed/paid/confirmed/stock_short/ready/picked_up/cancelled/review`, nominal, `pickup_code_hash` (pbkdf2-sha512), `event_seq`. Tanpa partner/HP/nama/alamat. |
 | `efn.online.refund` | refund per order: nota kredit standar (reversal faktur + qty disesuaikan), kumulatif ≤ dibayar, `refund_ref` UUID, settle → pembayaran keluar jurnal titipan. |
@@ -134,7 +186,14 @@ Uji manual: Penjualan → Pesanan → **Pesanan online** (filter "Perlu disiapka
   catatan SEC-58); status HTTP per exception json2 19.0 [B].
 - Dua place paralel di dua cursor nyata tidak diuji (TransactionCase); jalur UniqueViolation → `ConcurrencyError`
   diuji dengan simulasi.
-- `stock_hold_mode=confirm` (reservasi) dan delivery: ditolak constraint (Q-ON3/Q-ON4).
+- Delivery: ditolak constraint (Q-ON3). Reservasi (`confirm`) didukung sejak 19.0.1.2.0; kasir POS tetap bisa
+  menjual stok tercadang sampai pesanan "siap" (risiko diterima L-27, SOP Q-F19-2).
+- G19 [B]: perilaku `sale_loyalty` 19.0 diverifikasi dari source (WebFetch), bukan runtime: penghitungan
+  `total_order_count` (kuota), pengembalian poin kupon saat batal, persaingan dua diskon global (kode + otomatis —
+  kode tercatat `applied` walau reward-nya diganti diskon global yang lebih baik), dan `_free_reservation` saat
+  penyesuaian inventaris. Refund parsial per baris pada SO berpromo tidak mengalokasikan diskon order ke baris.
+  Constraint opsional "batas bayar ≥ parameter BFF + 10" (docs/08 §10.1 no. 5) tidak dibuat. Kanal F&B dengan
+  promo otomatis + PB1 exclude belum diuji (fixture memakai pajak exclude PPN uji).
 - Refund `restock`: hanya aktivitas ke staf gudang (retur picking standar manual). Pembulatan per nota kredit parsial
   bisa membuat Σ refund melebihi porsi Rp1 → ditolak `amount_mismatch` [B].
 - `review` diselesaikan lewat BFF (`efn_online_cancel reason=review`) atau admin; tidak ada tombol "lanjutkan" di

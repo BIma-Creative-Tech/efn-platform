@@ -155,10 +155,15 @@ check_compose() {
     fi
   fi
   # 6) Least privilege secret online (docs/04 §10.10): API key Odoo kanal hanya BFF; HMAC event hanya Odoo + BFF.
+  #    G19: SEMUA secret odoo_api_key_online_* yang ter-render (kanal per brand, §11.3) + kunci PoC PII Odoo
+  #    odoo_pii_* hanya service odoo (ADR-036 K-36-3; dev).
   local sec allowed
-  for sec in odoo_api_key_online_rtl odoo_api_key_online_fnb odoo_online_event_hmac; do
+  local -a secs
+  mapfile -t secs < <(jq -r '.secrets // {} | keys[] | select(test("^(odoo_api_key_online_[a-z0-9_]+|odoo_pii_[a-z0-9_]+)$"))' <<< "$json")
+  for sec in odoo_api_key_online_rtl odoo_online_event_hmac "${secs[@]}"; do
     allowed='["api-gateway"]'
     [[ "$sec" == "odoo_online_event_hmac" ]] && allowed='["api-gateway","odoo"]'
+    [[ "$sec" == odoo_pii_* ]] && allowed='["odoo"]'
     jq -e --arg s "$sec" --argjson ok "$allowed" '
         [.services | to_entries[] | select([.value.secrets[]? | (.source // .)] | index($s) != null) | .key]
         | (. - $ok) | length == 0' <<< "$json" > /dev/null \
@@ -241,6 +246,12 @@ case "$MODE" in
   all)
     check_compose dev -f docker-compose.yml -f docker-compose.dev.yml
     check_compose prod -f docker-compose.yml -f docker-compose.prod.yml
+    # G19: render prod + SEMUA overlay kanal online (secret kanal hanya ter-render bila di-mount) -> cek least privilege
+    online_overlays=()
+    for f in "$COMPOSE_DIR"/docker-compose.online-*.yml; do
+      [[ -f "$f" ]] && online_overlays+=(-f "$(basename -- "$f")")
+    done
+    check_compose prod-online -f docker-compose.yml -f docker-compose.prod.yml "${online_overlays[@]}"
     check_files
     ;;
   *) echo "pemakaian: $0 [all|files]" >&2; exit 2 ;;

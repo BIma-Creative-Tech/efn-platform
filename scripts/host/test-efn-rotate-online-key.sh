@@ -9,6 +9,10 @@
 # Docker palsu: `compose config/ps/up` (2 replika BFF + 1 sidecar network_mode), `exec <odoo> odoo shell` = penyimpanan
 # key di /tmp/fk/keys.db (id exp nama key dicabut), `exec <bff> node` = gateway: 200 bila key yang TERPASANG saat
 # recreate terakhir ada di db, belum dicabut, dan tidak ditandai rusak; selain itu 401.
+# G19 (kasus 50-84): kanal berhifen (RTL-GL -> secret/user/state rtl_gl), validasi kode kanal (traversal/injeksi),
+# --all (CHANNELS / fallback ONLINE_CHANNELS .env, kegagalan per kanal + metrik, satu overlap, kunci host, idempoten),
+# --no-wait, --bootstrap (overlay sementara), user teknis bersama ditolak; blok Python `odoo shell` dijalankan nyata
+# terhadap env Odoo palsu (precheck user_shared / user_not_in_channel / user_missing / user_privileged).
 # Yang TIDAK diuji di sini: Odoo/gateway/BFF sungguhan (uji nyata di stack dev: runbook odoo-online-api-key.md §2),
 # systemd, journald asli.
 set -euo pipefail
@@ -27,23 +31,34 @@ install -d -m 0755 /opt/efn/compose /etc/efn /var/lib/efn/node-exporter
 install -d -o root -g efn-superadmin -m 0750 /opt/efn/secrets
 printf 'docker-compose.yml\ndocker-compose.prod.yml\ndocker-compose.host.yml\n' > /opt/efn/compose/.efn-compose-files
 for f in docker-compose.yml docker-compose.prod.yml docker-compose.host.yml; do echo "name: efn" > "/opt/efn/compose/$f"; done
+# G19: overlay kanal brand untuk --bootstrap (RTL-BACHA sengaja TIDAK ada -> kasus overlay hilang)
+echo "services: {}" > /opt/efn/compose/docker-compose.online-fnb-bacha.yml
 SECRET=/opt/efn/secrets/odoo_api_key_online_rtl.txt
+SEC_GL=/opt/efn/secrets/odoo_api_key_online_rtl_gl.txt
+SEC_FB=/opt/efn/secrets/odoo_api_key_online_fnb_bacha.txt
 
+# Docker palsu G19: secret RTL + RTL-GL di-mount api-gateway (deploy dengan ONLINE_CHANNELS=RTL,RTL-GL); FNB-BACHA hanya
+# bila overlay docker-compose.online-fnb-bacha.yml ikut `-f` (--bootstrap); FNB-PB tidak pernah (kanal belum di-deploy).
+# Key per user teknis: efn_online_rtl -> /tmp/fk/keys.db (kasus lama), lainnya -> /tmp/fk/keys.<login>.db.
 cat > /usr/local/bin/docker <<'EOF'
 #!/usr/bin/env bash
 # docker palsu (lihat header test)
 FK=/tmp/fk
 cmd="$1"; shift
 if [[ "$cmd" == compose ]]; then
-  args=(); while (($#)); do
-    case "$1" in --project-name|--project-directory|-f) shift 2 ;; *) args+=("$1"); shift ;; esac
+  args=(); files=(); while (($#)); do
+    case "$1" in --project-name|--project-directory) shift 2 ;; -f) files+=("$2"); shift 2 ;; *) args+=("$1"); shift ;; esac
   done
   set -- "${args[@]}"
   sub="$1"; shift
+  fb=0; for f in "${files[@]}"; do [[ "$f" == */docker-compose.online-fnb-bacha.yml ]] && fb=1; done
   case "$sub" in
     config)
-      jq -nc --arg f /opt/efn/secrets/odoo_api_key_online_rtl.txt '{secrets:{odoo_api_key_online_rtl:{file:$f}},
-        services:{"api-gateway":{secrets:[{source:"odoo_api_key_online_rtl"},{source:"efn_ca_crt"}]},
+      jq -nc --argjson fb "$fb" '{secrets:({odoo_api_key_online_rtl:{file:"/opt/efn/secrets/odoo_api_key_online_rtl.txt"},
+                   odoo_api_key_online_rtl_gl:{file:"/opt/efn/secrets/odoo_api_key_online_rtl_gl.txt"}}
+                 + (if $fb == 1 then {odoo_api_key_online_fnb_bacha:{file:"/opt/efn/secrets/odoo_api_key_online_fnb_bacha.txt"}} else {} end)),
+        services:{"api-gateway":{secrets:([{source:"odoo_api_key_online_rtl"},{source:"odoo_api_key_online_rtl_gl"},{source:"efn_ca_crt"}]
+                    + (if $fb == 1 then [{source:"odoo_api_key_online_fnb_bacha"}] else [] end))},
                   "bff-tls":{network_mode:"service:api-gateway"}, odoo:{secrets:[{source:"odoo_online_event_hmac"}]},
                   "superapp-web":{}}}' ;;
     ps)
@@ -57,7 +72,8 @@ if [[ "$cmd" == compose ]]; then
         h=healthy; [[ -e $FK/unhealthy ]] && h=unhealthy
         for s in "$@"; do printf '{"Service":"%s","State":"running","Health":"%s"}\n' "$s" "$h"; done
       fi ;;
-    up) printf '%s\n' "$*" >> $FK/up.log; cp /opt/efn/secrets/odoo_api_key_online_rtl.txt $FK/mounted ;;
+    up) printf '%s\n' "$*" >> $FK/up.log; printf '%s\n' "${files[@]}" >> $FK/files.log
+        for s in /opt/efn/secrets/odoo_api_key_online_*.txt; do cp "$s" "$FK/mounted.$(basename "$s" .txt)"; done ;;
     *) exit 1 ;;
   esac
   exit 0
@@ -72,7 +88,10 @@ echo "$cid $*" | cut -c1-40 >> $FK/exec.log
 if [[ "$cid" == aaaaaaaaaaaa ]]; then           # odoo shell
   cat > /dev/null
   [[ -e $FK/odoo-err ]] && { echo "EFN_ROT ERR $(cat $FK/odoo-err)"; echo "Traceback: kunci 0123456789abcdef0123456789abcdef01234567" >&2; exit 0; }
-  db=$FK/keys.db; touch $db
+  login="${E[EFN_LOGIN]}"; echo "$login ${E[EFN_CH]:-}" >> $FK/odoo-ch.log
+  [[ -e $FK/odoo-err.$login ]] && { echo "EFN_ROT ERR $(cat "$FK/odoo-err.$login")"; exit 0; }
+  db=$FK/keys.db; [[ "$login" == efn_online_rtl ]] || db=$FK/keys.$login.db
+  touch $db
   case "${E[EFN_OP]}" in
     create)
       [[ -e $FK/fail-create ]] && { echo "EFN_ROT ERR ValidationError"; exit 0; }
@@ -101,9 +120,10 @@ if [[ "$cid" == aaaaaaaaaaaa ]]; then           # odoo shell
   echo "EFN_ROT OK"; exit 0
 fi
 # BFF: node -e <js> -> status gateway
-if [[ "${E[EFN_KEY_STDIN]:-}" == 1 ]]; then k=$(cat); else k=$(cat $FK/mounted 2> /dev/null); fi
+lc=$(tr 'A-Z-' 'a-z_' <<< "${E[EFN_CH]:-RTL}")
+if [[ "${E[EFN_KEY_STDIN]:-}" == 1 ]]; then k=$(cat); else k=$(cat "$FK/mounted.odoo_api_key_online_$lc" 2> /dev/null); fi
 st=401
-if [[ "$k" =~ ^[0-9a-f]{40}$ ]] && grep -q " $k 0$" $FK/keys.db 2> /dev/null && ! grep -qx "$k" $FK/bad 2> /dev/null; then st=200; fi
+if [[ "$k" =~ ^[0-9a-f]{40}$ ]] && cat $FK/keys*.db 2> /dev/null | grep -q " $k 0$" && ! grep -qx "$k" $FK/bad 2> /dev/null; then st=200; fi
 echo "EFN_VERIFY $st deny=0"
 EOF
 cat > /usr/local/bin/logger <<'EOF'
@@ -122,8 +142,9 @@ ok()  { echo "PASS $1"; PASS=$((PASS + 1)); }
 bad() { echo "FAIL $1 :: rc=$RC :: $(tail -n3 <<< "$OUT" | tr '\n' ' ') :: $(tail -n4 /tmp/journal.log 2> /dev/null | tr '\n' '|')"; FAIL=$((FAIL + 1)); }
 run() { set +e; OUT=$(env -i PATH=/usr/bin:/bin "$@" 2>&1); RC=$?; set -e; ALL_OUT+="$OUT"$'\n'; }
 rot() { run "$W" --channel=RTL "$@"; }
-fresh() { rm -rf /tmp/fk /var/lib/efn/online-key /var/lib/efn/node-exporter/*; mkdir -p /tmp/fk; : > /tmp/fk/keys.db
-  printf 'disabled' > "$SECRET"; chmod 0444 "$SECRET"; : > /tmp/journal.log; conf OVERLAP_SECONDS=0; }
+fresh() { rm -rf /tmp/fk /var/lib/efn/online-key /var/lib/efn/node-exporter/* /opt/efn/compose/.env; mkdir -p /tmp/fk; : > /tmp/fk/keys.db
+  for s in "$SECRET" "$SEC_GL" "$SEC_FB"; do printf 'disabled' > "$s"; chmod 0444 "$s"; done
+  : > /tmp/journal.log; conf OVERLAP_SECONDS=0; }
 active() { awk '$5 == 0' /tmp/fk/keys.db | wc -l; }
 key_of() { awk -v i="$1" '$1 == i { print $4 }' /tmp/fk/keys.db; }
 metric() { sed -nE "s/^efn_odoo_api_key_$1\{channel=\"RTL\"\} ([0-9]+)$/\1/p" /var/lib/efn/node-exporter/efn_odoo_api_key.prom; }
@@ -261,6 +282,190 @@ if [[ $RC -eq 0 ]] && awk '$1==9 {exit !($5==1)}' /tmp/fk/keys.db; then ok "47 k
 : > /tmp/journal.log; rot --force
 if [[ $RC -eq 0 ]] && [[ ! -e /proc/$$/fd/6 ]] && flock -n /run/efn/deploy.lock true; then
   ok "48 rotasi sukses melepas kunci host (deploy berikutnya tidak tertahan)"; else bad "48 kunci tidak dilepas"; fi
+conf OVERLAP_SECONDS=0
+
+# ── 11c. G19 (docs/04 §11.3): kanal berhifen, --all, --no-wait, --bootstrap, user teknis bersama ─────────────────
+GLDB=/tmp/fk/keys.efn_online_rtl_gl.db
+FBDB=/tmp/fk/keys.efn_online_fnb_bacha.db
+active_in() { awk '$5 == 0' "$1" 2> /dev/null | wc -l; }
+key_in() { awk -v i="$2" '$1 == i { print $4 }' "$1"; }
+metric_ch() { sed -nE "s/^efn_odoo_api_key_$1\{channel=\"$2\"\} ([0-9]+)$/\1/p" /var/lib/efn/node-exporter/efn_odoo_api_key.prom; }
+pending_of() { sed -nE 's/^PENDING_AFTER=([0-9]+)$/\1/p' "/var/lib/efn/online-key/$1.state"; }
+
+fresh; run "$W" --channel=RTL-GL
+if [[ $RC -eq 0 && "$(cat "$SEC_GL")" == "$(key_in "$GLDB" 1)" && "$(active_in "$GLDB")" == 1 && "$(cat "$SECRET")" == disabled ]] \
+   && grep -q 'KEY BARU kanal=RTL-GL id=1 nama=efn-online-RTL-GL-' /tmp/journal.log && grep -qx 'efn_online_rtl_gl RTL-GL' /tmp/fk/odoo-ch.log; then
+  ok "50 kanal berhifen RTL-GL -> secret odoo_api_key_online_rtl_gl + user efn_online_rtl_gl; kanal RTL tidak disentuh"
+else bad "50 kanal berhifen"; fi
+if [[ -f /var/lib/efn/online-key/rtl_gl.state && "$(metric_ch active_keys RTL-GL)" == 1 && "$(metric_ch rotation_last_run_ok RTL-GL)" == 1 ]]; then
+  ok "51 state & metrik per kanal (rtl_gl.state, label channel=\"RTL-GL\")"; else bad "51 state per kanal"; fi
+
+: > /tmp/journal.log
+run "$W" --channel=RTL_GL;               expect_deny "52 kode kanal ber-underscore ditolak" "channel"
+run "$W" --channel=RTL/../GL;            expect_deny "53 kode kanal path traversal ditolak" "channel"
+# shellcheck disable=SC2016  # literal $(id) disengaja (uji injeksi)
+run "$W" '--channel=RTL-GL$(id)';        expect_deny "54 kode kanal berisi substitusi shell ditolak" "channel"
+run "$W" --channel=RTL-ABCDEFGHIJKLM;    expect_deny "55 kode kanal > 16 karakter ditolak" "channel"
+run "$W" --all;                          expect_deny "56 --all tanpa CHANNELS dan tanpa .env ditolak" "daftar kanal kosong"
+run "$W" --all --channel=RTL;            expect_deny "57 --all + --channel ditolak" "hanya boleh digabung"
+run "$W" --all --force;                  expect_deny "58 --all + --force ditolak" "hanya boleh digabung"
+conf OVERLAP_SECONDS=0 CHANNELS=RTL,../../etc; rot; expect_deny "59 CHANNELS berisi path ditolak" "CHANNELS"
+conf OVERLAP_SECONDS=0 CHANNELS=RTL,RTL;       rot; expect_deny "60 CHANNELS ganda ditolak" "CHANNELS"
+conf OVERLAP_SECONDS=0 CHANNELS=rtl;           rot; expect_deny "61 CHANNELS huruf kecil ditolak" "CHANNELS"
+
+# --all: RTL & RTL-GL (di-mount) + FNB-PB (belum di-deploy -> anak gagal sebelum menulis metrik)
+fresh; conf OVERLAP_SECONDS=2 CHANNELS=RTL,RTL-GL,FNB-PB; run "$W" --all
+if [[ $RC -eq 1 && "$(cat "$SECRET")" == "$(key_of 1)" && "$(cat "$SEC_GL")" == "$(key_in "$GLDB" 1)" ]] \
+   && grep -q 'HASIL --all kanal=RTL argumen=--no-wait rc=0' /tmp/journal.log \
+   && grep -q 'HASIL --all kanal=RTL-GL argumen=--no-wait rc=0' /tmp/journal.log \
+   && grep -q 'HASIL --all kanal=FNB-PB argumen=--no-wait rc=2' /tmp/journal.log; then
+  ok "62 --all: RTL + RTL-GL dipasang; FNB-PB gagal TANPA menghentikan kanal lain; rc 1"; else bad "62 --all"; fi
+if [[ "$(metric_ch rotation_last_run_ok FNB-PB)" == 0 && "$(metric_ch rotation_last_run_ok RTL)" == 1 \
+      && "$(metric_ch rotation_last_run_ok RTL-GL)" == 1 ]]; then
+  ok "63 metrik per kanal: FNB-PB last_run_ok 0 walau anak gagal sebelum menulis metrik (alert per kanal)"
+else OUT=$(cat /var/lib/efn/node-exporter/efn_odoo_api_key.prom); bad "63 metrik per kanal"; fi
+awk '{ $2 = '"$(( $(date +%s) + 5 * 86400 ))"'; print }' "$GLDB" > /tmp/fk/k && mv /tmp/fk/k "$GLDB"
+: > /tmp/journal.log; run "$W" --all
+if [[ $RC -eq 1 && "$(cat "$SEC_GL")" == "$(key_in "$GLDB" 2)" && "$(active_in "$GLDB")" == 1 && "$(cat "$SECRET")" == "$(key_of 1)" ]] \
+   && awk '$1==1 {exit !($5==1)}' "$GLDB" && grep -q 'TIDAK PERLU kanal=RTL id=1' /tmp/journal.log \
+   && grep -q -- '--all menunggu overlap' /tmp/journal.log && grep -q 'KEY LAMA DITOLAK kanal=RTL-GL status=401' /tmp/journal.log \
+   && [[ "$(pending_of rtl_gl)" == 0 ]]; then
+  ok "64 --all: hanya kanal yang perlu dirotasi; key lama RTL-GL dicabut setelah SATU overlap (401 terbukti)"
+else bad "64 --all overlap"; fi
+N_RTL=$(wc -l < /tmp/fk/keys.db); N_GL=$(wc -l < "$GLDB"); : > /tmp/journal.log; run "$W" --all
+if [[ $RC -eq 1 && "$(wc -l < /tmp/fk/keys.db)" == "$N_RTL" && "$(wc -l < "$GLDB")" == "$N_GL" ]] && ! grep -q 'menunggu overlap' /tmp/journal.log; then
+  ok "65 --all idempoten (run ulang: tidak ada key baru, tidak menunggu)"; else bad "65 idempoten"; fi
+conf OVERLAP_SECONDS=2 CHANNELS=RTL,RTL-GL; : > /tmp/journal.log; run "$W" --all
+if [[ $RC -eq 0 ]] && grep -q 'SELESAI --all kanal=RTL RTL-GL .* rc=0' /tmp/journal.log && ! grep -q 'kanal=FNB-PB' /tmp/journal.log; then
+  ok "66 kanal aktif = konfigurasi CHANNELS (FNB-PB dikeluarkan -> tidak dijalankan, rc 0)"; else bad "66 CHANNELS"; fi
+install -d -m 0700 /run/efn; exec 6> /run/efn/deploy.lock; flock -n 6
+awk '{ $2 = '"$(( $(date +%s) + 5 * 86400 ))"'; print }' "$GLDB" > /tmp/fk/k && mv /tmp/fk/k "$GLDB"
+conf OVERLAP_SECONDS=2 CHANNELS=RTL,RTL-GL HOST_LOCK_WAIT_SECONDS=10; N_GL=$(wc -l < "$GLDB"); : > /tmp/journal.log; run "$W" --all
+if [[ $RC -eq 1 && "$(wc -l < "$GLDB")" == "$N_GL" && "$(metric_ch rotation_last_run_ok RTL-GL)" == 0 && "$(metric_ch rotation_last_run_ok RTL)" == 1 ]] \
+   && grep -q 'dipegang deploy' /tmp/journal.log; then
+  ok "67 --all memakai kunci host bersama deploy per kanal (RTL-GL menunggu lalu gagal tanpa key baru; RTL tetap OK)"
+else bad "67 --all kunci host"; fi
+exec 6>&-
+run "$W" --all --status
+if [[ $RC -eq 0 ]] && grep -q '== kanal RTL ==' <<< "$OUT" && grep -q '== kanal RTL-GL ==' <<< "$OUT" && ! grep -qE '[0-9a-f]{40}' <<< "$OUT"; then
+  ok "68 --all --status: semua kanal, tanpa nilai key"; else bad "68 --all --status"; fi
+# Fallback daftar kanal = ONLINE_CHANNELS hasil deploy (.env 0640 root)
+conf OVERLAP_SECONDS=0; printf 'APP_ENV=production\nONLINE_CHANNELS=RTL-GL\n' > /opt/efn/compose/.env; chmod 0640 /opt/efn/compose/.env
+: > /tmp/journal.log; run "$W" --all --status
+if [[ $RC -eq 0 ]] && grep -q 'sumber=/opt/efn/compose/.env ONLINE_CHANNELS' /tmp/journal.log && grep -q '== kanal RTL-GL ==' <<< "$OUT" \
+   && ! grep -q '== kanal RTL ==' <<< "$OUT"; then
+  ok "69 CHANNELS kosong -> kanal dari ONLINE_CHANNELS .env deploy"; else bad "69 fallback .env"; fi
+chmod 0662 /opt/efn/compose/.env; run "$W" --all --status; expect_deny "70 .env dapat ditulis lainnya ditolak" "tidak dapat ditulis"
+printf 'ONLINE_CHANNELS=RTL,../x\n' > /opt/efn/compose/.env; chmod 0640 /opt/efn/compose/.env
+run "$W" --all --status;                 expect_deny "71 ONLINE_CHANNELS .env tidak valid ditolak (tanpa fallback diam-diam)" "ONLINE_CHANNELS tidak valid"
+rm -f /opt/efn/compose/.env
+
+# --no-wait (dipakai --all): rotasi tanpa sleep overlap, key lama tetap sah sampai cabut tertunda
+conf OVERLAP_SECONDS=3600; : > /tmp/journal.log; rot --force --no-wait
+if [[ $RC -eq 0 && "$(active)" == 2 && "$(pending_of rtl)" -gt "$(date +%s)" ]] && grep -q -- '(--no-wait)' /tmp/journal.log; then
+  ok "72 --no-wait: tanpa menunggu overlap, cabut tertunda tercatat di state"; else bad "72 --no-wait"; fi
+conf OVERLAP_SECONDS=0
+rot --status --no-wait;                  expect_deny "73 --status + --no-wait ditolak" "tidak bisa digabung"
+
+# --bootstrap: key pertama kanal yang belum ada di ONLINE_CHANNELS (overlay ikut sementara)
+run "$W" --channel=FNB-BACHA;            expect_deny "74 kanal belum di-deploy tanpa --bootstrap ditolak" "tidak didefinisikan compose"
+: > /tmp/fk/files.log; run "$W" --channel=FNB-BACHA --bootstrap
+if [[ $RC -eq 0 && "$(cat "$SEC_FB")" == "$(key_in "$FBDB" 1)" ]] && grep -q 'docker-compose.online-fnb-bacha.yml' /tmp/fk/files.log \
+   && grep -q 'VERIFIKASI OK kanal=FNB-BACHA' /tmp/journal.log; then
+  ok "75 --bootstrap: overlay kanal ikut di-mount sementara, key pertama terpasang & terverifikasi"; else bad "75 bootstrap"; fi
+: > /tmp/journal.log
+run "$W" --channel=FNB-BACHA --bootstrap; expect_deny "76 --bootstrap saat secret bukan placeholder ditolak" "hanya untuk key pertama"
+run "$W" --channel=RTL-BACHA --bootstrap; expect_deny "77 --bootstrap tanpa file overlay kanal ditolak" "overlay"
+# User teknis bersama beberapa kanal (data demo) -> Odoo shell menolak sebelum key dibuat (fail-closed)
+echo user_shared > /tmp/fk/odoo-err.efn_online_rtl_gl; N_GL=$(wc -l < "$GLDB"); : > /tmp/journal.log; run "$W" --channel=RTL-GL --force
+rm -f /tmp/fk/odoo-err.efn_online_rtl_gl
+if [[ $RC -eq 1 && "$(wc -l < "$GLDB")" == "$N_GL" ]] && grep -q 'odoo list: user_shared' /tmp/journal.log; then
+  ok "78 user_shared dari Odoo -> rc 1, tidak ada key dibuat"; else bad "78 user_shared"; fi
+
+# Logika Python odoo shell (precheck G19) dijalankan NYATA terhadap env Odoo palsu (bukan hanya grep)
+PYF=/tmp/efn-rot-py.py
+sed -n "/^read -r -d '' PY << 'PYEOF'/,/^PYEOF\$/p" "$W" | sed '1d;$d' > "$PYF"
+cat > /tmp/efn-fake-odoo.py <<'EOF'
+import json, os, sys
+SPEC = json.loads(os.environ["FAKE_SPEC"])
+USERS = SPEC.get("users", {})
+class O:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+class User(O):
+    def has_group(self, g):
+        return g in self.groups
+class Rec:
+    def __init__(self, items):
+        self._items = list(items)
+    def __bool__(self):
+        return bool(self._items)
+    def __iter__(self):
+        return iter(self._items)
+    @property
+    def ids(self):
+        return [i.id for i in self._items]
+    def mapped(self, f):
+        return [getattr(i, f) for i in self._items]
+    def __getattr__(self, name):
+        items = self.__dict__.get("_items", [])
+        if len(items) != 1:
+            raise AttributeError(name)
+        return getattr(items[0], name)
+def uid(login):
+    return USERS[login]["id"]
+class Model:
+    def __init__(self, name):
+        self.name = name
+    def sudo(self):
+        return self
+    def with_context(self, *a, **k):
+        return self
+    def search(self, dom, limit=None, order=None):
+        if self.name == "res.users":
+            u = USERS.get(dom[0][2])
+            return Rec([User(login=dom[0][2], **u)] if u else [])
+        if self.name == "efn.online.channel":
+            want = set(dom[0][2])
+            return Rec([O(code=c["code"]) for c in SPEC.get("channels", []) if want & {uid(x) for x in c["users"]}])
+        if self.name == "res.users.apikeys":
+            return Rec([O(id=k["id"], expiration_date=None, name=k["name"])
+                        for k in SPEC.get("keys", []) if uid(k["user"]) == dom[0][2]])
+        raise KeyError(self.name)
+class Cr:
+    def commit(self):
+        pass
+    def rollback(self):
+        pass
+class Env(dict):
+    cr = Cr()
+    def __missing__(self, key):
+        return Model(key)
+with open(sys.argv[1], encoding="utf-8") as fh:
+    code = compile(fh.read(), "efn-rotate-online-key:PY", "exec")
+exec(code, {"env": Env(), "__name__": "efn_rot"})
+EOF
+PYOUT=""
+pyrun() { set +e; PYOUT=$(env -i PATH=/usr/local/bin:/usr/bin:/bin EFN_OP=list EFN_LOGIN="$1" EFN_CH="$2" FAKE_SPEC="$3" \
+            python3 -I /tmp/efn-fake-odoo.py "$PYF" 2>&1); set -e; }
+pyok() { if grep -qx "$2" <<< "$PYOUT" && { [[ "$2" == 'EFN_ROT OK' ]] || ! grep -qx 'EFN_ROT OK' <<< "$PYOUT"; }; then ok "$1"
+         else OUT="$PYOUT"; bad "$1"; fi; }
+G='"groups":["efn_online_order.group_online_channel"]'
+pyrun efn_online_rtl_gl RTL-GL '{"users":{"efn_online_rtl_gl":{"id":7,"active":true,'"$G"'}},
+  "channels":[{"code":"RTL-GL","users":["efn_online_rtl_gl"]},{"code":"RTL","users":[]}],
+  "keys":[{"id":3,"user":"efn_online_rtl_gl","name":"efn-online-RTL-GL-x"}]}'
+pyok "79 python: user khusus satu kanal -> daftar key + OK" 'EFN_ROT OK'
+if grep -qx 'EFN_ROT KEY 3 0 efn-online-RTL-GL-x' <<< "$PYOUT"; then ok "80 python: baris KEY (id exp nama) sesuai format parser"; else OUT="$PYOUT"; bad "80 python KEY"; fi
+pyrun efn_online_rtl RTL '{"users":{"efn_online_rtl":{"id":5,"active":true,'"$G"'}},
+  "channels":[{"code":"RTL","users":["efn_online_rtl"]},{"code":"RTL-GL","users":["efn_online_rtl"]}]}'
+pyok "81 python: user teknis bersama RTL + RTL-GL (pola data demo) -> ERR user_shared" 'EFN_ROT ERR user_shared'
+pyrun efn_online_rtl RTL-GL '{"users":{"efn_online_rtl":{"id":5,"active":true,'"$G"'}},"channels":[{"code":"RTL","users":["efn_online_rtl"]}]}'
+pyok "82 python: user tidak terhubung ke kanal -> ERR user_not_in_channel" 'EFN_ROT ERR user_not_in_channel'
+pyrun efn_online_x RTL '{"users":{}}'
+pyok "83 python: user tidak ada -> ERR user_missing" 'EFN_ROT ERR user_missing'
+pyrun efn_online_rtl RTL '{"users":{"efn_online_rtl":{"id":5,"active":true,"groups":["efn_online_order.group_online_channel","base.group_system"]}},
+  "channels":[{"code":"RTL","users":["efn_online_rtl"]}]}'
+pyok "84 python: user teknis ber-hak admin -> ERR user_privileged" 'EFN_ROT ERR user_privileged'
 conf OVERLAP_SECONDS=0
 
 # ── 12. Penjaga independen: nilai key TIDAK PERNAH muncul di journald / keluaran ─────────────────────────────

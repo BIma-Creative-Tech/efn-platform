@@ -6,7 +6,7 @@ import { QUEUES } from '../common/amqp/queues';
 import { PiiCipher } from '../common/pii/crypto';
 import { CatalogService } from '../catalog/catalog.service';
 import { CartService } from '../cart/cart.service';
-import { QuoteService, StoredQuote } from '../cart/quote.service';
+import { QuoteService, StoredQuote, placeLines } from '../cart/quote.service';
 import { ODOO_ONLINE, OdooOnlineApi, PlaceResult } from '../odoo-rpc/odoo-online.types';
 import { OnlineErrors, mapOdooError } from '../odoo-rpc/online-errors';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
@@ -18,8 +18,12 @@ import { decryptPickupCode, encryptPickupCode, formatPickupCode, generatePickupC
 
 /** L-8 (§10.17): key opak dari route handler Next.js (`chk1_…`, 48 karakter); BFF hanya memeriksa bentuk. */
 export const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9_-]{16,128}$/;
-/** Selisih minimum `expires_at` SO Odoo terhadap batas bayar BFF (§10.3.5 no. 5). */
-const ODOO_EXPIRY_MARGIN_MS = 5 * 60_000;
+/**
+ * Selisih minimum `expires_at` SO Odoo terhadap batas bayar BFF (§10.3.5 no. 5, tetap berlaku di G19 §11.1).
+ * Default G19: BFF 3600 s + Odoo `payment_timeout_minutes` 70 → selisih ±10 menit (≥ 5). Odoo masih 25 sementara BFF
+ * sudah 3600 → checkout ditolak `503 online_unavailable` + anomali `odoo_expiry_too_short` (urutan aktivasi salah).
+ */
+export const ODOO_EXPIRY_MARGIN_MS = 5 * 60_000;
 
 export interface CheckoutInput {
   quoteId: string;
@@ -160,6 +164,7 @@ export class OrdersService {
             price_unit_incl: l.price_unit_incl,
             subtotal_incl: l.subtotal_incl,
             tax_labels: l.tax_labels,
+            ...(l.reward === true ? { reward: true as const } : {}), // G19 §11.2: baris reward tampil di status order
           })),
           tax_groups: g.tax_groups,
           amount_total: g.amount_total,
@@ -206,9 +211,11 @@ export class OrdersService {
           checkout_ref: orderId,
           outlet_code: part.outlet_code,
           fulfilment: part.fulfilment,
-          lines: g.lines.map((l) => ({ product_id: l.product_id, qty: l.qty })),
+          lines: placeLines(g), // hanya produk cart; baris reward dihitung ulang Odoo dari promo_codes
           quote_hash: g.quote_hash,
           pickup_code: code,
+          // G19 §11.2 no. 5: kode yang TERPAKAI di grup ini menurut quote tersimpan (bukan dari klien)
+          promo_codes: [...(g.promo_applied ?? [])],
         });
         results.set(part.id, res);
         await this.repo.updatePart(part.id, {

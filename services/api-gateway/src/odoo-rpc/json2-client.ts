@@ -301,8 +301,10 @@ export class Json2OdooOnlineClient implements OdooOnlineApi {
     const v = await this.call('image', channel, { channel_code: channel, tmpl_id: tmplId, size }, { timeoutMs: this.config.odooRpcImageTimeoutMs });
     return parseImage(v);
   }
-  async quote(channel: string, outlet: string, fulfilment: Fulfilment, lines: QuoteLineIn[]): Promise<QuoteResult> {
-    const v = await this.call('quote', channel, { channel_code: channel, outlet_code: outlet, fulfilment, lines }, {
+  async quote(channel: string, outlet: string, fulfilment: Fulfilment, lines: QuoteLineIn[], promoCodes: string[]): Promise<QuoteResult> {
+    // §11.2 no. 2: `promo_codes` selalu dikirim (eksplisit, `[]` bila tanpa kode) — bentuk argumen tetap untuk Odoo
+    const args = { channel_code: channel, outlet_code: outlet, fulfilment, lines, promo_codes: [...promoCodes] };
+    const v = await this.call('quote', channel, args, {
       timeoutMs: this.config.odooRpcTimeoutMs,
       deadlineMs: this.config.odooRpcTimeoutMs,
     });

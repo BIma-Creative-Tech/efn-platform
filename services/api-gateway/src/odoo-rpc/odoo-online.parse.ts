@@ -16,6 +16,7 @@ import {
   StockRow,
   TaxGroup,
 } from './odoo-online.types';
+import { PROMO_CODE_RE } from './promo-codes';
 
 /**
  * Validasi ketat hasil json2 (docs/04 §10.4.3). Odoo dipercaya untuk harga/pajak, tetapi BENTUK respons tetap diperiksa:
@@ -50,6 +51,23 @@ function num(v: unknown, what: string): number {
   if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1e12) bad(what);
   return v as number;
 }
+/** Nominal bertanda (baris reward boleh negatif, §11.2 no. 3). */
+function signedNum(v: unknown, what: string): number {
+  if (typeof v !== 'number' || !Number.isFinite(v) || Math.abs(v) > 1e12) bad(what);
+  return v as number;
+}
+/** Daftar kode promo hasil Odoo: string berbentuk kode, dinormalisasi huruf besar, unik. Kosong/`false` → []. */
+function promoList(v: unknown, what: string): string[] {
+  if (v === undefined || v === null || v === false) return [];
+  const out: string[] = [];
+  for (const x of arr(v, what, 20)) {
+    const s = str(x, what, 40);
+    if (!PROMO_CODE_RE.test(s)) bad(what);
+    const u = s.toUpperCase();
+    if (!out.includes(u)) out.push(u);
+  }
+  return out;
+}
 /** `amount_payable` / porsi / refund: bilangan bulat Rupiah. */
 export function rupiah(v: unknown, what: string): number {
   if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 0) bad(`${what} bukan bilangan bulat Rupiah`);
@@ -75,6 +93,8 @@ function date(v: unknown, what: string): Date | null {
 
 /** L-9 (§10.17): hex huruf kecil 40 (SHA-1 lampiran Odoo) atau 64 (SHA-256). */
 export const IMAGE_SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+/** G19 §11.3 no. 2 (E-37a): `efn.online.channel.brand_code`. */
+export const BRAND_CODE_RE = /^[A-Z][A-Z0-9]{1,9}$/;
 
 function parsePrice(v: unknown): CatalogPrice {
   const o = obj(v, 'price');
@@ -132,9 +152,13 @@ function parseChannel(v: unknown): CatalogChannelInfo | null {
   const f = o.fulfilment === undefined || o.fulfilment === null ? null : obj(o.fulfilment, 'channel.fulfilment');
   const code = str(o.code, 'channel.code', 16);
   if (!/^[A-Z][A-Z0-9-]{1,15}$/.test(code)) bad('channel.code');
+  // §11.3 no. 2: brand_code opsional (Char kosong Odoo = false); bila ada wajib cocok regex (constraint Odoo)
+  const brand = optStr(o.brand_code, 'channel.brand_code', 10);
+  if (brand !== null && brand !== '' && !BRAND_CODE_RE.test(brand)) bad('channel.brand_code');
   return {
     code,
     company_code: str(o.company_code, 'channel.company_code', 8),
+    brand_code: brand === null || brand === '' ? null : brand,
     name: str(o.name, 'channel.name', 128),
     currency: str(o.currency, 'channel.currency', 8),
     active: o.active === undefined ? true : bool(o.active, 'channel.active'),
@@ -188,15 +212,20 @@ export function parseQuote(v: unknown): QuoteResult {
   const lines: QuoteLine[] = arr(o.lines, 'quote.lines', 200).map((x) => {
     const l = obj(x, 'quote line');
     const qty = int(l.qty, 'quote.qty', 1);
-    const subtotal = num(l.subtotal_incl, 'subtotal_incl');
+    // §11.2 no. 3: baris reward (`reward: true`) boleh bernilai negatif, tetapi tidak pernah menambah tagihan (≤ 0)
+    const reward = l.reward === undefined || l.reward === null || l.reward === false ? false : bool(l.reward, 'reward');
+    const money = reward ? signedNum : num;
+    const subtotal = money(l.subtotal_incl, 'subtotal_incl');
+    if (reward && subtotal > 0) bad('reward.subtotal_incl > 0');
     return {
       product_id: int(l.product_id, 'quote.product_id', 1),
       name: optStr(l.name, 'quote.name', 256),
       qty,
-      price_unit_incl: l.price_unit_incl === undefined ? Math.round((subtotal / qty) * 100) / 100 : num(l.price_unit_incl, 'price_unit_incl'),
+      price_unit_incl: l.price_unit_incl === undefined ? Math.round((subtotal / qty) * 100) / 100 : money(l.price_unit_incl, 'price_unit_incl'),
       subtotal_incl: subtotal,
       tax_labels: labels(l.tax_labels, 'quote.tax_labels'),
       available: l.available === undefined ? true : bool(l.available, 'available'),
+      reward,
     };
   });
   let issues: QuoteIssue[];
@@ -208,8 +237,11 @@ export function parseQuote(v: unknown): QuoteResult {
       return { product_id: i.product_id === null || i.product_id === undefined || i.product_id === false ? null : int(i.product_id, 'issue.product_id', 1), code };
     });
   } else {
-    issues = lines.filter((l) => !l.available).map((l) => ({ product_id: l.product_id, code: 'out_of_stock' }));
+    issues = lines.filter((l) => !l.reward && !l.available).map((l) => ({ product_id: l.product_id, code: 'out_of_stock' }));
   }
+  const promoApplied = promoList(o.promo_applied, 'promo_applied');
+  const promoRejected = promoList(o.promo_rejected, 'promo_rejected');
+  if (promoApplied.some((c) => promoRejected.includes(c))) bad('promo_applied ∩ promo_rejected');
   return {
     company_code: optStr(o.company_code, 'company_code', 8),
     lines,
@@ -219,6 +251,8 @@ export function parseQuote(v: unknown): QuoteResult {
     quote_hash: str(o.quote_hash, 'quote_hash', 128),
     valid_until: date(o.valid_until, 'valid_until'),
     issues,
+    promo_applied: promoApplied,
+    promo_rejected: promoRejected,
   };
 }
 

@@ -883,3 +883,136 @@ Tanpa commit/push. Mengikuti kontrak BFF bf5c5f9: `KEY_RE` menerima `online:<uui
   - Test SEC-99 menyuntikkan `now` tetap (waktu run CI yang gagal).
   - Test baru menguji batas ±1 detik di 23:59:59/00:00 WIB dan 23:59:59/00:00 UTC, serta prioritas `ready_at` di atas `paid_at`.
 - **Validasi:** suite modul online (efn_online_order, efn_setup_online, efn_online_pos_sale) 85 test, 0 failed; ruff lolos.
+
+---
+
+# G19: E-35 reservasi, E-36 promo, E-37a brand_code, L-34/L-35/L-37 (18 Okt 2026)
+
+Branch `chore/wave-19`, tanpa commit. Kontrak docs/04 §11 (menang atas §10 dan docs/08 §10).
+**Status: ditulis tanpa shell. Test BELUM dijalankan di Odoo 19 nyata.** Lead menjalankan suite `efn` di container.
+
+## Modul & file
+- `efn_online_order` 19.0.1.1.0 → **19.0.1.2.0**.
+  - `depends` + `sale_loyalty` (CE).
+  - `post_init_hook` (`hooks.py`) + `migrations/19.0.1.2.0/post-migrate.py`: `sale_ok=False` untuk program loyalty lama yang melanggar aturan online.
+  - `models/efn_online_common.py`: regex kode promo/brand, `promo_codes_payload`, `promo_code_ref`, `like_escape`.
+  - `models/efn_online_channel.py`: `brand_code`, default batas bayar 70, mode `confirm` diizinkan, mesin promo (quote dengan SO di savepoint yang di-rollback), L-35, L-37.
+  - `models/efn_online_order.py`: place dalam satu savepoint + konfirmasi + reservasi penuh, `mark_paid` berbasis reservasi, `picked` saat siap, serah terima menandai semua move picked.
+  - `models/loyalty_program.py` (baru): constraint §11.2 no. 7, default `sale_ok=False`.
+  - Lainnya: `views/efn_online_channel_views.xml`, `README.md`.
+  - Test: `tests/common.py` (helper `promo_codes`), `tests/test_online_api.py` (timeout 69–70, `brand_code` di blok channel, program #37 kini wajib pricelist dan reward ikut diklaim), `tests/test_online_g19.py` (baru).
+- `efn_setup_online` 19.0.1.2.0 → **19.0.1.3.0**.
+  - Demo: kanal ritel `confirm`, `brand_code`, 4 user teknis per kanal (L-37).
+  - Test dan README diperbarui.
+- `scripts/smoke/odoo_online_smoke.py`: 70 menit, `confirm`, promo `SMOKE10`, user dilepas dari kanal lain (L-37). `describe` ditambah `reserved`, `reserved_picked`, `reward_lines`.
+
+## Perubahan respons json2 (untuk BFF)
+- **`efn_online_quote(channel_code, outlet_code, fulfilment, lines, promo_codes=None)`**:
+  - `promo_applied: [str]` dan `promo_rejected: [str]` selalu ada, berhuruf besar, tidak beririsan, gabungannya = kode ternormalisasi yang diminta.
+  - Baris reward di `lines[]`: kunci yang sama dengan baris biasa ditambah `"reward": true`. `name` = nama program, `subtotal_incl ≤ 0`, `available: true`, maksimal 20 per grup. Baris biasa **tanpa** kunci `reward`.
+  - `quote_hash` berubah hanya bila ada promo (kode urut + `reward_id`).
+- **`efn_online_place`**: payload `promo_codes` opsional, masuk `payload_sha256` hanya bila tidak kosong. Bentuk hasil tidak berubah.
+  - Mode `confirm`: SO `sale` sejak place.
+  - Reservasi tidak penuh menghasilkan error **`efn_online:out_of_stock`** (UserError, bukan `issues`). Kode yang sama dengan G17; BFF sekarang memetakannya ke `409 out_of_stock`. Bila §11.1 menghendaki `cart_has_issues`, pemetaannya diubah di BFF.
+  - Promo berakhir, kuota habis, atau kupon sudah terpakai menghasilkan `price_changed`.
+- **`efn_online_mark_paid`**: bentuk tidak berubah. `short_lines.available` = qty yang masih tercadang.
+- **`efn_online_catalog`**: `channel.brand_code` (`null` bila kosong).
+
+## Test ditambah (`test_online_g19.py`, tag efn)
+- **E-35:**
+  - default kanal 70/`none`, `confirm` diizinkan;
+  - place mengonfirmasi SO, move `assigned`, `free_qty` 10→7;
+  - melebihi sisa stok: precheck `out_of_stock`, dan reservasi parsial di-rollback tanpa SO (jumlah `sale.order`/`efn.online.order`/`loyalty.card` tetap);
+  - cron kedaluwarsa melepas reservasi, lalu bayar terlambat → `refund_required`;
+  - batal pelanggan melepas reservasi;
+  - `mark_paid` tanpa konfirmasi ulang;
+  - stok dicabut dari luar (penyesuaian inventaris sebagai pengganti penjualan POS) → `stock_short` → cancel;
+  - order `ready` (picked) tidak tercabut;
+  - baris campuran ready → serah terima selesai;
+  - regresi mode `none`.
+- **E-36:**
+  - promo otomatis hanya untuk pricelist brand A (kanal TSC tidak mendapatnya) dan total tidak berubah saat konfirmasi (#37);
+  - quote berpromo tanpa jejak DB;
+  - kode valid/tak dikenal/duplikat/huruf kecil;
+  - kedaluwarsa dan kuota menghasilkan penolakan generik (respons & hash identik);
+  - validasi input;
+  - mode `none` menolak semua kode;
+  - hash berubah bila promo berakhir → `price_changed`;
+  - kupon sekali pakai: place kedua `price_changed`, batal → poin pulih;
+  - kupon buatan Odoo (huruf kecil) yang diminta huruf besar (L-34);
+  - kode milik brand lain ditolak;
+  - L-35: diskon 100 % → kode ditolak;
+  - bentuk baris reward;
+  - beli X gratis Y;
+  - `promo_codes` di `payload_sha256`;
+  - kode tidak di-log asli;
+  - constraint program (4 tipe terlarang, tanpa pricelist, pricelist non-online, wajib OTP, kosongkan pricelist), default `sale_ok` False, hook program lama.
+- **E-37a:** regex, tidak unik, nilai di katalog.
+- **L-37:** user yang sama di dua kanal ditolak.
+
+## Belum diverifikasi / [B]
+- Seluruh test di atas dan test lama **belum dijalankan**.
+- **API `sale_loyalty` 19.0** dicek lewat WebFetch source (ringkasan, bukan baris per baris):
+  - fungsi yang dipakai: `_try_apply_code`, `_apply_program_reward`, `_get_claimable_rewards`, `_update_programs_and_rewards`, `action_confirm`/`_action_cancel`;
+  - field yang dipakai: `loyalty.rule.mode/code`, `loyalty.card.code/points`, `reward.multi_product`, `program.is_nominative`, `sale_ok` default True, dan `api.constrains` dengan callable.
+- Yang belum pasti:
+  - apakah `total_order_count` menghitung SO `sale` (test kuota);
+  - pengembalian poin kupon saat `_action_cancel`;
+  - urutan "diskon global lebih baik" bila kode dan promo otomatis sama-sama diskon % order. Kode bisa tercatat `applied` walau reward-nya diganti; test sengaja memakai potongan nominal.
+- **Penjualan POS disimulasikan dengan `action_apply_inventory`.** Asumsinya `_free_reservation` dipanggil dan reservasi picked tidak dicabut. Belum dicek apakah quant boleh `reserved > quantity` tanpa error.
+- `move.quantity` diasumsikan = qty tercadang. Rantai multi-langkah (pick/ship) tidak diuji.
+- Error `LockNotAvailable` `sale_loyalty` dibiarkan naik (Odoo retrying). Dua place paralel di dua cursor tidak diuji.
+- ruff belum dijalankan (gaya mengikuti `ruff format`, baris ≤ 120).
+
+## Untuk lead / tim lain
+- **QA:** `scripts/smoke/run-e2e-smoke.sh` baris 667 `o.odoo_so_draft_with_code_hash` mengharapkan `so_state == draft`. Di mode confirm nilainya `sale`; ganti ke `sale` + `reserved == true`.
+- **BFF:**
+  - `promo_applied` grup dikirim ulang saat place;
+  - error place `out_of_stock` lihat catatan di atas;
+  - baris biasa tidak membawa `reward: false`.
+- **DB dev lama:** demo noupdate, sehingga user `efn_online_rtl` masih di 3 kanal. Buat ulang DB, atau smoke `setup` akan melepasnya dari kanal lain.
+- **Upgrade:** `-u efn_online_order` ikut memasang `sale_loyalty` bila belum ada. Kanal lama tetap 25 menit/`none` sampai diubah lewat checklist (urutan: Odoo 70 dulu, baru BFF 3600).
+
+---
+
+# G19 — E-38 PoC enkripsi kolom PII Odoo (`efn_pii` 19.0.1.0.0), 18 Okt 2026
+
+Builder (B) G19 (docs/04 §11.6). ADR-036 (Proposed) §8, docs/04 §11.5, §7.2. Laporan PoC lengkap:
+`docs/testing/POC_E38_PII_ODOO.md`. Tidak ada file di luar `services/odoo/addons/efn_pii/**` dan `docs/testing/`
+yang diubah (selain bagian ini). Modul **tidak** didaftarkan ke CI.
+
+## Modul & file (baru)
+- `services/odoo/addons/efn_pii/__manifest__.py`, `__init__.py`, `README.md` (status PoC), `static/description/index.html`.
+- `models/keyring.py`: AES-256-GCM key ring (format blob docs/04 §7.2, teks `efnpii1:`+base64, AAD
+  `efn:odoo:<tabel>.<kolom>:v1`), HKDF/HMAC blind index, pemuatan `EFN_ODOO_PII_*` dari file, log `EFN_PII_KEYRING`.
+- `models/fields_pii.py`: `EfnPiiChar(fields.Char)` (M1): `convert_to_column_insert`, `convert_to_record`,
+  `condition_to_sql`.
+- `models/res_partner.py`: `efn_pii_protected` (satu arah, admin), redefinisi `phone/email/vat`,
+  `efn_{phone,email,vat}_bidx`, `email_normalized`/`phone_sanitized` kosong, `_mail_track`, `copy_data`,
+  create/write (penanda palsu, mode terkunci, enkripsi nilai lama), `_register_hook` (R-T18 + status start).
+- `tests/common.py`, `test_pii_crypto.py`, `test_pii_partner.py`, `test_pii_overhead.py`,
+  `tests/data/efn_pii_test_vectors.json` (vektor publik GCM TC14/TC16 + RFC 5869 A.3). Tag `efn`, `efn_pii_poc`.
+  Kunci uji dibangkitkan `os.urandom` di folder tmp per test.
+
+## API Odoo 19.0 yang diverifikasi (source GitHub `19.0`, 18 Okt 2026)
+`_create` -> `convert_to_column_insert(stored[fname], self, stored)`; `_flush` -> `get_column_update(record)` ->
+`convert_to_column_insert(..., validate=False)` (dirty dibersihkan sebelum konversi); `_fetch_query` ->
+`_insert_cache` tanpa konversi; `mapped`/`filtered`/`_read_format`/`_export_rows` lewat `__get__`;
+`DomainCondition._to_sql` -> `field.condition_to_sql(field_expr, operator, value, model, alias, query)` setelah
+`=`->`in` (`OrderedSet`); `Field.__init_subclass__` `setdefault`; `Field._get_attrs` menggabungkan atribut bila
+`isinstance`; `_field_to_sql` memeriksa akses field (karena itu kode memakai `field.to_sql`); `create`/`write`
+memanggil `_check_field_access(field, 'write')`; `mail`: `phone tracking=2`, `email tracking=1`,
+`email_normalized` compute `@api.depends(lambda self: [self._primary_email])`; `phone_validation`:
+`_compute_phone_sanitized` depends `_phone_get_sanitize_triggers()`; `_mail_track(tracked_fields, initial_values)`.
+
+## Belum diverifikasi
+- **Test belum dijalankan** (sesi tanpa shell). Lead wajib run di container (perintah di laporan PoC §6): target
+  0 failed, 0 baris ERROR/CRITICAL; ambil angka `EFN_PII_POC overhead`.
+- ruff belum dijalankan (ditulis untuk line-length 120 dan urutan isort `services/odoo/ruff.toml`).
+- Asumsi yang paling mungkin salah bila test gagal: `Field.to_sql(model, alias)` dipakai langsung di
+  `condition_to_sql`; `load()` dengan kolom `.id` untuk update; `ir.qweb._render(view_id, values)`; `name_search`
+  mengembalikan tuple `(id, name)`; `email_formatted` memakai email ternormalisasi; precommit tracking berjalan di
+  `TransactionCase` (`self.env.cr.precommit.run()`).
+- `_load_pos_data` asli, QWeb faktur, ekspor Coretax, domain klien POS: tidak diuji (di luar cakupan PoC).
+- Vektor ber-AAD `efn:odoo:...` belum ada (butuh satu run untuk menghitung; perintah di laporan PoC §5). Sisi BFF
+  test vector belum ditulis (milik efn-bff-engineer).

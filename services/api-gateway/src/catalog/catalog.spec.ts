@@ -8,6 +8,8 @@ import { CatalogImageRejected, CatalogStorage, catalogImageKey, normalizeCatalog
 import { CatalogSyncService } from './catalog-sync.service';
 import { Logger } from '@nestjs/common';
 import { CatalogService, decodeCursor, encodeCursor } from './catalog.service';
+import { brandParam } from './catalog.controller';
+import { parseCatalogPage } from '../odoo-rpc/odoo-online.parse';
 
 const CHANNEL_DATA = {
   code: 'RTL',
@@ -71,6 +73,7 @@ describe('CatalogService (§10.3.2)', () => {
       {
         channel_code: 'RTL',
         company_code: 'RTL',
+        brand_code: null, // channel_data pra-G19 tanpa brand_code → null
         name: 'EFN Retail',
         fulfilment: { pickup: true, delivery: false },
         outlets: [{ outlet_code: 'TOKO-01', public_name: 'Toko 01', pickup_enabled: true, prep_minutes: 20 }],
@@ -149,6 +152,97 @@ describe('CatalogService (§10.3.2)', () => {
     expect(await ctx.kv.get('ocat:stk:RTL:TOKO-01:15')).toBe('none');
     for (let i = 0; i < 5; i += 1) await ctx.svc.stock('RTL', 'TOKO-01', [15]);
     expect(ctx.odoo.calls.filter((c) => c.method === 'stock')).toHaveLength(1);
+  });
+});
+
+describe('G19 §11.3: kanal per brand', () => {
+  function brandSetup(rows: { code: string; brand: unknown; company?: string }[], over: Record<string, string> = {}) {
+    const config = testConfig({ ONLINE_ENABLED: 'true', ODOO_ONLINE_MOCK: 'true', ONLINE_CHANNELS: rows.map((r) => r.code).join(','), ...over });
+    const db = new FakeDb((t, p) => {
+      if (!t.includes('FROM platform.online_catalog_sync WHERE channel_code = ANY')) return undefined;
+      const allowed = p[0] as string[];
+      const out = rows
+        .filter((r) => allowed.includes(r.code))
+        .map((r) => ({
+          channel_code: r.code,
+          channel_data: { ...CHANNEL_DATA, code: r.code, company_code: r.company ?? 'RTL', ...(r.brand === undefined ? {} : { brand_code: r.brand }) },
+          last_ok_at: new Date(),
+        }));
+      return { rows: out, rowCount: out.length };
+    });
+    const svc = new CatalogService(config, db, new FakeKvStore(), new MockOdooOnline(), memStorage().storage, new OnlineMetrics(new MetricsService()));
+    return { config, db, svc };
+  }
+  const ROWS = [
+    { code: 'RTL', brand: null },
+    { code: 'RTL-GL', brand: 'GL' },
+    { code: 'RTL-BACHA', brand: 'BACHA' },
+    { code: 'FNB-BACHA', brand: 'BACHA', company: 'FNB' },
+    { code: 'FNB-PB', brand: 'PB', company: 'FNB' },
+  ];
+
+  it('ONLINE_CHANNELS berhifen; blok channel membawa brand_code (null bila kosong); ?brand= menyaring, tanpa brand = semua', async () => {
+    const { config, svc } = brandSetup(ROWS);
+    expect(config.onlineChannels).toEqual(['RTL', 'RTL-GL', 'RTL-BACHA', 'FNB-BACHA', 'FNB-PB']);
+    const all = await svc.channels();
+    expect(all.map((c) => [c.channel_code, c.brand_code])).toEqual([
+      ['RTL', null],
+      ['RTL-GL', 'GL'],
+      ['RTL-BACHA', 'BACHA'],
+      ['FNB-BACHA', 'BACHA'],
+      ['FNB-PB', 'PB'],
+    ]);
+    expect((await svc.channels(null)).length).toBe(5);
+    // brand_code tidak unik: BACHA = butik (PT Retail) + kafe (PT F&B)
+    expect((await svc.channels('BACHA')).map((c) => [c.channel_code, c.company_code])).toEqual([
+      ['RTL-BACHA', 'RTL'],
+      ['FNB-BACHA', 'FNB'],
+    ]);
+    expect((await svc.channels('GL')).map((c) => c.channel_code)).toEqual(['RTL-GL']);
+    expect(await svc.channels('ZZ')).toEqual([]);
+    // channel(code) untuk cart/quote TIDAK bergantung pada filter brand
+    expect((await svc.channel('FNB-PB'))?.brand_code).toBe('PB');
+  });
+
+  it('brand_code tak valid / tipe salah di salinan channel_data → null (kanal tetap tampil); kanal di luar ONLINE_CHANNELS tidak tampil', async () => {
+    const { svc } = brandSetup([
+      { code: 'RTL-GL', brand: 'gl' },
+      { code: 'RTL-BACHA', brand: 5 },
+      { code: 'FNB-PB', brand: false },
+    ]);
+    expect((await svc.channels()).map((c) => c.brand_code)).toEqual([null, null, null]);
+    const only = brandSetup(ROWS, { ONLINE_CHANNELS: 'RTL-GL' });
+    expect((await only.svc.channels()).map((c) => c.channel_code)).toEqual(['RTL-GL']);
+    expect(await only.svc.channels('BACHA')).toEqual([]);
+  });
+
+  it('?brand= divalidasi: tidak ada → null; bukan ^[A-Z][A-Z0-9]{1,9}$ → 400 invalid_request', async () => {
+    expect(brandParam(undefined)).toBeNull();
+    expect(brandParam('GL')).toBe('GL');
+    expect(brandParam('BACHA')).toBe('BACHA');
+    expect(brandParam('A123456789')).toBe('A123456789');
+    for (const bad of ['', 'gl', 'G', 'GL-1', 'GL_1', '1GL', 'A1234567890', '../GL', 'GL%00', ' GL', ['GL'], 5, null]) {
+      const err = await catchApiError(() => brandParam(bad));
+      expect(err.getStatus()).toBe(400);
+      expect(err.body).toMatchObject({ error: { code: 'invalid_request' } });
+    }
+  });
+
+  it('parse blok channel E-37a: brand_code string/false/absen; bentuk salah → invalid_response', () => {
+    const ch = { code: 'RTL-GL', name: 'GL', company_code: 'RTL', currency: 'IDR', outlets: [] };
+    expect(parseCatalogPage({ items: [], server_time: 'now', channel: { ...ch, brand_code: 'GL' } }).channel?.brand_code).toBe('GL');
+    expect(parseCatalogPage({ items: [], server_time: 'now', channel: { ...ch, brand_code: false } }).channel?.brand_code).toBeNull();
+    expect(parseCatalogPage({ items: [], server_time: 'now', channel: ch }).channel?.brand_code).toBeNull();
+    for (const b of ['gl', 'G', 'GL-1', 'ABCDEFGHIJK', 7]) {
+      expect(() => parseCatalogPage({ items: [], server_time: 'now', channel: { ...ch, brand_code: b } })).toThrow(OdooRpcError);
+    }
+  });
+
+  it('stub mock: blok channel kanal brand membawa brand_code & company sesuai kontrak §11.3 no. 1', async () => {
+    const odoo = new MockOdooOnline();
+    expect((await odoo.catalog('RTL-GL', null)).channel).toMatchObject({ code: 'RTL-GL', company_code: 'RTL', brand_code: 'GL' });
+    expect((await odoo.catalog('FNB-PB', null)).channel).toMatchObject({ code: 'FNB-PB', company_code: 'FNB', brand_code: 'PB' });
+    expect((await odoo.catalog('RTL', null)).channel).toMatchObject({ code: 'RTL', brand_code: null });
   });
 });
 

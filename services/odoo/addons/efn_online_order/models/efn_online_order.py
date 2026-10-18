@@ -16,6 +16,15 @@ Aturan inti:
 - **Tanpa PII**: tidak ada partner/HP/nama/alamat pelanggan; SO memakai partner generik kanal.
 - Metode BFF memanggil ``efn.online.channel._efn_online_check_caller`` lebih dulu (grup + user kanal + company +
   context dibersihkan), lalu menulis lewat ``sudo``. Metode staf memeriksa grup + record rule + company.
+
+G19 (docs/04 §11.1-§11.2, docs/08 §10.1 E-35 / §10.2 E-36; keputusan L-27/L-28):
+- Kanal ``stock_hold_mode='confirm'``: place membuat SO, menerapkan promo, mencocokkan ``quote_hash``, lalu
+  mengonfirmasi SO (``CONFIRM_SCOPE``) dan mewajibkan SEMUA move storable ``assigned``; kurang -> seluruh savepoint
+  place di-rollback + ``efn_online:out_of_stock`` (tidak ada SO setengah tercadang). Kupon sekali pakai terkonsumsi di
+  sini; batal/kedaluwarsa -> ``_action_cancel`` mengembalikan kupon + melepas reservasi.
+- mark_paid untuk SO yang sudah ``sale``: cek move masih ``assigned`` (bukan ``free_qty``: reservasi sendiri
+  mengurangi ``free_qty``); dicabut POS (``_free_reservation``) -> ``_action_assign``; tetap kurang -> ``stock_short``.
+- ``action_efn_ready``: move tercadang ditandai ``picked`` agar penjualan kasir berikutnya tidak mencabutnya.
 """
 
 import json
@@ -51,6 +60,7 @@ from .efn_online_common import (
     lines_payload,
     online_error,
     pickup_crypt_context,
+    promo_codes_payload,
     require,
 )
 
@@ -87,6 +97,8 @@ PLACE_KEYS = frozenset(
         "pickup_code",
     }
 )
+# G19 E-36: opsional (BFF lama tanpa promo tetap sah); bila ada & tidak kosong ikut payload_sha256.
+PLACE_OPTIONAL_KEYS = frozenset({"promo_codes"})
 PAYMENT_KEYS = frozenset({"payment_ref", "amount_paid", "paid_at", "idempotency_key"})
 REFUND_KEYS = frozenset({"idempotency_key", "lines", "full", "restock", "reason"})
 SETTLE_KEYS = frozenset({"provider_refund_ref", "settled_at", "ok", "idempotency_key"})
@@ -283,9 +295,10 @@ class EfnOnlineOrder(models.Model):
     # ==================================================================== BFF: place
     @api.model
     def efn_online_place(self, channel_code, order):
-        """Buat SO draft idempoten (docs/04 §10.4.3 no. 5)."""
+        """Buat SO idempoten (docs/04 §10.4.3 no. 5): draft (mode ``none``) atau terkonfirmasi + stok tercadang (mode
+        ``confirm``, §11.1). ``promo_codes`` opsional (§11.2 no. 2) = ``promo_applied`` grup ini dari quote."""
         channel = self._efn_channel_env(channel_code)
-        require(isinstance(order, dict) and set(order) <= PLACE_KEYS and set(order) >= PLACE_KEYS)
+        require(isinstance(order, dict) and PLACE_KEYS <= set(order) <= PLACE_KEYS | PLACE_OPTIONAL_KEYS)
         key = check_str(order["idempotency_key"], IDEMPOTENCY_KEY_RE)
         ref = check_str(order["platform_order_ref"], UUID_RE, 36).lower()
         checkout_ref = check_str(order["checkout_ref"], UUID_RE, 36).lower()
@@ -297,18 +310,21 @@ class EfnOnlineOrder(models.Model):
         pickup_code = order["pickup_code"]
         require(isinstance(pickup_code, str) and bool(PICKUP_CODE_RE.match(pickup_code)))
         normalized_lines = lines_payload(order["lines"], channel.max_lines)
-        # Kode ambil TIDAK ikut hash payload (sha256 cepat atas 39,6 bit dapat di-brute force).
-        payload_sha = canonical_sha256(
-            {
-                "channel": channel.code,
-                "platform_order_ref": ref,
-                "checkout_ref": checkout_ref,
-                "outlet_code": outlet_code,
-                "fulfilment": fulfilment,
-                "lines": normalized_lines,
-                "quote_hash": quote_hash,
-            }
-        )
+        promo_codes = promo_codes_payload(order.get("promo_codes"))
+        # Kode ambil TIDAK ikut hash payload (sha256 cepat atas 39,6 bit dapat di-brute force). Kode promo ikut
+        # (hanya bila ada, agar hash payload tanpa promo sama dengan G17/G18).
+        payload = {
+            "channel": channel.code,
+            "platform_order_ref": ref,
+            "checkout_ref": checkout_ref,
+            "outlet_code": outlet_code,
+            "fulfilment": fulfilment,
+            "lines": normalized_lines,
+            "quote_hash": quote_hash,
+        }
+        if promo_codes:
+            payload["promo_codes"] = promo_codes
+        payload_sha = canonical_sha256(payload)
         Orders = self.with_env(channel.env)
         self.env.cr.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"efn_online_place:{key}",))
         existing = Orders.search([("idempotency_key", "=", key)], limit=1)
@@ -319,7 +335,9 @@ class EfnOnlineOrder(models.Model):
         if Orders.search_count([("platform_order_ref", "=", ref)], limit=1):
             raise online_error("idempotency_conflict")
 
-        outlet, product_qty, issues, summary = channel._efn_online_evaluate(outlet_code, fulfilment, order["lines"])
+        outlet, product_qty, issues, summary = channel._efn_online_evaluate(
+            outlet_code, fulfilment, order["lines"], promo_codes=promo_codes, for_place=True
+        )
         codes = {issue["code"] for issue in issues}
         if "not_found" in codes:
             raise online_error("not_found")
@@ -327,55 +345,77 @@ class EfnOnlineOrder(models.Model):
             raise online_error("out_of_stock")
         if codes or not product_qty:
             raise online_error("invalid_input")
-        if summary["quote_hash"] != quote_hash:
+        if summary is not None and summary["quote_hash"] != quote_hash:
             raise online_error("price_changed")
 
         now = fields.Datetime.now()
-        try:
-            with self.env.cr.savepoint():
-                record = Orders.create(
-                    {
-                        "company_id": channel.company_id.id,
-                        "channel_id": channel.id,
-                        "outlet_id": outlet.id,
-                        "fulfilment": fulfilment,
-                        "platform_order_ref": ref,
-                        "checkout_ref": checkout_ref,
-                        "idempotency_key": key,
-                        "payload_sha256": payload_sha,
-                        "quote_hash": quote_hash,
-                        "expires_at": now + timedelta(minutes=channel.payment_timeout_minutes),
-                        "pickup_code_hash": pickup_crypt_context(self._efn_kdf_rounds()).hash(pickup_code),
-                    }
-                )
-                record.flush_recordset()
-        except psycopg2.errors.UniqueViolation as exc:
-            # Place paralel dengan kunci yang sama sudah commit: ulangi request -> cabang `existing`.
-            raise ConcurrencyError("EFN online: place paralel, diulang") from exc
-
-        vals = channel._efn_online_so_vals(outlet, product_qty)
-        vals.update(
-            {
-                "client_order_ref": ref,
-                "origin": f"Super-App {checkout_ref}",
-                "efn_online_order_id": record.id,
-            }
+        # Seluruh langkah tulis dalam satu savepoint: galat apa pun (harga berubah, reservasi tidak penuh) tidak
+        # meninggalkan efn.online.order / SO / reservasi / kupon terpakai, juga bila pemanggil menangkap error-nya.
+        with self.env.cr.savepoint():
+            try:
+                with self.env.cr.savepoint():
+                    record = Orders.create(
+                        {
+                            "company_id": channel.company_id.id,
+                            "channel_id": channel.id,
+                            "outlet_id": outlet.id,
+                            "fulfilment": fulfilment,
+                            "platform_order_ref": ref,
+                            "checkout_ref": checkout_ref,
+                            "idempotency_key": key,
+                            "payload_sha256": payload_sha,
+                            "quote_hash": quote_hash,
+                            "expires_at": now + timedelta(minutes=channel.payment_timeout_minutes),
+                            "pickup_code_hash": pickup_crypt_context(self._efn_kdf_rounds()).hash(pickup_code),
+                        }
+                    )
+                    record.flush_recordset()
+            except psycopg2.errors.UniqueViolation as exc:
+                # Place paralel dengan kunci yang sama sudah commit: ulangi request -> cabang `existing`.
+                raise ConcurrencyError("EFN online: place paralel, diulang") from exc
+            record._efn_place_sale_order(channel, outlet, fulfilment, product_qty, promo_codes, quote_hash)
+            record._efn_emit("placed")
+        _logger.info(
+            "EFN online place order=%s part=%s so=%s hold=%s",
+            record.id,
+            ref,
+            record.sale_order_id.id,
+            channel.stock_hold_mode,
         )
-        sale_order = channel.env["sale.order"].with_context(mail_create_nosubscribe=True).create(vals)
-        stored = channel._efn_online_summarize(sale_order, outlet, fulfilment)
-        if stored["quote_hash"] != quote_hash:
-            # Hitungan SO tersimpan beda dengan quote (mis. aturan harga berubah di tengah): batalkan transaksi.
-            raise online_error("price_changed")
-        record.write(
-            {
-                "sale_order_id": sale_order.id,
-                "amount_total": stored["amount_total"],
-                "amount_payable": stored["amount_payable"],
-            }
-        )
-        record._efn_emit("placed")
-        _logger.info("EFN online place order=%s part=%s so=%s", record.id, ref, sale_order.id)
         return record._efn_place_result()
+
+    def _efn_place_sale_order(self, channel, outlet, fulfilment, product_qty, promo_codes, quote_hash):
+        """SO dari cart + promo (E-36) -> cek ``quote_hash`` -> (mode confirm) konfirmasi + reservasi penuh (E-35)."""
+        self.ensure_one()
+        sale_order = channel._efn_online_create_sale_order(
+            outlet,
+            product_qty,
+            {
+                "client_order_ref": self.platform_order_ref,
+                "origin": f"Super-App {self.checkout_ref}",
+                "efn_online_order_id": self.id,
+            },
+        )
+        self.write({"sale_order_id": sale_order.id})
+        usable, programs, engine = channel._efn_online_promo_plan(promo_codes, True)
+        applied = channel._efn_online_apply_promotions(sale_order, usable, programs) if engine else []
+        stored = channel._efn_online_summarize(sale_order, outlet, fulfilment, promo_applied=applied)
+        if stored["quote_hash"] != quote_hash:
+            # Hitungan SO tersimpan beda dengan quote (aturan harga berubah, promo berakhir/kuota habis, kupon sudah
+            # terpakai checkout lain): savepoint place di-rollback, BFF meminta quote ulang.
+            raise online_error("price_changed")
+        if channel.max_order_amount and stored["amount_total"] > channel.max_order_amount:
+            raise online_error("invalid_input")
+        if channel.stock_hold_mode == "confirm":
+            try:
+                self._efn_confirm_sale_order()
+            except _ReviewNeeded as review:
+                # Belum ada pembayaran -> bukan `review`: total berubah / kupon ditolak saat konfirmasi = harga berubah.
+                _logger.warning("EFN online order %s: konfirmasi saat place gagal (%s)", self.id, review.code)
+                raise online_error("price_changed") from None
+            if self._efn_reservation_short(assign=True):
+                raise online_error("out_of_stock")
+        self.write({"amount_total": stored["amount_total"], "amount_payable": stored["amount_payable"]})
 
     # ================================================================ BFF: mark paid
     @api.model
@@ -424,16 +464,25 @@ class EfnOnlineOrder(models.Model):
         if float_compare(amount_paid, order.amount_payable, precision_rounding=order.currency_id.rounding) != 0:
             order._efn_set_review("amount_mismatch")
             return order._efn_paid_result()
-        short = order._efn_short_lines()
+        # E-35: SO yang sudah dikonfirmasi saat place (mode confirm) -> cek reservasinya, bukan free_qty (reservasi
+        # sendiri mengurangi free_qty). Berbasis state SO, bukan mode kanal saat ini (mode bisa diubah di tengah).
+        reserved_flow = order.sale_order_id.state == "sale"
+        short = order._efn_reservation_short(assign=True) if reserved_flow else order._efn_short_lines()
         if short:
             order.write({"state": "stock_short", "short_lines": json.dumps(short)})
             order._efn_emit("stock_short")
             return order._efn_paid_result()
-        try:
-            order._efn_confirm_sale_order()
-        except _ReviewNeeded as review:
-            order._efn_set_review(review.code)
-            return order._efn_paid_result()
+        if reserved_flow:
+            # Konfirmasi ulang dilewati; jaring #37 tetap: total SO harus sama dengan saat place.
+            if order.currency_id.compare_amounts(order.sale_order_id.amount_total, order.amount_total) != 0:
+                order._efn_set_review("total_changed_on_confirm")
+                return order._efn_paid_result()
+        else:
+            try:
+                order._efn_confirm_sale_order()
+            except _ReviewNeeded as review:
+                order._efn_set_review(review.code)
+                return order._efn_paid_result()
         if channel.invoice_on_paid:
             try:
                 order._efn_invoice_and_register_payment()
@@ -472,6 +521,46 @@ class EfnOnlineOrder(models.Model):
                     }
                 )
         return short
+
+    def _efn_reservation_moves(self):
+        """Move storable SO yang menarik stok gudang (kepala rantai pick/pack/ship; 1 langkah = move pelanggan),
+        belum selesai/batal. Reservasi online = move ini ``assigned``."""
+        self.ensure_one()
+        Move = self.env["stock.move"]
+        moves = self.sale_order_id.order_line.move_ids.filtered(lambda m: m.state != "cancel")
+        chain = moves
+        todo = moves
+        while todo:
+            todo = todo.move_orig_ids.filtered(lambda m: m.state != "cancel") - chain
+            chain |= todo
+        heads = Move.browse()
+        for move in chain:
+            if move.state == "done" or not move.product_id.is_storable:
+                continue
+            if move.move_orig_ids.filtered(lambda m: m.state not in ("cancel", "done")):
+                continue
+            heads |= move
+        return heads
+
+    def _efn_reservation_short(self, assign=False):
+        """E-35: [{product_id, requested, available}] untuk move yang reservasinya tidak penuh (dicabut penjualan POS
+        lewat ``_free_reservation``, atau tipe operasi tidak ``at_confirm``). ``assign`` -> coba ``_action_assign``
+        dulu (jalur internal ``CONFIRM_SCOPE``)."""
+        self.ensure_one()
+        moves = self._efn_reservation_moves()
+        pending = moves.filtered(lambda m: m.state != "assigned")
+        if pending and assign:
+            with internal_scope(self.env, CONFIRM_SCOPE, self.sale_order_id.ids):
+                pending._action_assign()
+            pending = moves.filtered(lambda m: m.state != "assigned")
+        short = {}
+        for move in pending:
+            entry = short.setdefault(
+                move.product_id.id, {"product_id": move.product_id.id, "requested": 0.0, "available": 0.0}
+            )
+            entry["requested"] += move.product_uom_qty
+            entry["available"] += max(move.quantity, 0.0)
+        return [short[pid] for pid in sorted(short)]
 
     def _efn_confirm_sale_order(self):
         """Konfirmasi SO dalam savepoint; total berubah (sale_loyalty dsb., temuan #37) -> rollback + review."""
@@ -716,9 +805,21 @@ class EfnOnlineOrder(models.Model):
             order._efn_lock()
             if order.state != "confirmed":
                 raise UserError(_("Hanya pesanan berstatus 'Dikonfirmasi' yang dapat ditandai siap."))
+            order._efn_mark_reserved_picked()
             order.write({"state": "ready", "ready_at": fields.Datetime.now()})
             order._efn_emit("ready")
         return True
+
+    def _efn_mark_reserved_picked(self):
+        """E-35 no. 4: barang sudah disisihkan -> move tercadang ``picked=True``; ``_free_reservation`` (penjualan
+        POS/stok keluar lain) tidak mencabut baris picked. Barang belum keluar: tetap lewat serah terima (SEC-105)."""
+        self.ensure_one()
+        if self.sale_order_id.state != "sale":
+            return
+        moves = self._efn_reservation_moves().filtered(lambda m: m.state == "assigned" and not m.picked)
+        if moves:
+            with internal_scope(self.env, CONFIRM_SCOPE, self.sale_order_id.ids):
+                moves.write({"picked": True})
 
     def action_efn_retry_events(self):
         """Manajer penjualan: kirim ulang event outbox yang gagal untuk pesanan ini."""
@@ -767,6 +868,10 @@ class EfnOnlineOrder(models.Model):
                 for move in picking.move_ids.filtered(lambda m: m.state not in ("done", "cancel")):
                     if move.product_uom.compare(move.quantity, move.product_uom_qty) < 0:  # pickup: barang di outlet
                         move.quantity = move.product_uom_qty
+                    # E-35: sebagian move sudah `picked` sejak "siap" -> tandai semua agar validasi tidak memisahkan
+                    # move lain ke backorder (yang dibatalkan karena tanpa backorder).
+                    if not move.picked:
+                        move.picked = True
                 result = picking.with_context(
                     skip_backorder=True, picking_ids_not_to_backorder=picking.ids
                 ).button_validate()

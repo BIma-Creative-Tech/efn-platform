@@ -613,3 +613,52 @@ Sumber: `docs/10_RENCANA_GELOMBANG_18_PLUS.md` (W-18, W-19, W-25), keputusan pem
 - **POS loyalty:** kunci BFF = `pos_earn|pos_redeem|pos_reverse:<pos.order.uuid>` (stabil); release memakai `reservation_id` BFF (UUID). Tidak ada id lokal Odoo di dedup BFF. Catatan sisi Odoo saja: kunci outbox `pos_release:<id lokal reservasi>` hanya unik di DB Odoo (tidak dikirim ke BFF sebagai kunci) — disarankan diganti `pos_release:<bff_reservation_id>`.
 - **Usulan field untuk Odoo (efn_online_order):** (1) `idempotency_key` = `online:<platform_order_ref>:<event>:<seq>` (sudah diterima BFF); (2) `event_id` = uuid4 per baris outbox (dibuat sekali saat enqueue, dikirim ulang identik saat retry); (3) setelah restore, `seq` dilanjutkan dari maks seq yang diketahui (mis. tarik dari BFF/rekonsiliasi) agar event baru tidak `ignored_stale`. Kode `409 event_conflict` diperlakukan final + review.
 - Validasi: build OK, lint 0 error, **43 suite / 576 test lulus** (3 test baru), audit tanpa high.
+
+## Gelombang 19 — pilot online ritel per brand (docs/04 §11.1–11.3, §11.6–11.7; 18 Okt 2026)
+
+Dasar: kontrak v6.0 §11 (menang atas §10), L-27..L-32, ADR-034/ADR-019 (Proposed), ADR-020 (poin Odoo tidak dipakai). **Build, lint, dan Jest BELUM dijalankan lokal** (agent tanpa shell; lead menjalankan Jest di container). Semua yang tertulis di bawah = hasil penulisan kode + penalaran, bukan hasil eksekusi.
+
+### File
+- Diubah: `src/config/app-config.ts` (default 3600/2, rate limit `PROMO_MEMBER`/`PROMO_IP`, `onlineApiKeySecretName` + validasi kode kanal sebelum membentuk nama env/path), `src/odoo-rpc/{odoo-online.types.ts, odoo-online.parse.ts, json2-client.ts, odoo-online.mock.ts, online-metrics.ts, online-errors.ts, README.md}`, `src/cart/{quote.service.ts, cart.controller.ts, README.md}`, `src/catalog/{catalog.service.ts, catalog.controller.ts, README.md}`, `src/orders/{orders.service.ts, online.model.ts, online-admin.service.ts, README.md}`.
+- Baru: `src/odoo-rpc/promo-codes.ts`, `src/cart/promo.spec.ts`, `src/config/online-config.spec.ts`.
+- Spec diperbarui: `cart/cart.spec.ts`, `catalog/catalog.spec.ts`, `odoo-rpc/json2-client.spec.ts`, `orders/online-saga.spec.ts` (test timeout kini 60 menit, describe G19 baru), `orders/online-routes.spec.ts` (describe G19 baru).
+
+### Env (BFF)
+| Env | Default | Catatan |
+|---|---|---|
+| `ONLINE_PAYMENT_TIMEOUT_SECONDS` | **3600** (dari 900) | batas 60..3600 tetap; urutan aktivasi Odoo 70 dulu |
+| `ONLINE_MAX_OPEN_ORDERS_PER_MEMBER` | **2** (dari 3) | L-32 |
+| `ONLINE_RL_PROMO_MEMBER_LIMIT` / `_WINDOW_SECONDS` | 10 / 900 | baru |
+| `ONLINE_RL_PROMO_IP_LIMIT` / `_WINDOW_SECONDS` | 30 / 900 | baru, IP di-HMAC |
+| `ODOO_API_KEY_ONLINE_<CHANNEL>_FILE` | — | `-`→`_` (`ODOO_API_KEY_ONLINE_RTL_GL_FILE`), fallback `${SECRETS_DIR}/odoo_api_key_online_rtl_gl` (sudah didukung sejak G17; kini dengan validasi eksplisit + test) |
+
+### Bentuk respons untuk frontend
+- `POST /v1/cart/quote` body `{}` / tanpa body / `{ "promo_codes": ["kode1"] }` (≤ 3, `^[A-Za-z0-9_-]{1,40}$`, server menormalisasi ke huruf besar + dedupe). Salah format / kunci lain → `400 { error: { code: "invalid_input", message } }`. Terlalu sering → `429 rate_limited` + `Retry-After`.
+- Respons quote = bentuk §10.3.4 + `"promo": { "applied": ["KODE1"], "invalid": ["KODE2"] }` (selalu ada; `[]` bila tanpa kode). `invalid` = satu pesan generik "kode tidak dapat digunakan" (tidak membedakan penyebab); tidak memblokir checkout. Baris reward di `groups[].lines[]`: `{ product_id, name, qty, price_unit_incl (≤ 0), subtotal_incl (≤ 0), tax_labels, available: true, reward: true }`; baris produk **tidak** membawa field `reward`. Jangan kirim baris reward ke `PUT /v1/cart` (cart hanya produk katalog).
+- `GET /v1/orders/:id` `parts[].lines[]` juga memuat baris reward (`reward: true`) untuk order berpromo.
+- `GET /v1/catalog/channels?brand=GL` → `{ items: [ChannelInfo] }`; setiap item kini ada `brand_code: string | null`. `?brand=` kosong / huruf kecil / berulang → `400 invalid_input` (frontend: jangan kirim parameter bila tenant tanpa brand). Brand tak dikenal → `items: []`.
+- `409 price_changed` di checkout juga muncul bila promo berakhir/kuota habis antara quote & checkout → quote ulang.
+
+### Asumsi terhadap Odoo (efn-odoo-engineer A, E-35/E-36/E-37a)
+1. `efn_online_quote` menerima argumen bernama `promo_codes` (BFF **selalu** mengirimnya, `[]` bila kosong) dan `efn_online_place` membaca `order.promo_codes`.
+2. Hasil quote: `promo_applied`/`promo_rejected` = daftar string kode (BFF menormalisasi huruf besar; harus ⊆ yang diminta & tidak beririsan — bila tidak, BFF fail-closed `503` + anomali `online_config_error`). Field absen/`false` = `[]`.
+3. Baris reward: `reward: true`, `subtotal_incl ≤ 0` (positif → `invalid_response`); baris non-reward tetap ≥ 0. Field lain (mis. `reward_id`) diabaikan BFF. Baris reward boleh memakai `product_id` produk cart (buy_x_get_y). Maks 20 baris reward per grup.
+4. **Huruf besar:** BFF mengirim kode dalam huruf besar (kontrak). Kode kupon bawaan Odoo (`loyalty.card.code`) dibuat huruf kecil-heks → Odoo harus mencocokkan tanpa membedakan huruf (mis. `=ilike`/upper) atau membuat kode kupon huruf besar. Mohon dikonfirmasi builder Odoo — bila tidak, kupon `coupons` tidak akan pernah terpakai.
+5. `quote_hash` sudah memuat kode terpakai + reward; perbedaan di place → `efn_online:price_changed`.
+6. `expires_at` place = sekarang + `payment_timeout_minutes` (70). BFF menolak bila < batas order + 5 menit (diuji: 70 & 65 lolos, 64 & 25 ditolak). Stub mock kini +70 menit.
+7. Blok `channel` katalog memuat `brand_code` (`false`/kosong → null; bentuk di luar `^[A-Z][A-Z0-9]{1,9}$` → seluruh halaman katalog `invalid_response`, sinkron kanal gagal sampai diperbaiki).
+
+### Untuk agent lain
+- **devsecops (penting):** `infra/compose/docker-compose.yml:1119/1121` masih `${ONLINE_PAYMENT_TIMEOUT_SECONDS:-900}` dan `${ONLINE_MAX_OPEN_ORDERS_PER_MEMBER:-3}`, dan `infra/compose/.env.example:104/106` menyebut 900/3 — nilai compose **menimpa** default kode baru. Perlu diubah ke 3600/2 (ingat urutan aktivasi: kanal Odoo 70 dulu). Env `ONLINE_RL_PROMO_*` opsional di compose/deploy.yml (default kode sudah sesuai kontrak). Secret kanal berhifen: `odoo_api_key_online_rtl_gl`, `…_rtl_bacha`, `…_fnb_pb`, `…_fnb_bacha`; `scripts/host/test-efn-deploy.sh:405-406` memakai 900/3 sebagai contoh valid (tidak salah, hanya contoh lama).
+- **frontend:** bentuk di atas; tampilkan baris reward apa adanya (nominal negatif dari Odoo, tanpa hitung ulang).
+- **qa:** smoke online pakai kode demo stub `DEMO5K` (−Rp5.000 bila subtotal ≥ Rp50.000) dan `DEMOGL10` (−10 %, hanya kanal `RTL-GL`); kanal demo stub `RTL`, `RTL-GL`, `RTL-BACHA`, `FNB-PB`, `FNB-BACHA` (semua outlet `TOKO-01`).
+- **lead/architect:** §11 memakai kode `invalid_input` sementara validasi §10 lain tetap `invalid_request` (BFF mengikuti §11 persis hanya untuk `promo_codes` dan `?brand=`). Usul dicatat di §10.3.7.
+
+### Spec G19 (belum dijalankan)
+`cart/promo.spec.ts` (normalisasi & 400, metrik, multi-kanal, anti-enumerasi tak dikenal = kedaluwarsa = bukan brand ini, kode tidak di log, Odoo melapor kode tak diminta → 503, buy_x_get_y, rate limit member/IP), `config/online-config.spec.ts` (default, kanal berhifen, nama env/secret, traversal, start gagal menyebut nama env), `catalog.spec.ts` (filter brand, brand tidak unik, salinan lama → null, `brandParam`, parse, stub), `json2-client.spec.ts` (argumen promo quote/place, parse reward, bentuk salah, key per kanal berhifen), `online-saga.spec.ts` (3600/2 + order ke-3 429, margin expires 70/65/64/25, place mengirim `promo_applied`, promo kedaluwarsa → 409 + kompensasi, quote pra-G19, estimasi refund mengabaikan reward), `online-routes.spec.ts` (Fastify nyata: `?brand=`, body quote, 429 promo).
+
+### Risiko / sisa
+- R-B06/R-B03 (penyalahgunaan kupon): enumerasi dibatasi rate limit 10/15 m per member + 30/15 m per IP; penyerang dengan banyak akun/IP tetap bisa mencoba — kekuatan kode kupon (panjang/entropi) adalah kontrol utama di Odoo.
+- Refund CS per baris: perkiraan pre-check memakai harga baris produk tanpa membagi diskon reward → bisa lebih besar dari nota kredit sebenarnya (dapat menolak refund sah yang mendekati sisa porsi; nominal final tetap dari Odoo).
+- `amount_payable` 0 (diskon menutup seluruh tagihan) belum ditangani khusus — payment intent Rp0 bergantung provider; disarankan Odoo membatasi reward agar tagihan > 0 atau diputuskan lead.
+- Log debug memuat tag 8 heks SHA-256 kode; untuk kode yang mudah ditebak, tag dapat dicocokkan kamus oleh pembaca log (diizinkan kontrak §11.2 no. 6). Catatan: `main.ts` tidak membatasi level log Nest, jadi baris `debug` ini **ikut tercetak di production**; bila tidak diinginkan, hapus baris log atau batasi level log (keputusan lead).
