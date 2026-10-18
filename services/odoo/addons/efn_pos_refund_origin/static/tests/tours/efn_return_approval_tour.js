@@ -8,6 +8,8 @@ import * as Dialog from "@point_of_sale/../tests/generic_helpers/dialog_util";
 import * as PaymentScreen from "@point_of_sale/../tests/pos/tours/utils/payment_screen_util";
 import * as ProductScreen from "@point_of_sale/../tests/pos/tours/utils/product_screen_util";
 import * as ReceiptScreen from "@point_of_sale/../tests/pos/tours/utils/receipt_screen_util";
+import { inLeftSide } from "@point_of_sale/../tests/pos/tours/utils/common";
+import * as Numpad from "@point_of_sale/../tests/generic_helpers/numpad_util";
 import { registry } from "@web/core/registry";
 
 const PRODUCT = "Produk Tour Retur";
@@ -17,8 +19,13 @@ registry.category("web_tour.tours").add("EfnPosReturnApprovalTour", {
         [
             Chrome.startPoS(),
             Dialog.confirm("Open Register"),
-            ProductScreen.clickDisplayedProduct(PRODUCT),
-            ProductScreen.clickNumpad("+/-"),
+            ProductScreen.clickDisplayedProduct(PRODUCT, true, "1"),
+            // Pola tour standar Odoo 19 (FixedTaxNegativeQty): +/- lewat Numpad di panel kiri, lalu pastikan qty -1.
+            inLeftSide([
+                { ...ProductScreen.clickLine(PRODUCT, "1")[0], isActive: ["mobile"] },
+                ...["+/-"].map(Numpad.click),
+                ...ProductScreen.selectedOrderlineHasDirect(PRODUCT, "-1"),
+            ]),
             ProductScreen.clickPayButton(),
             PaymentScreen.clickPaymentMethod("Cash"),
             PaymentScreen.clickValidate(),
