@@ -661,4 +661,34 @@ Dasar: kontrak v6.0 §11 (menang atas §10), L-27..L-32, ADR-034/ADR-019 (Propos
 - R-B06/R-B03 (penyalahgunaan kupon): enumerasi dibatasi rate limit 10/15 m per member + 30/15 m per IP; penyerang dengan banyak akun/IP tetap bisa mencoba — kekuatan kode kupon (panjang/entropi) adalah kontrol utama di Odoo.
 - Refund CS per baris: perkiraan pre-check memakai harga baris produk tanpa membagi diskon reward → bisa lebih besar dari nota kredit sebenarnya (dapat menolak refund sah yang mendekati sisa porsi; nominal final tetap dari Odoo).
 - `amount_payable` 0 (diskon menutup seluruh tagihan) belum ditangani khusus — payment intent Rp0 bergantung provider; disarankan Odoo membatasi reward agar tagihan > 0 atau diputuskan lead.
-- Log debug memuat tag 8 heks SHA-256 kode; untuk kode yang mudah ditebak, tag dapat dicocokkan kamus oleh pembaca log (diizinkan kontrak §11.2 no. 6). Catatan: `main.ts` tidak membatasi level log Nest, jadi baris `debug` ini **ikut tercetak di production**; bila tidak diinginkan, hapus baris log atau batasi level log (keputusan lead).
+- Log debug memuat tag 8 heks SHA-256 kode; untuk kode yang mudah ditebak, tag dapat dicocokkan kamus oleh pembaca log (diizinkan kontrak §11.2 no. 6). Catatan: `main.ts` tidak membatasi level log Nest, jadi baris `debug` ini **ikut tercetak di production**; bila tidak diinginkan, hapus baris log atau batasi level log (keputusan lead). → **Ditutup di putaran perbaikan r12 (SEC-132), lihat di bawah.**
+
+### Putaran perbaikan G19 — security review r12 (18 Okt 2026)
+
+Dasar: `docs/reviews/SECURITY_REVIEW_2026-10-18_r12.md`. Cakupan hanya `services/api-gateway/src/**`. **Build, lint, dan Jest BELUM dijalankan lokal** oleh agent ini (lead menjalankan Jest di container). Tidak ada commit.
+
+| Item | Perubahan | File |
+|---|---|---|
+| **SEC-133** (pemblokir merge) | Pemeriksaan env literal di `onlineStartupProblems` kini `^ODOO_API_KEY_ONLINE_[A-Z0-9_]+$` **dan bukan** berakhiran `_FILE`. `ODOO_ONLINE_EVENT_HMAC` literal tetap ditolak; `ODOO_ONLINE_EVENT_HMAC_FILE` memang tidak pernah cocok. | `config/app-config.ts` |
+| SEC-133 spec | `APP_ENV=production` + `ODOO_API_KEY_ONLINE_RTL_FILE` + `…_RTL_GL_FILE` → `assertStartupSecrets()` tidak melempar (online OFF seperti base compose, dan online ON kanal `RTL,RTL-GL` + HMAC file; key terbaca dari file). Literal `ODOO_API_KEY_ONLINE_RTL` (acak dan `xxx`) → ditolak; pesan menyebut nama, tidak memuat nilai, dan tidak menyebut `…_FILE`. `online-observability.spec.ts` dipertegas: kegagalan placeholder `disabled` **bukan** karena "env literal". | `config/online-config.spec.ts`, `orders/online-observability.spec.ts` |
+| **SEC-134** (L-45) | Kuota promo berbobot per KODE: helper baru `consumePromoCodeQuota` (`RateLimiter.consume`, key sama `online:promo_member:m:<id>` / `online:promo_ip:ip:<HMAC>`). n kode (setelah dedupe) = n unit di member **dan** IP. Ditolak → tidak memakan kuota (kompensasi); IP menolak → unit member di-`release`. Batas default tetap 10 / 30 per 900 s. Quote tanpa kode = 0 unit. | `catalog/online-http.ts`, `cart/cart.controller.ts`, komentar `config/app-config.ts` |
+| SEC-134 spec | 3×3 kode = 9 unit, quote 3 kode berikutnya → 429, sisa tepat 1 kode, total kode ke Odoo = 10; IP 30 kode lintas 10 member → 429, counter member ke-11 kembali 0; duplikat huruf besar/kecil dihitung sekali. | `cart/promo.spec.ts` |
+| **SEC-132** (L-42) | `promoCodeTag` (SHA-256 tanpa kunci) **dihapus**; log debug quote hanya `Quote promo: terpakai <n>, tidak terpakai <m>`. Tidak ada log lain di BFF yang memuat kode. | `odoo-rpc/promo-codes.ts`, `cart/quote.service.ts` |
+| SEC-132 spec | Log (log/warn/error/debug/verbose) tidak memuat kode, SHA-256 penuh, maupun 8 heks pertamanya (huruf besar & kecil); export `promoCodeTag` tidak ada lagi. | `cart/promo.spec.ts` |
+| QA L-35 | Stub `MockOdooOnline` meniru guard parser: quote `amount_payable < 1` tanpa issue → `invalid_response`; place `< 1` → `invalid_response`. Penalaran: data demo tidak pernah mencapai itu (DEMO5K hanya bila subtotal ≥ Rp50.000; DEMOGL10 10 %). Spec menyapu semua kombinasi demo (kanal × produk × qty × promo). Parser: spec baru, quote Rp0 **dengan** issue tetap diterima. | `odoo-rpc/odoo-online.mock.ts`, `orders/online-saga.spec.ts`, `odoo-rpc/json2-client.spec.ts` |
+| **SEC-131** `qty_limit` | Parser: `PRODUCT_ISSUE_CODES = ['out_of_stock','qty_limit']`, isu tingkat produk wajib `product_id` (null/false → `invalid_response`); kode lain tetap diterima (mis. `order_limit` null). Quote service: produk ber-`qty_limit` boleh dikembalikan Odoo dengan qty **lebih kecil** dari cart (dipangkas); qty lebih besar atau tanpa issue `qty_limit` → tetap 503. Checkout: issue apa pun → `409 cart_has_issues` (tidak berubah). Stub: `maxQtyPerLine` (default `MOCK_MAX_QTY_PER_LINE` = 20, sama dengan `max_qty` katalog stub) → issue `qty_limit`; place ber-`qty_limit` → `business invalid_input`. | `odoo-rpc/odoo-online.parse.ts`, `cart/quote.service.ts`, `odoo-rpc/odoo-online.mock.ts`, spec di `orders/online-saga.spec.ts` + `odoo-rpc/json2-client.spec.ts` |
+
+README diperbarui: `src/cart/README.md` (rate limit per kode, log tanpa tag, issue `qty_limit`), `src/odoo-rpc/README.md` (promo-codes, SEC-133, issue codes + stub).
+
+**Perubahan yang terlihat klien (frontend):**
+- `POST /v1/cart/quote`: `groups[].issues[]` kini bisa memuat `{ "product_id": <id>, "code": "qty_limit" }`. Tampilkan sebagai "jumlah melebihi batas per pesanan, kurangi jumlah". Baris produk itu bisa tampil dengan qty yang dipangkas Odoo. Checkout dengan issue ini → `409 cart_has_issues` (sudah ada).
+- `429 rate_limited` promo kini lebih cepat: 1 quote dengan 3 kode memakai 3 dari 10 jatah per 15 menit. Bentuk respons tidak berubah.
+- SEC-132/SEC-133 tidak mengubah respons.
+
+**Asumsi:**
+1. Odoo mengirim `qty_limit` sebagai `{ product_id, code: 'qty_limit' }` di `issues` quote. Baris produk tetap ada dengan qty diminta **atau** dipangkas (< qty cart), atau hilang. Ketiganya diterima BFF.
+2. Place dengan qty melebihi batas ditolak Odoo sebagai `efn_online:invalid_input` (hanya di stub; BFF tidak pernah sampai ke place karena checkout memblokir issue). Bila Odoo memakai kode lain, mohon dicatat di §10.4.2 (kode di luar `ODOO_BUSINESS_CODES` jatuh ke peta error generik).
+3. SEC-134 mengikuti instruksi lead (semua kode per quote dihitung), **bukan** opsi review "hanya kode baru dibanding quote terakhir". Konsekuensi: re-quote dengan kode yang sama (mis. setelah ubah cart) juga memakan kuota. Pengguna normal (1 kode, beberapa re-quote) aman di 10/15 menit. Bila terlalu ketat, opsi "kode baru saja" bisa ditambahkan dengan menyimpan set kode terakhir per member (key ber-HMAC).
+4. SEC-133: kode kanal yang berakhiran `-FILE` (mis. `RTL-FILE`) akan bertabrakan dengan nama `…_FILE` kanal `RTL`. Regex §10.2 mengizinkannya secara teori. Usul ke architect: larang akhiran `-FILE` di §10.2 (belum diubah di kode agar kontrak tidak bergeser).
+
+**Belum:** Jest/tsc/eslint belum dijalankan oleh agent ini. Sisi Odoo (SEC-132 log INFO + tag SHA-256 di `efn_online_channel.py`/`efn_online_common.py`, SEC-131 batas qty) di luar cakupan.

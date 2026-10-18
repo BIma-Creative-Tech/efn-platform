@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Logger, RawBodyRequest } from '@nestjs/common';
 import { FastifyReply, FastifyRequest } from 'fastify';
 import { MetricsService } from '../common/metrics/metrics.service';
@@ -6,11 +7,13 @@ import { FakeKvStore, catchApiError, testConfig } from '../common/testing/fakes'
 import { CatalogService, ChannelInfo, ProductSummary } from '../catalog/catalog.service';
 import { MockOdooOnline } from '../odoo-rpc/odoo-online.mock';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
-import { PromoCodesInvalid, normalizePromoCodes, promoCodeTag } from '../odoo-rpc/promo-codes';
+import * as PromoModule from '../odoo-rpc/promo-codes';
 import { MemoryCartStore } from './cart-store';
 import { CartController, parseQuoteBody } from './cart.controller';
 import { CartService } from './cart.service';
 import { QuoteService, StoredQuote, placeLines, quoteKey } from './quote.service';
+
+const { PromoCodesInvalid, normalizePromoCodes } = PromoModule;
 
 /** G19 docs/04 §11.2 — promo online di quote (BFF). Semua Odoo = stub `MockOdooOnline` (promo demo DEMO5K / DEMOGL10). */
 
@@ -94,10 +97,8 @@ describe('Body quote promo_codes (§11.2 no. 1)', () => {
     expect(() => normalizePromoCodes({})).toThrow(PromoCodesInvalid);
   });
 
-  it('tag log = 8 heks pertama SHA-256 kode ternormalisasi (tidak memuat kode asli)', () => {
-    expect(promoCodeTag('demo5k')).toMatch(/^[0-9a-f]{8}$/);
-    expect(promoCodeTag('demo5k')).toBe(promoCodeTag('DEMO5K'));
-    expect(promoCodeTag('DEMO5K')).not.toContain('DEMO');
+  it('SEC-132: modul promo-codes tidak lagi mengekspor tag hash kode (promoCodeTag dihapus)', () => {
+    expect((PromoModule as unknown as Record<string, unknown>).promoCodeTag).toBeUndefined();
   });
 });
 
@@ -175,7 +176,7 @@ describe('Quote berpromo (§11.2 no. 2–5)', () => {
     expect(Object.keys(unknown.promo)).toEqual(['applied', 'invalid']);
   });
 
-  it('kode promo tidak pernah muncul di log BFF (hanya tag 8 heks)', async () => {
+  it('SEC-132: kode promo maupun hash/tag-nya tidak pernah muncul di log BFF (hanya jumlah)', async () => {
     const logs: string[] = [];
     const capture = (msg: unknown): void => void logs.push(String(msg));
     const spies = [
@@ -199,7 +200,14 @@ describe('Quote berpromo (§11.2 no. 2–5)', () => {
     }
     const all = logs.join('\n');
     expect(all).not.toMatch(/DEMO5K|RAHASIA99|BOCOR77/i);
-    expect(all).toContain(promoCodeTag('DEMO5K'));
+    // turunan kode (SHA-256 penuh / 8 heks pertama, huruf besar & kecil) juga tidak boleh ada
+    for (const code of ['DEMO5K', 'RAHASIA99', 'BOCOR77', 'demo5k', 'rahasia99']) {
+      const hex = createHash('sha256').update(code, 'utf8').digest('hex');
+      expect(all).not.toContain(hex.slice(0, 8));
+      expect(all).not.toContain(hex);
+    }
+    // log debug hanya memuat jumlah
+    expect(all).toContain('Quote promo: terpakai 1, tidak terpakai 1');
   });
 
   it('Odoo melaporkan kode yang TIDAK diminta → 503 online_unavailable (fail-closed) + anomali online_config_error', async () => {
@@ -283,6 +291,52 @@ describe('Rate limit promo terpisah (§11.2 no. 6)', () => {
     await ctx.controller.quote({ promo_codes: ['A2'] }, user(M2), req('198.51.100.7'), reply);
     expect((await catchApiError(() => ctx.controller.quote({ promo_codes: ['A3'] }, user(M2), req('198.51.100.7'), reply))).getStatus()).toBe(429);
     expect((await ctx.controller.quote({ promo_codes: ['A3'] }, user(M2), req('198.51.100.8'), reply)).promo.invalid).toEqual(['A3']);
+  });
+
+  it('SEC-134: kuota member dihitung per KODE — 3 kode = 3 unit; default 10 → quote ke-4 berisi 3 kode ditolak, 1 kode masih boleh', async () => {
+    const ctx = setup();
+    await ctx.put([{ channel: 'RTL', lines: [{ product_id: 11, qty: 1 }] }]);
+    const ip = (n: number) => req(`203.0.113.${n}`); // IP berbeda per quote: hanya limiter member yang diuji
+    for (let i = 0; i < 3; i += 1) {
+      await ctx.controller.quote({ promo_codes: [`A${i}`, `B${i}`, `C${i}`] }, user(M), ip(i), reply); // 9 unit
+    }
+    const err = await catchApiError(() => ctx.controller.quote({ promo_codes: ['X1', 'X2', 'X3'] }, user(M), ip(10), reply)); // 12 > 10
+    expect(err.getStatus()).toBe(429);
+    expect(err.body).toMatchObject({ error: { code: 'rate_limited' } });
+    // permintaan yang ditolak tidak memakan kuota: sisa tepat 1 kode
+    await ctx.controller.quote({ promo_codes: ['Y1'] }, user(M), ip(11), reply);
+    expect((await catchApiError(() => ctx.controller.quote({ promo_codes: ['Z1'] }, user(M), ip(12), reply))).getStatus()).toBe(429);
+    // total kode yang sampai Odoo = 10 = ONLINE_RL_PROMO_MEMBER_LIMIT
+    expect(ctx.odoo.quoteArgs.reduce((s, a) => s + a.promoCodes.length, 0)).toBe(10);
+    // member lain tidak terdampak
+    await ctx.put([{ channel: 'RTL', lines: [{ product_id: 11, qty: 1 }] }], M2);
+    expect((await ctx.controller.quote({ promo_codes: ['Q1', 'Q2', 'Q3'] }, user(M2), ip(13), reply)).promo.invalid).toEqual(['Q1', 'Q2', 'Q3']);
+  });
+
+  it('SEC-134: kuota IP dihitung per KODE (default 30) lintas member; IP menolak → unit member dikembalikan', async () => {
+    const ctx = setup({ ONLINE_RL_PROMO_MEMBER_LIMIT: '100', ONLINE_RL_QUOTE_LIMIT: '100' });
+    const members = Array.from({ length: 11 }, (_, i) => `00000000-0000-4000-8000-0000000001${String(i).padStart(2, '0')}`);
+    for (const m of members) await ctx.put([{ channel: 'RTL', lines: [{ product_id: 11, qty: 1 }] }], m);
+    const shared = req('198.51.100.9');
+    for (let i = 0; i < 10; i += 1) {
+      await ctx.controller.quote({ promo_codes: [`K${i}A`, `K${i}B`, `K${i}C`] }, user(members[i]), shared, reply); // 30 unit IP
+    }
+    const err = await catchApiError(() => ctx.controller.quote({ promo_codes: ['L1'] }, user(members[10]), shared, reply));
+    expect(err.getStatus()).toBe(429);
+    expect(ctx.odoo.quoteArgs.reduce((s, a) => s + a.promoCodes.length, 0)).toBe(30);
+    // unit member yang sempat dikonsumsi dikembalikan: member ke-11 tetap punya kuota penuh dari IP lain
+    const memberCounter = ctx.kv.keys().filter((k) => k.includes(`promo_member:m:${members[10]}`));
+    for (const k of memberCounter) expect(Number((await ctx.kv.get(k)) ?? '0')).toBe(0);
+    expect((await ctx.controller.quote({ promo_codes: ['L1', 'L2', 'L3'] }, user(members[10]), req('198.51.100.10'), reply)).promo.invalid).toEqual(['L1', 'L2', 'L3']);
+  });
+
+  it('SEC-134: duplikat kode (huruf besar/kecil) dihitung sekali; quote tanpa kode = 0 unit', async () => {
+    const ctx = setup({ ONLINE_RL_PROMO_MEMBER_LIMIT: '2' });
+    await ctx.put([{ channel: 'RTL', lines: [{ product_id: 11, qty: 1 }] }]);
+    await ctx.controller.quote({}, user(M), req('203.0.113.5'), reply);
+    await ctx.controller.quote({ promo_codes: ['dup', 'DUP'] }, user(M), req('203.0.113.5'), reply); // 1 unit
+    await ctx.controller.quote({ promo_codes: ['ONE'] }, user(M), req('203.0.113.5'), reply); // 2 unit
+    expect((await catchApiError(() => ctx.controller.quote({ promo_codes: ['TWO'] }, user(M), req('203.0.113.5'), reply))).getStatus()).toBe(429);
   });
 
   it('format salah ditolak 400 invalid_request SEBELUM rate limit/Odoo', async () => {

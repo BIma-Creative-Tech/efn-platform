@@ -15,8 +15,9 @@ Kontrak: `docs/04` §10.3.3–10.3.4, §10.12, **§11.2 (G19, menang atas §10)*
 | Validasi hasil Odoo | `promo_applied`/`promo_rejected` harus ⊆ kode yang diminta dan tidak beririsan; baris reward ≤ 0 dan ≤ 20 per grup; selain itu `503 online_unavailable` + anomali `online_config_error` (fail-closed). |
 | Respons | `promo: { applied, invalid }`; `invalid` = tidak terpakai di grup **mana pun** — satu kategori untuk semua penyebab (anti-enumerasi). Kode invalid **tidak** memblokir checkout (bukan `issues`). Baris reward diteruskan apa adanya dengan `reward: true`. |
 | Redis `oq:<id>` | + `promo_codes` (ternormalisasi) dan per grup `promo_applied`; place mengirim `promo_applied` grup itu (bukan dari klien) + hanya baris produk. Hash beda di place → `409 price_changed`. Quote pra-G19 tanpa field → `[]`. |
-| Rate limit | quote yang membawa kode juga dihitung `ONLINE_RL_PROMO_MEMBER` (10 / 900 s / member) dan `ONLINE_RL_PROMO_IP` (30 / 900 s / IP ber-HMAC) → `429 rate_limited`; validasi format dulu (tanpa memakan kuota). |
-| Observability | `efn_online_promo_codes_total{result="applied\|invalid"}` tanpa label kode. Kode tidak pernah di-log asli; log debug memakai `promoCodeTag` (8 heks pertama SHA-256). |
+| Rate limit | **per KODE** (SEC-134/L-45): quote dengan n kode (setelah dedupe) mengonsumsi n unit di `ONLINE_RL_PROMO_MEMBER` (10 kode / 900 s / member) dan `ONLINE_RL_PROMO_IP` (30 kode / 900 s / IP ber-HMAC) → `429 rate_limited`. Permintaan yang ditolak tidak memakan kuota; IP menolak → unit member dikembalikan. Validasi format dulu (tanpa memakan kuota). |
+| Observability | `efn_online_promo_codes_total{result="applied\|invalid"}` tanpa label kode. Kode **tidak pernah** di-log, termasuk hash/tag-nya (SEC-132/L-42: tag SHA-256 tanpa kunci dihapus); log debug hanya memuat jumlah terpakai/tidak terpakai. |
+| Issue `qty_limit` | SEC-131: Odoo menandai baris dengan qty > batas per baris kanal sebagai `issues: [{ product_id, code: "qty_limit" }]` (diteruskan apa adanya ke klien, seperti `out_of_stock`). Checkout → `409 cart_has_issues`. Baris ber-`qty_limit` boleh dikembalikan Odoo dengan qty dipangkas (< qty cart); selain itu baris ≠ cart tetap `503`. |
 
 Kontrak respons quote (klien):
 

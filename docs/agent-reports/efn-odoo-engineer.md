@@ -1016,3 +1016,86 @@ memanggil `_check_field_access(field, 'write')`; `mail`: `phone tracking=2`, `em
 - `_load_pos_data` asli, QWeb faktur, ekspor Coretax, domain klien POS: tidak diuji (di luar cakupan PoC).
 - Vektor ber-AAD `efn:odoo:...` belum ada (butuh satu run untuk menghitung; perintah di laporan PoC §5). Sisi BFF
   test vector belum ditulis (milik efn-bff-engineer).
+
+---
+
+# G19 putaran perbaikan r12 — L-40..L-44 (`efn_online_order` 19.0.1.3.0, `efn_setup_online` 19.0.1.4.0), 18 Okt 2026
+
+Sumber: `docs/reviews/SECURITY_REVIEW_2026-10-18_r12.md` (SEC-130/131/132/139/141), QA G19 (#1, #3), keputusan lead
+docs/04 §11.7. Cakupan file: `efn_online_order/**`, `efn_setup_online/**`, satu baris `efn_core/tests/test_rpc_surface.py`.
+`efn_pii*` tidak disentuh. Tidak di-commit.
+
+## Modul & file
+- `efn_online_order/models/efn_online_channel.py`: field `max_line_qty` (wajib, default 20); constraint
+  `_check_efn_hold_limits` (confirm → `max_order_amount > 0`, nominal ≥ 0, `max_line_qty` 1..9999);
+  `_efn_online_lock_quota_programs` (L-40); issue `qty_limit` di `_efn_online_evaluate`; `_efn_online_max_qty`
+  (katalog); `_efn_online_changed_since` + `write_date` kanal; reward hadiah tanpa stok dilepas di
+  `_efn_online_try_code`/`_efn_online_claim_auto_rewards` (parameter `outlet` baru di rantai promo); log promo tanpa
+  `refs=`; issue `out_of_stock` untuk produk hadiah dihapus dari quote.
+- `models/efn_online_order.py`: place memanggil kunci kuota sebelum SO dibuat; `_efn_do_cancel` tanpa refund bila
+  `paid_idempotency_key` kosong (WARNING + aktivitas `account.group_account_invoice`).
+- `models/sale_order.py`: `_prepare_invoice` menolak SO online tanpa pembayaran tercatat.
+- `models/efn_online_common.py`: `promo_code_ref` dihapus.
+- `views/efn_online_channel_views.xml`: `max_line_qty` (tampil hanya mode confirm), `max_order_amount` required di
+  mode confirm.
+- `migrations/19.0.1.3.0/post-migrate.py` (baru): kanal confirm bernominal 0 → placeholder 5.000.000 + WARNING;
+  `max_line_qty` kosong → 20.
+- `__manifest__.py` 19.0.1.3.0, `README.md` (bagian r12).
+- `tests/test_online_g19.py`: fixture G19 menulis `max_order_amount`; `test_channel_defaults_and_hold_mode_allowed`
+  diperbarui; `test_promo_code_never_logged_raw` kini memastikan tidak ada tag hash; kelas baru
+  `TestEfnOnlineSecurityR12` (9 test).
+- `efn_setup_online/demo/efn_online_demo.xml`: `RTL`, `RTL-GL`, `RTL-BACHA` → `max_order_amount` 5000000,
+  `max_line_qty` 20; `__manifest__.py` 19.0.1.4.0; `README.md`; `tests/test_setup_online.py` (batas kanal confirm,
+  `max_qty` katalog RTL = 20).
+- `efn_core/tests/test_rpc_surface.py`: deskripsi `efn_online_quote` (SEC-141).
+
+## Perubahan respons json2 (untuk BFF/frontend)
+- `efn_online_quote.issues` dapat memuat **`{"product_id": <int>, "code": "qty_limit"}`** (kanal mode confirm, qty
+  satu produk > `max_line_qty`). Parser BFF (`/^[a-z_]{1,40}$/`) dan `KNOWN_ISSUE_CODES` frontend sudah menerima.
+  Place untuk cart yang sama → `UserError("efn_online:invalid_input")` (pola issue `order_limit`).
+- `issues` **tidak lagi** memuat `out_of_stock` untuk produk hadiah (L-44): reward dilepas; kodenya masuk
+  `promo_rejected`.
+- `efn_online_catalog.items[].max_qty` mode confirm = `min(max_qty_per_line, max_line_qty)` (demo RTL: 20, semula 99).
+- Tidak ada kunci/metode baru; bentuk lain tidak berubah.
+
+## Test baru / diubah (tag `efn`, belum dijalankan)
+`TestEfnOnlineSecurityR12`: `test_place_locks_quota_code_program_before_promotions` (spy urutan kunci → promo;
+`xmin` baris `loyalty_program` tetap setelah quote, berubah setelah place; kode tanpa kuota → tidak ada yang
+dikunci), `test_place_locks_automatic_quota_promo_and_quota_still_enforced`,
+`test_confirm_mode_requires_order_amount_and_line_qty`, `test_qty_limit_issue_quote_and_place`,
+`test_unpaid_confirm_order_cannot_be_invoiced` (`_create_invoices`, `_prepare_invoice`, wizard `delivered`),
+`test_cancel_or_expiry_of_unpaid_order_never_refunds`, `test_reward_product_without_stock_is_dropped_not_an_issue`,
+`test_auto_reward_product_without_stock_is_skipped`, `test_buy_x_get_y_with_pb1_exclusive_fnb_fixture`
+(**fixture lokal** `PB1 uji` 10 % exclude, bukan data `efn_setup_company`). Test kuota berurutan lama
+(`test_promo_code_expired_and_quota_generic_rejection`) tidak diubah.
+
+## API Odoo 19.0 yang diverifikasi (source GitHub `19.0`, WebFetch)
+`sale_loyalty`: `order_count` = `_read_group` baris SO ber-`reward_id` (tanpa filter state), ditambahkan ke
+`total_order_count`; `_try_apply_code` mengunci `FOR UPDATE NOWAIT` lalu cek `limit_usage`; promo otomatis difilter
+`total_order_count < max_usage` di `_update_programs_and_rewards` **tanpa kunci**; `_update_programs_and_rewards`
+tidak pernah mengklaim reward baru; reward produk = `discount` 100, qty `reward_product_qty * claimable_count`.
+`sale`: `_create_invoices(grouped, final, date)` memanggil `order._prepare_invoice()` per order; wizard
+`sale.advance.payment.inv` uang muka membuat `account.move` langsung dari `order._prepare_invoice()`.
+
+## Asumsi / belum diverifikasi
+- **Test & ruff belum dijalankan** (tanpa shell). Lead: jalankan `efn_online_order`, `efn_setup_online`, `efn_core`
+  (tag `efn`), target 0 failed / 0 ERROR.
+- Konkurensi L-40 dibuktikan dari semantik PostgreSQL REPEATABLE READ (UPDATE baris yang di-UPDATE transaksi lain
+  setelah snapshot → `SerializationFailure`, diulang Odoo); belum diuji dengan dua cursor nyata (perlu skrip staging).
+- `xmin::text` pada `loyalty_program` dipakai sebagai bukti UPDATE; bila `sale_loyalty` menulis baris program lewat
+  ORM saat place, assert `xmin` berubah tetap lulus (spy urutan tetap membuktikan pemanggilan).
+- `price_include_override` ada di `account.tax` 19.0 (dirujuk README `efn_setup_company`).
+- Wizard `sale.advance.payment.inv` dibuat dengan `active_model/active_ids`, `create_invoices()` mencapai
+  `_create_invoices` sebelum validasi lain (mode `delivered`). Jalur uang muka hanya diuji lewat `_prepare_invoice`.
+- `max_line_qty` berlaku untuk semua produk di mode confirm (bukan hanya storable) sesuai teks L-41; qty baris reward
+  tidak dihitung. Reward yang qty-nya dinaikkan `_update_programs_and_rewards` setelah klaim tidak dicek ulang
+  (mode confirm tertangkap reservasi → `out_of_stock`).
+- Efek samping: place berpromo berkuota menahan kunci baris program sampai commit → quote dengan kode yang sama
+  `LockNotAvailable` → diulang Odoo (bisa 503 saat lonjakan). Promo otomatis berkuota menyerialkan semua place kanal.
+
+## Untuk lead / tim lain
+- `scripts/smoke/odoo_online_smoke.py` (di luar cakupan saya): `vals` kanal RTL men-set `stock_hold_mode=confirm`
+  tanpa `max_order_amount`. Pada DB dengan demo/migrasi ini, kanal sudah punya nominal → lulus; bila smoke **membuat**
+  kanal baru (tanpa demo) → `ValidationError`. Tambahkan `"max_order_amount": 5000000, "max_line_qty": 20`.
+- Frontend: pesan `qty_limit` sudah ada; stepper sebaiknya memakai `max_qty` katalog.
+- docs/04 §11.7 L-41..L-44 sudah ditulis lead; bentuk di atas sesuai teks itu.

@@ -3,7 +3,7 @@ import { randomSecret, testConfig } from '../common/testing/fakes';
 import { ConfigError } from '../config/app-config';
 import { CircuitBreaker } from './circuit-breaker';
 import { Json2OdooOnlineClient, Json2Transport, TransportResponse, businessCode } from './json2-client';
-import { parseCatalogPage, parsePlace, parseQuote } from './odoo-online.parse';
+import { PRODUCT_ISSUE_CODES, parseCatalogPage, parsePlace, parseQuote } from './odoo-online.parse';
 import { ODOO_ONLINE_PATHS, OdooRpcError } from './odoo-online.types';
 import { OnlineMetrics } from './online-metrics';
 
@@ -321,5 +321,41 @@ describe('SEC-96/SEC-109: batas konkurensi json2 per pool (publik vs saga)', () 
     (wake as unknown as () => void)();
     await a;
     expect(order).toEqual(['A', 'B', 'A']);
+  });
+});
+
+describe('L-35 / QA G19: tagihan < Rp1 ditolak sebagai konfigurasi salah', () => {
+  it('quote tanpa issue dengan amount_payable 0 → OdooRpcError; place 0 → OdooRpcError', () => {
+    expect(() => parseQuote({ lines: [], amount_total: 0, amount_payable: 0, quote_hash: 'h' })).toThrow(/amount_payable < 1/);
+    expect(() =>
+      parsePlace({ order_state: 'placed', sale_order_name: 'S1', amount_total: 0, amount_payable: 0, expires_at: '2026-10-09 03:25:00' }),
+    ).toThrow(/amount_payable < 1/);
+  });
+
+  it('quote amount_payable 0 DENGAN issue (mis. qty_limit / out_of_stock) diterima — quote tetap terblokir di checkout', () => {
+    const q = parseQuote({ lines: [], amount_total: 0, amount_payable: 0, quote_hash: 'h', issues: [{ product_id: 11, code: 'qty_limit' }] });
+    expect(q.issues).toEqual([{ product_id: 11, code: 'qty_limit' }]);
+  });
+});
+
+describe('G19 SEC-131: issue quote `qty_limit` di parser', () => {
+  const line = { product_id: 11, name: 'Beras', qty: 25, price_unit_incl: 79_900, subtotal_incl: 1_997_500, tax_labels: [], available: true };
+  const base = { company_code: 'RTL', lines: [line], amount_total: 1_997_500, amount_payable: 1_997_500, quote_hash: 'h' };
+
+  it('qty_limit per produk diterima di samping out_of_stock; code diteruskan apa adanya', () => {
+    const q = parseQuote({ ...base, issues: [{ product_id: 11, code: 'qty_limit' }, { product_id: 14, code: 'out_of_stock' }] });
+    expect(q.issues).toEqual([{ product_id: 11, code: 'qty_limit' }, { product_id: 14, code: 'out_of_stock' }]);
+    expect(PRODUCT_ISSUE_CODES).toEqual(['out_of_stock', 'qty_limit']);
+  });
+
+  it('qty_limit / out_of_stock tanpa product_id → invalid_response; isu tingkat order (order_limit) tetap boleh null', () => {
+    for (const pid of [null, false, undefined]) {
+      expect(() => parseQuote({ ...base, issues: [{ product_id: pid, code: 'qty_limit' }] })).toThrow(/qty_limit tanpa product_id/);
+      expect(() => parseQuote({ ...base, issues: [{ product_id: pid, code: 'out_of_stock' }] })).toThrow(OdooRpcError);
+    }
+    expect(parseQuote({ ...base, issues: [{ product_id: null, code: 'order_limit' }] }).issues).toEqual([{ product_id: null, code: 'order_limit' }]);
+    // bentuk kode tetap diperiksa
+    expect(() => parseQuote({ ...base, issues: [{ product_id: 11, code: 'QTY-LIMIT' }] })).toThrow(OdooRpcError);
+    expect(() => parseQuote({ ...base, issues: [{ product_id: 0, code: 'qty_limit' }] })).toThrow(OdooRpcError);
   });
 });

@@ -396,3 +396,111 @@ Staging: `APP_ENV=staging` (image production), `PAYMENT_PROVIDER=mock`, `CONSENT
 - **When** `erp.<domain>` dibuka dari internet (tanpa WireGuard) atau lewat entrypoint publik `websecure`
 - **Then** tidak ada router (404) / koneksi ditolak firewall; `/json/2/…`, `/xmlrpc`, `/jsonrpc` dari peer WireGuard → `403`
 - **And** Wi-Fi tamu outlet (VLAN terpisah, contoh OpenWrt) tidak dapat menjangkau `10.88.0.1`
+
+---
+
+## H. Pilot online ritel G19 — reservasi 1 jam, kode promo, promo per brand, Bacha dua PT (docs/04 §11, L-27..L-39)
+
+Ditambah oleh efn-qa-engineer 2026-10-18. **Belum dijalankan** (QA tanpa shell; skenario ini dasar UAT pilot dengan klien). Dijalankan di staging dengan kanal brand diaktifkan (`RTL-GL`, `RTL-BACHA`, `FNB-BACHA`; data outlet/SKU dari klien), `ONLINE_PAYMENT_TIMEOUT_SECONDS=3600` **setelah** Odoo `payment_timeout_minutes=70` (runbook `online-orders.md#aktivasi-reservasi-1-jam`), `ONLINE_MAX_OPEN_ORDERS_PER_MEMBER=2`, pembayaran QRIS mock/sandbox.
+
+**Data uji khusus H**
+- Outlet Uji Retail: SKU "Beras 5 kg" stok fisik 10, SKU "Minyak 2 L" stok 2, SKU "Tas" (non-storable). Kasir POS Uji di outlet yang sama.
+- Program promo (Marketing, `sale_ok`, pricelist kanal): `HEMAT10` (`promo_code`, diskon 10 %, pricelist `RTL-GL`), `KUPON1` (`coupons`, sekali pakai), `LAMA10` (kedaluwarsa kemarin), `KUOTA1` (`limit_usage`, maks 1), `GRATIS100` (diskon 100 %), promo otomatis "Diskon Grand Lucky 5 %" (pricelist `RTL-GL` saja).
+- Dua member uji A dan B (nomor HP uji, bukan pelanggan nyata). Semua angka rupiah dicatat dari layar; pajak dan total selalu dihitung Odoo.
+- Pemeriksaan umum: log BFF/Odoo/Traefik **tidak** memuat kode promo asli, kode ambil, atau HP utuh.
+
+### H1. Reservasi 1 jam — stok ditahan sejak checkout
+- **Given** member A, keranjang 3 × Beras 5 kg di kanal `RTL-GL`; `free_qty` Beras di Odoo = 10
+- **When** A checkout dan sampai di layar QRIS (belum bayar)
+- **Then** SO di Odoo berstatus `sale`, picking keluar `assigned`, `free_qty` Beras = 7; batas bayar di layar ≈ 60 menit; `expires_at` Odoo ≥ batas BFF + 5 menit (default 70 menit)
+- **When** member B membuka katalog `RTL-GL` / mencoba membeli 8 × Beras
+- **Then** stok B menunjukkan tersisa 7 (status sesuai ambang); 8 × Beras → quote `out_of_stock`, checkout diblok `cart_has_issues`
+- **And** menu Inventory tidak menampilkan picking itu sebagai siap kirim; serah terima hanya lewat wizard (SEC-105)
+
+### H2. Reservasi kedaluwarsa — stok pulih, bayar terlambat dikembalikan
+- **Given** pesanan H1 tidak dibayar
+- **When** lewat batas bayar (60 menit BFF; sweeper 30 detik; cron Odoo ≤ 2 menit)
+- **Then** order BFF `expired`, SO Odoo `cancel`, move `cancel`, `free_qty` Beras kembali 10; kupon (bila ada) kembali
+- **When** A membayar QRIS **setelah** kedaluwarsa
+- **Then** dana dikembalikan penuh otomatis (`refund_required: full`), pesanan tetap `cancelled`, tidak ada faktur
+- **Negatif** — batas bayar Odoo belum dinaikkan (25 menit) saat BFF 3600: checkout ditolak `503 online_unavailable`, anomali `odoo_expiry_too_short` di log; tidak ada SO/reservasi tertinggal (urutan aktivasi runbook)
+
+### H3. Dua pembeli berebut stok terakhir
+- **Given** stok Minyak 2 L = 2; A dan B masing-masing quote 2 × Minyak (quote keduanya lolos)
+- **When** A dan B menekan "Bayar" hampir bersamaan
+- **Then** tepat satu checkout sukses; yang lain `409 out_of_stock` dengan pesan "Sebagian barang habis…" (**bukan** `cart_has_issues`), tidak ada intent pembayaran, tidak ada SO tersisa untuk pembeli kalah, `free_qty` Minyak = 0 (bukan negatif)
+- **And** di keranjang berisi dua PT (lihat H12), kegagalan stok pada satu bagian membatalkan bagian lain yang sudah ter-place (reservasi dilepas)
+
+### H4. Kasir POS menjual barang yang dicadangkan (SOP Q-F19-2)
+- **Given** pesanan A (3 × Beras) sudah **dibayar** dan `confirmed`; stok fisik 10, kasir menjual 8 (POS tidak memeriksa stok)
+- **When** reservasi A tercabut oleh penjualan kasir, lalu pembayaran/konfirmasi diproses (atau staf mencoba menyiapkan)
+- **Then** status `stock_short`; pesanan dibatalkan otomatis dan **porsi** A dikembalikan; A mendapat notifikasi; tidak `review`
+- **Given** pesanan lain sudah ditandai **Siap diambil** oleh staf (barang `picked`)
+- **When** kasir menjual stok tersisa lewat POS
+- **Then** reservasi pesanan siap **tidak** tercabut; serah terima dengan kode ambil tetap berhasil
+- **Catatan SOP**: staf menyisihkan fisik barang begitu pesanan dibayar (risiko diterima L-27)
+
+### H5. Anti *stock griefing* — batas order terbuka
+- **Given** A punya 2 order `awaiting_payment`
+- **When** A checkout order ke-3
+- **Then** `429 too_many_open_orders`, pesan "Selesaikan atau batalkan dulu"; setelah A membatalkan satu order → stok pulih dan checkout baru berhasil
+- **And** metrik/log mencatat penolakan tanpa data pribadi
+
+### H6. Kode promo benar
+- **Given** keranjang A di `RTL-GL` Rp100.000 (incl. pajak), kode `HEMAT10` sah
+- **When** A mengetik `hemat10` (huruf kecil) di kolom "Kode promo (opsional)" lalu Terapkan
+- **Then** muncul baris "Diskon promo" bernilai negatif, total turun ≈ 10 % (Odoo yang menghitung; pajak per baris tetap), kode tampil di daftar "Kode promo terpakai" dengan tombol Hapus; pesan "Kode promo diterapkan."
+- **When** A checkout
+- **Then** tagihan QRIS = total setelah diskon, baris diskon tampil di detail pesanan, SO Odoo memuat baris reward; setelah bayar, faktur = nilai yang sama
+- **When** A menghapus kode sebelum checkout
+- **Then** total kembali penuh; quote dihitung ulang
+
+### H7. Kode promo salah / kedaluwarsa / kuota habis — pesan identik, checkout tidak terblokir
+- **When** A memasukkan `TIDAKADA1`, `LAMA10`, lalu `KUOTA1` (yang sudah habis dipakai)
+- **Then** ketiganya menampilkan **tepat** pesan yang sama "Kode promo tidak dapat digunakan"; respons jaringan ketiganya identik bentuk (hanya `promo.invalid` berisi kode yang diketik); total tidak berubah
+- **And** A tetap bisa checkout tanpa kode (kode invalid bukan `issues`, tidak memblokir)
+- **Negatif** — format salah (`bad code!`, 4 kode sekaligus): `400 invalid_request` → pesan generik yang sama; tidak memakan kuota rate limit
+- **Negatif** — kode tidak muncul di URL, localStorage, atau analytics; reload halaman menghapus kode dari kolom
+
+### H8. Kupon sekali pakai — satu pemenang, batal mengembalikan
+- **Given** `KUPON1` sekali pakai; A dan B sama-sama memasukkan `KUPON1` dan keduanya melihat diskon
+- **When** A checkout lebih dulu
+- **Then** kupon terkonsumsi saat checkout A; checkout B → `409 price_changed` (promo berakhir di antara quote dan place), tidak ada SO untuk B; quote ulang B menampilkan `KUPON1` tidak dapat digunakan
+- **When** A membatalkan pesanan sebelum bayar (atau kedaluwarsa)
+- **Then** kupon pulih; B bisa memakainya pada quote baru
+
+### H9. Rate limit percobaan kode (anti-enumerasi)
+- **When** A mengirim kode promo ke-11 dalam 15 menit (batas 10 per member), atau satu IP > 30 percobaan
+- **Then** `429 rate_limited`, pesan "Terlalu banyak percobaan kode promo. Coba lagi nanti."; ringkasan lama tetap tampil dan **checkout tanpa kode tetap berhasil**; setelah jendela 15 menit percobaan berjalan lagi
+- **And** quote tanpa kode tidak ikut dihitung dalam batas promo
+
+### H10. Promo otomatis per brand
+- **Given** promo otomatis "Diskon Grand Lucky 5 %" hanya di pricelist `RTL-GL`
+- **When** A mengisi keranjang Grand Lucky
+- **Then** baris diskon otomatis muncul tanpa kode; total sudah termasuk diskon
+- **When** A mengisi keranjang Bacha butik (`RTL-BACHA`) dengan SKU yang sama
+- **Then** **tidak** ada diskon Grand Lucky; kode `HEMAT10` (milik GL) di keranjang Bacha → pesan generik "tidak dapat digunakan"
+- **And** di kanal mode tanpa reservasi (`stock_hold_mode=none`), promo otomatis tetap berlaku sedangkan kode apa pun ditolak (L-38)
+- **Negatif** — program loyalty POS lama (`sale_ok=False`) dan tipe poin/dompet/gift card tidak pernah muncul di keranjang online; Marketing yang mencoba menyetel `sale_ok` pada tipe terlarang ditolak Odoo
+
+### H11. Promo yang membuat tagihan di bawah Rp1
+- **When** A memasukkan `GRATIS100` pada keranjang kecil
+- **Then** kode ditolak (pesan generik), total tidak berubah, QRIS tidak pernah bernilai Rp0; Marketing melihat peringatan konfigurasi di log Odoo bila promo **otomatis** menyebabkan hal serupa
+
+### H12. Bacha — satu keranjang, dua PT
+- **Given** member A di domain Bacha: katalog menampilkan `RTL-BACHA` (butik, PT Retail, PPN) dan `FNB-BACHA` (kafe, PT F&B, PB1); di domain Grand Lucky hanya `RTL-GL` tampil (pembatasan UI saja)
+- **When** A menaruh 1 produk butik dan 2 menu kafe, quote
+- **Then** dua kelompok per PT dengan nama PT sebagai judul, pajak sesuai PT masing-masing dari Odoo (label berbeda), total gabungan = Σ tagihan per kelompok; satu pembayaran QRIS
+- **When** A memakai kode promo yang hanya sah di kanal butik
+- **Then** diskon hanya di kelompok butik; kelompok kafe tidak berubah; kode dianggap terpakai (ada di minimal satu kelompok)
+- **When** A checkout dan membayar
+- **Then** dua SO di dua PT berbeda (Retail dan F&B), dua kode ambil terpisah, dua faktur; status order gabungan `fulfilling` hingga kedua bagian selesai
+- **Negatif — retur/refund parsial lintas PT**: CS me-refund 1 baris dari kafe → nota kredit **hanya** di PT F&B dan hanya dari bagian kafe; bagian butik tidak berubah; refund melebihi porsi bagian kafe ditolak; baris diskon bukan baris yang bisa dipilih
+- **Negatif — kegagalan sebagian**: stok kafe habis saat checkout → `409 out_of_stock`; bagian butik yang sudah ter-place dibatalkan dan reservasinya dilepas; tidak ada tagihan
+- **Negatif**: bagian butik dibayar tetapi bagian kafe dibatalkan toko → pelanggan hanya mendapat refund porsi kafe; porsi butik tetap `confirmed`
+
+### H13. Ketahanan: Odoo/AI mati dan isolasi kanal
+- **When** Odoo tidak tersedia saat A memasukkan kode promo
+- **Then** `503 online_unavailable` (pesan ramah); katalog dari salinan tetap tampil; POS toko tetap berjalan; Ollama/OCR mati tidak berpengaruh
+- **When** API key kanal `RTL-GL` dirotasi (`efn-rotate-online-key --channel=RTL-GL`)
+- **Then** kanal `RTL-BACHA` dan `FNB-BACHA` tetap melayani tanpa gangguan (satu user teknis per kanal, L-37); mencoba menghubungkan user teknis yang sama ke dua kanal ditolak Odoo

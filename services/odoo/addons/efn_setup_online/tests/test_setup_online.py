@@ -46,6 +46,8 @@ class TestEfnSetupOnline(TransactionCase):
         api = self.env["efn.online.channel"].with_user(user)
         catalog = api.efn_online_catalog("RTL")
         self.assertEqual(len(catalog["items"]), 3)
+        # L-41: kanal mode confirm -> max_qty katalog = min(max_qty_per_line 99, max_line_qty 20).
+        self.assertEqual({item["max_qty"] for item in catalog["items"]}, {20})
         self.assertEqual(catalog["channel"]["company_code"], "RTL")
         self.assertEqual(catalog["channel"]["currency"], "IDR")
         self.assertEqual([o["code"] for o in catalog["channel"]["outlets"]], ["TOKO-01"])
@@ -117,7 +119,16 @@ class TestEfnOnlineBrandChannels(TransactionCase):
                 self.assertEqual(channel.brand_code, brand)
                 self.assertEqual(channel.stock_hold_mode, hold)
                 self.assertEqual(len(channel.user_ids), 1)
-        self.assertEqual(self.env.ref("efn_setup_online.channel_rtl").stock_hold_mode, "confirm")
+        rtl = self.env.ref("efn_setup_online.channel_rtl")
+        self.assertEqual(rtl.stock_hold_mode, "confirm")
+        # L-41 (SEC-131): setiap kanal mode confirm punya batas nominal (> 0) + qty per baris (placeholder pilot).
+        Channel = self.env["efn.online.channel"].with_context(active_test=False)
+        confirm = Channel.search([("stock_hold_mode", "=", "confirm")])
+        self.assertIn(rtl, confirm)
+        for channel in confirm:
+            with self.subTest(confirm=channel.code):
+                self.assertGreater(channel.max_order_amount, 0)
+                self.assertEqual(channel.max_line_qty, 20)
         channels = self.env["efn.online.channel"].with_context(active_test=False).search([])
         users = channels.mapped("user_ids")
         self.assertEqual(len(users), sum(len(c.user_ids) for c in channels), "user teknis dipakai > 1 kanal")

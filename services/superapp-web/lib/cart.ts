@@ -323,14 +323,28 @@ function parseTaxGroups(v: unknown): TaxGroup[] {
   return out;
 }
 
+/** Allowlist kode issue dari BFF. Kode tak dikenal tetap menjadi issue (tetap memblokir checkout) tetapi dinormalkan. */
+export const KNOWN_ISSUE_CODES = ['out_of_stock', 'item_unavailable', 'qty_exceeds_max', 'qty_limit', 'price_changed'] as const;
+export const UNKNOWN_ISSUE_CODE = 'unknown_issue';
+
 export function parseIssues(v: unknown): QuoteIssue[] {
   if (!Array.isArray(v)) return [];
   const out: QuoteIssue[] = [];
   for (const i of v) {
     if (!isObj(i) || typeof i.code !== 'string') continue;
-    out.push({ product_id: parsePositiveInt(i.product_id), code: i.code.slice(0, 40) });
+    const code = (KNOWN_ISSUE_CODES as readonly string[]).includes(i.code) ? i.code : UNKNOWN_ISSUE_CODE;
+    out.push({ product_id: parsePositiveInt(i.product_id), code });
   }
   return out;
+}
+
+/**
+ * Kode promo yang dipertahankan setelah hitung ulang (murni). Bila quote gagal/jatuh ke fallback tanpa kode
+ * (429/400), daftar lama TETAP dipakai untuk percobaan berikutnya; selain itu ikuti `applied` dari server.
+ */
+export function retainPromoCodes(current: string[], applied: string[] | null, fellBack: boolean): string[] {
+  if (fellBack || applied === null) return [...current];
+  return [...applied];
 }
 
 export function parseQuoteLines(v: unknown): QuoteLine[] {
@@ -400,6 +414,7 @@ export const ISSUE_LABEL: Record<string, string> = {
   out_of_stock: 'Stok habis',
   item_unavailable: 'Tidak tersedia',
   qty_exceeds_max: 'Melebihi jumlah maksimum',
+  qty_limit: 'Jumlah melebihi batas pembelian. Kurangi jumlah barang ini.',
   price_changed: 'Harga berubah',
 };
 

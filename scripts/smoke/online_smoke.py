@@ -12,6 +12,8 @@ Subperintah (argumen tambahan setelah nama):
   quote <key:qty,...> [label]   PUT /v1/cart lalu POST /v1/cart/quote (simpan quote di state[label])
   checkout [label]              accept_total salah -> 409; checkout (Idempotency-Key L-8) -> 201; klik ganda -> order
                                 sama; body beda -> 409 idempotency_conflict; tanpa key -> 400
+  quote_promo <key:qty,...> [label]  G19: PUT cart + quote berkode promo dev SMOKE10 (benar/salah/format salah);
+                                simpan quote berpromo di state[label] untuk checkout_only
   checkout_only [label]         checkout tanpa uji negatif (order tambahan)
   pay [label] [paid|expired]    simulate-payment (webhook mock bertanda tangan HMAC) dev
   wait [label] <order_status> <part_status> [detik]   polling GET /v1/orders/:id
@@ -228,6 +230,102 @@ def cmd_quote(spec, label="main"):
         groups=sorted(groups),
     )
     st.setdefault("orders", {})[label] = {"quote_id": q.get("quote_id"), "total": q.get("amount_payable_total")}
+    save(st)
+
+
+PROMO_CODE = "SMOKE10"  # promo_code dev (diskon 10 %) dari odoo_online_smoke.py setup; FIKTIF
+
+
+def cmd_quote_promo(spec, label="main"):
+    """G19 (docs/04 §11.2, L-28/L-34): kode promo lewat BFF -> Odoo nyata. Quote terakhir (SMOKE10) disimpan di
+    state[label] sehingga `checkout_only <label>` men-place pesanan berpromo. Kode TIDAK pernah dicetak ke hasil
+    selain kode fiktif dev ini. Rate limit promo: 4 quote berkode per member (batas 10 / 15 menit)."""
+    st = load()
+    cat = catalog_state()
+    lines = [{"product_id": cat[k], "qty": int(q)} for k, q in (x.split(":") for x in spec.split(","))]
+    s, cart, _, _, v0 = put_cart(st, lines)
+    b.result(f"o.promo_cart_put[{label}]", s == 200 and cart.get("version") == v0 + 1, http=s)
+
+    def quote(codes=None):
+        body = {} if codes is None else {"promo_codes": codes}
+        s_, q_, _, _ = b.req("POST", "/v1/cart/quote", body=body, headers=auth(st))
+        return s_, q_ or {}
+
+    def rewards(q_):
+        return [ln for g in q_.get("groups", []) for ln in g.get("lines", []) if ln.get("reward")]
+
+    def issues(q_):
+        return [i for g in q_.get("groups", []) for i in g.get("issues", [])]
+
+    s0, base = quote()
+    base_total = base.get("amount_payable_total")
+    # 1. kode benar (huruf kecil dinormalisasi) + kode salah dalam satu permintaan
+    s1, q1 = quote([PROMO_CODE.lower(), "NOSUCH99"])
+    rw = rewards(q1)
+    total1 = q1.get("amount_payable_total")
+    expected = round(base_total * 0.9) if isinstance(base_total, int) else None
+    b.result(
+        f"o.promo_applied_and_invalid[{label}]",
+        s0 == 200
+        and s1 == 200
+        and q1.get("promo") == {"applied": [PROMO_CODE], "invalid": ["NOSUCH99"]}
+        and len(rw) == 1
+        and rw[0].get("subtotal_incl", 0) < 0
+        and expected is not None
+        and isinstance(total1, int)
+        and abs(total1 - expected) <= 2
+        and not issues(q1)
+        and "quote_hash" not in json.dumps(q1)
+        and "promo_applied" not in json.dumps(q1),
+        http=[s0, s1],
+        base_total=base_total,
+        total=total1,
+        reward_lines=len(rw),
+        promo=q1.get("promo"),
+    )
+    # 2. kode salah saja: tidak memblokir (tanpa issues), total tidak berubah, tanpa baris reward, pesan satu bentuk
+    s2, q2 = quote(["NOSUCH99"])
+    s3, q3 = quote(["ZZZZ0000"])
+    b.result(
+        f"o.promo_invalid_generic_nonblocking[{label}]",
+        s2 == 200
+        and s3 == 200
+        and q2.get("promo") == {"applied": [], "invalid": ["NOSUCH99"]}
+        and q3.get("promo") == {"applied": [], "invalid": ["ZZZZ0000"]}
+        and q2.get("amount_payable_total") == base_total == q3.get("amount_payable_total")
+        and not rewards(q2)
+        and not issues(q2)
+        and not issues(q3),
+        http=[s2, s3],
+    )
+    # 3. format salah / lebih dari 3 / bentuk body salah -> 400 invalid_request (L-36), tanpa memanggil Odoo
+    bad = {}
+    for name, body in {
+        "spasi": {"promo_codes": ["bad code!"]},
+        "empat": {"promo_codes": ["A1", "B2", "C3", "D4"]},
+        "bukan_array": {"promo_codes": "A1"},
+        "kunci_lain": {"foo": 1},
+    }.items():
+        s_, r_, _, _ = b.req("POST", "/v1/cart/quote", body=body, headers=auth(st))
+        bad[name] = (s_, code_of(r_))
+    b.result(
+        f"o.promo_bad_format_400[{label}]",
+        all(v == (400, "invalid_request") for v in bad.values()),
+        results=bad,
+    )
+    # 4. quote final berpromo -> dipakai checkout_only (place membawa promo_applied, Odoo menghitung ulang)
+    s5, q5 = quote([PROMO_CODE])
+    b.result(
+        f"o.promo_final_quote[{label}]",
+        s5 == 200
+        and UUID_RE.match(q5.get("quote_id", ""))
+        and q5.get("promo", {}).get("applied") == [PROMO_CODE]
+        and isinstance(q5.get("amount_payable_total"), int)
+        and q5["amount_payable_total"] < (base_total or 0),
+        http=s5,
+        total=q5.get("amount_payable_total"),
+    )
+    st.setdefault("orders", {})[label] = {"quote_id": q5.get("quote_id"), "total": q5.get("amount_payable_total")}
     save(st)
 
 
@@ -736,6 +834,7 @@ if __name__ == "__main__":
         "login": cmd_login,
         "catalog": cmd_catalog,
         "quote": cmd_quote,
+        "quote_promo": cmd_quote_promo,
         "checkout": cmd_checkout,
         "checkout_nokey": cmd_checkout_nokey,
         "checkout_only": lambda label="main": cmd_checkout(label, negatives=False),

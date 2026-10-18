@@ -204,6 +204,15 @@ function parseTaxGroups(v: unknown): TaxGroup[] {
 }
 
 /**
+ * Kode isu quote tingkat produk yang dikenal BFF (diteruskan apa adanya ke klien di `groups[].issues`):
+ * - `out_of_stock` — stok tidak cukup;
+ * - `qty_limit` — G19 SEC-131: qty baris melebihi batas per baris kanal (`max_qty_per_line`).
+ * Kode lain (`^[a-z_]{1,40}$`, mis. isu tingkat order `order_limit` dengan `product_id: null`) tetap diterima dan
+ * diteruskan; semua isu memblokir checkout (`409 cart_has_issues`, `orders.service`).
+ */
+export const PRODUCT_ISSUE_CODES = ['out_of_stock', 'qty_limit'] as const;
+
+/**
  * Hasil `efn_online_quote` (docs/08 §8.3 C no. 4). Bila Odoo tidak mengirim `price_unit_incl`, dihitung dari
  * `subtotal_incl / qty` (2 desimal, hanya tampilan); bila tidak mengirim `issues`, baris `available=false` → `out_of_stock`.
  */
@@ -234,7 +243,10 @@ export function parseQuote(v: unknown): QuoteResult {
       const i = obj(x, 'issue');
       const code = str(i.code, 'issue.code', 40);
       if (!/^[a-z_]{1,40}$/.test(code)) bad('issue.code');
-      return { product_id: i.product_id === null || i.product_id === undefined || i.product_id === false ? null : int(i.product_id, 'issue.product_id', 1), code };
+      const productId = i.product_id === null || i.product_id === undefined || i.product_id === false ? null : int(i.product_id, 'issue.product_id', 1);
+      // Isu tingkat PRODUK (out_of_stock, qty_limit SEC-131) wajib menyebut product_id; selain itu klien tidak tahu baris mana
+      if (productId === null && (PRODUCT_ISSUE_CODES as readonly string[]).includes(code)) bad(`issue.${code} tanpa product_id`);
+      return { product_id: productId, code };
     });
   } else {
     issues = lines.filter((l) => !l.reward && !l.available).map((l) => ({ product_id: l.product_id, code: 'out_of_stock' }));
@@ -242,12 +254,15 @@ export function parseQuote(v: unknown): QuoteResult {
   const promoApplied = promoList(o.promo_applied, 'promo_applied');
   const promoRejected = promoList(o.promo_rejected, 'promo_rejected');
   if (promoApplied.some((c) => promoRejected.includes(c))) bad('promo_applied ∩ promo_rejected');
+  const amountPayable = rupiah(o.amount_payable, 'amount_payable');
+  // L-35 / QA G19: tagihan < Rp1 tanpa issue = konfigurasi promo otomatis salah (QRIS tidak bisa Rp0) -> 503 + alert.
+  if (amountPayable < 1 && issues.length === 0) bad('amount_payable < 1');
   return {
     company_code: optStr(o.company_code, 'company_code', 8),
     lines,
     tax_groups: parseTaxGroups(o.tax_groups),
     amount_total: num(o.amount_total, 'amount_total'),
-    amount_payable: rupiah(o.amount_payable, 'amount_payable'),
+    amount_payable: amountPayable,
     quote_hash: str(o.quote_hash, 'quote_hash', 128),
     valid_until: date(o.valid_until, 'valid_until'),
     issues,
@@ -258,11 +273,13 @@ export function parseQuote(v: unknown): QuoteResult {
 
 export function parsePlace(v: unknown): PlaceResult {
   const o = obj(v, 'place');
+  const amountPayable = rupiah(o.amount_payable, 'amount_payable');
+  if (amountPayable < 1) bad('amount_payable < 1'); // L-35: SO Rp0 tidak pernah dibuat payment intent
   return {
     order_state: str(o.order_state, 'order_state', 32),
     sale_order_name: optStr(o.sale_order_name, 'sale_order_name', 64),
     amount_total: num(o.amount_total, 'amount_total'),
-    amount_payable: rupiah(o.amount_payable, 'amount_payable'),
+    amount_payable: amountPayable,
     expires_at: date(o.expires_at, 'expires_at'),
   };
 }

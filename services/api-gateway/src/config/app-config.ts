@@ -1308,8 +1308,8 @@ export class AppConfig {
   get onlineChannels(): string[] {
     const raw = this.str('ONLINE_CHANNELS') ?? 'RTL';
     const out = [...new Set(raw.split(/[\s,;]+/).filter((s) => s.length > 0))];
-    if (out.length === 0 || out.length > 20 || out.some((c) => !ONLINE_CHANNEL_RE.test(c))) {
-      throw new ConfigError('ONLINE_CHANNELS harus daftar kode kanal ^[A-Z][A-Z0-9-]{1,15}$');
+    if (out.length === 0 || out.length > 20 || out.some((c) => !ONLINE_CHANNEL_RE.test(c) || c.endsWith('-FILE'))) {
+      throw new ConfigError('ONLINE_CHANNELS harus daftar kode kanal ^[A-Z][A-Z0-9-]{1,15}$ (tanpa akhiran -FILE, L-46)');
     }
     return out;
   }
@@ -1379,8 +1379,8 @@ export class AppConfig {
   /**
    * Rate limit §10.3.1 (PLACEHOLDER): `ONLINE_RL_<NAMA>_LIMIT` & `ONLINE_RL_<NAMA>_WINDOW_SECONDS`.
    * Nama: CATALOG, STOCK, CART, QUOTE, CHECKOUT, ORDERS, PICKUP, CANCEL, EVENTS, PROMO_MEMBER, PROMO_IP.
-   * G19 §11.2 no. 6: quote yang membawa `promo_codes` juga dihitung `PROMO_MEMBER` (10 / 15 menit / member) dan
-   * `PROMO_IP` (30 / 15 menit / IP) — terpisah dari `QUOTE` (anti-enumerasi kupon).
+   * G19 §11.2 no. 6: setiap KODE di `promo_codes` dihitung `PROMO_MEMBER` (10 kode / 15 menit / member) dan
+   * `PROMO_IP` (30 kode / 15 menit / IP) — terpisah dari `QUOTE` (anti-enumerasi kupon). SEC-134: n kode = n unit.
    */
   onlineRateLimit(name: OnlineRateLimitName): { limit: number; windowSeconds: number } {
     const def = ONLINE_RL_DEFAULTS[name];
@@ -1543,7 +1543,9 @@ export class AppConfig {
     };
     if (!this.isDevEnv) {
       for (const name of Object.keys(this.env)) {
-        if ((name === 'ODOO_ONLINE_EVENT_HMAC' || /^ODOO_API_KEY_ONLINE_[A-Z0-9_]+$/.test(name)) && this.str(name) !== undefined) {
+        // SEC-133: `…_FILE` adalah path ke secret file (jalur yang benar), bukan nilai literal → tidak ditolak.
+        const literalApiKey = /^ODOO_API_KEY_ONLINE_[A-Z0-9_]+$/.test(name) && !name.endsWith('_FILE');
+        if ((name === 'ODOO_ONLINE_EVENT_HMAC' || literalApiKey) && this.str(name) !== undefined) {
           problems.push(`${name} sebagai env literal ditolak di luar APP_ENV=dev; pakai ${name}_FILE (SEC-29)`);
         }
       }

@@ -73,6 +73,8 @@ const MOCK_CHANNELS: Readonly<Record<string, { company: string; brand: string | 
 const REWARD_PRODUCT_ID = 9001;
 /** `payment_timeout_minutes` default field Odoo G19 (§11.1). */
 export const MOCK_PAYMENT_TIMEOUT_MINUTES = 70;
+/** SEC-131: batas qty per baris kanal demo (PLACEHOLDER; checklist kanal ritel 10–20). */
+export const MOCK_MAX_QTY_PER_LINE = 20;
 
 const PRODUCTS: { id: number; tmpl: number; name: string; priceIncl: number; categ: number; stock: 'in_stock' | 'low' | 'out' }[] = [
   { id: 11, tmpl: 101, name: 'Beras Premium 5 kg', priceIncl: 79_900, categ: 1, stock: 'in_stock' },
@@ -109,6 +111,8 @@ export class MockOdooOnline implements OdooOnlineApi {
   readonly expiredPromos = new Set<string>();
   /** Test: menit `expires_at` place (default 70; set < 65 untuk mensimulasikan kanal Odoo yang belum dinaikkan). */
   paymentTimeoutMinutes = MOCK_PAYMENT_TIMEOUT_MINUTES;
+  /** SEC-131: `max_qty_per_line` kanal demo (default 20 = `max_qty` katalog stub); qty baris > nilai ini → issue `qty_limit`. */
+  maxQtyPerLine = MOCK_MAX_QTY_PER_LINE;
 
   private track(method: string, channel: string): void {
     this.calls.push({ method, channel });
@@ -146,7 +150,7 @@ export class MockOdooOnline implements OdooOnlineApi {
             image_sha: sha(`mock-image-${p.tmpl}`).slice(0, 40),
             sequence: i + 1,
             prices: [{ outlet_code: null, price_incl: incl, price_excl: round2((incl * TAX_DEN) / (TAX_DEN + TAX_NUM)), tax_labels: [TAX_LABEL] }],
-            max_qty: 20,
+            max_qty: MOCK_MAX_QTY_PER_LINE,
           };
         });
     return {
@@ -219,15 +223,25 @@ export class MockOdooOnline implements OdooOnlineApi {
     const tax = round2((total * TAX_NUM) / (TAX_DEN + TAX_NUM));
     // quote_hash memuat kode terpakai (urut) + id reward (§11.2 no. 3)
     const hash = sha(`${channel}|${outlet}|${JSON.stringify(lines)}|v${this.priceVersion}|${[...applied].sort().join(',')}|r${REWARD_PRODUCT_ID}`);
+    const issues: QuoteResult['issues'] = [];
+    for (const l of out) {
+      if (l.reward) continue;
+      if (!l.available) issues.push({ product_id: l.product_id, code: 'out_of_stock' });
+      // SEC-131: qty baris > batas per baris kanal → issue `qty_limit` (baris tetap dengan qty yang diminta)
+      if (l.qty > this.maxQtyPerLine) issues.push({ product_id: l.product_id, code: 'qty_limit' });
+    }
+    const amountPayable = Math.round(total);
+    // Konsisten dengan parser (L-35 / QA G19): tagihan < Rp1 tanpa issue tidak pernah keluar dari stub
+    if (amountPayable < 1 && issues.length === 0) throw new OdooRpcError('invalid_response', null, 'respons Odoo tidak valid: amount_payable < 1');
     return {
       company_code: MOCK_CHANNELS[channel]?.company ?? 'RTL',
       lines: out,
       tax_groups: [{ label: TAX_LABEL, base: round2(total - tax), amount: tax }],
       amount_total: total,
-      amount_payable: Math.round(total),
+      amount_payable: amountPayable,
       quote_hash: hash,
       valid_until: new Date(this.now() + 15 * 60_000),
-      issues: out.filter((l) => !l.reward && !l.available).map((l) => ({ product_id: l.product_id, code: 'out_of_stock' })),
+      issues,
       promo_applied: applied,
       promo_rejected: rejected,
     };
@@ -252,7 +266,10 @@ export class MockOdooOnline implements OdooOnlineApi {
     const q = this.compute(channel, order.outlet_code, order.lines, order.promo_codes ?? []);
     // kode yang dikirim place harus semuanya masih berlaku; bila tidak, hash beda → price_changed (§11.2 no. 5)
     if (q.quote_hash !== order.quote_hash || q.promo_rejected.length > 0) throw new OdooRpcError('business', 'price_changed');
+    // ASUMSI: Odoo menolak place dengan qty > batas baris sebagai `invalid_input` (BFF memblokir lebih dulu: cart_has_issues)
+    if (q.issues.some((i) => i.code === 'qty_limit')) throw new OdooRpcError('business', 'invalid_input');
     if (q.issues.length > 0) throw new OdooRpcError('business', 'out_of_stock');
+    if (q.amount_payable < 1) throw new OdooRpcError('invalid_response', null, 'respons Odoo tidak valid: amount_payable < 1'); // = parsePlace
     const o: MockOrder = {
       ref: order.platform_order_ref,
       channel,

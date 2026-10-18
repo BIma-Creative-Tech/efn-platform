@@ -8,7 +8,7 @@
 > **mencadangkan stok** sejak checkout, menerima **kode promo** (promo otomatis per brand ikut dihitung Odoo), dan
 > setiap kanal punya **kode brand**.
 
-- Versi `19.0.1.2.0`, LGPL-3, `depends`: `sale_stock`, `sale_loyalty` (CE, mesin promo E-36; baru di 19.0.1.2.0 —
+- Versi `19.0.1.3.0` (putaran perbaikan r12, lihat bagian di bawah), LGPL-3, `depends`: `sale_stock`, `sale_loyalty` (CE, mesin promo E-36; baru di 19.0.1.2.0 —
   upgrade memasangnya bila belum), `point_of_sale` (hanya `pos.category`), `mail`, `efn_core`.
   Tanpa `website*`, `delivery`, `payment_*`, tanpa modul pihak ketiga (ADR-031; `check-odoo-deps.sh`).
 - Kontrak: `docs/04_SERVICE_CONTRACTS.md` §10 (v5.0) + **§11 (v6.0, G19) yang menang atas §10 dan docs/08**;
@@ -48,8 +48,9 @@ kupon buatan Odoo berhuruf kecil tetap terpakai; `_try_apply_code` → tepat sat
 `_apply_program_reward`; galat apa pun → kode ditolak) → klaim reward otomatis deterministik (urutan `sequence, id`;
 lewati program > 1 reward, nominatif, produk multi, reward yang sudah ada) → hitung ulang. **L-35**: tagihan grup < Rp1,
 > 20 baris reward, atau baris reward positif → semua reward dari kode di-rollback, kode masuk `promo_rejected`.
-Kanal mode `none` → semua kode ditolak (promo otomatis tetap). Kode tidak pernah di-log asli (hanya 8 heks SHA-256).
-Error `FOR UPDATE NOWAIT` program (`sale_loyalty`) tidak ditangkap → Odoo mengulang request (kupon sekali pakai).
+Kanal mode `none` → semua kode ditolak (promo otomatis tetap). Kode tidak pernah di-log (asli maupun hash; sejak
+19.0.1.3.0 log hanya `codes=<n> applied=<m>`, L-42). Error konkurensi PostgreSQL (`FOR UPDATE NOWAIT` program
+`sale_loyalty`, `SerializationFailure` kunci kuota L-40) tidak ditangkap → Odoo mengulang request.
 Constraint `loyalty.program` (§11.2 no. 7) + default `sale_ok=False` + `post_init_hook`/post-migrate 19.0.1.2.0
 mematikan `sale_ok` program lama yang melanggar.
 
@@ -64,6 +65,45 @@ bentuk sama; mode confirm → SO `sale` sejak place.
 
 Referensi desain (tidak disalin): `website_sale_loyalty` (CE 19.0, `_auto_apply_rewards`, `_try_pending_coupon`) —
 pola klaim otomatis ditulis ulang; tidak ada kode OCA/Cybrosys.
+
+## Putaran perbaikan r12 (19.0.1.3.0) — keputusan lead L-40..L-44 (docs/04 §11.7)
+Sumber: `docs/reviews/SECURITY_REVIEW_2026-10-18_r12.md` (SEC-130/131/132/139/141) + QA G19 (#1, #3).
+Risiko: R-B06 (promo/stok disalahgunakan), R-S10, R-O05 (refund per SO).
+
+- **L-40 / SEC-130 kuota promo paralel.** Jalur **place** (bukan quote), sebelum SO dibuat dan sebelum kuota
+  dihitung: `_efn_online_lock_quota_programs` menjalankan `UPDATE loyalty_program SET write_date = write_date WHERE
+  id IN %s` untuk program ber-`limit_usage` yang bisa berlaku (promo **otomatis** kanal + pemilik kode yang dikirim).
+  Odoo memakai REPEATABLE READ: place kedua yang paralel menunggu kunci baris lalu mendapat `SerializationFailure`
+  → Odoo mengulang request dengan snapshot baru → kuota habis → `price_changed`. Error tidak ditangkap. Efek samping:
+  selama place berpromo berkuota belum commit, quote lain dengan kode yang sama mendapat `LockNotAvailable` (NOWAIT
+  `sale_loyalty`) dan diulang Odoo; promo otomatis berkuota menyerialkan semua place kanal itu.
+- **L-41 / SEC-131 batas mode confirm.** Constraint: `stock_hold_mode='confirm'` wajib `max_order_amount > 0`;
+  nominal negatif ditolak di semua mode. Field baru **`max_line_qty`** (wajib, default 20, 1..9999), hanya berlaku di
+  mode confirm: qty satu produk > batas → quote `issues` `{"product_id": <id>, "code": "qty_limit"}`; place →
+  `efn_online:invalid_input` (pola issue lain). Katalog `max_qty` = `min(max_qty_per_line, max_line_qty)` di mode
+  confirm; perubahan kanal (`write_date`) kini memicu katalog penuh. Post-migrate 19.0.1.3.0: kanal confirm dengan
+  `max_order_amount` 0 diisi placeholder L-41 **Rp5.000.000** + WARNING (ganti sebelum go-live).
+- **L-42 / SEC-132.** Tag hash kode promo dihapus dari log Odoo (`promo_code_ref` dihapus).
+- **L-43 / SEC-139.** `sale.order._prepare_invoice` (dipakai `_create_invoices` **dan** wizard uang muka) menolak SO
+  online tanpa pembayaran tercatat (`paid_idempotency_key` kosong) → `UserError`. `_efn_do_cancel` tidak membuat
+  refund/nota kredit untuk order yang tidak pernah dibayar; faktur ter-posting seperti itu (data lama) → WARNING +
+  aktivitas Accounting (reversal manual).
+- **L-44 / QA #3.** Reward produk hadiah storable yang membuat kebutuhan > stok bebas outlet dilepas di savepoint
+  klaimnya: dari kode → kode masuk `promo_rejected`; otomatis → dilewati. Tidak pernah menjadi `issues` (dulu
+  `out_of_stock` untuk produk hadiah). Quote dan place memakai logika yang sama (hash cocok).
+- **SEC-141.** Deskripsi `RPC_ALLOWLIST` `efn_online_quote` diperbarui (savepoint SO berpromo, nomor urut, kunci).
+
+Perubahan respons json2: hanya **issue baru `qty_limit`** di `efn_online_quote.issues` (kanal mode confirm) dan nilai
+`max_qty` katalog yang lebih kecil di mode confirm. `issues` tidak lagi memuat `out_of_stock` untuk produk hadiah.
+Tidak ada kunci/metode baru.
+
+Uji (`tests/test_online_g19.py::TestEfnOnlineSecurityR12`): kunci kuota kode + otomatis (urutan kunci sebelum promo,
+`xmin` baris program berubah hanya di place), constraint batas confirm, `qty_limit`/`order_limit`, faktur ditolak
+sebelum bayar (`_create_invoices`, `_prepare_invoice`, wizard), batal/kedaluwarsa tanpa refund, reward hadiah tanpa
+stok (kode & otomatis), buy X get Y dengan PB1 exclude (**fixture lokal**, bukan data `efn_setup_company`).
+
+Uji manual: Kanal online → mode *Reservasi saat place* tanpa *Batas nominal* → simpan ditolak; isi batas qty 2 →
+quote qty 3 → issue `qty_limit`; SO online belum dibayar → *Create Invoice* → pesan "belum dibayar".
 
 Uji manual G19: Konfigurasi → Kanal online → *Reservasi saat place*; buat program *Promo Code* `sale_ok` dengan
 pricelist kanal; quote `promo_codes` lewat smoke `SMOKE10` (`scripts/smoke/odoo_online_smoke.py setup`); place →
@@ -192,8 +232,13 @@ Uji manual: Penjualan → Pesanan → **Pesanan online** (filter "Perlu disiapka
   `total_order_count` (kuota), pengembalian poin kupon saat batal, persaingan dua diskon global (kode + otomatis —
   kode tercatat `applied` walau reward-nya diganti diskon global yang lebih baik), dan `_free_reservation` saat
   penyesuaian inventaris. Refund parsial per baris pada SO berpromo tidak mengalokasikan diskon order ke baris.
-  Constraint opsional "batas bayar ≥ parameter BFF + 10" (docs/08 §10.1 no. 5) tidak dibuat. Kanal F&B dengan
-  promo otomatis + PB1 exclude belum diuji (fixture memakai pajak exclude PPN uji).
+  Constraint opsional "batas bayar ≥ parameter BFF + 10" (docs/08 §10.1 no. 5) tidak dibuat. Buy X get Y + PB1
+  exclude diuji dengan fixture lokal (pajak `PB1 uji`), belum dengan data `efn_setup_company` + fiscal position kota.
+- r12: kunci kuota L-40 belum diuji dengan dua koneksi nyata (TransactionCase hanya membuktikan UPDATE terjadi
+  sebelum promo); perlu skrip staging dua cursor. Pemakaian kuota di luar place online (SO manual staf) tidak
+  mengunci baris program. Reward produk yang qty-nya dinaikkan `_update_programs_and_rewards` setelah klaim tidak
+  dicek ulang terhadap stok (mode confirm: tertangkap reservasi → `out_of_stock`). `max_line_qty` tidak menghitung
+  qty baris reward. Batas akumulatif per member lintas order = BFF (SEC-131 rekomendasi 2).
 - Refund `restock`: hanya aktivitas ke staf gudang (retur picking standar manual). Pembulatan per nota kredit parsial
   bisa membuat Σ refund melebihi porsi Rp1 → ditolak `amount_mismatch` [B].
 - `review` diselesaikan lewat BFF (`efn_online_cancel reason=review`) atau admin; tidak ada tombol "lanjutkan" di

@@ -25,6 +25,9 @@ G19 (docs/04 §11.1-§11.2, docs/08 §10.1 E-35 / §10.2 E-36; keputusan L-27/L-
 - mark_paid untuk SO yang sudah ``sale``: cek move masih ``assigned`` (bukan ``free_qty``: reservasi sendiri
   mengurangi ``free_qty``); dicabut POS (``_free_reservation``) -> ``_action_assign``; tetap kurang -> ``stock_short``.
 - ``action_efn_ready``: move tercadang ditandai ``picked`` agar penjualan kasir berikutnya tidak mencabutnya.
+
+Putaran r12 (docs/04 §11.7): place mengunci program berkuota sebelum promo dihitung (L-40 / SEC-130); batal/kedaluwarsa
+order yang tidak pernah dibayar tidak membuat refund/nota kredit (L-43 / SEC-139).
 """
 
 import json
@@ -387,6 +390,11 @@ class EfnOnlineOrder(models.Model):
     def _efn_place_sale_order(self, channel, outlet, fulfilment, product_qty, promo_codes, quote_hash):
         """SO dari cart + promo (E-36) -> cek ``quote_hash`` -> (mode confirm) konfirmasi + reservasi penuh (E-35)."""
         self.ensure_one()
+        usable, programs, engine = channel._efn_online_promo_plan(promo_codes, True)
+        if engine:
+            # L-40 / SEC-130: kunci baris program berkuota SEBELUM SO dibuat & kuota dihitung (place paralel ->
+            # SerializationFailure -> Odoo mengulang request). Tidak ditangkap.
+            channel._efn_online_lock_quota_programs(usable, programs)
         sale_order = channel._efn_online_create_sale_order(
             outlet,
             product_qty,
@@ -397,8 +405,7 @@ class EfnOnlineOrder(models.Model):
             },
         )
         self.write({"sale_order_id": sale_order.id})
-        usable, programs, engine = channel._efn_online_promo_plan(promo_codes, True)
-        applied = channel._efn_online_apply_promotions(sale_order, usable, programs) if engine else []
+        applied = channel._efn_online_apply_promotions(sale_order, usable, programs, outlet) if engine else []
         stored = channel._efn_online_summarize(sale_order, outlet, fulfilment, promo_applied=applied)
         if stored["quote_hash"] != quote_hash:
             # Hitungan SO tersimpan beda dengan quote (aturan harga berubah, promo berakhir/kuota habis, kupon sudah
@@ -654,10 +661,25 @@ class EfnOnlineOrder(models.Model):
         return result
 
     def _efn_do_cancel(self, reason, initiator, idempotency_key=None, cancel_sale_order=True):
-        """Batalkan SO (+ nota kredit penuh bila faktur sudah di-post). Kembalikan refund (atau kosong)."""
+        """Batalkan SO (+ nota kredit penuh bila faktur sudah di-post DAN pernah dibayar). Kembalikan refund (atau
+        kosong).
+
+        L-43 / SEC-139: order yang tidak pernah dibayar (tanpa ``paid_idempotency_key``) tidak pernah menghasilkan
+        refund/nota kredit, walau ada faktur ter-posting (mis. dibuat manual sebelum guard ``_prepare_invoice``):
+        tidak ada dana untuk dikembalikan. Faktur seperti itu = anomali -> aktivitas Accounting (reversal manual)."""
         self.ensure_one()
         refund = self.env["efn.online.refund"]
         invoice = self._efn_posted_invoice()
+        if invoice and not self.sudo().paid_idempotency_key:
+            _logger.warning(
+                "EFN online order %s: faktur ter-posting tanpa pembayaran saat batal (tanpa refund)", self.id
+            )
+            self._efn_schedule_activity(
+                _("Faktur pesanan online tanpa pembayaran"),
+                "unpaid_invoice_on_cancel",
+                "account.group_account_invoice",
+            )
+            invoice = self.env["account.move"]
         if invoice:
             refund = (
                 self.env["efn.online.refund"]

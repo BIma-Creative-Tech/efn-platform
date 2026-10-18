@@ -1,11 +1,10 @@
-import { createHash } from 'node:crypto';
-
 /**
  * Kode promo online (docs/04 §11.2, W-09/E-36). Satu sumber aturan bentuk untuk body klien (`POST /v1/cart/quote`)
  * dan hasil Odoo (`promo_applied`/`promo_rejected`).
  *
  * - Bentuk: `^[A-Za-z0-9_-]{1,40}$`, dinormalisasi HURUF BESAR, duplikat dibuang, maks 3 per quote.
- * - Kode TIDAK PERNAH di-log/di-metrik dalam bentuk asli; korelasi hanya lewat `promoCodeTag` (8 heks pertama SHA-256).
+ * - Kode TIDAK PERNAH di-log/di-metrik, baik asli maupun turunannya (hash/tag). SEC-132 (L-42): tag 8 heks SHA-256
+ *   tanpa kunci dihapus — ruang kode ~32 bit bisa dibalik dengan brute force. Log & metrik hanya memuat JUMLAH.
  * - Pesan ke klien tidak membedakan penyebab kode tidak terpakai (tidak dikenal/kedaluwarsa/kuota/bukan brand ini).
  */
 export const PROMO_CODE_RE = /^[A-Za-z0-9_-]{1,40}$/;
@@ -32,9 +31,4 @@ export function normalizePromoCodes(raw: unknown): string[] {
     if (!out.includes(u)) out.push(u);
   }
   return out;
-}
-
-/** Tag korelasi log: 8 karakter heks pertama SHA-256 kode ternormalisasi (§11.2 no. 6). Bukan untuk keamanan. */
-export function promoCodeTag(code: string): string {
-  return createHash('sha256').update(code.toUpperCase(), 'utf8').digest('hex').slice(0, 8);
 }

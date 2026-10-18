@@ -51,8 +51,11 @@
         <field name="cash_rounding_id" ref="cash_rounding_idr_1"/>
         <field name="journal_titipan_id" ref="journal_titipan_rtl"/>
         <field name="payment_timeout_minutes">70</field>
-        <!-- G19 E-35 (docs/04 §11.1): kanal ritel mencadangkan stok saat checkout. -->
+        <!-- G19 E-35 (docs/04 §11.1): kanal ritel mencadangkan stok saat checkout. L-41 (SEC-131): mode confirm
+             wajib batas nominal + qty per baris; nilai = PLACEHOLDER pilot (Rp5.000.000 / 20 unit). -->
         <field name="stock_hold_mode">confirm</field>
+        <field name="max_order_amount">5000000</field>
+        <field name="max_line_qty">20</field>
         <field name="user_ids" eval="[Command.set([ref('user_online_rtl')])]"/>
     </record>
     <record id="outlet_rtl_toko01" model="efn.online.outlet">
@@ -192,6 +195,8 @@
         <field name="journal_titipan_id" ref="journal_titipan_rtl"/>
         <field name="payment_timeout_minutes">70</field>
         <field name="stock_hold_mode">confirm</field>
+        <field name="max_order_amount">5000000</field>
+        <field name="max_line_qty">20</field>
         <field name="user_ids" eval="[Command.set([ref('user_online_rtl_gl')])]"/>
     </record>
 
@@ -216,6 +221,8 @@
         <field name="journal_titipan_id" ref="journal_titipan_rtl"/>
         <field name="payment_timeout_minutes">70</field>
         <field name="stock_hold_mode">confirm</field>
+        <field name="max_order_amount">5000000</field>
+        <field name="max_line_qty">20</field>
         <field name="user_ids" eval="[Command.set([ref('user_online_rtl_bacha')])]"/>
     </record>
 

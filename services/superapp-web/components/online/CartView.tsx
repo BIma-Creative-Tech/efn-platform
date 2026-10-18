@@ -12,6 +12,7 @@ import {
   PROMO_INVALID_MESSAGE,
   PROMO_RATE_LIMIT_MESSAGE,
   quoteHasIssues,
+  retainPromoCodes,
   setOutlet,
   setQty,
   type Cart,
@@ -121,6 +122,12 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
   const [msg, setMsg] = useState<Msg>(null);
   // Kode promo hanya di memori komponen (bukan URL, localStorage, atau analytics). Hilang saat halaman dimuat ulang.
   const promoRef = useRef<string[]>([]);
+  // Salinan untuk render (ref tidak boleh dibaca saat render); diperbarui bersama ref lewat setCodes.
+  const [heldCodes, setHeldCodes] = useState<string[]>([]);
+  const setCodes = useCallback((next: string[]) => {
+    promoRef.current = next;
+    setHeldCodes(next);
+  }, []);
   const [promoInput, setPromoInput] = useState('');
   const [promoMsg, setPromoMsg] = useState<Msg>(null);
 
@@ -139,12 +146,16 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
   /** Sinkronkan kode promo terpakai + pesan generik dari hasil quote. Kode tidak berlaku tidak dibedakan penyebabnya. */
   const settlePromo = useCallback((q: QuoteFetch, sent: string[], explicit: boolean) => {
     if (q.promoNotice) {
-      promoRef.current = q.quote ? q.quote.promo.applied : promoRef.current;
-      setPromoMsg({ kind: 'error', text: q.promoNotice });
+      // Fallback tanpa kode (429/400): kode tetap disimpan di memori untuk percobaan berikutnya.
+      setCodes(retainPromoCodes(promoRef.current, null, true));
+      setPromoMsg({
+        kind: 'error',
+        text: promoRef.current.length > 0 ? `${q.promoNotice} Kode Anda tetap tersimpan; ringkasan sementara dihitung tanpa kode.` : q.promoNotice,
+      });
       return;
     }
     if (!q.quote) return;
-    promoRef.current = q.quote.promo.applied;
+    setCodes(retainPromoCodes(promoRef.current, q.quote.promo.applied, false));
     if (q.quote.promo.invalid.length > 0) setPromoMsg({ kind: 'error', text: PROMO_INVALID_MESSAGE });
     else if (explicit && sent.length > 0) setPromoMsg({ kind: 'success', text: 'Kode promo diterapkan.' });
     else if (sent.length === 0) setPromoMsg(null);
@@ -153,7 +164,7 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
   const requote = useCallback(
     async (cart: Cart, notice: string | null = null) => {
       if (cart.groups.length === 0) {
-        promoRef.current = [];
+        setCodes([]);
         setPromoMsg(null);
         setView({ kind: 'member', cart, quote: null, quoteError: null, notice });
         return;
@@ -201,7 +212,7 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
     setBusy(true);
     setPromoMsg(null);
     try {
-      promoRef.current = promoRef.current.filter((c) => c !== code);
+      setCodes(promoRef.current.filter((c) => c !== code));
       await requote(view.cart, view.notice);
     } finally {
       setBusy(false);
@@ -294,6 +305,8 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
   const quote = view.kind === 'member' ? view.quote : null;
   const blocked = !quote || quoteHasIssues(quote);
   const quoteGroup = (code: string): QuoteGroup | null => quote?.groups.find((g) => g.channel_code === code) ?? null;
+  // Saat fallback tanpa kode, quote.promo.applied kosong; tetap tampilkan kode yang disimpan agar bisa dihapus.
+  const shownCodes = quote ? (quote.promo.applied.length > 0 ? quote.promo.applied : heldCodes) : [];
   const mutate = view.kind === 'guest' ? mutateGuest : (fn: (g: CartGroup[]) => CartGroup[]) => void mutateMember(fn);
 
   return (
@@ -471,10 +484,10 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
                       spellCheck={false}
                       enterKeyHint="done"
                       aria-describedby="promo-status promo-hint"
-                      disabled={busy || paying || quote.promo.applied.length >= MAX_PROMO_CODES}
+                      disabled={busy || paying || shownCodes.length >= MAX_PROMO_CODES}
                       onChange={(e) => setPromoInput(e.target.value)}
                     />
-                    <button type="submit" className="btn btn-secondary" disabled={busy || paying || promoInput.trim() === '' || quote.promo.applied.length >= MAX_PROMO_CODES}>
+                    <button type="submit" className="btn btn-secondary" disabled={busy || paying || promoInput.trim() === '' || shownCodes.length >= MAX_PROMO_CODES}>
                       Terapkan
                     </button>
                   </div>
@@ -485,9 +498,9 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
                 <div id="promo-status" aria-live="polite" role="status">
                   {promoMsg && <p className={`alert ${promoMsg.kind === 'success' ? 'alert-success' : 'alert-error'}`}>{promoMsg.text}</p>}
                 </div>
-                {quote.promo.applied.length > 0 && (
+                {shownCodes.length > 0 && (
                   <ul className={styles.promoApplied} aria-label="Kode promo terpakai">
-                    {quote.promo.applied.map((c) => (
+                    {shownCodes.map((c) => (
                       <li key={c}>
                         <span className={styles.promoCode}>{c}</span>
                         <button type="button" className="btn btn-secondary btn-small" disabled={busy || paying} aria-label={`Hapus kode promo ${c}`} onClick={() => void removePromo(c)}>

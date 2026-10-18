@@ -3,7 +3,7 @@
     "summary": "E-28 + G19 (E-35/E-36/E-37a): kanal penjualan online per PT/brand lewat BFF (/json/2 terfilter): "
     "katalog, quote berpromo, SO idempoten dengan reservasi stok, saga bayar-konfirmasi-ambil, refund per SO, "
     "outbox event bertanda tangan HMAC.",
-    "version": "19.0.1.2.0",
+    "version": "19.0.1.3.0",
     "category": "EFN/Sales",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031): hanya Odoo CE 19 + efn_*.

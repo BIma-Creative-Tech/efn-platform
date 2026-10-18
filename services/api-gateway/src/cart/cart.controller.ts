@@ -4,7 +4,7 @@ import { AppConfig } from '../config/app-config';
 import { RateLimiter } from '../common/rate-limit/rate-limiter';
 import { AuthUser } from '../common/security/access-token.service';
 import { CurrentUser, JwtAuthGuard } from '../common/security/jwt-auth.guard';
-import { assertBodySize, limitByIp, limitByMember, noStore, requireOnline } from '../catalog/online-http';
+import { assertBodySize, consumePromoCodeQuota, limitByMember, noStore, requireOnline } from '../catalog/online-http';
 import { OnlineErrors } from '../odoo-rpc/online-errors';
 import { PromoCodesInvalid, normalizePromoCodes } from '../odoo-rpc/promo-codes';
 import { Cart } from './cart-store';
@@ -56,7 +56,7 @@ export class CartController {
 
   /**
    * `POST /v1/cart/quote` body `{}` atau `{ "promo_codes": ["KODE1"] }` (G19 §11.2 no. 1). Format salah / kunci lain →
-   * `400 invalid_request`. Quote berpromo dihitung juga di rate limit `PROMO_MEMBER` + `PROMO_IP` (→ `429 rate_limited`).
+   * `400 invalid_request`. Setiap KODE dihitung di rate limit `PROMO_MEMBER` + `PROMO_IP` (SEC-134; → `429 rate_limited`).
    */
   @Post('quote')
   @HttpCode(HttpStatus.OK)
@@ -71,10 +71,8 @@ export class CartController {
     assertBodySize(req);
     const promoCodes = parseQuoteBody(body);
     await limitByMember(this.limiter, this.config, 'QUOTE', user.memberId);
-    if (promoCodes.length > 0) {
-      await limitByMember(this.limiter, this.config, 'PROMO_MEMBER', user.memberId);
-      await limitByIp(this.limiter, this.config, 'PROMO_IP', req);
-    }
+    // SEC-134 (L-45): kuota promo dihitung per KODE (n kode = n unit di member & IP), bukan per quote
+    await consumePromoCodeQuota(this.limiter, this.config, user.memberId, req, promoCodes.length);
     return this.quotes.quote(user.memberId, promoCodes);
   }
 }

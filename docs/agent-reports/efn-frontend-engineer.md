@@ -415,3 +415,10 @@ Status selesai/dibatalkan tidak menampilkan batas. Label kini menyebut jumlah pe
 - **Brand (§11.3):** `Brand.brandCode`, `channelsPath`, `?brand=` tervalidasi di route channels. **L-33:** tenant yang ada memakai `brandCode: null` sampai Q-F19-5.
 - **Test:** `tests/promo.test.ts` (baru), tambahan di `online-routes.test.ts`, `brands.test.ts`. Dijalankan lead di container node:22: lint OK, 16 file test lulus, `next build` OK.
 - **Belum:** test komponen React CartView (alur aria-live/fallback 429), tampilan nominal negatif di browser nyata, kode promo hilang saat reload (disengaja).
+
+## G19 perbaikan (2026-10-18)
+
+- **QA #5 retensi kode promo:** `CartView.settlePromo` tidak lagi menimpa `promoRef` dengan `promo.applied` kosong saat fallback 429/400. Fungsi murni baru `retainPromoCodes(current, applied, fellBack)` di `lib/cart.ts`. Pesan generik ditambah "Kode Anda tetap tersimpan; ringkasan sementara dihitung tanpa kode." Kode yang tertahan tetap tampil di daftar "Kode promo terpakai" (bisa dihapus) dan dihitung terhadap batas 3. Tetap hanya di memori (tanpa URL/storage/log).
+- **`qty_limit`:** `parseIssues` kini memakai allowlist `KNOWN_ISSUE_CODES` (out_of_stock, item_unavailable, qty_exceeds_max, qty_limit, price_changed); kode lain dinormalkan ke `unknown_issue` (tetap issue, tetap memblokir). Label per baris: "Jumlah melebihi batas pembelian. Kurangi jumlah barang ini." Checkout tetap nonaktif via `quoteHasIssues`; 409 `cart_has_issues` sudah memicu hitung ulang.
+- **Test:** `tests/g19-fix.test.ts` (baru): parsing qty_limit, normalisasi kode tak dikenal, label, retensi kode. Belum dijalankan (tidak ada Node lokal; lead menjalankan Vitest/build).
+- **Belum:** kontrak batas kanal (default 20) tidak diketahui klien, tombol "+" masih sampai 99 sehingga issue baru muncul setelah quote; uji komponen CartView; kode yang selalu 400 akan terus dikirim ulang pada tiap hitung ulang sampai dihapus pelanggan.

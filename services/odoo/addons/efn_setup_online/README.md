@@ -37,9 +37,20 @@ repo).
   lepas user dari `RTL-GL`/`RTL-BACHA` manual. Constraint hanya berjalan saat kanal/user ditulis.
 - Test: `test_brand_codes_hold_mode_and_one_user_per_channel`; katalog per brand memakai user per kanal.
 
+### Putaran r12 (19.0.1.4.0, docs/04 §11.7 L-41 / SEC-131)
+- Kanal demo mode confirm (`RTL`, `RTL-GL`, `RTL-BACHA`) diberi `max_order_amount` **5.000.000** dan `max_line_qty`
+  **20** (PLACEHOLDER pilot lead; nilai bisnis dari Marketing/Ops sebelum go-live). Wajib karena `efn_online_order`
+  19.0.1.3.0 menolak mode confirm tanpa batas nominal.
+- Demo = noupdate: DB dev lama tidak memuat ulang nilai ini; post-migrate `efn_online_order` 19.0.1.3.0 mengisi
+  placeholder yang sama untuk kanal confirm ber-nominal 0, dan `max_line_qty` terisi default kolom (20).
+- Test: `test_brand_codes_hold_mode_and_one_user_per_channel` (semua kanal confirm punya batas), `test_demo_channels`
+  (`max_qty` katalog RTL = 20).
+- Checklist go-live: isi **batas nominal** dan **batas qty per baris (reservasi)** kanal produksi mode confirm.
+
 ## Checklist go-live kanal
 **Satu user teknis per kanal** (L-37; hanya Internal User + grup kanal, satu company, 2FA kebijakan) → API key via runbook → secret BFF
-`odoo_api_key_online_<kanal>` → kanal (pricelist, partner generik, jurnal titipan, pembulatan, batas) → outlet (gudang,
+`odoo_api_key_online_<kanal>` → kanal (pricelist, partner generik, jurnal titipan, pembulatan, batas; mode confirm:
+`max_order_amount` > 0 + `max_line_qty`, L-41) → outlet (gudang,
 FP outlet, jam ambil) → produk terpublikasi (tab "Online (Super-App)") → secret `odoo_online_event_hmac` dimount ke
 Odoo & BFF → `ONLINE_ENABLED` BFF.
 

@@ -230,8 +230,10 @@ Odoo menjawab 401/403 untuk kanal → key kedaluwarsa, dicabut, user teknis dino
 - Recreate BFF (2 replika prod) bersamaan → permintaan online bisa 503 beberapa detik pada 03:15 WIB (rolling restart
   belum; compose tidak mendukung tanpa orchestrator).
 - G19 `--all`, `--bootstrap`, pemeriksaan `user_shared` belum diuji terhadap Odoo/BFF sungguhan (uji palsu + blok
-  Python dijalankan terhadap env Odoo palsu). Uji nyata di stack dev butuh user teknis khusus per kanal brand
-  (data demo saat ini memakai `efn_online_rtl` bersama → `user_shared`, sesuai desain).
+  Python dijalankan terhadap env Odoo palsu). Data demo `efn_setup_online` kini sudah satu user teknis per kanal
+  (L-37), jadi uji nyata `RTL-GL` dll. hanya butuh kanal diaktifkan + outlet/SKU; **DB dev lama** (demo noupdate,
+  `efn_online_rtl` di 3 kanal) masih `user_shared` sampai DB dibuat ulang atau user dilepas manual (README modul).
+  Kanal nonaktif tidak bisa diverifikasi (lihat butir berikut). Kanal `FNB` demo tidak punya user teknis.
 - Verifikasi memanggil katalog kanal → kanal Odoo **nonaktif** tidak bisa diberi key (bukan 200). Pra-provisioning key
   untuk kanal nonaktif belum didukung (sengaja: verifikasi ketat 200).
 - Uji nyata rollback (key baru ditolak) hanya di test palsu; jalur sukses sudah diuji nyata di dev.

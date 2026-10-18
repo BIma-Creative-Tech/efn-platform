@@ -16,7 +16,7 @@ describe('Config online G19', () => {
   it('§11.3: ONLINE_CHANNELS menerima kode berhifen; selain regex §10.2 ditolak', () => {
     expect(testConfig({ ONLINE_CHANNELS: 'RTL-GL,RTL-BACHA' }).onlineChannels).toEqual(['RTL-GL', 'RTL-BACHA']);
     expect(testConfig({ ONLINE_CHANNELS: 'RTL, FNB-PB;FNB-BACHA' }).onlineChannels).toEqual(['RTL', 'FNB-PB', 'FNB-BACHA']);
-    for (const bad of ['RTL_GL', 'rtl-gl', 'R', '../RTL', 'RTL/GL', 'RTL.GL', '-RTL', 'A'.repeat(17)]) {
+    for (const bad of ['RTL_GL', 'rtl-gl', 'R', '../RTL', 'RTL/GL', 'RTL.GL', '-RTL', 'A'.repeat(17), 'RTL-FILE']) { // RTL-FILE: L-46
       expect(() => testConfig({ ONLINE_CHANNELS: bad }).onlineChannels).toThrow(ConfigError);
     }
   });
@@ -68,5 +68,48 @@ describe('Config online G19', () => {
     // env literal kanal berhifen di luar APP_ENV=dev ditolak (SEC-29)
     const lit = testConfig({ ONLINE_ENABLED: 'true', ONLINE_CHANNELS: 'RTL-GL', ODOO_API_KEY_ONLINE_RTL_GL: randomSecret() });
     expect(() => lit.assertStartupSecrets()).toThrow(/ODOO_API_KEY_ONLINE_RTL_GL sebagai env literal ditolak/);
+  });
+
+  describe('SEC-133: pemeriksaan env literal tidak menolak `ODOO_API_KEY_ONLINE_*_FILE`', () => {
+    const fileEnv = { ODOO_API_KEY_ONLINE_RTL_FILE: '/s/rtl', ODOO_API_KEY_ONLINE_RTL_GL_FILE: '/s/rtl-gl' };
+    const keys: Record<string, string> = { '/s/rtl': randomSecret(), '/s/rtl-gl': randomSecret(), '/s/hmac': randomSecret() };
+    const reader = (p: string): Buffer => {
+      const v = keys[p];
+      if (v === undefined) throw new Error('ENOENT');
+      return Buffer.from(v);
+    };
+
+    it('APP_ENV=production + RTL_FILE + RTL_GL_FILE (online OFF, seperti base compose) → start valid', () => {
+      expect(() => testConfig({ APP_ENV: 'production', ...fileEnv }, reader).assertStartupSecrets()).not.toThrow();
+    });
+
+    it('APP_ENV=production + online ON kanal RTL,RTL-GL via *_FILE → start valid dan key terbaca dari file', () => {
+      const c = testConfig(
+        { APP_ENV: 'production', ONLINE_ENABLED: 'true', ONLINE_CHANNELS: 'RTL,RTL-GL', ODOO_ONLINE_EVENT_HMAC_FILE: '/s/hmac', ...fileEnv },
+        reader,
+      );
+      expect(() => c.assertStartupSecrets()).not.toThrow();
+      expect(c.odooApiKeyOnline('RTL')).toBe(keys['/s/rtl']);
+      expect(c.odooApiKeyOnline('RTL-GL')).toBe(keys['/s/rtl-gl']);
+    });
+
+    it('APP_ENV=production + literal ODOO_API_KEY_ONLINE_RTL → ditolak (pesan menyebut nama, bukan nilai)', () => {
+      const literal = randomSecret();
+      const c = testConfig({ APP_ENV: 'production', ODOO_API_KEY_ONLINE_RTL: literal, ...fileEnv }, reader);
+      let msg = '';
+      try {
+        c.assertStartupSecrets();
+      } catch (err) {
+        msg = err instanceof Error ? err.message : String(err);
+      }
+      expect(msg).toMatch(/ODOO_API_KEY_ONLINE_RTL sebagai env literal ditolak/);
+      expect(msg).not.toMatch(/ODOO_API_KEY_ONLINE_RTL_FILE sebagai env literal/);
+      expect(msg).not.toMatch(/ODOO_API_KEY_ONLINE_RTL_GL_FILE sebagai env literal/);
+      expect(msg).not.toContain(literal);
+      // literal 'xxx' (pendek) juga ditolak sebagai literal, bukan lolos karena pendek
+      expect(() => testConfig({ APP_ENV: 'production', ODOO_API_KEY_ONLINE_RTL: 'xxx' }).assertStartupSecrets()).toThrow(
+        /ODOO_API_KEY_ONLINE_RTL sebagai env literal ditolak/,
+      );
+    });
   });
 });

@@ -43,7 +43,7 @@
                             <field name="journal_titipan_id"/>
                             <field name="payment_timeout_minutes"/>
                             <field name="quote_validity_minutes"/>
-                            <field name="max_order_amount"/>
+                            <field name="max_order_amount" required="stock_hold_mode == 'confirm'"/>
                         </group>
                         <group string="Stok">
                             <field name="stock_check"/>
@@ -58,6 +58,7 @@
                             <field name="require_outlet_fiscal_position"/>
                             <field name="max_lines"/>
                             <field name="max_qty_per_line"/>
+                            <field name="max_line_qty" invisible="stock_hold_mode != 'confirm'"/>
                             <field name="pickup_reminder_hours"/>
                             <field name="pickup_max_attempts"/>
                         </group>

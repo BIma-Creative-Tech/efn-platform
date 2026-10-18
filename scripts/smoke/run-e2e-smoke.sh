@@ -613,6 +613,8 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   # 0. Konfigurasi kanal dev (idempoten) + API key nyata user teknis (runbook odoo-online-api-key §1)
   r="$(oodoo -e SMOKE_STEP=setup)"
   check "o.odoo_channel_setup" "$([[ "$(field ok "$r")" == true && "$(field tech_user_groups_ok "$r")" == true && "$(field staff_is_admin "$r")" == false ]] && echo 1 || echo 0)" "$r"
+  # G19: kanal dev = reservasi saat place (§11.1), batas bayar Odoo 70 menit, program promo dev SMOKE10 sah (§11.2 no. 7)
+  check "o.g19_channel_confirm_70_promo_program" "$([[ "$(field stock_hold_mode "$r")" == confirm && "$(field payment_timeout_minutes "$r")" == 70 && "$(field promo_program_ok "$r")" == true ]] && echo 1 || echo 0)" "$r"
   n="$(tr -d '\r\n' < "${ROOT}/secrets/odoo_api_key_online_rtl.txt" | grep -cE '^[0-9a-f]{40}$' || true)"
   check "o.api_key_real_not_placeholder" "$([[ "$n" == 1 ]] && echo 1 || echo 0)" "secrets/odoo_api_key_online_rtl.txt 40 hex (nilai tidak dicetak)"
 
@@ -727,14 +729,23 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   check "o.odoo_credit_note_partial" "$([[ "$(field credit_notes "$r")" -ge 1 && "$(field state "$r")" == picked_up ]] && echo 1 || echo 0)" "$r"
 
   # 2. Batas bayar (member B): kedaluwarsa dipercepat lewat DB dev -> sweeper -> SO batal; bayar terlambat -> refund
-  local tmo tpart
-  opy "$pb" b quote oil:1 tmo
+  #    G19: pesanan ini memakai kode promo dev SMOKE10 (quote_promo; kode benar/salah/format salah/anti-enumerasi diuji di
+  #    online_smoke.py) dan mengukur reservasi 1 jam (§11.1): free_qty turun setelah place, pulih setelah kedaluwarsa.
+  local tmo tpart f0 f1 f2
+  f0="$(field free_qty "$(oodoo -e SMOKE_STEP=free -e SMOKE_PRODUCT=oil)")"
+  opy "$pb" b quote_promo oil:1 tmo
   opy "$pb" b checkout_only tmo
   tmo="$(python_free_json b tmo order_id)"; tpart="$(part_of "$tmo")"
+  r="$(oodoo -e SMOKE_STEP=order -e SMOKE_PART="$tpart")"
+  f1="$(field free_qty "$(oodoo -e SMOKE_STEP=free -e SMOKE_PRODUCT=oil)")"
+  check "o.g19_place_so_sale_reserved_70min_reward" "$([[ "$(field state "$r")" == placed && "$(field so_state "$r")" == sale && "$(field reserved "$r")" == true && "$(field hold_minutes "$r")" =~ ^(69|70)$ && "$(field reward_lines "$r")" -ge 1 ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  check "o.g19_stock_drops_after_place" "$([[ "$f0" =~ ^-?[0-9]+$ && "$f1" =~ ^-?[0-9]+$ && "$((f0 - f1))" == 1 ]] && echo 1 || echo 0)" "free_qty minyak sebelum=$f0 sesudah place=$f1"
   psql_platform -c "update platform.online_order set expires_at = now() - interval '1 minute' where id='$tmo' and status='awaiting_payment'" > /dev/null
   opy "$pb" b wait tmo expired cancelled 150
   for _ in $(seq 1 20); do r="$(oodoo -e SMOKE_STEP=order -e SMOKE_PART="$tpart")"; [[ "$(field state "$r")" == cancelled ]] && break; sleep 5; done
   check "o.timeout_odoo_so_cancelled" "$([[ "$(field state "$r")" == cancelled && "$(field cancel_reason "$r")" == payment_expired && "$(field so_state "$r")" == cancel ]] && echo 1 || echo 0)" "$r"
+  f2="$(field free_qty "$(oodoo -e SMOKE_STEP=free -e SMOKE_PRODUCT=oil)")"
+  check "o.g19_stock_restored_after_expiry" "$([[ "$f2" =~ ^-?[0-9]+$ && "$f2" == "$f0" ]] && echo 1 || echo 0)" "free_qty minyak awal=$f0 setelah kedaluwarsa=$f2"
   opy "$pb" b pay tmo paid
   for _ in $(seq 1 30); do
     n="$(psql_platform -c "select kind || '/' || status || '/' || amount::bigint from platform.online_refund where part_id='$tpart' order by created_at desc limit 1")"

@@ -961,6 +961,21 @@ describe('G19 §11.1–11.2: reservasi 1 jam, batas order terbuka, promo saat pl
     }
   });
 
+  it('L-38: reservasi gagal saat place (Odoo efn_online:out_of_stock) → 409 out_of_stock (bukan cart_has_issues), order failed, kompensasi cancel, tanpa intent pembayaran', async () => {
+    const ctx = setup();
+    const c = await ctx.cart.get(MEMBER);
+    await ctx.cart.put(MEMBER, { version: c.version, groups: [{ channel_code: 'RTL', outlet_code: 'TOKO-01', fulfilment: 'pickup', lines: [{ product_id: 11, qty: 2 }] }] });
+    const q = await ctx.quotes.quote(MEMBER);
+    ctx.odoo.failNext.set('place', new OdooRpcError('business', 'out_of_stock'));
+    const err = await catchApiError(() => ctx.orders.checkout(MEMBER, KEY, { quoteId: q.quote_id, acceptTotal: q.amount_payable_total }));
+    expect(err.getStatus()).toBe(409);
+    expect(err.body).toMatchObject({ error: { code: 'out_of_stock' } });
+    const o = [...ctx.repo.state.orders.values()][0];
+    expect(o).toMatchObject({ status: 'failed', close_reason: 'place_failed' });
+    expect(ctx.odoo.calls.filter((x) => x.method === 'cancel')).toHaveLength(1); // kompensasi idempoten (Odoo: absent)
+    expect(o.payment_intent_id ?? null).toBeNull();
+  });
+
   it('place mengirim promo_applied grup dari quote tersimpan (bukan dari klien), hanya baris produk; baris reward tersimpan & tampil di status order', async () => {
     const ctx = setup();
     const q = await quoteWith(ctx, ['DEMO5K', 'NOPE42']);
@@ -1015,5 +1030,94 @@ describe('G19 §11.1–11.2: reservasi 1 jam, batas order terbuka, promo saat pl
     const [part] = ctx.partsOf(order.order_id);
     expect(estimateLinesAmount(part, [{ product_id: 11, qty: 1 }])).toBe(79_900);
     expect(() => estimateLinesAmount(part, [{ product_id: 9001, qty: 1 }])).toThrow(/tidak ada di bagian/);
+  });
+});
+
+describe('G19 SEC-131: issue quote `qty_limit` (batas qty per baris kanal)', () => {
+  async function putLines(ctx: ReturnType<typeof setup>, lines: { product_id: number; qty: number }[]) {
+    const c = await ctx.cart.get(MEMBER);
+    await ctx.cart.put(MEMBER, { version: c.version, groups: [{ channel_code: 'RTL', outlet_code: 'TOKO-01', fulfilment: 'pickup', lines }] });
+  }
+
+  it('stub: default batas 20 per baris; qty 21 → issue qty_limit (baris tetap qty diminta), qty 20 → tanpa issue', async () => {
+    const odoo = new MockOdooOnline();
+    expect(odoo.maxQtyPerLine).toBe(20);
+    const over = await odoo.quote('RTL', 'TOKO-01', 'pickup', [{ product_id: 11, qty: 21 }, { product_id: 12, qty: 1 }]);
+    expect(over.issues).toEqual([{ product_id: 11, code: 'qty_limit' }]);
+    expect(over.lines.find((l) => l.product_id === 11)?.qty).toBe(21);
+    expect(over.amount_payable).toBeGreaterThan(0);
+    const ok = await odoo.quote('RTL', 'TOKO-01', 'pickup', [{ product_id: 11, qty: 20 }]);
+    expect(ok.issues).toEqual([]);
+    // produk habis + qty berlebih → kedua issue dilaporkan
+    const both = await odoo.quote('RTL', 'TOKO-01', 'pickup', [{ product_id: 14, qty: 25 }]);
+    expect(both.issues).toEqual([{ product_id: 14, code: 'out_of_stock' }, { product_id: 14, code: 'qty_limit' }]);
+  });
+
+  it('quote → issues [{product_id, code: qty_limit}] diteruskan ke klien; checkout → 409 cart_has_issues, tanpa place/order', async () => {
+    const ctx = setup();
+    ctx.odoo.maxQtyPerLine = 3; // batas kanal < max_qty katalog (20) → cart lolos, Odoo menandai
+    await putLines(ctx, [{ product_id: 11, qty: 5 }, { product_id: 12, qty: 1 }]);
+    const q = await ctx.quotes.quote(MEMBER);
+    expect(q.groups[0].issues).toEqual([{ product_id: 11, code: 'qty_limit' }]);
+    expect(q.groups[0].lines.map((l) => [l.product_id, l.qty])).toEqual([[11, 5], [12, 1]]);
+    const err = await catchApiError(() => ctx.orders.checkout(MEMBER, KEY, { quoteId: q.quote_id, acceptTotal: q.amount_payable_total }));
+    expect(err.getStatus()).toBe(409);
+    expect(err.body).toEqual({ error: { code: 'cart_has_issues', message: expect.any(String) } });
+    expect(ctx.odoo.calls.filter((c) => c.method === 'place')).toHaveLength(0);
+    expect(ctx.repo.state.orders.size).toBe(0);
+  });
+
+  it('Odoo memangkas qty baris ber-qty_limit (< qty cart) → diterima; qty lebih besar / tanpa issue → 503 (fail-closed)', async () => {
+    const ctx = setup();
+    await putLines(ctx, [{ product_id: 11, qty: 5 }]);
+    const base = {
+      company_code: 'RTL', tax_groups: [], quote_hash: 'h', valid_until: null, promo_applied: [], promo_rejected: [],
+    };
+    const line = (qty: number) => ({ product_id: 11, name: 'Beras', qty, price_unit_incl: 79_900, subtotal_incl: 79_900 * qty, tax_labels: [], available: true, reward: false });
+    jest.spyOn(ctx.odoo, 'quote').mockResolvedValueOnce({ ...base, lines: [line(3)], amount_total: 239_700, amount_payable: 239_700, issues: [{ product_id: 11, code: 'qty_limit' }] });
+    const q = await ctx.quotes.quote(MEMBER);
+    expect(q.groups[0].issues).toEqual([{ product_id: 11, code: 'qty_limit' }]);
+    expect(q.groups[0].lines[0].qty).toBe(3);
+    expect((await catchApiError(() => ctx.orders.checkout(MEMBER, KEY, { quoteId: q.quote_id, acceptTotal: q.amount_payable_total }))).body).toMatchObject({
+      error: { code: 'cart_has_issues' },
+    });
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      jest.spyOn(ctx.odoo, 'quote').mockResolvedValueOnce({ ...base, lines: [line(6)], amount_total: 479_400, amount_payable: 479_400, issues: [{ product_id: 11, code: 'qty_limit' }] });
+      expect((await catchApiError(() => ctx.quotes.quote(MEMBER))).getStatus()).toBe(503);
+      jest.spyOn(ctx.odoo, 'quote').mockResolvedValueOnce({ ...base, lines: [line(3)], amount_total: 239_700, amount_payable: 239_700, issues: [{ product_id: 11, code: 'out_of_stock' }] });
+      expect((await catchApiError(() => ctx.quotes.quote(MEMBER))).getStatus()).toBe(503);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('stub place dengan qty melebihi batas → business invalid_input (Odoo tidak pernah mencadangkan qty berlebih)', async () => {
+    const odoo = new MockOdooOnline();
+    const q = await odoo.quote('RTL', 'TOKO-01', 'pickup', [{ product_id: 11, qty: 21 }]);
+    await expect(
+      odoo.place('RTL', {
+        idempotency_key: 'online:place:x', platform_order_ref: 'x', checkout_ref: 'o', outlet_code: 'TOKO-01', fulfilment: 'pickup',
+        lines: [{ product_id: 11, qty: 21 }], quote_hash: q.quote_hash, pickup_code: 'ABCDEFGH', promo_codes: [],
+      }),
+    ).rejects.toMatchObject({ kind: 'business', code: 'invalid_input' });
+  });
+});
+
+describe('QA G19 / L-35: stub ODOO_ONLINE_MOCK konsisten dengan parser (tidak ada amount_payable < 1 tanpa issue)', () => {
+  it('semua kombinasi demo (produk × qty × promo × kanal) menghasilkan amount_payable ≥ 1 atau memuat issue', async () => {
+    const odoo = new MockOdooOnline();
+    const promoSets: string[][] = [[], ['DEMO5K'], ['DEMOGL10'], ['DEMO5K', 'DEMOGL10'], ['NOPE42']];
+    for (const channel of ['RTL', 'RTL-GL']) {
+      for (const pid of [11, 12, 13, 14]) {
+        for (const qty of [1, 2, 20, 21]) {
+          for (const codes of promoSets) {
+            const q = await odoo.quote(channel, 'TOKO-01', 'pickup', [{ product_id: pid, qty }], codes);
+            expect(q.amount_payable >= 1 || q.issues.length > 0).toBe(true);
+            expect(Number.isSafeInteger(q.amount_payable)).toBe(true);
+          }
+        }
+      }
+    }
   });
 });

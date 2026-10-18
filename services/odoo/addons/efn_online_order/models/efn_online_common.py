@@ -131,9 +131,8 @@ def promo_codes_payload(value):
     return result
 
 
-def promo_code_ref(code):
-    """Referensi korelasi log: 8 karakter heks pertama SHA-256 (§11.2 no. 6), bukan kode asli."""
-    return hashlib.sha256(code.encode("utf-8")).hexdigest()[:8]
+# L-42 / SEC-132: tidak ada tag hash kode promo di log (helper `promo_code_ref` dihapus; hash tanpa kunci atas ruang
+# kode ±32 bit bisa dibalik). Log promo hanya jumlah kode / jumlah terpakai.
 
 
 def like_escape(value):

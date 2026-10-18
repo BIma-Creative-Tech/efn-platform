@@ -19,8 +19,13 @@ G19 (docs/04 §11, docs/08 §10.1-§10.3):
 - E-36: promo ``sale_loyalty`` standar per pricelist kanal. Quote berpromo memakai SO NYATA di savepoint yang
   di-rollback (bukan ``new()``: ``sale_loyalty`` membuat ``loyalty.card`` dengan ``order_id`` = id SO). Klaim reward
   deterministik ditulis ulang dari pola ``website_sale_loyalty._auto_apply_rewards`` (CE, tidak dipasang, tidak
-  disalin). Semua galat kode -> ``promo_rejected`` tanpa pesan Odoo (anti-enumerasi kupon). Kode tidak di-log asli.
+  disalin). Semua galat kode -> ``promo_rejected`` tanpa pesan Odoo (anti-enumerasi kupon). Kode tidak di-log (asli
+  maupun hash, L-42).
 - E-37a: ``brand_code`` kanal (blok ``channel`` katalog).
+
+Putaran perbaikan r12 (docs/04 §11.7 L-40..L-44): kunci kuota promo di place (SEC-130), batas mode confirm
+``max_order_amount > 0`` + ``max_line_qty`` -> issue ``qty_limit`` (SEC-131), log promo tanpa tag (SEC-132), reward
+produk hadiah tanpa stok dilepas (QA G19 #3).
 """
 
 import base64
@@ -48,7 +53,6 @@ from .efn_online_common import (
     like_escape,
     lines_payload,
     online_error,
-    promo_code_ref,
     promo_codes_payload,
     require,
 )
@@ -157,7 +161,18 @@ class EfnOnlineChannel(models.Model):
     quote_validity_minutes = fields.Integer(default=10)
     max_lines = fields.Integer(default=50)
     max_qty_per_line = fields.Integer(default=99)
-    max_order_amount = fields.Monetary(currency_field="currency_id", help="0 = tanpa batas (PLACEHOLDER).")
+    max_line_qty = fields.Integer(
+        string="Batas qty per baris (reservasi)",
+        required=True,
+        default=20,
+        help="L-41 / SEC-131: hanya berlaku di mode 'Reservasi saat place'. Qty satu produk di atas batas ini -> issue "
+        "'qty_limit' di quote (place menolak). Membatasi penimbunan stok tercadang. Pilot = 20 (PLACEHOLDER).",
+    )
+    max_order_amount = fields.Monetary(
+        currency_field="currency_id",
+        help="0 = tanpa batas (hanya mode tanpa reservasi). Mode 'Reservasi saat place' WAJIB > 0 (L-41 / SEC-131; "
+        "pilot Rp5.000.000 = PLACEHOLDER).",
+    )
     invoice_on_paid = fields.Boolean(string="Faktur saat dibayar", default=True)
     fulfilment_pickup = fields.Boolean(default=True)
     fulfilment_delivery = fields.Boolean(default=False)
@@ -232,6 +247,22 @@ class EfnOnlineChannel(models.Model):
                 raise ValidationError(_("Masa berlaku quote harus 1..60 menit."))
             if not 1 <= channel.max_lines <= 200 or not 1 <= channel.max_qty_per_line <= 9999:
                 raise ValidationError(_("Batas baris (1..200) atau qty per baris (1..9999) tidak valid."))
+
+    @api.constrains("stock_hold_mode", "max_order_amount", "max_line_qty")
+    def _check_efn_hold_limits(self):
+        """L-41 / SEC-131: reservasi stok (mode confirm) tanpa batas nominal = penimbunan stok murah."""
+        for channel in self:
+            if not 1 <= channel.max_line_qty <= 9999:
+                raise ValidationError(_("Batas qty per baris (reservasi) harus 1..9999."))
+            if (channel.max_order_amount or 0.0) < 0:
+                raise ValidationError(_("Batas nominal pesanan tidak boleh negatif."))
+            if channel.stock_hold_mode == "confirm" and not (channel.max_order_amount or 0.0) > 0:
+                raise ValidationError(
+                    _(
+                        "Mode 'Reservasi saat place' wajib punya batas nominal pesanan (> 0) untuk mencegah "
+                        "penimbunan stok."
+                    )
+                )
 
     @api.constrains("user_ids", "company_id")
     def _check_efn_users(self):
@@ -370,9 +401,18 @@ class EfnOnlineChannel(models.Model):
         )
         return {att.res_id: att.checksum for att in attachments}
 
-    def _efn_online_changed_since(self, since):
-        """Perubahan pricelist/pajak/kategori sejak ``since`` -> kirim ulang katalog penuh."""
+    def _efn_online_max_qty(self):
+        """``max_qty`` katalog: batas input per baris; mode confirm -> juga ``max_line_qty`` (L-41)."""
         self.ensure_one()
+        if self.stock_hold_mode == "confirm":
+            return min(self.max_qty_per_line, self.max_line_qty)
+        return self.max_qty_per_line
+
+    def _efn_online_changed_since(self, since):
+        """Perubahan kanal (batas qty, mode)/pricelist/pajak/kategori sejak ``since`` -> kirim ulang katalog penuh."""
+        self.ensure_one()
+        if self.write_date and self.write_date > since:
+            return True
         if self.pricelist_id.write_date and self.pricelist_id.write_date > since:
             return True
         items = self.env["product.pricelist.item"].search_count(
@@ -440,7 +480,7 @@ class EfnOnlineChannel(models.Model):
                     "image_sha": shas.get(tmpl.id),
                     "sequence": tmpl.efn_online_sequence,
                     "prices": prices,
-                    "max_qty": channel.max_qty_per_line,
+                    "max_qty": channel._efn_online_max_qty(),
                 }
             )
         deleted = []
@@ -731,18 +771,55 @@ class EfnOnlineChannel(models.Model):
             return None
         return rewards
 
-    def _efn_online_try_code(self, order, code, programs):
+    def _efn_online_lock_quota_programs(self, codes, programs):
+        """L-40 / SEC-130 (jalur PLACE saja): ``UPDATE loyalty_program SET write_date = write_date`` atas program
+        ber-``limit_usage`` yang bisa berlaku (promo otomatis kanal + pemilik kode yang dikirim), SEBELUM kuota
+        dihitung / kode diterapkan.
+
+        Odoo memakai REPEATABLE READ: snapshot terbentuk di query pertama request, jadi ``FOR UPDATE NOWAIT``
+        ``sale_loyalty`` + ``invalidate_model`` tidak cukup (hitungan dibaca dari snapshot lama). Dengan UPDATE baris,
+        place kedua yang paralel menunggu kunci lalu mendapat ``SerializationFailure`` (atau langsung bila yang
+        pertama sudah commit setelah snapshot-nya) -> Odoo mengulang request dengan snapshot baru -> kuota habis ->
+        ``price_changed``. Error konkurensi TIDAK ditangkap. Kembalikan program yang dikunci (untuk test/diagnosis).
+        Batasan: pemakaian kuota di luar jalur ini (SO manual staf) tidak meng-UPDATE baris program."""
+        self.ensure_one()
+        Program = self.env["loyalty.program"]
+        quota = programs.filtered("limit_usage")
+        if not quota:
+            return Program
+        targets = quota.filtered(lambda p: p.trigger == "auto")
+        for code in codes:
+            real = self._efn_online_resolve_code(code, quota)
+            if not real:
+                continue
+            rules = (
+                self.env["loyalty.rule"]
+                .with_context(active_test=False)
+                .search([("program_id", "in", quota.ids), ("code", "=", real)])
+            )
+            cards = self.env["loyalty.card"].search([("program_id", "in", quota.ids), ("code", "=", real)])
+            targets |= rules.filtered(lambda r: r.mode == "with_code").program_id | cards.program_id
+        if not targets:
+            return Program
+        Program.flush_model()
+        self.env.cr.execute(
+            "UPDATE loyalty_program SET write_date = write_date WHERE id IN %s", (tuple(sorted(targets.ids)),)
+        )
+        Program.invalidate_model(["order_count", "total_order_count"])
+        return targets
+
+    def _efn_online_try_code(self, order, code, programs, outlet):
         """Terapkan satu kode di savepoint; True bila minimal satu reward terklaim. Semua galat -> False (pesan Odoo
-        dibuang). Error konkurensi PostgreSQL (``FOR UPDATE NOWAIT`` program) TIDAK ditangkap: Odoo mengulang
-        request (retrying), sehingga hasil kupon sekali pakai tetap benar."""
+        dibuang). Error konkurensi PostgreSQL TIDAK ditangkap (Odoo mengulang request). Kuota ``limit_usage`` di
+        jalur place dijaga ``_efn_online_lock_quota_programs`` (SEC-130), bukan oleh ``FOR UPDATE NOWAIT`` di sini.
+        L-44: reward produk storable yang stoknya tidak cukup -> kode ditolak (bukan ``issues``)."""
         real = self._efn_online_resolve_code(code, programs)
         if not real:
             return False
         try:
             with self.env.cr.savepoint():
-                # Kuota (`limit_usage`): `order_count`/`total_order_count` sale_loyalty = compute non-stored tanpa
-                # depends -> nilai lama tertahan di cache env (mis. setelah place lain di transaksi yang sama).
-                # Buang cache agar dihitung ulang setelah `_try_apply_code` mengunci baris program.
+                # `order_count`/`total_order_count` sale_loyalty = compute non-stored tanpa depends -> nilai lama bisa
+                # tertahan di cache env (mis. setelah place lain di transaksi yang sama). Ini hanya cache ORM.
                 self.env["loyalty.program"].invalidate_model(["order_count", "total_order_count"])
                 status = order._try_apply_code(real)
                 if not isinstance(status, dict) or "error" in status or not status:
@@ -760,16 +837,17 @@ class EfnOnlineChannel(models.Model):
                     if isinstance(result, dict) and result.get("error"):
                         raise _PromoRejected
                     claimed = True
-                if not claimed:
+                if not claimed or self._efn_online_reward_short(order, outlet):
                     raise _PromoRejected
         except (_PromoRejected, UserError, ValidationError):
             return False
         return True
 
-    def _efn_online_claim_auto_rewards(self, order, programs):
+    def _efn_online_claim_auto_rewards(self, order, programs, outlet):
         """Klaim reward promo otomatis secara deterministik (urutan program ``sequence, id``). Ditulis ulang dari
         pola ``website_sale_loyalty._auto_apply_rewards`` (CE): lewati program > 1 reward, nominatif, reward produk
-        multi, reward yang sudah ada; galat satu reward tidak menggagalkan yang lain."""
+        multi, reward yang sudah ada; galat satu reward tidak menggagalkan yang lain. L-44: reward produk storable
+        yang membuat kebutuhan melebihi stok bebas dilewati (bukan ``issues``)."""
         claimable = order._get_claimable_rewards()
         for coupon in sorted(claimable, key=self._efn_online_coupon_key):
             program = coupon.program_id
@@ -785,6 +863,8 @@ class EfnOnlineChannel(models.Model):
                     result = order._apply_program_reward(reward, coupon)
                     if isinstance(result, dict) and result.get("error"):
                         raise _PromoRejected
+                    if self._efn_online_reward_short(order, outlet):
+                        raise _PromoRejected
             except (_PromoRejected, UserError, ValidationError):
                 continue
 
@@ -799,31 +879,35 @@ class EfnOnlineChannel(models.Model):
             or any(line.price_total > rounding for line in reward_lines)
         )
 
-    def _efn_online_apply_codes_and_auto(self, order, codes, programs):
-        applied = [code for code in codes if self._efn_online_try_code(order, code, programs)]
-        self._efn_online_claim_auto_rewards(order, programs)
+    def _efn_online_apply_codes_and_auto(self, order, codes, programs, outlet):
+        applied = [code for code in codes if self._efn_online_try_code(order, code, programs, outlet)]
+        self._efn_online_claim_auto_rewards(order, programs, outlet)
         order._update_programs_and_rewards()
         return applied
 
-    def _efn_online_apply_promotions(self, order, codes, programs):
+    def _efn_online_apply_promotions(self, order, codes, programs, outlet):
         """docs/08 §10.2 E-36 no. 2: hitung program -> kode satu per satu -> klaim otomatis -> hitung ulang.
         Kembalikan kode (ternormalisasi, bentuk dari BFF) yang terpakai, urutan input; subset ``codes``.
 
         L-35: bila reward membuat tagihan < Rp1 (atau melanggar batas baris reward), SEMUA reward dari kode dibatalkan
-        untuk grup ini (savepoint) dan kodenya masuk ``promo_rejected``; promo otomatis dihitung ulang tanpa kode."""
+        untuk grup ini (savepoint) dan kodenya masuk ``promo_rejected``; promo otomatis dihitung ulang tanpa kode.
+        L-44: reward produk hadiah yang stoknya kurang dilepas per kode/program (tidak pernah menjadi ``issues``)."""
         self.ensure_one()
+        # Kuota promo otomatis (`_update_programs_and_rewards` memfilter `total_order_count < max_usage`): hitungan
+        # sale_loyalty = compute non-stored tanpa depends -> buang cache agar order lain di transaksi ini terhitung.
+        self.env["loyalty.program"].invalidate_model(["order_count", "total_order_count"])
         order._update_programs_and_rewards()
         applied = None
         if codes:
             try:
                 with self.env.cr.savepoint():
-                    applied = self._efn_online_apply_codes_and_auto(order, codes, programs)
+                    applied = self._efn_online_apply_codes_and_auto(order, codes, programs, outlet)
                     if applied and self._efn_online_promo_unacceptable(order):
                         raise _PromoRejected
             except _PromoRejected:
                 applied = None
         if applied is None:
-            applied = self._efn_online_apply_codes_and_auto(order, [], programs)
+            applied = self._efn_online_apply_codes_and_auto(order, [], programs, outlet)
         if self._efn_online_promo_unacceptable(order):
             # Hanya promo otomatis yang tersisa: konfigurasi Marketing salah (mis. diskon 100 %) -> dicatat, total
             # tetap dihitung Odoo; BFF menolak tagihan < Rp1 / baris tidak valid (online_config_error).
@@ -831,13 +915,9 @@ class EfnOnlineChannel(models.Model):
                 "EFN online promo channel=%s: promo otomatis menghasilkan tagihan/baris tidak valid", self.code
             )
         if codes:
-            _logger.info(
-                "EFN online promo channel=%s codes=%d applied=%d refs=%s",
-                self.code,
-                len(codes),
-                len(applied),
-                ",".join(promo_code_ref(code) for code in codes),
-            )
+            # L-42 / SEC-132: hanya jumlah. Tanpa kode, tanpa tag hash (hash tanpa kunci atas ruang kode kecil bisa
+            # dibalik pembaca log).
+            _logger.info("EFN online promo channel=%s codes=%d applied=%d", self.code, len(codes), len(applied))
         return applied
 
     def _efn_online_create_sale_order(self, outlet, product_qty, extra_vals=None, quote=False):
@@ -850,9 +930,10 @@ class EfnOnlineChannel(models.Model):
         return self.env["sale.order"].with_context(**ctx).create(vals)
 
     def _efn_online_reward_short(self, order, outlet):
-        """Produk storable dari reward (beli X gratis Y) yang total kebutuhannya melebihi stok bebas."""
+        """Produk storable dari reward (beli X gratis Y) yang total kebutuhannya (baris biasa + reward) melebihi stok
+        bebas outlet. Dipakai saat klaim reward (L-44): reward seperti ini dilepas, bukan menjadi ``issues``."""
         self.ensure_one()
-        if self.stock_check != "free_qty":
+        if self.stock_check != "free_qty" or not outlet:
             return []
         lines = order.order_line.filtered(lambda line: not line.display_type and line.product_id)
         products = lines.filtered(lambda line: line.reward_id and line.product_id.is_storable).product_id
@@ -875,16 +956,15 @@ class EfnOnlineChannel(models.Model):
         try:
             with self.env.cr.savepoint():
                 order = self._efn_online_create_sale_order(outlet, product_qty, quote=True)
-                applied = self._efn_online_apply_promotions(order, codes, programs)
+                applied = self._efn_online_apply_promotions(order, codes, programs, outlet)
                 summary = self._efn_online_summarize(order, outlet, fulfilment, promo_applied=applied)
                 summary["promo_applied"] = applied
                 result["summary"] = summary
-                result["short"] = self._efn_online_reward_short(order, outlet)
                 raise _QuoteRollback
         except _QuoteRollback:
             pass
         self.env.invalidate_all()
-        return result["summary"], result["short"]
+        return result["summary"]
 
     def _efn_online_evaluate(self, outlet_code, fulfilment, lines, promo_codes=None, for_place=False):
         """Validasi + hitung cart satu kanal. Kembalikan (outlet, products_qty, issues, summary).
@@ -906,6 +986,11 @@ class EfnOnlineChannel(models.Model):
                 issues.append({"product_id": pid, "code": "not_found"})
                 continue
             product_qty.append((product, qty))
+        if self.stock_hold_mode == "confirm":
+            # L-41 / SEC-131: batas qty per produk saat stok dicadangkan sejak place (anti penimbunan).
+            for product, qty in product_qty:
+                if qty > self.max_line_qty:
+                    issues.append({"product_id": product.id, "code": "qty_limit"})
         free = (
             self._efn_online_free_qty(outlet, products)
             if self.stock_check == "free_qty"
@@ -922,20 +1007,14 @@ class EfnOnlineChannel(models.Model):
         if engine and for_place:
             return outlet, product_qty, issues, None
         if engine:
-            summary, reward_short = self._efn_online_quote_with_promotions(
-                outlet, fulfilment, product_qty, usable, programs
-            )
+            # L-44: reward produk hadiah yang stoknya kurang sudah dilepas di mesin promo (tidak menjadi issues).
+            summary = self._efn_online_quote_with_promotions(outlet, fulfilment, product_qty, usable, programs)
         else:
             # Tanpa promo: sale.order.new() (tanpa tulis DB, perilaku G17).
             order = self.env["sale.order"].new(self._efn_online_so_vals(outlet, product_qty))
             summary = self._efn_online_summarize(order, outlet, fulfilment)
             summary["promo_applied"] = []
-            reward_short = []
         summary["promo_rejected"] = [code for code in codes if code not in summary["promo_applied"]]
-        for pid in reward_short:
-            if pid not in unavailable:
-                unavailable.add(pid)
-                issues.append({"product_id": pid, "code": "out_of_stock"})
         for line in summary["lines"]:
             line["available"] = line["product_id"] not in unavailable
         if self.max_order_amount and summary["amount_total"] > self.max_order_amount:
@@ -944,8 +1023,10 @@ class EfnOnlineChannel(models.Model):
 
     @api.model
     def efn_online_quote(self, channel_code, outlet_code, fulfilment, lines, promo_codes=None):
-        """Harga, pajak, total, ``amount_payable``, ``quote_hash`` (docs/04 §10.4.3 no. 4 + §11.2). Tanpa jejak DB:
-        tanpa promo -> ``new()``; dengan promo -> SO di savepoint yang di-rollback (L-28)."""
+        """Harga, pajak, total, ``amount_payable``, ``quote_hash`` (docs/04 §10.4.3 no. 4 + §11.2). Tanpa promo ->
+        ``new()`` (tanpa tulis DB); dengan promo -> SO di savepoint yang di-rollback (L-28; efek samping: nomor urut SO
+        terpakai + kunci ``FOR UPDATE NOWAIT`` program selama request, SEC-141). Mode confirm: qty > ``max_line_qty``
+        -> issue ``qty_limit`` (L-41)."""
         channel = self._efn_online_check_caller(channel_code)
         codes = promo_codes_payload(promo_codes)
         outlet, _product_qty, issues, summary = channel._efn_online_evaluate(

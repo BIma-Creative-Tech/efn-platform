@@ -9,7 +9,6 @@ import { CatalogService } from '../catalog/catalog.service';
 import { ODOO_ONLINE, OdooOnlineApi, OdooRpcError, QuoteIssue, QuoteResult, TaxGroup } from '../odoo-rpc/odoo-online.types';
 import { OnlineErrors, mapOdooError } from '../odoo-rpc/online-errors';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
-import { promoCodeTag } from '../odoo-rpc/promo-codes';
 import { PartLine } from '../orders/online.model';
 import { CartGroup } from './cart-store';
 import { CartService } from './cart.service';
@@ -146,8 +145,8 @@ export class QuoteService {
     if (codes.length > 0) {
       this.metrics.promo('applied', promo.applied.length);
       this.metrics.promo('invalid', promo.invalid.length);
-      // §11.2 no. 6: kode TIDAK PERNAH di-log asli — hanya tag 8 heks SHA-256 (debug) untuk korelasi
-      this.logger.debug(`Quote promo: terpakai [${promo.applied.map(promoCodeTag).join(',')}], tidak terpakai [${promo.invalid.map(promoCodeTag).join(',')}]`);
+      // §11.2 no. 6 + SEC-132 (L-42): kode TIDAK PERNAH di-log, juga tidak hash/tag-nya — hanya jumlah
+      this.logger.debug(`Quote promo: terpakai ${promo.applied.length}, tidak terpakai ${promo.invalid.length}`);
     }
     const stored: StoredQuote = {
       member_id: memberId,
@@ -197,9 +196,14 @@ export class QuoteService {
     if (rewardLines.length > MAX_REWARD_LINES) invalid('baris reward terlalu banyak');
     const want = new Map(g.lines.map((l) => [l.product_id, l.qty]));
     const issuesById = new Set(q.issues.map((i) => i.product_id));
+    // SEC-131: produk ber-issue `qty_limit` boleh dikembalikan dengan qty dipangkas (1..qty cart); quote tetap terblokir
+    // (`409 cart_has_issues` saat checkout) sehingga qty itu tidak pernah dipakai untuk place.
+    const qtyLimited = new Set(q.issues.filter((i) => i.code === 'qty_limit').map((i) => i.product_id));
     const seen = new Set<number>();
     for (const l of productLines) {
-      if (want.get(l.product_id) !== l.qty || seen.has(l.product_id)) invalid('baris quote ≠ cart');
+      const cartQty = want.get(l.product_id);
+      const qtyOk = cartQty === l.qty || (cartQty !== undefined && qtyLimited.has(l.product_id) && l.qty < cartQty);
+      if (!qtyOk || seen.has(l.product_id)) invalid('baris quote ≠ cart');
       seen.add(l.product_id);
     }
     for (const pid of want.keys()) {

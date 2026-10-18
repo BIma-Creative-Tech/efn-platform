@@ -9,6 +9,8 @@
 #                  G19: kanal RTL batas bayar 70 menit + `stock_hold_mode=confirm` (SO `sale` + stok tercadang sejak
 #                  place), promo kode dev `SMOKE10` (diskon 10 %, pricelist SMOKE), satu user teknis per kanal (L-37).
 #   - `stock`    : set stok bebas satu produk smoke di gudang outlet (inventory mode standar).
+#   - `free`     : baca free_qty (dibulatkan) satu produk smoke di gudang outlet; dipakai tahap `o` untuk membuktikan
+#                  reservasi G19 (free_qty turun setelah place, pulih setelah kedaluwarsa/batal).
 #   - `order`    : baca state efn.online.order + SO + faktur (tanpa kode ambil; hanya boolean ada/tidaknya hash).
 #   - `ready`    : aksi staf `action_efn_ready` sebagai user staf (bukan admin) -> kirim outbox sekarang.
 #   - `handover` : wizard serah terima sebagai user staf dengan SMOKE_CODE -> kirim outbox sekarang.
@@ -150,6 +152,8 @@ def step_setup():
         # G19 (docs/04 §11.1): Odoo 70 menit (BFF 3600 s + 10) + reservasi stok saat place (E-35).
         "payment_timeout_minutes": 70,
         "stock_hold_mode": "confirm",
+        "max_order_amount": 5000000,  # L-41 (SEC-131): wajib > 0 di mode confirm
+        "max_line_qty": 20,
         "active": True,
     }
     if channel:
@@ -288,6 +292,16 @@ def step_stock():
     out(ok=True, product_id=product.id, free_qty=product.with_context(warehouse_id=wh.id).free_qty)
 
 
+def step_free():
+    st = load_state()
+    su = env(su=True, context={"allowed_company_ids": [st["company_id"]]})
+    product = su["product.product"].browse(st["products"][os.environ["SMOKE_PRODUCT"]])
+    wh = su["stock.warehouse"].browse(st["warehouse_id"])
+    product = product.with_context(warehouse_id=wh.id)
+    product.invalidate_recordset(["free_qty", "qty_available"])
+    out(ok=True, product_id=product.id, free_qty=int(round(product.free_qty)))
+
+
 def find_order(su):
     return su["efn.online.order"].search([("platform_order_ref", "=", os.environ["SMOKE_PART"])], limit=1)
 
@@ -315,6 +329,10 @@ def describe(order):
         and all(m.state == "assigned" for m in order._efn_reservation_moves()),
         "reserved_picked": bool(order) and any(m.picked for m in order._efn_reservation_moves()),
         "reward_lines": len(so.order_line.filtered("reward_id")) if "reward_id" in so.order_line._fields else 0,
+        # G19 §11.1: batas bayar Odoo = 70 menit sejak place (BFF 3600 s + 10 menit)
+        "hold_minutes": round((order.expires_at - order.create_date).total_seconds() / 60)
+        if order and order.expires_at and order.create_date
+        else None,
         "outbox": sorted(f"{e.event}:{e.state}" for e in order.event_ids) if "event_ids" in order._fields else [],
     }
 
@@ -467,6 +485,7 @@ def step_apikey():
 {
     "setup": step_setup,
     "stock": step_stock,
+    "free": step_free,
     "order": step_order,
     "ready": step_ready,
     "handover": step_handover,
