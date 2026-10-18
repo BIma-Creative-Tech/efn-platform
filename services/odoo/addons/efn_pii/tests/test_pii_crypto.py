@@ -34,7 +34,7 @@ def manual_hkdf_sha256(ikm, info, length):
     return okm[:length]
 
 
-@tagged("post_install", "-at_install", "efn", "efn_pii_poc")
+@tagged("post_install", "-at_install", "efn", "efn_pii")
 class TestEfnPiiCrypto(PiiKeyMixin, TransactionCase):
     def test_shared_aead_vectors_seal_and_open(self):
         """Kriteria 4: blob Odoo == blob kontrak docs/04 §7.2 untuk vektor publik (dipakai juga BFF)."""
@@ -113,6 +113,31 @@ class TestEfnPiiCrypto(PiiKeyMixin, TransactionCase):
             ring.decrypt_text(kr.wrap(bytes(blob)), aad)
         self.assertEqual(cm.exception.code, "version_unknown")
 
+    def test_format2_aad_bound_to_record_id(self):
+        """SEC-138: efnpii2 = AAD `efn:odoo:<tabel>.<kolom>:<id>:v2`; format 1 dan id lain ditolak."""
+        ring = kr.KeyRing({1: os.urandom(32)}, 1, os.urandom(32), name_key=os.urandom(32))
+        self.assertTrue(ring.can_encrypt)
+        aad = kr.aad_for("res_partner", "phone", 42)
+        self.assertEqual(aad, "efn:odoo:res_partner.phone:42:v2")
+        for bad in (0, -1, True, "42", 4.2):
+            with self.assertRaises(ValueError):
+                kr.aad_for("res_partner", "phone", bad)
+        text = ring.encrypt_text("6281234567890", aad, kr.PREFIX_V2)
+        self.assertTrue(text.startswith("efnpii2:"))
+        self.assertEqual(kr.format_of(text), 2)
+        self.assertEqual(kr.format_of(ring.encrypt_text("x", "a")), 1)
+        self.assertIsNone(kr.format_of("efnpii9:AAAA"))
+        self.assertTrue(kr.looks_like_marker("efnpii9:AAAA"))
+        self.assertFalse(kr.is_ciphertext("efnpii9:AAAA"))
+        self.assertEqual(kr.version_of(text), 1)
+        self.assertEqual(ring.decrypt_text(text, aad), "6281234567890")
+        for other in (kr.aad_for("res_partner", "phone"), kr.aad_for("res_partner", "phone", 43)):
+            with self.assertRaises(kr.PiiError) as cm:
+                ring.decrypt_text(text, other)
+            self.assertEqual(cm.exception.code, "auth_failed")
+        with self.assertRaises(ValueError):
+            kr.wrap(b"\x01" * 29, "efnpii3:")
+
     def test_keyring_loading_codes(self):
         self._pii_env()
         ring = kr._build(*kr._candidate_paths())
@@ -133,6 +158,20 @@ class TestEfnPiiCrypto(PiiKeyMixin, TransactionCase):
         ring = kr._build(*kr._candidate_paths())
         self.assertFalse(ring.can_encrypt)
         self.assertEqual(ring.loaded_versions, [1])
+        # kunci token nama hilang -> mode terkunci (ADR-036 §0.4), baca tetap bisa
+        self._pii_env(with_name=False)
+        ring = kr._build(*kr._candidate_paths())
+        self.assertFalse(ring.can_encrypt)
+        self.assertFalse(ring.has_name_key)
+        self.assertEqual(ring.error_code, "key_missing")
+        # path kunci token nama lewat env EFN_ODOO_PII_NAME_KEY_FILE (nama env persis kontrak devsecops)
+        folder, _keys, _bidx = self._pii_env(with_name=False)
+        name_file = os.path.join(folder, "custom_name_key")
+        with open(name_file, "w", encoding="ascii") as handle:
+            handle.write(base64.b64encode(os.urandom(32)).decode("ascii"))
+        with patch.dict(os.environ, {"EFN_ODOO_PII_NAME_KEY_FILE": name_file}):
+            ring = kr._build(*kr._candidate_paths())
+        self.assertTrue(ring.can_encrypt)
         # versi aktif 2 dengan kunci v1+v2
         self._pii_env(keys={1: os.urandom(32), 2: os.urandom(32)}, active=2)
         ring = kr._build(*kr._candidate_paths())
@@ -166,6 +205,6 @@ class TestEfnPiiCrypto(PiiKeyMixin, TransactionCase):
         payload = json.loads(output.split("EFN_PII_KEYRING ", 1)[1])
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["loaded_versions"], [1])
-        for secret in (keys[1], bidx_key):
+        for secret in (keys[1], bidx_key, self.pii_name_key):
             self.assertNotIn(base64.b64encode(secret).decode(), output)
             self.assertNotIn(secret.hex(), output)

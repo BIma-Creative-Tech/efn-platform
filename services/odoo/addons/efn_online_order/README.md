@@ -8,7 +8,7 @@
 > **mencadangkan stok** sejak checkout, menerima **kode promo** (promo otomatis per brand ikut dihitung Odoo), dan
 > setiap kanal punya **kode brand**.
 
-- Versi `19.0.1.3.0` (putaran perbaikan r12, lihat bagian di bawah), LGPL-3, `depends`: `sale_stock`, `sale_loyalty` (CE, mesin promo E-36; baru di 19.0.1.2.0 —
+- Versi `19.0.1.5.0` (G20 E-45 bayar di kasir + W-33, lihat bagian di bawah), LGPL-3, `depends`: `sale_stock`, `sale_loyalty` (CE, mesin promo E-36; baru di 19.0.1.2.0 —
   upgrade memasangnya bila belum), `point_of_sale` (hanya `pos.category`), `mail`, `efn_core`.
   Tanpa `website*`, `delivery`, `payment_*`, tanpa modul pihak ketiga (ADR-031; `check-odoo-deps.sh`).
 - Kontrak: `docs/04_SERVICE_CONTRACTS.md` §10 (v5.0) + **§11 (v6.0, G19) yang menang atas §10 dan docs/08**;
@@ -108,6 +108,65 @@ quote qty 3 → issue `qty_limit`; SO online belum dibayar → *Create Invoice* 
 Uji manual G19: Konfigurasi → Kanal online → *Reservasi saat place*; buat program *Promo Code* `sale_ok` dengan
 pricelist kanal; quote `promo_codes` lewat smoke `SMOKE10` (`scripts/smoke/odoo_online_smoke.py setup`); place →
 Inventory menampilkan picking `Ready`; jual barang yang sama di POS → bayar → `stock_short`; tandai siap → move picked.
+
+## G20 (19.0.1.4.0) — batas berat pesanan W-33/E-35b + kode kanal = kode PT (docs/04 §12.1, §12.3)
+ADR-034, ADR-031 (*Proposed*); keputusan pemilik proyek 18-16; docs/08 §11.7. Risiko: R-O05 (pesanan ambil sendiri
+terlalu berat/tidak terlayani), R-B06 (penyalahgunaan reservasi lewat pesanan besar).
+
+- **Field kanal:** `max_order_weight_kg` (Float kg, `digits='Stock Weight'`, default 0 = mati, 0..100000) dan
+  `weight_missing_policy` (`block` default | `ignore`, hanya berlaku bila batas aktif). Di form kanal (tab batas).
+- **Rumus:** Σ `line.product_id.weight × line.product_qty` atas baris SO (sama dengan `delivery.carrier._match_weight`
+  19.0, diverifikasi WebFetch 2026-10-18; termasuk baris reward produk hadiah), dikonversi ke kg bila
+  `product.weight_in_lbs = '1'` (`product.template._get_weight_uom_id_from_ir_config_parameter`, diverifikasi 19.0;
+  lb → kg via `uom._compute_quantity`). Pembanding `float_compare(..., precision_digits=3)`: tepat di batas = boleh.
+- **Issue quote** (setelah `order_limit`): `{"product_id": <id>, "code": "weight_missing"}` per produk tanpa berat
+  (kebijakan `block`; baris reward `sale_loyalty` dan produk `service` dikecualikan), lalu
+  `{"product_id": null, "code": "weight_limit"}` bila total > batas. Place → `efn_online:invalid_input` (pola issue
+  lain; jalur promo diperiksa dari SO tersimpan setelah cek hash).
+- **`quote_hash`:** bila batas aktif, hash memuat blok `weight` = `{limit, total (3 desimal), policy, missing[]}` →
+  berat produk/batas/kebijakan berubah antara quote dan place = `price_changed`. Batas 0 → hash **identik** dengan
+  19.0.1.3.0 (quote yang berjalan saat deploy tetap sah).
+- **Katalog:** item bertambah `weight_kg` (float kg 3 desimal, `null` bila produk tanpa berat).
+- **L-46 / SEC-144 (sisa L-47):** constraint kode kanal kini juga menolak akhiran `-FILE`.
+- Help/pesan kode kanal memakai contoh `GL, PB, BCR, BCF` (kode kanal = kode PT, L-48). `company_code` di katalog,
+  quote, dan event = `efn_brand_code` company (kini `GL`/`PB`/`BCR`/`BCF`/…; tanpa perubahan kode).
+- Tidak ada migrasi: kolom baru memakai default (0 / `block`) → kanal lama tidak berubah perilaku.
+- **Koordinasi:** builder C (E-45 `payment_mode`) juga menyentuh modul ini; versi berikutnya ≥ 19.0.1.5.0.
+
+Perubahan respons json2 (aditif): `efn_online_catalog.items[].weight_kg` (number | null); kode issue baru
+`weight_limit` (`product_id` null) dan `weight_missing` di `efn_online_quote.issues`. Tidak ada metode/argumen baru.
+
+Uji (`tests/test_online_g20_weight.py`): default & constraint, batas 0 tidak mengubah hash, `weight_limit` quote +
+place ditolak tanpa SO, tepat di batas boleh, `weight_missing` block vs ignore (+ jasa dikecualikan, kebijakan masuk
+hash), perubahan berat/batas → hash beda + `price_changed`, `weight_kg` katalog, database lb → kg, mode confirm + promo
+otomatis (place ditolak tanpa reservasi tersisa; reward diskon tidak memicu `weight_missing`).
+Uji manual: Kanal → *Batas berat pesanan* 10 → produk Beras berat 5 kg → quote 3 unit → issue `weight_limit`.
+
+## G20 (19.0.1.5.0) — bayar di kasir E-45 (docs/04 §12.2, L-50/L-52/L-55/L-56)
+ADR-034, ADR-019 (titipan hanya `qris`), ADR-031. Risiko: R-T10, R-O05. Jembatan POS: **`efn_online_pos_counter`**
+(auto-install; produk pelunasan, jurnal kliring, lookup POS, validasi sync).
+
+- **Kanal** `payment_modes` (Char dipisah koma dari `qris`, `counter`; default `qris`; constraint format; `counter`
+  butuh `invoice_on_paid`). Pilot tanpa vendor = `counter` saja (konfigurasi `efn_setup_online`, L-55).
+- **Place**: kunci opsional `payment_mode` (`qris` default | `counter`; tidak diizinkan kanal → `invalid_input`) dan
+  `counter_code` (dibuat BFF, alfabet §10.2, 8 karakter; wajib bila `counter`, dilarang selain itu, ≠ `pickup_code`).
+  `payment_mode: "counter"` ikut `payload_sha256` (qris tidak → hash lama sama); `counter_code` **tidak** (pola kode
+  ambil). Disimpan sebagai `counter_code_hash` = digest PBKDF2-SHA512 **deterministik per company** (salt dari
+  company + `database.secret`, putaran `efn_online.counter_code_kdf_rounds` default 210 000 tersimpan di digest) agar
+  kasir bisa mencari dengan kode saja; digest bentrok dengan pesanan terbuka → `invalid_input`. Tidak dikembalikan,
+  tidak di-log; dihapus saat dibayar/batal/review. Field `payment_mode` di pesanan (default `qris`).
+- **BFF `mark_paid` / `refund_settled`** untuk pesanan `counter` → `efn_online:invalid_state`.
+- **Jalur internal** `_efn_counter_mark_paid(payment_ref, idempotency_key, amount_paid)` (privat, dipanggil sync POS):
+  idempoten per kunci; `placed` & belum kedaluwarsa → langkah bersama `_efn_apply_payment` (refactor dari
+  `efn_online_mark_paid`, perilaku QRIS tidak berubah) → `confirmed` | `stock_short` | `review`; sudah `cancelled`
+  atau `placed` lewat batas → pembayaran dicatat + `review` (L-56); sudah dibayar kunci lain → `invalid_state`.
+- **Jurnal pembayaran** lewat hook `_efn_payment_journal` (QRIS = titipan; counter = kosong di modul ini → `review`
+  `journal_missing`, diisi jurnal kliring oleh jembatan; tidak pernah jatuh ke titipan).
+- **Event** `paid` pesanan counter membawa `payment: {"method": "counter"}` (QRIS tanpa kunci ini).
+
+Perubahan json2 (aditif): katalog `channel.payment_modes: string[]` (kanonik, mis. `["qris","counter"]`);
+`efn_online_place` `order.payment_mode` + `order.counter_code` (input); hasil place **tidak** berubah; event `paid`
+`payment`. Uji: `tests/test_online_g20_payment_mode.py` (bagian tanpa POS) + `efn_online_pos_counter/tests`.
 
 ## Model
 | Model | Isi |

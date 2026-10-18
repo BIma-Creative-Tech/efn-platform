@@ -1,13 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- DEMO kanal online (bergantung keputusan klien Q-ON1..Q-ON13). Semua = PLACEHOLDER.
-     - Kanal RTL aktif, pickup 1 outlet (gudang demo OL01), batas bayar Odoo 70 menit (G19 W-02: BFF 60 + 10;
-       semula 25 = L-1).
-     - G19 W-21: 4 kanal PER BRAND (nonaktif, tanpa outlet; data outlet/SKU dari klien) - lihat bagian bawah.
-     - Kanal FNB ADA tetapi active=False (Q-ON2); outlet wajib fiscal position kota (ADR-027 §2).
+     G20 W-32/E-43 (docs/04 §12.1, L-48; ADR-001 revisi 18 Okt): KODE KANAL = KODE PT -> satu kanal per PT:
+       GL  (PT Grand Lucky, company_rtl)        aktif, pickup 1 outlet (gudang demo OL01), brand GL, mode confirm;
+       PB  (PT Paris Baguette, company_fnb)     nonaktif (Q-ON2), outlet RESTO-01 wajib FP non-dine-in kota, brand PB;
+       BCR (Bacha Coffee Retail, company_bcr)   nonaktif tanpa outlet, brand BACHA, mode confirm;
+       BCF (Bacha Coffee F&B, company_bcf)      nonaktif tanpa outlet, brand BACHA, outlet wajib FP.
+     Kanal G17-G19 RTL / FNB / RTL-GL / RTL-BACHA / FNB-PB / FNB-BACHA DIHAPUS (DB dev dibuat ulang, §12.1).
+     brand_code (E-37a) tetap: GL, PB, BACHA (dua kanal Bacha berbagi brand untuk Super-App satu domain).
+     - Batas bayar Odoo 70 menit (G19 W-02: BFF 60 + 10).
+     - L-37: SATU user teknis per kanal (efn_online_gl/pb/bcr/bcf), Internal User + grup kanal (SEC-101), satu
+       company, TANPA API key (key dibuat lewat runbook, tidak pernah di data/repo). Secret BFF:
+       odoo_api_key_online_{gl,pb,bcr,bcf}.
+     - L-41 (SEC-131): kanal mode confirm (GL, BCR) wajib max_order_amount > 0 + max_line_qty (PLACEHOLDER pilot
+       Rp5.000.000 / 20 unit).
      - Jurnal bank "Titipan Online - Holding" per PT (ADR-019 A1). Akun default jurnal dibuat otomatis Odoo;
        pemetaan ke akun "Piutang dana titipan Holding" = keputusan Finance (Q-2, tanpa kode akun di kode).
      - Pembulatan Rp1 (strategi biggest_tax: tanpa akun selisih; Q-ON6 Finance).
-     - User teknis demo TANPA API key (key dibuat lewat runbook, tidak pernah di data/repo). -->
+     - W-33 (E-35b): batas berat kanal default 0 (mati); produk demo GL diberi berat contoh (katalog weight_kg). -->
 <odoo>
     <record id="cash_rounding_idr_1" model="account.cash.rounding">
         <field name="name">Rupiah bulat (DEMO, Q-ON6)</field>
@@ -16,65 +25,68 @@
         <field name="rounding_method">HALF-UP</field>
     </record>
 
-    <!-- ===== PT Retail ===== -->
+    <!-- ===== Kanal GL - PT Grand Lucky (ritel PPN) ===== -->
     <!-- Gudang outlet contoh (pickup = gudang outlet tanpa carrier, temuan #39). -->
-    <record id="warehouse_online_rtl" model="stock.warehouse">
+    <record id="warehouse_online_gl" model="stock.warehouse">
         <field name="name">Toko Contoh Online (DEMO)</field>
         <field name="code">OL01</field>
         <field name="company_id" ref="efn_setup_company.company_rtl"/>
     </record>
-    <record id="journal_titipan_rtl" model="account.journal">
+    <record id="journal_titipan_gl" model="account.journal">
         <field name="name">Titipan Online - Holding</field>
         <field name="code">TTPO</field>
         <field name="type">bank</field>
         <field name="company_id" ref="efn_setup_company.company_rtl"/>
     </record>
-    <record id="pricelist_online_rtl" model="product.pricelist">
-        <field name="name">Online Super-App (Retail, DEMO)</field>
+    <record id="pricelist_online_gl" model="product.pricelist">
+        <field name="name">Online Grand Lucky (DEMO)</field>
         <field name="currency_id" ref="base.IDR"/>
         <field name="company_id" ref="efn_setup_company.company_rtl"/>
     </record>
-    <record id="user_online_rtl" model="res.users">
-        <field name="name">Kanal online RTL (user teknis)</field>
-        <field name="login">efn_online_rtl</field>
+    <record id="user_online_gl" model="res.users">
+        <field name="name">Kanal online GL (user teknis)</field>
+        <field name="login">efn_online_gl</field>
         <field name="company_id" ref="efn_setup_company.company_rtl"/>
         <field name="company_ids" eval="[Command.set([ref('efn_setup_company.company_rtl')])]"/>
         <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_online_order.group_online_channel')])]"/>
     </record>
-    <record id="channel_rtl" model="efn.online.channel">
-        <field name="name">Super-App Retail</field>
-        <field name="code">RTL</field>
+    <record id="channel_gl" model="efn.online.channel">
+        <field name="name">Super-App Grand Lucky</field>
+        <field name="code">GL</field>
+        <field name="brand_code">GL</field>
         <field name="company_id" ref="efn_setup_company.company_rtl"/>
-        <field name="pricelist_id" ref="pricelist_online_rtl"/>
+        <field name="pricelist_id" ref="pricelist_online_gl"/>
         <field name="partner_id" ref="partner_superapp_rtl"/>
         <field name="team_id" ref="team_superapp_rtl"/>
         <field name="cash_rounding_id" ref="cash_rounding_idr_1"/>
-        <field name="journal_titipan_id" ref="journal_titipan_rtl"/>
+        <field name="journal_titipan_id" ref="journal_titipan_gl"/>
         <field name="payment_timeout_minutes">70</field>
         <!-- G19 E-35 (docs/04 §11.1): kanal ritel mencadangkan stok saat checkout. L-41 (SEC-131): mode confirm
              wajib batas nominal + qty per baris; nilai = PLACEHOLDER pilot (Rp5.000.000 / 20 unit). -->
         <field name="stock_hold_mode">confirm</field>
         <field name="max_order_amount">5000000</field>
         <field name="max_line_qty">20</field>
-        <field name="user_ids" eval="[Command.set([ref('user_online_rtl')])]"/>
+        <field name="user_ids" eval="[Command.set([ref('user_online_gl')])]"/>
     </record>
-    <record id="outlet_rtl_toko01" model="efn.online.outlet">
-        <field name="channel_id" ref="channel_rtl"/>
+    <record id="outlet_gl_toko01" model="efn.online.outlet">
+        <field name="channel_id" ref="channel_gl"/>
         <field name="code">TOKO-01</field>
         <field name="public_name">Toko Contoh (DEMO)</field>
-        <field name="warehouse_id" ref="warehouse_online_rtl"/>
+        <field name="warehouse_id" ref="warehouse_online_gl"/>
         <field name="prep_minutes">15</field>
     </record>
 
-    <!-- 3 produk demo terpublikasi. Pajak = PPN l10n_id template (tax_ST4) milik PT Retail. -->
+    <!-- 3 produk demo terpublikasi. Pajak = PPN l10n_id template (tax_ST4) milik PT Grand Lucky.
+         Berat (product.weight, kg) = contoh untuk katalog weight_kg / batas berat W-33; tas belanja tanpa berat. -->
     <record id="product_online_rice" model="product.product">
         <field name="name">Beras Premium 5 kg (DEMO online)</field>
         <field name="type">consu</field>
         <field name="is_storable" eval="True"/>
         <field name="list_price">78900</field>
+        <field name="weight">5.0</field>
         <field name="company_id" ref="efn_setup_company.company_rtl"/>
         <field name="taxes_id" eval="[Command.set([ref('account.%s_tax_ST4' % ref('efn_setup_company.company_rtl'))])]"/>
-        <field name="efn_online_channel_ids" eval="[Command.set([ref('channel_rtl')])]"/>
+        <field name="efn_online_channel_ids" eval="[Command.set([ref('channel_gl')])]"/>
         <field name="efn_online_description">Beras premium kemasan 5 kg. Data contoh.</field>
     </record>
     <record id="product_online_oil" model="product.product">
@@ -82,9 +94,10 @@
         <field name="type">consu</field>
         <field name="is_storable" eval="True"/>
         <field name="list_price">36500</field>
+        <field name="weight">1.85</field>
         <field name="company_id" ref="efn_setup_company.company_rtl"/>
         <field name="taxes_id" eval="[Command.set([ref('account.%s_tax_ST4' % ref('efn_setup_company.company_rtl'))])]"/>
-        <field name="efn_online_channel_ids" eval="[Command.set([ref('channel_rtl')])]"/>
+        <field name="efn_online_channel_ids" eval="[Command.set([ref('channel_gl')])]"/>
     </record>
     <record id="product_online_bag" model="product.product">
         <field name="name">Tas Belanja (DEMO online)</field>
@@ -92,189 +105,131 @@
         <field name="list_price">5000</field>
         <field name="company_id" ref="efn_setup_company.company_rtl"/>
         <field name="taxes_id" eval="[Command.set([ref('account.%s_tax_ST4' % ref('efn_setup_company.company_rtl'))])]"/>
-        <field name="efn_online_channel_ids" eval="[Command.set([ref('channel_rtl')])]"/>
+        <field name="efn_online_channel_ids" eval="[Command.set([ref('channel_gl')])]"/>
     </record>
 
-    <!-- ===== PT F&B (kanal nonaktif, Q-ON2) ===== -->
-    <record id="warehouse_online_fnb" model="stock.warehouse">
+    <!-- ===== Kanal PB - PT Paris Baguette (F&B PB1, nonaktif Q-ON2) ===== -->
+    <record id="warehouse_online_pb" model="stock.warehouse">
         <field name="name">Resto Contoh Online (DEMO)</field>
         <field name="code">OL02</field>
         <field name="company_id" ref="efn_setup_company.company_fnb"/>
     </record>
-    <record id="journal_titipan_fnb" model="account.journal">
+    <record id="journal_titipan_pb" model="account.journal">
         <field name="name">Titipan Online - Holding</field>
         <field name="code">TTPO</field>
         <field name="type">bank</field>
         <field name="company_id" ref="efn_setup_company.company_fnb"/>
     </record>
-    <record id="pricelist_online_fnb" model="product.pricelist">
-        <field name="name">Online Super-App (F&amp;B, DEMO)</field>
-        <field name="currency_id" ref="base.IDR"/>
-        <field name="company_id" ref="efn_setup_company.company_fnb"/>
-    </record>
-    <record id="channel_fnb" model="efn.online.channel">
-        <field name="name">Super-App F&amp;B</field>
-        <field name="code">FNB</field>
-        <field name="active" eval="False"/>
-        <field name="company_id" ref="efn_setup_company.company_fnb"/>
-        <field name="pricelist_id" ref="pricelist_online_fnb"/>
-        <field name="partner_id" ref="partner_superapp_fnb"/>
-        <field name="team_id" ref="team_superapp_fnb"/>
-        <field name="cash_rounding_id" ref="cash_rounding_idr_1"/>
-        <field name="journal_titipan_id" ref="journal_titipan_fnb"/>
-        <field name="require_outlet_fiscal_position" eval="True"/>
-        <field name="stock_check">none</field>
-    </record>
-    <record id="outlet_fnb_resto01" model="efn.online.outlet">
-        <field name="channel_id" ref="channel_fnb"/>
-        <field name="code">RESTO-01</field>
-        <field name="public_name">Resto Kota Contoh (DEMO)</field>
-        <field name="warehouse_id" ref="warehouse_online_fnb"/>
-        <field name="fiscal_position_id" ref="efn_setup_company.fiscal_position_kota_contoh_fnb"/>
-    </record>
-
-    <!-- ===== G19 W-21: kanal & katalog PER BRAND (keputusan pemilik proyek #7-#9, #31, #60) =====
-         Pola standar (tanpa field baru): kanal = brand dalam satu PT -> katalog per brand (efn_online_channel_ids
-         produk), pricelist per brand (pricelist_id kanal), tim penjualan per brand (laporan sale.report per tim).
-         Bacha = DUA kanal di DUA PT (butik PT Retail PPN, kafe PT F&B PB1); Super-App Bacha menggabungkan keduanya
-         di BFF (cart per kanal, ADR-019 opsi A). Kode kanal = PLACEHOLDER usulan (kontrak docs/04 §10, lead):
-         RTL-GL (Grand Lucky), RTL-BACHA (Bacha butik), FNB-PB (Paris Baguette), FNB-BACHA (Bacha kafe).
-         Semua NONAKTIF tanpa outlet: alamat/jam/SKU outlet dari klien. Kanal F&B: outlet wajib fiscal position
-         NON-DINE-IN kota outlet (tanpa SC; PB1 0 % sesuai keputusan 18-1, efn_setup_company W-14). Kanal lama RTL/FNB
-         tetap (dipakai smoke/BFF dev) sampai lead memutuskan migrasi kode kanal.
-         G20 (18-27, setiap brand punya PT sendiri): RTL-BACHA / FNB-BACHA akan pindah ke company Bacha Coffee Retail /
-         Bacha Coffee F&amp;B dengan kode kanal baru: rencana migrasi docs/08 §11.3 (BELUM diterapkan).
-         G19: brand_code (E-37a) GL / BACHA / PB; kanal ritel stock_hold_mode=confirm (E-35); L-37: SATU user teknis
-         per kanal (API key per kanal), grup sama dengan efn_online_rtl (Internal User + grup kanal, SEC-101),
-         tanpa API key di data. -->
-    <record id="user_online_rtl_gl" model="res.users">
-        <field name="name">Kanal online RTL-GL (user teknis)</field>
-        <field name="login">efn_online_rtl_gl</field>
-        <field name="company_id" ref="efn_setup_company.company_rtl"/>
-        <field name="company_ids" eval="[Command.set([ref('efn_setup_company.company_rtl')])]"/>
-        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_online_order.group_online_channel')])]"/>
-    </record>
-    <record id="user_online_rtl_bacha" model="res.users">
-        <field name="name">Kanal online RTL-BACHA (user teknis)</field>
-        <field name="login">efn_online_rtl_bacha</field>
-        <field name="company_id" ref="efn_setup_company.company_rtl"/>
-        <field name="company_ids" eval="[Command.set([ref('efn_setup_company.company_rtl')])]"/>
-        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_online_order.group_online_channel')])]"/>
-    </record>
-    <record id="user_online_fnb_pb" model="res.users">
-        <field name="name">Kanal online FNB-PB (user teknis)</field>
-        <field name="login">efn_online_fnb_pb</field>
-        <field name="company_id" ref="efn_setup_company.company_fnb"/>
-        <field name="company_ids" eval="[Command.set([ref('efn_setup_company.company_fnb')])]"/>
-        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_online_order.group_online_channel')])]"/>
-    </record>
-    <record id="user_online_fnb_bacha" model="res.users">
-        <field name="name">Kanal online FNB-BACHA (user teknis)</field>
-        <field name="login">efn_online_fnb_bacha</field>
-        <field name="company_id" ref="efn_setup_company.company_fnb"/>
-        <field name="company_ids" eval="[Command.set([ref('efn_setup_company.company_fnb')])]"/>
-        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_online_order.group_online_channel')])]"/>
-    </record>
-
-    <record id="team_superapp_rtl_gl" model="crm.team">
-        <field name="name">Super-App Grand Lucky</field>
-        <field name="company_id" ref="efn_setup_company.company_rtl"/>
-    </record>
-    <record id="pricelist_online_rtl_gl" model="product.pricelist">
-        <field name="name">Online Grand Lucky (DEMO)</field>
-        <field name="currency_id" ref="base.IDR"/>
-        <field name="company_id" ref="efn_setup_company.company_rtl"/>
-    </record>
-    <record id="channel_rtl_gl" model="efn.online.channel">
-        <field name="name">Super-App Grand Lucky</field>
-        <field name="code">RTL-GL</field>
-        <field name="brand_code">GL</field>
-        <field name="active" eval="False"/>
-        <field name="company_id" ref="efn_setup_company.company_rtl"/>
-        <field name="pricelist_id" ref="pricelist_online_rtl_gl"/>
-        <field name="partner_id" ref="partner_superapp_rtl"/>
-        <field name="team_id" ref="team_superapp_rtl_gl"/>
-        <field name="journal_titipan_id" ref="journal_titipan_rtl"/>
-        <field name="payment_timeout_minutes">70</field>
-        <field name="stock_hold_mode">confirm</field>
-        <field name="max_order_amount">5000000</field>
-        <field name="max_line_qty">20</field>
-        <field name="user_ids" eval="[Command.set([ref('user_online_rtl_gl')])]"/>
-    </record>
-
-    <record id="team_superapp_rtl_bacha" model="crm.team">
-        <field name="name">Super-App Bacha (butik)</field>
-        <field name="company_id" ref="efn_setup_company.company_rtl"/>
-    </record>
-    <record id="pricelist_online_rtl_bacha" model="product.pricelist">
-        <field name="name">Online Bacha butik (DEMO)</field>
-        <field name="currency_id" ref="base.IDR"/>
-        <field name="company_id" ref="efn_setup_company.company_rtl"/>
-    </record>
-    <record id="channel_rtl_bacha" model="efn.online.channel">
-        <field name="name">Super-App Bacha (butik)</field>
-        <field name="code">RTL-BACHA</field>
-        <field name="brand_code">BACHA</field>
-        <field name="active" eval="False"/>
-        <field name="company_id" ref="efn_setup_company.company_rtl"/>
-        <field name="pricelist_id" ref="pricelist_online_rtl_bacha"/>
-        <field name="partner_id" ref="partner_superapp_rtl"/>
-        <field name="team_id" ref="team_superapp_rtl_bacha"/>
-        <field name="journal_titipan_id" ref="journal_titipan_rtl"/>
-        <field name="payment_timeout_minutes">70</field>
-        <field name="stock_hold_mode">confirm</field>
-        <field name="max_order_amount">5000000</field>
-        <field name="max_line_qty">20</field>
-        <field name="user_ids" eval="[Command.set([ref('user_online_rtl_bacha')])]"/>
-    </record>
-
-    <record id="team_superapp_fnb_pb" model="crm.team">
-        <field name="name">Super-App Paris Baguette</field>
-        <field name="company_id" ref="efn_setup_company.company_fnb"/>
-    </record>
-    <record id="pricelist_online_fnb_pb" model="product.pricelist">
+    <record id="pricelist_online_pb" model="product.pricelist">
         <field name="name">Online Paris Baguette (DEMO)</field>
         <field name="currency_id" ref="base.IDR"/>
         <field name="company_id" ref="efn_setup_company.company_fnb"/>
     </record>
-    <record id="channel_fnb_pb" model="efn.online.channel">
+    <record id="user_online_pb" model="res.users">
+        <field name="name">Kanal online PB (user teknis)</field>
+        <field name="login">efn_online_pb</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="company_ids" eval="[Command.set([ref('efn_setup_company.company_fnb')])]"/>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_online_order.group_online_channel')])]"/>
+    </record>
+    <record id="channel_pb" model="efn.online.channel">
         <field name="name">Super-App Paris Baguette</field>
-        <field name="code">FNB-PB</field>
+        <field name="code">PB</field>
         <field name="brand_code">PB</field>
         <field name="active" eval="False"/>
         <field name="company_id" ref="efn_setup_company.company_fnb"/>
-        <field name="pricelist_id" ref="pricelist_online_fnb_pb"/>
+        <field name="pricelist_id" ref="pricelist_online_pb"/>
         <field name="partner_id" ref="partner_superapp_fnb"/>
-        <field name="team_id" ref="team_superapp_fnb_pb"/>
-        <field name="journal_titipan_id" ref="journal_titipan_fnb"/>
+        <field name="team_id" ref="team_superapp_fnb"/>
+        <field name="cash_rounding_id" ref="cash_rounding_idr_1"/>
+        <field name="journal_titipan_id" ref="journal_titipan_pb"/>
         <field name="require_outlet_fiscal_position" eval="True"/>
         <field name="stock_check">none</field>
         <field name="payment_timeout_minutes">70</field>
-        <field name="user_ids" eval="[Command.set([ref('user_online_fnb_pb')])]"/>
+        <field name="user_ids" eval="[Command.set([ref('user_online_pb')])]"/>
+    </record>
+    <!-- Outlet F&B = pickup -> fiscal position NON-DINE-IN kota outlet (tanpa SC; PB1 0 % keputusan 18-1). -->
+    <record id="outlet_pb_resto01" model="efn.online.outlet">
+        <field name="channel_id" ref="channel_pb"/>
+        <field name="code">RESTO-01</field>
+        <field name="public_name">Resto Kota Contoh (DEMO)</field>
+        <field name="warehouse_id" ref="warehouse_online_pb"/>
+        <field name="fiscal_position_id" ref="efn_setup_company.fiscal_position_kota_contoh_fnb"/>
     </record>
 
-    <record id="team_superapp_fnb_bacha" model="crm.team">
-        <field name="name">Super-App Bacha (kafe)</field>
-        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+    <!-- ===== Kanal BCR - Bacha Coffee Retail (butik, ritel PPN; nonaktif tanpa outlet) =====
+         Super-App Bacha satu domain = dua kanal (BCR + BCF), dua PT, satu cart (ADR-019 opsi A, BFF). -->
+    <record id="journal_titipan_bcr" model="account.journal">
+        <field name="name">Titipan Online - Holding</field>
+        <field name="code">TTPO</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
     </record>
-    <record id="pricelist_online_fnb_bacha" model="product.pricelist">
-        <field name="name">Online Bacha kafe (DEMO)</field>
+    <record id="pricelist_online_bcr" model="product.pricelist">
+        <field name="name">Online Bacha Coffee butik (DEMO)</field>
         <field name="currency_id" ref="base.IDR"/>
-        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
     </record>
-    <record id="channel_fnb_bacha" model="efn.online.channel">
-        <field name="name">Super-App Bacha (kafe)</field>
-        <field name="code">FNB-BACHA</field>
+    <record id="user_online_bcr" model="res.users">
+        <field name="name">Kanal online BCR (user teknis)</field>
+        <field name="login">efn_online_bcr</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="company_ids" eval="[Command.set([ref('efn_setup_company.company_bcr')])]"/>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_online_order.group_online_channel')])]"/>
+    </record>
+    <record id="channel_bcr" model="efn.online.channel">
+        <field name="name">Super-App Bacha Coffee (butik)</field>
+        <field name="code">BCR</field>
         <field name="brand_code">BACHA</field>
         <field name="active" eval="False"/>
-        <field name="company_id" ref="efn_setup_company.company_fnb"/>
-        <field name="pricelist_id" ref="pricelist_online_fnb_bacha"/>
-        <field name="partner_id" ref="partner_superapp_fnb"/>
-        <field name="team_id" ref="team_superapp_fnb_bacha"/>
-        <field name="journal_titipan_id" ref="journal_titipan_fnb"/>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="pricelist_id" ref="pricelist_online_bcr"/>
+        <field name="partner_id" ref="partner_superapp_bcr"/>
+        <field name="team_id" ref="team_superapp_bcr"/>
+        <field name="cash_rounding_id" ref="cash_rounding_idr_1"/>
+        <field name="journal_titipan_id" ref="journal_titipan_bcr"/>
+        <field name="payment_timeout_minutes">70</field>
+        <field name="stock_hold_mode">confirm</field>
+        <field name="max_order_amount">5000000</field>
+        <field name="max_line_qty">20</field>
+        <field name="user_ids" eval="[Command.set([ref('user_online_bcr')])]"/>
+    </record>
+
+    <!-- ===== Kanal BCF - Bacha Coffee F&B (kafe, PB1 + SC; nonaktif tanpa outlet) =====
+         Outlet (dari klien) wajib fiscal position NON-DINE-IN kota BCF (efn_setup_company fiscal_position_bcf_non_dine_in
+         untuk kota default). -->
+    <record id="journal_titipan_bcf" model="account.journal">
+        <field name="name">Titipan Online - Holding</field>
+        <field name="code">TTPO</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+    </record>
+    <record id="pricelist_online_bcf" model="product.pricelist">
+        <field name="name">Online Bacha Coffee kafe (DEMO)</field>
+        <field name="currency_id" ref="base.IDR"/>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+    </record>
+    <record id="user_online_bcf" model="res.users">
+        <field name="name">Kanal online BCF (user teknis)</field>
+        <field name="login">efn_online_bcf</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="company_ids" eval="[Command.set([ref('efn_setup_company.company_bcf')])]"/>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_online_order.group_online_channel')])]"/>
+    </record>
+    <record id="channel_bcf" model="efn.online.channel">
+        <field name="name">Super-App Bacha Coffee (kafe)</field>
+        <field name="code">BCF</field>
+        <field name="brand_code">BACHA</field>
+        <field name="active" eval="False"/>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="pricelist_id" ref="pricelist_online_bcf"/>
+        <field name="partner_id" ref="partner_superapp_bcf"/>
+        <field name="team_id" ref="team_superapp_bcf"/>
+        <field name="cash_rounding_id" ref="cash_rounding_idr_1"/>
+        <field name="journal_titipan_id" ref="journal_titipan_bcf"/>
         <field name="require_outlet_fiscal_position" eval="True"/>
         <field name="stock_check">none</field>
         <field name="payment_timeout_minutes">70</field>
-        <field name="user_ids" eval="[Command.set([ref('user_online_fnb_bacha')])]"/>
+        <field name="user_ids" eval="[Command.set([ref('user_online_bcf')])]"/>
     </record>
 </odoo>

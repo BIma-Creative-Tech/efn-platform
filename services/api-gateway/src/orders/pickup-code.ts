@@ -37,6 +37,26 @@ export function encryptPickupCode(cipher: PiiCipher, code: string, partId: strin
   return cipher.encrypt(code, pickupCodeAad(partId));
 }
 
+/**
+ * G20 §12.2 no. 3 (L-50, L-56): kode BAYAR di kasir — dibuat BFF (`generatePickupCode`: `crypto.randomInt`, alfabet
+ * §10.2, 8 karakter) di transaksi checkout, disimpan terenkripsi SEBELUM `efn_online_place`, dikirim sekali ke Odoo
+ * (`order.counter_code`, Odoo menyimpan hash). Bukan kode ambil (tidak bisa dipakai menyerahkan barang; selalu berbeda).
+ * AAD terikat baris `efn:online_order_part.counter_code_enc:v2:<part_id>`; tidak pernah di log/event/metrik/URL.
+ */
+export function counterCodeAad(partId: string): string {
+  if (!isUuid(partId)) throw new Error('part_id tidak valid untuk AAD kode bayar');
+  return `efn:online_order_part.counter_code_enc:v2:${partId.toLowerCase()}`;
+}
+
+export function encryptCounterCode(cipher: PiiCipher, code: string, partId: string): Buffer {
+  if (!PICKUP_CODE_RE.test(code)) throw new Error('kode bayar tidak valid');
+  return cipher.encrypt(code, counterCodeAad(partId));
+}
+
+export function decryptCounterCode(cipher: PiiCipher, enc: Buffer | Uint8Array, partId: string): string {
+  return cipher.decrypt(enc, counterCodeAad(partId));
+}
+
 /** v2 (terikat `part_id`) dulu; gagal → AAD lama v1 (`legacy: true`). Keduanya gagal → `PiiDecryptError`. */
 export function decryptPickupCode(cipher: PiiCipher, enc: Buffer | Uint8Array, partId: string): { code: string; legacy: boolean } {
   try {

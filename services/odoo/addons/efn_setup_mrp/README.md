@@ -21,7 +21,7 @@ Modul konfigurasi **data-only** untuk Central Kitchen (kitting via BoM Manufactu
 - `qty_multiple` tidak ada lagi di orderpoint 19.0 (pembulatan lewat `replenishment_uom_id`).
 
 ## Alur CK → outlet (konfigurasi, tanpa kode)
-1. Gudang CK (company PT F&B): *Manufacture to Resupply* aktif; `manufacture_steps` sesuai SOP (1/2/3 langkah).
+1. Gudang CK (company PT Paris Baguette, kode PB): *Manufacture to Resupply* aktif; `manufacture_steps` sesuai SOP (1/2/3 langkah).
 2. Paket: storable, UoM Porsi (`efn_kitting.uom_porsi`), `tracking = lot`, kategori FEFO, BoM Manufacture.
 3. Gudang outlet (company sama): *Resupply From* = gudang CK (field `resupply_wh_ids` — nama di 19.0 belum diverifikasi; butuh Multi-Step Routes) → reorder rule outlet memicu transfer CK→outlet; reorder rule CK memicu MO.
 4. Outlet beda PT → inter-company lewat modul custom `efn_intercompany` (fase 1, `docs/08` §5.2, ADR-031 — tanpa OCA), bukan resupply route (lihat `docs/08` F-03, F-12).
@@ -39,7 +39,8 @@ odoo -d <db> -i efn_setup_mrp      # menarik mrp, product_expiry, efn_kitting
 
 ## Batasan / belum terverifikasi
 - Belum pernah di-install. FEFO di POS (pemilihan lot saat jual) dan perilaku scheduler **belum diuji** (PoC).
-- Demo memakai company yang sudah ada dengan `efn_brand_code = 'FNB'` (mis. `efn_setup_company.company_fnb`), fallback `base.main_company` — sama dengan demo `efn_kitting` (gelombang 3b). Orderpoint demo tidak lagi memasang `route_id = mrp.route_warehouse0_manufacture` (route itu milik gudang company utama → risiko `_check_company` pada company FNB); route manufacture gudang company dipilih otomatis.
+- Demo memakai company yang sudah ada dengan `efn_brand_code = 'PB'` (PT Paris Baguette, `efn_setup_company.company_fnb`; G20 docs/04 §12.1, semula `FNB`), fallback `base.main_company` — sama dengan demo `efn_kitting` (gelombang 3b). Orderpoint demo tidak lagi memasang `route_id = mrp.route_warehouse0_manufacture` (route itu milik gudang company utama → risiko `_check_company` pada company PB); route manufacture gudang company dipilih otomatis.
+- **G20 W-32 (19.0.1.0.2):** Central Kitchen **tetap di PT Paris Baguette** (PB). Bacha Coffee F&B (BCF) hanya memakai CK sendiri bila ada (gudang CK + rute + BoM Manufacture di company BCF, konfigurasi UI; tidak di demo). Pasokan CK PB → outlet PT lain = inter-company (`efn_intercompany`, W-15; transfer pricing cost-plus hanya BCR ↔ BCF dan Holding ↔ PT).
 - Demo data belum dieksekusi di CI (job `odoo-test` tidak memuat demo); validasi orderpoint demo masih manual.
 - Paket demo kini bertracking lot: uji manual di README `efn_kitting` (MO "Produce All") perlu mengisi lot.
 - Kategori FEFO tidak diberi parent; xmlid kategori induk 19.0 belum diverifikasi.

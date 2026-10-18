@@ -95,8 +95,14 @@ daftar path = perubahan kontrak §10.4.3 + `RPC_ALLOWLIST` Odoo). Tanpa deploy �
   (retry 1 m → 1 j) — tidak ada event hilang. Prosedur umum: [secret-rotation.md](secret-rotation.md).
 - **Bucket `catalog`:** dibuat `minio-init` (SSE-S3, privat, tanpa lifecycle; retensi = job BFF). Hanya user BFF
   (Get/Put/Delete objek + GetBucketLocation).
-- **Menambah kanal brand** (`RTL-GL`, `RTL-BACHA`, `FNB-PB`, `FNB-BACHA`, docs/04 §11.3): key & user teknis per kanal
+- **Mengaktifkan kanal PT** (G20 docs/04 §12.1: kode kanal = kode PT `GL`, `PB`, `BCR`, `BCF`; kode lama `RTL`/`FNB`
+  dan kanal G19 berhifen ditolak deploy): key & user teknis per kanal
   → [odoo-online-api-key.md#kanal-baru](odoo-online-api-key.md#kanal-baru). Kanal masuk `ONLINE_CHANNELS` **terakhir**.
+  Cutover dari kode lama: [odoo-online-api-key.md §8](odoo-online-api-key.md#migrasi-g20), dev: [dev-reset.md](dev-reset.md).
+- **Bayar di kasir** (G20 W-30, docs/04 §12.2): batas order `counter` terbuka per member
+  `ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER` (default **1**, rentang deploy 1..10 = BFF, wajib ≤
+  `ONLINE_MAX_OPEN_ORDERS_PER_MEMBER`; GitHub variable dengan nama sama → config rilis). Pelanggaran → `429
+  too_many_open_orders`.
 
 ## Aktivasi reservasi stok 1 jam (G19 W-02, docs/04 §11.1) {#aktivasi-reservasi-1-jam}
 

@@ -25,6 +25,14 @@ export const OnlineErrors = {
   tooManyOpenOrders: (): ApiError =>
     ApiError.of(429, 'too_many_open_orders', 'Masih ada pesanan yang menunggu pembayaran. Selesaikan atau batalkan dulu.'),
   fulfilmentUnavailable: (): ApiError => ApiError.of(422, 'fulfilment_unavailable', 'Metode pengambilan belum tersedia.'),
+  /** G20 §12.2 no. 2 (L-50): bayar di kasir hanya untuk pesanan satu PT (satu bagian). */
+  counterPaymentSinglePartOnly: (): ApiError =>
+    ApiError.of(422, 'counter_payment_single_part_only', 'Bayar di kasir hanya untuk pesanan dari satu toko. Pisahkan keranjang atau pilih QRIS.'),
+  /** G20 §12.2 no. 2: kanal tidak mengizinkan metode bayar yang dipilih (`efn.online.channel.payment_modes`). */
+  paymentMethodUnavailable: (): ApiError => ApiError.of(422, 'payment_method_unavailable', 'Metode pembayaran ini belum tersedia untuk pesanan ini.'),
+  /** G20 §12.2 no. 2: `ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER` (default 1) — kode sama dengan batas order terbuka. */
+  tooManyOpenCounterOrders: (): ApiError =>
+    ApiError.of(429, 'too_many_open_orders', 'Masih ada pesanan yang menunggu dibayar di kasir. Bayar atau batalkan dulu.'),
   pickupCodeUnavailable: (): ApiError => ApiError.of(409, 'pickup_code_unavailable', 'Kode ambil belum tersedia untuk pesanan ini.'),
   /** L-14: bagian sedang diperiksa (mis. kode ambil salah 5×) — kode ambil ditahan. */
   orderInReview: (): ApiError =>

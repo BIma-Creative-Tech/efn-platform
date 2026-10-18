@@ -22,6 +22,8 @@ PCI: tidak ada data kartu (SAQ A). Build/test **belum dijalankan lokal**.
 
 Egress vendor memakai `createPublicHttp()` (SEC-23: root store publik saja).
 
+**G20 L-55 (gerbang deploy pilot bayar di kasir):** `ONLINE_PAYMENT_METHODS` (`qris`, `counter`; default `qris,counter` di dev/test, `qris` selain itu). Production + `ONLINE_ENABLED=true` + `qris` di daftar → wajib `PAYMENT_PROVIDER=xendit|midtrans`, selain itu **gagal start** (ConfigError tanpa nilai rahasia). Pilot tanpa vendor = `ONLINE_PAYMENT_METHODS=counter` + `PAYMENT_PROVIDER=disabled`; `mock` tetap ditolak di production. Order `counter` tidak pernah membuat intent / memanggil provider (refund-nya lewat POS, `manual_required`). Jurnal titipan Holding (A1) hanya untuk `qris`.
+
 ## Aturan
 - Status final hanya lewat webhook terverifikasi atau `getStatus` provider (maks 1× per `PAYMENT_STATUS_REFRESH_SECONDS` per intent, Redis `rl:paychk:<id>`), tidak pernah dari klien.
 - Webhook: verifikasi → `processed_message (webhook.payments.<provider>, event_id)` → `SELECT … FOR UPDATE` → transisi monoton dalam satu transaksi: `pending → paid|expired|failed|cancelled`; `expired|cancelled|failed → paid` (pembayaran terlambat: dicatat + log peringatan untuk refund manual); `paid` final. Nominal webhook ≠ intent → tidak diubah, log error.

@@ -16,7 +16,7 @@ import {
 
 const QUOTE_ID = '3f2b8c1e-9a4d-4c7e-8b21-5d6e7f8a9b0c';
 
-const group = (lines: [number, number][], channel = 'RTL', outlet = 'TOKO-01'): CartGroup => ({
+const group = (lines: [number, number][], channel = 'GL', outlet = 'TOKO-01'): CartGroup => ({
   channel_code: channel,
   outlet_code: outlet,
   fulfilment: 'pickup',
@@ -29,8 +29,8 @@ describe('sanitizeCart (tidak ada harga dari klien)', () => {
       version: 3,
       total: 1,
       groups: [
-        { channel_code: 'RTL', outlet_code: 'TOKO-01', fulfilment: 'pickup', price: 1, lines: [{ product_id: 11, qty: 2, price_unit_incl: 1 }] },
-        { channel_code: 'FNB', outlet_code: 'RESTO-1', fulfilment: 'pickup', lines: [] },
+        { channel_code: 'GL', outlet_code: 'TOKO-01', fulfilment: 'pickup', price: 1, lines: [{ product_id: 11, qty: 2, price_unit_incl: 1 }] },
+        { channel_code: 'PB', outlet_code: 'RESTO-1', fulfilment: 'pickup', lines: [] },
       ],
     });
     expect(c).toEqual({ version: 3, groups: [group([[11, 2]])] });
@@ -58,37 +58,37 @@ describe('sanitizeCart (tidak ada harga dari klien)', () => {
 
 describe('operasi keranjang', () => {
   it('addItem menjumlahkan qty, dibatasi max_qty', () => {
-    let r = addItem([], { channel_code: 'RTL', outlet_code: 'TOKO-01', product_id: 11, qty: 2 });
+    let r = addItem([], { channel_code: 'GL', outlet_code: 'TOKO-01', product_id: 11, qty: 2 });
     expect(r.ok && r.groups).toEqual([group([[11, 2]])]);
-    r = addItem(r.ok ? r.groups : [], { channel_code: 'RTL', outlet_code: 'TOKO-01', product_id: 11, qty: 5, max_qty: 6 });
+    r = addItem(r.ok ? r.groups : [], { channel_code: 'GL', outlet_code: 'TOKO-01', product_id: 11, qty: 5, max_qty: 6 });
     expect(r.ok && r.groups[0]!.lines[0]!.qty).toBe(6);
   });
   it('satu outlet per kanal: outlet beda memindahkan grup', () => {
-    const r = addItem([group([[11, 1]])], { channel_code: 'RTL', outlet_code: 'TOKO-02', product_id: 12, qty: 1 });
+    const r = addItem([group([[11, 1]])], { channel_code: 'GL', outlet_code: 'TOKO-02', product_id: 12, qty: 1 });
     expect(r.ok && r.outletChanged).toBe(true);
     expect(r.ok && r.groups).toHaveLength(1);
     expect(r.ok && r.groups[0]!.outlet_code).toBe('TOKO-02');
   });
   it('multi-PT: kanal lain menjadi grup terpisah', () => {
-    const r = addItem([group([[11, 1]])], { channel_code: 'FNB', outlet_code: 'RESTO-1', product_id: 99, qty: 1 });
-    expect(r.ok && r.groups.map((g) => g.channel_code)).toEqual(['RTL', 'FNB']);
+    const r = addItem([group([[11, 1]])], { channel_code: 'PB', outlet_code: 'RESTO-1', product_id: 99, qty: 1 });
+    expect(r.ok && r.groups.map((g) => g.channel_code)).toEqual(['GL', 'PB']);
   });
   it('batas 50 baris & input tidak valid', () => {
     const full = [group(Array.from({ length: 50 }, (_, i) => [i + 1, 1] as [number, number]))];
-    expect(addItem(full, { channel_code: 'RTL', outlet_code: 'TOKO-01', product_id: 999, qty: 1 })).toEqual({ ok: false, reason: 'too_many_lines' });
-    expect(addItem([], { channel_code: 'RTL', outlet_code: 'TOKO-01', product_id: 1, qty: 0 }).ok).toBe(false);
+    expect(addItem(full, { channel_code: 'GL', outlet_code: 'TOKO-01', product_id: 999, qty: 1 })).toEqual({ ok: false, reason: 'too_many_lines' });
+    expect(addItem([], { channel_code: 'GL', outlet_code: 'TOKO-01', product_id: 1, qty: 0 }).ok).toBe(false);
   });
   it('setQty: 0 menghapus baris & grup kosong; setOutlet; input asli tidak dimutasi', () => {
     const g = [group([[11, 2]])];
-    expect(setQty(g, 'RTL', 11, 0)).toEqual([]);
-    expect(setQty(g, 'RTL', 11, 500)[0]!.lines[0]!.qty).toBe(99);
-    expect(setOutlet(g, 'RTL', 'TOKO-09')[0]!.outlet_code).toBe('TOKO-09');
-    expect(setOutlet(g, 'RTL', 'bad code')[0]!.outlet_code).toBe('TOKO-01');
+    expect(setQty(g, 'GL', 11, 0)).toEqual([]);
+    expect(setQty(g, 'GL', 11, 500)[0]!.lines[0]!.qty).toBe(99);
+    expect(setOutlet(g, 'GL', 'TOKO-09')[0]!.outlet_code).toBe('TOKO-09');
+    expect(setOutlet(g, 'GL', 'bad code')[0]!.outlet_code).toBe('TOKO-01');
     expect(g[0]!.lines[0]!.qty).toBe(2);
   });
   it('mergeGroups: tamu digabung, outlet server menang', () => {
-    const merged = mergeGroups([group([[11, 1]])], [group([[11, 2], [12, 1]], 'RTL', 'TOKO-02'), group([[50, 1]], 'FNB', 'RESTO-1')]);
-    expect(merged).toEqual([group([[11, 3], [12, 1]]), group([[50, 1]], 'FNB', 'RESTO-1')]);
+    const merged = mergeGroups([group([[11, 1]])], [group([[11, 2], [12, 1]], 'GL', 'TOKO-02'), group([[50, 1]], 'PB', 'RESTO-1')]);
+    expect(merged).toEqual([group([[11, 3], [12, 1]]), group([[50, 1]], 'PB', 'RESTO-1')]);
     expect(countItems(merged)).toBe(5);
   });
 });
@@ -111,8 +111,8 @@ describe('parseQuote §10.3.4', () => {
     quote_hash: 'rahasia-internal',
     groups: [
       {
-        channel_code: 'RTL',
-        company_code: 'RTL',
+        channel_code: 'GL',
+        company_code: 'GL',
         outlet_code: 'TOKO-01',
         fulfilment: 'pickup',
         quote_hash: 'rahasia-internal',

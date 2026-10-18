@@ -12,6 +12,7 @@
                 <field name="pricelist_id"/>
                 <field name="stock_check"/>
                 <field name="stock_hold_mode" optional="show"/>
+                <field name="payment_modes" optional="show"/>
                 <field name="payment_timeout_minutes"/>
                 <field name="company_id" groups="base.group_multi_company"/>
                 <field name="active" widget="boolean_toggle"/>
@@ -38,6 +39,8 @@
                             <field name="team_id"/>
                         </group>
                         <group string="Pembayaran &amp; faktur">
+                            <!-- G20 E-45: qris | counter (dipisah koma). -->
+                            <field name="payment_modes" placeholder="qris,counter"/>
                             <field name="cash_rounding_id"/>
                             <field name="invoice_on_paid"/>
                             <field name="journal_titipan_id"/>
@@ -59,6 +62,9 @@
                             <field name="max_lines"/>
                             <field name="max_qty_per_line"/>
                             <field name="max_line_qty" invisible="stock_hold_mode != 'confirm'"/>
+                            <!-- G20 W-33 / E-35b (docs/04 §12.3): batas berat pesanan (0 = mati). -->
+                            <field name="max_order_weight_kg"/>
+                            <field name="weight_missing_policy" invisible="max_order_weight_kg &lt;= 0"/>
                             <field name="pickup_reminder_hours"/>
                             <field name="pickup_max_attempts"/>
                         </group>

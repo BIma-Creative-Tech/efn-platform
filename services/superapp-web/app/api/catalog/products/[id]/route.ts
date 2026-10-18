@@ -1,4 +1,4 @@
-/** GET /api/catalog/products/:id?channel=RTL -> BFF GET /v1/catalog/products/:id (docs/04 §10.3.2). Publik. */
+/** GET /api/catalog/products/:id?channel=GL -> BFF GET /v1/catalog/products/:id (docs/04 §10.3.2). Publik. */
 import type { NextRequest } from 'next/server';
 import { isChannelCode, parsePositiveInt, parseProductDetail } from '@/lib/catalog';
 import { proxyCatalog } from '@/lib/catalog-route';

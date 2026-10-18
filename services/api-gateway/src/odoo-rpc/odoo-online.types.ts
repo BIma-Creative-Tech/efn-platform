@@ -75,7 +75,11 @@ export interface CatalogItem {
   sequence: number;
   prices: CatalogPrice[];
   max_qty: number;
+  /** G20 §12.3 (W-33): `product.weight` (kg) untuk batas berat pesanan; `null` = belum diisi di Odoo. */
+  weight_kg: number | null;
 }
+/** G20 §12.2 no. 1: `efn.online.channel.payment_modes`. */
+export type ChannelPaymentMode = 'qris' | 'counter';
 /**
  * L-11 (docs/04 §10.17): blok `channel` WAJIB pada hasil `efn_online_catalog` —
  * `{ code, name, company_code, currency, outlets: [{ code, public_name, pickup_enabled, prep_minutes, active }] }`.
@@ -91,6 +95,11 @@ export interface CatalogChannelInfo {
   active: boolean;
   fulfilment: { pickup: boolean; delivery: boolean };
   outlets: { outlet_code: string; public_name: string; pickup_enabled: boolean; prep_minutes: number | null; active: boolean }[];
+  /**
+   * G20 §12.2 no. 1 / L-52: metode bayar yang diizinkan kanal. `null` = Odoo tidak mengirim (modul pra-G20) → BFF memakai
+   * `ONLINE_PAYMENT_METHODS` (config, L-55). Opsional di tipe agar `channel_data` lama tetap terbaca.
+   */
+  payment_modes?: ChannelPaymentMode[] | null;
 }
 export interface CatalogPage {
   items: CatalogItem[];
@@ -165,6 +174,16 @@ export interface PlaceInput {
   promo_codes: string[];
   /** Rahasia: hanya dikirim sekali ke Odoo (TLS + mTLS), tidak pernah di-log (§10.3.6). */
   pickup_code: string;
+  /**
+   * G20 §12.2 no. 3: hanya dikirim bila `counter` (mode `qris` = field tidak ada, payload & `payload_sha256` Odoo sama
+   * dengan pra-G20).
+   */
+  payment_mode?: 'counter';
+  /**
+   * L-56: kode BAYAR di kasir dibuat BFF (pola `pickup_code`), hanya bila `payment_mode=counter`. Rahasia: dikirim sekali
+   * ke Odoo (TLS + mTLS; Odoo hanya menyimpan hash), tidak pernah di-log. Odoo TIDAK mengembalikannya.
+   */
+  counter_code?: string;
 }
 export interface PlaceResult {
   order_state: string;

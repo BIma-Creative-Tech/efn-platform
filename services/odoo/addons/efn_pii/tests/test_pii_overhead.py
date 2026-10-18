@@ -23,7 +23,7 @@ ROUNDS = 5
 READ_FIELDS = ["name", "phone", "email", "vat", "street", "city", "zip"]
 
 
-@tagged("post_install", "-at_install", "efn", "efn_pii_poc")
+@tagged("post_install", "-at_install", "efn", "efn_pii")
 class TestEfnPiiOverhead(PiiKeyMixin, TransactionCase):
     def setUp(self):
         super().setUp()
@@ -31,6 +31,7 @@ class TestEfnPiiOverhead(PiiKeyMixin, TransactionCase):
         self.Partner = self.env["res.partner"].with_context(tracking_disable=True)
 
     def _vals(self, protected):
+        """Terlindungi = individu (protect-by-default); pembanding = partner perusahaan (tidak terlindungi)."""
         tag = "P" if protected else "U"
         return [
             {
@@ -41,7 +42,7 @@ class TestEfnPiiOverhead(PiiKeyMixin, TransactionCase):
                 "street": "Jl. Contoh 1",
                 "city": "Jakarta",
                 "zip": "10110",
-                "efn_pii_protected": protected,
+                "is_company": not protected,
             }
             for i in range(N_PARTNERS)
         ]
@@ -75,6 +76,11 @@ class TestEfnPiiOverhead(PiiKeyMixin, TransactionCase):
         found = self.Partner.search([("phone", "in", [f"0812{i:08d}" for i in range(0, N_PARTNERS, 10)])])
         t_search = time.perf_counter() - start
         self.assertEqual(len(found & protected), N_PARTNERS // 10)
+        start = time.perf_counter()
+        by_name = self.Partner.search([("name", "ilike", "overhead 0042")])
+        t_name = time.perf_counter() - start
+        self.assertIn(protected[42], by_name)
+        _logger.info("EFN_PII_POC overhead name_token_search n=%d t=%.4fs", N_PARTNERS, t_name)
         ratio = (t_read_prot / t_read_plain - 1.0) * 100.0 if t_read_plain else float("nan")
         _logger.info(
             "EFN_PII_POC overhead n=%d rounds=%d read_plain=%.4fs read_protected=%.4fs overhead_read=%.1f%% "

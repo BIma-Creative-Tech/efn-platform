@@ -29,9 +29,11 @@
          manufacture_to_resupply=True (default True). Tidak perlu (dan tidak bisa) dipasang di
          form produk. warehouse_id/location_id dihitung otomatis (precompute) dari company.
          route_id SENGAJA dikosongkan (QA gelombang 4): xmlid route_warehouse0_manufacture terikat ke
-         warehouse/company utama, sedangkan orderpoint ini milik company FNB -> risiko _check_company.
-         Dengan route kosong, Odoo memakai route manufacture gudang company FNB (produk punya BoM normal). -->
-    <!-- G17 (load DB with-demo): company FNB dari efn_setup_company dibuat SEBELUM stock terpasang,
+         warehouse/company utama, sedangkan orderpoint ini milik company PB -> risiko _check_company.
+         Dengan route kosong, Odoo memakai route manufacture gudang company PB (produk punya BoM normal).
+         G20 W-32 (docs/04 §12.1): CK tetap di PT Paris Baguette (kode PB, xmlid company_fnb). CK Bacha Coffee F&B
+         hanya bila ada (gudang + rute per company BCF; tidak dibuat di demo). -->
+    <!-- G17 (load DB with-demo): company PB dari efn_setup_company dibuat SEBELUM stock terpasang,
          sehingga belum punya gudang (stock hanya membuat gudang untuk company pertama,
          res.company.create_missing_warehouse 19.0) -> orderpoint gagal (warehouse_id NOT NULL).
          Gudang Central Kitchen demo dibuat eksplisit dan dipakai orderpoint. Company gudang &amp; orderpoint =

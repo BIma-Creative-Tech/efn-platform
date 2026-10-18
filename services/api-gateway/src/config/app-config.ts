@@ -1304,9 +1304,12 @@ export class AppConfig {
   get onlineCatalogEnabled(): boolean {
     return this.bool('ONLINE_CATALOG_ENABLED', this.onlineEnabled);
   }
-  /** Kanal aktif di BFF (`ONLINE_CHANNELS=RTL`), format `channel_code` §10.2. */
+  /**
+   * Kanal aktif di BFF (`ONLINE_CHANNELS=GL,PB,BCR,BCF`), format `channel_code` §10.2. G20 §12.1 (L-48): kode kanal =
+   * kode PT; default `GL` (kode lama `RTL`/`FNB` dihapus).
+   */
   get onlineChannels(): string[] {
-    const raw = this.str('ONLINE_CHANNELS') ?? 'RTL';
+    const raw = this.str('ONLINE_CHANNELS') ?? 'GL';
     const out = [...new Set(raw.split(/[\s,;]+/).filter((s) => s.length > 0))];
     if (out.length === 0 || out.length > 20 || out.some((c) => !ONLINE_CHANNEL_RE.test(c) || c.endsWith('-FILE'))) {
       throw new ConfigError('ONLINE_CHANNELS harus daftar kode kanal ^[A-Z][A-Z0-9-]{1,15}$ (tanpa akhiran -FILE, L-46)');
@@ -1337,6 +1340,30 @@ export class AppConfig {
   /** G19 §11.1 / L-32: default **2** (dari 3) sejak reservasi stok aktif — anti *stock griefing*. */
   get onlineMaxOpenOrdersPerMember(): number {
     return this.int('ONLINE_MAX_OPEN_ORDERS_PER_MEMBER', 2, 1, 50);
+  }
+  /**
+   * G20 §12.2 no. 2: batas order bayar-di-kasir terbuka (`awaiting_counter_payment`) per member — default **1** (reservasi
+   * stok tanpa uang muka; anti stock griefing). Tetap dihitung juga dalam `ONLINE_MAX_OPEN_ORDERS_PER_MEMBER`.
+   */
+  get onlineMaxOpenCounterOrdersPerMember(): number {
+    return this.int('ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER', 1, 1, 10);
+  }
+  /**
+   * L-55 (gerbang deploy pilot bayar di kasir): metode bayar online yang diizinkan BFF — `qris`, `counter`, atau keduanya.
+   * Default `qris,counter` di APP_ENV=dev|test; selain itu `qris` (perilaku G19; production WAJIB menyetel eksplisit —
+   * pilot tanpa vendor = `counter` + `PAYMENT_PROVIDER=disabled`). Checkout metode di luar daftar → `422
+   * payment_method_unavailable`. L-52: juga dipakai sebagai `payment_modes` kanal bila blok `channel` Odoo tidak
+   * memuatnya; `payment_modes` yang tampil = (mode Odoo ?? daftar ini) ∩ daftar ini.
+   */
+  get onlinePaymentMethods(): ('qris' | 'counter')[] {
+    const appEnv = this.str('APP_ENV');
+    const devLike = appEnv === 'dev' || appEnv === 'test' || (appEnv === undefined && this.str('NODE_ENV') === 'test');
+    const raw = this.str('ONLINE_PAYMENT_METHODS') ?? (devLike ? 'qris,counter' : 'qris');
+    const out = [...new Set(raw.split(/[\s,;]+/).filter((s) => s.length > 0))];
+    if (out.length === 0 || out.some((m) => m !== 'qris' && m !== 'counter')) {
+      throw new ConfigError('ONLINE_PAYMENT_METHODS hanya boleh berisi qris|counter');
+    }
+    return out as ('qris' | 'counter')[];
   }
   /** Interval sinkron katalog (detik). 0 = job mati (test). */
   get onlineCatalogSyncSeconds(): number {
@@ -1487,7 +1514,8 @@ export class AppConfig {
    * Satu key = satu user teknis = satu PT; tidak pernah dipakai untuk kanal lain.
    */
   odooApiKeyOnline(channelCode: string): string {
-    // G19 §11.3 no. 3: kode berhifen (`RTL-GL`) → env `ODOO_API_KEY_ONLINE_RTL_GL_FILE`, secret `odoo_api_key_online_rtl_gl`.
+    // G20 §12.1: `GL` → env `ODOO_API_KEY_ONLINE_GL_FILE`, secret `odoo_api_key_online_gl` (juga pb/bcr/bcf). Kode berhifen
+    // (G19, mis. `AB-CD` → `ODOO_API_KEY_ONLINE_AB_CD_FILE`) tetap didukung regex walau kanal G20 tanpa hifen.
     // Kedua nama diturunkan HANYA dari kode yang lolos regex §10.2 (tanpa `/`, `.`, `_`) → tidak ada path traversal,
     // dan pemetaan `-`→`_` injektif (kode kanal tidak boleh memuat `_`).
     const envName = onlineApiKeyEnvName(channelCode);
@@ -1556,6 +1584,8 @@ export class AppConfig {
       () => this.onlinePaymentTimeoutSeconds,
       () => this.onlineQuoteTtlSeconds,
       () => this.onlineMaxOpenOrdersPerMember,
+      () => this.onlineMaxOpenCounterOrdersPerMember,
+      () => this.onlinePaymentMethods,
       () => this.onlineCatalogSyncSeconds,
       () => this.minioCatalogBucket,
       () => this.odooOnlineMock,
@@ -1563,6 +1593,21 @@ export class AppConfig {
       attempt(() => void getter());
     }
     if (problems.length > 0) return problems;
+    // L-55: production + online aktif + `qris` → wajib provider nyata. `mock` sudah ditolak `paymentProvider`; `disabled`
+    // hanya sah bila ONLINE_PAYMENT_METHODS=counter (bayar di kasir tidak pernah memanggil provider). Pesan tanpa nilai rahasia.
+    if (this.isProductionDeployment && this.onlineEnabled && this.onlinePaymentMethods.includes('qris')) {
+      let provider: string | null = null;
+      try {
+        provider = this.paymentProvider;
+      } catch {
+        provider = null; // masalah PAYMENT_PROVIDER sudah dilaporkan pemeriksaan umum
+      }
+      if (provider !== null && provider !== 'xendit' && provider !== 'midtrans') {
+        problems.push(
+          'ONLINE_PAYMENT_METHODS memuat qris tetapi PAYMENT_PROVIDER bukan xendit|midtrans (L-55); pilot tanpa vendor: ONLINE_PAYMENT_METHODS=counter + PAYMENT_PROVIDER=disabled',
+        );
+      }
+    }
     if (this.onlineEnabled || this.onlineCatalogEnabled) {
       attempt(() => void this.odooOnlineEventHmac);
       if (!this.odooOnlineMock) {
@@ -1604,14 +1649,14 @@ const ONLINE_RL_DEFAULTS: Readonly<Record<OnlineRateLimitName, readonly [number,
 };
 
 /**
- * `RTL` → `ODOO_API_KEY_ONLINE_RTL`; `RTL-GL` → `ODOO_API_KEY_ONLINE_RTL_GL` (file: `…_FILE`). Kode yang tidak lolos
+ * `GL` → `ODOO_API_KEY_ONLINE_GL`; `AB-CD` → `ODOO_API_KEY_ONLINE_AB_CD` (file: `…_FILE`). Kode yang tidak lolos
  * regex §10.2 → ConfigError (tidak pernah dipakai membentuk nama env/path).
  */
 export function onlineApiKeyEnvName(channelCode: string): string {
   if (!ONLINE_CHANNEL_RE.test(channelCode)) throw new ConfigError('kode kanal tidak valid');
   return `ODOO_API_KEY_ONLINE_${channelCode.replace(/-/g, '_')}`;
 }
-/** Nama secret Docker per kanal: `RTL-GL` → `odoo_api_key_online_rtl_gl` (di bawah `${SECRETS_DIR:-/run/secrets}`). */
+/** Nama secret Docker per kanal: `GL` → `odoo_api_key_online_gl` (di bawah `${SECRETS_DIR:-/run/secrets}`). */
 export function onlineApiKeySecretName(channelCode: string): string {
   if (!ONLINE_CHANNEL_RE.test(channelCode)) throw new ConfigError('kode kanal tidak valid');
   const name = `odoo_api_key_online_${channelCode.toLowerCase().replace(/-/g, '_')}`;

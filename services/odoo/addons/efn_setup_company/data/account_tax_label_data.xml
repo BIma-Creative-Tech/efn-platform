@@ -25,29 +25,29 @@
      Barang"). Langkah wajib setelah aktivasi id_ID: isi terjemahan id_ID label di bawah lewat
      tombol terjemahan di form Pajak/Grup Pajak (lihat README §Label pajak). -->
 <odoo noupdate="1">
-    <!-- invoice_label pajak penjualan, 4 PT. Python 3.12: comprehension di safe_eval (inlined, PEP 709). -->
+    <!-- invoice_label pajak penjualan, 6 PT (G20 W-32: + company_bcr, company_bcf). Python 3.12: comprehension di safe_eval (inlined, PEP 709). -->
     <function model="account.tax" name="write"
-              eval="[[ref('account.%d_%s' % (ref(c), t)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_farm') for t in ('tax_ST4', 'tax_ST5')], {'invoice_label': 'PPN 11%'}]"/>
+              eval="[[ref('account.%d_%s' % (ref(c), t)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_bcr', 'company_bcf', 'company_farm') for t in ('tax_ST4', 'tax_ST5')], {'invoice_label': 'PPN 11%'}]"/>
     <function model="account.tax" name="write"
-              eval="[[ref('account.%d_%s' % (ref(c), t)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_farm') for t in ('tax_ST3', 'tax_ST6')], {'invoice_label': 'PPN 12%'}]"/>
+              eval="[[ref('account.%d_%s' % (ref(c), t)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_bcr', 'company_bcf', 'company_farm') for t in ('tax_ST3', 'tax_ST6')], {'invoice_label': 'PPN 12%'}]"/>
     <function model="account.tax" name="write"
-              eval="[[ref('account.%d_%s' % (ref(c), t)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_farm') for t in ('tax_luxury_sales', 'tax_luxury_sales_pemungut_ppn')], {'invoice_label': 'PPnBM 20%'}]"/>
+              eval="[[ref('account.%d_%s' % (ref(c), t)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_bcr', 'company_bcf', 'company_farm') for t in ('tax_luxury_sales', 'tax_luxury_sales_pemungut_ppn')], {'invoice_label': 'PPnBM 20%'}]"/>
     <function model="account.tax" name="write"
-              eval="[[ref('account.%d_%s' % (ref(c), t)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_farm') for t in ('tax_ST0', 'tax_ST7')], {'invoice_label': 'PPN 0%'}]"/>
+              eval="[[ref('account.%d_%s' % (ref(c), t)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_bcr', 'company_bcf', 'company_farm') for t in ('tax_ST0', 'tax_ST7')], {'invoice_label': 'PPN 0%'}]"/>
     <function model="account.tax" name="write"
-              eval="[[ref('account.%d_tax_ST2' % ref(c)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_farm')], {'invoice_label': 'Bebas PPN'}]"/>
+              eval="[[ref('account.%d_tax_ST2' % ref(c)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_bcr', 'company_bcf', 'company_farm')], {'invoice_label': 'Bebas PPN'}]"/>
 
     <!-- Nama grup pajak (label subtotal pajak di quote/struk/invoice). -->
     <function model="account.tax.group" name="write"
-              eval="[[ref('account.%d_l10n_id_tax_group_non_luxury_goods' % ref(c)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_farm')], {'name': 'PPN 11%'}]"/>
+              eval="[[ref('account.%d_l10n_id_tax_group_non_luxury_goods' % ref(c)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_bcr', 'company_bcf', 'company_farm')], {'name': 'PPN 11%'}]"/>
     <function model="account.tax.group" name="write"
-              eval="[[ref('account.%d_l10n_id_tax_group_luxury_goods' % ref(c)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_farm')], {'name': 'PPN 12%'}]"/>
+              eval="[[ref('account.%d_l10n_id_tax_group_luxury_goods' % ref(c)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_bcr', 'company_bcf', 'company_farm')], {'name': 'PPN 12%'}]"/>
     <function model="account.tax.group" name="write"
-              eval="[[ref('account.%d_l10n_id_tax_group_stlg' % ref(c)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_farm')], {'name': 'PPnBM'}]"/>
+              eval="[[ref('account.%d_l10n_id_tax_group_stlg' % ref(c)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_bcr', 'company_bcf', 'company_farm')], {'name': 'PPnBM'}]"/>
     <function model="account.tax.group" name="write"
-              eval="[[ref('account.%d_l10n_id_tax_group_0' % ref(c)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_farm')], {'name': 'PPN 0%'}]"/>
+              eval="[[ref('account.%d_l10n_id_tax_group_0' % ref(c)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_bcr', 'company_bcf', 'company_farm')], {'name': 'PPN 0%'}]"/>
     <function model="account.tax.group" name="write"
-              eval="[[ref('account.%d_l10n_id_tax_group_exempt' % ref(c)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_farm')], {'name': 'Bebas PPN'}]"/>
+              eval="[[ref('account.%d_l10n_id_tax_group_exempt' % ref(c)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_bcr', 'company_bcf', 'company_farm')], {'name': 'Bebas PPN'}]"/>
     <function model="account.tax.group" name="write"
-              eval="[[ref('account.%d_default_tax_group' % ref(c)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_farm')], {'name': 'Pajak'}]"/>
+              eval="[[ref('account.%d_default_tax_group' % ref(c)) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_bcr', 'company_bcf', 'company_farm')], {'name': 'Pajak'}]"/>
 </odoo>

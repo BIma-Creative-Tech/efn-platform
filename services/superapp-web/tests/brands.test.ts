@@ -61,6 +61,23 @@ describe('isBrandId / getBrandById', () => {
   });
   it('id valid', () => {
     expect(isBrandId('efn-mart')).toBe(true);
-    expect(getBrandById('efn-kitchen').companies).toEqual(['FNB']);
+    expect(getBrandById('efn-kitchen').companies).toEqual(['PB']);
+    expect(getBrandById('efn-mart').companies).toEqual(['GL']);
+    expect(getBrandById('efn').companies).toEqual(['GL', 'PB', 'BCR', 'BCF']);
+  });
+  it('kode RTL/FNB sudah dihapus dari peta PT; enam entitas §12.1', async () => {
+    const { COMPANIES, BRANDS } = await import('../lib/brands');
+    expect(Object.keys(COMPANIES).sort()).toEqual(['BCF', 'BCR', 'EFN', 'FARM', 'GL', 'PB']);
+    for (const b of Object.values(BRANDS)) for (const c of b.companies) expect(COMPANIES).toHaveProperty(c);
+  });
+  it('peta brand Bacha = dua kanal BCR + BCF; kode tak dikenal -> kosong; tenant tetap brandCode null (L-33)', async () => {
+    const { channelsOfBrandCode, BRANDS } = await import('../lib/brands');
+    expect(channelsOfBrandCode('BACHA')).toEqual(['BCR', 'BCF']);
+    expect(channelsOfBrandCode('GL')).toEqual(['GL']);
+    expect(channelsOfBrandCode('PB')).toEqual(['PB']);
+    expect(channelsOfBrandCode('RTL')).toEqual([]);
+    expect(channelsOfBrandCode('__proto__')).toEqual([]);
+    expect(channelsOfBrandCode(null)).toEqual([]);
+    for (const b of Object.values(BRANDS)) expect(b.brandCode).toBeNull();
   });
 });

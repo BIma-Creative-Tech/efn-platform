@@ -28,13 +28,20 @@ import {
  * idempotensi place/cancel/refund, `absent` untuk cancel ref tak dikenal, `price_changed` bila `quote_hash` berbeda,
  * mark_paid → confirmed/stock_short/review/refund_required.
  *
- * SEMUA HARGA & PAJAK DI SINI ADALAH DATA DEMO PLACEHOLDER — bukan aturan bisnis. Produk demo kanal `RTL`:
- *   11 Beras 5 kg (in_stock), 12 Minyak goreng 2 L (low), 13 "Uji stok-kurang" (lolos quote, `stock_short` saat
- *   mark_paid), 14 "Uji habis" (`out` → issue `out_of_stock` saat quote). Outlet `TOKO-01`.
+ * SEMUA HARGA, PAJAK & BERAT DI SINI ADALAH DATA DEMO PLACEHOLDER — bukan aturan bisnis. Produk demo (semua kanal):
+ *   11 Beras 5 kg (in_stock, 5 kg), 12 Minyak goreng 2 L (low, 1,9 kg), 13 "Uji stok-kurang" (lolos quote,
+ *   `stock_short` saat mark_paid, 0,5 kg), 14 "Uji habis" (`out` → issue `out_of_stock` saat quote, berat kosong).
+ *   Outlet `TOKO-01`.
  * Kode ambil: mock hanya menyimpan SHA-256-nya (meniru Odoo yang menyimpan hash KDF), tidak pernah teks asli.
  *
- * G19 (docs/04 §11): kanal per brand demo `RTL-GL` (GL), `RTL-BACHA` (BACHA), `FNB-PB` (PB), `FNB-BACHA` (BACHA) selain
- * `RTL` (tanpa brand); `expires_at` place = sekarang + 70 menit (default field Odoo §11.1). Promo demo (PLACEHOLDER):
+ * G20 (docs/04 §12.1): kanal = kode PT — `GL` (brand GL), `PB` (brand PB), `BCR` & `BCF` (brand BACHA). Kode lama
+ * `RTL`/`FNB`/`RTL-GL`/… DIHAPUS. Mode bayar demo (§12.2, `paymentModes`): GL qris+counter, PB qris, BCR qris+counter,
+ * BCF counter saja (pilot tanpa vendor). Batas berat demo (§12.3, `maxOrderWeightKg`): BCF 10 kg (`block`), kanal lain
+ * mati. Bayar di kasir (L-56): `place` mode `counter` WAJIB membawa `order.counter_code` buatan BFF (stub menyimpan
+ * hash-nya saja, tidak mengembalikannya); `payAtCounter(ref, code?)` meniru sync POS (E-45) → `confirmed` (+ event
+ * `paid` yang dibangun test/simulasi).
+ *
+ * G19 (docs/04 §11): `expires_at` place = sekarang + 70 menit (default field Odoo §11.1). Promo demo (PLACEHOLDER):
  *   `DEMO5K`  — potongan tetap Rp5.000 (baris reward) bila subtotal ≥ Rp50.000, semua kanal;
  *   `DEMOGL10` — potongan 10 % hanya kanal brand `GL` (di kanal lain → `promo_rejected`, "bukan untuk brand ini").
  * Kode di `expiredPromos` (test) diperlakukan seperti kode tak dikenal (`promo_rejected`) — meniru Odoo yang memetakan
@@ -59,15 +66,25 @@ interface MockOrder {
   pickedUpAt: string | null;
   cancelRefund: { refund_ref: string; amount: number } | null;
   promoCodes: string[];
+  /** G20 §12.2: mode bayar SO. */
+  paymentMode: 'qris' | 'counter';
+  /** L-56: SHA-256 kode bayar dari BFF (meniru Odoo yang hanya menyimpan hash); teks asli tidak pernah disimpan. */
+  counterSha: string | null;
 }
 
-/** Kanal demo: company & brand (§11.3). */
+/** Kanal demo G20: kode kanal = kode PT (§12.1), brand (§11.3). */
 const MOCK_CHANNELS: Readonly<Record<string, { company: string; brand: string | null; name: string }>> = {
-  RTL: { company: 'RTL', brand: null, name: 'EFN Retail (demo)' },
-  'RTL-GL': { company: 'RTL', brand: 'GL', name: 'Grand Lucky (demo)' },
-  'RTL-BACHA': { company: 'RTL', brand: 'BACHA', name: 'Bacha Butik (demo)' },
-  'FNB-PB': { company: 'FNB', brand: 'PB', name: 'Paris Baguette (demo)' },
-  'FNB-BACHA': { company: 'FNB', brand: 'BACHA', name: 'Bacha Kafe (demo)' },
+  GL: { company: 'GL', brand: 'GL', name: 'Grand Lucky (demo)' },
+  PB: { company: 'PB', brand: 'PB', name: 'Paris Baguette (demo)' },
+  BCR: { company: 'BCR', brand: 'BACHA', name: 'Bacha Coffee Butik (demo)' },
+  BCF: { company: 'BCF', brand: 'BACHA', name: 'Bacha Coffee Kafe (demo)' },
+};
+/** Mode bayar default kanal demo (§12.2 no. 1) — PLACEHOLDER. */
+const MOCK_PAYMENT_MODES: Readonly<Record<string, ('qris' | 'counter')[]>> = {
+  GL: ['qris', 'counter'],
+  PB: ['qris'],
+  BCR: ['qris', 'counter'],
+  BCF: ['counter'],
 };
 /** Produk reward Odoo (discount line) demo — id di luar katalog. */
 const REWARD_PRODUCT_ID = 9001;
@@ -75,6 +92,14 @@ const REWARD_PRODUCT_ID = 9001;
 export const MOCK_PAYMENT_TIMEOUT_MINUTES = 70;
 /** SEC-131: batas qty per baris kanal demo (PLACEHOLDER; checklist kanal ritel 10–20). */
 export const MOCK_MAX_QTY_PER_LINE = 20;
+
+/** Berat demo (kg, PLACEHOLDER) — `null` = belum diisi di Odoo. */
+const DEFAULT_WEIGHTS: readonly [number, number | null][] = [
+  [11, 5],
+  [12, 1.9],
+  [13, 0.5],
+  [14, null],
+];
 
 const PRODUCTS: { id: number; tmpl: number; name: string; priceIncl: number; categ: number; stock: 'in_stock' | 'low' | 'out' }[] = [
   { id: 11, tmpl: 101, name: 'Beras Premium 5 kg', priceIncl: 79_900, categ: 1, stock: 'in_stock' },
@@ -113,6 +138,14 @@ export class MockOdooOnline implements OdooOnlineApi {
   paymentTimeoutMinutes = MOCK_PAYMENT_TIMEOUT_MINUTES;
   /** SEC-131: `max_qty_per_line` kanal demo (default 20 = `max_qty` katalog stub); qty baris > nilai ini → issue `qty_limit`. */
   maxQtyPerLine = MOCK_MAX_QTY_PER_LINE;
+  /** G20 §12.2: `payment_modes` per kanal (test boleh mengubah). */
+  readonly paymentModes = new Map<string, ('qris' | 'counter')[]>(Object.entries(MOCK_PAYMENT_MODES).map(([k, v]) => [k, [...v]]));
+  /** G20 §12.3: `max_order_weight_kg` per kanal (0/absen = mati). */
+  readonly maxOrderWeightKg = new Map<string, number>([['BCF', 10]]);
+  /** G20 §12.3: `weight_missing_policy` per kanal (default `block` bila batas aktif). */
+  readonly weightMissingPolicy = new Map<string, 'block' | 'ignore'>();
+  /** G20 §12.3: `product.weight` demo (test boleh mengubah). */
+  readonly weightKg = new Map<number, number | null>(DEFAULT_WEIGHTS);
 
   private track(method: string, channel: string): void {
     this.calls.push({ method, channel });
@@ -151,6 +184,7 @@ export class MockOdooOnline implements OdooOnlineApi {
             sequence: i + 1,
             prices: [{ outlet_code: null, price_incl: incl, price_excl: round2((incl * TAX_DEN) / (TAX_DEN + TAX_NUM)), tax_labels: [TAX_LABEL] }],
             max_qty: MOCK_MAX_QTY_PER_LINE,
+            weight_kg: this.weightKg.get(p.id) ?? null,
           };
         });
     return {
@@ -160,13 +194,14 @@ export class MockOdooOnline implements OdooOnlineApi {
       server_time: new Date(this.now()).toISOString(),
       channel: {
         code: channel,
-        company_code: MOCK_CHANNELS[channel]?.company ?? 'RTL',
+        company_code: MOCK_CHANNELS[channel]?.company ?? 'GL',
         brand_code: MOCK_CHANNELS[channel]?.brand ?? null,
-        name: MOCK_CHANNELS[channel]?.name ?? 'EFN Retail (demo)',
+        name: MOCK_CHANNELS[channel]?.name ?? 'EFN (demo)',
         currency: 'IDR',
         active: true,
         fulfilment: { pickup: true, delivery: false },
         outlets: [{ outlet_code: 'TOKO-01', public_name: 'Toko Demo 01', pickup_enabled: true, prep_minutes: 30, active: true }],
+        payment_modes: [...(this.paymentModes.get(channel) ?? ['qris'])],
       },
     };
   }
@@ -222,7 +257,6 @@ export class MockOdooOnline implements OdooOnlineApi {
     const total = out.reduce((s, l) => s + l.subtotal_incl, 0);
     const tax = round2((total * TAX_NUM) / (TAX_DEN + TAX_NUM));
     // quote_hash memuat kode terpakai (urut) + id reward (§11.2 no. 3)
-    const hash = sha(`${channel}|${outlet}|${JSON.stringify(lines)}|v${this.priceVersion}|${[...applied].sort().join(',')}|r${REWARD_PRODUCT_ID}`);
     const issues: QuoteResult['issues'] = [];
     for (const l of out) {
       if (l.reward) continue;
@@ -230,11 +264,30 @@ export class MockOdooOnline implements OdooOnlineApi {
       // SEC-131: qty baris > batas per baris kanal → issue `qty_limit` (baris tetap dengan qty yang diminta)
       if (l.qty > this.maxQtyPerLine) issues.push({ product_id: l.product_id, code: 'qty_limit' });
     }
+    // G20 §12.3: Σ product.weight × qty (rumus delivery.carrier._match_weight) vs batas kanal; masuk quote_hash
+    const limit = this.maxOrderWeightKg.get(channel) ?? 0;
+    let weightTag = '';
+    if (limit > 0) {
+      const policy = this.weightMissingPolicy.get(channel) ?? 'block';
+      let weight = 0;
+      for (const l of out) {
+        if (l.reward) continue;
+        const w = this.weightKg.get(l.product_id) ?? null;
+        if (w === null) {
+          if (policy === 'block') issues.push({ product_id: l.product_id, code: 'weight_missing' });
+          continue;
+        }
+        weight += w * l.qty;
+      }
+      if (weight > limit) issues.push({ product_id: null, code: 'weight_limit' });
+      weightTag = `|w${issues.filter((i) => i.code.startsWith('weight_')).map((i) => `${i.product_id ?? 'o'}:${i.code}`).join(',')}`;
+    }
+    const hash = sha(`${channel}|${outlet}|${JSON.stringify(lines)}|v${this.priceVersion}|${[...applied].sort().join(',')}|r${REWARD_PRODUCT_ID}${weightTag}`);
     const amountPayable = Math.round(total);
     // Konsisten dengan parser (L-35 / QA G19): tagihan < Rp1 tanpa issue tidak pernah keluar dari stub
     if (amountPayable < 1 && issues.length === 0) throw new OdooRpcError('invalid_response', null, 'respons Odoo tidak valid: amount_payable < 1');
     return {
-      company_code: MOCK_CHANNELS[channel]?.company ?? 'RTL',
+      company_code: MOCK_CHANNELS[channel]?.company ?? 'GL',
       lines: out,
       tax_groups: [{ label: TAX_LABEL, base: round2(total - tax), amount: tax }],
       amount_total: total,
@@ -257,7 +310,10 @@ export class MockOdooOnline implements OdooOnlineApi {
 
   async place(channel: string, order: PlaceInput): Promise<PlaceResult> {
     this.track('place', channel);
-    const payloadSha = sha(JSON.stringify({ ...order, pickup_code: sha(order.pickup_code) }));
+    // Rahasia (kode ambil & kode bayar) hanya masuk sidik sebagai hash, seperti Odoo
+    const payloadSha = sha(
+      JSON.stringify({ ...order, pickup_code: sha(order.pickup_code), ...(order.counter_code !== undefined ? { counter_code: sha(order.counter_code) } : {}) }),
+    );
     const existing = [...this.orders.values()].find((o) => o.key === order.idempotency_key);
     if (existing) {
       if (existing.payloadSha !== payloadSha) throw new OdooRpcError('business', 'idempotency_conflict');
@@ -267,9 +323,15 @@ export class MockOdooOnline implements OdooOnlineApi {
     // kode yang dikirim place harus semuanya masih berlaku; bila tidak, hash beda → price_changed (§11.2 no. 5)
     if (q.quote_hash !== order.quote_hash || q.promo_rejected.length > 0) throw new OdooRpcError('business', 'price_changed');
     // ASUMSI: Odoo menolak place dengan qty > batas baris sebagai `invalid_input` (BFF memblokir lebih dulu: cart_has_issues)
-    if (q.issues.some((i) => i.code === 'qty_limit')) throw new OdooRpcError('business', 'invalid_input');
+    if (q.issues.some((i) => i.code === 'qty_limit' || i.code.startsWith('weight_'))) throw new OdooRpcError('business', 'invalid_input');
     if (q.issues.length > 0) throw new OdooRpcError('business', 'out_of_stock');
     if (q.amount_payable < 1) throw new OdooRpcError('invalid_response', null, 'respons Odoo tidak valid: amount_payable < 1'); // = parsePlace
+    // G20 §12.2 no. 1/3: mode bayar harus diizinkan kanal (ASUMSI: Odoo menolak `invalid_input`)
+    const mode = order.payment_mode === 'counter' ? 'counter' : 'qris';
+    if (!(this.paymentModes.get(channel) ?? ['qris']).includes(mode)) throw new OdooRpcError('business', 'invalid_input');
+    // L-56: kode bayar dari BFF wajib untuk counter (alfabet §10.2), dilarang untuk qris; ASUMSI Odoo → invalid_input
+    const counterOk = order.counter_code !== undefined && /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$/.test(order.counter_code);
+    if (mode === 'counter' ? !counterOk : order.counter_code !== undefined) throw new OdooRpcError('business', 'invalid_input');
     const o: MockOrder = {
       ref: order.platform_order_ref,
       channel,
@@ -289,13 +351,32 @@ export class MockOdooOnline implements OdooOnlineApi {
       pickedUpAt: null,
       cancelRefund: null,
       promoCodes: [...(order.promo_codes ?? [])],
+      paymentMode: mode,
+      counterSha: mode === 'counter' && order.counter_code ? sha(order.counter_code) : null,
     };
     this.orders.set(o.ref, o);
     return this.placeResult(o);
   }
 
   private placeResult(o: MockOrder): PlaceResult {
+    // L-56: kode bayar TIDAK dikembalikan (Odoo hanya menyimpan hash)
     return { order_state: o.state, sale_order_name: o.saleOrderName, amount_total: o.amountTotal, amount_payable: o.amountPayable, expires_at: o.expiresAt };
+  }
+
+  /**
+   * Dev/test (§12.2 no. 5–6): kasir mengetik kode bayar → pelunasan POS → validasi server (bagian `placed`, belum
+   * kedaluwarsa, nominal = amount_payable) → jalur internal `mark_paid` (`method: counter`) → `confirmed`
+   * (produk 13 → `stock_short`, sama dengan QRIS). Mengembalikan seq event `paid` yang akan dikirim Odoo.
+   */
+  payAtCounter(ref: string, code?: string): MockOrder {
+    const o = this.get(ref);
+    if (o.paymentMode !== 'counter' || o.state !== 'placed') throw new OdooRpcError('business', 'invalid_state');
+    if (o.expiresAt.getTime() <= this.now()) throw new OdooRpcError('business', 'invalid_state');
+    if (code !== undefined && sha(code.replace(/-/g, '').toUpperCase()) !== o.counterSha) throw new OdooRpcError('business', 'not_found');
+    o.paymentRef = `pos:${randomUUID()}`;
+    o.state = o.lines.some((l) => l.product_id === STOCK_SHORT_PRODUCT) ? 'stock_short' : 'confirmed';
+    o.seq += 1;
+    return o;
   }
 
   private get(ref: string): MockOrder {
@@ -307,6 +388,8 @@ export class MockOdooOnline implements OdooOnlineApi {
   async markPaid(channel: string, ref: string, payment: MarkPaidInput): Promise<MarkPaidResult> {
     this.track('markPaid', channel);
     const o = this.get(ref);
+    // G20 §12.2 no. 2: order bayar di kasir TIDAK PERNAH dilunasi lewat jalur gateway BFF
+    if (o.paymentMode === 'counter') throw new OdooRpcError('business', 'invalid_state');
     if (o.paymentRef !== null && o.paymentRef !== payment.payment_ref) {
       o.state = 'review';
       return { order_state: 'review', short_lines: null, refund_required: null };

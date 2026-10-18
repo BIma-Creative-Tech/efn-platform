@@ -88,8 +88,8 @@ describe('Observability online (§10.11)', () => {
       if (p === '/k') return Buffer.from(v);
       throw new Error('ENOENT');
     };
-    expect(() => testConfig({ ODOO_API_KEY_ONLINE_RTL_FILE: '/k' }, reader('disabled\n')).odooApiKeyOnline('RTL')).toThrow(/placeholder 'disabled'/);
-    const startup = testConfig({ ONLINE_ENABLED: 'true', ODOO_API_KEY_ONLINE_RTL_FILE: '/k', ODOO_ONLINE_EVENT_HMAC_FILE: '/k' }, reader('disabled'));
+    expect(() => testConfig({ ODOO_API_KEY_ONLINE_GL_FILE: '/k' }, reader('disabled\n')).odooApiKeyOnline('GL')).toThrow(/placeholder 'disabled'/);
+    const startup = testConfig({ ONLINE_ENABLED: 'true', ODOO_API_KEY_ONLINE_GL_FILE: '/k', ODOO_ONLINE_EVENT_HMAC_FILE: '/k' }, reader('disabled'));
     expect(() => startup.assertStartupSecrets()).toThrow(ConfigError);
     // SEC-133: penyebabnya placeholder, bukan `…_FILE` yang salah dianggap env literal
     expect(() => startup.assertStartupSecrets()).not.toThrow(/sebagai env literal/);

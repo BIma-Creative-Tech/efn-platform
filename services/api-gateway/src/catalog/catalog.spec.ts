@@ -12,8 +12,8 @@ import { brandParam } from './catalog.controller';
 import { parseCatalogPage } from '../odoo-rpc/odoo-online.parse';
 
 const CHANNEL_DATA = {
-  code: 'RTL',
-  company_code: 'RTL',
+  code: 'GL',
+  company_code: 'GL',
   name: 'EFN Retail',
   currency: 'IDR',
   active: true,
@@ -55,7 +55,7 @@ function setup(
   const config = testConfig({ ONLINE_ENABLED: 'true', ODOO_ONLINE_MOCK: 'true' });
   const db = new FakeDb((t, p) => {
     if (t.includes('FROM platform.online_catalog_sync WHERE channel_code = ANY')) {
-      return { rows: [{ channel_code: 'RTL', channel_data: channelData, last_ok_at: new Date() }], rowCount: 1 };
+      return { rows: [{ channel_code: 'GL', channel_data: channelData, last_ok_at: new Date() }], rowCount: 1 };
     }
     return handler(t, p);
   });
@@ -71,17 +71,18 @@ describe('CatalogService (§10.3.2)', () => {
   it('L-11: kanal dari blok channel Odoo (outlet aktif saja); blok tidak ada / mata uang ≠ IDR / kode beda → disembunyikan + log', async () => {
     expect(await setup().svc.channels()).toEqual([
       {
-        channel_code: 'RTL',
-        company_code: 'RTL',
+        channel_code: 'GL',
+        company_code: 'GL',
         brand_code: null, // channel_data pra-G19 tanpa brand_code → null
         name: 'EFN Retail',
         fulfilment: { pickup: true, delivery: false },
         outlets: [{ outlet_code: 'TOKO-01', public_name: 'Toko 01', pickup_enabled: true, prep_minutes: 20 }],
+        payment_modes: ['qris', 'counter'], // L-52/L-55: channel_data tanpa payment_modes → ONLINE_PAYMENT_METHODS (default test qris,counter)
       },
     ]);
     const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     try {
-      for (const data of [null, { ...CHANNEL_DATA, currency: 'USD' }, { ...CHANNEL_DATA, code: 'FNB' }, { ...CHANNEL_DATA, company_code: 'XYZ' }]) {
+      for (const data of [null, { ...CHANNEL_DATA, currency: 'USD' }, { ...CHANNEL_DATA, code: 'PB' }, { ...CHANNEL_DATA, company_code: 'XYZ' }]) {
         expect(await setup(undefined, data).svc.channels()).toEqual([]);
       }
       expect(warn.mock.calls.filter((c) => String(c[0]).includes('L-11'))).toHaveLength(4);
@@ -96,7 +97,7 @@ describe('CatalogService (§10.3.2)', () => {
       if (t.includes('SELECT last_ok_at FROM platform.online_catalog_sync')) return { rows: [{ last_ok_at: new Date(0) }], rowCount: 1 };
       return undefined;
     });
-    const res = await ctx.svc.products('RTL', { category: null, q: '50%_off', cursor: null, limit: 2 });
+    const res = await ctx.svc.products('GL', { category: null, q: '50%_off', cursor: null, limit: 2 });
     expect(res.items.map((i) => [i.product_id, i.image_sha, i.price_incl])).toEqual([
       [1, SHA, 11_100],
       [2, null, 11_100],
@@ -107,12 +108,12 @@ describe('CatalogService (§10.3.2)', () => {
     expect(JSON.stringify(res)).not.toMatch(/odoo|http/i);
     expect(decodeCursor('!!')).toBeNull();
     expect(decodeCursor(encodeCursor(5, 7))).toEqual({ seq: 5, id: 7 });
-    expect((await catchApiError(() => ctx.svc.products('FNB', { category: null, q: null, cursor: null, limit: 5 }))).getStatus()).toBe(404);
+    expect((await catchApiError(() => ctx.svc.products('PB', { category: null, q: null, cursor: null, limit: 5 }))).getStatus()).toBe(404);
   });
 
   it('gambar: hanya hash 40/64 hex yang dirujuk item aktif & siap; selain itu 404', async () => {
-    const ctx = setup((t, p) => (t.includes('WHERE image_sha = $1 AND image_ready_sha = $1') && p[0] === SHA ? { rows: [{ channel_code: 'RTL' }], rowCount: 1 } : undefined));
-    ctx.objects.set(catalogImageKey('RTL', SHA, 512), Buffer.from('jpeg'));
+    const ctx = setup((t, p) => (t.includes('WHERE image_sha = $1 AND image_ready_sha = $1') && p[0] === SHA ? { rows: [{ channel_code: 'GL' }], rowCount: 1 } : undefined));
+    ctx.objects.set(catalogImageKey('GL', SHA, 512), Buffer.from('jpeg'));
     expect((await ctx.svc.image(SHA, 512)).toString()).toBe('jpeg');
     expect((await catchApiError(() => ctx.svc.image('b'.repeat(40), 512))).getStatus()).toBe(404);
     expect((await catchApiError(() => ctx.svc.image('a'.repeat(32), 512))).getStatus()).toBe(404);
@@ -125,18 +126,18 @@ describe('CatalogService (§10.3.2)', () => {
         ? { rows: (p[1] as number[]).filter((id) => [11, 12, 13, 15].includes(id)).map((id) => itemRow(id)), rowCount: 1 }
         : undefined,
     );
-    const r1 = await ctx.svc.stock('RTL', 'TOKO-01', [11, 12]);
+    const r1 = await ctx.svc.stock('GL', 'TOKO-01', [11, 12]);
     expect(r1.items).toEqual([
       { product_id: 11, status: 'in_stock' },
       { product_id: 12, status: 'low' },
     ]);
-    expect(await ctx.kv.get('ocat:stk:RTL:TOKO-01:12')).toBe('low');
-    expect(await ctx.kv.ttl('ocat:stk:RTL:TOKO-01:12')).toBe(30);
-    await ctx.svc.stock('RTL', 'TOKO-01', [11, 12]);
+    expect(await ctx.kv.get('ocat:stk:GL:TOKO-01:12')).toBe('low');
+    expect(await ctx.kv.ttl('ocat:stk:GL:TOKO-01:12')).toBe(30);
+    await ctx.svc.stock('GL', 'TOKO-01', [11, 12]);
     expect(ctx.odoo.calls.filter((c) => c.method === 'stock')).toHaveLength(1);
-    expect((await catchApiError(() => ctx.svc.stock('RTL', 'TOKO-99', [11]))).getStatus()).toBe(404);
+    expect((await catchApiError(() => ctx.svc.stock('GL', 'TOKO-99', [11]))).getStatus()).toBe(404);
     ctx.odoo.failNext.set('stock', new OdooRpcError('transport'));
-    expect((await catchApiError(() => ctx.svc.stock('RTL', 'TOKO-01', [13]))).body).toMatchObject({ error: { code: 'online_unavailable' } });
+    expect((await catchApiError(() => ctx.svc.stock('GL', 'TOKO-01', [13]))).body).toMatchObject({ error: { code: 'online_unavailable' } });
   });
 
   it('SEC-96: id di luar katalog kanal → 404 TANPA memanggil Odoo; status kosong dari Odoo → cache negatif 30 s', async () => {
@@ -145,12 +146,12 @@ describe('CatalogService (§10.3.2)', () => {
         ? { rows: (p[1] as number[]).filter((id) => [11, 15].includes(id)).map((id) => itemRow(id)), rowCount: 1 }
         : undefined,
     );
-    expect((await catchApiError(() => ctx.svc.stock('RTL', 'TOKO-01', [11, 987654]))).getStatus()).toBe(404);
+    expect((await catchApiError(() => ctx.svc.stock('GL', 'TOKO-01', [11, 987654]))).getStatus()).toBe(404);
     expect(ctx.odoo.calls.filter((c) => c.method === 'stock')).toHaveLength(0);
     // 15 ada di salinan katalog BFF tetapi Odoo tidak mengembalikan statusnya → cache negatif
-    expect((await ctx.svc.stock('RTL', 'TOKO-01', [15])).items).toEqual([]);
-    expect(await ctx.kv.get('ocat:stk:RTL:TOKO-01:15')).toBe('none');
-    for (let i = 0; i < 5; i += 1) await ctx.svc.stock('RTL', 'TOKO-01', [15]);
+    expect((await ctx.svc.stock('GL', 'TOKO-01', [15])).items).toEqual([]);
+    expect(await ctx.kv.get('ocat:stk:GL:TOKO-01:15')).toBe('none');
+    for (let i = 0; i < 5; i += 1) await ctx.svc.stock('GL', 'TOKO-01', [15]);
     expect(ctx.odoo.calls.filter((c) => c.method === 'stock')).toHaveLength(1);
   });
 });
@@ -165,7 +166,7 @@ describe('G19 §11.3: kanal per brand', () => {
         .filter((r) => allowed.includes(r.code))
         .map((r) => ({
           channel_code: r.code,
-          channel_data: { ...CHANNEL_DATA, code: r.code, company_code: r.company ?? 'RTL', ...(r.brand === undefined ? {} : { brand_code: r.brand }) },
+          channel_data: { ...CHANNEL_DATA, code: r.code, company_code: r.company ?? 'GL', ...(r.brand === undefined ? {} : { brand_code: r.brand }) },
           last_ok_at: new Date(),
         }));
       return { rows: out, rowCount: out.length };
@@ -173,47 +174,108 @@ describe('G19 §11.3: kanal per brand', () => {
     const svc = new CatalogService(config, db, new FakeKvStore(), new MockOdooOnline(), memStorage().storage, new OnlineMetrics(new MetricsService()));
     return { config, db, svc };
   }
+  // G20 §12.1 (L-48): kode kanal = kode PT; dua kanal Bacha (BCR retail, BCF F&B) berbagi brand BACHA
   const ROWS = [
-    { code: 'RTL', brand: null },
-    { code: 'RTL-GL', brand: 'GL' },
-    { code: 'RTL-BACHA', brand: 'BACHA' },
-    { code: 'FNB-BACHA', brand: 'BACHA', company: 'FNB' },
-    { code: 'FNB-PB', brand: 'PB', company: 'FNB' },
+    { code: 'GL', brand: 'GL', company: 'GL' },
+    { code: 'PB', brand: 'PB', company: 'PB' },
+    { code: 'BCR', brand: 'BACHA', company: 'BCR' },
+    { code: 'BCF', brand: 'BACHA', company: 'BCF' },
   ];
 
-  it('ONLINE_CHANNELS berhifen; blok channel membawa brand_code (null bila kosong); ?brand= menyaring, tanpa brand = semua', async () => {
+  it('G20: kanal GL/PB/BCR/BCF; blok channel membawa brand_code; ?brand= menyaring, tanpa brand = semua', async () => {
     const { config, svc } = brandSetup(ROWS);
-    expect(config.onlineChannels).toEqual(['RTL', 'RTL-GL', 'RTL-BACHA', 'FNB-BACHA', 'FNB-PB']);
+    expect(config.onlineChannels).toEqual(['GL', 'PB', 'BCR', 'BCF']);
     const all = await svc.channels();
-    expect(all.map((c) => [c.channel_code, c.brand_code])).toEqual([
-      ['RTL', null],
-      ['RTL-GL', 'GL'],
-      ['RTL-BACHA', 'BACHA'],
-      ['FNB-BACHA', 'BACHA'],
-      ['FNB-PB', 'PB'],
+    expect(all.map((c) => [c.channel_code, c.company_code, c.brand_code])).toEqual([
+      ['GL', 'GL', 'GL'],
+      ['PB', 'PB', 'PB'],
+      ['BCR', 'BCR', 'BACHA'],
+      ['BCF', 'BCF', 'BACHA'],
     ]);
-    expect((await svc.channels(null)).length).toBe(5);
-    // brand_code tidak unik: BACHA = butik (PT Retail) + kafe (PT F&B)
+    expect((await svc.channels(null)).length).toBe(4);
+    // brand_code tidak unik: BACHA = butik (Bacha Coffee Retail) + kafe (Bacha Coffee F&B)
     expect((await svc.channels('BACHA')).map((c) => [c.channel_code, c.company_code])).toEqual([
-      ['RTL-BACHA', 'RTL'],
-      ['FNB-BACHA', 'FNB'],
+      ['BCR', 'BCR'],
+      ['BCF', 'BCF'],
     ]);
-    expect((await svc.channels('GL')).map((c) => c.channel_code)).toEqual(['RTL-GL']);
+    expect((await svc.channels('GL')).map((c) => c.channel_code)).toEqual(['GL']);
     expect(await svc.channels('ZZ')).toEqual([]);
     // channel(code) untuk cart/quote TIDAK bergantung pada filter brand
-    expect((await svc.channel('FNB-PB'))?.brand_code).toBe('PB');
+    expect((await svc.channel('PB'))?.brand_code).toBe('PB');
+  });
+
+  it('G20 §12.1: kode PT lama RTL/FNB (salinan channel_data pra-G20) → kanal disembunyikan (fail-closed)', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const { svc } = brandSetup([
+        { code: 'GL', brand: 'GL', company: 'RTL' },
+        { code: 'PB', brand: 'PB', company: 'FNB' },
+        { code: 'BCR', brand: 'BACHA', company: 'BCR' },
+      ]);
+      expect((await svc.channels()).map((c) => c.channel_code)).toEqual(['BCR']);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('brand_code tak valid / tipe salah di salinan channel_data → null (kanal tetap tampil); kanal di luar ONLINE_CHANNELS tidak tampil', async () => {
     const { svc } = brandSetup([
-      { code: 'RTL-GL', brand: 'gl' },
-      { code: 'RTL-BACHA', brand: 5 },
-      { code: 'FNB-PB', brand: false },
+      { code: 'GL', brand: 'gl', company: 'GL' },
+      { code: 'BCR', brand: 5, company: 'BCR' },
+      { code: 'PB', brand: false, company: 'PB' },
     ]);
     expect((await svc.channels()).map((c) => c.brand_code)).toEqual([null, null, null]);
-    const only = brandSetup(ROWS, { ONLINE_CHANNELS: 'RTL-GL' });
-    expect((await only.svc.channels()).map((c) => c.channel_code)).toEqual(['RTL-GL']);
+    const only = brandSetup(ROWS, { ONLINE_CHANNELS: 'GL' });
+    expect((await only.svc.channels()).map((c) => c.channel_code)).toEqual(['GL']);
     expect(await only.svc.channels('BACHA')).toEqual([]);
+  });
+
+  it('L-52/L-55: payment_modes = (blok channel Odoo ?? ONLINE_PAYMENT_METHODS) ∩ ONLINE_PAYMENT_METHODS; mode tak dikenal dibuang', async () => {
+    const config = testConfig({ ONLINE_ENABLED: 'true', ODOO_ONLINE_MOCK: 'true', ONLINE_CHANNELS: 'GL,PB,BCR,BCF' });
+    const data: Record<string, unknown> = {
+      GL: { ...CHANNEL_DATA, code: 'GL', company_code: 'GL', payment_modes: ['qris', 'counter'] },
+      PB: { ...CHANNEL_DATA, code: 'PB', company_code: 'PB' }, // pra-G20: tanpa payment_modes
+      BCR: { ...CHANNEL_DATA, code: 'BCR', company_code: 'BCR', payment_modes: ['counter', 'va'] }, // `va` belum didukung → dibuang
+      BCF: { ...CHANNEL_DATA, code: 'BCF', company_code: 'BCF', payment_modes: ['counter'] },
+    };
+    const db = new FakeDb((t) =>
+      t.includes('FROM platform.online_catalog_sync WHERE channel_code = ANY')
+        ? { rows: Object.entries(data).map(([k, v]) => ({ channel_code: k, channel_data: v, last_ok_at: new Date() })), rowCount: 4 }
+        : undefined,
+    );
+    const mk = (c = config) => new CatalogService(c, db, new FakeKvStore(), new MockOdooOnline(), memStorage().storage, new OnlineMetrics(new MetricsService()));
+    expect((await mk().channels()).map((c) => [c.channel_code, c.payment_modes])).toEqual([
+      ['GL', ['qris', 'counter']],
+      ['PB', ['qris', 'counter']], // pra-G20 → daftar BFF (default test qris,counter)
+      ['BCR', ['counter']],
+      ['BCF', ['counter']],
+    ]);
+    // pilot tanpa vendor: hanya counter → qris Odoo tidak ditawarkan ke klien
+    const pilot = testConfig({ ONLINE_ENABLED: 'true', ODOO_ONLINE_MOCK: 'true', ONLINE_CHANNELS: 'GL,PB,BCR,BCF', ONLINE_PAYMENT_METHODS: 'counter' });
+    expect((await mk(pilot).channels()).map((c) => [c.channel_code, c.payment_modes])).toEqual([
+      ['GL', ['counter']],
+      ['PB', ['counter']],
+      ['BCR', ['counter']],
+      ['BCF', ['counter']],
+    ]);
+    const qrisOnly = testConfig({ ONLINE_ENABLED: 'true', ODOO_ONLINE_MOCK: 'true', ONLINE_CHANNELS: 'GL,PB,BCR,BCF', ONLINE_PAYMENT_METHODS: 'qris' });
+    expect((await mk(qrisOnly).channel('BCF'))?.payment_modes).toEqual([]); // kanal counter-saja tidak bisa dipesan
+  });
+
+  it('G20 §12.3 / L-52: produk membawa weight_kg (nullable; salinan pra-G20 tanpa field → null)', async () => {
+    const ctx = setup((t) => {
+      if (t.includes('ORDER BY sequence, product_id LIMIT')) {
+        return { rows: [itemRow(1, { data: { ...itemRow(1).data, weight_kg: 5 } }), itemRow(2), itemRow(3, { data: { ...itemRow(3).data, weight_kg: null } })], rowCount: 3 };
+      }
+      if (t.includes('SELECT last_ok_at FROM platform.online_catalog_sync')) return { rows: [{ last_ok_at: new Date(0) }], rowCount: 1 };
+      return undefined;
+    });
+    const res = await ctx.svc.products('GL', { category: null, q: null, cursor: null, limit: 10 });
+    expect(res.items.map((i) => [i.product_id, i.weight_kg])).toEqual([
+      [1, 5],
+      [2, null],
+      [3, null],
+    ]);
   });
 
   it('?brand= divalidasi: tidak ada → null; bukan ^[A-Z][A-Z0-9]{1,9}$ → 400 invalid_request', async () => {
@@ -229,7 +291,7 @@ describe('G19 §11.3: kanal per brand', () => {
   });
 
   it('parse blok channel E-37a: brand_code string/false/absen; bentuk salah → invalid_response', () => {
-    const ch = { code: 'RTL-GL', name: 'GL', company_code: 'RTL', currency: 'IDR', outlets: [] };
+    const ch = { code: 'GL', name: 'GL', company_code: 'GL', currency: 'IDR', outlets: [] };
     expect(parseCatalogPage({ items: [], server_time: 'now', channel: { ...ch, brand_code: 'GL' } }).channel?.brand_code).toBe('GL');
     expect(parseCatalogPage({ items: [], server_time: 'now', channel: { ...ch, brand_code: false } }).channel?.brand_code).toBeNull();
     expect(parseCatalogPage({ items: [], server_time: 'now', channel: ch }).channel?.brand_code).toBeNull();
@@ -238,11 +300,21 @@ describe('G19 §11.3: kanal per brand', () => {
     }
   });
 
-  it('stub mock: blok channel kanal brand membawa brand_code & company sesuai kontrak §11.3 no. 1', async () => {
+  it('stub mock G20: kanal = kode PT, brand, payment_modes, weight_kg; kode lama RTL/FNB tidak dikenal', async () => {
     const odoo = new MockOdooOnline();
-    expect((await odoo.catalog('RTL-GL', null)).channel).toMatchObject({ code: 'RTL-GL', company_code: 'RTL', brand_code: 'GL' });
-    expect((await odoo.catalog('FNB-PB', null)).channel).toMatchObject({ code: 'FNB-PB', company_code: 'FNB', brand_code: 'PB' });
-    expect((await odoo.catalog('RTL', null)).channel).toMatchObject({ code: 'RTL', brand_code: null });
+    expect((await odoo.catalog('GL', null)).channel).toMatchObject({ code: 'GL', company_code: 'GL', brand_code: 'GL', payment_modes: ['qris', 'counter'] });
+    expect((await odoo.catalog('PB', null)).channel).toMatchObject({ code: 'PB', company_code: 'PB', brand_code: 'PB', payment_modes: ['qris'] });
+    expect((await odoo.catalog('BCR', null)).channel).toMatchObject({ code: 'BCR', company_code: 'BCR', brand_code: 'BACHA' });
+    expect((await odoo.catalog('BCF', null)).channel).toMatchObject({ code: 'BCF', company_code: 'BCF', brand_code: 'BACHA', payment_modes: ['counter'] });
+    expect((await odoo.catalog('GL', null)).items.map((i) => [i.product_id, i.weight_kg])).toEqual([
+      [11, 5],
+      [12, 1.9],
+      [13, 0.5],
+      [14, null],
+    ]);
+    for (const old of ['RTL', 'FNB', 'RTL-GL', 'FNB-PB']) {
+      await expect(odoo.catalog(old, null)).rejects.toMatchObject({ kind: 'business', code: 'channel_inactive' });
+    }
   });
 });
 
@@ -258,14 +330,14 @@ describe('CatalogSyncService (§10.8.2)', () => {
     const sync = new CatalogSyncService(ctx.config, ctx.db, ctx.odoo, ctx.storage, ctx.svc, ctx.metrics);
     pending.push({ product_id: 11, tmpl_id: 101, image_sha: SHA, image_ready_sha: null });
     const [res] = await sync.runOnce();
-    expect(res).toMatchObject({ channel: 'RTL', ok: true, upserted: 4, images: 1 });
+    expect(res).toMatchObject({ channel: 'GL', ok: true, upserted: 4, images: 1 });
     expect(ctx.db.find('INSERT INTO platform.online_catalog_item')).toHaveLength(4);
-    expect(ctx.db.find('SET channel_data = $2::jsonb')[0].params[1]).toContain('"company_code":"RTL"');
+    expect(ctx.db.find('SET channel_data = $2::jsonb')[0].params[1]).toContain('"company_code":"GL"');
     const done = ctx.db.find('SET since = $2')[0];
     expect(done.params[1]).toMatch(/^\d{4}-/);
-    const jpeg = ctx.objects.get(catalogImageKey('RTL', SHA, 1024))!;
+    const jpeg = ctx.objects.get(catalogImageKey('GL', SHA, 1024))!;
     expect(jpeg.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
-    expect(ctx.objects.has(catalogImageKey('RTL', SHA, 512))).toBe(true);
+    expect(ctx.objects.has(catalogImageKey('GL', SHA, 512))).toBe(true);
   });
 
   it('Odoo gagal → last_error_code, tanpa melempar; katalog lama tetap', async () => {
@@ -274,7 +346,7 @@ describe('CatalogSyncService (§10.8.2)', () => {
     const sync = new CatalogSyncService(ctx.config, ctx.db, ctx.odoo, ctx.storage, ctx.svc, ctx.metrics);
     const [res] = await sync.runOnce();
     expect(res.ok).toBe(false);
-    expect(ctx.db.find('last_error_code')[0].params).toEqual(['RTL', 'odoo_auth']);
+    expect(ctx.db.find('last_error_code')[0].params).toEqual(['GL', 'odoo_auth']);
   });
 
   it('re-encode: magic bytes selain JPEG/PNG/WebP ditolak; hasil JPEG ≤ ukuran tanpa metadata', async () => {

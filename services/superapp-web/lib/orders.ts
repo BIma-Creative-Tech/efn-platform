@@ -7,10 +7,13 @@
  */
 import { parseQuoteLines, type QuoteLine, type TaxGroup } from './cart';
 import { CURSOR_RE, isChannelCode, isOutletCode, isUuid } from './catalog';
+import { formatCounterCode } from './payment';
 
 export type OrderStatus =
   | 'created'
   | 'awaiting_payment'
+  /** §12.2: pesanan "Bayar di kasir" menunggu pelunasan di kasir (kode bayar, bukan kode ambil). */
+  | 'awaiting_counter_payment'
   | 'paid'
   | 'fulfilling'
   | 'review'
@@ -32,18 +35,20 @@ export type PartStatus =
   | 'cancelled';
 
 export const FINAL_ORDER_STATUSES: readonly OrderStatus[] = ['completed', 'cancelled', 'expired', 'failed'];
-export const CANCELLABLE_STATUSES: readonly OrderStatus[] = ['created', 'awaiting_payment'];
+export const CANCELLABLE_STATUSES: readonly OrderStatus[] = ['created', 'awaiting_payment', 'awaiting_counter_payment'];
 export const PICKUP_CODE_PART_STATUSES: readonly PartStatus[] = ['confirmed', 'ready'];
 
 /** Polling klien §10.3.6: 3 dtk saat menunggu bayar, 30 dtk setelahnya, berhenti di status final. */
 export function pollIntervalMs(status: OrderStatus): number | null {
   if (FINAL_ORDER_STATUSES.includes(status)) return null;
+  if (status === 'awaiting_counter_payment') return 10_000; // kasir bisa lama; 10 dtk × 360 = 60 menit (= batas bayar)
   return status === 'awaiting_payment' || status === 'created' ? 3_000 : 30_000;
 }
 
 export const ORDER_STATUS_LABEL: Record<OrderStatus, string> = {
   created: 'Sedang dibuat',
   awaiting_payment: 'Menunggu pembayaran',
+  awaiting_counter_payment: 'Menunggu pembayaran di kasir',
   paid: 'Dibayar, menunggu konfirmasi toko',
   fulfilling: 'Diproses toko',
   review: 'Sedang diperiksa tim kami',
@@ -109,6 +114,10 @@ export const ONLINE_ERROR_MESSAGES: Record<string, string> = {
   pickup_code_unavailable: 'Kode ambil tersedia setelah pesanan dikonfirmasi toko.',
   // L-14 (G17-QA-03): bagian pesanan sedang diperiksa; kode ambil ditahan
   order_in_review: 'Pesanan Anda sedang diperiksa tim kami, jadi kode ambil ditahan sementara. Hubungi layanan pelanggan bila perlu bantuan.',
+  // §12.2 (bayar di kasir)
+  counter_payment_single_part_only:
+    'Bayar di kasir hanya untuk pesanan dari satu PT. Pisahkan pesanan per PT, atau pilih pembayaran QRIS.',
+  payment_method_unavailable: 'Metode pembayaran ini belum tersedia untuk pesanan Anda. Pilih metode lain atau coba lagi nanti.',
   rate_limited: 'Terlalu banyak permintaan. Tunggu sebentar lalu coba lagi.',
   // §11.2: satu pesan untuk semua penyebab kode promo tidak berlaku (anti-enumerasi)
   promo_invalid: 'Kode promo tidak dapat digunakan',
@@ -163,6 +172,11 @@ export interface OrderPayment {
   /** Hanya saat `awaiting_payment`. Dirender jadi QR di perangkat; tidak pernah di-log. */
   qr_string: string | null;
   expires_at: string | null;
+  /**
+   * Hanya saat `awaiting_counter_payment` (§12.2): kode bayar format `ABCD-EFGH`. Ditunjukkan ke kasir; bukan kode ambil.
+   * Tidak pernah ke URL/storage/log/analytics.
+   */
+  counter_code: string | null;
 }
 
 export interface OrderPart {
@@ -233,6 +247,7 @@ function parsePayment(v: unknown): OrderPayment | null {
     status: status(v.status),
     qr_string: typeof v.qr_string === 'string' && v.qr_string.length <= 2048 ? v.qr_string : null,
     expires_at: s(v.expires_at, 40),
+    counter_code: formatCounterCode(v.counter_code),
   };
 }
 
@@ -271,6 +286,8 @@ export function parseOrderDetail(v: unknown): OrderDetail | null {
   const payment = parsePayment(v.payment);
   // qr hanya relevan saat menunggu bayar (§10.3.6) — buang di status lain.
   if (payment && st !== 'awaiting_payment') payment.qr_string = null;
+  // kode bayar hanya relevan saat menunggu bayar di kasir (§12.2) — buang di status lain.
+  if (payment && st !== 'awaiting_counter_payment') payment.counter_code = null;
   return {
     order_id: v.order_id,
     status: st,
@@ -325,6 +342,19 @@ export function parsePickupCodes(v: unknown): PickupCodeItem[] | null {
     });
   }
   return out;
+}
+
+/**
+ * Salinan order tanpa kode bayar — dipakai render server (RSC) agar kode tidak masuk payload HTML/RSC;
+ * kode hanya diambil klien lewat `GET /api/orders/:id` (no-store) setelah halaman terbuka.
+ */
+export function withoutCounterCode(order: OrderDetail): OrderDetail {
+  return order.payment ? { ...order, payment: { ...order.payment, counter_code: null } } : order;
+}
+
+/** True bila pesanan "Bayar di kasir" masih menunggu pelunasan. */
+export function isAwaitingCounter(order: Pick<OrderDetail, 'status'>): boolean {
+  return order.status === 'awaiting_counter_payment';
 }
 
 export function canCancel(order: Pick<OrderDetail, 'status'>): boolean {

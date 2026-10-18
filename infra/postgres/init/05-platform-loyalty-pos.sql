@@ -38,7 +38,7 @@ SET LOCAL ROLE efn_platform_owner;   -- SEC-39: objek dimiliki role NOLOGIN
 CREATE TABLE IF NOT EXISTS platform.loyalty_reservation (
   id                      uuid        PRIMARY KEY,
   member_hash             char(64)    NOT NULL CHECK (member_hash ~ '^[0-9a-f]{64}$'),
-  company_code            text        NOT NULL CHECK (company_code IN ('EFN','RTL','FNB','FARM')),
+  company_code            text        NOT NULL CHECK (company_code IN ('EFN','GL','PB','BCR','BCF','FARM')),  -- G20 §12.1 (volume lama: 09)
   order_ref               text        NOT NULL CHECK (char_length(order_ref) BETWEEN 1 AND 64),
   token_jti               text        NOT NULL CHECK (char_length(token_jti) BETWEEN 1 AND 64),
   points                  integer     NOT NULL CHECK (points > 0),
@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS platform.loyalty_pos_earn (
   order_ref        text        PRIMARY KEY CHECK (char_length(order_ref) BETWEEN 1 AND 64),
   idempotency_key  text        NOT NULL UNIQUE CHECK (char_length(idempotency_key) <= 128),
   member_hash      char(64)    NOT NULL CHECK (member_hash ~ '^[0-9a-f]{64}$'),
-  company_code     text        NOT NULL CHECK (company_code IN ('EFN','RTL','FNB','FARM')),
+  company_code     text        NOT NULL CHECK (company_code IN ('EFN','GL','PB','BCR','BCF','FARM')),  -- G20 §12.1 (volume lama: 09)
   eligible_amount  numeric(16,2) NOT NULL CHECK (eligible_amount >= 0),
   points_earned    integer     NOT NULL CHECK (points_earned >= 0),
   created_at       timestamptz NOT NULL DEFAULT now()

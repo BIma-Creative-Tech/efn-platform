@@ -34,12 +34,12 @@ class TestEfnPosOtpGate(TestPoSCommon):
         cls.config = cls.basic_config
         cls.env["ir.config_parameter"].sudo().set_param("efn.pos.otp_required_for_promo", "True")
         company = cls.config.company_id
-        # Pastikan kode FNB unik di DB uji (data demo efn_kitting bisa memakainya).
-        cls.env["res.company"].search([("efn_brand_code", "=", "FNB"), ("id", "!=", company.id)]).write(
+        # Pastikan kode PB (G20 §12.1, semula FNB) unik di DB uji (data demo efn_kitting bisa memakainya).
+        cls.env["res.company"].search([("efn_brand_code", "=", "PB"), ("id", "!=", company.id)]).write(
             {"efn_brand_code": False}
         )
         cls.env["res.company"].flush_model(["efn_brand_code"])
-        company.write({"efn_brand_code": "FNB"})  # efn_business_type kini turunan (3b)
+        company.write({"efn_brand_code": "PB"})  # efn_business_type kini turunan (3b)
 
         Partner = cls.env["res.partner"]
         cls.member_a = Partner.create({"name": "Member Uji A", "phone": "0812-3456-7890"})
@@ -158,7 +158,7 @@ class TestEfnPosOtpGate(TestPoSCommon):
         self.assertEqual(request_payload["member_ref"], MEMBER_A, "nomor dari partner, dinormalisasi")
         self.assertEqual(request_payload["order_ref"], uuid)
         self.assertEqual(request_payload["amount"], 90)
-        self.assertEqual(request_payload["company_code"], "FNB")
+        self.assertEqual(request_payload["company_code"], "PB")
         self.assertEqual(request_payload["pos_config_id"], self.config.id)
         self.assertEqual(self.calls[1], (VERIFY, {"challenge_id": "chal-1", "order_ref": uuid, "code": "123456"}))
         self.assertEqual(

@@ -1,7 +1,26 @@
 import { TaxGroup } from '../odoo-rpc/odoo-online.types';
 
-/** Status platform order (docs/04 §10.6.1). */
-export type OrderStatus = 'created' | 'awaiting_payment' | 'paid' | 'fulfilling' | 'completed' | 'cancelled' | 'expired' | 'failed' | 'review';
+/**
+ * Status platform order (docs/04 §10.6.1). G20 §12.2 (W-30/E-45): `awaiting_counter_payment` = order bayar di kasir
+ * (tanpa payment intent) menunggu pelunasan di POS; event `paid` Odoo → `paid` → `fulfilling`.
+ */
+export type OrderStatus =
+  | 'created'
+  | 'awaiting_payment'
+  | 'awaiting_counter_payment'
+  | 'paid'
+  | 'fulfilling'
+  | 'completed'
+  | 'cancelled'
+  | 'expired'
+  | 'failed'
+  | 'review';
+/** G20 §12.2 no. 2: metode bayar pesanan online (`qris` = gateway, `counter` = bayar di kasir, satu PT saja). */
+export type PaymentMethod = 'qris' | 'counter';
+export const PAYMENT_METHODS: readonly PaymentMethod[] = ['qris', 'counter'];
+export function isPaymentMethod(v: unknown): v is PaymentMethod {
+  return v === 'qris' || v === 'counter';
+}
 /** Status bagian per SO (docs/04 §10.6.2). */
 export type PartStatus =
   | 'placing'
@@ -36,11 +55,18 @@ export type RefundStatus =
 export const MONEY_OUT_REFUND: readonly RefundStatus[] = ['gateway_in_flight', 'gateway_pending', 'gateway_done', 'settled'];
 
 export const FINAL_ORDER: ReadonlySet<OrderStatus> = new Set(['completed', 'cancelled', 'expired', 'failed']);
-export const UNPAID_OPEN: readonly OrderStatus[] = ['created', 'awaiting_payment'];
+/** Order belum dibayar yang masih terbuka (batas order terbuka, erasure, batal pelanggan, kedaluwarsa). */
+export const UNPAID_OPEN: readonly OrderStatus[] = ['created', 'awaiting_payment', 'awaiting_counter_payment'];
 export const FINAL_PART: ReadonlySet<PartStatus> = new Set(['handed_over', 'cancelled', 'place_failed']);
 export const FINAL_REFUND: ReadonlySet<RefundStatus> = new Set(['settled', 'failed', 'manual_required']);
 /** L-4: bagian yang menahan penghapusan akun (`409 open_online_orders`). */
 export const OPEN_PAID_PARTS: readonly PartStatus[] = ['paying', 'confirmed', 'ready', 'review'];
+
+/**
+ * G20 §12.2 no. 8: refund order bayar di kasir tidak lewat gateway → `manual_required` dengan alasan ini (CS melakukan
+ * refund order POS pelunasan ke metode asal lalu `online-refund-settle --provider-ref <ref refund POS>`).
+ */
+export const COUNTER_REFUND_REASON = 'counter_refund_via_pos';
 
 /** Peringkat monoton §10.6.2. */
 export const PART_RANK: Readonly<Record<PartStatus, number>> = {
@@ -106,6 +132,14 @@ export function deriveOrderStatus(current: OrderStatus, parts: readonly PartStat
   return current;
 }
 
+/**
+ * Order sudah dibayar (dana diterima): QRIS = punya intent; bayar di kasir = `paid_at` terisi (event `paid` Odoo, §12.2
+ * no. 7). Dipakai untuk refund (CS/Odoo/kompensasi) — order `counter` tidak pernah punya intent gateway.
+ */
+export function orderHasPayment(o: Pick<OrderRow, 'payment_intent_id' | 'payment_method' | 'paid_at'>): boolean {
+  return o.payment_intent_id !== null || (o.payment_method === 'counter' && o.paid_at !== null);
+}
+
 export interface PartLine {
   product_id: number;
   name: string;
@@ -129,6 +163,8 @@ export interface OrderRow {
   status: OrderStatus;
   amount_payable: number;
   currency: 'IDR';
+  /** G20 §12.2: `qris` (default) | `counter` (tanpa intent; `payment_intent_id` selalu NULL). */
+  payment_method: PaymentMethod;
   payment_intent_id: string | null;
   expires_at: Date;
   paid_at: Date | null;
@@ -155,6 +191,12 @@ export interface PartRow {
   odoo_state: string | null;
   last_seq: number;
   pickup_code_enc: Buffer | null;
+  /**
+   * G20 §12.2 no. 3: kode BAYAR di kasir dari Odoo (≠ kode ambil), AES-256-GCM AAD
+   * `efn:online_order_part.counter_code_enc:v2:<part_id>`. Hanya terisi selama bagian `placed` pada order
+   * `awaiting_counter_payment`; di-NULL-kan saat bagian berpindah status / order ditutup.
+   */
+  counter_code_enc: Buffer | null;
   refunded_amount: number;
   confirmed_at: Date | null;
   ready_at: Date | null;
@@ -168,7 +210,8 @@ export interface PartRow {
 export interface RefundRow {
   id: string;
   part_id: string;
-  payment_intent_id: string;
+  /** NULL = order bayar di kasir (§12.2 no. 8): BFF tidak memanggil gateway; uang keluar lewat refund POS (E-31). */
+  payment_intent_id: string | null;
   kind: RefundKind;
   reason: RefundReason;
   lines: { product_id: number; qty: number }[] | null;
@@ -208,6 +251,7 @@ export type PartPatch = Partial<
     | 'odoo_state'
     | 'last_seq'
     | 'pickup_code_enc'
+    | 'counter_code_enc'
     | 'refunded_amount'
     | 'confirmed_at'
     | 'ready_at'

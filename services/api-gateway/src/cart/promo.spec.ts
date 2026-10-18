@@ -23,14 +23,15 @@ const M2 = '00000000-0000-4000-8000-000000000002';
 function channel(code: string, brand: string | null): ChannelInfo {
   return {
     channel_code: code,
-    company_code: 'RTL',
+    company_code: code, // G20 §12.1: kode kanal = kode PT
     brand_code: brand,
     name: code,
     fulfilment: { pickup: true, delivery: false },
     outlets: [{ outlet_code: 'TOKO-01', public_name: 'Toko 1', pickup_enabled: true, prep_minutes: 10 }],
   };
 }
-const CHANNELS = [channel('RTL', null), channel('RTL-GL', 'GL')];
+// G20: `BCR` (brand BACHA, bukan GL) menggantikan kanal tanpa brand `RTL`; `GL` menggantikan `RTL-GL`
+const CHANNELS = [channel('BCR', 'BACHA'), channel('GL', 'GL')];
 const catalog = {
   channel: async (c: string) => CHANNELS.find((x) => x.channel_code === c) ?? null,
   productsByIds: async (_c: string, ids: readonly number[]) =>
@@ -42,7 +43,7 @@ const catalog = {
 } as unknown as CatalogService;
 
 function setup(over: Record<string, string> = {}) {
-  const config = testConfig({ ONLINE_ENABLED: 'true', ONLINE_CHANNELS: 'RTL,RTL-GL', ...over });
+  const config = testConfig({ ONLINE_ENABLED: 'true', ONLINE_CHANNELS: 'BCR,GL', ...over });
   const cart = new CartService(config, new MemoryCartStore(), catalog);
   const kv = new FakeKvStore();
   const odoo = new MockOdooOnline();
@@ -105,7 +106,7 @@ describe('Body quote promo_codes (§11.2 no. 1)', () => {
 describe('Quote berpromo (§11.2 no. 2–5)', () => {
   it('kode terpakai: baris reward `reward: true` diteruskan apa adanya, total turun, promo.applied; oq menyimpan promo_codes + promo_applied grup', async () => {
     const ctx = setup();
-    await ctx.put([{ channel: 'RTL', lines: [{ product_id: 11, qty: 1 }] }]);
+    await ctx.put([{ channel: 'BCR', lines: [{ product_id: 11, qty: 1 }] }]);
     const q = await ctx.quotes.quote(M, ['DEMO5K']);
     expect(q.promo).toEqual({ applied: ['DEMO5K'], invalid: [] });
     const g = q.groups[0];
@@ -128,10 +129,10 @@ describe('Quote berpromo (§11.2 no. 2–5)', () => {
 
   it('tanpa kode: promo {applied:[], invalid:[]}, Odoo tetap menerima promo_codes [] (eksplisit), tanpa metrik promo', async () => {
     const ctx = setup();
-    await ctx.put([{ channel: 'RTL', lines: [{ product_id: 11, qty: 2 }] }]);
+    await ctx.put([{ channel: 'BCR', lines: [{ product_id: 11, qty: 2 }] }]);
     const q = await ctx.quotes.quote(M);
     expect(q.promo).toEqual({ applied: [], invalid: [] });
-    expect(ctx.odoo.quoteArgs).toEqual([{ channel: 'RTL', promoCodes: [] }]);
+    expect(ctx.odoo.quoteArgs).toEqual([{ channel: 'BCR', promoCodes: [] }]);
     expect(q.groups[0].lines.every((l) => l.reward === undefined)).toBe(true);
     expect((await ctx.metrics.promoCodes.get()).values).toEqual([]);
   });
@@ -139,21 +140,21 @@ describe('Quote berpromo (§11.2 no. 2–5)', () => {
   it('multi-kanal: kode yang sama dikirim ke SETIAP kanal; invalid = tidak terpakai di grup MANA PUN', async () => {
     const ctx = setup();
     await ctx.put([
-      { channel: 'RTL', lines: [{ product_id: 11, qty: 1 }] },
-      { channel: 'RTL-GL', lines: [{ product_id: 12, qty: 2 }] },
+      { channel: 'BCR', lines: [{ product_id: 11, qty: 1 }] },
+      { channel: 'GL', lines: [{ product_id: 12, qty: 2 }] },
     ]);
     const q = await ctx.quotes.quote(M, ['DEMOGL10', 'NOPE42']);
-    expect(ctx.odoo.quoteArgs.map((a) => a.channel).sort()).toEqual(['RTL', 'RTL-GL']);
+    expect(ctx.odoo.quoteArgs.map((a) => a.channel).sort()).toEqual(['BCR', 'GL']);
     for (const a of ctx.odoo.quoteArgs) expect(a.promoCodes).toEqual(['DEMOGL10', 'NOPE42']);
     // DEMOGL10 hanya berlaku di kanal brand GL → tetap "applied" (terpakai di ≥ 1 grup)
     expect(q.promo).toEqual({ applied: ['DEMOGL10'], invalid: ['NOPE42'] });
-    const rtl = q.groups.find((g) => g.channel_code === 'RTL')!;
-    const gl = q.groups.find((g) => g.channel_code === 'RTL-GL')!;
+    const rtl = q.groups.find((g) => g.channel_code === 'BCR')!;
+    const gl = q.groups.find((g) => g.channel_code === 'GL')!;
     expect(rtl.lines.some((l) => l.reward)).toBe(false);
     expect(gl.lines.filter((l) => l.reward)).toEqual([expect.objectContaining({ subtotal_incl: -7_700, reward: true })]);
     const stored = JSON.parse((await ctx.kv.get(quoteKey(q.quote_id)))!) as StoredQuote;
-    expect(stored.groups.find((g) => g.channel_code === 'RTL')!.promo_applied).toEqual([]);
-    expect(stored.groups.find((g) => g.channel_code === 'RTL-GL')!.promo_applied).toEqual(['DEMOGL10']);
+    expect(stored.groups.find((g) => g.channel_code === 'BCR')!.promo_applied).toEqual([]);
+    expect(stored.groups.find((g) => g.channel_code === 'GL')!.promo_applied).toEqual(['DEMOGL10']);
     expect(await promoMetric(ctx.metrics, 'applied')).toBe(1);
     expect(await promoMetric(ctx.metrics, 'invalid')).toBe(1);
   });
@@ -162,13 +163,13 @@ describe('Quote berpromo (§11.2 no. 2–5)', () => {
     const run = async (code: string, prep: (o: MockOdooOnline) => void) => {
       const ctx = setup();
       prep(ctx.odoo);
-      await ctx.put([{ channel: 'RTL', lines: [{ product_id: 11, qty: 1 }] }]);
+      await ctx.put([{ channel: 'BCR', lines: [{ product_id: 11, qty: 1 }] }]);
       const q = await ctx.quotes.quote(M, [code]);
       return JSON.parse(JSON.stringify({ ...q, quote_id: '<id>', valid_until: '<t>' }).split(code).join('<KODE>'));
     };
     const unknown = await run('NOPE42', () => undefined);
     const expired = await run('DEMO5K', (o) => o.expiredPromos.add('DEMO5K'));
-    const otherBrand = await run('DEMOGL10', () => undefined); // kanal RTL bukan brand GL
+    const otherBrand = await run('DEMOGL10', () => undefined); // kanal BCR (brand BACHA) bukan brand GL
     expect(expired).toEqual(unknown);
     expect(otherBrand).toEqual(unknown);
     expect(unknown.promo).toEqual({ applied: [], invalid: ['<KODE>'] });
@@ -188,10 +189,10 @@ describe('Quote berpromo (§11.2 no. 2–5)', () => {
     ];
     try {
       const ctx = setup();
-      await ctx.put([{ channel: 'RTL', lines: [{ product_id: 11, qty: 1 }] }]);
+      await ctx.put([{ channel: 'BCR', lines: [{ product_id: 11, qty: 1 }] }]);
       await ctx.quotes.quote(M, ['DEMO5K', 'RAHASIA99']);
       jest.spyOn(ctx.odoo, 'quote').mockResolvedValueOnce({
-        company_code: 'RTL', lines: [], tax_groups: [], amount_total: 0, amount_payable: 0, quote_hash: 'h', valid_until: null,
+        company_code: 'BCR', lines: [], tax_groups: [], amount_total: 0, amount_payable: 0, quote_hash: 'h', valid_until: null,
         issues: [{ product_id: 11, code: 'out_of_stock' }], promo_applied: ['BOCOR77'], promo_rejected: [],
       });
       await catchApiError(() => ctx.quotes.quote(M, ['RAHASIA99']));
@@ -212,11 +213,11 @@ describe('Quote berpromo (§11.2 no. 2–5)', () => {
 
   it('Odoo melaporkan kode yang TIDAK diminta → 503 online_unavailable (fail-closed) + anomali online_config_error', async () => {
     const ctx = setup();
-    await ctx.put([{ channel: 'RTL', lines: [{ product_id: 11, qty: 1 }] }]);
+    await ctx.put([{ channel: 'BCR', lines: [{ product_id: 11, qty: 1 }] }]);
     const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     try {
       jest.spyOn(ctx.odoo, 'quote').mockResolvedValueOnce({
-        company_code: 'RTL',
+        company_code: 'BCR',
         lines: [{ product_id: 11, name: 'x', qty: 1, price_unit_incl: 1, subtotal_incl: 1, tax_labels: [], available: true, reward: false }],
         tax_groups: [], amount_total: 1, amount_payable: 1, quote_hash: 'h', valid_until: null, issues: [],
         promo_applied: ['LAIN'], promo_rejected: [],
@@ -230,9 +231,9 @@ describe('Quote berpromo (§11.2 no. 2–5)', () => {
 
   it('baris reward boleh memakai produk cart (buy_x_get_y) tanpa merusak validasi baris; baris produk tetap harus = cart', async () => {
     const ctx = setup();
-    await ctx.put([{ channel: 'RTL', lines: [{ product_id: 11, qty: 2 }] }]);
+    await ctx.put([{ channel: 'BCR', lines: [{ product_id: 11, qty: 2 }] }]);
     const base = {
-      company_code: 'RTL', tax_groups: [], amount_total: 79_900, amount_payable: 79_900, quote_hash: 'h', valid_until: null, issues: [],
+      company_code: 'BCR', tax_groups: [], amount_total: 79_900, amount_payable: 79_900, quote_hash: 'h', valid_until: null, issues: [],
       promo_applied: [], promo_rejected: [],
     };
     jest.spyOn(ctx.odoo, 'quote').mockResolvedValueOnce({
@@ -269,7 +270,7 @@ describe('Rate limit promo terpisah (§11.2 no. 6)', () => {
 
   it('per member: quote berpromo ke-3 → 429 rate_limited; quote tanpa promo tidak memakan kuota promo', async () => {
     const ctx = setup({ ONLINE_RL_PROMO_MEMBER_LIMIT: '2' });
-    await ctx.put([{ channel: 'RTL', lines: [{ product_id: 11, qty: 1 }] }]);
+    await ctx.put([{ channel: 'BCR', lines: [{ product_id: 11, qty: 1 }] }]);
     for (let i = 0; i < 3; i += 1) await ctx.controller.quote({}, user(M), req('203.0.113.5'), reply); // tanpa promo
     await ctx.controller.quote({ promo_codes: ['NOPE1'] }, user(M), req('203.0.113.5'), reply);
     await ctx.controller.quote({ promo_codes: ['nope2'] }, user(M), req('203.0.113.5'), reply);
@@ -285,8 +286,8 @@ describe('Rate limit promo terpisah (§11.2 no. 6)', () => {
 
   it('per IP: banyak member dari satu IP → 429 setelah ONLINE_RL_PROMO_IP; IP lain tidak terdampak', async () => {
     const ctx = setup({ ONLINE_RL_PROMO_IP_LIMIT: '2' });
-    await ctx.put([{ channel: 'RTL', lines: [{ product_id: 11, qty: 1 }] }]);
-    await ctx.put([{ channel: 'RTL', lines: [{ product_id: 11, qty: 1 }] }], M2);
+    await ctx.put([{ channel: 'BCR', lines: [{ product_id: 11, qty: 1 }] }]);
+    await ctx.put([{ channel: 'BCR', lines: [{ product_id: 11, qty: 1 }] }], M2);
     await ctx.controller.quote({ promo_codes: ['A1'] }, user(M), req('198.51.100.7'), reply);
     await ctx.controller.quote({ promo_codes: ['A2'] }, user(M2), req('198.51.100.7'), reply);
     expect((await catchApiError(() => ctx.controller.quote({ promo_codes: ['A3'] }, user(M2), req('198.51.100.7'), reply))).getStatus()).toBe(429);
@@ -295,7 +296,7 @@ describe('Rate limit promo terpisah (§11.2 no. 6)', () => {
 
   it('SEC-134: kuota member dihitung per KODE — 3 kode = 3 unit; default 10 → quote ke-4 berisi 3 kode ditolak, 1 kode masih boleh', async () => {
     const ctx = setup();
-    await ctx.put([{ channel: 'RTL', lines: [{ product_id: 11, qty: 1 }] }]);
+    await ctx.put([{ channel: 'BCR', lines: [{ product_id: 11, qty: 1 }] }]);
     const ip = (n: number) => req(`203.0.113.${n}`); // IP berbeda per quote: hanya limiter member yang diuji
     for (let i = 0; i < 3; i += 1) {
       await ctx.controller.quote({ promo_codes: [`A${i}`, `B${i}`, `C${i}`] }, user(M), ip(i), reply); // 9 unit
@@ -309,14 +310,14 @@ describe('Rate limit promo terpisah (§11.2 no. 6)', () => {
     // total kode yang sampai Odoo = 10 = ONLINE_RL_PROMO_MEMBER_LIMIT
     expect(ctx.odoo.quoteArgs.reduce((s, a) => s + a.promoCodes.length, 0)).toBe(10);
     // member lain tidak terdampak
-    await ctx.put([{ channel: 'RTL', lines: [{ product_id: 11, qty: 1 }] }], M2);
+    await ctx.put([{ channel: 'BCR', lines: [{ product_id: 11, qty: 1 }] }], M2);
     expect((await ctx.controller.quote({ promo_codes: ['Q1', 'Q2', 'Q3'] }, user(M2), ip(13), reply)).promo.invalid).toEqual(['Q1', 'Q2', 'Q3']);
   });
 
   it('SEC-134: kuota IP dihitung per KODE (default 30) lintas member; IP menolak → unit member dikembalikan', async () => {
     const ctx = setup({ ONLINE_RL_PROMO_MEMBER_LIMIT: '100', ONLINE_RL_QUOTE_LIMIT: '100' });
     const members = Array.from({ length: 11 }, (_, i) => `00000000-0000-4000-8000-0000000001${String(i).padStart(2, '0')}`);
-    for (const m of members) await ctx.put([{ channel: 'RTL', lines: [{ product_id: 11, qty: 1 }] }], m);
+    for (const m of members) await ctx.put([{ channel: 'BCR', lines: [{ product_id: 11, qty: 1 }] }], m);
     const shared = req('198.51.100.9');
     for (let i = 0; i < 10; i += 1) {
       await ctx.controller.quote({ promo_codes: [`K${i}A`, `K${i}B`, `K${i}C`] }, user(members[i]), shared, reply); // 30 unit IP
@@ -332,7 +333,7 @@ describe('Rate limit promo terpisah (§11.2 no. 6)', () => {
 
   it('SEC-134: duplikat kode (huruf besar/kecil) dihitung sekali; quote tanpa kode = 0 unit', async () => {
     const ctx = setup({ ONLINE_RL_PROMO_MEMBER_LIMIT: '2' });
-    await ctx.put([{ channel: 'RTL', lines: [{ product_id: 11, qty: 1 }] }]);
+    await ctx.put([{ channel: 'BCR', lines: [{ product_id: 11, qty: 1 }] }]);
     await ctx.controller.quote({}, user(M), req('203.0.113.5'), reply);
     await ctx.controller.quote({ promo_codes: ['dup', 'DUP'] }, user(M), req('203.0.113.5'), reply); // 1 unit
     await ctx.controller.quote({ promo_codes: ['ONE'] }, user(M), req('203.0.113.5'), reply); // 2 unit
@@ -341,7 +342,7 @@ describe('Rate limit promo terpisah (§11.2 no. 6)', () => {
 
   it('format salah ditolak 400 invalid_request SEBELUM rate limit/Odoo', async () => {
     const ctx = setup();
-    await ctx.put([{ channel: 'RTL', lines: [{ product_id: 11, qty: 1 }] }]);
+    await ctx.put([{ channel: 'BCR', lines: [{ product_id: 11, qty: 1 }] }]);
     const err = await catchApiError(() => ctx.controller.quote({ promo_codes: ['A', 'B', 'C', 'D'] }, user(M), req('203.0.113.5'), reply));
     expect(err.body).toMatchObject({ error: { code: 'invalid_request' } });
     expect(ctx.odoo.quoteArgs).toHaveLength(0);

@@ -32,6 +32,14 @@ export const PII_COLUMNS: readonly PiiColumn[] = [
     aad: PII_AAD.ONLINE_PICKUP_CODE,
     rowAad: (pk) => `efn:online_order_part.pickup_code_enc:v2:${pk.toLowerCase()}`,
   },
+  // G20 §12.2 no. 3: kode bayar di kasir (diperlakukan seperti kode ambil)
+  {
+    table: 'online_order_part',
+    column: 'counter_code_enc',
+    pk: 'id',
+    aad: PII_AAD.ONLINE_COUNTER_CODE,
+    rowAad: (pk) => `efn:online_order_part.counter_code_enc:v2:${pk.toLowerCase()}`,
+  },
 ];
 
 const IDENT_RE = /^[a-z_][a-z0-9_]*$/;

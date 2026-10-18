@@ -47,6 +47,8 @@ EVENTS = [
     ("picked_up", "picked_up"),
     ("cancelled", "cancelled"),
     ("refunded", "refunded"),
+    # L-58 (G20): refund pesanan bayar di kasir benar-benar dikembalikan di POS (bukan sekadar diminta).
+    ("refund_settled", "refund_settled"),
     ("review", "review"),
 ]
 HMAC_FILE_ENV = "EFN_ONLINE_EVENT_HMAC_FILE"
@@ -171,6 +173,12 @@ class EfnOnlineEventOutbox(models.Model):
                 login = refund.initiator_user_id.login or ""
                 if LOGIN_SAFE_RE.match(login):
                     refund_payload["initiator_login"] = login
+            if self.event == "refund_settled":
+                # L-58: uang refund keluar di kasir; BFF menandai settled HANYA dari event ini.
+                refund_payload["provider_refund_ref"] = f"pos:{refund.provider_refund_ref}"
+                refund_payload["settled_at"] = (
+                    refund.settled_at.replace(microsecond=0).isoformat() + "Z" if refund.settled_at else None
+                )
         payload = {
             "schema_version": 1,
             "idempotency_key": self.idempotency_key,
@@ -185,6 +193,10 @@ class EfnOnlineEventOutbox(models.Model):
             "occurred_at": self.occurred_at.replace(microsecond=0).isoformat() + "Z",
             "refund": refund_payload,
         }
+        if self.event == "paid" and order.payment_mode == "counter":
+            # G20 E-45 (docs/04 §12.2 no. 7): metode saja, tanpa identitas kasir/sesi/POS. QRIS tidak membawa kunci
+            # ini (payload & sidik event pra-G20 tidak berubah).
+            payload["payment"] = {"method": "counter"}
         if self.event == "cancelled":
             # SEC-95/L-16: kode alasan (tanpa teks bebas) agar BFF bisa membedakan batal ops (refund_attention).
             payload["cancel_reason"] = order.cancel_reason or None

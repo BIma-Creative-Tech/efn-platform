@@ -13,18 +13,24 @@ PRICE = 100000.0
 
 @tagged("post_install", "-at_install", "efn")
 class TestFnbServiceTaxes(TransactionCase):
+    """PT Paris Baguette (PB, xmlid lama sufiks _fnb). Subkelas di bawah menjalankan uji yang sama untuk BCF."""
+
+    COMPANY = "company_fnb"
+    SUFFIX = "fnb"
+
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
         ref = cls.env.ref
-        cls.company = ref("efn_setup_company.company_fnb")
+        s = cls.SUFFIX
+        cls.company = ref(f"efn_setup_company.{cls.COMPANY}")
         cls.currency = cls.company.currency_id
-        cls.pb1 = ref("efn_setup_company.tax_pb1_10_fnb")
-        cls.sc = ref("efn_setup_company.tax_service_charge_5_fnb")
-        cls.pb1_dine_in = ref("efn_setup_company.tax_pb1_dine_in_fnb")
-        cls.pb1_non_dine_in = ref("efn_setup_company.tax_pb1_non_dine_in_fnb")
-        cls.fp_dine_in = ref("efn_setup_company.fiscal_position_fnb_dine_in")
-        cls.fp_non_dine_in = ref("efn_setup_company.fiscal_position_fnb_non_dine_in")
+        cls.pb1 = ref(f"efn_setup_company.tax_pb1_10_{s}")
+        cls.sc = ref(f"efn_setup_company.tax_service_charge_5_{s}")
+        cls.pb1_dine_in = ref(f"efn_setup_company.tax_pb1_dine_in_{s}")
+        cls.pb1_non_dine_in = ref(f"efn_setup_company.tax_pb1_non_dine_in_{s}")
+        cls.fp_dine_in = ref(f"efn_setup_company.fiscal_position_{s}_dine_in")
+        cls.fp_non_dine_in = ref(f"efn_setup_company.fiscal_position_{s}_non_dine_in")
 
     def _compute(self, fiscal_position):
         taxes = fiscal_position.map_tax(self.pb1) if fiscal_position else self.pb1
@@ -101,3 +107,19 @@ class TestFnbServiceTaxes(TransactionCase):
         self.assertLess(self.sc.sequence, self.pb1_dine_in.sequence)
         self.assertTrue(self.pb1_dine_in.is_base_affected)
         self.assertNotEqual(self.sc.tax_group_id, self.pb1.tax_group_id)
+
+
+@tagged("post_install", "-at_install", "efn")
+class TestBcfServiceTaxes(TestFnbServiceTaxes):
+    """G20 W-32 (docs/04 §12.1): Bacha Coffee F&B = PB1 + SC dengan record sendiri (sufiks _bcf)."""
+
+    COMPANY = "company_bcf"
+    SUFFIX = "bcf"
+
+    def test_records_do_not_leak_across_fnb_companies(self):
+        pb = self.env.ref("efn_setup_company.company_fnb")
+        for record in (self.pb1, self.sc, self.pb1_dine_in, self.pb1_non_dine_in, self.fp_dine_in, self.fp_non_dine_in):
+            with self.subTest(record=record.display_name):
+                self.assertEqual(record.company_id, self.company)
+                self.assertNotEqual(record.company_id, pb)
+        self.assertNotEqual(self.pb1.tax_group_id, self.env.ref("efn_setup_company.tax_group_pb1_fnb"))

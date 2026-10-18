@@ -8,8 +8,8 @@ const quote = {
   amount_payable_total: 1000,
   groups: [
     {
-      channel_code: 'RTL',
-      company_code: 'RTL',
+      channel_code: 'GL',
+      company_code: 'GL',
       outlet_code: 'TOKO-01',
       fulfilment: 'pickup',
       lines: [],

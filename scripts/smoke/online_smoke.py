@@ -39,7 +39,10 @@ import bff_smoke as b  # noqa: E402
 
 STATE = os.environ.get("SMOKE_STATE", "/work/online_state.json")
 PHONE = os.environ.get("SMOKE_PHONE", "")
-CHANNEL, OUTLET = "RTL", "TOKO-01"
+# G20 (docs/04 §12.1, L-48): kode kanal = kode PT. Kanal dev smoke = GL (PT Grand Lucky, company_rtl xmlid tetap);
+# company lain di event uji silang = PB (PT Paris Baguette). Kode lama RTL/FNB dihapus.
+CHANNEL, OUTLET = "GL", "TOKO-01"
+COMPANY, OTHER_COMPANY = "GL", "PB"
 SMOKE_PREFIX = "SMOKE "
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 PICKUP_RE = re.compile(r"^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4}-[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4}$")
@@ -97,17 +100,17 @@ def cmd_login():
 # ----------------------------------------------------------------------------------------------------- catalog
 def cmd_catalog():
     s, ch, _, _ = b.req("GET", "/v1/catalog/channels")
-    rtl = next((c for c in (ch or {}).get("items", []) if c.get("channel_code") == CHANNEL), None)
-    outlets = [o.get("outlet_code") for o in (rtl or {}).get("outlets", [])]
+    chan = next((c for c in (ch or {}).get("items", []) if c.get("channel_code") == CHANNEL), None)
+    outlets = [o.get("outlet_code") for o in (chan or {}).get("outlets", [])]
     b.result(
         "o.catalog_channels",
         s == 200
-        and rtl is not None
-        and rtl.get("company_code") == "RTL"
+        and chan is not None
+        and chan.get("company_code") == COMPANY
         and OUTLET in outlets
-        and rtl.get("fulfilment") == {"pickup": True, "delivery": False},
+        and chan.get("fulfilment") == {"pickup": True, "delivery": False},
         http=s,
-        channel=rtl,
+        channel=chan,
     )
     s, cats, _, _ = b.req("GET", f"/v1/catalog/categories?channel={CHANNEL}")
     b.result("o.catalog_categories", s == 200 and isinstance((cats or {}).get("items"), list), http=s)
@@ -362,7 +365,7 @@ def cmd_checkout(label="main", negatives=True):
         and pay.get("status") == "pending"
         and bool(pay.get("qr_string"))
         and part.get("status") == "placed"
-        and part.get("company_code") == "RTL"
+        and part.get("company_code") == COMPANY
         and "pickup_code" not in json.dumps(body)
     )
     b.result(f"o.checkout_201[{label}]", ok, http=s, status=(body or {}).get("status"), code=code_of(body))
@@ -636,8 +639,8 @@ def cmd_web_flow():
     b.result("o.web_login_cookie", s == 200 and bool(sess), http=s)
     ck = {"Cookie": sess}
     s, chans, _, _ = b.req("GET", "/api/catalog/channels", host=host)
-    rtl = next((c for c in (chans or {}).get("items", []) if c.get("channel_code") == CHANNEL), None)
-    b.result("o.web_catalog_channels", s == 200 and rtl is not None, http=s)
+    chan = next((c for c in (chans or {}).get("items", []) if c.get("channel_code") == CHANNEL), None)
+    b.result("o.web_catalog_channels", s == 200 and chan is not None, http=s)
     s, prods, _, _ = b.req("GET", f"/api/catalog/products?channel={CHANNEL}&q=Minyak&limit=10", host=host)
     oil = next((p for p in (prods or {}).get("items", []) if p.get("name", "").startswith(SMOKE_PREFIX)), None)
     b.result(
@@ -759,7 +762,7 @@ def cmd_events(part_id, order_id, legacy_key=""):
             "platform_order_ref": part_id,
             "checkout_ref": order_id,
             "channel_code": CHANNEL,
-            "company_code": "RTL",
+            "company_code": COMPANY,
             "event": evname,
             "state": state,
             "occurred_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -789,7 +792,7 @@ def cmd_events(part_id, order_id, legacy_key=""):
     b.result("o.event_duplicate_idempotent", s2 == 200 and (b2 or {}).get("status") == "duplicate", http=s2, body=b2)
     s, body = post({**event("ready", "ready", 2), "checkout_ref": str(uuid.uuid4())})
     b.result("o.event_unknown_checkout_404", s == 404, http=s, code=code_of(body))
-    s, body = post(event("ready", "ready", 3, company_code="FNB"))
+    s, body = post(event("ready", "ready", 3, company_code=OTHER_COMPANY))
     b.result(
         "o.event_company_mismatch_409", s == 409 and code_of(body) == "company_mismatch", http=s, code=code_of(body)
     )

@@ -1,8 +1,11 @@
 {
     "name": "EFN Setup - Kanal Online (Super-App)",
     "summary": "Konfigurasi data-only kanal online E-28: masa berlaku API key user teknis, partner generik & tim "
-    "Super-App per PT, sale_loyalty dimatikan untuk SO; demo kanal RTL (FNB nonaktif).",
-    "version": "19.0.1.4.0",
+    "Super-App per PT (GL, PB, BCR, BCF), sale_loyalty dimatikan untuk SO; demo kanal = kode PT (GL aktif; PB, BCR, "
+    "BCF nonaktif).",
+    # 19.0.1.5.0 (G20 W-32/E-43, docs/04 §12.1, L-48): kode kanal = kode PT, user teknis efn_online_<kode>,
+    # partner/tim per PT baru; kanal RTL/FNB/RTL-GL/RTL-BACHA/FNB-PB/FNB-BACHA dihapus (DB dev dibuat ulang).
+    "version": "19.0.1.5.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",

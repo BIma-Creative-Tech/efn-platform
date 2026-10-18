@@ -58,7 +58,7 @@ END $$;
 CREATE TABLE IF NOT EXISTS platform.loyalty_pos_reverse (
   refund_order_ref      text        PRIMARY KEY CHECK (refund_order_ref ~ '^[\x20-\x7e]{1,64}$'),
   original_order_ref    text        NOT NULL CHECK (original_order_ref ~ '^[\x20-\x7e]{1,64}$'),
-  company_code          text        NOT NULL CHECK (company_code IN ('EFN', 'RTL', 'FNB', 'FARM')),
+  company_code          text        NOT NULL CHECK (company_code IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'FARM')),  -- G20 §12.1 (volume lama: 09)
   points_restored_value bigint      NOT NULL CHECK (points_restored_value >= 0),
   points_restored       integer     NOT NULL CHECK (points_restored >= 0),
   idempotency_key       text        NOT NULL UNIQUE CHECK (char_length(idempotency_key) <= 128),

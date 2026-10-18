@@ -83,8 +83,9 @@ def ctx_env():
 
 
 def step_setup():
-    company = env["res.company"].search([("efn_brand_code", "=", "FNB")], limit=1)
-    assert company, "company FNB (efn_setup_company) tidak ada"
+    # G20 (docs/04 §12.1): PT Paris Baguette = kode PB (semula FNB), xmlid efn_setup_company.company_fnb.
+    company = env["res.company"].search([("efn_brand_code", "=", "PB")], limit=1)
+    assert company, "company PB (efn_setup_company) tidak ada"
     admin = env.ref("base.user_admin")
     if company not in admin.company_ids:
         admin.write({"company_ids": [Command.link(company.id)]})
@@ -94,7 +95,7 @@ def step_setup():
     Journal = su["account.journal"]
     cash_j = Journal.search([("type", "=", "cash"), ("company_id", "=", company.id)], limit=1)
     bank_j = Journal.search([("type", "=", "bank"), ("company_id", "=", company.id)], limit=1)
-    assert cash_j and bank_j, "jurnal cash/bank FNB tidak ada (CoA l10n_id?)"
+    assert cash_j and bank_j, "jurnal cash/bank PB tidak ada (CoA l10n_id?)"
 
     PM = su["pos.payment.method"]
     cash_pm = PM.search([("name", "=", f"{PREFIX} Cash"), ("company_id", "=", company.id)], limit=1) or PM.create(
@@ -161,11 +162,11 @@ def step_setup():
         )
 
     Config = su["pos.config"]
-    config = Config.search([("name", "=", f"{PREFIX} POS FNB"), ("company_id", "=", company.id)], limit=1)
+    config = Config.search([("name", "=", f"{PREFIX} POS PB"), ("company_id", "=", company.id)], limit=1)
     if not config:
         config = Config.create(
             {
-                "name": f"{PREFIX} POS FNB",
+                "name": f"{PREFIX} POS PB",
                 "company_id": company.id,
                 "payment_method_ids": [Command.set([cash_pm.id, qris_pm.id, edc_pm.id])],
                 # E-30: redeem aktif saat dibuat -> efn_setup_pos menautkan metode Poin EFN PT (sesi belum buka).
@@ -820,7 +821,7 @@ RPC_CRED_FILE = "/tmp/efn_smoke_rpc.json"  # noqa: S108 - container dev, 0600, d
 
 
 def step_rpc_users():
-    """User internal biasa + kasir POS (FNB) dengan password & TOTP acak per run (2FA wajib).
+    """User internal biasa + kasir POS (PB) dengan password & TOTP acak per run (2FA wajib).
 
     Kredensial ditulis ke RPC_CRED_FILE (0600) di container Odoo dan TIDAK dicetak; orkestrator mem-pipe file ini
     ke odoo_rpc_smoke.py (stdin) lalu menghapusnya.

@@ -1,8 +1,88 @@
-# efn_pos_refund_origin (E-31) — refund POS ke metode bayar asal
+# efn_pos_refund_origin (E-31, E-41) — refund POS ke metode bayar asal; retur tanpa struk dengan persetujuan
 
 > **Ringkasan manajemen.** Uang refund di kasir hanya bisa dikembalikan lewat cara bayar yang dipakai pelanggan
 > saat membeli (mis. dibayar kartu -> dikembalikan ke kartu), maksimal sebesar yang dibayar dengan cara itu. Retur
-> tanpa struk hanya tunai. Mencegah kasir mengubah refund kartu menjadi uang tunai.
+> tanpa struk hanya tunai **dan** (sejak 19.0.1.3.0) wajib disetujui Store Manager lain dengan PIN yang diperiksa
+> server; saat POS offline retur tanpa struk tidak bisa dilakukan. Setiap persetujuan dan PIN salah tercatat.
+
+## E-41 — persetujuan Store Manager untuk retur tanpa struk (versi 19.0.1.3.0, G20)
+- **Dasar:** keputusan pemilik 18-15, fit-gap `docs/08 §11.6` (E-41), kontrak `docs/04 §12.4`, keputusan lead
+  **L-51** (PIN diverifikasi server, bukan `pos_hr` di browser; offline diblokir). Meralat Q-F18-5/L-23 ("cukup tunai").
+  ADR-031 (tanpa modul pihak ketiga). ADR-017 opsi (a) (fitur yang butuh server nonaktif saat offline).
+- **Risiko dimitigasi:** R-B06 (fraud kasir: retur fiktif tanpa struk dicairkan tunai), R-O05 (retur/refund),
+  SEC-63 (hash PIN `pos_hr` dimuat ke browser -> bisa di-brute-force offline; di sini hash tidak pernah ke klien).
+- **Mode** `efn.pos.refund.unlinked_return_mode` = `manager_approval` (**default baru**; nilai tidak dikenal juga
+  diperlakukan `manager_approval`) | `cash` (tunai tanpa persetujuan, perilaku lama) | `deny`. Semua mode tetap
+  **hanya tunai**. Migrasi `19.0.1.3.0`: DB yang masih `cash` (default lama) -> `manager_approval`.
+- **PIN** (`res.users.efn_return_pin_hash`, `groups=base.group_system`): pbkdf2-sha512 passlib (putaran
+  `efn.pos.return_pin_kdf_rounds`, default 600.000 = minimum hash password Odoo 19), 6–8 digit, deret/angka sama
+  ditolak. Diatur lewat **Preferensi -> Atur PIN** (Store Manager sendiri) atau **Settings -> Users -> Atur PIN
+  persetujuan retur** (hanya `base.group_system`). Keduanya `@check_identity` Odoo (konfirmasi kata sandi; wizard juga
+  mensyaratkan identity check sesi < 10 menit sehingga tidak bisa dipanggil langsung lewat RPC). Target wajib grup
+  Manajer POS. Hash tidak terbaca POS manager/kasir dan tidak ada di data POS.
+- **Approver sah** (sementara sampai W-31 jabatan `hr.job`): user internal aktif, grup
+  `point_of_sale.group_pos_manager`, company config ∈ company user, PIN diatur, **≠ user kasir yang login**.
+- **RPC** (semua di `RPC_ALLOWLIST`, diawali `_efn_refund_check_caller`):
+  - `pos.config.efn_return_approval_approvers()` -> `{ok, approvers: [{id, name}]}` (nama staf internal plaintext,
+    18-40; tanpa hash/PII pelanggan) | `{ok: false, error_code: "mode_disabled"}`.
+  - `pos.config.efn_return_approval_request(order_ref, approver_id, pin, amount, reason)` -> `{ok: true,
+    expires_in: 300, max_amount}` | `{ok: false, error_code, message}` dengan `error_code` ∈ `mode_disabled`,
+    `invalid_input`, `approver_invalid`, `invalid_pin`, `locked`. Kunci baris approver (`touch_row res_users`,
+    percobaan paralel diserialkan), **kunci 15 menit setelah 5 PIN salah per approver** (dihitung sejak persetujuan
+    sukses terakhir approver itu), PIN tidak disimpan/di-log. Sukses -> persetujuan baru untuk uuid yang sama
+    menggantikan yang lama (`superseded`).
+  - `res.users.efn_action_return_pin_wizard()` dan `efn.pos.return.pin.wizard.action_apply()` (atur PIN).
+- **Token sekali pakai = record `efn.pos.return.approval` server-side** (pola `efn.pos.otp.challenge`: tidak ada
+  token di browser yang bisa dicuri/diputar ulang). Terikat config + sesi + `pos.order.uuid` + kasir (user yang
+  sync = user yang meminta) + company + nominal maks; TTL 5 menit. Saat sync (`_process_saved_order`, final) retur
+  tanpa struk mode `manager_approval` -> persetujuan harus ada & sah (uang keluar tunai ≤ `amount_max`, belum
+  kedaluwarsa, belum dipakai order lain) -> `consumed` + `consumed_order_id` + `amount_used`; selain itu `UserError`
+  (sync ditolak). Tukar barang tanpa struk tanpa uang keluar juga butuh persetujuan (nominal 0). Sync ulang order yang
+  sama idempoten.
+- **Audit:** `efn.pos.return.approval` append-only (create/write/unlink hanya kode server ber-sudo; POS manager & admin
+  baca saja; kasir tanpa ACL), `company_id` + `_check_company_auto` + record rule multi-company. Menu *Point of Sale ->
+  Persetujuan Retur Tanpa Struk* (Manajer POS; filter PIN salah/terkunci, group by Store Manager/kasir/POS). Retensi
+  `efn.pos.return_approval_retention_days` (default 730, minimum 365) via autovacuum. Isi: id user staf, nominal, alasan
+  (UI meminta tanpa data pelanggan) — tanpa PIN, tanpa data pelanggan.
+- **Frontend (OWL):** `PaymentScreen.validateOrder` (patch) -> bila config `efn_unlinked_return_mode` =
+  `manager_approval` dan order retur tanpa struk: **offline -> diblokir dengan pesan**; online -> dialog
+  `EfnReturnApprovalDialog` (pilih Store Manager, PIN diketik Store Manager, alasan) -> RPC -> validasi lanjut.
+  PIN dihapus dari state dialog segera setelah dikirim. Persetujuan disimpan sebagai properti klien order (UI saja,
+  server tetap penentu).
+
+### Cara uji manual (E-41)
+1. Login sebagai Store Manager (grup Manajer POS) -> Preferensi -> *Atur PIN* -> konfirmasi kata sandi -> PIN 6 digit.
+2. Login POS sebagai kasir (bukan Store Manager) -> produk -> `+/-` (qty -1) -> Bayar -> Cash -> Validate -> dialog.
+3. PIN salah -> "PIN salah"; 5x salah -> "dikunci 15 menit" (Store Manager lain tetap bisa).
+4. PIN benar + alasan -> struk; *Point of Sale -> Persetujuan Retur Tanpa Struk* menampilkan `Dipakai` + order.
+5. Matikan jaringan (devtools offline) -> ulangi -> pesan "POS sedang offline", tidak bisa validasi.
+6. Ubah nominal setelah disetujui (lebih besar) -> sync ditolak; minta persetujuan ulang.
+
+### Referensi (ADR-031)
+Cybrosys `pos_refund_password@19.0` (AGPL-3): satu kata sandi global di tombol refund, diperiksa di browser — hanya
+ide "gerbang refund", **ditolak** sebagai desain (verifikasi harus di server, per approver, berlockout). OCA/pos 19.0
+tidak punya modul setara. Tidak ada kode yang disalin.
+
+### Batasan / belum (E-41)
+- Kasir = **user Odoo yang login** di POS. Bila terminal login sebagai user Store Manager (karyawan berganti lewat
+  `pos_hr`), Store Manager itu tidak bisa menyetujui retur di terminalnya sendiri (by design: approver ≠ kasir);
+  `employee_id` `pos_hr` diisi klien sehingga tidak dipakai. SOP: terminal login sebagai user kasir. W-31 (jabatan
+  `hr.job` Store Manager) akan mengganti cek grup `group_pos_manager`.
+- Kunci per approver bisa disalahgunakan kasir untuk mengunci Store Manager 15 menit (DoS); semua percobaan tercatat
+  dengan id kasir. Store Manager lain tetap bisa menyetujui.
+- PIN 6–8 digit (ruang kecil): hash pbkdf2 600k putaran hanya di DB (`base.group_system`); dump DB tetap memungkinkan
+  brute force luring dalam hitungan jam — sama dengan kelas risiko kata sandi pendek; mitigasi = enkripsi backup &
+  least privilege DB (CLAUDE.md).
+- Teks PIN wizard tersimpan sementara di tabel transient (pola wizard kata sandi Odoo) dan dikosongkan saat PIN
+  disimpan; bila validasi gagal, baris dihapus vacuum transient Odoo.
+- Sync tertunda > 5 menit setelah persetujuan (mis. jaringan putus tepat setelah Validate) -> sync ditolak dan order
+  tertahan di antrean sync POS; kasir menghubungi Store Manager untuk persetujuan ulang lewat order baru (belum ada
+  alur "minta ulang" untuk order yang sudah tervalidasi di klien).
+- Retur tanpa struk lewat backend (order POS manual + wizard Payment) dalam mode `manager_approval` selalu ditolak
+  (tidak ada jalur persetujuan backend).
+- Aturan `efn_audit` (log nilai lama/baru) untuk `efn.pos.return.approval` tidak ditambahkan (milik
+  `efn_setup_audit`); record sendiri sudah append-only.
+- Tour `EfnPosReturnApprovalTour` dan semua test E-41 **belum dijalankan** penulis (tanpa shell).
 
 - **Fit-gap:** W-24 / E-31 (`docs/08 §9.3`). **Kontrak/keputusan:** `docs/04 §9.9` L-23 (Q-F18-4 proporsional,
   Q-F18-5 retur tanpa struk tunai saja, Q-F18-6 QRIS statis dicatat atas metode asal + transfer manual SOP Finance).
@@ -56,8 +136,8 @@ Modul ini menjadi lapis **integritas order & pembayaran POS** untuk semua modul 
 - Hanya pembayaran **negatif** (uang keluar, bukan baris kembalian `is_change`) yang dinilai.
 - **Refund ber-struk** (baris `refunded_orderline_id`): setiap metode harus ada di order asal; nominal per metode ≤
   dibayar bersih di order asal (kembalian = pembayaran tunai negatif core) − refund tersinkron sebelumnya.
-- **Retur tanpa struk** (barang qty < 0 tanpa asal): `efn.pos.refund.unlinked_return_mode` = `cash` (default, tunai
-  saja) | `deny` (ditolak).
+- **Retur tanpa struk** (barang qty < 0 tanpa asal): `efn.pos.refund.unlinked_return_mode` = `manager_approval`
+  (default E-41) | `cash` (tunai saja) | `deny` (ditolak). Selalu tunai saja.
 - Pelanggaran -> `UserError` (sync ditolak). Penjualan & tukar barang tanpa uang keluar tidak terpengaruh.
 - QRIS statis / gateway tanpa reversal: dicatat atas metode asal; pengembalian dana fisik lewat transfer manual (SOP).
 - Bersama E-30 (Poin EFN): metode Poin EFN diperlakukan sama (subset + batas); nilai poinnya divalidasi E-30.
@@ -78,6 +158,13 @@ Modul ini menjadi lapis **integritas order & pembayaran POS** untuk semua modul 
 - RPC nyata r11 (`tests/test_payment_integrity_rpc.py`, tag `efn_tour`, `call_kw` sebagai kasir): SEC-113, SEC-116,
   dan probe ACL `res.partner.bank` untuk SEC-121 (milik `efn_setup_pos`, hanya dicatat di log).
 - Tour (`EfnPosRefundOriginTour`, tag `efn_tour`): order dibayar Bank -> refund -> hanya Bank ditawarkan, terisi otomatis.
+- E-41 (`tests/test_return_approval.py`, tag `efn`): default/mode, sync tanpa persetujuan ditolak, PIN benar ->
+  sync memakai sekali, dipakai ulang/order lain ditolak, persetujuan baru menggantikan, kedaluwarsa, nominal lebih,
+  kasir lain, tetap tunai, `deny`, PIN salah -> kunci setelah 5 + buka setelah 15 menit, sukses mereset hitungan,
+  approver = kasir, approver tanpa grup/company lain/tanpa PIN, input tidak sah, akses RPC, PIN tidak di-log, record
+  append-only + record rule, retensi minimum, wizard PIN (hash pbkdf2, hanya diri sendiri/admin, aturan PIN, identity
+  check, hash tidak terbaca). Tour `EfnPosReturnApprovalTour` (`tests/test_return_approval_tour.py`, `efn_tour`):
+  qty -1 -> Cash -> Validate -> PIN salah (pesan) -> PIN benar -> struk tersinkron; server: 1 `failed` + 1 `consumed`.
 - Manual: jual split tunai+kartu -> Orders -> refund sebagian -> cek alokasi & coba ganti metode (ditolak saat sync).
 
 ## Belum / batasan
@@ -85,5 +172,4 @@ Modul ini menjadi lapis **integritas order & pembayaran POS** untuk semua modul 
 - Order asal dari sesi/POS lain yang belum termuat saat offline: tanpa saringan klien; server tetap menolak.
 - SEC-117: kunci baris menyerialkan sync paralel; terverifikasi lewat spy (urutan kunci -> hitung sisa), belum lewat
   uji dua koneksi nyata (data uji tidak ter-commit sehingga tidak terlihat koneksi lain).
-- Persetujuan supervisor untuk retur tanpa struk (Q-F18-5 "hanya tunai + supervisor") belum ada (butuh keputusan
-  Ops; kini cukup tunai).
+- Persetujuan supervisor untuk retur tanpa struk: **selesai di E-41** (bagian atas).

@@ -10,7 +10,7 @@ Kontrak: `docs/04` §10.3.2, §10.8.2, §10.8.3, **§11.3 (G19)**. ADR-034 (**Pr
 
 ## Kanal per brand (G19, W-21/E-37a, §11.3)
 
-- Kode kanal berhifen (`RTL-GL`, `RTL-BACHA`, `FNB-PB`, `FNB-BACHA`) mengikuti regex §10.2 `^[A-Z][A-Z0-9-]{1,15}$`; `ONLINE_CHANNELS=RTL-GL,RTL-BACHA` diterima.
+- **G20 §12.1 (L-48)**: kode kanal = kode PT — `GL`, `PB`, `BCR`, `BCF` (`ONLINE_CHANNELS` default `GL`); kanal G19 `RTL-GL`/`RTL-BACHA`/`FNB-PB`/`FNB-BACHA` dihapus. `company_code` blok channel wajib salah satu `EFN|GL|PB|BCR|BCF|FARM` (kode lama `RTL`/`FNB` → kanal disembunyikan, fail-closed). Regex §10.2 `^[A-Z][A-Z0-9-]{1,15}$` tetap (hifen masih valid secara format).
 - Blok `channel` hasil `efn_online_catalog` membawa `brand_code` (`^[A-Z][A-Z0-9]{1,9}$`, tidak unik, `false`/kosong → `null`; bentuk lain → `invalid_response`). Salinan `channel_data` dari sinkron pra-G19 (tanpa field) → `null`.
 - `GET /v1/catalog/channels?brand=<brand_code>` — tanpa parameter = semua kanal aktif; nilai tidak cocok regex (termasuk kosong, huruf kecil, parameter berulang) → `400 invalid_request`; brand tak dikenal → `{ "items": [] }`. Ini **pembatasan UI** — cart/quote/order tidak memakai brand (BFF tidak mempercayai domain).
 
@@ -18,11 +18,18 @@ Respons `GET /v1/catalog/channels?brand=BACHA`:
 
 ```json
 { "items": [
-  { "channel_code": "RTL-BACHA", "company_code": "RTL", "brand_code": "BACHA", "name": "Bacha Butik",
+  { "channel_code": "BCR", "company_code": "BCR", "brand_code": "BACHA", "name": "Bacha Coffee Butik",
     "fulfilment": { "pickup": true, "delivery": false },
-    "outlets": [{ "outlet_code": "TOKO-01", "public_name": "Bacha Senayan", "pickup_enabled": true, "prep_minutes": 30 }] },
-  { "channel_code": "FNB-BACHA", "company_code": "FNB", "brand_code": "BACHA", "name": "Bacha Kafe", "fulfilment": { "pickup": true, "delivery": false }, "outlets": [] }
+    "outlets": [{ "outlet_code": "TOKO-01", "public_name": "Bacha Senayan", "pickup_enabled": true, "prep_minutes": 30 }],
+    "payment_modes": ["qris", "counter"] },
+  { "channel_code": "BCF", "company_code": "BCF", "brand_code": "BACHA", "name": "Bacha Coffee Kafe", "fulfilment": { "pickup": true, "delivery": false },
+    "outlets": [], "payment_modes": ["counter"] }
 ] }
 ```
+
+## G20 — metode bayar & berat (§12.2, §12.3, L-52, L-55)
+- `GET /v1/catalog/channels` item bertambah `payment_modes` (array string `qris|counter`, tipe nullable; dari Odoo wajib array, L-57): (blok `channel` Odoo `payment_modes` ?? `ONLINE_PAYMENT_METHODS`) ∩ `ONLINE_PAYMENT_METHODS`. Array kosong = kanal belum bisa dipesan dengan metode yang aktif.
+- Produk (`GET /v1/catalog/products`, `…/products/:id`) bertambah `weight_kg` (kg, nullable; salinan pra-G20 → `null`), disalin dari `efn_online_catalog` ke `online_catalog_item.data` (jsonb, tanpa migrasi).
+- Risiko: tampilan `payment_modes` dari salinan katalog bisa tertinggal ≤ interval sinkron (5 menit) + cache 30 s — checkout tetap divalidasi ulang terhadap salinan yang sama dan Odoo menolak mode yang tidak diizinkan saat place.
 
 Risiko: R-S03, R-S06 (gambar), R-T10, R-T14 (tenant per domain — brand hanya filter tampilan). Belum: push hint katalog (fase 3b); E-37b pricelist per outlet (G21+).

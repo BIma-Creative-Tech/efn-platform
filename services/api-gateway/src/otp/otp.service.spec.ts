@@ -49,7 +49,7 @@ function auditOutcomes(db: FakeDb): unknown[] {
 describe('OtpService', () => {
   it('menyimpan hanya hash HMAC (bukan kode) dan TTL = 180 s + grace', async () => {
     const { otp, kv, sender } = setup();
-    const { challengeId, expiresIn } = await otp.issue({ purpose: 'pos_promo', memberRef: MEMBER, orderRef: ORDER, companyCode: 'FNB' });
+    const { challengeId, expiresIn } = await otp.issue({ purpose: 'pos_promo', memberRef: MEMBER, orderRef: ORDER, companyCode: 'PB' });
     expect(expiresIn).toBe(180);
     const code = sender.lastCode();
     expect(code).toMatch(/^\d{6}$/);
@@ -63,7 +63,7 @@ describe('OtpService', () => {
 
   it('verify sukses sekali pakai; audit memakai member_hash, bukan nomor HP', async () => {
     const { otp, sender, db, config } = setup();
-    const { challengeId } = await otp.issue({ purpose: 'pos_promo', memberRef: MEMBER, orderRef: ORDER, companyCode: 'FNB' });
+    const { challengeId } = await otp.issue({ purpose: 'pos_promo', memberRef: MEMBER, orderRef: ORDER, companyCode: 'PB' });
     const code = sender.lastCode();
 
     const ok = await otp.verify({ purpose: 'pos_promo', challengeId, code, orderRef: ORDER });
@@ -74,7 +74,7 @@ describe('OtpService', () => {
       memberRef: null,
       posConfigId: null,
       orderRef: ORDER,
-      companyCode: 'FNB',
+      companyCode: 'PB',
       amount: null,
     });
 
@@ -123,7 +123,7 @@ describe('OtpService', () => {
 
   it('pos_promo: order_ref berbeda dihitung sebagai percobaan gagal', async () => {
     const { otp, sender } = setup();
-    const { challengeId } = await otp.issue({ purpose: 'pos_promo', memberRef: MEMBER, orderRef: ORDER, companyCode: 'RTL' });
+    const { challengeId } = await otp.issue({ purpose: 'pos_promo', memberRef: MEMBER, orderRef: ORDER, companyCode: 'GL' });
     const code = sender.lastCode();
     expect(await otp.verify({ purpose: 'pos_promo', challengeId, code, orderRef: '0b7e4c2a-1111-4c3d-8e9f-5a6b7c8d9e0f' })).toEqual({
       ok: false,
@@ -146,7 +146,7 @@ describe('OtpService', () => {
 
   it('SEC-07: amount POS disimpan di challenge dan dikembalikan saat verify', async () => {
     const { otp, sender } = setup();
-    const { challengeId } = await otp.issue({ purpose: 'pos_promo', memberRef: MEMBER, orderRef: ORDER, companyCode: 'FNB', amount: 125000 });
+    const { challengeId } = await otp.issue({ purpose: 'pos_promo', memberRef: MEMBER, orderRef: ORDER, companyCode: 'PB', amount: 125000 });
     const res = await otp.verify({ purpose: 'pos_promo', challengeId, code: sender.lastCode(), orderRef: ORDER });
     expect(res.ok && res.amount).toBe(125000);
   });
@@ -208,7 +208,7 @@ describe('OtpService', () => {
     expect(err.body).toEqual({ error: { code: 'rate_limited', message: expect.any(String) } });
     expect(sender.otps).toHaveLength(2);
     // POS tetap jalan walau budget login habis
-    await expect(otp.issue({ purpose: 'pos_promo', memberRef: MEMBER, orderRef: ORDER, companyCode: 'FNB' })).resolves.toBeDefined();
+    await expect(otp.issue({ purpose: 'pos_promo', memberRef: MEMBER, orderRef: ORDER, companyCode: 'PB' })).resolves.toBeDefined();
     expect(await metrics.render()).toContain('efn_otp_request_total{purpose="login",outcome="budget_exhausted"} 1');
     // jam berikutnya budget pulih
     clock.advanceSeconds(3600);
@@ -233,7 +233,7 @@ describe('OtpService', () => {
   describe('purpose pos_redeem (docs/04 §9.3)', () => {
     it('verify POS menerima pos_redeem lewat alsoAccept dan mengembalikan purpose challenge; metrik berlabel pos_redeem', async () => {
       const { otp, sender, metrics, db } = setup();
-      const { challengeId } = await otp.issue({ purpose: 'pos_redeem', memberRef: MEMBER, orderRef: ORDER, companyCode: 'FNB', amount: 50000 });
+      const { challengeId } = await otp.issue({ purpose: 'pos_redeem', memberRef: MEMBER, orderRef: ORDER, companyCode: 'PB', amount: 50000 });
       const res = await otp.verify({ purpose: 'pos_promo', alsoAccept: ['pos_redeem'], challengeId, code: sender.lastCode(), orderRef: ORDER });
       expect(res).toMatchObject({ ok: true, purpose: 'pos_redeem', orderRef: ORDER, amount: 50000 });
       const text = await metrics.render();
@@ -244,13 +244,13 @@ describe('OtpService', () => {
 
     it('tanpa alsoAccept, challenge pos_redeem tidak bisa diverifikasi sebagai pos_promo (dan sebaliknya)', async () => {
       const { otp, sender } = setup();
-      const redeem = await otp.issue({ purpose: 'pos_redeem', memberRef: MEMBER, orderRef: ORDER, companyCode: 'FNB' });
+      const redeem = await otp.issue({ purpose: 'pos_redeem', memberRef: MEMBER, orderRef: ORDER, companyCode: 'PB' });
       expect(await otp.verify({ purpose: 'pos_promo', challengeId: redeem.challengeId, code: sender.lastCode(), orderRef: ORDER })).toEqual({
         ok: false,
         reason: 'expired',
         attemptsLeft: 0,
       });
-      const promo = await otp.issue({ purpose: 'pos_promo', memberRef: MEMBER, orderRef: ORDER, companyCode: 'FNB' });
+      const promo = await otp.issue({ purpose: 'pos_promo', memberRef: MEMBER, orderRef: ORDER, companyCode: 'PB' });
       expect(await otp.verify({ purpose: 'pos_redeem', challengeId: promo.challengeId, code: sender.lastCode(), orderRef: ORDER })).toEqual({
         ok: false,
         reason: 'expired',
@@ -260,7 +260,7 @@ describe('OtpService', () => {
 
     it('pos_redeem juga terikat order_ref (order lain = percobaan gagal)', async () => {
       const { otp, sender } = setup();
-      const { challengeId } = await otp.issue({ purpose: 'pos_redeem', memberRef: MEMBER, orderRef: ORDER, companyCode: 'FNB' });
+      const { challengeId } = await otp.issue({ purpose: 'pos_redeem', memberRef: MEMBER, orderRef: ORDER, companyCode: 'PB' });
       const res = await otp.verify({
         purpose: 'pos_promo',
         alsoAccept: ['pos_redeem'],
@@ -273,8 +273,8 @@ describe('OtpService', () => {
 
     it('pos_redeem memakai budget POS (OTP_POS_HOURLY_BUDGET), bukan budget publik', async () => {
       const { otp } = setup({ OTP_POS_HOURLY_BUDGET: '1', OTP_GLOBAL_HOURLY_BUDGET: '1000' });
-      await otp.issue({ purpose: 'pos_redeem', memberRef: MEMBER, orderRef: ORDER, companyCode: 'FNB' });
-      const err = await catchApiError(() => otp.issue({ purpose: 'pos_redeem', memberRef: MEMBER, orderRef: ORDER, companyCode: 'FNB' }));
+      await otp.issue({ purpose: 'pos_redeem', memberRef: MEMBER, orderRef: ORDER, companyCode: 'PB' });
+      const err = await catchApiError(() => otp.issue({ purpose: 'pos_redeem', memberRef: MEMBER, orderRef: ORDER, companyCode: 'PB' }));
       expect(err.getStatus()).toBe(429);
     });
   });

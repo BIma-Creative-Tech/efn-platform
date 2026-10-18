@@ -2,12 +2,14 @@
 # scripts/smoke/run-e2e-smoke.sh tahap `o` (docs/04 §10, ADR-034/ADR-019 Proposed).
 #
 # Bukan modul Odoo dan bukan test unit. Skrip ini:
-#   - `setup`    : konfigurasi kanal RTL dev (data FIKTIF "SMOKE", idempoten) setara demo efn_setup_online: pembulatan
-#                  Rupiah, gudang outlet SMKOL, jurnal titipan bank, pricelist IDR, user teknis `efn_online_rtl`
-#                  (TANPA API key — key dibuat lewat runbook odoo-online-api-key §1), kanal RTL + outlet TOKO-01,
+#   - `setup`    : konfigurasi kanal GL dev (data FIKTIF "SMOKE", idempoten) setara demo efn_setup_online: pembulatan
+#                  Rupiah, gudang outlet SMKOL, jurnal titipan bank, pricelist IDR, user teknis `efn_online_gl`
+#                  (TANPA API key — key dibuat lewat runbook odoo-online-api-key §1), kanal GL + outlet TOKO-01,
 #                  4 produk online (PPN l10n_id), stok awal, dan user staf outlet `smoke_online_staff`.
-#                  G19: kanal RTL batas bayar 70 menit + `stock_hold_mode=confirm` (SO `sale` + stok tercadang sejak
+#                  G19: kanal batas bayar 70 menit + `stock_hold_mode=confirm` (SO `sale` + stok tercadang sejak
 #                  place), promo kode dev `SMOKE10` (diskon 10 %, pricelist SMOKE), satu user teknis per kanal (L-37).
+#                  G20 (docs/04 §12.1, L-48): kode kanal = kode PT -> kanal `GL` (PT Grand Lucky, xmlid company_rtl),
+#                  semula `RTL`; user teknis `efn_online_gl` (semula `efn_online_rtl`).
 #   - `stock`    : set stok bebas satu produk smoke di gudang outlet (inventory mode standar).
 #   - `free`     : baca free_qty (dibulatkan) satu produk smoke di gudang outlet; dipakai tahap `o` untuk membuktikan
 #                  reservasi G19 (free_qty turun setelah place, pulih setelah kedaluwarsa/batal).
@@ -86,20 +88,20 @@ def step_setup():
         "account.journal"
     ].create({"name": "SMOKE Titipan Online - Holding", "code": "SMKTT", "type": "bank", "company_id": company.id})
     pricelist = su["product.pricelist"].search(
-        [("name", "=", "SMOKE Online RTL"), ("company_id", "=", company.id)], limit=1
+        [("name", "=", "SMOKE Online GL"), ("company_id", "=", company.id)], limit=1
     ) or su["product.pricelist"].create(
-        {"name": "SMOKE Online RTL", "currency_id": env.ref("base.IDR").id, "company_id": company.id}
+        {"name": "SMOKE Online GL", "currency_id": env.ref("base.IDR").id, "company_id": company.id}
     )
     group = env.ref("efn_online_order.group_online_channel")
-    user = su["res.users"].with_context(active_test=False).search([("login", "=", "efn_online_rtl")], limit=1)
+    user = su["res.users"].with_context(active_test=False).search([("login", "=", "efn_online_gl")], limit=1)
     if not user:
         user = (
             su["res.users"]
             .with_context(no_reset_password=True)
             .create(
                 {
-                    "name": "Kanal online RTL (user teknis)",
-                    "login": "efn_online_rtl",
+                    "name": "Kanal online GL (user teknis)",
+                    "login": "efn_online_gl",
                     "company_id": company.id,
                     "company_ids": [Command.set([company.id])],
                     "group_ids": [Command.set([env.ref("base.group_user").id, group.id])],
@@ -140,9 +142,10 @@ def step_setup():
             )
         )
     Channel = su["efn.online.channel"].with_context(active_test=False)
-    channel = Channel.search([("code", "=", "RTL")], limit=1)
+    channel = Channel.search([("code", "=", "GL")], limit=1)
     vals = {
-        "name": "Super-App Retail (SMOKE dev)",
+        "name": "Super-App Grand Lucky (SMOKE dev)",
+        "brand_code": "GL",
         "company_id": company.id,
         "pricelist_id": pricelist.id,
         "partner_id": env.ref("efn_setup_online.partner_superapp_rtl").id,
@@ -159,8 +162,8 @@ def step_setup():
     if channel:
         channel.write(vals)
     else:
-        channel = Channel.create({**vals, "code": "RTL"})
-    # L-37: satu user teknis per kanal -> lepas efn_online_rtl dari kanal lain (DB dev lama: demo brand G19 awal).
+        channel = Channel.create({**vals, "code": "GL"})
+    # L-37: satu user teknis per kanal -> lepas efn_online_gl dari kanal lain (bila DB dev memakai user di kanal lain).
     for other in Channel.search([("id", "!=", channel.id), ("user_ids", "in", user.ids)]):
         other.write({"user_ids": [Command.unlink(user.id)]})
     channel.write({"user_ids": [Command.set([user.id])]})
@@ -466,11 +469,11 @@ def step_fake_ctx():
 def step_apikey():
     st = load_state()
     user = env["res.users"].browse(st["user_id"])
-    assert user.has_group("efn_online_order.group_online_channel"), "user teknis efn_online_rtl belum ada"
+    assert user.has_group("efn_online_order.group_online_channel"), "user teknis efn_online_gl belum ada"
     # W-11 (G18): batas efektif user teknis = 35 hari (efn_setup_online) -> default 30 seperti rotasi produksi.
     days = int(os.environ.get("SMOKE_KEY_DAYS", "30"))
     exp = datetime.utcnow().replace(microsecond=0) + timedelta(days=days)
-    name = "efn-online-RTL-" + datetime.utcnow().strftime("%Y%m%d%H%M")
+    name = "efn-online-GL-" + datetime.utcnow().strftime("%Y%m%d%H%M")
     key = env["res.users.apikeys"].with_user(user)._generate(None, name, exp)
     env.cr.commit()
     old = os.umask(0o077)

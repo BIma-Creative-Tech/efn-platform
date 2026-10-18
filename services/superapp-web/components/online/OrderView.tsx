@@ -18,6 +18,7 @@ import {
   type OrderDetail,
   type OrderStatus,
 } from '@/lib/orders';
+import { CounterPayPanel } from './CounterPayPanel';
 import { OnlineUnavailable } from './OnlineUnavailable';
 import { PickupCodePanel } from './PickupCodePanel';
 import { QrCode } from './QrCode';
@@ -59,10 +60,30 @@ export function OrderView({ initial, simulator }: { initial: OrderDetail; simula
 
   // Jam untuk hitung mundur (1 dtk) — hanya saat menunggu bayar.
   useEffect(() => {
-    if (status !== 'awaiting_payment') return;
+    if (status !== 'awaiting_payment' && status !== 'awaiting_counter_payment') return;
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [status]);
+
+  // Bayar di kasir: render server sengaja tanpa kode bayar; ambil sekali setelah halaman terbuka (lalu ikut polling).
+  const needCounterCode = status === 'awaiting_counter_payment' && !order.payment?.counter_code;
+  useEffect(() => {
+    if (!needCounterCode) return;
+    let active = true;
+    void apiFetch<unknown>(`/api/orders/${order.order_id}`).then((r) => {
+      if (!active) return;
+      if (!r.ok) {
+        if (r.status === 401) goToLogin(`/pesanan/${order.order_id}`);
+        return;
+      }
+      setSkew(clockSkewMs(r.date, Date.now()));
+      const next = parseOrderDetail(r.data);
+      if (next) setOrder(next);
+    });
+    return () => {
+      active = false;
+    };
+  }, [needCounterCode, order.order_id]);
 
   // Polling status.
   useEffect(() => {
@@ -146,6 +167,7 @@ export function OrderView({ initial, simulator }: { initial: OrderDetail; simula
   }
 
   const awaiting = status === 'awaiting_payment';
+  const awaitingCounter = status === 'awaiting_counter_payment';
   const expiresAt = order.payment?.expires_at ?? order.expires_at;
   const left = remainingSeconds(expiresAt, now, skew);
   const qr = awaiting ? order.payment?.qr_string : null;
@@ -172,6 +194,8 @@ export function OrderView({ initial, simulator }: { initial: OrderDetail; simula
         {status === 'failed' && <p className="notice">Pesanan tidak dapat dibuat. Tidak ada tagihan. Silakan coba lagi dari keranjang.</p>}
         {status === 'review' && <p className="notice">Pembayaran Anda sedang diperiksa tim kami. Anda tidak perlu membayar ulang.</p>}
       </section>
+
+      {awaitingCounter && <CounterPayPanel code={order.payment?.counter_code ?? null} secondsLeft={left} amount={order.amount_payable} />}
 
       {awaiting && (
         <section className={`card ${styles.payBox}`} aria-labelledby="bayar-judul">
@@ -228,7 +252,7 @@ export function OrderView({ initial, simulator }: { initial: OrderDetail; simula
         <section className="card stack">
           {confirmCancel ? (
             <>
-              <p style={{ margin: 0 }}>Batalkan pesanan ini? Kode QR tidak bisa dipakai lagi setelah dibatalkan.</p>
+              <p style={{ margin: 0 }}>{awaitingCounter ? 'Batalkan pesanan ini? Kode bayar tidak bisa dipakai lagi setelah dibatalkan.' : 'Batalkan pesanan ini? Kode QR tidak bisa dipakai lagi setelah dibatalkan.'}</p>
               <div className={styles.actions}>
                 <button type="button" className="btn btn-danger" disabled={busy} onClick={() => void cancel()}>
                   {busy ? 'Membatalkan…' : 'Ya, batalkan'}

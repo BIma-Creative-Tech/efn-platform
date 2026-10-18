@@ -89,9 +89,13 @@
         <field name="pattern">.*</field>
     </record>
 
-    <!-- Hanya PT Retail. PT F&B tetap nomenklatur default (tanpa timbangan); bila outlet F&B
-         memakai printer label/timbangan, pilih nomenklatur ini juga lewat UI. -->
+    <!-- Hanya PT ritel: PT Grand Lucky (GL) dan, sejak G20 W-32, Bacha Coffee Retail (BCR; asumsi format label
+         timbangan sama, Q-25 — ubah lewat UI bila berbeda). PT F&B (PB, BCF) tetap nomenklatur default (tanpa
+         timbangan); bila outlet F&B memakai printer label/timbangan, pilih nomenklatur ini juga lewat UI. -->
     <record id="efn_setup_company.company_rtl" model="res.company">
+        <field name="nomenclature_id" ref="barcode_nomenclature_efn_retail"/>
+    </record>
+    <record id="efn_setup_company.company_bcr" model="res.company">
         <field name="nomenclature_id" ref="barcode_nomenclature_efn_retail"/>
     </record>
 </odoo>

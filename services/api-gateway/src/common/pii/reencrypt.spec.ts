@@ -80,7 +80,12 @@ describe('re-encrypt PII (U2)', () => {
       'member.member_ref_enc',
       'consent.ip_enc',
       'online_order_part.pickup_code_enc',
+      'online_order_part.counter_code_enc',
     ]);
+    expect(PII_AAD.ONLINE_COUNTER_CODE).toBe('efn:online_order_part.counter_code_enc:v1');
+    expect(findPiiColumns('online_order_part.counter_code_enc')[0].rowAad!('AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA')).toBe(
+      'efn:online_order_part.counter_code_enc:v2:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    );
     expect(PII_AAD.ONLINE_PICKUP_CODE).toBe('efn:online_order_part.pickup_code_enc:v1');
     expect(findPiiColumns('online_order_part.pickup_code_enc')[0]).toMatchObject({ pk: 'id', aad: PII_AAD.ONLINE_PICKUP_CODE });
     expect(PII_AAD.MEMBER_REF).toBe('efn:member.member_ref_enc:v1');

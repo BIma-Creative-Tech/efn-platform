@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { QUEUES } from '../common/amqp/queues';
 import { ODOO_ONLINE, OdooOnlineApi, QuoteLineIn } from '../odoo-rpc/odoo-online.types';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
-import { PartRow, RefundRow, partStatusFromOdoo, refundRequestedMessage } from './online.model';
+import { PartRow, RefundRow, orderHasPayment, partStatusFromOdoo, refundRequestedMessage } from './online.model';
 import { ONLINE_REPO, OnlineRepo } from './online.repository';
 import { OnlineSagaService } from './online-saga.service';
 
@@ -119,7 +119,8 @@ export class OnlineAdminService {
     if (!part) throw new AdminError('bagian tidak ditemukan');
     if (!['confirmed', 'ready', 'handed_over'].includes(part.status)) throw new AdminError(`status bagian ${part.status} tidak dapat direfund lewat CLI`);
     const order = await this.repo.getOrder(part.order_id);
-    if (!order?.payment_intent_id) throw new AdminError('order tanpa pembayaran');
+    // G20 §12.2 no. 8: order bayar di kasir yang sudah lunas boleh direfund (tanpa intent; uang keluar lewat refund POS)
+    if (!order || !orderHasPayment(order)) throw new AdminError('order tanpa pembayaran');
     // SEC-98: cek porsi di bawah kunci bagian SEBELUM meminta nota kredit (Odoo memposting dokumen akuntansi)
     await this.repo.tx(async (r) => {
       const p = await r.getPart(part.id, true);

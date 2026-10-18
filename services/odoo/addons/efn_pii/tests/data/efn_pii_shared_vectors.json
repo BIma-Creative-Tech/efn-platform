@@ -1,0 +1,90 @@
+{
+  "description": "Vektor bersama BFF <-> Odoo, AAD EFN (ADR-036 §0.3). Kunci uji = SHA-256(label) publik, BUKAN rahasia. Dibangkitkan oleh efn_pii/tools/shared_vectors.py.",
+  "status": "PENDING: nilai expected_* = null sampai lead menjalankan generator di container (lihat README efn_pii, 'Vektor bersama'). Test Odoo mencetak JSON lengkap ke log (penanda EFN_PII_SHARED_VECTORS) selama nilai masih null.",
+  "labels": {
+    "aes_key": "efn-pii-shared-vector:aes-key:v1",
+    "bidx_ikm": "efn-pii-shared-vector:bidx-key:v1",
+    "name_ikm": "efn-pii-shared-vector:name-key:v1"
+  },
+  "key_version": 1,
+  "format": {
+    "text": "efnpii1:|efnpii2: + base64 standar(versi(1) || iv(12) || ciphertext || tag(16))",
+    "aad_v1": "efn:odoo:<tabel>.<kolom>:v1",
+    "aad_v2": "efn:odoo:<tabel>.<kolom>:<id>:v2",
+    "name_token": "base64url_nopad(HMAC-SHA256(HKDF(name_ikm, info))[:16])"
+  },
+  "aead": [
+    {
+      "name": "partner-phone-v1-unbound",
+      "table": "res_partner",
+      "column": "phone",
+      "record_id": null,
+      "aad": "efn:odoo:res_partner.phone:v1",
+      "plaintext": "6281234567890",
+      "iv_label": "efn-pii-shared-vector:iv:partner-phone-v1-unbound",
+      "expected_text": null
+    },
+    {
+      "name": "partner-phone-v2-id42",
+      "table": "res_partner",
+      "column": "phone",
+      "record_id": 42,
+      "aad": "efn:odoo:res_partner.phone:42:v2",
+      "plaintext": "6281234567890",
+      "iv_label": "efn-pii-shared-vector:iv:partner-phone-v2-id42",
+      "expected_text": null
+    },
+    {
+      "name": "partner-name-v2-id42",
+      "table": "res_partner",
+      "column": "name",
+      "record_id": 42,
+      "aad": "efn:odoo:res_partner.name:42:v2",
+      "plaintext": "Budi Santoso",
+      "iv_label": "efn-pii-shared-vector:iv:partner-name-v2-id42",
+      "expected_text": null
+    },
+    {
+      "name": "partner-street-v2-id42",
+      "table": "res_partner",
+      "column": "street",
+      "record_id": 42,
+      "aad": "efn:odoo:res_partner.street:42:v2",
+      "plaintext": "Jl. Melati No. 5, RT 01/RW 02",
+      "iv_label": "efn-pii-shared-vector:iv:partner-street-v2-id42",
+      "expected_text": null
+    },
+    {
+      "name": "pos-order-email-v2-id7",
+      "table": "pos_order",
+      "column": "email",
+      "record_id": 7,
+      "aad": "efn:odoo:pos_order.email:7:v2",
+      "plaintext": "budi.santoso@example.com",
+      "iv_label": "efn-pii-shared-vector:iv:pos-order-email-v2-id7",
+      "expected_text": null
+    }
+  ],
+  "bidx": [
+    {"field": "phone", "info": "efn:odoo:bidx:phone:v1", "normalized": "6281234567890", "expected_hex": null},
+    {"field": "email", "info": "efn:odoo:bidx:email:v1", "normalized": "budi.santoso@example.com", "expected_hex": null},
+    {"field": "vat", "info": "efn:odoo:bidx:vat:v1", "normalized": "0123456789012345", "expected_hex": null}
+  ],
+  "name_tokens": [
+    {"kind": "f", "info": "efn:odoo:nametok:f:v1", "normalized": "budi santoso", "expected": null},
+    {"kind": "w", "info": "efn:odoo:nametok:w:v1", "normalized": "budi", "expected": null},
+    {"kind": "p", "info": "efn:odoo:nametok:p:v1", "normalized": "sant", "expected": null}
+  ],
+  "normalize": [
+    {"input": "Budi Santoso", "expected": "budi santoso"},
+    {"input": "  Hj. Siti   Nurhaliza ", "expected": "hj siti nurhaliza"},
+    {"input": "Al-Fatih", "expected": "al fatih"},
+    {"input": "José Müller", "expected": "jose muller"},
+    {"input": "PT Sumber Rejeki, Budi", "expected": "pt sumber rejeki budi"},
+    {"input": "ＢＵＤＩ", "expected": "budi"},
+    {"input": "Straße", "expected": "strasse"},
+    {"input": "O'Neil", "expected": "o neil"},
+    {"input": "李小龙", "expected": ""}
+  ],
+  "normalize_note": "NFKC -> casefold -> NFKD tanpa diakritik -> [^a-z0-9] jadi spasi -> rapatkan spasi"
+}

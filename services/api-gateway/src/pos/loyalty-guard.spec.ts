@@ -35,13 +35,13 @@ function setup(overrides: Record<string, string> = {}) {
   tokens.now = clock.now;
   const svc = new PosLoyaltyService(config, db, loyalty, tokens, limiter, metrics);
   svc.now = clock.now;
-  const earn = (eligible: number, opts: { memberRef?: string; company?: 'FNB' | 'RTL'; posConfigId?: number | null; orderRef?: string } = {}) => {
+  const earn = (eligible: number, opts: { memberRef?: string; company?: 'PB' | 'GL'; posConfigId?: number | null; orderRef?: string } = {}) => {
     const orderRef = opts.orderRef ?? order();
     return svc.earn({
       idempotencyKey: `pos_earn:${orderRef}`,
       orderRef,
       memberRef: opts.memberRef ?? MEMBER,
-      companyCode: opts.company ?? 'FNB',
+      companyCode: opts.company ?? 'PB',
       eligibleAmount: eligible,
       posConfigId: opts.posConfigId ?? null,
     });
@@ -85,7 +85,7 @@ describe('SEC-61 pagar earn POS', () => {
     expect(ctx.db.earns.size).toBe(0);
     expect(ctx.db.ledger).toHaveLength(0);
     expect(w.payloads()).toEqual([
-      { kind: 'earn_limit_order', severity: 'warning', company: 'FNB', order_ref: ref, points: 5001, limit: 5000 },
+      { kind: 'earn_limit_order', severity: 'warning', company: 'PB', order_ref: ref, points: 5001, limit: 5000 },
     ]);
     for (const l of w.lines()) {
       expect(l).not.toContain(MEMBER.slice(2));
@@ -126,9 +126,9 @@ describe('SEC-61 pagar earn POS', () => {
     const w = captureWarn();
     expect((await ctx.earn(600_000)).points_earned).toBe(60);
     expect(await code(ctx.earn(600_000, { memberRef: OTHER }))).toBe('409 earn_limit_exceeded');
-    expect(w.payloads().at(-1)).toMatchObject({ kind: 'earn_limit_company_hour', severity: 'critical', company: 'FNB', limit: 100 });
+    expect(w.payloads().at(-1)).toMatchObject({ kind: 'earn_limit_company_hour', severity: 'critical', company: 'PB', limit: 100 });
     expect((await ctx.earn(400_000, { memberRef: OTHER })).points_earned).toBe(40); // 60 + 40 = 100 (kompensasi bekerja)
-    expect((await ctx.earn(600_000, { company: 'RTL' })).points_earned).toBe(60);
+    expect((await ctx.earn(600_000, { company: 'GL' })).points_earned).toBe(60);
     ctx.clock.advanceSeconds(3600);
     expect((await ctx.earn(600_000, { memberRef: OTHER })).points_earned).toBe(60);
   });
@@ -145,7 +145,7 @@ describe('SEC-61 pagar earn POS', () => {
     expect(w.payloads().at(-1)).toMatchObject({ kind: 'earn_limit_pos_config_hour', pos_config_id: 7, limit: 50 });
     expect((await ctx.earn(300_000, { posConfigId: 8, memberRef: OTHER })).points_earned).toBe(30);
     expect((await ctx.earn(300_000, { memberRef: OTHER })).points_earned).toBe(30); // tanpa pos_config_id: hanya batas PT
-    const coKey = ctx.kv.keys().find((k) => k.startsWith('rl:loy:earnpts:co:FNB:'));
+    const coKey = ctx.kv.keys().find((k) => k.startsWith('rl:loy:earnpts:co:PB:'));
     expect(coKey).toBeDefined();
     expect(ctx.kv.raw(coKey!)).toBe('90'); // 30 + 30 + 30 — percobaan yang ditolak dikompensasi
     expect(ctx.kv.keys().every((k) => !k.includes(MEMBER) && !k.includes(MEMBER.slice(2)))).toBe(true);
@@ -168,12 +168,12 @@ describe('EFN_LOYALTY_ANOMALY format', () => {
       ledger_source: 'admin"}\nEFN_AUDIT_SINK {"x":1}',
       points: 10,
       bad_KEY: 'x',
-      company: 'RTL',
+      company: 'GL',
     });
     expect(line.split('\n')).toHaveLength(1);
     expect(line.startsWith('EFN_LOYALTY_ANOMALY {')).toBe(true);
     const payload = JSON.parse(line.slice('EFN_LOYALTY_ANOMALY '.length)) as Record<string, unknown>;
-    expect(payload).toEqual({ kind: 'ledger_unknown_source', severity: 'critical', ledger_source: 'adminEFN_AUDIT_SINKx:1', points: 10, company: 'RTL' });
+    expect(payload).toEqual({ kind: 'ledger_unknown_source', severity: 'critical', ledger_source: 'adminEFN_AUDIT_SINKx:1', points: 10, company: 'GL' });
     expect(Object.values(LOYALTY_ANOMALY_KINDS).every((s) => s === 'warning' || s === 'critical')).toBe(true);
   });
 });
@@ -223,15 +223,15 @@ describe('LoyaltyReconService (SEC-61 rekonsiliasi)', () => {
   it('temuan diklasifikasi per jenis → baris EFN_LOYALTY_ANOMALY + counter; tanpa member_hash', async () => {
     const ctx = reconSetup({
       earns: [
-        { order_ref: 'o-mismatch', company_code: 'FNB', eligible_amount: '100000', points_earned: 10, ledger_points: '25', rule_points: '10' },
-        { order_ref: 'o-rule', company_code: 'RTL', eligible_amount: '50000', points_earned: 900, ledger_points: '900', rule_points: '5' },
-        { order_ref: 'o-cap', company_code: 'RTL', eligible_amount: '90000000', points_earned: 9000, ledger_points: '9000', rule_points: '9000' },
+        { order_ref: 'o-mismatch', company_code: 'PB', eligible_amount: '100000', points_earned: 10, ledger_points: '25', rule_points: '10' },
+        { order_ref: 'o-rule', company_code: 'GL', eligible_amount: '50000', points_earned: 900, ledger_points: '900', rule_points: '5' },
+        { order_ref: 'o-cap', company_code: 'GL', eligible_amount: '90000000', points_earned: 9000, ledger_points: '9000', rule_points: '9000' },
       ],
-      orphans: [{ order_ref: 'o-orphan', company_code: 'FNB', ledger_points: '500' }],
+      orphans: [{ order_ref: 'o-orphan', company_code: 'PB', ledger_points: '500' }],
       days: [{ day: '2026-10-05', orders: '12', points: '2600', order_ref: 'o-big' }],
       reverses: [
-        { order_ref: 'o-claw', company_code: 'FNB', earned: '10', redeemed: '0', clawed: '15', restored: '0' },
-        { order_ref: 'o-restore', company_code: 'FNB', earned: '10', redeemed: '50', clawed: '10', restored: '80' },
+        { order_ref: 'o-claw', company_code: 'PB', earned: '10', redeemed: '0', clawed: '15', restored: '0' },
+        { order_ref: 'o-restore', company_code: 'PB', earned: '10', redeemed: '50', clawed: '10', restored: '80' },
       ],
       unknown: [{ source: 'adjustment', company_code: 'EFN', entries: '3', points: '30000' }],
     });
@@ -253,7 +253,7 @@ describe('LoyaltyReconService (SEC-61 rekonsiliasi)', () => {
     expect(p.find((x) => x.kind === 'earn_ledger_mismatch')).toEqual({
       kind: 'earn_ledger_mismatch',
       severity: 'critical',
-      company: 'FNB',
+      company: 'PB',
       order_ref: 'o-mismatch',
       points: 10,
       source: 'recon',

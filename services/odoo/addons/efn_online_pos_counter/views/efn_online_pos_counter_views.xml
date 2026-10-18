@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- E-45: daftar baca-saja untuk audit (POS manager / Sales manager / Billing). Tanpa menu (dibuka dari aksi). -->
+<odoo>
+    <record id="efn_online_counter_settlement_view_list" model="ir.ui.view">
+        <field name="name">efn.online.counter.settlement.list</field>
+        <field name="model">efn.online.counter.settlement</field>
+        <field name="arch" type="xml">
+            <list create="false" edit="false" delete="false">
+                <field name="create_date"/>
+                <field name="online_order_id"/>
+                <field name="pos_order_id"/>
+                <field name="config_id"/>
+                <field name="amount"/>
+                <field name="online_state"/>
+                <field name="refund_pos_order_id" optional="show"/>
+                <field name="currency_id" column_invisible="1"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_efn_online_counter_settlement" model="ir.actions.act_window">
+        <field name="name">Pelunasan pesanan online di kasir</field>
+        <field name="res_model">efn.online.counter.settlement</field>
+        <field name="view_mode">list</field>
+    </record>
+
+    <record id="efn_online_counter_lookup_view_list" model="ir.ui.view">
+        <field name="name">efn.online.counter.lookup.list</field>
+        <field name="model">efn.online.counter.lookup</field>
+        <field name="arch" type="xml">
+            <list create="false" edit="false" delete="false" decoration-danger="result != 'ok'">
+                <field name="create_date"/>
+                <field name="config_id"/>
+                <field name="session_id"/>
+                <field name="user_id"/>
+                <field name="online_order_id"/>
+                <field name="result"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_efn_online_counter_lookup" model="ir.actions.act_window">
+        <field name="name">Lookup kode bayar di kasir</field>
+        <field name="res_model">efn.online.counter.lookup</field>
+        <field name="view_mode">list</field>
+    </record>
+</odoo>

@@ -1,0 +1,4 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_pos_return_approval_pos_manager,efn.pos.return.approval pos manager,model_efn_pos_return_approval,point_of_sale.group_pos_manager,1,0,0,0
+access_efn_pos_return_approval_system,efn.pos.return.approval system,model_efn_pos_return_approval,base.group_system,1,0,0,0
+access_efn_pos_return_pin_wizard_user,efn.pos.return.pin.wizard user,model_efn_pos_return_pin_wizard,base.group_user,1,1,1,0

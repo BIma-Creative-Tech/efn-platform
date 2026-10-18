@@ -275,7 +275,7 @@ scenario_e() {
   # Hanya bila BFF dev dijalankan dengan MIGRATION_ENABLED=true (endpoint 404 bila tidak; runbook E2E_SMOKE_REPORT).
   if [[ "$MIGRATION_ON" == 1 ]]; then
     r="$(migrate members "{\"source_ref\":\"$(newuuid)\",\"member_ref\":\"$PHONE\"}")"
-    r="$r ; $(migrate opening-balance "{\"source_ref\":\"$(newuuid)\",\"member_ref\":\"$PHONE\",\"points\":10,\"company_code\":\"FNB\"}")"
+    r="$r ; $(migrate opening-balance "{\"source_ref\":\"$(newuuid)\",\"member_ref\":\"$PHONE\",\"points\":10,\"company_code\":\"PB\"}")"   # G20: FNB -> PB (§12.1)
     check "e.migration_member_deleting_409" "$([[ "$r" == *member_deleting*"|409 ; "*member_deleting*"|409" ]] && echo 1 || echo 0)" "$r"
   else
     echo "   (cek migrasi SEC-65 dilewati: MIGRATION_ENABLED != true di $BFF)"
@@ -615,28 +615,29 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   check "o.odoo_channel_setup" "$([[ "$(field ok "$r")" == true && "$(field tech_user_groups_ok "$r")" == true && "$(field staff_is_admin "$r")" == false ]] && echo 1 || echo 0)" "$r"
   # G19: kanal dev = reservasi saat place (§11.1), batas bayar Odoo 70 menit, program promo dev SMOKE10 sah (§11.2 no. 7)
   check "o.g19_channel_confirm_70_promo_program" "$([[ "$(field stock_hold_mode "$r")" == confirm && "$(field payment_timeout_minutes "$r")" == 70 && "$(field promo_program_ok "$r")" == true ]] && echo 1 || echo 0)" "$r"
-  n="$(tr -d '\r\n' < "${ROOT}/secrets/odoo_api_key_online_rtl.txt" | grep -cE '^[0-9a-f]{40}$' || true)"
-  check "o.api_key_real_not_placeholder" "$([[ "$n" == 1 ]] && echo 1 || echo 0)" "secrets/odoo_api_key_online_rtl.txt 40 hex (nilai tidak dicetak)"
+  # G20 (docs/04 §12.1): kanal dev = GL (kode PT), user teknis efn_online_gl, secret odoo_api_key_online_gl
+  n="$(tr -d '\r\n' < "${ROOT}/secrets/odoo_api_key_online_gl.txt" | grep -cE '^[0-9a-f]{40}$' || true)"
+  check "o.api_key_real_not_placeholder" "$([[ "$n" == 1 ]] && echo 1 || echo 0)" "secrets/odoo_api_key_online_gl.txt 40 hex (nilai tidak dicetak)"
 
   # 0b. Gateway + key nyata: 10 path sah -> jawaban APLIKASI Odoo (200 / galat bisnis), bukan 401/403 atau deny filter.
   #     Key dibaca DI DALAM container curl (header file), tidak lewat argv/log.
   cp "${ROOT}/secrets/efn_ca_crt.txt" "${WORK}/efn_ca.crt"
   r="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal -v "${WORK_W}:/work:ro" \
-      -v "${SECRETS_W}/odoo_api_key_online_rtl.txt:/s/k:ro" -v "${SECRETS_W}/tls_api_gateway_crt.txt:/s/c:ro" \
+      -v "${SECRETS_W}/odoo_api_key_online_gl.txt:/s/k:ro" -v "${SECRETS_W}/tls_api_gateway_crt.txt:/s/c:ro" \
       -v "${SECRETS_W}/tls_api_gateway_key.txt:/s/ck:ro" --entrypoint /bin/sh \
       curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -c '
     printf "Authorization: bearer %s\n" "$(tr -d "\r\n" < /s/k)" > /tmp/h
     U=00000000-0000-4000-8000-000000000001
-    for pb in "efn.online.channel/efn_online_catalog|{\"channel_code\":\"RTL\",\"limit\":1}" \
-      "efn.online.channel/efn_online_stock|{\"channel_code\":\"RTL\",\"outlet_code\":\"TOKO-01\",\"product_ids\":[1]}" \
-      "efn.online.channel/efn_online_image|{\"channel_code\":\"RTL\",\"tmpl_id\":1,\"size\":512}" \
-      "efn.online.channel/efn_online_quote|{\"channel_code\":\"RTL\",\"outlet_code\":\"TOKO-01\",\"fulfilment\":\"pickup\",\"lines\":[]}" \
-      "efn.online.order/efn_online_place|{\"channel_code\":\"RTL\",\"order\":{}}" \
-      "efn.online.order/efn_online_mark_paid|{\"channel_code\":\"RTL\",\"platform_order_ref\":\"$U\",\"payment\":{}}" \
-      "efn.online.order/efn_online_cancel|{\"channel_code\":\"RTL\",\"platform_order_ref\":\"$U\",\"reason\":\"ops\",\"idempotency_key\":\"online:cancel:$U\"}" \
-      "efn.online.order/efn_online_refund|{\"channel_code\":\"RTL\",\"platform_order_ref\":\"$U\",\"refund\":{}}" \
-      "efn.online.order/efn_online_refund_settled|{\"channel_code\":\"RTL\",\"refund_ref\":\"$U\",\"settlement\":{}}" \
-      "efn.online.order/efn_online_status|{\"channel_code\":\"RTL\",\"platform_order_refs\":[\"$U\"]}"; do
+    for pb in "efn.online.channel/efn_online_catalog|{\"channel_code\":\"GL\",\"limit\":1}" \
+      "efn.online.channel/efn_online_stock|{\"channel_code\":\"GL\",\"outlet_code\":\"TOKO-01\",\"product_ids\":[1]}" \
+      "efn.online.channel/efn_online_image|{\"channel_code\":\"GL\",\"tmpl_id\":1,\"size\":512}" \
+      "efn.online.channel/efn_online_quote|{\"channel_code\":\"GL\",\"outlet_code\":\"TOKO-01\",\"fulfilment\":\"pickup\",\"lines\":[]}" \
+      "efn.online.order/efn_online_place|{\"channel_code\":\"GL\",\"order\":{}}" \
+      "efn.online.order/efn_online_mark_paid|{\"channel_code\":\"GL\",\"platform_order_ref\":\"$U\",\"payment\":{}}" \
+      "efn.online.order/efn_online_cancel|{\"channel_code\":\"GL\",\"platform_order_ref\":\"$U\",\"reason\":\"ops\",\"idempotency_key\":\"online:cancel:$U\"}" \
+      "efn.online.order/efn_online_refund|{\"channel_code\":\"GL\",\"platform_order_ref\":\"$U\",\"refund\":{}}" \
+      "efn.online.order/efn_online_refund_settled|{\"channel_code\":\"GL\",\"refund_ref\":\"$U\",\"settlement\":{}}" \
+      "efn.online.order/efn_online_status|{\"channel_code\":\"GL\",\"platform_order_refs\":[\"$U\"]}"; do
       p="${pb%%|*}"; d="${pb#*|}"
       c=$(curl -sS -o /tmp/b -D /tmp/hd -m 20 --cacert /work/efn_ca.crt --cert /s/c --key /s/ck -X POST \
         -H "Content-Type: application/json" -H @/tmp/h --data "$d" "https://odoo-rpc-gateway:8443/json/2/$p" -w "%{http_code}")
@@ -650,7 +651,7 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
 
   # Katalog BFF tersinkron dari E-28 (job tiap ONLINE_CATALOG_SYNC_SECONDS; setup baru -> tunggu siklus berikut)
   for _ in $(seq 1 40); do
-    n="$(psql_platform -c "select count(*) from platform.online_catalog_item where channel_code='RTL' and deleted_at is null and data->>'name' like 'SMOKE %'")"
+    n="$(psql_platform -c "select count(*) from platform.online_catalog_item where channel_code='GL' and deleted_at is null and data->>'name' like 'SMOKE %'")"
     [[ "$n" -ge 4 ]] && break; sleep 10
   done
   check "o.catalog_synced_from_odoo" "$([[ "$n" -ge 4 ]] && echo 1 || echo 0)" "item SMOKE di salinan katalog BFF=$n"

@@ -692,3 +692,84 @@ README diperbarui: `src/cart/README.md` (rate limit per kode, log tanpa tag, iss
 4. SEC-133: kode kanal yang berakhiran `-FILE` (mis. `RTL-FILE`) akan bertabrakan dengan nama `…_FILE` kanal `RTL`. Regex §10.2 mengizinkannya secara teori. Usul ke architect: larang akhiran `-FILE` di §10.2 (belum diubah di kode agar kontrak tidak bergeser).
 
 **Belum:** Jest/tsc/eslint belum dijalankan oleh agent ini. Sisi Odoo (SEC-132 log INFO + tag SHA-256 di `efn_online_channel.py`/`efn_online_common.py`, SEC-131 batas qty) di luar cakupan.
+
+## Gelombang 20 — 6 entitas, bayar di kasir, batas berat (docs/04 §12.1–§12.3, L-48/L-50/L-52/L-53/L-55; 18 Okt 2026)
+
+Dasar: kontrak v7.0 §12 (menang atas §1–§11), ADR-001 (revisi 6 entitas), ADR-016 (vendor belum dipilih), ADR-019/034 (Proposed). Branch `chore/wave-20`, **tanpa commit**. **Build (tsc), lint (eslint), dan Jest BELUM dijalankan lokal** (agent tanpa shell; lead menjalankan Jest di container). Migrasi SQL `09-platform-g20.sql` **belum dijalankan** ke PostgreSQL. Semua di bawah = hasil penulisan + penalaran, bukan hasil eksekusi.
+
+### File
+- Diubah (kode): `loyalty/loyalty.service.ts` (`COMPANY_CODES` = EFN/GL/PB/BCR/BCF/FARM), `catalog/{catalog.service.ts, catalog-sync.service.ts}`, `config/app-config.ts`, `common/pii/{crypto.ts, pii-columns.ts}`, `odoo-rpc/{odoo-online.types.ts, odoo-online.parse.ts, odoo-online.mock.ts, online-errors.ts, online-metrics.ts}`, `orders/{online.model.ts, online.repository.ts, orders.service.ts, orders.controller.ts, order-events.service.ts, online-saga.service.ts, online-jobs.service.ts, online-admin.service.ts, pickup-code.ts, testing/online-fakes.ts}`, `privacy/erasure.service.ts`.
+- Baru: `orders/online-counter.spec.ts`, `infra/postgres/init/09-platform-g20.sql`.
+- Diubah (SQL asli, L-53): CHECK `company_code` di `infra/postgres/init/{02,03,05,07,08}-*.sql` → daftar baru.
+- Spec diperbarui (kode lama → GL/PB/BCR/BCF; sisa `RTL`/`FNB` hanya di test yang menguji penolakan kode lama): `orders/{online-saga, online-routes, online-observability, online.model}.spec.ts`, `cart/{cart, promo}.spec.ts`, `catalog/catalog.spec.ts`, `config/online-config.spec.ts` (ditulis ulang), `odoo-rpc/json2-client.spec.ts`, `common/pii/reencrypt.spec.ts`, `loyalty/loyalty.spec.ts`, `pos/{pos-loyalty, loyalty-guard, pos.service, pos.controller}.spec.ts`, `otp/otp.service.spec.ts`, `migration/migration.spec.ts`, `payments/{payments, online-payments}.spec.ts`, `privacy/privacy.spec.ts`.
+- README: `orders`, `catalog`, `cart`, `odoo-rpc`, `payments`, `loyalty`, `privacy`, `migration`, `pos` (contoh log). Tidak ada `.env.example` di dalam `services/api-gateway` (env compose = devsecops).
+
+### Env BFF baru / berubah
+| Env | Default | Catatan |
+|---|---|---|
+| `ONLINE_CHANNELS` | **`GL`** (dari `RTL`) | kanal = kode PT: `GL,PB,BCR,BCF` |
+| `ONLINE_PAYMENT_METHODS` | `qris,counter` di APP_ENV=dev/test; **`qris`** di staging/production | L-55. Production + `ONLINE_ENABLED=true` + `qris` → wajib `PAYMENT_PROVIDER=xendit\|midtrans` (gagal start, pesan tanpa nilai rahasia). Pilot: `counter` + `PAYMENT_PROVIDER=disabled`. Juga fallback `payment_modes` kanal |
+| `ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER` | 1 (1..10) | §12.2 no. 2 |
+| `ODOO_API_KEY_ONLINE_{GL,PB,BCR,BCF}_FILE` | — | secret `odoo_api_key_online_{gl,pb,bcr,bcf}` (mekanisme lama, nama baru) |
+
+### Migrasi `09-platform-g20.sql` (idempoten, satu transaksi, `SET LOCAL ROLE efn_platform_owner`)
+1. 7 CHECK `<tabel>_company_code_check` (loyalty_ledger, payment_intent, loyalty_reservation, loyalty_pos_earn, online_order_part, payment_intent_portion, loyalty_pos_reverse): DROP IF EXISTS (+ CHECK lain bernama beda yang masih memuat `'RTL'`) → ADD `IN ('EFN','GL','PB','BCR','BCF','FARM') NOT VALID` → `VALIDATE` bila tidak ada baris kode lama (selain itu `RAISE WARNING` + tetap NOT VALID; reset dev).
+2. `online_order.payment_method text NOT NULL DEFAULT 'qris'` + `ck_online_order_payment_method` (counter ⇒ `payment_intent_id IS NULL`).
+3. `online_order_status_check` diganti (+ `awaiting_counter_payment`); indeks `ix_online_order_counter_open`.
+4. `online_order_part.counter_code_enc bytea` + CHECK bentuk ciphertext; indeks parsial.
+5. `online_refund.payment_intent_id DROP NOT NULL` (refund order counter).
+Catatan "ADD saja": langkah 1 dan 3 harus DROP+ADD constraint (melonggarkan/mengganti daftar), langkah 5 melonggarkan NOT NULL — tidak ada data yang diubah/dihapus. Hak akses tidak berubah (efn_bff sudah DML tingkat tabel).
+
+### Bentuk respons klien (frontend)
+- `POST /v1/orders` body `{ quote_id, accept_total, payment_method?: "qris" | "counter" }` (default `qris`; nilai lain → `400 invalid_request`). Error baru: `422 counter_payment_single_part_only`, `422 payment_method_unavailable`, `429 too_many_open_orders` (pesan khusus counter).
+- Checkout counter `201` dan `GET /v1/orders/:id` selama `awaiting_counter_payment`: `payment` **persis** `{ "method": "counter", "counter_code": "ABCD-EFGH", "expires_at": "<iso>" }`; status lain → `{ "method": "counter", "expires_at": "<iso>" }`. Field order lain sama dengan QRIS (`order_id`, `status: "awaiting_counter_payment"`, `amount_payable`, `currency`, `created_at`, `expires_at`, `paid_at`, `parts[]`). QRIS tetap `{ method: "qris", status, qr_string?, expires_at }` (tipe TS kini union — frontend cek `payment.method`).
+- `GET /v1/orders` item + `payment_method`. `POST /v1/orders/:id/cancel` berlaku untuk `awaiting_counter_payment` → `{ status: "cancelled" }`. Setelah lunas: `status` `fulfilling`, kode ambil lewat `GET …/pickup-code`.
+- `GET /v1/catalog/channels` item + `payment_modes: ("qris"|"counter")[]` (tipe nullable; BFF selalu mengisi array; `[]` = kanal belum bisa dipesan dengan metode aktif).
+- Produk katalog + `weight_kg: number | null`.
+- `groups[].issues[]` quote: `{ product_id: null, code: "weight_limit" }`, `{ product_id: <id>, code: "weight_missing" }` → checkout `409 cart_has_issues`.
+- Dev: `POST /v1/orders/:id/simulate-payment {status:"paid"}` untuk order counter (stub Odoo saja).
+
+### Asumsi terhadap Odoo (efn-odoo-engineer A/C, E-43/E-45/E-35b)
+1. Blok `channel` `efn_online_catalog` membawa `payment_modes` (array atau Char koma); tidak ada → BFF memakai `ONLINE_PAYMENT_METHODS`. Item katalog membawa `weight_kg` (null bila kosong).
+2. **(Diganti L-56)** BFF membuat kode bayar dan mengirimnya di `efn_online_place(order.payment_mode="counter", order.counter_code)`; Odoo menyimpan hash, tidak mengembalikannya (field di respons diabaikan). Kode ikut payload idempotensi Odoo — replay BFF memakai kode tersimpan. Kedua field tidak dikirim untuk QRIS. Counter tanpa kode / QRIS dengan kode → asumsi `invalid_input`.
+3. Mode tidak diizinkan kanal → `UserError efn_online:invalid_input` (→ 503 + alert; BFF mencegah lebih dulu dari salinan katalog).
+4. Event `paid` pelunasan POS: `{ event: "paid", state: "confirmed"|"stock_short"|"review"|"paid", payment: { method: "counter" } }`, `seq` naik. BFF juga menerima `confirmed`/`stock_short` tanpa `payment` pada order counter.
+5. `efn_online_status` melaporkan state pasca-pelunasan (dipakai sebelum kedaluwarsa & pull 15 menit). `efn_online_mark_paid` jalur BFF tidak pernah dipanggil untuk counter (stub menolaknya).
+6. Refund counter: `efn_online_refund` (CS) / `efn_online_cancel` (stock_short) seperti biasa; `efn_online_refund_settled` diterima dengan `provider_refund_ref` = ref refund order POS.
+7. Issue berat sesuai §12.3 (bentuk salah → 503 fail-closed).
+8. Kode bayar Odoo kedaluwarsa 70 menit vs BFF 60 menit: BFF menanyakan status sebelum kedaluwarsa, lalu `efn_online_cancel`; lookup POS sesudah cancel harus ditolak Odoo. Bayar yang lolos di jendela balapan → bagian `review` + anomali `late_counter_payment`.
+
+### Untuk agent lain
+- **devsecops:** (a) `scripts/deploy.sh:430-431` daftar migrasi WAJIB belum memuat `09-platform-g20.sql` (glob `[0-9][0-9]-*.sql` sudah menjalankannya, tetapi bundel tanpa 09 tidak akan gagal-cepat) — mohon tambahkan; (b) compose/.env.example/deploy.yml: `ONLINE_CHANNELS` default `GL`, `ONLINE_PAYMENT_METHODS` (production pilot `counter` + `PAYMENT_PROVIDER=disabled`), `ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER`; (c) secret `odoo_api_key_online_{gl,pb,bcr,bcf}`; (d) `scripts/lib/deploy-validate.sh` sebaiknya meniru gerbang L-55.
+- **frontend:** bentuk di atas; `counter_code` jangan disimpan di storage/URL/RSC payload (L-52) — ambil ulang dari `GET /v1/orders/:id`.
+- **qa:** stub kanal `GL` (qris+counter), `PB` (qris), `BCR` (qris+counter), `BCF` (counter, batas 10 kg); berat demo 11=5 kg, 12=1,9, 13=0,5, 14=kosong; produk 13 → stock_short saat pelunasan.
+- **security-reviewer (r13):** kode bayar = rahasia (AES-256-GCM AAD per baris, `pii-columns` → ikut re-encrypt & cek kunci pensiun; dihapus saat keluar `placed`/order ditutup; tidak di log/metrik/event). Event metode tidak cocok → 409 + anomali critical.
+
+### Spec G20 (belum dijalankan)
+`orders/online-counter.spec.ts` (checkout counter tanpa provider, bentuk payment persis, AAD, idempotensi metode, 422 multi-bagian/metode tak diizinkan/L-55, 429 batas counter, kode bayar BFF L-56, issue berat → 409; event paid → fulfilling, confirmed tanpa payment, mismatch 409, stock_short → refund manual tanpa gateway, simulate dev; batal tanpa refund, kedaluwarsa, event hilang dipulihkan sebelum kedaluwarsa & oleh pull status, Odoo tak terjangkau, bayar terlambat → review, retensi; refund CS → approver → manual_required → settle POS → settled; refund order belum lunas ditolak), `online.model.spec.ts`, `online-routes.spec.ts` (parser `payment_method`), `cart.spec.ts` (weight_limit/weight_missing/policy ignore/quote_hash), `catalog.spec.ts` (kanal G20, kode lama disembunyikan, `payment_modes` ∩ config, `weight_kg`, stub), `json2-client.spec.ts` (parser counter_code/berat/payment_modes, `payment_mode` hanya untuk counter), `online-config.spec.ts` (default GL, batas counter, L-55 production), `loyalty.spec.ts` (COMPANY_CODES), `reencrypt.spec.ts` (registry kolom baru).
+
+### Risiko / sisa
+- R-T10: tanpa intent, Odoo = sumber kebenaran pelunasan; event hilang dipulihkan (pre-expiry status check + pull 15 menit). Jendela balapan kasir vs kedaluwarsa BFF tersisa (→ `review`, ops).
+- Stock griefing: order counter mencadangkan stok tanpa uang muka — dibatasi 1 order counter terbuka per member + batas umum 2; belum ada batas per IP/perangkat.
+- `payment_modes` dari salinan katalog bisa tertinggal ≤ 5 menit + cache 30 s.
+- (Diperbaiki L-56) Metrik `efn_online_events_total{outcome}` kini memberi 409 metode bayar label `payment_method_mismatch`; 409 lain tetap `company_mismatch`.
+
+### Tindak lanjut L-56 (kode bayar dibuat BFF)
+- `orders.service.ts`: kode bayar dibuat di transaksi checkout (sama dengan kode ambil, dijamin berbeda), `counter_code_enc` di-INSERT sebelum place; place mengirim `order.counter_code`; pemeriksaan "Odoo tanpa counter_code → 503" dihapus.
+- `odoo-online.types.ts` (`PlaceInput.counter_code?`, `PlaceResult.counter_code` dihapus), `odoo-online.parse.ts` (field respons diabaikan), `odoo-online.mock.ts` (menyimpan `counterSha` saja, wajib kode untuk counter, `payAtCounter(ref, code?)` cocok hash), `pickup-code.ts` (`normalizeCounterCode` dihapus), `order-events.service.ts` (label metrik).
+- Spec: `online-counter.spec.ts` (kode tersimpan sebelum place = kode terkirim = kode tampil; Odoo hanya hash; kode salah ditolak; QRIS tanpa kode; place gagal → kode dihapus; label metrik), `json2-client.spec.ts` (respons counter_code diabaikan; payload hanya untuk counter). Belum dijalankan.
+
+### Tindak lanjut L-57 (review bayar terlambat di kasir, tanpa mark_paid/refund_settled untuk counter)
+- `order-events.service.ts`: parse `review_reason` (allowlist `counter_paid_after_cancel|counter_paid_after_expiry`, lainnya null; masuk sidik bila ada). Event `review` + alasan itu pada order counter `cancelled|expired|failed` → bagian `cancelled → review` (opsi `lateCounterReview` di `applyPart`, pengecualian monoton), anomali critical `late_counter_payment`, tanpa refund/outbox. Selain itu monoton biasa (`ignored_stale`). Event `refunded|cancelled` dengan `refund_ref` refund counter yang menunggu → `settled` (`saga.settleCounterRefund`, cek porsi).
+- `online-saga.service.ts`: `ApplyOptions.lateCounterReview`; `settleCounterRefund`; jalur `gateway_done` tidak memanggil `efn_online_refund_settled` untuk refund tanpa intent (counter). `mark_paid` memang tidak pernah dipanggil untuk counter (butuh intent).
+- `orders.service.ts` `customerStatus`: order counter ditutup dengan bagian `review` → pelanggan melihat `review`.
+- `odoo-online.parse.ts`: `payment_modes` hanya array string (Char koma kini `invalid_response`).
+- Spec: `online-counter.spec.ts` (after_cancel / after_expiry → review + anomali + tampil review + `order_in_review` + tanpa refund; review tanpa alasan / alasan lain / order QRIS / event lain tetap ditolak; refund settle lewat event `refunded`; refund_settled & mark_paid 0 panggilan), `json2-client.spec.ts` & `catalog.spec.ts` (payment_modes array). Belum dijalankan.
+- ~~Gap status settle dari `efn_online_status`~~ → digantikan L-58 di bawah.
+
+### Ralat L-58 (event `refund_settled`)
+- Settle dari event `refunded`/`cancelled` (L-57) **dihapus** — itu hanya refund diminta.
+- `order-events.service.ts`: `refund_settled` masuk `KNOWN_EVENTS`; payload `refund` divalidasi ketat (`refund_ref` 1..128, `amount` bulat ≥ 1, `provider_refund_ref` `^pos:<uuid>$`, `settled_at` opsional; selain itu 400) → `ev.settlement` (masuk sidik). Hasil bukan `settled` → `ignored_stale` + anomali `refund_settled_rejected` (`code` = alasan; critical untuk `qris`/`mismatch`).
+- `online-saga.service.ts` `settleCounterRefund(r, order, part, settlement)`: cocok `refund_ref` di bagian, refund tanpa intent, order counter, status `manual_required|odoo_done`, nominal persis, ≤ porsi → `settled` (`provider_refund_ref` dari Odoo, `settled_at` ≤ sekarang) + `refunded_amount` + notifikasi. `approval_required` → `unapproved` (tidak di-settle sebelum persetujuan CS).
+- Spec `online-counter.spec.ts`: `refunded` tidak settle; nominal beda ditolak; cocok → settled + notifikasi; replay → duplicate; event baru → ignored_stale tanpa dobel; refund QRIS → ignored_stale + critical; ref tak dikenal; payload salah → 400. Belum dijalankan.
+- Belum: lookup kode & sync pelunasan POS (Odoo C), batas per IP order counter, UI CS untuk refund POS.

@@ -35,7 +35,7 @@ def test_requested_limit_is_capped() -> None:
 
 
 def test_qualified_view_and_cte_and_union_allowed() -> None:
-    guard_sql("SELECT day, revenue FROM efn_dwh.v_sales_daily WHERE brand = 'FNB'", CONFIG)
+    guard_sql("SELECT day, revenue FROM efn_dwh.v_sales_daily WHERE brand = 'PB'", CONFIG)
     guard_sql("WITH t AS (SELECT * FROM v_competitor_prices) SELECT count() FROM t", CONFIG)
     result = guard_sql(
         "SELECT day FROM v_sales_daily UNION ALL SELECT day FROM v_loyalty_daily",
@@ -211,7 +211,7 @@ SCOPED_CTE_OK = [
     "WITH t AS (SELECT * FROM v_sales_daily) SELECT * FROM (SELECT day FROM t) AS s",
     "WITH a AS (SELECT * FROM v_sales_daily), b AS (SELECT day FROM a) SELECT * FROM b",
     "SELECT * FROM v_sales_daily WHERE day IN (WITH t AS (SELECT day FROM v_loyalty_daily) SELECT day FROM t)",
-    "SELECT * FROM v_sales_daily WHERE brand IN ('FNB', 'RTL') AND store_id NOT IN (1, 2)",
+    "SELECT * FROM v_sales_daily WHERE brand IN ('PB', 'GL', 'BCR', 'BCF') AND store_id NOT IN (1, 2)",
     "WITH toDate('2026-10-01') AS d0 SELECT * FROM v_sales_daily WHERE day >= d0",
     "SELECT a.day FROM v_sales_daily AS a JOIN v_loyalty_daily AS b USING (day)",
 ]

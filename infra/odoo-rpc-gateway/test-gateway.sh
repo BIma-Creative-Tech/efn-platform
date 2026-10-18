@@ -75,7 +75,7 @@ H_AUTH="Authorization: bearer $TOKEN"
 post() { # $1 nama, $2 harapan, $3 path, sisa = argumen tambahan
   n="$1"; w="$2"; p="$3"; shift 3
   # shellcheck disable=SC2086
-  run "$n" "$w" $BFF -X POST -H "$H_CT" -H "$H_AUTH" --data '{"channel_code":"RTL","platform_order_refs":[]}' "$@" "$GW$p"
+  run "$n" "$w" $BFF -X POST -H "$H_CT" -H "$H_AUTH" --data '{"channel_code":"GL","platform_order_refs":[]}' "$@" "$GW$p"
 }
 
 # ── Identitas klien (mTLS) ──────────────────────────────────────────────────────────────────────────────

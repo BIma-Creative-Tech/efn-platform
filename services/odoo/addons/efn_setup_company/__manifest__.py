@@ -1,12 +1,14 @@
 {
     "name": "EFN Setup - Company & Pajak",
     "summary": (
-        "Konfigurasi data-only: 4 company (Holding EFN, PT Grand Lucky, PT Paris Baguette, FARM), IDR, CoA l10n_id; "
-        "PB1 configurable (grup + default + fiscal position per kota/layanan); pembulatan pajak per dokumen."
+        "Konfigurasi data-only: 6 company (Holding EFN, PT Grand Lucky, PT Paris Baguette, Bacha Coffee Retail, "
+        "Bacha Coffee F&B, FARM), IDR, CoA l10n_id; PB1 configurable (grup + default + fiscal position per "
+        "kota/layanan) di PT F&B; pembulatan pajak per dokumen."
     ),
     # G20 (keputusan pemilik proyek 18 Okt 2026): 18-1 PB1 Non-Dine-in 0 %, 18-6 round_globally eksplisit,
-    # 18-27 nama tampilan company (struktur entitas Bacha = rencana, docs/08 §11.3).
-    "version": "19.0.1.6.0",
+    # 18-27 nama tampilan company. 19.0.1.7.0 = W-32/E-43 (docs/04 §12.1, L-48): kode GL/PB/BCR/BCF, company_bcr &
+    # company_bcf (root, IDR, l10n_id), PB1 + SC + FP dine-in/non-dine-in BCF (sufiks _bcf). DB baru saja (noupdate).
+    "version": "19.0.1.7.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",

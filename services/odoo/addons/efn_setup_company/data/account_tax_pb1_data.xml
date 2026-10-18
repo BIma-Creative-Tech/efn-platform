@@ -51,4 +51,29 @@
     <record id="company_fnb" model="res.company">
         <field name="account_sale_tax_id" ref="tax_pb1_10_fnb"/>
     </record>
+
+    <!-- G20 W-32 (docs/04 §12.1): Bacha Coffee F&B (BCF) = PT F&B kedua -> pola PB1 yang sama, record sendiri
+         (pajak & grup per company; xmlid bersufiks _bcf). Tarif PLACEHOLDER sama (Q-22, R-L03). -->
+    <record id="tax_group_pb1_bcf" model="account.tax.group">
+        <field name="name">PB1 (Pajak Restoran / PBJT)</field>
+        <field name="company_id" ref="company_bcf"/>
+        <field name="sequence">20</field>
+    </record>
+
+    <record id="tax_pb1_10_bcf" model="account.tax">
+        <field name="name">PB1 Default 10% (PLACEHOLDER)</field>
+        <field name="invoice_label">PB1</field>
+        <field name="type_tax_use">sale</field>
+        <field name="amount_type">percent</field>
+        <field name="amount">10.0</field>
+        <field name="sequence">10</field>
+        <field name="is_base_affected" eval="True"/>
+        <field name="company_id" ref="company_bcf"/>
+        <field name="tax_group_id" ref="tax_group_pb1_bcf"/>
+        <field name="description">&lt;p&gt;PB1 default Bacha Coffee F&amp;amp;B. Tarif 10% PLACEHOLDER (Q-22, R-L03). Tarif kota lain: buat pajak baru dengan "Replaces" = pajak ini, lalu masukkan ke fiscal position kota.&lt;/p&gt;</field>
+    </record>
+
+    <record id="company_bcf" model="res.company">
+        <field name="account_sale_tax_id" ref="tax_pb1_10_bcf"/>
+    </record>
 </odoo>

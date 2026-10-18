@@ -38,7 +38,7 @@
     </record>
 
     <!-- G19 W-14: fiscal position "Outlet Kota Contoh (DEMO)" di atas bermakna NON-DINE-IN kota contoh (tanpa SC;
-         dipakai preset bungkus demo efn_setup_pos & outlet online FNB demo efn_setup_online). Pasangan dine-in kota
+         dipakai preset bungkus demo efn_setup_pos & outlet online PB demo efn_setup_online). Pasangan dine-in kota
          contoh di bawah: PB1 default -> [SC 5% (data), PB1 Kota Contoh Dine-in]. Pajak tujuan dine-in kota harus pajak
          TERPISAH dari pajak non-dine-in kota: tax_map dihitung dari original_tax_ids pajak tujuan, jadi satu pajak
          kota yang dipakai di dua fiscal position akan memetakan sumber yang sama di keduanya.
@@ -65,6 +65,10 @@
 
     <!-- Harga rak retail lazimnya sudah termasuk PPN (Q-9/Q-28) — placeholder. -->
     <record id="company_rtl" model="res.company">
+        <field name="account_price_include">tax_included</field>
+    </record>
+    <!-- G20 W-32: Bacha Coffee Retail (ritel PPN) sama dengan PT Grand Lucky. -->
+    <record id="company_bcr" model="res.company">
         <field name="account_price_include">tax_included</field>
     </record>
 

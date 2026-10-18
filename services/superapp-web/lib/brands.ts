@@ -11,7 +11,7 @@
 export type BrandId = 'efn' | 'efn-mart' | 'efn-kitchen';
 
 /** Kode company sesuai kontrak `res.company.efn_brand_code` (docs/04_SERVICE_CONTRACTS.md §1). */
-export type CompanyCode = 'RTL' | 'FNB';
+export type CompanyCode = 'EFN' | 'GL' | 'PB' | 'BCR' | 'BCF' | 'FARM';
 
 /**
  * Identitas PT saja. Pajak (label, tarif, inklusif/eksklusif) TIDAK di sini — configurable,
@@ -24,9 +24,30 @@ export interface CompanyInfo {
 }
 
 export const COMPANIES: Record<CompanyCode, CompanyInfo> = {
-  RTL: { code: 'RTL', displayName: 'PT Retail (Supermarket)' },
-  FNB: { code: 'FNB', displayName: 'PT F&B (Restoran)' },
+  EFN: { code: 'EFN', displayName: 'Holding EFN' },
+  GL: { code: 'GL', displayName: 'PT Grand Lucky' },
+  PB: { code: 'PB', displayName: 'PT Paris Baguette' },
+  BCR: { code: 'BCR', displayName: 'Bacha Coffee Retail' },
+  BCF: { code: 'BCF', displayName: 'Bacha Coffee F&B' },
+  FARM: { code: 'FARM', displayName: 'FARM' },
 };
+
+/**
+ * Peta `brand_code` kanal (non-rahasia, docs/04 §12.1) -> kode kanal/PT. Kode kanal = kode PT.
+ * Bacha = DUA kanal (BCR retail + BCF F&B) di satu domain. Hanya peta; belum dipakai tenant mana pun
+ * (semua tenant tetap `brandCode: null`, L-33, sampai Q-F19-5 / pemetaan domain diputuskan klien).
+ */
+export const BRAND_CODE_CHANNELS: Readonly<Record<string, readonly CompanyCode[]>> = {
+  GL: ['GL'],
+  PB: ['PB'],
+  BACHA: ['BCR', 'BCF'],
+};
+
+/** Kanal/PT milik sebuah `brand_code`; kode tak dikenal -> daftar kosong. */
+export function channelsOfBrandCode(brandCode: string | null | undefined): readonly CompanyCode[] {
+  if (typeof brandCode !== 'string' || !Object.prototype.hasOwnProperty.call(BRAND_CODE_CHANNELS, brandCode)) return [];
+  return BRAND_CODE_CHANNELS[brandCode]!;
+}
 
 export interface BrandTheme {
   primary: string;
@@ -70,7 +91,7 @@ export const BRANDS: Record<BrandId, Brand> = {
     logoText: 'EFN',
     subdomain: 'app',
     hosts: ['app.efn.local', 'efn.local', 'localhost'],
-    companies: ['RTL', 'FNB'],
+    companies: ['GL', 'PB', 'BCR', 'BCF'],
     brandCode: null,
     theme: {
       primary: '#0b5d4b',
@@ -90,8 +111,8 @@ export const BRANDS: Record<BrandId, Brand> = {
     logoText: 'EFN Mart',
     subdomain: 'mart',
     hosts: ['mart.efn.local'],
-    companies: ['RTL'],
-    brandCode: null, // G19 L-33: menunggu Q-F19-5 (domain → brand_code); 'GL' setelah kanal RTL-GL aktif
+    companies: ['GL'],
+    brandCode: null, // L-33: menunggu Q-F19-5 (domain → brand_code); 'GL' setelah pemetaan domain diputuskan
     theme: {
       primary: '#1d4ed8',
       primaryContrast: '#ffffff',
@@ -110,8 +131,8 @@ export const BRANDS: Record<BrandId, Brand> = {
     logoText: 'EFN Kitchen',
     subdomain: 'kitchen',
     hosts: ['kitchen.efn.local'],
-    companies: ['FNB'],
-    brandCode: null, // G19 L-33: menunggu Q-F19-5; 'PB' setelah kanal FNB-PB aktif
+    companies: ['PB'],
+    brandCode: null, // L-33: menunggu Q-F19-5; 'PB' setelah pemetaan domain diputuskan
     theme: {
       primary: '#b42318',
       primaryContrast: '#ffffff',

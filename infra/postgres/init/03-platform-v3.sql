@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS platform.payment_intent (
   provider         text NOT NULL CHECK (provider IN ('mock', 'xendit', 'midtrans')),
   provider_ref     text,
   order_ref        text NOT NULL CHECK (length(order_ref) BETWEEN 1 AND 64),
-  company_code     text NOT NULL CHECK (company_code IN ('EFN', 'RTL', 'FNB', 'FARM')),
+  company_code     text NOT NULL CHECK (company_code IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'FARM')),  -- G20 §12.1 (volume lama: 09)
   amount           numeric(14,2) NOT NULL CHECK (amount > 0),
   currency         text NOT NULL CHECK (currency = 'IDR'),
   method           text NOT NULL CHECK (method = 'qris'),

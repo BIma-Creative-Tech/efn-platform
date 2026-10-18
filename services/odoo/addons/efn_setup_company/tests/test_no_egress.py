@@ -15,7 +15,7 @@ class TestNoEgress(TransactionCase):
                 self.assertFalse(cron.active)
 
     def test_efn_companies_without_vies(self):
-        for xmlid in ("company_efn", "company_rtl", "company_fnb", "company_farm"):
+        for xmlid in ("company_efn", "company_rtl", "company_fnb", "company_bcr", "company_bcf", "company_farm"):
             with self.subTest(company=xmlid):
                 company = self.env.ref(f"efn_setup_company.{xmlid}")
                 self.assertFalse(company.vat_check_vies)

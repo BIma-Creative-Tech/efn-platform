@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   countItems,
+  groupLevelIssues,
   issueLabel,
   MAX_PROMO_CODES,
   normalizePromoCode,
@@ -34,6 +35,7 @@ import {
 import { companyDisplayName, type CatalogChannel } from '@/lib/catalog';
 import { formatRupiah } from '@/lib/format';
 import { onlineErrorMessage, REQUOTE_CODES } from '@/lib/orders';
+import { COUNTER_UNAVAILABLE_REASON, paymentOptions, resolvePaymentMethod, type PaymentMethod } from '@/lib/payment';
 import { OnlineUnavailable } from './OnlineUnavailable';
 import styles from './online.module.css';
 
@@ -130,6 +132,9 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
   }, []);
   const [promoInput, setPromoInput] = useState('');
   const [promoMsg, setPromoMsg] = useState<Msg>(null);
+  // Metode bayar (§12.2). `counterDenied`: BFF menjawab 422 payment_method_unavailable -> opsi dikunci + pesan.
+  const [chosenMethod, setChosenMethod] = useState<PaymentMethod | null>(null);
+  const [counterDenied, setCounterDenied] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -245,14 +250,14 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
     setView({ kind: 'guest', guest: next });
   }
 
-  async function checkout() {
+  async function checkout(method: PaymentMethod) {
     if (view.kind !== 'member' || !view.quote) return;
     setPaying(true);
     setMsg(null);
     try {
       const r = await apiFetch<{ order_id: string }>('/api/orders', {
         method: 'POST',
-        body: JSON.stringify({ quote_id: view.quote.quote_id, accept_total: view.quote.amount_payable_total }),
+        body: JSON.stringify({ quote_id: view.quote.quote_id, accept_total: view.quote.amount_payable_total, payment_method: method }),
       });
       if (r.ok) {
         clearGuestCart();
@@ -262,6 +267,10 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
       if (r.status === 401) return goToLogin('/keranjang');
       if (r.code === 'online_unavailable') return setView({ kind: 'unavailable' });
       setMsg({ kind: 'error', text: r.message });
+      if (r.code === 'payment_method_unavailable' && method === 'counter') {
+        setCounterDenied(true);
+        setChosenMethod(null);
+      }
       if (REQUOTE_CODES.includes(r.code) || r.code === 'cart_has_issues') {
         const cart = await getServerCart();
         if (cart.ok) await requote(cart.data);
@@ -307,6 +316,11 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
   const quoteGroup = (code: string): QuoteGroup | null => quote?.groups.find((g) => g.channel_code === code) ?? null;
   // Saat fallback tanpa kode, quote.promo.applied kosong; tetap tampilkan kode yang disimpan agar bisa dihapus.
   const shownCodes = quote ? (quote.promo.applied.length > 0 ? quote.promo.applied : heldCodes) : [];
+  const baseOptions = paymentOptions(groups.map((g) => channelInfo(channels, g.channel_code)?.payment_modes ?? null));
+  const options = counterDenied
+    ? baseOptions.map((o) => (o.method === 'counter' ? { ...o, enabled: false, reason: COUNTER_UNAVAILABLE_REASON } : o))
+    : baseOptions;
+  const method = resolvePaymentMethod(chosenMethod, options);
   const mutate = view.kind === 'guest' ? mutateGuest : (fn: (g: CartGroup[]) => CartGroup[]) => void mutateMember(fn);
 
   return (
@@ -354,6 +368,12 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
               </p>
             )}
 
+            {qg &&
+              groupLevelIssues(qg).map((gi2) => (
+                <p key={gi2.code} className="alert alert-error" role="alert" style={{ marginTop: '0.5rem' }}>
+                  {issueLabel(gi2.code)} Pembayaran belum bisa dilanjutkan untuk keranjang ini.
+                </p>
+              ))}
             <ul className={styles.lines}>
               {g.lines.map((l) => {
                 const ql = qg?.lines.find((x) => !x.reward && x.product_id === l.product_id);
@@ -518,19 +538,65 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
                 <dt className={styles.grand}>Total bayar</dt>
                 <dd className={styles.grand}>{formatRupiah(quote.amount_payable_total)}</dd>
               </dl>
+              <fieldset className={styles.methodSet} disabled={busy || paying}>
+                <legend>Metode pembayaran</legend>
+                {options.map((o) => {
+                  const id = `pay-${o.method}`;
+                  const label = o.method === 'qris' ? 'QRIS (bayar di aplikasi)' : 'Bayar di kasir';
+                  return (
+                    <div key={o.method} className={styles.methodOption}>
+                      <input
+                        type="radio"
+                        id={id}
+                        name="payment_method"
+                        value={o.method}
+                        checked={method === o.method}
+                        disabled={!o.enabled}
+                        aria-describedby={o.reason ? `${id}-note` : undefined}
+                        onChange={() => setChosenMethod(o.method)}
+                      />
+                      <label htmlFor={id}>{label}</label>
+                      {o.reason && (
+                        <p id={`${id}-note`} className="small muted" style={{ margin: '0.125rem 0 0 1.5rem' }}>
+                          {o.reason}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </fieldset>
+              {method === null && (
+                <p className="alert alert-error" role="alert">
+                  Belum ada metode pembayaran yang dapat dipakai untuk keranjang ini. Pisahkan pesanan per PT, atau coba lagi nanti.
+                </p>
+              )}
+              {method === 'counter' && (
+                <p className="notice" role="note">
+                  Setelah pesanan dibuat, Anda mendapat <strong>kode bayar</strong>. Tunjukkan kode itu ke kasir dan bayar di sana
+                  (tunai, kartu, atau QRIS di kasir) sebelum batas waktu habis; stok ditahan selama itu. Kode ambil baru muncul setelah pembayaran diterima dan toko mengonfirmasi pesanan.
+                </p>
+              )}
               <p className="hint" style={{ marginBottom: 0 }}>
-                Harga sudah termasuk pajak dan dihitung oleh sistem toko. Pembayaran lewat QRIS; batas waktu bayar (hitung
-                mundur) ditampilkan di halaman pesanan setelah pesanan dibuat. Stok dicek lagi setelah pembayaran; bila habis, bagian itu dibatalkan dan dana dikembalikan.
+                Harga sudah termasuk pajak dan dihitung oleh sistem toko.{' '}
+                {method === 'counter'
+                  ? 'Batas waktu bayar (hitung mundur) ditampilkan di halaman pesanan setelah pesanan dibuat. Pesanan yang tidak dibayar sampai batas waktu dibatalkan otomatis.'
+                  : 'Pembayaran lewat QRIS; batas waktu bayar (hitung mundur) ditampilkan di halaman pesanan setelah pesanan dibuat. Stok dicek lagi setelah pembayaran; bila habis, bagian itu dibatalkan dan dana dikembalikan.'}
               </p>
             </section>
           )}
           <div className={styles.checkoutBar}>
             <span className="small">
               {countItems(groups)} barang
-              {quote && quoteHasIssues(quote) ? ' · perbaiki barang yang ditandai' : ''}
+              {quote && quoteHasIssues(quote) ? ' · pembayaran diblokir: perbaiki barang atau batas berat yang ditandai' : ''}
             </span>
-            <button type="button" className="btn" disabled={blocked || busy || paying} onClick={() => void checkout()}>
-              {paying ? 'Membuat pesanan…' : quote ? `Bayar ${formatRupiah(quote.amount_payable_total)}` : 'Bayar'}
+            <button type="button" className="btn" disabled={blocked || busy || paying || method === null} onClick={() => method && void checkout(method)}>
+              {paying
+                ? 'Membuat pesanan…'
+                : method === 'counter'
+                  ? 'Buat pesanan & bayar di kasir'
+                  : quote
+                    ? `Bayar ${formatRupiah(quote.amount_payable_total)}`
+                    : 'Bayar'}
             </button>
           </div>
         </>

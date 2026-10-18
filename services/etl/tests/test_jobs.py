@@ -90,7 +90,7 @@ def _ledger_row(**overrides: object) -> dict[str, object]:
     row: dict[str, object] = {
         "event_id": "17",
         "member_ref_hash": USER_HASH,
-        "company_code": "FNB",
+        "company_code": "PB",
         "delta_points": 10,
         "reason": "price_hunter_valid",
         "source": "price_hunter",
@@ -104,12 +104,30 @@ def _ledger_row(**overrides: object) -> dict[str, object]:
 def test_transform_loyalty_event_with_company_code() -> None:
     out = dict(zip(LOYALTY_EVENTS_COLUMNS, transform_loyalty_event(_ledger_row(), now=NOW), strict=True))
     assert out["member_hash"] == USER_HASH
-    assert out["company_code"] == "FNB"
+    assert out["company_code"] == "PB"
     assert out["created_at"].tzinfo is UTC
     assert "company_code" in LOYALTY_EVENTS.sql
 
 
-@pytest.mark.parametrize("override", [{"member_ref_hash": PHONE}, {"company_code": "XYZ"}, {"company_code": None}])
+@pytest.mark.parametrize("code", ["EFN", "GL", "PB", "BCR", "BCF", "FARM", "bcf"])
+def test_transform_loyalty_event_accepts_six_entities(code: str) -> None:
+    row = transform_loyalty_event(_ledger_row(company_code=code), now=NOW)
+    out = dict(zip(LOYALTY_EVENTS_COLUMNS, row, strict=True))
+    assert out["company_code"] == code.upper()
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"member_ref_hash": PHONE},
+        {"company_code": "XYZ"},
+        {"company_code": None},
+        # Kode lama G19 dihapus G20 (docs/04 §12.1): ledger dev lama harus dibuang, bukan dimuat.
+        {"company_code": "RTL"},
+        {"company_code": "FNB"},
+        {"company_code": "BACHA"},  # brand_code kanal, bukan kode PT
+    ],
+)
 def test_transform_loyalty_event_rejects_bad_rows(override: dict[str, object]) -> None:
     with pytest.raises(ValueError):
         transform_loyalty_event(_ledger_row(**override))
@@ -119,8 +137,8 @@ def test_transform_sales_line() -> None:
     row = {
         "line_id": 5,
         "company_id": 2,
-        "company_name": "PT F&B",
-        "brand": "FNB",
+        "company_name": "PT Paris Baguette",
+        "brand": "PB",
         "store_id": 3,
         "order_ref": "Order 00012-003-0004",
         "order_date": datetime(2026, 10, 5, 3, 0),
@@ -204,15 +222,15 @@ def test_loyalty_member_hash_blanked_after_5_years() -> None:
     )
     assert fresh["member_hash"] == USER_HASH
     assert old["member_hash"] == ""
-    assert old["delta_points"] == 10 and old["company_code"] == "FNB"
+    assert old["delta_points"] == 10 and old["company_code"] == "PB"
 
 
 def test_sales_customer_id_nulled_after_5_years() -> None:
     row = {
         "line_id": 6,
         "company_id": 2,
-        "company_name": "PT F&B",
-        "brand": "FNB",
+        "company_name": "PT Paris Baguette",
+        "brand": "PB",
         "store_id": 3,
         "order_ref": "Order 1",
         "order_date": datetime(2021, 1, 1, 3, 0),

@@ -1,4 +1,4 @@
-/** GET /api/catalog/categories?channel=RTL -> BFF GET /v1/catalog/categories (docs/04 §10.3.2). Publik. */
+/** GET /api/catalog/categories?channel=GL -> BFF GET /v1/catalog/categories (docs/04 §10.3.2). Publik. */
 import type { NextRequest } from 'next/server';
 import { isChannelCode, parseCategories } from '@/lib/catalog';
 import { proxyCatalog } from '@/lib/catalog-route';

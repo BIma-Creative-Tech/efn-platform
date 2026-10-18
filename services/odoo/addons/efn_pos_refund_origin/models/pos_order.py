@@ -10,8 +10,9 @@ NEGATIF (uang keluar) order:
   dihitung server (`_efn_refund_allocation`, dipakai frontend). Metode yang tidak bisa dibalik di kanalnya
   (QRIS statis, gateway tanpa reversal) tetap dicatat atas metode asal; pengembalian dana fisik = transfer manual
   SOP Finance (Q-F18-6, L-23).
-- **Retur tanpa struk** (barang qty < 0 tanpa order asal): default hanya tunai (Q-F18-5, L-23);
-  `efn.pos.refund.unlinked_return_mode` = ``cash`` | ``deny`` (``deny``: retur tanpa struk ditolak).
+- **Retur tanpa struk** (barang qty < 0 tanpa order asal): hanya tunai (Q-F18-5, L-23);
+  `efn.pos.refund.unlinked_return_mode` = ``manager_approval`` (default E-41, 18-15: wajib persetujuan Store
+  Manager terverifikasi server, `efn.pos.return.approval` sekali pakai) | ``cash`` | ``deny`` (ditolak).
 - Pelanggaran -> `UserError` (sync ditolak; kasir memperbaiki pembayaran). Jenis order ditentukan server dari
   baris (bukan flag klien `is_refund`, pola SEC-59).
 
@@ -31,7 +32,7 @@ dependency `efn_pos_loyalty_ledger`/`efn_pos_otp_gate`):
 
 import logging
 
-from odoo import _, api, models
+from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 
 from odoo.addons.efn_core.scope import (
@@ -45,7 +46,9 @@ from odoo.addons.efn_core.scope import (
 _logger = logging.getLogger(__name__)
 
 UNLINKED_MODE_PARAM = "efn.pos.refund.unlinked_return_mode"
-UNLINKED_MODES = ("cash", "deny")
+# E-41 (18-15, docs/04 §12.4): `manager_approval` = default baru; nilai tidak dikenal juga -> manager_approval.
+UNLINKED_MODES = ("manager_approval", "cash", "deny")
+DEFAULT_UNLINKED_MODE = "manager_approval"
 PAID_STATES = ("paid", "done", "invoiced")
 OPEN_STATES = ("draft", "cancel")
 # Field x2many payload sync yang diperiksa kepemilikannya (SEC-126).
@@ -115,9 +118,47 @@ class PosOrder(models.Model):
 
     @api.model
     def _efn_unlinked_return_mode(self):
-        raw = self.env["ir.config_parameter"].sudo().get_param(UNLINKED_MODE_PARAM, "cash")
-        mode = str(raw or "cash").strip().lower()
-        return mode if mode in UNLINKED_MODES else "cash"
+        raw = self.env["ir.config_parameter"].sudo().get_param(UNLINKED_MODE_PARAM, DEFAULT_UNLINKED_MODE)
+        mode = str(raw or DEFAULT_UNLINKED_MODE).strip().lower()
+        return mode if mode in UNLINKED_MODES else DEFAULT_UNLINKED_MODE
+
+    def _efn_consume_return_approval(self, amount):
+        """E-41: retur tanpa struk wajib persetujuan Store Manager yang sah untuk order ini (sekali pakai)."""
+        self.ensure_one()
+        Approval = self.env["efn.pos.return.approval"].sudo()
+        approval = Approval.search(
+            [
+                ("config_id", "=", self.config_id.id),
+                ("order_ref", "=", self.uuid),
+                ("state", "in", ("approved", "consumed")),
+            ],
+            order="id desc",
+            limit=1,
+        )
+        if approval:
+            # Serialkan dua sync paralel yang membawa uuid yang sama.
+            touch_row(self.env.cr, "efn_pos_return_approval", approval.id)
+            approval.invalidate_recordset()
+        error = approval._efn_usable_error(self, amount)
+        if error:
+            self._efn_refund_reject(
+                f"return_approval_{error}",
+                _(
+                    "Retur tanpa struk memerlukan persetujuan Store Manager yang sah untuk order ini "
+                    "(persetujuan tidak ada, kedaluwarsa, sudah dipakai, kasir/sesi berbeda, atau nominal melebihi "
+                    "yang disetujui). Minta persetujuan ulang lalu validasi lagi."
+                ),
+            )
+        if approval.state == "approved":
+            approval.write(
+                {
+                    "state": "consumed",
+                    "consumed_at": fields.Datetime.now(),
+                    "consumed_order_id": self.id,
+                    "amount_used": self.currency_id.round(amount),
+                }
+            )
+            _logger.info("EFN refund origin: order %s memakai persetujuan retur %s", self.uuid, approval.id)
 
     def _efn_refund_reject(self, code, message):
         _logger.warning("EFN refund origin: order %s ditolak saat sync (%s)", self.uuid, code)
@@ -176,7 +217,8 @@ class PosOrder(models.Model):
         origins = self._efn_refund_origins()
         unlinked = lines.filtered(lambda line: line.qty < 0 and not line.refunded_orderline_id)
         if unlinked and not origins:
-            if self._efn_unlinked_return_mode() == "deny":
+            mode = self._efn_unlinked_return_mode()
+            if mode == "deny":
                 self._efn_refund_reject("unlinked_return_denied", _("Retur tanpa struk tidak diizinkan."))
             non_cash = outgoing.filtered(lambda p: not p.payment_method_id.is_cash_count)
             if non_cash:
@@ -187,6 +229,9 @@ class PosOrder(models.Model):
                         name=non_cash[:1].payment_method_id.name,
                     ),
                 )
+            if mode == "manager_approval":
+                # Berlaku juga bila tidak ada uang keluar (tukar barang tanpa struk): nominal 0.
+                self._efn_consume_return_approval(-sum(outgoing.mapped("amount")))
             return
         if not origins or not outgoing:
             return

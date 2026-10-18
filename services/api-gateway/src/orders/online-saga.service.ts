@@ -7,6 +7,7 @@ import { OnlineMetrics } from '../odoo-rpc/online-metrics';
 import { PaymentOperationUnsupportedError } from '../payments/payment-gateway';
 import { ONLINE_PAYMENTS, OnlineIntentTransition, OnlinePaymentsPort } from '../payments/online-payments';
 import {
+  COUNTER_REFUND_REASON,
   CompensateMessage,
   FINAL_ORDER,
   FINAL_REFUND,
@@ -25,7 +26,9 @@ import {
   canTransitionPart,
   compensateMessage,
   deriveOrderStatus,
+  orderHasPayment,
   orderPaidMessage,
+  partStatusFromOdoo,
   refundRequestedMessage,
 } from './online.model';
 import { ONLINE_REPO, OnlineRepo } from './online.repository';
@@ -46,6 +49,11 @@ export interface ApplyOptions {
   odooState?: string | null;
   seq?: number | null;
   cancelReason?: PartCancelReason;
+  /**
+   * L-57: pengecualian monoton (seperti L-14) — `cancelled → review` HANYA untuk bagian order `counter` yang dilunasi di
+   * kasir setelah batal/kedaluwarsa (event Odoo `review` + `review_reason counter_paid_after_*`). Pemanggil memvalidasi.
+   */
+  lateCounterReview?: true;
 }
 
 /**
@@ -72,13 +80,16 @@ export class OnlineSagaService {
   async applyPart(r: OnlineRepo, part: PartRow, to: PartStatus, o: ApplyOptions): Promise<boolean> {
     const seqPatch = o.seq !== undefined && o.seq !== null && o.seq > part.last_seq ? { last_seq: o.seq } : {};
     const statePatch = o.odooState ? { odoo_state: o.odooState.slice(0, 32) } : {};
-    if (!canTransitionPart(part.status, to)) {
+    const lateReview = o.lateCounterReview === true && part.status === 'cancelled' && to === 'review';
+    if (!lateReview && !canTransitionPart(part.status, to)) {
       if (to !== part.status) this.metrics.backward(o.source);
       if (Object.keys(seqPatch).length + Object.keys(statePatch).length > 0) await r.updatePart(part.id, { ...seqPatch, ...statePatch });
       return false;
     }
     const at = new Date(this.now());
     const patch: Parameters<OnlineRepo['updatePart']>[1] = { status: to, ...seqPatch, ...statePatch };
+    // G20 §12.2: kode bayar di kasir hanya berlaku selama bagian `placed`
+    if (to !== 'placed' && part.counter_code_enc) patch.counter_code_enc = null;
     if (to === 'confirmed') patch.confirmed_at = at;
     if (to === 'ready') patch.ready_at = at;
     if (to === 'handed_over') {
@@ -125,6 +136,89 @@ export class OnlineSagaService {
       { schema_version: 2, idempotency_key: key, member_hash: hash, source: 'online_order', source_ref: part.id, template, params: {} },
       key,
     );
+  }
+
+  // ───────────── bayar di kasir (G20 §12.2 no. 6–7) ─────────────
+  /**
+   * DI DALAM transaksi `r` (order & bagian dikunci pemanggil). Odoo melaporkan pelunasan POS (event `paid` dengan
+   * `payment.method = counter`, atau state `paid|confirmed|…` dari rekonsiliasi status):
+   * - order `awaiting_counter_payment` → `paid` (paid_at) → bagian `confirmed` (atau `stock_short`/`review` sesuai state
+   *   Odoo) → order diturunkan `fulfilling`; kode ambil mulai tampil, kode bayar dihapus;
+   * - order sudah `paid|fulfilling|review` → transisi bagian biasa (monoton);
+   * - order sudah ditutup (`expired|cancelled|failed`) → bayar terlambat di kasir: TIDAK dibuka ulang, bagian `review` +
+   *   anomali critical `late_counter_payment` (ops: refund POS E-31 atau serahkan barang lewat CLI resolve).
+   * Mengembalikan `true` bila ada perubahan. Tidak pernah memanggil gateway / `mark_paid`.
+   */
+  async applyCounterPaid(
+    r: OnlineRepo,
+    order: OrderRow,
+    part: PartRow,
+    o: { source: 'odoo' | 'bff'; odooState: string; seq: number | null; paidAt: Date | null },
+  ): Promise<boolean> {
+    if (order.payment_method !== 'counter') {
+      this.metrics.anomaly('payment_method_mismatch', 'critical', { order_id: order.id, part_id: part.id, state: o.odooState });
+      return false;
+    }
+    const mapped = o.odooState === 'paid' ? 'confirmed' : partStatusFromOdoo(o.odooState);
+    if (mapped === 'cancelled' || mapped === 'place_failed') return false; // bukan state pelunasan
+    const target: PartStatus = mapped && PART_RANK[mapped] >= PART_RANK.confirmed ? mapped : 'confirmed';
+    const nowMs = this.now();
+    if (order.status === 'awaiting_counter_payment') {
+      const paidAt = o.paidAt && o.paidAt.getTime() <= nowMs ? o.paidAt : new Date(nowMs);
+      if (!(await r.transitionOrder(order.id, ['awaiting_counter_payment'], 'paid', { paid_at: paidAt }))) return false;
+      this.metrics.order('paid');
+      await this.applyPart(r, part, target, { source: o.source, odooState: o.odooState, seq: o.seq, cancelReason: 'ops' });
+      if (target === 'stock_short') {
+        // Uang sudah di kasir: batal + refund lewat jalur refund online (tanpa gateway, §12.2 no. 8)
+        const m = compensateMessage(part.id, 'stock_short');
+        await r.enqueue(QUEUES.ORDER_COMPENSATE, { ...m }, m.idempotency_key);
+      }
+      if (target === 'review') this.metrics.anomaly('counter_paid_review', 'critical', { order_id: order.id, part_id: part.id });
+      await this.refreshOrder(r, order.id);
+      return true;
+    }
+    if (order.status === 'paid' || order.status === 'fulfilling' || order.status === 'review') {
+      return this.applyPart(r, part, target, { source: o.source, odooState: o.odooState, seq: o.seq, cancelReason: 'ops' });
+    }
+    if (order.status === 'expired' || order.status === 'cancelled' || order.status === 'failed') {
+      this.metrics.anomaly('late_counter_payment', 'critical', { order_id: order.id, part_id: part.id, state: o.odooState });
+      return this.applyPart(r, part, 'review', { source: o.source, odooState: o.odooState, seq: o.seq });
+    }
+    // `created`: place belum selesai di BFF — jangan menimpa; rekonsiliasi status menerapkannya nanti
+    return false;
+  }
+
+  /**
+   * L-58: event Odoo `refund_settled` (kasir me-refund order POS pelunasan). DI DALAM transaksi event (bagian & order
+   * dikunci pemanggil). Cocokkan refund bagian ini via `refund_ref` + order counter + nominal persis + ≤ porsi → `settled`
+   * (`provider_refund_ref` = `pos:<uuid>` dari Odoo) + `refunded_amount` + notifikasi. Idempoten: refund yang sudah
+   * `settled` → `already`. Hasil selain `settled` tidak mengubah apa pun (pemanggil mencatat anomali + ignored_stale):
+   * `qris` (refund punya intent — dilunasi gateway), `not_found`, `mismatch` (nominal beda), `unapproved` (masih
+   * `approval_required`), `exceeds` (melebihi porsi), `not_counter`.
+   */
+  async settleCounterRefund(
+    r: OnlineRepo,
+    order: OrderRow,
+    part: PartRow,
+    s: { refund_ref: string; amount: number; settled_at: Date | null; provider_refund_ref: string },
+  ): Promise<'settled' | 'already' | 'qris' | 'not_found' | 'mismatch' | 'unapproved' | 'exceeds' | 'not_counter'> {
+    const rf = (await r.refundsOfPart(part.id)).find((x) => x.odoo_refund_ref === s.refund_ref);
+    if (!rf) return 'not_found';
+    if (rf.payment_intent_id !== null) return 'qris';
+    if (order.payment_method !== 'counter' || part.order_id !== order.id) return 'not_counter';
+    if (rf.status === 'settled') return 'already';
+    if (rf.status === 'approval_required') return 'unapproved';
+    if (rf.status !== 'manual_required' && rf.status !== 'odoo_done') return 'not_found';
+    if (rf.amount !== s.amount) return 'mismatch';
+    if (s.amount <= 0 || part.refunded_amount + s.amount > part.amount_payable) return 'exceeds';
+    const nowMs = this.now();
+    const at = s.settled_at && s.settled_at.getTime() <= nowMs ? s.settled_at : new Date(nowMs);
+    await r.updateRefund(rf.id, { status: 'settled', provider_refund_ref: s.provider_refund_ref.slice(0, 128), settled_at: at, claim_token: null });
+    await r.updatePart(part.id, { refunded_amount: part.refunded_amount + s.amount });
+    part.refunded_amount += s.amount;
+    this.metrics.refund('settled');
+    await this.notify(r, order, part, 'online_order_refunded');
+    return 'settled';
   }
 
   // ───────────── hook webhook payment (§10.7) ─────────────
@@ -282,9 +376,17 @@ export class OnlineSagaService {
     const part = await this.repo.getPart(msg.part_id);
     if (!part) throw new PermanentMessageError('bagian tidak ada');
     const order = await this.repo.getOrder(part.order_id);
-    if (!order?.payment_intent_id) throw new PermanentMessageError('order tanpa intent');
+    if (!order) throw new PermanentMessageError('order tidak ada');
+    // G20 §12.2 no. 8: order bayar di kasir tidak punya intent; "porsi" = amount_payable bagian (satu bagian per order)
+    const counter = order.payment_method === 'counter';
+    if (!counter && !order.payment_intent_id) throw new PermanentMessageError('order tanpa intent');
+    if (counter && msg.reason === 'late_payment') throw new PermanentMessageError('late_payment tidak berlaku untuk bayar di kasir');
     const intentId = order.payment_intent_id;
-    const portion = (await this.repo.portionsOf(intentId)).find((p) => p.part_id === part.id);
+    const portion = counter
+      ? orderHasPayment(order)
+        ? { amount: part.amount_payable }
+        : undefined
+      : (await this.repo.portionsOf(intentId as string)).find((p) => p.part_id === part.id);
 
     let odooRefund: { refund_ref: string; amount: number } | null = null;
     if (msg.reason !== 'late_payment' && part.status !== 'cancelled') {
@@ -405,6 +507,14 @@ export class OnlineSagaService {
         this.metrics.refund('failed');
         return this.claimed(CONSUMER.REFUND, msg.idempotency_key);
       }
+      if (claim.payment_intent_id === null) {
+        // G20 §12.2 no. 8: bayar di kasir — BFF TIDAK memanggil gateway. Uang keluar = refund order POS pelunasan ke
+        // metode asal (E-31); CS lalu `online-refund-settle --provider-ref <ref refund POS>` (approver, empat mata).
+        if (!(await this.casWrite(msg.refund_id, token, { status: 'manual_required', failure_reason: COUNTER_REFUND_REASON }))) return 'pending';
+        this.metrics.refund('manual_required');
+        this.metrics.anomaly('refund_counter_via_pos', 'warning', { refund_id: msg.refund_id, part_id: part.id });
+        return this.claimed(CONSUMER.REFUND, msg.idempotency_key);
+      }
       let res;
       try {
         res = await this.payments.refund(claim.payment_intent_id, { refundId: claim.id, amount: claim.amount ?? 0, reason: claim.reason });
@@ -437,7 +547,9 @@ export class OnlineSagaService {
     }
 
     if (refund.status === 'gateway_done') {
-      if (refund.odoo_refund_ref) {
+      // L-57: Odoo menolak `efn_online_refund_settled` untuk pesanan counter (`invalid_state`) — uang keluar lewat refund
+      // order POS; BFF hanya mencatat settled (tanpa panggilan Odoo).
+      if (refund.odoo_refund_ref && refund.payment_intent_id !== null) {
         await this.odoo.refundSettled(part.channel_code, refund.odoo_refund_ref, {
           provider_refund_ref: refund.provider_refund_ref ?? `gw:${refund.id}`,
           settled_at: new Date(this.now()).toISOString(),

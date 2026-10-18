@@ -14,6 +14,8 @@
 #   - (G17) filter odoo-rpc-gateway tanpa mTLS masuk (CN api-gateway) / mTLS keluar verify ke odoo-tls; BFF ke Odoo
 #     tidak lewat gateway; gateway di-label Traefik / publish port; secret API key online / HMAC event di-mount ke
 #     service selain BFF (+ Odoo untuk HMAC); saklar dev EFN_PAYMENT_SIMULATOR / ODOO_ONLINE_MOCK aktif di render prod
+#   - (G20) secret kanal di luar gl/pb/bcr/bcf; env ODOO_API_KEY_ONLINE_<KODE>_FILE tanpa secret ter-mount yang cocok;
+#     render dev tanpa ketiga kunci PII Odoo (odoo_pii_key_v1, odoo_pii_bidx_key, odoo_pii_name_key) di service odoo
 #   - (at rest) service metabase tanpa secret metabase_encryption_key / dengan MB_ENCRYPTION_SECRET_KEY di env /
 #     dengan override entrypoint apa pun termasuk `[]`/`''` / dengan image resmi metabase/metabase (G16b, SEC-86)
 # Pengecualian hanya lewat ADR-022; tambahkan di sini dengan komentar alasan.
@@ -155,12 +157,29 @@ check_compose() {
     fi
   fi
   # 6) Least privilege secret online (docs/04 §10.10): API key Odoo kanal hanya BFF; HMAC event hanya Odoo + BFF.
-  #    G19: SEMUA secret odoo_api_key_online_* yang ter-render (kanal per brand, §11.3) + kunci PoC PII Odoo
-  #    odoo_pii_* hanya service odoo (ADR-036 K-36-3; dev).
+  #    G19: SEMUA secret odoo_api_key_online_* yang ter-render + kunci PII Odoo odoo_pii_* hanya service odoo
+  #    (ADR-036 K-36-3 / §0; dev). G20 (docs/04 §12.1): kanal = kode PT -> hanya gl/pb/bcr/bcf; kode lama ditolak.
   local sec allowed
   local -a secs
   mapfile -t secs < <(jq -r '.secrets // {} | keys[] | select(test("^(odoo_api_key_online_[a-z0-9_]+|odoo_pii_[a-z0-9_]+)$"))' <<< "$json")
-  for sec in odoo_api_key_online_rtl odoo_online_event_hmac "${secs[@]}"; do
+  for sec in "${secs[@]}"; do
+    [[ "$sec" == odoo_api_key_online_* ]] || continue
+    [[ "$sec" =~ ^odoo_api_key_online_(gl|pb|bcr|bcf)$ ]] \
+      || err "[$label] secret $sec bukan kanal G20 (gl/pb/bcr/bcf; RTL/FNB & kanal G19 dihapus, docs/04 §12.1)"
+  done
+  # Env BFF ODOO_API_KEY_ONLINE_<KODE>_FILE wajib menunjuk /run/secrets/odoo_api_key_online_<kode> yang DI-MOUNT ke BFF
+  # (env tanpa secret = kanal gagal start; secret tanpa env = key ter-mount tetapi tidak terpakai).
+  while IFS=$'\t' read -r key val mounted; do
+    [[ -z "$key" ]] && continue
+    [[ "$val" == "/run/secrets/odoo_api_key_online_${key,,}" && "$mounted" == 1 ]] \
+      || err "[$label] api-gateway ODOO_API_KEY_ONLINE_${key}_FILE=${val} tidak cocok dengan secret ter-mount odoo_api_key_online_${key,,}"
+  done < <(jq -r '.services["api-gateway"] // {} | [.secrets[]? | (.source // .)] as $m
+      | (.environment // {}) | to_entries[] | select(.key | test("^ODOO_API_KEY_ONLINE_[A-Z0-9_]+_FILE$"))
+      | (.key | capture("^ODOO_API_KEY_ONLINE_(?<k>[A-Z0-9_]+)_FILE$") | .k) as $k
+      | [$k, (.value // ""), (if ($m | index("odoo_api_key_online_" + ($k | ascii_downcase))) != null then "1" else "0" end)]
+      | @tsv' <<< "$json")
+  # Kanal default GL (base) & HMAC event selalu diperiksa eksplisit (nama tetap), sisanya dari render
+  for sec in odoo_api_key_online_gl odoo_online_event_hmac "${secs[@]}"; do
     allowed='["api-gateway"]'
     [[ "$sec" == "odoo_online_event_hmac" ]] && allowed='["api-gateway","odoo"]'
     [[ "$sec" == odoo_pii_* ]] && allowed='["odoo"]'
@@ -169,6 +188,18 @@ check_compose() {
         | (. - $ok) | length == 0' <<< "$json" > /dev/null \
       || err "[$label] secret $sec di-mount ke service selain $allowed (least privilege, docs/04 §10.10)"
   done
+  # 6b) G20 E-38a (ADR-036 §0, docs/04 §12.5): render dev wajib me-mount KETIGA kunci PII Odoo ke odoo (key ring v1,
+  #     blind index, token nama) dengan env *_FILE yang cocok; tanpa kunci token nama pencarian nama terenkripsi gagal.
+  if [[ "$label" == dev ]]; then
+    local pk
+    for pk in odoo_pii_key_v1:EFN_ODOO_PII_KEY_V1_FILE odoo_pii_bidx_key:EFN_ODOO_PII_BIDX_KEY_FILE \
+              odoo_pii_name_key:EFN_ODOO_PII_NAME_KEY_FILE; do
+      jq -e --arg s "${pk%%:*}" --arg e "${pk#*:}" '
+          ([.services.odoo.secrets[]? | (.source // .)] | index($s) != null)
+          and ((.services.odoo.environment // {})[$e] == ("/run/secrets/" + $s))' <<< "$json" > /dev/null \
+        || err "[$label] odoo: secret ${pk%%:*} tidak di-mount atau ${pk#*:} != /run/secrets/${pk%%:*} (ADR-036 §0)"
+    done
+  fi
 
   # 7) G17: saklar khusus dev tidak boleh aktif di render prod (simulator bayar frontend, stub json2 BFF L-7)
   if [[ "$label" == prod ]]; then

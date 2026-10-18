@@ -24,11 +24,10 @@ const SHA1 = 'b'.repeat(40);
 
 describe('validator kode §10.2', () => {
   it('channel_code', () => {
-    expect(isChannelCode('RTL')).toBe(true);
-    expect(isChannelCode('FNB-KOPI')).toBe(true);
-    expect(isChannelCode('rtl')).toBe(false);
+    for (const c of ['GL', 'PB', 'BCR', 'BCF']) expect(isChannelCode(c)).toBe(true);
+    expect(isChannelCode('gl')).toBe(false);
     expect(isChannelCode('R')).toBe(false);
-    expect(isChannelCode('RTL&x=1')).toBe(false);
+    expect(isChannelCode('GL&x=1')).toBe(false);
     expect(isChannelCode('A'.repeat(17))).toBe(false);
   });
   it('outlet_code', () => {
@@ -71,11 +70,11 @@ describe('query katalog', () => {
     expect(parseIdList('')).toBeNull();
   });
   it('buildProductQuery membangun ulang parameter tervalidasi saja', () => {
-    const qs = buildProductQuery({ channel: 'RTL', category: '7', q: ' kopi ', cursor: 'abc_123', limit: '100' });
-    expect(new URLSearchParams(qs!).toString()).toBe('channel=RTL&category=7&q=kopi&cursor=abc_123&limit=50');
-    const bad = buildProductQuery({ channel: 'RTL', category: '-1', cursor: 'a&b=c', q: '' });
-    expect(bad).toBe('channel=RTL&limit=24');
-    expect(buildProductQuery({ channel: 'rtl' })).toBeNull();
+    const qs = buildProductQuery({ channel: 'GL', category: '7', q: ' kopi ', cursor: 'abc_123', limit: '100' });
+    expect(new URLSearchParams(qs!).toString()).toBe('channel=GL&category=7&q=kopi&cursor=abc_123&limit=50');
+    const bad = buildProductQuery({ channel: 'GL', category: '-1', cursor: 'a&b=c', q: '' });
+    expect(bad).toBe('channel=GL&limit=24');
+    expect(buildProductQuery({ channel: 'gl' })).toBeNull();
   });
   it('imageUrl hanya origin sendiri', () => {
     expect(imageUrl(SHA256)).toBe(`/api/catalog/images/${SHA256}?size=512`);
@@ -106,6 +105,12 @@ describe('normalisasi respons', () => {
     expect(parseProductDetail({ ...raw, price_incl: -1 })).toBeNull();
     expect(parseProductDetail({ ...raw, description: 'x'.repeat(5000) })!.description).toHaveLength(2000);
   });
+  it('weight_kg (§12.3): nullable, hanya angka tak negatif', () => {
+    expect(parseProductDetail(raw)!.weight_kg).toBeNull();
+    expect(parseProductDetail({ ...raw, weight_kg: 0.5 })!.weight_kg).toBe(0.5);
+    expect(parseProductDetail({ ...raw, weight_kg: -1 })!.weight_kg).toBeNull();
+    expect(parseProductDetail({ ...raw, weight_kg: '2' })!.weight_kg).toBeNull();
+  });
   it('halaman produk membuang item rusak dan cursor tidak aman', () => {
     const p = parseProductPage({ items: [raw, { product_id: 'x' }], next_cursor: 'a b', catalog_synced_at: '2026-10-09T00:00:00Z' })!;
     expect(p.items).toHaveLength(1);
@@ -116,9 +121,10 @@ describe('normalisasi respons', () => {
     const ch = parseChannels({
       items: [
         {
-          channel_code: 'RTL',
-          company_code: 'RTL',
+          channel_code: 'GL',
+          company_code: 'GL',
           name: 'Supermarket',
+          payment_modes: ['counter', 'bogus'],
           fulfilment: { pickup: true, delivery: false },
           outlets: [{ outlet_code: 'TOKO-01', public_name: 'Toko Pusat', pickup_enabled: true, prep_minutes: 30 }, { outlet_code: 'bad code' }],
         },
@@ -127,8 +133,9 @@ describe('normalisasi respons', () => {
     })!;
     expect(ch).toHaveLength(1);
     expect(ch[0]!.outlets).toHaveLength(1);
-    expect(channelsForBrand(ch, ['FNB'])).toHaveLength(0);
-    expect(channelsForBrand(ch, ['RTL', 'FNB'])).toHaveLength(1);
+    expect(ch[0]!.payment_modes).toEqual(['counter']);
+    expect(channelsForBrand(ch, ['PB'])).toHaveLength(0);
+    expect(channelsForBrand(ch, ['GL', 'PB'])).toHaveLength(1);
 
     const cats = parseCategories({ items: [{ category_id: 2, name: 'B', sequence: 2 }, { category_id: 1, name: 'A', sequence: 1 }, { name: 'x' }] })!;
     expect(cats.map((c) => c.category_id)).toEqual([1, 2]);
@@ -138,7 +145,9 @@ describe('normalisasi respons', () => {
     ]);
   });
   it('nama PT', () => {
-    expect(companyDisplayName('RTL')).toMatch(/Retail/);
+    expect(companyDisplayName('GL')).toBe('PT Grand Lucky');
+    expect(companyDisplayName('BCR')).toBe('Bacha Coffee Retail');
+    expect(companyDisplayName('RTL')).toBe('RTL'); // kode lama sudah dihapus
     expect(companyDisplayName('XYZ')).toBe('XYZ');
   });
 });

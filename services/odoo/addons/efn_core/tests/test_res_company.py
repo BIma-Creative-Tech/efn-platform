@@ -19,15 +19,27 @@ class TestEfnResCompany(TransactionCase):
             Company.create({"name": "EFN Farm Uji B", "efn_brand_code": "FARM"})
 
     def test_business_type_derived_from_brand_code(self):
+        # G20 (docs/04 §12.1): GL,BCR -> retail; PB,BCF -> fnb; EFN -> holding; FARM -> farm.
         Company = self.env["res.company"]
-        Company.search([("efn_brand_code", "in", ("RTL", "FNB"))]).write({"efn_brand_code": False})
+        expected = {"EFN": "holding", "GL": "retail", "PB": "fnb", "BCR": "retail", "BCF": "fnb", "FARM": "farm"}
+        Company.search([("efn_brand_code", "in", list(expected))]).write({"efn_brand_code": False})
         Company.flush_model(["efn_brand_code"])
-        company = Company.create({"name": "EFN Retail Uji", "efn_brand_code": "RTL"})
-        self.assertEqual(company.efn_business_type, "retail")
-        company.efn_brand_code = "FNB"
-        self.assertEqual(company.efn_business_type, "fnb")
+        company = Company.create({"name": "EFN Uji Kode", "efn_brand_code": "GL"})
+        for code, business_type in expected.items():
+            with self.subTest(code=code):
+                company.efn_brand_code = code
+                self.assertEqual(company.efn_business_type, business_type)
         company.efn_brand_code = False
         self.assertFalse(company.efn_business_type)
+
+    def test_selection_matches_contract_codes(self):
+        """W-32/E-43: Selection = 6 kode kontrak §12.1; kode lama RTL/FNB tidak lagi diterima."""
+        field = self.env["res.company"]._fields["efn_brand_code"]
+        codes = [value for value, _label in field.selection]
+        self.assertEqual(codes, ["EFN", "GL", "PB", "BCR", "BCF", "FARM"])
+        for old in ("RTL", "FNB"):
+            with self.subTest(old=old), self.assertRaises(ValueError):
+                self.env["res.company"].create({"name": f"EFN Kode Lama {old}", "efn_brand_code": old})
 
     def test_single_merchant_of_record(self):
         Company = self.env["res.company"]

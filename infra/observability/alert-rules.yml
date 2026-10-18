@@ -274,7 +274,7 @@ groups:
       # R-T15 (L-6; W-11 key 30 hari + rotasi otomatis): Odoo tidak mengekspos masa berlaku key lewat /json/2 ->
       # metrik textfile node-exporter ditulis scripts/host/efn-rotate-online-key (timer harian, rotasi saat sisa < 10 h):
       #   efn_odoo_api_key_expiry_timestamp_seconds / _active_keys / _rotation_last_run_ok /
-      #   _rotation_last_run_timestamp_seconds / _rotation_last_success_timestamp_seconds  {channel="RTL"|"RTL-GL"|...}
+      #   _rotation_last_run_timestamp_seconds / _rotation_last_success_timestamp_seconds  {channel="GL"|"PB"|"BCR"|"BCF"} (G20)
       # G19 (docs/04 §11.3): satu deret per kanal; `--all` menandai last_run_ok=0 juga untuk kanal yang gagal sebelum
       # sempat menulis metrik (secret tidak di-mount, user teknis bersama) -> EfnOnlineApiKeyRotationFailed per kanal.
       # Sisa < 7 hari = timer sudah gagal >= 3 hari berturut-turut (normal: rotasi di sisa 10 hari).

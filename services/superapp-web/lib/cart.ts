@@ -324,7 +324,16 @@ function parseTaxGroups(v: unknown): TaxGroup[] {
 }
 
 /** Allowlist kode issue dari BFF. Kode tak dikenal tetap menjadi issue (tetap memblokir checkout) tetapi dinormalkan. */
-export const KNOWN_ISSUE_CODES = ['out_of_stock', 'item_unavailable', 'qty_exceeds_max', 'qty_limit', 'price_changed'] as const;
+export const KNOWN_ISSUE_CODES = [
+  'out_of_stock',
+  'item_unavailable',
+  'qty_exceeds_max',
+  'qty_limit',
+  'price_changed',
+  // §12.3 (W-33): `weight_limit` = tingkat grup/PT (product_id null); `weight_missing` = per produk.
+  'weight_limit',
+  'weight_missing',
+] as const;
 export const UNKNOWN_ISSUE_CODE = 'unknown_issue';
 
 export function parseIssues(v: unknown): QuoteIssue[] {
@@ -416,8 +425,20 @@ export const ISSUE_LABEL: Record<string, string> = {
   qty_exceeds_max: 'Melebihi jumlah maksimum',
   qty_limit: 'Jumlah melebihi batas pembelian. Kurangi jumlah barang ini.',
   price_changed: 'Harga berubah',
+  weight_limit: 'Total berat pesanan melebihi batas untuk PT ini. Kurangi jumlah atau hapus beberapa barang, lalu coba lagi.',
+  weight_missing: 'Berat barang ini belum tercatat sehingga belum bisa dipesan online. Hapus barang ini atau beli langsung di toko.',
 };
 
 export function issueLabel(code: string): string {
   return ISSUE_LABEL[code] ?? 'Tidak dapat dipesan';
+}
+
+/** Issue tingkat grup/PT (tanpa `product_id`), mis. `weight_limit`. Tidak menempel ke baris produk mana pun. */
+export function groupLevelIssues(g: Pick<QuoteGroup, 'issues'>): QuoteIssue[] {
+  return g.issues.filter((i) => i.product_id === null);
+}
+
+/** Issue yang menempel pada satu produk (mis. `weight_missing`, `out_of_stock`). */
+export function productIssue(g: Pick<QuoteGroup, 'issues'>, productId: number): QuoteIssue | undefined {
+  return g.issues.find((i) => i.product_id === productId);
 }

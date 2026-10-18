@@ -17,14 +17,15 @@
         <field name="active" eval="True"/>
     </record>
 
-    <!-- 4 PT = 4 company terpisah (badan hukum berbeda). JANGAN memakai parent_id
-         (fitur "Branches" Odoo): cabang berbagi CoA/pajak induk, tidak cocok untuk PT berbeda.
-         G20 (keputusan pemilik proyek 18 Okt 2026, 18-27: setiap brand punya PT sendiri): nama tampilan mengikuti
-         struktur baru -> company_rtl = PT Grand Lucky (ritel, PPN), company_fnb = PT Paris Baguette (F&B, PB1, + CK).
-         xmlid & efn_brand_code (RTL/FNB) SENGAJA tidak diubah: kode adalah kontrak BFF/ETL (docs/04 §1).
-         Dua entitas Bacha Coffee (Retail & F&B) BELUM ditambahkan: butuh kode company baru di efn_core
-         (Selection) + kontrak docs/04 §1 + BFF/ETL -> rencana migrasi docs/08 §11.3. Nama tetap PLACEHOLDER
-         nama legal (noupdate: DB yang sudah ada tidak berubah; ubah lewat UI). -->
+    <!-- 6 entitas = 6 company terpisah (badan hukum berbeda), SEMUA ROOT. JANGAN memakai parent_id
+         (fitur "Branches" Odoo): cabang berbagi CoA/pajak induk, tidak cocok untuk PT berbeda, dan hierarki tidak
+         bisa diubah setelah dibuat (docs/04 §12.1).
+         G20 W-32/E-43 (keputusan pemilik proyek 18-27 + kontrak docs/04 §12.1, L-48; ADR-001 revisi 18 Okt):
+         company_rtl = PT Grand Lucky (GL, ritel PPN), company_fnb = PT Paris Baguette (PB, F&B PB1 + CK),
+         company_bcr = Bacha Coffee Retail (BCR, ritel PPN), company_bcf = Bacha Coffee F&B (BCF, F&B PB1 + SC).
+         xmlid company_rtl/company_fnb SENGAJA dipertahankan (L-48: mengurangi perubahan); kode lama RTL/FNB dihapus.
+         Tidak ada migrasi data: DB dev/CI dibuat ulang (noupdate: DB lama TIDAK diperbarui otomatis).
+         Nama = PLACEHOLDER nama legal (ubah lewat UI). -->
     <record id="company_efn" model="res.company">
         <field name="name">Holding EFN (PLACEHOLDER nama legal)</field>
         <field name="sequence">1</field>
@@ -38,7 +39,7 @@
     <record id="company_rtl" model="res.company">
         <field name="name">PT Grand Lucky (PLACEHOLDER nama legal)</field>
         <field name="sequence">2</field>
-        <field name="efn_brand_code">RTL</field>
+        <field name="efn_brand_code">GL</field>
         <field name="country_id" ref="base.id"/>
         <field name="currency_id" ref="base.IDR"/>
         <!-- R3: validasi VIES (EU) tidak relevan untuk NPWP dan butuh egress internet. -->
@@ -48,7 +49,28 @@
     <record id="company_fnb" model="res.company">
         <field name="name">PT Paris Baguette (PLACEHOLDER nama legal)</field>
         <field name="sequence">3</field>
-        <field name="efn_brand_code">FNB</field>
+        <field name="efn_brand_code">PB</field>
+        <field name="country_id" ref="base.id"/>
+        <field name="currency_id" ref="base.IDR"/>
+        <!-- R3: validasi VIES (EU) tidak relevan untuk NPWP dan butuh egress internet. -->
+        <field name="vat_check_vies" eval="False"/>
+    </record>
+
+    <!-- G20 W-32: dua PT Bacha Coffee (ritel butik & kafe). Transfer pricing cost-plus hanya BCR <-> BCF (W-15). -->
+    <record id="company_bcr" model="res.company">
+        <field name="name">Bacha Coffee Retail (PLACEHOLDER nama legal)</field>
+        <field name="sequence">4</field>
+        <field name="efn_brand_code">BCR</field>
+        <field name="country_id" ref="base.id"/>
+        <field name="currency_id" ref="base.IDR"/>
+        <!-- R3: validasi VIES (EU) tidak relevan untuk NPWP dan butuh egress internet. -->
+        <field name="vat_check_vies" eval="False"/>
+    </record>
+
+    <record id="company_bcf" model="res.company">
+        <field name="name">Bacha Coffee F&amp;B (PLACEHOLDER nama legal)</field>
+        <field name="sequence">5</field>
+        <field name="efn_brand_code">BCF</field>
         <field name="country_id" ref="base.id"/>
         <field name="currency_id" ref="base.IDR"/>
         <!-- R3: validasi VIES (EU) tidak relevan untuk NPWP dan butuh egress internet. -->
@@ -57,7 +79,7 @@
 
     <record id="company_farm" model="res.company">
         <field name="name">FARM (PLACEHOLDER nama legal)</field>
-        <field name="sequence">4</field>
+        <field name="sequence">6</field>
         <field name="efn_brand_code">FARM</field>
         <field name="country_id" ref="base.id"/>
         <field name="currency_id" ref="base.IDR"/>
@@ -65,9 +87,9 @@
         <field name="vat_check_vies" eval="False"/>
     </record>
 
-    <!-- Admin boleh berpindah ke keempat company (user lain diatur per peran). -->
+    <!-- Admin boleh berpindah ke keenam company (user lain diatur per peran). -->
     <record id="base.user_admin" model="res.users">
-        <field name="company_ids" eval="[(4, ref('company_efn')), (4, ref('company_rtl')), (4, ref('company_fnb')), (4, ref('company_farm'))]"/>
+        <field name="company_ids" eval="[(4, ref('company_efn')), (4, ref('company_rtl')), (4, ref('company_fnb')), (4, ref('company_bcr')), (4, ref('company_bcf')), (4, ref('company_farm'))]"/>
     </record>
 
     <!-- Fiscal localization Indonesia (template 'id' dari l10n_id) per company.
@@ -85,5 +107,7 @@
     <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_efn'))]"/>
     <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_rtl'))]"/>
     <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_fnb'))]"/>
+    <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_bcr'))]"/>
+    <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_bcf'))]"/>
     <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_farm'))]"/>
 </odoo>

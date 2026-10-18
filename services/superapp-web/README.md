@@ -9,7 +9,7 @@
 | Path | Isi |
 |---|---|
 | `proxy.ts` | (Next 16, dulu `middleware.ts`) Host -> brand, set request header `x-efn-brand` (dev: `?brand=efn-mart`) |
-| `lib/brands.ts` | Konfigurasi brand & company (RTL/FNB, tarif pajak placeholder) |
+| `lib/brands.ts` | Konfigurasi brand & company (EFN/GL/PB/BCR/BCF/FARM; peta brand Bacha = BCR+BCF) |
 | `lib/bff.ts` | Klien BFF server-side (`BFF_INTERNAL_URL`), tipe kontrak docs/04 |
 | `lib/bff-config.ts` | Guard transport BFF (https wajib, CA internal) — murni, diuji unit |
 | `lib/safe-next.ts` | Validator `?next=` anti open-redirect (SEC-13) |

@@ -1,0 +1,7 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_online_counter_lookup_pos_manager,efn.online.counter.lookup pos manager,model_efn_online_counter_lookup,point_of_sale.group_pos_manager,1,0,0,0
+access_efn_online_counter_lookup_system,efn.online.counter.lookup system,model_efn_online_counter_lookup,base.group_system,1,0,0,0
+access_efn_online_counter_settlement_pos_manager,efn.online.counter.settlement pos manager,model_efn_online_counter_settlement,point_of_sale.group_pos_manager,1,0,0,0
+access_efn_online_counter_settlement_sale_manager,efn.online.counter.settlement sale manager,model_efn_online_counter_settlement,sales_team.group_sale_manager,1,0,0,0
+access_efn_online_counter_settlement_invoice,efn.online.counter.settlement billing,model_efn_online_counter_settlement,account.group_account_invoice,1,0,0,0
+access_efn_online_counter_settlement_system,efn.online.counter.settlement system,model_efn_online_counter_settlement,base.group_system,1,0,0,0

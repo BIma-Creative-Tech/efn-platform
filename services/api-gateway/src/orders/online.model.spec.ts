@@ -1,4 +1,21 @@
-import { canTransitionPart, deriveOrderStatus } from './online.model';
+import { UNPAID_OPEN, canTransitionPart, deriveOrderStatus, isPaymentMethod, orderHasPayment } from './online.model';
+
+describe('G20 §12.2: model bayar di kasir', () => {
+  it('awaiting_counter_payment = order belum dibayar terbuka; tidak diturunkan dari bagian', () => {
+    expect(UNPAID_OPEN).toEqual(['created', 'awaiting_payment', 'awaiting_counter_payment']);
+    expect(deriveOrderStatus('awaiting_counter_payment', ['placed'])).toBe('awaiting_counter_payment');
+    expect(deriveOrderStatus('paid', ['confirmed'])).toBe('fulfilling');
+  });
+  it('isPaymentMethod hanya qris|counter; orderHasPayment: intent ATAU counter + paid_at', () => {
+    expect(isPaymentMethod('qris')).toBe(true);
+    expect(isPaymentMethod('counter')).toBe(true);
+    for (const v of ['COUNTER', 'cash', null, undefined, 1]) expect(isPaymentMethod(v)).toBe(false);
+    expect(orderHasPayment({ payment_method: 'qris', payment_intent_id: 'x', paid_at: null })).toBe(true);
+    expect(orderHasPayment({ payment_method: 'qris', payment_intent_id: null, paid_at: new Date() })).toBe(false);
+    expect(orderHasPayment({ payment_method: 'counter', payment_intent_id: null, paid_at: null })).toBe(false);
+    expect(orderHasPayment({ payment_method: 'counter', payment_intent_id: null, paid_at: new Date() })).toBe(true);
+  });
+});
 
 describe('Transisi bagian monoton (§10.6.2 + L-14)', () => {
   it('naik peringkat diizinkan; mundur ditolak', () => {

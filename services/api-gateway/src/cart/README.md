@@ -19,11 +19,13 @@ Kontrak: `docs/04` §10.3.3–10.3.4, §10.12, **§11.2 (G19, menang atas §10)*
 | Observability | `efn_online_promo_codes_total{result="applied\|invalid"}` tanpa label kode. Kode **tidak pernah** di-log, termasuk hash/tag-nya (SEC-132/L-42: tag SHA-256 tanpa kunci dihapus); log debug hanya memuat jumlah terpakai/tidak terpakai. |
 | Issue `qty_limit` | SEC-131: Odoo menandai baris dengan qty > batas per baris kanal sebagai `issues: [{ product_id, code: "qty_limit" }]` (diteruskan apa adanya ke klien, seperti `out_of_stock`). Checkout → `409 cart_has_issues`. Baris ber-`qty_limit` boleh dikembalikan Odoo dengan qty dipangkas (< qty cart); selain itu baris ≠ cart tetap `503`. |
 
+| Issue berat (G20 §12.3) | Batas berat kanal (`max_order_weight_kg`, 0 = mati) dihitung Odoo: `{ product_id: null, code: "weight_limit" }` di grup (Σ berat × qty > batas); produk tanpa berat saat `weight_missing_policy=block` → `{ product_id, code: "weight_missing" }`. Diteruskan apa adanya di `groups[].issues`, masuk `quote_hash`; checkout → `409 cart_has_issues`. Bentuk salah (weight_limit dengan product_id / weight_missing tanpa) → `503`. |
+
 Kontrak respons quote (klien):
 
 ```json
 { "quote_id": "<uuid>", "valid_until": "<iso>", "cart_version": 7,
-  "groups": [{ "channel_code": "RTL-GL", "company_code": "RTL", "outlet_code": "TOKO-01", "fulfilment": "pickup",
+  "groups": [{ "channel_code": "GL", "company_code": "GL", "outlet_code": "TOKO-01", "fulfilment": "pickup",
     "lines": [
       { "product_id": 11, "name": "Beras", "qty": 1, "price_unit_incl": 79900, "subtotal_incl": 79900, "tax_labels": ["PPN 11%"], "available": true },
       { "product_id": 9001, "name": "Promo Gajian", "qty": 1, "price_unit_incl": -5000, "subtotal_incl": -5000, "tax_labels": ["PPN 11%"], "available": true, "reward": true }

@@ -11,7 +11,7 @@ ETL, dan regresi negatif enkripsi. Hasil gelombang 8: `docs/testing/E2E_SMOKE_RE
 |---|---|---|
 | `run-e2e-smoke.sh` | host (Git Bash/Linux) | orkestrator skenario `a b c d f e g l p o` (default semua; `v` opsional), ringkasan PASS/FAIL, exit 1 bila gagal |
 | `bff_smoke.py` | container `python:3.12` di network `efn_edge` (klien publik, lewat Traefik) | Super-App/BFF: ALTCHA PoW, OTP, JWT, consent, upload foto sintetis (Pillow), DSAR |
-| `odoo_pos_smoke.py` | `odoo shell` di container `efn-odoo-1` | setup POS smoke (company FNB), `efn_otp_request/verify`, `sync_from_ui`, `efn_gateway_*`, cron erasure |
+| `odoo_pos_smoke.py` | `odoo shell` di container `efn-odoo-1` | setup POS smoke (company PB; G20 dulu FNB), `efn_otp_request/verify`, `sync_from_ui`, `efn_gateway_*`, cron erasure |
 
 ```bash
 bash scripts/smoke/run-e2e-smoke.sh          # semua skenario (~15 menit; DSAR menunggu 1-2 siklus ETL 120 s)
@@ -93,11 +93,14 @@ baru (L/M/N) per run; nilai poin memakai default BFF dev (1 poin/Rp10.000, Rp100
 | File baru | Dijalankan di | Isi |
 |---|---|---|
 | `online_smoke.py` | container `python:3.12` (efn_edge → Traefik `api.efn.local`/`app.efn.local`; subperintah `events` di efn_internal) | katalog, cart, quote, checkout (Idempotency-Key L-8), simulate bayar, status, kode ambil, anti-enumeration, DSAR L-4, kill switch, alur Next.js, event Odoo→BFF HMAC |
-| `odoo_online_smoke.py` | `odoo shell` di `efn-odoo-1` | `setup` kanal RTL dev (data fiktif `SMOKE`, idempoten), `stock`, `order`, `ready`/`handover` sebagai user staf non-admin, `outbox`, `apikey` |
+| `odoo_online_smoke.py` | `odoo shell` di `efn-odoo-1` | `setup` kanal GL dev (G20; data fiktif `SMOKE`, idempoten), `stock`, `order`, `ready`/`handover` sebagai user staf non-admin, `outbox`, `apikey` |
 
-Prasyarat (sekali per volume dev): `efn_online_order efn_setup_online` terpasang, SQL `07-platform-online.sql`, API key
-nyata user teknis di `secrets/odoo_api_key_online_rtl.txt` (runbook `odoo-online-api-key.md` §1; langkah `setup` membuat
-user `efn_online_rtl` lebih dulu), lalu `up -d --force-recreate api-gateway`.
+Prasyarat (sekali per volume dev): `efn_online_order efn_setup_online` terpasang, SQL `07-platform-online.sql` +
+`09-platform-g20.sql`, API key nyata user teknis di `secrets/odoo_api_key_online_gl.txt` (runbook `odoo-online-api-key.md`
+§1; langkah `setup` membuat user `efn_online_gl` lebih dulu), lalu `up -d --force-recreate api-gateway`.
+G20 (docs/04 §12.1): kanal/company smoke = `GL` (kode PT; dulu `RTL`), company pembanding event silang = `PB` (dulu `FNB`).
+`run-e2e-smoke.sh` dan `online_smoke.py` sudah memakai kode baru; `odoo_online_smoke.py`/`odoo_pos_smoke.py` milik
+builder Odoo harus mengikuti (kanal `GL`, user `efn_online_gl`, `efn_brand_code` `PB`).
 - Gateway + key nyata: 10 path `/json/2` → jawaban aplikasi Odoo (200 / `efn_online:<kode>` 422), bukan 401/403/deny.
 - Alur utama: quote → `accept_total` salah 409 → tanpa key 400 → checkout 201 → klik ganda = order sama → body beda 409
   → bayar (webhook mock HMAC) → `confirmed` (SO + faktur) → `ready` (aksi staf) → serah terima kode ambil → `completed`;

@@ -32,4 +32,21 @@
         <field name="journal_id" model="account.journal"
                search="[('type', '=', 'bank'), ('company_id', '=', ref('efn_setup_company.company_fnb'))]"/>
     </record>
+
+    <!-- G20 W-32 (docs/04 §12.1): PT POS baru Bacha Coffee Retail (BCR) & Bacha Coffee F&B (BCF). -->
+    <record id="pos_payment_method_edc_bcr" model="pos.payment.method">
+        <field name="name">Kartu Debit/Kredit (EDC manual)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="payment_method_type">none</field>
+        <field name="journal_id" model="account.journal"
+               search="[('type', '=', 'bank'), ('company_id', '=', ref('efn_setup_company.company_bcr'))]"/>
+    </record>
+
+    <record id="pos_payment_method_edc_bcf" model="pos.payment.method">
+        <field name="name">Kartu Debit/Kredit (EDC manual)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="payment_method_type">none</field>
+        <field name="journal_id" model="account.journal"
+               search="[('type', '=', 'bank'), ('company_id', '=', ref('efn_setup_company.company_bcf'))]"/>
+    </record>
 </odoo>

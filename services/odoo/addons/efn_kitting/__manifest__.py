@@ -1,7 +1,8 @@
 {
     "name": "EFN Kitting (Central Kitchen)",
     "summary": "Paket Central Kitchen via BoM Manufacture + MO; Phantom hanya untuk menu combo POS (ADR-018).",
-    "version": "19.0.1.1.0",
+    # 19.0.1.1.1 (G20 W-32): demo mencari company kode 'PB' (docs/04 §12.1, semula 'FNB').
+    "version": "19.0.1.1.1",
     "category": "EFN/Manufacturing",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",

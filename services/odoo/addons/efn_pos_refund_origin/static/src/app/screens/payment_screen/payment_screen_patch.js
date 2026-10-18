@@ -3,13 +3,35 @@
  * otomatis (alokasi proporsional dari server, `pos.config.efn_refund_origin_allocation`). Retur tanpa struk:
  * hanya metode tunai. Server tetap penentu akhir saat sync (metode di luar asal / melebihi sisa -> ditolak).
  * Offline: daftar metode disaring dari pembayaran order asal yang termuat (bila ada), tanpa isi otomatis.
+ *
+ * E-41 (docs/04 §12.4, L-51): mode `manager_approval` -> sebelum validasi retur tanpa struk, dialog persetujuan
+ * Store Manager (PIN diverifikasi server, `pos.config.efn_return_approval_request`). Offline: DIBLOKIR dengan pesan
+ * (persetujuan butuh server). Server tetap penentu akhir saat sync (tanpa persetujuan sah -> ditolak).
  */
+import { _t } from "@web/core/l10n/translation";
+import { AlertDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
+import { makeAwaitable } from "@point_of_sale/app/utils/make_awaitable_dialog";
 import { patch } from "@web/core/utils/patch";
 import { onWillStart } from "@odoo/owl";
+import { EfnReturnApprovalDialog } from "@efn_pos_refund_origin/app/components/efn_return_approval_dialog/efn_return_approval_dialog";
 
 function refundOrigin(order) {
     return order?.lines?.find((line) => line.refunded_orderline_id)?.refunded_orderline_id?.order_id || null;
+}
+
+/** Retur tanpa struk = ada baris qty < 0 dan tidak ada baris yang menunjuk order asal (sama dengan aturan server). */
+export function efnIsUnlinkedReturn(order) {
+    const lines = order?.lines || [];
+    return lines.some((line) => line.qty < 0) && !lines.some((line) => line.refunded_orderline_id);
+}
+
+/** Uang keluar order (positif): jumlah pembayaran negatif yang bukan kembalian. */
+export function efnOutgoingAmount(order) {
+    const total = (order?.payment_ids || [])
+        .filter((p) => p.amount < 0 && !p.is_change)
+        .reduce((sum, p) => sum - p.amount, 0);
+    return Math.round(total * 100) / 100;
 }
 
 patch(PaymentScreen.prototype, {
@@ -63,6 +85,96 @@ patch(PaymentScreen.prototype, {
     onMounted() {
         super.onMounted(...arguments);
         this.efnApplyRefundAllocation();
+    },
+
+    async validateOrder(isForceValidate) {
+        const order = this.currentOrder;
+        if (
+            order &&
+            this.pos.config.efn_unlinked_return_mode === "manager_approval" &&
+            efnIsUnlinkedReturn(order)
+        ) {
+            const approved = await this.efnEnsureReturnApproval(order);
+            if (!approved) {
+                return;
+            }
+        }
+        return await super.validateOrder(...arguments);
+    },
+
+    efnAlert(body) {
+        this.dialog.add(AlertDialog, { title: _t("Retur tanpa struk"), body });
+    },
+
+    async efnEnsureReturnApproval(order) {
+        if (this.pos.data.network?.offline) {
+            this.efnAlert(
+                _t(
+                    "Retur tanpa struk memerlukan persetujuan Store Manager yang diverifikasi server. POS sedang " +
+                        "offline: tunggu koneksi pulih atau batalkan retur ini."
+                )
+            );
+            return false;
+        }
+        const amount = efnOutgoingAmount(order);
+        // Properti klien saja (bukan field): persetujuan yang sudah didapat untuk order ini di layar ini.
+        const previous = order.efnReturnApproval;
+        if (previous && previous.uuid === order.uuid && amount <= previous.maxAmount && Date.now() < previous.until) {
+            return true;
+        }
+        let approvers;
+        try {
+            approvers = await this.pos.data.call("pos.config", "efn_return_approval_approvers", [[this.pos.config.id]]);
+        } catch {
+            this.efnAlert(_t("Server tidak dapat dihubungi. Retur tanpa struk tidak dapat disetujui sekarang."));
+            return false;
+        }
+        if (!approvers?.ok) {
+            this.efnAlert(approvers?.message || _t("Persetujuan retur tanpa struk tidak tersedia."));
+            return false;
+        }
+        if (!approvers.approvers.length) {
+            this.efnAlert(
+                _t(
+                    "Tidak ada Store Manager lain dengan PIN persetujuan retur untuk POS ini. Minta Store Manager " +
+                        "mengatur PIN di Preferensi Odoo."
+                )
+            );
+            return false;
+        }
+        let grant = null;
+        const confirmed = await makeAwaitable(this.dialog, EfnReturnApprovalDialog, {
+            title: _t("Persetujuan Store Manager"),
+            amountLabel: this.env.utils?.formatCurrency?.(amount) ?? String(amount),
+            approvers: approvers.approvers,
+            submit: async ({ approverId, pin, reason }) => {
+                if (this.pos.data.network?.offline) {
+                    return { ok: false, message: _t("POS offline. Persetujuan tidak dapat diverifikasi.") };
+                }
+                const result = await this.pos.data.call("pos.config", "efn_return_approval_request", [
+                    [this.pos.config.id],
+                    order.uuid,
+                    approverId,
+                    pin,
+                    amount,
+                    reason,
+                ]);
+                if (result?.ok) {
+                    grant = result;
+                }
+                return result;
+            },
+        });
+        if (confirmed !== true || !grant) {
+            return false;
+        }
+        order.efnReturnApproval = {
+            uuid: order.uuid,
+            maxAmount: grant.max_amount,
+            // Sedikit lebih pendek dari TTL server agar klien tidak memakai persetujuan yang hampir kedaluwarsa.
+            until: Date.now() + Math.max((grant.expires_in || 0) - 30, 0) * 1000,
+        };
+        return true;
     },
 
     efnApplyRefundAllocation() {

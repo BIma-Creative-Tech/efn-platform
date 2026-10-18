@@ -8,6 +8,7 @@ import pytest
 
 from efn_etl.gl import (
     COMPANIES,
+    COMPANY_COLUMNS,
     GL_ACCOUNTS,
     GL_JOBS,
     GL_LINE_COLUMNS,
@@ -46,6 +47,21 @@ def _line(**kw: object) -> dict[str, object]:
     return row
 
 
+def _company(**kw: object) -> dict[str, object]:
+    row: dict[str, object] = {
+        "company_id": 3,
+        "name": "PT Grand Lucky",
+        "brand": "GL",
+        "parent_id": None,
+        "currency": "IDR",
+        "fiscalyear_last_month": "12",
+        "fiscalyear_last_day": 31,
+        "write_date": datetime(2026, 1, 1),
+    }
+    row.update(kw)
+    return row
+
+
 def test_job_sql_contract_and_no_pii_columns() -> None:
     for job in GL_JOBS:
         sql = job.sql
@@ -62,10 +78,13 @@ def test_job_sql_contract_and_no_pii_columns() -> None:
 
 
 def test_columns_exist_in_clickhouse_schema_and_grants() -> None:
-    ddl = (ROOT.parents[1] / "infra" / "clickhouse" / "init" / "03-gl-audit.sql").read_text(encoding="utf-8")
+    init = ROOT.parents[1] / "infra" / "clickhouse" / "init"
+    ddl = (init / "03-gl-audit.sql").read_text(encoding="utf-8")
+    g20 = (init / "08-g20-entities.sql").read_text(encoding="utf-8")
     for job in GL_JOBS:
         for col in job.columns:
-            assert f"    {col} " in ddl, (job.target_table, col)
+            added = f"ALTER TABLE efn_dwh.{job.target_table} ADD COLUMN IF NOT EXISTS {col} " in g20
+            assert f"    {col} " in ddl or added, (job.target_table, col)
     grants = (ROOT / "sql" / "odoo-readonly-grants.sql").read_text(encoding="utf-8")
     for needle in (
         "ON public.account_move_line",
@@ -121,19 +140,10 @@ def test_transform_account_and_company() -> None:
         }
     )
     assert acc[:7] == [477, 3, "121000", "Piutang", "asset_receivable", "asset", 1]
-    comp = transform_company(
-        {
-            "company_id": 3,
-            "name": "PT EFN Retail",
-            "brand": "RTL",
-            "parent_id": None,
-            "currency": "IDR",
-            "fiscalyear_last_month": "12",
-            "fiscalyear_last_day": 31,
-            "write_date": datetime(2026, 1, 1),
-        }
-    )
-    assert comp[:7] == [3, "PT EFN Retail", "RTL", None, "IDR", 12, 31]
+    comp = transform_company(_company())
+    assert comp[:7] == [3, "PT Grand Lucky", "GL", None, "IDR", 12, 31]
+    out = dict(zip(COMPANY_COLUMNS, comp, strict=True))
+    assert (out["business_type"], out["brand_group"]) == ("retail", "GL")
     with pytest.raises(ValueError):
         transform_company(
             {
@@ -143,6 +153,33 @@ def test_transform_account_and_company() -> None:
                 "write_date": datetime(2026, 1, 1),
             }
         )
+
+
+@pytest.mark.parametrize(
+    ("code", "business_type", "brand_group"),
+    [
+        ("EFN", "holding", "EFN"),
+        ("GL", "retail", "GL"),
+        ("PB", "fnb", "PB"),
+        ("BCR", "retail", "BACHA"),
+        ("BCF", "fnb", "BACHA"),
+        ("FARM", "farm", "FARM"),
+        (" bcf ", "fnb", "BACHA"),  # dinormalisasi
+        (None, "", ""),  # company tanpa kode PT (mis. company bawaan Odoo)
+        ("", "", ""),
+    ],
+)
+def test_transform_company_six_entities(code: object, business_type: str, brand_group: str) -> None:
+    out = dict(zip(COMPANY_COLUMNS, transform_company(_company(brand=code)), strict=True))
+    assert (out["business_type"], out["brand_group"]) == (business_type, brand_group)
+    assert out["brand"] == ("" if code is None else str(code).strip().upper())
+
+
+@pytest.mark.parametrize("code", ["RTL", "FNB", "BACHA", "XYZ"])
+def test_transform_company_rejects_legacy_or_unknown_code(code: str) -> None:
+    # Kode lama G19 (RTL/FNB) dihapus G20; brand_code kanal (BACHA) bukan kode PT -> fail closed.
+    with pytest.raises(ValueError):
+        transform_company(_company(brand=code))
 
 
 @pytest.mark.parametrize(

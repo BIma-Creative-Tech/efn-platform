@@ -11,14 +11,15 @@ Modul konfigurasi **data-only** (Python hanya `hooks.py`: presisi IDR Rp1, W-03)
 | Bagian | Isi | File | Sifat |
 |---|---|---|---|
 | Mata uang | `base.IDR` diaktifkan; **presisi Rp1** (`rounding = 1` → 0 desimal, W-03/Q-ON6, sejak 19.0.1.4.0) | `data/res_company_data.xml`, `hooks.py` (`pre_init_hook`) | hanya saat install; **DB baru tanpa demo** (lihat di bawah) |
-| Company | 4 `res.company`: `company_efn` (EFN, *Holding EFN*), `company_rtl` (RTL, *PT Grand Lucky*), `company_fnb` (FNB, *PT Paris Baguette* + Central Kitchen), `company_farm` (FARM). Negara Indonesia, IDR, `efn_brand_code`. `efn_business_type` **tidak** diisi (compute dari kode sejak `efn_core` 19.0.1.2.0, temuan QA U6). **G20 (18-27):** nama tampilan mengikuti "setiap brand punya PT sendiri"; xmlid & kode RTL/FNB tetap (kontrak BFF/ETL). Dua entitas **Bacha Coffee (Retail, F&B)** belum dibuat — rencana `docs/08 §11.3` | `data/res_company_data.xml` | noupdate; **nama = placeholder nama legal** |
-| Pembulatan pajak (G20, 18-6) | `tax_calculation_rounding_method = round_globally` (*Round per Tax*, per dokumen) eksplisit di 4 PT (default CE sama; template `l10n_id` tidak mengubah) | `data/account_tax_rounding_data.xml` | noupdate — Finance boleh mengubah |
-| Akses admin | `base.user_admin` mendapat ke-4 company | `data/res_company_data.xml` | noupdate |
+| Company | 6 `res.company` **root** (docs/04 §12.1, W-32/E-43, L-48): `company_efn` (EFN, *Holding EFN*), `company_rtl` (**GL**, *PT Grand Lucky*, ritel PPN), `company_fnb` (**PB**, *PT Paris Baguette* + Central Kitchen, F&B PB1), `company_bcr` (**BCR**, *Bacha Coffee Retail*, ritel PPN, baru), `company_bcf` (**BCF**, *Bacha Coffee F&B*, F&B PB1 + SC, baru), `company_farm` (FARM). Negara Indonesia, IDR, `efn_brand_code`, `try_loading('id')` per company. `efn_business_type` **tidak** diisi (compute dari kode). xmlid `company_rtl`/`company_fnb` **dipertahankan** (L-48), kode lama `RTL`/`FNB` dihapus | `data/res_company_data.xml` | noupdate; **nama = placeholder nama legal**; DB lama dibuat ulang (tanpa migrasi, §12.1) |
+| Pembulatan pajak (G20, 18-6) | `tax_calculation_rounding_method = round_globally` (*Round per Tax*, per dokumen) eksplisit di 6 PT (default CE sama; template `l10n_id` tidak mengubah) | `data/account_tax_rounding_data.xml` | noupdate — Finance boleh mengubah |
+| Akses admin | `base.user_admin` mendapat ke-6 company | `data/res_company_data.xml` | noupdate |
 | Fiscal localization | `account.chart.template.try_loading('id', company)` → CoA `l10n_id`, jurnal (Cash, Bank, Sales, …), pajak PPN template | `data/res_company_data.xml` | hanya saat install |
-| **PB1 (PT F&B)** | Grup pajak **PB1** (`tax_group_pb1_fnb`), pajak **PB1 Default 10% (PLACEHOLDER)** (`tax_pb1_10_fnb`, `price_include_override` kosong = ikut setting company) dan dijadikan `account_sale_tax_id` PT F&B | `data/account_tax_pb1_data.xml` | noupdate — tarif/nama/akun boleh diubah admin |
+| **PB1 (PT F&B)** | Grup pajak **PB1** (`tax_group_pb1_fnb`), pajak **PB1 Default 10% (PLACEHOLDER)** (`tax_pb1_10_fnb`, `price_include_override` kosong = ikut setting company) dan dijadikan `account_sale_tax_id` PT F&B. **G20:** salinan per company untuk Bacha Coffee F&B (`tax_group_pb1_bcf`, `tax_pb1_10_bcf`) | `data/account_tax_pb1_data.xml` | noupdate — tarif/nama/akun boleh diubah admin |
+| **Pajak F&B per layanan BCF (G20, 19.0.1.7.0)** | Sama dengan baris berikut, record sendiri bersufiks `_bcf`: `tax_service_charge_5_bcf`, `tax_pb1_dine_in_bcf`, `tax_pb1_non_dine_in_bcf` (0 %), FP *Bacha F&B Dine-in (PB1 + SC 5%)* (`fiscal_position_bcf_dine_in`) & *Bacha F&B Non-Dine-in (tanpa SC, PB1 0%)* (`fiscal_position_bcf_non_dine_in`); `account_price_include = tax_excluded`. BCR (ritel) memakai PPN template `tax_ST4` seperti GL | `data/account_tax_pb1_data.xml`, `data/account_tax_fnb_service_data.xml` | noupdate |
 | **Pajak F&B per layanan (W-14, G19, sejak 19.0.1.5.0)** | Harga menu PT F&B **exclude** (`account_price_include`); grup + pajak **Service Charge 5% (dine-in)** (`sequence` 5, `include_base_amount` → masuk DPP PB1); **PB1 Dine-in 10%** dan **PB1 Non-Dine-in 0%** (G20, keputusan 18-1); fiscal position **F&B Dine-in (PB1 + SC 5%)** dan **F&B Non-Dine-in (tanpa SC, PB1 0%)**, keduanya `auto_apply` mati. Produk menu cukup memakai PB1 default | `data/account_tax_fnb_service_data.xml` | noupdate — tarif dine-in PLACEHOLDER; non-dine-in 0 % **bisa diubah tanpa kode** (Amount pajak) |
 | Ilustrasi PB1 per kota | Pajak *PB1 Kota Contoh Non-Dine-in 0% (DEMO)* + fiscal position *Outlet Kota Contoh (DEMO)* (= non-dine-in kota contoh); pasangan dine-in: *PB1 Kota Contoh Dine-in 5% (DEMO)* + *Outlet Kota Contoh Dine-in (DEMO)* (PB1 kota + SC) | `demo/` | hanya DB demo; 5% = angka ilustrasi |
-| Harga termasuk pajak | `account_price_include = tax_included` di PT Retail | `demo/` | menunggu Q-9/Q-28 |
+| Harga termasuk pajak | `account_price_include = tax_included` di PT ritel (GL, BCR) | `demo/` | menunggu Q-9/Q-28 |
 | Agen penagih | `efn_is_merchant_of_record = True` di Holding | `demo/` | menunggu Q-1, ADR-019 |
 
 ### Presisi Rupiah Rp1 (W-03, keputusan pemilik proyek 10 Okt 2026 #19; R-T17)
@@ -33,7 +34,7 @@ Modul konfigurasi **data-only** (Python hanya `hooks.py`: presisi IDR Rp1, W-03)
 - Template **tidak** men-set `account_price_include` (default CE `tax_excluded`).
 
 ### Label pajak ke pelanggan (G17-QA-04, `data/account_tax_label_data.xml`, noupdate: hanya saat install)
-Template `l10n_id` memberi `invoice_label` "12%" pada `tax_ST4` (tarif efektif 11%) dan nama grup berbahasa Inggris ("Non-luxury Good Taxes"). Keduanya tampil ke pelanggan: struk, invoice, katalog & quote online E-28 (label baris = `invoice_label`, label subtotal = nama grup / `tax_totals.group_name`). Modul ini menimpa nilai en_US (bahasa sumber = fallback semua bahasa, termasuk `lang=id_ID` dari BFF selama id_ID belum aktif) di 4 PT:
+Template `l10n_id` memberi `invoice_label` "12%" pada `tax_ST4` (tarif efektif 11%) dan nama grup berbahasa Inggris ("Non-luxury Good Taxes"). Keduanya tampil ke pelanggan: struk, invoice, katalog & quote online E-28 (label baris = `invoice_label`, label subtotal = nama grup / `tax_totals.group_name`). Modul ini menimpa nilai en_US (bahasa sumber = fallback semua bahasa, termasuk `lang=id_ID` dari BFF selama id_ID belum aktif) di 6 PT:
 
 | Pajak penjualan | `invoice_label` | Grup | Nama grup |
 |---|---|---|---|
@@ -106,7 +107,7 @@ Odoo EFN tidak punya akses internet (hanya jaringan internal, SEC-01). Fitur sta
 |---|---|---|
 | Cron `base_vat.vies_iap_check_update` → `POST https://vies.api.odoo.com/api/vies/1/check_update` (selalu, tidak bergantung `vat_check_vies`) | traceback `NameResolutionError` (ERROR) tiap hari | cron `active = False` |
 | Cron `mail.ir_cron_module_update_notification` (publisher warranty) → `POST http://services.odoo.com/publisher-warranty/` dengan nama/email/telepon company + jumlah user | cron gagal (`cron_mode=None` → exception) + transfer data ke luar negeri bila ada egress | cron `active = False` |
-| VIES saat mengisi NPWP (`res.company.vat_check_vies`) | tidak dipanggil bila tidak ada company dengan flag ini | `vat_check_vies = False` di 4 company (install); default CE juga False |
+| VIES saat mengisi NPWP (`res.company.vat_check_vies`) | tidak dipanggil bila tidak ada company dengan flag ini | `vat_check_vies = False` di 6 company (install); default CE juga False |
 
 Hanya dipicu aksi pengguna (bukan cron) — dibiarkan, didokumentasikan untuk runbook/pelatihan: `partner_autocomplete` (auto-install; enrich company & autocomplete nama/NPWP → `partner-autocomplete.odoo.com`, gagal = WARNING; bila ingin bersih: uninstall modul ini lewat Apps), `snailmail`/`sms` (hanya bila dipakai; `stock_sms` default nonaktif: `res.company.stock_text_confirmation = False`), `web_unsplash`/`html_editor` (gambar & AI teks, hanya saat dipakai), `google_gmail`/`microsoft_outlook`/`google_address_autocomplete` (hanya bila dikonfigurasi), menu Apps (`apps.odoo.com`). Untuk mengaktifkan lagi cron di atas (hanya bila egress disetujui): ubah `no_egress.xml`, bukan UI.
 
@@ -119,7 +120,7 @@ Hanya dipicu aksi pengguna (bukan cron) — dibiarkan, didokumentasikan untuk ru
 ## Cara install
 ```bash
 odoo -d <db> -i efn_setup_company            # produksi/staging: PB1 default ikut (data), tanpa contoh kota/SC
-odoo -d <db_demo> -i efn_setup_company       # DB demo: + contoh kota, service charge, RTL tax-included
+odoo -d <db_demo> -i efn_setup_company       # DB demo: + contoh kota, GL & BCR tax-included
 ```
 Prasyarat: `efn_core` (≥ 19.0.1.2.0) di addons path. Install pada DB **baru** (company & CoA dibuat sekali).
 
@@ -128,6 +129,8 @@ Prasyarat: `efn_core` (≥ 19.0.1.2.0) di addons path. Install pada DB **baru** 
 - Perilaku POS: penerapan `default_fiscal_position_id` pada pajak yang dipetakan, interaksi preset vs default fiscal position, perhitungan `include_base_amount` di frontend POS, dan posting SC tanpa akun → **uji di PoC**. G19: pemetaan & perhitungan SC→PB1 diverifikasi di **source** 19.0 (JS POS = cermin `map_tax`, helper pajak bersama) dan diuji di sisi server (`tests/test_fnb_service_taxes.py`); **tour POS belum dijalankan** (docs/08 §10.4).
 - `pos.preset` tidak punya `company_id`: preset yang memakai fiscal position PT F&B jangan dipasang di POS PT lain.
 - `try_loading` saat instalasi modul mencetak peringatan "without a fully loaded registry"; bila CI gagal, pindahkan ke `post_init_hook` (E-11, efn-odoo-engineer).
-- Konflik demo `efn_kitting` (E-7) sudah diselesaikan engineer: demo `efn_kitting` mencari company `efn_brand_code = 'FNB'` yang ada.
+- Konflik demo `efn_kitting` (E-7) sudah diselesaikan engineer: demo `efn_kitting` mencari company `efn_brand_code = 'PB'` yang ada (G20: semula `FNB`).
+- **G20 W-32 (19.0.1.7.0):** tambah company hanya saat **install** (blok noupdate + `try_loading`); DB yang sudah memasang versi lama wajib dibuat ulang (`docs/runbooks/dev-reset.md`). Ilustrasi PB1 kota (demo) hanya untuk PT Paris Baguette; kota BCF dibuat admin dengan panduan di atas (pilih company BCF). Akun liabilitas PB1/pendapatan SC BCF = Finance (Q-2), sama seperti PB. Produk lintas entitas = produk kembar per company + pemetaan (Q-AD1-4 default); transfer pricing cost-plus hanya BCR ↔ BCF dan Holding ↔ PT (W-15, belum).
+- Pajak FARM tetap placeholder PPN template (⚠ Q-AD1-2, tanpa PPN keluaran = keputusan konsultan pajak).
 - Company bawaan (`base.main_company`) tidak diubah; arsipkan atau pakai sebagai company teknis.
 - Inter-company belum ada (F-03: modul custom `efn_intercompany` fase 1, `docs/08` §5.2).
