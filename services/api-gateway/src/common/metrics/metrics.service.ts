@@ -1,7 +1,7 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { Counter, Gauge, Registry, collectDefaultMetrics } from 'prom-client';
 
-export type OtpPurposeLabel = 'pos_promo' | 'pos_redeem' | 'login' | 'dsar';
+export type OtpPurposeLabel = 'pos_promo' | 'pos_redeem' | 'pos_enroll' | 'login' | 'dsar';
 /** `budget_exhausted` = budget global per jam habis (SEC-06) — kandidat alert DevSecOps. */
 export type OtpRequestOutcome = 'sent' | 'delivery_failed' | 'rate_limited' | 'budget_exhausted';
 export type OtpVerifyOutcome = 'verified' | 'invalid' | 'expired' | 'locked';
@@ -111,6 +111,17 @@ export class MetricsService implements OnModuleInit {
     registers: [this.registry],
   });
 
+  /**
+   * W-18 (Q-P18): penundaan erasure karena pesanan online terbuka — `escalation_d3` / `escalation_d10` (eskalasi CS)
+   * dan `forced` (batas 14 hari lewat, erasure tetap jalan, tautan order dilepas). Tanpa label subjek.
+   */
+  readonly dsarErasureDeferral = new Counter({
+    name: 'efn_dsar_erasure_deferral_total',
+    help: 'Eskalasi/pemaksaan erasure yang tertahan pesanan online terbuka',
+    labelNames: ['event'] as const,
+    registers: [this.registry],
+  });
+
   /** Metrik default proses Node (CPU, heap, event loop) hanya di runtime, bukan di unit test. */
   onModuleInit(): void {
     collectDefaultMetrics({ register: this.registry });
@@ -155,6 +166,10 @@ export class MetricsService implements OnModuleInit {
   recordLoyaltyRecon(outcome: 'ok' | 'error' | 'skipped', atMs?: number): void {
     this.loyaltyReconRuns.inc({ outcome });
     if (outcome === 'ok') this.loyaltyReconLastSuccess.set(Math.floor((atMs ?? Date.now()) / 1000));
+  }
+
+  recordDsarErasureDeferral(event: 'escalation_d3' | 'escalation_d10' | 'forced'): void {
+    this.dsarErasureDeferral.inc({ event });
   }
 
   recordLoyaltyReservationExpired(n: number): void {

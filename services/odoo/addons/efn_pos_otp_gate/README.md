@@ -36,6 +36,18 @@ Baris refund (`refunded_orderline_id` dengan qty < 0) dikecualikan. Baris yang f
 ## `order_ref`
 Odoo 19 membuat `pos_reference` **di server saat order pertama kali di-sync** (`_complete_values_from_session`), sehingga belum ada saat kasir meminta OTP. Modul ini memakai **`pos.order.uuid`** (dibuat di frontend, stabil, unik) sebagai `order_ref`. Kontrak `docs/04 §1` perlu disesuaikan (BFF harus memperlakukan `order_ref` sebagai string opaque ≤ 64 karakter).
 
+## E-34 — daftar member dengan pernyataan usia 17+ (G18, versi 19.0.1.8.0)
+- Kontrak `docs/04 §9.9` K-18-8 (+ L-24 BFF), fit-gap `docs/08 §9.5`. Tujuan OTP baru `pos_enroll`.
+- POS: tombol **Daftar Member** (menu tombol lain; online saja) -> dialog centang wajib "Pelanggan menyatakan berusia
+  minimal 17 tahun" (tombol kirim nonaktif sampai dicentang; teks menunggu Legal) -> OTP `pos_enroll` ke nomor
+  pelanggan order.
+- Server: `efn_otp_request(..., purpose="pos_enroll", age_confirmed=True)` dan `efn_otp_verify(..., age_confirmed=True)`;
+  nilai selain boolean `True` -> `age_confirmation_required` tanpa memanggil BFF. `age_confirmed: true` diteruskan ke
+  `POST /v1/pos/otp/request|verify`; verify BFF `{ok: true, enrolled: true}` (tanpa token) -> challenge `consumed`.
+  BFF mengisi `member.age_confirmed_at` + `source=pos`. **Odoo tidak menyimpan usia/tanggal lahir/bendera usia**
+  (hanya `purpose` di challenge). Challenge `pos_enroll` tidak membuka promo maupun tukar poin.
+- Keterbatasan: pernyataan pelanggan + centang kasir = kontrol prosedural (SOP kasir), dicatat untuk DPO.
+
 ## Konfigurasi
 | Parameter | Default | Arti |
 |---|---|---|
@@ -58,10 +70,29 @@ Mematikan parameter ini (False) **membuka semua promo ber-OTP tanpa verifikasi**
 ## Kunci nomor HP member (SEC-07 sisa, Gelombang 9)
 **Fit-gap standar 19.0 (terverifikasi di source image `efn-odoo:ci`):** `res.partner` create/write hanya untuk grup `base.group_partner_manager` (*Contacts: Creation*); `base.group_user` baca saja. POS mengedit pelanggan lewat form standar (`point_of_sale.res_partner_action_edit_pos` → `base.view_partner_form`), jadi tunduk pada ACL itu. Standar hanya biner: kasir **tanpa** grup tsb tidak bisa membuat pelanggan baru di POS; kasir **dengan** grup tsb bisa mengubah HP siapa pun. Konfigurasi standar yang disarankan tetap: beri *Contact Creation* hanya bila onboarding pelanggan di kasir memang dibutuhkan.
 
-**Gap yang ditutup (`models/res_partner.py`):** HP (`phone`, dan `mobile` bila ada modul yang menambahkannya) partner yang **sudah dipakai sebagai member** — punya riwayat `efn.pos.otp.challenge` (retensi 30 hari) atau `pos.order.efn_otp_gate_state` (consumed/review, permanen) — hanya boleh diubah/dikosongkan oleh `point_of_sale.group_pos_manager` atau `base.group_system` (dan OdooBot, mis. cron erasure). Kasir lain → `AccessError`. Riwayat OTP hanya mungkin untuk HP valid `^62…`, yaitu dasar `efn_member_hash`; pengecekan tidak memakai pepper agar tidak gagal-terbuka saat pepper belum terpasang.
+**Gap yang ditutup (`models/res_partner.py`):** HP (`phone`, dan `mobile` bila ada modul yang menambahkannya) partner yang **sudah dipakai sebagai member** — punya riwayat `efn.pos.otp.challenge` (retensi 30 hari) atau `pos.order.efn_otp_gate_state` (consumed/review, permanen) — hanya boleh diubah/dikosongkan oleh `base.group_system` (sejak SEC-115; dulu juga `point_of_sale.group_pos_manager`) (dan OdooBot, mis. cron erasure). Kasir lain → `AccessError`. Riwayat OTP hanya mungkin untuk HP valid `^62…`, yaitu dasar `efn_member_hash`; pengecekan tidak memakai pepper agar tidak gagal-terbuka saat pepper belum terpasang.
 - Perubahan oleh manajer dicatat di **chatter** partner: `Nomor HP member diubah oleh <user> (SEC-07). phone: 62812****890 → 62813****222` (mask, UU PDP) + log aplikasi tanpa nomor. Jejak audit formal: `efn_audit` (aturan res.partner dari `efn_setup_audit`; HP disimpan ter-mask, nilai lengkap tidak disimpan — UU PDP).
 - Dua lapis: override `write` (cek awal + chatter) dan `@api.constrains("phone")` sebagai jaring pengaman untuk jalur yang tidak melewati override (constraint dijalankan Odoo dengan sudo, jadi keputusan memakai uid asli; penanda "sudah dicek" ada di `cr.cache`, bukan context yang bisa diisi klien RPC). **Gelombang 11 (SEC-44):** keputusan selalu dari uid asli (`env.user`) **termasuk di dalam `sudo()`** — kode server yang menulis HP member dengan `sudo()` atas nama kasir ikut ditolak (dulu lapis 1 dilewati dan id ditandai "sudah dicek" sehingga lapis 2 ikut terlewati). Penanda hanya diisi setelah pemeriksaan benar-benar dijalankan dan lolos. Proses sistem sah berjalan sebagai OdooBot (`SUPERUSER_ID`, mis. cron erasure) dan selalu lolos tanpa catatan chatter; kode kustom yang perlu mengubah HP member atas nama sistem wajib `with_user(SUPERUSER_ID)` eksplisit. Sejak ADR-031 tidak ada lagi monkeypatch registry OCA auditlog, sehingga override `write` selalu aktif tanpa perlu restart setelah install/upgrade; hook `efn_audit` di model `base` berada di dasar MRO dan melihat `vals` final.
 - Batasan: partner yang belum pernah dipakai OTP tidak dikunci (kasir bisa mengganti HP pelanggan baru sebelum OTP pertama); membuat partner baru dengan HP orang lain tetap mungkin, tetapi OTP terkirim ke pemilik nomor. `pos_hr` (login karyawan per PIN) tidak mengubah uid sesi, jadi "manajer" = user Odoo sesi POS, bukan karyawan `pos_hr`.
+
+### SEC-115 (review r11, L-25c, versi 19.0.1.9.0): kunci permanen, hanya admin
+- **Penanda tahan lama** `res.partner.efn_member_locked_at` (Datetime, tanpa PII, `readonly`, `copy=False`, terbaca grup
+  POS user & Settings). Diisi server (sudo, idempoten, `_efn_mark_member`) saat **OTP POS apa pun yang diterima BFF**
+  (`pos_promo`, `pos_redeem`, `pos_enroll` E-34), **reservasi redeem**, dan **earn non-skipped**
+  (`efn_pos_loyalty_ledger`). Tidak pernah dihapus otomatis (tidak bergantung retensi challenge 30 hari). Klien
+  (kasir, manajer, admin lewat RPC/UI) tidak bisa menulis penanda (`AccessError`); hanya kode server ber-sudo/superuser.
+- Status member = penanda ATAU riwayat challenge ATAU order promo ber-OTP. Migrasi `19.0.1.9.0` (dan loyalty
+  `19.0.2.1.0`) mengisi penanda dari riwayat yang masih ada.
+- **HP member hanya boleh diubah admin teraudit** (`base.group_system`, perubahan tercatat di chatter + `efn_audit`) atau
+  OdooBot (cron erasure). **Manajer POS tidak lagi cukup** (dulu `point_of_sale.group_pos_manager`).
+- "Event BFF": saat ini tidak ada event member BFF -> Odoo; jalur Odoo yang menyentuh member (OTP/redeem/earn) sudah
+  menandai. Alur resmi ganti nomor oleh pelanggan (OTP nomor lama + baru) **belum ada** di Odoo; sampai ada, perubahan
+  lewat admin (SOP).
+
+### Re-review G18 SEC-125 (versi 19.0.1.10.0)
+Dependency `efn_pos_refund_origin`. Order dengan reward ber-OTP tidak bisa dilunasi di luar `_process_saved_order`
+(`action_pos_order_paid` / write state lewat RPC ditolak). Wizard Payment backend menjalankan gerbang OTP yang sama
+seperti sync (reward ber-OTP tanpa OTP terverifikasi -> ditolak).
 
 ## Data pribadi
 Nomor HP mentah tidak disimpan di modul ini (nomor sumber tetap di `res.partner`; challenge hanya menyimpan mask `62812****890` + referensi `partner_id`); token dihapus setelah consume/kedaluwarsa; challenge dihapus setelah 30 hari. Log hanya memuat nomor ter-mask.

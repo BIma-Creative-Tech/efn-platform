@@ -1,0 +1,23 @@
+# Rotasi otomatis API key Odoo kanal online %i (W-11, R-T15). Pasang: docs/runbooks/odoo-online-api-key.md §2.
+# Instance = kode kanal huruf besar: efn-rotate-online-key@RTL.service. Jalan sebagai ROOT (menulis /opt/efn/secrets,
+# recreate container); log stdout/stderr + `logger -t efn-rotate-online-key` -> journald (_UID 0) -> promtail-journal -> Loki.
+[Unit]
+Description=EFN rotasi API key Odoo kanal online %i
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/efn-rotate-online-key --channel=%i
+# Overlap default 1 jam (key lama dicabut setelah itu) + recreate/verifikasi
+TimeoutStartSec=3h
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+Nice=5

@@ -11,7 +11,7 @@ describe('RetentionService (UU PDP, SEC-11)', () => {
     });
     const svc = new RetentionService(db, testConfig());
     const res = await svc.purgeOnce();
-    expect(res).toEqual({ otpAudit: 3, processedMessage: 0, outbox: 2, reportUserEncNulled: 0, reportDeleted: 0, skipped: false });
+    expect(res).toEqual({ otpAudit: 3, processedMessage: 0, outbox: 2, reportUserEncNulled: 0, reportGeoNulled: 0, reportDeleted: 0, skipped: false });
 
     expect(db.find('pg_try_advisory_xact_lock')[0].params).toEqual([RETENTION_LOCK_KEY]);
     expect(db.find('DELETE FROM platform.otp_audit')[0].params).toEqual([90, 5000]);
@@ -55,6 +55,26 @@ describe('RetentionService (UU PDP, SEC-11)', () => {
     ).purgeOnce();
     expect(db2.find('SET user_enc = NULL')[0].params[0]).toBe(30);
     expect(db2.find('DELETE FROM platform.price_hunter_report')[0].params[0]).toBe(365);
+  });
+
+  it('W-19 (Q-P8): geo laporan → NULL > 90 hari + updated_at (ETL ikut), env dapat diubah', async () => {
+    const db = new FakeDb((text) => {
+      if (text.includes('advisory')) return { rows: [{ ok: true }], rowCount: 1 };
+      if (text.includes('SET geo_lat = NULL')) return { rows: [], rowCount: 6 };
+      return { rows: [], rowCount: 0 };
+    });
+    const res = await new RetentionService(db, testConfig()).purgeOnce();
+    expect(res.reportGeoNulled).toBe(6);
+    const q = db.find('SET geo_lat = NULL')[0];
+    expect(q.params).toEqual([90, 5000]);
+    expect(q.text).toContain('geo_lng = NULL');
+    expect(q.text).toContain('updated_at = now()');
+    expect(q.text).toContain('geo_lat IS NOT NULL OR geo_lng IS NOT NULL');
+
+    const db2 = new FakeDb((text) => (text.includes('advisory') ? { rows: [{ ok: true }], rowCount: 1 } : undefined));
+    await new RetentionService(db2, testConfig({ PRICE_HUNTER_GEO_RETENTION_DAYS: '30' })).purgeOnce();
+    expect(db2.find('SET geo_lat = NULL')[0].params[0]).toBe(30);
+    expect(() => testConfig({ PRICE_HUNTER_GEO_RETENTION_DAYS: '0' }).priceHunterGeoRetentionDays).toThrow();
   });
 
   it('replika lain memegang lock → dilewati tanpa DELETE', async () => {

@@ -23,6 +23,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+import uuid
 
 BASE = "https://erp.efn.local:8443"
 CTX = ssl.create_default_context(cafile="/work/edge_ca.crt")
@@ -73,7 +74,104 @@ def csrf(html: str) -> str:
     return m.group(1) if m else ""
 
 
-def check_user(login: str, cred: dict) -> dict:
+def _rejected(r: dict) -> dict:
+    err = r.get("error") or {}
+    data = err.get("data") or {}
+    return {
+        "rejected": "error" in r and "result" not in r,
+        "exception": (data.get("name") or "").rsplit(".", 1)[-1],
+        "message": (data.get("message") or err.get("message") or "")[:90],
+    }
+
+
+def g18_probes(c: Client, t: dict) -> dict:
+    """G18 r11 (SEC-113/115/121), sebagai kasir POS ber-grup sempit "boleh membuat pelanggan":
+    ubah pembayaran order paid, ubah HP member terkunci, buat pelanggan individu (boleh) / perusahaan (ditolak)."""
+    res = {}
+    pid = t["payment_id"]
+    res["payment_write_amount"] = _rejected(c.call_kw("pos.payment", "write", [[pid], {"amount": 1}]))
+    res["payment_write_method"] = _rejected(
+        c.call_kw("pos.payment", "write", [[pid], {"payment_method_id": t["other_method_id"]}])
+    )
+    res["payment_unlink"] = _rejected(c.call_kw("pos.payment", "unlink", [[pid]]))
+    res["member_phone_write"] = _rejected(
+        c.call_kw("res.partner", "write", [[t["member_partner_id"]], {"phone": "081200000001"}])
+    )
+    ok = c.call_kw("res.partner", "create", [{"name": "SMOKE Kasir Individu"}])
+    res["create_individual"] = {"created": isinstance(ok.get("result"), (int, list)), **_rejected(ok)}
+    res["create_company"] = _rejected(
+        c.call_kw("res.partner", "create", [{"name": "SMOKE Kasir PT", "is_company": True}])
+    )
+    # SEC-125: transisi ke paid hanya lewat sync tervalidasi
+    did = t["draft_order_id"]
+    res["order_paid_action"] = _rejected(c.call_kw("pos.order", "action_pos_order_paid", [[did]]))
+    res["order_write_state_paid"] = _rejected(c.call_kw("pos.order", "write", [[did], {"state": "paid"}]))
+    res["order_create_paid"] = _rejected(
+        c.call_kw(
+            "pos.order",
+            "create",
+            [
+                {
+                    "name": "SMOKE-SEC125-create",
+                    "session_id": t["session_id"],
+                    "company_id": t["company_id"],
+                    "pricelist_id": t["pricelist_id"],
+                    "amount_tax": 0,
+                    "amount_total": 0,
+                    "amount_paid": 0,
+                    "amount_return": 0,
+                    "state": "paid",
+                }
+            ],
+        )
+    )
+    # SEC-126: sync_from_ui dengan perintah payment_ids [1|2|4, id] atas pembayaran order LAIN
+    for cmd in (1, 2, 4):
+        order = {
+            "uuid": str(uuid.uuid4()),
+            "name": f"SMOKE-SEC126-{cmd}",
+            "session_id": t["session_id"],
+            "pricelist_id": t["pricelist_id"],
+            "partner_id": False,
+            "user_id": False,
+            "date_order": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
+            "fiscal_position_id": False,
+            "to_invoice": False,
+            "last_order_preparation_change": "{}",
+            "amount_tax": 0,
+            "amount_total": 50000,
+            "amount_paid": 50000,
+            "amount_return": 0,
+            "state": "paid",
+            "lines": [
+                [
+                    0,
+                    0,
+                    {
+                        "product_id": t["product_id"],
+                        "qty": 1,
+                        "price_unit": 50000,
+                        "price_subtotal": 50000,
+                        "price_subtotal_incl": 50000,
+                        "tax_ids": [[6, 0, []]],
+                        "pack_lot_ids": [],
+                    },
+                ]
+            ],
+            "payment_ids": [
+                [1, t["payment_id"], {"amount": 1}] if cmd == 1 else [cmd, t["payment_id"]],
+                [0, 0, {"amount": 50000, "payment_method_id": t["cash_pm"], "name": order_now()}],
+            ],
+        }
+        res[f"sync_foreign_payment_{cmd}"] = _rejected(c.call_kw("pos.order", "sync_from_ui", [[order]]))
+    return res
+
+
+def order_now() -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+
+
+def check_user(login: str, cred: dict, targets: dict | None = None) -> dict:
     c = Client()
     token = csrf(c.get("/web/login"))
     url = c.post_form(
@@ -99,8 +197,10 @@ def check_user(login: str, cred: dict) -> dict:
             "exception": (data.get("name") or "").rsplit(".", 1)[-1],
             "message": (data.get("message") or err.get("message") or "")[:90],
         }
+    g18 = g18_probes(c, targets) if targets and login.endswith("cashier") and logged_in else None
     return {
         "user": login,
+        "g18": g18,
         "logged_in": logged_in,
         "final_url": url.replace(BASE, "")[:40],
         "all_rejected": logged_in and all(v["rejected"] for v in calls.values()),
@@ -110,9 +210,10 @@ def check_user(login: str, cred: dict) -> dict:
 
 def main() -> None:
     creds = json.loads(sys.stdin.read())
+    targets = creds.pop("_targets", None)  # G18: id target probe kasir (tanpa PII)
     for login in sorted(creds):
         try:
-            res = check_user(login, creds[login])
+            res = check_user(login, creds[login], targets)
         except Exception as exc:  # noqa: BLE001 - laporan smoke
             res = {
                 "user": login,

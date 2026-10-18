@@ -200,7 +200,7 @@ ANCHOR_PREFIX = "EFN_AUDIT_CHAIN_HEAD"
 # efn_audit_anchor. Dicocokkan di akhir baris (timestamp di depan tidak dipakai).
 _ANCHOR_RE = re.compile(
     r" INFO efn_etl\.audit_job EFN_AUDIT_CHAIN_HEAD "
-    r'(\{"company":\d{1,10},"seq":\d{1,19},"row_hash":"[0-9a-f]{64}"\})\s*$'
+    r'(\{"company":\d{1,10},"seq":\d{1,19},"row_hash":"[0-9a-f]{64}"(?:,"epoch":\d{1,10})?\})\s*$'
 )
 SINK_QUERY = '{stream="efn_audit_sink"}'
 ANCHOR_QUERY = '{stream="efn_audit_anchor", audit_event="chain_head"}'
@@ -211,6 +211,7 @@ class Anchor:
     company: int
     seq: int
     row_hash: str
+    epoch: int = 0  # chain epoch (audit.decide_epoch); baris lama tanpa kunci epoch = 0
 
 
 def parse_anchor_line(line: str) -> Anchor | None:
@@ -218,7 +219,7 @@ def parse_anchor_line(line: str) -> Anchor | None:
     if not match:
         return None
     body = json.loads(match.group(1))
-    return Anchor(int(body["company"]), int(body["seq"]), str(body["row_hash"]))
+    return Anchor(int(body["company"]), int(body["seq"]), str(body["row_hash"]), int(body.get("epoch", 0)))
 
 
 @dataclass
@@ -249,18 +250,19 @@ class AnchorResult:
 
 def verify_anchors(
     anchors: Iterable[Anchor],
-    current: Mapping[tuple[int, int], str],
+    current: Mapping[tuple[int, int, int], str],
     companies_with_chain: Iterable[int],
 ) -> AnchorResult:
-    """Bandingkan jangkar lama dengan salinan saat ini. `current`: (company, seq) -> row_hash salinan ClickHouse
-    untuk pasangan yang dijangkarkan (pasangan yang tidak ada = baris hilang)."""
+    """Bandingkan jangkar lama dengan salinan saat ini. `current`: (epoch, company, seq) -> row_hash salinan ClickHouse
+    untuk jangkar yang dicatat (yang tidak ada = baris hilang). Epoch membedakan rantai setelah restore DB Odoo
+    (seq dimulai ulang), sehingga jangkar epoch lama tetap dicocokkan ke salinan bukti epoch lama."""
     result = AnchorResult()
-    unique: dict[tuple[int, int], set[str]] = {}
+    unique: dict[tuple[int, int, int], set[str]] = {}
     for anchor in anchors:
-        unique.setdefault((anchor.company, anchor.seq), set()).add(anchor.row_hash)
-    for (company, seq), hashes in sorted(unique.items()):
+        unique.setdefault((anchor.epoch, anchor.company, anchor.seq), set()).add(anchor.row_hash)
+    for (epoch, company, seq), hashes in sorted(unique.items()):
         result.anchors_checked += 1
-        stored = current.get((company, seq))
+        stored = current.get((epoch, company, seq))
         if stored is None:
             result.anchor_missing += 1
             result.note(company, seq)
@@ -292,7 +294,7 @@ class SinkSource(Protocol):
 class SinkStore(Protocol):
     def copied_log_ids(self, log_ids: Sequence[int]) -> set[int]: ...
 
-    def chain_hashes(self, company: int, seqs: Sequence[int]) -> dict[int, str]: ...
+    def chain_hashes(self, company: int, seqs: Sequence[int], epoch: int = 0) -> dict[int, str]: ...
 
     def heads(self) -> Mapping[int, Any]: ...
 
@@ -358,13 +360,13 @@ def run_sink_check(
 
     anchor_fetch = query_range(loki, ANCHOR_QUERY, now - cfg.anchor_lookback, now, cfg.page_limit, cfg.max_pages)
     anchors = [a for a in (parse_anchor_line(line) for line in iter_lines(anchor_fetch)) if a is not None]
-    by_company: dict[int, set[int]] = {}
+    by_chain: dict[tuple[int, int], set[int]] = {}
     for anchor in anchors:
-        by_company.setdefault(anchor.company, set()).add(anchor.seq)
-    current: dict[tuple[int, int], str] = {}
-    for company, seqs in sorted(by_company.items()):
-        for seq, digest in store.chain_hashes(company, sorted(seqs)).items():
-            current[(company, seq)] = digest
+        by_chain.setdefault((anchor.epoch, anchor.company), set()).add(anchor.seq)
+    current: dict[tuple[int, int, int], str] = {}
+    for (epoch, company), seqs in sorted(by_chain.items()):
+        for seq, digest in store.chain_hashes(company, sorted(seqs), epoch).items():
+            current[(epoch, company, seq)] = digest
     anchor_result = verify_anchors(anchors, current, store.heads().keys())
     sink.truncated = sink.truncated or anchor_fetch.truncated
     return SinkCheckResult(sink=sink, anchors=anchor_result)

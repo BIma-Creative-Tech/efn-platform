@@ -46,6 +46,17 @@ export interface OnlineEventRecord {
   idempotency_key: string;
   outcome: 'applied' | 'duplicate' | 'ignored_stale' | 'ignored_unknown_event';
   occurred_at: Date | null;
+  /** G18-QA-01: sha256 isi event (deteksi kunci sama isi beda). */
+  payload_sha256?: string | null;
+  /** G18-QA-01: kunci asli dari Odoo (audit; kunci baris = kunci stabil BFF). */
+  source_key?: string | null;
+}
+
+export interface StoredEventRow {
+  part_id: string;
+  event: string;
+  seq: number | null;
+  payload_sha256: string | null;
 }
 
 export interface AdminAuditRecord {
@@ -124,6 +135,7 @@ export interface OnlineRepo {
   portionsOf(intentId: string): Promise<PortionRow[]>;
 
   insertEvent(e: OnlineEventRecord): Promise<boolean>;
+  findEvent(key: string): Promise<StoredEventRow | null>;
   claim(consumer: string, key: string): Promise<boolean>;
   isClaimed(consumer: string, key: string): Promise<boolean>;
   enqueue(queue: string, payload: Record<string, unknown>, messageId: string): Promise<void>;
@@ -473,12 +485,30 @@ export class PgOnlineRepo implements OnlineRepo {
 
   async insertEvent(e: OnlineEventRecord): Promise<boolean> {
     const r = await this.q.query(
-      `INSERT INTO platform.online_order_event (part_id, source, event, seq, idempotency_key, outcome, occurred_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO platform.online_order_event (part_id, source, event, seq, idempotency_key, outcome, occurred_at, payload_sha256, source_key)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (idempotency_key) DO NOTHING`,
-      [e.part_id, e.source, e.event, e.seq, e.idempotency_key, e.outcome, e.occurred_at ? e.occurred_at.toISOString() : null],
+      [
+        e.part_id,
+        e.source,
+        e.event,
+        e.seq,
+        e.idempotency_key,
+        e.outcome,
+        e.occurred_at ? e.occurred_at.toISOString() : null,
+        e.payload_sha256 ?? null,
+        e.source_key ?? null,
+      ],
     );
     return (r.rowCount ?? 0) > 0;
+  }
+  async findEvent(key: string): Promise<StoredEventRow | null> {
+    const r = await this.q.query<{ part_id: string; event: string; seq: number | null; payload_sha256: string | null }>(
+      `SELECT part_id::text AS part_id, event, seq, payload_sha256 FROM platform.online_order_event WHERE idempotency_key = $1`,
+      [key],
+    );
+    const row = r.rows[0];
+    return row ? { part_id: row.part_id, event: row.event, seq: row.seq === null ? null : Number(row.seq), payload_sha256: row.payload_sha256 } : null;
   }
   claim(consumer: string, key: string): Promise<boolean> {
     return claimMessage(this.q, consumer, key);

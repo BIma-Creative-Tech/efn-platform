@@ -60,3 +60,19 @@ Nama & tarif PBJT/PB1 per Perda; penyesuaian harga otomatis saat pemetaan includ
 
 ## Kapan ditinjau ulang
 Setiap perubahan Perda/UU pajak daerah; saat membuka kota baru; setelah opini konsultan pajak.
+
+## Catatan 2026-10-10 — nilai awal dari pemilik proyek (status tetap Proposed; ⚠ konfirmasi konsultan pajak)
+Sumber: sesi tanya-jawab 10 Okt 2026 (P-12, P-16, Q-ON5, Q-8/Q-22; `docs/decisions/README.md`). Semua nilai diisi sebagai **konfigurasi** `efn_setup_*` / UI Finance — tetap tidak ada tarif di kode.
+
+| Parameter | Nilai awal | Catatan |
+|---|---|---|
+| PB1 (PBJT makan-minum) | **10 %** | Cek tarif Perda kota tiap outlet (Q-TX1) |
+| Service charge (SC) | **5 %, dine-in saja** | Takeaway / 3PL / pickup **tanpa SC** |
+| SC masuk DPP PB1 | **Ya** | Urutan pajak: SC dihitung dulu, PB1 atas (harga + SC) — perlu `include_base_amount` pada SC (**[B]** dibuktikan di PoC POS 19) |
+| Harga menu F&B | **Belum termasuk pajak (exclude)** | `price_include_override = tax_excluded` pada PB1/SC; POS `iface_tax_included = subtotal` |
+| Layanan non-dine-in | **Tanpa PB1 dan tanpa SC** (jawaban pemilik proyek: "selain dine-in tidak dikenakan pajak") | Fiscal position per layanan (preset POS takeaway/delivery/pickup → peta PB1→tanpa pajak). **⚠ WAJIB konfirmasi konsultan pajak:** di bawah UU 1/2022 (HKPD), PBJT makanan/minuman umumnya juga terutang atas penjualan dibawa pulang oleh restoran; pengecualian bergantung Perda kota. Risiko **R-L09** |
+| Retail online (Q-ON5) | Harga **termasuk pajak** + label | Tidak berubah |
+| F&B online (Q-ON5) | Tampilkan **PB1+SC sesuai outlet (exclude)** dengan rincian sebelum bayar | Kontrak §10 perlu rincian pajak per baris/porsi; perhatikan: bila konsultan menyatakan takeaway kena PBJT, tampilan online F&B ikut berubah |
+| Konfigurasi per outlet/kota | PB1 & SC **configurable per outlet/kota** (Q-22) | Sesuai keputusan ADR ini |
+
+Dampak SC: SC bukan pajak negara/daerah tetapi pendapatan outlet; di Odoo dimodelkan sebagai `account.tax` jenis persentase dengan akun pendapatan SC (bukan utang pajak) atau sebagai produk biaya otomatis — pilihan diputuskan efn-odoo-functional di fit-gap paket W-14. Pembulatan mengikuti presisi IDR Rp1 global (Q-ON6, paket W-03).

@@ -11,6 +11,7 @@ import signal
 import threading
 import time
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from efn_etl.adapters import (
@@ -28,7 +29,7 @@ from efn_etl.config import Settings
 from efn_etl.erasure import SQL_PENDING_ERASURES, excluded_hashes, parse_requests, run_erasure
 from efn_etl.gl import GL_JOBS
 from efn_etl.heartbeat import Heartbeat, JobRun, make_heartbeat
-from efn_etl.jobs import enabled_jobs
+from efn_etl.jobs import AgeOut, enabled_jobs
 from efn_etl.loki import HttpsLokiTransport
 from efn_etl.loyalty_recon import LoyaltyReconSettings, run_loyalty_recon
 from efn_etl.loyalty_recon import recon_due as loyalty_recon_due
@@ -56,7 +57,13 @@ def run_audit_cycle(
     started = time.monotonic()
     try:
         result = run_audit_copy(source, audit_store, cfg, now)
-        log.info("job=audit_copy new=%d late=%d chains=%d", result.new_rows, result.late_rows, len(result.heads))
+        log.info(
+            "job=audit_copy new=%d late=%d chains=%d epoch=%d",
+            result.new_rows,
+            result.late_rows,
+            len(result.heads),
+            result.epoch,
+        )
     except Exception:
         log.exception("job=audit_copy gagal")
         heartbeat(JobRun("audit_copy", datetime.now(UTC), "error", duration_ms=_ms(started)))
@@ -190,6 +197,8 @@ def main() -> None:
         max_pages=settings.max_pages_per_run,
         recon_interval=timedelta(seconds=settings.audit_recon_interval_seconds),
         recon_content=settings.audit_recon_content,
+        epoch_auto=settings.audit_epoch_auto,
+        epoch_anchors=settings.audit_epoch_anchors,
     )
     sink_check: SinkCheck | None = None
     if settings.audit_sink_enabled:
@@ -214,19 +223,29 @@ def main() -> None:
         open_window=timedelta(days=settings.loyalty_recon_open_days),
         points_codes=settings.points_product_codes,
         not_before=settings.loyalty_recon_not_before,
+        points_mode=settings.loyalty_points_mode,
+        points_tolerance_idr=Decimal(settings.loyalty_points_tolerance_idr),
+        point_value_idr=settings.loyalty_point_value_idr,
     )
-    jobs = enabled_jobs(settings.odoo_enabled, settings.points_product_codes)
+    age_out = AgeOut(geo_days=settings.geo_retention_days, pseudonym_years=settings.pseudonym_retention_years)
+    jobs = enabled_jobs(
+        settings.odoo_enabled,
+        settings.points_product_codes,
+        age_out,
+        points_payment=settings.loyalty_points_mode == "payment",
+    )
     if settings.gl_enabled:
         jobs.extend(GL_JOBS)
     overlap = timedelta(seconds=settings.overlap_seconds)
     log.info(
-        "ETL mulai: jobs=%s stock_snapshot=%s audit_copy=%s audit_sink=%s loyalty_recon=%s erasure=%s interval=%ds "
-        "overlap=%ds",
+        "ETL mulai: jobs=%s stock_snapshot=%s audit_copy=%s audit_sink=%s loyalty_recon=%s points_mode=%s erasure=%s "
+        "interval=%ds overlap=%ds",
         [j.name for j in jobs],
         settings.stock_enabled,
         settings.audit_copy_enabled,
         settings.audit_sink_enabled,
         settings.loyalty_recon_enabled,
+        settings.loyalty_points_mode,
         settings.erasure_enabled,
         settings.interval_seconds,
         settings.overlap_seconds,

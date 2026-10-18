@@ -11,6 +11,7 @@ import {
   canCancelDeletion,
   deletionStatusDescription,
   deletionStatusLabel,
+  resolveErasureDeadline,
   type DeletionStatusView,
 } from '@/lib/dsar-receipt';
 import { formatDateId } from '@/lib/dsar';
@@ -31,10 +32,16 @@ export function DeletionStatus({
   id,
   sessionCanCancel,
   signedIn,
+  sessionDeadline = null,
+  queryDeadline = null,
 }: {
   id: string;
   sessionCanCancel: boolean;
   signedIn: boolean;
+  /** L-22: `erasure_deadline` dari item `GET /v1/me/requests` milik sesi (bila masuk). */
+  sessionDeadline?: string | null;
+  /** Cadangan BFF lama: `?batas=` dari respons 202 (hanya tampilan). */
+  queryDeadline?: string | null;
 }) {
   const [load, setLoad] = useState<Load>({ kind: 'loading' });
   const [busy, setBusy] = useState(false);
@@ -95,7 +102,10 @@ export function DeletionStatus({
     }
   }
 
-  const loginHref = `/masuk?next=${encodeURIComponent(`/akun/penghapusan/${id}`)}`;
+  // L-22: sumber utama = respons status BFF; `?batas=` hanya cadangan BFF lama (resolveErasureDeadline).
+  const deadline = load.kind === 'ok' ? resolveErasureDeadline(load.view, sessionDeadline, queryDeadline) : null;
+
+  const loginHref =`/masuk?next=${encodeURIComponent(`/akun/penghapusan/${id}`)}`;
 
   return (
     <section className="card stack" aria-live="polite" aria-busy={load.kind === 'loading'}>
@@ -130,6 +140,18 @@ export function DeletionStatus({
             <dd style={{ marginLeft: 0 }}>{formatDateId(load.view.requested_at)}</dd>
             <dt className="muted small">Jadwal penghapusan</dt>
             <dd style={{ marginLeft: 0 }}>{formatDateId(load.view.scheduled_at)}</dd>
+            {deadline && (
+              <>
+                <dt className="muted small">
+                  Paling lambat dihapus (
+                  {load.view.open_online_orders > 0
+                    ? `${load.view.open_online_orders} pesanan online belum selesai`
+                    : 'ada pesanan online belum selesai'}
+                  )
+                </dt>
+                <dd style={{ marginLeft: 0 }}>{formatDateId(deadline)}</dd>
+              </>
+            )}
             {load.view.completed_at && (
               <>
                 <dt className="muted small">Selesai</dt>

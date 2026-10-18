@@ -2,3 +2,8 @@
 2026-10-09 01:00:00,011 INFO efn_etl.loyalty_recon EFN_LOYALTY_RECON_ETL {"status":"ok","anomalies":0,"open_items":0}
 2026-10-09 01:00:00,012 INFO efn_etl.audit_job EFN_AUDIT_RECON {"max_log_id":812345678,"missing":0}
 2026-10-09 01:00:00,013 WARNING efn_etl.other EFN_AUDIT_CHAIN_HEAD {"company":1,"seq":8} hp 081234567806
+2026-10-15 01:00:00,014 INFO efn_etl.audit_job EFN_AUDIT_CHAIN_HEAD {"company":1,"seq":9,"row_hash":"0812345678900812345678900812345678900812345678900812345678909f9f","epoch":2}
+2026-10-15 01:00:00,015 INFO efn_etl.audit_job EFN_AUDIT_CHAIN_HEAD {"company":1,"seq":9,"row_hash":"0812345678900812345678900812345678900812345678900812345678909f9f","epoch":"x"}
+2026-10-15 01:00:00,016 WARNING efn_etl.audit_job EFN_AUDIT_EPOCH {"event":"new_epoch","epoch":2,"reason":"marker","marker":"restore-20261015T010000Z","prev_max_log_id":900,"source_max_log_id":40,"anchors_checked":20,"anchors_matched":0}
+2026-10-15 01:00:00,017 ERROR efn_etl.audit_job EFN_AUDIT_EPOCH {"event":"divergence_blocked","epoch":1,"reason":"divergence","marker":"","prev_max_log_id":900,"source_max_log_id":40,"anchors_checked":20,"anchors_matched":0}
+2026-10-15 01:00:00,018 ERROR efn_etl.other EFN_AUDIT_EPOCH {"event":"divergence_blocked","epoch":1}

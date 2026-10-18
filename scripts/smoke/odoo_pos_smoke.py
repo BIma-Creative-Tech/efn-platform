@@ -56,6 +56,25 @@ def load_state():
         return json.load(fh)
 
 
+RETRYABLE = ("SerializationFailure", "TransactionRollbackError", "LockNotAvailable")
+
+
+def sync_with_retry(e, data, attempts=4):
+    """`pos.order.sync_from_ui` + commit; ulangi pada konflik serialisasi seperti `odoo.service.model.retrying`."""
+    import time
+
+    for attempt in range(attempts):
+        try:
+            e["pos.order"].sync_from_ui([data])
+            env.cr.commit()
+            return
+        except Exception as exc:
+            env.cr.rollback()
+            if type(exc).__name__ not in RETRYABLE or attempt == attempts - 1:
+                raise
+            time.sleep(0.5 * (attempt + 1))
+
+
 def ctx_env():
     st = load_state()
     company = env["res.company"].browse(st["company_id"])
@@ -88,6 +107,13 @@ def step_setup():
     qris_pm = PM.search([("name", "=", f"{PREFIX} QRIS"), ("company_id", "=", company.id)], limit=1) or PM.create(
         vals_q
     )
+    # G18 (E-31): metode non-tunai tanpa terminal (EDC manual) untuk uji refund ke metode asal.
+    edc_j = Journal.search([("code", "=", "SMEDC"), ("company_id", "=", company.id)], limit=1) or Journal.create(
+        {"name": f"{PREFIX} EDC", "type": "bank", "code": "SMEDC", "company_id": company.id}
+    )
+    edc_pm = PM.search([("name", "=", f"{PREFIX} EDC"), ("company_id", "=", company.id)], limit=1) or PM.create(
+        {"name": f"{PREFIX} EDC", "journal_id": edc_j.id, "company_id": company.id}
+    )
 
     Product = su["product.product"]
     product = Product.search([("name", "=", f"{PREFIX} Nasi Goreng"), ("company_id", "=", company.id)], limit=1)
@@ -103,6 +129,37 @@ def step_setup():
             }
         )
 
+    # G18 (W-03): produk ber-PB1 10 % (exclude) dengan harga yang menghasilkan pecahan sen di IDR 0,01.
+    taxed = Product.search([("name", "=", f"{PREFIX} Roti PB1"), ("company_id", "=", company.id)], limit=1)
+    if not taxed:
+        taxed = Product.create(
+            {
+                "name": f"{PREFIX} Roti PB1",
+                "type": "consu",
+                "available_in_pos": True,
+                "list_price": 12345.0,
+                "taxes_id": [Command.set([env.ref("efn_setup_company.tax_pb1_10_fnb").id])],
+                "company_id": company.id,
+            }
+        )
+
+    categ_x = su["product.category"].search([("name", "=", f"{PREFIX} Tanpa Poin")], limit=1) or su[
+        "product.category"
+    ].create({"name": f"{PREFIX} Tanpa Poin", "efn_loyalty_earn_excluded": True})
+    excluded = Product.search([("name", "=", f"{PREFIX} Rokok Uji"), ("company_id", "=", company.id)], limit=1)
+    if not excluded:
+        excluded = Product.create(
+            {
+                "name": f"{PREFIX} Rokok Uji",
+                "type": "consu",
+                "available_in_pos": True,
+                "list_price": 50000.0,
+                "taxes_id": [Command.clear()],
+                "categ_id": categ_x.id,
+                "company_id": company.id,
+            }
+        )
+
     Config = su["pos.config"]
     config = Config.search([("name", "=", f"{PREFIX} POS FNB"), ("company_id", "=", company.id)], limit=1)
     if not config:
@@ -110,7 +167,9 @@ def step_setup():
             {
                 "name": f"{PREFIX} POS FNB",
                 "company_id": company.id,
-                "payment_method_ids": [Command.set([cash_pm.id, qris_pm.id])],
+                "payment_method_ids": [Command.set([cash_pm.id, qris_pm.id, edc_pm.id])],
+                # E-30: redeem aktif saat dibuat -> efn_setup_pos menautkan metode Poin EFN PT (sesi belum buka).
+                "efn_loyalty_redeem_enabled": True,
             }
         )
 
@@ -160,7 +219,11 @@ def step_setup():
         "session_id": config.current_session_id.id,
         "cash_pm": cash_pm.id,
         "qris_pm": qris_pm.id,
+        "edc_pm": edc_pm.id,
+        "points_pm": config._efn_loyalty_points_method_record().id,
         "product_id": product.id,
+        "taxed_product_id": taxed.id,
+        "excluded_product_id": excluded.id,
         "program_id": program.id,
         "reward_id": program.reward_ids[:1].id,
         "partners": partners,
@@ -173,6 +236,7 @@ def step_setup():
         config_id=config.id,
         session_state=config.current_session_id.state,
         admin_pos_user=admin.has_group("point_of_sale.group_pos_user"),
+        points_pm=config._efn_loyalty_points_method_record().id,
         partners=list(partners),
     )
 
@@ -462,7 +526,14 @@ def step_loy_config():
     config = e["pos.config"].browse(st["config_id"])
     config.write({"efn_loyalty_earn_enabled": True, "efn_loyalty_redeem_enabled": True})
     env.cr.commit()
-    out(ok=True, points_product=config.efn_loyalty_points_product)
+    method = config._efn_loyalty_points_method_record()
+    out(
+        ok=True,
+        points_pm=method.id,
+        points_pm_type=method.payment_method_type,
+        points_pm_cash=method.is_cash_count,
+        legacy_product_active=bool(e.ref("efn_pos_loyalty_ledger.product_efn_points").active),
+    )
 
 
 def step_loy_otp_request():
@@ -499,53 +570,40 @@ def step_loy_reserve():
 
 
 def step_loy_sync():
-    """Order berbayar dengan baris Poin EFN (tanpa pajak) senilai reservasi aktif order ini."""
+    """Order berbayar: redeem = pembayaran metode Poin EFN senilai reservasi aktif (E-30), sisa tunai."""
     e, st = ctx_env()
     uuid = os.environ["SMOKE_ORDER_UUID"]
     partner_id = st["partners"][os.environ["SMOKE_PARTNER"]]
+    if os.environ.get("SMOKE_PRODUCT") == "excluded":
+        st = {**st, "product_id": st["excluded_product_id"]}
     data, total = _order_data(e, st, uuid, partner_id, int(os.environ.get("SMOKE_QTY", "1")), False, None)
     draft = os.environ.get("SMOKE_DRAFT") == "1"
     reservation = e["efn.pos.loyalty.reservation"].sudo().search([("order_uuid", "=", uuid)], limit=1)
     value = reservation.value_idr if reservation else 0
+    if os.environ.get("SMOKE_POINTS_VALUE"):
+        value = int(os.environ["SMOKE_POINTS_VALUE"])  # SEC-125: nominal sengaja beda dari reservasi
     if value:
-        points = e.ref("efn_pos_loyalty_ledger.product_efn_points")
-        data["lines"].append(
-            (
-                0,
-                0,
-                {
-                    "id": random.randint(1, 1_000_000),  # noqa: S311
-                    "pack_lot_ids": [],
-                    "price_unit": -value,
-                    "product_id": points.id,
-                    "price_subtotal": -value,
-                    "price_subtotal_incl": -value,
-                    "qty": 1,
-                    "tax_ids": [(6, 0, [])],
-                    "price_type": "automatic",
-                },
-            )
+        data["payment_ids"][0][2]["amount"] = total - value
+        data["payment_ids"].insert(
+            0, (0, 0, {"amount": value, "name": fields.Datetime.now(), "payment_method_id": st["points_pm"]})
         )
-        total -= value
-        data["amount_total"] = data["amount_paid"] = total
-        data["payment_ids"][0][2]["amount"] = total
     if draft:
-        # Order belum dibayar (mis. disimpan lalu dibatalkan kasir) -> jalur release via cancel.
-        data.update({"state": "draft", "payment_ids": [], "amount_paid": 0})
+        # Order belum dibayar (mis. disimpan lalu dibatalkan kasir) -> jalur release via cancel; baris Poin EFN tetap.
+        data.update({"state": "draft", "amount_paid": value})
+        data["payment_ids"] = [p for p in data["payment_ids"] if p[2]["payment_method_id"] == st["points_pm"]]
     try:
-        e["pos.order"].sync_from_ui([data])
-        env.cr.commit()
+        sync_with_retry(e, data)
     except Exception as exc:  # noqa: BLE001 - laporan smoke
-        env.cr.rollback()
         out(ok=False, error=type(exc).__name__, message=str(exc)[:300])
         return
     order = e["pos.order"].search([("uuid", "=", uuid)], limit=1)
     outbox = e["efn.pos.loyalty.outbox"].sudo().search([("order_id", "=", order.id)])
     out(
         ok=True,
-        total=total,
+        total=order.amount_total,
         state=order.state,
-        points_lines=len(order._efn_points_lines()),
+        points_payments=len(order._efn_points_payments()),
+        points_paid=order._efn_points_paid(),
         loyalty_state=order.efn_loyalty_state,
         outbox=sorted(outbox.mapped("kind")),
     )
@@ -568,6 +626,8 @@ def step_loy_outbox():
                 f"{rec.kind}_attempts": rec.attempt_count,
             }
         )
+        if rec.kind == "reverse":
+            flat["reverse_points_restored_value"] = rec.points_restored_value
     reservation = e["efn.pos.loyalty.reservation"].sudo().search([("order_uuid", "=", uuid)], limit=1)
     out(
         order_state=order.state,
@@ -682,8 +742,7 @@ def step_loy_refund():
     qty = int(os.environ.get("SMOKE_QTY", "1"))
     original = e["pos.order"].search([("uuid", "=", os.environ["SMOKE_ORIG_UUID"])], limit=1)
     config = e["pos.config"].browse(st["config_id"])
-    points_product = e["pos.order"]._efn_points_product()
-    goods = original.lines.filtered(lambda line: line.product_id != points_product)[:1]
+    goods = original.lines[:1]
     preview = config.efn_loyalty_refund_preview(original.id, [[goods.id, qty]])
     session = e["pos.session"].browse(st["session_id"])
     price = goods.price_unit
@@ -705,25 +764,12 @@ def step_loy_refund():
         )
     ]
     adjust = preview.get("value_idr") or 0
+    total = -price * qty
+    payments = [(0, 0, {"amount": total + adjust, "name": fields.Datetime.now(), "payment_method_id": st["cash_pm"]})]
     if adjust:
-        lines.append(
-            (
-                0,
-                0,
-                {
-                    "id": random.randint(1, 1_000_000),  # noqa: S311
-                    "pack_lot_ids": [],
-                    "price_unit": adjust,
-                    "product_id": points_product.id,
-                    "price_subtotal": adjust,
-                    "price_subtotal_incl": adjust,
-                    "qty": 1,
-                    "tax_ids": [(6, 0, [])],
-                    "price_type": "automatic",
-                },
-            )
+        payments.insert(
+            0, (0, 0, {"amount": -adjust, "name": fields.Datetime.now(), "payment_method_id": st["points_pm"]})
         )
-    total = -price * qty + adjust
     data = {
         "amount_paid": total,
         "amount_return": 0,
@@ -737,7 +783,7 @@ def step_loy_refund():
         "lines": lines,
         "partner_id": original.partner_id.id,
         "session_id": session.id,
-        "payment_ids": [(0, 0, {"amount": total, "name": fields.Datetime.now(), "payment_method_id": st["cash_pm"]})],
+        "payment_ids": payments,
         "uuid": uuid,
         "user_id": e.uid,
         "to_invoice": False,
@@ -745,10 +791,8 @@ def step_loy_refund():
         "is_refund": True,
     }
     try:
-        e["pos.order"].sync_from_ui([data])
-        env.cr.commit()
+        sync_with_retry(e, data)
     except Exception as exc:  # noqa: BLE001 - laporan smoke
-        env.cr.rollback()
         out(ok=False, error=type(exc).__name__, message=str(exc)[:300], preview=preview)
         return
     order = e["pos.order"].search([("uuid", "=", uuid)], limit=1)
@@ -765,6 +809,8 @@ def step_loy_refund():
         reverse_ratio=outbox.refund_ratio,
         reverse_eligible=outbox.eligible_amount,
         reverse_state=outbox.state,
+        points_restored_value=outbox.points_restored_value,
+        points_paid=order._efn_points_paid(),
     )
 
 
@@ -786,7 +832,11 @@ def step_rpc_users():
     company = env["res.company"].browse(st["company_id"])
     spec = {
         "smoke_rpc_internal": ["base.group_user"],
-        "smoke_rpc_cashier": ["base.group_user", "point_of_sale.group_pos_user"],
+        "smoke_rpc_cashier": [
+            "base.group_user",
+            "point_of_sale.group_pos_user",
+            "efn_setup_pos.group_efn_cashier_contact_creation",
+        ],
     }
     Users = env["res.users"].sudo().with_context(no_reset_password=True)
     creds, ids = {}, {}
@@ -882,7 +932,343 @@ def step_loy_refund_noreceipt():
     )
 
 
+# --------------------------------------------------------------------------------------------------------------
+# Gelombang 18 (QA): Rupiah Rp1 (W-03), redeem = alat bayar (E-30), refund ke metode asal (E-31), integritas
+# pembayaran r11 (SEC-113/116), daftar member 17+ (E-34). Order dibangun dengan harga & pajak dihitung SERVER
+# (compute_all, mata uang company) seperti frontend POS.
+def _taxed_lines(e, st, qty, refunded_line=None):
+    product = e["product.product"].browse(st["taxed_product_id"])
+    company = e["res.company"].browse(st["company_id"])
+    taxes = product.taxes_id.filtered(lambda t: t.company_id == company)
+    res = taxes.compute_all(product.lst_price, company.currency_id, abs(qty), product=product)
+    sign = -1 if qty < 0 else 1
+    vals = {
+        "id": random.randint(1, 1_000_000),  # noqa: S311
+        "pack_lot_ids": [],
+        "price_unit": product.lst_price,
+        "product_id": product.id,
+        "price_subtotal": sign * res["total_excluded"],
+        "price_subtotal_incl": sign * res["total_included"],
+        "qty": qty,
+        "tax_ids": [(6, 0, taxes.ids)],
+    }
+    if refunded_line:
+        vals["refunded_orderline_id"] = refunded_line.id
+    return [(0, 0, vals)], sign * res["total_included"], sign * (res["total_included"] - res["total_excluded"])
+
+
+def _ui(e, st, uuid, lines, total, tax, payments, partner_id=False, refund=False, amount_return=0.0):
+    session = e["pos.session"].browse(st["session_id"])
+    data = {
+        "amount_paid": sum(p[2]["amount"] for p in payments),
+        "amount_return": amount_return,
+        "amount_tax": tax,
+        "amount_total": total,
+        "date_order": fields.Datetime.to_string(fields.Datetime.now()),
+        "fiscal_position_id": False,
+        "pricelist_id": session.config_id.pricelist_id.id,
+        "name": f"Order {uuid}",
+        "last_order_preparation_change": "{}",
+        "lines": lines,
+        "partner_id": partner_id,
+        "session_id": session.id,
+        "payment_ids": payments,
+        "uuid": uuid,
+        "user_id": e.uid,
+        "to_invoice": False,
+        "state": "paid",
+    }
+    if refund:
+        data["is_refund"] = True
+    return data
+
+
+def _pay(method_id, amount, **extra):
+    return (0, 0, {"amount": amount, "name": fields.Datetime.now(), "payment_method_id": method_id, **extra})
+
+
+def _try_sync(e, data):
+    try:
+        sync_with_retry(e, data)
+        return None, None
+    except Exception as exc:  # noqa: BLE001 - laporan smoke
+        return type(exc).__name__, str(exc)[:200]
+
+
+def _int_like(value):
+    return float(value).is_integer()
+
+
+def step_g18_tax_order():
+    """W-03: total & pajak order POS ber-PB1 = Rupiah bulat (IDR rounding 1); dibayar tunai/EDC (SMOKE_METHOD)."""
+    e, st = ctx_env()
+    uuid = os.environ["SMOKE_ORDER_UUID"]
+    qty = int(os.environ.get("SMOKE_QTY", "3"))
+    lines, total, tax = _taxed_lines(e, st, qty)
+    method = st["edc_pm"] if os.environ.get("SMOKE_METHOD") == "edc" else st["cash_pm"]
+    pkey = os.environ.get("SMOKE_PARTNER")
+    partner = st["partners"][pkey] if pkey else False
+    err, msg = _try_sync(e, _ui(e, st, uuid, lines, total, tax, [_pay(method, total)], partner_id=partner))
+    order = e["pos.order"].search([("uuid", "=", uuid)], limit=1)
+    cur = e["res.company"].browse(st["company_id"]).currency_id
+    out(
+        ok=err is None and bool(order),
+        error=err,
+        message=msg,
+        idr_rounding=cur.rounding,
+        idr_decimals=cur.decimal_places,
+        amount_total=order.amount_total,
+        amount_tax=order.amount_tax,
+        total_int=_int_like(order.amount_total) and _int_like(order.amount_tax),
+        client_total=total,
+        state=order.state,
+    )
+
+
+def step_g18_tax_redeem():
+    """E-30 (K-18-1): order ber-PB1 dengan pembayaran Poin EFN senilai reservasi -> DPP & pajak tetap atas harga
+    penuh (sama dengan order tanpa poin), total tetap bulat."""
+    e, st = ctx_env()
+    uuid = os.environ["SMOKE_ORDER_UUID"]
+    qty = int(os.environ.get("SMOKE_QTY", "3"))
+    partner_id = st["partners"][os.environ["SMOKE_PARTNER"]]
+    lines, total, tax = _taxed_lines(e, st, qty)
+    reservation = e["efn.pos.loyalty.reservation"].sudo().search([("order_uuid", "=", uuid)], limit=1)
+    value = reservation.value_idr
+    pays = [_pay(st["points_pm"], value), _pay(st["cash_pm"], total - value)]
+    err, msg = _try_sync(e, _ui(e, st, uuid, lines, total, tax, pays, partner_id=partner_id))
+    order = e["pos.order"].search([("uuid", "=", uuid)], limit=1)
+    e["efn.pos.loyalty.outbox"]._efn_process_due()
+    env.cr.commit()
+    commit = e["efn.pos.loyalty.outbox"].sudo().search([("order_id", "=", order.id), ("kind", "=", "redeem_commit")])
+    out(
+        ok=err is None and bool(order),
+        error=err,
+        message=msg,
+        value_idr=value,
+        amount_total=order.amount_total,
+        amount_tax=order.amount_tax,
+        expected_tax=tax,
+        tax_unchanged=bool(order) and order.currency_id.compare_amounts(order.amount_tax, tax) == 0,
+        total_int=_int_like(order.amount_total),
+        points_paid=order._efn_points_paid() if order else None,
+        commit_state=commit.state,
+        reservation_state=reservation.state,
+    )
+
+
+def step_g18_refund_method():
+    """E-31: refund order asal (SMOKE_ORIG_UUID, dibayar tunai) ke metode lain (EDC) ditolak; ke tunai melebihi
+    yang dibayar ditolak; ke tunai sesuai -> OK."""
+    e, st = ctx_env()
+    original = e["pos.order"].search([("uuid", "=", os.environ["SMOKE_ORIG_UUID"])], limit=1)
+    line = original.lines[:1]
+    lines, total, tax = _taxed_lines(e, st, -1, refunded_line=line)
+    res = {}
+    for name, pays in (
+        ("other_method", [_pay(st["edc_pm"], total)]),
+        ("over_paid", [_pay(st["cash_pm"], total - original.amount_total)]),
+        ("same_method", [_pay(st["cash_pm"], total)]),
+    ):
+        uuid = f"{os.environ['SMOKE_ORDER_UUID'][:-4]}{len(res):04d}"
+        data = _ui(e, st, uuid, lines, total, tax, pays, partner_id=original.partner_id.id, refund=True)
+        if name == "over_paid":
+            data["amount_paid"] = pays[0][2]["amount"]
+        err, msg = _try_sync(e, data)
+        res[name] = err or e["pos.order"].search([("uuid", "=", uuid)], limit=1).state
+        res[name + "_msg"] = (msg or "")[:90]
+    out(ok=True, **res)
+
+
+def step_g18_unlinked_noncash():
+    """E-31 (Q-F18-5 default): retur tanpa struk dengan uang keluar NON-tunai (EDC) ditolak."""
+    e, st = ctx_env()
+    uuid = os.environ["SMOKE_ORDER_UUID"]
+    lines, total, tax = _taxed_lines(e, st, -1)
+    err, msg = _try_sync(e, _ui(e, st, uuid, lines, total, tax, [_pay(st["edc_pm"], total)], refund=True))
+    out(ok=err is not None, error=err, message=msg, created=bool(e["pos.order"].search([("uuid", "=", uuid)])))
+
+
+def step_g18_is_change():
+    """SEC-116: `is_change` dihitung server. (a) Penjualan EDC 2x lipat + tunai -separuh ber-is_change palsu ->
+    tersimpan is_change False; (b) refund order EDC (SMOKE_ORIG_UUID) yang dibayar tunai ber-is_change palsu ->
+    ditolak (tunai bukan metode asal)."""
+    e, st = ctx_env()
+    lines, total, tax = _taxed_lines(e, st, 1)
+    uuid_a = os.environ["SMOKE_ORDER_UUID"]
+    pays = [_pay(st["edc_pm"], total * 2), _pay(st["cash_pm"], -total, is_change=True)]
+    err_a, msg_a = _try_sync(e, _ui(e, st, uuid_a, lines, total, tax, pays, amount_return=0.0))
+    order = e["pos.order"].search([("uuid", "=", uuid_a)], limit=1)
+    cash_change = order.payment_ids.sudo().filtered(lambda p: p.payment_method_id.id == st["cash_pm"])
+    original = e["pos.order"].search([("uuid", "=", os.environ["SMOKE_ORIG_UUID"])], limit=1)
+    rlines, rtotal, rtax = _taxed_lines(e, st, -1, refunded_line=original.lines[:1])
+    uuid_b = f"{uuid_a[:-4]}0b0b"
+    rpays = [_pay(st["edc_pm"], 0.0), _pay(st["cash_pm"], rtotal, is_change=True)]
+    data = _ui(e, st, uuid_b, rlines, rtotal, rtax, rpays, partner_id=original.partner_id.id, refund=True)
+    err_b, msg_b = _try_sync(e, data)
+    out(
+        ok=True,
+        sale_error=err_a,
+        sale_msg=(msg_a or "")[:90],
+        sale_state=order.state,
+        stored_is_change=cash_change.mapped("is_change"),
+        refund_error=err_b,
+        refund_msg=(msg_b or "")[:120],
+    )
+
+
+def step_g18_refund_points():
+    """Refund 1 unit order ber-PB1 berpoin (SMOKE_ORIG_UUID). Pengembalian Poin EFN = preview server, atau
+    SMOKE_RESTORE (sengaja salah -> Odoo hold `refund_points_allocation_mismatch`, SEC-60/L-26)."""
+    e, st = ctx_env()
+    uuid = os.environ["SMOKE_ORDER_UUID"]
+    original = e["pos.order"].search([("uuid", "=", os.environ["SMOKE_ORIG_UUID"])], limit=1)
+    config = e["pos.config"].browse(st["config_id"])
+    line = original.lines[:1]
+    preview = config.efn_loyalty_refund_preview(original.id, [[line.id, 1]])
+    restore = int(os.environ.get("SMOKE_RESTORE") or preview.get("value_idr") or 0)
+    lines, total, tax = _taxed_lines(e, st, -1, refunded_line=line)
+    pays = [_pay(st["points_pm"], -restore), _pay(st["cash_pm"], total + restore)]
+    err, msg = _try_sync(e, _ui(e, st, uuid, lines, total, tax, pays, partner_id=original.partner_id.id, refund=True))
+    e["efn.pos.loyalty.outbox"]._efn_process_due()
+    env.cr.commit()
+    order = e["pos.order"].search([("uuid", "=", uuid)], limit=1)
+    rev = e["efn.pos.loyalty.outbox"].sudo().search([("order_id", "=", order.id), ("kind", "=", "reverse")])
+    out(
+        ok=err is None,
+        error=err,
+        message=msg,
+        preview_value=preview.get("value_idr"),
+        restore=restore,
+        reverse_state=rev.state,
+        reverse_error=rev.last_error or "",
+        loyalty_state=order.efn_loyalty_state,
+    )
+
+
+def _reverse_of(e, uuid):
+    order = e["pos.order"].search([("uuid", "=", uuid)], limit=1)
+    return order, e["efn.pos.loyalty.outbox"].search([("order_id", "=", order.id), ("kind", "=", "reverse")])
+
+
+def step_g18_hold_decide():
+    """POS manager memutuskan reverse yang ditahan (SMOKE_ACTION = hold_approve | restore_approve), lalu outbox
+    diproses. L-26: hold_approve mengirim apa adanya (BFF bisa menolak 409 restore_value_mismatch -> hold lagi);
+    restore_approve mengirim ulang dengan `restore_approved: true`."""
+    e, _st = ctx_env()  # admin = POS manager
+    uuid = os.environ["SMOKE_ORDER_UUID"]
+    _order, rev = _reverse_of(e, uuid)
+    action = os.environ["SMOKE_ACTION"]
+    err = None
+    try:
+        getattr(rev, f"action_efn_{action}")()
+        env.cr.commit()
+    except Exception as exc:  # noqa: BLE001 - laporan smoke
+        env.cr.rollback()
+        err = type(exc).__name__
+    e["efn.pos.loyalty.outbox"]._efn_process_due()
+    env.cr.commit()
+    _order, rev = _reverse_of(e, uuid)
+    out(
+        ok=err is None,
+        error=err,
+        reverse_state=rev.state,
+        reverse_error=rev.last_error or "",
+        restore_approved=rev.restore_approved,
+        reverse_delta=rev.points_delta,
+        points_restored_value=rev.points_restored_value,
+    )
+
+
+def step_g18_enroll():
+    """E-34 / K-18-8: daftar member oleh kasir. SMOKE_AGE=0 -> ditolak lokal (age_confirmation_required);
+    SMOKE_AGE=1 -> OTP request ke BFF (verify terpisah, SMOKE_CODE)."""
+    e, st = ctx_env()
+    config = e["pos.config"].browse(st["config_id"])
+    partner_id = st["partners"][os.environ["SMOKE_PARTNER"]]
+    uuid = os.environ["SMOKE_ORDER_UUID"]
+    age = os.environ.get("SMOKE_AGE") == "1"
+    if os.environ.get("SMOKE_CODE"):
+        res = config.efn_otp_verify(uuid, os.environ["SMOKE_CODE"], "pos_enroll", age_confirmed=age)
+    else:
+        res = config.efn_otp_request(uuid, 0, partner_id, "pos_enroll", age_confirmed=age)
+    env.cr.commit()
+    partner = e["res.partner"].sudo().browse(partner_id)
+    challenge = e["efn.pos.otp.challenge"].sudo().search([("order_ref", "=", uuid)], order="id desc", limit=1)
+    out(
+        **res,
+        challenge_state=challenge.state,
+        member_locked=bool(partner.efn_member_locked_at) if "efn_member_locked_at" in partner._fields else None,
+    )
+
+
+def step_g18_rpc_targets():
+    """Target probe RPC kasir (odoo_rpc_smoke.py): pembayaran order paid (SMOKE_ORIG_UUID) & partner member terkunci
+    (SMOKE_PARTNER). Hanya id (tanpa PII) ditambahkan ke RPC_CRED_FILE (0600)."""
+    e, st = ctx_env()
+    order = e["pos.order"].search([("uuid", "=", os.environ["SMOKE_ORIG_UUID"])], limit=1)
+    partner = e["res.partner"].sudo().browse(st["partners"][os.environ["SMOKE_PARTNER"]])
+    draft = e["pos.order"].search([("uuid", "=", os.environ["SMOKE_DRAFT_UUID"])], limit=1)
+    session = e["pos.session"].browse(st["session_id"])
+    targets = {
+        "draft_order_id": draft.id,
+        "session_id": session.id,
+        "pricelist_id": session.config_id.pricelist_id.id,
+        "product_id": st["product_id"],
+        "cash_pm": st["cash_pm"],
+        "payment_id": order.payment_ids[:1].id,
+        "payment_amount": order.payment_ids[:1].amount,
+        "other_method_id": st["edc_pm"],
+        "member_partner_id": partner.id,
+        "company_id": st["company_id"],
+    }
+    # Digabung ke file kredensial (langkah rpc_users sebelumnya) di kunci `_targets` -> satu pipe stdin.
+    with open(RPC_CRED_FILE, encoding="utf-8") as fh:
+        creds = json.load(fh)
+    creds["_targets"] = targets
+    fd = os.open(RPC_CRED_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump(creds, fh)
+    out(
+        ok=bool(order and partner and draft),
+        draft_state=draft.state,
+        member_locked=bool(partner.efn_member_locked_at),
+        **targets,
+    )
+
+
+def step_g18_rpc_after():
+    """Keadaan setelah probe RPC kasir: pembayaran & HP member tidak berubah (dibandingkan nilai sebelum)."""
+    e, st = ctx_env()
+    order = e["pos.order"].search([("uuid", "=", os.environ["SMOKE_ORIG_UUID"])], limit=1)
+    pay = order.payment_ids[:1]
+    partner = e["res.partner"].sudo().browse(st["partners"][os.environ["SMOKE_PARTNER"]])
+    created = e["res.partner"].sudo().search([("name", "=like", f"{PREFIX} Kasir %")], order="id desc", limit=5)
+    draft = e["pos.order"].search([("uuid", "=", os.environ["SMOKE_DRAFT_UUID"])], limit=1)
+    out(
+        draft_state=draft.state,
+        paid_orders_by_cashier=e["pos.order"].search_count(
+            [("name", "=like", "SMOKE-SEC125%"), ("state", "in", ("paid", "done", "invoiced"))]
+        ),
+        payment_amount=pay.amount,
+        payment_method=pay.payment_method_id.id,
+        payments=len(order.payment_ids),
+        phone_unchanged=partner.phone == os.environ.get("SMOKE_PHONE_EXPECTED", partner.phone),
+        cashier_created=[{"company": c.company_id.id, "is_company": c.is_company} for c in created],
+    )
+
+
 {
+    "g18_tax_order": step_g18_tax_order,
+    "g18_tax_redeem": step_g18_tax_redeem,
+    "g18_refund_method": step_g18_refund_method,
+    "g18_unlinked_noncash": step_g18_unlinked_noncash,
+    "g18_is_change": step_g18_is_change,
+    "g18_enroll": step_g18_enroll,
+    "g18_refund_points": step_g18_refund_points,
+    "g18_hold_decide": step_g18_hold_decide,
+    "g18_rpc_targets": step_g18_rpc_targets,
+    "g18_rpc_after": step_g18_rpc_after,
     "rpc_users": step_rpc_users,
     "loy_refund_noreceipt": step_loy_refund_noreceipt,
     "audit": step_audit,

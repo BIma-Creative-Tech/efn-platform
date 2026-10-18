@@ -14,7 +14,14 @@ from typing import Self
 from urllib.parse import urlsplit
 
 from efn_etl.sink import load_key
-from efn_etl.tls import TlsConfigError, ca_file, pg_ssl_settings, plaintext_allowed, require_readable_file
+from efn_etl.tls import (
+    TlsConfigError,
+    ca_file,
+    is_production,
+    pg_ssl_settings,
+    plaintext_allowed,
+    require_readable_file,
+)
 
 _TRUE = {"1", "true", "yes", "on"}
 
@@ -38,6 +45,32 @@ def _str(env: Mapping[str, str], name: str, default: str) -> str:
 
 def _int(env: Mapping[str, str], name: str, default: int) -> int:
     return int(_str(env, name, str(default)))
+
+
+def _int_range(env: Mapping[str, str], name: str, default: int, low: int, high: int) -> int:
+    value = _int(env, name, default)
+    if not low <= value <= high:
+        raise RuntimeError(f"{name} di luar rentang {low}..{high}")
+    return value
+
+
+def _points_mode(env: Mapping[str, str]) -> str:
+    value = _str(env, "ETL_LOYALTY_POINTS_MODE", "payment").strip().lower()
+    if value not in ("product", "payment"):
+        raise RuntimeError("ETL_LOYALTY_POINTS_MODE harus product|payment")
+    # SEC-114 (L-25b): mode `product` (redeem = baris produk, pra-E-30) hanya untuk data historis; Odoo G18 menolak
+    # produk poin. Ditolak di production (fail closed, selaras deploy-validate).
+    if value == "product" and is_production(env):
+        raise RuntimeError("ETL_LOYALTY_POINTS_MODE=product ditolak di production (SEC-114); gunakan payment")
+    return value
+
+
+def _epoch_auto(env: Mapping[str, str]) -> bool:
+    value = _bool(env, "ETL_AUDIT_EPOCH_AUTO", False)
+    # Fail closed: di production epoch baru HANYA lewat penanda `efn_audit.chain_epoch` dari runbook restore.
+    if value and is_production(env):
+        raise RuntimeError("ETL_AUDIT_EPOCH_AUTO=true ditolak di production; ubah penanda efn_audit.chain_epoch")
+    return value
 
 
 def _bool(env: Mapping[str, str], name: str, default: bool) -> bool:
@@ -99,6 +132,9 @@ class Settings:
     audit_batch_size: int = 2000
     audit_recon_interval_seconds: int = 86_400
     audit_recon_content: bool = True
+    # Chain epoch (restore DB Odoo, audit.decide_epoch): auto = epoch baru tanpa penanda (DITOLAK di production).
+    audit_epoch_auto: bool = False
+    audit_epoch_anchors: int = 20
     # Gelombang 13 (Fase 1): snapshot stok & kedaluwarsa (efn_etl/stock.py). Default = ETL_ENABLE_ODOO (grant sama).
     stock_enabled: bool = False
     stock_snapshot_interval_seconds: int = 3600
@@ -122,6 +158,15 @@ class Settings:
     loyalty_recon_aged_hours: int = 24
     loyalty_recon_open_days: int = 30
     loyalty_recon_not_before: datetime | None = None
+    # G18 (docs/04 §9.9 K-18-1/K-18-6, E-30; SEC-114): `payment` (default) | `product` (data historis, non-production).
+    loyalty_points_mode: str = "payment"
+    loyalty_points_tolerance_idr: int = 0
+    # SEC-118: nilai 1 poin (Rp) — env SAMA dengan BFF `LOYALTY_POINT_VALUE_IDR`.
+    loyalty_point_value_idr: int = 100
+    # G18/W-19 (PDP v7 Q-P7/Q-P8): umur kolom pribadi saat dimuat (lapisan kedua TTL kolom ClickHouse). Env SAMA
+    # dengan service clickhouse-init agar kedua lapisan konsisten.
+    pseudonym_retention_years: int = 5
+    geo_retention_days: int = 90
 
     @property
     def amqp_user(self) -> str:
@@ -231,6 +276,8 @@ class Settings:
             audit_batch_size=_int(e, "ETL_AUDIT_BATCH_SIZE", 2000),
             audit_recon_interval_seconds=_int(e, "ETL_AUDIT_RECON_INTERVAL_SECONDS", 86_400),
             audit_recon_content=_bool(e, "ETL_AUDIT_RECON_CONTENT", True),
+            audit_epoch_auto=_epoch_auto(e),
+            audit_epoch_anchors=_int_range(e, "ETL_AUDIT_EPOCH_ANCHORS", 20, 1, 1000),
             stock_enabled=_bool(e, "ETL_ENABLE_STOCK", odoo_enabled),
             stock_snapshot_interval_seconds=_int(e, "ETL_STOCK_SNAPSHOT_INTERVAL_SECONDS", 3600),
             points_product_codes=points_codes,
@@ -249,4 +296,9 @@ class Settings:
             loyalty_recon_aged_hours=_int(e, "ETL_LOYALTY_RECON_AGED_HOURS", 24),
             loyalty_recon_open_days=_int(e, "ETL_LOYALTY_RECON_OPEN_DAYS", 30),
             loyalty_recon_not_before=_datetime(e, "ETL_LOYALTY_RECON_NOT_BEFORE"),
+            loyalty_points_mode=_points_mode(e),
+            loyalty_points_tolerance_idr=_int_range(e, "ETL_LOYALTY_POINTS_TOLERANCE_IDR", 0, 0, 1000),
+            loyalty_point_value_idr=_int_range(e, "LOYALTY_POINT_VALUE_IDR", 100, 1, 1_000_000_000),
+            pseudonym_retention_years=_int_range(e, "CH_PSEUDONYM_RETENTION_YEARS", 5, 1, 30),
+            geo_retention_days=_int_range(e, "CH_GEO_RETENTION_DAYS", 90, 1, 3650),
         )

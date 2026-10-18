@@ -1,6 +1,7 @@
 # ADR-030: Sumber Image & Masa Depan Object Storage (MinIO community ditinggalkan upstream)
 
 - **Status:** Proposed — rekomendasi jangka pendek **sudah diterapkan di dev** (Gelombang 9–11, reversible); lihat "Status implementasi"
+  - **Keputusan pemilik proyek 10 Okt 2026:** **Q-OS1** = terima SILO (fork komunitas, tanpa SLA); **Q-OS3** = object lock **GOVERNANCE** (bukan COMPLIANCE) + filter s3-gateway; **Q-OS2** = PoC SeaweedFS 5 hari **sebelum produksi**; **Q-OS4** = filestore Odoo lokal terenkripsi (LUKS); **Q-OS5** = backup off-site terenkripsi **wajib sebelum go-live**. Pemutus resmi ADR ini IT + Security: lead menentukan apakah jawaban ini cukup untuk mengubah status ke Accepted (architect tidak mengubahnya).
 - **Tanggal:** 2026-10-06 (status implementasi diperbarui Gelombang 12)
 - **Pemutus (klien):** IT (Head IT) + Security; Finance hanya bila memilih opsi berbayar (dukungan komersial)
 - **Referensi review:** R-S02 (kerentanan dependency), R-S08 (provenance image), R-T08 (backup/DR), R-L01 (UU PDP), R-S06 (upload foto); **usulan risiko baru R-S13** (komponen inti ditinggalkan upstream, lihat bawah)

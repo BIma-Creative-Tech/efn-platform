@@ -11,8 +11,8 @@ program reward di server, bukan flag klien).
 from unittest.mock import patch
 
 from odoo import Command
-from odoo.exceptions import UserError, ValidationError
-from odoo.tests import tagged
+from odoo.exceptions import AccessError, UserError, ValidationError
+from odoo.tests import new_test_user, tagged
 
 from odoo.addons.efn_core.models.efn_bff_client import BffResponse, EfnBffError
 from odoo.addons.point_of_sale.tests.common import TestPoSCommon
@@ -411,6 +411,58 @@ class TestEfnPosOtpGate(TestPoSCommon):
         self.assertFalse(self.env["pos.order"].search([("uuid", "=", data["uuid"])]))
         self.assertFalse(self._consume_calls())
 
+    def test_sec125_gated_reward_cannot_skip_gate_outside_sync(self):
+        """Skenario C re-review G18: reward ber-OTP yang ditambahkan kasir ke draft lewat RPC tidak bisa dilunasi
+        tanpa OTP, baik lewat action_pos_order_paid/write state (ditolak) maupun wizard Payment (gerbang berjalan)."""
+        cashier = new_test_user(
+            self.env,
+            login="efn_rr_otp_kasir",
+            groups="base.group_user,point_of_sale.group_pos_user",
+            company_id=self.env.company.id,
+        )
+        manager = new_test_user(
+            self.env,
+            login="efn_rr_otp_mgr",
+            groups="base.group_user,point_of_sale.group_pos_manager",
+            company_id=self.env.company.id,
+        )
+        with self._patch_bff():
+            order = self._sync(self._order_data(draft=True))
+            self.env["pos.order.line"].with_user(cashier).create(
+                {
+                    "order_id": order.id,
+                    "product_id": self.reward.discount_line_product_id.id,
+                    "qty": 1,
+                    "price_unit": -10.0,
+                    "price_subtotal": -10.0,
+                    "price_subtotal_incl": -10.0,
+                    "is_reward_line": True,
+                    "reward_id": self.reward.id,
+                }
+            )
+            order.add_payment(
+                {"pos_order_id": order.id, "payment_method_id": self.cash_pm1.id, "amount": order.amount_total}
+            )
+            for attempt in (
+                lambda: order.with_user(cashier).action_pos_order_paid(),
+                lambda: order.with_user(cashier).write({"state": "paid"}),
+            ):
+                with self.assertRaises(UserError) as caught:
+                    attempt()
+                self.assertNotIsInstance(caught.exception, AccessError)
+            wizard = (
+                self.env["pos.make.payment"]
+                .with_user(manager)
+                .with_context(active_id=order.id)
+                .create({"payment_method_id": self.cash_pm1.id, "amount": 0})
+            )
+            with self.assertRaises(UserError) as caught:
+                wizard.check()
+            self.assertNotIsInstance(caught.exception, AccessError)
+            self.assertIn("OTP", str(caught.exception))
+        self.assertEqual(order.state, "draft")
+        self.assertFalse(self._consume_calls())
+
     def test_browser_flag_alone_is_not_trusted(self):
         data = self._order_data(reward=self.reward)
         data["efn_otp_verified"] = True  # dipalsukan dari browser
@@ -563,3 +615,70 @@ class TestEfnPosOtpGate(TestPoSCommon):
             self.config.efn_otp_request(uuid, 90.0, self.member_a.id)
             res = self.config.efn_otp_verify(uuid, "123456", "pos_redeem")
         self.assertEqual(res["error_code"], "no_challenge")
+
+    # ------------------------------------------------------- E-34 pos_enroll
+    def test_enroll_requires_age_confirmed_true(self):
+        """K-18-8: tanpa `age_confirmed` True persis -> ditolak server tanpa memanggil BFF."""
+        uuid = self.create_random_uid()
+        with self._patch_bff():
+            for value in (False, None, "true", 1):
+                with self.subTest(value=value):
+                    res = self.config.efn_otp_request(uuid, 0, self.member_a.id, "pos_enroll", value)
+                    self.assertFalse(res["ok"])
+                    self.assertEqual(res["error_code"], "age_confirmation_required")
+                    res = self.config.efn_otp_verify(uuid, "123456", "pos_enroll", value)
+                    self.assertEqual(res["error_code"], "age_confirmation_required")
+        self.assertEqual(self.calls, [])
+
+    def test_enroll_flow_forwards_age_and_stores_no_age(self):
+        uuid = self.create_random_uid()
+        self.assertFalse(self.member_a.efn_member_locked_at)
+        with self._patch_bff():
+            self.responses[REQUEST] = BffResponse(202, {"challenge_id": "chal-e", "expires_in": 180})
+            self.responses[VERIFY] = BffResponse(200, {"ok": True})
+            res = self.config.efn_otp_request(uuid, 0, self.member_a.id, "pos_enroll", True)
+            self.assertTrue(res["ok"], res)
+            res = self.config.efn_otp_verify(uuid, "123456", "pos_enroll", True)
+            self.assertTrue(res["ok"], res)
+        self.assertEqual(self.calls[0][1]["purpose"], "pos_enroll")
+        self.assertIs(self.calls[0][1]["age_confirmed"], True)
+        self.assertEqual(
+            self.calls[1][1], {"challenge_id": "chal-e", "order_ref": uuid, "code": "123456", "age_confirmed": True}
+        )
+        challenge = self._challenge(uuid)
+        self.assertEqual(challenge.purpose, "pos_enroll")
+        self.assertEqual(challenge.state, "consumed")
+        self.assertFalse(challenge.sudo().discount_token)
+        self.assertFalse([name for name in challenge._fields if "age" in name or "birth" in name])
+        # SEC-115: pendaftaran (pos_enroll) menandai member secara permanen, tanpa PII.
+        self.assertTrue(self.member_a.efn_member_locked_at)
+        # Challenge pos_enroll tidak membuka promo ber-OTP.
+        with self._patch_bff():
+            with self.assertRaises(UserError):
+                self._sync(self._order_data(reward=self.reward, uuid=uuid))
+
+    def test_sec115_failed_request_does_not_mark(self):
+        """Penanda hanya diisi bila BFF menerima permintaan OTP (nomor benar-benar dipakai sebagai member)."""
+        uuid = self.create_random_uid()
+        with self._patch_bff():
+            self.responses[REQUEST] = BffResponse(400, {"error": {"code": "invalid_phone"}})
+            self.config.efn_otp_request(uuid, 1000, self.member_a.id)
+        self.assertFalse(self.member_a.efn_member_locked_at)
+        with self._patch_bff():
+            self.responses[REQUEST] = BffResponse(202, {"challenge_id": "chal-p", "expires_in": 180})
+            self.assertTrue(self.config.efn_otp_request(uuid, 1000, self.member_a.id)["ok"])
+        self.assertTrue(self.member_a.efn_member_locked_at)
+
+    def test_enroll_bff_age_rejection_mapped(self):
+        uuid = self.create_random_uid()
+        with self._patch_bff():
+            self.responses[REQUEST] = BffResponse(400, {"error": {"code": "age_confirmation_required"}})
+            res = self.config.efn_otp_request(uuid, 0, self.member_a.id, "pos_enroll", True)
+        self.assertEqual(res["error_code"], "age_confirmation_required")
+
+    def test_promo_payload_has_no_age_field(self):
+        uuid = self.create_random_uid()
+        with self._patch_bff():
+            self._verify_otp_for(uuid)
+        self.assertNotIn("age_confirmed", self.calls[0][1])
+        self.assertNotIn("age_confirmed", self.calls[1][1])

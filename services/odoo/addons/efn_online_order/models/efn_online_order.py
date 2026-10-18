@@ -21,7 +21,7 @@ Aturan inti:
 import json
 import logging
 import uuid
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import psycopg2
 
@@ -55,6 +55,14 @@ from .efn_online_common import (
 )
 
 _logger = logging.getLogger(__name__)
+
+# G18-QA-01: dasar seq berbasis waktu (detik UTC sejak tanggal ini).
+SEQ_EPOCH = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def _efn_epoch_seconds():
+    return int((datetime.now(UTC) - SEQ_EPOCH).total_seconds())
+
 
 STATES = [
     ("placed", "Menunggu pembayaran"),
@@ -189,10 +197,24 @@ class EfnOnlineOrder(models.Model):
         value = self.currency_id.round(amount)
         return int(round(value)) if float(value).is_integer() else value
 
-    def _efn_emit(self, event, refund=None):
-        """Antrikan event outbox (seq naik monoton per order). Payload dibangun saat kirim (tanpa PII)."""
+    def _efn_next_seq(self):
+        r"""G18-QA-01: ``seq`` = max(seq terakhir + 1, detik sejak 2026-01-01 UTC).
+
+        Dipilih karena paling aman tanpa ketergantungan jaringan di transaksi perubahan state: setelah DB Odoo
+        dibuat ulang / dipulihkan, ``event_seq`` mundur, tetapi detik dinding terus naik sehingga event baru tetap
+        > ``last_seq`` BFF (BFF mengabaikan ``seq <= last_seq``). Alternatif ditolak: tarik watermark dari BFF
+        (panggilan jaringan di dalam transaksi; BFF mati = state tidak bisa berubah), watermark lokal (ikut hilang
+        saat restore). Asumsi: jam server disinkron NTP; event beruntun dalam detik yang sama memakai +1, jadi seq
+        bisa mendahului jam beberapa detik (aman selama restore memakan lebih lama dari itu). Muat dalam 9 digit
+        (kontrak BFF ``\d{1,9}``) sampai ~2057.
+        """
         self.ensure_one()
-        seq = self.event_seq + 1
+        return max(self.event_seq + 1, _efn_epoch_seconds())
+
+    def _efn_emit(self, event, refund=None):
+        """Antrikan event outbox (seq naik monoton per order, berbasis waktu). Payload dibangun saat kirim."""
+        self.ensure_one()
+        seq = self._efn_next_seq()
         self.write({"event_seq": seq})
         return self.env["efn.online.event.outbox"].sudo()._efn_enqueue(self, event, seq, refund=refund)
 

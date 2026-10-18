@@ -3,6 +3,26 @@
 Berlaku untuk `bctech-adm/efn-platform` (repo **privat**, akun GitHub **gratis**). Ditulis gelombang 16 (9 Okt 2026)
 setelah run pertama CI/Security/Build gagal karena batas paket, bukan karena kode. Audiens: lead, devsecops, admin repo.
 
+## 0. Status G18 (18 Okt 2026): repo PUBLIK di organisasi `BIma-Creative-Tech/efn-platform`
+
+Repo dipindah dari `bctech-adm/efn-platform` (privat, akun pribadi) ke organisasi dan dibuat **publik**. Bagian 1–3 di
+bawah tetap berlaku sebagai catatan bila repo kembali privat; yang berubah:
+
+| Hal | Sebelum (privat, akun pribadi) | Sekarang (publik, organisasi) | Tindakan |
+|---|---|---|---|
+| Menit Actions runner standar | 2.000/bulan | Gratis untuk repo publik | `concurrency` tetap dipertahankan (hemat waktu tunggu) |
+| Code scanning (CodeQL, SARIF) | Tidak tersedia | **Aktif otomatis**: `CODE_SCANNING` = `visibility == 'public'` | Izin `security-events: write` ada di semua job pengunggah: `semgrep`, `trivy-fs`, `checkov` (security.yml), `analyze` (codeql.yml), `build` (build-push.yml) |
+| Artifact attestation | "Feature not available for user-owned private repositories" | **Aktif**: `attest-build-provenance` jalan bila publik | Job `build` kini `attestations: write` + `id-token: write`; deploy tetap memakai `cosign verify` |
+| gitleaks-action | Gratis untuk akun pribadi | Organisasi wajib lisensi (`missing gitleaks license`) | **Dihapus**; jalur PR memakai CLI gitleaks (image dipin digest) atas rentang commit PR (`--log-opts base..head`), push/jadwal tetap riwayat penuh |
+| Dependency review | Butuh GHAS | Butuh **Dependency graph** aktif | **Tindakan admin org (user):** Settings repo > *Code security and analysis* > **Dependency graph: Enable** (untuk repo publik biasanya aktif; di org bisa dimatikan kebijakan org: Org settings > Code security > *Dependency graph* "Automatically enable for new public repositories"). Sampai aktif, job `Dependency review (PR)` gagal "Dependency review is not supported on this repository" |
+| Identitas cosign/Rekor | `bctech-adm/efn-platform` | `BIma-Creative-Tech/efn-platform` | `EFN_SIGNER_IDENTITY_REGEXP`/`EFN_GITHUB_REPO`/`EFN_IMAGE_PREFIX` di `/etc/efn/deploy.conf` host wajib diperbarui Superadmin (key-custody §4a); tanda tangan lama tidak lolos identitas baru → rilis lama tidak bisa di-deploy ulang tanpa build ulang |
+| Visibilitas GHCR | Ikut repo privat | Paket org **tetap privat** sampai diubah (Package settings) | Disarankan tetap privat (daftar paket/versi image = info serangan); deploy memakai token `packages: read` |
+
+Risiko repo publik yang sudah dimitigasi: tidak ada secret di repo (gitleaks riwayat penuh), `pull_request` dari fork
+tidak mendapat secret / token tulis (job PR read-only, SEC-81), Rekor sudah publik sebelumnya (SEC-84). Yang perlu
+dijaga: jangan pakai `pull_request_target`; review PR dari luar sebelum menyetujui run workflow (Settings > Actions >
+"Require approval for all outside collaborators").
+
 ## 1. Batas paket gratis yang memengaruhi CI
 
 | Batas | Nilai | Dampak bila terlampaui | Mitigasi di repo |

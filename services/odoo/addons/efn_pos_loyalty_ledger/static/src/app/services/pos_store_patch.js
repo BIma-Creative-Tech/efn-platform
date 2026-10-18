@@ -1,7 +1,7 @@
 /**
- * Poin EFN: mencegah order berubah setelah reservasi (docs/08 §6.3 G). Kembali ke layar produk,
- * mengganti pelanggan, atau menghapus order dengan tukar poin aktif -> dialog "Batalkan tukar
- * poin?" -> release (server Odoo -> BFF; gagal = diantre outbox) + hapus baris poin.
+ * Poin EFN: mencegah order berubah setelah reservasi (docs/08 §6.3 G, §9.2 E-30). Kembali ke layar produk,
+ * mengganti pelanggan, menghapus pembayaran Poin EFN, atau menghapus order dengan tukar poin aktif -> dialog
+ * "Batalkan tukar poin?" -> release (server Odoo -> BFF; gagal = diantre outbox) + hapus pembayaran poin.
  */
 import { PosStore } from "@point_of_sale/app/services/pos_store";
 import { ask } from "@point_of_sale/app/utils/make_awaitable_dialog";
@@ -27,10 +27,10 @@ patch(PosStore.prototype, {
             try {
                 await this.data.call("pos.config", "efn_loyalty_redeem_release", [[this.config.id], order.uuid]);
             } catch {
-                // Server melepas reservasi saat order tersinkron tanpa baris poin.
+                // Server melepas reservasi saat order tersinkron tanpa pembayaran poin.
             }
         }
-        order.efnRemovePointsLines();
+        order.efnRemovePointsPayments();
     },
 
     async onClickBackButton() {

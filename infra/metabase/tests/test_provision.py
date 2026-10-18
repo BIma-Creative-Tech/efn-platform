@@ -146,3 +146,88 @@ def test_secret_file_must_not_be_empty(tmp_path: Path) -> None:
         p.read_secret_file(str(secret))
     secret.write_text("abc\n", encoding="utf-8")
     assert p.read_secret_file(str(secret)) == "abc"
+
+
+# ---------------------------------------------------------------- G18/W-19: akun tidak aktif 90 hari
+
+NOW = p.datetime(2026, 10, 10, 12, 0, tzinfo=p.UTC)
+
+
+def _user(uid: int, last_login: str | None, joined: str = "2026-01-01T00:00:00Z", **extra):
+    return {"id": uid, "is_active": True, "last_login": last_login, "date_joined": joined, **extra}
+
+
+def test_parse_ts_metabase_formats() -> None:
+    assert p.parse_ts("2026-10-10T10:03:55.6038Z") == p.datetime(2026, 10, 10, 10, 3, 55, 603800, tzinfo=p.UTC)
+    assert p.parse_ts("2026-10-10T10:03:55") == p.datetime(2026, 10, 10, 10, 3, 55, tzinfo=p.UTC)
+    for bad in (None, "", "bukan-tanggal", 123):
+        assert p.parse_ts(bad) is None
+
+
+def test_inactive_users_selection() -> None:
+    users = [
+        _user(1, "2026-01-01T00:00:00Z", is_superuser=True),  # admin provisioning (keep) walau lama
+        _user(2, "2026-07-11T11:59:59Z"),  # 91 hari -> nonaktif
+        _user(3, "2026-07-12T12:00:00Z"),  # tepat 90 hari -> tetap
+        _user(4, None, joined="2026-05-01T00:00:00Z"),  # undangan tak pernah dipakai -> nonaktif
+        _user(5, None, joined="2026-10-01T00:00:00Z"),  # undangan baru -> tetap
+        _user(6, "2025-01-01T00:00:00Z", is_active=False),  # sudah nonaktif
+        _user(7, "2025-01-01T00:00:00Z", type="api-key"),  # bukan akun orang
+        _user(8, "rusak", joined="rusak"),  # timestamp tak terbaca -> dilewati (fail safe)
+        _user(9, "2025-01-01T00:00:00Z", is_superuser=True),  # admin lain yang lama tidak aktif -> nonaktif
+    ]
+    assert [u["id"] for u in p.inactive_users(users, NOW, 90, {1})] == [2, 4, 9]
+    assert p.inactive_users(users, NOW, 0, {1}) == []
+
+
+class _FakeClient:
+    def __init__(self, users):
+        self.users = users
+        self.calls: list[tuple[str, str]] = []
+
+    def request(self, method, path, body=None, expect=(200,)):
+        self.calls.append((method, path))
+        if path == "/api/user/current":
+            return {"id": 1}
+        if path == "/api/user":
+            return {"data": self.users, "total": len(self.users)}
+        return None
+
+
+def test_deactivate_inactive_users_calls_delete_only_for_targets(capsys) -> None:
+    client = _FakeClient(
+        [
+            _user(1, "2020-01-01T00:00:00Z"),
+            _user(2, "2026-01-01T00:00:00Z"),
+            _user(3, None, joined="2026-10-01T00:00:00Z"),
+        ]
+    )
+    assert p.deactivate_inactive_users(client, 90, NOW) == 1
+    assert ("DELETE", "/api/user/2") in client.calls
+    assert ("DELETE", "/api/user/1") not in client.calls
+    out = capsys.readouterr().out
+    assert "@" not in out  # tidak mencetak email
+
+
+def test_deactivate_disabled_makes_no_calls() -> None:
+    client = _FakeClient([_user(2, "2020-01-01T00:00:00Z")])
+    assert p.deactivate_inactive_users(client, 0, NOW) == 0
+    assert client.calls == []
+
+
+def test_deactivate_days_cli_range() -> None:
+    with pytest.raises(SystemExit):
+        p.main(
+            [
+                "--url",
+                "https://bi.efn.local",
+                "--admin-email",
+                "a@b",
+                "--admin-password-file",
+                "x",
+                "--ch-password-file",
+                "y",
+                "--deactivate-inactive-days",
+                "-1",
+            ]
+        )

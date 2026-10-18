@@ -20,7 +20,14 @@ Critical (anomali integritas, alert):
   reservasi committed di BFF;
 - `redeem_points_mismatch`: −Σ ledger `pos_redeem` order ≠ `points` reservasi committed (atau reservasi tidak ada);
 - `reverse_without_refund_order`: ledger `pos_reverse` yang order refund-nya (uuid di idempotency key) atau order
-  asalnya (`source_ref`) tidak ada / bukan paid / jenisnya salah.
+  asalnya (`source_ref`) tidak ada / bukan paid / jenisnya salah;
+- `points_payment_daily_mismatch` (G18, K-18-6, hanya mode `payment`): per PT x hari WIB yang sudah settle,
+  Σ `pos.payment` metode Poin EFN (Odoo, refund negatif) ≠ Σ `value_idr` redeem committed − Σ `points_restored_value`
+  (BFF). Hasil per hari juga ditulis ke `loyalty_points_daily` (dashboard) dan `points_daily` di log.
+
+Mode poin (`ETL_LOYALTY_POINTS_MODE`): `product` = redeem berupa baris produk Poin EFN (G13, default sampai E-30
+terpasang); `payment` = redeem berupa pembayaran metode `efn_is_loyalty_points` (docs/04 §9.9 K-18-1). Pada mode
+`payment` kind 3-5 memakai baris pembayaran (toleransi `ETL_LOYALTY_POINTS_TOLERANCE_IDR`, default 0).
 
 Warning (antrean kerja yang menua; open item):
 - `outbox_hold_aged`, `outbox_pending_aged`: outbox `hold`/`pending` > `ETL_LOYALTY_RECON_AGED_HOURS` (default 24);
@@ -45,7 +52,7 @@ import re
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Protocol
 
@@ -77,6 +84,8 @@ CRITICAL_KINDS = (
     "points_line_without_redeem",
     "redeem_points_mismatch",
     "reverse_without_refund_order",
+    "points_payment_daily_mismatch",
+    "points_restore_value_mismatch",
 )
 WARNING_KINDS = (
     "outbox_hold_aged",
@@ -93,6 +102,22 @@ _REVERSE_KEY_RE = re.compile(r"^pos_reverse:([0-9A-Za-z-]{1,64}):")
 _UNKNOWN_COMPANY = "?"
 SAMPLE_LIMIT = 10
 _CHUNK = 5000
+WIB = timezone(timedelta(hours=7), "WIB")  # tanpa DST; tidak bergantung tzdata di image
+POINTS_MODES = ("product", "payment")
+DAILY_TABLE = "loyalty_points_daily"
+DAILY_COLUMNS = (
+    "run_at",
+    "day",
+    "company_code",
+    "odoo_points_payment_idr",
+    "bff_redeem_idr",
+    "bff_restored_idr",
+    "diff_idr",
+    "orders",
+    "orders_mismatched",
+    "bff_restored_points_idr",
+    "restore_value_mismatched",
+)
 
 # ---------------------------------------------------------------- SQL platform (efn_readonly, kolom non-PII)
 SQL_PLATFORM_EARNS = """
@@ -134,6 +159,48 @@ JOIN product_product p ON p.id = l.product_id
 WHERE p.default_code = ANY(%(codes)s) AND l.order_id = ANY(%(ids)s)
 GROUP BY l.order_id
 """
+# G18 (docs/04 §9.9 K-18-1, E-30): redeem = baris pembayaran metode Poin EFN (`efn_is_loyalty_points`), bukan
+# produk. Mode `payment` (ETL_LOYALTY_POINTS_MODE) memakai query ini menggantikan SQL_ODOO_POINTS_LINES, dengan
+# struktur hasil sama (order_id, n, total). Refund = pembayaran negatif.
+SQL_ODOO_POINTS_PAYMENTS = """
+SELECT p.pos_order_id AS order_id, count(*) AS n, COALESCE(sum(p.amount), 0) AS total
+FROM pos_payment p
+JOIN pos_payment_method m ON m.id = p.payment_method_id
+WHERE m.efn_is_loyalty_points AND p.pos_order_id = ANY(%(ids)s)
+GROUP BY p.pos_order_id
+"""
+# K-18-6 harian: pembayaran Poin EFN per order paid/done (tanggal = payment_date, fallback date_order).
+_POINTS_PAYMENT_ROWS = """
+SELECT p.id, p.pos_order_id AS order_id, o.uuid, o.company_id, COALESCE(p.payment_date, o.date_order) AS paid_at,
+       p.amount
+FROM pos_payment p
+JOIN pos_payment_method m ON m.id = p.payment_method_id
+JOIN pos_order o ON o.id = p.pos_order_id
+WHERE m.efn_is_loyalty_points AND o.state IN ('paid', 'done')
+"""
+SQL_ODOO_POINTS_PAYMENTS_WINDOW = (
+    _POINTS_PAYMENT_ROWS
+    + "  AND COALESCE(p.payment_date, o.date_order) >= %(since)s AND COALESCE(p.payment_date, o.date_order) < %(until)s"
+)
+SQL_ODOO_POINTS_PAYMENTS_BY_UUID = _POINTS_PAYMENT_ROWS + "  AND o.uuid = ANY(%(uuids)s)"
+# Sisi BFF (kolom non-PII efn_readonly). Redeem = value_idr reservasi committed (pos_redeem, K-18-3).
+_PLATFORM_REDEEM_ROWS = """
+SELECT order_ref, company_code, value_idr, committed_at AS at
+FROM platform.loyalty_reservation
+WHERE status = 'committed'
+"""
+SQL_PLATFORM_REDEEMS_WINDOW = _PLATFORM_REDEEM_ROWS + "  AND committed_at >= %(since)s AND committed_at < %(until)s"
+SQL_PLATFORM_REDEEMS_BY_REF = _PLATFORM_REDEEM_ROWS + "  AND order_ref = ANY(%(refs)s)"
+# Restore = points_restored_value reverse (K-18-5). USULAN KONTRAK (belum ada di BFF, lihat laporan G18): tabel
+# `platform.loyalty_pos_reverse`, satu baris per order refund (idempoten), grant SELECT kolom ini ke efn_readonly.
+_PLATFORM_RESTORE_ROWS = """
+SELECT refund_order_ref AS order_ref, company_code, points_restored_value AS value_idr, points_restored AS points,
+       created_at AS at
+FROM platform.loyalty_pos_reverse
+WHERE points_restored_value > 0
+"""
+SQL_PLATFORM_RESTORES_WINDOW = _PLATFORM_RESTORE_ROWS + "  AND created_at >= %(since)s AND created_at < %(until)s"
+SQL_PLATFORM_RESTORES_BY_REF = _PLATFORM_RESTORE_ROWS + "  AND refund_order_ref = ANY(%(refs)s)"
 SQL_ODOO_OUTBOX_BY_ORDERS = "SELECT order_id, kind, state FROM efn_pos_loyalty_outbox WHERE order_id = ANY(%(ids)s)"
 SQL_ODOO_COMPANIES = "SELECT id, efn_brand_code FROM res_company"
 SQL_ODOO_OUTBOX_OPEN = """
@@ -196,6 +263,8 @@ class Reservation:
 class PointsLines:
     count: int
     total_incl: Decimal
+    # Mode payment: order pra-E-30 (redeem masih baris produk Poin EFN) -> toleransi lama Rp1 x baris.
+    legacy: bool = False
 
 
 @dataclass
@@ -268,7 +337,15 @@ def reverse_refund_uuid(idempotency_key: str) -> str | None:
     return match.group(1) if match else None
 
 
-def reconcile(inputs: ReconInputs, now: datetime, settle: timedelta, report: ReconReport | None = None) -> ReconReport:
+def reconcile(
+    inputs: ReconInputs,
+    now: datetime,
+    settle: timedelta,
+    report: ReconReport | None = None,
+    points_tolerance: Decimal | None = None,
+) -> ReconReport:
+    """`points_tolerance` None = mode produk (toleransi Rp1 x jumlah baris, validasi Odoo G13); mode `payment` (E-30)
+    memberi toleransi tetap (default 0, K-18-1) antara Σ pembayaran Poin EFN dan `value_idr`."""
     report = report or ReconReport()
     orders = inputs.orders_by_uuid
     report.ledger_checked = len(inputs.ledger)
@@ -329,7 +406,8 @@ def reconcile(inputs: ReconInputs, now: datetime, settle: timedelta, report: Rec
             if order.loyalty_state != "review" and to_utc(order.date_order) < settled_before:
                 report.add("points_line_without_redeem", order.company_code, order.id)
             continue
-        if abs(abs(lines.total_incl) - Decimal(reservation.value_idr)) > Decimal(lines.count):
+        tolerance = Decimal(lines.count) if points_tolerance is None or lines.legacy else points_tolerance
+        if abs(abs(lines.total_incl) - Decimal(reservation.value_idr)) > tolerance:
             report.add("points_line_value_mismatch", order.company_code, order.id)
 
     # 7. reverse tanpa order refund / order asal
@@ -344,6 +422,170 @@ def reconcile(inputs: ReconInputs, now: datetime, settle: timedelta, report: Rec
         if not (refund_ok and original_ok):
             report.add("reverse_without_refund_order", entry.company_code, refund.id if refund else 0, entry.id)
     return report
+
+
+# ---------------------------------------------------------------- K-18-6: rekonsiliasi harian pembayaran Poin EFN
+@dataclass(frozen=True)
+class PointsPayment:
+    """Satu `pos.payment` metode Poin EFN (Odoo). amount negatif = refund."""
+
+    id: int
+    order_id: int
+    uuid: str
+    company_code: str
+    paid_at: datetime
+    amount: Decimal
+
+
+@dataclass(frozen=True)
+class BffPointsMove:
+    """Sisi BFF per order: redeem (value_idr reservasi committed) atau restore (points_restored_value, order refund)."""
+
+    order_ref: str
+    company_code: str
+    at: datetime
+    value_idr: int
+    kind: str  # redeem | restore
+    # Restore saja (SEC-118): poin yang benar-benar dikembalikan BFF (`loyalty_pos_reverse.points_restored`).
+    points: int | None = None
+
+    @property
+    def signed(self) -> Decimal:
+        return Decimal(self.value_idr if self.kind == "redeem" else -self.value_idr)
+
+
+@dataclass
+class DailyPoints:
+    day: date
+    company_code: str
+    odoo_idr: Decimal = Decimal(0)
+    redeem_idr: Decimal = Decimal(0)
+    restored_idr: Decimal = Decimal(0)
+    orders: set[str] = field(default_factory=set)
+    mismatched: set[str] = field(default_factory=set)
+    sample_order_ids: list[int] = field(default_factory=list)
+    # SEC-118: Σ points_restored x nilai poin (yang benar-benar dikembalikan BFF) dan order refund yang selisihnya
+    # terhadap points_restored_value (Odoo) di luar sisa pembulatan [0, nilai 1 poin).
+    restored_points_idr: Decimal = Decimal(0)
+    restore_mismatched: set[str] = field(default_factory=set)
+    restore_sample_order_ids: list[int] = field(default_factory=list)
+
+    @property
+    def diff(self) -> Decimal:
+        return self.odoo_idr - (self.redeem_idr - self.restored_idr)
+
+
+def wib_day(value: datetime) -> date:
+    return to_utc(value).astimezone(WIB).date()
+
+
+def wib_start(day: date) -> datetime:
+    return datetime.combine(day, time.min, tzinfo=WIB)
+
+
+def settled_days(since: datetime, now: datetime, settle: timedelta) -> tuple[date, date]:
+    """Rentang hari WIB [awal, akhir) yang utuh di dalam jendela dan sudah lewat `settle` sejak tengah malam akhirnya
+    (sinkron offline / commit BFF sempat masuk). Kosong bila awal >= akhir."""
+    first = wib_day(since)
+    if wib_start(first) < to_utc(since):
+        first += timedelta(days=1)
+    last = wib_day(to_utc(now) - settle)  # hari ini (belum utuh+settle) tidak termasuk
+    return first, last
+
+
+def daily_points_recon(
+    payments: Iterable[PointsPayment],
+    order_days: Mapping[str, tuple[date, str, int]],
+    moves: Iterable[BffPointsMove],
+    day_from: date,
+    day_to: date,
+    tolerance: Decimal = Decimal(0),
+    point_value_idr: int | None = None,
+) -> list[DailyPoints]:
+    """Σ pembayaran Poin EFN Odoo per PT x hari WIB vs Σ redeem − Σ restore BFF (K-18-6).
+
+    SEC-118 (bila `point_value_idr` diberikan): per order refund, `points_restored_value` (nilai Rupiah dari Odoo) −
+    `points_restored` x nilai poin harus berada di [0, nilai 1 poin) — sisa pembulatan floor BFF. Di luar itu (BFF
+    mengembalikan poin lebih banyak, atau jauh lebih sedikit dari nilai Odoo) -> `restore_mismatched`, terpisah dari
+    selisih pembayaran.
+
+    `payments` = pembayaran di jendela hari (dedup id). `order_days` = uuid -> (hari WIB pembayaran poin pertama, PT,
+    id order Odoo) untuk SEMUA order yang diketahui (termasuk di luar jendela). Sisi BFF diatribusikan ke hari & PT
+    order Odoo-nya (commit/reverse BFF bisa terjadi lewat tengah malam setelah order offline disinkron); hanya yang
+    tidak punya order Odoo memakai tanggal BFF (dan PT BFF). Hari di luar [day_from, day_to) diabaikan.
+    """
+    buckets: dict[tuple[date, str], DailyPoints] = {}
+    per_order_odoo: dict[str, Decimal] = defaultdict(Decimal)
+    per_order_bff: dict[str, Decimal] = defaultdict(Decimal)
+    order_bucket: dict[str, tuple[date, str]] = {}
+
+    def bucket(day: date, company: str) -> DailyPoints:
+        key = (day, company or _UNKNOWN_COMPANY)
+        if key not in buckets:
+            buckets[key] = DailyPoints(day, key[1])
+        return buckets[key]
+
+    seen: set[int] = set()
+    for p in payments:
+        if p.id in seen:
+            continue
+        seen.add(p.id)
+        day, company, _oid = order_days.get(p.uuid, (wib_day(p.paid_at), p.company_code, p.order_id))
+        if not day_from <= day < day_to:
+            continue
+        b = bucket(day, company)
+        b.odoo_idr += p.amount
+        b.orders.add(p.uuid)
+        per_order_odoo[p.uuid] += p.amount
+        order_bucket[p.uuid] = (day, b.company_code)
+    for m in moves:
+        known = order_days.get(m.order_ref)
+        day, company = (known[0], known[1]) if known else (wib_day(m.at), m.company_code)
+        if not day_from <= day < day_to:
+            continue
+        b = bucket(day, company)
+        if m.kind == "redeem":
+            b.redeem_idr += Decimal(m.value_idr)
+        else:
+            b.restored_idr += Decimal(m.value_idr)
+            if point_value_idr and m.points is not None:
+                points_idr = m.points * point_value_idr
+                b.restored_points_idr += Decimal(points_idr)
+                if not 0 <= m.value_idr - points_idr < point_value_idr:
+                    b.restore_mismatched.add(m.order_ref)
+                    oid = known[2] if known else 0
+                    if oid and len(b.restore_sample_order_ids) < SAMPLE_LIMIT:
+                        b.restore_sample_order_ids.append(oid)
+        b.orders.add(m.order_ref)
+        per_order_bff[m.order_ref] += m.signed
+        order_bucket.setdefault(m.order_ref, (day, b.company_code))
+    for ref, (day, company) in sorted(order_bucket.items()):
+        if abs(per_order_odoo.get(ref, Decimal(0)) - per_order_bff.get(ref, Decimal(0))) > tolerance:
+            b = buckets[(day, company)]
+            b.mismatched.add(ref)
+            oid = order_days[ref][2] if ref in order_days else 0
+            if oid and len(b.sample_order_ids) < SAMPLE_LIMIT:
+                b.sample_order_ids.append(oid)
+    return [buckets[k] for k in sorted(buckets)]
+
+
+def add_daily_findings(report: ReconReport, days: Iterable[DailyPoints], tolerance: Decimal = Decimal(0)) -> None:
+    """Satu temuan critical per PT x hari yang selisihnya > toleransi; sampel = id order Odoo yang tidak cocok.
+    SEC-118: `points_restore_value_mismatch` terpisah, hitungan = jumlah order refund yang tidak cocok."""
+    for d in days:
+        if d.restore_mismatched:
+            report.add("points_restore_value_mismatch", d.company_code, count=len(d.restore_mismatched))
+            restore = report.findings[("points_restore_value_mismatch", d.company_code)]
+            for oid in d.restore_sample_order_ids:
+                if len(restore.order_ids) < SAMPLE_LIMIT and oid not in restore.order_ids:
+                    restore.order_ids.append(oid)
+        if abs(d.diff) <= tolerance:
+            continue
+        report.add("points_payment_daily_mismatch", d.company_code)
+        finding = report.findings[("points_payment_daily_mismatch", d.company_code)]
+        for oid in d.sample_order_ids:
+            if len(finding.order_ids) < SAMPLE_LIMIT and oid not in finding.order_ids:
+                finding.order_ids.append(oid)
 
 
 def add_open_items(
@@ -400,6 +642,25 @@ class LoyaltyReconSettings:
     # Go-live loyalty POS (`ETL_LOYALTY_RECON_NOT_BEFORE`): order/ledger sebelum ini tidak direkonsiliasi (order lama
     # tidak pernah melewati hook efn_pos_loyalty_ledger -> positif palsu `paid_member_order_without_earn`).
     not_before: datetime | None = None
+    # G18 (docs/04 §9.9, E-30): `product` = redeem sebagai baris produk Poin EFN (G13); `payment` = metode bayar
+    # Poin EFN (`efn_is_loyalty_points`) + rekonsiliasi harian K-18-6 — default sejak SEC-114 (L-25b); `product` hanya
+    # untuk data historis pra-E-30.
+    points_mode: str = "payment"
+    points_tolerance_idr: Decimal = Decimal(0)
+    # SEC-118: nilai 1 poin (Rp), sama dengan BFF `LOYALTY_POINT_VALUE_IDR` (default 100).
+    point_value_idr: int = 100
+
+    def __post_init__(self) -> None:
+        if self.points_mode not in POINTS_MODES:
+            raise ValueError(f"points_mode harus salah satu {POINTS_MODES}")
+        if self.points_tolerance_idr < 0:
+            raise ValueError("points_tolerance_idr negatif")
+        if self.point_value_idr < 1:
+            raise ValueError("point_value_idr harus >= 1")
+
+    @property
+    def payment_mode(self) -> bool:
+        return self.points_mode == "payment"
 
     def since(self, now: datetime) -> datetime:
         start = to_utc(now) - self.lookback
@@ -476,8 +737,19 @@ def load_inputs(
     points_lines: dict[int, PointsLines] = {}
     outbox: dict[int, set[str]] = defaultdict(set)
     for chunk in _chunks(order_ids):
-        for row in odoo.query(SQL_ODOO_POINTS_LINES, {"codes": sorted(cfg.points_codes), "ids": chunk}):
-            points_lines[int(row["order_id"])] = PointsLines(int(row["n"]), Decimal(str(row["total"])))
+        if cfg.payment_mode:
+            for row in odoo.query(SQL_ODOO_POINTS_PAYMENTS, {"ids": chunk}):
+                points_lines[int(row["order_id"])] = PointsLines(int(row["n"]), Decimal(str(row["total"])))
+        # Mode product: sumber utama. Mode payment: cadangan untuk order tanpa pembayaran Poin EFN — order pra-E-30 di
+        # jendela lookback masih ber-redeem baris produk; tanpa ini muncul `redeem_without_points_line` palsu (SEC-114).
+        product_ids = [i for i in chunk if i not in points_lines]
+        if product_ids:
+            codes = sorted(cfg.points_codes)
+            for row in odoo.query(SQL_ODOO_POINTS_LINES, {"codes": codes, "ids": product_ids}):
+                if int(row["n"]):
+                    points_lines[int(row["order_id"])] = PointsLines(
+                        int(row["n"]), Decimal(str(row["total"])), legacy=cfg.payment_mode
+                    )
         for row in odoo.query(SQL_ODOO_OUTBOX_BY_ORDERS, {"ids": chunk}):
             if row["kind"] == "earn" and row["order_id"]:
                 outbox[int(row["order_id"])].add(str(row["state"]))
@@ -491,12 +763,122 @@ def load_inputs(
     return inputs, companies
 
 
+def _points_payment(row: Mapping[str, Any], companies: Mapping[int, str]) -> PointsPayment:
+    return PointsPayment(
+        id=int(row["id"]),
+        order_id=int(row["order_id"]),
+        uuid=str(row["uuid"] or ""),
+        company_code=companies.get(int(row["company_id"] or 0), _UNKNOWN_COMPANY),
+        paid_at=row["paid_at"],
+        amount=Decimal(str(row["amount"] or 0)),
+    )
+
+
+def _moves(rows: Iterable[Mapping[str, Any]], kind: str) -> list[BffPointsMove]:
+    return [
+        BffPointsMove(
+            str(r["order_ref"]),
+            str(r["company_code"]),
+            r["at"],
+            int(r["value_idr"]),
+            kind,
+            int(r["points"]) if r.get("points") is not None else None,
+        )
+        for r in rows
+        if r["order_ref"] and r["at"] is not None
+    ]
+
+
+def run_daily_points(
+    platform: Source,
+    odoo: Source,
+    cfg: LoyaltyReconSettings,
+    now: datetime,
+    companies: Mapping[int, str],
+    legacy_refs: frozenset[str] = frozenset(),
+) -> list[DailyPoints]:
+    """K-18-6. Muat pembayaran Poin EFN (Odoo) & redeem/restore (BFF) untuk hari WIB yang sudah settle, lalu
+    `daily_points_recon`. Order di luar jendela diambil per uuid hanya untuk menentukan harinya (bukan dijumlah).
+    `legacy_refs` = order pra-E-30 (redeem/refund berupa baris produk Poin EFN): nilai BFF-nya tidak punya pasangan
+    `pos.payment`, jadi dikeluarkan dari perbandingan harian (sudah dicek per order oleh kind 3-5)."""
+    day_from, day_to = settled_days(cfg.since(now), now, cfg.settle)
+    if day_from >= day_to:
+        return []
+    window = {"since": wib_start(day_from), "until": wib_start(day_to)}
+    payments = [_points_payment(r, companies) for r in odoo.query(SQL_ODOO_POINTS_PAYMENTS_WINDOW, window)]
+    moves = _moves(platform.query(SQL_PLATFORM_REDEEMS_WINDOW, window), "redeem")
+    moves += _moves(platform.query(SQL_PLATFORM_RESTORES_WINDOW, window), "restore")
+    moves = [m for m in moves if m.order_ref not in legacy_refs]
+    # Sisi BFF untuk order Odoo jendela yang dicatat BFF di luar jendela (commit setelah tengah malam).
+    have = {(m.kind, m.order_ref) for m in moves}
+    refs = sorted({p.uuid for p in payments if p.uuid})
+    for chunk in _chunks(refs):
+        for kind, sql in (("redeem", SQL_PLATFORM_REDEEMS_BY_REF), ("restore", SQL_PLATFORM_RESTORES_BY_REF)):
+            for m in _moves(platform.query(sql, {"refs": chunk}), kind):
+                if (m.kind, m.order_ref) not in have and m.order_ref not in legacy_refs:
+                    have.add((m.kind, m.order_ref))
+                    moves.append(m)
+    known: list[PointsPayment] = list(payments)
+    unknown = sorted({m.order_ref for m in moves} - set(refs))
+    for chunk in _chunks(unknown):
+        known += [_points_payment(r, companies) for r in odoo.query(SQL_ODOO_POINTS_PAYMENTS_BY_UUID, {"uuids": chunk})]
+    order_days: dict[str, tuple[date, str, int]] = {}
+    for p in sorted(known, key=lambda x: (to_utc(x.paid_at), x.id)):
+        order_days.setdefault(p.uuid, (wib_day(p.paid_at), p.company_code, p.order_id))
+    return daily_points_recon(
+        payments, order_days, moves, day_from, day_to, cfg.points_tolerance_idr, cfg.point_value_idr
+    )
+
+
+def daily_payload(days: Sequence[DailyPoints], tolerance: Decimal = Decimal(0)) -> dict[str, Any]:
+    bad = [d for d in days if abs(d.diff) > tolerance]
+    return {
+        "days_checked": len({d.day for d in days}),
+        "mismatched": [
+            {"day": d.day.isoformat(), "company": d.company_code, "diff_idr": str(d.diff), "orders": len(d.mismatched)}
+            for d in bad
+        ],
+        # SEC-118: terpisah dari selisih pembayaran.
+        "restore_mismatched": [
+            {"day": d.day.isoformat(), "company": d.company_code, "orders": len(d.restore_mismatched)}
+            for d in days
+            if d.restore_mismatched
+        ],
+    }
+
+
+def daily_rows(days: Sequence[DailyPoints], run_at: datetime) -> list[list[Any]]:
+    return [
+        [
+            run_at,
+            d.day,
+            d.company_code,
+            d.odoo_idr,
+            d.redeem_idr,
+            d.restored_idr,
+            d.diff,
+            len(d.orders),
+            len(d.mismatched),
+            d.restored_points_idr,
+            len(d.restore_mismatched),
+        ]
+        for d in days
+    ]
+
+
 def run_loyalty_recon(
     platform: Source, odoo: Source, store: ReconStore, cfg: LoyaltyReconSettings, now: datetime
 ) -> ReconReport:
     """Satu siklus rekonsiliasi. Melempar bila sumber gagal (pemanggil mencatat heartbeat error)."""
     inputs, companies = load_inputs(platform, odoo, cfg, now)
-    report = reconcile(inputs, now, cfg.settle)
+    report = reconcile(inputs, now, cfg.settle, points_tolerance=cfg.points_tolerance_idr if cfg.payment_mode else None)
+    daily: list[DailyPoints] = []
+    if cfg.payment_mode:
+        legacy = frozenset(
+            o.uuid for o in inputs.orders_by_uuid.values() if (pl := inputs.points_lines.get(o.id)) and pl.legacy
+        )
+        daily = run_daily_points(platform, odoo, cfg, now, companies, legacy)
+        add_daily_findings(report, daily, cfg.points_tolerance_idr)
     open_since = now - cfg.open_window
     if cfg.not_before:
         open_since = max(to_utc(open_since), to_utc(cfg.not_before))
@@ -506,6 +888,8 @@ def run_loyalty_recon(
     add_open_items(report, "reservation_review_aged", odoo.query(SQL_ODOO_RESERVATION_REVIEW, params), companies)
 
     payload = summary_payload(report, cfg.lookback, cfg.settle)
+    if cfg.payment_mode:
+        payload["points_daily"] = daily_payload(daily, cfg.points_tolerance_idr)
     level = logging.WARNING if report.anomalies else logging.INFO
     log.log(level, "%s %s", RECON_MARKER, json.dumps(payload, separators=(",", ":"), sort_keys=False))
     rows = [
@@ -517,6 +901,8 @@ def run_loyalty_recon(
     # view membaca run_at terakhir yang punya penanda).
     if rows:
         store.insert(FINDING_TABLE, FINDING_COLUMNS, rows)
+    if daily:
+        store.insert(DAILY_TABLE, DAILY_COLUMNS, daily_rows(daily, now))
     store.insert(
         RUN_TABLE,
         RUN_COLUMNS,

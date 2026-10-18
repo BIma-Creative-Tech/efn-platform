@@ -1,6 +1,6 @@
 # ADR-033: Akun Perangkat KDS — User Internal Tersandbox (Pilot) vs User *Share*
 
-- **Status:** Proposed
+- **Status:** Proposed — **opsi A untuk pilot disetujui pemilik proyek 10 Okt 2026** (Q-KD1 = ya; Q-KD3 = supervisor outlet memegang 2FA dan boleh login ulang; Q-KD4 = rotasi token 7 hari tetap). **Q-KD2 = akan ada portal** (vendor, pelanggan, franchisee, karyawan) → keputusan A→B dan dampak `auth_totp.policy = all_required` dievaluasi di **ADR-035**. Perangkat KDS = monitor + **mini PC** (bukan tablet) dengan klien WireGuard (P-18). ADR tetap Proposed sampai keputusan A→B sebelum outlet ke-2.
 - **Tanggal:** 2026-10-09
 - **Pemutus (klien):** IT + Security (+ Ops F&B untuk SOP perangkat)
 - **Referensi review:** SEC-74, SEC-77 (`docs/reviews/SECURITY_REVIEW_2026-10-09-r8.md` §SEC-74 "Opsi lebih kuat … sebaiknya lewat ADR kecil"); R-S03, R-S10, R-S12, R-L01, R-T04

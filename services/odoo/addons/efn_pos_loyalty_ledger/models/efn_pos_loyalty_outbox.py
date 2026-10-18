@@ -63,6 +63,8 @@ STATES = [
 FINAL_STATES = ("done", "failed", "skipped")
 # Alasan 4xx yang boleh dicoba ulang (bukan penolakan bisnis final).
 RETRYABLE_REASONS = frozenset({"earn_pending", "rate_limited"})
+# L-26 (SEC-128): BFF menolak nilai restore poin reverse -> ditahan untuk supervisor (pola SEC-60), bukan gagal.
+RESTORE_MISMATCH = "restore_value_mismatch"
 DEFAULT_MAX_HOURS = 48
 BACKOFF_BASE_SECONDS = 60
 BACKOFF_MAX_SECONDS = 3600
@@ -116,6 +118,11 @@ class EfnPosLoyaltyOutbox(models.Model):
     )
     eligible_amount = fields.Integer(string="Dasar poin (Rp)", readonly=True)
     refund_ratio = fields.Float(digits=(16, 6), readonly=True)
+    # K-18-5 (G18, E-30): nilai Poin EFN (Rupiah bulat) yang dikembalikan lewat pembayaran Poin EFN negatif refund.
+    points_restored_value = fields.Integer(string="Poin dikembalikan (Rp)", readonly=True)
+    # L-26: supervisor menyetujui nilai restore yang ditolak BFF (`409 restore_value_mismatch`); reverse dikirim
+    # ulang dengan `restore_approved: true` (BFF tetap membatasi ke sisa redeem). Hanya diisi aksi supervisor.
+    restore_approved = fields.Boolean(string="Restore disetujui supervisor", readonly=True, copy=False)
     state = fields.Selection(STATES, required=True, default="pending", index=True, readonly=True, tracking=True)
     attempt_count = fields.Integer(readonly=True)
     next_attempt_at = fields.Datetime(index=True, readonly=True, default=fields.Datetime.now)
@@ -147,6 +154,10 @@ class EfnPosLoyaltyOutbox(models.Model):
     def action_efn_hold_approve(self):
         """Supervisor menyetujui reverse yang ditahan: dikirim apa adanya (termasuk restore poin)."""
         self._efn_check_hold_decider()
+        if any(record.last_error == RESTORE_MISMATCH for record in self.sudo()):
+            raise UserError(
+                _("Nilai restore ditolak BFF; gunakan tombol 'Setujui nilai restore' (L-26) atau batalkan.")
+            )
         for record in self.sudo():
             record.write({"state": "pending", "next_attempt_at": fields.Datetime.now(), "last_error": False})
             record.message_post(
@@ -155,6 +166,38 @@ class EfnPosLoyaltyOutbox(models.Model):
                 subtype_xmlid="mail.mt_note",
             )
             _logger.info("EFN loyalty outbox %s: hold disetujui uid=%s", record.id, self.env.uid)
+        self._efn_trigger()
+        return True
+
+    def action_efn_restore_approve(self):
+        """L-26: supervisor menyetujui nilai restore poin yang ditolak BFF (`409 restore_value_mismatch`).
+
+        Reverse dikirim ulang dengan `restore_approved: true`; BFF melewati cek nilai, tetap membatasi ke sisa
+        redeem, dan mencatat anomali `restore_value_override`. Teraudit: chatter (tracking) + log (uid, tanpa PII).
+        """
+        self._efn_check_hold_decider()
+        if any(record.kind != "reverse" or record.last_error != RESTORE_MISMATCH for record in self.sudo()):
+            raise UserError(_("Hanya reverse yang ditahan karena nilai restore ditolak BFF yang dapat disetujui."))
+        for record in self.sudo():
+            record.write(
+                {
+                    "state": "pending",
+                    "restore_approved": True,
+                    "next_attempt_at": fields.Datetime.now(),
+                    "last_error": False,
+                }
+            )
+            record.message_post(
+                body=_(
+                    "Nilai restore Poin EFN (Rp %(value)s) disetujui oleh %(user)s; dikirim ulang dengan "
+                    "restore_approved (L-26).",
+                    value=record.points_restored_value,
+                    user=self.env.user.name,
+                ),
+                message_type="comment",
+                subtype_xmlid="mail.mt_note",
+            )
+            _logger.warning("EFN loyalty outbox %s: restore_approved oleh uid=%s (L-26)", record.id, self.env.uid)
         self._efn_trigger()
         return True
 
@@ -255,7 +298,21 @@ class EfnPosLoyaltyOutbox(models.Model):
         if reason in RETRYABLE_REASONS:
             self._efn_retry_or_fail(reason)
             return
+        if self.kind == "reverse" and reason == RESTORE_MISMATCH and not self.restore_approved:
+            self._efn_hold(reason)
+            return
         self._efn_finish("failed", reason)
+
+    def _efn_hold(self, code):
+        """L-26: tahan untuk keputusan supervisor (setujui nilai -> `action_efn_restore_approve`; tolak ->
+        `action_efn_hold_cancel`). Order ikut `review`."""
+        self.ensure_one()
+        _logger.warning("EFN loyalty outbox %s (%s) ditahan: %s", self.id, self.kind, code)
+        self.write({"state": "hold", "last_error": code, "attempt_count": self.attempt_count + 1})
+        order = self.order_id.sudo()
+        if order:
+            order._efn_loyalty_refresh_state()
+        self._efn_schedule_activity(code)
 
     def _efn_original_pending(self):
         original = self.original_order_id
@@ -322,7 +379,11 @@ class EfnPosLoyaltyOutbox(models.Model):
                     "order_ref": order.uuid,
                     "member_ref": member,
                     "value_idr": reservation.value_idr,
+                    # K-18-3 / SEC-118 (L-25f): jumlah AKTUAL baris pembayaran Poin EFN order (bukan salinan
+                    # reservasi), sehingga cek BFF payment_amount == value_idr bermakna.
+                    "payment_amount": int(round(order._efn_points_paid())),
                     "idempotency_key": self.idempotency_key,
+                    **self._efn_goods_field("order_goods_incl", order, minimum=1),
                 },
                 {"member": mask_phone(member), "order_ref": order.uuid},
             )
@@ -338,10 +399,20 @@ class EfnPosLoyaltyOutbox(models.Model):
                     "member_ref": member,
                     "refunded_eligible_amount": self.eligible_amount,
                     "refund_ratio": round(self.refund_ratio, 6),
+                    "points_restored_value": max(int(self.points_restored_value or 0), 0),
+                    **self._efn_goods_field("refund_goods_incl", order, minimum=0),
+                    **({"restore_approved": True} if self.restore_approved else {}),
                 },
                 {"member": mask_phone(member), "order_ref": order.uuid},
             )
         raise _SkipSend("unknown_kind")
+
+    @staticmethod
+    def _efn_goods_field(name, order, minimum):
+        """L-26: nilai barang incl. pajak order (Rupiah bulat, dihitung server); dilewati bila < `minimum`
+        (field opsional di BFF, kompatibel mundur)."""
+        value = int(round(abs(order._efn_goods_incl_raw())))
+        return {name: value} if value >= minimum else {}
 
     # ------------------------------------------------------------ results
     def _efn_apply_success(self, data):

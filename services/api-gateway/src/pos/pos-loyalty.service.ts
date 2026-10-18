@@ -50,6 +50,8 @@ export interface LoyaltyParamsResponse {
   point_expiry_days: number;
   reservation_ttl_seconds: number;
   reservation_commit_window_seconds: number;
+  /** G18 K-18-4: Odoo menerapkan faktor porsi uang pada `eligible_amount` bila true (`LOYALTY_EARN_EXCLUDE_POINT_PAYMENT`). */
+  earn_exclude_point_payment: boolean;
 }
 
 /** Sumber entri ledger Fase 1 (§9.5). */
@@ -84,6 +86,7 @@ interface LedgerRow {
 
 interface EarnRecordRow {
   order_ref: string;
+  company_code?: string;
   idempotency_key: string;
   member_hash: string;
   points_earned: number;
@@ -98,6 +101,9 @@ const LoyaltyErrors = {
   memberMismatch: (): ApiError => Errors.conflict('member_mismatch', 'Pelanggan tidak sesuai dengan verifikasi OTP.'),
   amountMismatch: (): ApiError => Errors.conflict('amount_mismatch', 'Total transaksi berubah terlalu jauh sejak OTP. Minta OTP baru.'),
   valueMismatch: (): ApiError => Errors.conflict('value_mismatch', 'Nilai poin tidak sesuai dengan reservasi.'),
+  restoreValueMismatch: (): ApiError =>
+    Errors.conflict('restore_value_mismatch', 'Nilai pengembalian poin tidak sesuai dengan penukaran asal. Perlu ditinjau.'),
+  paymentMismatch: (): ApiError => Errors.conflict('payment_mismatch', 'Nilai pembayaran poin tidak sesuai dengan reservasi.'),
   reservationExists: (): ApiError => Errors.conflict('reservation_exists', 'Transaksi ini sudah memiliki penukaran poin aktif.'),
   reservationNotFound: (): ApiError => ApiError.of(404, 'reservation_not_found', 'Reservasi poin tidak ditemukan.'),
   reservationReleased: (): ApiError => Errors.conflict('reservation_released', 'Reservasi poin sudah dibatalkan.'),
@@ -156,6 +162,9 @@ function errorCode(err: unknown): string {
  *   sampai `hold_until` (default 24 jam; `expires_at` 15 menit hanya UI — commit setelahnya dicatat `outcome="late"`).
  *   Entri ledger negatif dialokasikan FIFO (`allocateDebit`), idempoten (status + `commit_idempotency_key`).
  * - **Release** (K-5): idempoten; committed → 409 `already_committed`.
+ * - **G18 §9.9 v6 (poin = alat bayar)**: reserve `amount_total` integer incl pajak (K-18-2); commit wajib
+ *   `payment_amount` = `value_idr` reservasi (K-18-3, beda → 409 `payment_mismatch` + anomali critical); earn dengan
+ *   `LOYALTY_EARN_EXCLUDE_POINT_PAYMENT` dipagari porsi uang (K-18-4); reverse `points_restored_value` (K-18-5).
  * - **Reverse** (§9.4): catatan earn order asal belum ada → 409 `earn_pending` (K-6). Restore redeem floor(R × ratio)
  *   lalu clawback earn ceil(E × ratio) (pembulatan memihak PT, kumulatif dibatasi total asal; ratio = 1 → sisa penuh).
  *   Clawback melebihi sisa bucket → utang (bucket NULL). Restore ke bucket asal; bucket kedaluwarsa → masa berlaku baru.
@@ -185,6 +194,7 @@ export class PosLoyaltyService {
       point_expiry_days: this.config.loyaltyPointExpiryDays,
       reservation_ttl_seconds: this.config.loyaltyReservationTtlSeconds,
       reservation_commit_window_seconds: this.config.loyaltyReservationCommitWindowSeconds,
+      earn_exclude_point_payment: this.config.loyaltyEarnExcludePointPayment,
     };
   }
 
@@ -217,6 +227,7 @@ export class PosLoyaltyService {
           };
         }
         // SEC-61: pagar batas SETELAH cek replay (retry earn yang dulu diterima tetap 200 walau batas diturunkan)
+        if (points > 0) await this.enforceMoneyPortion(q, dto, points);
         if (points > 0) await this.enforceEarnLimits(q, hash, dto, points);
         await q.query(
           `INSERT INTO platform.loyalty_pos_earn
@@ -360,6 +371,26 @@ export class PosLoyaltyService {
           if (r.order_ref !== dto.orderRef) throw LoyaltyErrors.orderMismatch();
           if (!safeEqualHex(r.member_hash, hash)) throw LoyaltyErrors.memberMismatch();
           if (Number(r.value_idr) !== dto.valueIdr) throw LoyaltyErrors.valueMismatch();
+          // K-18-3: baris pembayaran Poin EFN harus PERSIS nilai reservasi (toleransi 0); beda → tolak + anomali (Odoo hold)
+          if (dto.paymentAmount !== Number(r.value_idr)) {
+            reportLoyaltyAnomaly(this.logger, this.metrics, 'commit_payment_mismatch', {
+              order_ref: r.order_ref,
+              company: r.company_code,
+              payment_amount: dto.paymentAmount,
+              value_idr: Number(r.value_idr),
+            });
+            throw LoyaltyErrors.paymentMismatch();
+          }
+          // SEC-128: total order final harus ≥ nilai poin yang dibayarkan (penyebut alokasi restore)
+          if (dto.orderGoodsIncl !== null && dto.orderGoodsIncl < dto.paymentAmount) {
+            reportLoyaltyAnomaly(this.logger, this.metrics, 'commit_payment_mismatch', {
+              order_ref: r.order_ref,
+              company: r.company_code,
+              payment_amount: dto.paymentAmount,
+              order_goods_incl: dto.orderGoodsIncl,
+            });
+            throw LoyaltyErrors.paymentMismatch();
+          }
           const points = Number(r.points);
 
           if (r.status === 'committed') {
@@ -392,9 +423,10 @@ export class PosLoyaltyService {
           }));
           await q.query(
             `UPDATE platform.loyalty_reservation
-                SET status = 'committed', committed_at = $2, commit_idempotency_key = $3, updated_at = $2
+                SET status = 'committed', committed_at = $2, commit_idempotency_key = $3, updated_at = $2,
+                    order_goods_incl = $4
               WHERE id = $1`,
-            [r.id, now.toISOString(), dto.idempotencyKey],
+            [r.id, now.toISOString(), dto.idempotencyKey, dto.orderGoodsIncl],
           );
           const balance = await this.loyalty.balanceByHash(hash, q);
           if (balance < 0) this.logger.warn(`commit redeem order ${r.order_ref}: saldo member negatif (${balance})`);
@@ -456,6 +488,15 @@ export class PosLoyaltyService {
             (r) => r.member_ref_hash === hash && r.source === POS_SOURCES.REVERSE && r.source_ref === dto.originalOrderRef,
           );
           if (!consistent) throw LoyaltyErrors.idempotencyConflict();
+          // K-18-6: retry dengan points_restored_value berbeda dari yang tercatat → konflik (bukan replay diam-diam)
+          if (dto.pointsRestoredValue !== null) {
+            const prev = await q.query<{ points_restored_value: string | number }>(
+              `SELECT original_order_ref, points_restored_value, idempotency_key FROM platform.loyalty_pos_reverse
+                WHERE refund_order_ref = $1 OR idempotency_key = $2`,
+              [dto.refundOrderRef, dto.idempotencyKey],
+            );
+            if (prev.rows.some((r) => Number(r.points_restored_value) !== dto.pointsRestoredValue)) throw LoyaltyErrors.idempotencyConflict();
+          }
           return {
             result: {
               points_clawed_back: -this.sumBy(existing, REVERSE_REASON.CLAWBACK),
@@ -468,7 +509,7 @@ export class PosLoyaltyService {
 
         // K-6: earn order asal harus sudah tercatat (termasuk earn 0 poin) — selain itu Odoo retry via outbox
         const earnRec = await q.query<EarnRecordRow>(
-          `SELECT order_ref, idempotency_key, member_hash, points_earned FROM platform.loyalty_pos_earn WHERE order_ref = $1`,
+          `SELECT order_ref, idempotency_key, member_hash, company_code, points_earned FROM platform.loyalty_pos_earn WHERE order_ref = $1`,
           [dto.originalOrderRef],
         );
         const rec = earnRec.rows[0];
@@ -492,10 +533,8 @@ export class PosLoyaltyService {
         const priorClaw = -this.sumBy(priorRows, REVERSE_REASON.CLAWBACK);
         const priorRestore = this.sumBy(priorRows, REVERSE_REASON.RESTORE);
         const full = dto.refundRatio >= 1;
-        const restore = Math.max(
-          0,
-          Math.min(redeemed - priorRestore, full ? redeemed : Math.floor(redeemed * dto.refundRatio + EPS)),
-        );
+        if (dto.pointsRestoredValue !== null) await this.assertExpectedRestore(q, dto, redeemed);
+        const restore = this.restorePoints(dto, redeemed, priorRestore, full);
         const claw = Math.max(0, Math.min(earned - priorClaw, full ? earned : Math.ceil(earned * dto.refundRatio - EPS)));
 
         const now = new Date(this.now());
@@ -534,6 +573,12 @@ export class PosLoyaltyService {
           }));
           this.metrics.recordLoyaltyPosPoints('clawed_back', company, claw);
         }
+        // K-18-5/K-18-6: nilai yang dilaporkan Odoo disimpan persisten (rekonsiliasi harian ETL), transaksi yang sama
+        if (dto.pointsRestoredValue !== null) {
+          const company = redeemRows[0]?.company_code ?? earnRows[0]?.company_code ?? rec.company_code;
+          if (!isCompanyCode(company)) throw new Error('company_code order asal tidak dikenal');
+          await this.recordReverse(q, dto, company, restore);
+        }
         const balance = await this.loyalty.balanceByHash(hash, q);
         if (balance < 0) {
           this.logger.warn(`reverse refund ${dto.refundOrderRef}: saldo member negatif (${balance}) — ditagih di earn berikutnya`);
@@ -544,6 +589,204 @@ export class PosLoyaltyService {
   }
 
   // ───────────────────────── helper ─────────────────────────
+
+  /**
+   * SEC-118 (L-25f): restore yang diharapkan dihitung dari data BFF sendiri — nilai redeem order asal V (Σ `value_idr`
+   * reservasi committed; tidak ada → poin redeem ledger × nilai poin) × rasio refund kumulatif (Σ `refund_ratio` reverse
+   * sebelumnya + rasio ini, ≤ 1) − Σ `points_restored_value` reverse sebelumnya. Selisih dengan nilai Odoo >
+   * max(nilai poin, `LOYALTY_RESTORE_TOLERANCE_PCT` % × V) → anomali `restore_value_unexpected` (critical) + 409
+   * `restore_value_mismatch` (Odoo menahan outbox untuk review; tidak ada entri yang ditulis).
+   */
+  private async assertExpectedRestore(q: Queryable, dto: PosReverseDto, redeemedPoints: number): Promise<void> {
+    const res = await q.query<{ v: string | number | null; t: string | number | null; t_missing: string | number | null; amt: string | number | null }>(
+      `SELECT COALESCE(SUM(value_idr), 0)::bigint AS v, COALESCE(SUM(order_goods_incl), 0)::bigint AS t,
+              COUNT(*) FILTER (WHERE order_goods_incl IS NULL) AS t_missing, COALESCE(SUM(amount_total), 0) AS amt
+         FROM platform.loyalty_reservation WHERE order_ref = $1 AND status = 'committed'`,
+      [dto.originalOrderRef],
+    );
+    const pv = this.config.loyaltyPointValueIdr;
+    const row = res.rows[0];
+    const fromReservation = Number(row?.v ?? 0);
+    const value = fromReservation > 0 ? fromReservation : redeemedPoints * pv;
+    const prior = await q.query<{
+      ratio: string | number | null;
+      restored: string | number | null;
+      goods: string | number | null;
+      goods_missing: string | number | null;
+    }>(
+      `SELECT COALESCE(SUM(refund_ratio), 0) AS ratio, COALESCE(SUM(points_restored_value), 0)::bigint AS restored,
+              COALESCE(SUM(refund_goods_incl), 0)::bigint AS goods, COUNT(*) FILTER (WHERE refund_goods_incl IS NULL) AS goods_missing
+         FROM platform.loyalty_pos_reverse WHERE original_order_ref = $1 AND refund_order_ref <> $2`,
+      [dto.originalOrderRef, dto.refundOrderRef],
+    );
+    const p = prior.rows[0];
+    const priorValue = Number(p?.restored ?? 0);
+    const reported = dto.pointsRestoredValue ?? 0;
+
+    let expected: number;
+    let tolerance: number;
+    let basis: string;
+    if (dto.refundGoodsIncl !== null && Number(p?.goods_missing ?? 0) === 0) {
+      // SEC-128: rasio NILAI incl pajak (tidak bergantung kategori earn) — rumus sama dengan alokasi Odoo Q-F18-4:
+      // round(min(Σ refund incl, T) × V ÷ T) − restore sebelumnya. Penyebut T = total order final saat commit
+      // (`order_goods_incl`); belum ada (commit lama) → `amount_total` reservasi (saat reserve, bisa bergeser).
+      const exactT = Number(row?.t_missing ?? 1) === 0 && Number(row?.t ?? 0) > 0;
+      const total = exactT ? Number(row?.t) : Number(row?.amt ?? 0);
+      if (total <= 0) {
+        expected = 0;
+        tolerance = 1;
+      } else {
+        const cumulative = Math.min(Number(p?.goods ?? 0) + dto.refundGoodsIncl, total);
+        expected = Math.max(0, Math.round((cumulative * value) / total) - priorValue);
+        tolerance = exactT
+          ? 1 // pembulatan Rupiah (sama dengan toleransi validasi server Odoo)
+          : Math.max(pv, Math.ceil((value * this.config.posOtpAmountTolerancePct) / 100));
+      }
+      basis = exactT ? 'goods_incl' : 'goods_incl_reserve_total';
+    } else if (dto.refundRatio > 0) {
+      // Event lama (tanpa refund_goods_incl): rasio eligible Odoo, toleransi longgar
+      const cumulative = Math.min(1, Number(p?.ratio ?? 0) + dto.refundRatio);
+      expected = Math.max(0, Math.round(value * cumulative) - priorValue);
+      tolerance = Math.max(pv, Math.ceil((value * this.config.loyaltyRestoreTolerancePct) / 100));
+      basis = 'eligible_ratio';
+    } else {
+      // Event lama, refund hanya barang dikecualikan dari earn (rasio eligible 0): tidak bisa dicek tanpa nilai incl pajak.
+      // Tidak ditolak (SEC-128: refund sah); restore tetap dibatasi sisa redeem; dicatat untuk ditinjau.
+      if (reported > 0) {
+        reportLoyaltyAnomaly(this.logger, this.metrics, 'restore_value_unverified', {
+          order_ref: dto.originalOrderRef,
+          refund_order_ref: dto.refundOrderRef,
+          points_restored_value: reported,
+        });
+      }
+      return;
+    }
+    if (Math.abs(reported - expected) <= tolerance) return;
+    const fields = {
+      order_ref: dto.originalOrderRef,
+      refund_order_ref: dto.refundOrderRef,
+      points_restored_value: reported,
+      expected_value: expected,
+      tolerance,
+      basis,
+    };
+    if (dto.restoreApproved) {
+      // SEC-128: hold/review — persetujuan supervisor Odoo; dibatasi sisa redeem (restorePoints) dan selalu dicatat
+      reportLoyaltyAnomaly(this.logger, this.metrics, 'restore_value_override', fields);
+      return;
+    }
+    reportLoyaltyAnomaly(this.logger, this.metrics, 'restore_value_unexpected', fields);
+    throw LoyaltyErrors.restoreValueMismatch();
+  }
+
+  /**
+   * K-18-6: `platform.loyalty_pos_reverse` (append-only, retensi 10 th, tanpa PII). Idempoten per `refund_order_ref` /
+   * `idempotency_key`: konflik dengan data sama → no-op; data berbeda → 409 `idempotency_conflict` (rollback).
+   */
+  private async recordReverse(q: Queryable, dto: PosReverseDto, company: CompanyCode, restored: number): Promise<void> {
+    const value = dto.pointsRestoredValue ?? 0;
+    const ins = await q.query(
+      `INSERT INTO platform.loyalty_pos_reverse
+         (refund_order_ref, original_order_ref, company_code, points_restored_value, points_restored, idempotency_key, created_at,
+          refund_ratio, refund_goods_incl, restore_approved)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT DO NOTHING`,
+      [
+        dto.refundOrderRef,
+        dto.originalOrderRef,
+        company,
+        value,
+        restored,
+        dto.idempotencyKey,
+        new Date(this.now()).toISOString(),
+        dto.refundRatio,
+        dto.refundGoodsIncl,
+        dto.restoreApproved,
+      ],
+    );
+    if ((ins.rowCount ?? 0) > 0) return;
+    const cur = await q.query<{ original_order_ref: string; points_restored_value: string | number; idempotency_key: string }>(
+      `SELECT original_order_ref, points_restored_value, idempotency_key FROM platform.loyalty_pos_reverse
+        WHERE refund_order_ref = $1 OR idempotency_key = $2`,
+      [dto.refundOrderRef, dto.idempotencyKey],
+    );
+    const same = cur.rows.every(
+      (r) => r.original_order_ref === dto.originalOrderRef && Number(r.points_restored_value) === value && r.idempotency_key === dto.idempotencyKey,
+    );
+    if (!same) throw LoyaltyErrors.idempotencyConflict();
+  }
+
+  /**
+   * K-18-5: poin redeem yang dikembalikan. `points_restored_value` ada → floor(nilai ÷ nilai poin) (pembulatan memihak
+   * PT; sisa < 1 poin dicatat di `EFN_LOYALTY_RESTORE` untuk rekonsiliasi K-18-6), dibatasi sisa redeem order asal
+   * (melebihi → dipotong + anomali `restore_exceeds_redeem`). Tidak ada (event v4) → floor(R × refund_ratio).
+   */
+  private restorePoints(dto: PosReverseDto, redeemed: number, priorRestore: number, full: boolean): number {
+    const left = Math.max(0, redeemed - priorRestore);
+    if (dto.pointsRestoredValue === null) {
+      return Math.max(0, Math.min(left, full ? redeemed : Math.floor(redeemed * dto.refundRatio + EPS)));
+    }
+    const pv = this.config.loyaltyPointValueIdr;
+    const asked = Math.floor(dto.pointsRestoredValue / pv);
+    const remainder = dto.pointsRestoredValue - asked * pv;
+    const restore = Math.min(left, asked);
+    if (asked > left) {
+      reportLoyaltyAnomaly(this.logger, this.metrics, 'restore_exceeds_redeem', {
+        order_ref: dto.originalOrderRef,
+        refund_order_ref: dto.refundOrderRef,
+        points_restored_value: dto.pointsRestoredValue,
+        points_asked: asked,
+        points_left: left,
+      });
+    }
+    if (dto.pointsRestoredValue > 0) {
+      // Tanpa PII: order_ref opak, nilai integer. Dasar rekonsiliasi harian Odoo ↔ BFF (K-18-6).
+      this.logger.log(
+        `EFN_LOYALTY_RESTORE ${JSON.stringify({
+          order_ref: dto.originalOrderRef.replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 64),
+          value_idr: dto.pointsRestoredValue,
+          points: restore,
+          remainder_idr: remainder + (asked - restore) * pv,
+        })}`,
+      );
+    }
+    return restore;
+  }
+
+  /**
+   * K-18-4 (`LOYALTY_EARN_EXCLUDE_POINT_PAYMENT`=true): order dengan redeem ter-commit — `eligible_amount` (tanpa
+   * pajak, sudah dikali faktor porsi uang oleh Odoo) tidak mungkin melebihi porsi uang order
+   * `amount_total × (1 + POS_OTP_AMOUNT_TOLERANCE_PCT) − value_idr`. Melebihi → 409 `earn_limit_exceeded` + anomali
+   * `earn_exceeds_money_portion`. Pagar kasar (pertahanan berlapis), bukan pengganti perhitungan Odoo.
+   */
+  private async enforceMoneyPortion(q: Queryable, dto: PosEarnDto, points: number): Promise<void> {
+    if (!this.config.loyaltyEarnExcludePointPayment) return;
+    // SEC-123 (L-25k): commit redeem order ini belum masuk (mis. sedang retry) → earn ditunda (retryable), agar pagar
+    // porsi uang tidak terlewat karena urutan outbox
+    const pending = await q.query<{ pending: number }>(
+      `SELECT 1 AS pending FROM platform.loyalty_reservation WHERE order_ref = $1 AND status = 'reserved' AND hold_until > $2`,
+      [dto.orderRef, new Date(this.now()).toISOString()],
+    );
+    if ((pending.rowCount ?? 0) > 0) throw LoyaltyErrors.earnPending();
+    const res = await q.query<{ value_idr: string | number; amount_total: string | number }>(
+      `SELECT value_idr, amount_total FROM platform.loyalty_reservation WHERE order_ref = $1 AND status = 'committed'`,
+      [dto.orderRef],
+    );
+    const r = res.rows[0];
+    if (!r) return;
+    const value = Number(r.value_idr);
+    const total = Number(r.amount_total);
+    const bound = Math.floor((total * (100 + this.config.posOtpAmountTolerancePct)) / 100) - value;
+    if (dto.eligibleAmount > bound) {
+      this.rejectEarn('earn_exceeds_money_portion', {
+        company: dto.companyCode,
+        order_ref: dto.orderRef,
+        points,
+        eligible_amount: dto.eligibleAmount,
+        money_portion_max: bound,
+      });
+    }
+  }
 
   /**
    * SEC-61 (Gelombang 13c) — defense in depth karena BFF mempercayai `eligible_amount` dari Odoo (SEC-58: pemanggil

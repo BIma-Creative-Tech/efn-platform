@@ -1,7 +1,10 @@
 /**
- * DELETE /api/me  { confirm: "HAPUS", acknowledge_points: true }
- *   -> BFF DELETE /v1/me (docs/04 §8.4, §8.13; PDP_DSAR_DESIGN §3/§5) dengan token step-up dari cookie `efn_stepup`.
- *   -> 202 { request_id, scheduled_at, points_forfeited, status_available }
+ * DELETE /api/me  { confirm: "HAPUS", acknowledge_points: true, confirm_open_orders?: true }
+ *   -> BFF DELETE /v1/me[?confirm_open_orders=true] (docs/04 §8.4, §8.13; PDP_DSAR_DESIGN §3/§5) dengan token step-up
+ *      dari cookie `efn_stepup`.
+ *   -> 202 { request_id, scheduled_at, points_forfeited, open_online_orders, erasure_deadline, status_available }
+ *   -> 409 { error: { code: "open_online_orders", message, open_parts, max_defer_days } } (G18 W-18; step-up tetap berlaku,
+ *      UI menampilkan penjelasan lalu mengulang dengan `confirm_open_orders: true`).
  *
  * - Step-up wajib: tanpa cookie step-up -> 403 `step_up_required` (UI mengulang re-OTP).
  * - SEC-40 (v3.6): token step-up SEKALI PAKAI untuk DELETE. BFF menjawab `403 step_up_invalid` bila dipakai ulang
@@ -16,7 +19,14 @@
  */
 import { NextResponse, type NextRequest } from 'next/server';
 import { bffFetch } from '@/lib/bff';
-import { isDeleteConfirmed, parseDeleteAccepted } from '@/lib/dsar';
+import {
+  isDeleteConfirmed,
+  MAX_DEFER_DAYS_CAP,
+  OPEN_ORDERS_CONFIRM_PARAM,
+  openOrdersExplanation,
+  parseDeleteAccepted,
+  parseOpenOrdersConflict,
+} from '@/lib/dsar';
 import { isPlausibleReceipt, receiptMaxAge } from '@/lib/dsar-receipt';
 import { mapBffFailure, unauthenticated } from '@/lib/me-route';
 import { isSameOrigin, jsonError } from '@/lib/request-guard';
@@ -64,7 +74,13 @@ export async function DELETE(req: NextRequest) {
     return jsonError(400, 'confirmation_required', 'Konfirmasi penghapusan belum lengkap.');
   }
 
-  const r = await bffFetch<unknown>('/v1/me', {
+  // G18 W-18: konfirmasi eksplisit setelah 409 open_online_orders. Hanya boolean `true` persis yang dihitung; query
+  // dibangun di sini (browser tidak memilih path BFF). Token step-up SAMA: BFF menjalankan pra-cek 409 sebelum jti
+  // ditandai terpakai, jadi cookie step-up TIDAK dihapus pada 409.
+  const confirmOpenOrders = (body as { confirm_open_orders?: unknown }).confirm_open_orders === true;
+  const path = confirmOpenOrders ? `/v1/me?${OPEN_ORDERS_CONFIRM_PARAM}=true` : '/v1/me';
+
+  const r = await bffFetch<unknown>(path, {
     method: 'DELETE',
     token,
     headers: { 'x-step-up-token': stepUp },
@@ -91,5 +107,20 @@ export async function DELETE(req: NextRequest) {
   // SEC-40: step-up sekali pakai -> 403 step_up_invalid; token kedaluwarsa -> step_up_required.
   if (r.code === 'step_up_invalid') return stepUpRequired(true);
   if (r.code === 'step_up_required' || r.status === 403) return stepUpRequired();
+  if (r.status === 409 && r.code === 'open_online_orders') {
+    // Allowlist: hanya angka + teks Indonesia buatan frontend (draf, menunggu Legal); pesan BFF tidak diteruskan.
+    const c = parseOpenOrdersConflict(r.body) ?? { open_parts: 0, max_defer_days: MAX_DEFER_DAYS_CAP };
+    return Response.json(
+      {
+        error: {
+          code: 'open_online_orders',
+          message: openOrdersExplanation(c),
+          open_parts: c.open_parts,
+          max_defer_days: c.max_defer_days,
+        },
+      },
+      { status: 409, headers: { 'cache-control': 'no-store' } },
+    );
+  }
   return mapBffFailure(r, 'Permintaan hapus akun belum dapat diproses. Silakan coba lagi.', [409, 429]);
 }

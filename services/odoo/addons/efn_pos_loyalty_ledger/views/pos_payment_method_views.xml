@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- E-30: penanda metode bayar Poin EFN (docs/08 §9.2). Data jurnal/akun/metode per PT di efn_setup_pos. -->
+<odoo>
+    <record id="pos_payment_method_view_form_efn_loyalty" model="ir.ui.view">
+        <field name="name">pos.payment.method.form.efn.loyalty</field>
+        <field name="model">pos.payment.method</field>
+        <field name="inherit_id" ref="point_of_sale.pos_payment_method_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='split_transactions']" position="after">
+                <field name="efn_is_loyalty_points" groups="point_of_sale.group_pos_manager"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>

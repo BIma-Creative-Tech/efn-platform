@@ -1,6 +1,6 @@
 # ADR-021: Baseline Versi Odoo CE 19 (Fallback 18 Hanya bila PoC Menemukan Blocker)
 
-- **Status:** Proposed
+- **Status:** **Accepted** — pemilik proyek, 2026-10-10 (sesi tanya-jawab via efn-lead, butir 5 "ADR Gelombang 1: Accepted semua"; nama & jabatan penandatangan dilengkapi klien di register keputusan). Sebelumnya: Proposed.
 - **Tanggal:** 2026-10-05
 - **Pemutus (klien):** IT Lead (dengan masukan Odoo engineer senior)
 - **Referensi review:** R-T04 (*"Keputusan di minggu 1"*), R-T03

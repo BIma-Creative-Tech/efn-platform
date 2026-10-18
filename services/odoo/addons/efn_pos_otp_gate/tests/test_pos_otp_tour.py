@@ -143,3 +143,17 @@ class TestEfnPosOtpTour(TestPointOfSaleHttpCommon):
         order = self._last_order()
         self.assertEqual(order.state, "paid")
         self.assertEqual(order.efn_otp_gate_state, "consumed")
+
+    def test_otp_enroll_age_confirmation(self):
+        """E-34: kasir mendaftarkan member; centang usia wajib; age_confirmed diteruskan; usia tidak disimpan."""
+        self.main_pos_config.with_user(self.pos_user).open_ui()
+        self.start_pos_tour("EfnPosOtpEnrollTour", login="pos_user")
+        self.assertEqual(self._paths(), [REQUEST, VERIFY])
+        request_payload, verify_payload = self.calls[0][1], self.calls[1][1]
+        self.assertEqual(request_payload["purpose"], "pos_enroll")
+        self.assertIs(request_payload["age_confirmed"], True)
+        self.assertIs(verify_payload["age_confirmed"], True)
+        challenge = self.env["efn.pos.otp.challenge"].sudo().search([("purpose", "=", "pos_enroll")])
+        self.assertEqual(challenge.state, "consumed")
+        self.assertFalse(challenge.discount_token)
+        self.assertFalse([name for name in challenge._fields if "age" in name or "birth" in name])

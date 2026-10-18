@@ -31,8 +31,10 @@ export function requireMemberRef(value: unknown): string {
 }
 
 export interface PosOtpRequestDto {
-  /** docs/04 §9.3: `pos_promo` (default) | `pos_redeem`. */
+  /** docs/04 §9.3: `pos_promo` (default) | `pos_redeem` | `pos_enroll` (§9.9 K-18-8). */
   purpose: PosOtpPurpose;
+  /** K-18-8: wajib `true` untuk `pos_enroll` (centang kasir atas pernyataan usia pelanggan). */
+  ageConfirmed?: boolean;
   memberRef: string;
   orderRef: string;
   amount: number;
@@ -62,6 +64,7 @@ export function parsePosOtpRequest(body: unknown): PosOtpRequestDto {
   if (!isPosOtpPurpose(purpose)) throw Errors.invalidRequest();
   return {
     purpose,
+    ageConfirmed: optionalBool(o, 'age_confirmed'),
     memberRef,
     orderRef: requireOrderRef(o),
     amount: requireNumber(o, 'amount', 0, 1_000_000_000_000),
@@ -70,10 +73,20 @@ export function parsePosOtpRequest(body: unknown): PosOtpRequestDto {
   };
 }
 
+/** `age_confirmed` opsional: tidak ada/null = false; selain boolean → 400 `invalid_request`. */
+function optionalBool(o: Record<string, unknown>, key: string): boolean {
+  const v = o[key];
+  if (v === undefined || v === null) return false;
+  if (typeof v !== 'boolean') throw Errors.invalidRequest();
+  return v;
+}
+
 export function parsePosOtpVerify(body: unknown): PosOtpVerifyDto {
   const o = asRecord(body);
   const code = o.code;
   if (typeof code !== 'string' || code.length > 16) throw Errors.invalidRequest();
+  // K-18-8: Odoo boleh meneruskan age_confirmed ke verify; divalidasi bentuknya saja (pernyataan diikat saat request)
+  optionalBool(o, 'age_confirmed');
   return {
     challengeId: requireUuid(o, 'challenge_id'),
     orderRef: requireOrderRef(o),

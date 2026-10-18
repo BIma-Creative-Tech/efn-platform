@@ -21,12 +21,16 @@ import {
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import { OtpService } from '../otp/otp.service';
 import { ConsentService, UNKNOWN_TEXT_SHA256 } from './consent.service';
-import { parseErasureComplete, parseReauth, parseSetConsent } from './dto/privacy.dto';
+import { parseConfirmOpenOrders, parseErasureComplete, parseReauth, parseSetConsent } from './dto/privacy.dto';
 import { DsarReceiptService } from './dsar-receipt.service';
 import { DsarService, STEP_UP_USED_PREFIX } from './dsar.service';
 import { ERASURE_COMPLETED_CONSUMER, ErasureCompletedConsumer, parseErasureCompleted } from './erasure-completed.consumer';
 import { ErasureService } from './erasure.service';
 import { erasureSuppressionTag } from '../common/pii/erasure-suppression';
+import { OnlinePrivacyService, openOnlineOrders } from '../orders/online-privacy.service';
+import { parseErasurePendingArgs } from '../cli/online-erasure-pending';
+import { listErasurePending } from './erasure-pending';
+import { DsarController } from './privacy.controller';
 
 const PHONE = '6281234567890';
 const MEMBER_ID = '8d7b5a1e-2c3f-4a5b-9c8d-7e6f5a4b3c2d';
@@ -168,7 +172,9 @@ describe('DsarService (§8.9)', () => {
     expect(ins.text).toContain("'delete', 'scheduled'");
     expect(ins.params.slice(1, 3)).toEqual([MEMBER_ID, ctx.hash]);
     // R6: receipt_token opak, terikat request_id, tanpa PII
-    expect(Object.keys(res).sort()).toEqual(['points_forfeited', 'receipt_token', 'request_id', 'scheduled_at']);
+    expect(Object.keys(res).sort()).toEqual(['erasure_deadline', 'open_online_orders', 'points_forfeited', 'receipt_token', 'request_id', 'scheduled_at']);
+    expect(res).toMatchObject({ open_online_orders: 0, erasure_deadline: null });
+    expect(ins.params[5]).toBe(false); // open_orders_ack_at NULL
     expect(res.receipt_token).toMatch(/^v1\.\d+\.[A-Za-z0-9_-]{43}$/);
     expect(res.receipt_token).not.toContain(PHONE);
     expect(res.receipt_token).not.toContain(res.request_id);
@@ -210,7 +216,7 @@ describe('DsarService (§8.9)', () => {
         cancelled = true;
         return { rows: [{ id: REQ_ID }], rowCount: 1 };
       }
-      if (t.includes('ORDER BY requested_at DESC LIMIT 50')) {
+      if (t.includes('requested_at DESC LIMIT 50')) {
         return {
           rows: [{ id: REQ_ID, type: 'delete', status: 'cancelled', requested_at: new Date(0), scheduled_at: new Date(0), completed_at: null }],
           rowCount: 1,
@@ -228,6 +234,8 @@ describe('DsarService (§8.9)', () => {
       requested_at: '1970-01-01T00:00:00.000Z',
       scheduled_at: '1970-01-01T00:00:00.000Z',
       completed_at: null,
+      open_online_orders: 0,
+      erasure_deadline: null,
     });
   });
 
@@ -302,6 +310,10 @@ describe('ErasureService (§8.4)', () => {
     const report = ctx.db.find('UPDATE platform.price_hunter_report')[0];
     expect(report.text).toMatch(/user_enc = NULL.*geo_lat = NULL/s);
     expect(ctx.db.find('UPDATE platform.otp_audit')[0].params).toEqual([ctx.hash, tomb]);
+    // SEC-124: reservasi committed (nilai keuangan, rekonsiliasi K-18-6) dipertahankan, tautan → tombstone SEBELUM DELETE sisanya
+    const keep = ctx.db.find("UPDATE platform.loyalty_reservation SET member_hash = $2 WHERE member_hash = $1 AND status = 'committed'");
+    expect(keep[0].params).toEqual([ctx.hash, tomb]);
+    expect(ctx.db.queries.indexOf(keep[0])).toBeLessThan(ctx.db.queries.findIndex((q) => q.text.includes('DELETE FROM platform.loyalty_reservation')));
     expect(ctx.db.find('DELETE FROM platform.loyalty_reservation')[0].params).toEqual([ctx.hash]);
     expect(ctx.db.find('DELETE FROM platform.loyalty_pos_earn')[0].params).toEqual([ctx.hash]);
     expect(ctx.db.find('UPDATE platform.consent SET ip_enc = NULL')[0].params).toEqual([MEMBER_ID]);
@@ -318,7 +330,7 @@ describe('ErasureService (§8.4)', () => {
     await ctx.svc.processDue(REQ_ID);
     const ins = ctx.db.find('INSERT INTO platform.erasure_suppression');
     expect(ins).toHaveLength(1);
-    expect(ins[0].params).toEqual([erasureSuppressionTag(ctx.config.erasureSuppressionKey, ctx.hash), 90]);
+    expect(ins[0].params).toEqual([erasureSuppressionTag(ctx.config.erasureSuppressionKey, ctx.hash), 365]); // W-19 (Q-P12)
     expect(ins[0].params[0]).not.toBe(ctx.hash);
     expect(ins[0].text).toContain('GREATEST'); // erasure ulang memperpanjang, tidak memendekkan
     expect(JSON.stringify(ins[0].params)).not.toContain(REQ_ID);
@@ -435,7 +447,7 @@ describe('DsarReceiptService (R6, §8.13)', () => {
   const OTHER_ID = '6f1d2c3b-4a5e-4f60-9a7b-8c9d0e1f2a3b';
   function receiptSetup(overrides: Record<string, string> = {}) {
     const ctx = setup(overrides, (t, p) =>
-      t.includes("FROM platform.dsar_request WHERE id = $1 AND type = 'delete'") && (p[0] === REQ_ID || p[0] === OTHER_ID)
+      t.includes("FROM platform.dsar_request d WHERE d.id = $1 AND d.type = 'delete'") && (p[0] === REQ_ID || p[0] === OTHER_ID)
         ? {
             rows: [{ id: p[0], type: 'delete', status: 'completed', requested_at: new Date(0), scheduled_at: new Date(0), completed_at: new Date(1000) }],
             rowCount: 1,
@@ -457,6 +469,8 @@ describe('DsarReceiptService (R6, §8.13)', () => {
       requested_at: '1970-01-01T00:00:00.000Z',
       scheduled_at: '1970-01-01T00:00:00.000Z',
       completed_at: '1970-01-01T00:00:01.000Z',
+      open_online_orders: 0,
+      erasure_deadline: null,
     });
     expect(Object.keys(res)).not.toEqual(expect.arrayContaining(['member_hash']));
   });
@@ -510,7 +524,7 @@ describe('DsarReceiptService (R6, §8.13)', () => {
 });
 
 describe('SEC-100: erasure & order online terbuka', () => {
-  it('kunci member yang sama dengan checkout + cek ulang; masih ada order terbuka → ditunda (rollback), anomali, member tidak dihapus', async () => {
+  it('kunci member yang sama dengan checkout + cek ulang; masih ada order terbuka → ditunda (rollback) tanpa alert per siklus, member tidak dihapus', async () => {
     const db = new FakeDb((t) => {
       if (t.includes('pg_try_advisory_xact_lock')) return { rows: [{ ok: true }], rowCount: 1 };
       if (t.includes("SET status = 'processing'")) return { rows: [{ member_id: MEMBER_ID, member_hash: 'e'.repeat(64) }], rowCount: 1 };
@@ -524,7 +538,9 @@ describe('SEC-100: erasure & order online terbuka', () => {
       expect(db.find("pg_advisory_xact_lock(hashtext('efn:online:member:'")[0].params).toEqual([MEMBER_ID]);
       expect(db.find('DELETE FROM platform.member')).toHaveLength(0);
       expect(db.find('UPDATE platform.member SET deleted_at')).toHaveLength(0);
-      expect(warn.mock.calls.some((c) => String(c[0]).includes('erasure_deferred_open_orders'))).toBe(true);
+      // W-18: alert CS lewat eskalasi hari 3/10 (escalateDeferred), bukan tiap siklus 60 s
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('EFN_ONLINE_ANOMALY'))).toBe(false);
+      expect(db.find('make_interval(days => $2::int)) AS defer_expired')[0].params).toEqual([REQ_ID, 14]);
     } finally {
       warn.mockRestore();
     }
@@ -550,5 +566,317 @@ describe('Erasure: cart & quote online di Redis (§10.8.3)', () => {
     expect(await svc.processDue(REQ_ID)).toBe(true);
     for (const k of [`cart:${MEMBER_ID}`, `oq:${qid}`, idx]) expect(await kv.get(k)).toBeNull();
     expect(await kv.get('cart:00000000-0000-4000-8000-000000000001')).toBe('{}');
+  });
+});
+
+describe('W-18 (Q-P18): penundaan hapus akun karena pesanan online terbuka, maks 14 hari', () => {
+  function onlineStub(open: number) {
+    return {
+      openPaidParts: jest.fn(async () => open),
+      prepareDelete: jest.fn(async (_m: string, o: { confirm?: boolean; maxDeferDays?: number } = {}) => {
+        if (open > 0 && !o.confirm) throw openOnlineOrders(open, o.maxDeferDays);
+        return open;
+      }),
+      lockAndAssertNoOpenOrders: jest.fn(async (_q: unknown, _m: string, o: { confirm?: boolean; maxDeferDays?: number } = {}) => {
+        if (open > 0 && !o.confirm) throw openOnlineOrders(open, o.maxDeferDays);
+        return open;
+      }),
+      exportOrders: jest.fn(async () => ({ items: [], truncated: false })),
+    };
+  }
+
+  function dsarWithOnline(open: number, overrides: Record<string, string> = {}) {
+    const base = setup(overrides, (t) => (t.includes('SUM(delta_points)') ? { rows: [{ balance: 0 }], rowCount: 1 } : undefined));
+    const online = onlineStub(open);
+    const loyalty = new LoyaltyService(base.config, base.db, base.cipher);
+    const dsar = new DsarService(
+      base.config,
+      base.db,
+      new MemberService(base.config, base.db, base.cipher),
+      base.tokens,
+      {} as OtpService,
+      new RateLimiter(base.kv),
+      loyalty,
+      base.consents,
+      base.receipts,
+      base.kv,
+      online as unknown as OnlinePrivacyService,
+    );
+    dsar.now = base.clock.now;
+    return { ...base, dsar, online };
+  }
+
+  it('409 open_online_orders menyebut batas 14 hari + field kontrak; tanpa konfirmasi tidak ada request dibuat', async () => {
+    const ctx = dsarWithOnline(2);
+    const err = await catchApiError(() => ctx.dsar.precheckDelete(ctx.user));
+    expect(err.getStatus()).toBe(409);
+    const body = err.body as { error: { code: string; message: string; open_parts: number; max_defer_days: number; confirm_param: string } };
+    expect(body.error).toMatchObject({ code: 'open_online_orders', open_parts: 2, max_defer_days: 14, confirm_param: 'confirm_open_orders' });
+    expect(body.error.message).toContain('14 hari');
+    expect((await catchApiError(() => ctx.dsar.requestDelete(ctx.user))).getStatus()).toBe(409);
+    expect(ctx.db.find('INSERT INTO platform.dsar_request')).toHaveLength(0);
+    // DTO query
+    expect(parseConfirmOpenOrders(undefined)).toBe(false);
+    expect(parseConfirmOpenOrders('true')).toBe(true);
+    expect(parseConfirmOpenOrders('1')).toBe(true);
+    expect(parseConfirmOpenOrders('0')).toBe(false);
+    expect((await catchApiError(() => parseConfirmOpenOrders('ya'))).getStatus()).toBe(400);
+  });
+
+  it('dengan ?confirm_open_orders=true → 202 dicatat (open_orders_ack_at), erasure_deadline = requested_at + 14 hari', async () => {
+    const ctx = dsarWithOnline(2);
+    await expect(ctx.dsar.precheckDelete(ctx.user, { confirmOpenOrders: true })).resolves.toBeUndefined();
+    const res = await ctx.dsar.requestDelete(ctx.user, { confirmOpenOrders: true });
+    expect(res.open_online_orders).toBe(2);
+    expect(res.erasure_deadline).toBe(new Date(ctx.clock.ms + 14 * 86_400_000).toISOString());
+    expect(res.scheduled_at).toBe(new Date(ctx.clock.ms + 7 * 86_400_000).toISOString());
+    const ins = ctx.db.find('INSERT INTO platform.dsar_request')[0];
+    expect(ins.text).toContain('open_orders_ack_at');
+    expect(ins.params[4]).toBe(new Date(ctx.clock.ms).toISOString());
+    expect(ins.params[5]).toBe(true);
+    expect(ctx.online.prepareDelete).toHaveBeenCalledWith(MEMBER_ID, { confirm: true, maxDeferDays: 14 });
+    // masa tenggang > 14 hari → batas tidak lebih awal dari scheduled_at
+    const long = dsarWithOnline(1, { DSAR_DELETE_GRACE_DAYS: '30' });
+    const r2 = await long.dsar.requestDelete(long.user, { confirmOpenOrders: true });
+    expect(r2.erasure_deadline).toBe(r2.scheduled_at);
+    // plafon keputusan pemilik proyek
+    expect(() => testConfig({ DSAR_OPEN_ORDER_MAX_DEFER_DAYS: '15' }).dsarOpenOrderMaxDeferDays).toThrow();
+    expect(testConfig({ DSAR_OPEN_ORDER_MAX_DEFER_DAYS: '5' }).dsarOpenOrderMaxDeferDays).toBe(5);
+  });
+
+  it('controller: 409 dikirim SEBELUM token step-up sekali pakai ditandai (pelanggan tidak perlu OTP ulang)', async () => {
+    const calls: string[] = [];
+    const dsar = {
+      requireStepUp: jest.fn(() => calls.push('verify')),
+      precheckDelete: jest.fn(async (_u: unknown, o: { confirmOpenOrders?: boolean }) => {
+        calls.push('precheck');
+        if (!o.confirmOpenOrders) throw openOnlineOrders(1, 14);
+      }),
+      consumeStepUp: jest.fn(async () => {
+        calls.push('consume');
+      }),
+      requestDelete: jest.fn(async () => {
+        calls.push('request');
+        return {} as never;
+      }),
+    };
+    const ctl = new DsarController(dsar as unknown as DsarService);
+    const user = { memberId: MEMBER_ID, memberHash: 'a'.repeat(64) };
+    expect((await catchApiError(() => ctl.remove(user, 'tok', undefined))).getStatus()).toBe(409);
+    expect(calls).toEqual(['verify', 'precheck']);
+    calls.length = 0;
+    await ctl.remove(user, 'tok', 'true');
+    expect(calls).toEqual(['verify', 'precheck', 'consume', 'request']);
+    expect(dsar.requestDelete).toHaveBeenCalledWith(user, { confirmOpenOrders: true });
+  });
+});
+
+describe('W-18: job erasure — tunda ≤ 14 hari, eskalasi hari 3/10, lalu erasure tetap jalan', () => {
+  const PART_A = '1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+
+  function forcedSetup(deferExpired: boolean) {
+    const db = new FakeDb((t) => {
+      if (t.includes('pg_try_advisory_xact_lock')) return { rows: [{ ok: true }], rowCount: 1 };
+      if (t.includes("SET status = 'processing'")) {
+        return { rows: [{ member_id: MEMBER_ID, member_hash: 'e'.repeat(64), defer_expired: deferExpired }], rowCount: 1 };
+      }
+      if (t.includes('SELECT count(*) AS n FROM platform.online_order o')) return { rows: [{ n: '1' }], rowCount: 1 };
+      if (t.includes('SELECT p.id::text AS part_id')) return { rows: [{ part_id: PART_A }], rowCount: 1 };
+      return undefined;
+    });
+    const metrics = new MetricsService();
+    const svc = new ErasureService(testConfig(), db, { put: jest.fn(), remove: jest.fn() }, null, metrics);
+    return { db, svc, metrics };
+  }
+
+  it('batas belum lewat → ditunda (member tetap); sudah lewat → erasure jalan, tautan order dilepas, anomali kritis + metrik', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const early = forcedSetup(false);
+      expect(await early.svc.processDue(REQ_ID)).toBe(false);
+      expect(early.db.find('DELETE FROM platform.member')).toHaveLength(0);
+
+      const late = forcedSetup(true);
+      expect(await late.svc.processDue(REQ_ID)).toBe(true);
+      expect(late.db.find('UPDATE platform.online_order SET member_id = NULL')[0].params).toEqual([MEMBER_ID]);
+      expect(late.db.find('DELETE FROM platform.member')).toHaveLength(1);
+      const line = warn.mock.calls.map((c) => String(c[0])).find((l) => l.includes('erasure_forced_open_orders'));
+      expect(line).toBeDefined();
+      const json = JSON.parse(line!.slice('EFN_ONLINE_ANOMALY '.length)) as Record<string, unknown>;
+      expect(json).toEqual({
+        kind: 'erasure_forced_open_orders',
+        severity: 'critical',
+        request_id: REQ_ID,
+        open_orders: 1,
+        max_defer_days: 14,
+        part_ids: [PART_A],
+        parts_total: 1,
+      });
+      expect(line).not.toContain(MEMBER_ID);
+      expect(line).not.toContain('e'.repeat(64));
+      expect(await late.metrics.render()).toContain('efn_dsar_erasure_deferral_total{event="forced"} 1');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('eskalasi: hari 3 → warning, hari 10 → critical, sekali per tingkat; tanpa order terbuka / UPDATE kalah → tanpa alert', async () => {
+    const R3 = '11111111-1111-4111-8111-111111111111';
+    const R10 = '22222222-2222-4222-8222-222222222222';
+    const R0 = '33333333-3333-4333-8333-333333333333';
+    const RL = '44444444-4444-4444-8444-444444444444';
+    const db = new FakeDb((t, p) => {
+      if (t.includes('floor(extract(epoch')) {
+        return {
+          rows: [
+            { id: R3, age_days: 4, defer_escalation: 0, open_n: '2' },
+            { id: R10, age_days: 11, defer_escalation: 1, open_n: 1 },
+            { id: R0, age_days: 5, defer_escalation: 0, open_n: '0' },
+            { id: RL, age_days: 12, defer_escalation: 0, open_n: '1' },
+          ],
+          rowCount: 4,
+        };
+      }
+      if (t.includes('SET defer_escalation')) return { rows: [], rowCount: p[0] === RL ? 0 : 1 };
+      return undefined;
+    });
+    const metrics = new MetricsService();
+    const svc = new ErasureService(testConfig(), db, { put: jest.fn(), remove: jest.fn() }, null, metrics);
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(await svc.escalateDeferred()).toBe(2);
+      const sel = db.find('floor(extract(epoch')[0];
+      expect(sel.params).toEqual([2, 3, 200]);
+      expect(sel.text).toContain("d.status = 'scheduled'");
+      const upd = db.find('SET defer_escalation');
+      expect(upd.map((q) => q.params)).toEqual([
+        [R3, 1],
+        [R10, 2],
+        [RL, 2],
+      ]);
+      expect(upd[0].text).toContain('defer_escalation < $2');
+      const lines = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('EFN_ONLINE_ANOMALY'));
+      expect(lines.map((l) => JSON.parse(l.slice('EFN_ONLINE_ANOMALY '.length)))).toEqual([
+        { kind: 'erasure_deferred_open_orders', severity: 'warning', request_id: R3, day: 3, open_orders: 2, max_defer_days: 14 },
+        { kind: 'erasure_deferred_open_orders', severity: 'critical', request_id: R10, day: 10, open_orders: 1, max_defer_days: 14 },
+      ]);
+      const out = await metrics.render();
+      expect(out).toContain('efn_dsar_erasure_deferral_total{event="escalation_d3"} 1');
+      expect(out).toContain('efn_dsar_erasure_deferral_total{event="escalation_d10"} 1');
+    } finally {
+      warn.mockRestore();
+    }
+    // DB gagal → tidak melempar (siklus erasure tetap jalan)
+    const bad = new ErasureService(
+      testConfig(),
+      new FakeDb(() => {
+        throw new Error('db down');
+      }),
+      { put: jest.fn(), remove: jest.fn() },
+    );
+    const w2 = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(await bad.escalateDeferred()).toBe(0);
+    } finally {
+      w2.mockRestore();
+    }
+  });
+
+  it('daftar kerja CS (CLI online-erasure-pending): tanpa member_id/hash/HP; bagian terbuka tanpa tautan akun', async () => {
+    const db = new FakeDb((t) => {
+      if (t.includes('FROM platform.dsar_request d')) {
+        return {
+          rows: [
+            {
+              request_id: REQ_ID,
+              requested_at: new Date(0),
+              scheduled_at: new Date(7 * 86_400_000),
+              deadline: new Date(14 * 86_400_000),
+              defer_escalation: 1,
+              part_ids: [PART_A],
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (t.includes('o.member_id IS NULL')) {
+        return {
+          rows: [{ part_id: PART_A, order_id: REQ_ID, status: 'ready', company_code: 'RTL', outlet_code: 'GL-01', member_unlinked_at: new Date(0) }],
+          rowCount: 1,
+        };
+      }
+      return undefined;
+    });
+    const rep = await listErasurePending(db, 14);
+    expect(rep.deferred).toEqual([
+      {
+        request_id: REQ_ID,
+        requested_at: '1970-01-01T00:00:00.000Z',
+        scheduled_at: '1970-01-08T00:00:00.000Z',
+        erasure_deadline: '1970-01-15T00:00:00.000Z',
+        escalation: 1,
+        part_ids: [PART_A],
+      },
+    ]);
+    expect(rep.unlinked_open_parts[0]).toMatchObject({ part_id: PART_A, status: 'ready', company_code: 'RTL' });
+    for (const q of db.queries) expect(q.text).not.toMatch(/member_hash|member_ref|pickup_code/);
+    expect(db.queries[0].params).toEqual([14, 500]);
+    expect(parseErasurePendingArgs([])).toEqual({});
+    expect(() => parseErasurePendingArgs(['--member=x'])).toThrow();
+  });
+});
+
+describe('W-18 tambahan: status permintaan hapus memuat open_online_orders & erasure_deadline (sesi + receipt)', () => {
+  const T0 = Date.UTC(2026, 9, 10, 0, 0, 0);
+  const row = (open: number | string, status = 'scheduled') => ({
+    id: REQ_ID,
+    type: 'delete',
+    status,
+    requested_at: new Date(T0),
+    scheduled_at: new Date(T0 + 7 * 86_400_000),
+    completed_at: null,
+    open_n: open,
+  });
+
+  it('receipt X-DSAR-Receipt: jumlah bagian terbuka + batas (requested_at + 14 hari); tanpa detail order', async () => {
+    let current: Record<string, unknown> = row('2');
+    const ctx = setup({}, (t) =>
+      t.includes("FROM platform.dsar_request d WHERE d.id = $1 AND d.type = 'delete'") ? { rows: [current], rowCount: 1 } : undefined,
+    );
+    const res = await ctx.receipts.status(REQ_ID, ctx.receipts.issue(REQ_ID), null);
+    expect(res).toEqual({
+      id: REQ_ID,
+      type: 'delete',
+      status: 'scheduled',
+      requested_at: new Date(T0).toISOString(),
+      scheduled_at: new Date(T0 + 7 * 86_400_000).toISOString(),
+      completed_at: null,
+      open_online_orders: 2,
+      erasure_deadline: new Date(T0 + 14 * 86_400_000).toISOString(),
+    });
+    const q = ctx.db.find('FROM platform.dsar_request d WHERE d.id')[0];
+    expect(q.text).toContain("p.status IN ('paying', 'confirmed', 'ready', 'review')");
+    expect(q.text).toContain("d.status = 'scheduled'");
+    expect(q.text).not.toMatch(/pickup_code|member_hash|sale_order_name|lines/);
+    // tanpa pesanan terbuka / sudah selesai → 0 & null
+    current = row(0, 'completed');
+    expect(await ctx.receipts.status(REQ_ID, ctx.receipts.issue(REQ_ID), null)).toMatchObject({ open_online_orders: 0, erasure_deadline: null });
+    // env lebih kecil ikut dipakai
+    const short = setup({ DSAR_OPEN_ORDER_MAX_DEFER_DAYS: '10' }, (t) =>
+      t.includes("FROM platform.dsar_request d WHERE d.id = $1") ? { rows: [row(1)], rowCount: 1 } : undefined,
+    );
+    expect((await short.receipts.status(REQ_ID, short.receipts.issue(REQ_ID), null)).erasure_deadline).toBe(new Date(T0 + 10 * 86_400_000).toISOString());
+  });
+
+  it('sesi GET /v1/me/requests: field sama; masa tenggang > batas → batas = scheduled_at', async () => {
+    const ctx = setup({ DSAR_DELETE_GRACE_DAYS: '30' }, (t) =>
+      t.includes('requested_at DESC LIMIT 50')
+        ? { rows: [{ ...row(1), scheduled_at: new Date(T0 + 30 * 86_400_000) }, { ...row(0, 'completed'), type: 'export' }], rowCount: 2 }
+        : undefined,
+    );
+    const list = await ctx.dsar.listRequests(ctx.user);
+    expect(list.items[0]).toMatchObject({ open_online_orders: 1, erasure_deadline: new Date(T0 + 30 * 86_400_000).toISOString() });
+    expect(list.items[1]).toMatchObject({ type: 'export', open_online_orders: 0, erasure_deadline: null });
+    expect(ctx.db.find('requested_at DESC LIMIT 50')[0].params).toEqual([MEMBER_ID]);
   });
 });

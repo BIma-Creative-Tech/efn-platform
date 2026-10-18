@@ -11,6 +11,7 @@ import { DB, Db, Queryable } from '../db/db';
  * | `platform.processed_message` | `processed_at` > `PROCESSED_MESSAGE_RETENTION_DAYS` | 14 hari |
  * | `platform.outbox` (sudah terkirim) | `published_at` > `OUTBOX_RETENTION_DAYS` | 14 hari |
  * | `platform.price_hunter_report.user_enc` → NULL | `created_at` > `PRICE_HUNTER_USER_ENC_RETENTION_DAYS` | 90 hari |
+ * | `platform.price_hunter_report.geo_lat/geo_lng` → NULL (+ `updated_at`) | `created_at` > `PRICE_HUNTER_GEO_RETENTION_DAYS` | 90 hari (W-19, Q-P8) |
  * | `platform.price_hunter_report` (baris) | `created_at` > `PRICE_HUNTER_REPORT_RETENTION_DAYS` | 730 hari |
  *
  * (docs/04 §8.4 — usulan, menunggu DPO.) Foto MinIO: lifecycle 90 hari (DevSecOps). Ledger 10 th & consent
@@ -31,6 +32,7 @@ export interface PurgeResult {
   processedMessage: number;
   outbox: number;
   reportUserEncNulled: number;
+  reportGeoNulled: number;
   reportDeleted: number;
   skipped: boolean;
 }
@@ -66,6 +68,7 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
       processedMessage: 0,
       outbox: 0,
       reportUserEncNulled: 0,
+      reportGeoNulled: 0,
       reportDeleted: 0,
       skipped: true,
     };
@@ -104,6 +107,15 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
               WHERE user_enc IS NOT NULL AND created_at < now() - make_interval(days => $1) LIMIT $2)`,
           this.config.priceHunterUserEncRetentionDays,
         );
+        // W-19 (Q-P8): lokasi dibuang setelah 90 h; updated_at diperbarui agar ETL (watermark updated_at) membawa
+        // versi tanpa lokasi ke ClickHouse (pola sama dengan erasure)
+        const reportGeoNulled = await this.purge(
+          q,
+          `UPDATE platform.price_hunter_report SET geo_lat = NULL, geo_lng = NULL, updated_at = now() WHERE ctid IN (
+             SELECT ctid FROM platform.price_hunter_report
+              WHERE (geo_lat IS NOT NULL OR geo_lng IS NOT NULL) AND created_at < now() - make_interval(days => $1) LIMIT $2)`,
+          this.config.priceHunterGeoRetentionDays,
+        );
         const reportDeleted = await this.purge(
           q,
           `DELETE FROM platform.price_hunter_report WHERE ctid IN (
@@ -111,12 +123,12 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
               WHERE created_at < now() - make_interval(days => $1) LIMIT $2)`,
           this.config.priceHunterReportRetentionDays,
         );
-        return { otpAudit, processedMessage, outbox, reportUserEncNulled, reportDeleted, skipped: false };
+        return { otpAudit, processedMessage, outbox, reportUserEncNulled, reportGeoNulled, reportDeleted, skipped: false };
       });
-      if (!res.skipped && res.otpAudit + res.processedMessage + res.outbox + res.reportUserEncNulled + res.reportDeleted > 0) {
+      if (!res.skipped && res.otpAudit + res.processedMessage + res.outbox + res.reportUserEncNulled + res.reportGeoNulled + res.reportDeleted > 0) {
         this.logger.log(
           `Retensi: otp_audit=${res.otpAudit}, processed_message=${res.processedMessage}, outbox=${res.outbox} dihapus; ` +
-            `price_hunter_report user_enc→NULL=${res.reportUserEncNulled}, baris dihapus=${res.reportDeleted}`,
+            `price_hunter_report user_enc→NULL=${res.reportUserEncNulled}, geo→NULL=${res.reportGeoNulled}, baris dihapus=${res.reportDeleted}`,
         );
       }
       return res;

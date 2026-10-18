@@ -1,6 +1,7 @@
 # ADR-001: Satu Database Odoo CE 19 Multi-Company untuk Semua PT
 
-- **Status:** Proposed (menunggu persetujuan PO)
+- **Status:** **Accepted** — pemilik proyek, 2026-10-10 (sesi tanya-jawab via efn-lead, butir 5 "ADR Gelombang 1: Accepted semua"; nama & jabatan penandatangan dilengkapi klien di register keputusan). Sebelumnya: Proposed.
+  - **Catatan penerimaan 10 Okt 2026:** pemetaan brand → PT: Grand Lucky = PT Retail; Paris Baguette = PT F&B; **Bacha Coffee = dua PT** (butik di PT Retail/PPN, kafe di PT F&B/PB1, POS terpisah). Central Kitchen **bukan** PT terpisah (bagian PT F&B). Transfer pricing antar-PT cost-plus (Q-3) dibangun di `efn_intercompany`. Rincian: `docs/decisions/README.md` bagian "Keputusan pemilik proyek 10 Okt 2026 (sesi tanya-jawab)", `docs/10_RENCANA_GELOMBANG_18_PLUS.md`.
 - **Tanggal:** 2026-10-05
 - **Referensi review:** D-09, D-10, R-T01, §3.4
 

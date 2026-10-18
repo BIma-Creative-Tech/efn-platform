@@ -65,6 +65,29 @@ hook) tidak dibandingkan. Log: `<ts> (INFO|WARNING) efn_etl.loyalty_recon EFN_LO
 ledger sampel. Tabel `loyalty_recon_run` (penanda, ditulis terakhir) + `loyalty_recon_finding`, retensi 400 hari; view
 `v_loyalty_recon_latest`, `v_loyalty_recon_daily`. Grant Odoo baru: `sql/odoo-readonly-grants.sql` bagian G14.
 
+### Redeem poin = pembayaran Poin EFN (docs/04 §9.9 K-18-1/K-18-6, Odoo E-30) — Gelombang 18
+`ETL_LOYALTY_POINTS_MODE` = `payment` (**default sejak SEC-114 / L-25b**; butuh E-30 + grant `efn_is_loyalty_points` dari
+`sql/odoo-readonly-grants.sql`) | `product` (redeem = baris produk Poin EFN, hanya data historis pra-E-30; **ditolak di
+production** oleh ETL dan `deploy-validate`). Mode `payment`:
+- kind `redeem_without_points_line`, `points_line_value_mismatch`, `points_line_without_redeem` memakai pembayaran
+  metode `pos_payment_method.efn_is_loyalty_points` (toleransi `ETL_LOYALTY_POINTS_TOLERANCE_IDR`, default 0, 0..1000);
+  order tanpa pembayaran Poin EFN jatuh ke baris produk lama (order pra-E-30 di jendela lookback, toleransi Rp1 x baris)
+  sehingga tidak ada `redeem_without_points_line` palsu; order itu juga dikeluarkan dari perbandingan harian;
+- **K-18-6 harian**: per PT x hari WIB yang sudah utuh + settle, Σ `pos.payment` Poin EFN (refund negatif) =
+  Σ `value_idr` reservasi committed − Σ `points_restored_value`. Sisi BFF diatribusikan ke hari/PT order Odoo
+  (`order_ref` = `pos.order.uuid`), sehingga commit BFF lewat tengah malam (order offline) tidak memicu alarm palsu.
+  Beda → kind critical `points_payment_daily_mismatch` di log `EFN_LOYALTY_RECON_ETL` (WARNING, kunci `points_daily`)
+  dan `loyalty_recon_finding`; semua hari ditulis ke `loyalty_points_daily` / view `v_loyalty_points_daily` (dashboard);
+- **SEC-118**: per order refund, `points_restored_value` (Rupiah dari Odoo) − `points_restored` x `LOYALTY_POINT_VALUE_IDR`
+  (poin yang benar-benar dikembalikan BFF, `platform.loyalty_pos_reverse`) harus di [0, nilai 1 poin) = sisa pembulatan
+  floor BFF. Di luar itu -> kind critical terpisah `points_restore_value_mismatch` (sampel id order refund Odoo), kunci
+  log `points_daily.restore_mismatched`, kolom `bff_restored_points_idr` / `restore_value_mismatched` di
+  `loyalty_points_daily`. Env `LOYALTY_POINT_VALUE_IDR` (default 100, 1..10^9) **harus sama** dengan BFF.
+- `fact_pos_payment.is_loyalty_points` = 1 untuk pembayaran Poin EFN (mode `product`: selalu 0).
+**Ketergantungan BFF (usulan kontrak, belum ada):** `platform.loyalty_pos_reverse` (`refund_order_ref`,
+`original_order_ref`, `company_code`, `points_restored_value` bigint, `created_at`) + grant SELECT kolom ke `efn_readonly`.
+Tanpa tabel itu mode `payment` gagal di siklus recon (heartbeat `loyalty_recon` error), job lain tetap jalan.
+
 ### Erasure DSAR (docs/04 §8.4)
 `efn_etl/erasure.py`: per request hitung baris `user_hash`/`member_hash` cocok → `ALTER TABLE ... DELETE` (mutation, `mutations_sync=2`; menghapus fisik, bukan sekadar mask seperti lightweight `DELETE`) → verifikasi `count()=0` → publish `{schema_version: 2, idempotency_key: "erasure:<request_id>:clickhouse", request_id, store: "clickhouse"}` (amqps, user `efn-etl`, properti `user_id`/`message_id`). Belum 0 / error → request tetap `processing`, diulang siklus berikutnya. Hash yang sedang dihapus dikecualikan dari job incremental pada siklus itu (overlap window tidak memuat ulang); bila `dsar_request` tidak terbaca, job ber-hash dilewati (fail closed). ETL tidak mendeklarasikan queue (milik BFF).
 
@@ -88,9 +111,50 @@ Rekonsiliasi (`ETL_AUDIT_RECON_INTERVAL_SECONDS`, default harian) -> baris `audi
 
 Kebijakan: gap id **di PostgreSQL sendiri** (sequence) bukan indikasi — rollback transaksi Odoo menghabiskan id; yang dibandingkan hanya log yang pernah tersalin. Log yang dihapus sebelum sempat disalin (< settle + interval) tidak terdeteksi oleh salinan; jalur itu ditutup sink Loki `EFN_AUDIT_SINK` untuk model kontrol. Alert Loki yang diusulkan (devsecops): `{service="etl"} |= "EFN_AUDIT_RECON" |= "WARNING"` dan `|= "job=audit_copy gagal"`.
 
-### Retensi
-TTL mart default 5 tahun (`CH_MART_RETENTION_YEARS` di service `clickhouse-init`, 1..30), diterapkan `infra/clickhouse/clickhouse-init.sh` setiap deploy.
-Salinan audit: `CH_AUDIT_COPY_RETENTION_YEARS` (default 10, 2..30; usulan menunggu DPO/Q-49). `fact_gl_line` tanpa TTL (arsip keuangan).
+### Retensi (G18/W-19, PDP v7 §0a/§3 — Q-6/Q-49, Q-P7, Q-P8)
+Diterapkan `infra/clickhouse/clickhouse-init.sh` setiap deploy (idempoten; env di service `clickhouse-init`):
+
+| Env | Default | Rentang | Efek |
+|---|---|---|---|
+| `CH_MART_RETENTION_YEARS` | **10** (sebelumnya 5) | 1..30 | TTL baris semua mart (`competitor_prices`, `loyalty_events`, `fact_sales_line`, `fact_pos_payment`, snapshot stok) |
+| `CH_PSEUDONYM_RETENTION_YEARS` | **5** | 1..`CH_MART_RETENTION_YEARS` | TTL kolom: `competitor_prices.user_hash` & `loyalty_events.member_hash` -> `''`, `fact_sales_line.customer_id` -> NULL |
+| `CH_GEO_RETENTION_DAYS` | **90** | 1..3650 | TTL kolom: `competitor_prices.geo_lat/geo_lng` -> NULL |
+
+- Penafsiran Q-P7 vs Q-6 (rencana G18 §3): *baris fakta 10 th, kolom pseudonim dikosongkan setelah 5 th*.
+- TTL kolom diterapkan server saat merge. Bila definisi TTL berubah, init menjalankan `MATERIALIZE TTL` sekali per
+  tabel (mutation async) agar part lama ikut diproses; deploy ulang dengan env sama = tanpa mutation.
+- **Lapisan kedua di ETL** (`efn_etl/jobs.py` `AgeOut`): baris yang dimuat (ulang) sudah dikosongkan saat transformasi
+  bila melewati batas yang sama, sehingga backfill tidak menghidupkan kembali hash/lokasi lama sampai merge berikutnya.
+  ETL membaca env yang **sama** (`CH_PSEUDONYM_RETENTION_YEARS`, `CH_GEO_RETENTION_DAYS`) — set di service `etl` juga.
+- `loyalty_events` kini `ORDER BY (event_id)` (TTL kolom tidak boleh pada kolom kunci; diuji 24.8.14) + skip index
+  `bloom_filter` pada `member_hash` untuk erasure. Volume lama dimigrasi otomatis oleh init (salin -> `EXCHANGE TABLES`
+  -> salin baris jendela migrasi -> `DROP` tabel lama). **Hentikan `etl` selama deploy pertama yang memuat migrasi ini**
+  (rekomendasi; ETL yang tetap jalan sudah diuji di dev tanpa kehilangan baris).
+- Sumber PostgreSQL: `platform.price_hunter_report.geo_*` di-NULL setelah 90 h oleh job retensi **BFF** (pemilik
+  tabel, `PRICE_HUNTER_GEO_RETENTION_DAYS`), dengan `updated_at` diperbarui sehingga ETL membawa versi tanpa lokasi.
+- Salinan audit: `CH_AUDIT_COPY_RETENTION_YEARS` (default 10, 2..30) — tidak diubah. `fact_gl_line` tanpa TTL (arsip keuangan).
+
+### Chain epoch salinan audit — restore DB Odoo (Gelombang 18)
+Setelah DB Odoo dipulihkan, id `efn.audit.log` mundur; tanpa epoch, log baru ber-id ≤ watermark tidak pernah tersalin.
+`efn_etl/audit.py` `decide_epoch` + `audit_job.resolve_epoch` (setiap siklus, sebelum penyalinan):
+- **Penanda runbook**: `ir.config_parameter` `efn_audit.chain_epoch` (`^[A-Za-z0-9_.:-]{1,64}$`), dibaca lewat view
+  baris-tunggal `efn_etl_audit_epoch` (`sql/odoo-readonly-grants.sql`; efn_etl tidak punya akses ke
+  `ir_config_parameter`). Penanda berubah -> **epoch baru**: rantai hash dari GENESIS + watermark baru, seluruh log
+  sumber disalin ulang; salinan epoch lama tetap (bukti) dan rantainya tetap diverifikasi rekonsiliasi.
+- **Deteksi otomatis**: `max(id)` sumber < watermark epoch (`id_regressed`), atau log tersalin terbaru (bukan model
+  orang) ada di sumber dengan identitas lain (`create_date`/model/operasi; `head_reused` = id dipakai ulang).
+  Tanpa perubahan penanda -> **diblokir**: ERROR `EFN_AUDIT_EPOCH {"event":"divergence_blocked",...}`, heartbeat
+  `audit_copy` error, tidak ada penyalinan sampai runbook mengubah penanda. Log terbaru yang hanya HILANG (tanpa id
+  mundur) bukan restore: penyalinan lanjut, rekonsiliasi menandai `unexplained`.
+- `ETL_AUDIT_EPOCH_AUTO=true` (default false; **ditolak di production**) = epoch baru otomatis saat divergensi (reset DB
+  dev). `ETL_AUDIT_EPOCH_ANCHORS` (20) = jumlah log terbaru yang dicek identitasnya.
+- Epoch baru: WARNING `EFN_AUDIT_EPOCH {"event":"new_epoch","epoch":N,"reason":"marker",...}` (alert Loki yang
+  diusulkan: `|= "EFN_AUDIT_EPOCH"`). Riwayat: tabel `audit_chain_epoch`; kolom `chain_epoch` di `audit_log_copy`,
+  `audit_log_line_copy`, `audit_recon_run` (`infra/clickhouse/init/07-audit-epoch.sql`). Jangkar Loki epoch ≥ 1:
+  `EFN_AUDIT_CHAIN_HEAD {"company":..,"seq":..,"row_hash":"..","epoch":N}` (epoch 0 = format lama).
+- Runbook restore (setelah DB pulih, sebelum ETL jalan lagi): jalankan ulang `sql/odoo-readonly-grants.sql`, lalu
+  `odoo shell`: `env['ir.config_parameter'].sudo().set_param('efn_audit.chain_epoch', 'restore-<UTC>'); env.cr.commit()`
+  (lewat ORM agar tercatat di log audit sebagai model kontrol).
 
 ### Grant Odoo
 `sql/odoo-readonly-grants.sql` — grant kolom minimum + index `(write_date, id)`; dijalankan devsecops pasca-install/upgrade Odoo sebagai `efn_odoo`.

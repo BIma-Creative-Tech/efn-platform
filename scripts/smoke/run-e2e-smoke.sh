@@ -26,13 +26,14 @@ command -v openssl > /dev/null || { echo "openssl dibutuhkan" >&2; exit 2; }
 
 P="efn"
 BFF="${P}-api-gateway-1"; ODOO="${P}-odoo-1"; PG="${P}-postgres-1"; CH="${P}-clickhouse-1"
-SCENARIOS=("$@"); [[ ${#SCENARIOS[@]} -eq 0 ]] && SCENARIOS=(a b c d f e g l o)
+SCENARIOS=("$@"); [[ ${#SCENARIOS[@]} -eq 0 ]] && SCENARIOS=(a b c d f e g l p o)
 
 WORK="$(mktemp -d)"
 RESULTS="${WORK}/results.txt"
 : > "$RESULTS"
 cp "${ROOT}/secrets/dev_edge_crt.txt" "${WORK}/edge_ca.crt"
 cp "${SMOKE_DIR}/bff_smoke.py" "${SMOKE_DIR}/odoo_rpc_smoke.py" "${SMOKE_DIR}/obs_smoke.py" "${SMOKE_DIR}/online_smoke.py" "${WORK}/"
+# G18: rekonsiliasi harian Poin EFN dijalankan di container ETL (stdin), bukan disalin ke WORK
 WORK_W="$WORK"; command -v cygpath > /dev/null && WORK_W="$(cygpath -w "$WORK")"
 SECRETS_W="${ROOT}/secrets"; command -v cygpath > /dev/null && SECRETS_W="$(cygpath -w "$SECRETS_W")"
 PY_IMAGE="python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea"
@@ -273,8 +274,8 @@ scenario_e() {
   # G13c SEC-65: migrasi K-7 untuk subjek yang sedang DSAR delete -> 409 member_deleting (member & saldo pembuka).
   # Hanya bila BFF dev dijalankan dengan MIGRATION_ENABLED=true (endpoint 404 bila tidak; runbook E2E_SMOKE_REPORT).
   if [[ "$MIGRATION_ON" == 1 ]]; then
-    r="$(migrate members "{\"source_ref\":\"smoke-mig-$(rand8)\",\"member_ref\":\"$PHONE\"}")"
-    r="$r ; $(migrate opening-balance "{\"source_ref\":\"smoke-ob-$(rand8)\",\"member_ref\":\"$PHONE\",\"points\":10,\"company_code\":\"FNB\"}")"
+    r="$(migrate members "{\"source_ref\":\"$(newuuid)\",\"member_ref\":\"$PHONE\"}")"
+    r="$r ; $(migrate opening-balance "{\"source_ref\":\"$(newuuid)\",\"member_ref\":\"$PHONE\",\"points\":10,\"company_code\":\"FNB\"}")"
     check "e.migration_member_deleting_409" "$([[ "$r" == *member_deleting*"|409 ; "*member_deleting*"|409" ]] && echo 1 || echo 0)" "$r"
   else
     echo "   (cek migrasi SEC-65 dilewati: MIGRATION_ENABLED != true di $BFF)"
@@ -312,7 +313,7 @@ scenario_e() {
   check "e.dsar_member_hash_nulled" "$([[ "$mhn" == 1/1 ]] && echo 1 || echo 0)" "member_hash NULL/baris=$mhn"
   if [[ "$MIGRATION_ON" == 1 ]]; then
     # Setelah erasure selesai: subjek ada di platform.erasure_suppression -> 409 member_erased, tidak hidup kembali
-    r="$(migrate members "{\"source_ref\":\"smoke-mig-$(rand8)\",\"member_ref\":\"$PHONE\"}")"
+    r="$(migrate members "{\"source_ref\":\"$(newuuid)\",\"member_ref\":\"$PHONE\"}")"
     local alive
     alive="$(psql_platform -c "select count(*) from platform.member where member_hash='$mh' and deleted_at is null")"
     check "e.migration_member_erased_409" "$([[ "$r" == *member_erased*"|409" && "$alive" == 0 ]] && echo 1 || echo 0)" "$r member_aktif=$alive"
@@ -412,7 +413,8 @@ scenario_l() { # Gelombang 13: Poin EFN di POS (docs/04 §9) — Odoo efn_pos_lo
     odoo -e SMOKE_STEP=loy_partner -e SMOKE_KEY=$k -e SMOKE_PHONE="$n" > /dev/null
   done
   r="$(odoo -e SMOKE_STEP=loy_config)"
-  check "l.config_points_product" "$([[ "$(field ok "$r")" == true && "$(field points_product "$r")" -gt 0 ]] && echo 1 || echo 0)" "$r"
+  # G18 E-30: redeem = metode bayar Poin EFN (non-tunai, tanpa terminal) tertaut ke POS; produk poin lama diarsipkan
+  check "l.config_points_method" "$([[ "$(field ok "$r")" == true && "$(field points_pm "$r")" -gt 0 && "$(field points_pm_cash "$r")" == false && "$(field legacy_product_active "$r")" == false ]] && echo 1 || echo 0)" "$r"
 
   # 0. G13c SEC-58: user internal biasa & kasir (login nyata password + TOTP lewat Traefik wg-https) memanggil
   #    efn.bff.client._efn_post/_efn_get dan nama lama post/get lewat /web/dataset/call_kw -> semua DITOLAK; kontrol
@@ -457,7 +459,8 @@ scenario_l() { # Gelombang 13: Poin EFN di POS (docs/04 §9) — Odoo efn_pos_lo
   r="$(odoo -e SMOKE_STEP=loy_reserve -e SMOKE_ORDER_UUID="$u2" -e SMOKE_PARTNER=L -e SMOKE_POINTS=60 -e SMOKE_AMOUNT=200000)"
   check "l.redeem_reserve" "$([[ "$(field ok "$r")" == true && "$(field value_idr "$r")" == 6000 && "$(resv "$u2")" == reserved/60/6000 ]] && echo 1 || echo 0)" "$r bff=$(resv "$u2")"
   r="$(odoo -e SMOKE_STEP=loy_sync -e SMOKE_ORDER_UUID="$u2" -e SMOKE_PARTNER=L -e SMOKE_QTY=4)"
-  check "l.redeem_order_synced" "$([[ "$(field state "$r")" == paid && "$(field points_lines "$r")" == 1 && "$(field total "$r")" == 194000* && "$r" == *redeem_commit* ]] && echo 1 || echo 0)" "$r"
+  # E-30: total order tetap 200.000 (DPP penuh); Poin EFN = baris pembayaran Rp6.000, sisa tunai
+  check "l.redeem_order_synced" "$([[ "$(field state "$r")" == paid && "$(field points_payments "$r")" == 1 && "$(field points_paid "$r")" == 6000* && "$(field total "$r")" == 200000* && "$r" == *redeem_commit* ]] && echo 1 || echo 0)" "$r"
   r="$(odoo -e SMOKE_STEP=loy_outbox -e SMOKE_ORDER_UUID="$u2")"
   check "l.redeem_commit_done" "$([[ "$(field redeem_commit_state "$r")" == "done" && "$(field redeem_commit_delta "$r")" == -60 && "$(field reservation_state "$r")" == committed && "$(field earn_state "$r")" == "done" && "$(field points_earned "$r")" == 19 ]] && echo 1 || echo 0)" "$r (earn 19 = Rp194.000 tanpa porsi poin)"
   r="$(resv "$u2")/$(ledger pos_redeem "$u2")/$(ledger pos_earn "$u2")"
@@ -476,7 +479,7 @@ scenario_l() { # Gelombang 13: Poin EFN di POS (docs/04 §9) — Odoo efn_pos_lo
   check "l.cancel_draft_otp_verified" "$(redeem_otp "$u6" L 100000)" "OTP pos_redeem order $u6"
   r="$(odoo -e SMOKE_STEP=loy_reserve -e SMOKE_ORDER_UUID="$u6" -e SMOKE_PARTNER=L -e SMOKE_POINTS=50 -e SMOKE_AMOUNT=100000)"
   r="$(odoo -e SMOKE_STEP=loy_sync -e SMOKE_ORDER_UUID="$u6" -e SMOKE_PARTNER=L -e SMOKE_QTY=2 -e SMOKE_DRAFT=1)"
-  check "l.draft_keeps_points_line" "$([[ "$(field state "$r")" == draft && "$(field points_lines "$r")" == 1 ]] && echo 1 || echo 0)" "$r"
+  check "l.draft_keeps_points_payment" "$([[ "$(field state "$r")" == draft && "$(field points_payments "$r")" == 1 ]] && echo 1 || echo 0)" "$r"
   r="$(odoo -e SMOKE_STEP=loy_cancel -e SMOKE_ORDER_UUID="$u6")"
   check "l.cancel_draft_release" "$([[ "$(field order_state "$r")" == cancel && "$(field reservation_state "$r")" == released && "$(field release_state "$r")" == "done" && "$(resv "$u6")" == released/50/5000 ]] && echo 1 || echo 0)" "$r bff=$(resv "$u6")"
   r="$(bal)"
@@ -498,9 +501,11 @@ scenario_l() { # Gelombang 13: Poin EFN di POS (docs/04 §9) — Odoo efn_pos_lo
   # 7. Refund 2 dari 4 unit order u2 -> rasio 0,5: restore floor(60x0,5)=30, clawback ceil(19x0,5)=10
   ur="$(newuuid)"
   r="$(odoo -e SMOKE_STEP=loy_refund -e SMOKE_ORDER_UUID="$ur" -e SMOKE_ORIG_UUID="$u2" -e SMOKE_QTY=2)"
-  check "l.refund_synced" "$([[ "$(field ok "$r")" == true && "$(field is_refund "$r")" == true && "$(field preview_value "$r")" == 3000 && "$(field reverse_ratio "$r")" == 0.5 && "$(field reverse_eligible "$r")" == 97000 ]] && echo 1 || echo 0)" "$r"
+  check "l.refund_synced" "$([[ "$(field ok "$r")" == true && "$(field is_refund "$r")" == true && "$(field preview_value "$r")" == 3000 && "$(field reverse_ratio "$r")" == 0.5 && "$(field reverse_eligible "$r")" == 97000 && "$(field points_paid "$r")" == -3000* && "$(field points_restored_value "$r")" == 3000 ]] && echo 1 || echo 0)" "$r"
   r="$(odoo -e SMOKE_STEP=loy_outbox -e SMOKE_ORDER_UUID="$ur")"
-  check "l.refund_reverse_done" "$([[ "$(field reverse_state "$r")" == "done" && "$(field reverse_delta "$r")" == 20 ]] && echo 1 || echo 0)" "$r"
+  check "l.refund_reverse_done" "$([[ "$(field reverse_state "$r")" == "done" && "$(field reverse_delta "$r")" == 20 && "$(field reverse_points_restored_value "$r")" == 3000 ]] && echo 1 || echo 0)" "$r"
+  r="$(psql_platform -c "select points_restored_value || '/' || points_restored from platform.loyalty_pos_reverse where refund_order_ref='$ur'")"
+  check "l.bff_points_restored_value" "$([[ "$r" == 3000/30 ]] && echo 1 || echo 0)" "loyalty_pos_reverse value/poin=$r (K-18-5)"
   r="$(ledger pos_reverse "$u2" "delta_points > 0")/$(ledger pos_reverse "$u2" "delta_points < 0")/$(bal)"
   check "l.refund_bff_proportional" "$([[ "$r" == 30/-10/79 ]] && echo 1 || echo 0)" "restore/clawback/saldo=$r"
 
@@ -573,13 +578,17 @@ scenario_l() { # Gelombang 13: Poin EFN di POS (docs/04 §9) — Odoo efn_pos_lo
   local o2 orr
   o2="$(MSYS_NO_PATHCONV=1 docker exec "$PG" psql -U postgres -d efn_odoo -At -c "select id from pos_order where uuid='$u2'")"
   orr="$(MSYS_NO_PATHCONV=1 docker exec "$PG" psql -U postgres -d efn_odoo -At -c "select id from pos_order where uuid='$ur'")"
+  # G18 E-30: tidak ada baris produk poin; penjualan u2 di fact_sales_line = harga penuh (200.000, tanpa line_kind
+  # points), Poin EFN = fact_pos_payment is_loyalty_points (+6.000 order u2, -3.000 refund ur), refund masuk fact_sales_line
   for _ in $(seq 1 30); do
-    r="$(echo "select countIf(order_id=$o2 and line_kind='points') || '/' || toString(toInt64(sumIf(subtotal, order_id=$o2 and line_kind='points'))) || '/' || countIf(order_id=$orr and is_refund=1) from efn_dwh.fact_sales_line final where order_id in ($o2,$orr)" | chq)"
-    [[ "$r" == 1/* && "${r##*/}" -ge 1 ]] && break
+    r="$(echo "select countIf(order_id=$o2 and line_kind='points') || '/' || toString(toInt64(sumIf(subtotal, order_id=$o2))) || '/' || countIf(order_id=$orr and is_refund=1) from efn_dwh.fact_sales_line final where order_id in ($o2,$orr)" | chq)"
+    r="$r/$(echo "select toString(toInt64(sumIf(amount, order_id=$o2 and is_loyalty_points=1))) || '/' || toString(toInt64(sumIf(amount, order_id=$orr and is_loyalty_points=1))) from efn_dwh.fact_pos_payment final where order_id in ($o2,$orr)" | chq)"
+    [[ "$r" == 0/200000/*/6000/-3000 ]] && break
     sleep 10
   done
-  check "l.etl_points_and_refund_lines" "$([[ "$r" == 1/-6000/* && "${r##*/}" -ge 1 ]] && echo 1 || echo 0)" "points_lines/points_subtotal/refund_lines=$r"
+  check "l.etl_points_payment_and_refund_lines" "$([[ "$r" =~ ^0/200000/[1-9][0-9]*/6000/-3000$ ]] && echo 1 || echo 0)" "points_lines/subtotal_u2/refund_lines/poin_bayar_u2/poin_refund=$r (produk tanpa pajak: subtotal = incl)"
   echo "$u2 $ur $o2 $orr" > "${WORK}/loyalty_orders"
+  echo "$u2,$ur,$u5,$u6" > "${WORK}/points_refs"   # order berpoin run ini (rekonsiliasi harian di tahap p)
 }
 
 scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-App/BFF -> odoo-rpc-gateway -> E-28 nyata
@@ -738,6 +747,7 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   local short spart
   oodoo -e SMOKE_STEP=stock -e SMOKE_PRODUCT=scarce -e SMOKE_QTY=50 > /dev/null
   opy "$pc" c quote scarce:5 short
+  opy "$pc" c checkout_nokey short     # tanpa Idempotency-Key -> 400 (quote tidak terpakai)
   opy "$pc" c checkout_only short
   short="$(python_free_json c short order_id)"; spart="$(part_of "$short")"
   oodoo -e SMOKE_STEP=stock -e SMOKE_PRODUCT=scarce -e SMOKE_QTY=0 > /dev/null
@@ -797,11 +807,14 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   check "o.ops_refund_approve_audit" "$([[ "$r" == *'refund_approve:rejected_role:smoke-cs-op/smoke'* && "$r" == *'refund_approve:odoo_done:smoke-cs-sup/smoke'* ]] && echo 1 || echo 0)" "$r"
   opy "$pc" c wait opc cancelled cancelled 60
 
+  # G18-QA-01: kunci event format lama (id lokal Odoo) milik bagian LAIN yang sudah tercatat BFF = simulasi restore
+  local legacy
+  legacy="$(psql_platform -c "select idempotency_key from platform.online_order_event where idempotency_key ~ '^online:[0-9]+:[a-z_]+:[0-9]+$' and part_id <> '$part' order by received_at desc limit 1")"
   # 5. Event Odoo -> BFF: HMAC salah / tanpa tanda tangan / di luar window / body diubah -> 401; duplikat & seq lama
   MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal -v "${WORK_W}:/work" \
     -v "${SECRETS_W}/efn_ca_crt.txt:/s/efn_ca_crt.txt:ro" -v "${SECRETS_W}/odoo_bff_api_key.txt:/s/odoo_bff_api_key.txt:ro" \
     -v "${SECRETS_W}/odoo_online_event_hmac.txt:/s/odoo_online_event_hmac.txt:ro" \
-    "$PY_IMAGE" python /work/online_smoke.py events "$part" "$main_oid" 2>&1 | grep '^SMOKE_RESULT' | tee -a "$RESULTS" || true
+    -e SMOKE_BFF_LOG=/work/bff.log "$PY_IMAGE" python /work/online_smoke.py events "$part" "$main_oid" "$legacy" 2>&1 | grep '^SMOKE_RESULT' | tee -a "$RESULTS" || true
 
   # 6. Kontrak FE <-> BFF lewat route handler Next.js (https://app.efn.local/api/*)
   opy "$pw" w web_flow
@@ -843,7 +856,8 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   # 8. Kill switch: ONLINE_ENABLED=false (overlay sementara; dev compose menyalakan online secara literal) -> 503
   local ov ovw
   ov="${WORK}/killswitch.override.yml"
-  printf 'services:\n  api-gateway:\n    environment:\n      ONLINE_ENABLED: "false"\n' > "$ov"
+  # G18: overlay yang sama menyalakan MIGRATION_ENABLED sementara untuk uji source_ref opak (L-21c) di jendela ini
+  printf 'services:\n  api-gateway:\n    environment:\n      ONLINE_ENABLED: "false"\n      MIGRATION_ENABLED: "true"\n' > "$ov"
   ovw="$ov"; command -v cygpath > /dev/null && ovw="$(cygpath -m "$ov")"
   kill_bff_recreate() { # [overlay]
     (cd "$ROOT" && docker compose -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.dev.yml ${1:+-f "$1"} \
@@ -867,11 +881,150 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   }
   kill_bff_recreate "$ovw"
   opy "$pa" a killswitch
+  local sr bad=""
+  for sr in legacy-001 "62812$(rand8)" 6ba7b810-9dad-11d1-80b4-00c04fd430c8 12345678901234567890123456789012; do
+    r="$(migrate members "{\"source_ref\":\"$sr\",\"member_ref\":\"62812$(rand8)\"}")"
+    [[ "$r" == *invalid_source_ref*"|400" ]] || bad+="$sr=>$(tail -c 60 <<< "$r"); "
+  done
+  check "o.g18_source_ref_not_opaque_400" "$([[ -z "$bad" ]] && echo 1 || echo 0)" "${bad:-4 varian (label, HP, UUID v1, hex angka) -> 400 invalid_source_ref}"
+  r="$(migrate members "{\"source_ref\":\"$(newuuid)\",\"member_ref\":\"62812$(rand8)\"}")"
+  check "o.g18_source_ref_opaque_ok" "$([[ "$r" =~ \|20[01]$ ]] && echo 1 || echo 0)" "$(tail -c 120 <<< "$r")"
   kill_bff_recreate
   r="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_edge --add-host "api.efn.local:${TRAEFIK_IP}" -v "${WORK_W}:/work" \
     curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -o /dev/null -w '%{http_code}' \
     --cacert /work/edge_ca.crt https://api.efn.local/v1/catalog/channels 2>&1 || true)"
   check "o.killswitch_restored" "$([[ "$r" == 200 && "$(docker inspect "$BFF" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -cx 'ONLINE_ENABLED=true')" == 1 ]] && echo 1 || echo 0)" "katalog=$r setelah recreate tanpa overlay"
+}
+
+scenario_p() { # Gelombang 18 (POS): Rupiah Rp1, poin = alat bayar dgn pajak tetap, refund ke metode asal, integritas
+  #                pembayaran (r11), daftar member 17+, probe RPC kasir, rekonsiliasi harian Poin EFN (K-18-6)
+  echo "== p. G18 POS: Rp1, redeem = pembayaran (DPP tetap), refund metode asal, SEC-113/115/116/121, enroll 17+, recon"
+  local r pp pq pr t1 t2 t3 t4 t5 t6 td tr u v n code
+  MSYS_NO_PATHCONV=1 docker exec "$ODOO" test -s /tmp/efn_smoke_state.json || odoo -e SMOKE_STEP=setup | tee -a "$RESULTS"
+  pp="0812$(rand8)"; pq="0812$(rand8)"; pr="0812$(rand8)"
+  odoo -e SMOKE_STEP=loy_partner -e SMOKE_KEY=P -e SMOKE_PHONE="$pp" > /dev/null
+  odoo -e SMOKE_STEP=loy_partner -e SMOKE_KEY=Q -e SMOKE_PHONE="$pq" > /dev/null
+  odoo -e SMOKE_STEP=loy_partner -e SMOKE_KEY=R -e SMOKE_PHONE="$pr" > /dev/null
+  redeem_p() { # uuid partner amount points -> reservasi (OTP pos_redeem dari log BFF dev)
+    local rr cc
+    rr="$(odoo -e SMOKE_STEP=loy_otp_request -e SMOKE_ORDER_UUID="$1" -e SMOKE_PARTNER="$2" -e SMOKE_AMOUNT="$3")"
+    cc="$(otp_code "$(field member_masked "$rr")")"
+    odoo -e SMOKE_STEP=loy_otp_verify -e SMOKE_ORDER_UUID="$1" -e SMOKE_CODE="$cc" > /dev/null
+    odoo -e SMOKE_STEP=loy_reserve -e SMOKE_ORDER_UUID="$1" -e SMOKE_PARTNER="$2" -e SMOKE_POINTS="$4" -e SMOKE_AMOUNT="$3"
+  }
+  odoo -e SMOKE_STEP=loy_config > /dev/null
+
+  # 1. W-03: order ber-PB1 (Rp12.345 x 3 + PB1 10 %) -> total & pajak Rupiah bulat (IDR rounding 1)
+  t1="$(newuuid)"
+  r="$(odoo -e SMOKE_STEP=g18_tax_order -e SMOKE_ORDER_UUID="$t1" -e SMOKE_QTY=3)"
+  check "p.idr_total_rounded" "$([[ "$(field ok "$r")" == true && "$(field idr_rounding "$r")" == 1.0 && "$(field total_int "$r")" == true && "$(field state "$r")" =~ ^(paid|done)$ ]] && echo 1 || echo 0)" "$r"
+
+  # 2. E-30: member P punya poin (earn 20 x Rp50.000 = 100) -> redeem 50 poin (Rp5.000) sebagai PEMBAYARAN order ber-PB1;
+  #    DPP & PB1 tetap atas harga penuh, commit membawa payment_amount (BFF reservasi committed/50/5000)
+  u="$(newuuid)"
+  odoo -e SMOKE_STEP=loy_sync -e SMOKE_ORDER_UUID="$u" -e SMOKE_PARTNER=P -e SMOKE_QTY=20 > /dev/null
+  r="$(odoo -e SMOKE_STEP=loy_outbox -e SMOKE_ORDER_UUID="$u")"
+  check "p.earn_for_redeem" "$([[ "$(field earn_state "$r")" == "done" && "$(field points_earned "$r")" == 100 ]] && echo 1 || echo 0)" "$r"
+  t2="$(newuuid)"
+  r="$(redeem_p "$t2" P 40739 50)"
+  check "p.redeem_reserved" "$([[ "$(field ok "$r")" == true && "$(field value_idr "$r")" == 5000 ]] && echo 1 || echo 0)" "$r"
+  r="$(odoo -e SMOKE_STEP=g18_tax_redeem -e SMOKE_ORDER_UUID="$t2" -e SMOKE_PARTNER=P -e SMOKE_QTY=3)"
+  check "p.redeem_payment_tax_unchanged" "$([[ "$(field ok "$r")" == true && "$(field tax_unchanged "$r")" == true && "$(field total_int "$r")" == true && "$(field points_paid "$r")" == 5000* && "$(field commit_state "$r")" == "done" ]] && echo 1 || echo 0)" "$r"
+  r="$(psql_platform -c "select status||'/'||points||'/'||value_idr from platform.loyalty_reservation where order_ref='$t2' order by created_at desc limit 1")"
+  check "p.redeem_bff_committed" "$([[ "$r" == committed/50/5000 ]] && echo 1 || echo 0)" "reservasi BFF=$r"
+
+  # 3. E-31: refund order tunai t1 ke EDC ditolak; tunai melebihi yang dibayar ditolak; tunai sesuai -> OK
+  r="$(odoo -e SMOKE_STEP=g18_refund_method -e SMOKE_ORDER_UUID="$(newuuid)" -e SMOKE_ORIG_UUID="$t1")"
+  check "p.refund_other_method_rejected" "$([[ "$(field other_method "$r")" == UserError && "$(field other_method_msg "$r")" == *"metode bayar asal"* ]] && echo 1 || echo 0)" "$r"
+  check "p.refund_over_paid_rejected" "$([[ "$(field over_paid "$r")" == UserError ]] && echo 1 || echo 0)" "over_paid=$(field over_paid "$r") $(field over_paid_msg "$r")"
+  check "p.refund_same_method_ok" "$([[ "$(field same_method "$r")" =~ ^(paid|done)$ ]] && echo 1 || echo 0)" "same_method=$(field same_method "$r")"
+  r="$(odoo -e SMOKE_STEP=g18_unlinked_noncash -e SMOKE_ORDER_UUID="$(newuuid)")"
+  check "p.unlinked_return_noncash_rejected" "$([[ "$(field error "$r")" == UserError && "$(field created "$r")" == false && "$r" == *tunai* ]] && echo 1 || echo 0)" "$r"
+
+  # 3b. L-26 (SEC-128): refund berpoin dgn nilai restore SALAH (penuh Rp5.000 untuk 1 dari 3 unit) -> Odoo hold
+  #     (alokasi) -> supervisor setujui apa adanya -> BFF 409 restore_value_mismatch -> hold lagi -> supervisor
+  #     "setujui nilai restore" -> terkirim dgn restore_approved (BFF tetap membatasi ke sisa redeem)
+  tr="$(newuuid)"
+  r="$(odoo -e SMOKE_STEP=g18_refund_points -e SMOKE_ORDER_UUID="$tr" -e SMOKE_ORIG_UUID="$t2" -e SMOKE_RESTORE=5000)"
+  check "p.restore_wrong_value_held_by_odoo" "$([[ "$(field ok "$r")" == true && "$(field reverse_state "$r")" == hold && "$(field reverse_error "$r")" == refund_points_allocation_mismatch ]] && echo 1 || echo 0)" "$r"
+  r="$(odoo -e SMOKE_STEP=g18_hold_decide -e SMOKE_ORDER_UUID="$tr" -e SMOKE_ACTION=hold_approve)"
+  check "p.restore_bff_409_held" "$([[ "$(field ok "$r")" == true && "$(field reverse_state "$r")" == hold && "$(field reverse_error "$r")" == *restore_value_mismatch* ]] && echo 1 || echo 0)" "$r"
+  r="$(odoo -e SMOKE_STEP=g18_hold_decide -e SMOKE_ORDER_UUID="$tr" -e SMOKE_ACTION=restore_approve)"
+  check "p.restore_supervisor_approved" "$([[ "$(field ok "$r")" == true && "$(field reverse_state "$r")" == "done" && "$(field restore_approved "$r")" == true ]] && echo 1 || echo 0)" "$r"
+  r="$(psql_platform -c "select points_restored_value || '/' || restore_approved from platform.loyalty_pos_reverse where refund_order_ref='$tr'")"
+  check "p.restore_approved_recorded_bff" "$([[ "$r" == 5000/t* || "$r" == 5000/true ]] && echo 1 || echo 0)" "loyalty_pos_reverse value/restore_approved=$r"
+
+  # 3c. L-26: barang kategori TANPA poin (excluded) dibayar sebagian poin -> refund sah lolos (rasio eligible 0)
+  u="$(newuuid)"
+  odoo -e SMOKE_STEP=loy_sync -e SMOKE_ORDER_UUID="$u" -e SMOKE_PARTNER=R -e SMOKE_QTY=20 > /dev/null
+  odoo -e SMOKE_STEP=loy_outbox -e SMOKE_ORDER_UUID="$u" > /dev/null
+  t4="$(newuuid)"
+  redeem_p "$t4" R 100000 50 > /dev/null
+  r="$(odoo -e SMOKE_STEP=loy_sync -e SMOKE_ORDER_UUID="$t4" -e SMOKE_PARTNER=R -e SMOKE_QTY=2 -e SMOKE_PRODUCT=excluded)"
+  r="$r | $(odoo -e SMOKE_STEP=loy_outbox -e SMOKE_ORDER_UUID="$t4")"
+  check "p.excluded_goods_redeem_committed" "$([[ "$r" == *'"redeem_commit_state": "done"'* ]] && echo 1 || echo 0)" "$r"
+  t5="$(newuuid)"
+  r="$(odoo -e SMOKE_STEP=loy_refund -e SMOKE_ORDER_UUID="$t5" -e SMOKE_ORIG_UUID="$t4" -e SMOKE_QTY=1)"
+  r="$r | $(odoo -e SMOKE_STEP=loy_outbox -e SMOKE_ORDER_UUID="$t5")"
+  check "p.excluded_goods_refund_restore_ok" "$([[ "$r" == *'"reverse_state": "done"'* && "$r" == *'"reverse_points_restored_value": 2500'* ]] && echo 1 || echo 0)" "$r"
+
+  # 3d. SEC-125: draft dgn nominal Poin EFN != reservasi -> baris poin dibuang (reservasi lalu dilepas)
+  td="$(newuuid)"
+  redeem_p "$td" R 100000 20 > /dev/null
+  r="$(odoo -e SMOKE_STEP=loy_sync -e SMOKE_ORDER_UUID="$td" -e SMOKE_PARTNER=R -e SMOKE_QTY=2 -e SMOKE_DRAFT=1 -e SMOKE_POINTS_VALUE=1500)"
+  check "p.draft_wrong_points_value_dropped" "$([[ "$(field ok "$r")" == true && "$(field state "$r")" == draft && "$(field points_payments "$r")" == 0 ]] && echo 1 || echo 0)" "$r"
+  odoo -e SMOKE_STEP=loy_release -e SMOKE_ORDER_UUID="$td" > /dev/null
+
+  # 4. SEC-116: is_change palsu (EDC dobel + tunai -total) tersimpan False; refund order EDC ke tunai ber-is_change ditolak
+  t3="$(newuuid)"
+  odoo -e SMOKE_STEP=g18_tax_order -e SMOKE_ORDER_UUID="$t3" -e SMOKE_QTY=1 -e SMOKE_METHOD=edc > /dev/null
+  r="$(odoo -e SMOKE_STEP=g18_is_change -e SMOKE_ORDER_UUID="$(newuuid)" -e SMOKE_ORIG_UUID="$t3")"
+  check "p.fake_is_change_not_trusted" "$([[ "$r" == *'"stored_is_change": [false]'* && "$(field refund_error "$r")" == UserError ]] && echo 1 || echo 0)" "$r"
+
+  # 5. E-34 / K-18-8: daftar member tanpa centang usia -> ditolak lokal (tanpa OTP); dengan centang -> OTP -> enrolled,
+  #    BFF member.age_confirmed_source=pos, partner terkunci (SEC-115)
+  v="$(newuuid)"
+  n="$(grep -c 'OTP untuk' "${WORK}/bff.log" || true)"
+  r="$(odoo -e SMOKE_STEP=g18_enroll -e SMOKE_ORDER_UUID="$v" -e SMOKE_PARTNER=Q -e SMOKE_AGE=0)"
+  check "p.enroll_without_age_rejected" "$([[ "$(field ok "$r")" == false && "$(field error_code "$r")" == age_confirmation_required && "$(grep -c 'OTP untuk' "${WORK}/bff.log" || true)" == "$n" ]] && echo 1 || echo 0)" "$r"
+  r="$(odoo -e SMOKE_STEP=g18_enroll -e SMOKE_ORDER_UUID="$v" -e SMOKE_PARTNER=Q -e SMOKE_AGE=1)"
+  code="$(otp_code "$(field member_masked "$r")")"
+  r="$(odoo -e SMOKE_STEP=g18_enroll -e SMOKE_ORDER_UUID="$v" -e SMOKE_PARTNER=Q -e SMOKE_AGE=1 -e SMOKE_CODE="$code")"
+  check "p.enroll_with_age_ok" "$([[ "$(field ok "$r")" == true && "$(field challenge_state "$r")" == consumed && "$(field member_locked "$r")" == true ]] && echo 1 || echo 0)" "$r"
+  r="$(psql_platform -c "select count(*) from platform.member where age_confirmed_source='pos' and age_confirmed_at > now() - interval '10 minutes'")"
+  check "p.enroll_bff_age_source_pos" "$([[ "$r" -ge 1 ]] && echo 1 || echo 0)" "member age_confirmed_source=pos baru=$r"
+
+  # 6. r11 SEC-113/115/121 lewat RPC web client NYATA sebagai kasir (password + TOTP, Traefik wg-https)
+  odoo -e SMOKE_STEP=rpc_users > /dev/null
+  t6="$(newuuid)"
+  odoo -e SMOKE_STEP=loy_sync -e SMOKE_ORDER_UUID="$t6" -e SMOKE_PARTNER=Q -e SMOKE_QTY=1 -e SMOKE_DRAFT=1 > /dev/null
+  r="$(odoo -e SMOKE_STEP=g18_rpc_targets -e SMOKE_ORIG_UUID="$t1" -e SMOKE_PARTNER=P -e SMOKE_DRAFT_UUID="$t6")"
+  local before; before="$(field payment_amount "$r")"
+  check "p.member_locked_marker" "$([[ "$(field member_locked "$r")" == true ]] && echo 1 || echo 0)" "$r"
+  r="$(MSYS_NO_PATHCONV=1 docker exec "$ODOO" sh -c 'cat /tmp/efn_smoke_rpc.json; rm -f /tmp/efn_smoke_rpc.json' \
+    | MSYS_NO_PATHCONV=1 docker run --rm -i --network efn_edge --add-host "erp.efn.local:${TRAEFIK_IP}" \
+        -v "${WORK_W}:/work:ro" "$PY_IMAGE" python /work/odoo_rpc_smoke.py 2>&1 | grep '^SMOKE_RESULT' | grep -F '"user": "smoke_rpc_cashier"' | head -1 || true)"
+  rj() { grep -oE "\"$1\": \\{\"rejected\": (true|false)" <<< "$r" | grep -oE '(true|false)$'; }
+  check "p.rpc_cashier_payment_locked" "$([[ "$r" == *'"logged_in": true'* && "$(rj payment_write_amount)" == true && "$(rj payment_write_method)" == true && "$(rj payment_unlink)" == true ]] && echo 1 || echo 0)" "$(head -c 400 <<< "$r")"
+  check "p.rpc_cashier_member_phone_locked" "$([[ "$(rj member_phone_write)" == true ]] && echo 1 || echo 0)" "$(grep -oE '"member_phone_write": \{[^}]*\}' <<< "$r")"
+  check "p.rpc_cashier_create_individual_ok" "$([[ "$r" == *'"create_individual": {"created": true'* ]] && echo 1 || echo 0)" "$(grep -oE '"create_individual": \{[^}]*\}' <<< "$r")"
+  check "p.rpc_cashier_create_company_rejected" "$([[ "$(rj create_company)" == true ]] && echo 1 || echo 0)" "$(grep -oE '"create_company": \{[^}]*\}' <<< "$r")"
+  check "p.rpc_cashier_paid_transition_rejected" "$([[ "$(rj order_paid_action)" == true && "$(rj order_write_state_paid)" == true && "$(rj order_create_paid)" == true ]] && echo 1 || echo 0)" "$(grep -oE '"order_(paid_action|write_state_paid|create_paid)": \{[^}]*\}' <<< "$r" | tr '\n' ' ')"
+  check "p.rpc_cashier_sync_foreign_payment_rejected" "$([[ "$(rj sync_foreign_payment_1)" == true && "$(rj sync_foreign_payment_2)" == true && "$(rj sync_foreign_payment_4)" == true ]] && echo 1 || echo 0)" "$(grep -oE '"sync_foreign_payment_[124]": \{[^}]*\}' <<< "$r" | tr '\n' ' ')"
+  r="$(odoo -e SMOKE_STEP=g18_rpc_after -e SMOKE_ORIG_UUID="$t1" -e SMOKE_PARTNER=P -e SMOKE_DRAFT_UUID="$t6")"
+  check "p.rpc_after_state_unchanged" "$([[ "$(field payment_amount "$r")" == "$before" && "$(field payments "$r")" == 1 && "$(field phone_unchanged "$r")" == true && "$(field draft_state "$r")" == draft && "$(field paid_orders_by_cashier "$r")" == 0 && "$r" == *'"is_company": false'* && "$r" != *'"is_company": true'* ]] && echo 1 || echo 0)" "$r"
+
+  # 7. K-18-6: rekonsiliasi harian Poin EFN (mode payment) untuk HARI INI atas transaksi smoke l + p = 0 selisih
+  # Rekonsiliasi per hari WIB: order run lain (mis. run terputus yang meninggalkan reverse `hold`) memang ikut
+  # terhitung -> yang dinilai = order berpoin RUN INI (SMOKE_REFS) 0 selisih; total hari dicatat di detail.
+  local refs; refs="$(cat "${WORK}/points_refs" 2>/dev/null || true)"
+  refs="${refs:+$refs,}$t2,$tr,$t4,$t5,$td"
+  r="$(MSYS_NO_PATHCONV=1 docker exec -i -e SMOKE_REFS="$refs" "${P}-etl-1" python - < "${SMOKE_DIR}/etl_points_recon_smoke.py" 2>&1 | grep '^SMOKE_RESULT' | tail -1 || true)"
+  check "p.points_recon_daily_zero_mismatch" "$([[ "$(field mode "$r")" == payment && "$(field run_refs_checked "$r")" -ge 6 && "$(field run_mismatched "$r")" == 0 ]] && echo 1 || echo 0)" "$(head -c 700 <<< "$r")"
+  check "p.points_restore_value_zero_mismatch" "$([[ "$(field today_restore_mismatched "$r")" == 0 && "$(field today_restored_idr "$r")" != 0 ]] && echo 1 || echo 0)" "restore_mismatched=$(field today_restore_mismatched "$r") restored_idr=$(field today_restored_idr "$r") (SEC-118)"
+  # PDP: HP fiktif P/Q tidak ada di log BFF/Odoo
+  n=0; for x in "$pp" "$pq" "$pr"; do n=$(( n + $(grep -c "${x:4}" "${WORK}/bff.log" || true) + $(docker logs --since 30m "$ODOO" 2>&1 | grep -c "${x:4}" || true) )); done
+  check "p.no_raw_phone_logs" "$([[ "$n" == 0 ]] && echo 1 || echo 0)" "hits=$n"
 }
 
 for s in "${SCENARIOS[@]}"; do "scenario_${s}"; done

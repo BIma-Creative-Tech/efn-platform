@@ -176,3 +176,63 @@ def test_loyalty_recon_defaults_follow_odoo(tls_env: dict[str, str]) -> None:
     assert settings.loyalty_recon_not_before is None
     cutoff = Settings.from_env({**tls_env, "ETL_LOYALTY_RECON_NOT_BEFORE": "2026-10-07T07:09:00Z"})
     assert cutoff.loyalty_recon_not_before is not None and cutoff.loyalty_recon_not_before.hour == 7
+
+
+def test_column_retention_defaults_w19(tls_env: dict[str, str]) -> None:
+    # G18/W-19 (PDP v7): pseudonim 5 th, lokasi Price Hunter 90 h — env sama dengan clickhouse-init.
+    settings = Settings.from_env(tls_env)
+    assert (settings.pseudonym_retention_years, settings.geo_retention_days) == (5, 90)
+    custom = Settings.from_env({**tls_env, "CH_PSEUDONYM_RETENTION_YEARS": "3", "CH_GEO_RETENTION_DAYS": "30"})
+    assert (custom.pseudonym_retention_years, custom.geo_retention_days) == (3, 30)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"CH_PSEUDONYM_RETENTION_YEARS": "0"},
+        {"CH_PSEUDONYM_RETENTION_YEARS": "31"},
+        {"CH_GEO_RETENTION_DAYS": "0"},
+        {"CH_GEO_RETENTION_DAYS": "3651"},
+    ],
+)
+def test_column_retention_out_of_range_fails(tls_env: dict[str, str], override: dict[str, str]) -> None:
+    with pytest.raises(RuntimeError):
+        Settings.from_env({**tls_env, **override})
+
+
+def test_loyalty_points_mode_w18(tls_env: dict[str, str]) -> None:
+    # SEC-114 (L-25b): default `payment`; toleransi default 0 (K-18-1).
+    settings = Settings.from_env(tls_env)
+    assert (settings.loyalty_points_mode, settings.loyalty_points_tolerance_idr) == ("payment", 0)
+    paid = Settings.from_env({**tls_env, "ETL_LOYALTY_POINTS_MODE": "Payment"})
+    assert paid.loyalty_points_mode == "payment"
+    # `product` (data historis) ditolak di production (APP_ENV production / kosong), boleh di non-production.
+    with pytest.raises(RuntimeError):
+        Settings.from_env({**tls_env, "ETL_LOYALTY_POINTS_MODE": "product"})
+    with pytest.raises(RuntimeError):
+        Settings.from_env({**tls_env, "APP_ENV": "", "ETL_LOYALTY_POINTS_MODE": "product"})
+    dev = Settings.from_env({**tls_env, "APP_ENV": "development", "ETL_LOYALTY_POINTS_MODE": "product"})
+    assert dev.loyalty_points_mode == "product"
+    for bad in ({"ETL_LOYALTY_POINTS_MODE": "diskon"}, {"ETL_LOYALTY_POINTS_TOLERANCE_IDR": "-1"}):
+        with pytest.raises(RuntimeError):
+            Settings.from_env({**tls_env, **bad})
+
+
+def test_loyalty_point_value_sec118(tls_env: dict[str, str]) -> None:
+    # SEC-118: nilai 1 poin sama dengan BFF (`LOYALTY_POINT_VALUE_IDR`, default 100).
+    assert Settings.from_env(tls_env).loyalty_point_value_idr == 100
+    assert Settings.from_env({**tls_env, "LOYALTY_POINT_VALUE_IDR": "250"}).loyalty_point_value_idr == 250
+    with pytest.raises(RuntimeError):
+        Settings.from_env({**tls_env, "LOYALTY_POINT_VALUE_IDR": "0"})
+
+
+def test_audit_epoch_settings(tls_env: dict[str, str]) -> None:
+    # Chain epoch: auto (epoch baru tanpa penanda runbook) hanya non-production; anchor 1..1000.
+    settings = Settings.from_env(tls_env)
+    assert (settings.audit_epoch_auto, settings.audit_epoch_anchors) == (False, 20)
+    with pytest.raises(RuntimeError):
+        Settings.from_env({**tls_env, "ETL_AUDIT_EPOCH_AUTO": "true"})
+    dev = Settings.from_env({**tls_env, "APP_ENV": "development", "ETL_AUDIT_EPOCH_AUTO": "true"})
+    assert dev.audit_epoch_auto is True
+    with pytest.raises(RuntimeError):
+        Settings.from_env({**tls_env, "ETL_AUDIT_EPOCH_ANCHORS": "0"})

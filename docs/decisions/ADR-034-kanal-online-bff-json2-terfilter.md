@@ -1,6 +1,7 @@
 # ADR-034: Kanal Penjualan Online lewat BFF + `/json/2` Terfilter (bukan `website_sale`)
 
 - **Status:** Proposed
+  - **Catatan keputusan pemilik proyek 10 Okt 2026 (status tetap Proposed; tanda tangan arsitektur IT + Security + PO belum):** jawaban Q-ON1..Q-ON13 tercatat di `docs/decisions/README.md` (sesi tanya-jawab). Yang **mengubah desain** ADR ini: reservasi stok 1 jam (Q-ON4 → `stock_hold_mode`, `ONLINE_PAYMENT_TIMEOUT_SECONDS=3600`, Odoo `payment_timeout_minutes` ≥ 70), presisi IDR global Rp1 (Q-ON6), F&B online via SO + jembatan KDS (Q-ON2/E-29a), delivery pickup + 3PL + kurir internal (Q-ON3), faktur atas nama/NPWP pembeli opsional (Q-ON7 → PII masuk Odoo, prinsip §10.1 butir 4 direvisi), promo standar `sale_loyalty` di quote (Q-ON10), katalog & pricelist **per brand** (Q-ON12), poin online earn + redeem sebagai alat bayar, dan **API key kanal 30 hari + rotasi otomatis** (R-T15 berubah dari PLACEHOLDER 90 h). Paket kerja: `docs/10_RENCANA_GELOMBANG_18_PLUS.md`.
 - **Tanggal:** 2026-10-09
 - **Pemutus (klien):** IT + Security (arsitektur & transport); PO (lingkup pilot); Finance + Tax untuk bagian yang menyentuh ADR-019 (dana titipan)
 - **Referensi review:** R-T10 (saga, skor 16), R-L03 (PB1 vs PPN), R-O05 (refund parsial), R-S03 (Odoo terekspos), R-S09 (webhook), R-T02; temuan #36–#45 `docs/08_ODOO_FIT_GAP.md` §8.2; SEC-58 (permukaan RPC)

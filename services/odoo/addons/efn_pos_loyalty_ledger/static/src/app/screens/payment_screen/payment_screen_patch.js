@@ -1,8 +1,9 @@
 /**
- * Tombol "Cek Poin" & "Tukar Poin EFN" di layar pembayaran (langkah terakhir; docs/08 §6.3 G).
- * Alur tukar: saldo -> jumlah poin -> OTP `pos_redeem` -> reserve (server Odoo -> BFF) ->
- * baris "Poin EFN" per kelompok pajak. Offline: tombol disembunyikan dan validasi order
- * berbaris poin diblokir (ADR-017 opsi a).
+ * Tombol "Cek Poin" & "Tukar Poin EFN" di layar pembayaran (docs/08 §9.2 E-30).
+ * Alur tukar: saldo -> jumlah poin -> OTP `pos_redeem` -> reserve (server Odoo -> BFF) -> baris PEMBAYARAN
+ * metode "Poin EFN" senilai `value_idr` (terkunci: tidak bisa diubah nominalnya; menghapus = batal tukar poin).
+ * Metode Poin EFN tidak tampil sebagai pilihan manual. Offline: tombol disembunyikan dan validasi order
+ * berpoin diblokir (ADR-017 opsi a).
  */
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { NumberPopup } from "@point_of_sale/app/components/popups/number_popup/number_popup";
@@ -10,12 +11,21 @@ import { ask, makeAwaitable } from "@point_of_sale/app/utils/make_awaitable_dial
 import { patch } from "@web/core/utils/patch";
 import { _t } from "@web/core/l10n/translation";
 import { efnIsOffline, efnRunOtpFlow } from "@efn_pos_otp_gate/app/utils/efn_otp_flow";
+import { efnIsPointsPayment, efnPointsMethod } from "@efn_pos_loyalty_ledger/app/models/pos_order_patch";
 
 async function callConfig(pos, method, args) {
     return await pos.data.call("pos.config", method, [[pos.config.id], ...args]);
 }
 
 patch(PaymentScreen.prototype, {
+    setup() {
+        super.setup(...arguments);
+        // Metode Poin EFN hanya lewat tombol tukar (OTP + reservasi), tidak dipilih manual.
+        this.payment_methods_from_config = this.payment_methods_from_config.filter(
+            (method) => !method.efn_is_loyalty_points
+        );
+    },
+
     get efnLoyaltyOnline() {
         return !efnIsOffline(this.pos);
     },
@@ -35,12 +45,75 @@ patch(PaymentScreen.prototype, {
         const order = this.currentOrder;
         return Boolean(
             this.pos.config.efn_loyalty_redeem_enabled &&
-                this.pos.config.efn_loyalty_points_product &&
+                efnPointsMethod(this.pos) &&
                 this.efnLoyaltyOnline &&
                 order?.getPartner() &&
                 !order.isRefund &&
                 !order.efnHasActiveRedeem()
         );
+    },
+
+    /**
+     * Baris Poin EFN READ-ONLY terhadap numpad (nominal = reservasi BFF; server menolak selisih).
+     * Akar bug G18: bila baris poin terpilih, input numpad yang diabaikan tetap tertahan di number buffer dan
+     * diterapkan ke baris berikutnya yang dipilih (mis. Bank menjadi Rp5) -> order kurang bayar, Validasi diam.
+     * Karena itu baris poin TIDAK PERNAH menjadi baris terpilih (pemilihan diabaikan, buffer dikosongkan) dan
+     * tombol tertunda diproses (`capture`) sebelum baris baru ditambahkan.
+     */
+    efnReleasePointsSelection() {
+        const order = this.currentOrder;
+        if (efnIsPointsPayment(order?.getSelectedPaymentline())) {
+            order.selectPaymentline(undefined);
+        }
+        this.numberBuffer.reset();
+    },
+
+    selectPaymentLine(uuid) {
+        const line = this.paymentLines.find((l) => l.uuid === uuid);
+        if (efnIsPointsPayment(line)) {
+            this.numberBuffer.capture();
+            this.efnReleasePointsSelection();
+            this.notification.add(_t("Nominal Poin EFN terkunci (sesuai penukaran)."), { type: "info" });
+            return;
+        }
+        return super.selectPaymentLine(...arguments);
+    },
+
+    updateSelectedPaymentline(amount = false) {
+        const selected = this.selectedPaymentLine;
+        if (efnIsPointsPayment(selected) || (!selected && this.currentOrder?.efnPointsPayments().length)) {
+            // Input numpad saat baris poin (atau tidak ada baris) terpilih dibuang.
+            this.efnReleasePointsSelection();
+            return;
+        }
+        return super.updateSelectedPaymentline(...arguments);
+    },
+
+    async addNewPaymentLine(paymentMethod) {
+        // Number buffer memproses tombol numpad secara tertunda (timeout). Tanpa capture, tombol yang ditekan saat
+        // baris poin terpilih diterapkan ke baris BARU (Bank = Rp5). Proses dulu terhadap seleksi saat ini.
+        this.numberBuffer.capture();
+        return await super.addNewPaymentLine(...arguments);
+    },
+
+    async deletePaymentLine(uuid) {
+        const line = this.paymentLines.find((l) => l.uuid === uuid);
+        if (!efnIsPointsPayment(line)) {
+            return super.deletePaymentLine(...arguments);
+        }
+        const order = this.currentOrder;
+        if (order.isRefund) {
+            this.notification.add(
+                _t("Pengembalian Poin EFN dihitung otomatis dan tidak bisa dihapus."),
+                { type: "warning" }
+            );
+            return;
+        }
+        if (!(await this.pos.efnConfirmCancelRedeem())) {
+            return;
+        }
+        await this.pos.efnCancelRedeem(order);
+        this.numberBuffer.reset();
     },
 
     async efnFetchBalance(partner) {
@@ -78,15 +151,19 @@ patch(PaymentScreen.prototype, {
     async efnRedeemPoints() {
         const order = this.currentOrder;
         const partner = order?.getPartner();
+        const method = efnPointsMethod(this.pos);
         if (!order || !partner || typeof partner.id !== "number") {
             this.notification.add(_t("Pilih pelanggan (member) terlebih dahulu."), { type: "info" });
+            return;
+        }
+        if (!method) {
             return;
         }
         if (efnIsOffline(this.pos)) {
             this.notification.add(_t("Tukar poin tidak tersedia saat POS offline."), { type: "warning" });
             return;
         }
-        // Nominal yang sama dipakai saat OTP & reserve (BFF membandingkan, amount_mismatch).
+        // K-18-2: total order TERMASUK pajak; nominal yang sama dipakai saat OTP & reserve.
         const amount = order.currency.round(order.priceIncl);
         const balance = await this.efnFetchBalance(partner);
         if (!balance) {
@@ -149,12 +226,16 @@ patch(PaymentScreen.prototype, {
             this.notification.add(reserve?.message || _t("Penukaran poin ditolak."), { type: "danger" });
             return;
         }
-        if (order.getPartner()?.id !== partner.id || !order.efnAddPointsLines(reserve.value_idr, reserve.points)) {
+        if (
+            order.getPartner()?.id !== partner.id ||
+            !order.efnAddPointsPayment(method, reserve.value_idr, reserve.points)
+        ) {
             // Order berubah selama proses: lepaskan reservasi agar poin pelanggan tidak tertahan.
             await callConfig(this.pos, "efn_loyalty_redeem_release", [order.uuid]).catch(() => {});
             this.notification.add(_t("Order berubah; penukaran poin dibatalkan."), { type: "warning" });
             return;
         }
+        this.efnReleasePointsSelection();
         this.notification.add(
             _t("%(points)s poin ditukar (%(value)s).", {
                 points: reserve.points,
@@ -166,7 +247,7 @@ patch(PaymentScreen.prototype, {
 
     async validateOrder(isForceValidate) {
         const order = this.currentOrder;
-        if (order?.efnHasActiveRedeem() && efnIsOffline(this.pos)) {
+        if (order?.efnPointsPayments().length && efnIsOffline(this.pos)) {
             const remove = await ask(this.dialog, {
                 title: _t("Tukar Poin EFN"),
                 body: _t(
@@ -176,9 +257,9 @@ patch(PaymentScreen.prototype, {
                 confirmLabel: _t("Hapus poin"),
                 cancelLabel: _t("Tunggu online"),
             });
-            if (remove) {
-                // Reservasi dilepas server saat order tersinkron tanpa baris poin.
-                order.efnRemovePointsLines();
+            if (remove && !order.isRefund) {
+                // Reservasi dilepas server saat order tersinkron tanpa pembayaran poin.
+                order.efnRemovePointsPayments();
             }
             return;
         }

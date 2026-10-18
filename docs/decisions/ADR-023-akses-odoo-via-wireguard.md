@@ -1,6 +1,7 @@
 # ADR-023: Akses Odoo Hanya via WireGuard + 2FA Wajib untuk User Internal
 
-- **Status:** Proposed
+- **Status:** Proposed — **usulan revisi terbatas di ADR-035 (Proposed, 10 Okt 2026; berlaku hanya setelah ADR-035 Accepted)**: satu pengecualian terkendali untuk **portal vendor** lewat `portal-gateway` terpisah (allowlist route portal, 2FA, WAF, rate limit, mTLS ke Odoo). Backend `/web`, `/odoo`, `/pos`, `/json/2`, `/xmlrpc` tetap **hanya** via WireGuard.
+  - **Keputusan pemilik proyek 10 Okt 2026 (Q-W1..Q-W4, Q-55, P-6):** klien WireGuard **di perangkat** (PC kasir, mini PC KDS, HP staf luar kantor) dipasang **IT internal**; OpenWrt **opsional**; **tidak ada user Odoo eksternal selain portal vendor** (ADR-035); internet outlet fiber + 4G cadangan (failover). Model perangkat & router masih dari IT klien.
 - **Tanggal:** 2026-10-05 (revisi 2026-10-06: opsi konektivitas outlet open source & biaya realistis, atas pertanyaan klien "tidak ada solusi open source?")
 - **Pemutus (klien):** IT + Operasional Outlet + Finance (biaya perangkat outlet)
 - **Referensi review:** SEC-01 (High), SEC-03, SEC-21, SEC-28, R-S03 (skor 20), R-T02, Q-55 (internet outlet)

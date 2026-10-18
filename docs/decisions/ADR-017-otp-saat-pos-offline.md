@@ -1,6 +1,6 @@
 # ADR-017: Perilaku OTP-Gated Promo saat POS Offline — Fitur Server Dinonaktifkan (Opsi a)
 
-- **Status:** Proposed
+- **Status:** **Accepted** — pemilik proyek, 2026-10-10 (sesi tanya-jawab via efn-lead, butir 5 "ADR Gelombang 1: Accepted semua"; nama & jabatan penandatangan dilengkapi klien di register keputusan). Sebelumnya: Proposed.
 - **Tanggal:** 2026-10-05
 - **Pemutus (klien):** PO + Operasional Outlet (SOP kasir) + Finance/Risk (toleransi fraud)
 - **Referensi review:** §3.2, R-T02 (skor 20), R-S04, R-B06, BRD §7.2 vs FSD-2.1

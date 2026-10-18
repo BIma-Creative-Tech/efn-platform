@@ -113,6 +113,8 @@ make_release() {
   cat > "$d/r/scripts/deploy.sh" <<'EOF'
 #!/usr/bin/env bash
 { env | grep -E '^(IMAGE_|APP_ENV=|EFN_RELEASE_|WHATSAPP_OTP_TEMPLATE=|EFN_WG_|EFN_PUBLIC_BIND=|COMPOSE_PROFILES=|TRAEFIK_DOMAIN=|PAYMENT_PROVIDER=|JWT_SECRET=)' | sort; } > /tmp/deploy-ran
+# SEC-120: kunci host bersama dipegang efn-deploy (fd 8 diwarisi) selama deploy.sh berjalan
+if flock -n /run/efn/deploy.lock true; then echo LOCK=free; else echo LOCK=held; fi >> /tmp/deploy-ran
 EOF
   local imgs
   imgs=$(for s in "${SVCS[@]}"; do v="IMAGE_$(echo "$s" | tr 'a-z-' 'A-Z_')"; printf '%s\t%s\n' "$v" "${PREFIX}${s}@sha256:$(dg "$s-1")"; done \
@@ -159,6 +161,7 @@ marker() { cat /opt/efn/compose/marker.txt 2> /dev/null || echo none; }
 # 1. Rilis sah seq 10 v1.2.0 -> deploy.sh jalan, IMAGE_* dari manifest, state tercatat
 make_release A 10 1.2.0; make_env A; run A; expect_ok "01 rilis sah diterima"
 if grep -q "IMAGE_ODOO=${PREFIX}odoo@sha256:$(dg odoo-1)" /tmp/deploy-ran 2> /dev/null; then ok "02 IMAGE_ODOO dari manifest"; else bad "02 IMAGE_ODOO dari manifest"; fi
+if grep -qx 'LOCK=held' /tmp/deploy-ran 2> /dev/null; then ok "02b kunci host /run/efn/deploy.lock dipegang selama deploy.sh (SEC-120)"; else bad "02b kunci host"; fi
 if grep -q '^seq=10$' /var/lib/efn/last-release && [[ "$(stat -c %a /var/lib/efn/last-release)" == 600 ]]; then
   ok "03 state last-release seq=10 (0600)"; else bad "03 state last-release"; fi
 # 2. Rilis yang sama di-deploy ulang (re-run job) -> diterima
@@ -251,9 +254,18 @@ neg_env "37 PAYMENT_PROVIDER lewat stdin ditolak" "variabel tidak diizinkan: PAY
 neg_env "38 secret multi-baris (injeksi .env) ditolak" "karakter kontrol" \
   "JWT_SECRET=$(printf 'abc\nIMAGE_ODOO=evil.example/odoo@sha256:%s' "$(dg evil)")"
 neg_env "39 secret dengan CR/ESC ditolak" "karakter kontrol" "JWT_SECRET=$(printf 'abc\r\033[2Jx')"
+# W-11: API key Odoo kanal online dikelola DI HOST (secrets.list host:*) -> tidak boleh datang dari stdin CI
+neg_env "110 ODOO_API_KEY_ONLINE_RTL lewat stdin ditolak (W-11, host:*)" "variabel tidak diizinkan: ODOO_API_KEY_ONLINE_RTL" \
+  "ODOO_API_KEY_ONLINE_RTL=0123456789abcdef0123456789abcdef01234567"
+# SEC-120 (L-25h): rotasi API key memegang kunci host -> efn-deploy menunggu lalu gagal, /opt/efn tidak disentuh
+install -d -m 0700 /run/efn; exec 6> /run/efn/deploy.lock; flock -n 6
+SEQ=$((SEQ + 1)); make_release "N$SEQ" "$SEQ" 1.3.0; make_env "N$SEQ"; EFN_DEPLOY_LOCK_WAIT=2 run "N$SEQ"
+expect_fail "110b kunci host dipegang rotasi -> deploy ditolak setelah menunggu (SEC-120)" "dipegang proses lain"
+exec 6>&-
 neg_man "40 config manifest multi-baris ditolak" "skema" '.config.RABBITMQ_STRICT_PERMISSIONS = "true\nIMAGE_ODOO=evil"'
 neg_man "41 kunci config manifest tidak dikenal ditolak" "skema" '.config.IMAGE_ODOO = "evil.example/odoo"'
 neg_man "101 saklar dev ODOO_ONLINE_MOCK di config manifest ditolak (G17)" "skema" '.config.ODOO_ONLINE_MOCK = "true"'
+neg_man "101b saklar dev ETL_AUDIT_EPOCH_AUTO di config manifest ditolak (G18)" "skema" '.config.ETL_AUDIT_EPOCH_AUTO = "true"'
 neg_man "42 manifest schema 1 (tanpa config) ditolak" "skema" '.schema = 1 | del(.config)'
 neg_man "43 config bukan string ditolak" "skema" '.config.ETL_ENABLE_GL = true'
 # shellcheck disable=SC2016 # literal $(id) disengaja
@@ -405,6 +417,43 @@ vc "106 pool 2+2 > maxconn 2 ditolak" 1 staging ODOO_RPC_MAXCONN=2 ODOO_RPC_PUBL
 vc "107 pool 2+2 = maxconn 4 diterima" 0 staging ODOO_RPC_MAXCONN=4 ODOO_RPC_PUBLIC_MAX_CONCURRENCY=2 ODOO_RPC_SAGA_MAX_CONCURRENCY=2
 vc "108 maxconn 1 dengan pool default 1+1 ditolak" 1 production ODOO_RPC_MAXCONN=1
 vc "109 pool 0 di luar rentang ditolak" 1 staging ODOO_RPC_SAGA_MAX_CONCURRENCY=0
+# W-18/W-19 (keputusan 10 Okt 2026): rentang env retensi baru
+vc "111 ERASURE_SUPPRESSION_DAYS=0 diterima (tidak disimpan)" 0 production ERASURE_SUPPRESSION_DAYS=0
+vc "112 ERASURE_SUPPRESSION_DAYS=365 diterima" 0 production ERASURE_SUPPRESSION_DAYS=365
+vc "113 ERASURE_SUPPRESSION_DAYS=731 ditolak" 1 production ERASURE_SUPPRESSION_DAYS=731
+vc "114 ERASURE_SUPPRESSION_DAYS=007 ditolak" 1 production ERASURE_SUPPRESSION_DAYS=007
+vc "115 ONLINE_ADMIN_AUDIT_RETENTION_DAYS=3650 diterima" 0 production ONLINE_ADMIN_AUDIT_RETENTION_DAYS=3650
+vc "116 ONLINE_ADMIN_AUDIT_RETENTION_DAYS=3651 ditolak" 1 production ONLINE_ADMIN_AUDIT_RETENTION_DAYS=3651
+vc "117 DSAR_OPEN_ORDER_MAX_DEFER_DAYS=15 ditolak (plafon 14)" 1 production DSAR_OPEN_ORDER_MAX_DEFER_DAYS=15
+vc "118 MEMBER_MIN_AGE=16 ditolak" 1 production MEMBER_MIN_AGE=16
+vc "119 PRICE_HUNTER_GEO_RETENTION_DAYS=90 diterima" 0 production PRICE_HUNTER_GEO_RETENTION_DAYS=90
+vc "120 CH 10 th / pseudonim 5 / geo 90 / Metabase 3650 diterima" 0 production CH_MART_RETENTION_YEARS=10 \
+  CH_PSEUDONYM_RETENTION_YEARS=5 CH_GEO_RETENTION_DAYS=90 MB_AUDIT_MAX_RETENTION_DAYS=3650
+vc "121 pseudonim > baris mart ditolak" 1 production CH_MART_RETENTION_YEARS=5 CH_PSEUDONYM_RETENTION_YEARS=6
+vc "122 pseudonim 11 > default mart 10 ditolak" 1 production CH_PSEUDONYM_RETENTION_YEARS=11
+vc "123 CH_MART_RETENTION_YEARS=31 ditolak" 1 production CH_MART_RETENTION_YEARS=31
+vc "124 MB_AUDIT_MAX_RETENTION_DAYS=20 ditolak (min 30)" 1 production MB_AUDIT_MAX_RETENTION_DAYS=20
+vc "125 production ETL_LOYALTY_POINTS_MODE=product ditolak (SEC-114)" 1 production ETL_LOYALTY_POINTS_MODE=product
+vc "126 staging ETL_LOYALTY_POINTS_MODE=product diterima (data historis)" 0 staging ETL_LOYALTY_POINTS_MODE=product
+vc "127 production ETL_LOYALTY_POINTS_MODE=payment diterima" 0 production ETL_LOYALTY_POINTS_MODE=payment
+vc "128 LOYALTY_RESTORE_TOLERANCE_PCT=0 diterima" 0 production LOYALTY_RESTORE_TOLERANCE_PCT=0
+vc "129 LOYALTY_RESTORE_TOLERANCE_PCT=51 ditolak" 1 production LOYALTY_RESTORE_TOLERANCE_PCT=51
+vc "130 LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS=3649 ditolak (min 10 th)" 1 production LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS=3649
+vc "131 LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS=3650 diterima" 0 production LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS=3650
+vc "131b production ETL_AUDIT_EPOCH_AUTO=true ditolak (dev saja, G18)" 1 production ETL_AUDIT_EPOCH_AUTO=true
+vc "131c staging ETL_AUDIT_EPOCH_AUTO=true ditolak (dev saja, G18)" 1 staging ETL_AUDIT_EPOCH_AUTO=true
+vc "131d ETL_AUDIT_EPOCH_ANCHORS=20 diterima" 0 production ETL_AUDIT_EPOCH_ANCHORS=20
+vc "131e ETL_AUDIT_EPOCH_ANCHORS=1001 ditolak" 1 production ETL_AUDIT_EPOCH_ANCHORS=1001
+# SEC-129 (r11): modul Odoo wajib (efn_pos_refund_origin) harus `installed`
+mods() { printf '%b' "$1" | efn_odoo_modules_missing > /dev/null; }
+u "132 modul wajib installed -> lulus (SEC-129)" 0 mods 'efn_pos_refund_origin|installed\n'
+u "133 modul wajib uninstalled -> deploy gagal" 1 mods 'efn_pos_refund_origin|uninstalled\n'
+u "134 modul wajib 'to upgrade' -> deploy gagal" 1 mods 'efn_pos_refund_origin|to upgrade\n'
+u "135 modul wajib tidak ada di ir_module_module -> deploy gagal" 1 mods 'efn_core|installed\n'
+u "136 keluaran psql kosong -> deploy gagal (fail-closed)" 1 mods ''
+u "137 baris CRLF/spasi tetap dikenali" 0 mods 'efn_pos_refund_origin|installed\r\n'
+if [[ "$(printf 'efn_pos_refund_origin|to install\n' | efn_odoo_modules_missing)" == "efn_pos_refund_origin=to install" ]]; then
+  ok "138 pesan menyebut modul + state"; else bad "138 pesan modul"; fi
 
 echo "RINGKASAN efn-deploy: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]

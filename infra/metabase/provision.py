@@ -9,6 +9,9 @@ Idempoten: aman dijalankan berulang (deploy/CI). Membuat atau memperbarui:
   3. collection `EFN Fase 1`;
   4. dashboard dari `dashboards/*.json` — kartu SQL native yang HANYA membaca view `efn_dwh.v_*` (semantic layer),
      filter tanggal/PT/outlet sebagai variabel template.
+  5. (G18/W-19) akun yang tidak login > `--deactivate-inactive-days` (default 90) dinonaktifkan; `--housekeeping-only`
+     untuk timer harian. Riwayat query (`query_execution`) 10 th TIDAK bisa diatur lewat API: setting internal
+     `audit-max-retention-days` hanya dari env `MB_AUDIT_MAX_RETENTION_DAYS` service metabase (README).
 
 Transport: HTTPS ke Metabase lewat Traefik (`https://bi.<domain>`, entrypoint wg-https, allowlist subnet staf),
 sertifikat server diverifikasi (CA sistem atau `--ca-file`); mTLS opsional
@@ -35,6 +38,7 @@ import ssl
 import sys
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -274,6 +278,40 @@ def clickhouse_details(
     }
 
 
+def parse_ts(value: Any) -> datetime | None:
+    """Timestamp ISO Metabase (`2026-10-10T10:03:55.6038Z`) -> datetime UTC aware. Kosong/tidak valid = None."""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def inactive_users(users: list[dict[str, Any]], now: datetime, days: int, keep_ids: set[int]) -> list[dict[str, Any]]:
+    """Akun aktif yang tidak login > `days` hari (G18/W-19, kebijakan akun tidak aktif 90 h).
+
+    Acuan = `last_login`; akun yang belum pernah login memakai `date_joined` (undangan lama yang tidak dipakai ikut
+    dinonaktifkan). Akun di `keep_ids` (admin provisioning yang sedang login) tidak pernah dinonaktifkan, sehingga
+    selalu tersisa minimal satu superuser aktif. Timestamp tak terbaca = dilewati (fail safe, bukan menonaktifkan).
+    """
+    if days <= 0:
+        return []
+    cutoff = now - timedelta(days=days)
+    result: list[dict[str, Any]] = []
+    for user in users:
+        if not user.get("is_active", True) or int(user.get("id", 0)) in keep_ids:
+            continue
+        # Hanya akun orang (bukan akun internal/API key bila versi Metabase mengembalikannya).
+        if user.get("type") not in (None, "personal"):
+            continue
+        reference = parse_ts(user.get("last_login")) or parse_ts(user.get("date_joined"))
+        if reference is not None and reference < cutoff:
+            result.append(user)
+    return result
+
+
 def load_dashboards(directory: Path) -> list[DashboardDef]:
     dashboards = [parse_dashboard(json.loads(p.read_text(encoding="utf-8"))) for p in sorted(directory.glob("*.json"))]
     if len({d.key for d in dashboards}) != len(dashboards):
@@ -469,6 +507,23 @@ def provision_dashboard(client: MetabaseClient, dash: DashboardDef, database_id:
     return dashboard_id
 
 
+def deactivate_inactive_users(client: MetabaseClient, days: int, now: datetime | None = None) -> int:
+    """Nonaktifkan (bukan hapus) akun Metabase tidak aktif > `days` hari. Metabase OSS 0.58 tidak punya fitur
+    bawaan untuk ini; `DELETE /api/user/:id` = deactivate (riwayat & konten akun tetap, bisa diaktifkan ulang admin
+    lewat Admin > People). Log hanya id user (email = data pribadi, tidak dicetak)."""
+    if days <= 0:
+        return 0
+    current = client.request("GET", "/api/user/current")
+    listing = client.request("GET", "/api/user")
+    users = listing.get("data", []) if isinstance(listing, dict) else list(listing)
+    targets = inactive_users(users, now or datetime.now(UTC), days, {int(current["id"])})
+    for user in targets:
+        client.request("DELETE", f"/api/user/{int(user['id'])}", expect=(200, 204))
+    ids = ",".join(str(int(u["id"])) for u in targets) or "-"
+    print(f"akun tidak aktif > {days} hari dinonaktifkan: {len(targets)} (id: {ids})")
+    return len(targets)
+
+
 def verify_cards(client: MetabaseClient, collection_id: int) -> int:
     """Jalankan setiap kartu EFN sekali (tanpa filter). Gagal = exit != 0."""
     failures = 0
@@ -500,12 +555,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ch-ca-path", default="/run/secrets/efn_ca_crt", help="path CA DI DALAM container Metabase")
     parser.add_argument("--dashboards", default=str(Path(__file__).resolve().parent / "dashboards"))
     parser.add_argument("--no-verify-cards", action="store_true", help="lewati eksekusi uji setiap kartu")
+    parser.add_argument(
+        "--deactivate-inactive-days",
+        type=int,
+        default=90,
+        help="nonaktifkan akun yang tidak login > N hari (G18/W-19; default 90, 0 = mati)",
+    )
+    parser.add_argument(
+        "--housekeeping-only",
+        action="store_true",
+        help="hanya login + nonaktifkan akun tidak aktif (untuk timer harian; tanpa dashboard/koneksi)",
+    )
     args = parser.parse_args(argv)
+    if not 0 <= args.deactivate_inactive_days <= 3650:
+        parser.error("--deactivate-inactive-days di luar rentang 0..3650")
 
     try:
         dashboards = load_dashboards(Path(args.dashboards))
         client = MetabaseClient(args.url, args.ca_file, args.client_cert, args.client_key, args.connect_host)
         login_or_setup(client, args.admin_email, read_secret_file(args.admin_password_file))
+        deactivate_inactive_users(client, args.deactivate_inactive_days)
+        if args.housekeeping_only:
+            return 0
         apply_settings(client)
         ch_password = read_secret_file(args.ch_password_file)
         details = clickhouse_details(ch_password, args.ch_host, args.ch_port, args.ch_ca_path)

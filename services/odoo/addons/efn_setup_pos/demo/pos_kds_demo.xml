@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO W-22 (Gelombang 18) — stasiun KDS outlet pilot F&B (patokan Paris Baguette / kafe Bacha, PT F&B):
+     keputusan pemilik proyek 10 Okt 2026 #14 (P-13/Q-19): stasiun Bakery/Pastry + Bar Kopi, warn 5 / late 10
+     menit, TANPA expo, retensi tiket 90 h (parameter efn_pos_kds). Hanya DB demo: kategori menu & printer nyata per
+     outlet dibuat admin (README checklist F&B, langkah 11-13), pos.config tidak dibuat lewat XML.
+     Field terverifikasi efn_pos_kds/models/efn_kds_station.py; pos.printer (point_of_sale 19.0). IP printer =
+     blok dokumentasi RFC 5737 (PLACEHOLDER). -->
+<odoo>
+    <record id="pos_categ_bakery_pastry" model="pos.category">
+        <field name="name">Bakery / Pastry</field>
+        <field name="sequence">30</field>
+    </record>
+    <record id="pos_categ_coffee_bar" model="pos.category">
+        <field name="name">Bar Kopi</field>
+        <field name="sequence">40</field>
+    </record>
+
+    <record id="pos_printer_bakery" model="pos.printer">
+        <field name="name">Printer Bakery/Pastry (DEMO)</field>
+        <field name="printer_type">epson_epos</field>
+        <field name="epson_printer_ip">192.0.2.12</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="product_categories_ids" eval="[(6, 0, [ref('pos_categ_bakery_pastry')])]"/>
+    </record>
+    <record id="pos_printer_coffee_bar" model="pos.printer">
+        <field name="name">Printer Bar Kopi (DEMO)</field>
+        <field name="printer_type">epson_epos</field>
+        <field name="epson_printer_ip">192.0.2.13</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="product_categories_ids" eval="[(6, 0, [ref('pos_categ_coffee_bar')])]"/>
+    </record>
+
+    <record id="kds_station_bakery_pastry" model="efn.kds.station">
+        <field name="name">Bakery / Pastry (DEMO)</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="sequence">10</field>
+        <field name="mode">kds_printer</field>
+        <field name="category_ids" eval="[(6, 0, [ref('pos_categ_bakery_pastry')])]"/>
+        <field name="fallback_printer_id" ref="pos_printer_bakery"/>
+        <field name="warn_minutes">5</field>
+        <field name="late_minutes">10</field>
+    </record>
+    <record id="kds_station_coffee_bar" model="efn.kds.station">
+        <field name="name">Bar Kopi (DEMO)</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="sequence">20</field>
+        <field name="mode">kds_printer</field>
+        <field name="category_ids" eval="[(6, 0, [ref('pos_categ_coffee_bar')])]"/>
+        <field name="fallback_printer_id" ref="pos_printer_coffee_bar"/>
+        <field name="warn_minutes">5</field>
+        <field name="late_minutes">10</field>
+    </record>
+
+    <!-- "Tanpa expo" (#14): stasiun expo demo milik efn_pos_kds diarsipkan di DB demo pilot. -->
+    <record id="efn_pos_kds.demo_station_expo" model="efn.kds.station">
+        <field name="active" eval="False"/>
+    </record>
+</odoo>

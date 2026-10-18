@@ -461,3 +461,81 @@ Daftar data pribadi kini mencakup belanja online. Tambahan data pribadinya kecil
   - nomor pasal UU PDP;
   - estimasi Q-ON7 ±1–2 minggu (kasar);
   - tidak ada kode/test yang saya jalankan.
+
+---
+
+# Gelombang 18 — Pencatatan keputusan pemilik proyek 10 Okt 2026 (2026-10-10)
+
+- **Lingkup tulis:** hanya `docs/`. Tidak ada kode yang diubah; tidak ada commit/push.
+
+## Ringkasan (untuk manajemen)
+Pemilik proyek menjawab semua pertanyaan terbuka (60 butir). Semua jawaban dicatat per ID beserta dampaknya. **8 ADR kini Accepted** (Gelombang 1 + ADR-032 opsi B). Satu ADR baru (**ADR-035**, portal) menunggu tanda tangan. Ada **5 risiko baru**, dan inventaris UU PDP naik ke **v7**. Jawaban memunculkan **28 paket kerja** (±52–79 minggu-engineer). Urutan yang direkomendasikan: pilot ritel dulu (G18–G19), F&B (G20), lalu produksi penuh (G21+).
+
+## File dibuat / diubah
+| File | Perubahan |
+|---|---|
+| `docs/decisions/README.md` | Pembaruan G18 di kepala; indeks: 8 Accepted, catatan 10 Okt di 019/020/022/023/027/030/031/033/034, baris ADR-035; urutan tanda tangan per 10 Okt; bagian baru **"Keputusan pemilik proyek 10 Okt 2026 (sesi tanya-jawab)"** (A–F per ID + G "masih menunggu data klien"); semua tabel pertanyaan lama dicoret "terjawab 10 Okt"; catatan pembaruan di syarat GO loyalty/KDS/aktivasi online |
+| `ADR-001, 004, 005, 013, 017, 018, 021` | Status **Accepted** (pemilik proyek, 2026-10-10) + catatan penerimaan (001, 004, 005, 013) |
+| `ADR-032` | **Accepted — opsi B**; bagian keputusan Q-QR1..Q-QR5 |
+| `ADR-019`, `ADR-027` | Catatan 10 Okt (Q-ON9; nilai awal PB1/SC + ⚠ PBJT non-dine-in); status tetap Proposed |
+| `ADR-020`, `ADR-022`, `ADR-023`, `ADR-030`, `ADR-031`, `ADR-033`, `ADR-034` | Catatan keputusan 10 Okt di kepala (status tidak dinaikkan kecuali rincian ADR-031 = "diputuskan") |
+| `ADR-035-strategi-portal-pelanggan-vendor-franchisee-karyawan.md` | **Baru (Proposed)** |
+| `docs/01_REVIEW_RISK_GAP_ANALYSIS.md` | Risiko baru **R-B11, R-T17, R-L09, R-L10, R-S15**; R-T15 & R-L04 diperbarui |
+| `docs/compliance/PDP_DATA_INVENTORY.md` | **v7**: §0a keputusan DPO/retensi + status kode, kategori baru (rencana), §2.2d PII baru di Odoo & portal, §2.7 transfer, matriks §3, §4 dijawab, §5/§6 |
+| `docs/10_RENCANA_GELOMBANG_18_PLUS.md` | **Baru**: 28 paket kerja (W-01..W-28), estimasi, urutan gelombang, alasan |
+| `docs/STATUS_MANAJEMEN.md` | Ditulis ulang per keputusan 10 Okt |
+
+## Keputusan yang butuh tanda tangan / konfirmasi
+- **ADR-035** (IT + Security + PO), termasuk revisi terbatas ADR-023.
+- Formalitas status ADR-030 (IT + Security). Jawaban bisnis sudah ada.
+- **Penafsiran yang harus dikonfirmasi lead/Finance:**
+  - Q-P7 vs Q-6: baris DWH disimpan 10 th, kolom pseudonim 5 th.
+  - Q-V3 = `efn_account_reports` (opsi b).
+  - Q-P18: setelah 14 hari erasure tetap jalan.
+- **Keputusan lead/PO:**
+  - apakah pilot ritel menunggu W-08 (enkripsi PII Odoo) atau berjalan dengan pengecualian sementara;
+  - apakah F&B online benar-benar dijalankan bersamaan dengan pilot ritel.
+
+## Temuan saat menulis
+1. `ONLINE_ADMIN_AUDIT_RETENTION_DAYS` **sudah** punya job (default 400, maks 3650), sehingga inventaris v6 yang menyebut "tak terbatas" sudah usang. v7 sudah mengoreksinya.
+2. Batas atas `ONLINE_PAYMENT_TIMEOUT_SECONDS` di `app-config.ts` = 3600, pas untuk keputusan 1 jam. Bila kelak butuh margin di atas 60 menit, batas config harus dinaikkan.
+3. `ERASURE_SUPPRESSION_DAYS` maks 730, jadi 365 tidak perlu perubahan validasi.
+4. Q-P21 + Q-E3 bertabrakan dengan pencarian standar Odoo (NPWP/HP terenkripsi tidak bisa dicari teks bebas). Butuh *blind index* dan fit-gap e-Faktur sebelum W-06.
+5. P-12 "selain dine-in tidak dikenakan pajak" berisiko terhadap UU HKPD (R-L09). Usulan default konservatif menunggu Finance.
+6. Dengan portal vendor, biaya 2FA `all_required` (penghalang ADR-033 opsi B) hilang. Ada risiko baru: user *share* KDS bisa login di host portal. Penangkalnya `efn_portal_guard` berbasis grup.
+
+## Terverifikasi / belum terverifikasi
+- **Dibaca di repo:**
+  - `app-config.ts` (default retensi & timeout);
+  - `online-jobs.service.ts` (job audit admin);
+  - `clickhouse-init.sh` (TTL `RETENTION_YEARS`);
+  - `docs/04` §9.3 (redeem = baris diskon);
+  - `docs/08` §6.5–6.6, §7.6, §8.6–8.7;
+  - ADR terkait.
+- **Belum terverifikasi:**
+  - semua estimasi (perkiraan kasar, tanpa fit-gap);
+  - route portal vendor CE 19.0;
+  - `auth_totp.policy=all_required` untuk portal di runtime;
+  - Coraza/OWASP CRS di HAProxy repo;
+  - fitur langganan/embedding Metabase OSS v0.58;
+  - TTL kolom ClickHouse pada tabel yang ada;
+  - pemodelan service charge sebagai pajak dengan `include_base_amount` di POS 19;
+  - aturan PBJT takeaway per Perda (wajib konsultan);
+  - nomor pasal UU PDP.
+
+## Gelombang 18 — lanjutan: kontrak privasi L-21, runbook erasure paksa, status PDP v7 (2026-10-10)
+Sumber: laporan efn-bff-engineer dan efn-data-ai-engineer, bagian Gelombang 18. Hanya dokumen; tidak ada commit.
+
+| File | Perubahan |
+|---|---|
+| `docs/04_SERVICE_CONTRACTS.md` | Header v5.1. Isi kontrak baru: L-21 di §10.17, yaitu (a) hapus akun 409 → `?confirm_open_orders=true` → 202 `erasure_deadline`, tunda maks 14 h, eskalasi hari 3/10, lalu erasure paksa; (b) `age_confirmed` 17+; (c) `source_ref` opak; (d) migrasi 08 + env; (e) teks pelanggan menunggu Legal. Penempatan: §3.2 (`age_confirmed`), §8.9 (alur hapus akun), §9.6 setelah K-7 (`source_ref`). §10.8.3: judul "diputuskan 10 Okt", cart dihapus saat erasure, alur DSAR baru. L-4 ditandai "diganti L-21a" |
+| `docs/runbooks/online-orders.md` | Bagian baru `#erasure-paksa`: sinyal hari 3/10/14, `online-erasure-pending` → `online-refund --full` (approver menyetujui) / `online-resolve` (cancel hanya approver) / serah terima setelah verifikasi kanal lain. Kode ambil tidak pernah ditampilkan ke CS. Catatan: subcommand wrapper belum ada |
+| `docs/compliance/PDP_DATA_INVENTORY.md` | §0a "Status kode" diperbarui: Q-P3, P7/6/49, P8, P12, P13, P14 (Metabase), P17 (koreksi: hapus cart sudah sejak G17), P18, P19 = sudah di kode G18. Baris §2.1/§2.4/§3, ringkasan v7, §5 ikut diperbarui. Teks pelanggan ditandai menunggu Legal |
+| `docs/decisions/README.md` | Koreksi baris Q-P17 (hapus cart sudah ada) |
+
+**Belum:**
+- Outbox Odoo GC 10 th dan W-17.
+- Subcommand wrapper `erasure-pending` (devsecops).
+- Smoke E2E BFF G18.
+- Pernyataan usia untuk pendaftaran via kasir POS.
+- `.env` dev lokal masih `CH_MART_RETENTION_YEARS=5`.

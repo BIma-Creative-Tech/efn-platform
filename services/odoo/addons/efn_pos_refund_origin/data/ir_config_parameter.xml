@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- E-31: retur tanpa struk (Q-F18-5, default L-23): "cash" = hanya tunai | "deny" = ditolak. -->
+<odoo noupdate="1">
+    <record id="param_unlinked_return_mode" model="ir.config_parameter">
+        <field name="key">efn.pos.refund.unlinked_return_mode</field>
+        <field name="value">cash</field>
+    </record>
+</odoo>

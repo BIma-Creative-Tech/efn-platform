@@ -8,7 +8,7 @@ Kontrak: `docs/04_SERVICE_CONTRACTS.md` §8.6 (keputusan user: **kunci hanya dip
 
 | Kunci | Bentuk | Lokasi kerja | Salinan cadangan | Bila hilang |
 |---|---|---|---|---|
-| Root CA (`root.key`) | ECDSA P-256, terenkripsi passphrase | **Offline** (media terenkripsi Superadmin). Tidak pernah di server/CI | 2 salinan tersegel (*rekomendasi*) | Tidak bisa menerbitkan intermediate → root baru + distribusi bundle |
+| Root CA (`root.key`) | ECDSA P-256, terenkripsi passphrase | **Offline** (media terenkripsi Superadmin). Tidak pernah di server/CI | Paket tersegel di **brankas Direksi** (§8, keputusan 10 Okt 2026) | Tidak bisa menerbitkan intermediate → root baru + distribusi bundle |
 | Intermediate CA per lingkungan | ECDSA P-256 | GitHub Environment `EFN_PKI_INTERMEDIATE_KEY` → tmpfs host **hanya selama deploy** (`/dev/shm`, dihancurkan) | Tidak perlu (terbitkan ulang dari root) | Terbitkan intermediate baru |
 | `pii_encryption_key*` | 32 byte | GitHub Environment → `/opt/efn/secrets` → BFF | **Wajib** offline | Data PII tidak terbaca permanen |
 | `walg_libsodium_key` | 32 byte | idem → postgres | **Wajib** offline | Backup tidak bisa dipulihkan |
@@ -31,7 +31,7 @@ Secret operasional lain (password service, token WhatsApp, kunci API payment, to
   saksi Finance/Internal Audit — prosedur & perintah: [online-orders.md#sec-111](online-orders.md#sec-111). Superadmin
   sendiri sebaiknya tidak menjadi approver refund rutin (pemegang root dapat melewati wrapper); bila terpaksa, setiap
   persetujuan oleh Superadmin dicatat di register dan diperiksa Finance.
-- *Rekomendasi (bukan keputusan)*: **minimal 2 orang** berperan Superadmin (mencegah *single point of failure* manusia; satu orang sakit/keluar = kunci tidak dapat diakses). Akses ke salinan tersegel memakai prinsip dua orang.
+- **Diputuskan pemilik proyek 10 Okt 2026 (Q-E1a/b/c): 1 orang Superadmin**, salinan offline tersegel di **brankas Direksi**, tanpa Shamir; bus factor 1 **diterima** (risiko **R-B11**). Mitigasi = §8 (paket segel, log brankas, uji pemulihan disaksikan, prosedur bila Superadmin tidak tersedia). Pembukaan brankas tetap prinsip **dua orang** (Direksi + saksi).
 
 ## 3. GitHub
 
@@ -252,16 +252,142 @@ Kirim log audit ke penyimpanan terpisah dari host (mis. Loki dengan retensi 1 ta
    ```
    Skrip menolak berjalan di server (`/opt/efn` ada).
 2. Unggah keluaran ke Environment terkait (perintah dicetak skrip), lalu `shred -u` kunci intermediate lokal.
-3. Salin `~/efn-pki-root` ke 2 media terenkripsi, segel, simpan terpisah (*rekomendasi*: brankas kantor + bank). Catat sidik jari SHA-256 root di register kunci.
+3. Salin `~/efn-pki-root` ke media paket segel brankas Direksi (§8). Catat sidik jari SHA-256 root di register kunci.
 4. Intermediate berlaku 2 tahun (alert metrik `efn_ca_crt_0`); terbitkan ulang ≥ 60 hari sebelum kedaluwarsa. Menambah service baru di `PKI_SERVICES` juga butuh intermediate baru (nameConstraints).
 
 ## 6. Break-glass (Superadmin tidak tersedia, insiden produksi)
 
 Hanya bila ada insiden aktif yang mengancam layanan/data dan **tidak ada** Superadmin yang dapat dihubungi dalam waktu yang ditetapkan klien.
-1. Dua pejabat yang ditunjuk klien (mis. Direktur + Head IT) membuka salinan tersegel bersama-sama; catat waktu, alasan, saksi di register.
+1. Ikuti §8.5 (Superadmin tidak tersedia): dua pejabat (Direksi pemegang brankas + saksi Internal Audit/Head IT) membuka paket segel bersama-sama; catat di log brankas (§8.3).
 2. Gunakan akses minimum (mis. hanya `walg_libsodium_key` untuk restore).
 3. Setelah insiden: rotasi semua secret yang tersentuh ([secret-rotation.md](secret-rotation.md)), segel ulang, review dalam 5 hari kerja.
 4. Akun break-glass GitHub (bila ada) memakai 2FA hardware key, disimpan di salinan tersegel, diaudit lewat GitHub audit log.
 
 ## 7. Pewarisan / pergantian Superadmin
 Superadmin baru ditambahkan **sebelum** yang lama keluar: tambah ke grup host + reviewer Environment + admin repo; serah terima salinan tersegel (berita acara); cabut akses yang lama (grup, sudo, GitHub, WireGuard peer); rotasi passphrase root CA (`openssl pkey -in root.key -aes-256-cbc -out root.key.new`) dan secret yang pernah dilihat.
+Dengan 1 Superadmin (keputusan 10 Okt 2026) serah terima memakai paket brankas (§8): paket baru dibuat oleh Superadmin
+baru (§8.4), paket lama dimusnahkan disaksikan.
+
+## 8. Paket segel brankas Direksi — 1 Superadmin (W-28, R-B11) {#brankas-direksi}
+
+Keputusan pemilik proyek 10 Okt 2026 (Q-E1a/b/c): **1 Superadmin**, salinan offline **tersegel di brankas Direksi**,
+**tanpa Shamir**; bus factor 1 diterima (R-B11, ADR-022 §Kustodi). Bagian ini membuat mitigasi yang tersisa bisa
+dijalankan oleh orang lain **hanya dengan runbook ini + isi brankas**. Butir *Rekomendasi* = saran konsultan, bukan
+keputusan.
+
+> **Ringkas untuk manajemen.** Semua kunci yang bila hilang berarti data hilang disimpan dalam satu paket terenkripsi
+> bersegel di brankas Direksi. Kata sandi pembukanya ada di amplop terpisah. Setiap pembukaan brankas dicatat dan
+> disaksikan. Dua kali setahun paket diuji dengan benar-benar memulihkan backup, disaksikan Direksi/Internal Audit.
+> Bila Superadmin tidak tersedia, Direksi menunjuk pengganti sementara dan membuka paket bersama saksi.
+
+### 8.1 Isi paket
+
+**Paket A — media terenkripsi** (2 flashdisk berbeda merek berisi arsip yang sama, mitigasi media rusak):
+arsip `efn-vault-<YYYYMMDD>.tar.age` dienkripsi **passphrase P-A** (≥ 6 kata diceware). Isi:
+
+| Isi | Sumber | Catatan |
+|---|---|---|
+| `~/efn-pki-root/` (`root.key` terenkripsi **passphrase root**, `root.crt`) | mesin offline §5 | Passphrase root **tidak** di paket A (lapis kedua) |
+| `pii_encryption_key*` (semua versi key ring yang masih dipakai data) | GitHub Environment `production` | Hilang = PII tidak terbaca permanen |
+| `walg_libsodium_key` (+ versi lama selama backup lama dalam retensi) | idem | Hilang = backup tidak bisa dipulihkan |
+| `minio_kms_key`, `clickhouse_disk_key`, `metabase_encryption_key` | idem | |
+| `otp_pepper`, `efn_audit_sink_key` | idem | `member_hash_pepper` diturunkan ulang dari `otp_pepper` |
+| Passphrase pemulihan LUKS per node + `cryptsetup luksHeaderBackup` per node | host ([luks-disk.md](luks-disk.md)) | Tanpa header backup, header rusak = disk hilang |
+| Kode pemulihan 2FA akun GitHub Superadmin/owner organisasi, kunci SSH break-glass host | GitHub / host | Akses ke Environment & host tanpa Superadmin |
+| Ciphertext kanari PII + SHA-256 plaintext-nya (§8.5 butir 5) | dibuat saat pengemasan | Bukan data pribadi nyata |
+| `register-kunci.sha256`: nama, versi, **SHA-256 tiap file kunci** (bukan nilai), sidik jari root CA, nomor segel | dibuat saat pengemasan | Juga dicetak di berita acara |
+
+**Tidak** dimasukkan (dapat dibuat ulang tanpa kehilangan data): kunci intermediate CA (terbitkan ulang dari root),
+sertifikat leaf, password DB/broker per service (rotasi lewat deploy), API key Odoo kanal online (rotasi otomatis 30
+hari, [odoo-online-api-key.md](odoo-online-api-key.md)), token payment/WhatsApp/ACME (terbitkan ulang di vendor).
+
+**Amplop B — passphrase** (kertas, ditulis tangan / dicetak dari mesin offline): P-A dan passphrase root CA, **disegel
+terpisah** dengan nomor segel berbeda. Default (keputusan: satu lokasi): amplop B di brankas yang sama, kompartemen
+terpisah. *Rekomendasi* (biaya ±Rp0–1 jt/tahun): simpan amplop B di lokasi kedua (direktur lain / safe deposit bank /
+notaris) agar satu pembobolan brankas tidak membuka semuanya — perlu persetujuan Direksi.
+
+### 8.2 Membuat & menyegel paket (Superadmin, mesin offline §5, disaksikan 1 anggota Direksi)
+
+```bash
+# mesin offline (LUKS, tanpa jaringan). Alat open source: age (alternatif: gpg --symmetric --cipher-algo AES256)
+umask 077; mkdir -p ~/vault && cd ~/vault        # salin file kunci dari sumbernya (bukan lewat chat/email)
+sha256sum -- * > register-kunci.sha256            # hash tiap file -> register (nilai TIDAK dicetak)
+tar -cf - . | age -p -o /media/usb1/efn-vault-$(date +%Y%m%d).tar.age   # passphrase P-A (diketik, tidak disimpan)
+cp /media/usb1/efn-vault-*.tar.age /media/usb2/ && sha256sum /media/usb*/efn-vault-*.tar.age
+age -d /media/usb2/efn-vault-*.tar.age | tar -tf - > /dev/null && echo "arsip dapat dibuka"   # uji sebelum segel
+cd ~ && find ~/vault -type f -exec shred -u {} + && rmdir ~/vault
+```
+
+1. Flashdisk 1+2 + cetakan `register-kunci.sha256` → **kantong segel tamper-evident bernomor seri** (Paket A). Amplop B
+   → kantong segel kedua. Foto kedua kantong (nomor seri terlihat).
+2. **Berita acara** (2 rangkap, tanda tangan Superadmin + saksi Direksi): tanggal, nomor segel A/B, SHA-256 arsip,
+   daftar isi (nama + versi kunci, **tanpa nilai**), alasan (pembuatan awal / pembaruan / pasca break-glass).
+3. Masukkan kedua kantong ke brankas Direksi, isi **log brankas** (§8.3). Rangkap kedua berita acara disimpan Internal
+   Audit.
+
+### 8.3 Log akses brankas
+
+Buku log fisik di samping brankas + salinan di register Internal Audit (di luar repo). Setiap pembukaan:
+
+| Tanggal & jam | Pembuka (nama, jabatan) | Saksi | Alasan (uji / pembaruan / break-glass / pemeriksaan) | No. segel sebelum | Utuh? | No. segel sesudah | Paraf |
+|---|---|---|---|---|---|---|---|
+
+- Pembukaan **selalu dua orang** (pemegang brankas Direksi + saksi). Superadmin sendirian tidak membuka brankas.
+- **Pemeriksaan segel kuartalan** oleh Internal Audit (tanpa membuka kantong): nomor seri = log terakhir, kantong utuh.
+  Nomor tidak cocok / kantong rusak = **insiden keamanan** ([security-incident.md](security-incident.md)): anggap semua
+  kunci di paket bocor → rotasi semua yang dapat dirotasi ([secret-rotation.md](secret-rotation.md)), paket baru.
+
+### 8.4 Pembaruan paket
+
+Buat paket baru (§8.2) dan **musnahkan** paket lama disaksikan (hancurkan fisik flashdisk, catat di log) bila: kunci
+di §8.1 dirotasi/ditambah (versi `pii_encryption_key` baru, node LUKS baru, rotasi `walg_libsodium_key` — versi lama
+tetap disimpan selama backup lama dalam retensi), passphrase root diganti, pergantian Superadmin (§7), atau setelah
+break-glass/uji yang membuka segel.
+
+### 8.5 Uji pemulihan disaksikan (2×/tahun, R-B11) {#uji-pemulihan}
+
+Tujuan: membuktikan paket **lengkap dan dapat dipakai oleh orang selain Superadmin**. *Rekomendasi*: langkah teknis
+dijalankan staf IT lain (Superadmin hanya mengamati) — menguji mitigasi bus factor yang sebenarnya. Disaksikan Direksi
++ Internal Audit; hasil per butir (lulus/gagal) masuk berita acara.
+
+1. Buka brankas (§8.3), periksa nomor segel, buka kantong A dan B.
+2. Di mesin offline: dekripsi arsip dari flashdisk 1 atau 2 (bergantian tiap semester);
+   `sha256sum -c register-kunci.sha256` → semua `OK`.
+3. Root CA: `openssl pkey -in root.key -noout` dengan passphrase root; sidik jari `root.crt` = `EFN_PKI_ROOT_SHA256`
+   di `/etc/efn/deploy.conf` host.
+4. Backup: restore test ([backup-restore.md](backup-restore.md)) memakai `walg_libsodium_key` **dari paket** (bukan
+   dari `/opt/efn/secrets`) ke container sementara → verifikasi lulus.
+5. PII: dekripsi ciphertext kanari dengan `pii_encryption_key` paket → SHA-256 plaintext cocok.
+6. LUKS: `cryptsetup luksOpen --test-passphrase <header-backup>` dengan passphrase paket, untuk tiap node.
+7. GitHub: kode pemulihan masih berlaku (cek jumlah tersisa di pengaturan akun, tanpa memakainya).
+8. Hancurkan salinan kerja di mesin offline (`shred`), segel ulang dengan **kantong baru** (nomor baru), log brankas,
+   berita acara. Butir gagal → perbaiki ≤ 5 hari kerja + paket baru (§8.4).
+
+### 8.6 Superadmin tidak tersedia {#superadmin-tidak-tersedia}
+
+**Pemicu** (diputuskan Direksi, dicatat): insiden produksi P1 dan Superadmin tidak terjangkau dalam **4 jam** (selaras
+RTO 4 jam, R-T08); sakit/cuti panjang > 2 minggu; atau berhenti/meninggal.
+
+1. Direksi menunjuk **Superadmin sementara** (default Head IT) secara tertulis.
+2. Buka brankas dua orang (§8.3); setiap pembukaan break-glass diberitahukan ke seluruh Direksi + Internal Audit pada
+   hari yang sama (tidak ada pembukaan diam-diam).
+3. Ambil **seminimal mungkin** (mis. hanya `walg_libsodium_key` untuk restore; kode pemulihan GitHub hanya bila perlu
+   mengubah Environment). Akses host: kunci SSH break-glass → `sudo` (grup `efn-superadmin`).
+4. Pulihkan layanan dengan runbook terkait ([backup-restore.md](backup-restore.md), [luks-disk.md](luks-disk.md),
+   [internal-pki.md](internal-pki.md), [odoo-online-api-key.md](odoo-online-api-key.md)).
+5. Setelah stabil (≤ 5 hari kerja): bila Superadmin lama tidak kembali → §7; rotasi semua kunci yang tersentuh dan
+   yang pernah dilihat pemegang sementara; paket baru (§8.4); review insiden.
+
+### 8.7 Opsi masa depan: Shamir (tidak diwajibkan)
+
+Shamir *secret sharing* (mis. 2-dari-3: Superadmin, Direksi, Internal Audit/notaris): tidak ada satu pihak yang bisa
+membuka paket sendiri, dan satu pihak hilang tidak menghilangkan kunci. Alat open source tersedia (mis. `ssss`).
+**Tidak dipilih** pemilik proyek (10 Okt 2026). *Rekomendasi*: tinjau ulang sebelum go-live publik, saat Superadmin
+cuti panjang, atau bila auditor eksternal mensyaratkan pemisahan kendali. Peralihan cukup mengganti amplop B
+(passphrase P-A) dengan share Shamir — paket A tidak berubah.
+
+### 8.8 Belum
+
+- Nama Superadmin, pemegang brankas Direksi, dan saksi belum ditetapkan (G-3); kantong segel bernomor belum diadakan.
+- Kunci SSH break-glass host dan ciphertext kanari belum dibuat (dibuat saat pengemasan pertama, setelah server ada).
+- Uji pemulihan pertama: setelah staging/produksi tersedia (ADR-004).

@@ -83,7 +83,9 @@ def cmd_login():
     off = b.log_offset()
     s, body, _, _ = b.req("POST", "/v1/auth/otp/request", body={"phone": PHONE, "altcha": altcha})
     code = b.wait_otp(b.mask(PHONE), off)
-    s, tok, _, _ = b.req("POST", "/v1/auth/otp/verify", body={"challenge_id": body["challenge_id"], "code": code})
+    s, tok, _, _ = b.req(
+        "POST", "/v1/auth/otp/verify", body={"challenge_id": body["challenge_id"], "code": code, "age_confirmed": True}
+    )
     st["token"] = tok["access_token"]
     st["phone_masked"] = b.mask(PHONE)
     save(st)
@@ -251,13 +253,6 @@ def cmd_checkout(label="main", negatives=True):
             http=s,
             code=code_of(body),
         )
-        s, body, _, _ = checkout(st, label, key=False)
-        b.result(
-            "o.checkout_without_key_400",
-            s == 400 and code_of(body) == "idempotency_key_required",
-            http=s,
-            code=code_of(body),
-        )
     s, body, _, _ = checkout(st, label)
     pay = (body or {}).get("payment") or {}
     part = ((body or {}).get("parts") or [{}])[0]
@@ -296,6 +291,17 @@ def cmd_checkout(label="main", negatives=True):
     s4, l4, _, _ = b.req("GET", "/v1/orders?limit=20", headers=auth(st))
     n = sum(1 for it in (l4 or {}).get("items", []) if it.get("order_id") == o["order_id"])
     b.result("o.checkout_single_order_in_list", s4 == 200 and n == 1, http=s4, occurrences=n)
+
+
+def cmd_checkout_nokey(label="main"):
+    st = load()
+    s, body, _, _ = checkout(st, label, key=False)
+    b.result(
+        "o.checkout_without_key_400",
+        s == 400 and code_of(body) == "idempotency_key_required",
+        http=s,
+        code=code_of(body),
+    )
 
 
 def cmd_pay(label="main", status="paid"):
@@ -408,6 +414,11 @@ def cmd_anti_enum(other_state, label="main"):
 
 def cmd_dsar_open():
     st = load()
+    # Quote sah disiapkan SEBELUM hapus akun dikonfirmasi: checkout dengan quote ini setelah 202 harus ditolak
+    # karena akun sedang dihapus (bukan karena quote tidak ada).
+    cat = catalog_state()
+    put_cart(st, [{"product_id": cat["bag"], "qty": 1}])
+    _, pre_q, _, _ = b.req("POST", "/v1/cart/quote", body={}, headers=auth(st))
     off = b.log_offset()
     s, r1, _, _ = b.req("POST", "/v1/me/reauth", body={}, headers=auth(st))
     code = b.wait_otp(st["phone_masked"], off)
@@ -417,7 +428,11 @@ def cmd_dsar_open():
     s, r3, _, _ = b.req("DELETE", "/v1/me", headers={**auth(st), "X-Step-Up-Token": r2["step_up_token"]})
     b.result(
         "o.dsar_delete_open_online_orders_409",
-        s == 409 and code_of(r3) == "open_online_orders",
+        # W-18 (Q-P18): tanpa ?confirm_open_orders=true tetap 409; teks menyebut batas 14 hari
+        s == 409
+        and code_of(r3) == "open_online_orders"
+        and (r3.get("error") or {}).get("max_defer_days") == 14
+        and "14 hari" in (r3.get("error") or {}).get("message", ""),
         http=s,
         code=code_of(r3),
         body=r3,
@@ -434,6 +449,49 @@ def cmd_dsar_open():
         http=s,
         has_orders=has_orders,
         no_secret=no_secret,
+    )
+    # W-18 / L-21a: konfirmasi eksplisit (token step-up yang sama) -> 202 + batas paling lambat 14 hari
+    s, r4, _, _ = b.req(
+        "DELETE", "/v1/me?confirm_open_orders=true", headers={**auth(st), "X-Step-Up-Token": r2["step_up_token"]}
+    )
+    deadline = (r4 or {}).get("erasure_deadline")
+    b.result(
+        "o.dsar_delete_confirmed_202_deadline",
+        s == 202
+        and (r4 or {}).get("open_online_orders", 0) >= 1
+        and isinstance(deadline, str)
+        and r4.get("request_id"),
+        http=s,
+        open_online_orders=(r4 or {}).get("open_online_orders"),
+        erasure_deadline=deadline,
+    )
+    rid, receipt = (r4 or {}).get("request_id"), (r4 or {}).get("receipt_token")
+    # L-22: status lewat receipt (tanpa sesi) dan daftar permintaan member memuat batas yang sama
+    s5, r5, _, _ = b.req("GET", f"/v1/dsar/requests/{rid}", headers={"X-DSAR-Receipt": receipt or "x"})
+    s6, r6, _, _ = b.req("GET", "/v1/me/requests", headers=auth(st))
+    items = r6 if isinstance(r6, list) else (r6 or {}).get("items", [])
+    mine = next((i for i in items if isinstance(i, dict) and i.get("id") == rid), {})
+    b.result(
+        "o.dsar_status_erasure_deadline",
+        s5 == 200
+        and (r5 or {}).get("erasure_deadline") == deadline
+        and (r5 or {}).get("open_online_orders", 0) >= 1
+        and s6 == 200
+        and mine.get("erasure_deadline") == deadline,
+        receipt_http=s5,
+        receipt_deadline=(r5 or {}).get("erasure_deadline"),
+        list_http=s6,
+        list_deadline=mine.get("erasure_deadline"),
+    )
+    # Checkout baru selama permintaan hapus aktif ditolak (L-21a: 409 account_deleting)
+    s7, r7, _, _ = b.req(
+        "POST",
+        "/v1/orders",
+        body={"quote_id": (pre_q or {}).get("quote_id"), "accept_total": (pre_q or {}).get("amount_payable_total")},
+        headers={**auth(st), "Idempotency-Key": "smoke-deleting-" + uuid.uuid4().hex[:12]},
+    )
+    b.result(
+        "o.dsar_checkout_while_deleting_409", s7 == 409 and code_of(r7) == "account_deleting", http=s7, code=code_of(r7)
     )
 
 
@@ -473,7 +531,7 @@ def cmd_web_flow():
         "POST",
         "/api/auth/otp/verify",
         host=host,
-        body={"challenge_id": body["challenge_id"], "code": code},
+        body={"challenge_id": body["challenge_id"], "code": code, "age_confirmed": True},
         headers=origin,
     )
     sess = next((c for c in cookies if c.startswith("efn_session=")), "").split(";")[0]
@@ -560,9 +618,11 @@ def cmd_web_flow():
 
 
 # ------------------------------------------------------------------- event Odoo -> BFF (jaringan internal)
-def cmd_events(part_id, order_id):
+def cmd_events(part_id, order_id, legacy_key=""):
     """Dijalankan di network efn_internal dengan /s/{efn_ca_crt,odoo_bff_api_key,odoo_online_event_hmac}.txt
-    di-mount read-only (secret dibaca di container, tidak dicetak). §10.5: service key + HMAC + replay 300 s."""
+    di-mount read-only (secret dibaca di container, tidak dicetak). §10.5: service key + HMAC + replay 300 s.
+    G18-QA-01: kunci event `online:<platform_order_ref>:<event>:<seq>` + `event_id` uuid; seq berbasis waktu.
+    `legacy_key` = kunci format lama (id lokal Odoo) milik bagian LAIN yang sudah tercatat di BFF (simulasi restore)."""
     import hmac
     import http.client
     import ssl
@@ -576,7 +636,7 @@ def cmd_events(part_id, order_id):
         ts = int(time.time()) if t is None else t
         sig = hmac.new(secret.encode(), f"{ts}.".encode() + raw, hashlib.sha256).hexdigest()
         if tamper:
-            raw = raw.replace(b'"seq":1', b'"seq":9')
+            raw = raw.replace(b'"seq":1,', b'"seq":9,')
         h = {"Content-Type": "application/json"}
         if key:
             h["X-EFN-Service-Key"] = key
@@ -592,20 +652,24 @@ def cmd_events(part_id, order_id):
         except ValueError:
             return r.status, None
 
-    nonce = int(time.time()) % 900000 + 100000
-    ev = {
-        "schema_version": 1,
-        "idempotency_key": f"online:{nonce}:ready:1",
-        "seq": 1,
-        "platform_order_ref": part_id,
-        "checkout_ref": order_id,
-        "channel_code": CHANNEL,
-        "company_code": "RTL",
-        "event": "ready",
-        "state": "ready",
-        "occurred_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "refund": None,
-    }
+    def event(evname, state, seq, **extra):
+        return {
+            "schema_version": 1,
+            "idempotency_key": f"online:{part_id}:{evname}:{seq}",
+            "event_id": str(uuid.uuid4()),
+            "seq": seq,
+            "platform_order_ref": part_id,
+            "checkout_ref": order_id,
+            "channel_code": CHANNEL,
+            "company_code": "RTL",
+            "event": evname,
+            "state": state,
+            "occurred_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "refund": None,
+            **extra,
+        }
+
+    ev = event("ready", "ready", 1)
     res = {
         "unsigned": post(ev, sign=False),
         "wrong_secret": post(ev, secret="x" * 64),
@@ -625,12 +689,45 @@ def cmd_events(part_id, order_id):
         body=b1,
     )
     b.result("o.event_duplicate_idempotent", s2 == 200 and (b2 or {}).get("status") == "duplicate", http=s2, body=b2)
-    s, body = post({**ev, "idempotency_key": f"online:{nonce}:ready:2", "checkout_ref": str(uuid.uuid4())})
+    s, body = post({**event("ready", "ready", 2), "checkout_ref": str(uuid.uuid4())})
     b.result("o.event_unknown_checkout_404", s == 404, http=s, code=code_of(body))
-    s, body = post({**ev, "idempotency_key": f"online:{nonce}:ready:3", "company_code": "FNB"})
+    s, body = post(event("ready", "ready", 3, company_code="FNB"))
     b.result(
         "o.event_company_mismatch_409", s == 409 and code_of(body) == "company_mismatch", http=s, code=code_of(body)
     )
+    # G18-QA-01: kunci sama (ref + event + seq + event_id), isi berbeda -> 409 event_conflict (bukan duplikat diam)
+    now_seq = int(time.time()) - 1767225600 + 100000  # di depan seq berbasis waktu Odoo (detik sejak 2026-01-01)
+    base = event("ready", "ready", now_seq)
+    s1, b1 = post(base)
+    s2, b2 = post({**base, "state": "review"})
+    b.result(
+        "o.event_same_key_other_payload_409",
+        s1 == 200 and s2 == 409 and code_of(b2) == "event_conflict",
+        first=(s1, (b1 or {}).get("status")),
+        second=(s2, code_of(b2)),
+    )
+    # G18-QA-01: restore DB Odoo -> id lokal terpakai ulang: kunci lama milik bagian lain tetap diproses + anomali
+    if legacy_key:
+        off = b.log_offset()
+        s, body = post({**event("picked_up", "picked_up", now_seq + 1), "idempotency_key": legacy_key})
+        anomaly = False
+        for _ in range(20):
+            with open(b.LOG, "rb") as fh:
+                fh.seek(off)
+                text = fh.read().decode("utf-8", "replace")
+            if 'EFN_ONLINE_ANOMALY {"kind":"odoo_event_key_reused"' in text and part_id in text:
+                anomaly = True
+                break
+            time.sleep(0.5)
+        b.result(
+            "o.event_legacy_key_reused_processed_with_anomaly",
+            s == 200 and (body or {}).get("status") in ("applied", "ignored_stale") and anomaly,
+            http=s,
+            status=(body or {}).get("status"),
+            anomaly=anomaly,
+        )
+    else:
+        b.result("o.event_legacy_key_reused_processed_with_anomaly", False, reason="tidak ada kunci lama di BFF")
 
 
 if __name__ == "__main__":
@@ -640,6 +737,7 @@ if __name__ == "__main__":
         "catalog": cmd_catalog,
         "quote": cmd_quote,
         "checkout": cmd_checkout,
+        "checkout_nokey": cmd_checkout_nokey,
         "checkout_only": lambda label="main": cmd_checkout(label, negatives=False),
         "pay": cmd_pay,
         "wait": cmd_wait,

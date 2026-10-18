@@ -275,7 +275,51 @@ printf '%s\n' 'tiket CS-123' | sudo efn-online-cs online-resolve --part=<part_id
 - **Alert (Loki, grup `efn-online-cs`):** `EfnOnlineCsDeniedRepeated` (≥ 3 penolakan per aktor / 15 m),
   `EfnOnlineCsDualRole` (akun di dua grup), `EfnOnlineCsRefundVolumeHigh` (> 10 refund/approve sukses per jam,
   ambang PLACEHOLDER). Alert "approve di luar jam kerja" belum: LogQL tidak punya fungsi jam; kandidat Grafana/ETL.
-- Uji regresi: `scripts/host/test-efn-online-cs.sh` (CI job infra, 45 kasus, docker/logger palsu).
+- Uji regresi: `scripts/host/test-efn-online-cs.sh` (CI job infra, 54 kasus termasuk `online-erasure-pending` G18, docker/logger palsu).
+
+## Hapus akun dengan pesanan terbuka & erasure paksa (W-18, Q-P18, L-21a) {#erasure-paksa}
+
+**Latar:** pelanggan yang meminta hapus akun saat masih punya bagian pesanan `paying|confirmed|ready|review` harus
+mengonfirmasi (`?confirm_open_orders=true`). Erasure ditunda selama pesanan terbuka, **paling lama 14 hari sejak
+permintaan** (`DSAR_OPEN_ORDER_MAX_DEFER_DAYS`, plafon 14). Setelah itu erasure **tetap jalan**: tautan
+`online_order.member_id` dilepas. Order, bagian, dan refund tetap ada, tetapi tidak lagi bisa dikaitkan ke akun.
+Konsekuensinya, pelanggan **kehilangan akses kode ambil di aplikasi**.
+
+**Sinyal:**
+- Hari 3: `EFN_ONLINE_ANOMALY kind=erasure_deferred_open_orders` warning.
+- Hari 10: anomali yang sama, critical ([alert](#efnonlineanomaly)).
+- Hari 14: `kind=erasure_forced_open_orders` critical, dengan `part_ids` (maks 20) + `parts_total`.
+- Metrik: `efn_dsar_erasure_deferral_total{event=…}`.
+- Sinyal tidak memuat HP, `member_id`, maupun `member_hash`.
+
+**Langkah CS (peran `cs`, kecuali disebut lain):**
+1. **Lihat daftar kerja** (read-only, tanpa alasan):
+   `sudo efn-online-cs online-erasure-pending` (alias `erasure-pending`; peran `cs` dan `approver`; tanpa flag,
+   tanpa alasan/stdin — wrapper G18). Wrapper host lama (sebelum dipasang ulang dari rilis G18) menolak subcommand
+   ini → Superadmin memasang ulang `/usr/local/sbin/efn-online-cs` (cocokkan sha256 PR).
+   Output JSON:
+   - `deferred[]`: `request_id`, `requested_at`, `scheduled_at`, `erasure_deadline`, `escalation`, `part_ids`. Ini
+     penghapusan yang masih tertunda; selesaikan sebelum `erasure_deadline`.
+   - `unlinked_open_parts[]`: `part_id`, `order_id`, `status`, `company_code`, `outlet_code`, `member_unlinked_at`.
+     Ini bagian terbuka yang sudah **tanpa tautan akun** (setelah erasure paksa).
+   - Tidak ada HP, member, maupun kode ambil.
+2. **Sebelum hari 14** (masih bertautan), selesaikan dengan prosedur biasa: pelanggan mengambil barang, atau batal
+   + refund.
+3. **Setelah erasure paksa:** untuk tiap `part_id`, putuskan salah satu jalur berikut.
+   - **Barang belum diambil, pelanggan tidak bisa diverifikasi** → refund penuh:
+     `sudo efn-online-cs online-refund --part=<part_id> --full [--restock]`
+     (status `approval_required`; disetujui `online-refund-approve` oleh **approver lain**). Bila SO perlu dibatalkan:
+     `online-resolve --part=<part_id> --action=cancel` (**hanya approver**, L-20).
+   - **Status perlu disinkronkan dengan Odoo:** `online-resolve --part=<part_id> --action=sync`.
+   - **Pelanggan datang ke toko:** serah terima di Odoo **hanya** setelah verifikasi lewat kanal lain sesuai SOP toko,
+     misalnya nomor pesanan + bukti bayar dari bank/e-wallet pelanggan + identitas. Alasan dicatat di tiket.
+     **Kode ambil tidak pernah ditampilkan ke CS** dan tidak dapat dipulihkan.
+4. **Alasan CLI:** nomor tiket atau alasan singkat, **tanpa nama/HP pelanggan** (SOP Q-P19).
+5. **Penutupan:** `unlinked_open_parts` kosong untuk bagian terkait. Rekonsiliasi refund vs mutasi bank tetap oleh
+   Finance.
+
+**Teks ke pelanggan** (respons 409, layar konfirmasi hapus akun, pernyataan usia 17+) masih **draf** dan **menunggu
+persetujuan Legal (DPO sementara)**.
 
 ## Belum / batas
 - Wrapper belum diuji dengan sudo + docker asli di host staging (uji CI memakai SUDO_USER tersimulasi + docker palsu).

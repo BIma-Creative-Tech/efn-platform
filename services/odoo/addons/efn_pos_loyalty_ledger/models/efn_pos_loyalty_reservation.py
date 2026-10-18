@@ -76,6 +76,12 @@ class EfnPosLoyaltyReservation(models.Model):
     note = fields.Char(readonly=True)
 
     @api.model
+    def _efn_release_key(self):
+        """G18-QA-01: kunci idempotensi release tanpa id lokal Odoo (id BFF reservasi = UUID global)."""
+        self.ensure_one()
+        reservation = self.sudo()
+        return f"pos_release:{reservation.bff_reservation_id or reservation.order_uuid}"
+
     def _efn_find_active(self, config, order_uuid):
         return self.sudo().search(
             [("config_id", "=", config.id), ("order_uuid", "=", order_uuid), ("state", "=", "reserved")],

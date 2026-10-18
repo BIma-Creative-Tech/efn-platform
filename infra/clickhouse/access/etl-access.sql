@@ -40,16 +40,21 @@ GRANT SELECT, INSERT ON efn_dwh.etl_job_run TO etl_writer;
 -- Gelombang 14 (sisa SEC-61): hasil rekonsiliasi loyalty ledger <-> pos.order (append-only, tanpa PII).
 GRANT SELECT, INSERT ON efn_dwh.loyalty_recon_run TO etl_writer;
 GRANT SELECT, INSERT ON efn_dwh.loyalty_recon_finding TO etl_writer;
+-- Gelombang 18 (K-18-6): rekonsiliasi harian pembayaran Poin EFN (append-only, tanpa PII).
+GRANT SELECT, INSERT ON efn_dwh.loyalty_points_daily TO etl_writer;
 -- Salinan audit tamper-evident: HANYA SELECT + INSERT. Sengaja TANPA ALTER DELETE/UPDATE, TRUNCATE, DROP, OPTIMIZE:
 -- ETL (atau kredensial efn_etl yang bocor) tidak bisa menghapus/mengubah salinan; perubahan hanya oleh admin ClickHouse
 -- (terdeteksi lewat kepala rantai di Loki). Bila suatu saat ada `GRANT ALL`/wildcard ke etl_writer, cabut dulu.
 GRANT SELECT, INSERT ON efn_dwh.audit_log_copy TO etl_writer;
 GRANT SELECT, INSERT ON efn_dwh.audit_log_line_copy TO etl_writer;
 GRANT SELECT, INSERT ON efn_dwh.audit_recon_run TO etl_writer;
+-- G18 chain epoch (07-audit-epoch.sql): riwayat epoch, append-only seperti salinan audit.
+GRANT SELECT, INSERT ON efn_dwh.audit_chain_epoch TO etl_writer;
 -- Defensif (idempoten): pastikan tidak ada hak ubah/hapus tersisa dari deploy lama.
 REVOKE ALTER DELETE, ALTER UPDATE, TRUNCATE, DROP TABLE, OPTIMIZE ON efn_dwh.audit_log_copy FROM etl_writer;
 REVOKE ALTER DELETE, ALTER UPDATE, TRUNCATE, DROP TABLE, OPTIMIZE ON efn_dwh.audit_log_line_copy FROM etl_writer;
 REVOKE ALTER DELETE, ALTER UPDATE, TRUNCATE, DROP TABLE, OPTIMIZE ON efn_dwh.audit_recon_run FROM etl_writer;
+REVOKE ALTER DELETE, ALTER UPDATE, TRUNCATE, DROP TABLE, OPTIMIZE ON efn_dwh.audit_chain_epoch FROM etl_writer;
 -- Erasure DSAR (docs/04 §8.4): hanya tabel dengan kolom user_hash/member_hash (services/etl/efn_etl/erasure.py
 -- ERASURE_TARGETS). `mutations_sync` disetel per query oleh ETL.
 GRANT ALTER DELETE ON efn_dwh.competitor_prices TO etl_writer;
@@ -66,3 +71,4 @@ CREATE ROLE IF NOT EXISTS audit_copy_reader;
 GRANT SELECT ON efn_dwh.audit_log_copy TO audit_copy_reader;
 GRANT SELECT ON efn_dwh.audit_log_line_copy TO audit_copy_reader;
 GRANT SELECT ON efn_dwh.audit_recon_run TO audit_copy_reader;
+GRANT SELECT ON efn_dwh.audit_chain_epoch TO audit_copy_reader;

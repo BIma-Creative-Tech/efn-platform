@@ -12,6 +12,11 @@ export interface AuthOtpRequestDto {
 export interface AuthOtpVerifyDto {
   challengeId: string;
   code: string;
+  /**
+   * W-19 (Q-P3): pernyataan pelanggan berusia minimal `MEMBER_MIN_AGE` (17) tahun — checkbox di layar masuk/daftar
+   * (login = daftar). Wajib `true`; dicek AuthService SEBELUM OTP diverifikasi agar percobaan tidak hangus.
+   */
+  ageConfirmed: boolean;
 }
 
 const MAX_ALTCHA_LENGTH = 2048;
@@ -30,9 +35,12 @@ export function parseAuthOtpRequest(body: unknown): AuthOtpRequestDto {
   return { phone, altcha };
 }
 
+/** `{ challenge_id, code, age_confirmed }` — `age_confirmed` tidak ada = false; selain boolean → 400 `invalid_request`. */
 export function parseAuthOtpVerify(body: unknown): AuthOtpVerifyDto {
   const o = asRecord(body);
   const code = o.code;
   if (typeof code !== 'string' || code.length > 16) throw Errors.invalidRequest();
-  return { challengeId: requireUuid(o, 'challenge_id'), code: code.trim() };
+  const age = o.age_confirmed;
+  if (age !== undefined && age !== null && typeof age !== 'boolean') throw Errors.invalidRequest();
+  return { challengeId: requireUuid(o, 'challenge_id'), code: code.trim(), ageConfirmed: age === true };
 }

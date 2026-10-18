@@ -2,6 +2,11 @@
 
 -- Event ledger poin (append-only di platform.loyalty_ledger). Hanya hash member (dihitung BFF); tidak ada nomor HP.
 -- company_code = PT penanggung liabilitas poin (ADR-020, settlement antar-PT): EFN | RTL | FNB | FARM.
+-- G18/W-19 (PDP v7, Q-P7 vs Q-6): member_hash dianonimkan (TTL kolom -> '') setelah CH_PSEUDONYM_RETENTION_YEARS,
+-- baris tetap 10 th. ClickHouse menolak TTL pada kolom kunci ("Trying to set TTL for key column", diuji 24.8.14) ->
+-- ORDER BY hanya event_id (UUID ledger, unik); pencarian per member (erasure DSAR) dibantu skip index bloom_filter.
+-- Volume lama (ORDER BY member_hash, event_id) dimigrasi otomatis oleh clickhouse-init.sh (EXCHANGE TABLES).
+-- DDL ini HARUS identik dengan CREATE loyalty_events_w19 di clickhouse-init.sh.
 CREATE TABLE IF NOT EXISTS efn_dwh.loyalty_events
 (
     event_id      String,
@@ -12,11 +17,13 @@ CREATE TABLE IF NOT EXISTS efn_dwh.loyalty_events
     source        LowCardinality(String),
     source_ref    String,
     created_at    DateTime64(6, 'UTC'),
-    _loaded_at    DateTime DEFAULT now()
+    _loaded_at    DateTime DEFAULT now(),
+    INDEX idx_member_hash member_hash TYPE bloom_filter(0.01) GRANULARITY 4
 )
 ENGINE = ReplacingMergeTree(created_at)
 PARTITION BY toYYYYMM(created_at)
-ORDER BY (member_hash, event_id);
+ORDER BY (event_id)
+SETTINGS ttl_only_drop_parts = 1;
 
 -- Volume yang dibuat sebelum kolom company_code ada (idempoten). Baris lama berisi '' sampai ETL dimuat ulang
 -- (hapus baris watermark job loyalty_events untuk backfill penuh).

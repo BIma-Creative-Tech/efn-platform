@@ -1,22 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Produk khusus "Poin EFN" (docs/08 §6.3 B). Baris order dengan produk ini = penukaran poin
-     (nilai negatif) atau penyesuaian poin pada refund (nilai positif). Server mendeteksi baris
-     poin dari produk ini, bukan flag klien (SEC-12).
-     default_code EFN-POINTS = konvensi ETL (env ETL_POINTS_PRODUCT_CODES) untuk memisahkan baris
-     poin di fact_sales_line. Tanpa pajak default: pajak baris diisi per kelompok pajak saat redeem.
-     Tanpa company (dipakai semua PT); tanpa kategori POS (tidak tampil di grid, dimuat lewat
-     pos.config._get_special_products). -->
+<!-- Produk "Poin EFN" desain lama (G13: baris diskon per kelompok pajak). G18 E-30 (K-18-1): redeem = metode
+     bayar "Poin EFN"; produk ini DIARSIPKAN dan hanya dipertahankan agar xmlid & baris order historis (dev/
+     staging) tetap terbaca. Server menolak baris baru dengan produk ini. default_code EFN-POINTS tetap konvensi
+     ETL (fact_sales_line historis). DB lama: migrations/19.0.2.0.0/post-migrate.py mengarsipkannya. -->
 <odoo noupdate="1">
     <record id="product_efn_points" model="product.product">
-        <field name="name">Poin EFN</field>
+        <field name="name">Poin EFN (desain lama, diarsipkan)</field>
         <field name="default_code">EFN-POINTS</field>
         <field name="type">service</field>
-        <field name="sale_ok" eval="True"/>
+        <field name="sale_ok" eval="False"/>
         <field name="purchase_ok" eval="False"/>
-        <field name="available_in_pos" eval="True"/>
+        <field name="available_in_pos" eval="False"/>
         <field name="list_price">0.0</field>
         <field name="taxes_id" eval="[Command.clear()]"/>
         <field name="supplier_taxes_id" eval="[Command.clear()]"/>
         <field name="company_id" eval="False"/>
+        <field name="active" eval="False"/>
     </record>
 </odoo>

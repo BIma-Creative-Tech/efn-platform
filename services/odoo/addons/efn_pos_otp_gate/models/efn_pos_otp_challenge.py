@@ -16,7 +16,10 @@ from odoo import api, fields, models
 DEFAULT_RETENTION_DAYS = 30
 PURPOSE_PROMO = "pos_promo"
 PURPOSE_REDEEM = "pos_redeem"
-OTP_PURPOSES = [(PURPOSE_PROMO, "Promo"), (PURPOSE_REDEEM, "Tukar poin")]
+# E-34 (G18, kontrak docs/04 §9.9 K-18-8): kasir mendaftarkan member; wajib pernyataan usia 17+ (age_confirmed).
+# Odoo TIDAK menyimpan usia/tanggal lahir/bendera usia: hanya tujuan OTP ini (bukti di registri member BFF).
+PURPOSE_ENROLL = "pos_enroll"
+OTP_PURPOSES = [(PURPOSE_PROMO, "Promo"), (PURPOSE_REDEEM, "Tukar poin"), (PURPOSE_ENROLL, "Daftar member")]
 OTP_PURPOSE_KEYS = frozenset(key for key, _label in OTP_PURPOSES)
 
 

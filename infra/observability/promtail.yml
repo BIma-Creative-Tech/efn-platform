@@ -46,8 +46,9 @@ scrape_configs:
       # (1) Kepala rantai salinan audit ClickHouse (ETL, logger efn_etl.audit_job) -> stream="efn_audit_anchor"
       #     retensi 400 hari (loki.yml) = jangkar eksternal + dead-man (loki-rules/efn-ops-logs.yml). Dicocokkan
       #     SEBELUM redaksi: hash hex 64 dapat memuat pola "08xxxxxxxx" yang akan dirusak redaksi nomor HP.
+      #     G18 (data-AI, epoch rantai): kunci opsional `,"epoch":N` sebelum `}` (epoch 0 = format lama tanpa kunci).
       - match:
-          selector: '{service="etl"} |~ "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2},\\d{3} INFO efn_etl\\.audit_job EFN_AUDIT_CHAIN_HEAD \\{\"company\":\\d+,\"seq\":\\d+,\"row_hash\":\"[0-9a-f]{64}\"\\}\\s*$"'
+          selector: '{service="etl"} |~ "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2},\\d{3} INFO efn_etl\\.audit_job EFN_AUDIT_CHAIN_HEAD \\{\"company\":\\d+,\"seq\":\\d+,\"row_hash\":\"[0-9a-f]{64}\"(,\"epoch\":\\d+)?\\}\\s*$"'
           stages:
             - static_labels:
                 stream: efn_audit_anchor
@@ -169,6 +170,14 @@ scrape_configs:
             - static_labels:
                 stream: efn_audit_anchor
                 audit_event: recon
+      # (3b) G18 (data-AI): keputusan epoch rantai salinan audit setelah restore/reset DB Odoo -> stream jangkar 400 hari
+      #      (alert loki-rules/efn-ops-logs.yml grup efn-audit-epoch). Berjangkar: logger, level, tag, event allowlist.
+      - match:
+          selector: '{service="etl"} |~ "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2},\\d{3} (INFO|WARNING|ERROR) efn_etl\\.audit_job EFN_AUDIT_EPOCH \\{\"event\":\"(register|new_epoch|divergence_blocked)\",\"epoch\":\\d+,.*\\}\\s*$"'
+          stages:
+            - static_labels:
+                stream: efn_audit_anchor
+                audit_event: epoch
       # (4) G13c (SEC-61): baris loyalty BFF (NestJS ConsoleLogger, NO_COLOR=1 di compose) -> stream="efn_loyalty"
       #     (retensi 400 hari = bukti fraud poin/Finance, loki.yml; alert loki-rules/efn-loyalty.yml). Format:
       #     "[Nest] <pid>  - <MM/DD/YYYY, h:mm:ss AM>    WARN [PosLoyaltyService] EFN_LOYALTY_ANOMALY {json}". Regex

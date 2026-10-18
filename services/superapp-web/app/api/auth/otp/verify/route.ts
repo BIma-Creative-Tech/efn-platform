@@ -1,10 +1,13 @@
 /**
- * POST /api/auth/otp/verify  { challenge_id, code }  ->  BFF POST /v1/auth/otp/verify (docs/04 §3.2)
+ * POST /api/auth/otp/verify  { challenge_id, code, age_confirmed }  ->  BFF POST /v1/auth/otp/verify (docs/04 §3.2)
+ * G18 (W-19, Q-P3): `age_confirmed: true` wajib (usia ≥ 17, lib/auth-age.ts). Tidak dicentang -> 400
+ * `age_confirmation_required` TANPA memanggil BFF (challenge tidak hangus); BFF juga memeriksa (lapis kedua).
  * Sukses: access_token disimpan di cookie efn_session (HttpOnly, Secure, SameSite=Lax);
  * token TIDAK dikembalikan ke browser.
  */
 import { NextResponse, type NextRequest } from 'next/server';
 import { bffFetch, type BffErrorBody, type OtpTokenResponse } from '@/lib/bff';
+import { AGE_REQUIRED_MESSAGE, isAgeConfirmed } from '@/lib/auth-age';
 import { setSessionCookie } from '@/lib/session';
 import { isSameOrigin, jsonError } from '@/lib/request-guard';
 
@@ -17,7 +20,7 @@ const CODE_RE = /^\d{6}$/;
 export async function POST(req: NextRequest) {
   if (!isSameOrigin(req)) return jsonError(403, 'forbidden', 'Permintaan ditolak.');
 
-  let body: { challenge_id?: unknown; code?: unknown } | null;
+  let body: { challenge_id?: unknown; code?: unknown; age_confirmed?: unknown } | null;
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -28,10 +31,13 @@ export async function POST(req: NextRequest) {
   if (!CHALLENGE_RE.test(challengeId) || !CODE_RE.test(code)) {
     return Response.json({ ok: false, reason: 'invalid' }, { status: 400 });
   }
+  if (!isAgeConfirmed(body?.age_confirmed)) {
+    return jsonError(400, 'age_confirmation_required', AGE_REQUIRED_MESSAGE);
+  }
 
   const result = await bffFetch<OtpTokenResponse>('/v1/auth/otp/verify', {
     method: 'POST',
-    json: { challenge_id: challengeId, code },
+    json: { challenge_id: challengeId, code, age_confirmed: true },
     incoming: req.headers,
   });
 
@@ -41,6 +47,10 @@ export async function POST(req: NextRequest) {
     return res;
   }
 
+  // G18: BFF menolak konfirmasi usia sebelum memeriksa OTP (challenge tetap berlaku).
+  if (!result.ok && result.status === 400 && result.code === 'age_confirmation_required') {
+    return jsonError(400, 'age_confirmation_required', AGE_REQUIRED_MESSAGE);
+  }
   if (!result.ok && result.status === 400) {
     // Kontrak §3.1/§3.2: { ok:false, reason: invalid|expired|locked, attempts_left }
     const b: BffErrorBody = result.body ?? {};

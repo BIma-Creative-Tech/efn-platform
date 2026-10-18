@@ -8,8 +8,77 @@ Poin EFN di POS Odoo CE 19: **earn** dari penjualan, **tukar poin** (wajib OTP p
 - **Risiko dimitigasi:** R-T02 (fraud promo/poin dari kasir: baris poin divalidasi server terhadap reservasi ber-OTP), R-B06 (saldo ganda/hilang: outbox transaksional + idempotency key), POS tidak berhenti saat BFF mati (semua panggilan ledger lewat outbox).
 - **Depends:** `point_of_sale`, `pos_loyalty`, `mail`, `efn_core`, `efn_pos_otp_gate` (semua CE / efn_*). `pos_loyalty` hanya dipakai untuk menetralkan baris poin dari perhitungan program promo — **bukan** `loyalty.card`/`program_type='loyalty'` (D-05).
 
+## G18 — E-30: tukar poin = metode bayar (versi 19.0.2.0.0)
+> **Ringkasan manajemen.** Penukaran Poin EFN di kasir kini menjadi **cara bayar** "Poin EFN" (seperti EDC),
+> bukan diskon. Harga, DPP, dan PPN/PB1 tetap atas harga penuh (keputusan pemilik proyek P-8). Kasir tetap wajib
+> OTP pelanggan; nominal poin tidak bisa diubah kasir dan diperiksa ulang server.
+
+- **Kontrak:** `docs/04 §9.9` v6 K-18-1..K-18-6, L-23, L-24 (BFF). **Fit-gap:** `docs/08 §9.2` (E-30). ADR-020 (catatan
+  10 Okt), ADR-017, ADR-031. Risiko: R-B06/R-T02 (fraud kasir), Q-F18-3/4 (Finance).
+- **Metode bayar:** `pos.payment.method.efn_is_loyalty_points` + constraint (jurnal bank, bukan kas, tanpa
+  terminal/QR, tanpa split, satu aktif per company). `pos.config.efn_loyalty_points_method` (id, dimuat ke POS).
+  **Data per PT** (jurnal bank "Poin EFN" tanpa rekening, `outstanding_account_id` = akun liabilitas/kliring poin
+  PLACEHOLDER, metode di `payment_method_ids` config) diisi `efn_setup_pos` (functional). Tanpa metode di config,
+  tombol tukar disembunyikan dan reserve ditolak.
+- **Frontend:** tombol "Tukar Poin EFN" (OTP `pos_redeem`, online saja) -> reserve -> baris pembayaran Poin EFN
+  senilai `value_idr`; metode tidak tampil sebagai pilihan manual; numpad tidak mengubah nominalnya; menghapus baris
+  = dialog "Batalkan tukar poin?" -> release. Refund berpoin: layar refund menambah pembayaran Poin EFN negatif
+  (`efn_loyalty_refund_preview`, alokasi proporsional kumulatif) + sisa uang ke metode asal (E-31).
+- **Server saat sync (toleransi 0):** pembayaran poin tanpa reservasi, nominal != `value_idr`, nominal <= 0, partner
+  beda, > `redeem_max_pct` x total incl. pajak (hitung server), kembalian dari porsi non-tunai -> `UserError`.
+  Refund: poin hanya negatif, hanya bila order asal dibayar poin, tidak melebihi sisa poin asal (`UserError`);
+  selisih alokasi > Rp1 -> reverse `hold` + review (SEC-60). Baris produk "Poin EFN" lama ditolak.
+- **Outbox:** `commit` + `payment_amount` (K-18-3; BFF `409 payment_mismatch` -> final, reservasi & order `review`);
+  `reverse` + `points_restored_value` (integer >= 0, K-18-5). Earn (K-18-4): `Σ eligible tanpa pajak × (1 −
+  bayar_poin ÷ total incl pajak)`; flag `earn_exclude_point_payment` dari `GET /v1/pos/loyalty/params` (cache, tidak
+  memanggil BFF saat sync), fallback `ir.config_parameter` `efn.pos.loyalty.earn_exclude_point_payment` (True).
+- **Tutup sesi:** selisih (`bank_payment_method_diffs`) untuk metode Poin EFN ditolak (`pos.session._validate_session`).
+- **Migrasi dari desain lama:** produk diskon "Poin EFN" (`product_efn_points`) **diarsipkan** (tetap ada agar xmlid &
+  baris order historis dev/staging terbaca; ETL `EFN-POINTS` historis tetap); baris lama tidak dikonversi (belum ada
+  produksi); filter audit pengganti E-24 dihapus dan filter `efn_setup_pos` dipulihkan
+  (`migrations/19.0.2.0.0/post-migrate.py`). Hook install/uninstall E-24 dihapus.
+- **Rekonsiliasi (K-18-6):** Σ `pos.payment` Poin EFN per PT/tanggal vs ledger BFF -> ETL (`loyalty_recon.py`).
+
+## Re-review G18 + L-26 (versi 19.0.2.2.0)
+- **Dependency `efn_pos_refund_origin`** (SEC-125/126/129): guard transisi lunas dan kepemilikan pembayaran di sync.
+  Penanda sync milik modul ini dihapus; pakai penanda bertoken dari `efn_pos_refund_origin`.
+- **SEC-125:** draft dengan pembayaran Poin EFN dipertahankan hanya bila cocok dengan reservasi aktif order. Syaratnya:
+  partner sama, setiap baris positif, dan jumlah = `value_idr` (toleransi 0). Selain itu baris poin dihapus
+  (`_efn_loyalty_draft_mismatch`). Draft berpoin tidak bisa dilunasi lewat `action_pos_order_paid`/write state.
+  Wizard Payment backend menjalankan validasi E-30 lengkap dan commit.
+- **SEC-127:** `_efn_loyalty_lock_origin` = `touch_row` (UPDATE no-op).
+- **G18-QA-01:** kunci outbox release = `pos_release:<bff_reservation_id>` (UUID BFF), bukan id lokal reservasi. Kunci earn/commit/reverse sudah memakai uuid order.
+- **SEC-119 residual:** pada metode Poin EFN, `journal_id` dan `outstanding_account_id` (akun kliring/liabilitas poin)
+  diperlakukan sama dengan flag. Keduanya hanya bisa diubah admin (`base.group_system`, log peringatan), dan dibekukan
+  untuk siapa pun selain superuser bila metode sudah punya pembayaran. Metode bayar biasa tidak terpengaruh.
+- **L-26 (SEC-128):**
+  - `commit` mengirim `order_goods_incl` (Rp bulat > 0 = nilai barang incl. pajak order, hitung server).
+  - `reverse` mengirim `refund_goods_incl` (Rp >= 0).
+  - `409 restore_value_mismatch` pada reverse -> outbox `hold` (order `review`, aktivitas supervisor), bukan `failed`.
+  - POS manager menyetujui lewat **`action_efn_restore_approve`** (tombol "Setujui nilai restore", masuk
+    `RPC_ALLOWLIST`, tercatat di chatter + log). Reverse lalu dikirim ulang dengan `restore_approved: true`.
+  - Menolak = `action_efn_hold_cancel` (batal).
+  - `action_efn_hold_approve` menolak hold jenis ini, karena kirim apa adanya akan ditolak lagi.
+  - Kasir tidak punya ACL outbox, jadi tidak bisa mengisi `restore_approved` (field hanya diisi aksi supervisor).
+
+## Review r11 (L-25a/c/e/f/g, versi 19.0.2.1.0)
+- **SEC-113:** pembayaran metode Poin EFN hanya dibuat/diubah/dihapus di jalur sync resmi (`models/pos_payment.py`,
+  penanda per cursor `efn_core/scope.py`), **juga pada order draft** (wizard pembayaran backend tidak bisa "membayar
+  dengan poin" tanpa OTP + reservasi), termasuk mengganti metode baris lain menjadi Poin EFN. Kode server ber-sudo
+  dikecualikan. Guard umum order non-draft: `efn_pos_refund_origin` (auto_install).
+- **SEC-115:** reservasi redeem dan earn non-skipped menandai partner sebagai member (`efn_member_locked_at`,
+  `efn_pos_otp_gate`); migrasi `19.0.2.1.0` mengisi penanda dari reservasi/order berpoin yang ada.
+- **SEC-117:** validasi pembayaran Poin EFN pada refund mengunci order asal (`_efn_loyalty_lock_origin`, `FOR UPDATE`)
+  sebelum menghitung sisa poin.
+- **SEC-118:** commit mengirim `payment_amount = round(jumlah pembayaran Poin EFN aktual order)` (bukan `value_idr`
+  reservasi), sehingga cek BFF `payment_amount == value_idr` (K-18-3) membandingkan dua sumber berbeda.
+- **SEC-119:** `efn_is_loyalty_points` hanya bisa diisi/diubah admin (`base.group_system`, log peringatan; create ber-flag
+  juga); bila metode sudah punya pembayaran, flag (dua arah), jurnal, dan pengarsipan metode Poin EFN tidak bisa diubah
+  siapa pun selain superuser (migrasi/data modul). Aturan audit `pos.payment.method` di `efn_setup_audit` (rekomendasi
+  review) = ranah functional, belum ditambahkan.
+
 ## Data & konfigurasi
-- Produk **"Poin EFN"** (`efn_pos_loyalty_ledger.product_efn_points`): `default_code = EFN-POINTS` (konvensi ETL, env `ETL_POINTS_PRODUCT_CODES`), layanan, tanpa pajak default, tanpa company & kategori POS; dimuat ke POS lewat `pos.config._get_special_products()` (tidak tampil di grid).
+- Produk **"Poin EFN"** (`product_efn_points`, desain G13): **diarsipkan sejak 19.0.2.0.0** (lihat bagian G18); tidak lagi dimuat ke POS.
 - **Kategori tanpa poin (K-2):** field `product.category.efn_loyalty_earn_excluded` (Boolean, berlaku untuk subkategori). Field ini juga sumber ETL untuk memisahkan penjualan tanpa poin.
 - **Per POS:** `pos.config.efn_loyalty_earn_enabled`, `efn_loyalty_redeem_enabled` (default mati; *Settings → Point of Sale → Pricing → Poin EFN*). Redeem ditolak untuk kiosk self-order (constraint).
 - **Parameter (`ir.config_parameter`):** `efn.pos.loyalty.outbox_max_hours` (48), `efn.pos.loyalty.reservation_retention_days` (400, PLACEHOLDER Finance), `efn.pos.loyalty.balance_rate_per_minute` (20). Timeout HTTP memakai parameter bersama `efn.pos.otp_timeout_seconds` (klien `efn_core`). Nilai poin, minimum & maks % **tidak disalin** — diambil dari `GET /v1/pos/loyalty/params` (cache 5 menit per worker).

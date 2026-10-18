@@ -11,7 +11,7 @@ from clickhouse_connect.driver.client import Client
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
 
-from efn_etl.audit import ChainHead, ChainRow, CopiedLog
+from efn_etl.audit import ChainHead, ChainRow, CopiedLog, EpochRecord
 from efn_etl.config import PgTarget, Settings
 from efn_etl.erasure import count_sql, delete_sql
 from efn_etl.heartbeat import JobRun
@@ -193,37 +193,46 @@ class ClickHouseAuditStore:
     def _rows(self, sql: str, params: dict[str, Any] | None = None) -> list[tuple[Any, ...]]:
         return list(self._client.query(sql, parameters=params or {}).result_rows)
 
-    def heads(self) -> dict[int, ChainHead]:
+    def epochs(self) -> list[EpochRecord]:
+        """Riwayat chain epoch (07-audit-epoch.sql). Kosong = belum terdaftar (salinan lama = epoch 0)."""
+        rows = self._rows("SELECT epoch, marker, reason, started_at FROM audit_chain_epoch ORDER BY epoch, started_at")
+        return [EpochRecord(int(e), str(m), str(r), s) for e, m, r, s in rows]
+
+    def heads(self, epoch: int = 0) -> dict[int, ChainHead]:
         rows = self._rows(
             "SELECT chain_company, max(chain_seq), argMax(row_hash, chain_seq) FROM audit_log_copy "
-            "GROUP BY chain_company"
+            "WHERE chain_epoch = {e:UInt32} GROUP BY chain_company",
+            {"e": epoch},
         )
         return {int(c): ChainHead(seq=int(s), row_hash=str(h)) for c, s, h in rows}
 
-    def max_log_id(self) -> int:
-        rows = self._rows("SELECT max(log_id) FROM audit_log_copy")
+    def max_log_id(self, epoch: int = 0) -> int:
+        rows = self._rows("SELECT max(log_id) FROM audit_log_copy WHERE chain_epoch = {e:UInt32}", {"e": epoch})
         return int(rows[0][0] or 0) if rows else 0
 
-    def min_log_id_since(self, since: datetime) -> int | None:
+    def min_log_id_since(self, since: datetime, epoch: int = 0) -> int | None:
         rows = self._rows(
-            "SELECT min(log_id), count() FROM audit_log_copy WHERE create_date >= {since:DateTime64(6)}",
-            {"since": since},
+            "SELECT min(log_id), count() FROM audit_log_copy "
+            "WHERE chain_epoch = {e:UInt32} AND create_date >= {since:DateTime64(6)}",
+            {"since": since, "e": epoch},
         )
         return int(rows[0][0]) if rows and rows[0][1] else None
 
-    def log_ids_between(self, lo: int, hi: int) -> set[int]:
+    def log_ids_between(self, lo: int, hi: int, epoch: int = 0) -> set[int]:
         rows = self._rows(
-            "SELECT log_id FROM audit_log_copy WHERE log_id > {lo:UInt64} AND log_id <= {hi:UInt64}",
-            {"lo": lo, "hi": hi},
+            "SELECT log_id FROM audit_log_copy "
+            "WHERE chain_epoch = {e:UInt32} AND log_id > {lo:UInt64} AND log_id <= {hi:UInt64}",
+            {"lo": lo, "hi": hi, "e": epoch},
         )
         return {int(r[0]) for r in rows}
 
-    def logs_with_lines(self, log_ids: Sequence[int]) -> set[int]:
+    def logs_with_lines(self, log_ids: Sequence[int], epoch: int = 0) -> set[int]:
         if not log_ids:
             return set()
         rows = self._rows(
-            "SELECT DISTINCT log_id FROM audit_log_line_copy WHERE log_id IN {ids:Array(UInt64)}",
-            {"ids": list(log_ids)},
+            "SELECT DISTINCT log_id FROM audit_log_line_copy "
+            "WHERE chain_epoch = {e:UInt32} AND log_id IN {ids:Array(UInt64)}",
+            {"ids": list(log_ids), "e": epoch},
         )
         return {int(r[0]) for r in rows}
 
@@ -231,36 +240,48 @@ class ClickHouseAuditStore:
         if rows:
             self._client.insert(table, rows, column_names=list(columns), database=self._database)
 
-    def copied_range(self, lo: int, hi: int) -> list[CopiedLog]:
+    def copied_range(self, lo: int, hi: int, epoch: int = 0) -> list[CopiedLog]:
         rows = self._rows(
             "SELECT log_id, create_date, model_name, operation, payload_hash FROM audit_log_copy "
-            "WHERE log_id > {lo:UInt64} AND log_id <= {hi:UInt64}",
-            {"lo": lo, "hi": hi},
+            "WHERE chain_epoch = {e:UInt32} AND log_id > {lo:UInt64} AND log_id <= {hi:UInt64}",
+            {"lo": lo, "hi": hi, "e": epoch},
         )
         return [CopiedLog(int(a), b, str(c), str(d), str(e)) for a, b, c, d, e in rows]
 
-    def line_hashes(self, log_ids: Sequence[int]) -> dict[int, dict[int, str]]:
+    def recent_copies(self, epoch: int, limit: int) -> list[CopiedLog]:
+        """K log tersalin terakhir (id terbesar) epoch ini — anchor deteksi restore."""
+        rows = self._rows(
+            "SELECT log_id, create_date, model_name, operation, payload_hash FROM audit_log_copy "
+            "WHERE chain_epoch = {e:UInt32} ORDER BY log_id DESC LIMIT {n:UInt32}",
+            {"e": epoch, "n": limit},
+        )
+        return [CopiedLog(int(a), b, str(c), str(d), str(e)) for a, b, c, d, e in rows]
+
+    def line_hashes(self, log_ids: Sequence[int], epoch: int = 0) -> dict[int, dict[int, str]]:
         if not log_ids:
             return {}
         rows = self._rows(
-            "SELECT log_id, line_id, line_hash FROM audit_log_line_copy WHERE log_id IN {ids:Array(UInt64)}",
-            {"ids": list(log_ids)},
+            "SELECT log_id, line_id, line_hash FROM audit_log_line_copy "
+            "WHERE chain_epoch = {e:UInt32} AND log_id IN {ids:Array(UInt64)}",
+            {"ids": list(log_ids), "e": epoch},
         )
         out: dict[int, dict[int, str]] = {}
         for log_id, line_id, digest in rows:
             out.setdefault(int(log_id), {})[int(line_id)] = str(digest)
         return out
 
-    def chain_rows(self, company: int, after_seq: int, limit: int) -> list[ChainRow]:
+    def chain_rows(self, company: int, after_seq: int, limit: int, epoch: int = 0) -> list[ChainRow]:
         rows = self._rows(
             "SELECT chain_company, chain_seq, log_id, payload_hash, prev_hash, row_hash FROM audit_log_copy "
-            "WHERE chain_company = {c:UInt32} AND chain_seq > {s:UInt64} ORDER BY chain_seq LIMIT {n:UInt32}",
-            {"c": company, "s": after_seq, "n": limit},
+            "WHERE chain_epoch = {e:UInt32} AND chain_company = {c:UInt32} AND chain_seq > {s:UInt64} "
+            "ORDER BY chain_seq LIMIT {n:UInt32}",
+            {"c": company, "s": after_seq, "n": limit, "e": epoch},
         )
         return [ChainRow(int(a), int(b), int(c), str(d), str(e), str(f)) for a, b, c, d, e, f in rows]
 
     def copied_log_ids(self, log_ids: Sequence[int]) -> set[int]:
-        """Id yang pernah tersalin (verifikasi sink G14: log sah dihapus retensi tetap punya jejak salinan)."""
+        """Id yang pernah tersalin di epoch MANA PUN (verifikasi sink G14: log sah dihapus retensi, atau log yang hilang
+        karena restore, tetap punya jejak salinan)."""
         if not log_ids:
             return set()
         rows = self._rows(
@@ -268,14 +289,14 @@ class ClickHouseAuditStore:
         )
         return {int(r[0]) for r in rows}
 
-    def chain_hashes(self, company: int, seqs: Sequence[int]) -> dict[int, str]:
-        """row_hash salinan untuk (company, seq) yang dijangkarkan di Loki (SEC-52 butir 3)."""
+    def chain_hashes(self, company: int, seqs: Sequence[int], epoch: int = 0) -> dict[int, str]:
+        """row_hash salinan untuk (epoch, company, seq) yang dijangkarkan di Loki (SEC-52 butir 3)."""
         if not seqs:
             return {}
         rows = self._rows(
             "SELECT chain_seq, row_hash FROM audit_log_copy "
-            "WHERE chain_company = {c:UInt32} AND chain_seq IN {s:Array(UInt64)}",
-            {"c": company, "s": list(seqs)},
+            "WHERE chain_epoch = {e:UInt32} AND chain_company = {c:UInt32} AND chain_seq IN {s:Array(UInt64)}",
+            {"c": company, "s": list(seqs), "e": epoch},
         )
         return {int(a): str(b) for a, b in rows}
 

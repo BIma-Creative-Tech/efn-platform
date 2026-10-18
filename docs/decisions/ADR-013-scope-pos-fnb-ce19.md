@@ -1,6 +1,7 @@
 # ADR-013: Scope POS F&B Dibatasi pada Kemampuan Odoo CE 19 + OCA; KDS dan Booking Dibangun/Ditunda
 
-- **Status:** Proposed
+- **Status:** **Accepted** — pemilik proyek, 2026-10-10 (sesi tanya-jawab via efn-lead, butir 5 "ADR Gelombang 1: Accepted semua"; nama & jabatan penandatangan dilengkapi klien di register keputusan). Sebelumnya: Proposed.
+  - **Catatan penerimaan 10 Okt 2026:** frasa "+ OCA" di judul dibaca sesuai ADR-031 (OCA hanya referensi, tidak dipasang). QR order ponsel diputuskan lewat ADR-032 (opsi B, E-27). Nilai stasiun KDS pilot: Bakery/Pastry + Bar Kopi, warn 5 / late 10 menit, tanpa expo (P-13). Lihat `docs/decisions/README.md` bagian "Keputusan pemilik proyek 10 Okt 2026 (sesi tanya-jawab)".
 - **Tanggal:** 2026-10-05
 - **Pemutus (klien):** PO + Operasional F&B; IT Lead (estimasi custom)
 - **Referensi review:** D-13, R-T03, R-T04, R-B01

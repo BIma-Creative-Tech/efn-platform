@@ -50,3 +50,13 @@ export function parseErasureComplete(body: unknown): { store: 'odoo'; records: n
 export function parseRequestId(v: unknown): string {
   return requireUuid({ v }, 'v');
 }
+
+/**
+ * W-18 (Q-P18): `DELETE /v1/me?confirm_open_orders=true|1` — pelanggan mengonfirmasi hapus akun walau ada pesanan
+ * online terbuka. Tidak ada / `false` / `0` → false; nilai lain → 400 `invalid_request`.
+ */
+export function parseConfirmOpenOrders(v: unknown): boolean {
+  if (v === undefined || v === null || v === '' || v === 'false' || v === '0') return false;
+  if (v === 'true' || v === '1') return true;
+  throw Errors.invalidRequest();
+}

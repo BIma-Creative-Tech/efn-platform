@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G18 W-01 / E-30 (docs/08 §9.2; kontrak docs/04 §9.9 K-18-1): metode bayar "Poin EFN" per PT POS (Retail, F&amp;B).
+     Penanda pos.payment.method.efn_is_loyalty_points milik efn_pos_loyalty_ledger (E-30, depends modul ini): server
+     hanya menerima pembayaran poin dari metode ini lewat tombol "Tukar Poin EFN" (OTP + reservasi BFF); kasir tidak
+     bisa memilihnya manual. Penautan ke pos.config.payment_method_ids: models/pos_config_points.py (POS redeem-aktif,
+     saat create/write dan setiap install/upgrade) + README checklist.
+     Akun = PLACEHOLDER (kode 21990091, nama "Liabilitas / Kliring Poin EFN") sampai Finance memutuskan (Q-F18-3);
+     noupdate: akun/kode/nama yang diubah Finance tidak ditimpa saat upgrade.
+
+     Desain (PoC 10 Okt, DB uji): jurnal bank "Poin EFN" + payment_method_type 'none' + outstanding_account_id = akun
+     liabilitas -> tutup sesi: Dr Liabilitas Poin / Cr Piutang PoS; penjualan & PPN atas harga penuh (P-8 #11).
+     Field terverifikasi 19.0: pos.payment.method (name, company_id, journal_id, payment_method_type,
+     outstanding_account_id, split_transactions), account.journal (name, code, type, company_id),
+     account.account (name, code, account_type, reconcile, company_ids).
+     Lintas brand (#58): bila poin diterbitkan PT lain, PT penjual mendebit akun KLIRING (bukan liabilitas sendiri);
+     settlement bulanan inter-company (W-15). Pilot 1 PT: satu akun per PT; Finance memutuskan (Q-F18-3). -->
+<odoo noupdate="1">
+    <!-- ===== PT Retail ===== -->
+    <record id="account_points_liability_rtl" model="account.account">
+        <field name="name">Liabilitas / Kliring Poin EFN (PLACEHOLDER Q-F18-3)</field>
+        <field name="code">21990091</field>
+        <field name="account_type">liability_current</field>
+        <field name="reconcile" eval="False"/>
+        <field name="company_ids" eval="[(6, 0, [ref('efn_setup_company.company_rtl')])]"/>
+    </record>
+    <record id="journal_points_rtl" model="account.journal">
+        <field name="name">Poin EFN</field>
+        <field name="code">PEFN</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+    </record>
+    <record id="pos_payment_method_points_rtl" model="pos.payment.method">
+        <field name="name">Poin EFN</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="journal_id" ref="journal_points_rtl"/>
+        <field name="payment_method_type">none</field>
+        <field name="split_transactions" eval="False"/>
+        <field name="outstanding_account_id" ref="account_points_liability_rtl"/>
+        <field name="efn_is_loyalty_points" eval="True"/>
+    </record>
+
+    <!-- ===== PT F&B ===== -->
+    <record id="account_points_liability_fnb" model="account.account">
+        <field name="name">Liabilitas / Kliring Poin EFN (PLACEHOLDER Q-F18-3)</field>
+        <field name="code">21990091</field>
+        <field name="account_type">liability_current</field>
+        <field name="reconcile" eval="False"/>
+        <field name="company_ids" eval="[(6, 0, [ref('efn_setup_company.company_fnb')])]"/>
+    </record>
+    <record id="journal_points_fnb" model="account.journal">
+        <field name="name">Poin EFN</field>
+        <field name="code">PEFN</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+    </record>
+    <record id="pos_payment_method_points_fnb" model="pos.payment.method">
+        <field name="name">Poin EFN</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="journal_id" ref="journal_points_fnb"/>
+        <field name="payment_method_type">none</field>
+        <field name="split_transactions" eval="False"/>
+        <field name="outstanding_account_id" ref="account_points_liability_fnb"/>
+        <field name="efn_is_loyalty_points" eval="True"/>
+    </record>
+    <!-- Holding & Farming tidak punya POS -> tidak dibuat. -->
+</odoo>

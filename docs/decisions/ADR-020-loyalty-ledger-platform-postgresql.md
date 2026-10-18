@@ -1,6 +1,7 @@
 # ADR-020: Loyalty Ledger Tunggal di PostgreSQL Platform Milik BFF (bukan di Odoo)
 
 - **Status:** Proposed
+  - **Catatan 10 Okt 2026 (pemilik proyek; status tetap Proposed):** (1) **redeem poin = alat bayar** (P-8): di POS menjadi *payment method* "Poin EFN", bukan baris diskon per kelompok pajak — DPP tidak berkurang (⚠ konfirmasi konsultan pajak tetap disarankan); (2) **poin online earn + redeem** (redeem online juga alat bayar); (3) settlement poin lintas brand **bulanan** via jurnal inter-company (Q-4); (4) parameter poin tetap placeholder configurable (Q-13). Ledger tetap di PG platform (ADR ini tidak berubah). Paket kerja W-01, W-12, W-15 di `docs/10_RENCANA_GELOMBANG_18_PLUS.md`.
 - **Tanggal:** 2026-10-05
 - **Pemutus (klien):** Finance (liabilitas poin & settlement antar-PT) + IT Lead + PO
 - **Referensi review:** D-05, §3.3 (poin lintas-brand = liabilitas), R-B03, R-B05, R-B06, R-S10, R-L01

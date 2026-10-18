@@ -41,7 +41,7 @@ Dua lapis (keduanya perlu):
 
 import logging
 
-from odoo import _, api, models
+from odoo import _, api, fields, models
 from odoo.exceptions import AccessError
 
 from odoo.addons.efn_core.models.efn_bff_client import mask_phone, normalize_member_ref
@@ -49,7 +49,10 @@ from odoo.addons.efn_core.models.efn_bff_client import mask_phone, normalize_mem
 _logger = logging.getLogger(__name__)
 
 PHONE_FIELDS = ("phone", "mobile")
-MANAGER_GROUPS = ("point_of_sale.group_pos_manager", "base.group_system")
+# Review r11 SEC-115 (L-25c): HP member hanya boleh diubah lewat alur resmi (OTP pemilik nomor lama + baru,
+# belum ada di Odoo) atau ADMIN teraudit (Settings; chatter + efn_audit). Manajer POS tidak lagi cukup.
+MANAGER_GROUPS = ("base.group_system",)
+MEMBER_FLAG = "efn_member_locked_at"
 # Kunci di `cr.cache` (per cursor/transaksi, tidak bisa diisi klien lewat context RPC): id partner
 # yang sudah diperiksa lapis 1 sehingga constraint (lapis 2) tidak memeriksa ulang.
 CHECKED_KEY = "efn_member_phone_checked"
@@ -64,8 +67,28 @@ def _mask(value):
 class ResPartner(models.Model):
     _inherit = "res.partner"
 
+    # SEC-115 (L-25c): penanda tahan lama "partner ini member" (tanpa PII). Diisi server (sudo) saat OTP POS apa
+    # pun (termasuk `pos_enroll`), reservasi redeem, dan earn; tidak pernah dihapus otomatis, tidak bisa ditulis
+    # klien. Kunci HP SEC-07/44 memakai penanda ini (bukan umur challenge OTP yang dihapus setelah 30 hari).
+    efn_member_locked_at = fields.Datetime(
+        string="Member EFN sejak (kunci HP)",
+        readonly=True,
+        copy=False,
+        groups="point_of_sale.group_pos_user,base.group_system",
+        help="Diisi otomatis saat pelanggan memakai OTP/Poin EFN. HP member hanya bisa diubah admin (teraudit).",
+    )
+
+    def _efn_mark_member(self):
+        """Tandai partner sebagai member (idempoten). Dipanggil kode server setelah OTP/redeem/earn."""
+        todo = self.sudo().filtered(lambda p: p.id and not p.efn_member_locked_at)
+        if todo:
+            todo.with_context(efn_member_marking=True).write({MEMBER_FLAG: fields.Datetime.now()})
+
     # ----------------------------------------------------------------- write
     def write(self, vals):
+        if MEMBER_FLAG in vals and not (self.env.su or self.env.user._is_superuser()):
+            # Penanda hanya ditulis server; klien (RPC/kasir/manajer) tidak bisa menghapus/mengisi.
+            raise AccessError(_("Penanda member EFN hanya diatur sistem."))
         fnames = [f for f in PHONE_FIELDS if f in vals and f in self._fields]
         if not fnames:
             return super().write(vals)
@@ -120,20 +143,21 @@ class ResPartner(models.Model):
         return user._is_superuser() or any(user.has_group(group) for group in MANAGER_GROUPS)
 
     def _efn_raise_member_phone_locked(self, count):
-        _logger.warning("EFN POS: user %s ditolak mengubah HP %d partner member (SEC-07)", self.env.uid, count)
+        _logger.warning("EFN POS: user %s ditolak mengubah HP %d partner member (SEC-07/115)", self.env.uid, count)
         raise AccessError(
             _(
-                "Nomor HP pelanggan ini sudah dipakai untuk OTP/promo member. "
-                "Perubahan hanya boleh dilakukan Manajer POS (SEC-07)."
+                "Nomor HP pelanggan ini terdaftar sebagai member EFN. "
+                "Perubahan hanya boleh dilakukan admin (teraudit) atau lewat verifikasi OTP (SEC-07/SEC-115)."
             )
         )
 
     def _efn_otp_member_partners(self):
-        """Partner di `self` yang punya riwayat OTP/consume (lintas company, sudo)."""
+        """Partner di `self` yang member: penanda tahan lama (SEC-115), riwayat OTP/consume (lintas company, sudo)."""
         ids = [i for i in self.ids if i]
         if not ids:
             return self.browse()
-        used = set(
+        used = set(self.sudo().browse(ids).filtered(MEMBER_FLAG).ids)
+        used |= set(
             self.env["efn.pos.otp.challenge"].sudo().search([("partner_id", "in", ids)]).mapped("partner_id").ids
         )
         remaining = [i for i in ids if i not in used]

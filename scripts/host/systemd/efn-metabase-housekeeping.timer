@@ -1,0 +1,10 @@
+[Unit]
+Description=Jadwal harian housekeeping Metabase EFN (04:00 WIB)
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 Asia/Jakarta
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

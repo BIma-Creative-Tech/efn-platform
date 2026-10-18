@@ -171,6 +171,8 @@ check_compose() {
       || err "[$label] superapp-web: EFN_PAYMENT_SIMULATOR harus false di prod (simulator pembayaran hanya dev)"
     jq -e '(.services["api-gateway"].environment.ODOO_ONLINE_MOCK // "false") == "false"' <<< "$json" > /dev/null \
       || err "[$label] api-gateway: ODOO_ONLINE_MOCK dilarang di prod (stub json2 hanya dev/test, L-7)"
+    jq -e '(.services.etl.environment.ETL_AUDIT_EPOCH_AUTO // "false") == "false"' <<< "$json" > /dev/null \
+      || err "[$label] etl: ETL_AUDIT_EPOCH_AUTO dilarang di prod (epoch otomatis hanya dev; restore = penanda efn_audit.chain_epoch)"
   fi
 
   echo "check-encryption: compose ${label} diperiksa"

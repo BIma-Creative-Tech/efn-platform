@@ -4,7 +4,8 @@ import { TokenExpiredError, sign, verify } from 'jsonwebtoken';
 import { AppConfig } from '../config/app-config';
 import { KV_STORE, KvStore } from '../common/redis/kv-store';
 import { safeEqualHex } from '../common/security/safe-equal';
-import { PosOtpPurpose } from '../otp/otp.service';
+/** Purpose token diskon/redeem (subset purpose OTP POS; `pos_enroll` TIDAK pernah menghasilkan token). */
+export type DiscountTokenPurpose = 'pos_promo' | 'pos_redeem';
 
 export type ConsumeFailureReason =
   | 'already_used'
@@ -33,7 +34,7 @@ export type ConsumeResult = { ok: true } | { ok: false; reason: ConsumeFailureRe
 
 export interface IssueDiscountTokenInput {
   /** Purpose challenge OTP asal (docs/04 §9.3). Default `pos_promo`. */
-  purpose?: PosOtpPurpose;
+  purpose?: DiscountTokenPurpose;
   orderRef: string;
   memberHash: string;
   companyCode: string;
@@ -44,7 +45,7 @@ export interface IssueDiscountTokenInput {
 /** Klaim token yang sudah diverifikasi tanda tangan, exp, bentuk, dan purpose-nya. */
 export interface DiscountTokenClaims {
   jti: string;
-  purpose: PosOtpPurpose;
+  purpose: DiscountTokenPurpose;
   orderRef: string;
   memberHash: string;
   companyCode: string;
@@ -106,7 +107,7 @@ export class DiscountTokenService {
    * Verifikasi tanda tangan, exp, bentuk klaim, dan purpose. Purpose berbeda → `invalid` (token redeem tidak bisa
    * dipakai untuk promo dan sebaliknya). Tidak menyentuh state sekali-pakai.
    */
-  verifyClaims(token: string, expectedPurpose: PosOtpPurpose): VerifyTokenResult {
+  verifyClaims(token: string, expectedPurpose: DiscountTokenPurpose): VerifyTokenResult {
     if (typeof token !== 'string' || token.length === 0 || token.length > MAX_TOKEN_LENGTH) {
       return { ok: false, reason: 'invalid' };
     }

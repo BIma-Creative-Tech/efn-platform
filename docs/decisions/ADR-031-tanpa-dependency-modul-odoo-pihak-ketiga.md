@@ -1,6 +1,6 @@
 # ADR-031: Tanpa Dependency Modul Odoo Pihak Ketiga; OCA & Cybrosys Hanya sebagai Referensi Desain
 
-- **Status:** **Diputuskan klien 6 Okt 2026** (prinsip). Rincian pelaksanaan (lisensi modul `efn_*`, anggaran tambahan, laporan keuangan statutori, studi di sandbox) masih **Proposed** sampai Q-V1..Q-V6 dijawab.
+- **Status:** **Diputuskan klien 6 Okt 2026** (prinsip). **Rincian Q-V1..Q-V6 diputuskan pemilik proyek 10 Okt 2026:** Q-V2 lisensi `efn_*` = **LGPL-3**; Q-V4 = **terima jadwal mundur 2–4 minggu** (tanpa engineer kontrak tambahan); Q-V3 = **laporan keuangan resmi per PT dari Odoo**, Metabase hanya analitik/konsolidasi; Q-V1 = **tanpa sandbox referensi**; Q-V5 = "pihak ketiga" = **semua addon non-CE**; Q-V6 = referensi **OCA + Cybrosys** saja. Konsekuensi Q-V3: tabel butir 4 di bawah — ditafsirkan sebagai **opsi (b) `efn_account_reports`** (LGPL-3, PDF/XLSX Neraca, L/R, Buku Besar, Neraca Saldo, umur piutang/utang di Odoo; **±4–6 minggu-engineer**) karena `account_reports` CE 19 tidak ada (Enterprise). ⚠ Bila Finance menganggap pivot + ekspor XLSX standar (opsi a, ±1 minggu) sudah "resmi", estimasi turun — konfirmasi Finance sebelum W-16 dimulai (`docs/10_RENCANA_GELOMBANG_18_PLUS.md`).
 - **Tanggal:** 2026-10-06
 - **Pemutus (klien):** Klien (instruksi langsung via efn-lead, 6 Okt 2026); rincian: IT Lead + Finance (anggaran, laporan) + Legal (lisensi)
 - **Referensi review:** D-15, R-T03, R-T04, R-L08, R-B09, R-S10, R-S13 (usulan ADR-030)

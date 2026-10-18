@@ -1,6 +1,6 @@
 # efn_setup_company
 
-Modul konfigurasi **data-only** (tanpa Python) untuk struktur multi-company EFN dan pajak di Odoo CE 19.
+Modul konfigurasi **data-only** (Python hanya `hooks.py`: presisi IDR Rp1, W-03) untuk struktur multi-company EFN dan pajak di Odoo CE 19.
 
 - **ADR:** ADR-001 (satu DB multi-company), ADR-019 (unified cart, Holding = agen penagih), ADR-015 (penamaan; bagian "OCA dulu" digantikan ADR-031: tanpa modul pihak ketiga). *Proposed* kecuali prinsip ADR-031 (diputuskan klien).
 - **Risiko dimitigasi:** R-T01/R-O01 (master data company konsisten dengan kontrak BFF), R-L03 (PB1 vs PPN dipisah per company; tarif & include/exclude **configurable**, bukan ditetapkan developer).
@@ -10,7 +10,7 @@ Modul konfigurasi **data-only** (tanpa Python) untuk struktur multi-company EFN 
 
 | Bagian | Isi | File | Sifat |
 |---|---|---|---|
-| Mata uang | `base.IDR` diaktifkan | `data/res_company_data.xml` | noupdate |
+| Mata uang | `base.IDR` diaktifkan; **presisi Rp1** (`rounding = 1` → 0 desimal, W-03/Q-ON6, sejak 19.0.1.4.0) | `data/res_company_data.xml`, `hooks.py` (`pre_init_hook`) | hanya saat install; **DB baru tanpa demo** (lihat di bawah) |
 | Company | 4 `res.company`: `company_efn` (EFN), `company_rtl` (RTL), `company_fnb` (FNB), `company_farm` (FARM). Negara Indonesia, IDR, `efn_brand_code`. `efn_business_type` **tidak** diisi (compute dari kode sejak `efn_core` 19.0.1.2.0, temuan QA U6) | `data/res_company_data.xml` | noupdate; **nama = placeholder** |
 | Akses admin | `base.user_admin` mendapat ke-4 company | `data/res_company_data.xml` | noupdate |
 | Fiscal localization | `account.chart.template.try_loading('id', company)` → CoA `l10n_id`, jurnal (Cash, Bank, Sales, …), pajak PPN template | `data/res_company_data.xml` | hanya saat install |
@@ -19,6 +19,11 @@ Modul konfigurasi **data-only** (tanpa Python) untuk struktur multi-company EFN 
 | Ilustrasi service charge | Grup *Service Charge* + pajak *Service Charge 5% (DEMO)* (`sequence` 5, `include_base_amount` True → masuk dasar PB1) | `demo/` | menunggu Q-22 |
 | Harga termasuk pajak | `account_price_include = tax_included` di PT Retail | `demo/` | menunggu Q-9/Q-28 |
 | Agen penagih | `efn_is_merchant_of_record = True` di Holding | `demo/` | menunggu Q-1, ADR-019 |
+
+### Presisi Rupiah Rp1 (W-03, keputusan pemilik proyek 10 Okt 2026 #19; R-T17)
+- Semua nilai uang (faktur, SO, POS, jurnal, `amount_payable` online) bulat Rupiah; harga satuan tetap 2 desimal (`decimal.precision` "Product Price"). Bukti PoC + dampak per area: `docs/08_ODOO_FIT_GAP.md` §9.1.
+- Odoo **menolak** menaikkan presisi bila sudah ada jurnal IDR (`account/models/res_currency.py` `write`). Karena itu `pre_init_hook` (`hooks.py`) mengubahnya sebelum data/CoA modul ini dimuat → berlaku **saat install di DB baru tanpa demo** saja. DB `--with-demo`: demo `l10n_id` sudah membuat jurnal IDR ("ID Company") → hook melewati dengan WARNING, presisi tetap 0,01 (DB demo hanya untuk dev). **Cek pra-go-live:** `SELECT rounding FROM res_currency WHERE name='IDR'` = 1. DB yang sudah ada (mis. dev `efn_odoo`) tetap 0,01 sampai dibuat ulang; **DB produksi wajib dibuat dari versi ≥ 19.0.1.4.0**.
+- Cash rounding POS/online tidak diperlukan lagi. Catatan pajak: PPN jurnal (11 %) vs e-Faktur Coretax (12 % × DPP 11/12 per baris) bisa selisih Rp1 per baris (Q-F18-2). Test: `tests/test_currency_idr.py`.
 
 ### Pajak dari template `l10n_id` (terverifikasi di `l10n_id/data/template/account.tax-id.csv`, 19.0)
 - `tax_ST4` "12% (Non-Luxury Good)" — penjualan, amount 11 (12% × DPP nilai lain 11/12), **default penjualan**; `tax_PT4` padanannya untuk pembelian.

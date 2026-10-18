@@ -172,7 +172,11 @@ services:
       ETL_AUDIT_COPY_ENABLED: "true"
       # G14: go-live loyalty POS di DB dev (efn_pos_loyalty_ledger dipasang 7 Okt). Tanpa ini 42 order smoke lama
       # muncul sebagai anomali `paid_member_order_without_earn` (EfnLoyaltyEtlReconAnomaly palsu).
-      ETL_LOYALTY_RECON_NOT_BEFORE: "2026-10-07T07:09:00Z"
+      # G18 QA: bisa ditimpa .env (mis. setelah reset DB Odoo dev) agar data uji lama BFF tidak memicu temuan.
+      ETL_LOYALTY_RECON_NOT_BEFORE: ${ETL_LOYALTY_RECON_NOT_BEFORE:-2026-10-07T07:09:00Z}
+      # G18 (data-AI): epoch rantai salinan audit OTOMATIS saat DB Odoo dev di-reset (KHUSUS dev; staging/production
+      # ditolak deploy-validate EFN_DEV_ONLY_SWITCHES + check-encryption + config ETL)
+      ETL_AUDIT_EPOCH_AUTO: "true"
 
   ocr-worker:
     image: efn/ai-ocr-worker:dev

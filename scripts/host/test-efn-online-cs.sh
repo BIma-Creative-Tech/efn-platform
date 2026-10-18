@@ -140,5 +140,20 @@ rm -f /tmp/fake-no-container
 if grep -q 'DITOLAK' /tmp/journal.log && ! grep -q 'tiket CS' /tmp/journal.log; then
   ok "45 penolakan tercatat journald, alasan tidak pernah di journald"; else bad "45 penolakan journald"; fi
 
+# ── W-18: erasure-pending (read-only, tanpa alasan/stdin, cs & approver) ────────────────────────────────────
+: > /tmp/journal.log
+IN="" as_cs1 online-erasure-pending
+if [[ $RC -eq 0 ]] && grep -qx 'dist/cli/online-erasure-pending.js' /tmp/exec.log && ! grep -qx -- '-i' /tmp/exec.log \
+   && [[ ! -s /tmp/exec.stdin ]] && grep -qx 'EFN_CS_ROLE=cs' /tmp/exec.log; then
+  ok "46 erasure-pending peran cs: tanpa alasan, tanpa stdin (-i), skrip online-erasure-pending.js"; else bad "46 erasure-pending cs"; fi
+IN="tidak dibaca" as_user ap1 "$UIDA" erasure-pending
+if [[ $RC -eq 0 && ! -s /tmp/exec.stdin ]] && grep -qx 'EFN_CS_ROLE=approver' /tmp/exec.log; then
+  ok "47 erasure-pending peran approver; stdin pemanggil tidak diteruskan"; else bad "47 erasure-pending approver"; fi
+if grep -q 'SELESAI aktor=cs1 peran=cs .*cmd=online-erasure-pending rc=0' /tmp/journal.log; then ok "48 erasure-pending tercatat journald"; else OUT=$(cat /tmp/journal.log); bad "48 journald"; fi
+as_cs1 online-erasure-pending --part=$P;                      expect_deny "49 erasure-pending dengan flag ditolak" "tidak diizinkan"
+as_cs1 erasure-pending extra;                           expect_deny "50 erasure-pending argumen posisi ditolak" "nama=nilai"
+as_user dual "$UIDD" erasure-pending;                   expect_deny "51 erasure-pending dua peran ditolak (SEC-107)" "satu orang satu peran"
+as_user cs2 "$UID2" erasure-pending;                    expect_deny "52 erasure-pending bukan anggota grup CS ditolak" "bukan anggota"
+
 echo "RINGKASAN efn-online-cs: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]

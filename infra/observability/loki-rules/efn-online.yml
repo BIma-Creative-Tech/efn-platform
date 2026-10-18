@@ -100,3 +100,31 @@ groups:
           summary: "odoo-rpc-gateway menolak request BFF (alasan {{ $labels.why }})"
           description: "Request ke Odoo /json/2 di luar 10 metode/format yang diizinkan. Periksa versi BFF; bila tidak dapat dijelaskan, perlakukan sebagai insiden."
           runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#efnodoorpcgatewaydenied"
+
+  # G18 (W-11): jejak timer rotasi API key Odoo kanal online `efn-rotate-online-key` (journald host, _UID 0 saja,
+  # promtail-journal.yml -> service="host-efn-rotate-online-key"). Baris tanpa nilai key. Gagal biasa -> metrik
+  # efn_odoo_api_key_rotation_last_run_ok (alert-rules.yml EfnOnlineApiKeyRotationFailed); di sini hanya kondisi
+  # yang bisa mematikan kanal SEKARANG. Runbook: odoo-online-api-key.md#rollback-gagal.
+  - name: efn-online-key-rotation
+    interval: 1m
+    rules:
+      - alert: EfnOnlineApiKeyRollbackFailed
+        expr: |
+          sum by (host) (count_over_time({service="host-efn-rotate-online-key"} |= `ROLLBACK GAGAL` [30m])) > 0
+        labels:
+          severity: critical
+          team: ops
+        annotations:
+          summary: "Rotasi API key kanal online: ROLLBACK GAGAL di host {{ $labels.host }}"
+          description: "Key baru gagal verifikasi DAN key lama tidak bisa dipulihkan; checkout online bisa berhenti (R-T15)."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/odoo-online-api-key.md#rollback-gagal"
+      - alert: EfnOnlineApiKeyOldKeyStillAccepted
+        expr: |
+          sum by (host) (count_over_time({service="host-efn-rotate-online-key"} |= `key lama masih dijawab` [1h])) > 0
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Key lama kanal online masih diterima Odoo setelah dicabut (host {{ $labels.host }})"
+          description: "Pencabutan belum efektif (cache worker Odoo?). Restart odoo terjadwal / cek ulang dengan --status; perlakukan sebagai temuan keamanan bila menetap."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/odoo-online-api-key.md#rotasi-gagal"

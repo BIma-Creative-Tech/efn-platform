@@ -203,3 +203,36 @@ def test_transform_product() -> None:
 
 def test_product_sql_versions_on_variant_and_template() -> None:
     assert PRODUCTS.sql.count("GREATEST(pp.write_date, pt.write_date)") >= 4
+
+
+def test_points_payment_flag_only_in_payment_mode() -> None:
+    # SEC-114: default mode payment membaca penanda E-30; mode produk (historis) tidak menyentuhnya.
+    from efn_etl.pos import pos_jobs, pos_payments_job
+
+    product = pos_payments_job(points_payment=False)
+    assert "efn_is_loyalty_points" not in product.sql
+    assert "FALSE AS is_loyalty_points" in product.sql
+    assert "efn_is_loyalty_points" in POS_PAYMENTS.sql
+    payment = pos_payments_job(points_payment=True)
+    assert "COALESCE(pm.efn_is_loyalty_points, FALSE) AS is_loyalty_points" in payment.sql
+    assert "{" not in payment.sql and "%(cursor_ts)s" in payment.sql
+    assert [j.name for j in pos_jobs(True)] == [j.name for j in POS_JOBS]
+    row = {
+        "payment_id": 4,
+        "order_id": 9,
+        "company_id": 4,
+        "company_name": "PT Retail",
+        "store_id": 1,
+        "payment_date": TS,
+        "amount": Decimal("6000"),
+        "payment_method_id": 7,
+        "method_name": "Poin EFN",
+        "method_type": "none",
+        "is_cash": False,
+        "is_change": False,
+        "is_refund": False,
+        "is_loyalty_points": True,
+        "write_date": TS,
+    }
+    out = dict(zip(POS_PAYMENT_COLUMNS, transform_pos_payment(row), strict=True))
+    assert out["is_loyalty_points"] == 1

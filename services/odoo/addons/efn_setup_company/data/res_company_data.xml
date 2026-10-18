@@ -7,7 +7,12 @@
      efn_brand_code (temuan QA U6, Gelombang 5). -->
 <odoo noupdate="1">
 
-    <!-- Rupiah aktif (base.IDR nonaktif di database baru). -->
+    <!-- Rupiah aktif (base.IDR nonaktif di database baru).
+         W-03 / Q-ON6 (keputusan pemilik proyek 10 Okt 2026): presisi IDR GLOBAL Rp1 diatur di
+         hooks.py pre_init_hook (SEBELUM data ini & CoA), bukan di sini: Odoo menolak menaikkan rounding bila
+         sudah ada jurnal IDR (DB demo l10n_id) -> hook melewati dengan WARNING agar DB demo tetap bisa dibuat.
+         Hanya saat install pertama: upgrade TIDAK mengubah DB yang sudah ada (dev efn_odoo tetap 0.01 sampai
+         dibuat ulang). Bukti PoC & dampak: docs/08_ODOO_FIT_GAP.md §9.1. -->
     <record id="base.IDR" model="res.currency">
         <field name="active" eval="True"/>
     </record>

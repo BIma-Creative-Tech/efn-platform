@@ -32,7 +32,7 @@ describe('PosController', () => {
       fakeReq(),
     );
     expect(pos.requestOtp).toHaveBeenCalledWith(
-      { purpose: 'pos_promo', memberRef: '6281234567890', orderRef: '3f2b8c1e-7d4a-4e0b-9c55-2a1f0e6d9b10', amount: 125000, companyCode: 'FNB', posConfigId: 3 },
+      { purpose: 'pos_promo', ageConfirmed: false, memberRef: '6281234567890', orderRef: '3f2b8c1e-7d4a-4e0b-9c55-2a1f0e6d9b10', amount: 125000, companyCode: 'FNB', posConfigId: 3 },
       '10.0.0.5',
     );
   });

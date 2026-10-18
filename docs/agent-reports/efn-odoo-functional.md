@@ -288,3 +288,116 @@ Compute `sale.order.new()` untuk quote di 19; perilaku `account.cash.rounding` p
 - Run pertama (tepat setelah Docker Desktop restart, working tree sedang diubah agent lain) mencatat 1 fail + 1 error di `efn_online_order` (`test_ops_cancel_from_sale_order_ui`, `test_handover_other_company_denied` — hak akses grup, tidak terkait pajak); tidak terulang pada run ulang DB baru. Baseline HEAD (tanpa perubahan ini): 0 failed dari 391.
 - Load demo DB baru `--with-demo`: exit 0, tanpa ERROR.
 - Belum: `efn_setup_security` install-after (tidak disentuh), tour POS `odoo-tour`, struk POS dengan label baru (dilihat di UI), smoke online ulang di DB dev.
+
+## Gelombang 18 — 2026-10-10 s.d. 12 (fit-gap W-03, W-01, W-24, W-20, W-25; konfigurasi W-22, W-10, W-11, W-25, W-03)
+
+Detail: `docs/08_ODOO_FIT_GAP.md` §9 (PoC W-03 §9.1, desain W-01 + usulan kontrak K-18-1..K-18-8 §9.2/§9.5, E-31 §9.3, GS1 §9.4, W-25 + usia 17+ §9.5, konfigurasi §9.6, gap E-30..E-34 §9.7, Q-F18-1..7 §9.9). PoC nyata di PostgreSQL 16.15 terpisah (network `efn-fg18`). DB dev `efn_odoo` tidak disentuh. Container, network, dan DB uji sudah dihapus.
+
+### Hasil PoC W-03 (IDR 0,01 vs Rp1, transaksi identik)
+- Faktur PPN exclude: 98.388,18 → **98.388**. Faktur PPN include: total 81.963, PPN 8.122. **e-Faktur Coretax menghasilkan Σ PPN 8.123 (selisih Rp1)** karena DPP 11/12 dibulatkan per baris (Q-F18-2).
+- Faktur F&B dengan SC 5 % + PB1 10 %: 89.679,98 → **89.680**. SC tetap masuk DPP PB1.
+- SO + pricelist member 5 %: 52.273,75 → **52.274**. Harga satuan tetap 2 desimal.
+- POS tunai: **84.346,25** (tidak bisa dibayar tunai) → **84.346**. Tutup sesi seimbang di kedua DB.
+- Odoo menolak menaikkan presisi bila sudah ada jurnal IDR (`account/models/res_currency.py` `write`), jadi perubahan hanya berlaku di DB baru. Demo `l10n_id` sudah membuat jurnal IDR sebelum `efn_setup_company` terpasang, sehingga nilai di XML membuat install `--with-demo` gagal. Karena itu nilai dipindah ke `pre_init_hook` kecil: pada DB demo hook melewati perubahan dengan WARNING.
+- Cash rounding POS dan online tidak diperlukan lagi.
+
+### Desain W-01 (ringkas)
+"Poin EFN" menjadi `pos.payment.method` per PT: jurnal bank, `payment_method_type='none'`, `outstanding_account_id` = akun liabilitas atau kliring poin. **PoC: Dr Liabilitas Poin 5.000 / Cr Piutang PoS 5.000; penjualan dan PPN tetap atas harga penuh; sesi ditutup sukses.**
+Isi E-30:
+- penanda `efn_is_loyalty_points`;
+- tombol kasir menambah baris pembayaran yang terkunci;
+- validasi server: Σ = `value_idr` (toleransi 0), partner, batas %, reservasi;
+- larangan selisih saat tutup sesi;
+- refund poin negatif proporsional + `points_restored_value`;
+- earn = `eligible × (1 − bayar_poin/total)` (menunggu keputusan Finance);
+- offline tetap mati.
+
+Usulan kontrak §9 v6: K-18-1..K-18-7, ditambah K-18-8 (`age_confirmed` untuk POS `pos_enroll`).
+
+### Gap untuk efn-odoo-engineer
+| Kode | Isi | Estimasi |
+|---|---|---|
+| E-30 | Poin EFN = metode bayar (W-01) | 1,5–2 minggu |
+| E-31 | `efn_pos_refund_origin`, refund ke metode asal (W-24) | 1 minggu |
+| E-32 | (opsional) pricelist member hanya untuk member (R-B06) | 2–3 hari |
+| E-33 | (opsional) cek kedaluwarsa lot + AI harga GS1 di POS (W-20) | 1,5–2 minggu |
+| E-34 | OTP `pos_enroll` + centang pernyataan usia 17+ → `age_confirmed` ke BFF (W-25) | 2 hari (+0,5 BFF) |
+
+### Konfigurasi diterapkan
+| Modul | Versi | Perubahan |
+|---|---|---|
+| `efn_setup_company` | 19.0.1.4.0 | `hooks.py` `pre_init_hook`: IDR `rounding = 1` di DB baru tanpa jurnal. Test `test_currency_idr.py` (3) |
+| `efn_setup_pos` | 19.0.1.6.0 | depends baru `efn_pos_kds` dan `efn_pos_otp_gate`. Data: `pos_kds_defaults.xml` (warn 5 / late 10), `pos_cashier_groups.xml` (grup "Kasir: boleh membuat pelanggan"). Demo: `pos_kds_demo.xml` (Bakery/Pastry + Bar Kopi, expo diarsipkan), `pos_promo_demo.xml` (3 promo standar). Test `test_g18_config.py` (5). README diperbarui |
+| `efn_setup_online` | 19.0.1.1.0 | `api_key_duration` grup kanal = 35 (noupdate=0). **`base.group_user.api_key_duration = 0`** (temuan devsecops: durasi efektif = maksimum dari semua grup; CE memberi Internal User 90 hari). Test `TestEfnOnlineApiKeyDuration` (4); test lama diperketat ke = 35 |
+| `scripts/smoke/odoo_online_smoke.py` | — | default `SMOKE_KEY_DAYS` 85 → 30 (85 hari kini ditolak Odoo) |
+
+**Dampak W-11 ke user manusia:**
+- User internal tanpa grup berdurasi kini hanya bisa membuat API key maksimal 1 hari (fallback CE).
+- Admin/Settings dan `sudo()` tetap tidak dibatasi (`is_system`). Karena itu rotasi key wajib memakai `with_user(<user teknis>)`; skrip `efn-rotate-online-key` sudah demikian.
+- Tidak ada layanan EFN lain yang memakai API key user manusia (dicek dengan grep `odoo_api_key*`).
+- `-u base` mengembalikan nilai 90, tetapi `efn_setup_online` ikut ter-upgrade sebagai modul dependen sehingga nilai dinormalkan lagi.
+
+### Hasil verifikasi (image `efn-odoo:ci` / `efn-odoo:ci-test` + addons working tree, DB baru)
+- Suite efn penuh pola CI (15 modul `EFN_TEST_MODULES` termasuk `efn_online_pos_sale`, `--test-tags efn`): **0 failed, 0 error dari 430 test**. Tes baru: IDR 3, G18 POS 5, durasi API key 4. Hasil DB: IDR `rounding` 1,0; hanya grup kanal yang punya durasi (35).
+- `efn_setup_security` di-install setelah suite di DB yang sama: exit 0, tanpa ERROR.
+- Tour POS (`efn_tour`, 5 modul CI): **0 failed, 0 error dari 20 test**. Tour dijalankan sebelum perubahan W-11 `base.group_user`; DB tour tidak memasang `efn_setup_*`, jadi tidak terdampak.
+- Install `--with-demo` untuk 5 modul `efn_setup_*`: exit 0, tanpa ERROR. Stasiun KDS 5/10, expo diarsipkan, 3 promo demo terbentuk. Di DB demo, IDR tetap 0,01 (WARNING hook, sesuai desain).
+- ruff check + format: bersih (170 file).
+
+### Belum / catatan untuk lead
+- DB dev `efn_odoo` tetap IDR 0,01 sampai dibuat ulang. W-11 ikut diterapkan saat `-u efn_setup_online`. DB produksi wajib dibuat dari versi ini tanpa demo; cek `SELECT rounding FROM res_currency WHERE name='IDR'` = 1.
+- Nomenklatur GS1 untuk PT Retail **belum** diterapkan; menunggu model scanner/timbangan dan label supplier, lalu PoC scan di perangkat nyata.
+- Data metode bayar "QRIS (statis)" dan "Poin EFN" belum dibuat: QRIS butuh akun merchant, Poin EFN butuh field dari E-30.
+- Belum diuji: smoke online BFF di atas IDR Rp1 (bff/QA), struk POS di UI, rumus dua tahap `account_tax_python` (Q-F18-2), FEFO pada picking POS tanpa lot.
+- `scripts/check-odoo-deps.sh` tidak bisa dijalankan lokal karena butuh Python di host. Depends baru hanya `efn_*`.
+- Pertanyaan klien: Q-F18-1..7 (`docs/08 §9.9`).
+
+### Gelombang 18 lanjutan — 2026-10-12 (L-23 harga member = promo OTP; draf data Poin EFN)
+- **L-23 (Q-F18-7)** di `efn_setup_pos` 19.0.1.7.0:
+  - `data/pos_member_price_data.xml` berisi template promo *Harga Member 5% - wajib OTP (PLACEHOLDER)* untuk PT Retail: `promotion` otomatis, diskon 5 % per order, `efn_requires_otp`.
+  - Template **nonaktif** (`active=False`, `pos_ok=False`). Alasannya, constraint `efn_pos_otp_gate` mewajibkan program OTP ditautkan ke `pos_config_ids` POS kasir, sedangkan pos.config tidak dibuat lewat XML. Nonaktif juga mencegah `sale_loyalty` menerapkannya ke SO.
+  - Pricelist demo *Harga Member* diarsipkan. Checklist README: `available_pricelist_ids` = pricelist umum saja; promo diaktifkan per outlet.
+  - Test `TestEfnMemberPriceOtp` (3): bentuk template, aktivasi wajib POS kasir, tidak ada pricelist "member" yang ditawarkan ke POS mana pun.
+  - E-32 tidak diperlukan.
+  - Sisa risiko: admin POS masih bisa menambahkan pricelist apa pun ke POS (kontrol prosedural + review akses).
+- **Draf data Poin EFN (W-01/E-30):** `efn_setup_pos/data/drafts/pos_loyalty_points_payment.xml.draft`, **tidak dimuat** manifest.
+  - Isi per PT Retail & PT F&B: jurnal bank PEFN, akun `liability_current` PLACEHOLDER (Q-F18-3), metode "Poin EFN" (`none`, bukan tunai, `outstanding_account_id` = akun poin).
+  - Penanda field E-30 masih `__E30_FLAG_FIELD__`. Working tree E-30 saat ini memakai `efn_is_loyalty_points`, tetapi belum final, jadi tidak saya kunci.
+  - Draf (tanpa baris penanda) sudah dicoba dimuat via `convert_file` di DB uji lalu di-rollback: OK, jurnal bank, akun liabilitas, bukan tunai.
+  - Langkah aktivasi ada di komentar file.
+- **Verifikasi** (DB baru, PostgreSQL 16.15 terpisah). Working tree saat itu memuat pekerjaan engineer lain yang sedang berjalan: E-30 di `efn_pos_loyalty_ledger`, E-31 `efn_pos_refund_origin` baru, perubahan `efn_pos_otp_gate`, dan test `efn_core`.
+  - **Working tree penuh:** suite 440 test → 2 failed + 2 error, tour 3 failed dari 20. Semua kegagalan ada di kode E-30 yang sedang dikerjakan engineer: `test_rpc_surface` (metode publik baru belum di-allowlist), 3 test `test_loyalty_ledger`, 3 tour Poin EFN (tombol `.efn-redeem-points` sudah tidak ada). **Tidak ada yang terkait `efn_setup_*`.**
+  - **Isolasi** (HEAD untuk semua modul + `efn_setup_company`/`efn_setup_pos`/`efn_setup_online` dari working tree): suite **0 failed / 0 error dari 433 test**, `efn_setup_security` install-after exit 0, tour **0 failed / 0 error dari 20 test**, ruff bersih.
+  - Container, network, DB uji, dan salinan addons isolasi sudah dihapus.
+
+### Gelombang 18 lanjutan 2 — 2026-10-12 (data Poin EFN final setelah E-30 `fe56a07`)
+- `efn_setup_pos` 19.0.1.8.0, depends baru `efn_pos_loyalty_ledger`:
+  - `data/pos_loyalty_points_payment.xml` (noupdate), per PT Retail & PT F&B: jurnal bank *Poin EFN* (PEFN, tanpa rekening), akun `liability_current` 21990091 *Liabilitas / Kliring Poin EFN* (PLACEHOLDER Q-F18-3) sebagai `outstanding_account_id`, dan metode "Poin EFN" (`efn_is_loyalty_points=True`, `payment_method_type='none'`, tanpa split).
+  - Penautan ke POS yang redeem-nya aktif (pos.config tidak dibuat lewat XML) ada di `models/pos_config_points.py`:
+    - otomatis saat POS dibuat atau diubah dengan `efn_loyalty_redeem_enabled`;
+    - `data/pos_loyalty_points_link.xml` (noupdate=0) menautkan ulang setiap install/upgrade;
+    - POS dengan sesi terbuka dilewati (dicatat di log); hanya menambah, tidak pernah menghapus.
+  - Override `_default_payment_methods`: default CE memasang semua metode non-tunai company ke POS baru (ditemukan dari test yang gagal), sehingga Poin EFN dikecualikan dan POS tanpa redeem/kiosk tidak mendapatkannya.
+  - Draf `.xml.draft` dihapus. README (tabel data + checklist) dan `docs/08 §9.6` diperbarui.
+  - Test `TestEfnPointsPaymentMethodData` (4): metode per PT, ditautkan saat dibuat, ditautkan saat redeem diaktifkan belakangan (bukan sebelumnya, dan bukan metode PT lain), fungsi upgrade menautkan ulang.
+- **Hasil uji** (working tree, DB baru, PostgreSQL 16.15 terpisah):
+  - suite efn penuh 16 modul (termasuk `efn_pos_refund_origin`): **0 failed / 0 error dari 456 test**;
+  - `efn_setup_security` install-after: exit 0;
+  - tour 6 modul CI: **0 failed / 0 error dari 22 test**. Tour dijalankan sebelum override `_default_payment_methods`; DB tour tidak memasang `efn_setup_pos`, jadi tidak terdampak;
+  - ruff bersih (182 file).
+- Container, network, dan DB uji sudah dihapus.
+- Catatan: rename draf sempat ter-stage oleh `git mv`; index sudah dikembalikan (`git restore --staged`), sehingga perubahan hanya ada di working tree. Working tree juga berisi `efn_pos_loyalty_ledger/static/tests/tours/efn_loyalty_tour.js` yang diubah agent lain (bukan saya).
+
+### Gelombang 18 — SEC-121 (review r11, L-25i), 2026-10-14
+- **`efn_setup_pos` 19.0.1.9.0:** grup "Kasir: boleh membuat pelanggan" tidak lagi mewarisi `base.group_partner_manager` (`implied_ids` di-set ulang ke POS User saja, sehingga user lama ikut kehilangan hak saat upgrade).
+  - ACL `res.partner` grup ini: baca + buat (tanpa write/unlink).
+  - Record rule grup: partner yang dibuat wajib individu, tanpa induk, dan `company_id` = company POS aktif.
+  - Rule pembanding (domain semua) untuk `base.group_partner_manager` menjaga user Contact Creation standar tetap tidak dibatasi.
+  - `models/res_partner.py`: default field `company_id` = company aktif khusus kasir ber-grup sempit. Hanya default; nilai kiriman klien tidak diubah. Override field (bukan `default_get`) dipilih agar tidak menambah metode publik — `efn_core` `test_rpc_surface` sempat menolak `default_get`.
+- **Cek kebutuhan POS standar:** alur kasir CE 19 tidak menulis partner; pelanggan baru dibuat via form → `web_save` (create). Karena itu tidak ada field yang perlu dibuka untuk write. Mengedit pelanggan lama = supervisor/back office.
+- **Verifikasi `call_kw` HTTP sebagai kasir** (login nyata, image `efn-odoo:ci`, DB uji terpisah):
+  - diizinkan: `default_get` company = PT F&B; `web_save` pelanggan individu → partner PT F&B; read partner;
+  - ditolak `AccessError`: create perusahaan, partner bersama, partner PT lain, kontak anak; write nama/HP partner sendiri dan partner bersama; unlink; create/write `res.partner.bank`.
+- **Test** `TestEfnG18Config` (6 test SEC-121 baru, menggantikan 3 test W-25 lama). Kunci HP member (SEC-115) milik engineer di `efn_pos_otp_gate`, tidak saya sentuh.
+- **Tidak dicek eksplisit:** cashier yang punya akses lebih dari satu company (field company tampil di form) — default tetap company aktif, tetapi bisa diubah ke PT lain lalu ditolak rule.
+- **Hasil uji:** suite efn penuh 16 modul (working tree, termasuk WIP engineer SEC-113/115) **479 test: 0 failed, 1 error** di `efn_pos_loyalty_ledger` `test_sec113_points_payment_only_via_sync` (AccessError `res.currency` pada user uji test itu — WIP engineer, bukan partner/grup kasir); seluruh test `efn_setup_pos` (termasuk 6 SEC-121) dan `efn_core` `test_rpc_surface` lulus. `efn_setup_security` install-after exit 0. Tour 6 modul CI **0 failed dari 25** (DB tour tidak memasang `efn_setup_pos`). ruff `efn_setup_pos` bersih; `efn_pos_refund_origin/tests/test_payment_integrity_rpc.py` (WIP agent lain) E501. Container/DB uji dihapus.

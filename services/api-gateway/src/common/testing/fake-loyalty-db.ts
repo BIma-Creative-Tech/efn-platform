@@ -42,6 +42,7 @@ export interface FakeReservationRow {
   updated_at: string;
   committed_at: string | null;
   commit_idempotency_key: string | null;
+  order_goods_incl?: number | null;
 }
 
 type Undo = () => void;
@@ -71,6 +72,8 @@ export interface FakeEarnRow {
 export class FakeLoyaltyDb implements Db {
   readonly ledger: FakeLedgerRow[] = [];
   readonly earns = new Map<string, FakeEarnRow>();
+  /** G18 K-18-6: `platform.loyalty_pos_reverse` (PK refund_order_ref, UNIQUE idempotency_key). */
+  readonly reverses = new Map<string, Record<string, unknown>>();
   readonly reservations = new Map<string, FakeReservationRow>();
   readonly queries: string[] = [];
   /** SEC-65 (`erasureBlock`): member_hash dengan DSAR delete aktif; tag daftar tolak → expires_at ISO. */
@@ -274,6 +277,65 @@ export class FakeLoyaltyDb implements Db {
         .reduce((s, r) => s + r.points, 0);
       return ok([{ held: String(held) }]);
     }
+    if (text.includes('INSERT INTO platform.loyalty_pos_reverse')) {
+      const row = {
+        refund_order_ref: String(p[0]),
+        original_order_ref: String(p[1]),
+        company_code: String(p[2]),
+        points_restored_value: Number(p[3]),
+        points_restored: Number(p[4]),
+        idempotency_key: String(p[5]),
+        created_at: String(p[6]),
+        refund_ratio: Number(p[7] ?? 0),
+        refund_goods_incl: p[8] === null || p[8] === undefined ? null : Number(p[8]),
+        restore_approved: p[9] === true,
+      };
+      if (this.reverses.has(row.refund_order_ref) || [...this.reverses.values()].some((r) => r.idempotency_key === row.idempotency_key)) {
+        return ok([], 0);
+      }
+      this.reverses.set(row.refund_order_ref, row);
+      undo.push(() => this.reverses.delete(row.refund_order_ref));
+      return ok([], 1);
+    }
+    if (text.includes('FROM platform.loyalty_pos_reverse WHERE original_order_ref = $1')) {
+      const rows = [...this.reverses.values()].filter((r) => r.original_order_ref === p[0] && r.refund_order_ref !== p[1]);
+      return ok([
+        {
+          ratio: rows.reduce((s, r) => s + Number(r.refund_ratio ?? 0), 0),
+          restored: String(rows.reduce((s, r) => s + Number(r.points_restored_value), 0)),
+          goods: String(rows.reduce((s, r) => s + Number(r.refund_goods_incl ?? 0), 0)),
+          goods_missing: String(rows.filter((r) => r.refund_goods_incl === null || r.refund_goods_incl === undefined).length),
+        },
+      ]);
+    }
+    if (text.includes('SUM(value_idr), 0)::bigint AS v') && text.includes('FROM platform.loyalty_reservation')) {
+      const rows = [...this.reservations.values()].filter((r) => r.order_ref === p[0] && r.status === 'committed');
+      return ok([
+        {
+          v: String(rows.reduce((s, r) => s + r.value_idr, 0)),
+          t: String(rows.reduce((s, r) => s + Number(r.order_goods_incl ?? 0), 0)),
+          t_missing: String(rows.filter((r) => r.order_goods_incl === null || r.order_goods_incl === undefined).length),
+          amt: String(rows.reduce((s, r) => s + r.amount_total, 0)),
+        },
+      ]);
+    }
+    if (text.includes('SELECT 1 AS pending FROM platform.loyalty_reservation')) {
+      return ok(
+        [...this.reservations.values()]
+          .filter((r) => r.order_ref === p[0] && r.status === 'reserved' && ms(r.hold_until) > ms(String(p[1])))
+          .map(() => ({ n: 1 })),
+      );
+    }
+    if (text.includes('FROM platform.loyalty_pos_reverse')) {
+      return ok([...this.reverses.values()].filter((r) => r.refund_order_ref === p[0] || r.idempotency_key === p[1]).map((r) => ({ ...r })));
+    }
+    if (text.includes('SELECT value_idr, amount_total FROM platform.loyalty_reservation WHERE order_ref = $1 AND status = \'committed\'')) {
+      return ok(
+        [...this.reservations.values()]
+          .filter((r) => r.order_ref === p[0] && r.status === 'committed')
+          .map((r) => ({ value_idr: String(r.value_idr), amount_total: String(r.amount_total) })),
+      );
+    }
     if (text.includes('INSERT INTO platform.loyalty_reservation')) {
       const row: FakeReservationRow = {
         id: String(p[0]),
@@ -306,7 +368,17 @@ export class FakeLoyaltyDb implements Db {
       if (!r) return ok([], 0);
       const next = { ...r, status: 'committed' as const };
       this.checkUnique(next, r.id);
-      this.setStatus(r, { status: 'committed', committed_at: String(p[1]), commit_idempotency_key: String(p[2]), updated_at: String(p[1]) }, undo);
+      this.setStatus(
+        r,
+        {
+          status: 'committed',
+          committed_at: String(p[1]),
+          commit_idempotency_key: String(p[2]),
+          updated_at: String(p[1]),
+          order_goods_incl: p[3] === null || p[3] === undefined ? null : Number(p[3]),
+        },
+        undo,
+      );
       return ok([], 1);
     }
     if (text.includes("SET status = 'released'")) {
@@ -330,7 +402,11 @@ export class FakeLoyaltyDb implements Db {
     if (text.includes('DELETE FROM platform.loyalty_reservation') && text.includes('updated_at < $1')) {
       const limit = Number(p[1]);
       const old = [...this.reservations.values()]
-        .filter((r) => r.status !== 'reserved' && ms(r.updated_at) < ms(String(p[0])))
+        .filter(
+          (r) =>
+            ((r.status === 'released' || r.status === 'expired') && ms(r.updated_at) < ms(String(p[0]))) ||
+            (r.status === 'committed' && p[2] !== undefined && ms(r.updated_at) < ms(String(p[2]))),
+        )
         .slice(0, limit);
       for (const r of old) {
         this.reservations.delete(r.id);

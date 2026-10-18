@@ -89,6 +89,7 @@ LOG_COPY_COLUMNS = (
     "prev_hash",
     "row_hash",
     "ingest_kind",
+    "chain_epoch",
 )
 LINE_COPY_COLUMNS = (
     "line_id",
@@ -103,6 +104,7 @@ LINE_COPY_COLUMNS = (
     "is_masked",
     "redacted",
     "line_hash",
+    "chain_epoch",
 )
 
 
@@ -226,8 +228,10 @@ def build_copy(
     lines_by_log: Mapping[int, Sequence[Mapping[str, Any]]],
     heads: dict[int, ChainHead],
     ingest_kind: str,
+    epoch: int = 0,
 ) -> CopyBatch:
-    """Bangun baris salinan untuk `logs` (urut id). `heads` dimutasi (kepala rantai per company maju)."""
+    """Bangun baris salinan untuk `logs` (urut id). `heads` dimutasi (kepala rantai per company maju). `epoch` = chain
+    epoch (rantai & watermark terpisah per epoch; epoch baru setelah restore DB Odoo, lihat `decide_epoch`)."""
     batch = CopyBatch()
     for log in sorted(logs, key=lambda r: int(r["id"])):
         log_id = int(log["id"])
@@ -260,10 +264,11 @@ def build_copy(
                 head.row_hash,
                 row_hash,
                 ingest_kind,
+                epoch,
             ]
         )
         for line in lines:
-            batch.line_rows.append(line_copy_row(line, personal))
+            batch.line_rows.append([*line_copy_row(line, personal), epoch])
         if lines:
             batch.line_log_ids.add(log_id)
         heads[key] = ChainHead(seq=head.seq + 1, row_hash=row_hash)
@@ -457,3 +462,112 @@ def compare_content(
         return
     result.modified += 1
     result.note(int(log["id"]))
+
+
+# ------------------------------------------------------------------ chain epoch (restore DB Odoo)
+#
+# Setelah DB Odoo dipulihkan dari backup/PITR, id `efn.audit.log` mundur ke keadaan backup: log yang dibuat setelah
+# backup hilang dari sumber (tetapi tetap ada di salinan), dan log BARU memakai ulang id yang sudah tersalin. Tanpa
+# epoch, watermark `max(log_id)` membuat log baru itu tidak pernah disalin dan rekonsiliasi melaporkan anomali.
+#
+# Epoch = garis keturunan sumber. Salinan epoch lama dibekukan sebagai bukti (tidak dihapus/diubah); epoch baru punya
+# rantai hash (GENESIS per company) dan watermark sendiri dan menyalin ulang seluruh log yang ada di sumber.
+#
+# Pemicu epoch baru (fail-closed):
+# - penanda eksplisit `ir.config_parameter` `efn_audit.chain_epoch` (dibaca lewat view `efn_etl_audit_epoch`) BERUBAH
+#   dari penanda epoch berjalan -> epoch baru (runbook restore WAJIB mengubahnya);
+# - divergensi otomatis TANPA perubahan penanda (id sumber mundur: `max(id)` sumber < watermark epoch, atau tidak satu
+#   pun dari K log tersalin terakhir ditemukan utuh di sumber) -> DIBLOKIR (salinan berhenti, log ERROR tiap siklus)
+#   kecuali `ETL_AUDIT_EPOCH_AUTO=true` (hanya non-production, mis. reset DB dev).
+# Divergensi parsial (sebagian anchor cocok) BUKAN restore -> salinan berlanjut; rekonsiliasi melaporkan tamper.
+
+EPOCH_MARKER_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+EPOCH_COLUMNS = (
+    "epoch",
+    "marker",
+    "reason",
+    "started_at",
+    "prev_max_log_id",
+    "source_max_log_id",
+    "anchors_checked",
+    "anchors_matched",
+)
+
+
+@dataclass(frozen=True)
+class EpochRecord:
+    epoch: int
+    marker: str
+    reason: str
+    started_at: datetime
+
+
+@dataclass(frozen=True)
+class DivergenceCheck:
+    """`copy_max` = watermark epoch berjalan; `source_max` = max(id) sumber. Anchor = K log tersalin terakhir epoch
+    berjalan yang BUKAN model orang (log model orang boleh dihapus erasure UU PDP), dicek identitasnya di sumber
+    (`anchor_matches`: create_date + model + operasi; tidak berubah oleh erasure/redaksi baris).
+    `head_reused` = anchor TERBARU ada di sumber tetapi identitasnya lain = id dipakai ulang (pola restore).
+    Anchor yang HILANG (tanpa id mundur) bukan restore: itu penghapusan -> rekonsiliasi (`unexplained`)."""
+
+    copy_max: int
+    source_max: int
+    anchors_checked: int
+    anchors_matched: int
+    head_reused: bool = False
+
+    @property
+    def id_regressed(self) -> bool:
+        return self.copy_max > 0 and self.source_max < self.copy_max
+
+    @property
+    def diverged(self) -> bool:
+        return self.id_regressed or self.head_reused
+
+    def signals(self) -> list[str]:
+        return [name for name, on in (("id_regressed", self.id_regressed), ("head_reused", self.head_reused)) if on]
+
+
+def anchor_matches(copied: CopiedLog, source_log: Mapping[str, Any]) -> bool:
+    """Identitas log tidak berubah oleh erasure/redaksi: waktu buat (mikrodetik), model, operasi."""
+    return (
+        to_utc(source_log["create_date"]) == to_utc(copied.create_date)
+        and str(source_log.get("model_name") or "") == copied.model_name
+        and str(source_log.get("operation") or "") == copied.operation
+    )
+
+
+@dataclass(frozen=True)
+class EpochDecision:
+    action: str  # continue | register | new | block
+    epoch: int
+    reason: str = ""
+
+
+def validate_marker(value: Any) -> str:
+    """Penanda dari Odoo: kosong (belum di-set) atau `^[A-Za-z0-9_.:-]{1,64}$`. Nilai lain = error (fail closed)."""
+    text = "" if value in (None, False) else str(value).strip()
+    if text and not EPOCH_MARKER_RE.fullmatch(text):
+        raise ValueError("penanda efn_audit.chain_epoch tidak valid")
+    return text
+
+
+def current_epoch(records: Sequence[EpochRecord]) -> EpochRecord | None:
+    return max(records, key=lambda r: r.epoch) if records else None
+
+
+def decide_epoch(current: EpochRecord | None, source_marker: str, check: DivergenceCheck, auto: bool) -> EpochDecision:
+    """Keputusan epoch per siklus salinan. `current` None = belum terdaftar (salinan lama = epoch 0, penanda '')."""
+    epoch = current.epoch if current else 0
+    marker = current.marker if current else ""
+    if source_marker != marker:
+        if current is None and not check.diverged:
+            # Penanda pertama kali di-set pada sistem sehat: adopsi untuk epoch 0, rantai tidak diputus.
+            return EpochDecision("register", epoch, "init")
+        return EpochDecision("new", epoch + 1, "marker")
+    if check.diverged:
+        reason = "auto:" + "+".join(check.signals())
+        return EpochDecision("new", epoch + 1, reason) if auto else EpochDecision("block", epoch, reason)
+    if current is None:
+        return EpochDecision("register", epoch, "init")
+    return EpochDecision("continue", epoch)

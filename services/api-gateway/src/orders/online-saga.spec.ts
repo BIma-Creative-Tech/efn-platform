@@ -13,7 +13,7 @@ import { OnlineAdminService, sameActor } from './online-admin.service';
 import { OnlineJobsService } from './online-jobs.service';
 import { OnlinePrivacyService } from './online-privacy.service';
 import { OnlineSagaService } from './online-saga.service';
-import { OrderEventsService, parseOdooEvent } from './order-events.service';
+import { OrderEventsService, eventFingerprint, parseOdooEvent, stableEventKey } from './order-events.service';
 import { OrdersService } from './orders.service';
 import { PICKUP_CODE_AAD_LEGACY, PICKUP_CODE_RE, decryptPickupCode, pickupCodeAad } from './pickup-code';
 import { FakeOnlinePayments, MemoryOnlineRepo } from './testing/online-fakes';
@@ -830,13 +830,13 @@ describe('Re-review G17 (L-19)', () => {
 });
 
 describe('Retensi audit CLI CS (ONLINE_ADMIN_AUDIT_RETENTION_DAYS)', () => {
-  it('default 400 hari; baris lebih tua dihapus, yang baru tetap; metrik per jenis tanpa PII; idempoten', async () => {
-    expect(testConfig().onlineAdminAuditRetentionDays).toBe(400);
+  it('default 3650 hari (W-19); baris lebih tua dihapus, yang baru tetap; metrik per jenis tanpa PII; idempoten', async () => {
+    expect(testConfig().onlineAdminAuditRetentionDays).toBe(3650); // W-19 (Q-P19)
     expect(testConfig({ ONLINE_ADMIN_AUDIT_RETENTION_DAYS: '730' }).onlineAdminAuditRetentionDays).toBe(730);
     expect(() => testConfig({ ONLINE_ADMIN_AUDIT_RETENTION_DAYS: '5' }).onlineAdminAuditRetentionDays).toThrow();
     const ctx = setup();
     await ctx.repo.audit({ action: 'refund', actor: 'cs/h', reason: 'lama', order_id: null, part_id: null, refund_id: null, amount: 1, outcome: 'ok' });
-    ctx.clock.advanceSeconds(401 * 86_400);
+    ctx.clock.advanceSeconds(3651 * 86_400); // W-19: default 3650 hari
     await ctx.repo.audit({ action: 'refund', actor: 'cs/h', reason: 'baru', order_id: null, part_id: null, refund_id: null, amount: 1, outcome: 'ok' });
     const res = (await ctx.jobs.retentionOnce()) as { adminAuditPurged: number };
     expect(res.adminAuditPurged).toBe(1);
@@ -844,5 +844,76 @@ describe('Retensi audit CLI CS (ONLINE_ADMIN_AUDIT_RETENTION_DAYS)', () => {
     expect(((await ctx.jobs.retentionOnce()) as { adminAuditPurged: number }).adminAuditPurged).toBe(0);
     const m = await ctx.metrics.retentionRows.get();
     expect(m.values).toEqual([expect.objectContaining({ labels: { kind: 'admin_audit_deleted' }, value: 1 })]);
+  });
+});
+
+describe('G18-QA-01: kunci idempotensi event Odoo stabil lintas restore DB Odoo', () => {
+  async function confirmedPart() {
+    const ctx = setup();
+    const { order } = await ctx.checkout();
+    await ctx.payments.pay(ctx.orderRow(order.order_id).payment_intent_id!);
+    await ctx.drain();
+    return { ctx, part: ctx.partsOf(order.order_id)[0] };
+  }
+  const spyWarn = () => jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+  it('kunci baris = odoo-ev:<platform_order_ref>:<event>:<seq> (+ event_id); duplikat sejati tetap duplicate', async () => {
+    const { ctx, part } = await confirmedPart();
+    const ready = ctx.event(part.id, 'ready', 5);
+    expect((await ctx.events.handle(ready)).status).toBe('applied');
+    const key = `odoo-ev:${part.id}:ready:5`;
+    expect(stableEventKey(ready)).toBe(key);
+    const row = ctx.repo.state.events.get(key)!;
+    expect(row).toMatchObject({ part_id: part.id, source_key: 'online:42:ready:5', payload_sha256: eventFingerprint(ready) });
+    expect(ctx.repo.state.events.has('online:42:ready:5')).toBe(false);
+    // retry identik (occurred_at boleh beda) → duplicate
+    ctx.clock.advanceSeconds(30);
+    expect((await ctx.events.handle(ctx.event(part.id, 'ready', 5))).status).toBe('duplicate');
+    // event_id (uuid) ikut kunci bila dikirim; bentuk salah → 400
+    const withId = ctx.event(part.id, 'ready', 6, { event_id: '3F2B6C1E-8A4D-4C2E-9B1F-0A2B3C4D5E6F' });
+    expect(stableEventKey(withId)).toBe(`odoo-ev:${part.id}:ready:6:3f2b6c1e-8a4d-4c2e-9b1f-0a2b3c4d5e6f`);
+    expect((await catchApiError(() => ctx.event(part.id, 'ready', 6, { event_id: 'x' }))).getStatus()).toBe(400);
+    // format kunci Odoo baru (uuid bagian) juga diterima
+    expect(ctx.event(part.id, 'ready', 7, { idempotency_key: `online:${part.id}:ready:7` }).idempotency_key).toBe(`online:${part.id}:ready:7`);
+  });
+
+  it('DR: kunci Odoo lama (id lokal) yang dipakai ulang untuk bagian lain TIDAK diabaikan; kunci lama bagian sama tetap duplicate', async () => {
+    const { ctx, part } = await confirmedPart();
+    const other = '00000000-0000-4000-8000-0000000000aa';
+    // baris lama (sebelum perbaikan) milik bagian LAIN dengan kunci Odoo yang sama (id lokal 42 terpakai ulang setelah restore)
+    ctx.repo.state.events.set('online:42:ready:5', { part_id: other, source: 'odoo', event: 'ready', seq: 5, idempotency_key: 'online:42:ready:5', outcome: 'applied', occurred_at: null });
+    const warn = spyWarn();
+    try {
+      expect((await ctx.events.handle(ctx.event(part.id, 'ready', 5))).status).toBe('applied');
+      expect(ctx.partsOf(part.order_id)[0].status).toBe('ready');
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('"kind":"odoo_event_key_reused"'))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+    // baris lama milik bagian YANG SAMA (event diproses sebelum upgrade BFF, Odoo retry) → duplicate
+    const { ctx: c2, part: p2 } = await confirmedPart();
+    c2.repo.state.events.set('online:42:ready:5', { part_id: p2.id, source: 'odoo', event: 'ready', seq: 5, idempotency_key: 'online:42:ready:5', outcome: 'applied', occurred_at: null });
+    expect((await c2.events.handle(c2.event(p2.id, 'ready', 5))).status).toBe('duplicate');
+    expect(c2.partsOf(p2.order_id)[0].status).not.toBe('ready');
+  });
+
+  it('kunci sama, isi berbeda → 409 event_conflict + anomali critical (tidak di-skip diam-diam, tidak ada perubahan)', async () => {
+    const { ctx, part } = await confirmedPart();
+    expect((await ctx.events.handle(ctx.event(part.id, 'ready', 5))).status).toBe('applied');
+    const before = ctx.repo.state.events.size;
+    const warn = spyWarn();
+    try {
+      const err = await catchApiError(() => ctx.events.handle(ctx.event(part.id, 'ready', 5, { state: 'done' })));
+      expect(err.getStatus()).toBe(409);
+      expect(err.body).toMatchObject({ error: { code: 'event_conflict' } });
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('"kind":"odoo_event_conflict","severity":"critical"'))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(ctx.repo.state.events.size).toBe(before);
+    // baris lama tanpa sidik (sebelum migrasi) → duplicate (tidak bisa dibandingkan)
+    const k = `odoo-ev:${part.id}:picked_up:6`;
+    ctx.repo.state.events.set(k, { part_id: part.id, source: 'odoo', event: 'picked_up', seq: 6, idempotency_key: k, outcome: 'applied', occurred_at: null });
+    expect((await ctx.events.handle(ctx.event(part.id, 'picked_up', 6))).status).toBe('duplicate');
   });
 });

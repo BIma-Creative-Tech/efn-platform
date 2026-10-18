@@ -1,6 +1,7 @@
 # ADR-004: Topologi Produksi 4 Node VPS/Bare-Metal + Docker Compose (Swarm/k3s saat Scale)
 
-- **Status:** Proposed
+- **Status:** **Accepted** — pemilik proyek, 2026-10-10 (sesi tanya-jawab via efn-lead, butir 5 "ADR Gelombang 1: Accepted semua"; nama & jabatan penandatangan dilengkapi klien di register keputusan). Sebelumnya: Proposed.
+  - **Catatan penerimaan 10 Okt 2026:** syarat pengadaan dari keputusan yang sama: **LUKS + CPU ber-AES-NI wajib** (Q-E2), filestore Odoo lokal terenkripsi (Q-OS4), **backup off-site terenkripsi wajib sebelum go-live** (Q-OS5), PoC SeaweedFS 5 hari sebelum produksi (Q-OS2).
 - **Tanggal:** 2026-10-05
 - **Pemutus (klien):** IT Lead + Finance (OpEx infra) ; Legal/DPO untuk lokasi data (UU PDP)
 - **Referensi review:** D-03, §6.3, R-T07, R-T08, R-T09, R-L01

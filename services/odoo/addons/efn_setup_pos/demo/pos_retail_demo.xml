@@ -53,11 +53,14 @@
                eval="[(6, 0, obj(ref('efn_setup_company.company_rtl')).account_sale_tax_id.ids)]"/>
     </record>
 
-    <!-- Harga member = pricelist (Q-9). Pasang di pos.config.available_pricelist_ids dan pada
-         partner member (property_product_pricelist, company-dependent: set saat company aktif
-         = PT Retail). Diskon 5% global = PLACEHOLDER. -->
+    <!-- G18 L-23 (Q-F18-7): harga member TIDAK lagi lewat pricelist POS. Pricelist bisa dipilih kasir mana pun lewat
+         tombol Pricelist (control_buttons.js, semua available_pricelist_ids) tanpa cek member -> R-B06. Harga member =
+         promo pos_loyalty ber-OTP (data/pos_member_price_data.xml). Pricelist demo ini diarsipkan dan JANGAN dimasukkan
+         ke pos.config.available_pricelist_ids (README checklist). Dipertahankan (arsip) agar xmlid lama tidak
+         menggantung di DB demo yang sudah ada. -->
     <record id="pricelist_member_rtl" model="product.pricelist">
-        <field name="name">Harga Member (DEMO)</field>
+        <field name="name">Harga Member (DEMO, arsip - pakai promo OTP)</field>
+        <field name="active" eval="False"/>
         <field name="company_id" ref="efn_setup_company.company_rtl"/>
     </record>
     <record id="pricelist_member_rtl_item_global" model="product.pricelist.item">

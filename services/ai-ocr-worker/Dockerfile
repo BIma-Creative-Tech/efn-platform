@@ -1,7 +1,7 @@
 # OCR worker Price Hunter (ADR-008): RabbitMQ ocr.requested -> Tesseract (CPU) -> VLM Ollama bila ragu
 # -> PostgreSQL + event loyalty.earn.requested / notify.push.
 # SEC-47: base image dipin tag@digest (build reprodusibel); Dependabot `docker` memperbarui digest per tag.
-FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
+FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -12,7 +12,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # Tesseract + data bahasa Indonesia & Inggris. Tidak perlu libgl (hanya untuk OpenCV/PaddleOCR).
+# G18 (PR #60, Trivy): `apt-get upgrade` mengambil perbaikan keamanan Debian (debian-security) yang terbit setelah
+# digest base dipin - mis. libexpat1 2.9.0 (CVE-2026-66046/76956/76957/77214/93990) dan libcurl4t64 8.14.1-2+deb13u7
+# (CVE-2026-8286/8927/92392), keduanya dependensi transitif tesseract. Gate Trivy di CI = pemeriksa hasilnya.
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-ind tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 

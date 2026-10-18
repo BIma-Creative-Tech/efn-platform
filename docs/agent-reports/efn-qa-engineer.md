@@ -470,3 +470,91 @@ atas instruksi efn-lead. Detail lengkap: `docs/testing/E2E_SMOKE_REPORT.md` bagi
 - **Bug produk baru:** tidak ada pada run akhir.
 - **Belum diuji:** jalur POS `efn_online_pos_sale` (`pos_sale` tidak terpasang di dev), dan wrapper host
   `efn-online-cs` dengan sudo + docker asli.
+
+# Gelombang 18 — Smoke nyata G18 + r11 + re-review (2026-10-15, HEAD `bc0a06a`)
+
+Detail di `docs/testing/E2E_SMOKE_REPORT.md` §G18. Dijalankan di stack dev nyata dengan DB Odoo **baru** (IDR Rp1).
+
+## Hasil
+**Smoke penuh: PASS=305, FAIL=0.**
+
+| Tahap | PASS/FAIL |
+|---|---|
+| a | 22/0 |
+| b | 17/0 |
+| c | 15/0 |
+| d | 7/0 |
+| f | 6/0 |
+| e | 24/0 |
+| g | 19/0 |
+| l | 43/0 |
+| p (baru) | 31/0 |
+| o | 121/0 |
+
+**Cakupan G18 dan r11 yang lulus:**
+- **W-03:** Rp1 dan pajak bulat.
+- **E-30 / K-18-1..5:**
+  - pembayaran Poin EFN;
+  - DPP/PPN tetap;
+  - `payment_amount`;
+  - `points_restored_value`;
+  - mart `fact_pos_payment`.
+- **E-31:** refund ke metode asal, tunai berlebih, retur tanpa struk hanya tunai.
+- **SEC-113/115/116/121/125/126:** diuji lewat RPC kasir nyata (login password + TOTP).
+- **L-26:** hold → BFF 409 → supervisor restore_approve → `restore_approved`; barang excluded lolos.
+- **E-34/K-18-8:** `pos_enroll` dengan/tanpa `age_confirmed`.
+- **L-21/L-22:** usia 17+ saat login; hapus akun 409 → konfirmasi → 202 + `erasure_deadline` di status; `account_deleting`.
+- **L-21c:** `source_ref` opak.
+- **K-18-6/SEC-118:** rekonsiliasi harian mode `payment`, 0 selisih untuk order run ini.
+
+## Perbaikan
+- **Produk:** tidak ada di gelombang ini.
+- **Konfigurasi dev:** `docker-compose.dev.yml` membuat `ETL_LOYALTY_RECON_NOT_BEFORE` bisa ditimpa `.env`.
+- **Harness:** lihat E2E §G18.3. Skrip yang diubah: `odoo_pos_smoke.py`, `odoo_rpc_smoke.py`, `bff_smoke.py`,
+  `online_smoke.py`, `run-e2e-smoke.sh`, dan file baru `etl_points_recon_smoke.py`.
+
+## Temuan untuk lead
+- **G18-QA-01 (lead → odoo-engineer + bff):** kunci idempotensi event online memakai id lokal Odoo. Setelah reset atau
+  restore DB Odoo, event baru diabaikan sebagai `duplicate`.
+- **G18-QA-02 (devsecops):** runbook reset DB Odoo dev belum mencakup reset data turunan (katalog BFF, mart ClickHouse
+  + watermark, event online).
+- **G18-QA-03 (CS dev):** rekonsiliasi menandai reverse hold yang tertinggal dari run terputus. Ini perilaku yang benar.
+
+## Belum diuji
+- UI browser POS dan POS offline.
+- Eskalasi erasure hari 3/10/14.
+- Rotasi key via systemd di host nyata.
+- Housekeeping Metabase dan TTL ClickHouse pada data nyata.
+- UI jalur POS ↔ SO online.
+
+## G18.7 Run konfirmasi sebelum PR (2026-10-18, HEAD `bea9be4`)
+- **Suite Odoo pola CI** (DB uji terpisah):
+  - unit: **501 test, 0 failed / 0 error / 0 ERROR**;
+  - `check-odoo-deps`: 17 modul, 0 terlarang;
+  - `efn_setup_security` install-after: exit 0;
+  - tour: **29/29**, 0 skip browser.
+- **Stack dev:**
+  - rebuild odoo, api-gateway, etl;
+  - `-u efn_online_order` (19.0.1.1.0), `efn_pos_loyalty_ledger`, `efn_pos_otp_gate`: 0 ERROR;
+  - migrasi 08 jalan;
+  - ETL di epoch audit 1, tanpa `divergence_blocked`.
+- **`online_smoke.py`:** event sintetis memakai kunci `online:<platform_order_ref>:<event>:<seq>` + `event_id`. Skenario baru:
+  - kunci sama dengan isi berbeda → 409 `event_conflict`;
+  - kunci lama (id lokal Odoo) milik bagian lain → diproses + anomali `odoo_event_key_reused`.
+- **Smoke penuh: PASS=307, FAIL=0.**
+
+  | Tahap | PASS/FAIL |
+  |---|---|
+  | a | 22/0 |
+  | b | 17/0 |
+  | c | 15/0 |
+  | d | 7/0 |
+  | f | 6/0 |
+  | e | 24/0 |
+  | g | 19/0 |
+  | l | 43/0 |
+  | p | 31/0 |
+  | o | 123/0 |
+
+- **Status temuan:** G18-QA-01 dan G18-QA-02 ditutup. Tidak ada bug baru.
+- **Catatan:** Docker Desktop di mesin dev berhenti sendiri dua kali (15 Okt); run diulang penuh setelah stack di-recreate.

@@ -137,6 +137,23 @@ didukung Metabase.
 Catatan log v0.58 saat start pertama: puluhan `WARN task.impl :: Deleting job ... class not found` = job Quartz
 versi lama yang kelasnya diganti nama; normal, dibuat ulang oleh 0.58.
 
+## Retensi riwayat & akun tidak aktif (G18/W-19, PDP v7 Q-P14)
+Diperiksa di image v0.58.35 (stack dev, 10 Okt 2026):
+- **Riwayat query** = tabel `query_execution` di DB aplikasi `metabase`. Dibersihkan task OSS
+  `TruncateAuditTables` menurut setting `audit-max-retention-days` — setting **internal** (`GET /api/setting/...` ->
+  "Pengaturan :audit-max-retention-days internal"), tanpa setter: **hanya** dari env `MB_AUDIT_MAX_RETENTION_DAYS`
+  pada service `metabase` (0 = tak terbatas, minimum 30; default bawaan Metabase 720 hari menurut dokumentasi
+  upstream — konstanta di jar tidak terbaca sebagai string, belum diverifikasi). Target 10 th =
+  **`MB_AUDIT_MAX_RETENTION_DAYS=3650`** (env compose milik devsecops; `provision.py` tidak bisa mengaturnya).
+- OSS **hanya** memangkas `query_execution` (docstring jar: "OSS implementation only truncates `query_execution`");
+  `audit_log`/`view_log` adalah fitur Pro/Enterprise dan di dev kosong (0 baris).
+- **Akun tidak aktif 90 hari**: tidak ada fitur bawaan OSS. `provision.py` menonaktifkan (bukan menghapus) akun yang
+  `last_login` (atau `date_joined` bila belum pernah login) lebih tua dari `--deactivate-inactive-days` (default 90,
+  0 = mati); admin provisioning yang sedang login tidak pernah dinonaktifkan. Aktif ulang: Admin > People.
+  Karena provision hanya jalan saat deploy, jadwalkan harian (devsecops), contoh timer host:
+  `$DC run --rm --no-deps metabase-provision <argumen sama> --housekeeping-only`.
+  Diuji di dev: akun uji `date_joined` 120 hari -> dinonaktifkan (`is_active=f`), exit 0; run penuh 2x exit 0.
+
 ## Belum
 - Filter PT/outlet/gudang = teks (cocok sebagian, tidak peka huruf besar), bukan dropdown (butuh field filter
   dengan id field hasil sync).

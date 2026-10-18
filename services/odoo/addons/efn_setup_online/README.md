@@ -4,7 +4,8 @@ Tujuan: konfigurasi standar untuk E-28 `efn_online_order` (docs/08 §8.4, docs/0
 ADR-027, ADR-031 (semua *Proposed*). Risiko: R-T15 (API key kedaluwarsa), temuan #36/#37/#40/#42.
 
 ## Data (noupdate)
-- `group_online_channel.api_key_duration` = **90 hari** (PLACEHOLDER; tanpa ini key user teknis hanya 1 hari).
+- `group_online_channel.api_key_duration` = **35 hari** (W-11, keputusan pemilik proyek 10 Okt 2026: key 30 hari + rotasi otomatis Superadmin, margin 5 hari; tanpa ini key user teknis hanya 1 hari). **noupdate=0** sejak 19.0.1.1.0: nilai ditegakkan setiap install/upgrade (nilai lama 90 diturunkan). Key yang sudah dibuat sebelum upgrade tetap memakai `expiration_date` lamanya → rotasi pertama segera setelah upgrade (runbook `odoo-online-api-key.md`, devsecops).
+- **Durasi efektif = maksimum semua grup user** (`_check_expiration_date`: `max(group.api_key_duration for group in all_group_ids)`). CE 19 memberi `base.group_user` 90 hari → user teknis (Internal User + grup kanal) efektif 90. Sejak 19.0.1.1.0 `base.group_user.api_key_duration = 0` (noupdate=0; `-u base` ikut meng-upgrade modul ini sehingga dinormalkan lagi) → efektif **35**. **Dampak staf:** user internal tanpa grup berdurasi kini maksimal **1 hari** (fallback CE); admin/Settings & `sudo()` tetap bebas batas (is_system) — rotasi wajib `with_user(<user teknis>)` (skrip `efn-rotate-online-key` sudah). Test `TestEfnOnlineApiKeyDuration`. Smoke `scripts/smoke/odoo_online_smoke.py` default `SMOKE_KEY_DAYS` 85 → 30.
 - Partner generik "Pelanggan Super-App" per PT (RTL, FNB) **tanpa HP/email/NPWP**; tim "Super-App" per PT.
 - `ir.default loyalty.program.sale_ok = False` (setiap install/upgrade) + `post_init_hook` mematikan `sale_ok` pada
   program yang sudah ada (temuan #37; E-28 tetap membandingkan total saat konfirmasi).

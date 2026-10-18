@@ -18,7 +18,7 @@ concurrency:
 jobs:
   changes:
     name: Detect changed paths
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: read   # dorny/paths-filter membaca daftar file PR via API
@@ -54,7 +54,7 @@ jobs:
     name: Node (${{ matrix.service }})
     needs: changes
     if: needs.changes.outputs.api == 'true' || needs.changes.outputs.web == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     strategy:
@@ -90,7 +90,7 @@ jobs:
     name: Python (ruff, compile, pip-audit)
     needs: changes
     if: needs.changes.outputs.python == 'true' || needs.changes.outputs.odoo == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -130,7 +130,7 @@ jobs:
     name: pytest (${{ matrix.service }})
     needs: changes
     if: needs.changes.outputs.python == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     strategy:
@@ -182,7 +182,7 @@ jobs:
     name: Odoo addons (pylint-odoo, manifest)
     needs: changes
     if: needs.changes.outputs.odoo == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -203,7 +203,7 @@ jobs:
     name: Odoo addon tests (Odoo 19 + PostgreSQL)
     needs: changes
     if: needs.changes.outputs.odoo == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     timeout-minutes: 45
@@ -230,7 +230,7 @@ jobs:
         efn_core efn_audit efn_pos_otp_gate efn_kitting
         efn_pos_payment_gateway efn_pos_loyalty_ledger efn_privacy efn_pos_kds
         efn_setup_company efn_setup_pos efn_setup_mrp efn_setup_audit
-        efn_online_order efn_setup_online efn_online_pos_sale
+        efn_online_order efn_setup_online efn_online_pos_sale efn_pos_refund_origin
       # G17 (docs/04 §10.15): efn_online_order menarik sale_stock (CE) lewat depends -> auto-install
       # sale_loyalty/pos_sale ikut terpasang di DB test yang sama, sehingga regresi POS teruji bersama modul online.
       # Di-install SETELAH test, tanpa test: efn_setup_security menaikkan auth_password_policy.minlength ke 12,
@@ -319,7 +319,7 @@ jobs:
     name: Odoo POS UI tours (Chrome headless)
     needs: changes
     if: needs.changes.outputs.odoo == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     timeout-minutes: 45
@@ -335,11 +335,11 @@ jobs:
           --health-cmd "pg_isready -U odoo"
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
-      EFN_TOUR_MODULES: efn_pos_otp_gate,efn_pos_payment_gateway,efn_pos_loyalty_ledger,efn_pos_kds,efn_online_order
+      EFN_TOUR_MODULES: efn_pos_otp_gate,efn_pos_payment_gateway,efn_pos_loyalty_ledger,efn_pos_kds,efn_online_order,efn_pos_refund_origin
       # Jumlah test tour yang WAJIB berjalan (HttpCase di-skip diam-diam bila Chrome/websocket tidak ada).
       # 5 (OTP gate 3 + gateway 2) + 4 Poin EFN (Gelombang 13b) + 4 KDS efn_pos_kds (Gelombang 14)
       # + 1 KDS cetak cadangan saat tiket gagal (Gelombang 15, SEC-76). Total terhitung runner 20.
-      EFN_TOUR_MIN_TESTS: "20"
+      EFN_TOUR_MIN_TESTS: "29"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
@@ -392,7 +392,7 @@ jobs:
     name: Promtail redaction regression
     needs: changes
     if: needs.changes.outputs.infra == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -413,7 +413,7 @@ jobs:
     name: Infra (compose, observability, shellcheck, hadolint, yamllint)
     needs: changes
     if: needs.changes.outputs.infra == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -518,7 +518,8 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck -x scripts/*.sh scripts/lib/*.sh scripts/host/efn-deploy scripts/host/efn-online-cs scripts/host/*.sh scripts/smoke/*.sh tests/load/*.sh infra/backup/postgres/*.sh \
+          shellcheck -x scripts/*.sh scripts/lib/*.sh scripts/host/efn-deploy scripts/host/efn-online-cs scripts/host/efn-rotate-online-key \
+            scripts/host/*.sh scripts/smoke/*.sh tests/load/*.sh infra/backup/postgres/*.sh \
             infra/postgres/init/*.sh infra/wireguard/*.sh
           shellcheck -x infra/odoo-rpc-gateway/test-gateway.sh infra/odoo-rpc-gateway/test-gateway-load.sh
           shellcheck -s sh infra/odoo-rpc-gateway/entrypoint.sh
@@ -557,12 +558,21 @@ jobs:
             python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea \
             bash /src/scripts/host/test-efn-deploy.sh
       # G17 (SEC-98 / L-16d): wrapper CS online (aktor dari sudo, allowlist subcommand/argumen, journald tanpa PII)
-      # diuji dengan docker/logger palsu di container sekali pakai (45 kasus; + peran SEC-107, alasan stdin SEC-108).
+      # diuji dengan docker/logger palsu di container sekali pakai (54 kasus; + peran SEC-107, alasan stdin SEC-108,
+      # G18 online-erasure-pending read-only).
       - name: efn-online-cs regression (docker palsu)
         run: |
           docker run --rm -v "$PWD:/src:ro" \
             python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea \
             bash /src/scripts/host/test-efn-online-cs.sh
+      # G18 (W-11, R-T15): rotasi otomatis API key Odoo kanal online - docker/Odoo/BFF palsu (rotasi, rollback, cabut
+      # tertunda, bukti 401, penolakan identitas/argumen/konfigurasi, tanpa kebocoran nilai key; r11 SEC-120: kunci host
+      # bersama deploy + cabut key yatim per nama; 48 kasus).
+      - name: efn-rotate-online-key regression (docker palsu)
+        run: |
+          docker run --rm -v "$PWD:/src:ro" \
+            python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea \
+            bash /src/scripts/host/test-efn-rotate-online-key.sh
       # G13 (data-AI): dashboard Metabase sebagai kode - validasi definisi (SQL hanya efn_dwh.v_*, TLS wajib) + ruff.
       # Container sekali pakai (image python yang sama dengan uji efn-deploy), direktori repo read-only.
       - name: pytest + ruff infra/metabase
@@ -598,7 +608,7 @@ jobs:
     name: CI gate
     if: always()
     needs: [changes, node, python, pytest, odoo-addons, odoo-test, odoo-tour, infra, promtail-redaction]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions: {}
     steps:
       - name: Fail if any required job failed

@@ -66,6 +66,9 @@ GRANT SELECT ON efn_dwh.loyalty_recon_run TO metabase_reader;
 GRANT SELECT ON efn_dwh.loyalty_recon_finding TO metabase_reader;
 -- Kolom baru fact_sales_line (tetap TANPA customer_id).
 GRANT SELECT(order_id, is_refund, line_kind, discount_amount) ON efn_dwh.fact_sales_line TO metabase_reader;
+-- Gelombang 18 (K-18-6): rekonsiliasi harian pembayaran Poin EFN per PT (nominal agregat, tanpa member/partner).
+GRANT SELECT ON efn_dwh.v_loyalty_points_daily TO metabase_reader;
+GRANT SELECT ON efn_dwh.loyalty_points_daily TO metabase_reader;
 
 GRANT metabase_reader TO efn_metabase;
 SET DEFAULT ROLE metabase_reader TO efn_metabase;

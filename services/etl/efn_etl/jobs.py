@@ -9,7 +9,7 @@ Kontrak SQL setiap job:
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -64,6 +64,46 @@ def _dt(value: datetime) -> datetime:
     return to_utc(value)
 
 
+# ---------------------------------------------------------------- retensi kolom (G18/W-19, PDP v7 Q-P7/Q-P8)
+
+
+def years_before(value: datetime, years: int) -> datetime:
+    """Tanggal kalender `years` tahun sebelumnya (29 Feb -> 28 Feb), selaras `INTERVAL n YEAR` ClickHouse."""
+    try:
+        return value.replace(year=value.year - years)
+    except ValueError:
+        return value.replace(year=value.year - years, day=28)
+
+
+@dataclass(frozen=True)
+class AgeOut:
+    """Batas umur kolom pribadi saat MEMUAT ke mart (lapisan kedua TTL kolom ClickHouse, clickhouse-init.sh).
+
+    TTL kolom ClickHouse baru diterapkan saat merge; baris lama yang dimuat ulang (backfill watermark, update sumber)
+    membawa nilai asli sampai merge berikutnya. Karena itu ETL sudah mengosongkan saat transformasi:
+    - koordinat Price Hunter (`geo_lat/geo_lng` -> NULL) bila lebih tua dari `geo_days` (Q-P8, 90 h);
+    - pseudonim (`user_hash`/`member_hash` -> '', `customer_id` -> NULL) bila lebih tua dari `pseudonym_years`
+      (Q-P7 vs Q-6: baris mart 10 th, kolom pseudonim dianonimkan setelah 5 th).
+    Nilai = env clickhouse-init yang sama (`CH_GEO_RETENTION_DAYS`, `CH_PSEUDONYM_RETENTION_YEARS`).
+    """
+
+    geo_days: int = 90
+    pseudonym_years: int = 5
+
+    def geo_expired(self, event_at: datetime, now: datetime) -> bool:
+        return to_utc(event_at) < to_utc(now) - timedelta(days=self.geo_days)
+
+    def pseudonym_expired(self, event_at: datetime, now: datetime) -> bool:
+        return to_utc(event_at) < years_before(to_utc(now), self.pseudonym_years)
+
+
+DEFAULT_AGE_OUT = AgeOut()
+
+
+def _now(now: datetime | None) -> datetime:
+    return datetime.now(UTC) if now is None else to_utc(now)
+
+
 # ---------------------------------------------------------------- platform.price_hunter_report -> competitor_prices
 
 SQL_COMPETITOR_PRICES = """
@@ -97,10 +137,19 @@ COMPETITOR_PRICES_COLUMNS = (
 )
 
 
-def transform_competitor_price(row: dict[str, Any]) -> list[Any]:
+def transform_competitor_price(
+    row: dict[str, Any], age_out: AgeOut = DEFAULT_AGE_OUT, now: datetime | None = None
+) -> list[Any]:
+    reported_at = _dt(row["created_at"])
+    current = _now(now)
+    # Validasi hash tetap dijalankan (fail closed) walau nilainya kemudian dikosongkan.
+    user_hash = pseudonym(row["user_hash"], "price_hunter_report.user_hash")
+    if age_out.pseudonym_expired(reported_at, current):
+        user_hash = ""
+    geo_gone = age_out.geo_expired(reported_at, current)
     return [
         row["id"],
-        _dt(row["created_at"]),
+        reported_at,
         row["product_name"],
         None,  # product_sku: pemetaan ke SKU internal belum ada (Fase berikutnya)
         row["competitor_name"] or "unknown",
@@ -109,9 +158,9 @@ def transform_competitor_price(row: dict[str, Any]) -> list[Any]:
         row["status"],
         row["reason"] or "",
         _opt_float(row["confidence"]),
-        _opt_float(row["geo_lat"], GEO_DECIMALS),
-        _opt_float(row["geo_lng"], GEO_DECIMALS),
-        pseudonym(row["user_hash"], "price_hunter_report.user_hash"),
+        None if geo_gone else _opt_float(row["geo_lat"], GEO_DECIMALS),
+        None if geo_gone else _opt_float(row["geo_lng"], GEO_DECIMALS),
+        user_hash,
         _dt(row["updated_at"]),
     ]
 
@@ -149,16 +198,22 @@ def _company_code(value: Any) -> str:
     return code
 
 
-def transform_loyalty_event(row: dict[str, Any]) -> list[Any]:
+def transform_loyalty_event(
+    row: dict[str, Any], age_out: AgeOut = DEFAULT_AGE_OUT, now: datetime | None = None
+) -> list[Any]:
+    created_at = _dt(row["created_at"])
+    member_hash = pseudonym(row["member_ref_hash"], "loyalty_ledger.member_ref_hash")
+    if age_out.pseudonym_expired(created_at, _now(now)):
+        member_hash = ""
     return [
         row["event_id"],
-        pseudonym(row["member_ref_hash"], "loyalty_ledger.member_ref_hash"),
+        member_hash,
         _company_code(row["company_code"]),
         int(row["delta_points"]),
         row["reason"] or "",
         row["source"] or "",
         row["source_ref"] or "",
-        _dt(row["created_at"]),
+        created_at,
     ]
 
 
@@ -257,7 +312,16 @@ def line_discount_amount(subtotal: Decimal, discount_pct: Decimal, qty: Decimal,
     return (subtotal * discount_pct / (_HUNDRED - discount_pct)).quantize(_CENT)
 
 
-def transform_sales_line(row: dict[str, Any], points_codes: frozenset[str] = DEFAULT_POINTS_PRODUCT_CODES) -> list[Any]:
+def transform_sales_line(
+    row: dict[str, Any],
+    points_codes: frozenset[str] = DEFAULT_POINTS_PRODUCT_CODES,
+    age_out: AgeOut = DEFAULT_AGE_OUT,
+    now: datetime | None = None,
+) -> list[Any]:
+    order_date = _dt(row["order_date"])
+    customer_id = int(row["customer_id"]) if row["customer_id"] is not None else None
+    if age_out.pseudonym_expired(order_date, _now(now)):
+        customer_id = None
     qty = Decimal(str(row["qty"]))
     price_unit = Decimal(str(row["price_unit"]))
     discount_pct = Decimal(str(row["discount_pct"] or 0))
@@ -270,8 +334,8 @@ def transform_sales_line(row: dict[str, Any], points_codes: frozenset[str] = DEF
         str(row["brand"] or ""),
         int(row["store_id"] or 0),
         str(row["order_ref"] or ""),
-        _dt(row["order_date"]),
-        int(row["customer_id"]) if row["customer_id"] is not None else None,
+        order_date,
+        customer_id,
         int(row["product_id"]),
         str(row["product_name"]),
         str(row["category"]),
@@ -289,47 +353,60 @@ def transform_sales_line(row: dict[str, Any], points_codes: frozenset[str] = DEF
     ]
 
 
-COMPETITOR_PRICES = Job(
-    name="competitor_prices",
-    source="platform",
-    sql=SQL_COMPETITOR_PRICES,
-    target_table="competitor_prices",
-    columns=COMPETITOR_PRICES_COLUMNS,
-    transform=transform_competitor_price,
-    identity_field="user_hash",
-)
-LOYALTY_EVENTS = Job(
-    name="loyalty_events",
-    source="platform",
-    sql=SQL_LOYALTY_EVENTS,
-    target_table="loyalty_events",
-    columns=LOYALTY_EVENTS_COLUMNS,
-    transform=transform_loyalty_event,
-    identity_field="member_ref_hash",
-)
+def competitor_prices_job(age_out: AgeOut = DEFAULT_AGE_OUT) -> Job:
+    return Job(
+        name="competitor_prices",
+        source="platform",
+        sql=SQL_COMPETITOR_PRICES,
+        target_table="competitor_prices",
+        columns=COMPETITOR_PRICES_COLUMNS,
+        transform=lambda row: transform_competitor_price(row, age_out),
+        identity_field="user_hash",
+    )
 
 
-def sales_fact_job(points_codes: frozenset[str] = DEFAULT_POINTS_PRODUCT_CODES) -> Job:
+def loyalty_events_job(age_out: AgeOut = DEFAULT_AGE_OUT) -> Job:
+    return Job(
+        name="loyalty_events",
+        source="platform",
+        sql=SQL_LOYALTY_EVENTS,
+        target_table="loyalty_events",
+        columns=LOYALTY_EVENTS_COLUMNS,
+        transform=lambda row: transform_loyalty_event(row, age_out),
+        identity_field="member_ref_hash",
+    )
+
+
+def sales_fact_job(
+    points_codes: frozenset[str] = DEFAULT_POINTS_PRODUCT_CODES, age_out: AgeOut = DEFAULT_AGE_OUT
+) -> Job:
     return Job(
         name="sales_fact_pos",
         source="odoo",
         sql=SQL_SALES_FACT,
         target_table="fact_sales_line",
         columns=SALES_FACT_COLUMNS,
-        transform=lambda row: transform_sales_line(row, points_codes),
+        transform=lambda row: transform_sales_line(row, points_codes, age_out),
     )
 
 
+COMPETITOR_PRICES = competitor_prices_job()
+LOYALTY_EVENTS = loyalty_events_job()
 SALES_FACT = sales_fact_job()
 
 
-def enabled_jobs(odoo_enabled: bool, points_codes: frozenset[str] = DEFAULT_POINTS_PRODUCT_CODES) -> list[Job]:
+def enabled_jobs(
+    odoo_enabled: bool,
+    points_codes: frozenset[str] = DEFAULT_POINTS_PRODUCT_CODES,
+    age_out: AgeOut = DEFAULT_AGE_OUT,
+    points_payment: bool = True,
+) -> list[Job]:
     """Job incremental. Odoo: penjualan POS + (Gelombang 13) pembayaran POS, outlet, produk (efn_etl/pos.py)."""
-    jobs = [COMPETITOR_PRICES, LOYALTY_EVENTS]
+    jobs = [competitor_prices_job(age_out), loyalty_events_job(age_out)]
     if odoo_enabled:
         # Import lokal: pos.py mengimpor helper dari modul ini.
-        from efn_etl.pos import POS_JOBS
+        from efn_etl.pos import pos_jobs
 
-        jobs.append(sales_fact_job(points_codes))
-        jobs.extend(POS_JOBS)
+        jobs.append(sales_fact_job(points_codes, age_out))
+        jobs.extend(pos_jobs(points_payment))
     return jobs

@@ -1,4 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
+import { Errors } from '../common/errors/api-error';
+import { MemberService } from '../common/member/member.service';
 import { AppConfig } from '../config/app-config';
 import { ApiError } from '../common/errors/api-error';
 import { memberHash } from '../common/pii/pii';
@@ -19,6 +21,12 @@ export interface PosOtpVerifyResponse {
   expires_in: number;
 }
 
+/** K-18-8: verify challenge `pos_enroll` — member terdaftar/terverifikasi; tidak ada discount_token. */
+export interface PosEnrollVerifyResponse {
+  ok: true;
+  enrolled: true;
+}
+
 /**
  * Gerbang OTP promo POS (kontrak §3.1, alur docs/02 §3.1). Dipanggil server Odoo (service key).
  * Rate limit: per member 3/15 menit, per pos_config 20/15 menit (pemanggil selalu server Odoo,
@@ -32,9 +40,19 @@ export class PosService {
     private readonly tokens: DiscountTokenService,
     private readonly limiter: RateLimiter,
     private readonly loyalty: LoyaltyService,
+    /** K-18-8: upsert member saat `pos_enroll` (token eksplisit; opsional agar test lama tetap jalan). */
+    @Optional() @Inject(MemberService) private readonly members: MemberService | null = null,
   ) {}
 
   async requestOtp(dto: PosOtpRequestDto, ip: string | null): Promise<PosOtpRequestResponse> {
+    // K-18-8: pendaftaran member oleh kasir wajib pernyataan usia minimum (kode galat sama dengan §3.2)
+    if (dto.purpose === 'pos_enroll' && !dto.ageConfirmed) {
+      throw ApiError.of(
+        400,
+        'age_confirmation_required',
+        `Konfirmasi bahwa pelanggan berusia minimal ${this.config.memberMinAge} tahun untuk melanjutkan.`,
+      );
+    }
     const window = this.config.otpRateWindowSeconds;
     try {
       await this.limiter.enforce(
@@ -58,16 +76,17 @@ export class PosService {
       orderRef: dto.orderRef,
       companyCode: dto.companyCode,
       amount: dto.amount,
+      posConfigId: dto.posConfigId,
       ip,
     });
     return { challenge_id: res.challengeId, expires_in: res.expiresIn };
   }
 
-  async verifyOtp(dto: PosOtpVerifyDto, ip: string | null): Promise<PosOtpVerifyResponse> {
-    // Body verify tidak memuat purpose: purpose dibawa challenge (pos_promo | pos_redeem) dan diteruskan ke token.
+  async verifyOtp(dto: PosOtpVerifyDto, ip: string | null): Promise<PosOtpVerifyResponse | PosEnrollVerifyResponse> {
+    // Body verify tidak memuat purpose: purpose dibawa challenge (pos_promo | pos_redeem | pos_enroll).
     const res = await this.otp.verify({
       purpose: 'pos_promo',
-      alsoAccept: ['pos_redeem'],
+      alsoAccept: ['pos_redeem', 'pos_enroll'],
       challengeId: dto.challengeId,
       code: dto.code,
       orderRef: dto.orderRef,
@@ -76,6 +95,7 @@ export class PosService {
     if (!res.ok) {
       throw new ApiError(400, { ok: false, reason: res.reason, attempts_left: res.attemptsLeft });
     }
+    if (res.purpose === 'pos_enroll') return this.enroll(res.memberRef, res.posConfigId);
     const token = this.tokens.issue({
       purpose: res.purpose === 'pos_redeem' ? 'pos_redeem' : 'pos_promo',
       orderRef: res.orderRef ?? dto.orderRef,
@@ -85,6 +105,18 @@ export class PosService {
       amount: res.amount ?? 0,
     });
     return { ok: true, discount_token: token.token, expires_in: token.expiresIn };
+  }
+
+  /**
+   * K-18-8: OTP `pos_enroll` terverifikasi (pemilik nomor hadir) → upsert `platform.member` dengan
+   * `age_confirmed_at`, `age_confirmed_source = 'pos'`, `age_confirmed_pos_config_id`. Akun sedang dihapus → 409
+   * `account_deleting` (hanya terlihat setelah OTP pemilik nomor). Odoo tidak menyimpan usia.
+   */
+  private async enroll(memberRef: string | null, posConfigId: number | null): Promise<PosEnrollVerifyResponse> {
+    if (!this.members || !memberRef) throw Errors.serviceUnavailable();
+    const m = await this.members.upsertOnLogin(memberRef, { ageConfirmed: true, ageSource: 'pos', posConfigId });
+    if (m.deleting) throw Errors.conflict('account_deleting', 'Akun sedang dalam proses penghapusan.');
+    return { ok: true, enrolled: true };
   }
 
   /** SEC-07: `member_ref` dari partner order harus sama dengan member token → selain itu 409 member_mismatch. */

@@ -38,3 +38,10 @@ Risiko dimitigasi: R-T10 (saga), R-O05 (refund ≤ porsi per bagian), R-S09 (web
 - SEC-100: `DELETE /v1/me` mengambil kunci member checkout + cek ulang order terbuka dalam transaksi INSERT; erasure ditunda (+ `EFN_ONLINE_ANOMALY erasure_deferred_open_orders`) bila masih ada order terbuka.
 - SEC-102: AAD kode ambil `efn:online_order_part.pickup_code_enc:v2:<part_id>`; baris AAD v1 tetap terbaca lalu ditulis ulang (baca kode ambil & `pii-reencrypt`).
 - L-19: peran CS (`EFN_CS_ROLE` cs|approver) — semua refund CS `approval_required` (ambang `ONLINE_CS_REFUND_APPROVAL_MIN_IDR`), approve/resolve-cancel hanya approver ≠ pembuat; `claim_token` CAS untuk penulisan pasca-gateway (SEC-106); pool json2 publik/saga terpisah (SEC-109); alasan CLI dari stdin (tanpa `--reason=`, atau `--reason-stdin`).
+
+## G18-QA-01 — kunci idempotensi event Odoo stabil lintas restore DB Odoo
+- Dedup event `POST /v1/orders/events` memakai kunci BFF `odoo-ev:<platform_order_ref>:<event>:<seq>[:<event_id>]` (bukan `online:<id lokal Odoo>:…` yang terpakai ulang setelah DB Odoo dibuat ulang/dipulihkan). Kunci Odoo asli disimpan di `online_order_event.source_key` (audit).
+- Kunci sama + sidik isi sama (`payload_sha256`, tanpa `occurred_at`/`event_id`) → `duplicate`. Kunci sama + isi berbeda → `409 event_conflict` + anomali `odoo_event_conflict` (critical) — tidak diabaikan diam-diam.
+- Kompatibel mundur: baris lama yang tercatat dengan kunci Odoo lama → `duplicate` hanya bila milik bagian/event/seq yang sama; milik bagian lain (id lokal terpakai ulang) → diproses + anomali `odoo_event_key_reused` (warning).
+- Body: `idempotency_key` menerima `online:<id lokal>|<uuid bagian>:<event>:<seq>`; `event_id` (uuid) opsional.
+- Sisa (DR): setelah restore, `seq` Odoo bisa mundur di bawah `last_seq` BFF → event tercatat `ignored_stale` (tidak diam: ada baris + metrik); status dipulihkan oleh rekonsiliasi pull `efn_online_status` (15 menit).
