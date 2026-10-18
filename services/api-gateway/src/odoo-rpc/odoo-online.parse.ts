@@ -3,6 +3,7 @@ import {
   CatalogChannelInfo,
   CatalogItem,
   ChannelPaymentMode,
+  CounterRefundAuthorizeResult,
   CatalogPage,
   CatalogPrice,
   ImageResult,
@@ -351,6 +352,17 @@ export function parseRefund(v: unknown): RefundResult {
 export function parseRefundSettled(v: unknown): { state: string } {
   const o = obj(v, 'refund_settled');
   return { state: str(o.state, 'state', 32) };
+}
+
+/** L-60: `{ authorized?: boolean, state?: string }` (bentuk ASUMSI; field tambahan diabaikan). */
+export function parseCounterRefundAuthorize(v: unknown): CounterRefundAuthorizeResult {
+  const o = obj(v, 'counter_refund_authorize');
+  return {
+    // Bentuk Odoo E-45: { state: "authorized", amount } — wajib state persis (tidak ada default true).
+    authorized: o.state === 'authorized' && o.authorized !== false,
+    state: optStr(o.state, 'state', 32),
+    amount: o.amount === undefined || o.amount === null || o.amount === false ? null : rupiah(o.amount, 'amount'),
+  };
 }
 
 export function parseStatus(v: unknown): StatusRow[] {

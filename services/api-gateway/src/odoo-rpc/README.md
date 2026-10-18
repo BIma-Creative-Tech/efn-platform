@@ -4,7 +4,7 @@ Kontrak: `docs/04` §10.4 (+ delta §10.4.4), §10.10, §10.11. ADR-034 (**Propo
 
 | Komponen | File | Catatan |
 |---|---|---|
-| 10 metode | `odoo-online.types.ts` (`ODOO_ONLINE_PATHS`) | Hanya 10 path persis = allowlist `odoo-rpc-gateway`. Tidak ada cara memanggil model/metode lain. |
+| 11 metode | `odoo-online.types.ts` (`ODOO_ONLINE_PATHS`) | Hanya 11 path persis (G20 L-60: + `efn.online.order/efn_online_counter_refund_authorize`) = allowlist `odoo-rpc-gateway` (path baru ditambah lead). Tidak ada cara memanggil model/metode lain. |
 | Klien | `json2-client.ts` | `POST {ODOO_RPC_URL}/json/2/<model>/<metode>`, HTTPS + **mTLS** (CA `ODOO_RPC_CA_FILE`, sertifikat klien `ODOO_RPC_CLIENT_CERT_FILE/KEY_FILE`, default `TLS_CERT_FILE/KEY_FILE`), verify-full, tanpa fallback plaintext. `Authorization: bearer <odoo_api_key_online_<kanal>>` — key **per kanal** (= per PT), placeholder `disabled` ditolak. Body = argumen bernama + `context:{lang:"id_ID"}` saja. Retry hanya jaringan/timeout/429/5xx, maks 3× (0,5/1/2 s + jitter); UserError/401/403/404 tidak di-retry. Circuit breaker per kanal (5 gagal → 30 s). |
 | Validasi respons | `odoo-online.parse.ts` | Bentuk & tipe dicek; `amount_payable`/refund wajib bilangan bulat Rupiah; `image_sha` hex 40/64 (L-9); qty stok tidak diteruskan. Gagal → `invalid_response` → 503 + anomali `online_config_error`. |
 | Peta error | `online-errors.ts` | §10.3.7 (K-ON5). Pesan generik; detail/traceback Odoo tidak pernah diteruskan/di-log. |
@@ -23,6 +23,7 @@ Kontrak: `docs/04` §10.4 (+ delta §10.4.4), §10.10, §10.11. ADR-034 (**Propo
 - Blok `channel`: `payment_modes` = **array string** (L-57; string/bentuk lain → `invalid_response`; mode di luar `qris|counter` dibuang; tidak ada → `null` → BFF memakai `ONLINE_PAYMENT_METHODS`).
 - Event `review` dapat membawa `review_reason` (`counter_paid_after_cancel|counter_paid_after_expiry` dipakai; nilai lain diabaikan → null), ikut sidik event bila ada.
 - Order counter: BFF tidak memanggil `efn_online_mark_paid` / `efn_online_refund_settled` (Odoo `invalid_state`, L-57). Event baru `refund_settled` (L-58) diterima di `POST /v1/pos/online/order-events`.
+- L-60 (SEC-145): `efn_online_counter_refund_authorize(channel_code, platform_order_ref, authorization: { idempotency_key, refund_id, refund_ref|null, amount })` — pool saga, key kanal. Respons `{ authorized?: boolean, state?: string }` (absen = true). **Asumsi**: nama argumen ke-3 `authorization` dan bentuk respons belum dikonfirmasi builder Odoo. Stub: idempoten per key (payload beda → `idempotency_conflict`), SO non-counter/belum lunas → `invalid_state`, nominal > tagihan → `amount_mismatch`.
 - Katalog item: `weight_kg` (nullable; negatif/bukan angka → `invalid_response`).
 - Issue quote: `weight_missing` (wajib `product_id`, masuk `PRODUCT_ISSUE_CODES`) dan `weight_limit` (wajib `product_id: null`, `ORDER_ISSUE_CODES`); allowlist `KNOWN_ISSUE_CODES` = out_of_stock, qty_limit, order_limit, weight_limit, weight_missing.
 - Event `paid` dapat membawa `payment: { method: "counter"|"qris" }` (field lain diabaikan, tanpa identitas kasir; metode lain → 400).

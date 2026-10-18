@@ -25,6 +25,31 @@
         <field name="view_mode">list</field>
     </record>
 
+    <!-- SEC-145: otorisasi BFF refund pelunasan (append-only, audit). -->
+    <record id="efn_online_counter_refund_auth_view_list" model="ir.ui.view">
+        <field name="name">efn.online.counter.refund.auth.list</field>
+        <field name="model">efn.online.counter.refund.auth</field>
+        <field name="arch" type="xml">
+            <list create="false" edit="false" delete="false">
+                <field name="create_date"/>
+                <field name="online_order_id"/>
+                <field name="settlement_id"/>
+                <field name="refund_id"/>
+                <field name="bff_refund_id" optional="hide"/>
+                <field name="amount"/>
+                <field name="consumed_pos_order_id" optional="show"/>
+                <field name="currency_id" column_invisible="1"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_efn_online_counter_refund_auth" model="ir.actions.act_window">
+        <field name="name">Otorisasi refund pelunasan di kasir</field>
+        <field name="res_model">efn.online.counter.refund.auth</field>
+        <field name="view_mode">list</field>
+    </record>
+
     <record id="efn_online_counter_lookup_view_list" model="ir.ui.view">
         <field name="name">efn.online.counter.lookup.list</field>
         <field name="model">efn.online.counter.lookup</field>

@@ -13,5 +13,10 @@
             <field name="model_id" ref="model_efn_online_counter_settlement"/>
             <field name="domain_force">[('company_id', 'in', company_ids)]</field>
         </record>
+        <record id="efn_online_counter_refund_auth_rule_company" model="ir.rule">
+            <field name="name">EFN bayar di kasir otorisasi refund: multi-company</field>
+            <field name="model_id" ref="model_efn_online_counter_refund_auth"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
     </data>
 </odoo>

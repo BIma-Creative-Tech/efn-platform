@@ -253,7 +253,8 @@ export class OrderEventsService {
           await r.updatePart(part.id, { last_seq: ev.seq, odoo_state: ev.state.slice(0, 32) });
           const outcome = ev.settlement ? await this.saga.settleCounterRefund(r, order, part, ev.settlement) : 'invalid';
           if (outcome === 'settled') return record('applied');
-          this.metrics.anomaly('refund_settled_rejected', outcome === 'qris' || outcome === 'mismatch' ? 'critical' : 'warning', {
+          // L-60: `unapproved` (refund POS tanpa persetujuan/otorisasi) juga critical
+          this.metrics.anomaly('refund_settled_rejected', outcome === 'qris' || outcome === 'mismatch' || outcome === 'unapproved' ? 'critical' : 'warning', {
             order_id: order.id,
             part_id: part.id,
             code: outcome,

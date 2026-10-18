@@ -109,6 +109,8 @@ RPC_ALLOWLIST = {
     ("sale.order", "load_sale_order_from_pos"): "override CE pos_sale (tolak SO online)",
     ("efn.online.handover.wizard", "action_confirm"): "grup stock user + check_access(read) order + company; "
     "kode = verifikasi pbkdf2, 5x salah -> review",
+    ("efn.online.order", "efn_online_counter_refund_authorize"): "L-60: _efn_online_check_caller + FOR UPDATE + "
+    "idempotency_key + refund requested/cancel tanpa faktur + nominal persis",
     ("pos.config", "efn_online_counter_lookup"): "E-45: grup POS user + check_access(read) config + company + sesi "
     "terbuka + rate limit sesi/kasir; digest KDF per company + outlet = gudang config; hanya {order_label, amount}",
 }

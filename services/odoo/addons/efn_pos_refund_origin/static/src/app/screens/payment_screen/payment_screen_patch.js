@@ -7,6 +7,8 @@
  * E-41 (docs/04 §12.4, L-51): mode `manager_approval` -> sebelum validasi retur tanpa struk, dialog persetujuan
  * Store Manager (PIN diverifikasi server, `pos.config.efn_return_approval_request`). Offline: DIBLOKIR dengan pesan
  * (persetujuan butuh server). Server tetap penentu akhir saat sync (tanpa persetujuan sah -> ditolak).
+ *
+ * SEC-147 (19.0.1.4.0): order campuran (refund ber-struk + barang qty < 0 tanpa asal) diblokir sebelum validasi.
  */
 import { _t } from "@web/core/l10n/translation";
 import { AlertDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
@@ -24,6 +26,18 @@ function refundOrigin(order) {
 export function efnIsUnlinkedReturn(order) {
     const lines = order?.lines || [];
     return lines.some((line) => line.qty < 0) && !lines.some((line) => line.refunded_orderline_id);
+}
+
+/**
+ * SEC-147: order campuran = ada baris yang menunjuk order asal DAN barang qty < 0 tanpa asal. Server menolaknya
+ * (semua mode); klien memblokir lebih awal dengan pesan yang sama.
+ */
+export function efnIsMixedReturn(order) {
+    const lines = order?.lines || [];
+    return (
+        lines.some((line) => line.refunded_orderline_id) &&
+        lines.some((line) => line.qty < 0 && !line.refunded_orderline_id)
+    );
 }
 
 /** Uang keluar order (positif): jumlah pembayaran negatif yang bukan kembalian. */
@@ -89,6 +103,15 @@ patch(PaymentScreen.prototype, {
 
     async validateOrder(isForceValidate) {
         const order = this.currentOrder;
+        if (order && efnIsMixedReturn(order)) {
+            this.efnAlert(
+                _t(
+                    "Refund dari struk dan retur tanpa struk tidak boleh digabung dalam satu order. Selesaikan " +
+                        "refund dari struk dulu, lalu buat retur tanpa struk sebagai order terpisah."
+                )
+            );
+            return;
+        }
         if (
             order &&
             this.pos.config.efn_unlinked_return_mode === "manager_approval" &&

@@ -5,6 +5,7 @@ import { ODOO_ONLINE, OdooOnlineApi } from '../odoo-rpc/odoo-online.types';
 import { OnlineMetrics, StuckKind } from '../odoo-rpc/online-metrics';
 import { ONLINE_PAYMENTS, OnlinePaymentsPort } from '../payments/online-payments';
 import {
+  COUNTER_REFUND_AUTH_PENDING,
   PartStatus,
   UNPAID_OPEN,
   compensateMessage,
@@ -183,6 +184,13 @@ export class OnlineJobsService implements OnModuleInit, OnModuleDestroy {
         stats.paid += 1;
       }
       for (const rf of await r.refundsInStatusBefore(['requested', 'odoo_done', 'gateway_in_flight', 'gateway_pending', 'gateway_done'], minus(15 * MIN), BATCH)) {
+        const m = refundRequestedMessage(rf.id);
+        await r.enqueue(QUEUES.ORDER_REFUND_REQUESTED, { ...m }, m.idempotency_key);
+        stats.refunds += 1;
+      }
+      // L-60: otorisasi refund POS counter yang tertunda (galat transien Odoo) → terbitkan ulang (idempoten)
+      for (const rf of await r.refundsInStatusBefore(['manual_required'], minus(15 * MIN), BATCH)) {
+        if (rf.payment_intent_id !== null || rf.failure_reason !== COUNTER_REFUND_AUTH_PENDING) continue;
         const m = refundRequestedMessage(rf.id);
         await r.enqueue(QUEUES.ORDER_REFUND_REQUESTED, { ...m }, m.idempotency_key);
         stats.refunds += 1;

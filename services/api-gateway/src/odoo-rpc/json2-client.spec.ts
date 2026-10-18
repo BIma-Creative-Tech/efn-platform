@@ -55,7 +55,7 @@ describe('Klien json2 (docs/04 §10.4)', () => {
       headers: { Authorization: `bearer ${GL_KEY}`, 'X-Odoo-Database': 'efn_odoo', 'Content-Type': 'application/json' },
     });
     expect(ctx.calls[1].headers.Authorization).toBe(`bearer ${PB_KEY}`);
-    expect(Object.values(ODOO_ONLINE_PATHS)).toHaveLength(10);
+    expect(Object.values(ODOO_ONLINE_PATHS)).toHaveLength(11); // + L-60 counterRefundAuthorize
     for (const p of Object.values(ODOO_ONLINE_PATHS)) expect(p).toMatch(/^efn\.online\.(channel|order)\/efn_online_[a-z_]+$/);
   });
 
@@ -404,6 +404,26 @@ describe('G20 §12.2–§12.3: parser place (counter_code), issue berat, weight_
     expect(modes(undefined)).toBeNull();
     expect(modes([])).toEqual([]);
     for (const bad of ['counter, qris', 'qris', 5, [1], [null], { qris: true }]) expect(() => modes(bad)).toThrow(OdooRpcError);
+  });
+
+  it('L-60: counterRefundAuthorize → path efn_online_counter_refund_authorize, argumen bernama, key kanal; respons authorized/state', async () => {
+    // Bentuk Odoo E-45: { state: "authorized", amount }. Tanpa state "authorized" = TIDAK diotorisasi (tanpa default true).
+    const ctx = setup([
+      ok({ state: 'authorized', amount: 12_000 }),
+      ok({}),
+      ok({ state: 'authorized', authorized: false }),
+      ok({ state: 'authorized', amount: 1.5 }),
+    ]);
+    const input = { idempotency_key: 'online:counter_refund_auth:r1', refund_id: 'r1', refund_ref: null, amount: 12_000 };
+    expect(await ctx.client.counterRefundAuthorize('GL', 'p1', input)).toEqual({ authorized: true, state: 'authorized', amount: 12_000 });
+    expect(ctx.calls[0]).toMatchObject({
+      path: 'efn.online.order/efn_online_counter_refund_authorize',
+      body: { channel_code: 'GL', platform_order_ref: 'p1', authorization: input, context: { lang: 'id_ID' } },
+      headers: { Authorization: `bearer ${GL_KEY}` },
+    });
+    expect(await ctx.client.counterRefundAuthorize('GL', 'p1', input)).toEqual({ authorized: false, state: null, amount: null });
+    expect((await ctx.client.counterRefundAuthorize('GL', 'p1', input)).authorized).toBe(false);
+    await expect(ctx.client.counterRefundAuthorize('GL', 'p1', input)).rejects.toMatchObject({ kind: 'invalid_response' });
   });
 
   it('place mengirim order.payment_mode + order.counter_code (L-56) HANYA untuk counter (payload QRIS pra-G20 tidak berubah)', async () => {

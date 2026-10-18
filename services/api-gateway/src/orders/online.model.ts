@@ -67,6 +67,10 @@ export const OPEN_PAID_PARTS: readonly PartStatus[] = ['paying', 'confirmed', 'r
  * refund order POS pelunasan ke metode asal lalu `online-refund-settle --provider-ref <ref refund POS>`).
  */
 export const COUNTER_REFUND_REASON = 'counter_refund_via_pos';
+/** L-60: refund counter disetujui approver, otorisasi Odoo `efn_online_counter_refund_authorize` belum berhasil. */
+export const COUNTER_REFUND_AUTH_PENDING = 'counter_refund_auth_pending';
+/** L-60: Odoo menolak otorisasi refund POS — tetap `manual_required`, CS memutuskan. */
+export const COUNTER_REFUND_AUTH_REJECTED = 'counter_refund_auth_rejected';
 
 /** Peringkat monoton §10.6.2. */
 export const PART_RANK: Readonly<Record<PartStatus, number>> = {

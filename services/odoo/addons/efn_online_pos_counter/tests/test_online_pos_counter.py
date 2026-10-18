@@ -5,6 +5,7 @@ dobel sync idempoten; jurnal kliring = 0; SO tetap tidak dimuat POS (regresi SEC
 refund online disetujui. BFF tidak dipanggil (event hanya diantrikan di outbox).
 """
 
+import uuid
 from datetime import timedelta
 
 from odoo import Command, fields
@@ -349,10 +350,15 @@ class TestEfnOnlinePosCounter(TestPoSCommon):
             "TCT", online.platform_order_ref, "review", f"online:cancel_review:{online.platform_order_ref}"
         )
         self.assertEqual(online.state, "cancelled")
+        # SEC-145: batal tanpa faktur tidak lagi otomatis membuka refund POS -> wajib otorisasi BFF (refund BFF).
+        self._assert_rejected(self._refund_data(pos_order))
+        result = self._authorize(online, None, int(online.amount_payable))
+        self.assertEqual(result, {"state": "authorized", "amount": int(online.amount_payable)})
         refund = self._sync(self._refund_data(pos_order))
         self.assertEqual(refund.state, "paid")
         settlement = self.env["efn.online.counter.settlement"].sudo().search([("online_order_id", "=", online.id)])
         self.assertEqual(settlement.refund_pos_order_id, refund)
+        self.assertEqual(settlement.refund_auth_ids.consumed_pos_order_id, refund)
         self._assert_rejected(self._refund_data(pos_order))  # refund kedua ditolak
 
     # ------------------------------------------------------------------ refund
@@ -369,18 +375,160 @@ class TestEfnOnlinePosCounter(TestPoSCommon):
         data.update(amount_total=-amount, amount_tax=0.0, amount_paid=-amount)
         return data
 
+    def _authorize(self, online, refund_ref, amount, key=None, bff_refund_id=None, user=None):
+        """BFF (user teknis kanal): refund counter lolos approver -> otorisasi refund POS (SEC-145)."""
+        bff_refund_id = bff_refund_id or str(uuid.uuid4())
+        return (
+            self.env["efn.online.order"]
+            .with_user(user or self.fx["tech"])
+            .efn_online_counter_refund_authorize(
+                "TCT",
+                online.platform_order_ref,
+                {
+                    "idempotency_key": key or f"online:counter_refund_auth:{bff_refund_id}",
+                    "refund_id": bff_refund_id,
+                    "refund_ref": refund_ref,
+                    "amount": amount,
+                },
+            )
+        )
+
+    def _cs_refund(self, online):
+        """CS membuat refund penuh lewat BFF (nota kredit, `requested`) — SEBELUM approver menyetujui."""
+        return (
+            self.env["efn.online.order"]
+            .with_user(self.fx["tech"])
+            .efn_online_refund(
+                "TCT",
+                online.platform_order_ref,
+                {
+                    "idempotency_key": f"online:refund:{online.platform_order_ref}",
+                    "full": True,
+                    "reason": "customer_cs",
+                },
+            )
+        )
+
+    def _other_outlet_config(self, same_outlet=False):
+        """Config POS lain (tanpa sesi): gudang lain (outlet lain) atau gudang yang sama (kasir lain di outlet itu)."""
+        picking_type = (
+            self.config.picking_type_id
+            if same_outlet
+            else (self.warehouse_2.pos_type_id or self.warehouse_2.out_type_id)
+        )
+        return (
+            self.env["pos.config"]
+            .sudo()
+            .create(
+                {
+                    "name": "POS Kasir Lain E45" if same_outlet else "POS Outlet Lain E45",
+                    "company_id": self.company.id,
+                    "picking_type_id": picking_type.id,
+                }
+            )
+        )
+
+    def test_pos_refund_rejected_before_bff_approval(self):
+        """SEC-145: refund `requested` initiator=bff (CS sudah minta, approver belum) belum membuka refund POS."""
+        online, pos_order = self._paid_online()
+        self._assert_rejected(self._refund_data(pos_order))
+        self._cs_refund(online)
+        self.assertEqual((online.refund_ids.state, online.refund_ids.initiator), ("requested", "bff"))
+        self._assert_rejected(self._refund_data(pos_order))
+        self.assertEqual(online.refund_ids.state, "requested")
+
+    def test_pos_refund_rejected_for_odoo_initiated_refund(self):
+        """SEC-145 skenario 1: Sales Manager membatalkan pesanan berfaktur dari Odoo -> refund initiator=odoo."""
+        online, pos_order = self._paid_online()
+        online._efn_ops_cancelled(reason_note="Pelanggan minta batal lewat telepon")
+        refund = online.refund_ids
+        self.assertEqual((online.state, refund.state, refund.initiator), ("cancelled", "requested", "odoo"))
+        self._assert_rejected(self._refund_data(pos_order))
+        self.assertEqual(refund.state, "requested", "uang tidak keluar sebelum approver BFF")
+        Outbox = self.env["efn.online.event.outbox"].sudo()
+        self.assertFalse(Outbox.search([("order_id", "=", online.id), ("event", "=", "refund_settled")]))
+        # Setelah approver CS menyetujui di BFF (empat mata vs pemicu Odoo) -> otorisasi -> refund POS diterima.
+        self._authorize(online, refund.refund_ref, int(refund.amount))
+        self.assertEqual(self._sync(self._refund_data(pos_order)).state, "paid")
+        self.assertEqual(refund.state, "settled")
+
+    def test_pos_refund_rejected_from_other_outlet(self):
+        """SEC-145 skenario 2: refund dari config di gudang lain (company sama) ditolak walau sudah diotorisasi."""
+        online, pos_order = self._paid_online()
+        result = self._cs_refund(online)
+        self._authorize(online, result["refund_ref"], int(online.refund_ids.amount))
+        settlement = self.env["efn.online.counter.settlement"].sudo().search([("online_order_id", "=", online.id)])
+        # Simulasi pelunasan tercatat di outlet lain (satu sesi terbuka per test): refund dari outlet ini ditolak.
+        original_config = settlement.config_id
+        settlement.write({"config_id": self._other_outlet_config().id})
+        # Logger anak (bukan induk): `_assert_rejected` membisukan logger induk lewat mute_logger.
+        with self.assertLogs("odoo.addons.efn_online_pos_counter.models.pos_order", level="WARNING") as logs:
+            self._assert_rejected(self._refund_data(pos_order))
+        self.assertIn("refund_other_outlet", "\n".join(logs.output))
+        self.assertEqual(online.refund_ids.state, "requested")
+        # Kasir lain di outlet yang SAMA (config lain, gudang sama) -> diterima.
+        settlement.write({"config_id": self._other_outlet_config(same_outlet=True).id})
+        self.assertNotEqual(settlement.config_id, original_config)
+        self.assertEqual(self._sync(self._refund_data(pos_order)).state, "paid")
+        self.assertEqual(online.refund_ids.state, "settled")
+
+    def test_authorize_rpc_rules(self):
+        online, pos_order = self._paid_online()
+        amount = int(online.amount_payable)
+        # Pesanan aktif berfaktur tanpa nota kredit: otorisasi tanpa refund_ref ditolak.
+        with self.assertRaisesRegex(UserError, "efn_online:invalid_state"):
+            self._authorize(online, None, amount)
+        result = self._cs_refund(online)
+        refund_ref = result["refund_ref"]
+        with self.assertRaisesRegex(UserError, "efn_online:amount_mismatch"):
+            self._authorize(online, refund_ref, amount - 1)
+        with self.assertRaisesRegex(UserError, "efn_online:not_found"):
+            self._authorize(online, str(uuid.uuid4()), amount)
+        for bad in ({"amount": 0}, {"amount": "1000"}, {"refund_id": "bukan-uuid"}, {"extra": 1}):
+            payload = {
+                "idempotency_key": "online:counter_refund_auth:bad",
+                "refund_id": str(uuid.uuid4()),
+                "refund_ref": refund_ref,
+                "amount": amount,
+                **bad,
+            }
+            with self.subTest(bad=bad), self.assertRaisesRegex(UserError, "efn_online:invalid_input"):
+                self.env["efn.online.order"].with_user(self.fx["tech"]).efn_online_counter_refund_authorize(
+                    "TCT", online.platform_order_ref, payload
+                )
+        bff_id = str(uuid.uuid4())
+        first = self._authorize(online, refund_ref, amount, bff_refund_id=bff_id)
+        self.assertEqual(self._authorize(online, refund_ref, amount, bff_refund_id=bff_id), first, "replay idempoten")
+        with self.assertRaisesRegex(UserError, "efn_online:idempotency_conflict"):
+            # kunci sama, payload lain
+            self._authorize(
+                online, refund_ref, amount, key=f"online:counter_refund_auth:{bff_id}", bff_refund_id=str(uuid.uuid4())
+            )
+        with self.assertRaisesRegex(UserError, "efn_online:idempotency_conflict"):
+            self._authorize(online, refund_ref, amount)  # refund Odoo yang sama, refund BFF lain
+        # Akses: user tanpa grup kanal / kasir POS -> AccessError.
+        for user in (self.cashier, self.plain):
+            with self.subTest(user=user.login), self.assertRaises(AccessError):
+                self._authorize(online, refund_ref, amount, user=user)
+        auth = self.env["efn.online.counter.refund.auth"].sudo().search([("online_order_id", "=", online.id)])
+        self.assertEqual(len(auth), 1)
+        with self.assertRaises(AccessError):
+            auth.with_user(self.cashier).read(["amount"])
+        # Setelah refund POS: otorisasi baru ditolak (pelunasan sudah direfund).
+        self._sync(self._refund_data(pos_order))
+        with self.assertRaisesRegex(UserError, "efn_online:invalid_state"):
+            self._authorize(online, refund_ref, amount)
+
     def test_pos_refund_requires_approved_online_refund(self):
         online, pos_order = self._paid_online()
         self._assert_rejected(self._refund_data(pos_order))
-        # CS + approver di BFF -> efn_online_refund (nota kredit, requested) -> uang keluar lewat refund POS.
+        # CS di BFF -> efn_online_refund (nota kredit, requested) -> approver -> otorisasi -> uang keluar lewat
+        # refund POS (outlet sama).
         api = self.env["efn.online.order"].with_user(self.fx["tech"])
-        result = api.efn_online_refund(
-            "TCT",
-            online.platform_order_ref,
-            {"idempotency_key": f"online:refund:{online.platform_order_ref}", "full": True, "reason": "customer_cs"},
-        )
+        result = self._cs_refund(online)
         record = online.refund_ids
         self.assertEqual(record.state, "requested")
+        self._authorize(online, result["refund_ref"], int(record.amount))
         with self.assertRaisesRegex(UserError, "efn_online:invalid_state"):
             api.efn_online_refund_settled(
                 "TCT",

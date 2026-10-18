@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { createHash } from 'node:crypto';
-import { OdooRpcError } from '../odoo-rpc/odoo-online.types';
+import { ODOO_ONLINE_PATHS, OdooRpcError } from '../odoo-rpc/odoo-online.types';
 import { MetricsService } from '../common/metrics/metrics.service';
 import { FakeClock, FakeKvStore, catchApiError, testCipher, testConfig } from '../common/testing/fakes';
 import { MemoryCartStore } from '../cart/cart-store';
@@ -13,7 +13,7 @@ import { parseCompensate, parseOrderPaid, parseRefundRequested, parseUnpaidClose
 import { OnlineAdminService } from './online-admin.service';
 import { OnlineJobsService } from './online-jobs.service';
 import { OnlineSagaService } from './online-saga.service';
-import { COUNTER_REFUND_REASON } from './online.model';
+import { COUNTER_REFUND_AUTH_PENDING, COUNTER_REFUND_AUTH_REJECTED, COUNTER_REFUND_REASON } from './online.model';
 import { OrderEventsService, parseOdooEvent } from './order-events.service';
 import { CounterPaymentView, OrdersService } from './orders.service';
 import { PICKUP_CODE_RE, counterCodeAad, decryptCounterCode, decryptPickupCode } from './pickup-code';
@@ -372,9 +372,22 @@ describe('Pelunasan di kasir → event Odoo `paid` (§12.2 no. 6–7)', () => {
     const [part] = ctx.partsOf(order.order_id);
     expect(part).toMatchObject({ status: 'cancelled', cancel_reason: 'stock_short' });
     const [rf] = [...ctx.repo.state.refunds.values()];
-    expect(rf).toMatchObject({ part_id: part.id, payment_intent_id: null, status: 'manual_required', failure_reason: COUNTER_REFUND_REASON, amount: 12_000 });
+    // L-60: refund sistem counter tetap menunggu approver; otorisasi Odoo belum dipanggil
+    expect(rf).toMatchObject({ part_id: part.id, payment_intent_id: null, status: 'approval_required', amount: 12_000 });
+    expect(ctx.odoo.counterRefundAuths.size).toBe(0);
     expect(ctx.payments.refunds).toEqual([]);
     expect(ctx.orderRow(order.order_id).status).toBe('cancelled');
+    const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    const warn2 = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      await ctx.admin.approveRefund(rf.id, { actor: 'spv1/host-b', role: 'approver' }, 'stok kurang');
+      await ctx.drain();
+    } finally {
+      log.mockRestore();
+      warn2.mockRestore();
+    }
+    expect(ctx.repo.state.refunds.get(rf.id)).toMatchObject({ status: 'manual_required', failure_reason: COUNTER_REFUND_REASON });
+    expect(ctx.odoo.counterRefundAuths.get(`online:counter_refund_auth:${rf.id}`)).toEqual({ ref: part.id, refundId: rf.id, refundRef: null, amount: 12_000 });
   });
 
   it('simulate-payment (dev, stub Odoo) untuk order counter → fulfilling; status selain paid → 400', async () => {
@@ -572,6 +585,15 @@ describe('Refund setelah bayar di kasir (§12.2 no. 8)', () => {
       await ctx.drain();
       expect(ctx.repo.state.refunds.get(rf.refund_id)).toMatchObject({ status: 'manual_required', failure_reason: COUNTER_REFUND_REASON, payment_intent_id: null });
       expect(ctx.payments.refunds).toEqual([]); // gateway tidak pernah dipanggil
+      // L-60: otorisasi refund POS dipanggil sekali, setelah approver, dengan ref & nominal persis
+      expect(ctx.odoo.calls.filter((c) => c.method === 'counterRefundAuthorize')).toHaveLength(1);
+      const dbRf = ctx.repo.state.refunds.get(rf.refund_id)!;
+      expect(ctx.odoo.counterRefundAuths.get(`online:counter_refund_auth:${rf.refund_id}`)).toEqual({
+        ref: part.id,
+        refundId: rf.refund_id,
+        refundRef: dbRf.odoo_refund_ref,
+        amount: 159_800,
+      });
       const out = await ctx.admin.settleManual(rf.refund_id, 'POS/RFD/0001', { actor: 'spv1/host-b', role: 'approver' }, 'refund POS tunai');
       expect(out.status).toBe('settled');
       expect(ctx.partsOf(order.order_id)[0].refunded_amount).toBe(159_800);
@@ -663,5 +685,108 @@ describe('Refund setelah bayar di kasir (§12.2 no. 8)', () => {
     await expect(
       ctx.admin.refund({ partId: part.id, lines: null, full: true, restock: true, reason: 'customer_cs', actor: 'cs1/host-a', note: 'uji' }),
     ).rejects.toThrow('order tanpa pembayaran');
+  });
+});
+
+describe('L-60 (SEC-145): otorisasi refund POS `efn_online_counter_refund_authorize`', () => {
+  async function paidCounter(over: Record<string, string> = {}) {
+    const ctx = setup(over);
+    const order = await ctx.checkout();
+    await ctx.payAtCounter(order.order_id);
+    const [part] = ctx.partsOf(order.order_id);
+    return { ctx, order, part };
+  }
+  const authCalls = (ctx: ReturnType<typeof setup>) => ctx.odoo.calls.filter((c) => c.method === 'counterRefundAuthorize').length;
+  const quiet = () => [jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined), jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)];
+
+  it('belum disetujui approver → TIDAK dipanggil (refund CS di bawah ambang pun tetap approval_required untuk counter); refund_settled → unapproved critical', async () => {
+    const { ctx, part } = await paidCounter({ ONLINE_CS_REFUND_APPROVAL_MIN_IDR: '99999999' });
+    const admin = new OnlineAdminService(ctx.repo, ctx.odoo, ctx.saga, ctx.metrics, ctx.config);
+    const spies = quiet();
+    try {
+      const rf = await admin.refund({ partId: part.id, lines: null, full: true, restock: true, reason: 'customer_cs', actor: 'cs1/host-a', note: 'uji ambang' });
+      expect(rf.status).toBe('approval_required');
+      await ctx.drain();
+      expect(authCalls(ctx)).toBe(0);
+      const ref = ctx.repo.state.refunds.get(rf.refund_id)!.odoo_refund_ref!;
+      const ev = ctx.event(part.id, 'refund_settled', ctx.partsOf(part.order_id)[0].last_seq + 1, {
+        state: 'confirmed',
+        refund: { refund_ref: ref, amount: 159_800, settled_at: null, provider_refund_ref: 'pos:3f2b6c1e-8a4d-4c2e-9b1f-0a2b3c4d5e6f' },
+      });
+      expect((await ctx.events.handle(ev)).status).toBe('ignored_stale');
+      const warn = spies[1];
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('"kind":"refund_settled_rejected"') && String(c[0]).includes('"severity":"critical"') && String(c[0]).includes('unapproved'))).toBe(true);
+      // settle CLI juga ditolak sebelum persetujuan/otorisasi
+      await expect(admin.settleManual(rf.refund_id, 'POS/RFD/1', { actor: 'spv1/host-b', role: 'approver' }, 'uji')).rejects.toThrow(/tidak dapat di-settle/);
+    } finally {
+      spies.forEach((s) => s.mockRestore());
+    }
+  });
+
+  it('setelah approver → dipanggil SEKALI (key online:counter_refund_auth:<id>); pesan ulang / key lain → tidak dipanggil lagi; replay Odoo idempoten', async () => {
+    const { ctx, part } = await paidCounter();
+    const spies = quiet();
+    try {
+      const rf = await ctx.admin.refund({ partId: part.id, lines: null, full: true, restock: true, reason: 'customer_cs', actor: 'cs1/host-a', note: 'uji' });
+      await ctx.admin.approveRefund(rf.refund_id, { actor: 'spv1/host-b', role: 'approver' }, 'disetujui uji');
+      await ctx.drain();
+      expect(authCalls(ctx)).toBe(1);
+      const msg = { schema_version: 1 as const, idempotency_key: `order.refund.requested:${rf.refund_id}`, refund_id: rf.refund_id };
+      expect(await ctx.saga.handleRefundRequested(msg)).toBe('duplicate');
+      expect(await ctx.saga.handleRefundRequested({ ...msg, idempotency_key: `${msg.idempotency_key}:x` })).toBe('done');
+      expect(authCalls(ctx)).toBe(1);
+      // Odoo idempoten per key: payload sama → sukses; payload beda → idempotency_conflict
+      const dbRf = ctx.repo.state.refunds.get(rf.refund_id)!;
+      const input = { idempotency_key: `online:counter_refund_auth:${rf.refund_id}`, refund_id: rf.refund_id, refund_ref: dbRf.odoo_refund_ref, amount: 159_800 };
+      expect(await ctx.odoo.counterRefundAuthorize('GL', part.id, input)).toEqual({ authorized: true, state: 'authorized', amount: 159_800 });
+      await expect(ctx.odoo.counterRefundAuthorize('GL', part.id, { ...input, amount: 1 })).rejects.toMatchObject({ code: 'idempotency_conflict' });
+    } finally {
+      spies.forEach((s) => s.mockRestore());
+    }
+  });
+
+  it('galat transien Odoo → tetap manual_required (auth_pending) + anomali, tidak diklaim; rekonsiliasi menerbitkan ulang → terotorisasi', async () => {
+    const { ctx, part } = await paidCounter();
+    const spies = quiet();
+    try {
+      const rf = await ctx.admin.refund({ partId: part.id, lines: null, full: true, restock: true, reason: 'customer_cs', actor: 'cs1/host-a', note: 'uji' });
+      await ctx.admin.approveRefund(rf.refund_id, { actor: 'spv1/host-b', role: 'approver' }, 'disetujui uji');
+      ctx.odoo.failNext.set('counterRefundAuthorize', new OdooRpcError('transport'));
+      await ctx.drain();
+      expect(ctx.repo.state.refunds.get(rf.refund_id)).toMatchObject({ status: 'manual_required', failure_reason: COUNTER_REFUND_AUTH_PENDING });
+      expect(spies[1].mock.calls.some((c) => String(c[0]).includes('"kind":"counter_refund_auth_failed"'))).toBe(true);
+      ctx.clock.advanceSeconds(16 * 60);
+      await ctx.jobs.reconOnce();
+      await ctx.drain();
+      expect(ctx.repo.state.refunds.get(rf.refund_id)!.failure_reason).toBe(COUNTER_REFUND_REASON);
+      expect(authCalls(ctx)).toBe(2);
+      expect(ctx.odoo.counterRefundAuths.size).toBe(1);
+    } finally {
+      spies.forEach((s) => s.mockRestore());
+    }
+  });
+
+  it('Odoo menolak (UserError) → manual_required + auth_rejected + anomali critical; tidak dicoba ulang; tidak bisa di-settle', async () => {
+    const { ctx, part } = await paidCounter();
+    const spies = quiet();
+    try {
+      const rf = await ctx.admin.refund({ partId: part.id, lines: null, full: true, restock: true, reason: 'customer_cs', actor: 'cs1/host-a', note: 'uji' });
+      await ctx.admin.approveRefund(rf.refund_id, { actor: 'spv1/host-b', role: 'approver' }, 'disetujui uji');
+      ctx.odoo.failNext.set('counterRefundAuthorize', new OdooRpcError('business', 'invalid_state'));
+      await ctx.drain();
+      expect(ctx.repo.state.refunds.get(rf.refund_id)).toMatchObject({ status: 'manual_required', failure_reason: COUNTER_REFUND_AUTH_REJECTED });
+      expect(spies[1].mock.calls.some((c) => String(c[0]).includes('"kind":"counter_refund_auth_rejected"') && String(c[0]).includes('"severity":"critical"'))).toBe(true);
+      ctx.clock.advanceSeconds(16 * 60);
+      await ctx.jobs.reconOnce();
+      await ctx.drain();
+      expect(authCalls(ctx)).toBe(1);
+      await expect(ctx.admin.settleManual(rf.refund_id, 'POS/RFD/1', { actor: 'spv1/host-b', role: 'approver' }, 'uji')).rejects.toThrow(/belum diotorisasi/);
+    } finally {
+      spies.forEach((s) => s.mockRestore());
+    }
+  });
+
+  it('json2: path allowlist memuat efn_online_counter_refund_authorize', () => {
+    expect(ODOO_ONLINE_PATHS.counterRefundAuthorize).toBe('efn.online.order/efn_online_counter_refund_authorize');
   });
 });

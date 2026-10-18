@@ -33,6 +33,8 @@ class EfnOnlineCounterSettlement(models.Model):
         "pos.order", string="Order POS refund", readonly=True, index="btree_not_null", check_company=True
     )
     refunded_at = fields.Datetime(readonly=True)
+    # SEC-145: otorisasi BFF (setelah approver CS) yang mengizinkan refund POS pelunasan ini.
+    refund_auth_ids = fields.One2many("efn.online.counter.refund.auth", "settlement_id", readonly=True)
 
     _online_order_unique = models.Constraint(
         "unique (online_order_id)", "Pesanan online hanya boleh dilunasi satu kali di kasir."

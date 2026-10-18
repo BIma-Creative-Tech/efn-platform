@@ -10,6 +10,7 @@ NEGATIF (uang keluar) order:
   dihitung server (`_efn_refund_allocation`, dipakai frontend). Metode yang tidak bisa dibalik di kanalnya
   (QRIS statis, gateway tanpa reversal) tetap dicatat atas metode asal; pengembalian dana fisik = transfer manual
   SOP Finance (Q-F18-6, L-23).
+- **Order campuran** (baris ber-struk + barang qty < 0 tanpa asal): ditolak di semua mode (SEC-147, 19.0.1.4.0).
 - **Retur tanpa struk** (barang qty < 0 tanpa order asal): hanya tunai (Q-F18-5, L-23);
   `efn.pos.refund.unlinked_return_mode` = ``manager_approval`` (default E-41, 18-15: wajib persetujuan Store
   Manager terverifikasi server, `efn.pos.return.approval` sekali pakai) | ``cash`` | ``deny`` (ditolak).
@@ -216,6 +217,17 @@ class PosOrder(models.Model):
         lines = self.lines.sudo()
         origins = self._efn_refund_origins()
         unlinked = lines.filtered(lambda line: line.qty < 0 and not line.refunded_orderline_id)
+        if unlinked and origins:
+            # SEC-147: order campuran (baris ber-struk + barang qty < 0 tanpa asal) dulu dinilai "refund ber-struk"
+            # sehingga E-41 (persetujuan) dan aturan tunai-saja lolos untuk porsi tanpa struk. Ditolak di semua mode;
+            # kasir memisahkan: refund dari struk, lalu retur tanpa struk sebagai order sendiri.
+            self._efn_refund_reject(
+                "mixed_return",
+                _(
+                    "Refund dari struk dan retur tanpa struk tidak boleh digabung dalam satu order. Selesaikan "
+                    "refund dari struk dulu, lalu buat retur tanpa struk sebagai order terpisah."
+                ),
+            )
         if unlinked and not origins:
             mode = self._efn_unlinked_return_mode()
             if mode == "deny":

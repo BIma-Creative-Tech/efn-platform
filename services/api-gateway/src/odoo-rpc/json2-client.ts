@@ -7,6 +7,7 @@ import { OnlineMetrics } from './online-metrics';
 import {
   parseCancel,
   parseCatalogPage,
+  parseCounterRefundAuthorize,
   parseImage,
   parseMarkPaid,
   parsePlace,
@@ -20,6 +21,8 @@ import {
   CancelReason,
   CancelResult,
   CatalogPage,
+  CounterRefundAuthorizeInput,
+  CounterRefundAuthorizeResult,
   Fulfilment,
   ImageResult,
   MarkPaidInput,
@@ -343,6 +346,16 @@ export class Json2OdooOnlineClient implements OdooOnlineApi {
       timeoutMs: this.config.odooRpcTimeoutMs,
     });
     return parseRefundSettled(v);
+  }
+  /** L-60 (SEC-145): pool saga; idempoten di Odoo per `authorization.idempotency_key`. */
+  async counterRefundAuthorize(channel: string, platformOrderRef: string, authorization: CounterRefundAuthorizeInput): Promise<CounterRefundAuthorizeResult> {
+    const v = await this.call(
+      'counterRefundAuthorize',
+      channel,
+      { channel_code: channel, platform_order_ref: platformOrderRef, authorization },
+      { timeoutMs: this.config.odooRpcTimeoutMs },
+    );
+    return parseCounterRefundAuthorize(v);
   }
   async status(channel: string, platformOrderRefs: string[]): Promise<StatusRow[]> {
     const v = await this.call('status', channel, { channel_code: channel, platform_order_refs: platformOrderRefs.slice(0, 100) }, {

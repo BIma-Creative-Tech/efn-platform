@@ -7,6 +7,8 @@ import { OnlineMetrics } from '../odoo-rpc/online-metrics';
 import { PaymentOperationUnsupportedError } from '../payments/payment-gateway';
 import { ONLINE_PAYMENTS, OnlineIntentTransition, OnlinePaymentsPort } from '../payments/online-payments';
 import {
+  COUNTER_REFUND_AUTH_PENDING,
+  COUNTER_REFUND_AUTH_REJECTED,
   COUNTER_REFUND_REASON,
   CompensateMessage,
   FINAL_ORDER,
@@ -207,8 +209,10 @@ export class OnlineSagaService {
     if (rf.payment_intent_id !== null) return 'qris';
     if (order.payment_method !== 'counter' || part.order_id !== order.id) return 'not_counter';
     if (rf.status === 'settled') return 'already';
-    if (rf.status === 'approval_required') return 'unapproved';
-    if (rf.status !== 'manual_required' && rf.status !== 'odoo_done') return 'not_found';
+    // L-60: hanya refund yang sudah disetujui approver DAN diotorisasi Odoo (kasir boleh me-refund POS)
+    if (rf.status === 'approval_required' || rf.status === 'odoo_done') return 'unapproved';
+    if (rf.status !== 'manual_required') return 'not_found';
+    if (rf.failure_reason !== COUNTER_REFUND_REASON) return 'unapproved';
     if (rf.amount !== s.amount) return 'mismatch';
     if (s.amount <= 0 || part.refunded_amount + s.amount > part.amount_payable) return 'exceeds';
     const nowMs = this.now();
@@ -420,7 +424,8 @@ export class OnlineSagaService {
           lines: null,
           amount: odooRefund.amount,
           odoo_refund_ref: odooRefund.refund_ref,
-          status: 'odoo_done',
+          // L-60: refund counter (refund POS) selalu lewat persetujuan approver CS sebelum otorisasi Odoo
+          status: counter ? 'approval_required' : 'odoo_done',
           requested_by: 'system',
         });
       } else if (paid && portion) {
@@ -435,7 +440,7 @@ export class OnlineSagaService {
             lines: null,
             amount,
             odoo_refund_ref: null,
-            status: 'requested',
+            status: counter ? 'approval_required' : 'requested', // L-60
             requested_by: 'system',
           });
         }
@@ -451,6 +456,48 @@ export class OnlineSagaService {
       await r.claim(CONSUMER.COMPENSATE, msg.idempotency_key);
       return 'done' as const;
     });
+  }
+
+  /**
+   * L-60 (SEC-145): `efn_online_counter_refund_authorize` — idempotency_key `online:counter_refund_auth:<refund_id>`,
+   * `refund_ref` = `odoo_refund_ref` (null hanya untuk pesanan batal tanpa faktur), `amount` = nominal persis.
+   * Sukses → `failure_reason = counter_refund_via_pos` (kasir boleh me-refund; settle lewat event `refund_settled` / CLI).
+   * Transien (jaringan/timeout/circuit/busy/auth) → tetap `counter_refund_auth_pending` + anomali; pesan TIDAK diklaim
+   * (rekonsiliasi menerbitkan ulang). Penolakan Odoo (UserError/`authorized:false`/respons tak valid) →
+   * `counter_refund_auth_rejected` + anomali critical; tetap `manual_required` (CS memutuskan). Tidak pernah gateway.
+   */
+  private async authorizeCounterRefund(msg: RefundRequestedMessage, part: PartRow): Promise<'done' | 'pending'> {
+    const rf = await this.repo.getRefund(msg.refund_id);
+    if (!rf || rf.status !== 'manual_required' || rf.failure_reason !== COUNTER_REFUND_AUTH_PENDING) return 'pending';
+    const ids = { refund_id: rf.id, part_id: part.id };
+    let rejected: string | null = null;
+    try {
+      const res = await this.odoo.counterRefundAuthorize(part.channel_code, part.id, {
+        idempotency_key: `online:counter_refund_auth:${rf.id}`,
+        refund_id: rf.id,
+        refund_ref: rf.odoo_refund_ref,
+        amount: rf.amount ?? 0,
+      });
+      if (!res.authorized) rejected = 'not_authorized';
+      else if (res.amount !== null && res.amount !== rf.amount) rejected = 'amount_mismatch';
+    } catch (err) {
+      if (err instanceof OdooRpcError && (err.kind === 'business' || err.kind === 'invalid_response' || err.kind === 'not_found')) {
+        rejected = err.code ?? err.kind;
+      } else {
+        this.metrics.anomaly('counter_refund_auth_failed', 'warning', { ...ids, code: err instanceof OdooRpcError ? err.kind : 'error' });
+        return 'pending';
+      }
+    }
+    const next = rejected ? COUNTER_REFUND_AUTH_REJECTED : COUNTER_REFUND_REASON;
+    const written = await this.repo.tx(async (r) => {
+      const cur = await r.getRefund(rf.id, true);
+      if (!cur || cur.status !== 'manual_required' || cur.failure_reason !== COUNTER_REFUND_AUTH_PENDING) return false;
+      await r.updateRefund(rf.id, { failure_reason: next });
+      return true;
+    });
+    if (written && rejected) this.metrics.anomaly('counter_refund_auth_rejected', 'critical', { ...ids, code: rejected });
+    if (written && !rejected) this.metrics.anomaly('refund_counter_via_pos', 'warning', ids);
+    return this.claimed(CONSUMER.REFUND, msg.idempotency_key);
   }
 
   private async claimed(consumer: string, key: string): Promise<'done'> {
@@ -471,6 +518,19 @@ export class OnlineSagaService {
     const part = await this.repo.getPart(refund.part_id);
     if (!part) throw new PermanentMessageError('bagian tidak ada');
     if (refund.status === 'approval_required') return 'pending'; // SEC-95: menunggu persetujuan CS (CLI)
+    if (refund.payment_intent_id === null) {
+      // L-60: refund counter yang belum lewat approver (mis. data lama `requested`) → wajib persetujuan dulu
+      if (refund.status === 'requested') {
+        await this.repo.tx(async (r) => r.updateRefund(msg.refund_id, { status: 'approval_required' }));
+        this.metrics.refund('approval_required');
+        this.metrics.anomaly('counter_refund_needs_approval', 'warning', { refund_id: msg.refund_id, part_id: part.id });
+        return 'pending';
+      }
+      // L-60: otorisasi Odoo tertunda (galat transien sebelumnya) → coba ulang (idempoten)
+      if (refund.status === 'manual_required' && refund.failure_reason === COUNTER_REFUND_AUTH_PENDING) {
+        return this.authorizeCounterRefund(msg, part);
+      }
+    }
 
     if (CLAIMABLE.includes(refund.status) || refund.status === 'gateway_in_flight') {
       // SEC-97: klaim eksklusif atomik + cek porsi (termasuk refund in-flight) di bawah kunci bagian, SEBELUM gateway
@@ -509,11 +569,11 @@ export class OnlineSagaService {
       }
       if (claim.payment_intent_id === null) {
         // G20 §12.2 no. 8: bayar di kasir — BFF TIDAK memanggil gateway. Uang keluar = refund order POS pelunasan ke
-        // metode asal (E-31); CS lalu `online-refund-settle --provider-ref <ref refund POS>` (approver, empat mata).
-        if (!(await this.casWrite(msg.refund_id, token, { status: 'manual_required', failure_reason: COUNTER_REFUND_REASON }))) return 'pending';
+        // metode asal (E-31). L-60: status di sini HANYA dicapai setelah persetujuan approver (`approval_required` →
+        // `odoo_done`); otorisasi Odoo `efn_online_counter_refund_authorize` dulu, baru kasir boleh me-refund.
+        if (!(await this.casWrite(msg.refund_id, token, { status: 'manual_required', failure_reason: COUNTER_REFUND_AUTH_PENDING }))) return 'pending';
         this.metrics.refund('manual_required');
-        this.metrics.anomaly('refund_counter_via_pos', 'warning', { refund_id: msg.refund_id, part_id: part.id });
-        return this.claimed(CONSUMER.REFUND, msg.idempotency_key);
+        return this.authorizeCounterRefund(msg, part);
       }
       let res;
       try {

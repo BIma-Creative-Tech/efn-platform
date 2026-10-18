@@ -1480,3 +1480,74 @@ domain `payment_account_id` `asset_current|liability_current`; frontend `addLine
   `review` setelah `cancelled` (bayar setelah batal); refund counter = BFF `efn_online_refund` lalu kasir me-refund
   order POS pelunasan (settle dicatat Odoo, terlihat di `efn_online_status.refunds[].state`).
 - **Security r13**: digest deterministik (bukan salt acak) adalah keputusan sadar agar lookup tanpa memilih pesanan.
+
+---
+
+# G20 putaran perbaikan r13 — SEC-145 (L-59), SEC-147, SEC-151 (19 Okt 2026, branch `chore/wave-20`)
+
+Cakupan: `efn_online_pos_counter` 19.0.1.0.0 → **19.0.1.1.0**, `efn_pos_refund_origin` 19.0.1.3.0 → **19.0.1.4.0**.
+Tanpa commit; tanpa shell — **test belum dijalankan** (lead menjalankan).
+
+## Modul & file
+- `efn_online_pos_counter`: `models/efn_online_counter_refund_auth.py` (baru), `models/efn_online_order.py` (RPC
+  `efn_online_counter_refund_authorize`), `models/efn_online_counter_settlement.py` (`refund_auth_ids`),
+  `models/pos_order.py` (`_efn_counter_plan_refund`, `_efn_counter_apply`), `models/__init__.py`,
+  `security/ir.model.access.csv`, `security/efn_online_pos_counter_security.xml`, `views/efn_online_pos_counter_views.xml`,
+  `tests/test_online_pos_counter.py`, `README.md`, `__manifest__.py`.
+- `efn_pos_refund_origin`: `models/pos_order.py`, `wizard/efn_pos_return_pin_wizard.py`,
+  `static/src/app/screens/payment_screen/payment_screen_patch.js`, `migrations/19.0.1.4.0/post-migrate.py` (baru),
+  `tests/test_return_approval.py`, `README.md`, `__manifest__.py`.
+
+## Keputusan
+- **SEC-145 — premis tugas dikoreksi.** "initiator `bff` = sudah disetujui" tidak benar: `online-admin.service.ts`
+  `refund()` memanggil Odoo `efn_online_refund` (refund `requested`, initiator `bff`) **sebelum** approver
+  (`approval_required` bila nominal ≥ `onlineCsRefundApprovalMinIdr`, default 0 = semua). Jadi menyaring initiator
+  saja tetap membuka celah CS + kasir. Odoo tidak punya sinyal persetujuan → ditambah **otorisasi eksplisit dari BFF**
+  (rekomendasi r13 no. 1): RPC `efn.online.order.efn_online_counter_refund_authorize(channel, platform_order_ref,
+  {idempotency_key, refund_id, refund_ref|null, amount})` → `efn.online.counter.refund.auth`. Refund POS diterima hanya
+  bila otorisasi belum terpakai cocok nominal: (a) bertaut refund `requested` (initiator `bff` atau `odoo` — `odoo`
+  hanya setelah approver BFF), atau (b) `refund_ref: null` untuk pesanan `cancelled` tanpa faktur (tidak lagi otomatis).
+  Tanpa otorisasi: initiator `odoo` (ops-cancel Sales Manager) **ditolak**, initiator `bff` sebelum approver ditolak.
+  Bila lead ingin initiator `odoo` ditolak mutlak (bahkan setelah approver), cukup satu filter di
+  `_efn_counter_plan_refund`; saya tidak memilihnya karena dana ops-cancel lalu tidak punya jalan keluar via POS.
+- **Ikatan outlet:** gudang config refund = gudang config pelunasan (`settlement.config_id`), tanpa pengecualian
+  POS manager. Lebih longgar dari "config persis" agar terminal lain/pengganti di outlet sama tetap jalan; lebih ketat
+  dari "company sama + POS manager". Outlet tutup → SOP Finance + `online-refund-settle`.
+- **SEC-147:** order campuran **ditolak** (server, semua mode, persetujuan yang ada tidak dikonsumsi) + blokir dini di
+  JS (`efnIsMixedReturn`). Tidak memecah nominal per porsi (lebih rumit, rawan salah alokasi).
+- **SEC-151:** `create`/`write` wizard membuang `pin`/`pin_confirm` dan menulis `pin_hash` (pbkdf2) atau `pin_error`;
+  `pin_hash`/`pin_error` dari klien selalu dihitung ulang. "write False di finally" tidak cukup: `web_save` sudah
+  commit sebelum `action_apply`, dan rollback `action_apply` yang gagal juga membatalkan pengosongan. Migrasi
+  mengosongkan teks PIN baris lama.
+
+## Test baru / diubah (tag `efn`, BELUM DIJALANKAN)
+- `efn_online_pos_counter/tests/test_online_pos_counter.py`: `test_pos_refund_rejected_before_bff_approval`,
+  `test_pos_refund_rejected_for_odoo_initiated_refund` (ditolak tanpa otorisasi, tidak ada event `refund_settled`,
+  diterima setelah otorisasi), `test_pos_refund_rejected_from_other_outlet` (gudang lain ditolak + log
+  `refund_other_outlet`; terminal lain gudang sama diterima), `test_authorize_rpc_rules`; diubah:
+  `test_paid_after_cancel_goes_to_review_then_pos_refund` (wajib otorisasi `refund_ref: null`),
+  `test_pos_refund_requires_approved_online_refund` (otorisasi; event `refund_settled` tetap 1, kliring 0).
+- `efn_pos_refund_origin/tests/test_return_approval.py`: `test_mixed_return_rejected_in_every_mode`,
+  `test_split_after_mixed_rejection_works`, `test_pin_never_stored_after_failed_apply` (baris mentah via SQL
+  `row_to_json`: mismatch/weak/format/identity kedaluwarsa/bukan Store Manager), 
+  `test_pin_never_stored_after_successful_apply_and_retry`, `test_pin_hash_injection_ignored`.
+
+## Wajib di luar cakupan saya (blokir 0 failed)
+- **`efn_core/tests/test_rpc_surface.py` `RPC_ALLOWLIST`** — tanpa entri ini `test_public_methods_are_allowlisted` dan
+  `test_installed_models_new_public_methods_allowlisted` GAGAL:
+  `("efn.online.order", "efn_online_counter_refund_authorize"): "_efn_online_check_caller + FOR UPDATE + idempotency_key + refund requested/cancel tanpa faktur + nominal persis",`
+- **BFF:** panggil RPC itu (via odoo-rpc-gateway, tambah ke allowlist metode gateway) tepat saat refund counter
+  dipindah ke `manual_required`/`counter_refund_via_pos` (`online-saga.service.ts` ~baris 510-516), dengan
+  `refund_id` = id refund BFF, `refund_ref` = `odoo_refund_ref` (null untuk kompensasi tanpa nota kredit), kunci
+  `online:counter_refund_auth:<refund_id>`; error transien → retry, bisnis → anomali critical. Sampai ada, semua
+  refund POS counter ditolak (fail-closed). Rekomendasi r13 no. 4 (alert `refund_settled_rejected`/`unapproved`
+  critical) juga BFF.
+- **Kontrak docs/04 §12.2:** catat RPC baru (L-59) dan perubahan aturan refund (outlet + otorisasi).
+
+## Belum diverifikasi
+- Semua test di atas belum dijalankan. Titik rawan: `pos.config.create` minimal (nama + company + picking type gudang
+  kedua) di `_other_outlet_config` — bila Odoo 19 menuntut field lain, test outlet gagal di setup (bukan logika);
+  `warehouse.pos_type_id` diasumsikan ada untuk gudang yang dibuat setelah `point_of_sale` terpasang (fallback
+  `out_type_id`); psycopg2 mengembalikan `row_to_json(...)::json` sebagai dict.
+- Alur form wizard di web client 19 (`web_save` → baca ulang field PIN kosong → `action_apply`) dibaca dari pola,
+  belum diuji tour. Blokir order campuran di JS belum diuji tour.

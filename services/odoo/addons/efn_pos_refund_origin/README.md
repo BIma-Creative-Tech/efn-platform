@@ -5,6 +5,29 @@
 > tanpa struk hanya tunai **dan** (sejak 19.0.1.3.0) wajib disetujui Store Manager lain dengan PIN yang diperiksa
 > server; saat POS offline retur tanpa struk tidak bisa dilakukan. Setiap persetujuan dan PIN salah tercatat.
 
+## Review r13 (SEC-147, SEC-151, versi 19.0.1.4.0)
+- **SEC-147: order campuran ditolak.** Order dengan baris ber-struk (`refunded_orderline_id`) **dan** barang qty < 0
+  tanpa asal dulu dinilai "refund ber-struk", sehingga persetujuan E-41 dan aturan tunai-saja tidak berlaku untuk
+  barang tanpa struk (dan barang itu masuk stok atas nama refund ber-struk). Dipilih **tolak** (bukan memecah nominal
+  per porsi): paling sederhana, tidak ada alokasi uang keluar per baris yang bisa salah. Berlaku di semua mode
+  (`manager_approval`/`cash`/`deny`), juga bila sudah ada persetujuan untuk uuid itu (tidak dikonsumsi). Kasir
+  memisahkan: refund dari struk dulu, lalu retur tanpa struk sebagai order sendiri (persetujuan + tunai). Frontend
+  memblokir lebih awal dengan pesan yang sama (`efnIsMixedReturn`). Log: `mixed_return`.
+- **SEC-151: teks PIN tidak pernah disimpan di tabel transient.** Klik *Simpan PIN* didahului `web_save` (transaksi
+  sendiri, di-commit), jadi mengosongkan PIN di `action_apply` tidak cukup (rollback saat gagal tidak menyentuh baris
+  yang sudah di-commit). Kini `create`/`write` wizard membuang `pin`/`pin_confirm` dari vals dan langsung menulis
+  `pin_hash` (pbkdf2, hanya bila format benar + tidak lemah + konfirmasi cocok) atau `pin_error`
+  (`format`/`weak`/`mismatch`). Nilai `pin_hash`/`pin_error` dari klien selalu dihitung ulang (tidak bisa menyuntik
+  hash PIN lemah). `action_apply` memindahkan hash ke user lalu mengosongkan `pin_hash` wizard. Form menampilkan field
+  kosong setelah gagal → PIN diketik ulang. Migrasi `19.0.1.4.0` mengosongkan teks PIN di baris wizard lama.
+- **Uji:** `test_mixed_return_rejected_in_every_mode`, `test_split_after_mixed_rejection_works`,
+  `test_pin_never_stored_after_failed_apply` (konfirmasi beda, lemah, format, identity kedaluwarsa, bukan Store
+  Manager — baris mentah dibaca SQL), `test_pin_never_stored_after_successful_apply_and_retry`,
+  `test_pin_hash_injection_ignored`.
+- **Batasan:** salinan teks PIN dari versi ≤ 19.0.1.3.0 tetap ada di WAL/backup sampai retensi backup berputar. Bila
+  identity check kedaluwarsa setelah PIN sah disimpan form, **hash** kandidat (bukan teks) tetap di baris transient
+  sampai vacuum (±1 jam), hanya terbaca pembuatnya dan admin. Pemblokiran order campuran di frontend belum diuji tour.
+
 ## E-41 — persetujuan Store Manager untuk retur tanpa struk (versi 19.0.1.3.0, G20)
 - **Dasar:** keputusan pemilik 18-15, fit-gap `docs/08 §11.6` (E-41), kontrak `docs/04 §12.4`, keputusan lead
   **L-51** (PIN diverifikasi server, bukan `pos_hr` di browser; offline diblokir). Meralat Q-F18-5/L-23 ("cukup tunai").
@@ -73,8 +96,7 @@ tidak punya modul setara. Tidak ada kode yang disalin.
 - PIN 6–8 digit (ruang kecil): hash pbkdf2 600k putaran hanya di DB (`base.group_system`); dump DB tetap memungkinkan
   brute force luring dalam hitungan jam — sama dengan kelas risiko kata sandi pendek; mitigasi = enkripsi backup &
   least privilege DB (CLAUDE.md).
-- Teks PIN wizard tersimpan sementara di tabel transient (pola wizard kata sandi Odoo) dan dikosongkan saat PIN
-  disimpan; bila validasi gagal, baris dihapus vacuum transient Odoo.
+- ~~Teks PIN wizard tersimpan sementara di tabel transient~~ — ditutup SEC-151 (19.0.1.4.0, lihat atas).
 - Sync tertunda > 5 menit setelah persetujuan (mis. jaringan putus tepat setelah Validate) -> sync ditolak dan order
   tertahan di antrean sync POS; kasir menghubungi Store Manager untuk persetujuan ulang lewat order baru (belum ada
   alur "minta ulang" untuk order yang sudah tervalidasi di klien).
@@ -136,6 +158,7 @@ Modul ini menjadi lapis **integritas order & pembayaran POS** untuk semua modul 
 - Hanya pembayaran **negatif** (uang keluar, bukan baris kembalian `is_change`) yang dinilai.
 - **Refund ber-struk** (baris `refunded_orderline_id`): setiap metode harus ada di order asal; nominal per metode ≤
   dibayar bersih di order asal (kembalian = pembayaran tunai negatif core) − refund tersinkron sebelumnya.
+- **Order campuran** (ber-struk + barang qty < 0 tanpa asal): ditolak (SEC-147).
 - **Retur tanpa struk** (barang qty < 0 tanpa asal): `efn.pos.refund.unlinked_return_mode` = `manager_approval`
   (default E-41) | `cash` (tunai saja) | `deny` (ditolak). Selalu tunai saja.
 - Pelanggaran -> `UserError` (sync ditolak). Penjualan & tukar barang tanpa uang keluar tidak terpengaruh.

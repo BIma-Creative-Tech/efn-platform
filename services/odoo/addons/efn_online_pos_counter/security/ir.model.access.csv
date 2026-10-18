@@ -5,3 +5,7 @@ access_efn_online_counter_settlement_pos_manager,efn.online.counter.settlement p
 access_efn_online_counter_settlement_sale_manager,efn.online.counter.settlement sale manager,model_efn_online_counter_settlement,sales_team.group_sale_manager,1,0,0,0
 access_efn_online_counter_settlement_invoice,efn.online.counter.settlement billing,model_efn_online_counter_settlement,account.group_account_invoice,1,0,0,0
 access_efn_online_counter_settlement_system,efn.online.counter.settlement system,model_efn_online_counter_settlement,base.group_system,1,0,0,0
+access_efn_online_counter_refund_auth_pos_manager,efn.online.counter.refund.auth pos manager,model_efn_online_counter_refund_auth,point_of_sale.group_pos_manager,1,0,0,0
+access_efn_online_counter_refund_auth_sale_manager,efn.online.counter.refund.auth sale manager,model_efn_online_counter_refund_auth,sales_team.group_sale_manager,1,0,0,0
+access_efn_online_counter_refund_auth_invoice,efn.online.counter.refund.auth billing,model_efn_online_counter_refund_auth,account.group_account_invoice,1,0,0,0
+access_efn_online_counter_refund_auth_system,efn.online.counter.refund.auth system,model_efn_online_counter_refund_auth,base.group_system,1,0,0,0

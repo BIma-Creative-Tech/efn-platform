@@ -167,6 +167,44 @@ class TestEfnPosReturnApproval(TestPoSCommon):
         self.env["ir.config_parameter"].sudo().set_param(MODE_PARAM, "deny")
         self._assert_sync_rejected(data)
 
+    # ------------------------------------------------------ SEC-147 campuran
+    def _mixed_data(self, method=None):
+        """Refund 1 barang dari struk (dibayar tunai) + 1 barang qty -1 tanpa asal, uang keluar 100.000."""
+        origin = self._sync(self.create_ui_order_data([(self.product, 2)], payments=[(self.cash_pm1, 100000)]))
+        self.assertEqual(origin.state, "paid")
+        lines = [
+            {"product": self.product, "quantity": -1, "refunded_orderline_id": origin.lines[:1].id},
+            (self.product, -1),
+        ]
+        return self.create_ui_order_data(lines, payments=[(method or self.cash_pm1, -100000)])
+
+    def test_mixed_return_rejected_in_every_mode(self):
+        for mode in ("manager_approval", "cash", "deny"):
+            with self.subTest(mode=mode):
+                self.env["ir.config_parameter"].sudo().set_param(MODE_PARAM, mode)
+                data = self._mixed_data()
+                if mode == "manager_approval":
+                    # Persetujuan sah pun tidak membuka order campuran (porsi tanpa struk harus order sendiri).
+                    self.assertTrue(self._request(data, amount=100000)["ok"])
+                with self.assertLogs("odoo.addons.efn_pos_refund_origin", level="WARNING") as logs:
+                    self._assert_sync_rejected(data)
+                self.assertIn("mixed_return", "\n".join(logs.output))
+                approval = self._approvals(data)
+                self.assertNotIn("consumed", approval.mapped("state"))
+
+    def test_split_after_mixed_rejection_works(self):
+        """Jalur yang benar: refund ber-struk sendiri (tanpa persetujuan), retur tanpa struk sendiri (persetujuan)."""
+        origin = self._sync(self.create_ui_order_data([(self.product, 2)], payments=[(self.cash_pm1, 100000)]))
+        linked = self.create_ui_order_data(
+            [{"product": self.product, "quantity": -1, "refunded_orderline_id": origin.lines[:1].id}],
+            payments=[(self.cash_pm1, -50000)],
+        )
+        self.assertEqual(self._sync(linked).state, "paid")
+        unlinked = self._return_data()
+        self._assert_sync_rejected(unlinked)
+        self.assertTrue(self._request(unlinked)["ok"])
+        self.assertEqual(self._sync(unlinked).state, "paid")
+
     # ------------------------------------------------------------ PIN & lockout
     def test_wrong_pin_lock_after_five_then_unlock_after_15_minutes(self):
         data = self._return_data()
@@ -316,6 +354,92 @@ class TestEfnPosReturnApproval(TestPoSCommon):
             self._apply_pin(self.manager, self.manager, "802413", "802414")
         with self.assertRaises(UserError):
             self._apply_pin(self.cashier, self.cashier, "802413")  # bukan Store Manager
+
+    # SEC-151: teks PIN tidak pernah ada di tabel transient (sukses maupun gagal).
+    def _new_wizard(self, target, actor, pin, confirm=None):
+        return (
+            self.env[WIZARD]
+            .with_user(actor)
+            .with_context(default_user_id=target.id)
+            .create({"pin": pin, "pin_confirm": pin if confirm is None else confirm})
+        )
+
+    def _assert_no_plaintext(self, wizard, *pins):
+        """Baca baris mentah (SQL) agar cache ORM tidak menyamarkan isi kolom."""
+        wizard.flush_recordset()
+        self.env.cr.execute("SELECT row_to_json(w)::json FROM efn_pos_return_pin_wizard w WHERE id = %s", (wizard.id,))
+        rows = [row[0] for row in self.env.cr.fetchall()]
+        self.assertEqual(len(rows), 1, "baris wizard tetap ada (pola web_save yang sudah di-commit)")
+        row = rows[0]
+        self.assertIsNone(row["pin"])
+        self.assertIsNone(row["pin_confirm"])
+        if row["pin_hash"] is not None:
+            self.assertTrue(row["pin_hash"].startswith("$pbkdf2-sha512$"))
+        for name, value in row.items():
+            if name in ("pin_hash", "create_date", "write_date"):
+                continue  # hash pbkdf2 / mikrodetik bisa kebetulan memuat deret digit
+            for pin in pins:
+                self.assertNotIn(pin, str(value), name)
+
+    def _apply_identity_ok(self, wizard):
+        with patch.object(type(self.env[WIZARD]), "_efn_require_recent_identity", lambda self: None):
+            return wizard.action_apply()
+
+    def test_pin_never_stored_after_failed_apply(self):
+        cases = (
+            ("mismatch", "802413", "802414"),
+            ("weak", "111111", None),
+            ("format", "80241", None),
+        )
+        for code, pin, confirm in cases:
+            with self.subTest(case=code):
+                wizard = self._new_wizard(self.manager, self.manager, pin, confirm)
+                self.assertEqual(wizard.sudo().pin_error, code)
+                self.assertFalse(wizard.sudo().pin_hash)
+                with self.assertRaises(UserError):
+                    self._apply_identity_ok(wizard)
+                self._assert_no_plaintext(wizard, pin, confirm or pin)
+        # PIN sah tetapi identity check kedaluwarsa: hanya hash (bukan teks) yang tersisa sampai vacuum.
+        before = self.manager.sudo().efn_return_pin_hash
+        wizard = self._new_wizard(self.manager, self.manager, "802413")
+        with self.assertRaises(UserError):
+            wizard.action_apply()
+        self._assert_no_plaintext(wizard, "802413")
+        self.assertEqual(self.manager.sudo().efn_return_pin_hash, before, "PIN target tidak berubah")
+        # Bukan Store Manager: sama.
+        wizard = self._new_wizard(self.cashier, self.cashier, "802413")
+        with self.assertRaises(UserError):
+            self._apply_identity_ok(wizard)
+        self._assert_no_plaintext(wizard, "802413")
+
+    def test_pin_never_stored_after_successful_apply_and_retry(self):
+        # Gagal dulu (konfirmasi beda), lalu form disimpan ulang (write) dengan PIN benar -> sukses.
+        wizard = self._new_wizard(self.manager_nopin, self.manager_nopin, "802413", "802414")
+        with self.assertRaises(UserError):
+            self._apply_identity_ok(wizard)
+        wizard.write({"pin": "802413", "pin_confirm": "802413"})
+        self._assert_no_plaintext(wizard, "802413")
+        self._apply_identity_ok(wizard)
+        self.assertTrue(verify_pin("802413", self.manager_nopin.sudo().efn_return_pin_hash))
+        self._assert_no_plaintext(wizard, "802413")
+        self.assertFalse(wizard.sudo().pin_hash, "hash kandidat dikosongkan setelah dipakai")
+
+    def test_pin_hash_injection_ignored(self):
+        """pin_hash/pin_error dari klien (RPC create/write) dihitung ulang server -> validasi tidak bisa dilewati."""
+        weak_hash = hash_pin(self.env, "111111")
+        Wizard = self.env[WIZARD].with_user(self.manager).with_context(default_user_id=self.manager.id)
+        before = self.manager.sudo().efn_return_pin_hash
+        injected = Wizard.create({"pin_hash": weak_hash, "pin_error": False})
+        self.assertEqual(injected.sudo().pin_error, "format")
+        self.assertFalse(injected.sudo().pin_hash)
+        with self.assertRaises(UserError):
+            self._apply_identity_ok(injected)
+        wizard = self._new_wizard(self.manager, self.manager, "802413")
+        wizard.write({"pin_hash": weak_hash})
+        self.assertFalse(wizard.sudo().pin_hash)
+        with self.assertRaises(UserError):
+            self._apply_identity_ok(wizard)
+        self.assertEqual(self.manager.sudo().efn_return_pin_hash, before)
 
     def test_pin_requires_identity_check_and_hash_not_readable(self):
         with self.assertRaises(UserError):

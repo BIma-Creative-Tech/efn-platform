@@ -1,6 +1,6 @@
 # odoo-rpc-gateway — filter L7 BFF → Odoo `/json/2` (penjualan online)
 
-- **Tujuan:** satu-satunya jalur BFF (`api-gateway`) ke Odoo untuk kanal online. Hanya `POST` ke **10 path persis**
+- **Tujuan:** satu-satunya jalur BFF (`api-gateway`) ke Odoo untuk kanal online. Hanya `POST` ke **11 path persis** (10 path §10.4.3 + `efn_online_counter_refund_authorize`, L-60)
   docs/04 §10.4.3; semua bentuk lain ditolak sebelum menyentuh Odoo. Odoo tetap tidak terjangkau dari internet
   maupun langsung dari BFF (`odoo-tls --allow-cn` tidak memuat `api-gateway`).
 - **ADR:** ADR-034 (Proposed — kanal online = BFF + `/json/2` terfilter), ADR-022 (enkripsi: mTLS dua hop, verify-full
@@ -11,7 +11,7 @@
   memori 64M, hanya network `internal`, tanpa label Traefik/port host. `haproxy.cfg` (aturan + alasan),
   `entrypoint.sh` (PEM crt+key ke tmpfs, validasi `ODOO_DB` fail-closed), `test-gateway.sh` (uji nyata).
 - **Aturan (ringkas):** mTLS masuk (CA internal, EKU clientAuth, CN persis `api-gateway`) · HTTP/1.1 origin-form ·
-  `POST` saja · path mentah = salah satu dari 10 path (tolak `%`, `;`, `//`, segmen titik, query, fragment) · allowlist
+  `POST` saja · path mentah = salah satu dari 11 path (tolak `%`, `;`, `//`, segmen titik, query, fragment) · allowlist
   header (`host, content-type, content-length, authorization, accept, accept-encoding, user-agent, connection,
   traceparent, tracestate, x-request-id`; method override/upgrade/transfer-encoding/x-original-url/x-openerp-* ditolak) ·
   Host `odoo-rpc-gateway[:8443]` · `Content-Type: application/json` · `Authorization: bearer <token>` tepat satu ·
@@ -32,7 +32,7 @@
   tanpa sertifikat / CA asing / sertifikat EKU server saja / HTTP polos / BFF langsung ke `odoo:8443` → gagal handshake;
   CN `traefik` → 403; GET/PUT/DELETE/PATCH/OPTIONS/HEAD → 405; 23 path lain + 14 varian encoded (`%61`, `%2F`, `%2e%2e`,
   `%252e`, `%00`, `%c0%ae`, …) + query/fragment/absolute-form/HTTP 1.0 → ditolak; 22 kasus header → ditolak; body
-  300 KB → 413; 10 path sah + variasi header yang dibuang → sampai Odoo (401 dari Odoo karena token uji).
+  300 KB → 413; 11 path sah + variasi header yang dibuang → sampai Odoo (401 dari Odoo karena token uji).
   Ditemukan & diperbaiki saat uji: regex `^bearer [..]` (spasi memisah argumen HAProxy = pola OR) meloloskan
   `Authorization: Basic`. CI: `haproxy -c` + shellcheck + `check-encryption.sh` (aturan G17).
 - **Belum / batas:**

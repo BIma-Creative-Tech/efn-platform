@@ -6,7 +6,7 @@
 > Odoo otomatis mengonfirmasi pesanan, membuat faktur (pajak hanya di faktur), dan mencatat pelunasan di jurnal
 > kliring PT sehingga saldo kliring kembali nol. Barang tetap diserahkan lewat kode ambil (tidak berubah).
 
-- Versi `19.0.1.0.0`, LGPL-3, `depends`: `efn_online_order` (≥ 19.0.1.5.0), `point_of_sale`; **auto_install**. Tanpa
+- Versi `19.0.1.1.0` (r13: SEC-145 / L-59), LGPL-3, `depends`: `efn_online_order` (≥ 19.0.1.5.0), `point_of_sale`; **auto_install**. Tanpa
   `pos_sale` (settle SO di POS sengaja ditolak, docs/08 §11.8), tanpa modul pihak ketiga (ADR-031).
 - Kontrak: `docs/04_SERVICE_CONTRACTS.md` §12.2 + **L-50** (satu PT per pesanan, kode bayar ≠ kode ambil, lookup tanpa
   data pelanggan), **L-52**, **L-55** (counter tidak memakai titipan Holding), **L-56** (kode bayar dibuat BFF, Odoo
@@ -28,6 +28,7 @@
 | `pos.order` | validasi sync + jalur internal `mark_paid` (lihat bawah). |
 | `efn.online.counter.lookup` | jejak setiap lookup (company, config, sesi, kasir, pesanan bila cocok, hasil) — rate limit + klaim; tanpa kode. Retensi 180 hari. |
 | `efn.online.counter.settlement` | tautan pesanan online ↔ order POS pelunasan (unik per pesanan & per uuid) + refund POS-nya. |
+| `efn.online.counter.refund.auth` | SEC-145: otorisasi BFF refund POS (pelunasan, refund online opsional, id refund BFF, nominal, order POS yang memakai). Append-only, unik per kunci / refund BFF / refund Odoo. |
 
 Model baru ber-`company_id`, `_check_company_auto`, record rule `company_id in company_ids`, ACL baca saja (POS
 manager; pelunasan juga Sales manager & Billing); ditulis sudo oleh server setelah cek.
@@ -57,10 +58,41 @@ yang sama = ditolak.
 **Kliring bersih 0:** penutupan sesi POS mengkredit akun kliring (pendapatan produk pelunasan) sebesar pelunasan;
 pembayaran faktur SO di jurnal kliring mendebit akun yang sama. Pajak hanya di faktur SO.
 
-**Refund (§12.2 no. 8)** — refund order POS pelunasan (tiket → refund, satu baris qty −1, seluruh nominal, sekali)
-hanya bila: (a) Σ refund online `requested` (nota kredit dari alur CS + approver BFF) = nominal → refund itu di-settle
-(pembayaran keluar jurnal kliring; kliring tetap 0), atau (b) pesanan `cancelled` tanpa faktur. Metode uang keluar
-dijaga E-31 (`efn_pos_refund_origin`). BFF `efn_online_refund_settled` untuk order counter → `invalid_state`.
+**Refund (§12.2 no. 8, diperketat r13 SEC-145 / L-59, versi 19.0.1.1.0)** — refund order POS pelunasan (tiket →
+refund, satu baris qty −1, seluruh nominal, sekali) hanya bila **semua** terpenuhi:
+1. **Outlet sama:** gudang (`picking_type_id.warehouse_id`) config POS refund = gudang config pelunasan asal
+   (`settlement.config_id`). Kasir/terminal lain di outlet yang sama boleh; outlet lain di PT yang sama ditolak
+   (`refund_other_outlet`), **tanpa** pengecualian grup POS manager. Dipilih gudang (bukan config persis) karena satu
+   outlet bisa punya beberapa terminal / terminal diganti; tetap mengikat uang ke laci outlet tempat pelanggan
+   membayar. Bila outlet tutup permanen: Finance lewat SOP + `online-refund-settle` BFF (tanpa POS).
+2. **Otorisasi BFF** (`efn.online.counter.refund.auth`, dibuat RPC `efn_online_counter_refund_authorize`). Refund
+   online `requested` saja **tidak cukup**: BFF memanggil `efn_online_refund` SEBELUM approver CS menyetujui
+   (`approval_required`, `online-admin.service.ts` refund → approveRefund), dan pembatalan Sales Manager dari UI Odoo
+   membuat refund `initiator=odoo` yang di BFF wajib disetujui approver (empat mata). Hanya BFF yang tahu kapan
+   approver sudah menyetujui → BFF wajib memanggil RPC ini saat refund counter berpindah ke `manual_required` /
+   `counter_refund_via_pos` (setelah approver, di bawah ambang approval, atau kompensasi sistem `stock_short`/`review`).
+   - (a) Σ otorisasi yang bertaut refund online `requested` = nominal → refund itu di-settle (pembayaran keluar jurnal
+     kliring; kliring tetap 0) + event `refund_settled` (L-58). Berlaku untuk initiator `bff` maupun `odoo` **setelah**
+     diotorisasi (persetujuan approver BFF = syarat SEC-95; tanpa otorisasi keduanya ditolak).
+   - (b) Pesanan `cancelled` tanpa faktur: wajib otorisasi tanpa nota kredit (`refund_ref: null`, nominal = seluruh
+     pelunasan) — tidak lagi otomatis. Tidak ada refund Odoo → tidak ada event; BFF menutup refund-nya lewat
+     `online-refund-settle --provider-ref pos:<uuid>` (approver).
+   Otorisasi dipakai sekali (`consumed_pos_order_id`).
+
+Metode uang keluar dijaga E-31 (`efn_pos_refund_origin`). BFF `efn_online_refund_settled` untuk order counter →
+`invalid_state`.
+
+### RPC BFF `efn.online.order.efn_online_counter_refund_authorize(channel_code, platform_order_ref, authorization)`
+Kontrak baru (L-59; **perlu dicatat di docs/04 §12.2 dan diimplementasi BFF** — belum ada pemanggil):
+`authorization` = persis `{idempotency_key, refund_id, refund_ref, amount}`; `refund_id` = UUID refund BFF
+(`platform.online_refund.id`), `refund_ref` = UUID refund Odoo atau `null`, `amount` = Rupiah bulat > 0. Cek:
+`_efn_online_check_caller` (grup kanal + user kanal + company), pesanan kanal itu (`FOR UPDATE`), `payment_mode =
+counter`, sudah dilunasi di kasir dan belum direfund POS; `refund_ref` → refund pesanan itu `requested` dengan nominal
+persis; `null` → pesanan `cancelled` tanpa faktur dan nominal = pelunasan; Σ otorisasi ≤ pelunasan; satu otorisasi
+per refund BFF dan per refund Odoo. Idempoten per `idempotency_key` (payload SHA-256; beda payload →
+`idempotency_conflict`). Hasil `{"state": "authorized", "amount"}`. Error `efn_online:<kode>`: `not_found`,
+`invalid_state`, `amount_mismatch`, `idempotency_conflict`, `invalid_input`. Saran kunci:
+`online:counter_refund_auth:<refund_id>`. **Wajib ditambah ke `RPC_ALLOWLIST` (`efn_core/tests/test_rpc_surface.py`).**
 
 **SEC-105 tetap:** POS tidak memuat SO; baris pelunasan = produk layanan non-stok tanpa `sale_order_origin_id`; barang
 keluar hanya lewat wizard serah terima kode ambil.
@@ -80,7 +112,12 @@ pelanggan, atau faktur POS.
   (faktur dibayar di jurnal kliring, bukan titipan; event `paid` `payment.method=counter`; kliring = 0 setelah tutup
   sesi; baris tanpa `sale_order_origin_id`); nominal/qty/baris tambahan/pelanggan/label diubah → ditolak; tanpa klaim
   lookup → ditolak; dobel sync idempoten + order POS kedua ditolak; bayar setelah kedaluwarsa / batal → `review`;
-  refund POS hanya setelah refund online / batal (kliring tetap 0).
+  refund POS hanya setelah otorisasi BFF (kliring tetap 0). r13 SEC-145: `test_pos_refund_rejected_before_bff_approval`
+  (refund `requested` initiator `bff` tanpa otorisasi), `test_pos_refund_rejected_for_odoo_initiated_refund`
+  (pembatalan Sales Manager → initiator `odoo` ditolak, setelah otorisasi diterima), `test_pos_refund_rejected_from_other_outlet`
+  (gudang lain ditolak, terminal lain gudang sama diterima), `test_authorize_rpc_rules` (input, nominal, idempotensi,
+  akses, setelah refund), batal tanpa faktur wajib otorisasi (`test_paid_after_cancel_goes_to_review_then_pos_refund`),
+  event `refund_settled` tetap (`test_pos_refund_requires_approved_online_refund`).
 - `tests/test_counter_tour.py` (tag `efn_tour`): tour `EfnOnlineCounterPayTour` — kode salah (pesan) → kode benar →
   baris pelunasan → tunai → struk tersinkron → pesanan `confirmed`.
 
@@ -104,3 +141,9 @@ kliring 0.
 - Perilaku frontend Odoo 19 (`addLineToCurrentOrder` dengan `price_unit`, penyembunyian *special product*, nama metode
   `PosOrderline`) diverifikasi dari source via WebFetch, belum dijalankan; tour menjadi buktinya.
 - File `hooks.py` tidak dipakai (boleh dihapus).
+- **SEC-145 belum lengkap end-to-end:** sampai BFF memanggil `efn_online_counter_refund_authorize`, **semua** refund
+  POS pelunasan counter ditolak (fail-closed; dana kembali lewat SOP Finance). Rekomendasi r13 no. 2 (persetujuan
+  Store Manager / kode refund dari aplikasi pelanggan sebagai bukti kehadiran pelanggan) dan no. 4 (alert critical
+  `refund_settled_rejected`) belum dikerjakan — milik BFF/desain lanjutan. Pengikatan outlet diuji dengan menulis ulang
+  `settlement.config_id` (satu sesi POS per test), bukan dua sesi nyata.
+- Tombol refund di frontend POS tidak memeriksa otorisasi lebih awal; penolakan terjadi saat sync (pesan generik).

@@ -10,10 +10,13 @@ outlet = gudang config, ada klaim lookup ``ok`` untuk config ini; belum dilunasi
 ``_efn_counter_mark_paid`` (``payment_ref`` = ``pos.order.uuid``, idempotensi ``pos_counter:<uuid>``) ->
 ``confirmed`` | ``stock_short`` | ``review``. Pesanan sudah batal/kedaluwarsa saat sync -> dibayar + ``review`` (L-56).
 
-**Refund pelunasan** (baris menunjuk baris pelunasan): satu baris qty -1 senilai pelunasan, sekali per pelunasan;
-diizinkan hanya bila (a) Σ refund online ``requested`` (nota kredit, alur CS + approver) = nominal -> refund itu
-di-settle (pembayaran keluar jurnal kliring), atau (b) pesanan sudah ``cancelled`` tanpa faktur (mis. stok kurang /
-review sebelum faktur). Selain itu ditolak. Metode uang keluar tetap dijaga E-31 (``efn_pos_refund_origin``).
+**Refund pelunasan** (baris menunjuk baris pelunasan): satu baris qty -1 senilai pelunasan, sekali per pelunasan,
+dari config di **outlet (gudang) yang sama** dengan pelunasan asal (SEC-145). Diizinkan hanya dengan **otorisasi BFF**
+(``efn.online.counter.refund.auth``, RPC ``efn_online_counter_refund_authorize`` setelah approver CS; SEC-145/L-59):
+(a) Σ otorisasi bertaut refund online ``requested`` = nominal -> refund itu di-settle (pembayaran keluar jurnal
+kliring) + event ``refund_settled``, atau (b) otorisasi tanpa nota kredit = nominal dan pesanan ``cancelled`` tanpa
+faktur. Refund ``requested`` tanpa otorisasi (initiator ``bff`` sebelum approver, atau ``odoo`` dari pembatalan Sales
+Manager) dan pesanan batal tanpa otorisasi ditolak. Metode uang keluar tetap dijaga E-31 (``efn_pos_refund_origin``).
 
 SEC-105 tidak berubah: POS tidak memuat SO; baris pelunasan = produk layanan tanpa ``sale_order_origin_id``.
 """
@@ -112,8 +115,8 @@ class PosOrder(models.Model):
 
     def _efn_counter_plan_refund(self, lines, settlements):
         generic = _(
-            "Refund pelunasan pesanan online hanya untuk seluruh nominal pelunasan, satu kali, setelah refund "
-            "pesanan online disetujui (CS) atau pesanan dibatalkan sebelum difaktur."
+            "Refund pelunasan pesanan online hanya untuk seluruh nominal pelunasan, satu kali, di outlet tempat "
+            "pesanan dilunasi, dan setelah refund disetujui CS di Super-App (approver)."
         )
         if len(settlements) != 1 or len(lines) != 1:
             self._efn_counter_reject("refund_shape", generic)
@@ -126,13 +129,29 @@ class PosOrder(models.Model):
             self._efn_counter_reject("refund_amount", generic)
         if settlement.refund_pos_order_id and settlement.refund_pos_order_id != self:
             self._efn_counter_reject("refund_twice", generic)
+        # SEC-145: outlet = gudang config pelunasan asal (kasir mana pun di outlet itu; outlet lain ditolak).
+        warehouse = self.config_id.sudo().picking_type_id.warehouse_id
+        if not warehouse or warehouse != settlement.config_id.sudo().picking_type_id.warehouse_id:
+            self._efn_counter_reject("refund_other_outlet", generic)
         online = settlement.online_order_id
         online._efn_lock()
-        requested = online.refund_ids.filtered(lambda r: r.state == "requested")
-        if requested and self._efn_counter_same(sum(requested.mapped("amount")), amount):
-            return {"kind": "refund", "settlement": settlement, "refunds": requested}
-        if online.state == "cancelled" and not online._efn_posted_invoice():
-            return {"kind": "refund", "settlement": settlement, "refunds": online.refund_ids.browse()}
+        settlement.invalidate_recordset(["refund_auth_ids"])
+        # SEC-145: refund `requested` saja TIDAK cukup (dibuat sebelum approver BFF, atau initiator=odoo dari
+        # pembatalan Sales Manager). Wajib otorisasi BFF (`efn_online_counter_refund_authorize`) yang belum dipakai.
+        auths = settlement.refund_auth_ids.filtered(lambda a: not a.consumed_pos_order_id)
+        linked = auths.filtered(lambda a: a.refund_id and a.refund_id.state == "requested")
+        if linked and self._efn_counter_same(sum(linked.mapped("amount")), amount):
+            if all(self._efn_counter_same(a.amount, a.refund_id.amount) for a in linked):
+                return {"kind": "refund", "settlement": settlement, "refunds": linked.refund_id, "auths": linked}
+        unlinked = auths.filtered(lambda a: not a.refund_id)
+        if (
+            unlinked
+            and self._efn_counter_same(sum(unlinked.mapped("amount")), amount)
+            and online.state == "cancelled"
+            and not online._efn_posted_invoice()
+        ):
+            no_refund = online.refund_ids.browse()
+            return {"kind": "refund", "settlement": settlement, "refunds": no_refund, "auths": unlinked}
         self._efn_counter_reject("refund_not_approved", generic)
 
     # ------------------------------------------------------------- terapkan
@@ -170,6 +189,7 @@ class PosOrder(models.Model):
             refund._efn_settle(f"pos_refund:{self.uuid}:{refund.refund_ref}", self.uuid, now, True)
             # L-58: event `refund_settled` -> BFF menandai refund counter lunas (bukan dari `refunded`).
             settlement.online_order_id._efn_emit("refund_settled", refund=refund)
+        plan["auths"].write({"consumed_pos_order_id": self.id})
         settlement.write({"refund_pos_order_id": self.id, "refunded_at": now})
         _logger.info(
             "EFN bayar di kasir: refund POS %s atas pelunasan %s (%d refund online di-settle)",

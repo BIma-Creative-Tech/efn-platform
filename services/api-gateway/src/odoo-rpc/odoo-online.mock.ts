@@ -5,6 +5,8 @@ import {
   CancelResult,
   CatalogItem,
   CatalogPage,
+  CounterRefundAuthorizeInput,
+  CounterRefundAuthorizeResult,
   Fulfilment,
   ImageResult,
   MarkPaidInput,
@@ -455,6 +457,25 @@ export class MockOdooOnline implements OdooOnlineApi {
       .map((r) => this.orders.get(r))
       .filter((o): o is MockOrder => o !== undefined)
       .map((o) => ({ platform_order_ref: o.ref, state: o.state, seq: o.seq, ready_at: o.readyAt, picked_up_at: o.pickedUpAt }));
+  }
+
+  /** L-60: otorisasi refund POS per idempotency_key (meniru Odoo: idempoten, payload beda → idempotency_conflict). */
+  readonly counterRefundAuths = new Map<string, { ref: string; refundId: string; refundRef: string | null; amount: number }>();
+
+  async counterRefundAuthorize(channel: string, ref: string, a: CounterRefundAuthorizeInput): Promise<CounterRefundAuthorizeResult> {
+    this.track('counterRefundAuthorize', channel);
+    const prev = this.counterRefundAuths.get(a.idempotency_key);
+    if (prev) {
+      if (prev.ref !== ref || prev.refundId !== a.refund_id || prev.refundRef !== a.refund_ref || prev.amount !== a.amount) {
+        throw new OdooRpcError('business', 'idempotency_conflict');
+      }
+      return { authorized: true, state: 'authorized', amount: prev.amount };
+    }
+    const o = this.get(ref);
+    if (o.paymentMode !== 'counter' || o.paymentRef === null) throw new OdooRpcError('business', 'invalid_state');
+    if (!Number.isSafeInteger(a.amount) || a.amount < 1 || a.amount > o.amountPayable) throw new OdooRpcError('business', 'amount_mismatch');
+    this.counterRefundAuths.set(a.idempotency_key, { ref, refundId: a.refund_id, refundRef: a.refund_ref, amount: a.amount });
+    return { authorized: true, state: 'authorized', amount: a.amount };
   }
 
   /** Test/dev: transisi yang di Odoo dilakukan staf outlet. */
