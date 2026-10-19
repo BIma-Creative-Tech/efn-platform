@@ -3,7 +3,9 @@
     "summary": "Bundel modul POS CE 19 untuk retail & F&B; demo stasiun dapur, printer dapur, denah meja.",
     # 19.0.1.11.0 (G20 W-32, docs/04 §12.1): EDC & Poin EFN untuk BCR/BCF, nomenklatur ritel BCR, preset Bacha F&B,
     # template harga member BCR (nonaktif). Data noupdate -> berlaku di DB baru (install).
-    "version": "19.0.1.11.0",
+    # 19.0.1.12.0 (G22 W-27, docs/08 §13.3): demo modifier & combo F&B PB/BCF (atribut no_variant, nilai berharga,
+    # add-on berbahan = produk + BoM Kit, product.combo). Hanya demo (keputusan 18-22: master data menunggu klien).
+    "version": "19.0.1.12.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",
@@ -63,6 +65,9 @@
         # G18: W-22 stasiun Bakery/Pastry + Bar Kopi (tanpa expo); W-10 promo standar pos_loyalty.
         "demo/pos_kds_demo.xml",
         "demo/pos_promo_demo.xml",
+        # G22 W-27: modifier & menu paket F&B PB/BCF (SETELAH pos_fnb_demo.xml & pos_kds_demo.xml: atribut Gula,
+        # kategori stasiun Bakery/Pastry & Bar Kopi).
+        "demo/pos_fnb_menu_demo.xml",
     ],
     "installable": True,
     "application": False,

@@ -1,0 +1,628 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G22 (docs/08 §13.4; matriks §12.2b; kontrak docs/04 §13.3 no. 2, L-64, L-67): peran efn_role per PT x jabatan.
+
+     Prinsip:
+     - Least privilege: grup CE seminimal mungkin; grup tersirat (implied_ids) tidak ditulis ulang.
+     - Satu peran per (PT, jabatan) - constraint unik efn_role. Jabatan = xmlid efn_setup_org.job_<kode>_<pt>.
+     - TANPA penetapan (efn.role.line) dan TANPA user: nama orang menunggu klien (A-5, 18-24). Peran tidak memberi hak
+       apa pun sampai Access Rights menetapkannya ke user (atau sinkron jabatan untuk peran ber-flag).
+     - sync_from_job=True HANYA untuk peran non-sensitif: Kasir & Staf Gudang (L-67/SEC-154 + daftar sensitif tambahan
+       data/ir_config_parameter.xml). Peran lain ditetapkan manual oleh Access Rights (tercatat audit, tampil di
+       review akses bulanan).
+     - TIDAK dibuat: Kurir (tanpa user Odoo, docs/08 §12.2b) dan Superadmin IT (peran admin hanya boleh dikelola
+       Superadmin; dibuat lewat UI oleh Superadmin bila perlu - kustodi kunci, R-B11). Akun teknis (kanal online,
+       perangkat KDS) bukan peran.
+     - Auditor TANPA base.group_allow_export (SEC-155, L-67): ekspor review akses lewat tombol khusus snapshot.
+       Auditor data pribadi lintas PT (efn_audit.group_auditor_personal) TIDAK dimasukkan: 18-38 belum diputuskan;
+       Superadmin menambahkannya manual untuk auditor holding/DPO.
+     - Staf Gudang di PT ber-Central Kitchen (PB, BCF): + mrp.group_mrp_user.
+     - Finance Manager: account.group_account_manager + account.group_account_user (manajer juga mengerjakan
+       pembukuan; tanpa group_account_user, Accounting Manager CE 19 hanya mewarisi group_account_invoice).
+
+     SoD (dirujuk lewat kode di efn_sod_rule_data.xml): SOD-01 Sales Manager (Merchandiser, Sales Manager Online)
+     ⟂ Approver Refund CS; SOD-02 Kasir ⟂ Store Manager (POS Administrator); SOD-03 Loyalty Manager ⟂ Finance Manager.
+     Tidak ada peran yang sendirian melanggar aturan block (diuji).
+
+     noupdate="1": nama, grup, flag sinkron boleh diubah Access Rights (peran admin: Superadmin). Peran yang tidak
+     dipakai di suatu PT (mis. Kasir di Holding/FARM) diarsipkan, jangan dihapus. Pakai PT: efn=EFN, gl=GL (company_rtl),
+     pb=PB (company_fnb), bcr=BCR, bcf=BCF, farm=FARM (18-41). -->
+<odoo noupdate="1">
+
+    <!-- ===================== Holding EFN (EFN) ===================== -->
+    <record id="role_director_efn" model="efn.role">
+        <field name="name">Direktur (EFN)</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="job_id" ref="efn_setup_org.job_director_efn"/>
+        <field name="sequence">10</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_readonly')])]"/>
+    </record>
+    <record id="role_finance_manager_efn" model="efn.role">
+        <field name="name">Finance Manager (EFN)</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="job_id" ref="efn_setup_org.job_finance_manager_efn"/>
+        <field name="sequence">20</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_manager'), ref('account.group_account_user')])]"/>
+    </record>
+    <record id="role_finance_staff_efn" model="efn.role">
+        <field name="name">Staf Finance (EFN)</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="job_id" ref="efn_setup_org.job_finance_staff_efn"/>
+        <field name="sequence">30</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_user')])]"/>
+    </record>
+    <record id="role_store_manager_efn" model="efn.role">
+        <field name="name">Store Manager (EFN)</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="job_id" ref="efn_setup_org.job_store_manager_efn"/>
+        <field name="sequence">40</field>
+        <field name="group_ids" eval="[Command.set([ref('point_of_sale.group_pos_manager')])]"/>
+    </record>
+    <record id="role_cashier_efn" model="efn.role">
+        <field name="name">Kasir (EFN)</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="job_id" ref="efn_setup_org.job_cashier_efn"/>
+        <field name="sequence">50</field>
+        <field name="sync_from_job" eval="True"/>
+        <field name="group_ids" eval="[Command.set([ref('point_of_sale.group_pos_user'), ref('efn_role.group_role_cashier')])]"/>
+    </record>
+    <record id="role_merchandiser_efn" model="efn.role">
+        <field name="name">Merchandiser (EFN)</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="job_id" ref="efn_setup_org.job_merchandiser_efn"/>
+        <field name="sequence">60</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager'), ref('stock.group_stock_user')])]"/>
+    </record>
+    <record id="role_procurement_efn" model="efn.role">
+        <field name="name">Staf Pengadaan (EFN)</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="job_id" ref="efn_setup_org.job_procurement_efn"/>
+        <field name="sequence">70</field>
+        <field name="group_ids" eval="[Command.set([ref('purchase.group_purchase_user'), ref('stock.group_stock_user')])]"/>
+    </record>
+    <record id="role_warehouse_staff_efn" model="efn.role">
+        <field name="name">Staf Gudang (EFN)</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="job_id" ref="efn_setup_org.job_warehouse_staff_efn"/>
+        <field name="sequence">80</field>
+        <field name="sync_from_job" eval="True"/>
+        <field name="group_ids" eval="[Command.set([ref('stock.group_stock_user')])]"/>
+    </record>
+    <record id="role_cs_agent_efn" model="efn.role">
+        <field name="name">Staf CS (EFN)</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="job_id" ref="efn_setup_org.job_cs_agent_efn"/>
+        <field name="sequence">100</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_salesman_all_leads')])]"/>
+    </record>
+    <record id="role_cs_refund_approver_efn" model="efn.role">
+        <field name="name">Approver Refund CS (EFN)</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="job_id" ref="efn_setup_org.job_cs_refund_approver_efn"/>
+        <field name="sequence">110</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_salesman_all_leads'), ref('efn_role.group_refund_approver')])]"/>
+    </record>
+    <record id="role_sales_manager_online_efn" model="efn.role">
+        <field name="name">Sales Manager Online (EFN)</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="job_id" ref="efn_setup_org.job_sales_manager_online_efn"/>
+        <field name="sequence">120</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager')])]"/>
+    </record>
+    <record id="role_loyalty_manager_efn" model="efn.role">
+        <field name="name">Loyalty Manager (EFN)</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="job_id" ref="efn_setup_org.job_loyalty_manager_efn"/>
+        <field name="sequence">130</field>
+        <field name="group_ids" eval="[Command.set([ref('efn_loyalty_accounting.group_loyalty_manager')])]"/>
+    </record>
+    <record id="role_auditor_efn" model="efn.role">
+        <field name="name">Auditor Internal (EFN)</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="job_id" ref="efn_setup_org.job_auditor_efn"/>
+        <field name="sequence">150</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_readonly'), ref('efn_audit.group_auditor')])]"/>
+    </record>
+
+    <!-- ===================== PT Grand Lucky (GL, company_rtl) ===================== -->
+    <record id="role_director_gl" model="efn.role">
+        <field name="name">Direktur (GL)</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="job_id" ref="efn_setup_org.job_director_gl"/>
+        <field name="sequence">10</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_readonly')])]"/>
+    </record>
+    <record id="role_finance_manager_gl" model="efn.role">
+        <field name="name">Finance Manager (GL)</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="job_id" ref="efn_setup_org.job_finance_manager_gl"/>
+        <field name="sequence">20</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_manager'), ref('account.group_account_user')])]"/>
+    </record>
+    <record id="role_finance_staff_gl" model="efn.role">
+        <field name="name">Staf Finance (GL)</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="job_id" ref="efn_setup_org.job_finance_staff_gl"/>
+        <field name="sequence">30</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_user')])]"/>
+    </record>
+    <record id="role_store_manager_gl" model="efn.role">
+        <field name="name">Store Manager (GL)</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="job_id" ref="efn_setup_org.job_store_manager_gl"/>
+        <field name="sequence">40</field>
+        <field name="group_ids" eval="[Command.set([ref('point_of_sale.group_pos_manager')])]"/>
+    </record>
+    <record id="role_cashier_gl" model="efn.role">
+        <field name="name">Kasir (GL)</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="job_id" ref="efn_setup_org.job_cashier_gl"/>
+        <field name="sequence">50</field>
+        <field name="sync_from_job" eval="True"/>
+        <field name="group_ids" eval="[Command.set([ref('point_of_sale.group_pos_user'), ref('efn_role.group_role_cashier')])]"/>
+    </record>
+    <record id="role_pos_terminal_gl" model="efn.role">
+        <field name="name">Terminal POS (GL)</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="sequence">55</field>
+        <field name="note">Peran tanpa jabatan: user terminal POS bersama tempat karyawan login PIN (pos_hr). Hanya POS User.</field>
+        <field name="group_ids" eval="[Command.set([ref('point_of_sale.group_pos_user')])]"/>
+    </record>
+    <record id="role_merchandiser_gl" model="efn.role">
+        <field name="name">Merchandiser (GL)</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="job_id" ref="efn_setup_org.job_merchandiser_gl"/>
+        <field name="sequence">60</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager'), ref('stock.group_stock_user')])]"/>
+    </record>
+    <record id="role_procurement_gl" model="efn.role">
+        <field name="name">Staf Pengadaan (GL)</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="job_id" ref="efn_setup_org.job_procurement_gl"/>
+        <field name="sequence">70</field>
+        <field name="group_ids" eval="[Command.set([ref('purchase.group_purchase_user'), ref('stock.group_stock_user')])]"/>
+    </record>
+    <record id="role_warehouse_staff_gl" model="efn.role">
+        <field name="name">Staf Gudang (GL)</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="job_id" ref="efn_setup_org.job_warehouse_staff_gl"/>
+        <field name="sequence">80</field>
+        <field name="sync_from_job" eval="True"/>
+        <field name="group_ids" eval="[Command.set([ref('stock.group_stock_user')])]"/>
+    </record>
+    <record id="role_cs_agent_gl" model="efn.role">
+        <field name="name">Staf CS (GL)</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="job_id" ref="efn_setup_org.job_cs_agent_gl"/>
+        <field name="sequence">100</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_salesman_all_leads')])]"/>
+    </record>
+    <record id="role_cs_refund_approver_gl" model="efn.role">
+        <field name="name">Approver Refund CS (GL)</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="job_id" ref="efn_setup_org.job_cs_refund_approver_gl"/>
+        <field name="sequence">110</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_salesman_all_leads'), ref('efn_role.group_refund_approver')])]"/>
+    </record>
+    <record id="role_sales_manager_online_gl" model="efn.role">
+        <field name="name">Sales Manager Online (GL)</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="job_id" ref="efn_setup_org.job_sales_manager_online_gl"/>
+        <field name="sequence">120</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager')])]"/>
+    </record>
+    <record id="role_loyalty_manager_gl" model="efn.role">
+        <field name="name">Loyalty Manager (GL)</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="job_id" ref="efn_setup_org.job_loyalty_manager_gl"/>
+        <field name="sequence">130</field>
+        <field name="group_ids" eval="[Command.set([ref('efn_loyalty_accounting.group_loyalty_manager')])]"/>
+    </record>
+    <record id="role_auditor_gl" model="efn.role">
+        <field name="name">Auditor Internal (GL)</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="job_id" ref="efn_setup_org.job_auditor_gl"/>
+        <field name="sequence">150</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_readonly'), ref('efn_audit.group_auditor')])]"/>
+    </record>
+
+    <!-- ===================== PT Paris Baguette (PB, company_fnb; Central Kitchen) ===================== -->
+    <record id="role_director_pb" model="efn.role">
+        <field name="name">Direktur (PB)</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="job_id" ref="efn_setup_org.job_director_pb"/>
+        <field name="sequence">10</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_readonly')])]"/>
+    </record>
+    <record id="role_finance_manager_pb" model="efn.role">
+        <field name="name">Finance Manager (PB)</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="job_id" ref="efn_setup_org.job_finance_manager_pb"/>
+        <field name="sequence">20</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_manager'), ref('account.group_account_user')])]"/>
+    </record>
+    <record id="role_finance_staff_pb" model="efn.role">
+        <field name="name">Staf Finance (PB)</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="job_id" ref="efn_setup_org.job_finance_staff_pb"/>
+        <field name="sequence">30</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_user')])]"/>
+    </record>
+    <record id="role_store_manager_pb" model="efn.role">
+        <field name="name">Store Manager (PB)</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="job_id" ref="efn_setup_org.job_store_manager_pb"/>
+        <field name="sequence">40</field>
+        <field name="group_ids" eval="[Command.set([ref('point_of_sale.group_pos_manager')])]"/>
+    </record>
+    <record id="role_cashier_pb" model="efn.role">
+        <field name="name">Kasir (PB)</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="job_id" ref="efn_setup_org.job_cashier_pb"/>
+        <field name="sequence">50</field>
+        <field name="sync_from_job" eval="True"/>
+        <field name="group_ids" eval="[Command.set([ref('point_of_sale.group_pos_user'), ref('efn_role.group_role_cashier')])]"/>
+    </record>
+    <record id="role_pos_terminal_pb" model="efn.role">
+        <field name="name">Terminal POS (PB)</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="sequence">55</field>
+        <field name="note">Peran tanpa jabatan: user terminal POS bersama tempat karyawan login PIN (pos_hr). Hanya POS User.</field>
+        <field name="group_ids" eval="[Command.set([ref('point_of_sale.group_pos_user')])]"/>
+    </record>
+    <record id="role_merchandiser_pb" model="efn.role">
+        <field name="name">Merchandiser (PB)</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="job_id" ref="efn_setup_org.job_merchandiser_pb"/>
+        <field name="sequence">60</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager'), ref('stock.group_stock_user')])]"/>
+    </record>
+    <record id="role_procurement_pb" model="efn.role">
+        <field name="name">Staf Pengadaan (PB)</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="job_id" ref="efn_setup_org.job_procurement_pb"/>
+        <field name="sequence">70</field>
+        <field name="group_ids" eval="[Command.set([ref('purchase.group_purchase_user'), ref('stock.group_stock_user')])]"/>
+    </record>
+    <record id="role_warehouse_staff_pb" model="efn.role">
+        <field name="name">Staf Gudang &amp; CK (PB)</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="job_id" ref="efn_setup_org.job_warehouse_staff_pb"/>
+        <field name="sequence">80</field>
+        <field name="sync_from_job" eval="True"/>
+        <field name="group_ids" eval="[Command.set([ref('stock.group_stock_user'), ref('mrp.group_mrp_user')])]"/>
+    </record>
+    <record id="role_cs_agent_pb" model="efn.role">
+        <field name="name">Staf CS (PB)</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="job_id" ref="efn_setup_org.job_cs_agent_pb"/>
+        <field name="sequence">100</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_salesman_all_leads')])]"/>
+    </record>
+    <record id="role_cs_refund_approver_pb" model="efn.role">
+        <field name="name">Approver Refund CS (PB)</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="job_id" ref="efn_setup_org.job_cs_refund_approver_pb"/>
+        <field name="sequence">110</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_salesman_all_leads'), ref('efn_role.group_refund_approver')])]"/>
+    </record>
+    <record id="role_sales_manager_online_pb" model="efn.role">
+        <field name="name">Sales Manager Online (PB)</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="job_id" ref="efn_setup_org.job_sales_manager_online_pb"/>
+        <field name="sequence">120</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager')])]"/>
+    </record>
+    <record id="role_loyalty_manager_pb" model="efn.role">
+        <field name="name">Loyalty Manager (PB)</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="job_id" ref="efn_setup_org.job_loyalty_manager_pb"/>
+        <field name="sequence">130</field>
+        <field name="group_ids" eval="[Command.set([ref('efn_loyalty_accounting.group_loyalty_manager')])]"/>
+    </record>
+    <record id="role_auditor_pb" model="efn.role">
+        <field name="name">Auditor Internal (PB)</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="job_id" ref="efn_setup_org.job_auditor_pb"/>
+        <field name="sequence">150</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_readonly'), ref('efn_audit.group_auditor')])]"/>
+    </record>
+
+    <!-- ===================== Bacha Coffee Retail (BCR) ===================== -->
+    <record id="role_director_bcr" model="efn.role">
+        <field name="name">Direktur (BCR)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="job_id" ref="efn_setup_org.job_director_bcr"/>
+        <field name="sequence">10</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_readonly')])]"/>
+    </record>
+    <record id="role_finance_manager_bcr" model="efn.role">
+        <field name="name">Finance Manager (BCR)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="job_id" ref="efn_setup_org.job_finance_manager_bcr"/>
+        <field name="sequence">20</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_manager'), ref('account.group_account_user')])]"/>
+    </record>
+    <record id="role_finance_staff_bcr" model="efn.role">
+        <field name="name">Staf Finance (BCR)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="job_id" ref="efn_setup_org.job_finance_staff_bcr"/>
+        <field name="sequence">30</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_user')])]"/>
+    </record>
+    <record id="role_store_manager_bcr" model="efn.role">
+        <field name="name">Store Manager (BCR)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="job_id" ref="efn_setup_org.job_store_manager_bcr"/>
+        <field name="sequence">40</field>
+        <field name="group_ids" eval="[Command.set([ref('point_of_sale.group_pos_manager')])]"/>
+    </record>
+    <record id="role_cashier_bcr" model="efn.role">
+        <field name="name">Kasir (BCR)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="job_id" ref="efn_setup_org.job_cashier_bcr"/>
+        <field name="sequence">50</field>
+        <field name="sync_from_job" eval="True"/>
+        <field name="group_ids" eval="[Command.set([ref('point_of_sale.group_pos_user'), ref('efn_role.group_role_cashier')])]"/>
+    </record>
+    <record id="role_pos_terminal_bcr" model="efn.role">
+        <field name="name">Terminal POS (BCR)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="sequence">55</field>
+        <field name="note">Peran tanpa jabatan: user terminal POS bersama tempat karyawan login PIN (pos_hr). Hanya POS User.</field>
+        <field name="group_ids" eval="[Command.set([ref('point_of_sale.group_pos_user')])]"/>
+    </record>
+    <record id="role_merchandiser_bcr" model="efn.role">
+        <field name="name">Merchandiser (BCR)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="job_id" ref="efn_setup_org.job_merchandiser_bcr"/>
+        <field name="sequence">60</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager'), ref('stock.group_stock_user')])]"/>
+    </record>
+    <record id="role_procurement_bcr" model="efn.role">
+        <field name="name">Staf Pengadaan (BCR)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="job_id" ref="efn_setup_org.job_procurement_bcr"/>
+        <field name="sequence">70</field>
+        <field name="group_ids" eval="[Command.set([ref('purchase.group_purchase_user'), ref('stock.group_stock_user')])]"/>
+    </record>
+    <record id="role_warehouse_staff_bcr" model="efn.role">
+        <field name="name">Staf Gudang (BCR)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="job_id" ref="efn_setup_org.job_warehouse_staff_bcr"/>
+        <field name="sequence">80</field>
+        <field name="sync_from_job" eval="True"/>
+        <field name="group_ids" eval="[Command.set([ref('stock.group_stock_user')])]"/>
+    </record>
+    <record id="role_cs_agent_bcr" model="efn.role">
+        <field name="name">Staf CS (BCR)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="job_id" ref="efn_setup_org.job_cs_agent_bcr"/>
+        <field name="sequence">100</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_salesman_all_leads')])]"/>
+    </record>
+    <record id="role_cs_refund_approver_bcr" model="efn.role">
+        <field name="name">Approver Refund CS (BCR)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="job_id" ref="efn_setup_org.job_cs_refund_approver_bcr"/>
+        <field name="sequence">110</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_salesman_all_leads'), ref('efn_role.group_refund_approver')])]"/>
+    </record>
+    <record id="role_sales_manager_online_bcr" model="efn.role">
+        <field name="name">Sales Manager Online (BCR)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="job_id" ref="efn_setup_org.job_sales_manager_online_bcr"/>
+        <field name="sequence">120</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager')])]"/>
+    </record>
+    <record id="role_loyalty_manager_bcr" model="efn.role">
+        <field name="name">Loyalty Manager (BCR)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="job_id" ref="efn_setup_org.job_loyalty_manager_bcr"/>
+        <field name="sequence">130</field>
+        <field name="group_ids" eval="[Command.set([ref('efn_loyalty_accounting.group_loyalty_manager')])]"/>
+    </record>
+    <record id="role_auditor_bcr" model="efn.role">
+        <field name="name">Auditor Internal (BCR)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="job_id" ref="efn_setup_org.job_auditor_bcr"/>
+        <field name="sequence">150</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_readonly'), ref('efn_audit.group_auditor')])]"/>
+    </record>
+
+    <!-- ===================== Bacha Coffee F&B (BCF; CK opsional) ===================== -->
+    <record id="role_director_bcf" model="efn.role">
+        <field name="name">Direktur (BCF)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="job_id" ref="efn_setup_org.job_director_bcf"/>
+        <field name="sequence">10</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_readonly')])]"/>
+    </record>
+    <record id="role_finance_manager_bcf" model="efn.role">
+        <field name="name">Finance Manager (BCF)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="job_id" ref="efn_setup_org.job_finance_manager_bcf"/>
+        <field name="sequence">20</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_manager'), ref('account.group_account_user')])]"/>
+    </record>
+    <record id="role_finance_staff_bcf" model="efn.role">
+        <field name="name">Staf Finance (BCF)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="job_id" ref="efn_setup_org.job_finance_staff_bcf"/>
+        <field name="sequence">30</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_user')])]"/>
+    </record>
+    <record id="role_store_manager_bcf" model="efn.role">
+        <field name="name">Store Manager (BCF)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="job_id" ref="efn_setup_org.job_store_manager_bcf"/>
+        <field name="sequence">40</field>
+        <field name="group_ids" eval="[Command.set([ref('point_of_sale.group_pos_manager')])]"/>
+    </record>
+    <record id="role_cashier_bcf" model="efn.role">
+        <field name="name">Kasir (BCF)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="job_id" ref="efn_setup_org.job_cashier_bcf"/>
+        <field name="sequence">50</field>
+        <field name="sync_from_job" eval="True"/>
+        <field name="group_ids" eval="[Command.set([ref('point_of_sale.group_pos_user'), ref('efn_role.group_role_cashier')])]"/>
+    </record>
+    <record id="role_pos_terminal_bcf" model="efn.role">
+        <field name="name">Terminal POS (BCF)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="sequence">55</field>
+        <field name="note">Peran tanpa jabatan: user terminal POS bersama tempat karyawan login PIN (pos_hr). Hanya POS User.</field>
+        <field name="group_ids" eval="[Command.set([ref('point_of_sale.group_pos_user')])]"/>
+    </record>
+    <record id="role_merchandiser_bcf" model="efn.role">
+        <field name="name">Merchandiser (BCF)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="job_id" ref="efn_setup_org.job_merchandiser_bcf"/>
+        <field name="sequence">60</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager'), ref('stock.group_stock_user')])]"/>
+    </record>
+    <record id="role_procurement_bcf" model="efn.role">
+        <field name="name">Staf Pengadaan (BCF)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="job_id" ref="efn_setup_org.job_procurement_bcf"/>
+        <field name="sequence">70</field>
+        <field name="group_ids" eval="[Command.set([ref('purchase.group_purchase_user'), ref('stock.group_stock_user')])]"/>
+    </record>
+    <record id="role_warehouse_staff_bcf" model="efn.role">
+        <field name="name">Staf Gudang &amp; CK (BCF)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="job_id" ref="efn_setup_org.job_warehouse_staff_bcf"/>
+        <field name="sequence">80</field>
+        <field name="sync_from_job" eval="True"/>
+        <field name="group_ids" eval="[Command.set([ref('stock.group_stock_user'), ref('mrp.group_mrp_user')])]"/>
+    </record>
+    <record id="role_cs_agent_bcf" model="efn.role">
+        <field name="name">Staf CS (BCF)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="job_id" ref="efn_setup_org.job_cs_agent_bcf"/>
+        <field name="sequence">100</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_salesman_all_leads')])]"/>
+    </record>
+    <record id="role_cs_refund_approver_bcf" model="efn.role">
+        <field name="name">Approver Refund CS (BCF)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="job_id" ref="efn_setup_org.job_cs_refund_approver_bcf"/>
+        <field name="sequence">110</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_salesman_all_leads'), ref('efn_role.group_refund_approver')])]"/>
+    </record>
+    <record id="role_sales_manager_online_bcf" model="efn.role">
+        <field name="name">Sales Manager Online (BCF)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="job_id" ref="efn_setup_org.job_sales_manager_online_bcf"/>
+        <field name="sequence">120</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager')])]"/>
+    </record>
+    <record id="role_loyalty_manager_bcf" model="efn.role">
+        <field name="name">Loyalty Manager (BCF)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="job_id" ref="efn_setup_org.job_loyalty_manager_bcf"/>
+        <field name="sequence">130</field>
+        <field name="group_ids" eval="[Command.set([ref('efn_loyalty_accounting.group_loyalty_manager')])]"/>
+    </record>
+    <record id="role_auditor_bcf" model="efn.role">
+        <field name="name">Auditor Internal (BCF)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="job_id" ref="efn_setup_org.job_auditor_bcf"/>
+        <field name="sequence">150</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_readonly'), ref('efn_audit.group_auditor')])]"/>
+    </record>
+
+    <!-- ===================== FARM ===================== -->
+    <record id="role_director_farm" model="efn.role">
+        <field name="name">Direktur (FARM)</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="job_id" ref="efn_setup_org.job_director_farm"/>
+        <field name="sequence">10</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_readonly')])]"/>
+    </record>
+    <record id="role_finance_manager_farm" model="efn.role">
+        <field name="name">Finance Manager (FARM)</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="job_id" ref="efn_setup_org.job_finance_manager_farm"/>
+        <field name="sequence">20</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_manager'), ref('account.group_account_user')])]"/>
+    </record>
+    <record id="role_finance_staff_farm" model="efn.role">
+        <field name="name">Staf Finance (FARM)</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="job_id" ref="efn_setup_org.job_finance_staff_farm"/>
+        <field name="sequence">30</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_user')])]"/>
+    </record>
+    <record id="role_store_manager_farm" model="efn.role">
+        <field name="name">Store Manager (FARM)</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="job_id" ref="efn_setup_org.job_store_manager_farm"/>
+        <field name="sequence">40</field>
+        <field name="group_ids" eval="[Command.set([ref('point_of_sale.group_pos_manager')])]"/>
+    </record>
+    <record id="role_cashier_farm" model="efn.role">
+        <field name="name">Kasir (FARM)</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="job_id" ref="efn_setup_org.job_cashier_farm"/>
+        <field name="sequence">50</field>
+        <field name="sync_from_job" eval="True"/>
+        <field name="group_ids" eval="[Command.set([ref('point_of_sale.group_pos_user'), ref('efn_role.group_role_cashier')])]"/>
+    </record>
+    <record id="role_merchandiser_farm" model="efn.role">
+        <field name="name">Merchandiser (FARM)</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="job_id" ref="efn_setup_org.job_merchandiser_farm"/>
+        <field name="sequence">60</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager'), ref('stock.group_stock_user')])]"/>
+    </record>
+    <record id="role_procurement_farm" model="efn.role">
+        <field name="name">Staf Pengadaan (FARM)</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="job_id" ref="efn_setup_org.job_procurement_farm"/>
+        <field name="sequence">70</field>
+        <field name="group_ids" eval="[Command.set([ref('purchase.group_purchase_user'), ref('stock.group_stock_user')])]"/>
+    </record>
+    <record id="role_warehouse_staff_farm" model="efn.role">
+        <field name="name">Staf Gudang (FARM)</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="job_id" ref="efn_setup_org.job_warehouse_staff_farm"/>
+        <field name="sequence">80</field>
+        <field name="sync_from_job" eval="True"/>
+        <field name="group_ids" eval="[Command.set([ref('stock.group_stock_user')])]"/>
+    </record>
+    <record id="role_cs_agent_farm" model="efn.role">
+        <field name="name">Staf CS (FARM)</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="job_id" ref="efn_setup_org.job_cs_agent_farm"/>
+        <field name="sequence">100</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_salesman_all_leads')])]"/>
+    </record>
+    <record id="role_cs_refund_approver_farm" model="efn.role">
+        <field name="name">Approver Refund CS (FARM)</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="job_id" ref="efn_setup_org.job_cs_refund_approver_farm"/>
+        <field name="sequence">110</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_salesman_all_leads'), ref('efn_role.group_refund_approver')])]"/>
+    </record>
+    <record id="role_sales_manager_online_farm" model="efn.role">
+        <field name="name">Sales Manager Online (FARM)</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="job_id" ref="efn_setup_org.job_sales_manager_online_farm"/>
+        <field name="sequence">120</field>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager')])]"/>
+    </record>
+    <record id="role_loyalty_manager_farm" model="efn.role">
+        <field name="name">Loyalty Manager (FARM)</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="job_id" ref="efn_setup_org.job_loyalty_manager_farm"/>
+        <field name="sequence">130</field>
+        <field name="group_ids" eval="[Command.set([ref('efn_loyalty_accounting.group_loyalty_manager')])]"/>
+    </record>
+    <record id="role_auditor_farm" model="efn.role">
+        <field name="name">Auditor Internal (FARM)</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="job_id" ref="efn_setup_org.job_auditor_farm"/>
+        <field name="sequence">150</field>
+        <field name="group_ids" eval="[Command.set([ref('account.group_account_readonly'), ref('efn_audit.group_auditor')])]"/>
+    </record>
+</odoo>

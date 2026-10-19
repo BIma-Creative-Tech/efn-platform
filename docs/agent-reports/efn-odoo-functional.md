@@ -532,5 +532,42 @@ Direktur `account.group_account_readonly` · Finance Manager `account.group_acco
 ### F. Pertanyaan klien
 Q-ORG-1 (departemen/jabatan per PT), Q-ORG-2 (CS/IT/Audit terpusat di Holding? terkait 18-38), Q-ORG-3 (nama jabatan resmi), Q-ORG-4 (SOD-05/06 jadi `block`?), Q-ORG-5 (jumlah Superadmin ≥ 2 & masa pengecualian). Nama orang & anggota `efn-cs-approver` tetap A-5. Tidak ada yang memblokir `efn_setup_org`.
 
-### G. Belum terverifikasi
+### G. Belum terverifikasi (G21)
 Test `efn_setup_org` belum dijalankan. [B]: group-by M2M di list `res.users`, ekspor `all_group_ids`, hak baca grup user lain bagi non-Access Rights, titik penegakan `base.group_allow_export`, hak tulis promo/pricelist dari `group_sale_manager`, jabatan aktif karyawan (`hr.version`), state `loyalty.program`, sintaks unique parsial 19.0, perilaku `pos.config.other_devices`.
+
+## Gelombang 22 — 2026-10-19 (paket restoran: W-07 E-27 QR ponsel, W-04 E-29a, W-27 modifier & combo, data peran `efn_setup_role`)
+
+Dasar: ADR-032 **Accepted opsi B**; keputusan 18-1, 18-14, 18-18, 18-22, 18-27, 18-41, 18-42; L-64, L-65, L-67, L-69. Detail: `docs/08_ODOO_FIT_GAP.md` **§13**. Verifikasi = source `odoo/odoo@19.0` via WebFetch (daftar file di §13). Referensi vendor: tidak ada yang relevan (pola self-order OCA/Cybrosys memakai route publik Odoo — bertentangan ADR-023). **Tanpa shell → test belum dijalankan; tidak di-commit.**
+
+### A. Diterapkan (data-only)
+| Modul | Versi | Isi |
+|---|---|---|
+| `efn_setup_role` (**baru**) | 19.0.1.0.0 | depends `efn_role`, `efn_setup_org`, `efn_audit`, `efn_loyalty_accounting`, `account`, `point_of_sale`, `sales_team`, `stock`, `purchase`, `mrp`. `data/efn_role_data.xml`: 82 `efn.role` (13 jabatan × 6 PT + Terminal POS × GL/PB/BCR/BCF), noupdate, tanpa penetapan; `sync_from_job` hanya Kasir & Staf Gudang. `data/ir_config_parameter.xml`: `efn_role.sensitive_group_xmlids` (6 grup tambahan). `data/efn_sod_rule_data.xml`: `<function>` `_efn_ensure_default_rules` (aturan dirujuk lewat kode, tidak dibuat ulang). Test 13. README + index.html |
+| `efn_setup_pos` | 19.0.1.12.0 | `demo/pos_fnb_menu_demo.xml` (W-27, PB & BCF): atribut `no_variant`, nilai berharga, add-on + BoM Kit ke bahan storable, `product.combo`. Test `tests/test_fnb_menu_demo.py` (8). README (demo, checklist #14, #20 — kunci SEC-75 tetap walau ADR-032 Accepted) |
+| `efn_setup_online` | 19.0.1.6.0 | demo outlet BCF `CAFE-01` (gudang `OL03`, FP non-dine-in BCF). Test `test_fnb_channels_outlets_non_dine_in_pb1_zero` (PB & BCF). README |
+
+### B. Fit-gap ringkas
+| Kebutuhan | Standar? | Hasil |
+|---|---|---|
+| W-07 QR ponsel → `pos.order` draft di meja, harga server, PB1 dine-in, notifikasi, bayar di kasir | Mesin **ya** (`sync_from_ui`, `recompute_prices`, preset FP, multi-order per meja, kanal kasir `efn_pos_kds`); jalur masuk & token meja dinamis **tidak** | **E-27** `efn_pos_bff_order` (§13.1b) |
+| W-04 F&B online + KDS | SO + FP non-dine-in **ya** (diuji PB & BCF); jembatan KDS **tidak** | **E-29a** dengan 6 penyesuaian (§13.2) |
+| W-27 modifier & combo | **Ya** (4 pola standar) | demo + test |
+| Peran per PT × jabatan | **Ya** dengan `efn_role` | `efn_setup_role` |
+
+### C. Rekomendasi untuk efn-odoo-engineer
+- **Tambah E-27** `efn_pos_bff_order` (7–9 hari odoo): `pos.config` (`efn_qr_enabled`, `efn_qr_preset_id`, `efn_qr_kitchen_mode` confirm/auto, batas sesi), `efn.pos.table.session` (id sesi BFF saja, bukan token), `efn.pos.bff.order.request` (idempotensi sha256), `pos.order` (`efn_qr_table_session_id`, `efn_qr_order_ref`, klaim kirim), grup teknis `group_qr_bff` + user per PT. Payload order **dibangun server** lalu `sync_from_ui` + `recompute_prices` standar; **jangan** memakai `_check_pos_order` (butuh preset `available_in_self` → melemahkan SEC-75; meneruskan field klien). Satu kiriman = order draft baru (recompute seluruh order akan menimpa harga order pelayan). Server tidak membuat tiket/cetak dapur; mode `confirm` default. QR dirender server dari respons BFF, tidak disimpan/di-log. 17 test (§13.1b).
+- **E-29a** — pakai kode kanal `PB`/`BCF`; peta outlet → POS lewat gudang (seperti E-45), `kds_config_id` hanya override; label tanpa kode ambil/bayar; `groups` pada `efn_online_order_id` tiket. Opsional: constraint FP outlet F&B ≠ FP preset dine-in.
+- **E-47d** (0,5 hari): tambah `efn_pos_bff_order.group_qr_bff` ke `TECHNICAL_GROUP_XMLIDS`; jadikan `efn_role.sensitive_group_xmlids` parameter kontrol `efn_audit` (selalu diaudit).
+- **Tidak ada yang dihapus/disederhanakan.** Pola E-45 (pelunasan SO di kasir) **tidak** dipakai untuk QR (order sudah `pos.order`); hanya pola cek pemanggil/idempotensi/outbox yang dipakai ulang. W-17 sisi Odoo sudah selesai di `efn_loyalty_accounting`.
+
+### D. Untuk lead
+- Tulis kontrak `docs/04` bagian `fnb` (ADR-032 draf): RPC `efn_qr_catalog`, `efn_qr_order_submit`, `efn_qr_order_status`; Odoo → BFF `POST /internal/v1/fnb/table-sessions` (+ `…/{id}/close`, POST karena klien `efn_core` belum DELETE); secret `odoo_api_key_qr_{pb,bcf}`.
+- Tambahkan `efn_setup_role` (dan `efn_setup_org` bila belum) ke `EFN_TEST_MODULES` CI (devsecops).
+- Estimasi W-07 naik menjadi ±4–4,5 minggu-engineer (docs/10: 3–4).
+- W-12 belum di-fit-gap rinci (butuh kontrak §9/§10 dulu); arah awal di §13.5.
+
+### E. Pertanyaan klien
+**Q-QR6** (baru): pesanan QR langsung ke dapur atau dikonfirmasi pelayan dulu? Default dikonfirmasi, configurable. Selebihnya data yang sudah di register: master modifier/paket per brand (18-22), printer slip QR (P-18), 18-38.
+
+### F. Belum terverifikasi (G22)
+Semua test G22 belum dijalankan. [B]: `ir.actions.report.barcode` 19.0, pemilihan order di denah saat > 1 order/meja, keys wajib payload `_process_order`, `source` baru di frontend, cetak gambar QR di Epson ePOS, penurunan stok bahan kit di picking POS (tour), UI combo + atribut, `qty_free`/`qty_max` combo, `<function>` metode privat saat install (source [V]).

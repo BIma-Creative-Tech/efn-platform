@@ -232,4 +232,18 @@
         <field name="payment_timeout_minutes">70</field>
         <field name="user_ids" eval="[Command.set([ref('user_online_bcf')])]"/>
     </record>
+    <!-- G22 W-04 (docs/08 §13.2): outlet contoh kafe BCF agar kanal F&B kedua punya pasangan outlet ber-FP NON-DINE-IN
+         (tanpa SC, PB1 0 % - 18-1). Kanal tetap nonaktif sampai outlet/SKU nyata dari klien; jembatan KDS = E-29a. -->
+    <record id="warehouse_online_bcf" model="stock.warehouse">
+        <field name="name">Kafe Bacha Online (DEMO)</field>
+        <field name="code">OL03</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+    </record>
+    <record id="outlet_bcf_cafe01" model="efn.online.outlet">
+        <field name="channel_id" ref="channel_bcf"/>
+        <field name="code">CAFE-01</field>
+        <field name="public_name">Kafe Bacha Kota Default (DEMO)</field>
+        <field name="warehouse_id" ref="warehouse_online_bcf"/>
+        <field name="fiscal_position_id" ref="efn_setup_company.fiscal_position_bcf_non_dine_in"/>
+    </record>
 </odoo>

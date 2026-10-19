@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G22 (docs/08 §13.4, L-67 / SEC-154): grup TAMBAHAN yang membuat peran "sensitif" (tidak boleh disinkron dari
+     jabatan; efn.role.sync_from_job ditolak). Parameter efn_role ini hanya MENAMBAH daftar bawaan
+     efn_role.models.role_policy.SENSITIVE_GROUP_XMLIDS (manajer akuntansi/penjualan/POS/loyalty, approver refund,
+     audit manager, admin) - tidak bisa mengurangi.
+
+     Alasan tambahan (keputusan functional, configurable):
+     - account.group_account_readonly / account.group_account_user : membaca/menjurnal data keuangan (Direktur,
+       Staf Finance, Auditor) -> penetapan manual oleh Access Rights.
+     - purchase.group_purchase_user : membuat & mengonfirmasi PO (vektor fraud vendor).
+     - efn_audit.group_auditor / group_auditor_personal : membaca log audit (bisa memuat perubahan data pribadi).
+     - sales_team.group_sale_salesman_all_leads : membaca SEMUA pesanan & pelanggan (Staf CS) -> UU PDP: akses data
+       pelanggan diberikan sengaja, bukan efek samping perubahan jabatan oleh HR.
+     Akibat: hanya peran Kasir dan Staf Gudang yang disinkron dari jabatan (efn_role_data.xml).
+
+     noupdate: Superadmin boleh menambah xmlid (dipisah koma). Menghapus entri di sini melemahkan kontrol -> lakukan
+     hanya lewat keputusan tertulis (dicatat di review akses bulanan). -->
+<odoo noupdate="1">
+    <record id="param_role_sensitive_group_xmlids" model="ir.config_parameter">
+        <field name="key">efn_role.sensitive_group_xmlids</field>
+        <field name="value">account.group_account_readonly,account.group_account_user,purchase.group_purchase_user,efn_audit.group_auditor,efn_audit.group_auditor_personal,sales_team.group_sale_salesman_all_leads</field>
+    </record>
+</odoo>

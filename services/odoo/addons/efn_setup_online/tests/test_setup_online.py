@@ -85,6 +85,40 @@ class TestEfnSetupOnline(TransactionCase):
             with self.subTest(outlet=outlet.code):
                 self.assertNotIn(sc, outlet.fiscal_position_id.map_tax(pb1))
 
+    def test_fnb_channels_outlets_non_dine_in_pb1_zero(self):
+        """G22 W-04 (docs/08 §13.2, 18-1): kanal F&B per PT (PB, BCF) - setiap outlet ber-FP non-dine-in: PB1 default
+        dipetakan ke pajak 0 % dan TANPA service charge; FP bukan milik preset dine-in POS."""
+        pb = self.env.ref("efn_setup_online.channel_pb", raise_if_not_found=False)
+        if not pb:
+            self.skipTest("demo tidak dimuat")
+        cases = {
+            "channel_pb": ("tax_pb1_10_fnb", "tax_service_charge_5_fnb"),
+            "channel_bcf": ("tax_pb1_10_bcf", "tax_service_charge_5_bcf"),
+        }
+        # pos.preset.service_at milik pos_self_order (bukan dependency modul ini) -> opsional.
+        Preset = self.env.get("pos.preset")
+        dine_in_fps = self.env["account.fiscal.position"]
+        if Preset is not None and "service_at" in Preset._fields:
+            dine_in_fps = Preset.search([("service_at", "=", "table")]).fiscal_position_id
+        for xmlid, (pb1_xmlid, sc_xmlid) in cases.items():
+            channel = self.env.ref(f"efn_setup_online.{xmlid}")
+            pb1 = self.env.ref(f"efn_setup_company.{pb1_xmlid}")
+            sc = self.env.ref(f"efn_setup_company.{sc_xmlid}")
+            self.assertEqual(channel.company_id.efn_business_type, "fnb")
+            self.assertEqual(channel.stock_check, "none")
+            outlets = channel.with_context(active_test=False).outlet_ids
+            self.assertTrue(outlets, f"{channel.code}: outlet demo F&B")
+            for outlet in outlets:
+                with self.subTest(channel=channel.code, outlet=outlet.code):
+                    fp = outlet.fiscal_position_id
+                    self.assertEqual(fp.company_id, channel.company_id)
+                    self.assertFalse(fp.auto_apply)
+                    self.assertNotIn(fp, dine_in_fps)
+                    mapped = fp.map_tax(pb1)
+                    self.assertNotIn(sc, mapped)
+                    self.assertNotIn(pb1, mapped)
+                    self.assertEqual(set(mapped.mapped("amount")), {0.0})
+
 
 @tagged("post_install", "-at_install", "efn")
 class TestEfnOnlineEntityChannels(TransactionCase):
