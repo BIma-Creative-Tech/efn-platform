@@ -3,7 +3,8 @@
 Kebijakan Poin EFN per PT (empat mata, publikasi bertanda tangan ke BFF) + akrual liabilitas poin harian per PT +
 rekonsiliasi saldo. Odoo CE 19, **LGPL-3**, `depends: account, mail, efn_core, efn_audit, efn_pos_loyalty_ledger`.
 
-- **Kontrak mengikat:** `docs/04_SERVICE_CONTRACTS.md` §13.1 + §13.7 L-61, L-62 (menang atas `docs/08` §11.4).
+- **Kontrak mengikat:** `docs/04_SERVICE_CONTRACTS.md` §13.1 + §13.7 L-61, L-62, L-66, L-67, L-68 (menang atas
+  `docs/08` §11.4). Perbaikan security r14: SEC-156, SEC-157, SEC-160 (19.0.1.1.0).
 - **ADR:** ADR-020 (ledger poin tunggal di BFF; Odoo hanya kebijakan + jurnal, saldo member tidak di Odoo, D-05),
   ADR-001 revisi (PT penerbit per lot earn, kliring antar-PT), ADR-027 (tanpa akun/angka bisnis di kode →
   PLACEHOLDER), ADR-031 (tanpa modul pihak ketiga), ADR-022 (TLS + CA internal untuk setiap panggilan BFF).
@@ -14,9 +15,10 @@ rekonsiliasi saldo. Odoo CE 19, **LGPL-3**, `depends: account, mail, efn_core, e
 ## Model
 | Model | Isi |
 |---|---|
-| `efn.loyalty.policy` | Per (company, `version`). Field per PT: `earn_idr_per_point`, `redeem_min_points`, `redeem_max_pct`, `max_points_per_order`, `daily_max_points_member`, `pos_config_hourly_max`, `company_hourly_max`, `earn_on_money_only` (default True, 18-10), `effective_from`. `point_value_idr` **hanya** di record global (company berkode `EFN`, L-62). `state` `draft → approved → published` \| `rejected`. Jejak: `maker_id`, `last_editor_id`, `approved_by_id/at`, `rejected_by_id/at`, `published_at`. |
+| `efn.loyalty.policy` | Per (company, `version`). Field per PT: `earn_idr_per_point`, `redeem_min_points`, `redeem_max_pct`, `max_points_per_order`, `daily_max_points_member`, `pos_config_hourly_max`, `company_hourly_max`, `earn_on_money_only` (default True, 18-10), `effective_from`. `point_value_idr` **hanya** di record global (company berkode `EFN`, L-62). `state` `draft → approved → published` \| `rejected`. Jejak: `maker_id`, `last_editor_id`, `editor_ids` (himpunan semua penyunting, SEC-157), `approved_by_id/at`, `rejected_by_id/at`, `published_at`. |
 | `efn.loyalty.policy.outbox` | Satu per kebijakan disetujui (`loyalty_policy:<PT>:<versi>`, UNIQUE): state, percobaan, backoff, HTTP terakhir, kode error, SHA-256 body. |
-| `efn.loyalty.accrual` | Satu per (company, tanggal bisnis) (UNIQUE): komponen BFF, `move_id`, saldo liabilitas Odoo, selisih, status rekonsiliasi. |
+| `efn.loyalty.accrual` | Satu per (company, tanggal bisnis) (UNIQUE): komponen BFF, `move_id`, saldo liabilitas Odoo, selisih, status rekonsiliasi. Tidak bisa dihapus (termasuk sudo) bila sudah punya jurnal. |
+| `account.move` (+ `efn_loyalty_accrual_id`) | SEC-156: tautan sistem jurnal → akrual (readonly, `ondelete=restrict`). Hanya bisa diisi kode akrual (sudo + konteks penanda); UI/RPC/sudo biasa → `AccessError`. |
 | `res.company` (+ Settings › Invoicing › *Poin EFN*) | Akun liabilitas, beban program, Piutang Poin Antar-PT (kliring, PT penebus), Utang Poin Antar-PT (L-66, PT penerbit), pendapatan kedaluwarsa (breakage), jurnal Misc. Semua **PLACEHOLDER** per PT; tidak ada default otomatis. Saran liabilitas = akun `21990091` dari `efn_setup_pos` (akun outstanding metode Poin EFN) agar penukaran POS dan akrual memakai akun yang sama. |
 
 Semua model: `company_id` wajib, `_check_company_auto`, record rule `company_ids`, ACL baca-saja kecuali draft
@@ -28,8 +30,10 @@ kebijakan oleh Loyalty Manager. Penulisan status/akrual/outbox hanya oleh kode s
 - **Empat mata:** pembuat = grup baru **EFN / Loyalty Manager** (`efn_loyalty_accounting.group_loyalty_manager`,
   implies `base.group_user`);
   penyetuju/penolak = **Accounting / Manager** (`account.group_account_manager`) dengan company record di
-  `company_ids`-nya, dan **bukan** pembuat maupun penyunting terakhir draft (juga bila penyuntingan lewat kode
-  ber-sudo — uid asli). SoD per user (Loyalty Manager ⟂ Accounting Manager) ditegakkan `efn_role` (§13.3).
+  `company_ids`-nya, dan **bukan** pembuat maupun **siapa pun yang pernah menyunting** isi draft (`editor_ids`,
+  ditambah server via `Command.link` pada setiap `write` isi, tidak bisa dihapus pengguna — SEC-157; juga bila
+  penyuntingan lewat kode ber-sudo — uid asli). SoD per user (Loyalty Manager ⟂ Accounting Manager) ditegakkan
+  `efn_role` (§13.3); pastikan SOD-03 mode `block` sebelum kebijakan prod dipublikasikan (bukan `report_only`).
 - **Read-only setelah approved/rejected** untuk semua termasuk `sudo()`; perubahan = versi baru (draft baru otomatis
   diisi dari versi terakhir yang disetujui). Non-draft tidak bisa dihapus. Field status/jejak ditulis lewat RPC →
   `AccessError`. `effective_from` yang sudah lewat saat disetujui digeser ke waktu persetujuan (tidak berlaku surut).
@@ -61,8 +65,17 @@ Cron `ir_cron_efn_loyalty_accrual` 19:00 UTC (= 02:00 Asia/Jakarta): untuk setia
 bisnis kemarin + `efn.loyalty.accrual_lookback_days` (3) hari ke belakang yang belum final →
 `GET /v1/pos/loyalty/accruals?company_code=<PT>&date=YYYY-MM-DD` (query hanya allowlist `company_code` + `date`;
 penjaga R2 `_efn_get` menolak tanggal ISO sebagai "mirip HP"). Respons divalidasi ketat (integer non-negatif,
-kode PT kontrak, `company_code`/`date` sama dengan permintaan). Satu `account.move` per (company, tanggal),
-`ref = EFN-LOY-<PT>-<YYYY-MM-DD>`; sudah ada → dilewati & ditautkan (idempoten).
+kode PT kontrak, `company_code`/`date` sama dengan permintaan; field aditif `forfeited_value_idr` dan
+`restored_value_idr_by_issuer` opsional — BFF lama → 0 / `{}`; Σ `restored_value_idr_by_issuer` wajib =
+`restored_value_idr`). Satu `account.move` per (company, tanggal), `ref = EFN-LOY-<PT>-<YYYY-MM-DD>`.
+
+**Idempotensi (SEC-156):** jurnal dianggap sudah ada hanya bila `account.move` tertaut sistem
+(`efn_loyalty_accrual_id` = akrual ini) **dan** `posted` → `done`. Jurnal lain ber-ref sama (manual, draft, batal,
+bahkan posted) → `conflict` (`ref_conflict:foreign_move`); jurnal akrual sendiri yang di-reset ke draft / dibatalkan /
+dihapus → `conflict` (`ref_conflict:move_not_posted`, juga dideteksi pada run berikutnya untuk akrual yang sudah
+`done` dalam jendela lookback). Konflik: log ERROR setiap run (tidak diam), aktivitas Finance sekali, baris RECON
+tetap dikirim, **tidak** membuat jurnal ganda. Penyelesaian: posting ulang jurnal akrual, atau ganti ref/hapus jurnal
+manual, lalu *Proses ulang*.
 
 | Komponen | Debit | Kredit |
 |---|---|---|
@@ -70,10 +83,17 @@ kode PT kontrak, `company_code`/`date` sama dengan permintaan). Satu `account.mo
 | `earn_reversed_value_idr` (clawback) | Liabilitas Poin | Beban Program Poin |
 | `redeemed_value_idr_by_issuer[I]`, I ≠ PT ini | Kliring Poin Antar-PT (label menyebut PT penerbit) | Liabilitas Poin |
 | `redeemed_value_idr_by_issuer[PT ini]` | — (sudah dijurnal POS, §9.2) | — |
+| L-68 `restored_value_idr_by_issuer[I]`, I ≠ PT ini (refund POS di PT penebus) | Liabilitas Poin | Kliring Poin Antar-PT |
 | L-66 `redeemed_value_idr_as_issuer_by_redeemer[R]` (PT ini = penerbit, R = PT penebus) | Liabilitas Poin | Utang Poin Antar-PT |
 | L-66 `restored_value_idr_as_issuer_by_redeemer[R]` | Utang Poin Antar-PT | Liabilitas Poin |
-| `restored_value_idr` | — (refund POS pembayaran Poin EFN negatif sudah menjurnal) | — |
-| `expired_value_idr` (W-17, G22) | Liabilitas Poin | Pendapatan kedaluwarsa — hanya bila `efn.loyalty.breakage_journal_enabled=True` (default False) |
+| `restored_value_idr` (bagian PT ini) | — (refund POS pembayaran Poin EFN negatif sudah menjurnal) | — |
+| L-67 `expired_value_idr` (kedaluwarsa) | Liabilitas Poin | Pendapatan Poin Kedaluwarsa |
+| L-67 `forfeited_value_idr` (erasure DSAR / penyesuaian ledger) | Liabilitas Poin | Pendapatan Poin Kedaluwarsa (baris terpisah) |
+
+L-67 (SEC-160): kedaluwarsa dan forfeit **selalu** dijurnal di PT penerbit (parameter lama
+`efn.loyalty.breakage_journal_enabled` dihapus dari data dan diabaikan kode). Akun = *Pendapatan poin kedaluwarsa*
+per PT di Settings (field `efn_loyalty_breakage_account_id` yang sudah ada, PLACEHOLDER); tanpa akun dan nilai > 0 →
+`missing_config` (`missing_accounts:breakage`).
 
 Akun/jurnal yang dibutuhkan tidak ada → `missing_config`, log ERROR (kode saja, tanpa angka/PII), aktivitas
 Accounting Manager, **tanpa jurnal**; semua komponen 0 → `no_entry` (tanpa akun pun tidak galat). BFF mati/respons
@@ -117,10 +137,15 @@ prefill versi baru, L-62, batas nilai, company tanpa kode, record rule, audit `e
 baru dan header lama tidak bisa diputar ulang, 401/404 → max age, 409/422/400 final + aktivitas, tanpa kunci tertahan
 lalu terkirim setelah kunci dipasang, kunci pendek, tombol retry & akses, idempotensi enqueue, transport klien:
 https + CA + service key, header tidak bisa menimpa service key, allowlist query),
-`test_accrual.py` (baris jurnal per komponen, lintas PT kliring, PT sendiri tidak dijurnal, idempoten run ulang &
-record hilang, akun per PT, tanpa akun → tanpa jurnal + ERROR + aktivitas + retry, nilai 0 tanpa akun, format RECON
-persis (ok/mismatch/dead-man), galat BFF & validasi respons, breakage nonaktif default, record rule/ACL, cron tanggal
-& semua company).
+`test_accrual.py` (baris jurnal per komponen, lintas PT kliring, PT sendiri tidak dijurnal, idempoten run ulang,
+akrual berjurnal tidak bisa dihapus, akun per PT, tanpa akun → tanpa jurnal + ERROR + aktivitas + retry, nilai 0 tanpa
+akun, format RECON persis (ok/mismatch/dead-man), galat BFF & validasi respons, record rule/ACL, cron tanggal & semua
+company; r14: jurnal manual ber-ref sama draft/batal/posted → `conflict` + ERROR + aktivitas tanpa jurnal ganda,
+konflik tidak diam & diselesaikan lewat Proses ulang, jurnal akrual di-reset draft → `conflict` sampai diposting ulang,
+tautan `efn_loyalty_accrual_id` tidak bisa ditulis/dipalsukan, kedaluwarsa + forfeit dijurnal → RECON 0, forfeit tanpa
+akun → `missing_config`, validasi `forfeited_value_idr`/`restored_value_idr_by_issuer`, L-68 earn GL – tukar BCR –
+refund BCR → RECON GL & BCR 0). `test_policy.py` r14: penyunting tengah (bukan terakhir) ditolak menyetujui/menolak,
+`editor_ids` tidak bisa ditulis pengguna.
 
 ## Referensi (ADR-031)
 Tidak ada modul OCA/Cybrosys 19.0 terverifikasi untuk ledger poin eksternal + jurnal akrual; konsep parameter per
@@ -136,11 +161,23 @@ kode yang disalin.
   Utang Poin Antar-PT, restore kebalikannya), sehingga saldo liabilitas kedua PT cocok dengan `closing_liability_idr`
   (diuji: earn GL, tukar BCR). Field L-66 opsional (BFF lama → map kosong); kunci PT sendiri/tidak dikenal → respons
   ditolak. Settlement piutang/utang antar-PT = W-15 (belum).
-- `restored_value_idr` tidak dijurnal (asumsi: restore selalu lewat refund POS di PT tempat refund). Restore lintas PT
-  belum ditangani.
+- `restored_value_idr` bagian PT sendiri tidak dijurnal (refund POS di PT tempat refund sudah menjurnal). Restore
+  poin terbitan PT lain di PT penebus dijurnal (L-68) bila BFF mengirim `restored_value_idr_by_issuer`; BFF lama tanpa
+  field → tidak dijurnal (selisih RECON PT penebus seperti sebelum L-68).
+- L-67: forfeit BFF mencakup **semua** debit non-POS (erasure DSAR **dan** penyesuaian manual ledger) → semuanya
+  dikreditkan ke Pendapatan Poin Kedaluwarsa. Bila Finance ingin akun terpisah untuk penyesuaian, butuh pemisahan
+  komponen di kontrak BFF (belum).
+- SEC-156: pemeriksaan "posted" tidak membandingkan `journal_id` dengan jurnal akrual yang dikonfigurasi saat ini
+  (tautan sistem tidak bisa dipalsukan; jurnal yang dipindah konfigurasi tidak memicu konflik palsu). Jurnal akrual
+  lama yang di-reset draft di luar jendela lookback tidak terdeteksi oleh cron (tetap terlihat di RECON tanggal
+  yang masih dalam lookback hanya bila saldo berubah). `activity_flagged` kini himpunan alasan (dipisah koma),
+  dikosongkan saat `done`.
+- Data G21 sebelum 19.0.1.1.0: draft kebijakan lama punya `editor_ids` kosong (pembuat & penyunting terakhir tetap
+  dicek); jurnal akrual lama tanpa tautan sistem akan dianggap `conflict` bila akrualnya diproses ulang (modul belum
+  aktif di prod — tidak ada migrasi).
 - Mata uang company diasumsikan IDR (nilai BFF integer IDR); tidak ada konversi.
 - Posting di periode terkunci (lock date) → `error post_failed:*` (perilaku `action_post` CE 19 pada lock date belum
   diuji).
-- Breakage disiapkan, nonaktif (G22). Settings hanya dapat disimpan admin sistem (perilaku CE `res.config.settings`).
+- Settings hanya dapat disimpan admin sistem (perilaku CE `res.config.settings`).
 - Aturan `efn_audit` untuk perubahan akun di `res.company` tidak ditambahkan (satu aturan per model; diserahkan ke
   `efn_setup_audit`).

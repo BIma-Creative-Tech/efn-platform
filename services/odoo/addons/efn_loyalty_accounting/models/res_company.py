@@ -38,7 +38,7 @@ class ResCompany(models.Model):
         string="Akun Piutang Poin Antar-PT (kliring)",
         copy=False,
         help="PT PENEBUS: Dr saat pelanggan menukar di PT ini poin yang diterbitkan PT lain (PT penerbit "
-        "menanggung; settlement antar-PT W-15).",
+        "menanggung; settlement antar-PT W-15); Cr saat penukaran itu dikembalikan lewat refund POS di PT ini (L-68).",
     )
     efn_loyalty_interco_payable_account_id = fields.Many2one(
         "account.account",
@@ -51,8 +51,9 @@ class ResCompany(models.Model):
         "account.account",
         string="Akun Pendapatan Poin Kedaluwarsa",
         copy=False,
-        help="Breakage (W-17, G22): Cr saat poin hangus. Hanya dipakai bila parameter "
-        "efn.loyalty.breakage_journal_enabled = True.",
+        help="L-67 (PT penerbit): Cr saat poin kedaluwarsa (breakage) dan saat poin hangus karena penghapusan data "
+        "(DSAR) / penyesuaian ledger BFF; lawan Dr Liabilitas Poin. Wajib bila ada nilai tersebut (tanpa akun -> "
+        "akrual missing_config).",
     )
     efn_loyalty_journal_id = fields.Many2one(
         "account.journal",

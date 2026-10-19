@@ -5,7 +5,13 @@ L-61: **Odoo menarik** dari BFF (``GET /v1/pos/loyalty/accruals?company_code=&da
 kemarin + ``efn.loyalty.accrual_lookback_days`` (3) hari ke belakang yang belum selesai (mengejar BFF yang mati).
 
 Satu ``efn.loyalty.accrual`` per (company, tanggal) (UNIQUE, baris dikunci saat diproses) dan paling banyak satu
-``account.move`` dengan ``ref = EFN-LOY-<company_code>-<YYYY-MM-DD>`` (sudah ada -> dilewati & ditautkan; idempoten).
+``account.move`` dengan ``ref = EFN-LOY-<company_code>-<YYYY-MM-DD>``.
+
+Idempotensi (SEC-156, r14): jurnal dianggap sudah ada HANYA bila ``account.move`` ditautkan sistem lewat
+``account.move.efn_loyalty_accrual_id`` (tidak bisa diisi pengguna) dan berstatus ``posted`` -> ``done``. Jurnal lain
+ber-ref sama (manual, draft, batal) atau jurnal akrual sendiri yang di-reset ke draft/dibatalkan/dihapus -> status
+``conflict`` + log ERROR + aktivitas Finance; **tidak** membuat jurnal ganda dan tidak diam.
+
 Baris jurnal di PT yang diminta (``company_code`` = PT tempat transaksi):
 
 ====================================================  =======================================  ====================
@@ -15,15 +21,17 @@ Komponen BFF                                          Debit                     
 ``earn_reversed_value_idr`` (clawback refund)         Liabilitas Poin                          Beban Program Poin
 ``redeemed_value_idr_by_issuer[I]``, I != PT ini      Kliring Poin Antar-PT (penerbit I)       Liabilitas Poin
 ``redeemed_value_idr_by_issuer[PT ini]``              -- (sudah dijurnal POS, metode Poin EFN §9.2)
+``restored_value_idr_by_issuer[I]``, I != PT ini L-68 Liabilitas Poin                          Kliring Poin Antar-PT
 ``redeemed_value_idr_as_issuer_by_redeemer[R]`` L-66  Liabilitas Poin                          Utang Poin Antar-PT
 ``restored_value_idr_as_issuer_by_redeemer[R]`` L-66  Utang Poin Antar-PT                      Liabilitas Poin
-``restored_value_idr``                                -- (refund POS pembayaran Poin EFN negatif sudah menjurnal)
-``expired_value_idr`` (breakage, W-17/G22)            Liabilitas Poin                          Pendapatan kedaluwarsa
+``restored_value_idr`` (bagian PT ini)                -- (refund POS pembayaran Poin EFN negatif sudah menjurnal)
+``expired_value_idr`` (kedaluwarsa) L-67              Liabilitas Poin                          Pendapatan kedaluwarsa
+``forfeited_value_idr`` (erasure DSAR dll.) L-67      Liabilitas Poin                          Pendapatan kedaluwarsa
 ====================================================  =======================================  ====================
 
-Breakage hanya bila ``efn.loyalty.breakage_journal_enabled`` = True (default False: disiapkan, G22). Akun per PT di
-``res.company`` (Settings, PLACEHOLDER). Akun/jurnal yang dibutuhkan tidak ada -> status ``missing_config``, log ERROR
-(galat, tanpa angka/PII), aktivitas Finance, **tanpa jurnal**. Semua komponen 0 -> ``no_entry`` (tanpa akun pun OK).
+Akun per PT di ``res.company`` (Settings, PLACEHOLDER). Akun/jurnal yang dibutuhkan tidak ada -> status
+``missing_config``, log ERROR (galat, tanpa angka/PII), aktivitas Finance, **tanpa jurnal**. Semua komponen 0 ->
+``no_entry`` (tanpa akun pun OK).
 
 Rekonsiliasi (no. 7): saldo akun liabilitas PT (jurnal posted s.d. tanggal itu) vs ``closing_liability_idr`` BFF ->
 satu baris ``EFN_LOYALTY_RECON {json 5 kunci}`` per PT per tanggal SETIAP run (termasuk selisih 0 dan akrual yang
@@ -46,6 +54,8 @@ from odoo.fields import Command
 from odoo.addons.efn_core.models.efn_bff_client import EfnBffError
 from odoo.addons.efn_core.models.res_company import EFN_BRAND_CODES
 
+from .account_move import ACCRUAL_LINK_CONTEXT
+
 _logger = logging.getLogger(__name__)
 _recon_logger = logging.getLogger("odoo.addons.efn_loyalty_accounting.recon")
 
@@ -56,6 +66,10 @@ MAX_LOOKBACK_DAYS = 31
 KNOWN_CODES = frozenset(code for code, _label in EFN_BRAND_CODES)
 VALUE_KEYS = ("earned_value_idr", "earn_reversed_value_idr", "restored_value_idr", "expired_value_idr")
 AS_ISSUER_KEYS = ("redeemed_value_idr_as_issuer_by_redeemer", "restored_value_idr_as_issuer_by_redeemer")
+# Field aditif opsional (BFF lama tanpa field -> 0): L-67 forfeit erasure DSAR/penyesuaian.
+OPTIONAL_VALUE_KEYS = ("forfeited_value_idr",)
+# L-68: restore di PT ini per PT penerbit (opsional; BFF lama -> {}); kunci PT sendiri = bagian POS, tidak dijurnal.
+RESTORED_BY_ISSUER_KEY = "restored_value_idr_by_issuer"
 MAX_IDR = 10**15  # pagar nilai tidak masuk akal (bukan batas bisnis)
 
 STATES = [
@@ -63,6 +77,7 @@ STATES = [
     ("done", "Dijurnal"),
     ("no_entry", "Tanpa jurnal (nilai 0)"),
     ("missing_config", "Akun belum diatur"),
+    ("conflict", "Konflik jurnal ber-ref sama"),
     ("error", "Galat"),
 ]
 FINAL_STATES = ("done", "no_entry")
@@ -105,6 +120,24 @@ def parse_accrual_response(data, company_code, date_str):
             return None
         issuers[issuer] = value
     result["redeemed_value_idr_by_issuer"] = issuers
+    for key in OPTIONAL_VALUE_KEYS:
+        value = data.get(key, 0)
+        if not _is_int(value) or not 0 <= value <= MAX_IDR:
+            return None
+        result[key] = value
+    raw_restored = data.get(RESTORED_BY_ISSUER_KEY)
+    restored_by_issuer = {}
+    if raw_restored is not None:
+        if not isinstance(raw_restored, dict):
+            return None
+        for issuer, value in raw_restored.items():
+            if issuer not in KNOWN_CODES or not _is_int(value) or not 0 <= value <= MAX_IDR:
+                return None
+            restored_by_issuer[issuer] = value
+        # Rincian per penerbit harus menjumlah ke total restore di PT ini (kontrak BFF: Σ = restored_value_idr).
+        if sum(restored_by_issuer.values()) != result["restored_value_idr"]:
+            return None
+    result[RESTORED_BY_ISSUER_KEY] = restored_by_issuer
     # L-66 (opsional; BFF lama tanpa field -> map kosong): sisi PT PENERBIT, kunci = PT penebus, tanpa PT sendiri.
     for key in AS_ISSUER_KEYS:
         raw = data.get(key)
@@ -159,7 +192,14 @@ class EfnLoyaltyAccrual(models.Model):
         string="Sisi penerbit per PT penebus", readonly=True, help="JSON {redeemed: {PT: Rp}, restored: {PT: Rp}}."
     )
     restored_value_idr = fields.Integer(string="Poin dikembalikan (Rp)", readonly=True)
+    restored_cross_value_idr = fields.Integer(
+        string="Restore poin PT lain (Rp)", readonly=True, help="L-68: Σ restored_value_idr_by_issuer[I], I != PT ini."
+    )
+    restored_by_issuer = fields.Char(string="Restore per penerbit", readonly=True, help="JSON {kode PT: Rp}.")
     expired_value_idr = fields.Integer(string="Kedaluwarsa (Rp)", readonly=True)
+    forfeited_value_idr = fields.Integer(
+        string="Hangus erasure/penyesuaian (Rp)", readonly=True, help="L-67: forfeit DSAR & penyesuaian ledger BFF."
+    )
     closing_liability_idr = fields.Integer(string="Liabilitas penutup BFF (Rp)", readonly=True)
     ledger_liability_idr = fields.Integer(string="Saldo akun liabilitas Odoo (Rp)", readonly=True)
     recon_diff_idr = fields.Integer(string="Selisih (Odoo - BFF)", readonly=True)
@@ -172,6 +212,14 @@ class EfnLoyaltyAccrual(models.Model):
     _company_date_unique = models.Constraint(
         "UNIQUE (company_id, date)", "Akrual poin hanya satu per company per tanggal."
     )
+
+    @api.ondelete(at_uninstall=False)
+    def _unlink_except_linked_move(self):
+        """SEC-156: akrual yang sudah menghasilkan jurnal tidak bisa dihapus (termasuk sudo) -- tautan sistem jurnal
+        akrual adalah dasar idempotensi; menghapusnya akan membuat jurnal lama tampak "manual" (konflik)."""
+        linked = self.env["account.move"].sudo().search_count([("efn_loyalty_accrual_id", "in", self.ids)], limit=1)
+        if linked or any(record.move_id for record in self):
+            raise UserError(_("Akrual Poin EFN yang sudah memiliki jurnal tidak dapat dihapus (jejak audit)."))
 
     # ------------------------------------------------------------- tanggal
     @api.model
@@ -247,6 +295,11 @@ class EfnLoyaltyAccrual(models.Model):
         if not self.env.cr.fetchone():
             return record  # sedang diproses worker lain
         record.invalidate_recordset()
+        if record.state == "done" and record.move_id.state != "posted":
+            # SEC-156: jurnal akrual di-reset ke draft / dibatalkan / dihapus -> tidak lagi dianggap selesai.
+            record._efn_fail("conflict", "ref_conflict:move_not_posted", level=logging.ERROR)
+            record._efn_reconcile()
+            return record
         if record.state in FINAL_STATES:
             # Sudah dijurnal: BFF tidak dipanggil lagi, tetapi baris RECON tetap dikirim setiap run (dead-man) memakai
             # closing BFF tersimpan vs saldo akun terkini.
@@ -284,6 +337,8 @@ class EfnLoyaltyAccrual(models.Model):
         cross = {issuer: value for issuer, value in sorted(by_issuer.items()) if issuer != code and value}
         as_issuer_redeemed = totals["redeemed_value_idr_as_issuer_by_redeemer"]
         as_issuer_restored = totals["restored_value_idr_as_issuer_by_redeemer"]
+        restored_by_issuer = totals[RESTORED_BY_ISSUER_KEY]
+        restored_cross = {issuer: value for issuer, value in restored_by_issuer.items() if issuer != code and value}
         self.write(
             {
                 "issuer_redeemed_value_idr": sum(as_issuer_redeemed.values()),
@@ -299,22 +354,17 @@ class EfnLoyaltyAccrual(models.Model):
                 "redeemed_cross_value_idr": sum(cross.values()),
                 "redeemed_by_issuer": json.dumps(by_issuer, sort_keys=True, separators=(",", ":")),
                 "restored_value_idr": totals["restored_value_idr"],
+                "restored_cross_value_idr": sum(restored_cross.values()),
+                "restored_by_issuer": json.dumps(restored_by_issuer, sort_keys=True, separators=(",", ":")),
                 "expired_value_idr": totals["expired_value_idr"],
+                "forfeited_value_idr": totals["forfeited_value_idr"],
                 "closing_liability_idr": totals["closing_liability_idr"],
                 "generated_at": totals["generated_at"],
             }
         )
-        existing = (
-            self.env["account.move"]
-            .sudo()
-            .search([("company_id", "=", company.id), ("ref", "=", self.ref)], order="id", limit=1)
-        )
-        if existing:
-            _logger.info("EFN loyalty accrual %s: jurnal %s sudah ada, dilewati (idempoten)", self.ref, existing.id)
-            self.write({"state": "done", "move_id": existing.id, "last_error": False})
-            self._efn_reconcile()
+        if self._efn_check_existing_moves(company):
             return
-        specs = self._efn_line_specs(totals, cross)
+        specs = self._efn_line_specs(totals, cross, restored_cross)
         if not specs:
             self.write({"state": "no_entry", "last_error": False})
             self._efn_reconcile()
@@ -326,15 +376,34 @@ class EfnLoyaltyAccrual(models.Model):
         move = self._efn_create_move(specs)
         if not move:
             return
-        self.write({"state": "done", "move_id": move.id, "last_error": False})
+        self.write({"state": "done", "move_id": move.id, "last_error": False, "activity_flagged": False})
         _logger.info("EFN loyalty accrual %s: jurnal %s diposting (%d baris)", self.ref, move.id, len(specs) * 2)
         self._efn_reconcile()
 
-    def _efn_breakage_enabled(self):
-        raw = self.env["ir.config_parameter"].sudo().get_param("efn.loyalty.breakage_journal_enabled", "False")
-        return str(raw).strip().lower() in ("1", "true", "yes")
+    def _efn_check_existing_moves(self, company):
+        """SEC-156: ``True`` bila tidak boleh membuat jurnal (sudah ``done`` atau ``conflict``), ``False`` bila aman.
 
-    def _efn_line_specs(self, totals, cross):
+        - Jurnal tertaut sistem (``efn_loyalty_accrual_id`` = record ini) berstatus posted -> ``done`` (idempoten).
+        - Selain itu, jurnal mana pun ber-ref sama di company ini (manual/draft/batal) atau jurnal tertaut yang tidak
+          posted -> ``conflict`` + ERROR + aktivitas Finance. Tidak membuat jurnal ganda."""
+        Move = self.env["account.move"].sudo()
+        ours = Move.search([("efn_loyalty_accrual_id", "=", self.id)], order="id")
+        posted = ours.filtered(lambda move: move.state == "posted" and move.company_id == company)[:1]
+        if posted:
+            _logger.info("EFN loyalty accrual %s: jurnal akrual %s sudah posted (idempoten)", self.ref, posted.id)
+            self.write({"state": "done", "move_id": posted.id, "last_error": False, "activity_flagged": False})
+            self._efn_reconcile()
+            return True
+        same_ref = Move.search([("company_id", "=", company.id), ("ref", "=", self.ref)], order="id")
+        if not (same_ref or ours):
+            return False
+        kind = "foreign_move" if (same_ref - ours) else "move_not_posted"
+        self.write({"move_id": ours[:1].id or False})
+        self._efn_fail("conflict", f"ref_conflict:{kind}", level=logging.ERROR)
+        self._efn_reconcile()
+        return True
+
+    def _efn_line_specs(self, totals, cross, restored_cross=None):
         """[(nilai, akun debit, akun kredit, label)] -- nama field akun ``res.company`` (belum di-resolve)."""
         specs = []
         if totals["earned_value_idr"]:
@@ -364,6 +433,18 @@ class EfnLoyaltyAccrual(models.Model):
                     _("Tukar Poin EFN terbitan %(issuer)s (kliring antar-PT)", issuer=issuer),
                 )
             )
+        # L-68, sisi PT PENEBUS: refund POS di PT ini mengembalikan poin terbitan PT lain -> kebalikan jurnal penukaran
+        # lintas PT (POS sudah mengkredit liabilitas lewat pembayaran Poin EFN negatif).
+        for issuer, value in sorted((restored_cross or {}).items()):
+            if value:
+                specs.append(
+                    (
+                        value,
+                        "efn_loyalty_liability_account_id",
+                        "efn_loyalty_clearing_account_id",
+                        _("Restore Poin EFN terbitan %(issuer)s (kliring antar-PT)", issuer=issuer),
+                    )
+                )
         # L-66, sisi PT PENERBIT: poin terbitan PT ini ditukar di PT lain -> liabilitas berpindah menjadi utang ke PT
         # penebus (pasangan Dr Piutang/Kliring di PT penebus); restore penukaran itu -> kebalikannya.
         for redeemer, value in sorted(totals["redeemed_value_idr_as_issuer_by_redeemer"].items()):
@@ -386,13 +467,24 @@ class EfnLoyaltyAccrual(models.Model):
                         _("Restore penukaran Poin EFN di %(redeemer)s (utang antar-PT)", redeemer=redeemer),
                     )
                 )
-        if totals["expired_value_idr"] and self._efn_breakage_enabled():
+        # L-67 (SEC-160): poin kedaluwarsa & hangus karena erasure DSAR/penyesuaian di PT penerbit. Tanpa baris ini
+        # ``closing_liability_idr`` BFF (sudah dikurangi keduanya) menyimpang permanen dari saldo Odoo.
+        if totals["expired_value_idr"]:
             specs.append(
                 (
                     totals["expired_value_idr"],
                     "efn_loyalty_liability_account_id",
                     "efn_loyalty_breakage_account_id",
                     _("Poin EFN kedaluwarsa (breakage)"),
+                )
+            )
+        if totals.get("forfeited_value_idr"):
+            specs.append(
+                (
+                    totals["forfeited_value_idr"],
+                    "efn_loyalty_liability_account_id",
+                    "efn_loyalty_breakage_account_id",
+                    _("Poin EFN hangus (penghapusan data/penyesuaian)"),
                 )
             )
         return specs
@@ -413,7 +505,7 @@ class EfnLoyaltyAccrual(models.Model):
         for value, debit_field, credit_field, label in specs:
             line_cmds.append(Command.create({"name": label, "account_id": company[debit_field].id, "debit": value}))
             line_cmds.append(Command.create({"name": label, "account_id": company[credit_field].id, "credit": value}))
-        Move = self.env["account.move"].sudo().with_company(company)
+        Move = self.env["account.move"].sudo().with_company(company).with_context(**{ACCRUAL_LINK_CONTEXT: True})
         try:
             with self.env.cr.savepoint():
                 move = Move.create(
@@ -423,6 +515,7 @@ class EfnLoyaltyAccrual(models.Model):
                         "journal_id": company._efn_loyalty_journal().id,
                         "date": self.date,
                         "ref": self.ref,
+                        "efn_loyalty_accrual_id": self.id,  # SEC-156: tautan sistem (dasar idempotensi)
                         "line_ids": line_cmds,
                     }
                 )
@@ -499,12 +592,16 @@ class EfnLoyaltyAccrual(models.Model):
             state,
             code,
         )
-        self._efn_schedule_activity(code.split(":", 1)[0] if state == "error" else "missing_config")
+        reasons = {"missing_config": "missing_config", "conflict": "ref_conflict"}
+        self._efn_schedule_activity(reasons.get(state) or code.split(":", 1)[0])
 
     def _efn_schedule_activity(self, reason):
-        """Aktivitas To-Do sekali per kode alasan ke Accounting Manager pertama company."""
+        """Aktivitas To-Do sekali per kode alasan ke Accounting Manager pertama company. ``activity_flagged`` =
+        himpunan alasan (dipisah koma) agar dua alasan bergantian (mis. ``ref_conflict`` + ``recon_mismatch`` setiap
+        run) tidak membuat aktivitas berulang; dikosongkan saat akrual menjadi ``done``."""
         self.ensure_one()
-        if self.activity_flagged == reason:
+        flagged = [item for item in (self.activity_flagged or "").split(",") if item]
+        if reason in flagged:
             return
         user = self._efn_finance_user()
         if user:
@@ -512,6 +609,11 @@ class EfnLoyaltyAccrual(models.Model):
                 "missing_config": _(
                     "Akrual Poin EFN %(ref)s tidak dijurnal: akun/jurnal belum diatur (%(error)s). "
                     "Atur di Settings > Invoicing > Poin EFN lalu klik 'Proses ulang'."
+                ),
+                "ref_conflict": _(
+                    "Akrual Poin EFN %(ref)s tidak dijurnal: ada jurnal ber-ref sama yang bukan jurnal akrual posted "
+                    "(%(error)s; mis. jurnal manual/draft/batal, atau jurnal akrual di-reset ke draft). Posting ulang "
+                    "jurnal akrual, atau hapus/ganti ref jurnal lain, lalu klik 'Proses ulang'."
                 ),
                 "recon_mismatch": _(
                     "Saldo liabilitas Poin EFN %(ref)s berbeda dengan ledger BFF (selisih Rp %(diff)s). "
@@ -526,7 +628,7 @@ class EfnLoyaltyAccrual(models.Model):
                 summary=_("Akrual Poin EFN"),
                 note=note % {"ref": self.ref, "error": self.last_error or reason, "diff": self.recon_diff_idr},
             )
-        self.sudo().write({"activity_flagged": reason})
+        self.sudo().write({"activity_flagged": ",".join([*flagged, reason])})
 
     def _efn_finance_user(self):
         group = self.env.ref("account.group_account_manager", raise_if_not_found=False)

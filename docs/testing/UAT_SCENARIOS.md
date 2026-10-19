@@ -615,3 +615,97 @@ Ditambah oleh efn-qa-engineer 2026-10-19. **Belum dijalankan** (QA tanpa shell/r
 - **Transaksi antar-PT** — Σ per kelompok = tagihan; faktur terbit di PT penjual; harga transfer cost-plus hanya `BCR` ↔ `BCF` dan Holding ↔ PT
 - **Poin & ledger** — earn di POS `PB` mencatat `company_code = PB`; event/ledger BFF dengan kode lama (`RTL`/`FNB`) ditolak CHECK Postgres dan ETL; `dim_company` ClickHouse memuat `business_type` & `brand_group` (`BCR`+`BCF` = `BACHA`)
 - **Secret/rotasi** — `efn-rotate-online-key --channel=GL|PB|BCR|BCF` berjalan per kanal; kode lama ditolak; rotasi satu kanal tidak mengganggu kanal lain
+
+---
+
+## J. Gelombang 21 — kebijakan poin per PT, akrual & rekonsiliasi, faktur atas nama pembeli, peran & SoD, PPN Coretax (docs/04 §13, L-61..L-66)
+
+Ditambah oleh efn-qa-engineer 2026-10-19. **Belum dijalankan** (QA tanpa shell/runtime; J1-J2 sebagian diotomasi di `scripts/smoke/run-e2e-smoke.sh` tahap `r`). Staging: modul `efn_loyalty_accounting`, `efn_role`, `efn_setup_org`, `efn_l10n_id_coretax_rounding`, `efn_region` terpasang; `efn_pii*` terpasang dan aktif **hanya** untuk J3 (varian ber-PII) — modul `efn_pii*` tetap tidak di daftar install produksi sampai PO menyatakan aktivasi (L-59).
+
+**Data uji khusus J**
+- User Odoo uji: **Maya** (grup *EFN / Loyalty Manager*), **Andi** (*Accounting / Manager* PT GL dan PT PB), **Budi** (*Accounting / Manager* PT GL, bukan pembuat), **Sari** (Superadmin tunggal, R-B11), **Rini** (Auditor tanpa Access Rights, `base.group_allow_export`), **Dedi** (kasir), **Tono** (Store Manager).
+- Secret `loyalty_policy_signing_key` terpasang di `odoo` dan `api-gateway` (bukan `odoo_bff_api_key`); plafon BFF `LOYALTY_POLICY_CEILING_*` = env lama (default).
+- Akun per PT di *Settings > Invoicing > Poin EFN* (PLACEHOLDER Finance): liabilitas, beban program, piutang & utang antar-PT untuk `GL`, `PB`, `BCR`; akun *Selisih Pembulatan Pajak* untuk `GL`.
+- Member M dengan poin dari PT GL; ledger BFF berisi earn di GL, penukaran di PB dan BCR.
+- Pemeriksaan umum: log Odoo/BFF/Loki **tidak** memuat NPWP, NIK, nama/alamat/email pembeli, HP utuh, kunci tanda tangan; baris `EFN_LOYALTY_RECON` hanya 5 kunci kontrak.
+
+### J1. Kebijakan poin per PT — empat mata, publikasi bertanda tangan, berlaku di POS (E-44, L-61/L-62)
+- **Given** PT GL belum punya kebijakan (BFF memakai env lama, ada log warning "fallback")
+- **When** Maya membuat draft kebijakan GL (mis. `redeem_min_points` 60, `redeem_max_pct` 40, nilai lain default) lalu mencoba **menyetujui sendiri**
+- **Then** ditolak ("Empat mata: pembuat/penyunting draft tidak boleh memutuskan kebijakannya sendiri"); menyunting draft oleh Andi lalu Andi mencoba menyetujui → ditolak (penyunting terakhir juga dihitung); Maya tidak punya tombol Setujui (bukan *Accounting / Manager*)
+- **When** Budi (Accounting / Manager GL) menyetujui draft yang disunting Maya
+- **Then** status `approved` → outbox mengirim `PUT /v1/pos/loyalty/policies/GL/<versi>` dengan `X-EFN-Signature`; BFF `200 stored`; kebijakan Odoo `published`; baris di `platform.loyalty_policy` (append-only); versi naik monoton per PT; `effective_from` yang sudah lewat digeser ke waktu persetujuan (tidak berlaku surut)
+- **And** dalam ≤ 30 detik (cache BFF) + ≤ 5 menit (cache params POS) kasir GL memakai `GET /v1/pos/loyalty/params?company_code=GL` → batas baru; transaksi lama tidak berubah; PT lain (PB) tetap pada kebijakan/env-nya
+- **Nilai tukar (L-62)**: `point_value_idr` hanya bisa diisi pada kebijakan company **EFN**; mengisinya di GL ditolak Odoo; BFF juga menolak `point_value_idr` untuk `company_code ≠ EFN` (`400`)
+- **Negatif — batas BFF**: kebijakan `redeem_min_points` di bawah plafon env atau `daily_max_points_member = 0` → publikasi `422 policy_out_of_bounds` → outbox `failed` final + aktivitas ke Loyalty Manager; kebijakan tetap `approved`, perbaikan = versi baru (versi lama BFF tidak berubah)
+- **Negatif — konflik**: kirim ulang versi yang sama dengan isi berbeda → `409 policy_conflict` (final); kirim ulang isi sama (retry outbox) → `200 duplicate`
+- **Negatif — tanda tangan**: body diubah satu byte / `t` lewat 300 detik / kunci salah → `401 invalid_signature`; Odoo mencoba ulang dengan backoff (jam bergeser atau rotasi kunci) sampai 72 jam lalu `failed`; hanya service key POS tanpa tanda tangan → `401`
+- **Negatif — kunci Odoo hilang**: file secret kosong/kurang 32 byte → publikasi tertahan (`pending`, `signing_key_missing`), log ERROR tanpa isi kunci, aktivitas ke Loyalty Manager; **tidak pernah** terkirim tanpa tanda tangan
+- **Negatif — kunci BFF belum ada (dev)**: `503`; BFF production gagal start bila kunci hilang/<32 byte/sama dengan service key
+- **Negatif — read-only**: kebijakan `approved/published/rejected` tidak bisa diubah/dihapus (termasuk Superadmin/sudo); penulisan `state`/`maker_id` lewat RPC → `AccessError`; kebijakan company lain tidak terlihat (record rule)
+- **Penolakan**: Budi menolak draft → `rejected` (jejak tersimpan, tidak dipublikasikan); audit `efn_audit` mencatat pembuat/penyetuju
+
+### J2. Akrual harian per PT dan rekonsiliasi liabilitas — lintas PT simetris (E-44, L-61/L-66)
+- **Given** hari kemarin (WIB): member M mendapat 10.000 poin-rupiah di GL; menukar 3.000 di BCR dan 1.000 di PB; GL me-refund sebagian sehingga 500 dari penukaran BCR dipulihkan; akun per PT sudah diatur
+- **When** cron Odoo 02:00 WIB berjalan (atau Finance menjalankan manual)
+- **Then** satu `account.move` per (PT, tanggal) dengan `ref = EFN-LOY-<PT>-<tanggal>`: GL — Dr Beban / Cr Liabilitas (earn), Dr Liabilitas / Cr **Utang Poin Antar-PT** per PT penebus (BCR 3.000, PB 1.000), restore BCR 500 kebalikannya; BCR dan PB — Dr **Piutang Poin Antar-PT** / Cr Liabilitas atas penukaran lot GL; penukaran di PT yang sama **tidak** dijurnal ulang (sudah di POS)
+- **And** log `EFN_LOYALTY_RECON` per PT per tanggal: `diff_idr = 0` untuk **semua** PT (GL, BCR, PB) — saldo liabilitas Odoo = `closing_liability_idr` BFF; level INFO; muncul di Loki `{stream="efn_loyalty", loyalty_event="liability_recon"}`; panel Grafana "Liabilitas poin vs ledger" hijau
+- **Idempoten**: cron/tombol dijalankan lagi → tidak ada jurnal ganda (`ref` unik; status `done` dilewati), baris RECON tetap dicetak (dead-man)
+- **Negatif — selisih**: koreksi manual jurnal GL sebesar Rp5.000 lalu jalankan ulang → `diff_idr ≠ 0`, level WARNING, aktivitas Finance, alert Loki *warning* (critical bila melebihi ambang); **tidak ada koreksi otomatis**
+- **Negatif — akun belum diatur** (mis. PB tanpa akun utang antar-PT): status `missing_config` + ERROR + aktivitas Finance, **tanpa jurnal**; setelah akun diatur, tombol "Proses ulang" membuat jurnal
+- **Negatif — BFF mati**: status `error` (`bff:*`), cron berikutnya mengejar sampai `accrual_lookback_days` (3) hari; POS/checkout tidak terpengaruh
+- **Negatif — tanggal belum ditutup**: tarik hari ini / masa depan / < 5 menit setelah tengah malam WIB → `422 date_not_closed`; Odoo mencatat galat dan mengulang pada run berikutnya
+- **Negatif — periode terkunci** (lock date): `post_failed` tanpa memindah tanggal jurnal
+- **Negatif — respons BFF rusak** (nilai pecahan/negatif, kode PT asing, kunci PT sendiri pada map penebus) → `bad_response`, tanpa jurnal
+- **Negatif — dead-man**: cron tidak berjalan > 26 jam → alert "tidak mencatat EFN_LOYALTY_RECON"
+- **Catatan risiko (belum dijurnal)**: pemulihan poin (restore) atas lot PT **lain** di PT penebus tidak dijurnal di sisi penebus (lihat laporan QA G21) — uji varian ini dan catat selisih RECON PT penebus sebagai temuan, bukan lulus
+
+### J3. Faktur pajak atas nama pembeli (E-39, L-63, K-36-7)
+- **Given** keranjang kanal `GL` (PT PPN) dan efn_pii aktif di Odoo; pelanggan meminta faktur
+- **When** pembeli mengisi form "Minta faktur pajak" (NPWP 16 digit, nama, alamat, email) dan checkout
+- **Then** pesanan dibuat; BFF meneruskan profil **sekali** ke Odoo lalu membuangnya; faktur akan diterbitkan atas partner pembeli (blind index NPWP; `partner_invoice_id` SO), `partner_id` SO tetap partner generik kanal; respons checkout memuat `invoice_request` berstatus tanpa isi profil; partner pembeli bertanda *invoice buyer* milik PT itu
+- **And** profil **tidak** ada di tabel/Redis/outbox BFF, log BFF/Odoo/Traefik, URL, localStorage, analytics; di Odoo nama/alamat/email/NPWP terenkripsi at rest (`efnpii2:`)
+- **Varian NIK / paspor**: NIK 16 digit diterima; paspor 5-20 huruf/angka (huruf kecil dinormalkan jadi besar); `l10n_id_buyer_document_type` sesuai (NIK / Passport)
+- **Idempoten**: pesanan kedua dengan NPWP sama di PT sama memakai ulang partner pembeli yang sama (tanpa duplikat); NPWP sama di PT lain → partner terpisah per company
+- **Negatif — validasi**: NPWP 15 digit / NIK berhuruf / paspor 4 karakter / nama 1 karakter / alamat 4 karakter / email tanpa `@` atau TLD 1 huruf / karakter kontrol / field tambahan → `400 invalid_request` generik (tidak mengulang nilai); form klien menampilkan pesan per kolom
+- **Negatif — PT PB1**: keranjang berisi `PB`/`BCF` → `422 invoice_not_available` tanpa order setengah jadi; form tidak ditawarkan bila ada bagian non-PPN (Bacha `BCR` + `BCF`)
+- **Negatif — efn_pii belum aktif** (L-59): `422 invoice_not_available`; **profil tidak pernah masuk Odoo** (tidak ada partner baru, tidak ada log nilai); pelanggan diberi tahu faktur atas nama dibuat CS
+- **Negatif — Odoo gagal memasang partner** (`invalid_state`, timeout): pesanan tetap berjalan dengan partner generik + anomali `invoice_party_failed`; status `pending_cs`
+- **Negatif — sudah ada faktur**: set partner pembeli setelah faktur terbit → ditolak (`invalid_state`)
+- **Gateway**: panggilan `efn_online_set_invoice_party` hanya lewat path ke-12 (`/json/2/efn.online.order/efn_online_set_invoice_party`); model/suffix berbeda ditolak `odoo-rpc-gateway` (`test-gateway.sh`)
+- **Erasure (K-36-4)**: permintaan hapus data member yang pernah memakai email/NIK yang sama → partner member kosong pada `efn_region_id`, NIK/nomor dokumen, token nama, bidx; antrean `mail.mail` ke member terhapus; **partner pembeli faktur** (bukan member) tidak otomatis terhapus — keputusan DPO (retensi faktur pajak 10 tahun) dicatat sebagai risiko
+
+### J4. Peran per PT dan pemisahan tugas (E-47, L-64/L-65)
+- **Given** departemen/jabatan `efn_setup_org` (Kasir, Store Manager, Finance, Auditor, IT/Superadmin, …) tanpa nama orang; peran *Kasir* PT GL = *Point of Sale / User* + *EFN / Kasir*; *Store Manager* = *Point of Sale / Administrator*
+- **When** Dedi (Kasir) diberi peran *Kasir* lalu Superadmin mencoba menambahkan grup Store Manager langsung ke Dedi
+- **Then** ditolak `efn_role:sod_block — SOD-02` (pesan memuat kode aturan + nama grup, **tanpa** nama/login user); log `EFN_SOD_BLOCK`; Superadmin **tidak kebal**
+- **When** peran Store Manager ditetapkan ke Tono → berhasil; menetapkan juga peran Kasir ke Tono → ditolak
+- **SoD bawaan**: Sales Manager ⟂ *Refund Approver* (SOD-01), Loyalty Manager ⟂ Accounting Manager (SOD-03; Maya tidak bisa diberi grup Accounting Manager — dan tidak bisa menyetujui kebijakannya sendiri meski dikecualikan), pembuat ⟂ penyetuju promo bila aturan ada; aturan *report_only* (mis. SOD-05/06) tidak memblokir tetapi tampil di review
+- **Perubahan lewat Settings**: menambah `implied_ids` ke grup yang membuat banyak user melanggar → ditolak bila ada pelanggaran **baru**; aturan `block` yang diaktifkan saat masih ada pelanggaran ditolak (pesan hanya jumlah)
+- **Pengecualian (L-65)**: Sari (Superadmin) membuat pengecualian untuk Tono dengan alasan ≥ 20 karakter, mulai ≥ hari ini, maks. 90 hari → berhasil; Rini (Auditor) menerima aktivitas otomatis; pengecualian muncul di review akses bulan berjalan (hitungan aktif)
+- **Negatif — pengecualian**: alasan < 20 karakter; > 90 hari; mulai kemarin; pemberi = penerima; dibuat oleh non-Superadmin (Andi) → ditolak; pengecualian tidak bisa diedit/diaktifkan ulang/dihapus (hanya dicabut)
+- **Kedaluwarsa**: hari ke-91 — grup **tidak** dicabut otomatis, tetapi aktivitas ke Superadmin (sekali) dan penulisan grup berikutnya untuk Tono ditolak sampai pelanggaran diselesaikan; review akses menandai pengecualian kedaluwarsa
+- **Peran admin**: peran yang memuat grup administrator hanya dibuat/ditetapkan Superadmin; tidak pernah disinkron dari jabatan HR (HR tidak bisa menaikkan hak ke Superadmin lewat jabatan); akun teknis (kanal online, KDS) tidak bisa diberi peran
+- **Jabatan**: karyawan berjabatan Kasir (di PT GL) mendapat peran otomatis oleh cron/tombol; jabatan berubah → baris peran `job` ditutup; baris `manual` tidak disentuh
+- **Auditabilitas**: perubahan peran/penetapan/aturan/pengecualian tercatat di `efn_audit`
+
+### J5. Review akses bulanan (E-47c, R-S14)
+- **Given** tanggal 1; ada user dengan pemberian grup langsung, user tanpa login > 90 hari, user tanpa 2FA, dan pengecualian aktif
+- **When** cron 02:30 WIB berjalan
+- **Then** review periode bulan lalu terbentuk per PT (unik per PT-periode; cron ulang tidak menggandakan) + aktivitas ke Auditor PT; snapshot per user × grup efektif dengan sumber (`role`/`direct`/`implied`), peran PT, aturan SoD yang dilanggar, status pengecualian
+- **When** Rini membuka review, memfilter "Melanggar SoD", *Mulai review*, mengisi temuan lalu *Selesai & tandatangani*
+- **Then** status `done` dan **read-only untuk semua** (termasuk Superadmin; hanya chatter); ekspor CSV/XLSX standar berhasil bagi Auditor (butuh `base.group_allow_export`) dan memuat hanya nama/login user internal (tanpa data pelanggan)
+- **Negatif**: Rini tidak bisa menghapus review/baris snapshot atau mengubah baris; Andi (bukan Auditor/Access Rights) tidak melihat menu; review PT lain tidak terlihat; ambil ulang snapshot setelah `done` ditolak; snapshot berikutnya tidak mengubah review yang sudah `done`
+- **Rekonsiliasi manual**: user ber-peran *Refund Approver* di Odoo dibandingkan dengan anggota grup host BFF `efn-cs-approver`; selisih dicatat di *Catatan / Temuan* (tidak tersinkron otomatis)
+- **Retensi**: review `done` lebih tua dari retensi (730 hari PLACEHOLDER) dibersihkan autovacuum; 0 = selamanya
+
+### J6. PPN rumus Coretax — selisih ±Rp1 dibukukan otomatis (E-40, 18-5)
+- **Given** PT GL: akun *Selisih Pembulatan Pajak* (beban) + jurnal Miscellaneous diatur di Settings; pelanggan PKP dengan NPWP 16 digit; faktur PPN **inklusif** 12.990 × 3, 7.500, 1.499 × 7, 25.000 (total 81.963)
+- **When** faktur diposting
+- **Then** terbentuk satu jurnal penyesuaian `EFN-CTX-RND <faktur>` sebesar Rp1 (Dr Selisih Pembulatan Pajak / Cr PPN Keluaran, bertag pajak); total tagihan dan piutang pelanggan **tidak berubah**; saldo PPN Keluaran = 8.123 = Σ VAT di XML Coretax
+- **Idempoten**: *Download e-Faktur* dua kali / *Regenerate* → tetap satu jurnal; ganti kode transaksi sebelum ekspor → jurnal lama di-reverse + jurnal baru; *Reset to Draft* → penyesuaian di-reverse
+- **Akun per PT**: faktur BCR memakai akun/jurnal BCR, bukan GL
+- **Negatif — faktur eksklusif** (tanpa selisih): tidak ada jurnal
+- **Negatif — pengaman**: kode transaksi 01 dengan PPN 11 % (selisih ≫ baris × Rp1) → posting berjalan, *Download e-Faktur* ditolak ("bukan pembulatan"), XML tidak dibuat
+- **Negatif — akun belum diatur / periode pajak terkunci**: posting faktur tetap jalan (best-effort, log `not adjusted at posting`); *Download e-Faktur* ditolak sampai akun diatur / kunci dibuka — jurnal tidak pernah dipindah ke tanggal lain
+- **Di luar cakupan**: `out_refund` (nota kredit), kode transaksi 07/08, faktur bukan IDR, B2C POS/online yang digunggung — pastikan tidak ada jurnal penyesuaian palsu dan catat sebagai [B] ke Finance + konsultan pajak

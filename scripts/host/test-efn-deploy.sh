@@ -503,6 +503,12 @@ vc "143 EFN_ODOO_PII_ENABLED bukan boolean ditolak" 1 staging EFN_ODOO_PII_ENABL
 vc "144 EFN_ODOO_PII_REQUIRED bukan boolean ditolak" 1 production EFN_ODOO_PII_ENABLED=true EFN_ODOO_PII_REQUIRED=1
 vc "145 production PII mati (default) diterima (L-59)" 0 production
 vc "146 production PII mati + REQUIRED=true diterima" 0 production EFN_ODOO_PII_REQUIRED=true
+# SEC-148 (QA G21): mode migrasi efnpii1 tidak boleh menyala di production (jalur manual sudo -E)
+vc "146a production EFN_ODOO_PII_ACCEPT_V1=true ditolak (SEC-148)" 1 production EFN_ODOO_PII_ACCEPT_V1=true
+vc "146b production EFN_ODOO_PII_ACCEPT_V1=true + PII ENABLED/REQUIRED tetap ditolak" 1 production EFN_ODOO_PII_ENABLED=true EFN_ODOO_PII_REQUIRED=true EFN_ODOO_PII_ACCEPT_V1=true
+vc "146c production EFN_ODOO_PII_ACCEPT_V1=false diterima" 0 production EFN_ODOO_PII_ACCEPT_V1=false
+vc "146d staging EFN_ODOO_PII_ACCEPT_V1=true diterima (migrasi data PoC)" 0 staging EFN_ODOO_PII_ACCEPT_V1=true
+vc "146e EFN_ODOO_PII_ACCEPT_V1 bukan boolean ditolak" 1 staging EFN_ODOO_PII_ACCEPT_V1=1
 # Kunci host (nilai acak dibuat di sini; tidak pernah dicetak). mkkeys <dir> -> 3 kunci 32 byte berbeda (.txt)
 PK=$(mktemp -d)
 mkkeys() {

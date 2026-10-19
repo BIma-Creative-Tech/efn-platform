@@ -70,6 +70,12 @@ PARTNER_CLEAR_FIELDS = (
     "comment",
     "image_1920",
     "barcode",
+    # G21 K-36-4 (QA): modul opsional, dilewati bila tidak terpasang. Menulis False pada field terenkripsi/ber-bidx
+    # (efn_pii_l10n_id) ikut mengosongkan ciphertext + blind index; `efn_name_tokens` dihitung ulang dari nama
+    # placeholder; `efn_region_id` (efn_region) plaintext kab/kota domisili.
+    "l10n_id_nik",
+    "l10n_id_buyer_document_number",
+    "efn_region_id",
 )
 POS_ORDER_CLEAR_FIELDS = ("email", "mobile")
 
@@ -244,6 +250,7 @@ class EfnPrivacyErasure(models.AbstractModel):
             self.env["mail.tracking.value"].sudo().search([("mail_message_id", "in", messages.ids)]).unlink()
             messages.unlink()
         Message.search([("author_id", "in", ids), ("email_from", "!=", False)]).write({"email_from": False})
+        self._efn_erase_mail_queue(ids)
 
         # efn_audit (ADR-031, pengganti OCA auditlog): log res.partner menyimpan HP/email lama
         # (ter-mask) + nama — termasuk write anonimisasi di atas. Hapus log partner tsb dan
@@ -251,6 +258,19 @@ class EfnPrivacyErasure(models.AbstractModel):
         # menulis satu log `purge` tanpa id/nama.
         self.env["efn.audit.log"].sudo()._efn_audit_purge_records("res.partner", ids)
         return len(partners)
+
+    @api.model
+    def _efn_erase_mail_queue(self, partner_ids):
+        """K-36-4 / SEC-153 (QA G21): antrean/arsip `mail.mail` yang menyebut partner sebagai penerima
+        (`recipient_ids`) adalah salinan alamat/isi di luar `res.partner`. Dihapus. Pencarian HANYA lewat
+        `recipient_ids`: `email_to`/`email_cc` terenkripsi (efn_pii) sehingga tidak bisa dicari. Email yang hanya
+        bertanda `email_to` tanpa partner (mis. struk POS) tidak terjangkau di sini -> sisa risiko di laporan QA."""
+        if "mail.mail" not in self.env:
+            return
+        Mail = self.env["mail.mail"].sudo().with_context(active_test=False)
+        mails = Mail.search([("recipient_ids", "in", partner_ids)])
+        if mails:
+            mails.unlink()
 
     @api.model
     def _efn_erase_pos_loyalty(self, partner_ids):

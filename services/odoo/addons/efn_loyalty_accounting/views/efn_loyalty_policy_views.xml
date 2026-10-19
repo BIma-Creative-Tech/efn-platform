@@ -49,6 +49,7 @@
                         <group string="Persetujuan (empat mata)">
                             <field name="maker_id"/>
                             <field name="last_editor_id"/>
+                            <field name="editor_ids" widget="many2many_tags"/>
                             <field name="approved_by_id" invisible="not approved_by_id"/>
                             <field name="approved_at" invisible="not approved_at"/>
                             <field name="rejected_by_id" invisible="not rejected_by_id"/>

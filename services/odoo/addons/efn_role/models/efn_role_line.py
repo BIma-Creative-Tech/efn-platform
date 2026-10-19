@@ -3,14 +3,27 @@
 `is_effective` = Boolean tersimpan yang HANYA ditulis kode server (penanda `cr.cache`): tanggal hari ini
 (Asia/Jakarta) dalam [date_from, date_to] dan peran aktif. Diperbarui saat baris/peran berubah dan oleh cron
 harian 00:30 WIB. Penulisan `is_effective` lewat RPC ditolak (mencegah mengaktifkan baris masa depan).
+
+SEC-159: baris untuk user yang EFEKTIF memegang `base.group_system`/`base.group_erp_manager` hanya boleh dibuat,
+diubah, atau dihapus oleh Superadmin (bukan Access Rights) — cegah Access Rights menjadikan admin "managed" lalu
+mencabut grup admin-nya lewat penerapan peran.
 """
 
-from odoo import _, api, fields, models
-from odoo.exceptions import UserError, ValidationError
+from odoo import SUPERUSER_ID, _, api, fields, models
+from odoo.exceptions import AccessError, UserError, ValidationError
 
 from odoo.addons.efn_audit.models.audit_policy import mask_free_text
 
-from .role_policy import INTERNAL_KEY, TECHNICAL_GROUP_XMLIDS, cache_flag, efn_today, has_flag, xmlid_group_ids
+from .role_policy import (
+    ADMIN_GROUP_XMLIDS,
+    INTERNAL_KEY,
+    TECHNICAL_GROUP_XMLIDS,
+    cache_flag,
+    effective_member_ids,
+    efn_today,
+    has_flag,
+    xmlid_group_ids,
+)
 
 
 class EfnRoleLine(models.Model):
@@ -74,8 +87,24 @@ class EfnRoleLine(models.Model):
         # sudo() tetap membawa env.user asli -> has_group memeriksa pemanggil sebenarnya.
         self.sudo().role_id._efn_check_admin_rights()
 
+    @api.model
+    def _efn_check_admin_target(self, user_ids):
+        """SEC-159: baris untuk user admin (efektif) hanya oleh Superadmin (atau OdooBot/proses server root)."""
+        caller = self.env.user
+        if caller.id == SUPERUSER_ID or caller.has_group("base.group_system"):
+            return
+        user_ids = {uid for uid in user_ids if isinstance(uid, int)}
+        if user_ids & effective_member_ids(self.env, ADMIN_GROUP_XMLIDS):
+            raise AccessError(
+                _(
+                    "efn_role:admin_user_superadmin_only — penetapan peran untuk user Administrator / Access "
+                    "Rights hanya dapat dikelola Superadmin."
+                )
+            )
+
     @api.model_create_multi
     def create(self, vals_list):
+        self._efn_check_admin_target([vals.get("user_id") for vals in vals_list])
         internal = has_flag(self.env.cr, INTERNAL_KEY)
         for vals in vals_list:
             if not internal:
@@ -108,6 +137,7 @@ class EfnRoleLine(models.Model):
         if vals.get("reason"):
             vals["reason"] = mask_free_text(vals["reason"])
         self._efn_check_admin_rights()
+        self._efn_check_admin_target(self.sudo().user_id.ids)
         res = super().write(vals)
         self._efn_check_admin_rights()
         self._efn_refresh_effective(apply=False)
@@ -116,6 +146,7 @@ class EfnRoleLine(models.Model):
 
     def unlink(self):
         self._efn_check_admin_rights()
+        self._efn_check_admin_target(self.sudo().user_id.ids)
         users = self.sudo().user_id.with_context(active_test=False)
         res = super().unlink()
         self.env["efn.role"]._efn_apply_roles(users)

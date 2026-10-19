@@ -4,7 +4,7 @@
         <field name="name">efn.loyalty.accrual.list</field>
         <field name="model">efn.loyalty.accrual</field>
         <field name="arch" type="xml">
-            <list create="0" edit="0" delete="0" decoration-danger="state in ('missing_config', 'error') or recon_status == 'mismatch'">
+            <list create="0" edit="0" delete="0" decoration-danger="state in ('missing_config', 'conflict', 'error') or recon_status == 'mismatch'">
                 <field name="date"/>
                 <field name="company_id" groups="base.group_multi_company"/>
                 <field name="ref"/>
@@ -28,7 +28,7 @@
             <form create="0" edit="0" delete="0">
                 <header>
                     <button name="action_efn_retry" type="object" string="Proses ulang"
-                            invisible="state not in ('missing_config', 'error', 'pending')"
+                            invisible="state not in ('missing_config', 'conflict', 'error', 'pending')"
                             groups="account.group_account_manager"/>
                     <field name="state" widget="statusbar" statusbar_visible="pending,done"/>
                 </header>
@@ -54,7 +54,10 @@
                             <field name="earned_value_idr"/>
                             <field name="earn_reversed_value_idr"/>
                             <field name="restored_value_idr"/>
+                            <field name="restored_cross_value_idr"/>
+                            <field name="restored_by_issuer"/>
                             <field name="expired_value_idr"/>
+                            <field name="forfeited_value_idr"/>
                         </group>
                         <group>
                             <field name="redeemed_same_value_idr"/>
@@ -78,7 +81,7 @@
             <search>
                 <field name="company_id"/>
                 <field name="date"/>
-                <filter name="filter_problem" string="Perlu tindakan" domain="['|', ('state', 'in', ('missing_config', 'error')), ('recon_status', '=', 'mismatch')]"/>
+                <filter name="filter_problem" string="Perlu tindakan" domain="['|', ('state', 'in', ('missing_config', 'conflict', 'error')), ('recon_status', '=', 'mismatch')]"/>
                 <group>
                     <filter name="group_company" string="Company" context="{'group_by': 'company_id'}"/>
                 </group>

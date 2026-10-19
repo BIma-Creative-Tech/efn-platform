@@ -1,4 +1,5 @@
 from . import (
+    account_move,
     efn_bff_client,
     efn_loyalty_accrual,
     efn_loyalty_policy,

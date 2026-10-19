@@ -7,6 +7,10 @@ implied_ids, implied_by_ids, user_ids), penerapan peran, dan transisi aturan ke 
 
 `res_groups` CE tidak punya konsep SoD (`disjoint_ids` hanya tipe user internal/portal/publik, 19.0 [V]).
 Selama registry belum siap (install/upgrade modul), penegakan dilewati; pelanggaran tetap muncul di review akses.
+
+SEC-158 (kompensasi L-65 Superadmin tunggal): setiap perubahan `mode`/`active`/grup/company aturan -> catatan
+chatter + aktivitas To-Do untuk auditor efektif company aturan (aturan global = semua auditor) + log
+`EFN_SOD_RULE_CHANGED` (alert Loki) di samping log efn_audit `write` (aturan audit bawaan).
 """
 
 import logging
@@ -18,7 +22,7 @@ from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.addons.base.models.ir_model import MODULE_UNINSTALL_FLAG
 from odoo.addons.efn_audit.models.audit_policy import mask_free_text
 
-from .role_policy import closure, explicit_memberships, implied_map
+from .role_policy import auditor_users, closure, explicit_memberships, implied_map
 
 _logger = logging.getLogger(__name__)
 
@@ -77,6 +81,7 @@ KEY_FIELDS = frozenset({"mode", "active", "group_a_id", "group_b_id", "company_i
 class EfnSodRule(models.Model):
     _name = "efn.sod.rule"
     _description = "EFN Segregation of Duties Rule"
+    _inherit = ["mail.thread", "mail.activity.mixin"]
     _order = "code, id"
     _check_company_auto = True
     _rec_name = "code"
@@ -157,10 +162,61 @@ class EfnSodRule(models.Model):
         self._efn_check_admin()
         if vals.get("rationale"):
             vals["rationale"] = mask_free_text(vals["rationale"])
+        before = self._efn_key_state() if KEY_FIELDS & set(vals) else {}
         res = super().write(vals)
         if KEY_FIELDS & set(vals):
             self._efn_check_block_transition()
+            self._efn_notify_rule_change(before)
         return res
+
+    def _efn_key_state(self):
+        return {
+            rule.id: (rule.mode, rule.active, rule.group_a_id.id, rule.group_b_id.id, rule.company_id.id)
+            for rule in self.sudo().with_context(active_test=False)
+        }
+
+    def _efn_notify_rule_change(self, before):
+        """SEC-158: perubahan kunci aturan -> chatter + aktivitas auditor + log (tanpa nama user, hanya uid)."""
+        after = self._efn_key_state()
+        for rule in self.sudo().with_context(active_test=False):
+            old, new = before.get(rule.id), after.get(rule.id)
+            if old is None or old == new:
+                continue
+            groups_changed = old[2:] != new[2:]
+            note = _(
+                "Aturan SoD %(code)s diubah oleh uid %(uid)s: mode %(mode_from)s → %(mode_to)s, aktif %(act_from)s → "
+                "%(act_to)s%(groups)s. Tinjau: penurunan/arsip aturan membuka kombinasi grup yang sebelumnya diblokir.",
+                code=rule.code,
+                uid=self.env.uid,
+                mode_from=old[0],
+                mode_to=new[0],
+                act_from=old[1],
+                act_to=new[1],
+                groups=_(", grup/company aturan diubah") if groups_changed else "",
+            )
+            rule.message_post(body=note, subtype_xmlid="mail.mt_note")
+            auditors = auditor_users(self.env, rule.company_id)
+            if not auditors:
+                _logger.warning("EFN_SOD_RULE_CHANGED_NO_AUDITOR rule=%s", rule.code)
+            for auditor in auditors:
+                rule.activity_schedule(
+                    "mail.mail_activity_data_todo",
+                    user_id=auditor.id,
+                    summary=_("Aturan SoD diubah"),
+                    note=note,
+                )
+            _logger.warning(
+                "EFN_SOD_RULE_CHANGED rule=%s uid=%s from=%s to=%s active_from=%s active_to=%s groups_changed=%s "
+                "auditors=%s",
+                rule.code,
+                self.env.uid,
+                old[0],
+                new[0],
+                old[1],
+                new[1],
+                groups_changed,
+                len(auditors),
+            )
 
     def unlink(self):
         if not self.env.context.get(MODULE_UNINSTALL_FLAG):

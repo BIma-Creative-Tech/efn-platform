@@ -6,7 +6,8 @@
 - Record **global** = company berkode ``EFN`` (Holding): satu-satunya tempat ``point_value_idr`` (L-62: nilai tukar
   seragam lintas PT karena dompet member lintas PT). PT lain hanya laju & batas.
 - Alur: ``draft -> approved -> published`` | ``draft -> rejected``. Empat mata: pembuat (grup EFN / Loyalty Manager)
-  dan penyunting terakhir draft != penyetuju (grup Accounting / Manager, company yang sama). Setelah approved, field
+  dan **setiap** user yang pernah menyunting isi draft (``editor_ids``, himpunan yang ditulis server, SEC-157 r14)
+  != penyetuju (grup Accounting / Manager, company yang sama). Setelah approved, field
   kebijakan read-only untuk SEMUA (termasuk sudo); perubahan = versi baru. Record non-draft tidak bisa dihapus.
 - Field status/jejak (``state``, ``maker_id``, ``approved_by_id``, ...) hanya ditulis kode server ber-sudo setelah
   cek; penulisan langsung lewat ORM/RPC oleh pengguna -> ``AccessError``.
@@ -18,6 +19,7 @@ import logging
 
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
+from odoo.fields import Command
 
 _logger = logging.getLogger(__name__)
 
@@ -50,6 +52,7 @@ SYSTEM_FIELDS = (
     "state",
     "maker_id",
     "last_editor_id",
+    "editor_ids",
     "approved_by_id",
     "approved_at",
     "rejected_by_id",
@@ -121,7 +124,8 @@ class EfnLoyaltyPolicy(models.Model):
         string="Maks. poin earn per member per hari",
         default=lambda self: self._efn_default("daily_max_points_member"),
         tracking=True,
-        help="0 = tanpa batas (BFF tetap memberlakukan plafon env).",
+        help="Isi >= 1. Nilai 0 (tanpa batas) ditolak BFF (422 policy_out_of_bounds, publikasi gagal final) selama "
+        "plafon env BFF LOYALTY_POLICY_CEILING_* > 0 (default).",
     )
     pos_config_hourly_max = fields.Integer(
         string="Maks. poin earn per kasir per jam",
@@ -149,6 +153,17 @@ class EfnLoyaltyPolicy(models.Model):
 
     maker_id = fields.Many2one("res.users", string="Pembuat", readonly=True, copy=False, index=True)
     last_editor_id = fields.Many2one("res.users", string="Penyunting terakhir", readonly=True, copy=False)
+    editor_ids = fields.Many2many(
+        "res.users",
+        "efn_loyalty_policy_editor_rel",
+        "policy_id",
+        "user_id",
+        string="Semua penyunting draft",
+        readonly=True,
+        copy=False,
+        help="SEC-157: setiap user yang membuat/menyunting isi draft (ditulis server, tidak bisa dihapus pengguna). "
+        "Tidak satu pun boleh menyetujui/menolak kebijakan ini.",
+    )
     approved_by_id = fields.Many2one("res.users", string="Disetujui oleh", readonly=True, copy=False, tracking=True)
     approved_at = fields.Datetime(readonly=True, copy=False)
     rejected_by_id = fields.Many2one("res.users", string="Ditolak oleh", readonly=True, copy=False)
@@ -234,6 +249,7 @@ class EfnLoyaltyPolicy(models.Model):
             vals["state"] = "draft"
             vals["maker_id"] = self.env.uid
             vals["last_editor_id"] = self.env.uid
+            vals["editor_ids"] = [Command.set([self.env.uid])]
         records = super().create(vals_list)
         for record in records:
             _logger.info(
@@ -266,8 +282,9 @@ class EfnLoyaltyPolicy(models.Model):
                 raise AccessError(_("Hanya EFN / Loyalty Manager yang dapat mengubah draft kebijakan poin."))
             if "company_id" in vals and any(policy.company_id.id != vals["company_id"] for policy in self):
                 raise UserError(_("Company kebijakan tidak dapat dipindah; buat kebijakan baru di company tujuan."))
-            # Penyunting terakhir ikut dicek empat mata (bukan hanya pembuat); juga untuk kode ber-sudo (uid asli).
-            vals = {**vals, "last_editor_id": self.env.uid}
+            # SEC-157: SEMUA penyunting (himpunan, bukan hanya terakhir) ikut dicek empat mata; juga untuk kode ber-sudo
+            # (uid asli). Command.link menambah tanpa menghapus penyunting sebelumnya.
+            vals = {**vals, "last_editor_id": self.env.uid, "editor_ids": [Command.link(self.env.uid)]}
         return super().write(vals)
 
     @api.ondelete(at_uninstall=False)
@@ -280,7 +297,7 @@ class EfnLoyaltyPolicy(models.Model):
 
     # -------------------------------------------------------------- approval
     def _efn_check_approver(self):
-        """Grup Accounting / Manager + company record di company user + bukan pembuat/penyunting terakhir."""
+        """Grup Accounting / Manager + company record di company user + bukan pembuat / penyunting mana pun."""
         user = self.env.user
         if not user.has_group(APPROVER_GROUP):
             raise AccessError(_("Hanya Accounting / Manager yang dapat menyetujui atau menolak kebijakan poin."))
@@ -290,7 +307,7 @@ class EfnLoyaltyPolicy(models.Model):
                 raise AccessError(_("Kebijakan poin milik company lain."))
             if policy.state != "draft":
                 raise UserError(_("Hanya kebijakan berstatus draft yang dapat diputuskan."))
-            if user in (policy.maker_id | policy.last_editor_id):
+            if user in (policy.sudo().maker_id | policy.sudo().last_editor_id | policy.sudo().editor_ids):
                 raise UserError(_("Empat mata: pembuat/penyunting draft tidak boleh memutuskan kebijakannya sendiri."))
 
     def action_efn_approve(self):

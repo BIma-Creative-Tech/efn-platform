@@ -1888,3 +1888,128 @@ constraint `_check_disjoint_groups`/`_check_at_least_one_administrator`), `base/
   peran Auditor memuat `base.group_allow_export`; aturan SoD dirujuk lewat `code` (sudah dibuat efn_role) — ubah mode
   SOD-05/06 setelah Q-ORG-4.
 - **Security review:** RPC baru 4 tombol (allowlist), `cr.cache` sebagai penanda internal, SoD dilewati saat registry belum siap.
+
+---
+
+# G21 perbaikan r14 — `efn_role` SEC-154 / SEC-155 / SEC-158 / SEC-159 (19 Okt 2026, L-67)
+
+Branch `chore/wave-21` (HEAD 06686be). Tanpa commit; tanpa shell — **test belum dijalankan** (lead menjalankan di
+container Odoo 19). Cakupan: `services/odoo/addons/efn_role/**` + satu entri `RPC_ALLOWLIST` di
+`efn_core/tests/test_rpc_surface.py`.
+
+## Modul & file (`efn_role` 19.0.1.0.0 → 19.0.1.1.0)
+- `models/role_policy.py`: `SENSITIVE_GROUP_XMLIDS`, `SENSITIVE_PARAM` (`efn_role.sensitive_group_xmlids`, hanya
+  menambah), `sensitive_group_ids()`, `effective_member_ids()`.
+- `models/efn_role.py`: field `sync_from_job` (default False), `is_sensitive_role` (compute), `_efn_sensitive_roles()`,
+  constraint `_check_sync_from_job` (`efn_role:sync_sensitive_role`); `_efn_sync_job_lines` hanya peran ber-flag &
+  tidak sensitif, melewati user admin; `action_efn_apply_job_roles` menolak peran tanpa flag/sensitif
+  (`efn_role:job_sync_disabled`); `_efn_apply_roles` mempertahankan `base.group_system` pemegang terakhir
+  (`_efn_has_other_system_holder`, log `EFN_ROLE_KEEP_LAST_SUPERADMIN`).
+- `models/efn_role_line.py`: `_efn_check_admin_target` di create (sebelum super) / write / unlink →
+  `efn_role:admin_user_superadmin_only` (kecuali Superadmin / OdooBot).
+- `models/efn_sod_rule.py`: `_inherit mail.thread + mail.activity.mixin`; `write` mencatat keadaan kunci sebelum →
+  `_efn_notify_rule_change` (chatter + aktivitas `auditor_users(company aturan)` + log `EFN_SOD_RULE_CHANGED`).
+- `models/efn_access_review.py`: `action_efn_export_csv` (RPC publik baru), `EXPORT_HEADER`, `_csv_cell`
+  (netralisasi formula), attachment CSV + chatter + log `EFN_ACCESS_REVIEW_EXPORT`.
+- `views/efn_role_views.xml` (flag + sensitif, tombol hanya bila flag & tidak sensitif), `views/efn_sod_views.xml`
+  (`<chatter/>`), `views/efn_access_review_views.xml` (tombol *Ekspor CSV*, grup Auditor/Superadmin).
+- `__manifest__.py` (versi, L-67), `README.md` (bagian *Perbaikan review keamanan r14*, uji manual 6–8, asumsi).
+- Tests: `tests/common.py` (Auditor tanpa `base.group_allow_export`), `tests/test_access_review.py` (16d: `export_data`
+  → `UserError`), `tests/test_role_apply.py` (dua test sinkron jabatan memakai `sync_from_job=True`),
+  **baru** `tests/test_r14.py` (8 test), `tests/__init__.py`.
+- `efn_core/tests/test_rpc_surface.py`: + `("efn.access.review", "action_efn_export_csv")`.
+
+## Test baru (`test_r14.py`, tag `efn`, post_install) — BELUM DIJALANKAN
+1. `test_sec154_hr_self_job_change_never_grants_sensitive_group` — constraint (write/create/tambah grup), tombol
+   ditolak, user `hr.group_hr_user` mengubah jabatannya sendiri ke jabatan peran sensitif → setelah cron tidak dapat
+   `group_refund_approver`, tidak ada baris peran sensitif, baris jabatan lama ditutup.
+2. `test_sec154_job_lines_closed_when_sync_disabled`. 3. `test_sec154_sensitive_list_extended_by_parameter`.
+4. `test_sec155_auditor_csv_export_from_snapshot_only` — header, jumlah baris, formula `'=`, tanpa login; Superadmin
+   boleh, Access Rights `AccessError`, review company lain `AccessError`.
+5. `test_sec158_rule_mode_and_archive_notify_auditors` — rationale saja tanpa aktivitas; mode & arsip → aktivitas
+   auditor + chatter; Access Rights tidak menerima; log efn_audit `write`.
+6. `test_sec159_lines_for_admin_users_superadmin_only` (create/write/unlink). 7. `test_sec159_job_sync_skips_admin_users`.
+8. `test_sec159_apply_never_removes_group_system_from_last_holder` (`patch.object` `_efn_has_other_system_holder`
+   → False; dengan Superadmin lain pencabutan berlaku).
+
+## Keputusan / tafsiran (mohon dikonfirmasi lead)
+- Parameter grup sensitif hanya **menambah** (tidak ada cara mengurangi daftar bawaan tanpa ubah kode) — lebih ketat
+  dari "daftar konfigurasi (default …)".
+- `base.group_system`/`base.group_erp_manager` termasuk sensitif (selain sudah dikecualikan sebagai peran admin).
+- Mematikan flag / peran menjadi sensitif → baris `job` terbuka **ditutup** (bukan dibiarkan). Dampak upgrade: semua
+  peran mulai tanpa flag → baris `job` lama ditutup cron berikutnya sampai `efn_setup_role`/Access Rights menyalakan
+  flag peran non-sensitif.
+- Rekomendasi SEC-154 (b) "tolak penetapan diri" dan (a) "baris menunggu konfirmasi" **tidak** diimplementasikan:
+  peran sensitif sama sekali tidak tersinkron (lebih sederhana, menutup skenario yang sama).
+- Ekspor CSV: kolom `uid` (pengenal internal) dan `user_active` ikut; login/login terakhir/2FA tidak. Semua status review.
+- SEC-159: OdooBot (uid 1) dikecualikan dari cek pemanggil dan dari hitungan "pemegang lain". Cek pemanggil memakai
+  `env.user` (sudo tidak membebaskan), konsisten dengan `_efn_check_admin_rights`.
+
+## Belum diverifikasi / titik rawan test
+- `ir.attachment.raw` (tulis bytes) dan `/web/content/<id>?download=true` di 19.0 [B].
+- `action_archive` pada model yang baru mewarisi `mail.thread`; upgrade modul menambah `mail.thread` ke model yang
+  sudah ada [B].
+- `hr.employee.with_user(hr_user).write({'job_id'})` untuk karyawan milik sendiri oleh `hr.group_hr_user` [B].
+- `patch.object(type(env['efn.role']), ...)` pada kelas registry (pola umum, belum dicoba di repo ini).
+- Auditor menandai aktivitas aturan SoD selesai (hak baca saja) — pola sama dengan `efn.sod.exception`, belum diuji UI.
+- Diverifikasi [V] (WebFetch raw 19.0, 19 Okt 2026): `export_data` → `UserError` tanpa `group_allow_export`/admin;
+  `group_allow_export` hanya `implied_by` `group_system` (`base/security/base_groups.xml`).
+
+## Untuk lead / tim lain
+- **efn-odoo-functional (`efn_setup_role`)**: jangan beri `base.group_allow_export` ke peran Auditor; set
+  `sync_from_job=True` hanya pada peran non-sensitif (peran sensitif akan ditolak constraint).
+- **devsecops**: alert Loki untuk `EFN_SOD_RULE_CHANGED`, `EFN_ROLE_KEEP_LAST_SUPERADMIN`, `EFN_ACCESS_REVIEW_EXPORT`.
+- **security re-review**: RPC baru `efn.access.review.action_efn_export_csv`.
+
+---
+
+# G21 perbaikan r14 — `efn_loyalty_accounting` 19.0.1.1.0 (SEC-156, SEC-157, SEC-160/L-67, L-68) — 19 Okt 2026
+
+Cakupan hanya `services/odoo/addons/efn_loyalty_accounting/**`. Tanpa shell: **test BELUM DIJALANKAN** (lead menjalankan).
+
+## Modul & file
+- `models/account_move.py` (baru): `account.move.efn_loyalty_accrual_id` (M2O readonly, `copy=False`,
+  `ondelete=restrict`, index `btree_not_null`); `create`/`write` menolak field ini (`AccessError`) kecuali `env.su` +
+  konteks `efn_loyalty_accrual_link` (hanya `_efn_create_move`).
+- `models/efn_loyalty_accrual.py`: state baru `conflict`; `_efn_check_existing_moves` (SEC-156: tertaut+posted → `done`;
+  ref sama manual/draft/batal/posted atau jurnal sendiri tidak posted → `conflict` + ERROR + aktivitas `ref_conflict` +
+  RECON, tanpa jurnal); akrual `done` yang jurnalnya tidak lagi posted → `conflict` di run berikutnya; akrual
+  berjurnal tidak bisa dihapus (`@api.ondelete`); L-67: `expired_value_idr` & `forfeited_value_idr` (opsional, baru
+  diparse) selalu dijurnal Dr Liabilitas / Cr Pendapatan Poin Kedaluwarsa (`efn_loyalty_breakage_account_id`, baris
+  terpisah); L-68: `restored_value_idr_by_issuer` (opsional; Σ wajib = `restored_value_idr`) → per penerbit ≠ PT ini Dr
+  Liabilitas / Cr Kliring; field baru `forfeited_value_idr`, `restored_cross_value_idr`, `restored_by_issuer`;
+  `activity_flagged` jadi himpunan alasan (cegah aktivitas berulang conflict+mismatch), dikosongkan saat `done`.
+- `models/efn_loyalty_policy.py`: `editor_ids` (M2M `res.users`, tabel `efn_loyalty_policy_editor_rel`, field sistem
+  di `SYSTEM_FIELDS`), diisi `Command.set([uid])` saat create dan `Command.link(uid)` di setiap `write` isi;
+  `_efn_check_approver` menolak `maker | last_editor | editor_ids`.
+- `models/res_company.py`: help akun breakage & kliring (L-67/L-68). Tidak perlu field akun baru — akun
+  *Pendapatan Poin Kedaluwarsa* per PT sudah ada di Settings (G21).
+- `data/ir_config_parameter.xml`: record `efn.loyalty.breakage_journal_enabled` dihapus (DB lama: param tertinggal
+  diabaikan kode).
+- Views: accrual (state `conflict` di dekorasi/filter/tombol Proses ulang; field baru), policy (`editor_ids`).
+- `__manifest__.py` 19.0.1.0.0 → 19.0.1.1.0; `README.md`.
+- Test: `tests/test_accrual.py`, `tests/test_policy.py`.
+
+## Test baru / diubah (tag `efn`) — BELUM DIJALANKAN
+- `test_accrual.py` baru: `test_cross_company_restore_at_redeemer_both_reconcile_zero` (L-68),
+  `test_expired_and_forfeited_journaled_recon_zero` (L-67, RECON 0), `test_forfeit_without_breakage_account_is_missing_config`,
+  `test_forfeit_and_restore_by_issuer_validated`, `test_ref_conflict_manual_moves_never_double_journal` (draft/batal/posted),
+  `test_ref_conflict_not_silent_and_resolved_by_retry`, `test_own_move_reset_to_draft_is_conflict_until_reposted`,
+  `test_accrual_link_on_move_is_system_only`.
+- Diubah: `test_accrual_journal_lines_recon_ok_and_idempotent` (bagian "record hilang → ditautkan ulang" diganti:
+  akrual berjurnal tidak bisa dihapus + tautan sistem), `test_as_issuer_fields_optional_and_validated` (run sukses di
+  17 Okt agar loop hapus hanya tanggal 18), `test_breakage_prepared_but_disabled_by_default` dihapus (diganti L-67).
+- `test_policy.py` baru: `test_any_intermediate_editor_cannot_approve` (A buat, C sunting via sudo, A sunting catatan
+  → C ditolak approve & reject; `editor_ids` tidak bisa ditulis user saat write/create; AM lain bisa).
+
+## Belum diverifikasi / titik rawan test
+- `account.move.button_draft()` / `button_cancel()` pada entry draft/posted di jurnal Misc company test (asumsi: tanpa
+  hash/lock); `search_count(..., limit=1)`; `index="btree_not_null"` pada field inherit.
+- Urutan `unlink`: asumsi CE 19 memeriksa ACL sebelum `@api.ondelete` (test ACL lama mengharap `AccessError` untuk AM).
+- Perubahan `ref` pada jurnal draft manual oleh sudo (penyelesaian konflik di test).
+- `Many2one` `ondelete="restrict"` dari `account.move` ke model modul ini saat uninstall modul (asumsi: tabel di-drop
+  CASCADE oleh mekanisme uninstall).
+- Keputusan akuntansi: forfeit BFF = semua debit non-POS (DSAR **dan** penyesuaian manual) → semua ke Pendapatan Poin
+  Kedaluwarsa (L-67). Pemisahan butuh komponen kontrak BFF baru.
+- Pasca-deploy: SOD-03 harus `block` (bukan `report_only`) sebelum kebijakan prod — bagian rekomendasi SEC-157 kedua,
+  di luar cakupan file (efn_role/runbook).

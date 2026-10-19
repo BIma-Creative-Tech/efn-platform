@@ -150,7 +150,7 @@ class TestEfnRoleApply(EfnRoleCase):
         employee = self.env["hr.employee"].create(
             {"name": "Karyawan Uji Peran", "company_id": self.gl.id, "user_id": user.id, "job_id": job.id}
         )
-        role = self._role("Peran Jabatan Uji", self.g_role1, job_id=job.id)
+        role = self._role("Peran Jabatan Uji", self.g_role1, job_id=job.id, sync_from_job=True)
         role.with_user(self.access_admin).action_efn_apply_job_roles()
         line = self.Line.search([("role_id", "=", role.id), ("user_id", "=", user.id)])
         self.assertEqual(len(line), 1)
@@ -172,7 +172,7 @@ class TestEfnRoleApply(EfnRoleCase):
         employee = self.env["hr.employee"].create(
             {"name": "Karyawan Uji Peran Lama", "company_id": self.gl.id, "user_id": user.id, "job_id": job.id}
         )
-        role = self._role("Peran Jabatan Uji Lama", self.g_role1, job_id=job.id)
+        role = self._role("Peran Jabatan Uji Lama", self.g_role1, job_id=job.id, sync_from_job=True)
         line = self._assign(role, user, source="job", date_from=self.today - timedelta(days=30))
         employee.write({"job_id": False})
         role._efn_sync_job_lines(roles=role)

@@ -9,8 +9,15 @@ kedaluwarsa) ditandai per baris.
 Status `draft -> in_review -> done`; `done` = read-only untuk semua (termasuk sudo) kecuali chatter. Baca: Auditor
 (`efn_audit.group_auditor`, TANPA hak Access Rights) + Access Rights; tulis status: Auditor lewat tombol.
 Data pribadi: hanya nama & login user internal (identitas kerja, 18-40). Retensi = `efn.audit.retention_days`.
+
+Ekspor (SEC-155, L-67): Auditor TIDAK diberi `base.group_allow_export` (grup itu membuka ekspor massal semua model
+yang bisa dibaca, termasuk kontak terdekripsi). Ekspor review lewat `action_efn_export_csv`: Auditor/Superadmin +
+record rule company; CSV dibangun HANYA dari baris snapshot review ini, kolom tanpa login/login terakhir/2FA (hanya
+nama user internal, grup, peran, SoD); disimpan sebagai attachment review (ikut terhapus bersama review/GC).
 """
 
+import csv
+import io
 import logging
 import re
 from datetime import timedelta
@@ -58,6 +65,35 @@ COUNT_FIELDS = (
     "users_without_role_count",
 )
 SERVER_FIELDS = frozenset({"state", "reviewer_id", "reviewed_on", "snapshot_date", "line_ids", *COUNT_FIELDS})
+# Kolom CSV ekspor review (SEC-155): tanpa login, login terakhir, 2FA, atau data kontak.
+EXPORT_HEADER = (
+    "period",
+    "company",
+    "uid",
+    "user_name",
+    "user_active",
+    "company_roles",
+    "privilege",
+    "group",
+    "source",
+    "via_role",
+    "sod_codes",
+    "sod_unexcepted",
+    "exception_state",
+)
+# Awalan sel yang dieksekusi spreadsheet sebagai rumus (CSV/formula injection; nama user bisa diubah pemiliknya).
+FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_cell(value):
+    if value is None or value is False:
+        return ""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    text = str(value)
+    if text.startswith(FORMULA_PREFIXES):
+        return "'" + text
+    return text
 
 
 class EfnAccessReview(models.Model):
@@ -192,6 +228,81 @@ class EfnAccessReview(models.Model):
         for review in self.sudo():
             review.message_post(body=_("Review akses ditandatangani reviewer (uid %s).", self.env.uid))
         return True
+
+    def action_efn_export_csv(self):
+        """RPC publik (RPC_ALLOWLIST, SEC-155): Auditor/Superadmin + check_access(read) + record rule company.
+
+        Membangun CSV dari baris snapshot review ini saja (sudo SETELAH cek), menyimpannya sebagai attachment review,
+        dan mengembalikan aksi unduh. Semua status (draft/in_review/done); tidak mengubah review.
+        """
+        self.ensure_one()
+        user = self.env.user
+        if not (user.has_group("efn_audit.group_auditor") or user.has_group("base.group_system")):
+            raise AccessError(_("efn_role:review_export_access — ekspor review akses hanya Auditor / Superadmin."))
+        self.check_access("read")
+        review = self.sudo()
+        buffer = io.StringIO()
+        writer = csv.writer(buffer, lineterminator="\r\n")
+        writer.writerow(EXPORT_HEADER)
+        source_labels = dict(self.env["efn.access.review.line"]._fields["source"].selection)
+        for line in review.line_ids:
+            writer.writerow(
+                [
+                    _csv_cell(value)
+                    for value in (
+                        review.period,
+                        review.company_id.name,
+                        line.user_id.id or "",
+                        line.user_id.name,
+                        line.user_active,
+                        line.role_names,
+                        line.privilege_name,
+                        line.group_full_name,
+                        source_labels.get(line.source, line.source),
+                        line.via_role_name,
+                        line.sod_codes,
+                        line.sod_unexcepted,
+                        line.exception_state,
+                    )
+                ]
+            )
+        # BOM: Excel membaca UTF-8 dengan benar.
+        data = ("﻿" + buffer.getvalue()).encode("utf-8")
+        attachment = (
+            self.env["ir.attachment"]
+            .sudo()
+            .create(
+                {
+                    "name": f"access_review_{review.company_id.id}_{review.period}.csv",
+                    "type": "binary",
+                    "raw": data,
+                    "mimetype": "text/csv",
+                    "res_model": self._name,
+                    "res_id": review.id,
+                    "company_id": review.company_id.id,
+                }
+            )
+        )
+        review.message_post(
+            body=_(
+                "Ekspor CSV review akses oleh uid %(uid)s (%(rows)s baris).",
+                uid=self.env.uid,
+                rows=len(review.line_ids),
+            ),
+            subtype_xmlid="mail.mt_note",
+        )
+        _logger.info(
+            "EFN_ACCESS_REVIEW_EXPORT review=%s uid=%s rows=%s attachment=%s",
+            review.id,
+            self.env.uid,
+            len(review.line_ids),
+            attachment.id,
+        )
+        return {
+            "type": "ir.actions.act_url",
+            "url": f"/web/content/{attachment.id}?download=true",
+            "target": "self",
+        }
 
     # -------------------------------------------------------------- snapshot
     def _efn_take_snapshot(self):

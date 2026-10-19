@@ -131,6 +131,8 @@ RPC_ALLOWLIST = {
     "rule company; draft -> in_review",
     ("efn.access.review", "action_efn_done"): "grup efn_audit.group_auditor + check_access(write) + record rule "
     "company; in_review -> done (read-only)",
+    ("efn.access.review", "action_efn_export_csv"): "grup efn_audit.group_auditor / base.group_system + "
+    "check_access(read) + record rule company; CSV hanya dari baris snapshot review (tanpa login/kontak) -> attachment",
 }
 
 MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}

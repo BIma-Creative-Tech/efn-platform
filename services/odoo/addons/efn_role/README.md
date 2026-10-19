@@ -4,7 +4,8 @@ Peran per PT (jabatan → himpunan grup), **pemisahan tugas (SoD) yang ditegakka
 Superadmin, dan **review akses bulanan** (snapshot) per PT. Odoo CE 19, **LGPL-3**,
 `depends: hr, mail, efn_audit`. Gap **E-47** + **E-47c** dalam satu modul.
 
-- **Kontrak mengikat:** `docs/04_SERVICE_CONTRACTS.md` §13.3 no. 2–4, §13.7 **L-64**, **L-65**.
+- **Kontrak mengikat:** `docs/04_SERVICE_CONTRACTS.md` §13.3 no. 2–4, §13.7 **L-64**, **L-65**, **L-67**
+  (19.0.1.1.0: perbaikan review keamanan r14 SEC-154, SEC-155, SEC-158, SEC-159 — lihat bagian *r14*).
   **Spesifikasi:** `docs/08_ODOO_FIT_GAP.md` §12.2b (matriks), §12.3 (E-47), §12.4 (SoD), §12.5b (E-47c), §12.8 (test).
 - **ADR:** ADR-001 (satu DB multi-company), ADR-031 (tanpa modul pihak ketiga) — keduanya *Proposed*.
 - **Risiko dimitigasi:** **R-S14** (hak akses menumpuk tanpa review), R-S10 (insider/fraud: satu orang memegang
@@ -19,13 +20,13 @@ melingkar, dan `efn_setup_role` (functional, §12.6) cukup bergantung pada satu 
 
 | Model | Isi |
 |---|---|
-| `efn.role` | Per company (`_check_company_auto`): `name`, `job_id` (opsional; unik per company lewat `models.UniqueIndex ... WHERE job_id IS NOT NULL`), `group_ids` (≥1, non-portal, bukan grup akun teknis), `active`, `sequence`, `note`, `line_ids`, `user_count`, `is_admin_role`. Peran yang (efektif) memuat `base.group_system`/`base.group_erp_manager` hanya dibuat/diubah/ditetapkan oleh `base.group_system`. Company peran terkunci setelah ada penetapan. |
-| `efn.role.line` | `role_id` (restrict), `user_id`, `company_id` (related stored), `date_from` (default hari ini WIB), `date_to`, `source` `manual`/`job`, `is_effective` (Boolean tersimpan, **hanya ditulis server** — RPC ditolak), `reason` (wajib untuk peran admin tanpa `date_to`). Ditolak untuk user portal/publik dan akun teknis (`efn_online_order.group_online_channel`, `efn_pos_kds.group_kds_device`). Peran/user baris tidak bisa diganti (buat baris baru). |
+| `efn.role` | Per company (`_check_company_auto`): `name`, `job_id` (opsional; unik per company lewat `models.UniqueIndex ... WHERE job_id IS NOT NULL`), `group_ids` (≥1, non-portal, bukan grup akun teknis), `active`, `sequence`, `note`, `line_ids`, `user_count`, `is_admin_role`, `sync_from_job` (default False; ditolak untuk peran sensitif), `is_sensitive_role`. Peran yang (efektif) memuat `base.group_system`/`base.group_erp_manager` hanya dibuat/diubah/ditetapkan oleh `base.group_system`. Company peran terkunci setelah ada penetapan. |
+| `efn.role.line` | `role_id` (restrict), `user_id`, `company_id` (related stored), `date_from` (default hari ini WIB), `date_to`, `source` `manual`/`job`, `is_effective` (Boolean tersimpan, **hanya ditulis server** — RPC ditolak), `reason` (wajib untuk peran admin tanpa `date_to`). Ditolak untuk user portal/publik dan akun teknis (`efn_online_order.group_online_channel`, `efn_pos_kds.group_kds_device`). Baris untuk user yang efektif memegang `base.group_system`/`base.group_erp_manager` hanya dibuat/diubah/dihapus Superadmin. Peran/user baris tidak bisa diganti (buat baris baru). |
 | `res.users` (+) | `efn_role_line_ids`, `efn_role_managed` (readonly; diisi otomatis saat baris pertama; hanya sistem/Superadmin yang boleh mengubah; diabaikan saat create). |
-| `efn.sod.rule` | `code` (unik), `name`, `company_id` (kosong = global, default), `group_a_id`/`group_b_id` (≠, pasangan tak berurut unik per company), `mode` `block`/`report_only`, `active`, `rationale`, `violation_count`. Tulis hanya `base.group_system`; tidak bisa dihapus (arsipkan). |
+| `efn.sod.rule` | `code` (unik), `name`, `company_id` (kosong = global, default), `group_a_id`/`group_b_id` (≠, pasangan tak berurut unik per company), `mode` `block`/`report_only`, `active`, `rationale`, `violation_count`, chatter (`mail.thread`). Tulis hanya `base.group_system`; tidak bisa dihapus (arsipkan). Perubahan mode/aktif/grup/company → chatter + aktivitas auditor + log `EFN_SOD_RULE_CHANGED`. |
 | `efn.sod.exception` | `rule_id`, `user_id`, `company_id` (server: company aturan atau company utama user), `reason` (≥20 karakter), `granted_by_id` (= user login, wajib Superadmin, ≠ `user_id`), `date_from` (≥ hari ini), `date_to` (≤ 90 hari, default +30), `active`, `state` (compute), `expiry_notified`, `revoked_by_id/on`. Immutable kecuali dicabut (`active=False`); tanpa pengaktifan ulang; tanpa unlink. |
 | `efn.access.review` | `company_id`, `period` `YYYY-MM` (unik per company), `state` `draft → in_review → done`, `reviewer_id`, `reviewed_on`, `snapshot_date`, `notes`, hitungan (user, pelanggaran SoD, pengecualian aktif, pengecualian kedaluwarsa, pemberian grup langsung, tanpa login > 90 hari, tanpa 2FA, user tanpa peran di PT). `done` read-only untuk semua (termasuk sudo) kecuali chatter; tanpa unlink (kecuali GC retensi). |
-| `efn.access.review.line` | Snapshot tersimpan per (user internal company review, grup efektif): login, aktif, login terakhir, 2FA, nama peran PT, grup + nama lengkap + privilege, `source` `role`/`direct`/`implied`, peran asal, aturan SoD dilanggar (+ kode teks), pengecualian (+ status `effective`/`expired`). Hanya dibuat/dihapus snapshot (penanda `cr.cache`); tidak bisa diubah. List/pivot/graph + ekspor standar CSV/XLSX. |
+| `efn.access.review.line` | Snapshot tersimpan per (user internal company review, grup efektif): login, aktif, login terakhir, 2FA, nama peran PT, grup + nama lengkap + privilege, `source` `role`/`direct`/`implied`, peran asal, aturan SoD dilanggar (+ kode teks), pengecualian (+ status `effective`/`expired`). Hanya dibuat/dihapus snapshot (penanda `cr.cache`); tidak bisa diubah. List/pivot/graph; ekspor lewat tombol *Ekspor CSV* review (bukan ekspor generik). |
 
 Grup penanda baru (tanpa ACL, tanpa `implied_ids`, privilege *EFN Peran*): `efn_role.group_role_cashier`,
 `efn_role.group_refund_approver` (cermin grup host BFF `efn-cs-approver`).
@@ -45,8 +46,10 @@ context dapat diisi klien lewat RPC, `cr.cache` tidak (pola efn_audit).
 `hr.employee.job_id` (19.0: field turunan `hr.version.job_id` versi aktif lewat `_inherits` [V source
 `hr/models/hr_version.py`]) = `role.job_id` di company sama → baris `job`; jabatan berubah → baris `job` ditutup
 (`date_to` = kemarin; baris yang dibuat hari ini di-unlink, tercatat audit). Baris `manual` tidak disentuh.
-**Peran admin tidak pernah disinkron dari jabatan** (cegah eskalasi: HR menetapkan jabatan *Superadmin IT* →
-`base.group_system`); peran admin = baris manual oleh Superadmin. Tombol karyawan (spesifikasi "di
+**Hanya peran `sync_from_job=True` yang tidak sensitif yang disinkron** (SEC-154, L-67) — lihat bagian *r14*.
+Peran tanpa flag / sensitif: baris `job` yang masih terbuka ditutup oleh cron berikutnya; tombol ditolak
+(`efn_role:job_sync_disabled`). User yang efektif memegang grup admin dilewati sinkron (baris `job`-nya tidak
+dibuat maupun ditutup). Tombol karyawan (spesifikasi "di
 peran/karyawan") **tidak** dibuat agar tidak mewarisi view `hr.employee` 19.0 yang belum diverifikasi; cron + tombol
 peran mencakup kebutuhan.
 
@@ -88,8 +91,9 @@ tanggal 3 bila cron terlewat; idempoten) + aktivitas ke auditor company. Tombol:
 Auditor/Access Rights), *Mulai review*, *Selesai & tandatangani* (Auditor). Menu: *Settings → Users & Companies →
 Peran EFN / Penetapan Peran / Aturan SoD / Pengecualian SoD / Review Akses* (Access Rights) dan *Audit → Review
 Akses / Snapshot Review Akses / Aturan SoD / Pengecualian SoD / Peran EFN* (Auditor tanpa Access Rights).
-Ekspor = standar (`/web/export/xlsx`); **ORM `export_data` 19.0 mensyaratkan `base.group_allow_export`** [V source
-`odoo/orm/models.py`] → peran Auditor (`efn_setup_role`) harus memuat `base.group_allow_export`.
+Ekspor: tombol **Ekspor CSV** (`action_efn_export_csv`, Auditor/Superadmin, semua status) — lihat *r14 / SEC-155*.
+Auditor **tidak** diberi `base.group_allow_export` (L-67): ORM `export_data` 19.0 menolak (`UserError`) user tanpa
+grup itu [V source `odoo/orm/models.py`], dan grup itu akan membuka ekspor massal semua model yang bisa dibaca.
 Retensi: `@api.autovacuum` menghapus review `done` lebih tua dari `efn.audit.retention_days` (730, PLACEHOLDER;
 minimum efn_audit berlaku; 0 = selamanya). Data pribadi: hanya nama & login user internal (18-40).
 Rekonsiliasi cermin `efn-cs-approver` (BFF) manual: filter *Cermin efn-cs-approver*, catat di *Catatan / Temuan*.
@@ -104,7 +108,42 @@ company pembaca). Audit: aturan `efn.audit.rule` bawaan (xmlid, tidak bisa dihap
 sudah dicatat bawaan efn_audit.
 
 RPC publik baru (terdaftar `efn_core/tests/test_rpc_surface.py` `RPC_ALLOWLIST`): `efn.role.action_efn_apply_job_roles`,
-`efn.access.review.action_efn_snapshot` / `action_efn_start_review` / `action_efn_done`.
+`efn.access.review.action_efn_snapshot` / `action_efn_start_review` / `action_efn_done` / `action_efn_export_csv` (r14).
+
+## Perbaikan review keamanan r14 (L-67)
+- **SEC-154 — sinkron jabatan → peran (R-S14, A-5).** `efn.role.sync_from_job` (default **False**). Cron/tombol hanya
+  menerapkan peran ber-flag yang **tidak sensitif**. Sensitif = penutup `implied_ids` grup peran memuat salah satu
+  `SENSITIVE_GROUP_XMLIDS` (`role_policy.py`): `base.group_system`, `base.group_erp_manager`,
+  `account.group_account_manager`, `sales_team.group_sale_manager`, `point_of_sale.group_pos_manager`,
+  `efn_audit.group_manager`, `efn_role.group_refund_approver`, `efn_loyalty_accounting.group_loyalty_manager`
+  (xmlid yang belum terpasang dilewati). Parameter `efn_role.sensitive_group_xmlids` (xmlid dipisah koma) hanya
+  **menambah** daftar (tidak bisa mengurangi; entri salah format dilewati). Constraint `efn_role:sync_sensitive_role`
+  menolak flag pada peran sensitif (termasuk saat grup sensitif ditambahkan ke peran ber-flag). Peran yang menjadi
+  sensitif lewat perubahan `implied_ids` grup lain tetap dilewati saat sinkron (cek ulang runtime) dan baris `job`-nya
+  ditutup. Akibatnya user HR yang mengubah jabatan (termasuk jabatannya sendiri) tidak pernah memperoleh grup sensitif;
+  peran sensitif ditetapkan manual oleh Access Rights (baris tercatat audit, tampil di review). Log:
+  `EFN_ROLE_JOB_SKIP_SENSITIVE`, `EFN_ROLE_JOB_SKIP_ADMIN_USER`.
+  **Dampak upgrade 19.0.1.0.0 → 1.1.0:** semua peran mulai `sync_from_job=False` → baris `job` terbuka ditutup cron
+  berikutnya sampai Access Rights (atau `efn_setup_role`) mengaktifkan flag pada peran non-sensitif.
+- **SEC-155 — ekspor Auditor (R-L01, UU PDP Pasal 16, ADR-036).** Rekomendasi `base.group_allow_export` untuk Auditor
+  dihapus (README, fixture test). Tombol *Ekspor CSV* → `action_efn_export_csv`: Auditor (`efn_audit.group_auditor`)
+  atau Superadmin (`base.group_system`) + `check_access('read')` + record rule company; CSV dibangun (sudo setelah cek)
+  **hanya** dari baris snapshot review itu; kolom: periode, company, uid, nama user, aktif, peran PT, privilege, grup,
+  sumber, peran asal, kode SoD, SoD tanpa pengecualian, status pengecualian — **tanpa** login (bisa berupa email),
+  login terakhir, 2FA, atau data kontak. Sel berawalan `= + - @ TAB CR` diberi `'` (cegah formula injection; nama
+  user bisa diubah pemiliknya). Hasil = `ir.attachment` (res_model review, company review) + catatan chatter + log
+  `EFN_ACCESS_REVIEW_EXPORT`; attachment ikut terhapus bersama review (GC retensi). Access Rights tanpa Auditor ditolak.
+- **SEC-158 — perubahan aturan SoD (L-65).** `efn.sod.rule` kini `mail.thread` + `mail.activity.mixin`. Setiap
+  `write` yang mengubah `mode`/`active`/`group_a_id`/`group_b_id`/`company_id` (termasuk *Arsipkan*) → catatan chatter
+  (uid pengubah, mode/aktif lama → baru), aktivitas To-Do untuk setiap auditor efektif (bukan Access Rights) di company
+  aturan (aturan global = semua auditor), dan log `EFN_SOD_RULE_CHANGED rule=<code> uid=<id> from=<mode> to=<mode>
+  active_from=… active_to=…` (target alert Loki — wilayah devsecops). Log efn_audit `write` tetap (aturan audit bawaan).
+- **SEC-159 — admin "managed".** (a) Baris peran (buat/ubah/hapus) untuk user yang efektif memegang
+  `base.group_system`/`base.group_erp_manager` hanya oleh Superadmin (atau proses server OdooBot) →
+  `AccessError efn_role:admin_user_superadmin_only`; sinkron jabatan melewati user admin. (b) Penerapan peran tidak
+  pernah mencabut `base.group_system` dari pemegang aktif-internal terakhir (selain OdooBot): grup dipertahankan + log
+  `EFN_ROLE_KEEP_LAST_SUPERADMIN`. Superadmin yang sengaja menetapkan peran ke Superadmin lain tetap berlaku
+  "nothing more, nothing less" selama masih ada Superadmin lain.
 
 ## Cara uji manual
 1. Pasang `efn_role` (+ `point_of_sale`, `sales_team` untuk SOD-01/02). *Settings → Users & Companies → Aturan SoD*:
@@ -115,11 +154,18 @@ RPC publik baru (terdaftar `efn_core/tests/test_rpc_surface.py` `RPC_ALLOWLIST`)
 4. Login Superadmin B: *Pengecualian SoD* untuk U (alasan ≥ 20 karakter, ≤ 90 hari) → auditor menerima aktivitas;
    langkah 3 kini lolos.
 5. *Review Akses* → buat (company GL, periode) → snapshot; filter *Melanggar SoD*; auditor *Mulai review* →
-   *Selesai* → form read-only; ekspor XLSX dari list snapshot.
+   *Selesai* → form read-only; *Ekspor CSV* → file terunduh, tanpa kolom login; menu *Ekspor* list kontak tidak
+   tersedia untuk auditor.
+6. (SEC-154) Peran *Approver Refund* dengan jabatan → centang *Sinkron dari Jabatan* → ditolak. User HR mengubah
+   jabatannya ke jabatan itu → setelah cron, user tidak memperoleh grup.
+7. (SEC-158) Superadmin mengubah SOD-xx ke *Laporan saja* → auditor menerima aktivitas *Aturan SoD diubah*.
+8. (SEC-159) Login Access Rights → tetapkan peran apa pun ke user Superadmin → ditolak.
 
 ## Test
 `tests/` (tag `efn`, `post_install`): penerapan (1–5, 12, jabatan, unik), SoD (6–8, 10, 11, bawaan, penanda),
-pengecualian (9), review (16, cron), keamanan (13–15, flag). Grup modul lain diuji bila terpasang (`skipTest`
+pengecualian (9), review (16, cron), keamanan (13–15, flag), r14 (`test_r14.py`: SEC-154 HR mengubah jabatan
+sendiri / flag dimatikan / parameter; SEC-155 ekspor CSV + hak; SEC-158 notifikasi mode & arsip; SEC-159 baris user
+admin, sinkron melewati admin, Superadmin terakhir). Grup modul lain diuji bila terpasang (`skipTest`
 bila tidak). Uji 17 = regresi seluruh `--test-tags efn` dengan `efn_role` terpasang.
 
 ## Asumsi 19.0 / belum terverifikasi
@@ -130,6 +176,11 @@ bila tidak). Uji 17 = regresi seluruh `--test-tags efn` dengan `efn_role` terpas
 - [B] `check_access(operation)`, `action_archive` → `write({'active': False})`, `activity_schedule` untuk user
   dengan hak baca record, render `web_ribbon`/pivot di 19.0, efek `hr.employee.write({'job_id'})` ke versi aktif.
 - Test **belum dijalankan** oleh penulis (sesi tanpa shell). Modul belum ada di `EFN_TEST_MODULES` CI (wilayah devsecops).
+- r14 [B]: `ir.attachment` field `raw` (tulis bytes), `action_archive` di model `mail.thread`, aktivitas auditor pada
+  model yang hanya bisa ia baca (menandai selesai mungkin butuh hak tulis — pola sama dengan pengecualian SoD),
+  `hr.employee.write({'job_id'})` oleh `hr.group_hr_user` atas karyawannya sendiri.
+  [V] `export_data` → `UserError` tanpa `group_allow_export`; `group_allow_export` hanya tersirat dari `group_system`
+  (`base/security/base_groups.xml` 19.0, WebFetch 19 Okt 2026).
 
 ## Batasan
 - Grup Odoo global: peran per company hanya menambah company; SoD dievaluasi global per user (default).

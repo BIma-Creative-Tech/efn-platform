@@ -135,6 +135,22 @@ Bayar setelah batal (L-57): lookup → pelanggan batal → kasir tetap bayar →
 (`counter_paid_after_cancel`, tanpa faktur) → BFF bagian `review`, order DB tetap `cancelled`, pelanggan melihat `review`.
 Sebelum `q` pertama: Odoo modul `efn_online_pos_counter` terpasang, `ONLINE_PAYMENT_METHODS` berisi `counter` (default dev).
 
+## Skenario `r` — G21 kebijakan poin per PT + akrual harian (docs/04 §13.1, L-61, L-66) — ditulis QA, BELUM dijalankan
+
+Opsional (tidak di default): `bash scripts/smoke/run-e2e-smoke.sh r`. Skrip Odoo baru `odoo_loyalty_accounting_smoke.py`
+(`policy|accounts|accrual`). Prasyarat: `efn_loyalty_accounting` terpasang di `efn_odoo`; secret `loyalty_policy_signing_key`
+ada di `secrets/` (gen-secrets) dan ter-mount ke odoo + api-gateway; BFF membawa migrasi `10-platform-g21.sql`; kebijakan
+env BFF default (plafon `LOYALTY_POLICY_CEILING_*` = env lama). Alur: user fiktif pembuat (Loyalty Manager) + penyetuju
+(Accounting Manager) PT GL → draft nilai acak (`redeem_min_points` 51..99, `redeem_max_pct` 41..49) → pembuat tidak bisa
+menyetujui (empat mata) → penyetuju menyetujui → outbox mengirim `PUT /v1/pos/loyalty/policies/GL/<v>` bertanda tangan →
+`published` + baris append-only di `platform.loyalty_policy` (UPDATE ditolak trigger) → `pos.config._efn_loyalty_params()`
+(jalur POS, `GET params?company_code=GL`) mengembalikan nilai baru. Akrual: akun dev PT GL (`21990091`, `SMKLY1..3`) → cron
+`_efn_run_all()` dijalankan manual dua kali → tidak ada akrual berstatus `error`, baris `EFN_LOYALTY_RECON` tertangkap dan
+berformat 5 kunci, jumlah jurnal `EFN-LOY-*` tidak bertambah pada run kedua. Keterbatasan: shell `odoo shell` tidak menulis
+ke log container, jadi baris RECON tidak sampai ke Loki lewat skenario ini (periksa Loki setelah cron 02:00 nyata:
+`{stream="efn_loyalty", loyalty_event="liability_recon"}`); jumlah `mismatch` hanya informasi (jurnal POS dev sebelum jendela
+lookback tidak ikut diakrual).
+
 `l` langkah 8b' (G20 E-41, `odoo_pos_smoke.py ret_approval`): retur tanpa struk dengan PIN Store Manager — tanpa persetujuan
 ditolak, kasir bukan approver, PIN salah, PIN benar sekali pakai (token tidak keluar), nominal melebihi, 5 salah = terkunci.
 `setup` POS menyetel mode `cash` agar langkah SEC-59 (`loy_refund_noreceipt`) tetap menguji loyalty, bukan persetujuan.

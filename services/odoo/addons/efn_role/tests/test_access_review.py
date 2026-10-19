@@ -105,15 +105,17 @@ class TestEfnAccessReview(EfnRoleCase):
         with self.assertRaises(UserError):
             self.env["efn.access.review.line"].create({"review_id": review.id, "source": "direct"})
 
-    def test_16d_auditor_without_access_rights_reads_and_exports(self):
+    def test_16d_auditor_without_access_rights_reads_but_no_generic_export(self):
         self._snapshot_user()
         review = self.Review.create({"company_id": self.gl.id, "period": "2001-05"})
         self.assertFalse(self.auditor.has_group("base.group_erp_manager"))
+        self.assertFalse(self.auditor.has_group("base.group_allow_export"), "SEC-155: tanpa hak ekspor generik")
         Line = self.env["efn.access.review.line"].with_user(self.auditor)
         lines = Line.search([("review_id", "=", review.id)])
         self.assertEqual(len(lines), len(review.line_ids))
-        data = lines.export_data(["user_login", "group_full_name", "source", "sod_codes", "exception_state"])
-        self.assertEqual(len(data["datas"]), len(lines))
+        # Ekspor generik ORM (sumber /web/export/*) ditolak untuk Auditor; ekspor lewat action_efn_export_csv.
+        with self.assertRaises(UserError):
+            lines.export_data(["user_login", "group_full_name"])
         # Header review terbaca auditor juga.
         self.assertEqual(self.Review.with_user(self.auditor).search([("id", "=", review.id)]), review)
 

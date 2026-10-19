@@ -11,9 +11,6 @@
         <field name="key">efn.loyalty.policy_outbox_max_hours</field>
         <field name="value">72</field>
     </record>
-    <!-- Breakage poin kedaluwarsa (W-17) disiapkan, aktif di G22 setelah keputusan Finance/Legal. -->
-    <record id="param_breakage_journal_enabled" model="ir.config_parameter">
-        <field name="key">efn.loyalty.breakage_journal_enabled</field>
-        <field name="value">False</field>
-    </record>
+    <!-- r14 L-67 (SEC-160): breakage & forfeit selalu dijurnal; parameter efn.loyalty.breakage_journal_enabled dihapus
+         (bila masih ada di DB lama: diabaikan kode). -->
 </odoo>

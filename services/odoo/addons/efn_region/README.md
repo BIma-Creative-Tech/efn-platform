@@ -39,7 +39,8 @@ Upsert per `code`; baris tidak valid dilewati (dihitung, isi tidak di-log). Alte
 ## Batasan / belum
 - Tidak ada penurunan otomatis dari kode pos (butuh tabel kode pos → kab/kota, sumber tambahan).
 - BFF `region_code` (W-05/W-06) → `efn_region_id`: pemetaan di jalur RPC terkait (bukan modul ini).
-- Erasure UU PDP (`efn_privacy`) wajib mengosongkan `efn_region_id` (K-36-4) — di luar cakupan file builder ini.
+- Erasure UU PDP (`efn_privacy`) mengosongkan `efn_region_id` (K-36-4) — ditambahkan QA G21 di `PARTNER_CLEAR_FIELDS`
+  (`efn_privacy/models/efn_privacy_erasure.py`), test `test_erasure_clears_region_nik_and_mail_queue`.
 - `state_id` tidak diisi data contoh (xmlid provinsi base tidak diverifikasi); importer belum memetakan provinsi.
 
 ## Referensi (ADR-031)

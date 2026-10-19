@@ -135,6 +135,9 @@ describe('parseInvoiceRequest (§13.5 validasi BFF)', () => {
     ['alamat 256 karakter', { address: 'a'.repeat(256) }],
     ['email tanpa @', { email: 'budi.example.com' }],
     ['email > 254', { email: `${'a'.repeat(250)}@x.id` }],
+    // QA G21: selaras Odoo efn_online_common.EMAIL_RE (lokal ≤ 64, TLD ≥ 2) — kalau tidak, lolos BFF tetapi ditolak Odoo
+    ['email TLD 1 huruf', { email: 'budi@contoh.i' }],
+    ['email bagian lokal 65 karakter', { email: `${'a'.repeat(65)}@contoh.id` }],
     ['karakter kontrol di nama', { name: 'Budi\nSantoso' }],
     ['field tambahan', { phone: '6281234567890' }],
     ['bukan string', { name: 42 }],

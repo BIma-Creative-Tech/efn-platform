@@ -88,6 +88,26 @@ class TestEfnLoyaltyPolicy(TransactionCase):
         policy.with_user(self.am2).action_efn_approve()
         self.assertEqual((policy.state, policy.approved_by_id), ("approved", self.am2))
 
+    def test_any_intermediate_editor_cannot_approve(self):
+        """SEC-157: A (LM) membuat; C (Accounting Manager, lewat kode ber-sudo atas namanya) menaikkan nilai; A
+        menyunting catatan (penyunting terakhir = A) -> C tetap ditolak karena pernah menyunting draft."""
+        policy = self._policy()
+        policy.with_user(self.am).sudo().write({"earn_idr_per_point": 20_000})
+        policy.with_user(self.lm).write({"note": "catatan uji"})
+        self.assertEqual(policy.last_editor_id, self.lm)
+        self.assertEqual(policy.editor_ids, self.lm | self.am)
+        for action in ("action_efn_approve", "action_efn_reject"):
+            with self.subTest(action=action), self.assertRaises(UserError):
+                getattr(policy.with_user(self.am), action)()
+        self.assertEqual(policy.state, "draft")
+        # Himpunan penyunting tidak bisa dihapus/diubah pengguna (field sistem).
+        with self.assertRaises(AccessError):
+            policy.with_user(self.lm).write({"editor_ids": [(5, 0, 0)]})
+        with self.assertRaises(AccessError):
+            self.env["efn.loyalty.policy"].with_user(self.lm).create({"editor_ids": [(6, 0, [self.lm2.id])]})
+        policy.with_user(self.am2).action_efn_approve()
+        self.assertEqual((policy.state, policy.approved_by_id), ("approved", self.am2))
+
     def test_only_accounting_manager_of_same_company_approves(self):
         policy = self._policy()
         with self.assertRaises(AccessError):

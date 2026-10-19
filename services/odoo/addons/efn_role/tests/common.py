@@ -33,9 +33,8 @@ class EfnRoleCase(TransactionCase):
         cls.superadmin = cls._make_user("efn_role_sa1", ["base.group_system"], all_companies)
         cls.superadmin2 = cls._make_user("efn_role_sa2", ["base.group_system"], all_companies)
         cls.access_admin = cls._make_user("efn_role_access", ["base.group_erp_manager"], all_companies)
-        cls.auditor = cls._make_user(
-            "efn_role_auditor", ["efn_audit.group_auditor", "base.group_allow_export"], cls.main | cls.gl
-        )
+        # SEC-155 / L-67: Auditor TANPA base.group_allow_export (ekspor lewat action_efn_export_csv).
+        cls.auditor = cls._make_user("efn_role_auditor", ["efn_audit.group_auditor"], cls.main | cls.gl)
         cls.rule_ab = cls.Rule.create(
             {"code": "UJI-AB", "name": "Uji A ⟂ B", "group_a_id": cls.g_a.id, "group_b_id": cls.g_b.id}
         )

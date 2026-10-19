@@ -39,7 +39,8 @@ export const INVOICE_NOT_AVAILABLE_MESSAGE = 'Faktur atas nama belum tersedia un
 export const INVOICE_PRIVACY_NOTICE =
   'Data ini hanya dipakai untuk menerbitkan faktur pajak atas nama Anda. Data tidak disimpan di perangkat ini dan dihapus dari layar setelah pesanan dibuat. Faktur pajak disimpan sesuai aturan perpajakan (10 tahun).';
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Selaras dengan BFF `invoice-request.ts` dan Odoo `efn_online_common.EMAIL_RE` (lokal ≤ 64, TLD ≥ 2).
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]+\.[^\s@]{2,}$/;
 
 /** Hapus pemisah umum (titik, strip, spasi) pada NPWP/NIK; paspor hanya dipangkas dan dijadikan huruf besar. */
 export function normalizeTaxId(type: InvoiceBuyerType, raw: string): string {

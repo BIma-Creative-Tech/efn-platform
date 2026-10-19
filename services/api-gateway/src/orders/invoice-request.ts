@@ -15,7 +15,9 @@ export const INVOICE_REQUEST_KEYS = ['buyer_type', 'tax_id', 'name', 'address', 
 /** §13.5: hanya kanal PT PPN. PT F&B (PB, BCF; PB1) dan PT lain → `422 invoice_not_available`. */
 export const INVOICE_COMPANIES: readonly string[] = ['GL', 'BCR'];
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Selaras dengan Odoo `efn_online_common.EMAIL_RE` (lokal ≤ 64, TLD ≥ 2): tanpa ini email lolos BFF tetapi ditolak Odoo
+// (invalid_input) sehingga faktur atas nama diam-diam jatuh ke CS.
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]+\.[^\s@]{2,}$/;
 /** Kontrol & karakter format (termasuk pemisah baris/arah teks) ditolak di nama/alamat — cegah injeksi ke dokumen pajak. */
 // eslint-disable-next-line no-control-regex -- sengaja mencocokkan karakter kontrol untuk DITOLAK
 const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069]/;

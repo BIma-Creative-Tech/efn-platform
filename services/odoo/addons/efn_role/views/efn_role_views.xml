@@ -10,8 +10,10 @@
                 <field name="name"/>
                 <field name="company_id" groups="base.group_multi_company"/>
                 <field name="job_id"/>
+                <field name="sync_from_job" optional="show"/>
                 <field name="group_ids" widget="many2many_tags"/>
                 <field name="is_admin_role" optional="show"/>
+                <field name="is_sensitive_role" optional="show"/>
                 <field name="user_count"/>
             </list>
         </field>
@@ -24,7 +26,8 @@
             <form>
                 <header>
                     <button name="action_efn_apply_job_roles" type="object" string="Terapkan peran dari jabatan"
-                            invisible="not job_id or not id" groups="base.group_erp_manager"/>
+                            invisible="not job_id or not id or not sync_from_job or is_sensitive_role"
+                            groups="base.group_erp_manager"/>
                 </header>
                 <sheet>
                     <widget name="web_ribbon" title="Diarsipkan" bg_color="text-bg-danger" invisible="active"/>
@@ -33,11 +36,14 @@
                             <field name="name"/>
                             <field name="company_id" groups="base.group_multi_company"/>
                             <field name="job_id"/>
+                            <field name="sync_from_job" invisible="not job_id"
+                                   readonly="is_sensitive_role and not sync_from_job"/>
                             <field name="active" invisible="1"/>
                         </group>
                         <group>
                             <field name="sequence"/>
                             <field name="is_admin_role"/>
+                            <field name="is_sensitive_role"/>
                             <field name="user_count"/>
                         </group>
                     </group>

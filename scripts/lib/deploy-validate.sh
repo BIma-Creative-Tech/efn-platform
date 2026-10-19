@@ -202,6 +202,17 @@ efn_validate_config() { # app_env
     _efn_err "production EFN_ODOO_PII_ENABLED=true wajib EFN_ODOO_PII_REQUIRED=true (AC-13, docs/runbooks/key-custody.md)"
     return 1
   fi
+  # SEC-148 (r13, QA G21): mode migrasi `efnpii1:` (EFN_ODOO_PII_ACCEPT_V1=true) hanya untuk data PoC dev/staging.
+  # Bukan konfigurasi rilis (tidak ada di EFN_RELEASE_CONFIG_VARS, tidak diteruskan compose) - ini lapis kedua untuk
+  # jalur manual `sudo -E bash deploy.sh`: production menolak nilai selain kosong/false. Tidak bisa dimatikan lewat
+  # EFN_ALLOW_CONTROL_OFF.
+  if [[ -n "${EFN_ODOO_PII_ACCEPT_V1:-}" ]]; then
+    _efn_re EFN_ODOO_PII_ACCEPT_V1 '^(true|false)$' || return 1
+    if [[ "$app_env" == production && "$EFN_ODOO_PII_ACCEPT_V1" == true ]]; then
+      _efn_err "production menolak EFN_ODOO_PII_ACCEPT_V1=true (mode migrasi efnpii1, SEC-148)"
+      return 1
+    fi
+  fi
   # G17 penjualan online (docs/04 §10.1/§10.13; angka PLACEHOLDER pilot). Kosong = default compose (online MATI).
   _efn_re ONLINE_CHANNELS '^[A-Z][A-Z0-9-]{1,15}(,[A-Z][A-Z0-9-]{1,15}){0,7}$' || return 1
   efn_validate_online_channels "${ONLINE_CHANNELS:-$EFN_ONLINE_BASE_CHANNEL}" || return 1

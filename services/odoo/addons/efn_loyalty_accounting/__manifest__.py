@@ -1,7 +1,7 @@
 {
     "name": "EFN Loyalty Accounting",
     "summary": "Kebijakan Poin EFN per PT (empat mata, publikasi bertanda tangan ke BFF) + akrual liabilitas harian.",
-    "version": "19.0.1.0.0",
+    "version": "19.0.1.1.0",
     "category": "EFN/Accounting",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",

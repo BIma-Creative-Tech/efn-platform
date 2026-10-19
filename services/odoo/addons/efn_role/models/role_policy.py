@@ -1,10 +1,11 @@
-"""Konstanta & helper murni efn_role (G21, E-47/E-47c; docs/08 §12.3-§12.5, docs/04 §13.3, L-64, L-65).
+"""Konstanta & helper murni efn_role (G21, E-47/E-47c; docs/08 §12.3-§12.5, docs/04 §13.3, L-64, L-65, L-67).
 
 Penanda operasi internal disimpan di `cr.cache` (per cursor/transaksi), BUKAN di context: context dapat diisi
 klien lewat RPC (`/web/dataset/call_kw`, `/json/2`), `cr.cache` tidak (pola sama dengan efn_audit / efn_pos_otp_gate).
 Spesifikasi menyebut `with_context(efn_role_apply=True)`; diganti penanda `cr.cache` agar tidak bisa dipalsukan klien.
 """
 
+import re
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import timedelta
@@ -19,6 +20,20 @@ INTERNAL_KEY = "efn_role_internal"  # tulis field status/snapshot/flag oleh kode
 
 # Grup admin: peran yang (efektif) memuat salah satunya hanya boleh dibuat/diubah/ditetapkan oleh base.group_system.
 ADMIN_GROUP_XMLIDS = ("base.group_system", "base.group_erp_manager")
+# Grup sensitif (SEC-154, L-67): peran yang (efektif) memuat salah satunya TIDAK PERNAH disinkron dari jabatan
+# (`efn.role.sync_from_job` ditolak) -> penetapan manual oleh Access Rights / Superadmin. Opsional per xmlid.
+# Parameter `efn_role.sensitive_group_xmlids` (xmlid dipisah koma) hanya MENAMBAH daftar ini, tidak mengurangi.
+SENSITIVE_GROUP_XMLIDS = (
+    *ADMIN_GROUP_XMLIDS,
+    "account.group_account_manager",
+    "sales_team.group_sale_manager",
+    "point_of_sale.group_pos_manager",
+    "efn_audit.group_manager",
+    "efn_role.group_refund_approver",
+    "efn_loyalty_accounting.group_loyalty_manager",
+)
+SENSITIVE_PARAM = "efn_role.sensitive_group_xmlids"
+XMLID_RE = re.compile(r"^[A-Za-z0-9_]+\.[A-Za-z0-9_]+$")
 # Akun non-jabatan (docs/08 §12.2b): tidak boleh diberi peran. Opsional (modul pemilik mungkin belum terpasang).
 TECHNICAL_GROUP_XMLIDS = ("efn_online_order.group_online_channel", "efn_pos_kds.group_kds_device")
 # Grup penanda modul ini (tanpa ACL, tanpa implied_ids) -> selalu termasuk himpunan terkelola.
@@ -134,6 +149,24 @@ def users_of_groups(env, group_ids):
     env["res.groups"].flush_model(["user_ids"])
     env.cr.execute("SELECT DISTINCT uid FROM res_groups_users_rel WHERE gid = ANY(%s)", [ids])
     return {row[0] for row in env.cr.fetchall()}
+
+
+def sensitive_group_ids(env):
+    """Id grup sensitif (SEC-154): bawaan + tambahan parameter `efn_role.sensitive_group_xmlids`.
+
+    Entri berformat salah / xmlid yang tidak ada dilewati; parameter tidak bisa mengurangi daftar bawaan."""
+    raw = env["ir.config_parameter"].sudo().get_param(SENSITIVE_PARAM, "") or ""
+    extra = tuple(x.strip() for x in raw.replace(";", ",").split(",") if XMLID_RE.match(x.strip()))
+    return xmlid_group_ids(env, SENSITIVE_GROUP_XMLIDS + extra)
+
+
+def effective_member_ids(env, xmlids):
+    """uid yang EFEKTIF memegang salah satu grup `xmlids` (eksplisit atau lewat grup yang menyiratkannya),
+    termasuk user arsip; dihitung dari tabel relasi setelah flush."""
+    gids = xmlid_group_ids(env, xmlids)
+    if not gids:
+        return set()
+    return users_of_groups(env, closure(gids, reverse_map(implied_map(env))))
 
 
 # ----------------------------------------------------------------- penerima notifikasi
