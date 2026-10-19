@@ -34,6 +34,8 @@
 #               MARKET_SCOUT_PHOTO_RETENTION_DAYS CH_MART_RETENTION_YEARS PG_SUPERUSER ETL_ENABLE_ODOO (true|false)
 #               ETL_ENABLE_GL ETL_AUDIT_COPY_ENABLED (true|false; kosong = aktif otomatis setelah grant, G12)
 #               ETL_LOYALTY_RECON_NOT_BEFORE (UTC YYYY-MM-DDTHH:MM:SSZ, go-live loyalty POS; kosong = nilai .env lama, G14)
+#               EFN_ODOO_PII_ENABLED EFN_ODOO_PII_REQUIRED (true|false; G21 AC-13: overlay docker-compose.pii.yml, kunci
+#               host:* odoo_pii_* divalidasi; production ENABLED=true wajib REQUIRED=true)
 set -euo pipefail
 
 BASE=/opt/efn
@@ -137,6 +139,13 @@ if [[ "${ONLINE_ENABLED:-false}" == true ]]; then
       die "ONLINE_ENABLED=true tetapi API key kanal ${ch} tidak ada/placeholder (docs/runbooks/odoo-online-api-key.md)"
     fi
   done
+fi
+# G21 AC-13 (docs/04 §13.2, ADR-036 §0): kunci PII Odoo produksi (host:disabled [SA]) dibuat Superadmin di host. Overlay
+# docker-compose.pii.yml hanya dipasang bila ketiganya kunci 32 byte nyata & berbeda (bukan placeholder) - fail-closed.
+if [[ "${EFN_ODOO_PII_ENABLED:-false}" == true ]]; then
+  efn_validate_pii_keys "$SECRETS_DIR" \
+    || die "EFN_ODOO_PII_ENABLED=true tetapi kunci PII Odoo tidak valid (docs/runbooks/key-custody.md §4e)"
+  echo "==> Kunci PII Odoo valid (3 kunci, 32 byte, berbeda) - overlay docker-compose.pii.yml dipasang"
 fi
 
 echo "==> Secret turunan (member_hash_pepper = HKDF(otp_pepper), token metrik MinIO)"
@@ -344,6 +353,9 @@ DOTENV=(
   "ERASURE_SUPPRESSION_DAYS=${ERASURE_SUPPRESSION_DAYS:-}"
   "MEMBER_MIN_AGE=${MEMBER_MIN_AGE:-}"
   "PRICE_HUNTER_GEO_RETENTION_DAYS=${PRICE_HUNTER_GEO_RETENTION_DAYS:-}"
+  # G21 AC-13: overlay docker-compose.pii.yml (kosong REQUIRED = default overlay true; production wajib eksplisit true)
+  "EFN_ODOO_PII_ENABLED=${EFN_ODOO_PII_ENABLED:-false}"
+  "EFN_ODOO_PII_REQUIRED=${EFN_ODOO_PII_REQUIRED:-}"
 )
 efn_write_dotenv "$COMPOSE_DIR/.env" "${DOTENV[@]}" || die "gagal menulis .env (SEC-50)"
 
@@ -372,6 +384,11 @@ cd "$COMPOSE_DIR"
 FILES=(-f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.host.yml)
 # Kunci API payment hanya di-mount bila provider nyata (docs/04 §8.3); mock/disabled tidak me-mount kunci
 if [[ "$PAYMENT_PROVIDER" =~ ^(xendit|midtrans)$ ]]; then FILES+=(-f docker-compose.payment.yml); fi
+# G21 AC-13: kunci PII Odoo hanya di-mount (ke odoo saja) bila diaktifkan PO + kunci tervalidasi di langkah 1 (L-59)
+if [[ "${EFN_ODOO_PII_ENABLED:-false}" == true ]]; then
+  [[ -f docker-compose.pii.yml ]] || die "EFN_ODOO_PII_ENABLED=true tetapi infra/compose/docker-compose.pii.yml tidak ada di bundel"
+  FILES+=(-f docker-compose.pii.yml)
+fi
 # G17/G19/G20 (docs/04 §12.1): API key kanal selain GL (base) hanya di-mount bila kanal ada di ONLINE_CHANNELS: satu
 # overlay per kanal docker-compose.online-<kode huruf kecil>.yml (PB -> online-pb, BCR -> online-bcr, BCF -> online-bcf).
 # Kode di luar EFN_ONLINE_CHANNEL_CODES (termasuk RTL/FNB/RTL-GL.. lama) atau kanal tanpa overlay = konfigurasi salah ->
@@ -430,7 +447,7 @@ echo "==> Migrasi skema idempoten (infra/postgres/init/[0-9][0-9]-*.sql >= 04)"
 # member.age_confirmed_at; dibutuhkan BFF G18). 09 = G20 (docs/04 §12.1/§12.2: CHECK company_code 6 entitas,
 # online_order.payment_method, status awaiting_counter_payment, counter_code_enc; dibutuhkan BFF G20).
 for req in 04-platform-v3-6.sql 05-platform-loyalty-pos.sql 06-platform-loyalty-guard.sql 07-platform-online.sql \
-           08-platform-g18-privacy.sql 09-platform-g20.sql; do
+           08-platform-g18-privacy.sql 09-platform-g20.sql 10-platform-g21.sql; do
   [[ -s "$BASE/postgres/init/$req" ]] || die "migrasi wajib $req tidak ada di $BASE/postgres/init (bundel rilis tidak lengkap)"
 done
 for mig in "$BASE"/postgres/init/[0-9][0-9]-*.sql; do
@@ -441,6 +458,17 @@ for mig in "$BASE"/postgres/init/[0-9][0-9]-*.sql; do
   "${DC[@]}" exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U "${PG_SUPERUSER:-postgres}" -d postgres \
     -f "/docker-entrypoint-initdb.d/$(basename "$mig")" || die "migrasi $(basename "$mig") gagal"
 done
+
+# G21 AC-13: efn_pii yang sudah terpasang di DB efn_odoo tanpa overlay kunci = Odoo start tanpa kunci (data partner
+# terlindungi tidak terbaca, mode terkunci). Dicek SEBELUM `up` agar container Odoo lama tidak di-recreate tanpa kunci.
+# DB/tabel belum ada (instalasi baru) = lewati; query gagal saat tabel ada = gagal (fail-closed).
+if "${DC[@]}" exec -T postgres psql -X -q -t -A -U efn_odoo -d efn_odoo \
+     -c "SELECT to_regclass('public.ir_module_module') IS NOT NULL" 2> /dev/null | grep -qx t; then
+  pii_state=$("${DC[@]}" exec -T postgres psql -X -q -t -A -v ON_ERROR_STOP=1 -U efn_odoo -d efn_odoo \
+    -c "SELECT state FROM ir_module_module WHERE name = 'efn_pii'") || die "status modul efn_pii tidak dapat dibaca"
+  efn_pii_module_state_ok "${EFN_ODOO_PII_ENABLED:-false}" "$pii_state" \
+    || die "efn_pii terpasang tanpa kunci: set EFN_ODOO_PII_ENABLED=true (+ kunci, docs/runbooks/key-custody.md §4e) lalu ulangi deploy"
+fi
 
 # W-19 (data-AI G18): clickhouse-init dapat memigrasi tabel (loyalty_events: salin + EXCHANGE, jendela 1 jam). ETL lama
 # yang masih berjalan selama itu bisa menyalin ulang baris subjek yang baru dihapus -> hentikan ETL dulu; `up -d`

@@ -55,7 +55,7 @@ describe('Klien json2 (docs/04 §10.4)', () => {
       headers: { Authorization: `bearer ${GL_KEY}`, 'X-Odoo-Database': 'efn_odoo', 'Content-Type': 'application/json' },
     });
     expect(ctx.calls[1].headers.Authorization).toBe(`bearer ${PB_KEY}`);
-    expect(Object.values(ODOO_ONLINE_PATHS)).toHaveLength(11); // + L-60 counterRefundAuthorize
+    expect(Object.values(ODOO_ONLINE_PATHS)).toHaveLength(12); // + L-60 counterRefundAuthorize + G21 §13.5 setInvoiceParty
     for (const p of Object.values(ODOO_ONLINE_PATHS)) expect(p).toMatch(/^efn\.online\.(channel|order)\/efn_online_[a-z_]+$/);
   });
 

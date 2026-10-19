@@ -1,0 +1,21 @@
+# Overlay enkripsi PII Odoo PRODUKSI/STAGING (G21 AC-13, docs/04 §13.2; ADR-036 §0 Accepted, ADR-022). Pola
+# docker-compose.payment.yml / docker-compose.online-<kode>.yml: kunci PII Odoo HANYA di-mount ke service `odoo` (bukan BFF,
+# ETL, OCR, Metabase, odoo-rpc-gateway; dicek scripts/check-encryption.sh render `prod-pii`) dan HANYA bila
+# EFN_ODOO_PII_ENABLED=true (scripts/deploy.sh). Tanpa overlay ini kunci tidak ada di container mana pun.
+#
+# Prasyarat (deploy.sh + scripts/lib/deploy-validate.sh, fail-closed):
+#   - /opt/efn/secrets/odoo_pii_{key_v1,bidx_key,name_key}.txt = 32 byte acak base64, ketiganya berbeda, BUKAN
+#     placeholder `disabled` (dibuat Superadmin di host, docs/runbooks/key-custody.md §4e, salinan tersegel brankas Direksi);
+#   - production: EFN_ODOO_PII_REQUIRED=true (mode terkunci Odoo dicatat CRITICAL bila kunci hilang saat berjalan).
+# Modul efn_pii* tetap TIDAK di daftar install produksi sampai PO menyatakan aktivasi (L-59): overlay ini hanya
+# menyiapkan kunci. Rotasi: docs/runbooks/pii-key-rotation.md.
+services:
+  odoo:
+    environment:
+      EFN_ODOO_PII_KEY_V1_FILE: /run/secrets/odoo_pii_key_v1
+      EFN_ODOO_PII_ACTIVE_KEY_VERSION: "1"
+      EFN_ODOO_PII_BIDX_KEY_FILE: /run/secrets/odoo_pii_bidx_key
+      EFN_ODOO_PII_NAME_KEY_FILE: /run/secrets/odoo_pii_name_key
+      # Default true: render tanpa .env (CI) = perilaku production. deploy.sh menulis nilai tervalidasi ke .env.
+      EFN_ODOO_PII_REQUIRED: ${EFN_ODOO_PII_REQUIRED:-true}
+    secrets: [odoo_pii_key_v1, odoo_pii_bidx_key, odoo_pii_name_key]   # digabung dengan daftar secret base

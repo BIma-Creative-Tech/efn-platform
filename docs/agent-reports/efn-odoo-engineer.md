@@ -1551,3 +1551,465 @@ Tanpa commit; tanpa shell — **test belum dijalankan** (lead menjalankan).
   `out_type_id`); psycopg2 mengembalikan `row_to_json(...)::json` sebagai dict.
 - Alur form wizard di web client 19 (`web_save` → baca ulang field PIN kosong → `action_apply`) dibaca dari pola,
   belum diuji tour. Blokir order campuran di JS belum diuji tour.
+
+---
+
+# G21 paket B — E-38a sisa + E-38b + SEC-148/149/153 (19 Okt 2026, branch `chore/wave-21`)
+
+Kontrak: docs/04 §13.2 + ADR-036 §0 (Accepted) + review r13 (SEC-148, SEC-149, SEC-153). Cakupan file: `efn_pii*/**`,
+`efn_pii_l10n_id/**` (baru), `efn_region/**` (baru). Tanpa commit, tanpa shell: **test & ruff belum dijalankan** (lead).
+
+## Modul & file
+| Modul | File |
+|---|---|
+| `efn_pii` 19.0.2.0.0 → **19.0.3.0.0** | `models/keyring.py` (bytes API `encrypt_bytes/decrypt_bytes`, `name_padder`, `accept_v1_env`, `is_bytes_ciphertext`), `models/fields_pii.py` (ditulis ulang: `EfnPiiFieldMixin` + `EfnPiiChar`/`EfnPiiText`/`EfnBidxChar`, normalizer dokumen, `bidx_condition`, SEC-148 gate baca, created-set, kait v1, `_efn_pii_partner_search`, blind index untuk model `_efn_pii_always`), `models/pii_model.py` (`created`, `rewrite_rows(allow_v1)`, `unbound_ids`, `count_unbound`, `latch_v1_migrated`, `redact_tracking_fields`, redaksi kolom `*_text`), `models/res_partner.py` (`_create`, atribut kelas `_efn_pii_bidx_sources`, `_efn_pii_fill_bidx`, padding seed id, `_efn_pii_after_protect`, migrasi mode v1 + kait), `models/res_users.py` (login portal opak), `models/base_partner_merge.py` (log merge tanpa nama/email), `models/mail_tracking_value.py` (`_efn_pii_tracking_scope`), **baru** `models/mail_mail.py`, `models/res_partner_bank.py`; `tools/name_tokens.py` (`pad_tokens(tokens, pad_token, extra_blocks)`); tests `test_pii_g21.py` (baru), `test_pii_sec.py`, `test_pii_tokens.py`, `test_pii_vectors.py`, `tests/__init__.py`, `tests/data/efn_pii_shared_vectors.json` (status), `README.md`, `__manifest__.py` |
+| `efn_pii_account` → **19.0.2.0.0** | `models/account_move.py` (baru), `models/res_partner.py` (hook), `models/res_partner_bank.py` (baru), `tests/` (baru), `README.md`, `__manifest__.py` |
+| `efn_pii_hr` → **19.0.2.0.0** | `models/hr_employee.py` (ditulis ulang), `models/hr_version.py` (baru), `__init__.py` (`post_init_hook`), `tests/test_pii_hr.py`, `README.md`, `__manifest__.py` |
+| `efn_pii_pos` → **19.0.1.1.0** | `models/pos_order.py` (`_create`, migrasi mode v1), `README.md`, `__manifest__.py` |
+| **`efn_pii_l10n_id` 19.0.1.0.0 (baru)** | `__manifest__.py` (auto_install `efn_pii` + `l10n_id_efaktur_coretax`), `__init__.py` (hook), `models/{res_partner,ir_attachment,efaktur_document}.py`, `controllers/download_efaktur.py`, `tests/test_pii_l10n_id.py`, `README.md` |
+| **`efn_region` 19.0.1.0.0 (baru)** | `models/{efn_region,res_partner}.py`, `security/{ir.model.access.csv,efn_region_security.xml}`, `data/efn.region.csv` (12 contoh), `views/{efn_region_views,res_partner_views}.xml`, `tests/test_region.py`, `README.md` |
+
+Tidak ada metode publik baru (semua override `create`/`write` atau `_`-privat; importer region = `_efn_region_import_csv`
+via shell) → **tidak perlu entri `RPC_ALLOWLIST`**. Model baru: hanya `efn.region` (company_id opsional = referensi
+bersama, `_check_company_auto`, record rule global multi-company, ACL baca user / kelola system).
+
+## AC / butir
+| # | Status (ditulis; belum dijalankan) |
+|---|---|
+| 1 SEC-153 | `invoice_partner_display_name` E + penanda `account.move.efn_pii_protected` (precompute, satu arah) + pencarian via subquery token partner + faktur lama ikut saat partner menjadi terlindungi. `mail.message.record_name` **tidak tersimpan di 19.0** (`store=False`) → tidak ada residu. Log merge `mail` (nama + email sumber di `body`) diganti pesan ID saja bila ada partner terlindungi. `mail.mail.email_to` (`EfnPiiText`) + `email_cc` E bila dokumen/penerima/penulis/email (blind index) terlindungi atau model `_efn_pii_always` (struk POS); antrean lama ikut saat partner menjadi terlindungi |
+| 2 `efn_pii_l10n_id` | NIK & nomor dokumen pembeli E + B; XML Coretax: lampiran dibuat tanpa isi lalu ditulis `efnpii2:` (AAD `ir_attachment.raw:<id>`), plaintext tidak pernah ke filestore; chatter tanpa salinan lampiran; unduhan = override controller (grup `account.group_account_invoice`, dekripsi server, zip di memori, jejak chatter + log); test AC-3 isi terdekripsi == `_generate_efaktur_invoice()` + memuat nama/alamat/NPWP; HttpCase unduhan |
+| 3 SEC-148 | `efnpii1` dibaca hanya untuk id yang di-INSERT di cursor ini (sebelum bind) atau mode migrasi (env `EFN_ODOO_PII_ACCEPT_V1=true` DAN kait `efn_pii.v1_migration_done` kosong); selain itu pengganti + CRITICAL `decrypt_refused`/`unbound_ciphertext`. Jalur menjadi-terlindungi & migrasi di luar mode tidak mengikat `efnpii1` (`unbound`). `_efn_pii_migrate()` penuh tanpa sisa → kait (cek `count_unbound` semua model PII). Kait DB hanya bisa mengetatkan (env tetap wajib) |
+| 4 SEC-149 | padding deterministik: token pad = HMAC(subkunci HKDF `nametok:pad`, tabel+id+SHA-256 token asli+i); jumlah = ke kelipatan 16 + **0/1 blok ekstra dari HMAC(tabel+id)**. Nama sama → kolom identik; ganti nama → padding berganti total |
+| 5 E-38b | vendor perorangan = sudah kelas P/V (protect-by-default, test rekening); login portal `share` ber-`@` → `vnd-XXXXXX`; HR: 8 field `hr.employee` + 8 field `hr.version` E, `identification_id` B, tracking hanya field terenkripsi diredaksi, `post_init_hook` baris lama; rekening `acc_number`/`acc_holder_name` E, `sanitized_acc_number` = blind index (`EfnBidxChar`) → unik & cari nomor lengkap tetap; nama karyawan/user internal plaintext (diuji) |
+| 6 `efn_region` | master + importer CSV + `res.partner.efn_region_id` plaintext. Kolom ETL persis: `efn_region(id, code, name, state_id, active, create_date, write_date)` + `res_partner.efn_region_id` (diuji `information_schema`). **View ETL tidak dibuat** (milik data-ai) |
+| 7 AC-2 | nilai `expected_*` **masih null** (tanpa shell; HMAC/AES tidak bisa dihitung tangan). Test kini menulis JSON lengkap ke `EFN_PII_SHARED_VECTORS_OUT` bila env diset; perbandingan ketat aktif otomatis setelah file terisi |
+
+## Asumsi 19.0 (diverifikasi via WebFetch raw 19.0 kecuali disebut)
+- Terverifikasi: `account.move.invoice_partner_display_name` (compute stored, depends), `_rec_names_search`, filter
+  view faktur memakai `partner_id`; `mail.message.record_name store=False`; `mail.mail` (`_inherits`, `email_to` Text,
+  `email_cc` Char, baca ORM saat kirim, `auto_delete` di `_postprocess_sent_message`); POS `action_send_receipt` →
+  `mail_template.send_mail(email_values={'email_to'})`; `mail` `_log_merge_operation`; `mail.thread.message_post` /
+  `_process_attachments_for_post(attachments, attachment_ids, message_values)`; `mail.tracking.value` punya kolom
+  `*_value_text`; Coretax `efaktur_document._generate_xml`, controller unduhan, res_partner field, test CE
+  (`setup_country('id')`); `hr.version` field pribadi; `hr.employee` field pribadi langsung di model; `res.partner.bank`
+  (`_sanitize_vals`, `_search_acc_number`, Constraint unik), account redefinisi `acc_number`/`acc_holder_name`
+  (`tracking=True`) + SQL duplikat; `BaseModel._create(self, data_list)` `@api.model`; `Query.subselect()`;
+  menu `contacts.res_partner_menu_config`.
+- **Belum terverifikasi (risiko run):** (a) mixin non-Field di depan `fields.Char/Text` diterima `Field.__init_subclass__`
+  19.0; (b) pencarian `hr.employee` atas `identification_id` lewat `_inherits` `version_id` (hr 19 punya `_search_version_id`);
+  (c) `Partner._search(...)` di dalam `condition_to_sql` (subquery) tanpa masalah flush; (d) `env._` pada wizard
+  merge; (e) `new_test_user` portal ber-login email; (f) `AccountTestInvoicingHttpCommon` + kunci kelas untuk unduhan;
+  (g) urutan `_sanitize_vals` vs override `create` account untuk rekening; (h) Coretax `download_efaktur` menuntut
+  `l10n_id_pkp`/NPWP/negara (data test mengikuti test CE); (i) `xpath //field[@name='vat']` di `base.view_partner_form`.
+- Data kode wilayah contoh ditulis dari pengetahuan penulis — verifikasi Kepmendagri (Q-PII10).
+
+## Untuk lead
+- **Run gabungan** dengan kunci uji global seperti G20; tambah `efn_pii_l10n_id` (butuh `l10n_id_efaktur_coretax`
+  terpasang; auto_install) dan `efn_region`. Tag test baru: `efn` (+ `efn_pii`). Isi AC-2: set
+  `EFN_PII_SHARED_VECTORS_OUT=/tmp/efn_pii_shared_vectors.json` saat run, salin ke
+  `services/odoo/addons/efn_pii/tests/data/` (atau `tools/shared_vectors.py`), lalu run ulang (perbandingan ketat).
+- **CI (devsecops, AC-4):** job `odoo-test-pii` = install `efn_pii,efn_pii_base_vat,efn_pii_account,efn_pii_pos,efn_pii_hr,
+  efn_pii_l10n_id,efn_region` + `EFN_TEST_MODULES`, tiga kunci acak dibuat di job, `--test-tags efn`, gagal pada
+  ERROR/CRITICAL; **jangan** set `EFN_ODOO_PII_ACCEPT_V1`; opsional query verifikasi `pii_model.count_unbound(env) == 0`
+  sesudah test. `efn_region` boleh masuk `EFN_TEST_MODULES` biasa (tidak bergantung kunci).
+- **deploy-validate (AC-13):** tolak `EFN_ODOO_PII_ACCEPT_V1=true` di production.
+- **Builder C (`efn_online_order`)**: `l10n_id_buyer_document_number` kini `EfnPiiChar` + blind index → `_efn_invoice_party_available`
+  bernilai True bila `efn_pii_l10n_id` terpasang; pencarian `=` berjalan via blind index (normalisasi huruf-angka huruf besar).
+- **efn_privacy (di luar cakupan)**: erasure wajib mengosongkan `efn_region_id`, `efn_name_tokens`, data pribadi HR
+  menurut retensi, rekening orang, `mail.mail` antrean (K-36-4).
+- **data-ai**: view `efn_etl.partner_region` membaca `res_partner.efn_region_id` → join `efn_region.code`; nama
+  kolom sesuai pesan lead (tidak ada perbedaan).
+- Keputusan desain yang perlu dicatat di ADR-036 §0.5 (SEC-149): blok padding ekstra 0/1 per record (rata-rata
+  +8 token/record, ember jumlah token tidak lagi persis f(jumlah kata)).
+
+---
+
+# G21 paket (C) — E-40 pembulatan PPN Coretax + E-39 faktur atas nama pembeli (19 Okt 2026, branch `chore/wave-21`)
+
+Kontrak: docs/04 §13.4, §13.5, §13.7 L-63; spesifikasi docs/08 §11.2 (E-40), §10.7 (E-39). Tanpa commit; tanpa shell
+— **test belum dijalankan** (lead menjalankan di container Odoo 19).
+
+## Modul & file
+- **`efn_l10n_id_coretax_rounding` 19.0.1.0.0 (baru, LGPL-3, depends `l10n_id_efaktur_coretax`, `efn_core`)**:
+  `__manifest__.py`, `__init__.py`, `models/{__init__,account_move,efaktur_document,res_company,res_config_settings}.py`,
+  `views/{res_config_settings_views,account_move_views}.xml`, `tests/{__init__,test_coretax_rounding}.py`, `README.md`.
+  Tanpa model baru → tanpa ACL/record rule baru (jurnal = `account.move` standar).
+- **`efn_online_order` 19.0.1.5.0 → 19.0.1.6.0**: `models/efn_online_order.py` (RPC `efn_online_set_invoice_party` +
+  helper privat `_efn_invoice_party_*`, `_efn_pii_encrypted_field`, field `invoice_party_idempotency_key`),
+  `models/efn_online_common.py` (kode `invoice_not_available`, `invoice_profile_payload`), `models/res_partner.py`
+  (field `efn_online_invoice_buyer`), `tests/test_online_g21_invoice_party.py` (baru), `tests/__init__.py`,
+  `__manifest__.py`, `README.md`.
+- **`efn_core/tests/test_rpc_surface.py`**: satu entri `RPC_ALLOWLIST` `("efn.online.order", "efn_online_set_invoice_party")`.
+
+## E-40 — keputusan
+- Angka Coretax = `account.move.line._l10n_id_coretax_build_invoice_line_vals(vals)` per baris (`VAT`), tidak ditulis
+  ulang. Odoo = Σ baris pajak dengan grup PPN yang sama (`default_tax_group`, non-luxury, luxury); baris grup 0 %/bebas
+  dan kode 07/08 dilewati (VAT XML ≠ PPN terutang).
+- Jurnal `entry` per faktur di jurnal & akun PT; baris PPN = akun + `tax_tag_ids` baris pajak PPN terbesar faktur
+  (CE 19: tanda tag dari formula laporan, `tax_tag_invert` tidak ada lagi) → saldo tag = Σ VAT.
+- Pemicu posting = **best effort** (galat → log `EFN_CORETAX_ROUNDING`, posting faktur tidak diblokir — agar saga
+  online/kasir tidak masuk `review`); pemicu ekspor = override privat
+  `l10n_id_efaktur_coretax.document._generate_xml` (**ketat**, XML tidak dibuat bila gagal). Tidak meng-override
+  `download_efaktur`/`button_draft` (publik → gerbang RPC); reset ke draft ditangkap lewat override ORM `write`.
+- Idempoten via `efn_coretax_rounding_diff` + tautan; berubah → reverse + baru. Pengaman `|d| ≤ baris × Rp1`.
+  Periode terkunci: cek eksplisit `fiscalyear/tax/sale/hard_lock_date` (konservatif, tanpa lock exception per user).
+- Audit pengaturan: log `EFN_CORETAX_ROUNDING_CONFIG` (uid + nama field). Aturan `efn.audit.rule` untuk `res.company`
+  = `efn_setup_audit` (di luar paket ini).
+
+## E-39 — perubahan json2 persis (untuk BFF)
+- **Baru:** `POST /json/2/efn.online.order/efn_online_set_invoice_party`, body
+  `{"channel_code": "<KODE>", "platform_order_ref": "<part_id uuid>", "profile": {"buyer_type": "npwp"|"nik"|"passport", "tax_id": "<16 digit | paspor 5-20 alfanumerik>", "name": "<2-100>", "address": "<5-255>", "email": "<opsional>"}, "idempotency_key": "online:invoice_party:<part_id>"}`
+  → `200 {"state": "set"}`.
+- **Error** (`UserError` message persis): `efn_online:invalid_input` (profil/kunci/ref tidak valid; kunci tambahan
+  ditolak), `efn_online:not_found`, **`efn_online:invoice_not_available`** (baru: PT bukan PPN — `efn_business_type`
+  ≠ retail, yaitu selain GL/BCR — atau efn_pii tidak terpasang/terkunci/field tidak terenkripsi; NIK/paspor juga butuh
+  `efn_pii_l10n_id`), `efn_online:idempotency_conflict` (kunci sama profil beda, atau party sudah dipasang dengan kunci
+  lain), `efn_online:invalid_state` (order bukan `placed` / sudah ada faktur); `AccessError` untuk pemanggil salah.
+  Replay kunci + profil sama → `{"state": "set"}` juga setelah dibayar.
+- Panggil **setelah place, sebelum mark_paid**. Metode lain & hasilnya tidak berubah.
+
+## Test (tag `efn`) — BELUM DIJALANKAN
+- `efn_l10n_id_coretax_rounding/tests/test_coretax_rounding.py` (10): include 8.122 vs 8.123 → Rp1 (akun, jurnal,
+  tag, piutang 81.963 tetap, saldo PPN = 8.123), exclude tanpa jurnal, kode 01 OtherTaxBase = TaxBase, pengaman
+  (posting jalan + WARNING, ekspor ketat `UserError`), idempoten `download_efaktur` + `action_regenerate` + ganti kode
+  ke 08 → reverse, selisih negatif (compute di-mock) → akun lebih, multi-PT, akun belum diatur + `tax_lock_date`,
+  reset ke draft → reverse lalu jurnal baru, constraint pengaturan.
+- `efn_online_order/tests/test_online_g21_invoice_party.py`: kelas tanpa efn_pii (5: profil tidak valid ×13,
+  not_found, user kanal lain, PT F&B, tanpa efn_pii → `invoice_not_available` + tidak ada partner baru) dan kelas
+  efn_pii (5, **skip** bila efn_pii/efn_pii_base_vat tidak terpasang: partner terlindungi + kolom DB `efnpii*` + log
+  tanpa PII, replay/konflik, pakai ulang per company, faktur memakai pembeli + `invalid_state` setelah bayar, keyring
+  terkunci → `invoice_not_available` tanpa partner tersimpan).
+
+## Belum diverifikasi / risiko test
+- Semua test belum dijalankan. Titik rawan E-40: `AccountTestInvoicingCommon.setup_country('id')` + `tax_ST4` (11 %)
+  sebagai sumber salinan pajak; `setup_other_company` memakai negara/chart ID (bila tidak → test multi-PT skip);
+  `download_efaktur` lolos validasi CE (`_validate_tax_groups`) untuk faktur uji; IDR Rp1 di DB uji (efn_setup_company
+  sudah; bila tidak dan ada jurnal IDR → kelas skip); `tax_lock_date` dapat ditulis di test; `_reverse_moves` entry
+  menyalin `tax_tag_ids`; `account.chart.template.ref(xmlid, raise_if_not_found=False)` bentuk singkat.
+- E-39: pencarian pembeli memakai `("vat", "in", [npwp])` (bentuk yang ditangani `_efn_bidx_condition` efn_pii →
+  blind index); `test_buyer_reused_per_company` membuktikannya. Blind index `l10n_id_buyer_document_number`
+  tergantung `efn_pii_l10n_id` (builder B); tanpa itu NIK/paspor = `invoice_not_available`. Normalisasi `base_vat`
+  atas NPWP (`check_vat_id`: 16 digit berawalan bukan 0 lolos tanpa checksum) diasumsikan tidak menambah prefiks;
+  pencocokan tetap membandingkan digit saja.
+- Ekspor Coretax pembeli NIK/paspor tetap ditolak `download_efaktur` CE (butuh `vat`) → keputusan Finance/Legal
+  (Q-F19-6). Erasure partner pembeli belum. `invoice_partner_display_name` plaintext sampai SEC-153 (builder B).
+
+## Untuk lead / tim lain
+- Tambah `efn_l10n_id_coretax_rounding` ke `EFN_TEST_MODULES` CI (devsecops) — tanpa itu test E-40 tidak jalan.
+- BFF: kode baru `invoice_not_available` → `422`; panggil set_invoice_party setelah place, gagal → bagian tetap jalan
+  dengan partner generik + anomali (§13.5).
+- efn_setup_audit (functional): aturan `efn.audit.rule` untuk field `res.company.efn_tax_rounding_*`.
+
+---
+
+# G21 paket (A) — E-44 kebijakan Poin EFN per PT + akrual liabilitas harian (19 Okt 2026, branch `chore/wave-21`)
+
+Kontrak: docs/04 §13.1 + §13.7 L-61, L-62 (+ format log RECON dari lead, mengikat); spesifikasi docs/08 §11.4. Tanpa
+commit; tanpa shell — **test belum dijalankan** (lead menjalankan di container Odoo 19).
+
+## Modul & file
+- **`efn_loyalty_accounting` 19.0.1.0.0 (baru, LGPL-3; depends `account`, `mail`, `efn_core`, `efn_audit`,
+  `efn_pos_loyalty_ledger`)**: `__manifest__.py`, `__init__.py`, `README.md`,
+  `models/{__init__,signing,efn_bff_client,res_company,res_config_settings,efn_loyalty_policy,efn_loyalty_policy_outbox,efn_loyalty_accrual}.py`,
+  `security/{efn_loyalty_groups.xml,ir.model.access.csv,efn_loyalty_security.xml}`,
+  `data/{ir_cron,ir_config_parameter,efn_audit_rule_data}.xml`,
+  `views/{efn_loyalty_policy_views,efn_loyalty_outbox_views,efn_loyalty_accrual_views,res_config_settings_views,efn_loyalty_menus}.xml`,
+  `tests/{__init__,common,test_signing,test_policy,test_policy_outbox,test_accrual}.py`.
+- **`efn_pos_loyalty_ledger` 19.0.2.2.0 → 19.0.2.3.0** (hanya integrasi params): `models/pos_config.py`
+  (`GET /v1/pos/loyalty/params?company_code=<PT config>`, cache per (db, PT)), `tests/test_loyalty_ledger.py`
+  (+`test_params_per_company_code_g21`), `__manifest__.py`, `README.md`.
+
+## Keputusan / tafsiran (mohon dikonfirmasi lead)
+- Model baru: `efn.loyalty.policy`, `efn.loyalty.policy.outbox`, `efn.loyalty.accrual` (log per company+tanggal,
+  UNIQUE; dibutuhkan untuk idempotensi, kunci baris, rekonsiliasi, aktivitas). Semua `company_id` wajib +
+  `_check_company_auto` + record rule `company_ids` + ACL (hanya Loyalty Manager rwcu draft; lainnya baca).
+- Grup baru `efn_loyalty_accounting.group_loyalty_manager` (*EFN Loyalty / Loyalty Manager*, implies
+  `base.group_user` sesuai functional G21 §12); test tidak pernah memberi satu user LM + Accounting Manager (SOD-03):
+  maker & approver selalu dua user terpisah; kasus "pembuat = penyetuju" diuji lewat create ber-sudo atas nama
+  Accounting Manager (uid asli = maker). Penyetuju =
+  `account.group_account_manager`. Empat mata per record: penyetuju ≠ `maker_id` dan ≠ `last_editor_id` (penyuntingan
+  ber-sudo juga tercatat dengan uid asli). SoD per user = `efn_role` (builder D) — xmlid grup di atas untuk
+  `efn.sod.rule` Loyalty Manager ⟂ Accounting Manager.
+- Record global = company berkode `EFN`; `point_value_idr` wajib ≥ 1 di sana dan dilarang di PT lain (L-62). Body
+  PUT selalu memuat 8 `params` (juga untuk EFN) + `point_value_idr` hanya untuk EFN.
+- Body (persis, kanonik `sort_keys`, separator `,`/`:`, ASCII): `{"approved_by_uid": int, "company_code": "GL",
+  "effective_from": "YYYY-MM-DDTHH:MM:SSZ", "params": {"company_hourly_max", "daily_max_points_member",
+  "earn_idr_per_point", "earn_on_money_only": bool, "max_points_per_order", "pos_config_hourly_max",
+  "redeem_max_pct", "redeem_min_points"}, "point_value_idr"?: int, "schema_version": 1, "version": int}`.
+  Kunci HMAC = isi file `EFN_LOYALTY_POLICY_SIGNING_KEY_FILE` (strip, byte UTF-8, ≥ 32 byte).
+- Respons PUT: 2xx → published; 409/422/400 → final; 401/404/408/429/5xx → retry sampai 72 jam (401 dianggap jam
+  bergeser/rotasi kunci; 404 = endpoint belum di-deploy).
+- `effective_from` yang lewat saat disetujui digeser ke waktu persetujuan (tidak berlaku surut).
+- Akrual: data `company_code` = PT penebus; lintas PT hanya dijurnal di PT penebus (Dr Kliring / Cr Liabilitas) sesuai
+  kontrak; `restored_value_idr` tidak dijurnal; breakage disiapkan tetapi nonaktif (`efn.loyalty.breakage_journal_enabled`).
+  Lookback 3 hari (mengejar BFF mati). Akun tidak di-default (Finance/Superadmin mengisi; saran 21990091).
+- `_efn_get` efn_core menolak tanggal ISO di query (regex "mirip HP" R2 → positif palsu), jadi modul ini memperluas
+  `efn.bff.client` dengan metode privat `_efn_loyalty_request` (PUT byte persis + header tanda tangan; GET dengan
+  allowlist `company_code`/`date` ber-regex). Transport tetap milik efn_core (https, CA, service key, tanpa redirect).
+- Format RECON (pesan lead): `EFN_LOYALTY_RECON ` + `json.dumps(obj, sort_keys=True)` dengan tepat
+  `{bff_closing_liability_idr, company_code, date, diff_idr, odoo_liability_idr}`, logger
+  `odoo.addons.efn_loyalty_accounting.recon`, setiap run per PT per tanggal (akrual yang sudah final ikut direkonsiliasi
+  ulang tanpa memanggil BFF), INFO bila 0 / WARNING bila ≠ 0. Akun liabilitas kosong → saldo Odoo 0 + WARNING terpisah.
+  Tanggal dengan BFF galat tidak menghasilkan baris RECON (dead-man yang benar).
+
+## L-66 (pesan lead setelah handback pertama)
+- `res.company.efn_loyalty_interco_payable_account_id` (*Utang Poin Antar-PT*, tipe liability_current/payable,
+  PLACEHOLDER, Settings); akun kliring diberi label *Piutang Poin Antar-PT (kliring)*.
+- Parsing opsional `redeemed_value_idr_as_issuer_by_redeemer` / `restored_value_idr_as_issuer_by_redeemer` (absen → `{}`;
+  bukan dict, kunci PT sendiri/tidak dikenal, nilai bukan int ≥ 0 → `bad_response`). Jurnal PT penerbit per PT penebus:
+  Dr Liabilitas / Cr Utang (redeemed), kebalikan (restored). Jurnal PT penebus tidak berubah. Tanpa akun utang →
+  `missing_config` (`missing_accounts:interco_payable`), tanpa jurnal + aktivitas. Field record baru
+  `issuer_redeemed_value_idr`, `issuer_restored_value_idr`, `issuer_by_redeemer` (form view).
+- Test baru (`test_accrual.py`): earn GL / tukar BCR (+ restore 500) → GL & BCR selisih 0; field opsional & validasi;
+  tanpa akun utang. Fixture menambah company ketiga BCR (`setup_other_company`).
+- File: `models/{res_company,res_config_settings,efn_loyalty_accrual}.py`, `views/{res_config_settings_views,efn_loyalty_accrual_views}.xml`,
+  `tests/test_accrual.py`, `README.md`.
+
+## Wajib di luar cakupan file saya (blokir 0 failed)
+- **`efn_core/tests/test_rpc_surface.py` `RPC_ALLOWLIST`** — 4 metode publik baru (tombol form), tanpa ini
+  `test_public_methods_are_allowlisted` + `test_installed_models_new_public_methods_allowlisted` gagal:
+  - `("efn.loyalty.policy", "action_efn_approve")`: grup `account.group_account_manager` + `check_access(read)` +
+    company ∈ `user.company_ids` + state draft + user ∉ {maker, last_editor}; tulis sudo setelah cek.
+  - `("efn.loyalty.policy", "action_efn_reject")`: sama dengan approve.
+  - `("efn.loyalty.policy.outbox", "action_efn_retry")`: grup Loyalty Manager/Accounting Manager + `check_access(read)` +
+    company + state failed.
+  - `("efn.loyalty.accrual", "action_efn_retry")`: grup Accounting Manager + `check_access(read)` + company + state
+    bukan final.
+  (`copy` dan `create`/`write` = ORM_OVERRIDES.)
+- **CI:** tambah `efn_loyalty_accounting` ke `EFN_TEST_MODULES` (ci.yml) dan ke `odoo-test-pii` bila daftar terpisah.
+- **devsecops:** secret `loyalty_policy_signing_key` (≥ 32 byte) di Odoo + BFF, env
+  `EFN_LOYALTY_POLICY_SIGNING_KEY_FILE=/run/secrets/loyalty_policy_signing_key`. Promtail: token `EFN_LOYALTY_RECON`
+  juga dipakai heartbeat BFF (`service=api-gateway`, kunci berbeda) → pipeline/alert dipisah per `service`.
+- **BFF:** verifikasi tanda tangan persis seperti `models/signing.py::verify_signature`; `PUT` idempoten (versi sama +
+  isi sama → 2xx); `GET /v1/pos/loyalty/accruals` mengembalikan `company_code` & `date` yang diminta (Odoo menolak
+  respons yang beda) dan `redeemed_value_idr_by_issuer` berkunci kode PT kontrak; `GET /v1/pos/loyalty/params` menerima
+  `company_code` (nilai `redeem_max_pct_of_order`, `earn_exclude_point_payment` dibaca POS seperti sebelumnya).
+- **efn_setup_audit (functional):** aturan audit untuk akun `res.company.efn_loyalty_*` bila diinginkan.
+
+## Test (tag `efn`) — BELUM DIJALANKAN
+`test_signing` (3), `test_policy` (14), `test_policy_outbox` (9 + transport 3), `test_accrual` (9), +1 di
+`efn_pos_loyalty_ledger`. Cakupan: maker = approver ditolak, penyunting terakhir ditolak, approver PT lain / bukan
+Accounting Manager ditolak, versi monoton & tidak bisa diisi, read-only termasuk sudo, L-62, outbox body + tanda tangan
+terverifikasi, retry dengan `t` baru & header lama gagal replay window, tanpa kunci tertahan + ERROR (assertLogs) lalu
+terkirim, 409/422 final, akrual idempoten per PT (run ulang & record hilang), lintas PT kliring, tanpa akun → tanpa
+jurnal + ERROR + aktivitas + retry, format RECON persis (ok/mismatch/dead-man/tanpa akun), validasi respons, breakage
+nonaktif, record rule/ACL, cron tanggal & semua company.
+
+## Belum diverifikasi / titik rawan test
+- API 19.0 yang dipakai tanpa verifikasi source sesi ini: `account.move.line._read_group(domain, aggregates=["balance:sum"])`
+  (bentuk 17+), `@api.ondelete(at_uninstall=False)`, `account.move.action_post` pada `entry` dengan `debit`/`credit`
+  di `Command.create`, XML `<app name="account">` di settings (diverifikasi WebFetch: ada, `groups=account.group_account_manager`),
+  `res.groups.privilege` (pola efn_audit), eval `DateTime` di `nextcall` cron.
+- `AccountTestInvoicingCommon.company_data["company"]` dipakai sebagai PT GL (kode dipindah sementara); kode akun uji
+  `LOYGL1..4`/`LOYPB1..4` diasumsikan lolos validasi kode akun 19.0.
+- Aktivitas outbox ditugaskan ke Loyalty Manager pertama company; test mengasumsikan satu-satunya LM company uji.
+- Posting pada lock date tidak diuji (perilaku auto-geser tanggal CE 19 belum dipastikan).
+- `res.config.settings` hanya bisa disimpan admin sistem (perilaku CE) — Finance non-admin mengubah akun lewat Superadmin.
+
+---
+
+# G21 paket (D) — E-47 `efn_role` peran & SoD + E-47c review akses bulanan (19 Okt 2026, branch `chore/wave-21`)
+
+Kontrak: docs/04 §13.3 no. 2–4 + §13.7 L-64, L-65; spesifikasi docs/08 §12.2b, §12.3–§12.5, §12.8. Tanpa commit;
+tanpa shell — **test belum dijalankan** (lead menjalankan di container Odoo 19). Modul lain tidak disentuh kecuali
+`efn_core/tests/test_rpc_surface.py` (4 entri allowlist). `efn_setup_org` hanya dibaca.
+
+## Modul & file
+- **`efn_role` 19.0.1.0.0 (baru, LGPL-3; depends `hr`, `mail`, `efn_audit`)**: `__manifest__.py`, `__init__.py`
+  (`post_init_hook`), `README.md`, `models/{__init__,role_policy,efn_role,efn_role_line,efn_sod_rule,efn_sod_exception,res_users,res_groups,efn_access_review}.py`,
+  `security/{efn_role_groups.xml,ir.model.access.csv,efn_role_security.xml}`, `data/{efn_audit_rule_data,ir_cron}.xml`,
+  `views/{efn_role_views,efn_sod_views,efn_access_review_views,efn_role_menus}.xml`,
+  `tests/{__init__,common,test_role_apply,test_sod,test_sod_exception,test_access_review,test_security}.py`.
+- `efn_core/tests/test_rpc_surface.py`: `RPC_ALLOWLIST` + `efn.role.action_efn_apply_job_roles`,
+  `efn.access.review.action_efn_snapshot` / `action_efn_start_review` / `action_efn_done`.
+
+## Keputusan / tafsiran (mohon dikonfirmasi lead)
+- **E-47c di modul yang sama** (bukan `efn_role_review`): snapshot memakai mesin SoD + ACL/rule yang sama; satu modul CI.
+- Penanda penerapan/internal = **`cr.cache`**, bukan `with_context(efn_role_apply=True)` (context bisa diisi klien RPC).
+- SoD dievaluasi pada grup efektif dari tabel relasi via SQL setelah flush (tidak bergantung cache `groups` CE yang
+  dibersihkan SETELAH `res.groups.write`). Jalur `res.groups` hanya menolak pelanggaran **baru** (baseline); jalur
+  `res.users` menolak semua pelanggaran user itu (sesuai "penulisan grup berikutnya ditolak"). Penegakan dilewati
+  saat registry belum siap (install/upgrade) — pelanggaran tetap muncul di review.
+- **Aturan SoD bawaan** dibuat `post_init_hook` + cron harian, hanya bila kedua xmlid grup ada (tanpa depends):
+  SOD-01/02/03 block, SOD-05/06 report_only, tanpa xmlid (kunci `code`). Bila saat dibuat sudah ada pelanggaran →
+  dibuat `report_only` + log `EFN_SOD_DEFAULT_REPORT_ONLY` (cegah install/test macet). **`efn_setup_role`
+  (functional) harus merujuk lewat `code`, bukan membuat ulang** (unik `code` → bentrok).
+- L-65: pengecualian hanya `base.group_system`, alasan ≥ 20 karakter (mask PII), maks. 90 hari, mulai ≥ hari ini,
+  pemberi = user login ≠ penerima (Superadmin tunggal tidak bisa mengecualikan dirinya), notifikasi = chatter + aktivitas
+  To-Do untuk auditor (efektif `efn_audit.group_auditor` **tanpa** `base.group_erp_manager`) di company pengecualian.
+  Company pengecualian = company aturan atau company utama user; record rule juga membuka untuk auditor company mana
+  pun milik user. Immutable kecuali dicabut (`action_archive`), tanpa unlink, tanpa unarchive.
+- Peran admin (efektif `group_system`/`group_erp_manager`): buat/ubah/tetapkan/hapus baris hanya `base.group_system`;
+  **tidak pernah disinkron dari jabatan** (cegah eskalasi HR → Superadmin). Baris peran admin tanpa `date_to` wajib alasan.
+- `managed` = grup semua peran + grup penanda − `base.group_user`; grup yang dikeluarkan dari peran dicabut dari
+  pemegangnya (extra_managed). Company user hanya ditambah.
+- Jabatan: baris `job` yang jabatannya berubah → `date_to` = kemarin; bila baris dibuat hari ini → unlink (tercatat
+  audit). Tombol hanya di form peran (tidak mewarisi view `hr.employee` 19.0).
+- Review: cron harian 02:30 WIB membuat review **bulan lalu** pada tanggal 1–3 (idempoten), bukan interval `months`
+  (drift tanggal). Baris snapshot per (user internal ber-company review, grup efektif); `via_role_id` hanya peran
+  company review (nama peran lain di `via_role_name`). `done` read-only termasuk sudo; review & baris tanpa unlink
+  kecuali GC retensi `efn.audit.retention_days`.
+- ORM 19.0 `export_data` mensyaratkan `base.group_allow_export` [V] → peran Auditor di `efn_setup_role` harus memuat grup itu.
+
+## Test (tag `efn`, post_install) — BELUM DIJALANKAN
+`test_role_apply` (13): 1, 2 (+tanggal), 3 (+aktivasi mendatang, `is_effective` tak bisa ditulis), 4, 5 (+ubah grup
+peran, arsip, dua peran), 12 (portal + akun teknis bila terpasang), sinkron jabatan (buat/akhiri), unik jabatan.
+`test_sod` (12): 6 (SOD-02 nyata bila `point_of_sale` + generik langsung/implied/implied baru/Superadmin tidak kebal),
+penetapan peran melanggar, 7 (generik + SOD-03 nyata bila `efn_loyalty_accounting`), 8 (`base.group_user` implied_ids /
+implied_by_ids), baseline, 10 (+arsip→aktif, selesai→boleh), hak Superadmin & tanpa hapus & pasangan duplikat,
+arsip tidak ditegakkan, 11, aturan bawaan idempoten, penanda tanpa ACL. `test_sod_exception` (4): 9a–9d.
+`test_access_review` (5): 16a–16e (sumber, SoD/pengecualian, kedaluwarsa, workflow read-only, auditor baca+ekspor,
+cron + aktivitas). `test_security` (5): 13, 14 (+user biasa tanpa akses), 15, flag. Uji 17 = regresi suite gabungan.
+
+## API Odoo 19.0 diverifikasi (WebFetch `raw.githubusercontent.com/odoo/odoo/19.0`, 19 Okt 2026)
+`base/models/res_groups.py` (relasi `res_groups_implied_rel` gid/hid, `res_groups_users_rel` gid/uid, `all_*`
+compute tidak stored, cache `groups` dibersihkan setelah write/`_check_disjoint_groups`), `base/models/res_users.py`
+(`group_ids`, `all_group_ids` compute+search, `share` stored dari `all_group_ids`, `UsersMultiCompany.write`,
+constraint `_check_disjoint_groups`/`_check_at_least_one_administrator`), `base/security/base_groups.xml`
+(`group_allow_export` implied_by `group_system`), `base/views/base_menus.xml` (`menu_users`, Settings =
+`group_erp_manager`), `odoo/orm/table_objects.py` + `odoo/models/__init__.py` (`UniqueIndex` partial WHERE),
+`odoo/orm/models.py` (`export_data` cek `group_allow_export`), `web/controllers/export.py` (tanpa cek grup),
+`hr/models/hr_version.py` (`job_id` stored) + `hr_employee.py` (`_inherits` hr.version), `odoo/sql_db.py`
+(`savepoint()` flush → rollback membersihkan transaksi ORM), `mail/models/mail_activity.py` (create tanpa cek akses assignee).
+
+## Belum diverifikasi / titik rawan test
+- `check_access(operation)` (dipakai repo sebelumnya), `action_archive` → write `active=False`, `activity_schedule`
+  di bawah sudo, `hr.employee.create/write({'job_id'})` diteruskan ke versi aktif, render `web_ribbon`/pivot/graph.
+- `new_test_user(groups="...,base.group_system")` di 19.0; user test `efn_pos_kds.group_kds_device` lolos allowlist
+  KDS (hanya `base.group_user` + device).
+- Test cron review (`16e`) membuat snapshot untuk SEMUA company DB (6 PT + company test) — lambat bila DB besar.
+- Regresi lintas modul: setiap tulis grup user/grup kini menjalankan evaluasi SoD (SQL ringan); aturan bawaan block
+  hanya melibatkan grup penanda efn_role (SOD-01/02) dan LM ⟂ AM (SOD-03; test `efn_loyalty_accounting` memakai user
+  terpisah). Superadmin selalu melanggar SOD-06 (report_only, by design CE).
+
+## Wajib di luar cakupan file saya
+- **CI:** tambah `efn_role` ke `EFN_TEST_MODULES` (`.github/workflows/ci.yml`, devsecops).
+- **efn-odoo-functional (`efn_setup_role`, §12.6):** data `efn.role` per (PT × jabatan) memakai xmlid `efn_setup_org.job_*`;
+  peran Auditor memuat `base.group_allow_export`; aturan SoD dirujuk lewat `code` (sudah dibuat efn_role) — ubah mode
+  SOD-05/06 setelah Q-ORG-4.
+- **Security review:** RPC baru 4 tombol (allowlist), `cr.cache` sebagai penanda internal, SoD dilewati saat registry belum siap.
+
+---
+
+# G21 perbaikan r14 — `efn_role` SEC-154 / SEC-155 / SEC-158 / SEC-159 (19 Okt 2026, L-67)
+
+Branch `chore/wave-21` (HEAD 06686be). Tanpa commit; tanpa shell — **test belum dijalankan** (lead menjalankan di
+container Odoo 19). Cakupan: `services/odoo/addons/efn_role/**` + satu entri `RPC_ALLOWLIST` di
+`efn_core/tests/test_rpc_surface.py`.
+
+## Modul & file (`efn_role` 19.0.1.0.0 → 19.0.1.1.0)
+- `models/role_policy.py`: `SENSITIVE_GROUP_XMLIDS`, `SENSITIVE_PARAM` (`efn_role.sensitive_group_xmlids`, hanya
+  menambah), `sensitive_group_ids()`, `effective_member_ids()`.
+- `models/efn_role.py`: field `sync_from_job` (default False), `is_sensitive_role` (compute), `_efn_sensitive_roles()`,
+  constraint `_check_sync_from_job` (`efn_role:sync_sensitive_role`); `_efn_sync_job_lines` hanya peran ber-flag &
+  tidak sensitif, melewati user admin; `action_efn_apply_job_roles` menolak peran tanpa flag/sensitif
+  (`efn_role:job_sync_disabled`); `_efn_apply_roles` mempertahankan `base.group_system` pemegang terakhir
+  (`_efn_has_other_system_holder`, log `EFN_ROLE_KEEP_LAST_SUPERADMIN`).
+- `models/efn_role_line.py`: `_efn_check_admin_target` di create (sebelum super) / write / unlink →
+  `efn_role:admin_user_superadmin_only` (kecuali Superadmin / OdooBot).
+- `models/efn_sod_rule.py`: `_inherit mail.thread + mail.activity.mixin`; `write` mencatat keadaan kunci sebelum →
+  `_efn_notify_rule_change` (chatter + aktivitas `auditor_users(company aturan)` + log `EFN_SOD_RULE_CHANGED`).
+- `models/efn_access_review.py`: `action_efn_export_csv` (RPC publik baru), `EXPORT_HEADER`, `_csv_cell`
+  (netralisasi formula), attachment CSV + chatter + log `EFN_ACCESS_REVIEW_EXPORT`.
+- `views/efn_role_views.xml` (flag + sensitif, tombol hanya bila flag & tidak sensitif), `views/efn_sod_views.xml`
+  (`<chatter/>`), `views/efn_access_review_views.xml` (tombol *Ekspor CSV*, grup Auditor/Superadmin).
+- `__manifest__.py` (versi, L-67), `README.md` (bagian *Perbaikan review keamanan r14*, uji manual 6–8, asumsi).
+- Tests: `tests/common.py` (Auditor tanpa `base.group_allow_export`), `tests/test_access_review.py` (16d: `export_data`
+  → `UserError`), `tests/test_role_apply.py` (dua test sinkron jabatan memakai `sync_from_job=True`),
+  **baru** `tests/test_r14.py` (8 test), `tests/__init__.py`.
+- `efn_core/tests/test_rpc_surface.py`: + `("efn.access.review", "action_efn_export_csv")`.
+
+## Test baru (`test_r14.py`, tag `efn`, post_install) — BELUM DIJALANKAN
+1. `test_sec154_hr_self_job_change_never_grants_sensitive_group` — constraint (write/create/tambah grup), tombol
+   ditolak, user `hr.group_hr_user` mengubah jabatannya sendiri ke jabatan peran sensitif → setelah cron tidak dapat
+   `group_refund_approver`, tidak ada baris peran sensitif, baris jabatan lama ditutup.
+2. `test_sec154_job_lines_closed_when_sync_disabled`. 3. `test_sec154_sensitive_list_extended_by_parameter`.
+4. `test_sec155_auditor_csv_export_from_snapshot_only` — header, jumlah baris, formula `'=`, tanpa login; Superadmin
+   boleh, Access Rights `AccessError`, review company lain `AccessError`.
+5. `test_sec158_rule_mode_and_archive_notify_auditors` — rationale saja tanpa aktivitas; mode & arsip → aktivitas
+   auditor + chatter; Access Rights tidak menerima; log efn_audit `write`.
+6. `test_sec159_lines_for_admin_users_superadmin_only` (create/write/unlink). 7. `test_sec159_job_sync_skips_admin_users`.
+8. `test_sec159_apply_never_removes_group_system_from_last_holder` (`patch.object` `_efn_has_other_system_holder`
+   → False; dengan Superadmin lain pencabutan berlaku).
+
+## Keputusan / tafsiran (mohon dikonfirmasi lead)
+- Parameter grup sensitif hanya **menambah** (tidak ada cara mengurangi daftar bawaan tanpa ubah kode) — lebih ketat
+  dari "daftar konfigurasi (default …)".
+- `base.group_system`/`base.group_erp_manager` termasuk sensitif (selain sudah dikecualikan sebagai peran admin).
+- Mematikan flag / peran menjadi sensitif → baris `job` terbuka **ditutup** (bukan dibiarkan). Dampak upgrade: semua
+  peran mulai tanpa flag → baris `job` lama ditutup cron berikutnya sampai `efn_setup_role`/Access Rights menyalakan
+  flag peran non-sensitif.
+- Rekomendasi SEC-154 (b) "tolak penetapan diri" dan (a) "baris menunggu konfirmasi" **tidak** diimplementasikan:
+  peran sensitif sama sekali tidak tersinkron (lebih sederhana, menutup skenario yang sama).
+- Ekspor CSV: kolom `uid` (pengenal internal) dan `user_active` ikut; login/login terakhir/2FA tidak. Semua status review.
+- SEC-159: OdooBot (uid 1) dikecualikan dari cek pemanggil dan dari hitungan "pemegang lain". Cek pemanggil memakai
+  `env.user` (sudo tidak membebaskan), konsisten dengan `_efn_check_admin_rights`.
+
+## Belum diverifikasi / titik rawan test
+- `ir.attachment.raw` (tulis bytes) dan `/web/content/<id>?download=true` di 19.0 [B].
+- `action_archive` pada model yang baru mewarisi `mail.thread`; upgrade modul menambah `mail.thread` ke model yang
+  sudah ada [B].
+- `hr.employee.with_user(hr_user).write({'job_id'})` untuk karyawan milik sendiri oleh `hr.group_hr_user` [B].
+- `patch.object(type(env['efn.role']), ...)` pada kelas registry (pola umum, belum dicoba di repo ini).
+- Auditor menandai aktivitas aturan SoD selesai (hak baca saja) — pola sama dengan `efn.sod.exception`, belum diuji UI.
+- Diverifikasi [V] (WebFetch raw 19.0, 19 Okt 2026): `export_data` → `UserError` tanpa `group_allow_export`/admin;
+  `group_allow_export` hanya `implied_by` `group_system` (`base/security/base_groups.xml`).
+
+## Untuk lead / tim lain
+- **efn-odoo-functional (`efn_setup_role`)**: jangan beri `base.group_allow_export` ke peran Auditor; set
+  `sync_from_job=True` hanya pada peran non-sensitif (peran sensitif akan ditolak constraint).
+- **devsecops**: alert Loki untuk `EFN_SOD_RULE_CHANGED`, `EFN_ROLE_KEEP_LAST_SUPERADMIN`, `EFN_ACCESS_REVIEW_EXPORT`.
+- **security re-review**: RPC baru `efn.access.review.action_efn_export_csv`.
+
+---
+
+# G21 perbaikan r14 — `efn_loyalty_accounting` 19.0.1.1.0 (SEC-156, SEC-157, SEC-160/L-67, L-68) — 19 Okt 2026
+
+Cakupan hanya `services/odoo/addons/efn_loyalty_accounting/**`. Tanpa shell: **test BELUM DIJALANKAN** (lead menjalankan).
+
+## Modul & file
+- `models/account_move.py` (baru): `account.move.efn_loyalty_accrual_id` (M2O readonly, `copy=False`,
+  `ondelete=restrict`, index `btree_not_null`); `create`/`write` menolak field ini (`AccessError`) kecuali `env.su` +
+  konteks `efn_loyalty_accrual_link` (hanya `_efn_create_move`).
+- `models/efn_loyalty_accrual.py`: state baru `conflict`; `_efn_check_existing_moves` (SEC-156: tertaut+posted → `done`;
+  ref sama manual/draft/batal/posted atau jurnal sendiri tidak posted → `conflict` + ERROR + aktivitas `ref_conflict` +
+  RECON, tanpa jurnal); akrual `done` yang jurnalnya tidak lagi posted → `conflict` di run berikutnya; akrual
+  berjurnal tidak bisa dihapus (`@api.ondelete`); L-67: `expired_value_idr` & `forfeited_value_idr` (opsional, baru
+  diparse) selalu dijurnal Dr Liabilitas / Cr Pendapatan Poin Kedaluwarsa (`efn_loyalty_breakage_account_id`, baris
+  terpisah); L-68: `restored_value_idr_by_issuer` (opsional; Σ wajib = `restored_value_idr`) → per penerbit ≠ PT ini Dr
+  Liabilitas / Cr Kliring; field baru `forfeited_value_idr`, `restored_cross_value_idr`, `restored_by_issuer`;
+  `activity_flagged` jadi himpunan alasan (cegah aktivitas berulang conflict+mismatch), dikosongkan saat `done`.
+- `models/efn_loyalty_policy.py`: `editor_ids` (M2M `res.users`, tabel `efn_loyalty_policy_editor_rel`, field sistem
+  di `SYSTEM_FIELDS`), diisi `Command.set([uid])` saat create dan `Command.link(uid)` di setiap `write` isi;
+  `_efn_check_approver` menolak `maker | last_editor | editor_ids`.
+- `models/res_company.py`: help akun breakage & kliring (L-67/L-68). Tidak perlu field akun baru — akun
+  *Pendapatan Poin Kedaluwarsa* per PT sudah ada di Settings (G21).
+- `data/ir_config_parameter.xml`: record `efn.loyalty.breakage_journal_enabled` dihapus (DB lama: param tertinggal
+  diabaikan kode).
+- Views: accrual (state `conflict` di dekorasi/filter/tombol Proses ulang; field baru), policy (`editor_ids`).
+- `__manifest__.py` 19.0.1.0.0 → 19.0.1.1.0; `README.md`.
+- Test: `tests/test_accrual.py`, `tests/test_policy.py`.
+
+## Test baru / diubah (tag `efn`) — BELUM DIJALANKAN
+- `test_accrual.py` baru: `test_cross_company_restore_at_redeemer_both_reconcile_zero` (L-68),
+  `test_expired_and_forfeited_journaled_recon_zero` (L-67, RECON 0), `test_forfeit_without_breakage_account_is_missing_config`,
+  `test_forfeit_and_restore_by_issuer_validated`, `test_ref_conflict_manual_moves_never_double_journal` (draft/batal/posted),
+  `test_ref_conflict_not_silent_and_resolved_by_retry`, `test_own_move_reset_to_draft_is_conflict_until_reposted`,
+  `test_accrual_link_on_move_is_system_only`.
+- Diubah: `test_accrual_journal_lines_recon_ok_and_idempotent` (bagian "record hilang → ditautkan ulang" diganti:
+  akrual berjurnal tidak bisa dihapus + tautan sistem), `test_as_issuer_fields_optional_and_validated` (run sukses di
+  17 Okt agar loop hapus hanya tanggal 18), `test_breakage_prepared_but_disabled_by_default` dihapus (diganti L-67).
+- `test_policy.py` baru: `test_any_intermediate_editor_cannot_approve` (A buat, C sunting via sudo, A sunting catatan
+  → C ditolak approve & reject; `editor_ids` tidak bisa ditulis user saat write/create; AM lain bisa).
+
+## Belum diverifikasi / titik rawan test
+- `account.move.button_draft()` / `button_cancel()` pada entry draft/posted di jurnal Misc company test (asumsi: tanpa
+  hash/lock); `search_count(..., limit=1)`; `index="btree_not_null"` pada field inherit.
+- Urutan `unlink`: asumsi CE 19 memeriksa ACL sebelum `@api.ondelete` (test ACL lama mengharap `AccessError` untuk AM).
+- Perubahan `ref` pada jurnal draft manual oleh sudo (penyelesaian konflik di test).
+- `Many2one` `ondelete="restrict"` dari `account.move` ke model modul ini saat uninstall modul (asumsi: tabel di-drop
+  CASCADE oleh mekanisme uninstall).
+- Keputusan akuntansi: forfeit BFF = semua debit non-POS (DSAR **dan** penyesuaian manual) → semua ke Pendapatan Poin
+  Kedaluwarsa (L-67). Pemisahan butuh komponen kontrak BFF baru.
+- Pasca-deploy: SOD-03 harus `block` (bukan `report_only`) sebelum kebijakan prod — bagian rekomendasi SEC-157 kedua,
+  di luar cakupan file (efn_role/runbook).

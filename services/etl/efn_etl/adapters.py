@@ -26,8 +26,12 @@ SQL_GET_WATERMARK = (
 # Satu koneksi per halaman: transaksi read-only, TimeZone UTC, statement_timeout (R-O03).
 class PgSource:
     def __init__(self, target: PgTarget, statement_timeout_ms: int, application_name: str = "efn-etl") -> None:
+        # search_path=public (G21): default "$user", public akan me-resolve nama tak berkualifikasi ke skema `efn_etl`
+        # (nama role = nama skema view efn_etl.partner_region di DB Odoo). Semua query ETL memakai `platform.` atau
+        # tabel Odoo di public; view G21 selalu dirujuk berkualifikasi `efn_etl.`.
         options = (
-            f"-c default_transaction_read_only=on -c statement_timeout={int(statement_timeout_ms)} -c TimeZone=UTC"
+            f"-c default_transaction_read_only=on -c statement_timeout={int(statement_timeout_ms)} -c TimeZone=UTC "
+            "-c search_path=public"
         )
         # TLS: sslmode/sslrootcert divalidasi Settings.from_env (verify-full kecuali EFN_ALLOW_PLAINTEXT di dev).
         self._conninfo = make_conninfo(

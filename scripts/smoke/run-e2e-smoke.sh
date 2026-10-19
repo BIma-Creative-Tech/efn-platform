@@ -11,7 +11,8 @@
 #
 # Pemakaian (Git Bash/Linux):  bash scripts/smoke/run-e2e-smoke.sh [a b c d e f g l o v]   (default: a b c d f e g l o;
 #   v = jalur VLM nyata, opsional, butuh model OLLAMA_VISION_MODEL di Ollama; o = penjualan online G17, terakhir
-#   karena me-recreate api-gateway untuk uji kill switch; q = G20 bayar di kasir §12.2, butuh o sudah jalan di stack yang sama)
+#   karena me-recreate api-gateway untuk uji kill switch; q = G20 bayar di kasir §12.2, butuh o sudah jalan di stack yang sama;
+#   r = G21 kebijakan poin per PT + akrual harian Odoo<->BFF, opsional/tidak di default, butuh efn_loyalty_accounting terpasang)
 # Keluaran: baris `SMOKE_RESULT {...}` + ringkasan PASS/FAIL; exit 1 bila ada FAIL.
 set -euo pipefail
 
@@ -1157,6 +1158,39 @@ scenario_q() { # Gelombang 20: bayar di kasir (docs/04 §12.2, L-50..L-58) — B
   opy "$pe" e pickup_in_review cnt
   r="$(psql_platform -c "select status || '/' || payment_method from platform.online_order where id='$eoid'")"
   check "q.late_pay_bff_order_stays_closed" "$([[ "$r" == cancelled/counter ]] && echo 1 || echo 0)" "order DB tetap ditutup=$r (pelanggan melihat review; refund oleh CS)"
+}
+
+scenario_r() { # Gelombang 21 (QA): kebijakan poin per PT (docs/04 §13.1 no. 1-4) + akrual harian (no. 6-7, L-66) — Odoo <-> BFF nyata
+  echo "== r. Keuangan Poin G21: kebijakan GL empat mata -> outbox bertanda tangan -> BFF -> GET params; akrual manual idempoten + RECON"
+  echo "      Prasyarat: efn_loyalty_accounting terpasang di efn_odoo; secret loyalty_policy_signing_key ada (scripts/gen-secrets.sh);"
+  echo "      BFF membawa migrasi 10-platform-g21.sql. Tidak di default: jalankan 'bash scripts/smoke/run-e2e-smoke.sh r'."
+  local r pv want_min want_pct m1 m2
+  lodoo() { # -e K=V ... -> satu baris SMOKE_RESULT (langkah odoo_loyalty_accounting_smoke.py)
+    local o
+    o="$(MSYS_NO_PATHCONV=1 docker exec -i "$@" "$ODOO" odoo shell -d efn_odoo --no-http --log-level=warn \
+      < "${SMOKE_DIR}/odoo_loyalty_accounting_smoke.py" 2>&1 | grep -E '^SMOKE_RESULT|Error|errors\.' | tail -1 || true)"
+    if [[ -n "$o" ]]; then echo "$o"; else echo 'SMOKE_RESULT {"ok": false, "error": "odoo_shell_no_result"}'; fi
+  }
+
+  # 1. Kebijakan: pembuat tidak boleh menyetujui; penyetuju menyetujui; outbox terkirim; BFF menyimpan; POS membaca
+  r="$(lodoo -e SMOKE_STEP=policy)"
+  pv="$(field version "$r")"; want_min="$(field want_redeem_min_points "$r")"; want_pct="$(field want_redeem_max_pct "$r")"
+  check "r.policy_four_eyes_maker_cannot_approve" "$([[ "$(field four_eyes_blocked "$r")" == true ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  check "r.policy_published_signed_put_200" "$([[ "$(field policy_state "$r")" == published && "$(field outbox_state "$r")" == "done" && "$(field outbox_last_status "$r")" == 200 ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  check "r.bff_policy_row_append_only" "$([[ "$(psql_platform -c "select count(*) from platform.loyalty_policy where company_code='GL' and version=${pv:-0} and (params->>'redeem_min_points')::int=${want_min:-0} and (params->>'redeem_max_pct')::int=${want_pct:-0}")" == 1 ]] && echo 1 || echo 0)" "GL v${pv}"
+  check "r.pos_params_follow_active_policy" "$([[ "$(field pos_config_found "$r")" == true && "$(field bff_redeem_min_points "$r")" == "$want_min" && "$(field bff_redeem_max_pct "$r")" == "$want_pct" ]] && echo 1 || echo 0)" "diharapkan=${want_min}/${want_pct} dibaca=$(field bff_redeem_min_points "$r")/$(field bff_redeem_max_pct "$r")"
+  check "r.bff_policy_update_blocked" "$([[ "$(psql_platform -c "do \$\$ begin update platform.loyalty_policy set version=version where company_code='GL' and version=${pv:-0}; raise notice 'updated'; exception when others then raise notice 'blocked'; end \$\$" 2>&1 | grep -c blocked || true)" -ge 1 ]] && echo 1 || echo 0)" "tabel append-only: UPDATE ditolak trigger"
+
+  # 2. Akrual: akun dev -> cron manual (kemarin + lookback) -> tidak ada galat, RECON 5 kunci, jalankan ulang tidak menambah jurnal
+  r="$(lodoo -e SMOKE_STEP=accounts)"
+  check "r.accrual_accounts_set" "$([[ "$(field ok "$r")" == true ]] && echo 1 || echo 0)" "$r"
+  m1="$(lodoo -e SMOKE_STEP=accrual)"
+  # error_codes = kode galat akrual berstatus error ([] = tidak ada: BFF terjangkau, respons lolos parser, jurnal terposting)
+  check "r.accrual_no_error_and_recon_format" "$([[ "$(field ok "$m1")" == true && "$(field error_codes "$m1")" == '[]' && "$(field recon_format_ok "$m1")" == true && "$(field recon_lines "$m1")" -ge 1 ]] && echo 1 || echo 0)" "$(nomsg "$m1")"
+  m2="$(lodoo -e SMOKE_STEP=accrual)"
+  check "r.accrual_rerun_idempotent" "$([[ "$(field moves "$m1")" == "$(field moves "$m2")" && "$(field ok "$m2")" == true ]] && echo 1 || echo 0)" "jurnal EFN-LOY-* run1=$(field moves "$m1") run2=$(field moves "$m2")"
+  # Selisih recon pada data dev BUKAN kegagalan smoke (saldo awal/POS sebelum lookback tidak ikut diakrual): dilaporkan saja.
+  record "{\"check\": \"r.info_recon_mismatch_count\", \"ok\": true, \"detail\": \"mismatch=$(field recon_mismatch "$m2") (informasi; nonzero di dev wajar bila ada jurnal POS sebelum jendela lookback)\"}"
 }
 
 for s in "${SCENARIOS[@]}"; do "scenario_${s}"; done

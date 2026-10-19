@@ -15,10 +15,12 @@ Kontrak: `docs/04_SERVICE_CONTRACTS.md` §8.6 (keputusan user: **kunci hanya dip
 | `minio_kms_key` | 32 byte | idem → MinIO | **Wajib** offline | Objek MinIO tidak terbaca |
 | `metabase_encryption_key` (G16b) | 32 byte base64 (44 karakter) | GitHub Environment → `/opt/efn/secrets` → **hanya** service metabase (`MB_ENCRYPTION_SECRET_KEY`, fail-closed) | Disarankan offline (kunci lama diarsipkan saat rotasi selama dump `metabase` lama masih dalam retensi) | Detail koneksi DB di Metabase tidak terbaca → `metabase-provision` membuat ulang koneksi ClickHouse; dashboard/kartu tetap (tidak terenkripsi) |
 | `clickhouse_disk_key` | hex | idem → ClickHouse | Disarankan | Rebuild DWH dari PostgreSQL |
+| `odoo_pii_key_v<n>` (G21 AC-13) | 32 byte base64 | **Dibuat Superadmin di host** → `/opt/efn/secrets` → **hanya** service odoo (overlay `docker-compose.pii.yml`). Tidak pernah di GitHub/CI ([§4e](#pii-odoo)) | **Wajib** — paket segel brankas Direksi (§8.1) | **PII Odoo (pelanggan, vendor perorangan, karyawan, NIK) tidak terbaca permanen** |
+| `odoo_pii_bidx_key`, `odoo_pii_name_key` (G21 AC-13) | 32 byte base64, berbeda satu sama lain | idem | **Wajib** — paket segel (tanpa kunci ini pencarian gagal sampai dihitung ulang) | Pencarian HP/email/NPWP/NIK/nama gagal sampai blind index/token dihitung ulang (data tidak hilang) |
 | `otp_pepper` → `member_hash_pepper` | random; turunan HKDF | `otp_pepper` di GitHub Environment; `member_hash_pepper` **diturunkan di host** (`derive-secrets.sh`), tidak disimpan di GitHub | **Wajib** offline (`otp_pepper`) | Semua `member_hash` berubah → ledger/DSAR tidak tersambung |
 | Passphrase LUKS per node | passphrase | Keyslot disk | **Wajib** offline | Disk tidak terbuka → restore |
 
-Secret operasional lain (password service, token WhatsApp, kunci API payment, token DNS ACME) dikelola lewat GitHub Environment yang sama; perubahannya juga butuh approval Superadmin (§3).
+Secret operasional lain (password service, token WhatsApp, kunci API payment, token DNS ACME, G21 `loyalty_policy_signing_key` = HMAC publikasi kebijakan poin Odoo → BFF, hanya odoo + api-gateway) dikelola lewat GitHub Environment yang sama; perubahannya juga butuh approval Superadmin (§3).
 
 ## 2. Peran
 
@@ -216,6 +218,66 @@ juga butuh `allow-downgrade` §4b). Hapus baris rilis yang ditarik. Penolakan te
 Rekomendasi admin repo (gratis, belum diterapkan, butuh hak admin): Environment `staging` → Deployment branches =
 `main` saja (saat ini kosong: `workflow_dispatch` dari branch mana pun bisa memakai secret staging).
 
+### 4e. Kunci PII Odoo produksi (G21 AC-13, docs/04 §13.2, ADR-036 §0) {#pii-odoo}
+
+> **Ringkas untuk manajemen.** Tiga kunci yang mengenkripsi data pribadi di Odoo dibuat langsung di server oleh
+> Superadmin, tidak pernah lewat GitHub/CI, dan satu salinannya disegel di brankas Direksi. Fitur ini **mati** sampai
+> PO menyatakan aktivasi (L-59). Kehilangan kunci utama = data pribadi di Odoo tidak bisa dibaca selamanya, jadi
+> salinan brankas wajib dibuat **sebelum** fitur dinyalakan.
+
+Status di `scripts/secrets.list`: `host:disabled [SA]` → `deploy.sh` membuat file berisi `disabled` bila belum ada dan
+**tidak pernah menimpanya**; `efn-deploy` menolak nama ini dari stdin (`ODOO_PII_*`, uji 110c–110e). Kunci di-mount
+**hanya** ke `odoo` oleh `infra/compose/docker-compose.pii.yml` saat `EFN_ODOO_PII_ENABLED=true` (`check-encryption.sh`
+render `prod-pii`). Staging dan production memakai kunci **berbeda** (jangan menyalin antar-lingkungan).
+
+**Gerbang otomatis** (`scripts/lib/deploy-validate.sh` + `deploy.sh`, fail-closed):
+| Kondisi | Hasil |
+|---|---|
+| production `EFN_ODOO_PII_ENABLED=true` tanpa `EFN_ODOO_PII_REQUIRED=true` | ditolak sebelum `/opt/efn` disentuh (tidak bisa dibuka `EFN_ALLOW_CONTROL_OFF`) |
+| `EFN_ODOO_PII_ENABLED=true` + salah satu file kunci tidak ada / kosong / symlink / `disabled` / bukan 32 byte base64 kanonik / dua kunci sama | deploy gagal, overlay tidak dipasang |
+| modul `efn_pii` berstatus `installed`/`to upgrade`/`to remove` di DB `efn_odoo` tetapi `EFN_ODOO_PII_ENABLED` bukan `true` | deploy gagal **sebelum** `up` (Odoo lama tidak di-recreate tanpa kunci) |
+
+**Prosedur pembuatan (sekali per lingkungan, Superadmin + saksi Direksi untuk langkah 3):**
+1. Prasyarat: keputusan aktivasi PO tercatat (L-59); jalankan di host target sebagai root (`sudo -i`), dengan
+   `/opt/efn/secrets` = `root:efn-superadmin 0750` (§4).
+2. Buat kunci di host (tanpa transit jaringan; nilai tidak pernah dicetak):
+   ```bash
+   cd /opt/efn/secrets
+   for n in odoo_pii_key_v1 odoo_pii_bidx_key odoo_pii_name_key; do
+     f="$n.txt"
+     if [ -s "$f" ] && ! grep -qx disabled "$f"; then echo "$f SUDAH berisi kunci - JANGAN ditimpa (lihat pii-key-rotation.md)"; continue; fi
+     ( umask 0277; openssl rand -base64 32 | tr -d '\n' > "$f.new" )
+     chown root:efn-superadmin "$f.new" && chmod 0444 "$f.new" && mv -f "$f.new" "$f"
+   done
+   sha256sum odoo_pii_*.txt      # catat HASH (bukan nilai) di register kunci + berita acara
+   ```
+3. **Salinan tersegel SEBELUM aktivasi**: enkripsi ketiga file dengan passphrase sementara lalu pindahkan ke mesin
+   offline (§5) dan masukkan ke paket A brankas (§8.2, §8.4 pembaruan paket):
+   ```bash
+   tar -C /opt/efn/secrets -cf - odoo_pii_key_v1.txt odoo_pii_bidx_key.txt odoo_pii_name_key.txt \
+     | age -p -o /root/efn-pii-$(hostname)-$(date +%Y%m%d).tar.age      # alternatif: gpg --symmetric --cipher-algo AES256
+   # salin ke media Superadmin (scp lewat WireGuard / USB), verifikasi sha256 di mesin offline, lalu di host:
+   shred -u /root/efn-pii-*.tar.age
+   ```
+   Di mesin offline: dekripsi, `sha256sum -c` terhadap hash langkah 2, masukkan ke paket A, segel, log brankas (§8.3).
+4. Aktivasi: GitHub Environment **vars** `EFN_ODOO_PII_ENABLED=true` dan `EFN_ODOO_PII_REQUIRED=true` → deploy (manifest
+   bertanda tangan). Baru setelah itu install modul `efn_pii*` (runbook rilis Odoo, `deploy-odoo-modules.md`).
+5. Verifikasi (host):
+   ```bash
+   cd /opt/efn/compose; DC="docker compose $(sed 's/^/-f /' .efn-compose-files | tr '\n' ' ')"
+   $DC exec -T odoo sh -c 'ls /run/secrets | grep -c "^odoo_pii_"'            # 3
+   for s in api-gateway etl ocr-worker metabase odoo-rpc-gateway; do
+     $DC exec -T "$s" sh -c 'ls /run/secrets 2>/dev/null | grep -c "^odoo_pii_" || true'; done   # 0 semua
+   $DC logs --since 10m odoo | grep -c 'EFN_PII_KEYRING.*CRITICAL' || true        # 0
+   ```
+   Uji fungsional: buat kontak perorangan uji di Odoo → kolom `phone` di DB berawalan `efnpii2:`; cari HP lengkap →
+   ditemukan; hapus kontak uji.
+
+**Larangan:** menjalankan `scripts/gen-secrets.sh` di host; menyalin kunci dev/CI; menimpa `odoo_pii_key_v1.txt` yang sudah
+berisi kunci (data terenkripsi dengannya hilang permanen) — rotasi hanya lewat [pii-key-rotation.md](pii-key-rotation.md#kunci-pii-odoo).
+Menonaktifkan (`EFN_ODOO_PII_ENABLED=false`) saat `efn_pii` terpasang **ditolak deploy** (by design); menonaktifkan PII
+berarti uninstall/migrasi-balik modul (keputusan PO + ADR-036), bukan saklar.
+
 ### Mekanisme uid: kenapa file secret 0444 di dalam direktori 0750
 
 `deploy.sh` (root) menulis: direktori `/opt/efn/secrets` = `root:efn-superadmin 0750`, file = `root:efn-superadmin 0444`.
@@ -289,6 +351,7 @@ arsip `efn-vault-<YYYYMMDD>.tar.age` dienkripsi **passphrase P-A** (≥ 6 kata d
 |---|---|---|
 | `~/efn-pki-root/` (`root.key` terenkripsi **passphrase root**, `root.crt`) | mesin offline §5 | Passphrase root **tidak** di paket A (lapis kedua) |
 | `pii_encryption_key*` (semua versi key ring yang masih dipakai data) | GitHub Environment `production` | Hilang = PII tidak terbaca permanen |
+| `odoo_pii_key_v<n>` (semua versi yang masih dipakai data), `odoo_pii_bidx_key`, `odoo_pii_name_key` (G21 AC-13) | **host** `/opt/efn/secrets` ([§4e](#pii-odoo)), per lingkungan | Hilang key ring = PII Odoo tidak terbaca permanen; wajib masuk paket **sebelum** `EFN_ODOO_PII_ENABLED=true` |
 | `walg_libsodium_key` (+ versi lama selama backup lama dalam retensi) | idem | Hilang = backup tidak bisa dipulihkan |
 | `minio_kms_key`, `clickhouse_disk_key`, `metabase_encryption_key` | idem | |
 | `otp_pepper`, `efn_audit_sink_key` | idem | `member_hash_pepper` diturunkan ulang dari `otp_pepper` |
@@ -357,7 +420,10 @@ dijalankan staf IT lain (Superadmin hanya mengamati) — menguji mitigasi bus fa
    di `/etc/efn/deploy.conf` host.
 4. Backup: restore test ([backup-restore.md](backup-restore.md)) memakai `walg_libsodium_key` **dari paket** (bukan
    dari `/opt/efn/secrets`) ke container sementara → verifikasi lulus.
-5. PII: dekripsi ciphertext kanari dengan `pii_encryption_key` paket → SHA-256 plaintext cocok.
+5. PII: dekripsi ciphertext kanari dengan `pii_encryption_key` paket → SHA-256 plaintext cocok. G21: `sha256sum` file
+   `odoo_pii_*` paket = hash di register **dan** = `sha256sum /opt/efn/secrets/odoo_pii_*.txt` di host (dicocokkan di
+   host oleh Superadmin; nilai tidak dibawa keluar). *Rekomendasi*: kanari Odoo (`efnpii2:` satu partner uji)
+   didekripsi dengan kunci paket memakai `efn_pii/tools` di container sekali pakai.
 6. LUKS: `cryptsetup luksOpen --test-passphrase <header-backup>` dengan passphrase paket, untuk tiap node.
 7. GitHub: kode pemulihan masih berlaku (cek jumlah tersisa di pengaturan akun, tanpa memakainya).
 8. Hancurkan salinan kerja di mesin offline (`shred`), segel ulang dengan **kantong baru** (nomor baru), log brankas,

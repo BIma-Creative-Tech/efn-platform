@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { AppConfig } from '../config/app-config';
 import { DB, Db, Queryable } from '../common/db/db';
@@ -17,6 +17,7 @@ import {
   splitCredit,
 } from '../loyalty/loyalty.service';
 import { LoyaltyAnomalyKind, reportLoyaltyAnomaly } from '../loyalty/loyalty-anomaly';
+import { EffectiveLoyaltyParams, LoyaltyPolicyService, envLoyaltyParams } from '../loyalty/loyalty-policy.service';
 import { DiscountTokenService, amountWithinBounds } from './discount-token.service';
 import { PosEarnDto, PosReverseDto, RedeemCommitDto, RedeemReserveDto } from './dto/pos-loyalty.dto';
 
@@ -52,6 +53,17 @@ export interface LoyaltyParamsResponse {
   reservation_commit_window_seconds: number;
   /** G18 K-18-4: Odoo menerapkan faktor porsi uang pada `eligible_amount` bila true (`LOYALTY_EARN_EXCLUDE_POINT_PAYMENT`). */
   earn_exclude_point_payment: boolean;
+  // ── G21 §13.1 no. 4 (aditif, hanya bila `?company_code=` dikirim) ──
+  company_code?: CompanyCode;
+  /** `policy` = kebijakan Odoo aktif; `env` = fallback parameter env. */
+  source?: 'policy' | 'env';
+  policy_version?: number | null;
+  /** Versi kebijakan global EFN sumber `point_value_idr` (null = env). */
+  point_value_version?: number | null;
+  max_points_per_order?: number;
+  daily_max_points_member?: number;
+  pos_config_hourly_max?: number;
+  company_hourly_max?: number;
 }
 
 /** Sumber entri ledger Fase 1 (§9.5). */
@@ -76,6 +88,8 @@ interface ReservationRow {
 interface LedgerRow {
   member_ref_hash: string;
   company_code: string;
+  /** G21: PT penerbit lot (NULL = baris pra-G21 → `company_code`). */
+  issuer_company_code?: string | null;
   delta_points: number;
   expires_at: Date | string | null;
   reason: string;
@@ -138,6 +152,13 @@ function toDate(v: Date | string): Date {
   return v instanceof Date ? v : new Date(v);
 }
 
+/** G21 §13.1 no. 5: PT penerbit lot sebuah entri ledger (baris pra-G21 tanpa kolom → `company_code`). */
+function issuerOf(r: { company_code: string; issuer_company_code?: string | null }): CompanyCode {
+  const c = r.issuer_company_code ?? r.company_code;
+  if (!isCompanyCode(c)) throw new Error('issuer ledger tidak dikenal');
+  return c;
+}
+
 function errorCode(err: unknown): string {
   if (err instanceof ApiError) {
     const body = err.body as { error?: { code?: string } };
@@ -183,8 +204,11 @@ export class PosLoyaltyService {
     private readonly tokens: DiscountTokenService,
     private readonly limiter: RateLimiter,
     private readonly metrics: MetricsService,
+    /** G21 §13.1: kebijakan poin per PT. Tidak ada (test lama) → parameter env. */
+    @Optional() private readonly policies: LoyaltyPolicyService | null = null,
   ) {}
 
+  /** Parameter env (kompatibel mundur: `GET /v1/pos/loyalty/params` tanpa `company_code`). */
   params(): LoyaltyParamsResponse {
     return {
       earn_idr_per_point: this.config.loyaltyEarnIdrPerPoint,
@@ -198,9 +222,40 @@ export class PosLoyaltyService {
     };
   }
 
-  /** Poin earn untuk `eligible` Rupiah — pembulatan ke bawah. */
-  pointsFor(eligibleAmount: number): number {
-    return Math.floor(eligibleAmount / this.config.loyaltyEarnIdrPerPoint + EPS);
+  /**
+   * G21 §13.1 no. 4: parameter kebijakan AKTIF PT (versi tertinggi yang berlaku), fallback env + warning. Bentuk lama
+   * tetap (field §9.1) + field aditif `company_code`, `source`, `policy_version`, `point_value_version`, batas earn.
+   */
+  async paramsFor(company: CompanyCode): Promise<LoyaltyParamsResponse> {
+    const p = await this.paramsOf(company);
+    return {
+      earn_idr_per_point: p.earnIdrPerPoint,
+      point_value_idr: p.pointValueIdr,
+      redeem_min_points: p.redeemMinPoints,
+      redeem_max_pct_of_order: p.redeemMaxPct,
+      point_expiry_days: this.config.loyaltyPointExpiryDays,
+      reservation_ttl_seconds: this.config.loyaltyReservationTtlSeconds,
+      reservation_commit_window_seconds: this.config.loyaltyReservationCommitWindowSeconds,
+      earn_exclude_point_payment: p.earnOnMoneyOnly,
+      company_code: company,
+      source: p.source,
+      policy_version: p.policyVersion,
+      point_value_version: p.pointValueVersion,
+      max_points_per_order: p.maxPointsPerOrder,
+      daily_max_points_member: p.dailyMaxPointsMember,
+      pos_config_hourly_max: p.posConfigHourlyMax,
+      company_hourly_max: p.companyHourlyMax,
+    };
+  }
+
+  /** Parameter efektif PT tempat transaksi (§13.1 no. 4). */
+  private paramsOf(company: CompanyCode): Promise<EffectiveLoyaltyParams> {
+    return this.policies ? this.policies.effective(company) : Promise.resolve(envLoyaltyParams(this.config, company));
+  }
+
+  /** Poin earn untuk `eligible` Rupiah — pembulatan ke bawah (`rate` = Rupiah per poin kebijakan PT; default env). */
+  pointsFor(eligibleAmount: number, rate: number = this.config.loyaltyEarnIdrPerPoint): number {
+    return Math.floor(eligibleAmount / rate + EPS);
   }
 
   // ───────────────────────── Earn (§9.2) ─────────────────────────
@@ -208,7 +263,8 @@ export class PosLoyaltyService {
     return this.observe('earn', async () => {
       const hash = this.loyalty.hashMember(dto.memberRef);
       await this.rateLimit('earn', hash);
-      const points = this.pointsFor(dto.eligibleAmount);
+      const policy = await this.paramsOf(dto.companyCode);
+      const points = this.pointsFor(dto.eligibleAmount, policy.earnIdrPerPoint);
       return this.db.tx(async (q) => {
         await this.loyalty.lockMember(q, hash);
         const existing = await q.query<EarnRecordRow>(
@@ -227,16 +283,18 @@ export class PosLoyaltyService {
           };
         }
         // SEC-61: pagar batas SETELAH cek replay (retry earn yang dulu diterima tetap 200 walau batas diturunkan)
-        if (points > 0) await this.enforceMoneyPortion(q, dto, points);
-        if (points > 0) await this.enforceEarnLimits(q, hash, dto, points);
+        if (points > 0) await this.enforceMoneyPortion(q, dto, points, policy);
+        if (points > 0) await this.enforceEarnLimits(q, hash, dto, points, policy);
+        // G21: versi kebijakan yang menghitung earn ini (audit; versi baru tidak mengubah transaksi lalu)
         await q.query(
           `INSERT INTO platform.loyalty_pos_earn
-             (order_ref, idempotency_key, member_hash, company_code, eligible_amount, points_earned, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [dto.orderRef, dto.idempotencyKey, hash, dto.companyCode, dto.eligibleAmount, points, new Date(this.now()).toISOString()],
+             (order_ref, idempotency_key, member_hash, company_code, eligible_amount, points_earned, created_at, policy_version)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [dto.orderRef, dto.idempotencyKey, hash, dto.companyCode, dto.eligibleAmount, points, new Date(this.now()).toISOString(), policy.policyVersion],
         );
         if (points > 0) {
-          const parts = splitCredit(await this.loyalty.buckets(q, hash, new Date(this.now())), points, this.earnExpiry());
+          // §13.1 no. 5: lot earn baru diterbitkan PT order; pelunasan utang memakai penerbit lot berutang
+          const parts = splitCredit(await this.loyalty.buckets(q, hash, new Date(this.now())), points, this.earnExpiry(), dto.companyCode);
           const enc = this.loyalty.encryptMemberRef(dto.memberRef);
           await this.writeParts(q, parts, (part, i) => ({
             idempotencyKey: i === 0 ? dto.idempotencyKey : `${dto.idempotencyKey}#${i + 1}`,
@@ -248,6 +306,7 @@ export class PosLoyaltyService {
             sourceRef: dto.orderRef,
             companyCode: dto.companyCode,
             expiresAt: part.expiresAt,
+            issuerCompanyCode: part.issuer ?? dto.companyCode,
           }));
           this.metrics.recordLoyaltyPosPoints('earned', dto.companyCode, points);
         }
@@ -274,10 +333,12 @@ export class PosLoyaltyService {
         throw LoyaltyErrors.amountMismatch();
       }
       const companyCode: CompanyCode = claims.companyCode;
-      if (dto.points < this.config.loyaltyRedeemMinPoints) throw LoyaltyErrors.belowMinimum();
-      const valueIdr = dto.points * this.config.loyaltyPointValueIdr;
+      // G21 §13.1 no. 4: minimum & persen maks = kebijakan PT penebus; nilai tukar = kebijakan global EFN (L-62)
+      const policy = await this.paramsOf(companyCode);
+      if (dto.points < policy.redeemMinPoints) throw LoyaltyErrors.belowMinimum();
+      const valueIdr = dto.points * policy.pointValueIdr;
       // nilai poin ≤ pct% × amount_total (perbandingan perkalian, bukan pembagian)
-      if (valueIdr * 100 > dto.amountTotal * this.config.loyaltyRedeemMaxPctOfOrder + EPS) throw LoyaltyErrors.exceedsMaxPct();
+      if (valueIdr * 100 > dto.amountTotal * policy.redeemMaxPct + EPS) throw LoyaltyErrors.exceedsMaxPct();
 
       const now = new Date(this.now());
       try {
@@ -409,7 +470,8 @@ export class PosLoyaltyService {
           if (!isCompanyCode(r.company_code)) throw new Error('company_code reservasi tidak dikenal');
           const company: CompanyCode = r.company_code;
           const enc = this.loyalty.encryptMemberRef(dto.memberRef);
-          const parts = allocateDebit(await this.loyalty.buckets(q, hash, now), points);
+          // §13.1 no. 5: FIFO per lot (expires_at, penerbit); tiap bagian mencatat penerbit (lintas PT bila ≠ PT penebus)
+          const parts = allocateDebit(await this.loyalty.buckets(q, hash, now), points, company);
           await this.writeParts(q, parts, (part, i) => ({
             idempotencyKey: i === 0 ? dto.idempotencyKey : `${dto.idempotencyKey}#${i + 1}`,
             memberHash: hash,
@@ -420,6 +482,7 @@ export class PosLoyaltyService {
             sourceRef: r.order_ref,
             companyCode: company,
             expiresAt: part.expiresAt,
+            issuerCompanyCode: part.issuer ?? company,
           }));
           await q.query(
             `UPDATE platform.loyalty_reservation
@@ -476,7 +539,7 @@ export class PosLoyaltyService {
         // deterministik + UNIQUE menjadi pagar terakhir (writeParts → idempotency_conflict).
         const existing = (
           await q.query<LedgerRow>(
-            `SELECT member_ref_hash, company_code, delta_points, expires_at, reason, source, source_ref, idempotency_key
+            `SELECT member_ref_hash, company_code, issuer_company_code, delta_points, expires_at, reason, source, source_ref, idempotency_key
                FROM platform.loyalty_ledger
               WHERE (source = 'pos_reverse' AND source_ref = $2 AND starts_with(idempotency_key, $1))
                  OR idempotency_key = ANY($3::text[])`,
@@ -517,7 +580,7 @@ export class PosLoyaltyService {
         if (!safeEqualHex(rec.member_hash, hash)) throw LoyaltyErrors.memberMismatch();
 
         const rows = await q.query<LedgerRow>(
-          `SELECT member_ref_hash, company_code, delta_points, expires_at, reason, source, source_ref, idempotency_key
+          `SELECT member_ref_hash, company_code, issuer_company_code, delta_points, expires_at, reason, source, source_ref, idempotency_key
              FROM platform.loyalty_ledger
             WHERE source IN ('pos_earn', 'pos_redeem', 'pos_reverse') AND source_ref = $1
             ORDER BY id`,
@@ -533,8 +596,11 @@ export class PosLoyaltyService {
         const priorClaw = -this.sumBy(priorRows, REVERSE_REASON.CLAWBACK);
         const priorRestore = this.sumBy(priorRows, REVERSE_REASON.RESTORE);
         const full = dto.refundRatio >= 1;
-        if (dto.pointsRestoredValue !== null) await this.assertExpectedRestore(q, dto, redeemed);
-        const restore = this.restorePoints(dto, redeemed, priorRestore, full);
+        // G21: nilai tukar poin SAAT REDEEM order asal (bukan kebijakan saat refund) agar perubahan nilai tukar tidak
+        // menggeser jumlah poin yang dikembalikan
+        const pv = dto.pointsRestoredValue !== null ? await this.redeemPointValue(q, dto.originalOrderRef) : 0;
+        if (dto.pointsRestoredValue !== null) await this.assertExpectedRestore(q, dto, redeemed, pv);
+        const restore = this.restorePoints(dto, redeemed, priorRestore, full, pv);
         const claw = Math.max(0, Math.min(earned - priorClaw, full ? earned : Math.ceil(earned * dto.refundRatio - EPS)));
 
         const now = new Date(this.now());
@@ -553,6 +619,8 @@ export class PosLoyaltyService {
             sourceRef: dto.originalOrderRef,
             companyCode: company,
             expiresAt: part.expiresAt,
+            // §13.1 no. 5: poin kembali ke lot PENERBIT asal yang dikonsumsi redeem
+            issuerCompanyCode: part.issuer ?? company,
           }));
           this.metrics.recordLoyaltyPosPoints('restored', company, restore);
         }
@@ -570,6 +638,7 @@ export class PosLoyaltyService {
             sourceRef: dto.originalOrderRef,
             companyCode: company,
             expiresAt: part.expiresAt,
+            issuerCompanyCode: part.issuer ?? company,
           }));
           this.metrics.recordLoyaltyPosPoints('clawed_back', company, claw);
         }
@@ -597,14 +666,13 @@ export class PosLoyaltyService {
    * max(nilai poin, `LOYALTY_RESTORE_TOLERANCE_PCT` % × V) → anomali `restore_value_unexpected` (critical) + 409
    * `restore_value_mismatch` (Odoo menahan outbox untuk review; tidak ada entri yang ditulis).
    */
-  private async assertExpectedRestore(q: Queryable, dto: PosReverseDto, redeemedPoints: number): Promise<void> {
+  private async assertExpectedRestore(q: Queryable, dto: PosReverseDto, redeemedPoints: number, pv: number): Promise<void> {
     const res = await q.query<{ v: string | number | null; t: string | number | null; t_missing: string | number | null; amt: string | number | null }>(
       `SELECT COALESCE(SUM(value_idr), 0)::bigint AS v, COALESCE(SUM(order_goods_incl), 0)::bigint AS t,
               COUNT(*) FILTER (WHERE order_goods_incl IS NULL) AS t_missing, COALESCE(SUM(amount_total), 0) AS amt
          FROM platform.loyalty_reservation WHERE order_ref = $1 AND status = 'committed'`,
       [dto.originalOrderRef],
     );
-    const pv = this.config.loyaltyPointValueIdr;
     const row = res.rows[0];
     const fromReservation = Number(row?.v ?? 0);
     const value = fromReservation > 0 ? fromReservation : redeemedPoints * pv;
@@ -721,12 +789,11 @@ export class PosLoyaltyService {
    * PT; sisa < 1 poin dicatat di `EFN_LOYALTY_RESTORE` untuk rekonsiliasi K-18-6), dibatasi sisa redeem order asal
    * (melebihi → dipotong + anomali `restore_exceeds_redeem`). Tidak ada (event v4) → floor(R × refund_ratio).
    */
-  private restorePoints(dto: PosReverseDto, redeemed: number, priorRestore: number, full: boolean): number {
+  private restorePoints(dto: PosReverseDto, redeemed: number, priorRestore: number, full: boolean, pv: number): number {
     const left = Math.max(0, redeemed - priorRestore);
     if (dto.pointsRestoredValue === null) {
       return Math.max(0, Math.min(left, full ? redeemed : Math.floor(redeemed * dto.refundRatio + EPS)));
     }
-    const pv = this.config.loyaltyPointValueIdr;
     const asked = Math.floor(dto.pointsRestoredValue / pv);
     const remainder = dto.pointsRestoredValue - asked * pv;
     const restore = Math.min(left, asked);
@@ -759,8 +826,9 @@ export class PosLoyaltyService {
    * `amount_total × (1 + POS_OTP_AMOUNT_TOLERANCE_PCT) − value_idr`. Melebihi → 409 `earn_limit_exceeded` + anomali
    * `earn_exceeds_money_portion`. Pagar kasar (pertahanan berlapis), bukan pengganti perhitungan Odoo.
    */
-  private async enforceMoneyPortion(q: Queryable, dto: PosEarnDto, points: number): Promise<void> {
-    if (!this.config.loyaltyEarnExcludePointPayment) return;
+  private async enforceMoneyPortion(q: Queryable, dto: PosEarnDto, points: number, policy: EffectiveLoyaltyParams): Promise<void> {
+    // G21: `earn_on_money_only` kebijakan PT (fallback LOYALTY_EARN_EXCLUDE_POINT_PAYMENT)
+    if (!policy.earnOnMoneyOnly) return;
     // SEC-123 (L-25k): commit redeem order ini belum masuk (mis. sedang retry) → earn ditunda (retryable), agar pagar
     // porsi uang tidak terlewat karena urutan outbox
     const pending = await q.query<{ pending: number }>(
@@ -800,12 +868,14 @@ export class PosLoyaltyService {
    *    dikompensasi). Redis mati → error 5xx (fail closed; Odoo retry). Bila transaksi DB gagal setelah counter
    *    bertambah, counter sedikit lebih tinggi dari kenyataan (memihak keamanan).
    */
-  private async enforceEarnLimits(q: Queryable, hash: string, dto: PosEarnDto, points: number): Promise<void> {
+  private async enforceEarnLimits(q: Queryable, hash: string, dto: PosEarnDto, points: number, policy: EffectiveLoyaltyParams): Promise<void> {
+    // G21 §13.1 no. 1: batas = kebijakan PT (`max_points_per_order`, `daily_max_points_member`, `pos_config_hourly_max`,
+    // `company_hourly_max`), selalu ≤ plafon env; fallback env
     const base = { company: dto.companyCode, order_ref: dto.orderRef, points };
-    const cap = this.config.loyaltyPosMaxEarnPoints;
+    const cap = policy.maxPointsPerOrder;
     if (points > cap) this.rejectEarn('earn_limit_order', { ...base, limit: cap });
 
-    const daily = this.config.loyaltyEarnDailyMaxPoints;
+    const daily = policy.dailyMaxPointsMember;
     if (daily > 0) {
       const res = await q.query<{ earned: string | number | null }>(
         `SELECT COALESCE(SUM(points_earned), 0)::bigint AS earned
@@ -816,13 +886,13 @@ export class PosLoyaltyService {
       if (today + points > daily) this.rejectEarn('earn_limit_member_day', { ...base, earned_today: today, limit: daily });
     }
 
-    const companyLimit = this.config.loyaltyEarnCompanyHourlyMaxPoints;
+    const companyLimit = policy.companyHourlyMax;
     const companyKey = `loy:earnpts:co:${dto.companyCode}`;
     if (companyLimit > 0) {
       const r = await this.limiter.consume(companyKey, points, companyLimit, 3600);
       if (!r.allowed) this.rejectEarn('earn_limit_company_hour', { ...base, limit: companyLimit });
     }
-    const cfgLimit = this.config.loyaltyEarnPosConfigHourlyMaxPoints;
+    const cfgLimit = policy.posConfigHourlyMax;
     if (cfgLimit > 0 && dto.posConfigId !== undefined && dto.posConfigId !== null) {
       const r = await this.limiter.consume(`loy:earnpts:cfg:${dto.companyCode}:${dto.posConfigId}`, points, cfgLimit, 3600);
       if (!r.allowed) {
@@ -836,6 +906,23 @@ export class PosLoyaltyService {
   private rejectEarn(kind: LoyaltyAnomalyKind, fields: Record<string, string | number>): never {
     reportLoyaltyAnomaly(this.logger, this.metrics, kind, fields);
     throw LoyaltyErrors.earnLimitExceeded();
+  }
+
+  /**
+   * G21: nilai tukar per poin saat redeem order asal = Σ value_idr ÷ Σ points reservasi committed (bila habis dibagi);
+   * tanpa reservasi (data lama/migrasi) → nilai tukar global aktif sekarang (kebijakan EFN, fallback env).
+   */
+  private async redeemPointValue(q: Queryable, orderRef: string): Promise<number> {
+    const res = await q.query<{ rv: string | number | null; rp: string | number | null }>(
+      `SELECT COALESCE(SUM(value_idr), 0)::bigint AS rv, COALESCE(SUM(points), 0)::bigint AS rp
+         FROM platform.loyalty_reservation WHERE order_ref = $1 AND status = 'committed' AND points > 0`,
+      [orderRef],
+    );
+    const rv = Number(res.rows[0]?.rv ?? 0);
+    const rp = Number(res.rows[0]?.rp ?? 0);
+    if (rp > 0 && rv > 0 && rv % rp === 0) return rv / rp;
+    if (this.policies) return (await this.policies.pointValueIdrAt(new Date(this.now()), q)).value;
+    return this.config.loyaltyPointValueIdr;
   }
 
   /** Saldo tersedia = saldo ledger − reservasi aktif (status reserved & belum lewat hold_until). */
@@ -852,7 +939,7 @@ export class PosLoyaltyService {
 
   private async ledgerByKeys(q: Queryable, keys: string[]): Promise<LedgerRow[]> {
     const res = await q.query<LedgerRow>(
-      `SELECT member_ref_hash, company_code, delta_points, expires_at, reason, source, source_ref, idempotency_key
+      `SELECT member_ref_hash, company_code, issuer_company_code, delta_points, expires_at, reason, source, source_ref, idempotency_key
          FROM platform.loyalty_ledger WHERE idempotency_key = ANY($1::text[])`,
       [keys],
     );
@@ -886,12 +973,14 @@ export class PosLoyaltyService {
       if (take <= 0) continue;
       const orig = r.expires_at === null ? null : toDate(r.expires_at);
       const target = orig === null || orig.getTime() > now.getTime() ? orig : this.earnExpiry();
-      const same = out.find((a) => (a.expiresAt?.getTime() ?? null) === (target?.getTime() ?? null));
+      // G21: penerbit lot yang dikonsumsi redeem (baris pra-G21 → company_code)
+      const issuer = issuerOf(r);
+      const same = out.find((a) => (a.expiresAt?.getTime() ?? null) === (target?.getTime() ?? null) && a.issuer === issuer);
       if (same) same.points += take;
-      else out.push({ expiresAt: target, points: take });
+      else out.push({ expiresAt: target, points: take, issuer });
       left -= take;
     }
-    if (left > 0) out.push({ expiresAt: this.earnExpiry(), points: left });
+    if (left > 0) out.push({ expiresAt: this.earnExpiry(), points: left, issuer: rows[0] ? issuerOf(rows[0]) : undefined });
     return out;
   }
 
@@ -901,14 +990,18 @@ export class PosLoyaltyService {
    */
   private clawAllocation(earnRows: LedgerRow[], buckets: LedgerBucket[], points: number, now: Date): Allocation[] {
     const dated = earnRows.find((r) => r.expires_at !== null);
+    // G21: lot sasaran = lot earn asal (expires_at + penerbit); utang kekurangan dicatat atas penerbit yang sama
+    const ref = dated ?? earnRows[0];
+    const issuer = ref ? issuerOf(ref) : undefined;
     const target = dated?.expires_at ? toDate(dated.expires_at) : null;
-    if (target === null) return [{ expiresAt: null, points }];
-    if (target.getTime() <= now.getTime()) return [{ expiresAt: target, points }];
-    const remaining = buckets.find((b) => b.expiresAt?.getTime() === target.getTime())?.remaining ?? 0;
+    if (target === null) return [{ expiresAt: null, points, issuer }];
+    if (target.getTime() <= now.getTime()) return [{ expiresAt: target, points, issuer }];
+    const remaining =
+      buckets.find((b) => b.expiresAt?.getTime() === target.getTime() && (b.issuer === undefined || issuer === undefined || b.issuer === issuer))?.remaining ?? 0;
     const fromBucket = Math.min(points, Math.max(0, remaining));
     const out: Allocation[] = [];
-    if (fromBucket > 0) out.push({ expiresAt: target, points: fromBucket });
-    if (points - fromBucket > 0) out.push({ expiresAt: null, points: points - fromBucket });
+    if (fromBucket > 0) out.push({ expiresAt: target, points: fromBucket, issuer });
+    if (points - fromBucket > 0) out.push({ expiresAt: null, points: points - fromBucket, issuer });
     return out;
   }
 

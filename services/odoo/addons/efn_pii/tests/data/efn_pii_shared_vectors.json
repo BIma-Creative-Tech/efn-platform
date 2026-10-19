@@ -1,6 +1,5 @@
 {
   "description": "Vektor bersama BFF <-> Odoo, AAD EFN (ADR-036 §0.3). Kunci uji = SHA-256(label) publik, BUKAN rahasia. Dibangkitkan oleh efn_pii/tools/shared_vectors.py.",
-  "status": "PENDING: nilai expected_* = null sampai lead menjalankan generator di container (lihat README efn_pii, 'Vektor bersama'). Test Odoo mencetak JSON lengkap ke log (penanda EFN_PII_SHARED_VECTORS) selama nilai masih null.",
   "labels": {
     "aes_key": "efn-pii-shared-vector:aes-key:v1",
     "bidx_ikm": "efn-pii-shared-vector:bidx-key:v1",
@@ -22,7 +21,7 @@
       "aad": "efn:odoo:res_partner.phone:v1",
       "plaintext": "6281234567890",
       "iv_label": "efn-pii-shared-vector:iv:partner-phone-v1-unbound",
-      "expected_text": null
+      "expected_text": "efnpii1:AW/7jkMdWyy/KcK+JTHsHEFJYr4Cpl75rtDT6/hEOXZd/KpnjKubJRhY"
     },
     {
       "name": "partner-phone-v2-id42",
@@ -32,7 +31,7 @@
       "aad": "efn:odoo:res_partner.phone:42:v2",
       "plaintext": "6281234567890",
       "iv_label": "efn-pii-shared-vector:iv:partner-phone-v2-id42",
-      "expected_text": null
+      "expected_text": "efnpii2:ATKQdzvB9sM1rj1pMYQGMs66JDIuerGtH3KiQ/Wjtaxjoa4qq1ovBvD6"
     },
     {
       "name": "partner-name-v2-id42",
@@ -42,7 +41,7 @@
       "aad": "efn:odoo:res_partner.name:42:v2",
       "plaintext": "Budi Santoso",
       "iv_label": "efn-pii-shared-vector:iv:partner-name-v2-id42",
-      "expected_text": null
+      "expected_text": "efnpii2:ASa2YeRcjHBpsRb9B3fXIa4wLNy1okrF7N+8yvA05RnOyntn9lYiwts="
     },
     {
       "name": "partner-street-v2-id42",
@@ -52,7 +51,7 @@
       "aad": "efn:odoo:res_partner.street:42:v2",
       "plaintext": "Jl. Melati No. 5, RT 01/RW 02",
       "iv_label": "efn-pii-shared-vector:iv:partner-street-v2-id42",
-      "expected_text": null
+      "expected_text": "efnpii2:AageAxYKFLpKztZY4/NmEryQtsqyHZvobPq/eVSxo2nzkbqk18PUi1Qff9tk+x8ko2/r+94g2ptb1Q=="
     },
     {
       "name": "pos-order-email-v2-id7",
@@ -62,29 +61,86 @@
       "aad": "efn:odoo:pos_order.email:7:v2",
       "plaintext": "budi.santoso@example.com",
       "iv_label": "efn-pii-shared-vector:iv:pos-order-email-v2-id7",
-      "expected_text": null
+      "expected_text": "efnpii2:AVBchcZDyletEEr7Doa2G6N9Ah/CMceAqP0+bgTFkPdPlVFEF6UehDcJeEFfm47W9sgYJPo="
     }
   ],
   "bidx": [
-    {"field": "phone", "info": "efn:odoo:bidx:phone:v1", "normalized": "6281234567890", "expected_hex": null},
-    {"field": "email", "info": "efn:odoo:bidx:email:v1", "normalized": "budi.santoso@example.com", "expected_hex": null},
-    {"field": "vat", "info": "efn:odoo:bidx:vat:v1", "normalized": "0123456789012345", "expected_hex": null}
+    {
+      "field": "phone",
+      "info": "efn:odoo:bidx:phone:v1",
+      "normalized": "6281234567890",
+      "expected_hex": "a4e2f012be469621fb872b1a7ba9454b6c70c63d7252dc3ff3a6ced8c896431e"
+    },
+    {
+      "field": "email",
+      "info": "efn:odoo:bidx:email:v1",
+      "normalized": "budi.santoso@example.com",
+      "expected_hex": "570b6015715332bb729b6606c48769bd18d955c0f648d85c5cee4eca53c67161"
+    },
+    {
+      "field": "vat",
+      "info": "efn:odoo:bidx:vat:v1",
+      "normalized": "0123456789012345",
+      "expected_hex": "59d503b9751273204f56888af1e9cdbfcd37136dcb7b9f1fbbc9f06765aee036"
+    }
   ],
   "name_tokens": [
-    {"kind": "f", "info": "efn:odoo:nametok:f:v1", "normalized": "budi santoso", "expected": null},
-    {"kind": "w", "info": "efn:odoo:nametok:w:v1", "normalized": "budi", "expected": null},
-    {"kind": "p", "info": "efn:odoo:nametok:p:v1", "normalized": "sant", "expected": null}
+    {
+      "kind": "f",
+      "info": "efn:odoo:nametok:f:v1",
+      "normalized": "budi santoso",
+      "expected": "ENLY_TvjBplK6nZvcvupOQ"
+    },
+    {
+      "kind": "w",
+      "info": "efn:odoo:nametok:w:v1",
+      "normalized": "budi",
+      "expected": "RWBIU5aTg3lMqG13oIyjCg"
+    },
+    {
+      "kind": "p",
+      "info": "efn:odoo:nametok:p:v1",
+      "normalized": "sant",
+      "expected": "jyySvOGjYpSnYPq5-Cta_w"
+    }
   ],
   "normalize": [
-    {"input": "Budi Santoso", "expected": "budi santoso"},
-    {"input": "  Hj. Siti   Nurhaliza ", "expected": "hj siti nurhaliza"},
-    {"input": "Al-Fatih", "expected": "al fatih"},
-    {"input": "José Müller", "expected": "jose muller"},
-    {"input": "PT Sumber Rejeki, Budi", "expected": "pt sumber rejeki budi"},
-    {"input": "ＢＵＤＩ", "expected": "budi"},
-    {"input": "Straße", "expected": "strasse"},
-    {"input": "O'Neil", "expected": "o neil"},
-    {"input": "李小龙", "expected": ""}
+    {
+      "input": "Budi Santoso",
+      "expected": "budi santoso"
+    },
+    {
+      "input": "  Hj. Siti   Nurhaliza ",
+      "expected": "hj siti nurhaliza"
+    },
+    {
+      "input": "Al-Fatih",
+      "expected": "al fatih"
+    },
+    {
+      "input": "José Müller",
+      "expected": "jose muller"
+    },
+    {
+      "input": "PT Sumber Rejeki, Budi",
+      "expected": "pt sumber rejeki budi"
+    },
+    {
+      "input": "ＢＵＤＩ",
+      "expected": "budi"
+    },
+    {
+      "input": "Straße",
+      "expected": "strasse"
+    },
+    {
+      "input": "O'Neil",
+      "expected": "o neil"
+    },
+    {
+      "input": "李小龙",
+      "expected": ""
+    }
   ],
   "normalize_note": "NFKC -> casefold -> NFKD tanpa diakritik -> [^a-z0-9] jadi spasi -> rapatkan spasi"
 }

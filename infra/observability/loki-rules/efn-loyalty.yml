@@ -123,3 +123,66 @@ groups:
           summary: "Poin EFN: rekonsiliasi harian ETL (loyalty_recon) tidak sukses > 26 jam (atau baris tidak dikenali)"
           description: "Kontrol detektif ledger poin vs order POS tidak berjalan. Cek log ETL (EFN_LOYALTY_RECON_ETL status error / heartbeat job=loyalty_recon)."
           runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-anomaly.md#efnloyaltyetlreconmissing"
+
+  # G21 (data-AI, docs/04 §13.1 no. 7, E-44): rekonsiliasi liabilitas poin per PT setelah akrual harian Odoo
+  # (efn_loyalty_accounting, cron 02:00 WIB): saldo akun Liabilitas Poin PT (Odoo) vs closing_liability_idr BFF.
+  # Baris `EFN_LOYALTY_RECON {bff_closing_liability_idr, company_code, date, diff_idr, odoo_liability_idr}` (tanpa PII)
+  # -> promtail.yml tahap 2c -> {stream="efn_loyalty", loyalty_event="liability_recon", company_code="<PT>"}.
+  # Satu baris per PT per hari -> alert memakai NILAI TERAKHIR dalam 26 jam (last_over_time), tetap menyala sampai run
+  # berikutnya bersih. Angka diambil dengan `| regexp` TANPA jangkar posisi (urutan kunci boleh sort_keys atau urutan
+  # kontrak; isi stream sudah dibatasi regex berjangkar penuh di promtail). |diff| = unwrap digit tanpa tanda "-".
+  # Tidak ada koreksi otomatis (kontrak): alert + aktivitas Finance di Odoo; jurnal koreksi lewat CR Finance.
+  #
+  # AMBANG CRITICAL (konfigurasi): Rp 100.000 = PLACEHOLDER sampai Finance menetapkan (usulan Q-F21-1, laporan
+  # data-AI G21). Ubah HANYA angka `> 100000` pada EfnLoyaltyLiabilityReconCritical (satu tempat; Loki ruler tidak
+  # mengekspansi env di file aturan) + panel Grafana efn-loyalty-liability-recon.json (threshold merah) lewat PR.
+  # Warning menyala untuk selisih berapa pun (≠ 0); critical menekan warning PT yang sama (alertmanager.yml inhibit).
+  # Runbook: docs/runbooks/loyalty-anomaly.md (bagian liabilitas poin — diusulkan, milik lead/devsecops).
+  - name: efn-loyalty-liability-recon
+    interval: 5m
+    rules:
+      - alert: EfnLoyaltyLiabilityReconMismatch
+        expr: |
+          max by (company_code) (
+            last_over_time({stream="efn_loyalty", loyalty_event="liability_recon"}
+              | regexp `"diff_idr": ?-?(?P<diff_abs>\d+)`
+              | unwrap diff_abs | __error__="" [26h])
+          ) > 0
+        labels:
+          severity: warning
+          team: finance
+        annotations:
+          summary: "Poin EFN: liabilitas poin {{ $labels.company_code }} di Odoo beda Rp {{ $value }} dari saldo penutup BFF"
+          description: "Saldo akun Liabilitas Poin PT (Odoo) tidak sama dengan closing_liability_idr BFF setelah akrual harian. Penyebab umum: akrual hari sebelumnya gagal/terlewat, jurnal manual ke akun liabilitas, akun per PT salah konfigurasi. Tinjau aktivitas Finance di Odoo; tidak ada koreksi otomatis."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-anomaly.md#efnloyaltyliabilityreconmismatch"
+      - alert: EfnLoyaltyLiabilityReconCritical
+        expr: |
+          max by (company_code) (
+            last_over_time({stream="efn_loyalty", loyalty_event="liability_recon"}
+              | regexp `"diff_idr": ?-?(?P<diff_abs>\d+)`
+              | unwrap diff_abs | __error__="" [26h])
+          ) > 100000
+        labels:
+          severity: critical
+          team: finance
+        annotations:
+          summary: "Poin EFN: selisih liabilitas poin {{ $labels.company_code }} Rp {{ $value }} melewati ambang kritis"
+          description: "Selisih liabilitas poin Odoo vs BFF di atas ambang critical (PLACEHOLDER Rp 100.000, efn-loyalty.yml). Perlakukan sebagai dugaan salah saji laporan keuangan / manipulasi ledger sampai terbukti sebaliknya; jangan koreksi tanpa CR Finance."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-anomaly.md#efnloyaltyliabilityreconcritical"
+      # DEAD-MAN: tidak ada baris rekonsiliasi selama 26 jam padahal ada dalam 7 hari terakhir = cron akrual Odoo
+      # berhenti/gagal (akun PT belum dikonfigurasi -> galat + aktivitas Finance, tanpa baris recon), Odoo mati, ATAU
+      # format log berubah (alert selisih ikut buta). Hanya "bersenjata" setelah baris pertama terlihat (7 hari) agar
+      # lingkungan tanpa efn_loyalty_accounting tidak alarm terus; berhenti > 7 hari = alert padam (lihat laporan G21).
+      - alert: EfnLoyaltyLiabilityReconMissing
+        expr: |
+          absent_over_time({stream="efn_loyalty", loyalty_event="liability_recon"} [26h])
+          and
+          sum by (stream, loyalty_event) (count_over_time({stream="efn_loyalty", loyalty_event="liability_recon"} [7d])) > 0
+        for: 30m
+        labels:
+          severity: warning
+          team: finance
+        annotations:
+          summary: "Poin EFN: rekonsiliasi liabilitas poin harian (Odoo) tidak terlihat > 26 jam"
+          description: "Cron akrual poin Odoo (02:00 WIB) tidak mencatat EFN_LOYALTY_RECON untuk PT mana pun. Cek log Odoo efn_loyalty_accounting (akun per PT, akses BFF /v1/pos/loyalty/accruals) dan pipeline log (promtail tahap 2c)."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-anomaly.md#efnloyaltyliabilityreconmissing"

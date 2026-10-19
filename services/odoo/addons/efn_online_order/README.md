@@ -168,6 +168,45 @@ Perubahan json2 (aditif): katalog `channel.payment_modes: string[]` (kanonik, mi
 `efn_online_place` `order.payment_mode` + `order.counter_code` (input); hasil place **tidak** berubah; event `paid`
 `payment`. Uji: `tests/test_online_g20_payment_mode.py` (bagian tanpa POS) + `efn_online_pos_counter/tests`.
 
+## G21 (19.0.1.6.0) — faktur atas nama pembeli E-39 (docs/04 §13.5, L-63; docs/08 §10.7)
+ADR-036 §0 (Accepted: enkripsi PII Odoo), ADR-034, ADR-031. Risiko: R-L01/R-L10 (PII pembeli, UU PDP), R-T18
+(fail-closed enkripsi).
+
+- **RPC baru** `efn.online.order/efn_online_set_invoice_party(channel_code, platform_order_ref, profile,
+  idempotency_key)` (path gateway ke-12) → `{"state": "set"}`. `profile = {buyer_type: "npwp"|"nik"|"passport",
+  tax_id, name, address, email?}`; kunci lain ditolak. Validasi server: NPWP/NIK 16 digit (titik/strip/spasi dibuang),
+  paspor 5–20 alfanumerik, nama 2–100, alamat 5–255 (spasi beruntun dirapikan, karakter kontrol ditolak), email RFC
+  dasar ≤ 254 (opsional, huruf kecil). Kunci idempotensi yang disarankan: `online:invoice_party:<part_id>`.
+- **Urutan cek & kode error:** pemanggil (`AccessError`) → input (`invalid_input`) → order kanal (`not_found`) →
+  **`invoice_not_available`** (kode baru) bila PT bukan PPN (`efn_business_type != retail`, yaitu GL/BCR saja) **atau**
+  `efn_pii` tidak terpasang / field partner `name, street, email, vat` (+ `l10n_id_buyer_document_number` untuk
+  NIK/paspor, `efn_pii_l10n_id`) bukan field terenkripsi `EfnPiiChar` (mis. `base_vat` tanpa `efn_pii_base_vat`) /
+  mode terkunci kunci PII → idempotensi (kunci sama + profil sama → `set`; selain itu `idempotency_conflict`) →
+  `invalid_state` bila order bukan `placed` atau sudah ada faktur. L-63: profil **tidak pernah** ditulis ke Odoo tanpa
+  enkripsi aktif. `efn_pii` tidak di `depends` (dicek saat runtime lewat kelas field).
+- **Partner pembeli:** perorangan (`is_company=False`, tanpa induk) per company, `efn_online_invoice_buyer=True`
+  (penanda baru), terlindungi otomatis oleh `efn_pii` (dicek setelah create; tidak terlindungi → rollback +
+  `invoice_not_available`). NPWP → `vat` (+ `l10n_id_buyer_document_type=TIN` bila `l10n_id_efaktur_coretax`
+  terpasang) + negara Indonesia; NIK/paspor → `l10n_id_buyer_document_type` NIK/Passport + `_number` (tanpa `vat`).
+  Dipakai ulang hanya bila partner bertanda milik company sama dan nama, alamat, email, nomor identitas sama persis
+  (pencarian `vat =` / nomor dokumen `=` → blind index efn_pii, lalu dicocokkan terdekripsi). Pembuatan diserialkan
+  per company (advisory lock tanpa PII).
+- **SO:** `partner_invoice_id` = pembeli; `partner_id` tetap partner generik kanal. Faktur saat `mark_paid` memakai
+  `partner_invoice_id` (standar `_prepare_invoice`) → Coretax membaca NPWP dari `commercial_partner_id` = pembeli.
+- **Tanpa PII** di hasil RPC, log (hanya id order/partner + `buyer_type`), hash, outbox/event. Pesan validasi Odoo
+  (`base_vat` memuat nilai) tidak diteruskan/di-log.
+- **Field baru:** `res.partner.efn_online_invoice_buyer` (Boolean), `efn.online.order.invoice_party_idempotency_key`
+  (Char, `base.group_system`).
+- **Batasan:** NIK/paspor butuh `efn_pii_l10n_id` (builder lain, G21) — tanpa itu `invoice_not_available`; ekspor
+  Coretax pembeli NIK/paspor tetap butuh `vat` di `download_efaktur` CE 19.0 (validasi "NPWP … hasn't been filled") →
+  **[B]** keputusan Finance/Legal (Q-F19-6 default: NPWP saja). Penghapusan/anonimisasi partner pembeli (erasure,
+  kecuali data wajib faktur 10 th) belum. `account.move.invoice_partner_display_name` terenkripsi = E-38a sisa
+  (`efn_pii_account`, SEC-153).
+
+Perubahan json2 (aditif): metode baru di atas; kode error baru `efn_online:invoice_not_available`. Metode lain tidak
+berubah. Uji: `tests/test_online_g21_invoice_party.py` (kelas tanpa efn_pii selalu jalan; kelas dengan efn_pii di-skip
+bila efn_pii/efn_pii_base_vat tidak terpasang).
+
 ## Model
 | Model | Isi |
 |---|---|
@@ -183,10 +222,11 @@ Perubahan json2 (aditif): katalog `channel.payment_modes: string[]` (kanonik, mi
 Semua model ber-`company_id`, `_check_company_auto`, record rule `company_id in company_ids`; ACL di
 `security/ir.model.access.csv`. Grup `group_online_channel` **tanpa satu pun ACL** (BFF tidak bisa CRUD dokumen).
 
-## Metode RPC (13, semua di `RPC_ALLOWLIST` `efn_core/tests/test_rpc_surface.py`)
+## Metode RPC (semua di `RPC_ALLOWLIST` `efn_core/tests/test_rpc_surface.py`)
 BFF (`/json/2/<model>/<metode>` lewat `odoo-rpc-gateway`): `efn.online.channel` → `efn_online_catalog`,
 `efn_online_stock`, `efn_online_image`, `efn_online_quote`; `efn.online.order` → `efn_online_place`,
-`efn_online_mark_paid`, `efn_online_cancel`, `efn_online_refund`, `efn_online_refund_settled`, `efn_online_status`.
+`efn_online_mark_paid`, `efn_online_cancel`, `efn_online_refund`, `efn_online_refund_settled`, `efn_online_status`,
+`efn_online_set_invoice_party` (G21 E-39).
 Staf (web client): `efn.online.order.action_efn_ready` (Inventory user), `action_efn_retry_events` (Sales manager),
 `efn.online.handover.wizard.action_confirm` (Inventory user).
 
@@ -198,7 +238,7 @@ currency, outlets: [{ code, public_name, pickup_enabled, prep_minutes, active }]
 user (gagal = `AccessError` seragam, termasuk kanal tak dikenal) → kanal nonaktif = `efn_online:channel_inactive`
 → **context klien dibuang kecuali `lang` (`id_ID`/`en_US`)** → `sudo` + `with_company(kanal)`.
 Error bisnis = `UserError("efn_online:<kode>")` persis (`price_changed`, `out_of_stock`, `amount_mismatch`,
-`invalid_state`, `idempotency_conflict`, `not_found`, `invalid_input`, `channel_inactive`).
+`invalid_state`, `idempotency_conflict`, `not_found`, `invalid_input`, `channel_inactive`, `invoice_not_available`).
 
 Alur: quote (`sale.order.new()`, tanpa tulis DB) → place (advisory lock + unik; hitung ulang, `quote_hash` beda →
 `price_changed`; SO draft partner generik, `client_order_ref`=part_id, `origin`="Super-App <order_id>", gudang &

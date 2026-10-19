@@ -37,6 +37,9 @@ gen_value() {
 while read -r name kind _; do
   [[ -z "${name:-}" || "$name" == \#* ]] && continue
   [[ "$kind" == "pki" || "$kind" == derived:* ]] && continue
+  # G21 AC-13: kunci PII Odoo di secrets.list berjenis host:disabled (produksi = dibuat Superadmin di host). Dev/CI butuh
+  # kunci NYATA (32 byte acak) -> dibuat di bagian "PII Odoo" di bawah, bukan placeholder `disabled`.
+  [[ "$name" == odoo_pii_* ]] && continue
   f="${OUT_DIR}/${name}.txt"
   if [[ -s "$f" ]]; then
     chmod 644 "$f"
@@ -53,14 +56,14 @@ bash "${ROOT_DIR}/scripts/derive-secrets.sh" "$OUT_DIR"
 
 # PII Odoo (G19 E-38 PoC -> G20 E-38a, docs/04 §12.5, ADR-036 Accepted §0): kunci AES-256-GCM key ring v1, kunci blind
 # index, dan (G20, ADR-036 §0.5) kunci token nama `odoo_pii_name_key`; masing-masing 32 byte acak base64, HANYA di-mount
-# ke container odoo oleh docker-compose.dev.yml. Sengaja TIDAK di scripts/secrets.list (pola dev_edge_*): staging/
-# production menyusul setelah AC ADR-036 lulus -> pindahkan ke secrets.list (`b64key32 [SA]`), compose base (mount odoo
-# saja), key-custody.md + salinan tersegel.
-# Idempoten: file yang ada TIDAK ditimpa (menimpa key ring = PII dev terenkripsi tidak terbaca lagi; menimpa bidx/name =
-# pencarian gagal sampai indeks/token dihitung ulang).
+# ke container odoo oleh docker-compose.dev.yml. G21 (AC-13): ketiganya kini di scripts/secrets.list sebagai
+# `host:disabled [SA]` (produksi dibuat Superadmin di host, overlay docker-compose.pii.yml) - nilai dev tetap dibuat di
+# sini. Idempoten: file yang ada TIDAK ditimpa (menimpa key ring = PII dev terenkripsi tidak terbaca lagi; menimpa
+# bidx/name = pencarian gagal sampai indeks/token dihitung ulang). Pengecualian: file berisi placeholder `disabled`
+# (bukan kunci; tidak ada data yang terenkripsi dengannya) diganti kunci acak.
 for name in odoo_pii_key_v1 odoo_pii_bidx_key odoo_pii_name_key; do
   f="${OUT_DIR}/${name}.txt"
-  if [[ -s "$f" ]]; then
+  if [[ -s "$f" ]] && ! grep -qx 'disabled' "$f"; then
     chmod 644 "$f"
     echo "ada    : $f"
     continue

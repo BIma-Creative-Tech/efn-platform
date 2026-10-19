@@ -151,3 +151,95 @@ CREATE OR REPLACE VIEW public.efn_etl_audit_epoch WITH (security_barrier) AS
     SELECT value::text AS marker FROM public.ir_config_parameter WHERE key = 'efn_audit.chain_epoch';
 REVOKE ALL ON public.efn_etl_audit_epoch FROM PUBLIC;
 GRANT SELECT ON public.efn_etl_audit_epoch TO efn_etl;
+
+-- ===================================================================== Gelombang 21 (efn-data-ai-engineer, ADR-036 §0.7)
+-- Laporan penjualan per wilayah domisili (docs/04 §13.2, E-38b, K-36-5 diralat). efn_etl TETAP tanpa grant apa pun
+-- pada res_partner (nama/alamat/kota/kode pos/kontak terenkripsi ADR-036) dan efn_region: dua view milik efn_odoo di
+-- skema `efn_etl` (dijalankan dengan hak pemilik; JANGAN diberi security_invoker). Kolom sumber yang dibaca view:
+--   res_partner : id, company_id, efn_region_id (plaintext menurut ADR-036 §0.2; diisi dropdown kasir/back office/BFF,
+--                 dikosongkan erasure K-36-4)
+--   efn_region  : id, code (^\d{2}\.\d{2}$ kab/kota Kemendagri), name, state_id, active (bila ada), write_date
+--   res_country_state: id, code, name
+-- Tanpa security_barrier: view tidak menyaring baris demi keamanan (pembatas = daftar kolom), sehingga predikat join
+-- ETL (`pr.partner_id = o.partner_id`) boleh didorong ke dalam view (index PK res_partner).
+-- Bersyarat: dilewati (NOTICE) sampai modul efn_region terpasang -> jalankan ulang skrip setelah `-i efn_region`.
+-- ETL membaca view ini hanya bila ETL_PARTNER_REGION_ENABLED=true (efn_etl/region.py). Kolom nama efn_region/state
+-- bisa jsonb (translate=True) atau varchar: ekspresi dipilih dari information_schema (kolom & tipe dicek saat deploy).
+-- Catatan: nama skema = nama role efn_etl -> ETL memaksa search_path=public (efn_etl/adapters.py) dan selalu
+-- merujuk view berkualifikasi. Skema hanya milik efn_odoo; efn_etl hanya USAGE (tidak bisa membuat objek bayangan).
+DO $grant_g21$
+DECLARE
+    region_name text;
+    state_join  text := '';
+    state_code  text := $q$''$q$;
+    state_name  text := $q$''$q$;
+    active_expr text := 'TRUE';
+    dtype       text;
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'res_partner' AND column_name = 'efn_region_id'
+    ) OR NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'efn_region' AND column_name = 'code'
+    ) THEN
+        RAISE NOTICE 'efn_region belum terpasang: view efn_etl.partner_region / efn_etl.region dilewati (G21)';
+        RETURN;
+    END IF;
+
+    EXECUTE 'CREATE SCHEMA IF NOT EXISTS efn_etl';
+    EXECUTE 'REVOKE ALL ON SCHEMA efn_etl FROM PUBLIC';
+    EXECUTE 'GRANT USAGE ON SCHEMA efn_etl TO efn_etl';
+
+    -- (a) partner -> kode wilayah. Kontrak kolom (ADR-036 §0.7): partner_id, company_id, region_code. Hanya partner
+    --     yang punya wilayah (INNER JOIN): partner tanpa wilayah / sudah dihapus (erasure) tidak muncul.
+    EXECUTE $v$
+        CREATE OR REPLACE VIEW efn_etl.partner_region AS
+        SELECT p.id AS partner_id, p.company_id, r.code::text AS region_code
+        FROM public.res_partner p
+        JOIN public.efn_region r ON r.id = p.efn_region_id
+    $v$;
+    EXECUTE 'REVOKE ALL ON efn_etl.partner_region FROM PUBLIC';
+    EXECUTE 'GRANT SELECT ON efn_etl.partner_region TO efn_etl';
+
+    -- (b) master wilayah -> dim_region (data Kemendagri, bukan data pribadi).
+    SELECT data_type INTO dtype FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'efn_region' AND column_name = 'name';
+    region_name := CASE
+        WHEN dtype = 'jsonb' THEN $q$COALESCE(r.name ->> 'id_ID', r.name ->> 'en_US', '')$q$
+        WHEN dtype IS NULL THEN $q$''$q$
+        ELSE $q$COALESCE(r.name::text, '')$q$
+    END;
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'efn_region' AND column_name = 'active'
+    ) THEN
+        active_expr := 'COALESCE(r.active, TRUE)';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'efn_region' AND column_name = 'state_id'
+    ) THEN
+        state_join := 'LEFT JOIN public.res_country_state s ON s.id = r.state_id';
+        state_code := $q$COALESCE(s.code::text, '')$q$;
+        SELECT data_type INTO dtype FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'res_country_state' AND column_name = 'name';
+        state_name := CASE
+            WHEN dtype = 'jsonb' THEN $q$COALESCE(s.name ->> 'id_ID', s.name ->> 'en_US', '')$q$
+            ELSE $q$COALESCE(s.name::text, '')$q$
+        END;
+    END IF;
+    EXECUTE format(
+        $v$
+        CREATE OR REPLACE VIEW efn_etl.region AS
+        SELECT r.code::text AS region_code, %s AS name, %s AS state_code, %s AS state_name, %s AS active,
+               COALESCE(r.write_date, r.create_date) AS write_date
+        FROM public.efn_region r
+        %s
+        $v$,
+        region_name, state_code, state_name, active_expr, state_join
+    );
+    EXECUTE 'REVOKE ALL ON efn_etl.region FROM PUBLIC';
+    EXECUTE 'GRANT SELECT ON efn_etl.region TO efn_etl';
+END
+$grant_g21$;

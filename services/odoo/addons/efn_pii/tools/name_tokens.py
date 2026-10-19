@@ -71,18 +71,27 @@ def prefix_query_inputs(value):
     return long_words or None
 
 
-def pad_tokens(tokens, random_token, multiple=PAD_MULTIPLE):
-    """Urutkan + padatkan ke kelipatan ``multiple`` dengan token acak unik (menyembunyikan jumlah/panjang kata).
+MAX_PAD_ATTEMPTS = 10_000
 
-    Token padding diurutkan bersama token asli sehingga posisinya tidak membedakan.
+
+def pad_tokens(tokens, pad_token, multiple=PAD_MULTIPLE, extra_blocks=0):
+    """Urutkan + padatkan ke kelipatan ``multiple`` (+ ``extra_blocks`` blok penuh) dengan token padding unik.
+
+    ``pad_token(i)`` mengembalikan kandidat ke-i (SEC-149: deterministik per record dan per himpunan token asli,
+    sehingga menghitung ulang token untuk nama yang sama menghasilkan kolom identik; dua snapshot tidak lagi
+    memisahkan token asli dari padding). Token padding diurutkan bersama token asli (posisi tidak membedakan).
     """
     real = set(tokens)
     if not real:
         return []
-    need = (-len(real)) % multiple
+    need = (-len(real)) % multiple + multiple * max(0, int(extra_blocks))
     pads = set()
+    index = 0
     while len(pads) < need:
-        candidate = random_token()
+        if index >= MAX_PAD_ATTEMPTS:
+            raise ValueError("padding token nama tidak konvergen")
+        candidate = pad_token(index)
+        index += 1
         if candidate not in real:
             pads.add(candidate)
     return sorted(real | pads)

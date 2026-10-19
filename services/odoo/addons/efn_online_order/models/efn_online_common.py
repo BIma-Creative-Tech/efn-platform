@@ -24,6 +24,8 @@ ERROR_CODES = frozenset(
         "not_found",
         "invalid_input",
         "channel_inactive",
+        # G21 E-39 (docs/04 §13.5, L-63): PT bukan PPN, atau efn_pii tidak terpasang/aktif -> BFF 422.
+        "invoice_not_available",
     }
 )
 
@@ -99,6 +101,54 @@ def parse_payment_modes(value):
     if not tokens or any(token not in PAYMENT_MODES for token in tokens) or len(set(tokens)) != len(tokens):
         return None
     return [mode for mode in PAYMENT_MODES if mode in tokens]
+
+
+# G21 E-39 (docs/04 §13.5): profil pembeli untuk faktur atas nama. Validasi server (BFF juga memvalidasi; Odoo tidak
+# memercayai input). Nilai profil = data pribadi: tidak pernah di-log, tidak masuk hash/outbox/hasil RPC.
+INVOICE_PROFILE_KEYS = frozenset({"buyer_type", "tax_id", "name", "address", "email"})
+INVOICE_PROFILE_REQUIRED = frozenset({"buyer_type", "tax_id", "name", "address"})
+BUYER_TYPES = ("npwp", "nik", "passport")
+# buyer_type -> nilai `l10n_id_buyer_document_type` (l10n_id_efaktur_coretax 19.0: TIN/NIK/Passport/Other).
+BUYER_DOCUMENT_TYPES = {"npwp": "TIN", "nik": "NIK", "passport": "Passport"}
+DIGITS16_RE = re.compile(r"^\d{16}$")
+# Format paspor tidak ditetapkan kontrak; 5-20 alfanumerik = aturan form Super-App (laporan frontend G21).
+PASSPORT_RE = re.compile(r"^[A-Z0-9]{5,20}$")
+EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]+\.[^@\s]{2,}$")
+CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _profile_text(value, min_len, max_len):
+    require(isinstance(value, str))
+    text = " ".join(value.split())  # spasi/baris baru beruntun -> satu spasi
+    require(min_len <= len(text) <= max_len and not CONTROL_CHARS_RE.search(text))
+    return text
+
+
+def invoice_profile_payload(value):
+    """Validasi + normalisasi ``profile`` (docs/04 §13.5): NPWP/NIK 16 digit (titik/strip/spasi dibuang), paspor
+    5-20 alfanumerik huruf besar, nama 2-100, alamat 5-255, email opsional (RFC dasar, huruf kecil, <= 254).
+    Gagal -> ``efn_online:invalid_input`` tanpa menyebut field (pesan tidak memuat nilai)."""
+    require(isinstance(value, dict) and INVOICE_PROFILE_REQUIRED <= set(value) <= INVOICE_PROFILE_KEYS)
+    buyer_type = value["buyer_type"]
+    require(buyer_type in BUYER_TYPES)
+    tax_id = value["tax_id"]
+    require(isinstance(tax_id, str) and len(tax_id) <= 40)
+    tax_id = re.sub(r"[\s.\-]", "", tax_id).upper()
+    require(bool((PASSPORT_RE if buyer_type == "passport" else DIGITS16_RE).match(tax_id)))
+    email = value.get("email")
+    if email is None or email == "":
+        email = ""
+    else:
+        require(isinstance(email, str))
+        email = email.strip().lower()
+        require(len(email) <= 254 and bool(EMAIL_RE.match(email)))
+    return {
+        "buyer_type": buyer_type,
+        "tax_id": tax_id,
+        "name": _profile_text(value["name"], 2, 100),
+        "address": _profile_text(value["address"], 5, 255),
+        "email": email,
+    }
 
 
 def online_error(code):

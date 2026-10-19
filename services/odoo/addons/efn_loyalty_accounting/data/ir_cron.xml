@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- Publikasi kebijakan: dipicu segera saat approve (_trigger); jadwal ini cadangan (retry/backoff). -->
+    <record id="ir_cron_efn_loyalty_policy_outbox" model="ir.cron">
+        <field name="name">EFN Loyalty: publikasi kebijakan poin ke BFF</field>
+        <field name="model_id" ref="model_efn_loyalty_policy_outbox"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_loyalty_policy_outbox_run()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">5</field>
+        <field name="interval_type">minutes</field>
+        <field name="active" eval="True"/>
+    </record>
+    <!-- Akrual harian 02:00 Asia/Jakarta (= 19:00 UTC hari sebelumnya; nextcall disimpan UTC). Tanggal bisnis =
+         kemarin (Asia/Jakarta) + lookback efn.loyalty.accrual_lookback_days. -->
+    <record id="ir_cron_efn_loyalty_accrual" model="ir.cron">
+        <field name="name">EFN Loyalty: akrual liabilitas poin harian + rekonsiliasi</field>
+        <field name="model_id" ref="model_efn_loyalty_accrual"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_loyalty_accrual_run()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="nextcall" eval="DateTime.now().strftime('%Y-%m-%d 19:00:00')"/>
+        <field name="active" eval="True"/>
+    </record>
+</odoo>

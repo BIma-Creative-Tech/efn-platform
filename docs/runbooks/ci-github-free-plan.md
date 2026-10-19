@@ -66,6 +66,9 @@ secara teknis adalah **rilis**:
   menjalankan semua job, ±60 menit; PR biasa lebih sedikit karena path-filter). Alur satu PR per gelombang (bagian 9)
   tetap dipertahankan; bila kuota habis: runner self-hosted untuk job Odoo atau menit tambahan (bagian 8). Perkiraan
   awal (135-195 menit) terlalu tinggi.
+  G21 (AC-4): job `odoo-test-pii` (build image + install `efn_pii*` + semua `EFN_TEST_MODULES` dengan 3 kunci uji acak)
+  menambah **perkiraan** ±7–9 menit per run yang menyentuh Odoo (belum diukur; job berjalan paralel dengan `odoo-test`
+  sehingga waktu dinding hampir tidak bertambah, tetapi menit kuota bertambah). Ukur di merge G21 dan perbarui angka ini.
 - Pilihan yang ditolak: memicu `build-push` lewat `workflow_run` setelah CI + Security. Workflow_run berjalan di
   konteks default branch (identitas cosign untuk tag rilis `build-push.yml@refs/tags/vX.Y.Z` hilang) dan dua workflow
   sumber memicu dua run yang harus saling menunggu.

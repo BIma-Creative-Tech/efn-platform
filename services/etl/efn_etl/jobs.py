@@ -15,6 +15,14 @@ from typing import Any
 
 # Kode PT (G20: EFN, GL, PB, BCR, BCF, FARM) = efn_etl.entities.COMPANY_CODES.
 from efn_etl.entities import company_code
+from efn_etl.region import (
+    REGION_JOIN_OFF,
+    REGION_JOIN_ON,
+    REGION_SELECT_OFF,
+    REGION_SELECT_ON,
+    region_code,
+    regions_job,
+)
 from efn_etl.watermark import to_utc
 
 GEO_DECIMALS = 3  # ~100 m: cukup untuk analisis area kompetitor, tidak melacak posisi presisi pelapor
@@ -224,7 +232,9 @@ def transform_loyalty_event(
 # sinkronisasi); perubahan yang hanya menyentuh pos_order.write_date tidak tertangkap (lihat README).
 # `res_partner` TIDAK dibaca (PII); customer_id = id partner.
 # Gelombang 13 (Fase 1): order_id, is_refund, line_kind (product|discount|reward|points|tip), discount_amount.
-SQL_SALES_FACT = """
+# Gelombang 21 (ADR-036 §0.7): customer_region_code dari view `efn_etl.partner_region` (efn_etl/region.py) bila
+# ETL_PARTNER_REGION_ENABLED; mati = konstanta '' tanpa join.
+_SQL_SALES_FACT = """
 SELECT l.id AS line_id, o.company_id, c.name AS company_name, COALESCE(c.efn_brand_code, '') AS brand,
        o.config_id AS store_id, COALESCE(o.pos_reference, o.name) AS order_ref, o.date_order AS order_date,
        o.partner_id AS customer_id, l.product_id, COALESCE(l.full_product_name, '') AS product_name,
@@ -235,6 +245,7 @@ SELECT l.id AS line_id, o.company_id, c.name AS company_name, COALESCE(c.efn_bra
        COALESCE(l.is_reward_line, FALSE) AS is_reward_line, COALESCE(pp.default_code, '') AS default_code,
        (cfg.discount_product_id IS NOT NULL AND cfg.discount_product_id = l.product_id) AS is_discount_product,
        (cfg.tip_product_id IS NOT NULL AND cfg.tip_product_id = l.product_id) AS is_tip_product,
+       {region_select},
        l.write_date AS _cursor_ts, l.id::text AS _cursor_key
 FROM pos_order_line l
 JOIN pos_order o ON o.id = l.order_id
@@ -243,12 +254,22 @@ JOIN product_product pp ON pp.id = l.product_id
 JOIN product_template pt ON pt.id = pp.product_tmpl_id
 LEFT JOIN product_category pc ON pc.id = pt.categ_id
 LEFT JOIN pos_config cfg ON cfg.id = o.config_id
+{region_join}
 WHERE o.state IN ('paid', 'done')
   AND l.write_date >= %(cursor_ts)s
   AND (l.write_date, l.id::text) > (%(cursor_ts)s, %(cursor_key)s)
 ORDER BY l.write_date, l.id::text
 LIMIT %(limit)s
 """
+
+
+def sales_fact_sql(partner_region: bool = False) -> str:
+    if partner_region:
+        return _SQL_SALES_FACT.format(region_select=REGION_SELECT_ON, region_join=REGION_JOIN_ON)
+    return _SQL_SALES_FACT.format(region_select=REGION_SELECT_OFF, region_join=REGION_JOIN_OFF)
+
+
+SQL_SALES_FACT = sales_fact_sql()
 
 SALES_FACT_COLUMNS = (
     "line_id",
@@ -274,6 +295,7 @@ SALES_FACT_COLUMNS = (
     "is_refund",
     "line_kind",
     "discount_amount",
+    "customer_region_code",
 )
 
 # Produk "Poin EFN" (docs/04 §9.3): baris diskon senilai poin yang di-redeem. Kode internal (default_code) dapat
@@ -348,6 +370,9 @@ def transform_sales_line(
         1 if row.get("is_refund") else 0,
         line_kind(row, points_codes),
         line_discount_amount(subtotal, discount_pct, qty, price_unit),
+        # Wilayah tidak terikat pada partner yang bisa dikenali bila customer_id sudah dikosongkan (AgeOut): kab/kota
+        # tanpa id = agregat kasar. Baris tanpa member / member tanpa wilayah = ''.
+        region_code(row.get("customer_region_code")),
     ]
 
 
@@ -376,12 +401,14 @@ def loyalty_events_job(age_out: AgeOut = DEFAULT_AGE_OUT) -> Job:
 
 
 def sales_fact_job(
-    points_codes: frozenset[str] = DEFAULT_POINTS_PRODUCT_CODES, age_out: AgeOut = DEFAULT_AGE_OUT
+    points_codes: frozenset[str] = DEFAULT_POINTS_PRODUCT_CODES,
+    age_out: AgeOut = DEFAULT_AGE_OUT,
+    partner_region: bool = False,
 ) -> Job:
     return Job(
         name="sales_fact_pos",
         source="odoo",
-        sql=SQL_SALES_FACT,
+        sql=sales_fact_sql(partner_region),
         target_table="fact_sales_line",
         columns=SALES_FACT_COLUMNS,
         transform=lambda row: transform_sales_line(row, points_codes, age_out),
@@ -398,13 +425,17 @@ def enabled_jobs(
     points_codes: frozenset[str] = DEFAULT_POINTS_PRODUCT_CODES,
     age_out: AgeOut = DEFAULT_AGE_OUT,
     points_payment: bool = True,
+    partner_region: bool = False,
 ) -> list[Job]:
-    """Job incremental. Odoo: penjualan POS + (Gelombang 13) pembayaran POS, outlet, produk (efn_etl/pos.py)."""
+    """Job incremental. Odoo: penjualan POS + (Gelombang 13) pembayaran POS, outlet, produk (efn_etl/pos.py) +
+    (Gelombang 21, `partner_region`) wilayah pembeli di penjualan dan master `dim_region` (efn_etl/region.py)."""
     jobs = [competitor_prices_job(age_out), loyalty_events_job(age_out)]
     if odoo_enabled:
         # Import lokal: pos.py mengimpor helper dari modul ini.
         from efn_etl.pos import pos_jobs
 
-        jobs.append(sales_fact_job(points_codes, age_out))
+        jobs.append(sales_fact_job(points_codes, age_out, partner_region))
         jobs.extend(pos_jobs(points_payment))
+        if partner_region:
+            jobs.append(regions_job())
     return jobs

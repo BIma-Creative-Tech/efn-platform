@@ -9,6 +9,7 @@ import {
   CounterRefundAuthorizeResult,
   Fulfilment,
   ImageResult,
+  InvoiceBuyerProfile,
   MarkPaidInput,
   MarkPaidResult,
   OdooOnlineApi,
@@ -20,6 +21,7 @@ import {
   RefundInput,
   RefundResult,
   RefundSettledInput,
+  SetInvoicePartyResult,
   StatusRow,
   StockRow,
 } from './odoo-online.types';
@@ -476,6 +478,31 @@ export class MockOdooOnline implements OdooOnlineApi {
     if (!Number.isSafeInteger(a.amount) || a.amount < 1 || a.amount > o.amountPayable) throw new OdooRpcError('business', 'amount_mismatch');
     this.counterRefundAuths.set(a.idempotency_key, { ref, refundId: a.refund_id, refundRef: a.refund_ref, amount: a.amount });
     return { authorized: true, state: 'authorized', amount: a.amount };
+  }
+
+  /**
+   * G21 §13.5: `efn_pii` aktif di Odoo stub (false → `invoice_not_available`, meniru L-63). Panggilan dicatat TANPA PII:
+   * hanya jenis identitas + SHA-256 profil (test memverifikasi profil yang sama sampai ke Odoo).
+   */
+  invoicePiiActive = true;
+  readonly invoiceCalls: { ref: string; channel: string; key: string; buyerType: string; profileSha: string }[] = [];
+
+  async setInvoiceParty(channel: string, ref: string, profile: InvoiceBuyerProfile, idempotencyKey: string): Promise<SetInvoicePartyResult> {
+    this.track('setInvoiceParty', channel);
+    const profileSha = sha(JSON.stringify(profile));
+    const prev = this.invoiceCalls.find((c) => c.key === idempotencyKey);
+    if (prev) {
+      if (prev.ref !== ref || prev.profileSha !== profileSha) throw new OdooRpcError('business', 'idempotency_conflict');
+      return { state: 'applied' };
+    }
+    const o = this.get(ref);
+    // Hanya PT PPN (GL, BCR) dan hanya bila efn_pii aktif (L-63)
+    if (!this.invoicePiiActive || !['GL', 'BCR'].includes(MOCK_CHANNELS[o.channel]?.company ?? '')) {
+      throw new OdooRpcError('business', 'invoice_not_available');
+    }
+    if (o.state !== 'placed') throw new OdooRpcError('business', 'invalid_state');
+    this.invoiceCalls.push({ ref, channel, key: idempotencyKey, buyerType: profile.buyer_type, profileSha });
+    return { state: 'applied' };
   }
 
   /** Test/dev: transisi yang di Odoo dilakukan staf outlet. */

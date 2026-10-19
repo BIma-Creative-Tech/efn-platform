@@ -14,6 +14,7 @@ import {
   parseQuote,
   parseRefund,
   parseRefundSettled,
+  parseSetInvoiceParty,
   parseStatus,
   parseStock,
 } from './odoo-online.parse';
@@ -25,6 +26,7 @@ import {
   CounterRefundAuthorizeResult,
   Fulfilment,
   ImageResult,
+  InvoiceBuyerProfile,
   MarkPaidInput,
   MarkPaidResult,
   ODOO_BUSINESS_CODES,
@@ -40,6 +42,7 @@ import {
   RefundInput,
   RefundResult,
   RefundSettledInput,
+  SetInvoicePartyResult,
   StatusRow,
   StockRow,
 } from './odoo-online.types';
@@ -356,6 +359,19 @@ export class Json2OdooOnlineClient implements OdooOnlineApi {
       { timeoutMs: this.config.odooRpcTimeoutMs },
     );
     return parseCounterRefundAuthorize(v);
+  }
+  /**
+   * G21 §13.5 (path ke-12): argumen bernama sesuai kontrak `(channel_code, platform_order_ref, profile, idempotency_key)`.
+   * `profile` = PII → body hanya ada di memori request ini; log/metrik klien ini tidak pernah memuat body (lihat kelas).
+   */
+  async setInvoiceParty(channel: string, platformOrderRef: string, profile: InvoiceBuyerProfile, idempotencyKey: string): Promise<SetInvoicePartyResult> {
+    const v = await this.call(
+      'setInvoiceParty',
+      channel,
+      { channel_code: channel, platform_order_ref: platformOrderRef, profile: { ...profile }, idempotency_key: idempotencyKey },
+      { timeoutMs: this.config.odooRpcTimeoutMs, deadlineMs: this.config.odooRpcTimeoutMs * 2 },
+    );
+    return parseSetInvoiceParty(v);
   }
   async status(channel: string, platformOrderRefs: string[]): Promise<StatusRow[]> {
     const v = await this.call('status', channel, { channel_code: channel, platform_order_refs: platformOrderRefs.slice(0, 100) }, {

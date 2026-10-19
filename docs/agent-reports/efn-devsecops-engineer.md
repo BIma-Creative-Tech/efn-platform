@@ -1,5 +1,138 @@
 # Laporan Agent: efn-devsecops-engineer
 
+## G21 (19 Okt 2026, branch chore/wave-21, HEAD 71aef24) — AC-4 CI PII, AC-13 kunci PII produksi, kunci kebijakan poin, path gateway ke-12
+
+Kontrak: docs/04 §13.1 no. 3 (L-61), §13.2 (AC-4, AC-13, L-59), §13.5 (path ke-12, L-63), §13.6 baris devsecops;
+ADR-036 §0, ADR-022. Tidak di-commit. **Tidak ada perintah yang dijalankan** oleh agent ini (sesi tanpa shell/docker);
+semua uji di bawah wajib dijalankan lead. YAML/shell diperiksa manual (indentasi, anchor, referensi secret).
+
+### File diubah / baru
+- `.github/workflows/ci.yml` — `EFN_TEST_MODULES`/`EFN_INSTALL_ONLY_MODULES` dipindah ke `env:` tingkat workflow (sumber
+  tunggal untuk dua job; isi tidak berubah). **Job baru `odoo-test-pii`** (AC-4): path-filter `odoo`, `permissions:
+  contents: read`, postgres service + build image (pola `odoo-test`), modul = `efn_pii efn_pii_pos efn_pii_hr
+  efn_pii_account` (wajib ada, gagal bila hilang) + semua `efn_pii_*` lain yang ditemukan (`efn_pii_base_vat`, nanti
+  `efn_pii_l10n_id`) + `EFN_TEST_MODULES`, lalu `efn_setup_security` tanpa test di DB yang sama. 3 kunci
+  `openssl rand -base64 32` di `$RUNNER_TEMP/efn-pii-keys` (tidak di repo/log/artefak/`GITHUB_ENV`; dicek berbeda;
+  dihapus `if: always()`), mount `:ro` ke `/run/efn-pii-test` + `-e EFN_ODOO_PII_KEY_DIR`. Pemeriksaan log: ERROR/CRITICAL
+  = gagal; test `odoo.addons.efn_pii.tests.*` wajib muncul (anti-skip); nilai kunci di log = gagal (`grep -qF -f`, tanpa
+  mencetak). Masuk `ci-gate.needs`. Langkah infra "secret == secrets.list" kini menyertakan `docker-compose.pii.yml`.
+- `infra/compose/docker-compose.pii.yml` (**baru**, AC-13) — hanya service `odoo`: env `EFN_ODOO_PII_KEY_V1_FILE`,
+  `EFN_ODOO_PII_ACTIVE_KEY_VERSION=1`, `EFN_ODOO_PII_BIDX_KEY_FILE`, `EFN_ODOO_PII_NAME_KEY_FILE`,
+  `EFN_ODOO_PII_REQUIRED=${EFN_ODOO_PII_REQUIRED:-true}` + secrets `odoo_pii_{key_v1,bidx_key,name_key}`.
+- `infra/compose/docker-compose.yml` — top-level `loyalty_policy_signing_key` + `odoo_pii_*` (definisi; mount PII hanya
+  overlay/dev). odoo: `EFN_LOYALTY_POLICY_SIGNING_KEY_FILE` + mount; api-gateway: `LOYALTY_POLICY_SIGNING_KEY_FILE` + mount.
+- `infra/compose/docker-compose.dev.yml` — definisi top-level `odoo_pii_*` duplikat dihapus (kini di base); mount dev tetap.
+- `infra/compose/.env.example` — `EFN_ODOO_PII_ENABLED=false`, `EFN_ODOO_PII_REQUIRED=` (non-rahasia).
+- `scripts/secrets.list` — `loyalty_policy_signing_key random`; `odoo_pii_key_v1`, `odoo_pii_bidx_key`,
+  `odoo_pii_name_key` = `host:disabled [SA]`.
+- `scripts/gen-secrets.sh` — loop utama melewati `odoo_pii_*` (dev tetap 32 byte acak di bagian PII; file berisi
+  placeholder `disabled` diganti kunci acak, file kunci nyata tidak pernah ditimpa).
+- `scripts/lib/deploy-validate.sh` — `EFN_ODOO_PII_ENABLED`/`EFN_ODOO_PII_REQUIRED` di `EFN_RELEASE_CONFIG_VARS`
+  (boolean); production + ENABLED=true tanpa `REQUIRED=true` ditolak (tidak bisa dibuka `EFN_ALLOW_CONTROL_OFF`);
+  fungsi baru `efn_validate_pii_keys <dir>` (file biasa, bukan symlink, 32 byte base64 kanonik, bukan `disabled`, ketiganya
+  berbeda; pesan tanpa nilai) dan `efn_pii_module_state_ok <enabled> <state>`.
+- `scripts/deploy.sh` — ENABLED=true → `efn_validate_pii_keys` (langkah 1) + overlay `docker-compose.pii.yml`; `.env`
+  memuat `EFN_ODOO_PII_ENABLED/REQUIRED`; setelah migrasi & **sebelum `up`**: `efn_pii` berstatus
+  installed/to upgrade/to remove di `efn_odoo` tanpa ENABLED=true → gagal (Odoo lama tidak di-recreate tanpa kunci).
+- `.github/workflows/deploy.yml` — `CFG_EFN_ODOO_PII_ENABLED` (default `false`), `CFG_EFN_ODOO_PII_REQUIRED`.
+- `scripts/check-encryption.sh` — `loyalty_policy_signing_key` hanya odoo + api-gateway **dan** wajib ter-mount di
+  keduanya dengan env yang cocok (§6a); render `prod`/`prod-online` tidak boleh me-mount `odoo_pii_*` ke odoo; render
+  baru `prod-pii` (base + prod + pii): ketiga kunci + env cocok + `EFN_ODOO_PII_REQUIRED == "true"`.
+- `scripts/host/test-efn-deploy.sh` — kasus baru 110c–110j (e2e efn-deploy) dan 139–165 (unit), lihat di bawah.
+- `infra/odoo-rpc-gateway/{haproxy.cfg,test-gateway.sh,README.md}` — path ke-12
+  `/json/2/efn.online.order/efn_online_set_invoice_party` (pola L-60); uji: +1 positif, +4 negatif (model salah, sufiks
+  `_v2`, `res.partner/create`, `res.partner/search_read`) → 102 kasus.
+- Runbook: `docs/runbooks/key-custody.md` (§1 baris kunci PII Odoo, **§4e baru** `{#pii-odoo}`: pembuatan di host,
+  salinan tersegel brankas Direksi sebelum aktivasi, gerbang otomatis, verifikasi, larangan; §8.1 isi paket; §8.5 butir 5),
+  `docs/runbooks/pii-key-rotation.md` (status G21, anchor `{#kunci-pii-odoo}`, rotasi produksi bidx/name & key ring
+  v1→v2 di host, kunci hilang), `docs/runbooks/secret-rotation.md` (baris `loyalty_policy_signing_key`, `odoo_pii_*`),
+  `docs/runbooks/ci-github-free-plan.md` (perkiraan menit job baru, belum diukur).
+
+### Kasus uji baru `test-efn-deploy.sh`
+| # | Kasus | Harapan |
+|---|---|---|
+| 110c–110e | `ODOO_PII_KEY_V1` / `_BIDX_KEY` / `_NAME_KEY` lewat stdin efn-deploy | ditolak (host:*) |
+| 110f | `LOYALTY_POLICY_SIGNING_KEY` lewat stdin | diterima |
+| 110g | `EFN_ODOO_PII_ENABLED` lewat stdin | ditolak (SEC-50) |
+| 110h / 110i | manifest production ENABLED=true tanpa REQUIRED / REQUIRED=false | ditolak |
+| 110j | manifest production ENABLED=true + REQUIRED=true | diterima |
+| 139–146 | `efn_validate_config` kombinasi saklar PII (prod/staging, non-boolean, default mati) | sesuai tabel AC-13 |
+| 147–158 | `efn_validate_pii_keys`: sah, newline akhir, `disabled`, hilang, kosong, duplikat, 16 byte, hex, non-kanonik, multi-baris, symlink, pesan tanpa nilai | 0 hanya 147/148 |
+| 159–165 | `efn_pii_module_state_ok`: installed/to upgrade/to remove tanpa ENABLED gagal; uninstalled/kosong lulus; CR | sesuai |
+
+### Kontrak untuk agent lain (rekonsiliasi lead)
+- **Nama env `loyalty_policy_signing_key`** (dipilih di sini; kontrak §13.1 hanya menyebut nama secret): Odoo
+  `EFN_LOYALTY_POLICY_SIGNING_KEY_FILE`, BFF `LOYALTY_POLICY_SIGNING_KEY_FILE` (pola `*_HMAC_FILE` G17). efn-odoo-engineer A
+  dan efn-bff-engineer harus membaca nama ini; `check-encryption.sh` §6a gagal bila env/mount tidak cocok.
+- `LOYALTY_POLICY_CEILING_*` (plafon BFF §13.1 no. 4) **belum** ditambahkan ke compose/deploy-validate: nama & rentang
+  milik BFF. Bila BFF butuh env baru, kirim daftar → devsecops menambah ke compose + `EFN_RELEASE_CONFIG_VARS` + `deploy.yml`.
+- efn-odoo-engineer C: `efn_online_set_invoice_party` wajib ada di `RPC_ALLOWLIST`/`test_rpc_surface` Odoo; gateway sudah.
+- GitHub Environment `staging`/`production`: tambah secret **`LOYALTY_POLICY_SIGNING_KEY`** (`openssl rand -base64 36`)
+  sebelum deploy G21 (tanpa itu `deploy.sh` berhenti "secret ... kosong"). Kunci PII Odoo **tidak** ditambahkan ke GitHub.
+
+### Perintah uji persis (Git Bash, root repo; `MSYS_NO_PATHCONV=1` hanya untuk `docker run`)
+```bash
+# 1) shellcheck (pola CI)
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/mnt" -w /mnt koalaman/shellcheck:stable -x \
+  scripts/*.sh scripts/lib/*.sh scripts/host/efn-deploy scripts/host/*.sh infra/odoo-rpc-gateway/test-gateway.sh
+# 2) regresi efn-deploy + deploy-validate (kasus baru 110c-110j, 139-165)
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/src:ro" \
+  python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea \
+  bash /src/scripts/host/test-efn-deploy.sh
+# 3) secret dev baru + lint enkripsi (butuh docker compose + jq di host; render dev, prod, prod-online, prod-pii)
+bash scripts/gen-secrets.sh            # membuat secrets/loyalty_policy_signing_key.txt; kunci PII dev tidak ditimpa
+[ -f infra/compose/.env ] || cp infra/compose/.env.example infra/compose/.env
+bash scripts/check-encryption.sh
+# 4) compose secrets == secrets.list (langkah CI infra)
+cd infra/compose && overlays=(); for f in docker-compose.online-*.yml; do overlays+=(-f "$f"); done
+diff <(docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.payment.yml -f docker-compose.pii.yml \
+  "${overlays[@]}" --profile core --profile data --profile ai --profile observability --profile ops config --format json \
+  | jq -r '.secrets | keys[]' | sort) <(awk '!/^[[:space:]]*#/ && NF {print $1}' ../../scripts/secrets.list | sort) && cd ../..
+# 5) yamllint
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/src:ro" -w /src \
+  python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea \
+  sh -c 'pip install -q yamllint && yamllint -c .yamllint.yml infra .github'
+# 6) haproxy -c gateway (pola CI) lalu uji nyata path ke-12 di stack dev
+cat secrets/tls_odoo_rpc_gateway_crt.txt secrets/tls_odoo_rpc_gateway_key.txt > /tmp/odoo-rpc-gateway.pem && chmod 644 /tmp/odoo-rpc-gateway.pem
+MSYS_NO_PATHCONV=1 docker run --rm -e ODOO_DB=efn_odoo -e ODOO_RPC_MAXCONN=4 \
+  -v "$(pwd -W)/infra/odoo-rpc-gateway/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
+  -v "$(cygpath -m /tmp/odoo-rpc-gateway.pem):/tmp/haproxy/odoo-rpc-gateway.pem:ro" \
+  -v "$(pwd -W)/secrets/efn_ca_crt.txt:/run/secrets/efn_ca_crt:ro" \
+  haproxy:3.2.25-alpine@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
+(cd infra/compose && docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile core up -d --force-recreate odoo-rpc-gateway odoo api-gateway)
+bash infra/odoo-rpc-gateway/test-gateway.sh     # harap TOTAL_FAIL=0 (102 kasus)
+# 7) replikasi lokal job odoo-test-pii (image efn-odoo:ci + postgres sementara; ±10-15 menit)
+docker build -t efn-odoo:ci services/odoo
+docker run -d --name efn-pg-pii -e POSTGRES_USER=odoo -e POSTGRES_PASSWORD=odoo-ci-only -p 55432:5432 postgres:16.15-bookworm
+K="$(mktemp -d)"; for k in odoo_pii_key_v1 odoo_pii_bidx_key odoo_pii_name_key; do openssl rand -base64 32 | tr -d '\r\n' > "$K/$k"; done
+MSYS_NO_PATHCONV=1 docker run --rm --network host --entrypoint odoo -e EFN_ODOO_PII_KEY_DIR=/run/efn-pii-test \
+  -v "$(cygpath -m "$K"):/run/efn-pii-test:ro" efn-odoo:ci --db_host=127.0.0.1 --db_port=55432 --db_user=odoo \
+  --db_password=odoo-ci-only --addons-path=/mnt/extra-addons,/usr/lib/python3/dist-packages/odoo/addons -d efn_test_pii \
+  -i "efn_pii,efn_pii_pos,efn_pii_hr,efn_pii_account,efn_pii_base_vat,efn_core,efn_audit,efn_pos_otp_gate,efn_kitting,efn_pos_payment_gateway,efn_pos_loyalty_ledger,efn_privacy,efn_pos_kds,efn_setup_company,efn_setup_pos,efn_setup_mrp,efn_setup_audit,efn_online_order,efn_setup_online,efn_online_pos_sale,efn_pos_refund_origin,efn_online_pos_counter" \
+  --test-tags efn --stop-after-init --log-level=test --workers=0 --max-cron-threads=0 2>&1 | tee odoo-test-pii.log
+grep -E '^[0-9-]+ [0-9:,]+ [0-9]+ (ERROR|CRITICAL) ' odoo-test-pii.log; grep -c 'odoo\.addons\.efn_pii\.tests\.' odoo-test-pii.log
+docker rm -f efn-pg-pii; rm -rf "$K"
+```
+Catatan: `--network host` di Docker Desktop (WSL2) hanya bekerja bila fitur host networking aktif; bila tidak, ganti
+dengan network bersama (`docker network create`) + `--db_host=efn-pg-pii`.
+
+### Belum terverifikasi / risiko (jujur)
+- Tidak satu pun perintah di atas dijalankan. Paling berisiko: (a) `odoo-test-pii` bisa **merah** karena modul lain
+  (POS/online/loyalty) membuat partner perorangan dan belum pernah diuji dengan `efn_pii` aktif — itu memang tujuan AC-4;
+  temuan = pekerjaan efn-odoo-engineer B, bukan bug job; (b) test `efn_pii` yang sengaja menguji mode terkunci bisa
+  mencetak CRITICAL ke log bila tidak memakai `assertLogs`/`mute_logger` → job gagal di pemeriksaan log (perlu dilihat di
+  run pertama; jangan longgarkan grep, perbaiki test); (c) pola grep `odoo.addons.efn_pii.tests.` mengasumsikan format
+  logger test Odoo 19 standar.
+- Menit CI: job baru ±7–9 menit per run Odoo (perkiraan, belum diukur).
+- Staging yang sudah memasang `efn_pii` (uji manual) akan **gagal deploy** sampai kunci staging dibuat + ENABLED=true
+  (fail-closed, disengaja). Production belum punya DB → tidak terdampak.
+- `efn_validate_pii_keys` tidak menilai entropi (kunci `AAAA…A=` lolos format); kunci wajib dari `openssl rand` (runbook).
+- Rotasi `loyalty_policy_signing_key` tanpa jeda butuh BFF menerima 2 kunci (belum dikontrakkan; saat ini jendela
+  401 ditutup retry outbox Odoo).
+- Restore DR ke host baru membutuhkan kunci PII dari paket brankas (key-custody §8.6); `restore-test.sh` (dump DB) tidak
+  terpengaruh karena ciphertext dipulihkan apa adanya — tetapi uji pemulihan 2×/tahun kini wajib mencocokkan hash
+  `odoo_pii_*` (key-custody §8.5 butir 5).
+
 ## G20 (18 Okt 2026, branch chore/wave-20) — kanal = kode PT (GL/PB/BCR/BCF), bayar di kasir, kunci token nama PII
 
 Kontrak: docs/04 §12.1 (L-48), §12.2 no. 2, §12.5, §12.6 baris devsecops; ADR-036 §0.5. Tidak di-commit. **Tidak ada

@@ -54,21 +54,46 @@ class TestEfnNameTokensPure(TransactionCase):
         self.assertEqual(nt.prefix_query_inputs("abcdefghijklmnopqrstu"), ["abcdefghijklmno"])
 
     def test_padding_multiple_of_16_and_unique(self):
-        counter = iter(range(10_000))
+        def fake_pad(index):
+            return f"pad{index:019d}"
 
-        def fake_random():
-            return f"pad{next(counter):019d}"
-
-        self.assertEqual(nt.pad_tokens([], fake_random), [])
-        padded = nt.pad_tokens(["b", "a", "a"], fake_random)
+        self.assertEqual(nt.pad_tokens([], fake_pad), [])
+        padded = nt.pad_tokens(["b", "a", "a"], fake_pad)
         self.assertEqual(len(padded), 16)
         self.assertEqual(padded, sorted(padded))
         self.assertEqual(len(set(padded)), 16)
         self.assertTrue({"a", "b"} <= set(padded))
-        self.assertEqual(len(nt.pad_tokens([f"t{i}" for i in range(16)], fake_random)), 16)
-        self.assertEqual(len(nt.pad_tokens([f"t{i}" for i in range(17)], fake_random)), 32)
+        self.assertEqual(padded, nt.pad_tokens(["a", "b"], fake_pad))  # deterministik
+        self.assertEqual(len(nt.pad_tokens([f"t{i}" for i in range(16)], fake_pad)), 16)
+        self.assertEqual(len(nt.pad_tokens([f"t{i}" for i in range(17)], fake_pad)), 32)
+        self.assertEqual(len(nt.pad_tokens(["a"], fake_pad, extra_blocks=1)), 32)
+        # kandidat padding yang kebetulan sama dengan token asli dilewati
+        clash = nt.pad_tokens(["pad0000000000000000000"], fake_pad)
+        self.assertEqual(len(clash), 16)
+        self.assertEqual(len(set(clash)), 16)
         token = kr.random_name_token()
         self.assertRegex(token, TOKEN_RE)
+
+    def test_padding_seed_per_record_and_name(self):
+        """SEC-149: padding = f(kunci nama, tabel, id, token asli) -> stabil untuk nama sama, berganti total bila
+        nama/record berbeda."""
+        ring = kr.KeyRing({1: os.urandom(32)}, 1, os.urandom(32), name_key=os.urandom(32))
+        real = {ring.name_token("p", "budi"), ring.name_token("f", "budi")}
+        pad_a, extra_a = ring.name_padder("res_partner", 7, real)
+        pad_b, extra_b = ring.name_padder("res_partner", 7, set(real))
+        self.assertEqual([pad_a(i) for i in range(20)], [pad_b(i) for i in range(20)])
+        self.assertEqual(extra_a, extra_b)
+        self.assertIn(extra_a, (0, 1))
+        pad_other_id, _extra = ring.name_padder("res_partner", 8, real)
+        pad_other_name, _extra = ring.name_padder("res_partner", 7, real | {ring.name_token("p", "san")})
+        first = {pad_a(i) for i in range(32)}
+        self.assertFalse(first & {pad_other_id(i) for i in range(32)})
+        self.assertFalse(first & {pad_other_name(i) for i in range(32)})
+        for i in range(5):
+            self.assertRegex(pad_a(i), TOKEN_RE)
+        # tanpa kunci token nama: tidak ada padding (fail-closed)
+        with self.assertRaises(kr.PiiError):
+            kr.KeyRing({1: os.urandom(32)}, 1, os.urandom(32)).name_padder("res_partner", 7, real)
 
     def test_token_derivation_per_kind(self):
         ring = kr.KeyRing({1: os.urandom(32)}, 1, os.urandom(32), name_key=os.urandom(32))

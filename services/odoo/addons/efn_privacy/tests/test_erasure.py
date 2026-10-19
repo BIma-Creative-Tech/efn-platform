@@ -241,6 +241,36 @@ class TestEfnPrivacyErasure(PepperMixin, TestPoSCommon):
             )
             self.assertEqual(self.env.cr.fetchone()[0], 0, table)
 
+    def test_erasure_clears_region_nik_and_mail_queue(self):
+        """K-36-4 (QA G21): `efn_region_id`, NIK/nomor dokumen pembeli (efn_pii_l10n_id) dan antrean `mail.mail` ke
+        partner dikosongkan. Bagian yang modulnya tidak terpasang dilewati; sisanya tetap diuji."""
+        Partner = self.env["res.partner"]
+        vals = {}
+        if "efn_region_id" in Partner._fields:
+            region = self.env["efn.region"].sudo().search([("code", "=", "31.71")], limit=1) or self.env[
+                "efn.region"
+            ].sudo().create({"code": "31.71", "name": "Kota Uji Wilayah"})
+            vals["efn_region_id"] = region.id
+        if "l10n_id_nik" in Partner._fields:
+            vals["l10n_id_nik"] = "3171000000000001"
+        if vals:
+            self.member.sudo().write(vals)
+        # Email antrean yang menyebut member sebagai penerima (belum terkirim) + email milik pelanggan lain.
+        Mail = self.env["mail.mail"].sudo()
+        queued = Mail.create(
+            {"subject": "Uji erasure", "body_html": "<p>x</p>", "recipient_ids": [(4, self.member.id)]}
+        )
+        queued_id = queued.id
+        unrelated = Mail.create({"subject": "Uji lain", "body_html": "<p>y</p>", "recipient_ids": [(4, self.other.id)]})
+        self._run_cron()
+        self.member.invalidate_recordset()
+        if "efn_region_id" in Partner._fields:
+            self.assertFalse(self.member.efn_region_id, "K-36-4: wilayah domisili dikosongkan")
+        if "l10n_id_nik" in Partner._fields:
+            self.assertFalse(self.member.l10n_id_nik, "K-36-4: NIK dikosongkan")
+        self.assertFalse(Mail.search([("id", "=", queued_id)]), "antrean mail.mail ke member dihapus")
+        self.assertTrue(unrelated.exists(), "email pelanggan lain tidak disentuh")
+
     def test_complete_retry_is_idempotent_without_permanent_link(self):
         # Run 1: anonimisasi sukses, complete gagal -> penanda sementara menyimpan jumlah.
         self.complete_response = EfnBffError("bff_unreachable")

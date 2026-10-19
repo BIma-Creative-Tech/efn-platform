@@ -21,16 +21,30 @@ export interface CompanyInfo {
   code: CompanyCode;
   /** Nama tampilan. Nama badan hukum final menunggu konfirmasi klien. */
   displayName: string;
+  /**
+   * Jenis usaha (docs/04 §13.5): `retail` = PT PPN (faktur atas nama dimungkinkan), `fnb` = PT PB1 (tidak).
+   * null = bukan kanal belanja online / belum ditetapkan -> diperlakukan tidak memenuhi syarat.
+   */
+  businessType: 'retail' | 'fnb' | null;
 }
 
 export const COMPANIES: Record<CompanyCode, CompanyInfo> = {
-  EFN: { code: 'EFN', displayName: 'Holding EFN' },
-  GL: { code: 'GL', displayName: 'PT Grand Lucky' },
-  PB: { code: 'PB', displayName: 'PT Paris Baguette' },
-  BCR: { code: 'BCR', displayName: 'Bacha Coffee Retail' },
-  BCF: { code: 'BCF', displayName: 'Bacha Coffee F&B' },
-  FARM: { code: 'FARM', displayName: 'FARM' },
+  EFN: { code: 'EFN', displayName: 'Holding EFN', businessType: null },
+  GL: { code: 'GL', displayName: 'PT Grand Lucky', businessType: 'retail' },
+  PB: { code: 'PB', displayName: 'PT Paris Baguette', businessType: 'fnb' },
+  BCR: { code: 'BCR', displayName: 'Bacha Coffee Retail', businessType: 'retail' },
+  BCF: { code: 'BCF', displayName: 'Bacha Coffee F&B', businessType: 'fnb' },
+  FARM: { code: 'FARM', displayName: 'FARM', businessType: null },
 };
+
+/** True bila semua kode PT adalah PT PPN (GL/BCR). Daftar kosong atau kode tak dikenal -> false. */
+export function allPpnCompanies(codes: readonly string[]): boolean {
+  if (codes.length === 0) return false;
+  return codes.every((c) => {
+    if (!Object.prototype.hasOwnProperty.call(COMPANIES, c)) return false;
+    return COMPANIES[c as CompanyCode].businessType === 'retail';
+  });
+}
 
 /**
  * Peta `brand_code` kanal (non-rahasia, docs/04 §12.1) -> kode kanal/PT. Kode kanal = kode PT.

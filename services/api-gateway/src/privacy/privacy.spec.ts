@@ -262,7 +262,10 @@ describe('ErasureService (§8.4)', () => {
       if (t.includes("SET status = 'processing'")) {
         return status === 'scheduled' ? { rows: [{ member_id: MEMBER_ID, member_hash: hash }], rowCount: 1 } : { rows: [], rowCount: 0 };
       }
-      if (t.includes('GROUP BY company_code')) return { rows: [{ company_code: 'EFN', balance: '120' }, { company_code: 'PB', balance: 30 }], rowCount: 2 };
+      // G21: forfeit per lot (penerbit, expires_at)
+      if (t.includes('GROUP BY COALESCE(issuer_company_code, company_code), expires_at')) {
+        return { rows: [{ company_code: 'EFN', expires_at: null, balance: '120' }, { company_code: 'PB', expires_at: '2027-01-01T00:00:00.000Z', balance: 30 }], rowCount: 2 };
+      }
       if (t.includes('array_remove')) {
         stores = stores.filter((s) => s !== p[1]);
         return { rows: [{ status: stores.length === 0 ? 'completed' : 'processing' }], rowCount: 1 };
@@ -289,6 +292,9 @@ describe('ErasureService (§8.4)', () => {
       [tomb, 'EFN', -120],
       [tomb, 'PB', -30],
     ]);
+    // G21: forfeit ikut expires_at lot & mencatat penerbit (= company_code entri)
+    expect(forfeits.map((q) => q.params[4])).toEqual([null, '2027-01-01T00:00:00.000Z']);
+    for (const f of forfeits) expect(f.text).toContain('issuer_company_code');
     for (const f of forfeits) {
       expect(f.text).toContain('erased_at');
       expect(f.text).toMatch(/'dsar', NULL, \$4/); // source_ref NULL

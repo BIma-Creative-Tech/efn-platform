@@ -158,6 +158,13 @@ secrets:
   odoo_api_key_online_bcr: { file: ../../secrets/odoo_api_key_online_bcr.txt }
   odoo_api_key_online_bcf: { file: ../../secrets/odoo_api_key_online_bcf.txt }
   odoo_online_event_hmac: { file: ../../secrets/odoo_online_event_hmac.txt }
+  # G21 (docs/04 §13.1 no. 3, L-61): HMAC publikasi kebijakan poin Odoo -> BFF (hanya odoo + api-gateway)
+  loyalty_policy_signing_key: { file: ../../secrets/loyalty_policy_signing_key.txt }
+  # G21 AC-13 (docs/04 §13.2, ADR-036 §0): kunci PII Odoo (host:disabled [SA], dibuat Superadmin di host). Mount HANYA
+  # ke odoo oleh docker-compose.pii.yml (deploy.sh bila EFN_ODOO_PII_ENABLED=true) / docker-compose.dev.yml.
+  odoo_pii_key_v1: { file: ../../secrets/odoo_pii_key_v1.txt }
+  odoo_pii_bidx_key: { file: ../../secrets/odoo_pii_bidx_key.txt }
+  odoo_pii_name_key: { file: ../../secrets/odoo_pii_name_key.txt }
   # turunan (scripts/derive-secrets.sh)
   member_hash_pepper: { file: ../../secrets/member_hash_pepper.txt }
   minio_prometheus_token: { file: ../../secrets/minio_prometheus_token.txt }
@@ -844,8 +851,12 @@ services:
       EFN_AUDIT_SINK_KEY_FILE: /run/secrets/efn_audit_sink_key
       # G17 (docs/04 §10.5, L-2): HMAC event pesanan online Odoo -> BFF (X-EFN-Signature)
       EFN_ONLINE_EVENT_HMAC_FILE: /run/secrets/odoo_online_event_hmac
+      # G21 (docs/04 §13.1 no. 3, L-61): tanda tangan outbox kebijakan poin -> BFF (X-EFN-Signature, efn_loyalty_accounting)
+      EFN_LOYALTY_POLICY_SIGNING_KEY_FILE: /run/secrets/loyalty_policy_signing_key
+    # Kunci PII Odoo (odoo_pii_*) TIDAK di base: overlay docker-compose.pii.yml (production, L-59) / dev compose.
     secrets:
-      [pg_password_odoo, odoo_admin_password, odoo_bff_api_key, member_hash_pepper, efn_audit_sink_key, odoo_online_event_hmac, efn_ca_crt]
+      [pg_password_odoo, odoo_admin_password, odoo_bff_api_key, member_hash_pepper, efn_audit_sink_key, odoo_online_event_hmac,
+       loyalty_policy_signing_key, efn_ca_crt]
     volumes:
       - odoo-data:/var/lib/odoo
     networks: [internal, data]
@@ -1160,6 +1171,8 @@ services:
       # ODOO_API_KEY_ONLINE_<KODE>_FILE + secret di overlay docker-compose.online-<kode>.yml (docs/04 §12.1).
       ODOO_API_KEY_ONLINE_GL_FILE: /run/secrets/odoo_api_key_online_gl
       ODOO_ONLINE_EVENT_HMAC_FILE: /run/secrets/odoo_online_event_hmac
+      # G21 (docs/04 §13.1 no. 3-4, L-61): verifikasi tanda tangan PUT /v1/pos/loyalty/policies (replay window 300 s)
+      LOYALTY_POLICY_SIGNING_KEY_FILE: /run/secrets/loyalty_policy_signing_key
       MINIO_CATALOG_BUCKET: catalog
     secrets:
       - efn_ca_crt
@@ -1181,6 +1194,7 @@ services:
       - migration_api_key
       - odoo_api_key_online_gl
       - odoo_online_event_hmac
+      - loyalty_policy_signing_key
     networks: [internal, data, cache, egress]
     read_only: true
     tmpfs: [/tmp]

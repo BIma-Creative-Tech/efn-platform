@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -26,6 +27,8 @@ from .test_pii_crypto import manual_hkdf_sha256
 _logger = logging.getLogger(__name__)
 
 VECTORS_FILE = "efn_pii/tests/data/efn_pii_shared_vectors.json"
+# AC-2: bila diisi (mis. /tmp/efn_pii_shared_vectors.json), test menulis JSON lengkap ke path itu.
+OUT_ENV = "EFN_PII_SHARED_VECTORS_OUT"
 
 
 def load_shared():
@@ -60,9 +63,16 @@ class TestEfnPiiSharedVectors(TransactionCase):
             for item in self.stored[key]
             if item.get(field) is None
         ]
+        output = dict(self.generated)
+        output.pop("normalize_actual", None)
+        out_path = os.environ.get(OUT_ENV)
+        if out_path:
+            # Lead/CI: tulis JSON lengkap (deterministik) ke path di luar repo/addons read-only, lalu salin ke
+            # tests/data/efn_pii_shared_vectors.json. Tidak memuat kunci (hanya label publik + hasil).
+            with open(out_path, "w", encoding="utf-8") as handle:
+                json.dump(output, handle, ensure_ascii=False, indent=2)
+                handle.write("\n")
         if pending:
-            output = dict(self.generated)
-            output.pop("normalize_actual", None)
             _logger.info("EFN_PII_SHARED_VECTORS %s", json.dumps(output, ensure_ascii=False, sort_keys=False))
             return
         for key, field in (("aead", "expected_text"), ("bidx", "expected_hex"), ("name_tokens", "expected")):

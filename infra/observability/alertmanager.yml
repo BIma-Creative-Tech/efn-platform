@@ -34,6 +34,10 @@ inhibit_rules:
   - source_matchers: ['alertname="EfnOnlineApiKeyExpiryCritical"']
     target_matchers: ['alertname="EfnOnlineApiKeyExpiringSoon"']
     equal: [channel]
+  # G21: selisih liabilitas poin di atas ambang menekan warning selisih PT yang sama (loki-rules/efn-loyalty.yml)
+  - source_matchers: ['alertname="EfnLoyaltyLiabilityReconCritical"']
+    target_matchers: ['alertname="EfnLoyaltyLiabilityReconMismatch"']
+    equal: [company_code]
   - source_matchers: ['alertname="EfnDiskUsageCritical"']
     target_matchers: ['alertname="EfnDiskUsageHigh"']
     equal: [instance, mountpoint]

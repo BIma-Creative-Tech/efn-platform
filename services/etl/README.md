@@ -16,6 +16,7 @@
 | `audit_copy` (`ETL_AUDIT_COPY_ENABLED=true`, G12) | Odoo `efn_audit_log` + `efn_audit_log_line` | `audit_log_copy`, `audit_log_line_copy` (MergeTree append-only), `audit_recon_run` | id (keyset) + jendela settle/late |
 | `pos_outlets`, `products`, `pos_payments` (`ETL_ENABLE_ODOO=true`, G13) | Odoo `pos_config`; `product_product`+`product_template`; `pos_payment`+`pos_payment_method` | `dim_outlet`, `dim_product`, `fact_pos_payment` | `write_date` (produk: `GREATEST(variant, template)`) |
 | `loyalty_recon` (`ETL_LOYALTY_RECON_ENABLED`, default = `ETL_ENABLE_ODOO`, G14) | platform `loyalty_pos_earn`, `loyalty_ledger` (`pos_*`), `loyalty_reservation` + Odoo `pos_order`, baris Poin EFN, `efn_pos_loyalty_outbox`, `efn_pos_loyalty_reservation` | `loyalty_recon_run`, `loyalty_recon_finding` + log `EFN_LOYALTY_RECON_ETL` | harian (`ETL_LOYALTY_RECON_INTERVAL_SECONDS`), jendela 72 jam |
+| `regions` + kolom `customer_region_code` di `sales_fact_pos` (`ETL_PARTNER_REGION_ENABLED`, default `false`, G21) | Odoo view `efn_etl.region` (master `efn.region`) dan `efn_etl.partner_region` (LEFT JOIN di `sales_fact_pos`) | `dim_region`, `fact_sales_line.customer_region_code` | `write_date`, `region_code` |
 | `stock_snapshot` (`ETL_ENABLE_STOCK`, default = `ETL_ENABLE_ODOO`, G13) | Odoo `stock_quant` (lokasi internal) + `stock_lot` + `stock_warehouse_orderpoint` | `fact_stock_snapshot`, `fact_orderpoint_snapshot`, penanda `stock_snapshot_run` | snapshot penuh tiap `ETL_STOCK_SNAPSHOT_INTERVAL_SECONDS` (3600) + saat ganti tanggal WIB |
 
 ### Mart Fase 1 (Gelombang 13) — docs/01 §7 "ETL dasar + 3 dashboard Metabase"
@@ -87,6 +88,25 @@ production** oleh ETL dan `deploy-validate`). Mode `payment`:
 **Ketergantungan BFF (usulan kontrak, belum ada):** `platform.loyalty_pos_reverse` (`refund_order_ref`,
 `original_order_ref`, `company_code`, `points_restored_value` bigint, `created_at`) + grant SELECT kolom ke `efn_readonly`.
 Tanpa tabel itu mode `payment` gagal di siklus recon (heartbeat `loyalty_recon` error), job lain tetap jalan.
+
+### Penjualan per wilayah domisili (ADR-036 §0.7, docs/04 §13.2 E-38b) — Gelombang 21
+`efn_etl/region.py`. Alamat/kota/kode pos partner terenkripsi (ADR-036), jadi laporan per wilayah memakai kode kab/kota
+Kemendagri `res.partner.efn_region_id` (modul `efn_region`, plaintext, ±500 nilai — kebocoran yang diterima Q-PII10).
+- **Sumber**: view `efn_etl.partner_region(partner_id, company_id, region_code)` dan `efn_etl.region(region_code, name,
+  state_code, state_name, active, write_date)` milik `efn_odoo`, dibuat `sql/odoo-readonly-grants.sql` bagian G21
+  (bersyarat: dilewati sampai `efn_region` terpasang). `efn_etl` hanya `SELECT` pada kedua view; **tidak** ada grant ke
+  `res_partner`/`efn_region` (K-36-5). Kolom yang dibaca view: `res_partner.id, company_id, efn_region_id`;
+  `efn_region.code, name, state_id, active, write_date`; `res_country_state.code, name`. Tidak ada kolom terenkripsi,
+  blind index, atau token nama.
+- **Mart**: `fact_sales_line.customer_region_code` (LEFT JOIN view di job `sales_fact_pos` = wilayah **saat baris
+  dimuat**; '' = tanpa member/tanpa wilayah/kode tidak valid) + `dim_region` (`09-g21-region.sql`). Tidak ada tabel
+  partner -> wilayah di ClickHouse (minimisasi). View Metabase `v_pos_sales_region_daily` (tanpa `customer_id`);
+  kartu "Penjualan per wilayah domisili pembeli" di dashboard Penjualan Harian Outlet.
+- **Aktivasi**: pasang `efn_region` -> jalankan ulang grant -> `ETL_PARTNER_REGION_ENABLED=true` (butuh
+  `ETL_ENABLE_ODOO=true`; gagal start bila tidak). Backfill wilayah baris lama = reset watermark `sales_fact_pos` (lihat
+  "Backfill" G13) — memakai wilayah partner **saat ini**.
+- Koneksi PostgreSQL ETL memaksa `search_path=public`: nama skema `efn_etl` = nama role, sehingga `"$user"` di
+  search_path bawaan akan me-resolve nama tak berkualifikasi ke skema view.
 
 ### Erasure DSAR (docs/04 §8.4)
 `efn_etl/erasure.py`: per request hitung baris `user_hash`/`member_hash` cocok → `ALTER TABLE ... DELETE` (mutation, `mutations_sync=2`; menghapus fisik, bukan sekadar mask seperti lightweight `DELETE`) → verifikasi `count()=0` → publish `{schema_version: 2, idempotency_key: "erasure:<request_id>:clickhouse", request_id, store: "clickhouse"}` (amqps, user `efn-etl`, properti `user_id`/`message_id`). Belum 0 / error → request tetap `processing`, diulang siklus berikutnya. Hash yang sedang dihapus dikecualikan dari job incremental pada siklus itu (overlap window tidak memuat ulang); bila `dsar_request` tidak terbaca, job ber-hash dilewati (fail closed). ETL tidak mendeklarasikan queue (milik BFF).
@@ -186,6 +206,7 @@ PDP (SEC-16, docs/04 §7.2): ETL **tidak memegang `otp_pepper`** dan tidak mengh
 | `ODOO_PG_HOST`, `ODOO_PG_PORT`, `ODOO_PG_USER`, `ODOO_PG_PASSWORD_FILE`, `ODOO_DB`, `ODOO_PG_SSLMODE`, `ODOO_PG_SSLROOTCERT` | ikut `PG_*`; `efn_odoo` — arahkan ke read replica di produksi |
 | `ETL_ENABLE_ODOO` | `false` |
 | `ETL_ENABLE_GL` | `false` (butuh grant G12) |
+| `ETL_PARTNER_REGION_ENABLED` | `false` (butuh `efn_region` + grant G21 + `ETL_ENABLE_ODOO=true`) |
 | `ETL_AUDIT_COPY_ENABLED`, `ETL_AUDIT_SETTLE_SECONDS`, `ETL_AUDIT_LATE_WINDOW_SECONDS`, `ETL_AUDIT_BATCH_SIZE` | `false`, `600`, `86400`, `2000` |
 | `ETL_AUDIT_RECON_INTERVAL_SECONDS`, `ETL_AUDIT_RECON_CONTENT` | `86400`, `true` (bandingkan hash isi; `false` = hanya id) |
 | `ETL_AUDIT_SINK_ENABLED`, `LOKI_URL`, `LOKI_CA_FILE`, `LOKI_CLIENT_CERT_FILE`, `LOKI_CLIENT_KEY_FILE`, `EFN_AUDIT_SINK_KEY_FILE` | aktif bila audit copy + `LOKI_URL`; secret `tls_etl_crt/key`, `efn_audit_sink_key` |

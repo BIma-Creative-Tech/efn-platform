@@ -1,7 +1,7 @@
 # odoo-rpc-gateway — filter L7 BFF → Odoo `/json/2` (penjualan online)
 
-- **Tujuan:** satu-satunya jalur BFF (`api-gateway`) ke Odoo untuk kanal online. Hanya `POST` ke **11 path persis** (10 path §10.4.3 + `efn_online_counter_refund_authorize`, L-60)
-  docs/04 §10.4.3; semua bentuk lain ditolak sebelum menyentuh Odoo. Odoo tetap tidak terjangkau dari internet
+- **Tujuan:** satu-satunya jalur BFF (`api-gateway`) ke Odoo untuk kanal online. Hanya `POST` ke **12 path persis** (10 path §10.4.3 + `efn_online_counter_refund_authorize`, L-60 +
+  `efn_online_set_invoice_party`, G21 §13.5 faktur atas nama pembeli, L-63) docs/04 §10.4.3; semua bentuk lain ditolak sebelum menyentuh Odoo. Odoo tetap tidak terjangkau dari internet
   maupun langsung dari BFF (`odoo-tls --allow-cn` tidak memuat `api-gateway`).
 - **ADR:** ADR-034 (Proposed — kanal online = BFF + `/json/2` terfilter), ADR-022 (enkripsi: mTLS dua hop, verify-full
   CA internal), ADR-023 (Odoo privat), ADR-024 (kredensial per kanal), pola ADR-030 (s3-gateway).
@@ -11,7 +11,7 @@
   memori 64M, hanya network `internal`, tanpa label Traefik/port host. `haproxy.cfg` (aturan + alasan),
   `entrypoint.sh` (PEM crt+key ke tmpfs, validasi `ODOO_DB` fail-closed), `test-gateway.sh` (uji nyata).
 - **Aturan (ringkas):** mTLS masuk (CA internal, EKU clientAuth, CN persis `api-gateway`) · HTTP/1.1 origin-form ·
-  `POST` saja · path mentah = salah satu dari 11 path (tolak `%`, `;`, `//`, segmen titik, query, fragment) · allowlist
+  `POST` saja · path mentah = salah satu dari 12 path (tolak `%`, `;`, `//`, segmen titik, query, fragment) · allowlist
   header (`host, content-type, content-length, authorization, accept, accept-encoding, user-agent, connection,
   traceparent, tracestate, x-request-id`; method override/upgrade/transfer-encoding/x-original-url/x-openerp-* ditolak) ·
   Host `odoo-rpc-gateway[:8443]` · `Content-Type: application/json` · `Authorization: bearer <token>` tepat satu ·
@@ -35,6 +35,13 @@
   300 KB → 413; 11 path sah + variasi header yang dibuang → sampai Odoo (401 dari Odoo karena token uji).
   Ditemukan & diperbaiki saat uji: regex `^bearer [..]` (spasi memisah argumen HAProxy = pola OR) meloloskan
   `Authorization: Basic`. CI: `haproxy -c` + shellcheck + `check-encryption.sh` (aturan G17).
+- **G21 (19 Okt 2026, docs/04 §13.5):** path ke-12 `efn.online.order/efn_online_set_invoice_party` (BFF meneruskan
+  `invoice_request` sekali ke Odoo; profil pembeli hanya di Odoo sebagai partner terlindungi `efn_pii`, L-63). Tidak ada
+  header/aturan baru: body (NPWP/NIK/nama/alamat) tidak pernah dilog gateway (log tanpa body/header/query). Uji nyata
+  bertambah 5 kasus (1 positif + model salah, sufiks, `res.partner/create`, `res.partner/search_read` ditolak) →
+  102 kasus; **belum dijalankan** terhadap stack nyata (lead menjalankan `test-gateway.sh`). Odoo harus memuat metode
+  yang sama di `RPC_ALLOWLIST` (efn-odoo-engineer C); tanpa itu Odoo menjawab 403/404 dan kasus positif tetap
+  `pass` (status dari Odoo).
 - **Belum / batas:**
   - Tidak ada metrik HAProxy ke Prometheus (log akses → Loki; alert `EfnOdooRpcGatewayDenied`). Kandidat: PROMEX di
     loopback + sidecar mTLS.

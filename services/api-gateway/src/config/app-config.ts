@@ -113,6 +113,19 @@ export interface MinioConnectionConfig extends MinioTransportConfig {
   secretKey: string;
 }
 
+/** G21 §13.1 no. 4: plafon keras kebijakan poin (lihat `AppConfig.loyaltyPolicyCeilings`). */
+export interface LoyaltyPolicyCeilings {
+  earnIdrPerPointMin: number;
+  pointValueIdrMax: number;
+  redeemMinPointsMin: number;
+  redeemMaxPctMax: number;
+  maxPointsPerOrderMax: number;
+  dailyMaxPointsMemberMax: number;
+  posConfigHourlyMax: number;
+  companyHourlyMax: number;
+  earnOnMoneyOnlyRequired: boolean;
+}
+
 export class AppConfig {
   constructor(
     private readonly env: EnvRecord,
@@ -181,6 +194,8 @@ export class AppConfig {
       () => this.loyaltyReconIntervalMs,
       () => this.loyaltyReconLookbackHours,
       () => this.loyaltyMigrationAnomalyPoints,
+      () => this.loyaltyPolicyCacheSeconds,
+      () => this.assertEnvWithinPolicyCeilings(),
     ]) {
       attempt(() => void getter(), 'parameter LOYALTY_* tidak valid');
     }
@@ -189,6 +204,12 @@ export class AppConfig {
     attempt(() => void this.memberMinAge, 'MEMBER_MIN_AGE tidak valid (17..21, Q-P3)');
     attempt(() => void this.priceHunterGeoRetentionDays, 'PRICE_HUNTER_GEO_RETENTION_DAYS tidak valid');
     attempt(() => void this.altchaFailMinSample, 'ALTCHA_FAIL_MIN_SAMPLE tidak valid');
+    // G21 §13.1 no. 3: `loyalty_policy_signing_key` (LOYALTY_POLICY_SIGNING_KEY_FILE=/run/secrets/loyalty_policy_signing_key)
+    // wajib di luar APP_ENV=dev; di dev boleh kosong (PUT kebijakan → 503). Literal env sudah ditolak di luar dev (SEC-29).
+    if (!this.isDevEnv) {
+      check('LOYALTY_POLICY_SIGNING_KEY');
+      attempt(() => void this.loyaltyPolicySigningKey, 'LOYALTY_POLICY_SIGNING_KEY tidak valid');
+    }
     if (this.migrationEnabled) {
       check('MIGRATION_API_KEY');
       attempt(() => {
@@ -968,6 +989,75 @@ export class AppConfig {
   get loyaltyRestoreTolerancePct(): number {
     return this.int('LOYALTY_RESTORE_TOLERANCE_PCT', 10, 0, 100);
   }
+  // ───────────── G21 kebijakan poin per PT (docs/04 §13.1, W-29/E-44, L-61/L-62) ─────────────
+  /**
+   * Plafon keras kebijakan poin dari Odoo (`PUT /v1/pos/loyalty/policies/*`). Kebijakan di luar plafon → `422
+   * policy_out_of_bounds`; kebijakan tersimpan yang kemudian melanggar plafon (plafon diturunkan) tidak dipakai (fallback
+   * env + anomali). Default = nilai env lama (§13.1 no. 4: "env lama menjadi batas keras"). Arah plafon = arah yang
+   * memperbesar liabilitas/risiko fraud:
+   * - `..._EARN_IDR_PER_POINT_MIN` — Rupiah per poin MINIMUM (lebih kecil = lebih banyak poin);
+   * - `..._POINT_VALUE_IDR` — nilai tukar MAKSIMUM (hanya kebijakan global EFN, L-62);
+   * - `..._REDEEM_MIN_POINTS_MIN` — minimum penukaran tidak boleh lebih kecil dari ini;
+   * - `..._REDEEM_MAX_PCT`, `..._MAX_POINTS_PER_ORDER`, `..._DAILY_MAX_POINTS_MEMBER`, `..._POS_CONFIG_HOURLY_MAX`,
+   *   `..._COMPANY_HOURLY_MAX` — MAKSIMUM; plafon 0 = tanpa plafon (sama dengan env 0 = mati). Bila plafon > 0, nilai
+   *   kebijakan 0 (= tanpa batas) ditolak;
+   * - `..._EARN_ON_MONEY_ONLY` — true = kebijakan WAJIB `earn_on_money_only: true` (default = LOYALTY_EARN_EXCLUDE_POINT_PAYMENT).
+   */
+  get loyaltyPolicyCeilings(): LoyaltyPolicyCeilings {
+    return {
+      earnIdrPerPointMin: this.int('LOYALTY_POLICY_CEILING_EARN_IDR_PER_POINT_MIN', this.loyaltyEarnIdrPerPoint, 1, 1_000_000_000),
+      pointValueIdrMax: this.int('LOYALTY_POLICY_CEILING_POINT_VALUE_IDR', this.loyaltyPointValueIdr, 1, 1_000_000_000),
+      redeemMinPointsMin: this.int('LOYALTY_POLICY_CEILING_REDEEM_MIN_POINTS_MIN', this.loyaltyRedeemMinPoints, 1, 1_000_000),
+      redeemMaxPctMax: this.int('LOYALTY_POLICY_CEILING_REDEEM_MAX_PCT', this.loyaltyRedeemMaxPctOfOrder, 0, 100),
+      maxPointsPerOrderMax: this.int('LOYALTY_POLICY_CEILING_MAX_POINTS_PER_ORDER', this.loyaltyPosMaxEarnPoints, 1, 1_000_000),
+      dailyMaxPointsMemberMax: this.int('LOYALTY_POLICY_CEILING_DAILY_MAX_POINTS_MEMBER', this.loyaltyEarnDailyMaxPoints, 0, 1_000_000),
+      posConfigHourlyMax: this.int('LOYALTY_POLICY_CEILING_POS_CONFIG_HOURLY_MAX', this.loyaltyEarnPosConfigHourlyMaxPoints, 0, 100_000_000),
+      companyHourlyMax: this.int('LOYALTY_POLICY_CEILING_COMPANY_HOURLY_MAX', this.loyaltyEarnCompanyHourlyMaxPoints, 0, 1_000_000_000),
+      earnOnMoneyOnlyRequired: this.bool('LOYALTY_POLICY_CEILING_EARN_ON_MONEY_ONLY', this.loyaltyEarnExcludePointPayment),
+    };
+  }
+  /**
+   * Nilai env lama dipakai sebagai fallback (PT tanpa kebijakan) → wajib berada di dalam plafon, selain itu gagal start
+   * (plafon yang di-set lebih ketat dari env = salah konfigurasi).
+   */
+  private assertEnvWithinPolicyCeilings(): void {
+    const c = this.loyaltyPolicyCeilings;
+    const capOk = (v: number, cap: number): boolean => cap === 0 || (v > 0 && v <= cap);
+    const bad: string[] = [];
+    if (this.loyaltyEarnIdrPerPoint < c.earnIdrPerPointMin) bad.push('LOYALTY_EARN_IDR_PER_POINT');
+    if (this.loyaltyPointValueIdr > c.pointValueIdrMax) bad.push('LOYALTY_POINT_VALUE_IDR');
+    if (this.loyaltyRedeemMinPoints < c.redeemMinPointsMin) bad.push('LOYALTY_REDEEM_MIN_POINTS');
+    if (this.loyaltyRedeemMaxPctOfOrder > c.redeemMaxPctMax) bad.push('LOYALTY_REDEEM_MAX_PCT_OF_ORDER');
+    if (this.loyaltyPosMaxEarnPoints > c.maxPointsPerOrderMax) bad.push('LOYALTY_POS_MAX_EARN_POINTS');
+    if (!capOk(this.loyaltyEarnDailyMaxPoints, c.dailyMaxPointsMemberMax)) bad.push('LOYALTY_EARN_DAILY_MAX_POINTS');
+    if (!capOk(this.loyaltyEarnPosConfigHourlyMaxPoints, c.posConfigHourlyMax)) bad.push('LOYALTY_EARN_POS_CONFIG_HOURLY_MAX_POINTS');
+    if (!capOk(this.loyaltyEarnCompanyHourlyMaxPoints, c.companyHourlyMax)) bad.push('LOYALTY_EARN_COMPANY_HOURLY_MAX_POINTS');
+    if (c.earnOnMoneyOnlyRequired && !this.loyaltyEarnExcludePointPayment) bad.push('LOYALTY_EARN_EXCLUDE_POINT_PAYMENT');
+    if (bad.length > 0) throw new ConfigError(`Env loyalty di luar plafon LOYALTY_POLICY_CEILING_*: ${bad.join(', ')}`);
+  }
+  /** Cache kebijakan aktif per PT di memori proses (detik). 0 = tanpa cache. Kebijakan baru berlaku ≤ N detik. */
+  get loyaltyPolicyCacheSeconds(): number {
+    return this.int('LOYALTY_POLICY_CACHE_SECONDS', 30, 0, 600);
+  }
+  /**
+   * §13.1 no. 3 / L-61: secret `loyalty_policy_signing_key` (Odoo + BFF), HMAC-SHA256 `X-EFN-Signature` publikasi
+   * kebijakan. Wajib berbeda dari `odoo_bff_api_key` (service key tidak boleh sekaligus kunci tanda tangan).
+   */
+  get loyaltyPolicySigningKey(): string {
+    // Sama dengan Odoo `efn_loyalty_accounting/models/signing.py`: isi file di-trim, dipakai sebagai byte UTF-8, ≥ 32 byte
+    const v = this.secret('LOYALTY_POLICY_SIGNING_KEY');
+    if (Buffer.byteLength(v, 'utf8') < 32) throw new ConfigError('LOYALTY_POLICY_SIGNING_KEY minimal 32 byte (signing.py MIN_KEY_BYTES)');
+    if (v === this.secretValue('ODOO_BFF_API_KEY')) throw new ConfigError('LOYALTY_POLICY_SIGNING_KEY harus berbeda dari ODOO_BFF_API_KEY');
+    return v;
+  }
+  /**
+   * §13.1 no. 6: jeda minimum setelah akhir hari WIB sebelum akrual tanggal itu boleh ditarik (transaksi yang masih
+   * berjalan tepat tengah malam memakai `now()` awal transaksi). Default 300 s.
+   */
+  get loyaltyAccrualCloseGraceSeconds(): number {
+    return this.int('LOYALTY_ACCRUAL_CLOSE_GRACE_SECONDS', 300, 0, 3600);
+  }
+
   /** K-6: catatan earn per order (`loyalty_pos_earn`) dihapus setelah N hari (≥ masa retur). Default 400. */
   get loyaltyPosEarnRetentionDays(): number {
     return this.int('LOYALTY_POS_EARN_RETENTION_DAYS', 400, 30, 3650);

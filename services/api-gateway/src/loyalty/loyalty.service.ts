@@ -50,8 +50,14 @@ export interface LedgerEntryInput {
   reason: string;
   source: string;
   sourceRef: string | null;
+  /** PT tempat transaksi terjadi (earn: PT penerbit; redeem: PT penebus; reverse: PT order asal). */
   companyCode: CompanyCode;
   expiresAt: Date | null;
+  /**
+   * G21 §13.1 no. 5 (ADR-020 revisi): PT PENERBIT lot yang dikredit/didebit entri ini. Default = `companyCode` (kredit
+   * earn baru). Debit redeem/clawback/forfeit = penerbit lot yang dikonsumsi FIFO (bisa ≠ PT penebus → lintas PT).
+   */
+  issuerCompanyCode?: CompanyCode;
 }
 
 export interface EarnResult {
@@ -68,11 +74,20 @@ export interface EarnResult {
 export interface LedgerBucket {
   expiresAt: Date | null;
   remaining: number;
+  /**
+   * G21 §13.1 no. 5: lot = (expires_at, PT penerbit). Opsional agar alokasi murni tetap bisa dipakai tanpa penerbit
+   * (semua `undefined` = satu penerbit).
+   */
+  issuer?: CompanyCode;
+  /** id entri pertama lot — pemecah seri FIFO bila dua penerbit punya `expires_at` sama (lot terbit lebih dulu dulu). */
+  firstId?: number;
 }
 
 export interface Allocation {
   expiresAt: Date | null;
   points: number;
+  /** PT penerbit lot yang dialokasikan (dicatat di `issuer_company_code`). */
+  issuer?: CompanyCode;
 }
 
 /**
@@ -92,11 +107,12 @@ export function memberLockKey(hash: string): number {
 }
 
 /**
- * FIFO: alokasikan debit `points` ke bucket bersisa positif (urutan: `expires_at` terdekat dulu, NULL terakhir).
- * Kelebihan (saldo tidak cukup — commit terlambat, clawback) → bucket NULL sebagai utang (saldo negatif,
- * "ditagih di earn berikutnya" — docs/04 §9.4).
+ * FIFO: alokasikan debit `points` ke lot bersisa positif (urutan: `expires_at` terdekat dulu, NULL terakhir; seri →
+ * lot yang terbit lebih dulu, `firstId`). Setiap bagian membawa PT penerbit lot (G21 §13.1 no. 5).
+ * Kelebihan (saldo tidak cukup — commit terlambat, clawback) → lot NULL sebagai utang (saldo negatif,
+ * "ditagih di earn berikutnya" — docs/04 §9.4) atas nama `fallbackIssuer`.
  */
-export function allocateDebit(buckets: readonly LedgerBucket[], points: number): Allocation[] {
+export function allocateDebit(buckets: readonly LedgerBucket[], points: number, fallbackIssuer?: CompanyCode): Allocation[] {
   const sorted = sortBuckets(buckets);
   const out: Allocation[] = [];
   let left = points;
@@ -104,47 +120,62 @@ export function allocateDebit(buckets: readonly LedgerBucket[], points: number):
     if (left <= 0) break;
     if (b.remaining <= 0) continue;
     const take = Math.min(left, b.remaining);
-    out.push({ expiresAt: b.expiresAt, points: take });
+    mergeAllocation(out, b.expiresAt, take, b.issuer);
     left -= take;
   }
-  if (left > 0) mergeAllocation(out, null, left);
+  if (left > 0) mergeAllocation(out, null, left, fallbackIssuer);
   return out;
 }
 
 /**
- * Kredit baru dengan masa berlaku `expiresAt`: bila bucket NULL berutang (sisa negatif), bagian kredit dipakai melunasi
- * utang lebih dulu (entri NULL), sisanya ke bucket bermasa berlaku. Tanpa ini utang akan "hidup lagi" ketika kredit
- * pelunasnya kedaluwarsa.
+ * Kredit baru dengan masa berlaku `expiresAt` dari PT `issuer`: bila lot NULL berutang (sisa negatif), bagian kredit
+ * dipakai melunasi utang lebih dulu (entri NULL atas nama penerbit lot berutang itu — utang penerbit lain tidak tersisa
+ * abadi), sisanya ke lot baru. Tanpa ini utang akan "hidup lagi" ketika kredit pelunasnya kedaluwarsa.
  */
-export function splitCredit(buckets: readonly LedgerBucket[], points: number, expiresAt: Date | null): Allocation[] {
-  if (expiresAt === null) return [{ expiresAt: null, points }];
-  const debt = -Math.min(0, buckets.find((b) => b.expiresAt === null)?.remaining ?? 0);
-  const payoff = Math.min(points, debt);
+export function splitCredit(
+  buckets: readonly LedgerBucket[],
+  points: number,
+  expiresAt: Date | null,
+  issuer?: CompanyCode,
+): Allocation[] {
   const out: Allocation[] = [];
-  if (payoff > 0) out.push({ expiresAt: null, points: payoff });
-  if (points - payoff > 0) out.push({ expiresAt, points: points - payoff });
+  let left = points;
+  for (const d of sortBuckets(buckets)) {
+    if (left <= 0) break;
+    if (d.expiresAt !== null || d.remaining >= 0) continue;
+    const take = Math.min(left, -d.remaining);
+    mergeAllocation(out, null, take, d.issuer);
+    left -= take;
+  }
+  if (left > 0) mergeAllocation(out, expiresAt, left, issuer);
   return out;
 }
 
 function sortBuckets(buckets: readonly LedgerBucket[]): LedgerBucket[] {
   return [...buckets].sort((a, b) => {
-    if (a.expiresAt === null) return b.expiresAt === null ? 0 : 1;
-    if (b.expiresAt === null) return -1;
-    return a.expiresAt.getTime() - b.expiresAt.getTime();
+    if (a.expiresAt === null && b.expiresAt !== null) return 1;
+    if (b.expiresAt === null && a.expiresAt !== null) return -1;
+    const byExpiry = a.expiresAt !== null && b.expiresAt !== null ? a.expiresAt.getTime() - b.expiresAt.getTime() : 0;
+    if (byExpiry !== 0) return byExpiry;
+    const byId = (a.firstId ?? 0) - (b.firstId ?? 0);
+    if (byId !== 0) return byId;
+    return (a.issuer ?? '').localeCompare(b.issuer ?? '');
   });
 }
 
-function mergeAllocation(out: Allocation[], expiresAt: Date | null, points: number): void {
-  const same = out.find((a) => (a.expiresAt?.getTime() ?? null) === (expiresAt?.getTime() ?? null));
+function mergeAllocation(out: Allocation[], expiresAt: Date | null, points: number, issuer?: CompanyCode): void {
+  const same = out.find((a) => (a.expiresAt?.getTime() ?? null) === (expiresAt?.getTime() ?? null) && a.issuer === issuer);
   if (same) same.points += points;
-  else out.push({ expiresAt, points });
+  else out.push(issuer === undefined ? { expiresAt, points } : { expiresAt, points, issuer });
 }
 
 /**
  * Ledger poin tunggal (D-05) di `platform.loyalty_ledger` (kontrak §5, §9).
  * - Saldo = SUM(delta_points) atas entri yang belum kedaluwarsa (`expires_at IS NULL OR expires_at > now`); debit
  *   dialokasikan FIFO ke bucket `expires_at` (lihat `LedgerBucket`) sehingga SUM tetap benar setelah kedaluwarsa.
- * - `company_code` = PT yang menanggung liabilitas poin (ADR-020) untuk settlement antar-PT.
+ * - `company_code` = PT tempat transaksi; `issuer_company_code` (G21 §13.1 no. 5, ADR-020 revisi) = PT PENERBIT lot
+ *   (penanggung liabilitas). Lot = (expires_at, penerbit); redeem/clawback/forfeit mengonsumsi lot FIFO dan mencatat
+ *   penerbitnya; kedaluwarsa tidak menulis entri (lot hilang dari SUM) sehingga breakage per penerbit = SUM entri lot itu.
  * - Identitas member: `member_ref_hash` = member_hash (kontrak §1) + `member_ref_enc` (wajib, docs/04 §7.2) agar
  *   nomor bisa dipulihkan untuk DSAR/notifikasi tanpa menyimpan plaintext.
  * - Idempotensi: UNIQUE(idempotency_key) + `ON CONFLICT DO NOTHING`.
@@ -197,14 +228,17 @@ export class LoyaltyService {
       throw new RangeError('delta harus bilangan bulat ≠ 0 dalam batas');
     }
     if (!isCompanyCode(input.companyCode)) throw new RangeError('company_code tidak dikenal');
+    const issuer = input.issuerCompanyCode ?? input.companyCode;
+    if (!isCompanyCode(issuer)) throw new RangeError('issuer_company_code tidak dikenal');
     if (!isMemberHash(input.memberHash)) throw new RangeError('member_hash tidak valid');
     if (!Buffer.isBuffer(input.memberRefEnc) || input.memberRefEnc.length === 0) {
       throw new RangeError('member_ref_enc wajib diisi');
     }
     const res = await q.query<{ id: string }>(
       `INSERT INTO platform.loyalty_ledger
-         (member_ref_hash, member_ref_enc, company_code, delta_points, reason, source, source_ref, idempotency_key, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         (member_ref_hash, member_ref_enc, company_code, delta_points, reason, source, source_ref, idempotency_key, expires_at,
+          issuer_company_code)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        ON CONFLICT (idempotency_key) DO NOTHING
        RETURNING id`,
       [
@@ -217,6 +251,7 @@ export class LoyaltyService {
         input.sourceRef,
         input.idempotencyKey,
         input.expiresAt ? input.expiresAt.toISOString() : null,
+        issuer,
       ],
     );
     return (res.rowCount ?? 0) > 0;
@@ -228,21 +263,30 @@ export class LoyaltyService {
     await q.query('SELECT pg_advisory_xact_lock($1::int4, $2::int4)', [MEMBER_LOCK_CLASS, memberLockKey(hash)]);
   }
 
-  /** Bucket yang belum kedaluwarsa pada `at` (urut expires_at naik, NULL terakhir). */
+  /**
+   * Lot yang belum kedaluwarsa pada `at` = (expires_at, PT penerbit) — G21 §13.1 no. 5. Baris lama tanpa
+   * `issuer_company_code` (pra-G21) → penerbit = `company_code`. Urut expires_at naik (NULL terakhir), lalu lot tertua.
+   */
   async buckets(q: Queryable, hash: string, at: Date = new Date(this.now())): Promise<LedgerBucket[]> {
-    const res = await q.query<{ expires_at: Date | string | null; remaining: string | number }>(
-      `SELECT expires_at, SUM(delta_points)::bigint AS remaining
+    const res = await q.query<{ expires_at: Date | string | null; issuer: string; remaining: string | number; first_id: string | number }>(
+      `SELECT expires_at, COALESCE(issuer_company_code, company_code) AS issuer,
+              SUM(delta_points)::bigint AS remaining, MIN(id) AS first_id
          FROM platform.loyalty_ledger
         WHERE member_ref_hash = $1
           AND (expires_at IS NULL OR expires_at > $2)
-        GROUP BY expires_at
-        ORDER BY expires_at ASC NULLS LAST`,
+        GROUP BY expires_at, COALESCE(issuer_company_code, company_code)
+        ORDER BY expires_at ASC NULLS LAST, first_id ASC`,
       [hash, at.toISOString()],
     );
-    return res.rows.map((r) => ({
-      expiresAt: r.expires_at === null ? null : new Date(r.expires_at),
-      remaining: Number(r.remaining),
-    }));
+    return res.rows.map((r) => {
+      if (!isCompanyCode(r.issuer)) throw new RangeError('issuer ledger tidak dikenal');
+      return {
+        expiresAt: r.expires_at === null ? null : new Date(r.expires_at),
+        remaining: Number(r.remaining),
+        issuer: r.issuer,
+        firstId: Number(r.first_id),
+      };
+    });
   }
 
   async balance(memberRef: string): Promise<number> {

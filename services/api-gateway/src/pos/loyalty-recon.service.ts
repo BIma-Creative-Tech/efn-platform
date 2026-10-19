@@ -131,8 +131,11 @@ export class LoyaltyReconService implements OnModuleInit, OnModuleDestroy {
     const nowMs = this.now();
     const since = new Date(nowMs - this.config.loyaltyReconLookbackHours * 3_600_000);
     const out: { kind: LoyaltyAnomalyKind; fields: Record<string, string | number> }[] = [];
-    const rate = this.config.loyaltyEarnIdrPerPoint;
-    const cap = this.config.loyaltyPosMaxEarnPoints;
+    // G21 §13.1: earn dihitung dengan kebijakan PT (≤ plafon env) → aturan rekonsiliasi = PLAFON (batas keras yang tidak
+    // boleh dilampaui kebijakan mana pun). Default plafon = env lama → perilaku pra-G21 sama.
+    const ceilings = this.config.loyaltyPolicyCeilings;
+    const rate = ceilings.earnIdrPerPointMin;
+    const cap = ceilings.maxPointsPerOrderMax;
 
     // 1. Catatan earn vs ledger & aturan
     const earns = await q.query<EarnRow>(
@@ -180,7 +183,7 @@ export class LoyaltyReconService implements OnModuleInit, OnModuleDestroy {
     }
 
     // 3. Σ earn per member per hari WIB (dari awal hari WIB jendela)
-    const daily = this.config.loyaltyEarnDailyMaxPoints;
+    const daily = ceilings.dailyMaxPointsMemberMax;
     if (daily > 0) {
       const days = await q.query<{ day: string; orders: string | number; points: string | number; order_ref: string }>(
         `SELECT to_char((created_at AT TIME ZONE 'Asia/Jakarta')::date, 'YYYY-MM-DD') AS day,

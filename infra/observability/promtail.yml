@@ -98,6 +98,31 @@ scrape_configs:
                 kds_event: ticket_failed
             - labels:
                 kds_only:
+      # (2c) G21 (docs/04 §13.1 no. 7, E-44): rekonsiliasi liabilitas poin per PT setelah akrual harian Odoo
+      #      (efn_loyalty_accounting) -> stream="efn_loyalty" (retensi 400 hari = bukti Finance, loki.yml),
+      #      loyalty_event="liability_recon", label company_code (kode PT, <= 6 nilai). Alert loki-rules/efn-loyalty.yml
+      #      grup efn-loyalty-liability-recon; panel Grafana efn-loyalty-liability-recon.json. Format Odoo:
+      #      "<tgl> <jam>,<ms> <pid> INFO|WARNING <db> odoo.addons.efn_loyalty_accounting[.<sub>]: EFN_LOYALTY_RECON {json}".
+      #      JSON = 5 kunci kontrak, nilai IDR bilangan bulat (boleh negatif), kode PT [A-Z][A-Z0-9]{1,7}, tanggal
+      #      YYYY-MM-DD. Dua urutan kunci diterima: json.dumps(sort_keys=True) (bff_closing_liability_idr, company_code,
+      #      date, diff_idr, odoo_liability_idr) dan urutan kontrak (company_code, date, odoo_liability_idr,
+      #      bff_closing_liability_idr, diff_idr); separator ", "/": " atau ringkas ","/":". Regex BERJANGKAR PENUH dan
+      #      skema KETAT (tanpa teks bebas) -> tidak ada PII yang bisa masuk; baris lain yang memuat teks
+      #      "EFN_LOYALTY_RECON" (logger lain, kunci tambahan) TIDAK masuk dan tetap diredaksi. Dicocokkan SEBELUM
+      #      redaksi DAN dikecualikan dari redaksi (selector di bawah): nominal liabilitas >= Rp6,2 M berawalan "628..."
+      #      berpola nomor HP dan akan dirusak redaksi -> nilai alert hilang. Hanya container service=odoo. BFF memakai
+      #      penanda yang sama untuk heartbeat recon-nya (tahap 4, service=api-gateway, loyalty_event="recon") - tidak
+      #      bertabrakan karena selector service berbeda.
+      - match:
+          selector: '{service="odoo"} |~ "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2},\\d{3} \\d+ (INFO|WARNING) \\S+ odoo\\.addons\\.efn_loyalty_accounting(\\.[a-z0-9_]{1,40}){0,4}: EFN_LOYALTY_RECON (\\{\"bff_closing_liability_idr\": ?-?\\d{1,18}, ?\"company_code\": ?\"[A-Z][A-Z0-9]{1,7}\", ?\"date\": ?\"\\d{4}-\\d{2}-\\d{2}\", ?\"diff_idr\": ?-?\\d{1,18}, ?\"odoo_liability_idr\": ?-?\\d{1,18}\\}|\\{\"company_code\": ?\"[A-Z][A-Z0-9]{1,7}\", ?\"date\": ?\"\\d{4}-\\d{2}-\\d{2}\", ?\"odoo_liability_idr\": ?-?\\d{1,18}, ?\"bff_closing_liability_idr\": ?-?\\d{1,18}, ?\"diff_idr\": ?-?\\d{1,18}\\})\\s*$"'
+          stages:
+            - regex:
+                expression: ' EFN_LOYALTY_RECON \{.*"company_code": ?"(?P<company_code>[A-Z][A-Z0-9]{1,7})"'
+            - static_labels:
+                stream: efn_loyalty
+                loyalty_event: liability_recon
+            - labels:
+                company_code:
       # Redaksi dasar: nomor HP Indonesia dan token Bearer tidak boleh masuk log (UU PDP, R-L01). Semua baris KECUALI
       # kepala rantai (1) dan sink audit (2), yang dicocokkan di atas SEBELUM redaksi:
       #   - kepala rantai: isi dibatasi regex (angka + hex);
@@ -106,8 +131,11 @@ scrape_configs:
       #     PII by design (efn_audit emit_sink: id, model, uid, nama field, catatan purge - tanpa nilai lama/baru;
       #     nama/nomor orang di-mask di sumber, SEC-45). Bila suatu saat sink memuat nomor HP, itu bug di efn_audit
       #     (perbaiki di sumber), bukan alasan meredaksi di sini (redaksi = MAC rusak = alarm tamper palsu).
+      #   - rekonsiliasi liabilitas poin (2c, G21): hanya angka/kode PT/tanggal (skema ketat); redaksi merusak nominal
+      #     berawalan 628... -> alert selisih buta. Dikecualikan lewat label loyalty_event (baris lain tidak berlabel itu
+      #     pada tahap ini: label loyalty_event BFF/ETL baru dipasang di tahap 4/5 SETELAH redaksi).
       - match:
-          selector: '{container=~".+", stream!~"efn_audit_anchor|efn_audit_sink"}'
+          selector: '{container=~".+", stream!~"efn_audit_anchor|efn_audit_sink", loyalty_event!="liability_recon"}'
           # G14 (bug ditemukan saat uji dry-run): stage `replace` Promtail hanya mengganti CAPTURE GROUP, bukan seluruh
           # kecocokan. Ekspresi lama `(\+?62|0)8...` hanya mengganti awalan "0"/"62" -> sisa nomor HP BOCOR ke Loki
           # ("[PHONE_REDACTED]81298765432"), dan ekspresi Bearer tanpa grup tidak mengganti apa pun. Sekarang seluruh

@@ -782,3 +782,62 @@ Catatan "ADD saja": langkah 1 dan 3 harus DROP+ADD constraint (melonggarkan/meng
 - Asumsi Odoo: nama argumen `authorization`; respons `{ authorized, state }`; UserError = penolakan final; `refund_ref` null diterima untuk pesanan batal tanpa faktur.
 - Untuk lead: path baru wajib ada di allowlist `odoo-rpc-gateway` (disebut ditambah lead).
 - Belum: lookup kode & sync pelunasan POS (Odoo C), batas per IP order counter, UI CS untuk refund POS.
+
+## Gelombang 21 — keuangan poin per PT, faktur atas nama pembeli, vektor PII bersama (docs/04 §13.1 no. 3–7, §13.5, §13.2 AC-2, L-61..L-63; 19 Okt 2026)
+
+Branch `chore/wave-21` (HEAD 71aef24), **tanpa commit**. **Build (tsc), lint (eslint), dan Jest BELUM dijalankan lokal** (agent tanpa shell; lead menjalankan Jest di container). Migrasi `10-platform-g21.sql` **belum dijalankan** ke PostgreSQL. Semua di bawah = hasil penulisan + penalaran, bukan hasil eksekusi.
+
+### File
+- Baru: `loyalty/loyalty-policy.ts` (parser skema ketat, plafon, sidik kanonik), `loyalty/loyalty-policy.service.ts` (simpan append-only, kebijakan aktif, cache, fallback env), `pos/loyalty-policy.guard.ts` (`X-EFN-Signature`), `pos/pos-loyalty-finance.controller.ts` (PUT policies, GET accruals), `pos/loyalty-accrual.service.ts`, `orders/invoice-request.ts`, `infra/postgres/init/10-platform-g21.sql`.
+- Diubah: `config/{app-config.ts, secrets.loader.ts}`, `loyalty/{loyalty.service.ts (lot = expires_at + penerbit), loyalty-anomaly.ts, loyalty.module.ts}`, `pos/{pos-loyalty.service.ts, pos-loyalty.controller.ts, pos.module.ts, loyalty-recon.service.ts}`, `privacy/erasure.service.ts` (forfeit per lot), `migration/migration.service.ts` (penerbit + kunci bagian), `odoo-rpc/{odoo-online.types.ts, json2-client.ts, odoo-online.parse.ts, odoo-online.mock.ts, odoo-rpc.module.ts, online-errors.ts}`, `orders/{orders.controller.ts, orders.service.ts}`, `common/testing/{fake-loyalty-db.ts, fakes.ts}`.
+- Spec baru: `loyalty/loyalty-policy.spec.ts`, `pos/loyalty-g21.spec.ts`, `orders/invoice-request.spec.ts`, `common/pii/shared-vectors.spec.ts`. Spec diubah: `privacy/privacy.spec.ts` (forfeit per lot), `odoo-rpc/json2-client.spec.ts` (12 path).
+- README: `loyalty`, `pos`, `orders`, `odoo-rpc`.
+
+### Env / secret baru
+| Env | Default | Catatan |
+|---|---|---|
+| `LOYALTY_POLICY_SIGNING_KEY_FILE` | `/run/secrets/loyalty_policy_signing_key` (fallback nama kontrak) | **wajib di luar `APP_ENV=dev`** (gagal start), ≥ 32 byte setelah trim (= Odoo `signing.py`), ≠ `odoo_bff_api_key`, literal env ditolak di luar dev. Dev tanpa kunci → PUT 503 |
+| `LOYALTY_POLICY_CEILING_EARN_IDR_PER_POINT_MIN` | = `LOYALTY_EARN_IDR_PER_POINT` (10000) | minimum Rp/poin |
+| `LOYALTY_POLICY_CEILING_POINT_VALUE_IDR` | = `LOYALTY_POINT_VALUE_IDR` (100) | maksimum, kebijakan EFN |
+| `LOYALTY_POLICY_CEILING_REDEEM_MIN_POINTS_MIN` | = `LOYALTY_REDEEM_MIN_POINTS` (50) | minimum |
+| `LOYALTY_POLICY_CEILING_REDEEM_MAX_PCT` | = `LOYALTY_REDEEM_MAX_PCT_OF_ORDER` (50) | maksimum |
+| `LOYALTY_POLICY_CEILING_MAX_POINTS_PER_ORDER` | = `LOYALTY_POS_MAX_EARN_POINTS` (5000) | maksimum |
+| `LOYALTY_POLICY_CEILING_DAILY_MAX_POINTS_MEMBER` | = `LOYALTY_EARN_DAILY_MAX_POINTS` (2000) | maksimum; 0 = tanpa plafon |
+| `LOYALTY_POLICY_CEILING_POS_CONFIG_HOURLY_MAX` | = `LOYALTY_EARN_POS_CONFIG_HOURLY_MAX_POINTS` (10000) | idem |
+| `LOYALTY_POLICY_CEILING_COMPANY_HOURLY_MAX` | = `LOYALTY_EARN_COMPANY_HOURLY_MAX_POINTS` (50000) | idem |
+| `LOYALTY_POLICY_CEILING_EARN_ON_MONEY_ONLY` | = `LOYALTY_EARN_EXCLUDE_POINT_PAYMENT` (true) | true = kebijakan wajib `earn_on_money_only: true` |
+| `LOYALTY_POLICY_CACHE_SECONDS` | 30 (0..600) | cache kebijakan aktif per proses |
+| `LOYALTY_ACCRUAL_CLOSE_GRACE_SECONDS` | 300 (0..3600) | jeda setelah tengah malam WIB |
+Env loyalty lama di luar plafon eksplisit → gagal start.
+
+### Migrasi `10-platform-g21.sql` (idempoten, satu transaksi, `SET LOCAL ROLE efn_platform_owner`)
+1. `platform.loyalty_policy` (UNIQUE company_code+version, CHECK point_value_idr hanya EFN, `body_sha256`, `received_at`) + trigger append-only (UPDATE/DELETE/TRUNCATE ditolak). efn_bff SELECT/INSERT + sequence; efn_readonly kolom tanpa `approved_by_uid`.
+2. `loyalty_ledger.issuer_company_code` (nullable, CHECK kode PT) — baris lama NULL → `company_code`. Tanpa migrasi data (dev reset, §13.1 no. 5).
+3. Indeks `ix_loyalty_ledger_issuer_created` (ekspresi COALESCE, created_at) dan `ix_loyalty_ledger_expires` (parsial).
+4. `loyalty_pos_earn.policy_version` (audit).
+Perlu ditambahkan devsecops ke daftar migrasi WAJIB `scripts/deploy.sh` (BFF G21 menulis kolom baru).
+
+### Bentuk respons
+- `PUT /v1/pos/loyalty/policies/{company_code}/{version}` → 200 `{ ok: true, company_code, version, status: "stored"|"duplicate" }`; 400 `invalid_request`, 401 `invalid_signature`, 409 `policy_conflict`, 422 `policy_out_of_bounds`, 503 (kunci belum ada).
+- `GET /v1/pos/loyalty/params?company_code=` → field §9.1 + aditif `company_code, source, policy_version, point_value_version, max_points_per_order, daily_max_points_member, pos_config_hourly_max, company_hourly_max`. Tanpa query = env (lama).
+- `GET /v1/pos/loyalty/accruals?company_code=&date=` → `{ company_code, date, earned_value_idr, earn_reversed_value_idr, redeemed_value_idr_by_issuer, restored_value_idr, expired_value_idr, closing_liability_idr, generated_at }` + aditif `point_value_idr, point_value_version, restored_value_idr_by_issuer, redeemed_value_idr_as_issuer, restored_value_idr_as_issuer, forfeited_value_idr` + **L-66** `redeemed_value_idr_as_issuer_by_redeemer` / `restored_value_idr_as_issuer_by_redeemer` (`{ <PT penebus lain>: n }`, tanpa kunci PT sendiri, `{}` bila kosong; invarian Σ map + `*_by_issuer[PT sendiri]` = `*_as_issuer` dicek sebelum menjawab — gagal = 500, bukan angka salah). `company_code`/`date` = permintaan. 422 `date_not_closed`, 400 `invalid_request`. Definisi rinci: `src/pos/README.md`.
+- `POST /v1/orders` + `invoice_request` → respons checkout pertama + `invoice_request: { status: "applied"|"pending_cs" }`; 422 `invoice_not_available` (kanal non-PPN sebelum order dibuat, atau dari Odoo → order dikompensasi); 400 `invalid_request`.
+
+### Asumsi terhadap Odoo (dicocokkan dengan kode efn_loyalty_accounting yang sudah ada)
+1. Tanda tangan = `signing.py::sign` (HMAC-SHA256 kunci byte UTF-8 ter-trim atas `"<t>." + body` persis; header hex huruf kecil). Body = `canonical_json(_efn_publish_body())` — 8 kunci `params` selalu, `point_value_idr` hanya EFN, `effective_from` `%Y-%m-%dT%H:%M:%SZ`. Odoo menggeser `effective_from` lampau ke waktu persetujuan; BFF tetap memakai `GREATEST(effective_from, received_at)`.
+2. Odoo 400/409/422 final; 401/404/408/429/5xx retry (respons BFF sesuai).
+3. Accruals: Odoo memvalidasi `company_code`/`date` sama dan nilai arus ≥ 0 — BFF memastikan (expired negatif → 0 + log). Lookback 3 hari ≤ batas BFF (mulai 2026-01-01).
+4. `efn_online_set_invoice_party(channel_code, platform_order_ref, profile, idempotency_key)`; profil `{buyer_type, tax_id, name, address, email}`; idempoten per key; efn_pii tidak aktif / kanal non-PPN → `UserError("efn_online:invoice_not_available")`; hasil = `true` atau `{state?}` tanpa PII (field lain diabaikan).
+5. Path ke-12 sudah di allowlist gateway (devsecops).
+
+### Perlu keputusan lead / Finance
+- **Rekonsiliasi §13.1 no. 7**: `closing_liability_idr` BFF = liabilitas lot **terbitan** PT (definisi "PT penerbit menanggung"). Jurnal Odoo (`efn_loyalty_accrual.py`) mengkredit Liabilitas di PT **penebus** untuk penukaran lintas PT dan tidak menjurnal penukaran lot PT ini di PT lain → saldo akun liabilitas PT akan berbeda dari `closing_liability_idr` setiap ada penukaran lintas PT. Field aditif `redeemed_value_idr_as_issuer` / `restored_value_idr_as_issuer` disediakan agar Odoo bisa menjurnal sisi penerbit; mohon dikonfirmasi model jurnalnya (W-15).
+- Pelunasan utang member dari earn PT X dicatat atas penerbit lot berutang (Y) — earn X yang dipakai melunasi utang Y tidak menjadi beban X.
+- Faktur: keranjang campuran PPN + F&B ditolak seluruhnya (sama dengan frontend); retry pemasangan partner tidak ada (profil tidak disimpan → CS).
+
+### Spec G21 (belum dijalankan)
+- `loyalty/loyalty-policy.spec.ts`: skema ketat (12 kasus 400, path ≠ body, body Odoo kanonik sort_keys), sidik kanonik, plafon default/arah/0, env di luar plafon gagal start, secret wajib/≥ 32 byte/≠ service key/literal ditolak/via `_FILE`; publish stored/duplicate/409/422, replay versi lama walau plafon turun, append-only; aktif = versi tertinggi berlaku, backdate tidak berlaku surut, fallback env + warning dibatasi, point value global, cache, plafon turun → fallback; guard HMAC valid/salah/kunci lain/body diubah/tanpa header/replay > 300 s → 401, tanpa kunci → 503, metadata guard.
+- `pos/loyalty-g21.spec.ts`: alokasi FIFO lintas penerbit & pelunasan utang per penerbit; earn/reserve/params memakai kebijakan PT + nilai tukar EFN, `policy_version`; redeem lintas PT mencatat issuer; restore ke penerbit asal, clawback; akrual (earned, by_issuer, as_issuer, closing, deterministik setelah aktivitas & kebijakan baru, expired + identitas penutup, clawback lahir-kedaluwarsa dikecualikan, validasi tanggal/PT).
+- `orders/invoice-request.spec.ts`: validasi 14 kasus 400 tanpa nilai di pesan; sidik hanya penanda; GL applied + kunci idempoten + urutan place→set + tanpa PII di repo/outbox/log/respons + replay/konflik; F&B & campuran 422 sebelum order; Odoo 422 → kompensasi; transport → anomali + pending_cs; klien json2 path/argumen/kode bisnis/log tanpa PII.
+- `common/pii/shared-vectors.spec.ts` (AC-2): membaca `services/odoo/addons/efn_pii/tests/data/efn_pii_shared_vectors.json` (atau `EFN_PII_SHARED_VECTORS`); file tidak ada → suite di-skip dengan judul yang menyebut path. Nilai `expected_*` saat ini masih **null** (generator Odoo belum dijalankan) → hanya format/round-trip yang terbukti + `console.warn`; perbandingan byte-per-byte aktif otomatis setelah lead menjalankan `efn_pii/tools/shared_vectors.py`.
+- Spec lama yang terdampak dan sudah disesuaikan/diperiksa (bukan dijalankan): `pos-loyalty.spec.ts` (FakeLoyaltyDb diperluas; alokasi tanpa issuer tetap sama), `privacy.spec.ts`, `json2-client.spec.ts`, `migration.spec.ts`, `loyalty-guard.spec.ts` (recon memakai plafon = env default).

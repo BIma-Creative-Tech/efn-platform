@@ -9,7 +9,8 @@ Format (tata letak blob identik dengan BFF `services/api-gateway/src/common/pii/
 
 `efnpiiN:` adalah penanda FORMAT, bukan versi kunci (versi kunci = byte pertama blob).
 `efnpii1:` ditulis INSERT (id belum diketahui), lalu ditulis ulang ke `efnpii2:` di transaksi yang sama.
-`efnpii1:` yang terbaca di luar itu tetap didekripsi (migrasi PoC) dan dicatat `unbound_ciphertext`.
+`efnpii1:` yang terbaca di luar itu DITOLAK (nilai pengganti + CRITICAL `unbound_ciphertext`, SEC-148), kecuali mode
+migrasi (env `EFN_ODOO_PII_ACCEPT_V1=true` DAN migrasi belum dinyatakan selesai di DB, lihat `pii_model`).
 
 Blind index (ADR-036 §4.4)::
 
@@ -21,6 +22,12 @@ Token nama (ADR-036 §0.5)::
     k_t  = HKDF-SHA256(ikm = odoo_pii_name_key, salt = kosong, info = "efn:odoo:nametok:<f|w|p>:v1", 32 byte)
     tok  = base64url_tanpa_padding(HMAC-SHA256(k_t, N(teks))[:16])      # 22 karakter
 
+Padding token deterministik (SEC-149)::
+
+    k_pad = HKDF-SHA256(ikm = odoo_pii_name_key, salt = kosong, info = "efn:odoo:nametok:pad:v1", 32 byte)
+    pad_i = base64url_tanpa_padding(HMAC-SHA256(k_pad, "tok:<tabel>:<id>:<sha256 hex token asli terurut>:<i>")[:16])
+    blok_ekstra = HMAC-SHA256(k_pad, "blocks:<tabel>:<id>")[0] % 2         # 0 / 1 blok 16 token tambahan
+
 Secret (tidak pernah di DB, ir.config_parameter, log, image, atau repo):
 
 | Env | Default | Isi |
@@ -30,6 +37,7 @@ Secret (tidak pernah di DB, ir.config_parameter, log, image, atau repo):
 | `EFN_ODOO_PII_BIDX_KEY_FILE` | `<dir>/odoo_pii_bidx_key` | override path kunci blind index |
 | `EFN_ODOO_PII_NAME_KEY_FILE` | `<dir>/odoo_pii_name_key` | override path kunci token nama |
 | `EFN_ODOO_PII_ACTIVE_KEY_VERSION` | `1` | versi kunci untuk enkripsi baru (non-rahasia) |
+| `EFN_ODOO_PII_ACCEPT_V1` | kosong (= tolak) | `true` = migrasi `efnpii1:` lama (SEC-148), bukan produksi |
 
 Isi file kunci = 32 byte acak dalam base64. Pesan error/log hanya berisi KODE
 (`key_missing`, `key_invalid`, `version_unknown`, `auth_failed`, `unbound_ciphertext`,
@@ -76,6 +84,8 @@ ENV_ACTIVE_VERSION = "EFN_ODOO_PII_ACTIVE_KEY_VERSION"
 ENV_BIDX_FILE = "EFN_ODOO_PII_BIDX_KEY_FILE"
 ENV_NAME_FILE = "EFN_ODOO_PII_NAME_KEY_FILE"
 ENV_REQUIRED = "EFN_ODOO_PII_REQUIRED"
+ENV_ACCEPT_V1 = "EFN_ODOO_PII_ACCEPT_V1"
+NAME_PAD_INFO = b"efn:odoo:nametok:pad:v1"
 KEY_FILE_RE = re.compile(r"^odoo_pii_key_v([1-9][0-9]{0,2})$")
 KEY_ENV_RE = re.compile(r"^EFN_ODOO_PII_KEY_V([1-9][0-9]{0,2})_FILE$")
 BIDX_FILE_NAME = "odoo_pii_bidx_key"
@@ -181,8 +191,23 @@ def b64url_nopad(raw):
 
 
 def random_name_token():
-    """Token padding (ADR-036 §0.5): format sama dengan token asli, tidak pernah cocok kueri."""
+    """Token acak format token nama (hanya untuk test; padding produksi deterministik, SEC-149)."""
     return b64url_nopad(os.urandom(NAME_TOKEN_BYTES))
+
+
+def real_tokens_digest(tokens):
+    """SHA-256 hex dari token asli terurut (bagian seed padding: ganti nama -> semua padding berganti)."""
+    return hashlib.sha256(" ".join(sorted(tokens)).encode("ascii")).hexdigest()
+
+
+def name_pad_token_b64(pad_key, table, record_id, digest, index):
+    message = f"tok:{table}:{record_id}:{digest}:{index}".encode("ascii")
+    return b64url_nopad(hmac.new(pad_key, message, hashlib.sha256).digest()[:NAME_TOKEN_BYTES])
+
+
+def name_pad_extra_blocks(pad_key, table, record_id):
+    """0 atau 1 blok padding tambahan, deterministik per record (bukan per nama)."""
+    return hmac.new(pad_key, f"blocks:{table}:{record_id}".encode("ascii"), hashlib.sha256).digest()[0] % 2
 
 
 def derive_name_subkey(name_key, kind):
@@ -270,14 +295,55 @@ class KeyRing:
                     self._name_subkeys[kind] = subkey
         return name_token_b64(subkey, normalized)
 
+    def _pad_key(self):
+        if self._name_key is None:
+            raise PiiError(self.error_code or "key_missing")
+        key = self._name_subkeys.get("pad")
+        if key is None:
+            with self._sub_lock:
+                key = self._name_subkeys.get("pad")
+                if key is None:
+                    key = hkdf_sha256(self._name_key, NAME_PAD_INFO)
+                    self._name_subkeys["pad"] = key
+        return key
+
+    def name_padder(self, table, record_id, real_tokens):
+        """(fungsi indeks -> token padding, jumlah blok ekstra) deterministik untuk satu record (SEC-149)."""
+        key = self._pad_key()
+        rid = record_id if isinstance(record_id, int) and record_id > 0 else 0
+        digest = real_tokens_digest(real_tokens)
+        return (
+            lambda index: name_pad_token_b64(key, table, rid, digest, index),
+            name_pad_extra_blocks(key, table, rid),
+        )
+
     def _encrypt_raw(self, plaintext, aad):
+        if isinstance(plaintext, str):
+            plaintext = plaintext.encode("utf-8")
         iv = os.urandom(IV_BYTES)
-        return iv + self._aead[self.active_version].encrypt(iv, plaintext.encode("utf-8"), aad.encode("utf-8"))
+        return iv + self._aead[self.active_version].encrypt(iv, plaintext, aad.encode("utf-8"))
 
     def decrypt_text(self, text, aad):
         """:raises PiiError: ``version_unknown`` (kunci versi itu tidak dimuat) | ``auth_failed``."""
         blob = unwrap(text)
         return open_blob(self._aead, blob, aad.encode("utf-8")).decode("utf-8")
+
+    def encrypt_bytes(self, data, aad, prefix=PREFIX_V2):
+        """Isi file (mis. XML Coretax) -> bytes ASCII `efnpii2:` + base64(blob)."""
+        if self.active_version is None:
+            raise PiiError(self.error_code or "key_missing")
+        blob = bytes([self.active_version]) + self._encrypt_raw(bytes(data), aad)
+        return wrap(blob, prefix).encode("ascii")
+
+    def decrypt_bytes(self, data, aad):
+        """Kebalikan :meth:`encrypt_bytes`. :raises PiiError: ``auth_failed`` | ``version_unknown``."""
+        try:
+            text = bytes(data).decode("ascii")
+        except UnicodeDecodeError:
+            raise PiiError("auth_failed") from None
+        if format_of(text) != 2:
+            raise PiiError("auth_failed")
+        return open_blob(self._aead, unwrap(text), aad.encode("utf-8"))
 
     def blind_index(self, field_name, normalized):
         if self._bidx_key is None:
@@ -439,8 +505,21 @@ def log_alarm(event, dbname, error_code, model=None, fields=None, count=None, le
     _logger.log(level, "%s %s", LOG_TAG, json.dumps(payload, sort_keys=True))
 
 
+def _env_true(name):
+    return (os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def required():
-    return (os.environ.get(ENV_REQUIRED) or "").strip().lower() in {"1", "true", "yes", "on"}
+    return _env_true(ENV_REQUIRED)
+
+
+def accept_v1_env():
+    """SEC-148: mode migrasi `efnpii1:` hanya bila env ini eksplisit `true` (default produksi: tolak)."""
+    return _env_true(ENV_ACCEPT_V1)
+
+
+def is_bytes_ciphertext(data):
+    return isinstance(data, (bytes, bytearray, memoryview)) and bytes(data[:8]) in (b"efnpii1:", b"efnpii2:")
 
 
 def get_keyring(dbname=None, log=True):

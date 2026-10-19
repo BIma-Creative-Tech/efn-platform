@@ -118,7 +118,8 @@ export class MigrationService {
     if (parseOpaqueSourceRef(dto.sourceRef) !== dto.sourceRef) throw Errors.invalidRequest(); // W-25: hanya bentuk ternormalisasi
     const hash = this.loyalty.hashMember(dto.memberRef);
     const key = `${MIGRATION_SOURCE}:${dto.sourceRef}`;
-    const keys = [key, `${key}#2`];
+    // G21: pelunasan utang bisa terpecah per penerbit lot berutang (splitCredit) → ≤ 1 + jumlah PT bagian
+    const keys = [key, ...Array.from({ length: 6 }, (_, i) => `${key}#${i + 2}`)];
     return this.db.tx(async (q) => {
       await this.loyalty.lockMember(q, hash);
       await this.assertNotErased(q, hash, dto.sourceRef, 'opening_balance');
@@ -134,7 +135,13 @@ export class MigrationService {
         return { applied: false, points_balance: await this.loyalty.balanceByHash(hash, q) };
       }
       const at = new Date(this.now());
-      const parts = splitCredit(await this.loyalty.buckets(q, hash, at), dto.points, expiryFor(at.getTime(), this.config.loyaltyPointExpiryDays));
+      const parts = splitCredit(
+        await this.loyalty.buckets(q, hash, at),
+        dto.points,
+        expiryFor(at.getTime(), this.config.loyaltyPointExpiryDays),
+        dto.companyCode,
+      );
+      if (parts.length > keys.length) throw new Error('migration: bagian kredit melebihi kunci idempotensi');
       const enc = this.loyalty.encryptMemberRef(dto.memberRef);
       for (const [i, part] of parts.entries()) {
         await this.loyalty.insertEntry(
@@ -148,6 +155,7 @@ export class MigrationService {
             sourceRef: dto.sourceRef,
             companyCode: dto.companyCode,
             expiresAt: part.expiresAt,
+            issuerCompanyCode: part.issuer ?? dto.companyCode,
           },
           q,
         );

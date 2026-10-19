@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- E-40 (docs/08 §11.2 butir 1): akun & jurnal Selisih Pembulatan Pajak per PT (PLACEHOLDER, diisi Finance). -->
+<odoo>
+    <record id="res_config_settings_view_form_efn_coretax_rounding" model="ir.ui.view">
+        <field name="name">res.config.settings.view.form.inherit.efn.coretax.rounding</field>
+        <field name="model">res.config.settings</field>
+        <field name="inherit_id" ref="account.res_config_settings_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//app[@name='account']" position="inside">
+                <block title="Pembulatan PPN Coretax (EFN)" id="efn_coretax_rounding" groups="account.group_account_manager">
+                    <setting id="efn_tax_rounding_accounts"
+                             string="Selisih Pembulatan Pajak"
+                             company_dependent="1"
+                             help="Selisih PPN rumus Coretax (per baris) dengan jurnal PPN Odoo dibukukan per faktur e-Faktur ke akun ini. Piutang pelanggan tidak berubah.">
+                        <div class="content-group">
+                            <div class="row mt8">
+                                <label for="efn_tax_rounding_account_id" class="col-lg-4 o_light_label"/>
+                                <field name="efn_tax_rounding_account_id"/>
+                            </div>
+                            <div class="row">
+                                <label for="efn_tax_rounding_gain_account_id" class="col-lg-4 o_light_label"/>
+                                <field name="efn_tax_rounding_gain_account_id"/>
+                            </div>
+                            <div class="row">
+                                <label for="efn_tax_rounding_journal_id" class="col-lg-4 o_light_label"/>
+                                <field name="efn_tax_rounding_journal_id"/>
+                            </div>
+                        </div>
+                    </setting>
+                </block>
+            </xpath>
+        </field>
+    </record>
+</odoo>

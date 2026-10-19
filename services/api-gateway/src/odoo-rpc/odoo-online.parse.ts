@@ -14,6 +14,7 @@ import {
   QuoteLine,
   QuoteResult,
   RefundResult,
+  SetInvoicePartyResult,
   StatusRow,
   StockRow,
   TaxGroup,
@@ -363,6 +364,18 @@ export function parseCounterRefundAuthorize(v: unknown): CounterRefundAuthorizeR
     state: optStr(o.state, 'state', 32),
     amount: o.amount === undefined || o.amount === null || o.amount === false ? null : rupiah(o.amount, 'amount'),
   };
+}
+
+/**
+ * G21 §13.5: hasil `efn_online_set_invoice_party` — ASUMSI bentuk `{ state?: string }` atau `true` (Odoo `return True`).
+ * Field lain DIABAIKAN tanpa dibaca/disimpan (kontrak: tidak ada PII di hasil RPC; bila Odoo keliru mengirimnya, BFF tidak
+ * meneruskannya ke mana pun).
+ */
+export function parseSetInvoiceParty(v: unknown): SetInvoicePartyResult {
+  if (v === true) return { state: null };
+  const o = obj(v, 'set_invoice_party');
+  const state = o.state === undefined || o.state === null || o.state === false ? null : str(o.state, 'state', 32);
+  return { state };
 }
 
 export function parseStatus(v: unknown): StatusRow[] {

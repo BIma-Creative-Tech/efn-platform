@@ -50,6 +50,10 @@ class PosOrder(models.Model):
         return pm.scan_fetch(self, lambda: super(PosOrder, self)._fetch_query(query, fields))
 
     # ------------------------------------------------------------------ create / write
+    @api.model
+    def _create(self, data_list):
+        return pm.created(super()._create(data_list))
+
     @api.model_create_multi
     def create(self, vals_list):
         for vals in vals_list:
@@ -86,9 +90,10 @@ class PosOrder(models.Model):
         )
         ids = [row[0] for row in self.env.cr.fetchall()]
         total = 0
+        allow_v1 = pm.migration_allows_v1(self.env)  # SEC-148
         for chunk in split_every(batch, ids):
             records = self.sudo().browse(chunk)
-            counts = pm.rewrite_rows(records, list(chunk), encrypt_plain=True)
+            counts = pm.rewrite_rows(records, list(chunk), encrypt_plain=True, allow_v1=allow_v1)
             total += counts["encrypted"] + counts["bound"]
             records.invalidate_recordset(list(PII_FIELDS))
         return total

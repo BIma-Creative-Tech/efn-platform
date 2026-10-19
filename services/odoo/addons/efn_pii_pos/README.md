@@ -42,8 +42,13 @@ Ulangi setelah kunci dipasang: `env['pos.order'].sudo()._efn_pii_encrypt_legacy(
 - UX: hasil lokal kosong tidak otomatis memanggil server; kasir harus menekan Enter (perilaku POS 19 standar,
   `partner_list.js`). Pelatihan kasir (R-O07). Tour belum ditulis (AC-12, QA).
 - AC-1 (`_load_pos_data` nyata, overhead < 5 %, p95 pencarian ≤ 300 ms pada 200 rb partner) **belum diukur**.
-- `mail.mail` struk email (`auto_delete`) dan `pos_self_order`/`pos_restaurant` yang mungkin mendefinisikan ulang
-  `email`/`mobile`: belum diperiksa (akan tertangkap `_register_hook` + SEC-137 bila terjadi).
+- `mail.mail` struk email: sejak efn_pii 19.0.3.0.0 (G21, SEC-153) `mail.mail` ber-`model='pos.order'` selalu
+  menyimpan `email_to`/`email_cc` terenkripsi (`pos.order._efn_pii_always`); `auto_delete` template struk menghapusnya
+  setelah terkirim (perilaku `mail.template` CE, belum diuji runtime untuk struk POS 19). `pos_self_order`/
+  `pos_restaurant` yang mungkin mendefinisikan ulang `email`/`mobile`: belum diperiksa (tertangkap `_register_hook` +
+  SEC-137 bila terjadi).
+- 19.0.1.1.0: `_create` mencatat id baru (SEC-148); `_efn_pii_encrypt_legacy` hanya mengikat `efnpii1` dalam mode
+  migrasi (`EFN_ODOO_PII_ACCEPT_V1=true`).
 
 ## Referensi desain (ADR-031)
 Ditulis ulang dari source Odoo CE 19.0 (`point_of_sale/models/{pos_order,pos_config,res_partner}.py`,

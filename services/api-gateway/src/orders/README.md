@@ -87,3 +87,20 @@ ADR terkait: ADR-001 (revisi 6 entitas), ADR-016 (vendor payment, **belum dipili
 **Risiko**: R-T10 (saga tanpa intent; kedaluwarsa vs pelunasan POS — jendela balapan dibatasi pengecekan status sebelum kedaluwarsa), R-O05 (refund ≤ porsi = `amount_payable` bagian), R-L01 (kode bayar rahasia: tidak di log/event/URL, terenkripsi at rest), stock griefing (batas 1 order counter terbuka per member).
 **Test**: `online-counter.spec.ts`, `online.model.spec.ts`, `online-routes.spec.ts` (parser body).
 **Belum**: lookup kode di POS & sync pelunasan = Odoo (`efn_online_pos_counter`); rate limit lookup per sesi di Odoo; kanal counter-saja tidak bisa memakai QRIS sampai vendor (ADR-016).
+
+## G21 — faktur atas nama pembeli (docs/04 §13.5, W-06/E-39, L-63, K-36-7)
+ADR terkait: ADR-036 §0 (enkripsi PII Odoo, Accepted). File: `invoice-request.ts` (validasi), `orders.service.ts` (`applyInvoiceParty`), path gateway ke-12 `efn.online.order/efn_online_set_invoice_party` (`odoo-rpc/`).
+
+**Kontrak klien**: `POST /v1/orders` body opsional `invoice_request: { buyer_type: "npwp"|"nik"|"passport", tax_id, name, address, email }` — tepat lima field. Validasi: NPWP/NIK 16 digit (titik/strip/spasi dibuang), paspor 5–20 `[A-Z0-9]` (ASUMSI, = frontend), nama 2–100, alamat 5–255 (tanpa karakter kontrol), email dasar ≤ 254. Salah → `400 invalid_request` (pesan tanpa nilai).
+- Ada bagian non-PPN (PB/BCF F&B PB1, atau PT lain; hanya GL & BCR yang PPN) → `422 invoice_not_available` **sebelum** order dibuat.
+- Respons checkout pertama bertambah `invoice_request: { status: "applied" | "pending_cs" }` (tidak disimpan; replay/`GET` tidak memuatnya).
+- Sidik idempotensi: hanya penanda `invoice_request: true` (isi profil tidak di-hash). Key sama dengan/ tanpa faktur → `409 idempotency_conflict`.
+
+**Alur**: setelah SEMUA bagian ter-place dan cek total/expires_at lolos, SEBELUM payment intent: `efn_online_set_invoice_party(channel_code, platform_order_ref=<part_id>, profile, idempotency_key="online:invoice:<part_id>")` per bagian.
+- `UserError("efn_online:invoice_not_available")` (efn_pii tidak aktif, L-63) → order dikompensasi (cancel + `failed`, tanpa intent) → `422 invoice_not_available` diteruskan.
+- Gagal lain (transport/circuit/auth/respons) → anomali `EFN_ONLINE_ANOMALY invoice_party_failed` (order/part/channel/kode saja) + lanjut (partner generik; status `pending_cs`, faktur atas nama dibuat CS). Tidak di-retry otomatis (profil tidak disimpan) — sengaja.
+- Hasil RPC: hanya `state` opsional dibaca; field lain diabaikan.
+
+**PII**: profil hanya di memori request; tidak masuk DB (order/part/event), outbox, Redis, log, metrik; klien json2 tidak me-log body. Mock Odoo mencatat SHA-256 profil saja (test).
+**Test**: `invoice-request.spec.ts`.
+**Belum**: retry pemasangan partner (butuh profil → sengaja tidak; CS); faktur untuk bagian PPN dalam keranjang campuran (kontrak ditafsirkan ketat: semua bagian harus PPN, sama dengan frontend).

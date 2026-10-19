@@ -47,6 +47,7 @@ import { OnlineMetrics } from './online-metrics';
           refundSettled: (...a) => get().refundSettled(...a),
           status: (...a) => get().status(...a),
           counterRefundAuthorize: (...a) => get().counterRefundAuthorize(...a),
+          setInvoiceParty: (...a) => get().setInvoiceParty(...a),
           isCircuitOpen: (ch) => (impl ? impl.isCircuitOpen(ch) : false),
         };
       },

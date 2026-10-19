@@ -286,20 +286,25 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
     // 1. Forfeit saldo per PT (liabilitas turun tercatat; perlakuan akuntansi: Finance, ADR-020).
     //    source_ref NULL & idempotency_key acak: entri tidak memuat request_id (SEC-31). Idempotensi dijamin transaksi +
     //    transisi status `scheduled → processing` (retry setelah rollback memulai dari nol).
-    const balances = await q.query<{ company_code: string; balance: string | number }>(
-      `SELECT company_code, SUM(delta_points)::bigint AS balance
+    //    G21 §13.1 no. 5: forfeit PER LOT (penerbit, expires_at) dengan expires_at yang sama — tiap lot hidup menjadi 0 dan
+    //    tetap 0 setelah kedaluwarsa (forfeit NULL lama membuat liabilitas penerbit negatif saat lotnya hangus). Lot utang
+    //    (sisa < 0) ikut dinolkan: kontribusi subjek ke liabilitas tiap penerbit = 0. `company_code` = penerbit.
+    const balances = await q.query<{ company_code: string; expires_at: Date | string | null; balance: string | number }>(
+      `SELECT COALESCE(issuer_company_code, company_code) AS company_code, expires_at, SUM(delta_points)::bigint AS balance
          FROM platform.loyalty_ledger
         WHERE member_ref_hash = $1 AND (expires_at IS NULL OR expires_at > now())
-        GROUP BY company_code
-       HAVING SUM(delta_points) > 0`,
+        GROUP BY COALESCE(issuer_company_code, company_code), expires_at
+       HAVING SUM(delta_points) <> 0`,
       [hash],
     );
     for (const b of balances.rows) {
+      const exp = b.expires_at === null || b.expires_at === undefined ? null : new Date(b.expires_at).toISOString();
       await q.query(
         `INSERT INTO platform.loyalty_ledger
-           (member_ref_hash, member_ref_enc, erased_at, company_code, delta_points, reason, source, source_ref, idempotency_key)
-         VALUES ($1, NULL, now(), $2, $3, 'dsar_forfeit', 'dsar', NULL, $4)`,
-        [tomb, b.company_code, -Number(b.balance), `dsar:forfeit:${randomUUID()}`],
+           (member_ref_hash, member_ref_enc, erased_at, company_code, delta_points, reason, source, source_ref, idempotency_key,
+            expires_at, issuer_company_code)
+         VALUES ($1, NULL, now(), $2, $3, 'dsar_forfeit', 'dsar', NULL, $4, $5, $2)`,
+        [tomb, b.company_code, -Number(b.balance), `dsar:forfeit:${randomUUID()}`, exp],
       );
     }
     // 2. Tombstone ledger

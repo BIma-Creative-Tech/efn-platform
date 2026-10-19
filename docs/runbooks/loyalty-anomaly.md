@@ -127,6 +127,24 @@ Severity **warning**, tim data. Tidak ada `status":"ok"` selama 26 jam (+15 meni
 4. Setelah deploy pertama G14 alert ini dapat menyala sekali (run terakhir < 24 jam sebelum Promtail mengenali
    baris): tunggu run harian berikutnya atau jalankan sekali (dev: `ETL_RUN_ONCE=true`, `ETL_LOYALTY_RECON_INTERVAL_SECONDS=60`).
 
+## EfnLoyaltyLiabilityReconMismatch
+
+Sumber: log Odoo `EFN_LOYALTY_RECON` (G21, docs/04 §13.1 no. 7) — saldo akun **Liabilitas Poin** PT di Odoo setelah jurnal akrual harian ≠ `closing_liability_idr` ledger BFF. Warning bila `diff_idr ≠ 0`.
+
+1. Buka dashboard Grafana *EFN Loyalty Liability Recon*, catat `company_code`, `date`, `diff_idr` (`odoo − bff`).
+2. Di Odoo (Finance, company PT itu): cek jurnal akrual `EFN-LOY-<company_code>-<date>` ada & posted, dan apakah ada jurnal manual ke akun liabilitas poin di tanggal itu (penyebab tersering).
+3. Di BFF: `GET /v1/pos/loyalty/accruals?company_code=&date=` (via CLI admin) — bandingkan angka dengan jurnal.
+4. Selisih kecil karena jurnal manual → koreksi oleh Finance (jurnal pembalik). **Tidak ada koreksi otomatis.**
+5. Catat penyebab & tindakan di tiket Finance.
+
+## EfnLoyaltyLiabilityReconCritical
+
+Sama dengan di atas, tetapi |`diff_idr`| > ambang (sementara Rp100.000, nilai final menunggu Finance Q-F21-1). Eskalasi ke Finance pusat + lead teknis di hari yang sama; tahan settlement antar-PT (W-15) untuk PT terkait sampai jelas.
+
+## EfnLoyaltyLiabilityReconMissing
+
+Tidak ada baris `EFN_LOYALTY_RECON` untuk sebuah PT dalam 26 jam (padahal ada dalam 7 hari terakhir). Periksa cron akrual Odoo (`efn_loyalty_accounting`), konektivitas Odoo → BFF (mTLS), dan akun PLACEHOLDER (tanpa akun → cron mencatat galat + aktivitas Finance, tidak membuat jurnal).
+
 ## Batas
 - Rekonsiliasi BFF per jam hanya melihat data BFF; order yang tidak pernah ada di Odoo dideteksi oleh rekonsiliasi
   harian ETL di atas (G14), dengan latensi hingga 24 jam + `settle_hours` (6).

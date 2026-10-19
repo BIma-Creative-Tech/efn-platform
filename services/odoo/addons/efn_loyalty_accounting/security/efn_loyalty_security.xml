@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- Multi-company: kebijakan, outbox, dan akrual hanya terlihat di company yang diizinkan user. -->
+    <record id="efn_loyalty_policy_rule_company" model="ir.rule">
+        <field name="name">EFN loyalty policy: multi-company</field>
+        <field name="model_id" ref="model_efn_loyalty_policy"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_loyalty_policy_outbox_rule_company" model="ir.rule">
+        <field name="name">EFN loyalty policy outbox: multi-company</field>
+        <field name="model_id" ref="model_efn_loyalty_policy_outbox"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_loyalty_accrual_rule_company" model="ir.rule">
+        <field name="name">EFN loyalty accrual: multi-company</field>
+        <field name="model_id" ref="model_efn_loyalty_accrual"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+</odoo>
