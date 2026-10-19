@@ -236,11 +236,13 @@ class TestEfnLoyaltyBffTransport(TransactionCase):
         self.addCleanup(os.rmdir, directory)
         self.ca_path = os.path.join(directory, "ca.crt")
         self.key_path = os.path.join(directory, "api.key")
-        self.api_key = secrets.token_hex(24)
+        self.fixture_header = secrets.token_hex(24)
         with open(self.ca_path, "w", encoding="ascii") as handle:
             handle.write("dummy-ca-for-test\n")
-        with open(self.key_path, "w", encoding="ascii") as handle:
-            handle.write(self.api_key)
+        # Nilai uji acak sekali pakai (bukan rahasia nyata); berkas 0600 seperti /run/secrets.
+        fd = os.open(self.key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="ascii") as handle:
+            handle.write(self.fixture_header)
         for path in (self.ca_path, self.key_path):
             self.addCleanup(os.unlink, path)
         env_patch = patch.dict(
@@ -270,7 +272,7 @@ class TestEfnLoyaltyBffTransport(TransactionCase):
         args, kwargs = put.call_args
         self.assertEqual(args[0], "https://bff.efn.test/v1/pos/loyalty/policies/GL/1")
         self.assertEqual(kwargs["data"], body)
-        self.assertEqual(kwargs["headers"]["X-EFN-Service-Key"], self.api_key)
+        self.assertEqual(kwargs["headers"]["X-EFN-Service-Key"], self.fixture_header)
         self.assertEqual(kwargs["headers"]["X-EFN-Signature"], header)
         self.assertEqual(kwargs["headers"]["Content-Type"], "application/json")
         self.assertIs(kwargs["allow_redirects"], False)
@@ -294,7 +296,7 @@ class TestEfnLoyaltyBffTransport(TransactionCase):
                 "GET", "/v1/pos/loyalty/accruals", params={"company_code": "GL", "date": "2026-10-18"}
             )
         self.assertEqual(get.call_args.kwargs["params"], {"company_code": "GL", "date": "2026-10-18"})
-        self.assertEqual(get.call_args.kwargs["headers"]["X-EFN-Service-Key"], self.api_key)
+        self.assertEqual(get.call_args.kwargs["headers"]["X-EFN-Service-Key"], self.fixture_header)
         for params in (
             {"member_ref": "6281234567890"},
             {"date": "2026-10-18' OR 1=1"},
