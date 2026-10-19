@@ -30,6 +30,10 @@ ROUTE_ALLOWLIST = {
     # efn_pos_kds (Gelombang 14, r8 terverifikasi): GET saja, _efn_kds_check_device (grup perangkat
     # stasiun itu / manager POS + record rule + company), 404 seragam, Cache-Control no-store.
     ("/efn_kds/<int:station_id>", "user"): "efn_pos_kds/controllers/main.py: _efn_kds_check_device",
+    # efn_pii_l10n_id (G21, ADR-036 §0.8): override route CE unduhan XML Coretax; check_access('read') + grup
+    # account.group_account_invoice + semua lampiran milik l10n_id_efaktur_coretax.document; dekripsi di server.
+    ("<override>:EfnEfakturDownloadController.download_invoice_attachments", "user"): "efn_pii_l10n_id/controllers/"
+    "download_efaktur.py: check_access + account.group_account_invoice + res_model Coretax",
 }
 # Route pra-autentikasi yang sudah ditinjau: (path, auth) -> ID review. Saat ini kosong.
 PREAUTH_REVIEWED = {}

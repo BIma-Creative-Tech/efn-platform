@@ -16,6 +16,9 @@
 #     service selain BFF (+ Odoo untuk HMAC); saklar dev EFN_PAYMENT_SIMULATOR / ODOO_ONLINE_MOCK aktif di render prod
 #   - (G20) secret kanal di luar gl/pb/bcr/bcf; env ODOO_API_KEY_ONLINE_<KODE>_FILE tanpa secret ter-mount yang cocok;
 #     render dev tanpa ketiga kunci PII Odoo (odoo_pii_key_v1, odoo_pii_bidx_key, odoo_pii_name_key) di service odoo
+#   - (G21) loyalty_policy_signing_key di luar odoo + api-gateway atau tidak di-mount ke keduanya; render prod tanpa
+#     overlay PII me-mount odoo_pii_*; render prod-pii (docker-compose.pii.yml) tanpa ketiga kunci / tanpa
+#     EFN_ODOO_PII_REQUIRED=true
 #   - (at rest) service metabase tanpa secret metabase_encryption_key / dengan MB_ENCRYPTION_SECRET_KEY di env /
 #     dengan override entrypoint apa pun termasuk `[]`/`''` / dengan image resmi metabase/metabase (G16b, SEC-86)
 # Pengecualian hanya lewat ADR-022; tambahkan di sini dengan komentar alasan.
@@ -179,18 +182,38 @@ check_compose() {
       | [$k, (.value // ""), (if ($m | index("odoo_api_key_online_" + ($k | ascii_downcase))) != null then "1" else "0" end)]
       | @tsv' <<< "$json")
   # Kanal default GL (base) & HMAC event selalu diperiksa eksplisit (nama tetap), sisanya dari render
-  for sec in odoo_api_key_online_gl odoo_online_event_hmac "${secs[@]}"; do
+  for sec in odoo_api_key_online_gl odoo_online_event_hmac loyalty_policy_signing_key "${secs[@]}"; do
     allowed='["api-gateway"]'
-    [[ "$sec" == "odoo_online_event_hmac" ]] && allowed='["api-gateway","odoo"]'
+    [[ "$sec" == "odoo_online_event_hmac" || "$sec" == "loyalty_policy_signing_key" ]] && allowed='["api-gateway","odoo"]'
     [[ "$sec" == odoo_pii_* ]] && allowed='["odoo"]'
     jq -e --arg s "$sec" --argjson ok "$allowed" '
         [.services | to_entries[] | select([.value.secrets[]? | (.source // .)] | index($s) != null) | .key]
         | (. - $ok) | length == 0' <<< "$json" > /dev/null \
       || err "[$label] secret $sec di-mount ke service selain $allowed (least privilege, docs/04 §10.10)"
   done
+  # 6a) G21 (docs/04 §13.1 no. 3, L-61): kunci tanda tangan kebijakan poin WAJIB di-mount ke odoo (penanda tangan) DAN
+  #     api-gateway (pemverifikasi) dengan env *_FILE yang cocok; di luar keduanya sudah ditolak loop di atas.
+  local lp
+  for lp in odoo:EFN_LOYALTY_POLICY_SIGNING_KEY_FILE api-gateway:LOYALTY_POLICY_SIGNING_KEY_FILE; do
+    jq -e --arg svc "${lp%%:*}" --arg e "${lp#*:}" '
+        (.services[$svc] == null)
+        or (([.services[$svc].secrets[]? | (.source // .)] | index("loyalty_policy_signing_key") != null)
+            and ((.services[$svc].environment // {})[$e] == "/run/secrets/loyalty_policy_signing_key"))' <<< "$json" > /dev/null \
+      || err "[$label] ${lp%%:*}: secret loyalty_policy_signing_key tidak di-mount atau ${lp#*:} != /run/secrets/loyalty_policy_signing_key"
+  done
   # 6b) G20 E-38a (ADR-036 §0, docs/04 §12.5): render dev wajib me-mount KETIGA kunci PII Odoo ke odoo (key ring v1,
   #     blind index, token nama) dengan env *_FILE yang cocok; tanpa kunci token nama pencarian nama terenkripsi gagal.
-  if [[ "$label" == dev ]]; then
+  #     G21 AC-13: sama untuk render prod-pii (overlay docker-compose.pii.yml) + EFN_ODOO_PII_REQUIRED=true (mode terkunci).
+  #     Render prod/prod-online TANPA overlay tidak boleh me-mount kunci PII ke odoo (aktivasi PO, L-59).
+  if [[ "$label" == prod || "$label" == prod-online ]]; then
+    jq -e '[.services.odoo.secrets[]? | (.source // .) | select(startswith("odoo_pii_"))] | length == 0' <<< "$json" > /dev/null \
+      || err "[$label] odoo: kunci odoo_pii_* ter-mount tanpa overlay docker-compose.pii.yml (aktivasi PII = EFN_ODOO_PII_ENABLED, L-59)"
+  fi
+  if [[ "$label" == prod-pii ]]; then
+    jq -e '(.services.odoo.environment // {}).EFN_ODOO_PII_REQUIRED == "true"' <<< "$json" > /dev/null \
+      || err "[$label] odoo: EFN_ODOO_PII_REQUIRED wajib true di render produksi ber-PII (AC-13)"
+  fi
+  if [[ "$label" == dev || "$label" == prod-pii ]]; then
     local pk
     for pk in odoo_pii_key_v1:EFN_ODOO_PII_KEY_V1_FILE odoo_pii_bidx_key:EFN_ODOO_PII_BIDX_KEY_FILE \
               odoo_pii_name_key:EFN_ODOO_PII_NAME_KEY_FILE; do
@@ -283,6 +306,8 @@ case "$MODE" in
       [[ -f "$f" ]] && online_overlays+=(-f "$(basename -- "$f")")
     done
     check_compose prod-online -f docker-compose.yml -f docker-compose.prod.yml "${online_overlays[@]}"
+    # G21 AC-13: render prod + overlay kunci PII Odoo (hanya odoo, env *_FILE cocok, mode terkunci)
+    check_compose prod-pii -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.pii.yml
     check_files
     ;;
   *) echo "pemakaian: $0 [all|files]" >&2; exit 2 ;;

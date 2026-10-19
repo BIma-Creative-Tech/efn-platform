@@ -263,6 +263,25 @@ install -d -m 0700 /run/efn; exec 6> /run/efn/deploy.lock; flock -n 6
 SEQ=$((SEQ + 1)); make_release "N$SEQ" "$SEQ" 1.3.0; make_env "N$SEQ"; EFN_DEPLOY_LOCK_WAIT=2 run "N$SEQ"
 expect_fail "110b kunci host dipegang rotasi -> deploy ditolak setelah menunggu (SEC-120)" "dipegang proses lain"
 exec 6>&-
+# G21 AC-13: kunci PII Odoo produksi = host:disabled [SA] (dibuat Superadmin di host) -> TIDAK pernah dari stdin CI
+neg_env "110c ODOO_PII_KEY_V1 lewat stdin ditolak (AC-13, host:*)" "variabel tidak diizinkan: ODOO_PII_KEY_V1" \
+  "ODOO_PII_KEY_V1=$(openssl rand -base64 32)"
+neg_env "110d ODOO_PII_BIDX_KEY lewat stdin ditolak (AC-13, host:*)" "variabel tidak diizinkan: ODOO_PII_BIDX_KEY" \
+  "ODOO_PII_BIDX_KEY=$(openssl rand -base64 32)"
+neg_env "110e ODOO_PII_NAME_KEY lewat stdin ditolak (AC-13, host:*)" "variabel tidak diizinkan: ODOO_PII_NAME_KEY" \
+  "ODOO_PII_NAME_KEY=$(openssl rand -base64 32)"
+# G21 §13.1 no. 3: loyalty_policy_signing_key = secret GitHub Environment biasa (random) -> diterima dari stdin
+SEQ=$((SEQ + 1)); make_release "N$SEQ" "$SEQ" 1.3.0; make_env "N$SEQ" "LOYALTY_POLICY_SIGNING_KEY=$(openssl rand -base64 36)"
+run "N$SEQ"; expect_ok "110f LOYALTY_POLICY_SIGNING_KEY lewat stdin diterima (secret GitHub Environment)"
+# Saklar PII ada di config manifest bertanda tangan (bukan stdin); production ENABLED tanpa REQUIRED=true ditolak
+neg_env "110g EFN_ODOO_PII_ENABLED lewat stdin ditolak (SEC-50)" "variabel tidak diizinkan: EFN_ODOO_PII_ENABLED" \
+  "EFN_ODOO_PII_ENABLED=true"
+neg_man "110h production config EFN_ODOO_PII_ENABLED=true tanpa REQUIRED ditolak (AC-13)" "config manifest rilis tidak valid" \
+  '.config.EFN_ODOO_PII_ENABLED = "true"'
+neg_man "110i production config EFN_ODOO_PII_ENABLED=true + REQUIRED=false ditolak (AC-13)" "config manifest rilis tidak valid" \
+  '.config.EFN_ODOO_PII_ENABLED = "true" | .config.EFN_ODOO_PII_REQUIRED = "false"'
+SEQ=$((SEQ + 1)); make_release "N$SEQ" "$SEQ" 1.3.0 '.config.EFN_ODOO_PII_ENABLED = "true" | .config.EFN_ODOO_PII_REQUIRED = "true"'
+make_env "N$SEQ"; run "N$SEQ"; expect_ok "110j production config PII ENABLED + REQUIRED=true diterima (AC-13)"
 neg_man "40 config manifest multi-baris ditolak" "skema" '.config.RABBITMQ_STRICT_PERMISSIONS = "true\nIMAGE_ODOO=evil"'
 neg_man "41 kunci config manifest tidak dikenal ditolak" "skema" '.config.IMAGE_ODOO = "evil.example/odoo"'
 neg_man "101 saklar dev ODOO_ONLINE_MOCK di config manifest ditolak (G17)" "skema" '.config.ODOO_ONLINE_MOCK = "true"'
@@ -474,6 +493,59 @@ u "136 keluaran psql kosong -> deploy gagal (fail-closed)" 1 mods ''
 u "137 baris CRLF/spasi tetap dikenali" 0 mods 'efn_pos_refund_origin|installed\r\n'
 if [[ "$(printf 'efn_pos_refund_origin|to install\n' | efn_odoo_modules_missing)" == "efn_pos_refund_origin=to install" ]]; then
   ok "138 pesan menyebut modul + state"; else bad "138 pesan modul"; fi
+
+# ── G21 AC-13 (docs/04 §13.2, ADR-036 §0): saklar PII Odoo produksi + validasi kunci host ──────────────────────────
+vc "139 production EFN_ODOO_PII_ENABLED=true tanpa REQUIRED ditolak" 1 production EFN_ODOO_PII_ENABLED=true
+vc "140 production PII ENABLED + REQUIRED=false ditolak" 1 production EFN_ODOO_PII_ENABLED=true EFN_ODOO_PII_REQUIRED=false
+vc "141 production PII ENABLED + REQUIRED=true diterima" 0 production EFN_ODOO_PII_ENABLED=true EFN_ODOO_PII_REQUIRED=true
+vc "142 staging PII ENABLED tanpa REQUIRED diterima (default overlay true)" 0 staging EFN_ODOO_PII_ENABLED=true
+vc "143 EFN_ODOO_PII_ENABLED bukan boolean ditolak" 1 staging EFN_ODOO_PII_ENABLED=yes
+vc "144 EFN_ODOO_PII_REQUIRED bukan boolean ditolak" 1 production EFN_ODOO_PII_ENABLED=true EFN_ODOO_PII_REQUIRED=1
+vc "145 production PII mati (default) diterima (L-59)" 0 production
+vc "146 production PII mati + REQUIRED=true diterima" 0 production EFN_ODOO_PII_REQUIRED=true
+# Kunci host (nilai acak dibuat di sini; tidak pernah dicetak). mkkeys <dir> -> 3 kunci 32 byte berbeda (.txt)
+PK=$(mktemp -d)
+mkkeys() {
+  rm -rf "$1"; mkdir -p "$1"
+  local n
+  for n in odoo_pii_key_v1 odoo_pii_bidx_key odoo_pii_name_key; do openssl rand -base64 32 | tr -d '\n' > "$1/$n.txt"; done
+}
+mkkeys "$PK/ok"
+u "147 tiga kunci 32 byte berbeda diterima" 0 efn_validate_pii_keys "$PK/ok"
+mkkeys "$PK/nl"; for f in "$PK"/nl/*.txt; do echo >> "$f"; done
+u "148 newline penutup diterima" 0 efn_validate_pii_keys "$PK/nl"
+mkkeys "$PK/ph"; printf 'disabled' > "$PK/ph/odoo_pii_name_key.txt"
+u "149 placeholder 'disabled' ditolak" 1 efn_validate_pii_keys "$PK/ph"
+mkkeys "$PK/miss"; rm -f "$PK/miss/odoo_pii_bidx_key.txt"
+u "150 kunci hilang ditolak" 1 efn_validate_pii_keys "$PK/miss"
+mkkeys "$PK/empty"; : > "$PK/empty/odoo_pii_key_v1.txt"
+u "151 kunci kosong ditolak" 1 efn_validate_pii_keys "$PK/empty"
+mkkeys "$PK/dup"; cp "$PK/dup/odoo_pii_key_v1.txt" "$PK/dup/odoo_pii_bidx_key.txt"
+u "152 dua kunci identik ditolak (SEC-140 c)" 1 efn_validate_pii_keys "$PK/dup"
+mkkeys "$PK/short"; openssl rand -base64 16 | tr -d '\n' > "$PK/short/odoo_pii_key_v1.txt"
+u "153 kunci 16 byte ditolak" 1 efn_validate_pii_keys "$PK/short"
+mkkeys "$PK/hex"; openssl rand -hex 32 | tr -d '\n' > "$PK/hex/odoo_pii_name_key.txt"
+u "154 kunci hex (bukan base64 32 byte) ditolak" 1 efn_validate_pii_keys "$PK/hex"
+mkkeys "$PK/noncanon"; printf '%s' "$(printf 'A%.0s' {1..42})B=" > "$PK/noncanon/odoo_pii_key_v1.txt"
+u "155 base64 non-kanonik (bit sisa != 0) ditolak" 1 efn_validate_pii_keys "$PK/noncanon"
+mkkeys "$PK/multi"; { openssl rand -base64 32; openssl rand -base64 32; } > "$PK/multi/odoo_pii_bidx_key.txt"
+u "156 file multi-baris ditolak" 1 efn_validate_pii_keys "$PK/multi"
+mkkeys "$PK/link"; mv "$PK/link/odoo_pii_key_v1.txt" "$PK/link/real.txt"; ln -s real.txt "$PK/link/odoo_pii_key_v1.txt"
+u "157 kunci symlink ditolak" 1 efn_validate_pii_keys "$PK/link"
+# Pesan galat tidak memuat nilai kunci
+mkkeys "$PK/leak"; cp "$PK/leak/odoo_pii_key_v1.txt" "$PK/leak/odoo_pii_name_key.txt"
+leak_msg=$(efn_validate_pii_keys "$PK/leak" 2>&1 || true)
+if [[ -n "$leak_msg" && "$leak_msg" != *"$(cat "$PK/leak/odoo_pii_key_v1.txt")"* ]]; then
+  ok "158 pesan galat kunci tanpa nilai kunci"; else RC=1 OUT="(pesan disembunyikan)"; bad "158 pesan galat kunci"; fi
+rm -rf "$PK"
+# Status modul efn_pii di DB vs saklar overlay (deploy.sh, sebelum `up`)
+u "159 efn_pii installed tanpa ENABLED -> deploy gagal" 1 efn_pii_module_state_ok false installed
+u "160 efn_pii installed + ENABLED -> lulus" 0 efn_pii_module_state_ok true installed
+u "161 efn_pii 'to upgrade' tanpa ENABLED -> gagal" 1 efn_pii_module_state_ok false "to upgrade"
+u "162 efn_pii 'to remove' tanpa ENABLED -> gagal" 1 efn_pii_module_state_ok false "to remove"
+u "163 efn_pii uninstalled tanpa ENABLED -> lulus" 0 efn_pii_module_state_ok false uninstalled
+u "164 efn_pii tidak dikenal DB (kosong) -> lulus" 0 efn_pii_module_state_ok false ""
+u "165 status ber-CR (psql) tetap dikenali" 1 efn_pii_module_state_ok false $'installed\r'
 
 echo "RINGKASAN efn-deploy: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]

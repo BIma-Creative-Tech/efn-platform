@@ -98,12 +98,17 @@ done
 # shellcheck disable=SC2086
 run method_HEAD deny $BFF -I -H "$H_AUTH" "$GW$OK_PATH"
 
-# ── Path di luar 10 metode / normalisasi / encoded ──────────────────────────────────────────────────────
+# ── Path di luar 12 metode / normalisasi / encoded ──────────────────────────────────────────────────────
 post path_res_users_search deny /json/2/res.users/search_read
 post path_sale_order_write deny /json/2/sale.order/write
 post path_online_order_read deny /json/2/efn.online.order/read
 post path_staff_action_ready deny /json/2/efn.online.order/action_efn_ready
 post path_handover_wizard deny /json/2/efn.online.handover.wizard/action_confirm
+# G21 §13.5 (path ke-12): metode faktur pembeli hanya di model efn.online.order; partner tidak bisa ditulis langsung
+post path_invoice_party_wrong_model deny /json/2/efn.online.channel/efn_online_set_invoice_party
+post path_invoice_party_suffix deny /json/2/efn.online.order/efn_online_set_invoice_party_v2
+post path_partner_create deny /json/2/res.partner/create
+post path_partner_search deny /json/2/res.partner/search_read
 post path_web_dataset deny /web/dataset/call_kw/efn.online.order/efn_online_status
 post path_jsonrpc deny /jsonrpc
 post path_xmlrpc deny /xmlrpc/2/object
@@ -177,11 +182,12 @@ run hdr_auth_bearer_short deny $BFF -X POST -H "$H_CT" -H "Authorization: bearer
 # shellcheck disable=SC2086
 run body_too_large deny $BFF -X POST -H "$H_CT" -H "$H_AUTH" --data-binary @/t/big.json "$GW$OK_PATH"
 
-# ── Positif: 11 path persis LOLOS filter (status dari Odoo, bukan dari gateway) ──────────────────────────
+# ── Positif: 12 path persis LOLOS filter (status dari Odoo, bukan dari gateway) ──────────────────────────
 for p in efn.online.channel/efn_online_catalog efn.online.channel/efn_online_stock efn.online.channel/efn_online_image \
          efn.online.channel/efn_online_quote efn.online.order/efn_online_place efn.online.order/efn_online_mark_paid \
          efn.online.order/efn_online_cancel efn.online.order/efn_online_refund efn.online.order/efn_online_refund_settled \
-         efn.online.order/efn_online_status efn.online.order/efn_online_counter_refund_authorize; do
+         efn.online.order/efn_online_status efn.online.order/efn_online_counter_refund_authorize \
+         efn.online.order/efn_online_set_invoice_party; do
   post "allowed:$p" pass "/json/2/$p"
 done
 # shellcheck disable=SC2086

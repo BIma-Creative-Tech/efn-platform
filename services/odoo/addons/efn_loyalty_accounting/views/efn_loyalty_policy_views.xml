@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_loyalty_policy_view_list" model="ir.ui.view">
+        <field name="name">efn.loyalty.policy.list</field>
+        <field name="model">efn.loyalty.policy</field>
+        <field name="arch" type="xml">
+            <list decoration-muted="state == 'rejected'" decoration-info="state == 'draft'">
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="company_code"/>
+                <field name="version"/>
+                <field name="effective_from"/>
+                <field name="earn_idr_per_point"/>
+                <field name="redeem_min_points"/>
+                <field name="redeem_max_pct"/>
+                <field name="point_value_idr" optional="show"/>
+                <field name="maker_id" optional="show"/>
+                <field name="approved_by_id" optional="show"/>
+                <field name="state" widget="badge"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_loyalty_policy_view_form" model="ir.ui.view">
+        <field name="name">efn.loyalty.policy.form</field>
+        <field name="model">efn.loyalty.policy</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_efn_approve" type="object" string="Setujui" class="btn-primary"
+                            invisible="state != 'draft' or not id" groups="account.group_account_manager"
+                            confirm="Setujui kebijakan ini? Setelah disetujui kebijakan tidak dapat diubah dan langsung dipublikasikan ke BFF."/>
+                    <button name="action_efn_reject" type="object" string="Tolak"
+                            invisible="state != 'draft' or not id" groups="account.group_account_manager"
+                            confirm="Tolak kebijakan ini?"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,approved,published"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="display_label"/></h1>
+                    </div>
+                    <group>
+                        <group string="Kebijakan">
+                            <field name="company_id" readonly="state != 'draft' or id" groups="base.group_multi_company"/>
+                            <field name="company_code"/>
+                            <field name="is_global" invisible="not is_global"/>
+                            <field name="version"/>
+                            <field name="effective_from" readonly="state != 'draft'"/>
+                        </group>
+                        <group string="Persetujuan (empat mata)">
+                            <field name="maker_id"/>
+                            <field name="last_editor_id"/>
+                            <field name="approved_by_id" invisible="not approved_by_id"/>
+                            <field name="approved_at" invisible="not approved_at"/>
+                            <field name="rejected_by_id" invisible="not rejected_by_id"/>
+                            <field name="rejected_at" invisible="not rejected_at"/>
+                            <field name="published_at" invisible="not published_at"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Earn">
+                            <field name="earn_idr_per_point" readonly="state != 'draft'"/>
+                            <field name="earn_on_money_only" readonly="state != 'draft'"/>
+                            <field name="max_points_per_order" readonly="state != 'draft'"/>
+                            <field name="daily_max_points_member" readonly="state != 'draft'"/>
+                            <field name="pos_config_hourly_max" readonly="state != 'draft'"/>
+                            <field name="company_hourly_max" readonly="state != 'draft'"/>
+                        </group>
+                        <group string="Tukar poin">
+                            <field name="redeem_min_points" readonly="state != 'draft'"/>
+                            <field name="redeem_max_pct" readonly="state != 'draft'"/>
+                            <field name="point_value_idr" invisible="not is_global" readonly="state != 'draft'"/>
+                        </group>
+                    </group>
+                    <field name="note" readonly="state != 'draft'" placeholder="Dasar keputusan (nomor memo Finance, dsb.)"/>
+                    <field name="outbox_ids" invisible="not outbox_ids">
+                        <list>
+                            <field name="idempotency_key"/>
+                            <field name="state" widget="badge"/>
+                            <field name="attempt_count"/>
+                            <field name="last_status"/>
+                            <field name="last_error"/>
+                            <field name="done_at"/>
+                        </list>
+                    </field>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="efn_loyalty_policy_view_search" model="ir.ui.view">
+        <field name="name">efn.loyalty.policy.search</field>
+        <field name="model">efn.loyalty.policy</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="company_id"/>
+                <field name="version"/>
+                <filter name="filter_draft" string="Menunggu persetujuan" domain="[('state', '=', 'draft')]"/>
+                <filter name="filter_active" string="Disetujui/Dipublikasikan" domain="[('state', 'in', ('approved', 'published'))]"/>
+                <group>
+                    <filter name="group_company" string="Company" context="{'group_by': 'company_id'}"/>
+                    <filter name="group_state" string="Status" context="{'group_by': 'state'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_efn_loyalty_policy" model="ir.actions.act_window">
+        <field name="name">Kebijakan Poin EFN</field>
+        <field name="res_model">efn.loyalty.policy</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Buat kebijakan poin per PT</p>
+            <p>Draft dibuat EFN / Loyalty Manager, disetujui Accounting / Manager PT yang sama, lalu dipublikasikan ke BFF.</p>
+        </field>
+    </record>
+</odoo>

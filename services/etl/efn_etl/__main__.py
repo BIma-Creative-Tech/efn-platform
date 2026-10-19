@@ -233,6 +233,7 @@ def main() -> None:
         settings.points_product_codes,
         age_out,
         points_payment=settings.loyalty_points_mode == "payment",
+        partner_region=settings.partner_region_enabled,
     )
     if settings.gl_enabled:
         jobs.extend(GL_JOBS)

@@ -1,0 +1,246 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G21 W-31 (docs/04 §13.3 no. 1, keputusan 18-24): templat departemen hr CE per PT.
+
+     noupdate="1": dimuat sekali saat install. Pengguna (HR/Superadmin) boleh mengganti nama, menyusun induk
+     (parent_id), mengisi manajer (manager_id = karyawan), atau MENGARSIPKAN departemen yang tidak dipakai PT itu
+     (mis. "Operasional Toko & Outlet" di Holding EFN) tanpa ditimpa saat upgrade. Jangan menghapus record yang
+     dipakai efn_role (jabatan -> peran): arsipkan saja.
+
+     Templat SAMA untuk 6 PT (keputusan klien belum ada tentang departemen mana yang berlaku per PT -> Q-ORG-1).
+     company_id ditulis eksplisit: hr.department.company_id = compute stored readonly=False dari parent_id dengan
+     default env.company (terverifikasi hr/models/hr_department.py 19.0) -> tanpa induk, nilai eksplisit dipakai.
+     Nama orang TIDAK ada di data (18-24, 18-40): manajer & karyawan diisi klien lewat UI.
+     Nama tanpa " / " karena complete_name 19.0 memakai " / " sebagai pemisah hierarki.
+
+     xmlid: dept_<kode>_<pt>, pt = efn | gl | pb | bcr | bcf | farm (kode entitas 18-41; xmlid company lama
+     company_rtl = GL, company_fnb = PB dipertahankan L-48). -->
+<odoo noupdate="1">
+
+    <!-- ===================== Holding EFN (EFN) ===================== -->
+    <record id="dept_board_efn" model="hr.department">
+        <field name="name">Direksi</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+    </record>
+    <record id="dept_finance_efn" model="hr.department">
+        <field name="name">Keuangan &amp; Akuntansi</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+    </record>
+    <record id="dept_store_efn" model="hr.department">
+        <field name="name">Operasional Toko &amp; Outlet</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+    </record>
+    <record id="dept_merch_efn" model="hr.department">
+        <field name="name">Merchandising &amp; Pengadaan</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+    </record>
+    <record id="dept_warehouse_efn" model="hr.department">
+        <field name="name">Gudang &amp; Logistik</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+    </record>
+    <record id="dept_cs_efn" model="hr.department">
+        <field name="name">Layanan Pelanggan (CS)</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+    </record>
+    <record id="dept_online_efn" model="hr.department">
+        <field name="name">Penjualan Online &amp; Loyalty</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+    </record>
+    <record id="dept_it_efn" model="hr.department">
+        <field name="name">IT</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+    </record>
+    <record id="dept_audit_efn" model="hr.department">
+        <field name="name">Audit Internal</field>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+    </record>
+
+    <!-- ===================== PT Grand Lucky (GL, xmlid company_rtl) ===================== -->
+    <record id="dept_board_gl" model="hr.department">
+        <field name="name">Direksi</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+    </record>
+    <record id="dept_finance_gl" model="hr.department">
+        <field name="name">Keuangan &amp; Akuntansi</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+    </record>
+    <record id="dept_store_gl" model="hr.department">
+        <field name="name">Operasional Toko &amp; Outlet</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+    </record>
+    <record id="dept_merch_gl" model="hr.department">
+        <field name="name">Merchandising &amp; Pengadaan</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+    </record>
+    <record id="dept_warehouse_gl" model="hr.department">
+        <field name="name">Gudang &amp; Logistik</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+    </record>
+    <record id="dept_cs_gl" model="hr.department">
+        <field name="name">Layanan Pelanggan (CS)</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+    </record>
+    <record id="dept_online_gl" model="hr.department">
+        <field name="name">Penjualan Online &amp; Loyalty</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+    </record>
+    <record id="dept_it_gl" model="hr.department">
+        <field name="name">IT</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+    </record>
+    <record id="dept_audit_gl" model="hr.department">
+        <field name="name">Audit Internal</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+    </record>
+
+    <!-- ===================== PT Paris Baguette (PB, xmlid company_fnb) ===================== -->
+    <record id="dept_board_pb" model="hr.department">
+        <field name="name">Direksi</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+    </record>
+    <record id="dept_finance_pb" model="hr.department">
+        <field name="name">Keuangan &amp; Akuntansi</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+    </record>
+    <record id="dept_store_pb" model="hr.department">
+        <field name="name">Operasional Toko &amp; Outlet</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+    </record>
+    <record id="dept_merch_pb" model="hr.department">
+        <field name="name">Merchandising &amp; Pengadaan</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+    </record>
+    <record id="dept_warehouse_pb" model="hr.department">
+        <field name="name">Gudang &amp; Logistik</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+    </record>
+    <record id="dept_cs_pb" model="hr.department">
+        <field name="name">Layanan Pelanggan (CS)</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+    </record>
+    <record id="dept_online_pb" model="hr.department">
+        <field name="name">Penjualan Online &amp; Loyalty</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+    </record>
+    <record id="dept_it_pb" model="hr.department">
+        <field name="name">IT</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+    </record>
+    <record id="dept_audit_pb" model="hr.department">
+        <field name="name">Audit Internal</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+    </record>
+
+    <!-- ===================== Bacha Coffee Retail (BCR) ===================== -->
+    <record id="dept_board_bcr" model="hr.department">
+        <field name="name">Direksi</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+    </record>
+    <record id="dept_finance_bcr" model="hr.department">
+        <field name="name">Keuangan &amp; Akuntansi</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+    </record>
+    <record id="dept_store_bcr" model="hr.department">
+        <field name="name">Operasional Toko &amp; Outlet</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+    </record>
+    <record id="dept_merch_bcr" model="hr.department">
+        <field name="name">Merchandising &amp; Pengadaan</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+    </record>
+    <record id="dept_warehouse_bcr" model="hr.department">
+        <field name="name">Gudang &amp; Logistik</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+    </record>
+    <record id="dept_cs_bcr" model="hr.department">
+        <field name="name">Layanan Pelanggan (CS)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+    </record>
+    <record id="dept_online_bcr" model="hr.department">
+        <field name="name">Penjualan Online &amp; Loyalty</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+    </record>
+    <record id="dept_it_bcr" model="hr.department">
+        <field name="name">IT</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+    </record>
+    <record id="dept_audit_bcr" model="hr.department">
+        <field name="name">Audit Internal</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+    </record>
+
+    <!-- ===================== Bacha Coffee F&B (BCF) ===================== -->
+    <record id="dept_board_bcf" model="hr.department">
+        <field name="name">Direksi</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+    </record>
+    <record id="dept_finance_bcf" model="hr.department">
+        <field name="name">Keuangan &amp; Akuntansi</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+    </record>
+    <record id="dept_store_bcf" model="hr.department">
+        <field name="name">Operasional Toko &amp; Outlet</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+    </record>
+    <record id="dept_merch_bcf" model="hr.department">
+        <field name="name">Merchandising &amp; Pengadaan</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+    </record>
+    <record id="dept_warehouse_bcf" model="hr.department">
+        <field name="name">Gudang &amp; Logistik</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+    </record>
+    <record id="dept_cs_bcf" model="hr.department">
+        <field name="name">Layanan Pelanggan (CS)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+    </record>
+    <record id="dept_online_bcf" model="hr.department">
+        <field name="name">Penjualan Online &amp; Loyalty</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+    </record>
+    <record id="dept_it_bcf" model="hr.department">
+        <field name="name">IT</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+    </record>
+    <record id="dept_audit_bcf" model="hr.department">
+        <field name="name">Audit Internal</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+    </record>
+
+    <!-- ===================== FARM ===================== -->
+    <record id="dept_board_farm" model="hr.department">
+        <field name="name">Direksi</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+    </record>
+    <record id="dept_finance_farm" model="hr.department">
+        <field name="name">Keuangan &amp; Akuntansi</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+    </record>
+    <record id="dept_store_farm" model="hr.department">
+        <field name="name">Operasional Toko &amp; Outlet</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+    </record>
+    <record id="dept_merch_farm" model="hr.department">
+        <field name="name">Merchandising &amp; Pengadaan</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+    </record>
+    <record id="dept_warehouse_farm" model="hr.department">
+        <field name="name">Gudang &amp; Logistik</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+    </record>
+    <record id="dept_cs_farm" model="hr.department">
+        <field name="name">Layanan Pelanggan (CS)</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+    </record>
+    <record id="dept_online_farm" model="hr.department">
+        <field name="name">Penjualan Online &amp; Loyalty</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+    </record>
+    <record id="dept_it_farm" model="hr.department">
+        <field name="name">IT</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+    </record>
+    <record id="dept_audit_farm" model="hr.department">
+        <field name="name">Audit Internal</field>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+    </record>
+</odoo>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- E-44: parameter operasional (bukan nilai poin; nilai poin = efn.loyalty.policy). PLACEHOLDER configurable. -->
+<odoo noupdate="1">
+    <!-- Hari ke belakang yang dikejar cron akrual bila BFF sempat mati (1..31). -->
+    <record id="param_accrual_lookback_days" model="ir.config_parameter">
+        <field name="key">efn.loyalty.accrual_lookback_days</field>
+        <field name="value">3</field>
+    </record>
+    <!-- Umur maksimum outbox publikasi sebelum gagal final (jam). Tanpa kunci tanda tangan tidak dihitung. -->
+    <record id="param_policy_outbox_max_hours" model="ir.config_parameter">
+        <field name="key">efn.loyalty.policy_outbox_max_hours</field>
+        <field name="value">72</field>
+    </record>
+    <!-- Breakage poin kedaluwarsa (W-17) disiapkan, aktif di G22 setelah keputusan Finance/Legal. -->
+    <record id="param_breakage_journal_enabled" model="ir.config_parameter">
+        <field name="key">efn.loyalty.breakage_journal_enabled</field>
+        <field name="value">False</field>
+    </record>
+</odoo>

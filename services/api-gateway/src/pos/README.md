@@ -92,3 +92,26 @@ Belum: kebijakan Finance atas utang poin & restore poin kedaluwarsa (placeholder
 - Ada keduanya → `expected = round(min(Σ refund_goods_incl, T) × V ÷ T) − Σ restore sebelumnya` (rumus sama dengan alokasi Odoo Q-F18-4), toleransi **Rp1**, tidak bergantung kategori earn. `order_goods_incl` belum ada (commit lama) → T = `amount_total` reservasi, toleransi max(nilai poin, `POS_OTP_AMOUNT_TOLERANCE_PCT`% × V).
 - Tanpa `refund_goods_incl` (event lama): rasio eligible bila > 0 (toleransi `LOYALTY_RESTORE_TOLERANCE_PCT`); rasio 0 (refund barang dikecualikan) → TIDAK ditolak, anomali `restore_value_unverified` (warning), restore dibatasi sisa redeem.
 - Hold/review: reverse yang ditolak `restore_value_mismatch` dapat dikirim ulang dengan `restore_approved: true` setelah persetujuan supervisor di Odoo → cek nilai dilewati, restore tetap dibatasi sisa redeem, anomali `restore_value_override` (warning) + kolom `loyalty_pos_reverse.restore_approved`.
+
+## G21 — keuangan poin per PT (docs/04 §13.1 no. 3–7, L-61/L-62; ADR-020 revisi Proposed, ADR-001 §poin)
+File: `pos-loyalty-finance.controller.ts`, `loyalty-policy.guard.ts`, `loyalty-accrual.service.ts`; logika kebijakan di `src/loyalty/` (lihat README-nya). Migrasi `10-platform-g21.sql`.
+
+### `PUT /v1/pos/loyalty/policies/{company_code}/{version}`
+- Guard: `ServiceKeyGuard` (POS) → `LoyaltyPolicySignatureGuard`: `X-EFN-Signature: t=<unix>,v1=<hex HMAC-SHA256(key, "<t>." + rawBody)>`, |now − t| ≤ 300 s, kunci file `LOYALTY_POLICY_SIGNING_KEY_FILE=/run/secrets/loyalty_policy_signing_key` (di-trim, byte UTF-8, ≥ 32 byte — sama dengan Odoo `efn_loyalty_accounting/models/signing.py`; wajib di luar `APP_ENV=dev`, literal ditolak; ≠ `odoo_bff_api_key`). Kunci tidak ada (dev) → 503.
+- Body (divalidasi dari `rawBody`, ≤ 8 KB, `additionalProperties: false`): `{ schema_version: 1, company_code, version, effective_from, approved_by_uid, params: {earn_idr_per_point, redeem_min_points, redeem_max_pct, max_points_per_order, daily_max_points_member, pos_config_hourly_max, company_hourly_max, earn_on_money_only}, point_value_idr? }` — 8 kunci params wajib (juga EFN), integer ≥ 0 (earn_idr_per_point, redeem_min_points, max_points_per_order ≥ 1; redeem_max_pct ≤ 100), `point_value_idr` hanya EFN. `effective_from` ISO berzona atau `YYYY-MM-DD HH:MM:SS` UTC.
+- Respons 200 `{ ok: true, company_code, version, status: "stored" | "duplicate" }`. Galat: 400 `invalid_request` (skema/path ≠ body), 401 `invalid_signature`, 409 `policy_conflict` (versi sama isi beda; sidik kanonik), 422 `policy_out_of_bounds` (plafon `LOYALTY_POLICY_CEILING_*`). Odoo: 400/409/422 final, 401/404/408/429/5xx retry.
+
+### `GET /v1/pos/loyalty/params?company_code=<PT>`
+Kebijakan aktif PT (fallback env + warning). Field §9.1 lama + aditif `company_code, source ("policy"|"env"), policy_version, point_value_version, max_points_per_order, daily_max_points_member, pos_config_hourly_max, company_hourly_max`. Tanpa `company_code` → env murni (kompatibel mundur). Earn memakai kebijakan PT order; reserve memakai min/persen PT penebus + nilai tukar global EFN; `loyalty_pos_earn.policy_version` mencatat versi. Restore memakai nilai tukar saat redeem (Σ value_idr ÷ Σ points reservasi committed).
+
+### `GET /v1/pos/loyalty/accruals?company_code=&date=YYYY-MM-DD`
+Service key POS. Respons integer IDR (poin × nilai tukar global yang berlaku di akhir tanggal):
+`{ company_code, date, earned_value_idr, earn_reversed_value_idr, redeemed_value_idr_by_issuer: {<issuer>: n}, restored_value_idr, expired_value_idr, closing_liability_idr, generated_at }` + aditif `point_value_idr, point_value_version, restored_value_idr_by_issuer, redeemed_value_idr_as_issuer, restored_value_idr_as_issuer, forfeited_value_idr` + **L-66 (mengikat)** `redeemed_value_idr_as_issuer_by_redeemer` dan `restored_value_idr_as_issuer_by_redeemer` = `{ <PT penebus>: n }` atas lot PT yang diminta yang ditukar/dipulihkan di PT LAIN (kunci PT sendiri tidak ada; `{}` bila kosong). Invarian (diperiksa BFF sebelum menjawab): Σ map + `*_by_issuer[PT sendiri]` = `*_as_issuer`. `company_code`/`date` = permintaan persis.
+Definisi (hari WIB [00:00, 24:00)): earned = kredit lot terbitan PT; earn_reversed = clawback lot PT; redeemed_by_issuer = penukaran DI PT per penerbit (kunci PT sendiri = sama PT); restored = pengembalian DI PT; expired = sisa lot PT yang hangus pada tanggal itu; closing = Σ lot PT hidup di akhir tanggal (lot hangus tepat 00:00 berikutnya masih termasuk). Entri "lahir kedaluwarsa" (clawback ke lot yang sudah hangus) dikecualikan. Deterministik untuk tanggal lampau; tanggal hari ini/masa depan atau < `LOYALTY_ACCRUAL_CLOSE_GRACE_SECONDS` (300) setelah tengah malam → 422 `date_not_closed`. Snapshot REPEATABLE READ READ ONLY.
+
+### Rekonsiliasi ringan BFF
+`LoyaltyReconService` kini memakai PLAFON (`LOYALTY_POLICY_CEILING_*`) sebagai aturan earn (default = env → perilaku lama).
+
+### Belum (G21)
+- Rate limit khusus endpoint akrual (hanya service key; dipanggil cron 1×/PT/hari × 4 tanggal).
+- Definisi jurnal Odoo untuk penukaran lintas PT memakai `redeemed_value_idr_by_issuer` di PT penebus, sedangkan `closing_liability_idr` BFF berbasis PENERBIT — rekonsiliasi akun liabilitas per PT hanya cocok bila jurnal Odoo juga berbasis penerbit (lihat laporan agent, perlu konfirmasi Finance/lead).

@@ -52,8 +52,9 @@ POSITIVE_PHONE_OPERATORS = ("ilike", "like", "=ilike", "=like", "=")
 class ResPartner(models.Model):
     _inherit = "res.partner"
 
-    # atribut yang dibaca EfnPiiChar / pii_model
+    # atribut yang dibaca EfnPiiChar / pii_model (modul jembatan, mis. efn_pii_l10n_id, memperluas daftar ini)
     _efn_pii_fields = PII_FIELDS
+    _efn_pii_bidx_sources = BIDX_SOURCES
     _efn_pii_bidx = {
         "phone": ("efn_phone_bidx", "phone"),
         "email": ("efn_email_bidx", "email"),
@@ -187,10 +188,14 @@ class ResPartner(models.Model):
     # ------------------------------------------------------------------ compute
     @api.depends("phone", "email", "vat", PROTECTED_FIELD)
     def _compute_efn_pii_bidx(self):
+        self._efn_pii_fill_bidx(BIDX_SOURCES)
+
+    def _efn_pii_fill_bidx(self, sources):
+        """Isi kolom `efn_<field>_bidx` untuk ``sources`` (dipakai juga modul jembatan, mis. NIK)."""
         ring = None
         for partner in self:
             protected = partner.sudo()[PROTECTED_FIELD]
-            for fname in BIDX_SOURCES:
+            for fname in sources:
                 value = False
                 raw = partner[fname] if protected else False
                 if raw == kr.PLACEHOLDER:
@@ -220,7 +225,9 @@ class ResPartner(models.Model):
                 partner[TOKENS_FIELD] = False
                 continue
             ring = ring or pm.require_keys(self.env)
-            partner[TOKENS_FIELD] = record_name_tokens(ring, name or "", complete_name or "")
+            # SEC-149: padding deterministik per (tabel, id, token asli) -> hitung ulang nama sama = kolom identik
+            rid = partner.id if isinstance(partner.id, int) else partner._origin.id
+            partner[TOKENS_FIELD] = record_name_tokens(ring, name or "", complete_name or "", self._table, rid)
 
     @api.depends(lambda self: [*(self._phone_get_sanitize_triggers() or []), PROTECTED_FIELD])
     def _compute_phone_sanitized(self):
@@ -264,8 +271,13 @@ class ResPartner(models.Model):
     def _mail_track(self, tracked_fields, initial_values):
         """Nilai field cakupan partner terlindungi tidak pernah ditulis ke mail.tracking.value."""
         if any(self.sudo().mapped(PROTECTED_FIELD)):
-            tracked_fields = {k: v for k, v in tracked_fields.items() if k not in TRACKING_EXCLUDED}
+            excluded = self._efn_pii_tracking_excluded()
+            tracked_fields = {k: v for k, v in tracked_fields.items() if k not in excluded}
         return super()._mail_track(tracked_fields, initial_values)
+
+    @api.model
+    def _efn_pii_tracking_excluded(self):
+        return TRACKING_EXCLUDED | frozenset(self._efn_pii_fields)
 
     # ------------------------------------------------------------------ create / write / copy
     def copy_data(self, default=None):
@@ -281,6 +293,11 @@ class ResPartner(models.Model):
                 else:
                     vals.pop(PROTECTED_FIELD, None)
         return vals_list
+
+    @api.model
+    def _create(self, data_list):
+        # SEC-148: id baru dicatat agar efnpii1 hanya sah sampai diikat oleh create ini
+        return pm.created(super()._create(data_list))
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -310,7 +327,7 @@ class ResPartner(models.Model):
         protected_before = self.browse(self.sudo().filtered(PROTECTED_FIELD).ids)
         if PROTECTED_FIELD in vals and not vals[PROTECTED_FIELD] and protected_before:
             raise UserError(_("Penanda data pribadi terlindungi bersifat satu arah dan tidak bisa dicabut."))
-        pii_touch = any(fname in vals for fname in PII_FIELDS)
+        pii_touch = any(fname in vals for fname in self._efn_pii_fields)
         becoming = self.browse()
         if vals.get(PROTECTED_FIELD):
             becoming = self - protected_before
@@ -346,8 +363,18 @@ class ResPartner(models.Model):
             return
         pm.require_keys(self.env)
         pm.encrypt_existing(todo)
-        pm.redact_tracking(self.env, self._name, todo.ids, sorted(TRACKING_EXCLUDED))
+        pm.redact_tracking(self.env, self._name, todo.ids, sorted(self._efn_pii_tracking_excluded()))
         todo.with_context(**{pm.INTERNAL_CONTEXT_KEY: pm.INTERNAL_TOKEN}).write({PROTECTED_FIELD: True})
+        todo._efn_pii_after_protect()
+
+    def _efn_pii_after_protect(self):
+        """Hook setelah partner ``self`` menjadi terlindungi: salinan data pribadi di model lain ikut dienkripsi.
+
+        efn_pii: rekening bank (`res.partner.bank`, Q-PII9) dan email antrean (`mail.mail` penerima, SEC-153).
+        Modul jembatan memperluas (efn_pii_account: `account.move.invoice_partner_display_name`).
+        """
+        self.env["res.partner.bank"]._efn_pii_protect_for_partners(self)
+        self.env["mail.mail"]._efn_pii_protect_for_partners(self)
 
     # ------------------------------------------------------------------ migrasi (shell/Superadmin)
     @api.model
@@ -367,25 +394,42 @@ class ResPartner(models.Model):
             self.env.cr.execute(
                 SQL("SELECT id FROM res_partner WHERE efn_pii_protected AND id IN %s ORDER BY id", tuple(ids) or (0,))
             )
+        full_run = ids is None
         ids = [row[0] for row in self.env.cr.fetchall()]
-        totals = {"partners": len(ids), "bound": 0, "encrypted": 0, "failed": 0}
-        names = (TOKENS_FIELD, "email_normalized", *map(bidx_field_name, BIDX_SOURCES))
-        recompute = [self._fields[name] for name in names]
+        totals = {"partners": len(ids), "bound": 0, "encrypted": 0, "failed": 0, "unbound": 0}
+        names = (TOKENS_FIELD, "email_normalized", *map(bidx_field_name, self._efn_pii_bidx_sources))
+        recompute = [self._fields[name] for name in names if name in self._fields]
+        # SEC-148: efnpii1 hanya dikonversi dalam mode migrasi (env EFN_ODOO_PII_ACCEPT_V1=true, kait DB kosong)
+        allow_v1 = pm.migration_allows_v1(self.env)
+        if not allow_v1:
+            # record ber-efnpii1 dilewati seluruhnya (baca = pengganti; blind index/token tidak boleh dihitung dari
+            # nilai pengganti). Jalankan ulang dalam mode migrasi.
+            skipped = set(pm.unbound_ids(self, ids))
+            if skipped:
+                totals["unbound"] += len(skipped)
+                kr.log_alarm(
+                    "migrate_skipped", self.env.cr.dbname, "unbound_ciphertext", model=self._name, count=len(skipped)
+                )
+                ids = [rid for rid in ids if rid not in skipped]
         for chunk in split_every(batch, ids):
             records = self.sudo().browse(chunk)
-            counts = pm.rewrite_rows(records, list(chunk), encrypt_plain=True)
-            for key in ("bound", "encrypted", "failed"):
+            counts = pm.rewrite_rows(records, list(chunk), encrypt_plain=True, allow_v1=allow_v1)
+            for key in ("bound", "encrypted", "failed", "unbound"):
                 totals[key] += counts[key]
             records.invalidate_recordset()
             for field in recompute:
                 self.env.add_to_compute(field, records)
             records.flush_recordset()
         _logger.info(
-            "%s migrate res.partner partners=%d bound=%d encrypted=%d failed=%d",
+            "%s migrate res.partner partners=%d bound=%d encrypted=%d failed=%d unbound=%d",
             kr.LOG_TAG,
             totals["partners"],
             totals["bound"],
             totals["encrypted"],
             totals["failed"],
+            totals["unbound"],
         )
+        if full_run and not totals["failed"] and not totals["unbound"]:
+            # kait "migrasi efnpii1 selesai" hanya bila seluruh DB (semua model PII) bersih dari efnpii1
+            totals["v1_latched"] = pm.latch_v1_migrated(self.env)
         return totals

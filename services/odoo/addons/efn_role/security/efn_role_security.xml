@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Multi-company (CLAUDE.md, docs/08 §12.3 "ACL & rule"). Rule global (tanpa grup) -> berlaku untuk semua user
+     non-sudo. noupdate="0" (sengaja): rule keamanan mengikuti kode saat upgrade. -->
+<odoo>
+    <record id="efn_role_rule_company" model="ir.rule">
+        <field name="name">EFN Peran: multi-company</field>
+        <field name="model_id" ref="model_efn_role"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_role_line_rule_company" model="ir.rule">
+        <field name="name">EFN Penetapan Peran: multi-company</field>
+        <field name="model_id" ref="model_efn_role_line"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <!-- Aturan SoD global (company kosong = default, grup Odoo lintas company) terlihat semua; ber-company hanya PT itu. -->
+    <record id="efn_sod_rule_rule_company" model="ir.rule">
+        <field name="name">EFN Aturan SoD: global atau company user</field>
+        <field name="model_id" ref="model_efn_sod_rule"/>
+        <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+    </record>
+    <!-- Pengecualian: company pengecualian ATAU user yang dikecualikan punya akses ke company pembaca (auditor PT
+         mana pun tempat user itu bekerja melihatnya di review akses). -->
+    <record id="efn_sod_exception_rule_company" model="ir.rule">
+        <field name="name">EFN Pengecualian SoD: multi-company</field>
+        <field name="model_id" ref="model_efn_sod_exception"/>
+        <field name="domain_force">['|', ('company_id', 'in', company_ids), ('user_id.company_ids', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_access_review_rule_company" model="ir.rule">
+        <field name="name">EFN Review Akses: multi-company</field>
+        <field name="model_id" ref="model_efn_access_review"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_access_review_line_rule_company" model="ir.rule">
+        <field name="name">EFN Baris Review Akses: multi-company</field>
+        <field name="model_id" ref="model_efn_access_review_line"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+</odoo>

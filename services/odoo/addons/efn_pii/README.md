@@ -1,4 +1,4 @@
-# efn_pii (19.0.2.0.0) — E-38a tahap inti
+# efn_pii (19.0.3.0.0) — E-38a inti + G21 (SEC-148/149/153, E-38b rekening & portal)
 
 > **Status: dibangun G20, belum untuk produksi.** Jangan dimasukkan ke daftar install produksi atau `EFN_TEST_MODULES`
 > CI sebelum lead memutuskan (ADR-036 §0.11: modul baru masuk setelah semua kriteria tonggak E-38a lulus).
@@ -57,7 +57,26 @@ Turunan & SEC-136:
 | `phone_sanitized` | dikosongkan (K) |
 
 NIK / dokumen pembeli (`l10n_id_*`), XML Coretax = `efn_pii_l10n_id`; `account.move.invoice_partner_display_name` =
-perluasan `efn_pii_account` (**belum**, sisa E-38a).
+`efn_pii_account`; data pribadi karyawan = `efn_pii_hr`; kode wilayah = `efn_region` (plaintext, terpisah).
+
+## G21 (docs/04 §13.2) — tambahan 19.0.3.0.0
+| Butir | Perilaku | Verifikasi 19.0 (WebFetch 19 Okt 2026) |
+|---|---|---|
+| **SEC-148** `efnpii1` | Baca `efnpii1:` hanya sah untuk id yang di-INSERT di cursor ini (dicatat `_create` → `cr.cache`, dilepas setelah bind) atau **mode migrasi** = env `EFN_ODOO_PII_ACCEPT_V1=true` **dan** kait DB `efn_pii.v1_migration_done` kosong. Selain itu nilai pengganti + CRITICAL `unbound_ciphertext` (`decrypt_refused`). Jalur menjadi-terlindungi/migrasi tidak pernah mengikat `efnpii1` di luar mode migrasi (dihitung `unbound`, CRITICAL `rewrite_refused`/`migrate_skipped`) → blob dari WAL lama tidak bisa "dicuci" ke `efnpii2`. `_efn_pii_migrate()` penuh tanpa sisa → kait dipasang (`pii_model.latch_v1_migrated`, cek `count_unbound` semua model) | `_create(self, data_list)` `@api.model` → records |
+| **SEC-149** padding | Token padding = `HMAC(HKDF(name_key,"efn:odoo:nametok:pad:v1"), "tok:<tabel>:<id>:<sha256 token asli>:<i>")[:16]`; jumlah = ke kelipatan 16 + 0/1 blok ekstra (`HMAC(..., "blocks:<tabel>:<id>")[0] % 2`). Hitung ulang nama sama → kolom identik; ganti nama → semua padding berganti | — |
+| **SEC-153** `mail.message.record_name` | **Tidak tersimpan di 19.0** (`compute='_compute_record_name', store=False`) → tidak ada residu | `mail/models/mail_message.py` |
+| **SEC-153** log merge | `mail` 19.0 `_log_merge_operation` mem-post "Merged with the following partners: <nama> <<email>> (ID n)". Bila ada partner terlindungi → pesan hanya ID (tanpa super) | `mail/wizard/base_partner_merge_automatic_wizard.py` |
+| **SEC-153** `mail.mail` | `email_to` (Text → `EfnPiiText`), `email_cc` (`EfnPiiChar`) terenkripsi bila `efn_pii_protected` (dokumen terlindungi/`_efn_pii_always` mis. struk POS, penerima/penulis terlindungi, atau email cocok blind index partner terlindungi). Partner baru terlindungi → antrean lamanya ikut dienkripsi | `mail/models/mail_mail.py` (`_inherits mail.message`, email dibaca ORM saat kirim) |
+| **E-38b** rekening (Q-PII9) | `res.partner.bank.acc_number`/`acc_holder_name` E; `sanitized_acc_number` = blind index (`EfnBidxChar`, subkunci `acc_number`) → constraint unik & pencarian `acc_number =` tetap. Rekening partner bukan-perusahaan (termasuk work contact/user internal K-a) atau partner terlindungi | `base/models/res_bank.py` (`_sanitize_vals`, `_search_acc_number`) |
+| **E-38b** portal (Q-PII8) | `share=True` + login ber-`@` → `vnd-XXXXXX` (alfabet tanpa 0/O/1/I) saat create/ubah grup/ubah login | `portal.wizard` memakai email sebagai login |
+| AC-2 | `test_pii_vectors`: env `EFN_PII_SHARED_VECTORS_OUT=/tmp/x.json` → test menulis JSON lengkap | — |
+
+Kelas field: `EfnPiiChar` / `EfnPiiText` (logika di `EfnPiiFieldMixin`; nama kelas `EfnPiiChar` dipakai
+`efn_online_order` sebagai penanda), `EfnBidxChar` (kolom deterministik blind index). Atribut model baru:
+`_efn_pii_partner_search` (nama tampilan salinan nama partner → subquery token), `_efn_pii_bidx_self`,
+`_efn_pii_tracking_scope = "fields"` (hanya field terenkripsi yang diredaksi dari tracking; dipakai HR),
+`_efn_pii_bidx_sources`. Model `_efn_pii_always` kini juga mendukung blind index (`identification_id` HR).
+Hook `res.partner._efn_pii_after_protect()` (rekening, `mail.mail`; `efn_pii_account` menambah faktur).
 
 ## Mekanisme (M1, ADR-036 §8.2)
 `models/fields_pii.py` `EfnPiiChar(fields.Char)` didefinisikan ulang di `_inherit` (tanpa monkeypatch):
@@ -82,7 +101,8 @@ lead: hanya `mail`, `base_vat`, `account` yang mendefinisikan ulang field cakupa
 - Blob (identik BFF): `versi_kunci(1) || IV(12) || ciphertext || tag(16)`, AES-256-GCM.
 - `efnpii2:` + base64(blob), AAD `efn:odoo:<tabel>.<kolom>:<id>:v2` (format berlaku).
 - `efnpii1:` + base64(blob), AAD `efn:odoo:<tabel>.<kolom>:v1` — hanya di dalam transaksi create. Terbaca di luar
-  itu (data PoC G19) → tetap didekripsi + CRITICAL `unbound_ciphertext` (kode saja); migrasi `_efn_pii_migrate`.
+  itu → **ditolak** (pengganti + CRITICAL `unbound_ciphertext`, SEC-148); data PoC G19 dimigrasi dengan
+  `EFN_ODOO_PII_ACCEPT_V1=true` + `_efn_pii_migrate()` (lihat G21).
 - Ciphertext dipindah antar-record/kolom lewat SQL → `auth_failed` + nilai pengganti (AC-7).
 - Penanda apa pun `efnpii<n>:` di input create/write ditolak (`ValidationError`).
 
@@ -104,7 +124,8 @@ Partner tidak terlindungi tetap memakai SQL standar.
 Jenis `f` (nama lengkap & complete_name), `w` (kata ≥ 2), `p` (awalan 3–15). HMAC-SHA256 (subkunci HKDF
 `efn:odoo:nametok:<f|w|p>:v1` dari `odoo_pii_name_key`) dipotong 128 bit, base64url 22 karakter. Token diurutkan +
 dipadatkan ke kelipatan 16 dengan token acak. Kolom `efn_name_tokens` (admin saja, `prefetch=False`) + indeks GIN
-ekspresi `res_partner_efn_name_tokens_gin` = `gin (string_to_array(efn_name_tokens, ' '))`.
+ekspresi `res_partner_efn_name_tokens_gin` = `gin (string_to_array(efn_name_tokens, ' '))`. Padding deterministik
+per record (SEC-149, lihat G21).
 
 ## Kunci (tidak pernah di DB, `ir.config_parameter`, log, image, atau repo)
 | Env | Default | Isi |
@@ -115,6 +136,7 @@ ekspresi `res_partner_efn_name_tokens_gin` = `gin (string_to_array(efn_name_toke
 | `EFN_ODOO_PII_NAME_KEY_FILE` | `<dir>/odoo_pii_name_key` | override path kunci token nama (dev compose devsecops: `/run/secrets/odoo_pii_name_key`) |
 | `EFN_ODOO_PII_ACTIVE_KEY_VERSION` | `1` | versi untuk enkripsi baru |
 | `EFN_ODOO_PII_REQUIRED` | kosong | `true` = mode terkunci dicatat CRITICAL walau belum ada data terlindungi |
+| `EFN_ODOO_PII_ACCEPT_V1` | kosong (= tolak) | `true` = mode migrasi `efnpii1:` (SEC-148). **Jangan diset di produksi**; tidak berlaku lagi setelah kait `efn_pii.v1_migration_done` terpasang |
 
 **Mode terkunci** = salah satu dari kunci aktif / blind index / token nama tidak terbaca: membuat atau mengubah data
 partner terlindungi (termasuk **membuat pelanggan perorangan baru**) → `UserError` + CRITICAL, tanpa fallback
@@ -132,9 +154,13 @@ jalan; `pos.order` tidak menyalin email/HP (efn_pii_pos).
 > Test `efn_pii*` sendiri memasang kunci acak per test/kelas (`tests/common.py`) dan memulihkan cache sesudahnya.
 
 ## Migrasi / operasi (shell Superadmin)
-- DB PoC G19 / partner bertanda dengan kolom plaintext atau `efnpii1:`:
-  `env['res.partner'].sudo()._efn_pii_migrate(); env.cr.commit()` → `efnpii2:` + hitung ulang token, blind index,
-  `email_normalized`. Juga dipakai setelah **rotasi `odoo_pii_name_key`** (token dihitung ulang).
+- DB PoC G19 / partner bertanda dengan kolom plaintext atau `efnpii1:`: jalankan Odoo dengan
+  `EFN_ODOO_PII_ACCEPT_V1=true`, lalu `env['res.partner'].sudo()._efn_pii_migrate(); env.cr.commit()` → `efnpii2:` +
+  hitung ulang token, blind index, `email_normalized`; bila DB bersih dari `efnpii1` kait migrasi dipasang (hasil
+  `v1_latched`), lalu **hapus env itu**. Tanpa env: record ber-`efnpii1` dilewati (`unbound`). Juga dipakai setelah
+  **rotasi `odoo_pii_name_key`** (token dihitung ulang).
+- Rekening lama (sebelum 19.0.3): `env['res.partner.bank'].sudo()._efn_pii_migrate()`.
+- Query verifikasi (AC-7/AC-11): `pii_model.count_unbound(env)` = jumlah `efnpii1:` di semua kolom PII.
 - Partner perorangan lama yang belum bertanda (DB dibuat sebelum E-38a): tandai lewat `write({'efn_pii_protected':
   True})` per batch (mengenkripsi nilai lama + turunan + redaksi tracking). Tidak otomatis: L-36-1 mensyaratkan DB
   produksi dibuat setelah E-38a.
@@ -152,16 +178,20 @@ jalan; `pos.order` tidak menyalin email/HP (efn_pii_pos).
 `tests/` (tag `efn`, `efn_pii`): `test_pii_partner` (protect-by-default, kelas, K-a, jalur tulis, baca, blind index,
 rotasi, swap AC-7, mode terkunci), `test_pii_tokens` (AC-9 + GIN), `test_pii_sec` (SEC-136/137/138 + migrasi efnpii1),
 `test_pii_crypto` (format v1/v2, key ring, `EFN_ODOO_PII_NAME_KEY_FILE`), `test_pii_vectors` (AC-2 sisi Odoo),
-`test_pii_overhead` (angka di log `EFN_PII_POC overhead`).
+`test_pii_overhead` (angka di log `EFN_PII_POC overhead`), `test_pii_g21` (SEC-149 padding stabil, SEC-148 jendela
+create, log merge, `mail.mail`, rekening, login portal opak). SEC-148 latch/mode migrasi di `test_pii_sec`.
 
 ## Vektor bersama BFF ↔ Odoo (AC-2)
 `tools/shared_vectors.py` membangun vektor deterministik dari **label publik** (kunci uji = SHA-256 label, bukan
 rahasia; JSON tidak memuat kunci): AEAD `efnpii1` & `efnpii2` (AAD EFN `…:v1` dan `…:<id>:v2`, termasuk `pos_order`),
 blind index, token nama, normalisasi. File: `tests/data/efn_pii_shared_vectors.json`.
-- **Status:** nilai `expected_*` masih `null` (penulis tidak bisa menjalankan kode). Isi dengan salah satu:
-  `docker run --rm --entrypoint python3 efn-odoo:ci /mnt/extra-addons/efn_pii/tools/shared_vectors.py > efn_pii_shared_vectors.json`
-  atau salin JSON dari log test (`grep EFN_PII_SHARED_VECTORS`). Setelah terisi, `test_expected_values_or_emit`
-  membandingkan secara ketat.
+- **Status:** nilai `expected_*` masih `null` (penulis tanpa shell). Isi dengan salah satu (deterministik, hasil
+  selalu sama):
+  1. jalankan test dengan env `EFN_PII_SHARED_VECTORS_OUT=/tmp/efn_pii_shared_vectors.json` (path writable di
+     container) → `test_expected_values_or_emit` menulis JSON lengkap ke path itu; salin ke `tests/data/`;
+  2. `docker run --rm --entrypoint python3 efn-odoo:ci /mnt/extra-addons/efn_pii/tools/shared_vectors.py > efn_pii_shared_vectors.json`;
+  3. dari log test: `grep -o 'EFN_PII_SHARED_VECTORS .*' odoo.log | cut -d' ' -f2- | python3 -m json.tool`.
+  Setelah terisi, test membandingkan secara ketat (Odoo) dan Jest BFF membaca file yang sama.
 - **BFF (Jest)**: baca file yang sama; kunci = `createHash('sha256').update(labels.aes_key).digest()`, IV =
   `createHash('sha256').update(iv_label).digest().subarray(0, 12)`, blob = `Buffer.from(expected_text.slice(8), 'base64')`;
   `new PiiCipher(new Map([[1, key]]), 1).decrypt(blob, aad)` == `plaintext`; arah enkripsi dengan `randomBytes`
@@ -175,10 +205,14 @@ blind index, token nama, normalisasi. File: `tests/data/efn_pii_shared_vectors.j
   dicocokkan dengan 15 huruf pertama (bisa sedikit melebar).
 - Kueri `ilike` gabungan (`plain OR token`) tetap seq scan pada cabang plaintext (sama dengan Odoo standar tanpa
   trigram); GIN hanya dipakai cabang token. AC-1 (200 rb partner, p95 ≤ 300 ms) **belum diukur**.
-- Residu: `mail.message` (body/email_from, termasuk pesan log merge yang memuat nama & email sumber),
-  `mail.mail`, `res.users.login` (portal wajib ID opak, Q-PII8), tuple mati plaintext partner portal (dibuat K-a lalu
-  ditandai di transaksi yang sama) sampai VACUUM, tracking many2one lama di model lain yang dibuat sebelum partner
-  ditandai, `privacy_lookup` (cari `ilike`).
+- Residu (tahap 2, dicatat inventaris PDP): `mail.message.body` (isi pesan/chatter bebas), `mail.message.email_from`,
+  `mail.message.incoming_email_to/outgoing_email_to` (19.0), `mail.mail.body_html`, `mail.notification.mail_email_address`,
+  tuple mati plaintext partner portal & login email sebelum diganti (dibuat lalu diubah di transaksi yang sama) sampai
+  VACUUM, tracking many2one lama di model lain yang dibuat sebelum partner ditandai, `privacy_lookup` (cari `ilike`).
+  Log merge & penerima `mail.mail` sudah ditangani (G21). `mail.mail` ke email partner terlindungi yang hanya dikenali
+  lewat blind index tidak terdeteksi dalam mode terkunci (penerima `recipient_ids`/dokumen tetap terdeteksi).
+- Rekening: duplikat lintas kelas (rekening terlindungi vs perusahaan bernomor sama) tidak terdeteksi; pencarian
+  potongan nomor rekening orang tidak didukung (nomor lengkap saja).
 - `filter_domain` view pencarian Accounting/Purchase, `auth_signup` reset password, mass mailing/blacklist SQL join:
   belum diuji.
 - Field cakupan yang dihitung ulang tanpa `write` pada record itu (mis. `complete_name` anak saat nama induk

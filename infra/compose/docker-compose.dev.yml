@@ -86,9 +86,9 @@ services:
       APP_ENV: dev
       ODOO_DEV_MODE: "all"
       # G19 E-38 PoC -> G20 E-38a (docs/04 §12.5, ADR-036 Accepted §0): kunci PII Odoo HANYA untuk container odoo (bukan
-      # BFF, ETL, OCR, Metabase, odoo-rpc-gateway; dicek scripts/check-encryption.sh). Masih dev/test saja di G20:
-      # staging/production (secrets.list [SA] + compose base + key-custody + salinan tersegel) menyusul setelah AC-1..AC-14
-      # ADR-036 lulus. Tanpa modul efn_pii terpasang, env ini tidak dipakai.
+      # BFF, ETL, OCR, Metabase, odoo-rpc-gateway; dicek scripts/check-encryption.sh). G21 AC-13: staging/production
+      # memakai overlay docker-compose.pii.yml (env + mount sama, EFN_ODOO_PII_REQUIRED=true) saat EFN_ODOO_PII_ENABLED=true.
+      # Tanpa modul efn_pii terpasang, env ini tidak dipakai.
       EFN_ODOO_PII_KEY_V1_FILE: /run/secrets/odoo_pii_key_v1
       EFN_ODOO_PII_ACTIVE_KEY_VERSION: "1"
       EFN_ODOO_PII_BIDX_KEY_FILE: /run/secrets/odoo_pii_bidx_key
@@ -208,9 +208,6 @@ services:
 secrets:
   dev_edge_crt: { file: ../../secrets/dev_edge_crt.txt }
   dev_edge_key: { file: ../../secrets/dev_edge_key.txt }
-  # G19 E-38 PoC / G20 E-38a (ADR-036): 32 byte acak base64 dari scripts/gen-secrets.sh (bagian "PII Odoo"). Kunci DEV saja:
-  # data PII dev terenkripsi dengan kunci ini -> menghapus file = data partner terlindungi di DB dev tidak terbaca.
-  odoo_pii_key_v1: { file: ../../secrets/odoo_pii_key_v1.txt }
-  odoo_pii_bidx_key: { file: ../../secrets/odoo_pii_bidx_key.txt }
-  # G20 E-38a (ADR-036 §0.5): kunci token nama. Hilang = token nama dihitung ulang (data tidak hilang, ADR-022 tabel kunci).
-  odoo_pii_name_key: { file: ../../secrets/odoo_pii_name_key.txt }
+  # Kunci PII Odoo (odoo_pii_key_v1/_bidx_key/_name_key): definisi top-level kini di compose base (G21 AC-13, sama dengan
+  # scripts/secrets.list). Dev: 32 byte acak dari scripts/gen-secrets.sh (bagian "PII Odoo"); menghapus file key ring =
+  # data partner terlindungi di DB dev tidak terbaca; bidx/name hilang = indeks/token dihitung ulang.

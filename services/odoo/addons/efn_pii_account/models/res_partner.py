@@ -3,6 +3,8 @@ setelah `efn_pii` (efn_pii tidak bergantung pada `account`) -> kelas field kemba
 `efn_pii` menolak semua penulisan nama partner terlindungi (fail-closed, SEC-137). Modul ini dimuat SETELAH keduanya
 dan mengembalikan kelas `EfnPiiChar`; atribut definisi sebelumnya (`tracking`, `index`, `required`) tetap digabung ORM.
 Pola sama dengan `efn_pii_base_vat`.
+
+G21 (SEC-153): partner yang baru menjadi terlindungi -> faktur lamanya (`invoice_partner_display_name`) ikut dienkripsi.
 """
 
 from odoo import models
@@ -14,3 +16,7 @@ class ResPartner(models.Model):
     _inherit = "res.partner"
 
     name = EfnPiiChar()
+
+    def _efn_pii_after_protect(self):
+        super()._efn_pii_after_protect()
+        self.env["account.move"]._efn_pii_protect_for_partners(self)

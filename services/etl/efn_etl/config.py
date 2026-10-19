@@ -167,6 +167,9 @@ class Settings:
     # dengan service clickhouse-init agar kedua lapisan konsisten.
     pseudonym_retention_years: int = 5
     geo_retention_days: int = 90
+    # G21 (ADR-036 §0.7, docs/04 §13.2): wilayah kab/kota pembeli dari view Odoo efn_etl.partner_region + dim_region.
+    # Default mati sampai efn_region terpasang dan grant G21 (sql/odoo-readonly-grants.sql) diterapkan.
+    partner_region_enabled: bool = False
 
     @property
     def amqp_user(self) -> str:
@@ -246,6 +249,9 @@ class Settings:
         points_codes = frozenset(
             code.strip() for code in _str(e, "ETL_POINTS_PRODUCT_CODES", "EFN-POINTS").split(",") if code.strip()
         )
+        partner_region = _bool(e, "ETL_PARTNER_REGION_ENABLED", False)
+        if partner_region and not odoo_enabled:
+            raise RuntimeError("ETL_PARTNER_REGION_ENABLED membutuhkan ETL_ENABLE_ODOO=true")
         return cls(
             platform_pg=platform,
             odoo_pg=odoo,
@@ -301,4 +307,5 @@ class Settings:
             loyalty_point_value_idr=_int_range(e, "LOYALTY_POINT_VALUE_IDR", 100, 1, 1_000_000_000),
             pseudonym_retention_years=_int_range(e, "CH_PSEUDONYM_RETENTION_YEARS", 5, 1, 30),
             geo_retention_days=_int_range(e, "CH_GEO_RETENTION_DAYS", 90, 1, 3650),
+            partner_region_enabled=partner_region,
         )

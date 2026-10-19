@@ -1,0 +1,15 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_role_erp_manager,efn.role access rights,model_efn_role,base.group_erp_manager,1,1,1,1
+access_efn_role_auditor,efn.role auditor,model_efn_role,efn_audit.group_auditor,1,0,0,0
+access_efn_role_line_erp_manager,efn.role.line access rights,model_efn_role_line,base.group_erp_manager,1,1,1,1
+access_efn_role_line_auditor,efn.role.line auditor,model_efn_role_line,efn_audit.group_auditor,1,0,0,0
+access_efn_sod_rule_erp_manager,efn.sod.rule access rights,model_efn_sod_rule,base.group_erp_manager,1,0,0,0
+access_efn_sod_rule_auditor,efn.sod.rule auditor,model_efn_sod_rule,efn_audit.group_auditor,1,0,0,0
+access_efn_sod_rule_system,efn.sod.rule superadmin,model_efn_sod_rule,base.group_system,1,1,1,1
+access_efn_sod_exception_erp_manager,efn.sod.exception access rights,model_efn_sod_exception,base.group_erp_manager,1,0,0,0
+access_efn_sod_exception_auditor,efn.sod.exception auditor,model_efn_sod_exception,efn_audit.group_auditor,1,0,0,0
+access_efn_sod_exception_system,efn.sod.exception superadmin,model_efn_sod_exception,base.group_system,1,1,1,0
+access_efn_access_review_auditor,efn.access.review auditor,model_efn_access_review,efn_audit.group_auditor,1,1,1,0
+access_efn_access_review_erp_manager,efn.access.review access rights,model_efn_access_review,base.group_erp_manager,1,0,1,0
+access_efn_access_review_line_auditor,efn.access.review.line auditor,model_efn_access_review_line,efn_audit.group_auditor,1,0,0,0
+access_efn_access_review_line_erp_manager,efn.access.review.line access rights,model_efn_access_review_line,base.group_erp_manager,1,0,0,0

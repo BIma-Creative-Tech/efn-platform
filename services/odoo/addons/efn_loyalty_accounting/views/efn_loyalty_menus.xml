@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_efn_loyalty_root" name="Poin EFN" sequence="95"
+              groups="efn_loyalty_accounting.group_loyalty_manager,account.group_account_manager"/>
+    <menuitem id="menu_efn_loyalty_policy" name="Kebijakan Poin" parent="menu_efn_loyalty_root"
+              action="action_efn_loyalty_policy" sequence="10"/>
+    <menuitem id="menu_efn_loyalty_policy_outbox" name="Publikasi ke BFF" parent="menu_efn_loyalty_root"
+              action="action_efn_loyalty_policy_outbox" sequence="20"/>
+    <menuitem id="menu_efn_loyalty_accrual" name="Akrual Harian" parent="menu_efn_loyalty_root"
+              action="action_efn_loyalty_accrual" sequence="30"/>
+</odoo>

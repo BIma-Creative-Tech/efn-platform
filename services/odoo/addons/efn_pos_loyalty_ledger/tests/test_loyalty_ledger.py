@@ -1081,6 +1081,17 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
             [{"member_ref": MEMBER_A, "pos_config_id": self.config.id, "company_code": "GL"}],
         )
 
+    def test_params_per_company_code_g21(self):
+        """G21 §13.1 no. 4 (E-44): params diminta dengan company_code PT config dan di-cache per PT."""
+        self.responses[PARAMS] = BffResponse(200, {"redeem_max_pct_of_order": 30})
+        self.assertEqual(self.config._efn_loyalty_redeem_max_pct(), 30)
+        self.assertEqual(self._calls_to(PARAMS), [{"company_code": "GL"}])
+        # Cache per (db, PT): panggilan kedua tidak memanggil BFF; cache baca-saja (sync) melihat nilai yang sama.
+        self.assertEqual(self.config._efn_loyalty_redeem_max_pct(), 30)
+        self.assertEqual(len(self._calls_to(PARAMS)), 1)
+        self.assertEqual(self.config._efn_loyalty_cached_params(), {"redeem_max_pct_of_order": 30})
+        self.assertIn((self.env.cr.dbname, "GL"), loyalty_pos_config._PARAMS_CACHE)
+
     def test_balance_rate_limited_per_session(self):
         self.env["ir.config_parameter"].sudo().set_param("efn.pos.loyalty.balance_rate_per_minute", "2")
         self.responses[BALANCE] = BffResponse(200, {"points_balance": 1})

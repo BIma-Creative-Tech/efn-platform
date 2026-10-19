@@ -43,6 +43,12 @@ export const OnlineErrors = {
    * validasi BFF lain §10.3.7). Pesan tidak menyebut kode mana yang salah.
    */
   invalidInput: (): ApiError => ApiError.of(400, 'invalid_request', 'Data yang dikirim tidak valid.'),
+  /**
+   * G21 §13.5 / L-63: faktur atas nama tidak tersedia (kanal PT F&B/PB1, atau `efn_pii` belum aktif di Odoo). Pesanan
+   * tidak dibuat; pelanggan bisa memesan ulang tanpa permintaan faktur.
+   */
+  invoiceNotAvailable: (): ApiError =>
+    ApiError.of(422, 'invoice_not_available', 'Faktur atas nama belum tersedia untuk pesanan ini. Pesan tanpa faktur atau hubungi layanan pelanggan.'),
 };
 
 /**

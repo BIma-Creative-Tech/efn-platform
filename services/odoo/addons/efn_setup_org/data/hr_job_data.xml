@@ -1,0 +1,751 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G21 W-31 (docs/04 §13.3 no. 1, keputusan 18-24): templat jabatan hr CE per PT.
+
+     Jabatan = kunci pemetaan ke peran akses efn_role (efn.role per company, docs/08 §12.3). Matriks jabatan ->
+     grup Odoo: docs/08 §12.2. Jabatan TIDAK memberi hak akses apa pun sendiri (hr.job 19.0 tidak punya tautan ke
+     res.groups, terverifikasi hr/models/hr_job.py).
+
+     noupdate="1": nama/urutan/deskripsi boleh diubah pengguna; arsipkan (jangan hapus) jabatan yang tidak dipakai.
+     Constraint standar hr.job 19.0: unique(name, company_id, department_id) -> nama sama di 6 PT aman.
+     no_of_recruitment = 0: templat bukan lowongan (default standar 1). user_id kosong: default standar = env.user
+     (saat install = OdooBot), tidak bermakna untuk templat.
+     Nama orang TIDAK ada di data (18-24, 18-40).
+
+     xmlid: job_<kode>_<pt>, pt = efn | gl | pb | bcr | bcf | farm. Kode jabatan (dipakai efn_role & test):
+       director, finance_manager, finance_staff, store_manager, cashier, merchandiser, procurement,
+       warehouse_staff, courier, cs_agent, cs_refund_approver, sales_manager_online, loyalty_manager,
+       superadmin, auditor -->
+<odoo noupdate="1">
+
+    <!-- ===================== Holding EFN (EFN) ===================== -->
+    <record id="job_director_efn" model="hr.job">
+        <field name="name">Direktur</field>
+        <field name="sequence">10</field>
+        <field name="department_id" ref="dept_board_efn"/>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_finance_manager_efn" model="hr.job">
+        <field name="name">Finance Manager</field>
+        <field name="sequence">20</field>
+        <field name="department_id" ref="dept_finance_efn"/>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_finance_staff_efn" model="hr.job">
+        <field name="name">Staf Finance</field>
+        <field name="sequence">30</field>
+        <field name="department_id" ref="dept_finance_efn"/>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_store_manager_efn" model="hr.job">
+        <field name="name">Store Manager</field>
+        <field name="sequence">40</field>
+        <field name="department_id" ref="dept_store_efn"/>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cashier_efn" model="hr.job">
+        <field name="name">Kasir</field>
+        <field name="sequence">50</field>
+        <field name="department_id" ref="dept_store_efn"/>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_merchandiser_efn" model="hr.job">
+        <field name="name">Merchandiser</field>
+        <field name="sequence">60</field>
+        <field name="department_id" ref="dept_merch_efn"/>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_procurement_efn" model="hr.job">
+        <field name="name">Staf Pengadaan</field>
+        <field name="sequence">70</field>
+        <field name="department_id" ref="dept_merch_efn"/>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_warehouse_staff_efn" model="hr.job">
+        <field name="name">Staf Gudang</field>
+        <field name="sequence">80</field>
+        <field name="department_id" ref="dept_warehouse_efn"/>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_courier_efn" model="hr.job">
+        <field name="name">Kurir</field>
+        <field name="sequence">90</field>
+        <field name="department_id" ref="dept_warehouse_efn"/>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cs_agent_efn" model="hr.job">
+        <field name="name">Staf CS</field>
+        <field name="sequence">100</field>
+        <field name="department_id" ref="dept_cs_efn"/>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cs_refund_approver_efn" model="hr.job">
+        <field name="name">Approver Refund CS</field>
+        <field name="sequence">110</field>
+        <field name="department_id" ref="dept_cs_efn"/>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_sales_manager_online_efn" model="hr.job">
+        <field name="name">Sales Manager Online</field>
+        <field name="sequence">120</field>
+        <field name="department_id" ref="dept_online_efn"/>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_loyalty_manager_efn" model="hr.job">
+        <field name="name">Loyalty Manager</field>
+        <field name="sequence">130</field>
+        <field name="department_id" ref="dept_online_efn"/>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_superadmin_efn" model="hr.job">
+        <field name="name">Superadmin IT</field>
+        <field name="sequence">140</field>
+        <field name="department_id" ref="dept_it_efn"/>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_auditor_efn" model="hr.job">
+        <field name="name">Auditor Internal</field>
+        <field name="sequence">150</field>
+        <field name="department_id" ref="dept_audit_efn"/>
+        <field name="company_id" ref="efn_setup_company.company_efn"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+
+    <!-- ===================== PT Grand Lucky (GL, xmlid company_rtl) ===================== -->
+    <record id="job_director_gl" model="hr.job">
+        <field name="name">Direktur</field>
+        <field name="sequence">10</field>
+        <field name="department_id" ref="dept_board_gl"/>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_finance_manager_gl" model="hr.job">
+        <field name="name">Finance Manager</field>
+        <field name="sequence">20</field>
+        <field name="department_id" ref="dept_finance_gl"/>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_finance_staff_gl" model="hr.job">
+        <field name="name">Staf Finance</field>
+        <field name="sequence">30</field>
+        <field name="department_id" ref="dept_finance_gl"/>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_store_manager_gl" model="hr.job">
+        <field name="name">Store Manager</field>
+        <field name="sequence">40</field>
+        <field name="department_id" ref="dept_store_gl"/>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cashier_gl" model="hr.job">
+        <field name="name">Kasir</field>
+        <field name="sequence">50</field>
+        <field name="department_id" ref="dept_store_gl"/>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_merchandiser_gl" model="hr.job">
+        <field name="name">Merchandiser</field>
+        <field name="sequence">60</field>
+        <field name="department_id" ref="dept_merch_gl"/>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_procurement_gl" model="hr.job">
+        <field name="name">Staf Pengadaan</field>
+        <field name="sequence">70</field>
+        <field name="department_id" ref="dept_merch_gl"/>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_warehouse_staff_gl" model="hr.job">
+        <field name="name">Staf Gudang</field>
+        <field name="sequence">80</field>
+        <field name="department_id" ref="dept_warehouse_gl"/>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_courier_gl" model="hr.job">
+        <field name="name">Kurir</field>
+        <field name="sequence">90</field>
+        <field name="department_id" ref="dept_warehouse_gl"/>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cs_agent_gl" model="hr.job">
+        <field name="name">Staf CS</field>
+        <field name="sequence">100</field>
+        <field name="department_id" ref="dept_cs_gl"/>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cs_refund_approver_gl" model="hr.job">
+        <field name="name">Approver Refund CS</field>
+        <field name="sequence">110</field>
+        <field name="department_id" ref="dept_cs_gl"/>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_sales_manager_online_gl" model="hr.job">
+        <field name="name">Sales Manager Online</field>
+        <field name="sequence">120</field>
+        <field name="department_id" ref="dept_online_gl"/>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_loyalty_manager_gl" model="hr.job">
+        <field name="name">Loyalty Manager</field>
+        <field name="sequence">130</field>
+        <field name="department_id" ref="dept_online_gl"/>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_superadmin_gl" model="hr.job">
+        <field name="name">Superadmin IT</field>
+        <field name="sequence">140</field>
+        <field name="department_id" ref="dept_it_gl"/>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_auditor_gl" model="hr.job">
+        <field name="name">Auditor Internal</field>
+        <field name="sequence">150</field>
+        <field name="department_id" ref="dept_audit_gl"/>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+
+    <!-- ===================== PT Paris Baguette (PB, xmlid company_fnb) ===================== -->
+    <record id="job_director_pb" model="hr.job">
+        <field name="name">Direktur</field>
+        <field name="sequence">10</field>
+        <field name="department_id" ref="dept_board_pb"/>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_finance_manager_pb" model="hr.job">
+        <field name="name">Finance Manager</field>
+        <field name="sequence">20</field>
+        <field name="department_id" ref="dept_finance_pb"/>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_finance_staff_pb" model="hr.job">
+        <field name="name">Staf Finance</field>
+        <field name="sequence">30</field>
+        <field name="department_id" ref="dept_finance_pb"/>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_store_manager_pb" model="hr.job">
+        <field name="name">Store Manager</field>
+        <field name="sequence">40</field>
+        <field name="department_id" ref="dept_store_pb"/>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cashier_pb" model="hr.job">
+        <field name="name">Kasir</field>
+        <field name="sequence">50</field>
+        <field name="department_id" ref="dept_store_pb"/>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_merchandiser_pb" model="hr.job">
+        <field name="name">Merchandiser</field>
+        <field name="sequence">60</field>
+        <field name="department_id" ref="dept_merch_pb"/>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_procurement_pb" model="hr.job">
+        <field name="name">Staf Pengadaan</field>
+        <field name="sequence">70</field>
+        <field name="department_id" ref="dept_merch_pb"/>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_warehouse_staff_pb" model="hr.job">
+        <field name="name">Staf Gudang</field>
+        <field name="sequence">80</field>
+        <field name="department_id" ref="dept_warehouse_pb"/>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_courier_pb" model="hr.job">
+        <field name="name">Kurir</field>
+        <field name="sequence">90</field>
+        <field name="department_id" ref="dept_warehouse_pb"/>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cs_agent_pb" model="hr.job">
+        <field name="name">Staf CS</field>
+        <field name="sequence">100</field>
+        <field name="department_id" ref="dept_cs_pb"/>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cs_refund_approver_pb" model="hr.job">
+        <field name="name">Approver Refund CS</field>
+        <field name="sequence">110</field>
+        <field name="department_id" ref="dept_cs_pb"/>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_sales_manager_online_pb" model="hr.job">
+        <field name="name">Sales Manager Online</field>
+        <field name="sequence">120</field>
+        <field name="department_id" ref="dept_online_pb"/>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_loyalty_manager_pb" model="hr.job">
+        <field name="name">Loyalty Manager</field>
+        <field name="sequence">130</field>
+        <field name="department_id" ref="dept_online_pb"/>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_superadmin_pb" model="hr.job">
+        <field name="name">Superadmin IT</field>
+        <field name="sequence">140</field>
+        <field name="department_id" ref="dept_it_pb"/>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_auditor_pb" model="hr.job">
+        <field name="name">Auditor Internal</field>
+        <field name="sequence">150</field>
+        <field name="department_id" ref="dept_audit_pb"/>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+
+    <!-- ===================== Bacha Coffee Retail (BCR) ===================== -->
+    <record id="job_director_bcr" model="hr.job">
+        <field name="name">Direktur</field>
+        <field name="sequence">10</field>
+        <field name="department_id" ref="dept_board_bcr"/>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_finance_manager_bcr" model="hr.job">
+        <field name="name">Finance Manager</field>
+        <field name="sequence">20</field>
+        <field name="department_id" ref="dept_finance_bcr"/>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_finance_staff_bcr" model="hr.job">
+        <field name="name">Staf Finance</field>
+        <field name="sequence">30</field>
+        <field name="department_id" ref="dept_finance_bcr"/>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_store_manager_bcr" model="hr.job">
+        <field name="name">Store Manager</field>
+        <field name="sequence">40</field>
+        <field name="department_id" ref="dept_store_bcr"/>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cashier_bcr" model="hr.job">
+        <field name="name">Kasir</field>
+        <field name="sequence">50</field>
+        <field name="department_id" ref="dept_store_bcr"/>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_merchandiser_bcr" model="hr.job">
+        <field name="name">Merchandiser</field>
+        <field name="sequence">60</field>
+        <field name="department_id" ref="dept_merch_bcr"/>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_procurement_bcr" model="hr.job">
+        <field name="name">Staf Pengadaan</field>
+        <field name="sequence">70</field>
+        <field name="department_id" ref="dept_merch_bcr"/>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_warehouse_staff_bcr" model="hr.job">
+        <field name="name">Staf Gudang</field>
+        <field name="sequence">80</field>
+        <field name="department_id" ref="dept_warehouse_bcr"/>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_courier_bcr" model="hr.job">
+        <field name="name">Kurir</field>
+        <field name="sequence">90</field>
+        <field name="department_id" ref="dept_warehouse_bcr"/>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cs_agent_bcr" model="hr.job">
+        <field name="name">Staf CS</field>
+        <field name="sequence">100</field>
+        <field name="department_id" ref="dept_cs_bcr"/>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cs_refund_approver_bcr" model="hr.job">
+        <field name="name">Approver Refund CS</field>
+        <field name="sequence">110</field>
+        <field name="department_id" ref="dept_cs_bcr"/>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_sales_manager_online_bcr" model="hr.job">
+        <field name="name">Sales Manager Online</field>
+        <field name="sequence">120</field>
+        <field name="department_id" ref="dept_online_bcr"/>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_loyalty_manager_bcr" model="hr.job">
+        <field name="name">Loyalty Manager</field>
+        <field name="sequence">130</field>
+        <field name="department_id" ref="dept_online_bcr"/>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_superadmin_bcr" model="hr.job">
+        <field name="name">Superadmin IT</field>
+        <field name="sequence">140</field>
+        <field name="department_id" ref="dept_it_bcr"/>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_auditor_bcr" model="hr.job">
+        <field name="name">Auditor Internal</field>
+        <field name="sequence">150</field>
+        <field name="department_id" ref="dept_audit_bcr"/>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+
+    <!-- ===================== Bacha Coffee F&B (BCF) ===================== -->
+    <record id="job_director_bcf" model="hr.job">
+        <field name="name">Direktur</field>
+        <field name="sequence">10</field>
+        <field name="department_id" ref="dept_board_bcf"/>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_finance_manager_bcf" model="hr.job">
+        <field name="name">Finance Manager</field>
+        <field name="sequence">20</field>
+        <field name="department_id" ref="dept_finance_bcf"/>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_finance_staff_bcf" model="hr.job">
+        <field name="name">Staf Finance</field>
+        <field name="sequence">30</field>
+        <field name="department_id" ref="dept_finance_bcf"/>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_store_manager_bcf" model="hr.job">
+        <field name="name">Store Manager</field>
+        <field name="sequence">40</field>
+        <field name="department_id" ref="dept_store_bcf"/>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cashier_bcf" model="hr.job">
+        <field name="name">Kasir</field>
+        <field name="sequence">50</field>
+        <field name="department_id" ref="dept_store_bcf"/>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_merchandiser_bcf" model="hr.job">
+        <field name="name">Merchandiser</field>
+        <field name="sequence">60</field>
+        <field name="department_id" ref="dept_merch_bcf"/>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_procurement_bcf" model="hr.job">
+        <field name="name">Staf Pengadaan</field>
+        <field name="sequence">70</field>
+        <field name="department_id" ref="dept_merch_bcf"/>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_warehouse_staff_bcf" model="hr.job">
+        <field name="name">Staf Gudang</field>
+        <field name="sequence">80</field>
+        <field name="department_id" ref="dept_warehouse_bcf"/>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_courier_bcf" model="hr.job">
+        <field name="name">Kurir</field>
+        <field name="sequence">90</field>
+        <field name="department_id" ref="dept_warehouse_bcf"/>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cs_agent_bcf" model="hr.job">
+        <field name="name">Staf CS</field>
+        <field name="sequence">100</field>
+        <field name="department_id" ref="dept_cs_bcf"/>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cs_refund_approver_bcf" model="hr.job">
+        <field name="name">Approver Refund CS</field>
+        <field name="sequence">110</field>
+        <field name="department_id" ref="dept_cs_bcf"/>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_sales_manager_online_bcf" model="hr.job">
+        <field name="name">Sales Manager Online</field>
+        <field name="sequence">120</field>
+        <field name="department_id" ref="dept_online_bcf"/>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_loyalty_manager_bcf" model="hr.job">
+        <field name="name">Loyalty Manager</field>
+        <field name="sequence">130</field>
+        <field name="department_id" ref="dept_online_bcf"/>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_superadmin_bcf" model="hr.job">
+        <field name="name">Superadmin IT</field>
+        <field name="sequence">140</field>
+        <field name="department_id" ref="dept_it_bcf"/>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_auditor_bcf" model="hr.job">
+        <field name="name">Auditor Internal</field>
+        <field name="sequence">150</field>
+        <field name="department_id" ref="dept_audit_bcf"/>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+
+    <!-- ===================== FARM ===================== -->
+    <record id="job_director_farm" model="hr.job">
+        <field name="name">Direktur</field>
+        <field name="sequence">10</field>
+        <field name="department_id" ref="dept_board_farm"/>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_finance_manager_farm" model="hr.job">
+        <field name="name">Finance Manager</field>
+        <field name="sequence">20</field>
+        <field name="department_id" ref="dept_finance_farm"/>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_finance_staff_farm" model="hr.job">
+        <field name="name">Staf Finance</field>
+        <field name="sequence">30</field>
+        <field name="department_id" ref="dept_finance_farm"/>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_store_manager_farm" model="hr.job">
+        <field name="name">Store Manager</field>
+        <field name="sequence">40</field>
+        <field name="department_id" ref="dept_store_farm"/>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cashier_farm" model="hr.job">
+        <field name="name">Kasir</field>
+        <field name="sequence">50</field>
+        <field name="department_id" ref="dept_store_farm"/>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_merchandiser_farm" model="hr.job">
+        <field name="name">Merchandiser</field>
+        <field name="sequence">60</field>
+        <field name="department_id" ref="dept_merch_farm"/>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_procurement_farm" model="hr.job">
+        <field name="name">Staf Pengadaan</field>
+        <field name="sequence">70</field>
+        <field name="department_id" ref="dept_merch_farm"/>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_warehouse_staff_farm" model="hr.job">
+        <field name="name">Staf Gudang</field>
+        <field name="sequence">80</field>
+        <field name="department_id" ref="dept_warehouse_farm"/>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_courier_farm" model="hr.job">
+        <field name="name">Kurir</field>
+        <field name="sequence">90</field>
+        <field name="department_id" ref="dept_warehouse_farm"/>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cs_agent_farm" model="hr.job">
+        <field name="name">Staf CS</field>
+        <field name="sequence">100</field>
+        <field name="department_id" ref="dept_cs_farm"/>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cs_refund_approver_farm" model="hr.job">
+        <field name="name">Approver Refund CS</field>
+        <field name="sequence">110</field>
+        <field name="department_id" ref="dept_cs_farm"/>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_sales_manager_online_farm" model="hr.job">
+        <field name="name">Sales Manager Online</field>
+        <field name="sequence">120</field>
+        <field name="department_id" ref="dept_online_farm"/>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_loyalty_manager_farm" model="hr.job">
+        <field name="name">Loyalty Manager</field>
+        <field name="sequence">130</field>
+        <field name="department_id" ref="dept_online_farm"/>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_superadmin_farm" model="hr.job">
+        <field name="name">Superadmin IT</field>
+        <field name="sequence">140</field>
+        <field name="department_id" ref="dept_it_farm"/>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_auditor_farm" model="hr.job">
+        <field name="name">Auditor Internal</field>
+        <field name="sequence">150</field>
+        <field name="department_id" ref="dept_audit_farm"/>
+        <field name="company_id" ref="efn_setup_company.company_farm"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+</odoo>

@@ -1,5 +1,7 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Post, Query, UseGuards } from '@nestjs/common';
+import { Errors } from '../common/errors/api-error';
 import { ServiceKeyGuard } from '../common/security/service-key.guard';
+import { isCompanyCode } from '../loyalty/loyalty.service';
 import { parsePosEarn, parsePosReverse, parseRedeemCommit, parseRedeemRelease, parseRedeemReserve } from './dto/pos-loyalty.dto';
 import {
   LoyaltyParamsResponse,
@@ -12,7 +14,8 @@ import {
 
 /**
  * Loyalty POS Fase 1 (docs/04 §9.2–9.4), server Odoo → BFF (service key). Prefix global `v1` → `/v1/pos/loyalty/*`.
- * R2: semua identitas (member_ref, token, order) hanya di body POST — tidak ada @Param/@Query.
+ * R2: semua identitas (member_ref, token, order) hanya di body POST — tidak ada @Param/@Query (G21: `company_code`
+ * di query `GET params` bukan identitas pribadi).
  * `POST /v1/pos/loyalty/balance` tetap di `PosController` (§8.13).
  */
 @Controller('pos/loyalty')
@@ -20,10 +23,16 @@ import {
 export class PosLoyaltyController {
   constructor(private readonly loyalty: PosLoyaltyService) {}
 
-  /** Parameter §9.1 yang dipakai BFF (Odoo menampilkan nilai poin & menghitung eligible_amount dengan nilai yang sama). */
+  /**
+   * Parameter §9.1 yang dipakai BFF (Odoo menampilkan nilai poin & menghitung eligible_amount dengan nilai yang sama).
+   * G21 §13.1 no. 4: `?company_code=<PT>` → kebijakan aktif PT itu (fallback env); tanpa parameter → env (kompatibel
+   * mundur). Kode PT tidak dikenal → 400.
+   */
   @Get('params')
-  params(): LoyaltyParamsResponse {
-    return this.loyalty.params();
+  async params(@Query('company_code') company: unknown): Promise<LoyaltyParamsResponse> {
+    if (company === undefined || company === '') return this.loyalty.params();
+    if (!isCompanyCode(company)) throw Errors.invalidRequest();
+    return this.loyalty.paramsFor(company);
   }
 
   @Post('earn')

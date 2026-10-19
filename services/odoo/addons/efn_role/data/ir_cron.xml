@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- 00:30 Asia/Jakarta (= 17:30 UTC hari sebelumnya; nextcall disimpan UTC): masa berlaku baris peran,
+         penerapan ulang, sinkron jabatan, pengecualian SoD kedaluwarsa, aturan SoD bawaan yang belum ada. -->
+    <record id="ir_cron_efn_role_daily" model="ir.cron">
+        <field name="name">EFN Peran: masa berlaku, jabatan, pengecualian SoD</field>
+        <field name="model_id" ref="model_efn_role"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_role_daily()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="nextcall" eval="DateTime.now().strftime('%Y-%m-%d 17:30:00')"/>
+        <field name="active" eval="True"/>
+    </record>
+    <!-- 02:30 Asia/Jakarta (= 19:30 UTC): review akses periode lalu per company pada tanggal 1 (toleransi s/d 3). -->
+    <record id="ir_cron_efn_access_review_monthly" model="ir.cron">
+        <field name="name">EFN Peran: review akses bulanan per PT</field>
+        <field name="model_id" ref="model_efn_access_review"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_access_review_monthly()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="nextcall" eval="DateTime.now().strftime('%Y-%m-%d 19:30:00')"/>
+        <field name="active" eval="True"/>
+    </record>
+</odoo>

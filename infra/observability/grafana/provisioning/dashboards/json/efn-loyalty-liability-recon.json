@@ -1,0 +1,71 @@
+{
+  "uid": "efn-loyalty-liability-recon",
+  "title": "EFN - Rekonsiliasi Liabilitas Poin per PT",
+  "description": "G21 (docs/04 §13.1 no. 7): saldo akun Liabilitas Poin per PT di Odoo vs closing_liability_idr BFF setelah akrual harian (cron Odoo 02:00 WIB). Sumber: log EFN_LOYALTY_RECON (Loki stream efn_loyalty, loyalty_event=liability_recon; tanpa data pribadi). diff = Odoo - BFF. Alert: loki-rules/efn-loyalty.yml grup efn-loyalty-liability-recon (warning bila selisih != 0, critical bila |selisih| > ambang, PLACEHOLDER Rp 100.000). Tidak ada koreksi otomatis.",
+  "tags": ["efn", "loyalty", "finance"],
+  "timezone": "Asia/Jakarta",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "graphTooltip": 1,
+  "refresh": "5m",
+  "time": { "from": "now-30d", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "|Selisih| terakhir per PT (Rp, 26 jam)",
+      "description": "Nilai absolut diff_idr baris terakhir per PT. Kuning = selisih ada (warning), merah = di atas ambang critical (samakan dengan efn-loyalty.yml).",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 5 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "refId": "A", "queryType": "instant", "legendFormat": "{{company_code}}", "expr": "max by (company_code) (last_over_time({stream=\"efn_loyalty\", loyalty_event=\"liability_recon\"} | regexp `\"diff_idr\": ?-?(?P<diff_abs>\\d+)` | unwrap diff_abs | __error__=\"\" [26h]))" }],
+      "fieldConfig": { "defaults": { "unit": "currencyIDR", "decimals": 0, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 100001 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "textMode": "value_and_name" }
+    },
+    {
+      "id": 2, "type": "stat", "title": "PT yang tercatat (26 jam)",
+      "description": "Jumlah PT dengan baris rekonsiliasi dalam 26 jam. Kurang dari jumlah PT aktif = akrual PT itu gagal/terlewat (cek aktivitas Finance di Odoo).",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 5 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "refId": "A", "queryType": "instant", "expr": "count(sum by (company_code) (count_over_time({stream=\"efn_loyalty\", loyalty_event=\"liability_recon\"} [26h]))) or vector(0)" }],
+      "fieldConfig": { "defaults": { "unit": "none", "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+    {
+      "id": 3, "type": "stat", "title": "PT dengan selisih (26 jam)",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 5 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "refId": "A", "queryType": "instant", "expr": "count(max by (company_code) (last_over_time({stream=\"efn_loyalty\", loyalty_event=\"liability_recon\"} | regexp `\"diff_idr\": ?-?(?P<diff_abs>\\d+)` | unwrap diff_abs | __error__=\"\" [26h])) > 0) or vector(0)" }],
+      "fieldConfig": { "defaults": { "unit": "none", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "Selisih (Odoo - BFF) per PT (Rp)",
+      "description": "Bertanda: positif = liabilitas di Odoo lebih besar dari BFF; negatif = lebih kecil.",
+      "gridPos": { "x": 0, "y": 5, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "refId": "A", "legendFormat": "{{company_code}}", "expr": "max by (company_code) (last_over_time({stream=\"efn_loyalty\", loyalty_event=\"liability_recon\"} | regexp `\"diff_idr\": ?(?P<diff>-?\\d+)` | unwrap diff | __error__=\"\" [26h]))" }],
+      "fieldConfig": { "defaults": { "unit": "currencyIDR", "decimals": 0, "custom": { "drawStyle": "line", "lineInterpolation": "stepAfter" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "max", "min"] } }
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Liabilitas poin per PT: Odoo vs BFF (Rp)",
+      "gridPos": { "x": 0, "y": 13, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        { "refId": "A", "legendFormat": "{{company_code}} Odoo", "expr": "max by (company_code) (last_over_time({stream=\"efn_loyalty\", loyalty_event=\"liability_recon\"} | regexp `\"odoo_liability_idr\": ?(?P<odoo>-?\\d+)` | unwrap odoo | __error__=\"\" [26h]))" },
+        { "refId": "B", "legendFormat": "{{company_code}} BFF", "expr": "max by (company_code) (last_over_time({stream=\"efn_loyalty\", loyalty_event=\"liability_recon\"} | regexp `\"bff_closing_liability_idr\": ?(?P<bff>-?\\d+)` | unwrap bff | __error__=\"\" [26h]))" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyIDR", "decimals": 0, "custom": { "drawStyle": "line", "lineInterpolation": "stepAfter" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 6, "type": "logs", "title": "Baris EFN_LOYALTY_RECON (Odoo)",
+      "description": "Satu baris per PT per tanggal akrual. Tanpa data pribadi (skema dibatasi promtail tahap 2c).",
+      "gridPos": { "x": 0, "y": 21, "w": 24, "h": 10 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "refId": "A", "expr": "{stream=\"efn_loyalty\", loyalty_event=\"liability_recon\"}" }],
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true }
+    }
+  ]
+}

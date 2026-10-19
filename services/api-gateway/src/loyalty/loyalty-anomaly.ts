@@ -49,6 +49,11 @@ export const LOYALTY_ANOMALY_KINDS = {
   earn_exceeds_money_portion: 'warning',
   /** Entri ledger dengan `source` di luar daftar penulis BFF (admin/SQL manual/server action). */
   ledger_unknown_source: 'critical',
+  // ── G21 §13.1 kebijakan poin per PT ──
+  /** Kebijakan dari Odoo di luar plafon `LOYALTY_POLICY_CEILING_*` (422) atau tersimpan lalu plafon diturunkan (fallback env). */
+  policy_out_of_bounds: 'warning',
+  /** Versi kebijakan sama dengan isi berbeda (409) — outbox Odoo/penyetuju perlu ditinjau. */
+  policy_conflict: 'critical',
 } as const;
 
 export type LoyaltyAnomalyKind = keyof typeof LOYALTY_ANOMALY_KINDS;

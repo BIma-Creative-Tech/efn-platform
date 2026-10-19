@@ -1,7 +1,8 @@
 {
     "name": "EFN PII + account",
-    "summary": "Mempertahankan enkripsi `res.partner.name` (efn_pii) saat account mendefinisikan ulang field itu.",
-    "version": "19.0.1.0.0",
+    "summary": "efn_pii untuk modul account: kelas field res.partner.name & rekening bank dipulihkan, "
+    "invoice_partner_display_name faktur partner terlindungi terenkripsi (SEC-153/AC-10).",
+    "version": "19.0.2.0.0",
     "category": "EFN",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031, CLAUDE.md).

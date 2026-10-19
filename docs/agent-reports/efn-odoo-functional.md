@@ -492,3 +492,45 @@ Tidak ada yang baru (default configurable). Konfirmasi yang sudah di register: t
 - **Test G20 belum dijalankan**; ruff belum. Wajib: suite `--test-tags efn` di DB terpisah + install `--with-demo`.
 - Tampilan grup "PB1 Rp0" di struk/quote non-dine-in ([B], tour POS).
 - Mekanisme pembaruan layar pelanggan lokal vs jarak jauh ([B]); perilaku Coretax untuk `out_refund` ([B]); nama record rule multi-company produk 19.0; parameter `product.weight_in_lbs` 19.0; `OCA/l10n-indonesia` belum diperiksa.
+
+## Gelombang 21 — 2026-10-19 (W-31 struktur organisasi → peran & SoD, W-23 profil perangkat; paket D docs/04 §13.6)
+
+Kontrak: docs/04 §13.3 + L-64; keputusan 18-24, 18-27, 18-40, 18-41. Detail: `docs/08_ODOO_FIT_GAP.md` §12. Verifikasi = source odoo/odoo 19.0 via WebFetch (daftar file di §12). Referensi vendor: `OCA/server-backend@19.0` `base_user_role` (LGPL-3), `base_user_role_company` (AGPL-3, sengaja tidak diikuti), `base_user_role_history` (lisensi belum terverifikasi) — ide saja. **Tanpa shell → test belum dijalankan; tidak di-commit.**
+
+### A. Diterapkan (data-only)
+| Modul | Versi | Isi |
+|---|---|---|
+| `efn_setup_org` (**baru**) | 19.0.1.0.0 | depends `hr`, `efn_setup_company`. `data/hr_department_data.xml`: 9 departemen × 6 PT; `data/hr_job_data.xml`: 15 jabatan × 6 PT (`no_of_recruitment=0`, `user_id` kosong); semua `noupdate="1"`, tanpa nama orang. Test `tests/test_setup_org.py` (6 test: departemen/jabatan per PT, company konsisten, jumlah record, tanpa data orang + noupdate, isolasi rule multi-company standar, nama sama lintas PT). README + `static/description/index.html` |
+| `efn_setup_pos` | tetap | Hanya README: alasan W-23 tidak dijadikan data (19.0 tanpa `customer_display_type`; nilai per perangkat). Test lama tidak disentuh |
+
+### B. Fit-gap ringkas
+| Kebutuhan | Standar? | Hasil |
+|---|---|---|
+| OC per PT | Ya (`hr.department`, `hr.job`) | diterapkan |
+| Jabatan → grup, ganti grup EFN user | Tidak (`hr.job` tanpa tautan grup) | **E-47** `efn_role` |
+| SoD | Tidak (`disjoint_ids` hanya tipe user) | **E-47** `efn.sod.rule` + `efn.sod.exception` |
+| Review akses bulanan | Sebagian (ekspor list user standar; tanpa grup efektif terjamin, peran, snapshot, tanda tangan; auditor perlu hak Access Rights) | interim prosedur + **E-47c** snapshot |
+| Profil perangkat | Ya (checklist) | README |
+
+### C. Matriks peran (ringkas; lengkap docs/08 §12.2b)
+Direktur `account.group_account_readonly` · Finance Manager `account.group_account_manager` · Staf Finance `account.group_account_user` · Store Manager `point_of_sale.group_pos_manager` · Kasir `point_of_sale.group_pos_user` + `efn_role.group_role_cashier` (+ opsional `efn_setup_pos.group_efn_cashier_contact_creation`) · Merchandiser `sales_team.group_sale_manager` + `stock.group_stock_user` · Staf Pengadaan `purchase.group_purchase_user` + `stock.group_stock_user` · Staf Gudang `stock.group_stock_user` (+ `mrp.group_mrp_user` di CK) · Kurir tanpa user Odoo · Staf CS `sales_team.group_sale_salesman_all_leads` · Approver Refund CS idem + `efn_role.group_refund_approver` (cermin BFF) · Sales Manager Online `sales_team.group_sale_manager` · Loyalty Manager `base.group_user` + `efn_loyalty_accounting.group_loyalty_manager` · Superadmin `base.group_system` + `efn_audit.group_manager` · Auditor `account.group_account_readonly` + `efn_audit.group_auditor` (holding/DPO: `group_auditor_personal`). Akun teknis (`group_online_channel`, `group_kds_device`) di luar peran.
+
+**SoD minimal:** SOD-01 `sales_team.group_sale_manager` ⟂ `efn_role.group_refund_approver`; SOD-02 `efn_role.group_role_cashier` ⟂ `point_of_sale.group_pos_manager`; SOD-03 `efn_loyalty_accounting.group_loyalty_manager` ⟂ `account.group_account_manager`; SOD-04 promo tidak dibuat (CE tanpa alur persetujuan promo). Usulan `report_only`: SOD-05 pengadaan ⟂ akuntansi, SOD-06 auditor ⟂ `base.group_erp_manager`.
+
+### D. Rekomendasi untuk efn-odoo-engineer (paket D)
+- **Tambah E-47** `efn_role` (5–7 hari): `efn.role`, `efn.role.line` (tanggal, sumber manual/jabatan), flag `res.users.efn_role_managed` (user tanpa flag tidak disentuh), apply "nothing more, nothing less" hanya pada grup terkelola, `efn.sod.rule` (`block`/`report_only`), `efn.sod.exception` (Superadmin lain, alasan, ≤ 90 hari), SoD dievaluasi pada **grup efektif** di `res.users` **dan** `res.groups` (`implied_ids`/`user_ids`), grup penanda `group_role_cashier` & `group_refund_approver`, audit 4 model. Spesifikasi & 17 test: docs/08 §12.3, §12.8.
+- **Tambah E-47c** (2–3 hari): `efn.access.review` + snapshot `efn.access.review.line` + list/pivot + cron bulanan; auditor membaca tanpa hak Access Rights.
+- Opsional **E-47b** `efn_role_pos` (SoD karyawan POS di `advanced_employee_ids`).
+- **Koordinasi paket A:** `efn_loyalty_accounting.group_loyalty_manager` tidak mewarisi `base.group_user` (boleh, peran menambah eksplisit); pastikan test E-44 tidak memberi satu user Loyalty Manager + Accounting Manager sekaligus (akan ditolak SOD-03 bila `efn_role` + data SoD terpasang di run gabungan).
+- **Tidak ada yang dihapus/disederhanakan:** tidak ada modul `efn_*` yang menduplikasi `hr`/`res.groups` standar; `efn_setup_pos.group_efn_cashier_contact_creation` tetap (sempit, SEC-121) dan dipakai ulang sebagai grup peran Kasir opsional.
+- Setelah E-47: functional membuat `efn_setup_role` (data peran per PT × jabatan + SOD-01..03, 05..06) — docs/08 §12.6.
+
+### E. Untuk lead
+- Tambahkan `efn_setup_org` ke `EFN_TEST_MODULES` di `.github/workflows/ci.yml` (wilayah devsecops; tidak saya ubah).
+- §12 meralat §11.10: grup peran tidak dibuat sebagai `res.groups` di `efn_setup_org` (kontrak memilih `efn.role`).
+
+### F. Pertanyaan klien
+Q-ORG-1 (departemen/jabatan per PT), Q-ORG-2 (CS/IT/Audit terpusat di Holding? terkait 18-38), Q-ORG-3 (nama jabatan resmi), Q-ORG-4 (SOD-05/06 jadi `block`?), Q-ORG-5 (jumlah Superadmin ≥ 2 & masa pengecualian). Nama orang & anggota `efn-cs-approver` tetap A-5. Tidak ada yang memblokir `efn_setup_org`.
+
+### G. Belum terverifikasi
+Test `efn_setup_org` belum dijalankan. [B]: group-by M2M di list `res.users`, ekspor `all_group_ids`, hak baca grup user lain bagi non-Access Rights, titik penegakan `base.group_allow_export`, hak tulis promo/pricelist dari `group_sale_manager`, jabatan aktif karyawan (`hr.version`), state `loyalty.program`, sintaks unique parsial 19.0, perilaku `pos.config.other_devices`.

@@ -117,6 +117,8 @@ Semua profil = **standar CE 19**, tanpa modul baru; dipilih per `pos.config` (sa
 
 Tidak dipakai: IoT box (`iface_print_via_proxy`, `proxy_ip`, `is_posbox`) — perangkat non-Epson tidak didukung tanpa IoT box. Profil per outlet dicatat di ADR-023 (W-23).
 
+**G21 W-23 — kenapa profil tidak dijadikan data modul (verifikasi `point_of_sale/models/pos_config.py` 19.0, 2026-10-19):** `pos.config` 19.0 **tidak** punya field jenis layar pelanggan (`customer_display_type` versi lama tidak ada; yang ada hanya `customer_display_bg_img`/`_name`), sehingga dual vs single screen = cara membuka halaman layar pelanggan, bukan nilai field. Perbedaan profil lain hanya nilai per perangkat (`epson_printer_ip` = IP/nomor seri printer outlet, `iface_cashdrawer`, `iface_print_auto`, `iface_big_scrollbars`, `iface_electronic_scale`) yang baru diketahui saat survei outlet. CE tidak punya model "templat config", dan menambah `pos.config` contoh per profil di demo akan memunculkan config/sesi tambahan di DB uji tanpa manfaat konfigurasi. Jadi profil = **checklist** tabel di atas + ADR-023 per outlet. Field `other_devices` (*Connect devices to your PoS without an IoT Box*) ada di 19.0; perilakunya untuk perangkat non-Epson **belum terverifikasi** (uji perangkat).
+
 ## Checklist `pos.config` outlet pilot retail (PT Retail)
 | Field | Nilai usulan | Catatan |
 |---|---|---|

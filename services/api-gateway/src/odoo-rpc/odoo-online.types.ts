@@ -1,5 +1,5 @@
 /**
- * Tipe & jalur 11 metode `/json/2` untuk BFF (docs/04 §10.4.3; + L-60 `counterRefundAuthorize`). Hanya path di `ODOO_ONLINE_PATHS` yang boleh dipanggil
+ * Tipe & jalur 12 metode `/json/2` untuk BFF (docs/04 §10.4.3; + L-60 `counterRefundAuthorize`; + G21 §13.5 `setInvoiceParty`). Hanya path di `ODOO_ONLINE_PATHS` yang boleh dipanggil
  * (sama dengan allowlist `odoo-rpc-gateway`); klien tidak punya cara memanggil model/metode lain.
  */
 export const ODOO_ONLINE_PATHS = {
@@ -15,6 +15,11 @@ export const ODOO_ONLINE_PATHS = {
   status: 'efn.online.order/efn_online_status',
   /** L-60 (SEC-145 r13): otorisasi refund POS atas pelunasan counter (fail-closed di Odoo tanpa ini). */
   counterRefundAuthorize: 'efn.online.order/efn_online_counter_refund_authorize',
+  /**
+   * G21 §13.5 (W-06/E-39, L-63): pasang partner faktur pembeli TERLINDUNGI (efn_pii) pada SO — path gateway ke-12.
+   * Argumen berisi PII (profil pembeli): dikirim sekali (TLS + mTLS), tidak pernah di-log/disimpan BFF.
+   */
+  setInvoiceParty: 'efn.online.order/efn_online_set_invoice_party',
 } as const;
 export type OdooOnlineMethod = keyof typeof ODOO_ONLINE_PATHS;
 
@@ -28,6 +33,8 @@ export const ODOO_BUSINESS_CODES = [
   'not_found',
   'invalid_input',
   'channel_inactive',
+  /** G21 §13.5: `efn_pii` tidak aktif / kanal bukan PT PPN → profil pembeli tidak boleh masuk Odoo (L-63). */
+  'invoice_not_available',
 ] as const;
 export type OdooBusinessCode = (typeof ODOO_BUSINESS_CODES)[number];
 
@@ -246,6 +253,22 @@ export interface CounterRefundAuthorizeResult {
   /** Nominal yang diotorisasi Odoo (Rupiah bulat); harus sama dengan nominal refund BFF. */
   amount: number | null;
 }
+/**
+ * G21 §13.5: profil pembeli untuk faktur pajak atas nama (`invoice_request`). PII — hanya hidup di memori selama
+ * checkout, diteruskan SEKALI ke Odoo; tidak masuk DB/outbox/Redis/log BFF (K-36-7, L-63).
+ */
+export interface InvoiceBuyerProfile {
+  buyer_type: 'npwp' | 'nik' | 'passport';
+  tax_id: string;
+  name: string;
+  address: string;
+  email: string;
+}
+/** Hasil `efn_online_set_invoice_party` — TANPA PII (kontrak §13.5); hanya status opsional. */
+export interface SetInvoicePartyResult {
+  state: string | null;
+}
+
 export interface StatusRow {
   platform_order_ref: string;
   state: string;
@@ -269,6 +292,8 @@ export interface OdooOnlineApi {
   status(channel: string, platformOrderRefs: string[]): Promise<StatusRow[]>;
   /** L-60: hanya setelah refund counter disetujui approver CS; idempoten per `idempotency_key`. */
   counterRefundAuthorize(channel: string, platformOrderRef: string, authorization: CounterRefundAuthorizeInput): Promise<CounterRefundAuthorizeResult>;
+  /** G21 §13.5: setelah place berhasil; idempoten per `idempotencyKey`. Gagal tidak membatalkan order (kecuali invoice_not_available). */
+  setInvoiceParty(channel: string, platformOrderRef: string, profile: InvoiceBuyerProfile, idempotencyKey: string): Promise<SetInvoicePartyResult>;
   /** true bila circuit kanal sedang terbuka (quote/checkout langsung 503, katalog tetap dari salinan). */
   isCircuitOpen(channel: string): boolean;
 }

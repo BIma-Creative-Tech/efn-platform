@@ -26,6 +26,9 @@ export const KNOWN_SECRET_FILES: Readonly<Record<string, string>> = {
   PAYMENT_PROVIDER_API_KEY: 'payment_provider_api_key',
   // v4.1 (docs/04 §9.6 K-7): kunci endpoint migrasi, TERPISAH dari odoo_bff_api_key; wajib hanya bila MIGRATION_ENABLED
   MIGRATION_API_KEY: 'migration_api_key',
+  // G21 docs/04 §13.1 no. 3 (L-61): kunci HMAC publikasi kebijakan poin Odoo → BFF; TIDAK wajib saat start
+  // (endpoint `PUT /v1/pos/loyalty/policies/*` menjawab 503 bila belum ada)
+  LOYALTY_POLICY_SIGNING_KEY: 'loyalty_policy_signing_key',
   // Kredensial per service (docs/04 §7.3, SEC-02) — bukan lagi kredensial bersama/superuser
   PG_PASSWORD: 'pg_password_bff',
   RABBITMQ_PASSWORD: 'rabbitmq_password_bff',

@@ -36,6 +36,16 @@ import { companyDisplayName, type CatalogChannel } from '@/lib/catalog';
 import { formatRupiah } from '@/lib/format';
 import { onlineErrorMessage, REQUOTE_CODES } from '@/lib/orders';
 import { COUNTER_UNAVAILABLE_REASON, paymentOptions, resolvePaymentMethod, type PaymentMethod } from '@/lib/payment';
+import {
+  buildInvoiceRequest,
+  EMPTY_INVOICE_FORM,
+  INVOICE_NOT_AVAILABLE_MESSAGE,
+  invoiceRequestAvailable,
+  validateInvoiceRequest,
+  type InvoiceErrors,
+  type InvoiceRequestInput,
+} from '@/lib/invoice-request';
+import { InvoiceRequestForm } from './InvoiceRequestForm';
 import { OnlineUnavailable } from './OnlineUnavailable';
 import styles from './online.module.css';
 
@@ -135,6 +145,16 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
   // Metode bayar (§12.2). `counterDenied`: BFF menjawab 422 payment_method_unavailable -> opsi dikunci + pesan.
   const [chosenMethod, setChosenMethod] = useState<PaymentMethod | null>(null);
   const [counterDenied, setCounterDenied] = useState(false);
+  // Faktur atas nama (§13.5, L-63): data pribadi HANYA di memori komponen — bukan URL/storage/log/analytics.
+  const [invoiceOn, setInvoiceOn] = useState(false);
+  const [invoiceForm, setInvoiceForm] = useState<InvoiceRequestInput>(EMPTY_INVOICE_FORM);
+  const [invoiceErrors, setInvoiceErrors] = useState<InvoiceErrors>({});
+
+  function resetInvoice() {
+    setInvoiceOn(false);
+    setInvoiceForm(EMPTY_INVOICE_FORM);
+    setInvoiceErrors({});
+  }
 
   useEffect(() => {
     let active = true;
@@ -252,20 +272,50 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
 
   async function checkout(method: PaymentMethod) {
     if (view.kind !== 'member' || !view.quote) return;
+    // Hanya dikirim bila opsi aktif DAN keranjang masih seluruhnya kanal PT PPN (validasi klien = UX saja).
+    const invoiceEligible = invoiceRequestAvailable(view.quote.groups.map((g) => g.company_code));
+    let invoice: InvoiceRequestInput | null = null;
+    if (invoiceOn && invoiceEligible) {
+      const errs = validateInvoiceRequest(invoiceForm);
+      if (Object.keys(errs).length > 0) {
+        setInvoiceErrors(errs);
+        setMsg({ kind: 'error', text: 'Lengkapi data faktur pajak yang ditandai, atau matikan opsi faktur.' });
+        setTimeout(() => document.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus(), 0);
+        return;
+      }
+      setInvoiceErrors({});
+      invoice = buildInvoiceRequest(invoiceForm);
+    }
     setPaying(true);
     setMsg(null);
     try {
       const r = await apiFetch<{ order_id: string }>('/api/orders', {
         method: 'POST',
-        body: JSON.stringify({ quote_id: view.quote.quote_id, accept_total: view.quote.amount_payable_total, payment_method: method }),
+        body: JSON.stringify({
+          quote_id: view.quote.quote_id,
+          accept_total: view.quote.amount_payable_total,
+          payment_method: method,
+          ...(invoice ? { invoice_request: invoice } : {}),
+        }),
       });
+      invoice = null;
       if (r.ok) {
+        resetInvoice();
         clearGuestCart();
         router.push(`/pesanan/${r.data.order_id}`);
         return;
       }
-      if (r.status === 401) return goToLogin('/keranjang');
+      if (r.status === 401) {
+        resetInvoice();
+        return goToLogin('/keranjang');
+      }
       if (r.code === 'online_unavailable') return setView({ kind: 'unavailable' });
+      if (r.code === 'invoice_not_available') {
+        // 422: data dibuang dari state; pelanggan bisa membayar tanpa faktur atas nama.
+        resetInvoice();
+        setMsg({ kind: 'error', text: INVOICE_NOT_AVAILABLE_MESSAGE });
+        return;
+      }
       setMsg({ kind: 'error', text: r.message });
       if (r.code === 'payment_method_unavailable' && method === 'counter') {
         setCounterDenied(true);
@@ -565,6 +615,22 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
                   );
                 })}
               </fieldset>
+              {invoiceRequestAvailable(quote.groups.map((g) => g.company_code)) && (
+                <InvoiceRequestForm
+                  enabled={invoiceOn}
+                  onToggle={(on) => {
+                    if (on) setInvoiceOn(true);
+                    else resetInvoice();
+                  }}
+                  value={invoiceForm}
+                  errors={invoiceErrors}
+                  onChange={(next) => {
+                    setInvoiceForm(next);
+                    if (Object.keys(invoiceErrors).length > 0) setInvoiceErrors({});
+                  }}
+                  disabled={busy || paying}
+                />
+              )}
               {method === null && (
                 <p className="alert alert-error" role="alert">
                   Belum ada metode pembayaran yang dapat dipakai untuk keranjang ini. Pisahkan pesanan per PT, atau coba lagi nanti.

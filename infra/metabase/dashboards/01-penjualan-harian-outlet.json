@@ -235,6 +235,17 @@
       "size_y": 6,
       "description": "Per jenis temuan dan PT. Sampel = id order Odoo (cari di Point of Sale > Orders). Tanpa data pelanggan.",
       "sql": "SELECT run_at AS waktu_run_utc, severity AS tingkat, kind AS jenis, company_code AS pt, findings AS jumlah, arrayStringConcat(arrayMap(x -> toString(x), sample_order_ids), ', ') AS contoh_order_id FROM efn_dwh.v_loyalty_recon_latest WHERE 1 = 1 [[AND company_code = upper({{company}})]] ORDER BY tingkat, jumlah DESC LIMIT 200"
+    },
+    {
+      "key": "penjualan-per-wilayah",
+      "name": "Penjualan per wilayah domisili pembeli (kab/kota)",
+      "display": "table",
+      "row": 41,
+      "col": 0,
+      "size_x": 24,
+      "size_y": 7,
+      "description": "G21 (ADR-036 §0.7): kode wilayah Kemendagri pembeli/member saat transaksi dimuat. 'Tanpa wilayah' = order tanpa member atau member tanpa wilayah. Tanpa identitas pelanggan.",
+      "sql": "SELECT region_code AS kode_wilayah, region_name AS wilayah, state_name AS provinsi, sum(orders) AS jumlah_order, sum(gross_sales) AS penjualan_kotor, sum(refunds) AS refund_uang, sum(net_sales) AS penjualan_bersih FROM efn_dwh.v_pos_sales_region_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND (positionCaseInsensitive(company_name, {{company}}) > 0 OR brand = upper({{company}}))]] [[AND positionCaseInsensitive(store_name, {{outlet}}) > 0]] GROUP BY kode_wilayah, wilayah, provinsi ORDER BY penjualan_bersih DESC LIMIT 600"
     }
   ]
 }

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- docs/08 §12.3 "Audit": create/write/unlink peran, penetapan, aturan SoD, pengecualian SoD, dan review akses
+     dicatat efn_audit (semua field yang memenuhi syarat; relasi user disimpan `res.users,id` tanpa nama, SEC-56).
+     Aturan ber-xmlid = bawaan: tidak bisa dihapus (efn_audit), hanya diarsipkan oleh EFN Audit / Manager
+     (tersirat dari base.group_system) -> tercatat. Perubahan res.users.group_ids / res.groups sudah dicatat
+     bawaan efn_audit (CONTROL_SPECS / ACCESS_MODELS). noupdate="1": admin boleh menambah field. -->
+<odoo noupdate="1">
+    <record id="audit_rule_efn_role" model="efn.audit.rule">
+        <field name="name">EFN - Peran</field>
+        <field name="model_id" ref="model_efn_role"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+    </record>
+    <record id="audit_rule_efn_role_line" model="efn.audit.rule">
+        <field name="name">EFN - Penetapan Peran</field>
+        <field name="model_id" ref="model_efn_role_line"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+    </record>
+    <record id="audit_rule_efn_sod_rule" model="efn.audit.rule">
+        <field name="name">EFN - Aturan SoD</field>
+        <field name="model_id" ref="model_efn_sod_rule"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+    </record>
+    <record id="audit_rule_efn_sod_exception" model="efn.audit.rule">
+        <field name="name">EFN - Pengecualian SoD</field>
+        <field name="model_id" ref="model_efn_sod_exception"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+    </record>
+    <record id="audit_rule_efn_access_review" model="efn.audit.rule">
+        <field name="name">EFN - Review Akses</field>
+        <field name="model_id" ref="model_efn_access_review"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+    </record>
+</odoo>

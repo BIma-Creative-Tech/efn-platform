@@ -7,7 +7,9 @@
  *   → error `{ code: '23505' }` seperti pg;
  * - `pg_advisory_xact_lock(a, b)` = mutex async per kunci sampai akhir transaksi (`noLocks` mematikannya untuk kontrol
  *   negatif test konkurensi); `pg_try_advisory_xact_lock(k)`;
- * - transaksi dengan undo log (rollback saat fn melempar) tanpa mengganggu transaksi paralel lain.
+ * - transaksi dengan undo log (rollback saat fn melempar) tanpa mengganggu transaksi paralel lain;
+ * - G21: `issuer_company_code` + `created_at` (jam `now`) ledger, lot (expires_at, penerbit), `platform.loyalty_policy`
+ *   (append-only), dan tiga query akrual harian `LoyaltyAccrualService`.
  * Setiap query menunggu satu putaran event loop agar transaksi paralel benar-benar ber-interleave.
  * Query yang tidak dikenal → Error (agar SQL baru tidak lolos diam-diam tanpa diuji).
  */
@@ -24,6 +26,23 @@ export interface FakeLedgerRow {
   source_ref: string | null;
   idempotency_key: string;
   expires_at: string | null;
+  /** G21: PT penerbit lot (NULL = baris pra-G21). */
+  issuer_company_code?: string | null;
+  /** Default DB `now()` = `FakeLoyaltyDb.now()` saat INSERT. */
+  created_at?: string;
+}
+
+/** G21 `platform.loyalty_policy` (append-only). */
+export interface FakePolicyRow {
+  id: number;
+  company_code: string;
+  version: number;
+  effective_from: string;
+  approved_by_uid: number;
+  params: unknown;
+  point_value_idr: number | null;
+  body_sha256: string;
+  received_at: string;
 }
 
 export interface FakeReservationRow {
@@ -67,6 +86,8 @@ export interface FakeEarnRow {
   eligible_amount: number;
   points_earned: number;
   created_at: string;
+  /** G21: versi kebijakan PT yang menghitung earn (null = env). */
+  policy_version?: number | null;
 }
 
 export class FakeLoyaltyDb implements Db {
@@ -75,7 +96,11 @@ export class FakeLoyaltyDb implements Db {
   /** G18 K-18-6: `platform.loyalty_pos_reverse` (PK refund_order_ref, UNIQUE idempotency_key). */
   readonly reverses = new Map<string, Record<string, unknown>>();
   readonly reservations = new Map<string, FakeReservationRow>();
+  /** G21: kebijakan poin (UNIQUE company_code+version; UPDATE/DELETE tidak didukung = append-only). */
+  readonly policies: FakePolicyRow[] = [];
   readonly queries: string[] = [];
+  /** Jam DB (`now()` / DEFAULT created_at). Test mengikatnya ke FakeClock. */
+  now: () => number = () => Date.now();
   /** SEC-65 (`erasureBlock`): member_hash dengan DSAR delete aktif; tag daftar tolak → expires_at ISO. */
   readonly erasureActive = new Set<string>();
   readonly suppression = new Map<string, string>();
@@ -154,6 +179,84 @@ export class FakeLoyaltyDb implements Db {
       return ok(exp !== undefined && ms(exp) > ms(String(p[2])) ? [{ kind: 'erased' }] : []);
     }
 
+    if (text.startsWith('SET TRANSACTION')) return ok([]); // snapshot/read-only: fake sudah serial per query
+
+    // ───── G21 kebijakan poin ─────
+    if (text.includes('INSERT INTO platform.loyalty_policy')) {
+      const company = String(p[0]);
+      const version = Number(p[1]);
+      if (this.policies.some((r) => r.company_code === company && r.version === version)) return ok([], 0);
+      const row: FakePolicyRow = {
+        id: ++this.seq,
+        company_code: company,
+        version,
+        effective_from: String(p[2]),
+        approved_by_uid: Number(p[3]),
+        params: JSON.parse(String(p[4])),
+        point_value_idr: p[5] === null || p[5] === undefined ? null : Number(p[5]),
+        body_sha256: String(p[6]),
+        received_at: String(p[7]),
+      };
+      this.policies.push(row);
+      undo.push(() => this.policies.splice(this.policies.indexOf(row), 1));
+      return ok([{ id: String(row.id) }]);
+    }
+    if (text.includes('SELECT body_sha256 FROM platform.loyalty_policy WHERE company_code = $1 AND version = $2')) {
+      return ok(this.policies.filter((r) => r.company_code === p[0] && r.version === Number(p[1])).map((r) => ({ body_sha256: r.body_sha256 })));
+    }
+    if (text.includes('FROM platform.loyalty_policy') && text.includes('GREATEST(effective_from, received_at) <= $2')) {
+      const at = ms(String(p[1]));
+      const rows = this.policies
+        .filter((r) => r.company_code === p[0] && Math.max(ms(r.effective_from), ms(r.received_at)) <= at)
+        .filter((r) => !text.includes('point_value_idr IS NOT NULL') || r.point_value_idr !== null)
+        .sort((a, b) => b.version - a.version)
+        .slice(0, 1)
+        .map((r) => ({ ...r, effective_from: new Date(r.effective_from), received_at: new Date(r.received_at) }));
+      return ok(rows);
+    }
+    if (/UPDATE platform\.loyalty_policy|DELETE FROM platform\.loyalty_policy/.test(text)) {
+      throw new Error('platform.loyalty_policy append-only'); // = trigger DB
+    }
+
+    // ───── G21 akrual harian (§13.1 no. 6) ─────
+    if (text.includes('AS flow_points')) {
+      const [from, to, company] = [ms(String(p[0])), ms(String(p[1])), String(p[2])];
+      const groups = new Map<string, { issuer: string; company_code: string; reason: string; credit: boolean; flow_points: number }>();
+      for (const r of this.ledger) {
+        const created = ms(this.createdAt(r));
+        if (created < from || created >= to) continue;
+        if (r.expires_at !== null && ms(r.expires_at) <= created) continue; // lahir kedaluwarsa
+        const issuer = r.issuer_company_code ?? r.company_code;
+        if (r.company_code !== company && issuer !== company) continue;
+        const credit = r.delta_points > 0;
+        const k = `${issuer}|${r.company_code}|${r.reason}|${credit}`;
+        const g = groups.get(k) ?? { issuer, company_code: r.company_code, reason: r.reason, credit, flow_points: 0 };
+        g.flow_points += r.delta_points;
+        groups.set(k, g);
+      }
+      return ok([...groups.values()].map((g) => ({ ...g, flow_points: String(g.flow_points) })));
+    }
+    if (text.includes('AS expired_points')) {
+      const [from, to, company] = [ms(String(p[0])), ms(String(p[1])), String(p[2])];
+      const sum = this.ledger
+        .filter((r) => (r.issuer_company_code ?? r.company_code) === company && r.expires_at !== null)
+        .filter((r) => ms(r.expires_at as string) >= from && ms(r.expires_at as string) < to && ms(this.createdAt(r)) < ms(r.expires_at as string))
+        .reduce((s, r) => s + r.delta_points, 0);
+      return ok([{ expired_points: String(sum) }]);
+    }
+    if (text.includes('AS closing_points')) {
+      const [company, at] = [String(p[0]), ms(String(p[1]))];
+      const sum = this.ledger
+        .filter((r) => (r.issuer_company_code ?? r.company_code) === company && ms(this.createdAt(r)) < at)
+        .filter((r) => r.expires_at === null || ms(r.expires_at) >= at)
+        .reduce((s, r) => s + r.delta_points, 0);
+      return ok([{ closing_points: String(sum) }]);
+    }
+    if (text.includes('AS rv') && text.includes('FROM platform.loyalty_reservation')) {
+      const rows = [...this.reservations.values()].filter((r) => r.order_ref === p[0] && r.status === 'committed' && r.points > 0);
+      return ok([{ rv: String(rows.reduce((s, r) => s + r.value_idr, 0)), rp: String(rows.reduce((s, r) => s + r.points, 0)) }]);
+    }
+
     // ───── ledger ─────
     if (text.includes('INSERT INTO platform.loyalty_ledger')) {
       const key = String(p[7]);
@@ -169,6 +272,8 @@ export class FakeLoyaltyDb implements Db {
         source_ref: (p[6] as string | null) ?? null,
         idempotency_key: key,
         expires_at: (p[8] as string | null) ?? null,
+        issuer_company_code: (p[9] as string | null | undefined) ?? null,
+        created_at: new Date(this.now()).toISOString(),
       };
       this.ledger.push(row);
       undo.push(() => this.ledger.splice(this.ledger.indexOf(row), 1));
@@ -176,11 +281,26 @@ export class FakeLoyaltyDb implements Db {
     }
     if (text.includes('FROM platform.loyalty_ledger') && text.includes('GROUP BY expires_at')) {
       const live = this.live(String(p[0]), String(p[1]));
-      const groups = new Map<string | null, number>();
-      for (const r of live) groups.set(r.expires_at, (groups.get(r.expires_at) ?? 0) + r.delta_points);
-      const rows = [...groups.entries()]
-        .sort(([a], [b]) => (a === null ? 1 : b === null ? -1 : ms(a) - ms(b)))
-        .map(([expires_at, remaining]) => ({ expires_at: expires_at === null ? null : new Date(expires_at), remaining: String(remaining) }));
+      const groups = new Map<string, { expires_at: string | null; issuer: string; remaining: number; first_id: number }>();
+      for (const r of live) {
+        const issuer = r.issuer_company_code ?? r.company_code;
+        const k = `${r.expires_at ?? 'null'}|${issuer}`;
+        const g = groups.get(k) ?? { expires_at: r.expires_at, issuer, remaining: 0, first_id: r.id };
+        g.remaining += r.delta_points;
+        g.first_id = Math.min(g.first_id, r.id);
+        groups.set(k, g);
+      }
+      const rows = [...groups.values()]
+        .sort((a, b) => {
+          const byExp = a.expires_at === b.expires_at ? 0 : a.expires_at === null ? 1 : b.expires_at === null ? -1 : ms(a.expires_at) - ms(b.expires_at);
+          return byExp !== 0 ? byExp : a.first_id - b.first_id;
+        })
+        .map((g) => ({
+          expires_at: g.expires_at === null ? null : new Date(g.expires_at),
+          issuer: g.issuer,
+          remaining: String(g.remaining),
+          first_id: String(g.first_id),
+        }));
       return ok(rows);
     }
     if (text.includes('AS balance') && text.includes('FROM platform.loyalty_ledger')) {
@@ -235,6 +355,7 @@ export class FakeLoyaltyDb implements Db {
         eligible_amount: Number(p[4]),
         points_earned: Number(p[5]),
         created_at: String(p[6]),
+        policy_version: p[7] === null || p[7] === undefined ? null : Number(p[7]),
       };
       if (this.earns.has(row.order_ref) || [...this.earns.values()].some((r) => r.idempotency_key === row.idempotency_key)) {
         throw new UniqueViolation('loyalty_pos_earn_pkey');
@@ -415,6 +536,10 @@ export class FakeLoyaltyDb implements Db {
       return ok([], old.length);
     }
     throw new Error(`FakeLoyaltyDb: query tidak dikenal: ${text.slice(0, 120)}`);
+  }
+
+  private createdAt(r: FakeLedgerRow): string {
+    return r.created_at ?? new Date(0).toISOString();
   }
 
   private live(hash: string, at: string): FakeLedgerRow[] {

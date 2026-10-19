@@ -761,3 +761,167 @@ dihapus; tidak ada migrasi data (DB dev dibuat ulang).
   company tidak terdeteksi, sama seperti G12). `tax_regime` (ADR-001 §6) belum dibuat: FARM belum ditetapkan
   (Q-AD1-2), lebih tepat diturunkan dari fiscal position/pajak Odoo daripada di-hardcode.
 - Dashboard Metabase belum memakai `brand_group`/`v_gl_ic_recon` (belum ada kartu baru).
+
+## Gelombang 21 — Alert `EFN_LOYALTY_RECON` liabilitas poin per PT + wilayah pembeli `efn_etl.partner_region` (19 Okt 2026)
+
+Kontrak: docs/04 §13.1 no. 7 (rekonsiliasi liabilitas poin setelah akrual), §13.2 (E-38b `efn_region` + view ETL),
+§13.6 (batas file); ADR-036 §0.7 + K-36-5 (ralat), ADR-022 revisi 18 Okt. Branch `chore/wave-21`, tanpa commit.
+
+> **Ringkasan manajemen.** Bila saldo liabilitas poin suatu PT di Odoo berbeda dari catatan Super-App setelah akrual
+> harian, tim Finance kini menerima peringatan (selisih berapa pun) dan peringatan kritis (selisih besar; ambang
+> sementara Rp 100.000 menunggu keputusan Finance), plus dasbor Grafana per PT. Laporan penjualan per kabupaten/kota
+> domisili pembeli tersedia di Metabase tanpa membuka alamat pelanggan: yang diambil hanya kode wilayah.
+
+### 1. `EFN_LOYALTY_RECON` (Odoo) → Loki → Alertmanager + Grafana
+- **Promtail tahap 2c** (`infra/observability/promtail.yml`): hanya `service=odoo`, logger
+  `odoo.addons.efn_loyalty_accounting[.<sub>]`, level `INFO|WARNING`, regex berjangkar penuh dengan 5 kunci kontrak
+  (`bff_closing_liability_idr`, `company_code` `[A-Z][A-Z0-9]{1,7}`, `date` `YYYY-MM-DD`, `diff_idr`,
+  `odoo_liability_idr` — bilangan bulat, boleh negatif). Diterima dua urutan kunci: `json.dumps(sort_keys=True)`
+  dan urutan kontrak; separator `", "/": "` atau ringkas. → `{stream="efn_loyalty", loyalty_event="liability_recon",
+  company_code}` (retensi 400 hari). Baris lain yang memuat teks `EFN_LOYALTY_RECON` (logger lain, kunci tambahan, teks
+  ekor, newline) tidak masuk stream dan tetap diredaksi.
+- **Pengecualian redaksi**: selector redaksi kini `loyalty_event!="liability_recon"`. Alasannya, nominal ≥ Rp6,2 M
+  berawalan `628…` berpola nomor HP, sehingga redaksi akan merusak nilai dan alert jadi buta. Pengecualian ini aman
+  karena skemanya hanya menerima angka, kode PT, dan tanggal. Fixture membuktikan nominal `62812345678` lolos utuh,
+  sedangkan baris palsu dengan nomor HP tetap diredaksi.
+- **Loki rules** (`loki-rules/efn-loyalty.yml`, grup `efn-loyalty-liability-recon`): nilai terakhir dalam 26 jam per
+  `company_code`, `|diff|` = unwrap digit tanpa tanda.
+  - `EfnLoyaltyLiabilityReconMismatch` (`> 0`, warning, team finance).
+  - `EfnLoyaltyLiabilityReconCritical` (`> 100000`, critical).
+  - `EfnLoyaltyLiabilityReconMissing` (dead-man 26 jam; aktif hanya bila ada baris dalam 7 hari).
+  - Inhibit critical → warning per `company_code` (`alertmanager.yml`).
+- **Ambang "configurable"**: Loki ruler tidak mengekspansi env di file aturan. Karena itu ambang critical berada di
+  satu tempat (angka `> 100000` di rule). Ambang itu dijaga sama dengan threshold merah panel Grafana oleh pytest
+  `test_threshold_consistent_with_grafana_and_inhibit`. Perubahan ambang = PR.
+- **Grafana** `efn-loyalty-liability-recon.json` (folder EFN), berisi enam panel:
+  - |selisih| terakhir per PT;
+  - jumlah PT yang tercatat dalam 26 jam;
+  - jumlah PT dengan selisih;
+  - selisih bertanda per PT;
+  - liabilitas Odoo vs BFF;
+  - log mentah.
+
+### 2. Wilayah pembeli tanpa PII (`efn_etl.partner_region`)
+- **View Odoo** (`services/etl/sql/odoo-readonly-grants.sql` blok `DO $grant_g21$`): dibuat oleh pemilik `efn_odoo`,
+  bersyarat (NOTICE + lewati sampai `res_partner.efn_region_id` dan `efn_region.code` ada). Rinciannya:
+  - Skema `efn_etl` dibuat; `efn_etl` (role) hanya mendapat `USAGE`, `PUBLIC` dicabut.
+  - `efn_etl.partner_region(partner_id, company_id, region_code)` = `res_partner p JOIN efn_region r` (INNER JOIN:
+    partner tanpa wilayah atau sudah di-erasure tidak muncul).
+  - `efn_etl.region(region_code, name, state_code, state_name, active, write_date)` = `efn_region LEFT JOIN
+    res_country_state`. Ekspresi nama (jsonb `translate=True` atau varchar) dan keberadaan `active`/`state_id` dipilih
+    dari `information_schema` saat deploy.
+  - Tanpa `security_invoker` (view berjalan dengan hak pemilik). Tanpa `security_barrier`, karena view tidak menyaring
+    baris; pembatasnya adalah daftar kolom, dan dengan begitu join ETL bisa memakai PK.
+- **Kolom yang dibaca (lengkap)**: `res_partner.id, company_id, efn_region_id`; `efn_region.id, code, name, state_id,
+  active` (bila ada), `write_date, create_date`; `res_country_state.id, code, name`. Kolom yang tidak dibaca: nama,
+  alamat, kota, kode pos, email, HP, NPWP/NIK, blind index, `efn_name_tokens`. Tidak ada grant tabel ke `res_partner`
+  maupun `efn_region` (diuji pytest).
+- **ETL** (`efn_etl/region.py`, `ETL_PARTNER_REGION_ENABLED`, default `false`, butuh `ETL_ENABLE_ODOO`):
+  - `sales_fact_pos` melakukan LEFT JOIN view → `fact_sales_line.customer_region_code`. Nilainya adalah wilayah saat
+    baris dimuat. Kode tidak valid → `''` (lenient: baris tetap dimuat, teks bebas tidak pernah disalin). Granularitas
+    kecamatan `PP.KK.CC` ditolak.
+  - Job `regions` → `dim_region` (ReplacingMergeTree(write_date)). Kode master tidak valid → `ValueError`
+    (heartbeat error).
+  - **Tidak ada tabel partner → wilayah di ClickHouse** (minimisasi). Partner ID pseudonim tetap hanya
+    `fact_sales_line.customer_id` lama (TTL 5 th, tidak di-grant ke Metabase). Wilayah tetap ada setelah
+    `customer_id` dikosongkan; yang tersisa hanya agregat kab/kota.
+- **ClickHouse** `infra/clickhouse/init/09-g21-region.sql`:
+  - kolom `customer_region_code`;
+  - tabel `dim_region`;
+  - view `v_pos_sales_region_daily` (per hari × PT × outlet × wilayah; tanpa `customer_id` agar view INVOKER tidak butuh
+    grant identitas).
+  - Grant: `etl_writer` INSERT `dim_region`; `metabase_reader` view + `dim_region` + kolom `customer_region_code`.
+  - Kartu Metabase "Penjualan per wilayah domisili pembeli (kab/kota)" di dashboard 01 (baris 41).
+- **Hardening**: `PgSource` kini `-c search_path=public`. Nama skema `efn_etl` = nama role, sehingga `"$user"` di
+  search_path bawaan akan me-resolve nama tak berkualifikasi ke skema view. Semua query ETL sudah berkualifikasi
+  (`platform.` atau tabel Odoo di `public`).
+
+### File
+- Baru:
+  - `services/etl/efn_etl/region.py`
+  - `services/etl/tests/test_region.py`
+  - `services/etl/tests/test_observability_liability_recon.py`
+  - `infra/clickhouse/init/09-g21-region.sql`
+  - `infra/observability/grafana/provisioning/dashboards/json/efn-loyalty-liability-recon.json`
+- Ubah:
+  - `services/etl/efn_etl/jobs.py` (SQL penjualan bertemplate, kolom `customer_region_code`, `enabled_jobs(partner_region)`)
+  - `services/etl/efn_etl/config.py`
+  - `services/etl/efn_etl/__main__.py`
+  - `services/etl/efn_etl/adapters.py` (search_path)
+  - `services/etl/sql/odoo-readonly-grants.sql` (blok G21)
+  - `services/etl/README.md`
+  - `infra/clickhouse/access/etl-access.sql`
+  - `infra/clickhouse/access/metabase-access.sql`
+  - `infra/metabase/dashboards/01-penjualan-harian-outlet.json`
+  - `infra/observability/promtail.yml` (tahap 2c + selector redaksi)
+  - `infra/observability/loki-rules/efn-loyalty.yml`
+  - `infra/observability/alertmanager.yml`
+  - `infra/observability/tests/promtail/fixtures/odoo.txt` (+4 baris: 2 valid, 2 palsu)
+  - `infra/observability/tests/promtail/expected.txt` (+4 baris, posisi urutan `LC_ALL=C sort` disusun manual)
+
+### Test
+- `test_region.py`:
+  - kode kab/kota valid/tidak valid (provinsi saja, kecamatan, alamat, nomor HP, newline);
+  - `strict_region_code`, `transform_region` (+ negatif: kode rusak, `state_code` aneh, nama 500 karakter);
+  - kontrak SQL `regions`;
+  - SQL penjualan tanpa/dengan wilayah (tanpa `efn_etl.` saat mati; saat aktif hanya LEFT JOIN view, tanpa
+    `res_partner`/kolom PII);
+  - kolom fakta (kosong, valid, teks bebas → `''`); wilayah tetap ada saat `customer_id` di-age-out;
+  - flag `enabled_jobs`; konfigurasi (default mati, butuh Odoo);
+  - isi view `partner_region` persis 3 kolom kontrak, tanpa kolom PII/`security_invoker`, tanpa grant `res_partner`/
+    `efn_region`, bersyarat;
+  - DDL ClickHouse cocok dengan `REGION_COLUMNS`; grant ETL/Metabase tanpa `customer_id`.
+- `test_observability_liability_recon.py`: regex selector promtail diekstrak dari `promtail.yml` lalu diuji dengan
+  `re` Python (subset sintaks RE2) atas fixture yang sama.
+  - Fixture: 2 cocok, 2 palsu ditolak.
+  - 13 baris negatif: level ERROR/DEBUG, logger `efn_loyalty_accounting_evil`/modul lain, teks ekor berisi nomor HP,
+    kode huruf kecil/nama orang, format tanggal, desimal, string, kunci tambahan, injeksi newline, prefiks.
+  - 4 varian valid (dua urutan kunci, separator ringkas, negatif, 12 digit).
+  - Ekstraksi `|diff|` rule; ambang = threshold Grafana + inhibit Alertmanager; urutan tahap 2c sebelum redaksi.
+- Uji perilaku promtail sungguhan: `scripts/test-promtail-redaction.sh` (CI `promtail-redaction`) dengan `expected.txt`
+  yang diperbarui.
+
+### Asumsi skema / kontrak (perlu dikonfirmasi efn-odoo-engineer A dan B)
+- **(A) `efn_loyalty_accounting`**:
+  - logger di bawah `odoo.addons.efn_loyalty_accounting` dengan format log Odoo standar;
+  - level INFO (selisih 0) / WARNING (≠ 0);
+  - **satu baris per PT per tanggal setiap run, termasuk selisih 0** (dibutuhkan dead-man dan panel "PT tercatat");
+  - JSON lewat `json.dumps(payload, sort_keys=True)` dengan nilai IDR `int`;
+  - `diff_idr = odoo_liability_idr − bff_closing_liability_idr` (dashboard menafsirkan tanda begitu).
+  - Bila hanya mencatat saat ada selisih, dead-man harus dihapus/diubah. Bila format berbeda, tahap 2c tidak cocok;
+    dead-man menangkapnya.
+- **(B) `efn_region`**:
+  - tabel `efn_region` dengan `code` (`^\d{2}\.\d{2}$`), `name`, `state_id` → `res_country_state`, opsional `active`;
+  - `res_partner.efn_region_id` Many2one plaintext;
+  - erasure mengosongkan `efn_region_id` (K-36-4).
+  - **View dibuat satu pemilik saja**: skrip grant ETL ini. Bila modul `efn_region` juga membuat
+    `efn_etl.partner_region`, kolomnya wajib persis `(partner_id integer, company_id integer, region_code text)`. Kalau
+    tidak, `CREATE OR REPLACE VIEW` gagal saat deploy. Lead perlu memutuskan satu pemilik.
+
+### Belum terverifikasi / risiko sisa
+- **Belum dijalankan**:
+  - pytest + ruff (lead);
+  - `scripts/test-promtail-redaction.sh` (urutan `expected.txt` disusun manual);
+  - Loki ruler memuat grup baru: sintaks LogQL `absent_over_time(...) and sum by (...) (count_over_time(...[7d])) > 0`
+    dan `| regexp ... | unwrap` belum dievaluasi di Loki 3.2.1;
+  - `amtool check-config`;
+  - render panel Grafana 11.3;
+  - blok `DO $grant_g21$` di PostgreSQL (modul `efn_region` belum ada di repo saat ditulis);
+  - DDL/view `09-g21-region.sql` di ClickHouse 24.8;
+  - validasi kartu Metabase oleh `provision.py`.
+- **Uninstall `efn_region` / perubahan tipe kolom**: view bergantung pada `res_partner.efn_region_id`.
+  `DROP COLUMN` tanpa `CASCADE` atau `ALTER COLUMN TYPE` oleh Odoo akan gagal selama view ada. Hal yang sama berlaku
+  untuk `efn_etl_audit_epoch` (G18). Belum diverifikasi apakah `odoo.tools.sql.drop_column` memakai CASCADE. Runbook
+  uninstall: `DROP VIEW efn_etl.partner_region, efn_etl.region` dulu.
+- **Wilayah = saat baris dimuat**: wilayah yang diisi/diubah setelah transaksi tidak memperbarui fakta lama, kecuali
+  backfill (reset watermark `sales_fact_pos`, yang memakai wilayah saat ini). Ini perilaku yang dipilih untuk laporan
+  domisili saat transaksi; perlu dikonfirmasi Finance/PO.
+- **Dead-man**: padam setelah 7 hari tanpa baris (agar lingkungan tanpa modul tidak alarm terus). Berhenti lebih dari
+  7 hari hanya terlihat di panel "PT tercatat". Belum ada dead-man per PT (PT baru tanpa akun dikonfigurasi tidak
+  memicu alert selama PT lain tercatat).
+- **Ambang critical Rp 100.000 = PLACEHOLDER** → usulan **Q-F21-1** (Finance): nilai ambang, apakah per PT, dan
+  apakah selisih bertanda tertentu (mis. Odoo < BFF) lebih kritis.
+- **Runbook belum ditulis** (di luar cakupan file saya): `docs/runbooks/loyalty-anomaly.md` anchor
+  `#efnloyaltyliabilityreconmismatch`, `#…critical`, `#…missing` direferensikan rule. Usulan ke lead/devsecops.
+- `v_pos_sales_region_daily` hanya POS (`source='pos'`); penjualan online (`sale_order_line`) belum ada di mart.
+  Text-to-SQL semantic layer belum memuat view wilayah (perlu keputusan: kab/kota + PT + hari bisa kecil per sel).

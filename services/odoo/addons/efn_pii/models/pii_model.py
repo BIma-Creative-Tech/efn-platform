@@ -17,7 +17,18 @@ from odoo.exceptions import UserError
 from odoo.tools import SQL, split_every
 
 from . import keyring as kr
-from .fields_pii import _SCAN, PROTECTED_FIELD, keyring_for, raise_locked, reject_marker
+from .fields_pii import (
+    _SCAN,
+    PROTECTED_FIELD,
+    V1_MIGRATED_PARAM,
+    is_created,
+    keyring_for,
+    mark_created,
+    raise_locked,
+    reject_marker,
+    unmark_created,
+    v1_migration_mode,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -56,8 +67,13 @@ def internal(env):
 
 
 # --------------------------------------------------------------------------- registry / SEC-137
+def created(records):
+    """Dipanggil dari override `_create` model ber-field PII: catat id baru (SEC-148, efnpii1 sah sampai diikat)."""
+    return mark_created(records)
+
+
 def pii_columns(model):
-    """Nama kolom tersimpan bertipe EfnPiiChar pada model (urutan stabil)."""
+    """Nama kolom tersimpan bertipe EfnPiiChar/EfnPiiText pada model (urutan stabil)."""
     return [
         name
         for name, field in model._fields.items()
@@ -123,17 +139,19 @@ def require_keys(env):
 
 
 # --------------------------------------------------------------------------- tulis ulang kolom (SQL)
-def rewrite_rows(model, ids, encrypt_plain=False):
+def rewrite_rows(model, ids, encrypt_plain=False, allow_v1=False):
     """Tulis ulang kolom PII baris `ids` langsung di SQL (tanpa ORM, tanpa write_date/tracking).
 
-    - `efnpii1:` -> didekripsi dengan AAD v1 lalu dienkripsi `efnpii2:` (AAD + id). Dipakai setelah INSERT
-      (`bind_new_records`) dan migrasi data PoC.
+    - `efnpii1:` -> didekripsi dengan AAD v1 lalu dienkripsi `efnpii2:` (AAD + id), HANYA untuk id yang di-INSERT di
+      cursor ini (`bind_new_records`) atau bila ``allow_v1`` (migrasi dalam mode migrasi, SEC-148). Selain itu blob
+      dibiarkan (tetap ditolak saat baca) dan dihitung `unbound` + CRITICAL: mencegah "pencucian" blob efnpii1 dari
+      WAL lama ke record lain lewat jalur menjadi-terlindungi.
     - plaintext -> `efnpii2:` hanya bila ``encrypt_plain`` (record yang baru menjadi terlindungi / migrasi).
     - `efnpii2:` tidak disentuh.
 
-    :returns: dict jumlah {"bound", "encrypted", "failed"} (tanpa id).
+    :returns: dict jumlah {"bound", "encrypted", "failed", "unbound"} (tanpa id).
     """
-    counts = {"bound": 0, "encrypted": 0, "failed": 0}
+    counts = {"bound": 0, "encrypted": 0, "failed": 0, "unbound": 0}
     columns = pii_columns(model)
     ids = [rid for rid in ids if isinstance(rid, int)]
     if not ids or not columns:
@@ -173,6 +191,9 @@ def rewrite_rows(model, ids, encrypt_plain=False):
                     continue
                 ring = ring or keyring_for(env)
                 if fmt == 1:
+                    if not (allow_v1 or is_created(env, table, rid)):
+                        counts["unbound"] += 1
+                        continue
                     try:
                         plain = ring.decrypt_text(value, kr.aad_for(table, column))
                     except kr.PiiError:
@@ -210,20 +231,27 @@ def rewrite_rows(model, ids, encrypt_plain=False):
             count=counts["failed"],
             level=logging.ERROR,
         )
+    if counts["unbound"]:
+        kr.log_alarm("rewrite_refused", env.cr.dbname, "unbound_ciphertext", model=model._name, count=counts["unbound"])
     return counts
 
 
 def bind_new_records(records):
     """SEC-138 (ADR-036 §0.3): setelah INSERT, ikat ciphertext `efnpii1:` record baru ke id-nya (`efnpii2:`).
 
-    Cache ORM berisi plaintext (dari create), jadi tidak di-invalidate.
+    Cache ORM berisi plaintext (dari create), jadi tidak di-invalidate. ``records`` = hasil `super().create()` di
+    override create (pasti record baru), sehingga efnpii1-nya sah diikat. Id dilepas dari daftar "baru dibuat"
+    (SEC-148) sesudahnya.
     """
     if records:
-        rewrite_rows(records, records.ids, encrypt_plain=False)
+        try:
+            rewrite_rows(records, records.ids, encrypt_plain=False, allow_v1=True)
+        finally:
+            unmark_created(records)
 
 
 def encrypt_existing(records):
-    """Record yang BARU menjadi terlindungi: enkripsi nilai lama di kolom (plaintext + efnpii1 -> efnpii2)."""
+    """Record yang BARU menjadi terlindungi: enkripsi nilai lama di kolom (plaintext -> efnpii2; efnpii1 ditolak)."""
     if not records:
         return {}
     records.flush_recordset()
@@ -231,6 +259,69 @@ def encrypt_existing(records):
     counts = rewrite_rows(records, records.ids, encrypt_plain=True)
     records.invalidate_recordset(pii_columns(records))
     return counts
+
+
+def unbound_ids(model, ids):
+    """Id di ``ids`` yang punya nilai `efnpii1:` di kolom PII mana pun."""
+    columns = pii_columns(model)
+    ids = [rid for rid in ids if isinstance(rid, int)]
+    if not ids or not columns:
+        return []
+    found = []
+    for chunk in split_every(BATCH, sorted(set(ids))):
+        model.env.cr.execute(
+            SQL(
+                "SELECT id FROM %s WHERE id IN %s AND (%s)",
+                SQL.identifier(model._table),
+                tuple(chunk),
+                SQL(" OR ").join(SQL("%s LIKE %s", SQL.identifier(c), kr.PREFIX + "%") for c in columns),
+            )
+        )
+        found.extend(row[0] for row in model.env.cr.fetchall())
+    return found
+
+
+def migration_allows_v1(env):
+    """SEC-148 "mode migrasi": env `EFN_ODOO_PII_ACCEPT_V1=true` dan kait DB belum terpasang."""
+    return v1_migration_mode(env)
+
+
+def pii_models(env):
+    """Model tersimpan (bukan abstrak/view) yang punya kolom EfnPiiChar/EfnPiiText."""
+    result = []
+    for name in sorted(env.registry):
+        model = env[name]
+        if model._abstract or not model._auto or model._transient:
+            continue
+        if pii_columns(model):
+            result.append(model)
+    return result
+
+
+def count_unbound(env):
+    """Jumlah nilai `efnpii1:` di semua kolom PII semua model (query verifikasi AC-7/AC-11, tanpa id)."""
+    env.flush_all()
+    total = 0
+    for model in pii_models(env):
+        columns = pii_columns(model)
+        env.cr.execute(
+            SQL(
+                "SELECT count(*) FROM %s WHERE %s",
+                SQL.identifier(model._table),
+                SQL(" OR ").join(SQL("%s LIKE %s", SQL.identifier(c), kr.PREFIX + "%") for c in columns),
+            )
+        )
+        total += env.cr.fetchone()[0]
+    return total
+
+
+def latch_v1_migrated(env):
+    """Pasang kait "migrasi efnpii1 selesai" bila DB bersih dari efnpii1. :returns: True bila terpasang."""
+    if count_unbound(env):
+        return False
+    env["ir.config_parameter"].sudo().set_param(V1_MIGRATED_PARAM, "1")
+    _logger.info("%s v1 migration latched (efnpii1 tidak ada lagi; selanjutnya selalu ditolak)", kr.LOG_TAG)
+    return True
 
 
 # --------------------------------------------------------------------------- deteksi plaintext (SEC-137)
@@ -312,7 +403,8 @@ def redact_tracking(env, model_name, ids, fnames):
     if fnames:
         cr.execute(
             SQL(
-                """UPDATE mail_tracking_value v SET old_value_char = NULL, new_value_char = NULL
+                """UPDATE mail_tracking_value v
+                      SET old_value_char = NULL, new_value_char = NULL, old_value_text = NULL, new_value_text = NULL
                      FROM mail_message m, ir_model_fields f
                     WHERE v.mail_message_id = m.id AND m.model = %s AND m.res_id IN %s
                       AND v.field_id = f.id AND f.model = %s AND f.name IN %s""",
@@ -323,6 +415,32 @@ def redact_tracking(env, model_name, ids, fnames):
             )
         )
     if model_name == "res.partner":
+        redact_partner_labels(env, ids)
+
+
+def redact_tracking_fields(env, model_name, fnames):
+    """Redaksi nilai lama/baru tracking field ``fnames`` model ``model_name`` untuk SEMUA record (model yang
+    selalu terlindungi, mis. hr.employee/hr.version saat modul dipasang di DB lama)."""
+    if not fnames:
+        return
+    env.flush_all()
+    env.cr.execute(
+        SQL(
+            """UPDATE mail_tracking_value v
+                  SET old_value_char = NULL, new_value_char = NULL, old_value_text = NULL, new_value_text = NULL
+                 FROM ir_model_fields f
+                WHERE v.field_id = f.id AND f.model = %s AND f.name IN %s""",
+            model_name,
+            tuple(fnames),
+        )
+    )
+
+
+def redact_partner_labels(env, ids):
+    """Label many2one tracking (model apa pun) yang menunjuk partner ``ids`` -> `Kontak terlindungi #<id>`."""
+    cr = env.cr
+    ids = tuple(ids)
+    if ids:
         for side in ("old", "new"):
             char_col = SQL.identifier(f"{side}_value_char")
             int_col = SQL.identifier(f"{side}_value_integer")

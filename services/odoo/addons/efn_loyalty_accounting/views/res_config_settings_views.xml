@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="res_config_settings_view_form_inherit_efn_loyalty_accounting" model="ir.ui.view">
+        <field name="name">res.config.settings.view.form.inherit.efn.loyalty.accounting</field>
+        <field name="model">res.config.settings</field>
+        <field name="inherit_id" ref="account.res_config_settings_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//app[@name='account']" position="inside">
+                <block title="Poin EFN (akrual liabilitas per PT)" id="efn_loyalty_accounting">
+                    <setting id="efn_loyalty_accounts" string="Akun akrual Poin EFN"
+                             help="PLACEHOLDER per PT (Finance). Tanpa akun yang dibutuhkan, cron akrual tidak membuat jurnal dan menjadwalkan aktivitas Finance.">
+                        <div class="content-group">
+                            <div class="row mt8">
+                                <label for="efn_loyalty_liability_account_id" string="Liabilitas poin" class="col-lg-4 o_light_label"/>
+                                <field name="efn_loyalty_liability_account_id" class="col-lg-8"
+                                       domain="[('company_ids', 'in', company_id), ('account_type', 'in', ('liability_current', 'liability_non_current'))]"/>
+                            </div>
+                            <div class="row">
+                                <label for="efn_loyalty_expense_account_id" string="Beban program poin" class="col-lg-4 o_light_label"/>
+                                <field name="efn_loyalty_expense_account_id" class="col-lg-8"
+                                       domain="[('company_ids', 'in', company_id), ('account_type', 'in', ('expense', 'expense_direct_cost', 'expense_other'))]"/>
+                            </div>
+                            <div class="row">
+                                <label for="efn_loyalty_clearing_account_id" string="Piutang poin antar-PT (PT penebus)" class="col-lg-4 o_light_label"/>
+                                <field name="efn_loyalty_clearing_account_id" class="col-lg-8"
+                                       domain="[('company_ids', 'in', company_id), ('account_type', 'in', ('asset_current', 'asset_receivable', 'liability_current'))]"/>
+                            </div>
+                            <div class="row">
+                                <label for="efn_loyalty_interco_payable_account_id" string="Utang poin antar-PT (PT penerbit)" class="col-lg-4 o_light_label"/>
+                                <field name="efn_loyalty_interco_payable_account_id" class="col-lg-8"
+                                       domain="[('company_ids', 'in', company_id), ('account_type', 'in', ('liability_current', 'liability_payable'))]"/>
+                            </div>
+                            <div class="row">
+                                <label for="efn_loyalty_breakage_account_id" string="Pendapatan poin kedaluwarsa" class="col-lg-4 o_light_label"/>
+                                <field name="efn_loyalty_breakage_account_id" class="col-lg-8"
+                                       domain="[('company_ids', 'in', company_id), ('account_type', 'in', ('income', 'income_other'))]"/>
+                            </div>
+                            <div class="row">
+                                <label for="efn_loyalty_journal_id" string="Jurnal akrual" class="col-lg-4 o_light_label"/>
+                                <field name="efn_loyalty_journal_id" class="col-lg-8"
+                                       domain="[('company_id', '=', company_id), ('type', '=', 'general')]"/>
+                            </div>
+                        </div>
+                    </setting>
+                </block>
+            </xpath>
+        </field>
+    </record>
+</odoo>

@@ -72,6 +72,10 @@ GRANT SELECT ON efn_dwh.loyalty_points_daily TO metabase_reader;
 -- Gelombang 20 (W-32): rekonsiliasi eliminasi antar-entitas per pasangan (agregat GL, tanpa partner). Kolom baru
 -- dim_company (business_type, brand_group) sudah tercakup grant tabel penuh di atas.
 GRANT SELECT ON efn_dwh.v_gl_ic_recon TO metabase_reader;
+-- Gelombang 21 (ADR-036 §0.7): penjualan per wilayah domisili. Kode kab/kota tanpa customer_id (tetap tidak di-grant).
+GRANT SELECT ON efn_dwh.v_pos_sales_region_daily TO metabase_reader;
+GRANT SELECT ON efn_dwh.dim_region TO metabase_reader;
+GRANT SELECT(customer_region_code) ON efn_dwh.fact_sales_line TO metabase_reader;
 
 GRANT metabase_reader TO efn_metabase;
 SET DEFAULT ROLE metabase_reader TO efn_metabase;

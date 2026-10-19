@@ -15,6 +15,29 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Daftar modul Odoo yang di-install + diuji (--test-tags efn), dipakai BERSAMA job odoo-test dan odoo-test-pii (G21
+# AC-4) agar run gabungan ber-PII selalu mencakup modul yang sama; yang belum ada di repo dilewati otomatis.
+# efn_setup_* = modul konfigurasi data-only (efn-odoo-functional): ikut di-install agar test efn berjalan di
+# atas konfigurasi nyata (4 company, POS, MRP/FEFO, aturan audit). Tanpa modul OCA/vendor (ADR-031):
+# hanya Odoo CE 19 + efn_* (gerbang check-odoo-deps di job odoo-test).
+# efn_privacy menarik privacy_lookup (CE, depends manifest) otomatis; tidak didaftarkan di sini
+# karena pick() hanya menerima modul di services/odoo/addons. Sama: efn_online_pos_sale menarik pos_sale
+# (+ sale_management) agar jalur POS SEC-105 teruji di CI.
+# G17 (docs/04 §10.15): efn_online_order menarik sale_stock (CE) lewat depends -> auto-install
+# sale_loyalty/pos_sale ikut terpasang di DB test yang sama, sehingga regresi POS teruji bersama modul online.
+# EFN_INSTALL_ONLY_MODULES di-install SETELAH test, tanpa test: efn_setup_security menaikkan
+# auth_password_policy.minlength ke 12, sedangkan fixture test Odoo (mis. user `accountman` di
+# AccountTestInvoicingCommon) memakai password < 12 karakter -> setUpClass test POS akan gagal bila modul ini
+# terpasang lebih dulu. Langkah terpisah tetap membuktikan modul bisa di-install di DB yang sama.
+env:
+  EFN_TEST_MODULES: >-
+    efn_core efn_audit efn_pos_otp_gate efn_kitting
+    efn_pos_payment_gateway efn_pos_loyalty_ledger efn_privacy efn_pos_kds
+    efn_setup_company efn_setup_pos efn_setup_mrp efn_setup_audit
+    efn_online_order efn_setup_online efn_online_pos_sale efn_pos_refund_origin efn_online_pos_counter
+    efn_setup_org efn_loyalty_accounting efn_l10n_id_coretax_rounding efn_role efn_region
+  EFN_INSTALL_ONLY_MODULES: efn_setup_security
+
 jobs:
   changes:
     name: Detect changed paths
@@ -218,26 +241,7 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U odoo"
           --health-interval 5s --health-timeout 5s --health-retries 20
-    env:
-      # Modul yang di-install + diuji (--test-tags efn); yang belum ada di repo dilewati otomatis.
-      # efn_setup_* = modul konfigurasi data-only (efn-odoo-functional): ikut di-install agar test efn berjalan di
-      # atas konfigurasi nyata (4 company, POS, MRP/FEFO, aturan audit). Tanpa modul OCA/vendor (ADR-031):
-      # hanya Odoo CE 19 + efn_* (gerbang check-odoo-deps di bawah).
-      # efn_privacy menarik privacy_lookup (CE, depends manifest) otomatis; tidak didaftarkan di sini
-      # karena pick() hanya menerima modul di services/odoo/addons. Sama: efn_online_pos_sale menarik pos_sale
-      # (+ sale_management) agar jalur POS SEC-105 teruji di CI.
-      EFN_TEST_MODULES: >-
-        efn_core efn_audit efn_pos_otp_gate efn_kitting
-        efn_pos_payment_gateway efn_pos_loyalty_ledger efn_privacy efn_pos_kds
-        efn_setup_company efn_setup_pos efn_setup_mrp efn_setup_audit
-        efn_online_order efn_setup_online efn_online_pos_sale efn_pos_refund_origin efn_online_pos_counter
-      # G17 (docs/04 §10.15): efn_online_order menarik sale_stock (CE) lewat depends -> auto-install
-      # sale_loyalty/pos_sale ikut terpasang di DB test yang sama, sehingga regresi POS teruji bersama modul online.
-      # Di-install SETELAH test, tanpa test: efn_setup_security menaikkan auth_password_policy.minlength ke 12,
-      # sedangkan fixture test Odoo (mis. user `accountman` di AccountTestInvoicingCommon) memakai password < 12
-      # karakter -> setUpClass test POS akan gagal bila modul ini terpasang lebih dulu. Langkah terpisah tetap
-      # membuktikan modul bisa di-install di DB yang sama.
-      EFN_INSTALL_ONLY_MODULES: efn_setup_security
+    # EFN_TEST_MODULES / EFN_INSTALL_ONLY_MODULES: env tingkat workflow (di atas), dipakai juga odoo-test-pii.
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
@@ -307,6 +311,141 @@ jobs:
         with:
           name: odoo-test-log
           path: odoo-test.log
+          retention-days: 2
+          if-no-files-found: ignore
+
+  # G21 AC-4 (docs/04 §13.2, ADR-036 §0, SEC-153): run GABUNGAN efn_pii* + semua EFN_TEST_MODULES dengan 3 kunci uji
+  # acak. efn_pii melindungi partner perorangan sejak dibuat -> setiap modul/test yang membuat partner perorangan butuh
+  # ketiga kunci; job ini membuktikan modul lain tetap lulus saat PII aktif (gerbang aktivasi produksi, L-59).
+  # Kunci dibuat DI JOB (openssl rand, folder RUNNER_TEMP sekali pakai), tidak di repo, tidak di log/artefak/GITHUB_ENV;
+  # dihapus di akhir job. Log diperiksa: ERROR/CRITICAL = gagal; test efn_pii harus benar-benar berjalan; nilai kunci
+  # yang muncul di log = gagal (tanpa mencetaknya).
+  odoo-test-pii:
+    name: Odoo addon tests + PII (efn_pii*, 3 kunci uji)
+    needs: changes
+    if: needs.changes.outputs.odoo == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 50
+    services:
+      postgres:
+        image: postgres:16.15-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4
+        env:
+          POSTGRES_USER: odoo
+          POSTGRES_PASSWORD: odoo-ci-only   # kredensial DB sementara CI, bukan secret
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U odoo"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # WAJIB ada (gagal bila hilang): kontrak AC-4. Modul efn_pii_* lain di repo (mis. efn_pii_base_vat, efn_pii_l10n_id)
+      # ikut otomatis (penemuan direktori) agar modul PII baru tidak lolos tanpa diuji.
+      EFN_PII_MODULES: efn_pii efn_pii_pos efn_pii_hr efn_pii_account
+      # Path kunci DI DALAM container (folder, bukan file per kunci): efn_pii membaca <dir>/odoo_pii_{key_v1,bidx_key,name_key}
+      EFN_PII_KEY_MOUNT: /run/efn-pii-test
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - name: "Build image Odoo dari services/odoo/Dockerfile (BuildKit: COPY --chmod)"
+        env:
+          DOCKER_BUILDKIT: "1"
+        run: docker build -t efn-odoo:ci services/odoo
+      - name: Tentukan modul (EFN_TEST_MODULES + efn_pii*)
+        id: mods
+        run: |
+          set -euo pipefail
+          pick() {
+            local out="" m
+            for m in "$@"; do
+              if [ ! -f "services/odoo/addons/$m/__manifest__.py" ]; then
+                echo "::notice::modul $m belum ada, dilewati" >&2; continue
+              fi
+              case ",$out," in *",$m,"*) continue ;; esac
+              out="${out:+$out,}$m"
+            done
+            echo "$out"
+          }
+          for m in $EFN_PII_MODULES; do
+            [ -f "services/odoo/addons/$m/__manifest__.py" ] || { echo "::error::modul PII wajib $m tidak ada (AC-4)"; exit 1; }
+          done
+          extra=$(find services/odoo/addons -mindepth 2 -maxdepth 2 -path 'services/odoo/addons/efn_pii_*/__manifest__.py' \
+            | awk -F/ '{print $4}' | sort | tr '\n' ' ')
+          # shellcheck disable=SC2086  # daftar modul dipisah spasi
+          mods=$(pick $EFN_PII_MODULES $extra $EFN_TEST_MODULES)
+          # shellcheck disable=SC2086
+          later=$(pick $EFN_INSTALL_ONLY_MODULES)
+          echo "modul: $mods"
+          echo "modules=$mods" >> "$GITHUB_OUTPUT"
+          echo "later=$later" >> "$GITHUB_OUTPUT"
+      - name: Kunci PII uji acak (3 x 32 byte, hanya di job ini)
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/efn-pii-keys"
+          rm -rf "$d"; mkdir -m 0755 "$d"
+          for k in odoo_pii_key_v1 odoo_pii_bidx_key odoo_pii_name_key; do
+            # tr -d: satu baris tanpa newline; nilai TIDAK pernah di-echo. 0644: uid user odoo di image != runner,
+            # mount read-only; VM runner sekali pakai.
+            ( umask 022; openssl rand -base64 32 | tr -d '\r\n' > "$d/$k" )
+          done
+          test "$(sort -u "$d"/* | wc -l)" -eq 3   # ketiga kunci berbeda
+          ls -l "$d" | awk 'NR > 1 {print $1, $NF}'
+      - name: Install + test (--test-tags efn) dengan kunci PII
+        run: |
+          set -o pipefail
+          docker run --rm --network host --entrypoint odoo \
+            -e EFN_ODOO_PII_KEY_DIR="$EFN_PII_KEY_MOUNT" -v "$RUNNER_TEMP/efn-pii-keys:$EFN_PII_KEY_MOUNT:ro" \
+            efn-odoo:ci \
+            --db_host=127.0.0.1 --db_port=5432 --db_user=odoo --db_password=odoo-ci-only \
+            --addons-path=/mnt/extra-addons,/usr/lib/python3/dist-packages/odoo/addons \
+            -d efn_test_pii -i "${{ steps.mods.outputs.modules }}" \
+            --test-tags efn --stop-after-init --log-level=test --workers=0 --max-cron-threads=0 \
+            2>&1 | tee odoo-test-pii.log
+      - name: Install modul tanpa test (efn_setup_security) di DB yang sama, dengan kunci PII
+        if: steps.mods.outputs.later != ''
+        run: |
+          set -o pipefail
+          docker run --rm --network host --entrypoint odoo \
+            -e EFN_ODOO_PII_KEY_DIR="$EFN_PII_KEY_MOUNT" -v "$RUNNER_TEMP/efn-pii-keys:$EFN_PII_KEY_MOUNT:ro" \
+            efn-odoo:ci \
+            --db_host=127.0.0.1 --db_port=5432 --db_user=odoo --db_password=odoo-ci-only \
+            --addons-path=/mnt/extra-addons,/usr/lib/python3/dist-packages/odoo/addons \
+            -d efn_test_pii -i "${{ steps.mods.outputs.later }}" \
+            --stop-after-init --workers=0 --max-cron-threads=0 \
+            2>&1 | tee -a odoo-test-pii.log
+      - name: Periksa log (ERROR/CRITICAL = gagal, test efn_pii berjalan, kunci tidak bocor)
+        if: always()
+        run: |
+          set -euo pipefail
+          [ -s odoo-test-pii.log ] || { echo "::error::log test PII kosong"; exit 1; }
+          if grep -E '^[0-9-]+ [0-9:,]+ [0-9]+ (ERROR|CRITICAL) ' odoo-test-pii.log; then
+            echo "::error::Odoo test/instalasi ber-PII melaporkan ERROR/CRITICAL"; exit 1
+          fi
+          # Test efn_pii di-skip diam-diam (modul tidak ter-install / tag salah) = gagal
+          grep -q 'odoo\.addons\.efn_pii\.tests\.' odoo-test-pii.log \
+            || { echo "::error::test efn_pii tidak berjalan (AC-4)"; exit 1; }
+          # Nilai kunci uji tidak boleh muncul di log (grep -qF -f: satu kunci per baris, tanpa mencetak isi). File kunci
+          # tanpa newline -> digabung per baris lewat loop (cat saja = 3 kunci jadi satu pola).
+          if [ -d "$RUNNER_TEMP/efn-pii-keys" ]; then
+            pat="$RUNNER_TEMP/efn-pii-patterns"
+            for f in "$RUNNER_TEMP"/efn-pii-keys/*; do cat "$f"; echo; done > "$pat"
+            leak=0; grep -qF -f "$pat" odoo-test-pii.log && leak=1
+            rm -f "$pat"
+            [ "$leak" -eq 0 ] || { echo "::error::nilai kunci PII uji muncul di log Odoo"; exit 1; }
+          fi
+          grep -E 'tests? (when loading|in [0-9.]+s)|Ran [0-9]+ test' odoo-test-pii.log || true
+      - name: Hapus kunci PII uji
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/efn-pii-keys" "$RUNNER_TEMP/efn-pii-patterns"
+      # Log diagnostik hanya saat gagal, retensi 2 hari (pola odoo-test); log tidak memuat kunci (diperiksa di atas).
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        if: failure()
+        continue-on-error: true
+        with:
+          name: odoo-test-pii-log
+          path: odoo-test-pii.log
           retention-days: 2
           if-no-files-found: ignore
 
@@ -487,8 +626,9 @@ jobs:
         run: |
           overlays=()
           for f in docker-compose.online-*.yml; do overlays+=(-f "$f"); done
+          # G21 AC-13: odoo_pii_* (secrets.list host:disabled) hanya di-mount docker-compose.pii.yml -> ikut juga.
           cfg=$(docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.payment.yml \
-            "${overlays[@]}" \
+            -f docker-compose.pii.yml "${overlays[@]}" \
             --profile core --profile data --profile ai --profile observability --profile ops config --format json)
           defined=$(echo "$cfg" | jq -r '.secrets | keys[]' | sort)
           listed=$(awk '!/^[[:space:]]*#/ && NF {print $1}' ../../scripts/secrets.list | sort)
@@ -537,7 +677,7 @@ jobs:
             -v "$PWD/secrets/efn_ca_crt.txt:/run/secrets/efn_ca_crt:ro" \
             haproxy:3.2.25-alpine@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be \
             haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
-      # G17 (docs/04 §10.4.1): filter BFF -> Odoo /json/2. Uji negatif nyata (mTLS, 10 path, encoded, header) butuh
+      # G17 (docs/04 §10.4.1): filter BFF -> Odoo /json/2. Uji negatif nyata (mTLS, 12 path G21, encoded, header) butuh
       # stack berjalan: infra/odoo-rpc-gateway/test-gateway.sh (lokal/staging); di sini sintaks + ODOO_DB.
       - name: haproxy -c (infra/odoo-rpc-gateway/haproxy.cfg)
         run: |
@@ -553,7 +693,8 @@ jobs:
       # downgrade, IMAGE_* lewat env, registry asing, trust anchor PKI, tanda tangan, allowlist env, topologi dipin di
       # deploy.conf, config manifest, karakter kontrol/multi-baris, kontrol keamanan production, lib deploy-validate,
       # image terikat SHA commit (SEC-91), persetujuan rilis production approved-release (SEC-92); G17: 101 kasus,
-      # termasuk config penjualan online ONLINE_* dan penolakan saklar dev ODOO_ONLINE_MOCK/EFN_PAYMENT_SIMULATOR)
+      # termasuk config penjualan online ONLINE_* dan penolakan saklar dev ODOO_ONLINE_MOCK/EFN_PAYMENT_SIMULATOR;
+      # G21 AC-13: kunci PII host:* ditolak dari stdin, saklar EFN_ODOO_PII_*, validasi kunci host, status modul efn_pii)
       - name: efn-deploy regression (cosign palsu)
         run: |
           docker run --rm -v "$PWD:/src:ro" \
@@ -610,7 +751,7 @@ jobs:
   ci-gate:
     name: CI gate
     if: always()
-    needs: [changes, node, python, pytest, odoo-addons, odoo-test, odoo-tour, infra, promtail-redaction]
+    needs: [changes, node, python, pytest, odoo-addons, odoo-test, odoo-test-pii, odoo-tour, infra, promtail-redaction]
     runs-on: ubuntu-24.04
     permissions: {}
     steps:

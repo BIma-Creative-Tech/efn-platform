@@ -101,6 +101,8 @@ RPC_ALLOWLIST = {
     ("efn.online.order", "efn_online_refund"): "_efn_online_check_caller + idempotency_key + kumulatif <= dibayar",
     ("efn.online.order", "efn_online_refund_settled"): "_efn_online_check_caller + refund milik kanal + idempotensi",
     ("efn.online.order", "efn_online_status"): "_efn_online_check_caller (baca, hanya ref kanal itu)",
+    ("efn.online.order", "efn_online_set_invoice_party"): "G21 E-39: _efn_online_check_caller + validasi profil + "
+    "FOR UPDATE + PT PPN + efn_pii aktif (L-63) + idempotency_key + hanya placed; hasil {state} tanpa PII",
     # 3 metode UI staf (web client lewat WireGuard, bukan gateway).
     ("efn.online.order", "action_efn_ready"): "grup stock.group_stock_user + check_access(read) + company user",
     ("efn.online.order", "action_efn_retry_events"): "grup sales_team.group_sale_manager + check_access + company",
@@ -109,10 +111,26 @@ RPC_ALLOWLIST = {
     ("sale.order", "load_sale_order_from_pos"): "override CE pos_sale (tolak SO online)",
     ("efn.online.handover.wizard", "action_confirm"): "grup stock user + check_access(read) order + company; "
     "kode = verifikasi pbkdf2, 5x salah -> review",
+    # G21 E-44 (efn_loyalty_accounting): tombol kebijakan poin & retry; cek grup + check_access + company + state.
+    ("efn.loyalty.policy", "action_efn_approve"): "Accounting Manager + check_access(read) + company + draft + "
+    "bukan pembuat/penyunting terakhir",
+    ("efn.loyalty.policy", "action_efn_reject"): "sama dengan action_efn_approve",
+    ("efn.loyalty.policy.outbox", "action_efn_retry"): "Loyalty Manager/Accounting Manager + check_access + company + "
+    "state failed",
+    ("efn.loyalty.accrual", "action_efn_retry"): "Accounting Manager + check_access + company + state belum final",
     ("efn.online.order", "efn_online_counter_refund_authorize"): "L-60: _efn_online_check_caller + FOR UPDATE + "
     "idempotency_key + refund requested/cancel tanpa faktur + nominal persis",
     ("pos.config", "efn_online_counter_lookup"): "E-45: grup POS user + check_access(read) config + company + sesi "
     "terbuka + rate limit sesi/kasir; digest KDF per company + outlet = gudang config; hanya {order_label, amount}",
+    # efn_role (G21, E-47/E-47c, docs/08 §12.3-§12.5): tombol UI staf (web client lewat WireGuard, bukan gateway).
+    ("efn.role", "action_efn_apply_job_roles"): "grup base.group_erp_manager + check_access(write) + record rule "
+    "company + peran admin hanya base.group_system; sinkron baris jabatan via sudo setelah cek",
+    ("efn.access.review", "action_efn_snapshot"): "grup efn_audit.group_auditor / base.group_erp_manager + "
+    "check_access(read) + record rule company; hanya draft; snapshot via sudo",
+    ("efn.access.review", "action_efn_start_review"): "grup efn_audit.group_auditor + check_access(write) + record "
+    "rule company; draft -> in_review",
+    ("efn.access.review", "action_efn_done"): "grup efn_audit.group_auditor + check_access(write) + record rule "
+    "company; in_review -> done (read-only)",
 }
 
 MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}

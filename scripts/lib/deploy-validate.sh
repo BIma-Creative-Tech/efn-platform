@@ -29,7 +29,11 @@ EFN_RELEASE_CONFIG_VARS=(ACME_EMAIL PAYMENT_PROVIDER PG_SUPERUSER WHATSAPP_ENABL
   ERASURE_SUPPRESSION_DAYS DSAR_OPEN_ORDER_MAX_DEFER_DAYS MEMBER_MIN_AGE PRICE_HUNTER_GEO_RETENTION_DAYS
   CH_PSEUDONYM_RETENTION_YEARS CH_GEO_RETENTION_DAYS MB_AUDIT_MAX_RETENTION_DAYS
   LOYALTY_EARN_EXCLUDE_POINT_PAYMENT ETL_LOYALTY_POINTS_MODE LOYALTY_POINT_VALUE_IDR LOYALTY_RESTORE_TOLERANCE_PCT
-  LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS ETL_AUDIT_EPOCH_ANCHORS)
+  LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS ETL_AUDIT_EPOCH_ANCHORS
+  EFN_ODOO_PII_ENABLED EFN_ODOO_PII_REQUIRED)
+# G21 AC-13 (docs/04 §13.2, ADR-036 §0): kunci PII Odoo produksi (scripts/secrets.list host:disabled [SA]) - di-mount ke
+# odoo oleh infra/compose/docker-compose.pii.yml hanya bila EFN_ODOO_PII_ENABLED=true (scripts/deploy.sh).
+EFN_ODOO_PII_KEY_NAMES=(odoo_pii_key_v1 odoo_pii_bidx_key odoo_pii_name_key)
 # G17 (docs/04 §10.13): saklar KHUSUS dev/test. Bukan konfigurasi rilis (kunci manifest tidak dikenal = ditolak
 # efn-deploy); efn_validate_config juga menolak nilai true di staging/production lewat jalur manual deploy.sh.
 EFN_DEV_ONLY_SWITCHES=(ODOO_ONLINE_MOCK EFN_PAYMENT_SIMULATOR ETL_AUDIT_EPOCH_AUTO)
@@ -188,9 +192,16 @@ efn_validate_config() { # app_env
     _efn_re "$v" '^[0-9]{1,5}$' || return 1
   done
   for v in WHATSAPP_ENABLED RABBITMQ_STRICT_PERMISSIONS ETL_ENABLE_ODOO ETL_ENABLE_GL ETL_AUDIT_COPY_ENABLED MIGRATION_ENABLED \
-           ONLINE_ENABLED ONLINE_CATALOG_ENABLED LOYALTY_EARN_EXCLUDE_POINT_PAYMENT; do
+           ONLINE_ENABLED ONLINE_CATALOG_ENABLED LOYALTY_EARN_EXCLUDE_POINT_PAYMENT EFN_ODOO_PII_ENABLED EFN_ODOO_PII_REQUIRED; do
     _efn_re "$v" '^(true|false)$' || return 1
   done
+  # G21 AC-13 (docs/04 §13.2): production dengan kunci PII Odoo ter-mount WAJIB mode terkunci eksplisit
+  # (EFN_ODOO_PII_REQUIRED=true; kosong tidak cukup). Tanpa itu kunci yang hilang saat berjalan hanya WARNING dan Odoo
+  # bisa menulis PII baru tanpa enkripsi yang terdeteksi (L-63). Tidak bisa dimatikan lewat EFN_ALLOW_CONTROL_OFF.
+  if [[ "$app_env" == production && "${EFN_ODOO_PII_ENABLED:-false}" == true && "${EFN_ODOO_PII_REQUIRED:-}" != true ]]; then
+    _efn_err "production EFN_ODOO_PII_ENABLED=true wajib EFN_ODOO_PII_REQUIRED=true (AC-13, docs/runbooks/key-custody.md)"
+    return 1
+  fi
   # G17 penjualan online (docs/04 §10.1/§10.13; angka PLACEHOLDER pilot). Kosong = default compose (online MATI).
   _efn_re ONLINE_CHANNELS '^[A-Z][A-Z0-9-]{1,15}(,[A-Z][A-Z0-9-]{1,15}){0,7}$' || return 1
   efn_validate_online_channels "${ONLINE_CHANNELS:-$EFN_ONLINE_BASE_CHANNEL}" || return 1
@@ -357,4 +368,45 @@ efn_odoo_modules_missing() {
     if [[ "${st[$m]:-absent}" != installed ]]; then echo "${m}=${st[$m]:-absent}"; bad=1; fi
   done
   return "$bad"
+}
+
+# G21 AC-13 (docs/04 §13.2, ADR-036 §0): ketiga kunci PII Odoo di <dir> harus ada sebagai file biasa (bukan symlink),
+# berisi TEPAT 32 byte base64 kanonik (44 karakter, satu '=' penutup; newline akhir boleh), bukan placeholder `disabled`,
+# dan ketiganya BERBEDA (satu kunci untuk dua peran = kebocoran satu membuka keduanya, SEC-140 c). Nilai kunci tidak
+# pernah dicetak; alasan hanya menyebut nama file. rc 1 + alasan di stderr.
+efn_validate_pii_keys() { # dir
+  local dir="$1" n f v bad=0
+  local -A seen=()
+  for n in "${EFN_ODOO_PII_KEY_NAMES[@]}"; do
+    f="${dir}/${n}.txt"
+    if [[ -L "$f" || ! -f "$f" || ! -s "$f" ]]; then
+      _efn_err "kunci PII ${n}: file ${n}.txt tidak ada/kosong/symlink (docs/runbooks/key-custody.md §4e)"; bad=1; continue
+    fi
+    v=$(tr -d '\n' < "$f")
+    if [[ "$v" == disabled ]]; then
+      _efn_err "kunci PII ${n}: masih placeholder 'disabled' (Superadmin belum membuat kunci produksi)"; bad=1; continue
+    fi
+    # 32 byte -> base64 44 karakter: 42 karakter bebas + 1 karakter dengan 2 bit terakhir nol (AEIMQUYcgkosw048) + '='
+    if [[ ! "$v" =~ ^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$ ]] || [[ "$(wc -l < "$f")" -gt 1 ]]; then
+      _efn_err "kunci PII ${n}: bukan 32 byte base64 kanonik (openssl rand -base64 32)"; bad=1; continue
+    fi
+    if [[ -n "${seen[$v]:-}" ]]; then
+      _efn_err "kunci PII ${n}: sama dengan ${seen[$v]} (ketiga kunci wajib berbeda, ADR-036 §0.5)"; bad=1; continue
+    fi
+    seen[$v]="$n"
+  done
+  return "$bad"
+}
+
+# G21 AC-13: status modul efn_pii di DB efn_odoo vs saklar overlay. Modul terpasang (installed / to upgrade / to remove)
+# tanpa EFN_ODOO_PII_ENABLED=true = Odoo berjalan TANPA kunci (data terlindungi tidak terbaca; ADR-036 mode terkunci)
+# -> deploy gagal. `uninstalled`/`uninstallable`/`to install`/kosong (modul tidak dikenal DB) = boleh tanpa kunci.
+efn_pii_module_state_ok() { # enabled state
+  local enabled="$1" state="${2%$'\r'}"
+  case "$state" in
+    installed|"to upgrade"|"to remove")
+      [[ "$enabled" == true ]] \
+        || _efn_err "efn_pii berstatus '${state}' di efn_odoo tetapi EFN_ODOO_PII_ENABLED bukan true (kunci PII tidak di-mount)" ;;
+    *) return 0 ;;
+  esac
 }

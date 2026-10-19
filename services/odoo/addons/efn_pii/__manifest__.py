@@ -1,8 +1,9 @@
 {
     "name": "EFN PII (enkripsi kolom data pribadi Odoo, E-38a)",
     "summary": "ADR-036 §0: partner perorangan terlindungi sejak dibuat; nama/alamat/kota/kode pos/HP/email/NPWP "
-    "dienkripsi AES-256-GCM (efnpii2, AAD terikat id) + blind index + token nama. Belum untuk produksi.",
-    "version": "19.0.2.0.0",
+    "dienkripsi AES-256-GCM (efnpii2, AAD terikat id) + blind index + token nama; rekening orang, penerima "
+    "mail.mail, login portal opak (E-38b). Belum untuk produksi.",
+    "version": "19.0.3.0.0",
     "category": "EFN",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031, CLAUDE.md).

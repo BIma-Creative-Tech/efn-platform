@@ -8,7 +8,10 @@
     # 19.0.1.5.0 (G20 E-45, docs/04 §12.2 + L-50/L-52/L-55/L-56): kanal payment_modes (qris|counter), place
     # payment_mode + counter_code (digest KDF), blok channel katalog payment_modes, jalur internal mark_paid counter
     # (_efn_counter_mark_paid), event paid payment.method=counter. Jembatan POS: efn_online_pos_counter.
-    "version": "19.0.1.5.0",
+    # 19.0.1.6.0 (G21 E-39, docs/04 §13.5 + L-63): RPC efn_online_set_invoice_party (partner pembeli terlindungi
+    # efn_pii -> partner_invoice_id SO), kode error invoice_not_available, res.partner.efn_online_invoice_buyer,
+    # efn.online.order.invoice_party_idempotency_key. efn_pii TIDAK di depends (opsional, dicek saat runtime).
+    "version": "19.0.1.6.0",
     "category": "EFN/Sales",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031): hanya Odoo CE 19 + efn_*.

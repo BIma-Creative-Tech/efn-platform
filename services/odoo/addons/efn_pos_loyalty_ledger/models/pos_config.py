@@ -144,14 +144,26 @@ class PosConfig(models.Model):
                     _BALANCE_CALLS.pop(stale, None)
         return False
 
+    def _efn_loyalty_params_key(self):
+        """Kunci cache params: (db, kode PT config). G21 §13.1 no. 4: kebijakan aktif per PT."""
+        return (self.env.cr.dbname, self.sudo().company_id.efn_brand_code or "")
+
     def _efn_loyalty_params(self):
-        """Parameter §9.1 dari BFF (`GET /v1/pos/loyalty/params`), di-cache 5 menit per worker."""
-        key = self.env.cr.dbname
+        """Parameter §9.1 dari BFF, di-cache 5 menit per worker per PT.
+
+        G21 (docs/04 §13.1 no. 4, E-44): ``GET /v1/pos/loyalty/params?company_code=<PT config>`` -> kebijakan aktif PT
+        itu (versi tertinggi dengan effective_from <= now; tanpa kebijakan BFF memakai env lama). Tanpa kode PT ->
+        tanpa query (perilaku lama, env BFF).
+        """
+        key = self._efn_loyalty_params_key()
         cached = _PARAMS_CACHE.get(key)
         if cached and time.monotonic() - cached[0] < PARAMS_CACHE_SECONDS:
             return cached[1]
+        company_code = key[1]
         try:
-            response = self.env["efn.bff.client"]._efn_get(PARAMS_PATH)
+            response = self.env["efn.bff.client"]._efn_get(
+                PARAMS_PATH, params={"company_code": company_code} if company_code else None
+            )
         except EfnBffError:
             return {}
         if response.status != 200:
@@ -170,7 +182,7 @@ class PosConfig(models.Model):
     def _efn_loyalty_cached_params(self):
         """Parameter §9.1 dari cache saja (tanpa panggilan BFF) -- dipakai saat sync order agar sync tidak
         bergantung/menunggu BFF. Cache diisi saat cek saldo/reserve (TTL 5 menit, per worker)."""
-        cached = _PARAMS_CACHE.get(self.env.cr.dbname)
+        cached = _PARAMS_CACHE.get(self._efn_loyalty_params_key())
         if cached and time.monotonic() - cached[0] < PARAMS_CACHE_SECONDS:
             return cached[1]
         return {}

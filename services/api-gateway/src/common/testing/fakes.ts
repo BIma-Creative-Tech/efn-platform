@@ -258,6 +258,8 @@ export function testConfig(
     WEBHOOK_PAYMENT_SECRET: randomSecret(),
     PII_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
     ALTCHA_HMAC_KEY: randomSecret(),
+    // G21 §13.1 no. 3: wajib di luar APP_ENV=dev
+    LOYALTY_POLICY_SIGNING_KEY: randomSecret(),
   };
   const env: Record<string, string> = {
     NODE_ENV: 'test',

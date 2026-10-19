@@ -157,8 +157,13 @@ class TestEfnPiiSec138(PiiKeyMixin, TransactionCase):
 
     def setUp(self):
         super().setUp()
-        self._pii_env()
+        _folder, self.keys, self.bidx_key = self._pii_env()
+        self.name_key = self.pii_name_key
         self.Partner = self.env["res.partner"]
+
+    def _same_keys(self, **extra_env):
+        """Kunci yang sama, env tambahan (mis. mode migrasi SEC-148)."""
+        self._pii_env(keys=self.keys, bidx_key=self.bidx_key, name_key=self.name_key, extra_env=extra_env)
 
     def test_no_efnpii1_left_after_any_create_path(self):
         created = self.Partner.create([{"name": f"Batch {i}", "phone": f"0812 5000 {i:04d}"} for i in range(5)])
@@ -194,15 +199,27 @@ class TestEfnPiiSec138(PiiKeyMixin, TransactionCase):
             )
         )
         self.env.invalidate_all()
+        # SEC-148: default (tanpa mode migrasi) efnpii1 di luar transaksi create DITOLAK saat baca
         with self.assertLogs(KEYRING_LOGGER, "CRITICAL") as logs:
-            self.assertEqual(partner.phone, "0812 6000 0001")
+            self.assertEqual(partner.phone, kr.PLACEHOLDER)
         output = "\n".join(logs.output)
         self.assertIn("unbound_ciphertext", output)
-        self.assertIn("plaintext_in_protected", output)
+        self.assertIn("decrypt_refused", output)
+        self.assertNotIn("0812", output)
+        # migrasi tanpa mode migrasi: plaintext dienkripsi, efnpii1 dibiarkan (tidak "dicuci" ke efnpii2)
+        with self.assertLogs(KEYRING_LOGGER, "CRITICAL"):
+            totals = self.Partner.sudo()._efn_pii_migrate(ids=partner.ids)
+        self.assertEqual(totals["unbound"], 1)
+        self.assertTrue(self._raw(partner.id, "phone")["phone"].startswith(V1))
+        # mode migrasi (env eksplisit): baca = dekripsi + alarm, migrasi mengikat ke id
+        self._same_keys(**{kr.ENV_ACCEPT_V1: "true"})
+        self.env.invalidate_all()
+        with self.assertLogs(KEYRING_LOGGER, "CRITICAL") as logs:
+            self.assertEqual(partner.phone, "0812 6000 0001")
+        self.assertIn("decrypt_unbound", "\n".join(logs.output))
         totals = self.Partner.sudo()._efn_pii_migrate(ids=partner.ids)
-        self.assertEqual((totals["partners"], totals["failed"]), (1, 0))
+        self.assertEqual((totals["partners"], totals["failed"], totals["unbound"]), (1, 0, 0))
         self.assertGreaterEqual(totals["bound"], 1)
-        self.assertGreaterEqual(totals["encrypted"], 3)
         raw = self._raw(partner.id, "phone", "name", "complete_name", "city", "efn_name_tokens")
         self.assertBound(raw["phone"], "res_partner", "phone", partner.id, "0812 6000 0001")
         self.assertBound(raw["name"], "res_partner", "name", partner.id, "Legacy PoC")
@@ -212,3 +229,34 @@ class TestEfnPiiSec138(PiiKeyMixin, TransactionCase):
         with self.assertNoLogs(KEYRING_LOGGER, "CRITICAL"):
             self.assertEqual(partner.phone, "0812 6000 0001")
         self.assertIn(partner, self.Partner.search([("name", "ilike", "legacy")]))
+
+    def test_v1_latch_rejects_even_in_migration_mode(self):
+        """Kait DB 'migrasi selesai' menang atas env: blob efnpii1 dari WAL lama tetap ditolak (SEC-148)."""
+        victim = self.Partner.create({"name": "Korban WAL", "phone": "0812 6100 0001"})
+        target = self.Partner.create({"name": "Target WAL", "phone": "0812 6100 0002"})
+        ring = kr.get_keyring(self.env.cr.dbname)
+        wal_blob = ring.encrypt_text("0812 6100 0001", kr.aad_for("res_partner", "phone"), kr.PREFIX)
+        self.env.flush_all()
+        self.env["ir.config_parameter"].sudo().set_param(pm.V1_MIGRATED_PARAM, "1")
+        self.env.cr.execute(SQL("UPDATE res_partner SET phone = %s WHERE id = %s", wal_blob, target.id))
+        self._same_keys(**{kr.ENV_ACCEPT_V1: "true"})
+        self.env.invalidate_all()
+        with self.assertLogs(KEYRING_LOGGER, "CRITICAL") as logs:
+            self.assertEqual(target.phone, kr.PLACEHOLDER)
+        self.assertIn("decrypt_refused", "\n".join(logs.output))
+        # jalur "menjadi terlindungi"/migrasi juga tidak mengikat blob itu
+        with self.assertLogs(KEYRING_LOGGER, "CRITICAL"):
+            totals = self.Partner.sudo()._efn_pii_migrate(ids=target.ids)
+        self.assertEqual(totals["unbound"], 1)
+        self.assertTrue(self._raw(target.id, "phone")["phone"].startswith(V1))
+        self.assertEqual(victim.phone, "0812 6100 0001")
+
+    def test_latch_only_when_db_clean(self):
+        partner = self.Partner.create({"name": "Bersih", "phone": "0812 6200 0001"})
+        self.assertGreaterEqual(pm.count_unbound(self.env), 0)
+        ring = kr.get_keyring(self.env.cr.dbname)
+        self.env.flush_all()
+        blob = ring.encrypt_text("x", kr.aad_for("res_partner", "street"), kr.PREFIX)
+        self.env.cr.execute(SQL("UPDATE res_partner SET street = %s WHERE id = %s", blob, partner.id))
+        self.assertGreaterEqual(pm.count_unbound(self.env), 1)
+        self.assertFalse(pm.latch_v1_migrated(self.env))

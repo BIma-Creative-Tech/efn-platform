@@ -7,7 +7,8 @@ import { PiiCipher } from '../common/pii/crypto';
 import { CatalogService } from '../catalog/catalog.service';
 import { CartService } from '../cart/cart.service';
 import { QuoteService, StoredQuote, placeLines } from '../cart/quote.service';
-import { ODOO_ONLINE, OdooOnlineApi, PlaceResult } from '../odoo-rpc/odoo-online.types';
+import { INVOICE_COMPANIES } from './invoice-request';
+import { InvoiceBuyerProfile, ODOO_ONLINE, OdooOnlineApi, OdooRpcError, PlaceResult, isOdooBusiness } from '../odoo-rpc/odoo-online.types';
 import { OnlineErrors, mapOdooError } from '../odoo-rpc/online-errors';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
 import { PaymentStatus } from '../payments/payment-gateway';
@@ -38,6 +39,19 @@ export interface CheckoutInput {
   acceptTotal: number;
   /** G20 §12.2 no. 2: default `qris`. */
   paymentMethod?: PaymentMethod;
+  /**
+   * G21 §13.5: profil pembeli faktur pajak (PII). Hanya di memori selama request; diteruskan sekali ke Odoo
+   * `efn_online_set_invoice_party`; TIDAK masuk DB/outbox/Redis/log (K-36-7, L-63).
+   */
+  invoiceRequest?: InvoiceBuyerProfile;
+}
+
+/**
+ * G21 §13.5 (aditif, hanya di respons checkout — tidak disimpan): `applied` = partner faktur terpasang di semua bagian;
+ * `pending_cs` = sebagian/seluruh pemasangan gagal (anomali) → faktur atas nama dibuat CS.
+ */
+export interface InvoiceRequestView {
+  status: 'applied' | 'pending_cs';
 }
 
 /** QRIS (gateway) — bentuk pra-G20, tidak berubah. */
@@ -67,6 +81,8 @@ export interface OrderView {
   amount_payable: number;
   currency: 'IDR';
   payment: QrisPaymentView | CounterPaymentView;
+  /** G21 §13.5: hanya pada respons checkout pertama yang membawa `invoice_request`. */
+  invoice_request?: InvoiceRequestView;
   parts: {
     channel_code: string;
     company_code: string;
@@ -108,6 +124,9 @@ export function customerStatus(order: OrderRow, parts: readonly PartRow[]): Orde
 export function requestSha256(input: CheckoutInput): string {
   const body: Record<string, unknown> = { quote_id: input.quoteId, accept_total: input.acceptTotal };
   if (input.paymentMethod === 'counter') body.payment_method = 'counter';
+  // G21 §13.5: HANYA penanda ada/tidaknya permintaan faktur — isi profil (PII, NPWP/NIK berentropi rendah) tidak pernah
+  // ikut di-hash/disimpan. Sidik order tanpa faktur sama dengan pra-G21.
+  if (input.invoiceRequest) body.invoice_request = true;
   return createHash('sha256').update(JSON.stringify(body), 'utf8').digest('hex');
 }
 
@@ -168,6 +187,10 @@ export class OrdersService {
     // L-55: metode di luar ONLINE_PAYMENT_METHODS → 422 (gerbang deploy pilot; `counter` tidak butuh provider)
     if (!this.config.onlinePaymentMethods.includes(method)) throw OnlineErrors.paymentMethodUnavailable();
     if (method === 'counter' && quote.groups.length > 1) throw OnlineErrors.counterPaymentSinglePartOnly();
+    // G21 §13.5: faktur atas nama hanya bila SEMUA bagian kanal PT PPN (GL, BCR); F&B (PB1) → 422 sebelum order dibuat
+    if (input.invoiceRequest && quote.groups.some((g) => !INVOICE_COMPANIES.includes(g.company_code))) {
+      throw OnlineErrors.invoiceNotAvailable();
+    }
     for (const g of quote.groups) {
       const ch = await this.catalog.channel(g.channel_code);
       if (!ch) throw OnlineErrors.itemUnavailable();
@@ -242,7 +265,33 @@ export class OrdersService {
     });
     if (created) return this.replay(created, sha);
     this.metrics.order('created');
-    return this.place(memberId, orderId, input.quoteId, quote, codes, input.acceptTotal, expiresAt, method, counterCodes);
+    return this.place(memberId, orderId, input.quoteId, quote, codes, input.acceptTotal, expiresAt, method, counterCodes, input.invoiceRequest ?? null);
+  }
+
+  /**
+   * G21 §13.5: setelah SEMUA bagian ter-place (dan total/expires_at lolos), pasang partner faktur pembeli per bagian
+   * (`efn_online_set_invoice_party`, idempoten `online:invoice:<part_id>`). `invoice_not_available` dari Odoo (efn_pii
+   * belum aktif, L-63) → kegagalan checkout (order dikompensasi, 422 diteruskan). Gagal lain (transport/circuit/auth/
+   * respons) → anomali `invoice_party_failed` + lanjut (partner generik; faktur atas nama dibuat CS). Profil tidak pernah
+   * di-log: anomali hanya order/part/kode.
+   */
+  private async applyInvoiceParty(
+    orderId: string,
+    parts: readonly PartRow[],
+    profile: InvoiceBuyerProfile,
+  ): Promise<{ failure: ApiError | null; view: InvoiceRequestView }> {
+    let pending = false;
+    for (const part of parts) {
+      try {
+        await this.odoo.setInvoiceParty(part.channel_code, part.id, profile, `online:invoice:${part.id}`);
+      } catch (err) {
+        if (isOdooBusiness(err, 'invoice_not_available')) return { failure: OnlineErrors.invoiceNotAvailable(), view: { status: 'pending_cs' } };
+        pending = true;
+        const code = err instanceof OdooRpcError ? (err.code ?? err.kind) : 'error';
+        this.metrics.anomaly('invoice_party_failed', 'warning', { order_id: orderId, part_id: part.id, channel: part.channel_code, code });
+      }
+    }
+    return { failure: null, view: { status: pending ? 'pending_cs' : 'applied' } };
   }
 
   private async replay(order: OrderRow, sha: string): Promise<OrderView> {
@@ -260,6 +309,7 @@ export class OrdersService {
     expiresAt: Date,
     method: PaymentMethod,
     counterCodes: Map<string, string>,
+    invoice: InvoiceBuyerProfile | null = null,
   ): Promise<OrderView> {
     const parts = await this.repo.getParts(orderId);
     const results = new Map<string, PlaceResult>();
@@ -319,6 +369,14 @@ export class OrdersService {
         }
       }
     }
+    // G21 §13.5: faktur atas nama SEBELUM payment intent (invoice_not_available → order dikompensasi tanpa intent)
+    let invoiceView: InvoiceRequestView | null = null;
+    if (!failure && invoice) {
+      const res = await this.applyInvoiceParty(orderId, parts, invoice);
+      failure = res.failure;
+      invoiceView = res.view;
+    }
+    const withInvoice = (v: OrderView): OrderView => (invoiceView ? { ...v, invoice_request: invoiceView } : v);
     if (!failure && method === 'counter') {
       // G20 §12.2 no. 2: TANPA payment intent — pelanggan membayar di kasir dengan kode bayar
       await this.repo.tx(async (r) => {
@@ -329,7 +387,7 @@ export class OrdersService {
       const order = await this.repo.getOrder(orderId);
       if (!order) throw OnlineErrors.unavailable();
       this.logger.log(`Order online ${orderId} menunggu bayar di kasir (${parts.length} bagian)`);
-      return this.view(order);
+      return withInvoice(await this.view(order));
     }
     let intent: OnlineIntent | null = null;
     if (!failure) {
@@ -360,7 +418,7 @@ export class OrdersService {
     const order = await this.repo.getOrder(orderId);
     if (!order) throw OnlineErrors.unavailable();
     this.logger.log(`Order online ${orderId} menunggu pembayaran (${parts.length} bagian)`);
-    return this.view(order);
+    return withInvoice(await this.view(order));
   }
 
   /** Kompensasi checkout gagal: batalkan semua bagian di Odoo (idempoten; `absent` = selesai). Gagal → outbox. */

@@ -445,3 +445,20 @@ Status selesai/dibatalkan tidak menampilkan batas. Label kini menyebut jumlah pe
 4. Katalog produk membawa `weight_kg` nullable.
 
 **Belum diverifikasi:** Vitest/lint/`next build` (lead); uji browser/pembaca layar untuk `CounterPayPanel` dan radio metode bayar; tampilan di perangkat kecil; teks pelanggan menunggu Legal/Produk; tenant Bacha dua kanal belum dibuat.
+
+
+## Gelombang 21 — faktur pajak atas nama pembeli di checkout (docs/04 §13.5, L-63; W-06)
+
+**Halaman/komponen**
+- `components/online/InvoiceRequestForm.tsx` (baru, terkendali): checkbox "Minta faktur pajak (B2B / atas nama)" (`aria-controls`/`aria-expanded`), pemberitahuan privasi (tujuan: penerbitan faktur pajak; retensi 10 tahun sesuai aturan perpajakan), radio jenis identitas NPWP/NIK/Paspor (fieldset+legend), kolom nomor, nama, alamat, email. Semua kolom berlabel, `required`, `aria-invalid` + `aria-describedby` ke pesan `role="alert"`; fokus pindah ke kolom salah pertama saat submit gagal validasi. Tanpa atribut `name`, `autocomplete="off"`.
+- `components/online/CartView.tsx`: bagian ditampilkan hanya bila SEMUA `quote.groups[].company_code` PT PPN (`invoiceRequestAvailable`). State data faktur hanya di memori (useState); tidak ke URL/storage/log/analytics. Dihapus (`resetInvoice`) setelah submit sukses, saat 401, saat 422 `invoice_not_available`, dan saat checkbox dimatikan. Pada galat yang bisa diulang (harga berubah, dll.) data dipertahankan di memori agar pelanggan tidak mengetik ulang. Bila keranjang berubah menjadi tidak memenuhi syarat, `invoice_request` tidak dikirim.
+- `lib/invoice-request.ts` (baru, murni): validasi klien (NPWP/NIK 16 digit setelah pemisah `. - spasi` dibuang; paspor 5–20 alfanumerik; nama 2–100; alamat 5–255; email dasar), `buildInvoiceRequest`, `parseInvoiceRequest` (dipakai route: buang field tambahan), teks privasi. Pesan error tidak memuat nilai yang diketik.
+- `lib/brands.ts`: `CompanyInfo.businessType` ('retail' GL/BCR, 'fnb' PB/BCF, null EFN/FARM) + `allPpnCompanies()`.
+- `lib/orders.ts`: `invoice_not_available` -> "Faktur atas nama belum tersedia untuk pesanan ini".
+- `app/api/orders/route.ts` POST: `invoice_request` opsional divalidasi ulang, hanya lima field diteruskan ke BFF; bentuk salah -> 400 `invalid_request` generik tanpa memantulkan nilai. Tidak ada log di route; `bffFetch` hanya me-log method/path/status. Respons ke browser tetap `{order_id, status}`.
+
+**Endpoint BFF (asumsi)**: `POST /v1/orders` menerima `invoice_request: {buyer_type: "npwp"|"nik"|"passport", tax_id, name, address, email}`; 422 `invoice_not_available` (PT PB1 atau `efn_pii` tidak aktif) diteruskan ke pelanggan; BFF memvalidasi ulang dan tidak menyimpan (K-36-7). Asumsi tambahan: aturan paspor (5–20 alfanumerik) adalah tebakan klien karena §13.5 tidak menetapkan format paspor; BFF boleh lebih ketat (akan jadi 400 generik).
+
+**Test**: `tests/g21-invoice.test.ts` (baru): validasi per jenis, normalisasi, kelayakan PT PPN (campuran PB/BCF, kosong, kode tak dikenal), teks privasi, parse buang field tambahan, route meneruskan lima field, tidak ada field tanpa opsi, 400 tanpa BFF dan tanpa echo, 422 -> pesan Indonesia, tidak ada kebocoran ke respons/console.
+
+**Belum diverifikasi**: Vitest/lint/`next build` (tanpa shell; lead menjalankan); tidak ada uji komponen CartView/InvoiceRequestForm (belum ada runner DOM); uji pembaca layar & fokus; tampilan perangkat kecil; teks privasi menunggu Legal; pengujian bahwa pengelola kata sandi/ekstensi browser tidak menyimpan isian (hanya mitigasi `autocomplete="off"`, tanpa `name`); format paspor.

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Settings > Users & Companies (base.menu_users; menu Settings = base.group_erp_manager). -->
+    <menuitem id="menu_efn_role" name="Peran EFN" parent="base.menu_users"
+              action="efn_role_action" sequence="50" groups="base.group_erp_manager"/>
+    <menuitem id="menu_efn_role_line" name="Penetapan Peran" parent="base.menu_users"
+              action="efn_role_line_action" sequence="51" groups="base.group_erp_manager"/>
+    <menuitem id="menu_efn_sod_rule" name="Aturan SoD" parent="base.menu_users"
+              action="efn_sod_rule_action" sequence="52" groups="base.group_erp_manager"/>
+    <menuitem id="menu_efn_sod_exception" name="Pengecualian SoD" parent="base.menu_users"
+              action="efn_sod_exception_action" sequence="53" groups="base.group_erp_manager"/>
+    <menuitem id="menu_efn_access_review" name="Review Akses" parent="base.menu_users"
+              action="efn_access_review_action" sequence="54" groups="base.group_erp_manager"/>
+
+    <!-- Auditor tanpa hak Access Rights tidak melihat menu Settings -> menu di bawah Audit (efn_audit). -->
+    <menuitem id="menu_efn_role_audit_review" name="Review Akses" parent="efn_audit.menu_efn_audit_root"
+              action="efn_access_review_action" sequence="30" groups="efn_audit.group_auditor"/>
+    <menuitem id="menu_efn_role_audit_review_line" name="Snapshot Review Akses" parent="efn_audit.menu_efn_audit_root"
+              action="efn_access_review_line_action" sequence="31" groups="efn_audit.group_auditor"/>
+    <menuitem id="menu_efn_role_audit_sod_rule" name="Aturan SoD" parent="efn_audit.menu_efn_audit_root"
+              action="efn_sod_rule_action" sequence="32" groups="efn_audit.group_auditor"/>
+    <menuitem id="menu_efn_role_audit_sod_exception" name="Pengecualian SoD" parent="efn_audit.menu_efn_audit_root"
+              action="efn_sod_exception_action" sequence="33" groups="efn_audit.group_auditor"/>
+    <menuitem id="menu_efn_role_audit_role" name="Peran EFN" parent="efn_audit.menu_efn_audit_root"
+              action="efn_role_action" sequence="34" groups="efn_audit.group_auditor"/>
+</odoo>

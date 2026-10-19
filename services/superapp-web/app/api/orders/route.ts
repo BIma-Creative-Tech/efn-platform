@@ -4,12 +4,14 @@
  * - POST /api/orders `{ quote_id, accept_total, payment_method?: 'qris'|'counter' }` (§12.2) -> BFF POST /v1/orders dengan header `Idempotency-Key` yang DIBUAT DI
  *   SINI (deterministik dari quote_id, lib/orders-route.ts) — browser tidak memilih key. `accept_total` hanya pembanding
  *   (BFF/Odoo menghitung ulang); bukan harga yang dipercaya.
+ *   Opsional `invoice_request` (§13.5): divalidasi ulang di sini lalu diteruskan; tidak di-log dan tidak ada di respons.
  * Semua respons `no-store`.
  */
 import type { NextRequest } from 'next/server';
 import { bffFetch } from '@/lib/bff';
 import { CURSOR_RE, isUuid, parseLimit } from '@/lib/catalog';
 import { parseCheckoutResult, parseOrderList } from '@/lib/orders';
+import { parseInvoiceRequest } from '@/lib/invoice-request';
 import { isPaymentMethod } from '@/lib/payment';
 import {
   checkoutIdempotencyKey,
@@ -45,7 +47,12 @@ export async function POST(req: NextRequest) {
   if (!g.ok) return g.response;
   const body = await readJsonBody(req);
   if (!body.ok) return body.response;
-  const v = (body.value ?? {}) as { quote_id?: unknown; accept_total?: unknown; payment_method?: unknown };
+  const v = (body.value ?? {}) as {
+    quote_id?: unknown;
+    accept_total?: unknown;
+    payment_method?: unknown;
+    invoice_request?: unknown;
+  };
   const quoteId = v.quote_id;
   const acceptTotal = v.accept_total;
   if (!isUuid(quoteId) || typeof acceptTotal !== 'number' || !Number.isSafeInteger(acceptTotal) || acceptTotal < 0) {
@@ -53,6 +60,13 @@ export async function POST(req: NextRequest) {
   }
   // §12.2: `payment_method` opsional (default BFF = qris); nilai selain qris|counter ditolak sebelum ke BFF.
   if (v.payment_method !== undefined && !isPaymentMethod(v.payment_method)) return onlineError(400, 'invalid_request');
+  // §13.5 (L-63): `invoice_request` opsional, diteruskan SEKALI ke BFF tanpa disimpan/di-log; bentuk salah -> 400 generik
+  // (pesan tidak memuat nilai). Hanya lima field kontrak yang diteruskan.
+  let invoice: ReturnType<typeof parseInvoiceRequest> | undefined;
+  if (v.invoice_request !== undefined && v.invoice_request !== null) {
+    invoice = parseInvoiceRequest(v.invoice_request);
+    if (!invoice) return onlineError(400, 'invalid_request');
+  }
   const r = await bffFetch<unknown>('/v1/orders', {
     method: 'POST',
     token: g.token,
@@ -60,6 +74,7 @@ export async function POST(req: NextRequest) {
       quote_id: quoteId.toLowerCase(),
       accept_total: acceptTotal,
       ...(v.payment_method !== undefined ? { payment_method: v.payment_method } : {}),
+      ...(invoice ? { invoice_request: invoice } : {}),
     },
     headers: { 'idempotency-key': checkoutIdempotencyKey(quoteId) },
     incoming: req.headers,

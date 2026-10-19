@@ -34,6 +34,11 @@ G20 E-45 bayar di kasir (docs/04 §12.2, L-50/L-52/L-55/L-56): place ``payment_m
 dikembalikan). BFF ``mark_paid``/``refund_settled`` untuk order counter -> ``invalid_state``; pelunasan hanya lewat
 ``_efn_counter_mark_paid`` (dipanggil sync POS ``efn_online_pos_counter``), pembayaran faktur di jurnal kliring PT
 (``_efn_payment_journal``). Event ``paid`` membawa ``payment: {method: "counter"}``.
+
+G21 E-39 faktur atas nama pembeli (docs/04 §13.5, L-63; docs/08 §10.7): ``efn_online_set_invoice_party`` memasang
+partner pembeli **terlindungi** (``efn_pii``) sebagai ``partner_invoice_id`` SO sebelum bayar. Tanpa ``efn_pii``
+terpasang dengan field partner benar-benar terenkripsi, atau PT bukan PPN -> ``efn_online:invoice_not_available``
+(profil tidak pernah masuk Odoo tanpa enkripsi). Profil tidak di-log, tidak masuk hasil/hash/outbox.
 """
 
 import json
@@ -49,6 +54,7 @@ from odoo.tools import float_compare
 
 from .efn_online_channel import iso_utc, parse_iso_utc
 from .efn_online_common import (
+    BUYER_DOCUMENT_TYPES,
     CANCEL_REASONS,
     CANCEL_SCOPE,
     CONFIRM_SCOPE,
@@ -71,6 +77,7 @@ from .efn_online_common import (
     counter_kdf_rounds,
     counter_secret,
     internal_scope,
+    invoice_profile_payload,
     lines_payload,
     online_error,
     pickup_crypt_context,
@@ -119,6 +126,13 @@ PLACE_OPTIONAL_KEYS = frozenset({"promo_codes", "payment_mode", "counter_code"})
 PAYMENT_MODE_LABELS = {"qris": "QRIS / gateway (BFF)", "counter": "Bayar di kasir"}
 # Order bayar di kasir yang tidak lagi bisa dibayar normal (batal/kedaluwarsa) tetapi uangnya sudah diterima kasir.
 COUNTER_LATE_REVIEW = {"cancelled": "counter_paid_after_cancel", "placed": "counter_paid_after_expiry"}
+# G21 E-39: field partner yang menerima profil pembeli; semuanya WAJIB kelas field terenkripsi efn_pii (EfnPiiChar)
+# sebelum profil ditulis (L-63). NIK/paspor ditulis ke dokumen pembeli Coretax -> butuh enkripsi field itu juga
+# (efn_pii_l10n_id, E-38a sisa).
+INVOICE_PARTY_PII_FIELDS = ("name", "street", "email", "vat")
+INVOICE_PARTY_DOC_FIELDS = ("l10n_id_buyer_document_number",)
+INVOICE_PARTY_PROTECTED_FIELD = "efn_pii_protected"
+INVOICE_PARTY_MAX_CANDIDATES = 50
 PAYMENT_KEYS = frozenset({"payment_ref", "amount_paid", "paid_at", "idempotency_key"})
 REFUND_KEYS = frozenset({"idempotency_key", "lines", "full", "restock", "reason"})
 SETTLE_KEYS = frozenset({"provider_refund_ref", "settled_at", "ok", "idempotency_key"})
@@ -191,6 +205,12 @@ class EfnOnlineOrder(models.Model):
         copy=False,
         index="btree_not_null",
         help="Digest KDF kode bayar di kasir (bukan kode ambil). Dihapus saat dibayar/batal/review.",
+    )
+    invoice_party_idempotency_key = fields.Char(
+        readonly=True,
+        groups="base.group_system",
+        copy=False,
+        help="G21 E-39: kunci idempotensi efn_online_set_invoice_party (tanpa profil pembeli).",
     )
     pickup_attempts = fields.Integer(readonly=True, copy=False)
     ready_at = fields.Datetime(readonly=True)
@@ -975,6 +995,152 @@ class EfnOnlineOrder(models.Model):
                 }
             )
         return result
+
+    # ============================================== BFF: faktur atas nama pembeli (E-39)
+    @api.model
+    def efn_online_set_invoice_party(self, channel_code, platform_order_ref, profile, idempotency_key):
+        """Pasang partner pembeli terlindungi sebagai ``partner_invoice_id`` SO (docs/04 §13.5, L-63).
+
+        Urutan: cek pemanggil -> validasi input (``invalid_input``) -> order kanal (``not_found``) -> ketersediaan
+        (PT PPN + ``efn_pii`` aktif; selain itu ``invoice_not_available``) -> idempotensi -> state (hanya ``placed``,
+        sebelum faktur; selain itu ``invalid_state``). Hasil ``{"state": "set"}`` tanpa data pribadi. Profil tidak
+        pernah di-log / di-hash / masuk outbox. ``partner_id`` SO tetap partner generik kanal (minimisasi)."""
+        channel = self._efn_channel_env(channel_code)
+        key = check_str(idempotency_key, IDEMPOTENCY_KEY_RE)
+        buyer = invoice_profile_payload(profile)
+        order = self.with_env(channel.env)._efn_find(channel, platform_order_ref)
+        if not order:
+            raise online_error("not_found")
+        if not order._efn_invoice_party_available(buyer["buyer_type"]):
+            raise online_error("invoice_not_available")
+        sale_order = order.sale_order_id
+        if order.invoice_party_idempotency_key:
+            if order.invoice_party_idempotency_key == key and order._efn_invoice_party_matches(
+                sale_order.partner_invoice_id, buyer
+            ):
+                return {"state": "set"}
+            raise online_error("idempotency_conflict")
+        if order.state != "placed" or not sale_order or order.invoice_id or sale_order.invoice_ids:
+            raise online_error("invalid_state")
+        partner, reused = order._efn_invoice_party_partner(buyer)
+        sale_order.write({"partner_invoice_id": partner.id})
+        order.write({"invoice_party_idempotency_key": key})
+        _logger.info(
+            "EFN online order %s: invoice party set (type=%s, partner=%s, reused=%s)",
+            order.id,
+            buyer["buyer_type"],
+            partner.id,
+            reused,
+        )
+        return {"state": "set"}
+
+    @api.model
+    def _efn_pii_encrypted_field(self, model, fname):
+        """True bila ``model._fields[fname]`` memakai kelas field terenkripsi efn_pii (``EfnPiiChar``). Dicek lewat
+        nama kelas di MRO agar modul ini tidak bergantung (depends) pada efn_pii (opsional, L-59)."""
+        field = model._fields.get(fname)
+        return bool(field) and any(klass.__name__ == "EfnPiiChar" for klass in type(field).__mro__)
+
+    def _efn_invoice_party_available(self, buyer_type):
+        """L-63 + §13.5: hanya PT PPN (jenis usaha ritel: GL, BCR) dan hanya bila efn_pii terpasang dengan SEMUA
+        field yang akan menerima profil benar-benar terenkripsi (fail-closed: modul lain yang mendefinisikan ulang
+        field, mis. ``base_vat`` tanpa ``efn_pii_base_vat`` -> tidak tersedia)."""
+        self.ensure_one()
+        if self.company_id.efn_business_type != "retail":
+            return False
+        Partner = self.env["res.partner"]
+        if INVOICE_PARTY_PROTECTED_FIELD not in Partner._fields:
+            return False
+        fnames = INVOICE_PARTY_PII_FIELDS + (INVOICE_PARTY_DOC_FIELDS if buyer_type != "npwp" else ())
+        return all(self._efn_pii_encrypted_field(Partner, fname) for fname in fnames)
+
+    @api.model
+    def _efn_invoice_party_matches(self, partner, buyer):
+        """Partner pembeli (hasil efn_online_set_invoice_party) cocok persis dengan profil ternormalisasi."""
+        if not partner or len(partner) != 1:
+            return False
+        partner = partner.sudo()
+        if not partner.efn_online_invoice_buyer:
+            return False
+        same = (
+            (partner.name or "") == buyer["name"]
+            and (partner.street or "") == buyer["address"]
+            and (partner.email or "") == buyer["email"]
+        )
+        if not same:
+            return False
+        if buyer["buyer_type"] == "npwp":
+            # base_vat dapat memformat ulang NPWP (prefiks/pemisah) -> bandingkan digit saja.
+            return "".join(ch for ch in (partner.vat or "") if ch.isdigit()) == buyer["tax_id"]
+        return (
+            "l10n_id_buyer_document_number" in partner._fields
+            and (partner.l10n_id_buyer_document_number or "") == buyer["tax_id"]
+            and partner.l10n_id_buyer_document_type == BUYER_DOCUMENT_TYPES[buyer["buyer_type"]]
+        )
+
+    def _efn_invoice_party_partner(self, buyer):
+        """Cari-atau-buat partner pembeli perorangan per company. Pencarian ``vat =`` / nomor dokumen ``=`` ditulis
+        ulang efn_pii menjadi blind index (partner terlindungi); kandidat dicocokkan persis di Python (nama, alamat,
+        email terdekripsi). Hanya partner bertanda ``efn_online_invoice_buyer`` milik company ini yang dipakai ulang
+        (tidak pernah menempelkan faktur ke vendor/kontak lain dengan NPWP sama). Returns (partner, reused)."""
+        self.ensure_one()
+        company = self.company_id
+        # Pembuatan pembeli diserialkan per company (kunci tanpa PII) -> tidak ada duplikat dari panggilan paralel.
+        self.env.cr.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"efn_online_invoice_buyer:{company.id}",))
+        Partner = self.env["res.partner"].sudo().with_company(company)
+        domain = [
+            ("efn_online_invoice_buyer", "=", True),
+            ("company_id", "=", company.id),
+            ("parent_id", "=", False),
+            ("is_company", "=", False),
+        ]
+        # Operator `in` = bentuk yang ditulis ulang efn_pii ke blind index (`=` dinormalisasi Domain ke `in`).
+        if buyer["buyer_type"] == "npwp":
+            domain.append(("vat", "in", [buyer["tax_id"]]))
+        else:
+            domain.append(("l10n_id_buyer_document_number", "in", [buyer["tax_id"]]))
+        for candidate in Partner.search(domain, order="id", limit=INVOICE_PARTY_MAX_CANDIDATES):
+            if self._efn_invoice_party_matches(candidate, buyer):
+                return candidate, True
+        vals = {
+            "name": buyer["name"],
+            "street": buyer["address"],
+            "email": buyer["email"] or False,
+            "is_company": False,
+            "type": "contact",
+            "company_id": company.id,
+            "efn_online_invoice_buyer": True,
+        }
+        country = self.env.ref("base.id", raise_if_not_found=False)
+        if country and buyer["buyer_type"] != "passport":
+            vals["country_id"] = country.id
+        has_doc_fields = "l10n_id_buyer_document_type" in Partner._fields
+        if buyer["buyer_type"] == "npwp":
+            vals["vat"] = buyer["tax_id"]
+            if has_doc_fields:
+                vals["l10n_id_buyer_document_type"] = BUYER_DOCUMENT_TYPES["npwp"]
+        else:
+            require(has_doc_fields, "invoice_not_available")
+            vals["l10n_id_buyer_document_type"] = BUYER_DOCUMENT_TYPES[buyer["buyer_type"]]
+            vals["l10n_id_buyer_document_number"] = buyer["tax_id"]
+        try:
+            with self.env.cr.savepoint():
+                partner = Partner.create(vals)
+                partner.flush_recordset()
+                if not partner[INVOICE_PARTY_PROTECTED_FIELD]:
+                    # Aturan protect-by-default efn_pii tidak berlaku (mis. dikustom) -> jangan simpan profil.
+                    raise online_error("invoice_not_available")
+        except ValidationError:
+            # mis. base_vat menolak format NPWP. Pesan Odoo memuat nilai -> tidak di-log, tidak diteruskan.
+            _logger.warning("EFN online order %s: invoice party rejected by partner validation", self.id)
+            raise online_error("invalid_input") from None
+        except UserError as exc:
+            if str(exc) == "efn_online:invoice_not_available":
+                raise
+            # efn_pii mode terkunci (kunci PII tidak tersedia) / SEC-137 fail-closed -> tidak tersedia.
+            _logger.warning("EFN online order %s: invoice party unavailable (%s)", self.id, type(exc).__name__)
+            raise online_error("invoice_not_available") from None
+        return partner, False
 
     # ===================================================================== staf (UI)
     def _efn_check_staff(self, group_xmlid):

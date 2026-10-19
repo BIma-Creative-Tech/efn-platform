@@ -118,6 +118,8 @@ export const ONLINE_ERROR_MESSAGES: Record<string, string> = {
   counter_payment_single_part_only:
     'Bayar di kasir hanya untuk pesanan dari satu PT. Pisahkan pesanan per PT, atau pilih pembayaran QRIS.',
   payment_method_unavailable: 'Metode pembayaran ini belum tersedia untuk pesanan Anda. Pilih metode lain atau coba lagi nanti.',
+  // §13.5 / L-63: PT F&B (PB1) atau efn_pii belum aktif di Odoo
+  invoice_not_available: 'Faktur atas nama belum tersedia untuk pesanan ini',
   rate_limited: 'Terlalu banyak permintaan. Tunggu sebentar lalu coba lagi.',
   // §11.2: satu pesan untuk semua penyebab kode promo tidak berlaku (anti-enumerasi)
   promo_invalid: 'Kode promo tidak dapat digunakan',

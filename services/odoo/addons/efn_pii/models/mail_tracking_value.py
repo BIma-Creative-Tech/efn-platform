@@ -74,9 +74,18 @@ def _secret_strings(partners):
     return secrets
 
 
-def _redact(values, record, initial_value, new_value):
+def _scope_all(record, fname):
+    """True bila semua nilai char/text record terlindungi dikosongkan. Model dengan
+    `_efn_pii_tracking_scope = "fields"` (hr.employee/hr.version: nama & jabatan karyawan = identitas kerja, 18-40)
+    hanya mengosongkan nilai field terenkripsi (EfnPiiChar/EfnPiiText)."""
+    if getattr(record, "_efn_pii_tracking_scope", "all") != "fields" or not fname:
+        return True
+    return bool(getattr(record._fields.get(fname), "efn_pii_encrypted", False))
+
+
+def _redact(values, record, initial_value, new_value, fname=None):
     """Redaksi in-place dict nilai tracking (lihat docstring modul)."""
-    if _record_protected(record):
+    if _record_protected(record) and _scope_all(record, fname):
         for key in VALUE_KEYS:
             if values.get(key):
                 values[key] = False
@@ -106,7 +115,7 @@ class MailTrackingValue(models.Model):
     def _create_tracking_values(self, initial_value, new_value, col_name, col_info, record):
         values = super()._create_tracking_values(initial_value, new_value, col_name, col_info, record)
         if isinstance(values, dict):
-            _redact(values, record, initial_value, new_value)
+            _redact(values, record, initial_value, new_value, col_name)
         return values
 
     @api.model_create_multi
@@ -135,4 +144,4 @@ class MailTrackingValue(models.Model):
             Partner = self.env["res.partner"]
             initial = Partner.browse(vals.get("old_value_integer") or []).exists()
             new = Partner.browse(vals.get("new_value_integer") or []).exists()
-        _redact(vals, record, initial, new)
+        _redact(vals, record, initial, new, field.name or None)

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- §13.1 no. 2: kebijakan poin teraudit efn_audit (nilai lama/baru semua field, termasuk state & penyetuju). Akun
+     akrual per PT (res.company) ikut dicatat bila efn_setup_audit/aturan admin mencakup res.company. -->
+<odoo>
+    <record id="audit_rule_efn_loyalty_policy" model="efn.audit.rule">
+        <field name="name">EFN - Kebijakan Poin per PT</field>
+        <field name="model_id" ref="model_efn_loyalty_policy"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+    </record>
+</odoo>

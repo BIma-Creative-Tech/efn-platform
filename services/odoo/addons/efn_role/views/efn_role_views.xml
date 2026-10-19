@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- ================================================================ efn.role -->
+    <record id="efn_role_view_list" model="ir.ui.view">
+        <field name="name">efn.role.list</field>
+        <field name="model">efn.role</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="job_id"/>
+                <field name="group_ids" widget="many2many_tags"/>
+                <field name="is_admin_role" optional="show"/>
+                <field name="user_count"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_role_view_form" model="ir.ui.view">
+        <field name="name">efn.role.form</field>
+        <field name="model">efn.role</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_efn_apply_job_roles" type="object" string="Terapkan peran dari jabatan"
+                            invisible="not job_id or not id" groups="base.group_erp_manager"/>
+                </header>
+                <sheet>
+                    <widget name="web_ribbon" title="Diarsipkan" bg_color="text-bg-danger" invisible="active"/>
+                    <group>
+                        <group>
+                            <field name="name"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="job_id"/>
+                            <field name="active" invisible="1"/>
+                        </group>
+                        <group>
+                            <field name="sequence"/>
+                            <field name="is_admin_role"/>
+                            <field name="user_count"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Grup" name="groups">
+                            <field name="group_ids">
+                                <list>
+                                    <field name="full_name"/>
+                                    <field name="comment" optional="hide"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Penetapan" name="lines">
+                            <field name="line_ids">
+                                <list editable="bottom">
+                                    <field name="user_id"/>
+                                    <field name="date_from"/>
+                                    <field name="date_to"/>
+                                    <field name="source" readonly="1"/>
+                                    <field name="is_effective"/>
+                                    <field name="reason" optional="show"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Catatan" name="note">
+                            <field name="note" placeholder="Tanpa data pribadi (HP/email/NIK di-mask otomatis)."/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="efn_role_view_search" model="ir.ui.view">
+        <field name="name">efn.role.search</field>
+        <field name="model">efn.role</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="job_id"/>
+                <field name="group_ids"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <filter name="archived" string="Diarsipkan" domain="[('active', '=', False)]"/>
+                <group>
+                    <filter name="group_company" string="Company" context="{'group_by': 'company_id'}"/>
+                    <filter name="group_job" string="Jabatan" context="{'group_by': 'job_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="efn_role_action" model="ir.actions.act_window">
+        <field name="name">Peran EFN</field>
+        <field name="res_model">efn.role</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="efn_role_view_search"/>
+    </record>
+
+    <!-- =========================================================== efn.role.line -->
+    <record id="efn_role_line_view_list" model="ir.ui.view">
+        <field name="name">efn.role.line.list</field>
+        <field name="model">efn.role.line</field>
+        <field name="arch" type="xml">
+            <list editable="bottom">
+                <field name="role_id"/>
+                <field name="user_id"/>
+                <field name="company_id" groups="base.group_multi_company" readonly="1"/>
+                <field name="date_from"/>
+                <field name="date_to"/>
+                <field name="source" readonly="1"/>
+                <field name="is_effective"/>
+                <field name="reason" optional="show"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_role_line_view_search" model="ir.ui.view">
+        <field name="name">efn.role.line.search</field>
+        <field name="model">efn.role.line</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="user_id"/>
+                <field name="role_id"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <filter name="effective" string="Efektif" domain="[('is_effective', '=', True)]"/>
+                <filter name="not_effective" string="Tidak efektif" domain="[('is_effective', '=', False)]"/>
+                <separator/>
+                <filter name="from_job" string="Dari jabatan" domain="[('source', '=', 'job')]"/>
+                <filter name="manual" string="Manual" domain="[('source', '=', 'manual')]"/>
+                <group>
+                    <filter name="group_user" string="User" context="{'group_by': 'user_id'}"/>
+                    <filter name="group_role" string="Peran" context="{'group_by': 'role_id'}"/>
+                    <filter name="group_company" string="Company" context="{'group_by': 'company_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="efn_role_line_action" model="ir.actions.act_window">
+        <field name="name">Penetapan Peran</field>
+        <field name="res_model">efn.role.line</field>
+        <field name="view_mode">list</field>
+        <field name="search_view_id" ref="efn_role_line_view_search"/>
+        <field name="context">{'search_default_effective': 1}</field>
+    </record>
+</odoo>
