@@ -1,0 +1,12 @@
+# Override QR order meja BCF (PT Bacha Coffee F&B; docs/04 §14.A.5/§14.A.9, G22 W-07, L-72 D-22-7). Pola
+# docker-compose.online-<kode>.yml: API key Odoo user teknis QR `efn_qr_bcf` (secret `odoo_api_key_qr_bcf`, grup
+# efn_pos_bff_order.group_qr_bff, satu company, tanpa ACL dokumen) HANYA di-mount ke BFF saat FNB_QR_ENABLED=true dan
+# FNB_QR_COMPANIES memuat BCF (scripts/deploy.sh). Selama QR mati file ini TIDAK disertakan. Nama file `online-qr-<pt>`
+# agar efn-rotate-online-key --channel=QR-BCF --bootstrap, CI (job infra) dan scripts/check-encryption.sh ikut memakainya.
+# Pembuatan & rotasi key: docs/runbooks/odoo-qr-api-key.md (efn-rotate-online-key --channel=QR-BCF).
+services:
+  api-gateway:
+    environment:
+      ODOO_API_KEY_QR_BCF_FILE: /run/secrets/odoo_api_key_qr_bcf
+    secrets:
+      - odoo_api_key_qr_bcf

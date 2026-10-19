@@ -35,6 +35,8 @@ export const ODOO_BUSINESS_CODES = [
   'channel_inactive',
   /** G21 §13.5: `efn_pii` tidak aktif / kanal bukan PT PPN → profil pembeli tidak boleh masuk Odoo (L-63). */
   'invoice_not_available',
+  /** G22 §14.C.3: porsi Poin EFN ditolak kebijakan PT/global Odoo (fail-closed) → BFF `409 exceeds_max_pct` (L-79: tanpa fallback). */
+  'points_invalid',
 ] as const;
 export type OdooBusinessCode = (typeof ODOO_BUSINESS_CODES)[number];
 
@@ -86,6 +88,16 @@ export interface CatalogItem {
   max_qty: number;
   /** G20 §12.3 (W-33): `product.weight` (kg) untuk batas berat pesanan; `null` = belum diisi di Odoo. */
   weight_kg: number | null;
+  /** G22 §14.B B-2 / L-78: atribut `no_variant` (format A.6); `[]` untuk ritel / tanpa atribut. */
+  attributes?: ItemAttribute[];
+}
+/** G22 A.6 / B-2: atribut menu (`required` = `display_type != "multi"` di Odoo). */
+export interface ItemAttribute {
+  attribute_id: number;
+  name: string;
+  display_type: 'radio' | 'select' | 'multi' | 'pills';
+  required: boolean;
+  values: { id: number; name: string; price_extra_excl: number }[];
 }
 /** G20 §12.2 no. 1: `efn.online.channel.payment_modes`. */
 export type ChannelPaymentMode = 'qris' | 'counter';
@@ -109,6 +121,10 @@ export interface CatalogChannelInfo {
    * `ONLINE_PAYMENT_METHODS` (config, L-55). Opsional di tipe agar `channel_data` lama tetap terbaca.
    */
   payment_modes?: ChannelPaymentMode[] | null;
+  /** G22 §14.B B-2: `retail` | `fnb` (absen = `retail`). */
+  business_type?: 'retail' | 'fnb';
+  /** G22 §14.C.1 no. 5 / B-2: flag kanal Odoo `loyalty_earn` / `loyalty_redeem` (absen = mati). */
+  loyalty?: { earn: boolean; redeem: boolean };
 }
 export interface CatalogPage {
   items: CatalogItem[];
@@ -130,6 +146,8 @@ export interface ImageResult {
 export interface QuoteLineIn {
   product_id: number;
   qty: number;
+  /** G22 B-4 / L-78: PTAV `no_variant` (urut naik, ≤ 10). Absen/kosong = baris tanpa atribut (payload lama sama). */
+  attribute_value_ids?: number[];
 }
 export interface QuoteLine {
   product_id: number;
@@ -145,6 +163,10 @@ export interface QuoteLine {
    * apa adanya ke klien; TIDAK pernah dikirim balik ke Odoo saat place dan tidak pernah diterima dari klien/cart.
    */
   reward: boolean;
+  /** G22 L-78: identitas baris = (product_id, attribute_value_ids). Parser selalu mengisi (absen di fixture lama = []). */
+  attribute_value_ids?: number[];
+  /** G22 L-78: teks atribut dari Odoo (`""`/null tanpa atribut). */
+  attributes_text?: string | null;
 }
 export interface TaxGroup {
   label: string;
@@ -193,6 +215,8 @@ export interface PlaceInput {
    * ke Odoo (TLS + mTLS; Odoo hanya menyimpan hash), tidak pernah di-log. Odoo TIDAK mengembalikannya.
    */
   counter_code?: string;
+  /** G22 §14.C.3: porsi Poin EFN bagian (hanya bila ada; masuk `payload_sha256` Odoo). */
+  points_payment?: { points: number; value_idr: number };
 }
 export interface PlaceResult {
   order_state: string;
@@ -200,12 +224,23 @@ export interface PlaceResult {
   amount_total: number;
   amount_payable: number;
   expires_at: Date | null;
+  /** G22 §14.C.3: `amount_payable − value_idr` (tanpa poin = amount_payable). */
+  amount_due: number;
 }
 export interface MarkPaidInput {
   payment_ref: string;
+  /** = porsi TUNAI (G22). */
   amount_paid: number;
   paid_at: string;
   idempotency_key: string;
+  /** G22 §14.C.3: nilai Poin EFN bagian (hanya bila ada). */
+  points_value?: number;
+}
+/** G22 §14.C.4: rincian poin pada refund/batal Odoo. */
+export interface RefundPoints {
+  points_value: number;
+  cash_amount: number | null;
+  eligible_amount_refunded: number | null;
 }
 export interface MarkPaidResult {
   order_state: string;
@@ -213,9 +248,14 @@ export interface MarkPaidResult {
   refund_required: string | null;
 }
 export type CancelReason = 'payment_expired' | 'customer' | 'place_failed' | 'stock_short' | 'ops' | 'review';
+/** Blok `refund` hasil batal/status Odoo (Odoo B): bruto + rincian poin opsional. */
+export interface CancelRefund extends Partial<RefundPoints> {
+  refund_ref: string;
+  amount: number;
+}
 export interface CancelResult {
   order_state: string;
-  refund: { refund_ref: string; amount: number } | null;
+  refund: CancelRefund | null;
 }
 export type RefundReason = 'stock_short' | 'customer_cs' | 'ops_cancelled' | 'review';
 export interface RefundInput {
@@ -225,7 +265,7 @@ export interface RefundInput {
   restock: boolean;
   reason: RefundReason;
 }
-export interface RefundResult {
+export interface RefundResult extends Partial<RefundPoints> {
   refund_ref: string;
   amount: number;
   credit_note: string | null;
@@ -275,6 +315,8 @@ export interface StatusRow {
   seq: number | null;
   ready_at: string | null;
   picked_up_at: string | null;
+  /** G22 §14.C.4: eligible earn dibekukan saat serah terima (null sebelum `picked_up`). */
+  eligible_amount?: number | null;
 }
 
 /** Klien 11 metode E-28 (+ L-60). Implementasi: `Json2OdooOnlineClient` (mTLS) atau `MockOdooOnline` (dev/test saja). */

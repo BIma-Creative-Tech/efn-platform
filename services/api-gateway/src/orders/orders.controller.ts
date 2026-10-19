@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Headers, HttpCode, HttpStatus, Param, Post, Query, RawBodyRequest, Req, Res, UseGuards } from '@nestjs/common';
 import { FastifyReply, FastifyRequest } from 'fastify';
-import { AppConfig } from '../config/app-config';
+import { AppConfig, ONLINE_CHANNEL_RE } from '../config/app-config';
 import { Errors } from '../common/errors/api-error';
 import { RateLimiter } from '../common/rate-limit/rate-limiter';
 import { AuthUser } from '../common/security/access-token.service';
@@ -21,7 +21,25 @@ function orderIdParam(id: string): string {
   return id.toLowerCase();
 }
 
-const CHECKOUT_KEYS = ['quote_id', 'accept_total', 'payment_method', 'invoice_request'];
+const CHECKOUT_KEYS = ['quote_id', 'accept_total', 'payment_method', 'invoice_request', 'points_redeem'];
+
+/**
+ * G22 §14.C.2 `points_redeem: [{ channel_code, points }]` — maks satu entri per kanal, poin bulat > 0, ≤ 10 entri;
+ * nilai Rupiah TIDAK diterima dari klien (API3). Absen/[] = tanpa poin.
+ */
+export function parsePointsRedeem(v: unknown): { channel_code: string; points: number }[] {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v) || v.length > 10) throw Errors.invalidRequest();
+  const seen = new Set<string>();
+  return v.map((x) => {
+    const o = asRecord(x);
+    if (Object.keys(o).some((k) => k !== 'channel_code' && k !== 'points')) throw Errors.invalidRequest();
+    if (typeof o.channel_code !== 'string' || !ONLINE_CHANNEL_RE.test(o.channel_code) || seen.has(o.channel_code)) throw Errors.invalidRequest();
+    if (typeof o.points !== 'number' || !Number.isSafeInteger(o.points) || o.points < 1 || o.points > 1_000_000) throw Errors.invalidRequest();
+    seen.add(o.channel_code);
+    return { channel_code: o.channel_code, points: o.points };
+  });
+}
 
 /**
  * G20 §12.2 no. 2: `payment_method` opsional `qris` (default) | `counter`; nilai lain (termasuk null/huruf besar) → 400.
@@ -36,7 +54,14 @@ export function parseCheckout(body: unknown): CheckoutInput {
   const pm = o.payment_method === undefined ? 'qris' : o.payment_method;
   if (!isPaymentMethod(pm)) throw Errors.invalidRequest();
   const invoice = parseInvoiceRequest(o.invoice_request);
-  return { quoteId: o.quote_id.toLowerCase(), acceptTotal: t, paymentMethod: pm, ...(invoice ? { invoiceRequest: invoice } : {}) };
+  const points = parsePointsRedeem(o.points_redeem);
+  return {
+    quoteId: o.quote_id.toLowerCase(),
+    acceptTotal: t,
+    paymentMethod: pm,
+    ...(invoice ? { invoiceRequest: invoice } : {}),
+    ...(points.length > 0 ? { pointsRedeem: points } : {}),
+  };
 }
 
 /** Order pelanggan (docs/04 §10.3.5–10.3.6, §10.7): Bearer member, `no-store`, rate limit per member, kill switch. */

@@ -653,3 +653,116 @@ Branch `chore/wave-20`. Hanya dokumen, tanpa commit. Dokumen bisnis asli dan `do
   - status PP pelaksana UU PDP;
   - semua estimasi = perkiraan architect;
   - Mermaid tidak dirender.
+
+# Gelombang 22 — inventaris PDP v8, RoPA/DPIA anonimisasi & notifikasi hangus, runbook QR meja, status rencana, register risiko (2026-10-19)
+Branch `chore/wave-22`, tanpa commit. Dasar: kontrak `docs/04` §14 + L-70..L-74 (milik lead, **tidak diubah**). Dokumen bisnis asli tidak disentuh.
+
+## Ringkasan (untuk manajemen)
+- **Daftar data pribadi sudah diperbarui** untuk fitur G20–G22. Sebagian besar fitur baru tidak menyimpan nama atau HP pelanggan.
+- **Poin hangus dan penghapusan akun member tidak aktif** dinilai sebagai keputusan otomatis yang merugikan secara ekonomi. Keduanya tetap **mati di produksi** sampai DPO/Legal menetapkan dasar hukum, teks syarat, dan jalur keberatan. Ada 8 pertanyaan baru untuk DPO.
+- **Panduan operasional QR meja** siap untuk outlet, CS, dan IT. Fitur QR sendiri masih dibangun.
+- **Register risiko bertambah 9 risiko.** Yang tertinggi (skor 12): hangus massal tanpa pemberitahuan sah, dan akun akuntansi PLACEHOLDER yang belum ditinjau Finance.
+
+## File dibuat / diubah
+| File | Perubahan |
+|---|---|
+| `docs/compliance/PDP_DATA_INVENTORY.md` | **v8**: status/tanggal/terkait; ringkasan manajemen v8; **§0b** (18-14 meralat Q-P11 24 → 12 bln, 18-7/18-8/18-30..33/18-35/18-40, Q-PII9/10, L-63, L-68, L-70/71, L-73); §1 +7 kategori; catatan §2.2d (kini dibangun); **§2.8 baru**: ringkasan N1–N12 (dasar Pasal 20(2), retensi usulan, status, ⚠ DPO) + rincian BFF (§2.8.1), Odoo (§2.8.2), ClickHouse/ETL (§2.8.3), cache/log (§2.8.4), pihak ketiga (§2.8.5); §3 +15 baris retensi; §4 **Q-P22..Q-P29**; §5 +6 butir belum terverifikasi; §6 catatan G18–G22 (tanpa insiden tercatat) |
+| `docs/compliance/DPIA_DRAFT.md` | Revisi 19 Okt: ringkasan tambahan; pemicu a & g diperluas; **P15–P18** (QR meja, poin online, hangus + notifikasi, anonimisasi retensi); **DR-23..DR-28**; M-4 diperbarui + **M-11..M-13**; isian **D-12..D-17**; pemicu tinjau ulang; **§13 baru**: RoPA R-22-A (anonimisasi karena retensi, D-22-14) & R-22-B (aktivitas, notifikasi WA T−30, hangus, D-22-16), alur Mermaid, kebutuhan & proporsionalitas, residu, kapan ditinjau |
+| `docs/runbooks/fnb-qr-orders.md` | **Baru**: aturan wajib (token tidak disalin/difoto, tamu anonim, catatan tanpa nama), siklus sesi (Mermaid), A1 cetak ulang, A2 cabut sesi, A3 pesanan nyasar, A4 spam, A5 konfirmasi pelayan, A6 gangguan (outlet); B1–B3 CS (pertanyaan, poin QR, privasi); C1 gangguan BFF/Odoo/gateway, C2 kill switch (per POS/PT/rotasi darurat kunci token/poin), C3 investigasi anomali, C4 rekonsiliasi harian; batas jujur |
+| `docs/runbooks/README.md` | Baris prosedur QR meja |
+| `docs/10_RENCANA_GELOMBANG_18_PLUS.md` | Tanggal revisi; A.0 status 19 Okt; **A.1** menjadi "Status G18–G22": G19 #62, G20 #63, G21 #64 **merged** (isi paket, syarat aktivasi, sisa), G22 berjalan (selesai: kontrak §14, fit-gap §13, `efn_setup_role`, demo menu; berjalan: W-07/W-04/W-12/W-17) |
+| `docs/01_REVIEW_RISK_GAP_ANALYSIS.md` | Register: **R-B12** (spam QR, 9), **R-B13** (fraud kasir bayar-di-kasir/retur, 9), **R-T18** (hook enkripsi ORM terlewati — kini 8 setelah gerbang CI `odoo-test-pii`), **R-T19** (frekuensi token, 4, diterima), **R-T20** (ketergantungan QR/poin online pada BFF→Odoo, 6), **R-L11** (hangus massal tanpa pemberitahuan sah, 12), **R-S16** (peran/SoD tanpa pemeriksa kedua, 8), **R-O07** (keluhan pencarian → ekspor CSV, 6), **R-O08** (akun PLACEHOLDER G20–G22, 12); catatan pembaruan R-L10 |
+
+## Keputusan yang butuh tanda tangan klien
+- **L-73 (masih terbuka):**
+  - D-22-12 definisi "aktif" (Finance + Legal; DPIA D-16);
+  - **D-22-14 anonimisasi** (DPO + Legal; Q-P22, D-12);
+  - **D-22-16 dasar & kategori template WA** (Legal + Meta; Q-P25, D-13);
+  - Q-F22-1..6 (termasuk **Q-F22-4 teks syarat program**, yang memblokir aktivasi job hangus).
+- **DPO, baru:**
+  - Q-P22 pasal & masa tenggang anonimisasi;
+  - Q-P23 kode wilayah (age-out, ambang sel, SEC-162);
+  - Q-P24 erasure partner pembeli faktur (L-68);
+  - Q-P25 dasar notifikasi & hangus saat notifikasi gagal;
+  - Q-P26 isi template & bukti pemberitahuan;
+  - Q-P27 jalur keberatan Pasal 10(1);
+  - Q-P28 retensi HR/rekening & erasure karyawan;
+  - Q-P29 paket retensi QR (termasuk catatan baris 90 h).
+- **Finance:**
+  - checklist akun PLACEHOLDER per PT sebelum aktivasi (R-O08);
+  - pemulihan poin hangus atas keberatan (Q-P27).
+- **Ops F&B:** Q-QR6 (mode konfirmasi; default `waiter`).
+
+## Temuan untuk lead (tidak saya ubah, `docs/04` milik lead)
+1. **Batas kiriman per sesi tidak selaras:** BFF `FNB_MAX_SUBMISSIONS_PER_SESSION=20` (§14.A.7) vs Odoo `efn_qr_max_submissions` default 10 (docs/08 §13.1b). Runbook memakai "yang lebih ketat berlaku".
+2. **Istilah berbeda docs/08 §13.1b vs kontrak §14:**
+   - `efn_qr_kitchen_mode confirm|auto` vs `efn_qr_confirm_mode waiter|auto`;
+   - path `/internal/v1/fnb/table-sessions` vs `/v1/pos/fnb/table-sessions`;
+   - body buka sesi `{config_ref, table_ref}` vs `{config_id, table_id, order_uuid}` (L-70 membuat `order_uuid` saat buka sesi kurang relevan).
+
+   Lead perlu menetapkan satu versi untuk builder.
+3. **Retensi Odoo `efn.pos.table.session` belum ada di spesifikasi.** Usulan: 400 h, atau ikut `pos.order` (Q-P29). Catatan baris QR ikut `pos.order` 10 th → usulan dikosongkan setelah 90 h.
+4. **Bukti pemberitahuan hangus ikut terhapus saat anonimisasi** (§14.D.7 menghapus `loyalty_expiry_notice`). Bila DPO menginginkan bukti, perlu catatan tanpa identitas (±0,5 hari BFF, Q-P26).
+5. **Template WA hangus membawa jumlah poin ke Meta.** Ini lebih banyak dari template online yang tanpa parameter. Perlu persetujuan DPO (Q-P26). Opsi tanpa jumlah poin biayanya Rp0.
+6. **Belum ada alert** untuk sesi QR `open` > 4 jam, kiriman `submitting` macet, dan earn QR tertunda (usulan devsecops/data-ai, runbook C4).
+
+## Terverifikasi / belum terverifikasi
+- **Terverifikasi (pasal.id, 19 Okt 2026, teks — bukan sumber resmi JDIH):**
+  - UU 27/2022 Pasal 16 ayat (2) huruf g;
+  - Pasal 43 ayat (1) huruf a–d;
+  - Pasal 44 ayat (1) huruf a–d + Penjelasan "memusnahkan";
+  - Pasal 10 ayat (1) (sebagian kutipan + parafrase).
+- **Dibaca dari repo:**
+  - kontrak §11–§14;
+  - docs/08 §13;
+  - migrasi `09-platform-g20.sql`, `10-platform-g21.sql`;
+  - `online.repository.ts` (retensi kode bayar);
+  - README `efn_pii`, `efn_pii_hr`, `efn_region`, `efn_online_pos_counter`, `efn_pos_refund_origin` (retensi persetujuan), `efn_role` (pengecualian SoD), `efn_online_order` (partner pembeli);
+  - `ci.yml` (job `odoo-test-pii` ada di `needs` gerbang akhir);
+  - review r14 (SEC-154..163);
+  - log git (#62–#64 di riwayat branch).
+- **Belum terverifikasi:**
+  - migrasi `11-platform-g22.sql`, `efn_pos_bff_order`, `efn_online_kds_bridge`, frontend `/meja` belum ada → isi G22 di inventaris/runbook mengikuti kontrak;
+  - nama tombol POS;
+  - kategori template WA (Meta);
+  - `auto_delete` `mail.mail` struk POS 19;
+  - status W-26/W-19 tambahan G21 dan W-14b/teks 18-36 G20 (tidak dicek terpisah);
+  - penerapan pasal ke anonimisasi = penafsiran architect;
+  - architect tidak menjalankan kode/test;
+  - Mermaid tidak dirender.
+
+# G22 r15 — sinkron dokumen setelah security review r15 & QA G22 (2026-10-19)
+Branch `chore/wave-22`, tanpa commit, **hanya `docs/**`**. Sumber: `docs/reviews/SECURITY_REVIEW_2026-10-19_r15.md`, `docs/agent-reports/efn-qa-engineer.md` §G22, kontrak bersama r15 K1–K3 dari lead.
+
+## Ringkasan (untuk manajemen)
+- Isi kontrak QR meja kini sama dengan yang dibangun: 10 kiriman per sesi, satu event tutup membawa semua order meja, dan modifier menu ikut tampil.
+- **Poin dari pesanan QR tetap mati.** Poin ini baru boleh dinyalakan setelah tiga celah r15 (refund, dobel dengan kasir, meja menyerap tamu berikutnya) terbukti tertutup, dan klien memutuskan cara staf mengoreksi klaim poin yang salah (G23). Pemesanan QR tanpa poin boleh dipilot.
+- **Penukaran poin online tanpa verifikasi ulang** diterima sementara (poin online juga mati di produksi). Verifikasi ulang dibangun di G23.
+- Peran Sales Manager Online yang juga bisa memvalidasi stok **diterima**, dengan syarat diperiksa di review akses bulanan.
+
+## File diubah
+| File | Perubahan |
+|---|---|
+| `docs/04_SERVICE_CONTRACTS.md` | **v9.1**. Catatan sinkron di awal §14. Diagram A.1 (tanpa `order_uuid` di buka sesi, order baru per kiriman, `orders[]`). A.2 keterikatan & token di memori (L-78). A.3: `lines` hasil submit + `attribute_value_ids`/`attributes_text`; daftar kiriman + `attributes_text`; filter catatan identik SEC-168 (NFKC → buang zero-width/bidi → aturan angka). A.4: body buka sesi tanpa `order_uuid`, kunci `fnb_open:<cfg>:<tbl>:<n>`, `print_no` monoton `n ≤ 99999999` (SEC-167), `reissue` diteruskan, syarat jam sesi ≥ TTL. Event: body 16 KB, `submission.order_uuid` (K1), `close.orders[]` ≤ 100 `{order_uuid, eligible_amount neto, company_code, pos_member_attached}` (K2), aturan lekat order SEC-166, rate limit sesudah guard (SEC-173), BFF tidak earn QR untuk `pos_member_attached:true` (SEC-165). Tabel K3 refund vs close (SEC-164). A.5: modul `efn_pos_bff_order`, grup `efn_pos_bff_order.group_qr_bff`, `order_uuid` di #14/#15, validasi order baru per kiriman. A.7: batas 10, baris event. A.8: `fnb_submission.order_uuid`. C.1 no. 4: step-up diralat menjadi rencana G23. D.4/D.8: `LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT` default `true`. E.6: nama modul. **L-82** (a–d) setelah L-81 |
+| `docs/01_REVIEW_RISK_GAP_ANALYSIS.md` | Pembaruan r15 untuk R-B12, R-B13, R-T20, R-L11, R-S16. **R-B14 baru** (pencurian/penguncian poin QR: SEC-164/165/166/169; 9, OFF sampai syarat), **R-B15 baru** (redeem online tanpa step-up SEC-170; 6, residu diterima sementara) |
+| `docs/runbooks/fnb-qr-orders.md` | Header v9.1 + risiko R-B14/R-T20. Batas kiriman 10 (catatan "20 vs 10" dihapus). **§1.1** syarat jam sesi Odoo ≥ TTL token. B2 status poin QR mati + `pos_member_attached`. C1 refund neto K3. C2 posisi default poin. **Bagian D baru**: 7 syarat aktivasi `FNB_QR_POINTS_ENABLED`. Batas jujur |
+| `docs/runbooks/loyalty-inactivity-expiry.md` | Baris kontrol SEC-171, syarat consent di langkah aktivasi 1, batas/usulan metrik `skipped_no_consent` |
+| `docs/agent-reports/efn-architect.md` | Bagian ini |
+
+**Butir 5 (indeks review):** `docs/reviews/` **tidak punya** README/daftar, dan tidak ada indeks lain yang mendaftar r11–r14 (`docs/decisions/README.md` hanya mengutip r7/r8/r10 di bagian go/no-go). Tidak ada yang perlu ditautkan; saya tidak membuat indeks baru karena di luar brief. Usulan: `docs/reviews/README.md` berisi tabel r1–r15 (tanggal, gelombang, verdict, pemblokir aktivasi), ±30 menit.
+
+## Keputusan yang butuh tanda tangan klien / pemilik
+- **SEC-169 (G23):** mekanisme koreksi klaim poin QR. Pilihan: reset dari POS, OTP kasir mengalahkan klaim, batas perangkat/waktu, atau indikator. Pemilik: Ops F&B + Finance. Biaya ±2–4 hari Odoo+BFF+FE (perkiraan architect). Ini syarat runbook D no. 5.
+- **SEC-170 (G23):** apakah klien ingin step-up untuk redeem online besar, dan berapa ambangnya. Biaya ±1–2 hari BFF + 0,5 hari FE. Wajib dijawab sebelum poin online aktif.
+- **SEC-171:** nilai `LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT` saat aktivasi. Ini keputusan Legal/DPO (Q-P25, D-22-16) dan bergantung pada kategori Meta.
+- **SEC-172:** penerimaan L-82 c perlu diketahui Internal Audit (review akses bulanan). Opsi aturan SoD report-only ±0,5 hari.
+
+## Temuan saat menulis (untuk lead)
+1. Batas `orders[]` kini **100** dan body **16 KB** (kontrak bersama). QA mencatat kode BFF saat ini ≤ 50 / 8 KB, jadi builder harus menyamakannya di kedua sisi.
+2. K3 menetapkan **hasil** (total earn = neto, tanpa hilang/dobel). Mekanismenya bisa Odoo menahan reverse sampai close `done`, BFF `409 earn_pending` berbasis `order_uuid` K1, atau reverse tertunda di BFF. Mekanisme ini belum saya lihat di kode dan perlu dicatat di README `src/fnb` / `efn_pos_bff_order`. Catatan: order pelayan/jangkar (bukan kiriman QR) tidak dikenal BFF lewat K1 sebelum close. Bila mekanisme hanya mengandalkan K1, jendela kedua SEC-164 tetap terbuka untuk order jenis itu.
+3. DPIA §13 / PDP inventory belum menyebut filter catatan SEC-168 sebagai "upaya terbaik" dan saklar consent SEC-171. Usulan pembaruan kecil gelombang berikutnya (tidak saya ubah, di luar brief).
+4. R-B14 merujuk runbook §D. Skor pasca-mitigasi 4 adalah usulan architect.
+
+## Terverifikasi / belum terverifikasi
+- **Dibaca:** review r15 (utuh); QA G22 §G22.1–G22.5; `docs/04` §14 (A–E, §14.7); `docs/01` §4.1–4.4; kedua runbook; daftar `docs/reviews/`; grep `services/api-gateway/src` untuk `earn_pending`/`pos_member_attached`/`ONLINE_REDEEM_STEPUP` (README orders mengonfirmasi step-up belum dibangun).
+- **Belum terverifikasi:** implementasi K1–K3, SEC-164..168, SEC-171, SEC-173 (paralel, tidak dibaca); `print_no` monoton di Odoo; batas 100/16 KB di kode; penerusan env `LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT` di compose/deploy-validate; semua estimasi = perkiraan architect; Mermaid tidak dirender; tidak ada test yang dijalankan.

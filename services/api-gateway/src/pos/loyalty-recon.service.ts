@@ -22,6 +22,9 @@ export const KNOWN_LEDGER_SOURCES: readonly string[] = [
   POS_SOURCES.REVERSE,
   MIGRATION_SOURCE,
   'dsar',
+  // G22: poin online (§14.C) dan hangus tidak aktif (§14.D)
+  'online',
+  'loyalty_expiry',
   ...Object.keys(EARN_SOURCE_PUBLISHERS),
 ];
 

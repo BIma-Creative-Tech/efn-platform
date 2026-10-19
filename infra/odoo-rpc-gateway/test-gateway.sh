@@ -98,7 +98,7 @@ done
 # shellcheck disable=SC2086
 run method_HEAD deny $BFF -I -H "$H_AUTH" "$GW$OK_PATH"
 
-# ── Path di luar 12 metode / normalisasi / encoded ──────────────────────────────────────────────────────
+# ── Path di luar 15 metode / normalisasi / encoded ──────────────────────────────────────────────────────
 post path_res_users_search deny /json/2/res.users/search_read
 post path_sale_order_write deny /json/2/sale.order/write
 post path_online_order_read deny /json/2/efn.online.order/read
@@ -109,7 +109,17 @@ post path_invoice_party_wrong_model deny /json/2/efn.online.channel/efn_online_s
 post path_invoice_party_suffix deny /json/2/efn.online.order/efn_online_set_invoice_party_v2
 post path_partner_create deny /json/2/res.partner/create
 post path_partner_search deny /json/2/res.partner/search_read
-post path_web_dataset deny /web/dataset/call_kw/efn.online.order/efn_online_status
+# G22 §14.A.5 (path 13-15): metode QR hanya di model efn.pos.qr.order; ORM generik pos.order / model lain ditolak
+post path_qr_wrong_model deny /json/2/efn.online.order/efn_qr_submit
+post path_qr_suffix deny /json/2/efn.pos.qr.order/efn_qr_submit_v2
+post path_qr_upper deny /json/2/efn.pos.qr.order/EFN_QR_SUBMIT
+post path_qr_read deny /json/2/efn.pos.qr.order/search_read
+post path_pos_order_create deny /json/2/pos.order/create
+post path_pos_order_sync deny /json/2/pos.order/sync_from_ui
+post path_pos_config_session_open deny /json/2/pos.config/efn_qr_session_open
+post path_qr_trailing_slash deny /json/2/efn.pos.qr.order/efn_qr_menu/
+post path_qr_encoded deny /json/2/efn.pos.qr.order/efn_qr_st%61tus
+post path_web_dataset deny/web/dataset/call_kw/efn.online.order/efn_online_status
 post path_jsonrpc deny /jsonrpc
 post path_xmlrpc deny /xmlrpc/2/object
 post path_root deny /
@@ -182,12 +192,13 @@ run hdr_auth_bearer_short deny $BFF -X POST -H "$H_CT" -H "Authorization: bearer
 # shellcheck disable=SC2086
 run body_too_large deny $BFF -X POST -H "$H_CT" -H "$H_AUTH" --data-binary @/t/big.json "$GW$OK_PATH"
 
-# ── Positif: 12 path persis LOLOS filter (status dari Odoo, bukan dari gateway) ──────────────────────────
+# ── Positif: 15 path persis LOLOS filter (status dari Odoo, bukan dari gateway) ──────────────────────────
 for p in efn.online.channel/efn_online_catalog efn.online.channel/efn_online_stock efn.online.channel/efn_online_image \
          efn.online.channel/efn_online_quote efn.online.order/efn_online_place efn.online.order/efn_online_mark_paid \
          efn.online.order/efn_online_cancel efn.online.order/efn_online_refund efn.online.order/efn_online_refund_settled \
          efn.online.order/efn_online_status efn.online.order/efn_online_counter_refund_authorize \
-         efn.online.order/efn_online_set_invoice_party; do
+         efn.online.order/efn_online_set_invoice_party \
+         efn.pos.qr.order/efn_qr_menu efn.pos.qr.order/efn_qr_submit efn.pos.qr.order/efn_qr_status; do
   post "allowed:$p" pass "/json/2/$p"
 done
 # shellcheck disable=SC2086

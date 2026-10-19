@@ -1,7 +1,7 @@
 # Rencana Paket Kerja Gelombang 18+ — Turunan Keputusan Pemilik Proyek 10 & 18 Okt 2026
 
 - **Status:** Usulan efn-architect untuk efn-lead (urutan & estimasi **belum** disetujui lead/PO). Dokumen ini tidak mengubah kontrak `docs/04`; perubahan kontrak ditulis lead per paket. **Bagian A (18 Okt) menang atas §1–§4 (10 Okt) bila bertentangan.**
-- **Tanggal:** 2026-10-10 · revisi **2026-10-18** (bagian A: status G18–G19, paket W-29..W-34, urutan G20+)
+- **Tanggal:** 2026-10-10 · revisi **2026-10-18** (bagian A: status G18–G19, paket W-29..W-34, urutan G20+) · revisi **2026-10-19** (A.1: G19–G21 merged, G22 berjalan)
 - **Sumber:** jawaban pemilik proyek 10 Okt 2026 (60 butir) — dicatat di `docs/decisions/README.md` bagian "Keputusan pemilik proyek 10 Okt 2026 (sesi tanya-jawab)"; ADR-032 (Accepted, opsi B), ADR-035 (baru), ADR-019/020/022/027/034 (catatan 10 Okt); `docs/compliance/PDP_DATA_INVENTORY.md` v7; risiko baru R-B11, R-L09, R-L10, R-T17, R-S15 (`docs/01` §4).
 - **Tarif rujukan biaya:** ±Rp5–9 jt per minggu-engineer (asumsi ADR-031, belum divalidasi). Estimasi di bawah = **perkiraan kasar arsitek** tanpa fit-gap rinci; QA ±20 % sudah termasuk bila disebut "termasuk QA".
 
@@ -10,8 +10,12 @@
 Sumber: keputusan pemilik proyek 18 Okt 2026 (butir 18-1..18-38, `docs/decisions/README.md`), ADR-036 (**Accepted** 18 Okt), ADR-001 (catatan revisi 18 Okt: 6 entitas), `docs/04 §11.7` (L-39, L-45, L-47), review r12.
 
 ### A.0 Ringkasan manajemen
-- **G18 dan G19 selesai dibangun.** G18 (pembulatan Rp1, poin sebagai alat bayar, refund ke metode asal, masa simpan data, rotasi kunci) sudah digabung ke `main` (PR #60). G19 (reservasi stok 1 jam, kode promo, kanal per brand, uji coba enkripsi data pribadi) menunggu digabung (PR #62).
-- **Keputusan 18 Okt mengubah rencana ke depan.**
+- **(19 Okt) G18–G21 selesai dan sudah digabung ke `main`.**
+  - G19 (PR #62): reservasi stok, kode promo, kanal per brand.
+  - G20 (PR #63): 6 entitas, bayar di kasir, enkripsi data pelanggan.
+  - G21 (PR #64): poin per PT, enkripsi vendor/karyawan, peran & pemisahan tugas, PPN Coretax, faktur atas nama pembeli.
+  - **G22 (restoran: QR meja, restoran online, poin online, poin hangus) sedang berjalan** di branch `chore/wave-22`. Kontrak `docs/04` §14 sudah ditetapkan lead (L-70..L-74).
+  - Semua fitur baru tetap **mati di produksi** sampai syarat aktivasinya dipenuhi.- **Keputusan 18 Okt mengubah rencana ke depan.**
   - Setiap brand menjadi perusahaan sendiri (6 entitas).
   - Data pribadi yang dienkripsi di Odoo jauh lebih luas: kini termasuk nama, vendor perorangan, dan karyawan.
   - Karena vendor pembayaran belum dipilih, pesanan online dibayar **di kasir** dulu.
@@ -23,11 +27,14 @@ Sumber: keputusan pemilik proyek 18 Okt 2026 (butir 18-1..18-38, `docs/decisions
 - **Sisa pekerjaan:** ±57–79 minggu-engineer (±Rp0,29–0,71 M pada tarif asumsi). Dari angka ini, ±7–10 minggu-engineer sudah dianggarkan di ADR-031.
 - **Pekerjaan yang menunggu server staging.** Server staging/produksi belum ada (proyek masih tahap usulan/demo). Semua kode bisa dibangun dan diuji di lingkungan pengembangan. Yang menunggu server: uji beban, uji pemulihan bencana, uji perangkat outlet, domain & WhatsApp produksi, pentest, dan UAT dengan data klien.
 
-### A.1 Status G18–G19
+### A.1 Status G18–G22 (diperbarui 19 Okt 2026)
 | Gelombang | PR | Status | Paket selesai | Catatan / sisa |
 |---|---|---|---|---|
 | **G18** | **#60 — merged** | Selesai (smoke 305/0, re-review r11 GO) | W-01 (E-30 Poin EFN = alat bayar), W-03 (Rp1), W-10 (konfigurasi promo POS), W-11 (rotasi API key 30 h), W-18 (tunda hapus akun 14 h), W-19 (retensi; **sisa:** GC outbox poin Odoo 10 th), W-22 (KDS pilot), W-24 (E-31 refund ke metode asal), W-25 (E-34 daftar member 17+, `source_ref` opak), W-20 fit-gap (E-33 opsional, belum dibangun), W-28 kick-off (kustodi brankas) | R-L09 PB1 non-dine-in tetap dipungut (diubah 18-1 → W-14b) |
-| **G19** | **#62 — menunggu merge** (re-review r12 GO, online OFF di prod, L-47) | Selesai di kode | W-02 (E-35 reservasi 1 jam), W-09 (E-36 promo/kode), W-21 (E-37a `brand_code`, kanal per brand; E-37b ditunda), W-14 (konfigurasi PB1+SC), W-08 **PoC** (`efn_pii` + `efn_pii_base_vat`, lulus bersyarat L-39), fit-gap W-04/W-06, API key per kanal | Kode kanal `RTL-GL`… **diganti** kode per PT (W-32). Syarat L-47 (promo berkuota, SEC-142/143/144) → backlog aktivasi |
+| **G19** | **#62 — merged** (re-review r12 GO, online OFF di prod, L-47) | Selesai | W-02 (E-35 reservasi 1 jam), W-09 (E-36 promo/kode), W-21 (E-37a `brand_code`, kanal per brand; E-37b ditunda), W-14 (konfigurasi PB1+SC), W-08 **PoC** (`efn_pii` + `efn_pii_base_vat`, lulus bersyarat L-39), fit-gap W-04/W-06, API key per kanal | Kode kanal `RTL-GL`… **diganti** kode per PT (W-32, G20). Syarat L-47 (promo berkuota, SEC-142/143/144) → backlog aktivasi |
+| **G20** | **#63 — merged** (security r13 GO, online & `efn_pii*` OFF di prod, L-59) | Selesai | W-32 (6 entitas, kode `EFN/GL/PB/BCR/BCF/FARM`, migrasi `09-platform-g20.sql`), E-38a inti (`efn_pii` `efnpii2:`, token nama, POS tanpa preload), W-30/E-45 bayar di kasir (`efn_online_pos_counter`, kode bayar terenkripsi BFF, L-56..L-58), W-33 batas berat, W-24b/E-41 retur tanpa struk dengan persetujuan Store Manager, SEC-145/147/151 | Syarat aktivasi (L-59): SEC-146 notifikasi approver + laporan harian retur, SEC-150/152 SOP. Status W-14b (PB1 non-dine-in 0 %) dan teks pelanggan 18-36: sudah tercermin di `efn_setup_*` (docs/08 §13.2), **belum dicek terpisah** oleh architect |
+| **G21** | **#64 — merged** (security r14 GO, online & `efn_pii*` OFF di prod) | Selesai | W-29/E-44 kebijakan poin per PT + akrual harian + lot FIFO (`10-platform-g21.sql`), E-38a sisa + E-38b (`efn_pii_l10n_id`, `efn_pii_account`, `efn_pii_hr`, rekening, login portal opak, SEC-148/149/153), `efn_region` + view ETL `partner_region` + mart wilayah, W-31/E-47 `efn_setup_org` + `efn_role` + SoD + review akses, W-34/E-40 pembulatan PPN Coretax, W-06/E-39 faktur atas nama pembeli, PII stage 1a/1b, alert `EFN_LOYALTY_RECON` | Syarat aktivasi: L-69 (SOD-03 `block` sebelum kebijakan poin pertama), SEC-154/155/157/158/160 (L-67). Sisa erasure K-36-4 (rekening, HR, `mail.mail` tanpa partner, partner pembeli) → G22/DPO (L-68). W-23 = README saja (tanpa data, docs/08 §12). **W-26 (settlement 4 PT) dan W-19 tambahan (off-site): status belum terlihat di laporan yang dibaca architect** |
+| **G22** | **branch `chore/wave-22` — berjalan** (commit dokumen 852b5fe) | Kontrak & fit-gap selesai; build berjalan | Selesai sejauh ini: kontrak `docs/04` §14 v9.0 + L-70..L-74; fit-gap `docs/08` §13; `efn_setup_role` (data 82 peran); demo menu F&B (W-27, standar). Berjalan: W-07/E-27 QR meja (`efn_pos_bff_order`), W-04/E-29a F&B online + jembatan KDS, W-12 poin online, W-17 hangus 12 bulan + notifikasi + anonimisasi; inventaris PDP v8, RoPA/DPIA §13, runbook `fnb-qr-orders.md` | **L-73:** job hangus & anonimisasi OFF prod sampai teks Legal (Q-F22-4) & template Meta; D-22-12/14/16 + Q-F22-1..6 = keputusan klien. `FNB_QR_ENABLED`, `ONLINE_LOYALTY_*` default OFF prod |
 
 ### A.2 Paket baru (18 Okt)
 | ID | Paket (butir) | Agent (urutan) | Prasyarat | Dependensi | Estimasi (minggu-engineer) | Blok | Gelombang |

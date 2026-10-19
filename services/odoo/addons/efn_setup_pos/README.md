@@ -28,6 +28,13 @@ Modul konfigurasi untuk POS **retail (PT Retail)** dan **restoran (PT F&B)** di 
 
 **Catatan upgrade:** semua blok `noupdate` (termasuk `<function>` dan penetapan nomenklatur PT Retail) hanya dijalankan saat **install**. DB yang sudah memasang `efn_setup_pos` 19.0.1.1.0: filter audit baru ikut dibuat saat `-u`, tetapi default/nomenklatur/pecahan harus diterapkan manual (Settings POS) atau DB pilot di-install bersih.
 
+**G22 L-79 (19.0.1.13.0):** `data/pos_loyalty_points_link.xml` (noupdate=0) memanggil
+`pos.payment.method._efn_setup_points_journal_accounts` setiap install/upgrade: baris metode masuk & keluar jurnal
+"Poin EFN" tiap PT (GL, PB, BCR, BCF) yang masih kosong diisi akun liabilitas/kliring Poin EFN PT itu
+(`outstanding_account_id` metode). Wajib agar porsi Poin EFN pesanan online (W-12) berjurnal di Odoo 19; tanpa akun,
+`efn_online_order` menolak penukaran poin online. Akun yang sudah diganti Finance tidak ditimpa. Test:
+`tests/test_g18_config.py::TestEfnPointsPaymentMethodData`.
+
 ## Demo (`demo/`, hanya DB demo)
 - `pos_demo.xml` (F&B): kategori stasiun dapur, 2 printer ePOS (IP placeholder), denah meja.
 - `pos_fnb_demo.xml` (G14): lantai *Teras* (3 meja), modifier tanpa stok sebagai atribut `no_variant` (*Level Pedas*, *Permintaan Dapur* multi, *Gula*), menu *Nasi Goreng EFN* (Dapur Panas) & *Es Kopi Susu* (Bar) ber-PB1 default, preset *Bungkus – Kota Contoh* (fiscal position kota demo; ilustrasi aturan preset per kota).

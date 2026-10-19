@@ -12,6 +12,7 @@ import {
   InvoiceBuyerProfile,
   MarkPaidInput,
   MarkPaidResult,
+  ItemAttribute,
   OdooOnlineApi,
   OdooRpcError,
   PlaceInput,
@@ -68,12 +69,18 @@ interface MockOrder {
   refunded: number;
   readyAt: string | null;
   pickedUpAt: string | null;
-  cancelRefund: { refund_ref: string; amount: number } | null;
+  cancelRefund: CancelResult['refund'];
   promoCodes: string[];
   /** G20 §12.2: mode bayar SO. */
   paymentMode: 'qris' | 'counter';
   /** L-56: SHA-256 kode bayar dari BFF (meniru Odoo yang hanya menyimpan hash); teks asli tidak pernah disimpan. */
   counterSha: string | null;
+  /** G22 §14.C.3: porsi Poin EFN (Rupiah) saat place; 0 = tanpa poin. */
+  pointsValue: number;
+  /** = amountPayable − pointsValue. */
+  amountDue: number;
+  /** Σ points_value refund sebelumnya (alokasi proporsional, meniru Odoo). */
+  pointsRefunded: number;
 }
 
 /** Kanal demo G20: kode kanal = kode PT (§12.1), brand (§11.3). */
@@ -150,6 +157,16 @@ export class MockOdooOnline implements OdooOnlineApi {
   readonly weightMissingPolicy = new Map<string, 'block' | 'ignore'>();
   /** G20 §12.3: `product.weight` demo (test boleh mengubah). */
   readonly weightKg = new Map<number, number | null>(DEFAULT_WEIGHTS);
+  /**
+   * G22 B-2/B-4 (PLACEHOLDER demo): atribut `no_variant` per produk — default kosong (test/dev mengisi). PTAV di luar
+   * atribut produk → issue `attribute_invalid` (quote) / `invalid_input` (place).
+   */
+  readonly attributes = new Map<number, ItemAttribute[]>();
+  /** G22 B-2: flag poin kanal (default earn & redeem aktif di stub; kill switch BFF tetap menentukan). */
+  readonly loyaltyFlags = new Map<string, { earn: boolean; redeem: boolean }>();
+  /** G22 §14.C.3: kebijakan stub — nilai 1 poin & persen maksimum dari amount_payable (PLACEHOLDER). */
+  pointValueIdr = 100;
+  redeemMaxPct = 50;
 
   private track(method: string, channel: string): void {
     this.calls.push({ method, channel });
@@ -189,6 +206,7 @@ export class MockOdooOnline implements OdooOnlineApi {
             prices: [{ outlet_code: null, price_incl: incl, price_excl: round2((incl * TAX_DEN) / (TAX_DEN + TAX_NUM)), tax_labels: [TAX_LABEL] }],
             max_qty: MOCK_MAX_QTY_PER_LINE,
             weight_kg: this.weightKg.get(p.id) ?? null,
+            attributes: this.attributes.get(p.id) ?? [],
           };
         });
     return {
@@ -206,6 +224,8 @@ export class MockOdooOnline implements OdooOnlineApi {
         fulfilment: { pickup: true, delivery: false },
         outlets: [{ outlet_code: 'TOKO-01', public_name: 'Toko Demo 01', pickup_enabled: true, prep_minutes: 30, active: true }],
         payment_modes: [...(this.paymentModes.get(channel) ?? ['qris'])],
+        business_type: channel === 'PB' || channel === 'BCF' ? 'fnb' : 'retail',
+        loyalty: { ...(this.loyaltyFlags.get(channel) ?? { earn: true, redeem: true }) },
       },
     };
   }
@@ -237,11 +257,34 @@ export class MockOdooOnline implements OdooOnlineApi {
     if (outlet !== 'TOKO-01') throw new OdooRpcError('business', 'not_found');
     if (lines.length === 0 || lines.length > 50) throw new OdooRpcError('business', 'invalid_input');
     if (promoCodes.length > 3) throw new OdooRpcError('business', 'invalid_input');
+    // G22 B-4: identitas baris (product_id, PTAV terurut) — ganda → invalid_input
+    const identities = lines.map((l) => `${l.product_id}|${[...(l.attribute_value_ids ?? [])].sort((a, b) => a - b).join(',')}`);
+    if (new Set(identities).size !== identities.length) throw new OdooRpcError('business', 'invalid_input');
+    const attrIssues: QuoteResult['issues'] = [];
     const out: QuoteResult['lines'] = lines.map((l) => {
       const p = PRODUCTS.find((x) => x.id === l.product_id);
       if (!p) throw new OdooRpcError('business', 'not_found');
-      const unit = this.price(p.id);
-      return { product_id: p.id, name: p.name, qty: l.qty, price_unit_incl: unit, subtotal_incl: unit * l.qty, tax_labels: [TAX_LABEL], available: p.stock !== 'out', reward: false };
+      const ptav = [...(l.attribute_value_ids ?? [])].sort((a, b) => a - b);
+      const attrs = this.attributes.get(p.id) ?? [];
+      const chosen = attrs.flatMap((a) => a.values.filter((v) => ptav.includes(v.id)).map((v) => ({ a: a.name, v })));
+      if (chosen.length !== ptav.length) attrIssues.push({ product_id: p.id, code: 'attribute_invalid' });
+      // Seperti Odoo: pajak dihitung atas (harga excl + Σ price_extra excl), lalu dibulatkan SEKALI ke Rupiah. Faktor
+      // excl→incl = (TAX_DEN + TAX_NUM) / TAX_DEN — sama dengan konversi `price_excl` katalog stub (bukan 1,11).
+      const base = this.price(p.id);
+      const extraExcl = chosen.reduce((t, x) => t + x.v.price_extra_excl, 0);
+      const unit = extraExcl === 0 ? base : Math.round((((base * TAX_DEN) / (TAX_DEN + TAX_NUM) + extraExcl) * (TAX_DEN + TAX_NUM)) / TAX_DEN);
+      return {
+        product_id: p.id,
+        name: p.name,
+        qty: l.qty,
+        price_unit_incl: unit,
+        subtotal_incl: unit * l.qty,
+        tax_labels: [TAX_LABEL],
+        available: p.stock !== 'out',
+        reward: false,
+        attribute_value_ids: ptav,
+        attributes_text: chosen.length > 0 ? chosen.map((x) => `${x.a}: ${x.v.name}`).join(', ') : null,
+      };
     });
     const subtotal = out.reduce((s, l) => s + l.subtotal_incl, 0);
     const applied: string[] = [];
@@ -256,12 +299,23 @@ export class MockOdooOnline implements OdooOnlineApi {
       const amount = Math.min(d, remaining); // reward tidak membuat total negatif
       remaining -= amount;
       applied.push(code);
-      out.push({ product_id: REWARD_PRODUCT_ID, name: `Promo ${code} (demo)`, qty: 1, price_unit_incl: -amount, subtotal_incl: -amount, tax_labels: [TAX_LABEL], available: true, reward: true });
+      out.push({
+        product_id: REWARD_PRODUCT_ID,
+        name: `Promo ${code} (demo)`,
+        qty: 1,
+        price_unit_incl: -amount,
+        subtotal_incl: -amount,
+        tax_labels: [TAX_LABEL],
+        available: true,
+        reward: true,
+        attribute_value_ids: [],
+        attributes_text: null,
+      });
     }
     const total = out.reduce((s, l) => s + l.subtotal_incl, 0);
     const tax = round2((total * TAX_NUM) / (TAX_DEN + TAX_NUM));
     // quote_hash memuat kode terpakai (urut) + id reward (§11.2 no. 3)
-    const issues: QuoteResult['issues'] = [];
+    const issues: QuoteResult['issues'] = [...attrIssues];
     for (const l of out) {
       if (l.reward) continue;
       if (!l.available) issues.push({ product_id: l.product_id, code: 'out_of_stock' });
@@ -336,6 +390,16 @@ export class MockOdooOnline implements OdooOnlineApi {
     // L-56: kode bayar dari BFF wajib untuk counter (alfabet §10.2), dilarang untuk qris; ASUMSI Odoo → invalid_input
     const counterOk = order.counter_code !== undefined && /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$/.test(order.counter_code);
     if (mode === 'counter' ? !counterOk : order.counter_code !== undefined) throw new OdooRpcError('business', 'invalid_input');
+    // G22 §14.C.3 (meniru E-28): kanal loyalty_redeem, value = points × nilai tukar, ≤ pct × amount_payable, tunai ≥ Rp1
+    let pointsValue = 0;
+    if (order.points_payment) {
+      const pp = order.points_payment;
+      const flags = this.loyaltyFlags.get(channel) ?? { earn: true, redeem: true };
+      const okValue = pp.points > 0 && pp.value_idr === pp.points * this.pointValueIdr;
+      const okPct = pp.value_idr <= Math.floor((q.amount_payable * this.redeemMaxPct) / 100) && q.amount_payable - pp.value_idr >= 1;
+      if (!flags.redeem || !okValue || !okPct) throw new OdooRpcError('business', 'points_invalid');
+      pointsValue = pp.value_idr;
+    }
     const o: MockOrder = {
       ref: order.platform_order_ref,
       channel,
@@ -357,6 +421,9 @@ export class MockOdooOnline implements OdooOnlineApi {
       promoCodes: [...(order.promo_codes ?? [])],
       paymentMode: mode,
       counterSha: mode === 'counter' && order.counter_code ? sha(order.counter_code) : null,
+      pointsValue,
+      amountDue: q.amount_payable - pointsValue,
+      pointsRefunded: 0,
     };
     this.orders.set(o.ref, o);
     return this.placeResult(o);
@@ -364,7 +431,23 @@ export class MockOdooOnline implements OdooOnlineApi {
 
   private placeResult(o: MockOrder): PlaceResult {
     // L-56: kode bayar TIDAK dikembalikan (Odoo hanya menyimpan hash)
-    return { order_state: o.state, sale_order_name: o.saleOrderName, amount_total: o.amountTotal, amount_payable: o.amountPayable, expires_at: o.expiresAt };
+    return {
+      order_state: o.state,
+      sale_order_name: o.saleOrderName,
+      amount_total: o.amountTotal,
+      amount_payable: o.amountPayable,
+      expires_at: o.expiresAt,
+      amount_due: o.amountDue,
+    };
+  }
+
+  /** G22 §14.C.4 (meniru E-28): alokasi poin refund = round(min(ΣR, T) × V ÷ T) − Σ sebelumnya. */
+  private refundPoints(o: MockOrder, amount: number): { points_value: number; cash_amount: number } {
+    if (o.pointsValue <= 0) return { points_value: 0, cash_amount: amount };
+    const cumulative = Math.min(o.amountPayable, o.refunded + amount);
+    const pv = Math.min(o.pointsValue - o.pointsRefunded, Math.max(0, Math.round((cumulative * o.pointsValue) / o.amountPayable) - o.pointsRefunded));
+    o.pointsRefunded += pv;
+    return { points_value: pv, cash_amount: amount - pv };
   }
 
   /**
@@ -401,7 +484,8 @@ export class MockOdooOnline implements OdooOnlineApi {
     if (o.state === 'cancelled') return { order_state: 'cancelled', short_lines: null, refund_required: 'full' };
     if (o.state !== 'placed') return { order_state: o.state, short_lines: null, refund_required: null };
     o.paymentRef = payment.payment_ref;
-    if (payment.amount_paid !== o.amountPayable) {
+    // G22: tunai dibanding amount_due; points_value harus = nilai saat place
+    if (payment.amount_paid !== o.amountDue || (payment.points_value ?? 0) !== o.pointsValue) {
       o.state = 'review';
     } else if (o.lines.some((l) => l.product_id === STOCK_SHORT_PRODUCT)) {
       o.state = 'stock_short';
@@ -423,7 +507,10 @@ export class MockOdooOnline implements OdooOnlineApi {
       const invoiced = o.state === 'confirmed' || o.state === 'ready';
       o.state = 'cancelled';
       o.seq += 1;
-      if (invoiced) o.cancelRefund = { refund_ref: `RINV/${randomUUID().slice(0, 8)}`, amount: o.amountPayable - o.refunded };
+      if (invoiced) {
+        const amount = o.amountPayable - o.refunded;
+        o.cancelRefund = { refund_ref: `RINV/${randomUUID().slice(0, 8)}`, amount, ...(o.pointsValue > 0 ? this.refundPoints(o, amount) : {}) };
+      }
     }
     return { order_state: 'cancelled', refund: o.cancelRefund };
   }
@@ -442,8 +529,14 @@ export class MockOdooOnline implements OdooOnlineApi {
           return s + this.price(l.product_id) * l.qty;
         }, 0);
     if (amount <= 0 || o.refunded + amount > o.amountPayable) throw new OdooRpcError('business', 'amount_mismatch');
+    const points = o.pointsValue > 0 ? this.refundPoints(o, amount) : null;
     o.refunded += amount;
-    const r: RefundResult = { refund_ref: `RINV/${randomUUID().slice(0, 8)}`, amount, credit_note: `RINV/2026/${this.refundKeys.size + 1}` };
+    const r: RefundResult = {
+      refund_ref: `RINV/${randomUUID().slice(0, 8)}`,
+      amount,
+      credit_note: `RINV/2026/${this.refundKeys.size + 1}`,
+      ...(points ? { ...points, eligible_amount_refunded: Math.floor((amount * TAX_DEN) / (TAX_DEN + TAX_NUM)) } : {}),
+    };
     this.refundKeys.set(refund.idempotency_key, r);
     return r;
   }

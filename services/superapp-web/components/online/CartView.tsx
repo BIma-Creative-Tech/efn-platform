@@ -7,8 +7,10 @@ import {
   countItems,
   groupLevelIssues,
   issueLabel,
+  lineKey,
   MAX_PROMO_CODES,
   normalizePromoCode,
+  pairQuoteLines,
   parseQuote,
   PROMO_INVALID_MESSAGE,
   PROMO_RATE_LIMIT_MESSAGE,
@@ -33,9 +35,19 @@ import {
   writeGuestCart,
 } from '@/lib/cart-client';
 import { companyDisplayName, type CatalogChannel } from '@/lib/catalog';
-import { formatRupiah } from '@/lib/format';
+import { formatNumber, formatRupiah } from '@/lib/format';
 import { onlineErrorMessage, REQUOTE_CODES } from '@/lib/orders';
 import { COUNTER_UNAVAILABLE_REASON, paymentOptions, resolvePaymentMethod, type PaymentMethod } from '@/lib/payment';
+import {
+  canRedeemAny,
+  INSUFFICIENT_BALANCE_MESSAGE,
+  POINTS_REFRESH_CODES,
+  pointsErrorMessage,
+  resolveAllocation,
+  suggestMaxPoints,
+  type Allocation,
+  type QuotePoints,
+} from '@/lib/points';
 import {
   buildInvoiceRequest,
   EMPTY_INVOICE_FORM,
@@ -113,6 +125,11 @@ function channelInfo(channels: CatalogChannel[], code: string) {
   return channels.find((c) => c.channel_code === code) ?? null;
 }
 
+/** Baris quote untuk tiap baris keranjang grup ini (modifier berbeda = baris berbeda). */
+function pairedLines(cartLines: CartGroup['lines'], qg: QuoteGroup | null) {
+  return pairQuoteLines(cartLines, qg?.lines ?? []);
+}
+
 function GroupTitle({ channel, code, companyCode, index, total }: { channel: CatalogChannel | null; code: string; companyCode?: string; index: number; total: number }) {
   const company = companyDisplayName(channel?.company_code ?? companyCode ?? code);
   return (
@@ -149,6 +166,8 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
   const [invoiceOn, setInvoiceOn] = useState(false);
   const [invoiceForm, setInvoiceForm] = useState<InvoiceRequestInput>(EMPTY_INVOICE_FORM);
   const [invoiceErrors, setInvoiceErrors] = useState<InvoiceErrors>({});
+  // Poin sebagai alat bayar per PT (§14.C.2): isian jumlah poin per kanal, hanya di memori komponen.
+  const [pointsInputs, setPointsInputs] = useState<Record<string, string>>({});
 
   function resetInvoice() {
     setInvoiceOn(false);
@@ -286,6 +305,13 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
       setInvoiceErrors({});
       invoice = buildInvoiceRequest(invoiceForm);
     }
+    // Poin (§14.C.2): validasi UX; server tetap memvalidasi (saldo, minimum, batas %, porsi tunai ≥ Rp1).
+    const alloc = resolveAllocation(view.quote.points, view.quote.groups, pointsInputs);
+    if (!alloc.valid) {
+      setMsg({ kind: 'error', text: 'Periksa jumlah poin yang ditandai sebelum membayar, atau kosongkan untuk membayar tanpa poin.' });
+      setTimeout(() => document.querySelector<HTMLElement>('[data-points-input][aria-invalid="true"]')?.focus(), 0);
+      return;
+    }
     setPaying(true);
     setMsg(null);
     try {
@@ -296,6 +322,7 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
           accept_total: view.quote.amount_payable_total,
           payment_method: method,
           ...(invoice ? { invoice_request: invoice } : {}),
+          ...(alloc.request.length > 0 ? { points_redeem: alloc.request } : {}),
         }),
       });
       invoice = null;
@@ -321,7 +348,8 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
         setCounterDenied(true);
         setChosenMethod(null);
       }
-      if (REQUOTE_CODES.includes(r.code) || r.code === 'cart_has_issues') {
+      if (r.code === 'points_unavailable') setPointsInputs({});
+      if (REQUOTE_CODES.includes(r.code) || r.code === 'cart_has_issues' || POINTS_REFRESH_CODES.includes(r.code)) {
         const cart = await getServerCart();
         if (cart.ok) await requote(cart.data);
       }
@@ -372,6 +400,9 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
     : baseOptions;
   const method = resolvePaymentMethod(chosenMethod, options);
   const mutate = view.kind === 'guest' ? mutateGuest : (fn: (g: CartGroup[]) => CartGroup[]) => void mutateMember(fn);
+  // Poin (§14.C.2): alokasi diturunkan dari isian + quote saat render (tanpa effect); kuota otomatis ikut quote terbaru.
+  const redeemable = canRedeemAny(quote?.points ?? null);
+  const alloc = resolveAllocation(redeemable ? (quote?.points ?? null) : null, quote?.groups ?? [], pointsInputs);
 
   return (
     <div className="stack">
@@ -425,14 +456,23 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
                 </p>
               ))}
             <ul className={styles.lines}>
-              {g.lines.map((l) => {
-                const ql = qg?.lines.find((x) => !x.reward && x.product_id === l.product_id);
+              {g.lines.map((l, li) => {
+                // G22: baris produk sama dengan modifier berbeda dipasangkan menurut urutan (pairQuoteLines).
+                const ql = pairedLines(g.lines, qg)[li];
                 const issue = qg?.issues.find((i) => i.product_id === l.product_id);
                 const name = ql?.name ?? (view.kind === 'guest' ? view.guest.names[String(l.product_id)] : undefined) ?? `Produk #${l.product_id}`;
+                const optionsText =
+                  ql?.attributes_text || (view.kind === 'guest' ? (view.guest.options?.[lineKey(l.product_id, l.attribute_value_ids)] ?? '') : '');
                 return (
-                  <li key={l.product_id} className={styles.line}>
+                  <li key={lineKey(l.product_id, l.attribute_value_ids)} className={styles.line}>
                     <span>
                       <span className={styles.lineName}>{name}</span>
+                      {optionsText && (
+                        <span className="small muted">
+                          <br />
+                          {optionsText}
+                        </span>
+                      )}
                       {ql && (
                         <span className="small muted">
                           <br />
@@ -453,7 +493,7 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
                           type="button"
                           disabled={busy || paying}
                           aria-label={l.qty <= 1 ? `Hapus ${name}` : `Kurangi ${name}`}
-                          onClick={() => mutate((gs) => setQty(gs, g.channel_code, l.product_id, l.qty - 1))}
+                          onClick={() => mutate((gs) => setQty(gs, g.channel_code, l.product_id, l.qty - 1, undefined, l.attribute_value_ids))}
                         >
                           −
                         </button>
@@ -462,7 +502,7 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
                           type="button"
                           disabled={busy || paying || l.qty >= 99}
                           aria-label={`Tambah ${name}`}
-                          onClick={() => mutate((gs) => setQty(gs, g.channel_code, l.product_id, l.qty + 1))}
+                          onClick={() => mutate((gs) => setQty(gs, g.channel_code, l.product_id, l.qty + 1, undefined, l.attribute_value_ids))}
                         >
                           +
                         </button>
@@ -471,7 +511,7 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
                         type="button"
                         className="btn btn-secondary btn-small"
                         disabled={busy || paying}
-                        onClick={() => mutate((gs) => setQty(gs, g.channel_code, l.product_id, 0))}
+                        onClick={() => mutate((gs) => setQty(gs, g.channel_code, l.product_id, 0, undefined, l.attribute_value_ids))}
                       >
                         Hapus
                       </button>
@@ -585,9 +625,26 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
                 {quote.groups.map((qg) => (
                   <PairRow key={qg.channel_code} label={companyDisplayName(qg.company_code)} value={formatRupiah(qg.amount_payable)} />
                 ))}
-                <dt className={styles.grand}>Total bayar</dt>
-                <dd className={styles.grand}>{formatRupiah(quote.amount_payable_total)}</dd>
+                <dt className={alloc.total_value_idr > 0 ? undefined : styles.grand}>{alloc.total_value_idr > 0 ? 'Total tagihan' : 'Total bayar'}</dt>
+                <dd className={alloc.total_value_idr > 0 ? undefined : styles.grand}>{formatRupiah(quote.amount_payable_total)}</dd>
+                {alloc.total_value_idr > 0 && (
+                  <>
+                    <PairRow label={`Dibayar dengan poin (${formatNumber(alloc.total_points)} poin)`} value={`−${formatRupiah(alloc.total_value_idr)}`} />
+                    <dt className={styles.grand}>Bayar tunai</dt>
+                    <dd className={styles.grand}>{formatRupiah(alloc.total_cash_idr)}</dd>
+                  </>
+                )}
               </dl>
+              {redeemable && quote.points && (
+                <PointsSection
+                  points={quote.points}
+                  groups={quote.groups}
+                  inputs={pointsInputs}
+                  alloc={alloc}
+                  disabled={busy || paying}
+                  onChange={(channel, value) => setPointsInputs((prev) => ({ ...prev, [channel]: value }))}
+                />
+              )}
               <fieldset className={styles.methodSet} disabled={busy || paying}>
                 <legend>Metode pembayaran</legend>
                 {options.map((o) => {
@@ -661,13 +718,97 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
                 : method === 'counter'
                   ? 'Buat pesanan & bayar di kasir'
                   : quote
-                    ? `Bayar ${formatRupiah(quote.amount_payable_total)}`
+                    ? `Bayar ${formatRupiah(alloc.total_value_idr > 0 ? alloc.total_cash_idr : quote.amount_payable_total)}`
                     : 'Bayar'}
             </button>
           </div>
         </>
       )}
     </div>
+  );
+}
+
+interface PointsSectionProps {
+  points: QuotePoints;
+  groups: QuoteGroup[];
+  inputs: Record<string, string>;
+  alloc: Allocation;
+  disabled: boolean;
+  onChange: (channel: string, value: string) => void;
+}
+
+/**
+ * Poin sebagai alat bayar per PT (docs/04 §14.C.1–§14.C.2): saldo tersedia + nilai, isian per kanal dengan batas dari quote,
+ * dan porsi tunai per kanal. Poin BUKAN diskon (pajak tetap atas harga penuh). Validasi di sini hanya UX.
+ */
+function PointsSection({ points, groups, inputs, alloc, disabled, onChange }: PointsSectionProps) {
+  return (
+    <fieldset className={styles.methodSet} disabled={disabled}>
+      <legend>Bayar dengan poin (opsional)</legend>
+      <p className="small" style={{ margin: '0 0 0.25rem' }}>
+        Saldo poin tersedia: <strong>{formatNumber(points.balance_available)} poin</strong> (1 poin = {formatRupiah(points.point_value_idr)}; setara{' '}
+        {formatRupiah(points.balance_available * points.point_value_idr)}).
+      </p>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Poin dipakai sebagai alat bayar, bukan diskon: pajak tetap dihitung dari harga penuh. Setiap PT wajib menyisakan minimal Rp1 untuk dibayar
+        tunai. Poin ditahan sampai pesanan dibayar atau kedaluwarsa.
+      </p>
+      {groups.map((g) => {
+        const info = points.groups.find((x) => x.channel_code === g.channel_code);
+        const company = companyDisplayName(g.company_code);
+        if (!info || !info.redeem_allowed) {
+          return (
+            <p key={g.channel_code} className="small muted">
+              {company}: poin tidak dapat dipakai untuk pesanan ini.
+            </p>
+          );
+        }
+        const line = alloc.lines.find((l) => l.channel_code === g.channel_code);
+        const err = line?.error ? pointsErrorMessage(line.error, info) : null;
+        const id = `poin-${g.channel_code}`;
+        return (
+          <div key={g.channel_code} className="field" style={{ marginTop: '0.5rem' }}>
+            <label htmlFor={id}>Poin untuk {company}</label>
+            <div className={styles.promoRow}>
+              <input
+                id={id}
+                data-points-input=""
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                autoComplete="off"
+                value={inputs[g.channel_code] ?? ''}
+                aria-invalid={Boolean(err)}
+                aria-describedby={err ? `${id}-hint ${id}-err` : `${id}-hint`}
+                onChange={(e) => onChange(g.channel_code, e.target.value.replace(/\D/g, '').slice(0, 9))}
+              />
+              <button
+                type="button"
+                className="btn btn-secondary"
+                aria-label={`Pakai poin maksimum untuk ${company}`}
+                onClick={() => onChange(g.channel_code, String(suggestMaxPoints(points, groups, inputs, g.channel_code) || ''))}
+              >
+                Maks
+              </button>
+            </div>
+            <span id={`${id}-hint`} className="hint">
+              Minimal {formatNumber(info.min_points)}, maksimal {formatNumber(info.max_points)} poin ({formatRupiah(info.max_value_idr)}).
+              {line && !err ? ` Dibayar poin ${formatRupiah(line.value_idr)}; sisa tunai ${formatRupiah(line.cash_idr)}.` : ''}
+            </span>
+            {err && (
+              <p id={`${id}-err`} role="alert" className="alert alert-error" style={{ margin: 0 }}>
+                {err}
+              </p>
+            )}
+          </div>
+        );
+      })}
+      {alloc.insufficient_balance && (
+        <p role="alert" className="alert alert-error">
+          {INSUFFICIENT_BALANCE_MESSAGE}
+        </p>
+      )}
+    </fieldset>
   );
 }
 

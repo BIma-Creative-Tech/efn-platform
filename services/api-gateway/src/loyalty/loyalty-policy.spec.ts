@@ -125,6 +125,9 @@ describe('plafon LOYALTY_POLICY_CEILING_* (§13.1 no. 4)', () => {
       posConfigHourlyMax: 10_000,
       companyHourlyMax: 50_000,
       earnOnMoneyOnlyRequired: true,
+      // L-75 (G22): plafon kebijakan hangus
+      inactivityMonthsMin: 6,
+      inactivityMonthsMax: 36,
     });
     expect(policyViolations(PARAMS, null, c)).toEqual([]);
     const bad = { ...PARAMS, earn_idr_per_point: 9_999, redeem_min_points: 10, redeem_max_pct: 60, max_points_per_order: 5_001, daily_max_points_member: 0, pos_config_hourly_max: 10_001, company_hourly_max: 0, earn_on_money_only: false };
@@ -267,6 +270,69 @@ describe('LoyaltyPolicyService.effective — kebijakan aktif per PT, fallback en
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('L-75 (G22) — kunci kebijakan hangus hanya untuk EFN', () => {
+  /** Body kanonik persis dari Odoo G22 (dikunci test Odoo, pesan lead L-75). */
+  const CANONICAL =
+    '{"approved_by_uid":7,"company_code":"EFN","effective_from":"2026-11-01T00:00:00Z","params":{"activity_epoch":"2026-11-01","company_hourly_max":50000,"daily_max_points_member":2000,"earn_idr_per_point":10000,"earn_on_money_only":true,"expiry_notice_days":30,"inactivity_expiry_months":12,"max_points_per_order":5000,"pos_config_hourly_max":10000,"redeem_max_pct":50,"redeem_min_points":50},"point_value_idr":100,"schema_version":1,"version":2}';
+
+  it('body kanonik EFN diterima; tiga kunci terbaca; sidik stabil & beda dari body tanpa kunci', () => {
+    const p = parseLoyaltyPolicy(Buffer.from(CANONICAL), 'EFN', '2');
+    expect(p.params).toMatchObject({ inactivity_expiry_months: 12, expiry_notice_days: 30, activity_epoch: '2026-11-01', redeem_max_pct: 50 });
+    expect(p.pointValueIdr).toBe(100);
+    expect(policyViolations(p.params, p.pointValueIdr, testConfig().loyaltyPolicyCeilings, Date.UTC(2026, 9, 5))).toEqual([]);
+    const without = JSON.parse(CANONICAL) as { params: Record<string, unknown> };
+    delete without.params.activity_epoch;
+    delete without.params.expiry_notice_days;
+    delete without.params.inactivity_expiry_months;
+    const old = parseLoyaltyPolicy(raw(without), 'EFN', '2');
+    expect(old.params.inactivity_expiry_months).toBeUndefined();
+    expect(policyFingerprint(old)).not.toBe(policyFingerprint(p));
+    // versi lama tanpa kunci: sidik = rumus G21 (tidak ada kunci hangus di objek kanonik)
+    expect(policyFingerprint(old)).toBe(policyFingerprint(parseLoyaltyPolicy(raw(without), 'EFN', '2')));
+  });
+
+  it.each([['inactivity_expiry_months', 12], ['expiry_notice_days', 30], ['activity_epoch', '2026-11-01']])(
+    'kunci %s pada PT non-EFN → 400',
+    async (k, v) => {
+      expect(await code(() => parseLoyaltyPolicy(raw(body({}, { [k]: v })), 'GL', '3'))).toBe('400 invalid_request');
+    },
+  );
+
+  it('bentuk salah (desimal, string, tanggal tidak ada) → 400', async () => {
+    const efn = (params: Record<string, unknown>) => raw(body({ company_code: 'EFN', version: 2 }, params));
+    expect(await code(() => parseLoyaltyPolicy(efn({ inactivity_expiry_months: 12.5 }), 'EFN', '2'))).toBe('400 invalid_request');
+    expect(await code(() => parseLoyaltyPolicy(efn({ expiry_notice_days: '30' }), 'EFN', '2'))).toBe('400 invalid_request');
+    expect(await code(() => parseLoyaltyPolicy(efn({ activity_epoch: '2026-02-30' }), 'EFN', '2'))).toBe('400 invalid_request');
+    expect(await code(() => parseLoyaltyPolicy(efn({ activity_epoch: '01-11-2026' }), 'EFN', '2'))).toBe('400 invalid_request');
+  });
+
+  it('plafon: bulan di luar MIN..MAX, notice di luar 7..60, epoch > 1 tahun ke depan → 422 policy_out_of_bounds', async () => {
+    const ctx = setup();
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      for (const params of [{ inactivity_expiry_months: 5 }, { inactivity_expiry_months: 37 }, { expiry_notice_days: 6 }, { expiry_notice_days: 61 }, { activity_epoch: '2027-12-01' }]) {
+        expect(await code(ctx.publish(body({ company_code: 'EFN', version: 2 }, params)))).toBe('422 policy_out_of_bounds');
+      }
+    } finally {
+      warn.mockRestore();
+    }
+    const narrow = testConfig({ LOYALTY_POLICY_CEILING_INACTIVITY_MONTHS_MIN: '12', LOYALTY_POLICY_CEILING_INACTIVITY_MONTHS_MAX: '24' }).loyaltyPolicyCeilings;
+    expect(policyViolations({ ...PARAMS, inactivity_expiry_months: 11 }, null, narrow)).toEqual(['inactivity_expiry_months']);
+    expect(ctx.db.policies).toHaveLength(0);
+  });
+
+  it('expiryParams: kebijakan EFN aktif menang per kunci; tanpa kunci → env', async () => {
+    const ctx = setup({ LOYALTY_POLICY_CACHE_SECONDS: '0', LOYALTY_INACTIVITY_EXPIRY_MONTHS: '18', LOYALTY_ACTIVITY_EPOCH: '2026-10-01' });
+    expect(await ctx.svc.expiryParams()).toMatchObject({ inactivityMonths: 18, noticeDays: 30, source: 'env', policyVersion: null });
+    await ctx.publish(body({ company_code: 'EFN', version: 1, effective_from: '2026-10-01T00:00:00Z' }, { inactivity_expiry_months: 12, expiry_notice_days: 45 }));
+    const e = await ctx.svc.expiryParams();
+    expect(e).toMatchObject({ inactivityMonths: 12, noticeDays: 45, source: 'policy', policyVersion: 1 });
+    expect(e.activityEpoch?.toISOString()).toBe('2026-09-30T17:00:00.000Z'); // env (00:00 WIB)
+    // PT lain tidak terpengaruh kunci EFN (earn tetap dari kebijakan PT/env)
+    expect((await ctx.svc.effective('EFN')).source).toBe('policy');
   });
 });
 

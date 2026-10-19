@@ -5,7 +5,9 @@
     # template harga member BCR (nonaktif). Data noupdate -> berlaku di DB baru (install).
     # 19.0.1.12.0 (G22 W-27, docs/08 §13.3): demo modifier & combo F&B PB/BCF (atribut no_variant, nilai berharga,
     # add-on berbahan = produk + BoM Kit, product.combo). Hanya demo (keputusan 18-22: master data menunggu klien).
-    "version": "19.0.1.12.0",
+    # 19.0.1.13.0 (G22 L-79): baris metode masuk/keluar jurnal Poin EFN tiap PT diisi akun liabilitas/kliring Poin EFN
+    # PT (setiap install/upgrade, hanya yang kosong) -> porsi Poin EFN pesanan online berjurnal (W-12).
+    "version": "19.0.1.13.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",

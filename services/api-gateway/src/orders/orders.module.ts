@@ -14,6 +14,7 @@ import { OnlineJobsService } from './online-jobs.service';
 import { OnlinePrivacyService } from './online-privacy.service';
 import { ONLINE_REPO, OnlineRepo, PgOnlineRepo } from './online.repository';
 import { OnlineSagaService } from './online-saga.service';
+import { LoyaltyModule } from '../loyalty/loyalty.module';
 import { OrderEventsController, OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
 
@@ -22,7 +23,7 @@ import { OrdersService } from './orders.service';
  * batal, kode ambil, event Odoo, consumer saga, sweeper/rekonsiliasi/retensi, operasi CS (CLI) dan hook privasi.
  */
 @Module({
-  imports: [OdooRpcModule, CatalogModule, CartModule, PaymentsModule],
+  imports: [OdooRpcModule, CatalogModule, CartModule, PaymentsModule, LoyaltyModule],
   controllers: [OrdersController, OrderEventsController],
   providers: [
     { provide: ONLINE_REPO, inject: [DB], useFactory: (db: Db): OnlineRepo => new PgOnlineRepo(db, db) },

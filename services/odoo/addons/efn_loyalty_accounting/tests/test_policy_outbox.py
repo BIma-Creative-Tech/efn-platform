@@ -110,6 +110,44 @@ class TestEfnLoyaltyPolicyOutbox(SigningKeyMixin, FakeBffMixin, TransactionCase)
         self.assertEqual((body["company_code"], body["point_value_idr"]), ("EFN", 150))
         self.assertEqual(self.bff_calls[0]["path"], f"/v1/pos/loyalty/policies/EFN/{policy.version}")
         self.assertEqual(policy.state, "published")
+        # G22 W-17: default 12 bulan / 30 hari ikut params; epoch kosong -> kunci tidak dikirim.
+        self.assertEqual(set(body["params"]), {*PARAM_FIELDS, "inactivity_expiry_months", "expiry_notice_days"})
+        self.assertEqual((body["params"]["inactivity_expiry_months"], body["params"]["expiry_notice_days"]), (12, 30))
+
+    def test_global_policy_body_w17_exact_bytes_and_signature(self):
+        """Bentuk persis body PUT EFN G22 (§14.D.8): urutan kanonik, tipe, tanda tangan atas byte persis."""
+        key = self.install_signing_key()
+        effective = fields.Datetime.now() + timedelta(days=1)
+        policy, outbox = self._approved(
+            user=self.lm_efn,
+            approver=self.am_efn,
+            point_value_idr=100,
+            inactivity_expiry_months=12,
+            expiry_notice_days=30,
+            activity_epoch=fields.Date.to_date("2026-11-01"),
+            effective_from=effective,
+        )
+        self.bff_responses = [self.ok()]
+        with patch.object(outbox_module, "_now_unix", return_value=T1):
+            self._run()
+        call = self.bff_calls[0]
+        template = (
+            '{"approved_by_uid":UID,"company_code":"EFN","effective_from":"EFF","params":{'
+            '"activity_epoch":"2026-11-01","company_hourly_max":50000,"daily_max_points_member":2000,'
+            '"earn_idr_per_point":10000,'
+            '"earn_on_money_only":true,"expiry_notice_days":30,"inactivity_expiry_months":12,'
+            '"max_points_per_order":5000,"pos_config_hourly_max":10000,"redeem_max_pct":50,"redeem_min_points":50},'
+            '"point_value_idr":100,"schema_version":1,"version":VER}'
+        )
+        expected = (
+            template.replace("UID", str(self.am_efn.id))
+            .replace("EFF", policy.effective_from.strftime("%Y-%m-%dT%H:%M:%SZ"))
+            .replace("VER", str(policy.version))
+        )
+        self.assertEqual(call["body"], expected.encode("ascii"))
+        header = call["headers"][signing.SIGNATURE_HEADER]
+        self.assertEqual(signing.verify_signature(key, header, call["body"], now=T1), (True, None))
+        self.assertEqual((outbox.state, policy.state), ("done", "published"))
 
     # ------------------------------------------------------ replay / retry
     def test_retry_resigns_with_new_timestamp_old_signature_not_replayable(self):

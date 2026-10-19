@@ -3,7 +3,9 @@
     "summary": "E-45: pesanan online Super-App dilunasi di kasir POS dengan kode bayar (tunai/EDC/QRIS statis). "
     "Baris layanan 'Pelunasan Pesanan Online' terkunci, validasi server saat sync, faktur SO dibayar di jurnal "
     "kliring PT (kliring bersih 0). POS tidak memuat SO (SEC-105 tetap).",
-    "version": "19.0.1.1.0",
+    # 19.0.1.2.0 (G22 W-12, docs/04 §14.C.4): lookup mengembalikan `amount_due` (porsi tunai), pelunasan POS = porsi
+    # tunai, otorisasi/refund POS = `cash_amount` refund; porsi Poin EFN dicatat efn_online_order di jurnal Poin EFN.
+    "version": "19.0.1.2.0",
     "category": "EFN/Point of Sale",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031): hanya Odoo CE 19 + efn_*. Tidak bergantung pada

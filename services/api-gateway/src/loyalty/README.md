@@ -34,6 +34,36 @@ Kontrak publikasi: lihat `src/pos/README.md` (§G21).
 
 Risiko dimitigasi: R-B05 (rekonsiliasi poin per PT), R-B06 (fraud: plafon keras + tanda tangan + service key), R-S14 (empat mata di Odoo; BFF menolak isi beda versi sama).
 
+## G22 — aktivitas, poin hangus tidak aktif (W-17), poin online (W-12)
+Kontrak `docs/04` §14.C–§14.D, L-72 (D-22-12/13/15/17/18), **L-73** (job & anonimisasi OFF di production), **L-75**
+(parameter hangus di kebijakan global EFN), **L-76** (WA tanpa jumlah poin, bukti tanpa identitas), **L-77**, **L-79**.
+ADR-020, ADR-022. Risiko: R-B05, R-B06, R-L01, R-L09.
+- `loyalty-activity.ts` `touchActivity(q, hash, kind, at)` — `GREATEST` di transaksi peristiwa: earn/redeem POS, impor
+  migrasi, Price Hunter valid, login OTP, klaim QR, earn/redeem online. Bukan aktivitas: clawback/restore/forfeit/expire.
+- `loyalty-inactivity.job.ts` (`LoyaltyInactivityJob`, logger `LoyaltyInactivityJob`): notice ≥ jam
+  `LOYALTY_EXPIRY_NOTICE_HOUR_WIB` (notice + outbox `notify.push` `source: loyalty_expiry`, params `{expire_date}`),
+  expire ≥ `LOYALTY_EXPIRY_RUN_HOUR_WIB` (advisory lock per fase; batal bila kandidat > `LOYALTY_EXPIRY_MAX_PER_RUN`;
+  dry-run default; entri `inactivity_expire` per lot, `source='loyalty_expiry'`, kunci acak; lot utang tidak disentuh;
+  blocker: reservasi aktif / pesanan online terbuka / DSAR aktif). Anonimisasi (`LOYALTY_INACTIVE_ANONYMIZE`, default
+  false) → `dsar_request(type='retention')` → `ErasureService`. Heartbeat `EFN_LOYALTY_EXPIRY_RUN {"status","phase",…}`;
+  metrik `efn_loyalty_expiry_total{phase,outcome}` (seri diinisialisasi 0), `efn_loyalty_expired_points_total{issuer}`,
+  `efn_loyalty_expiry_notice_failed_total`.
+- **SEC-171 (r15)** `LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT` (default `true` sampai Legal memutuskan dasar hukum §14.D.4;
+  nilai selain true/false → gagal start): WA hanya bila consent `marketing` terbaru member = `granted` (`platform.consent`,
+  sumber yang sama dengan `ConsentService`). Tanpa consent (termasuk subjek hanya-ledger POS) → notice TETAP dibuat (due ≥
+  N hari, info in-app `GET /v1/me` D.6), bukti anonim `loyalty_expiry_notice_proof.channel='in_app'`, metrik outcome
+  `no_consent`, heartbeat `no_consent`/`require_consent`. Consent dicek saat enqueue; penarikan consent di antara enqueue dan
+  kirim (menit) belum dicek ulang di consumer.
+- Kebijakan global EFN (L-75): `params` boleh memuat `inactivity_expiry_months` (plafon
+  `LOYALTY_POLICY_CEILING_INACTIVITY_MONTHS_MIN/_MAX`, 6..36), `expiry_notice_days` (7..60), `activity_epoch`
+  (YYYY-MM-DD, ≤ 1 tahun ke depan) — PT lain mengirim kunci ini → 400; di luar plafon → 422. Sidik kanonik memuat kunci
+  ini hanya bila ada (sidik G21 tidak berubah). `LoyaltyPolicyService.expiryParams()` = nilai kebijakan per kunci, fallback env.
+- `LOYALTY_POINT_EXPIRY_DAYS` DIHAPUS (production: gagal start; dev: peringatan, diabaikan) → `LOYALTY_POINT_MAX_AGE_DAYS`
+  (default 0 = lot tanpa `expires_at`).
+- Poin online: implementasi `src/orders/online-points.ts` (provider `ONLINE_POINTS` di modul ini).
+
 ## Belum
+- G22: definisi aktivitas final (Finance+Legal, D-22-12), teks syarat program & kategori template WA (Legal/Meta, L-73),
+  pasal UU PDP anonimisasi (DPO). Consent `marketing` untuk notifikasi hangus belum dicek (dasar: perjanjian program).
 - G21: settlement antar-PT (W-15) dan jurnal breakage (W-17, G22) di Odoo; snapshot saldo harian (query saldo penutup memindai seluruh riwayat penerbit — cukup untuk volume pilot, perlu tabel snapshot bila ledger > puluhan juta baris).
 - Redeem/clawback POS + FIFO kedaluwarsa: SELESAI gelombang 13 (lihat `src/pos/README.md`, primitif `allocateDebit`/`splitCredit`/`lockMember` di sini). Sisa: sumber `mgm` (butuh validasi semantik sendiri); plafon poin per member per hari.

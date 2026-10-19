@@ -122,6 +122,47 @@ export class MetricsService implements OnModuleInit {
     registers: [this.registry],
   });
 
+  /**
+   * G22 §14.D.9 + L-77: satu kenaikan per MEMBER per fase (`notice|expire|anonymize`) dengan `outcome`
+   * (`queued|no_consent|expired|superseded|skipped|scheduled|dry_run|aborted|error`; `no_consent` = SEC-171 r15, notice
+   * dibuat tanpa WA karena consent marketing tidak ada). Seri diinisialisasi 0 saat start
+   * (`initLoyaltyExpirySeries`) agar alert `increase()` tidak buta pada seri baru.
+   */
+  readonly loyaltyExpiry = new Counter({
+    name: 'efn_loyalty_expiry_total',
+    help: 'Job poin hangus tidak aktif per fase dan hasil (per member)',
+    labelNames: ['phase', 'outcome'] as const,
+    registers: [this.registry],
+  });
+  /** §14.D.9: poin yang dihanguskan per PT penerbit. */
+  readonly loyaltyExpiredPoints = new Counter({
+    name: 'efn_loyalty_expired_points_total',
+    help: 'Poin dihanguskan job tidak aktif per PT penerbit',
+    labelNames: ['issuer'] as const,
+    registers: [this.registry],
+  });
+  /** §14.D.4: pengiriman pemberitahuan hangus yang gagal (consumer notify.push). */
+  readonly loyaltyExpiryNoticeFailed = new Counter({
+    name: 'efn_loyalty_expiry_notice_failed_total',
+    help: 'Pemberitahuan WA poin hangus yang gagal dikirim',
+    registers: [this.registry],
+  });
+
+  initLoyaltyExpirySeries(): void {
+    const outcomes: Record<string, string[]> = {
+      notice: ['queued', 'no_consent', 'skipped', 'dry_run', 'aborted', 'error'],
+      expire: ['expired', 'superseded', 'skipped', 'dry_run', 'aborted', 'error'],
+      anonymize: ['scheduled', 'skipped', 'error'],
+    };
+    for (const [phase, list] of Object.entries(outcomes)) for (const outcome of list) this.loyaltyExpiry.inc({ phase, outcome }, 0);
+    for (const issuer of ['EFN', 'GL', 'PB', 'BCR', 'BCF', 'FARM']) this.loyaltyExpiredPoints.inc({ issuer }, 0);
+    this.loyaltyExpiryNoticeFailed.inc(0);
+  }
+
+  recordLoyaltyExpiry(phase: 'notice' | 'expire' | 'anonymize', outcome: string, n = 1): void {
+    if (n > 0) this.loyaltyExpiry.inc({ phase, outcome: /^[a-z_]{1,40}$/.test(outcome) ? outcome : 'error' }, n);
+  }
+
   /** Metrik default proses Node (CPU, heap, event loop) hanya di runtime, bukan di unit test. */
   onModuleInit(): void {
     collectDefaultMetrics({ register: this.registry });

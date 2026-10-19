@@ -1,0 +1,7 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_pos_table_session_pos_manager,efn.pos.table.session pos manager,model_efn_pos_table_session,point_of_sale.group_pos_manager,1,0,0,0
+access_efn_pos_table_session_system,efn.pos.table.session system,model_efn_pos_table_session,base.group_system,1,0,0,0
+access_efn_pos_qr_order_pos_manager,efn.pos.qr.order pos manager,model_efn_pos_qr_order,point_of_sale.group_pos_manager,1,0,0,0
+access_efn_pos_qr_order_system,efn.pos.qr.order system,model_efn_pos_qr_order,base.group_system,1,0,0,0
+access_efn_pos_qr_event_outbox_pos_manager,efn.pos.qr.event.outbox pos manager,model_efn_pos_qr_event_outbox,point_of_sale.group_pos_manager,1,0,0,0
+access_efn_pos_qr_event_outbox_system,efn.pos.qr.event.outbox system,model_efn_pos_qr_event_outbox,base.group_system,1,1,0,1

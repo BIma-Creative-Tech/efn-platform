@@ -49,6 +49,8 @@ Layout host: `/opt/efn/{compose,traefik,observability,backup,minio,clickhouse,po
 | EfnOnlineApiKeyRollbackFailed, EfnOnlineApiKeyOldKeyStillAccepted (timer `efn-rotate-online-key`, journald host, W-11) | critical / warning | [odoo-online-api-key.md](odoo-online-api-key.md#rollback-gagal) |
 | EfnAuditEpochDivergenceBlocked, EfnAuditEpochNew (epoch rantai salinan audit setelah restore DB Odoo, G18) | critical / warning | [etl-audit-copy.md](etl-audit-copy.md#epoch) |
 | EfnLoyaltyAnomalyCritical, EfnLoyaltyAnomalyWarning, EfnLoyaltyReconMissing, EfnLoyaltyReconFailing (Poin EFN, G13c SEC-61); EfnLoyaltyReconStale (Prometheus) | critical / warning / warning / warning / warning | [loyalty-anomaly.md](loyalty-anomaly.md) |
+| EfnLoyaltyExpiryAborted, EfnLoyaltyExpiryFailed, EfnLoyaltyExpiryHeartbeatMissing (poin hangus tidak aktif W-17, G22 §14.D.9) | critical / warning / warning | [loyalty-inactivity-expiry.md](loyalty-inactivity-expiry.md) |
+| EfnOnlineApiKey* dengan label `channel="QR-PB"` / `"QR-BCF"` (API key user teknis QR meja, G22) | sama dengan kanal online | [odoo-qr-api-key.md](odoo-qr-api-key.md#alert) |
 
 Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-incident.md](security-incident.md).
 
@@ -71,8 +73,12 @@ Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-inciden
 | Ubah grup/hak user Odoo (UI/RPC, bukan `odoo shell`); traceback JSON-RPC (sisa SEC-22) | [odoo-access-changes.md](odoo-access-changes.md) |
 | journald host (efn-deploy, backup) → Loki | [host-journal-loki.md](host-journal-loki.md) |
 | Operasi pesanan online (kill switch `ONLINE_ENABLED`, order macet, DLQ saga, refund CLI L-3, rotasi HMAC event) | [online-orders.md](online-orders.md) |
+| Pesanan QR meja F&B (G22): cetak ulang QR, cabut sesi, pesanan nyasar, spam, konfirmasi pelayan, gangguan BFF, kill switch, poin QR | [fnb-qr-orders.md](fnb-qr-orders.md) |
 | CLI CS online lewat wrapper `efn-online-cs`: pasang sudoers, grup `efn-cs` / `efn-cs-approver`, alasan via stdin | [online-orders.md](online-orders.md#cli-cs) |
 | API key Odoo kanal online: pemasangan timer rotasi otomatis 30 hari `efn-rotate-online-key`, rotasi darurat, metrik (R-T15, W-11) | [odoo-online-api-key.md](odoo-online-api-key.md) |
+| API key Odoo user teknis QR meja `QR-PB`/`QR-BCF` (G22): key pertama `--bootstrap`, aktivasi `FNB_QR_ENABLED`, rotasi, hentikan | [odoo-qr-api-key.md](odoo-qr-api-key.md) |
+| Rotasi kunci token sesi meja `fnb_table_token_key` dan HMAC event QR `odoo_fnb_event_hmac` (G22) | [fnb-table-token-key.md](fnb-table-token-key.md) |
+| Aktivasi poin hangus 12 bulan tidak aktif & anonimisasi (L-73: izin `EFN_ALLOW_FEATURE_ON` di host) | [loyalty-inactivity-expiry.md](loyalty-inactivity-expiry.md#aktivasi) |
 | Retensi data W-19 (env default, deploy pertama G18 / stop ETL, timer housekeeping Metabase) | [retention.md](retention.md) |
 | Deploy gagal: modul Odoo wajib (`efn_pos_refund_origin`) belum `installed` (SEC-129) | [deploy-odoo-modules.md](deploy-odoo-modules.md) |
 | Boot stack dev di laptop (Docker Desktop/WSL2), upgrade modul Odoo dev | [dev-stack-boot.md](dev-stack-boot.md) |

@@ -8,7 +8,7 @@
 > **mencadangkan stok** sejak checkout, menerima **kode promo** (promo otomatis per brand ikut dihitung Odoo), dan
 > setiap kanal punya **kode brand**.
 
-- Versi `19.0.1.5.0` (G20 E-45 bayar di kasir + W-33, lihat bagian di bawah), LGPL-3, `depends`: `sale_stock`, `sale_loyalty` (CE, mesin promo E-36; baru di 19.0.1.2.0 —
+- Versi `19.0.1.7.0` (G22 W-04 atribut/KDS-hook + W-12 Poin EFN, lihat bagian G22), LGPL-3, `depends`: `sale_stock`, `sale_loyalty` (CE, mesin promo E-36; baru di 19.0.1.2.0 —
   upgrade memasangnya bila belum), `point_of_sale` (hanya `pos.category`), `mail`, `efn_core`.
   Tanpa `website*`, `delivery`, `payment_*`, tanpa modul pihak ketiga (ADR-031; `check-odoo-deps.sh`).
 - Kontrak: `docs/04_SERVICE_CONTRACTS.md` §10 (v5.0) + **§11 (v6.0, G19) yang menang atas §10 dan docs/08**;
@@ -206,6 +206,84 @@ ADR-036 §0 (Accepted: enkripsi PII Odoo), ADR-034, ADR-031. Risiko: R-L01/R-L10
 Perubahan json2 (aditif): metode baru di atas; kode error baru `efn_online:invoice_not_available`. Metode lain tidak
 berubah. Uji: `tests/test_online_g21_invoice_party.py` (kelas tanpa efn_pii selalu jalan; kelas dengan efn_pii di-skip
 bila efn_pii/efn_pii_base_vat tidak terpasang).
+
+## G22 (19.0.1.7.0) — F&B online (W-04) + Poin EFN online (W-12)
+Kontrak `docs/04` §14.B, §14.C, §14.7 L-72 (D-22-8, D-22-9, D-22-11), L-78 (identitas baris quote). Fit-gap `docs/08`
+§10.6, §13.2, §13.5. ADR-034, ADR-020 (ledger poin tunggal di BFF), ADR-027, ADR-031. Risiko: R-T10, R-O05, R-B06,
+R-L01. Jembatan KDS: **`efn_online_kds_bridge`** (auto-install bila `efn_pos_kds` ada).
+
+**B-4 atribut `no_variant`.** Baris cart/quote/place = `{product_id, qty, attribute_value_ids?: int[] ≤ 10}`;
+identitas baris = `(product_id, sorted(attribute_value_ids))` (produk sama dengan modifier berbeda = dua baris; identitas
+atau PTAV ganda → `invalid_input`). PTAV harus milik baris atribut `no_variant` template produk, `ptav_active`, bukan
+`is_custom`; atribut non-`multi` wajib tepat satu nilai. Tidak sah → issue quote `{product_id, code:"attribute_invalid"}`
+(BFF `409 cart_has_issues`), place → `invalid_input`. Baris SO memakai field standar
+`product_no_variant_attribute_value_ids` → `price_extra` dihitung `sale.order.line` (`_get_product_price_context` →
+`no_variant_attributes_price_extra`, [V] source 19.0). `quote_hash` memuat `["ptav", ids]` per baris **hanya bila ada**
+(hash tanpa atribut sama dengan 19.0.1.6.0); `payload_sha256` place: baris `[pid, qty]` atau `[pid, qty, [ptav]]`.
+Batas qty reservasi, stok, dan menu habis dihitung per produk (Σ semua barisnya).
+
+**B-2/B-3 katalog & stok.** Item katalog + `attributes` (`[{attribute_id, name, display_type, required, values:[{id,
+name, price_extra_excl}]}]`, `[]` bila tidak ada; `required` = `display_type != "multi"`; nilai kustom/nonaktif tidak
+dikirim). Perubahan PTAV/baris atribut memicu katalog penuh. Blok `channel` + `business_type` (`fnb` bila
+`company.efn_business_type == "fnb"`, selain itu `retail`) dan `loyalty: {earn, redeem}` (field kanal baru
+`loyalty_earn`, `loyalty_redeem`, default mati). Produk `type='combo'` tidak dipublikasikan di **semua** kanal (D-22-9;
+SO online tidak membangun baris anak combo). `product.template.efn_online_sold_out` (toggle "Habis (online)" di tab
+Online) → `efn_online_stock` `out` + issue `out_of_stock`; kanal F&B → `in_stock` selain itu, tanpa `qty`.
+
+**B-6/B-7 hook KDS & event.** Hook no-op `_efn_after_confirmed`, `_efn_after_cancelled`, `_efn_after_refund(refund)`
+(diisi jembatan). `action_efn_ready` → `_efn_set_ready("manual")`; jembatan → `_efn_set_ready("kds")`. Field
+`ready_source`, `kitchen_started_at`. Event `ready` + `ready_source: "kds"|"manual"`; event baru opsional **`preparing`**
+(`state` = `confirmed`, + `kitchen_started_at` ISO Z; sekali per pesanan; BFF lama → `ignored_unknown_event`).
+
+**W-12 Poin EFN** (redeem = porsi pembayaran, bukan diskon; DPP/pajak atas harga penuh):
+- Place: kunci opsional `points_payment: {points, value_idr}` (int > 0, kunci lain ditolak; ikut `payload_sha256`
+  hanya bila ada). Validasi (setelah total dihitung, di savepoint place): kanal `loyalty_redeem`; kebijakan PT
+  `efn.loyalty.policy` **published** & berlaku + nilai tukar global company `EFN` (fail-closed bila tidak ada);
+  `points ≥ redeem_min_points`; `value_idr == points × point_value_idr`; `value_idr ≤ floor(amount_payable ×
+  redeem_max_pct / 100)`; porsi tunai ≥ Rp1. Gagal → **`efn_online:points_invalid`** (kode baru; BFF → `409
+  exceeds_max_pct`). Hasil place + **`amount_due`** (= `amount_payable − value_idr`; tanpa poin = `amount_payable`).
+- `mark_paid`: `payment.points_value` opsional (harus = nilai saat place, selain itu `review` `points_mismatch`);
+  `amount_paid` dibanding `amount_due` (beda → `review` `amount_mismatch`). Faktur dibayar dua kali: tunai di jurnal
+  titipan/kliring + Poin EFN di jurnal metode POS "Poin EFN" PT (`pos.payment.method.efn_is_loyalty_points`).
+  **L-79:** modul ini tidak pernah menulis konfigurasi akun. Jurnal siap = metode punya `outstanding_account_id` dan
+  semua baris metode masuk/keluar jurnal punya `payment_account_id` (diisi data `efn_setup_pos` 19.0.1.13.0 / Finance).
+  Tidak siap → place berpoin ditolak `points_invalid` + log ERROR (id company saja) + aktivitas To-Do untuk Accounting
+  Manager di jurnal Poin EFN, dibuat di cursor baru lewat `cr.postrollback` (request sudah di-rollback), sekali per
+  company per hari (`ir.config_parameter` `efn_online.points_account_alert.<company_id>`). Akun hilang di antara place
+  dan bayar → `review` `points_journal_missing` (pertahanan kedua).
+- Refund (`efn_online_refund`, nota kredit pembatalan): `points_value = round(min(ΣR, T) × V ÷ T) − Σ sebelumnya`
+  (setengah ke atas, dibatasi sisa V), `cash_amount = amount − points_value` (Σ ≤ porsi tunai dibayar, selain itu
+  `amount_mismatch`), `eligible_amount_refunded = floor(subtotal tanpa pajak baris berhak poin × porsi uang)`. Settle →
+  pembayaran keluar tunai + Poin EFN (restore di BFF saat `settled`, D-22-11).
+- Earn: saat serah terima `eligible_amount = floor((Σ subtotal tanpa pajak baris SO berhak poin − Σ baris nota kredit) ×
+  (1 − V/T bila earn_on_money_only))` dibekukan; kategori `product.category.efn_loyalty_earn_excluded` (bila modul POS
+  loyalty ada) dikecualikan; `earn_on_money_only` dari kebijakan PT (fallback parameter
+  `efn.pos.loyalty.earn_exclude_point_payment`).
+- `efn_loyalty_accounting` & `efn_pos_loyalty_ledger` **tidak** di `depends` (dibaca saat runtime, pola efn_pii).
+
+**Perubahan json2/event persis (aditif):**
+- `efn_online_catalog.items[].attributes`; `channel.business_type`, `channel.loyalty`.
+- `efn_online_quote.lines[]` + `attribute_value_ids` (int[] naik) + `attributes_text` (string, `""` tanpa atribut);
+  issue `attribute_invalid`; baris input menerima `attribute_value_ids`.
+- `efn_online_place`: input `lines[].attribute_value_ids`, `points_payment`; hasil + `amount_due`.
+- `efn_online_mark_paid`: input `payment.points_value` (opsional). Hasil tidak berubah.
+- `efn_online_refund` / `efn_online_cancel.refund` / `efn_online_status.refunds[]` + `points_value`, `cash_amount`,
+  `eligible_amount_refunded`; `efn_online_status[]` + `eligible_amount` (null sebelum `picked_up`).
+- Event: `refund` (refunded/cancelled/refund_settled) + 3 kunci di atas; `paid` counter `payment: {method:"counter",
+  points_value}`; `ready` + `ready_source`; `preparing` (baru) + `kitchen_started_at`; `picked_up` + `loyalty:
+  {eligible_amount}` **hanya** bila kanal `loyalty_earn`. Event `placed`/QRIS `paid` tidak berubah.
+- Kode error baru `efn_online:points_invalid`. Tidak ada metode RPC baru.
+
+Uji: `tests/test_online_g22.py` (kebijakan/metode Poin EFN di-patch; pembacaan kebijakan diuji dengan stub).
+Uji manual: produk menu dengan atribut *Gula* (radio) + *Ekstra* (multi, +Rp6.000) → quote dua baris latte
+berbeda modifier → harga baris kedua +6.000; kanal *Poin EFN: tukar* + kebijakan PT dipublikasikan → place dengan
+`points_payment` → faktur menampilkan dua pembayaran.
+
+**Batasan G22:** `exclude_for` atribut tidak divalidasi; nilai kustom ditolak (bukan teks bebas). Pembulatan nota
+kredit parsial bisa membuat alokasi poin berbeda ±Rp1 dari hitungan BFF (BFF toleransi ±Rp1). Pesanan `stock_short`
+yang dibatalkan sebelum faktur tidak punya refund Odoo → restore penuh dihitung BFF. Kebijakan dibaca dari Odoo
+(published); bila BFF memakai env karena kebijakan belum ada, Odoo menolak poin (fail-closed, perlu kebijakan PT +
+global dipublikasikan sebelum mengaktifkan `loyalty_redeem`).
 
 ## Model
 | Model | Isi |

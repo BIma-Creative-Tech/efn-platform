@@ -124,6 +124,9 @@ export interface LoyaltyPolicyCeilings {
   posConfigHourlyMax: number;
   companyHourlyMax: number;
   earnOnMoneyOnlyRequired: boolean;
+  /** L-75 (G22): rentang `inactivity_expiry_months` kebijakan global EFN; opsional (absen = 6..36). */
+  inactivityMonthsMin?: number;
+  inactivityMonthsMax?: number;
 }
 
 export class AppConfig {
@@ -185,7 +188,7 @@ export class AppConfig {
       () => this.loyaltyPointValueIdr,
       () => this.loyaltyRedeemMinPoints,
       () => this.loyaltyRedeemMaxPctOfOrder,
-      () => this.loyaltyPointExpiryDays,
+      () => this.loyaltyPointMaxAgeDays,
       () => this.loyaltyPosMaxEarnPoints,
       () => this.loyaltyReservationTtlSeconds,
       () => this.loyaltyEarnDailyMaxPoints,
@@ -223,6 +226,8 @@ export class AppConfig {
     if (!this.str('PG_HOST') && !this.str('DATABASE_URL')) problems.push('PG_HOST (atau DATABASE_URL) belum dikonfigurasi');
     // Fase 3 (docs/04 §10.13): mock json2 ditolak di production; secret kanal & HMAC event wajib bila online aktif
     problems.push(...this.onlineStartupProblems());
+    // G22 (docs/04 §14.A.9, §14.C, §14.D.8, L-72 D-22-18, L-73): QR meja, poin online, job hangus
+    problems.push(...this.g22StartupProblems());
     if (problems.length > 0) throw new ConfigError(`Konfigurasi tidak lengkap: ${problems.join('; ')}`);
   }
 
@@ -259,7 +264,8 @@ export class AppConfig {
     });
     // §10.4.1: mTLS ke odoo-rpc-gateway wajib bila kanal online/katalog aktif dan bukan stub dev (tanpa fallback plaintext)
     attempt(() => {
-      if ((this.onlineEnabled || this.onlineCatalogEnabled) && !this.odooOnlineMock) void this.odooRpcTls;
+      // G22: QR meja juga memakai json2 lewat gateway yang sama
+      if ((this.onlineEnabled || this.onlineCatalogEnabled || this.fnbQrEnabled) && !this.odooOnlineMock) void this.odooRpcTls;
     });
     if (problems.length > 0) throw new ConfigError(`Konfigurasi TLS tidak valid: ${problems.join('; ')}`);
     return { plaintextChannels: plaintext };
@@ -895,9 +901,13 @@ export class AppConfig {
     return this.int('LOYALTY_REDEEM_MAX_PCT_OF_ORDER', 50, 1, 100);
   }
   // K-2 (docs/04 §9.6): kategori tanpa poin dikelola di Odoo (flag kategori produk) — BFF tidak punya parameter ini.
-  /** Masa berlaku poin earn POS (hari). 0 = tidak kedaluwarsa. */
-  get loyaltyPointExpiryDays(): number {
-    return this.int('LOYALTY_POINT_EXPIRY_DAYS', 365, 0, 3650);
+  /**
+   * G22 §14.D.1 / L-72 D-22-18: umur maksimum lot poin earn baru (hari) — `LOYALTY_POINT_MAX_AGE_DAYS`, default **0** =
+   * lot tanpa `expires_at` (hangus hanya lewat job tidak aktif W-17). Menggantikan `LOYALTY_POINT_EXPIRY_DAYS` yang
+   * DIHAPUS (masih diset → gagal start di production, peringatan di dev; nilainya TIDAK dipakai lagi).
+   */
+  get loyaltyPointMaxAgeDays(): number {
+    return this.int('LOYALTY_POINT_MAX_AGE_DAYS', 0, 0, 3650);
   }
   /**
    * Plafon poin satu earn POS (pagar fraud/salah hitung; batas teknis ledger 1 000 000). SEC-61 (Gelombang 13c):
@@ -1014,6 +1024,8 @@ export class AppConfig {
       posConfigHourlyMax: this.int('LOYALTY_POLICY_CEILING_POS_CONFIG_HOURLY_MAX', this.loyaltyEarnPosConfigHourlyMaxPoints, 0, 100_000_000),
       companyHourlyMax: this.int('LOYALTY_POLICY_CEILING_COMPANY_HOURLY_MAX', this.loyaltyEarnCompanyHourlyMaxPoints, 0, 1_000_000_000),
       earnOnMoneyOnlyRequired: this.bool('LOYALTY_POLICY_CEILING_EARN_ON_MONEY_ONLY', this.loyaltyEarnExcludePointPayment),
+      inactivityMonthsMin: this.loyaltyInactivityMonthsCeiling.min,
+      inactivityMonthsMax: this.loyaltyInactivityMonthsCeiling.max,
     };
   }
   /**
@@ -1398,6 +1410,15 @@ export class AppConfig {
    * Kanal aktif di BFF (`ONLINE_CHANNELS=GL,PB,BCR,BCF`), format `channel_code` §10.2. G20 §12.1 (L-48): kode kanal =
    * kode PT; default `GL` (kode lama `RTL`/`FNB` dihapus).
    */
+  /**
+   * G22 §14.A.6: kanal yang katalognya disalin BFF = `ONLINE_CHANNELS` ∪ PT QR meja (`FNB_QR_COMPANIES` bila
+   * `FNB_QR_ENABLED`). Kanal F&B tidak perlu `active` untuk menu QR (hanya nama/gambar/kategori).
+   */
+  get catalogSyncChannels(): string[] {
+    const out = [...this.onlineChannels];
+    if (this.fnbQrEnabled) for (const c of this.fnbQrCompanies) if (!out.includes(c)) out.push(c);
+    return out;
+  }
   get onlineChannels(): string[] {
     const raw = this.str('ONLINE_CHANNELS') ?? 'GL';
     const out = [...new Set(raw.split(/[\s,;]+/).filter((s) => s.length > 0))];
@@ -1707,7 +1728,350 @@ export class AppConfig {
     }
     return problems;
   }
+
+  // ───────────── G22 — QR meja F&B (docs/04 §14.A.9, ADR-032 Accepted B, L-70/L-71) ─────────────
+  /** Kill switch QR meja. Default `false` di SEMUA lingkungan (fail safe; dev/staging menyalakan eksplisit). */
+  get fnbQrEnabled(): boolean {
+    return this.bool('FNB_QR_ENABLED', false);
+  }
+  /** PT F&B yang boleh memakai QR meja (`FNB_QR_COMPANIES=PB,BCF`; hanya `PB`/`BCF`, business_type=fnb). */
+  get fnbQrCompanies(): FnbCompanyCode[] {
+    const raw = this.str('FNB_QR_COMPANIES') ?? 'PB,BCF';
+    const out = [...new Set(raw.split(/[\s,;]+/).filter((s) => s.length > 0))];
+    if (out.length === 0 || out.some((c) => !(FNB_COMPANY_CODES as readonly string[]).includes(c))) {
+      throw new ConfigError('FNB_QR_COMPANIES hanya boleh berisi PB|BCF');
+    }
+    return out as FnbCompanyCode[];
+  }
+  /**
+   * A.2/A.10 (API7): URL tenant Super-App per PT untuk `qr_url` (`https://<domain>/meja#t=<token>`) — dari env, BUKAN input.
+   * Wajib https, tanpa kredensial/query/fragment. `null` bila belum diset (open sesi → 422 qr_disabled).
+   */
+  fnbQrBaseUrl(company: FnbCompanyCode): string | null {
+    const raw = this.str(`FNB_QR_BASE_URL_${company}`);
+    if (raw === undefined) return null;
+    let u: URL;
+    try {
+      u = new URL(raw);
+    } catch {
+      throw new ConfigError(`FNB_QR_BASE_URL_${company} bukan URL valid`);
+    }
+    if (u.protocol !== 'https:' || u.username || u.password || u.search || u.hash) {
+      throw new ConfigError(`FNB_QR_BASE_URL_${company} harus https:// tanpa kredensial/query/fragment`);
+    }
+    return u.origin;
+  }
+  /** A.2: umur token sesi meja (detik), default & maksimum 14 400 (4 jam). */
+  get fnbTableSessionTtlSeconds(): number {
+    return this.int('FNB_TABLE_SESSION_TTL_SECONDS', 14_400, 300, 14_400);
+  }
+  /** A.7 batas per sesi/kiriman (PLACEHOLDER, Ops F&B). */
+  get fnbMaxSubmissionsPerSession(): number {
+    return this.int('FNB_MAX_SUBMISSIONS_PER_SESSION', 10, 1, 200); // L-76: default 10
+  }
+  get fnbMaxItemsPerSession(): number {
+    return this.int('FNB_MAX_ITEMS_PER_SESSION', 150, 1, 2000);
+  }
+  get fnbMaxLines(): number {
+    return this.int('FNB_MAX_LINES', 30, 1, 30);
+  }
+  get fnbMaxLineQty(): number {
+    return this.int('FNB_MAX_LINE_QTY', 20, 1, 99);
+  }
+  /** A.7 / D-22-4: ALTCHA pada kiriman QR — `off` (default) | `first_submit` | `always`. */
+  get fnbCaptchaMode(): 'off' | 'first_submit' | 'always' {
+    const v = (this.str('FNB_CAPTCHA_MODE') ?? 'off').toLowerCase();
+    if (v !== 'off' && v !== 'first_submit' && v !== 'always') throw new ConfigError('FNB_CAPTCHA_MODE harus off|first_submit|always');
+    return v;
+  }
+  /** A.6: interval sinkron overlay menu per config (detik). 0 = job mati (test). */
+  get fnbMenuSyncSeconds(): number {
+    return this.int('FNB_MENU_SYNC_SECONDS', 300, 0, 86_400);
+  }
+  /** Interval job sesi QR (kedaluwarsa, rekonsiliasi `submitting`, retensi). 0 = mati (test). Default 60 s. */
+  get fnbJobIntervalMs(): number {
+    return this.int('FNB_JOB_INTERVAL_MS', 60_000, 0, 3_600_000);
+  }
+  /** A.11 / E.5: retensi baris fnb_* (hari) dan tautan member QR setelah sesi ditutup (hari). */
+  get fnbSessionRetentionDays(): number {
+    return this.int('FNB_SESSION_RETENTION_DAYS', 180, 7, 3650);
+  }
+  get fnbSessionMemberLinkDays(): number {
+    return this.int('FNB_SESSION_MEMBER_LINK_DAYS', 30, 1, 365);
+  }
+  /** A.3 klaim poin QR. Default `false` (PLACEHOLDER Finance; 422 points_unavailable). */
+  get fnbQrPointsEnabled(): boolean {
+    return this.bool('FNB_QR_POINTS_ENABLED', false);
+  }
+  /** A.3 rate limit (PLACEHOLDER): `FNB_RL_<NAMA>_LIMIT` & `FNB_RL_<NAMA>_WINDOW_SECONDS`. */
+  fnbRateLimit(name: FnbRateLimitName): { limit: number; windowSeconds: number } {
+    const def = FNB_RL_DEFAULTS[name];
+    return {
+      limit: this.int(`FNB_RL_${name}_LIMIT`, def[0], 1, 1_000_000),
+      windowSeconds: this.int(`FNB_RL_${name}_WINDOW_SECONDS`, def[1], 1, 86_400),
+    };
+  }
+  /**
+   * A.2: K = HKDF-SHA256(ikm = secret `fnb_table_token_key`, salt "", info "efn:fnb_table_token:v1", 32 byte). Kunci
+   * mentah tidak pernah dipakai langsung. Secret ≥ 32 byte (UTF-8).
+   */
+  get fnbTableTokenKey(): Buffer {
+    return this.fnbKey('FNB_TABLE_TOKEN_KEY');
+  }
+  /** Kunci lama (verifikasi saja) selama overlap rotasi 4 jam; `null` bila tidak dikonfigurasi. */
+  get fnbTableTokenKeyPrev(): Buffer | null {
+    return this.secretValue('FNB_TABLE_TOKEN_KEY_PREV') ? this.fnbKey('FNB_TABLE_TOKEN_KEY_PREV') : null;
+  }
+  private readonly fnbKeys = new Map<string, Buffer>();
+  private fnbKey(name: 'FNB_TABLE_TOKEN_KEY' | 'FNB_TABLE_TOKEN_KEY_PREV'): Buffer {
+    const cached = this.fnbKeys.get(name);
+    if (cached) return cached;
+    const v = this.secret(name);
+    if (Buffer.byteLength(v, 'utf8') < 32) throw new ConfigError(`${name} minimal 32 byte`);
+    const k = Buffer.from(hkdfSync('sha256', v, Buffer.alloc(0), 'efn:fnb_table_token:v1', 32));
+    this.fnbKeys.set(name, k);
+    return k;
+  }
+  /** A.4: secret `odoo_fnb_event_hmac` — HMAC `X-EFN-Signature` event QR; wajib beda dari service key & HMAC online. */
+  get odooFnbEventHmac(): string {
+    const v = this.secret('ODOO_FNB_EVENT_HMAC');
+    if (v === this.secretValue('ODOO_BFF_API_KEY')) throw new ConfigError('ODOO_FNB_EVENT_HMAC harus berbeda dari ODOO_BFF_API_KEY');
+    let online: string | undefined;
+    try {
+      online = this.odooOnlineEventHmac;
+    } catch {
+      online = undefined;
+    }
+    if (online !== undefined && v === online) throw new ConfigError('ODOO_FNB_EVENT_HMAC harus berbeda dari ODOO_ONLINE_EVENT_HMAC');
+    return v;
+  }
+  /**
+   * A.5: API key json2 user teknis QR per PT (`efn_qr_pb`/`efn_qr_bcf`): `ODOO_API_KEY_QR_<PT>_FILE` → fallback
+   * `${SECRETS_DIR:-/run/secrets}/odoo_api_key_qr_<pt>` → literal hanya APP_ENV=dev. Placeholder `disabled` ditolak.
+   */
+  odooApiKeyQr(company: FnbCompanyCode): string {
+    if (!(FNB_COMPANY_CODES as readonly string[]).includes(company)) throw new ConfigError('kode PT QR tidak valid');
+    const envName = `ODOO_API_KEY_QR_${company}`;
+    const contractName = `odoo_api_key_qr_${company.toLowerCase()}`;
+    const raw = this.onlineSecretRaw(envName, contractName);
+    if (raw !== undefined && raw.trim().toLowerCase() === 'disabled') {
+      throw new ConfigError(`${envName} masih placeholder 'disabled' — QR ${company} belum boleh aktif`);
+    }
+    return this.onlineSecret(envName, contractName);
+  }
+
+  // ───────────── G22 — poin online (docs/04 §14.C.1 no. 5) ─────────────
+  /** Kill switch redeem poin di checkout online (default `false` di semua lingkungan; flag kanal Odoo juga harus true). */
+  get onlineLoyaltyRedeemEnabled(): boolean {
+    return this.bool('ONLINE_LOYALTY_REDEEM_ENABLED', false);
+  }
+  /** Kill switch earn poin saat pesanan online diambil (default `false`). */
+  get onlineLoyaltyEarnEnabled(): boolean {
+    return this.bool('ONLINE_LOYALTY_EARN_ENABLED', false);
+  }
+  /** C.3: reservasi poin online ditahan sampai `order.expires_at + N menit` (kontrak: 10). */
+  get onlineRedeemHoldExtraSeconds(): number {
+    return this.int('ONLINE_REDEEM_HOLD_EXTRA_SECONDS', 600, 60, 3600);
+  }
+
+  // ───────────── G22 — poin hangus tidak aktif W-17 (docs/04 §14.D.8, L-73) ─────────────
+  /** Job hangus (notice + expire). Default `false` di SEMUA lingkungan; production OFF sampai Legal & Meta (L-73). */
+  get loyaltyExpiryEnabled(): boolean {
+    return this.bool('LOYALTY_EXPIRY_ENABLED', false);
+  }
+  /** D.3 no. 4: run kering (hanya hitung kandidat per penerbit). Default `true` — operator mematikan eksplisit. */
+  get loyaltyExpiryDryRun(): boolean {
+    return this.bool('LOYALTY_EXPIRY_DRY_RUN', true);
+  }
+  /** Fallback env `N` bulan tidak aktif (kebijakan global EFN menang, D-22-13); rentang plafon MIN..MAX. */
+  get loyaltyInactivityExpiryMonths(): number {
+    const { min, max } = this.loyaltyInactivityMonthsCeiling;
+    return this.int('LOYALTY_INACTIVITY_EXPIRY_MONTHS', 12, min, max);
+  }
+  /** `LOYALTY_POLICY_CEILING_INACTIVITY_MONTHS_MIN` (6) / `_MAX` (36): batas kebijakan & env. */
+  get loyaltyInactivityMonthsCeiling(): { min: number; max: number } {
+    const min = this.int('LOYALTY_POLICY_CEILING_INACTIVITY_MONTHS_MIN', 6, 1, 120);
+    const max = this.int('LOYALTY_POLICY_CEILING_INACTIVITY_MONTHS_MAX', 36, 1, 120);
+    if (min > max) throw new ConfigError('LOYALTY_POLICY_CEILING_INACTIVITY_MONTHS_MIN harus ≤ _MAX');
+    return { min, max };
+  }
+  /**
+   * SEC-171 r15: notifikasi WA hangus hanya untuk member dengan consent `marketing` aktif (baris consent terbaru
+   * `granted=true`). Default `true` sampai Legal memutuskan dasar hukum (§14.D.4). Tanpa consent → notice tetap dibuat
+   * (due ≥ N hari, info in-app D.6) + bukti anonim kanal `in_app`, TANPA WA.
+   */
+  get loyaltyExpiryNoticeRequireConsent(): boolean {
+    // Saklar pengaman: nilai salah ketik tidak boleh diam-diam mematikannya (bool() memetakan nilai asing ke false)
+    const raw = this.str('LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT');
+    if (raw === undefined) return true;
+    const v = raw.toLowerCase();
+    if (['1', 'true', 'yes', 'on'].includes(v)) return true;
+    if (['0', 'false', 'no', 'off'].includes(v)) return false;
+    throw new ConfigError('LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT harus true|false');
+  }
+  /** D.3 no. 2: minimum hari pemberitahuan sebelum hangus (7..60, default 30). */
+  get loyaltyExpiryNoticeDays(): number {
+    return this.int('LOYALTY_EXPIRY_NOTICE_DAYS', 30, 7, 60);
+  }
+  get loyaltyExpiryRunHourWib(): number {
+    return this.int('LOYALTY_EXPIRY_RUN_HOUR_WIB', 1, 0, 23);
+  }
+  get loyaltyExpiryNoticeHourWib(): number {
+    return this.int('LOYALTY_EXPIRY_NOTICE_HOUR_WIB', 10, 0, 23);
+  }
+  get loyaltyExpiryBatchSize(): number {
+    return this.int('LOYALTY_EXPIRY_BATCH_SIZE', 500, 1, 5000);
+  }
+  get loyaltyExpiryMaxPerRun(): number {
+    return this.int('LOYALTY_EXPIRY_MAX_PER_RUN', 20_000, 1, 10_000_000);
+  }
+  /** Interval pemeriksa jam job (ms). 0 = mati (test). Default 10 menit. */
+  get loyaltyExpiryTickMs(): number {
+    return this.int('LOYALTY_EXPIRY_TICK_MS', 600_000, 0, 3_600_000);
+  }
+  /**
+   * D.2 / D-22-15: jangkar minimum aktivitas = tanggal go-live program (ISO `YYYY-MM-DD`, 00:00 WIB). Wajib bila
+   * `LOYALTY_EXPIRY_ENABLED=true`. `null` bila belum diset.
+   */
+  get loyaltyActivityEpoch(): Date | null {
+    const raw = this.str('LOYALTY_ACTIVITY_EPOCH');
+    if (raw === undefined) return null;
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+    if (!m) throw new ConfigError('LOYALTY_ACTIVITY_EPOCH harus tanggal YYYY-MM-DD');
+    const utc = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    const back = new Date(utc);
+    if (back.getUTCFullYear() !== Number(m[1]) || back.getUTCMonth() !== Number(m[2]) - 1 || back.getUTCDate() !== Number(m[3])) {
+      throw new ConfigError('LOYALTY_ACTIVITY_EPOCH bukan tanggal yang ada');
+    }
+    return new Date(utc - 7 * 3600 * 1000); // 00:00 WIB
+  }
+  /** D.7 / L-73 D-22-14: anonimisasi setelah hangus. Default `false` (production OFF sampai DPO + Legal). */
+  get loyaltyInactiveAnonymize(): boolean {
+    return this.bool('LOYALTY_INACTIVE_ANONYMIZE', false);
+  }
+  get loyaltyInactiveAnonymizeGraceDays(): number {
+    return this.int('LOYALTY_INACTIVE_ANONYMIZE_GRACE_DAYS', 0, 0, 90);
+  }
+  /** Retensi `loyalty_expiry_notice` (hari, E.5: 400). */
+  get loyaltyExpiryNoticeRetentionDays(): number {
+    return this.int('LOYALTY_EXPIRY_NOTICE_RETENTION_DAYS', 400, 30, 3650);
+  }
+  /** L-76: retensi bukti pemberitahuan tanpa identitas (hari). Usulan 1825 (5 th), PLACEHOLDER DPO. */
+  get loyaltyExpiryProofRetentionDays(): number {
+    return this.int('LOYALTY_EXPIRY_PROOF_RETENTION_DAYS', 1825, 365, 3650);
+  }
+
+  /**
+   * Peringatan start non-fatal (dicetak main.ts): env lama yang diabaikan di luar production. Tidak memuat nilai.
+   */
+  startupWarnings(): string[] {
+    const out: string[] = [];
+    if (this.str('LOYALTY_POINT_EXPIRY_DAYS') !== undefined && !this.isProductionDeployment) {
+      out.push('LOYALTY_POINT_EXPIRY_DAYS sudah DIHAPUS (G22 D-22-18) dan diabaikan; pakai LOYALTY_POINT_MAX_AGE_DAYS (default 0)');
+    }
+    return out;
+  }
+
+  /** Validasi G22 saat start (dipanggil `assertStartupSecrets`). Pesan tanpa nilai rahasia. */
+  private g22StartupProblems(): string[] {
+    const problems: string[] = [];
+    const attempt = (fn: () => void): void => {
+      try {
+        fn();
+      } catch (err) {
+        problems.push(err instanceof Error ? err.message : 'konfigurasi G22 tidak valid');
+      }
+    };
+    // D-22-18: env lama diset → gagal start di production (diabaikan + peringatan di luar production)
+    if (this.str('LOYALTY_POINT_EXPIRY_DAYS') !== undefined && this.isProductionDeployment) {
+      problems.push('LOYALTY_POINT_EXPIRY_DAYS sudah dihapus (G22 D-22-18); hapus dari env dan pakai LOYALTY_POINT_MAX_AGE_DAYS');
+    }
+    if (!this.isDevEnv) {
+      for (const name of Object.keys(this.env)) {
+        if (/^ODOO_API_KEY_QR_[A-Z0-9_]+$/.test(name) && !name.endsWith('_FILE') && this.str(name) !== undefined) {
+          problems.push(`${name} sebagai env literal ditolak di luar APP_ENV=dev; pakai ${name}_FILE (SEC-29)`);
+        }
+      }
+    }
+    for (const getter of [
+      () => this.fnbQrCompanies,
+      () => this.fnbTableSessionTtlSeconds,
+      () => this.fnbMaxSubmissionsPerSession,
+      () => this.fnbMaxItemsPerSession,
+      () => this.fnbMaxLines,
+      () => this.fnbMaxLineQty,
+      () => this.fnbCaptchaMode,
+      () => this.fnbMenuSyncSeconds,
+      () => this.fnbSessionRetentionDays,
+      () => this.fnbSessionMemberLinkDays,
+      () => this.onlineRedeemHoldExtraSeconds,
+      () => this.loyaltyInactivityExpiryMonths,
+      () => this.loyaltyExpiryNoticeDays,
+      () => this.loyaltyExpiryNoticeRequireConsent,
+      () => this.loyaltyExpiryRunHourWib,
+      () => this.loyaltyExpiryNoticeHourWib,
+      () => this.loyaltyExpiryBatchSize,
+      () => this.loyaltyExpiryMaxPerRun,
+      () => this.loyaltyActivityEpoch,
+      () => this.loyaltyInactiveAnonymizeGraceDays,
+    ]) {
+      attempt(() => void getter());
+    }
+    for (const name of Object.keys(FNB_RL_DEFAULTS) as FnbRateLimitName[]) attempt(() => void this.fnbRateLimit(name));
+    if (problems.length > 0) return problems;
+    if (this.loyaltyExpiryEnabled && this.loyaltyActivityEpoch === null) {
+      problems.push('LOYALTY_ACTIVITY_EPOCH wajib bila LOYALTY_EXPIRY_ENABLED=true (D-22-15)');
+    }
+    // A.10 API8: QR aktif → kunci token, HMAC event, URL tenant https per PT, API key QR per PT (kecuali stub dev)
+    if (this.fnbQrEnabled) {
+      attempt(() => void this.fnbTableTokenKey);
+      attempt(() => void this.fnbTableTokenKeyPrev);
+      attempt(() => void this.odooFnbEventHmac);
+      for (const pt of this.fnbQrCompanies) {
+        attempt(() => {
+          if (this.fnbQrBaseUrl(pt) === null) throw new ConfigError(`FNB_QR_BASE_URL_${pt} wajib (https) bila FNB_QR_ENABLED=true`);
+        });
+        if (!this.odooOnlineMock) {
+          attempt(() => void this.odooRpcUrl);
+          attempt(() => void this.odooApiKeyQr(pt));
+          // A.6: salinan katalog kanal F&B PT itu ditarik dengan API key kanal online PT tersebut
+          attempt(() => void this.odooApiKeyOnline(pt));
+        }
+      }
+    }
+    return problems;
+  }
 }
+
+/** G22 §14.A.4: PT F&B yang memakai QR meja. */
+export const FNB_COMPANY_CODES = ['PB', 'BCF'] as const;
+export type FnbCompanyCode = (typeof FNB_COMPANY_CODES)[number];
+export function isFnbCompanyCode(v: unknown): v is FnbCompanyCode {
+  return typeof v === 'string' && (FNB_COMPANY_CODES as readonly string[]).includes(v);
+}
+export type FnbRateLimitName =
+  | 'SESSION_READ'
+  | 'IP_READ'
+  | 'SUBMIT_SESSION'
+  | 'SUBMIT_IP'
+  | 'ORDERS_SESSION'
+  | 'CLAIM_MEMBER'
+  | 'OPEN_CONFIG'
+  | 'EVENTS';
+/**
+ * §14.A.3 (PLACEHOLDER): [batas, window detik]. OPEN_CONFIG = A.4 60/menit/config; EVENTS = event Odoo→BFF per
+ * `config_id`, dipasang SETELAH ServiceKeyGuard + FnbEventHmacGuard (SEC-173 r15, `FnbPosService.handleEvent`).
+ */
+const FNB_RL_DEFAULTS: Readonly<Record<FnbRateLimitName, readonly [number, number]>> = {
+  SESSION_READ: [60, 60],
+  IP_READ: [120, 60],
+  SUBMIT_SESSION: [6, 60],
+  SUBMIT_IP: [20, 600],
+  ORDERS_SESSION: [30, 60],
+  CLAIM_MEMBER: [5, 600],
+  OPEN_CONFIG: [60, 60],
+  EVENTS: [1200, 60],
+};
 
 /** `channel_code` (docs/04 §10.2). */
 export const ONLINE_CHANNEL_RE = /^[A-Z][A-Z0-9-]{1,15}$/;

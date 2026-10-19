@@ -13,6 +13,11 @@
   cek; penulisan langsung lewat ORM/RPC oleh pengguna -> ``AccessError``.
 - Teraudit: aturan ``efn_audit`` (data modul ini) + chatter (tracking state) + log aplikasi (uid, tanpa PII).
 - Publikasi ke BFF: ``efn.loyalty.policy.outbox`` (dibuat saat approve) -> ``PUT /v1/pos/loyalty/policies/...``.
+- G22 W-17 / D-22-13, D-22-15 (docs/04 §14.D.2, §14.D.3, §14.D.8, L-72): record global juga memuat parameter hangus
+  karena tidak aktif (``inactivity_expiry_months``, ``expiry_notice_days``, ``activity_epoch``) -- ikut empat mata,
+  read-only setelah approved, dan dikirim di ``params`` body publikasi HANYA untuk ``company_code=EFN``. BFF tetap
+  memegang plafon env (``LOYALTY_POLICY_CEILING_INACTIVITY_MONTHS_MIN/_MAX``) dan fallback env bila belum ada
+  kebijakan. Job hangus di production OFF sampai Legal/Meta (L-73) -- field ini tidak menyalakan apa pun.
 """
 
 import logging
@@ -45,7 +50,15 @@ PARAM_FIELDS = (
     "company_hourly_max",
     "earn_on_money_only",
 )
-POLICY_FIELDS = (*PARAM_FIELDS, "point_value_idr", "effective_from", "company_id", "note")
+# W-17 (D-22-13, D-22-15): parameter hangus karena tidak aktif, HANYA di record global (EFN); dikirim di `params`.
+GLOBAL_PARAM_FIELDS = ("inactivity_expiry_months", "expiry_notice_days", "activity_epoch")
+# Field yang hanya bermakna di record global (PT lain wajib 0/kosong).
+GLOBAL_ONLY_FIELDS = ("point_value_idr", *GLOBAL_PARAM_FIELDS)
+# Batas statis Odoo (sanity, lebih longgar dari plafon env BFF 6..36 bulan / 7..60 hari yang configurable; nilai di
+# luar plafon BFF -> 422 policy_out_of_bounds, publikasi gagal final, perbaikan = versi baru).
+INACTIVITY_MONTHS_MIN, INACTIVITY_MONTHS_MAX = 1, 60
+NOTICE_DAYS_MIN, NOTICE_DAYS_MAX = 7, 90
+POLICY_FIELDS = (*PARAM_FIELDS, *GLOBAL_ONLY_FIELDS, "effective_from", "company_id", "note")
 # Field jejak/status: hanya kode server (sudo) yang menulis.
 SYSTEM_FIELDS = (
     "version",
@@ -74,7 +87,12 @@ DEFAULTS = {
     "company_hourly_max": 50_000,
     "earn_on_money_only": True,
     "point_value_idr": 100,
+    # W-17: default kontrak §14.D.3/§14.D.8 (= fallback env BFF); PLACEHOLDER sampai syarat program disetujui Legal.
+    "inactivity_expiry_months": 12,
+    "expiry_notice_days": 30,
+    "activity_epoch": False,
 }
+_GLOBAL_EMPTY = {"point_value_idr": 0, "inactivity_expiry_months": 0, "expiry_notice_days": 0, "activity_epoch": False}
 
 
 class EfnLoyaltyPolicy(models.Model):
@@ -149,6 +167,28 @@ class EfnLoyaltyPolicy(models.Model):
         tracking=True,
         help="Hanya pada kebijakan global (company EFN, L-62).",
     )
+    inactivity_expiry_months = fields.Integer(
+        string="Poin hangus setelah tidak aktif (bulan)",
+        default=lambda self: self._efn_default("inactivity_expiry_months"),
+        tracking=True,
+        help="W-17 / D-22-13: hanya pada kebijakan global (company EFN). Saldo member hangus bila tidak ada aktivitas "
+        "selama N bulan kalender (definisi aktivitas docs/04 §14.D.2). Odoo menerima 1..60; BFF menolak di luar "
+        "plafon env (default 6..36) -> publikasi gagal final.",
+    )
+    expiry_notice_days = fields.Integer(
+        string="Pemberitahuan sebelum hangus (hari)",
+        default=lambda self: self._efn_default("expiry_notice_days"),
+        tracking=True,
+        help="W-17: hanya pada kebijakan global. Member selalu mendapat minimal sekian hari pemberitahuan sebelum "
+        "poin hangus (WA T-N). Odoo menerima 7..90; plafon env BFF default 7..60.",
+    )
+    activity_epoch = fields.Date(
+        string="Epoch aktivitas (go-live)",
+        default=lambda self: self._efn_default("activity_epoch"),
+        tracking=True,
+        help="W-17 / D-22-15: opsional, hanya pada kebijakan global. Aktivitas terakhir efektif = MAX(aktivitas "
+        "terakhir, tanggal ini 00:00 WIB). Kosong -> BFF memakai env LOYALTY_ACTIVITY_EPOCH.",
+    )
     note = fields.Text(string="Catatan / dasar keputusan")
 
     maker_id = fields.Many2one("res.users", string="Pembuat", readonly=True, copy=False, index=True)
@@ -181,6 +221,10 @@ class EfnLoyaltyPolicy(models.Model):
         " AND company_hourly_max >= 0 AND COALESCE(point_value_idr, 0) >= 0)",
         "Nilai kebijakan poin harus bilangan bulat >= 0.",
     )
+    _inactivity_non_negative = models.Constraint(
+        "CHECK (COALESCE(inactivity_expiry_months, 0) >= 0 AND COALESCE(expiry_notice_days, 0) >= 0)",
+        "Parameter hangus karena tidak aktif harus bilangan bulat >= 0.",
+    )
 
     # ------------------------------------------------------------------ compute
     @api.depends("company_id.efn_brand_code")
@@ -199,19 +243,30 @@ class EfnLoyaltyPolicy(models.Model):
     def _efn_default(self, name):
         """Default field: nilai versi terakhir yang disetujui/dipublikasikan company aktif (memudahkan 'versi
         baru'); belum ada -> DEFAULTS (PLACEHOLDER env BFF). Privat (bukan override ``default_get`` publik, SEC-58)."""
+        return self._efn_default_for(self.env.company, name)
+
+    @api.model
+    def _efn_default_for(self, company, name):
+        """Default per company. Field global-only: PT selain EFN -> 0/kosong; EFN -> versi terakhir yang disetujui
+        bila terisi (versi pra-G22 tidak punya parameter W-17), selain itu DEFAULTS."""
         latest = self.sudo().search(
-            [("company_id", "=", self.env.company.id), ("state", "in", ("approved", "published"))],
+            [("company_id", "=", company.id), ("state", "in", ("approved", "published"))],
             order="version desc",
             limit=1,
         )
+        if name in GLOBAL_ONLY_FIELDS:
+            if company.sudo().efn_brand_code != GLOBAL_COMPANY_CODE:
+                return _GLOBAL_EMPTY[name]
+            if latest and latest[name]:
+                return latest[name]
+            # activity_epoch: tidak ada nilai sebelumnya -> tetap kosong (fallback env BFF).
+            return DEFAULTS[name]
         if latest:
             return latest[name]
-        if name == "point_value_idr":
-            return DEFAULTS[name] if self.env.company.efn_brand_code == GLOBAL_COMPANY_CODE else 0
         return DEFAULTS[name]
 
     # --------------------------------------------------------------- validation
-    @api.constrains(*PARAM_FIELDS, "point_value_idr", "company_id")
+    @api.constrains(*PARAM_FIELDS, *GLOBAL_ONLY_FIELDS, "company_id")
     def _check_efn_policy_values(self):
         int_fields = [name for name in PARAM_FIELDS if name != "earn_on_money_only"] + ["point_value_idr"]
         for policy in self:
@@ -230,10 +285,42 @@ class EfnLoyaltyPolicy(models.Model):
             if policy.is_global:
                 if policy.point_value_idr < 1:
                     raise ValidationError(_("Kebijakan global (EFN) wajib mengisi nilai tukar 1 poin (>= Rp1)."))
+                policy._efn_check_inactivity_params()
             elif policy.point_value_idr:
                 raise ValidationError(
                     _("Nilai tukar poin hanya diatur di kebijakan global company EFN (L-62), bukan per PT.")
                 )
+            elif policy.inactivity_expiry_months or policy.expiry_notice_days or policy.activity_epoch:
+                raise ValidationError(
+                    _(
+                        "Parameter poin hangus karena tidak aktif hanya diatur di kebijakan global company EFN "
+                        "(D-22-13), bukan per PT."
+                    )
+                )
+
+    def _efn_check_inactivity_params(self):
+        """W-17 (record global): rentang statis Odoo + pemberitahuan harus lebih pendek dari masa tidak aktif
+        (N bulan kalender >= 28 x N hari). Plafon keras tetap di env BFF (§14.D.8)."""
+        self.ensure_one()
+        months, notice = self.inactivity_expiry_months, self.expiry_notice_days
+        if not INACTIVITY_MONTHS_MIN <= months <= INACTIVITY_MONTHS_MAX:
+            raise ValidationError(
+                _(
+                    "Masa tidak aktif sebelum poin hangus harus %(lo)s..%(hi)s bulan.",
+                    lo=INACTIVITY_MONTHS_MIN,
+                    hi=INACTIVITY_MONTHS_MAX,
+                )
+            )
+        if not NOTICE_DAYS_MIN <= notice <= NOTICE_DAYS_MAX:
+            raise ValidationError(
+                _(
+                    "Pemberitahuan sebelum poin hangus harus %(lo)s..%(hi)s hari.",
+                    lo=NOTICE_DAYS_MIN,
+                    hi=NOTICE_DAYS_MAX,
+                )
+            )
+        if notice >= months * 28:
+            raise ValidationError(_("Pemberitahuan sebelum poin hangus harus lebih pendek dari masa tidak aktif."))
 
     # ------------------------------------------------------------------ ORM
     @api.model_create_multi
@@ -245,6 +332,12 @@ class EfnLoyaltyPolicy(models.Model):
                 raise AccessError(_("Status dan jejak persetujuan kebijakan poin diisi sistem."))
             company_id = vals.get("company_id") or self.env.company.id
             vals["company_id"] = company_id
+            # Default field global-only mengikuti company record (bukan company aktif user), mis. Loyalty Manager
+            # multi-company yang membuat kebijakan EFN dari company lain. Nilai yang dikirim pengguna tidak diubah.
+            company = self.env["res.company"].sudo().browse(company_id)
+            for name in GLOBAL_ONLY_FIELDS:
+                if name not in vals:
+                    vals[name] = self._efn_default_for(company, name)
             vals["version"] = self._efn_next_version(company_id)
             vals["state"] = "draft"
             vals["maker_id"] = self.env.uid
@@ -382,20 +475,31 @@ class EfnLoyaltyPolicy(models.Model):
 
     # ----------------------------------------------------------------- body
     def _efn_publish_body(self):
-        """Body kontrak §13.1 no. 3 (``additionalProperties: false``). Angka integer, tanpa desimal."""
+        """Body kontrak §13.1 no. 3 (``additionalProperties: false``). Angka integer, tanpa desimal.
+
+        G22 (§14.D.8, D-22-13/D-22-15): HANYA untuk ``company_code=EFN``, ``params`` bertambah
+        ``inactivity_expiry_months`` (int), ``expiry_notice_days`` (int) dan ``activity_epoch`` ("YYYY-MM-DD", hanya
+        bila diisi). Kunci dihilangkan bila nilainya kosong (versi global pra-G22) -> BFF memakai fallback env.
+        ``schema_version`` tetap 1 (penambahan opsional)."""
         self.ensure_one()
         policy = self.sudo()
+        params = {
+            name: (bool(policy[name]) if name == "earn_on_money_only" else int(policy[name])) for name in PARAM_FIELDS
+        }
         body = {
             "schema_version": SCHEMA_VERSION,
             "company_code": policy.company_code,
             "version": policy.version,
             "effective_from": policy.effective_from.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "approved_by_uid": policy.approved_by_id.id,
-            "params": {
-                name: (bool(policy[name]) if name == "earn_on_money_only" else int(policy[name]))
-                for name in PARAM_FIELDS
-            },
+            "params": params,
         }
         if policy.is_global:
             body["point_value_idr"] = int(policy.point_value_idr)
+            if policy.inactivity_expiry_months:
+                params["inactivity_expiry_months"] = int(policy.inactivity_expiry_months)
+            if policy.expiry_notice_days:
+                params["expiry_notice_days"] = int(policy.expiry_notice_days)
+            if policy.activity_epoch:
+                params["activity_epoch"] = policy.activity_epoch.isoformat()
         return body

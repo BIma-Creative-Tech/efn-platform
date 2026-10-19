@@ -160,6 +160,13 @@ secrets:
   odoo_online_event_hmac: { file: ../../secrets/odoo_online_event_hmac.txt }
   # G21 (docs/04 §13.1 no. 3, L-61): HMAC publikasi kebijakan poin Odoo -> BFF (hanya odoo + api-gateway)
   loyalty_policy_signing_key: { file: ../../secrets/loyalty_policy_signing_key.txt }
+  # G22 (docs/04 §14.A.2/§14.A.9/§14.E.4): kunci HMAC token sesi meja QR (`fts1.`; HANYA api-gateway), HMAC event
+  # Odoo -> BFF /v1/pos/fnb/events (hanya odoo + api-gateway), API key Odoo user teknis QR per PT (host:disabled,
+  # dirotasi efn-rotate-online-key --channel=QR-<PT>; mount HANYA lewat overlay docker-compose.online-qr-<pt>.yml).
+  fnb_table_token_key: { file: ../../secrets/fnb_table_token_key.txt }
+  odoo_fnb_event_hmac: { file: ../../secrets/odoo_fnb_event_hmac.txt }
+  odoo_api_key_qr_pb: { file: ../../secrets/odoo_api_key_qr_pb.txt }
+  odoo_api_key_qr_bcf: { file: ../../secrets/odoo_api_key_qr_bcf.txt }
   # G21 AC-13 (docs/04 §13.2, ADR-036 §0): kunci PII Odoo (host:disabled [SA], dibuat Superadmin di host). Mount HANYA
   # ke odoo oleh docker-compose.pii.yml (deploy.sh bila EFN_ODOO_PII_ENABLED=true) / docker-compose.dev.yml.
   odoo_pii_key_v1: { file: ../../secrets/odoo_pii_key_v1.txt }
@@ -853,10 +860,12 @@ services:
       EFN_ONLINE_EVENT_HMAC_FILE: /run/secrets/odoo_online_event_hmac
       # G21 (docs/04 §13.1 no. 3, L-61): tanda tangan outbox kebijakan poin -> BFF (X-EFN-Signature, efn_loyalty_accounting)
       EFN_LOYALTY_POLICY_SIGNING_KEY_FILE: /run/secrets/loyalty_policy_signing_key
+      # G22 (docs/04 §14.A.4): tanda tangan outbox event QR meja -> BFF POST /v1/pos/fnb/events (X-EFN-Signature)
+      EFN_FNB_EVENT_HMAC_FILE: /run/secrets/odoo_fnb_event_hmac
     # Kunci PII Odoo (odoo_pii_*) TIDAK di base: overlay docker-compose.pii.yml (production, L-59) / dev compose.
     secrets:
       [pg_password_odoo, odoo_admin_password, odoo_bff_api_key, member_hash_pepper, efn_audit_sink_key, odoo_online_event_hmac,
-       loyalty_policy_signing_key, efn_ca_crt]
+       loyalty_policy_signing_key, odoo_fnb_event_hmac, efn_ca_crt]
     volumes:
       - odoo-data:/var/lib/odoo
     networks: [internal, data]
@@ -969,7 +978,7 @@ services:
       service: odoo-ws-tls
 
   # Filter L7 BFF -> Odoo /json/2 (G17, docs/04 §10.4.1, ADR-034 Proposed; pola s3-gateway). Aturan di
-  # infra/odoo-rpc-gateway/haproxy.cfg: mTLS masuk hanya CN api-gateway, POST ke 10 path persis, header allowlist,
+  # infra/odoo-rpc-gateway/haproxy.cfg: mTLS masuk hanya CN api-gateway, POST ke 15 path persis (G22), header allowlist,
   # X-Odoo-Database dipaksa; keluar mTLS verify-full ke odoo-tls (CN odoo-rpc-gateway). Tanpa label Traefik, tanpa
   # port host. Non-root (uid image haproxy), read_only, tanpa capability; PEM crt+key hanya di tmpfs /tmp.
   odoo-rpc-gateway:
@@ -1173,6 +1182,51 @@ services:
       ODOO_ONLINE_EVENT_HMAC_FILE: /run/secrets/odoo_online_event_hmac
       # G21 (docs/04 §13.1 no. 3-4, L-61): verifikasi tanda tangan PUT /v1/pos/loyalty/policies (replay window 300 s)
       LOYALTY_POLICY_SIGNING_KEY_FILE: /run/secrets/loyalty_policy_signing_key
+      # ── G22 (docs/04 §14; angka = PLACEHOLDER kontrak, rentang divalidasi scripts/lib/deploy-validate.sh) ──
+      # W-07 QR order meja (§14.A.9). Kill switch default false. Production true butuh FNB_QR_BASE_URL_<PT> https +
+      # API key QR nyata per PT (deploy.sh) -> overlay docker-compose.online-qr-<pt>.yml me-mount key QR PT itu saja.
+      FNB_QR_ENABLED: ${FNB_QR_ENABLED:-false}
+      FNB_QR_COMPANIES: ${FNB_QR_COMPANIES:-PB,BCF}
+      FNB_QR_BASE_URL_PB: ${FNB_QR_BASE_URL_PB:-}
+      FNB_QR_BASE_URL_BCF: ${FNB_QR_BASE_URL_BCF:-}
+      FNB_QR_POINTS_ENABLED: ${FNB_QR_POINTS_ENABLED:-false}
+      FNB_TABLE_SESSION_TTL_SECONDS: ${FNB_TABLE_SESSION_TTL_SECONDS:-14400}
+      FNB_MAX_SUBMISSIONS_PER_SESSION: ${FNB_MAX_SUBMISSIONS_PER_SESSION:-10}
+      FNB_MAX_ITEMS_PER_SESSION: ${FNB_MAX_ITEMS_PER_SESSION:-150}
+      FNB_MAX_LINES: ${FNB_MAX_LINES:-30}
+      FNB_MAX_LINE_QTY: ${FNB_MAX_LINE_QTY:-20}
+      FNB_CAPTCHA_MODE: ${FNB_CAPTCHA_MODE:-off}
+      FNB_MENU_SYNC_SECONDS: ${FNB_MENU_SYNC_SECONDS:-300}
+      # Retensi (§14.E.5, usulan paket DPO): fnb_* 180 hari; tautan member QR 30 hari setelah sesi ditutup
+      FNB_SESSION_RETENTION_DAYS: ${FNB_SESSION_RETENTION_DAYS:-180}
+      FNB_SESSION_MEMBER_LINK_DAYS: ${FNB_SESSION_MEMBER_LINK_DAYS:-30}
+      # Token sesi meja `fts1.` (HKDF dari secret ini; BFF saja). FNB_TABLE_TOKEN_KEY_PREV_FILE (verifikasi saja) belum
+      # di-wire: rotasi = di luar jam layanan (TTL <= 4 jam) - docs/runbooks/fnb-table-token-key.md.
+      FNB_TABLE_TOKEN_KEY_FILE: /run/secrets/fnb_table_token_key
+      ODOO_FNB_EVENT_HMAC_FILE: /run/secrets/odoo_fnb_event_hmac
+      # W-12 poin online (§14.C.1 no. 5): kill switch default false (+ flag kanal Odoo loyalty_redeem/loyalty_earn)
+      ONLINE_LOYALTY_REDEEM_ENABLED: ${ONLINE_LOYALTY_REDEEM_ENABLED:-false}
+      ONLINE_LOYALTY_EARN_ENABLED: ${ONLINE_LOYALTY_EARN_ENABLED:-false}
+      # W-17 poin hangus 12 bulan tidak aktif (§14.D.8). L-73: job & anonimisasi OFF di production sampai Legal/DPO/Meta
+      # setuju; deploy-validate menolak true tanpa izin Superadmin EFN_ALLOW_FEATURE_ON (/etc/efn/deploy.conf). DRY_RUN
+      # default true (run pertama tiap lingkungan hanya menghitung). D-22-18: LOYALTY_POINT_EXPIRY_DAYS DIHAPUS (jangan
+      # ditambahkan lagi; deploy-validate & check-encryption menolaknya) -> LOYALTY_POINT_MAX_AGE_DAYS (0 = tanpa umur).
+      LOYALTY_EXPIRY_ENABLED: ${LOYALTY_EXPIRY_ENABLED:-false}
+      LOYALTY_EXPIRY_DRY_RUN: ${LOYALTY_EXPIRY_DRY_RUN:-true}
+      LOYALTY_INACTIVITY_EXPIRY_MONTHS: ${LOYALTY_INACTIVITY_EXPIRY_MONTHS:-12}
+      LOYALTY_EXPIRY_NOTICE_DAYS: ${LOYALTY_EXPIRY_NOTICE_DAYS:-30}
+      LOYALTY_EXPIRY_RUN_HOUR_WIB: ${LOYALTY_EXPIRY_RUN_HOUR_WIB:-1}
+      LOYALTY_EXPIRY_NOTICE_HOUR_WIB: ${LOYALTY_EXPIRY_NOTICE_HOUR_WIB:-10}
+      LOYALTY_EXPIRY_BATCH_SIZE: ${LOYALTY_EXPIRY_BATCH_SIZE:-500}
+      LOYALTY_EXPIRY_MAX_PER_RUN: ${LOYALTY_EXPIRY_MAX_PER_RUN:-20000}
+      LOYALTY_ACTIVITY_EPOCH: ${LOYALTY_ACTIVITY_EPOCH:-}
+      LOYALTY_POINT_MAX_AGE_DAYS: ${LOYALTY_POINT_MAX_AGE_DAYS:-0}
+      LOYALTY_INACTIVE_ANONYMIZE: ${LOYALTY_INACTIVE_ANONYMIZE:-false}
+      LOYALTY_INACTIVE_ANONYMIZE_GRACE_DAYS: ${LOYALTY_INACTIVE_ANONYMIZE_GRACE_DAYS:-0}
+      # SEC-171 (r15): notice hangus hanya ke member dengan consent `marketing` aktif. Default true sampai Legal
+      # memutuskan dasar hukum; production `false` ditolak deploy-validate kecuali Superadmin mencantumkan nama ini di
+      # EFN_ALLOW_FEATURE_ON (/etc/efn/deploy.conf). check-encryption.sh: render prod wajib "true".
+      LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT: ${LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT:-true}
       MINIO_CATALOG_BUCKET: catalog
     secrets:
       - efn_ca_crt
@@ -1195,6 +1249,8 @@ services:
       - odoo_api_key_online_gl
       - odoo_online_event_hmac
       - loyalty_policy_signing_key
+      - fnb_table_token_key
+      - odoo_fnb_event_hmac
     networks: [internal, data, cache, egress]
     read_only: true
     tmpfs: [/tmp]
@@ -1571,6 +1627,14 @@ services:
       ETL_LOYALTY_RECON_NOT_BEFORE: ${ETL_LOYALTY_RECON_NOT_BEFORE:-}
       # SEC-114 (L-25b): default payment (E-30 = desain G18); product hanya data historis (ditolak deploy-validate di production)
       ETL_LOYALTY_POINTS_MODE: ${ETL_LOYALTY_POINTS_MODE:-payment}
+      # G21/G22 (QA G22 P2-3, services/etl/README.md): job opsional, default MATI. Prasyarat dicek efn_etl/config.py
+      # (gagal start bila dilanggar) dan deploy-validate.sh: REGION & KDS butuh ETL_ENABLE_ODOO + grant terbaru
+      # (efn_region / efn_pos_kds terpasang); KDS_ONLINE butuh ETL_ENABLE_KDS (setelah E-29a efn_online_kds_bridge);
+      # RECON_ONLINE butuh rekonsiliasi aktif (ETL_ENABLE_ODOO) + ETL_LOYALTY_POINTS_MODE=payment + view G22.
+      ETL_PARTNER_REGION_ENABLED: ${ETL_PARTNER_REGION_ENABLED:-false}
+      ETL_LOYALTY_RECON_ONLINE_ENABLED: ${ETL_LOYALTY_RECON_ONLINE_ENABLED:-false}
+      ETL_ENABLE_KDS: ${ETL_ENABLE_KDS:-false}
+      ETL_KDS_ONLINE_ENABLED: ${ETL_KDS_ONLINE_ENABLED:-false}
       LOYALTY_POINT_VALUE_IDR: ${LOYALTY_POINT_VALUE_IDR:-100}   # SEC-118: wajib sama dengan api-gateway
       # W-19: harus sama dengan clickhouse-init (TTL kolom pseudonim / geo; ETL gagal start bila di luar rentang)
       CH_PSEUDONYM_RETENTION_YEARS: ${CH_PSEUDONYM_RETENTION_YEARS:-5}

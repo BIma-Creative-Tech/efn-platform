@@ -11,7 +11,12 @@
     # 19.0.1.6.0 (G21 E-39, docs/04 §13.5 + L-63): RPC efn_online_set_invoice_party (partner pembeli terlindungi
     # efn_pii -> partner_invoice_id SO), kode error invoice_not_available, res.partner.efn_online_invoice_buyer,
     # efn.online.order.invoice_party_idempotency_key. efn_pii TIDAK di depends (opsional, dicek saat runtime).
-    "version": "19.0.1.6.0",
+    # 19.0.1.7.0 (G22 docs/04 §14.B W-04 + §14.C W-12, L-72): atribut no_variant di cart/quote/place (B-4, PTAV di
+    # quote_hash), katalog `attributes` + blok channel `business_type`/`loyalty` (B-2), combo tidak online (D-22-9),
+    # `efn_online_sold_out` (B-3), hook KDS + `ready_source` + event `preparing` (B-6/B-7), porsi Poin EFN
+    # (`points_payment`, `amount_due`, pembayaran faktur Poin EFN, `eligible_amount`, alokasi refund). Kolom baru
+    # bertipe compute-stored (`amount_due`, `cash_amount`) dihitung otomatis saat upgrade (tanpa skrip migrasi).
+    "version": "19.0.1.7.0",
     "category": "EFN/Sales",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031): hanya Odoo CE 19 + efn_*.

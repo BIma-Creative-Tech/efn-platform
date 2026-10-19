@@ -426,16 +426,22 @@ def enabled_jobs(
     age_out: AgeOut = DEFAULT_AGE_OUT,
     points_payment: bool = True,
     partner_region: bool = False,
+    kds: bool = False,
+    kds_online: bool = False,
 ) -> list[Job]:
     """Job incremental. Odoo: penjualan POS + (Gelombang 13) pembayaran POS, outlet, produk (efn_etl/pos.py) +
-    (Gelombang 21, `partner_region`) wilayah pembeli di penjualan dan master `dim_region` (efn_etl/region.py)."""
+    (Gelombang 21, `partner_region`) wilayah pembeli di penjualan dan master `dim_region` (efn_etl/region.py) +
+    (Gelombang 22, `kds`) tiket & stasiun KDS, `kds_online` = kanal online E-29a (efn_etl/kds.py)."""
     jobs = [competitor_prices_job(age_out), loyalty_events_job(age_out)]
     if odoo_enabled:
-        # Import lokal: pos.py mengimpor helper dari modul ini.
+        # Import lokal: pos.py / kds.py mengimpor helper dari modul ini.
+        from efn_etl.kds import kds_jobs
         from efn_etl.pos import pos_jobs
 
         jobs.append(sales_fact_job(points_codes, age_out, partner_region))
         jobs.extend(pos_jobs(points_payment))
         if partner_region:
             jobs.append(regions_job())
+        if kds:
+            jobs.extend(kds_jobs(kds_online))
     return jobs

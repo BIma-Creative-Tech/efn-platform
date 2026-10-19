@@ -226,6 +226,48 @@ def test_loyalty_point_value_sec118(tls_env: dict[str, str]) -> None:
         Settings.from_env({**tls_env, "LOYALTY_POINT_VALUE_IDR": "0"})
 
 
+def test_g22_flags_default_off(tls_env: dict[str, str]) -> None:
+    settings = Settings.from_env({**tls_env, "ETL_ENABLE_ODOO": "true"})
+    assert (settings.loyalty_recon_online_enabled, settings.kds_enabled, settings.kds_online_enabled) == (
+        False,
+        False,
+        False,
+    )
+    on = Settings.from_env(
+        {
+            **tls_env,
+            "ETL_ENABLE_ODOO": "true",
+            "ETL_LOYALTY_RECON_ONLINE_ENABLED": "true",
+            "ETL_ENABLE_KDS": "true",
+            "ETL_KDS_ONLINE_ENABLED": "true",
+        }
+    )
+    assert (on.loyalty_recon_online_enabled, on.kds_enabled, on.kds_online_enabled) == (True, True, True)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        # rekonsiliasi online tanpa job loyalty_recon (Odoo mati -> default recon mati)
+        {"ETL_LOYALTY_RECON_ONLINE_ENABLED": "true"},
+        # ... atau dengan recon dimatikan eksplisit
+        {"ETL_ENABLE_ODOO": "true", "ETL_LOYALTY_RECON_ENABLED": "false", "ETL_LOYALTY_RECON_ONLINE_ENABLED": "true"},
+        # ... atau mode produk (pra-E-30, non-production)
+        {
+            "APP_ENV": "development",
+            "ETL_ENABLE_ODOO": "true",
+            "ETL_LOYALTY_POINTS_MODE": "product",
+            "ETL_LOYALTY_RECON_ONLINE_ENABLED": "true",
+        },
+        {"ETL_ENABLE_KDS": "true"},  # KDS tanpa Odoo
+        {"ETL_ENABLE_ODOO": "true", "ETL_KDS_ONLINE_ENABLED": "true"},  # kanal online tanpa job KDS
+    ],
+)
+def test_g22_flags_fail_closed(tls_env: dict[str, str], override: dict[str, str]) -> None:
+    with pytest.raises(RuntimeError):
+        Settings.from_env({**tls_env, **override})
+
+
 def test_audit_epoch_settings(tls_env: dict[str, str]) -> None:
     # Chain epoch: auto (epoch baru tanpa penanda runbook) hanya non-production; anchor 1..1000.
     settings = Settings.from_env(tls_env)

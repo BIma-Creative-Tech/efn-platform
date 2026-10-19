@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getBrand } from '@/lib/brand-server';
-import { companyDisplayName, parsePositiveInt } from '@/lib/catalog';
+import { channelBusinessType, companyDisplayName, parsePositiveInt, priceDisplay } from '@/lib/catalog';
 import { loadChannels, loadProduct, pickChannel } from '@/lib/catalog-server';
 import { formatRupiah } from '@/lib/format';
 import { getSessionToken } from '@/lib/session';
@@ -43,6 +43,8 @@ export default async function ProductPage({
     return <OnlineUnavailable reason={product.unavailable ? 'off' : 'error'} />;
   }
   const p = product.data;
+  // G22 (§14.B B-5): kanal F&B menampilkan harga sebelum pajak + label pajak; ritel tetap harga termasuk pajak.
+  const price = priceDisplay(p, channelBusinessType(channel));
   const loggedIn = Boolean(await getSessionToken());
   const returnPath = `/belanja/${productId}?channel=${encodeURIComponent(channel.channel_code)}`;
 
@@ -62,17 +64,21 @@ export default async function ProductPage({
           <h1 style={{ margin: 0, overflowWrap: 'anywhere' }}>{p.name}</h1>
           <p style={{ margin: 0 }}>
             <span className={styles.price} style={{ fontSize: '1.5rem' }}>
-              {formatRupiah(p.price_incl)}
+              {formatRupiah(price.amount)}
             </span>
             {p.uom && <span className="muted"> / {p.uom}</span>}
           </p>
           <p className="small muted" style={{ margin: 0 }}>
-            {p.tax_labels.length > 0 ? `Harga termasuk ${p.tax_labels.join(', ')}. ` : 'Harga termasuk pajak. '}
+            {price.excl
+              ? `Harga ${price.taxNote}; pajak dirinci di keranjang sebelum Anda membayar. `
+              : p.tax_labels.length > 0
+                ? `Harga termasuk ${p.tax_labels.join(', ')}. `
+                : 'Harga termasuk pajak. '}
             Dijual oleh {companyDisplayName(channel.company_code)}. Total akhir dihitung saat checkout.
           </p>
           {p.description && <p className={styles.description}>{p.description}</p>}
           <AddToCart
-            product={{ product_id: p.product_id, name: p.name, max_qty: p.max_qty }}
+            product={{ product_id: p.product_id, name: p.name, max_qty: p.max_qty, attributes: p.attributes }}
             channelCode={channel.channel_code}
             outlets={channel.outlets}
             deliveryAvailable={channel.fulfilment.delivery}

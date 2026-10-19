@@ -375,7 +375,20 @@ def test_daily_points_clean_redeem_and_refund_with_cross_midnight_commit() -> No
     lr.add_daily_findings(report, days)
     assert report.anomalies == 0
     rows = lr.daily_rows(days, NOW)
-    assert rows[0] == [NOW, D6, PB, Decimal("6000.00"), Decimal(6000), Decimal(0), Decimal(0), 1, 0, Decimal(0), 0]
+    assert rows[0] == [
+        NOW,
+        D6,
+        PB,
+        Decimal("6000.00"),
+        Decimal(6000),
+        Decimal(0),
+        Decimal(0),
+        1,
+        0,
+        Decimal(0),
+        0,
+        "pos",  # G22: kolom channel
+    ]
     assert len(rows[0]) == len(lr.DAILY_COLUMNS)
 
 

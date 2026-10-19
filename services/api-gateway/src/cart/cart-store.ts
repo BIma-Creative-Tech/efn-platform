@@ -5,6 +5,16 @@ import { REDIS_CLIENT } from '../common/redis/kv-store';
 export interface CartLine {
   product_id: number;
   qty: number;
+  /**
+   * G22 §14.B B-4 / L-78: PTAV `no_variant` (urut naik, unik, ≤ 10). Identitas baris = (product_id, attribute_value_ids);
+   * hanya ada bila tidak kosong (bentuk cart lama tetap sama).
+   */
+  attribute_value_ids?: number[];
+}
+
+/** Kunci identitas baris cart/quote (B-4). */
+export function lineIdentity(l: { product_id: number; attribute_value_ids?: readonly number[] | null }): string {
+  return `${l.product_id}|${[...(l.attribute_value_ids ?? [])].sort((a, b) => a - b).join(',')}`;
 }
 export interface CartGroup {
   channel_code: string;

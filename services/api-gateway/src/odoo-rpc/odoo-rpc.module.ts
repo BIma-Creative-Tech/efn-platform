@@ -1,6 +1,6 @@
 import { Logger, Module } from '@nestjs/common';
 import { AppConfig } from '../config/app-config';
-import { Json2OdooOnlineClient, createJson2Transport } from './json2-client';
+import { Json2OdooOnlineClient, ODOO_RPC_GATES, OdooRpcGates, createJson2Transport, createOdooRpcGates } from './json2-client';
 import { MockOdooOnline } from './odoo-online.mock';
 import { ODOO_ONLINE, OdooOnlineApi, OdooRpcError } from './odoo-online.types';
 import { OnlineMetrics } from './online-metrics';
@@ -14,10 +14,12 @@ import { OnlineMetrics } from './online-metrics';
 @Module({
   providers: [
     OnlineMetrics,
+    // G22 §14.A.7 (L-20): satu pasang semaphore per proses, dipakai klien online DAN klien QR meja (pool publik)
+    { provide: ODOO_RPC_GATES, inject: [AppConfig], useFactory: (config: AppConfig): OdooRpcGates => createOdooRpcGates(config) },
     {
       provide: ODOO_ONLINE,
-      inject: [AppConfig, OnlineMetrics],
-      useFactory: (config: AppConfig, metrics: OnlineMetrics): OdooOnlineApi => {
+      inject: [AppConfig, OnlineMetrics, ODOO_RPC_GATES],
+      useFactory: (config: AppConfig, metrics: OnlineMetrics, gates: OdooRpcGates): OdooOnlineApi => {
         let impl: OdooOnlineApi | null = null;
         const logger = new Logger('OdooOnline');
         const get = (): OdooOnlineApi => {
@@ -27,7 +29,7 @@ import { OnlineMetrics } from './online-metrics';
               logger.warn('ODOO_ONLINE_MOCK aktif — stub json2 in-memory (DEV/TEST SAJA)');
               impl = new MockOdooOnline();
             } else {
-              impl = new Json2OdooOnlineClient(config, createJson2Transport(config), metrics);
+              impl = new Json2OdooOnlineClient(config, createJson2Transport(config), metrics, gates);
             }
           } catch (err) {
             logger.error(`Klien Odoo online tidak dapat dibuat: ${err instanceof Error ? err.message : 'config'}`);
@@ -53,6 +55,6 @@ import { OnlineMetrics } from './online-metrics';
       },
     },
   ],
-  exports: [ODOO_ONLINE, OnlineMetrics],
+  exports: [ODOO_ONLINE, OnlineMetrics, ODOO_RPC_GATES],
 })
 export class OdooRpcModule {}

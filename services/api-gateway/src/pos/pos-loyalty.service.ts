@@ -17,6 +17,8 @@ import {
   splitCredit,
 } from '../loyalty/loyalty.service';
 import { LoyaltyAnomalyKind, reportLoyaltyAnomaly } from '../loyalty/loyalty-anomaly';
+import { touchActivity } from '../loyalty/loyalty-activity';
+import { PiiDecryptError } from '../common/pii/crypto';
 import { EffectiveLoyaltyParams, LoyaltyPolicyService, envLoyaltyParams } from '../loyalty/loyalty-policy.service';
 import { DiscountTokenService, amountWithinBounds } from './discount-token.service';
 import { PosEarnDto, PosReverseDto, RedeemCommitDto, RedeemReserveDto } from './dto/pos-loyalty.dto';
@@ -96,6 +98,8 @@ interface LedgerRow {
   source: string;
   source_ref: string | null;
   idempotency_key: string;
+  /** G22: hanya dibaca untuk reverse `earn_channel: "qr"` (dekripsi di memori, tidak di-log). */
+  member_ref_enc?: Buffer | null;
 }
 
 interface EarnRecordRow {
@@ -143,6 +147,9 @@ export function expiryFor(nowMs: number, days: number): Date | null {
   const startOfDayWib = Math.floor((nowMs + WIB_OFFSET_MS) / DAY_MS) * DAY_MS - WIB_OFFSET_MS;
   return new Date(startOfDayWib + (days + 1) * DAY_MS);
 }
+
+/** G22 D-22-5: kunci `pos_earn:<order_uuid>` sudah dipakai kanal lain (QR ↔ POS) untuk member berbeda. */
+export class QrPosMemberConflict extends Error {}
 
 function isUniqueViolation(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === '23505';
@@ -215,7 +222,8 @@ export class PosLoyaltyService {
       point_value_idr: this.config.loyaltyPointValueIdr,
       redeem_min_points: this.config.loyaltyRedeemMinPoints,
       redeem_max_pct_of_order: this.config.loyaltyRedeemMaxPctOfOrder,
-      point_expiry_days: this.config.loyaltyPointExpiryDays,
+      // G22 D-22-18: field tetap (bentuk respons); nilai = LOYALTY_POINT_MAX_AGE_DAYS (0 = lot tanpa kedaluwarsa)
+      point_expiry_days: this.config.loyaltyPointMaxAgeDays,
       reservation_ttl_seconds: this.config.loyaltyReservationTtlSeconds,
       reservation_commit_window_seconds: this.config.loyaltyReservationCommitWindowSeconds,
       earn_exclude_point_payment: this.config.loyaltyEarnExcludePointPayment,
@@ -233,7 +241,7 @@ export class PosLoyaltyService {
       point_value_idr: p.pointValueIdr,
       redeem_min_points: p.redeemMinPoints,
       redeem_max_pct_of_order: p.redeemMaxPct,
-      point_expiry_days: this.config.loyaltyPointExpiryDays,
+      point_expiry_days: this.config.loyaltyPointMaxAgeDays,
       reservation_ttl_seconds: this.config.loyaltyReservationTtlSeconds,
       reservation_commit_window_seconds: this.config.loyaltyReservationCommitWindowSeconds,
       earn_exclude_point_payment: p.earnOnMoneyOnly,
@@ -264,8 +272,53 @@ export class PosLoyaltyService {
       const hash = this.loyalty.hashMember(dto.memberRef);
       await this.rateLimit('earn', hash);
       const policy = await this.paramsOf(dto.companyCode);
-      const points = this.pointsFor(dto.eligibleAmount, policy.earnIdrPerPoint);
-      return this.db.tx(async (q) => {
+      try {
+        return await this.db.tx(async (q) => this.earnTx(q, dto, hash, policy, 'pos_sale'));
+      } catch (err) {
+        // G22 §14.A.4 (D-22-5): kunci `pos_earn:<order_uuid>` sudah dipakai earn QR untuk member LAIN → 409 final + anomali
+        if (err instanceof QrPosMemberConflict) {
+          reportLoyaltyAnomaly(this.logger, this.metrics, 'qr_pos_member_conflict', { order_ref: dto.orderRef, company: dto.companyCode });
+          throw LoyaltyErrors.idempotencyConflict();
+        }
+        throw err;
+      }
+    });
+  }
+
+  /**
+   * G22 §14.A.4 (D-22-5): earn QR meja di DALAM transaksi event `session_closed|order_closed` (pemanggil: `FnbEventsService`)
+   * lewat jalur ledger POS yang sama (`pos_earn:<order_uuid>`, kebijakan PT, pagar `earn_limit_exceeded`). Ledger
+   * `source = 'pos_earn'`, `reason = 'pos_qr_sale'` (penanda kanal QR; source tetap agar rekonsiliasi/reverse POS berlaku).
+   * Hasil: `earned` | `replay` | `limited` (pagar batas, 409 dari earnTx ditangkap → tanpa entri) | `conflict` (kunci sama
+   * milik member lain = POS sudah meng-earn untuk member lain).
+   */
+  async earnQrInTx(
+    q: Queryable,
+    dto: PosEarnDto,
+  ): Promise<{ outcome: 'earned' | 'replay' | 'limited' | 'conflict'; points: number }> {
+    const hash = this.loyalty.hashMember(dto.memberRef);
+    const policy = await this.paramsOf(dto.companyCode);
+    try {
+      const r = await this.earnTx(q, dto, hash, policy, 'pos_qr_sale');
+      return { outcome: r.outcome === 'replay' ? 'replay' : 'earned', points: r.result.points_earned };
+    } catch (err) {
+      // Keduanya dilempar SEBELUM tulis apa pun (cek replay / pagar batas) → transaksi pemanggil tetap konsisten
+      if (err instanceof QrPosMemberConflict) return { outcome: 'conflict', points: 0 };
+      if (err instanceof ApiError && errorCode(err) === 'earn_limit_exceeded') return { outcome: 'limited', points: 0 };
+      throw err;
+    }
+  }
+
+  private async earnTx(
+    q: Queryable,
+    dto: PosEarnDto,
+    hash: string,
+    policy: EffectiveLoyaltyParams,
+    reason: 'pos_sale' | 'pos_qr_sale',
+  ): Promise<{ result: PosEarnResponse; outcome: string }> {
+    const points = this.pointsFor(dto.eligibleAmount, policy.earnIdrPerPoint);
+    {
+      {
         await this.loyalty.lockMember(q, hash);
         const existing = await q.query<EarnRecordRow>(
           `SELECT order_ref, idempotency_key, member_hash, points_earned
@@ -276,7 +329,14 @@ export class PosLoyaltyService {
           const consistent = existing.rows.every(
             (r) => r.order_ref === dto.orderRef && r.idempotency_key === dto.idempotencyKey && r.member_hash === hash,
           );
-          if (!consistent) throw LoyaltyErrors.idempotencyConflict();
+          if (!consistent) {
+            // D-22-5: kunci dipakai earn kanal lain (QR ↔ POS) untuk member berbeda → konflik final + anomali (pemanggil)
+            const prior = await this.ledgerByKeys(q, [dto.idempotencyKey]);
+            const crossChannel = prior.some((r) => (r.reason === 'pos_qr_sale') !== (reason === 'pos_qr_sale'));
+            // jalur QR: konflik apa pun = final (event QR tidak di-retry); jalur POS: anomali hanya bila lintas kanal
+            if (crossChannel || reason === 'pos_qr_sale') throw new QrPosMemberConflict();
+            throw LoyaltyErrors.idempotencyConflict();
+          }
           return {
             result: { points_earned: Number(existing.rows[0].points_earned), points_balance: await this.loyalty.balanceByHash(hash, q) },
             outcome: 'replay',
@@ -301,7 +361,7 @@ export class PosLoyaltyService {
             memberHash: hash,
             memberRefEnc: enc,
             delta: part.points,
-            reason: 'pos_sale',
+            reason,
             source: POS_SOURCES.EARN,
             sourceRef: dto.orderRef,
             companyCode: dto.companyCode,
@@ -310,12 +370,14 @@ export class PosLoyaltyService {
           }));
           this.metrics.recordLoyaltyPosPoints('earned', dto.companyCode, points);
         }
+        // G22 §14.D.2: transaksi POS bermember = aktivitas (juga earn 0 poin)
+        await touchActivity(q, hash, 'pos_earn', new Date(this.now()));
         return {
           result: { points_earned: points, points_balance: await this.loyalty.balanceByHash(hash, q) },
           outcome: points > 0 ? 'ok' : 'zero',
         };
-      });
-    });
+      }
+    }
   }
 
   // ───────────────────────── Reserve (§9.3 langkah 2) ─────────────────────────
@@ -491,6 +553,7 @@ export class PosLoyaltyService {
               WHERE id = $1`,
             [r.id, now.toISOString(), dto.idempotencyKey, dto.orderGoodsIncl],
           );
+          await touchActivity(q, hash, 'pos_redeem', now); // G22 §14.D.2
           const balance = await this.loyalty.balanceByHash(hash, q);
           if (balance < 0) this.logger.warn(`commit redeem order ${r.order_ref}: saldo member negatif (${balance})`);
           this.metrics.recordLoyaltyPosPoints('redeemed', company, points);
@@ -525,7 +588,77 @@ export class PosLoyaltyService {
   }
 
   // ───────────────────────── Reverse (§9.4, K-6) ─────────────────────────
-  async reverse(dto: PosReverseDto): Promise<PosReverseResponse> {
+  async reverse(input: PosReverseDto): Promise<PosReverseResponse> {
+    if (input.earnChannel === 'qr') {
+      // G22 §14.A.4: member dicari dari earn QR `pos_earn:<original_order_ref>` (Odoo tidak tahu member QR, tanpa PII)
+      const resolved = await this.resolveQrMember(input.originalOrderRef);
+      if (resolved === 'pending') {
+        this.metrics.recordLoyaltyPosOp('reverse', 'earn_pending');
+        throw LoyaltyErrors.earnPending();
+      }
+      if (resolved === null) {
+        this.metrics.recordLoyaltyPosOp('reverse', 'qr_no_earn');
+        return { points_clawed_back: 0, points_restored: 0, points_balance: 0 };
+      }
+      return this.reverseResolved({ ...input, memberRef: resolved });
+    }
+    if (input.memberRef === null) throw Errors.invalidRequest();
+    return this.reverseResolved({ ...input, memberRef: input.memberRef });
+  }
+
+  /**
+   * G22 §14.A.4 (reverse `earn_channel: "qr"`): `pending` = order QR dikenal BFF (K1: `fnb_submission.order_uuid`) yang
+   * belum selesai (bukan `paid`/`cancelled`) DAN event `session_closed` sesinya belum diproses BFF (`close_event_at` NULL)
+   * → 409 earn_pending, Odoo retry (r15 K3/SEC-164 jendela kedua: reverse yang datang sebelum close tidak hilang dan tidak
+   * dijawab 200 nol). `null` = tidak ada earn (tamu tanpa klaim / earn 0 poin / subjek sudah dihapus / order tak dikenal /
+   * close sudah diproses tetapi order tidak ada di `orders[]` karena neto ≤ 0) → 200 nol; string = member_ref hasil
+   * dekripsi entri ledger earn (AAD ledger) yang diverifikasi terhadap `member_hash` catatan earn. Nomor tidak di-log.
+   *
+   * Urutan baca disengaja: status QR DULU, catatan earn SESUDAHNYA. Earn dan `close_event_at` di-commit dalam SATU
+   * transaksi event, jadi bila baca pertama sudah melihat close diproses, baca kedua (READ COMMITTED, snapshot lebih baru)
+   * pasti melihat catatan earn-nya → tidak ada jendela "close terlihat, earn belum" yang menghasilkan 200 nol palsu.
+   * Idempoten: earn_pending tidak menulis apa pun; reverse ulang setelah earn → replay `reverseResolved` (sekali).
+   */
+  private async resolveQrMember(orderRef: string): Promise<string | null | 'pending'> {
+    const qr = await this.db.query<{ qr_known: boolean; settled: boolean; close_processed: boolean }>(
+      `SELECT true AS qr_known, (s.order_state IN ('paid', 'cancelled')) AS settled, (t.close_event_at IS NOT NULL) AS close_processed
+         FROM platform.fnb_submission s JOIN platform.fnb_table_session t ON t.id = s.session_id
+        WHERE s.order_uuid = $1
+       UNION ALL
+       SELECT true AS qr_known, false AS settled, (t.close_event_at IS NOT NULL) AS close_processed
+         FROM platform.fnb_table_session t WHERE t.order_uuid = $1
+       LIMIT 1`,
+      [orderRef],
+    );
+    const row = qr.rows[0];
+    const rec = (
+      await this.db.query<EarnRecordRow>(
+        `SELECT order_ref, idempotency_key, member_hash, company_code, points_earned FROM platform.loyalty_pos_earn WHERE order_ref = $1`,
+        [orderRef],
+      )
+    ).rows[0];
+    if (!rec) {
+      if (row && row.settled !== true && row.close_processed !== true) return 'pending';
+      // Order tak dikenal BFF = normal pada L-80 (order pelayan ditautkan Odoo saat bayar; sesi tanpa klaim → tanpa earn).
+      // Hanya dicatat sebagai log info (bukan anomali) agar tidak bising.
+      if (!row) this.logger.log(`EFN_LOYALTY_QR_REVERSE ${JSON.stringify({ outcome: 'no_earn', order_ref: orderRef.replace(/[^A-Za-z0-9-]/g, '').slice(0, 64) })}`);
+      return null;
+    }
+    const rows = await this.ledgerByKeys(this.db, [rec.idempotency_key]);
+    const enc = rows.find((r) => r.member_ref_enc)?.member_ref_enc ?? null;
+    if (!enc) return null; // earn 0 poin (tanpa entri) atau subjek ter-erasure (member_ref_enc NULL)
+    let ref: string;
+    try {
+      ref = this.loyalty.decryptLedgerMemberRef(enc);
+    } catch (err) {
+      if (err instanceof PiiDecryptError) throw new Error('member_ref_enc ledger earn QR tidak dapat didekripsi');
+      throw err;
+    }
+    if (!safeEqualHex(this.loyalty.hashMember(ref), rec.member_hash)) throw new Error('member_ref_enc earn QR tidak konsisten');
+    return ref;
+  }
+
+  private async reverseResolved(dto: PosReverseDto & { memberRef: string }): Promise<PosReverseResponse> {
     return this.observe('reverse', async () => {
       const hash = this.loyalty.hashMember(dto.memberRef);
       await this.rateLimit('reverse', hash);
@@ -939,7 +1072,7 @@ export class PosLoyaltyService {
 
   private async ledgerByKeys(q: Queryable, keys: string[]): Promise<LedgerRow[]> {
     const res = await q.query<LedgerRow>(
-      `SELECT member_ref_hash, company_code, issuer_company_code, delta_points, expires_at, reason, source, source_ref, idempotency_key
+      `SELECT member_ref_hash, member_ref_enc, company_code, issuer_company_code, delta_points, expires_at, reason, source, source_ref, idempotency_key
          FROM platform.loyalty_ledger WHERE idempotency_key = ANY($1::text[])`,
       [keys],
     );
@@ -1020,7 +1153,8 @@ export class PosLoyaltyService {
    * jumlah bucket (dan entri debit per redeem) tetap kecil. 0 hari = tanpa kedaluwarsa (NULL).
    */
   private earnExpiry(): Date | null {
-    return expiryFor(this.now(), this.config.loyaltyPointExpiryDays);
+    // G22 D-22-18: LOYALTY_POINT_MAX_AGE_DAYS (default 0 = tanpa expires_at; hangus lewat job tidak aktif W-17)
+    return expiryFor(this.now(), this.config.loyaltyPointMaxAgeDays);
   }
 
   private reserveResponse(id: string, points: number, valueIdr: number, expiresAt: Date, holdUntil: Date): RedeemReserveResponse {

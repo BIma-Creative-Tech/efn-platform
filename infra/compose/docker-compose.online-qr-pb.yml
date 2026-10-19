@@ -1,0 +1,13 @@
+# Override QR order meja PB (PT Paris Baguette; docs/04 §14.A.5/§14.A.9, G22 W-07, L-72 D-22-7). Pola
+# docker-compose.online-<kode>.yml: API key Odoo user teknis QR `efn_qr_pb` (secret `odoo_api_key_qr_pb`, grup
+# efn_pos_bff_order.group_qr_bff, satu company, tanpa ACL dokumen) HANYA di-mount ke BFF saat FNB_QR_ENABLED=true dan
+# FNB_QR_COMPANIES memuat PB (scripts/deploy.sh). Selama QR mati file ini TIDAK disertakan -> key tidak ada di container
+# mana pun dan BFF memperlakukan PT ini sebagai "QR tidak dikonfigurasi". Nama file sengaja `online-qr-<pt>` agar
+# efn-rotate-online-key --channel=QR-PB --bootstrap, CI (job infra) dan scripts/check-encryption.sh ikut memakainya.
+# Pembuatan & rotasi key: docs/runbooks/odoo-qr-api-key.md (efn-rotate-online-key --channel=QR-PB).
+services:
+  api-gateway:
+    environment:
+      ODOO_API_KEY_QR_PB_FILE: /run/secrets/odoo_api_key_qr_pb
+    secrets:
+      - odoo_api_key_qr_pb

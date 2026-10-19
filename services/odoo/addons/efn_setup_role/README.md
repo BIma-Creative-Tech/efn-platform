@@ -32,7 +32,7 @@ untuk GL, PB, BCR, BCF.
 | Staf Gudang | `stock.group_stock_user` (+ `mrp.group_mrp_user` di PB & BCF = Central Kitchen) | **ya** | |
 | Staf CS | `sales_team.group_sale_salesman_all_leads` | tidak | membaca semua pesanan/pelanggan → penetapan sengaja (UU PDP) |
 | Approver Refund CS | idem + `efn_role.group_refund_approver` (cermin BFF) | tidak (sensitif) | ⟂ Sales Manager (SOD-01) |
-| Sales Manager Online | `sales_team.group_sale_manager` | tidak (sensitif) | |
+| Sales Manager Online | `sales_team.group_sale_manager`, `stock.group_stock_user` | tidak (sensitif) | stock user: batal SO saat purchase_stock terpasang |
 | Loyalty Manager | `efn_loyalty_accounting.group_loyalty_manager` | tidak (sensitif) | pembuat kebijakan poin |
 | Auditor Internal | `account.group_account_readonly`, `efn_audit.group_auditor` | tidak | **tanpa** `base.group_allow_export` (SEC-155); ekspor review lewat tombol snapshot |
 
@@ -73,7 +73,7 @@ kode (tidak ada xmlid aturan di modul ini; SOD-03 `block`), tidak ada peran yang
 penerapan Kasir + penolakan Store Manager (SOD-02), sinkron jabatan Gudang vs Store Manager.
 
 ## Belum / belum terverifikasi
-- Test **belum dijalankan** (sesi tanpa shell). Modul belum ada di `EFN_TEST_MODULES` CI (wilayah devsecops).
+- Test dijalankan lead di container (suite penuh G22) dan masuk `EFN_TEST_MODULES` CI.
 - [B] `<function>` pada metode privat di data XML 19.0: `convert.py` hanya memblokir nama dunder/`_UNSAFE_ATTRIBUTES`
   (diverifikasi WebFetch 2026-10-19) — perilaku runtime menunggu install.
 - Regresi: dengan modul ini terpasang, grup peran (mis. `point_of_sale.group_pos_user`) menjadi "terkelola" bagi user

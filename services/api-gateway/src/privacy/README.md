@@ -88,3 +88,14 @@ Keputusan pemilik proyek 10 Okt 2026: penundaan karena pesanan berjalan sah, **m
 - Setelah batas: erasure **tetap** jalan — `online_order.member_id` NULL (tautan dilepas), baris order/bagian/refund tetap; anomali `erasure_forced_open_orders` (critical) memuat `part_ids` (maks 20, opak) + `parts_total`. CS menyelesaikan lewat CLI tanpa tautan akun: `online-erasure-pending` (daftar kerja read-only: request tertunda + batas + id bagian; bagian terbuka yang sudah tanpa tautan), lalu `online-refund --part=… --full` / `online-resolve` / serah terima di Odoo setelah verifikasi lewat kanal lain. Kode ambil TIDAK pernah ditampilkan ke CS.
 - Belum: teks pelanggan final (Legal, PDP_DATA_INVENTORY §4 butir 6); runbook CS (architect); wrapper host `efn-online-cs` belum mengenal subcommand `erasure-pending` (devsecops).
 - Erasure platform: `online_order.member_id` → NULL + `member_unlinked_at` (baris keuangan tetap).
+
+### G22 — retensi setelah hangus tidak aktif (§14.D.7, D-22-14, L-73)
+- `dsar_request.type = 'retention'` (dibuat `LoyaltyInactivityJob` HANYA bila `LOYALTY_INACTIVE_ANONYMIZE=true`, default
+  false; production OFF sampai DPO + Legal). `member_id` boleh NULL hanya untuk retention (subjek ledger POS); indeks
+  unik "satu hapus aktif" mencakup retention. `ErasureService` memproses `delete` & `retention` dengan jalur yang sama
+  (tombstone ledger, forfeit lot termasuk utang D-22-17, suppression SEC-65, Odoo pull, ClickHouse). Aktivitas selama masa
+  tenggang → request `cancelled`.
+- Erasure kini juga: `fnb_table_session.member_id` → NULL, hapus `loyalty_member_activity` & `loyalty_expiry_notice`
+  subjek. Bukti pemberitahuan tanpa identitas (`loyalty_expiry_notice_proof`, L-76) TIDAK dihapus.
+- Ekspor DSAR: `qr_table_sessions` (outlet, PT, tanggal, status earn, poin sesi).
+- Belum: pasal UU PDP & retensi di RoPA (DPO).

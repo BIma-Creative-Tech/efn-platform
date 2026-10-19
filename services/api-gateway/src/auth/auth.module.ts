@@ -10,6 +10,7 @@ import { MeController } from './me.controller';
   imports: [OtpModule, LoyaltyModule],
   controllers: [AuthController, MeController],
   providers: [AuthService, AltchaService],
-  exports: [AuthService],
+  // G22 §14.A.7: AltchaService dipakai kiriman QR meja (FNB_CAPTCHA_MODE)
+  exports: [AuthService, AltchaService],
 })
 export class AuthModule {}

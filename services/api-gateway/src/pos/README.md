@@ -112,6 +112,16 @@ Definisi (hari WIB [00:00, 24:00)): earned = kredit lot terbitan PT; earn_revers
 ### Rekonsiliasi ringan BFF
 `LoyaltyReconService` kini memakai PLAFON (`LOYALTY_POLICY_CEILING_*`) sebagai aturan earn (default = env → perilaku lama).
 
+### G22 (§14.A.4, §14.D.5, L-72 D-22-5/D-22-18, L-80)
+- Earn QR meja: `PosLoyaltyService.earnQrInTx` dipanggil di transaksi event `/v1/pos/fnb/events` — kunci sama
+  `pos_earn:<order_uuid>`, kebijakan PT, pagar batas (`limited` tanpa melempar); ledger `source='pos_earn'`,
+  `reason='pos_qr_sale'` (deviasi sengaja dari "source=pos_qr": rekonsiliasi & reverse POS tetap berlaku tanpa diubah).
+  POS meng-earn kunci yang sama untuk member lain → `409 idempotency_conflict` + anomali `qr_pos_member_conflict`.
+- `/v1/pos/loyalty/reverse` `earn_channel: "qr"` (tanpa `member_ref`): member dari entri earn QR (dekripsi ledger,
+  hash diverifikasi); order QR dikenal tetapi belum dibayar → `409 earn_pending`; tanpa earn → `200 {0,0,0}`.
+- Akrual: `expired_value_idr` += Σ entri `inactivity_expire` per penerbit per tanggal; alasan online diklasifikasikan
+  seperti padanan POS. `point_expiry_days` di `GET params` = `LOYALTY_POINT_MAX_AGE_DAYS` (default 0).
+
 ### Belum (G21)
 - Rate limit khusus endpoint akrual (hanya service key; dipanggil cron 1×/PT/hari × 4 tanggal).
 - Definisi jurnal Odoo untuk penukaran lintas PT memakai `redeemed_value_idr_by_issuer` di PT penebus, sedangkan `closing_liability_idr` BFF berbasis PENERBIT — rekonsiliasi akun liabilitas per PT hanya cocok bila jurnal Odoo juga berbasis penerbit (lihat laporan agent, perlu konfirmasi Finance/lead).

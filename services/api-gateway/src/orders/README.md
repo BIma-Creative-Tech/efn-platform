@@ -104,3 +104,22 @@ ADR terkait: ADR-036 §0 (enkripsi PII Odoo, Accepted). File: `invoice-request.t
 **PII**: profil hanya di memori request; tidak masuk DB (order/part/event), outbox, Redis, log, metrik; klien json2 tidak me-log body. Mock Odoo mencatat SHA-256 profil saja (test).
 **Test**: `invoice-request.spec.ts`.
 **Belum**: retry pemasangan partner (butuh profil → sengaja tidak; CS); faktur untuk bagian PPN dalam keranjang campuran (kontrak ditafsirkan ketat: semua bagian harus PPN, sama dengan frontend).
+
+## G22 — poin online (W-12, §14.C) & F&B online (W-04, §14.B)
+ADR-020, ADR-034; L-72 (D-22-10/11), **L-77**, **L-78**, **L-79**. Risiko: R-B05/R-B06 (fraud poin), R-T10 (saga), R-O05.
+- Checkout `points_redeem: [{ channel_code, points }]` (ikut `request_sha256` hanya bila ada). Validasi kebijakan PT
+  (`online-points.ts` `plan`; **L-79**: redeem hanya bila kebijakan PT + nilai tukar global Odoo dipublikasikan, tanpa
+  fallback env) → reservasi `loyalty_reservation(channel='online', part_id)` DI transaksi pembuatan order (hold =
+  `expires_at` + `ONLINE_REDEEM_HOLD_EXTRA_SECONDS`) → `efn_online_place(points_payment)`; `amount_due` Odoo harus =
+  `amount_payable − value_idr`. Intent QRIS & porsi = **tunai**. Odoo `points_invalid` → `409 exceeds_max_pct`.
+- Commit: transaksi webhook `paid` (QRIS) / event `paid` counter. Release: transaksi batal/kedaluwarsa/gagal + consumer
+  `unpaid_closed`. Restore: saat refund `settled` (nilai `points_value` Odoo, cek ±Rp1, poin = floor, L-77).
+  Earn: event `picked_up` + `loyalty.eligible_amount`. Clawback: event `refunded` + `eligible_amount_refunded`
+  (kunci `online_reverse:<refund_id>`). Ledger `source='online'`, `source_ref=part_id` (L-77 no. 2).
+- Refund: `amount` = bruto; `cash_amount` ke gateway/POS; `points_value` dipulihkan. Kompensasi tanpa nota kredit Odoo
+  (stok kurang sebelum faktur) → BFF menghitung sisa tunai + sisa poin.
+- Respons (aditif): order `amount_points_value`, `amount_cash`; bagian `points_redeemed`, `points_value_idr`,
+  `amount_cash`, `points_earned` (poin), `points_restored` (poin), `kitchen_started_at`, `prep_minutes`.
+- B-7: event `preparing` (kitchen_started_at, tanpa transisi), `ready_source`; B-4: baris beratribut membawa
+  `attribute_value_ids` + `attributes_text` (identitas baris = product_id + PTAV).
+- Belum: step-up `ONLINE_REDEEM_STEPUP_MIN_POINTS` (opsional kontrak, tidak dibangun); test terhadap PostgreSQL nyata.

@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { getBrand } from '@/lib/brand-server';
-import { companyDisplayName, CURSOR_RE, parsePositiveInt, sanitizeQuery, type ProductSummary } from '@/lib/catalog';
+import { channelBusinessType, companyDisplayName, CURSOR_RE, parsePositiveInt, priceDisplay, sanitizeQuery, type ProductSummary } from '@/lib/catalog';
 import { loadCategories, loadChannels, loadProducts, pickChannel } from '@/lib/catalog-server';
 import { formatRupiah } from '@/lib/format';
 import { OnlineUnavailable } from '@/components/online/OnlineUnavailable';
@@ -57,8 +57,10 @@ export default async function BelanjaPage({ searchParams }: { searchParams: SP }
       <section className={styles.toolbar}>
         <h1 style={{ margin: 0 }}>Belanja</h1>
         <p className="small muted" style={{ margin: 0 }}>
-          {companyDisplayName(channel.company_code)} · ambil di toko. Harga sudah termasuk pajak; total akhir dihitung saat
-          checkout.
+          {companyDisplayName(channel.company_code)} · ambil di toko.{' '}
+          {channelBusinessType(channel) === 'fnb'
+            ? 'Harga belum termasuk pajak; rincian pajak tampil di keranjang dan total akhir dihitung saat checkout.'
+            : 'Harga sudah termasuk pajak; total akhir dihitung saat checkout.'}
         </p>
 
         {channels.data.length > 1 && (
@@ -125,7 +127,7 @@ export default async function BelanjaPage({ searchParams }: { searchParams: SP }
           <ul className={styles.productGrid}>
             {products.data.items.map((p) => (
               <li key={p.product_id}>
-                <ProductCard product={p} channel={channel.channel_code} />
+                <ProductCard product={p} channel={channel.channel_code} businessType={channelBusinessType(channel)} />
               </li>
             ))}
           </ul>
@@ -147,16 +149,18 @@ export default async function BelanjaPage({ searchParams }: { searchParams: SP }
   );
 }
 
-function ProductCard({ product, channel }: { product: ProductSummary; channel: string }) {
+function ProductCard({ product, channel, businessType }: { product: ProductSummary; channel: string; businessType: 'retail' | 'fnb' | null }) {
+  const price = priceDisplay(product, businessType);
   return (
     <Link href={`/belanja/${product.product_id}?channel=${encodeURIComponent(channel)}`} className={styles.productCard}>
       <ProductImage sha={product.image_sha} alt="" />
       <span className={styles.productBody}>
         <span className={styles.productName}>{product.name}</span>
-        <span className={styles.price}>{formatRupiah(product.price_incl)}</span>
+        <span className={styles.price}>{formatRupiah(price.amount)}</span>
         <span className={styles.taxNote}>
           {product.uom ? `per ${product.uom}` : ''}
-          {product.tax_labels.length > 0 ? `${product.uom ? ' · ' : ''}termasuk ${product.tax_labels.join(', ')}` : ''}
+          {price.taxNote ? `${product.uom ? ' · ' : ''}${price.taxNote}` : ''}
+          {product.attributes.length > 0 ? `${product.uom || price.taxNote ? ' · ' : ''}bisa disesuaikan` : ''}
         </span>
       </span>
     </Link>

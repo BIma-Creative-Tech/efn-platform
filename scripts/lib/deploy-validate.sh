@@ -14,7 +14,7 @@
 
 # Topologi host (pemegang kunci SSH deploy tidak boleh bisa membuka erp./bi./ops. ke internet, SEC-50a)
 EFN_HOST_PINNED_VARS=(EFN_PUBLIC_BIND EFN_WG_BIND EFN_WG_HTTPS_PORT EFN_WG_OUTLET_CIDR EFN_WG_STAFF_CIDR
-  TRAEFIK_DOMAIN COMPOSE_PROFILES EFN_ALLOW_CONTROL_OFF)
+  TRAEFIK_DOMAIN COMPOSE_PROFILES EFN_ALLOW_CONTROL_OFF EFN_ALLOW_FEATURE_ON)
 # Konfigurasi aplikasi non-rahasia, ditandatangani bersama rilis (SEC-50b/c)
 EFN_RELEASE_CONFIG_VARS=(ACME_EMAIL PAYMENT_PROVIDER PG_SUPERUSER WHATSAPP_ENABLED WHATSAPP_PHONE_NUMBER_ID
   WHATSAPP_OTP_TEMPLATE ACME_DNS_PROVIDER ACME_DNS_TOKEN_ENV ACME_SERVER RABBITMQ_STRICT_PERMISSIONS
@@ -30,7 +30,32 @@ EFN_RELEASE_CONFIG_VARS=(ACME_EMAIL PAYMENT_PROVIDER PG_SUPERUSER WHATSAPP_ENABL
   CH_PSEUDONYM_RETENTION_YEARS CH_GEO_RETENTION_DAYS MB_AUDIT_MAX_RETENTION_DAYS
   LOYALTY_EARN_EXCLUDE_POINT_PAYMENT ETL_LOYALTY_POINTS_MODE LOYALTY_POINT_VALUE_IDR LOYALTY_RESTORE_TOLERANCE_PCT
   LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS ETL_AUDIT_EPOCH_ANCHORS
-  EFN_ODOO_PII_ENABLED EFN_ODOO_PII_REQUIRED)
+  EFN_ODOO_PII_ENABLED EFN_ODOO_PII_REQUIRED
+  FNB_QR_ENABLED FNB_QR_COMPANIES FNB_QR_BASE_URL_PB FNB_QR_BASE_URL_BCF FNB_QR_POINTS_ENABLED
+  FNB_TABLE_SESSION_TTL_SECONDS FNB_MAX_SUBMISSIONS_PER_SESSION FNB_MAX_ITEMS_PER_SESSION FNB_MAX_LINES FNB_MAX_LINE_QTY
+  FNB_CAPTCHA_MODE FNB_MENU_SYNC_SECONDS FNB_SESSION_RETENTION_DAYS FNB_SESSION_MEMBER_LINK_DAYS
+  ONLINE_LOYALTY_REDEEM_ENABLED ONLINE_LOYALTY_EARN_ENABLED
+  LOYALTY_EXPIRY_ENABLED LOYALTY_EXPIRY_DRY_RUN LOYALTY_INACTIVITY_EXPIRY_MONTHS LOYALTY_EXPIRY_NOTICE_DAYS
+  LOYALTY_EXPIRY_RUN_HOUR_WIB LOYALTY_EXPIRY_NOTICE_HOUR_WIB LOYALTY_EXPIRY_BATCH_SIZE LOYALTY_EXPIRY_MAX_PER_RUN
+  LOYALTY_ACTIVITY_EPOCH LOYALTY_POINT_MAX_AGE_DAYS LOYALTY_INACTIVE_ANONYMIZE LOYALTY_INACTIVE_ANONYMIZE_GRACE_DAYS
+  LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT
+  ETL_PARTNER_REGION_ENABLED ETL_LOYALTY_RECON_ONLINE_ENABLED ETL_ENABLE_KDS ETL_KDS_ONLINE_ENABLED)
+# G22 (docs/04 §14.D.1, L-72 D-22-18): env yang DIHAPUS kontrak. Bukan konfigurasi rilis (kunci manifest tak dikenal =
+# ditolak efn-deploy); jalur manual `sudo -E bash deploy.sh` -> production DITOLAK, staging peringatan (BFF: gagal start
+# di production, warning di luar production).
+EFN_REMOVED_CONFIG_VARS=(LOYALTY_POINT_EXPIRY_DAYS)
+# G22 (docs/04 §14.7 L-73): fitur yang menunggu persetujuan klien (Legal/DPO/Meta). Di production nilai `true` hanya
+# diterima bila nama variabel dicantumkan Superadmin di EFN_ALLOW_FEATURE_ON (/etc/efn/deploy.conf, dipin host) -
+# manifest rilis bertanda tangan saja TIDAK cukup (pemegang akses CI tidak bisa menyalakan hangus/anonimisasi massal).
+EFN_GATED_FEATURES=(LOYALTY_EXPIRY_ENABLED LOYALTY_INACTIVE_ANONYMIZE LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT)
+# Subset EFN_GATED_FEATURES yang nilai berisikonya `false` (default true = filter perlindungan aktif). SEC-171 (r15):
+# melepas filter consent `marketing` untuk notice hangus = keputusan Legal yang sama jenisnya dengan L-73, jadi memakai
+# izin yang sama (EFN_ALLOW_FEATURE_ON), bukan izin darurat EFN_ALLOW_CONTROL_OFF.
+EFN_GATED_FEATURES_OFF=(LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT)
+# G22 (docs/04 §14.A.3/§14.A.8): PT F&B yang boleh menerima QR meja (company_code CHECK PB,BCF). API key QR per PT:
+# scripts/secrets.list odoo_api_key_qr_<pt>, overlay infra/compose/docker-compose.online-qr-<pt>.yml (scripts/deploy.sh),
+# efn-rotate-online-key --channel=QR-<PT>.
+EFN_FNB_QR_COMPANY_CODES=(PB BCF)
 # G21 AC-13 (docs/04 §13.2, ADR-036 §0): kunci PII Odoo produksi (scripts/secrets.list host:disabled [SA]) - di-mount ke
 # odoo oleh infra/compose/docker-compose.pii.yml hanya bila EFN_ODOO_PII_ENABLED=true (scripts/deploy.sh).
 EFN_ODOO_PII_KEY_NAMES=(odoo_pii_key_v1 odoo_pii_bidx_key odoo_pii_name_key)
@@ -106,6 +131,7 @@ efn_validate_topology() { # app_env
   EFN_WG_STAFF_CIDR="${EFN_WG_STAFF_CIDR:-10.89.0.0/16}"
   COMPOSE_PROFILES="${COMPOSE_PROFILES:-core,data,ai,observability,ops}"
   EFN_ALLOW_CONTROL_OFF="${EFN_ALLOW_CONTROL_OFF:-}"
+  EFN_ALLOW_FEATURE_ON="${EFN_ALLOW_FEATURE_ON:-}"
   for v in "${EFN_HOST_PINNED_VARS[@]}"; do efn_no_cntrl "$v" "${!v:-}" || return 1; done
 
   [[ "${TRAEFIK_DOMAIN:-}" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]] \
@@ -150,6 +176,28 @@ efn_validate_topology() { # app_env
   for v in "${allow[@]}"; do
     efn_list_has "$v" "${EFN_SECURITY_CONTROLS[@]}" || _efn_err "EFN_ALLOW_CONTROL_OFF: nama tidak dikenal $v" || return 1
   done
+  # G22 L-73: izin menyalakan fitur yang menunggu persetujuan klien (hanya nama di EFN_GATED_FEATURES)
+  local -a feat
+  read -r -a feat <<< "$EFN_ALLOW_FEATURE_ON"
+  for v in "${feat[@]}"; do
+    efn_list_has "$v" "${EFN_GATED_FEATURES[@]}" || _efn_err "EFN_ALLOW_FEATURE_ON: nama tidak dikenal $v" || return 1
+  done
+}
+
+# G22 (docs/04 §14.A.9): daftar PT QR koma -> setiap kode WAJIB di EFN_FNB_QR_COMPANY_CODES dan unik. Dipakai
+# efn_validate_config dan scripts/deploy.sh (overlay + cek API key QR). rc 1 + alasan di stderr.
+efn_validate_fnb_qr_companies() { # daftar
+  local raw="$1" c
+  local -a list
+  local -A seen=()
+  [[ "$raw" =~ ^[A-Z]{2,8}(,[A-Z]{2,8}){0,3}$ ]] || _efn_err "FNB_QR_COMPANIES tidak valid (kode PT huruf besar dipisah koma)" || return 1
+  IFS=, read -r -a list <<< "$raw"
+  for c in "${list[@]}"; do
+    efn_list_has "$c" "${EFN_FNB_QR_COMPANY_CODES[@]}" \
+      || _efn_err "FNB_QR_COMPANIES: ${c} bukan PT F&B (${EFN_FNB_QR_COMPANY_CODES[*]}; docs/04 §14.A.4)" || return 1
+    [[ -z "${seen[$c]:-}" ]] || _efn_err "FNB_QR_COMPANIES: ${c} ganda" || return 1
+    seen[$c]=1
+  done
 }
 
 # G20 (docs/04 §12.1): daftar kanal koma -> setiap kode WAJIB di EFN_ONLINE_CHANNEL_CODES dan unik. Dipakai
@@ -192,7 +240,8 @@ efn_validate_config() { # app_env
     _efn_re "$v" '^[0-9]{1,5}$' || return 1
   done
   for v in WHATSAPP_ENABLED RABBITMQ_STRICT_PERMISSIONS ETL_ENABLE_ODOO ETL_ENABLE_GL ETL_AUDIT_COPY_ENABLED MIGRATION_ENABLED \
-           ONLINE_ENABLED ONLINE_CATALOG_ENABLED LOYALTY_EARN_EXCLUDE_POINT_PAYMENT EFN_ODOO_PII_ENABLED EFN_ODOO_PII_REQUIRED; do
+           ONLINE_ENABLED ONLINE_CATALOG_ENABLED LOYALTY_EARN_EXCLUDE_POINT_PAYMENT EFN_ODOO_PII_ENABLED EFN_ODOO_PII_REQUIRED \
+           ETL_PARTNER_REGION_ENABLED ETL_LOYALTY_RECON_ONLINE_ENABLED ETL_ENABLE_KDS ETL_KDS_ONLINE_ENABLED; do
     _efn_re "$v" '^(true|false)$' || return 1
   done
   # G21 AC-13 (docs/04 §13.2): production dengan kunci PII Odoo ter-mount WAJIB mode terkunci eksplisit
@@ -222,6 +271,20 @@ efn_validate_config() { # app_env
   # (Odoo G18 menolak produk poin). Hanya untuk data historis di staging/dev.
   if [[ "$app_env" == production && "${ETL_LOYALTY_POINTS_MODE:-payment}" == product ]]; then
     _efn_err "production menolak ETL_LOYALTY_POINTS_MODE=product (SEC-114; pakai payment)"; return 1
+  fi
+  # G21/G22 (QA G22 P2-3): prasyarat job ETL opsional = cermin services/etl/efn_etl/config.py (ETL gagal start bila
+  # dilanggar -> tolak di sini agar terlihat sebelum deploy). ETL_ENABLE_ODOO kosong = aktif otomatis setelah grant
+  # (scripts/deploy.sh) -> diterima; hanya `false` eksplisit yang bertentangan. Semua lingkungan (bukan gerbang prod).
+  if [[ "${ETL_ENABLE_ODOO:-}" == false ]]; then
+    for v in ETL_PARTNER_REGION_ENABLED ETL_ENABLE_KDS ETL_LOYALTY_RECON_ONLINE_ENABLED; do
+      [[ "${!v:-false}" != true ]] || _efn_err "${v}=true membutuhkan ETL_ENABLE_ODOO (bukan false)" || return 1
+    done
+  fi
+  if [[ "${ETL_KDS_ONLINE_ENABLED:-false}" == true && "${ETL_ENABLE_KDS:-false}" != true ]]; then
+    _efn_err "ETL_KDS_ONLINE_ENABLED=true membutuhkan ETL_ENABLE_KDS=true"; return 1
+  fi
+  if [[ "${ETL_LOYALTY_RECON_ONLINE_ENABLED:-false}" == true && "${ETL_LOYALTY_POINTS_MODE:-payment}" != payment ]]; then
+    _efn_err "ETL_LOYALTY_RECON_ONLINE_ENABLED=true membutuhkan ETL_LOYALTY_POINTS_MODE=payment"; return 1
   fi
   local spec name lo hi
   for spec in ONLINE_PAYMENT_TIMEOUT_SECONDS:60:3600 ONLINE_QUOTE_TTL_SECONDS:60:1800 \
@@ -308,6 +371,7 @@ efn_validate_config() { # app_env
       _efn_err "$ver dan $sha harus di-set berpasangan"; return 1
     fi
   done
+  efn_validate_g22_config "$app_env" || return 1
   # SEC-50c: kontrol keamanan tidak bisa dimatikan di production kecuali izin eksplisit Superadmin di deploy.conf
   if [[ "$app_env" == production ]]; then
     local -a allow
@@ -315,6 +379,89 @@ efn_validate_config() { # app_env
     for v in "${EFN_SECURITY_CONTROLS[@]}"; do
       if [[ "${!v:-}" == false ]] && ! efn_list_has "$v" "${allow[@]}"; then
         _efn_err "production menolak ${v}=false (kontrol keamanan; izin hanya lewat EFN_ALLOW_CONTROL_OFF di /etc/efn/deploy.conf)"
+        return 1
+      fi
+    done
+  fi
+}
+
+# ── G22 (docs/04 §14): QR meja (W-07), poin online (W-12), poin hangus tidak aktif (W-17) ─────────────────────────
+# Dipanggil efn_validate_config (manifest rilis bertanda tangan / env manual Superadmin). Kosong = default compose
+# (QR, poin online, job hangus, anonimisasi MATI). Cek secret (API key QR nyata) ada di scripts/deploy.sh (host).
+efn_validate_g22_config() { # app_env
+  local app_env="$1" v spec name lo hi c
+  local url_re='^https://([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(/[A-Za-z0-9._~-]+)*$'
+  local date_re='^20[0-9]{2}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
+  local num_re='^(0|[1-9][0-9]{0,5})$'
+  # D-22-18 (L-72): env yang dihapus kontrak -> production ditolak, staging peringatan (nilai tidak diteruskan compose)
+  for v in "${EFN_REMOVED_CONFIG_VARS[@]}"; do
+    efn_no_cntrl "$v" "${!v:-}" || return 1
+    [[ -n "${!v:-}" ]] || continue
+    if [[ "$app_env" == production ]]; then
+      _efn_err "production menolak ${v} (dihapus G22 D-22-18; pakai LOYALTY_POINT_MAX_AGE_DAYS, docs/04 §14.D.1)"
+      return 1
+    fi
+    echo "validasi: PERINGATAN ${v} diset tetapi sudah dihapus (G22 D-22-18) - tidak dipakai; hapus dari konfigurasi" >&2
+  done
+  for v in FNB_QR_ENABLED FNB_QR_POINTS_ENABLED ONLINE_LOYALTY_REDEEM_ENABLED ONLINE_LOYALTY_EARN_ENABLED \
+           LOYALTY_EXPIRY_ENABLED LOYALTY_EXPIRY_DRY_RUN LOYALTY_INACTIVE_ANONYMIZE LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT; do
+    [[ -z "${!v:-}" || "${!v}" == true || "${!v}" == false ]] || _efn_err "$v harus true|false" || return 1
+  done
+  [[ -z "${FNB_CAPTCHA_MODE:-}" || "$FNB_CAPTCHA_MODE" == off || "$FNB_CAPTCHA_MODE" == first_submit \
+     || "$FNB_CAPTCHA_MODE" == always ]] || _efn_err "FNB_CAPTCHA_MODE harus off|first_submit|always" || return 1
+  # Rentang (kontrak §14.A.7/§14.D.8; batas keras Odoo E-27: 30 baris, qty 20 per baris; TTL token maks 4 jam)
+  for spec in FNB_TABLE_SESSION_TTL_SECONDS:600:14400 FNB_MAX_SUBMISSIONS_PER_SESSION:1:100 \
+              FNB_MAX_ITEMS_PER_SESSION:1:1000 FNB_MAX_LINES:1:30 FNB_MAX_LINE_QTY:1:20 FNB_MENU_SYNC_SECONDS:60:3600 \
+              FNB_SESSION_RETENTION_DAYS:7:730 FNB_SESSION_MEMBER_LINK_DAYS:1:365 \
+              LOYALTY_INACTIVITY_EXPIRY_MONTHS:6:36 LOYALTY_EXPIRY_NOTICE_DAYS:7:60 LOYALTY_EXPIRY_BATCH_SIZE:1:5000 \
+              LOYALTY_EXPIRY_MAX_PER_RUN:1:999999 LOYALTY_EXPIRY_RUN_HOUR_WIB:0:23 LOYALTY_EXPIRY_NOTICE_HOUR_WIB:0:23 \
+              LOYALTY_POINT_MAX_AGE_DAYS:0:3650 LOYALTY_INACTIVE_ANONYMIZE_GRACE_DAYS:0:90; do
+    IFS=: read -r name lo hi <<< "$spec"
+    [[ -z "${!name:-}" ]] && continue
+    [[ "${!name}" =~ $num_re ]] && (( ${!name} >= lo && ${!name} <= hi )) \
+      || _efn_err "$name harus bilangan bulat ${lo}..${hi}" || return 1
+  done
+  # Tautan member sesi QR tidak boleh hidup lebih lama dari baris sesinya (§14.A.11 / §14.E.5)
+  if (( ${FNB_SESSION_MEMBER_LINK_DAYS:-30} > ${FNB_SESSION_RETENTION_DAYS:-180} )); then
+    _efn_err "FNB_SESSION_MEMBER_LINK_DAYS (${FNB_SESSION_MEMBER_LINK_DAYS:-30}) > FNB_SESSION_RETENTION_DAYS (${FNB_SESSION_RETENTION_DAYS:-180})"
+    return 1
+  fi
+  # QR meja: PT F&B saja; URL tenant https dari env (API7 SSRF: qr_url tidak dari input); aktif = URL wajib (API8)
+  local companies="${FNB_QR_COMPANIES:-PB,BCF}"
+  efn_validate_fnb_qr_companies "$companies" || return 1
+  for c in "${EFN_FNB_QR_COMPANY_CODES[@]}"; do
+    v="FNB_QR_BASE_URL_${c}"
+    [[ -z "${!v:-}" || "${!v}" =~ $url_re ]] \
+      || _efn_err "$v harus https://<host>[/path] huruf kecil tanpa port/query/fragment (docs/04 §14.A.10)" || return 1
+  done
+  if [[ "${FNB_QR_ENABLED:-false}" == true ]]; then
+    local -a qr_list
+    IFS=, read -r -a qr_list <<< "$companies"
+    for c in "${qr_list[@]}"; do
+      v="FNB_QR_BASE_URL_${c}"
+      [[ -n "${!v:-}" ]] || _efn_err "FNB_QR_ENABLED=true tetapi ${v} kosong (docs/04 §14.A.10 API8)" || return 1
+    done
+  fi
+  # Poin hangus (§14.D.8): epoch go-live wajib saat job aktif; anonimisasi hanya setelah hangus (§14.D.7)
+  [[ -z "${LOYALTY_ACTIVITY_EPOCH:-}" || "$LOYALTY_ACTIVITY_EPOCH" =~ $date_re ]] \
+    || _efn_err "LOYALTY_ACTIVITY_EPOCH harus tanggal YYYY-MM-DD" || return 1
+  if [[ "${LOYALTY_EXPIRY_ENABLED:-false}" == true && -z "${LOYALTY_ACTIVITY_EPOCH:-}" ]]; then
+    _efn_err "LOYALTY_EXPIRY_ENABLED=true wajib LOYALTY_ACTIVITY_EPOCH (D-22-15, docs/04 §14.D.8)"; return 1
+  fi
+  if [[ "${LOYALTY_INACTIVE_ANONYMIZE:-false}" == true && "${LOYALTY_EXPIRY_ENABLED:-false}" != true ]]; then
+    _efn_err "LOYALTY_INACTIVE_ANONYMIZE=true butuh LOYALTY_EXPIRY_ENABLED=true (anonimisasi setelah hangus, §14.D.7)"; return 1
+  fi
+  # L-73: job hangus & anonimisasi OFF di production kecuali izin Superadmin di deploy.conf (tidak bisa lewat manifest).
+  # SEC-171: filter consent notice hangus (EFN_GATED_FEATURES_OFF) - nilai berisiko `false`, kosong = default compose true.
+  if [[ "$app_env" == production ]]; then
+    local -a feat_on
+    local risky
+    read -r -a feat_on <<< "${EFN_ALLOW_FEATURE_ON:-}"
+    for v in "${EFN_GATED_FEATURES[@]}"; do
+      risky=true
+      if efn_list_has "$v" "${EFN_GATED_FEATURES_OFF[@]}"; then risky=false; fi
+      if [[ "${!v:-}" == "$risky" ]] && ! efn_list_has "$v" "${feat_on[@]}"; then
+        _efn_err "production menolak ${v}=${risky} (L-73/SEC-171: menunggu persetujuan Legal/DPO/Meta; izin hanya EFN_ALLOW_FEATURE_ON di /etc/efn/deploy.conf)"
         return 1
       fi
     done

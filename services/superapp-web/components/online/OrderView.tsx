@@ -4,9 +4,10 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { apiFetch, goToLogin } from '@/lib/cart-client';
 import { companyDisplayName } from '@/lib/catalog';
-import { formatRupiah } from '@/lib/format';
+import { formatNumber, formatRupiah } from '@/lib/format';
 import {
   canCancel,
+  cashDue,
   clockSkewMs,
   formatCountdown,
   hasPickupCode,
@@ -190,12 +191,17 @@ export function OrderView({ initial, simulator }: { initial: OrderDetail; simula
         <p style={{ margin: 0 }}>
           Total: <strong>{formatRupiah(order.amount_payable)}</strong>
         </p>
+        {order.amount_points_value > 0 && (
+          <p style={{ margin: 0 }}>
+            Dibayar dengan poin: <strong>{formatRupiah(order.amount_points_value)}</strong> · Dibayar tunai: <strong>{formatRupiah(cashDue(order))}</strong>
+          </p>
+        )}
         {status === 'expired' && <p className="notice">Batas waktu pembayaran habis dan pesanan dibatalkan. Bila Anda sudah membayar, dana dikembalikan otomatis.</p>}
         {status === 'failed' && <p className="notice">Pesanan tidak dapat dibuat. Tidak ada tagihan. Silakan coba lagi dari keranjang.</p>}
         {status === 'review' && <p className="notice">Pembayaran Anda sedang diperiksa tim kami. Anda tidak perlu membayar ulang.</p>}
       </section>
 
-      {awaitingCounter && <CounterPayPanel code={order.payment?.counter_code ?? null} secondsLeft={left} amount={order.amount_payable} />}
+      {awaitingCounter && <CounterPayPanel code={order.payment?.counter_code ?? null} secondsLeft={left} amount={cashDue(order)} />}
 
       {awaiting && (
         <section className={`card ${styles.payBox}`} aria-labelledby="bayar-judul">
@@ -215,7 +221,7 @@ export function OrderView({ initial, simulator }: { initial: OrderDetail; simula
                 {formatCountdown(left)}
               </p>
               {qr ? (
-                <QrCode value={qr} className={styles.qr} label={`Kode QRIS pembayaran ${formatRupiah(order.amount_payable)}`} />
+                <QrCode value={qr} className={styles.qr} label={`Kode QRIS pembayaran ${formatRupiah(cashDue(order))}`} />
               ) : (
                 <p className="muted">Menyiapkan kode QR…</p>
               )}
@@ -291,10 +297,16 @@ export function OrderView({ initial, simulator }: { initial: OrderDetail; simula
           </p>
           {p.cancel_reason && <p className="small" style={{ margin: '0.25rem 0 0' }}>{CANCEL_REASON[p.cancel_reason] ?? 'Dibatalkan.'}</p>}
           <ul className={styles.lines}>
-            {p.lines.map((l) => (
-              <li key={l.product_id} className={styles.line}>
+            {p.lines.map((l, li) => (
+              <li key={`${l.product_id}-${li}`} className={styles.line}>
                 <span>
                   <span className={styles.lineName}>{l.name}</span>
+                  {l.attributes_text && (
+                    <span className="small muted">
+                      <br />
+                      {l.attributes_text}
+                    </span>
+                  )}
                   <span className="small muted">
                     <br />
                     {l.qty} × {formatRupiah(l.price_unit_incl)}
@@ -310,6 +322,26 @@ export function OrderView({ initial, simulator }: { initial: OrderDetail; simula
             {p.tax_groups.map((t) => (
               <TaxRow key={t.label} label={t.label} amount={t.amount} />
             ))}
+            {p.points_redeemed > 0 && (
+              <>
+                <dt>Dibayar dengan poin ({formatNumber(p.points_redeemed)} poin)</dt>
+                <dd>{formatRupiah(p.points_value_idr)}</dd>
+                <dt>Dibayar tunai</dt>
+                <dd>{formatRupiah(p.amount_cash ?? p.amount_payable - p.points_value_idr)}</dd>
+              </>
+            )}
+            {p.points_restored > 0 && (
+              <>
+                <dt>Poin dikembalikan</dt>
+                <dd>{formatNumber(p.points_restored)} poin</dd>
+              </>
+            )}
+            {p.points_earned > 0 && (
+              <>
+                <dt>Poin diperoleh</dt>
+                <dd>+{formatNumber(p.points_earned)} poin</dd>
+              </>
+            )}
             {p.refunded_amount > 0 && (
               <>
                 <dt>Dana dikembalikan</dt>

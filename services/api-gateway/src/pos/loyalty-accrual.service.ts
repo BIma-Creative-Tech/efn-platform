@@ -12,6 +12,16 @@ const WIB_OFFSET_MS = 7 * 3600 * 1000;
 /** Tanggal paling awal yang dilayani (sebelum platform berjalan tidak ada ledger). */
 const MIN_DATE_MS = Date.UTC(2026, 0, 1);
 
+/** G22 §14.C.5: alasan entri ledger poin online (source `online`) — klasifikasi akrual sama dengan padanan POS. */
+export const ONLINE_REASONS = {
+  EARN: 'online_earn',
+  REDEEM: 'online_redeem',
+  REVERSE: 'online_reverse',
+  RESTORE: 'online_restore',
+} as const;
+/** G22 §14.D.3 no. 3: entri eksplisit hangus karena tidak aktif (source `loyalty_expiry`). */
+export const INACTIVITY_EXPIRE_REASON = 'inactivity_expire';
+
 /**
  * Respons `GET /v1/pos/loyalty/accruals` (docs/04 §13.1 no. 6). Semua nilai **integer Rupiah** = poin × nilai tukar
  * global (kebijakan EFN aktif di akhir tanggal, L-62; fallback env). Field kontrak + field ADITIF (ditandai) untuk
@@ -135,6 +145,15 @@ export class LoyaltyAccrualService {
             AND expires_at >= $1 AND expires_at < $2 AND created_at < expires_at`,
         [start.toISOString(), end.toISOString(), company],
       );
+      // G22 §14.D.5: + Σ(−delta) entri `inactivity_expire` yang DIBUAT pada tanggal ini untuk penerbit ini (tanpa
+      // filter lahir-kedaluwarsa: lot berumur yang sudah hangus implisit tidak pernah disentuh job — sisa 0)
+      const inactivity = await q.query<{ inactivity_points: string | number | null }>(
+        `SELECT COALESCE(-SUM(delta_points), 0)::bigint AS inactivity_points
+           FROM platform.loyalty_ledger
+          WHERE reason = 'inactivity_expire' AND created_at >= $1 AND created_at < $2
+            AND COALESCE(issuer_company_code, company_code) = $3`,
+        [start.toISOString(), end.toISOString(), company],
+      );
       const closing = await q.query<{ closing_points: string | number | null }>(
         `SELECT COALESCE(SUM(delta_points), 0)::bigint AS closing_points
            FROM platform.loyalty_ledger
@@ -146,7 +165,10 @@ export class LoyaltyAccrualService {
       const pv = this.policies
         ? await this.policies.pointValueIdrAt(new Date(end.getTime() - 1), q)
         : { value: this.config.loyaltyPointValueIdr, version: null };
-      return { flows: flows.rows, expired: Number(expired.rows[0]?.expired_points ?? 0), closing: Number(closing.rows[0]?.closing_points ?? 0), pv };
+      return {
+        flows: flows.rows,
+        expired: Number(expired.rows[0]?.expired_points ?? 0) + Number(inactivity.rows[0]?.inactivity_points ?? 0),
+        closing: Number(closing.rows[0]?.closing_points ?? 0), pv };
     });
 
     const out = classifyFlows(company, result.flows);
@@ -233,8 +255,10 @@ export function classifyFlows(
     const credit = r.credit === true || r.credit === 't' || r.credit === 'true';
     const atCompany = r.company_code === company;
     const asIssuer = r.issuer === company;
+    // G22 §14.D.5: hangus tidak aktif dihitung terpisah (expired_value_idr), bukan forfeit
+    if (!credit && r.reason === INACTIVITY_EXPIRE_REASON) continue;
     if (credit) {
-      if (r.reason === REVERSE_REASON.RESTORE) {
+      if (r.reason === REVERSE_REASON.RESTORE || r.reason === ONLINE_REASONS.RESTORE) {
         if (atCompany) {
           out.restored += pts;
           add(out.restoredByIssuer, r.issuer, pts);
@@ -244,11 +268,11 @@ export function classifyFlows(
       } else if (asIssuer) {
         out.earned += pts;
       }
-    } else if (r.reason === POS_SOURCES.REDEEM) {
+    } else if (r.reason === POS_SOURCES.REDEEM || r.reason === ONLINE_REASONS.REDEEM) {
       if (atCompany) add(out.redeemedByIssuer, r.issuer, pts);
       if (asIssuer) out.redeemedAsIssuer += pts;
       if (asIssuer && !atCompany) add(out.redeemedAsIssuerByRedeemer, r.company_code, pts);
-    } else if (r.reason === REVERSE_REASON.CLAWBACK) {
+    } else if (r.reason === REVERSE_REASON.CLAWBACK || r.reason === ONLINE_REASONS.REVERSE) {
       if (asIssuer) out.earnReversed += pts;
     } else if (asIssuer) {
       out.forfeited += pts;

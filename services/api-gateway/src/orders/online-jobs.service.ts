@@ -1,4 +1,5 @@
-import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
+import { ONLINE_POINTS, OnlinePointsPort } from './online-points';
 import { AppConfig } from '../config/app-config';
 import { QUEUES } from '../common/amqp/queues';
 import { ODOO_ONLINE, OdooOnlineApi } from '../odoo-rpc/odoo-online.types';
@@ -47,6 +48,7 @@ export class OnlineJobsService implements OnModuleInit, OnModuleDestroy {
     @Inject(ONLINE_PAYMENTS) private readonly payments: OnlinePaymentsPort,
     private readonly saga: OnlineSagaService,
     private readonly metrics: OnlineMetrics,
+    @Optional() @Inject(ONLINE_POINTS) private readonly points: OnlinePointsPort | null = null,
   ) {}
 
   onModuleInit(): void {
@@ -119,6 +121,7 @@ export class OnlineJobsService implements OnModuleInit, OnModuleDestroy {
           if (intent?.status === 'paid') return 'skip' as const; // webhook menang
         }
         await r.transitionOrder(o.id, [o.status], 'expired', { close_reason: 'payment_expired', closed_at: new Date(this.now()) });
+        await this.points?.releaseOrder(r, o.id, await r.getParts(o.id)); // G22 C.3: release di transaksi transisi
         const m = unpaidClosedMessage(o.id, 'payment_expired');
         await r.enqueue(QUEUES.ORDER_UNPAID_CLOSED, { ...m }, m.idempotency_key);
         return 'expired' as const;

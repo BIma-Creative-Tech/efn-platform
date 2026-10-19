@@ -133,6 +133,20 @@ RPC_ALLOWLIST = {
     "company; in_review -> done (read-only)",
     ("efn.access.review", "action_efn_export_csv"): "grup efn_audit.group_auditor / base.group_system + "
     "check_access(read) + record rule company; CSV hanya dari baris snapshot review (tanpa login/kontak) -> attachment",
+    # efn_pos_bff_order (G22, E-27, docs/04 §14.A.5 path 13-15 + §14.7 L-70/L-76): 3 metode BFF lewat odoo-rpc-gateway.
+    # `_efn_qr_check_caller` = grup group_qr_bff + user internal aktif dengan TEPAT satu company = company config +
+    # tanpa grup lain selain Internal User (fail closed) + context klien dibuang kecuali lang; sudo setelah cek.
+    ("efn.pos.qr.order", "efn_qr_menu"): "_efn_qr_check_caller (baca; produk menu POS + harga/pajak dihitung server)",
+    ("efn.pos.qr.order", "efn_qr_submit"): "_efn_qr_check_caller + idempotency_key/payload_sha256 + sesi meja open & "
+    "belum kedaluwarsa + sesi POS opened + touch_row sesi + batas kiriman/item/nominal; order dibangun server (L-70)",
+    ("efn.pos.qr.order", "efn_qr_status"): "_efn_qr_check_caller (baca; hanya kiriman config itu, ref asing -> absent)",
+    # 3 metode POS (kasir/pelayan): `_efn_qr_check_pos_caller` = grup POS user + check_access(read) config + company
+    # user + sesi POS opened; BFF dipanggil server-side (service key tidak ke browser); QR dirender server.
+    ("pos.config", "efn_qr_session_open"): "_efn_qr_check_pos_caller + efn_qr_enabled + meja ∈ denah + order draft "
+    "meja; hanya id sesi BFF disimpan, token tidak disimpan/di-log",
+    ("pos.config", "efn_qr_session_close"): "_efn_qr_check_pos_caller + meja ∈ denah; tutup closed_by_staff + outbox",
+    ("pos.order", "efn_qr_claim_send"): "grup POS user + check_access(read) order + company user + order QR draft + "
+    "mode auto + sesi POS opened; UPDATE ... WHERE claimed IS NULL (satu terminal menang)",
 }
 
 MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}

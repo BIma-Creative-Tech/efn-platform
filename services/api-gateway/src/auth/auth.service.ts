@@ -1,4 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { DB, Db } from '../common/db/db';
+import { touchActivity } from '../loyalty/loyalty-activity';
+import { LoyaltyInactivityJob } from '../loyalty/loyalty-inactivity.job';
+import { ONLINE_POINTS, OnlinePointsPort } from '../orders/online-points';
 import { AppConfig } from '../config/app-config';
 import { ApiError, Errors } from '../common/errors/api-error';
 import { MemberService } from '../common/member/member.service';
@@ -24,6 +28,10 @@ export interface AuthOtpVerifyResponse {
 export interface MeResponse {
   member_ref_masked: string;
   points_balance: number;
+  /** G22 §14.C.2: poin tertahan reservasi aktif (checkout online/POS) — saldo tersedia = balance − reserved. */
+  points_reserved: number;
+  /** G22 §14.D.6: `expires_on` hanya bila ≤ 60 hari lagi (null bila saldo 0 / masih jauh / job mati). */
+  points_expiry: { inactive_since: string | null; expires_on: string | null; notice_sent: boolean };
 }
 
 /**
@@ -55,6 +63,10 @@ export class AuthService {
     private readonly loyalty: LoyaltyService,
     private readonly altcha: AltchaService,
     private readonly members: MemberService,
+    /** G22 §14.D.2: login OTP sukses = aktivitas (jam tidak aktif W-17). Opsional di test lama. */
+    @Optional() @Inject(DB) private readonly db: Db | null = null,
+    @Optional() @Inject(ONLINE_POINTS) private readonly points: OnlinePointsPort | null = null,
+    @Optional() private readonly expiry: LoyaltyInactivityJob | null = null,
   ) {}
 
   /** Pseudonim IP untuk nama key Redis (SEC-24). */
@@ -155,6 +167,12 @@ export class AuthService {
       // Hanya pemilik nomor (lolos OTP) yang melihat status ini → tidak membocorkan keanggotaan ke pihak lain
       throw Errors.conflict('account_deleting', 'Akun sedang dalam proses penghapusan.');
     }
+    // G22 §14.D.2 (D-22-12 default L-73): login OTP sukses = aktivitas member. Best effort — login tidak gagal karenanya.
+    if (this.db) {
+      await touchActivity(this.db, memberHash(this.config.memberHashPepper, res.memberRef), 'login_otp', new Date()).catch(() =>
+        this.logger.warn('Pembaruan aktivitas login gagal (diabaikan)'),
+      );
+    }
     const token = this.tokens.issue(member.id);
     this.logger.log(`Login berhasil untuk ${maskMsisdn(res.memberRef)}`);
     return { access_token: token.accessToken, token_type: 'Bearer', expires_in: token.expiresIn };
@@ -175,9 +193,14 @@ export class AuthService {
   async me(user: AuthUser): Promise<MeResponse> {
     const memberRef = await this.members.memberRef(user.memberId);
     if (!memberRef) throw Errors.unauthorized();
+    const balance = await this.loyalty.balanceByHash(user.memberHash);
     return {
       member_ref_masked: maskMsisdn(memberRef),
-      points_balance: await this.loyalty.balanceByHash(user.memberHash),
+      points_balance: balance,
+      points_reserved: this.points ? await this.points.reservedPoints(user.memberHash) : 0,
+      points_expiry: this.expiry
+        ? await this.expiry.expiryInfo(user.memberHash, balance)
+        : { inactive_since: null, expires_on: null, notice_sent: false },
     };
   }
 }

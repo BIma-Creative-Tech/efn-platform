@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- docs/08 §13.1b no. 1: konfigurasi QR per POS diaudit efn_audit (nilai lama/baru). Satu aturan per model
+     (efn.audit.rule unik per model): saat ini belum ada aturan pos.config di efn_setup_* — bila modul lain kelak
+     menambah aturan pos.config, gabungkan field di satu aturan. noupdate="1": admin boleh menambah field. -->
+<odoo noupdate="1">
+    <record id="audit_rule_pos_config_qr" model="efn.audit.rule">
+        <field name="name">EFN - Konfigurasi QR ponsel POS</field>
+        <field name="model_id" ref="point_of_sale.model_pos_config"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="tracked_field_ids" eval="[(6, 0, [
+            ref('efn_pos_bff_order.field_pos_config__efn_qr_enabled'),
+            ref('efn_pos_bff_order.field_pos_config__efn_qr_preset_id'),
+            ref('efn_pos_bff_order.field_pos_config__efn_qr_confirm_mode'),
+            ref('efn_pos_bff_order.field_pos_config__efn_qr_session_hours'),
+            ref('efn_pos_bff_order.field_pos_config__efn_qr_max_submissions'),
+            ref('efn_pos_bff_order.field_pos_config__efn_qr_max_items'),
+            ref('efn_pos_bff_order.field_pos_config__efn_qr_max_amount'),
+            ref('efn_pos_bff_order.field_pos_config__efn_qr_stale_minutes'),
+        ])]"/>
+    </record>
+</odoo>

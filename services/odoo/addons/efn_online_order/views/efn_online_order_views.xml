@@ -69,14 +69,21 @@
                             <field name="currency_id" invisible="1"/>
                             <field name="amount_total"/>
                             <field name="amount_payable"/>
+                            <!-- G22 W-12: porsi Poin EFN & tunai. -->
+                            <field name="points_redeemed" invisible="not points_redeemed"/>
+                            <field name="points_value" invisible="not points_value"/>
+                            <field name="amount_due"/>
                             <field name="paid_amount"/>
                             <field name="paid_at"/>
                             <field name="expires_at"/>
                             <field name="invoice_id"/>
                         </group>
                         <group>
+                            <field name="kitchen_started_at"/>
                             <field name="ready_at"/>
+                            <field name="ready_source"/>
                             <field name="picked_up_at"/>
+                            <field name="eligible_amount" invisible="state != 'picked_up'"/>
                             <field name="pickup_attempts"/>
                             <field name="cancel_reason"/>
                             <field name="cancelled_at"/>
@@ -98,6 +105,8 @@
                                     <field name="initiator"/>
                                     <field name="reason"/>
                                     <field name="amount"/>
+                                    <field name="points_value" optional="show"/>
+                                    <field name="cash_amount" optional="show"/>
                                     <field name="credit_note_id"/>
                                     <field name="state"/>
                                     <field name="currency_id" column_invisible="1"/>

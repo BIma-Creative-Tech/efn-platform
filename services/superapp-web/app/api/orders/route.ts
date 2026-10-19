@@ -5,6 +5,7 @@
  *   SINI (deterministik dari quote_id, lib/orders-route.ts) — browser tidak memilih key. `accept_total` hanya pembanding
  *   (BFF/Odoo menghitung ulang); bukan harga yang dipercaya.
  *   Opsional `invoice_request` (§13.5): divalidasi ulang di sini lalu diteruskan; tidak di-log dan tidak ada di respons.
+ *   Opsional `points_redeem` (§14.C.2, G22): `[{ channel_code, points }]` divalidasi ulang lalu diteruskan.
  * Semua respons `no-store`.
  */
 import type { NextRequest } from 'next/server';
@@ -13,6 +14,7 @@ import { CURSOR_RE, isUuid, parseLimit } from '@/lib/catalog';
 import { parseCheckoutResult, parseOrderList } from '@/lib/orders';
 import { parseInvoiceRequest } from '@/lib/invoice-request';
 import { isPaymentMethod } from '@/lib/payment';
+import { sanitizePointsRedeem } from '@/lib/points';
 import {
   checkoutIdempotencyKey,
   mapOnlineFailure,
@@ -52,6 +54,7 @@ export async function POST(req: NextRequest) {
     accept_total?: unknown;
     payment_method?: unknown;
     invoice_request?: unknown;
+    points_redeem?: unknown;
   };
   const quoteId = v.quote_id;
   const acceptTotal = v.accept_total;
@@ -67,6 +70,11 @@ export async function POST(req: NextRequest) {
     invoice = parseInvoiceRequest(v.invoice_request);
     if (!invoice) return onlineError(400, 'invalid_request');
   }
+  // §14.C.2 (G22): `points_redeem` = [{ channel_code, points }], satu entri per kanal, points bilangan bulat > 0. Hanya
+  // JUMLAH POIN yang dikirim klien (nilai Rp dihitung server). `accept_total` tidak berubah (= Σ amount_payable).
+  // Idempotency-Key tetap dari quote_id (kontrak: key sama + poin beda -> 409 idempotency_conflict).
+  const pointsRedeem = sanitizePointsRedeem(v.points_redeem);
+  if (pointsRedeem === null) return onlineError(400, 'invalid_request');
   const r = await bffFetch<unknown>('/v1/orders', {
     method: 'POST',
     token: g.token,
@@ -75,6 +83,7 @@ export async function POST(req: NextRequest) {
       accept_total: acceptTotal,
       ...(v.payment_method !== undefined ? { payment_method: v.payment_method } : {}),
       ...(invoice ? { invoice_request: invoice } : {}),
+      ...(pointsRedeem ? { points_redeem: pointsRedeem } : {}),
     },
     headers: { 'idempotency-key': checkoutIdempotencyKey(quoteId) },
     incoming: req.headers,

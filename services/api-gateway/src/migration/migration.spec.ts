@@ -32,7 +32,7 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
   describe('opening-balance', () => {
     function setup() {
       const clock = new FakeClock();
-      const config = testConfig({ LOYALTY_POINT_EXPIRY_DAYS: '365' });
+      const config = testConfig({ LOYALTY_POINT_MAX_AGE_DAYS: '365' }); // G22 D-22-18 (pengganti LOYALTY_POINT_EXPIRY_DAYS)
       const cipher = testCipher(config);
       const db = new FakeLoyaltyDb();
       const loyalty = new LoyaltyService(config, db, cipher);
@@ -57,6 +57,7 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
         reason: 'opening_balance',
       });
       expect(ctx.db.ledger[0].expires_at).not.toBeNull();
+      expect(ctx.db.activity.get(ctx.hash)?.last_kind).toBe('migration_import'); // G22 §14.D.2
       expect(ctx.cipher.decrypt(ctx.db.ledger[0].member_ref_enc as Buffer, PII_AAD.LOYALTY_LEDGER_MEMBER_REF)).toBe(MEMBER);
       expect(await ctx.svc.openingBalance(dto)).toEqual({ applied: false, points_balance: 250 });
       expect(ctx.db.ledger).toHaveLength(1);

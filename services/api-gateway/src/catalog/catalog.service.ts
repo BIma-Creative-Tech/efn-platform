@@ -4,7 +4,7 @@ import { DB, Db } from '../common/db/db';
 import { Errors } from '../common/errors/api-error';
 import { KV_STORE, KvStore } from '../common/redis/kv-store';
 import { COMPANY_CODES } from '../loyalty/loyalty.service';
-import { CatalogChannelInfo, CatalogPrice, ChannelPaymentMode, ODOO_ONLINE, OdooOnlineApi, StockStatus } from '../odoo-rpc/odoo-online.types';
+import { CatalogChannelInfo, CatalogPrice, ChannelPaymentMode, ItemAttribute, ODOO_ONLINE, OdooOnlineApi, StockStatus } from '../odoo-rpc/odoo-online.types';
 import { OnlineErrors, mapOdooError } from '../odoo-rpc/online-errors';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
 import { BRAND_CODE_RE, IMAGE_SHA_RE, parsePaymentModes } from '../odoo-rpc/odoo-online.parse';
@@ -29,6 +29,13 @@ export interface ChannelInfo {
    * ∩ `ONLINE_PAYMENT_METHODS`. Opsional di tipe (fixture lama); `CatalogService` selalu mengisinya.
    */
   payment_modes?: ChannelPaymentMode[] | null;
+  /** G22 §14.B B-2: `retail` | `fnb` (salinan lama tanpa field → `retail`). */
+  business_type?: 'retail' | 'fnb';
+  /**
+   * G22 §14.C.1 no. 5: poin online efektif kanal = flag kanal Odoo ∧ kill switch BFF (`ONLINE_LOYALTY_EARN_ENABLED`,
+   * `ONLINE_LOYALTY_REDEEM_ENABLED`).
+   */
+  loyalty?: { earn: boolean; redeem: boolean };
 }
 export interface ProductSummary {
   product_id: number;
@@ -42,6 +49,8 @@ export interface ProductSummary {
   max_qty: number;
   /** G20 §12.3 / L-52: berat produk (kg) atau `null`. Opsional di tipe (fixture lama); `toSummary` selalu mengisinya. */
   weight_kg?: number | null;
+  /** G22 B-2 / L-78: atribut `no_variant` (format A.6); `[]` ritel. */
+  attributes?: ItemAttribute[];
 }
 export interface ItemData {
   name: string;
@@ -51,6 +60,8 @@ export interface ItemData {
   max_qty: number;
   /** G20 §12.3: `null`/tidak ada (salinan pra-G20) = berat belum diketahui. */
   weight_kg?: number | null;
+  /** G22 B-2: atribut (salinan pra-G22 tanpa field → []). */
+  attributes?: ItemAttribute[];
 }
 
 /** G20 §12.1: kode PT yang diterima dari blok `channel` Odoo (sama dengan `COMPANY_CODES` loyalty). */
@@ -152,6 +163,11 @@ export class CatalogService {
         .map((o) => ({ outlet_code: o.outlet_code, public_name: o.public_name, pickup_enabled: o.pickup_enabled, prep_minutes: o.prep_minutes })),
       // L-55: yang ditampilkan hanya mode yang juga diizinkan BFF (`ONLINE_PAYMENT_METHODS`)
       payment_modes: (modes ?? this.config.onlinePaymentMethods).filter((m) => this.config.onlinePaymentMethods.includes(m)),
+      business_type: (c as { business_type?: unknown }).business_type === 'fnb' ? 'fnb' : 'retail',
+      loyalty: {
+        earn: (c as { loyalty?: { earn?: unknown } }).loyalty?.earn === true && this.config.onlineLoyaltyEarnEnabled,
+        redeem: (c as { loyalty?: { redeem?: unknown } }).loyalty?.redeem === true && this.config.onlineLoyaltyRedeemEnabled,
+      },
     };
   }
 
@@ -253,7 +269,7 @@ export class CatalogService {
     const res = await this.db.query<{ channel_code: string }>(
       `SELECT channel_code FROM platform.online_catalog_item
         WHERE image_sha = $1 AND image_ready_sha = $1 AND deleted_at IS NULL AND channel_code = ANY($2::text[]) LIMIT 1`,
-      [sha, this.config.onlineChannels],
+      [sha, this.config.catalogSyncChannels], // G22: gambar menu QR lewat endpoint yang sama
     );
     const ch = res.rows[0]?.channel_code;
     if (!ch) throw Errors.notFound();
@@ -329,5 +345,6 @@ function toSummary(r: ItemRow): ProductSummary {
     tax_labels: price?.tax_labels ?? [],
     max_qty: Number(r.data.max_qty ?? 99),
     weight_kg: typeof r.data.weight_kg === 'number' && Number.isFinite(r.data.weight_kg) ? r.data.weight_kg : null,
+    attributes: Array.isArray(r.data.attributes) ? r.data.attributes : [],
   };
 }

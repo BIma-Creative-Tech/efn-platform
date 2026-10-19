@@ -45,6 +45,10 @@ GRANT SELECT, INSERT ON efn_dwh.loyalty_points_daily TO etl_writer;
 -- Gelombang 21 (ADR-036 §0.7): master wilayah kab/kota (09-g21-region.sql). Kolom baru fact_sales_line
 -- (customer_region_code) tercakup grant tabel di atas.
 GRANT SELECT, INSERT ON efn_dwh.dim_region TO etl_writer;
+-- Gelombang 22 (10-g22-kds-online-points.sql): mart KDS (ReplacingMergeTree, tanpa PII). Kolom baru
+-- loyalty_points_daily.channel tercakup grant tabel G18.
+GRANT SELECT, INSERT ON efn_dwh.fact_kds_ticket TO etl_writer;
+GRANT SELECT, INSERT ON efn_dwh.dim_kds_station TO etl_writer;
 -- Salinan audit tamper-evident: HANYA SELECT + INSERT. Sengaja TANPA ALTER DELETE/UPDATE, TRUNCATE, DROP, OPTIMIZE:
 -- ETL (atau kredensial efn_etl yang bocor) tidak bisa menghapus/mengubah salinan; perubahan hanya oleh admin ClickHouse
 -- (terdeteksi lewat kepala rantai di Loki). Bila suatu saat ada `GRANT ALL`/wildcard ke etl_writer, cabut dulu.

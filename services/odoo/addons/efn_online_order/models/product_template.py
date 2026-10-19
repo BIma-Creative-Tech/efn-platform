@@ -26,6 +26,12 @@ class ProductTemplate(models.Model):
         help="Teks polos (tanpa HTML) maks. 2.000 karakter; dirender sebagai teks di Super-App.",
     )
     efn_online_sequence = fields.Integer(string="Urutan online", default=10)
+    efn_online_sold_out = fields.Boolean(
+        string="Habis (online)",
+        copy=False,
+        help="G22 W-04 B-3 (docs/04 §14.B): ditandai Ops saat menu habis. Stok online = 'out' dan quote/place menolak "
+        "produk ini (issue out_of_stock) di semua kanal. Tidak memengaruhi POS kasir.",
+    )
 
     @api.constrains("efn_online_channel_ids", "company_id", "sale_ok", "taxes_id")
     def _check_efn_online_channels(self):

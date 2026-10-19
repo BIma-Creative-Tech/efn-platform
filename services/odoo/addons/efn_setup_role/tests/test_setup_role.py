@@ -33,7 +33,7 @@ ROLE_GROUPS = {
     "warehouse_staff": ("stock.group_stock_user",),
     "cs_agent": ("sales_team.group_sale_salesman_all_leads",),
     "cs_refund_approver": ("sales_team.group_sale_salesman_all_leads", "efn_role.group_refund_approver"),
-    "sales_manager_online": ("sales_team.group_sale_manager",),
+    "sales_manager_online": ("sales_team.group_sale_manager", "stock.group_stock_user"),
     "loyalty_manager": ("efn_loyalty_accounting.group_loyalty_manager",),
     "auditor": ("account.group_account_readonly", "efn_audit.group_auditor"),
 }
@@ -145,9 +145,10 @@ class TestEfnSetupRole(TransactionCase):
     def test_sync_from_job_only_for_non_sensitive_roles(self):
         sensitive = sensitive_group_ids(self.env)
         flagged = self.data_roles.filtered("sync_from_job")
-        self.assertEqual({r.job_id.id for r in flagged}, {
-            self.env.ref(f"efn_setup_org.job_{job}_{s}").id for job in SYNC_JOBS for s in COMPANIES
-        })
+        self.assertEqual(
+            {r.job_id.id for r in flagged},
+            {self.env.ref(f"efn_setup_org.job_{job}_{s}").id for job in SYNC_JOBS for s in COMPANIES},
+        )
         for role in flagged:
             with self.subTest(role=role.name):
                 self.assertFalse(role.is_sensitive_role)

@@ -5,7 +5,8 @@
 2. rate limit per sesi & per kasir (gagal beruntun, lihat ``efn.online.counter.lookup``);
 3. kode dinormalisasi (huruf besar, tanpa spasi/strip) -> digest KDF per company -> pesanan ``counter`` milik company
    config DAN outlet pesanan = gudang config; masih ``placed`` dan belum kedaluwarsa;
-4. sukses -> HANYA ``{"order_label", "amount_payable"}`` (L-50: tanpa data pelanggan); gagal ->
+4. sukses -> HANYA ``{"order_label", "amount_due"}`` (L-50: tanpa data pelanggan; G22 §14.C.4: porsi TUNAI =
+   ``amount_payable`` − nilai Poin EFN, bukan ``amount_payable``); gagal ->
    ``{"error_code", "message"}`` (tanpa membedakan PT/outlet lain dari kode salah). Kode tidak di-log/disimpan.
 Setiap panggilan dicatat (jejak + klaim untuk sync). Offline: tombol dinonaktifkan di frontend.
 """
@@ -108,7 +109,7 @@ class PosConfig(models.Model):
         """Cari pesanan online bayar di kasir dari kode bayar (E-45, docs/04 §12.2 no. 5).
 
         :param str code: kode bayar dari aplikasi pelanggan (8 karakter alfabet §10.2; strip/spasi diabaikan).
-        :returns: ``{"order_label", "amount_payable"}`` atau ``{"error_code", "message"}``.
+        :returns: ``{"order_label", "amount_due"}`` atau ``{"error_code", "message"}``.
         """
         session = self._efn_counter_check_caller()
         if not self.efn_online_counter_enabled:
@@ -139,4 +140,5 @@ class PosConfig(models.Model):
             return self._efn_counter_error("not_payable")
         Lookup.create({**base, "result": "ok", "online_order_id": order.id})
         _logger.info("EFN bayar di kasir: lookup order %s oleh user %s (config %s)", order.id, self.env.uid, self.id)
-        return {"order_label": order.name, "amount_payable": order._efn_amount_out(order.amount_payable)}
+        # G22 W-12 (docs/04 §14.C.4): kasir menagih porsi tunai saja; porsi Poin EFN sudah ditahan BFF saat checkout.
+        return {"order_label": order.name, "amount_due": order._efn_amount_out(order.amount_due)}

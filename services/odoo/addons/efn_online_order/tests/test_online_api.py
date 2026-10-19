@@ -129,8 +129,10 @@ class TestEfnOnlineCatalog(EfnOnlineCommon):
                 "prices",
                 "max_qty",
                 "weight_kg",  # G20 W-33 (docs/04 §12.3), nullable
+                "attributes",  # G22 B-2 (docs/04 §14.B, format §14.A.6), [] tanpa atribut no_variant
             },
         )
+        self.assertEqual(item["attributes"], [])
         self.assertIsNone(item["weight_kg"])  # produk fixture tanpa berat
         self.assertNotIn("standard_price", json.dumps(catalog))
         price = item["prices"][0]
@@ -158,8 +160,21 @@ class TestEfnOnlineCatalog(EfnOnlineCommon):
         catalog = self.channel_api().efn_online_catalog("TST")
         block = catalog["channel"]
         self.assertEqual(
-            set(block), {"code", "name", "brand_code", "company_code", "currency", "payment_modes", "outlets"}
+            set(block),
+            {
+                "code",
+                "name",
+                "brand_code",
+                "company_code",
+                "currency",
+                "payment_modes",
+                "outlets",
+                "business_type",  # G22 B-2
+                "loyalty",  # G22 §14.C.1 no. 5
+            },
         )
+        self.assertEqual(block["business_type"], "retail")
+        self.assertEqual(block["loyalty"], {"earn": False, "redeem": False})
         self.assertEqual(block["payment_modes"], ["qris"])  # G20 E-45: default kanal
         self.assertEqual(block["code"], "TST")
         self.assertIsNone(block["brand_code"])  # G19 E-37a: kosong -> null
@@ -652,7 +667,7 @@ class TestEfnOnlinePaidCancelRefund(EfnOnlineCommon):
         manager = new_test_user(
             self.env,
             login="efn_online_ops_mgr",
-            groups="base.group_user,sales_team.group_sale_manager",
+            groups="base.group_user,sales_team.group_sale_manager,stock.group_stock_user",
             company_id=self.company.id,
             company_ids=[Command.set(self.company.ids)],
         )
@@ -704,7 +719,10 @@ class TestEfnOnlineSecurityR10(EfnOnlineCommon):
             **common,
         )
         cls.manager = new_test_user(
-            cls.env, login="efn_r10_mgr", groups="base.group_user,sales_team.group_sale_manager", **common
+            cls.env,
+            login="efn_r10_mgr",
+            groups="base.group_user,sales_team.group_sale_manager,stock.group_stock_user",
+            **common,
         )
         cls.stock_user = new_test_user(
             cls.env, login="efn_r10_stock", groups="base.group_user,stock.group_stock_user", **common
@@ -849,7 +867,7 @@ class TestEfnOnlineInitiatorPayload(EfnOnlineCommon):
         user = new_test_user(
             self.env,
             login=login,
-            groups="base.group_user,sales_team.group_sale_manager",
+            groups="base.group_user,sales_team.group_sale_manager,stock.group_stock_user",
             company_id=self.company.id,
             company_ids=[Command.set(self.company.ids)],
         )
@@ -1111,7 +1129,7 @@ class TestEfnOnlineGuardedFieldsSec110(EfnOnlineCommon):
         manager = new_test_user(
             self.env,
             login="efn_s110_mgr",
-            groups="base.group_user,sales_team.group_sale_manager",
+            groups="base.group_user,sales_team.group_sale_manager,stock.group_stock_user",
             company_id=self.company.id,
             company_ids=[Command.set(self.company.ids)],
         )

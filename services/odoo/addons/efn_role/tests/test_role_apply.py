@@ -9,6 +9,8 @@ from odoo.fields import Command
 from odoo.tests import new_test_user, tagged
 from odoo.tools import mute_logger
 
+from odoo.addons.efn_role.models.role_policy import TECHNICAL_GROUP_XMLIDS
+
 from .common import EfnRoleCase
 
 
@@ -132,7 +134,8 @@ class TestEfnRoleApply(EfnRoleCase):
         with self.assertRaises(ValidationError):
             self._assign(role, portal)
         found = False
-        for xmlid in ("efn_online_order.group_online_channel", "efn_pos_kds.group_kds_device"):
+        # E-47d (G22): + user teknis QR ponsel (efn_pos_bff_order), dilewati bila modul belum terpasang.
+        for xmlid in TECHNICAL_GROUP_XMLIDS:
             group = self.env.ref(xmlid, raise_if_not_found=False)
             if group is None:
                 continue

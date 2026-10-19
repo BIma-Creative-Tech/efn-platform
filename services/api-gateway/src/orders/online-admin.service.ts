@@ -159,6 +159,9 @@ export class OnlineAdminService {
         status: over ? 'failed' : needsApproval ? 'approval_required' : 'odoo_done',
         requested_by: 'cs',
         initiated_by: input.actor,
+        // G22 §14.C.4: porsi poin/tunai nota kredit Odoo (gateway/POS hanya menerima porsi tunai)
+        points_value: res.points_value ?? 0,
+        cash_amount: res.cash_amount ?? null,
       });
       if (over) {
         await r.updateRefund(rf.id, { failure_reason: 'refund_exceeds_portion' });

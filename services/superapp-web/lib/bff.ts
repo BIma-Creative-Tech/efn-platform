@@ -182,6 +182,10 @@ export interface OtpVerifyFailure {
 export interface MeResponse {
   member_ref_masked: string;
   points_balance: number;
+  /** G22 (§14.C.2): poin yang sedang ditahan untuk pesanan online yang belum dibayar. Opsional. */
+  points_reserved?: number;
+  /** G22 (§14.D.6): info poin hangus; `expires_on` hanya terisi bila ≤ 60 hari lagi. Opsional; diparse defensif (lib/points.ts). */
+  points_expiry?: unknown;
 }
 
 export type ReportStatus = 'queued' | 'processing' | 'valid' | 'rejected' | 'flagged';

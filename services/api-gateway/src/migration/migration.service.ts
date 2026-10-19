@@ -8,6 +8,7 @@ import { erasureBlock } from '../common/pii/erasure-suppression';
 import { PII_AAD, PiiCipher } from '../common/pii/crypto';
 import { maskMsisdn } from '../common/pii/pii';
 import { reportLoyaltyAnomaly } from '../loyalty/loyalty-anomaly';
+import { touchActivity } from '../loyalty/loyalty-activity';
 import { LoyaltyService, splitCredit } from '../loyalty/loyalty.service';
 import { expiryFor } from '../pos/pos-loyalty.service';
 import { MigrationMemberDto, OpeningBalanceDto, parseOpaqueSourceRef } from './dto/migration.dto';
@@ -138,7 +139,7 @@ export class MigrationService {
       const parts = splitCredit(
         await this.loyalty.buckets(q, hash, at),
         dto.points,
-        expiryFor(at.getTime(), this.config.loyaltyPointExpiryDays),
+        expiryFor(at.getTime(), this.config.loyaltyPointMaxAgeDays), // G22 D-22-18 (default 0 = tanpa expires_at)
         dto.companyCode,
       );
       if (parts.length > keys.length) throw new Error('migration: bagian kredit melebihi kunci idempotensi');
@@ -161,6 +162,8 @@ export class MigrationService {
         );
       }
       this.metrics.recordLoyaltyMigrationPoints(dto.companyCode, dto.points);
+      // G22 §14.D.2: impor migrasi = aktivitas (jam tidak aktif mulai dari tanggal impor, dibatasi LOYALTY_ACTIVITY_EPOCH)
+      await touchActivity(q, hash, 'migration_import', at);
       this.logger.log(
         `EFN_LOYALTY_MIGRATION ${JSON.stringify({ company: dto.companyCode, points: dto.points, source_ref: dto.sourceRef.replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 64) })}`,
       );

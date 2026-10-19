@@ -841,3 +841,144 @@ Perlu ditambahkan devsecops ke daftar migrasi WAJIB `scripts/deploy.sh` (BFF G21
 - `orders/invoice-request.spec.ts`: validasi 14 kasus 400 tanpa nilai di pesan; sidik hanya penanda; GL applied + kunci idempoten + urutan place→set + tanpa PII di repo/outbox/log/respons + replay/konflik; F&B & campuran 422 sebelum order; Odoo 422 → kompensasi; transport → anomali + pending_cs; klien json2 path/argumen/kode bisnis/log tanpa PII.
 - `common/pii/shared-vectors.spec.ts` (AC-2): membaca `services/odoo/addons/efn_pii/tests/data/efn_pii_shared_vectors.json` (atau `EFN_PII_SHARED_VECTORS`); file tidak ada → suite di-skip dengan judul yang menyebut path. Nilai `expected_*` saat ini masih **null** (generator Odoo belum dijalankan) → hanya format/round-trip yang terbukti + `console.warn`; perbandingan byte-per-byte aktif otomatis setelah lead menjalankan `efn_pii/tools/shared_vectors.py`.
 - Spec lama yang terdampak dan sudah disesuaikan/diperiksa (bukan dijalankan): `pos-loyalty.spec.ts` (FakeLoyaltyDb diperluas; alokasi tanpa issuer tetap sama), `privacy.spec.ts`, `json2-client.spec.ts`, `migration.spec.ts`, `loyalty-guard.spec.ts` (recon memakai plafon = env default).
+
+## Gelombang 22 — QR meja F&B, poin online, poin hangus tidak aktif (docs/04 §14.A–§14.E, L-70..L-80; 19 Okt 2026)
+
+Branch `chore/wave-22` (HEAD 852b5fe), **tanpa commit**. **Build (tsc), lint (eslint), dan Jest BELUM dijalankan lokal** (agent tanpa shell; lead menjalankan Jest di container). Migrasi `11-platform-g22.sql` **belum dijalankan** ke PostgreSQL. Semua di bawah = hasil penulisan + penalaran, bukan hasil eksekusi.
+
+### File
+- Baru — `src/fnb/`: `fnb-token.ts` (token `fts1`), `fnb.model.ts`, `odoo-qr.ts` (klien json2 `efn.pos.qr.order/efn_qr_{menu,submit,status}` + `MockOdooQr`), `fnb-metrics.ts`, `fnb.repository.ts`, `fnb.service.ts`, `fnb-pos.service.ts`, `fnb-earn.ts`, `fnb-jobs.service.ts`, `fnb-event.guard.ts`, `fnb.controller.ts`, `fnb.module.ts`, `testing/fnb-fakes.ts`, `fnb.spec.ts`, `README.md`.
+- Baru — lain: `loyalty/loyalty-activity.ts`, `loyalty/loyalty-inactivity.job.ts` (+ `.spec.ts`), `orders/online-points.ts` (+ `.spec.ts`), `notification/loyalty-expiry-subject.ts`, `notification/loyalty-expiry-notify.spec.ts`, `pos/loyalty-accrual-g22.spec.ts`, `config/g22-config.spec.ts`, `infra/postgres/init/11-platform-g22.sql`.
+- Diubah: `app.module.ts`, `main.ts` (peringatan start), `config/{app-config.ts, secrets.loader.ts}`, `auth/{auth.module.ts, auth.service.ts, auth.service.spec.ts}`, `loyalty/{loyalty-policy.ts, loyalty-policy.service.ts, loyalty-policy.spec.ts, loyalty.service.ts, loyalty.module.ts, loyalty-anomaly.ts, loyalty-earn.consumer.ts, README.md}`, `pos/{pos-loyalty.service.ts, dto/pos-loyalty.dto.ts, pos.module.ts, loyalty-accrual.service.ts, loyalty-recon.service.ts, pos-loyalty.spec.ts, loyalty-g21.spec.ts}`, `migration/{migration.service.ts, migration.spec.ts}`, `odoo-rpc/{json2-client.ts, odoo-rpc.module.ts, odoo-online.types.ts, odoo-online.parse.ts, odoo-online.mock.ts, online-errors.ts, json2-client.spec.ts}`, `catalog/{catalog.service.ts, catalog-sync.service.ts, catalog.controller.ts, catalog.spec.ts}`, `cart/{cart-store.ts, cart.service.ts, cart.module.ts, quote.service.ts}`, `orders/{online.model.ts, online.repository.ts, orders.service.ts, orders.controller.ts, online-saga.service.ts, online-jobs.service.ts, order-events.service.ts, online-admin.service.ts, orders.module.ts, online-saga.spec.ts, README.md}`, `privacy/{erasure.service.ts, dsar.service.ts, README.md}`, `notification/{notify-push.consumer.ts, templates.ts, README.md}`, `common/metrics/metrics.service.ts`, `common/testing/fake-loyalty-db.ts`, `scripts/deploy.sh` (baris migrasi `11-platform-g22.sql` saja).
+
+### Env / secret baru
+| Env / secret | Default | Catatan |
+|---|---|---|
+| secret `fnb_table_token_key` (`FNB_TABLE_TOKEN_KEY_FILE`) | — | ≥ 32 byte; K = HKDF-SHA256(info `efn:fnb_table_token:v1`). Wajib bila `FNB_QR_ENABLED=true` |
+| secret `fnb_table_token_key_prev` (`FNB_TABLE_TOKEN_KEY_PREV_FILE`) | tidak ada | verifikasi saja, overlap rotasi 4 jam |
+| secret `odoo_fnb_event_hmac` (`ODOO_FNB_EVENT_HMAC_FILE`) | — | wajib bila QR aktif; harus ≠ `odoo_bff_api_key` dan ≠ `odoo_online_event_hmac` |
+| secret `odoo_api_key_qr_pb` / `_bcf` (`ODOO_API_KEY_QR_PB_FILE`/`_BCF_FILE`) | — | user teknis json2 QR per PT; literal env ditolak di luar dev; placeholder `disabled` ditolak |
+| `FNB_QR_ENABLED` | `false` (semua lingkungan) | kill switch; true → mTLS ke gateway Odoo diwajibkan |
+| `FNB_QR_COMPANIES` | `PB,BCF` | hanya PB/BCF |
+| `FNB_QR_BASE_URL_PB` / `_BCF` | — | https, tanpa kredensial/query/fragment; wajib per PT bila QR aktif |
+| `FNB_TABLE_SESSION_TTL_SECONDS` | 14400 (300..14400) | |
+| `FNB_MAX_SUBMISSIONS_PER_SESSION` | **10** (L-76) | **compose masih default 20 → devsecops samakan ke 10** |
+| `FNB_MAX_ITEMS_PER_SESSION` / `FNB_MAX_LINES` / `FNB_MAX_LINE_QTY` | 150 / 30 / 20 | PLACEHOLDER Ops F&B |
+| `FNB_CAPTCHA_MODE` | `off` | `off|first_submit|always` |
+| `FNB_MENU_SYNC_SECONDS` / `FNB_JOB_INTERVAL_MS` | 300 / 60000 | 0 = mati |
+| `FNB_SESSION_RETENTION_DAYS` / `FNB_SESSION_MEMBER_LINK_DAYS` | 180 / 30 | |
+| `FNB_QR_POINTS_ENABLED` | `false` | |
+| `FNB_RL_<NAMA>_LIMIT` / `_WINDOW_SECONDS` | per nama | `SESSION_READ, IP_READ, SUBMIT_SESSION, SUBMIT_IP, ORDERS_SESSION, CLAIM_MEMBER, OPEN_CONFIG, EVENTS` (EVENTS belum dipasang, lihat penyimpangan) |
+| `ONLINE_LOYALTY_REDEEM_ENABLED` / `ONLINE_LOYALTY_EARN_ENABLED` | `false` / `false` | flag kanal Odoo juga harus true |
+| `ONLINE_REDEEM_HOLD_EXTRA_SECONDS` | 600 (60..3600) | |
+| `LOYALTY_EXPIRY_ENABLED` | `false` (L-73) | true butuh `LOYALTY_ACTIVITY_EPOCH` |
+| `LOYALTY_EXPIRY_DRY_RUN` | `true` | |
+| `LOYALTY_INACTIVITY_EXPIRY_MONTHS` | 12 | fallback; kebijakan EFN menang |
+| `LOYALTY_POLICY_CEILING_INACTIVITY_MONTHS_MIN` / `_MAX` | 6 / 36 | |
+| `LOYALTY_EXPIRY_NOTICE_DAYS` | 30 (7..60) | |
+| `LOYALTY_EXPIRY_RUN_HOUR_WIB` / `LOYALTY_EXPIRY_NOTICE_HOUR_WIB` | 1 / 10 | |
+| `LOYALTY_EXPIRY_BATCH_SIZE` / `LOYALTY_EXPIRY_MAX_PER_RUN` / `LOYALTY_EXPIRY_TICK_MS` | 500 / 20000 / 600000 | |
+| `LOYALTY_ACTIVITY_EPOCH` | — | `YYYY-MM-DD` (00:00 WIB) |
+| `LOYALTY_INACTIVE_ANONYMIZE` / `_GRACE_DAYS` | `false` / 0 | OFF di production sampai DPO + Legal |
+| `LOYALTY_EXPIRY_NOTICE_RETENTION_DAYS` / `LOYALTY_EXPIRY_PROOF_RETENTION_DAYS` | 400 / 1825 | PLACEHOLDER DPO |
+| `LOYALTY_POINT_MAX_AGE_DAYS` | **0** (= lot tanpa `expires_at`) | pengganti |
+| `LOYALTY_POINT_EXPIRY_DAYS` | **DIHAPUS** | production → gagal start; dev → peringatan, diabaikan |
+
+### Migrasi `11-platform-g22.sql` (idempoten)
+Tabel baru `fnb_table_session` (order_uuid nullable, unique parsial satu sesi open per config+meja, TTL ≤ 4 jam), `fnb_submission` (UNIQUE session+Idempotency-Key; baris tanpa teks catatan), `fnb_menu_item`, `fnb_menu_sync`, `loyalty_member_activity` (+ backfill dari ledger), `loyalty_expiry_notice`, `loyalty_expiry_notice_proof` (tanpa identitas, tidak ikut erasure). Kolom: `loyalty_reservation.channel/part_id` (token_jti nullable hanya online), poin di `online_order`/`online_order_part`/`online_refund`, `online_order_part.kitchen_started_at`. `dsar_request` type `retention` (member_id nullable hanya untuk retention). Grant: efn_bff DML (tanpa DELETE ledger); efn_readonly kolom non-PII (L-77). Sudah ditambahkan ke daftar wajib `scripts/deploy.sh`.
+
+### Bentuk respons untuk frontend (persis)
+- QR (header `X-Table-Session`, tidak pernah di path/query):
+  - `GET /v1/fnb/session` → `{ outlet_name, table_label, company_code, brand_code, expires_at, confirm_mode, limits:{max_lines, max_line_qty, submissions_left}, points:{claimable, claimed, claimed_by_me?} }`
+  - `GET /v1/fnb/menu` → `{ categories:[{category_id,name,sequence,image_sha:null}], products:[{product_id,name,category_id,image_sha,price_excl,tax_labels,price_note,available,attributes}], menu_synced_at }` (`Cache-Control: private, max-age=60`)
+  - `POST /v1/fnb/orders` (Idempotency-Key) → **202** `{ submission_id, status, lines:[{product_id,name,qty,attribute_value_ids,attributes_text}], indicative_subtotal_excl }`
+  - `GET /v1/fnb/orders` → `{ items:[{submission_id, created_at, status, lines:[{name,qty,attribute_value_ids,attributes_text}]}] }`; `GET /v1/fnb/orders/:id` → `{ submission_id, status, updated_at }`
+  - `POST /v1/fnb/session/points-claim` → `{ claimed: true }`; `DELETE` → 204
+  - Error: `401 table_session_invalid` (generik), `409 table_session_closed`, `503 ordering_unavailable`, sisanya §14.A.3.
+- POS (mTLS + service key): `POST /v1/pos/fnb/table-sessions` → **201** `{ table_session_id, qr_url, expires_at }` (`qr_url = https://<tenant>/meja#t=<token>`); `POST /v1/pos/fnb/events` (HMAC) → `{ ok: true, status: "applied"|"duplicate"|"ignored_stale"|"ignored_unknown_event" }`.
+- Online (aditif): checkout `points_redeem: [{ channel_code, points }]`; `GET /v1/orders/:id` order + `amount_points_value`, `amount_cash`; per bagian `points_redeemed`, `points_value_idr`, `amount_cash`, `points_earned` (poin), `points_restored` (poin), `kitchen_started_at`, `prep_minutes`; baris beratribut `attribute_value_ids` (terurut) + `attributes_text` (hanya bila tidak kosong). Kanal katalog + `business_type`, `loyalty` (flag di-AND dengan kill switch BFF). Error poin: `insufficient_points`, `below_minimum`, `exceeds_max_pct` (409, termasuk Odoo `points_invalid`), `points_unavailable`, `points_cover_full_amount`; `attribute_invalid` → `409 cart_has_issues`.
+- `GET /v1/me` + `points_reserved` (number) dan `points_expiry: { inactive_since: string|null, expires_on: string|null, notice_sent: boolean }` (`expires_on` hanya bila saldo > 0, job aktif, ≤ 60 hari).
+
+### Asumsi terhadap Odoo
+1. json2 `efn.pos.qr.order` method `efn_qr_menu`, `efn_qr_submit` (kunci `fnb:submit:<submission_id>`; `order_uuid` di respons opsional), `efn_qr_status` — path sudah di allowlist gateway (dikonfirmasi lead).
+2. Body open table-session tanpa `order_uuid`; Idempotency-Key `fnb_open:<config>:<table>:<n>` (bentuk lama `fnb_open:<uuid>:<n>` tetap diterima).
+3. Event QR: `submission_status`, `session_closed` (`close.reason=paid`, `close.orders[{order_uuid, eligible_amount, company_code}]`; `close.order` tunggal juga diterima), `order_closed`; HMAC atas raw body, replay 300 s, `seq` monoton per sesi; `company_code` per order harus = PT sesi.
+4. Online: `efn_online_place(points_payment)` mengembalikan `amount_due` = `amount_payable − value_idr`; `mark_paid(points_value)`; refund/status membawa `points_value`/`cash_amount`/`eligible_amount`; event `preparing`, `ready_source`, `picked_up.loyalty.eligible_amount`, `refunded.eligible_amount_refunded`; katalog `attributes` + PTAV di quote.
+5. L-79: redeem online hanya bila kebijakan PT + `point_value` global EFN sudah dipublikasikan (tanpa fallback env).
+
+### Penyimpangan / perlu keputusan lead
+- Earn QR dicatat `source='pos_earn'`, reason `pos_qr_sale`, kunci `pos_earn:<order_uuid>` (bukan source `pos_qr`) agar reverse POS yang sudah ada tetap berlaku; reverse dengan `earn_channel='qr'` menyelesaikan member dari ledger (409 `earn_pending` bila earn belum ada).
+- Kiriman QR umumnya tanpa `order_uuid` (Odoo tidak mengembalikannya) → earn dilacak per sesi melalui `close.orders`.
+- Selisih restore ±Rp1 di luar toleransi hanya anomali `restore_value_mismatch` (tidak ada state review refund otomatis). Clawback online = rasio per refund (bukan kumulatif tersimpan).
+- `FNB_RL_EVENTS` belum dipasang; ALTCHA `first_submit` per sesi; step-up `ONLINE_REDEEM_STEPUP_MIN_POINTS` tidak dibangun; consent `marketing` tidak dicek untuk notifikasi hangus (dasar perjanjian program — perlu Legal).
+- Anomali `qr_reverse_unknown_order` diganti log info (hindari noise); jenis anomali tetap ada.
+- Compose: `FNB_MAX_SUBMISSIONS_PER_SESSION` default 20 → devsecops samakan ke 10 (L-76).
+
+### Metrik (L-76/L-77) untuk alert devsecops
+`efn_fnb_sessions_open`, `efn_fnb_sessions_open_overdue` (open > 4 jam), `efn_fnb_submissions_stuck` (submitting > 5 menit), `efn_fnb_qr_earn_pending` (> 15 menit), `efn_fnb_submissions_total{status}`, `efn_fnb_odoo_requests_total{method,outcome}`, `efn_loyalty_expiry_total{phase,outcome}` (per member per fase, seri diinisialisasi 0), `efn_loyalty_expired_points_total{issuer}`, `efn_loyalty_expiry_notice_failed_total`. Log heartbeat `EFN_LOYALTY_EXPIRY_RUN {"status":"ok|dry_run|aborted|error","phase":"notice|expire|anonymize",…}` (logger `LoyaltyInactivityJob`), `EFN_FNB_JOB`, `EFN_FNB_ANOMALY`, `EFN_FNB_SESSION` (tanpa token).
+
+### Spec G22 (belum dijalankan)
+`fnb/fnb.spec.ts` (token: tanda tangan salah/kedaluwarsa/kunci lama/cek sebelum DB, header saja; rate limit; batas kiriman; idempotensi + konflik; Odoo mati → 503; rekonsiliasi status; event HMAC salah/replay/seq stale; earn per order L-80 + idempoten; tanpa PII di log), `loyalty/loyalty-inactivity.job.spec.ts` (dry run, cap abort, advisory lock, blocker, entri per lot, notice + outbox, anonimisasi off), `orders/online-points.spec.ts` (plan/reserve/commit/release/restore floor ±1/earn/clawback, L-79), `notification/loyalty-expiry-notify.spec.ts`, `pos/loyalty-accrual-g22.spec.ts`, `config/g22-config.spec.ts` (LOYALTY_POINT_EXPIRY_DAYS production gagal, QR wajib secret/https), `loyalty/loyalty-policy.spec.ts` (L-75), `pos/pos-loyalty.spec.ts` (QR earn/reverse), plus penyesuaian `auth.service.spec.ts`, `json2-client.spec.ts`, `catalog.spec.ts`, `online-saga.spec.ts`, `migration.spec.ts`, `loyalty-g21.spec.ts`.
+
+### Perbaikan setelah run lead (tsc/eslint/Jest di container)
+- tsc `online-saga.service.ts:463-464`: variabel lokal `odooRefund` bertipe sempit `{refund_ref, amount}`. Ditambahkan tipe bernama `CancelRefund` (`refund_ref`, `amount` + `Partial<RefundPoints>`: `points_value`, `cash_amount`, `eligible_amount_refunded`) di `odoo-rpc/odoo-online.types.ts`; `CancelResult.refund` dan saga memakainya. Parser (`parseRefundPoints` pada blok refund cancel/status) sudah mengisi field tersebut.
+- eslint: import `DB` tak terpakai di `loyalty/loyalty-inactivity.job.ts` dihapus.
+- Jest `loyalty-inactivity.job.spec.ts:168`: **bug di job, bukan di ekspektasi.** `expireMember` membaca `b.remaining` lagi SETELAH `insertExpireEntry`; fake store (wajar) mengurangi sisa lot saat entri ditulis → `points_by_issuer` & metrik `efn_loyalty_expired_points_total` tercatat 0. Di PostgreSQL bucket tidak bermutasi sehingga gejala tidak muncul, tetapi kodenya rapuh. Diperbaiki: snapshot `(issuer, expires_at, points)` per lot sebelum menulis entri; ledger, total per penerbit, dan metrik memakai angka yang sama. Urutan fase, jangkar bergeser (H2 → superseded), dan lot utang (EFN −5 dilewati) sudah benar; ekspektasi test tetap.
+- Run ke-2 (815 lulus, 2 gagal):
+  - `online-points.spec.ts:281` — **ekspektasi keliru**: mengasumsikan faktor 1,11, padahal stub mengonversi excl↔incl dengan `(TAX_DEN+TAX_NUM)/TAX_DEN` = 122/111 (sama dengan `price_excl` katalog stub). Stub diubah agar seperti Odoo (pajak atas harga excl + Σ `price_extra_excl`, dibulatkan sekali); hasil 80 999, ekspektasi disesuaikan.
+  - `online-saga.spec.ts:447` — **test keliru**: test menggeser `amountPayable` saja, sedangkan stub G22 membandingkan `amount_paid` dengan `amount_due`. Stub tetap → `review` bila `amount_paid ≠ amount_due` atau `points_value` beda; test kini menggeser `amountPayable` dan `amountDue`.
+- Catatan regex: tidak ada karakter Unicode literal (U+2028/2029, bidi, zero-width) lagi di `src/` (dicek grep); lead sudah mengganti `CONTROL_RE` di `fnb/fnb.model.ts`.
+
+## G22 r15 — perbaikan security review r15 (SEC-164/165/167/168/171/173) + QA G22 P3 (19 Okt 2026)
+
+> **Build/test BELUM dijalankan** (tanpa shell di sesi ini). Semua spec di bawah belum dieksekusi; lead menjalankan tsc/eslint/Jest di container.
+
+### File diubah
+- `src/fnb/fnb.model.ts` — `EarnStatus` + `pos_member`; `TableSessionRow.close_event_at`; `sanitizeNote` aturan SEC-168 (NFKC → hapus format → kontrol → whitespace → ≤ 140 code point → `@` / ≥ 8 digit Nd / deret ASCII lama); kelas karakter format dibangun dari kode titik heksadesimal (`String.fromCharCode`), TANPA karakter literal maupun escape backslash-u baru; `OPEN_KEY_RE` n ≤ 99 999 999 (SEC-167).
+- `src/fnb/fnb-pos.service.ts` — body event 16 KB, `orders[]` ≤ 100; `pos_member_attached` tri-state (absen = null → fail-closed + anomali critical `odoo_config_error` code `pos_member_attached_missing`); `true` → `earn_status=pos_member`; `submission_status.order_uuid` wajib UUID, mengisi kolom kosong, beda → anomali `order_uuid_mismatch`; rate limit `FNB_RL_EVENTS` per `config_id` di `handleEvent` (setelah kedua guard) + anomali `events_rate_limited`; `markCloseProcessed` di transaksi close.
+- `src/fnb/fnb.repository.ts`, `src/fnb/testing/fnb-fakes.ts` — kolom `close_event_at`, `markCloseProcessed` (sesi + pendahulu `reissued` di meja yang sama).
+- `src/fnb/odoo-qr.ts` — `order_uuid` submit/status divalidasi UUID (null diterima, lain → `invalid_response`); `qrBusinessError` + `OdooQrError.productIds` (`efn_qr:item_unavailable:<id>,…`); mock = bentuk Odoo r15 (submit/status memuat UUID, `absent` seq 0).
+- `src/fnb/fnb.service.ts` — `409 item_unavailable.product_ids` = id Odoo ∩ kiriman, cadangan overlay menu ∩ kiriman.
+- `src/fnb/fnb-metrics.ts` — jenis anomali `events_rate_limited`, `order_uuid_mismatch`.
+- `src/pos/pos-loyalty.service.ts` — `resolveQrMember` K3; `src/common/testing/fake-loyalty-db.ts` (state `closed_unlisted`).
+- `src/loyalty/loyalty-inactivity.job.ts` (+ `ExpiryStore.hasMarketingConsent/recordInAppProof`), `src/config/app-config.ts`, `src/common/metrics/metrics.service.ts` (outcome `no_consent`).
+- `infra/postgres/init/11-platform-g22.sql` — `fnb_table_session.close_event_at`, CHECK `earn_status` + `pos_member` (tabel sesi & kiriman), indeks `ix_fnb_table_session_close_pending`, `loyalty_expiry_notice_proof.channel` + `in_app`; blok ALTER idempoten untuk volume dev yang sudah menjalankan versi awal.
+- Spec: `fnb/fnb.spec.ts` (blok "security review r15" + 2 ekspektasi lama disesuaikan), `pos/pos-loyalty.spec.ts` (2 test K3), `loyalty/loyalty-inactivity.job.spec.ts` (2 test SEC-171, MemStore).
+- README: `fnb/README.md`, `loyalty/README.md`, `notification/README.md`.
+
+### Env baru
+| Nama | Default | Catatan |
+|---|---|---|
+| `LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT` | `true` | true/false saja; nilai lain → gagal start (saklar pengaman tidak boleh mati karena salah ketik). Perlu ditambahkan devsecops ke compose/`.env.example`/allowlist `deploy-validate.sh` (tidak saya sentuh). |
+| `FNB_RL_EVENTS_LIMIT` / `FNB_RL_EVENTS_WINDOW_SECONDS` | 1200 / 60 | sudah ada di kode, kini TERPASANG (SEC-173). |
+
+### Keputusan
+1. **K3 = opsi `earn_pending`** (bukan menyimpan reverse pending). `pending` ⇔ order dikenal lewat `fnb_submission.order_uuid` (K1), belum `paid|cancelled`, dan `close_event_at` sesinya NULL. Close diproses tetapi order tidak ada di `orders[]` (neto ≤ 0) → 200 nol (bukan pending abadi). Urutan baca: status QR dulu, catatan earn sesudahnya (earn & penanda satu commit → tidak ada 200 nol palsu di READ COMMITTED). Sesi yang di-reissue (Odoo `emit=False`, tidak ada close) ditandai saat close sesi penggantinya diproses.
+2. **Jaminan durabilitas yang diminta lead (2xx event close hanya setelah earn durable):**
+   - `fnb.controller.ts:94-99` — handler mengembalikan promise `handleEvent`; Fastify menjawab 200 hanya setelah promise selesai.
+   - `fnb-pos.service.ts:320` — seluruh pemrosesan di `this.repo.tx(...)`; `PgFnbRepo.tx` = `db.tx` satu transaksi PostgreSQL (`fnb.repository.ts:198-200`).
+   - `fnb-pos.service.ts:321` — klaim idempotensi event (`processed_message`) di transaksi itu.
+   - `fnb-pos.service.ts:337` → `applyOrder` → `:407` `this.earn.earn(r, …)` → `fnb-earn.ts:23-24` memakai `r.sql()` (klien transaksi yang SAMA; di luar transaksi melempar) → `PosLoyaltyService.earnQrInTx` → `earnTx` INSERT `loyalty_pos_earn` + entri ledger pada `q` yang sama (`pos-loyalty.service.ts` `earnTx`).
+   - `fnb-pos.service.ts:343` — `markCloseProcessed` (penanda K3) di transaksi yang sama.
+   - `fnb-pos.service.ts:349` — `{ ok: true, status }` dikembalikan SETELAH `repo.tx` commit. Error apa pun (409/404/DB) → rollback klaim + earn + penanda, respons non-2xx → outbox Odoo retry/final. Tidak ada antrean memori.
+   - Hasil `limited`/`skipped`/`pos_member` tidak menulis catatan earn (by design, 0 poin): reverse berikutnya → `close_processed` → 200 nol, benar.
+   - Penanganan reverse-sebelum-earn (`pos-loyalty.service.ts:622-645`) dipertahankan sebagai lapis kedua.
+3. **K2** field `pos_member_attached` absen tidak lagi dianggap `false`: tidak earn + anomali critical (fail-closed), sesi tetap ditutup (bukan 400, agar sesi tidak tergantung).
+4. **SEC-168** aturan digit = gabungan yang lebih ketat: total digit Nd ≥ 8 di seluruh catatan (tanpa jendela) ATAU regex ASCII lama. Odoo wajib menyalin persis: `unicodedata.normalize('NFKC', s)` → hapus rentang format yang sama → kontrol U+0000–U+001F, U+007F–U+009F, U+2028, U+2029 → spasi → `re.sub(r"\s+", " ", s).strip()` → `len(s) > 140` → `'@' in s` / `sum(c.isdecimal() for c in s) >= 8` / `re.search(r"[0-9][0-9\s.-]{6,}[0-9]", s, re.ASCII)`. Vektor uji di `fnb.spec.ts` blok r15 (fullwidth, zero-width, bidi RLO/LRI, `0812-3456 / 789`, digit Arab-Indik, `@` fullwidth, emoji 140 code point).
+5. **SEC-171** tanpa consent `marketing` aktif (sumber `platform.consent`, sama dengan `ConsentService`): notice tetap dibuat (due ≥ N hari, info in-app), TANPA outbox WA, bukti anonim `channel='in_app'`. Pilihan ini menjaga hak "≥ 30 hari pemberitahuan" lewat aplikasi; Legal perlu memastikan in-app cukup bagi member tanpa consent.
+6. **SEC-173** dipasang (bukan dihapus): per `config_id`, setelah guard, 429 = retry (klaim belum terpakai).
+7. **SEC-170** tidak diimplementasikan; tidak ada kode/README yang mengklaim `ONLINE_REDEEM_STEPUP_MIN_POINTS` ada (`orders/README.md` menyebutnya "tidak dibangun").
+8. **QA P3 `product_ids`**: usulan kontrak ke Odoo `UserError("efn_qr:item_unavailable:<product_id>[,<product_id>…]")` (≤ 30 id desimal, tanpa spasi). Tanpa id → BFF memakai overlay menu (bisa `[]` bila overlay basi).
+
+### Untuk Odoo engineer / lead / devsecops
+- Odoo: naikkan `MAX_BODY_BYTES` event QR ke 16 KB dan batas `orders[]` ke 100; kirim `pos_member_attached` di SETIAP entri `orders[]`; `order_uuid` UUID di submit/status/`submission_status`; samakan filter catatan (butir 4); opsional id di `efn_qr:item_unavailable`.
+- Devsecops: env `LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT` (default true) ke compose + `.env.example` + allowlist boolean; jenis anomali baru `events_rate_limited` (warning), `order_uuid_mismatch` (warning); outcome metrik `no_consent`; heartbeat notice kini memuat `no_consent`, `require_consent` (ditambahkan di AKHIR objek, urutan kunci awal tetap).
+- DPIA/RoPA: `loyalty_expiry_notice_proof.channel='in_app'`.
+
+### Belum terverifikasi / risiko sisa
+- tsc/eslint/Jest belum dijalankan. Khusus: `\p{Nd}` (flag `u`, target ES2022) dan `String.prototype.normalize('NFKC')` bergantung ICU Node (image resmi Node = full-icu).
+- Order pelayan yang tidak pernah dikenal BFF (bukan kiriman QR) masih 200 nol bila reverse mendahului close — tertutup oleh jaminan Odoo "reverse QR hanya setelah close 2xx".
+- Bila event close Odoo final-gagal (400), reverse order QR sesi itu `earn_pending` terus sampai outbox Odoo menaruhnya di review (disengaja: lebih baik tertunda daripada poin tak tertarik).
+- Consent dicek saat enqueue; penarikan consent dalam menit sebelum consumer mengirim belum dicek ulang.
+- SEC-166/169 tidak disentuh (Odoo / keputusan lead). Ringkasan sesi `fnb_table_session.earn_status` saat order campuran (`pos_member` lalu `skipped`) menyimpan hasil terakhir non-`earned` (hanya ringkasan; per kiriman akurat).
+- Butir laporan G22 di atas yang menyebut "`FNB_RL_EVENTS` belum dipasang" dan "consent `marketing` tidak dicek" kini usang.

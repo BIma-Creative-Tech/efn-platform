@@ -193,6 +193,14 @@ export class DsarService {
     );
     const requests = await this.listRequests(user);
     const onlineOrders = this.online ? await this.online.exportOrders(user.memberId) : { items: [], truncated: false };
+    // G22 §14.A.11: sesi meja QR yang diklaim member (outlet, tanggal, poin) — tanpa token, catatan, atau id internal Odoo
+    const qrSessions = await this.db.query<{ outlet_name: string | null; company_code: string; opened_at: Date | string; points: string | number | null; earn_status: string }>(
+      `SELECT s.outlet_name, t.company_code, t.opened_at, t.earn_status,
+              (SELECT COALESCE(SUM(x.points_earned), 0) FROM platform.fnb_submission x WHERE x.session_id = t.id) AS points
+         FROM platform.fnb_table_session t LEFT JOIN platform.fnb_menu_sync s ON s.config_id = t.config_id
+        WHERE t.member_id = $1 ORDER BY t.opened_at DESC LIMIT $2`,
+      [user.memberId, EXPORT_ROW_LIMIT],
+    );
     const truncated = ledger.rows.length > EXPORT_ROW_LIMIT || reports.rows.length > EXPORT_ROW_LIMIT;
 
     await this.db.query(
@@ -244,6 +252,13 @@ export class DsarService {
       },
       // §10.8.3: tanpa kode ambil, QR, id internal Odoo/payment
       online_orders: onlineOrders.items,
+      qr_table_sessions: qrSessions.rows.map((r) => ({
+        outlet_name: r.outlet_name ?? null,
+        company_code: r.company_code,
+        date: toIso(r.opened_at),
+        earn_status: r.earn_status,
+        points_earned_in_session: Number(r.points ?? 0),
+      })),
       requests: requests.items,
       processors: DATA_PROCESSORS,
       truncated: truncated || onlineOrders.truncated,

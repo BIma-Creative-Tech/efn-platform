@@ -36,6 +36,13 @@
 #               ETL_LOYALTY_RECON_NOT_BEFORE (UTC YYYY-MM-DDTHH:MM:SSZ, go-live loyalty POS; kosong = nilai .env lama, G14)
 #               EFN_ODOO_PII_ENABLED EFN_ODOO_PII_REQUIRED (true|false; G21 AC-13: overlay docker-compose.pii.yml, kunci
 #               host:* odoo_pii_* divalidasi; production ENABLED=true wajib REQUIRED=true)
+#               G22 (docs/04 §14): FNB_QR_* / FNB_* (QR meja; FNB_QR_ENABLED=true -> API key QR host:* nyata per PT +
+#               overlay docker-compose.online-qr-<pt>.yml), ONLINE_LOYALTY_*, LOYALTY_EXPIRY_* / LOYALTY_ACTIVITY_EPOCH /
+#               LOYALTY_POINT_MAX_AGE_DAYS / LOYALTY_INACTIVE_ANONYMIZE* (L-73: production true hanya dengan
+#               EFN_ALLOW_FEATURE_ON di /etc/efn/deploy.conf). LOYALTY_POINT_EXPIRY_DAYS dihapus (D-22-18): production ditolak.
+#               LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT (default true, SEC-171: production false hanya dengan EFN_ALLOW_FEATURE_ON).
+#               ETL_PARTNER_REGION_ENABLED ETL_LOYALTY_RECON_ONLINE_ENABLED ETL_ENABLE_KDS ETL_KDS_ONLINE_ENABLED
+#               (true|false, default false; G21/G22 job ETL opsional, prasyarat dicek deploy-validate)
 set -euo pipefail
 
 BASE=/opt/efn
@@ -146,6 +153,19 @@ if [[ "${EFN_ODOO_PII_ENABLED:-false}" == true ]]; then
   efn_validate_pii_keys "$SECRETS_DIR" \
     || die "EFN_ODOO_PII_ENABLED=true tetapi kunci PII Odoo tidak valid (docs/runbooks/key-custody.md §4e)"
   echo "==> Kunci PII Odoo valid (3 kunci, 32 byte, berbeda) - overlay docker-compose.pii.yml dipasang"
+fi
+# G22 (docs/04 §14.A.9/§14.A.10 API8): QR meja aktif = setiap PT di FNB_QR_COMPANIES wajib punya API key Odoo user teknis
+# QR nyata (host:*, dibuat efn-rotate-online-key --channel=QR-<PT> --bootstrap). URL https sudah divalidasi lib.
+FNB_QR_CO_LIST=()
+if [[ "${FNB_QR_ENABLED:-false}" == true ]]; then
+  efn_validate_fnb_qr_companies "${FNB_QR_COMPANIES:-PB,BCF}" || die "FNB_QR_COMPANIES tidak valid (G22)"
+  IFS=, read -r -a FNB_QR_CO_LIST <<< "${FNB_QR_COMPANIES:-PB,BCF}"
+  for co in "${FNB_QR_CO_LIST[@]}"; do
+    f="$SECRETS_DIR/odoo_api_key_qr_$(tr '[:upper:]' '[:lower:]' <<< "$co").txt"
+    if [[ ! -s "$f" ]] || grep -qx 'disabled' "$f"; then
+      die "FNB_QR_ENABLED=true tetapi API key QR ${co} tidak ada/placeholder (docs/runbooks/odoo-qr-api-key.md)"
+    fi
+  done
 fi
 
 echo "==> Secret turunan (member_hash_pepper = HKDF(otp_pepper), token metrik MinIO)"
@@ -264,6 +284,14 @@ if [[ "$APP_ENV" == production && -n "$PREV_LOYALTY_NB" && "$ETL_LOYALTY_RECON_N
   efn_list_has ETL_LOYALTY_RECON_NOT_BEFORE "${_allow_off[@]}" \
     || die "ETL_LOYALTY_RECON_NOT_BEFORE dimajukan (${PREV_LOYALTY_NB} -> ${ETL_LOYALTY_RECON_NOT_BEFORE_EFF}): ditolak di production tanpa EFN_ALLOW_CONTROL_OFF (SEC-50c)"
 fi
+# G21/G22 (QA G22 P2-3): job ETL opsional butuh ETL_ENABLE_ODOO=true efektif. Kosong = aktif otomatis setelah grant
+# (langkah di bawah, lalu `up -d etl`); sampai saat itu container etl gagal start (efn_etl/config.py) -> peringatan.
+if [[ "$ETL_ENABLE_ODOO_EFF" != true ]]; then
+  for v in ETL_PARTNER_REGION_ENABLED ETL_ENABLE_KDS ETL_LOYALTY_RECON_ONLINE_ENABLED; do
+    [[ "${!v:-false}" != true ]] \
+      || echo "PERINGATAN: ${v}=true tetapi ETL_ENABLE_ODOO belum true - etl restart sampai grant Odoo sukses (langkah grant ETL)" >&2
+  done
+fi
 
 echo "==> Menulis .env (non-secret)"
 # SEC-50b: satu kunci satu baris; nilai dengan karakter kontrol ditolak; jumlah baris diverifikasi
@@ -356,6 +384,41 @@ DOTENV=(
   # G21 AC-13: overlay docker-compose.pii.yml (kosong REQUIRED = default overlay true; production wajib eksplisit true)
   "EFN_ODOO_PII_ENABLED=${EFN_ODOO_PII_ENABLED:-false}"
   "EFN_ODOO_PII_REQUIRED=${EFN_ODOO_PII_REQUIRED:-}"
+  # G22 (docs/04 §14): kosong = default compose (QR/poin online/hangus/anonimisasi MATI, DRY_RUN true, angka kontrak)
+  "FNB_QR_ENABLED=${FNB_QR_ENABLED:-false}"
+  "FNB_QR_COMPANIES=${FNB_QR_COMPANIES:-}"
+  "FNB_QR_BASE_URL_PB=${FNB_QR_BASE_URL_PB:-}"
+  "FNB_QR_BASE_URL_BCF=${FNB_QR_BASE_URL_BCF:-}"
+  "FNB_QR_POINTS_ENABLED=${FNB_QR_POINTS_ENABLED:-false}"
+  "FNB_TABLE_SESSION_TTL_SECONDS=${FNB_TABLE_SESSION_TTL_SECONDS:-}"
+  "FNB_MAX_SUBMISSIONS_PER_SESSION=${FNB_MAX_SUBMISSIONS_PER_SESSION:-}"
+  "FNB_MAX_ITEMS_PER_SESSION=${FNB_MAX_ITEMS_PER_SESSION:-}"
+  "FNB_MAX_LINES=${FNB_MAX_LINES:-}"
+  "FNB_MAX_LINE_QTY=${FNB_MAX_LINE_QTY:-}"
+  "FNB_CAPTCHA_MODE=${FNB_CAPTCHA_MODE:-}"
+  "FNB_MENU_SYNC_SECONDS=${FNB_MENU_SYNC_SECONDS:-}"
+  "FNB_SESSION_RETENTION_DAYS=${FNB_SESSION_RETENTION_DAYS:-}"
+  "FNB_SESSION_MEMBER_LINK_DAYS=${FNB_SESSION_MEMBER_LINK_DAYS:-}"
+  "ONLINE_LOYALTY_REDEEM_ENABLED=${ONLINE_LOYALTY_REDEEM_ENABLED:-false}"
+  "ONLINE_LOYALTY_EARN_ENABLED=${ONLINE_LOYALTY_EARN_ENABLED:-false}"
+  "LOYALTY_EXPIRY_ENABLED=${LOYALTY_EXPIRY_ENABLED:-false}"
+  "LOYALTY_EXPIRY_DRY_RUN=${LOYALTY_EXPIRY_DRY_RUN:-}"
+  "LOYALTY_INACTIVITY_EXPIRY_MONTHS=${LOYALTY_INACTIVITY_EXPIRY_MONTHS:-}"
+  "LOYALTY_EXPIRY_NOTICE_DAYS=${LOYALTY_EXPIRY_NOTICE_DAYS:-}"
+  "LOYALTY_EXPIRY_RUN_HOUR_WIB=${LOYALTY_EXPIRY_RUN_HOUR_WIB:-}"
+  "LOYALTY_EXPIRY_NOTICE_HOUR_WIB=${LOYALTY_EXPIRY_NOTICE_HOUR_WIB:-}"
+  "LOYALTY_EXPIRY_BATCH_SIZE=${LOYALTY_EXPIRY_BATCH_SIZE:-}"
+  "LOYALTY_EXPIRY_MAX_PER_RUN=${LOYALTY_EXPIRY_MAX_PER_RUN:-}"
+  "LOYALTY_ACTIVITY_EPOCH=${LOYALTY_ACTIVITY_EPOCH:-}"
+  "LOYALTY_POINT_MAX_AGE_DAYS=${LOYALTY_POINT_MAX_AGE_DAYS:-}"
+  "LOYALTY_INACTIVE_ANONYMIZE=${LOYALTY_INACTIVE_ANONYMIZE:-false}"
+  "LOYALTY_INACTIVE_ANONYMIZE_GRACE_DAYS=${LOYALTY_INACTIVE_ANONYMIZE_GRACE_DAYS:-}"
+  "LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=${LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT:-true}"   # SEC-171 r15
+  # G21/G22 job ETL opsional (QA G22 P2-3): default MATI; prasyarat ETL_ENABLE_ODOO + grant terbaru
+  "ETL_PARTNER_REGION_ENABLED=${ETL_PARTNER_REGION_ENABLED:-false}"
+  "ETL_LOYALTY_RECON_ONLINE_ENABLED=${ETL_LOYALTY_RECON_ONLINE_ENABLED:-false}"
+  "ETL_ENABLE_KDS=${ETL_ENABLE_KDS:-false}"
+  "ETL_KDS_ONLINE_ENABLED=${ETL_KDS_ONLINE_ENABLED:-false}"
 )
 efn_write_dotenv "$COMPOSE_DIR/.env" "${DOTENV[@]}" || die "gagal menulis .env (SEC-50)"
 
@@ -399,6 +462,12 @@ for ch in "${ONLINE_OVERLAY_CH[@]}"; do
   [[ "$ch" == "$EFN_ONLINE_BASE_CHANNEL" ]] && continue
   ov="docker-compose.online-$(tr '[:upper:]' '[:lower:]' <<< "$ch").yml"
   [[ -f "$ov" ]] || die "kanal ${ch} di ONLINE_CHANNELS tanpa overlay infra/compose/${ov} (docs/runbooks/odoo-online-api-key.md#kanal-baru)"
+  [[ " ${FILES[*]} " == *" ${ov} "* ]] || FILES+=(-f "$ov")
+done
+# G22 (docs/04 §14.A.9): API key QR meja per PT hanya di-mount saat FNB_QR_ENABLED=true (daftar & key dicek di langkah 1)
+for co in "${FNB_QR_CO_LIST[@]}"; do
+  ov="docker-compose.online-qr-$(tr '[:upper:]' '[:lower:]' <<< "$co").yml"
+  [[ -f "$ov" ]] || die "PT ${co} di FNB_QR_COMPANIES tanpa overlay infra/compose/${ov} (bundel rilis G22+?)"
   [[ " ${FILES[*]} " == *" ${ov} "* ]] || FILES+=(-f "$ov")
 done
 DC=(docker compose "${FILES[@]}")
@@ -447,7 +516,7 @@ echo "==> Migrasi skema idempoten (infra/postgres/init/[0-9][0-9]-*.sql >= 04)"
 # member.age_confirmed_at; dibutuhkan BFF G18). 09 = G20 (docs/04 §12.1/§12.2: CHECK company_code 6 entitas,
 # online_order.payment_method, status awaiting_counter_payment, counter_code_enc; dibutuhkan BFF G20).
 for req in 04-platform-v3-6.sql 05-platform-loyalty-pos.sql 06-platform-loyalty-guard.sql 07-platform-online.sql \
-           08-platform-g18-privacy.sql 09-platform-g20.sql 10-platform-g21.sql; do
+           08-platform-g18-privacy.sql 09-platform-g20.sql 10-platform-g21.sql 11-platform-g22.sql; do
   [[ -s "$BASE/postgres/init/$req" ]] || die "migrasi wajib $req tidak ada di $BASE/postgres/init (bundel rilis tidak lengkap)"
 done
 for mig in "$BASE"/postgres/init/[0-9][0-9]-*.sql; do

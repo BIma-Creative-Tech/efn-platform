@@ -125,8 +125,9 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
       await this.purgeSuppression();
       await this.escalateDeferred();
       const due = await this.db.query<{ id: string }>(
+        // G22 §14.D.7: + type 'retention' (anonimisasi setelah hangus tidak aktif; subjek ledger POS boleh tanpa member_id)
         `SELECT id::text AS id FROM platform.dsar_request
-          WHERE type = 'delete' AND status = 'scheduled' AND scheduled_at <= now()
+          WHERE type IN ('delete', 'retention') AND status = 'scheduled' AND scheduled_at <= now()
           ORDER BY scheduled_at LIMIT $1`,
         [DUE_BATCH],
       );
@@ -223,16 +224,24 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
         requestId,
       ]);
       if (!lock.rows[0]?.ok) return null;
-      const started = await q.query<{ member_id: string; member_hash: string; defer_expired: boolean | null }>(
+      const started = await q.query<{ member_id: string | null; member_hash: string; defer_expired: boolean | null; type?: string }>(
         `UPDATE platform.dsar_request
             SET status = 'processing', stores_pending = ARRAY['platform', 'odoo', 'clickhouse']::text[]
-          WHERE id = $1 AND type = 'delete' AND status = 'scheduled' AND scheduled_at <= now()
-          RETURNING member_id::text AS member_id, member_hash,
+          WHERE id = $1 AND type IN ('delete', 'retention') AND status = 'scheduled' AND scheduled_at <= now()
+          RETURNING member_id::text AS member_id, member_hash, type,
                     (requested_at <= now() - make_interval(days => $2::int)) AS defer_expired`,
         [requestId, this.config.dsarOpenOrderMaxDeferDays],
       );
-      const r = started.rows[0];
-      if (!r) return null;
+      const r0 = started.rows[0];
+      if (!r0) return null;
+      // G22 §14.D.7: retention tanpa akun Super-App (subjek hanya di ledger POS) → langkah member/order dilewati
+      if (r0.member_id === null) {
+        await this.suppress(q, r0.member_hash);
+        await this.erasePlatform(q, requestId, null, r0.member_hash);
+        await this.completeStore('platform', requestId, q);
+        return { photos: [] as string[], memberId: null, forced: null };
+      }
+      const r = { ...r0, member_id: r0.member_id };
       // SEC-100 (L-16): kunci member yang sama dengan checkout lalu cek ulang order online terbuka; ada → tunda
       await q.query(`SELECT pg_advisory_xact_lock(hashtext('efn:online:member:' || $1::text))`, [r.member_id]);
       const open = await q.query<{ n: string | number }>(
@@ -276,12 +285,12 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
       this.metrics?.recordDsarErasureDeferral('forced');
     }
     await this.removePhotos(result.photos);
-    await this.purgeOnlineRedis(result.memberId);
+    if (result.memberId) await this.purgeOnlineRedis(result.memberId);
     return true;
   }
 
   /** Erasure data platform untuk satu subjek (di dalam transaksi pemanggil). */
-  async erasePlatform(q: Queryable, requestId: string, memberId: string, hash: string): Promise<void> {
+  async erasePlatform(q: Queryable, requestId: string, memberId: string | null, hash: string): Promise<void> {
     const tomb = randomTombstone();
     // 1. Forfeit saldo per PT (liabilitas turun tercatat; perlakuan akuntansi: Finance, ADR-020).
     //    source_ref NULL & idempotency_key acak: entri tidak memuat request_id (SEC-31). Idempotensi dijamin transaksi +
@@ -328,6 +337,10 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
     );
     // 4. Audit OTP
     await q.query(`UPDATE platform.otp_audit SET subject = $2, ip_enc = NULL WHERE subject = $1`, [hash, tomb]);
+    // 4b. G22 §14.D.2/D.3/D.7: aktivitas & pemberitahuan hangus subjek dihapus (bukti tanpa identitas L-76 TIDAK disentuh)
+    await q.query(`DELETE FROM platform.loyalty_member_activity WHERE member_hash = $1`, [hash]);
+    await q.query(`DELETE FROM platform.loyalty_expiry_notice WHERE member_hash = $1`, [hash]);
+    if (memberId === null) return; // retention subjek ledger POS: tidak ada baris akun
     // 5. Consent: bukti dipertahankan tanpa PII
     await q.query(`UPDATE platform.consent SET ip_enc = NULL WHERE member_id = $1 AND ip_enc IS NOT NULL`, [memberId]);
     // 6. Request DSAR lain milik subjek (export, delete yang pernah dibatalkan) tidak lagi memuat member_hash
@@ -339,6 +352,11 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
     // 6b. Fase 3 (§10.8.3): order online tetap (baris keuangan 10 th) tanpa tautan ke member
     await q.query(
       `UPDATE platform.online_order SET member_id = NULL, member_unlinked_at = now(), updated_at = now() WHERE member_id = $1`,
+      [memberId],
+    );
+    // 6c. G22 §14.A.11: tautan member sesi meja QR → NULL
+    await q.query(
+      `UPDATE platform.fnb_table_session SET member_id = NULL, member_unlinked_at = now(), updated_at = now() WHERE member_id = $1`,
       [memberId],
     );
     // 7. Member
@@ -360,12 +378,12 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
                                   THEN now() ELSE completed_at END,
               member_hash = CASE WHEN cardinality(array_remove(stores_pending, $2::text)) = 0
                                  THEN NULL ELSE member_hash END
-        WHERE id = $1 AND type = 'delete' AND status IN ('processing', 'completed')
+        WHERE id = $1 AND type IN ('delete', 'retention') AND status IN ('processing', 'completed')
         RETURNING status`,
       [requestId, store],
     );
     if (res.rows[0]) return { ok: true, status: res.rows[0].status };
-    const exists = await q.query<{ status: string }>(`SELECT status FROM platform.dsar_request WHERE id = $1 AND type = 'delete'`, [
+    const exists = await q.query<{ status: string }>(`SELECT status FROM platform.dsar_request WHERE id = $1 AND type IN ('delete', 'retention')`, [
       requestId,
     ]);
     return { ok: false, reason: exists.rows[0] ? 'not_processing' : 'not_found' };
@@ -376,7 +394,7 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
     const res = await this.db.query<{ request_id: string; member_hash: string }>(
       `SELECT id::text AS request_id, member_hash
          FROM platform.dsar_request
-        WHERE type = 'delete' AND status = 'processing' AND $1::text = ANY(stores_pending) AND member_hash IS NOT NULL
+        WHERE type IN ('delete', 'retention') AND status = 'processing' AND $1::text = ANY(stores_pending) AND member_hash IS NOT NULL
         ORDER BY requested_at
         LIMIT 500`,
       [store],

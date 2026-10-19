@@ -33,9 +33,17 @@ SENSITIVE_GROUP_XMLIDS = (
     "efn_loyalty_accounting.group_loyalty_manager",
 )
 SENSITIVE_PARAM = "efn_role.sensitive_group_xmlids"
+# E-47d (G22, L-74): parameter di atas = parameter KONTROL efn_audit (selalu diaudit walau aturan admin diarsipkan,
+# log tidak ikut GC) — models/efn_audit_rule.py. Kunci `efn_role.*` tidak cocok filter `efn.%` efn_setup_audit.
+CONTROL_PARAM_KEYS = (SENSITIVE_PARAM,)
 XMLID_RE = re.compile(r"^[A-Za-z0-9_]+\.[A-Za-z0-9_]+$")
 # Akun non-jabatan (docs/08 §12.2b): tidak boleh diberi peran. Opsional (modul pemilik mungkin belum terpasang).
-TECHNICAL_GROUP_XMLIDS = ("efn_online_order.group_online_channel", "efn_pos_kds.group_kds_device")
+# E-47d (G22, L-74): + user teknis QR ponsel per PT F&B (efn_pos_bff_order).
+TECHNICAL_GROUP_XMLIDS = (
+    "efn_online_order.group_online_channel",
+    "efn_pos_kds.group_kds_device",
+    "efn_pos_bff_order.group_qr_bff",
+)
 # Grup penanda modul ini (tanpa ACL, tanpa implied_ids) -> selalu termasuk himpunan terkelola.
 MARKER_GROUP_XMLIDS = ("efn_role.group_role_cashier", "efn_role.group_refund_approver")
 # Grup yang diberikan otomatis oleh CE (bukan "pemberian langsung" di laporan review).

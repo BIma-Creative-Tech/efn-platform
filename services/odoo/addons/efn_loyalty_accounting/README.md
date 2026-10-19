@@ -4,7 +4,8 @@ Kebijakan Poin EFN per PT (empat mata, publikasi bertanda tangan ke BFF) + akrua
 rekonsiliasi saldo. Odoo CE 19, **LGPL-3**, `depends: account, mail, efn_core, efn_audit, efn_pos_loyalty_ledger`.
 
 - **Kontrak mengikat:** `docs/04_SERVICE_CONTRACTS.md` §13.1 + §13.7 L-61, L-62, L-66, L-67, L-68 (menang atas
-  `docs/08` §11.4). Perbaikan security r14: SEC-156, SEC-157, SEC-160 (19.0.1.1.0).
+  `docs/08` §11.4). Perbaikan security r14: SEC-156, SEC-157, SEC-160 (19.0.1.1.0). G22 (19.0.1.2.0): §14.D W-17 +
+  L-72 (D-22-13, D-22-15), L-73 — parameter poin hangus karena tidak aktif di kebijakan global.
 - **ADR:** ADR-020 (ledger poin tunggal di BFF; Odoo hanya kebijakan + jurnal, saldo member tidak di Odoo, D-05),
   ADR-001 revisi (PT penerbit per lot earn, kliring antar-PT), ADR-027 (tanpa akun/angka bisnis di kode →
   PLACEHOLDER), ADR-031 (tanpa modul pihak ketiga), ADR-022 (TLS + CA internal untuk setiap panggilan BFF).
@@ -50,6 +51,8 @@ X-EFN-Signature: t=<unix>,v1=<hex HMAC-SHA256(key, "<t>." + body)>
 ```
 - Body = `json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)`:
   `{schema_version: 1, company_code, version, effective_from: "YYYY-MM-DDTHH:MM:SSZ", approved_by_uid, params: {8 field per PT}, point_value_idr?}` (`point_value_idr` hanya `company_code=EFN`).
+  G22 (19.0.1.2.0): untuk `company_code=EFN` saja, `params` bertambah `inactivity_expiry_months`, `expiry_notice_days`
+  dan `activity_epoch` (opsional) -- lihat bagian *Poin hangus karena tidak aktif* di bawah.
 - Kunci = isi file `EFN_LOYALTY_POLICY_SIGNING_KEY_FILE` (default `/run/secrets/loyalty_policy_signing_key`),
   whitespace ujung dibuang, dipakai sebagai byte UTF-8, minimal 32 byte; dibaca setiap kirim; tidak pernah di DB/log.
   Implementasi acuan penerima: `models/signing.py::verify_signature` (replay window 300 s, `hmac.compare_digest`).
@@ -59,6 +62,39 @@ X-EFN-Signature: t=<unix>,v1=<hex HMAC-SHA256(key, "<t>." + body)>
   aktivitas (kebijakan tetap `approved`; perbaikan = versi baru). 401/404/408/429/5xx/jaringan → backoff 1 menit…1 jam,
   tanda tangan dibuat ulang dengan `t` baru setiap percobaan, gagal setelah `efn.loyalty.policy_outbox_max_hours` (72).
   Tombol *Kirim ulang* (Loyalty/Accounting Manager company itu) untuk outbox gagal.
+
+## Poin hangus karena tidak aktif (G22 W-17, 19.0.1.2.0)
+Kontrak: `docs/04` §14.D.2, §14.D.3, §14.D.5, §14.D.8; L-72 (D-22-13 parameter di kebijakan global Odoo + fallback
+env, D-22-15 epoch go-live configurable), L-73 (job hangus production OFF sampai Legal/Meta). Odoo **hanya** menyimpan
+parameter (empat mata) dan memublikasikannya; job notice/expire, aktivitas, dan WA ada di BFF.
+
+| Field (hanya record global EFN) | Default | Validasi Odoo | Plafon BFF (env) |
+|---|---|---|---|
+| `inactivity_expiry_months` | 12 | wajib, 1..60 | `LOYALTY_POLICY_CEILING_INACTIVITY_MONTHS_MIN/_MAX` (6..36) |
+| `expiry_notice_days` | 30 | wajib, 7..90, dan `< 28 × bulan` | `LOYALTY_EXPIRY_NOTICE_DAYS` 7..60 (§14.D.8) |
+| `activity_epoch` (Date) | kosong | opsional | kosong → env `LOYALTY_ACTIVITY_EPOCH` |
+
+- PT selain EFN: ketiganya wajib 0/kosong (`ValidationError`), tidak tampil di form, tidak dikirim.
+- Ikut `POLICY_FIELDS`: penyunting masuk `editor_ids` (empat mata SEC-157), read-only setelah approved untuk semua
+  termasuk sudo, teraudit `efn_audit` + tracking chatter, prefill versi berikutnya dari versi terakhir yang disetujui.
+- Default mengikuti company **record** (bukan company aktif user) saat create tanpa nilai eksplisit.
+- Batas Odoo sengaja lebih longgar dari plafon BFF (plafon env bisa diubah tanpa rilis Odoo). Nilai di luar plafon BFF
+  → `422 policy_out_of_bounds` → outbox `failed` final + aktivitas; perbaikan = versi baru.
+
+Body PUT EFN (kanonik, kunci terurut; contoh default + epoch):
+```json
+{"approved_by_uid":7,"company_code":"EFN","effective_from":"2026-11-01T00:00:00Z","params":{"activity_epoch":"2026-11-01","company_hourly_max":50000,"daily_max_points_member":2000,"earn_idr_per_point":10000,"earn_on_money_only":true,"expiry_notice_days":30,"inactivity_expiry_months":12,"max_points_per_order":5000,"pos_config_hourly_max":10000,"redeem_max_pct":50,"redeem_min_points":50},"point_value_idr":100,"schema_version":1,"version":2}
+```
+- `inactivity_expiry_months`, `expiry_notice_days`: integer; `activity_epoch`: string `YYYY-MM-DD` (tanggal kalender,
+  ditafsirkan BFF sebagai 00:00 Asia/Jakarta), **dihilangkan** bila kosong. `schema_version` tetap 1.
+- Versi global pra-G22 (dinormalisasi migrasi `migrations/19.0.1.2.0/post-migrate.py` → 0/NULL) mengirim body lama
+  persis (tanpa kunci W-17), sehingga kirim ulang outbox lama tidak memicu `409 policy_conflict`.
+
+**Breakage (L-67, §14.D.5) — terverifikasi tanpa perubahan kode:** `expired_value_idr` sudah selalu dijurnal di PT
+penerbit sejak r14/SEC-160 (Dr Liabilitas / Cr Pendapatan Poin Kedaluwarsa, flag `efn.loyalty.breakage_journal_enabled`
+dihapus dan diabaikan). Entri `inactivity_expire` BFF masuk komponen yang sama (bentuk respons akrual tidak berubah).
+Test: `test_expired_and_forfeited_journaled_recon_zero` (r14) + `test_inactivity_expire_breakage_per_issuer_recon_zero`
+(G22: dua PT penerbit, RECON 0 di keduanya).
 
 ## Akrual harian (§13.1 no. 6, L-61 — Odoo menarik)
 Cron `ir_cron_efn_loyalty_accrual` 19:00 UTC (= 02:00 Asia/Jakarta): untuk setiap company berkode dan setiap tanggal
@@ -127,6 +163,9 @@ untuk earn/redeem; Odoo tidak menyalin nilai poin.
    tersedia`, aktivitas ke Loyalty Manager.
 5. Settings › Invoicing › *Poin EFN*: isi akun PT. Jalankan cron *EFN Loyalty: akrual …* (Settings › Technical ›
    Scheduled Actions › Run) → menu **Akrual Harian**: status, jurnal `EFN-LOY-…`, rekonsiliasi; log `EFN_LOYALTY_RECON`.
+6. (G22) Loyalty Manager company EFN: **Baru** → grup *Poin hangus karena tidak aktif* tampil (12 / 30 / kosong). Isi
+   bulan 61 atau pemberitahuan 6 → ditolak. Di company GL grup tidak tampil. Setujui oleh Accounting Manager EFN lain
+   → field read-only; outbox body memuat `params.inactivity_expiry_months` dst. (cek `body_sha256` / log BFF).
 
 ## Test (`tests/`, tag `efn`; BFF di-mock)
 `test_signing.py` (format, HMAC atas byte persis, tamper, replay window ±300 s, kunci lain, kunci hilang/pendek),
@@ -146,6 +185,10 @@ tautan `efn_loyalty_accrual_id` tidak bisa ditulis/dipalsukan, kedaluwarsa + for
 akun → `missing_config`, validasi `forfeited_value_idr`/`restored_value_idr_by_issuer`, L-68 earn GL – tukar BCR –
 refund BCR → RECON GL & BCR 0). `test_policy.py` r14: penyunting tengah (bukan terakhir) ditolak menyetujui/menolak,
 `editor_ids` tidak bisa ditulis pengguna.
+G22: `test_policy.py` (W-17 hanya global + default 12/30, default ikut company record, batas 1..60 / 7..90 / notice <
+28×bulan / negatif, empat mata + read-only termasuk sudo + body + prefill + audit), `test_policy_outbox.py` (body EFN
+byte-persis termasuk kunci W-17 + tanda tangan; default dikirim, epoch kosong tidak dikirim), `test_signing.py` (kunci
+W-17 kanonik & tamper terdeteksi), `test_accrual.py` (hangus tidak aktif di dua PT penerbit → breakage + RECON 0).
 
 ## Referensi (ADR-031)
 Tidak ada modul OCA/Cybrosys 19.0 terverifikasi untuk ledger poin eksternal + jurnal akrual; konsep parameter per
@@ -154,6 +197,13 @@ kode yang disalin.
 
 ## Batasan / belum terverifikasi
 - **Belum dijalankan** di Odoo 19 nyata oleh penulis (tanpa shell) — lead menjalankan test di container.
+- G22: BFF G21 (`loyalty-policy.ts` `parsePolicyParams`, `additionalProperties:false`) **menolak** kunci W-17 di
+  `params` → publikasi kebijakan EFN baru akan `400` final sampai BFF G22 menerima ketiga kunci (hanya untuk EFN).
+  Kontrak §14.D.8 baru menyebut `inactivity_expiry_months`; `expiry_notice_days` dan `activity_epoch` perlu
+  ditambahkan lead ke teks kontrak. Rentang Odoo (1..60 bulan, 7..90 hari) lebih lebar dari plafon BFF (6..36,
+  7..60) sesuai instruksi lead; plafon BFF yang menang.
+- G22: migrasi `post-migrate.py` (normalisasi baris lama) belum diuji dengan upgrade dari 19.0.1.1.0 berisi data.
+- `activity_epoch` tidak dibatasi rentang (masa depan diizinkan — menunda hangus untuk semua member; dijaga empat mata).
 - Metode publik baru wajib masuk `RPC_ALLOWLIST` `efn_core/tests/test_rpc_surface.py` (di luar cakupan file modul
   ini): `efn.loyalty.policy.action_efn_approve`, `efn.loyalty.policy.action_efn_reject`,
   `efn.loyalty.policy.outbox.action_efn_retry`, `efn.loyalty.accrual.action_efn_retry`.

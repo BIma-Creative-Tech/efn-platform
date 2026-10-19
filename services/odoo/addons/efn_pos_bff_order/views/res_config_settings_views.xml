@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="res_config_settings_view_form_inherit_efn_qr" model="ir.ui.view">
+        <field name="name">res.config.settings.view.form.inherit.efn.qr</field>
+        <field name="model">res.config.settings</field>
+        <field name="inherit_id" ref="pos_self_order.res_config_settings_view_form_menu"/>
+        <field name="arch" type="xml">
+            <block id="self_ordering_section" position="after">
+                <block title="QR ponsel Super-App (EFN)" id="efn_qr_section" groups="point_of_sale.group_pos_manager">
+                    <setting id="efn_qr_enabled" string="Pesanan QR ponsel lewat Super-App"
+                             help="Pelayan mencetak QR sesi meja; tamu memesan di ponsel; pesanan masuk sebagai order meja, bayar di kasir. Wajib review security sebelum aktif di produksi.">
+                        <field name="pos_efn_qr_enabled"/>
+                        <div class="content-group" invisible="not pos_efn_qr_enabled">
+                            <div class="row mt8">
+                                <label for="pos_efn_qr_preset_id" string="Preset (dine-in)" class="col-lg-4 o_light_label"/>
+                                <field name="pos_efn_qr_preset_id" domain="[('service_at', '=', 'table')]"/>
+                            </div>
+                            <div class="row">
+                                <label for="pos_efn_qr_confirm_mode" string="Konfirmasi" class="col-lg-4 o_light_label"/>
+                                <field name="pos_efn_qr_confirm_mode"/>
+                            </div>
+                            <div class="row">
+                                <label for="pos_efn_qr_session_hours" string="Umur QR (jam)" class="col-lg-4 o_light_label"/>
+                                <field name="pos_efn_qr_session_hours"/>
+                            </div>
+                            <div class="row">
+                                <label for="pos_efn_qr_max_submissions" string="Maks kiriman/meja" class="col-lg-4 o_light_label"/>
+                                <field name="pos_efn_qr_max_submissions"/>
+                            </div>
+                            <div class="row">
+                                <label for="pos_efn_qr_max_items" string="Maks item/meja" class="col-lg-4 o_light_label"/>
+                                <field name="pos_efn_qr_max_items"/>
+                            </div>
+                            <div class="row">
+                                <label for="pos_efn_qr_max_amount" string="Maks nominal/meja" class="col-lg-4 o_light_label"/>
+                                <field name="pos_efn_qr_max_amount"/>
+                            </div>
+                            <div class="row">
+                                <label for="pos_efn_qr_stale_minutes" string="Alert belum dikirim (menit)" class="col-lg-4 o_light_label"/>
+                                <field name="pos_efn_qr_stale_minutes"/>
+                            </div>
+                        </div>
+                    </setting>
+                </block>
+            </block>
+        </field>
+    </record>
+</odoo>

@@ -156,7 +156,7 @@ class EfnRole(models.Model):
                 raise ValidationError(_("efn_role:role_share_group — peran tidak boleh memuat grup portal/publik."))
             if set(role.group_ids.ids) & technical:
                 raise ValidationError(
-                    _("efn_role:role_technical_group — grup akun teknis (kanal online / perangkat KDS) bukan peran.")
+                    _("efn_role:role_technical_group — grup akun teknis (kanal online/KDS/QR) bukan peran.")
                 )
 
     # ----------------------------------------------------------- hak admin

@@ -20,6 +20,8 @@ accessLog:
       names:
         Authorization: drop
         Cookie: drop
+        # G22 (docs/04 §14.A.2): token sesi meja QR `fts1.` (bukti hadir di meja, <= 4 jam) - tidak pernah dicatat
+        X-Table-Session: drop
 
 # Ping hanya di loopback container (healthcheck `traefik healthcheck --ping`), bukan di network.
 ping:

@@ -103,6 +103,11 @@ export interface OrderExportRow {
  */
 export interface OnlineRepo {
   tx<T>(fn: (r: OnlineRepo) => Promise<T>): Promise<T>;
+  /**
+   * G22 §14.C: klien transaksi PostgreSQL saat ini (ledger poin online di transaksi yang SAMA dengan order/webhook/event).
+   * Opsional: fake test tidak mengimplementasikan (port poin di-fake).
+   */
+  sql?(): Queryable | null;
 
   lockMember(memberId: string): Promise<void>;
   /** Advisory lock job (xact) — `false` bila replika lain memegangnya. */
@@ -172,12 +177,16 @@ export interface OnlineRepo {
 // ───────────── PostgreSQL ─────────────
 
 const ORDER_COLS = `id::text AS id, member_id::text AS member_id, idempotency_key, request_sha256, quote_id::text AS quote_id, status,
-  amount_payable, currency, payment_method, payment_intent_id::text AS payment_intent_id, expires_at, paid_at, closed_at, close_reason, created_at, updated_at`;
+  amount_payable, currency, payment_method, payment_intent_id::text AS payment_intent_id, expires_at, paid_at, closed_at, close_reason, created_at, updated_at,
+  amount_points_value, amount_cash`;
 const PART_COLS = `id::text AS id, order_id::text AS order_id, channel_code, company_code, outlet_code, fulfilment, status, lines, tax_groups,
   amount_total, amount_payable, quote_hash, sale_order_name, odoo_state, last_seq, pickup_code_enc, counter_code_enc, refunded_amount, confirmed_at, ready_at,
-  handed_over_at, cancelled_at, cancel_reason, created_at, updated_at`;
+  handed_over_at, cancelled_at, cancel_reason, created_at, updated_at, points_redeemed, points_value_idr, amount_cash,
+  loyalty_reservation_id::text AS loyalty_reservation_id, eligible_amount, earn_status, points_earned, points_restored_value, kitchen_started_at`;
 const REFUND_COLS = `id::text AS id, part_id::text AS part_id, payment_intent_id::text AS payment_intent_id, kind, reason, lines, amount,
-  odoo_refund_ref, provider_refund_ref, status, failure_reason, initiated_by, claim_token::text AS claim_token, requested_by, created_at, updated_at, settled_at`;
+  odoo_refund_ref, provider_refund_ref, status, failure_reason, initiated_by, claim_token::text AS claim_token, requested_by, created_at, updated_at, settled_at,
+  points_value, cash_amount`;
+const nn = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
 
 type Raw = Record<string, unknown>;
 const d = (v: unknown): Date | null => (v === null || v === undefined ? null : v instanceof Date ? v : new Date(String(v)));
@@ -201,6 +210,8 @@ function toOrder(r: Raw): OrderRow {
     close_reason: (r.close_reason ?? null) as OrderRow['close_reason'],
     created_at: d(r.created_at) as Date,
     updated_at: d(r.updated_at) as Date,
+    amount_points_value: Number(r.amount_points_value ?? 0),
+    amount_cash: nn(r.amount_cash),
   };
 }
 
@@ -231,6 +242,15 @@ function toPart(r: Raw): PartRow {
     cancel_reason: (r.cancel_reason ?? null) as PartRow['cancel_reason'],
     created_at: d(r.created_at) as Date,
     updated_at: d(r.updated_at) as Date,
+    points_redeemed: Number(r.points_redeemed ?? 0),
+    points_value_idr: Number(r.points_value_idr ?? 0),
+    amount_cash: nn(r.amount_cash),
+    loyalty_reservation_id: (r.loyalty_reservation_id ?? null) as string | null,
+    eligible_amount: nn(r.eligible_amount),
+    earn_status: (r.earn_status ?? 'none') as PartRow['earn_status'],
+    points_earned: Number(r.points_earned ?? 0),
+    points_restored_value: Number(r.points_restored_value ?? 0),
+    kitchen_started_at: d(r.kitchen_started_at),
   };
 }
 
@@ -253,10 +273,12 @@ function toRefund(r: Raw): RefundRow {
     created_at: d(r.created_at) as Date,
     updated_at: d(r.updated_at) as Date,
     settled_at: d(r.settled_at),
+    points_value: Number(r.points_value ?? 0),
+    cash_amount: nn(r.cash_amount),
   };
 }
 
-const ORDER_PATCH_COLS = new Set(['status', 'payment_intent_id', 'paid_at', 'closed_at', 'close_reason', 'amount_payable', 'expires_at']);
+const ORDER_PATCH_COLS = new Set(['status', 'payment_intent_id', 'paid_at', 'closed_at', 'close_reason', 'amount_payable', 'expires_at', 'amount_points_value', 'amount_cash']);
 const PART_PATCH_COLS = new Set([
   'status',
   'sale_order_name',
@@ -272,8 +294,18 @@ const PART_PATCH_COLS = new Set([
   'cancel_reason',
   'amount_total',
   'amount_payable',
+  // G22 §14.C.6
+  'points_redeemed',
+  'points_value_idr',
+  'amount_cash',
+  'loyalty_reservation_id',
+  'eligible_amount',
+  'earn_status',
+  'points_earned',
+  'points_restored_value',
+  'kitchen_started_at',
 ]);
-const REFUND_PATCH_COLS = new Set(['status', 'amount', 'odoo_refund_ref', 'provider_refund_ref', 'settled_at', 'failure_reason', 'claim_token']);
+const REFUND_PATCH_COLS = new Set(['status', 'amount', 'odoo_refund_ref', 'provider_refund_ref', 'settled_at', 'failure_reason', 'claim_token', 'points_value', 'cash_amount']);
 
 /** SET klausa dari patch (nama kolom HANYA dari whitelist konstan, nilai selalu parameter). */
 function setClause(patch: Record<string, unknown>, allowed: ReadonlySet<string>, offset: number): { sql: string; params: unknown[] } {
@@ -301,6 +333,9 @@ export class PgOnlineRepo implements OnlineRepo {
     return this.db.tx((q) => fn(new PgOnlineRepo(q, null)));
   }
 
+  sql(): Queryable | null {
+    return this.db ? null : this.q; // hanya di dalam transaksi
+  }
   async lockMember(memberId: string): Promise<void> {
     await this.q.query(`SELECT pg_advisory_xact_lock(hashtext('efn:online:member:' || $1::text))`, [memberId]);
   }
@@ -431,11 +466,25 @@ export class PgOnlineRepo implements OnlineRepo {
     // claim_token selalu NULL saat dibuat
     const ins = await this.q.query<Raw>(
       `INSERT INTO platform.online_refund
-         (id, part_id, payment_intent_id, kind, reason, lines, amount, odoo_refund_ref, status, requested_by, initiated_by)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11)
+         (id, part_id, payment_intent_id, kind, reason, lines, amount, odoo_refund_ref, status, requested_by, initiated_by, points_value, cash_amount)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13)
        ON CONFLICT DO NOTHING
        RETURNING ${REFUND_COLS}`,
-      [r.id, r.part_id, r.payment_intent_id, r.kind, r.reason, r.lines === null ? null : JSON.stringify(r.lines), r.amount, r.odoo_refund_ref, r.status, r.requested_by, r.initiated_by ?? null],
+      [
+        r.id,
+        r.part_id,
+        r.payment_intent_id,
+        r.kind,
+        r.reason,
+        r.lines === null ? null : JSON.stringify(r.lines),
+        r.amount,
+        r.odoo_refund_ref,
+        r.status,
+        r.requested_by,
+        r.initiated_by ?? null,
+        r.points_value ?? 0,
+        r.cash_amount ?? null,
+      ],
     );
     if (ins.rows[0]) return toRefund(ins.rows[0]);
     const existing =

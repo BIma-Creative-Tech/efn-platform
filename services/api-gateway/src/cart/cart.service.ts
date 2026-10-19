@@ -4,7 +4,7 @@ import { Errors } from '../common/errors/api-error';
 import { asRecord } from '../common/validation';
 import { CatalogService } from '../catalog/catalog.service';
 import { OnlineErrors } from '../odoo-rpc/online-errors';
-import { CART_STORE, Cart, CartGroup, CartLine, CartStore } from './cart-store';
+import { CART_STORE, Cart, CartGroup, CartLine, CartStore, lineIdentity } from './cart-store';
 
 const OUTLET_RE = /^[A-Z0-9][A-Z0-9-]{1,23}$/;
 export const CART_MAX_LINES = 50;
@@ -35,22 +35,35 @@ export function parseCartPut(body: unknown): { version: number; groups: CartGrou
     if (seen.has(r.channel_code)) throw Errors.invalidRequest('Satu outlet per kanal.');
     seen.add(r.channel_code);
     if (!Array.isArray(r.lines)) throw Errors.invalidRequest();
-    const merged = new Map<number, number>();
+    // G22 B-4: baris digabung per identitas (product_id, PTAV terurut) — produk sama dengan modifier berbeda = dua baris
+    const merged = new Map<string, CartLine>();
     for (const l of r.lines) {
       const lr = asRecord(l);
-      if (Object.keys(lr).some((k) => k !== 'product_id' && k !== 'qty')) throw Errors.invalidRequest();
+      if (Object.keys(lr).some((k) => k !== 'product_id' && k !== 'qty' && k !== 'attribute_value_ids')) throw Errors.invalidRequest();
       const pid = lr.product_id;
       const qty = lr.qty;
       if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid < 1 || pid > 2_147_483_647) throw Errors.invalidRequest();
       if (typeof qty !== 'number' || !Number.isSafeInteger(qty) || qty < 1 || qty > QTY_HARD_MAX) throw Errors.invalidRequest();
-      merged.set(pid, (merged.get(pid) ?? 0) + qty);
+      const ptavRaw = lr.attribute_value_ids === undefined || lr.attribute_value_ids === null ? [] : lr.attribute_value_ids;
+      if (!Array.isArray(ptavRaw) || ptavRaw.length > 10) throw Errors.invalidRequest();
+      const ptav = ptavRaw.map((x) => {
+        if (typeof x !== 'number' || !Number.isSafeInteger(x) || x < 1 || x > 2_147_483_647) throw Errors.invalidRequest();
+        return x;
+      });
+      if (new Set(ptav).size !== ptav.length) throw Errors.invalidRequest();
+      const sorted = [...ptav].sort((a, b) => a - b);
+      const line: CartLine = sorted.length > 0 ? { product_id: pid, qty, attribute_value_ids: sorted } : { product_id: pid, qty };
+      const key = lineIdentity(line);
+      const prev = merged.get(key);
+      if (prev) prev.qty += qty;
+      else merged.set(key, line);
     }
     total += merged.size;
     return {
       channel_code: r.channel_code,
       outlet_code: r.outlet_code,
       fulfilment: r.fulfilment,
-      lines: [...merged].map(([product_id, qty]): CartLine => ({ product_id, qty })),
+      lines: [...merged.values()],
     };
   });
   if (total > CART_MAX_LINES) throw Errors.invalidRequest(`Maksimal ${CART_MAX_LINES} baris di keranjang.`);

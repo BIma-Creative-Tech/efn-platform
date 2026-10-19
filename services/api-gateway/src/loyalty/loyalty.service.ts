@@ -200,6 +200,28 @@ export class LoyaltyService {
     return this.cipher.encrypt(memberRef, PII_AAD.LOYALTY_LEDGER_MEMBER_REF);
   }
 
+  /** G22: dekripsi `loyalty_ledger.member_ref_enc` (hanya di memori; pemanggil WAJIB memverifikasi hash). */
+  decryptLedgerMemberRef(enc: Buffer): string {
+    return this.cipher.decrypt(enc, PII_AAD.LOYALTY_LEDGER_MEMBER_REF);
+  }
+
+  /**
+   * G22: `member.member_ref_enc` (AAD member) → dekripsi + verifikasi hash → enkripsi ulang dengan AAD ledger, untuk entri
+   * ledger dari kanal ber-akun (online, QR). `null` bila member tidak aktif. Nomor tidak pernah keluar dari fungsi ini
+   * kecuali sebagai ciphertext ledger.
+   */
+  async ledgerEncForMember(q: Queryable, memberId: string): Promise<{ hash: string; enc: Buffer; memberRef: string } | null> {
+    const res = await q.query<{ member_hash: string; member_ref_enc: Buffer }>(
+      `SELECT member_hash, member_ref_enc FROM platform.member WHERE id = $1 AND deleted_at IS NULL`,
+      [memberId],
+    );
+    const row = res.rows[0];
+    if (!row) return null;
+    const ref = this.cipher.decrypt(row.member_ref_enc, PII_AAD.MEMBER_REF);
+    if (this.hashMember(ref) !== row.member_hash) throw new Error('member_ref_enc tidak konsisten dengan member_hash');
+    return { hash: row.member_hash, enc: this.encryptMemberRef(ref), memberRef: ref };
+  }
+
   /** Jalankan di dalam transaksi pemanggil (param `q`) bila digabung dengan klaim processed_message. */
   async earn(input: EarnInput, q: Queryable = this.db): Promise<EarnResult> {
     if (!Number.isSafeInteger(input.points) || input.points <= 0 || input.points > MAX_EARN_POINTS) {

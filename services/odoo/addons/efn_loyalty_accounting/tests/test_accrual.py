@@ -476,6 +476,40 @@ class TestEfnLoyaltyAccrual(FakeBffMixin, AccountTestInvoicingCommon):
         }
         self.assertRecon(logs, "INFO", expected)
 
+    def test_inactivity_expire_breakage_per_issuer_recon_zero(self):
+        """G22 W-17 (§14.D.5): entri ``inactivity_expire`` masuk ``expired_value_idr`` PT PENERBIT (bentuk respons
+        tidak berubah, tanpa flag). Member punya lot terbitan GL Rp2.500 dan PB Rp4.000 (17 Okt), tidak aktif, semua
+        sisa hangus 18 Okt -> masing-masing PT penerbit Dr Liabilitas / Cr Pendapatan Poin Kedaluwarsa, saldo Odoo =
+        closing BFF (0) -> RECON 0 di kedua PT."""
+        self.bff_responses = [self.accrual("GL", earned=2_500, closing=2_500, day="2026-10-17")]
+        with self.assertLogs(RECON_LOGGER, "INFO"):
+            self._run(self.gl, date(2026, 10, 17))
+        self.bff_responses = [self.accrual("PB", earned=4_000, closing=4_000, day="2026-10-17")]
+        with self.assertLogs(RECON_LOGGER, "INFO"):
+            self._run(self.pb, date(2026, 10, 17))
+        for company, value in ((self.gl, 2_500), (self.pb, 4_000)):
+            with self.subTest(company=company.efn_brand_code):
+                self.bff_responses = [self.accrual(company.efn_brand_code, expired=value, closing=0)]
+                with self.assertLogs(RECON_LOGGER, "INFO") as logs:
+                    record = self._run(company)
+                move = self._moves(company)
+                self.assertEqual(move.state, "posted")
+                self.assertEqual(move.company_id, company)
+                self.assertEqual(self._sums(move, "efn_loyalty_breakage_account_id"), (0, value))
+                self.assertEqual(self._sums(move, "efn_loyalty_liability_account_id"), (value, 0))
+                self.assertEqual((record.state, record.recon_status, record.recon_diff_idr), ("done", "ok", 0))
+                self.assertRecon(
+                    logs,
+                    "INFO",
+                    {
+                        "bff_closing_liability_idr": 0,
+                        "company_code": company.efn_brand_code,
+                        "date": DAY_STR,
+                        "diff_idr": 0,
+                        "odoo_liability_idr": 0,
+                    },
+                )
+
     def test_forfeit_without_breakage_account_is_missing_config(self):
         self.gl.sudo().write({"efn_loyalty_breakage_account_id": False})
         self.bff_responses = [self.accrual("GL", forfeited=200, closing=-200)]

@@ -16,6 +16,8 @@
        Auditor data pribadi lintas PT (efn_audit.group_auditor_personal) TIDAK dimasukkan: 18-38 belum diputuskan;
        Superadmin menambahkannya manual untuk auditor holding/DPO.
      - Staf Gudang di PT ber-Central Kitchen (PB, BCF): + mrp.group_mrp_user.
+     - Sales Manager Online: + stock.group_stock_user. Dengan purchase terpasang (purchase_stock auto-install), pembatalan
+       SO standar membaca purchase.order.line lewat stock.move; tanpa grup ini batal pesanan online dibayar -> AccessError.
      - Finance Manager: account.group_account_manager + account.group_account_user (manajer juga mengerjakan
        pembukuan; tanpa group_account_user, Accounting Manager CE 19 hanya mewarisi group_account_invoice).
 
@@ -106,7 +108,7 @@
         <field name="company_id" ref="efn_setup_company.company_efn"/>
         <field name="job_id" ref="efn_setup_org.job_sales_manager_online_efn"/>
         <field name="sequence">120</field>
-        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager')])]"/>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager'), ref('stock.group_stock_user')])]"/>
     </record>
     <record id="role_loyalty_manager_efn" model="efn.role">
         <field name="name">Loyalty Manager (EFN)</field>
@@ -208,7 +210,7 @@
         <field name="company_id" ref="efn_setup_company.company_rtl"/>
         <field name="job_id" ref="efn_setup_org.job_sales_manager_online_gl"/>
         <field name="sequence">120</field>
-        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager')])]"/>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager'), ref('stock.group_stock_user')])]"/>
     </record>
     <record id="role_loyalty_manager_gl" model="efn.role">
         <field name="name">Loyalty Manager (GL)</field>
@@ -310,7 +312,7 @@
         <field name="company_id" ref="efn_setup_company.company_fnb"/>
         <field name="job_id" ref="efn_setup_org.job_sales_manager_online_pb"/>
         <field name="sequence">120</field>
-        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager')])]"/>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager'), ref('stock.group_stock_user')])]"/>
     </record>
     <record id="role_loyalty_manager_pb" model="efn.role">
         <field name="name">Loyalty Manager (PB)</field>
@@ -412,7 +414,7 @@
         <field name="company_id" ref="efn_setup_company.company_bcr"/>
         <field name="job_id" ref="efn_setup_org.job_sales_manager_online_bcr"/>
         <field name="sequence">120</field>
-        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager')])]"/>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager'), ref('stock.group_stock_user')])]"/>
     </record>
     <record id="role_loyalty_manager_bcr" model="efn.role">
         <field name="name">Loyalty Manager (BCR)</field>
@@ -514,7 +516,7 @@
         <field name="company_id" ref="efn_setup_company.company_bcf"/>
         <field name="job_id" ref="efn_setup_org.job_sales_manager_online_bcf"/>
         <field name="sequence">120</field>
-        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager')])]"/>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager'), ref('stock.group_stock_user')])]"/>
     </record>
     <record id="role_loyalty_manager_bcf" model="efn.role">
         <field name="name">Loyalty Manager (BCF)</field>
@@ -609,7 +611,7 @@
         <field name="company_id" ref="efn_setup_company.company_farm"/>
         <field name="job_id" ref="efn_setup_org.job_sales_manager_online_farm"/>
         <field name="sequence">120</field>
-        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager')])]"/>
+        <field name="group_ids" eval="[Command.set([ref('sales_team.group_sale_manager'), ref('stock.group_stock_user')])]"/>
     </record>
     <record id="role_loyalty_manager_farm" model="efn.role">
         <field name="name">Loyalty Manager (FARM)</field>

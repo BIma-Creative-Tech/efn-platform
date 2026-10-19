@@ -108,6 +108,33 @@ Kemendagri `res.partner.efn_region_id` (modul `efn_region`, plaintext, ±500 nil
 - Koneksi PostgreSQL ETL memaksa `search_path=public`: nama skema `efn_etl` = nama role, sehingga `"$user"` di
   search_path bawaan akan me-resolve nama tak berkualifikasi ke skema view.
 
+### Poin online + KPI dapur KDS (docs/04 §14.B, §14.C.5) — Gelombang 22
+Risiko yang dimitigasi: R-B05/R-B06 (fraud/salah saji poin), SEC-61 (rekonsiliasi dua sumber kebenaran). ADR-020
+(liabilitas poin per PT), ADR-032 (F&B online lewat SO + KDS), ADR-036 (minimisasi PII).
+- **Rekonsiliasi poin online** (`efn_etl/loyalty_recon_online.py`, dipanggil di job `loyalty_recon` bila
+  `ETL_LOYALTY_RECON_ONLINE_ENABLED=true`): ledger BFF `source='online'` (`online_redeem|restore|earn|reverse`,
+  `source_ref = part_id`; kolom efn_readonly lama, tanpa hash member) vs view Odoo `efn_etl.online_points_payment`
+  (pembayaran jurnal Poin EFN di faktur [+] / nota kredit refund [−] SO online) dan `efn_etl.online_order_ref`
+  (state bagian, jumlah refund non-gagal). Temuan critical `online_points_payment_mismatch`,
+  `online_points_restore_mismatch` (sisa pembulatan floor < nilai poin per refund diterima, pola SEC-118),
+  `online_earn_without_picked_up`, `online_reverse_without_refund` -> ikut `anomalies` (alert
+  `EfnLoyaltyEtlReconAnomaly` yang ada). Baris harian `loyalty_points_daily.channel='online'`; view
+  `v_loyalty_points_daily_total` = persamaan kontrak §14.C.5 (POS + online per PT x hari). Bagian yang punya aktivitas
+  setelah batas jendela (belum settle) ditunda ke run berikutnya.
+- **KPI dapur** (`efn_etl/kds.py`, `ETL_ENABLE_KDS=true`): `efn_kds_ticket` -> `fact_kds_ticket` (durasi antre/masak/
+  tunggu/saji, status, rush, cetak offline, hitungan baris; tanpa label meja, nomor antrean, catatan, nama produk),
+  `efn_kds_station` -> `dim_kds_station`. Kanal `online` (tiket SO E-29a, kolom `efn_online_order_id`) hanya dibaca bila
+  `ETL_KDS_ONLINE_ENABLED=true` (setelah `efn_online_kds_bridge` terpasang). View Metabase `v_kds_ticket_daily`
+  (rata-rata/p50/p90 waktu tunggu, tiket terlambat vs `late_minutes` stasiun **saat ini**), `v_kds_ticket_hourly`.
+  Odoo menghapus tiket > 90 hari (autovacuum); salinan mart tetap (tanpa PII).
+- **Grant / view Odoo**: `sql/odoo-readonly-grants.sql` bagian G22 (bersyarat; jalankan ulang setelah modul terpasang).
+  ClickHouse: `infra/clickhouse/init/10-g22-kds-online-points.sql`, akses di `access/etl-access.sql` +
+  `access/metabase-access.sql`.
+- **Observability poin hangus (W-17, §14.D.9)**: dashboard Grafana `efn-loyalty-expiry.json` (metrik BFF
+  `efn_loyalty_expiry_total`, `efn_loyalty_expired_points_total`, `efn_loyalty_expiry_notice_failed_total` + heartbeat
+  `EFN_LOYALTY_EXPIRY_RUN`); alert run di `loki-rules/efn-loyalty.yml` (devsecops), alert notifikasi gagal di
+  `alert-rules.yml` grup `efn-loyalty-expiry`.
+
 ### Erasure DSAR (docs/04 §8.4)
 `efn_etl/erasure.py`: per request hitung baris `user_hash`/`member_hash` cocok → `ALTER TABLE ... DELETE` (mutation, `mutations_sync=2`; menghapus fisik, bukan sekadar mask seperti lightweight `DELETE`) → verifikasi `count()=0` → publish `{schema_version: 2, idempotency_key: "erasure:<request_id>:clickhouse", request_id, store: "clickhouse"}` (amqps, user `efn-etl`, properti `user_id`/`message_id`). Belum 0 / error → request tetap `processing`, diulang siklus berikutnya. Hash yang sedang dihapus dikecualikan dari job incremental pada siklus itu (overlap window tidak memuat ulang); bila `dsar_request` tidak terbaca, job ber-hash dilewati (fail closed). ETL tidak mendeklarasikan queue (milik BFF).
 
@@ -207,6 +234,8 @@ PDP (SEC-16, docs/04 §7.2): ETL **tidak memegang `otp_pepper`** dan tidak mengh
 | `ETL_ENABLE_ODOO` | `false` |
 | `ETL_ENABLE_GL` | `false` (butuh grant G12) |
 | `ETL_PARTNER_REGION_ENABLED` | `false` (butuh `efn_region` + grant G21 + `ETL_ENABLE_ODOO=true`) |
+| `ETL_LOYALTY_RECON_ONLINE_ENABLED` | `false` (G22; butuh recon aktif + mode `payment` + view G22) |
+| `ETL_ENABLE_KDS`, `ETL_KDS_ONLINE_ENABLED` | `false`, `false` (G22; butuh `ETL_ENABLE_ODOO` + grant G22; online setelah E-29a) |
 | `ETL_AUDIT_COPY_ENABLED`, `ETL_AUDIT_SETTLE_SECONDS`, `ETL_AUDIT_LATE_WINDOW_SECONDS`, `ETL_AUDIT_BATCH_SIZE` | `false`, `600`, `86400`, `2000` |
 | `ETL_AUDIT_RECON_INTERVAL_SECONDS`, `ETL_AUDIT_RECON_CONTENT` | `86400`, `true` (bandingkan hash isi; `false` = hanya id) |
 | `ETL_AUDIT_SINK_ENABLED`, `LOKI_URL`, `LOKI_CA_FILE`, `LOKI_CLIENT_CERT_FILE`, `LOKI_CLIENT_KEY_FILE`, `EFN_AUDIT_SINK_KEY_FILE` | aktif bila audit copy + `LOKI_URL`; secret `tls_etl_crt/key`, `efn_audit_sink_key` |

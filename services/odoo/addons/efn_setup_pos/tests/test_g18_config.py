@@ -189,6 +189,31 @@ class TestEfnPointsPaymentMethodData(TransactionCase):
                 self.assertFalse(method.journal_id.bank_account_id)
                 self.assertEqual(method.outstanding_account_id.account_type, "liability_current")
 
+    def test_points_journal_payment_lines_use_pt_liability_account(self):
+        """G22 L-79: baris metode masuk/keluar jurnal Poin EFN tiap PT = akun liabilitas/kliring Poin EFN PT itu."""
+        for suffix in ("rtl", "fnb", "bcr", "bcf"):
+            with self.subTest(pt=suffix):
+                journal = self.env.ref(f"efn_setup_pos.journal_points_{suffix}")
+                account = self.env.ref(f"efn_setup_pos.account_points_liability_{suffix}")
+                inbound = journal.inbound_payment_method_line_ids
+                outbound = journal.outbound_payment_method_line_ids
+                self.assertTrue(inbound and outbound)
+                self.assertEqual((inbound | outbound).payment_account_id, account)
+
+    def test_points_journal_accounts_function_fills_only_empty_lines(self):
+        Method = self.env["pos.payment.method"]
+        journal = self.env.ref("efn_setup_pos.journal_points_fnb")
+        account = self.env.ref("efn_setup_pos.account_points_liability_fnb")
+        inbound = journal.inbound_payment_method_line_ids[:1]
+        outbound = journal.outbound_payment_method_line_ids[:1]
+        other = account.copy({"code": "21990092", "name": "Akun pilihan Finance uji"})
+        inbound.payment_account_id = False
+        outbound.payment_account_id = other
+        filled = Method._efn_setup_points_journal_accounts()
+        self.assertIn(inbound, filled)
+        self.assertEqual(inbound.payment_account_id, account)
+        self.assertEqual(outbound.payment_account_id, other, "pilihan Finance tidak ditimpa")
+
     def test_redeem_enabled_config_gets_points_method(self):
         company = self.env.ref("efn_setup_company.company_rtl")
         config = self._new_config(company, efn_loyalty_redeem_enabled=True)

@@ -105,6 +105,10 @@ export class FakeLoyaltyDb implements Db {
   readonly erasureActive = new Set<string>();
   readonly suppression = new Map<string, string>();
   noLocks = false;
+  /** G22 §14.D.2: `platform.loyalty_member_activity` (member_hash → jam aktivitas terakhir). */
+  readonly activity = new Map<string, { last_activity_at: string; last_kind: string }>();
+  /** G22 §14.A.4: order QR yang dikenal BFF (`order_uuid` → `draft`|`paid`|`cancelled`|`closed_unlisted`). */
+  readonly qrOrders = new Map<string, string>();
   /** Jumlah transaksi yang di-rollback (untuk asersi). */
   rollbacks = 0;
   private seq = 0;
@@ -180,6 +184,36 @@ export class FakeLoyaltyDb implements Db {
     }
 
     if (text.startsWith('SET TRANSACTION')) return ok([]); // snapshot/read-only: fake sudah serial per query
+
+    // ───── G22 §14.D.2 aktivitas member (GREATEST, idempoten) ─────
+    if (text.includes('INSERT INTO platform.loyalty_member_activity')) {
+      const hash = String(p[0]);
+      const at = String(p[1]);
+      const prev = this.activity.get(hash);
+      const next = !prev || ms(at) >= ms(prev.last_activity_at) ? { last_activity_at: at, last_kind: String(p[2]) } : prev;
+      this.activity.set(hash, next);
+      undo.push(() => (prev ? this.activity.set(hash, prev) : this.activity.delete(hash)));
+      return ok([], 1);
+    }
+    // ───── G22 §14.D.5 akrual: hangus tidak aktif (entri eksplisit) per penerbit per tanggal ─────
+    if (text.includes('AS inactivity_points')) {
+      const [from, to, company] = [ms(String(p[0])), ms(String(p[1])), String(p[2])];
+      const sum = this.ledger
+        .filter((r) => r.reason === 'inactivity_expire' && (r.issuer_company_code ?? r.company_code) === company)
+        .filter((r) => ms(this.createdAt(r)) >= from && ms(this.createdAt(r)) < to)
+        .reduce((s, r) => s - r.delta_points, 0);
+      return ok([{ inactivity_points: String(sum) }]);
+    }
+    // ───── G22 §14.A.4 reverse earn_channel=qr: status order QR (fnb_submission / sesi) ─────
+    if (text.includes('AS qr_known') && text.includes('platform.fnb_')) {
+      // r15 K3: `draft` = sesi belum close; `closed_unlisted` = close sudah diproses tetapi order tidak di orders[]
+      const s = this.qrOrders.get(String(p[0]));
+      return ok(
+        s === undefined
+          ? []
+          : [{ qr_known: true, settled: s === 'paid' || s === 'cancelled', close_processed: s !== 'draft' }],
+      );
+    }
 
     // ───── G21 kebijakan poin ─────
     if (text.includes('INSERT INTO platform.loyalty_policy')) {

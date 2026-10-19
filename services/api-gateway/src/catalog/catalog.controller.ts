@@ -112,7 +112,8 @@ export class CatalogController {
     @Req() req: FastifyRequest,
     @Res() reply: FastifyReply,
   ): Promise<void> {
-    requireCatalog(this.config);
+    // G22 §14.A.3: gambar menu QR memakai endpoint ini → juga aktif bila FNB_QR_ENABLED walau katalog online mati
+    if (!this.config.fnbQrEnabled) requireCatalog(this.config);
     await limitByIp(this.limiter, this.config, 'CATALOG', req);
     const s = size === undefined || size === '' ? 512 : size === '512' ? 512 : size === '1024' ? 1024 : null;
     if (s === null) throw Errors.invalidRequest();

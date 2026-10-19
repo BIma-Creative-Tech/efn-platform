@@ -123,6 +123,11 @@ class EfnPosLoyaltyOutbox(models.Model):
     # L-26: supervisor menyetujui nilai restore yang ditolak BFF (`409 restore_value_mismatch`); reverse dikirim
     # ulang dengan `restore_approved: true` (BFF tetap membatasi ke sisa redeem). Hanya diisi aksi supervisor.
     restore_approved = fields.Boolean(string="Restore disetujui supervisor", readonly=True, copy=False)
+    # G22 L-80 (docs/04 §14.A.4 "Perubahan §9.4"): reverse atas order sesi QR yang earn-nya (bila ada) dilakukan BFF
+    # untuk member pengklaim sesi -> `earn_channel: "qr"` TANPA member_ref (Odoo tidak tahu member/earn QR).
+    earn_channel = fields.Selection(
+        [("pos", "POS"), ("qr", "QR ponsel")], string="Kanal earn", default="pos", readonly=True, copy=False
+    )
     state = fields.Selection(STATES, required=True, default="pending", index=True, readonly=True, tracking=True)
     attempt_count = fields.Integer(readonly=True)
     next_attempt_at = fields.Datetime(index=True, readonly=True, default=fields.Datetime.now)
@@ -386,6 +391,24 @@ class EfnPosLoyaltyOutbox(models.Model):
                     **self._efn_goods_field("order_goods_incl", order, minimum=1),
                 },
                 {"member": mask_phone(member), "order_ref": order.uuid},
+            )
+        if self.kind == "reverse" and self.earn_channel == "qr":
+            # L-80: BFF mencari member dari entri `pos_earn:<original_order_ref>`; tidak ada earn -> 200 nol.
+            # Bila earn QR belum tercatat (event session_closed tertunda) BFF membalas 409 earn_pending (dicoba ulang).
+            original = self.original_order_id.sudo()
+            return (
+                REVERSE_PATH,
+                {
+                    "idempotency_key": self.idempotency_key,
+                    "original_order_ref": original.uuid,
+                    "refund_order_ref": order.uuid,
+                    "earn_channel": "qr",
+                    "refunded_eligible_amount": self.eligible_amount,
+                    "refund_ratio": round(self.refund_ratio, 6),
+                    "points_restored_value": 0,
+                    **self._efn_goods_field("refund_goods_incl", order, minimum=0),
+                },
+                {"order_ref": order.uuid, "channel": "qr"},
             )
         if self.kind == "reverse":
             original = self.original_order_id.sudo()

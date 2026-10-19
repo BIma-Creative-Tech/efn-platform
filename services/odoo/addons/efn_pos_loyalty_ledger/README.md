@@ -8,6 +8,37 @@ Poin EFN di POS Odoo CE 19: **earn** dari penjualan, **tukar poin** (wajib OTP p
 - **Risiko dimitigasi:** R-T02 (fraud promo/poin dari kasir: baris poin divalidasi server terhadap reservasi ber-OTP), R-B06 (saldo ganda/hilang: outbox transaksional + idempotency key), POS tidak berhenti saat BFF mati (semua panggilan ledger lewat outbox).
 - **Depends:** `point_of_sale`, `pos_loyalty`, `mail`, `efn_core`, `efn_pos_otp_gate` (semua CE / efn_*). `pos_loyalty` hanya dipakai untuk menetralkan baris poin dari perhitungan program promo — **bukan** `loyalty.card`/`program_type='loyalty'` (D-05).
 
+## G22 — L-80: refund order QR ponsel (versi 19.0.2.4.0)
+- Order sesi meja QR yang dibayar dilaporkan `efn_pos_bff_order` ke BFF (event `session_closed` → `orders[]`) dan
+  ditandai `pos.order.efn_qr_points_eligible` (field modul itu; dibaca di sini **tanpa depends**). BFF meng-earn untuk
+  member pengklaim sesi dengan kunci `pos_earn:<order_uuid>`.
+- Refund atas order seperti itu yang **tidak** ikut loyalty POS (tanpa earn/commit POS, tanpa pembayaran Poin EFN) →
+  outbox `reverse` dengan `earn_channel: "qr"` **tanpa `member_ref`** (`points_restored_value: 0`, dasar & rasio = rumus
+  refund POS). BFF membalas `200 {points_clawed_back: 0, …}` bila tidak ada earn, `409 earn_pending` (dicoba ulang)
+  bila event close belum diproses. Order asal yang ikut loyalty POS tetap jalur lama (`member_ref`).
+- ~~Batasan: refund sebelum sesi ditutup tidak mengirim reverse QR dan BFF meng-earn penuh~~ — diperbaiki r15 (lihat
+  di bawah).
+
+### r15 (19.0.2.4.1) — K3 / SEC-164
+Keputusan per refund diambil `efn_pos_bff_order` (`pos.order._efn_qr_refund_mode`, dipanggil lewat `hasattr`, tanpa
+depends) dan dijalankan `_efn_loyalty_qr_refund`:
+
+| Keadaan order asal saat refund dibayar | Tindakan |
+|---|---|
+| Sesi meja masih `open`/`expired`, atau sudah close tetapi snapshot event close belum dibekukan | **Tanpa reverse** (`deferred`). Baris sesi dikunci (`touch_row`); saat snapshot dibekukan, `eligible_amount` order dikurangi semua refund yang sudah dibayar (neto); refund ditandai `efn_qr_refund_netted` setelah 2xx. |
+| Snapshot close sudah beku, belum 2xx (L-83) | **Tanpa reverse sekarang** (`awaiting`): refund ditandai `efn_qr_refund_awaiting`; saat 2xx outbox QR memanggil `_efn_loyalty_qr_refund` lagi → reverse QR, rasio vs `eligible_amount` snapshot. Close gagal permanen → tetap bertanda + alert `EFN_QR_REFUND_UNRESOLVED`. |
+| Event close sudah 2xx, order dilaporkan dapat di-earn QR (`efn_qr_points_eligible`) | Reverse `earn_channel:"qr"`; `refund_ratio` = dasar refund ÷ **dasar neto yang dikirim di close** (`efn_qr_eligible_amount`) dikurangi rasio reverse QR sebelumnya (≤ 1). |
+| Refund sudah dinetokan di snapshot (`efn_qr_refund_netted`) | Tanpa reverse (hindari potong dobel). |
+| Lainnya (bukan order sesi QR, sesi ditutup staf/dibatalkan, order `pos_member_attached`) | Tanpa reverse QR; order ber-member POS memakai jalur reverse POS biasa (`member_ref`). |
+
+Tidak ada jendela hilang: pembekuan snapshot dan pemrosesan 2xx di outbox QR mengunci baris sesi yang sama, sehingga
+refund dan outbox yang berjalan paralel terserialisasi (yang kalah gagal serialisasi lalu diulang Odoo). Reverse QR
+hanya dikirim setelah event close 2xx (BFF menjamin 2xx setelah earn tercatat durable). Urutan lengkap:
+`efn_pos_bff_order/README.md` §"Poin QR". Test: `efn_pos_bff_order/tests/test_qr_session.py`
+(`test_refund_qr_order_sends_qr_reverse`, `test_refund_before_close_is_netted_without_reverse`,
+`test_refund_after_close_ratio_against_net`, `test_frozen_snapshot_reused_and_awaiting_refund_reversed_on_2xx`,
+`test_awaiting_refund_kept_and_alerted_when_close_fails`; reverse dilewati bila modul ini tidak terpasang).
+
 ## G18 — E-30: tukar poin = metode bayar (versi 19.0.2.0.0)
 > **Ringkasan manajemen.** Penukaran Poin EFN di kasir kini menjadi **cara bayar** "Poin EFN" (seperti EDC),
 > bukan diskon. Harga, DPP, dan PPN/PB1 tetap atas harga penuh (keputusan pemilik proyek P-8). Kasir tetap wajib

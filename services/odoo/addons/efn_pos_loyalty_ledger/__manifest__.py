@@ -2,7 +2,11 @@
     "name": "EFN POS Loyalty Ledger",
     "summary": "Earn, tukar (OTP), dan clawback Poin EFN di POS lewat ledger BFF (outbox transaksional).",
     # 19.0.2.3.0 (G21 E-44): GET /v1/pos/loyalty/params?company_code=<PT> (kebijakan aktif per PT, docs/04 §13.1).
-    "version": "19.0.2.3.0",
+    # 19.0.2.4.0 (G22 L-80, docs/04 §14.A.4): refund order sesi QR (`efn_qr_points_eligible`, efn_pos_bff_order,
+    # dibaca tanpa depends) -> reverse `earn_channel: "qr"` tanpa member_ref; field outbox `earn_channel`.
+    # 19.0.2.4.1 (G22 r15 K3, SEC-164): reverse QR hanya bila sesi meja sudah close (`_efn_qr_refund_mode`); refund
+    # saat sesi open/expired dinetokan di event close (tanpa reverse); rasio reverse terhadap dasar neto close.
+    "version": "19.0.2.4.1",
     "category": "EFN/Point of Sale",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",

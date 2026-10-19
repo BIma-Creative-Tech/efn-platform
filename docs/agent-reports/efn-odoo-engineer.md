@@ -2013,3 +2013,386 @@ Cakupan hanya `services/odoo/addons/efn_loyalty_accounting/**`. Tanpa shell: **t
   Kedaluwarsa (L-67). Pemisahan butuh komponen kontrak BFF baru.
 - Pasca-deploy: SOD-03 harus `block` (bukan `report_only`) sebelum kebijakan prod — bagian rekomendasi SEC-157 kedua,
   di luar cakupan file (efn_role/runbook).
+
+---
+
+# G22 (C) — `efn_loyalty_accounting` 19.0.1.2.0: parameter W-17 di kebijakan global (D-22-13, D-22-15) + cek breakage L-67 — 19 Okt 2026
+
+Kontrak: `docs/04` §14.D.2/D.3/D.5/D.8, §14.7 L-72, L-73. Cakupan hanya `services/odoo/addons/efn_loyalty_accounting/**`.
+Tanpa shell: **test BELUM DIJALANKAN** (lead menjalankan di container). Tidak ada commit.
+
+## Modul & file
+- `models/efn_loyalty_policy.py`: field `inactivity_expiry_months` (Integer, default 12), `expiry_notice_days`
+  (Integer, default 30), `activity_epoch` (Date, opsional) — semuanya `tracking`, masuk `POLICY_FIELDS` (empat mata via
+  `editor_ids`, read-only setelah approved termasuk sudo, audit `efn_audit`). Hanya record global (EFN): validasi
+  1..60 bulan, 7..90 hari, `notice < 28 × bulan`; PT lain wajib 0/kosong. Default via `_efn_default_for(company, name)`
+  (company record, juga dipakai `create` untuk field global-only yang tidak dikirim). CHECK SQL baru
+  `_inactivity_non_negative`. `_efn_publish_body`: kunci W-17 di `params` hanya EFN, dihilangkan bila kosong.
+- `migrations/19.0.1.2.0/post-migrate.py` (baru): normalisasi baris lama (non-EFN & global non-draft → 0/NULL; draft
+  global kosong → 12/30) agar body versi lama tetap byte-identik.
+- `views/efn_loyalty_policy_views.xml`: grup *Poin hangus karena tidak aktif* (`invisible="not is_global"`), kolom
+  list opsional.
+- `__manifest__.py` 19.0.1.1.0 → 19.0.1.2.0; `README.md` (bagian W-17, body persis, test, batasan).
+- Test: `tests/test_policy.py` (+4), `tests/test_policy_outbox.py` (+1, 1 diperluas), `tests/test_signing.py` (+1),
+  `tests/test_accrual.py` (+1).
+
+## Breakage L-67 (butir 2) — terverifikasi dari kode, tanpa perubahan
+`efn_loyalty_accrual._efn_line_specs` menjurnal `expired_value_idr` (dan `forfeited_value_idr`) tanpa syarat flag sejak
+r14/SEC-160; `efn.loyalty.breakage_journal_enabled` sudah dihapus dan test r14 membuktikan param lama `False` diabaikan.
+Test RECON 0 setelah expire sudah ada (`test_expired_and_forfeited_journaled_recon_zero`); ditambah
+`test_inactivity_expire_breakage_per_issuer_recon_zero` (lot GL & PB hangus → jurnal di masing-masing PT penerbit,
+RECON 0 keduanya). Bentuk respons akrual tidak berubah (§14.D.5).
+
+## Bentuk payload persis untuk BFF (PUT `/v1/pos/loyalty/policies/EFN/{version}`)
+`params` (hanya `company_code=EFN`) = 8 field per PT + `inactivity_expiry_months` (int) + `expiry_notice_days` (int) +
+`activity_epoch` (string `YYYY-MM-DD`, **hanya bila diisi**). `schema_version` tetap 1. Byte kanonik contoh:
+`{"approved_by_uid":7,"company_code":"EFN","effective_from":"2026-11-01T00:00:00Z","params":{"activity_epoch":"2026-11-01","company_hourly_max":50000,"daily_max_points_member":2000,"earn_idr_per_point":10000,"earn_on_money_only":true,"expiry_notice_days":30,"inactivity_expiry_months":12,"max_points_per_order":5000,"pos_config_hourly_max":10000,"redeem_max_pct":50,"redeem_min_points":50},"point_value_idr":100,"schema_version":1,"version":2}`
+PT selain EFN: body tidak berubah. Versi global pra-G22: tanpa ketiga kunci (BFF → fallback env).
+
+## Untuk lead / tim lain
+- **BFF (blokir publikasi EFN):** `loyalty-policy.ts` G21 menolak kunci `params` tak dikenal → kebijakan EFN baru `400`
+  final sampai `parsePolicyParams` menerima ketiga kunci (opsional, hanya EFN; PT lain tetap ditolak), dan
+  `policyViolations` menerapkan plafon `LOYALTY_POLICY_CEILING_INACTIVITY_MONTHS_MIN/_MAX` (+ batas notice 7..60).
+  Penyimpanan jsonb dibaca ulang lewat parser yang sama — perlu ikut diperluas.
+- **Kontrak:** §14.D.8 hanya menyebut `inactivity_expiry_months` di `params`; mohon lead menambah `expiry_notice_days`
+  dan `activity_epoch` (sesuai instruksi gelombang ini). Rentang Odoo 1..60 / 7..90 mengikuti instruksi lead (lebih
+  longgar dari plafon BFF 6..36 / 7..60 — plafon BFF menang, `422` final).
+- Tidak ada RPC publik baru (`RPC_ALLOWLIST` tidak berubah).
+
+## Belum diverifikasi / titik rawan test
+- Semua test di atas belum dijalankan. Titik rawan: `default_get` untuk field `Date` (test memakai
+  `fields.Date.to_date` agar toleran string/date); `assertRaises((IntegrityError, ValidationError))` untuk bulan negatif
+  (CHECK SQL vs constraint Python, mana yang lebih dulu); `with_context(allowed_company_ids=[EFN, GL])` untuk
+  kebijakan GL dengan company aktif EFN.
+- `_init_column` saat upgrade mengisi kolom baru dengan default lambda (company superuser) sebelum post-migrate
+  menormalisasi — upgrade dengan data nyata belum diuji.
+- Penempatan `<div>` di dalam `<group>` form (render) belum dicek visual.
+
+---
+
+# G22 (B) — E-29a `efn_online_kds_bridge` + B-4 atribut + W-12 Poin EFN online — 19 Okt 2026
+
+Kontrak: `docs/04` §14.B (W-04), §14.C.4 (W-12), §14.7 L-72 (D-22-8, D-22-9, D-22-11) + pesan lead **L-78** (baris quote
+membawa `attribute_value_ids` naik + `attributes_text`, identitas `(product_id, attribute_value_ids)`, masuk
+`quote_hash`). Spesifikasi `docs/08` §10.6, §13.2 (#1–#6), §13.5. Tanpa shell: **test BELUM DIJALANKAN**; tidak ada
+commit. `efn_pos_kds`, `efn_pos_bff_order`, `efn_role`, `efn_loyalty_accounting` **tidak disentuh**.
+
+## Modul & file
+- **Baru `efn_online_kds_bridge` 19.0.1.0.0** (auto-install; depends `efn_online_order`, `efn_pos_kds`): `__manifest__.py`,
+  `__init__.py`, `hooks.py` (uninstall: hapus tiket `order_id IS NULL`), `models/efn_kds_ticket.py` (`order_id`
+  opsional, `efn_online_order_id` ber-`groups`, CHECK satu sumber, UNIQUE per sumber, override
+  `_efn_kds_after_change`), `models/efn_online_order.py` (hook confirmed/cancelled/refund, stasiun dari gudang outlet
+  atau `kds_config_id`, tiket, sinkron preparing/ready), `models/efn_online_outlet.py` (`kds_config_id`, constraint
+  E-29a-6), `views/efn_online_kds_bridge_views.xml`, `tests/test_online_kds_bridge.py` (11 test), `README.md`.
+- **`efn_online_order` 19.0.1.6.0 → 19.0.1.7.0**: `models/efn_online_common.py` (`cart_lines_payload`,
+  `cart_lines_canonical`, `points_payment_payload`, `round_half_up`, `floor_idr`, kode `points_invalid`),
+  `models/efn_online_loyalty.py` (baru, helper non-model: kebijakan published, nilai tukar global, metode/jurnal Poin
+  EFN, kategori dikecualikan), `models/efn_online_channel.py` (atribut katalog/quote/validasi PTAV, `loyalty_earn/redeem`,
+  blok channel, combo dikecualikan, sold-out/F&B stok, hash PTAV), `models/efn_online_order.py` (points di place/paid,
+  `amount_due`, hook, `_efn_set_ready`, `_efn_set_kitchen_started`, `eligible_amount`), `models/efn_online_refund.py`
+  (`points_value`, `cash_amount`, `eligible_amount_refunded`, settle terpisah), `models/efn_online_event_outbox.py`
+  (event `preparing`, kunci baru), `models/product_template.py` (`efn_online_sold_out`), 3 view, `README.md`, test baru
+  `tests/test_online_g22.py` (~22 test), `tests/test_online_api.py` (set kunci katalog/blok disesuaikan).
+- **`efn_online_pos_counter` 19.0.1.1.0 → 19.0.1.2.0**: lookup `amount_due`, pelunasan = `amount_due`, otorisasi/refund
+  POS = `cash_amount`, JS `control_buttons_patch.js` (`found.amount_due`), README, test baru
+  `tests/test_counter_points.py`, `test_online_pos_counter.py` (2 asersi disesuaikan).
+
+## Perubahan json2 / event persis
+Lihat README `efn_online_order` §G22 "Perubahan json2/event persis". Ringkas: katalog `items[].attributes`,
+`channel.business_type`, `channel.loyalty{earn,redeem}`; quote `lines[].attribute_value_ids` + `attributes_text`, issue
+`attribute_invalid`; place input `lines[].attribute_value_ids`, `points_payment{points,value_idr}`, hasil + `amount_due`;
+mark_paid input `payment.points_value` (opsional); refund/cancel/status refund + `points_value`, `cash_amount`,
+`eligible_amount_refunded`; status + `eligible_amount`; lookup POS `{order_label, amount_due}` (kunci `amount_payable`
+**dihapus**). Event: `paid` counter `payment:{method, points_value}`, `ready` + `ready_source`, **`preparing`** baru +
+`kitchen_started_at`, `picked_up` + `loyalty:{eligible_amount}` (hanya kanal `loyalty_earn`), blok `refund` + 3 kunci.
+Kode error baru `efn_online:points_invalid`. **Tidak ada RPC baru** → `RPC_ALLOWLIST` tidak berubah.
+
+## Keputusan / tafsiran (mohon dikonfirmasi lead)
+1. Kebijakan Poin EFN dibaca dari `efn.loyalty.policy` **published** (PT + global EFN) tanpa `depends`; tidak ada
+   kebijakan → `points_invalid` (fail-closed) walau BFF memakai env fallback.
+2. ~~Pengisian akun runtime~~ — **diganti L-79** (lihat bagian di bawah).
+3. Combo dikecualikan dari katalog **semua** kanal (bukan hanya F&B) karena SO online tidak membangun baris anak combo.
+4. `efn_online_sold_out` berlaku semua kanal; kanal F&B selalu `in_stock` tanpa `qty` kecuali ditandai habis.
+5. `required` atribut = `display_type != "multi"`; atribut tunggal wajib tepat satu nilai (BFF lama tanpa
+   `attribute_value_ids` untuk produk beratribut → `attribute_invalid`).
+6. Blok `loyalty` di `picked_up` hanya bila kanal `loyalty_earn` (kill switch Odoo).
+7. Refund per baris saat `confirmed` → tiket KDS pengurangan; refund penuh/batal → tiket batal.
+
+## API Odoo 19.0 diverifikasi (WebFetch raw 19.0, 19 Okt 2026)
+`sale/models/sale_order_line.py` (`product_no_variant_attribute_value_ids` compute-store-readonly=False,
+`_get_product_price_context`, `_get_pricelist_price`), `product/models/product_product.py`
+(`_get_no_variant_attributes_price_extra`, context `no_variant_attributes_price_extra`),
+`product_template_attribute_value.py` (`ptav_active`, `is_custom`, `price_extra`, `attribute_line_id`),
+`product_template_attribute_line.py` (`sequence`, `product_template_value_ids`), `product_attribute.py`
+(`create_variant` `no_variant`, `display_type` radio/pills/select/color/multi/image), `product_template.py`
+(`valid_product_template_attribute_line_ids`, `type` combo), `account/models/account_payment.py` (outstanding account,
+`_generate_journal_entry` hanya bila ada akun, state paid bila akun likuiditas tidak reconcile).
+
+## Belum diverifikasi / titik rawan test
+- Semua test belum dijalankan; `ruff format --check` belum dijalankan (format ditulis manual mengikuti gaya repo).
+- `sale.order.new()` dengan `Command.set` PTAV + `_origin` pada baris baru; `account.payment.register` dua kali
+  (tunai jurnal tanpa akun outstanding = tanpa jurnal → `in_payment`; poin dengan jurnal) pada faktur yang sama.
+- `models.Constraint` CHECK/UNIQUE baru di `efn.kds.ticket` + pelepasan `NOT NULL` `order_id` saat install pada DB yang
+  sudah berisi tiket (upgrade nyata belum diuji); `uninstall_hook` sebelum `NOT NULL` dipasang kembali.
+- `pos.preset.create` di test E-29a-6 (field wajib lain bila ada); `product.combo` di test D-22-9; `default_extra_price`
+  atribut.
+- Test bridge memakai `basic_config` TestPoSCommon + kanal tanpa pembulatan kas; regresi `efn_pos_kds` dengan bridge
+  terpasang (payload KDS tidak berubah, tetapi semua test `efn_pos_kds` kini jalan dengan field opsional).
+
+## Untuk lead / tim lain
+- **CI (devsecops):** tambahkan `efn_online_kds_bridge` ke `EFN_TEST_MODULES` (`.github/workflows/ci.yml` baris 37).
+- **BFF:** lookup counter ke frontend POS tidak lewat BFF; event `preparing` → `ignored_unknown_event` sampai ditambah
+  ke `KNOWN_EVENTS`; parser `refund`/`payment` sudah toleran kunci tambahan (diperiksa `order-events.service.ts`).
+  Kode `efn_online:points_invalid` → `409 exceeds_max_pct`; `attribute_invalid` → `409 cart_has_issues`.
+- **Functional:** sebelum `loyalty_redeem=True` pastikan kebijakan PT + EFN dipublikasikan dan metode "Poin EFN" PT
+  punya `outstanding_account_id`; kanal PB/BCF `stock_check='none'`.
+
+## L-79 (pesan lead, mengikat) — akun jurnal Poin EFN
+- `efn_online_order/models/efn_online_loyalty.py`: penulisan runtime `payment_account_id` **dihapus**. `points_journal`
+  = siap hanya bila metode punya `outstanding_account_id` dan semua baris metode masuk/keluar jurnal punya
+  `payment_account_id`; `points_journal_raw` (tanpa cek akun) untuk aktivitas.
+- `efn_online_order/models/efn_online_order.py`: `_efn_check_points_payment` → jurnal tidak siap →
+  `_efn_points_account_missing` (log ERROR id company saja + `cr.postrollback` → `_efn_points_account_alert_job` cursor
+  baru → `_efn_points_account_activity`: To-Do Accounting Manager di jurnal Poin EFN, sekali per company per hari via
+  `ir.config_parameter efn_online.points_account_alert.<company_id>`) → `points_invalid`. Mark-paid tetap `review
+  points_journal_missing` sebagai pertahanan kedua.
+- `efn_setup_pos` 19.0.1.12.0 → **19.0.1.13.0**: `models/pos_payment_method_points.py` (baru,
+  `_efn_setup_points_journal_accounts`: isi `payment_account_id` baris kosong jurnal Poin EFN setiap metode
+  `efn_is_loyalty_points` = `outstanding_account_id` metode = akun liabilitas/kliring PT; baris yang sudah diisi Finance
+  tidak ditimpa), `models/__init__.py`, `data/pos_loyalty_points_link.xml` (`<function>` noupdate=0, tiap
+  install/upgrade), komentar di `data/pos_loyalty_points_payment.xml`, `__manifest__.py`. **Penyimpangan:** pemanggilan
+  ditaruh di `pos_loyalty_points_link.xml` (root noupdate=0), bukan di `pos_loyalty_points_payment.xml`, karena file
+  itu `noupdate="1"` (fungsi hanya jalan saat install, DB yang sudah ada tidak terisi) dan mencampur `<data
+  noupdate="0">` di bawah `<odoo noupdate="1">` belum saya verifikasi terhadap skema RNG 19.0. Akun dari record di file
+  payment (GL=rtl, PB=fnb, BCR, BCF).
+- Test: `efn_setup_pos/tests/test_g18_config.py` (+2: baris metode 4 PT = akun liabilitas PT; fungsi hanya mengisi
+  baris kosong), `efn_online_order/tests/test_online_g22.py` (+3: akun baris kosong → `points_invalid` + ERROR +
+  callback postrollback terdaftar (dibuang sebelum rollback test) + tidak ada penulisan akun; metode tanpa akun
+  liabilitas → sama; aktivitas Finance sekali per hari), fixture kini menyiapkan akun lewat data uji;
+  `efn_online_pos_counter/tests/test_counter_points.py` fixture akun disesuaikan. Belum dijalankan.
+- Belum diverifikasi: callback `cr.postrollback` + cursor baru pada rollback request json2 nyata (test hanya memeriksa
+  pendaftaran callback dan memanggil `_efn_points_account_activity` langsung); atribut privat `Callbacks._funcs` di 19.0.
+
+---
+
+# G22 (A) — E-27 `efn_pos_bff_order` + E-47d `efn_role` — 19 Okt 2026
+
+Kontrak: `docs/04` §14.A + §14.7 **L-70, L-71, L-72, L-74, L-76** (kontrak menang atas `docs/08` §13.1b). Tanpa shell:
+**test BELUM DIJALANKAN**, `ruff` belum dijalankan; tidak ada commit. `efn_pos_kds` **tidak diubah** (hook cukup lewat
+`_inherit efn.kds.ticket` di modul baru). Modul builder lain tidak disentuh.
+
+## Modul & file
+- **Baru `efn_pos_bff_order` 19.0.1.0.0** (depends `pos_restaurant`, `pos_self_order`, `efn_pos_kds`, `efn_core`,
+  `efn_audit`): `__manifest__.py`, `README.md`, `models/{qr_common,pos_config,efn_pos_table_session,efn_pos_qr_order,
+  efn_pos_qr_event_outbox,pos_order,pos_session,efn_kds_ticket,res_config_settings}.py`,
+  `security/{efn_pos_bff_order_security.xml,ir.model.access.csv}`, `data/{ir_cron.xml,efn_audit_rule_data.xml}`,
+  `views/{efn_pos_qr_views.xml,res_config_settings_views.xml}`, `static/src/app/{efn_qr_control_buttons.js,
+  efn_qr_store_patch.js,efn_qr_dialog.js,efn_qr_slip.js,efn_qr_templates.xml}`, `tests/{common,test_qr_submit,
+  test_qr_session}.py` (±30 test).
+- **`efn_role` 19.0.1.1.0 → 19.0.1.2.0 (E-47d)**: `models/role_policy.py` (`TECHNICAL_GROUP_XMLIDS` +
+  `efn_pos_bff_order.group_qr_bff`, `CONTROL_PARAM_KEYS`), `models/efn_audit_rule.py` (baru: override
+  `_efn_builtin_rule` → parameter `efn_role.sensitive_group_xmlids` = parameter kontrol), `models/__init__.py`, pesan
+  2 constraint, `__manifest__.py`, `README.md`, `tests/test_e47d.py` (baru, 2 test), `tests/test_role_apply.py`
+  (test_12 memakai `TECHNICAL_GROUP_XMLIDS`), `tests/__init__.py`.
+- **`efn_core/tests/test_rpc_surface.py`**: 6 entri `RPC_ALLOWLIST` (3 BFF + 3 POS). Tidak ada `http.route` baru.
+
+## json2 / HTTP persis
+- `POST /json/2/efn.pos.qr.order/efn_qr_menu` `{config_id, since?, cursor?, limit?≤200}` → `{config:{config_id,
+  company_code, outlet_name, qr_enabled, confirm_mode}, items:[{product_id, name, price_excl, tax_labels, available,
+  attributes:[{attribute_id, name, display_type, required, values:[{id, name, price_extra_excl}]}]}], deleted,
+  next_cursor, server_time}`. **`name` ditambahkan** (A.6) — BFF harus menerima kunci ini.
+- `POST /json/2/efn.pos.qr.order/efn_qr_submit` `{config_id, table_session_ref, submission:{idempotency_key,
+  submission_ref, lines:[{product_id, qty, attribute_value_ids, note?}]}, order_uuid?}` → `{submission_ref, state,
+  lines:[{product_id, name, qty}], amount_indicative_excl}`. `order_uuid` **opsional** (L-76 body buka sesi tanpa
+  order_uuid → BFF tidak memilikinya); bila dikirim harus sama dengan order meja saat QR dicetak.
+- `POST /json/2/efn.pos.qr.order/efn_qr_status` `{config_id, submission_refs}` → `[{submission_ref, state, seq}]`;
+  **probe rotasi key** `{config_id: 0, submission_refs: []}` → `[]` (200); probe + ref → 422 `efn_qr:invalid_input`.
+- Galat: `UserError("efn_qr:<session_closed|pos_session_closed|item_unavailable|invalid_input|idempotency_conflict|
+  qr_disabled|limit_exceeded>")`; akses → `AccessError` (403) seragam. `item_unavailable` **tanpa** daftar product_ids
+  di pesan (kode persis kontrak).
+- Odoo → BFF `POST /v1/pos/fnb/table-sessions` `{idempotency_key:"fnb_open:<config_id>:<table_id>:<n>", company_code,
+  config_id, table_id, table_label, reissue}` (n = nomor cetak per meja; tanpa order_uuid). Respons dipakai:
+  `table_session_id` (UUID), `qr_url` (https, `#t=`), `expires_at`. 409 `table_session_exists` → POS "cetak ulang?".
+- Odoo → BFF `POST /v1/pos/fnb/events` §14.A.4 + `X-EFN-Signature: t=<unix>,v1=<hex>` (secret file
+  `EFN_FNB_EVENT_HMAC_FILE`). `submission` hanya di `submission_status`; `close:{reason}` + `order:{order_uuid,
+  eligible_amount, pos_member_attached}` hanya bila `reason=paid`. `seq` = max(seq+1, detik sejak 2026-01-01) per sesi.
+
+## Keputusan / tafsiran (mohon dikonfirmasi lead)
+1. Model RPC `efn.pos.qr.order` = model biasa (record per kiriman = idempotensi + status), bukan abstrak (gerbang
+   SEC-58 melarang metode publik di AbstractModel `efn.*`).
+2. Sesi meja tetap mewajibkan **order draft di meja** saat cetak QR (API6: pesanan tidak bisa dibuat tanpa meja dibuka
+   pelayan); `order_uuid` hanya disimpan lokal & dipakai `close.order.order_uuid` (kunci earn `pos_earn:<uuid>`).
+3. Status kiriman diturunkan dari baris ber-`efn_qr_submission_ref` (ikut saat order digabung) + tiket KDS per
+   `order_line_uuid`; maju monoton; order dihapus/batal sebelum dikirim ke dapur = `rejected` (pelayan menolak dengan
+   menghapus order — tanpa RPC "Tolak" baru), sesudahnya = `cancelled`. Status awal (pending_confirmation/accepted)
+   **tidak** dikirim sebagai event (sudah di respons submit).
+4. Sesi ditutup saat order sesi final dan meja tanpa draft lagi (`paid` bila ada order sesi dibayar, selain itu
+   `cancelled`); order lain yang dibayar di meja selama sesi hidup ikut ditautkan (dasar poin). Reissue: BFF mencabut,
+   Odoo tanpa event. Expired: tanpa event; pembayaran sesudahnya tetap kirim `session_closed paid`.
+5. `eligible_amount` = Σ `pos.order._efn_loyalty_eligible_amount()` bila `efn_pos_loyalty_ledger` terpasang (tanpa
+   depends), selain itu Σ subtotal tanpa pajak. `pos_member_attached` = ada order sesi dibayar ber-partner dengan earn POS.
+6. `source` tetap `pos` (fallback §13.1b); `efn_qr_order_ref` = penanda.
+7. QR dirender reportlab langsung (bukan `ir.actions.report.barcode` yang menyimpan nilai di cache LRU).
+8. Retensi L-76: sesi meja dihapus 400 hari (cascade kiriman/outbox, order POS tetap); catatan baris QR → NULL setelah
+   90 hari lewat SQL kolom `note` saja (tanpa audit ORM, total tidak berubah).
+9. Grup `group_qr_bff.api_key_duration = 35` di modul ini (noupdate=0). Efektif 35 hari hanya bila `base.group_user`
+   dinormalkan ke 0 (`efn_setup_online`); tanpa itu CE 90 hari.
+10. Audit config QR: aturan `efn.audit.rule` baru untuk `pos.config` (field `efn_qr_*`); unik per model → bila modul
+    lain kelak menambah aturan `pos.config`, gabungkan.
+
+## API Odoo 19.0 diverifikasi (WebFetch raw 19.0, 19 Okt 2026)
+`point_of_sale/models/pos_order.py` (`sync_from_ui`, `_process_order` kunci wajib `session_id`/`uuid`/`lines`,
+`_complete_values_from_session`, `_get_open_order`, `_ensure_to_keep_last_preparation_change`, field wajib order &
+baris, `name` baris dari sequence, `_prepare_base_line_for_taxes_computation` memakai
+`tax_ids_after_fiscal_position`), `pos_self_order/models/pos_order.py` (`recompute_prices`, `_compute_line_price`,
+`_check_pos_order` fallback preset→config), `pos_self_order/models/product_product.py` (`self_order_available` di
+template), `point_of_sale/models/pos_preset.py` + `service_at` (pos_self_order), `pos_config.py` (field preset,
+kategori, sesi, `notify_synchronisation`), `pos_restaurant/static/src/app/services/pos_store.js` (`mergeOrders` hapus
+order sumber, baris dibuat ulang dari `raw`), `point_of_sale/static/src/app/models/pos_order_line.js` (`note` = string
+JSON `"[]"`), `services/pos_store.js` / `data_service.js` (`printer.print`, `printOptions`, `loadServerOrders(domain)`,
+`data.call`), `control_buttons.js` (impor), `odoo/addons/base/models/ir_actions_report.py` (`barcode` + cache LRU),
+`pos_self_order/views/res_config_settings_views.xml` (`res_config_settings_view_form_menu`, block
+`self_ordering_section`), `point_of_sale/tests/common.py` (`create_ui_order_data`).
+
+## Belum diverifikasi / titik rawan test
+- Semua test & tour belum dijalankan; **tour §13.1b no. 17 tidak ditulis** (OWL tombol/dialog/klaim auto belum diuji).
+- `sync_from_ui` dengan payload buatan server (kunci minimal) + `recompute_prices` di sudo/`with_company`; nilai 115.500
+  bergantung pada pemetaan FP (test 01).
+- `models.UniqueIndex` parsial; `fields.Json`; `Domain.OR`; `filtered_domain(Domain)`; `flatten_taxes_hierarchy`
+  (dibungkus `hasattr`); `createBarcodeDrawing("QR")` + `renderPM` di image.
+- Helper test `_pay` / `_send_to_kitchen` (sinkron order yang ada dengan `lines: []`) — bila guard modul lain
+  (`efn_pos_refund_origin`/`efn_pos_otp_gate`) menolak, helper yang perlu disesuaikan, bukan logika modul.
+- `pos.config.write({"module_pos_restaurant": True, "use_presets": True, ...})` di setUpClass `basic_config`.
+- Ubah `efn_brand_code` PT lain (PB/BCF) ke False di test (unik) — bila ada constraint lain di efn_setup_*.
+- Settings view: field Monetary related di `res.config.settings` (butuh `currency_id` settings dari `account`).
+
+## Untuk lead / tim lain
+- **CI (devsecops):** tambah `efn_pos_bff_order` ke `EFN_TEST_MODULES`; secret `odoo_fnb_event_hmac` → env Odoo
+  `EFN_FNB_EVENT_HMAC_FILE`; user teknis `efn_qr_pb`/`efn_qr_bcf` (Internal User + `group_qr_bff`, satu company) +
+  key `odoo_api_key_qr_<pt>`; gateway path 13–15 = `efn.pos.qr.order/efn_qr_{menu,submit,status}`.
+- **BFF:** terima `name` di item menu; `order_uuid` tidak wajib di submit; respons 201 buka sesi wajib
+  `table_session_id` UUID + `qr_url` `https://…#t=…` (≤1024) — selain itu Odoo menganggap BFF tidak tersedia;
+  `submission_status` tidak dikirim untuk status awal; `rejected` = pelayan menghapus order sebelum dikirim ke dapur.
+- ~~efn_pos_loyalty_ledger: reverse QR belum ada~~ → dikerjakan di addendum L-80 di bawah.
+
+## Addendum L-80 (pesan lead, mengikat)
+- **Event close `reason=paid`**: `close = {reason, orders:[{order_uuid, eligible_amount, company_code}]}` untuk SEMUA
+  `pos.order` sesi yang dibayar (urut id); `close.order` + `pos_member_attached` **dihapus**. Dasar poin per order =
+  `_efn_loyalty_eligible_amount()` (porsi uang, kategori dikecualikan) bila ledger terpasang. Order itu ditandai
+  `pos.order.efn_qr_points_eligible` (milik server). File: `efn_pos_bff_order/models/{efn_pos_qr_event_outbox,
+  efn_pos_table_session,pos_order}.py`, README, `tests/test_qr_session.py` (test_13 disesuaikan).
+- **`efn_pos_loyalty_ledger` 19.0.2.3.0 → 19.0.2.4.0** (hanya untuk L-80): `models/efn_pos_loyalty_outbox.py` (field
+  `earn_channel` pos|qr default pos; payload reverse QR `{idempotency_key, original_order_ref, refund_order_ref,
+  earn_channel:"qr", refunded_eligible_amount, refund_ratio, points_restored_value:0, refund_goods_incl?}` tanpa
+  `member_ref`; reverse POS tidak berubah), `models/pos_order.py` (`_efn_loyalty_qr_earn_candidate` membaca field
+  `efn_qr_points_eligible` tanpa depends; `_efn_loyalty_enqueue_qr_reverse` bila order asal tidak ikut loyalty POS),
+  `__manifest__.py`, `README.md`. Test: `efn_pos_bff_order/tests/test_qr_session.py::
+  test_refund_qr_order_sends_qr_reverse` (skip bila ledger tidak terpasang).
+- **Tour POS: tidak ditulis** — helper tour restoran (denah/meja) 19.0 belum diverifikasi dan tour gagal akan memblokir
+  job `efn_tour`; tetap [B].
+- Batasan: refund sebelum sesi meja ditutup → flag belum ada → tanpa reverse QR, BFF lalu meng-earn penuh saat close.
+  Helper test refund (payload `create_ui_order_data` dengan total ditimpa) bisa ditolak guard `efn_pos_refund_origin`
+  — bila begitu yang disesuaikan helper test.
+
+---
+
+# G22 r15 — perbaikan security review r15 (SEC-164..168) + QA G22 (19 Okt 2026)
+
+Kontrak: docs/04 §14 + L-70..L-81 + KONTRAK BERSAMA r15 K1–K3 (termasuk tambahan K3 lead: `orders[]` dihitung saat
+kirim, flag hanya setelah 2xx). Tanpa shell: **test BELUM dijalankan** (lead menjalankan di container).
+
+## Modul & file
+- **`efn_pos_bff_order` 19.0.1.0.0 → 19.0.1.1.0** (kolom baru, tanpa migrasi data):
+  - `models/qr_common.py` — SEC-168: `normalize_note` + `note_has_pii` + `clean_note` identik BFF `sanitizeNote`
+    (lihat keputusan 7); `qr_error(code, product_ids)` untuk sufiks `item_unavailable`.
+  - `models/efn_pos_qr_order.py` — K1: `order_uuid` di hasil submit (+ replay hasil lama diisi dari record), di setiap
+    entri `efn_qr_status` (`absent` → `null`); helper `_efn_order_uuid` (stabil = order yang dibuat kiriman).
+  - `models/efn_pos_qr_event_outbox.py` — K1: field `submission_order_uuid`, payload `submission.order_uuid`; K3:
+    `_efn_refresh_close_orders` (kunci baris sesi di savepoint → hitung ulang `close.orders` tiap percobaan kirim;
+    bentrok serialisasi → ditunda `session_busy`), setelah 2xx `session._efn_mark_close_sent()`.
+  - `models/efn_pos_table_session.py` — K2: `_efn_close_orders` (neto refund, order neto ≤ 0 dibuang,
+    `pos_member_attached`), `_efn_paid_orders_payload` kini tanpa efek samping, `_efn_mark_close_sent` (flag
+    `efn_qr_refund_netted`, `efn_qr_points_eligible`, `efn_qr_eligible_amount`), `_efn_close_event_pending`;
+    `_efn_paid_orders` tanpa order refund; SEC-166 `_efn_may_attach`.
+  - `models/pos_order.py` — field server `efn_qr_eligible_amount`, `efn_qr_refund_netted` (masuk
+    `ORDER_SERVER_FIELDS`); `_efn_qr_is_refund`; SEC-166 di `_efn_qr_after_final`; `_efn_qr_pos_member_attached`
+    (SEC-165); `_efn_qr_refund_mode` (K3: `netted`/`reverse`/`deferred`/None, `deferred` mengunci baris sesi).
+    `_get_open_order` L-81 tidak diubah.
+  - `models/pos_config.py` — SEC-167: `_efn_qr_next_print_no` (MAX(print_no)+1 setelah `touch_row` meja, batas
+    99 999 999); respons BFF yang menunjuk `bff_session_id` yang sudah ada di Odoo ditolak SEBELUM sesi open ditutup
+    (jalur "replay → pakai record lama" dihapus). Perubahan QA (`"reissue": bool(current) or reissue`) dipertahankan.
+  - `tests/common.py` (helper `_send_outbox`, `_refund`, `_qr_reverses`, `_paid_qr_order`, `_pay(partner=)`),
+    `tests/test_qr_submit.py` (01/08/11 K1, 10b vektor SEC-168; 01d/12b/12c QA dipertahankan),
+    `tests/test_qr_session.py` (13 + refund disesuaikan K3; 9 test baru, lihat README §Test), `README.md`,
+    `__manifest__.py`.
+- **`efn_pos_loyalty_ledger` 19.0.2.4.0 → 19.0.2.4.1**: `models/pos_order.py` (`_efn_loyalty_qr_refund` memakai
+  `_efn_qr_refund_mode` lewat `hasattr`; `_efn_loyalty_qr_refund_ratio` = dasar refund ÷ neto yang dikirim di close,
+  dikurangi rasio reverse QR sebelumnya; `_efn_loyalty_qr_earn_candidate` dihapus), `__manifest__.py`, `README.md`.
+
+## Keputusan desain (mohon dikonfirmasi lead/BFF)
+1. **K1 `order_uuid` stabil**: uuid order yang DIBUAT kiriman, tidak mengikuti penggabungan order pelayan
+   (BFF `applySubmission` juga hanya mengisi sekali). Earn tetap dari `close.orders[]`.
+2. **K2 `pos_member_attached`** = ledger involved (earn/commit tidak skipped) ATAU partner punya `member_ref` sah.
+   Bagian kedua wajib karena close sering dibangun di transaksi bayar yang sama sebelum hook ledger membuat outbox
+   earn. Konservatif: abaikan `efn_loyalty_earn_enabled` config. Hanya order `false` yang diberi flag poin QR.
+3. **K3 urutan**: open/expired → `deferred`; close dengan event `pending` → `deferred`; event 2xx → flag; sesudahnya
+   reverse. Penutupan, pengiriman outbox, dan refund `deferred` mengunci baris `efn_pos_table_session` yang sama
+   (`touch_row`, pola SEC-127) — transaksi yang kalah gagal serialisasi lalu diulang, jadi setiap refund tercermin tepat
+   sekali (neto ATAU reverse). Close `paid` dengan semua order neto 0 dikirim `orders: []` (parser BFF menerima).
+4. **Rasio reverse QR** dihitung terhadap neto yang dikirim (`efn_qr_eligible_amount`), karena BFF clawback =
+   ceil(earn × Σ rasio) dan earn atas neto; rasio terhadap bruto akan kurang potong.
+5. **SEC-166**: pelekatan saat bayar hanya untuk order hasil gabung yang membawa baris kiriman QR sesi itu (+ sesi
+   `open`, `date_order >= opened_at`, bukan refund). Akibat: order pelayan KEDUA yang terpisah tidak lagi ikut poin
+   sesi (cetak ulang QR dari order itu sebagai jalan keluar). Tafsiran saya atas "order draft yang sudah ada di meja
+   (anchor/carried)": keduanya sudah tertaut saat buka/cetak ulang.
+6. **SEC-167**: MAX+1 (bukan counter di `restaurant.table`, agar tidak menulis model POS yang disinkron ke frontend).
+   Aman setelah retensi karena yang dihapus selalu nomor terkecil; reset ke 1 hanya bila semua sesi meja > 400 hari
+   (kunci BFF 180 hari).
+7. **SEC-168 (final, pesan lead kedua)**: disamakan PERSIS dengan BFF `sanitizeNote` r15 — raw ≤ 1000, NFKC, hapus
+   rentang format daftar kontrak (bukan seluruh Cf; U+00AD tidak dihapus), kontrol C0/DEL/C1/U+2028/U+2029 → spasi,
+   rapatkan whitespace, ≤ 140 code point, tolak `@` / Σ digit Nd ≥ 8 / deret ASCII `[0-9][0-9\s.-]{6,}[0-9]`.
+   Vektor test dibangun dengan `chr(0x...)`: alat edit mengubah escape backslash-u menjadi karakter literal, jadi
+   sumber Python & README dibersihkan dan diperiksa bebas karakter format/fullwidth.
+8. **Pesan lead kedua** juga: `close.orders` ≤ 100 (lebih → outbox `failed too_many_orders`), body ≤ 16 KB;
+   `pos_member_attached` selalu ada; `item_unavailable` kini `efn_qr:item_unavailable:<id>,...` (≤ 30, urut, unik;
+   `_assert_qr_error` menerima prefiks; test 03 memeriksa sufiks).
+
+## Belum diverifikasi / titik rawan test
+- Semua test r15 BELUM dijalankan. Titik rawan: (a) helper `_refund` parsial (1/4, 2/4, 3/4 qty; total & pajak
+  dibagi proporsional, angka bulat Rp) bisa ditolak guard `efn_pos_refund_origin`/`_is_pos_order_paid`; (b)
+  `pos.order.is_refund` diasumsikan ada di 19.0 (dipakai ledger juga); (c) `_pay(order, partner=)` lewat
+  `sync_from_ui` diasumsikan tidak memicu gerbang OTP (OTP hanya untuk token promo/redeem); (d) SEC-166 test bergantung
+  pada `_get_open_order` (L-81) membuat order baru untuk tamu B saat meja hanya punya draft QR; (e)
+  `cr.savepoint()` + `psycopg2.extensions.TransactionRollbackError` di outbox — jalur bentrok tidak diuji (butuh dua
+  transaksi nyata) dan dapat mencetak "bad query" ERROR dari kursor Odoo saat terjadi; (f) `assertLogs` pada logger
+  `...models.pos_config` untuk menelan ERROR yang disengaja di test SEC-167.
+- Perbandingan `date_order` vs `opened_at` di batas detik untuk order hasil gabung tidak diuji.
+- ~~Residu K3 retry close dengan `orders[]` berbeda~~ dan ~~lock sesi selama POST~~ — ditutup oleh L-83 (lihat bawah).
+
+## L-83 (pesan lead ketiga) — snapshot close beku
+- Keputusan 5 (order pelayan kedua tidak ikut poin) dan keputusan 2 (attached konservatif) **disetujui lead (L-83)**.
+- Residu "retry close setelah BFF memproses tanpa 2xx" ditutup:
+  - outbox: field `snapshot_frozen`, `netted_refund_ids`. Pass pertama `session_closed paid` hanya membekukan
+    (`_efn_freeze_close_orders`, di bawah kunci sesi) lalu kembali tanpa POST; cron meng-commit, dan POST di pass
+    berikutnya selalu memakai body beku yang tersimpan (retry = body sama persis). Kunci sesi tidak lagi dipegang selama
+    POST, hanya saat membekukan dan saat memproses 2xx (`_efn_lock_session`, savepoint; bentrok → `session_busy`, event
+    tetap pending, retry → replay 200).
+  - `pos.order.efn_qr_refund_awaiting` (field server): `_efn_qr_refund_mode` → `awaiting` bila close pending dan
+    snapshot beku. Saat 2xx, `efn.pos.table.session._efn_mark_close_sent(outbox)` memakai snapshot beku (bukan hitung
+    ulang): netted → `efn_qr_refund_netted`, eligible dari `eligible_amount` snapshot, refund awaiting → flag dilepas
+    lalu `_efn_loyalty_qr_refund` (ledger) meng-enqueue reverse QR (rasio vs snapshot).
+  - Close gagal permanen → `_efn_alert_awaiting_refunds`: alert `EFN_QR_REFUND_UNRESOLVED` (id saja), flag tetap.
+  - Ledger: mode `awaiting` dicatat log info (tanpa reverse).
+  - Test: `test_refund_after_close_before_first_attempt_is_netted`,
+    `test_frozen_snapshot_reused_and_awaiting_refund_reversed_on_2xx`,
+    `test_awaiting_refund_kept_and_alerted_when_close_fails`; helper `_send_outbox` menjalankan dua pass.
+- Konsekuensi: POST pertama event close tertunda satu putaran cron (± 1 menit; `_efn_trigger` memanggil cron lagi).
+- Belum diverifikasi: `_commit_progress` per item di cron memang meng-commit pembekuan sebelum pass POST (asumsi dari
+  pola outbox yang sudah ada); tanpa konteks cron (pemanggilan manual) pembekuan dan POST bisa berada di transaksi yang
+  sama, sama seperti perilaku outbox lain.
+
+## Untuk lead / tim lain
+- BFF: terima `pos_member_attached` (sekarang selalu dikirim), `order_uuid` di submit/status/event, `orders: []`
+  pada close paid; `OPEN_KEY_RE` n ≤ 99 999 999; replay close dengan body beku identik (L-83).
+- QA: jalankan `--test-tags efn` untuk `efn_pos_bff_order` dengan dan tanpa `efn_pos_loyalty_ledger` (test reverse
+  di-skip tanpa ledger).

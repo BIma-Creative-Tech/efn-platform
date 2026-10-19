@@ -6,7 +6,7 @@
 > Odoo otomatis mengonfirmasi pesanan, membuat faktur (pajak hanya di faktur), dan mencatat pelunasan di jurnal
 > kliring PT sehingga saldo kliring kembali nol. Barang tetap diserahkan lewat kode ambil (tidak berubah).
 
-- Versi `19.0.1.1.0` (r13: SEC-145 / L-59), LGPL-3, `depends`: `efn_online_order` (≥ 19.0.1.5.0), `point_of_sale`; **auto_install**. Tanpa
+- Versi `19.0.1.2.0` (G22 W-12 Poin EFN, lihat bagian G22), LGPL-3, `depends`: `efn_online_order` (≥ 19.0.1.7.0), `point_of_sale`; **auto_install**. Tanpa
   `pos_sale` (settle SO di POS sengaja ditolak, docs/08 §11.8), tanpa modul pihak ketiga (ADR-031).
 - Kontrak: `docs/04_SERVICE_CONTRACTS.md` §12.2 + **L-50** (satu PT per pesanan, kode bayar ≠ kode ambil, lookup tanpa
   data pelanggan), **L-52**, **L-55** (counter tidak memakai titipan Holding), **L-56** (kode bayar dibuat BFF, Odoo
@@ -16,6 +16,18 @@
   kasir), SEC-105 (barang online keluar di luar serah terima).
 - Referensi desain: hanya pola internal `efn_pos_refund_origin` (E-41: RPC + jejak + rate limit) dan
   `efn_pos_loyalty_ledger` (validasi sync E-30). Tidak ada kode OCA/Cybrosys yang dipelajari/disalin.
+
+## G22 (19.0.1.2.0) — porsi Poin EFN (docs/04 §14.C.2–§14.C.4, D-22-11)
+- `pos.config.efn_online_counter_lookup` kini mengembalikan **`{"order_label", "amount_due"}`** (porsi tunai =
+  `amount_payable − nilai Poin EFN`), bukan `amount_payable`. Frontend memakai `amount_due` sebagai harga baris
+  pelunasan.
+- Sync pelunasan: nominal baris/total order POS wajib = `amount_due` (toleransi 0) → jalur internal `mark_paid` →
+  faktur SO dibayar di jurnal kliring (tunai) + jurnal Poin EFN PT (porsi poin, `efn_online_order`). Kliring tetap 0.
+- Event `paid`: `payment: {"method": "counter", "points_value": <int>}` (0 bila tanpa poin).
+- `efn_online_counter_refund_authorize` dan validasi refund POS membandingkan dengan **`cash_amount`** refund (porsi
+  tunai); porsi Poin EFN dikembalikan lewat jurnal Poin EFN saat refund di-settle oleh sync POS.
+- Uji: `tests/test_counter_points.py` (kebijakan & metode Poin EFN di-patch). Uji lama disesuaikan
+  (`amount_due`, `points_value: 0`).
 
 ## Komponen
 | Bagian | Isi |

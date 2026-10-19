@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Tampilan baca-saja untuk manajer POS: sesi meja QR, kiriman, outbox event. Tanpa token/URL QR (tidak disimpan),
+     tanpa catatan pesanan (ada di baris order POS). -->
+<odoo>
+    <record id="efn_pos_table_session_view_list" model="ir.ui.view">
+        <field name="name">efn.pos.table.session.list</field>
+        <field name="model">efn.pos.table.session</field>
+        <field name="arch" type="xml">
+            <list create="0" edit="0" delete="0">
+                <field name="opened_at"/>
+                <field name="config_id"/>
+                <field name="table_id"/>
+                <field name="state" widget="badge"/>
+                <field name="close_reason"/>
+                <field name="submission_count"/>
+                <field name="amount_total"/>
+                <field name="currency_id" column_invisible="1"/>
+                <field name="expires_at"/>
+                <field name="closed_at"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_pos_table_session_view_form" model="ir.ui.view">
+        <field name="name">efn.pos.table.session.form</field>
+        <field name="model">efn.pos.table.session</field>
+        <field name="arch" type="xml">
+            <form create="0" edit="0" delete="0">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="config_id"/>
+                            <field name="table_id"/>
+                            <field name="state"/>
+                            <field name="close_reason"/>
+                            <field name="bff_session_id"/>
+                            <field name="print_no"/>
+                        </group>
+                        <group>
+                            <field name="opened_by_id"/>
+                            <field name="opened_at"/>
+                            <field name="expires_at"/>
+                            <field name="closed_at"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Order" name="orders">
+                            <field name="order_ids"/>
+                        </page>
+                        <page string="Kiriman QR" name="submissions">
+                            <field name="submission_ids">
+                                <list>
+                                    <field name="create_date"/>
+                                    <field name="submission_ref"/>
+                                    <field name="order_id"/>
+                                    <field name="item_count"/>
+                                    <field name="last_status" widget="badge"/>
+                                    <field name="sent_to_kitchen"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="efn_pos_table_session_action" model="ir.actions.act_window">
+        <field name="name">Sesi meja QR</field>
+        <field name="res_model">efn.pos.table.session</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <record id="efn_pos_qr_event_outbox_view_list" model="ir.ui.view">
+        <field name="name">efn.pos.qr.event.outbox.list</field>
+        <field name="model">efn.pos.qr.event.outbox</field>
+        <field name="arch" type="xml">
+            <list create="0" edit="0" delete="0">
+                <field name="create_date"/>
+                <field name="table_session_id"/>
+                <field name="event"/>
+                <field name="seq"/>
+                <field name="submission_status"/>
+                <field name="close_reason"/>
+                <field name="state" widget="badge"/>
+                <field name="attempt_count"/>
+                <field name="last_error"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_pos_qr_event_outbox_action" model="ir.actions.act_window">
+        <field name="name">Event QR ke BFF</field>
+        <field name="res_model">efn.pos.qr.event.outbox</field>
+        <field name="view_mode">list</field>
+    </record>
+
+    <menuitem id="efn_pos_table_session_menu"
+              name="Sesi meja QR"
+              parent="point_of_sale.menu_point_of_sale"
+              action="efn_pos_table_session_action"
+              groups="point_of_sale.group_pos_manager"
+              sequence="60"/>
+    <menuitem id="efn_pos_qr_event_outbox_menu"
+              name="Event QR ke BFF"
+              parent="point_of_sale.menu_point_config_product"
+              action="efn_pos_qr_event_outbox_action"
+              groups="point_of_sale.group_pos_manager"
+              sequence="95"/>
+</odoo>

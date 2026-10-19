@@ -925,3 +925,172 @@ Kontrak: docs/04 §13.1 no. 7 (rekonsiliasi liabilitas poin setelah akrual), §1
   `#efnloyaltyliabilityreconmismatch`, `#…critical`, `#…missing` direferensikan rule. Usulan ke lead/devsecops.
 - `v_pos_sales_region_daily` hanya POS (`source='pos'`); penjualan online (`sale_order_line`) belum ada di mart.
   Text-to-SQL semantic layer belum memuat view wilayah (perlu keputusan: kab/kota + PT + hari bisa kecil per sel).
+
+## Gelombang 22 — Rekonsiliasi poin online, mart KPI dapur KDS, dashboard poin hangus (19 Okt 2026)
+
+Kontrak: docs/04 §14.C.5 (rekonsiliasi poin online), §14.B B-6 (tiket KDS online), §14.D.9 (observability hangus),
+§14.E.6 (batas file). ADR-020, ADR-032, ADR-036. Branch `chore/wave-22`, tanpa commit, tanpa shell (pytest/ruff/
+clickhouse-local dijalankan lead).
+
+> **Ringkasan manajemen.** (1) Pembayaran sebagian belanja online dengan poin kini dicocokkan setiap hari: nilai poin
+> yang dicatat Odoo di faktur dan nota kredit dibandingkan dengan pemakaian/pengembalian poin di Super-App, per PT dan
+> per pesanan. Selisih memicu alert yang sudah ada untuk tim Finance. (2) Waktu masak dan waktu siap per stasiun dapur
+> (POS dan pesanan online) tersedia untuk Metabase tanpa nama meja, catatan, atau data pelanggan. (3) Dasbor Grafana
+> poin hangus menampilkan poin dan member per hari, run yang gagal atau dibatalkan, dan notifikasi WA yang gagal.
+> Semua fitur baru default mati sampai modul Odoo/BFF terkait terpasang.
+
+### 1. RECON poin online (§14.C.5) — `efn_etl/loyalty_recon_online.py`
+- **Dipanggil** di job `loyalty_recon` yang ada (mode `payment`) bila `ETL_LOYALTY_RECON_ONLINE_ENABLED=true` (default
+  `false`; gagal start bila recon mati atau mode `product`). Hari WIB utuh yang sudah lewat `settle`, sama dengan K-18-6.
+- **Sisi BFF**: `platform.loyalty_ledger` `source='online'`, `reason ∈ {online_redeem, online_restore, online_earn,
+  online_reverse}`, `source_ref = part_id`. Kolom yang dibaca hanya kolom `efn_readonly` lama (id, company_code,
+  delta_points, reason, source_ref, created_at), **tanpa** `member_ref_hash`. **Tidak perlu grant BFF baru** (sesuai
+  §14.E.1 "efn_etl/efn_readonly tanpa akses ke tabel baru"). Nilai Rupiah = poin × `LOYALTY_POINT_VALUE_IDR` (C.7 API3).
+- **Sisi Odoo**: dua view milik `efn_odoo` di skema `efn_etl` (pola G21, `sql/odoo-readonly-grants.sql` blok
+  `DO $grant_g22_online$`, bersyarat):
+  - `efn_etl.online_points_payment(payment_id, online_order_id, part_ref, company_id, paid_on, amount)`:
+    `account_payment` di jurnal Poin EFN yang tertaut (M2M `account_move__account_payment`) ke faktur
+    `efn_online_order.invoice_id` (inbound, +) atau nota kredit `efn_online_refund.credit_note_id` (outbound, −). Status
+    `in_process|paid`. Jurnal Poin EFN dipilih dari `account_journal.efn_is_loyalty_points` bila E-28 menambahkannya,
+    selain itu `pos_payment_method.efn_is_loyalty_points → journal_id` (jurnal PEFN per PT).
+  - `efn_etl.online_order_ref(online_order_id, part_ref, company_id, state, refunds)`.
+  - `efn_etl` **tidak** diberi akses ke `account_payment`, `efn_online_order` (hash kode ambil/bayar, payment_ref),
+    `efn_online_refund` (provider_refund_ref).
+- **Temuan critical** (masuk `anomalies` → alert `EfnLoyaltyEtlReconAnomaly` yang sudah ada; format log tidak berubah,
+  kunci `points_daily_online` ditambahkan di akhir):
+  - `online_points_payment_mismatch`: per bagian, Σ pembayaran Poin EFN faktur ≠ −Σ online_redeem × nilai poin
+    (termasuk redeem tanpa pembayaran Odoo dan sebaliknya), toleransi `ETL_LOYALTY_POINTS_TOLERANCE_IDR`;
+  - `online_points_restore_mismatch`: nilai restore Odoo − poin restore × nilai poin di luar [0, nilai poin × jumlah
+    refund Odoo) (sisa pembulatan floor, pola SEC-118); restore BFF tanpa refund Odoo = temuan;
+  - `online_earn_without_picked_up`: `online_earn` untuk bagian yang tidak ada / belum `picked_up`;
+  - `online_reverse_without_refund`: `online_reverse` tanpa refund Odoo yang tidak `failed`.
+  - Bagian yang punya aktivitas sesudah batas jendela (belum settle) ditunda ke run berikutnya (`parts_deferred`).
+  - Sampel = id `efn.online.order` + id ledger (angka). `part_id` tidak ditulis ke log maupun ClickHouse.
+- **Harian**: `loyalty_points_daily` kolom baru `channel` (`pos` | `online`). View `v_loyalty_points_daily` kini
+  difilter `channel='pos'` (dashboard lama tetap benar), view baru `v_loyalty_points_daily_channel` dan
+  `v_loyalty_points_daily_total` (= persamaan kontrak: Σ jurnal Poin EFN POS + faktur SO vs Σ redeem − Σ restore per PT ×
+  hari). Untuk online `bff_restored_idr = bff_restored_points_idr` (BFF tidak membuka nilai Rupiah restore online),
+  jadi selisih harian kecil (< nilai poin per refund) di hari refund itu wajar. Temuan hanya dari cek per bagian.
+
+### 2. Mart KPI dapur (POS + online) — `efn_etl/kds.py`
+- Catatan: **mart KDS belum ada sebelumnya** (laporan architect G15 #3, PDP inventory §2.2b, README `efn_pos_kds`), jadi
+  dibuat sekarang untuk POS dan online sekaligus.
+- Job `kds_tickets` (`efn_kds_ticket` → `fact_kds_ticket`, cursor `write_date`, ReplacingMergeTree(write_date)) dan
+  `kds_stations` (`efn_kds_station` → `dim_kds_station`). Aktif dengan `ETL_ENABLE_KDS=true` (butuh `ETL_ENABLE_ODOO`).
+  Kanal online (`efn_online_order_id`, E-29a) hanya dibaca bila `ETL_KDS_ONLINE_ENABLED=true`; tanpa flag itu, semua
+  tiket berkanal `pos` dan kolom E-29a tidak disentuh.
+- Kolom: id tiket/stasiun/config/order POS/order online, preset, course, sequence, state, rush, cetak offline, cap waktu,
+  durasi `queue/cook/wait/serve_seconds` (NULL bila belum terjadi atau negatif karena recall/jam), jumlah baris, item
+  tambah/batal. **Tidak dibaca**: `table_label`, `tracking_number`, `internal_note`, `session_id`, isi baris (nama
+  produk, atribut, catatan, combo), token/perangkat stasiun. Grant kolom G22 diuji agar tidak memuat kolom itu.
+- View Metabase `v_kds_ticket_daily` (tiket, batal, siap, rush, offline, item, rata-rata antre/masak/tunggu/saji, p50/p90
+  tunggu, tiket terlambat vs `late_minutes` stasiun saat ini) dan `v_kds_ticket_hourly` (beban per jam WIB).
+- Index cursor `efn_etl_efn_kds_ticket_write_date_id_idx` (CONCURRENTLY, di dalam `\if` psql agar bersyarat tetapi di
+  luar transaksi).
+
+### 3. Observability poin hangus (§14.D.9)
+- **Koordinasi**: devsecops sudah menulis tahap promtail `EFN_LOYALTY_EXPIRY_RUN` dan alert run
+  (`EfnLoyaltyExpiryAborted` critical, `EfnLoyaltyExpiryFailed`, `EfnLoyaltyExpiryHeartbeatMissing`) di
+  `loki-rules/efn-loyalty.yml`. Saya **tidak** menduplikasi alert itu (diuji pytest) dan tidak menyentuh `promtail.yml`.
+- **Grafana** `efn-loyalty-expiry.json`, delapan panel:
+  - run dibatalkan (kandidat > batas);
+  - run gagal;
+  - kandidat run expire terakhir (threshold merah > 20 000 = default `LOYALTY_EXPIRY_MAX_PER_RUN`);
+  - notifikasi WA gagal 24 jam;
+  - poin hangus per hari per PT penerbit (`efn_loyalty_expired_points_total{issuer}`);
+  - member per hari per fase (`efn_loyalty_expiry_total{phase,outcome="ok"}`);
+  - semua outcome per fase;
+  - log heartbeat.
+- **Prometheus** `alert-rules.yml` grup `efn-loyalty-expiry`: `EfnLoyaltyExpiryNoticeFailed` (warning, team finance,
+  `metric_status: proposed`). Alasannya: §14.D.4 menetapkan hangus tetap berjalan walau notifikasi WA gagal.
+- `EfnLoyaltyEtlReconAnomaly` (efn-loyalty.yml): hanya teks deskripsi diperluas ke online; ekspresi tidak berubah.
+
+### File
+- Baru:
+  - `services/etl/efn_etl/loyalty_recon_online.py`
+  - `services/etl/efn_etl/kds.py`
+  - `services/etl/tests/test_loyalty_recon_online.py`
+  - `services/etl/tests/test_kds.py`
+  - `services/etl/tests/test_observability_g22.py`
+  - `infra/clickhouse/init/10-g22-kds-online-points.sql`
+  - `infra/observability/grafana/provisioning/dashboards/json/efn-loyalty-expiry.json`
+- Ubah:
+  - `services/etl/efn_etl/loyalty_recon.py` (kind online, `channel` di `DAILY_COLUMNS`, `merge_findings`,
+    `online_enabled`, pemanggilan online)
+  - `services/etl/efn_etl/jobs.py` (`enabled_jobs(kds, kds_online)`)
+  - `services/etl/efn_etl/config.py` (3 flag + validasi fail-closed)
+  - `services/etl/efn_etl/__main__.py`
+  - `services/etl/sql/odoo-readonly-grants.sql` (blok G22)
+  - `services/etl/tests/test_config.py`
+  - `services/etl/README.md`
+  - `infra/clickhouse/access/etl-access.sql`
+  - `infra/clickhouse/access/metabase-access.sql`
+  - `infra/observability/alert-rules.yml` (grup `efn-loyalty-expiry`)
+  - `infra/observability/loki-rules/efn-loyalty.yml` (komentar/deskripsi saja)
+
+### Test (pytest, logika murni + fake I/O)
+- `test_loyalty_recon_online.py`:
+  - cocok bersih (FIFO dua lot, restore floor);
+  - redeem tanpa pembayaran Odoo dan sebaliknya; toleransi;
+  - 5 kasus jendela pembulatan restore (tepat, sisa 99, sisa = V, BFF lebih besar, restore tanpa refund);
+  - bagian ditunda; riwayat sebelum jendela; batas hari WIB;
+  - earn tanpa `picked_up`, clawback tanpa refund, entri di luar jendela;
+  - PT dari Odoo menang atas ledger; dedup;
+  - baris/payload tanpa `part_id`; kind terdaftar critical; settings fail-closed; SQL tanpa identitas/`*`;
+  - end-to-end `run_loyalty_recon` (kunci awal payload tetap untuk regex Loki, `channel='online'`, sampel order);
+  - online mati = view tidak di-query.
+- `test_kds.py`:
+  - durasi, NULL negatif/kosong, tiket online tanpa order POS;
+  - state/kanal/mode tidak dikenal → `ValueError`;
+  - SQL tanpa kolom PII + keyset; kolom E-29a hanya bila flag;
+  - `enabled_jobs`; kolom yang dibaca ⊆ grant G22; DDL ClickHouse memuat semua kolom.
+- `test_config.py`: default mati + 5 kombinasi fail-closed.
+- `test_observability_g22.py`: metrik dashboard = kontrak; label Loki ⊆ nilai tahap promtail; alert run tidak
+  diduplikasi di Prometheus.
+
+### Asumsi skema / kontrak (perlu dikonfirmasi)
+- **BFF (efn-bff-engineer)**:
+  - entri ledger online memakai `source='online'` dan `source_ref = part_id` untuk **keempat** reason (kontrak
+    menyebut `source_ref=part_id` eksplisit untuk redeem; restore/earn/reverse diasumsikan sama);
+  - restore memakai **floor** (`points = floor(points_value / V)`); bila ceil/round, kind restore memberi positif palsu;
+  - `company_code` redeem = PT bagian (restore lintas PT boleh berbeda; ETL memakai PT bagian Odoo);
+  - metrik `efn_loyalty_expiry_total` diinkremen **per member** per fase dengan `outcome` minimal `ok` (panel member per
+    hari), dan seri counter diinisialisasi 0 (agar `increase()` tidak melewatkan kejadian pertama).
+- **Odoo E-28 / E-45 (efn-odoo-engineer B)**:
+  - pembayaran Poin EFN faktur online dan nota kredit dicatat sebagai `account.payment` lewat
+    `account.payment.register`, sehingga M2M `invoice_ids` (`account_move__account_payment`) terisi;
+  - jurnal = jurnal Poin EFN PT (tanda `account_journal.efn_is_loyalty_points` atau jurnal metode POS PEFN);
+  - `account_payment.date` = tanggal WIB (user teknis ber-tz Asia/Jakarta; bila UTC, atribusi harian bergeser
+    00:00–07:00 WIB, temuan per bagian tidak terpengaruh);
+  - `platform_order_ref` huruf kecil.
+- **E-29a `efn_online_kds_bridge`**: `efn_kds_ticket.order_id` opsional + kolom `efn_online_order_id` (docs/08 §10.6);
+  `state`/cap waktu tiket online sama dengan POS; `config_id` boleh kosong (mart → `store_id=0`, label "Online").
+
+### Belum terverifikasi / risiko sisa
+- **Belum dijalankan**:
+  - pytest + `ruff check` + `ruff format --check` (lead). Beberapa assert panjang diformat manual; jalankan
+    `ruff format` bila berbeda;
+  - DDL/view `10-g22-kds-online-points.sql` di ClickHouse 24.8 (`quantileExactIf`, LEFT JOIN subquery FINAL, `ALTER ADD
+    COLUMN channel` lalu `CREATE OR REPLACE VIEW` di file yang sama);
+  - blok G22 `odoo-readonly-grants.sql` (`\gset`/`\if`, `DO`, `format()` dengan `%1$s`) di PostgreSQL. Modul
+    `efn_online_kds_bridge` dan perubahan poin E-28 **belum ada di repo** saat ditulis;
+  - nama tabel M2M `account_move__account_payment` dan kolom `account_payment.date/state/payment_type` Odoo 19
+    (dicek dari pengetahuan 18.0, bukan sumber 19.0);
+  - `promtool check rules` untuk grup baru; render dashboard Grafana 11.3; LogQL panel `| regexp | unwrap`.
+- **Perbaikan setelah run lead (19 Okt)**: (1) `test_loyalty_recon.py::test_daily_points_clean_redeem_and_refund_with_cross_midnight_commit`
+  kini mengharapkan kolom `channel='pos'` di akhir baris harian; test lain sudah memakai indeks/`zip(DAILY_COLUMNS)`.
+  (2) `v_loyalty_points_daily_total` ditulis ulang dengan subquery berkolom prefiks `c_` (ClickHouse 24.8 Code 184
+  ILLEGAL_AGGREGATION: alias = nama kolom sumber tersulih ke argumen `sum`). Belum dijalankan ulang oleh saya.
+- **Runbook belum ada**: `docs/runbooks/loyalty-inactivity-expiry.md` (dirujuk alert devsecops dan alert saya,
+  anchor `#efnloyaltyexpirynoticefailed`). Usulan ke lead/architect.
+- **Compose**: env baru (`ETL_LOYALTY_RECON_ONLINE_ENABLED`, `ETL_ENABLE_KDS`, `ETL_KDS_ONLINE_ENABLED`) belum
+  ditambahkan ke service `etl` (milik devsecops); default `false` aman.
+- **Persamaan harian online tidak eksak** selama BFF tidak membuka nilai Rupiah restore online ke `efn_readonly`.
+  Opsi: BFF menambah grant kolom `online_order_part.points_restored_value`, atau menulis nilai restore di tabel
+  non-PII. Butuh keputusan lead.
+- **SLA dapur** memakai `late_minutes` stasiun saat ini (target historis tidak disimpan; PLACEHOLDER Q-19).
+- `fact_kds_ticket` belum masuk TTL mart `clickhouse-init.sh` (milik devsecops; tanpa PII, jadi tidak mendesak) dan
+  belum ada kartu Metabase (view sudah siap).
+- `earn` online yang **hilang** (picked_up + member tertaut tanpa `online_earn`) tidak bisa dideteksi ETL: Odoo tidak
+  tahu member dan `online_order_part.earn_status` tidak dibuka ke `efn_readonly` (sengaja). Pengecekan itu tetap di
+  recon BFF.

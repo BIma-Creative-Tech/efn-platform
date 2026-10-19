@@ -147,6 +147,15 @@ scrape_configs:
           # "batas kiri" = karakter non-alfanumerik di LUAR grup (tidak ikut diganti).
           # Urutan: rahasia di query/kv/JSON dulu (nilainya bisa berpola nomor), lalu skema Authorization, lalu HP.
           stages:
+            # (a0) G22 (docs/04 §14.A.2): token sesi meja QR `fts1.<b64url sid>.<exp>.<b64url HMAC>` = bukti hadir di
+            #      meja selama <= 4 jam (siapa pun yang memegangnya bisa memesan atas nama meja). BFF tidak pernah
+            #      me-log token (hanya table_session_id) dan token ada di FRAGMENT URL QR (tidak sampai ke server), tetapi
+            #      klien bisa salah kirim `?ts=`/header ke log lain -> diredaksi di mana pun muncul (tanpa batas kiri:
+            #      prefiks `fts1.` cukup khas; bentuk URL-encoded `%3Dfts1.` juga terkena). Dijalankan PERTAMA agar tahap
+            #      lain tidak memotong token menjadi sisa yang lolos.
+            - replace:
+                expression: '(fts1\.[A-Za-z0-9_.-]+)'
+                replace: '[TABLE_TOKEN_REDACTED]'
             # (a) Parameter rahasia di query string / logfmt (SEC-73): token reset password Odoo, access_token
             #     self-order, presigned S3, dll. Traefik JSON menulis "&" sebagai "\u0026" (encoding/json) -> ikut
             #     dikenali; "?"/"&"/"=" boleh URL-encoded (%3F/%26/%3D, mis. redirect=%2Fweb%3Ftoken%3D...). Nilai = sampai &, spasi, kutip, backslash, #.
@@ -247,6 +256,24 @@ scrape_configs:
             - static_labels:
                 stream: efn_loyalty
                 loyalty_event: migration
+      #     G22 (docs/04 §14.D.3/§14.D.9, W-17): heartbeat job poin hangus karena tidak aktif (LoyaltyInactivityJob,
+      #     satu baris per fase per run: notice 10:00 WIB, expire 01:00 WIB, anonymize). KONTRAK FORMAT untuk BFF:
+      #     `EFN_LOYALTY_EXPIRY_RUN {"status":"ok|dry_run|aborted|error","phase":"notice|expire|anonymize",...}`
+      #     (kunci pertama status, kedua phase; sisanya jumlah per fase/penerbit, TANPA member/nomor/hash). Konteks
+      #     logger `LoyaltyInactivity<Nama>`; level LOG/WARN/ERROR. Label rendah kardinalitas: expiry_status (4 nilai) +
+      #     expiry_phase (3 nilai). Alert: loki-rules/efn-loyalty.yml grup efn-loyalty-expiry (aborted = critical,
+      #     error = warning, dead-man 26 jam). Format berubah = baris tidak cocok -> dead-man menyala (bukan diam).
+      - match:
+          selector: '{service="api-gateway"} |~ "^\\[Nest\\] \\d+  - \\d{1,2}/\\d{1,2}/\\d{4}, \\d{1,2}:\\d{2}:\\d{2} (AM|PM) +(LOG|WARN|ERROR) \\[LoyaltyInactivity[A-Za-z]{0,40}\\] EFN_LOYALTY_EXPIRY_RUN \\{\"status\":\"(ok|dry_run|aborted|error)\",\"phase\":\"(notice|expire|anonymize)\"[^\\n]*\\}\\s*$"'
+          stages:
+            - regex:
+                expression: ' EFN_LOYALTY_EXPIRY_RUN \{"status":"(?P<expiry_status>ok|dry_run|aborted|error)","phase":"(?P<expiry_phase>notice|expire|anonymize)"'
+            - static_labels:
+                stream: efn_loyalty
+                loyalty_event: expiry_run
+            - labels:
+                expiry_status:
+                expiry_phase:
       # (5) G14 (data-AI, sisa SEC-61): rekonsiliasi harian ledger poin BFF <-> pos.order oleh ETL
       #     (services/etl/efn_etl/loyalty_recon.py) -> stream="efn_loyalty" (400 hari), loyalty_event="etl_recon",
       #     label recon_status (ok|error). Format Python logging: "<YYYY-MM-DD HH:MM:SS,mmm> <LEVEL> <logger> {json}".

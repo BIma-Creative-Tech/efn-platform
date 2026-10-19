@@ -59,7 +59,7 @@ class TestEfnOnlineHandover(EfnOnlineCommon):
         cls.manager_user = new_test_user(
             cls.env,
             login="efn_online_mgr",
-            groups="base.group_user,sales_team.group_sale_manager",
+            groups="base.group_user,sales_team.group_sale_manager",  # sengaja tanpa stock (uji gerbang ready)
             company_id=cls.company.id,
             company_ids=[Command.set(cls.company.ids)],
         )
@@ -286,7 +286,7 @@ class TestEfnOnlineOutbox(EfnOnlineCommon):
         manager = new_test_user(
             self.env,
             login="efn_online_mgr_retry",
-            groups="base.group_user,sales_team.group_sale_manager",
+            groups="base.group_user,sales_team.group_sale_manager,stock.group_stock_user",
             company_id=self.company.id,
             company_ids=[Command.set(self.company.ids)],
         )

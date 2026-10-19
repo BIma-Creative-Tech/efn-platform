@@ -226,6 +226,7 @@ def main() -> None:
         points_mode=settings.loyalty_points_mode,
         points_tolerance_idr=Decimal(settings.loyalty_points_tolerance_idr),
         point_value_idr=settings.loyalty_point_value_idr,
+        online_enabled=settings.loyalty_recon_online_enabled,
     )
     age_out = AgeOut(geo_days=settings.geo_retention_days, pseudonym_years=settings.pseudonym_retention_years)
     jobs = enabled_jobs(
@@ -234,18 +235,21 @@ def main() -> None:
         age_out,
         points_payment=settings.loyalty_points_mode == "payment",
         partner_region=settings.partner_region_enabled,
+        kds=settings.kds_enabled,
+        kds_online=settings.kds_online_enabled,
     )
     if settings.gl_enabled:
         jobs.extend(GL_JOBS)
     overlap = timedelta(seconds=settings.overlap_seconds)
     log.info(
-        "ETL mulai: jobs=%s stock_snapshot=%s audit_copy=%s audit_sink=%s loyalty_recon=%s points_mode=%s erasure=%s "
-        "interval=%ds overlap=%ds",
+        "ETL mulai: jobs=%s stock_snapshot=%s audit_copy=%s audit_sink=%s loyalty_recon=%s (online=%s) points_mode=%s "
+        "erasure=%s interval=%ds overlap=%ds",
         [j.name for j in jobs],
         settings.stock_enabled,
         settings.audit_copy_enabled,
         settings.audit_sink_enabled,
         settings.loyalty_recon_enabled,
+        settings.loyalty_recon_online_enabled,
         settings.loyalty_points_mode,
         settings.erasure_enabled,
         settings.interval_seconds,

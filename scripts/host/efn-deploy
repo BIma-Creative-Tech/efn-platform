@@ -23,6 +23,11 @@
 #   COMPOSE_PROFILES=core,data,ai,observability,ops  (opsional; production wajib memuat core,data,observability)
 #   EFN_ALLOW_CONTROL_OFF=''                    (opsional, darurat Superadmin: nama kontrol yang boleh `false` di
 #                                                production: RABBITMQ_STRICT_PERMISSIONS ETL_AUDIT_COPY_ENABLED)
+#   EFN_ALLOW_FEATURE_ON=''                     (opsional, G22 L-73: nama fitur yang menunggu persetujuan klien dan boleh
+#                                                `true` di production: LOYALTY_EXPIRY_ENABLED LOYALTY_INACTIVE_ANONYMIZE;
+#                                                SEC-171: LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT = izin nilai `false`;
+#                                                diisi Superadmin SETELAH Legal/DPO/Meta menyetujui - runbook
+#                                                docs/runbooks/loyalty-inactivity-expiry.md §Aktivasi)
 # Production saja (SEC-92): /etc/efn/approved-release (root; 0644/0600/0444/0400) baris `<X.Y.Z> <git_sha>` per rilis
 #   yang disetujui Superadmin SETELAH memeriksa bahwa commit tag ada di `main` dan CI/Security hijau
 #   (docs/runbooks/key-custody.md §4d). Tanda tangan CI saja tidak cukup untuk production.
@@ -81,13 +86,13 @@ COSIGN_BIN="" EFN_SIGNER_IDENTITY_REGEXP="" EFN_SIGNER_ISSUER="" EFN_APP_ENV="" 
 EFN_PKI_ROOT_SHA256="" EFN_PKI_EXTRA_TRUST_SHA256=""
 # SEC-50: topologi host dipin di deploy.conf; nilai dari lingkungan pemanggil dibuang (sudo env_reset juga membuangnya)
 unset TRAEFIK_DOMAIN EFN_PUBLIC_BIND EFN_WG_BIND EFN_WG_HTTPS_PORT EFN_WG_OUTLET_CIDR EFN_WG_STAFF_CIDR COMPOSE_PROFILES \
-  EFN_ALLOW_CONTROL_OFF
+  EFN_ALLOW_CONTROL_OFF EFN_ALLOW_FEATURE_ON
 while IFS='=' read -r k v; do
   [[ "$k$v" != *[[:cntrl:]]* ]] || die "karakter kontrol di $CONF"
   case "$k" in
     COSIGN_BIN|EFN_SIGNER_IDENTITY_REGEXP|EFN_SIGNER_ISSUER|EFN_APP_ENV|EFN_GITHUB_REPO|EFN_IMAGE_PREFIX|EFN_PKI_ROOT_SHA256|EFN_PKI_EXTRA_TRUST_SHA256)
       v="${v#\'}"; v="${v%\'}"; printf -v "$k" '%s' "$v" ;;
-    TRAEFIK_DOMAIN|EFN_PUBLIC_BIND|EFN_WG_BIND|EFN_WG_HTTPS_PORT|EFN_WG_OUTLET_CIDR|EFN_WG_STAFF_CIDR|COMPOSE_PROFILES|EFN_ALLOW_CONTROL_OFF)
+    TRAEFIK_DOMAIN|EFN_PUBLIC_BIND|EFN_WG_BIND|EFN_WG_HTTPS_PORT|EFN_WG_OUTLET_CIDR|EFN_WG_STAFF_CIDR|COMPOSE_PROFILES|EFN_ALLOW_CONTROL_OFF|EFN_ALLOW_FEATURE_ON)
       v="${v#\'}"; v="${v%\'}"; printf -v "$k" '%s' "$v"; export "${k?}" ;;
     ''|\#*) ;;
     *) die "kunci tidak dikenal di $CONF: $k" ;;
@@ -260,7 +265,7 @@ while IFS=$'\t' read -r k v; do
 done < <(jq -r '.config | to_entries[] | select(.value != "") | "\(.key)\t\(.value)"' "$MAN")
 efn_validate_topology "$EFN_APP_ENV" || die "topologi di $CONF tidak valid (SEC-50)"
 efn_validate_config "$EFN_APP_ENV" || die "config manifest rilis tidak valid (SEC-50)"
-export EFN_WG_BIND EFN_WG_HTTPS_PORT EFN_WG_OUTLET_CIDR EFN_WG_STAFF_CIDR COMPOSE_PROFILES EFN_ALLOW_CONTROL_OFF
+export EFN_WG_BIND EFN_WG_HTTPS_PORT EFN_WG_OUTLET_CIDR EFN_WG_STAFF_CIDR COMPOSE_PROFILES EFN_ALLOW_CONTROL_OFF EFN_ALLOW_FEATURE_ON
 log "topologi (deploy.conf) & config manifest valid: wg ${EFN_WG_BIND}:${EFN_WG_HTTPS_PORT}, profil ${COMPOSE_PROFILES}"
 
 # ── 6. Trust anchor PKI: root & EXTRA_TRUST harus cocok dengan sidik jari yang dipin di deploy.conf ───────────

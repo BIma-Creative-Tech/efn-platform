@@ -17,6 +17,10 @@
 # dan kanal G19 berhifen (RTL-GL, FNB-BACHA, ...) DITOLAK allowlist ALLOWED_CHANNELS. Pemetaan kasus lama -> baru:
 # RTL -> GL (base), RTL-GL -> PB (overlay ter-deploy), FNB-BACHA -> BCF (--bootstrap), FNB-PB/RTL-BACHA -> BCR (belum
 # di-deploy, overlay tidak ada di fixture).
+# G22 (docs/04 §14.A.5, kasus 90-110): kunci user teknis QR meja QR-PB/QR-BCF (secret odoo_api_key_qr_<pt>, user
+# efn_qr_<pt>, overlay docker-compose.online-qr-<pt>.yml, nama key efn-qr-<PT>-*, verifikasi path #15 efn_qr_status dengan
+# 422 = key sah HANYA untuk QR), --all dari FNB_QR_ENABLED/FNB_QR_COMPANIES .env, precheck Python QR (company, grup POS,
+# user bersama kanal online, modul belum terpasang).
 # Yang TIDAK diuji di sini: Odoo/gateway/BFF sungguhan (uji nyata di stack dev: runbook odoo-online-api-key.md §2),
 # systemd, journald asli.
 set -euo pipefail
@@ -37,9 +41,12 @@ printf 'docker-compose.yml\ndocker-compose.prod.yml\ndocker-compose.host.yml\n' 
 for f in docker-compose.yml docker-compose.prod.yml docker-compose.host.yml; do echo "name: efn" > "/opt/efn/compose/$f"; done
 # Overlay kanal untuk --bootstrap: BCF ada; BCR sengaja TIDAK ada -> kasus overlay hilang
 echo "services: {}" > /opt/efn/compose/docker-compose.online-bcf.yml
+# G22: overlay QR meja PB ada (--bootstrap QR-PB); QR-BCF sengaja TIDAK ada -> kasus overlay hilang
+echo "services: {}" > /opt/efn/compose/docker-compose.online-qr-pb.yml
 SECRET=/opt/efn/secrets/odoo_api_key_online_gl.txt
 SEC_PB=/opt/efn/secrets/odoo_api_key_online_pb.txt
 SEC_BCF=/opt/efn/secrets/odoo_api_key_online_bcf.txt
+SEC_QRPB=/opt/efn/secrets/odoo_api_key_qr_pb.txt
 
 # Docker palsu: secret GL (base) + PB (overlay; deploy dengan ONLINE_CHANNELS=GL,PB) di-mount api-gateway; BCF hanya
 # bila overlay docker-compose.online-bcf.yml ikut `-f` (--bootstrap); BCR tidak pernah (kanal belum di-deploy).
@@ -55,14 +62,21 @@ if [[ "$cmd" == compose ]]; then
   done
   set -- "${args[@]}"
   sub="$1"; shift
-  fb=0; for f in "${files[@]}"; do [[ "$f" == */docker-compose.online-bcf.yml ]] && fb=1; done
+  fb=0; qp=0
+  for f in "${files[@]}"; do
+    [[ "$f" == */docker-compose.online-bcf.yml ]] && fb=1
+    # G22: overlay QR meja PB (docker-compose.online-qr-pb.yml) -> secret odoo_api_key_qr_pb di-mount api-gateway
+    [[ "$f" == */docker-compose.online-qr-pb.yml ]] && qp=1
+  done
   case "$sub" in
     config)
-      jq -nc --argjson fb "$fb" '{secrets:({odoo_api_key_online_gl:{file:"/opt/efn/secrets/odoo_api_key_online_gl.txt"},
+      jq -nc --argjson fb "$fb" --argjson qp "$qp" '{secrets:({odoo_api_key_online_gl:{file:"/opt/efn/secrets/odoo_api_key_online_gl.txt"},
                    odoo_api_key_online_pb:{file:"/opt/efn/secrets/odoo_api_key_online_pb.txt"}}
-                 + (if $fb == 1 then {odoo_api_key_online_bcf:{file:"/opt/efn/secrets/odoo_api_key_online_bcf.txt"}} else {} end)),
+                 + (if $fb == 1 then {odoo_api_key_online_bcf:{file:"/opt/efn/secrets/odoo_api_key_online_bcf.txt"}} else {} end)
+                 + (if $qp == 1 then {odoo_api_key_qr_pb:{file:"/opt/efn/secrets/odoo_api_key_qr_pb.txt"}} else {} end)),
         services:{"api-gateway":{secrets:([{source:"odoo_api_key_online_gl"},{source:"odoo_api_key_online_pb"},{source:"efn_ca_crt"}]
-                    + (if $fb == 1 then [{source:"odoo_api_key_online_bcf"}] else [] end))},
+                    + (if $fb == 1 then [{source:"odoo_api_key_online_bcf"}] else [] end)
+                    + (if $qp == 1 then [{source:"odoo_api_key_qr_pb"}] else [] end))},
                   "bff-tls":{network_mode:"service:api-gateway"}, odoo:{secrets:[{source:"odoo_online_event_hmac"}]},
                   "superapp-web":{}}}' ;;
     ps)
@@ -77,7 +91,9 @@ if [[ "$cmd" == compose ]]; then
         for s in "$@"; do printf '{"Service":"%s","State":"running","Health":"%s"}\n' "$s" "$h"; done
       fi ;;
     up) printf '%s\n' "$*" >> $FK/up.log; printf '%s\n' "${files[@]}" >> $FK/files.log
-        for s in /opt/efn/secrets/odoo_api_key_online_*.txt; do cp "$s" "$FK/mounted.$(basename "$s" .txt)"; done ;;
+        for s in /opt/efn/secrets/odoo_api_key_online_*.txt /opt/efn/secrets/odoo_api_key_qr_*.txt; do
+          [[ -f "$s" ]] && cp "$s" "$FK/mounted.$(basename "$s" .txt)"
+        done ;;
     *) exit 1 ;;
   esac
   exit 0
@@ -123,11 +139,17 @@ if [[ "$cid" == aaaaaaaaaaaa ]]; then           # odoo shell
   done < $db
   echo "EFN_ROT OK"; exit 0
 fi
-# BFF: node -e <js> -> status gateway
+# BFF: node -e <js> -> status gateway. G22: nama secret & path RPC dari env skrip (EFN_SECRET, EFN_RPC_PATH);
+# key sah -> 200, kecuali path QR efn_qr_status (UserError config_id 0 -> 422) atau penanda force-422.
 lc=$(tr 'A-Z-' 'a-z_' <<< "${E[EFN_CH]:-GL}")
-if [[ "${E[EFN_KEY_STDIN]:-}" == 1 ]]; then k=$(cat); else k=$(cat "$FK/mounted.odoo_api_key_online_$lc" 2> /dev/null); fi
+sec="${E[EFN_SECRET]:-odoo_api_key_online_$lc}"
+echo "${E[EFN_CH]:-} ${E[EFN_RPC_PATH]:-} ${E[EFN_KEY_ENV]:-}" >> $FK/rpc.log
+if [[ "${E[EFN_KEY_STDIN]:-}" == 1 ]]; then k=$(cat); else k=$(cat "$FK/mounted.$sec" 2> /dev/null); fi
 st=401
-if [[ "$k" =~ ^[0-9a-f]{40}$ ]] && cat $FK/keys*.db 2> /dev/null | grep -q " $k 0$" && ! grep -qx "$k" $FK/bad 2> /dev/null; then st=200; fi
+if [[ "$k" =~ ^[0-9a-f]{40}$ ]] && cat $FK/keys*.db 2> /dev/null | grep -q " $k 0$" && ! grep -qx "$k" $FK/bad 2> /dev/null; then
+  st=200
+  if [[ "${E[EFN_RPC_PATH]:-}" == */efn_qr_status || -e $FK/force-422 ]]; then st=422; fi
+fi
 echo "EFN_VERIFY $st deny=0"
 EOF
 cat > /usr/local/bin/logger <<'EOF'
@@ -147,7 +169,7 @@ bad() { echo "FAIL $1 :: rc=$RC :: $(tail -n3 <<< "$OUT" | tr '\n' ' ') :: $(tai
 run() { set +e; OUT=$(env -i PATH=/usr/bin:/bin "$@" 2>&1); RC=$?; set -e; ALL_OUT+="$OUT"$'\n'; }
 rot() { run "$W" --channel=GL "$@"; }
 fresh() { rm -rf /tmp/fk /var/lib/efn/online-key /var/lib/efn/node-exporter/* /opt/efn/compose/.env; mkdir -p /tmp/fk; : > /tmp/fk/keys.db
-  for s in "$SECRET" "$SEC_PB" "$SEC_BCF"; do printf 'disabled' > "$s"; chmod 0444 "$s"; done
+  for s in "$SECRET" "$SEC_PB" "$SEC_BCF" "$SEC_QRPB"; do printf 'disabled' > "$s"; chmod 0444 "$s"; done
   : > /tmp/journal.log; conf OVERLAP_SECONDS=0; }
 active() { awk '$5 == 0' /tmp/fk/keys.db | wc -l; }
 key_of() { awk -v i="$1" '$1 == i { print $4 }' /tmp/fk/keys.db; }
@@ -399,6 +421,54 @@ rm -f /tmp/fk/odoo-err.efn_online_pb
 if [[ $RC -eq 1 && "$(wc -l < "$PBDB")" == "$N_PB" ]] && grep -q 'odoo list: user_shared' /tmp/journal.log; then
   ok "78 user_shared dari Odoo -> rc 1, tidak ada key dibuat"; else bad "78 user_shared"; fi
 
+# ── 11d. G22 (docs/04 §14.A.5, L-72 D-22-7): API key user teknis QR meja per PT (QR-PB / QR-BCF) ─────────────────
+QRDB=/tmp/fk/keys.efn_qr_pb.db
+QR_FILES=docker-compose.yml,docker-compose.prod.yml,docker-compose.host.yml,docker-compose.online-qr-pb.yml
+: > /tmp/journal.log
+run "$W" --channel=QR-PB;                expect_deny "90 QR-PB belum di-deploy (overlay tidak di-mount) tanpa --bootstrap ditolak" "tidak didefinisikan compose"
+run "$W" --channel=QR-GL;                expect_deny "91 kode QR untuk PT non-F&B (QR-GL) ditolak allowlist" "salah satu"
+run "$W" --channel=QR-BCF --bootstrap;   expect_deny "92 --bootstrap QR-BCF tanpa file overlay ditolak" "overlay"
+: > /tmp/fk/files.log; : > /tmp/fk/rpc.log; run "$W" --channel=QR-PB --bootstrap
+if [[ $RC -eq 0 && "$(cat "$SEC_QRPB")" == "$(key_in "$QRDB" 1)" && "$(active_in "$QRDB")" == 1 ]] \
+   && grep -q 'docker-compose.online-qr-pb.yml' /tmp/fk/files.log && grep -qx 'efn_qr_pb QR-PB' /tmp/fk/odoo-ch.log \
+   && grep -q 'KEY BARU kanal=QR-PB id=1 nama=efn-qr-PB-' /tmp/journal.log \
+   && grep -q 'VERIFIKASI OK kanal=QR-PB container=bbbbbbbbbbbb status=422' /tmp/journal.log; then
+  ok "93 --bootstrap QR-PB: secret odoo_api_key_qr_pb + user efn_qr_pb, nama efn-qr-PB-*, verifikasi 422 = key sah"
+else bad "93 bootstrap QR-PB"; fi
+if grep -qx 'QR-PB /json/2/efn.pos.qr.order/efn_qr_status ODOO_API_KEY_QR_PB_FILE' /tmp/fk/rpc.log \
+   && ! grep -q 'QR-PB /json/2/efn.online' /tmp/fk/rpc.log; then
+  ok "94 verifikasi QR memakai path gateway #15 efn_qr_status + env ODOO_API_KEY_QR_PB_FILE (bukan path online)"
+else OUT=$(cat /tmp/fk/rpc.log); bad "94 path verifikasi QR"; fi
+if [[ -f /var/lib/efn/online-key/qr_pb.state && "$(metric_ch active_keys QR-PB)" == 1 && "$(metric_ch rotation_last_run_ok QR-PB)" == 1 ]]; then
+  ok "95 state & metrik per kunci QR (qr_pb.state, channel=\"QR-PB\" -> alert EfnOnlineApiKey* per label)"; else bad "95 metrik QR"; fi
+GL_BEFORE=$(cat "$SECRET"); PB_BEFORE=$(cat "$SEC_PB")
+conf OVERLAP_SECONDS=0 "COMPOSE_FILES=${QR_FILES}"; : > /tmp/journal.log; run "$W" --channel=QR-PB --force
+if [[ $RC -eq 0 && "$(cat "$SEC_QRPB")" == "$(key_in "$QRDB" 2)" && "$(active_in "$QRDB")" == 1 ]] && awk '$1==1 {exit !($5==1)}' "$QRDB" \
+   && grep -q 'KEY LAMA DITOLAK kanal=QR-PB status=401' /tmp/journal.log \
+   && [[ "$(cat "$SECRET")" == "$GL_BEFORE" && "$(cat "$SEC_PB")" == "$PB_BEFORE" ]]; then
+  ok "96 rotasi QR-PB (overlay ter-deploy): key 2 terpasang, key 1 dicabut (401 terbukti), kanal GL tidak disentuh"
+else bad "96 rotasi QR-PB"; fi
+# 422 hanya diterima untuk QR: kanal online yang dijawab 422 = gagal -> rollback (bukan diam-diam lolos)
+conf OVERLAP_SECONDS=0; rot; BEFORE=$(cat "$SECRET"); touch /tmp/fk/force-422; : > /tmp/journal.log; rot --force; rm -f /tmp/fk/force-422
+if [[ $RC -eq 1 && "$(cat "$SECRET")" == "$BEFORE" ]] && grep -q 'VERIFIKASI GAGAL kanal=GL .*status=422' /tmp/journal.log; then
+  ok "97 kanal online: status 422 BUKAN bukti key sah -> rollback (status_ok khusus QR)"; else bad "97 422 online"; fi
+# --all: QR-PB ikut dari .env deploy (FNB_QR_ENABLED=true + FNB_QR_COMPANIES)
+conf OVERLAP_SECONDS=0 "COMPOSE_FILES=${QR_FILES}"
+printf 'APP_ENV=production\nONLINE_CHANNELS=GL\nFNB_QR_ENABLED=true\nFNB_QR_COMPANIES=PB\n' > /opt/efn/compose/.env; chmod 0640 /opt/efn/compose/.env
+: > /tmp/journal.log; run "$W" --all --status
+if [[ $RC -eq 0 ]] && grep -q '== kanal GL ==' <<< "$OUT" && grep -q '== kanal QR-PB ==' <<< "$OUT" \
+   && grep -q 'sumber=/opt/efn/compose/.env ONLINE_CHANNELS + FNB_QR_COMPANIES' /tmp/journal.log && ! grep -qE '[0-9a-f]{40}' <<< "$OUT"; then
+  ok "98 --all: FNB_QR_ENABLED=true di .env -> QR-PB ikut (tanpa nilai key)"; else bad "98 --all QR"; fi
+printf 'APP_ENV=production\nONLINE_CHANNELS=GL\nFNB_QR_ENABLED=false\nFNB_QR_COMPANIES=PB\n' > /opt/efn/compose/.env; chmod 0640 /opt/efn/compose/.env
+: > /tmp/journal.log; run "$W" --all --status
+if [[ $RC -eq 0 ]] && ! grep -q '== kanal QR-PB ==' <<< "$OUT"; then ok "99 --all: FNB_QR_ENABLED=false -> QR tidak dirotasi"; else bad "99 QR mati"; fi
+printf 'FNB_QR_ENABLED=true\nFNB_QR_COMPANIES=GL\n' > /opt/efn/compose/.env; chmod 0640 /opt/efn/compose/.env
+run "$W" --all --status;                 expect_deny "100 FNB_QR_COMPANIES .env bukan PT F&B ditolak" "FNB_QR_COMPANIES tidak valid"
+printf 'ONLINE_CHANNELS=GL,QR-PB\n' > /opt/efn/compose/.env; chmod 0640 /opt/efn/compose/.env
+run "$W" --all --status;                 expect_deny "101 QR-* di ONLINE_CHANNELS ditolak" "ONLINE_CHANNELS tidak valid"
+rm -f /opt/efn/compose/.env
+conf OVERLAP_SECONDS=0
+
 # Logika Python odoo shell (precheck G19) dijalankan NYATA terhadap env Odoo palsu (bukan hanya grep)
 PYF=/tmp/efn-rot-py.py
 sed -n "/^read -r -d '' PY << 'PYEOF'/,/^PYEOF\$/p" "$W" | sed '1d;$d' > "$PYF"
@@ -410,6 +480,11 @@ class O:
     def __init__(self, **kw):
         self.__dict__.update(kw)
 class User(O):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        # G22: company_id {"efn_brand_code": ".."} -> objek; company_ids = daftar id (len dipakai precheck QR)
+        if isinstance(getattr(self, "company_id", None), dict):
+            self.company_id = O(**self.company_id)
     def has_group(self, g):
         return g in self.groups
 class Rec:
@@ -458,13 +533,18 @@ class Env(dict):
     cr = Cr()
     def __missing__(self, key):
         return Model(key)
+    # G22: env.ref(xmlid, raise_if_not_found=False) & `model in env` (modul terpasang) untuk precheck QR
+    def ref(self, xmlid, raise_if_not_found=True):
+        return xmlid not in SPEC.get("missing_xmlids", [])
+    def __contains__(self, name):
+        return name not in SPEC.get("missing_models", [])
 with open(sys.argv[1], encoding="utf-8") as fh:
     code = compile(fh.read(), "efn-rotate-online-key:PY", "exec")
 exec(code, {"env": Env(), "__name__": "efn_rot"})
 EOF
 PYOUT=""
 pyrun() { set +e; PYOUT=$(env -i PATH=/usr/local/bin:/usr/bin:/bin EFN_OP=list EFN_LOGIN="$1" EFN_CH="$2" FAKE_SPEC="$3" \
-            python3 -I /tmp/efn-fake-odoo.py "$PYF" 2>&1); set -e; }
+            EFN_KIND="${4:-online}" EFN_PT="${5:-}" python3 -I /tmp/efn-fake-odoo.py "$PYF" 2>&1); set -e; }
 pyok() { if grep -qx "$2" <<< "$PYOUT" && { [[ "$2" == 'EFN_ROT OK' ]] || ! grep -qx 'EFN_ROT OK' <<< "$PYOUT"; }; then ok "$1"
          else OUT="$PYOUT"; bad "$1"; fi; }
 G='"groups":["efn_online_order.group_online_channel"]'
@@ -483,6 +563,27 @@ pyok "83 python: user tidak ada -> ERR user_missing" 'EFN_ROT ERR user_missing'
 pyrun efn_online_gl GL '{"users":{"efn_online_gl":{"id":5,"active":true,"groups":["efn_online_order.group_online_channel","base.group_system"]}},
   "channels":[{"code":"GL","users":["efn_online_gl"]}]}'
 pyok "84 python: user teknis ber-hak admin -> ERR user_privileged" 'EFN_ROT ERR user_privileged'
+# G22: precheck user teknis QR meja (grup efn_pos_bff_order.group_qr_bff, satu company = PT, tanpa POS/admin, bukan kanal)
+QG='"groups":["efn_pos_bff_order.group_qr_bff"]'
+QU='"active":true,"company_ids":[3],"company_id":{"efn_brand_code":"PB"}'
+pyrun efn_qr_pb QR-PB '{"users":{"efn_qr_pb":{"id":9,'"$QU"','"$QG"'}},"channels":[{"code":"PB","users":[]}],
+  "keys":[{"id":4,"user":"efn_qr_pb","name":"efn-qr-PB-x"}]}' qr PB
+pyok "102 python QR: user teknis QR PB satu company -> daftar key + OK" 'EFN_ROT OK'
+if grep -qx 'EFN_ROT KEY 4 0 efn-qr-PB-x' <<< "$PYOUT"; then ok "103 python QR: baris KEY sesuai format parser"; else OUT="$PYOUT"; bad "103 python QR KEY"; fi
+pyrun efn_qr_pb QR-PB '{"users":{"efn_qr_pb":{"id":9,"active":true,"company_ids":[3,4],"company_id":{"efn_brand_code":"PB"},'"$QG"'}}}' qr PB
+pyok "104 python QR: user teknis multi-company -> ERR user_company_mismatch" 'EFN_ROT ERR user_company_mismatch'
+pyrun efn_qr_pb QR-BCF '{"users":{"efn_qr_pb":{"id":9,'"$QU"','"$QG"'}}}' qr BCF
+pyok "105 python QR: company user (PB) != kode PT (BCF) -> ERR user_company_mismatch" 'EFN_ROT ERR user_company_mismatch'
+pyrun efn_qr_pb QR-PB '{"users":{"efn_qr_pb":{"id":9,'"$QU"',"groups":["efn_pos_bff_order.group_qr_bff","point_of_sale.group_pos_user"]}}}' qr PB
+pyok "106 python QR: user teknis ber-grup POS -> ERR user_privileged" 'EFN_ROT ERR user_privileged'
+pyrun efn_qr_pb QR-PB '{"users":{"efn_qr_pb":{"id":9,'"$QU"','"$QG"'}},"channels":[{"code":"PB","users":["efn_qr_pb"]}]}' qr PB
+pyok "107 python QR: user QR juga user kanal online -> ERR user_shared" 'EFN_ROT ERR user_shared'
+pyrun efn_qr_pb QR-PB '{"users":{"efn_qr_pb":{"id":9,'"$QU"','"$QG"'}},"missing_xmlids":["efn_pos_bff_order.group_qr_bff"]}' qr PB
+pyok "108 python QR: modul efn_pos_bff_order belum terpasang -> ERR group_missing" 'EFN_ROT ERR group_missing'
+pyrun efn_qr_pb QR-PB '{"users":{"efn_qr_pb":{"id":9,'"$QU"',"groups":["efn_online_order.group_online_channel"]}}}' qr PB
+pyok "109 python QR: user tanpa grup QR -> ERR user_not_qr" 'EFN_ROT ERR user_not_qr'
+pyrun efn_qr_pb QR-PB '{"users":{"efn_qr_pb":{"id":9,'"$QU"','"$QG"'}},"missing_models":["efn.online.channel"]}' qr PB
+pyok "110 python QR: tanpa modul kanal online -> cek user_shared dilewati, OK" 'EFN_ROT OK'
 conf OVERLAP_SECONDS=0
 
 # ── 12. Penjaga independen: nilai key TIDAK PERNAH muncul di journald / keluaran ─────────────────────────────

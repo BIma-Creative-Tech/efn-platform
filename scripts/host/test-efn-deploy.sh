@@ -112,7 +112,7 @@ make_release() {
   cp "$SRC/scripts/lib/deploy-validate.sh" "$d/r/scripts/lib/deploy-validate.sh"
   cat > "$d/r/scripts/deploy.sh" <<'EOF'
 #!/usr/bin/env bash
-{ env | grep -E '^(IMAGE_|APP_ENV=|EFN_RELEASE_|WHATSAPP_OTP_TEMPLATE=|EFN_WG_|EFN_PUBLIC_BIND=|COMPOSE_PROFILES=|TRAEFIK_DOMAIN=|PAYMENT_PROVIDER=|JWT_SECRET=)' | sort; } > /tmp/deploy-ran
+{ env | grep -E '^(IMAGE_|APP_ENV=|EFN_RELEASE_|WHATSAPP_OTP_TEMPLATE=|EFN_WG_|EFN_PUBLIC_BIND=|COMPOSE_PROFILES=|TRAEFIK_DOMAIN=|PAYMENT_PROVIDER=|JWT_SECRET=|EFN_ALLOW_FEATURE_ON=|LOYALTY_EXPIRY_ENABLED=|FNB_QR_ENABLED=|LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=|ETL_ENABLE_KDS=)' | sort; } > /tmp/deploy-ran
 # SEC-120: kunci host bersama dipegang efn-deploy (fd 8 diwarisi) selama deploy.sh berjalan
 if flock -n /run/efn/deploy.lock true; then echo LOCK=free; else echo LOCK=held; fi >> /tmp/deploy-ran
 EOF
@@ -282,6 +282,64 @@ neg_man "110i production config EFN_ODOO_PII_ENABLED=true + REQUIRED=false ditol
   '.config.EFN_ODOO_PII_ENABLED = "true" | .config.EFN_ODOO_PII_REQUIRED = "false"'
 SEQ=$((SEQ + 1)); make_release "N$SEQ" "$SEQ" 1.3.0 '.config.EFN_ODOO_PII_ENABLED = "true" | .config.EFN_ODOO_PII_REQUIRED = "true"'
 make_env "N$SEQ"; run "N$SEQ"; expect_ok "110j production config PII ENABLED + REQUIRED=true diterima (AC-13)"
+# ── G22 (docs/04 §14): secret baru, D-22-18, L-73 (fitur menunggu persetujuan klien), QR meja ───────────────────────
+# fnb_table_token_key / odoo_fnb_event_hmac = secret GitHub Environment biasa (random) -> diterima dari stdin
+SEQ=$((SEQ + 1)); make_release "N$SEQ" "$SEQ" 1.3.0
+make_env "N$SEQ" "FNB_TABLE_TOKEN_KEY=$(openssl rand -base64 36)" "ODOO_FNB_EVENT_HMAC=$(openssl rand -base64 36)"
+run "N$SEQ"; expect_ok "170 FNB_TABLE_TOKEN_KEY + ODOO_FNB_EVENT_HMAC lewat stdin diterima (secret GitHub Environment)"
+# API key QR per PT = host:* (dibuat Odoo, efn-rotate-online-key --channel=QR-<PT>) -> TIDAK pernah dari stdin CI
+neg_env "171 ODOO_API_KEY_QR_PB lewat stdin ditolak (host:*)" "variabel tidak diizinkan: ODOO_API_KEY_QR_PB" \
+  "ODOO_API_KEY_QR_PB=0123456789abcdef0123456789abcdef01234567"  # gitleaks:allow (kunci uji palsu)
+neg_env "172 EFN_ALLOW_FEATURE_ON lewat stdin ditolak (dipin deploy.conf)" "variabel tidak diizinkan: EFN_ALLOW_FEATURE_ON" \
+  "EFN_ALLOW_FEATURE_ON=LOYALTY_EXPIRY_ENABLED"
+neg_env "173 LOYALTY_EXPIRY_ENABLED lewat stdin ditolak (config manifest)" "variabel tidak diizinkan: LOYALTY_EXPIRY_ENABLED" \
+  "LOYALTY_EXPIRY_ENABLED=true"
+# D-22-18: LOYALTY_POINT_EXPIRY_DAYS bukan kunci config rilis (dihapus) -> manifest ditolak skema
+neg_man "174 config manifest LOYALTY_POINT_EXPIRY_DAYS (dihapus D-22-18) ditolak" "skema" '.config.LOYALTY_POINT_EXPIRY_DAYS = "365"'
+# L-73: job hangus OFF di production tanpa izin Superadmin di deploy.conf (manifest bertanda tangan saja tidak cukup)
+neg_man "175 production LOYALTY_EXPIRY_ENABLED=true tanpa EFN_ALLOW_FEATURE_ON ditolak (L-73)" "config manifest rilis tidak valid" \
+  '.config.LOYALTY_EXPIRY_ENABLED = "true" | .config.LOYALTY_ACTIVITY_EPOCH = "2026-11-01"'
+write_conf "" "EFN_ALLOW_FEATURE_ON='LOYALTY_EXPIRY_ENABLED'"
+SEQ=$((SEQ + 1))
+make_release "N$SEQ" "$SEQ" 1.3.0 '.config.LOYALTY_EXPIRY_ENABLED = "true" | .config.LOYALTY_ACTIVITY_EPOCH = "2026-11-01"'
+make_env "N$SEQ"; run "N$SEQ"
+expect_ok "176 production LOYALTY_EXPIRY_ENABLED=true dengan EFN_ALLOW_FEATURE_ON di deploy.conf diterima (L-73)"
+if grep -qxF 'EFN_ALLOW_FEATURE_ON=LOYALTY_EXPIRY_ENABLED' /tmp/deploy-ran 2> /dev/null && grep -qxF 'LOYALTY_EXPIRY_ENABLED=true' /tmp/deploy-ran; then
+  ok "177 izin fitur (deploy.conf) + config manifest diteruskan ke deploy.sh"; else bad "177 izin fitur ke deploy.sh"; fi
+SEQ=$((SEQ + 1))
+make_release "N$SEQ" "$SEQ" 1.3.0 '.config.LOYALTY_EXPIRY_ENABLED = "true" | .config.LOYALTY_ACTIVITY_EPOCH = "2026-11-01" | .config.LOYALTY_INACTIVE_ANONYMIZE = "true"'
+make_env "N$SEQ"; run "N$SEQ"
+expect_fail "178 izin LOYALTY_EXPIRY_ENABLED tidak membuka LOYALTY_INACTIVE_ANONYMIZE (L-73)" "config manifest rilis tidak valid"
+write_conf
+neg_conf "179 EFN_ALLOW_FEATURE_ON nama tak dikenal (FNB_QR_ENABLED) ditolak" "topologi" "EFN_ALLOW_FEATURE_ON='FNB_QR_ENABLED'"
+# SEC-171 (r15): filter consent notice hangus - production `false` hanya dengan izin deploy.conf (gerbang sama L-73)
+neg_man "179b production LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=false tanpa EFN_ALLOW_FEATURE_ON ditolak (SEC-171)" \
+  "config manifest rilis tidak valid" '.config.LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT = "false"'
+write_conf "" "EFN_ALLOW_FEATURE_ON='LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT'"
+SEQ=$((SEQ + 1))
+make_release "N$SEQ" "$SEQ" 1.3.0 '.config.LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT = "false"'
+make_env "N$SEQ"; run "N$SEQ"
+expect_ok "179c production LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=false dengan EFN_ALLOW_FEATURE_ON di deploy.conf diterima"
+if grep -qxF 'LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=false' /tmp/deploy-ran 2> /dev/null; then
+  ok "179d nilai consent dari manifest diteruskan ke deploy.sh"; else bad "179d consent ke deploy.sh"; fi
+write_conf
+# QA G22 P2-3: job ETL opsional = kunci config manifest (bukan stdin), diteruskan ke deploy.sh
+SEQ=$((SEQ + 1))
+make_release "N$SEQ" "$SEQ" 1.3.0 '.config.ETL_ENABLE_KDS = "true" | .config.ETL_KDS_ONLINE_ENABLED = "true"'
+make_env "N$SEQ"; run "N$SEQ"
+expect_ok "179e production ETL_ENABLE_KDS + ETL_KDS_ONLINE_ENABLED di manifest diterima (ETL_ENABLE_ODOO kosong = setelah grant)"
+if grep -qxF 'ETL_ENABLE_KDS=true' /tmp/deploy-ran 2> /dev/null; then
+  ok "179f ETL_ENABLE_KDS dari manifest diteruskan ke deploy.sh"; else bad "179f ETL_ENABLE_KDS ke deploy.sh"; fi
+neg_env "179g ETL_ENABLE_KDS lewat stdin ditolak (config manifest)" "variabel tidak diizinkan: ETL_ENABLE_KDS" "ETL_ENABLE_KDS=true"
+neg_man "179h manifest ETL_ENABLE_KDS=true + ETL_ENABLE_ODOO=false ditolak" "config manifest rilis tidak valid" \
+  '.config.ETL_ENABLE_KDS = "true" | .config.ETL_ENABLE_ODOO = "false"'
+# QR meja (§14.A.10 API8): aktif tanpa URL tenant https ditolak di manifest
+neg_man "180 production FNB_QR_ENABLED=true tanpa FNB_QR_BASE_URL_* ditolak" "config manifest rilis tidak valid" \
+  '.config.FNB_QR_ENABLED = "true"'
+SEQ=$((SEQ + 1))
+make_release "N$SEQ" "$SEQ" 1.3.0 '.config.FNB_QR_ENABLED = "true" | .config.FNB_QR_COMPANIES = "PB" | .config.FNB_QR_BASE_URL_PB = "https://pb.efn.example"'
+make_env "N$SEQ"; run "N$SEQ"
+expect_ok "181 production FNB_QR_ENABLED=true + PB + URL https diterima (cek API key QR = deploy.sh di host)"
 neg_man "40 config manifest multi-baris ditolak" "skema" '.config.RABBITMQ_STRICT_PERMISSIONS = "true\nIMAGE_ODOO=evil"'
 neg_man "41 kunci config manifest tidak dikenal ditolak" "skema" '.config.IMAGE_ODOO = "evil.example/odoo"'
 neg_man "101 saklar dev ODOO_ONLINE_MOCK di config manifest ditolak (G17)" "skema" '.config.ODOO_ONLINE_MOCK = "true"'
@@ -552,6 +610,107 @@ u "162 efn_pii 'to remove' tanpa ENABLED -> gagal" 1 efn_pii_module_state_ok fal
 u "163 efn_pii uninstalled tanpa ENABLED -> lulus" 0 efn_pii_module_state_ok false uninstalled
 u "164 efn_pii tidak dikenal DB (kosong) -> lulus" 0 efn_pii_module_state_ok false ""
 u "165 status ber-CR (psql) tetap dikenali" 1 efn_pii_module_state_ok false $'installed\r'
+
+# ── G22 (docs/04 §14): lib deploy-validate (efn_validate_g22_config lewat efn_validate_config) ───────────────────────
+# D-22-18: env dihapus -> production ditolak, staging peringatan (rc 0)
+vc "200 production LOYALTY_POINT_EXPIRY_DAYS=365 ditolak (D-22-18)" 1 production LOYALTY_POINT_EXPIRY_DAYS=365
+vc "201 production LOYALTY_POINT_EXPIRY_DAYS=0 tetap ditolak (variabel dihapus, bukan nilainya)" 1 production LOYALTY_POINT_EXPIRY_DAYS=0
+vc "202 staging LOYALTY_POINT_EXPIRY_DAYS diset -> peringatan saja" 0 staging LOYALTY_POINT_EXPIRY_DAYS=365
+warn_msg=$(env ACME_EMAIL=a@b.co PAYMENT_PROVIDER=disabled LOYALTY_POINT_EXPIRY_DAYS=365 \
+  bash -c "source '$SRC/scripts/lib/deploy-validate.sh'; efn_validate_config staging" 2>&1 || true)
+if [[ "$warn_msg" == *"PERINGATAN LOYALTY_POINT_EXPIRY_DAYS"* ]]; then ok "203 staging: peringatan menyebut LOYALTY_POINT_EXPIRY_DAYS"
+else RC=1 OUT="$warn_msg"; bad "203 peringatan D-22-18"; fi
+# L-73: job hangus & anonimisasi OFF di production kecuali izin deploy.conf (EFN_ALLOW_FEATURE_ON)
+vc "204 production LOYALTY_EXPIRY_ENABLED=true tanpa izin ditolak" 1 production LOYALTY_EXPIRY_ENABLED=true LOYALTY_ACTIVITY_EPOCH=2026-11-01
+vc "205 production LOYALTY_EXPIRY_ENABLED=true + izin diterima" 0 production LOYALTY_EXPIRY_ENABLED=true \
+  LOYALTY_ACTIVITY_EPOCH=2026-11-01 EFN_ALLOW_FEATURE_ON=LOYALTY_EXPIRY_ENABLED
+vc "206 production anonimisasi dengan izin expiry saja ditolak" 1 production LOYALTY_EXPIRY_ENABLED=true \
+  LOYALTY_ACTIVITY_EPOCH=2026-11-01 LOYALTY_INACTIVE_ANONYMIZE=true EFN_ALLOW_FEATURE_ON=LOYALTY_EXPIRY_ENABLED
+vc "207 production hangus + anonimisasi dengan kedua izin diterima" 0 production LOYALTY_EXPIRY_ENABLED=true \
+  LOYALTY_ACTIVITY_EPOCH=2026-11-01 LOYALTY_INACTIVE_ANONYMIZE=true \
+  "EFN_ALLOW_FEATURE_ON=LOYALTY_EXPIRY_ENABLED LOYALTY_INACTIVE_ANONYMIZE"
+vc "208 production LOYALTY_EXPIRY_ENABLED=false (default) diterima tanpa izin" 0 production LOYALTY_EXPIRY_ENABLED=false
+vc "209 staging LOYALTY_EXPIRY_ENABLED=true tanpa izin diterima (gerbang L-73 hanya production)" 0 staging \
+  LOYALTY_EXPIRY_ENABLED=true LOYALTY_ACTIVITY_EPOCH=2026-11-01
+vc "210 LOYALTY_EXPIRY_ENABLED=true tanpa LOYALTY_ACTIVITY_EPOCH ditolak (D-22-15)" 1 staging LOYALTY_EXPIRY_ENABLED=true
+vc "211 LOYALTY_INACTIVE_ANONYMIZE=true tanpa job hangus ditolak" 1 staging LOYALTY_INACTIVE_ANONYMIZE=true
+vc "212 LOYALTY_ACTIVITY_EPOCH bulan 13 ditolak" 1 staging LOYALTY_ACTIVITY_EPOCH=2026-13-01
+vc "213 LOYALTY_ACTIVITY_EPOCH format waktu ditolak" 1 staging LOYALTY_ACTIVITY_EPOCH=2026-11-01T00:00:00Z
+vc "214 LOYALTY_EXPIRY_ENABLED bukan boolean ditolak" 1 staging LOYALTY_EXPIRY_ENABLED=1
+vc "215 LOYALTY_INACTIVITY_EXPIRY_MONTHS=5 ditolak (6..36)" 1 staging LOYALTY_INACTIVITY_EXPIRY_MONTHS=5
+vc "216 LOYALTY_INACTIVITY_EXPIRY_MONTHS=36 diterima" 0 staging LOYALTY_INACTIVITY_EXPIRY_MONTHS=36
+vc "217 LOYALTY_EXPIRY_NOTICE_DAYS=6 ditolak (7..60)" 1 staging LOYALTY_EXPIRY_NOTICE_DAYS=6
+vc "218 LOYALTY_EXPIRY_RUN_HOUR_WIB=0 diterima" 0 staging LOYALTY_EXPIRY_RUN_HOUR_WIB=0
+vc "219 LOYALTY_EXPIRY_NOTICE_HOUR_WIB=24 ditolak" 1 staging LOYALTY_EXPIRY_NOTICE_HOUR_WIB=24
+vc "220 LOYALTY_POINT_MAX_AGE_DAYS=0 diterima (default D-22-18)" 0 production LOYALTY_POINT_MAX_AGE_DAYS=0
+vc "221 LOYALTY_POINT_MAX_AGE_DAYS=00 ditolak" 1 production LOYALTY_POINT_MAX_AGE_DAYS=00
+vc "222 LOYALTY_EXPIRY_MAX_PER_RUN=1000000 ditolak (maks 999999)" 1 staging LOYALTY_EXPIRY_MAX_PER_RUN=1000000
+vc "223 LOYALTY_EXPIRY_BATCH_SIZE=5001 ditolak" 1 staging LOYALTY_EXPIRY_BATCH_SIZE=5001
+vc "224 LOYALTY_INACTIVE_ANONYMIZE_GRACE_DAYS=91 ditolak" 1 staging LOYALTY_INACTIVE_ANONYMIZE_GRACE_DAYS=91
+vc "225 LOYALTY_EXPIRY_DRY_RUN=false diterima" 0 production LOYALTY_EXPIRY_DRY_RUN=false
+# QR meja (§14.A.7/§14.A.9/§14.A.10)
+vc "226 FNB_QR_ENABLED=true + URL https kedua PT diterima" 0 production FNB_QR_ENABLED=true \
+  FNB_QR_BASE_URL_PB=https://pb.efn.example FNB_QR_BASE_URL_BCF=https://bacha.efn.example/fnb
+vc "227 FNB_QR_ENABLED=true tanpa URL BCF (default PB,BCF) ditolak" 1 production FNB_QR_ENABLED=true \
+  FNB_QR_BASE_URL_PB=https://pb.efn.example
+vc "228 FNB_QR_ENABLED=true hanya PB + URL PB diterima" 0 production FNB_QR_ENABLED=true FNB_QR_COMPANIES=PB \
+  FNB_QR_BASE_URL_PB=https://pb.efn.example
+# Uji NEGATIF plaintext: skema dirakit dari variabel agar check-encryption.sh/grep URL tidak salah membaca
+PLAIN=http
+vc "229 FNB_QR_BASE_URL plaintext ditolak" 1 staging "FNB_QR_BASE_URL_PB=${PLAIN}://pb.efn.example"
+vc "230 FNB_QR_BASE_URL dengan query ditolak" 1 staging "FNB_QR_BASE_URL_PB=https://pb.efn.example/?ts=1"
+vc "231 FNB_QR_BASE_URL dengan fragment ditolak" 1 staging "FNB_QR_BASE_URL_PB=https://pb.efn.example/#t=x"
+vc "232 FNB_QR_BASE_URL dengan port ditolak" 1 staging FNB_QR_BASE_URL_PB=https://pb.efn.example:8443
+vc "233 FNB_QR_BASE_URL huruf besar ditolak" 1 staging FNB_QR_BASE_URL_PB=https://PB.efn.example
+vc "234 FNB_QR_BASE_URL dengan userinfo ditolak" 1 staging FNB_QR_BASE_URL_PB=https://a@pb.efn.example
+vc "235 FNB_QR_COMPANIES=GL (bukan F&B) ditolak" 1 staging FNB_QR_COMPANIES=GL
+vc "236 FNB_QR_COMPANIES ganda ditolak" 1 staging FNB_QR_COMPANIES=PB,PB
+vc "237 FNB_QR_COMPANIES huruf kecil ditolak" 1 staging FNB_QR_COMPANIES=pb
+vc "238 FNB_QR_ENABLED=yes ditolak" 1 staging FNB_QR_ENABLED=yes
+vc "239 FNB_TABLE_SESSION_TTL_SECONDS=14401 ditolak (maks 4 jam)" 1 staging FNB_TABLE_SESSION_TTL_SECONDS=14401
+vc "240 FNB_TABLE_SESSION_TTL_SECONDS=600 diterima" 0 staging FNB_TABLE_SESSION_TTL_SECONDS=600
+vc "241 FNB_MAX_LINES=31 ditolak (batas keras Odoo 30)" 1 staging FNB_MAX_LINES=31
+vc "242 FNB_MAX_LINE_QTY=21 ditolak (batas keras Odoo 20)" 1 staging FNB_MAX_LINE_QTY=21
+vc "243 FNB_CAPTCHA_MODE=first_submit diterima" 0 production FNB_CAPTCHA_MODE=first_submit
+vc "244 FNB_CAPTCHA_MODE tak dikenal ditolak" 1 staging FNB_CAPTCHA_MODE=sometimes
+vc "245 FNB_SESSION_MEMBER_LINK_DAYS > retensi sesi (default 180) ditolak" 1 staging FNB_SESSION_MEMBER_LINK_DAYS=200
+vc "246 FNB_SESSION_RETENTION_DAYS=180 + link 30 diterima" 0 production FNB_SESSION_RETENTION_DAYS=180 FNB_SESSION_MEMBER_LINK_DAYS=30
+vc "247 ONLINE_LOYALTY_REDEEM_ENABLED bukan boolean ditolak" 1 staging ONLINE_LOYALTY_REDEEM_ENABLED=on
+vc "248 FNB_MENU_SYNC_SECONDS=59 ditolak" 1 staging FNB_MENU_SYNC_SECONDS=59
+u "249 efn_validate_fnb_qr_companies PB,BCF" 0 efn_validate_fnb_qr_companies PB,BCF
+u "250 efn_validate_fnb_qr_companies BCR (ritel) ditolak" 1 efn_validate_fnb_qr_companies BCR
+# SEC-171 (r15): LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT - nilai berisiko `false`, gerbang EFN_ALLOW_FEATURE_ON (production)
+vc "251 production NOTICE_REQUIRE_CONSENT=false tanpa izin ditolak" 1 production LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=false
+vc "252 production NOTICE_REQUIRE_CONSENT=false + izin diterima" 0 production LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=false \
+  EFN_ALLOW_FEATURE_ON=LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT
+vc "253 production NOTICE_REQUIRE_CONSENT=true tanpa izin diterima" 0 production LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=true
+vc "254 staging NOTICE_REQUIRE_CONSENT=false tanpa izin diterima (gerbang hanya production)" 0 staging \
+  LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=false
+vc "255 NOTICE_REQUIRE_CONSENT bukan boolean ditolak" 1 staging LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=no
+vc "256 izin LOYALTY_EXPIRY_ENABLED tidak membuka NOTICE_REQUIRE_CONSENT=false" 1 production \
+  LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=false EFN_ALLOW_FEATURE_ON=LOYALTY_EXPIRY_ENABLED
+vc "257 izin NOTICE_REQUIRE_CONSENT tidak membuka LOYALTY_EXPIRY_ENABLED=true" 1 production LOYALTY_EXPIRY_ENABLED=true \
+  LOYALTY_ACTIVITY_EPOCH=2026-11-01 EFN_ALLOW_FEATURE_ON=LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT
+vc "258 hangus + consent off dengan kedua izin diterima" 0 production LOYALTY_EXPIRY_ENABLED=true \
+  LOYALTY_ACTIVITY_EPOCH=2026-11-01 LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=false \
+  "EFN_ALLOW_FEATURE_ON=LOYALTY_EXPIRY_ENABLED LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT"
+# QA G22 P2-3: job ETL opsional (boolean + prasyarat cermin services/etl/efn_etl/config.py)
+vc "259 ETL_ENABLE_KDS=1 ditolak (boolean)" 1 staging ETL_ENABLE_KDS=1
+vc "260 ETL_PARTNER_REGION_ENABLED=yes ditolak (boolean)" 1 staging ETL_PARTNER_REGION_ENABLED=yes
+vc "261 production ETL_ENABLE_KDS=true + ETL_ENABLE_ODOO kosong diterima (aktif setelah grant)" 0 production ETL_ENABLE_KDS=true
+vc "262 ETL_ENABLE_KDS=true + ETL_ENABLE_ODOO=false ditolak" 1 staging ETL_ENABLE_KDS=true ETL_ENABLE_ODOO=false
+vc "263 ETL_KDS_ONLINE_ENABLED=true tanpa ETL_ENABLE_KDS ditolak" 1 staging ETL_KDS_ONLINE_ENABLED=true
+vc "264 ETL_KDS_ONLINE_ENABLED=true + ETL_ENABLE_KDS=true diterima" 0 production ETL_ENABLE_KDS=true ETL_KDS_ONLINE_ENABLED=true
+vc "265 ETL_PARTNER_REGION_ENABLED=true + ETL_ENABLE_ODOO=false ditolak" 1 staging ETL_PARTNER_REGION_ENABLED=true \
+  ETL_ENABLE_ODOO=false
+vc "266 ETL_LOYALTY_RECON_ONLINE_ENABLED=true + mode product ditolak" 1 staging ETL_LOYALTY_RECON_ONLINE_ENABLED=true \
+  ETL_LOYALTY_POINTS_MODE=product
+vc "267 ETL_LOYALTY_RECON_ONLINE_ENABLED=true + ETL_ENABLE_ODOO=false ditolak" 1 staging \
+  ETL_LOYALTY_RECON_ONLINE_ENABLED=true ETL_ENABLE_ODOO=false
+vc "268 production recon online + region + ETL_ENABLE_ODOO=true diterima" 0 production ETL_ENABLE_ODOO=true \
+  ETL_LOYALTY_RECON_ONLINE_ENABLED=true ETL_PARTNER_REGION_ENABLED=true
+vc "269 semua job ETL opsional false diterima" 0 production ETL_PARTNER_REGION_ENABLED=false \
+  ETL_LOYALTY_RECON_ONLINE_ENABLED=false ETL_ENABLE_KDS=false ETL_KDS_ONLINE_ENABLED=false
 
 echo "RINGKASAN efn-deploy: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]

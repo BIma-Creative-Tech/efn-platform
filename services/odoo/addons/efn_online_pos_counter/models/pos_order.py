@@ -94,7 +94,8 @@ class PosOrder(models.Model):
                 "no_lookup_claim", _("Pesanan online ini belum dicari dengan kode bayar di POS ini. Ulangi lookup.")
             )
         online._efn_lock()
-        amount = online.amount_payable
+        # G22 W-12 (docs/04 §14.C.2): kasir menagih porsi tunai (`amount_due`); porsi Poin EFN dicatat di faktur SO.
+        amount = online.amount_due
         if not all(
             self._efn_counter_same(value, amount)
             for value in (line.price_unit, line.price_subtotal, line.price_subtotal_incl, self.amount_total)
@@ -141,7 +142,9 @@ class PosOrder(models.Model):
         auths = settlement.refund_auth_ids.filtered(lambda a: not a.consumed_pos_order_id)
         linked = auths.filtered(lambda a: a.refund_id and a.refund_id.state == "requested")
         if linked and self._efn_counter_same(sum(linked.mapped("amount")), amount):
-            if all(self._efn_counter_same(a.amount, a.refund_id.amount) for a in linked):
+            # G22 W-12 (§14.C.3): uang keluar di kasir = porsi TUNAI refund (`cash_amount`); porsi Poin EFN dikembalikan
+            # lewat jurnal Poin EFN saat settle.
+            if all(self._efn_counter_same(a.amount, a.refund_id.cash_amount) for a in linked):
                 return {"kind": "refund", "settlement": settlement, "refunds": linked.refund_id, "auths": linked}
         unlinked = auths.filtered(lambda a: not a.refund_id)
         if (

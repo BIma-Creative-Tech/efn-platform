@@ -170,6 +170,13 @@ class Settings:
     # G21 (ADR-036 §0.7, docs/04 §13.2): wilayah kab/kota pembeli dari view Odoo efn_etl.partner_region + dim_region.
     # Default mati sampai efn_region terpasang dan grant G21 (sql/odoo-readonly-grants.sql) diterapkan.
     partner_region_enabled: bool = False
+    # G22 (docs/04 §14.C.5): rekonsiliasi poin online (faktur SO) di dalam job loyalty_recon. Default mati sampai
+    # E-28 (poin online Odoo) + view G22 sql/odoo-readonly-grants.sql diterapkan.
+    loyalty_recon_online_enabled: bool = False
+    # G22 (docs/04 §14.B, docs/08 §7.3 F-54): mart KPI dapur (efn_etl/kds.py). `kds_online_enabled` = baca kolom
+    # efn_kds_ticket.efn_online_order_id (ada setelah efn_online_kds_bridge E-29a terpasang).
+    kds_enabled: bool = False
+    kds_online_enabled: bool = False
 
     @property
     def amqp_user(self) -> str:
@@ -252,6 +259,20 @@ class Settings:
         partner_region = _bool(e, "ETL_PARTNER_REGION_ENABLED", False)
         if partner_region and not odoo_enabled:
             raise RuntimeError("ETL_PARTNER_REGION_ENABLED membutuhkan ETL_ENABLE_ODOO=true")
+        points_mode = _points_mode(e)
+        loyalty_recon_enabled = _bool(e, "ETL_LOYALTY_RECON_ENABLED", odoo_enabled)
+        recon_online = _bool(e, "ETL_LOYALTY_RECON_ONLINE_ENABLED", False)
+        if recon_online and not (loyalty_recon_enabled and points_mode == "payment"):
+            raise RuntimeError(
+                "ETL_LOYALTY_RECON_ONLINE_ENABLED membutuhkan ETL_LOYALTY_RECON_ENABLED=true dan "
+                "ETL_LOYALTY_POINTS_MODE=payment"
+            )
+        kds_enabled = _bool(e, "ETL_ENABLE_KDS", False)
+        kds_online = _bool(e, "ETL_KDS_ONLINE_ENABLED", False)
+        if kds_enabled and not odoo_enabled:
+            raise RuntimeError("ETL_ENABLE_KDS membutuhkan ETL_ENABLE_ODOO=true")
+        if kds_online and not kds_enabled:
+            raise RuntimeError("ETL_KDS_ONLINE_ENABLED membutuhkan ETL_ENABLE_KDS=true")
         return cls(
             platform_pg=platform,
             odoo_pg=odoo,
@@ -295,17 +316,20 @@ class Settings:
             audit_sink_key=sink_key,
             audit_sink_window_seconds=_int(e, "ETL_AUDIT_SINK_WINDOW_SECONDS", 90_000),
             audit_anchor_lookback_seconds=_int(e, "ETL_AUDIT_ANCHOR_LOOKBACK_SECONDS", 691_200),
-            loyalty_recon_enabled=_bool(e, "ETL_LOYALTY_RECON_ENABLED", odoo_enabled),
+            loyalty_recon_enabled=loyalty_recon_enabled,
             loyalty_recon_interval_seconds=_int(e, "ETL_LOYALTY_RECON_INTERVAL_SECONDS", 86_400),
             loyalty_recon_lookback_hours=_int(e, "ETL_LOYALTY_RECON_LOOKBACK_HOURS", 72),
             loyalty_recon_settle_hours=_int(e, "ETL_LOYALTY_RECON_SETTLE_HOURS", 6),
             loyalty_recon_aged_hours=_int(e, "ETL_LOYALTY_RECON_AGED_HOURS", 24),
             loyalty_recon_open_days=_int(e, "ETL_LOYALTY_RECON_OPEN_DAYS", 30),
             loyalty_recon_not_before=_datetime(e, "ETL_LOYALTY_RECON_NOT_BEFORE"),
-            loyalty_points_mode=_points_mode(e),
+            loyalty_points_mode=points_mode,
             loyalty_points_tolerance_idr=_int_range(e, "ETL_LOYALTY_POINTS_TOLERANCE_IDR", 0, 0, 1000),
             loyalty_point_value_idr=_int_range(e, "LOYALTY_POINT_VALUE_IDR", 100, 1, 1_000_000_000),
             pseudonym_retention_years=_int_range(e, "CH_PSEUDONYM_RETENTION_YEARS", 5, 1, 30),
             geo_retention_days=_int_range(e, "CH_GEO_RETENTION_DAYS", 90, 1, 3650),
             partner_region_enabled=partner_region,
+            loyalty_recon_online_enabled=recon_online,
+            kds_enabled=kds_enabled,
+            kds_online_enabled=kds_online,
         )

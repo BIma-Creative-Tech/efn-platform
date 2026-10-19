@@ -1,4 +1,4 @@
-# KONTRAK ANTAR-SERVICE (v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
+# KONTRAK ANTAR-SERVICE (v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -1005,6 +1005,14 @@ Modul `efn_l10n_id_coretax_rounding` sesuai docs/08 §11.2 (memanggil `_l10n_id_
 
 Dasar: ADR-032 (Accepted opsi B), ADR-020, docs/08 §13 (fit-gap G22), draf architect `docs/decisions/G22_CONTRACT_DRAFT.md` (bagian A–E di bawah disalin dari draf; **§14.7 keputusan lead menang** atas opsi/usulan di dalamnya dan atas docs/08 §13 bila bertentangan).
 
+> **v9.1 (19 Okt 2026, sinkron QA G22 #4 dan security review r15).** Badan §14.A kini mengikuti L-70/L-76/L-78/L-80/L-81 (sebelumnya hanya tabel §14.7 yang benar) dan **kontrak bersama r15**:
+> - **K1** `order_uuid`: dikembalikan Odoo di hasil `efn_qr_submit`, entri `efn_qr_status`, dan event `submission_status`.
+> - **K2** `close.orders[]`: entri `{order_uuid, eligible_amount, company_code, pos_member_attached}`.
+> - **K3** refund vs close: tidak ada earn atas uang yang sudah kembali.
+> - Perbaikan SEC-166 (lekat order), SEC-167 (`print_no` monoton), SEC-168 (filter catatan identik), SEC-171 (consent notifikasi hangus), SEC-173 (rate limit event).
+>
+> Keputusan penundaan SEC-169/SEC-170 dan penerimaan SEC-172: **L-82**. Sumber: `docs/reviews/SECURITY_REVIEW_2026-10-19_r15.md`, `docs/agent-reports/efn-qa-engineer.md` §G22. Status implementasi K1–K3 dan SEC-166..173: **dikerjakan paralel di G22, belum diverifikasi architect** (lihat laporan builder).
+
 ### 14.A W-07 — QR order dari ponsel (E-27, `/v1/fnb/*`)
 
 #### 14.A.1 Alur
@@ -1017,23 +1025,23 @@ sequenceDiagram
     participant B as BFF
     participant P as Ponsel tamu (Super-App)
     participant K as KDS
-    W->>O: Buka meja → order draft tersinkron (order_uuid)
-    W->>O: pos.config/efn_qr_session_open(config, table, order_uuid)
-    O->>B: POST /v1/pos/fnb/table-sessions (mTLS + service key)
+    W->>O: Buka meja → order draft tersinkron (order jangkar)
+    W->>O: pos.config/efn_qr_session_open(config, table)
+    O->>B: POST /v1/pos/fnb/table-sessions (mTLS + service key, tanpa order_uuid — L-76)
     B-->>O: {table_session_id, qr_url (token di fragment), expires_at}
     O-->>W: Cetak slip QR (printer struk), token tidak disimpan
     P->>B: GET /v1/fnb/session + /v1/fnb/menu (X-Table-Session)
     P->>B: POST /v1/fnb/orders (Idempotency-Key)
     B->>O: json2 efn_qr_submit (user efn_qr_<pt>, via odoo-rpc-gateway)
-    O->>O: tambah baris ke pos.order draft, hitung harga, hook KDS, notify POS (kanal privat)
-    O-->>B: {submission_ref, state}
+    O->>O: buat pos.order draft BARU di meja (L-70), hitung harga, hook KDS, notify POS (kanal privat)
+    O-->>B: {submission_ref, order_uuid (K1), state, lines + modifier (L-78)}
     B-->>P: 202 {submission_id, status}
     K->>O: bump tiket
-    O->>B: POST /v1/pos/fnb/events submission_status (HMAC, seq)
+    O->>B: POST /v1/pos/fnb/events submission_status (HMAC, seq, order_uuid)
     P->>B: GET /v1/fnb/orders (polling, jawaban dari DB BFF)
-    W->>O: Bayar di kasir → order paid
-    O->>B: event session_closed {reason: paid, order: {eligible_amount}}
-    B->>B: token mati; earn poin bila sesi diklaim member
+    W->>O: Bayar di kasir → order-order meja paid
+    O->>B: event session_closed {reason: paid, orders[]: {order_uuid, eligible_amount neto, company_code, pos_member_attached} (L-80, K2)}
+    B->>B: token mati; earn per order bila sesi diklaim member, poin QR aktif, dan pos_member_attached=false
 ```
 
 #### 14.A.2 Token sesi meja (memenuhi Q-QR4, R-S03, SEC-73/75/77)
@@ -1041,10 +1049,10 @@ sequenceDiagram
 |---|---|
 | Penerbit | **BFF** saat Odoo memanggil `POST /v1/pos/fnb/table-sessions`. Tidak diturunkan dari `pos.config.access_token`/`restaurant.table.identifier`. |
 | Format | `fts1.<b64url(session_id 16 byte)>.<exp unix>.<b64url(HMAC-SHA256(K, "fts1\|" + session_id_hex + "\|" + exp))>`; `K = HKDF-SHA256(ikm=secret fnb_table_token_key, info "efn:fnb_table_token:v1")`. Tanda tangan diperiksa **sebelum** query DB (murah, anti-DoS). Token dapat dihitung ulang dari `session_id` + `exp`, sehingga BFF tidak menyimpan token atau hash token. |
-| Keterikatan | `session_id → (company_code, config_id, table_id, order_uuid)` di `platform.fnb_table_session`; Odoo menyimpan `pos.order.efn_qr_session_ref = session_id` dan memverifikasi kecocokan saat submit. |
+| Keterikatan | `session_id → (company_code, config_id, table_id)` di `platform.fnb_table_session` (kolom `order_uuid` sesi tetap ada tetapi tidak diisi saat buka sesi, L-76). Odoo menyimpan id sesi BFF di `efn.pos.table.session` dan menautkan order meja ke sesi itu (`efn_qr_table_session_id`); kecocokan diperiksa saat submit. Order per kiriman dikenal BFF lewat `order_uuid` di hasil submit/status/event (K1). |
 | Umur | `exp = opened_at + FNB_TABLE_SESSION_TTL_SECONDS` (default 14 400 = 4 jam, maks 14 400). Tidak diperpanjang otomatis; pelayan bisa **cetak ulang** (sesi lama dicabut, `close_reason=reissued`). |
 | Pencabutan | Event Odoo `session_closed` (order dibayar/batal/ditutup staf), cetak ulang, kedaluwarsa (sweeper), kill switch. Sesi tidak `open` → `409 table_session_closed`. |
-| Transport | QR berisi `https://<domain tenant brand>/meja#t=<token>`. Token ada di **fragment**, sehingga tidak dikirim ke server dan tidak masuk access log Traefik/Next.js. Frontend membaca fragment, menghapusnya dari address bar (`history.replaceState`), menyimpannya di `sessionStorage`, lalu mengirim header **`X-Table-Session`**. Query `?ts=` **tidak** diterima. |
+| Transport | QR berisi `https://<domain tenant brand>/meja#t=<token>`. Token ada di **fragment**, sehingga tidak dikirim ke server dan tidak masuk access log Traefik/Next.js. Frontend membaca fragment, menghapusnya dari address bar (`history.replaceState`), menyimpannya **hanya di memori halaman** (L-78; reload = pindai ulang), lalu mengirim header **`X-Table-Session`**. Query `?ts=` **tidak** diterima. |
 | Rotasi kunci | Secret `fnb_table_token_key` + opsional `fnb_table_token_key_prev` (verifikasi saja). Karena TTL ≤ 4 jam, rotasi cukup dengan overlap 4 jam. |
 | Log | Token tidak pernah di-log. Promtail ditambah pola redaksi `fts1\.[A-Za-z0-9_.-]+`. Log hanya memuat `table_session_id`. |
 
@@ -1055,8 +1063,8 @@ Umum: header `X-Table-Session` wajib (kecuali disebut lain). `Authorization: Bea
 |---|---|---|---|---|
 | `GET /v1/fnb/session` | — | `200 { outlet_name, table_label, company_code, brand_code, expires_at, confirm_mode: "auto"\|"waiter", limits: { max_lines, max_line_qty, submissions_left }, points: { claimable, claimed, claimed_by_me } }` (`claimed_by_me` hanya bila Bearer) | 401, 409 `table_session_closed`, 503 | 60/menit/sesi; 120/menit/IP |
 | `GET /v1/fnb/menu` | — | `200 { categories:[{ category_id, name, sequence, image_sha }], products:[{ product_id, name, category_id, image_sha, price_excl, tax_labels:["PB1 10%","Service 5%"], price_note:"belum termasuk pajak & layanan", available, attributes:[A.6] }], menu_synced_at }`. `Cache-Control: private, max-age=60`. Gambar lewat `GET /v1/catalog/images/:sha` yang sudah ada | 401, 409, 503 | 60/menit/sesi; 120/menit/IP |
-| `POST /v1/fnb/orders` | Header **`Idempotency-Key`** `^[A-Za-z0-9_-]{16,128}$` (frontend: `crypto.randomUUID()` per percobaan, `sessionStorage`). Body `{ lines: [{ product_id:int, qty:int 1..FNB_MAX_LINE_QTY, attribute_value_ids:int[] ≤10, note?: string ≤140 }] (1..FNB_MAX_LINES) , altcha?: string }` | `202 { submission_id, status: "accepted"\|"pending_confirmation", lines:[{ product_id, name, qty }], indicative_subtotal_excl }` | 400 `invalid_request` / `idempotency_key_required` / `note_invalid` / `captcha_required`; 401; 409 `table_session_closed` / `idempotency_conflict` / `item_unavailable` (+`product_ids`); 422 `session_limit_reached`; 429 `rate_limited`; 503 `ordering_unavailable` (Odoo mati/circuit terbuka → teks "silakan pesan ke pelayan"; **tidak** diantrekan) | 6/menit/sesi; 20/10 menit/IP |
-| `GET /v1/fnb/orders` | — | `200 { items:[{ submission_id, created_at, status, lines:[{ name, qty }] }] }` (semua kiriman sesi; meja berbagi token) | 401, 409 | 30/menit/sesi |
+| `POST /v1/fnb/orders` | Header **`Idempotency-Key`** `^[A-Za-z0-9_-]{16,128}$` (frontend: `crypto.randomUUID()` per percobaan, `sessionStorage`). Body `{ lines: [{ product_id:int, qty:int 1..FNB_MAX_LINE_QTY, attribute_value_ids:int[] ≤10, note?: string ≤140 }] (1..FNB_MAX_LINES) , altcha?: string }` | `202 { submission_id, status: "accepted"\|"pending_confirmation", lines:[{ product_id, name, qty, attribute_value_ids:int[] (urut naik), attributes_text: string\|null }], indicative_subtotal_excl }` (L-78) | 400 `invalid_request` / `idempotency_key_required` / `note_invalid` / `captcha_required`; 401; 409 `table_session_closed` / `idempotency_conflict` / `item_unavailable` (+`product_ids`); 422 `session_limit_reached`; 429 `rate_limited`; 503 `ordering_unavailable` (Odoo mati/circuit terbuka → teks "silakan pesan ke pelayan"; **tidak** diantrekan) | 6/menit/sesi; 20/10 menit/IP |
+| `GET /v1/fnb/orders` | — | `200 { items:[{ submission_id, created_at, status, lines:[{ name, qty, attributes_text: string\|null }] }] }` (semua kiriman sesi; meja berbagi token; modifier wajib tampil, L-78 / QA G22 P3 #4) | 401, 409 | 30/menit/sesi |
 | `GET /v1/fnb/orders/:submission_id` | — | `200 { submission_id, status, updated_at }` | 401; 404 `not_found` (id bukan milik sesi/bukan UUID) | 30/menit/sesi |
 | `POST /v1/fnb/session/points-claim` | **Bearer wajib** + `X-Table-Session`, body `{}` | `200 { claimed: true }` (idempoten untuk member yang sama) | 401; 409 `points_already_claimed` (member lain) / `table_session_closed` / `account_deleting`; 422 `points_unavailable` (poin QR dimatikan) | 5/10 menit/member |
 | `DELETE /v1/fnb/session/points-claim` | Bearer (member pengklaim) | `204` | 404 bila bukan pengklaim | 5/10 menit/member |
@@ -1065,47 +1073,79 @@ Umum: header `X-Table-Session` wajib (kecuali disebut lain). `Authorization: Bea
 
 **Idempotensi submit:** `UNIQUE (table_session_id, idempotency_key)` + `request_sha256`. Key dan body sama → respons yang sama (status terkini). Body beda → `409 idempotency_conflict`. Ke Odoo dikirim `idempotency_key = fnb:submit:<submission_id>` (unik per config di Odoo) dan `submission_ref = submission_id`. Timeout ke Odoo → BFF mengulang (maks 3×, pola §10.4.2). Bila tetap gagal, status `submitting` direkonsiliasi lewat `efn_qr_status` (A.5 #15) sebelum diputuskan `failed`, sehingga tidak ada pesanan ganda di dapur.
 
-**Validasi `note`:** trim, buang karakter kontrol & baris baru, ≤ 140 karakter, tolak `\d[\d\s.-]{6,}\d` (deret ≥ 8 digit, mirip nomor HP) dan `@` → `400 note_invalid`. Catatan **tidak disimpan** di BFF (hanya `has_note`), diteruskan ke Odoo `pos.order.line.note` (tampil di KDS). [D-22-6]
+**Validasi `note` (identik di BFF dan Odoo, SEC-168):** urutan wajib sama di kedua lapis:
+1. normalisasi **NFKC** (angka fullwidth `０８１２` → `0812`);
+2. buang karakter kontrol C0/C1, baris baru, U+2028/2029, serta karakter format **zero-width/bidi**: U+200B–200F, U+202A–202E, U+2060–2064, U+2066–2069, U+FEFF;
+3. trim, ≤ 140 karakter;
+4. **baru kemudian** aturan angka: tolak `\d[\d\s.-]{6,}\d` (deret ≥ 8 digit, mirip nomor HP) dan `@` → `400 note_invalid` (Odoo: `efn_qr:invalid_input`).
+
+Vektor uji bersama (pola AC-2) wajib dipakai spec BFF dan test Odoo. Filter ini **upaya terbaik**, bukan jaminan (mis. huruf "O"/"l" sebagai angka tetap lolos; dicatat di DPIA §13). Catatan **tidak disimpan** di BFF (hanya `has_note`), diteruskan ke Odoo `pos.order.line.note` (tampil di KDS, dikosongkan 90 hari, L-76). [D-22-6]
 
 #### 14.A.4 Endpoint Odoo → BFF (in-cluster, `/v1/pos/*` dikecualikan dari router publik)
 **`POST /v1/pos/fnb/table-sessions`** — mTLS + `X-EFN-Service-Key` (`odoo_bff_api_key`).
 ```json
-{ "idempotency_key": "fnb_open:<order_uuid>:<n>", "company_code": "PB", "config_id": 7, "table_id": 12,
-  "table_label": "T12 / Teras", "order_uuid": "<pos.order.uuid>", "reissue": false }
+{ "idempotency_key": "fnb_open:<config_id>:<table_id>:<n>", "company_code": "PB", "config_id": 7, "table_id": 12,
+  "table_label": "T12 / Teras", "reissue": false }
 ```
-- `company_code ∈ {PB, BCF}` (`business_type=fnb`), `table_label` ≤ 32 karakter tanpa PII (nama meja/area), `n` = nomor cetak per order (1, 2, …).
-- Sesi `open` lain untuk `(config_id, table_id)`: bila `reissue=false` → `409 table_session_exists`; bila `true` → sesi lama ditutup `reissued`.
+- Body **tanpa `order_uuid`** (L-76; `additionalProperties:false`). Odoo mewajibkan ada order draft milik config & meja (order jangkar, L-80) sebelum memanggil endpoint ini.
+- `company_code ∈ {PB, BCF}` (`business_type=fnb`), `table_label` ≤ 32 karakter tanpa PII (nama meja/area).
+- **`n` = `print_no` monoton per (config, meja) (SEC-167):** diambil dari penghitung yang **tidak ikut terhapus** retensi sesi 400 hari (bukan `search_count` sesi + 1), sehingga kunci tidak pernah dipakai ulang. BFF menerima `1 ≤ n ≤ 99999999` (`OPEN_KEY_RE`); `<config_id>`/`<table_id>` di kunci harus sama dengan body. Odoo menolak respons BFF yang menunjuk sesi yang di Odoo tidak `open` (rekomendasi r15, belum diverifikasi).
+- Sesi `open` lain untuk `(config_id, table_id)`: bila `reissue=false` → `409 table_session_exists`; bila `true` → sesi lama ditutup `reissued`. Odoo meneruskan `reissue=true` dari pelayan walaupun sesi Odoo sudah `expired` (perbaikan QA G22 #2; BFF tanpa sesi open mengabaikan flag).
+- **Syarat konfigurasi (L-82 d):** `pos.config.efn_qr_session_hours` × 3600 **≥** `FNB_TABLE_SESSION_TTL_SECONDS` BFF. Bila jam Odoo lebih pendek, tamu memegang token yang masih sah di BFF tetapi kirimannya ditolak `table_session_closed` (QA G22 P3 #5). Disarankan sama persis (default keduanya 4 jam).
 - Replay dengan `idempotency_key` yang sama → respons yang sama (token dihitung ulang).
 - Respons `201 { table_session_id, qr_url, expires_at }`. Error: `400 invalid_request`, `401`, `409 table_session_exists | idempotency_conflict`, `422 qr_disabled` (FNB_QR_ENABLED mati / PT bukan F&B), `429` (60/menit/config).
 - POS **offline** → tombol "Cetak QR" nonaktif (butuh server, sejalan CLAUDE.md). Sesi yang sudah terbuka tetap bisa menerima pesanan selama server Odoo hidup.
 
-**`POST /v1/pos/fnb/events`** — mTLS + service key + **`X-EFN-Signature`** (HMAC-SHA256 `"<t>." + rawBody`, secret baru **`odoo_fnb_event_hmac`**, replay window 300 s), dikirim dari outbox Odoo `efn.pos.qr.event.outbox` (retry 1 m → 1 j, pola §10.5). Body ≤ 8 KB, `additionalProperties: false`:
+**`POST /v1/pos/fnb/events`** — mTLS + service key + **`X-EFN-Signature`** (HMAC-SHA256 `"<t>." + rawBody`, secret baru **`odoo_fnb_event_hmac`**, replay window 300 s), dikirim dari outbox Odoo `efn.pos.qr.event.outbox` (retry 1 m → 1 j, pola §10.5). Body ≤ **16 KB** (kedua sisi: Odoo `MAX_BODY_BYTES`, BFF `FNB_EVENT_BODY_LIMIT`; naik dari 8 KB agar `orders[]` 100 entri muat), `additionalProperties: false`:
 ```json
 { "schema_version": 1, "idempotency_key": "fnb:<table_session_id>:<event>:<seq>", "seq": 4,
   "table_session_id": "<uuid>", "company_code": "PB", "config_id": 7,
   "event": "submission_status|session_closed",
-  "submission": { "submission_ref": "<uuid>", "status": "accepted|pending_confirmation|preparing|ready|served|rejected|cancelled" },
+  "submission": { "submission_ref": "<uuid>", "order_uuid": "<uuid>|null",
+                  "status": "accepted|pending_confirmation|preparing|ready|served|rejected|cancelled" },
   "close": { "reason": "paid|cancelled|closed_by_staff|reissued",
-             "order": { "order_uuid": "<uuid>", "eligible_amount": 125000.00, "pos_member_attached": false } },
+             "orders": [ { "order_uuid": "<uuid>", "eligible_amount": 125000.00, "company_code": "PB",
+                           "pos_member_attached": false } ] },
   "occurred_at": "<iso>" }
 ```
-- `submission` hanya untuk `submission_status`; `close` hanya untuk `session_closed`. `eligible_amount` dihitung Odoo dengan rumus K-1/K-18-4 (tanpa pajak, tanpa porsi Poin EFN, tanpa kategori dikecualikan) dan hanya diisi bila `reason=paid`.
-- Pemrosesan pola §10.5: `claimMessage('fnb.events', idempotency_key)`, `seq ≤ last_seq` → `ignored_stale`, company/config tidak cocok → `409 company_mismatch` (final), event tak dikenal → `ignored_unknown_event`.
-- `session_closed reason=paid` + sesi diklaim member + `pos_member_attached=false` → earn **di transaksi yang sama** lewat jalur ledger POS dengan `idempotency_key = pos_earn:<order_uuid>`, `source=pos_qr`, kebijakan earn PT (§13.1), pagar `earn_limit_exceeded` (§9.8; bila kena → anomali, tanpa retry). Bila `pos_member_attached=true`, BFF tidak meng-earn (POS yang meng-earn). Bila POS lalu meng-earn dengan kunci yang sama untuk member lain → `409 idempotency_conflict` (final di outbox Odoo) + anomali `qr_pos_member_conflict`. [D-22-5]
+- `submission` hanya untuk `submission_status`; `close` hanya untuk `session_closed`. **`submission.order_uuid` (K1)** = uuid `pos.order` yang dibuat kiriman itu; `null` hanya bila order sudah tidak ada (mis. ditolak/dihapus pelayan).
+- **`close.orders[]` (L-80 + K2)** — menggantikan `close.order` tunggal pada v9.0:
+  - **Isi:** satu entri per `pos.order` sesi yang **dibayar**, hanya bila `reason=paid`; untuk alasan lain `orders: []`. Maks **100 entri** (BFF menolak > 100 → `400 invalid_request`).
+  - **`eligible_amount` neto refund:** rumus K-1/K-18-4 (tanpa pajak, tanpa porsi Poin EFN, tanpa kategori dikecualikan) **dikurangi** nilai eligible semua order refund ber-state paid yang menunjuk order itu, dengan nilai ≥ 0. Order yang netonya **≤ 0 tidak dikirim** (K3, SEC-164).
+  - **`company_code`** per order harus sama dengan PT sesi; bila beda → `409` + anomali critical.
+  - **`pos_member_attached` wajib dikirim** (boolean, SEC-165). Nilainya `true` bila order sudah diberi member sah di kasir (partner dengan `member_ref`, earn lewat OTP POS).
+- **Order yang boleh dilekatkan ke sesi (SEC-166, Odoo):** order dibayar hanya dilekatkan ke sesi QR bila ketiga syarat ini terpenuhi:
+  1. sesi berstatus **`open`** (bukan `expired`/`closed`);
+  2. `date_order ≥ opened_at` sesi;
+  3. order itu adalah **order kiriman QR** sesi itu, **order jangkar** (draft yang ada di meja saat QR dicetak), atau **order yang dibawa** (*carried*) dari sesi sebelumnya saat cetak ulang.
+
+  Order tamu berikutnya yang tidak memakai QR di meja yang sama **tidak** ikut terserap ke sesi lama.
+- Pemrosesan pola §10.5: `ServiceKeyGuard` → `FnbEventHmacGuard` → **baru kemudian** rate limit `FNB_RL_EVENTS_*` per `config_id` (SEC-173; limit sesudah kedua guard agar tidak bisa dipakai menahan event sah oleh pihak tanpa secret) → `claimMessage('fnb.events', idempotency_key)`, `seq ≤ last_seq` → `ignored_stale`, company/config tidak cocok → `409 company_mismatch` (final), event tak dikenal → `ignored_unknown_event`. Kena rate limit → `429` (retry outbox).
+- `session_closed reason=paid` + sesi diklaim member + `FNB_QR_POINTS_ENABLED=true` → untuk **setiap** entri `orders[]` dengan `pos_member_attached=false`: earn **di transaksi yang sama** lewat jalur ledger POS dengan `idempotency_key = pos_earn:<order_uuid>`, `source=pos_qr`, kebijakan earn PT (§13.1), pagar `earn_limit_exceeded` (§9.8; bila kena → anomali, tanpa retry). Entri `pos_member_attached=true` **tidak** di-earn BFF untuk pengklaim QR (POS yang meng-earn member kasir, SEC-165). Bila POS tetap meng-earn dengan kunci yang sama untuk member lain → `409 idempotency_conflict` (final di outbox Odoo) + anomali `qr_pos_member_conflict`. [D-22-5]
 - Respons `200 { ok, status: applied|duplicate|ignored_stale|ignored_unknown_event }`. `400/401/404/409` final; `429/5xx` retry.
 
-**Perubahan §9.4 (`/v1/pos/loyalty/reverse`):** field baru `earn_channel: "pos"|"qr"` (default `pos`); bila `qr`, `member_ref` **tidak dikirim**. BFF menemukan member dari entri `pos_earn:<original_order_ref>`. Odoo tidak tahu apakah BFF berhasil meng-earn (tidak ada PII/flag poin di Odoo). Karena itu Odoo **selalu** mengirim `reverse` dengan `earn_channel:"qr"` untuk refund atas order yang punya `efn_qr_session_ref` dan tanpa member POS. BFF membalas `200 { points_clawed_back: 0, points_restored: 0 }` bila tidak ada earn (bukan error). Bila sesi QR order itu belum menerima `session_closed reason=paid` (event tertunda), BFF membalas `409 earn_pending` (pola K-6; Odoo retry lewat outbox) agar refund tidak mendahului earn.
+**Perubahan §9.4 (`/v1/pos/loyalty/reverse`):** field baru `earn_channel: "pos"|"qr"` (default `pos`); bila `qr`, `member_ref` **tidak dikirim**. BFF menemukan member dari entri `pos_earn:<original_order_ref>`. Odoo tidak tahu apakah BFF berhasil meng-earn (tidak ada PII/flag poin di Odoo).
 
-#### 14.A.5 RPC Odoo baru (modul `efn_pos_qr_order`, usulan nama — sketsa ADR-032 menyebut `efn_pos_bff_order`)
-Lewat `odoo-rpc-gateway` (path ke-13..15), user teknis per PT `efn_qr_pb` / `efn_qr_bcf` (grup `efn_pos_qr_order.group_qr_service` + `base.group_user` saja; satu company; tanpa ACL dokumen), secret `odoo_api_key_qr_{pb,bcf}` (env `ODOO_API_KEY_QR_<PT>_FILE`), rotasi 30 hari oleh `efn-rotate-online-key` (pola W-11). Galat bisnis = `UserError("efn_qr:<kode>")` → HTTP 422 (L-15). Context dibersihkan kecuali `lang` (pola §10.4.4 no. 4).
+**Refund order QR terhadap penutupan sesi (K3, SEC-164).** Tujuannya: total poin akhir = earn atas neto, tanpa kehilangan dan tanpa dobel.
+
+| Saat refund (di Odoo) | Perilaku Odoo | Perilaku BFF |
+|---|---|---|
+| **Sebelum** sesi ditutup (event close belum dibangun) | Tidak mengirim `reverse`. Refund tercermin di `eligible_amount` neto `orders[]` saat close; order yang netonya ≤ 0 tidak dikirim | Earn atas neto; tidak ada clawback |
+| **Setelah** sesi ditutup (order sudah masuk `orders[]` event close) | Mengirim `reverse` dengan `earn_channel:"qr"` untuk order ber-sesi QR tanpa member POS | Earn ada → clawback proporsional (§9.4). Tidak ada earn **dan** close sesi sudah diproses → `200 { points_clawed_back: 0, points_restored: 0 }` |
+| Setelah close di Odoo, tetapi **sebelum BFF memproses** `session_closed` (outbox QR tertunda/antre) | Sama dengan baris kedua | **Tidak boleh** menjawab `200 {0,0}` lalu meng-earn penuh saat close tiba. BFF mengenali order lewat `order_uuid` (K1) / sesi, lalu menjawab `409 earn_pending` (retry outbox Odoo) sampai close diproses. Alternatifnya, BFF mencatat reverse tertunda yang diterapkan dalam transaksi earn close. Test regresi wajib: total earn = neto |
+
+Mekanisme rinci yang dipilih BFF/Odoo dicatat di README `services/api-gateway/src/fnb` dan `efn_pos_bff_order`. Bagi architect, mekanisme ini **belum terverifikasi**.
+
+#### 14.A.5 RPC Odoo baru (modul **`efn_pos_bff_order`**, L-70; model RPC `efn.pos.qr.order`)
+Lewat `odoo-rpc-gateway` (path ke-13..15), user teknis per PT `efn_qr_pb` / `efn_qr_bcf` (grup **`efn_pos_bff_order.group_qr_bff`** + `base.group_user` saja, tanpa grup lain — `_efn_qr_check_caller` fail-closed; grup ini termasuk daftar grup teknis yang tidak boleh diberi peran, L-74; satu company; tanpa ACL dokumen), secret `odoo_api_key_qr_{pb,bcf}` (env `ODOO_API_KEY_QR_<PT>_FILE`), rotasi 30 hari oleh `efn-rotate-online-key` (pola W-11). Galat bisnis = `UserError("efn_qr:<kode>")` → HTTP 422 (L-15). Context dibersihkan kecuali `lang` (pola §10.4.4 no. 4).
 
 | # | Path `/json/2/…` | Argumen → hasil | Idempotensi |
 |---|---|---|---|
 | 13 | `efn.pos.qr.order/efn_qr_menu` | `config_id, since, cursor, limit ≤ 200` → `{ config:{ config_id, company_code, outlet_name, qr_enabled, confirm_mode }, items:[{ product_id, price_excl, tax_labels, available, attributes }], deleted:[product_id], next_cursor, server_time }` — hanya produk `available_in_pos` + kategori config + bukan `combo` (D-22-9); harga dari pricelist config, label pajak dari FP/preset dine-in | baca |
-| 14 | `efn.pos.qr.order/efn_qr_submit` | `config_id, table_session_ref, order_uuid, submission:{ idempotency_key, submission_ref, lines:[{ product_id, qty, attribute_value_ids, note }] }` → `{ submission_ref, state: "accepted"\|"pending_confirmation", lines:[{ product_id, name, qty }], amount_indicative_excl }` | `fnb:submit:<submission_id>` unik per config |
-| 15 | `efn.pos.qr.order/efn_qr_status` | `config_id, submission_refs (≤ 100)` → `[{ submission_ref, state, seq }]` (`absent` bila tidak ada) | baca |
+| 14 | `efn.pos.qr.order/efn_qr_submit` | `config_id, table_session_ref, [order_uuid] (opsional, L-80; biasanya tidak dikirim), submission:{ idempotency_key, submission_ref, lines:[{ product_id, qty, attribute_value_ids, note }] }` → `{ submission_ref, order_uuid: "<uuid>"\|null (K1), state: "accepted"\|"pending_confirmation", lines:[{ product_id, name, qty, attribute_value_ids:int[] (urut naik), attributes_text: string\|null }] (L-78; format `Atribut: nilai; …` sama dengan `efn_online_order`), amount_indicative_excl }` | `fnb:submit:<submission_id>` unik per config |
+| 15 | `efn.pos.qr.order/efn_qr_status` | `config_id, submission_refs (≤ 100)` → `[{ submission_ref, order_uuid: "<uuid>"\|null (K1), state, seq }]` (`state: absent`, `order_uuid: null`, `seq: 0` bila tidak ada) | baca |
 
-Validasi server (#14): config milik company user teknis; `efn_qr_enabled`; sesi POS terbuka (`pos_session_closed`); `order_uuid` milik config & meja, `state='draft'`, `efn_qr_session_ref` cocok (`session_closed`); produk tersedia (`item_unavailable`); `attribute_value_ids` ⊆ PTAV `no_variant` template itu, satu nilai per atribut `radio/select` (`invalid_input`); batas qty/baris (`limit_exceeded`). Harga dihitung ulang oleh Odoo (klien tidak pernah mengirim harga). Baris ditandai `efn_qr_submission_ref`. Mode `auto` → baris dikirim ke dapur lewat hook E-26 (server menandai perubahan persiapan, [B] §G). Mode `waiter` → baris `pending` sampai pelayan menekan "Kirim ke dapur" atau "Tolak". POS diberi tahu lewat kanal **privat** config/partner kasir (pola SEC-77 G15), **bukan** kanal token. Kode: `session_closed`, `pos_session_closed`, `item_unavailable`, `invalid_input`, `idempotency_conflict`, `qr_disabled`, `limit_exceeded`.
+Validasi server (#14): config milik company user teknis; `efn_qr_enabled`; sesi POS terbuka (`pos_session_closed`); sesi meja Odoo `open` dan cocok dengan `table_session_ref` (`session_closed`); setiap kiriman membuat **`pos.order` draft baru** di meja (L-70, uuid4 dari server, tidak pernah bergabung dengan draft pelayan, L-81); catatan baris melewati filter SEC-168 (A.3); produk tersedia (`item_unavailable`); `attribute_value_ids` ⊆ PTAV `no_variant` template itu, satu nilai per atribut `radio/select` (`invalid_input`); batas qty/baris (`limit_exceeded`). Harga dihitung ulang oleh Odoo (klien tidak pernah mengirim harga). Baris ditandai `efn_qr_submission_ref`. Mode `auto` → baris dikirim ke dapur lewat hook E-26 (server menandai perubahan persiapan, [B] §G). Mode `waiter` → baris `pending` sampai pelayan menekan "Kirim ke dapur" atau "Tolak". POS diberi tahu lewat kanal **privat** config/partner kasir (pola SEC-77 G15), **bukan** kanal token. Kode: `session_closed`, `pos_session_closed`, `item_unavailable`, `invalid_input`, `idempotency_conflict`, `qr_disabled`, `limit_exceeded`.
 
 Peta ke HTTP BFF: `session_closed|pos_session_closed` → `409 table_session_closed`; `item_unavailable` → `409 item_unavailable`; `limit_exceeded` → `422 session_limit_reached`; `qr_disabled` → `503 ordering_unavailable`; `invalid_input|idempotency_conflict`/401/403/5xx → `503 ordering_unavailable` + alert (pola §10.3.7).
 
@@ -1119,7 +1159,8 @@ Peta ke HTTP BFF: `session_closed|pos_session_closed` → `409 table_session_clo
 | Kontrol | Default (PLACEHOLDER, env) |
 |---|---|
 | Token = bukti hadir di meja, TTL ≤ 4 jam, dicabut saat bayar/cetak ulang | `FNB_TABLE_SESSION_TTL_SECONDS=14400` |
-| Kiriman per sesi | `FNB_MAX_SUBMISSIONS_PER_SESSION=20` |
+| Kiriman per sesi | `FNB_MAX_SUBMISSIONS_PER_SESSION=10` = Odoo `efn_qr_max_submissions` 10 (L-76; v9.0 menulis 20) |
+| Event Odoo → BFF | body ≤ 16 KB, `close.orders[]` ≤ 100; `FNB_RL_EVENTS_*` per `config_id` sesudah guard service key + HMAC (SEC-173) |
 | Item (Σ qty) per sesi | `FNB_MAX_ITEMS_PER_SESSION=150` |
 | Baris per kiriman / qty per baris | `FNB_MAX_LINES=30` / `FNB_MAX_LINE_QTY=20` |
 | Rate limit | A.3; key `rl:fnb:*`, IP di-HMAC (§8.16) |
@@ -1132,7 +1173,7 @@ Peta ke HTTP BFF: `session_closed|pos_session_closed` → `409 table_session_clo
 | Tabel | Kolom inti | Catatan |
 |---|---|---|
 | `platform.fnb_table_session` | `id uuid PK`, `company_code CHECK (PB,BCF)`, `config_id int`, `table_id int`, `table_label text ≤32`, `order_uuid text ≤64`, `open_idempotency_key text UNIQUE`, `print_seq int`, `status CHECK (open, closed, expired)`, `close_reason CHECK (paid, cancelled, closed_by_staff, reissued, expired, ops) NULL`, `opened_at`, `expires_at`, `closed_at`, `member_id uuid NULL`, `member_claimed_at`, `earn_status CHECK (none, earned, skipped, limited, conflict)`, `submissions_count`, `items_count`, `last_seq int`, `member_unlinked_at` | partial unique `(config_id, table_id) WHERE status='open'` |
-| `platform.fnb_submission` | `id uuid PK`, `session_id → fnb_table_session`, `idempotency_key`, `request_sha256 char(64)`, `lines jsonb` (product_id, qty, attribute_value_ids, has_note — **tanpa teks catatan**), `status`, `odoo_state`, `created_at`, `updated_at` | `UNIQUE (session_id, idempotency_key)` |
+| `platform.fnb_submission` | `id uuid PK`, `session_id → fnb_table_session`, `idempotency_key`, `request_sha256 char(64)`, `lines jsonb` (product_id, qty, attribute_value_ids, has_note — **tanpa teks catatan**), `status`, `odoo_state`, `order_uuid` (diisi dari K1; sebelum v9.1 selalu NULL, QA G22 P3 #2), `created_at`, `updated_at` | `UNIQUE (session_id, idempotency_key)` |
 | `platform.fnb_menu_item`, `platform.fnb_menu_sync` | A.6 | non-PII |
 
 #### 14.A.9 Env & secret baru
@@ -1191,7 +1232,7 @@ Keamanan: B-4 menambah permukaan input → validasi tipe/jumlah di BFF, validasi
 1. Redeem = **porsi pembayaran "Poin EFN" per bagian (per PT)**, bukan diskon. DPP/PPN/PB1 tetap atas harga penuh (K-18-1, K-18-7). Porsi poin **tidak lewat gateway**.
 2. Kebijakan PT penjual (§13.1) berlaku: `redeem_min_points`, `redeem_max_pct` (dari `amount_payable` bagian, **termasuk pajak**, K-18-2), `point_value_idr` global (L-62), batas earn harian/per order.
 3. Ledger BFF tetap satu-satunya saldo. Odoo hanya mencatat pembayaran Poin EFN di faktur SO (jurnal Poin EFN per PT) dan memvalidasi batas dari kebijakan yang dipublikasikan (pertahanan berlapis).
-4. Tidak ada OTP tambahan [D-22-10]: checkout sudah Bearer hasil login OTP + ALTCHA, JWT berumur 1 jam. Opsional `ONLINE_REDEEM_STEPUP_MIN_POINTS` (default 0 = mati) memakai step-up `/v1/me/reauth` yang ada bila klien kelak meminta.
+4. Tidak ada OTP tambahan [D-22-10]: checkout sudah Bearer hasil login OTP + ALTCHA, JWT berumur 1 jam **tanpa refresh token**, plafon kebijakan (`redeem_max_pct`, porsi tunai ≥ Rp1), reservasi atomik, dan kode ambil. **Step-up redeem DITUNDA ke G23 (L-82 a, SEC-170):** env `ONLINE_REDEEM_STEPUP_MIN_POINTS` **belum ada di kode G22**. v9.0 menulisnya seolah sudah tersedia sebagai saklar, dan klaim itu diralat. Rencana G23: env tersebut (default 0 = mati) memakai step-up `/v1/me/reauth` + `X-Step-Up-Token` sekali pakai (`consumeStepUp` yang ada), ditambah notifikasi transaksional "poin Anda dipakai" saat commit redeem sebagai kontrol deteksi. Sampai itu selesai, poin online tetap **OFF** di production (`ONLINE_LOYALTY_REDEEM_ENABLED=false`, no. 5).
 5. Kill switch: `ONLINE_LOYALTY_REDEEM_ENABLED`, `ONLINE_LOYALTY_EARN_ENABLED` (prod default `false`) + flag kanal Odoo `efn.online.channel.loyalty_redeem`/`loyalty_earn` (B-2).
 
 #### 14.C.2 API pelanggan
@@ -1299,6 +1340,7 @@ flowchart LR
 - Template WA `efn_loyalty_inactivity_notice` (didaftarkan di WhatsApp Manager; kategori diharapkan UTILITY — keputusan kategori ada di Meta, **belum terverifikasi**). Parameter: jumlah poin dan tanggal hangus. Tanpa nama, tanpa nominal Rupiah, tanpa tautan berparameter. Teks menyebut anonimisasi akun bila D-22-14 aktif. **Teks final = Legal.**
 - Gagal kirim permanen → DLQ (perilaku consumer yang ada). Hangus **tetap** jalan sesuai syarat program; kegagalan dihitung metrik `efn_loyalty_expiry_notice_failed_total`.
 - Dasar pemrosesan: pelaksanaan perjanjian program (syarat program yang diterima saat daftar/login). Bila Legal mensyaratkan opt-in eksplisit atau Meta menggolongkan template sebagai MARKETING → pakai consent `marketing` §8.4 (member tanpa consent tidak diberi tahu lewat WA; tetap tampil di aplikasi D.6).
+- **Saklar consent (SEC-171, v9.1):** `LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT` (default **`true`** di semua lingkungan sampai Legal memutuskan Q-P25/D-22-16). Bila `true`, fase notice hanya meng-enqueue `notify.push` untuk member dengan consent `marketing` aktif. Member tanpa consent tetap memperoleh info in-app (D.6) dan `due_at` tetap ≥ 30 hari dari jangkar + `LOYALTY_EXPIRY_NOTICE_DAYS`, jadi hangus **tidak** dipercepat. Mengubah ke `false` = keputusan Legal tertulis (dicatat di RoPA/DPIA §13), bukan keputusan teknis. Dengan saklar ini, perubahan dasar hukum cukup lewat konfigurasi, tanpa rilis kode.
 
 #### 14.D.5 Akuntansi (L-67)
 - `GET /v1/pos/loyalty/accruals` bentuk **tidak berubah**. `expired_value_idr` = (lot berumur yang hangus pada tanggal itu, perilaku lama) **+** Σ(−`delta`) entri `inactivity_expire` dengan `created_at` pada tanggal itu (WIB) untuk penerbit itu.
@@ -1316,7 +1358,7 @@ flowchart LR
 - **Catatan DPO:** (1) anonimisasi atas inisiatif pengendali karena retensi berakhir; dasar pasal UU PDP **belum diverifikasi** architect, minta DPO menetapkan pasal & retensi di RoPA. (2) Teks syarat program wajib menyebut: definisi tidak aktif, 12 bulan, pemberitahuan 30 hari, poin hangus, akun dihapus. (3) Riwayat transaksi keuangan tetap 10 tahun tanpa tautan identitas (pola L-21). (4) Data Odoo POS (partner member) dianonimkan oleh `efn_privacy`, sedangkan faktur atas nama pembeli mengikuti L-68 (keputusan DPO terpisah).
 
 #### 14.D.8 Env baru (BFF)
-`LOYALTY_INACTIVITY_EXPIRY_MONTHS=12`, `LOYALTY_EXPIRY_NOTICE_DAYS=30` (7..60), `LOYALTY_EXPIRY_ENABLED` (prod default `false`), `LOYALTY_EXPIRY_DRY_RUN`, `LOYALTY_EXPIRY_RUN_HOUR_WIB=1`, `LOYALTY_EXPIRY_NOTICE_HOUR_WIB=10`, `LOYALTY_EXPIRY_BATCH_SIZE=500`, `LOYALTY_EXPIRY_MAX_PER_RUN=20000`, `LOYALTY_ACTIVITY_EPOCH` (tanggal ISO, wajib bila `ENABLED`), `LOYALTY_POINT_MAX_AGE_DAYS=0`, `LOYALTY_INACTIVE_ANONYMIZE`, `LOYALTY_INACTIVE_ANONYMIZE_GRACE_DAYS=0`, `LOYALTY_POLICY_CEILING_INACTIVITY_MONTHS_MIN=6` / `_MAX=36`. Kebijakan global §13.1 no. 3: `params` record EFN boleh memuat `inactivity_expiry_months` (selain itu `additionalProperties:false` tetap).
+`LOYALTY_INACTIVITY_EXPIRY_MONTHS=12`, `LOYALTY_EXPIRY_NOTICE_DAYS=30` (7..60), `LOYALTY_EXPIRY_ENABLED` (prod default `false`), `LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT` (default `true`, SEC-171, D.4), `LOYALTY_EXPIRY_DRY_RUN`, `LOYALTY_EXPIRY_RUN_HOUR_WIB=1`, `LOYALTY_EXPIRY_NOTICE_HOUR_WIB=10`, `LOYALTY_EXPIRY_BATCH_SIZE=500`, `LOYALTY_EXPIRY_MAX_PER_RUN=20000`, `LOYALTY_ACTIVITY_EPOCH` (tanggal ISO, wajib bila `ENABLED`), `LOYALTY_POINT_MAX_AGE_DAYS=0`, `LOYALTY_INACTIVE_ANONYMIZE`, `LOYALTY_INACTIVE_ANONYMIZE_GRACE_DAYS=0`, `LOYALTY_POLICY_CEILING_INACTIVITY_MONTHS_MIN=6` / `_MAX=36`. Kebijakan global §13.1 no. 3: `params` record EFN boleh memuat `inactivity_expiry_months` (selain itu `additionalProperties:false` tetap).
 
 #### 14.D.9 Observability
 Metrik `efn_loyalty_expiry_total{phase="notice|expire|anonymize",outcome}`, `efn_loyalty_expired_points_total{issuer}`; heartbeat log `EFN_LOYALTY_EXPIRY_RUN {json}` (jumlah per fase/penerbit, tanpa member). Alert: `EfnLoyaltyExpiryAborted` (critical), deadman 26 jam tanpa heartbeat (warning).
@@ -1339,7 +1381,7 @@ Estimasi **2–2,5 minggu-engineer** (BFF 1–1,5; Odoo 0–0,5; data-ai 0,25; Q
 | Builder | Cakupan | File |
 |---|---|---|
 | efn-odoo-functional | Verifikasi [B] §G no. 1–3 sebelum engineer mulai; data kanal PB/BCF, `efn_qr_*` config | `docs/08` §13 (baru), `efn_setup_pos/**`, `efn_setup_online/**` |
-| efn-odoo-engineer (A) | E-27 `efn_pos_qr_order` (A.4 outbox, A.5) + hook E-26 | `efn_pos_qr_order/**` (baru), `efn_pos_kds/**` (hanya hook sumber baris) |
+| efn-odoo-engineer (A) | E-27 `efn_pos_bff_order` (L-70; A.4 outbox, A.5) + hook E-26 | `efn_pos_bff_order/**` (baru), `efn_pos_kds/**` (hanya hook sumber baris) |
 | efn-odoo-engineer (B) | E-29a `efn_online_kds_bridge` + B-4 atribut + C.4 poin | `efn_online_kds_bridge/**` (baru), `efn_online_order/**`, `efn_online_pos_counter/**` |
 | efn-odoo-engineer (C) | D-22-13 field kebijakan + cek jurnal breakage | `efn_loyalty_accounting/**` |
 | efn-bff-engineer | `src/fnb/**` (baru), `src/orders/**`, `src/catalog/**`, `src/loyalty/**`, `src/pos/**`, `src/privacy/**`, `src/notification/**`, `src/config/**`, migrasi 11 | `services/api-gateway/**`, `infra/postgres/init/11-platform-g22.sql` |
@@ -1359,3 +1401,12 @@ Estimasi **2–2,5 minggu-engineer** (BFF 1–1,5; Odoo 0–0,5; data-ai 0,25; Q
 | L-72 | D-22-2 (overlay menu per config), D-22-4 (ALTCHA mati default), D-22-5 (earn QR dengan kunci `pos_earn:<order_uuid>` yang sama), D-22-6 (catatan ≤ 140, tolak deret ≥ 8 digit), D-22-7 (user teknis QR per PT `efn_qr_pb`/`efn_qr_bcf`), D-22-8 (kanal F&B `confirm`), D-22-9 (atribut `no_variant` G22, combo ditunda online/QR — combo tetap tersedia di POS kasir), D-22-10 (poin per kanal tanpa OTP tambahan), D-22-11 (restore saat refund `settled`, clawback earn saat `refunded`), D-22-13 (parameter 12 bulan di kebijakan global Odoo + fallback env), D-22-15 (epoch go-live configurable), D-22-17 (utang poin mengikuti erasure), D-22-18 (`LOYALTY_POINT_EXPIRY_DAYS` dihapus; diganti `LOYALTY_POINT_MAX_AGE_DAYS=0`; env lama diset → BFF gagal start di production) **diterima sesuai rekomendasi draf**. |
 | L-73 | Keputusan milik klien memakai default aman sampai dijawab: D-22-12 definisi "aktif" (default: aktivitas yang dimulai member termasuk login OTP; Finance+Legal), D-22-14 anonimisasi setelah hangus (**OFF di production**; DPO+Legal), D-22-16 dasar & kategori template WA (UTILITY, syarat program; Legal+Meta), Q-F22-1..6. Job hangus W-17 di production juga **OFF** sampai teks syarat program disetujui Legal (Q-F22-4) dan template WA disetujui Meta. |
 | L-74 | `efn_setup_role` (data peran 6 PT × jabatan, functional) diterima: `sync_from_job` hanya Kasir & Staf Gudang; Auditor tanpa `base.group_allow_export`; aturan SoD dipanggil lewat `_efn_ensure_default_rules`. E-47d: grup `group_qr_bff` masuk daftar grup teknis (tidak boleh diberi peran). |
+| L-75 | Kebijakan global EFN (Odoo `efn_loyalty_accounting` 19.0.1.2.0) membawa `params.inactivity_expiry_months`, `params.expiry_notice_days`, `params.activity_epoch` (YYYY-MM-DD, opsional) **hanya untuk `company_code=EFN`** (meralat §14.D.8 yang hanya menyebut kunci pertama). Odoo membatasi 1..60 bulan / 7..90 hari; BFF menegakkan plafon env (default 6..36 bulan, 7..60 hari; epoch ≤ 1 tahun ke depan) → `422 policy_out_of_bounds`. Versi global tanpa kunci ini = fallback env. |
+| L-76 | **Penyelarasan istilah G22 (kontrak menang atas docs/08 §13.1b):** field config `efn_qr_confirm_mode` = `waiter`\|`auto` (bukan `efn_qr_kitchen_mode confirm\|auto`); path Odoo→BFF `/v1/pos/fnb/...` (bukan `/internal/v1/fnb/...`); body buka sesi tanpa `order_uuid` (L-70). Batas kiriman per sesi meja **10** di kedua sisi (Odoo param `efn_qr_max_submissions`, BFF env default 10). Retensi `efn.pos.table.session` Odoo **400 hari**; catatan baris QR (`note`) dikosongkan setelah **90 hari** (cron). Template WA pengingat hangus **tanpa jumlah poin** sebagai default (minimisasi transfer ke Meta; versi dengan jumlah menunggu DPO Q-P26); bukti pemberitahuan disimpan sebagai catatan **tanpa identitas** (tanggal, kategori, id lot) agar tidak hilang saat anonimisasi. Alert: sesi QR `open` > 4 jam, kiriman `submitting` macet > 5 menit, earn QR tertunda > 15 menit. |
+| L-77 | Rekonsiliasi ETL poin online eksak: BFF memberi `efn_readonly` akses kolom `online_order_part.points_restored_value` (non-PII); ledger online `source_ref = part_id` untuk redeem/restore/earn/reverse; restore dibulatkan ke bawah (floor) ke poin utuh. Mart KDS (POS + online) baru dibuat di ClickHouse (sebelumnya belum ada). |
+| L-78 | Baris quote/place online (dan menu QR) membawa `attribute_value_ids` (urut naik) dan `attributes_text`; identitas baris = (product_id, attribute_value_ids). Frontend memasangkan baris keranjang ↔ quote dengan kunci ini, bukan urutan. `GET /v1/orders/:id` per bagian: `points_earned`, `points_restored` dalam **poin** (bukan Rupiah). Token meja disimpan di memori halaman saja (reload = pindai ulang QR); hanya `Idempotency-Key` + sidik isi kiriman yang boleh di `sessionStorage`. |
+| L-79 | Poin online (Odoo B): (1) tanpa kebijakan PT + global EFN terpublikasi → `points_invalid` (fail-closed, BFF tidak boleh fallback env untuk poin online); (2) **tidak ada penulisan konfigurasi akuntansi saat runtime** — metode bayar jurnal Poin EFN wajib punya akun (`payment_account_id`/outstanding) dari data `efn_setup_pos`; bila kosong → `points_invalid` + log ERROR + aktivitas Finance; (3) produk combo tidak dipublikasikan ke semua kanal online/QR (combo hanya POS kasir); (4) flag "habis" berlaku semua kanal; (5) atribut wajib bila `display_type` ≠ `multi`; (6) blok `loyalty` di event `picked_up` hanya bila kanal `loyalty_earn`. Lookup POS bayar di kasir kini `{order_label, amount_due}` (porsi tunai). BFF memetakan `points_invalid` → `409 exceeds_max_pct`, `attribute_invalid` → `409 cart_has_issues`, event `preparing` dikenal. |
+| L-80 | **Poin QR per order:** setiap `pos.order` milik sesi meja yang **dibayar** memberi earn ke member yang mengklaim sesi, dengan kunci `pos_earn:<order_uuid>` per order (bukan hanya order saat QR dicetak). Event Odoo `close` (reason `paid`) membawa daftar `orders:[{order_uuid, eligible_amount, company_code}]` untuk semua order sesi yang dibayar; BFF meng-earn per order (idempoten, kunci sama dengan earn POS → tidak ganda bila kasir juga memakai OTP). Refund order QR → `efn_pos_loyalty_ledger` mengirim `reverse` dengan `earn_channel:"qr"` tanpa `member_ref` untuk order yang pernah di-earn dari QR. Keputusan Odoo A diterima: buka QR mewajibkan order draft di meja; tolak pesanan = pelayan menghapus order draft sebelum ke dapur (state `rejected`); status awal tidak dikirim sebagai event; `api_key_duration` 35 h efektif bila `base.group_user` dinormalkan `efn_setup_online`. Menu item QR membawa `name`; `order_uuid` opsional di submit. |
+| L-81 | **Draft QR tidak bergabung dengan draft meja (temuan run lead G22):** `pos_restaurant._get_open_order` standar mencocokkan `uuid ATAU (meja + draft)` dan memilih id terbesar, sehingga kiriman QR menimpa order pelayan dan sinkron order pelayan berikutnya menimpa order QR. `efn_pos_bff_order` meng-override: uuid yang cocok selalu menang; kiriman QR (scope internal) tanpa uuid cocok selalu order baru; fallback meja standar tidak pernah memilih order ber-`efn_qr_order_ref`. Selain itu peran **Sales Manager Online** (`efn_setup_role`) mendapat `stock.group_stock_user`: dengan `purchase` terpasang (`purchase_stock` auto-install) pembatalan SO standar membaca `purchase.order.line` lewat `stock.move`. `efn_audit` mengecualikan field `mail.activity.mixin` per nama, bukan prefix `activity_` (agar `activity_epoch` L-75 teraudit). |
+| L-82 | **Tindak lanjut security review r15 + QA G22 (19 Okt 2026).** Perbaikan kontrak K1–K3 dan SEC-164..168/171/173 masuk badan §14 (v9.1). Empat sisanya diputuskan sebagai berikut. **(a) SEC-170 step-up redeem poin online — DITUNDA ke G23.** Mitigasi sementara: JWT 1 jam tanpa refresh token, plafon kebijakan (`redeem_max_pct`, porsi tunai ≥ Rp1), reservasi atomik, kode ambil; poin online **default OFF** di production. Klaim §14.C.1 no. 4 tentang `ONLINE_REDEEM_STEPUP_MIN_POINTS` diralat menjadi rencana G23 (env + notifikasi "poin Anda dipakai"). **(b) SEC-169 klaim poin QR "siapa cepat" tanpa jalur reset staf — DITUNDA ke G23.** Poin QR tetap **OFF** (`FNB_QR_POINTS_ENABLED=false`) sampai (1) perbaikan SEC-164, SEC-165, dan SEC-166 diverifikasi oleh test + re-review security, dan (2) keputusan SEC-169 diambil. Opsinya: tombol POS "reset klaim" → event `claim_reset`; earn OTP kasir mengalahkan klaim QR; klaim dibatasi ke perangkat pengirim atau ≤ X menit setelah kiriman pertama; indikator "poin meja sudah diklaim" di POS. QR pesan-saja (tanpa poin) boleh dipilot. **(c) SEC-172 peran Sales Manager Online + `stock.group_stock_user` — DITERIMA.** Alasannya: hak ini setara peran Merchandiser yang sudah ada, dan pembatalan pesanan online memang menyentuh reservasi stok (`purchase_stock` membaca `purchase.order.line` lewat `stock.move`). Alternatif `sudo()` terbatas di `efn_online_order` **ditolak** karena melewati pemeriksaan akses standar Odoo dan menambah kode akses kustom yang harus dirawat. Kompensasinya: review akses bulanan (R-S14/R-S16) mencakup pemegang peran ini dan transfer stok yang mereka validasi. Residu dicatat di R-S16 dan README `efn_setup_role`. **(d) QA P3 TTL token vs umur sesi:** `pos.config.efn_qr_session_hours` × 3600 harus **≥** `FNB_TABLE_SESSION_TTL_SECONDS` (disarankan sama, default 4 jam). Ini syarat konfigurasi di runbook `fnb-qr-orders.md` §1 dan checklist aktivasi pilot. Validasi otomatis lintas sistem (mis. `session_hours` dikirim di body buka sesi) = backlog G23. |
+| L-83 | **Poin QR: snapshot close beku + cakupan order (r15, implementasi Odoo/BFF):** (a) event `session_closed` dibekukan pada putaran outbox pertama (`orders[]` neto + daftar refund yang dinetokan disimpan), POST di putaran berikutnya; semua retry mengirim body identik (BFF replay 200). Refund sebelum pembekuan masuk neto; refund setelah pembekuan menunggu (`efn_qr_refund_awaiting`) dan di-enqueue reverse `earn_channel:"qr"` saat 2xx (rasio terhadap `eligible_amount` snapshot); close gagal permanen -> refund menunggu tetap untuk review + alert `EFN_QR_REFUND_UNRESOLVED`. BFF menjawab 2xx hanya setelah claim event + earn + penanda close tercatat dalam satu transaksi Postgres; reverse yang tiba sebelum close diproses -> 409 `earn_pending`. (b) Order pelayan yang dibuat terpisah di meja setelah QR dibuka TIDAK ikut poin sesi (SEC-166; jalan keluar: cetak ulang QR dari order itu). (c) `pos_member_attached` konservatif: true bila ledger mencatat earn/redeem non-skipped ATAU partner order punya HP member sah, walau earn POS config mati. |

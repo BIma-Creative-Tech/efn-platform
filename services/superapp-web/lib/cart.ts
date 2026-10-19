@@ -7,7 +7,9 @@
  *   (ADR-019 Proposed, unified cart -> pesanan per PT).
  * - Keranjang tamu di `localStorage` (tanpa harga; `name` hanya untuk tampilan) lalu digabung ke server setelah login.
  */
+import { normalizeAttributeIds, sameIds } from './attributes';
 import { isChannelCode, isOutletCode, isUuid, parsePositiveInt } from './catalog';
+import { parseQuotePoints, type QuotePoints } from './points';
 
 export const MAX_CART_LINES = 50;
 export const DEFAULT_MAX_QTY = 99;
@@ -19,6 +21,20 @@ export type Fulfilment = 'pickup' | 'delivery';
 export interface CartLine {
   product_id: number;
   qty: number;
+  /**
+   * G22 (docs/04 §14.B B-4): nilai atribut `no_variant` (PTAV) F&B, ≤ 10, terurut naik. DIHILANGKAN bila kosong
+   * (kompatibel dengan ritel). Identitas baris = `(product_id, attribute_value_ids)`.
+   */
+  attribute_value_ids?: number[];
+}
+
+/** Kunci tampilan satu baris (guest `options`, key React): produk + id atribut terurut. */
+export function lineKey(productId: number, attrs: readonly number[] | undefined): string {
+  return `${productId}:${[...(attrs ?? [])].sort((a, b) => a - b).join('.')}`;
+}
+
+function lineMatches(l: CartLine, productId: number, attrs: readonly number[]): boolean {
+  return l.product_id === productId && sameIds(l.attribute_value_ids ?? [], attrs);
 }
 
 export interface CartGroup {
@@ -78,8 +94,10 @@ export function sanitizeCart(v: unknown, maxQty = 999): Cart | null {
       const id = parsePositiveInt(l.product_id);
       const qty = typeof l.qty === 'number' && Number.isInteger(l.qty) ? l.qty : null;
       if (id === null || qty === null || qty < 1 || qty > maxQty) return null;
-      if (lines.some((x) => x.product_id === id)) return null;
-      lines.push({ product_id: id, qty });
+      const attrs = normalizeAttributeIds(l.attribute_value_ids);
+      if (attrs === null) return null;
+      if (lines.some((x) => lineMatches(x, id, attrs))) return null;
+      lines.push(attrs.length > 0 ? { product_id: id, qty, attribute_value_ids: attrs } : { product_id: id, qty });
     }
     if (lines.length > 0) groups.push({ channel_code: g.channel_code, outlet_code: g.outlet_code, fulfilment: g.fulfilment, lines });
   }
@@ -107,12 +125,17 @@ export interface AddItemInput {
   product_id: number;
   qty: number;
   max_qty?: number;
+  /** G22: nilai atribut F&B (opsional). */
+  attribute_value_ids?: number[];
 }
 
 export type CartOpResult = { ok: true; groups: CartGroup[]; outletChanged: boolean } | { ok: false; reason: 'too_many_lines' | 'invalid' };
 
 function cloneGroups(groups: CartGroup[]): CartGroup[] {
-  return groups.map((g) => ({ ...g, lines: g.lines.map((l) => ({ ...l })) }));
+  return groups.map((g) => ({
+    ...g,
+    lines: g.lines.map((l) => (l.attribute_value_ids ? { ...l, attribute_value_ids: [...l.attribute_value_ids] } : { ...l })),
+  }));
 }
 
 /**
@@ -126,6 +149,8 @@ export function addItem(groups: CartGroup[], input: AddItemInput): CartOpResult 
   if (!Number.isInteger(input.qty) || input.qty < 1 || parsePositiveInt(input.product_id) === null) {
     return { ok: false, reason: 'invalid' };
   }
+  const attrs = normalizeAttributeIds(input.attribute_value_ids);
+  if (attrs === null) return { ok: false, reason: 'invalid' };
   const next = cloneGroups(groups);
   let group = next.find((g) => g.channel_code === input.channel_code);
   let outletChanged = false;
@@ -136,25 +161,36 @@ export function addItem(groups: CartGroup[], input: AddItemInput): CartOpResult 
     group.outlet_code = input.outlet_code;
     outletChanged = true;
   }
-  const line = group.lines.find((l) => l.product_id === input.product_id);
+  const line = group.lines.find((l) => lineMatches(l, input.product_id, attrs));
   if (line) {
     line.qty = Math.min(line.qty + input.qty, max);
   } else {
     if (countLines(next) >= MAX_CART_LINES) return { ok: false, reason: 'too_many_lines' };
-    group.lines.push({ product_id: input.product_id, qty: Math.min(input.qty, max) });
+    const qty = Math.min(input.qty, max);
+    group.lines.push(attrs.length > 0 ? { product_id: input.product_id, qty, attribute_value_ids: attrs } : { product_id: input.product_id, qty });
   }
   return { ok: true, groups: next, outletChanged };
 }
 
-/** Ubah qty; qty ≤ 0 menghapus baris; grup kosong dihapus. */
-export function setQty(groups: CartGroup[], channel: string, productId: number, qty: number, maxQty = DEFAULT_MAX_QTY): CartGroup[] {
+/**
+ * Ubah qty; qty ≤ 0 menghapus baris; grup kosong dihapus. `attrs` = atribut F&B baris itu (identitas baris,
+ * docs/04 §14.B B-4); kosong untuk ritel.
+ */
+export function setQty(
+  groups: CartGroup[],
+  channel: string,
+  productId: number,
+  qty: number,
+  maxQty = DEFAULT_MAX_QTY,
+  attrs: readonly number[] = [],
+): CartGroup[] {
   const next = cloneGroups(groups);
   const group = next.find((g) => g.channel_code === channel);
   if (!group) return next;
   if (!Number.isFinite(qty) || qty <= 0) {
-    group.lines = group.lines.filter((l) => l.product_id !== productId);
+    group.lines = group.lines.filter((l) => !lineMatches(l, productId, attrs));
   } else {
-    const line = group.lines.find((l) => l.product_id === productId);
+    const line = group.lines.find((l) => lineMatches(l, productId, attrs));
     if (line) line.qty = Math.min(Math.floor(qty), maxQty);
   }
   return next.filter((g) => g.lines.length > 0);
@@ -172,7 +208,13 @@ export function mergeGroups(server: CartGroup[], guest: CartGroup[]): CartGroup[
     const existing = merged.find((m) => m.channel_code === g.channel_code);
     const outlet = existing ? existing.outlet_code : g.outlet_code;
     for (const l of g.lines) {
-      const r = addItem(merged, { channel_code: g.channel_code, outlet_code: outlet, product_id: l.product_id, qty: l.qty });
+      const r = addItem(merged, {
+        channel_code: g.channel_code,
+        outlet_code: outlet,
+        product_id: l.product_id,
+        qty: l.qty,
+        attribute_value_ids: l.attribute_value_ids,
+      });
       if (r.ok) merged = r.groups;
     }
   }
@@ -185,7 +227,11 @@ export interface GuestCart {
   groups: CartGroup[];
   /** Nama produk untuk tampilan saja (bukan harga). */
   names: Record<string, string>;
+  /** G22: ringkasan pilihan atribut F&B per baris (kunci `lineKey`), tampilan saja. Dihilangkan bila kosong. */
+  options?: Record<string, string>;
 }
+
+const LINE_KEY_RE = /^[1-9][0-9]{0,15}:(?:[1-9][0-9]{0,15}(?:\.[1-9][0-9]{0,15}){0,9})?$/;
 
 export function parseGuestCart(raw: string | null): GuestCart {
   if (!raw || raw.length > MAX_CART_BODY_BYTES * 2) return { groups: [], names: {} };
@@ -199,14 +245,21 @@ export function parseGuestCart(raw: string | null): GuestCart {
         if (parsePositiveInt(k) !== null && typeof n === 'string') names[k] = n.slice(0, 200);
       }
     }
-    return { groups: cart?.groups ?? [], names };
+    const options: Record<string, string> = {};
+    if (isObj(v.options)) {
+      for (const [k, n] of Object.entries(v.options)) {
+        if (LINE_KEY_RE.test(k) && typeof n === 'string') options[k] = n.slice(0, 200);
+      }
+    }
+    const groups = cart?.groups ?? [];
+    return Object.keys(options).length > 0 ? { groups, names, options } : { groups, names };
   } catch {
     return { groups: [], names: {} };
   }
 }
 
 export function serializeGuestCart(cart: GuestCart): string {
-  return JSON.stringify({ groups: cart.groups, names: cart.names });
+  return JSON.stringify(cart.options && Object.keys(cart.options).length > 0 ? { groups: cart.groups, names: cart.names, options: cart.options } : { groups: cart.groups, names: cart.names });
 }
 
 // ---------- quote (§10.3.4) ----------
@@ -221,6 +274,8 @@ export interface QuoteLine {
   available: boolean;
   /** Baris reward promo (§11.2): nilai negatif, dari Odoo, tidak pernah dari keranjang/klien. Ditampilkan sebagai diskon. */
   reward: boolean;
+  /** G22 (§14.B B-4): ringkasan pilihan atribut F&B dari Odoo, mis. "Gula: Kurang manis". '' untuk ritel. */
+  attributes_text: string;
 }
 
 export interface TaxGroup {
@@ -254,6 +309,8 @@ export interface Quote {
   amount_payable_total: number;
   /** Hasil kode promo (§11.2 no. 4). `invalid` tidak dibedakan penyebabnya dan tidak memblokir checkout. */
   promo: PromoResult;
+  /** G22 (§14.C.2): blok informatif poin (saldo, batas per kanal). null = BFF tidak mengirim -> UI tidak menawarkan poin. */
+  points: QuotePoints | null;
 }
 
 export interface PromoResult {
@@ -335,6 +392,8 @@ export const KNOWN_ISSUE_CODES = [
   // §12.3 (W-33): `weight_limit` = tingkat grup/PT (product_id null); `weight_missing` = per produk.
   'weight_limit',
   'weight_missing',
+  // §14.B B-4: PTAV/atribut F&B tidak valid atau tidak lagi berlaku untuk produk itu.
+  'attribute_invalid',
 ] as const;
 export const UNKNOWN_ISSUE_CODE = 'unknown_issue';
 
@@ -377,6 +436,7 @@ export function parseQuoteLines(v: unknown): QuoteLine[] {
       tax_labels: Array.isArray(l.tax_labels) ? l.tax_labels.filter((x): x is string => typeof x === 'string').slice(0, 8) : [],
       available: l.available !== false,
       reward: l.reward === true,
+      attributes_text: text(l.attributes_text, 200),
     });
   }
   return out;
@@ -414,7 +474,23 @@ export function parseQuote(v: unknown): Quote | null {
     groups,
     amount_payable_total: total,
     promo: parsePromo(v.promo),
+    points: parseQuotePoints(v.points),
   };
+}
+
+/**
+ * Pasangkan baris keranjang dengan baris quote (non-reward). Baris dengan produk sama (modifier berbeda) dipasangkan
+ * menurut urutan kemunculan: baris ke-n produk P di keranjang <-> baris quote ke-n produk P.
+ * ASUMSI (belum diverifikasi dengan Odoo): urutan baris quote mengikuti urutan keranjang (quote tidak membawa id atribut).
+ */
+export function pairQuoteLines(cartLines: readonly CartLine[], quoteLines: readonly QuoteLine[]): (QuoteLine | undefined)[] {
+  const real = quoteLines.filter((q) => !q.reward);
+  const seen = new Map<number, number>();
+  return cartLines.map((c) => {
+    const n = seen.get(c.product_id) ?? 0;
+    seen.set(c.product_id, n + 1);
+    return real.filter((q) => q.product_id === c.product_id)[n];
+  });
 }
 
 export function quoteHasIssues(q: Quote): boolean {
@@ -430,6 +506,7 @@ export const ISSUE_LABEL: Record<string, string> = {
   order_limit: 'Nilai pesanan melebihi batas untuk PT ini. Kurangi barang, lalu coba lagi.',
   weight_limit: 'Total berat pesanan melebihi batas untuk PT ini. Kurangi jumlah atau hapus beberapa barang, lalu coba lagi.',
   weight_missing: 'Berat barang ini belum tercatat sehingga belum bisa dipesan online. Hapus barang ini atau beli langsung di toko.',
+  attribute_invalid: 'Pilihan tambahan (mis. ukuran, topping) tidak berlaku lagi. Hapus barang ini lalu pilih ulang dari menu.',
 };
 
 export function issueLabel(code: string): string {

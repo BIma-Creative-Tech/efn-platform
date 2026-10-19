@@ -22,7 +22,8 @@ import { onlineErrorMessage } from './orders';
 
 export type ApiResult<T> =
   | { ok: true; status: number; data: T; date: string | null }
-  | { ok: false; status: number; code: string; message: string };
+  /** `details` = objek `error` dari server (mis. `product_ids` pada `item_unavailable`); hanya data non-rahasia. */
+  | { ok: false; status: number; code: string; message: string; details?: Record<string, unknown> };
 
 /** fetch JSON same-origin. Error -> pesan Indonesia dari peta K-ON5 (lib/orders.ts). */
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<ApiResult<T>> {
@@ -49,7 +50,8 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   const err = (body as { error?: { code?: unknown; message?: unknown } } | null)?.error;
   const code = typeof err?.code === 'string' ? err.code : `http_${res.status}`;
   const message = typeof err?.message === 'string' && err.message ? err.message : onlineErrorMessage(code);
-  return { ok: false, status: res.status, code, message };
+  const details = typeof err === 'object' && err !== null ? (err as Record<string, unknown>) : undefined;
+  return { ok: false, status: res.status, code, message, ...(details ? { details } : {}) };
 }
 
 /** Arahkan ke halaman masuk lalu kembali ke halaman ini (path relatif saja; divalidasi lagi oleh safeNextPath). */
