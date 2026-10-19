@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 
 from odoo import Command
-from odoo.exceptions import ValidationError
+from odoo.exceptions import AccessError, ValidationError
 from odoo.tests import TransactionCase, tagged
 
 
@@ -15,10 +15,20 @@ class TestEfnSetupOnline(TransactionCase):
         self.assertEqual(group.api_key_duration, 35.0)
 
     def test_generic_partners_without_pii(self):
-        for xmlid in ("efn_setup_online.partner_superapp_rtl", "efn_setup_online.partner_superapp_fnb"):
-            partner = self.env.ref(xmlid)
-            self.assertFalse(partner.phone or partner.email or partner.vat, xmlid)
-            self.assertTrue(partner.company_id)
+        # G20 W-32 (docs/04 §12.1): satu partner generik + tim per PT berkanal online (GL, PB, BCR, BCF).
+        for suffix, company_xmlid in (
+            ("rtl", "company_rtl"),
+            ("fnb", "company_fnb"),
+            ("bcr", "company_bcr"),
+            ("bcf", "company_bcf"),
+        ):
+            with self.subTest(pt=suffix):
+                partner = self.env.ref(f"efn_setup_online.partner_superapp_{suffix}")
+                company = self.env.ref(f"efn_setup_company.{company_xmlid}")
+                self.assertFalse(partner.phone or partner.email or partner.vat, suffix)
+                self.assertFalse(partner.is_company)
+                self.assertEqual(partner.company_id, company)
+                self.assertEqual(self.env.ref(f"efn_setup_online.team_superapp_{suffix}").company_id, company)
 
     def test_loyalty_programs_not_on_sale_orders(self):
         programs = self.env["loyalty.program"].with_context(active_test=False).search([])
@@ -30,151 +40,166 @@ class TestEfnSetupOnline(TransactionCase):
         self.assertFalse(self.env["res.groups"]._is_feature_enabled("sale.group_auto_done_setting"))
 
     def test_demo_channels(self):
-        rtl = self.env.ref("efn_setup_online.channel_rtl", raise_if_not_found=False)
-        if not rtl:
+        gl = self.env.ref("efn_setup_online.channel_gl", raise_if_not_found=False)
+        if not gl:
             self.skipTest("demo tidak dimuat")
-        self.assertTrue(rtl.active)
+        self.assertTrue(gl.active)
         # G19 W-02 (#18): BFF menunggu bayar 1 jam -> Odoo 70 menit (BFF + 10), semula 25.
-        self.assertEqual(rtl.payment_timeout_minutes, 70)
-        self.assertEqual(rtl.company_id, self.env.ref("efn_setup_company.company_rtl"))
-        user = self.env.ref("efn_setup_online.user_online_rtl")
+        self.assertEqual(gl.payment_timeout_minutes, 70)
+        self.assertEqual(gl.company_id, self.env.ref("efn_setup_company.company_rtl"))
+        user = self.env.ref("efn_setup_online.user_online_gl")
         self.assertFalse(self.env["res.users.apikeys"].sudo().search_count([("user_id", "=", user.id)]))
-        fnb = self.env.ref("efn_setup_online.channel_fnb")
-        self.assertFalse(fnb.active)
-        self.assertTrue(fnb.outlet_ids.fiscal_position_id)
+        pb = self.env.ref("efn_setup_online.channel_pb")
+        self.assertFalse(pb.active)
+        self.assertTrue(pb.outlet_ids.fiscal_position_id)
         # Katalog demo bisa dihitung oleh user teknis (harga/pajak dari Odoo, Rupiah bulat).
         api = self.env["efn.online.channel"].with_user(user)
-        catalog = api.efn_online_catalog("RTL")
+        catalog = api.efn_online_catalog("GL")
         self.assertEqual(len(catalog["items"]), 3)
         # L-41: kanal mode confirm -> max_qty katalog = min(max_qty_per_line 99, max_line_qty 20).
         self.assertEqual({item["max_qty"] for item in catalog["items"]}, {20})
-        self.assertEqual(catalog["channel"]["company_code"], "RTL")
+        # G20 §12.1: kode kanal = kode PT; W-33: weight_kg katalog (contoh demo; tas belanja tanpa berat -> None).
+        self.assertEqual(catalog["channel"]["code"], "GL")
+        self.assertEqual(catalog["channel"]["company_code"], "GL")
+        self.assertEqual(catalog["channel"]["brand_code"], "GL")
         self.assertEqual(catalog["channel"]["currency"], "IDR")
         self.assertEqual([o["code"] for o in catalog["channel"]["outlets"]], ["TOKO-01"])
         bag = self.env.ref("efn_setup_online.product_online_bag")
-        quote = api.efn_online_quote("RTL", "TOKO-01", "pickup", [{"product_id": bag.id, "qty": 3}])
+        rice = self.env.ref("efn_setup_online.product_online_rice")
+        weights = {item["product_id"]: item["weight_kg"] for item in catalog["items"]}
+        self.assertEqual(weights[rice.id], 5.0)
+        self.assertIsNone(weights[bag.id])
+        quote = api.efn_online_quote("GL", "TOKO-01", "pickup", [{"product_id": bag.id, "qty": 3}])
         self.assertIsInstance(quote["amount_payable"], int)
         self.assertEqual(quote["issues"], [])
+        self.assertEqual(quote["company_code"], "GL")
 
     def test_demo_fnb_outlet_is_non_dine_in(self):
         """G19 W-14: outlet online F&B = pickup -> fiscal position outlet tidak boleh menambah service charge."""
-        fnb = self.env.ref("efn_setup_online.channel_fnb", raise_if_not_found=False)
-        if not fnb:
+        pb = self.env.ref("efn_setup_online.channel_pb", raise_if_not_found=False)
+        if not pb:
             self.skipTest("demo tidak dimuat")
         pb1 = self.env.ref("efn_setup_company.tax_pb1_10_fnb")
         sc = self.env.ref("efn_setup_company.tax_service_charge_5_fnb")
-        for outlet in fnb.with_context(active_test=False).outlet_ids:
+        for outlet in pb.with_context(active_test=False).outlet_ids:
             with self.subTest(outlet=outlet.code):
                 self.assertNotIn(sc, outlet.fiscal_position_id.map_tax(pb1))
 
 
 @tagged("post_install", "-at_install", "efn")
-class TestEfnOnlineBrandChannels(TransactionCase):
-    """G19 W-21 (docs/08 §10.3): kanal = brand; katalog & pricelist per brand tanpa field baru (data demo)."""
+class TestEfnOnlineEntityChannels(TransactionCase):
+    """G20 W-32/E-43 (docs/04 §12.1, L-48): kode kanal = kode PT (GL, PB, BCR, BCF); brand_code GL/PB/BACHA;
+    satu user teknis per kanal (L-37); mode confirm + batas L-41. Menggantikan kanal per brand G19 (W-21)."""
 
-    BRANDS = {
-        "channel_rtl_gl": ("RTL-GL", "company_rtl"),
-        "channel_rtl_bacha": ("RTL-BACHA", "company_rtl"),
-        "channel_fnb_pb": ("FNB-PB", "company_fnb"),
-        "channel_fnb_bacha": ("FNB-BACHA", "company_fnb"),
+    CHANNELS = {
+        # xmlid: (kode kanal, xmlid company, brand_code, stock_hold_mode, login user teknis)
+        "channel_gl": ("GL", "company_rtl", "GL", "confirm", "efn_online_gl"),
+        "channel_pb": ("PB", "company_fnb", "PB", "none", "efn_online_pb"),
+        "channel_bcr": ("BCR", "company_bcr", "BACHA", "confirm", "efn_online_bcr"),
+        "channel_bcf": ("BCF", "company_bcf", "BACHA", "none", "efn_online_bcf"),
     }
 
     def setUp(self):
         super().setUp()
-        if not self.env.ref("efn_setup_online.channel_rtl_gl", raise_if_not_found=False):
+        if not self.env.ref("efn_setup_online.channel_gl", raise_if_not_found=False):
             self.skipTest("demo tidak dimuat")
 
     def _channel(self, xmlid):
         return self.env.ref(f"efn_setup_online.{xmlid}")
 
-    def test_brand_channels_shape(self):
+    def test_channel_code_equals_company_code(self):
         pricelists = self.env["product.pricelist"]
         teams = self.env["crm.team"]
-        for xmlid, (code, company_xmlid) in self.BRANDS.items():
+        for xmlid, (code, company_xmlid, brand, hold, login) in self.CHANNELS.items():
             with self.subTest(channel=code):
                 channel = self._channel(xmlid)
+                company = self.env.ref(f"efn_setup_company.{company_xmlid}")
                 self.assertEqual(channel.code, code)
-                self.assertEqual(channel.company_id, self.env.ref(f"efn_setup_company.{company_xmlid}"))
-                self.assertFalse(channel.active)  # outlet/SKU dari klien
-                self.assertEqual(channel.payment_timeout_minutes, 70)
-                self.assertEqual(channel.pricelist_id.company_id, channel.company_id)
-                pricelists |= channel.pricelist_id
-                teams |= channel.team_id
-                if company_xmlid == "company_fnb":
-                    self.assertTrue(channel.require_outlet_fiscal_position)
-        self.assertEqual(len(pricelists), 4, "pricelist per brand")
-        self.assertEqual(len(teams), 4, "tim penjualan per brand")
-
-    def test_brand_codes_hold_mode_and_one_user_per_channel(self):
-        """G19: brand_code (E-37a), reservasi kanal ritel (E-35), satu user teknis per kanal (L-37)."""
-        expected = {
-            "channel_rtl_gl": ("GL", "confirm"),
-            "channel_rtl_bacha": ("BACHA", "confirm"),
-            "channel_fnb_pb": ("PB", "none"),
-            "channel_fnb_bacha": ("BACHA", "none"),
-        }
-        for xmlid, (brand, hold) in expected.items():
-            with self.subTest(channel=xmlid):
-                channel = self._channel(xmlid)
+                self.assertEqual(channel.company_id, company)
+                self.assertEqual(company.efn_brand_code, code)  # L-48: kode kanal = kode PT
                 self.assertEqual(channel.brand_code, brand)
                 self.assertEqual(channel.stock_hold_mode, hold)
-                self.assertEqual(len(channel.user_ids), 1)
-        rtl = self.env.ref("efn_setup_online.channel_rtl")
-        self.assertEqual(rtl.stock_hold_mode, "confirm")
-        # L-41 (SEC-131): setiap kanal mode confirm punya batas nominal (> 0) + qty per baris (placeholder pilot).
+                self.assertEqual(channel.payment_timeout_minutes, 70)
+                self.assertEqual(channel.pricelist_id.company_id, company)
+                self.assertEqual(channel.partner_id.company_id, company)
+                self.assertEqual(channel.journal_titipan_id.company_id, company)
+                self.assertEqual(channel.user_ids.mapped("login"), [login])
+                self.assertEqual(channel.user_ids.company_ids, company)
+                if company.efn_business_type == "fnb":
+                    self.assertTrue(channel.require_outlet_fiscal_position)
+                pricelists |= channel.pricelist_id
+                teams |= channel.team_id
+        self.assertEqual(len(pricelists), 4, "pricelist per kanal")
+        self.assertEqual(len(teams), 4, "tim penjualan per PT")
+        self.assertTrue(self._channel("channel_gl").active)
+        for xmlid in ("channel_pb", "channel_bcr", "channel_bcf"):
+            with self.subTest(inactive=xmlid):
+                self.assertFalse(self._channel(xmlid).active)  # outlet/SKU dari klien
+
+    def test_old_channel_codes_removed(self):
+        Channel = self.env["efn.online.channel"].with_context(active_test=False)
+        old = ("RTL", "FNB", "RTL-GL", "RTL-BACHA", "FNB-PB", "FNB-BACHA")
+        self.assertFalse(Channel.search([("code", "in", old)]))
+        for xmlid in ("channel_rtl", "channel_fnb", "channel_rtl_gl", "channel_rtl_bacha", "channel_fnb_pb"):
+            with self.subTest(xmlid=xmlid):
+                self.assertFalse(self.env.ref(f"efn_setup_online.{xmlid}", raise_if_not_found=False))
+
+    def test_confirm_limits_and_one_user_per_channel(self):
+        """L-41 (SEC-131): setiap kanal mode confirm punya batas nominal (> 0) + qty per baris; L-37 user unik."""
         Channel = self.env["efn.online.channel"].with_context(active_test=False)
         confirm = Channel.search([("stock_hold_mode", "=", "confirm")])
-        self.assertIn(rtl, confirm)
+        self.assertIn(self._channel("channel_gl"), confirm)
+        self.assertIn(self._channel("channel_bcr"), confirm)
         for channel in confirm:
             with self.subTest(confirm=channel.code):
                 self.assertGreater(channel.max_order_amount, 0)
                 self.assertEqual(channel.max_line_qty, 20)
-        channels = self.env["efn.online.channel"].with_context(active_test=False).search([])
+        channels = Channel.search([])
         users = channels.mapped("user_ids")
         self.assertEqual(len(users), sum(len(c.user_ids) for c in channels), "user teknis dipakai > 1 kanal")
 
-    def test_catalog_per_brand_same_company(self):
-        rtl = self.env.ref("efn_setup_company.company_rtl")
-        gl = self._channel("channel_rtl_gl")
-        bacha = self._channel("channel_rtl_bacha")
-        (gl | bacha).write({"active": True})
-        tax = self.env.ref(f"account.{rtl.id}_tax_ST4")
+    def test_bacha_two_channels_two_companies_separate_catalogs(self):
+        """Bacha = dua kanal di dua PT (BCR ritel PPN, BCF kafe PB1) berbagi brand_code BACHA."""
+        bcr = self._channel("channel_bcr")
+        bcf = self._channel("channel_bcf")
+        (bcr | bcf).write({"active": True})
+        company_bcr = self.env.ref("efn_setup_company.company_bcr")
+        company_bcf = self.env.ref("efn_setup_company.company_bcf")
         Product = self.env["product.product"]
-        common = {"type": "consu", "company_id": rtl.id, "taxes_id": [Command.set(tax.ids)]}
-        p_gl = Product.create(
+        p_bcr = Product.create(
             {
-                **common,
-                "name": "Produk GL uji",
-                "list_price": 10000,
-                "efn_online_channel_ids": [Command.set(gl.ids)],
+                "name": "Teh Bacha kemasan uji",
+                "type": "consu",
+                "list_price": 150000,
+                "company_id": company_bcr.id,
+                "taxes_id": [Command.set(self.env.ref(f"account.{company_bcr.id}_tax_ST4").ids)],
+                "efn_online_channel_ids": [Command.set(bcr.ids)],
             }
         )
-        p_bacha = Product.create(
+        p_bcf = Product.create(
             {
-                **common,
-                "name": "Produk Bacha uji",
-                "list_price": 20000,
-                "efn_online_channel_ids": [Command.set(bacha.ids)],
+                "name": "Kopi Bacha kafe uji",
+                "type": "consu",
+                "list_price": 65000,
+                "company_id": company_bcf.id,
+                "taxes_id": [Command.set(self.env.ref("efn_setup_company.tax_pb1_10_bcf").ids)],
+                "efn_online_channel_ids": [Command.set(bcf.ids)],
             }
         )
-        # L-37: satu user teknis per kanal.
         Channel = self.env["efn.online.channel"]
-        gl_ids = {
-            item["product_id"]
-            for item in Channel.with_user(self.env.ref("efn_setup_online.user_online_rtl_gl")).efn_online_catalog(
-                "RTL-GL"
-            )["items"]
-        }
-        bacha_ids = {
-            item["product_id"]
-            for item in Channel.with_user(self.env.ref("efn_setup_online.user_online_rtl_bacha")).efn_online_catalog(
-                "RTL-BACHA"
-            )["items"]
-        }
-        self.assertIn(p_gl.id, gl_ids)
-        self.assertNotIn(p_bacha.id, gl_ids)
-        self.assertIn(p_bacha.id, bacha_ids)
-        self.assertNotIn(p_gl.id, bacha_ids)
+        bcr_cat = Channel.with_user(self.env.ref("efn_setup_online.user_online_bcr")).efn_online_catalog("BCR")
+        bcf_cat = Channel.with_user(self.env.ref("efn_setup_online.user_online_bcf")).efn_online_catalog("BCF")
+        bcr_ids = {item["product_id"] for item in bcr_cat["items"]}
+        bcf_ids = {item["product_id"] for item in bcf_cat["items"]}
+        self.assertIn(p_bcr.id, bcr_ids)
+        self.assertNotIn(p_bcf.id, bcr_ids)
+        self.assertIn(p_bcf.id, bcf_ids)
+        self.assertNotIn(p_bcr.id, bcf_ids)
+        self.assertEqual((bcr_cat["channel"]["company_code"], bcr_cat["channel"]["brand_code"]), ("BCR", "BACHA"))
+        self.assertEqual((bcf_cat["channel"]["company_code"], bcf_cat["channel"]["brand_code"]), ("BCF", "BACHA"))
+        # User teknis satu kanal tidak bisa memakai kanal lain (company/kanal berbeda).
+        with self.assertRaises(AccessError):
+            Channel.with_user(self.env.ref("efn_setup_online.user_online_bcr")).efn_online_catalog("BCF")
 
 
 @tagged("post_install", "-at_install", "efn")
@@ -184,7 +209,7 @@ class TestEfnOnlineApiKeyDuration(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        company = cls.env.ref("efn_setup_company.company_rtl")
+        company = cls.env.ref("efn_setup_company.company_rtl")  # PT Grand Lucky (GL)
         Users = cls.env["res.users"].with_context(no_reset_password=True)
         base_vals = {"company_id": company.id, "company_ids": [Command.set(company.ids)]}
         cls.tech_user = Users.create(

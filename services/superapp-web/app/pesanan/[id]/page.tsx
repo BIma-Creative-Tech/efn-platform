@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
 import { bffFetch } from '@/lib/bff';
 import { isUuid } from '@/lib/catalog';
-import { parseOrderDetail } from '@/lib/orders';
+import { parseOrderDetail, withoutCounterCode } from '@/lib/orders';
 import { paymentSimulatorEnabled } from '@/lib/orders-server';
 import { getSessionToken } from '@/lib/session';
 import { OnlineUnavailable } from '@/components/online/OnlineUnavailable';
@@ -30,9 +30,10 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
   const order = parseOrderDetail(r.data);
   if (!order) return <OnlineUnavailable reason="error" />;
 
+  // Kode bayar di kasir tidak dirender server-side (tidak masuk payload RSC); klien mengambilnya lewat GET /api/orders/:id.
   return (
     <div style={{ maxWidth: '40rem', margin: '0 auto' }}>
-      <OrderView initial={order} simulator={paymentSimulatorEnabled()} />
+      <OrderView initial={withoutCounterCode(order)} simulator={paymentSimulatorEnabled()} />
     </div>
   );
 }

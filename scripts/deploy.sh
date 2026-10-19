@@ -130,9 +130,9 @@ grep -qx 'disabled' "$SECRETS_DIR/acme_dns_api_token.txt" \
   && die "ACME_DNS_API_TOKEN masih placeholder (wajib untuk sertifikat wg-https, ADR-023)"
 # G17 (docs/04 §10.4.1): online aktif = setiap kanal di ONLINE_CHANNELS wajib punya API key Odoo nyata
 if [[ "${ONLINE_ENABLED:-false}" == true ]]; then
-  IFS=, read -r -a ONLINE_CH_LIST <<< "${ONLINE_CHANNELS:-RTL}"
+  IFS=, read -r -a ONLINE_CH_LIST <<< "${ONLINE_CHANNELS:-$EFN_ONLINE_BASE_CHANNEL}"
   for ch in "${ONLINE_CH_LIST[@]}"; do
-    f="$SECRETS_DIR/odoo_api_key_online_$(tr 'A-Z-' 'a-z_' <<< "$ch").txt"
+    f="$SECRETS_DIR/odoo_api_key_online_$(tr '[:upper:]' '[:lower:]' <<< "$ch").txt"
     if [[ ! -s "$f" ]] || grep -qx 'disabled' "$f"; then
       die "ONLINE_ENABLED=true tetapi API key kanal ${ch} tidak ada/placeholder (docs/runbooks/odoo-online-api-key.md)"
     fi
@@ -323,11 +323,13 @@ DOTENV=(
   "LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS=${LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS:-}"
   "ETL_LOYALTY_POINTS_MODE=${ETL_LOYALTY_POINTS_MODE:-payment}"   # SEC-114 (L-25b)
   "ETL_AUDIT_EPOCH_ANCHORS=${ETL_AUDIT_EPOCH_ANCHORS:-}"   # G18: kosong = default compose 20
-  "ONLINE_CHANNELS=${ONLINE_CHANNELS:-RTL}"
+  "ONLINE_CHANNELS=${ONLINE_CHANNELS:-$EFN_ONLINE_BASE_CHANNEL}"
   "ONLINE_FULFILMENTS=${ONLINE_FULFILMENTS:-pickup}"
   "ONLINE_PAYMENT_TIMEOUT_SECONDS=${ONLINE_PAYMENT_TIMEOUT_SECONDS:-}"
   "ONLINE_QUOTE_TTL_SECONDS=${ONLINE_QUOTE_TTL_SECONDS:-}"
   "ONLINE_MAX_OPEN_ORDERS_PER_MEMBER=${ONLINE_MAX_OPEN_ORDERS_PER_MEMBER:-}"
+  "ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=${ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER:-}"   # G20 W-30: kosong = 1
+  "ONLINE_PAYMENT_METHODS=${ONLINE_PAYMENT_METHODS:-}"   # G20 L-55: kosong = qris,counter; pilot tanpa vendor = counter
   "ONLINE_CATALOG_SYNC_SECONDS=${ONLINE_CATALOG_SYNC_SECONDS:-}"
   "ONLINE_PICKUP_CODE_MAX_DAYS=${ONLINE_PICKUP_CODE_MAX_DAYS:-}"
   "ONLINE_ORDER_MEMBER_LINK_DAYS=${ONLINE_ORDER_MEMBER_LINK_DAYS:-}"
@@ -370,13 +372,14 @@ cd "$COMPOSE_DIR"
 FILES=(-f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.host.yml)
 # Kunci API payment hanya di-mount bila provider nyata (docs/04 §8.3); mock/disabled tidak me-mount kunci
 if [[ "$PAYMENT_PROVIDER" =~ ^(xendit|midtrans)$ ]]; then FILES+=(-f docker-compose.payment.yml); fi
-# G17/G19 (docs/04 §11.3): API key kanal selain RTL (base) hanya di-mount bila kanal ada di ONLINE_CHANNELS: satu
-# overlay per kanal docker-compose.online-<kode huruf kecil>.yml (FNB -> online-fnb, RTL-GL -> online-rtl-gl).
-# Kanal tanpa overlay = konfigurasi salah -> gagal (BFF akan menolak kanal tanpa key; lebih baik berhenti di sini).
-IFS=, read -r -a ONLINE_OVERLAY_CH <<< "${ONLINE_CHANNELS:-RTL}"
+# G17/G19/G20 (docs/04 §12.1): API key kanal selain GL (base) hanya di-mount bila kanal ada di ONLINE_CHANNELS: satu
+# overlay per kanal docker-compose.online-<kode huruf kecil>.yml (PB -> online-pb, BCR -> online-bcr, BCF -> online-bcf).
+# Kode di luar EFN_ONLINE_CHANNEL_CODES (termasuk RTL/FNB/RTL-GL.. lama) atau kanal tanpa overlay = konfigurasi salah ->
+# gagal (BFF akan menolak kanal tanpa key; lebih baik berhenti di sini).
+efn_validate_online_channels "${ONLINE_CHANNELS:-$EFN_ONLINE_BASE_CHANNEL}" || die "ONLINE_CHANNELS tidak valid (G20)"
+IFS=, read -r -a ONLINE_OVERLAY_CH <<< "${ONLINE_CHANNELS:-$EFN_ONLINE_BASE_CHANNEL}"
 for ch in "${ONLINE_OVERLAY_CH[@]}"; do
-  [[ "$ch" =~ ^[A-Z][A-Z0-9-]{1,15}$ ]] || die "ONLINE_CHANNELS: kode kanal tidak valid"
-  [[ "$ch" == RTL ]] && continue
+  [[ "$ch" == "$EFN_ONLINE_BASE_CHANNEL" ]] && continue
   ov="docker-compose.online-$(tr '[:upper:]' '[:lower:]' <<< "$ch").yml"
   [[ -f "$ov" ]] || die "kanal ${ch} di ONLINE_CHANNELS tanpa overlay infra/compose/${ov} (docs/runbooks/odoo-online-api-key.md#kanal-baru)"
   [[ " ${FILES[*]} " == *" ${ov} "* ]] || FILES+=(-f "$ov")
@@ -424,9 +427,10 @@ echo "==> Migrasi skema idempoten (infra/postgres/init/[0-9][0-9]-*.sql >= 04)"
 # 05 = loyalty POS (G13), 06 = pagar earn + daftar tolak erasure (SEC-61/SEC-65; tanpa 06 job erasure BFF gagal),
 # 07 = penjualan online G17 (docs/04 §10.7/§10.8: payment_intent.purpose + tabel online_*; dibutuhkan BFF G17
 # termasuk saat ONLINE_ENABLED=false). 08 = privasi G18 (W-18/W-19: dsar_request.open_orders_ack_at/defer_escalation,
-# member.age_confirmed_at; dibutuhkan BFF G18).
+# member.age_confirmed_at; dibutuhkan BFF G18). 09 = G20 (docs/04 §12.1/§12.2: CHECK company_code 6 entitas,
+# online_order.payment_method, status awaiting_counter_payment, counter_code_enc; dibutuhkan BFF G20).
 for req in 04-platform-v3-6.sql 05-platform-loyalty-pos.sql 06-platform-loyalty-guard.sql 07-platform-online.sql \
-           08-platform-g18-privacy.sql; do
+           08-platform-g18-privacy.sql 09-platform-g20.sql; do
   [[ -s "$BASE/postgres/init/$req" ]] || die "migrasi wajib $req tidak ada di $BASE/postgres/init (bundel rilis tidak lengkap)"
 done
 for mig in "$BASE"/postgres/init/[0-9][0-9]-*.sql; do

@@ -1,0 +1,11 @@
+# Override kanal online PB (PT Paris Baguette; docs/04 §12.1, G20 L-48: kode kanal = kode PT). Pola
+# docker-compose.payment.yml: API key Odoo kanal ini (`odoo_api_key_online_pb`, user teknis efn_online_pb) HANYA di-mount
+# ke BFF saat ONLINE_CHANNELS memuat PB (scripts/deploy.sh). Selama kanal mati file ini TIDAK disertakan -> key tidak ada
+# di container mana pun. Pembuatan & rotasi key: docs/runbooks/odoo-online-api-key.md (efn-rotate-online-key).
+# CI (job infra) dan scripts/check-encryption.sh menyertakan file ini saat membandingkan secrets / least privilege.
+services:
+  api-gateway:
+    environment:
+      ODOO_API_KEY_ONLINE_PB_FILE: /run/secrets/odoo_api_key_online_pb
+    secrets:
+      - odoo_api_key_online_pb

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- E-41: wizard atur PIN persetujuan retur (Store Manager sendiri / admin sistem). -->
+    <record id="view_efn_pos_return_pin_wizard_form" model="ir.ui.view">
+        <field name="name">efn.pos.return.pin.wizard.form</field>
+        <field name="model">efn.pos.return.pin.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Atur PIN persetujuan retur">
+                <p class="text-muted">
+                    PIN dipakai Store Manager untuk menyetujui retur tanpa struk di kasir. PIN diverifikasi di server
+                    dan hanya disimpan sebagai hash. Jangan beri tahu PIN kepada kasir.
+                </p>
+                <group>
+                    <field name="user_id" options="{'no_open': True}"/>
+                    <field name="pin" password="True" required="1"/>
+                    <field name="pin_confirm" password="True" required="1"/>
+                </group>
+                <footer>
+                    <button name="action_apply" type="object" string="Simpan PIN" class="btn-primary"
+                            data-hotkey="q"/>
+                    <button string="Batal" special="cancel" data-hotkey="x"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <!-- Form user (Settings > Users): admin sistem mengatur PIN Store Manager lain. -->
+    <record id="view_users_form_inherit_efn_return_pin" model="ir.ui.view">
+        <field name="name">res.users.form.inherit.efn.return.pin</field>
+        <field name="model">res.users</field>
+        <field name="inherit_id" ref="base.view_users_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//header" position="inside">
+                <button name="efn_action_return_pin_wizard" type="object" string="Atur PIN persetujuan retur"
+                        groups="base.group_system"/>
+            </xpath>
+        </field>
+    </record>
+
+    <!-- Preferensi: Store Manager mengatur PIN miliknya (konfirmasi ulang kata sandi Odoo). -->
+    <record id="view_users_form_simple_modif_inherit_efn_return_pin" model="ir.ui.view">
+        <field name="name">res.users.preferences.inherit.efn.return.pin</field>
+        <field name="model">res.users</field>
+        <field name="inherit_id" ref="base.view_users_form_simple_modif"/>
+        <field name="arch" type="xml">
+            <xpath expr="//div[@name='auth']" position="after">
+                <div name="efn_return_pin" class="d-flex mt-3" groups="point_of_sale.group_pos_manager">
+                    <div class="col-7 col-sm-6 col-lg-3 d-flex flex-column">
+                        <span class="o_form_label">PIN persetujuan retur</span>
+                        <field name="efn_return_pin_is_set" readonly="1" invisible="1"/>
+                        <span class="text-muted" invisible="not efn_return_pin_is_set">PIN aktif.</span>
+                        <span class="text-muted" invisible="efn_return_pin_is_set">Belum diatur.</span>
+                    </div>
+                    <button name="efn_action_return_pin_wizard" type="object" string="Atur PIN"
+                            class="btn btn-secondary h-100 my-auto"/>
+                </div>
+            </xpath>
+        </field>
+    </record>
+</odoo>

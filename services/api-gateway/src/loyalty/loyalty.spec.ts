@@ -3,7 +3,7 @@ import { PII_AAD } from '../common/pii/crypto';
 import { memberHash } from '../common/pii/pii';
 import { FakeClock, FakeDb, testCipher, testConfig } from '../common/testing/fakes';
 import { LOYALTY_EARN_CONSUMER, LoyaltyEarnConsumer } from './loyalty-earn.consumer';
-import { LoyaltyService } from './loyalty.service';
+import { COMPANY_CODES, LoyaltyService, isCompanyCode } from './loyalty.service';
 
 const MEMBER = '6281234567890';
 const REPORT = '9b2e1c4d-5f6a-4b7c-8d9e-0f1a2b3c4d5e';
@@ -129,10 +129,16 @@ describe('LoyaltyEarnConsumer v2 (idempotency)', () => {
     for (const q of ctx.db.queries) expect(q.params).not.toContain(MEMBER);
   });
 
-  it('company_code eksplisit di payload dipakai bila valid', async () => {
+  it('company_code eksplisit di payload dipakai bila valid (kode G20 §12.1)', async () => {
     const ctx = setup();
-    await ctx.consumer.handle(message(ctx.hash, { company_code: 'FNB' }), OCR);
-    expect([...ctx.ledger.values()][0].company).toBe('FNB');
+    await ctx.consumer.handle(message(ctx.hash, { company_code: 'PB' }), OCR);
+    expect([...ctx.ledger.values()][0].company).toBe('PB');
+  });
+
+  it('G20 §12.1: COMPANY_CODES = EFN/GL/PB/BCR/BCF/FARM; kode lama RTL/FNB ditolak', () => {
+    expect(COMPANY_CODES).toEqual(['EFN', 'GL', 'PB', 'BCR', 'BCF', 'FARM']);
+    for (const c of ['GL', 'PB', 'BCR', 'BCF']) expect(isCompanyCode(c)).toBe(true);
+    for (const c of ['RTL', 'FNB', 'gl', '']) expect(isCompanyCode(c)).toBe(false);
   });
 });
 

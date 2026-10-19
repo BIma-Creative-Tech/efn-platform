@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="template" xml:space="preserve">
+    <t t-name="efn_pos_refund_origin.EfnReturnApprovalDialog">
+        <Dialog title="props.title" size="'md'">
+            <p class="efn-return-approval-body">
+                Retur tanpa struk (uang keluar tunai <strong t-esc="props.amountLabel"/>) memerlukan persetujuan
+                Store Manager. PIN diketik sendiri oleh Store Manager.
+            </p>
+            <div class="mb-3">
+                <label class="form-label" for="efn_return_approver">Store Manager</label>
+                <select id="efn_return_approver" class="form-select efn-return-approver" t-model="state.approverId">
+                    <t t-foreach="props.approvers" t-as="approver" t-key="approver.id">
+                        <option t-att-value="approver.id" t-esc="approver.name"/>
+                    </t>
+                </select>
+            </div>
+            <div class="mb-3">
+                <label class="form-label" for="efn_return_pin">PIN Store Manager</label>
+                <input id="efn_return_pin" type="password" inputmode="numeric" autocomplete="off" maxlength="8"
+                       class="form-control efn-return-pin" t-model="state.pin"/>
+            </div>
+            <div class="mb-3">
+                <label class="form-label" for="efn_return_reason">Alasan retur</label>
+                <input id="efn_return_reason" type="text" maxlength="200" autocomplete="off"
+                       class="form-control efn-return-reason" t-model="state.reason"
+                       placeholder="Mis. barang rusak — tanpa data pribadi pelanggan"/>
+            </div>
+            <div t-if="state.error" class="alert alert-danger efn-return-error" role="alert" t-esc="state.error"/>
+            <t t-set-slot="footer">
+                <button class="btn btn-primary btn-lg lh-lg efn-return-approve" t-att-disabled="!canSubmit"
+                        t-on-click="confirm">Setujui</button>
+                <button class="btn btn-secondary btn-lg lh-lg" t-on-click="props.close">Batal</button>
+            </t>
+        </Dialog>
+    </t>
+</templates>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- E-45: batas lookup kode bayar di kasir (rate limit per sesi POS & per kasir). Nilai = PLACEHOLDER configurable.
+     Putaran KDF kode bayar: `efn_online.counter_code_kdf_rounds` (default kode 210000, parameter base.group_system). -->
+<odoo noupdate="1">
+    <record id="param_lookup_max_failures" model="ir.config_parameter">
+        <field name="key">efn_online_counter.lookup_max_failures</field>
+        <field name="value">5</field>
+    </record>
+    <record id="param_lookup_window_minutes" model="ir.config_parameter">
+        <field name="key">efn_online_counter.lookup_window_minutes</field>
+        <field name="value">15</field>
+    </record>
+</odoo>

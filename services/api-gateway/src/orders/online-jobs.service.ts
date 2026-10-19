@@ -5,7 +5,9 @@ import { ODOO_ONLINE, OdooOnlineApi } from '../odoo-rpc/odoo-online.types';
 import { OnlineMetrics, StuckKind } from '../odoo-rpc/online-metrics';
 import { ONLINE_PAYMENTS, OnlinePaymentsPort } from '../payments/online-payments';
 import {
+  COUNTER_REFUND_AUTH_PENDING,
   PartStatus,
+  UNPAID_OPEN,
   compensateMessage,
   orderPaidMessage,
   partStatusFromOdoo,
@@ -18,6 +20,8 @@ import { OnlineSagaService } from './online-saga.service';
 export const LOCK = { EXPIRE: 0x45464f45, RECON: 0x45464f52, STATUS: 0x45464f53, RETENTION: 0x45464f54 } as const; // 'EFO?'
 const BATCH = 100;
 const MIN = 60_000;
+/** State `efn.online.order` yang berarti SO sudah dilunasi (G20 §12.2 no. 6: pelunasan POS → confirmed/… ). */
+const COUNTER_PAID_STATES: ReadonlySet<string> = new Set(['paid', 'confirmed', 'stock_short', 'ready', 'picked_up', 'review']);
 
 /**
  * Job saga online (docs/04 §10.6.5, §10.8.3) — satu replika per job per siklus (advisory lock xact):
@@ -90,6 +94,15 @@ export class OnlineJobsService implements OnModuleInit, OnModuleDestroy {
     let expired = 0;
     let skipped = 0;
     for (const c of candidates) {
+      // G20 §12.2: order bayar di kasir — Odoo sumber kebenaran pelunasan. Sebelum kedaluwarsa, tanya status SO; bila
+      // sudah lunas di POS (event belum sampai) → terapkan pelunasan, jangan batalkan.
+      if (c.payment_method === 'counter' && c.status === 'awaiting_counter_payment') {
+        const outcome = await this.counterPaidBeforeExpiry(c.id, now);
+        if (outcome === 'paid' || outcome === 'retry') {
+          skipped += 1;
+          continue;
+        }
+      }
       if (c.payment_intent_id) {
         try {
           await this.payments.cancelIntent(c.payment_intent_id);
@@ -100,7 +113,7 @@ export class OnlineJobsService implements OnModuleInit, OnModuleDestroy {
       const done = await this.repo.tx(async (r) => {
         if (!(await r.tryJobLock(LOCK.EXPIRE))) return 'locked' as const;
         const o = await r.getOrder(c.id, true);
-        if (!o || (o.status !== 'awaiting_payment' && o.status !== 'created')) return 'skip' as const;
+        if (!o || !UNPAID_OPEN.includes(o.status)) return 'skip' as const;
         if (o.payment_intent_id) {
           const intent = await this.payments.getIntent(o.payment_intent_id);
           if (intent?.status === 'paid') return 'skip' as const; // webhook menang
@@ -117,6 +130,39 @@ export class OnlineJobsService implements OnModuleInit, OnModuleDestroy {
       } else skipped += 1;
     }
     return { expired, skipped };
+  }
+
+  /** Batas toleransi Odoo tak terjangkau sebelum order bayar di kasir tetap dikedaluwarsakan (bayar terlambat → anomali). */
+  static readonly COUNTER_EXPIRY_GRACE_MS = 10 * MIN;
+
+  /**
+   * `paid` = Odoo melaporkan SO sudah lunas → pelunasan diterapkan; `retry` = Odoo tidak terjangkau dan masih dalam
+   * toleransi → coba siklus berikut; `expire` = boleh dikedaluwarsakan (Odoo belum lunas / toleransi habis).
+   */
+  private async counterPaidBeforeExpiry(orderId: string, now: number): Promise<'paid' | 'retry' | 'expire'> {
+    const parts = (await this.repo.getParts(orderId)).filter((p) => p.status === 'placed');
+    if (parts.length === 0) return 'expire';
+    const order = await this.repo.getOrder(orderId);
+    if (!order) return 'expire';
+    let rows;
+    try {
+      rows = await this.odoo.status(parts[0].channel_code, parts.map((p) => p.id));
+    } catch (err) {
+      this.logger.warn(`Status Odoo order bayar di kasir ${orderId} gagal: ${err instanceof Error ? err.message : 'error'}`);
+      return now < order.expires_at.getTime() + OnlineJobsService.COUNTER_EXPIRY_GRACE_MS ? 'retry' : 'expire';
+    }
+    let paid = false;
+    for (const row of rows) {
+      if (!COUNTER_PAID_STATES.has(row.state)) continue;
+      const applied = await this.repo.tx(async (r) => {
+        const o = await r.getOrder(orderId, true);
+        const p = await r.getPart(row.platform_order_ref, true);
+        if (!o || !p || p.order_id !== orderId) return false;
+        return this.saga.applyCounterPaid(r, o, p, { source: 'bff', odooState: row.state, seq: row.seq, paidAt: null });
+      });
+      paid = paid || applied;
+    }
+    return paid ? 'paid' : 'expire';
   }
 
   // ───────────── rekonsiliasi ─────────────
@@ -138,6 +184,13 @@ export class OnlineJobsService implements OnModuleInit, OnModuleDestroy {
         stats.paid += 1;
       }
       for (const rf of await r.refundsInStatusBefore(['requested', 'odoo_done', 'gateway_in_flight', 'gateway_pending', 'gateway_done'], minus(15 * MIN), BATCH)) {
+        const m = refundRequestedMessage(rf.id);
+        await r.enqueue(QUEUES.ORDER_REFUND_REQUESTED, { ...m }, m.idempotency_key);
+        stats.refunds += 1;
+      }
+      // L-60: otorisasi refund POS counter yang tertunda (galat transien Odoo) → terbitkan ulang (idempoten)
+      for (const rf of await r.refundsInStatusBefore(['manual_required'], minus(15 * MIN), BATCH)) {
+        if (rf.payment_intent_id !== null || rf.failure_reason !== COUNTER_REFUND_AUTH_PENDING) continue;
         const m = refundRequestedMessage(rf.id);
         await r.enqueue(QUEUES.ORDER_REFUND_REQUESTED, { ...m }, m.idempotency_key);
         stats.refunds += 1;
@@ -185,8 +238,11 @@ export class OnlineJobsService implements OnModuleInit, OnModuleDestroy {
 
   private async statusPull(): Promise<number> {
     const parts = await this.repo.partsInStatusBefore(['confirmed', 'ready', 'review'], new Date(this.now()), 500);
+    // G20 §12.2: bagian bayar-di-kasir yang masih menunggu — event `paid` yang hilang dipulihkan dari status SO
+    const counterParts = await this.repo.counterAwaitingParts(200);
+    const counterIds = new Set(counterParts.map((p) => p.id));
     const byChannel = new Map<string, string[]>();
-    for (const p of parts) byChannel.set(p.channel_code, [...(byChannel.get(p.channel_code) ?? []), p.id]);
+    for (const p of [...parts, ...counterParts]) byChannel.set(p.channel_code, [...(byChannel.get(p.channel_code) ?? []), p.id]);
     let applied = 0;
     for (const [channel, ids] of byChannel) {
       for (let i = 0; i < ids.length; i += 100) {
@@ -204,7 +260,15 @@ export class OnlineJobsService implements OnModuleInit, OnModuleDestroy {
             const p = await r.getPart(row.platform_order_ref, true);
             if (!p || p.channel_code !== channel) return false;
             if (row.seq !== null && row.seq <= p.last_seq) return false;
-            const changed = await this.saga.applyPart(r, p, target, { source: 'bff', odooState: row.state, seq: row.seq, cancelReason: 'ops' });
+            let changed: boolean;
+            if (counterIds.has(p.id) && COUNTER_PAID_STATES.has(row.state)) {
+              const o = await r.getOrder(p.order_id, true);
+              changed = o ? await this.saga.applyCounterPaid(r, o, p, { source: 'bff', odooState: row.state, seq: row.seq, paidAt: null }) : false;
+            } else if (counterIds.has(p.id) && target !== 'cancelled') {
+              return false; // `placed` (belum dibayar) / state lain: tidak ada perubahan
+            } else {
+              changed = await this.saga.applyPart(r, p, target, { source: 'bff', odooState: row.state, seq: row.seq, cancelReason: 'ops' });
+            }
             if (changed) {
               await r.insertEvent({
                 part_id: p.id,
@@ -237,7 +301,7 @@ export class OnlineJobsService implements OnModuleInit, OnModuleDestroy {
         adminAuditRetentionDays: this.config.onlineAdminAuditRetentionDays,
       });
       this.metrics.retention(res);
-      const total = res.pickupNulled + res.qrNulled + res.unlinked + res.eventsPurged + res.adminAuditPurged;
+      const total = res.pickupNulled + res.counterNulled + res.qrNulled + res.unlinked + res.eventsPurged + res.adminAuditPurged;
       if (total > 0) this.logger.log(`Retensi online: ${JSON.stringify(res)}`);
       return res;
     });

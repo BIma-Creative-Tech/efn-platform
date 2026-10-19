@@ -36,13 +36,14 @@ from datetime import timedelta
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.fields import Command, Domain
-from odoo.tools import float_round, frozendict
+from odoo.tools import float_compare, float_round, frozendict
 from odoo.tools.mimetypes import guess_mimetype
 
 from .efn_online_common import (
     ALLOWED_LANGS,
     BRAND_CODE_RE,
     CHANNEL_CODE_RE,
+    DEFAULT_PAYMENT_MODE,
     FULFILMENTS,
     MAX_BATCH,
     ONLINE_PROGRAM_TYPES,
@@ -53,6 +54,7 @@ from .efn_online_common import (
     like_escape,
     lines_payload,
     online_error,
+    parse_payment_modes,
     promo_codes_payload,
     require,
 )
@@ -106,7 +108,8 @@ class EfnOnlineChannel(models.Model):
     name = fields.Char(required=True, translate=True)
     code = fields.Char(
         required=True,
-        help="Kode stabil yang dipakai BFF (channel_code), pola ^[A-Z][A-Z0-9-]{1,15}$, mis. RTL, FNB-<BRAND>.",
+        help="Kode stabil yang dipakai BFF (channel_code), pola ^[A-Z][A-Z0-9-]{1,15}$, tidak berakhiran -FILE (L-46). "
+        "Sejak G20 kode kanal = kode PT: GL, PB, BCR, BCF (docs/04 §12.1).",
     )
     brand_code = fields.Char(
         string="Kode brand",
@@ -173,6 +176,30 @@ class EfnOnlineChannel(models.Model):
         help="0 = tanpa batas (hanya mode tanpa reservasi). Mode 'Reservasi saat place' WAJIB > 0 (L-41 / SEC-131; "
         "pilot Rp5.000.000 = PLACEHOLDER).",
     )
+    max_order_weight_kg = fields.Float(
+        string="Batas berat pesanan (kg)",
+        digits="Stock Weight",
+        default=0.0,
+        help="W-33 / E-35b (docs/04 §12.3): 0 = mati. Total berat = Σ berat produk × qty (rumus sama dengan "
+        "delivery.carrier._match_weight, dikonversi ke kg). Di atas batas -> issue 'weight_limit' di quote; place "
+        "menolak.",
+    )
+    weight_missing_policy = fields.Selection(
+        [("block", "Tolak produk tanpa berat"), ("ignore", "Hitung sebagai 0 kg")],
+        string="Produk tanpa berat",
+        required=True,
+        default="block",
+        help="Hanya berlaku bila batas berat aktif. 'Tolak': produk (bukan jasa) tanpa berat -> issue 'weight_missing' "
+        "(isi berat produk dulu). 'Hitung sebagai 0 kg': produk tanpa berat tidak menambah total.",
+    )
+    payment_modes = fields.Char(
+        string="Metode bayar",
+        required=True,
+        default=DEFAULT_PAYMENT_MODE,
+        help="G20 E-45 (docs/04 §12.2): daftar dipisah koma dari 'qris' (gateway lewat BFF) dan 'counter' (bayar "
+        "di kasir dengan kode bayar). Pilot tanpa vendor payment = 'counter' saja (L-55). 'counter' butuh faktur saat "
+        "dibayar + jurnal kliring PT (modul efn_online_pos_counter) dan hanya untuk pesanan satu PT (BFF).",
+    )
     invoice_on_paid = fields.Boolean(string="Faktur saat dibayar", default=True)
     fulfilment_pickup = fields.Boolean(default=True)
     fulfilment_delivery = fields.Boolean(default=False)
@@ -202,7 +229,10 @@ class EfnOnlineChannel(models.Model):
     def _check_efn_code(self):
         for channel in self:
             if not CHANNEL_CODE_RE.match(channel.code or ""):
-                raise ValidationError(_("Kode kanal harus berpola ^[A-Z][A-Z0-9-]{1,15}$ (mis. RTL, FNB-KOPI)."))
+                raise ValidationError(_("Kode kanal harus berpola ^[A-Z][A-Z0-9-]{1,15}$ (mis. GL, PB, BCR, BCF)."))
+            if channel.code.endswith("-FILE"):
+                # L-46 / SEC-144: bentrok dengan env ODOO_API_KEY_ONLINE_<KANAL>_FILE kanal lain di BFF.
+                raise ValidationError(_("Kode kanal tidak boleh berakhiran -FILE."))
 
     @api.constrains("brand_code")
     def _check_efn_brand_code(self):
@@ -229,6 +259,23 @@ class EfnOnlineChannel(models.Model):
                 raise ValidationError(_("Jurnal titipan harus jurnal bertipe Bank."))
             if channel.invoice_on_paid and not channel.journal_titipan_id:
                 raise ValidationError(_("Faktur saat dibayar membutuhkan jurnal titipan untuk mencatat pembayaran."))
+
+    @api.constrains("payment_modes", "invoice_on_paid")
+    def _check_efn_payment_modes(self):
+        for channel in self:
+            modes = parse_payment_modes(channel.payment_modes)
+            if modes is None:
+                raise ValidationError(
+                    _("Metode bayar kanal harus daftar dipisah koma dari: qris, counter (tanpa duplikat).")
+                )
+            if "counter" in modes and not channel.invoice_on_paid:
+                # Kliring bayar di kasir hanya bersih 0 bila faktur SO dibayar di jurnal kliring (E-45 no. 6).
+                raise ValidationError(_("Metode 'counter' (bayar di kasir) membutuhkan 'Faktur saat dibayar'."))
+
+    def _efn_online_payment_modes(self):
+        """Metode bayar kanal (list kanonik). Nilai tersimpan tidak valid (tidak mungkin lewat constraint) -> []."""
+        self.ensure_one()
+        return parse_payment_modes(self.payment_modes) or []
 
     @api.constrains("fulfilment_delivery", "stock_hold_mode")
     def _check_efn_unsupported(self):
@@ -263,6 +310,12 @@ class EfnOnlineChannel(models.Model):
                         "penimbunan stok."
                     )
                 )
+
+    @api.constrains("max_order_weight_kg")
+    def _check_efn_weight_limit(self):
+        for channel in self:
+            if not 0.0 <= (channel.max_order_weight_kg or 0.0) <= 100000.0:
+                raise ValidationError(_("Batas berat pesanan harus 0..100000 kg (0 = tanpa batas)."))
 
     @api.constrains("user_ids", "company_id")
     def _check_efn_users(self):
@@ -408,6 +461,70 @@ class EfnOnlineChannel(models.Model):
             return min(self.max_qty_per_line, self.max_line_qty)
         return self.max_qty_per_line
 
+    # ------------------------------------------------------------- berat (W-33)
+    def _efn_online_weight_to_kg(self, value):
+        """Berat dalam satuan berat database (``product.weight_in_lbs``: kg default / lb) -> kg.
+
+        Terverifikasi 19.0 ``product/models/product_template.py``: ``_get_weight_uom_id_from_ir_config_parameter``
+        mengembalikan ``uom.product_uom_lb`` bila parameter = '1', selain itu ``uom.product_uom_kgm``."""
+        if not value:
+            return 0.0
+        uom = self.env["product.template"]._get_weight_uom_id_from_ir_config_parameter()
+        kg = self.env.ref("uom.product_uom_kgm")
+        if uom == kg:
+            return value
+        return uom._compute_quantity(value, kg, round=False)
+
+    def _efn_online_weight_kg(self, product):
+        """``weight_kg`` katalog (docs/04 §12.3): berat 1 unit dalam kg (3 desimal) atau ``None`` bila kosong."""
+        weight = self._efn_online_weight_to_kg(product.weight or 0.0)
+        return float_round(weight, precision_digits=3) if weight > 0 else None
+
+    def _efn_online_order_weight(self, order):
+        """(total kg, id produk tanpa berat) baris SO. Rumus = ``delivery.carrier._match_weight`` 19.0:
+        Σ ``line.product_id.weight × qty baris dalam UoM produk`` (qty dalam UoM produk; produk tanpa berat = 0).
+
+        Produk "tanpa berat" (``weight_missing``) hanya dari baris biasa yang bukan jasa: baris reward ``sale_loyalty``
+        (produk diskon buatan Odoo) dan produk ``service`` tidak dianggap kurang data."""
+        self.ensure_one()
+        total = 0.0
+        missing = set()
+        for line in order.order_line:
+            product = line.product_id
+            if line.display_type or not product:
+                continue
+            weight = product.weight or 0.0
+            # `product_qty` hanya ada bila `delivery` menambahkannya -> qty baris dikonversi ke UoM produk.
+            qty = line.product_uom_id._compute_quantity(line.product_uom_qty, line.product_id.uom_id, round=False)
+            total += weight * qty
+            if weight <= 0 and not line.reward_id and product.type != "service":
+                missing.add(product.id)
+        return self._efn_online_weight_to_kg(total), sorted(missing)
+
+    def _efn_online_weight_check(self, order):
+        """W-33 / E-35b: (blok hash, issues) bila batas berat aktif; ``(None, [])`` bila mati.
+
+        Issue ``{product_id, code: "weight_missing"}`` per produk tanpa berat (kebijakan ``block``) lalu
+        ``{product_id: None, code: "weight_limit"}`` bila total > batas. Blok hash memuat batas, total, kebijakan, dan
+        produk tanpa berat -> berat/batas yang berubah antara quote dan place = ``price_changed``."""
+        self.ensure_one()
+        limit = self.max_order_weight_kg or 0.0
+        if limit <= 0:
+            return None, []
+        total, missing = self._efn_online_order_weight(order)
+        if self.weight_missing_policy != "block":
+            missing = []
+        issues = [{"product_id": pid, "code": "weight_missing"} for pid in missing]
+        if float_compare(total, limit, precision_digits=3) > 0:
+            issues.append({"product_id": None, "code": "weight_limit"})
+        block = {
+            "limit": f"{limit:.3f}",
+            "total": f"{float_round(total, precision_digits=3):.3f}",
+            "policy": self.weight_missing_policy,
+            "missing": missing,
+        }
+        return block, issues
+
     def _efn_online_changed_since(self, since):
         """Perubahan kanal (batas qty, mode)/pricelist/pajak/kategori sejak ``since`` -> kirim ulang katalog penuh."""
         self.ensure_one()
@@ -481,6 +598,8 @@ class EfnOnlineChannel(models.Model):
                     "sequence": tmpl.efn_online_sequence,
                     "prices": prices,
                     "max_qty": channel._efn_online_max_qty(),
+                    # G20 W-33 (docs/04 §12.3): berat 1 unit dalam kg, None bila produk tanpa berat.
+                    "weight_kg": channel._efn_online_weight_kg(product),
                 }
             )
         deleted = []
@@ -518,6 +637,8 @@ class EfnOnlineChannel(models.Model):
             "brand_code": self.brand_code or None,  # G19 E-37a (docs/04 §11.3 no. 2)
             "company_code": self.company_id.efn_brand_code or None,
             "currency": self.currency_id.name,
+            # G20 E-45 (docs/04 §12.2 no. 1, L-52): array string kanonik, mis. ["qris", "counter"].
+            "payment_modes": self._efn_online_payment_modes(),
             "outlets": [
                 {
                     "code": outlet.code,
@@ -708,6 +829,12 @@ class EfnOnlineChannel(models.Model):
         }
         if promo_applied:
             hashed["promo_codes"] = sorted(promo_applied)
+        # G20 W-33 / E-35b (docs/04 §12.3): berat masuk hash HANYA bila batas aktif (kanal tanpa batas: hash identik
+        # dengan G19). Issue berat dibawa lewat kunci privat `_weight_issues` (dibuang pemanggil, tidak ke BFF).
+        weight_block, weight_issues = self._efn_online_weight_check(order)
+        if weight_block is not None:
+            hashed["weight"] = weight_block
+        summary["_weight_issues"] = weight_issues
         summary["quote_hash"] = canonical_sha256(hashed)
         return summary
 
@@ -1019,6 +1146,8 @@ class EfnOnlineChannel(models.Model):
             line["available"] = line["product_id"] not in unavailable
         if self.max_order_amount and summary["amount_total"] > self.max_order_amount:
             issues.append({"product_id": None, "code": "order_limit"})
+        # W-33 / E-35b: weight_missing (per produk) lalu weight_limit (product_id null); keduanya membuat place ditolak.
+        issues.extend(summary.pop("_weight_issues", []))
         return outlet, product_qty, issues, summary
 
     @api.model

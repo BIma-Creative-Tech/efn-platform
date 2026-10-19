@@ -57,6 +57,19 @@ RPC_ALLOWLIST = {
     # company user + sesi terbuka; order asal dibaca dengan hak user (record rule) + cek company; hanya id metode &
     # nominal alokasi (tanpa data pelanggan).
     ("pos.config", "efn_refund_origin_allocation"): "_efn_refund_check_caller + check_access order asal + company",
+    # efn_pos_refund_origin (G20, E-41, docs/04 §12.4, L-51): retur tanpa struk dengan persetujuan Store Manager.
+    # approvers: _efn_refund_check_caller + mode manager_approval; hanya {id, name} user internal aktif grup POS
+    # manager dengan company config ∈ company user, PIN diatur, bukan pemanggil (tanpa hash/PII pelanggan).
+    ("pos.config", "efn_return_approval_approvers"): "_efn_refund_check_caller + mode manager_approval",
+    # request: _efn_refund_check_caller + mode + validasi input manual + approver sah (grup POS manager, company
+    # config, aktif/internal, PIN diatur, != kasir) + touch_row approver + kunci 15 menit setelah 5 PIN salah +
+    # verifikasi pbkdf2 server; tulis efn.pos.return.approval via sudo setelah cek (TTL 5 menit, sekali pakai).
+    ("pos.config", "efn_return_approval_request"): "_efn_refund_check_caller + approver sah + lockout + pbkdf2",
+    # PIN Store Manager: @check_identity Odoo (kata sandi ulang) + target = diri sendiri / base.group_system;
+    # hanya membuka wizard. Wizard: identity check sesi < 10 menit + target diri sendiri / base.group_system +
+    # target grup POS manager; hash pbkdf2 ditulis sudo.
+    ("res.users", "efn_action_return_pin_wizard"): "@check_identity + diri sendiri / base.group_system",
+    ("efn.pos.return.pin.wizard", "action_apply"): "identity check sesi + diri sendiri / base.group_system",
     # efn_pos_kds (Gelombang 14, docs/08 §7.3): `_efn_kds_check_device` = grup perangkat KDS
     # (user perangkat stasiun itu) ATAU POS manager + check_access(read) (record rule company +
     # stasiun milik perangkat) + company user; tulis via sudo setelah cek.
@@ -96,6 +109,10 @@ RPC_ALLOWLIST = {
     ("sale.order", "load_sale_order_from_pos"): "override CE pos_sale (tolak SO online)",
     ("efn.online.handover.wizard", "action_confirm"): "grup stock user + check_access(read) order + company; "
     "kode = verifikasi pbkdf2, 5x salah -> review",
+    ("efn.online.order", "efn_online_counter_refund_authorize"): "L-60: _efn_online_check_caller + FOR UPDATE + "
+    "idempotency_key + refund requested/cancel tanpa faktur + nominal persis",
+    ("pos.config", "efn_online_counter_lookup"): "E-45: grup POS user + check_access(read) config + company + sesi "
+    "terbuka + rate limit sesi/kasir; digest KDF per company + outlet = gudang config; hanya {order_label, amount}",
 }
 
 MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}

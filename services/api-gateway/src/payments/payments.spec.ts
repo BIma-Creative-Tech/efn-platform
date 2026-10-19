@@ -12,7 +12,7 @@ const BODY = {
   order_ref: '3f2b8c1e-7d4a-4e0b-9c55-2a1f0e6d9b10',
   amount: 125000,
   currency: 'IDR',
-  company_code: 'FNB',
+  company_code: 'PB',
   pos_config_id: 3,
   method: 'qris',
   idempotency_key: 'pos:3f2b8c1e:pay-1',
@@ -247,7 +247,7 @@ describe('Konfigurasi & adapter vendor (kerangka, belum diuji sandbox)', () => {
       text: async () => '',
     });
     const gw = new XenditGateway({ apiKey: 'xnd_test_key', callbackToken: 'cb-token-0123456789', timeoutMs: 1000, experimental: true }, http);
-    const r = await gw.createQris({ paymentId: 'p1', orderRef: 'o', amount: 125000, currency: 'IDR', companyCode: 'FNB', expiresAt: new Date(0) });
+    const r = await gw.createQris({ paymentId: 'p1', orderRef: 'o', amount: 125000, currency: 'IDR', companyCode: 'PB', expiresAt: new Date(0) });
     expect(r.providerRef).toBe('qr_123');
     const [url, init] = http.mock.calls[0] as [string, { headers: Record<string, string>; body: string }];
     expect(url).toBe('https://api.xendit.co/qr_codes');

@@ -51,3 +51,52 @@ class TestEfnFnbServicePresets(TransactionCase):
         self.assertNotIn(self.sc, self.takeaway.fiscal_position_id.map_tax(self.pb1))
         self.assertEqual(self.dine_in.service_at, "table")
         self.assertEqual(self.takeaway.service_at, "counter")
+
+    def test_bacha_fnb_presets_use_bcf_fiscal_positions(self):
+        """G20 W-32 (docs/04 §12.1): preset Bacha F&B memakai pajak & fiscal position company BCF sendiri."""
+        ref = self.env.ref
+        bcf = ref("efn_setup_company.company_bcf")
+        pb1 = ref("efn_setup_company.tax_pb1_10_bcf")
+        sc = ref("efn_setup_company.tax_service_charge_5_bcf")
+        dine_in = ref("efn_setup_pos.preset_bcf_dine_in")
+        takeaway = ref("efn_setup_pos.preset_bcf_takeaway")
+        self.assertEqual(dine_in.fiscal_position_id, ref("efn_setup_company.fiscal_position_bcf_dine_in"))
+        self.assertEqual(takeaway.fiscal_position_id, ref("efn_setup_company.fiscal_position_bcf_non_dine_in"))
+        for preset in dine_in | takeaway:
+            with self.subTest(preset=preset.name):
+                self.assertEqual(preset.fiscal_position_id.company_id, bcf)
+                self.assertFalse(preset.available_in_self)
+        self.assertIn(sc, dine_in.fiscal_position_id.map_tax(pb1))
+        self.assertNotIn(sc, takeaway.fiscal_position_id.map_tax(pb1))
+        # Preset PB tidak memetakan pajak BCF (fiscal position per company).
+        self.assertEqual(self.dine_in.fiscal_position_id.map_tax(pb1), pb1)
+
+
+@tagged("post_install", "-at_install", "efn")
+class TestEfnG20EntityPosData(TransactionCase):
+    """G20 W-32 (docs/04 §12.1): data POS per PT baru (EDC manual, nomenklatur ritel)."""
+
+    def test_edc_method_per_pos_company(self):
+        for suffix, company_xmlid in (
+            ("rtl", "company_rtl"),
+            ("fnb", "company_fnb"),
+            ("bcr", "company_bcr"),
+            ("bcf", "company_bcf"),
+        ):
+            with self.subTest(pt=suffix):
+                method = self.env.ref(f"efn_setup_pos.pos_payment_method_edc_{suffix}")
+                company = self.env.ref(f"efn_setup_company.{company_xmlid}")
+                self.assertEqual(method.company_id, company)
+                self.assertEqual(method.payment_method_type, "none")
+                self.assertEqual(method.journal_id.type, "bank")
+                self.assertEqual(method.journal_id.company_id, company)
+                self.assertFalse(method.efn_is_loyalty_points)
+
+    def test_retail_nomenclature_for_retail_companies(self):
+        nomenclature = self.env.ref("efn_setup_pos.barcode_nomenclature_efn_retail")
+        for xmlid in ("company_rtl", "company_bcr"):
+            with self.subTest(company=xmlid):
+                self.assertEqual(self.env.ref(f"efn_setup_company.{xmlid}").nomenclature_id, nomenclature)
+        for xmlid in ("company_fnb", "company_bcf"):
+            with self.subTest(company=xmlid):
+                self.assertNotEqual(self.env.ref(f"efn_setup_company.{xmlid}").nomenclature_id, nomenclature)

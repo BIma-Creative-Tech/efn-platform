@@ -76,7 +76,7 @@ Trade-off privasi (untuk DPO):
 
 ## Fase 3 — order online (docs/04 §10.8.3, L-4)
 - `GET /v1/me/data` memuat `online_orders` (tanpa kode ambil, QR, id Odoo/payment).
-- `DELETE /v1/me`: order `created|awaiting_payment` dibatalkan otomatis; bagian `paying|confirmed|ready|review` → `409 open_online_orders` (ambil/batalkan lewat CS) **kecuali** `?confirm_open_orders=true` (G18).
+- `DELETE /v1/me`: order `created|awaiting_payment|awaiting_counter_payment` (G20) dibatalkan otomatis; bagian `paying|confirmed|ready|review` → `409 open_online_orders` (ambil/batalkan lewat CS) **kecuali** `?confirm_open_orders=true` (G18).
 
 ### G18 — W-18 (Q-P18): penundaan hapus akun maks 14 hari
 Keputusan pemilik proyek 10 Okt 2026: penundaan karena pesanan berjalan sah, **maksimum 14 hari**, eskalasi CS, setelah itu erasure tetap jalan. Desain dipilih: **409 sebagai langkah informasi + 202 dengan konfirmasi** (bukan 409 permanen, bukan 202 diam-diam):

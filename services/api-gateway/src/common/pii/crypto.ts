@@ -45,6 +45,11 @@ export const PII_AAD = {
   CONSENT_IP: piiAad('consent', 'ip_enc'),
   /** Fase 3 (docs/04 §10.3.6, L-13): kode ambil online — rahasia yang harus bisa ditampilkan ulang ke pemilik. */
   ONLINE_PICKUP_CODE: piiAad('online_order_part', 'pickup_code_enc'),
+  /**
+   * G20 §12.2 no. 3: kode bayar di kasir (rahasia yang ditampilkan ulang ke pemilik). Format kolom v1 hanya cadangan
+   * registry re-encrypt; BFF selalu menulis AAD per baris v2 (`counterCodeAad`, pola SEC-102).
+   */
+  ONLINE_COUNTER_CODE: piiAad('online_order_part', 'counter_code_enc'),
   /** SEC-24: nomor HP di challenge OTP login (Redis hash `otp:<id>` field `m`) — bukan kolom DB, tidak di-re-encrypt. */
   REDIS_OTP_MEMBER: piiAad('redis_otp', 'm'),
 } as const;

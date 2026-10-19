@@ -26,11 +26,11 @@ class TestEfnPosGatewayTour(TestPointOfSaleHttpCommon):
         env = cls.env
         config = cls.main_pos_config
         company = config.company_id
-        env["res.company"].search([("efn_brand_code", "=", "FNB"), ("id", "!=", company.id)]).write(
+        env["res.company"].search([("efn_brand_code", "=", "PB"), ("id", "!=", company.id)]).write(
             {"efn_brand_code": False}
         )
         env["res.company"].flush_model(["efn_brand_code"])
-        company.write({"efn_brand_code": "FNB"})
+        company.write({"efn_brand_code": "PB"})
         # DB uji memakai mata uang company test (bukan IDR); kontrak produksi = IDR.
         env["ir.config_parameter"].sudo().set_param("efn.pos.gateway_currency", company.currency_id.name)
         journal = env["account.journal"].create(

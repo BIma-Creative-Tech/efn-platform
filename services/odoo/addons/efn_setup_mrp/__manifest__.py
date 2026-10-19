@@ -3,7 +3,8 @@
     "summary": (
         "Konfigurasi data-only: lot/serial, multi-step routes, kategori FEFO; demo reorder rule Manufacture paket CK."
     ),
-    "version": "19.0.1.0.1",
+    # 19.0.1.0.2 (G20 W-32): komentar/README kode PB (CK tetap di PT Paris Baguette, docs/04 §12.1).
+    "version": "19.0.1.0.2",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",

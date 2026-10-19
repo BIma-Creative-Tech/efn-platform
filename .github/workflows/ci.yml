@@ -230,7 +230,7 @@ jobs:
         efn_core efn_audit efn_pos_otp_gate efn_kitting
         efn_pos_payment_gateway efn_pos_loyalty_ledger efn_privacy efn_pos_kds
         efn_setup_company efn_setup_pos efn_setup_mrp efn_setup_audit
-        efn_online_order efn_setup_online efn_online_pos_sale efn_pos_refund_origin
+        efn_online_order efn_setup_online efn_online_pos_sale efn_pos_refund_origin efn_online_pos_counter
       # G17 (docs/04 §10.15): efn_online_order menarik sale_stock (CE) lewat depends -> auto-install
       # sale_loyalty/pos_sale ikut terpasang di DB test yang sama, sehingga regresi POS teruji bersama modul online.
       # Di-install SETELAH test, tanpa test: efn_setup_security menaikkan auth_password_policy.minlength ke 12,
@@ -335,7 +335,7 @@ jobs:
           --health-cmd "pg_isready -U odoo"
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
-      EFN_TOUR_MODULES: efn_pos_otp_gate,efn_pos_payment_gateway,efn_pos_loyalty_ledger,efn_pos_kds,efn_online_order,efn_pos_refund_origin
+      EFN_TOUR_MODULES: efn_pos_otp_gate,efn_pos_payment_gateway,efn_pos_loyalty_ledger,efn_pos_kds,efn_online_order,efn_pos_refund_origin,efn_online_pos_counter
       # Jumlah test tour yang WAJIB berjalan (HttpCase di-skip diam-diam bila Chrome/websocket tidak ada).
       # 5 (OTP gate 3 + gateway 2) + 4 Poin EFN (Gelombang 13b) + 4 KDS efn_pos_kds (Gelombang 14)
       # + 1 KDS cetak cadangan saat tiket gagal (Gelombang 15, SEC-76). Total terhitung runner 20.
@@ -482,8 +482,8 @@ jobs:
       - name: Setiap secret yang direferensikan service didefinisikan & ada di secrets.list
         working-directory: infra/compose
         # docker compose config membuang secret top-level yang tak direferensikan service; payment_provider_api_key
-        # hanya di-mount oleh docker-compose.payment.yml (dan odoo_api_key_online_<kanal> oleh docker-compose.online-*.yml,
-        # G17/G19 §11.3) -> overlay itu wajib ikut agar perbandingan lengkap.
+        # hanya di-mount oleh docker-compose.payment.yml (dan odoo_api_key_online_{pb,bcr,bcf} oleh docker-compose.online-*.yml,
+        # G20 §12.1; _gl di base) -> overlay itu wajib ikut agar perbandingan lengkap.
         run: |
           overlays=()
           for f in docker-compose.online-*.yml; do overlays+=(-f "$f"); done
@@ -569,7 +569,8 @@ jobs:
             bash /src/scripts/host/test-efn-online-cs.sh
       # G18 (W-11, R-T15): rotasi otomatis API key Odoo kanal online - docker/Odoo/BFF palsu (rotasi, rollback, cabut
       # tertunda, bukti 401, penolakan identitas/argumen/konfigurasi, tanpa kebocoran nilai key; r11 SEC-120: kunci host
-      # bersama deploy + cabut key yatim per nama; G19 §11.3: kanal berhifen, --all, --bootstrap, user bersama; 84 kasus).
+      # bersama deploy + cabut key yatim per nama; G19: --all, --bootstrap, user bersama; G20 §12.1: allowlist kanal
+      # GL/PB/BCR/BCF, kode lama RTL/FNB/kanal G19 ditolak; 90 kasus).
       - name: efn-rotate-online-key regression (docker palsu)
         run: |
           docker run --rm -v "$PWD:/src:ro" \

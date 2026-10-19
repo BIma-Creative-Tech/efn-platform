@@ -13,11 +13,12 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+# Kode PT (G20: EFN, GL, PB, BCR, BCF, FARM) = efn_etl.entities.COMPANY_CODES.
+from efn_etl.entities import company_code
 from efn_etl.watermark import to_utc
 
 GEO_DECIMALS = 3  # ~100 m: cukup untuk analisis area kompetitor, tidak melacak posisi presisi pelapor
 HASH_RE = re.compile(r"^[0-9a-f]{64}$")
-COMPANY_CODES = frozenset({"EFN", "RTL", "FNB", "FARM"})
 
 
 @dataclass(frozen=True)
@@ -192,10 +193,7 @@ LOYALTY_EVENTS_COLUMNS = (
 
 def _company_code(value: Any) -> str:
     """PT penanggung liabilitas poin (ADR-020). Nilai di luar daftar ditolak (CHECK di Postgres sama)."""
-    code = str(value or "").strip().upper()
-    if code not in COMPANY_CODES:
-        raise ValueError("company_code tidak dikenal")
-    return code
+    return company_code(value)
 
 
 def transform_loyalty_event(

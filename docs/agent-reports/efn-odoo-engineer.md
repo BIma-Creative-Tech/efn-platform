@@ -1099,3 +1099,455 @@ tidak pernah mengklaim reward baru; reward produk = `discount` 100, qty `reward_
   kanal baru (tanpa demo) → `ValidationError`. Tambahkan `"max_order_amount": 5000000, "max_line_qty": 20`.
 - Frontend: pesan `qty_limit` sudah ada; stepper sebaiknya memakai `max_qty` katalog.
 - docs/04 §11.7 L-41..L-44 sudah ditulis lead; bentuk di atas sesuai teks itu.
+
+---
+
+# G20 — E-41 retur tanpa struk dengan persetujuan Store Manager (`efn_pos_refund_origin` 19.0.1.3.0), 18 Okt 2026
+
+Sumber: docs/04 §12.4 + §12.7 L-51, docs/08 §11.6 (E-41), keputusan 18-15. Cakupan: `efn_pos_refund_origin/**` + baris
+`RPC_ALLOWLIST` di `efn_core/tests/test_rpc_surface.py`. `efn_core`/`efn_setup_*` lain tidak disentuh. Tidak di-commit.
+
+## Modul & file
+- `models/return_pin.py` (baru, bukan model): hash/verify PIN pbkdf2-sha512 passlib, aturan PIN 6–8 digit (deret/angka
+  sama ditolak), putaran `efn.pos.return_pin_kdf_rounds` (default 600.000, min 1.000 untuk test).
+- `models/res_users.py` (baru): `efn_return_pin_hash` (`groups=base.group_system`), `efn_return_pin_set_at`,
+  `efn_return_pin_is_set`; `efn_action_return_pin_wizard` (`@check_identity`).
+- `wizard/efn_pos_return_pin_wizard.py` (baru, transient): `action_apply` (identity check sesi < 10 menit, diri
+  sendiri / `base.group_system`, target grup POS manager).
+- `models/efn_pos_return_approval.py` (baru): `efn.pos.return.approval` (company_id, `_check_company_auto`, append-only,
+  lockout 5/15 menit, `_efn_usable_error`, autovacuum retensi min 365 hari).
+- `models/pos_config.py`: field `efn_unlinked_return_mode` (+ `_load_pos_data_fields`), RPC
+  `efn_return_approval_approvers`, `efn_return_approval_request`.
+- `models/pos_order.py`: mode `manager_approval` (default; nilai tidak dikenal -> `manager_approval`),
+  `_efn_consume_return_approval` di jalur retur tanpa struk (setelah cek tunai).
+- `security/ir.model.access.csv`, `security/efn_pos_return_approval_security.xml` (record rule company) — baru.
+- `views/efn_pos_return_approval_views.xml` (list/form/search + menu POS), `views/efn_pos_return_pin_views.xml`
+  (wizard + tombol di form user [admin] dan Preferensi [POS manager]) — baru.
+- `data/ir_config_parameter.xml`: default `manager_approval`; `migrations/19.0.1.3.0/post-migrate.py`: `cash` -> `manager_approval`.
+- Frontend: `static/src/app/components/efn_return_approval_dialog/*` (dialog OWL), patch `PaymentScreen.validateOrder`
+  (offline diblokir dengan `AlertDialog`; online -> dialog -> RPC).
+- Test: `tests/test_return_approval.py` (23 test, tag `efn`), `tests/test_return_approval_tour.py` +
+  `static/tests/tours/efn_return_approval_tour.js` (tag `efn_tour`).
+- `__manifest__.py` 19.0.1.3.0 (depends tetap `point_of_sale`, `efn_core`; `external_dependencies` passlib), `README.md`.
+
+## RPC baru (4 entri `RPC_ALLOWLIST`)
+| Metode | Cek akses |
+|---|---|
+| `pos.config.efn_return_approval_approvers()` | `_efn_refund_check_caller` (grup POS user + `check_access` config + company user + sesi terbuka) + mode `manager_approval`; hanya `{id, name}` |
+| `pos.config.efn_return_approval_request(order_ref, approver_id, pin, amount, reason)` | idem + validasi input manual + approver sah (internal aktif, grup POS manager, company config, PIN, ≠ pemanggil) + `touch_row res_users` + lockout + pbkdf2; tulis sudo setelah cek |
+| `res.users.efn_action_return_pin_wizard()` | `@check_identity` Odoo + diri sendiri / `base.group_system`; hanya membuka wizard |
+| `efn.pos.return.pin.wizard.action_apply()` | identity check sesi < 10 menit + diri sendiri / `base.group_system` + target grup POS manager |
+
+## Penyimpangan / tafsiran (mohon dikonfirmasi lead)
+- **Token server-side**: "token sekali pakai" = record `efn.pos.return.approval` yang dicari saat sync lewat
+  (config, `pos.order.uuid`) dan dicek sesi/kasir/company/TTL/nominal — tidak ada token di browser maupun field baru
+  di `pos.order` (pola `efn.pos.otp.challenge`). Lebih kuat dari token di payload (tidak bisa dicuri/diputar ulang).
+- TTL **5 menit** (docs/04 §12.4 + instruksi lead), bukan 10 menit (docs/08 §11.6 butir 2).
+- PIN pada **`res.users`** (instruksi lead), bukan PIN `hr.employee` (docs/08 butir 2); kasir = user Odoo yang login
+  (bukan `employee_id` `pos_hr` yang diisi klien).
+- Kunci per **approver global** (bukan per approver/config).
+- Tukar barang tanpa struk tanpa uang keluar juga wajib persetujuan (nominal 0).
+- `efn_audit`: tidak menambah dependency (test SEC-122 mengunci depends); record append-only menjadi jejak audit.
+  Aturan log `efn_audit` untuk model ini = `efn_setup_audit` (di luar cakupan).
+
+## Belum diverifikasi
+- **Test, tour, dan ruff belum dijalankan** (tanpa shell). Lead: `-i efn_pos_refund_origin` + tag `efn` dan `efn_tour`
+  untuk modul ini, `efn_core` (`test_rpc_surface`), dan seluruh modul POS efn.
+- **Akan memecah test modul lain (di luar cakupan saya):** default baru `manager_approval` membuat retur tanpa struk tanpa
+  persetujuan ditolak. `efn_pos_loyalty_ledger/tests/test_loyalty_ledger.py` `test_negative_sale_without_refund_flag_earns_nothing`
+  (baris ~994) dan `test_exchange_with_unlinked_return_earns_nothing` (~1002) melakukan sync retur tanpa struk dan
+  mengharapkan sukses. Perbaikan satu baris di `setUp` (baris ~89):
+  `self.env["ir.config_parameter"].sudo().set_param("efn.pos.refund.unlinked_return_mode", "cash")`
+  (pola `test_refund_origin.py`). `test_unlinked_return_with_points_payment_rejected` tetap lulus (mengharapkan galat).
+  Modul baru `efn_online_pos_counter` (bila membuat order POS bertanda negatif) perlu hal yang sama.
+- Asumsi API 19.0 (WebFetch source 19.0): `check_identity` di `odoo.addons.base.models.res_users` + kunci sesi
+  `identity-check-last` (10 menit); `PaymentScreen.validateOrder` dibungkus `useAsyncLockedMethod` di `setup`
+  (patch prototype berlaku); `makeAwaitable` dari `@point_of_sale/app/utils/make_awaitable_dialog`; header kosong di
+  `base.view_users_form`, `div[@name='auth']` di `base.view_users_form_simple_modif`. Belum diverifikasi:
+  `this.env.utils.formatCurrency` di POS 19 (ada fallback), tombol numpad `+/-` menghasilkan qty -1 di tour, input
+  teks di dialog tidak ditangkap number buffer/barcode reader POS, sync retur oleh user kasir murni
+  (`group_pos_user`) di `TestPoSCommon` (picking retur).
+- Konkurensi lockout (`touch_row res_users`) mengikuti pola SEC-127; belum diuji dua koneksi nyata.
+- Alur sync tertunda > 5 menit setelah persetujuan -> order tertahan di antrean sync (README "Batasan").
+
+---
+
+# G20 paket A — W-32/E-43 kode 6 entitas + W-33/E-35b batas berat (18 Okt 2026)
+
+Kontrak: docs/04 §12.1, §12.3, §12.6 (Odoo A), §12.7 L-48; rencana docs/08 §11.3 (kode diganti §12.1) + §11.7; ADR-001
+catatan revisi 18 Okt. Tidak di-commit. **Tanpa shell: test & ruff belum dijalankan** (lead menjalankan di container).
+
+## Modul & file
+| Modul | Versi | File |
+|---|---|---|
+| `efn_core` | 19.0.1.6.0 → **19.0.1.7.0** | `models/res_company.py` (Selection `EFN, GL, PB, BCR, BCF, FARM`; `RTL`/`FNB` dihapus; business type GL,BCR→retail, PB,BCF→fnb), `migrations/19.0.1.2.0/post-migrate.py` (peta kode baru), `tests/test_res_company.py`, `README.md` |
+| `efn_setup_company` | 19.0.1.6.0 → **19.0.1.7.0** | `data/res_company_data.xml` (GL/PB; `company_bcr`, `company_bcf` root, IDR, `vat_check_vies=False`, admin, `try_loading('id')`), `data/account_tax_pb1_data.xml` (`tax_group_pb1_bcf`, `tax_pb1_10_bcf`, sale tax BCF), `data/account_tax_fnb_service_data.xml` (SC/PB1 dine-in/non-dine-in 0 %/2 FP `_bcf`, exclude), `data/account_tax_label_data.xml` + `account_tax_rounding_data.xml` (6 PT), `demo/account_tax_demo.xml` (BCR tax-included), tests `test_tax_rounding.py`, `test_tax_labels.py`, `test_currency_idr.py`, `test_no_egress.py`, `test_fnb_service_taxes.py`, `README.md`, `static/description/index.html` |
+| `efn_setup_pos` | 19.0.1.10.0 → **19.0.1.11.0** | `data/pos_payment_method_data.xml` (EDC BCR/BCF), `data/pos_loyalty_points_payment.xml` (akun 21990091 + jurnal PEFN + metode Poin EFN BCR/BCF), `data/barcode_nomenclature_data.xml` (BCR), `data/pos_fnb_service_presets.xml` (`preset_bcf_dine_in`, `preset_bcf_takeaway`), `data/pos_member_price_data.xml` (template BCR nonaktif), tests `test_g18_config.py`, `test_fnb_defaults.py`, `README.md` |
+| `efn_setup_online` | 19.0.1.4.0 → **19.0.1.5.0** | `data/efn_online_setup_data.xml` (partner & tim BCR/BCF; nama GL/PB), `demo/efn_online_demo.xml` (ditulis ulang: kanal `GL` aktif, `PB`/`BCR`/`BCF` nonaktif; user `efn_online_gl/pb/bcr/bcf`; jurnal titipan & pricelist per kanal; kanal RTL/FNB/RTL-GL/RTL-BACHA/FNB-PB/FNB-BACHA dihapus), `tests/test_setup_online.py`, `README.md` |
+| `efn_setup_mrp` | 19.0.1.0.1 → **19.0.1.0.2** | `demo/mrp_demo.xml` (komentar), `README.md` (CK tetap PB) |
+| `efn_kitting` | 19.0.1.1.0 → **19.0.1.1.1** | `demo/efn_kitting_demo.xml` (`'FNB'` → `'PB'`), `README.md` |
+| `efn_online_order` | 19.0.1.3.0 → **19.0.1.4.0** | `models/efn_online_channel.py` (field `max_order_weight_kg`, `weight_missing_policy`, helper berat, issue, hash, `weight_kg`, L-46 `-FILE`), `models/efn_online_order.py` (cek issue berat di place jalur promo), `views/efn_online_channel_views.xml`, `tests/test_online_g20_weight.py` (baru), `tests/__init__.py`, `tests/test_online_api.py` (whitelist field katalog), `README.md` |
+| test saja (versi tidak dinaikkan) | — | `efn_pos_loyalty_ledger/tests/{test_loyalty_ledger,test_loyalty_tour,test_rpc_access}.py` (`RTL`→`GL`), `efn_pos_otp_gate/tests/{test_otp_gate,test_pos_otp_tour}.py` + `efn_pos_payment_gateway/tests/{test_payment_gateway,test_gateway_tour}.py` (`FNB`→`PB`, termasuk `company_code` yang diharapkan di payload BFF) |
+| skrip smoke (odoo shell) | — | `scripts/smoke/odoo_pos_smoke.py` (company `PB`, config "SMOKE POS PB"), `scripts/smoke/odoo_online_smoke.py` (kanal `GL`, user `efn_online_gl`, brand GL, nama key `efn-online-GL-…`) |
+
+`grep RTL|FNB` di `services/odoo/addons` kini hanya tersisa di teks riwayat/README dan di test negatif `test_selection_matches_contract_codes`.
+
+## Perubahan kontrak json2 (persis)
+1. `company_code` (blok `channel` katalog, respons quote, event outbox, payload OTP/poin/gateway) = `efn_brand_code`
+   → nilai kini `EFN | GL | PB | BCR | BCF | FARM` (tanpa perubahan kode; nilai `RTL`/`FNB` tidak pernah muncul lagi).
+2. Kode kanal demo/dev: `GL`, `PB`, `BCR`, `BCF` (kanal = kode PT). `brand_code`: `GL`, `PB`, `BACHA` (BCR & BCF).
+3. `efn_online_catalog(...).items[]` bertambah **`weight_kg`**: `number | null` (kg, dibulatkan 3 desimal; `null` bila
+   `product.weight` kosong/0). Berlaku semua kanal (tidak bergantung batas).
+4. `efn_online_quote(...).issues[]` bisa memuat (urutan: `not_found`, `qty_limit`, `out_of_stock`, `order_limit`, lalu):
+   - `{"product_id": <int>, "code": "weight_missing"}` — satu per produk tanpa berat (urut id), hanya bila
+     `max_order_weight_kg > 0` dan `weight_missing_policy = "block"`; baris reward `sale_loyalty` & produk `service`
+     dikecualikan;
+   - `{"product_id": null, "code": "weight_limit"}` — total kg > batas (tepat sama = boleh).
+5. `quote_hash`: hanya bila batas aktif, objek hash bertambah kunci `weight` =
+   `{"limit": "<3 desimal>", "total": "<3 desimal>", "policy": "block|ignore", "missing": [ids]}`. Batas 0 → hash
+   identik dengan 19.0.1.3.0.
+6. `efn_online_place`: issue berat → `efn_online:invalid_input` (tanpa SO/reservasi tersisa); berat/batas/kebijakan
+   berubah sejak quote → `efn_online:price_changed`. Tidak ada metode/argumen RPC baru (`RPC_ALLOWLIST` tidak berubah).
+7. Constraint Odoo baru (bukan json2): kode kanal berakhiran `-FILE` ditolak (L-46/SEC-144, sisa L-47).
+
+## Test baru / diubah (tag `efn`, belum dijalankan)
+- `efn_core`: `test_business_type_derived_from_brand_code` (6 kode), **`test_selection_matches_contract_codes`** (Selection = kontrak, `RTL`/`FNB` → `ValueError`).
+- `efn_setup_company`: `test_tax_rounding.py` (6 PT; nama+kode+business type; **`test_all_entities_are_root_companies`**, **`test_admin_can_switch_to_all_entities`**), label/IDR/VIES 6 PT, default sale tax BCR=PPN & BCF=PB1, **`TestBcfServiceTaxes`** (seluruh uji pajak F&B dijalankan ulang untuk BCF + `test_records_do_not_leak_across_fnb_companies`).
+- `efn_setup_pos`: Poin EFN 4 PT, **`test_bacha_config_gets_own_company_points_method`**, **`test_bcr_template_is_inactive_otp_promotion`**, **`test_bacha_fnb_presets_use_bcf_fiscal_positions`**, **`TestEfnG20EntityPosData`** (EDC 4 PT, nomenklatur GL+BCR saja).
+- `efn_setup_online`: partner/tim 4 PT; `test_demo_channels` (GL, `weight_kg`), **`TestEfnOnlineEntityChannels`** (kode kanal = kode PT, brand, user per kanal, batas L-41, kanal lama tidak ada, katalog BCR vs BCF terpisah + user BCR ditolak di BCF). Menggantikan `TestEfnOnlineBrandChannels`.
+- `efn_online_order`: **`test_online_g20_weight.py`** — `TestEfnOnlineWeightLimit` (7 test: default/constraint, batas 0 = hash G19, `weight_limit` quote+place, tepat di batas, `weight_missing` block/ignore + jasa, hash berubah + `price_changed`, `weight_kg`, DB lb→kg) dan `TestEfnOnlineWeightLimitPromoConfirm` (mode confirm + promo otomatis: place ditolak tanpa reservasi; reward diskon tidak memicu `weight_missing`). `test_online_api` whitelist field katalog + `weight_kg`.
+
+## API Odoo 19.0 diverifikasi (WebFetch `raw.githubusercontent.com/odoo/odoo/19.0`, 18 Okt 2026)
+`delivery/models/delivery_carrier.py::_match_weight` (Σ `line.product_id.weight * line.product_qty` atas `order_line`),
+`product/models/product_template.py` (`_get_weight_uom_id_from_ir_config_parameter`: `product.weight_in_lbs='1'` → `uom.product_uom_lb`, selain itu kg),
+`product/models/product_product.py` (`weight` field sendiri di varian), `uom/data/uom_data.xml` (kg & lb relatif ke gram; lb nonaktif),
+`uom/models/uom_uom.py::_compute_quantity(qty, to_unit, round=True, ...)` (faktor, tanpa cek kategori),
+`stock/models/res_company.py` (`create` hanya membuat gudang company baru saat `current_test`; `create_missing_warehouse` hanya bila belum ada gudang sama sekali).
+
+## Yang saya ragukan / belum diverifikasi
+1. **Gudang BCR/BCF.** Stock CE hanya membuat gudang company baru saat test (`current_test`). Test `pos.config` BCF
+   (`test_bacha_config_gets_own_company_points_method`) simetris dengan test PB/GL yang sudah lulus G18/G19, jadi
+   diharapkan lulus di harness yang sama; di DB non-test, outlet Bacha butuh gudang dibuat lewat UI (checklist).
+2. **Selection `RTL`/`FNB` di DB lama** yang di-upgrade: tidak dipetakan (kontrak: tanpa migrasi). DB dev wajib dibuat
+   ulang; `-u` di DB lama akan meninggalkan nilai tak valid di kolom (perilaku ORM belum dicek) dan **tidak** membuat
+   company BCR/BCF (blok noupdate).
+3. **`ValueError`** untuk nilai Selection tidak dikenal saat `create` (asumsi `convert_to_cache` 19.0) — bila Odoo
+   melempar tipe lain, sesuaikan `test_selection_matches_contract_codes`.
+4. **Jurnal titipan** BCR/BCF tetap di **demo** (pola yang ada); docs/08 §11.3 menulisnya di baris file data. Bila lead
+   ingin di data produksi, pindahkan empat jurnal `journal_titipan_*` ke `data/` (noupdate).
+5. **Template harga member BCR** ditambahkan mengikuti docs/08 §11.3 walau tidak disebut eksplisit di tugas.
+6. **Nomenklatur ritel BCR** = asumsi format timbangan sama dengan GL (Q-25).
+7. `weight_missing` mengecualikan produk `service` dan baris reward; produk `combo` dihitung seperti barang (tanpa
+   berat → `weight_missing`). Reward produk hadiah ikut total berat (sesuai `_match_weight`). Pembulatan banding 3 desimal.
+8. Promo + berat: issue berat di jalur promo hanya terlihat di quote; place jalur promo memeriksa setelah cek hash
+   (`invalid_input`).
+9. Versi modul yang hanya berubah test (`efn_pos_loyalty_ledger`, `efn_pos_otp_gate`, `efn_pos_payment_gateway`)
+   sengaja **tidak** dinaikkan.
+
+## Untuk lead / tim lain
+- **Builder C** (`efn_online_order` `payment_mode`): saya memakai 19.0.1.4.0; versi C ≥ 19.0.1.5.0. Kunci privat
+  `summary["_weight_issues"]` dibuang di `_efn_online_evaluate` dan `_efn_place_sale_order` — jalur baru yang memanggil
+  `_efn_online_summarize` harus membuangnya juga.
+- **BFF**: tambahkan `weight_limit`, `weight_missing` ke allowlist issue (→ `409 cart_has_issues`), terima
+  `weight_kg` nullable di parser katalog, `COMPANY_CODES` = 6 kode, default `ONLINE_CHANNELS` = `GL`.
+- **devsecops**: `scripts/smoke/online_smoke.py` (CHANNEL `RTL`, `company_code` `RTL`/`FNB`), `run-e2e-smoke.sh`
+  (`odoo_api_key_online_rtl`, `channel_code RTL`, `company_code FNB`), `scripts/secrets.list`, `deploy.sh` belum saya
+  sentuh (batas file §12.6) — harus diubah ke `GL`/`PB` bersamaan, karena `odoo_online_smoke.py setup` kini membuat kanal `GL`.
+- Perintah uji: DB baru, `-i efn_core,efn_setup_company,efn_setup_pos,efn_setup_mrp,efn_kitting,efn_online_order,efn_setup_online,efn_pos_loyalty_ledger,efn_pos_otp_gate,efn_pos_payment_gateway,…` `--test-tags efn` (+ `efn_tour` untuk tour OTP/gateway/loyalty yang mengubah kode company), lalu sekali `--with-demo` untuk demo `efn_setup_online`/`efn_kitting`/`efn_setup_mrp`.
+
+---
+
+# G20 paket B — E-38a tahap inti (`efn_pii` 19.0.2.0.0, `efn_pii_pos`, `efn_pii_hr`), 18 Okt 2026
+
+Kontrak: docs/04 §12.5 + ADR-036 §0 (Accepted, menang atas §1–§14), K-36 revisi §0.9; review r12 SEC-136/137/138/140.
+Cakupan file: `efn_pii/**`, `efn_pii_base_vat/**` (README), `efn_pii_pos/**` (baru), `efn_pii_hr/**` (baru),
+`docs/testing/POC_E38_PII_ODOO.md`. Tidak menyentuh `efn_core`/`efn_setup_*`/`efn_online_order`/`efn_pos_refund_origin`.
+Tidak di-commit. **Tanpa shell: test & ruff belum dijalankan.** Tetap di luar CI/produksi (keputusan lead).
+
+## Modul & file
+| Modul | File |
+|---|---|
+| `efn_pii` 19.0.1.0.0 → **19.0.2.0.0** | `models/keyring.py` (format `efnpii2:` + `aad_for(table, col, id)`, `format_of`, `looks_like_marker`, kunci ketiga `odoo_pii_name_key` / env `EFN_ODOO_PII_NAME_KEY_FILE`, `name_token`, `log_alarm`), `models/fields_pii.py` (ditulis ulang: INSERT efnpii1 / UPDATE efnpii2, cache dekripsi per cursor, deteksi plaintext di `_insert_cache`, blind index `=ilike`/`ilike` nilai lengkap, token nama, `_efn_pii_always`), `models/pii_model.py` (baru: `SKIP_TOKEN`, SEC-137 `broken_fields`/`refuse_broken`/`vals_touch_broken`, `rewrite_rows`/`bind_new_records`/`encrypt_existing`, `scan_fetch`/`report_plaintext`, `redact_tracking`), `models/res_partner.py` (ditulis ulang: 10 field, precompute protect-by-default, token + GIN `_auto_init`, `_search_phone_mobile_search`, `_efn_pii_protect`, `_efn_pii_migrate`), `models/res_users.py` (K-a + portal), `models/mail_tracking_value.py`, `models/base_partner_merge.py`, `tools/name_tokens.py`, `tools/shared_vectors.py`, `tests/{common,test_pii_partner,test_pii_tokens,test_pii_sec,test_pii_crypto,test_pii_vectors,test_pii_overhead}.py`, `tests/data/efn_pii_shared_vectors.json`, `README.md`, `__manifest__.py` |
+| `efn_pii_pos` **19.0.1.0.0 (baru)** | `models/pos_order.py` (email/mobile `EfnPiiChar`, semua order, mode terkunci tidak menyalin), `models/pos_config.py` (`get_limited_partners_loading` disaring, `@api.private`), `__init__.py` (`post_init_hook` order lama), `tests/test_pii_pos.py`, `README.md` |
+| `efn_pii_hr` **19.0.1.0.0 (baru)** | `models/hr_employee.py` (`_create_work_contacts` + `SKIP_TOKEN`), `tests/test_pii_hr.py`, `README.md` |
+| `efn_pii_base_vat` | `README.md` (sekarang fail-closed) |
+
+Tidak ada model baru (tanpa ACL/record rule baru); semua override pada model CE. Tidak ada metode publik baru
+(gerbang SEC-58: override `create`/`write`/`copy_data`; `get_limited_partners_loading` diberi `@api.private`).
+
+## Keputusan desain
+1. **Tanpa AbstractModel mixin**: `efn.*` AbstractModel tidak boleh punya metode publik (test SEC-58), jadi logika
+   bersama = fungsi di `pii_model.py`, dipanggil dari override `create`/`write`/`_fetch_query`/`_register_hook` per model.
+2. **Protect-by-default** = `efn_pii_protected` compute stored **precompute** dengan `@api.depends()` kosong:
+   dihitung di create sebelum INSERT (tidak menambah key ke `vals`, jadi kasir non-admin tidak kena AccessError field
+   admin); record lama (install/onchange) mempertahankan nilai DB (SQL), tidak pernah dari aturan.
+3. **K-a**: `SKIP_TOKEN` = subclass `str` (JSON-safe, tidak bisa dibuat JSON-RPC); dicek `type(v) is _ServerToken`.
+   Dipasang hanya di `res.users.create` dan `hr.employee._create_work_contacts`. Partner user portal ditandai segera
+   setelah create/ubah grup (residu tuple mati plaintext di transaksi itu → README).
+4. **efnpii2**: INSERT menulis efnpii1; `bind_new_records` (SQL, transaksi sama, setelah `super().create()`) menulis
+   ulang ke efnpii2. Cache ORM tetap plaintext (dari `_create`), sehingga jendela tidak pernah membaca efnpii1 dari DB.
+5. **Menjadi terlindungi**: nilai lama dienkripsi SQL **dulu**, tracking diredaksi, baru penanda ditulis (context
+   internal `INTERNAL_TOKEN`) — tidak pernah ada plaintext di record bertanda (alarm baca tidak salah tembak).
+6. **Alarm plaintext (SEC-137)**: nilai mentah dikumpulkan di `_insert_cache` selama `_fetch_query` (tumpukan
+   thread-local), diperiksa sekali per fetch; status penanda dari cache field atau satu SQL. Tidak membaca nilai dirty.
+7. **SEC-137 fail-closed**: tolak bila field cakupan rusak DAN record terlindungi terlibat DAN vals menyentuh field itu
+   atau dependensi compute stored-nya (`registry.field_depends`). Partner tidak terlindungi tetap bisa ditulis (POS/B2B).
+8. `email_normalized` memakai kolom `efn_email_bidx` (subkunci `email`; `normalize(email_normalized) == normalize(email)`).
+9. `phone_mobile_search` POS: hasil SQL mentah CE dibuang untuk partner terlindungi (base64 tanpa huruf = deret angka
+   pendek yang bisa cocok kebetulan dengan "3456") + blind index bila HP lengkap.
+10. Pola `ilike` tanpa huruf/angka sama sekali (mis. `%%`) = semua partner bernama (menyimpang kecil dari ADR "tidak
+    cocok", hanya untuk pola kosong; Odoo sendiri mengoptimasi `ilike ''` menjadi TRUE).
+11. `pos.order` mode terkunci: salinan dari partner dikosongkan (penjualan tetap jalan); tulis eksplisit ditolak.
+
+## API Odoo 19.0 yang diverifikasi (WebFetch `raw.githubusercontent.com/odoo/odoo/19.0`, 18 Okt 2026)
+- `odoo/orm/models.py`: `_create` → `convert_to_column_insert(stored[fname], self, stored)` dengan `self` kosong;
+  setelah INSERT `convert_to_cache` + `_update_cache` atas nilai tersimpan; parent `_inherits` dibuat di `create`
+  sebelum `_create`; precompute di `_prepare_create_values`; `_fetch_query` → `field._insert_cache(fetched, values)`;
+  `_fetch_field` memfilter prefetch dengan `_has_field_access`.
+- `odoo/orm/fields.py`: `_get_cache(env)`, `_insert_cache(records, values)` (setdefault), `_get_attrs` (gabung definisi
+  bila `isinstance(self, type(prev))`), `__init_subclass__` `setdefault`; Field tanpa `__slots__`.
+- `odoo/orm/domains.py`: `_to_sql` memanggil `model._check_field_access(field,'read')` (karenanya filter penanda di
+  SQL, bukan domain), `=`→`in`, `!=`→`not in`, `ilike ''`→TRUE, `Domain.OR`, `Domain('id','in',…)`.
+- `base/models/res_partner.py`: field & index (`name` index, `complete_name` compute stored index,
+  `_compute_complete_name` depends), `_order`, `_rec_names_search`, `_commercial_fields`/`_synced_commercial_fields`,
+  `_commercial_sync_from_company`/`_to_descendants`, `_fields_sync` (sinkron alamat dua arah kontak↔induk),
+  `_check_name` SQL; tidak ada `contact_address_complete` stored.
+- `base/wizard/base_partner_merge.py`: `_merge(partner_ids, dst_partner, extra_checks)`, `_update_values` ORM write,
+  field `copy=False` dilewati.
+- `mail/models/res_partner.py`: `find_or_create` & `_find_or_create_from_emails` (`email_normalized =`/`in`),
+  tracking `name`/`email`/`phone`/`vat`/`parent_id`/`contact_address_inline`.
+- `mail/models/mail_tracking_value.py`: `_create_tracking_values(initial, new, col_name, col_info, record)`, m2o
+  `old/new_value_char` = display_name.
+- `phone_validation/models/mail_thread_phone.py`: `_search_phone_mobile_search(operator, value)` → `Domain('id','in',ids)`.
+- `point_of_sale`: `pos.order.email/mobile` compute stored `readonly=False`, `_compute_contact_details`
+  (`@api.depends('partner_id')`), `action_send_receipt` menulis `self.email`; `res.partner._load_pos_data_domain`,
+  `_load_pos_data_fields`, `get_new_partner(config_id, domain, offset)`; `pos.config.get_limited_partners_loading(offset=0)`
+  (param `point_of_sale.limited_customer_count`); `partner_list.js` (server dipanggil saat Enter/scroll; domain
+  `complete_name/ref/company_registry/vat/street/zip/email/phone_mobile_search/barcode` `ilike` kueri mentah).
+- `hr/models/hr_employee.py`: `_create_work_contacts(self)` dipanggil dari `create` & `_inverse_work_contact_details`.
+
+## Asumsi / belum diverifikasi
+- **Semua test & ruff belum dijalankan.** Risiko tertinggi: (a) `@api.depends()` kosong + `precompute=True` diterima
+  registry tanpa warning; (b) penulisan field compute `readonly=True` tanpa inverse lewat `write` (`_efn_pii_protect`);
+  (c) `self.pool.field_depends` ada di 19 (fallback: tolak semua tulis pada model rusak); (d) `_mail_track(self,
+  tracked_fields, initial_values)` dipanggil per record; (e) `patch.object` atribut instance Field di test SEC-137;
+  (f) `TestPoSCommon.create_ui_order_data(..., customer=)` & `open_new_session` (pola test EFN lain); (g)
+  `res.company.create` membuat partner `is_company=True`; (h) `api.private` pada override metode CE publik.
+- Klien POS 19 tidak memanggil `get_limited_partners_loading` via RPC (bila ya: hapus `@api.private`, tambah allowlist).
+- `mail_tracking_value` kolom `field_id`, `mail_message_id`, `old/new_value_char`, `old/new_value_integer`;
+  `ir_model_fields.ttype/relation` (SQL redaksi).
+- Perencanaan kueri GIN pada 200 rb–1 jt baris; kueri gabungan `plain OR token` tetap seq scan pada cabang plaintext.
+
+## Dampak ke modul lain (untuk run gabungan lead)
+- **Kunci global wajib** (`EFN_ODOO_PII_KEY_DIR` berisi tiga file uji) saat install + test gabungan; tanpa itu setiap
+  pembuatan partner perorangan (data modul, `TestPoSCommon.setUpClass`, test EFN lain) gagal — fail-closed disengaja.
+- Test EFN lain yang mungkin terdampak bila `efn_pii` ikut terpasang: urutan partner menurut nama (ciphertext),
+  pencarian partner perorangan dengan potongan tengah kata / potongan HP, `read_group` kota. Grep saya tidak menemukan
+  `ilike` atas field partner di kode/test EFN lain; `efn_privacy` (erasure menulis nama placeholder → token
+  "pelanggan dihapus", bukan kosong; K-36-4 minta token kosong → perlu penyesuaian `efn_privacy` atau ADR).
+- `efn_audit` menyimpan HP/nama ter-mask dari ORM (plaintext di-mask), tidak terdampak format.
+
+## Kriteria (ADR-036 §0.11)
+Ditulis + diuji (setelah run): AC-5, AC-6, AC-7, AC-9, AC-10 kelas P (kecuali `account.move`). Sebagian: AC-1 (angka
+1.000 partner + EXPLAIN GIN; belum 200 rb/`_load_pos_data` nyata), AC-2 (generator + test Odoo; nilai `expected_*`
+null, BFF belum). Belum: AC-3 (Coretax), AC-4 (gerbang CI), AC-8, AC-11 (query/alert harian; log `EFN_PII_KEYRING`
+kode `unbound_ciphertext`/`plaintext_in_protected`/`field_not_encrypted` sudah ada), AC-12 (tour), AC-13, AC-14.
+
+## Sisa pekerjaan E-38a
+1. `efn_pii_l10n_id`: `l10n_id_nik` (E + B), `l10n_id_buyer_document_number` (E), XML Coretax terenkripsi
+   (`ir.attachment.raw` efnpii2, controller unduh, tanpa lampiran chatter), AC-3 PDF/XML identik.
+2. `efn_pii_account`: `account.move.invoice_partner_display_name` (E bila partner terlindungi, penanda turunan
+   `account.move.efn_pii_protected`, rewrite `ilike` → `partner_id IN (token)`), cek `filter_domain` view faktur/PO.
+3. Sorting **O1** didokumentasikan; laporan QWeb yang butuh abjad mengurutkan di Python (belum ada laporan EFN yang
+   diubah). O2 menunggu Q-PII11.
+4. AC-1 ukur `_load_pos_data` nyata + 200 rb partner (staging), AC-2 isi JSON + BFF Jest, tour AC-12 (QA),
+   gerbang CI AC-4 + query residu/alert AC-11 (devsecops), erasure `efn_privacy` mengosongkan `efn_name_tokens`.
+5. E-38b: kelas V/A (login portal opak), `efn_pii_hr` data pribadi + redaksi tracking `hr.version`, `efn_region`.
+
+## Untuk lead / tim lain
+- **BFF**: pakai `tests/data/efn_pii_shared_vectors.json` setelah terisi (cara di README `efn_pii` §Vektor bersama).
+- **devsecops**: env `EFN_ODOO_PII_NAME_KEY_FILE` dipakai persis; `deploy-validate` cukup memeriksa tiga file.
+- **efn_core (lead)**: tidak perlu entri `RPC_ALLOWLIST` baru.
+
+## Putaran perbaikan setelah run nyata lead (66 test: 3 failed 3 error; gabungan 690: 3 failed 4 error, semua efn_pii*)
+`efn_pii_account` (buatan lead, `name = EfnPiiChar()` atas `account/models/partner.py`) tidak diubah. Belum dijalankan ulang.
+1. **Kebocoran nyata tracking** (`test_tracking_never_stores_protected_plaintext`, 'Budi Baru'): akar masalah = label
+   many2one; `col_info` 19.0 (hasil `fields_get`) **tidak** memuat `relation`, sehingga override saya tidak pernah aktif
+   dan `display_name` partner terlindungi tersimpan di `new_value_char` (`parent_id`). Perbaikan
+   `efn_pii/models/mail_tracking_value.py`: pengecekan di titik pembuatan, tanpa daftar statis — (a) field `EfnPiiChar`
+   record terlindungi (penanda atau `_efn_pii_always`) → char/text dikosongkan, apa pun modul yang menambah `tracking=`
+   (mis. `account` `name tracking=True`); (b) nilai many2one berupa partner terlindungi → `Kontak terlindungi #<id>`.
+   Test baru `test_tracking_values_redacted_at_creation_point`. Nilai '0811 0000 0002/0004' di run = HP partner
+   perusahaan kontrol (tidak terlindungi, sah); HP partner terlindungi ('…0001/…0003') sudah tidak ada di run itu.
+2. `*sant*`: kontrak = awalan kata. Partner kedua (`CV Santoso Jaya`) **tidak terlindungi**, dicari SQL standar Odoo yang
+   memperlakukan `*` sebagai literal → tidak cocok. Test diperbaiki (harapan: hanya partner terlindungi), README dicatat.
+3. `efn_pii_pos`: (a) `order.mobile` kosong: `_compute_contact_details` memformat lewat `_phone_format` dengan negara
+   partner/company; nomor lokal tanpa negara → False. Test memakai HP internasional + negara ID (dan tulis eksplisit
+   sebagai cadangan). (b) locked: compute token tertunda dari `setUp` di-flush sesudah kunci dicabut → `flush_all()`
+   sebelum mengunci. (c) `assertRaises` tuple → try/except. (d) `pos_online_payment_self_order.create` butuh
+   `session_id` → test SEC-137 memakai `write` pada order nyata. (e) tearDownClass `_patch_dict` → `_pii_class_env`
+   tidak lagi memakai `patch.dict` (simpan/pulihkan `os.environ` manual via class cleanup).
+
+### Putaran 2 (run gabungan 691: 1 gagal, 'Budi Baru' masih di tracking)
+- Analisis: nilai hanya muncul sebagai nilai BARU (nama lama 'Budi Santoso' tidak ada) dan label m2o sudah teredaksi →
+  sumbernya field turunan non-`EfnPiiChar` di record `holder` (yang menjadi terlindungi), kemungkinan `parent_name`
+  (related `parent_id.name`) atau sejenis; field persisnya belum dikonfirmasi (test kini mencetak `model.field`).
+- Perbaikan umum `mail_tracking_value.py` (`_redact`, dipakai dua lapis):
+  1. record yang di-track terlindungi → **semua** nilai char/text dikosongkan (field apa pun, bukan hanya EfnPiiChar);
+     sisi many2one ke partner terlindungi diberi label;
+  2. record tidak terlindungi → nilai char/text yang sama dengan/memuat plaintext PII (+ display_name) partner
+     terlindungi yang terkait (nilai m2o lama/baru, semua field m2o `res.partner` tersimpan pada record, `parent_id`,
+     `commercial_partner_id`) dikosongkan;
+  3. lapis baru `mail.tracking.value.create`: jalur yang tidak memakai `_create_tracking_values` tetap diredaksi
+     berdasarkan `field_id` + record pesan (`mail_message_id`).
+- Test: query tracking kini join `ir_model_fields` dan pesan gagal menyebut `model.field` yang bocor; tambahan assert
+  hanya `phone`/`parent_id` yang bernilai di partner; `test_tracking_values_redacted_at_creation_point` menguji
+  `parent_name` pada record terlindungi dan pencocokan isi pada record tidak terlindungi yang terkait.
+- Konsekuensi: over-redaksi mungkin (mis. tracking dokumen lain yang kebetulan memuat kota partner terlindungi terkait).
+
+---
+
+# G20 builder C — E-45 bayar di kasir (18 Okt 2026; kontrak docs/04 §12.2 + L-50/L-52/L-55 + ralat L-56)
+
+## Modul & file
+- `efn_online_order` **19.0.1.4.0 → 19.0.1.5.0**: `models/efn_online_common.py` (PAYMENT_MODES, digest KDF kode
+  bayar deterministik per company, `parse_payment_modes`), `models/efn_online_channel.py` (`payment_modes` + constraint
+  + blok katalog), `models/efn_online_order.py` (`payment_mode`, `counter_code_hash`, place, refactor
+  `_efn_apply_payment`, `_efn_counter_find/_payable/_mark_paid`, hook `_efn_payment_journal`, BFF mark_paid &
+  refund_settled menolak counter), `models/efn_online_event_outbox.py` (event `paid` `payment.method`), views kanal &
+  pesanan, `tests/test_online_g20_payment_mode.py` (baru), `tests/test_online_api.py` (satu assert kunci blok channel),
+  `tests/__init__.py`, `README.md`, `__manifest__.py`. Kunci privat `_weight_issues` tidak tersentuh (tidak ada kunci
+  privat baru di summary).
+- `efn_online_pos_counter` **19.0.1.0.0 (baru, LGPL-3, auto_install `efn_online_order` + `point_of_sale`)**: models
+  (`res_company`, `efn_online_channel`, `efn_online_order`, `pos_config`, `pos_order`, `pos_order_line`,
+  `efn_online_counter_lookup`, `efn_online_counter_settlement`), `security/` (ACL + 2 record rule), `data/` (param
+  rate limit), `views/` (daftar audit), `static/src/**` (tombol, dialog, kunci baris, guard layar bayar),
+  `static/tests/tours/efn_counter_pay_tour.js`, `tests/` (`common.py`, `test_online_pos_counter.py`,
+  `test_counter_tour.py`), `README.md`. `hooks.py` tidak dipakai (tanpa shell tidak bisa dihapus — mohon hapus).
+- `efn_core/tests/test_rpc_surface.py`: satu entri `("pos.config", "efn_online_counter_lookup")`.
+
+## Perubahan json2 persis
+- `efn_online_catalog` → `channel.payment_modes: string[]` (kanonik `["qris"]` | `["counter"]` | `["qris","counter"]`;
+  default kanal `qris`).
+- `efn_online_place(channel_code, order)` → kunci opsional `order.payment_mode: "qris"|"counter"` (tidak ada = qris)
+  dan `order.counter_code` (wajib bila counter, dilarang bila qris, alfabet §10.2, 8 karakter, ≠ `pickup_code`).
+  Kanal tidak mengizinkan / input salah / digest bentrok dengan pesanan terbuka → `efn_online:invalid_input`.
+  `payment_mode: "counter"` masuk `payload_sha256`; `counter_code` tidak. **Hasil place tidak berubah** (L-56: tidak
+  ada `counter_code` di hasil).
+- `efn_online_mark_paid` & `efn_online_refund_settled` untuk pesanan counter → `efn_online:invalid_state`.
+- Event `paid` pesanan counter: `"payment": {"method": "counter"}` (QRIS: kunci tidak ada). State event/alur:
+  `paid` → `confirmed` | `stock_short` | `review`; bayar POS setelah batal/kedaluwarsa → `review` dengan
+  `review_reason` `counter_paid_after_cancel` / `counter_paid_after_expiry` (event `review`, setelah `cancelled` bila
+  sudah batal) — **BFF perlu menerima `review` sesudah `cancelled`** untuk kasus ini.
+- RPC baru POS `pos.config.efn_online_counter_lookup(code)` → `{order_label, amount_payable}` atau
+  `{error_code, message}` (`invalid_format|not_found|not_payable|rate_limited|disabled`).
+
+## Test (tag `efn`; tour `efn_tour`) — BELUM DIJALANKAN (tanpa shell; lead menjalankan)
+- `efn_online_order/tests/test_online_g20_payment_mode.py` (7 test) + assert blok channel di `test_online_api.py`.
+- `efn_online_pos_counter/tests/test_online_pos_counter.py` (17 test, docs/08 §11.8 no. 8): kode salah/PT lain/outlet
+  lain, rate limit, kode tidak di-log, kedaluwarsa/batal, akses RPC, nominal/qty/baris/pelanggan/label diubah, tanpa
+  klaim, dobel sync idempoten + order POS kedua ditolak, bayar telat → review, kliring = 0 setelah tutup sesi (jual,
+  dan jual + refund), refund POS hanya setelah refund online / batal, SEC-105 (tanpa `sale_order_origin_id`).
+- `test_counter_tour.py` → tour `EfnOnlineCounterPayTour`.
+- `efn_pos_refund_origin` manager_approval tidak relevan (refund pelunasan selalu ber-`refunded_orderline_id`).
+
+## API 19.0 diverifikasi (WebFetch raw 19.0, 18 Okt 2026)
+`pos.order.sync_from_ui` (cari per uuid; order non-draft diabaikan = idempotensi), `_process_order(order,
+existing_order)`, `_process_saved_order(draft)` (paid → picking → faktur); `pos.config._get_special_products` +
+`_pos_special_products_ids`; `product.template._load_pos_data_search_read` menambah special product tanpa filter
+`available_in_pos`; `account.payment` outstanding = `payment_method_line_id.payment_account_id` (move hanya bila ada),
+domain `payment_account_id` `asset_current|liability_current`; frontend `addLineToCurrentOrder(vals, opts, configure)`
+(`price_unit` → `price_type manual`, tanpa merge), `PosOrderline.setQuantity/setUnitPrice/setDiscount`,
+`pos.data.network.offline`; `TestPoSCommon.create_ui_order_data/open_new_session`, tutup sesi
+`post_closing_cash_details` + `close_session_from_ui`.
+
+## Asumsi / belum diverifikasi
+- Seluruh test & tour belum dijalankan; ruff belum dijalankan.
+- Penyembunyian produk pelunasan dari layar produk (special product + `available_in_pos=False`) dan
+  `ProductScreen.clickControlButton` untuk tombol di menu "lainnya" — dari source/pola tour lain, belum runtime.
+- Akun kliring `asset_current` + `reconcile=True`; pembayaran faktur berstatus `in_process` (invoice `in_payment`)
+  sama seperti jurnal titipan — test menerima `paid|in_payment`.
+- Pembuatan jurnal Bank otomatis membuat akun bank default + metode manual masuk/keluar (dibutuhkan; bila tidak ada →
+  `ValidationError`).
+- Salt digest memakai `database.secret` (ada di setiap DB Odoo). Mengganti `database.secret` membuat kode bayar
+  pesanan terbuka tidak bisa dicari (umur ≤ 70 menit) — catat di runbook rotasi.
+- Refund parsial pesanan counter lewat POS tidak didukung (lihat README jembatan).
+
+## Untuk lead / tim lain
+- **efn-odoo-functional (`efn_setup_online`)**: set `payment_modes` kanal pilot = `counter` (L-55) dan tinjau data
+  kliring PLACEHOLDER per PT (akun `1199xx`, jurnal `KKSR`, produk *Pelunasan Pesanan Online*).
+- **BFF**: kirim `counter_code` di place (sudah); jangan panggil `mark_paid`/`refund_settled` untuk counter; terima
+  `review` setelah `cancelled` (bayar setelah batal); refund counter = BFF `efn_online_refund` lalu kasir me-refund
+  order POS pelunasan (settle dicatat Odoo, terlihat di `efn_online_status.refunds[].state`).
+- **Security r13**: digest deterministik (bukan salt acak) adalah keputusan sadar agar lookup tanpa memilih pesanan.
+
+---
+
+# G20 putaran perbaikan r13 — SEC-145 (L-59), SEC-147, SEC-151 (19 Okt 2026, branch `chore/wave-20`)
+
+Cakupan: `efn_online_pos_counter` 19.0.1.0.0 → **19.0.1.1.0**, `efn_pos_refund_origin` 19.0.1.3.0 → **19.0.1.4.0**.
+Tanpa commit; tanpa shell — **test belum dijalankan** (lead menjalankan).
+
+## Modul & file
+- `efn_online_pos_counter`: `models/efn_online_counter_refund_auth.py` (baru), `models/efn_online_order.py` (RPC
+  `efn_online_counter_refund_authorize`), `models/efn_online_counter_settlement.py` (`refund_auth_ids`),
+  `models/pos_order.py` (`_efn_counter_plan_refund`, `_efn_counter_apply`), `models/__init__.py`,
+  `security/ir.model.access.csv`, `security/efn_online_pos_counter_security.xml`, `views/efn_online_pos_counter_views.xml`,
+  `tests/test_online_pos_counter.py`, `README.md`, `__manifest__.py`.
+- `efn_pos_refund_origin`: `models/pos_order.py`, `wizard/efn_pos_return_pin_wizard.py`,
+  `static/src/app/screens/payment_screen/payment_screen_patch.js`, `migrations/19.0.1.4.0/post-migrate.py` (baru),
+  `tests/test_return_approval.py`, `README.md`, `__manifest__.py`.
+
+## Keputusan
+- **SEC-145 — premis tugas dikoreksi.** "initiator `bff` = sudah disetujui" tidak benar: `online-admin.service.ts`
+  `refund()` memanggil Odoo `efn_online_refund` (refund `requested`, initiator `bff`) **sebelum** approver
+  (`approval_required` bila nominal ≥ `onlineCsRefundApprovalMinIdr`, default 0 = semua). Jadi menyaring initiator
+  saja tetap membuka celah CS + kasir. Odoo tidak punya sinyal persetujuan → ditambah **otorisasi eksplisit dari BFF**
+  (rekomendasi r13 no. 1): RPC `efn.online.order.efn_online_counter_refund_authorize(channel, platform_order_ref,
+  {idempotency_key, refund_id, refund_ref|null, amount})` → `efn.online.counter.refund.auth`. Refund POS diterima hanya
+  bila otorisasi belum terpakai cocok nominal: (a) bertaut refund `requested` (initiator `bff` atau `odoo` — `odoo`
+  hanya setelah approver BFF), atau (b) `refund_ref: null` untuk pesanan `cancelled` tanpa faktur (tidak lagi otomatis).
+  Tanpa otorisasi: initiator `odoo` (ops-cancel Sales Manager) **ditolak**, initiator `bff` sebelum approver ditolak.
+  Bila lead ingin initiator `odoo` ditolak mutlak (bahkan setelah approver), cukup satu filter di
+  `_efn_counter_plan_refund`; saya tidak memilihnya karena dana ops-cancel lalu tidak punya jalan keluar via POS.
+- **Ikatan outlet:** gudang config refund = gudang config pelunasan (`settlement.config_id`), tanpa pengecualian
+  POS manager. Lebih longgar dari "config persis" agar terminal lain/pengganti di outlet sama tetap jalan; lebih ketat
+  dari "company sama + POS manager". Outlet tutup → SOP Finance + `online-refund-settle`.
+- **SEC-147:** order campuran **ditolak** (server, semua mode, persetujuan yang ada tidak dikonsumsi) + blokir dini di
+  JS (`efnIsMixedReturn`). Tidak memecah nominal per porsi (lebih rumit, rawan salah alokasi).
+- **SEC-151:** `create`/`write` wizard membuang `pin`/`pin_confirm` dan menulis `pin_hash` (pbkdf2) atau `pin_error`;
+  `pin_hash`/`pin_error` dari klien selalu dihitung ulang. "write False di finally" tidak cukup: `web_save` sudah
+  commit sebelum `action_apply`, dan rollback `action_apply` yang gagal juga membatalkan pengosongan. Migrasi
+  mengosongkan teks PIN baris lama.
+
+## Test baru / diubah (tag `efn`, BELUM DIJALANKAN)
+- `efn_online_pos_counter/tests/test_online_pos_counter.py`: `test_pos_refund_rejected_before_bff_approval`,
+  `test_pos_refund_rejected_for_odoo_initiated_refund` (ditolak tanpa otorisasi, tidak ada event `refund_settled`,
+  diterima setelah otorisasi), `test_pos_refund_rejected_from_other_outlet` (gudang lain ditolak + log
+  `refund_other_outlet`; terminal lain gudang sama diterima), `test_authorize_rpc_rules`; diubah:
+  `test_paid_after_cancel_goes_to_review_then_pos_refund` (wajib otorisasi `refund_ref: null`),
+  `test_pos_refund_requires_approved_online_refund` (otorisasi; event `refund_settled` tetap 1, kliring 0).
+- `efn_pos_refund_origin/tests/test_return_approval.py`: `test_mixed_return_rejected_in_every_mode`,
+  `test_split_after_mixed_rejection_works`, `test_pin_never_stored_after_failed_apply` (baris mentah via SQL
+  `row_to_json`: mismatch/weak/format/identity kedaluwarsa/bukan Store Manager), 
+  `test_pin_never_stored_after_successful_apply_and_retry`, `test_pin_hash_injection_ignored`.
+
+## Wajib di luar cakupan saya (blokir 0 failed)
+- **`efn_core/tests/test_rpc_surface.py` `RPC_ALLOWLIST`** — tanpa entri ini `test_public_methods_are_allowlisted` dan
+  `test_installed_models_new_public_methods_allowlisted` GAGAL:
+  `("efn.online.order", "efn_online_counter_refund_authorize"): "_efn_online_check_caller + FOR UPDATE + idempotency_key + refund requested/cancel tanpa faktur + nominal persis",`
+- **BFF:** panggil RPC itu (via odoo-rpc-gateway, tambah ke allowlist metode gateway) tepat saat refund counter
+  dipindah ke `manual_required`/`counter_refund_via_pos` (`online-saga.service.ts` ~baris 510-516), dengan
+  `refund_id` = id refund BFF, `refund_ref` = `odoo_refund_ref` (null untuk kompensasi tanpa nota kredit), kunci
+  `online:counter_refund_auth:<refund_id>`; error transien → retry, bisnis → anomali critical. Sampai ada, semua
+  refund POS counter ditolak (fail-closed). Rekomendasi r13 no. 4 (alert `refund_settled_rejected`/`unapproved`
+  critical) juga BFF.
+- **Kontrak docs/04 §12.2:** catat RPC baru (L-59) dan perubahan aturan refund (outlet + otorisasi).
+
+## Belum diverifikasi
+- Semua test di atas belum dijalankan. Titik rawan: `pos.config.create` minimal (nama + company + picking type gudang
+  kedua) di `_other_outlet_config` — bila Odoo 19 menuntut field lain, test outlet gagal di setup (bukan logika);
+  `warehouse.pos_type_id` diasumsikan ada untuk gudang yang dibuat setelah `point_of_sale` terpasang (fallback
+  `out_type_id`); psycopg2 mengembalikan `row_to_json(...)::json` sebagai dict.
+- Alur form wizard di web client 19 (`web_save` → baca ulang field PIN kosong → `action_apply`) dibaca dari pola,
+  belum diuji tour. Blokir order campuran di JS belum diuji tour.

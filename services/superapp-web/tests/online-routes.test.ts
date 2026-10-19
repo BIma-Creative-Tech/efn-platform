@@ -59,7 +59,7 @@ describe('katalog publik', () => {
     bffFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      data: { items: [{ channel_code: 'RTL', company_code: 'RTL', name: 'Supermarket', fulfilment: { pickup: true }, outlets: [], secret: 1 }] },
+      data: { items: [{ channel_code: 'GL', company_code: 'GL', name: 'Supermarket', fulfilment: { pickup: true }, outlets: [], secret: 1 }] },
     });
     const res = await getChannels(req('/api/catalog/channels'));
     expect(res.status).toBe(200);
@@ -71,15 +71,15 @@ describe('katalog publik', () => {
   });
   it('products: query dibangun ulang; parameter sisipan tidak diteruskan', async () => {
     bffFetch.mockResolvedValue({ ok: true, status: 200, data: { items: [], next_cursor: null, catalog_synced_at: null } });
-    await getProducts(req('/api/catalog/products?channel=RTL&q=kopi&limit=999&member_id=x&cursor=a%26b'));
-    expect(bffFetch.mock.calls[0]![0]).toBe('/v1/catalog/products?channel=RTL&q=kopi&limit=50');
+    await getProducts(req('/api/catalog/products?channel=GL&q=kopi&limit=999&member_id=x&cursor=a%26b'));
+    expect(bffFetch.mock.calls[0]![0]).toBe('/v1/catalog/products?channel=GL&q=kopi&limit=50');
     expect((await getProducts(req('/api/catalog/products?channel=rtl'))).status).toBe(400);
   });
   it('detail: id bukan integer -> 404 tanpa BFF; BFF 404 -> 404', async () => {
-    expect((await getProduct(req('/api/catalog/products/abc?channel=RTL'), params({ id: 'abc' }))).status).toBe(404);
+    expect((await getProduct(req('/api/catalog/products/abc?channel=GL'), params({ id: 'abc' }))).status).toBe(404);
     expect(bffFetch).not.toHaveBeenCalled();
     bffFetch.mockResolvedValue(fail(404, 'not_found'));
-    const res = await getProduct(req('/api/catalog/products/11?channel=RTL'), params({ id: '11' }));
+    const res = await getProduct(req('/api/catalog/products/11?channel=GL'), params({ id: '11' }));
     expect(res.status).toBe(404);
     expect((await res.json()).error.message).toBe('Data tidak ditemukan.');
   });
@@ -93,11 +93,11 @@ describe('katalog publik', () => {
   });
   it('stok: no-store, validasi ids', async () => {
     bffFetch.mockResolvedValue({ ok: true, status: 200, data: { items: [{ product_id: 1, status: 'in_stock', qty: 9 }] } });
-    const res = await getStock(req('/api/catalog/stock?channel=RTL&outlet=TOKO-01&ids=1,1,2'));
+    const res = await getStock(req('/api/catalog/stock?channel=GL&outlet=TOKO-01&ids=1,1,2'));
     expect(res.headers.get('cache-control')).toBe('no-store');
     expect(await res.json()).toEqual({ items: [{ product_id: 1, status: 'in_stock' }] });
-    expect(bffFetch.mock.calls[0]![0]).toBe('/v1/catalog/stock?channel=RTL&outlet=TOKO-01&ids=1%2C2');
-    expect((await getStock(req('/api/catalog/stock?channel=RTL&outlet=TOKO-01&ids=1,x'))).status).toBe(400);
+    expect(bffFetch.mock.calls[0]![0]).toBe('/v1/catalog/stock?channel=GL&outlet=TOKO-01&ids=1%2C2');
+    expect((await getStock(req('/api/catalog/stock?channel=GL&outlet=TOKO-01&ids=1,x'))).status).toBe(400);
   });
   it('gambar: stream image/jpeg dari BFF dengan cache immutable', async () => {
     bffBaseUrl.mockReturnValue('https://api-gateway:3000');
@@ -186,13 +186,13 @@ describe('keranjang', () => {
     const body = {
       version: 1,
       amount_payable_total: 1,
-      groups: [{ channel_code: 'RTL', outlet_code: 'TOKO-01', fulfilment: 'pickup', lines: [{ product_id: 11, qty: 2, price_unit_incl: 1 }] }],
+      groups: [{ channel_code: 'GL', outlet_code: 'TOKO-01', fulfilment: 'pickup', lines: [{ product_id: 11, qty: 2, price_unit_incl: 1 }] }],
     };
     const res = await putCart(req('/api/cart', { method: 'PUT', body }));
     expect(res.status).toBe(200);
     const [path, opts] = bffFetch.mock.calls[0]!;
     expect(path).toBe('/v1/cart');
-    expect(opts.json).toEqual({ version: 1, groups: [{ channel_code: 'RTL', outlet_code: 'TOKO-01', fulfilment: 'pickup', lines: [{ product_id: 11, qty: 2 }] }] });
+    expect(opts.json).toEqual({ version: 1, groups: [{ channel_code: 'GL', outlet_code: 'TOKO-01', fulfilment: 'pickup', lines: [{ product_id: 11, qty: 2 }] }] });
   });
   it('PUT: tanpa/lain Origin -> 403; body > 16 KB -> 413; JSON rusak -> 400', async () => {
     expect((await putCart(req('/api/cart', { method: 'PUT', body: { version: 0, groups: [] }, origin: null }))).status).toBe(403);
@@ -228,7 +228,7 @@ describe('keranjang', () => {
         valid_until: null,
         cart_version: 1,
         quote_hash: 'h',
-        groups: [{ channel_code: 'RTL', company_code: 'RTL', outlet_code: 'TOKO-01', fulfilment: 'pickup', quote_hash: 'h', lines: [], tax_groups: [], amount_total: 0, amount_payable: 0, issues: [] }],
+        groups: [{ channel_code: 'GL', company_code: 'GL', outlet_code: 'TOKO-01', fulfilment: 'pickup', quote_hash: 'h', lines: [], tax_groups: [], amount_total: 0, amount_payable: 0, issues: [] }],
         amount_payable_total: 0,
       },
     });
@@ -244,7 +244,7 @@ describe('keranjang', () => {
     data: {
       quote_id: QUOTE_ID,
       cart_version: 1,
-      groups: [{ channel_code: 'RTL', company_code: 'RTL', outlet_code: 'TOKO-01', fulfilment: 'pickup', lines: [], tax_groups: [], amount_total: 0, amount_payable: 0, issues: [] }],
+      groups: [{ channel_code: 'GL', company_code: 'GL', outlet_code: 'TOKO-01', fulfilment: 'pickup', lines: [], tax_groups: [], amount_total: 0, amount_payable: 0, issues: [] }],
       amount_payable_total: 0,
       promo: { applied: ['HEMAT5'], invalid: [] },
     },
@@ -276,7 +276,7 @@ describe('keranjang', () => {
 
 describe('katalog per brand (§11.3)', () => {
   it('channels?brand= valid diteruskan ke BFF; format salah -> 400 tanpa BFF', async () => {
-    bffFetch.mockResolvedValue({ ok: true, status: 200, data: { items: [{ channel_code: 'RTL-GL', company_code: 'RTL', name: 'GL', brand_code: 'GL', fulfilment: {}, outlets: [] }] } });
+    bffFetch.mockResolvedValue({ ok: true, status: 200, data: { items: [{ channel_code: 'GL', company_code: 'GL', name: 'GL', brand_code: 'GL', fulfilment: {}, outlets: [] }] } });
     const res = await getChannels(req('/api/catalog/channels?brand=GL'));
     expect(res.status).toBe(200);
     expect(bffFetch.mock.calls[0]![0]).toBe('/v1/catalog/channels?brand=GL');
@@ -396,7 +396,7 @@ describe('status, batal, kode ambil', () => {
     const log = vi.spyOn(console, 'log');
     const err = vi.spyOn(console, 'error');
     const warn = vi.spyOn(console, 'warn');
-    bffFetch.mockResolvedValue({ ok: true, status: 200, data: { items: [{ channel_code: 'RTL', outlet_code: 'TOKO-01', outlet_name: 'Toko', pickup_code: 'ABCD-EFGH' }] } });
+    bffFetch.mockResolvedValue({ ok: true, status: 200, data: { items: [{ channel_code: 'GL', outlet_code: 'TOKO-01', outlet_name: 'Toko', pickup_code: 'ABCD-EFGH' }] } });
     const res = await getPickup(req(`/api/orders/${ID}/pickup-code`, { site: 'same-origin' }), params({ id: ID }));
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toMatch(/^no-store/);

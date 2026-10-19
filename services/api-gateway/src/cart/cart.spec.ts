@@ -10,8 +10,8 @@ import { QuoteService, purgeMemberOnlineRedis, quoteIndexKey, quoteKey } from '.
 
 const M = '8d7b5a1e-2c3f-4a5b-9c8d-7e6f5a4b3c2d';
 const CH: ChannelInfo = {
-  channel_code: 'RTL',
-  company_code: 'RTL',
+  channel_code: 'GL',
+  company_code: 'GL',
   brand_code: null,
   name: 'Retail',
   fulfilment: { pickup: true, delivery: false },
@@ -21,13 +21,13 @@ const CH: ChannelInfo = {
   ],
 };
 const catalog = {
-  channel: async (c: string) => (c === 'RTL' ? CH : null),
+  channel: async (c: string) => (c === 'GL' ? CH : null),
   productsByIds: async (_c: string, ids: readonly number[]) =>
     new Map(ids.filter((i) => i >= 11 && i <= 14).map((i): [number, ProductSummary] => [i, { product_id: i, name: `P${i}`, uom: '', category_id: 1, image_sha: null, price_incl: 1, price_excl: 1, tax_labels: [], max_qty: 5 }])),
 } as unknown as CatalogService;
 
 function group(lines: Record<string, unknown>[], extra: Record<string, unknown> = {}) {
-  return { channel_code: 'RTL', outlet_code: 'TOKO-01', fulfilment: 'pickup', lines, ...extra };
+  return { channel_code: 'GL', outlet_code: 'TOKO-01', fulfilment: 'pickup', lines, ...extra };
 }
 
 function setup() {
@@ -68,7 +68,7 @@ describe('Cart (§10.3.3)', () => {
   it('kanal/outlet/fulfilment divalidasi; qty > max_qty produk → 400', async () => {
     const ctx = setup();
     const put = (g: Record<string, unknown>) => ctx.cart.put(M, parseCartPut({ version: 0, groups: [g] }));
-    expect((await catchApiError(() => put(group([{ product_id: 11, qty: 1 }], { channel_code: 'FNB' })))).body).toMatchObject({ error: { code: 'item_unavailable' } });
+    expect((await catchApiError(() => put(group([{ product_id: 11, qty: 1 }], { channel_code: 'PB' })))).body).toMatchObject({ error: { code: 'item_unavailable' } });
     expect((await catchApiError(() => put(group([{ product_id: 11, qty: 1 }], { outlet_code: 'TOKO-02' })))).body).toMatchObject({ error: { code: 'item_unavailable' } });
     expect((await catchApiError(() => put(group([{ product_id: 11, qty: 1 }], { fulfilment: 'delivery' })))).getStatus()).toBe(422);
     expect((await catchApiError(() => put(group([{ product_id: 11, qty: 6 }])))).getStatus()).toBe(400);
@@ -76,7 +76,7 @@ describe('Cart (§10.3.3)', () => {
 
   it('format Redis: hash cart:<member_id> v/b; data rusak → kosong', () => {
     expect(cartKey(M)).toBe(`cart:${M}`);
-    expect(parseStored('3', '[{"channel_code":"RTL"}]').version).toBe(3);
+    expect(parseStored('3', '[{"channel_code":"GL"}]').version).toBe(3);
     expect(parseStored('x', '{bad')).toEqual({ version: 0, groups: [] });
   });
 });
@@ -86,7 +86,7 @@ describe('Quote (§10.3.4)', () => {
     const ctx = setup();
     await ctx.cart.put(M, parseCartPut({ version: 0, groups: [group([{ product_id: 11, qty: 2 }])] }));
     const q = await ctx.quotes.quote(M);
-    expect(q.groups[0]).toMatchObject({ company_code: 'RTL', amount_payable: 159_800, lines: [expect.objectContaining({ product_id: 11, qty: 2, subtotal_incl: 159_800 })] });
+    expect(q.groups[0]).toMatchObject({ company_code: 'GL', amount_payable: 159_800, lines: [expect.objectContaining({ product_id: 11, qty: 2, subtotal_incl: 159_800 })] });
     expect(JSON.stringify(q)).not.toContain('quote_hash');
     const stored = JSON.parse((await ctx.kv.get(quoteKey(q.quote_id)))!);
     expect(stored.groups[0].quote_hash).toMatch(/^[0-9a-f]{64}$/);
@@ -103,6 +103,38 @@ describe('Quote (§10.3.4)', () => {
     expect((await catchApiError(() => ctx.quotes.quote(M))).body).toMatchObject({ error: { code: 'online_unavailable' } });
     ctx.odoo.failNext.set('quote', new OdooRpcError('business', 'not_found'));
     expect((await catchApiError(() => ctx.quotes.quote(M))).body).toMatchObject({ error: { code: 'item_unavailable' } });
+  });
+});
+
+describe('G20 §12.3: issue batas berat diteruskan ke klien (allowlist weight_limit / weight_missing)', () => {
+  it('Σ berat × qty > batas kanal → { product_id: null, code: "weight_limit" }; di bawah batas → tanpa issue', async () => {
+    const ctx = setup();
+    ctx.odoo.maxOrderWeightKg.set('GL', 8); // produk 11 = 5 kg (demo)
+    await ctx.cart.put(M, parseCartPut({ version: 0, groups: [group([{ product_id: 11, qty: 2 }])] }));
+    const over = await ctx.quotes.quote(M);
+    expect(over.groups[0].issues).toEqual([{ product_id: null, code: 'weight_limit' }]);
+    await ctx.cart.put(M, parseCartPut({ version: 1, groups: [group([{ product_id: 11, qty: 1 }])] }));
+    expect((await ctx.quotes.quote(M)).groups[0].issues).toEqual([]);
+  });
+
+  it('produk tanpa berat saat batas aktif: block → weight_missing (product_id); ignore → tanpa issue; batas mati → tanpa issue', async () => {
+    const ctx = setup();
+    ctx.odoo.weightKg.set(12, null);
+    await ctx.cart.put(M, parseCartPut({ version: 0, groups: [group([{ product_id: 11, qty: 1 }, { product_id: 12, qty: 1 }])] }));
+    expect((await ctx.quotes.quote(M)).groups[0].issues).toEqual([]); // batas GL mati (0)
+    ctx.odoo.maxOrderWeightKg.set('GL', 50);
+    expect((await ctx.quotes.quote(M)).groups[0].issues).toEqual([{ product_id: 12, code: 'weight_missing' }]);
+    ctx.odoo.weightMissingPolicy.set('GL', 'ignore');
+    expect((await ctx.quotes.quote(M)).groups[0].issues).toEqual([]);
+  });
+
+  it('quote_hash berubah bila issue berat berubah (issue masuk quote_hash, §12.3)', async () => {
+    const ctx = setup();
+    await ctx.cart.put(M, parseCartPut({ version: 0, groups: [group([{ product_id: 11, qty: 2 }])] }));
+    const a = JSON.parse((await ctx.kv.get(quoteKey((await ctx.quotes.quote(M)).quote_id)))!).groups[0].quote_hash;
+    ctx.odoo.maxOrderWeightKg.set('GL', 8);
+    const b = JSON.parse((await ctx.kv.get(quoteKey((await ctx.quotes.quote(M)).quote_id)))!).groups[0].quote_hash;
+    expect(a).not.toBe(b);
   });
 });
 

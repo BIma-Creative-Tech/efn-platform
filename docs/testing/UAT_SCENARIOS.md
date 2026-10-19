@@ -401,6 +401,8 @@ Staging: `APP_ENV=staging` (image production), `PAYMENT_PROVIDER=mock`, `CONSENT
 
 ## H. Pilot online ritel G19 — reservasi 1 jam, kode promo, promo per brand, Bacha dua PT (docs/04 §11, L-27..L-39)
 
+> **Catatan G20 (docs/04 §12.1, L-48):** kode kanal di bagian H ditulis dengan kode G19. Setelah G20 baca: `RTL-GL` = **`GL`**, `RTL-BACHA` = **`BCR`**, `FNB-BACHA` = **`BCF`**, `FNB-PB` = **`PB`**; perintah rotasi `efn-rotate-online-key --channel=GL`. Perilaku skenario tidak berubah.
+
 Ditambah oleh efn-qa-engineer 2026-10-18. **Belum dijalankan** (QA tanpa shell; skenario ini dasar UAT pilot dengan klien). Dijalankan di staging dengan kanal brand diaktifkan (`RTL-GL`, `RTL-BACHA`, `FNB-BACHA`; data outlet/SKU dari klien), `ONLINE_PAYMENT_TIMEOUT_SECONDS=3600` **setelah** Odoo `payment_timeout_minutes=70` (runbook `online-orders.md#aktivasi-reservasi-1-jam`), `ONLINE_MAX_OPEN_ORDERS_PER_MEMBER=2`, pembayaran QRIS mock/sandbox.
 
 **Data uji khusus H**
@@ -504,3 +506,112 @@ Ditambah oleh efn-qa-engineer 2026-10-18. **Belum dijalankan** (QA tanpa shell; 
 - **Then** `503 online_unavailable` (pesan ramah); katalog dari salinan tetap tampil; POS toko tetap berjalan; Ollama/OCR mati tidak berpengaruh
 - **When** API key kanal `RTL-GL` dirotasi (`efn-rotate-online-key --channel=RTL-GL`)
 - **Then** kanal `RTL-BACHA` dan `FNB-BACHA` tetap melayani tanpa gangguan (satu user teknis per kanal, L-37); mencoba menghubungkan user teknis yang sama ke dua kanal ditolak Odoo
+
+---
+
+## I. Gelombang 20 — bayar di kasir, batas berat, retur tanpa struk Store Manager, enam entitas (docs/04 §12, L-48..L-58)
+
+Ditambah oleh efn-qa-engineer 2026-10-19. **Belum dijalankan** (QA tanpa shell/runtime; sebagian diotomasi di `scripts/smoke/run-e2e-smoke.sh` tahap `q` dan `l` langkah 8b'). Staging: kanal `GL`, `PB`, `BCR`, `BCF`; `ONLINE_PAYMENT_METHODS=counter` + `PAYMENT_PROVIDER=disabled` (pilot tanpa vendor, L-55); `ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=1`; batas bayar BFF 3600 s / Odoo 70 menit.
+
+**Data uji khusus I**
+- Outlet Uji Retail PT Grand Lucky (`GL`) dengan POS Uji di gudang outlet itu; kasir POS Uji (grup POS user, bukan admin); **dua** Store Manager uji (grup Manajer POS, PIN diatur lewat wizard "Atur PIN persetujuan retur"); SKU "Beras 5 kg" (berat 5 kg), "Tas" (tanpa berat), stok cukup.
+- Member A dan B (nomor HP uji). Kanal GL memakai `payment_modes = qris,counter`; kanal PB hanya `qris` (bila vendor belum ada, kanal PB tidak dapat dipesan).
+- Pemeriksaan umum: log BFF/Odoo/Traefik/POS **tidak** memuat kode bayar, kode ambil, PIN, atau HP utuh; respons lookup POS tidak memuat nama/HP pelanggan.
+
+### I1. Bayar di kasir — alur normal
+- **Given** member A, keranjang 2 × Beras di kanal `GL`; kanal mengiklankan `counter`
+- **When** A memilih "Bayar di kasir" lalu checkout
+- **Then** `201`, status `awaiting_counter_payment`, layar menampilkan **kode bayar** (format `ABCD-EFGH`) dan batas waktu; tidak ada QR/payment intent; kode bayar **berbeda** dari kode ambil; kode ambil belum bisa dibuka (`pickup_code_unavailable`)
+- **And** di Odoo SO `sale` + stok tercadang, hanya **hash** kode bayar tersimpan (kode asli tidak terbaca di Odoo maupun log)
+- **When** A membuka ulang halaman pesanan / daftar pesanan
+- **Then** halaman pesanan masih memuat kode bayar; daftar pesanan tidak memuat kode; kode tidak ada di URL, localStorage, atau analytics
+- **When** kasir menekan "Bayar pesanan online", mengetik kode (huruf kecil/dengan strip diterima), POS menampilkan **hanya** nomor pesanan + nominal; kasir menerima tunai/EDC/QRIS statis dan menyelesaikan
+- **Then** pesanan Odoo `confirmed`, faktur lunas di jurnal "Kliring Bayar di Kasir" (bukan titipan Holding); saldo akun kliring = 0 setelah sesi POS ditutup; BFF: order `fulfilling`, bagian `confirmed`, kode bayar dihapus, kode ambil tampil; A mendapat notifikasi
+- **And** barang keluar tetap lewat wizard serah terima dengan **kode ambil** (SEC-105); kode bayar tidak dapat dipakai lagi (lookup → "tidak ditemukan")
+- **Negatif — sinkron ulang**: order POS dikirim dua kali (uuid sama) → satu faktur, satu event `paid`
+- **Negatif — dua order POS untuk pesanan yang sama** (uuid berbeda) → order POS kedua ditolak ("sudah dilunasi")
+
+### I2. Bayar di kasir — kedaluwarsa tanpa bayar
+- **Given** pesanan I1 tidak dibayar
+- **When** lewat 60 menit (BFF) / 70 menit (Odoo)
+- **Then** order BFF `expired`, SO batal, stok pulih, kode bayar dihapus; **tanpa refund** (tidak ada uang masuk); kasir yang mengetik kode lama mendapat pesan "tidak ditemukan/tidak dapat dibayar" dan tidak ada order POS pelunasan terbentuk
+- **When** A membatalkan sendiri pesanan `awaiting_counter_payment` sebelum kedaluwarsa
+- **Then** status `cancelled`, stok pulih, tanpa refund; kode bayar tidak berlaku
+
+### I3. Bayar setelah dibatalkan / kedaluwarsa → `review` (L-56/L-57)
+- **Given** kasir sudah memasukkan kode (lookup sukses di POS), lalu A membatalkan pesanan di aplikasi
+- **When** kasir tetap menyelesaikan pembayaran (uang diterima)
+- **Then** order POS tersinkron (dana tercatat), Odoo pesanan `review` dengan alasan `counter_paid_after_cancel`, **tanpa faktur**; BFF menerima event `review` + alasan: A melihat status "sedang diperiksa" (bukan "dibatalkan"), kode ambil ditahan (`409 order_in_review`); anomali critical `late_counter_payment` di Loki/alert; tidak ada refund otomatis
+- **When** CS memutuskan refund: pesanan dibatalkan lewat CLI, kasir me-refund order POS pelunasan ke metode asal
+- **Then** uang kembali ke pelanggan di kasir; saldo kliring tetap 0
+- **Varian** — kedaluwarsa (`counter_paid_after_expiry`): lookup sebelum jatuh tempo, bayar sesudahnya → hasil sama
+- **Negatif**: lookup **setelah** pembatalan → "tidak ditemukan" (digest dihapus), jadi pembayaran tanpa klaim lookup ditolak saat sync (order POS tidak tersimpan)
+
+### I4. Refund pesanan bayar di kasir lewat POS (L-58)
+- **Given** pesanan I1 sudah `confirmed`/selesai dan lunas di kasir
+- **When** CS membuat refund penuh (CLI `online-refund`) dan approver lain menyetujui
+- **Then** Odoo membuat nota kredit (refund `requested`); BFF menandai refund `manual_required` (`counter_refund_via_pos`), **tidak** memanggil gateway, **belum** `settled`, notifikasi "refund selesai" **belum** terkirim; `refunded_amount` bagian = 0
+- **When** kasir me-refund order POS pelunasan (tiket → refund, satu baris, seluruh nominal, metode tunai asal)
+- **Then** Odoo menandai refund `settled` (pembayaran keluar jurnal kliring), mengirim event `refund_settled` (`provider_refund_ref = pos:<uuid>`); BFF refund `settled`, `refunded_amount` = porsi, A mendapat notifikasi; saldo kliring tetap 0
+- **Negatif** — kasir me-refund order POS pelunasan **sebelum** ada refund online yang disetujui (dan pesanan belum batal) → ditolak
+- **Negatif** — refund POS kedua atas pelunasan yang sama → ditolak; refund POS dengan nominal parsial → ditolak (belum didukung, SOP Finance)
+- **Negatif** — event `refund_settled` untuk refund QRIS (punya intent) / nominal beda / refund belum disetujui → `ignored_stale` + anomali, refund tidak berubah
+- **Negatif** — `efn_online_refund_settled` dari BFF untuk pesanan counter → Odoo `invalid_state`
+
+### I5. Kode bayar salah dan penyalahgunaan di POS
+- **When** kasir mengetik 5 kode salah dalam 15 menit (satu sesi atau satu kasir)
+- **Then** kode ke-6 — **bahkan yang benar** — ditolak `rate_limited` sampai jendela 15 menit lewat; pesan tidak membedakan "kode salah" vs "PT/outlet lain"
+- **When** kode pesanan PT lain (mis. kode pesanan `BCR` diketik di POS `GL`) atau pesanan outlet lain di PT sama
+- **Then** "tidak ditemukan" (identik dengan kode salah)
+- **When** kasir mengubah nominal/qty/menambah barang/pelanggan/diskon pada baris pelunasan (atau memaksa payload sinkron)
+- **Then** UI mengunci baris; bila payload dimanipulasi, sinkron ditolak server dan order POS tidak tersimpan; pesanan tetap `placed`
+- **When** kasir tanpa grup POS atau dari PT lain memanggil lookup
+- **Then** akses ditolak
+- **When** POS **offline**
+- **Then** tombol "Bayar pesanan online" nonaktif; menyelesaikan order pelunasan diblok dengan pesan "butuh koneksi ke server" (uang tidak diterima untuk pesanan yang tidak bisa dicatat)
+
+### I6. Batasan metode bayar di checkout
+- **When** A membuat checkout `counter` untuk keranjang dua PT (Bacha: `BCR` + `BCF`)
+- **Then** `422 counter_payment_single_part_only`; pilihan QRIS tidak tersedia bila vendor belum ada → UI menjelaskan "pisahkan per toko" / tidak ada metode
+- **When** A memiliki 1 pesanan counter terbuka lalu checkout counter kedua
+- **Then** `429 too_many_open_orders` (batas counter 1); setelah dibatalkan/dilunasi, checkout baru berhasil
+- **When** kanal tidak mengizinkan `counter` (PB) atau env `ONLINE_PAYMENT_METHODS=qris`
+- **Then** `422 payment_method_unavailable`, opsi tampil nonaktif dengan alasan
+- **When** `payment_method` bukan `qris|counter` (mis. `cash`, `COUNTER`)
+- **Then** `400 invalid_request`
+- **Gerbang deploy L-55**: production `ONLINE_ENABLED=true` + `ONLINE_PAYMENT_METHODS=qris,counter` + `PAYMENT_PROVIDER=disabled` → deploy ditolak; `counter` saja + `disabled` → diterima; `PAYMENT_PROVIDER=mock` di production → ditolak
+
+### I7. Retur tanpa struk dengan persetujuan Store Manager (E-41, L-51/L-54)
+- **Given** POS `GL` online, mode default `manager_approval`; pelanggan datang tanpa struk
+- **When** kasir menambahkan barang retur (tanpa memilih struk asal), memilih metode tunai, menekan Validasi
+- **Then** dialog "Persetujuan Store Manager" muncul (pilih Store Manager, PIN, alasan 3–200 karakter); kasir **tidak** muncul di daftar approver
+- **Benar** — Store Manager mengetik PIN benar → "disetujui", retur tersinkron, uang keluar tunai; catatan persetujuan `consumed` (approver, kasir, nominal, alasan; tanpa PIN); persetujuan **tidak dapat dipakai ulang** untuk order lain
+- **Salah** — PIN salah → "PIN salah", retur tidak bisa divalidasi; catatan percobaan gagal tercatat
+- **Terkunci** — 5 kali PIN salah untuk Store Manager yang sama (lintas POS) → "dikunci 15 menit"; PIN benar pun ditolak selama terkunci; Store Manager lain tetap bisa menyetujui; setelah 15 menit bisa lagi (risiko diterima: kasir dapat mengunci Store Manager, tercatat)
+- **Offline** — POS offline: dialog menolak ("butuh server"), retur tanpa struk tidak bisa divalidasi; retur **dengan** struk tetap boleh offline
+- **Negatif** — persetujuan kedaluwarsa (> 5 menit) → ditolak, minta ulang; nominal sinkron > nominal disetujui → ditolak; kasir lain / sesi lain / order lain memakai persetujuan itu → ditolak; kasir memilih dirinya sebagai approver → ditolak
+- **Negatif** — uang keluar non-tunai (EDC/QRIS) tanpa struk → ditolak (tetap hanya tunai)
+- **Negatif** — tukar barang tanpa struk **tanpa uang keluar** (nominal 0) tetap butuh persetujuan
+- **Negatif** — payload sinkron dimanipulasi (token/approver dalam payload diabaikan; hash PIN tidak pernah ada di data POS browser); user tanpa grup Manajer POS tidak muncul sebagai approver
+- **Mode** `cash` atau `deny` (parameter sistem) → perilaku G18 / retur tanpa struk ditolak; nilai tak dikenal → `manager_approval`
+
+### I8. Batas berat pesanan online (W-33, E-35b)
+- **Given** kanal `GL` `max_order_weight_kg = 20`, kebijakan berat kosong `block`; Beras 5 kg, Tas tanpa berat
+- **When** A mengisi 4 × Beras (20 kg) dan quote
+- **Then** lolos (batas inklusif: sama dengan batas boleh); total berat dihitung Odoo (Σ berat × qty)
+- **When** A menambah 1 × Beras (25 kg)
+- **Then** quote memuat issue tingkat PT `weight_limit` (tanpa produk): pesan "Total berat pesanan melebihi batas untuk PT ini…" di grup PT itu; checkout `409 cart_has_issues`; mengurangi qty menghapus issue
+- **When** A menambah "Tas" (produk bukan jasa tanpa berat)
+- **Then** issue `weight_missing` pada baris itu: "Berat barang ini belum tercatat…"; checkout ditolak sampai dihapus; kebijakan `ignore` → produk tanpa berat dihitung 0 dan tidak memblokir
+- **And** produk jasa/baris diskon (reward) tidak memicu `weight_missing`; batas 0 = fitur mati; ubah batas/berat produk mengubah `quote_hash` → checkout dengan quote lama `409 price_changed`
+- **Negatif** — klien memaksa `POST /v1/orders` dengan quote lama setelah batas diturunkan → Odoo place menolak (`invalid_input`), tidak ada SO tersisa
+- **Bacha dua PT**: batas dihitung **per PT** (kelompok); berat butik tidak digabung dengan kafe
+
+### I9. Enam entitas — kode, akses produk, pajak per PT (W-32, L-48)
+- **Given** Odoo satu database dengan company `EFN`, `GL`, `PB`, `BCR`, `BCF`, `FARM` (semua root)
+- **Then** kode `RTL`/`FNB`/kanal berhifen tidak muncul di Odoo, Super-App, ETL, dashboard; `GET /v1/catalog/channels` hanya memuat kanal `GL`, `PB`, `BCR`, `BCF` dengan nama PT yang benar; domain Bacha menampilkan `BCR` + `BCF`, domain Grand Lucky hanya `GL`
+- **Akses produk** — user Odoo hanya company `GL` tidak melihat produk/SO/stok/faktur `PB` (record rule multi-company); produk yang sama dijual dua PT berupa **produk kembar per company**; kanal `BCR` tidak dapat memuat produk milik `BCF`
+- **Pajak per PT** — keranjang `GL`/`BCR`: PPN 11 % inklusif; `PB`/`BCF`: PB1 + service charge sesuai fiscal position dine-in/non-dine-in (non-dine-in 0 % SC); angka pajak di quote = faktur Odoo; label pajak per PT berbeda di keranjang Bacha
+- **Transaksi antar-PT** — Σ per kelompok = tagihan; faktur terbit di PT penjual; harga transfer cost-plus hanya `BCR` ↔ `BCF` dan Holding ↔ PT
+- **Poin & ledger** — earn di POS `PB` mencatat `company_code = PB`; event/ledger BFF dengan kode lama (`RTL`/`FNB`) ditolak CHECK Postgres dan ETL; `dim_company` ClickHouse memuat `business_type` & `brand_group` (`BCR`+`BCF` = `BACHA`)
+- **Secret/rotasi** — `efn-rotate-online-key --channel=GL|PB|BCR|BCF` berjalan per kanal; kode lama ditolak; rotasi satu kanal tidak mengganggu kanal lain

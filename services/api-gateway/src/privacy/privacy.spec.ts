@@ -262,7 +262,7 @@ describe('ErasureService (§8.4)', () => {
       if (t.includes("SET status = 'processing'")) {
         return status === 'scheduled' ? { rows: [{ member_id: MEMBER_ID, member_hash: hash }], rowCount: 1 } : { rows: [], rowCount: 0 };
       }
-      if (t.includes('GROUP BY company_code')) return { rows: [{ company_code: 'EFN', balance: '120' }, { company_code: 'FNB', balance: 30 }], rowCount: 2 };
+      if (t.includes('GROUP BY company_code')) return { rows: [{ company_code: 'EFN', balance: '120' }, { company_code: 'PB', balance: 30 }], rowCount: 2 };
       if (t.includes('array_remove')) {
         stores = stores.filter((s) => s !== p[1]);
         return { rows: [{ status: stores.length === 0 ? 'completed' : 'processing' }], rowCount: 1 };
@@ -287,7 +287,7 @@ describe('ErasureService (§8.4)', () => {
     expect(tomb).not.toBe(ctx.hash);
     expect(forfeits.map((q) => q.params.slice(0, 3))).toEqual([
       [tomb, 'EFN', -120],
-      [tomb, 'FNB', -30],
+      [tomb, 'PB', -30],
     ]);
     for (const f of forfeits) {
       expect(f.text).toContain('erased_at');
@@ -801,7 +801,7 @@ describe('W-18: job erasure — tunda ≤ 14 hari, eskalasi hari 3/10, lalu eras
       }
       if (t.includes('o.member_id IS NULL')) {
         return {
-          rows: [{ part_id: PART_A, order_id: REQ_ID, status: 'ready', company_code: 'RTL', outlet_code: 'GL-01', member_unlinked_at: new Date(0) }],
+          rows: [{ part_id: PART_A, order_id: REQ_ID, status: 'ready', company_code: 'GL', outlet_code: 'GL-01', member_unlinked_at: new Date(0) }],
           rowCount: 1,
         };
       }
@@ -818,7 +818,7 @@ describe('W-18: job erasure — tunda ≤ 14 hari, eskalasi hari 3/10, lalu eras
         part_ids: [PART_A],
       },
     ]);
-    expect(rep.unlinked_open_parts[0]).toMatchObject({ part_id: PART_A, status: 'ready', company_code: 'RTL' });
+    expect(rep.unlinked_open_parts[0]).toMatchObject({ part_id: PART_A, status: 'ready', company_code: 'GL' });
     for (const q of db.queries) expect(q.text).not.toMatch(/member_hash|member_ref|pickup_code/);
     expect(db.queries[0].params).toEqual([14, 500]);
     expect(parseErasurePendingArgs([])).toEqual({});

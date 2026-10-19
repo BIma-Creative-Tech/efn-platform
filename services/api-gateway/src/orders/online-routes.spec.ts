@@ -136,18 +136,18 @@ describe('Route G19 (§11.2 promo, §11.3 brand) — Fastify nyata', () => {
 describe('Route online (Fastify nyata, prefix /v1)', () => {
   it('katalog publik: tanpa login, Cache-Control public; gambar immutable image/jpeg; validasi query', async () => {
     const { app, catalog } = await boot();
-    const r = await app.inject({ method: 'GET', url: '/v1/catalog/products?channel=RTL&limit=10&q=beras' });
+    const r = await app.inject({ method: 'GET', url: '/v1/catalog/products?channel=GL&limit=10&q=beras' });
     expect(r.statusCode).toBe(200);
     expect(r.headers['cache-control']).toBe('public, max-age=60');
-    expect(catalog.products).toHaveBeenCalledWith('RTL', { category: null, q: 'beras', cursor: null, limit: 10 });
+    expect(catalog.products).toHaveBeenCalledWith('GL', { category: null, q: 'beras', cursor: null, limit: 10 });
     const img = await app.inject({ method: 'GET', url: `/v1/catalog/images/${'a'.repeat(40)}?size=1024` });
     expect(img.statusCode).toBe(200);
     expect(img.headers['content-type']).toBe('image/jpeg');
     expect(img.headers['cache-control']).toBe('public, max-age=31536000, immutable');
-    for (const url of ['/v1/catalog/products?channel=rtl', '/v1/catalog/products?channel=RTL&limit=51', `/v1/catalog/stock?channel=RTL&outlet=TOKO-01&ids=${'1,'.repeat(50)}1`, '/v1/catalog/images/x?size=99']) {
+    for (const url of ['/v1/catalog/products?channel=gl', '/v1/catalog/products?channel=GL&limit=51', `/v1/catalog/stock?channel=GL&outlet=TOKO-01&ids=${'1,'.repeat(50)}1`, '/v1/catalog/images/x?size=99']) {
       expect((await app.inject({ method: 'GET', url })).statusCode).toBe(400);
     }
-    expect((await app.inject({ method: 'GET', url: '/v1/catalog/stock?channel=RTL&outlet=TOKO-01&ids=1,2' })).headers['cache-control']).toBe('no-store');
+    expect((await app.inject({ method: 'GET', url: '/v1/catalog/stock?channel=GL&outlet=TOKO-01&ids=1,2' })).headers['cache-control']).toBe('no-store');
     await app.close();
   });
 
@@ -182,13 +182,32 @@ describe('Route online (Fastify nyata, prefix /v1)', () => {
     const body = { quote_id: '5e0c3a2b-1d4f-4e6a-8b7c-9d0e1f2a3b4c', accept_total: 39_800 };
     const ok = await app.inject({ method: 'POST', url: '/v1/orders', headers: { ...bearer, 'idempotency-key': key }, payload: body });
     expect(ok.statusCode).toBe(201);
-    expect(orders.checkout).toHaveBeenCalledWith(MEMBER, key, { quoteId: body.quote_id, acceptTotal: 39_800 });
+    expect(orders.checkout).toHaveBeenCalledWith(MEMBER, key, { quoteId: body.quote_id, acceptTotal: 39_800, paymentMethod: 'qris' });
     expect((await app.inject({ method: 'POST', url: '/v1/orders', headers: bearer, payload: { ...body, price: 1 } })).statusCode).toBe(400);
     const big = await app.inject({ method: 'POST', url: '/v1/orders', headers: { ...bearer, 'content-type': 'application/json' }, payload: JSON.stringify({ ...body, pad: 'x'.repeat(17_000) }) });
     expect(big.statusCode).toBe(413);
     for (let i = 0; i < 3; i += 1) await app.inject({ method: 'POST', url: '/v1/orders', headers: { ...bearer, 'idempotency-key': key }, payload: body });
     const limited = await app.inject({ method: 'POST', url: '/v1/orders', headers: { ...bearer, 'idempotency-key': key }, payload: body });
     expect(limited.statusCode).toBe(429);
+    await app.close();
+  });
+
+  it('G20 §12.2: payment_method qris|counter (default qris) diteruskan; nilai lain → 400 invalid_request', async () => {
+    const { app, bearer, orders } = await boot({ ONLINE_RL_CHECKOUT_LIMIT: '50' });
+    const key = 'chk1_' + 'B'.repeat(43);
+    const body = { quote_id: '5e0c3a2b-1d4f-4e6a-8b7c-9d0e1f2a3b4c', accept_total: 39_800 };
+    const ok = await app.inject({ method: 'POST', url: '/v1/orders', headers: { ...bearer, 'idempotency-key': key }, payload: { ...body, payment_method: 'counter' } });
+    expect(ok.statusCode).toBe(201);
+    expect(orders.checkout).toHaveBeenLastCalledWith(MEMBER, key, { quoteId: body.quote_id, acceptTotal: 39_800, paymentMethod: 'counter' });
+    await app.inject({ method: 'POST', url: '/v1/orders', headers: { ...bearer, 'idempotency-key': key }, payload: { ...body, payment_method: 'qris' } });
+    expect(orders.checkout).toHaveBeenLastCalledWith(MEMBER, key, { quoteId: body.quote_id, acceptTotal: 39_800, paymentMethod: 'qris' });
+    const calls = orders.checkout.mock.calls.length;
+    for (const pm of ['cash', 'COUNTER', 1, null, '']) {
+      const bad = await app.inject({ method: 'POST', url: '/v1/orders', headers: { ...bearer, 'idempotency-key': key }, payload: { ...body, payment_method: pm } });
+      expect(bad.statusCode).toBe(400);
+      expect(bad.json()).toMatchObject({ error: { code: 'invalid_request' } });
+    }
+    expect(orders.checkout.mock.calls.length).toBe(calls);
     await app.close();
   });
 
@@ -208,7 +227,7 @@ describe('Route online (Fastify nyata, prefix /v1)', () => {
   it('event Odoo: service key + HMAC valid → 200; HMAC salah / replay > 300 s / tanpa service key → 401', async () => {
     const { app, config, events } = await boot();
     const body = Buffer.from(
-      JSON.stringify({ schema_version: 1, idempotency_key: 'online:7:ready:2', seq: 2, platform_order_ref: ORDER, checkout_ref: MEMBER, channel_code: 'RTL', company_code: 'RTL', event: 'ready', state: 'ready', occurred_at: null, refund: null }),
+      JSON.stringify({ schema_version: 1, idempotency_key: 'online:7:ready:2', seq: 2, platform_order_ref: ORDER, checkout_ref: MEMBER, channel_code: 'GL', company_code: 'GL', event: 'ready', state: 'ready', occurred_at: null, refund: null }),
     );
     const now = Math.floor(Date.now() / 1000);
     const sig = (t: number, secret = HMAC) => `t=${t},v1=${computeWebhookSignature(secret, t, body)}`;

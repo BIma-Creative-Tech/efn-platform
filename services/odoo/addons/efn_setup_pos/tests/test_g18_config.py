@@ -142,6 +142,14 @@ class TestEfnMemberPriceOtp(TransactionCase):
         self.assertTrue(self.program.active)
         self.assertEqual(self.program.pos_config_ids, config)
 
+    def test_bcr_template_is_inactive_otp_promotion(self):
+        # G20 W-32: template harga member BCR sama dengan GL (nonaktif, wajib OTP, company BCR).
+        program = self.env.ref("efn_setup_pos.loyalty_program_member_price_bcr")
+        self.assertFalse(program.active)
+        self.assertFalse(program.pos_ok)
+        self.assertTrue(program.efn_requires_otp)
+        self.assertEqual(program.company_id, self.env.ref("efn_setup_company.company_bcr"))
+
     def test_no_member_pricelist_offered_to_cashiers(self):
         """Tidak ada pricelist 'Member' aktif di daftar pilihan kasir POS mana pun (R-B06)."""
         configs = self.env["pos.config"].search([])
@@ -160,7 +168,13 @@ class TestEfnPointsPaymentMethodData(TransactionCase):
         return self.env["pos.config"].with_company(company).create({"name": "POS Uji Poin", **vals})
 
     def test_points_method_per_pt(self):
-        for suffix, company_xmlid in (("rtl", "company_rtl"), ("fnb", "company_fnb")):
+        # G20 W-32 (docs/04 §12.1): 4 PT ber-POS = GL (rtl), PB (fnb), BCR, BCF.
+        for suffix, company_xmlid in (
+            ("rtl", "company_rtl"),
+            ("fnb", "company_fnb"),
+            ("bcr", "company_bcr"),
+            ("bcf", "company_bcf"),
+        ):
             with self.subTest(pt=suffix):
                 method = self._method(suffix)
                 self.assertEqual(method.company_id, self.env.ref(f"efn_setup_company.{company_xmlid}"))
@@ -188,6 +202,14 @@ class TestEfnPointsPaymentMethodData(TransactionCase):
         config.efn_loyalty_redeem_enabled = True
         self.assertIn(self._method("fnb"), config.payment_method_ids)
         self.assertNotIn(self._method("rtl"), config.payment_method_ids)
+
+    def test_bacha_config_gets_own_company_points_method(self):
+        company = self.env.ref("efn_setup_company.company_bcf")
+        config = self._new_config(company, efn_loyalty_redeem_enabled=True)
+        self.assertIn(self._method("bcf"), config.payment_method_ids)
+        for other in ("rtl", "fnb", "bcr"):
+            with self.subTest(other=other):
+                self.assertNotIn(self._method(other), config.payment_method_ids)
 
     def test_upgrade_function_relinks_missing_method(self):
         company = self.env.ref("efn_setup_company.company_rtl")

@@ -2,14 +2,17 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ApiError, Errors } from '../common/errors/api-error';
 import { isUuid } from '../common/validation';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
-import { PartStatus, partStatusFromOdoo } from './online.model';
+import { PartStatus, orderHasPayment, partStatusFromOdoo } from './online.model';
 import { ONLINE_REPO, OnlineRepo } from './online.repository';
 import { OnlineSagaService } from './online-saga.service';
 import { createHash, randomUUID } from 'node:crypto';
 
 export const ORDER_EVENTS_CONSUMER = 'online.order-events';
-export const KNOWN_EVENTS = ['placed', 'paid', 'confirmed', 'stock_short', 'ready', 'picked_up', 'cancelled', 'refunded', 'review'] as const;
+/** L-58: `refund_settled` = kasir sudah me-refund order POS pelunasan (pesanan counter). `refunded` = refund DIMINTA saja. */
+export const KNOWN_EVENTS = ['placed', 'paid', 'confirmed', 'stock_short', 'ready', 'picked_up', 'cancelled', 'refunded', 'review', 'refund_settled'] as const;
 export const EVENT_BODY_LIMIT = 8 * 1024;
+/** Order yang sudah ditutup tanpa pembayaran BFF (L-57: hanya di sini `cancelled → review` boleh untuk counter). */
+const FINAL_UNPAID: readonly string[] = ['cancelled', 'expired', 'failed'];
 
 export interface OdooOrderEvent {
   /** Kunci dari Odoo (format lama `online:<id lokal Odoo>:<event>:<seq>`) — hanya untuk kompatibilitas & audit. */
@@ -25,7 +28,33 @@ export interface OdooOrderEvent {
   state: string;
   occurred_at: Date | null;
   refund: { refund_ref: string; amount: number; kind: 'full' | 'lines'; initiator: 'bff' | 'odoo'; initiated_by: string | null } | null;
+  /**
+   * G20 §12.2 no. 7: `payment: { method }` pada event `paid` (tanpa identitas kasir). `null` = tidak dikirim (event
+   * lain / Odoo pra-G20). Field lain di objek `payment` diabaikan (minimisasi: tidak disimpan).
+   */
+  payment_method: 'qris' | 'counter' | null;
+  /**
+   * L-57: alasan event `review` dari Odoo E-45. Hanya nilai di `REVIEW_REASONS` yang dipakai (nilai lain → null,
+   * event tetap diproses seperti review biasa). `counter_paid_after_*` = kasir melunasi pesanan counter yang sudah
+   * batal/kedaluwarsa (uang sudah diterima di POS).
+   */
+  review_reason: ReviewReason | null;
+  /**
+   * L-58: payload event `refund_settled` — `{ refund: { refund_ref, amount, settled_at, provider_refund_ref: "pos:<uuid>" } }`.
+   * Hanya terisi untuk event itu (field `refund` event lain tetap di `refund`).
+   */
+  settlement: CounterSettlement | null;
 }
+
+export interface CounterSettlement {
+  refund_ref: string;
+  amount: number;
+  settled_at: Date | null;
+  provider_refund_ref: string;
+}
+
+export const LATE_COUNTER_REVIEW_REASONS = ['counter_paid_after_cancel', 'counter_paid_after_expiry'] as const;
+export type ReviewReason = (typeof LATE_COUNTER_REVIEW_REASONS)[number];
 
 export type EventOutcome = 'applied' | 'duplicate' | 'ignored_stale' | 'ignored_unknown_event';
 
@@ -47,7 +76,15 @@ export function stableEventKey(ev: Pick<OdooOrderEvent, 'platform_order_ref' | '
  */
 export function eventFingerprint(ev: OdooOrderEvent): string {
   const rf = ev.refund ? [ev.refund.refund_ref, ev.refund.amount, ev.refund.kind, ev.refund.initiator] : null;
-  const canonical = JSON.stringify([ev.platform_order_ref, ev.checkout_ref, ev.channel_code, ev.company_code, ev.event, ev.state, ev.seq, rf]);
+  const fields: unknown[] = [ev.platform_order_ref, ev.checkout_ref, ev.channel_code, ev.company_code, ev.event, ev.state, ev.seq, rf];
+  // G20: metode bayar ikut sidik HANYA bila ada → sidik event pra-G20 tidak berubah (dedup lintas versi tetap cocok)
+  if (ev.payment_method !== null) fields.push(['payment', ev.payment_method]);
+  if (ev.review_reason !== null) fields.push(['review_reason', ev.review_reason]);
+  if (ev.settlement !== null) {
+    const s = ev.settlement;
+    fields.push(['settlement', s.refund_ref, s.amount, s.provider_refund_ref, s.settled_at ? s.settled_at.toISOString() : null]);
+  }
+  const canonical = JSON.stringify(fields);
   return createHash('sha256').update(canonical, 'utf8').digest('hex');
 }
 
@@ -83,8 +120,19 @@ export function parseOdooEvent(raw: Buffer | undefined): OdooOrderEvent {
   const company = o.company_code === null || o.company_code === undefined ? null : str('company_code', /^[A-Z]{2,8}$/);
   const occurredRaw = o.occurred_at;
   const occurred = typeof occurredRaw === 'string' && !Number.isNaN(Date.parse(occurredRaw)) ? new Date(occurredRaw) : null;
+  const eventName = str('event', /^[a-z_]{1,32}$/);
   let refund: OdooOrderEvent['refund'] = null;
-  if (o.refund !== null && o.refund !== undefined && o.refund !== false) {
+  let settlement: CounterSettlement | null = null;
+  if (eventName === 'refund_settled') {
+    // L-58: bentuk khusus; wajib lengkap (selain itu 400, final di Odoo)
+    const rf = o.refund as Record<string, unknown> | null | undefined;
+    if (typeof rf !== 'object' || rf === null || Array.isArray(rf)) throw Errors.invalidRequest();
+    if (typeof rf.refund_ref !== 'string' || rf.refund_ref.length < 1 || rf.refund_ref.length > 128) throw Errors.invalidRequest();
+    if (typeof rf.amount !== 'number' || !Number.isSafeInteger(rf.amount) || rf.amount < 1) throw Errors.invalidRequest();
+    if (typeof rf.provider_refund_ref !== 'string' || !/^pos:[0-9a-fA-F-]{36}$/.test(rf.provider_refund_ref)) throw Errors.invalidRequest();
+    const at = typeof rf.settled_at === 'string' && !Number.isNaN(Date.parse(rf.settled_at)) ? new Date(rf.settled_at) : null;
+    settlement = { refund_ref: rf.refund_ref, amount: rf.amount, settled_at: at, provider_refund_ref: rf.provider_refund_ref.toLowerCase() };
+  } else if (o.refund !== null && o.refund !== undefined && o.refund !== false) {
     const rf = o.refund as Record<string, unknown>;
     if (typeof rf !== 'object' || typeof rf.refund_ref !== 'string' || rf.refund_ref.length < 1 || rf.refund_ref.length > 128) throw Errors.invalidRequest();
     if (typeof rf.amount !== 'number' || !Number.isSafeInteger(rf.amount) || rf.amount < 0) throw Errors.invalidRequest();
@@ -96,6 +144,15 @@ export function parseOdooEvent(raw: Buffer | undefined): OdooOrderEvent {
     else if (typeof rf.initiator_login === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(rf.initiator_login)) by = `odoo-login:${rf.initiator_login.toLowerCase()}`;
     refund = { refund_ref: rf.refund_ref, amount: rf.amount, kind: rf.kind, initiator: rf.initiator, initiated_by: by };
   }
+  let paymentMethod: OdooOrderEvent['payment_method'] = null;
+  if (o.payment !== null && o.payment !== undefined && o.payment !== false) {
+    const p = o.payment as Record<string, unknown>;
+    if (typeof p !== 'object' || Array.isArray(p) || (p.method !== 'counter' && p.method !== 'qris')) throw Errors.invalidRequest();
+    paymentMethod = p.method;
+  }
+  const rr = o.review_reason;
+  const reviewReason: ReviewReason | null =
+    typeof rr === 'string' && (LATE_COUNTER_REVIEW_REASONS as readonly string[]).includes(rr) ? (rr as ReviewReason) : null;
   return {
     idempotency_key: key,
     event_id: eventId,
@@ -104,10 +161,13 @@ export function parseOdooEvent(raw: Buffer | undefined): OdooOrderEvent {
     checkout_ref: checkout,
     channel_code: str('channel_code', /^[A-Z][A-Z0-9-]{1,15}$/),
     company_code: company,
-    event: str('event', /^[a-z_]{1,32}$/),
+    event: eventName,
     state: str('state', /^[a-z_]{1,32}$/),
     occurred_at: occurred,
     refund,
+    payment_method: paymentMethod,
+    review_reason: reviewReason,
+    settlement,
   };
 }
 
@@ -175,6 +235,49 @@ export class OrderEventsService {
         if (!(KNOWN_EVENTS as readonly string[]).includes(ev.event)) return record('ignored_unknown_event');
         if (ev.seq <= part.last_seq) return record('ignored_stale');
 
+        // ── G20 §12.2 no. 7: bayar di kasir ──
+        const order = await r.getOrder(part.order_id, true);
+        if (!order) throw Errors.notFound();
+        const counterOrder = order.payment_method === 'counter';
+        if (ev.payment_method === 'counter' && !counterOrder) {
+          // Pelunasan kasir untuk order QRIS = bug/serangan: tolak (409 final di Odoo) + alert, tidak mengubah status
+          this.metrics.anomaly('payment_method_mismatch', 'critical', { order_id: order.id, part_id: part.id, state: ev.event, code: 'counter_on_qris' });
+          throw Errors.conflict('payment_method_mismatch', 'Metode bayar tidak cocok dengan pesanan.');
+        }
+        if (counterOrder && ev.event === 'paid' && ev.payment_method !== 'counter') {
+          this.metrics.anomaly('payment_method_mismatch', 'critical', { order_id: order.id, part_id: part.id, state: ev.event, code: 'qris_on_counter' });
+          throw Errors.conflict('payment_method_mismatch', 'Metode bayar tidak cocok dengan pesanan.');
+        }
+        // L-58: kasir sudah me-refund order POS pelunasan → settle refund counter yang cocok (ref + order + nominal)
+        if (ev.event === 'refund_settled') {
+          await r.updatePart(part.id, { last_seq: ev.seq, odoo_state: ev.state.slice(0, 32) });
+          const outcome = ev.settlement ? await this.saga.settleCounterRefund(r, order, part, ev.settlement) : 'invalid';
+          if (outcome === 'settled') return record('applied');
+          // L-60: `unapproved` (refund POS tanpa persetujuan/otorisasi) juga critical
+          this.metrics.anomaly('refund_settled_rejected', outcome === 'qris' || outcome === 'mismatch' || outcome === 'unapproved' ? 'critical' : 'warning', {
+            order_id: order.id,
+            part_id: part.id,
+            code: outcome,
+          });
+          return record('ignored_stale');
+        }
+        // L-57: kasir melunasi pesanan counter yang sudah batal/kedaluwarsa → `cancelled → review` (pengecualian monoton,
+        // khusus counter + review_reason ini). Tanpa refund otomatis (CS memutuskan); order tetap ditutup.
+        if (ev.event === 'review' && ev.review_reason !== null && counterOrder && FINAL_UNPAID.includes(order.status)) {
+          this.metrics.anomaly('late_counter_payment', 'critical', { order_id: order.id, part_id: part.id, state: ev.state, code: ev.review_reason });
+          const applied = await this.saga.applyPart(r, part, 'review', { source: 'odoo', odooState: ev.state, seq: ev.seq, lateCounterReview: true });
+          return record(applied ? 'applied' : 'ignored_stale');
+        }
+        if (counterOrder && (ev.event === 'paid' || ev.event === 'confirmed' || ev.event === 'stock_short')) {
+          const state = ev.event === 'paid' ? ev.state : ev.event;
+          const applied = await this.saga.applyCounterPaid(r, order, part, { source: 'odoo', odooState: state, seq: ev.seq, paidAt: ev.occurred_at });
+          if (!applied) {
+            await r.updatePart(part.id, { last_seq: Math.max(part.last_seq, ev.seq), odoo_state: ev.state.slice(0, 32) });
+            return record('ignored_stale');
+          }
+          return record('applied');
+        }
+
         const target: PartStatus | null = ev.event === 'refunded' ? null : partStatusFromOdoo(ev.event === 'picked_up' ? 'picked_up' : ev.event);
         if (target) {
           // L-14: transisi yang tidak diterapkan (mundur/sama) dicatat `ignored_stale`, bukan `applied` (seq tetap maju)
@@ -186,9 +289,10 @@ export class OrderEventsService {
         if (ev.event === 'review') {
           this.metrics.anomaly('odoo_review', 'warning', { part_id: part.id, order_id: part.order_id, state: ev.state });
         }
+        // L-58: `refunded`/`cancelled` = refund DIMINTA (nota kredit), tidak pernah menandai settled
         if (ev.refund && ev.refund.initiator === 'odoo' && (ev.event === 'cancelled' || ev.event === 'refunded')) {
-          const order = await r.getOrder(part.order_id);
-          if (!order?.payment_intent_id) {
+          // G20: order bayar di kasir yang sudah lunas juga punya dana (refund tanpa intent, lewat POS)
+          if (!orderHasPayment(order)) {
             this.metrics.anomaly('odoo_refund_without_payment', 'critical', { part_id: part.id });
           } else if (ev.refund.amount > 0) {
             const rf = await r.insertRefund({
@@ -215,7 +319,11 @@ export class OrderEventsService {
         return record('applied');
       });
     } catch (err) {
-      if (err instanceof ApiError) this.metrics.event(ev.event, err.getStatus() === 404 ? 'not_found' : 'company_mismatch');
+      if (err instanceof ApiError) {
+        const code = (err.body as { error?: { code?: unknown } }).error?.code;
+        // G20: 409 metode bayar tidak cocok diberi label sendiri (bukan company_mismatch)
+        this.metrics.event(ev.event, err.getStatus() === 404 ? 'not_found' : code === 'payment_method_mismatch' ? 'payment_method_mismatch' : 'company_mismatch');
+      }
       throw err;
     }
     this.metrics.event(ev.event, outcome);

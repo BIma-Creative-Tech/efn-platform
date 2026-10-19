@@ -23,6 +23,11 @@ Subperintah (argumen tambahan setelah nama):
   killswitch                    ONLINE_ENABLED=false: cart/quote/order -> 503 online_unavailable, katalog tetap
   web_flow                      lewat Next.js app.efn.local: login cookie -> katalog -> cart -> quote -> checkout x2
                                 (key server-side) -> status -> simulate bayar -> pickup-code route
+  G20 bayar di kasir (docs/04 §12.2, tahap `q`):
+  counter_channel [detik]       tunggu sinkron katalog: kanal GL mengiklankan payment_modes qris+counter
+  checkout_counter [label]      checkout `payment_method: counter` (negatif: metode asing 400; replay = kode sama)
+  counter_view [label]          GET order memuat kode bayar (pemilik); daftar pesanan tanpa kode
+  counter_cancel [label]        pelanggan membatalkan pesanan menunggu bayar di kasir
 """
 
 import base64
@@ -39,7 +44,10 @@ import bff_smoke as b  # noqa: E402
 
 STATE = os.environ.get("SMOKE_STATE", "/work/online_state.json")
 PHONE = os.environ.get("SMOKE_PHONE", "")
-CHANNEL, OUTLET = "RTL", "TOKO-01"
+# G20 (docs/04 §12.1, L-48): kode kanal = kode PT. Kanal dev smoke = GL (PT Grand Lucky, company_rtl xmlid tetap);
+# company lain di event uji silang = PB (PT Paris Baguette). Kode lama RTL/FNB dihapus.
+CHANNEL, OUTLET = "GL", "TOKO-01"
+COMPANY, OTHER_COMPANY = "GL", "PB"
 SMOKE_PREFIX = "SMOKE "
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 PICKUP_RE = re.compile(r"^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4}-[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4}$")
@@ -97,17 +105,17 @@ def cmd_login():
 # ----------------------------------------------------------------------------------------------------- catalog
 def cmd_catalog():
     s, ch, _, _ = b.req("GET", "/v1/catalog/channels")
-    rtl = next((c for c in (ch or {}).get("items", []) if c.get("channel_code") == CHANNEL), None)
-    outlets = [o.get("outlet_code") for o in (rtl or {}).get("outlets", [])]
+    chan = next((c for c in (ch or {}).get("items", []) if c.get("channel_code") == CHANNEL), None)
+    outlets = [o.get("outlet_code") for o in (chan or {}).get("outlets", [])]
     b.result(
         "o.catalog_channels",
         s == 200
-        and rtl is not None
-        and rtl.get("company_code") == "RTL"
+        and chan is not None
+        and chan.get("company_code") == COMPANY
         and OUTLET in outlets
-        and rtl.get("fulfilment") == {"pickup": True, "delivery": False},
+        and chan.get("fulfilment") == {"pickup": True, "delivery": False},
         http=s,
-        channel=rtl,
+        channel=chan,
     )
     s, cats, _, _ = b.req("GET", f"/v1/catalog/categories?channel={CHANNEL}")
     b.result("o.catalog_categories", s == 200 and isinstance((cats or {}).get("items"), list), http=s)
@@ -362,7 +370,7 @@ def cmd_checkout(label="main", negatives=True):
         and pay.get("status") == "pending"
         and bool(pay.get("qr_string"))
         and part.get("status") == "placed"
-        and part.get("company_code") == "RTL"
+        and part.get("company_code") == COMPANY
         and "pickup_code" not in json.dumps(body)
     )
     b.result(f"o.checkout_201[{label}]", ok, http=s, status=(body or {}).get("status"), code=code_of(body))
@@ -636,8 +644,8 @@ def cmd_web_flow():
     b.result("o.web_login_cookie", s == 200 and bool(sess), http=s)
     ck = {"Cookie": sess}
     s, chans, _, _ = b.req("GET", "/api/catalog/channels", host=host)
-    rtl = next((c for c in (chans or {}).get("items", []) if c.get("channel_code") == CHANNEL), None)
-    b.result("o.web_catalog_channels", s == 200 and rtl is not None, http=s)
+    chan = next((c for c in (chans or {}).get("items", []) if c.get("channel_code") == CHANNEL), None)
+    b.result("o.web_catalog_channels", s == 200 and chan is not None, http=s)
     s, prods, _, _ = b.req("GET", f"/api/catalog/products?channel={CHANNEL}&q=Minyak&limit=10", host=host)
     oil = next((p for p in (prods or {}).get("items", []) if p.get("name", "").startswith(SMOKE_PREFIX)), None)
     b.result(
@@ -759,7 +767,7 @@ def cmd_events(part_id, order_id, legacy_key=""):
             "platform_order_ref": part_id,
             "checkout_ref": order_id,
             "channel_code": CHANNEL,
-            "company_code": "RTL",
+            "company_code": COMPANY,
             "event": evname,
             "state": state,
             "occurred_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -789,7 +797,7 @@ def cmd_events(part_id, order_id, legacy_key=""):
     b.result("o.event_duplicate_idempotent", s2 == 200 and (b2 or {}).get("status") == "duplicate", http=s2, body=b2)
     s, body = post({**event("ready", "ready", 2), "checkout_ref": str(uuid.uuid4())})
     b.result("o.event_unknown_checkout_404", s == 404, http=s, code=code_of(body))
-    s, body = post(event("ready", "ready", 3, company_code="FNB"))
+    s, body = post(event("ready", "ready", 3, company_code=OTHER_COMPANY))
     b.result(
         "o.event_company_mismatch_409", s == 409 and code_of(body) == "company_mismatch", http=s, code=code_of(body)
     )
@@ -828,8 +836,114 @@ def cmd_events(part_id, order_id, legacy_key=""):
         b.result("o.event_legacy_key_reused_processed_with_anomaly", False, reason="tidak ada kunci lama di BFF")
 
 
+# ----------------------------------------------------------------------------------- G20: bayar di kasir (§12.2)
+def cmd_counter_channel(timeout="150"):
+    """Salinan katalog BFF tersinkron dari Odoo: kanal GL mengiklankan `payment_modes` qris+counter (L-52, L-57)."""
+    deadline = time.time() + int(timeout)
+    modes = None
+    s = None
+    while time.time() < deadline:
+        s, ch, _, _ = b.req("GET", "/v1/catalog/channels")
+        chan = next((c for c in (ch or {}).get("items", []) if c.get("channel_code") == CHANNEL), None)
+        modes = (chan or {}).get("payment_modes")
+        if s == 200 and isinstance(modes, list) and "counter" in modes:
+            break
+        time.sleep(5)
+    b.result(
+        "q.counter_channel_payment_modes",
+        s == 200 and isinstance(modes, list) and "counter" in modes and "qris" in modes,
+        http=s,
+        modes=modes,
+    )
+
+
+def cmd_checkout_counter(label="main"):
+    """POST /v1/orders `payment_method: counter` -> 201 awaiting_counter_payment, `payment` PERSIS
+    {method, counter_code, expires_at} (tanpa QR/intent), kode bayar != kode ambil; negatif: metode asing -> 400;
+    replay (key sama) -> order sama + kode bayar sama (L-56)."""
+    st = load()
+    o = st["orders"][label]
+    h = dict(auth(st))
+    h["Idempotency-Key"] = idem_key(o["quote_id"])
+    s0, b0, _, _ = b.req(
+        "POST",
+        "/v1/orders",
+        body={"quote_id": o["quote_id"], "accept_total": o["total"], "payment_method": "cash"},
+        headers=h,
+    )
+    b.result(f"q.checkout_unknown_method_400[{label}]", s0 == 400, http=s0, code=code_of(b0))
+    req = {"quote_id": o["quote_id"], "accept_total": o["total"], "payment_method": "counter"}
+    s, body, _, _ = b.req("POST", "/v1/orders", body=req, headers=h)
+    pay = (body or {}).get("payment") or {}
+    parts = (body or {}).get("parts") or [{}]
+    raw = json.dumps(body)
+    ok = (
+        s == 201
+        and body.get("status") == "awaiting_counter_payment"
+        and body.get("amount_payable") == o["total"]
+        and set(pay) == {"method", "counter_code", "expires_at"}
+        and pay.get("method") == "counter"
+        and bool(PICKUP_RE.match(pay.get("counter_code") or ""))
+        and parts[0].get("status") == "placed"
+        and "qr_string" not in raw
+        and "pickup_code" not in raw
+    )
+    b.result(f"q.checkout_counter_201[{label}]", ok, http=s, status=(body or {}).get("status"), code=code_of(body))
+    o["order_id"] = (body or {}).get("order_id")
+    o["counter_code"] = pay.get("counter_code")
+    save(st)
+    s2, b2, _, _ = b.req("POST", "/v1/orders", body=req, headers=h)
+    same = ((b2 or {}).get("payment") or {}).get("counter_code") == o["counter_code"]
+    b.result(
+        f"q.checkout_counter_replay_same_code[{label}]",
+        s2 in (200, 201) and (b2 or {}).get("order_id") == o["order_id"] and same,
+        http=s2,
+        same_order=(b2 or {}).get("order_id") == o["order_id"],
+        same_code=same,
+    )
+
+
+def cmd_counter_view(label="main"):
+    """GET /v1/orders/:id selama awaiting_counter_payment membawa kode bayar (hanya pemilik); daftar pesanan tidak."""
+    st = load()
+    o = st["orders"][label]
+    s, body, _, _ = get_order(st, label)
+    pay = (body or {}).get("payment") or {}
+    b.result(
+        f"q.counter_view_owner[{label}]",
+        s == 200
+        and body.get("status") == "awaiting_counter_payment"
+        and pay.get("counter_code") == o.get("counter_code")
+        and "qr_string" not in pay,
+        http=s,
+        status=(body or {}).get("status"),
+    )
+    s2, lst, _, _ = b.req("GET", "/v1/orders?limit=20", headers=auth(st))
+    item = next((i for i in (lst or {}).get("items", []) if i.get("order_id") == o["order_id"]), None)
+    b.result(
+        f"q.counter_list_no_code[{label}]",
+        s2 == 200 and item is not None and "counter_code" not in json.dumps(item),
+        http=s2,
+        status=(item or {}).get("status"),
+    )
+
+
+def cmd_counter_cancel(label="main"):
+    """Pelanggan membatalkan pesanan yang menunggu bayar di kasir (tanpa refund, L-52)."""
+    st = load()
+    oid = st["orders"][label]["order_id"]
+    s, body, _, _ = b.req("POST", f"/v1/orders/{oid}/cancel", body={}, headers=auth(st))
+    b.result(
+        f"q.counter_cancel[{label}]", s == 200 and (body or {}).get("status") == "cancelled", http=s, code=code_of(body)
+    )
+
+
 if __name__ == "__main__":
     cmds = {
+        "counter_channel": cmd_counter_channel,
+        "checkout_counter": cmd_checkout_counter,
+        "counter_view": cmd_counter_view,
+        "counter_cancel": cmd_counter_cancel,
         "events": cmd_events,
         "login": cmd_login,
         "catalog": cmd_catalog,

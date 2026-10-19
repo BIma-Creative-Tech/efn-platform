@@ -1,11 +1,156 @@
-# Rencana Paket Kerja Gelombang 18+ — Turunan Keputusan Pemilik Proyek 10 Okt 2026
+# Rencana Paket Kerja Gelombang 18+ — Turunan Keputusan Pemilik Proyek 10 & 18 Okt 2026
 
-- **Status:** Usulan efn-architect untuk efn-lead (urutan & estimasi **belum** disetujui lead/PO). Dokumen ini tidak mengubah kontrak `docs/04`; perubahan kontrak ditulis lead per paket.
-- **Tanggal:** 2026-10-10
+- **Status:** Usulan efn-architect untuk efn-lead (urutan & estimasi **belum** disetujui lead/PO). Dokumen ini tidak mengubah kontrak `docs/04`; perubahan kontrak ditulis lead per paket. **Bagian A (18 Okt) menang atas §1–§4 (10 Okt) bila bertentangan.**
+- **Tanggal:** 2026-10-10 · revisi **2026-10-18** (bagian A: status G18–G19, paket W-29..W-34, urutan G20+)
 - **Sumber:** jawaban pemilik proyek 10 Okt 2026 (60 butir) — dicatat di `docs/decisions/README.md` bagian "Keputusan pemilik proyek 10 Okt 2026 (sesi tanya-jawab)"; ADR-032 (Accepted, opsi B), ADR-035 (baru), ADR-019/020/022/027/034 (catatan 10 Okt); `docs/compliance/PDP_DATA_INVENTORY.md` v7; risiko baru R-B11, R-L09, R-L10, R-T17, R-S15 (`docs/01` §4).
 - **Tarif rujukan biaya:** ±Rp5–9 jt per minggu-engineer (asumsi ADR-031, belum divalidasi). Estimasi di bawah = **perkiraan kasar arsitek** tanpa fit-gap rinci; QA ±20 % sudah termasuk bila disebut "termasuk QA".
 
-## Ringkasan manajemen
+## A. Pembaruan 18 Okt 2026 — status G18–G19, paket baru, urutan G20+
+
+Sumber: keputusan pemilik proyek 18 Okt 2026 (butir 18-1..18-38, `docs/decisions/README.md`), ADR-036 (**Accepted** 18 Okt), ADR-001 (catatan revisi 18 Okt: 6 entitas), `docs/04 §11.7` (L-39, L-45, L-47), review r12.
+
+### A.0 Ringkasan manajemen
+- **G18 dan G19 selesai dibangun.** G18 (pembulatan Rp1, poin sebagai alat bayar, refund ke metode asal, masa simpan data, rotasi kunci) sudah digabung ke `main` (PR #60). G19 (reservasi stok 1 jam, kode promo, kanal per brand, uji coba enkripsi data pribadi) menunggu digabung (PR #62).
+- **Keputusan 18 Okt mengubah rencana ke depan.**
+  - Setiap brand menjadi perusahaan sendiri (6 entitas).
+  - Data pribadi yang dienkripsi di Odoo jauh lebih luas: kini termasuk nama, vendor perorangan, dan karyawan.
+  - Karena vendor pembayaran belum dipilih, pesanan online dibayar **di kasir** dulu.
+- **Usulan urutan.**
+  1. **G20** menyiapkan fondasi yang mahal bila diubah setelah ada data nyata: struktur 6 perusahaan, enkripsi data pelanggan, bayar di kasir, dan perbaikan kecil (batas berat pesanan, PB1 0 % untuk bawa pulang, retur tanpa struk dengan persetujuan Store Manager).
+  2. **G21** menyiapkan poin per perusahaan, struktur organisasi & hak akses, PPN Coretax, faktur atas nama pembeli, serta enkripsi vendor/karyawan.
+  3. **G22** membangun restoran (QR ponsel, restoran online, poin online).
+  4. **G23+** membangun antar-perusahaan, laporan keuangan, kurir internal, dan portal vendor.
+- **Sisa pekerjaan:** ±57–79 minggu-engineer (±Rp0,29–0,71 M pada tarif asumsi). Dari angka ini, ±7–10 minggu-engineer sudah dianggarkan di ADR-031.
+- **Pekerjaan yang menunggu server staging.** Server staging/produksi belum ada (proyek masih tahap usulan/demo). Semua kode bisa dibangun dan diuji di lingkungan pengembangan. Yang menunggu server: uji beban, uji pemulihan bencana, uji perangkat outlet, domain & WhatsApp produksi, pentest, dan UAT dengan data klien.
+
+### A.1 Status G18–G19
+| Gelombang | PR | Status | Paket selesai | Catatan / sisa |
+|---|---|---|---|---|
+| **G18** | **#60 — merged** | Selesai (smoke 305/0, re-review r11 GO) | W-01 (E-30 Poin EFN = alat bayar), W-03 (Rp1), W-10 (konfigurasi promo POS), W-11 (rotasi API key 30 h), W-18 (tunda hapus akun 14 h), W-19 (retensi; **sisa:** GC outbox poin Odoo 10 th), W-22 (KDS pilot), W-24 (E-31 refund ke metode asal), W-25 (E-34 daftar member 17+, `source_ref` opak), W-20 fit-gap (E-33 opsional, belum dibangun), W-28 kick-off (kustodi brankas) | R-L09 PB1 non-dine-in tetap dipungut (diubah 18-1 → W-14b) |
+| **G19** | **#62 — menunggu merge** (re-review r12 GO, online OFF di prod, L-47) | Selesai di kode | W-02 (E-35 reservasi 1 jam), W-09 (E-36 promo/kode), W-21 (E-37a `brand_code`, kanal per brand; E-37b ditunda), W-14 (konfigurasi PB1+SC), W-08 **PoC** (`efn_pii` + `efn_pii_base_vat`, lulus bersyarat L-39), fit-gap W-04/W-06, API key per kanal | Kode kanal `RTL-GL`… **diganti** kode per PT (W-32). Syarat L-47 (promo berkuota, SEC-142/143/144) → backlog aktivasi |
+
+### A.2 Paket baru (18 Okt)
+| ID | Paket (butir) | Agent (urutan) | Prasyarat | Dependensi | Estimasi (minggu-engineer) | Blok | Gelombang |
+|---|---|---|---|---|---|---|---|
+| **W-29** | **Konfigurasi poin per PT di Odoo → BFF + jurnal akrual liabilitas harian** (18-9, 18-10, 18-11). Model `efn.loyalty.policy` per company (laju earn, batas earn per transaksi/hari, batas redeem, min redeem, maks % order, batas anti-fraud), 4-eyes (Loyalty Manager membuat, Finance menyetujui), teraudit `efn_audit`. Dikirim ke BFF lewat outbox bertanda tangan; BFF menolak nilai di luar plafon env. Jurnal akrual harian per PT (impor teraudit, idempoten) + rekonsiliasi saldo. **Alokasi FIFO per lot earn** di ledger BFF (penerbit = PT earn) untuk settlement & breakage | functional → lead (kontrak) → odoo + bff → data-ai (recon) → qa → security | W-32; keputusan Finance: nilai tukar seragam (Q-AD1-6), akun liabilitas/kliring per PT | ADR-020, W-01, K-18-6 | **3,25–4,25** (functional 0,5; odoo 1–1,5; BFF 1–1,5; data 0,25; QA 0,5) | R (parameter final), P | fit-gap G20 → G21 |
+| **W-30** | **Bayar di kasir untuk pesanan online/QR** (18-18). Checkout `payment_method: "counter"`; reservasi & batas 1 jam tetap; SO online ditarik ke POS outlet dan dibayar (tunai/EDC/QRIS statis); Odoo `mark_paid` internal + event `paid` `method:"counter"`; hanya pesanan **satu PT**; maks 1 pesanan bayar-di-kasir terbuka per member | functional (pos_sale + faktur: hindari faktur ganda, pola SEC-139) → lead (kontrak) → odoo + bff + frontend → qa → security | W-32 (kanal per PT) | E-28, `efn_online_pos_sale` (mengubah aturan A-2 "POS menolak settle SO online" khusus mode counter), ADR-019 | **3,5–4** (functional 0,5; odoo 1–1,5; BFF 1; FE 0,5; QA 0,5) | **O** (satu-satunya cara menerima uang nyata sebelum vendor payment, A-4) | **G20** |
+| **W-31** | **Struktur organisasi Odoo → peran/grup + pemisahan tugas** (18-24). Departemen & jabatan `hr` CE per PT → templat peran `efn_role` (jabatan → set `res.groups`), matriks SoD yang ditegakkan (mis. Sales Manager ≠ approver refund CS, kasir ≠ Store Manager untuk retur tanpa struk, pembuat ≠ penyetuju kebijakan poin), laporan review akses bulanan (A-5, R-S14). OCA `base_user_role` hanya referensi desain (ADR-031) | functional (desain OC templat + SoD bersama klien) → odoo → qa → security | W-32; nama orang (data klien, menyusul) | ADR-024, ADR-035, SEC-111/112 | **3–3,5** (functional 1; odoo 1,5–2; QA 0,5) | O (A-5), R (Store Manager) | desain G20 → G21 |
+| **W-32** | **Restrukturisasi company per brand** (18-27): 6 company root (bukan cabang), COA/pajak/jurnal/metode Poin EFN per PT, kode `EFN/GL/PB/BCR/BCF/FARM`, kanal `GL/BCR/PB/BCF`, produk per company, data demo & smoke, `dim_company` | functional → odoo + bff + data-ai → qa | Kode final (Q-AD1-7) | ADR-001 (revisi), semua `efn_setup_*` | **2–3,5** | **R, O, F** (fondasi) | **G20 (pertama)** |
+| **W-33** | **Batas berat pesanan online per kanal** (18-16, E-35b): `max_order_weight_kg` kanal; Σ `product.weight` × qty; produk tanpa berat → perilaku configurable (tolak/abaikan); issue `{code:"weight_limit"}` → `409 cart_has_issues` | functional → odoo + bff + FE → qa | — | E-35, L-41 | **0,5–0,75** | O | G20 |
+| **W-34** | **PPN rumus Coretax + selisih pembulatan ke akun beban** (18-5, 18-6): PPN 12 % × DPP 11/12 per baris; selisih terhadap total dokumen (`round_globally`) ke akun *Selisih Pembulatan Pajak* configurable per PT; berlaku untuk PT PPN (GL, BCR, Holding; FARM ⚠) | functional (fit-gap: konfigurasi pajak CE vs gap) → odoo (bila gap) → qa | W-32; konsultan pajak (disarankan) | ADR-027, W-03 | **1,25–2,75** (0,5 bila cukup konfigurasi) | P (go-live entitas PPN) | fit-gap G20 → G21 |
+
+**Kontrak usulan (untuk lead, belum di `docs/04`):**
+- **W-29 kebijakan poin.**
+  - Odoo outbox → BFF `PUT /internal/v1/loyalty/policies/{company_code}/{version}` dengan `X-EFN-Service-Key` + `X-EFN-Signature: t=<unix>,v1=<hex HMAC-SHA256("<t>." + body)>` (secret baru `loyalty_policy_signing_key`, Odoo + BFF), replay window 300 s.
+  - Idempotency = `(company_code, version)`: versi sama dengan isi beda → `409 policy_conflict`; di luar plafon `LOYALTY_POLICY_CEILING_*` → `422 policy_out_of_bounds`.
+  - Payload `{schema_version:1, company_code, version, effective_from, approved_by_uid, params:{earn_idr_per_point, earn_max_per_order, earn_max_per_member_day, redeem_min_points, redeem_max_pct_order, limit_company_hour, limit_cashier_hour}}` (integer ≥ 0, `additionalProperties:false`).
+  - BFF menyimpan `platform.loyalty_policy` (append-only). `GET /v1/pos/loyalty/params` mengembalikan kebijakan aktif per `company_code`.
+- **W-29 akrual.**
+  - Cron Odoo harian menarik `GET /internal/v1/loyalty/accruals?company_code=&date=` → `{earned_value_idr, redeemed_value_idr_by_issuer:{…}, restored_value_idr, breakage_value_idr, closing_liability_idr}`.
+  - Jurnal ber-`ref` `EFN-LOY-<company>-<date>` (unik, idempoten). Selisih saldo → `EFN_LOYALTY_RECON`.
+- **W-30 bayar di kasir.**
+  - Checkout `payment_method:"counter"` (selain itu tetap `qris`).
+  - Multi-bagian → `422 counter_payment_single_part_only`. Pesanan terbuka melebihi `ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER` (default 1) → `429 too_many_open_orders`.
+  - Status platform `awaiting_counter_payment`; event Odoo `paid` membawa `method:"counter"` dan `paid_idempotency_key = pos.order.uuid`.
+  - Kedaluwarsa = alur pembatalan yang ada (tanpa refund, L-43).
+
+### A.3 Paket yang berubah (18 Okt)
+| ID | Perubahan | Estimasi baru | Gelombang |
+|---|---|---|---|
+| **W-08 → E-38 penuh** | ADR-036 **Accepted**, cakupan S1+ (pelanggan, vendor individu, portal, karyawan; nama/alamat/kota/kode pos; `pos.order.email/mobile` terenkripsi; token nama awalan ≥ 3). Dipecah **E-38a** (pelanggan + inti + POS + Coretax + akuntansi) dan **E-38b** (vendor/portal/karyawan + `efn_region`). Kriteria penerimaan AC-1..AC-14 (L-39 a–d, SEC-136/137/138/140) | **9–11,5** (a: 7,25–9,25; b: 1,75–2,25) — angka lead 7–9 hanya bila XML Coretax/karyawan/region ditunda (ADR-036 §0.12) | a: **G20**; b: **G21** |
+| **W-14b** | PB1 non-dine-in **0 %** (18-1): data `efn_setup_company` (pajak *PB1 Non-Dine-in* 0 %, fiscal position tetap), test, catatan R-L09 "risiko diterima pemilik proyek" | 0,1–0,25 | G20 |
+| **W-24b (E-31b)** | Retur tanpa struk **diblokir kecuali disetujui Store Manager** (18-15): persetujuan PIN/login peran Store Manager di POS, tetap tunai saja, teraudit; grup sementara sampai W-31 | 0,75–1 | G20 |
+| **W-17** | Hangus/anonimisasi **12 bulan** tidak aktif (bukan 24, 18-14), configurable; notifikasi WA 30 h; **jurnal breakage** per PT penerbit (liabilitas → pendapatan poin kedaluwarsa, akun configurable); teks syarat program (Legal) | 2–2,5 | G22 |
+| **W-05** | Mulai dari **kurir internal** (18-19): penugasan, status, bukti serah, zona/ongkir sederhana; alamat penerima = partner terlindungi (E-38b). 3PL menyusul setelah vendor dipilih | tahap kurir internal 4–5,5 (+2–4 adapter 3PL) | G23+ |
+| **W-06** | NIK/NPWP hanya bila pembeli **meminta faktur** atau B2B (18-7); B2C langsung tanpa identitas | 2–3 (tetap) | G21 (setelah E-38a) |
+| **W-13** | Portal **configurable di master vendor** (18-26): penanda & fungsi portal per vendor; login opak (Q-PII8) | 5–6,5 (tetap) | G23+ (setelah E-38b) |
+| **W-15** | TP hanya **Bacha F&B ↔ Bacha Retail** dan **Holding ↔ PT** (18-3); FARM/antar-brand = Q-AD1-1; settlement poin bulanan memakai alokasi FIFO W-29 | 4–5,5 (tetap; matriks pasangan lebih banyak, cost-plus lebih sedikit) | G23+ |
+| **W-16** | Ikuti rekomendasi (18-25): `efn_account_reports` per PT + mart konsolidasi & eliminasi 6 entitas | 4–6 (tetap) | G23+ |
+| **W-19** | Tambah: retensi backup off-site **35 hari + base bulanan 12 bulan** (18-35); kunci pensiun ≥ 12 bln + 30 h | +0,25–0,5 (devsecops; verifikasi butuh staging) | G21 |
+| **W-23** | **Profil perangkat** (18-23): PC kasir dual screen (layar pelanggan), single screen, **tablet**; profil di `efn_setup_pos` + pola WireGuard per perangkat (ADR-023). **Belum terverifikasi:** fitur layar pelanggan POS CE 19 | 0,75–1,25 | G21 (konfigurasi), uji perangkat butuh staging |
+| **W-28** | Draf DPIA **selesai** (`docs/compliance/DPIA_DRAFT.md`, 18 Okt); sisa: pengisian DPO, off-site, brankas, uji pemulihan | sisa 1,5–2,5 | G21–G23 |
+| **W-07, W-04, W-12, W-27** | Tidak berubah isinya; **dimundurkan ke G22** karena G20–G21 diisi fondasi baru (PP-4 "F&B online G20" tidak lagi realistis tanpa engineer Odoo ketiga) | 3–4; 4–5,5; 2,5–3,5; 0,5 | G22 |
+| W-26 | Laporan settlement per **4 PT** | 0,5–1 | G21 |
+| Teks pelanggan (18-36) | Draf L-21e = teks final pilot (usia 17+, hapus akun 14 h) | ±0,25 (frontend) | G20 |
+
+### A.4 Ringkasan estimasi sisa (minggu-engineer, kasar)
+| Gelombang | Paket | Estimasi | Kalender (tim pola G13–G19: 2 Odoo, 1 BFF, 1 FE, 1 devsecops, 1 data, QA) |
+|---|---|---|---|
+| **G20** | W-32, E-38a, W-30, W-33, W-14b, W-24b, teks pelanggan + fit-gap W-29/W-31/W-34/W-23 (±2,75–3) | **±17–22** | ±5 minggu (bottleneck: 2 engineer Odoo ±8–9 minggu-engineer kerja Odoo) |
+| **G21** | E-38b, W-29, W-31, W-34, W-06, W-23, W-26, W-19 tambahan | **±10–15,5** | ±5 minggu |
+| **G22** | W-07, W-04, W-27, W-12, W-17 | **±12–16** | ±5–6 minggu |
+| **G23+** | W-15, W-16, W-05 (kurir internal), W-13, W-28 sisa | **±18,5–26** | ±8–10 minggu |
+| **Total sisa** | | **±57–79** (±Rp0,29–0,71 M; ±7–10 sudah di ADR-031) | ±23–26 minggu kalender |
+
+Di luar angka: adapter 3PL (+2–4), E-33 GS1 opsional (+1,5–2), nama karyawan terenkripsi K-b (+2–3), review security tiap gelombang, pentest pihak ketiga portal.
+
+### A.5 Urutan yang direkomendasikan & dependensi
+```mermaid
+flowchart TD
+    W32[W-32 6 company] --> W30[W-30 bayar di kasir]
+    W32 --> W29[W-29 poin per PT + akrual]
+    W32 --> W34[W-34 PPN Coretax]
+    W32 --> W31[W-31 OC / peran / SoD]
+    W32 --> W26[W-26 settlement 4 PT]
+    E38a[E-38a enkripsi pelanggan] --> PRODDB[(DB produksi dibuat)]
+    W32 --> PRODDB
+    E38a --> W06[W-06 faktur pembeli]
+    E38a --> E38b[E-38b vendor/portal/karyawan]
+    E38b --> IMPORT[(impor master vendor & karyawan)]
+    E38b --> W13[W-13 portal vendor]
+    E38b --> W05[W-05 kurir internal]
+    W31 --> W24b[W-24b retur Store Manager: peran final]
+    W29 --> W12[W-12 poin online]
+    W29 --> W17[W-17 breakage 12 bln]
+    W29 --> W15[W-15 interco + settlement poin]
+    W14b[W-14b PB1 non-dine-in 0 %] --> W04[W-04 F&B online]
+    W07[W-07 QR ponsel] --> PILOTF[(pilot F&B)]
+    W04 --> PILOTF
+    W30 --> PILOTO[(pilot online ritel, uang nyata)]
+    W33[W-33 batas berat] --> PILOTO
+    W15 --> W16[W-16 laporan per PT + konsolidasi]
+```
+
+**G20 — fondasi yang mahal dibalik + jalur uang nyata online:**
+1. **W-32 lebih dulu (minggu 1–2).** Hierarki company Odoo terkunci setelah dibuat, dan COA/pajak/kode kanal dipakai oleh hampir semua paket berikutnya. Biayanya kini ±2–3,5 minggu-engineer; setelah ada jurnal produksi ≥ 4–8 minggu + risiko audit.
+2. **E-38a paralel (engineer Odoo A, seluruh G20).** Syarat DB produksi dibuat tanpa E14, dan syarat W-06. Tidak bergantung W-32 kecuali data demo.
+3. **W-30 setelah W-32 (engineer Odoo B + BFF + FE).** Satu-satunya cara pilot online menerima uang nyata selama vendor payment (A-4) belum dipilih.
+4. Paket kecil: W-33, W-14b, W-24b (grup sementara Store Manager), teks pelanggan.
+5. Functional menyiapkan fit-gap G21: W-29, W-31 (desain OC + SoD bersama klien), W-34, W-23.
+
+**G21 — keuangan, akses, dan sisa enkripsi.** E-38b (sebelum master vendor/karyawan diimpor), W-29 (poin per PT; dibutuhkan sebelum Finance mengisi parameter final G-2), W-31 (syarat A-5), W-34 (sebelum go-live entitas PPN), W-06 (setelah E-38a), W-23, W-26.
+
+**G22 — restoran.** W-07 (E-27 QR ponsel tahap 1 bayar di kasir), W-04 (E-29a), W-27, W-12 (poin online, setelah W-29), W-17 (breakage, setelah W-29).
+- **Alternatif bila PO ingin restoran lebih cepat:** tukar G21 ↔ G22. Konsekuensinya, pilot F&B memakai parameter poin global placeholder (tanpa W-29), SoD lewat SOP (tanpa W-31), dan faktur pembeli menyusul. Tambahan engineer Odoo ketiga memungkinkan W-07 mulai di G20.
+
+**G23+ — produksi penuh.** W-15 → W-16 (sebelum transaksi antar-entitas nyata & tutup buku bulan pertama), W-05 kurir internal, W-13 portal vendor (setelah E-38b, ADR-035, pentest), W-28 sisa.
+
+### A.6 Yang tidak bisa dimulai/diselesaikan sebelum staging (18-28: server belum ada)
+| Pekerjaan | Kenapa butuh staging/produksi | Yang bisa dikerjakan sekarang |
+|---|---|---|
+| Uji beban POS + online (A-3), AC-1 E-38 final | butuh hardware & jaringan setara produksi | ukur di dev sebagai baseline |
+| Bukti paralel promo berkuota (SEC-130/142, L-47) | dua koneksi nyata ke DB produksi-setara | test unit/integrasi dev |
+| Uji pemulihan (restore + key ring Odoo + WAL-G), retensi off-site 35 h / 12 bln, object lock | butuh target off-site & host LUKS | runbook, skrip, CI |
+| Timer systemd (rotasi API key W-11, sertifikat PKI), LUKS/AES-NI | butuh host nyata | kode & unit test sudah ada |
+| WireGuard per outlet, profil perangkat (W-23), Epson ePOS, tablet, mini PC KDS | butuh perangkat outlet | profil konfigurasi, runbook |
+| Domain per brand, Cloudflare, ACME DNS, WhatsApp Cloud API produksi (template W-17, OTP) | domain belum ada (18-29), verifikasi bisnis Meta | adapter & mode console di dev |
+| Pentest pihak ketiga portal (W-13) | butuh endpoint publik staging | desain ADR-035 |
+| UAT dengan master data klien (outlet, SKU, OC & nama orang, parameter Finance) | data klien belum ada | data demo per 6 entitas (W-32) |
+| Rehearsal migrasi E14 | hanya perlu bila DB produksi dibuat sebelum E-38a | — (direkomendasikan tidak terjadi) |
+
+### A.7 Keputusan yang masih dibutuhkan
+| ID | Keputusan | Pemutus | Memblokir |
+|---|---|---|---|
+| L-G20-1 | Setujui urutan G20 (W-32 + E-38a + W-30) dan pemunduran F&B ke G22 (atau alternatif tukar G21↔G22) | lead + PO | perencanaan G20 |
+| L-G20-2 | Terima estimasi E-38 ±9–11,5 (bukan 7–9) atau tunda XML/karyawan/region (butuh persetujuan pemilik proyek karena meralat 18-8/18-33) | lead + PO | anggaran |
+| Q-AD1-1..7 | Struktur entitas: harga FARM/antar-brand, PPN FARM, NITKU outlet, produk lintas entitas, pengendali data member, nilai tukar poin, kode final | Finance, Tax, Legal, PO | W-32, W-15, W-29 |
+| Q-PII7..12 | Interpretasi ADR-036 (nama karyawan, login portal, rekening bank, kode wilayah, sorting, XML) | DPO, Finance, PO | E-38a/b |
+| 18-38 / Q-P10 | Grup auditor lintas PT | Legal | audit lintas PT |
+| (tetap) | Vendor payment (A-4), vendor 3PL, opini konsultan pajak (P-8, TP, ADR-019, PB1 kota, FARM), data outlet/perangkat/promo/modifier | Finance, Legal, IT, Ops | aktivasi online, W-05, W-07 tahap 2, W-15 |
+
+---
+
+## Ringkasan manajemen (10 Okt 2026)
 
 Pemilik proyek menjawab **semua** pertanyaan terbuka pada 10 Oktober 2026. Sebagian besar jawaban **sesuai** dengan yang sudah dibangun, tetapi **±25 jawaban menambah atau mengubah pekerjaan**. Yang terbesar: **pembulatan Rupiah ke Rp1 di seluruh sistem**, **penukaran poin diperlakukan sebagai alat bayar**, **pesan makanan dari ponsel di meja (QR)**, **pesanan restoran online**, **pesan-antar (3PL + kurir sendiri)**, **data faktur pembeli di Odoo yang wajib dienkripsi**, dan **portal vendor**. Totalnya kira-kira **±52–79 minggu-engineer** (±Rp0,26–0,71 M pada tarif asumsi), sebagian paralel; **±7–10 minggu-engineer** di antaranya (antar-perusahaan dan laporan keuangan) **sudah dianggarkan** di ADR-031.
 

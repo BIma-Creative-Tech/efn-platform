@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- E-45: record rule multi-company. Kedua model hanya ditulis sudo oleh server (lookup RPC / sync POS); ACL user
+     baca saja (ir.model.access.csv). -->
+<odoo>
+    <data noupdate="1">
+        <record id="efn_online_counter_lookup_rule_company" model="ir.rule">
+            <field name="name">EFN bayar di kasir lookup: multi-company</field>
+            <field name="model_id" ref="model_efn_online_counter_lookup"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_online_counter_settlement_rule_company" model="ir.rule">
+            <field name="name">EFN bayar di kasir pelunasan: multi-company</field>
+            <field name="model_id" ref="model_efn_online_counter_settlement"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_online_counter_refund_auth_rule_company" model="ir.rule">
+            <field name="name">EFN bayar di kasir otorisasi refund: multi-company</field>
+            <field name="model_id" ref="model_efn_online_counter_refund_auth"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+    </data>
+</odoo>

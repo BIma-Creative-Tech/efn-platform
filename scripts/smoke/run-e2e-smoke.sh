@@ -11,7 +11,7 @@
 #
 # Pemakaian (Git Bash/Linux):  bash scripts/smoke/run-e2e-smoke.sh [a b c d e f g l o v]   (default: a b c d f e g l o;
 #   v = jalur VLM nyata, opsional, butuh model OLLAMA_VISION_MODEL di Ollama; o = penjualan online G17, terakhir
-#   karena me-recreate api-gateway untuk uji kill switch)
+#   karena me-recreate api-gateway untuk uji kill switch; q = G20 bayar di kasir §12.2, butuh o sudah jalan di stack yang sama)
 # Keluaran: baris `SMOKE_RESULT {...}` + ringkasan PASS/FAIL; exit 1 bila ada FAIL.
 set -euo pipefail
 
@@ -26,7 +26,7 @@ command -v openssl > /dev/null || { echo "openssl dibutuhkan" >&2; exit 2; }
 
 P="efn"
 BFF="${P}-api-gateway-1"; ODOO="${P}-odoo-1"; PG="${P}-postgres-1"; CH="${P}-clickhouse-1"
-SCENARIOS=("$@"); [[ ${#SCENARIOS[@]} -eq 0 ]] && SCENARIOS=(a b c d f e g l p o)
+SCENARIOS=("$@"); [[ ${#SCENARIOS[@]} -eq 0 ]] && SCENARIOS=(a b c d f e g l p o q)
 
 WORK="$(mktemp -d)"
 RESULTS="${WORK}/results.txt"
@@ -275,7 +275,7 @@ scenario_e() {
   # Hanya bila BFF dev dijalankan dengan MIGRATION_ENABLED=true (endpoint 404 bila tidak; runbook E2E_SMOKE_REPORT).
   if [[ "$MIGRATION_ON" == 1 ]]; then
     r="$(migrate members "{\"source_ref\":\"$(newuuid)\",\"member_ref\":\"$PHONE\"}")"
-    r="$r ; $(migrate opening-balance "{\"source_ref\":\"$(newuuid)\",\"member_ref\":\"$PHONE\",\"points\":10,\"company_code\":\"FNB\"}")"
+    r="$r ; $(migrate opening-balance "{\"source_ref\":\"$(newuuid)\",\"member_ref\":\"$PHONE\",\"points\":10,\"company_code\":\"PB\"}")"   # G20: FNB -> PB (§12.1)
     check "e.migration_member_deleting_409" "$([[ "$r" == *member_deleting*"|409 ; "*member_deleting*"|409" ]] && echo 1 || echo 0)" "$r"
   else
     echo "   (cek migrasi SEC-65 dilewati: MIGRATION_ENABLED != true di $BFF)"
@@ -537,6 +537,16 @@ scenario_l() { # Gelombang 13: Poin EFN di POS (docs/04 §9) — Odoo efn_pos_lo
   r="$(psql_platform -c "select (select count(*) from platform.loyalty_ledger where source_ref='$u9') || '/' || (select count(*) from platform.loyalty_pos_earn where order_ref='$u9')")/$(bal)"
   check "l.refund_noreceipt_no_bff_effect" "$([[ "$r" == 0/0/89 ]] && echo 1 || echo 0)" "ledger/earn/saldo=$r"
 
+  # 8b'. G20 E-41 (docs/04 §12.4, L-51/L-54): retur tanpa struk default = persetujuan Store Manager (PIN diverifikasi server).
+  #      Tanpa persetujuan ditolak; kasir sendiri bukan approver; PIN salah ditolak; PIN benar -> sah sekali pakai (terikat
+  #      order + nominal); 5 PIN salah -> terkunci walau PIN benar. (Offline-diblokir: tour efn_pos_refund_origin.)
+  r="$(odoo -e SMOKE_STEP=ret_approval -e SMOKE_ORDER_UUID="$(newuuid)")"
+  check "l.e41_no_approval_rejected" "$([[ "$(field sync_without_approval "$r")" == UserError ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  check "l.e41_cashier_not_approver_wrong_pin" "$([[ "$(field self_approver "$r")" == approver_invalid && "$(field wrong_pin "$r")" == invalid_pin ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  check "l.e41_approval_ok_single_use_token_hidden" "$([[ "$(field approve_ok "$r")" == true && "$r" == *'"approve_keys": ["expires_in", "max_amount", "ok"]'* && "$(field approve_expires_in "$r")" == 300 && "$(field sync_with_approval "$r")" =~ ^(paid|done)$ && "$(field sync_other_order_same_approval "$r")" == UserError && "$(field audit_consumed "$r")" == 1 ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  check "l.e41_amount_exceeded_rejected" "$([[ "$(field approve_small_ok "$r")" == true && "$(field sync_amount_exceeded "$r")" == UserError ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  check "l.e41_lockout_after_5_wrong_pins" "$([[ "$r" == *'"lock_sequence": ["invalid_pin", "invalid_pin", "invalid_pin", "invalid_pin", "locked"]'* && "$(field correct_pin_while_locked "$r")" == locked ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+
   # 8c. G13c SEC-61: earn melebihi batas harian member (2000 poin; order 401 x Rp50.000 = 2005 poin, < plafon order
   #     5000) -> 409 earn_limit_exceeded final, order review, tanpa catatan earn; baris EFN_LOYALTY_ANOMALY sampai Loki
   #     (stream efn_loyalty, label kind) dan alert EfnLoyaltyAnomalyWarning sampai Alertmanager.
@@ -615,28 +625,29 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   check "o.odoo_channel_setup" "$([[ "$(field ok "$r")" == true && "$(field tech_user_groups_ok "$r")" == true && "$(field staff_is_admin "$r")" == false ]] && echo 1 || echo 0)" "$r"
   # G19: kanal dev = reservasi saat place (§11.1), batas bayar Odoo 70 menit, program promo dev SMOKE10 sah (§11.2 no. 7)
   check "o.g19_channel_confirm_70_promo_program" "$([[ "$(field stock_hold_mode "$r")" == confirm && "$(field payment_timeout_minutes "$r")" == 70 && "$(field promo_program_ok "$r")" == true ]] && echo 1 || echo 0)" "$r"
-  n="$(tr -d '\r\n' < "${ROOT}/secrets/odoo_api_key_online_rtl.txt" | grep -cE '^[0-9a-f]{40}$' || true)"
-  check "o.api_key_real_not_placeholder" "$([[ "$n" == 1 ]] && echo 1 || echo 0)" "secrets/odoo_api_key_online_rtl.txt 40 hex (nilai tidak dicetak)"
+  # G20 (docs/04 §12.1): kanal dev = GL (kode PT), user teknis efn_online_gl, secret odoo_api_key_online_gl
+  n="$(tr -d '\r\n' < "${ROOT}/secrets/odoo_api_key_online_gl.txt" | grep -cE '^[0-9a-f]{40}$' || true)"
+  check "o.api_key_real_not_placeholder" "$([[ "$n" == 1 ]] && echo 1 || echo 0)" "secrets/odoo_api_key_online_gl.txt 40 hex (nilai tidak dicetak)"
 
   # 0b. Gateway + key nyata: 10 path sah -> jawaban APLIKASI Odoo (200 / galat bisnis), bukan 401/403 atau deny filter.
   #     Key dibaca DI DALAM container curl (header file), tidak lewat argv/log.
   cp "${ROOT}/secrets/efn_ca_crt.txt" "${WORK}/efn_ca.crt"
   r="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal -v "${WORK_W}:/work:ro" \
-      -v "${SECRETS_W}/odoo_api_key_online_rtl.txt:/s/k:ro" -v "${SECRETS_W}/tls_api_gateway_crt.txt:/s/c:ro" \
+      -v "${SECRETS_W}/odoo_api_key_online_gl.txt:/s/k:ro" -v "${SECRETS_W}/tls_api_gateway_crt.txt:/s/c:ro" \
       -v "${SECRETS_W}/tls_api_gateway_key.txt:/s/ck:ro" --entrypoint /bin/sh \
       curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -c '
     printf "Authorization: bearer %s\n" "$(tr -d "\r\n" < /s/k)" > /tmp/h
     U=00000000-0000-4000-8000-000000000001
-    for pb in "efn.online.channel/efn_online_catalog|{\"channel_code\":\"RTL\",\"limit\":1}" \
-      "efn.online.channel/efn_online_stock|{\"channel_code\":\"RTL\",\"outlet_code\":\"TOKO-01\",\"product_ids\":[1]}" \
-      "efn.online.channel/efn_online_image|{\"channel_code\":\"RTL\",\"tmpl_id\":1,\"size\":512}" \
-      "efn.online.channel/efn_online_quote|{\"channel_code\":\"RTL\",\"outlet_code\":\"TOKO-01\",\"fulfilment\":\"pickup\",\"lines\":[]}" \
-      "efn.online.order/efn_online_place|{\"channel_code\":\"RTL\",\"order\":{}}" \
-      "efn.online.order/efn_online_mark_paid|{\"channel_code\":\"RTL\",\"platform_order_ref\":\"$U\",\"payment\":{}}" \
-      "efn.online.order/efn_online_cancel|{\"channel_code\":\"RTL\",\"platform_order_ref\":\"$U\",\"reason\":\"ops\",\"idempotency_key\":\"online:cancel:$U\"}" \
-      "efn.online.order/efn_online_refund|{\"channel_code\":\"RTL\",\"platform_order_ref\":\"$U\",\"refund\":{}}" \
-      "efn.online.order/efn_online_refund_settled|{\"channel_code\":\"RTL\",\"refund_ref\":\"$U\",\"settlement\":{}}" \
-      "efn.online.order/efn_online_status|{\"channel_code\":\"RTL\",\"platform_order_refs\":[\"$U\"]}"; do
+    for pb in "efn.online.channel/efn_online_catalog|{\"channel_code\":\"GL\",\"limit\":1}" \
+      "efn.online.channel/efn_online_stock|{\"channel_code\":\"GL\",\"outlet_code\":\"TOKO-01\",\"product_ids\":[1]}" \
+      "efn.online.channel/efn_online_image|{\"channel_code\":\"GL\",\"tmpl_id\":1,\"size\":512}" \
+      "efn.online.channel/efn_online_quote|{\"channel_code\":\"GL\",\"outlet_code\":\"TOKO-01\",\"fulfilment\":\"pickup\",\"lines\":[]}" \
+      "efn.online.order/efn_online_place|{\"channel_code\":\"GL\",\"order\":{}}" \
+      "efn.online.order/efn_online_mark_paid|{\"channel_code\":\"GL\",\"platform_order_ref\":\"$U\",\"payment\":{}}" \
+      "efn.online.order/efn_online_cancel|{\"channel_code\":\"GL\",\"platform_order_ref\":\"$U\",\"reason\":\"ops\",\"idempotency_key\":\"online:cancel:$U\"}" \
+      "efn.online.order/efn_online_refund|{\"channel_code\":\"GL\",\"platform_order_ref\":\"$U\",\"refund\":{}}" \
+      "efn.online.order/efn_online_refund_settled|{\"channel_code\":\"GL\",\"refund_ref\":\"$U\",\"settlement\":{}}" \
+      "efn.online.order/efn_online_status|{\"channel_code\":\"GL\",\"platform_order_refs\":[\"$U\"]}"; do
       p="${pb%%|*}"; d="${pb#*|}"
       c=$(curl -sS -o /tmp/b -D /tmp/hd -m 20 --cacert /work/efn_ca.crt --cert /s/c --key /s/ck -X POST \
         -H "Content-Type: application/json" -H @/tmp/h --data "$d" "https://odoo-rpc-gateway:8443/json/2/$p" -w "%{http_code}")
@@ -650,7 +661,7 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
 
   # Katalog BFF tersinkron dari E-28 (job tiap ONLINE_CATALOG_SYNC_SECONDS; setup baru -> tunggu siklus berikut)
   for _ in $(seq 1 40); do
-    n="$(psql_platform -c "select count(*) from platform.online_catalog_item where channel_code='RTL' and deleted_at is null and data->>'name' like 'SMOKE %'")"
+    n="$(psql_platform -c "select count(*) from platform.online_catalog_item where channel_code='GL' and deleted_at is null and data->>'name' like 'SMOKE %'")"
     [[ "$n" -ge 4 ]] && break; sleep 10
   done
   check "o.catalog_synced_from_odoo" "$([[ "$n" -ge 4 ]] && echo 1 || echo 0)" "item SMOKE di salinan katalog BFF=$n"
@@ -1036,6 +1047,116 @@ scenario_p() { # Gelombang 18 (POS): Rupiah Rp1, poin = alat bayar dgn pajak tet
   # PDP: HP fiktif P/Q tidak ada di log BFF/Odoo
   n=0; for x in "$pp" "$pq" "$pr"; do n=$(( n + $(grep -c "${x:4}" "${WORK}/bff.log" || true) + $(docker logs --since 30m "$ODOO" 2>&1 | grep -c "${x:4}" || true) )); done
   check "p.no_raw_phone_logs" "$([[ "$n" == 0 ]] && echo 1 || echo 0)" "hits=$n"
+}
+
+scenario_q() { # Gelombang 20: bayar di kasir (docs/04 §12.2, L-50..L-58) — BFF -> Odoo -> POS (kasir) -> BFF nyata
+  echo "== q. Bayar di kasir: checkout counter -> lookup POS -> bayar tunai -> confirmed -> kode ambil -> serah terima;"
+  echo "      refund via POS (L-58 refund_settled); bayar setelah batal -> review (L-57). Prasyarat: tahap o sudah jalan (API key kanal GL)."
+  local r pd pe doid dpart dcode dtotal eoid epart ecode crid n u
+  oodoo() { # -e K=V ... -> satu baris SMOKE_RESULT (langkah odoo_online_smoke.py)
+    local o
+    o="$(MSYS_NO_PATHCONV=1 docker exec -i "$@" "$ODOO" odoo shell -d efn_odoo --no-http --log-level=warn \
+      < "${SMOKE_DIR}/odoo_online_smoke.py" 2>&1 | grep -E '^SMOKE_RESULT|Error|errors\.' | tail -1 || true)"
+    if [[ -n "$o" ]]; then echo "$o"; else echo 'SMOKE_RESULT {"ok": false, "error": "odoo_shell_no_result"}'; fi
+  }
+  opy() { # <hp> <member> <subperintah> [arg...]
+    local phone="$1" who="$2"; shift 2
+    MSYS_NO_PATHCONV=1 docker run --rm --network efn_edge \
+      --add-host "api.efn.local:${TRAEFIK_IP}" --add-host "app.efn.local:${TRAEFIK_IP}" \
+      -v "${WORK_W}:/work" -e SMOKE_PHONE="$phone" -e SMOKE_STATE="/work/online_${who}.json" -e SMOKE_BFF_LOG=/work/bff.log \
+      "$PY_IMAGE" python /work/online_smoke.py "$@" 2>&1 | grep '^SMOKE_RESULT' | tee -a "$RESULTS" || true
+  }
+  state_of() { grep -oE "\"$2\": \\{[^}]*\"$3\": \"[^\"]+\"" "${WORK}/online_$1.json" | sed -nE "s/.*\"$3\": \"([^\"]+)\"/\\1/p" | head -1; }
+  part_of() { psql_platform -c "select id from platform.online_order_part where order_id='$1' limit 1"; }
+  cs() { # <operator> <peran> <skrip cli> [arg...] -> keluaran + "exit=<rc>"
+    local op="$1" role="$2" cli="$3"; shift 3
+    MSYS_NO_PATHCONV=1 docker exec -e EFN_CS_OPERATOR="$op" -e EFN_CS_HOST=smoke -e EFN_CS_ROLE="$role" "$BFF" \
+      node "dist/cli/${cli}.js" "$@" 2>&1 | tr '\n' ' '; echo "exit=${PIPESTATUS[0]}"
+  }
+
+  # 0. Kanal GL (idempoten) + counter + kasir/POS/sesi di gudang outlet
+  r="$(oodoo -e SMOKE_STEP=setup)"
+  check "q.odoo_channel_setup" "$([[ "$(field ok "$r")" == true ]] && echo 1 || echo 0)" "$r"
+  r="$(oodoo -e SMOKE_STEP=counter_setup)"
+  check "q.odoo_counter_setup" "$([[ "$(field ok "$r")" == true && "$(field counter_enabled "$r")" == true && "$(field counter_product "$r")" == true && "$(field counter_journal "$r")" == true && "$(field session_state "$r")" == opened && "$(field cashier_is_admin "$r")" == false && "$(field cashier_pos_user "$r")" == true ]] && echo 1 || echo 0)" "$r"
+  pd="62812$(rand8)"; pe="62812$(rand8)"
+  opy "$pd" d login; opy "$pd" d catalog; opy "$pe" e login
+  opy "$pd" d counter_channel 180
+
+  # 1. Alur normal (member D): checkout counter -> kode bayar (BFF, terenkripsi) -> Odoo hanya digest
+  opy "$pd" d quote rice:1 cnt
+  opy "$pd" d checkout_counter cnt
+  doid="$(state_of d cnt order_id)"; dpart="$(part_of "$doid")"; dcode="$(state_of d cnt counter_code)"
+  check "q.bff_counter_order_row" "$([[ "$(psql_platform -c "select status || '/' || payment_method from platform.online_order where id='$doid'")" == awaiting_counter_payment/counter ]] && echo 1 || echo 0)" "order=$doid"
+  r="$(psql_platform -c "select count(*) || '/' || bool_and(counter_code_enc is not null and pickup_code_enc is not null) from platform.online_order_part where order_id='$doid'")"
+  check "q.bff_counter_code_encrypted" "$([[ "$r" == 1/true ]] && echo 1 || echo 0)" "bagian/kode terenkripsi=$r"
+  r="$(oodoo -e SMOKE_STEP=order -e SMOKE_PART="$dpart")"
+  check "q.odoo_placed_counter_hash_only" "$([[ "$(field state "$r")" == placed && "$(field payment_mode "$r")" == counter && "$(field counter_hash_present "$r")" == true && "$(field reserved "$r")" == true ]] && echo 1 || echo 0)" "$r"
+  check "q.bff_counter_code_not_in_odoo_or_logs" "$([[ "$(docker logs --since 30m "$ODOO" 2>&1 | grep -c "${dcode//-/}" || true)" == 0 && "$(grep -c "${dcode//-/}" "${WORK}/bff.log" || true)" == 0 ]] && echo 1 || echo 0)" "kode bayar tidak muncul di log Odoo/BFF"
+  opy "$pd" d counter_view cnt
+  opy "$pd" d pickup_unavailable cnt
+  # Kasir: kode salah -> not_found; kode benar -> persis {order_label, amount_payable}
+  r="$(oodoo -e SMOKE_STEP=counter_lookup -e SMOKE_CODE=ZZZZ2222)"
+  check "q.pos_lookup_wrong_code_not_found" "$([[ "$(field ok "$r")" == false && "$(field error_code "$r")" == not_found ]] && echo 1 || echo 0)" "$r"
+  r="$(oodoo -e SMOKE_STEP=counter_lookup -e SMOKE_CODE="$dcode")"
+  dtotal="$(psql_platform -c "select amount_payable::bigint from platform.online_order where id='$doid'")"
+  check "q.pos_lookup_ok_only_label_and_amount" "$([[ "$(field ok "$r")" == true && "$r" == *'"keys": ["amount_payable", "order_label"]'* && "$(field amount_payable "$r")" == "$dtotal" ]] && echo 1 || echo 0)" "total BFF=$dtotal $(nomsg "$r")"
+  u="$(newuuid)"
+  r="$(oodoo -e SMOKE_STEP=counter_pay -e SMOKE_PART="$dpart" -e SMOKE_ORDER_UUID="$u")"
+  check "q.pos_pay_confirms_invoices_clearing" "$([[ "$(field ok "$r")" == true && "$(field pos_state "$r")" =~ ^(paid|done)$ && "$(field state "$r")" == confirmed && "$(field invoice_payment_state "$r")" =~ ^(paid|in_payment)$ && "$(field clearing_payments "$r")" -ge 1 && "$(field paid_events "$r")" == 1 && "$r" == *'"invoices": ["posted"]'* ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  r="$(oodoo -e SMOKE_STEP=counter_pay -e SMOKE_PART="$dpart" -e SMOKE_ORDER_UUID="$u")"   # sync ulang uuid sama: idempoten
+  check "q.pos_pay_resync_idempotent" "$([[ "$(field ok "$r")" == true && "$(field paid_events "$r")" == 1 && "$(field state "$r")" == confirmed ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  opy "$pd" d wait cnt fulfilling confirmed
+  r="$(psql_platform -c "select o.status || '/' || o.payment_method || '/' || (o.paid_at is not null) || '/' || bool_and(p.counter_code_enc is null) from platform.online_order o join platform.online_order_part p on p.order_id=o.id where o.id='$doid' group by o.status, o.payment_method, o.paid_at")"
+  check "q.bff_paid_counter_code_purged" "$([[ "$r" == fulfilling/counter/true/true ]] && echo 1 || echo 0)" "order/metode/paid_at/kode bayar dihapus=$r"
+  r="$(oodoo -e SMOKE_STEP=counter_lookup -e SMOKE_CODE="$dcode")"
+  check "q.pos_lookup_after_paid_not_found" "$([[ "$(field error_code "$r")" == not_found ]] && echo 1 || echo 0)" "$r"
+  # Kode ambil (bukan kode bayar) tetap jalur serah terima barang (SEC-105)
+  r="$(oodoo -e SMOKE_STEP=ready -e SMOKE_PART="$dpart")"
+  check "q.odoo_staff_ready" "$([[ "$(field ok "$r")" == true && "$(field state "$r")" == ready ]] && echo 1 || echo 0)" "$r"
+  opy "$pd" d wait cnt fulfilling ready
+  opy "$pd" d pickup cnt
+  ecode="$(state_of d cnt pickup_code)"
+  check "q.pickup_code_differs_from_counter_code" "$([[ -n "$ecode" && "$ecode" != "$dcode" ]] && echo 1 || echo 0)" "kode ambil != kode bayar"
+  r="$(oodoo -e SMOKE_STEP=handover -e SMOKE_PART="$dpart" -e SMOKE_CODE="$ecode")"
+  check "q.odoo_handover_by_pickup_code" "$([[ "$(field "done" "$r")" == true && "$(field state "$r")" == picked_up ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  opy "$pd" d wait cnt completed handed_over
+
+  # 2. Refund pesanan bayar di kasir (L-58): refund DIMINTA (nota kredit) belum lunas; lunas hanya dari refund_settled
+  r="$(cs smoke-cs-op cs online-refund --part="$dpart" --full --reason="smoke refund kasir SMOKE-CS-Q1")"
+  crid="$(psql_platform -c "select id from platform.online_refund where part_id='$dpart' order by created_at desc limit 1")"
+  check "q.cli_counter_refund_created" "$([[ "$r" == *exit=0* && -n "$crid" ]] && echo 1 || echo 0)" "$(tail -c 160 <<< "$r")"
+  r="$(cs smoke-cs-sup approver online-refund-approve --refund="$crid" --reason="smoke setujui refund kasir SMOKE-CS-Q1")"
+  for _ in $(seq 1 30); do
+    n="$(psql_platform -c "select status || '/' || coalesce(failure_reason,'-') from platform.online_refund where id='$crid'")"
+    [[ "$n" == manual_required/counter_refund_via_pos ]] && break; sleep 3
+  done
+  check "q.bff_counter_refund_waits_for_pos" "$([[ "$n" == manual_required/counter_refund_via_pos && "$(psql_platform -c "select refunded_amount::bigint from platform.online_order_part where id='$dpart'")" == 0 ]] && echo 1 || echo 0)" "refund=$n (tanpa gateway; belum settled)"
+  u="$(newuuid)"
+  r="$(oodoo -e SMOKE_STEP=counter_refund -e SMOKE_PART="$dpart" -e SMOKE_ORDER_UUID="$u")"
+  check "q.pos_refund_emits_refund_settled" "$([[ "$(field ok "$r")" == true && "$(field refund_settled_events "$r")" -ge 1 && "$r" == *'refund_settled:done'* ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  for _ in $(seq 1 30); do
+    n="$(psql_platform -c "select status || '|' || coalesce(provider_refund_ref,'-') from platform.online_refund where id='$crid'")"
+    [[ "$n" == settled\|* ]] && break; sleep 3
+  done
+  check "q.bff_refund_settled_from_pos_event" "$([[ "$n" == settled\|pos:* && "$(psql_platform -c "select refunded_amount::bigint = amount_payable::bigint from platform.online_order_part where id='$dpart'")" == t ]] && echo 1 || echo 0)" "refund=$n"
+
+  # 3. Bayar setelah batal (member E): lookup (klaim) -> pelanggan batal -> kasir tetap menerima uang -> review (L-57)
+  opy "$pe" e quote oil:1 cnt
+  opy "$pe" e checkout_counter cnt
+  eoid="$(state_of e cnt order_id)"; epart="$(part_of "$eoid")"; ecode="$(state_of e cnt counter_code)"
+  r="$(oodoo -e SMOKE_STEP=counter_lookup -e SMOKE_CODE="$ecode")"
+  check "q.late_lookup_ok_before_cancel" "$([[ "$(field ok "$r")" == true ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  opy "$pe" e counter_cancel cnt
+  opy "$pe" e wait cnt cancelled cancelled
+  r="$(oodoo -e SMOKE_STEP=counter_lookup -e SMOKE_CODE="$ecode")"
+  check "q.late_lookup_after_cancel_not_found" "$([[ "$(field error_code "$r")" == not_found ]] && echo 1 || echo 0)" "$r"
+  r="$(oodoo -e SMOKE_STEP=counter_pay -e SMOKE_PART="$epart" -e SMOKE_ORDER_UUID="$(newuuid)")"
+  check "q.late_pay_goes_to_review_no_invoice" "$([[ "$(field ok "$r")" == true && "$(field state "$r")" == review && "$(field review_reason "$r")" == counter_paid_after_cancel && "$r" == *'review:done'* && "$r" == *'"invoices": []'* ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  opy "$pe" e wait cnt review review
+  opy "$pe" e pickup_in_review cnt
+  r="$(psql_platform -c "select status || '/' || payment_method from platform.online_order where id='$eoid'")"
+  check "q.late_pay_bff_order_stays_closed" "$([[ "$r" == cancelled/counter ]] && echo 1 || echo 0)" "order DB tetap ditutup=$r (pelanggan melihat review; refund oleh CS)"
 }
 
 for s in "${SCENARIOS[@]}"; do "scenario_${s}"; done

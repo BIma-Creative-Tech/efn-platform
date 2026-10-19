@@ -1,5 +1,5 @@
 /**
- * Tipe & jalur 10 metode `/json/2` untuk BFF (docs/04 §10.4.3). Hanya path di `ODOO_ONLINE_PATHS` yang boleh dipanggil
+ * Tipe & jalur 11 metode `/json/2` untuk BFF (docs/04 §10.4.3; + L-60 `counterRefundAuthorize`). Hanya path di `ODOO_ONLINE_PATHS` yang boleh dipanggil
  * (sama dengan allowlist `odoo-rpc-gateway`); klien tidak punya cara memanggil model/metode lain.
  */
 export const ODOO_ONLINE_PATHS = {
@@ -13,6 +13,8 @@ export const ODOO_ONLINE_PATHS = {
   refund: 'efn.online.order/efn_online_refund',
   refundSettled: 'efn.online.order/efn_online_refund_settled',
   status: 'efn.online.order/efn_online_status',
+  /** L-60 (SEC-145 r13): otorisasi refund POS atas pelunasan counter (fail-closed di Odoo tanpa ini). */
+  counterRefundAuthorize: 'efn.online.order/efn_online_counter_refund_authorize',
 } as const;
 export type OdooOnlineMethod = keyof typeof ODOO_ONLINE_PATHS;
 
@@ -75,7 +77,11 @@ export interface CatalogItem {
   sequence: number;
   prices: CatalogPrice[];
   max_qty: number;
+  /** G20 §12.3 (W-33): `product.weight` (kg) untuk batas berat pesanan; `null` = belum diisi di Odoo. */
+  weight_kg: number | null;
 }
+/** G20 §12.2 no. 1: `efn.online.channel.payment_modes`. */
+export type ChannelPaymentMode = 'qris' | 'counter';
 /**
  * L-11 (docs/04 §10.17): blok `channel` WAJIB pada hasil `efn_online_catalog` —
  * `{ code, name, company_code, currency, outlets: [{ code, public_name, pickup_enabled, prep_minutes, active }] }`.
@@ -91,6 +97,11 @@ export interface CatalogChannelInfo {
   active: boolean;
   fulfilment: { pickup: boolean; delivery: boolean };
   outlets: { outlet_code: string; public_name: string; pickup_enabled: boolean; prep_minutes: number | null; active: boolean }[];
+  /**
+   * G20 §12.2 no. 1 / L-52: metode bayar yang diizinkan kanal. `null` = Odoo tidak mengirim (modul pra-G20) → BFF memakai
+   * `ONLINE_PAYMENT_METHODS` (config, L-55). Opsional di tipe agar `channel_data` lama tetap terbaca.
+   */
+  payment_modes?: ChannelPaymentMode[] | null;
 }
 export interface CatalogPage {
   items: CatalogItem[];
@@ -165,6 +176,16 @@ export interface PlaceInput {
   promo_codes: string[];
   /** Rahasia: hanya dikirim sekali ke Odoo (TLS + mTLS), tidak pernah di-log (§10.3.6). */
   pickup_code: string;
+  /**
+   * G20 §12.2 no. 3: hanya dikirim bila `counter` (mode `qris` = field tidak ada, payload & `payload_sha256` Odoo sama
+   * dengan pra-G20).
+   */
+  payment_mode?: 'counter';
+  /**
+   * L-56: kode BAYAR di kasir dibuat BFF (pola `pickup_code`), hanya bila `payment_mode=counter`. Rahasia: dikirim sekali
+   * ke Odoo (TLS + mTLS; Odoo hanya menyimpan hash), tidak pernah di-log. Odoo TIDAK mengembalikannya.
+   */
+  counter_code?: string;
 }
 export interface PlaceResult {
   order_state: string;
@@ -208,6 +229,23 @@ export interface RefundSettledInput {
   ok: boolean;
   idempotency_key: string;
 }
+/**
+  * L-60: argumen ke-3 `efn_online_counter_refund_authorize` (nama argumen `authorization`, terverifikasi Odoo E-45; pola `refund` /
+ * `settlement`). `refund_ref` = `odoo_refund_ref` (null hanya untuk pesanan batal tanpa faktur), `amount` = nominal persis.
+ */
+export interface CounterRefundAuthorizeInput {
+  idempotency_key: string;
+  refund_id: string;
+  refund_ref: string | null;
+  amount: number;
+}
+export interface CounterRefundAuthorizeResult {
+  /** `true` hanya bila Odoo menjawab `state: "authorized"` (bentuk E-45 `{ state, amount }`) dan tidak `authorized: false`. */
+  authorized: boolean;
+  state: string | null;
+  /** Nominal yang diotorisasi Odoo (Rupiah bulat); harus sama dengan nominal refund BFF. */
+  amount: number | null;
+}
 export interface StatusRow {
   platform_order_ref: string;
   state: string;
@@ -216,7 +254,7 @@ export interface StatusRow {
   picked_up_at: string | null;
 }
 
-/** Klien 10 metode E-28. Implementasi: `Json2OdooOnlineClient` (mTLS) atau `MockOdooOnline` (dev/test saja). */
+/** Klien 11 metode E-28 (+ L-60). Implementasi: `Json2OdooOnlineClient` (mTLS) atau `MockOdooOnline` (dev/test saja). */
 export interface OdooOnlineApi {
   catalog(channel: string, since: string | null, cursor: string | null, limit: number): Promise<CatalogPage>;
   stock(channel: string, outlet: string, productIds: number[]): Promise<StockRow[]>;
@@ -229,6 +267,8 @@ export interface OdooOnlineApi {
   refund(channel: string, platformOrderRef: string, refund: RefundInput): Promise<RefundResult>;
   refundSettled(channel: string, refundRef: string, settlement: RefundSettledInput): Promise<{ state: string }>;
   status(channel: string, platformOrderRefs: string[]): Promise<StatusRow[]>;
+  /** L-60: hanya setelah refund counter disetujui approver CS; idempoten per `idempotency_key`. */
+  counterRefundAuthorize(channel: string, platformOrderRef: string, authorization: CounterRefundAuthorizeInput): Promise<CounterRefundAuthorizeResult>;
   /** true bila circuit kanal sedang terbuka (quote/checkout langsung 503, katalog tetap dari salinan). */
   isCircuitOpen(channel: string): boolean;
 }

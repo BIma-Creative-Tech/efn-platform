@@ -2,12 +2,14 @@
 # scripts/smoke/run-e2e-smoke.sh tahap `o` (docs/04 §10, ADR-034/ADR-019 Proposed).
 #
 # Bukan modul Odoo dan bukan test unit. Skrip ini:
-#   - `setup`    : konfigurasi kanal RTL dev (data FIKTIF "SMOKE", idempoten) setara demo efn_setup_online: pembulatan
-#                  Rupiah, gudang outlet SMKOL, jurnal titipan bank, pricelist IDR, user teknis `efn_online_rtl`
-#                  (TANPA API key — key dibuat lewat runbook odoo-online-api-key §1), kanal RTL + outlet TOKO-01,
+#   - `setup`    : konfigurasi kanal GL dev (data FIKTIF "SMOKE", idempoten) setara demo efn_setup_online: pembulatan
+#                  Rupiah, gudang outlet SMKOL, jurnal titipan bank, pricelist IDR, user teknis `efn_online_gl`
+#                  (TANPA API key — key dibuat lewat runbook odoo-online-api-key §1), kanal GL + outlet TOKO-01,
 #                  4 produk online (PPN l10n_id), stok awal, dan user staf outlet `smoke_online_staff`.
-#                  G19: kanal RTL batas bayar 70 menit + `stock_hold_mode=confirm` (SO `sale` + stok tercadang sejak
+#                  G19: kanal batas bayar 70 menit + `stock_hold_mode=confirm` (SO `sale` + stok tercadang sejak
 #                  place), promo kode dev `SMOKE10` (diskon 10 %, pricelist SMOKE), satu user teknis per kanal (L-37).
+#                  G20 (docs/04 §12.1, L-48): kode kanal = kode PT -> kanal `GL` (PT Grand Lucky, xmlid company_rtl),
+#                  semula `RTL`; user teknis `efn_online_gl` (semula `efn_online_rtl`).
 #   - `stock`    : set stok bebas satu produk smoke di gudang outlet (inventory mode standar).
 #   - `free`     : baca free_qty (dibulatkan) satu produk smoke di gudang outlet; dipakai tahap `o` untuk membuktikan
 #                  reservasi G19 (free_qty turun setelah place, pulih setelah kedaluwarsa/batal).
@@ -27,9 +29,10 @@ import base64
 import io
 import json
 import os
+import random
 from datetime import datetime, timedelta
 
-from odoo import Command
+from odoo import Command, fields
 
 if (os.environ.get("APP_ENV") or "").lower() != "dev":
     raise SystemExit("odoo_online_smoke hanya untuk APP_ENV=dev")
@@ -86,20 +89,20 @@ def step_setup():
         "account.journal"
     ].create({"name": "SMOKE Titipan Online - Holding", "code": "SMKTT", "type": "bank", "company_id": company.id})
     pricelist = su["product.pricelist"].search(
-        [("name", "=", "SMOKE Online RTL"), ("company_id", "=", company.id)], limit=1
+        [("name", "=", "SMOKE Online GL"), ("company_id", "=", company.id)], limit=1
     ) or su["product.pricelist"].create(
-        {"name": "SMOKE Online RTL", "currency_id": env.ref("base.IDR").id, "company_id": company.id}
+        {"name": "SMOKE Online GL", "currency_id": env.ref("base.IDR").id, "company_id": company.id}
     )
     group = env.ref("efn_online_order.group_online_channel")
-    user = su["res.users"].with_context(active_test=False).search([("login", "=", "efn_online_rtl")], limit=1)
+    user = su["res.users"].with_context(active_test=False).search([("login", "=", "efn_online_gl")], limit=1)
     if not user:
         user = (
             su["res.users"]
             .with_context(no_reset_password=True)
             .create(
                 {
-                    "name": "Kanal online RTL (user teknis)",
-                    "login": "efn_online_rtl",
+                    "name": "Kanal online GL (user teknis)",
+                    "login": "efn_online_gl",
                     "company_id": company.id,
                     "company_ids": [Command.set([company.id])],
                     "group_ids": [Command.set([env.ref("base.group_user").id, group.id])],
@@ -140,9 +143,10 @@ def step_setup():
             )
         )
     Channel = su["efn.online.channel"].with_context(active_test=False)
-    channel = Channel.search([("code", "=", "RTL")], limit=1)
+    channel = Channel.search([("code", "=", "GL")], limit=1)
     vals = {
-        "name": "Super-App Retail (SMOKE dev)",
+        "name": "Super-App Grand Lucky (SMOKE dev)",
+        "brand_code": "GL",
         "company_id": company.id,
         "pricelist_id": pricelist.id,
         "partner_id": env.ref("efn_setup_online.partner_superapp_rtl").id,
@@ -159,8 +163,8 @@ def step_setup():
     if channel:
         channel.write(vals)
     else:
-        channel = Channel.create({**vals, "code": "RTL"})
-    # L-37: satu user teknis per kanal -> lepas efn_online_rtl dari kanal lain (DB dev lama: demo brand G19 awal).
+        channel = Channel.create({**vals, "code": "GL"})
+    # L-37: satu user teknis per kanal -> lepas efn_online_gl dari kanal lain (bila DB dev memakai user di kanal lain).
     for other in Channel.search([("id", "!=", channel.id), ("user_ids", "in", user.ids)]):
         other.write({"user_ids": [Command.unlink(user.id)]})
     channel.write({"user_ids": [Command.set([user.id])]})
@@ -318,6 +322,9 @@ def describe(order):
         "review_reason": order.review_reason,
         "pickup_attempts": order.pickup_attempts,
         "pickup_hash_present": bool(order.sudo().pickup_code_hash),
+        # G20 E-45: mode bayar + ada/tidaknya digest kode bayar (digest tidak pernah dicetak)
+        "payment_mode": order.payment_mode or None,
+        "counter_hash_present": bool(order.sudo().counter_code_hash),
         "checkout_ref": order.checkout_ref,
         "amount_payable": order.amount_payable if "amount_payable" in order._fields else None,
         "invoices": sorted(set(invoices.filtered(lambda m: m.move_type == "out_invoice").mapped("state"))),
@@ -466,11 +473,11 @@ def step_fake_ctx():
 def step_apikey():
     st = load_state()
     user = env["res.users"].browse(st["user_id"])
-    assert user.has_group("efn_online_order.group_online_channel"), "user teknis efn_online_rtl belum ada"
+    assert user.has_group("efn_online_order.group_online_channel"), "user teknis efn_online_gl belum ada"
     # W-11 (G18): batas efektif user teknis = 35 hari (efn_setup_online) -> default 30 seperti rotasi produksi.
     days = int(os.environ.get("SMOKE_KEY_DAYS", "30"))
     exp = datetime.utcnow().replace(microsecond=0) + timedelta(days=days)
-    name = "efn-online-RTL-" + datetime.utcnow().strftime("%Y%m%d%H%M")
+    name = "efn-online-GL-" + datetime.utcnow().strftime("%Y%m%d%H%M")
     key = env["res.users.apikeys"].with_user(user)._generate(None, name, exp)
     env.cr.commit()
     old = os.umask(0o077)
@@ -482,7 +489,217 @@ def step_apikey():
     out(ok=len(key) == 40, name=name, expires=exp.isoformat(), length=len(key))
 
 
+# --------------------------------------------------------------------------------------------------------------
+# G20 (docs/04 §12.2, L-55..L-58): bayar pesanan online di kasir POS. Kanal GL hasil `setup`.
+#   counter_setup  : kanal GL `payment_modes=qris,counter` (menyiapkan data kliring PT), kasir `smoke_counter_cashier`
+#                    (POS user, bukan admin), POS config di gudang outlet SMKOL + metode tunai, sesi dibuka.
+#   counter_lookup : kasir -> pos.config.efn_online_counter_lookup(SMOKE_CODE); keluaran hanya kunci hasil.
+#   counter_pay    : kasir menyinkronkan order POS pelunasan (SMOKE_PART, SMOKE_ORDER_UUID) lalu outbox diproses.
+#   counter_refund : kasir me-refund order POS pelunasan (SMOKE_PART) -> event `refund_settled` (L-58).
+def counter_cashier_env():
+    st = load_state()
+    cashier = env["res.users"].browse(st["cashier_id"])
+    return st, env(user=cashier, context={"allowed_company_ids": [st["company_id"]]})
+
+
+def counter_pos_order_data(ce, st, uuid, lines, total, label_payment):
+    config = ce["pos.config"].browse(st["pos_config_id"])
+    return {
+        "amount_paid": total,
+        "amount_return": 0,
+        "amount_tax": 0,
+        "amount_total": total,
+        "date_order": fields.Datetime.to_string(fields.Datetime.now()),
+        "fiscal_position_id": False,
+        "pricelist_id": config.pricelist_id.id,
+        "name": f"Order {uuid}",
+        "last_order_preparation_change": "{}",
+        "lines": lines,
+        "partner_id": False,
+        "session_id": st["pos_session_id"],
+        "payment_ids": [(0, 0, {"amount": total, "name": fields.Datetime.now(), "payment_method_id": label_payment})],
+        "uuid": uuid,
+        "user_id": ce.uid,
+        "to_invoice": False,
+        "state": "paid",
+    }
+
+
+def step_counter_setup():
+    st = load_state()
+    company = env["res.company"].browse(st["company_id"])
+    admin = env.ref("base.user_admin")
+    su = env(user=admin, context={"allowed_company_ids": [company.id]}, su=True)
+    channel = su["efn.online.channel"].browse(st["channel_id"])
+    channel.write({"payment_modes": "qris,counter"})
+    wh = su["stock.warehouse"].browse(st["warehouse_id"])
+    cashier = su["res.users"].with_context(active_test=False).search([("login", "=", "smoke_counter_cashier")], limit=1)
+    if not cashier:
+        cashier = (
+            su["res.users"]
+            .with_context(no_reset_password=True)
+            .create(
+                {
+                    "name": "SMOKE kasir bayar di kasir",
+                    "login": "smoke_counter_cashier",
+                    "company_id": company.id,
+                    "company_ids": [Command.set([company.id])],
+                    "group_ids": [
+                        Command.set([env.ref("base.group_user").id, env.ref("point_of_sale.group_pos_user").id])
+                    ],
+                }
+            )
+        )
+    Journal = su["account.journal"]
+    cash_j = Journal.search([("type", "=", "cash"), ("company_id", "=", company.id)], limit=1) or Journal.create(
+        {"name": "SMOKE Kas Kasir GL", "type": "cash", "code": "SMKCS", "company_id": company.id}
+    )
+    PM = su["pos.payment.method"]
+    cash_pm = PM.search([("name", "=", "SMOKE Cash GL"), ("company_id", "=", company.id)], limit=1) or PM.create(
+        {"name": "SMOKE Cash GL", "journal_id": cash_j.id, "company_id": company.id}
+    )
+    Config = su["pos.config"]
+    config = Config.search([("name", "=", "SMOKE POS GL online"), ("company_id", "=", company.id)], limit=1)
+    if not config:
+        config = Config.create(
+            {
+                "name": "SMOKE POS GL online",
+                "company_id": company.id,
+                "payment_method_ids": [Command.set([cash_pm.id])],
+                "picking_type_id": wh.pos_type_id.id,
+            }
+        )
+    if not config.current_session_id:
+        config.with_user(admin).open_ui()
+        config.current_session_id.set_opening_control(0, None)
+    st.update(
+        {
+            "cashier_id": cashier.id,
+            "pos_config_id": config.id,
+            "pos_session_id": config.current_session_id.id,
+            "pos_cash_pm": cash_pm.id,
+        }
+    )
+    save_state(st)
+    env.cr.commit()
+    out(
+        ok=True,
+        payment_modes=channel.payment_modes,
+        counter_enabled=bool(config.efn_online_counter_enabled),
+        counter_product=bool(company.efn_online_counter_product_id),
+        counter_journal=bool(company.efn_online_counter_journal_id),
+        session_state=config.current_session_id.state,
+        cashier_is_admin=cashier.has_group("base.group_system"),
+        cashier_pos_user=cashier.has_group("point_of_sale.group_pos_user"),
+    )
+
+
+def step_counter_lookup():
+    st, ce = counter_cashier_env()
+    config = ce["pos.config"].browse(st["pos_config_id"])
+    try:
+        res = config.efn_online_counter_lookup(os.environ.get("SMOKE_CODE", ""))
+    except Exception as exc:  # noqa: BLE001 - dilaporkan sebagai hasil smoke
+        env.cr.rollback()
+        out(ok=False, error=type(exc).__name__)
+        return
+    env.cr.commit()  # setiap lookup (berhasil/gagal) adalah jejak untuk rate limit + klaim sync
+    out(
+        ok=bool(res.get("order_label")) and not res.get("error_code"),
+        keys=sorted(res),
+        order_label=res.get("order_label"),
+        amount_payable=res.get("amount_payable"),
+        error_code=res.get("error_code"),
+    )
+
+
+def step_counter_pay():
+    st, ce = counter_cashier_env()
+    su = env(su=True)
+    online = find_order(su)
+    company = su["res.company"].browse(st["company_id"])
+    uuid = os.environ["SMOKE_ORDER_UUID"]
+    amount = online.amount_payable
+    line = {
+        "id": random.randint(1, 1_000_000),  # noqa: S311 - id sementara klien POS
+        "pack_lot_ids": [],
+        "price_unit": amount,
+        "product_id": company.efn_online_counter_product_id.id,
+        "price_subtotal": amount,
+        "price_subtotal_incl": amount,
+        "qty": 1,
+        "tax_ids": [(6, 0, [])],
+        "efn_online_order_label": online.name,
+    }
+    data = counter_pos_order_data(ce, st, uuid, [(0, 0, line)], amount, st["pos_cash_pm"])
+    error = message = None
+    try:
+        ce["pos.order"].sync_from_ui([data])
+        env.cr.commit()
+    except Exception as exc:  # noqa: BLE001 - dilaporkan sebagai hasil smoke
+        env.cr.rollback()
+        error, message = type(exc).__name__, str(exc)[:160]
+    process_outbox()
+    order = find_order(env(su=True))
+    pos_order = env(su=True)["pos.order"].search([("uuid", "=", uuid)], limit=1)
+    clearing = env(su=True)["account.payment"].search([("journal_id", "=", company.efn_online_counter_journal_id.id)])
+    out(
+        ok=error is None,
+        error=error,
+        message=message,
+        pos_state=pos_order.state or None,
+        invoice_payment_state=order.invoice_id.payment_state if "invoice_id" in order._fields else None,
+        clearing_payments=len(clearing),
+        paid_events=len(order.event_ids.filtered(lambda e: e.event == "paid")),
+        **describe(order),
+    )
+
+
+def step_counter_refund():
+    st, ce = counter_cashier_env()
+    su = env(su=True)
+    online = find_order(su)
+    settlement = su["efn.online.counter.settlement"].search([("online_order_id", "=", online.id)], limit=1)
+    origin = settlement.pos_order_id.lines[:1]
+    amount = origin.price_subtotal_incl
+    uuid = os.environ["SMOKE_ORDER_UUID"]
+    line = {
+        "id": random.randint(1, 1_000_000),  # noqa: S311 - id sementara klien POS
+        "pack_lot_ids": [],
+        "price_unit": amount,
+        "product_id": origin.product_id.id,
+        "price_subtotal": -amount,
+        "price_subtotal_incl": -amount,
+        "qty": -1,
+        "tax_ids": [(6, 0, [])],
+        "refunded_orderline_id": origin.id,
+    }
+    data = counter_pos_order_data(ce, st, uuid, [(0, 0, line)], -amount, st["pos_cash_pm"])
+    data["is_refund"] = True
+    error = message = None
+    try:
+        ce["pos.order"].sync_from_ui([data])
+        env.cr.commit()
+    except Exception as exc:  # noqa: BLE001 - dilaporkan sebagai hasil smoke
+        env.cr.rollback()
+        error, message = type(exc).__name__, str(exc)[:160]
+    process_outbox()
+    order = find_order(env(su=True))
+    out(
+        ok=error is None,
+        error=error,
+        message=message,
+        refund_states=sorted(order.refund_ids.mapped("state")),
+        refund_settled_events=len(order.event_ids.filtered(lambda e: e.event == "refund_settled")),
+        outbox=sorted(f"{e.event}:{e.state}" for e in order.event_ids),
+    )
+
+
 {
+    "counter_setup": step_counter_setup,
+    "counter_lookup": step_counter_lookup,
+    "counter_pay": step_counter_pay,
+    "counter_refund": step_counter_refund,
     "setup": step_setup,
     "stock": step_stock,
     "free": step_free,

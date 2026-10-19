@@ -62,11 +62,11 @@ class TestEfnPosLoyaltyTour(TestPointOfSaleHttpCommon):
         env = cls.env
         env["loyalty.program"].search([]).write({"active": False})
         company = cls.main_pos_config.company_id
-        env["res.company"].search([("efn_brand_code", "=", "RTL"), ("id", "!=", company.id)]).write(
+        env["res.company"].search([("efn_brand_code", "=", "GL"), ("id", "!=", company.id)]).write(
             {"efn_brand_code": False}
         )
         env["res.company"].flush_model(["efn_brand_code"])
-        company.write({"efn_brand_code": "RTL"})
+        company.write({"efn_brand_code": "GL"})
         cls.points_method = create_points_method(env, company)
         cls.main_pos_config.write(
             {

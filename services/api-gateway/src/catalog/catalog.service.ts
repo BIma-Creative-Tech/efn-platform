@@ -3,10 +3,11 @@ import { AppConfig } from '../config/app-config';
 import { DB, Db } from '../common/db/db';
 import { Errors } from '../common/errors/api-error';
 import { KV_STORE, KvStore } from '../common/redis/kv-store';
-import { CatalogChannelInfo, CatalogPrice, ODOO_ONLINE, OdooOnlineApi, StockStatus } from '../odoo-rpc/odoo-online.types';
+import { COMPANY_CODES } from '../loyalty/loyalty.service';
+import { CatalogChannelInfo, CatalogPrice, ChannelPaymentMode, ODOO_ONLINE, OdooOnlineApi, StockStatus } from '../odoo-rpc/odoo-online.types';
 import { OnlineErrors, mapOdooError } from '../odoo-rpc/online-errors';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
-import { BRAND_CODE_RE, IMAGE_SHA_RE } from '../odoo-rpc/odoo-online.parse';
+import { BRAND_CODE_RE, IMAGE_SHA_RE, parsePaymentModes } from '../odoo-rpc/odoo-online.parse';
 import { CATALOG_STORAGE, CatalogStorage, catalogImageKey } from './catalog-storage';
 
 export interface OutletInfo {
@@ -23,6 +24,11 @@ export interface ChannelInfo {
   name: string;
   fulfilment: { pickup: boolean; delivery: boolean };
   outlets: OutletInfo[];
+  /**
+   * G20 §12.2 / L-52 / L-55: metode bayar kanal (`qris|counter`) — (blok `channel` Odoo ?? `ONLINE_PAYMENT_METHODS`)
+   * ∩ `ONLINE_PAYMENT_METHODS`. Opsional di tipe (fixture lama); `CatalogService` selalu mengisinya.
+   */
+  payment_modes?: ChannelPaymentMode[] | null;
 }
 export interface ProductSummary {
   product_id: number;
@@ -34,6 +40,8 @@ export interface ProductSummary {
   price_excl: number;
   tax_labels: string[];
   max_qty: number;
+  /** G20 §12.3 / L-52: berat produk (kg) atau `null`. Opsional di tipe (fixture lama); `toSummary` selalu mengisinya. */
+  weight_kg?: number | null;
 }
 export interface ItemData {
   name: string;
@@ -41,9 +49,12 @@ export interface ItemData {
   uom: string;
   prices: CatalogPrice[];
   max_qty: number;
+  /** G20 §12.3: `null`/tidak ada (salinan pra-G20) = berat belum diketahui. */
+  weight_kg?: number | null;
 }
 
-const COMPANY_CODES = new Set(['EFN', 'RTL', 'FNB', 'FARM']);
+/** G20 §12.1: kode PT yang diterima dari blok `channel` Odoo (sama dengan `COMPANY_CODES` loyalty). */
+const COMPANY_CODE_SET: ReadonlySet<string> = new Set(COMPANY_CODES);
 const CHANNEL_CACHE_MS = 30_000;
 const STOCK_TTL_SECONDS = 30;
 
@@ -120,9 +131,16 @@ export class CatalogService {
   }
 
   private fromOdoo(code: string, c: CatalogChannelInfo): ChannelInfo | null {
-    if (c.code !== code || !c.active || !COMPANY_CODES.has(c.company_code) || c.currency !== 'IDR') return null;
+    if (c.code !== code || !c.active || !COMPANY_CODE_SET.has(c.company_code) || c.currency !== 'IDR') return null;
     // `channel_data` hasil sinkron sebelum G19 tidak memuat brand_code → null (kanal tetap tampil tanpa brand)
     const brand: unknown = (c as { brand_code?: unknown }).brand_code;
+    // L-52: payment_modes dari Odoo bila ada (juga salinan lama tanpa field → config BFF); divalidasi ulang (jsonb)
+    let modes: ChannelPaymentMode[] | null = null;
+    try {
+      modes = parsePaymentModes((c as { payment_modes?: unknown }).payment_modes);
+    } catch {
+      modes = null;
+    }
     return {
       channel_code: c.code,
       company_code: c.company_code,
@@ -132,6 +150,8 @@ export class CatalogService {
       outlets: c.outlets
         .filter((o) => o.active)
         .map((o) => ({ outlet_code: o.outlet_code, public_name: o.public_name, pickup_enabled: o.pickup_enabled, prep_minutes: o.prep_minutes })),
+      // L-55: yang ditampilkan hanya mode yang juga diizinkan BFF (`ONLINE_PAYMENT_METHODS`)
+      payment_modes: (modes ?? this.config.onlinePaymentMethods).filter((m) => this.config.onlinePaymentMethods.includes(m)),
     };
   }
 
@@ -308,5 +328,6 @@ function toSummary(r: ItemRow): ProductSummary {
     price_excl: price?.price_excl ?? 0,
     tax_labels: price?.tax_labels ?? [],
     max_qty: Number(r.data.max_qty ?? 99),
+    weight_kg: typeof r.data.weight_kg === 'number' && Number.isFinite(r.data.weight_kg) ? r.data.weight_kg : null,
   };
 }

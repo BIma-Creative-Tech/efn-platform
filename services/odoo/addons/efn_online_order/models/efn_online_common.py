@@ -61,6 +61,45 @@ MAX_STATUS_REFS = 100
 DEFAULT_PICKUP_KDF_ROUNDS = 600_000
 MIN_PICKUP_KDF_ROUNDS = 1_000  # hanya untuk test; produksi memakai default (param sistem, base.group_system)
 
+# G20 E-45 (docs/04 §12.2, L-50, L-56): metode bayar pesanan online. Urutan = urutan kanonik keluaran katalog.
+PAYMENT_MODES = ("qris", "counter")
+DEFAULT_PAYMENT_MODE = "qris"
+# Kode bayar di kasir (dibuat BFF, alfabet §10.2 sama dengan kode ambil). Odoo hanya menyimpan digest KDF
+# DETERMINISTIK per company (bukan salt acak seperti kode ambil) karena kasir mengetik kode TANPA memilih pesanan:
+# pencarian = persamaan digest. Salt = sha256("efn_online_counter:<company_id>:<database.secret>") -> digest tidak
+# bisa dihitung tanpa isi DB dan tidak sama antar-company. Putaran: param `efn_online.counter_code_kdf_rounds`
+# (default 210 000 = rekomendasi OWASP PBKDF2-SHA512); putaran ikut tersimpan di digest (pencarian mencoba setiap
+# nilai putaran yang dipakai pesanan terbuka, jadi parameter boleh diubah kapan saja).
+COUNTER_KDF_PARAM = "efn_online.counter_code_kdf_rounds"
+DEFAULT_COUNTER_KDF_ROUNDS = 210_000
+COUNTER_HASH_PREFIX = "pbkdf2-sha512"
+
+
+def counter_code_digest(secret, company_id, code, rounds):
+    """Digest KDF kode bayar (``pbkdf2-sha512$<rounds>$<hex>``). Kode tidak pernah disimpan/di-log."""
+    rounds = max(int(rounds), MIN_PICKUP_KDF_ROUNDS)
+    salt = hashlib.sha256(f"efn_online_counter:{int(company_id)}:{secret or ''}".encode()).digest()
+    derived = hashlib.pbkdf2_hmac("sha512", code.encode("ascii"), salt, rounds)
+    return f"{COUNTER_HASH_PREFIX}${rounds}${derived.hex()}"
+
+
+def counter_hash_rounds(value):
+    """Putaran dari digest tersimpan (None bila format tidak dikenal)."""
+    parts = (value or "").split("$")
+    if len(parts) != 3 or parts[0] != COUNTER_HASH_PREFIX or not parts[1].isdigit():
+        return None
+    return int(parts[1])
+
+
+def parse_payment_modes(value):
+    """``payment_modes`` kanal (Char dipisah koma) -> list kanonik; None bila tidak valid (kosong/duplikat/asing)."""
+    if not isinstance(value, str):
+        return None
+    tokens = [token.strip() for token in value.split(",")]
+    if not tokens or any(token not in PAYMENT_MODES for token in tokens) or len(set(tokens)) != len(tokens):
+        return None
+    return [mode for mode in PAYMENT_MODES if mode in tokens]
+
 
 def online_error(code):
     """``UserError`` dengan pesan stabil ``efn_online:<kode>`` (BFF hanya membaca ``name`` + ``message``)."""
@@ -102,6 +141,18 @@ def check_amount_int(value):
 def canonical_sha256(data):
     raw = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
     return hashlib.sha256(raw.encode("ascii")).hexdigest()
+
+
+def counter_kdf_rounds(env):
+    raw = env["ir.config_parameter"].sudo().get_param(COUNTER_KDF_PARAM, DEFAULT_COUNTER_KDF_ROUNDS)
+    try:
+        return max(int(raw), MIN_PICKUP_KDF_ROUNDS)
+    except (TypeError, ValueError):
+        return DEFAULT_COUNTER_KDF_ROUNDS
+
+
+def counter_secret(env):
+    return env["ir.config_parameter"].sudo().get_param("database.secret") or ""
 
 
 def normalize_pickup_code(value):

@@ -101,8 +101,8 @@ describe('kontrak order', () => {
     pickup_code: 'ABCD-EFGH',
     parts: [
       {
-        channel_code: 'RTL',
-        company_code: 'RTL',
+        channel_code: 'GL',
+        company_code: 'GL',
         outlet_code: 'TOKO-01',
         outlet_name: 'Toko Pusat',
         status: 'placed',
@@ -135,7 +135,7 @@ describe('kontrak order', () => {
     expect(parseOrderDetail({ ...detail, order_id: '42' })).toBeNull();
   });
   it('daftar order & label status', () => {
-    const l = parseOrderList({ items: [{ order_id: ID, status: 'completed', amount_payable: 1, parts: [{ channel_code: 'RTL', status: 'handed_over' }] }, { order_id: 'x' }], next_cursor: null })!;
+    const l = parseOrderList({ items: [{ order_id: ID, status: 'completed', amount_payable: 1, parts: [{ channel_code: 'GL', status: 'handed_over' }] }, { order_id: 'x' }], next_cursor: null })!;
     expect(l.items).toHaveLength(1);
     expect(orderStatusLabel('awaiting_payment')).toBe('Menunggu pembayaran');
     expect(orderStatusLabel('aneh')).toBe('Status tidak dikenal');
@@ -143,11 +143,11 @@ describe('kontrak order', () => {
   it('kode ambil: hanya format alfabet §10.2', () => {
     const items = parsePickupCodes({
       items: [
-        { channel_code: 'RTL', outlet_code: 'TOKO-01', outlet_name: 'Toko Pusat', pickup_code: 'ABCD-EFGH' },
-        { channel_code: 'RTL', outlet_code: 'TOKO-02', pickup_code: 'ABCD-EFG1' }, // '1' bukan alfabet
-        { channel_code: 'RTL', pickup_code: '<script>' },
+        { channel_code: 'GL', outlet_code: 'TOKO-01', outlet_name: 'Toko Pusat', pickup_code: 'ABCD-EFGH' },
+        { channel_code: 'GL', outlet_code: 'TOKO-02', pickup_code: 'ABCD-EFG1' }, // '1' bukan alfabet
+        { channel_code: 'GL', pickup_code: '<script>' },
       ],
     });
-    expect(items).toEqual([{ channel_code: 'RTL', outlet_code: 'TOKO-01', outlet_name: 'Toko Pusat', pickup_code: 'ABCD-EFGH' }]);
+    expect(items).toEqual([{ channel_code: 'GL', outlet_code: 'TOKO-01', outlet_name: 'Toko Pusat', pickup_code: 'ABCD-EFGH' }]);
   });
 });

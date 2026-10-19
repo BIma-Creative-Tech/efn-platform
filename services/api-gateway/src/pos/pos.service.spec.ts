@@ -43,7 +43,7 @@ function setup(overrides: Record<string, string> = {}) {
 
 async function obtainToken(ctx: ReturnType<typeof setup>, orderRef = ORDER): Promise<string> {
   const req = await ctx.pos.requestOtp(
-    { purpose: 'pos_promo', memberRef: MEMBER, orderRef, amount: 125000, companyCode: 'FNB', posConfigId: 3 },
+    { purpose: 'pos_promo', memberRef: MEMBER, orderRef, amount: 125000, companyCode: 'PB', posConfigId: 3 },
     '10.0.0.5',
   );
   const res = await ctx.pos.verifyOtp(
@@ -61,7 +61,7 @@ describe('PosService', () => {
   it('alur lengkap: request 202-body, verify → token, consume sekali', async () => {
     const ctx = setup();
     const req = await ctx.pos.requestOtp(
-      { purpose: 'pos_promo', memberRef: MEMBER, orderRef: ORDER, amount: 125000, companyCode: 'FNB', posConfigId: 3 },
+      { purpose: 'pos_promo', memberRef: MEMBER, orderRef: ORDER, amount: 125000, companyCode: 'PB', posConfigId: 3 },
       null,
     );
     expect(req.expires_in).toBe(180);
@@ -132,13 +132,13 @@ describe('PosService', () => {
     const tokens = new DiscountTokenService(config, kv);
     tokens.now = clock.now;
     const hash = 'a'.repeat(64);
-    const t = tokens.issue({ orderRef: ORDER, memberHash: hash, companyCode: 'FNB', amount: 100_000 });
+    const t = tokens.issue({ orderRef: ORDER, memberHash: hash, companyCode: 'PB', amount: 100_000 });
     expect(await tokens.consume(t.token, ORDER, hash, 100_001)).toEqual({ ok: false, reason: 'amount_mismatch' });
     expect(await tokens.consume(t.token, ORDER, hash, 100_000)).toEqual({ ok: true });
 
     const now = Math.floor(clock.ms / 1000);
     const legacy = sign(
-      { jti: 'j', purpose: 'pos_promo', order_ref: ORDER, member_hash: hash, company_code: 'FNB', iat: now, exp: now + 600 },
+      { jti: 'j', purpose: 'pos_promo', order_ref: ORDER, member_hash: hash, company_code: 'PB', iat: now, exp: now + 600 },
       config.discountTokenSecret,
       { algorithm: 'HS256' },
     );
@@ -147,7 +147,7 @@ describe('PosService', () => {
 
   it('request OTP: nomor non-62 → 400 invalid_phone', async () => {
     const err = await catchApiError(() =>
-      parsePosOtpRequest({ member_ref: '+447700900123', order_ref: ORDER, amount: 1, company_code: 'FNB', pos_config_id: 1 }),
+      parsePosOtpRequest({ member_ref: '+447700900123', order_ref: ORDER, amount: 1, company_code: 'PB', pos_config_id: 1 }),
     );
     expect(err.body).toEqual({ error: { code: 'invalid_phone', message: expect.any(String) } });
   });
@@ -188,7 +188,7 @@ describe('PosService', () => {
   it('token dengan tanda tangan lain / alg none / purpose lain / tanpa member_hash → 409 invalid', async () => {
     const ctx = setup();
     const now = Math.floor(ctx.clock.ms / 1000);
-    const claims = { jti: 'x', purpose: 'pos_promo', order_ref: ORDER, member_hash: 'h', company_code: 'FNB', iat: now, exp: now + 600 };
+    const claims = { jti: 'x', purpose: 'pos_promo', order_ref: ORDER, member_hash: 'h', company_code: 'PB', iat: now, exp: now + 600 };
 
     const forged = sign(claims, 'kunci-penyerang-yang-berbeda-0123456789', { algorithm: 'HS256' });
     const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
@@ -208,7 +208,7 @@ describe('PosService', () => {
   it('verify kode salah → 400 { ok:false, reason:"invalid", attempts_left:2 }', async () => {
     const ctx = setup();
     const req = await ctx.pos.requestOtp(
-      { purpose: 'pos_promo', memberRef: MEMBER, orderRef: ORDER, amount: 1, companyCode: 'RTL', posConfigId: 1 },
+      { purpose: 'pos_promo', memberRef: MEMBER, orderRef: ORDER, amount: 1, companyCode: 'GL', posConfigId: 1 },
       null,
     );
     const bad = ctx.sender.lastCode() === '000000' ? '111111' : '000000';
@@ -219,7 +219,7 @@ describe('PosService', () => {
 
   it('rate limit per member: request ke-4 dalam 15 menit → 429 + Retry-After', async () => {
     const ctx = setup();
-    const dto = { purpose: 'pos_promo' as const, memberRef: MEMBER, orderRef: ORDER, amount: 1, companyCode: 'FNB' as const, posConfigId: 3 };
+    const dto = { purpose: 'pos_promo' as const, memberRef: MEMBER, orderRef: ORDER, amount: 1, companyCode: 'PB' as const, posConfigId: 3 };
     for (let i = 0; i < 3; i += 1) await ctx.pos.requestOtp(dto, null);
     const err = await catchApiError(() => ctx.pos.requestOtp(dto, null));
     expect(err.getStatus()).toBe(429);
@@ -234,28 +234,28 @@ describe('PosService', () => {
     const ctx = setup();
     for (let i = 0; i < 20; i += 1) {
       const member = `62812000000${String(i).padStart(2, '0')}`;
-      await ctx.pos.requestOtp({ purpose: 'pos_promo', memberRef: member, orderRef: `O-${i}`, amount: 1, companyCode: 'FNB', posConfigId: 7 }, null);
+      await ctx.pos.requestOtp({ purpose: 'pos_promo', memberRef: member, orderRef: `O-${i}`, amount: 1, companyCode: 'PB', posConfigId: 7 }, null);
     }
     const err = await catchApiError(() =>
-      ctx.pos.requestOtp({ purpose: 'pos_promo', memberRef: '6289999999999', orderRef: 'O-x', amount: 1, companyCode: 'FNB', posConfigId: 7 }, null),
+      ctx.pos.requestOtp({ purpose: 'pos_promo', memberRef: '6289999999999', orderRef: 'O-x', amount: 1, companyCode: 'PB', posConfigId: 7 }, null),
     );
     expect(err.getStatus()).toBe(429);
   });
 
   it('saldo loyalty dari ledger', async () => {
     const ctx = setup();
-    expect(await ctx.pos.balance({ memberRef: MEMBER, posConfigId: 3, companyCode: 'FNB' })).toEqual({ points_balance: 1200 });
+    expect(await ctx.pos.balance({ memberRef: MEMBER, posConfigId: 3, companyCode: 'PB' })).toEqual({ points_balance: 1200 });
   });
 
   it('K-8: saldo tanpa OTP tetapi rate limit per member dan per pos_config', async () => {
     const ctx = setup({ LOYALTY_BALANCE_RL_MEMBER_LIMIT: '2', LOYALTY_BALANCE_RL_SOURCE_LIMIT: '3' });
-    await ctx.pos.balance({ memberRef: MEMBER, posConfigId: 3, companyCode: 'FNB' });
-    await ctx.pos.balance({ memberRef: MEMBER, posConfigId: 4, companyCode: 'FNB' });
-    expect((await catchApiError(() => ctx.pos.balance({ memberRef: MEMBER, posConfigId: 5, companyCode: 'FNB' }))).getStatus()).toBe(429);
+    await ctx.pos.balance({ memberRef: MEMBER, posConfigId: 3, companyCode: 'PB' });
+    await ctx.pos.balance({ memberRef: MEMBER, posConfigId: 4, companyCode: 'PB' });
+    expect((await catchApiError(() => ctx.pos.balance({ memberRef: MEMBER, posConfigId: 5, companyCode: 'PB' }))).getStatus()).toBe(429);
     // kasir yang sama: kuota per pos_config (3) habis meski member berbeda
-    await ctx.pos.balance({ memberRef: OTHER_MEMBER, posConfigId: 3, companyCode: 'FNB' });
-    await ctx.pos.balance({ memberRef: '6285700000001', posConfigId: 3, companyCode: 'FNB' });
-    expect((await catchApiError(() => ctx.pos.balance({ memberRef: '6285700000002', posConfigId: 3, companyCode: 'FNB' }))).getStatus()).toBe(429);
+    await ctx.pos.balance({ memberRef: OTHER_MEMBER, posConfigId: 3, companyCode: 'PB' });
+    await ctx.pos.balance({ memberRef: '6285700000001', posConfigId: 3, companyCode: 'PB' });
+    expect((await catchApiError(() => ctx.pos.balance({ memberRef: '6285700000002', posConfigId: 3, companyCode: 'PB' }))).getStatus()).toBe(429);
     expect(ctx.kv.keys().some((k) => k.includes(MEMBER))).toBe(false); // key Redis memakai hash, bukan nomor
   });
 });

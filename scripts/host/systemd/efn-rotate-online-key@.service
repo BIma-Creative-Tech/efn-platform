@@ -1,5 +1,5 @@
 # Rotasi otomatis API key Odoo kanal online %i (W-11, R-T15). Pasang: docs/runbooks/odoo-online-api-key.md §2.
-# Instance = kode kanal huruf besar: efn-rotate-online-key@RTL.service. Jalan sebagai ROOT (menulis /opt/efn/secrets,
+# Instance = kode kanal G20 (GL|PB|BCR|BCF): efn-rotate-online-key@GL.service. Jalan sebagai ROOT (menulis /opt/efn/secrets,
 # recreate container); log stdout/stderr + `logger -t efn-rotate-online-key` -> journald (_UID 0) -> promtail-journal -> Loki.
 [Unit]
 Description=EFN rotasi API key Odoo kanal online %i

@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- E-41: jejak audit persetujuan retur tanpa struk (baca saja; record append-only). -->
+    <record id="view_efn_pos_return_approval_list" model="ir.ui.view">
+        <field name="name">efn.pos.return.approval.list</field>
+        <field name="model">efn.pos.return.approval</field>
+        <field name="arch" type="xml">
+            <list create="0" edit="0" delete="0" decoration-danger="state == 'failed'" decoration-muted="state == 'superseded'">
+                <field name="create_date" string="Waktu"/>
+                <field name="config_id"/>
+                <field name="session_id" optional="hide"/>
+                <field name="cashier_user_id"/>
+                <field name="approver_user_id"/>
+                <field name="amount_max" sum="Total"/>
+                <field name="amount_used" optional="show"/>
+                <field name="state"/>
+                <field name="failure_reason" optional="show"/>
+                <field name="reason"/>
+                <field name="consumed_order_id" optional="show"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="currency_id" column_invisible="True"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_efn_pos_return_approval_form" model="ir.ui.view">
+        <field name="name">efn.pos.return.approval.form</field>
+        <field name="model">efn.pos.return.approval</field>
+        <field name="arch" type="xml">
+            <form create="0" edit="0" delete="0">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="state"/>
+                            <field name="failure_reason" invisible="state != 'failed'"/>
+                            <field name="config_id"/>
+                            <field name="session_id"/>
+                            <field name="order_ref"/>
+                            <field name="consumed_order_id"/>
+                        </group>
+                        <group>
+                            <field name="cashier_user_id"/>
+                            <field name="approver_user_id"/>
+                            <field name="currency_id" invisible="1"/>
+                            <field name="amount_max"/>
+                            <field name="amount_used"/>
+                            <field name="expires_at"/>
+                            <field name="consumed_at"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                    </group>
+                    <group>
+                        <field name="reason"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_efn_pos_return_approval_search" model="ir.ui.view">
+        <field name="name">efn.pos.return.approval.search</field>
+        <field name="model">efn.pos.return.approval</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="approver_user_id"/>
+                <field name="cashier_user_id"/>
+                <field name="config_id"/>
+                <field name="order_ref"/>
+                <filter string="Dipakai" name="consumed" domain="[('state', '=', 'consumed')]"/>
+                <filter string="PIN salah / terkunci" name="failed" domain="[('state', '=', 'failed')]"/>
+                <group>
+                    <filter string="Store Manager" name="group_approver" context="{'group_by': 'approver_user_id'}"/>
+                    <filter string="Kasir" name="group_cashier" context="{'group_by': 'cashier_user_id'}"/>
+                    <filter string="POS" name="group_config" context="{'group_by': 'config_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_efn_pos_return_approval" model="ir.actions.act_window">
+        <field name="name">Persetujuan Retur Tanpa Struk</field>
+        <field name="res_model">efn.pos.return.approval</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_efn_pos_return_approval_search"/>
+    </record>
+
+    <menuitem id="menu_efn_pos_return_approval"
+              name="Persetujuan Retur Tanpa Struk"
+              parent="point_of_sale.menu_point_of_sale"
+              action="action_efn_pos_return_approval"
+              sequence="95"
+              groups="point_of_sale.group_pos_manager"/>
+</odoo>

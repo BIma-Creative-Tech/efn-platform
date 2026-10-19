@@ -43,7 +43,7 @@ MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal -v "$(hostpath "$work"
   -sS --http1.1 -H 'Connection: close' --parallel --parallel-immediate --parallel-max "$PAR" -m 30 \
   --cacert /t/efn_ca_crt --cert /t/tls_api_gateway_crt --key /t/tls_api_gateway_key \
   -X POST -H 'Content-Type: application/json' -H 'Authorization: bearer g17-load-test-token-not-a-secret' \
-  --data '{"channel_code":"RTL","platform_order_refs":[]}' \
+  --data '{"channel_code":"GL","platform_order_refs":[]}' \
   -w '%{http_code} %header{x-efn-gateway-error}\n' -K /t/urls.cfg \
   > "${work}/codes.txt" 2> "${work}/err.txt" || true
 

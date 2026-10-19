@@ -698,3 +698,66 @@ bersih, tamper epoch lama terdeteksi, auto dev + erasure/penghapusan bukan diver
 - Restore yang tidak menghilangkan log apa pun (tidak ada aktivitas sejak backup) tidak terdeteksi otomatis — tidak
   perlu (tidak ada id yang dipakai ulang).
 - Epoch baru menyalin ulang seluruh sumber (volume log audit kecil; dibatasi `max_pages` per siklus).
+
+## Gelombang 20 — W-32 enam entitas: `COMPANY_CODES`, `dim_company`, eliminasi antar-entitas (18 Okt 2026)
+
+Kontrak: docs/04 §12.1 + §12.6 (L-48), ADR-001 revisi 18 Okt §2 dan §6. Kode PT `EFN, GL, PB, BCR, BCF, FARM`; `RTL`/`FNB`
+dihapus; tidak ada migrasi data (DB dev dibuat ulang).
+
+### Desain
+- **`efn_etl/entities.py` (baru, logika murni)**: `COMPANY_CODES`, `BUSINESS_TYPES` (`EFN`→holding, `GL`/`BCR`→retail,
+  `PB`/`BCF`→fnb, `FARM`→farm), `brand_group` (`BCR`+`BCF` = `BACHA`, laporan per brand Bacha), `company_code()`
+  (fail closed), `ic_relation()`.
+- **`loyalty_events.company_code`**: `jobs._company_code` memakai `entities.company_code` → `RTL`/`FNB`/`BACHA` ditolak
+  (halaman tidak dimuat). Ledger BFF dev lama harus dibuang (§12.1).
+- **`dim_company`**: kolom baru `business_type`, `brand_group` (diisi ETL; `ALTER ... ADD COLUMN IF NOT EXISTS` di
+  `08-g20-entities.sql`). `brand` dinormalisasi huruf besar. Kode kosong → ''; kode tidak dikenal → `ValueError`
+  (fail closed, agar konsolidasi tidak salah klasifikasi).
+- **Eliminasi**: tetap untuk **semua** baris ber-`ic_company_id` (partner = company grup lain), jadi otomatis mencakup
+  6×5 arah. View `v_gl_consolidated` (dipindah dari 03 ke 08 karena membaca kolom baru) bertambah `business_type`,
+  `brand_group`, `counterparty_brand`, `ic_relation`: `tp_holding` (Holding↔PT), `tp_bacha` (BCR↔BCF), `non_tp`
+  (pasangan lain, mis. FARM→PT, PB↔GL; Q-AD1-1), `unknown` (kode company tidak dikenal/ganda). Label hanya untuk
+  rekonsiliasi dasar harga; tidak mengubah angka eliminasi.
+- **`v_gl_ic_recon` (baru)**: per bulan × pasangan tak berurut (`company_a_id < company_b_id`): `balance_a`,
+  `balance_b`, `net_balance` (≠ 0 = selisih eliminasi: kurs, timing, sisi belum diposting, partner salah), grant
+  Metabase. Tidak masuk semantic layer Text-to-SQL (sama dengan `v_gl_consolidated`).
+
+### File
+- Baru: `services/etl/efn_etl/entities.py`, `services/etl/tests/test_entities.py`,
+  `infra/clickhouse/init/08-g20-entities.sql`.
+- Ubah: `services/etl/efn_etl/jobs.py`, `services/etl/efn_etl/gl.py`, `services/etl/README.md`,
+  `infra/clickhouse/init/03-gl-audit.sql` (view dipindah), `infra/clickhouse/init/02-loyalty-etl.sql` (komentar),
+  `infra/clickhouse/access/metabase-access.sql` (`v_gl_ic_recon`), `services/text2sql/semantic_layer.yaml`
+  (deskripsi kode), `services/text2sql/tests/test_guard.py` (fixture kode).
+- Test fixture kode lama diganti: `services/etl/tests/test_jobs.py`, `test_gl.py`, `test_pos.py`, `test_stock.py`,
+  `test_loyalty_recon.py` (`FNB`→`PB`, `RTL`→`GL`).
+
+### Test baru
+- `test_entities.py`: 6 kode & kode lama hilang; business_type per kode (+huruf kecil); brand_group Bacha; `company_code`
+  menolak `RTL`/`FNB`/`BACHA`/salah ketik/None/''; `ic_relation` 30 pasangan berarah (simetris, tepat 6 pasangan TP),
+  kasus tepi (None, '', kode lama, kode ganda); keselarasan SQL view ↔ Python (daftar kode di `NOT IN`, label,
+  pasangan TP, urutan cabang `multiIf`), eliminasi semua IC, tanpa `partner_id`, view tidak lagi di 03; grant Metabase.
+- `test_gl.py`: `transform_company` 6 entitas (business_type/brand_group, normalisasi, kode kosong) + menolak
+  `RTL`/`FNB`/`BACHA`/`XYZ`; cek kolom DDL menerima `ADD COLUMN` di 08.
+- `test_jobs.py`: `loyalty_events` menerima 6 kode, menolak `RTL`/`FNB`/`BACHA`.
+
+### Asumsi skema
+- `res_company.efn_brand_code` berisi kode baru persis (`GL`, `PB`, `BCR`, `BCF`, …) setelah efn-odoo-engineer (A)
+  mengubah Selection `efn_core`; xmlid lama tidak relevan bagi ETL.
+- Keenam company adalah company root dengan `partner_id` masing-masing (dasar `ic_company_id`).
+
+### Belum terverifikasi / butuh pihak lain
+- **Belum dijalankan**: pytest + ruff (lead), `clickhouse-init` (DDL `ALTER` + dua view; terutama JOIN kunci Nullable
+  `cp.company_id = l.ic_company_id` dan alias `GROUP BY` di `v_gl_ic_recon` — pola standar ClickHouse 24.8 tetapi belum
+  diuji di container).
+- **Postgres CHECK masih kode lama** (di luar cakupan saya, milik BFF/devsecops): `infra/postgres/init/02-platform-loyalty.sql:29`,
+  `03-platform-v3.sql:104`, `05-platform-loyalty-pos.sql:41,87`, `07-platform-online.sql:89,122`,
+  `08-platform-g18-privacy.sql:61` → `CHECK (company_code IN ('EFN','RTL','FNB','FARM'))`. Tanpa diganti, BFF tidak bisa
+  menulis `GL/PB/BCR/BCF`; ETL sudah menolak kode lama.
+- Dev ClickHouse yang tidak dibuat ulang: `dim_company` lama tidak punya nilai `business_type` sampai `res_company`
+  berubah → `TRUNCATE efn_dwh.dim_company` + hapus watermark job `companies` (pola `docs/runbooks/dev-stack-boot.md`).
+  `loyalty_events` ber-`RTL`/`FNB` di ClickHouse dev ikut dibuang.
+- Penanda transaksi `efn_intercompany` (W-15) belum ada; eliminasi masih berbasis partner company lawan (kontak anak
+  company tidak terdeteksi, sama seperti G12). `tax_regime` (ADR-001 §6) belum dibuat: FARM belum ditetapkan
+  (Q-AD1-2), lebih tepat diturunkan dari fiscal position/pajak Odoo daripada di-hardcode.
+- Dashboard Metabase belum memakai `brand_group`/`v_gl_ic_recon` (belum ada kartu baru).

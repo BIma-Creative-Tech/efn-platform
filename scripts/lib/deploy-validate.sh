@@ -22,7 +22,8 @@ EFN_RELEASE_CONFIG_VARS=(ACME_EMAIL PAYMENT_PROVIDER PG_SUPERUSER WHATSAPP_ENABL
   CONSENT_MARKETING_VERSION CONSENT_MARKETING_TEXT_SHA256 DSAR_DELETE_GRACE_DAYS ETL_ENABLE_ODOO ETL_ENABLE_GL
   ETL_AUDIT_COPY_ENABLED OLLAMA_VISION_MODEL MIGRATION_ENABLED METABASE_ADMIN_EMAIL ETL_LOYALTY_RECON_NOT_BEFORE
   ONLINE_ENABLED ONLINE_CATALOG_ENABLED ONLINE_CHANNELS ONLINE_FULFILMENTS ONLINE_PAYMENT_TIMEOUT_SECONDS
-  ONLINE_QUOTE_TTL_SECONDS ONLINE_MAX_OPEN_ORDERS_PER_MEMBER ONLINE_CATALOG_SYNC_SECONDS ONLINE_PICKUP_CODE_MAX_DAYS
+  ONLINE_QUOTE_TTL_SECONDS ONLINE_MAX_OPEN_ORDERS_PER_MEMBER ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER ONLINE_PAYMENT_METHODS
+  ONLINE_CATALOG_SYNC_SECONDS ONLINE_PICKUP_CODE_MAX_DAYS
   ONLINE_ORDER_MEMBER_LINK_DAYS ONLINE_EVENT_RETENTION_DAYS ONLINE_ADMIN_AUDIT_RETENTION_DAYS ODOO_RPC_TIMEOUT_MS ODOO_RPC_MAXCONN
   ODOO_RPC_PUBLIC_MAX_CONCURRENCY ODOO_RPC_SAGA_MAX_CONCURRENCY
   ERASURE_SUPPRESSION_DAYS DSAR_OPEN_ORDER_MAX_DEFER_DAYS MEMBER_MIN_AGE PRICE_HUNTER_GEO_RETENTION_DAYS
@@ -35,6 +36,12 @@ EFN_DEV_ONLY_SWITCHES=(ODOO_ONLINE_MOCK EFN_PAYMENT_SIMULATOR ETL_AUDIT_EPOCH_AU
 # Kontrol keamanan yang di production hanya boleh `false` bila nama-nya ada di EFN_ALLOW_CONTROL_OFF (deploy.conf)
 # (ETL_LOYALTY_RECON_NOT_BEFORE: bukan boolean; izin = boleh MEMAJUKAN cutoff di production, dicek scripts/deploy.sh)
 EFN_SECURITY_CONTROLS=(RABBITMQ_STRICT_PERMISSIONS ETL_AUDIT_COPY_ENABLED ETL_LOYALTY_RECON_NOT_BEFORE)
+# G20 (docs/04 §12.1, L-48): kode kanal online = kode PT. Satu-satunya daftar yang diterima ONLINE_CHANNELS; GL di-mount
+# compose base, sisanya lewat infra/compose/docker-compose.online-<kode huruf kecil>.yml (scripts/deploy.sh). Kode lama
+# RTL/FNB dan kanal G19 berhifen DITOLAK. Kanal baru = tambah di sini + scripts/secrets.list + compose + overlay +
+# ALLOWED_CHANNELS di scripts/host/efn-rotate-online-key (runbook odoo-online-api-key.md#kanal-baru).
+EFN_ONLINE_CHANNEL_CODES=(GL PB BCR BCF)
+EFN_ONLINE_BASE_CHANNEL=GL
 # Profil compose yang dikenal; production wajib memuat core,data,observability (alert/Loki/salinan audit)
 EFN_KNOWN_PROFILES=(core data ai observability ops)
 EFN_REQUIRED_PROD_PROFILES=(core data observability)
@@ -141,6 +148,23 @@ efn_validate_topology() { # app_env
   done
 }
 
+# G20 (docs/04 §12.1): daftar kanal koma -> setiap kode WAJIB di EFN_ONLINE_CHANNEL_CODES dan unik. Dipakai
+# efn_validate_config dan scripts/deploy.sh (overlay + cek API key). rc 1 + alasan di stderr.
+efn_validate_online_channels() { # daftar
+  local raw="$1" c
+  local -a list
+  local -A seen=()
+  [[ "$raw" =~ ^[A-Z][A-Z0-9-]{1,15}(,[A-Z][A-Z0-9-]{1,15}){0,7}$ ]] || _efn_err "ONLINE_CHANNELS tidak valid" || return 1
+  IFS=, read -r -a list <<< "$raw"
+  for c in "${list[@]}"; do
+    efn_list_has "$c" "${EFN_ONLINE_CHANNEL_CODES[@]}" \
+      || _efn_err "ONLINE_CHANNELS: kanal ${c} tidak dikenal (G20: ${EFN_ONLINE_CHANNEL_CODES[*]}; RTL/FNB & kanal G19 dihapus, docs/04 §12.1)" \
+      || return 1
+    [[ -z "${seen[$c]:-}" ]] || _efn_err "ONLINE_CHANNELS: kanal ${c} ganda" || return 1
+    seen[$c]=1
+  done
+}
+
 # ── Konfigurasi rilis (manifest bertanda tangan / env manual Superadmin) ──────────────────────────────────────
 # Nilai kosong = default deploy.sh. Regex per variabel; tidak ada nilai bebas.
 efn_validate_config() { # app_env
@@ -169,6 +193,7 @@ efn_validate_config() { # app_env
   done
   # G17 penjualan online (docs/04 §10.1/§10.13; angka PLACEHOLDER pilot). Kosong = default compose (online MATI).
   _efn_re ONLINE_CHANNELS '^[A-Z][A-Z0-9-]{1,15}(,[A-Z][A-Z0-9-]{1,15}){0,7}$' || return 1
+  efn_validate_online_channels "${ONLINE_CHANNELS:-$EFN_ONLINE_BASE_CHANNEL}" || return 1
   _efn_re ONLINE_FULFILMENTS '^(pickup|delivery)(,(pickup|delivery))?$' || return 1
   _efn_re ETL_LOYALTY_POINTS_MODE '^(product|payment)$' || return 1
   # SEC-114 (L-25b): mode `product` mematikan rekonsiliasi harian K-18-6 dan membuat redeem sah menjadi anomali palsu
@@ -178,7 +203,8 @@ efn_validate_config() { # app_env
   fi
   local spec name lo hi
   for spec in ONLINE_PAYMENT_TIMEOUT_SECONDS:60:3600 ONLINE_QUOTE_TTL_SECONDS:60:1800 \
-              ONLINE_MAX_OPEN_ORDERS_PER_MEMBER:1:20 ONLINE_CATALOG_SYNC_SECONDS:60:86400 \
+              ONLINE_MAX_OPEN_ORDERS_PER_MEMBER:1:20 ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER:1:10 \
+              ONLINE_CATALOG_SYNC_SECONDS:60:86400 \
               ONLINE_PICKUP_CODE_MAX_DAYS:1:30 ONLINE_ORDER_MEMBER_LINK_DAYS:30:3650 \
               ONLINE_EVENT_RETENTION_DAYS:7:3650 ONLINE_ADMIN_AUDIT_RETENTION_DAYS:30:3650 ODOO_RPC_TIMEOUT_MS:1000:30000 ODOO_RPC_MAXCONN:1:16 \
               ODOO_RPC_PUBLIC_MAX_CONCURRENCY:1:16 ODOO_RPC_SAGA_MAX_CONCURRENCY:1:16 \
@@ -218,9 +244,24 @@ efn_validate_config() { # app_env
     _efn_err "ODOO_RPC_PUBLIC_MAX_CONCURRENCY (${eff_pub}) + ODOO_RPC_SAGA_MAX_CONCURRENCY (${eff_saga}) > ODOO_RPC_MAXCONN (${eff_max}) - worker Odoo POS bisa terpakai online (docs/runbooks/online-orders.md#sizing-worker)"
     return 1
   fi
-  # Online di production butuh payment provider nyata: mock ditolak di atas, `disabled` = checkout pasti gagal.
+  # G20 W-30 (docs/04 §12.2): order bayar-di-kasir adalah order terbuka juga -> batas counter <= batas total
+  # (kosong = default compose 1 / 2).
+  if (( ${ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER:-1} > ${ONLINE_MAX_OPEN_ORDERS_PER_MEMBER:-2} )); then
+    _efn_err "ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER (${ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER:-1}) > ONLINE_MAX_OPEN_ORDERS_PER_MEMBER (${ONLINE_MAX_OPEN_ORDERS_PER_MEMBER:-2})"
+    return 1
+  fi
+  # ONLINE_PAYMENT_METHODS (L-55): daftar qris,counter tanpa duplikat.
+  local pay_methods="${ONLINE_PAYMENT_METHODS:-qris,counter}"
+  if [[ ! "$pay_methods" =~ ^(qris|counter)(,(qris|counter))?$ || "$pay_methods" == qris,qris || "$pay_methods" == counter,counter ]]; then
+    _efn_err "ONLINE_PAYMENT_METHODS harus qris|counter|qris,counter (bukan ${pay_methods})"; return 1
+  fi
+  # Online di production: qris butuh payment provider nyata (mock ditolak di atas). Pilot bayar di kasir (L-55)
+  # boleh tanpa vendor HANYA bila ONLINE_PAYMENT_METHODS=counter dan PAYMENT_PROVIDER=disabled.
   if [[ "$app_env" == production && "${ONLINE_ENABLED:-false}" == true && ! "${PAYMENT_PROVIDER}" =~ ^(xendit|midtrans)$ ]]; then
-    _efn_err "production ONLINE_ENABLED=true butuh PAYMENT_PROVIDER xendit|midtrans (bukan ${PAYMENT_PROVIDER})"; return 1
+    if [[ "$pay_methods" != counter || "${PAYMENT_PROVIDER}" != disabled ]]; then
+      _efn_err "production ONLINE_ENABLED=true butuh PAYMENT_PROVIDER xendit|midtrans, atau ONLINE_PAYMENT_METHODS=counter + PAYMENT_PROVIDER=disabled (L-55)"
+      return 1
+    fi
   fi
   # Saklar dev/test (stub json2 BFF L-7, simulator bayar frontend) tidak boleh aktif di staging/production
   for v in "${EFN_DEV_ONLY_SWITCHES[@]}"; do

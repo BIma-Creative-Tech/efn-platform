@@ -57,7 +57,7 @@ function setup() {
   return { svc, rows, portions, db, hook, config, clock };
 }
 
-const input = { orderId: ORDER, amount: 39_800, portions: [{ partId: PART, channelCode: 'RTL', companyCode: 'RTL', amount: 39_800 }], expiresAt: new Date(Date.UTC(2026, 9, 5, 3, 15)), idempotencyKey: `online:intent:${ORDER}` };
+const input = { orderId: ORDER, amount: 39_800, portions: [{ partId: PART, channelCode: 'GL', companyCode: 'GL', amount: 39_800 }], expiresAt: new Date(Date.UTC(2026, 9, 5, 3, 15)), idempotencyKey: `online:intent:${ORDER}` };
 
 describe('Payment online (§10.7)', () => {
   it('intent purpose=online, company EFN, porsi per bagian; idempoten per online:intent:<order_id>; Σ porsi ≠ amount ditolak', async () => {
@@ -65,7 +65,7 @@ describe('Payment online (§10.7)', () => {
     const a = await ctx.svc.createOnlineIntent(input);
     expect(a).toMatchObject({ status: 'pending', amount: 39_800, provider: 'mock' });
     expect(ctx.db.find("'online', $7")[0].text).toContain("'EFN'");
-    expect(ctx.portions).toEqual([[a.paymentId, PART, 'RTL', 'RTL', 39_800]]);
+    expect(ctx.portions).toEqual([[a.paymentId, PART, 'GL', 'GL', 39_800]]);
     const b = await ctx.svc.createOnlineIntent(input);
     expect(b.paymentId).toBe(a.paymentId);
     await expect(ctx.svc.createOnlineIntent({ ...input, amount: 1 })).rejects.toThrow('porsi');

@@ -25,11 +25,11 @@ def _quant(i: int, **overrides: Any) -> dict[str, Any]:
     row: dict[str, Any] = {
         "quant_id": i,
         "company_id": 4,
-        "company_name": "PT F&B",
+        "company_name": "PT Paris Baguette",
         "warehouse_id": 2,
-        "warehouse_name": "WH F&B",
+        "warehouse_name": "WH PB",
         "location_id": 32,
-        "location_name": "FNB/Stock",
+        "location_name": "PB/Stock",
         "product_id": 9,
         "lot_id": 0,
         "lot_name": "",
@@ -47,7 +47,7 @@ def _op(i: int) -> dict[str, Any]:
     return {
         "orderpoint_id": i,
         "company_id": 4,
-        "company_name": "PT F&B",
+        "company_name": "PT Paris Baguette",
         "warehouse_id": 2,
         "warehouse_name": "WH",
         "location_id": 32,

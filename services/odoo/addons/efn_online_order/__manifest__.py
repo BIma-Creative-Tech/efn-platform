@@ -3,7 +3,12 @@
     "summary": "E-28 + G19 (E-35/E-36/E-37a): kanal penjualan online per PT/brand lewat BFF (/json/2 terfilter): "
     "katalog, quote berpromo, SO idempoten dengan reservasi stok, saga bayar-konfirmasi-ambil, refund per SO, "
     "outbox event bertanda tangan HMAC.",
-    "version": "19.0.1.3.0",
+    # 19.0.1.4.0 (G20 W-33/E-35b, docs/04 §12.3): batas berat per kanal (max_order_weight_kg, weight_missing_policy),
+    # issue weight_limit/weight_missing (masuk quote_hash), katalog weight_kg; L-46 kode kanal tanpa akhiran -FILE.
+    # 19.0.1.5.0 (G20 E-45, docs/04 §12.2 + L-50/L-52/L-55/L-56): kanal payment_modes (qris|counter), place
+    # payment_mode + counter_code (digest KDF), blok channel katalog payment_modes, jalur internal mark_paid counter
+    # (_efn_counter_mark_paid), event paid payment.method=counter. Jembatan POS: efn_online_pos_counter.
+    "version": "19.0.1.5.0",
     "category": "EFN/Sales",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031): hanya Odoo CE 19 + efn_*.

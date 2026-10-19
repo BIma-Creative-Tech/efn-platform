@@ -36,7 +36,7 @@ def _order(oid: int, uuid: str, **kw: Any) -> OdooOrder:
     base: dict[str, Any] = {
         "id": oid,
         "uuid": uuid,
-        "company_code": "FNB",
+        "company_code": "PB",
         "state": "paid",
         "is_refund": False,
         "has_partner": True,
@@ -57,14 +57,14 @@ def _clean_inputs() -> ReconInputs:
         "u-nomember": _order(4, "u-nomember", has_partner=False),
     }
     ledger = [
-        LedgerEntry(10, "FNB", 100, "pos_earn", "u-earn", "pos_earn:u-earn"),
-        LedgerEntry(11, "FNB", -60, "pos_redeem", "u-redeem", "pos_redeem:u-redeem"),
-        LedgerEntry(12, "FNB", 19, "pos_earn", "u-redeem", "pos_earn:u-redeem"),
-        LedgerEntry(13, "FNB", 30, "pos_reverse", "u-redeem", "pos_reverse:u-refund:restore#1"),
-        LedgerEntry(14, "FNB", -10, "pos_reverse", "u-redeem", "pos_reverse:u-refund:claw"),
+        LedgerEntry(10, "PB", 100, "pos_earn", "u-earn", "pos_earn:u-earn"),
+        LedgerEntry(11, "PB", -60, "pos_redeem", "u-redeem", "pos_redeem:u-redeem"),
+        LedgerEntry(12, "PB", 19, "pos_earn", "u-redeem", "pos_earn:u-redeem"),
+        LedgerEntry(13, "PB", 30, "pos_reverse", "u-redeem", "pos_reverse:u-refund:restore#1"),
+        LedgerEntry(14, "PB", -10, "pos_reverse", "u-redeem", "pos_reverse:u-refund:claw"),
     ]
     return ReconInputs(
-        earn_refs={"u-earn": "FNB", "u-redeem": "FNB"},
+        earn_refs={"u-earn": "PB", "u-redeem": "PB"},
         ledger=ledger,
         orders_by_uuid=orders,
         window_uuids=set(orders),
@@ -93,14 +93,14 @@ def test_clean_smoke_flow_has_no_findings() -> None:
 
 def test_earn_without_order_fictitious_draft_or_refund() -> None:
     inputs = _clean_inputs()
-    inputs.earn_refs["u-ghost"] = "RTL"
-    inputs.ledger.append(LedgerEntry(20, "RTL", 50, "pos_earn", "u-ghost", "pos_earn:u-ghost"))
+    inputs.earn_refs["u-ghost"] = "GL"
+    inputs.ledger.append(LedgerEntry(20, "GL", 50, "pos_earn", "u-ghost", "pos_earn:u-ghost"))
     inputs.orders_by_uuid["u-draft"] = _order(5, "u-draft", state="draft")
-    inputs.earn_refs["u-draft"] = "FNB"
-    inputs.earn_refs["u-refund"] = "FNB"
+    inputs.earn_refs["u-draft"] = "PB"
+    inputs.earn_refs["u-refund"] = "PB"
     report = reconcile(inputs, NOW, SETTLE)
     assert _kinds(report) == {"earn_without_paid_order": 3}
-    ghost = report.findings[("earn_without_paid_order", "RTL")]
+    ghost = report.findings[("earn_without_paid_order", "GL")]
     assert ghost.ledger_ids == [20] and ghost.order_ids == []
     assert report.anomalies == 3
 
@@ -121,7 +121,7 @@ def test_paid_member_order_without_earn_respects_settle_review_and_outbox() -> N
         if states:
             inputs.outbox_earn_states[oid] = states
     report = reconcile(inputs, NOW, SETTLE)
-    finding = report.findings[("paid_member_order_without_earn", "FNB")]
+    finding = report.findings[("paid_member_order_without_earn", "PB")]
     assert finding.count == 2 and finding.order_ids == [6, 12]
 
 
@@ -160,7 +160,7 @@ def test_points_line_without_committed_reservation() -> None:
     inputs = _clean_inputs()
     inputs.orders_by_uuid["u-free"] = _order(15, "u-free")
     inputs.window_uuids.add("u-free")
-    inputs.earn_refs["u-free"] = "FNB"
+    inputs.earn_refs["u-free"] = "PB"
     inputs.points_lines[15] = PointsLines(1, Decimal("-5000"))
     inputs.orders_by_uuid["u-free-review"] = _order(16, "u-free-review", loyalty_state="review")
     inputs.window_uuids.add("u-free-review")
@@ -174,7 +174,7 @@ def test_reverse_without_refund_order() -> None:
     inputs.window_uuids.discard("u-refund")
     report = reconcile(inputs, NOW, SETTLE)
     assert _kinds(report) == {"reverse_without_refund_order": 2}  # restore + claw
-    assert report.findings[("reverse_without_refund_order", "FNB")].ledger_ids == [13, 14]
+    assert report.findings[("reverse_without_refund_order", "PB")].ledger_ids == [13, 14]
 
     inputs = _clean_inputs()
     inputs.orders_by_uuid["u-refund"] = _order(3, "u-refund", is_refund=False)  # bukan refund
@@ -183,7 +183,7 @@ def test_reverse_without_refund_order() -> None:
 
 def test_unknown_kind_rejected() -> None:
     with pytest.raises(ValueError):
-        ReconReport().add("bogus", "FNB")
+        ReconReport().add("bogus", "PB")
 
 
 # ---------------------------------------------------------------- orkestrasi dengan fake I/O
@@ -244,7 +244,7 @@ class FakeOdoo:
         assert "partner_id," not in sql and "member" not in sql
         orders = self.inputs.orders_by_uuid
         if sql == lr.SQL_ODOO_COMPANIES:
-            return [{"id": 3, "efn_brand_code": "FNB"}]
+            return [{"id": 3, "efn_brand_code": "PB"}]
         if sql == lr.SQL_ODOO_ORDERS_WINDOW:
             return [self._row(o) for u, o in orders.items() if u in self.window_only and o.has_partner]
         if sql == lr.SQL_ODOO_ORDERS_BY_UUID:
@@ -303,14 +303,14 @@ def test_run_loyalty_recon_end_to_end(caplog: pytest.LogCaptureFixture) -> None:
     assert caplog.records[-1].levelno == logging.INFO
     assert store.rows[lr.RUN_TABLE][0][1:] == ["ok", 72, 6, 3, 5, 0, 3]
     kinds = {r[1]: r for r in store.rows[lr.FINDING_TABLE]}
-    assert kinds["order_review_aged"][2:5] == ["warning", "FNB", 2]
+    assert kinds["order_review_aged"][2:5] == ["warning", "PB", 2]
     assert not recon_due(store, cfg, NOW + timedelta(hours=1))
     assert recon_due(store, cfg, NOW + timedelta(hours=24))
 
 
 def test_run_logs_warning_on_anomaly(caplog: pytest.LogCaptureFixture) -> None:
     inputs = _clean_inputs()
-    inputs.earn_refs["u-ghost"] = "FNB"
+    inputs.earn_refs["u-ghost"] = "PB"
     with caplog.at_level(logging.INFO, logger="efn_etl.loyalty_recon"):
         report = run_loyalty_recon(FakePlatform(inputs), FakeOdoo(inputs, set()), FakeStore(), PRODUCT, NOW)
     assert report.anomalies == 1
@@ -329,7 +329,7 @@ def test_not_before_bounds_window() -> None:
 # ---------------------------------------------------------------- G18: redeem = pembayaran Poin EFN (E-30, K-18-6)
 
 WIB = lr.WIB
-FNB = "FNB"
+PB = "PB"
 D6, D7, D8 = (datetime(2026, 10, d).date() for d in (6, 7, 8))
 
 
@@ -337,7 +337,7 @@ def _wib(day: int, hour: int, minute: int = 0) -> datetime:
     return datetime(2026, 10, day, hour, minute, tzinfo=WIB)
 
 
-def _pay(pid: int, oid: int, uuid: str, at: datetime, amount: str, company: str = FNB) -> lr.PointsPayment:
+def _pay(pid: int, oid: int, uuid: str, at: datetime, amount: str, company: str = PB) -> lr.PointsPayment:
     return lr.PointsPayment(pid, oid, uuid, company, at, Decimal(amount))
 
 
@@ -363,8 +363,8 @@ def test_daily_points_clean_redeem_and_refund_with_cross_midnight_commit() -> No
         _pay(2, 3, "u-refund", _wib(7, 10), "-3000.00"),
     ]
     moves = [
-        lr.BffPointsMove("u-redeem", FNB, _wib(7, 0, 10), 6000, "redeem"),
-        lr.BffPointsMove("u-refund", FNB, _wib(7, 10, 5), 3000, "restore"),
+        lr.BffPointsMove("u-redeem", PB, _wib(7, 0, 10), 6000, "redeem"),
+        lr.BffPointsMove("u-refund", PB, _wib(7, 10, 5), 3000, "restore"),
     ]
     days = lr.daily_points_recon(payments, _days_of(payments), moves, D6, D8)
     assert [(d.day, d.odoo_idr, d.redeem_idr, d.restored_idr, d.diff) for d in days] == [
@@ -375,7 +375,7 @@ def test_daily_points_clean_redeem_and_refund_with_cross_midnight_commit() -> No
     lr.add_daily_findings(report, days)
     assert report.anomalies == 0
     rows = lr.daily_rows(days, NOW)
-    assert rows[0] == [NOW, D6, FNB, Decimal("6000.00"), Decimal(6000), Decimal(0), Decimal(0), 1, 0, Decimal(0), 0]
+    assert rows[0] == [NOW, D6, PB, Decimal("6000.00"), Decimal(6000), Decimal(0), Decimal(0), 1, 0, Decimal(0), 0]
     assert len(rows[0]) == len(lr.DAILY_COLUMNS)
 
 
@@ -386,21 +386,21 @@ def test_daily_points_mismatches() -> None:
         _pay(3, 5, "u-ok", _wib(7, 9), "1000"),
     ]
     moves = [
-        lr.BffPointsMove("u-short", FNB, _wib(6, 10, 1), 6000, "redeem"),
-        lr.BffPointsMove("u-ghost", "RTL", _wib(7, 12), 4000, "redeem"),  # redeem BFF tanpa order Odoo
-        lr.BffPointsMove("u-ok", FNB, _wib(7, 9, 1), 1000, "redeem"),
+        lr.BffPointsMove("u-short", PB, _wib(6, 10, 1), 6000, "redeem"),
+        lr.BffPointsMove("u-ghost", "GL", _wib(7, 12), 4000, "redeem"),  # redeem BFF tanpa order Odoo
+        lr.BffPointsMove("u-ok", PB, _wib(7, 9, 1), 1000, "redeem"),
     ]
     days = lr.daily_points_recon(payments, _days_of(payments), moves, D6, D8)
     by_key = {(d.day, d.company_code): d for d in days}
-    assert by_key[(D6, FNB)].diff == Decimal(1000)  # 7000 - 6000
-    assert sorted(by_key[(D6, FNB)].mismatched) == ["u-nobff", "u-short"]
-    assert sorted(by_key[(D6, FNB)].sample_order_ids) == [2, 4]
-    assert by_key[(D7, "RTL")].diff == Decimal(-4000) and by_key[(D7, "RTL")].sample_order_ids == []
-    assert by_key[(D7, FNB)].diff == 0
+    assert by_key[(D6, PB)].diff == Decimal(1000)  # 7000 - 6000
+    assert sorted(by_key[(D6, PB)].mismatched) == ["u-nobff", "u-short"]
+    assert sorted(by_key[(D6, PB)].sample_order_ids) == [2, 4]
+    assert by_key[(D7, "GL")].diff == Decimal(-4000) and by_key[(D7, "GL")].sample_order_ids == []
+    assert by_key[(D7, PB)].diff == 0
     report = ReconReport()
     lr.add_daily_findings(report, days)
     assert report.by_kind() == {"points_payment_daily_mismatch": 2}
-    assert sorted(report.findings[("points_payment_daily_mismatch", FNB)].order_ids) == [2, 4]
+    assert sorted(report.findings[("points_payment_daily_mismatch", PB)].order_ids) == [2, 4]
     payload = lr.daily_payload(days)
     assert payload["days_checked"] == 2 and len(payload["mismatched"]) == 2
     assert "member" not in json.dumps(payload)
@@ -409,10 +409,10 @@ def test_daily_points_mismatches() -> None:
 def test_daily_points_tolerance_and_out_of_window() -> None:
     payments = [_pay(1, 2, "u-a", _wib(6, 10), "5999")]
     order_days = _days_of(payments)
-    order_days["u-old"] = (datetime(2026, 10, 5).date(), FNB, 9)  # order Odoo di luar jendela
+    order_days["u-old"] = (datetime(2026, 10, 5).date(), PB, 9)  # order Odoo di luar jendela
     moves = [
-        lr.BffPointsMove("u-a", FNB, _wib(6, 10), 6000, "redeem"),
-        lr.BffPointsMove("u-old", FNB, _wib(6, 0, 30), 500, "restore"),  # dicatat BFF di jendela, order hari 5
+        lr.BffPointsMove("u-a", PB, _wib(6, 10), 6000, "redeem"),
+        lr.BffPointsMove("u-old", PB, _wib(6, 0, 30), 500, "restore"),  # dicatat BFF di jendela, order hari 5
     ]
     strict = lr.daily_points_recon(payments, order_days, moves, D6, D8)
     assert len(strict) == 1 and strict[0].diff == Decimal(-1) and strict[0].restored_idr == 0
@@ -534,9 +534,9 @@ def test_run_payment_mode_end_to_end(caplog: pytest.LogCaptureFixture) -> None:
         _pay(3, 7, "u-early", _wib(5, 9), "800"),  # di luar jendela hari
     ]
     moves = [
-        lr.BffPointsMove("u-redeem", FNB, _wib(7, 0, 10), 6000, "redeem"),
-        lr.BffPointsMove("u-refund", FNB, _wib(7, 10, 5), 2500, "restore"),  # BFF restore kurang Rp500
-        lr.BffPointsMove("u-early", FNB, _wib(6, 0, 5), 800, "redeem"),  # commit di jendela, order hari 5
+        lr.BffPointsMove("u-redeem", PB, _wib(7, 0, 10), 6000, "redeem"),
+        lr.BffPointsMove("u-refund", PB, _wib(7, 10, 5), 2500, "restore"),  # BFF restore kurang Rp500
+        lr.BffPointsMove("u-early", PB, _wib(6, 0, 5), 800, "redeem"),  # commit di jendela, order hari 5
     ]
     platform = FakePlatformPayment(inputs, moves)
     odoo = FakeOdooPayment(inputs, {"u-earn", "u-nomember"}, payments)
@@ -545,7 +545,7 @@ def test_run_payment_mode_end_to_end(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO, logger="efn_etl.loyalty_recon"):
         report = run_loyalty_recon(platform, odoo, store, cfg, NOW)
     assert report.by_kind()["points_payment_daily_mismatch"] == 1
-    assert report.findings[("points_payment_daily_mismatch", FNB)].order_ids == [3]
+    assert report.findings[("points_payment_daily_mismatch", PB)].order_ids == [3]
     assert lr.SQL_ODOO_POINTS_PAYMENTS_BY_UUID in odoo.seen_sql  # u-early: hari ditentukan dari order Odoo
     daily = store.rows[lr.DAILY_TABLE]
     assert [(r[1], r[3], r[4], r[5], r[6]) for r in daily] == [
@@ -556,7 +556,7 @@ def test_run_payment_mode_end_to_end(caplog: pytest.LogCaptureFixture) -> None:
     assert record.levelno == logging.WARNING
     payload = json.loads(record.getMessage().split(" ", 1)[1])
     assert payload["points_daily"]["mismatched"] == [
-        {"day": "2026-10-07", "company": FNB, "diff_idr": "-500", "orders": 1}
+        {"day": "2026-10-07", "company": PB, "diff_idr": "-500", "orders": 1}
     ]
 
 
@@ -602,7 +602,7 @@ def test_payment_mode_still_flags_redeem_without_any_points_line() -> None:
 def test_daily_excludes_legacy_orders() -> None:
     inputs = _clean_inputs()
     legacy = {2: inputs.points_lines.pop(2)}
-    moves = [lr.BffPointsMove("u-redeem", FNB, _wib(7, 9), 6000, "redeem")]  # redeem pra-E-30, tanpa pos.payment
+    moves = [lr.BffPointsMove("u-redeem", PB, _wib(7, 9), 6000, "redeem")]  # redeem pra-E-30, tanpa pos.payment
     platform, store = FakePlatformPayment(inputs, moves), FakeStore()
     odoo = FakeOdooPayment(inputs, {"u-earn", "u-nomember"}, [], legacy_lines=legacy)
     report = run_loyalty_recon(platform, odoo, store, LoyaltyReconSettings(), NOW)
@@ -614,7 +614,7 @@ def test_daily_excludes_legacy_orders() -> None:
 
 
 def _restore(ref: str, value: int, points: int | None, at: datetime | None = None) -> lr.BffPointsMove:
-    return lr.BffPointsMove(ref, FNB, at or _wib(7, 10, 5), value, "restore", points)
+    return lr.BffPointsMove(ref, PB, at or _wib(7, 10, 5), value, "restore", points)
 
 
 def test_restore_points_vs_value_rounding_window() -> None:
@@ -641,10 +641,10 @@ def test_restore_points_vs_value_rounding_window() -> None:
     report = ReconReport()
     lr.add_daily_findings(report, days)
     assert report.by_kind() == {"points_restore_value_mismatch": 2}
-    assert sorted(report.findings[("points_restore_value_mismatch", FNB)].order_ids) == [4, 5]
+    assert sorted(report.findings[("points_restore_value_mismatch", PB)].order_ids) == [4, 5]
     payload = lr.daily_payload(days)
     assert payload["mismatched"] == []
-    assert payload["restore_mismatched"] == [{"day": "2026-10-07", "company": FNB, "orders": 2}]
+    assert payload["restore_mismatched"] == [{"day": "2026-10-07", "company": PB, "orders": 2}]
     row = dict(zip(lr.DAILY_COLUMNS, lr.daily_rows(days, NOW)[0], strict=True))
     assert row["bff_restored_points_idr"] == Decimal(10100) and row["restore_value_mismatched"] == 2
 
@@ -668,14 +668,14 @@ def test_restore_check_custom_point_value() -> None:
 def test_run_payment_mode_reports_restore_mismatch_separately() -> None:
     inputs = _clean_inputs()
     payments = [_pay(2, 3, "u-refund", _wib(7, 10), "-3000")]
-    moves = [lr.BffPointsMove("u-refund", FNB, _wib(7, 10, 5), 3000, "restore", 35)]  # 35 poin = Rp3.500 > Rp3.000
+    moves = [lr.BffPointsMove("u-refund", PB, _wib(7, 10, 5), 3000, "restore", 35)]  # 35 poin = Rp3.500 > Rp3.000
     store = FakeStore()
     odoo = FakeOdooPayment(inputs, {"u-earn", "u-nomember"}, payments)
     report = run_loyalty_recon(FakePlatformPayment(inputs, moves), odoo, store, LoyaltyReconSettings(), NOW)
     kinds = report.by_kind()
     assert kinds.get("points_restore_value_mismatch") == 1
     assert "points_payment_daily_mismatch" not in kinds
-    assert report.findings[("points_restore_value_mismatch", FNB)].order_ids == [3]
+    assert report.findings[("points_restore_value_mismatch", PB)].order_ids == [3]
     (row,) = store.rows[lr.DAILY_TABLE]
     assert dict(zip(lr.DAILY_COLUMNS, row, strict=True))["restore_value_mismatched"] == 1
     assert LoyaltyReconSettings().point_value_idr == 100

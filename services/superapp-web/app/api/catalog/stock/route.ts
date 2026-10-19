@@ -1,5 +1,5 @@
 /**
- * GET /api/catalog/stock?channel=RTL&outlet=TOKO-01&ids=1,2,3 -> BFF GET /v1/catalog/stock (docs/04 §10.3.2). Publik.
+ * GET /api/catalog/stock?channel=GL&outlet=TOKO-01&ids=1,2,3 -> BFF GET /v1/catalog/stock (docs/04 §10.3.2). Publik.
  * Status live (`in_stock|low|out`, tanpa qty) -> `no-store`.
  */
 import type { NextRequest } from 'next/server';

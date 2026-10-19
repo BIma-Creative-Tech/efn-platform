@@ -2,7 +2,7 @@
 <!-- W-14 (Gelombang 19): preset POS F&B per layanan untuk kota default PT F&B. docs/08 §10.4, ADR-027.
      Fiscal position dari efn_setup_company (data/account_tax_fnb_service_data.xml):
      - dine-in      -> PB1 + service charge 5 % (SC masuk DPP PB1);
-     - bawa pulang  -> tanpa SC; PB1 non-dine-in = TODO konsultan pajak (R-L09).
+     - bawa pulang  -> tanpa SC; PB1 non-dine-in 0 % (keputusan pemilik proyek 18 Okt 2026, 18-1; configurable).
      Kenapa preset baru, bukan preset bawaan pos_restaurant (Dine In / Takeout): preset bawaan tanpa fiscal position
      memakai pos.config.default_fiscal_position_id (pos_order.js setPreset: preset.fiscal_position_id ATAU default
      config, temuan G14) sehingga "Takeout" ikut kena SC bila default config = dine-in. pos.preset tidak punya
@@ -25,6 +25,26 @@
         <field name="color">3</field>
         <field name="identification">none</field>
         <field name="fiscal_position_id" ref="efn_setup_company.fiscal_position_fnb_non_dine_in"/>
+        <field name="service_at">counter</field>
+        <field name="available_in_self" eval="False"/>
+    </record>
+
+    <!-- G20 W-32 (docs/04 §12.1): preset Bacha Coffee F&B (BCF) memakai fiscal position company BCF. Preset tanpa
+         company_id -> pasang HANYA di pos.config BCF (fiscal position BCF hanya memetakan PB1 default BCF; di POS PT
+         lain pajak produk tidak terpetakan sehingga SC/PB1 dine-in tidak berlaku; README checklist). -->
+    <record id="preset_bcf_dine_in" model="pos.preset">
+        <field name="name">Makan di tempat (Bacha F&amp;B)</field>
+        <field name="color">1</field>
+        <field name="identification">none</field>
+        <field name="fiscal_position_id" ref="efn_setup_company.fiscal_position_bcf_dine_in"/>
+        <field name="service_at">table</field>
+        <field name="available_in_self" eval="False"/>
+    </record>
+    <record id="preset_bcf_takeaway" model="pos.preset">
+        <field name="name">Bawa pulang (Bacha F&amp;B)</field>
+        <field name="color">3</field>
+        <field name="identification">none</field>
+        <field name="fiscal_position_id" ref="efn_setup_company.fiscal_position_bcf_non_dine_in"/>
         <field name="service_at">counter</field>
         <field name="available_in_self" eval="False"/>
     </record>

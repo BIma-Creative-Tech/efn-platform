@@ -255,8 +255,9 @@ neg_env "38 secret multi-baris (injeksi .env) ditolak" "karakter kontrol" \
   "JWT_SECRET=$(printf 'abc\nIMAGE_ODOO=evil.example/odoo@sha256:%s' "$(dg evil)")"
 neg_env "39 secret dengan CR/ESC ditolak" "karakter kontrol" "JWT_SECRET=$(printf 'abc\r\033[2Jx')"
 # W-11: API key Odoo kanal online dikelola DI HOST (secrets.list host:*) -> tidak boleh datang dari stdin CI
-neg_env "110 ODOO_API_KEY_ONLINE_RTL lewat stdin ditolak (W-11, host:*)" "variabel tidak diizinkan: ODOO_API_KEY_ONLINE_RTL" \
-  "ODOO_API_KEY_ONLINE_RTL=0123456789abcdef0123456789abcdef01234567"  # gitleaks:allow (kunci uji palsu)
+# G20: kanal default GL (secrets.list host:disabled) - nama ada di secrets.list tetapi host:* -> tetap ditolak
+neg_env "110 ODOO_API_KEY_ONLINE_GL lewat stdin ditolak (W-11, host:*)" "variabel tidak diizinkan: ODOO_API_KEY_ONLINE_GL" \
+  "ODOO_API_KEY_ONLINE_GL=0123456789abcdef0123456789abcdef01234567"  # gitleaks:allow (kunci uji palsu)
 # SEC-120 (L-25h): rotasi API key memegang kunci host -> efn-deploy menunggu lalu gagal, /opt/efn tidak disentuh
 install -d -m 0700 /run/efn; exec 6> /run/efn/deploy.lock; flock -n 6
 SEQ=$((SEQ + 1)); make_release "N$SEQ" "$SEQ" 1.3.0; make_env "N$SEQ"; EFN_DEPLOY_LOCK_WAIT=2 run "N$SEQ"
@@ -395,10 +396,29 @@ vc() { # nama harapan app_env VAR=nilai...
     bash -c "source '$SRC/scripts/lib/deploy-validate.sh'; efn_validate_config $e"
 }
 vc "88 production ONLINE_ENABLED=true dengan PAYMENT_PROVIDER=disabled ditolak" 1 production ONLINE_ENABLED=true
-PP=xendit vc "89 production ONLINE_ENABLED=true dengan provider nyata diterima" 0 production ONLINE_ENABLED=true ONLINE_CHANNELS=RTL
+PP=xendit vc "89 production ONLINE_ENABLED=true dengan provider nyata diterima" 0 production ONLINE_ENABLED=true ONLINE_CHANNELS=GL
+vc "89b L-55 production online counter + provider disabled diterima" 0 production ONLINE_ENABLED=true ONLINE_CHANNELS=GL ONLINE_PAYMENT_METHODS=counter
+vc "89c L-55 production online qris,counter tanpa vendor ditolak" 1 production ONLINE_ENABLED=true ONLINE_CHANNELS=GL ONLINE_PAYMENT_METHODS=qris,counter
+PP=xendit vc "89d L-55 production online qris dengan vendor nyata diterima" 0 production ONLINE_ENABLED=true ONLINE_CHANNELS=GL ONLINE_PAYMENT_METHODS=qris
+vc "89e L-55 ONLINE_PAYMENT_METHODS tidak dikenal ditolak" 1 staging ONLINE_PAYMENT_METHODS=card
+vc "89f L-55 ONLINE_PAYMENT_METHODS duplikat ditolak" 1 staging ONLINE_PAYMENT_METHODS=counter,counter
 vc "90 ONLINE_ENABLED bukan boolean ditolak" 1 staging ONLINE_ENABLED=yes
-vc "91 ONLINE_CHANNELS huruf kecil ditolak" 1 staging ONLINE_CHANNELS=rtl
-vc "92 ONLINE_CHANNELS RTL,FNB-BAKSO diterima" 0 staging ONLINE_CHANNELS=RTL,FNB-BAKSO
+vc "91 ONLINE_CHANNELS huruf kecil ditolak" 1 staging ONLINE_CHANNELS=gl
+vc "92 ONLINE_CHANNELS GL,PB,BCR,BCF diterima (G20 kode kanal = kode PT)" 0 staging ONLINE_CHANNELS=GL,PB,BCR,BCF
+# G20 (docs/04 §12.1): kode lama & kanal G19 berhifen dihapus -> allowlist EFN_ONLINE_CHANNEL_CODES
+vc "92b ONLINE_CHANNELS=RTL (kode lama) ditolak" 1 staging ONLINE_CHANNELS=RTL
+vc "92c ONLINE_CHANNELS=GL,FNB-PB (kanal G19) ditolak" 1 production ONLINE_CHANNELS=GL,FNB-PB
+vc "92d ONLINE_CHANNELS kanal tak dikenal (FNB-BAKSO) ditolak" 1 staging ONLINE_CHANNELS=GL,FNB-BAKSO
+vc "92e ONLINE_CHANNELS ganda ditolak" 1 staging ONLINE_CHANNELS=PB,PB
+vc "92f ONLINE_CHANNELS=BCF saja diterima" 0 production ONLINE_CHANNELS=BCF
+# G20 W-30 (docs/04 §12.2): batas order bayar di kasir per member
+vc "92g ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=1 diterima" 0 production ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=1
+vc "92h ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=0 ditolak" 1 production ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=0
+vc "92i ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=11 ditolak (plafon 10 = BFF)" 1 staging ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=11 \
+  ONLINE_MAX_OPEN_ORDERS_PER_MEMBER=20
+vc "92j counter 3 > batas order terbuka default 2 ditolak" 1 staging ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=3
+vc "92k counter 3 <= batas order terbuka 4 diterima" 0 staging ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=3 \
+  ONLINE_MAX_OPEN_ORDERS_PER_MEMBER=4
 vc "93 ONLINE_FULFILMENTS di luar allowlist ditolak" 1 staging ONLINE_FULFILMENTS=pickup,shipping
 vc "94 ONLINE_PAYMENT_TIMEOUT_SECONDS < 60 ditolak" 1 staging ONLINE_PAYMENT_TIMEOUT_SECONDS=30
 vc "95 ONLINE_PAYMENT_TIMEOUT_SECONDS nol di depan ditolak" 1 staging ONLINE_PAYMENT_TIMEOUT_SECONDS=0900

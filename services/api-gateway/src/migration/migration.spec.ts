@@ -45,11 +45,11 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
 
     it('entri ledger migration_opening terenkripsi; idempoten per source_ref; data beda → idempotency_conflict', async () => {
       const ctx = setup();
-      const dto = { sourceRef: SR1, memberRef: MEMBER, points: 250, companyCode: 'RTL' as const };
+      const dto = { sourceRef: SR1, memberRef: MEMBER, points: 250, companyCode: 'GL' as const };
       expect(await ctx.svc.openingBalance(dto)).toEqual({ applied: true, points_balance: 250 });
       expect(ctx.db.ledger[0]).toMatchObject({
         member_ref_hash: ctx.hash,
-        company_code: 'RTL',
+        company_code: 'GL',
         delta_points: 250,
         source: 'migration_opening',
         source_ref: SR1,
@@ -70,22 +70,22 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
       const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
       const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
       try {
-        await ctx.svc.openingBalance({ sourceRef: SR1, memberRef: MEMBER, points: 250, companyCode: 'RTL' });
-        expect((await ctx.svc.openingBalance({ sourceRef: SR2, memberRef: MEMBER, points: 6000, companyCode: 'FNB' })).applied).toBe(true);
+        await ctx.svc.openingBalance({ sourceRef: SR1, memberRef: MEMBER, points: 250, companyCode: 'GL' });
+        expect((await ctx.svc.openingBalance({ sourceRef: SR2, memberRef: MEMBER, points: 6000, companyCode: 'PB' })).applied).toBe(true);
         const m = await ctx.metrics.loyaltyMigrationPoints.get();
         expect(m.values.map((v) => [v.labels.company, v.value])).toEqual([
-          ['RTL', 250],
-          ['FNB', 6000],
+          ['GL', 250],
+          ['PB', 6000],
         ]);
         const lines = log.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('EFN_LOYALTY_MIGRATION '));
         expect(lines).toHaveLength(2);
-        expect(JSON.parse(lines[0].slice('EFN_LOYALTY_MIGRATION '.length))).toEqual({ company: 'RTL', points: 250, source_ref: SR1 });
+        expect(JSON.parse(lines[0].slice('EFN_LOYALTY_MIGRATION '.length))).toEqual({ company: 'GL', points: 250, source_ref: SR1 });
         const anomalies = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('EFN_LOYALTY_ANOMALY '));
         expect(anomalies).toHaveLength(1);
         expect(JSON.parse(anomalies[0].slice('EFN_LOYALTY_ANOMALY '.length))).toMatchObject({
           kind: 'migration_large_balance',
           severity: 'warning',
-          company: 'FNB',
+          company: 'PB',
           points: 6000,
           limit: 5000,
         });
@@ -101,7 +101,7 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
 
     it('SEC-65: saldo pembuka untuk subjek yang sedang/pernah dihapus → 409, tanpa entri ledger', async () => {
       const ctx = setup();
-      const dto = { sourceRef: SR9, memberRef: MEMBER, points: 10, companyCode: 'RTL' as const };
+      const dto = { sourceRef: SR9, memberRef: MEMBER, points: 10, companyCode: 'GL' as const };
       ctx.db.erasureActive.add(ctx.hash);
       expect((await catchApiError(() => ctx.svc.openingBalance(dto))).body).toEqual({ error: { code: 'member_deleting', message: expect.any(String) } });
       ctx.db.erasureActive.clear();
@@ -214,10 +214,10 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
     });
 
     it('validasi opening-balance', async () => {
-      expect(parseOpeningBalance({ source_ref: SRA, member_ref: MEMBER, points: 5, company_code: 'FNB' })).toMatchObject({ points: 5 });
+      expect(parseOpeningBalance({ source_ref: SRA, member_ref: MEMBER, points: 5, company_code: 'PB' })).toMatchObject({ points: 5 });
       for (const body of [
-        { source_ref: SRA, member_ref: MEMBER, points: 0, company_code: 'FNB' },
-        { source_ref: SRA, member_ref: MEMBER, points: 1.5, company_code: 'FNB' },
+        { source_ref: SRA, member_ref: MEMBER, points: 0, company_code: 'PB' },
+        { source_ref: SRA, member_ref: MEMBER, points: 1.5, company_code: 'PB' },
         { source_ref: SRA, member_ref: MEMBER, points: 5, company_code: 'XX' },
       ]) {
         expect((await catchApiError(() => parseOpeningBalance(body))).getStatus()).toBe(400);
@@ -264,7 +264,7 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
     it('jalur impor: DTO member & saldo menolak id lama; service menolak pemanggil internal yang melewati DTO', async () => {
       for (const parse of [
         () => parseMigrationMember({ source_ref: '6281234567890', member_ref: MEMBER }),
-        () => parseOpeningBalance({ source_ref: 'CUST-000123', member_ref: MEMBER, points: 5, company_code: 'FNB' }),
+        () => parseOpeningBalance({ source_ref: 'CUST-000123', member_ref: MEMBER, points: 5, company_code: 'PB' }),
       ]) {
         expect((await catchApiError(parse)).body).toMatchObject({ error: { code: 'invalid_source_ref' } });
       }
@@ -272,7 +272,7 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
       const cipher = testCipher(config);
       const db = new FakeLoyaltyDb();
       const svc = new MigrationService(config, db, cipher, new LoyaltyService(config, db, cipher), new MetricsService());
-      expect((await catchApiError(() => svc.openingBalance({ sourceRef: 'legacy-001', memberRef: MEMBER, points: 5, companyCode: 'FNB' }))).getStatus()).toBe(400);
+      expect((await catchApiError(() => svc.openingBalance({ sourceRef: 'legacy-001', memberRef: MEMBER, points: 5, companyCode: 'PB' }))).getStatus()).toBe(400);
       expect((await catchApiError(() => svc.importMember({ sourceRef: SR1.toUpperCase(), memberRef: MEMBER, consents: [] }))).getStatus()).toBe(400);
     });
   });
@@ -299,7 +299,7 @@ describe('Migrasi (docs/04 §9.6 K-7)', () => {
       await app.getHttpAdapter().getInstance().ready();
       return { app, svc, config };
     }
-    const body = { source_ref: SRA, member_ref: MEMBER, points: 5, company_code: 'FNB' };
+    const body = { source_ref: SRA, member_ref: MEMBER, points: 5, company_code: 'PB' };
 
     it('MIGRATION_ENABLED=false (default) → 404 meski kunci benar', async () => {
       const key = randomSecret();

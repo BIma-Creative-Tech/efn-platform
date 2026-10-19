@@ -35,11 +35,11 @@ class TestEfnPosOtpTour(TestPointOfSaleHttpCommon):
         ICP.set_param("efn.pos.otp_required_for_promo", "True")
         ICP.set_param("efn.pos.promo_disabled_when_offline", "True")
         company = cls.main_pos_config.company_id
-        env["res.company"].search([("efn_brand_code", "=", "FNB"), ("id", "!=", company.id)]).write(
+        env["res.company"].search([("efn_brand_code", "=", "PB"), ("id", "!=", company.id)]).write(
             {"efn_brand_code": False}
         )
         env["res.company"].flush_model(["efn_brand_code"])
-        company.write({"efn_brand_code": "FNB"})
+        company.write({"efn_brand_code": "PB"})
 
         # Nomor fiktif khusus test.
         cls.member = env["res.partner"].create({"name": "Member Tour OTP", "phone": "0812-3456-7890"})
@@ -109,7 +109,7 @@ class TestEfnPosOtpTour(TestPointOfSaleHttpCommon):
         self.assertEqual(self._paths(), [REQUEST, VERIFY, VERIFY, CONSUME])
         request_payload = self.calls[0][1]
         self.assertEqual(request_payload["member_ref"], "6281234567890", "nomor dari res.partner, bukan input kasir")
-        self.assertEqual(request_payload["company_code"], "FNB")
+        self.assertEqual(request_payload["company_code"], "PB")
         self.assertEqual(self.calls[1][1]["code"], "111111")
         order = self._last_order()
         self.assertEqual(order.partner_id, self.member)

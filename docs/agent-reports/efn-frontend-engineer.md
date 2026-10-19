@@ -422,3 +422,26 @@ Status selesai/dibatalkan tidak menampilkan batas. Label kini menyebut jumlah pe
 - **`qty_limit`:** `parseIssues` kini memakai allowlist `KNOWN_ISSUE_CODES` (out_of_stock, item_unavailable, qty_exceeds_max, qty_limit, price_changed); kode lain dinormalkan ke `unknown_issue` (tetap issue, tetap memblokir). Label per baris: "Jumlah melebihi batas pembelian. Kurangi jumlah barang ini." Checkout tetap nonaktif via `quoteHasIssues`; 409 `cart_has_issues` sudah memicu hitung ulang.
 - **Test:** `tests/g19-fix.test.ts` (baru): parsing qty_limit, normalisasi kode tak dikenal, label, retensi kode. Belum dijalankan (tidak ada Node lokal; lead menjalankan Vitest/build).
 - **Belum:** kontrak batas kanal (default 20) tidak diketahui klien, tombol "+" masih sampai 99 sehingga issue baru muncul setelah quote; uji komponen CartView; kode yang selalu 400 akan terus dikirim ulang pada tiap hitung ulang sampai dihapus pelanggan.
+
+## Gelombang 20 — kode entitas baru, bayar di kasir, issue berat (18 Okt 2026; docs/04 §12.1–§12.3)
+
+**Kode entitas (§12.1):** `CompanyCode` = EFN/GL/PB/BCR/BCF/FARM; `COMPANIES` berisi enam nama tampilan (Holding EFN, PT Grand Lucky, PT Paris Baguette, Bacha Coffee Retail, Bacha Coffee F&B, FARM). RTL/FNB dihapus dari kode, fixture, test, dan komentar. Tenant: `efn` = GL,PB,BCR,BCF; `efn-mart` = GL; `efn-kitchen` = PB; semua tetap `brandCode: null` (L-33). Baru `BRAND_CODE_CHANNELS` + `channelsOfBrandCode()` (`BACHA` -> BCR+BCF; hanya peta, belum ada tenant Bacha karena domain belum diputuskan).
+
+**Bayar di kasir (§12.2):**
+- `lib/payment.ts` (baru, murni): `PaymentMethod`, `parsePaymentModes`, `paymentOptions` (counter hanya bila tepat satu PT dan kanal tidak menolak; multi-PT diberi penjelasan "beberapa pesanan terpisah"), `resolvePaymentMethod`, `formatCounterCode` (alfabet §10.2, tampil `ABCD-EFGH`), ejaan & pengumuman hitung mundur untuk pembaca layar.
+- `CatalogChannel.payment_modes` (nullable; null = BFF belum mengirim field -> opsi tetap ditawarkan untuk satu PT, BFF memutuskan). `CartView`: fieldset radio "Metode pembayaran" (QRIS / Bayar di kasir) dengan alasan via `aria-describedby`; 422 `payment_method_unavailable` mengunci opsi counter dengan pesan; tanpa metode yang bisa dipakai (mis. pilot counter-saja + multi-PT) checkout diblokir dengan penjelasan. Tombol: "Buat pesanan & bayar di kasir".
+- `POST /api/orders` meneruskan `payment_method` (qris|counter; selain itu 400 tanpa BFF). Respons ke browser tetap hanya `{order_id, status}` — `counter_code` dari respons checkout dibuang di route.
+- Halaman pesanan: status `awaiting_counter_payment` ("Menunggu pembayaran di kasir"), komponen `CounterPayPanel`: kode bayar besar (bukan kode ambil), hitung mundur dari `payment.expires_at` (koreksi jam server), instruksi "Tunjukkan kode ini ke kasir", region `aria-live="polite"` yang hanya berubah tiap menit/kritis (`role=timer` tanpa live). Kode hanya di props/memori komponen: tidak di URL/storage/log, tidak ada tombol salin; tidak dirender server (`withoutCounterCode` di `page.tsx`), klien mengambilnya lewat `GET /api/orders/:id` (no-store) sekali saat mount lalu ikut polling 10 dtk. Batal pesanan diizinkan di status ini.
+- Pesan error baru: `counter_payment_single_part_only`, `payment_method_unavailable`; `too_many_open_orders` memakai teks yang ada.
+
+**Berat (§12.3):** `weight_limit` (product_id null, tingkat grup) dan `weight_missing` (per produk) masuk `KNOWN_ISSUE_CODES` + label jelas; `groupLevelIssues`/`productIssue`; `CartView` menampilkan `role=alert` per PT untuk `weight_limit`; checkout tetap diblokir lewat `quoteHasIssues`. `ProductSummary.weight_kg` (nullable) di-parse, belum ditampilkan.
+
+**Test (belum dijalankan; tanpa shell):** `tests/g20-counter.test.ts` (baru: opsi bayar, kode bayar, parsing order, issue berat, route POST payment_method + peta error), tambahan `brands.test.ts`, `catalog.test.ts` (payment_modes, weight_kg, nama PT), fixture RTL/FNB -> GL/PB di `cart/orders/online-routes/promo/g19-fix`.
+
+**Asumsi kontrak untuk BFF (perlu dikonfirmasi):**
+1. `GET /v1/orders/:id` mengembalikan `payment: { method: "counter", counter_code, expires_at }` selama `awaiting_counter_payment` (docs/04 §12.2 hanya mencantumkan di respons checkout). Tanpa ini kode tidak bisa ditampilkan setelah navigasi/reload.
+2. `GET /v1/catalog/channels` membawa `payment_modes: ["qris"|"counter"]` per kanal (opsional; bila tidak ada, UI tidak tahu kanal pilot counter-saja dan pelanggan baru melihat 422).
+3. Status order `awaiting_counter_payment` juga muncul di `GET /v1/orders` (daftar) dan bisa dibatalkan lewat `POST /v1/orders/:id/cancel`.
+4. Katalog produk membawa `weight_kg` nullable.
+
+**Belum diverifikasi:** Vitest/lint/`next build` (lead); uji browser/pembaca layar untuk `CounterPayPanel` dan radio metode bayar; tampilan di perangkat kecil; teks pelanggan menunggu Legal/Produk; tenant Bacha dua kanal belum dibuat.

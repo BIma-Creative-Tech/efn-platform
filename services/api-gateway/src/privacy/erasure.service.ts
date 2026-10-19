@@ -21,7 +21,7 @@ export const DEFER_ESCALATION_DAYS = [3, 10] as const;
 const ESCALATION_BATCH = 200;
 /** Bagian order online yang menahan erasure (sama dengan L-4). */
 const OPEN_PART_STATUSES = `('paying', 'confirmed', 'ready', 'review')`;
-const OPEN_ORDER_PREDICATE = `(o.status IN ('created', 'awaiting_payment')
+const OPEN_ORDER_PREDICATE = `(o.status IN ('created', 'awaiting_payment', 'awaiting_counter_payment')
                  OR EXISTS (SELECT 1 FROM platform.online_order_part p
                              WHERE p.order_id = o.id AND p.status IN ${OPEN_PART_STATUSES}))`;
 /** Maksimum id bagian yang dicetak di satu baris anomali (sisanya lewat CLI `online-erasure-pending`). */

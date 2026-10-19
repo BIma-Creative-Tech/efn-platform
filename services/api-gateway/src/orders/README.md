@@ -8,7 +8,7 @@ ADR-016/026 (provider `mock`), ADR-029 (member opak). Migrasi: `infra/postgres/i
 |---|---|---|
 | `POST /v1/orders` | Bearer | `Idempotency-Key` wajib (opak `^[A-Za-z0-9_-]{16,128}$`, L-8: dibuat route handler Next.js `chk1_…`), body `{quote_id, accept_total}` saja. `UNIQUE(member_id, idempotency_key)` + `request_sha256`: key+body sama → order yang sama (klik ganda), body beda → `409 idempotency_conflict`. Advisory lock member: batas order terbuka (`429 too_many_open_orders`), DSAR hapus aktif → `409 account_deleting`. → `201` |
 | `GET /v1/orders`, `GET /v1/orders/:order_id` | Bearer | Dari DB saja (polling tidak memanggil Odoo); daftar memuat `company_code` per bagian; QR hanya saat `awaiting_payment`. |
-| `POST /v1/orders/:order_id/cancel` | Bearer | Hanya `created|awaiting_payment`; intent dibatalkan di gateway; webhook menang bila sudah `paid` → `409 order_not_cancellable`. Idempoten. |
+| `POST /v1/orders/:order_id/cancel` | Bearer | Hanya `created|awaiting_payment|awaiting_counter_payment` (G20); intent dibatalkan di gateway; webhook menang bila sudah `paid` → `409 order_not_cancellable`. Idempoten. |
 | `GET /v1/orders/:order_id/pickup-code` | Bearer | Bagian `confirmed|ready` saja, `no-store`, rate limit sendiri. |
 | `POST /v1/orders/:order_id/simulate-payment` | Bearer | Dev/staging + mock saja (404 di production). |
 | `POST /v1/pos/online/order-events` | service key + HMAC `odoo_online_event_hmac` | Replay 300 s, `claim` idempotensi, `seq`, transisi monoton; 404/409 final. |
@@ -51,3 +51,39 @@ Risiko dimitigasi: R-T10 (saga), R-O05 (refund ≤ porsi per bagian), R-S09 (web
 - **Anti stock griefing**: `ONLINE_MAX_OPEN_ORDERS_PER_MEMBER` default **2** (L-32). `400 captcha_required` tetap dicadangkan (belum aktif).
 - **Promo saat place**: `efn_online_place.order.promo_codes` = `promo_applied` grup dari quote tersimpan (bukan dari klien), `lines` = baris produk saja (`placeLines`); promo berakhir/kuota habis di antara quote & place → Odoo `price_changed` → `409 price_changed` + kompensasi. Baris reward (`reward: true`) disimpan di `online_order_part.lines` dan tampil di `GET /v1/orders/:id`; tidak dihitung sebagai baris refund CS.
 - Kupon sekali pakai dikonsumsi Odoo saat place dan dikembalikan saat batal/kedaluwarsa (cron Odoo) — BFF tidak menyimpan status kupon.
+
+## G20 — bayar di kasir (docs/04 §12.2, W-30/E-45, L-50/L-52/L-55)
+ADR terkait: ADR-001 (revisi 6 entitas), ADR-016 (vendor payment, **belum dipilih** → pilot `counter`), ADR-019/034 (Proposed). Migrasi: `infra/postgres/init/09-platform-g20.sql`.
+
+**Kontrak klien**
+- `POST /v1/orders` body `{ quote_id, accept_total, payment_method? }`, `payment_method` = `"qris"` (default) | `"counter"`; nilai lain → `400 invalid_request`.
+  - Metode di luar `ONLINE_PAYMENT_METHODS` (L-55) atau di luar `payment_modes` kanal → `422 payment_method_unavailable`.
+  - `counter` dengan > 1 bagian → `422 counter_payment_single_part_only`.
+  - Order `counter` terbuka ≥ `ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER` (default 1) → `429 too_many_open_orders` (batas umum `ONLINE_MAX_OPEN_ORDERS_PER_MEMBER` tetap menghitung order counter).
+  - Key sama dengan metode berbeda → `409 idempotency_conflict` (`payment_method` masuk sidik body hanya bila `counter`).
+- Respons `201` (dan `GET /v1/orders/:id` selama `awaiting_counter_payment`, hanya member pemilik):
+  ```json
+  { "order_id": "…", "status": "awaiting_counter_payment", "amount_payable": 159800, "currency": "IDR",
+    "created_at": "…", "expires_at": "…", "paid_at": null,
+    "payment": { "method": "counter", "counter_code": "ABCD-EFGH", "expires_at": "…" },
+    "parts": [{ "channel_code": "GL", "company_code": "GL", "status": "placed", "…": "…" }] }
+  ```
+  Status lain → `payment: { "method": "counter", "expires_at": "…" }` (tanpa `counter_code`). QRIS tidak berubah (`{ method: "qris", status, qr_string?, expires_at }`).
+- `GET /v1/orders` item bertambah `payment_method`; status `awaiting_counter_payment` tampil apa adanya.
+- `POST /v1/orders/:id/cancel` berlaku untuk `awaiting_counter_payment` (batal tanpa refund; SO dibatalkan lewat `order.unpaid_closed`).
+- `POST /v1/orders/:id/simulate-payment` `{status:"paid"}` untuk order counter: hanya dengan stub `ODOO_ONLINE_MOCK` (meniru sync POS); Odoo sungguhan → 404.
+
+**Alur**
+- Checkout counter (L-56): BFF membuat kode bayar (`crypto.randomInt`, alfabet §10.2, 8 karakter, selalu ≠ kode ambil) dan menyimpannya di `online_order_part.counter_code_enc` (AES-256-GCM, AAD `efn:online_order_part.counter_code_enc:v2:<part_id>`, ikut `pii-reencrypt` / cek key ring) **di transaksi checkout yang sama dengan kode ambil, sebelum place** → `efn_online_place(order.payment_mode="counter", order.counter_code)` (Odoo menyimpan hash, tidak mengembalikan kode; field `counter_code` di respons diabaikan) → order `awaiting_counter_payment`. Kode tidak pernah di-log. **Tidak ada payment intent; provider tidak pernah dipanggil** (aman dengan `PAYMENT_PROVIDER=disabled`).
+- Event Odoo `paid` + `payment: { method: "counter" }` (atau `confirmed`/`stock_short`) → order `paid` (paid_at) → bagian `confirmed` (`stock_short` → batal + refund; `review` → anomali) → order `fulfilling`; kode bayar dihapus, kode ambil tampil. `paid` tanpa method counter pada order counter / method counter pada order QRIS → `409 payment_method_mismatch` + anomali critical.
+- Event hilang: job kedaluwarsa menanyakan `efn_online_status` dulu (lunas → diterapkan; Odoo tak terjangkau → coba ulang ≤ 10 menit lewat batas, lalu kedaluwarsa); pull status 15 menit juga memeriksa bagian `placed` order counter.
+- Kedaluwarsa tanpa bayar = alur batal yang ada (expired + `order.unpaid_closed`), tanpa refund. Bayar terlambat di kasir pada order yang sudah ditutup BFF → bagian `review` + anomali `late_counter_payment` (ops: refund POS E-31 / CLI resolve).
+- Refund setelah lunas di kasir: alur CS + approver yang ada; `order.refund.requested` → `manual_required` + `failure_reason=counter_refund_via_pos` (tanpa gateway) → CS me-refund order POS pelunasan ke metode asal → event Odoo `refund_settled` (L-58) atau `online-refund-settle --provider-ref <ref refund POS>` → `settled` (tanpa memanggil `efn_online_refund_settled` Odoo, L-57). Refund otomatis (stock_short) sama.
+- **L-57**: event Odoo `review` + `review_reason` `counter_paid_after_cancel|counter_paid_after_expiry` pada order counter yang sudah `cancelled|expired|failed` → bagian `cancelled → review` (pengecualian monoton khusus ini, seperti L-14) + anomali critical `late_counter_payment`; order DB tetap ditutup, pelanggan melihat `status: "review"` (kode ambil `409 order_in_review`); **tanpa refund otomatis** (CS memutuskan). `review` tanpa alasan / alasan lain / order QRIS → tetap `ignored_stale`.
+- **L-60 (SEC-145)**: refund counter (CS, Odoo, maupun sistem `stock_short`) **selalu** `approval_required` (tanpa ambang). Setelah approver → `odoo_done` → consumer: `manual_required` + `failure_reason=counter_refund_auth_pending` → `efn_online_counter_refund_authorize` (`online:counter_refund_auth:<refund_id>`, `refund_ref` = `odoo_refund_ref`/null, nominal persis). Sukses → `counter_refund_via_pos` (kasir boleh me-refund POS). Transien → tetap pending + anomali `counter_refund_auth_failed`, rekonsiliasi (≥ 15 menit) menerbitkan ulang. Ditolak Odoo → `counter_refund_auth_rejected` + anomali critical, tidak dicoba ulang (CS memutuskan). `refund_settled` / CLI settle hanya untuk refund berstatus `counter_refund_via_pos`; selain itu `unapproved` (anomali **critical**) / CLI ditolak.
+- **L-57**: BFF tidak pernah memanggil `efn_online_mark_paid` maupun `efn_online_refund_settled` untuk order counter (Odoo `invalid_state`). Refund counter = `efn_online_refund` (CS) → kasir me-refund order POS pelunasan → selesai HANYA bila (a) Odoo mengirim event **`refund_settled`** `{ refund: { refund_ref, amount, settled_at, provider_refund_ref: "pos:<uuid>" } }` (L-58; HMAC + seq seperti event lain) yang cocok refund_ref + order counter + nominal persis + ≤ porsi → `settled` + notifikasi `online_order_refunded`; idempoten (replay → `duplicate`, refund sudah settled → `ignored_stale`), atau (b) CS `online-refund-settle` (dicatat BFF saja). Event `refunded`/`cancelled` = refund DIMINTA, tidak pernah menandai settled. `refund_settled` untuk refund QRIS / nominal beda / ref tak dikenal / masih approval_required → `ignored_stale` + anomali `refund_settled_rejected` (critical untuk QRIS & nominal beda).
+- Retensi: kode bayar di-NULL-kan saat bagian keluar dari `placed` / order tidak lagi `awaiting_counter_payment` (metrik `efn_online_retention_rows_total{kind="counter_code_nulled"}`).
+
+**Risiko**: R-T10 (saga tanpa intent; kedaluwarsa vs pelunasan POS — jendela balapan dibatasi pengecekan status sebelum kedaluwarsa), R-O05 (refund ≤ porsi = `amount_payable` bagian), R-L01 (kode bayar rahasia: tidak di log/event/URL, terenkripsi at rest), stock griefing (batas 1 order counter terbuka per member).
+**Test**: `online-counter.spec.ts`, `online.model.spec.ts`, `online-routes.spec.ts` (parser body).
+**Belum**: lookup kode di POS & sync pelunasan = Odoo (`efn_online_pos_counter`); rate limit lookup per sesi di Odoo; kanal counter-saja tidak bisa memakai QRIS sampai vendor (ADR-016).

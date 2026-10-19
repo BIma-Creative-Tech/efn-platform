@@ -1,6 +1,6 @@
 """Mart konsolidasi GL (F-19, docs/08 §5.3; Gelombang 12): Odoo `account_move_line` -> ClickHouse
 `fact_gl_line`, dimensi `dim_gl_account` (kode per company) dan `dim_company`; view `v_gl_consolidated`
-(infra/clickhouse/init/03-gl-audit.sql).
+(tabel: infra/clickhouse/init/03-gl-audit.sql; kolom G20 + view: 08-g20-entities.sql).
 
 Nama kolom diverifikasi di DB dev Odoo CE 19.0 (7 Okt 2026, information_schema):
 - `account_move_line`: id, move_id, journal_id, company_id, account_id, partner_id, date, parent_state, debit, credit,
@@ -16,11 +16,17 @@ Privasi: `partner_id` TIDAK disalin (pelanggan perorangan); hanya `ic_company_id
 adalah partner company grup (dasar eliminasi inter-company). Label baris (`name`) dan `ref` tidak dibaca
 (bisa memuat nama pelanggan). Semua state (draft/posted/cancel) dimuat agar transisi posted->draft/cancel menimpa
 versi lama; view hanya menjumlah `posted`.
+
+G20 (W-32, docs/04 §12.1, ADR-001 revisi): 6 entitas root EFN/GL/PB/BCR/BCF/FARM. `dim_company` bertambah
+`business_type` (holding|retail|fnb|farm) dan `brand_group` (BCR+BCF = BACHA); view konsolidasi mengklasifikasi
+relasi antar-entitas (`ic_relation`: tp_holding | tp_bacha | non_tp | unknown) dan view rekonsiliasi pasangan
+`v_gl_ic_recon` — infra/clickhouse/init/08-g20-entities.sql.
 """
 
 from decimal import Decimal
 from typing import Any
 
+from efn_etl.entities import brand_group, business_type, normalize_code
 from efn_etl.jobs import Job
 from efn_etl.watermark import to_utc
 
@@ -172,6 +178,9 @@ COMPANY_COLUMNS = (
     "fy_last_month",
     "fy_last_day",
     "write_date",
+    # G20 (W-32, docs/04 §12.1): dihitung ETL dari kode PT (efn_etl/entities.py), kolom 08-g20-entities.sql.
+    "business_type",
+    "brand_group",
 )
 
 
@@ -190,15 +199,20 @@ def _fy_day(value: Any) -> int:
 
 
 def transform_company(row: dict[str, Any]) -> list[Any]:
+    """Baris `dim_company`. Kode PT kosong -> business_type/brand_group ''; kode tidak dikenal (mis. `RTL`/`FNB`
+    dari DB dev lama) -> ValueError (fail closed, halaman tidak dimuat) agar konsolidasi tidak salah klasifikasi."""
+    brand = normalize_code(row["brand"])
     return [
         int(row["company_id"]),
         str(row["name"] or ""),
-        str(row["brand"] or ""),
+        brand,
         int(row["parent_id"]) if row["parent_id"] is not None else None,
         str(row["currency"] or ""),
         _fy_month(row["fiscalyear_last_month"]),
         _fy_day(row["fiscalyear_last_day"]),
         to_utc(row["write_date"]),
+        business_type(brand),
+        brand_group(brand),
     ]
 
 

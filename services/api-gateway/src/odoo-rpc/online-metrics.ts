@@ -137,9 +137,10 @@ export class OnlineMetrics {
     this.backwardTransitions.inc({ source });
   }
   /** Hitungan job retensi (§10.8.3): jenis tetap, tanpa id/aktor. */
-  retention(res: { pickupNulled: number; qrNulled: number; unlinked: number; eventsPurged: number; adminAuditPurged: number }): void {
+  retention(res: { pickupNulled: number; counterNulled?: number; qrNulled: number; unlinked: number; eventsPurged: number; adminAuditPurged: number }): void {
     const kinds: [string, number][] = [
       ['pickup_code_nulled', res.pickupNulled],
+      ['counter_code_nulled', res.counterNulled ?? 0],
       ['qr_nulled', res.qrNulled],
       ['member_unlinked', res.unlinked],
       ['event_deleted', res.eventsPurged],

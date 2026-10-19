@@ -8,6 +8,7 @@
  */
 
 import { COMPANIES } from './brands';
+import { parsePaymentModes, type PaymentMethod } from './payment';
 
 export const CHANNEL_RE = /^[A-Z][A-Z0-9-]{1,15}$/;
 export const OUTLET_RE = /^[A-Z0-9][A-Z0-9-]{1,23}$/;
@@ -38,6 +39,8 @@ export interface CatalogChannel {
   name: string;
   /** Kode brand non-rahasia (§11.3 no. 2); null bila kanal tidak berbrand. */
   brand_code: string | null;
+  /** §12.2: metode bayar yang diizinkan kanal. null = BFF belum mengirim field (tidak diketahui; BFF yang memutuskan). */
+  payment_modes: PaymentMethod[] | null;
   fulfilment: { pickup: boolean; delivery: boolean };
   outlets: CatalogOutlet[];
 }
@@ -60,6 +63,8 @@ export interface ProductSummary {
   price_excl: number;
   tax_labels: string[];
   max_qty: number;
+  /** §12.3: berat per satuan (kg); null = belum diisi. Informasi saja — batas berat dihitung server di quote. */
+  weight_kg: number | null;
 }
 
 export interface ProductDetail extends ProductSummary {
@@ -211,6 +216,7 @@ export function parseProductSummary(v: unknown): ProductSummary | null {
     price_excl: num(v.price_excl) ?? priceIncl,
     tax_labels: labels(v.tax_labels),
     max_qty: maxQty === null ? 99 : Math.min(maxQty, 999),
+    weight_kg: typeof v.weight_kg === 'number' && Number.isFinite(v.weight_kg) && v.weight_kg >= 0 ? v.weight_kg : null,
   };
 }
 
@@ -251,6 +257,7 @@ export function parseChannels(v: unknown): CatalogChannel[] | null {
       company_code: str(c.company_code, 16) ?? c.channel_code,
       name: str(c.name, 120) ?? c.channel_code,
       brand_code: isBrandCode(c.brand_code) ? c.brand_code : null,
+      payment_modes: parsePaymentModes(c.payment_modes),
       fulfilment: { pickup: f.pickup === true, delivery: f.delivery === true },
       outlets,
     });

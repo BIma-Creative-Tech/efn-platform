@@ -38,4 +38,27 @@
         <field name="discount_mode">percent</field>
         <field name="discount_applicability">order</field>
     </record>
+
+    <!-- G20 W-32 (docs/04 §12.1, docs/08 §11.3): template sama untuk Bacha Coffee Retail (BCR), nonaktif. -->
+    <record id="loyalty_program_member_price_bcr" model="loyalty.program">
+        <field name="name">Harga Member 5% - wajib OTP (PLACEHOLDER)</field>
+        <field name="program_type">promotion</field>
+        <field name="applies_on">current</field>
+        <field name="trigger">auto</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="pos_ok" eval="False"/>
+        <field name="efn_requires_otp" eval="True"/>
+        <field name="active" eval="False"/>
+    </record>
+    <record id="loyalty_rule_member_price_bcr" model="loyalty.rule">
+        <field name="program_id" ref="loyalty_program_member_price_bcr"/>
+        <field name="minimum_amount">0</field>
+    </record>
+    <record id="loyalty_reward_member_price_bcr" model="loyalty.reward">
+        <field name="program_id" ref="loyalty_program_member_price_bcr"/>
+        <field name="reward_type">discount</field>
+        <field name="discount">5</field>
+        <field name="discount_mode">percent</field>
+        <field name="discount_applicability">order</field>
+    </record>
 </odoo>

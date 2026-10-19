@@ -1,5 +1,105 @@
 # Laporan Agent: efn-devsecops-engineer
 
+## G20 (18 Okt 2026, branch chore/wave-20) — kanal = kode PT (GL/PB/BCR/BCF), bayar di kasir, kunci token nama PII
+
+Kontrak: docs/04 §12.1 (L-48), §12.2 no. 2, §12.5, §12.6 baris devsecops; ADR-036 §0.5. Tidak di-commit. **Tidak ada
+perintah yang dijalankan** oleh agent ini (sesi tanpa shell); semua uji di bawah wajib dijalankan lead.
+
+### File diubah / baru
+- `scripts/secrets.list` — `odoo_api_key_online_{gl,pb,bcr,bcf}` (`host:disabled`) menggantikan `_rtl`, `_fnb`,
+  `_rtl_gl`, `_rtl_bacha`, `_fnb_pb`, `_fnb_bacha`.
+- `infra/compose/docker-compose.yml` — secret top-level 4 kanal baru; BFF: `ODOO_API_KEY_ONLINE_GL_FILE` + mount
+  `odoo_api_key_online_gl` (kanal default di base), `ONLINE_CHANNELS` default `GL`, **baru**
+  `ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER` default `1`.
+- **Baru** `infra/compose/docker-compose.online-{pb,bcr,bcf}.yml` (mount secret + env `_FILE` hanya api-gateway).
+- **Harus dihapus lead** (`git rm`; agent tanpa shell tidak bisa menghapus file): `infra/compose/docker-compose.online-{fnb,rtl-gl,rtl-bacha,fnb-pb,fnb-bacha}.yml`.
+  Isinya sudah dinetralkan menjadi `services: {}` + komentar tombstone sehingga render compose/CI tetap valid bila lupa.
+- `infra/compose/docker-compose.dev.yml` — secret dev `odoo_pii_name_key` (top-level dev), mount HANYA `odoo`, env
+  `EFN_ODOO_PII_NAME_KEY_FILE=/run/secrets/odoo_pii_name_key`; komentar ADR-036 Accepted; komentar key dev GL.
+- `infra/compose/.env.example` — `ONLINE_CHANNELS=GL` + penjelasan kode G20; `ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=1`.
+- `scripts/gen-secrets.sh` — `odoo_pii_name_key` di loop yang sama dengan `odoo_pii_key_v1`/`odoo_pii_bidx_key`
+  (b64key32, idempoten, tidak pernah menimpa, di luar secrets.list).
+- `scripts/check-encryption.sh` — §6: secret `odoo_api_key_online_*` ter-render wajib `gl|pb|bcr|bcf`; setiap env BFF
+  `ODOO_API_KEY_ONLINE_<KODE>_FILE` wajib = `/run/secrets/odoo_api_key_online_<kode>` yang di-mount ke BFF; nama
+  tetap yang diperiksa `odoo_api_key_online_gl`. **§6b baru** (render dev): odoo wajib me-mount ketiga kunci PII
+  (`odoo_pii_key_v1`, `odoo_pii_bidx_key`, `odoo_pii_name_key`) dengan env `*_FILE` yang cocok. Least privilege
+  `odoo_pii_*` → hanya odoo (sudah generik sejak G19).
+- `scripts/lib/deploy-validate.sh` — `EFN_ONLINE_CHANNEL_CODES=(GL PB BCR BCF)`, `EFN_ONLINE_BASE_CHANNEL=GL`, fungsi
+  `efn_validate_online_channels` (allowlist + unik; kode lama/kanal G19 ditolak dengan pesan jelas), dipanggil
+  `efn_validate_config`; `ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER` masuk `EFN_RELEASE_CONFIG_VARS`, rentang 1..10
+  (= BFF `app-config.ts`), wajib ≤ `ONLINE_MAX_OPEN_ORDERS_PER_MEMBER` (BFF menghitungnya juga dalam batas total).
+- `scripts/deploy.sh` — default kanal `GL`; overlay untuk setiap kanal ≠ GL; `efn_validate_online_channels` sebelum
+  overlay; cek API key nyata per kanal (nama huruf kecil); `.env` + `ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER`;
+  migrasi wajib bertambah `09-platform-g20.sql` (file milik efn-bff-engineer, sudah ada di working tree).
+- `.github/workflows/deploy.yml` — `CFG_ONLINE_CHANNELS` default `GL`; `CFG_ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER`.
+- `.github/workflows/ci.yml` — komentar saja (diff secrets.list↔compose sudah generik atas `docker-compose.online-*.yml`).
+- `scripts/host/efn-rotate-online-key` — `ALLOWED_CHANNELS=(GL PB BCR BCF)`, `BASE_CHANNEL=GL`; `--channel`, `CHANNELS`
+  conf, dan fallback `ONLINE_CHANNELS` `.env` divalidasi allowlist; fallback default `GL`; `--bootstrap` overlay untuk
+  semua kanal ≠ GL; LOGIN/secret = `efn_online_<kode>` / `odoo_api_key_online_<kode>`; header & contoh diperbarui.
+  **Skrip host berubah → pasang ulang di host + cocokkan sha256 (runbook §1).**
+- `scripts/host/systemd/efn-rotate-online-key@.service` — komentar instance `@GL`.
+- `scripts/host/test-efn-rotate-online-key.sh` — semua kasus lama dipertahankan dengan pemetaan RTL→GL, RTL-GL→PB,
+  FNB-BACHA→BCF, FNB-PB/RTL-BACHA→BCR; kasus baru 55b–55e (RTL/FNB/RTL-GL/FNB-BACHA ditolak), 61b (CHANNELS kanal
+  G19), 71b (`.env` RTL ditolak tanpa fallback), 71c (`.env` tanpa ONLINE_CHANNELS → GL). Total 90 kasus.
+- `scripts/host/test-efn-deploy.sh` — 89/91/92 ke kode G20; 110 → `ODOO_API_KEY_ONLINE_GL` (benar-benar `host:*`);
+  baru 92b–92k (kode lama/G19/tak dikenal/ganda ditolak, BCF diterima, rentang & relasi batas counter).
+- `scripts/smoke/run-e2e-smoke.sh` — key `secrets/odoo_api_key_online_gl.txt`, `channel_code` `GL` (10 path gateway),
+  katalog `channel_code='GL'`, saldo pembuka migrasi `company_code` `PB`.
+- `scripts/smoke/online_smoke.py` — `CHANNEL=GL`, `COMPANY=GL`, `OTHER_COMPANY=PB` (uji `company_mismatch`).
+- `scripts/smoke/README.md`, `infra/odoo-rpc-gateway/test-gateway{,-load}.sh` (payload `GL`, kosmetik),
+  `infra/observability/alert-rules.yml` (komentar label channel).
+- Runbook: `docs/runbooks/odoo-online-api-key.md` (tabel kanal G20, §1b `#kanal-baru` untuk PB/BCR/BCF, galat allowlist,
+  **§8 baru `#migrasi-g20`** cutover dev/host), **baru** `docs/runbooks/dev-reset.md` (dirujuk docs/04 §12.1 dan
+  09-platform-g20.sql tetapi belum ada), `docs/runbooks/online-orders.md` (kanal PT + batas bayar di kasir),
+  `docs/runbooks/pii-key-rotation.md` (bagian kunci PII Odoo: tiga kunci, rotasi bidx/name hanya bila bocor, AC-8).
+
+### Cara menguji (perintah persis, Git Bash dari root repo)
+```bash
+git rm infra/compose/docker-compose.online-fnb.yml infra/compose/docker-compose.online-rtl-gl.yml \
+  infra/compose/docker-compose.online-rtl-bacha.yml infra/compose/docker-compose.online-fnb-pb.yml \
+  infra/compose/docker-compose.online-fnb-bacha.yml
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/src:ro" python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea bash /src/scripts/host/test-efn-rotate-online-key.sh
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/src:ro" python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea bash /src/scripts/host/test-efn-deploy.sh
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/mnt:ro" koalaman/shellcheck:stable -x /mnt/scripts/host/efn-rotate-online-key /mnt/scripts/host/test-efn-rotate-online-key.sh /mnt/scripts/host/test-efn-deploy.sh /mnt/scripts/deploy.sh /mnt/scripts/lib/deploy-validate.sh /mnt/scripts/gen-secrets.sh /mnt/scripts/check-encryption.sh /mnt/scripts/smoke/run-e2e-smoke.sh /mnt/infra/odoo-rpc-gateway/test-gateway.sh /mnt/infra/odoo-rpc-gateway/test-gateway-load.sh
+bash scripts/gen-secrets.sh            # membuat secrets/odoo_api_key_online_{gl,pb,bcr,bcf}.txt + secrets/odoo_pii_name_key.txt
+cd infra/compose && cp -n .env.example .env
+docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile core --profile data --profile ai --profile observability --profile ops config -q
+docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile core --profile data --profile ai --profile observability --profile ops config -q
+docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.payment.yml $(for f in docker-compose.online-*.yml; do printf -- '-f %s ' "$f"; done) --profile core --profile data --profile ai --profile observability --profile ops config --format json | jq -r '.secrets|keys[]' | sort | diff - <(awk '!/^[[:space:]]*#/ && NF {print $1}' ../../scripts/secrets.list | sort)
+cd ../.. && bash scripts/check-encryption.sh   # butuh docker + jq
+bash scripts/smoke/run-e2e-smoke.sh o          # setelah dev-reset + odoo_online_smoke.py G20 (temuan 2)
+```
+Catatan: `infra/compose/.env` lokal yang sudah ada tidak memuat `ONLINE_CHANNELS` (dicek) → default GL berlaku.
+
+### Temuan untuk lead (penting)
+1. **Kebijakan deploy vs bayar di kasir (keputusan dibutuhkan).** `deploy-validate` masih menolak production
+   `ONLINE_ENABLED=true` tanpa `PAYMENT_PROVIDER=xendit|midtrans` (kasus uji 88). §12.2 menyatakan pilot tanpa vendor =
+   `counter` saja → aturan ini akan **memblokir pilot** di production. Tidak saya ubah (gerbang keamanan; butuh
+   keputusan lead/security reviewer). Opsi: izinkan `PAYMENT_PROVIDER=disabled` bila config rilis baru mis.
+   `ONLINE_PAYMENT_METHODS=counter` (BFF menolak `qris` bila provider disabled) — perlu kontrak.
+2. **`odoo_online_smoke.py` & `odoo_pos_smoke.py` (milik builder Odoo)** masih `efn_online_rtl`/kanal `RTL`/company
+   `FNB`. Smoke shell & `online_smoke.py` sudah GL/PB → tahap `o` gagal sampai builder Odoo A mengubah file itu
+   (kanal `GL`, user `efn_online_gl`, `efn_brand_code` `PB`).
+3. **Env nama kunci token nama** `EFN_ODOO_PII_NAME_KEY_FILE` belum ada di `efn_pii` (builder B, grep kosong). Default
+   `EFN_ODOO_PII_KEY_DIR=/run/secrets` + nama file `odoo_pii_name_key` juga cocok bila builder B memakai pola direktori.
+   Mohon disamakan; bila nama env berbeda, ubah satu baris di `docker-compose.dev.yml` dan `check-encryption.sh` §6b.
+4. `09-platform-g20.sql` (BFF) menyebut "File 02..08 sudah memuat daftar kode baru", padahal 02/03/05/07/08 di working
+   tree masih `('EFN','RTL','FNB','FARM')` (saat saya baca). Aman secara fungsi (09 menulis ulang constraint), tetapi
+   komentar/isi harus konsisten — konfirmasi ke efn-bff-engineer.
+5. Allowlist kanal kini di tiga tempat (deploy-validate, skrip rotasi host, regex check-encryption) — sengaja: skrip
+   host berdiri sendiri (dipasang manual + sha256). PT baru = ubah ketiganya (runbook §1b).
+
+### Yang belum / tidak terverifikasi
+- Tidak satu pun perintah dijalankan; YAML/shell diperiksa manual: setiap secret di overlay baru didefinisikan top-level
+  base; `odoo_pii_name_key` didefinisikan top-level dev dan hanya di-mount odoo; jq baru di check-encryption memakai
+  `capture(...) | .k` dan `//` dengan precedence yang benar.
+- `services: {}` sebagai isi override yang dinetralkan belum diuji `docker compose config` (diyakini valid; tetap
+  sebaiknya di-`git rm`).
+- Cutover host (§8 runbook) belum dijalankan (staging belum ada). Uji nyata kanal PB/BCR/BCF menunggu data Odoo G20.
+- `efn_pii` belum memakai kunci token nama (builder B); check-encryption §6b hanya memastikan kunci ter-mount.
+
+---
+
 ## G19 (18 Okt 2026, branch chore/wave-19) — secret kanal berhifen, rotasi multi-kanal, env BFF, PoC PII Odoo
 
 Kontrak: docs/04 §11.1, §11.2 no. 6, §11.3 no. 3, §11.5. Tidak di-commit. **Tidak ada yang dijalankan** oleh agent ini

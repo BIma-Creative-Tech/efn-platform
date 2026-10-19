@@ -144,3 +144,53 @@ Cek ruff: `ruff check services/odoo/addons/efn_pii` dan `ruff format --check` (k
 Perbaikan lead saat run: `copy_data` tidak lagi menerima `default={'efn_pii_protected': False}` (bypass penanda satu arah → salinan plaintext; test ditambah); `copy_data` masuk `ORM_OVERRIDES` scanner RPC `efn_core`.
 
 Penilaian kriteria & keputusan: lihat docs/04 §11.7 **L-39** (lulus bersyarat; E-38 penuh ke G20).
+
+---
+
+## E-38a tahap inti (G20, 18 Okt 2026, branch `chore/wave-20`) — ADR-036 §0, docs/04 §12.5
+
+- **Pelaksana:** efn-odoo-engineer (B). **Test belum dijalankan** (sesi tanpa shell); lead menjalankan di container.
+- **Modul:** `efn_pii` 19.0.2.0.0, `efn_pii_pos` 19.0.1.0.0 (baru, auto_install `efn_pii`+`point_of_sale`),
+  `efn_pii_hr` 19.0.1.0.0 (baru, auto_install `efn_pii`+`hr`, hanya K-a), `efn_pii_base_vat` (README).
+
+### Yang berubah dari PoC
+| Area | PoC G19 | E-38a |
+|---|---|---|
+| Penandaan | manual (`efn_pii_protected=True`) | **protect-by-default** (precompute di create); K-a via context server `SKIP_TOKEN` |
+| Field | phone, email, vat | + name, complete_name, street, street2, city, zip, email_normalized (E + blind index) |
+| Format | `efnpii1:` AAD tanpa id | **`efnpii2:` AAD `…:<id>:v2`**; `efnpii1:` hanya transisi INSERT → ditulis ulang di create yang sama; baca `efnpii1:` lama = CRITICAL `unbound_ciphertext` + migrasi |
+| Cari nama | tidak cocok | token `f`/`w`/`p` HMAC-128 (`odoo_pii_name_key`), GIN, AND multi-kata, awalan 3–15 |
+| Cari kontak | `=`/`in` | + `=ilike`, `ilike` nilai lengkap, `phone_mobile_search` (POS) tanpa cocok kebetulan |
+| R-T18 | log CRITICAL | **fail-closed** (`UserError`) + alarm baca `plaintext_in_protected` |
+| SEC-136 | — | anak/commercial sync, merge, email masuk (`email_normalized` bidx), tracking (redaksi + label m2o) |
+| POS | — | `pos.order.email/mobile` terenkripsi semua order; preload tanpa partner terlindungi |
+
+### Perintah (lead)
+```bash
+docker build -t efn-odoo:ci services/odoo
+# kunci uji di folder sementara container (bukan repo)
+K=/tmp/efn-pii-ci; mkdir -p $K; for f in odoo_pii_key_v1 odoo_pii_bidx_key odoo_pii_name_key; do openssl rand -base64 32 > $K/$f; done
+# 1) modul E-38a sendiri (pos + hr ikut sebagai dependensi untuk modul jembatan)
+docker run --rm --network host -e EFN_ODOO_PII_KEY_DIR=$K -v $K:$K:ro --entrypoint odoo efn-odoo:ci \
+  --db_host=127.0.0.1 --db_port=5432 --db_user=odoo --db_password=odoo-ci-only \
+  --addons-path=/mnt/extra-addons,/usr/lib/python3/dist-packages/odoo/addons \
+  -d efn_test_pii2 -i efn_pii,efn_pii_pos,efn_pii_hr --test-tags efn_pii --stop-after-init --log-level=test \
+  --workers=0 --max-cron-threads=0 2>&1 | tee odoo-pii2.log
+grep -E '^[0-9-]+ [0-9:,]+ [0-9]+ (ERROR|CRITICAL) ' odoo-pii2.log      # harus kosong
+grep -E 'EFN_PII_POC overhead|EFN_PII_SHARED_VECTORS' odoo-pii2.log     # angka + JSON vektor (salin ke tests/data)
+# 2) gabungan (AC-4 awal): efn_pii* + semua EFN_TEST_MODULES, --test-tags efn, kunci global sama (-e/-v seperti di atas)
+```
+Tanpa kunci global, instalasi/test modul lain yang membuat partner perorangan **gagal** (fail-closed, disengaja).
+Tag test berubah `efn_pii_poc` → **`efn_pii`**.
+
+### Kriteria ADR-036 §0.11 — status sisi Odoo
+| AC | Bukti test | Status |
+|---|---|---|
+| AC-1 | `test_pii_overhead` (1.000 partner, + `name_token_search`), EXPLAIN GIN di `test_pii_tokens` | **belum**: `_load_pos_data` nyata & 200 rb partner tidak diukur |
+| AC-2 | `test_pii_vectors` + `tools/shared_vectors.py` + `tests/data/efn_pii_shared_vectors.json` | sisi Odoo siap; nilai `expected_*` **null** sampai generator dijalankan; BFF belum |
+| AC-5 | `test_pii_sec.TestEfnPiiSec136` (anak, commercial sync, pindah induk, turunan, merge, email masuk), `test_becoming_…_redacts_tracking`, `test_tracking_never_stores_protected_plaintext` | ditulis |
+| AC-6 | `TestEfnPiiSec137` (field didefinisikan ulang → `UserError`, compute dependency, alarm plaintext), `test_redefined_order_field_refuses_writes` | ditulis |
+| AC-7 | `test_swapped_ciphertext_between_records_fails_auth`, `TestEfnPiiSec138.test_no_efnpii1_left_after_any_create_path` | ditulis |
+| AC-9 | `test_pii_tokens` (normalisasi, awalan ≥ 3, AND, tanpa infiks, padding 16, ganti nama/erasure, rotasi `odoo_pii_name_key`) | ditulis |
+| AC-10 (P) | member/pelanggan kasir/pembeli (individu), portal, `pos.order.email/mobile` | ditulis; `account.move.invoice_partner_display_name` **belum** |
+| AC-3, AC-4, AC-8, AC-11..14 | — | di luar tahap ini / agent lain |

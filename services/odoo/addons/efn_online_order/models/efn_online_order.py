@@ -28,6 +28,12 @@ G19 (docs/04 §11.1-§11.2, docs/08 §10.1 E-35 / §10.2 E-36; keputusan L-27/L-
 
 Putaran r12 (docs/04 §11.7): place mengunci program berkuota sebelum promo dihitung (L-40 / SEC-130); batal/kedaluwarsa
 order yang tidak pernah dibayar tidak membuat refund/nota kredit (L-43 / SEC-139).
+
+G20 E-45 bayar di kasir (docs/04 §12.2, L-50/L-52/L-55/L-56): place ``payment_mode='counter'`` + ``counter_code``
+(dibuat BFF) -> digest KDF deterministik per company (``counter_code_hash``, bukan teks asli, tidak di-log, tidak
+dikembalikan). BFF ``mark_paid``/``refund_settled`` untuk order counter -> ``invalid_state``; pelunasan hanya lewat
+``_efn_counter_mark_paid`` (dipanggil sync POS ``efn_online_pos_counter``), pembayaran faktur di jurnal kliring PT
+(``_efn_payment_journal``). Event ``paid`` membawa ``payment: {method: "counter"}``.
 """
 
 import json
@@ -46,6 +52,7 @@ from .efn_online_common import (
     CANCEL_REASONS,
     CANCEL_SCOPE,
     CONFIRM_SCOPE,
+    DEFAULT_PAYMENT_MODE,
     DEFAULT_PICKUP_KDF_ROUNDS,
     FULFILMENTS,
     HANDOVER_SCOPE,
@@ -53,12 +60,16 @@ from .efn_online_common import (
     MAX_STATUS_REFS,
     OPAQUE_REF_RE,
     OUTLET_CODE_RE,
+    PAYMENT_MODES,
     PICKUP_CODE_RE,
     REFUND_REASONS,
     UUID_RE,
     canonical_sha256,
     check_amount_int,
     check_str,
+    counter_code_digest,
+    counter_kdf_rounds,
+    counter_secret,
     internal_scope,
     lines_payload,
     online_error,
@@ -101,7 +112,13 @@ PLACE_KEYS = frozenset(
     }
 )
 # G19 E-36: opsional (BFF lama tanpa promo tetap sah); bila ada & tidak kosong ikut payload_sha256.
-PLACE_OPTIONAL_KEYS = frozenset({"promo_codes"})
+# G20 E-45 (docs/04 §12.2 no. 3, L-56): `payment_mode` ("qris" default | "counter") + `counter_code` (dibuat BFF,
+# wajib bila counter, dilarang bila qris). `payment_mode` counter ikut payload_sha256; `counter_code` TIDAK (pola
+# pickup_code: sha256 cepat atas 39,6 bit dapat di-brute force).
+PLACE_OPTIONAL_KEYS = frozenset({"promo_codes", "payment_mode", "counter_code"})
+PAYMENT_MODE_LABELS = {"qris": "QRIS / gateway (BFF)", "counter": "Bayar di kasir"}
+# Order bayar di kasir yang tidak lagi bisa dibayar normal (batal/kedaluwarsa) tetapi uangnya sudah diterima kasir.
+COUNTER_LATE_REVIEW = {"cancelled": "counter_paid_after_cancel", "placed": "counter_paid_after_expiry"}
 PAYMENT_KEYS = frozenset({"payment_ref", "amount_paid", "paid_at", "idempotency_key"})
 REFUND_KEYS = frozenset({"idempotency_key", "lines", "full", "restock", "reason"})
 SETTLE_KEYS = frozenset({"provider_refund_ref", "settled_at", "ok", "idempotency_key"})
@@ -160,6 +177,21 @@ class EfnOnlineOrder(models.Model):
     paid_at = fields.Datetime(readonly=True)
     invoice_id = fields.Many2one("account.move", readonly=True, check_company=True, copy=False)
     pickup_code_hash = fields.Char(readonly=True, groups="base.group_system", copy=False)
+    payment_mode = fields.Selection(
+        [(mode, PAYMENT_MODE_LABELS[mode]) for mode in PAYMENT_MODES],
+        string="Metode bayar",
+        required=True,
+        default=DEFAULT_PAYMENT_MODE,
+        readonly=True,
+        help="G20 E-45: 'Bayar di kasir' = dilunasi lewat POS (kode bayar) -> jalur internal mark_paid, bukan BFF.",
+    )
+    counter_code_hash = fields.Char(
+        readonly=True,
+        groups="base.group_system",
+        copy=False,
+        index="btree_not_null",
+        help="Digest KDF kode bayar di kasir (bukan kode ambil). Dihapus saat dibayar/batal/review.",
+    )
     pickup_attempts = fields.Integer(readonly=True, copy=False)
     ready_at = fields.Datetime(readonly=True)
     picked_up_at = fields.Datetime(readonly=True)
@@ -234,8 +266,88 @@ class EfnOnlineOrder(models.Model):
         return self.env["efn.online.event.outbox"].sudo()._efn_enqueue(self, event, seq, refund=refund)
 
     def _efn_clear_secret(self):
-        """Hapus hash kode ambil saat final (delta §10.4.4 no. 1)."""
-        self.sudo().write({"pickup_code_hash": False})
+        """Hapus hash kode ambil saat final (delta §10.4.4 no. 1) + digest kode bayar di kasir (E-45)."""
+        self.sudo().write({"pickup_code_hash": False, "counter_code_hash": False})
+
+    # --------------------------------------------------------- bayar di kasir (E-45)
+    @api.model
+    def _efn_counter_digests(self, company, code):
+        """Digest kandidat kode bayar untuk ``company``: satu per nilai putaran KDF yang dipakai pesanan terbuka
+        (biasanya satu) + putaran saat ini. ``code`` sudah dinormalisasi & divalidasi pemanggil."""
+        self.flush_model(["counter_code_hash", "company_id"])
+        self.env.cr.execute(
+            "SELECT DISTINCT split_part(counter_code_hash, '$', 2) FROM efn_online_order "
+            "WHERE company_id = %s AND counter_code_hash IS NOT NULL",
+            (company.id,),
+        )
+        rounds = {int(row[0]) for row in self.env.cr.fetchall() if (row[0] or "").isdigit()}
+        rounds.add(counter_kdf_rounds(self.env))
+        secret = counter_secret(self.env)
+        return [counter_code_digest(secret, company.id, code, r) for r in sorted(rounds)]
+
+    @api.model
+    def _efn_counter_find(self, company, code):
+        """Pesanan bayar di kasir milik ``company`` dengan kode ``code`` (digest masih tersimpan) atau kosong.
+        Dipanggil hanya dari jalur server ber-cek (lookup POS); hasil sudo."""
+        if not isinstance(code, str) or not PICKUP_CODE_RE.match(code):
+            return self.browse()
+        digests = self._efn_counter_digests(company, code)
+        return (
+            self.sudo()
+            .with_context(active_test=False)
+            .search(
+                [
+                    ("company_id", "=", company.id),
+                    ("payment_mode", "=", "counter"),
+                    ("counter_code_hash", "in", digests),
+                ],
+                limit=1,
+            )
+        )
+
+    def _efn_counter_payable(self):
+        """True bila order bayar di kasir masih bisa dilunasi normal (placed, belum kedaluwarsa, belum dibayar)."""
+        self.ensure_one()
+        return (
+            self.payment_mode == "counter"
+            and self.state == "placed"
+            and not self.sudo().paid_idempotency_key
+            and bool(self.expires_at)
+            and self.expires_at > fields.Datetime.now()
+        )
+
+    def _efn_counter_mark_paid(self, payment_ref, idempotency_key, amount_paid):
+        """Jalur INTERNAL mark_paid untuk pelunasan POS (docs/04 §12.2 no. 6; tidak ada metode RPC).
+
+        Dipanggil hanya oleh sync order POS (modul ``efn_online_pos_counter``) setelah validasi server. Idempoten
+        per ``idempotency_key`` (= ``pos_counter:<pos.order.uuid>``). Alur sama dengan BFF ``mark_paid`` (cek stok/
+        reservasi -> konfirmasi -> faktur -> pembayaran di jurnal kliring PT) -> ``confirmed`` | ``stock_short`` |
+        ``review``. L-56: order yang sudah batal / kedaluwarsa saat uang diterima kasir -> pembayaran dicatat +
+        ``review`` (bukan sukses; dana dikembalikan lewat refund POS). Sudah dibayar dengan kunci lain ->
+        ``UserError`` (sync POS ditolak, cegah bayar dobel)."""
+        self.ensure_one()
+        order = self.with_env(self.env(su=True)).with_company(self.company_id)
+        order._efn_lock()
+        if order.payment_mode != "counter":
+            raise online_error("invalid_state")
+        payment_ref = check_str(payment_ref, OPAQUE_REF_RE)
+        key = check_str(idempotency_key, IDEMPOTENCY_KEY_RE)
+        amount_paid = check_amount_int(amount_paid)
+        now = fields.Datetime.now()
+        if order.paid_idempotency_key:
+            if order.paid_idempotency_key == key and order.payment_ref == payment_ref:
+                return order._efn_paid_result()
+            raise online_error("invalid_state")
+        if order.state == "placed" and order.expires_at and order.expires_at > now:
+            return order._efn_apply_payment(payment_ref, key, amount_paid, now)
+        reason = COUNTER_LATE_REVIEW.get(order.state)
+        if not reason:
+            raise online_error("invalid_state")
+        order.write(
+            {"payment_ref": payment_ref, "paid_idempotency_key": key, "paid_amount": amount_paid, "paid_at": now}
+        )
+        order._efn_set_review(reason)
+        return order._efn_paid_result()
 
     def _efn_set_review(self, code):
         self.ensure_one()
@@ -314,6 +426,15 @@ class EfnOnlineOrder(models.Model):
         require(isinstance(pickup_code, str) and bool(PICKUP_CODE_RE.match(pickup_code)))
         normalized_lines = lines_payload(order["lines"], channel.max_lines)
         promo_codes = promo_codes_payload(order.get("promo_codes"))
+        # G20 E-45 (L-56): metode bayar + kode bayar di kasir (dibuat BFF). Kanal tidak mengizinkan -> invalid_input.
+        payment_mode = order.get("payment_mode", DEFAULT_PAYMENT_MODE)
+        require(payment_mode in PAYMENT_MODES and payment_mode in channel._efn_online_payment_modes())
+        counter_code = order.get("counter_code")
+        if payment_mode == "counter":
+            require(isinstance(counter_code, str) and bool(PICKUP_CODE_RE.match(counter_code)))
+            require(counter_code != pickup_code)  # L-50: kode bayar != kode ambil
+        else:
+            require("counter_code" not in order)
         # Kode ambil TIDAK ikut hash payload (sha256 cepat atas 39,6 bit dapat di-brute force). Kode promo ikut
         # (hanya bila ada, agar hash payload tanpa promo sama dengan G17/G18).
         payload = {
@@ -327,6 +448,9 @@ class EfnOnlineOrder(models.Model):
         }
         if promo_codes:
             payload["promo_codes"] = promo_codes
+        if payment_mode != DEFAULT_PAYMENT_MODE:
+            # Hanya bila bukan default -> hash payload QRIS sama dengan G19/G20 awal. Kode bayar TIDAK ikut.
+            payload["payment_mode"] = payment_mode
         payload_sha = canonical_sha256(payload)
         Orders = self.with_env(channel.env)
         self.env.cr.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"efn_online_place:{key}",))
@@ -351,6 +475,16 @@ class EfnOnlineOrder(models.Model):
         if summary is not None and summary["quote_hash"] != quote_hash:
             raise online_error("price_changed")
 
+        counter_hash = False
+        if payment_mode == "counter":
+            # Digest deterministik per company (lihat efn_online_common): kode bentrok dengan pesanan lain yang masih
+            # menyimpan digest -> tolak (peluang ~n/8,5e11; BFF membuat kode baru dan place ulang dengan part baru).
+            counter_hash = counter_code_digest(
+                counter_secret(self.env), channel.company_id.id, counter_code, counter_kdf_rounds(self.env)
+            )
+            if Orders._efn_counter_find(channel.company_id, counter_code):
+                raise online_error("invalid_input")
+
         now = fields.Datetime.now()
         # Seluruh langkah tulis dalam satu savepoint: galat apa pun (harga berubah, reservasi tidak penuh) tidak
         # meninggalkan efn.online.order / SO / reservasi / kupon terpakai, juga bila pemanggil menangkap error-nya.
@@ -370,6 +504,8 @@ class EfnOnlineOrder(models.Model):
                             "quote_hash": quote_hash,
                             "expires_at": now + timedelta(minutes=channel.payment_timeout_minutes),
                             "pickup_code_hash": pickup_crypt_context(self._efn_kdf_rounds()).hash(pickup_code),
+                            "payment_mode": payment_mode,
+                            "counter_code_hash": counter_hash,
                         }
                     )
                     record.flush_recordset()
@@ -379,11 +515,12 @@ class EfnOnlineOrder(models.Model):
             record._efn_place_sale_order(channel, outlet, fulfilment, product_qty, promo_codes, quote_hash)
             record._efn_emit("placed")
         _logger.info(
-            "EFN online place order=%s part=%s so=%s hold=%s",
+            "EFN online place order=%s part=%s so=%s hold=%s pay=%s",
             record.id,
             ref,
             record.sale_order_id.id,
             channel.stock_hold_mode,
+            payment_mode,
         )
         return record._efn_place_result()
 
@@ -413,6 +550,9 @@ class EfnOnlineOrder(models.Model):
             raise online_error("price_changed")
         if channel.max_order_amount and stored["amount_total"] > channel.max_order_amount:
             raise online_error("invalid_input")
+        if stored.pop("_weight_issues", None):
+            # W-33 / E-35b (docs/04 §12.3): quote yang sama sudah membawa issue berat -> BFF tidak boleh place.
+            raise online_error("invalid_input")
         if channel.stock_hold_mode == "confirm":
             try:
                 self._efn_confirm_sale_order()
@@ -437,6 +577,9 @@ class EfnOnlineOrder(models.Model):
         order = self.with_env(channel.env)._efn_find(channel, platform_order_ref)
         if not order:
             raise online_error("not_found")
+        if order.payment_mode == "counter":
+            # E-45 (docs/04 §12.2 no. 2/6): pesanan bayar di kasir hanya dilunasi lewat sync POS (jalur internal).
+            raise online_error("invalid_state")
         if order.paid_idempotency_key:
             if order.paid_idempotency_key == key and order.payment_ref == payment_ref:
                 return order._efn_paid_result()
@@ -458,6 +601,14 @@ class EfnOnlineOrder(models.Model):
             return {"order_state": "cancelled", "refund_required": "full"}
         if order.state != "placed":
             raise online_error("invalid_state")
+        return order._efn_apply_payment(payment_ref, key, amount_paid, paid_at)
+
+    def _efn_apply_payment(self, payment_ref, key, amount_paid, paid_at):
+        """Langkah bersama BFF ``mark_paid`` dan jalur internal bayar di kasir (E-45): order ``placed`` terkunci
+        -> ``paid`` + event -> nominal -> stok/reservasi -> konfirmasi -> faktur + pembayaran -> ``confirmed``."""
+        order = self
+        order.ensure_one()
+        channel = order.channel_id
         order.write(
             {
                 "state": "paid",
@@ -465,6 +616,7 @@ class EfnOnlineOrder(models.Model):
                 "paid_idempotency_key": key,
                 "paid_amount": amount_paid,
                 "paid_at": paid_at,
+                "counter_code_hash": False,
             }
         )
         order._efn_emit("paid")
@@ -615,10 +767,19 @@ class EfnOnlineOrder(models.Model):
             _logger.warning("EFN online order %s: faktur/pembayaran gagal (%s)", self.id, type(exc).__name__)
             raise _ReviewNeeded("invoice_failed") from None
 
+    def _efn_payment_journal(self):
+        """Jurnal pembayaran faktur/refund. QRIS = jurnal titipan kanal (ADR-019 A1). Bayar di kasir (E-45, L-55):
+        jurnal kliring PT penjual — di-override ``efn_online_pos_counter``; tanpa modul itu -> kosong -> ``review``
+        (tidak pernah jatuh diam-diam ke titipan)."""
+        self.ensure_one()
+        if self.payment_mode == "counter":
+            return self.env["account.journal"]
+        return self.channel_id.journal_titipan_id
+
     def _efn_register_payment(self, moves, amount):
         """Satu-satunya titik pencatatan pembayaran (ADR-019: A2/opsi C cukup mengubah metode ini)."""
         self.ensure_one()
-        journal = self.channel_id.journal_titipan_id
+        journal = self._efn_payment_journal()
         if not journal:
             raise _ReviewNeeded("journal_missing")
         wizard = (
@@ -777,6 +938,10 @@ class EfnOnlineOrder(models.Model):
         )
         if not record:
             raise online_error("not_found")
+        if record.order_id.payment_mode == "counter":
+            # E-45 (§12.2 no. 8): dana refund pesanan bayar di kasir keluar lewat refund order POS pelunasan; settle
+            # dicatat sync POS, bukan BFF (BFF tidak memanggil gateway untuk order counter).
+            raise online_error("invalid_state")
         record.order_id._efn_lock()
         return record._efn_settle(key, provider_ref, settled_at, ok)
 

@@ -8,6 +8,7 @@ import {
   PartPatch,
   PartRow,
   PartStatus,
+  PaymentMethod,
   PortionRow,
   RefundPatch,
   RefundRow,
@@ -30,7 +31,11 @@ export type NewPart = Omit<
   | 'handed_over_at'
   | 'cancelled_at'
   | 'cancel_reason'
->;
+  | 'counter_code_enc'
+> & {
+  /** G20: kode bayar di kasir baru diketahui setelah `efn_online_place` (patch), jadi tidak wajib saat insert. */
+  counter_code_enc?: Buffer | null;
+};
 export type NewRefund = Omit<
   RefundRow,
   'created_at' | 'updated_at' | 'settled_at' | 'provider_refund_ref' | 'failure_reason' | 'initiated_by' | 'claim_token'
@@ -79,6 +84,8 @@ export interface RetentionConfig {
 }
 export interface RetentionResult {
   pickupNulled: number;
+  /** G20: kode bayar di kasir yang di-NULL-kan (bagian bukan `placed` / order tidak lagi menunggu bayar di kasir). */
+  counterNulled: number;
   qrNulled: number;
   unlinked: number;
   eventsPurged: number;
@@ -111,7 +118,8 @@ export interface OnlineRepo {
   updateOrder(id: string, patch: OrderPatch): Promise<void>;
   /** UPDATE bersyarat status (`from`) → `to`; true bila berubah. */
   transitionOrder(id: string, from: readonly OrderStatus[], to: OrderStatus, patch?: OrderPatch): Promise<boolean>;
-  countOpenOrders(memberId: string): Promise<number>;
+  /** Order belum dibayar yang terbuka (`UNPAID_OPEN`); `method` → hanya metode itu (G20: batas order bayar di kasir). */
+  countOpenOrders(memberId: string, method?: PaymentMethod): Promise<number>;
 
   insertPart(p: NewPart): Promise<void>;
   getPart(id: string, forUpdate?: boolean): Promise<PartRow | null>;
@@ -142,9 +150,11 @@ export interface OnlineRepo {
   audit(a: AdminAuditRecord): Promise<void>;
 
   // ───────────── job ─────────────
-  /** `awaiting_payment` lewat `expires_at + grace` atau `created` lebih tua dari `createdBefore`. */
+  /** `awaiting_payment|awaiting_counter_payment` lewat `expires_at + grace` atau `created` lebih tua dari `createdBefore`. */
   expireCandidates(expiredBefore: Date, createdBefore: Date, limit: number): Promise<OrderRow[]>;
   partsInStatusBefore(statuses: readonly PartStatus[], updatedBefore: Date, limit: number): Promise<PartRow[]>;
+  /** G20: bagian `placed` milik order `awaiting_counter_payment` (rekonsiliasi status Odoo bila event `paid` hilang). */
+  counterAwaitingParts(limit: number): Promise<PartRow[]>;
   refundsInStatusBefore(statuses: readonly RefundStatus[], updatedBefore: Date, limit: number): Promise<RefundRow[]>;
   /** Order final belum dibayar (`expired|cancelled|failed`) yang masih punya bagian `placing|placed`. */
   closedOrdersWithOpenParts(updatedBefore: Date, limit: number): Promise<OrderRow[]>;
@@ -162,9 +172,9 @@ export interface OnlineRepo {
 // ───────────── PostgreSQL ─────────────
 
 const ORDER_COLS = `id::text AS id, member_id::text AS member_id, idempotency_key, request_sha256, quote_id::text AS quote_id, status,
-  amount_payable, currency, payment_intent_id::text AS payment_intent_id, expires_at, paid_at, closed_at, close_reason, created_at, updated_at`;
+  amount_payable, currency, payment_method, payment_intent_id::text AS payment_intent_id, expires_at, paid_at, closed_at, close_reason, created_at, updated_at`;
 const PART_COLS = `id::text AS id, order_id::text AS order_id, channel_code, company_code, outlet_code, fulfilment, status, lines, tax_groups,
-  amount_total, amount_payable, quote_hash, sale_order_name, odoo_state, last_seq, pickup_code_enc, refunded_amount, confirmed_at, ready_at,
+  amount_total, amount_payable, quote_hash, sale_order_name, odoo_state, last_seq, pickup_code_enc, counter_code_enc, refunded_amount, confirmed_at, ready_at,
   handed_over_at, cancelled_at, cancel_reason, created_at, updated_at`;
 const REFUND_COLS = `id::text AS id, part_id::text AS part_id, payment_intent_id::text AS payment_intent_id, kind, reason, lines, amount,
   odoo_refund_ref, provider_refund_ref, status, failure_reason, initiated_by, claim_token::text AS claim_token, requested_by, created_at, updated_at, settled_at`;
@@ -183,6 +193,7 @@ function toOrder(r: Raw): OrderRow {
     status: r.status as OrderStatus,
     amount_payable: n(r.amount_payable),
     currency: 'IDR',
+    payment_method: r.payment_method === 'counter' ? 'counter' : 'qris',
     payment_intent_id: r.payment_intent_id === null ? null : String(r.payment_intent_id),
     expires_at: d(r.expires_at) as Date,
     paid_at: d(r.paid_at),
@@ -211,6 +222,7 @@ function toPart(r: Raw): PartRow {
     odoo_state: (r.odoo_state ?? null) as string | null,
     last_seq: n(r.last_seq),
     pickup_code_enc: (r.pickup_code_enc ?? null) as Buffer | null,
+    counter_code_enc: (r.counter_code_enc ?? null) as Buffer | null,
     refunded_amount: n(r.refunded_amount),
     confirmed_at: d(r.confirmed_at),
     ready_at: d(r.ready_at),
@@ -226,7 +238,7 @@ function toRefund(r: Raw): RefundRow {
   return {
     id: String(r.id),
     part_id: String(r.part_id),
-    payment_intent_id: String(r.payment_intent_id),
+    payment_intent_id: r.payment_intent_id === null || r.payment_intent_id === undefined ? null : String(r.payment_intent_id),
     kind: r.kind as RefundRow['kind'],
     reason: r.reason as RefundRow['reason'],
     lines: (r.lines ?? null) as RefundRow['lines'],
@@ -251,6 +263,7 @@ const PART_PATCH_COLS = new Set([
   'odoo_state',
   'last_seq',
   'pickup_code_enc',
+  'counter_code_enc',
   'refunded_amount',
   'confirmed_at',
   'ready_at',
@@ -313,11 +326,11 @@ export class PgOnlineRepo implements OnlineRepo {
   async insertOrder(o: NewOrder): Promise<boolean> {
     const r = await this.q.query(
       `INSERT INTO platform.online_order
-         (id, member_id, idempotency_key, request_sha256, quote_id, status, amount_payable, currency, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'IDR', $8)
+         (id, member_id, idempotency_key, request_sha256, quote_id, status, amount_payable, currency, expires_at, payment_method)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'IDR', $8, $9)
        ON CONFLICT ON CONSTRAINT uq_online_order_member_key DO NOTHING
        RETURNING id`,
-      [o.id, o.member_id, o.idempotency_key, o.request_sha256, o.quote_id, o.status, o.amount_payable, o.expires_at.toISOString()],
+      [o.id, o.member_id, o.idempotency_key, o.request_sha256, o.quote_id, o.status, o.amount_payable, o.expires_at.toISOString(), o.payment_method],
     );
     return (r.rowCount ?? 0) > 0;
   }
@@ -359,10 +372,12 @@ export class PgOnlineRepo implements OnlineRepo {
     const r = await this.q.query(`UPDATE platform.online_order SET ${s.sql} WHERE id = $1 AND status = ANY($2::text[])`, [id, [...from], ...s.params]);
     return (r.rowCount ?? 0) > 0;
   }
-  async countOpenOrders(memberId: string): Promise<number> {
+  async countOpenOrders(memberId: string, method?: PaymentMethod): Promise<number> {
     const r = await this.q.query<{ n: string }>(
-      `SELECT count(*) AS n FROM platform.online_order WHERE member_id = $1 AND status IN ('created', 'awaiting_payment')`,
-      [memberId],
+      `SELECT count(*) AS n FROM platform.online_order
+        WHERE member_id = $1 AND status IN ('created', 'awaiting_payment', 'awaiting_counter_payment')
+          AND ($2::text IS NULL OR payment_method = $2::text)`,
+      [memberId, method ?? null],
     );
     return Number(r.rows[0]?.n ?? 0);
   }
@@ -371,8 +386,8 @@ export class PgOnlineRepo implements OnlineRepo {
     await this.q.query(
       `INSERT INTO platform.online_order_part
          (id, order_id, channel_code, company_code, outlet_code, fulfilment, status, lines, tax_groups, amount_total, amount_payable,
-          quote_hash, pickup_code_enc)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13)`,
+          quote_hash, pickup_code_enc, counter_code_enc)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14)`,
       [
         p.id,
         p.order_id,
@@ -387,6 +402,7 @@ export class PgOnlineRepo implements OnlineRepo {
         p.amount_payable,
         p.quote_hash,
         p.pickup_code_enc,
+        p.counter_code_enc ?? null,
       ],
     );
   }
@@ -531,7 +547,7 @@ export class PgOnlineRepo implements OnlineRepo {
   async expireCandidates(expiredBefore: Date, createdBefore: Date, limit: number): Promise<OrderRow[]> {
     const r = await this.q.query<Raw>(
       `SELECT ${ORDER_COLS} FROM platform.online_order
-        WHERE (status = 'awaiting_payment' AND expires_at < $1) OR (status = 'created' AND created_at < $2)
+        WHERE (status IN ('awaiting_payment', 'awaiting_counter_payment') AND expires_at < $1) OR (status = 'created' AND created_at < $2)
         ORDER BY expires_at LIMIT $3`,
       [expiredBefore.toISOString(), createdBefore.toISOString(), limit],
     );
@@ -541,6 +557,16 @@ export class PgOnlineRepo implements OnlineRepo {
     const r = await this.q.query<Raw>(
       `SELECT ${PART_COLS} FROM platform.online_order_part WHERE status = ANY($1::text[]) AND updated_at < $2 ORDER BY updated_at LIMIT $3`,
       [[...statuses], updatedBefore.toISOString(), limit],
+    );
+    return r.rows.map(toPart);
+  }
+  async counterAwaitingParts(limit: number): Promise<PartRow[]> {
+    const r = await this.q.query<Raw>(
+      `SELECT ${PART_COLS} FROM platform.online_order_part
+        WHERE status = 'placed'
+          AND order_id IN (SELECT id FROM platform.online_order WHERE status = 'awaiting_counter_payment' ORDER BY expires_at LIMIT $1)
+        ORDER BY updated_at LIMIT $1`,
+      [limit],
     );
     return r.rows.map(toPart);
   }
@@ -566,7 +592,7 @@ export class PgOnlineRepo implements OnlineRepo {
       `SELECT
          (SELECT count(*) FROM platform.online_order_part WHERE status = 'placing' AND updated_at < $1::timestamptz - interval '2 minutes') AS placing,
          (SELECT count(*) FROM platform.online_order_part WHERE status = 'paying' AND updated_at < $1::timestamptz - interval '10 minutes') AS paying,
-         (SELECT count(*) FROM platform.online_order WHERE status = 'awaiting_payment' AND expires_at < $1::timestamptz - interval '5 minutes') AS awaiting,
+         (SELECT count(*) FROM platform.online_order WHERE status IN ('awaiting_payment', 'awaiting_counter_payment') AND expires_at < $1::timestamptz - interval '5 minutes') AS awaiting,
          (SELECT count(*) FROM platform.online_refund WHERE status NOT IN ('settled', 'failed', 'manual_required') AND created_at < $1::timestamptz - interval '24 hours') AS refund,
          (SELECT count(*) FROM platform.online_refund WHERE status IN ('failed', 'manual_required', 'approval_required')) AS attention`,
       [now.toISOString()],
@@ -615,6 +641,13 @@ export class PgOnlineRepo implements OnlineRepo {
                    AND COALESCE(ready_at, confirmed_at, updated_at) < $1::timestamptz - make_interval(days => $2::int)))`,
       [ts, cfg.pickupCodeMaxDays],
     );
+    // G20 §12.2: kode bayar di kasir hanya hidup selama bagian `placed` + order `awaiting_counter_payment`
+    const counter = await this.q.query(
+      `UPDATE platform.online_order_part p SET counter_code_enc = NULL, updated_at = now()
+        WHERE p.counter_code_enc IS NOT NULL
+          AND (p.status <> 'placed'
+               OR NOT EXISTS (SELECT 1 FROM platform.online_order o WHERE o.id = p.order_id AND o.status = 'awaiting_counter_payment'))`,
+    );
     const qr = await this.q.query(
       `UPDATE platform.payment_intent SET qr_string = NULL, updated_at = now()
         WHERE purpose = 'online' AND qr_string IS NOT NULL AND status <> 'pending' AND updated_at < $1::timestamptz - interval '1 day'`,
@@ -646,6 +679,7 @@ export class PgOnlineRepo implements OnlineRepo {
     }
     return {
       pickupNulled: pickup.rowCount ?? 0,
+      counterNulled: counter.rowCount ?? 0,
       qrNulled: qr.rowCount ?? 0,
       unlinked: unlink.rowCount ?? 0,
       eventsPurged: events.rowCount ?? 0,
@@ -663,7 +697,7 @@ export class PgOnlineRepo implements OnlineRepo {
   }
   async memberUnpaidOrders(memberId: string): Promise<OrderRow[]> {
     const r = await this.q.query<Raw>(
-      `SELECT ${ORDER_COLS} FROM platform.online_order WHERE member_id = $1 AND status IN ('created', 'awaiting_payment')`,
+      `SELECT ${ORDER_COLS} FROM platform.online_order WHERE member_id = $1 AND status IN ('created', 'awaiting_payment', 'awaiting_counter_payment')`,
       [memberId],
     );
     return r.rows.map(toOrder);

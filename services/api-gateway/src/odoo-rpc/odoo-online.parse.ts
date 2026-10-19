@@ -2,6 +2,8 @@ import {
   CancelResult,
   CatalogChannelInfo,
   CatalogItem,
+  ChannelPaymentMode,
+  CounterRefundAuthorizeResult,
   CatalogPage,
   CatalogPrice,
   ImageResult,
@@ -130,7 +132,31 @@ function parseItem(v: unknown): CatalogItem {
     sequence: o.sequence === undefined ? 0 : int(o.sequence, 'sequence'),
     prices: arr(o.prices, 'prices', 200).map(parsePrice),
     max_qty: o.max_qty === undefined ? 99 : Math.min(999, int(o.max_qty, 'max_qty', 1)),
+    weight_kg: parseWeight(o.weight_kg),
   };
+}
+
+/**
+ * G20 §12.3: `weight_kg` nullable (kg, `product.weight`). Tidak ada / `null` / `false` (Float kosong Odoo) → `null`.
+ * Bila ada wajib angka berhingga 0..100 000 (pengaman bentuk); 0 diteruskan apa adanya (Odoo menentukan artinya).
+ */
+export function parseWeight(v: unknown): number | null {
+  if (v === undefined || v === null || v === false) return null;
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 100_000) bad('weight_kg');
+  return v as number;
+}
+
+/**
+ * G20 §12.2 no. 1 / L-52 / L-57: `payment_modes` kanal = ARRAY string (`["qris","counter"]`); bentuk lain (termasuk
+ * string) → `invalid_response`. Tidak ada / `false` → `null` (BFF memakai config). Nilai string di luar `qris|counter`
+ * diabaikan (Odoo bisa menambah mode baru sebelum BFF mendukungnya — fail-closed: mode tak dikenal tidak ditawarkan).
+ */
+export function parsePaymentModes(v: unknown): ChannelPaymentMode[] | null {
+  if (v === undefined || v === null || v === false) return null;
+  const raw = arr(v, 'channel.payment_modes', 10).map((x) => str(x, 'payment_mode', 32));
+  const out: ChannelPaymentMode[] = [];
+  for (const m of raw) if ((m === 'qris' || m === 'counter') && !out.includes(m)) out.push(m);
+  return out;
 }
 
 function parseChannel(v: unknown): CatalogChannelInfo | null {
@@ -165,6 +191,7 @@ function parseChannel(v: unknown): CatalogChannelInfo | null {
     // pilot: pickup bila ada outlet aktif yang menerima ambil; delivery hanya bila Odoo menyatakannya eksplisit
     fulfilment: f ? { pickup: f.pickup === true, delivery: f.delivery === true } : { pickup: outlets.some((x) => x.active && x.pickup_enabled), delivery: false },
     outlets,
+    payment_modes: parsePaymentModes(o.payment_modes),
   };
 }
 
@@ -206,11 +233,19 @@ function parseTaxGroups(v: unknown): TaxGroup[] {
 /**
  * Kode isu quote tingkat produk yang dikenal BFF (diteruskan apa adanya ke klien di `groups[].issues`):
  * - `out_of_stock` — stok tidak cukup;
- * - `qty_limit` — G19 SEC-131: qty baris melebihi batas per baris kanal (`max_qty_per_line`).
+ * - `qty_limit` — G19 SEC-131: qty baris melebihi batas per baris kanal (`max_qty_per_line`);
+ * - `weight_missing` — G20 §12.3: produk tanpa berat saat batas berat kanal aktif dengan `weight_missing_policy=block`.
  * Kode lain (`^[a-z_]{1,40}$`, mis. isu tingkat order `order_limit` dengan `product_id: null`) tetap diterima dan
  * diteruskan; semua isu memblokir checkout (`409 cart_has_issues`, `orders.service`).
  */
-export const PRODUCT_ISSUE_CODES = ['out_of_stock', 'qty_limit'] as const;
+export const PRODUCT_ISSUE_CODES = ['out_of_stock', 'qty_limit', 'weight_missing'] as const;
+/**
+ * Isu tingkat ORDER/grup yang wajib `product_id: null`: `weight_limit` (G20 §12.3, Σ berat × qty > batas kanal).
+ * `weight_limit` dengan product_id → respons tidak sesuai kontrak (fail-closed).
+ */
+export const ORDER_ISSUE_CODES = ['weight_limit'] as const;
+/** Allowlist issue yang dikenal BFF & frontend (§12.3); kode lain tetap diteruskan (dan tetap memblokir checkout). */
+export const KNOWN_ISSUE_CODES = ['out_of_stock', 'qty_limit', 'order_limit', 'weight_limit', 'weight_missing'] as const;
 
 /**
  * Hasil `efn_online_quote` (docs/08 §8.3 C no. 4). Bila Odoo tidak mengirim `price_unit_incl`, dihitung dari
@@ -246,6 +281,7 @@ export function parseQuote(v: unknown): QuoteResult {
       const productId = i.product_id === null || i.product_id === undefined || i.product_id === false ? null : int(i.product_id, 'issue.product_id', 1);
       // Isu tingkat PRODUK (out_of_stock, qty_limit SEC-131) wajib menyebut product_id; selain itu klien tidak tahu baris mana
       if (productId === null && (PRODUCT_ISSUE_CODES as readonly string[]).includes(code)) bad(`issue.${code} tanpa product_id`);
+      if (productId !== null && (ORDER_ISSUE_CODES as readonly string[]).includes(code)) bad(`issue.${code} dengan product_id`);
       return { product_id: productId, code };
     });
   } else {
@@ -275,6 +311,7 @@ export function parsePlace(v: unknown): PlaceResult {
   const o = obj(v, 'place');
   const amountPayable = rupiah(o.amount_payable, 'amount_payable');
   if (amountPayable < 1) bad('amount_payable < 1'); // L-35: SO Rp0 tidak pernah dibuat payment intent
+  // L-56: kode bayar dibuat BFF; field `counter_code` apa pun di respons Odoo DIABAIKAN (tidak dibaca, tidak disimpan)
   return {
     order_state: str(o.order_state, 'order_state', 32),
     sale_order_name: optStr(o.sale_order_name, 'sale_order_name', 64),
@@ -315,6 +352,17 @@ export function parseRefund(v: unknown): RefundResult {
 export function parseRefundSettled(v: unknown): { state: string } {
   const o = obj(v, 'refund_settled');
   return { state: str(o.state, 'state', 32) };
+}
+
+/** L-60: `{ authorized?: boolean, state?: string }` (bentuk ASUMSI; field tambahan diabaikan). */
+export function parseCounterRefundAuthorize(v: unknown): CounterRefundAuthorizeResult {
+  const o = obj(v, 'counter_refund_authorize');
+  return {
+    // Bentuk Odoo E-45: { state: "authorized", amount } — wajib state persis (tidak ada default true).
+    authorized: o.state === 'authorized' && o.authorized !== false,
+    state: optStr(o.state, 'state', 32),
+    amount: o.amount === undefined || o.amount === null || o.amount === false ? null : rupiah(o.amount, 'amount'),
+  };
 }
 
 export function parseStatus(v: unknown): StatusRow[] {

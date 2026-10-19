@@ -5,8 +5,8 @@ import { normalizePromoCode, parseQuote, quoteHasIssues, sanitizePromoCodes } fr
 const QUOTE_ID = '3f2b8c1e-9a4d-4c7e-8b21-5d6e7f8a9b0c';
 
 const baseGroup = {
-  channel_code: 'RTL-GL',
-  company_code: 'RTL',
+  channel_code: 'GL',
+  company_code: 'GL',
   outlet_code: 'TOKO-01',
   fulfilment: 'pickup',
   lines: [

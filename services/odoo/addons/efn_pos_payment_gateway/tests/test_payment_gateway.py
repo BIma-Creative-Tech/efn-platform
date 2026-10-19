@@ -29,11 +29,11 @@ class TestEfnPosPaymentGateway(TestPoSCommon):
         super().setUpClass()
         cls.config = cls.basic_config
         company = cls.config.company_id
-        cls.env["res.company"].search([("efn_brand_code", "=", "FNB"), ("id", "!=", company.id)]).write(
+        cls.env["res.company"].search([("efn_brand_code", "=", "PB"), ("id", "!=", company.id)]).write(
             {"efn_brand_code": False}
         )
         cls.env["res.company"].flush_model(["efn_brand_code"])
-        company.write({"efn_brand_code": "FNB"})
+        company.write({"efn_brand_code": "PB"})
         # DB uji memakai mata uang company TestPoSCommon (bukan IDR); kontrak produksi = IDR.
         cls.env["ir.config_parameter"].sudo().set_param("efn.pos.gateway_currency", company.currency_id.name)
         cls.gw_method = cls.env["pos.payment.method"].create(
@@ -149,7 +149,7 @@ class TestEfnPosPaymentGateway(TestPoSCommon):
                 "order_ref": order_uuid,
                 "amount": 100,
                 "currency": self.config.company_id.currency_id.name,
-                "company_code": "FNB",
+                "company_code": "PB",
                 "pos_config_id": self.config.id,
                 "method": "qris",
                 "idempotency_key": f"pos:{order_uuid}:{pay_uuid}",

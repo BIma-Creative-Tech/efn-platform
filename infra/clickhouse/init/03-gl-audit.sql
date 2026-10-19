@@ -62,40 +62,9 @@ CREATE TABLE IF NOT EXISTS efn_dwh.dim_company
 ENGINE = ReplacingMergeTree(write_date)
 ORDER BY company_id;
 
--- View konsolidasi untuk Metabase: per periode (bulan) x company x akun x lawan inter-company, hanya posted.
--- Konsolidasi grup = SUM(balance_after_elimination) lintas company per account_code (bagan akun sama: l10n_id).
--- Eliminasi sederhana: baris dengan partner = company grup lain dikeluarkan (kedua sisi transaksi inter-company
--- memakai partner company lawan). Selisih eliminasi (mis. beda kurs/timing) terlihat dari SUM(balance) baris
--- is_intercompany per pasangan company — dashboard rekonsiliasi IC.
-CREATE OR REPLACE VIEW efn_dwh.v_gl_consolidated AS
-SELECT
-    toStartOfMonth(l.date) AS period,
-    if(toMonth(l.date) * 100 + toDayOfMonth(l.date) > c.fy_last_month * 100 + c.fy_last_day,
-       toYear(l.date) + 1, toYear(l.date)) AS fiscal_year,
-    l.company_id AS company_id,
-    c.name AS company_name,
-    c.brand AS brand,
-    c.currency AS currency,
-    l.account_id AS account_id,
-    a.code AS account_code,
-    a.name AS account_name,
-    a.account_type AS account_type,
-    a.internal_group AS internal_group,
-    isNotNull(l.ic_company_id) AS is_intercompany,
-    l.ic_company_id AS counterparty_company_id,
-    sum(l.debit) AS debit,
-    sum(l.credit) AS credit,
-    sum(l.balance) AS balance,
-    sumIf(l.balance, isNull(l.ic_company_id)) AS balance_after_elimination,
-    count() AS lines
-FROM efn_dwh.fact_gl_line AS l FINAL
-LEFT JOIN (SELECT company_id, name, brand, currency, fy_last_month, fy_last_day FROM efn_dwh.dim_company FINAL) AS c
-    ON c.company_id = l.company_id
-LEFT JOIN (SELECT company_id, account_id, code, name, account_type, internal_group FROM efn_dwh.dim_gl_account FINAL) AS a
-    ON a.company_id = l.company_id AND a.account_id = l.account_id
-WHERE l.parent_state = 'posted'
-GROUP BY period, fiscal_year, company_id, company_name, brand, currency, account_id, account_code, account_name,
-         account_type, internal_group, is_intercompany, counterparty_company_id;
+-- View konsolidasi `v_gl_consolidated` DIPINDAH ke 08-g20-entities.sql (G20): view baru membaca kolom
+-- dim_company.business_type/brand_group yang ditambahkan di 08 (ALTER ... ADD COLUMN), sehingga harus dibuat
+-- setelah kolom itu ada. File ini hanya membuat tabel.
 
 -- ============================================================== Salinan audit tamper-evident (efn_etl/audit*.py)
 -- APPEND-ONLY: MergeTree biasa (BUKAN Replacing/Collapsing -> merge tidak pernah membuang/menggabung baris).

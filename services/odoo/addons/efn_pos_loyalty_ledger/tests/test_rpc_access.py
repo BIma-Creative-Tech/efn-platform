@@ -39,11 +39,11 @@ class TestEfnRpcAccess(TestPointOfSaleHttpCommon):
         super().setUpClass()
         env = cls.env
         company = cls.main_pos_config.company_id
-        env["res.company"].search([("efn_brand_code", "=", "RTL"), ("id", "!=", company.id)]).write(
+        env["res.company"].search([("efn_brand_code", "=", "GL"), ("id", "!=", company.id)]).write(
             {"efn_brand_code": False}
         )
         env["res.company"].flush_model(["efn_brand_code"])
-        company.write({"efn_brand_code": "RTL"})
+        company.write({"efn_brand_code": "GL"})
         cls.main_pos_config.write({"efn_loyalty_earn_enabled": True, "efn_loyalty_redeem_enabled": True})
         cls.member = env["res.partner"].create({"name": "Member RPC Uji", "phone": "0812-3456-7890"})
         cls.points_pm = create_points_method(env, company)

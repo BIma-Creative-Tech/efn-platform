@@ -69,6 +69,9 @@ GRANT SELECT(order_id, is_refund, line_kind, discount_amount) ON efn_dwh.fact_sa
 -- Gelombang 18 (K-18-6): rekonsiliasi harian pembayaran Poin EFN per PT (nominal agregat, tanpa member/partner).
 GRANT SELECT ON efn_dwh.v_loyalty_points_daily TO metabase_reader;
 GRANT SELECT ON efn_dwh.loyalty_points_daily TO metabase_reader;
+-- Gelombang 20 (W-32): rekonsiliasi eliminasi antar-entitas per pasangan (agregat GL, tanpa partner). Kolom baru
+-- dim_company (business_type, brand_group) sudah tercakup grant tabel penuh di atas.
+GRANT SELECT ON efn_dwh.v_gl_ic_recon TO metabase_reader;
 
 GRANT metabase_reader TO efn_metabase;
 SET DEFAULT ROLE metabase_reader TO efn_metabase;

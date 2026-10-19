@@ -51,12 +51,14 @@ done < "$LIST"
 # Secret turunan (member_hash_pepper dari otp_pepper, token metrik MinIO) - scripts/derive-secrets.sh
 bash "${ROOT_DIR}/scripts/derive-secrets.sh" "$OUT_DIR"
 
-# PoC PII Odoo (G19 E-38, docs/04 §11.5, ADR-036 Proposed): kunci AES-256-GCM key ring v1 + kunci blind index, 32 byte
-# acak base64, HANYA di-mount ke container odoo oleh docker-compose.dev.yml. Sengaja TIDAK di scripts/secrets.list
-# (pola dev_edge_*): staging/production belum mewajibkannya sampai PoC lulus (ADR-036 §8). Saat E-38 penuh masuk:
-# pindahkan ke secrets.list (`b64key32 [SA]`), compose base (mount odoo saja), key-custody.md + salinan tersegel.
-# Idempoten: file yang ada TIDAK ditimpa (menimpa = PII dev terenkripsi tidak terbaca lagi).
-for name in odoo_pii_key_v1 odoo_pii_bidx_key; do
+# PII Odoo (G19 E-38 PoC -> G20 E-38a, docs/04 §12.5, ADR-036 Accepted §0): kunci AES-256-GCM key ring v1, kunci blind
+# index, dan (G20, ADR-036 §0.5) kunci token nama `odoo_pii_name_key`; masing-masing 32 byte acak base64, HANYA di-mount
+# ke container odoo oleh docker-compose.dev.yml. Sengaja TIDAK di scripts/secrets.list (pola dev_edge_*): staging/
+# production menyusul setelah AC ADR-036 lulus -> pindahkan ke secrets.list (`b64key32 [SA]`), compose base (mount odoo
+# saja), key-custody.md + salinan tersegel.
+# Idempoten: file yang ada TIDAK ditimpa (menimpa key ring = PII dev terenkripsi tidak terbaca lagi; menimpa bidx/name =
+# pencarian gagal sampai indeks/token dihitung ulang).
+for name in odoo_pii_key_v1 odoo_pii_bidx_key odoo_pii_name_key; do
   f="${OUT_DIR}/${name}.txt"
   if [[ -s "$f" ]]; then
     chmod 644 "$f"
@@ -65,7 +67,7 @@ for name in odoo_pii_key_v1 odoo_pii_bidx_key; do
   fi
   ( umask 022; gen_value b64key32 > "$f" )
   chmod 644 "$f"
-  echo "dibuat : $f (PoC PII Odoo, dev/test saja)"
+  echo "dibuat : $f (PII Odoo, dev/test saja)"
 done
 
 # PKI internal (docs/04 §7.1): enkripsi in transit wajib juga di dev/CI (dev = prod, tanpa fallback plaintext).

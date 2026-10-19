@@ -154,6 +154,7 @@ export class CatalogSyncService implements OnModuleInit, OnModuleDestroy {
       uom: item.uom,
       prices: item.prices,
       max_qty: item.max_qty,
+      weight_kg: item.weight_kg, // G20 §12.3 (nullable)
     };
     const search = `${item.name} ${item.categ?.name ?? ''}`.toLowerCase().slice(0, 512);
     await q.query(

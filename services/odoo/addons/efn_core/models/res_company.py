@@ -1,19 +1,25 @@
 from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
-# Kode company sesuai docs/04_SERVICE_CONTRACTS.md §1. Perubahan = ubah kontrak dulu.
+# Kode company sesuai docs/04_SERVICE_CONTRACTS.md §12.1 (G20, W-32/E-43, L-48; meralat §1). Perubahan = ubah
+# kontrak dulu (kode dipakai BFF COMPANY_CODES, ETL dim_company, kanal online = kode PT). Kode lama RTL/FNB DIHAPUS
+# (bukan alias): tidak ada migrasi data, DB dev/CI dibuat ulang (§12.1). ADR-001 (revisi 18 Okt, 6 entitas).
 EFN_BRAND_CODES = [
-    ("EFN", "EFN - Holding / Agen Penagih"),
-    ("RTL", "RTL - PT Retail / Supermarket (PPN)"),
-    ("FNB", "FNB - PT F&B (PB1)"),
+    ("EFN", "EFN - Holding EFN / Agen Penagih"),
+    ("GL", "GL - PT Grand Lucky (ritel, PPN)"),
+    ("PB", "PB - PT Paris Baguette (F&B, PB1)"),
+    ("BCR", "BCR - Bacha Coffee Retail (ritel, PPN)"),
+    ("BCF", "BCF - Bacha Coffee F&B (F&B, PB1)"),
     ("FARM", "FARM - Collection Center / Farming"),
 ]
 
-# Kode brand -> jenis usaha (relasi 1:1 tetap).
+# Kode company -> jenis usaha (relasi tetap, §12.1: GL,BCR -> retail; PB,BCF -> fnb).
 EFN_BRAND_BUSINESS_TYPE = {
     "EFN": "holding",
-    "RTL": "retail",
-    "FNB": "fnb",
+    "GL": "retail",
+    "PB": "fnb",
+    "BCR": "retail",
+    "BCF": "fnb",
     "FARM": "farm",
 }
 

@@ -6,7 +6,20 @@ import { randomUUID } from 'node:crypto';
 import { StuckKind } from '../../odoo-rpc/online-metrics';
 import { PaymentOperationUnsupportedError, PaymentStatus, RefundOutcome, RefundRequest } from '../../payments/payment-gateway';
 import { OnlineIntent, OnlineIntentInput, OnlinePaymentsPort } from '../../payments/online-payments';
-import { OrderPatch, OrderRow, OrderStatus, PartPatch, PartRow, PartStatus, PortionRow, RefundPatch, RefundRow, RefundStatus } from '../online.model';
+import {
+  OrderPatch,
+  OrderRow,
+  OrderStatus,
+  PartPatch,
+  PartRow,
+  PartStatus,
+  PaymentMethod,
+  PortionRow,
+  RefundPatch,
+  RefundRow,
+  RefundStatus,
+  UNPAID_OPEN,
+} from '../online.model';
 import {
   AdminAuditRecord,
   NewOrder,
@@ -117,13 +130,16 @@ export class MemoryOnlineRepo implements OnlineRepo {
     Object.assign(o, patch, { status: to, updated_at: this.d() });
     return true;
   }
-  async countOpenOrders(memberId: string): Promise<number> {
-    return [...this.state.orders.values()].filter((o) => o.member_id === memberId && (o.status === 'created' || o.status === 'awaiting_payment')).length;
+  async countOpenOrders(memberId: string, method?: PaymentMethod): Promise<number> {
+    return [...this.state.orders.values()].filter(
+      (o) => o.member_id === memberId && UNPAID_OPEN.includes(o.status) && (method === undefined || o.payment_method === method),
+    ).length;
   }
 
   async insertPart(p: NewPart): Promise<void> {
     this.state.parts.set(p.id, {
       ...p,
+      counter_code_enc: p.counter_code_enc ?? null,
       sale_order_name: null,
       odoo_state: null,
       last_seq: 0,
@@ -219,12 +235,22 @@ export class MemoryOnlineRepo implements OnlineRepo {
 
   async expireCandidates(expiredBefore: Date, createdBefore: Date, limit: number): Promise<OrderRow[]> {
     return [...this.state.orders.values()]
-      .filter((o) => (o.status === 'awaiting_payment' && o.expires_at < expiredBefore) || (o.status === 'created' && o.created_at < createdBefore))
+      .filter(
+        (o) =>
+          ((o.status === 'awaiting_payment' || o.status === 'awaiting_counter_payment') && o.expires_at < expiredBefore) ||
+          (o.status === 'created' && o.created_at < createdBefore),
+      )
       .slice(0, limit)
       .map(clone);
   }
   async partsInStatusBefore(statuses: readonly PartStatus[], before: Date, limit: number): Promise<PartRow[]> {
     return [...this.state.parts.values()].filter((p) => statuses.includes(p.status) && p.updated_at < before).slice(0, limit).map(clone);
+  }
+  async counterAwaitingParts(limit: number): Promise<PartRow[]> {
+    return [...this.state.parts.values()]
+      .filter((p) => p.status === 'placed' && this.state.orders.get(p.order_id)?.status === 'awaiting_counter_payment')
+      .slice(0, limit)
+      .map(clone);
   }
   async refundsInStatusBefore(statuses: readonly RefundStatus[], before: Date, limit: number): Promise<RefundRow[]> {
     return [...this.state.refunds.values()].filter((r) => statuses.includes(r.status) && r.updated_at < before).slice(0, limit).map(clone);
@@ -247,7 +273,9 @@ export class MemoryOnlineRepo implements OnlineRepo {
     return {
       placing: parts.filter((p) => p.status === 'placing' && p.updated_at.getTime() < ago(120_000)).length,
       paying: parts.filter((p) => p.status === 'paying' && p.updated_at.getTime() < ago(600_000)).length,
-      awaiting_payment: [...this.state.orders.values()].filter((o) => o.status === 'awaiting_payment' && o.expires_at.getTime() < ago(300_000)).length,
+      awaiting_payment: [...this.state.orders.values()].filter(
+        (o) => (o.status === 'awaiting_payment' || o.status === 'awaiting_counter_payment') && o.expires_at.getTime() < ago(300_000),
+      ).length,
       refund: [...this.state.refunds.values()].filter((r) => !['settled', 'failed', 'manual_required'].includes(r.status) && r.created_at.getTime() < ago(86_400_000)).length,
       refund_attention: [...this.state.refunds.values()].filter((r) => ['failed', 'manual_required', 'approval_required'].includes(r.status)).length,
     };
@@ -273,6 +301,14 @@ export class MemoryOnlineRepo implements OnlineRepo {
         pickupNulled += 1;
       }
     }
+    let counterNulled = 0;
+    for (const p of this.state.parts.values()) {
+      if (!p.counter_code_enc) continue;
+      if (p.status !== 'placed' || this.state.orders.get(p.order_id)?.status !== 'awaiting_counter_payment') {
+        p.counter_code_enc = null;
+        counterNulled += 1;
+      }
+    }
     let unlinked = 0;
     for (const o of this.state.orders.values()) {
       if (o.member_id && o.closed_at && o.closed_at.getTime() < now.getTime() - cfg.memberLinkDays * 86_400_000) {
@@ -283,7 +319,7 @@ export class MemoryOnlineRepo implements OnlineRepo {
     const cutoff = now.getTime() - cfg.adminAuditRetentionDays * 86_400_000;
     const before = this.state.audits.length;
     this.state.audits = this.state.audits.filter((a) => (a.created_at?.getTime() ?? now.getTime()) >= cutoff);
-    return { pickupNulled, qrNulled: 0, unlinked, eventsPurged: 0, adminAuditPurged: before - this.state.audits.length };
+    return { pickupNulled, counterNulled, qrNulled: 0, unlinked, eventsPurged: 0, adminAuditPurged: before - this.state.audits.length };
   }
   async memberOpenPaidParts(memberId: string): Promise<number> {
     return [...this.state.parts.values()].filter(
@@ -291,7 +327,7 @@ export class MemoryOnlineRepo implements OnlineRepo {
     ).length;
   }
   async memberUnpaidOrders(memberId: string): Promise<OrderRow[]> {
-    return [...this.state.orders.values()].filter((o) => o.member_id === memberId && (o.status === 'created' || o.status === 'awaiting_payment')).map(clone);
+    return [...this.state.orders.values()].filter((o) => o.member_id === memberId && UNPAID_OPEN.includes(o.status)).map(clone);
   }
   async exportOrders(memberId: string, limit: number): Promise<OrderExportRow[]> {
     const orders = await this.listOrdersOfMember(memberId, null, limit);

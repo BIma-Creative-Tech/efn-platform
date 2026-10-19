@@ -7,15 +7,15 @@ import { PRODUCT_ISSUE_CODES, parseCatalogPage, parsePlace, parseQuote } from '.
 import { ODOO_ONLINE_PATHS, OdooRpcError } from './odoo-online.types';
 import { OnlineMetrics } from './online-metrics';
 
-const RTL_KEY = randomSecret();
-const FNB_KEY = randomSecret();
+const GL_KEY = randomSecret();
+const PB_KEY = randomSecret();
 
 function setup(responses: (TransportResponse | Error)[]) {
   const config = testConfig(
-    { ODOO_API_KEY_ONLINE_RTL_FILE: '/k/rtl', ODOO_API_KEY_ONLINE_FNB_FILE: '/k/fnb', ODOO_DB: 'efn_odoo' },
+    { ODOO_API_KEY_ONLINE_GL_FILE: '/k/gl', ODOO_API_KEY_ONLINE_PB_FILE: '/k/pb', ODOO_DB: 'efn_odoo' },
     (p) => {
-      if (p === '/k/rtl') return Buffer.from(RTL_KEY);
-      if (p === '/k/fnb') return Buffer.from(FNB_KEY);
+      if (p === '/k/gl') return Buffer.from(GL_KEY);
+      if (p === '/k/pb') return Buffer.from(PB_KEY);
       throw new Error('ENOENT');
     },
   );
@@ -47,38 +47,38 @@ const STATUS_ROW = [{ platform_order_ref: 'x', state: 'confirmed', seq: 3, ready
 describe('Klien json2 (docs/04 §10.4)', () => {
   it('POST ke 10 path persis, argumen bernama + context lang saja, bearer key PER KANAL, X-Odoo-Database', async () => {
     const ctx = setup([ok(STATUS_ROW), ok(STATUS_ROW)]);
-    await ctx.client.status('RTL', ['x']);
-    await ctx.client.status('FNB', ['x']);
+    await ctx.client.status('GL', ['x']);
+    await ctx.client.status('PB', ['x']);
     expect(ctx.calls[0]).toMatchObject({
       path: 'efn.online.order/efn_online_status',
-      body: { channel_code: 'RTL', platform_order_refs: ['x'], context: { lang: 'id_ID' } },
-      headers: { Authorization: `bearer ${RTL_KEY}`, 'X-Odoo-Database': 'efn_odoo', 'Content-Type': 'application/json' },
+      body: { channel_code: 'GL', platform_order_refs: ['x'], context: { lang: 'id_ID' } },
+      headers: { Authorization: `bearer ${GL_KEY}`, 'X-Odoo-Database': 'efn_odoo', 'Content-Type': 'application/json' },
     });
-    expect(ctx.calls[1].headers.Authorization).toBe(`bearer ${FNB_KEY}`);
-    expect(Object.values(ODOO_ONLINE_PATHS)).toHaveLength(10);
+    expect(ctx.calls[1].headers.Authorization).toBe(`bearer ${PB_KEY}`);
+    expect(Object.values(ODOO_ONLINE_PATHS)).toHaveLength(11); // + L-60 counterRefundAuthorize
     for (const p of Object.values(ODOO_ONLINE_PATHS)) expect(p).toMatch(/^efn\.online\.(channel|order)\/efn_online_[a-z_]+$/);
   });
 
   it('retry hanya transport/5xx/429 (0,5/1/2 s), maks 3×; UserError tidak di-retry dan memetakan kode', async () => {
     const ctx = setup([{ status: 502, body: '' }, { status: 429, body: '' }, new Error('ECONNRESET'), ok(STATUS_ROW)]);
-    expect(await ctx.client.status('RTL', ['x'])).toHaveLength(1);
+    expect(await ctx.client.status('GL', ['x'])).toHaveLength(1);
     expect(ctx.sleeps).toEqual([500, 1000, 2000]);
     const biz = setup([userError('price_changed')]);
-    const err = await biz.client.status('RTL', ['x']).catch((e: unknown) => e);
+    const err = await biz.client.status('GL', ['x']).catch((e: unknown) => e);
     expect(err).toMatchObject({ kind: 'business', code: 'price_changed' });
     expect(biz.calls).toHaveLength(1);
     expect(String((err as Error).message)).not.toContain('Traceback');
     const many = setup([{ status: 503, body: '' }, { status: 503, body: '' }, { status: 503, body: '' }, { status: 503, body: '' }]);
-    await expect(many.client.status('RTL', ['x'])).rejects.toMatchObject({ kind: 'transport' });
+    await expect(many.client.status('GL', ['x'])).rejects.toMatchObject({ kind: 'transport' });
     expect(many.calls).toHaveLength(4);
   });
 
   it('401/403 → auth (tanpa retry) + metrik auth failure per kanal; 404 → not_found', async () => {
     const ctx = setup([{ status: 401, body: '{}' }, { status: 403, body: 'forbidden' }, { status: 404, body: '' }]);
-    await expect(ctx.client.status('RTL', ['x'])).rejects.toMatchObject({ kind: 'auth' });
-    await expect(ctx.client.status('RTL', ['x'])).rejects.toMatchObject({ kind: 'auth' });
-    await expect(ctx.client.status('RTL', ['x'])).rejects.toMatchObject({ kind: 'not_found' });
-    expect((await ctx.metrics.odooAuthFailures.get()).values[0]).toMatchObject({ labels: { channel: 'RTL' }, value: 2 });
+    await expect(ctx.client.status('GL', ['x'])).rejects.toMatchObject({ kind: 'auth' });
+    await expect(ctx.client.status('GL', ['x'])).rejects.toMatchObject({ kind: 'auth' });
+    await expect(ctx.client.status('GL', ['x'])).rejects.toMatchObject({ kind: 'not_found' });
+    expect((await ctx.metrics.odooAuthFailures.get()).values[0]).toMatchObject({ labels: { channel: 'GL' }, value: 2 });
     expect(ctx.calls).toHaveLength(3);
   });
 
@@ -86,15 +86,15 @@ describe('Klien json2 (docs/04 §10.4)', () => {
     const ctx = setup(Array.from({ length: 5 }, () => ({ status: 500, body: '' })).concat([ok(STATUS_ROW)]));
     let t = 0;
     ctx.client.now = () => t;
-    await expect(ctx.client.status('RTL', ['x'])).rejects.toMatchObject({ kind: 'transport' }); // 4 percobaan
-    await expect(ctx.client.status('RTL', ['x'])).rejects.toMatchObject({ kind: 'transport' }); // ke-5 → terbuka
-    expect(ctx.client.isCircuitOpen('RTL')).toBe(true);
-    expect(ctx.client.isCircuitOpen('FNB')).toBe(false);
-    await expect(ctx.client.status('RTL', ['x'])).rejects.toMatchObject({ kind: 'circuit_open' });
+    await expect(ctx.client.status('GL', ['x'])).rejects.toMatchObject({ kind: 'transport' }); // 4 percobaan
+    await expect(ctx.client.status('GL', ['x'])).rejects.toMatchObject({ kind: 'transport' }); // ke-5 → terbuka
+    expect(ctx.client.isCircuitOpen('GL')).toBe(true);
+    expect(ctx.client.isCircuitOpen('PB')).toBe(false);
+    await expect(ctx.client.status('GL', ['x'])).rejects.toMatchObject({ kind: 'circuit_open' });
     expect((await ctx.metrics.circuitOpen.get()).values[0]).toMatchObject({ value: 1 });
     t = 31_000;
-    expect(await ctx.client.status('RTL', ['x'])).toHaveLength(1);
-    expect(ctx.client.isCircuitOpen('RTL')).toBe(false);
+    expect(await ctx.client.status('GL', ['x'])).toHaveLength(1);
+    expect(ctx.client.isCircuitOpen('GL')).toBe(false);
     const b = new CircuitBreaker(2, 1000, () => 0);
     b.failure();
     b.neutral();
@@ -104,10 +104,10 @@ describe('Klien json2 (docs/04 §10.4)', () => {
 
   it('API key kanal tidak dikonfigurasi → auth (tanpa panggilan); literal di luar dev ditolak; mock ditolak di production', async () => {
     const ctx = setup([]);
-    await expect(ctx.client.status('FNB-BAKSO', ['x'])).rejects.toMatchObject({ kind: 'auth' });
+    await expect(ctx.client.status('PB-BAKSO', ['x'])).rejects.toMatchObject({ kind: 'auth' });
     expect(ctx.calls).toHaveLength(0);
-    expect(() => testConfig({ ODOO_API_KEY_ONLINE_RTL: randomSecret() }).odooApiKeyOnline('RTL')).toThrow(ConfigError);
-    expect(testConfig({ APP_ENV: 'dev', ODOO_API_KEY_ONLINE_RTL: 'k'.repeat(20) }).odooApiKeyOnline('RTL')).toBe('k'.repeat(20));
+    expect(() => testConfig({ ODOO_API_KEY_ONLINE_GL: randomSecret() }).odooApiKeyOnline('GL')).toThrow(ConfigError);
+    expect(testConfig({ APP_ENV: 'dev', ODOO_API_KEY_ONLINE_GL: 'k'.repeat(20) }).odooApiKeyOnline('GL')).toBe('k'.repeat(20));
     expect(testConfig({ ODOO_ONLINE_MOCK: 'true' }).odooOnlineMock).toBe(true);
     expect(testConfig({ ODOO_ONLINE_MOCK: 'true', APP_ENV: 'dev' }).odooOnlineMock).toBe(true);
     const envs: Record<string, string>[] = [{ APP_ENV: 'production' }, { APP_ENV: 'staging' }, { NODE_ENV: 'production' }, { NODE_ENV: '' }];
@@ -158,19 +158,20 @@ describe('Validasi respons Odoo (§10.4.3)', () => {
     const withCh = parseCatalogPage({
       items: [],
       server_time: 'now',
-      channel: { code: 'RTL', name: 'Retail', company_code: 'RTL', currency: 'IDR', outlets: [{ code: 'TOKO-01', public_name: 'Toko 1', pickup_enabled: true, prep_minutes: 15, active: true }] },
+      channel: { code: 'GL', name: 'Retail', company_code: 'GL', currency: 'IDR', outlets: [{ code: 'TOKO-01', public_name: 'Toko 1', pickup_enabled: true, prep_minutes: 15, active: true }] },
     });
     expect(withCh.channel).toEqual({
-      code: 'RTL', name: 'Retail', company_code: 'RTL', brand_code: null, currency: 'IDR', active: true, fulfilment: { pickup: true, delivery: false },
+      code: 'GL', name: 'Retail', company_code: 'GL', brand_code: null, currency: 'IDR', active: true, fulfilment: { pickup: true, delivery: false },
       outlets: [{ outlet_code: 'TOKO-01', public_name: 'Toko 1', pickup_enabled: true, prep_minutes: 15, active: true }],
+      payment_modes: null, // L-52: Odoo pra-G20 tanpa payment_modes → BFF memakai config
     });
-    expect(() => parseCatalogPage({ items: [], server_time: 'now', channel: { code: 'RTL', name: 'x', company_code: 'RTL', outlets: [] } })).toThrow(OdooRpcError);
+    expect(() => parseCatalogPage({ items: [], server_time: 'now', channel: { code: 'GL', name: 'x', company_code: 'GL', outlets: [] } })).toThrow(OdooRpcError);
   });
 });
 
 describe('G19 §11.2: promo di json2 (quote/place) & baris reward', () => {
   const QUOTE_OK = {
-    company_code: 'RTL',
+    company_code: 'GL',
     lines: [
       { product_id: 11, name: 'Beras', qty: 1, price_unit_incl: 79_900, subtotal_incl: 79_900, tax_labels: ['PPN 11%'], available: true },
       { product_id: 9001, name: 'Promo Gajian', qty: 1, price_unit_incl: -5_000, subtotal_incl: -5_000, tax_labels: ['PPN 11%'], available: true, reward: true, reward_id: 3 },
@@ -187,24 +188,24 @@ describe('G19 §11.2: promo di json2 (quote/place) & baris reward', () => {
 
   it('quote mengirim promo_codes (selalu, [] bila kosong); place mengirim order.promo_codes', async () => {
     const ctx = setup([ok(QUOTE_OK), ok({ ...QUOTE_OK, promo_applied: [], promo_rejected: [], lines: [QUOTE_OK.lines[0]], amount_total: 79_900, amount_payable: 79_900 }), ok({ order_state: 'placed', sale_order_name: 'S1', amount_total: 74_900, amount_payable: 74_900, expires_at: '2026-10-18 04:10:00' })]);
-    await ctx.client.quote('RTL', 'TOKO-01', 'pickup', [{ product_id: 11, qty: 1 }], ['GAJIAN', 'NOPE42']);
+    await ctx.client.quote('GL', 'TOKO-01', 'pickup', [{ product_id: 11, qty: 1 }], ['GAJIAN', 'NOPE42']);
     expect(ctx.calls[0].body).toEqual({
-      channel_code: 'RTL', outlet_code: 'TOKO-01', fulfilment: 'pickup', lines: [{ product_id: 11, qty: 1 }], promo_codes: ['GAJIAN', 'NOPE42'], context: { lang: 'id_ID' },
+      channel_code: 'GL', outlet_code: 'TOKO-01', fulfilment: 'pickup', lines: [{ product_id: 11, qty: 1 }], promo_codes: ['GAJIAN', 'NOPE42'], context: { lang: 'id_ID' },
     });
-    await ctx.client.quote('RTL', 'TOKO-01', 'pickup', [{ product_id: 11, qty: 1 }], []);
+    await ctx.client.quote('GL', 'TOKO-01', 'pickup', [{ product_id: 11, qty: 1 }], []);
     expect((ctx.calls[1].body as Record<string, unknown>).promo_codes).toEqual([]);
-    await ctx.client.place('RTL', {
+    await ctx.client.place('GL', {
       idempotency_key: 'online:place:p', platform_order_ref: 'p', checkout_ref: 'o', outlet_code: 'TOKO-01', fulfilment: 'pickup',
       lines: [{ product_id: 11, qty: 1 }], quote_hash: 'h1', pickup_code: 'ABCDEFGH', promo_codes: ['GAJIAN'],
     });
     expect((ctx.calls[2].body as { order: Record<string, unknown> }).order.promo_codes).toEqual(['GAJIAN']);
   });
 
-  it('kanal berhifen: bearer dari ODOO_API_KEY_ONLINE_RTL_GL_FILE, tidak pernah key kanal lain', async () => {
+  it('G20 kanal = kode PT: bearer dari ODOO_API_KEY_ONLINE_BCR_FILE, tidak pernah key kanal lain', async () => {
     const glKey = randomSecret();
-    const config = testConfig({ ODOO_API_KEY_ONLINE_RTL_FILE: '/k/rtl', ODOO_API_KEY_ONLINE_RTL_GL_FILE: '/k/rtl-gl' }, (p) => {
-      if (p === '/k/rtl') return Buffer.from(RTL_KEY);
-      if (p === '/k/rtl-gl') return Buffer.from(glKey);
+    const config = testConfig({ ODOO_API_KEY_ONLINE_GL_FILE: '/k/gl', ODOO_API_KEY_ONLINE_BCR_FILE: '/k/bcr' }, (p) => {
+      if (p === '/k/gl') return Buffer.from(GL_KEY);
+      if (p === '/k/bcr') return Buffer.from(glKey);
       throw new Error('ENOENT');
     });
     const seen: string[] = [];
@@ -213,10 +214,10 @@ describe('G19 §11.2: promo di json2 (quote/place) & baris reward', () => {
       return ok(STATUS_ROW);
     };
     const client = new Json2OdooOnlineClient(config, transport, new OnlineMetrics(new MetricsService()));
-    await client.status('RTL-GL', ['x']);
-    await client.status('RTL', ['x']);
-    expect(seen).toEqual([`bearer ${glKey}`, `bearer ${RTL_KEY}`]);
-    await expect(client.status('RTL-BACHA', ['x'])).rejects.toMatchObject({ kind: 'auth' }); // tanpa key → tidak memakai key lain
+    await client.status('BCR', ['x']);
+    await client.status('GL', ['x']);
+    expect(seen).toEqual([`bearer ${glKey}`, `bearer ${GL_KEY}`]);
+    await expect(client.status('BCF', ['x'])).rejects.toMatchObject({ kind: 'auth' }); // tanpa key → tidak memakai key lain
     expect(seen).toHaveLength(2);
   });
 
@@ -247,8 +248,8 @@ describe('G19 §11.2: promo di json2 (quote/place) & baris reward', () => {
 
 describe('SEC-96/SEC-109: batas konkurensi json2 per pool (publik vs saga)', () => {
   function cfg(pub: string, saga: string) {
-    return testConfig({ ODOO_API_KEY_ONLINE_RTL_FILE: '/k/rtl', ODOO_RPC_PUBLIC_MAX_CONCURRENCY: pub, ODOO_RPC_SAGA_MAX_CONCURRENCY: saga }, (path) => {
-      if (path === '/k/rtl') return Buffer.from(RTL_KEY);
+    return testConfig({ ODOO_API_KEY_ONLINE_GL_FILE: '/k/gl', ODOO_RPC_PUBLIC_MAX_CONCURRENCY: pub, ODOO_RPC_SAGA_MAX_CONCURRENCY: saga }, (path) => {
+      if (path === '/k/gl') return Buffer.from(GL_KEY);
       throw new Error('ENOENT');
     });
   }
@@ -268,7 +269,7 @@ describe('SEC-96/SEC-109: batas konkurensi json2 per pool (publik vs saga)', () 
       return ok(STATUS_ROW);
     };
     const client = new Json2OdooOnlineClient(cfg('1', '1'), transport, new OnlineMetrics(new MetricsService()));
-    const calls = Array.from({ length: 10 }, () => client.status('RTL', ['x']).then(() => 'ok', (e: unknown) => (e as OdooRpcError).kind));
+    const calls = Array.from({ length: 10 }, () => client.status('GL', ['x']).then(() => 'ok', (e: unknown) => (e as OdooRpcError).kind));
     await tick();
     for (let k = 0; k < 20; k += 1) {
       waiters.shift()?.();
@@ -277,7 +278,7 @@ describe('SEC-96/SEC-109: batas konkurensi json2 per pool (publik vs saga)', () 
     const out = await Promise.all(calls);
     expect(peak).toBe(1);
     expect(out.filter((x) => x === 'busy')).toHaveLength(1); // 1 jalan + 8 antre + 1 ditolak
-    expect(client.isCircuitOpen('RTL')).toBe(false);
+    expect(client.isCircuitOpen('GL')).toBe(false);
   });
 
   it('SEC-109: lonjakan stok/quote (pool publik penuh) tidak memblokir saga (mark_paid/status)', async () => {
@@ -287,9 +288,9 @@ describe('SEC-96/SEC-109: batas konkurensi json2 per pool (publik vs saga)', () 
       return path.endsWith('efn_online_stock') ? ok([]) : ok(STATUS_ROW);
     };
     const client = new Json2OdooOnlineClient(cfg('1', '1'), transport, new OnlineMetrics(new MetricsService()));
-    const stocks = Array.from({ length: 3 }, () => client.stock('RTL', 'TOKO-01', [1]).catch(() => 'x'));
+    const stocks = Array.from({ length: 3 }, () => client.stock('GL', 'TOKO-01', [1]).catch(() => 'x'));
     await tick();
-    expect(await client.status('RTL', ['x'])).toHaveLength(1); // saga tetap jalan
+    expect(await client.status('GL', ['x'])).toHaveLength(1); // saga tetap jalan
     for (let k = 0; k < 10; k += 1) {
       hold.splice(0).forEach((h) => h());
       await tick();
@@ -313,10 +314,10 @@ describe('SEC-96/SEC-109: batas konkurensi json2 per pool (publik vs saga)', () 
     let wake: (() => void) | null = null;
     client.sleep = () => new Promise<void>((res) => (wake = res));
     client.random = () => 0;
-    const a = client.status('RTL', ['A']);
+    const a = client.status('GL', ['A']);
     await tick();
     expect(order).toEqual(['A']); // A gagal, sedang backoff
-    await client.status('RTL', ['B']); // slot saga (1) bebas selama backoff A
+    await client.status('GL', ['B']); // slot saga (1) bebas selama backoff A
     expect(order).toEqual(['A', 'B']);
     (wake as unknown as () => void)();
     await a;
@@ -340,12 +341,12 @@ describe('L-35 / QA G19: tagihan < Rp1 ditolak sebagai konfigurasi salah', () =>
 
 describe('G19 SEC-131: issue quote `qty_limit` di parser', () => {
   const line = { product_id: 11, name: 'Beras', qty: 25, price_unit_incl: 79_900, subtotal_incl: 1_997_500, tax_labels: [], available: true };
-  const base = { company_code: 'RTL', lines: [line], amount_total: 1_997_500, amount_payable: 1_997_500, quote_hash: 'h' };
+  const base = { company_code: 'GL', lines: [line], amount_total: 1_997_500, amount_payable: 1_997_500, quote_hash: 'h' };
 
   it('qty_limit per produk diterima di samping out_of_stock; code diteruskan apa adanya', () => {
     const q = parseQuote({ ...base, issues: [{ product_id: 11, code: 'qty_limit' }, { product_id: 14, code: 'out_of_stock' }] });
     expect(q.issues).toEqual([{ product_id: 11, code: 'qty_limit' }, { product_id: 14, code: 'out_of_stock' }]);
-    expect(PRODUCT_ISSUE_CODES).toEqual(['out_of_stock', 'qty_limit']);
+    expect(PRODUCT_ISSUE_CODES).toEqual(['out_of_stock', 'qty_limit', 'weight_missing']);
   });
 
   it('qty_limit / out_of_stock tanpa product_id → invalid_response; isu tingkat order (order_limit) tetap boleh null', () => {
@@ -357,5 +358,85 @@ describe('G19 SEC-131: issue quote `qty_limit` di parser', () => {
     // bentuk kode tetap diperiksa
     expect(() => parseQuote({ ...base, issues: [{ product_id: 11, code: 'QTY-LIMIT' }] })).toThrow(OdooRpcError);
     expect(() => parseQuote({ ...base, issues: [{ product_id: 0, code: 'qty_limit' }] })).toThrow(OdooRpcError);
+  });
+});
+
+describe('G20 §12.2–§12.3: parser place (counter_code), issue berat, weight_kg, payment_modes', () => {
+  const line = { product_id: 11, name: 'Beras', qty: 3, price_unit_incl: 79_900, subtotal_incl: 239_700, tax_labels: [], available: true };
+  const base = { company_code: 'GL', lines: [line], amount_total: 239_700, amount_payable: 239_700, quote_hash: 'h' };
+  const place = { order_state: 'placed', sale_order_name: 'S1', amount_total: 100, amount_payable: 100, expires_at: '2026-10-18 04:10:00' };
+
+  it('weight_limit tingkat order (product_id null) & weight_missing per produk diterima apa adanya', () => {
+    const q = parseQuote({ ...base, issues: [{ product_id: null, code: 'weight_limit' }, { product_id: 12, code: 'weight_missing' }] });
+    expect(q.issues).toEqual([{ product_id: null, code: 'weight_limit' }, { product_id: 12, code: 'weight_missing' }]);
+  });
+
+  it('weight_limit DENGAN product_id / weight_missing TANPA product_id → invalid_response (fail-closed)', () => {
+    expect(() => parseQuote({ ...base, issues: [{ product_id: 11, code: 'weight_limit' }] })).toThrow(/weight_limit dengan product_id/);
+    for (const pid of [null, false, undefined]) {
+      expect(() => parseQuote({ ...base, issues: [{ product_id: pid, code: 'weight_missing' }] })).toThrow(/weight_missing tanpa product_id/);
+    }
+  });
+
+  it('L-56: hasil place TIDAK membawa counter_code — field apa pun dari Odoo diabaikan (tidak dibaca/disimpan)', () => {
+    for (const v of [undefined, 'ABCDEFGH', 'bukan-kode', 12345678]) {
+      const r = parsePlace({ ...place, counter_code: v });
+      expect('counter_code' in r).toBe(false);
+      expect(r).toEqual(parsePlace(place));
+    }
+  });
+
+  it('katalog: weight_kg nullable (absen/false/null → null); negatif/bukan angka → invalid_response', () => {
+    const item = { product_id: 1, tmpl_id: 2, name: 'A', categ: null, uom: 'Unit', sequence: 1, prices: [], max_qty: 5 };
+    const p = parseCatalogPage({ items: [{ ...item, weight_kg: 2.5 }, { ...item, product_id: 2 }, { ...item, product_id: 3, weight_kg: false }], server_time: 'now' });
+    expect(p.items.map((i) => i.weight_kg)).toEqual([2.5, null, null]);
+    for (const w of [-1, '2', Number.NaN, 1e9]) {
+      expect(() => parseCatalogPage({ items: [{ ...item, weight_kg: w }], server_time: 'now' })).toThrow(OdooRpcError);
+    }
+  });
+
+  it('blok channel payment_modes (L-57): array string saja; mode tak dikenal dibuang; string/angka/elemen bukan string → invalid_response', () => {
+    const ch = { code: 'GL', name: 'GL', company_code: 'GL', currency: 'IDR', outlets: [] };
+    const modes = (v: unknown) => parseCatalogPage({ items: [], server_time: 'now', channel: { ...ch, payment_modes: v } }).channel?.payment_modes;
+    expect(modes(['qris', 'counter'])).toEqual(['qris', 'counter']);
+    expect(modes(['counter', 'va', 'counter'])).toEqual(['counter']);
+    expect(modes(false)).toBeNull();
+    expect(modes(undefined)).toBeNull();
+    expect(modes([])).toEqual([]);
+    for (const bad of ['counter, qris', 'qris', 5, [1], [null], { qris: true }]) expect(() => modes(bad)).toThrow(OdooRpcError);
+  });
+
+  it('L-60: counterRefundAuthorize → path efn_online_counter_refund_authorize, argumen bernama, key kanal; respons authorized/state', async () => {
+    // Bentuk Odoo E-45: { state: "authorized", amount }. Tanpa state "authorized" = TIDAK diotorisasi (tanpa default true).
+    const ctx = setup([
+      ok({ state: 'authorized', amount: 12_000 }),
+      ok({}),
+      ok({ state: 'authorized', authorized: false }),
+      ok({ state: 'authorized', amount: 1.5 }),
+    ]);
+    const input = { idempotency_key: 'online:counter_refund_auth:r1', refund_id: 'r1', refund_ref: null, amount: 12_000 };
+    expect(await ctx.client.counterRefundAuthorize('GL', 'p1', input)).toEqual({ authorized: true, state: 'authorized', amount: 12_000 });
+    expect(ctx.calls[0]).toMatchObject({
+      path: 'efn.online.order/efn_online_counter_refund_authorize',
+      body: { channel_code: 'GL', platform_order_ref: 'p1', authorization: input, context: { lang: 'id_ID' } },
+      headers: { Authorization: `bearer ${GL_KEY}` },
+    });
+    expect(await ctx.client.counterRefundAuthorize('GL', 'p1', input)).toEqual({ authorized: false, state: null, amount: null });
+    expect((await ctx.client.counterRefundAuthorize('GL', 'p1', input)).authorized).toBe(false);
+    await expect(ctx.client.counterRefundAuthorize('GL', 'p1', input)).rejects.toMatchObject({ kind: 'invalid_response' });
+  });
+
+  it('place mengirim order.payment_mode + order.counter_code (L-56) HANYA untuk counter (payload QRIS pra-G20 tidak berubah)', async () => {
+    const ctx = setup([ok(place), ok(place)]);
+    const order = {
+      idempotency_key: 'online:place:p', platform_order_ref: 'p', checkout_ref: 'o', outlet_code: 'TOKO-01', fulfilment: 'pickup' as const,
+      lines: [{ product_id: 11, qty: 1 }], quote_hash: 'h1', pickup_code: 'ABCDEFGH', promo_codes: [],
+    };
+    await ctx.client.place('GL', { ...order, payment_mode: 'counter', counter_code: 'HGFEDCBA' });
+    expect((ctx.calls[0].body as { order: Record<string, unknown> }).order).toMatchObject({ payment_mode: 'counter', counter_code: 'HGFEDCBA' });
+    await ctx.client.place('GL', order);
+    const qris = (ctx.calls[1].body as { order: Record<string, unknown> }).order;
+    expect('payment_mode' in qris).toBe(false);
+    expect('counter_code' in qris).toBe(false);
   });
 });

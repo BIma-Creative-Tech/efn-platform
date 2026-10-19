@@ -4,8 +4,12 @@ import { DB, Db, Queryable } from '../common/db/db';
 import { PII_AAD, PiiCipher } from '../common/pii/crypto';
 import { isMemberHash, memberHash } from '../common/pii/pii';
 
-/** Kode PT (kontrak §1). */
-export const COMPANY_CODES = ['EFN', 'RTL', 'FNB', 'FARM'] as const;
+/**
+ * Kode PT (docs/04 §12.1, W-32/L-48, ADR-001 revisi 6 entitas): Holding `EFN`, PT Grand Lucky `GL` (dulu `RTL`),
+ * PT Paris Baguette `PB` (dulu `FNB`), Bacha Coffee Retail `BCR`, Bacha Coffee F&B `BCF`, `FARM`. Kode lama `RTL`/`FNB`
+ * DIHAPUS (tidak ada alias) — CHECK PostgreSQL ikut diganti di `infra/postgres/init/09-platform-g20.sql`.
+ */
+export const COMPANY_CODES = ['EFN', 'GL', 'PB', 'BCR', 'BCF', 'FARM'] as const;
 export type CompanyCode = (typeof COMPANY_CODES)[number];
 
 export function isCompanyCode(v: unknown): v is CompanyCode {

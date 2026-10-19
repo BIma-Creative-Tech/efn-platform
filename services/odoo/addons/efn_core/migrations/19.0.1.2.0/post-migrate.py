@@ -12,7 +12,16 @@
 OLD_DEFAULT = "http://api-gateway:3000"
 NEW_DEFAULT = "https://api-gateway:3000"
 
-BRAND_TO_BUSINESS_TYPE = {"EFN": "holding", "RTL": "retail", "FNB": "fnb", "FARM": "farm"}
+# G20 (docs/04 §12.1): kode mengikuti Selection terkini. Migrasi ini hanya berjalan dari versi < 19.0.1.2.0 (DB lama
+# sudah dibuat ulang; tidak ada produksi), sehingga kode lama tidak perlu dipetakan di sini.
+BRAND_TO_BUSINESS_TYPE = {
+    "EFN": "holding",
+    "GL": "retail",
+    "PB": "fnb",
+    "BCR": "retail",
+    "BCF": "fnb",
+    "FARM": "farm",
+}
 
 
 def migrate(cr, version):

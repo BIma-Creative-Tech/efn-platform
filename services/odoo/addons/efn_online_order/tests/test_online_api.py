@@ -128,8 +128,10 @@ class TestEfnOnlineCatalog(EfnOnlineCommon):
                 "sequence",
                 "prices",
                 "max_qty",
+                "weight_kg",  # G20 W-33 (docs/04 §12.3), nullable
             },
         )
+        self.assertIsNone(item["weight_kg"])  # produk fixture tanpa berat
         self.assertNotIn("standard_price", json.dumps(catalog))
         price = item["prices"][0]
         self.assertIsNone(price["outlet_code"])
@@ -155,7 +157,10 @@ class TestEfnOnlineCatalog(EfnOnlineCommon):
         )
         catalog = self.channel_api().efn_online_catalog("TST")
         block = catalog["channel"]
-        self.assertEqual(set(block), {"code", "name", "brand_code", "company_code", "currency", "outlets"})
+        self.assertEqual(
+            set(block), {"code", "name", "brand_code", "company_code", "currency", "payment_modes", "outlets"}
+        )
+        self.assertEqual(block["payment_modes"], ["qris"])  # G20 E-45: default kanal
         self.assertEqual(block["code"], "TST")
         self.assertIsNone(block["brand_code"])  # G19 E-37a: kosong -> null
         self.assertEqual(block["name"], "Kanal TST")

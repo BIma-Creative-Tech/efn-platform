@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { AppConfig } from '../config/app-config';
 import { ApiError, Errors } from '../common/errors/api-error';
@@ -12,9 +12,17 @@ import { OnlineErrors, mapOdooError } from '../odoo-rpc/online-errors';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
 import { PaymentStatus } from '../payments/payment-gateway';
 import { ONLINE_PAYMENTS, OnlineIntent, OnlinePaymentsPort } from '../payments/online-payments';
-import { OrderRow, OrderStatus, PartRow, unpaidClosedMessage } from './online.model';
+import { OrderRow, OrderStatus, PartRow, PaymentMethod, UNPAID_OPEN, unpaidClosedMessage } from './online.model';
 import { ONLINE_REPO, OnlineRepo } from './online.repository';
-import { decryptPickupCode, encryptPickupCode, formatPickupCode, generatePickupCode } from './pickup-code';
+import { OnlineSagaService } from './online-saga.service';
+import {
+  decryptCounterCode,
+  decryptPickupCode,
+  encryptCounterCode,
+  encryptPickupCode,
+  formatPickupCode,
+  generatePickupCode,
+} from './pickup-code';
 
 /** L-8 (§10.17): key opak dari route handler Next.js (`chk1_…`, 48 karakter); BFF hanya memeriksa bentuk. */
 export const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9_-]{16,128}$/;
@@ -28,6 +36,26 @@ export const ODOO_EXPIRY_MARGIN_MS = 5 * 60_000;
 export interface CheckoutInput {
   quoteId: string;
   acceptTotal: number;
+  /** G20 §12.2 no. 2: default `qris`. */
+  paymentMethod?: PaymentMethod;
+}
+
+/** QRIS (gateway) — bentuk pra-G20, tidak berubah. */
+export interface QrisPaymentView {
+  method: 'qris';
+  status: PaymentStatus | 'none';
+  qr_string?: string;
+  expires_at: string | null;
+}
+/**
+ * G20 §12.2 no. 4 / L-52: bayar di kasir — PERSIS `{ method, counter_code, expires_at }` selama order
+ * `awaiting_counter_payment`; status lain `{ method, expires_at }` (tanpa `counter_code`). `counter_code` tampil
+ * `ABCD-EFGH` (kode BAYAR, bukan kode ambil).
+ */
+export interface CounterPaymentView {
+  method: 'counter';
+  counter_code?: string;
+  expires_at: string;
 }
 
 export interface OrderView {
@@ -38,7 +66,7 @@ export interface OrderView {
   paid_at: string | null;
   amount_payable: number;
   currency: 'IDR';
-  payment: { method: 'qris'; status: PaymentStatus | 'none'; qr_string?: string; expires_at: string | null };
+  payment: QrisPaymentView | CounterPaymentView;
   parts: {
     channel_code: string;
     company_code: string;
@@ -66,11 +94,21 @@ const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);
  */
 export function customerStatus(order: OrderRow, parts: readonly PartRow[]): OrderStatus {
   if ((order.status === 'paid' || order.status === 'fulfilling') && parts.some((p) => p.status === 'review')) return 'review';
+  // L-57: pesanan counter yang dilunasi di kasir setelah batal/kedaluwarsa → "sedang diperiksa" (status DB tetap ditutup)
+  if (order.payment_method === 'counter' && (order.status === 'cancelled' || order.status === 'expired' || order.status === 'failed') && parts.some((p) => p.status === 'review')) {
+    return 'review';
+  }
   return order.status;
 }
 
+/**
+ * Sidik body checkout untuk idempotensi. G20: `payment_method` ikut HANYA bila `counter` (sidik order QRIS sama dengan
+ * pra-G20) → key sama dengan metode berbeda = `409 idempotency_conflict`.
+ */
 export function requestSha256(input: CheckoutInput): string {
-  return createHash('sha256').update(JSON.stringify({ quote_id: input.quoteId, accept_total: input.acceptTotal }), 'utf8').digest('hex');
+  const body: Record<string, unknown> = { quote_id: input.quoteId, accept_total: input.acceptTotal };
+  if (input.paymentMethod === 'counter') body.payment_method = 'counter';
+  return createHash('sha256').update(JSON.stringify(body), 'utf8').digest('hex');
 }
 
 /** Cursor daftar order (opak): base64url `<created_at iso>|<order_id>`. */
@@ -107,6 +145,8 @@ export class OrdersService {
     private readonly catalog: CatalogService,
     private readonly cipher: PiiCipher,
     private readonly metrics: OnlineMetrics,
+    /** G20: hanya untuk simulasi bayar di kasir (dev, stub Odoo). Opsional agar test lama tetap jalan. */
+    @Optional() private readonly saga: OnlineSagaService | null = null,
   ) {}
 
   // ───────────── checkout ─────────────
@@ -123,17 +163,32 @@ export class OrdersService {
     if (cart.version !== quote.cart_version) throw OnlineErrors.cartChanged();
     if (input.acceptTotal !== quote.amount_payable_total) throw OnlineErrors.priceChanged();
     if (quote.groups.length === 0 || quote.groups.some((g) => g.issues.length > 0)) throw OnlineErrors.cartHasIssues();
+    const method: PaymentMethod = input.paymentMethod ?? 'qris';
+    // G20 §12.2 no. 2: `counter` hanya satu bagian (satu PT, L-50); metode harus diizinkan SETIAP kanal
+    // L-55: metode di luar ONLINE_PAYMENT_METHODS → 422 (gerbang deploy pilot; `counter` tidak butuh provider)
+    if (!this.config.onlinePaymentMethods.includes(method)) throw OnlineErrors.paymentMethodUnavailable();
+    if (method === 'counter' && quote.groups.length > 1) throw OnlineErrors.counterPaymentSinglePartOnly();
+    for (const g of quote.groups) {
+      const ch = await this.catalog.channel(g.channel_code);
+      if (!ch) throw OnlineErrors.itemUnavailable();
+      if (!(ch.payment_modes ?? this.config.onlinePaymentMethods).includes(method)) throw OnlineErrors.paymentMethodUnavailable();
+    }
     for (const g of quote.groups) if (this.odoo.isCircuitOpen(g.channel_code)) throw OnlineErrors.unavailable();
 
     const orderId = randomUUID();
     const expiresAt = new Date(this.now() + this.config.onlinePaymentTimeoutSeconds * 1000);
     const codes = new Map<string, string>();
+    /** L-56: kode bayar dibuat BFF (pola kode ambil) dan disimpan terenkripsi di transaksi yang sama, SEBELUM place. */
+    const counterCodes = new Map<string, string>();
     const created = await this.repo.tx(async (r) => {
       await r.lockMember(memberId);
       const again = await r.findOrderByKey(memberId, key);
       if (again) return again;
       if (await r.hasActiveDelete(memberId)) throw OnlineErrors.accountDeleting();
       if ((await r.countOpenOrders(memberId)) >= this.config.onlineMaxOpenOrdersPerMember) throw OnlineErrors.tooManyOpenOrders();
+      if (method === 'counter' && (await r.countOpenOrders(memberId, 'counter')) >= this.config.onlineMaxOpenCounterOrdersPerMember) {
+        throw OnlineErrors.tooManyOpenCounterOrders();
+      }
       await r.insertOrder({
         id: orderId,
         member_id: memberId,
@@ -143,12 +198,21 @@ export class OrdersService {
         status: 'created',
         amount_payable: quote.amount_payable_total,
         currency: 'IDR',
+        payment_method: method,
         expires_at: expiresAt,
       });
       for (const g of quote.groups) {
         const partId = randomUUID();
         const code = generatePickupCode();
         codes.set(partId, code);
+        let counterCode: string | null = null;
+        if (method === 'counter') {
+          // kode bayar ≠ kode ambil (L-50): ulang sampai berbeda (peluang sama ≈ 1/31^8)
+          let next = generatePickupCode();
+          while (next === code) next = generatePickupCode();
+          counterCode = next;
+          counterCodes.set(partId, next);
+        }
         await r.insertPart({
           id: partId,
           order_id: orderId,
@@ -171,13 +235,14 @@ export class OrdersService {
           amount_payable: g.amount_payable,
           quote_hash: g.quote_hash,
           pickup_code_enc: encryptPickupCode(this.cipher, code, partId),
+          counter_code_enc: counterCode ? encryptCounterCode(this.cipher, counterCode, partId) : null,
         });
       }
       return null;
     });
     if (created) return this.replay(created, sha);
     this.metrics.order('created');
-    return this.place(memberId, orderId, input.quoteId, quote, codes, input.acceptTotal, expiresAt);
+    return this.place(memberId, orderId, input.quoteId, quote, codes, input.acceptTotal, expiresAt, method, counterCodes);
   }
 
   private async replay(order: OrderRow, sha: string): Promise<OrderView> {
@@ -193,6 +258,8 @@ export class OrdersService {
     codes: Map<string, string>,
     acceptTotal: number,
     expiresAt: Date,
+    method: PaymentMethod,
+    counterCodes: Map<string, string>,
   ): Promise<OrderView> {
     const parts = await this.repo.getParts(orderId);
     const results = new Map<string, PlaceResult>();
@@ -200,7 +267,8 @@ export class OrdersService {
     for (const part of parts) {
       const g = quote.groups.find((x) => x.channel_code === part.channel_code);
       const code = codes.get(part.id);
-      if (!g || !code) {
+      const counterCode = counterCodes.get(part.id);
+      if (!g || !code || (method === 'counter' && !counterCode)) {
         failure = OnlineErrors.unavailable();
         break;
       }
@@ -216,6 +284,8 @@ export class OrdersService {
           pickup_code: code,
           // G19 §11.2 no. 5: kode yang TERPAKAI di grup ini menurut quote tersimpan (bukan dari klien)
           promo_codes: [...(g.promo_applied ?? [])],
+          // G20 §12.2 no. 3 + L-56: hanya untuk bayar di kasir (payload QRIS tidak berubah); kode bayar rahasia, tidak di-log
+          ...(method === 'counter' && counterCode ? { payment_mode: 'counter' as const, counter_code: counterCode } : {}),
         });
         results.set(part.id, res);
         await this.repo.updatePart(part.id, {
@@ -232,6 +302,7 @@ export class OrdersService {
       }
     }
     codes.clear();
+    counterCodes.clear();
     if (!failure) {
       const sum = [...results.values()].reduce((s, r) => s + r.amount_payable, 0);
       if (sum !== acceptTotal) {
@@ -247,6 +318,18 @@ export class OrdersService {
           }
         }
       }
+    }
+    if (!failure && method === 'counter') {
+      // G20 §12.2 no. 2: TANPA payment intent — pelanggan membayar di kasir dengan kode bayar
+      await this.repo.tx(async (r) => {
+        if (await r.transitionOrder(orderId, ['created'], 'awaiting_counter_payment')) this.metrics.order('awaiting_counter_payment');
+      });
+      await this.cart.clearIfVersion(memberId, quote.cart_version);
+      await this.quotes.remove(quoteId).catch(() => undefined);
+      const order = await this.repo.getOrder(orderId);
+      if (!order) throw OnlineErrors.unavailable();
+      this.logger.log(`Order online ${orderId} menunggu bayar di kasir (${parts.length} bagian)`);
+      return this.view(order);
     }
     let intent: OnlineIntent | null = null;
     if (!failure) {
@@ -294,6 +377,7 @@ export class OrdersService {
             cancel_reason: 'place_failed',
             cancelled_at: new Date(this.now()),
             pickup_code_enc: null,
+            counter_code_enc: null,
           });
         });
       } catch {
@@ -324,6 +408,7 @@ export class OrdersService {
         status: customerStatus(o, parts.filter((p) => p.order_id === o.id)),
         created_at: o.created_at.toISOString(),
         amount_payable: o.amount_payable,
+        payment_method: o.payment_method, // G20 (aditif): `qris` | `counter`
         parts: parts
           .filter((p) => p.order_id === o.id)
           .map((p) => ({ channel_code: p.channel_code, company_code: p.company_code, status: p.status })),
@@ -345,8 +430,14 @@ export class OrdersService {
     const channels = await this.catalog.channels().catch(() => []);
     const outletName = (ch: string, code: string): string =>
       channels.find((c) => c.channel_code === ch)?.outlets.find((o) => o.outlet_code === code)?.public_name ?? code;
-    const payment: OrderView['payment'] = { method: 'qris', status: intent?.status ?? 'none', expires_at: iso(intent?.expiresAt ?? order.expires_at) };
-    if (order.status === 'awaiting_payment' && intent?.status === 'pending' && intent.qrString) payment.qr_string = intent.qrString;
+    let payment: OrderView['payment'];
+    if (order.payment_method === 'counter') {
+      payment = this.counterPayment(order, parts);
+    } else {
+      const qris: QrisPaymentView = { method: 'qris', status: intent?.status ?? 'none', expires_at: iso(intent?.expiresAt ?? order.expires_at) };
+      if (order.status === 'awaiting_payment' && intent?.status === 'pending' && intent.qrString) qris.qr_string = intent.qrString;
+      payment = qris;
+    }
     return {
       order_id: order.id,
       status: customerStatus(order, parts),
@@ -375,12 +466,31 @@ export class OrdersService {
     };
   }
 
+  /**
+   * L-52 no. 1: `counter_code` didekripsi HANYA saat order `awaiting_counter_payment` (pemanggil `view` selalu sudah
+   * memastikan order milik member: `get`/`checkout`/`simulate`). Gagal dekripsi → kode tidak ditampilkan + anomali
+   * (bukan 500), pelanggan bisa membatalkan dan memesan ulang.
+   */
+  private counterPayment(order: OrderRow, parts: readonly PartRow[]): CounterPaymentView {
+    const out: CounterPaymentView = { method: 'counter', expires_at: order.expires_at.toISOString() };
+    if (order.status !== 'awaiting_counter_payment') return out;
+    const part = parts.find((p) => p.status === 'placed' && p.counter_code_enc);
+    if (!part?.counter_code_enc) return out;
+    try {
+      out.counter_code = formatPickupCode(decryptCounterCode(this.cipher, part.counter_code_enc, part.id));
+    } catch {
+      this.metrics.anomaly('counter_code_unreadable', 'critical', { order_id: order.id, part_id: part.id });
+    }
+    return out;
+  }
+
   // ───────────── batal (pelanggan) ─────────────
   async cancel(memberId: string, orderId: string): Promise<{ status: 'cancelled' }> {
     const order = await this.repo.getOrderOfMember(orderId, memberId);
     if (!order) throw Errors.notFound();
     if (order.status === 'cancelled' && order.close_reason === 'customer') return { status: 'cancelled' };
-    if (order.status !== 'created' && order.status !== 'awaiting_payment') throw OnlineErrors.orderNotCancellable();
+    // G20 L-52 no. 3: `awaiting_counter_payment` boleh dibatalkan (alur batal tanpa refund — belum ada uang masuk)
+    if (!UNPAID_OPEN.includes(order.status)) throw OnlineErrors.orderNotCancellable();
     if (order.payment_intent_id) {
       let st: PaymentStatus;
       try {
@@ -399,9 +509,11 @@ export class OrdersService {
         const intent = await this.payments.getIntent(o.payment_intent_id);
         if (intent?.status === 'paid') return 'paid' as const; // webhook menang
       }
-      if (!(await r.transitionOrder(orderId, ['created', 'awaiting_payment'], 'cancelled', { close_reason: 'customer', closed_at: new Date(this.now()) }))) {
-        return 'paid' as const;
+      if (!(await r.transitionOrder(orderId, UNPAID_OPEN, 'cancelled', { close_reason: 'customer', closed_at: new Date(this.now()) }))) {
+        return 'paid' as const; // termasuk event `paid` bayar di kasir yang menang lebih dulu
       }
+      // Kode bayar tidak lagi berlaku → hapus segera (retensi juga membersihkan)
+      for (const p of await r.getParts(orderId)) if (p.counter_code_enc) await r.updatePart(p.id, { counter_code_enc: null });
       const m = unpaidClosedMessage(orderId, 'customer');
       await r.enqueue(QUEUES.ORDER_UNPAID_CLOSED, { ...m }, m.idempotency_key);
       return 'cancelled' as const;
@@ -440,9 +552,39 @@ export class OrdersService {
   async simulatePayment(memberId: string, orderId: string, status: Exclude<PaymentStatus, 'pending'>): Promise<OrderView> {
     if (this.config.isProductionDeployment) throw Errors.notFound();
     const order = await this.repo.getOrderOfMember(orderId, memberId);
+    if (order?.payment_method === 'counter') return this.simulateCounter(order, status);
     if (!order?.payment_intent_id) throw Errors.notFound();
     await this.payments.simulate(order.payment_intent_id, status);
     const fresh = await this.repo.getOrder(orderId);
+    if (!fresh) throw Errors.notFound();
+    return this.view(fresh);
+  }
+
+  /**
+   * DEV SAJA (G20): bayar di kasir hanya bisa disimulasikan dengan stub Odoo (`ODOO_ONLINE_MOCK`, fail-closed di
+   * staging/production) — meniru sync POS (`payAtCounter`) + event `paid` (`method: counter`). Odoo sungguhan → 404
+   * (pelunasan nyata hanya lewat POS). Hanya `status: "paid"`; kedaluwarsa = job BFF biasa.
+   */
+  private async simulateCounter(order: OrderRow, status: Exclude<PaymentStatus, 'pending'>): Promise<OrderView> {
+    const stub = this.odoo as unknown as { payAtCounter?: (ref: string) => { state: string; seq: number } };
+    if (!this.saga || typeof stub.payAtCounter !== 'function') throw Errors.notFound();
+    if (status !== 'paid') throw Errors.invalidRequest();
+    if (order.status !== 'awaiting_counter_payment') throw OnlineErrors.invalidState();
+    for (const part of (await this.repo.getParts(order.id)).filter((p) => p.status === 'placed')) {
+      let res: { state: string; seq: number };
+      try {
+        res = stub.payAtCounter(part.id);
+      } catch {
+        throw OnlineErrors.invalidState();
+      }
+      const saga = this.saga;
+      await this.repo.tx(async (r) => {
+        const o = await r.getOrder(order.id, true);
+        const p = await r.getPart(part.id, true);
+        if (o && p) await saga.applyCounterPaid(r, o, p, { source: 'bff', odooState: res.state, seq: res.seq, paidAt: null });
+      });
+    }
+    const fresh = await this.repo.getOrder(order.id);
     if (!fresh) throw Errors.notFound();
     return this.view(fresh);
   }

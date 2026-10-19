@@ -9,6 +9,7 @@ import { ServiceKeyGuard } from '../common/security/service-key.guard';
 import { asRecord, isUuid } from '../common/validation';
 import { assertBodySize, limitByMember, noStore, requireOnline } from '../catalog/online-http';
 import { PaymentStatus } from '../payments/payment-gateway';
+import { isPaymentMethod } from './online.model';
 import { OnlineEventHmacGuard } from './order-events.guard';
 import { EventOutcome, OrderEventsService, parseOdooEvent } from './order-events.service';
 import { CheckoutInput, OrderView, OrdersService } from './orders.service';
@@ -19,13 +20,16 @@ function orderIdParam(id: string): string {
   return id.toLowerCase();
 }
 
+/** G20 §12.2 no. 2: `payment_method` opsional `qris` (default) | `counter`; nilai lain (termasuk null/huruf besar) → 400. */
 export function parseCheckout(body: unknown): CheckoutInput {
   const o = asRecord(body);
-  if (Object.keys(o).some((k) => k !== 'quote_id' && k !== 'accept_total')) throw Errors.invalidRequest();
+  if (Object.keys(o).some((k) => k !== 'quote_id' && k !== 'accept_total' && k !== 'payment_method')) throw Errors.invalidRequest();
   if (!isUuid(o.quote_id)) throw Errors.invalidRequest();
   const t = o.accept_total;
   if (typeof t !== 'number' || !Number.isSafeInteger(t) || t <= 0) throw Errors.invalidRequest();
-  return { quoteId: o.quote_id.toLowerCase(), acceptTotal: t };
+  const pm = o.payment_method === undefined ? 'qris' : o.payment_method;
+  if (!isPaymentMethod(pm)) throw Errors.invalidRequest();
+  return { quoteId: o.quote_id.toLowerCase(), acceptTotal: t, paymentMethod: pm };
 }
 
 /** Order pelanggan (docs/04 §10.3.5–10.3.6, §10.7): Bearer member, `no-store`, rate limit per member, kill switch. */

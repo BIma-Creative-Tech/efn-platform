@@ -41,11 +41,11 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         cls.config = cls.basic_config
         cls.config.write({"efn_loyalty_earn_enabled": True, "efn_loyalty_redeem_enabled": True})
         company = cls.config.company_id
-        cls.env["res.company"].search([("efn_brand_code", "=", "RTL"), ("id", "!=", company.id)]).write(
+        cls.env["res.company"].search([("efn_brand_code", "=", "GL"), ("id", "!=", company.id)]).write(
             {"efn_brand_code": False}
         )
         cls.env["res.company"].flush_model(["efn_brand_code"])
-        company.write({"efn_brand_code": "RTL"})
+        company.write({"efn_brand_code": "GL"})
         cls.env["ir.config_parameter"].sudo().set_param("efn.pos.otp_required_for_promo", "True")
 
         Partner = cls.env["res.partner"]
@@ -93,6 +93,8 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         # Default §9.1 kosong -> batas % dari fallback ir.config_parameter (SEC-62).
         self.responses = {PARAMS: BffResponse(200, {})}
         self.env["ir.config_parameter"].sudo().set_param("efn.pos.loyalty.redeem_max_pct_fallback", "50")
+        # E-41 (G20): default retur tanpa struk = manager_approval; test poin di sini menguji earn, bukan persetujuan.
+        self.env["ir.config_parameter"].sudo().set_param("efn.pos.refund.unlinked_return_mode", "cash")
         loyalty_pos_config._BALANCE_CALLS.clear()
         loyalty_pos_config._PARAMS_CACHE.clear()
         client_cls = self.env.registry["efn.bff.client"]
@@ -220,7 +222,7 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
                     "idempotency_key": f"pos_earn:{order.uuid}",
                     "order_ref": order.uuid,
                     "member_ref": MEMBER_A,
-                    "company_code": "RTL",
+                    "company_code": "GL",
                     "eligible_amount": 110000,
                     "pos_config_id": self.config.id,
                 }
@@ -1076,7 +1078,7 @@ class TestEfnPosLoyaltyLedger(TestPoSCommon):
         )
         self.assertEqual(
             self._calls_to(BALANCE),
-            [{"member_ref": MEMBER_A, "pos_config_id": self.config.id, "company_code": "RTL"}],
+            [{"member_ref": MEMBER_A, "pos_config_id": self.config.id, "company_code": "GL"}],
         )
 
     def test_balance_rate_limited_per_session(self):

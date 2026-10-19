@@ -4,9 +4,9 @@ Dasar: docs/04 §10.4.1 & §10.10, ADR-034 (Proposed), ADR-024 (rotasi dua kunci
 #33 (**key 30 hari + rotasi otomatis**, paket **W-11**), risiko **R-T15** (API key kanal online kedaluwarsa →
 checkout berhenti). Audiens: on-call IT EFN + Superadmin.
 
-> **Ringkasan manajemen.** Super-App berbicara dengan Odoo memakai satu "kunci API" per **kanal** (sejak G19: satu
-> kanal per brand — Grand Lucky `RTL-GL`, Bacha butik `RTL-BACHA`, Paris Baguette `FNB-PB`, Bacha kafe `FNB-BACHA`;
-> kanal `RTL` untuk dev/uji). Kunci berlaku **30 hari** dan diganti **otomatis** oleh server setiap hari ke-20 untuk
+> **Ringkasan manajemen.** Super-App berbicara dengan Odoo memakai satu "kunci API" per **kanal** (sejak G20: satu
+> kanal per PT dengan kode PT — Grand Lucky `GL`, Paris Baguette `PB`, Bacha Coffee Retail `BCR`, Bacha Coffee F&B
+> `BCF`; kode lama `RTL`/`FNB` dan kanal G19 `RTL-GL`, `RTL-BACHA`, `FNB-PB`, `FNB-BACHA` dihapus). Kunci berlaku **30 hari** dan diganti **otomatis** oleh server setiap hari ke-20 untuk
 > semua kanal yang terdaftar (tanpa downtime; BFF di-restart beberapa detik pada 03:15 WIB). Kunci lama dicabut 1 jam
 > setelah kunci baru terbukti bekerja. Bila penggantian satu kanal gagal, kanal lain tetap diproses, kunci lama kanal itu
 > tetap dipakai dan alert muncul **untuk kanal itu**; masih ada ±10 hari untuk memperbaiki sebelum pembayaran online
@@ -22,25 +22,28 @@ checkout berhenti). Audiens: on-call IT EFN + Superadmin.
   `efn_online_order.group_online_channel` = **35 hari** (`efn_setup_online`, W-11: 30 hari + margin 5). ⚠ Bila grup
   lain milik user teknis (mis. `base.group_user`) punya durasi lebih besar, batas efektifnya ikut lebih besar — jangan
   beri durasi di grup umum. Membuat key lewat `sudo()`/admin **melewati** batas ini — skrip selalu `with_user(<user teknis>)`.
-- Satu key = satu user teknis = **satu kanal** (G19, docs/04 §11.3). Pemetaan kode kanal → nama: huruf kecil, `-` → `_`:
+- Satu key = satu user teknis = **satu kanal** (L-37). G20 (docs/04 §12.1, L-48): kode kanal = kode PT; pemetaan
+  kode → nama = huruf kecil. Hanya empat kode ini yang diterima (`EFN_ONLINE_CHANNEL_CODES` di
+  `scripts/lib/deploy-validate.sh`, `ALLOWED_CHANNELS` di `efn-rotate-online-key`, cek `check-encryption.sh`):
 
-  | Kanal | User teknis | Secret Docker | Env BFF | Overlay compose |
+  | Kanal (= PT) | User teknis | Secret Docker | Env BFF | Overlay compose |
   |---|---|---|---|---|
-  | `RTL` | `efn_online_rtl` | `odoo_api_key_online_rtl` | `ODOO_API_KEY_ONLINE_RTL_FILE` | (base) |
-  | `RTL-GL` | `efn_online_rtl_gl` | `odoo_api_key_online_rtl_gl` | `ODOO_API_KEY_ONLINE_RTL_GL_FILE` | `docker-compose.online-rtl-gl.yml` |
-  | `RTL-BACHA` | `efn_online_rtl_bacha` | `odoo_api_key_online_rtl_bacha` | `ODOO_API_KEY_ONLINE_RTL_BACHA_FILE` | `docker-compose.online-rtl-bacha.yml` |
-  | `FNB-PB` | `efn_online_fnb_pb` | `odoo_api_key_online_fnb_pb` | `ODOO_API_KEY_ONLINE_FNB_PB_FILE` | `docker-compose.online-fnb-pb.yml` |
-  | `FNB-BACHA` | `efn_online_fnb_bacha` | `odoo_api_key_online_fnb_bacha` | `ODOO_API_KEY_ONLINE_FNB_BACHA_FILE` | `docker-compose.online-fnb-bacha.yml` |
-  | `FNB` | `efn_online_fnb` | `odoo_api_key_online_fnb` | `ODOO_API_KEY_ONLINE_FNB_FILE` | `docker-compose.online-fnb.yml` |
+  | `GL` (PT Grand Lucky) | `efn_online_gl` | `odoo_api_key_online_gl` | `ODOO_API_KEY_ONLINE_GL_FILE` | (base, kanal default) |
+  | `PB` (PT Paris Baguette) | `efn_online_pb` | `odoo_api_key_online_pb` | `ODOO_API_KEY_ONLINE_PB_FILE` | `docker-compose.online-pb.yml` |
+  | `BCR` (Bacha Coffee Retail) | `efn_online_bcr` | `odoo_api_key_online_bcr` | `ODOO_API_KEY_ONLINE_BCR_FILE` | `docker-compose.online-bcr.yml` |
+  | `BCF` (Bacha Coffee F&B) | `efn_online_bcf` | `odoo_api_key_online_bcf` | `ODOO_API_KEY_ONLINE_BCF_FILE` | `docker-compose.online-bcf.yml` |
+
+  Kode G17/G19 (`RTL`, `FNB`, `RTL-GL`, `RTL-BACHA`, `FNB-PB`, `FNB-BACHA`) **ditolak** deploy dan skrip rotasi;
+  cutover: [§8](#migrasi-g20).
 
   User teknis hanya `base.group_user` + `group_online_channel`, satu company, tanpa ACL dokumen, dan **terhubung ke
   tepat satu kanal** (`efn.online.channel.user_ids`). Skrip menolak bila user tidak ada/nonaktif/bukan anggota grup
   kanal/punya `base.group_system` atau `base.group_erp_manager` (`user_privileged`)/tidak terhubung ke kanal itu
   (`user_not_in_channel`)/**terhubung juga ke kanal lain** (`user_shared`). Alasan `user_shared`: setelah overlap skrip
   mencabut **semua** key lain milik user teknis; bila user itu juga dipakai kanal lain, key kanal lain ikut mati (dan
-  key satu kanal bisa dipakai untuk kanal lain — isolasi per brand hilang). ⚠ Data **demo** `efn_setup_online` G19
-  menghubungkan `RTL-GL`/`RTL-BACHA` ke `efn_online_rtl`: hanya untuk dev, jangan dirotasi otomatis.
-- Secret Docker: lihat tabel. Secret kanal selain `RTL` hanya di-mount bila kanal ada di `ONLINE_CHANNELS` (deploy.sh
+  key satu kanal bisa dipakai untuk kanal lain — isolasi per PT hilang). ⚠ DB dev lama dengan data demo G19
+  (satu user untuk beberapa kanal) tetap `user_shared` sampai DB dibuat ulang ([dev-reset.md](dev-reset.md)).
+- Secret Docker: lihat tabel. Secret kanal selain `GL` hanya di-mount bila kanal ada di `ONLINE_CHANNELS` (deploy.sh
   menyertakan overlay-nya; kanal tanpa overlay → deploy gagal). Sejak G18 secret ini
   berjenis **`host:`** di `scripts/secrets.list`: **dikelola di host**, TIDAK ada di GitHub Environment, tidak dikirim
   `deploy.yml`, ditolak `efn-deploy` dari stdin, dan **tidak ditimpa** `deploy.sh` (file belum ada → placeholder
@@ -61,48 +64,50 @@ install -o root -g root -m 0644 scripts/host/systemd/efn-rotate-online-key.servi
   scripts/host/systemd/efn-rotate-online-key.timer /etc/systemd/system/
 # 2) (opsional) /etc/efn/online-key-rotation.conf root:root 0644 - default: KEY_DAYS=30 ROTATE_BEFORE_DAYS=10
 #    OVERLAP_SECONDS=3600 (lihat header skrip; nilai divalidasi, kunci di luar allowlist ditolak)
-#    G19: CHANNELS=RTL-GL,RTL-BACHA (kanal yang dirotasi timer). Kosong -> ONLINE_CHANNELS dari /opt/efn/compose/.env
-#    (= kanal yang di-deploy; disarankan, satu sumber kebenaran).
+#    G20: CHANNELS=GL,PB (kanal yang dirotasi timer; hanya GL/PB/BCR/BCF). Kosong -> ONLINE_CHANNELS dari
+#    /opt/efn/compose/.env (= kanal yang di-deploy; disarankan, satu sumber kebenaran).
 # 3) key pertama per kanal (menggantikan placeholder; kanal Odoo harus AKTIF - verifikasi memanggil katalog kanal)
-sudo efn-rotate-online-key --channel=RTL-GL          # kanal sudah di ONLINE_CHANNELS (secret di-mount)
-sudo efn-rotate-online-key --channel=RTL-GL --status # id, nama, kedaluwarsa (TANPA nilai key)
+sudo efn-rotate-online-key --channel=GL              # kanal sudah di ONLINE_CHANNELS (secret di-mount)
+sudo efn-rotate-online-key --channel=GL --status     # id, nama, kedaluwarsa (TANPA nilai key)
 # 4) SATU timer harian 03:15 WIB untuk semua kanal
 systemctl daemon-reload && systemctl enable --now efn-rotate-online-key.timer
 # 5) GitHub: hapus secret lama ODOO_API_KEY_ONLINE_<KANAL> dari Environment staging/production (tidak dipakai lagi)
 ```
 
-**Migrasi dari timer per kanal (G18):** `systemctl disable --now efn-rotate-online-key@RTL.timer` **sebelum**
+**Migrasi dari timer per kanal (G18):** `systemctl disable --now efn-rotate-online-key@RTL.timer` (dan instance
+`@<kode lama>` lain) **sebelum**
 `enable --now efn-rotate-online-key.timer`. Jangan menjalankan keduanya untuk kanal yang sama: kunci per kanal membuat
 salah satunya gagal "sedang berjalan" (alert palsu). Unit `@.service/@.timer` tetap ada untuk kebutuhan khusus.
 
-## 1b. Menambah kanal brand baru {#kanal-baru}
+## 1b. Mengaktifkan kanal PT (PB / BCR / BCF) {#kanal-baru}
 
-Urutan (Superadmin + efn-odoo-functional; contoh `FNB-PB`). Prinsip: kunci dibuat dan **terbukti bekerja** sebelum kanal
+Urutan (Superadmin + efn-odoo-functional; contoh `PB`). Prinsip: kunci dibuat dan **terbukti bekerja** sebelum kanal
 masuk `ONLINE_CHANNELS`, karena deploy dengan `ONLINE_ENABLED=true` menolak kanal yang key-nya masih placeholder.
 
-1. **Odoo:** kanal `FNB-PB` lengkap (outlet, pricelist, `payment_timeout_minutes` ≥ 70 bila BFF 3600) dan **aktif**.
-   Kanal aktif di Odoo tetapi belum di `ONLINE_CHANNELS` **tidak terlihat** pelanggan (BFF hanya menampilkan kanal di
-   `ONLINE_CHANNELS`).
-2. **Odoo:** user teknis **khusus** `efn_online_fnb_pb` (Internal User + grup kanal online, company PT F&B saja), lalu
-   isi `user_ids` kanal `FNB-PB` = user itu saja. Jangan memakai ulang user kanal lain (`user_shared`).
-3. **Rilis** berisi overlay `infra/compose/docker-compose.online-fnb-pb.yml` + baris `scripts/secrets.list` sudah
-   ter-deploy (deploy.sh membuat file placeholder `/opt/efn/secrets/odoo_api_key_online_fnb_pb.txt`).
+1. **Odoo:** kanal `PB` lengkap (outlet, pricelist, `payment_timeout_minutes` ≥ 70 bila BFF 3600, `payment_modes`
+   §12.2) dan **aktif**. Kanal aktif di Odoo tetapi belum di `ONLINE_CHANNELS` **tidak terlihat** pelanggan (BFF hanya
+   menampilkan kanal di `ONLINE_CHANNELS`).
+2. **Odoo:** user teknis **khusus** `efn_online_pb` (Internal User + grup kanal online, company PT Paris Baguette saja),
+   lalu isi `user_ids` kanal `PB` = user itu saja. Jangan memakai ulang user kanal lain (`user_shared`).
+3. **Rilis G20+** berisi overlay `infra/compose/docker-compose.online-pb.yml` + baris `scripts/secrets.list` sudah
+   ter-deploy (deploy.sh membuat file placeholder `/opt/efn/secrets/odoo_api_key_online_pb.txt`).
 4. **Host:** key pertama dengan overlay sementara (kanal belum di `ONLINE_CHANNELS`):
    ```bash
-   sudo efn-rotate-online-key --channel=FNB-PB --bootstrap   # hanya bila secret masih 'disabled'
-   sudo efn-rotate-online-key --channel=FNB-PB --status
+   sudo efn-rotate-online-key --channel=PB --bootstrap   # hanya bila secret masih 'disabled'
+   sudo efn-rotate-online-key --channel=PB --status
    ```
    `--bootstrap` me-recreate BFF dengan overlay kanal itu, memverifikasi key (200) di setiap replika, lalu selesai
    seperti rotasi biasa. Deploy berikutnya kembali memakai daftar file deploy (overlay hilang sampai langkah 5).
-5. **Config rilis:** tambah `FNB-PB` ke GitHub variable `ONLINE_CHANNELS` → workflow Deploy (deploy.sh menyertakan
-   overlay; cek key nyata lolos). Timer `--all` merotasi kanal itu otomatis (CHANNELS kosong → dari `.env`; bila
-   `CHANNELS` diisi manual, tambahkan juga di sana).
-6. Verifikasi: `sudo efn-rotate-online-key --all --status`; Grafana/Prometheus `efn_odoo_api_key_expiry_timestamp_seconds{channel="FNB-PB"}`.
+5. **Config rilis:** tambah `PB` ke GitHub variable `ONLINE_CHANNELS` (mis. `GL,PB`) → workflow Deploy (deploy.sh
+   menyertakan overlay; cek key nyata lolos). Timer `--all` merotasi kanal itu otomatis (CHANNELS kosong → dari
+   `.env`; bila `CHANNELS` diisi manual, tambahkan juga di sana).
+6. Verifikasi: `sudo efn-rotate-online-key --all --status`; Grafana/Prometheus `efn_odoo_api_key_expiry_timestamp_seconds{channel="PB"}`.
 
-**Kanal baru di luar tabel di atas** (mis. brand ke-5): butuh perubahan repo dulu — baris `scripts/secrets.list`
-(`host:disabled`), secret top-level `infra/compose/docker-compose.yml`, overlay `docker-compose.online-<kanal>.yml`
-(pola file yang ada), kode kanal di `ONLINE_CHANNELS` (maks 8). CI job `infra` memeriksa secrets.list == compose dan
-least privilege (secret kanal hanya `api-gateway`).
+**PT/kanal baru di luar tabel di atas** (mis. entitas ke-7): butuh perubahan repo dulu — baris `scripts/secrets.list`
+(`host:disabled`), secret top-level `infra/compose/docker-compose.yml`, overlay `docker-compose.online-<kode>.yml`
+(pola file yang ada), kode di `EFN_ONLINE_CHANNEL_CODES` (`scripts/lib/deploy-validate.sh`) **dan** `ALLOWED_CHANNELS`
+(`scripts/host/efn-rotate-online-key`; skrip host dipasang ulang + sha256 di-review), regex `check-encryption.sh` §6.
+CI job `infra` memeriksa secrets.list == compose dan least privilege (secret kanal hanya `api-gateway`).
 
 **Menghentikan kanal:** hapus dari `ONLINE_CHANNELS` (dan `CHANNELS` bila diisi) → Deploy. Cabut key-nya di Odoo
 (§4 butir 4, ganti login) lalu hapus state host `rm /var/lib/efn/online-key/<kanal_kecil>.*` agar alert
@@ -115,9 +120,10 @@ Migrasi dari pemasangan G17 (key manual via `gh secret set`): langkah 3 membuat 
 
 ## 2. Cara kerja rotasi otomatis {#rotasi}
 
-**G19 — semua kanal:** `efn-rotate-online-key.timer` (harian, `Persistent=true`) → `efn-rotate-online-key --all`:
-daftar kanal dari `CHANNELS` (konfigurasi) atau `ONLINE_CHANNELS` deploy; setiap kode divalidasi
-`^[A-Z][A-Z0-9-]{1,15}$` (tanpa `/ . _` spasi → tidak ada path traversal/injeksi nama secret), unik, maks 8. Setiap kanal
+**G19/G20 — semua kanal:** `efn-rotate-online-key.timer` (harian, `Persistent=true`) → `efn-rotate-online-key --all`:
+daftar kanal dari `CHANNELS` (konfigurasi) atau `ONLINE_CHANNELS` deploy (kosong = `GL`); setiap kode divalidasi
+`^[A-Z][A-Z0-9-]{1,15}$` (tanpa `/ . _` spasi → tidak ada path traversal/injeksi nama secret), wajib salah satu
+`GL PB BCR BCF` (G20), unik. Setiap kanal
 dijalankan sebagai **proses anak terpisah, berurutan** (`--channel=<KANAL> --no-wait`): kegagalan satu kanal tidak
 menghentikan kanal lain, kode keluar induk 0 (semua OK) / 1 (≥ 1 kanal gagal) / 3 (≥ 1 ROLLBACK GAGAL). Kanal yang
 dirotasi tidak menunggu overlap sendiri; induk menunggu **sekali** sampai overlap terlama lewat, lalu menjalankan
@@ -151,7 +157,7 @@ Jejak: journald `efn-rotate-online-key` (hanya root, `_UID 0`) → `promtail-jou
 `ROLLBACK OK|GAGAL`, `DICABUT`, `KEY LAMA DITOLAK`, `SELESAI rc=`. **Nilai key tidak pernah dicetak** (stdout/stderr/
 journald/argv); stderr `odoo shell` yang dilog disaring (hex ≥ 32 → `[REDACTED]`).
 
-Rotasi darurat (dugaan kebocoran): `sudo efn-rotate-online-key --channel=RTL --force --overlap-seconds=0`, lalu
+Rotasi darurat (dugaan kebocoran): `sudo efn-rotate-online-key --channel=<GL|PB|BCR|BCF> --force --overlap-seconds=0`, lalu
 perlakukan sebagai insiden ([security-incident.md](security-incident.md)).
 
 ## 3. Metrik & alert (R-T15) {#metrik-masa-berlaku}
@@ -173,7 +179,7 @@ Textfile node-exporter `efn_odoo_api_key.prom` (ditulis setiap run, semua kanal)
 ## 4. Rotasi gagal / timer tidak jalan {#rotasi-gagal}
 
 1. `journalctl -u efn-rotate-online-key --since -2d` (timer `--all`; baris `HASIL --all kanal=<KANAL> ... rc=<n>`)
-   atau `journalctl -u efn-rotate-online-key@RTL` (timer per kanal), atau Loki `service="host-efn-rotate-online-key"`.
+   atau `journalctl -u efn-rotate-online-key@GL` (timer per kanal), atau Loki `service="host-efn-rotate-online-key"`.
 2. Penyebab umum per baris log:
    - `odoo create: ValidationError` → `KEY_DAYS` > `api_key_duration` grup (cek `efn_setup_online` = 35).
    - `odoo list: user_missing|user_inactive|user_not_channel|user_privileged` → perbaiki user teknis (UI/RPC,
@@ -189,10 +195,13 @@ Textfile node-exporter `efn_odoo_api_key.prom` (ditulis setiap run, semua kanal)
    - `tidak sehat` / `timeout menunggu sehat` → `$DC logs api-gateway`.
    - `key lama masih dijawab` → pencabutan belum efektif di worker Odoo: `--status` (key masih terdaftar?), restart
      `odoo` di luar jam ramai, jalankan ulang; bila menetap = temuan keamanan.
-3. Setelah diperbaiki: `sudo efn-rotate-online-key --channel=RTL --force`.
+   - `--channel=<KODE> (salah satu: GL PB BCR BCF)` / `CHANNELS harus kode kanal unik dari ...` / `ONLINE_CHANNELS
+     tidak valid (G20 ...)` → kode lama G17/G19 masih di `/etc/efn/online-key-rotation.conf`, `.env` deploy, atau unit
+     `@<kode lama>.timer`: ikuti [§8](#migrasi-g20).
+3. Setelah diperbaiki: `sudo efn-rotate-online-key --channel=<KODE> --force`.
 4. Key ekstra (`EfnOnlineApiKeyExtraKeys`): run biasa mencabut key lain setelah overlap; key buatan manual di luar
    prosedur = insiden. Cabut manual (break-glass, shell):
-   `env['res.users.apikeys'].search([('user_id.login','=','efn_online_rtl'),('id','!=',<id terpasang>)]).sudo()._remove()`.
+   `env['res.users.apikeys'].search([('user_id.login','=','efn_online_gl'),('id','!=',<id terpasang>)]).sudo()._remove()`.
 
 ## 5. ROLLBACK GAGAL (critical) {#rollback-gagal}
 
@@ -200,7 +209,7 @@ Key baru gagal **dan** key lama tidak bisa dipasang kembali/diverifikasi → che
 
 1. Kill switch bila perlu: `ONLINE_ENABLED=false` (cart/quote/order → 503; order yang sudah dibayar diproses saat
    kanal pulih — saga idempoten).
-2. Pulihkan dependensi (BFF/`odoo-rpc-gateway`/Odoo sehat), lalu `sudo efn-rotate-online-key --channel=RTL --force`.
+2. Pulihkan dependensi (BFF/`odoo-rpc-gateway`/Odoo sehat), lalu `sudo efn-rotate-online-key --channel=<KODE> --force`.
 3. Key baru yang gagal sudah dicabut skrip (baris `DICABUT ... (key baru gagal)`); bila tidak, cabut lewat §4 butir 4.
 
 ## 6. `EfnOnlineOdooAuthFailure` (critical) {#efnonlineodooauthfailure}
@@ -209,15 +218,15 @@ Odoo menjawab 401/403 untuk kanal → key kedaluwarsa, dicabut, user teknis dino
 
 1. `$DC logs --since 30m odoo-rpc-gateway | tail` — status 401 dengan `why=-` = ditolak **Odoo** (bukan filter gateway).
    Penolakan gateway (`why=auth|header|path|…`) → [online-orders.md](online-orders.md#efnodoorpcgatewaydenied).
-2. `sudo efn-rotate-online-key --channel=RTL --status` (id/nama/kedaluwarsa; key terpasang ditandai).
-3. `sudo efn-rotate-online-key --channel=RTL --force`. Selama itu kill switch opsional (§5 butir 1).
+2. `sudo efn-rotate-online-key --channel=<KODE> --status` (id/nama/kedaluwarsa; key terpasang ditandai).
+3. `sudo efn-rotate-online-key --channel=<KODE> --force`. Selama itu kill switch opsional (§5 butir 1).
 4. Bila key dicabut tanpa perubahan terencana → perlakukan sebagai insiden ([security-incident.md](security-incident.md)).
 
 ## 7. Dev / uji
 
 - Dev: `scripts/smoke/run-e2e-smoke.sh` langkah setup membuat key dev (skrip smoke) — tidak memakai timer.
-- Uji regresi skrip (docker/Odoo/BFF palsu, 84 kasus termasuk G19 kanal berhifen/`--all`/`--bootstrap` dan blok
-  Python `odoo shell` terhadap env Odoo palsu, CI job infra):
+- Uji regresi skrip (docker/Odoo/BFF palsu, 90 kasus termasuk G19 `--all`/`--bootstrap`, G20 allowlist kanal
+  `GL/PB/BCR/BCF` + penolakan kode lama, dan blok Python `odoo shell` terhadap env Odoo palsu, CI job infra):
   `docker run --rm -v "$PWD:/src:ro" python:3.12-bookworm@sha256:e91fec3d… bash /src/scripts/host/test-efn-rotate-online-key.sh`.
 - Uji nyata stack dev (Docker Desktop, 10 Okt 2026): skrip dijalankan di container `docker:27-cli` (socket Docker +
   repo di-mount pada `/run/desktop/mnt/host/e/...` agar path bind compose valid), `/etc/efn/online-key-rotation.conf`
@@ -225,15 +234,46 @@ Odoo menjawab 401/403 untuk kanal → key kedaluwarsa, dicabut, user teknis dino
   `SECRET_GROUP=root`, `OVERLAP_SECONDS=20`, env `COMPOSE_PROFILES`. Hasil: `--status` → rotasi (key 1 → key 2, kedua
   verifikasi 200, key 1 dicabut, 401 terbukti) → run kedua "TIDAK PERLU" → metrik lengkap.
 
+## 8. Cutover kode kanal G20 (RTL/FNB/G19 → GL/PB/BCR/BCF) {#migrasi-g20}
+
+Dasar: docs/04 §12.1 (L-48): belum ada produksi, **tidak ada migrasi data** — DB dev/CI dibuat ulang. Key lama tidak
+dipindahkan ke nama baru (user teknis lama `efn_online_rtl*`/`efn_online_fnb*` tidak dipakai lagi).
+
+**Repo (sekali, PR G20):** `git rm infra/compose/docker-compose.online-{fnb,rtl-gl,rtl-bacha,fnb-pb,fnb-bacha}.yml`
+(isi sudah dinetralkan `services: {}` sebagai pengaman bila belum terhapus).
+
+**Dev (laptop):**
+1. `bash scripts/gen-secrets.sh` → membuat `secrets/odoo_api_key_online_{gl,pb,bcr,bcf}.txt` (`disabled`) dan
+   `secrets/odoo_pii_name_key.txt` (32 byte acak, G20 E-38a). File lama `secrets/odoo_api_key_online_{rtl,fnb,rtl_gl,
+   rtl_bacha,fnb_pb,fnb_bacha}.txt` tidak lagi direferensikan compose → hapus manual (`rm`), isinya key dev saja.
+2. Reset DB dev ([dev-reset.md](dev-reset.md)), install modul G20, jalankan `scripts/smoke/run-e2e-smoke.sh o`
+   (langkah `setup` membuat kanal `GL` + user `efn_online_gl`), lalu pasang key nyata ke
+   `secrets/odoo_api_key_online_gl.txt` (§1 runbook ini) dan `up -d --force-recreate api-gateway`.
+3. `.env` lokal: `ONLINE_CHANNELS` lama (`RTL`, `RTL-GL`, …) **harus** diganti/dihapus (default `GL`).
+
+**Staging/host (bila sudah ada):**
+1. GitHub variable `ONLINE_CHANNELS` → `GL` (atau daftar kode G20); nilai lama → deploy **gagal** di validasi
+   (`ONLINE_CHANNELS: kanal RTL tidak dikenal`), tidak ada fallback diam-diam.
+2. `/etc/efn/online-key-rotation.conf`: `CHANNELS=` lama → kode G20 atau kosongkan. Unit per kanal lama:
+   `systemctl disable --now 'efn-rotate-online-key@RTL.timer'` (dst.).
+3. Deploy G20 (deploy.sh membuat placeholder `odoo_api_key_online_{gl,pb,bcr,bcf}.txt`; file lama di
+   `/opt/efn/secrets` tidak lagi di-mount → hapus: `shred -u /opt/efn/secrets/odoo_api_key_online_{rtl,fnb,rtl_gl,rtl_bacha,fnb_pb,fnb_bacha}.txt`).
+4. State/metrik kanal lama: `rm /var/lib/efn/online-key/{rtl,fnb,rtl_gl,rtl_bacha,fnb_pb,fnb_bacha}.*` lalu
+   `sudo efn-rotate-online-key --all --status` (menulis ulang `efn_odoo_api_key.prom` → alert
+   `EfnOnlineApiKeyRotationNotRunning{channel="RTL"}` dkk. padam).
+5. Odoo: cabut key user teknis lama (§4 butir 4, login lama) dan nonaktifkan user itu; buat kanal + user G20 (§1b),
+   key pertama `sudo efn-rotate-online-key --channel=GL` (atau `--bootstrap` untuk PB/BCR/BCF).
+6. Verifikasi: `sudo efn-rotate-online-key --all --status` hanya menampilkan kode G20; Prometheus
+   `count by (channel) (efn_odoo_api_key_expiry_timestamp_seconds)` tidak memuat kode lama.
+
 ## Batas / belum
 
 - Recreate BFF (2 replika prod) bersamaan → permintaan online bisa 503 beberapa detik pada 03:15 WIB (rolling restart
   belum; compose tidak mendukung tanpa orchestrator).
 - G19 `--all`, `--bootstrap`, pemeriksaan `user_shared` belum diuji terhadap Odoo/BFF sungguhan (uji palsu + blok
-  Python dijalankan terhadap env Odoo palsu). Data demo `efn_setup_online` kini sudah satu user teknis per kanal
-  (L-37), jadi uji nyata `RTL-GL` dll. hanya butuh kanal diaktifkan + outlet/SKU; **DB dev lama** (demo noupdate,
-  `efn_online_rtl` di 3 kanal) masih `user_shared` sampai DB dibuat ulang atau user dilepas manual (README modul).
-  Kanal nonaktif tidak bisa diverifikasi (lihat butir berikut). Kanal `FNB` demo tidak punya user teknis.
+  Python dijalankan terhadap env Odoo palsu). Uji nyata kanal G20 `PB`/`BCR`/`BCF` butuh data Odoo G20 (kanal + user
+  teknis `efn_online_<kode>`, builder Odoo) + kanal diaktifkan + outlet/SKU. Kanal nonaktif tidak bisa diverifikasi
+  (lihat butir berikut).
 - Verifikasi memanggil katalog kanal → kanal Odoo **nonaktif** tidak bisa diberi key (bukan 200). Pra-provisioning key
   untuk kanal nonaktif belum didukung (sengaja: verifikasi ketat 200).
 - Uji nyata rollback (key baru ditolak) hanya di test palsu; jalur sukses sudah diuji nyata di dev.

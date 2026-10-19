@@ -449,3 +449,46 @@ Q-F19-1..Q-F19-6 (`docs/08 §10.10`): PB1 bawa pulang (konsultan pajak), SOP pen
 - Perilaku `sale_loyalty` pada `sale.order.new()` dan nomor SO yang terpakai saat quote berpromo ([B]).
 - Apakah `phone_validation` (sumber `phone_sanitized`) terpasang di DB EFN ([B]).
 - Mekanisme persis mematikan tracking `email`/`phone` di `res.partner` ([B], untuk ADR W-08).
+
+## Gelombang 20 — 2026-10-18 (keputusan pemilik proyek 18 Okt 2026: 18-1, 18-5, 18-6, 18-9..18-11, 18-14..18-16, 18-18, 18-19, 18-23, 18-24, 18-26, 18-27)
+
+Detail: `docs/08_ODOO_FIT_GAP.md` §11. Verifikasi = source odoo/odoo 19.0 via WebFetch (daftar file di §11). Referensi vendor diperiksa: `OCA/server-backend@19.0 base_user_role` (LGPL-3), `OCA/pos@19.0` (tidak ada modul retur/persetujuan), `CybroOdoo/CybroAddons@19.0 pos_refund_password` (AGPL-3) — ide saja. **Tanpa shell → test belum dijalankan.** File arsitek (ADR-036, ADR-001, docs/10) tidak disentuh.
+
+### A. Diterapkan (data-only, belum di-commit)
+| Modul | Versi | Perubahan |
+|---|---|---|
+| `efn_setup_company` | 19.0.1.5.0 → **19.0.1.6.0** | **18-1:** `tax_pb1_non_dine_in_fnb` 10 → **0 %**, nama *PB1 Non-Dine-in 0%*, deskripsi "keputusan pemilik 18 Okt; bisa diubah tanpa kode", FP *F&B Non-Dine-in (tanpa SC, PB1 0%)*; demo `tax_pb1_kota_contoh_fnb` → *PB1 Kota Contoh Non-Dine-in 0% (DEMO)*. **18-6:** `data/account_tax_rounding_data.xml` (baru) `round_globally` eksplisit 4 PT. **18-27:** nama tampilan Holding EFN / PT Grand Lucky / PT Paris Baguette / FARM (xmlid & kode tetap). Test: `test_fnb_service_taxes.py` (ganti `test_non_dine_in_pb1_is_todo_placeholder` → `test_non_dine_in_pb1_zero_and_configurable`; `test_non_dine_in_without_service_charge_nor_pb1` total 100.000; baru `test_non_dine_in_rate_change_needs_no_code`), `test_tax_rounding.py` (baru, 2). README |
+| `efn_setup_pos` | tetap 19.0.1.10.0 | Hanya komentar (manifest, `pos_fnb_service_presets.xml`) + README: baris preset bawa pulang (PB1 0 %), bagian baru **Profil perangkat kasir** (18-23: dual screen, single screen, tablet) |
+| `efn_setup_online` | tetap | Hanya komentar demo (PB1 0 %, rencana kanal Bacha) |
+
+**18-27 tidak diterapkan penuh (berisiko):** `efn_brand_code` adalah Selection `efn_core` + `UNIQUE` dan kontrak `company_code` lintas Odoo/BFF/ETL (`catalog.service.ts:46`, `loyalty.service.ts:8`, `etl/jobs.py:20`) → menambah PT Bacha butuh K-20-1 (lead) + E-43 (engineer) + BFF/ETL dulu. 89 referensi xmlid company di 23 file sudah dipetakan; rencana per file di docs/08 §11.3. Rekomendasi: **jangan** ganti kode RTL/FNB; tambah `BCR`/`BCF`; kanal `BCR-BACHA`/`BCF-BACHA`.
+
+### B. Fit-gap ringkas
+| Butir | Standar vs gap | Estimasi |
+|---|---|---|
+| 18-5 PPN Coretax | `account_tax_python` hanya `min`/`max` (tanpa round) → tidak bisa; Coretax ekspor hanya `out_invoice` PKP → **E-40** jurnal penyesuaian ke akun pembulatan per PT | 1–1,5 mg |
+| 18-9/10/11 poin per PT + akrual | Tidak ada standar (ADR-020) → **E-44** policy per PT (maker ≠ approver) → event ke BFF dengan plafon; RPC akrual harian idempoten | W-29 3–4 mg |
+| 18-14 hangus 12 bln | Job BFF + breakage via E-44; `LOYALTY_POINT_EXPIRY_DAYS` BFF berubah semantik | odoo 1–2 hari; BFF 1–1,5 mg |
+| 18-15 retur tanpa struk | `pos_hr` hanya pengambilalihan PIN di browser; `employee_id` dari klien → **E-41** persetujuan diverifikasi server | 1–1,5 mg |
+| 18-16 berat | `delivery.carrier.max_weight` standar untuk kirim; pickup **E-35b** | 2–3 hari tim |
+| 18-18 bayar di kasir | Kiosk/QR: standar. SO online: `pos_sale` settle ditolak (SEC-105) → **E-45** baris pelunasan + kliring | W-30 3–4 mg |
+| 18-19 kurir internal | `delivery`/`stock_delivery` (tarif/zona) standar; penugasan & status → **E-46** (butuh E-38) | 4,5–5,5 mg |
+| 18-23 perangkat | Standar (layar pelanggan CE, ePOS, tablet) | 0 (README) |
+| 18-24 OC & SoD | `hr.department`/`hr.job` per company standar; tanpa jabatan→grup → `efn_setup_org` (data) + **E-47** opsional | 1–2 hari + 1–1,5 mg |
+| 18-26 portal vendor | Portal `purchase` CE (tanpa unggah tagihan) + field fungsi per vendor di `efn_portal_guard` | +2–3 hari (W-13) |
+
+### Rekomendasi untuk efn-odoo-engineer
+E-40, E-41, E-43, E-44, E-35b, E-45, E-46, E-47 (opsional) — tabel docs/08 §11.12. **Tidak ada yang dihapus**: semua memperluas modul yang ada atau mengisi gap CE; W-30 sengaja tidak membuka `pos_sale` settle.
+
+### Untuk lead
+- **K-20-1:** kode company `BCR`/`BCF` + kode kanal `<company>-<brand>` (kontrak docs/04 §1/§10) — memblokir 18-27 penuh.
+- **L-G20-a:** nilai poin satu (Holding/global) vs per PT — rekomendasi satu nilai; laju & batas per PT.
+- Kontrak §9 (policy poin + akrual) dan §10 (`payment_mode=counter`, kode bayar) untuk W-29/W-30.
+
+### Pertanyaan klien
+Tidak ada yang baru (default configurable). Konfirmasi yang sudah di register: teks syarat hangus (Legal), PB1 bawa pulang per kota (konsultan pajak, R-L09 — risiko diterima), PPN B2C digunggung (konsultan pajak), akun pembulatan/liabilitas/breakage per PT (Finance; PLACEHOLDER).
+
+### Belum / tidak terverifikasi
+- **Test G20 belum dijalankan**; ruff belum. Wajib: suite `--test-tags efn` di DB terpisah + install `--with-demo`.
+- Tampilan grup "PB1 Rp0" di struk/quote non-dine-in ([B], tour POS).
+- Mekanisme pembaruan layar pelanggan lokal vs jarak jauh ([B]); perilaku Coretax untuk `out_refund` ([B]); nama record rule multi-company produk 19.0; parameter `product.weight_in_lbs` 19.0; `OCA/l10n-indonesia` belum diperiksa.

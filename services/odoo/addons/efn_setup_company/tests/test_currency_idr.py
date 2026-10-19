@@ -15,7 +15,7 @@ class TestCurrencyIdr(TransactionCase):
 
     def test_all_efn_companies_use_idr(self):
         idr = self.env.ref("base.IDR")
-        for xmlid in ("company_efn", "company_rtl", "company_fnb", "company_farm"):
+        for xmlid in ("company_efn", "company_rtl", "company_fnb", "company_bcr", "company_bcf", "company_farm"):
             with self.subTest(company=xmlid):
                 self.assertEqual(self.env.ref(f"efn_setup_company.{xmlid}").currency_id, idr)
 

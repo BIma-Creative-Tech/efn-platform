@@ -9,6 +9,7 @@
 #      audit|audit_partner|balance|loy_config|loy_otp_request|loy_otp_verify|loy_reserve|loy_sync|loy_outbox|
 #      loy_partner|loy_balance|loy_release|loy_cancel|loy_token_probe|loy_refund|rpc_users|loy_refund_noreceipt)
 #      G13c: `rpc_users` (SEC-58, user + kasir ber-2FA untuk odoo_rpc_smoke.py), `loy_refund_noreceipt` (SEC-59).
+#      G20: `ret_approval` (E-41, retur tanpa struk + PIN Store Manager).
 #      Langkah `loy_*` (Gelombang 13b, butuh modul efn_pos_loyalty_ledger terpasang di DB dev): urutan
 #      loy_config -> loy_otp_request -> loy_otp_verify (SMOKE_CODE) -> loy_reserve (SMOKE_POINTS) -> loy_sync
 #      -> loy_outbox. Dirangkai di run-e2e-smoke.sh skenario `l` (Gelombang 13, QA).
@@ -83,8 +84,9 @@ def ctx_env():
 
 
 def step_setup():
-    company = env["res.company"].search([("efn_brand_code", "=", "FNB")], limit=1)
-    assert company, "company FNB (efn_setup_company) tidak ada"
+    # G20 (docs/04 §12.1): PT Paris Baguette = kode PB (semula FNB), xmlid efn_setup_company.company_fnb.
+    company = env["res.company"].search([("efn_brand_code", "=", "PB")], limit=1)
+    assert company, "company PB (efn_setup_company) tidak ada"
     admin = env.ref("base.user_admin")
     if company not in admin.company_ids:
         admin.write({"company_ids": [Command.link(company.id)]})
@@ -94,7 +96,7 @@ def step_setup():
     Journal = su["account.journal"]
     cash_j = Journal.search([("type", "=", "cash"), ("company_id", "=", company.id)], limit=1)
     bank_j = Journal.search([("type", "=", "bank"), ("company_id", "=", company.id)], limit=1)
-    assert cash_j and bank_j, "jurnal cash/bank FNB tidak ada (CoA l10n_id?)"
+    assert cash_j and bank_j, "jurnal cash/bank PB tidak ada (CoA l10n_id?)"
 
     PM = su["pos.payment.method"]
     cash_pm = PM.search([("name", "=", f"{PREFIX} Cash"), ("company_id", "=", company.id)], limit=1) or PM.create(
@@ -161,11 +163,11 @@ def step_setup():
         )
 
     Config = su["pos.config"]
-    config = Config.search([("name", "=", f"{PREFIX} POS FNB"), ("company_id", "=", company.id)], limit=1)
+    config = Config.search([("name", "=", f"{PREFIX} POS PB"), ("company_id", "=", company.id)], limit=1)
     if not config:
         config = Config.create(
             {
-                "name": f"{PREFIX} POS FNB",
+                "name": f"{PREFIX} POS PB",
                 "company_id": company.id,
                 "payment_method_ids": [Command.set([cash_pm.id, qris_pm.id, edc_pm.id])],
                 # E-30: redeem aktif saat dibuat -> efn_setup_pos menautkan metode Poin EFN PT (sesi belum buka).
@@ -200,6 +202,10 @@ def step_setup():
             }
         )
     su["ir.config_parameter"].set_param("efn.pos.otp_required_for_promo", "True")
+    # G20 (E-41, docs/04 §12.4): default retur tanpa struk = manager_approval. SEC-59 (`loy_refund_noreceipt`) menguji
+    # loyalty review, bukan persetujuan -> mode "cash" (perilaku G18) selama smoke; `ret_approval` menyalakan
+    # manager_approval sendiri lalu mengembalikan ke "cash".
+    su["ir.config_parameter"].set_param("efn.pos.refund.unlinked_return_mode", "cash")
 
     if not config.current_session_id:
         config.with_user(admin).open_ui()
@@ -820,7 +826,7 @@ RPC_CRED_FILE = "/tmp/efn_smoke_rpc.json"  # noqa: S108 - container dev, 0600, d
 
 
 def step_rpc_users():
-    """User internal biasa + kasir POS (FNB) dengan password & TOTP acak per run (2FA wajib).
+    """User internal biasa + kasir POS (PB) dengan password & TOTP acak per run (2FA wajib).
 
     Kredensial ditulis ke RPC_CRED_FILE (0600) di container Odoo dan TIDAK dicetak; orkestrator mem-pipe file ini
     ke odoo_rpc_smoke.py (stdin) lalu menghapusnya.
@@ -1258,7 +1264,99 @@ def step_g18_rpc_after():
     )
 
 
+# --------------------------------------------------------------------------------------------------------------
+# G20 (E-41, docs/04 §12.4, L-51/L-54): retur tanpa struk dengan persetujuan Store Manager (PIN diverifikasi server).
+# Offline-diblokir hanya terukur di tour/browser (efn_pos_refund_origin tour), bukan di sini.
+def step_ret_approval():
+    import secrets
+
+    from odoo.addons.efn_pos_refund_origin.models.return_pin import hash_pin
+
+    st = load_state()
+    company = env["res.company"].browse(st["company_id"])
+    su = env(su=True)
+    params = su["ir.config_parameter"]
+    params.set_param("efn.pos.refund.unlinked_return_mode", "manager_approval")
+    pos_user, pos_manager = env.ref("point_of_sale.group_pos_user"), env.ref("point_of_sale.group_pos_manager")
+
+    def ensure_user(login, name, group):
+        Users = su["res.users"].with_context(no_reset_password=True, active_test=False)
+        user = Users.search([("login", "=", login)], limit=1)
+        vals = {
+            "name": name,
+            "login": login,
+            "company_id": company.id,
+            "company_ids": [Command.set([company.id])],
+            "group_ids": [Command.set([env.ref("base.group_user").id, group.id])],
+        }
+        if user:
+            user.write({k: v for k, v in vals.items() if k != "login"})
+            return user
+        return Users.create(vals)
+
+    cashier = ensure_user("smoke_ret_cashier", f"{PREFIX} kasir retur", pos_user)
+    mgr = ensure_user("smoke_ret_mgr", f"{PREFIX} Store Manager 1", pos_manager)
+    mgr2 = ensure_user("smoke_ret_mgr2", f"{PREFIX} Store Manager 2", pos_manager)
+    pin = str(secrets.randbelow(900000) + 100000)
+    bad = str((int(pin) + 1) % 900000 + 100000)
+    for manager in (mgr, mgr2):
+        manager.write({"efn_return_pin_hash": hash_pin(su, pin)})
+    su["efn.pos.return.approval"].search(
+        [("approver_user_id", "in", (mgr | mgr2).ids)]
+    ).unlink()  # reset kunci run lama
+    env.cr.commit()
+
+    ce = env(user=cashier, context={"allowed_company_ids": [company.id]})
+    config = ce["pos.config"].browse(st["config_id"])
+    base = os.environ["SMOKE_ORDER_UUID"][:-4]
+    uuids = [f"{base}{i:04d}" for i in range(1, 5)]
+    amount = abs(_taxed_lines(ce, st, -1)[1])
+    res = {}
+
+    def try_sync(uuid, big=False):
+        ln, tt, tx = _taxed_lines(
+            ce, st, -2 if big else -1
+        )  # baris baru tiap sinkron (sync_from_ui dapat mengubah payload)
+        err, msg = _try_sync(ce, _ui(ce, st, uuid, ln, tt, tx, [_pay(st["cash_pm"], tt)], refund=True))
+        return err or ce["pos.order"].search([("uuid", "=", uuid)], limit=1).state
+
+    try:
+        res["sync_without_approval"] = try_sync(uuids[0])
+        r = config.efn_return_approval_request(uuids[1], cashier.id, pin, amount, "uji smoke approver kasir sendiri")
+        res["self_approver"] = r.get("error_code")
+        r = config.efn_return_approval_request(uuids[1], mgr.id, bad, amount, "uji smoke PIN salah")
+        res["wrong_pin"] = r.get("error_code")
+        r = config.efn_return_approval_request(uuids[1], mgr.id, pin, amount, "uji smoke retur tanpa struk")
+        res["approve_ok"] = bool(r.get("ok"))
+        res["approve_keys"] = sorted(r)
+        res["approve_expires_in"] = r.get("expires_in")
+        res["sync_with_approval"] = try_sync(uuids[1])
+        res["sync_other_order_same_approval"] = try_sync(uuids[2])
+        r = config.efn_return_approval_request(uuids[3], mgr.id, pin, amount, "uji smoke nominal terlalu kecil")
+        res["approve_small_ok"] = bool(r.get("ok"))
+        # nominal sync (2 unit) melebihi nominal disetujui (1 unit) -> ditolak
+        res["sync_amount_exceeded"] = try_sync(uuids[3], big=True)
+        locked = [
+            config.efn_return_approval_request(uuids[0], mgr2.id, bad, amount, "uji kunci PIN").get("error_code")
+            for _ in range(5)
+        ]
+        res["lock_sequence"] = locked
+        res["correct_pin_while_locked"] = config.efn_return_approval_request(
+            uuids[0], mgr2.id, pin, amount, "uji kunci PIN benar"
+        ).get("error_code")
+        audit = su["efn.pos.return.approval"].search([("approver_user_id", "in", (mgr | mgr2).ids)])
+        res["audit_states"] = sorted(set(audit.mapped("state")))
+        res["audit_consumed"] = len(audit.filtered(lambda a: a.state == "consumed"))
+        res["audit_has_no_pin"] = not any(pin in str(a.read(["reason", "failure_reason"])) for a in audit)
+        env.cr.commit()
+    finally:
+        params.set_param("efn.pos.refund.unlinked_return_mode", "cash")
+        env.cr.commit()
+    out(ok=True, **res)
+
+
 {
+    "ret_approval": step_ret_approval,
     "g18_tax_order": step_g18_tax_order,
     "g18_tax_redeem": step_g18_tax_redeem,
     "g18_refund_method": step_g18_refund_method,

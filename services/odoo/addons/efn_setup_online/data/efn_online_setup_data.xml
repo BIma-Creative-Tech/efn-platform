@@ -10,25 +10,45 @@
      - "Lock Confirmed Sales" (sale.group_auto_done_setting) TIDAK diaktifkan: action_cancel menolak SO terkunci
        (temuan #36). -->
 <odoo>
+    <!-- G20 W-32 (docs/04 §12.1, L-48): satu partner generik + satu tim per PT yang punya kanal online (GL, PB, BCR, BCF).
+         xmlid _rtl/_fnb dipertahankan (= PT Grand Lucky / PT Paris Baguette, sama dengan xmlid company). -->
     <data noupdate="1">
         <record id="partner_superapp_rtl" model="res.partner">
-            <field name="name">Pelanggan Super-App - PT Retail</field>
+            <field name="name">Pelanggan Super-App - PT Grand Lucky</field>
             <field name="company_id" ref="efn_setup_company.company_rtl"/>
             <field name="is_company" eval="False"/>
         </record>
         <record id="partner_superapp_fnb" model="res.partner">
-            <field name="name">Pelanggan Super-App - PT F&amp;B</field>
+            <field name="name">Pelanggan Super-App - PT Paris Baguette</field>
             <field name="company_id" ref="efn_setup_company.company_fnb"/>
+            <field name="is_company" eval="False"/>
+        </record>
+        <record id="partner_superapp_bcr" model="res.partner">
+            <field name="name">Pelanggan Super-App - Bacha Coffee Retail</field>
+            <field name="company_id" ref="efn_setup_company.company_bcr"/>
+            <field name="is_company" eval="False"/>
+        </record>
+        <record id="partner_superapp_bcf" model="res.partner">
+            <field name="name">Pelanggan Super-App - Bacha Coffee F&amp;B</field>
+            <field name="company_id" ref="efn_setup_company.company_bcf"/>
             <field name="is_company" eval="False"/>
         </record>
 
         <record id="team_superapp_rtl" model="crm.team">
-            <field name="name">Super-App (Retail)</field>
+            <field name="name">Super-App Grand Lucky</field>
             <field name="company_id" ref="efn_setup_company.company_rtl"/>
         </record>
         <record id="team_superapp_fnb" model="crm.team">
-            <field name="name">Super-App (F&amp;B)</field>
+            <field name="name">Super-App Paris Baguette</field>
             <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        </record>
+        <record id="team_superapp_bcr" model="crm.team">
+            <field name="name">Super-App Bacha Coffee (butik)</field>
+            <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        </record>
+        <record id="team_superapp_bcf" model="crm.team">
+            <field name="name">Super-App Bacha Coffee (kafe)</field>
+            <field name="company_id" ref="efn_setup_company.company_bcf"/>
         </record>
     </data>
 

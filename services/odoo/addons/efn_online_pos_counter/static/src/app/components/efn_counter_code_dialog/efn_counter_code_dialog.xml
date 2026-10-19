@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="template" xml:space="preserve">
+    <t t-name="efn_online_pos_counter.EfnCounterCodeDialog">
+        <Dialog title="props.title" size="'md'">
+            <p class="efn-counter-body">
+                Ketik <strong>kode bayar</strong> (8 huruf/angka) dari aplikasi pelanggan. Ini BUKAN kode ambil barang.
+            </p>
+            <div class="mb-3">
+                <label class="form-label" for="efn_counter_code">Kode bayar</label>
+                <input id="efn_counter_code" type="text" autocomplete="off" maxlength="12" spellcheck="false"
+                       class="form-control efn-counter-code text-uppercase" t-model="state.code"/>
+            </div>
+            <div t-if="state.error" class="alert alert-danger efn-counter-error" role="alert" t-esc="state.error"/>
+            <t t-set-slot="footer">
+                <button class="btn btn-primary btn-lg lh-lg efn-counter-submit" t-att-disabled="!canSubmit"
+                        t-on-click="confirm">Cari pesanan</button>
+                <button class="btn btn-secondary btn-lg lh-lg" t-on-click="props.close">Batal</button>
+            </t>
+        </Dialog>
+    </t>
+</templates>

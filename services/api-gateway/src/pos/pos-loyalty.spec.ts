@@ -55,14 +55,14 @@ function setup(overrides: Record<string, string> = {}) {
   sweeper.now = clock.now;
   const hash = memberHash(config.memberHashPepper, MEMBER);
 
-  const earn = (orderRef: string, eligible: number, memberRef = MEMBER, companyCode: 'FNB' | 'RTL' = 'FNB') =>
+  const earn = (orderRef: string, eligible: number, memberRef = MEMBER, companyCode: 'PB' | 'GL' = 'PB') =>
     svc.earn({ idempotencyKey: `pos_earn:${orderRef}`, orderRef, memberRef, companyCode, eligibleAmount: eligible });
   const token = (orderRef: string, opts: { purpose?: 'pos_promo' | 'pos_redeem'; memberRef?: string; amount?: number } = {}) =>
     tokens.issue({
       purpose: opts.purpose ?? 'pos_redeem',
       orderRef,
       memberHash: memberHash(config.memberHashPepper, opts.memberRef ?? MEMBER),
-      companyCode: 'FNB',
+      companyCode: 'PB',
       amount: opts.amount ?? 125_000,
     }).token;
   const reserve = (orderRef: string, points: number, opts: { tok?: string; memberRef?: string; amountTotal?: number } = {}) =>
@@ -166,7 +166,7 @@ describe('PosLoyaltyService — earn (§9.2)', () => {
     const row = ctx.db.ledger[0];
     expect(row).toMatchObject({
       member_ref_hash: ctx.hash,
-      company_code: 'FNB',
+      company_code: 'PB',
       delta_points: 12,
       source: 'pos_earn',
       source_ref: ORDER_A,
@@ -236,7 +236,7 @@ describe('PosLoyaltyService — redeem reserve (§9.3)', () => {
       hold_until: new Date(ctx.clock.now() + 86_400_000).toISOString(),
     });
     const row = ctx.db.reservations.get(res.reservation_id)!;
-    expect(row).toMatchObject({ status: 'reserved', member_hash: ctx.hash, company_code: 'FNB', order_ref: ORDER_A, points: 60 });
+    expect(row).toMatchObject({ status: 'reserved', member_hash: ctx.hash, company_code: 'PB', order_ref: ORDER_A, points: 60 });
     expect(JSON.stringify(row)).not.toContain(MEMBER);
     expect(Object.keys(row)).not.toContain('member_ref_enc');
     expect(ctx.db.ledger).toHaveLength(1); // reserve tidak menulis ledger
@@ -350,12 +350,12 @@ describe('PosLoyaltyService — commit / release (§9.3)', () => {
     const ctx = await reserved();
     expect(await ctx.commit(ctx.r.reservation_id, ORDER_A)).toEqual({ points_redeemed: 60, points_balance: 40 });
     const debit = ctx.db.ledger.find((l) => l.source === 'pos_redeem')!;
-    expect(debit).toMatchObject({ delta_points: -60, company_code: 'FNB', source_ref: ORDER_A, idempotency_key: `pos_redeem:${ORDER_A}` });
+    expect(debit).toMatchObject({ delta_points: -60, company_code: 'PB', source_ref: ORDER_A, idempotency_key: `pos_redeem:${ORDER_A}` });
     expect(ctx.cipher.decrypt(debit.member_ref_enc as Buffer, PII_AAD.LOYALTY_LEDGER_MEMBER_REF)).toBe(MEMBER);
     expect(ctx.db.reservations.get(ctx.r.reservation_id)).toMatchObject({ status: 'committed', commit_idempotency_key: `pos_redeem:${ORDER_A}` });
     const text = await ctx.metrics.render();
-    expect(text).toContain('efn_loyalty_pos_points_total{kind="redeemed",company="FNB"} 60');
-    expect(text).toContain('efn_loyalty_pos_points_total{kind="earned",company="FNB"} 100');
+    expect(text).toContain('efn_loyalty_pos_points_total{kind="redeemed",company="PB"} 60');
+    expect(text).toContain('efn_loyalty_pos_points_total{kind="earned",company="PB"} 100');
   });
 
   it('commit idempoten: retry key sama → hasil sama tanpa entri baru; key lain → idempotency_conflict', async () => {
@@ -467,7 +467,7 @@ describe('PosLoyaltyService — reverse (§9.4)', () => {
     const ctx = await sold();
     expect(await ctx.reverse(REFUND_1, ORDER_A, 1)).toEqual({ points_clawed_back: 25, points_restored: 50, points_balance: 100 });
     const rows = ctx.db.ledger.filter((l) => l.source === 'pos_reverse');
-    expect(rows.every((l) => l.source_ref === ORDER_A && l.company_code === 'FNB')).toBe(true);
+    expect(rows.every((l) => l.source_ref === ORDER_A && l.company_code === 'PB')).toBe(true);
     expect(rows.map((l) => l.reason).sort()).toEqual(['pos_refund_clawback', 'pos_refund_restore']);
   });
 
@@ -580,7 +580,7 @@ describe('OTP purpose pos_redeem end-to-end (PosService → token → reserve / 
 
   async function obtain(ctx: ReturnType<typeof otpSetup>, purpose: 'pos_promo' | 'pos_redeem'): Promise<string> {
     const req = await ctx.pos.requestOtp(
-      parsePosOtpRequest({ member_ref: MEMBER, order_ref: ORDER_A, amount: 125_000, company_code: 'FNB', pos_config_id: 3, purpose }),
+      parsePosOtpRequest({ member_ref: MEMBER, order_ref: ORDER_A, amount: 125_000, company_code: 'PB', pos_config_id: 3, purpose }),
       null,
     );
     const res = await ctx.pos.verifyOtp({ challengeId: req.challenge_id, orderRef: ORDER_A, code: ctx.sender.lastCode() }, null);
@@ -608,7 +608,7 @@ describe('OTP purpose pos_redeem end-to-end (PosService → token → reserve / 
   });
 
   it('DTO OTP request: purpose default pos_promo; purpose tak dikenal → 400', async () => {
-    const base = { member_ref: MEMBER, order_ref: ORDER_A, amount: 1, company_code: 'FNB', pos_config_id: 1 };
+    const base = { member_ref: MEMBER, order_ref: ORDER_A, amount: 1, company_code: 'PB', pos_config_id: 1 };
     expect(parsePosOtpRequest(base).purpose).toBe('pos_promo');
     expect(parsePosOtpRequest({ ...base, purpose: 'pos_redeem' }).purpose).toBe('pos_redeem');
     for (const purpose of ['login', 'dsar', 'redeem', 1]) {
@@ -618,7 +618,7 @@ describe('OTP purpose pos_redeem end-to-end (PosService → token → reserve / 
 });
 
 describe('DTO & controller loyalty POS', () => {
-  const earnBody = { idempotency_key: `pos_earn:${ORDER_A}`, order_ref: ORDER_A, member_ref: MEMBER, company_code: 'FNB', eligible_amount: 125000 };
+  const earnBody = { idempotency_key: `pos_earn:${ORDER_A}`, order_ref: ORDER_A, member_ref: MEMBER, company_code: 'PB', eligible_amount: 125000 };
 
   it('controller dilindungi ServiceKeyGuard', () => {
     expect(Reflect.getMetadata(GUARDS_METADATA, PosLoyaltyController)).toContain(ServiceKeyGuard);
@@ -629,7 +629,7 @@ describe('DTO & controller loyalty POS', () => {
       idempotencyKey: `pos_earn:${ORDER_A}`,
       orderRef: ORDER_A,
       memberRef: MEMBER,
-      companyCode: 'FNB',
+      companyCode: 'PB',
       eligibleAmount: 125000,
       posConfigId: null,
     });
@@ -699,7 +699,7 @@ describe('G18 kontrak §9.9 v6 — poin = alat bayar (K-18-2..K-18-5)', () => {
     const reserveBody = { discount_token: 't', order_ref: ORDER_A, member_ref: MEMBER, points: 10, amount_total: 125_000 };
     expect(parseRedeemReserve(reserveBody).amountTotal).toBe(125_000);
     expect((await catchApiError(() => parseRedeemReserve({ ...reserveBody, amount_total: 125_000.5 }))).getStatus()).toBe(400);
-    const earnBody = { idempotency_key: `pos_earn:${ORDER_A}`, order_ref: ORDER_A, member_ref: MEMBER, company_code: 'FNB', eligible_amount: 44_703.97 };
+    const earnBody = { idempotency_key: `pos_earn:${ORDER_A}`, order_ref: ORDER_A, member_ref: MEMBER, company_code: 'PB', eligible_amount: 44_703.97 };
     expect(parsePosEarn(earnBody).eligibleAmount).toBe(44_703);
     const commitBody = {
       reservation_id: '11111111-2222-4333-8444-555555555555',
@@ -785,7 +785,7 @@ describe('G18 kontrak §9.9 v6 — poin = alat bayar (K-18-2..K-18-5)', () => {
       const restored = ctx.db.ledger.filter((l) => l.reason === 'pos_refund_restore').reduce((s, l) => s + l.delta_points, 0);
       expect(restored).toBe(50);
       // K-18-6: tersimpan persisten untuk rekonsiliasi ETL (bentuk _PLATFORM_RESTORE_ROWS)
-      expect(ctx.db.reverses.get(REFUND_1)).toMatchObject({ original_order_ref: ORDER_A, company_code: 'FNB', points_restored_value: 2550, points_restored: 25 });
+      expect(ctx.db.reverses.get(REFUND_1)).toMatchObject({ original_order_ref: ORDER_A, company_code: 'PB', points_restored_value: 2550, points_restored: 25 });
       expect(ctx.db.reverses.get(REFUND_2)).toMatchObject({ points_restored_value: 2950, points_restored: 25, refund_ratio: 0.5 });
       // retry identik → replay; retry dengan nilai berbeda → 409 idempotency_conflict
       expect((await ctx.reverse(REFUND_1, ORDER_A, 0.5, MEMBER, 2550)).points_restored).toBe(25);
@@ -827,7 +827,7 @@ describe('G18 K-18-8: OTP POS pos_enroll — pernyataan usia 17+ saat kasir mend
     const pos = new PosService(ctx.config, otp, ctx.tokens, limiter, ctx.loyalty, new MemberService(ctx.config, db, ctx.cipher));
     return { ...ctx, sender, pos, members, mdb: db };
   }
-  const body = { member_ref: MEMBER, order_ref: ORDER_A, amount: 0, company_code: 'RTL', pos_config_id: 7, purpose: 'pos_enroll' };
+  const body = { member_ref: MEMBER, order_ref: ORDER_A, amount: 0, company_code: 'GL', pos_config_id: 7, purpose: 'pos_enroll' };
 
   it('tanpa age_confirmed → 400 age_confirmation_required, OTP tidak dikirim; bukan boolean → 400 invalid_request', async () => {
     const ctx = enrollSetup();
