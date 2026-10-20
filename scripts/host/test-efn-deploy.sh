@@ -633,6 +633,13 @@ vc "208 production LOYALTY_EXPIRY_ENABLED=false (default) diterima tanpa izin" 0
 vc "209 staging LOYALTY_EXPIRY_ENABLED=true tanpa izin diterima (gerbang L-73 hanya production)" 0 staging \
   LOYALTY_EXPIRY_ENABLED=true LOYALTY_ACTIVITY_EPOCH=2026-11-01
 vc "210 LOYALTY_EXPIRY_ENABLED=true tanpa LOYALTY_ACTIVITY_EPOCH ditolak (D-22-15)" 1 staging LOYALTY_EXPIRY_ENABLED=true
+# SEC-175: poin QR & redeem poin online butuh izin Superadmin di production
+vc "210a production FNB_QR_POINTS_ENABLED=true tanpa izin ditolak (SEC-175)" 1 production FNB_QR_POINTS_ENABLED=true
+vc "210b production FNB_QR_POINTS_ENABLED=true + izin diterima" 0 production FNB_QR_POINTS_ENABLED=true EFN_ALLOW_FEATURE_ON=FNB_QR_POINTS_ENABLED
+vc "210c production ONLINE_LOYALTY_REDEEM_ENABLED=true tanpa izin ditolak (SEC-175)" 1 production ONLINE_LOYALTY_REDEEM_ENABLED=true
+vc "210d staging FNB_QR_POINTS_ENABLED=true tanpa izin diterima" 0 staging FNB_QR_POINTS_ENABLED=true
+vc "210e FNB_SESSION_RETENTION_DAYS=396 ditolak (SEC-176)" 1 staging FNB_SESSION_RETENTION_DAYS=396
+vc "210f FNB_SESSION_RETENTION_DAYS=395 diterima" 0 staging FNB_SESSION_RETENTION_DAYS=395
 vc "211 LOYALTY_INACTIVE_ANONYMIZE=true tanpa job hangus ditolak" 1 staging LOYALTY_INACTIVE_ANONYMIZE=true
 vc "212 LOYALTY_ACTIVITY_EPOCH bulan 13 ditolak" 1 staging LOYALTY_ACTIVITY_EPOCH=2026-13-01
 vc "213 LOYALTY_ACTIVITY_EPOCH format waktu ditolak" 1 staging LOYALTY_ACTIVITY_EPOCH=2026-11-01T00:00:00Z

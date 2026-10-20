@@ -2396,3 +2396,23 @@ kirim, flag hanya setelah 2xx). Tanpa shell: **test BELUM dijalankan** (lead men
   pada close paid; `OPEN_KEY_RE` n ≤ 99 999 999; replay close dengan body beku identik (L-83).
 - QA: jalankan `--test-tags efn` untuk `efn_pos_bff_order` dengan dan tanpa `efn_pos_loyalty_ledger` (test reverse
   di-skip tanpa ledger).
+
+## G22 r15 re-review — SEC-174 (20 Okt 2026)
+Sumber: `docs/reviews/SECURITY_REVIEW_2026-10-20_r15-rereview.md` SEC-174 (Medium, PLAUSIBLE); kontrak docs/04 §14
+L-80/L-82/L-83. Modul `efn_pos_bff_order` (versi tidak dinaikkan: tanpa perubahan skema/data).
+- `models/pos_config.py` `efn_qr_session_open` (jalur cetak ulang): `carried_orders` = order **draft** sesi lama saja.
+  Bila sesi lama punya order dibayar (`_efn_paid_orders`, tanpa refund) → `current._efn_close("paid")` (outbox
+  `session_closed paid` biasa + snapshot beku L-83, earn ke pengklaim lama; log `EFN_QR_SESSION_REISSUE_PAID`),
+  selain itu `_efn_close("reissued", emit=False)` seperti sebelumnya. Penutupan tetap setelah BFF menjawab 201.
+- `models/efn_pos_table_session.py`: docstring siklus. `README.md`: bagian "Cetak ulang QR (SEC-174)", risiko, test,
+  batasan.
+- Test (`tests/test_qr_session.py`, tag `efn`, tanpa ketergantungan ledger, tanpa `if ledger:`):
+  `test_sec174_reissue_keeps_paid_orders_on_old_session`, `test_sec174_reissue_without_paid_orders_sends_no_close`.
+  **Belum dijalankan** (tanpa shell; lead menjalankan).
+- Tafsiran: `close_reason` sesi lama di Odoo = `paid` (bukan `reissued`) agar outbox, `_efn_pending_close`, dan
+  `_efn_qr_refund_mode` memakai jalur yang sudah ada tanpa cabang baru; jejak cetak ulang ada di log + sesi baru.
+- BFF tidak diubah. Asumsi dari pembacaan kode (`fnb-pos.service.ts:336-344`): close untuk sesi berstatus `closed
+  reissued` diterima, `applyOrder` meng-earn `s.member_id` sesi lama, status tidak diubah. Belum diverifikasi: jalur
+  `earn_pending` reverse BFF untuk sesi yang ditutup `reissued` lalu menerima close `paid` (perlu dicek efn-bff-engineer).
+- Belum ditangani: varian SEC-174 no. 3 (order tertaut dibayar jauh setelah `expired`) dan ralat kontrak §14.A.4
+  syarat 3 ("carried = order draft") di docs/04 — untuk lead/architect.

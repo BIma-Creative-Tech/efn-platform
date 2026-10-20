@@ -1793,8 +1793,10 @@ export class AppConfig {
     return this.int('FNB_JOB_INTERVAL_MS', 60_000, 0, 3_600_000);
   }
   /** A.11 / E.5: retensi baris fnb_* (hari) dan tautan member QR setelah sesi ditutup (hari). */
+  // SEC-176: maks 395 hari (< retensi 400 hari efn.pos.table.session Odoo, L-76; Odoo menghapus per opened_at, BFF per closed_at); lebih lama -> print_no Odoo bisa mulai
+  // ulang dari 1 sementara kunci idempotensi buka sesi lama masih ada di BFF.
   get fnbSessionRetentionDays(): number {
-    return this.int('FNB_SESSION_RETENTION_DAYS', 180, 7, 3650);
+    return this.int('FNB_SESSION_RETENTION_DAYS', 180, 7, 395);
   }
   get fnbSessionMemberLinkDays(): number {
     return this.int('FNB_SESSION_MEMBER_LINK_DAYS', 30, 1, 365);

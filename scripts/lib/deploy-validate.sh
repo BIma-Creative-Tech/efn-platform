@@ -47,7 +47,10 @@ EFN_REMOVED_CONFIG_VARS=(LOYALTY_POINT_EXPIRY_DAYS)
 # G22 (docs/04 §14.7 L-73): fitur yang menunggu persetujuan klien (Legal/DPO/Meta). Di production nilai `true` hanya
 # diterima bila nama variabel dicantumkan Superadmin di EFN_ALLOW_FEATURE_ON (/etc/efn/deploy.conf, dipin host) -
 # manifest rilis bertanda tangan saja TIDAK cukup (pemegang akses CI tidak bisa menyalakan hangus/anonimisasi massal).
-EFN_GATED_FEATURES=(LOYALTY_EXPIRY_ENABLED LOYALTY_INACTIVE_ANONYMIZE LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT)
+# SEC-175 (re-review r15): poin QR (pemblokir SEC-164..166/169/174, L-82 b) dan redeem poin online (SEC-170, G23) juga
+# hanya bisa dinyalakan di production lewat izin Superadmin, bukan variabel CI/manifest saja.
+EFN_GATED_FEATURES=(LOYALTY_EXPIRY_ENABLED LOYALTY_INACTIVE_ANONYMIZE LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT
+  FNB_QR_POINTS_ENABLED ONLINE_LOYALTY_REDEEM_ENABLED)
 # Subset EFN_GATED_FEATURES yang nilai berisikonya `false` (default true = filter perlindungan aktif). SEC-171 (r15):
 # melepas filter consent `marketing` untuk notice hangus = keputusan Legal yang sama jenisnya dengan L-73, jadi memakai
 # izin yang sama (EFN_ALLOW_FEATURE_ON), bukan izin darurat EFN_ALLOW_CONTROL_OFF.
@@ -412,7 +415,7 @@ efn_validate_g22_config() { # app_env
   # Rentang (kontrak §14.A.7/§14.D.8; batas keras Odoo E-27: 30 baris, qty 20 per baris; TTL token maks 4 jam)
   for spec in FNB_TABLE_SESSION_TTL_SECONDS:600:14400 FNB_MAX_SUBMISSIONS_PER_SESSION:1:100 \
               FNB_MAX_ITEMS_PER_SESSION:1:1000 FNB_MAX_LINES:1:30 FNB_MAX_LINE_QTY:1:20 FNB_MENU_SYNC_SECONDS:60:3600 \
-              FNB_SESSION_RETENTION_DAYS:7:730 FNB_SESSION_MEMBER_LINK_DAYS:1:365 \
+              FNB_SESSION_RETENTION_DAYS:7:395 FNB_SESSION_MEMBER_LINK_DAYS:1:365 \
               LOYALTY_INACTIVITY_EXPIRY_MONTHS:6:36 LOYALTY_EXPIRY_NOTICE_DAYS:7:60 LOYALTY_EXPIRY_BATCH_SIZE:1:5000 \
               LOYALTY_EXPIRY_MAX_PER_RUN:1:999999 LOYALTY_EXPIRY_RUN_HOUR_WIB:0:23 LOYALTY_EXPIRY_NOTICE_HOUR_WIB:0:23 \
               LOYALTY_POINT_MAX_AGE_DAYS:0:3650 LOYALTY_INACTIVE_ANONYMIZE_GRACE_DAYS:0:90; do

@@ -355,10 +355,18 @@ class PosConfig(models.Model):
             expires_at = bff_expires
         carried_orders = self.env["pos.order"]
         if current:
-            # Sesi lama dicabut BFF (reissue=true -> close_reason reissued); di Odoo cukup ditandai tanpa event.
-            # Order sesi lama pindah ke sesi baru (tagihan meja tetap satu siklus; L-70).
-            carried_orders = current.order_ids
-            current._efn_close("reissued", emit=False)
+            # SEC-174 (r15 re-review): hanya order DRAFT sesi lama yang dibawa ke sesi baru (tagihan meja yang belum
+            # dibayar tetap satu siklus; L-70). Order yang sudah dibayar/batal TETAP di sesi lama, sehingga poinnya
+            # tidak pernah jatuh ke pengklaim sesi baru.
+            carried_orders = current.order_ids.sudo().filtered(lambda o: o.state == "draft")
+            if current._efn_paid_orders():
+                # Sesi lama punya order dibayar -> tutup `paid` lewat jalur biasa (outbox + snapshot beku L-83): BFF
+                # sudah mencabut sesi itu (`reissued`) tetapi tetap memproses close untuk sesi tertutup dan meng-earn
+                # ke pengklaim LAMA. Tanpa order dibayar -> `reissued` tanpa event (BFF mencabut sendiri).
+                _logger.info("EFN_QR_SESSION_REISSUE_PAID session=%s", current.id)
+                current._efn_close("paid")
+            else:
+                current._efn_close("reissued", emit=False)
             # Index unik parsial "satu sesi open per meja": UPDATE state harus sampai DB sebelum INSERT sesi baru.
             current.flush_recordset()
         table_session = TableSession.create(

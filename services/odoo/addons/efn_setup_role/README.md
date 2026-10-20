@@ -32,9 +32,13 @@ untuk GL, PB, BCR, BCF.
 | Staf Gudang | `stock.group_stock_user` (+ `mrp.group_mrp_user` di PB & BCF = Central Kitchen) | **ya** | |
 | Staf CS | `sales_team.group_sale_salesman_all_leads` | tidak | membaca semua pesanan/pelanggan → penetapan sengaja (UU PDP) |
 | Approver Refund CS | idem + `efn_role.group_refund_approver` (cermin BFF) | tidak (sensitif) | ⟂ Sales Manager (SOD-01) |
-| Sales Manager Online | `sales_team.group_sale_manager`, `stock.group_stock_user` | tidak (sensitif) | stock user: batal SO saat purchase_stock terpasang |
+| Sales Manager Online | `sales_team.group_sale_manager`, `stock.group_stock_user` | tidak (sensitif) | stock user: batal SO saat purchase_stock terpasang [^sec172] |
 | Loyalty Manager | `efn_loyalty_accounting.group_loyalty_manager` | tidak (sensitif) | pembuat kebijakan poin |
 | Auditor Internal | `account.group_account_readonly`, `efn_audit.group_auditor` | tidak | **tanpa** `base.group_allow_export` (SEC-155); ekspor review lewat tombol snapshot |
+
+[^sec172]: **Residu SEC-172 (diterima, L-82 c, R-S16).** `stock.group_stock_user` juga memberi hak membuat dan memvalidasi transfer
+stok di PT itu, bukan hanya membatalkan SO. Alternatif `sudo()` terbatas di `efn_online_order` ditolak. Kompensasi: review
+akses bulanan (`efn_role`) wajib mencakup pemegang peran ini dan transfer stok yang mereka validasi.
 
 **Tidak dibuat:** peran *Kurir* (tanpa user Odoo) dan *Superadmin IT* (peran admin hanya boleh dikelola Superadmin —
 buat lewat UI bila perlu). Penetapan ke orang (`efn.role.line`) **tidak** ada di data (A-5, 18-24).

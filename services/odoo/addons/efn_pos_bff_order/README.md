@@ -20,14 +20,15 @@ mengirim otomatis ke dapur (mode `auto`). Server tidak pernah membuat tiket/menc
   SEC-58 (permukaan RPC), SEC-75 (kunci self-order mobile tidak dibuka), SEC-77 (notifikasi kanal partner kasir).
   r15: **SEC-164** (neto refund + urutan refund/close, R-B13), **SEC-165** (`pos_member_attached`, R-B12),
   **SEC-166** (sesi tidak menyerap order tamu berikutnya), **SEC-167** (`print_no` monoton, R-T20), **SEC-168**
-  (filter PII catatan NFKC + Cf, R-L01). Kontrak docs/04 §14 + K1–K3 r15.
+  (filter PII catatan NFKC + Cf, R-L01). Kontrak docs/04 §14 + K1–K3 r15. r15 re-review: **SEC-174** (cetak ulang
+  tidak memindahkan order yang sudah dibayar ke sesi baru, R-B12/R-B13).
 
 ## Isi
 
 | Bagian | Isi |
 |---|---|
 | `pos.config` (+) | `efn_qr_enabled`, `efn_qr_preset_id` (wajib `service_at='table'`, ∈ preset POS, FP company sama), `efn_qr_confirm_mode` `waiter`\|`auto` (default `waiter`), `efn_qr_session_hours` (1..4), `efn_qr_max_submissions` (**10**, L-76), `efn_qr_max_items` (150), `efn_qr_max_amount` (Rp3.000.000 PLACEHOLDER), `efn_qr_stale_minutes` (5). Constraint: POS restoran + presets + PT kode PB/BCF. Diaudit `efn_audit` (aturan `audit_rule_pos_config_qr`). Tampil di Settings POS (blok "QR ponsel Super-App"). |
-| `efn.pos.table.session` | Sesi meja: **hanya** `bff_session_id` (UUID dari BFF), bukan token/URL. Satu `open` per (config, meja). Banyak order per sesi. Tutup: `paid`/`cancelled` (meja tanpa draft lagi), `closed_by_staff`, `reissued`; cron → `expired`. Retensi **400 hari** (L-76, cron harian). |
+| `efn.pos.table.session` | Sesi meja: **hanya** `bff_session_id` (UUID dari BFF), bukan token/URL. Satu `open` per (config, meja). Banyak order per sesi. Tutup: `paid`/`cancelled` (meja tanpa draft lagi), `closed_by_staff`, `reissued` (cetak ulang tanpa order dibayar) atau `paid` + event (cetak ulang dengan order dibayar, SEC-174); cron → `expired`. Retensi **400 hari** (L-76, cron harian). |
 | `efn.pos.qr.order` | Satu record per kiriman (idempotensi `(config, idempotency_key)` + `payload_sha256`, `submission_ref` unik), status kiriman, **fasad 3 RPC BFF**. Tanpa teks catatan. |
 | `efn.pos.qr.event.outbox` | Event `submission_status` / `session_closed` → BFF `POST /v1/pos/fnb/events` (HMAC `odoo_fnb_event_hmac`, seq berbasis waktu per sesi, retry 1 m→1 j, final 4xx). |
 | `pos.order` / `pos.order.line` (+) | `efn_qr_order_ref`, `efn_qr_table_session_id`, `efn_qr_send_claimed_at`; baris `efn_qr_submission_ref` (ikut saat order meja digabung). Field milik server: nilai klien dibuang. `source` tetap `pos`. |
@@ -148,6 +149,21 @@ saat dibuat, dan — saat dibayar — order yang belum tertaut **hanya bila** se
 tamu berikutnya di meja yang sama tidak pernah diserap walau kiriman QR lama masih pending; sesi `expired` tetap
 ditutup (event close) saat meja kosong tanpa menyerap order baru.
 
+### Cetak ulang QR (SEC-174, r15 re-review)
+
+- Yang dibawa (*carried*) ke sesi baru **hanya order `draft`** sesi lama (plus order jangkar cetak ulang). Order yang
+  sudah dibayar (`paid`/`done`/`invoiced`) dan order batal **tetap** di sesi lama.
+- Sesi lama **punya order dibayar** (bukan refund) → ditutup `paid` lewat `_efn_close("paid")`: outbox
+  `session_closed reason=paid` biasa, snapshot dibekukan di putaran outbox pertama (L-83), `close.orders[]` = order
+  dibayar milik sesi lama saja. BFF sudah mencabut sesi lama (`reissued`) saat `POST /table-sessions`, tetapi tetap
+  memproses `session_closed` untuk sesi tertutup (`applyOrder` + `markCloseProcessed`, status tidak diubah), sehingga
+  earn jatuh ke pengklaim **lama**. Log `EFN_QR_SESSION_REISSUE_PAID session=<id>` (tanpa PII). Refund atas order itu
+  mengikuti urutan K3 biasa (sesi tertutup + close pending → `deferred`/`awaiting`; setelah 2xx → reverse QR).
+- Sesi lama **tanpa order dibayar** → perilaku lama: `closed reissued`, tanpa event (BFF mencabut sendiri).
+- Penutupan dilakukan **setelah** BFF menjawab 201 (BFF gagal → sesi lama tetap open, tidak ada event).
+- Akibat operasional (L-83 b): mencetak ulang QR dari order pelayan kedua hanya memindahkan draft; tagihan yang sudah
+  dibayar tetap menjadi poin pengklaim sesi lama.
+
 ## Konfigurasi & secret
 
 - `EFN_BFF_URL` (https), `EFN_CA_FILE`, `EFN_BFF_API_KEY_FILE` (efn_core); **`EFN_FNB_EVENT_HMAC_FILE`** (default
@@ -174,7 +190,8 @@ termasuk refund → reverse QR bila `efn_pos_loyalty_ledger` terpasang). r15: `t
 `test_full_refund_before_close_excluded`, `test_refund_after_close_ratio_against_net`,
 `test_pos_member_attached_not_points_eligible`, `test_sec166_pending_submission_next_guest_not_absorbed`,
 `test_sec167_print_no_monotonic_after_retention`, `test_sec167_bff_pointing_to_existing_session_rejected`; K1 di
-test 01/08/11. Tour POS (§13.1b no. 17) **belum** ditulis.
+test 01/08/11. r15 re-review: `test_sec174_reissue_keeps_paid_orders_on_old_session`,
+`test_sec174_reissue_without_paid_orders_sends_no_close` (tanpa ketergantungan `efn_pos_loyalty_ledger`). Tour POS (§13.1b no. 17) **belum** ditulis.
 
 ## Batasan / belum
 
@@ -187,7 +204,10 @@ test 01/08/11. Tour POS (§13.1b no. 17) **belum** ditulis.
 - Residu retry close (BFF memproses tetapi Odoo tidak menerima 2xx) ditutup oleh pembekuan snapshot (L-83). Pembekuan
   menambah satu putaran cron (± 1 menit) sebelum POST pertama event close.
 - SEC-166 (disetujui lead, L-83): order pelayan KEDUA yang dibuat terpisah di meja (bukan gabungan) setelah QR dibuka
-  tidak ikut poin sesi; pelayan dapat mencetak ulang QR dari order itu (order lama ikut pindah) bila satu rombongan.
+  tidak ikut poin sesi; pelayan dapat mencetak ulang QR dari order itu bila satu rombongan (hanya order **draft**
+  lama yang ikut pindah; yang sudah dibayar dilaporkan di close sesi lama, SEC-174).
+- SEC-174 sisa (tidak ditangani di perbaikan ini): order jangkar/carried yang sudah tertaut tetap dihitung walau dibayar
+  jauh setelah sesi `expired` (rekomendasi r15 re-review no. 3, "bekukan anggota sesi saat expired") — terbuka.
   `pos_member_attached` konservatif (partner member terlampir = attached walau earn POS mati) juga disetujui (L-83).
 - Bentrok kunci di outbox (savepoint) dapat menghasilkan baris log ERROR "bad query" dari kursor Odoo pada kejadian
   serentak (jarang); event ditunda, bukan hilang.

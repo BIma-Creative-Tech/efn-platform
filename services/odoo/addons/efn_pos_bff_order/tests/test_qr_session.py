@@ -343,6 +343,81 @@ class TestEfnQrSession(EfnQrCommon):
         self.assertEqual(uuids, [anchor.uuid])
         self.assertEqual(session.order_ids.filtered(lambda o: o.state == "paid"), anchor)
 
+    # r15 re-review SEC-174 --------------------------------------------------------------------------
+    def _session_close_bodies(self, post, session):
+        """Body ``session_closed`` yang benar-benar di-POST untuk ``session`` (urut kirim)."""
+        bodies = [json.loads(kwargs["data"]) for _args, kwargs in post.call_args_list]
+        return [
+            body
+            for body in bodies
+            if body["event"] == "session_closed" and body["table_session_id"] == session.bff_session_id
+        ]
+
+    def test_sec174_reissue_keeps_paid_orders_on_old_session(self):
+        """Rombongan 1 bayar, kiriman QR pending tertinggal (sesi tetap open), pelayan cetak ulang:
+        order dibayar TETAP di sesi lama dan dilaporkan di event close ``paid`` sesi lama; hanya draft yang pindah;
+        close sesi baru tidak memuat order rombongan 1."""
+        first, anchor, paid = self._paid_qr_order()
+        pending = self._qr_order(self._submit(first, [self._line(self.croissant)])).order_id
+        self.assertEqual((first.state, paid.state, pending.state), ("open", "paid", "draft"))
+        _r, second, _a = self._open(anchor=anchor, reissue=True)
+        self.assertNotEqual(first, second)
+        self.assertEqual(self.bff_calls[-1][1]["reissue"], True)
+        # Order dibayar tetap di sesi lama; draft (jangkar + kiriman pending) pindah ke sesi baru.
+        self.assertEqual(paid.efn_qr_table_session_id, first)
+        self.assertEqual(anchor.efn_qr_table_session_id, second)
+        self.assertEqual(pending.efn_qr_table_session_id, second)
+        self.assertEqual(first.order_ids, paid)
+        # Sesi lama ditutup `paid` lewat jalur outbox biasa (snapshot beku L-83), bukan `reissued` tanpa event.
+        self.assertEqual((first.state, first.close_reason), ("closed", "paid"))
+        close_first = self._close_event(first)
+        self.assertEqual(len(close_first), 1)
+        self.assertEqual(close_first.close_reason, "paid")
+        expected_first = [
+            {"order_uuid": paid.uuid, "eligible_amount": 100000, "company_code": "PB", "pos_member_attached": False}
+        ]
+        self.assertEqual(close_first.orders_snapshot, expected_first)
+        self.assertFalse(close_first.snapshot_frozen, "pembekuan di putaran outbox pertama, bukan saat cetak ulang")
+        post = self._send_outbox()
+        self.assertTrue(close_first.snapshot_frozen)
+        self.assertEqual(close_first.state, "done")
+        bodies = self._session_close_bodies(post, first)
+        self.assertEqual(len(bodies), 1)
+        self.assertEqual(bodies[0]["close"], {"reason": "paid", "orders": expected_first})
+        self.assertTrue(paid.efn_qr_points_eligible, "flag poin dipasang setelah 2xx close sesi LAMA")
+        self.assertEqual(paid.efn_qr_eligible_amount, 100000)
+        # Rombongan 2 di sesi baru: kiriman baru dibayar, kiriman lama ditolak, jangkar dibatalkan -> close sesi baru.
+        fresh = self._qr_order(self._submit(second, [self._line(self.croissant, 2)])).order_id
+        self._pay(fresh)
+        pending.unlink()
+        self.assertEqual(second.state, "open", "jangkar masih draft di meja")
+        anchor.action_pos_order_cancel()
+        self.assertEqual((second.state, second.close_reason), ("closed", "paid"))
+        uuids = [entry["order_uuid"] for entry in self._close_event(second).orders_snapshot]
+        self.assertEqual(uuids, [fresh.uuid])
+        self.assertNotIn(paid.uuid, uuids, "order rombongan 1 tidak pernah dilaporkan untuk pengklaim sesi baru")
+        post = self._send_outbox()
+        bodies = self._session_close_bodies(post, second)
+        self.assertEqual(len(bodies), 1)
+        self.assertEqual([o["order_uuid"] for o in bodies[0]["close"]["orders"]], [fresh.uuid])
+        self.assertFalse(self._session_close_bodies(post, first), "close sesi lama tidak dikirim ulang")
+
+    def test_sec174_reissue_without_paid_orders_sends_no_close(self):
+        """Tanpa order dibayar di sesi lama: perilaku lama (``reissued``, tanpa event close);
+        order batal tetap di sesi lama, draft pindah."""
+        _r, first, anchor = self._open()
+        pending = self._qr_order(self._submit(first, [self._line(self.croissant)])).order_id
+        cancelled = self._qr_order(self._submit(first, [self._line(self.croissant, 3)])).order_id
+        cancelled.action_pos_order_cancel()
+        self.assertEqual((first.state, cancelled.state), ("open", "cancel"))
+        _r, second, _a = self._open(anchor=anchor, reissue=True)
+        self.assertEqual((first.state, first.close_reason), ("closed", "reissued"))
+        self.assertFalse(self._close_event(first), "BFF mencabut sendiri saat reissue; tidak ada close paid")
+        self.assertEqual((anchor | pending).efn_qr_table_session_id, second)
+        self.assertEqual(cancelled.efn_qr_table_session_id, first, "order batal tidak dibawa")
+        post = self._send_outbox()
+        self.assertFalse(self._session_close_bodies(post, first))
+
     # r15 SEC-167 -------------------------------------------------------------------------------------
     def test_sec167_print_no_monotonic_after_retention(self):
         _r, first, anchor = self._open()
@@ -381,14 +456,22 @@ class TestEfnQrSession(EfnQrCommon):
             self.env["efn.pos.qr.event.outbox"]._efn_process_due()
         self.assertEqual((event.state, event.attempt_count, event.last_error), ("pending", 1, "http_503"))
         event.next_attempt_at = False
-        with patch(POST, return_value=response(409, {"error": {"code": "company_mismatch"}})):
+        with (
+            self.assertLogs("odoo.addons.efn_pos_bff_order.alert", level="ERROR") as logs,
+            patch(POST, return_value=response(409, {"error": {"code": "company_mismatch"}})),
+        ):
             self.env["efn.pos.qr.event.outbox"]._efn_process_due()
         self.assertEqual((event.state, event.last_error), ("failed", "http_409:company_mismatch"))
+        self.assertIn("EFN_QR_EVENT_FAILED", logs.output[0])
 
     def test_hmac_missing_not_sent_unsigned(self):
         _r, session, _a = self._open()
         session._efn_close("closed_by_staff")
-        with patch.dict("os.environ", {"EFN_FNB_EVENT_HMAC_FILE": "/nonexistent/efn"}), patch(POST) as post:
+        with (
+            self.assertLogs("odoo.addons.efn_pos_bff_order.models.efn_pos_qr_event_outbox", level="ERROR"),
+            patch.dict("os.environ", {"EFN_FNB_EVENT_HMAC_FILE": "/nonexistent/efn"}),
+            patch(POST) as post,
+        ):
             self.env["efn.pos.qr.event.outbox"]._efn_process_due()
         post.assert_not_called()
         self.assertEqual(self._outbox(session).last_error, "hmac_missing")
@@ -450,7 +533,10 @@ class TestEfnQrSession(EfnQrCommon):
             company_id=self.company.id,
             company_ids=[Command.set(self.company.ids)],
         )
-        with self.assertRaises(AccessError):
+        with (
+            self.assertLogs("odoo.addons.efn_pos_bff_order.models.efn_pos_qr_order", level="ERROR"),
+            self.assertRaises(AccessError),
+        ):
             Qr.with_user(extra).efn_qr_menu(config_id=self.config.id)
         # Context klien (allowed_company_ids, active_test) diabaikan.
         menu = (

@@ -8,7 +8,9 @@ QR, L-70). Siklus:
 - order sesi dibayar/dibatalkan dan meja tidak lagi punya order draft -> ``closed`` (``paid`` bila ada order sesi
   yang dibayar, selain itu ``cancelled``) + event ``session_closed`` (dengan ``eligible_amount`` NETO refund dan
   ``pos_member_attached`` per order bila ``paid``, K2 r15);
-- cetak ulang -> ``closed reissued`` (BFF mencabut sendiri, tanpa event);
+- cetak ulang -> hanya order ``draft`` pindah ke sesi baru (SEC-174); sesi lama ``closed reissued`` (BFF mencabut
+  sendiri, tanpa event) atau, bila sesi lama punya order dibayar, ``closed paid`` + event ``session_closed paid``
+  berisi order dibayar miliknya (earn ke pengklaim lama);
 - staf menutup / sesi POS ditutup -> ``closed_by_staff`` + event;
 - cron 5 menit -> ``expired`` setelah ``expires_at`` (BFF juga menolak token kedaluwarsa); order yang SUDAH tertaut
   (pelayan/carried/kiriman QR) dan dibayar setelahnya tetap mengirim ``session_closed paid``; order baru di meja tidak
