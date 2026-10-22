@@ -1,0 +1,7 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_booking_settings_pos_user,efn.booking.settings pos user,model_efn_booking_settings,point_of_sale.group_pos_user,1,0,0,0
+access_efn_booking_settings_pos_manager,efn.booking.settings pos manager,model_efn_booking_settings,point_of_sale.group_pos_manager,1,1,1,1
+access_efn_table_booking_pos_user,efn.table.booking pos user,model_efn_table_booking,point_of_sale.group_pos_user,1,0,0,0
+access_efn_table_booking_pos_manager,efn.table.booking pos manager,model_efn_table_booking,point_of_sale.group_pos_manager,1,1,0,0
+access_efn_booking_event_outbox_pos_manager,efn.booking.event.outbox pos manager,model_efn_booking_event_outbox,point_of_sale.group_pos_manager,1,0,0,0
+access_efn_booking_event_outbox_system,efn.booking.event.outbox system,model_efn_booking_event_outbox,base.group_system,1,1,0,1
