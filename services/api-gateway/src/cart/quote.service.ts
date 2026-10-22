@@ -20,6 +20,8 @@ export interface QuoteGroupView {
   company_code: string;
   outlet_code: string;
   fulfilment: 'pickup' | 'delivery';
+  /** G23 §15.4: jadwal ambil pre-order terpilih (absen = secepatnya). */
+  pickup_slot?: string;
   /** Baris produk cart + (G19 §11.2) baris reward Odoo `reward: true` (harga ≤ 0) apa adanya. */
   lines: (PartLine & { available: boolean })[];
   tax_groups: TaxGroup[];
@@ -211,7 +213,7 @@ export class QuoteService {
     if (!ch) throw OnlineErrors.itemUnavailable();
     let q: QuoteResult;
     try {
-      q = await this.odoo.quote(g.channel_code, g.outlet_code, g.fulfilment, g.lines, codes);
+      q = await this.odoo.quote(g.channel_code, g.outlet_code, g.fulfilment, g.lines, codes, g.pickup_slot ?? null);
     } catch (err) {
       throw mapOdooError(err, this.metrics, { method: 'quote', channel: g.channel_code });
     }
@@ -251,6 +253,7 @@ export class QuoteService {
         company_code: ch.company_code,
         outlet_code: g.outlet_code,
         fulfilment: g.fulfilment,
+        ...(g.pickup_slot ? { pickup_slot: g.pickup_slot } : {}),
         lines: q.lines.map((l) => ({
           product_id: l.product_id,
           name: l.reward ? (l.name ?? 'Promo') : (l.name ?? names.get(l.product_id)?.name ?? ''),

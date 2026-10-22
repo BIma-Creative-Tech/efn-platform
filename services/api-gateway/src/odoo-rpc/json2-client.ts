@@ -15,6 +15,7 @@ import {
   parseRefund,
   parseRefundSettled,
   parseSetInvoiceParty,
+  parseSlots,
   parseStatus,
   parseStock,
 } from './odoo-online.parse';
@@ -39,6 +40,7 @@ import {
   PlaceResult,
   QuoteLineIn,
   QuoteResult,
+  SlotsResult,
   RefundInput,
   RefundResult,
   RefundSettledInput,
@@ -319,14 +321,22 @@ export class Json2OdooOnlineClient implements OdooOnlineApi {
     const v = await this.call('image', channel, { channel_code: channel, tmpl_id: tmplId, size }, { timeoutMs: this.config.odooRpcImageTimeoutMs });
     return parseImage(v);
   }
-  async quote(channel: string, outlet: string, fulfilment: Fulfilment, lines: QuoteLineIn[], promoCodes: string[]): Promise<QuoteResult> {
-    // §11.2 no. 2: `promo_codes` selalu dikirim (eksplisit, `[]` bila tanpa kode) — bentuk argumen tetap untuk Odoo
-    const args = { channel_code: channel, outlet_code: outlet, fulfilment, lines, promo_codes: [...promoCodes] };
+  async quote(channel: string, outlet: string, fulfilment: Fulfilment, lines: QuoteLineIn[], promoCodes: string[], pickupSlot?: string | null): Promise<QuoteResult> {
+    // §11.2 no. 2: `promo_codes` selalu dikirim (eksplisit, `[]` bila tanpa kode) — bentuk argumen tetap untuk Odoo.
+    // G23 §15.4: `pickup_slot` HANYA bila dipilih (argumen pra-G23 tidak berubah → Odoo tanpa efn_online_slot tetap jalan).
+    const args = { channel_code: channel, outlet_code: outlet, fulfilment, lines, promo_codes: [...promoCodes], ...(pickupSlot ? { pickup_slot: pickupSlot } : {}) };
     const v = await this.call('quote', channel, args, {
       timeoutMs: this.config.odooRpcTimeoutMs,
       deadlineMs: this.config.odooRpcTimeoutMs,
     });
     return parseQuote(v);
+  }
+  async slots(channel: string, outlet: string, date: string): Promise<SlotsResult> {
+    const v = await this.call('slots', channel, { channel_code: channel, outlet_code: outlet, date }, {
+      timeoutMs: this.config.odooRpcTimeoutMs,
+      deadlineMs: this.config.odooRpcTimeoutMs,
+    });
+    return parseSlots(v);
   }
   async place(channel: string, order: PlaceInput): Promise<PlaceResult> {
     const v = await this.call('place', channel, { channel_code: channel, order }, {

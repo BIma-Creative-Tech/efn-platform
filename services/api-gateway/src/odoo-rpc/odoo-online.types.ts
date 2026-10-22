@@ -20,6 +20,8 @@ export const ODOO_ONLINE_PATHS = {
    * Argumen berisi PII (profil pembeli): dikirim sekali (TLS + mTLS), tidak pernah di-log/disimpan BFF.
    */
   setInvoiceParty: 'efn.online.order/efn_online_set_invoice_party',
+  /** G23 §15.4 (W-36, L-87): slot ambil pre-order per outlet — path gateway ke-20 (modul efn_online_slot). */
+  slots: 'efn.online.channel/efn_online_slots',
 } as const;
 export type OdooOnlineMethod = keyof typeof ODOO_ONLINE_PATHS;
 
@@ -37,6 +39,8 @@ export const ODOO_BUSINESS_CODES = [
   'invoice_not_available',
   /** G22 §14.C.3: porsi Poin EFN ditolak kebijakan PT/global Odoo (fail-closed) → BFF `409 exceeds_max_pct` (L-79: tanpa fallback). */
   'points_invalid',
+  /** G23 §15.4: slot ambil penuh / tidak sah saat place → BFF `409 slot_unavailable`. */
+  'slot_unavailable',
 ] as const;
 export type OdooBusinessCode = (typeof ODOO_BUSINESS_CODES)[number];
 
@@ -115,7 +119,16 @@ export interface CatalogChannelInfo {
   currency: string;
   active: boolean;
   fulfilment: { pickup: boolean; delivery: boolean };
-  outlets: { outlet_code: string; public_name: string; pickup_enabled: boolean; prep_minutes: number | null; active: boolean }[];
+  outlets: {
+    outlet_code: string;
+    public_name: string;
+    pickup_enabled: boolean;
+    prep_minutes: number | null;
+    active: boolean;
+    /** G23 §15.4: outlet menerima pre-order berjadwal (absen = false). */
+    slot_enabled?: boolean;
+    slot_minutes?: number | null;
+  }[];
   /**
    * G20 §12.2 no. 1 / L-52: metode bayar yang diizinkan kanal. `null` = Odoo tidak mengirim (modul pra-G20) → BFF memakai
    * `ONLINE_PAYMENT_METHODS` (config, L-55). Opsional di tipe agar `channel_data` lama tetap terbaca.
@@ -178,6 +191,14 @@ export interface QuoteIssue {
   product_id: number | null;
   code: string;
 }
+/** G23 §15.4 (RPC 20). */
+export interface SlotsResult {
+  outlet_code: string;
+  date: string;
+  timezone: string;
+  slot_minutes: number;
+  slots: { start_at: string; end_at: string; remaining: number }[];
+}
 export interface QuoteResult {
   company_code: string | null;
   lines: QuoteLine[];
@@ -217,6 +238,8 @@ export interface PlaceInput {
   counter_code?: string;
   /** G22 §14.C.3: porsi Poin EFN bagian (hanya bila ada; masuk `payload_sha256` Odoo). */
   points_payment?: { points: number; value_idr: number };
+  /** G23 §15.4: jadwal ambil pre-order (ISO UTC); hanya bila dipilih (payload tanpa slot identik pra-G23). */
+  pickup_slot?: string;
 }
 export interface PlaceResult {
   order_state: string;
@@ -325,7 +348,9 @@ export interface OdooOnlineApi {
   stock(channel: string, outlet: string, productIds: number[]): Promise<StockRow[]>;
   image(channel: string, tmplId: number, size: 512 | 1024): Promise<ImageResult>;
   /** `promoCodes` = kode ternormalisasi (huruf besar, unik, ≤ 3); dikirim sama ke setiap kanal (§11.2 no. 2). */
-  quote(channel: string, outlet: string, fulfilment: Fulfilment, lines: QuoteLineIn[], promoCodes: string[]): Promise<QuoteResult>;
+  quote(channel: string, outlet: string, fulfilment: Fulfilment, lines: QuoteLineIn[], promoCodes: string[], pickupSlot?: string | null): Promise<QuoteResult>;
+  /** G23 §15.4: slot ambil satu hari lokal outlet + sisa kapasitas. */
+  slots(channel: string, outlet: string, date: string): Promise<SlotsResult>;
   place(channel: string, order: PlaceInput): Promise<PlaceResult>;
   markPaid(channel: string, platformOrderRef: string, payment: MarkPaidInput): Promise<MarkPaidResult>;
   cancel(channel: string, platformOrderRef: string, reason: CancelReason, idempotencyKey: string): Promise<CancelResult>;

@@ -15,6 +15,9 @@ export const NOTIFY_TEMPLATES: Readonly<Record<string, NotifyTemplate>> = {
   online_order_ready: { waTemplate: 'efn_online_order_ready', params: [] },
   online_order_cancelled: { waTemplate: 'efn_online_order_cancelled', params: [] },
   online_order_refunded: { waTemplate: 'efn_online_order_refunded', params: [] },
+  // G23 §15.5: reservasi meja — TANPA nama tamu/catatan/nomor meja; hanya "buka aplikasi" (UTILITY tanpa parameter).
+  booking_confirmed: { waTemplate: 'efn_booking_confirmed', params: [] },
+  booking_cancelled: { waTemplate: 'efn_booking_cancelled', params: [] },
   // G22 §14.D.4 + L-76: pengingat hangus T−30 — HANYA tanggal hangus (tanpa jumlah poin, nama, nominal, tautan).
   // Kategori diharapkan UTILITY (keputusan Meta, belum terverifikasi); teks final = Legal.
   loyalty_inactivity_notice: { waTemplate: 'efn_loyalty_inactivity_notice', params: ['expire_date'] },

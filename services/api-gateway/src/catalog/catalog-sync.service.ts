@@ -46,7 +46,7 @@ export class CatalogSyncService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit(): void {
     const s = this.config.onlineCatalogSyncSeconds;
-    if (s > 0 && (this.config.onlineCatalogEnabled || this.config.onlineEnabled || this.config.fnbQrEnabled)) {
+    if (s > 0 && (this.config.onlineCatalogEnabled || this.config.onlineEnabled || this.config.fnbQrEnabled || this.config.bookingEnabled)) {
       this.timer = setInterval(() => void this.runOnce(), s * 1000);
       this.timer.unref();
       setTimeout(() => void this.runOnce(), 5_000).unref();

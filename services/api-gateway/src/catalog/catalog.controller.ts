@@ -125,6 +125,22 @@ export class CatalogController {
       .send(data);
   }
 
+  /** G23 §15.4: `GET /v1/catalog/slots?channel=&outlet=&date=YYYY-MM-DD` (publik, cache 30 s). */
+  @Get('slots')
+  async slots(
+    @Query('channel') channel: unknown,
+    @Query('outlet') outlet: unknown,
+    @Query('date') date: unknown,
+    @Req() req: FastifyRequest,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ): Promise<unknown> {
+    await this.guard(req, reply, 'STOCK');
+    void reply.header('Cache-Control', 'public, max-age=30');
+    if (typeof outlet !== 'string' || !OUTLET_RE.test(outlet)) throw Errors.invalidRequest();
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) throw Errors.invalidRequest();
+    return this.catalog.slots(channelParam(channel), outlet, date);
+  }
+
   @Get('stock')
   async stock(
     @Query('channel') channel: unknown,

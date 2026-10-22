@@ -246,7 +246,8 @@ describe('Route online (Fastify nyata, prefix /v1)', () => {
   });
 
   it('R2: parameter URL online hanya id opak/enum/teks pencarian — tanpa PII', () => {
-    const allowedQuery = new Set(['channel', 'category', 'q', 'cursor', 'limit', 'size', 'outlet', 'ids', 'brand']);
+    // G23 §15.4: `date` (YYYY-MM-DD, GET /v1/catalog/slots) — tanggal kalender, bukan PII
+    const allowedQuery = new Set(['channel', 'category', 'q', 'cursor', 'limit', 'size', 'outlet', 'ids', 'brand', 'date']);
     const allowedParam = new Set(['product_id', 'image_sha', 'order_id']);
     for (const ctrl of [CatalogController, CartController, OrdersController, OrderEventsController]) {
       for (const m of Object.getOwnPropertyNames(ctrl.prototype)) {

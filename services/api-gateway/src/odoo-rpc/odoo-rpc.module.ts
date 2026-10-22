@@ -42,6 +42,7 @@ import { OnlineMetrics } from './online-metrics';
           stock: (...a) => get().stock(...a),
           image: (...a) => get().image(...a),
           quote: (...a) => get().quote(...a),
+          slots: (...a) => get().slots(...a),
           place: (...a) => get().place(...a),
           markPaid: (...a) => get().markPaid(...a),
           cancel: (...a) => get().cancel(...a),

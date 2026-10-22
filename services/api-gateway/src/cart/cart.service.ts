@@ -7,6 +7,8 @@ import { OnlineErrors } from '../odoo-rpc/online-errors';
 import { CART_STORE, Cart, CartGroup, CartLine, CartStore, lineIdentity } from './cart-store';
 
 const OUTLET_RE = /^[A-Z0-9][A-Z0-9-]{1,23}$/;
+/** G23 §15.4: ISO UTC detik nol (bentuk yang dikembalikan `GET /v1/catalog/slots`). */
+const SLOT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/;
 export const CART_MAX_LINES = 50;
 export const CART_MAX_GROUPS = 10;
 const QTY_HARD_MAX = 999;
@@ -28,7 +30,11 @@ export function parseCartPut(body: unknown): { version: number; groups: CartGrou
   const seen = new Set<string>();
   const groups = o.groups.map((g): CartGroup => {
     const r = asRecord(g);
-    if (Object.keys(r).some((k) => !['channel_code', 'outlet_code', 'fulfilment', 'lines'].includes(k))) throw Errors.invalidRequest();
+    if (Object.keys(r).some((k) => !['channel_code', 'outlet_code', 'fulfilment', 'lines', 'pickup_slot'].includes(k))) throw Errors.invalidRequest();
+    const slot = r.pickup_slot === undefined || r.pickup_slot === null ? undefined : r.pickup_slot;
+    if (slot !== undefined && (typeof slot !== 'string' || !SLOT_RE.test(slot) || Number.isNaN(Date.parse(slot)) || r.fulfilment !== 'pickup')) {
+      throw Errors.invalidRequest();
+    }
     if (typeof r.channel_code !== 'string' || !ONLINE_CHANNEL_RE.test(r.channel_code)) throw Errors.invalidRequest();
     if (typeof r.outlet_code !== 'string' || !OUTLET_RE.test(r.outlet_code)) throw Errors.invalidRequest();
     if (r.fulfilment !== 'pickup' && r.fulfilment !== 'delivery') throw Errors.invalidRequest();
@@ -64,6 +70,7 @@ export function parseCartPut(body: unknown): { version: number; groups: CartGrou
       outlet_code: r.outlet_code,
       fulfilment: r.fulfilment,
       lines: [...merged.values()],
+      ...(slot !== undefined ? { pickup_slot: slot as string } : {}),
     };
   });
   if (total > CART_MAX_LINES) throw Errors.invalidRequest(`Maksimal ${CART_MAX_LINES} baris di keranjang.`);
@@ -96,6 +103,8 @@ export class CartService {
       if (!ch.fulfilment[g.fulfilment]) throw OnlineErrors.fulfilmentUnavailable();
       const outlet = ch.outlets.find((o) => o.outlet_code === g.outlet_code);
       if (!outlet || (g.fulfilment === 'pickup' && !outlet.pickup_enabled)) throw OnlineErrors.itemUnavailable();
+      // G23 §15.4: slot hanya untuk outlet ber-slot (kill switch mati → outlet tidak pernah slot_enabled)
+      if (g.pickup_slot !== undefined && outlet.slot_enabled !== true) throw OnlineErrors.fulfilmentUnavailable();
       const products = await this.catalog.productsByIds(g.channel_code, g.lines.map((l) => l.product_id));
       const lines: CartLine[] = [];
       for (const l of g.lines) {
