@@ -147,11 +147,13 @@ def run(env, payload):
             tmpl = cenv["product.template"].create(vals)
             stats["created"] += 1
         if item.get("image_b64"):
-            # Bandingkan checksum attachment (sha1 isi biner) -> gambar sama tidak ditulis ulang (idempoten).
+            # Bandingkan checksum attachment -> gambar sama tidak ditulis ulang (idempoten). SHA1 di sini BUKAN kontrol
+            # keamanan: ir.attachment.checksum Odoo memang sha1 isi biner, jadi harus algoritma yang sama.
             att = env["ir.attachment"].sudo().search([("res_model", "=", "product.template"),
                                                       ("res_field", "=", "image_1920"), ("res_id", "=", tmpl.id)],
                                                      limit=1)
-            new_sha = hashlib.sha1(base64.b64decode(item["image_b64"])).hexdigest()
+            # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1
+            new_sha = hashlib.sha1(base64.b64decode(item["image_b64"]), usedforsecurity=False).hexdigest()
             if att.checksum != new_sha:
                 tmpl.image_1920 = item["image_b64"]
                 stats["image_set"] += 1
