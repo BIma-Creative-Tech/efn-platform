@@ -1,4 +1,4 @@
-# KONTRAK ANTAR-SERVICE (v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
+# KONTRAK ANTAR-SERVICE (v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -855,7 +855,7 @@ ADR-036 (Proposed) opsi C diikuti. G19 menjalankan **PoC** (`efn_pii` minimal pa
 | L-30 | W-14 konfigurasi diterima; PB1 non-dine-in tidak diputuskan lead (menunggu konsultan pajak, R-L09). |
 | L-31 | ADR-036: lead menerima rekomendasi L-36-1..L-36-6 sebagai default kerja (ADR tetap Proposed menunggu PO/DPO); pilot ritel **tidak** ditahan; E14 versi baru berlaku bila DB produksi dibuat sebelum E-38 merge. PoC dulu (§11.5). |
 | L-32 | `ONLINE_MAX_OPEN_ORDERS_PER_MEMBER` default 2 sejak reservasi aktif. |
-| L-33 | Tenant Super-App yang sudah ada (`efn-mart`, `efn-kitchen`) memakai `brandCode: null` sampai klien menjawab Q-F19-5 (kode kanal & domain per brand) dan kanal brand diaktifkan; kanal dev `RTL`/`FNB` tanpa `brand_code` tetap tampil. Galat format kode promo di route Next.js (sebelum BFF) memakai pesan generik yang sama. |
+| L-33 | ~~Tenant Super-App yang sudah ada (`efn-mart`, `efn-kitchen`) memakai `brandCode: null` sampai klien menjawab Q-F19-5.~~ **Diperbarui 20 Okt 2026 (keputusan user: tenant per brand):** tenant `grandlucky` = `GL`, `parisbaguette` = `PB`, `bacha` = `BACHA` (BCR+BCF); holding `efn` tetap `brandCode: null` (semua kanal). Tetap pembatasan UI saja — BFF tidak mempercayai domain. Konsekuensi: kanal tanpa `brand_code` hanya tampil di domain holding; nama domain produksi masih menunggu klien. Galat format kode promo di route Next.js (sebelum BFF) memakai pesan generik yang sama. |
 | L-34 | Kode promo dikirim BFF dalam huruf besar; Odoo mencocokkan **case-insensitive** (kupon `coupons` buatan Odoo berkode huruf kecil tetap terpakai) dan mengembalikan `promo_applied`/`promo_rejected` dalam bentuk yang dikirim BFF (subset kode yang diminta, tidak beririsan). Baris reward per grup ≤ 20, `subtotal_incl ≤ 0`. |
 | L-35 | Bila setelah reward `amount_payable` grup < 1, reward kode promo grup itu dibatalkan dan kodenya masuk `promo_rejected` (QRIS tidak bisa Rp0). |
 | L-36 | Galat validasi `promo_codes` / `?brand=` di BFF memakai `400 invalid_request` (sama dengan validasi BFF lain §10.3.7), meralat `invalid_input` di §11.2–§11.3 versi awal. `invalid_input` tetap hanya kode galat Odoo (→ 503). Tag log kode promo (8 heks SHA-256) boleh di level debug. |
@@ -1411,3 +1411,126 @@ Estimasi **2–2,5 minggu-engineer** (BFF 1–1,5; Odoo 0–0,5; data-ai 0,25; Q
 | L-82 | **Tindak lanjut security review r15 + QA G22 (19 Okt 2026).** Perbaikan kontrak K1–K3 dan SEC-164..168/171/173 masuk badan §14 (v9.1). Empat sisanya diputuskan sebagai berikut. **(a) SEC-170 step-up redeem poin online — DITUNDA ke G23.** Mitigasi sementara: JWT 1 jam tanpa refresh token, plafon kebijakan (`redeem_max_pct`, porsi tunai ≥ Rp1), reservasi atomik, kode ambil; poin online **default OFF** di production. Klaim §14.C.1 no. 4 tentang `ONLINE_REDEEM_STEPUP_MIN_POINTS` diralat menjadi rencana G23 (env + notifikasi "poin Anda dipakai"). **(b) SEC-169 klaim poin QR "siapa cepat" tanpa jalur reset staf — DITUNDA ke G23.** Poin QR tetap **OFF** (`FNB_QR_POINTS_ENABLED=false`) sampai (1) perbaikan SEC-164, SEC-165, dan SEC-166 diverifikasi oleh test + re-review security, dan (2) keputusan SEC-169 diambil. Opsinya: tombol POS "reset klaim" → event `claim_reset`; earn OTP kasir mengalahkan klaim QR; klaim dibatasi ke perangkat pengirim atau ≤ X menit setelah kiriman pertama; indikator "poin meja sudah diklaim" di POS. QR pesan-saja (tanpa poin) boleh dipilot. **(c) SEC-172 peran Sales Manager Online + `stock.group_stock_user` — DITERIMA.** Alasannya: hak ini setara peran Merchandiser yang sudah ada, dan pembatalan pesanan online memang menyentuh reservasi stok (`purchase_stock` membaca `purchase.order.line` lewat `stock.move`). Alternatif `sudo()` terbatas di `efn_online_order` **ditolak** karena melewati pemeriksaan akses standar Odoo dan menambah kode akses kustom yang harus dirawat. Kompensasinya: review akses bulanan (R-S14/R-S16) mencakup pemegang peran ini dan transfer stok yang mereka validasi. Residu dicatat di R-S16 dan README `efn_setup_role`. **(d) QA P3 TTL token vs umur sesi:** `pos.config.efn_qr_session_hours` × 3600 harus **≥** `FNB_TABLE_SESSION_TTL_SECONDS` (disarankan sama, default 4 jam). Ini syarat konfigurasi di runbook `fnb-qr-orders.md` §1 dan checklist aktivasi pilot. Validasi otomatis lintas sistem (mis. `session_hours` dikirim di body buka sesi) = backlog G23. |
 | L-83 | **Poin QR: snapshot close beku + cakupan order (r15, implementasi Odoo/BFF):** (a) event `session_closed` dibekukan pada putaran outbox pertama (`orders[]` neto + daftar refund yang dinetokan disimpan), POST di putaran berikutnya; semua retry mengirim body identik (BFF replay 200). Refund sebelum pembekuan masuk neto; refund setelah pembekuan menunggu (`efn_qr_refund_awaiting`) dan di-enqueue reverse `earn_channel:"qr"` saat 2xx (rasio terhadap `eligible_amount` snapshot); close gagal permanen -> refund menunggu tetap untuk review + alert `EFN_QR_REFUND_UNRESOLVED`. BFF menjawab 2xx hanya setelah claim event + earn + penanda close tercatat dalam satu transaksi Postgres; reverse yang tiba sebelum close diproses -> 409 `earn_pending`. (b) Order pelayan yang dibuat terpisah di meja setelah QR dibuka TIDAK ikut poin sesi (SEC-166; jalan keluar: cetak ulang QR dari order itu). (c) `pos_member_attached` konservatif: true bila ledger mencatat earn/redeem non-skipped ATAU partner order punya HP member sah, walau earn POS config mati. |
 | L-84 | **Tindak lanjut re-review r15 (20 Okt 2026, `docs/reviews/SECURITY_REVIEW_2026-10-20_r15-rereview.md`).** (a) **SEC-174:** cetak ulang QR hanya membawa order draft; sesi lama dengan order dibayar ditutup `close_reason=paid` (bukan `reissued`) agar jalur refund `deferred`/`awaiting` dan snapshot L-83 berlaku tanpa jalur baru; jejak cetak ulang = log `EFN_QR_SESSION_REISSUE_PAID` + sesi baru. BFF tidak berubah (event close untuk sesi yang sudah `closed` di BFF tetap di-earn ke pengklaim lama). (b) **SEC-175:** `FNB_QR_POINTS_ENABLED` dan `ONLINE_LOYALTY_REDEEM_ENABLED` masuk `EFN_GATED_FEATURES`: `true` di production hanya dengan izin Superadmin `EFN_ALLOW_FEATURE_ON`. (c) **SEC-176:** `FNB_SESSION_RETENTION_DAYS` maks **395** di BFF dan `deploy-validate.sh` (di bawah retensi sesi Odoo 400 hari: Odoo menghapus per `opened_at`, BFF per `closed_at`). (d) **SEC-177:** residu SEC-172 dicatat di README `efn_setup_role`. Sisa terbuka untuk poin QR: SEC-169 (G23), order jangkar/bawaan yang dibayar jauh setelah sesi `expired` (README `efn_pos_bff_order` "Batasan"), jalur bentrok serialisasi K3 belum diuji; SEC-178 (Info): `markCloseProcessed` BFF menandai pendahulu `reissued` sebelum close-nya sendiri diproses sehingga lapis kedua `earn_pending` melemah (lapis Odoo tetap menahan) → G23. |
+
+---
+
+## 15. Gelombang 23 — reservasi meja, pre-order berjadwal, mode pesan, Super-App & mobile (v10.0, 21 Okt 2026)
+
+> **Ringkasan manajemen.** Pelanggan Paris Baguette dan Bacha Coffee (kafe) bisa memesan meja dari web atau aplikasi:
+> pilih gerai, tanggal, jam, dan jumlah orang; Odoo mengecek jam buka, kapasitas meja, dan bentrok jadwal. Staf melihat
+> dan mengelola reservasi di Odoo (konfirmasi, datang, tidak datang, batal). Kue dan hampers bisa dipesan jauh hari
+> dengan jadwal ambil (slot) yang kapasitasnya diatur per gerai. Semua mode pesan (ambil, pre-order, makan di tempat,
+> reservasi, pesan-antar) tampil di web brand, Super-App, dan aplikasi mobile; pesan-antar masih "segera hadir".
+> Semua fitur baru **mati di produksi** (`BOOKING_ENABLED=false`, `ONLINE_SLOTS_ENABLED=false`) sampai syarat aktivasi.
+
+Dasar: permintaan user 21 Okt 2026 (booking management + order pickup/delivery/dine-in di web & apps, brand & superapp,
+Odoo sebagai engine; mobile Expo **repo terpisah** `E:\Projects\efn-mobile`, app per brand berdiri sendiri). ADR-013
+(booking ditunda di MVP → **dibuka** G23 sebagai modul custom, CE tidak punya `pos_appointment`), ADR-031, ADR-034,
+ADR-029. Konsep produk & nama: `docs/design/superapp-concept.md`.
+
+### 15.1 Fit-gap singkat (Odoo CE 19)
+| Kebutuhan | CE 19 | Keputusan |
+|---|---|---|
+| Meja, kursi, denah | `pos_restaurant` `restaurant.floor` (`pos_config_ids`), `restaurant.table` (`seats`, `active`) | **Standar** — kapasitas dari meja nyata |
+| Jam buka gerai | `resource.calendar` (`_attendance_intervals_batch`) | **Standar** — kalender di pengaturan booking |
+| Reservasi online / appointment | `pos_appointment` = Enterprise (ADR-013) | **Gap → `efn_table_booking`** (baru) |
+| Jadwal ambil pre-order | `sale.order.commitment_date` (standar `sale`) | **Standar** untuk penyimpanan; slot & kapasitas = **gap → `efn_online_slot`** (baru) |
+| Pesan-antar | `delivery` (depends `payment_custom`, tidak dipasang ADR-034) | Tetap **nonaktif** G23 (W-05 G24) |
+
+Referensi desain (bukan dependency, ADR-031): OCA `calendar`/`resource` dan Cybrosys `table_reservation_on_website`
+hanya pola konsep. Tidak ada kode disalin.
+
+### 15.2 Model Odoo `efn_table_booking` (19.0.1.0.0; depends `pos_restaurant`, `efn_core`, `efn_audit`, `efn_online_order`)
+- `efn.booking.settings` (satu per `efn.online.outlet`): `company_id` (related outlet, stored), `outlet_id` (unik),
+  `active`, `pos_config_id` (restoran, `check_company`), `calendar_id` (`resource.calendar`, wajib), `slot_minutes`
+  (15|30|60, default 30), `duration_minutes` (30..360, default 90), `lead_minutes` (≥ 0, default 60), `horizon_days`
+  (1..60, default 14), `min_party` (≥ 1, default 1), `max_party` (≤ 50, default 8), `confirm_mode` (`auto`|`staff`,
+  default `staff`), `hold_minutes` (default 15).
+- `efn.table.booking`: `company_id` (wajib, record rule), `settings_id`, `outlet_id`, `name` (urutan `BKG/…`),
+  `platform_booking_ref` (UUID dari BFF, unik per company), `idempotency_key` (unik), `request_sha256`, `start_at`,
+  `end_at`, `party_size`, `table_id` (`restaurant.table`, dipilih otomatis: meja aktif di lantai config dengan
+  `seats` ≥ party, terkecil dulu, tanpa tumpang tindih booking aktif), `state` (`requested` → `confirmed` → `seated` →
+  `done`; `cancelled`, `no_show`), `cancel_reason` (`customer`|`staff`|`no_show`|`expired`), `guest_label` (≤ 40,
+  **panggilan saja**), `note` (≤ 140), keduanya difilter aturan catatan SEC-168; `seq`, `confirmed_at`, `seated_at`,
+  `cancelled_at`. **Tanpa** HP/email/partner pelanggan (ADR-029, R-L01).
+- Bentrok: dicek di Python di bawah `SELECT … FOR UPDATE` baris settings (serialisasi per outlet) +
+  `UNIQUE(company_id, platform_booking_ref)` + `UNIQUE(idempotency_key)`.
+- Staf (POS user = lihat, POS manager = ubah): Konfirmasi, Datang (`seated`), Selesai, Tidak datang, Batal; tampilan
+  kalender + list per outlet. Setiap transisi = outbox event (pola §10.5) ke BFF.
+- Cron 5 menit: `requested` yang melewati `start_at` → `cancelled/expired`. `no_show` hanya oleh staf.
+
+### 15.3 RPC Odoo baru (gateway path 16–19; user teknis per PT F&B `efn_booking_pb`/`efn_booking_bcf`, grup `efn_table_booking.group_booking_bff`)
+Pola pemanggil = E-27: `_efn_booking_check_caller(outlet_code)` (grup teknis, tepat satu company = company outlet,
+tanpa grup lain), context dibuang kecuali `lang`, lalu `sudo().with_company`. Galat bisnis
+`UserError("efn_booking:<kode>")` (HTTP 422), kode ∈ `invalid_input | not_found | slot_unavailable | outside_hours |
+party_size | too_late | too_far | idempotency_conflict | invalid_state | booking_disabled`.
+
+| # | Path `/json/2/…` | Argumen → hasil | Idempotensi |
+|---|---|---|---|
+| 16 | `efn.table.booking/efn_booking_availability` | `outlet_code, date (YYYY-MM-DD zona outlet), party_size` → `{ outlet_code, date, timezone, slot_minutes, duration_minutes, min_party, max_party, horizon_days, slots:[{ start_at (iso UTC), available }] }` (≤ 96 slot) | baca |
+| 17 | `efn.table.booking/efn_booking_create` | `outlet_code, booking:{ idempotency_key, platform_booking_ref, start_at, party_size, guest_label?, note? }` → `{ booking_ref, platform_booking_ref, state, start_at, end_at, party_size, table_label, seq }` | `booking:create:<platform_booking_ref>` (isi beda → `idempotency_conflict`) |
+| 18 | `efn.table.booking/efn_booking_cancel` | `outlet_code, platform_booking_ref, idempotency_key` → `{ state, seq }` (hanya `requested|confirmed` dan belum mulai; lainnya `invalid_state`) | `booking:cancel:<ref>` |
+| 19 | `efn.table.booking/efn_booking_status` | `outlet_code, platform_booking_refs (≤ 100)` → `[{ platform_booking_ref, state, seq, start_at, end_at, table_label }]` | baca |
+
+Ketersediaan dihitung ulang di dalam kunci saat create (klien tidak dipercaya). `table_label` = `"<lantai> <nomor>"`.
+
+### 15.4 Pre-order berjadwal — `efn_online_slot` (19.0.1.0.0; depends `efn_online_order`)
+- `efn.online.outlet` + `slot_enabled`, `slot_minutes` (30|60), `slot_capacity` (pesanan per slot, ≥ 1, default 10),
+  `slot_lead_minutes` (default 240), `slot_horizon_days` (1..30, default 7), `slot_calendar_id`.
+- RPC baru **path 20** `efn.online.channel/efn_online_slots` (user teknis kanal online, `_efn_online_check_caller`):
+  `channel_code, outlet_code, date` → `{ outlet_code, date, timezone, slot_minutes, slots:[{ start_at, end_at, remaining }] }`.
+- `efn_online_quote` / `efn_online_place` menerima kunci opsional **`pickup_slot`** (iso UTC, tepat batas slot): quote →
+  issue `{product_id: null, code: "slot_unavailable"}` bila penuh/di luar jam; place → `sale.order.commitment_date` +
+  cek kapasitas di bawah kunci baris outlet; penuh → `efn_online:slot_unavailable` (kode bisnis baru, BFF →
+  `409 slot_unavailable`). `pickup_slot` masuk `quote_hash` **hanya bila ada** (hash lama tetap).
+- Blok kanal katalog: per outlet + `slot_enabled`, `slot_minutes`; `fulfilment.scheduled = any(slot_enabled)`.
+- Saga §10.6 tidak berubah (bayar QRIS/kasir; `ready` dari KDS/staf).
+
+### 15.5 BFF
+**Reservasi** (`src/booking/**`, kill switch `BOOKING_ENABLED` default `false`, `BOOKING_COMPANIES=PB,BCF`):
+- `GET /v1/booking/outlets` (publik, cache 60 s) → `{ items:[{ outlet_code, company_code, channel_code, public_name }] }` (outlet kanal katalog ∩ `BOOKING_COMPANIES`).
+- `GET /v1/booking/availability?outlet=&date=&party=` (publik, 30/menit/IP, cache Redis 30 s) → hasil RPC 16 (tervalidasi).
+- `POST /v1/booking/reservations` (Bearer wajib; `Idempotency-Key` 16–64; body `{ outlet_code, start_at, party_size, guest_label?, note? }`, ≤ 4 KB) → `201 { booking_id, status, outlet_code, outlet_name, start_at, end_at, party_size, table_label }`. Maks `BOOKING_MAX_ACTIVE_PER_MEMBER` (default 2) aktif; 10/jam/member.
+- `GET /v1/booking/reservations` (milik member, ≤ 20) dan `GET /v1/booking/reservations/:id`.
+- `POST /v1/booking/reservations/:id/cancel` → `200 { status: "cancelled" }` | `409 booking_not_cancellable`.
+- Event Odoo → BFF `POST /v1/pos/booking/events` (service key + HMAC `odoo_booking_event_hmac`, replay 300 s, `seq` monoton, ≤ 4 KB): `{ schema_version:1, idempotency_key, seq, platform_booking_ref, company_code, outlet_code, event: "confirmed|seated|done|cancelled|no_show", state, occurred_at }`. Respons seperti §10.5.
+- Tabel `platform.table_booking` (migrasi `12-platform-g23.sql`): `id uuid PK`, `member_id → member` (pseudonim, NULL setelah `BOOKING_MEMBER_LINK_DAYS=180` hari atau erasure), `idempotency_key`, `request_sha256`, `company_code CHECK (PB,BCF)`, `channel_code`, `outlet_code`, `start_at`, `end_at`, `party_size`, `status CHECK (requested, confirmed, seated, done, cancelled, no_show, failed)`, `odoo_booking_ref`, `table_label`, `last_seq`, `created_at`, `updated_at`. **`guest_label`/`note` tidak disimpan BFF.** `UNIQUE(member_id, idempotency_key)`. Retensi 400 hari.
+- Notifikasi `notify.push` `source: "table_booking"`, template `booking_confirmed|booking_cancelled` (consent & resolusi penerima yang ada; template Meta menunggu → console di dev).
+- Galat: Odoo `slot_unavailable|outside_hours|too_late|too_far|party_size` → `409` kode sama; `booking_disabled|not_found` → `409 booking_unavailable`; kill switch → `503 booking_unavailable`.
+
+**Slot pre-order** (`ONLINE_SLOTS_ENABLED` default `false`): `GET /v1/catalog/slots?channel=&outlet=&date=` (publik, cache 30 s) → RPC 20; cart group menerima `pickup_slot` (opsional, hanya outlet `slot_enabled`) diteruskan ke quote/place; `409 slot_unavailable` di checkout; `GET /v1/orders/:id` per bagian + `pickup_slot`.
+
+### 15.6 Klien mobile (repo terpisah `efn-mobile`)
+- App memanggil BFF langsung di `https://api.<domain>`. Token dari `POST /v1/auth/otp/verify` disimpan di **`expo-secure-store`**; tidak ada refresh token (JWT 1 jam, L-82a).
+- ALTCHA: app mengambil `GET /v1/auth/challenge` dan memecahkan proof-of-work di perangkat (SHA-256, format ALTCHA v1).
+- App brand memfilter kanal `?brand=<brand_code>` (L-33); superapp tanpa filter.
+- QR meja: kamera membaca `https://<tenant>/meja#t=<token>`; token di memori saja (L-78), header `X-Table-Session`.
+- TLS sistem, tanpa `http://`; tidak ada log token/HP.
+
+### 15.7 Web (superapp-web)
+- `/reservasi` (PB, Bacha, holding `app.`): gerai → tanggal → jumlah orang → slot → konfirmasi (login OTP bila belum) → status; `/reservasi/saya`.
+- Pemilih mode pesan: Ambil · Pre-order · Makan di tempat (`/meja`) · Reservasi · Pesan-antar (nonaktif, "segera hadir") di beranda brand, `/belanja`, dan beranda `app.`.
+- Beranda `app.` = landing Super-App bergaya Eraspace mengikuti bahasa visual landing PB. Brand lain tidak berubah.
+- Route Handler `/api/booking/**` (pola `orders-route`: cookie → Bearer, same-origin untuk tulis, `no-store`).
+
+### 15.8 Keamanan & PDP
+- Gateway allowlist + `RPC_ALLOWLIST` Odoo: path 16–20 (SEC-58). User teknis booking tanpa ACL dokumen.
+- Rate limit + cache availability (anti-scraping, lindungi Odoo); circuit breaker per PT.
+- Spam reservasi: login OTP, batas aktif per member, idempotensi; tanpa deposit pada pilot (Q-BK1).
+- `guest_label`/`note` difilter SEC-168 di BFF dan Odoo, tidak di-log.
+- Secret baru: `odoo_api_key_booking_pb`, `odoo_api_key_booking_bcf`, `odoo_booking_event_hmac` (host:disabled sampai aktif).
+
+### 15.9 Keputusan lead G23 (21 Okt 2026)
+| # | Keputusan |
+|---|---|
+| L-85 | Reservasi meja = modul baru `efn_table_booking` (CE tidak punya `pos_appointment`); kapasitas dari `restaurant.table.seats`; satu reservasi = satu meja (gabung meja ditunda). Default `confirm_mode=staff`. |
+| L-86 | Data tamu reservasi minimal: `member_id` (pseudonim) di BFF; `guest_label` + `note` di Odoo. HP/nama lengkap tidak masuk Odoo (ADR-029). |
+| L-87 | Pre-order berjadwal = `commitment_date` standar + kapasitas slot per outlet (`efn_online_slot`), di dalam saga §10.6. |
+| L-88 | Pesan-antar tetap mati G23; UI "segera hadir" tanpa tombol aktif. W-05 = G24. |
+| L-89 | Mobile = repo terpisah `E:\Projects\efn-mobile`, 4 app Expo berdiri sendiri (superapp, parisbaguette, bacha, grandlucky), tanpa paket bersama (keputusan user). Semua lewat BFF publik. |
+| L-90 | Kill switch default `false`: `BOOKING_ENABLED`, `ONLINE_SLOTS_ENABLED`; production hanya lewat `EFN_ALLOW_FEATURE_ON` (pola SEC-175). |
+
+### 15.10 Pertanyaan klien (default aman sampai dijawab)
+Q-BK1 deposit/no-show fee (default: tanpa) · Q-BK2 durasi standar per brand (90 menit) · Q-BK3 maks tamu online (8) ·
+Q-BK4 auto-confirm vs staf (staf) · Q-BK5 kapasitas slot pre-order per gerai (10/slot) · Q-BK6 teks syarat reservasi
+(Legal) · Q-BK7 template WA pengingat H-1 (Meta).

@@ -155,6 +155,20 @@ flowchart TD
 | 18-38 / Q-P10 | Grup auditor lintas PT | Legal | audit lintas PT |
 | (tetap) | Vendor payment (A-4), vendor 3PL, opini konsultan pajak (P-8, TP, ADR-019, PB1 kota, FARM), data outlet/perangkat/promo/modifier | Finance, Legal, IT, Ops | aktivasi online, W-05, W-07 tahap 2, W-15 |
 
+### A.8 Pembaruan 21 Okt 2026 — G23 (permintaan user: Super-App ala Eraspace, booking, mode pesan, mobile)
+Kontrak: `docs/04 §15` (L-85..L-90). Konsep produk & usulan nama: `docs/design/superapp-concept.md`.
+
+| ID | Paket | Agent | Estimasi kasar (minggu-engineer) | Status 21 Okt |
+|---|---|---|---|---|
+| **W-35** | Reservasi meja `efn_table_booking` (Odoo) + BFF `/v1/booking/*` + web `/reservasi` | odoo + bff + FE | 3–4 | dibangun G23 |
+| **W-36** | Pre-order berjadwal `efn_online_slot` (slot & kapasitas per gerai, `commitment_date`) | odoo + bff + FE | 1,5–2 | dibangun G23 |
+| **W-37** | Pemilih mode pesan (ambil · pre-order · makan di tempat · reservasi · pesan-antar "segera hadir") + landing Super-App `app.` gaya Eraspace | FE + uiux | 1–1,5 | dibangun G23 |
+| **W-38** | Mobile: repo terpisah `efn-mobile`, 4 app Expo berdiri sendiri (superapp, PB, Bacha, GrandLucky) | FE mobile | 6–9 (×4 app karena tanpa kode bersama) | kerangka G23; uji perangkat & toko aplikasi menyusul |
+| W-05 | Pesan-antar kurir internal | — | 4–5,5 | **G24** (L-88) |
+| W-39 (usulan) | Tier member, gift card (`loyalty` CE), reorder/favorit | functional → bff + FE | 3–5 | G24, perlu fit-gap |
+
+Keputusan klien baru: Q-BK1..Q-BK7 (`docs/04 §15.10`), nama produk (`superapp-concept.md §1`).
+
 ---
 
 ## Ringkasan manajemen (10 Okt 2026)
