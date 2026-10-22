@@ -182,7 +182,7 @@ const ORDER_COLS = `id::text AS id, member_id::text AS member_id, idempotency_ke
 const PART_COLS = `id::text AS id, order_id::text AS order_id, channel_code, company_code, outlet_code, fulfilment, status, lines, tax_groups,
   amount_total, amount_payable, quote_hash, sale_order_name, odoo_state, last_seq, pickup_code_enc, counter_code_enc, refunded_amount, confirmed_at, ready_at,
   handed_over_at, cancelled_at, cancel_reason, created_at, updated_at, points_redeemed, points_value_idr, amount_cash,
-  loyalty_reservation_id::text AS loyalty_reservation_id, eligible_amount, earn_status, points_earned, points_restored_value, kitchen_started_at`;
+  loyalty_reservation_id::text AS loyalty_reservation_id, eligible_amount, earn_status, points_earned, points_restored_value, kitchen_started_at, pickup_slot`;
 const REFUND_COLS = `id::text AS id, part_id::text AS part_id, payment_intent_id::text AS payment_intent_id, kind, reason, lines, amount,
   odoo_refund_ref, provider_refund_ref, status, failure_reason, initiated_by, claim_token::text AS claim_token, requested_by, created_at, updated_at, settled_at,
   points_value, cash_amount`;
@@ -251,6 +251,7 @@ function toPart(r: Raw): PartRow {
     points_earned: Number(r.points_earned ?? 0),
     points_restored_value: Number(r.points_restored_value ?? 0),
     kitchen_started_at: d(r.kitchen_started_at),
+    pickup_slot: d(r.pickup_slot),
   };
 }
 
@@ -421,8 +422,8 @@ export class PgOnlineRepo implements OnlineRepo {
     await this.q.query(
       `INSERT INTO platform.online_order_part
          (id, order_id, channel_code, company_code, outlet_code, fulfilment, status, lines, tax_groups, amount_total, amount_payable,
-          quote_hash, pickup_code_enc, counter_code_enc)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14)`,
+          quote_hash, pickup_code_enc, counter_code_enc, pickup_slot)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14, $15)`,
       [
         p.id,
         p.order_id,
@@ -438,6 +439,7 @@ export class PgOnlineRepo implements OnlineRepo {
         p.quote_hash,
         p.pickup_code_enc,
         p.counter_code_enc ?? null,
+        p.pickup_slot ?? null,
       ],
     );
   }

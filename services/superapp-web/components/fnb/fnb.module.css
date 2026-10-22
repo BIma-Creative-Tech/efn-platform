@@ -275,3 +275,48 @@
   display: flex;
   align-items: center;
 }
+
+/* ---------- Skema gelap (PB) ---------- */
+:global(html[data-scheme='dark']) .chip {
+  background: transparent;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+:global(html[data-scheme='dark']) .chip[aria-pressed='true'] {
+  background: var(--color-text);
+  border-color: var(--color-text);
+  color: var(--color-chrome);
+}
+:global(html[data-scheme='dark']) .item,
+:global(html[data-scheme='dark']) .sub,
+:global(html[data-scheme='dark']) .loginBox,
+:global(html[data-scheme='dark']) .attr {
+  border-radius: 16px;
+  border-color: var(--color-border);
+}
+:global(html[data-scheme='dark']) .thumb {
+  background: #ffffff;
+  border-radius: 12px;
+}
+:global(html[data-scheme='dark']) .itemPrice {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+:global(html[data-scheme='dark']) .noteInput,
+:global(html[data-scheme='dark']) .selectInput {
+  background: var(--color-surface-alt);
+  border-color: var(--color-border);
+  border-radius: 12px;
+}
+:global(html[data-scheme='dark']) .qty {
+  border-color: var(--color-border);
+  border-radius: 999px;
+}
+:global(html[data-scheme='dark']) .qty button {
+  background: transparent;
+}
+:global(html[data-scheme='dark']) .sendBar {
+  background: color-mix(in oklab, var(--color-chrome) 92%, transparent);
+  backdrop-filter: blur(12px);
+}

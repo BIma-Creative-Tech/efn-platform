@@ -1,6 +1,6 @@
 # odoo-rpc-gateway — filter L7 BFF → Odoo `/json/2` (penjualan online)
 
-- **Tujuan:** satu-satunya jalur BFF (`api-gateway`) ke Odoo untuk kanal online dan QR order meja. Hanya `POST` ke **15 path persis** (10 path §10.4.3 + `efn_online_counter_refund_authorize`, L-60 +
+- **Tujuan:** satu-satunya jalur BFF (`api-gateway`) ke Odoo untuk kanal online dan QR order meja. Hanya `POST` ke **20 path persis** (10 path §10.4.3 + `efn_online_counter_refund_authorize`, L-60 +
   `efn_online_set_invoice_party`, G21 §13.5 faktur atas nama pembeli, L-63 + 3 path QR G22 §14.A.5) docs/04; semua bentuk lain ditolak sebelum menyentuh Odoo. Odoo tetap tidak terjangkau dari internet
   maupun langsung dari BFF (`odoo-tls --allow-cn` tidak memuat `api-gateway`).
 - **ADR:** ADR-034 (Proposed — kanal online = BFF + `/json/2` terfilter), ADR-022 (enkripsi: mTLS dua hop, verify-full
@@ -11,7 +11,7 @@
   memori 64M, hanya network `internal`, tanpa label Traefik/port host. `haproxy.cfg` (aturan + alasan),
   `entrypoint.sh` (PEM crt+key ke tmpfs, validasi `ODOO_DB` fail-closed), `test-gateway.sh` (uji nyata).
 - **Aturan (ringkas):** mTLS masuk (CA internal, EKU clientAuth, CN persis `api-gateway`) · HTTP/1.1 origin-form ·
-  `POST` saja · path mentah = salah satu dari 15 path (tolak `%`, `;`, `//`, segmen titik, query, fragment) · allowlist
+  `POST` saja · path mentah = salah satu dari 20 path (tolak `%`, `;`, `//`, segmen titik, query, fragment) · allowlist
   header (`host, content-type, content-length, authorization, accept, accept-encoding, user-agent, connection,
   traceparent, tracestate, x-request-id`; method override/upgrade/transfer-encoding/x-original-url/x-openerp-* ditolak) ·
   Host `odoo-rpc-gateway[:8443]` · `Content-Type: application/json` · `Authorization: bearer <token>` tepat satu ·
@@ -42,6 +42,18 @@
   102 kasus; **belum dijalankan** terhadap stack nyata (lead menjalankan `test-gateway.sh`). Odoo harus memuat metode
   yang sama di `RPC_ALLOWLIST` (efn-odoo-engineer C); tanpa itu Odoo menjawab 403/404 dan kasus positif tetap
   `pass` (status dari Odoo).
+- **G23 (21 Okt 2026, docs/04 §15.3/§15.4/§15.8):** path 16–20 untuk reservasi meja (W-35) dan slot pre-order (W-36):
+
+  | # | Path | Pemanggil | Sifat |
+  |---|---|---|---|
+  | 16 | `/json/2/efn.table.booking/efn_booking_availability` | BFF, user teknis `efn_booking_pb`/`efn_booking_bcf` | baca |
+  | 17 | `/json/2/efn.table.booking/efn_booking_create` | idem | tulis, idempoten `booking:create:<ref>` |
+  | 18 | `/json/2/efn.table.booking/efn_booking_cancel` | idem | tulis, idempoten `booking:cancel:<ref>` |
+  | 19 | `/json/2/efn.table.booking/efn_booking_status` | idem | baca (rekonsiliasi) |
+  | 20 | `/json/2/efn.online.channel/efn_online_slots` | BFF, user teknis kanal online | baca |
+
+  Tidak ada header/aturan baru. Uji positif `test-gateway.sh` bertambah 5 kasus; **belum dijalankan** terhadap stack
+  nyata (Odoo dev belum memasang `efn_table_booking`/`efn_online_slot`; kasus positif tetap `pass` karena status dari Odoo).
 - **G22 (19 Okt 2026, docs/04 §14.A.5, §14.E.2):** path 13–15 untuk QR order dari ponsel (W-07, E-27):
 
   | # | Path | Pemanggil | Sifat |

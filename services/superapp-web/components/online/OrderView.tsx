@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { apiFetch, goToLogin } from '@/lib/cart-client';
 import { companyDisplayName } from '@/lib/catalog';
 import { formatNumber, formatRupiah } from '@/lib/format';
+import { slotLongLabel } from '@/lib/slots';
 import {
   canCancel,
   cashDue,
@@ -292,6 +293,7 @@ export function OrderView({ initial, simulator }: { initial: OrderDetail; simula
           <p className="small muted" style={{ margin: '0.25rem 0 0' }}>
             Ambil di: {p.outlet_name || p.outlet_code}
             {p.sale_order_name ? ` · No. pesanan ${p.sale_order_name}` : ''}
+            {p.pickup_slot ? ` · jadwal ambil ${slotLongLabel(p.pickup_slot)}` : ''}
             {p.ready_at ? ` · siap ${formatTime(p.ready_at)}` : ''}
             {p.handed_over_at ? ` · diambil ${formatTime(p.handed_over_at)}` : ''}
           </p>

@@ -165,3 +165,19 @@ Butuh DB Odoo baru (IDR `rounding = 1`) dengan `efn_pos_refund_origin` terpasang
   poin salah dibuang; `is_change` palsu; `pos_enroll` usia 17+; probe kasir SEC-113/115/121/125/126.
 - Reset DB Odoo dev: reset juga salinan katalog BFF, mart ClickHouse sumber Odoo + watermark, dan event online lama
   (E2E_SMOKE_REPORT G18-QA-01/02), lalu set `ETL_LOYALTY_RECON_NOT_BEFORE` di `.env`.
+
+## Skenario G23 — reservasi meja + slot pre-order (docs/04 §15) — DIJALANKAN 22 Okt 2026 di stack dev
+
+| File | Jalan di | Isi |
+|---|---|---|
+| `booking_smoke.py` | container `python:3.12` (efn_edge → Traefik `api.efn.local`, CA edge dev) | subperintah `login public create limit status cancel list`: gerai, ketersediaan, batas tamu, buat (Idempotency-Key, idempoten, konflik isi, field asing, HP di catatan, tanpa login), batas aktif per member, status setelah konfirmasi staf, batal + idempoten, daftar |
+| `booking_slot_smoke.py` | sama (butuh state login `booking_smoke.py`) | cart `pickup_slot` → quote → checkout → detail pesanan `pickup_slot`, kapasitas slot berkurang (cache 30 s), slot di luar jam → issue `slot_unavailable`, slot salah bentuk 400, tanpa slot = quote lama |
+| `odoo_booking_staff_smoke.py` | `odoo shell` di `efn-odoo-1` (env `BK_OP=confirm\|seat\|done\|cancel\|noop`, `BK_REF=<booking_id BFF>`) | aksi staf sebagai manajer POS PB dev (`efn_dev_pos_mgr_pb`) → outbox → kirim event HMAC ke BFF; cetak state/seq/outbox |
+
+Prasyarat dev: migrasi `12-platform-g23.sql`, modul `efn_table_booking` + `efn_online_slot` terpasang, pengaturan
+reservasi + slot outlet `RESTO-01` (PB), user teknis `efn_booking_pb` + key di `secrets/odoo_api_key_booking_pb.txt`
+([odoo-booking-api-key.md](../../docs/runbooks/odoo-booking-api-key.md)), `.env` `BOOKING_ENABLED=true`,
+`BOOKING_COMPANIES=PB`, `ONLINE_SLOTS_ENABLED=true`, compose + `-f docker-compose.online-booking-pb.yml`.
+
+Hasil 22 Okt 2026: reservasi 22/22 cek lulus (termasuk event `confirmed` Odoo → BFF `done` pada percobaan pertama),
+slot 9/9 setelah perbaikan format `pickup_slot` di detail pesanan (`...T05:00:00Z`, tanpa milidetik).

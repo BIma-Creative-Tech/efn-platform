@@ -2,7 +2,7 @@
  * Proxy multi-tenant (Next.js 16: `middleware.ts` -> `proxy.ts`, fungsi `middleware` -> `proxy`): host -> brand, diteruskan ke Server Components lewat
  * request header `x-efn-brand`. Header dari klien selalu ditimpa (tidak bisa dipalsukan).
  *
- * Dev saja (NODE_ENV !== 'production'): `?brand=efn-mart` menyimpan cookie `efn_dev_brand`
+ * Dev saja (NODE_ENV !== 'production'): `?brand=grandlucky` (atau `parisbaguette`, `bacha`, `efn`) menyimpan cookie `efn_dev_brand`
  * agar bisa mencoba brand lain di http://localhost:3001 tanpa mengatur /etc/hosts.
  *
  * ADR terkait: multi-tenant by domain (Proposed). Next 16: proxy berjalan di runtime Node.js

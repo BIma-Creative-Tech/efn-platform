@@ -39,7 +39,9 @@ EFN_RELEASE_CONFIG_VARS=(ACME_EMAIL PAYMENT_PROVIDER PG_SUPERUSER WHATSAPP_ENABL
   LOYALTY_EXPIRY_RUN_HOUR_WIB LOYALTY_EXPIRY_NOTICE_HOUR_WIB LOYALTY_EXPIRY_BATCH_SIZE LOYALTY_EXPIRY_MAX_PER_RUN
   LOYALTY_ACTIVITY_EPOCH LOYALTY_POINT_MAX_AGE_DAYS LOYALTY_INACTIVE_ANONYMIZE LOYALTY_INACTIVE_ANONYMIZE_GRACE_DAYS
   LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT
-  ETL_PARTNER_REGION_ENABLED ETL_LOYALTY_RECON_ONLINE_ENABLED ETL_ENABLE_KDS ETL_KDS_ONLINE_ENABLED)
+  ETL_PARTNER_REGION_ENABLED ETL_LOYALTY_RECON_ONLINE_ENABLED ETL_ENABLE_KDS ETL_KDS_ONLINE_ENABLED
+  BOOKING_ENABLED BOOKING_COMPANIES BOOKING_MAX_ACTIVE_PER_MEMBER BOOKING_MEMBER_LINK_DAYS BOOKING_RETENTION_DAYS
+  ONLINE_SLOTS_ENABLED)
 # G22 (docs/04 §14.D.1, L-72 D-22-18): env yang DIHAPUS kontrak. Bukan konfigurasi rilis (kunci manifest tak dikenal =
 # ditolak efn-deploy); jalur manual `sudo -E bash deploy.sh` -> production DITOLAK, staging peringatan (BFF: gagal start
 # di production, warning di luar production).
@@ -59,6 +61,10 @@ EFN_GATED_FEATURES_OFF=(LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT)
 # scripts/secrets.list odoo_api_key_qr_<pt>, overlay infra/compose/docker-compose.online-qr-<pt>.yml (scripts/deploy.sh),
 # efn-rotate-online-key --channel=QR-<PT>.
 EFN_FNB_QR_COMPANY_CODES=(PB BCF)
+# G23 (docs/04 §15.3, L-85): PT F&B yang boleh menerima reservasi meja. API key reservasi per PT: scripts/secrets.list
+# odoo_api_key_booking_<pt>, overlay infra/compose/docker-compose.online-booking-<pt>.yml (scripts/deploy.sh),
+# efn-rotate-online-key --channel=BOOKING-<PT>.
+EFN_BOOKING_COMPANY_CODES=(PB BCF)
 # G21 AC-13 (docs/04 §13.2, ADR-036 §0): kunci PII Odoo produksi (scripts/secrets.list host:disabled [SA]) - di-mount ke
 # odoo oleh infra/compose/docker-compose.pii.yml hanya bila EFN_ODOO_PII_ENABLED=true (scripts/deploy.sh).
 EFN_ODOO_PII_KEY_NAMES=(odoo_pii_key_v1 odoo_pii_bidx_key odoo_pii_name_key)
@@ -199,6 +205,22 @@ efn_validate_fnb_qr_companies() { # daftar
     efn_list_has "$c" "${EFN_FNB_QR_COMPANY_CODES[@]}" \
       || _efn_err "FNB_QR_COMPANIES: ${c} bukan PT F&B (${EFN_FNB_QR_COMPANY_CODES[*]}; docs/04 §14.A.4)" || return 1
     [[ -z "${seen[$c]:-}" ]] || _efn_err "FNB_QR_COMPANIES: ${c} ganda" || return 1
+    seen[$c]=1
+  done
+}
+
+# G23 (docs/04 §15.3): daftar PT reservasi koma -> setiap kode WAJIB di EFN_BOOKING_COMPANY_CODES dan unik. Dipakai
+# efn_validate_config dan scripts/deploy.sh (overlay + cek API key booking). rc 1 + alasan di stderr.
+efn_validate_booking_companies() { # daftar
+  local raw="$1" c
+  local -a list
+  local -A seen=()
+  [[ "$raw" =~ ^[A-Z]{2,8}(,[A-Z]{2,8}){0,3}$ ]] || _efn_err "BOOKING_COMPANIES tidak valid (kode PT huruf besar dipisah koma)" || return 1
+  IFS=, read -r -a list <<< "$raw"
+  for c in "${list[@]}"; do
+    efn_list_has "$c" "${EFN_BOOKING_COMPANY_CODES[@]}" \
+      || _efn_err "BOOKING_COMPANIES: ${c} bukan PT F&B reservasi (${EFN_BOOKING_COMPANY_CODES[*]}; docs/04 §15.3)" || return 1
+    [[ -z "${seen[$c]:-}" ]] || _efn_err "BOOKING_COMPANIES: ${c} ganda" || return 1
     seen[$c]=1
   done
 }
@@ -454,6 +476,22 @@ efn_validate_g22_config() { # app_env
   if [[ "${LOYALTY_INACTIVE_ANONYMIZE:-false}" == true && "${LOYALTY_EXPIRY_ENABLED:-false}" != true ]]; then
     _efn_err "LOYALTY_INACTIVE_ANONYMIZE=true butuh LOYALTY_EXPIRY_ENABLED=true (anonimisasi setelah hangus, §14.D.7)"; return 1
   fi
+  # G23 (docs/04 §15): kill switch reservasi & slot pre-order; angka = rentang yang sama dengan BFF app-config.ts
+  for v in BOOKING_ENABLED ONLINE_SLOTS_ENABLED; do
+    [[ -z "${!v:-}" || "${!v}" == true || "${!v}" == false ]] || _efn_err "$v harus true|false" || return 1
+  done
+  for spec in BOOKING_MAX_ACTIVE_PER_MEMBER:1:10 BOOKING_MEMBER_LINK_DAYS:1:400 BOOKING_RETENTION_DAYS:30:3650; do
+    IFS=: read -r name lo hi <<< "$spec"
+    [[ -z "${!name:-}" ]] && continue
+    [[ "${!name}" =~ $num_re ]] && (( ${!name} >= lo && ${!name} <= hi )) \
+      || _efn_err "$name harus bilangan bulat ${lo}..${hi}" || return 1
+  done
+  # Tautan member reservasi tidak boleh hidup lebih lama dari barisnya (§15.5 retensi)
+  if (( ${BOOKING_MEMBER_LINK_DAYS:-180} > ${BOOKING_RETENTION_DAYS:-400} )); then
+    _efn_err "BOOKING_MEMBER_LINK_DAYS (${BOOKING_MEMBER_LINK_DAYS:-180}) > BOOKING_RETENTION_DAYS (${BOOKING_RETENTION_DAYS:-400})"
+    return 1
+  fi
+  efn_validate_booking_companies "${BOOKING_COMPANIES:-PB,BCF}" || return 1
   # L-73: job hangus & anonimisasi OFF di production kecuali izin Superadmin di deploy.conf (tidak bisa lewat manifest).
   # SEC-171: filter consent notice hangus (EFN_GATED_FEATURES_OFF) - nilai berisiko `false`, kosong = default compose true.
   if [[ "$app_env" == production ]]; then

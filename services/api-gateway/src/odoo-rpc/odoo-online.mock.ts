@@ -23,6 +23,7 @@ import {
   RefundResult,
   RefundSettledInput,
   SetInvoicePartyResult,
+  SlotsResult,
   StatusRow,
   StockRow,
 } from './odoo-online.types';
@@ -222,7 +223,17 @@ export class MockOdooOnline implements OdooOnlineApi {
         currency: 'IDR',
         active: true,
         fulfilment: { pickup: true, delivery: false },
-        outlets: [{ outlet_code: 'TOKO-01', public_name: 'Toko Demo 01', pickup_enabled: true, prep_minutes: 30, active: true }],
+        outlets: [
+          {
+            outlet_code: 'TOKO-01',
+            public_name: 'Toko Demo 01',
+            pickup_enabled: true,
+            prep_minutes: 30,
+            active: true,
+            // G23 §15.4: pre-order berjadwal demo hanya kanal F&B (kue/hampers)
+            ...(this.slotChannels.has(channel) ? { slot_enabled: true, slot_minutes: 60 } : {}),
+          },
+        ],
         payment_modes: [...(this.paymentModes.get(channel) ?? ['qris'])],
         business_type: channel === 'PB' || channel === 'BCF' ? 'fnb' : 'retail',
         loyalty: { ...(this.loyaltyFlags.get(channel) ?? { earn: true, redeem: true }) },
@@ -253,7 +264,7 @@ export class MockOdooOnline implements OdooOnlineApi {
     return null;
   }
 
-  private compute(channel: string, outlet: string, lines: QuoteLineIn[], promoCodes: readonly string[] = []): QuoteResult {
+  private compute(channel: string, outlet: string, lines: QuoteLineIn[], promoCodes: readonly string[] = [], pickupSlot: string | null = null): QuoteResult {
     if (outlet !== 'TOKO-01') throw new OdooRpcError('business', 'not_found');
     if (lines.length === 0 || lines.length > 50) throw new OdooRpcError('business', 'invalid_input');
     if (promoCodes.length > 3) throw new OdooRpcError('business', 'invalid_input');
@@ -340,7 +351,7 @@ export class MockOdooOnline implements OdooOnlineApi {
       if (weight > limit) issues.push({ product_id: null, code: 'weight_limit' });
       weightTag = `|w${issues.filter((i) => i.code.startsWith('weight_')).map((i) => `${i.product_id ?? 'o'}:${i.code}`).join(',')}`;
     }
-    const hash = sha(`${channel}|${outlet}|${JSON.stringify(lines)}|v${this.priceVersion}|${[...applied].sort().join(',')}|r${REWARD_PRODUCT_ID}${weightTag}`);
+    const hash = sha(`${channel}|${outlet}|${JSON.stringify(lines)}|v${this.priceVersion}|${[...applied].sort().join(',')}|r${REWARD_PRODUCT_ID}${weightTag}${pickupSlot ? `|s${pickupSlot}` : ''}`);
     const amountPayable = Math.round(total);
     // Konsisten dengan parser (L-35 / QA G19): tagihan < Rp1 tanpa issue tidak pernah keluar dari stub
     if (amountPayable < 1 && issues.length === 0) throw new OdooRpcError('invalid_response', null, 'respons Odoo tidak valid: amount_payable < 1');
@@ -358,13 +369,62 @@ export class MockOdooOnline implements OdooOnlineApi {
     };
   }
 
-  async quote(channel: string, outlet: string, _fulfilment: Fulfilment, lines: QuoteLineIn[], promoCodes: string[] = []): Promise<QuoteResult> {
+  async quote(
+    channel: string,
+    outlet: string,
+    _fulfilment: Fulfilment,
+    lines: QuoteLineIn[],
+    promoCodes: string[] = [],
+    pickupSlot?: string | null,
+  ): Promise<QuoteResult> {
     this.track('quote', channel);
-    this.quoteArgs.push({ channel, promoCodes: [...promoCodes] });
-    return this.compute(channel, outlet, lines, promoCodes);
+    this.quoteArgs.push({ channel, promoCodes: [...promoCodes], ...(pickupSlot ? { pickupSlot } : {}) });
+    const q = this.compute(channel, outlet, lines, promoCodes, pickupSlot ?? null);
+    if (pickupSlot && !this.slotOk(channel, pickupSlot)) q.issues = [...q.issues, { product_id: null, code: 'slot_unavailable' }];
+    return q;
+  }
+
+  // ───────────── G23 §15.4: slot ambil pre-order (DEMO: 09:00–17:00 WIB, 60 menit, kapasitas 3, min 4 jam, 7 hari) ─────────────
+  readonly slotChannels = new Set<string>(['PB', 'BCF']);
+  slotCapacity = 3;
+  /** jumlah order per `${channel}|${slot}` (meniru hitungan Odoo; order batal tidak dikurangi di stub). */
+  readonly slotUsed = new Map<string, number>();
+
+  private slotStarts(date: string): number[] {
+    const base = Date.parse(`${date}T00:00:00Z`) - 7 * 3600_000;
+    const out: number[] = [];
+    for (let h = 9; h < 17; h += 1) out.push(base + h * 3600_000);
+    return out;
+  }
+
+  private slotOk(channel: string, slot: string): boolean {
+    if (!this.slotChannels.has(channel)) return false;
+    const t = Date.parse(slot);
+    if (Number.isNaN(t) || t < this.now() + 4 * 3600_000 || t > this.now() + 8 * 86_400_000) return false;
+    const date = new Date(t + 7 * 3600_000).toISOString().slice(0, 10);
+    if (!this.slotStarts(date).includes(t)) return false;
+    return (this.slotUsed.get(`${channel}|${slot}`) ?? 0) < this.slotCapacity;
+  }
+
+  async slots(channel: string, outlet: string, date: string): Promise<SlotsResult> {
+    this.track('slots', channel);
+    if (outlet !== 'TOKO-01' || !this.slotChannels.has(channel)) throw new OdooRpcError('business', 'not_found');
+    const iso = (ms: number): string => new Date(ms).toISOString().replace('.000Z', 'Z');
+    const starts = this.slotStarts(date).filter((t) => t >= this.now() + 4 * 3600_000);
+    return {
+      outlet_code: outlet,
+      date,
+      timezone: 'Asia/Jakarta',
+      slot_minutes: 60,
+      slots: starts.map((t) => ({
+        start_at: iso(t),
+        end_at: iso(t + 3600_000),
+        remaining: Math.max(this.slotCapacity - (this.slotUsed.get(`${channel}|${iso(t)}`) ?? 0), 0),
+      })),
+    };
   }
   /** Test: argumen promo per panggilan quote (memastikan kode yang sama dikirim ke setiap kanal). */
-  readonly quoteArgs: { channel: string; promoCodes: string[] }[] = [];
+  readonly quoteArgs: { channel: string; promoCodes: string[]; pickupSlot?: string }[] = [];
 
   async place(channel: string, order: PlaceInput): Promise<PlaceResult> {
     this.track('place', channel);
@@ -377,7 +437,9 @@ export class MockOdooOnline implements OdooOnlineApi {
       if (existing.payloadSha !== payloadSha) throw new OdooRpcError('business', 'idempotency_conflict');
       return this.placeResult(existing);
     }
-    const q = this.compute(channel, order.outlet_code, order.lines, order.promo_codes ?? []);
+    const q = this.compute(channel, order.outlet_code, order.lines, order.promo_codes ?? [], order.pickup_slot ?? null);
+    // G23 §15.4: slot penuh/tidak sah → slot_unavailable (Odoo menghitung di bawah kunci outlet)
+    if (order.pickup_slot !== undefined && !this.slotOk(channel, order.pickup_slot)) throw new OdooRpcError('business', 'slot_unavailable');
     // kode yang dikirim place harus semuanya masih berlaku; bila tidak, hash beda → price_changed (§11.2 no. 5)
     if (q.quote_hash !== order.quote_hash || q.promo_rejected.length > 0) throw new OdooRpcError('business', 'price_changed');
     // ASUMSI: Odoo menolak place dengan qty > batas baris sebagai `invalid_input` (BFF memblokir lebih dulu: cart_has_issues)
@@ -426,6 +488,7 @@ export class MockOdooOnline implements OdooOnlineApi {
       pointsRefunded: 0,
     };
     this.orders.set(o.ref, o);
+    if (order.pickup_slot !== undefined) this.slotUsed.set(`${channel}|${order.pickup_slot}`, (this.slotUsed.get(`${channel}|${order.pickup_slot}`) ?? 0) + 1);
     return this.placeResult(o);
   }
 

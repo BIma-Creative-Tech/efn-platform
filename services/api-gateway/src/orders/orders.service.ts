@@ -101,6 +101,8 @@ export interface OrderView {
     ready_at: string | null;
     handed_over_at: string | null;
     cancel_reason: string | null;
+    /** G23 §15.4: jadwal ambil pre-order (ISO) atau null = secepatnya. */
+    pickup_slot: string | null;
     // ── G22 (aditif) ──
     /** §14.C.2 */
     points_redeemed: number;
@@ -119,6 +121,8 @@ export interface OrderView {
 }
 
 const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);
+/** G23 §15.4: `pickup_slot` keluar dalam bentuk yang SAMA dengan slot/cart/quote (`...T05:00:00Z`, tanpa milidetik). */
+export const slotIso = (d: Date | null): string | null => (d ? d.toISOString().replace(/\.\d{3}Z$/, 'Z') : null);
 
 /**
  * L-14: status yang dilihat pelanggan. Bila order `paid|fulfilling` punya bagian `review`, pelanggan melihat `review`
@@ -204,6 +208,8 @@ export class OrdersService {
     const cart = await this.cart.get(memberId);
     if (cart.version !== quote.cart_version) throw OnlineErrors.cartChanged();
     if (input.acceptTotal !== quote.amount_payable_total) throw OnlineErrors.priceChanged();
+    // G23 §15.4: slot penuh di quote → 409 slot_unavailable (pilih jadwal lain), sebelum issue umum
+    if (quote.groups.some((g) => g.issues.some((i) => i.code === 'slot_unavailable'))) throw OnlineErrors.slotUnavailable();
     if (quote.groups.length === 0 || quote.groups.some((g) => g.issues.length > 0)) throw OnlineErrors.cartHasIssues();
     const method: PaymentMethod = input.paymentMethod ?? 'qris';
     // G20 §12.2 no. 2: `counter` hanya satu bagian (satu PT, L-50); metode harus diizinkan SETIAP kanal
@@ -296,6 +302,8 @@ export class OrdersService {
           quote_hash: g.quote_hash,
           pickup_code_enc: encryptPickupCode(this.cipher, code, partId),
           counter_code_enc: counterCode ? encryptCounterCode(this.cipher, counterCode, partId) : null,
+          // G23 §15.4: jadwal ambil pre-order dari quote tersimpan (bukan dari klien saat checkout)
+          pickup_slot: g.pickup_slot ? new Date(g.pickup_slot) : null,
         });
         // G22 §14.C.3: reservasi poin DI TRANSAKSI YANG SAMA dengan order (hold = expires_at + 10 menit)
         const plan = plans.find((x) => x.channel_code === g.channel_code);
@@ -389,6 +397,8 @@ export class OrdersService {
           ...(method === 'counter' && counterCode ? { payment_mode: 'counter' as const, counter_code: counterCode } : {}),
           // G22 §14.C.3: porsi Poin EFN (hanya bila ada) — Odoo memvalidasi batas kebijakan PT (points_invalid → 409)
           ...((part.points_redeemed ?? 0) > 0 ? { points_payment: { points: part.points_redeemed ?? 0, value_idr: part.points_value_idr ?? 0 } } : {}),
+          // G23 §15.4: jadwal ambil pre-order (hanya bila dipilih; masuk quote_hash Odoo)
+          ...(g.pickup_slot ? { pickup_slot: g.pickup_slot } : {}),
         });
         // amount_due Odoo = amount_payable − nilai poin (selain itu respons tidak dipercaya)
         const due = res.amount_payable - (part.points_value_idr ?? 0);
@@ -604,6 +614,8 @@ export class OrdersService {
         ready_at: iso(p.ready_at),
         handed_over_at: iso(p.handed_over_at),
         cancel_reason: p.cancel_reason,
+        // G23 §15.4: jadwal ambil pre-order (null = secepatnya)
+        pickup_slot: slotIso(p.pickup_slot ?? null),
         points_redeemed: p.points_redeemed ?? 0,
         points_value_idr: p.points_value_idr ?? 0,
         amount_cash: partCash(p),

@@ -17,6 +17,7 @@ import {
   QuoteResult,
   RefundResult,
   SetInvoicePartyResult,
+  SlotsResult,
   StatusRow,
   StockRow,
   TaxGroup,
@@ -216,6 +217,14 @@ function parseChannel(v: unknown): CatalogChannelInfo | null {
       pickup_enabled: ot.pickup_enabled === undefined ? true : bool(ot.pickup_enabled, 'pickup_enabled'),
       prep_minutes: ot.prep_minutes === undefined || ot.prep_minutes === null || ot.prep_minutes === false ? null : int(ot.prep_minutes, 'prep_minutes'),
       active: ot.active === undefined ? true : bool(ot.active, 'outlet.active'),
+      // G23 §15.4: absen (modul efn_online_slot tidak terpasang / tanpa outlet ber-slot) = tanpa slot
+      ...(ot.slot_enabled === true
+        ? { slot_enabled: true, slot_minutes: (() => {
+            const m = int(ot.slot_minutes, 'slot_minutes');
+            if (m !== 30 && m !== 60) bad('slot_minutes');
+            return m;
+          })() }
+        : {}),
     };
   });
   const f = o.fulfilment === undefined || o.fulfilment === null ? null : obj(o.fulfilment, 'channel.fulfilment');
@@ -360,6 +369,29 @@ export function parseQuote(v: unknown): QuoteResult {
     issues,
     promo_applied: promoApplied,
     promo_rejected: promoRejected,
+  };
+}
+
+/** G23 §15.4: respons `efn_online_slots` (RPC 20) divalidasi ulang. */
+export function parseSlots(v: unknown): SlotsResult {
+  const o = obj(v, 'slots');
+  const date = str(o.date, 'date', 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) bad('date');
+  const minutes = int(o.slot_minutes, 'slot_minutes');
+  if (minutes !== 30 && minutes !== 60) bad('slot_minutes');
+  const iso = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/;
+  return {
+    outlet_code: str(o.outlet_code, 'outlet_code', 24),
+    date,
+    timezone: str(o.timezone, 'timezone', 64),
+    slot_minutes: minutes,
+    slots: arr(o.slots, 'slots', 48).map((x) => {
+      const s = obj(x, 'slot');
+      const start = str(s.start_at, 'start_at', 20);
+      const end = str(s.end_at, 'end_at', 20);
+      if (!iso.test(start) || !iso.test(end) || Date.parse(end) - Date.parse(start) !== minutes * 60_000) bad('slot');
+      return { start_at: start, end_at: end, remaining: int(s.remaining, 'remaining') };
+    }),
   };
 }
 

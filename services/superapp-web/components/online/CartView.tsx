@@ -17,6 +17,7 @@ import {
   quoteHasIssues,
   retainPromoCodes,
   setOutlet,
+  setPickupSlot,
   setQty,
   type Cart,
   type CartGroup,
@@ -58,6 +59,7 @@ import {
   type InvoiceRequestInput,
 } from '@/lib/invoice-request';
 import { InvoiceRequestForm } from './InvoiceRequestForm';
+import { PickupSlotPicker } from './PickupSlotPicker';
 import { OnlineUnavailable } from './OnlineUnavailable';
 import styles from './online.module.css';
 
@@ -349,7 +351,7 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
         setChosenMethod(null);
       }
       if (r.code === 'points_unavailable') setPointsInputs({});
-      if (REQUOTE_CODES.includes(r.code) || r.code === 'cart_has_issues' || POINTS_REFRESH_CODES.includes(r.code)) {
+      if (REQUOTE_CODES.includes(r.code) || r.code === 'cart_has_issues' || r.code === 'slot_unavailable' || POINTS_REFRESH_CODES.includes(r.code)) {
         const cart = await getServerCart();
         if (cart.ok) await requote(cart.data);
       }
@@ -447,6 +449,17 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
               <p className="small" style={{ margin: '0.5rem 0 0' }}>
                 Ambil di toko: <strong>{outlets[0]?.public_name ?? ch?.outlets.find((o) => o.outlet_code === g.outlet_code)?.public_name ?? g.outlet_code}</strong>
               </p>
+            )}
+            {/* G23 §15.4: jadwal ambil pre-order hanya untuk outlet ber-slot (BFF mengirim slot_enabled bila aktif). */}
+            {g.fulfilment === 'pickup' && ch?.outlets.find((o) => o.outlet_code === g.outlet_code)?.slot_enabled === true && (
+              <PickupSlotPicker
+                key={`${g.channel_code}-${g.outlet_code}`}
+                channel={g.channel_code}
+                outlet={g.outlet_code}
+                value={g.pickup_slot ?? null}
+                disabled={busy || paying}
+                onChange={(slot) => mutate((gs) => setPickupSlot(gs, g.channel_code, slot))}
+              />
             )}
 
             {qg &&

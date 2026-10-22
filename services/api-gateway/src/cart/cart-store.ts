@@ -21,6 +21,8 @@ export interface CartGroup {
   outlet_code: string;
   fulfilment: 'pickup' | 'delivery';
   lines: CartLine[];
+  /** G23 §15.4: jadwal ambil pre-order (ISO UTC, menit bulat); absen = ambil secepatnya. */
+  pickup_slot?: string;
 }
 /** Isi cart (docs/04 §10.3.3): HANYA `product_id` + `qty` per grup kanal — tanpa harga. */
 export interface Cart {

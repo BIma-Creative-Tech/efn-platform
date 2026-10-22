@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- W-36: kolom slot pre-order di tab Outlet kanal online. -->
+    <record id="efn_online_channel_view_form_slot" model="ir.ui.view">
+        <field name="name">efn.online.channel.form.slot</field>
+        <field name="model">efn.online.channel</field>
+        <field name="inherit_id" ref="efn_online_order.efn_online_channel_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='outlet_ids']/list/field[@name='resource_calendar_id']" position="after">
+                <field name="slot_enabled" optional="show"/>
+                <field name="slot_minutes" optional="hide"/>
+                <field name="slot_capacity" optional="show"/>
+                <field name="slot_lead_minutes" optional="hide"/>
+                <field name="slot_horizon_days" optional="hide"/>
+                <field name="slot_calendar_id" optional="hide"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>

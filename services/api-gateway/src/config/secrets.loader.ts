@@ -35,6 +35,9 @@ export const KNOWN_SECRET_FILES: Readonly<Record<string, string>> = {
   FNB_TABLE_TOKEN_KEY: 'fnb_table_token_key',
   FNB_TABLE_TOKEN_KEY_PREV: 'fnb_table_token_key_prev',
   ODOO_FNB_EVENT_HMAC: 'odoo_fnb_event_hmac',
+  // G23 docs/04 §15.5/§15.8: HMAC event reservasi Odoo → BFF `/v1/pos/booking/events`. Wajib hanya bila BOOKING_ENABLED=true.
+  // `ODOO_API_KEY_BOOKING_<PT>` bernama dinamis per PT (pola QR) → tidak di daftar ini.
+  ODOO_BOOKING_EVENT_HMAC: 'odoo_booking_event_hmac',
   // Kredensial per service (docs/04 §7.3, SEC-02) — bukan lagi kredensial bersama/superuser
   PG_PASSWORD: 'pg_password_bff',
   RABBITMQ_PASSWORD: 'rabbitmq_password_bff',

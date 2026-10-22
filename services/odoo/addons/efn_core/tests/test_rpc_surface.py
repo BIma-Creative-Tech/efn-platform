@@ -140,6 +140,25 @@ RPC_ALLOWLIST = {
     ("efn.pos.qr.order", "efn_qr_submit"): "_efn_qr_check_caller + idempotency_key/payload_sha256 + sesi meja open & "
     "belum kedaluwarsa + sesi POS opened + touch_row sesi + batas kiriman/item/nominal; order dibangun server (L-70)",
     ("efn.pos.qr.order", "efn_qr_status"): "_efn_qr_check_caller (baca; hanya kiriman config itu, ref asing -> absent)",
+    # efn_table_booking (G23, W-35, docs/04 §15.3 path 16-19): `_efn_booking_check_caller` = grup group_booking_bff +
+    # user internal aktif TEPAT satu company = company outlet + tanpa grup lain (fail closed) + context dibuang kecuali
+    # lang; sudo setelah cek. Tombol staf = grup POS manager + check_access(write) + company.
+    ("efn.table.booking", "efn_booking_availability"): "_efn_booking_check_caller (baca; jam buka + meja + bentrok)",
+    ("efn.table.booking", "efn_booking_create"): "_efn_booking_check_caller + idempotency_key/request_sha256 + "
+    "FOR UPDATE settings outlet + hitung ulang ketersediaan; teks tamu difilter SEC-168",
+    ("efn.table.booking", "efn_booking_cancel"): "_efn_booking_check_caller + FOR UPDATE + hanya requested/confirmed "
+    "belum mulai; ref asing -> not_found",
+    ("efn.table.booking", "efn_booking_status"): "_efn_booking_check_caller (baca; hanya ref outlet itu)",
+    ("efn.table.booking", "action_efn_confirm"): "grup POS manager + check_access(write) + company + state",
+    ("efn.table.booking", "action_efn_seat"): "grup POS manager + check_access(write) + company + state",
+    ("efn.table.booking", "action_efn_done"): "grup POS manager + check_access(write) + company + state",
+    (
+        "efn.table.booking",
+        "action_efn_no_show",
+    ): "grup POS manager + check_access(write) + company + state + lewat tahan",
+    ("efn.table.booking", "action_efn_cancel"): "grup POS manager + check_access(write) + company + state",
+    # efn_online_slot (G23, W-36, docs/04 §15.4 path 20): `_efn_online_check_caller` kanal online (baca).
+    ("efn.online.channel", "efn_online_slots"): "_efn_online_check_caller (baca; kapasitas slot outlet)",
     # 3 metode POS (kasir/pelayan): `_efn_qr_check_pos_caller` = grup POS user + check_access(read) config + company
     # user + sesi POS opened; BFF dipanggil server-side (service key tidak ke browser); QR dirender server.
     ("pos.config", "efn_qr_session_open"): "_efn_qr_check_pos_caller + efn_qr_enabled + meja ∈ denah + order draft "

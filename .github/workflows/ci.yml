@@ -715,7 +715,8 @@ jobs:
       # tertunda, bukti 401, penolakan identitas/argumen/konfigurasi, tanpa kebocoran nilai key; r11 SEC-120: kunci host
       # bersama deploy + cabut key yatim per nama; G19: --all, --bootstrap, user bersama; G20 §12.1: allowlist kanal
       # GL/PB/BCR/BCF, kode lama RTL/FNB/kanal G19 ditolak; G22 §14.A.5: kunci QR-PB/QR-BCF user teknis QR meja,
-      # verifikasi path #15, --all dari FNB_QR_ENABLED, precheck Python QR; 111 kasus).
+      # verifikasi path #15, --all dari FNB_QR_ENABLED, precheck Python QR; G23 §15.3: kunci BOOKING-PB/BOOKING-BCF,
+      # verifikasi path #19 (403 Odoo sah, 403 gateway gagal), --all dari BOOKING_ENABLED; 127 kasus).
       - name: efn-rotate-online-key regression (docker palsu)
         run: |
           docker run --rm -v "$PWD:/src:ro" \

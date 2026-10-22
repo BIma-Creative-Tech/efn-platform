@@ -1,0 +1,305 @@
+/*
+ * Reservasi meja, pemilih mode pesan, dan pemilih jadwal ambil (G23 §15.7). Warna = token brand (lib/brands.ts),
+ * jadi tiap brand otomatis mengikuti paletnya (PB gelap navy/kuning, Bacha, holding). Tanpa warna baru.
+ * Target sentuh ≥ 2,75rem; fokus terlihat (outline var(--color-focus)); `prefers-reduced-motion` mematikan transisi.
+ */
+
+.flow {
+  display: grid;
+  /* minmax(0, 1fr): kolom tidak melebar mengikuti isi scroller tanggal (14 chip) -> tanpa scroll horizontal. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem;
+  max-width: 46rem;
+  width: 100%;
+  min-width: 0;
+  margin: 0 auto;
+}
+
+.head h1 {
+  margin: 0 0 0.25rem;
+}
+
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.step {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  padding: 1rem 1.125rem;
+}
+
+.stepTitle {
+  display: flex;
+  align-items: baseline;
+  gap: 0.625rem;
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.stepNum {
+  display: inline-grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  flex: none;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scroller {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding: 0.125rem 0.125rem 0.5rem;
+  margin: 0;
+  list-style: none;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+}
+
+.scroller > li {
+  scroll-snap-align: start;
+  flex: none;
+}
+
+.choice {
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+  padding: 0.5rem 0.875rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.choice:hover:not(:disabled) {
+  border-color: var(--color-primary);
+}
+
+.choice:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.choice[aria-pressed='true'],
+.choice[aria-checked='true'] {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-primary-contrast);
+}
+
+.choice:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  text-decoration: line-through;
+}
+
+.dateChoice {
+  display: grid;
+  justify-items: center;
+  gap: 0.125rem;
+  min-width: 4.25rem;
+  line-height: 1.15;
+}
+
+.dateChoice small {
+  font-size: 0.75rem;
+  opacity: 0.85;
+}
+
+.slotGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.slotGrid .choice {
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+.party {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.party output {
+  min-width: 2.5rem;
+  text-align: center;
+  font-size: 1.25rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.375rem 1rem;
+  margin: 0 0 1rem;
+}
+
+.summary dt {
+  color: var(--color-text-muted);
+}
+
+.summary dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.resHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.resHead h2 {
+  margin: 0;
+  font-size: 1.0625rem;
+}
+
+/* ---------- Pemilih mode pesan ---------- */
+
+.modes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.75rem;
+}
+
+.mode {
+  position: relative;
+  display: grid;
+  gap: 0.25rem;
+  align-content: start;
+  min-height: 5.5rem;
+  height: 100%;
+  padding: 1rem 1.125rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  text-decoration: none;
+  transition:
+    transform 220ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 160ms ease,
+    box-shadow 220ms ease;
+}
+
+a.mode:hover {
+  border-color: var(--color-primary);
+  transform: translateY(-2px);
+  box-shadow: 0 14px 28px -20px rgb(0 0 0 / 0.55);
+}
+
+a.mode:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.modeLabel {
+  font-weight: 700;
+  font-size: 1.0625rem;
+}
+
+.modeHint {
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+}
+
+.modeOff {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.modeBadge {
+  justify-self: start;
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-alt);
+}
+
+/* Varian di atas landing gelap: kartu transparan bergaris tipis (bahasa visual landing). */
+.modesOnDark .mode {
+  background: color-mix(in oklab, var(--color-surface) 70%, transparent);
+  border-color: color-mix(in oklab, var(--color-text) 18%, transparent);
+}
+
+/* ---------- Jadwal ambil di keranjang ---------- */
+
+.slotBox {
+  min-width: 0;
+  margin-top: 0.75rem;
+  padding: 0.75rem 0.875rem;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius);
+  display: grid;
+  gap: 0.625rem;
+}
+
+.slotBox legend {
+  font-weight: 700;
+  padding: 0 0.25rem;
+}
+
+.slotMode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .choice,
+  .mode {
+    transition: none;
+  }
+  a.mode:hover {
+    transform: none;
+  }
+}

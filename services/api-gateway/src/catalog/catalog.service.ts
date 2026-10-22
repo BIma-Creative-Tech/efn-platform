@@ -4,7 +4,7 @@ import { DB, Db } from '../common/db/db';
 import { Errors } from '../common/errors/api-error';
 import { KV_STORE, KvStore } from '../common/redis/kv-store';
 import { COMPANY_CODES } from '../loyalty/loyalty.service';
-import { CatalogChannelInfo, CatalogPrice, ChannelPaymentMode, ItemAttribute, ODOO_ONLINE, OdooOnlineApi, StockStatus } from '../odoo-rpc/odoo-online.types';
+import { CatalogChannelInfo, CatalogPrice, ChannelPaymentMode, ItemAttribute, ODOO_ONLINE, OdooOnlineApi, SlotsResult, StockStatus } from '../odoo-rpc/odoo-online.types';
 import { OnlineErrors, mapOdooError } from '../odoo-rpc/online-errors';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
 import { BRAND_CODE_RE, IMAGE_SHA_RE, parsePaymentModes } from '../odoo-rpc/odoo-online.parse';
@@ -15,6 +15,9 @@ export interface OutletInfo {
   public_name: string;
   pickup_enabled: boolean;
   prep_minutes: number | null;
+  /** G23 §15.4: pre-order berjadwal (hanya bila `ONLINE_SLOTS_ENABLED` dan outlet mengaktifkannya). */
+  slot_enabled?: boolean;
+  slot_minutes?: number | null;
 }
 export interface ChannelInfo {
   channel_code: string;
@@ -160,7 +163,14 @@ export class CatalogService {
       fulfilment: { ...c.fulfilment },
       outlets: c.outlets
         .filter((o) => o.active)
-        .map((o) => ({ outlet_code: o.outlet_code, public_name: o.public_name, pickup_enabled: o.pickup_enabled, prep_minutes: o.prep_minutes })),
+        .map((o) => ({
+          outlet_code: o.outlet_code,
+          public_name: o.public_name,
+          pickup_enabled: o.pickup_enabled,
+          prep_minutes: o.prep_minutes,
+          // G23 §15.4: field hanya muncul bila aktif (bentuk outlet pra-G23 tidak berubah)
+          ...(o.slot_enabled === true && this.config.onlineSlotsEnabled ? { slot_enabled: true, slot_minutes: o.slot_minutes ?? null } : {}),
+        })),
       // L-55: yang ditampilkan hanya mode yang juga diizinkan BFF (`ONLINE_PAYMENT_METHODS`)
       payment_modes: (modes ?? this.config.onlinePaymentMethods).filter((m) => this.config.onlinePaymentMethods.includes(m)),
       business_type: (c as { business_type?: unknown }).business_type === 'fnb' ? 'fnb' : 'retail',
@@ -285,6 +295,30 @@ export class CatalogService {
   }
 
   /** Stok live per outlet (`efn_online_stock`), cache Redis `ocat:stk:<channel>:<outlet>:<product_id>` 30 s. */
+  /**
+   * G23 §15.4: slot ambil pre-order (RPC 20), cache Redis 30 s per (kanal, outlet, tanggal). Hanya outlet `slot_enabled`
+   * menurut salinan kanal; kill switch `ONLINE_SLOTS_ENABLED` → 503 `slots_unavailable`.
+   */
+  async slots(channel: string, outlet: string, date: string): Promise<SlotsResult> {
+    if (!this.config.onlineSlotsEnabled) throw OnlineErrors.slotsUnavailable();
+    const info = await this.requireChannel(channel);
+    const o = info.outlets.find((x) => x.outlet_code === outlet);
+    if (!o || o.slot_enabled !== true) throw Errors.notFound();
+    const key = `ocat:slots:${channel}:${outlet}:${date}`;
+    const cached = await this.kv.get(key).catch(() => null);
+    if (cached) return JSON.parse(cached) as SlotsResult;
+    if (this.odoo.isCircuitOpen(channel)) throw OnlineErrors.unavailable();
+    let res: SlotsResult;
+    try {
+      res = await this.odoo.slots(channel, outlet, date);
+    } catch (err) {
+      throw mapOdooError(err, this.metrics, { method: 'slots', channel });
+    }
+    if (res.outlet_code !== outlet || res.date !== date) throw mapOdooError(new Error('slot tidak cocok'), this.metrics, { method: 'slots', channel });
+    await this.kv.setEx(key, JSON.stringify(res), 30).catch(() => undefined);
+    return res;
+  }
+
   async stock(channel: string, outlet: string, ids: number[]): Promise<{ items: { product_id: number; status: StockStatus }[]; checked_at: string }> {
     const info = await this.requireChannel(channel);
     if (!info.outlets.some((o) => o.outlet_code === outlet)) throw Errors.notFound();

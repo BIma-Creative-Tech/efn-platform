@@ -167,6 +167,12 @@ secrets:
   odoo_fnb_event_hmac: { file: ../../secrets/odoo_fnb_event_hmac.txt }
   odoo_api_key_qr_pb: { file: ../../secrets/odoo_api_key_qr_pb.txt }
   odoo_api_key_qr_bcf: { file: ../../secrets/odoo_api_key_qr_bcf.txt }
+  # G23 (docs/04 §15.3/§15.5, W-35): HMAC event reservasi Odoo -> BFF /v1/pos/booking/events (hanya odoo + api-gateway);
+  # API key Odoo user teknis reservasi per PT F&B (efn_booking_<pt>, host:disabled, dirotasi efn-rotate-online-key
+  # --channel=BOOKING-<PT>; mount HANYA lewat overlay docker-compose.online-booking-<pt>.yml saat BOOKING_ENABLED=true).
+  odoo_booking_event_hmac: { file: ../../secrets/odoo_booking_event_hmac.txt }
+  odoo_api_key_booking_pb: { file: ../../secrets/odoo_api_key_booking_pb.txt }
+  odoo_api_key_booking_bcf: { file: ../../secrets/odoo_api_key_booking_bcf.txt }
   # G21 AC-13 (docs/04 §13.2, ADR-036 §0): kunci PII Odoo (host:disabled [SA], dibuat Superadmin di host). Mount HANYA
   # ke odoo oleh docker-compose.pii.yml (deploy.sh bila EFN_ODOO_PII_ENABLED=true) / docker-compose.dev.yml.
   odoo_pii_key_v1: { file: ../../secrets/odoo_pii_key_v1.txt }
@@ -862,10 +868,12 @@ services:
       EFN_LOYALTY_POLICY_SIGNING_KEY_FILE: /run/secrets/loyalty_policy_signing_key
       # G22 (docs/04 §14.A.4): tanda tangan outbox event QR meja -> BFF POST /v1/pos/fnb/events (X-EFN-Signature)
       EFN_FNB_EVENT_HMAC_FILE: /run/secrets/odoo_fnb_event_hmac
+      # G23 (docs/04 §15.5): tanda tangan outbox event reservasi meja -> BFF POST /v1/pos/booking/events (X-EFN-Signature)
+      EFN_BOOKING_EVENT_HMAC_FILE: /run/secrets/odoo_booking_event_hmac
     # Kunci PII Odoo (odoo_pii_*) TIDAK di base: overlay docker-compose.pii.yml (production, L-59) / dev compose.
     secrets:
       [pg_password_odoo, odoo_admin_password, odoo_bff_api_key, member_hash_pepper, efn_audit_sink_key, odoo_online_event_hmac,
-       loyalty_policy_signing_key, odoo_fnb_event_hmac, efn_ca_crt]
+       loyalty_policy_signing_key, odoo_fnb_event_hmac, odoo_booking_event_hmac, efn_ca_crt]
     volumes:
       - odoo-data:/var/lib/odoo
     networks: [internal, data]
@@ -1227,6 +1235,18 @@ services:
       # memutuskan dasar hukum; production `false` ditolak deploy-validate kecuali Superadmin mencantumkan nama ini di
       # EFN_ALLOW_FEATURE_ON (/etc/efn/deploy.conf). check-encryption.sh: render prod wajib "true".
       LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT: ${LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT:-true}
+      # ── G23 (docs/04 §15; angka = PLACEHOLDER kontrak Q-BK1..7, rentang divalidasi scripts/lib/deploy-validate.sh) ──
+      # W-35 reservasi meja PB/BCF. Kill switch default false (/v1/booking/* 503 booking_unavailable). true butuh API key
+      # booking nyata per PT (deploy.sh) -> overlay docker-compose.online-booking-<pt>.yml me-mount key PT itu saja.
+      BOOKING_ENABLED: ${BOOKING_ENABLED:-false}
+      BOOKING_COMPANIES: ${BOOKING_COMPANIES:-PB,BCF}
+      BOOKING_MAX_ACTIVE_PER_MEMBER: ${BOOKING_MAX_ACTIVE_PER_MEMBER:-2}
+      BOOKING_MEMBER_LINK_DAYS: ${BOOKING_MEMBER_LINK_DAYS:-180}
+      BOOKING_RETENTION_DAYS: ${BOOKING_RETENTION_DAYS:-400}
+      ODOO_BOOKING_EVENT_HMAC_FILE: /run/secrets/odoo_booking_event_hmac
+      # W-36 pre-order berjadwal (§15.4). Kill switch default false (/v1/catalog/slots 503 slots_unavailable; pickup_slot
+      # di keranjang diabaikan). Slot juga harus diaktifkan per outlet di Odoo (efn_online_slot).
+      ONLINE_SLOTS_ENABLED: ${ONLINE_SLOTS_ENABLED:-false}
       MINIO_CATALOG_BUCKET: catalog
     secrets:
       - efn_ca_crt
@@ -1251,6 +1271,7 @@ services:
       - loyalty_policy_signing_key
       - fnb_table_token_key
       - odoo_fnb_event_hmac
+      - odoo_booking_event_hmac
     networks: [internal, data, cache, egress]
     read_only: true
     tmpfs: [/tmp]
@@ -1330,6 +1351,8 @@ services:
       traefik.docker.network: efn_internal
       traefik.http.routers.web.rule: >-
         Host(`app.${TRAEFIK_DOMAIN:-efn.local}`) || Host(`${TRAEFIK_DOMAIN:-efn.local}`)
+        || Host(`grandlucky.${TRAEFIK_DOMAIN:-efn.local}`) || Host(`parisbaguette.${TRAEFIK_DOMAIN:-efn.local}`)
+        || Host(`bacha.${TRAEFIK_DOMAIN:-efn.local}`)
         || Host(`mart.${TRAEFIK_DOMAIN:-efn.local}`) || Host(`kitchen.${TRAEFIK_DOMAIN:-efn.local}`)
       traefik.http.routers.web.entrypoints: websecure
       traefik.http.routers.web.tls.certresolver: letsencrypt

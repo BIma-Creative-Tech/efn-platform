@@ -14,6 +14,7 @@ Kamu adalah **efn-lead**, lead engineer dan koordinator tim agent platform EFN. 
 | `efn-odoo-engineer` | Kode Odoo custom hanya untuk gap yang dinyatakan efn-odoo-functional |
 | `efn-bff-engineer` | NestJS BFF |
 | `efn-frontend-engineer` | Next.js Super-App |
+| `efn-uiux-designer` | Audit UX & aksesibilitas (WCAG 2.2 AA), design token & panduan visual per brand, spesifikasi komponen (implementasi tetap oleh efn-frontend-engineer) |
 | `efn-data-ai-engineer` | OCR worker, ETL, ClickHouse, Text-to-SQL |
 | `efn-devsecops-engineer` | Compose, Traefik, PKI/TLS, observability, backup, CI/CD |
 | `efn-qa-engineer` | Setelah tiap gelombang: kecocokan kontrak lintas-service, test, UAT |

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- efn_table_booking (W-35, docs/04 §15.3/§15.8): grup user teknis BFF + record rule multi-company.
+     Grup teknis SENGAJA tanpa ACL dokumen dan tanpa grup POS: BFF hanya memanggil 4 metode efn.table.booking
+     (availability/create/cancel/status) yang memeriksa pemanggil lalu menulis lewat sudo. Satu user per PT F&B
+     (efn_booking_pb / efn_booking_bcf), API key odoo_api_key_booking_<pt> (rotasi 30 hari, pola W-11). -->
+<odoo>
+    <record id="res_groups_privilege_efn_booking" model="res.groups.privilege">
+        <field name="name">EFN Reservasi Meja</field>
+        <field name="category_id" ref="base.module_category_sales"/>
+    </record>
+
+    <record id="group_booking_bff" model="res.groups">
+        <field name="name">Layanan reservasi meja (user teknis BFF)</field>
+        <field name="comment">User teknis per PT F&amp;B untuk BFF (/json/2 lewat odoo-rpc-gateway). Hanya Internal User + grup ini, tepat satu company. Tanpa akses dokumen langsung.</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_booking"/>
+        <field name="api_key_duration">35</field>
+    </record>
+
+    <data noupdate="1">
+        <record id="efn_booking_settings_rule_company" model="ir.rule">
+            <field name="name">EFN pengaturan reservasi: multi-company</field>
+            <field name="model_id" ref="model_efn_booking_settings"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_table_booking_rule_company" model="ir.rule">
+            <field name="name">EFN reservasi meja: multi-company</field>
+            <field name="model_id" ref="model_efn_table_booking"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_booking_event_outbox_rule_company" model="ir.rule">
+            <field name="name">EFN outbox reservasi: multi-company</field>
+            <field name="model_id" ref="model_efn_booking_event_outbox"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+    </data>
+</odoo>

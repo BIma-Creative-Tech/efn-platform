@@ -9,6 +9,9 @@ import { OnlineMetrics } from './online-metrics';
 export const OnlineErrors = {
   unavailable: (): ApiError => ApiError.of(503, 'online_unavailable', 'Belanja online sedang tidak tersedia. Silakan coba lagi nanti.'),
   priceChanged: (): ApiError => ApiError.of(409, 'price_changed', 'Harga atau total berubah. Muat ulang ringkasan pesanan.'),
+  /** G23 §15.4: jadwal ambil pre-order penuh / tidak sah lagi. */
+  slotUnavailable: (): ApiError => ApiError.of(409, 'slot_unavailable', 'Jadwal ambil yang dipilih sudah penuh. Pilih jadwal lain.'),
+  slotsUnavailable: (): ApiError => ApiError.of(503, 'slots_unavailable', 'Pesan terjadwal sedang tidak tersedia.'),
   outOfStock: (): ApiError => ApiError.of(409, 'out_of_stock', 'Sebagian barang sedang habis. Perbarui keranjang Anda.'),
   itemUnavailable: (): ApiError => ApiError.of(409, 'item_unavailable', 'Sebagian barang tidak lagi tersedia. Perbarui keranjang Anda.'),
   orderNotCancellable: (): ApiError =>
@@ -79,6 +82,8 @@ export function mapOdooError(err: unknown, metrics: OnlineMetrics, ctx: { method
       // G22 §14.C.3 / L-79: Odoo menolak porsi Poin EFN (kebijakan PT/global) → 409, TANPA fallback env/tanpa poin
       case 'points_invalid':
         return OnlineErrors.exceedsMaxPct();
+      case 'slot_unavailable':
+        return OnlineErrors.slotUnavailable();
       default:
         metrics.anomaly('online_config_error', 'critical', { method: ctx.method, channel: ctx.channel, part_id: ctx.partId, code: err.code });
         return OnlineErrors.unavailable();

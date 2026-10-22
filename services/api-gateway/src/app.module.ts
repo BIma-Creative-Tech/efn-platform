@@ -3,6 +3,7 @@ import { APP_FILTER } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { TerminusModule } from '@nestjs/terminus';
 import { AuthModule } from './auth/auth.module';
+import { BookingModule } from './booking/booking.module';
 import { CartModule } from './cart/cart.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { CommonModule } from './common/common.module';
@@ -47,6 +48,7 @@ import { PrivacyModule } from './privacy/privacy.module';
     OrdersModule,
     // G22 QR meja F&B (docs/04 §14.A, ADR-032 Accepted B): kill switch FNB_QR_ENABLED (default false)
     FnbModule,
+    BookingModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_FILTER, useClass: ContractExceptionFilter }],

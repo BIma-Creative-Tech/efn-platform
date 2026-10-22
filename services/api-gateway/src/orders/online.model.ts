@@ -239,6 +239,8 @@ export interface PartRow {
   points_restored_value?: number;
   /** B-7: tiket dapur pertama `in_progress` (event `preparing`). */
   kitchen_started_at?: Date | null;
+  /** G23 §15.4: jadwal ambil pre-order (null = secepatnya). */
+  pickup_slot?: Date | null;
 }
 
 export interface RefundRow {

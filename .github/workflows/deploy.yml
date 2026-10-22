@@ -339,6 +339,14 @@ jobs:
           CFG_ETL_LOYALTY_RECON_ONLINE_ENABLED: ${{ vars.ETL_LOYALTY_RECON_ONLINE_ENABLED || 'false' }}
           CFG_ETL_ENABLE_KDS: ${{ vars.ETL_ENABLE_KDS || 'false' }}
           CFG_ETL_KDS_ONLINE_ENABLED: ${{ vars.ETL_KDS_ONLINE_ENABLED || 'false' }}
+          # G23 (docs/04 §15). Kosong = default compose (MATI, angka kontrak). Reservasi meja: true butuh API key booking
+          # host:* nyata per PT di BOOKING_COMPANIES (deploy.sh, efn-rotate-online-key --channel=BOOKING-<PT> --bootstrap).
+          CFG_BOOKING_ENABLED: ${{ vars.BOOKING_ENABLED || 'false' }}
+          CFG_BOOKING_COMPANIES: ${{ vars.BOOKING_COMPANIES }}
+          CFG_BOOKING_MAX_ACTIVE_PER_MEMBER: ${{ vars.BOOKING_MAX_ACTIVE_PER_MEMBER }}
+          CFG_BOOKING_MEMBER_LINK_DAYS: ${{ vars.BOOKING_MEMBER_LINK_DAYS }}
+          CFG_BOOKING_RETENTION_DAYS: ${{ vars.BOOKING_RETENTION_DAYS }}
+          CFG_ONLINE_SLOTS_ENABLED: ${{ vars.ONLINE_SLOTS_ENABLED || 'false' }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/efn-release"

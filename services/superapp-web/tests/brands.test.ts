@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getBrandById, isBrandId, normalizeHost, resolveBrandIdFromHost } from '../lib/brands';
+import { BRANDS, getBrandById, isBrandId, isSafeThemeValue, normalizeHost, resolveBrandIdFromHost, safeLogoSrc, themeToCssVars } from '../lib/brands';
 
 describe('normalizeHost', () => {
   it.each([
@@ -23,14 +23,21 @@ describe('resolveBrandIdFromHost', () => {
     ['app.efn.local', 'efn'],
     ['efn.local', 'efn'],
     ['localhost:3001', 'efn'],
-    ['mart.efn.local', 'efn-mart'],
-    ['Mart.Efn.Local:443', 'efn-mart'],
-    ['kitchen.efn.local', 'efn-kitchen'],
-    ['mart.contoh-produksi.co.id', 'efn-mart'], // prefix subdomain di domain apa pun
-    ['kitchen.contoh-produksi.co.id', 'efn-kitchen'],
+    ['grandlucky.efn.local', 'grandlucky'],
+    ['GrandLucky.Efn.Local:443', 'grandlucky'],
+    ['parisbaguette.efn.local', 'parisbaguette'],
+    ['bacha.efn.local', 'bacha'],
+    ['grandlucky.contoh-produksi.co.id', 'grandlucky'], // prefix subdomain di domain apa pun
+    ['parisbaguette.contoh-produksi.co.id', 'parisbaguette'],
+    ['bacha.contoh-produksi.co.id', 'bacha'],
+    ['mart.efn.local', 'grandlucky'], // alias subdomain lama
+    ['kitchen.contoh-produksi.co.id', 'parisbaguette'], // alias subdomain lama
     ['app.contoh-produksi.co.id', 'efn'],
     ['mart', 'efn'], // tanpa titik: bukan subdomain
+    ['bacha', 'efn'],
     ['evil.mart.contoh.co.id', 'efn'], // hanya label pertama yang dicocokkan
+    ['evil.bacha.contoh.co.id', 'efn'],
+    ['efn-mart.efn.local', 'efn'], // id tenant lama bukan subdomain
     ['tidak-dikenal.example.com', 'efn'],
     ['[::1]:3001', 'efn'],
     ['', 'efn'],
@@ -60,9 +67,12 @@ describe('isBrandId / getBrandById', () => {
     expect(channelsPath('gl')).toBe('/v1/catalog/channels');
   });
   it('id valid', () => {
-    expect(isBrandId('efn-mart')).toBe(true);
-    expect(getBrandById('efn-kitchen').companies).toEqual(['PB']);
-    expect(getBrandById('efn-mart').companies).toEqual(['GL']);
+    expect(isBrandId('grandlucky')).toBe(true);
+    expect(isBrandId('efn-mart')).toBe(false); // id lama dihapus
+    expect(getBrandById('efn-kitchen').id).toBe('efn'); // id lama -> default, bukan error
+    expect(getBrandById('parisbaguette').companies).toEqual(['PB']);
+    expect(getBrandById('grandlucky').companies).toEqual(['GL']);
+    expect(getBrandById('bacha').companies).toEqual(['BCR', 'BCF']);
     expect(getBrandById('efn').companies).toEqual(['GL', 'PB', 'BCR', 'BCF']);
   });
   it('kode RTL/FNB sudah dihapus dari peta PT; enam entitas §12.1', async () => {
@@ -70,14 +80,84 @@ describe('isBrandId / getBrandById', () => {
     expect(Object.keys(COMPANIES).sort()).toEqual(['BCF', 'BCR', 'EFN', 'FARM', 'GL', 'PB']);
     for (const b of Object.values(BRANDS)) for (const c of b.companies) expect(COMPANIES).toHaveProperty(c);
   });
-  it('peta brand Bacha = dua kanal BCR + BCF; kode tak dikenal -> kosong; tenant tetap brandCode null (L-33)', async () => {
-    const { channelsOfBrandCode, BRANDS } = await import('../lib/brands');
+  it('peta brand Bacha = dua kanal BCR + BCF; kode tak dikenal -> kosong', async () => {
+    const { channelsOfBrandCode } = await import('../lib/brands');
     expect(channelsOfBrandCode('BACHA')).toEqual(['BCR', 'BCF']);
     expect(channelsOfBrandCode('GL')).toEqual(['GL']);
     expect(channelsOfBrandCode('PB')).toEqual(['PB']);
     expect(channelsOfBrandCode('RTL')).toEqual([]);
     expect(channelsOfBrandCode('__proto__')).toEqual([]);
     expect(channelsOfBrandCode(null)).toEqual([]);
-    for (const b of Object.values(BRANDS)) expect(b.brandCode).toBeNull();
+  });
+  it('L-33 (diperbarui 20 Okt 2026): tenant brand memakai brandCode-nya, holding tetap null; kanal brand = PT tenant', async () => {
+    const { channelsOfBrandCode } = await import('../lib/brands');
+    expect(BRANDS.efn.brandCode).toBeNull();
+    expect(BRANDS.grandlucky.brandCode).toBe('GL');
+    expect(BRANDS.parisbaguette.brandCode).toBe('PB');
+    expect(BRANDS.bacha.brandCode).toBe('BACHA');
+    for (const b of Object.values(BRANDS)) {
+      if (b.brandCode !== null) expect([...channelsOfBrandCode(b.brandCode)]).toEqual(b.companies);
+    }
+  });
+});
+
+describe('tema per brand (R-T14, token aman untuk atribut style)', () => {
+  it('setiap brand menghasilkan semua CSS var (tidak ada token yang terbuang validasi)', () => {
+    for (const b of Object.values(BRANDS)) {
+      const vars = themeToCssVars(b.theme);
+      expect(Object.keys(vars)).toHaveLength(20);
+      expect(vars['--font-body']).toBe(b.theme.fontBody);
+      expect(vars['--radius']).toBe(b.theme.radius);
+    }
+  });
+  it('nilai berbahaya dibuang, bukan diteruskan ke style', () => {
+    const evil = {
+      ...BRANDS.efn.theme,
+      primary: 'red;background:url(https://x)',
+      fontBody: 'x; } body { display:none',
+      fontHeading: 'Arial", evil',
+      radius: 'calc(1px)',
+      cardShadow: 'url(https://x)',
+    };
+    const vars = themeToCssVars(evil);
+    expect(vars['--color-primary']).toBeUndefined();
+    expect(vars['--font-body']).toBeUndefined();
+    expect(vars['--font-heading']).toBeUndefined();
+    expect(vars['--radius']).toBeUndefined();
+    expect(vars['--card-shadow']).toBeUndefined();
+    expect(vars['--color-text']).toBe(BRANDS.efn.theme.text);
+    expect(isSafeThemeValue('color', '#fff')).toBe(false); // hanya #rrggbb
+    expect(isSafeThemeValue('font', "Georgia, 'Times New Roman', serif")).toBe(true);
+  });
+
+  /** Rasio kontras WCAG 2.x. */
+  function contrast(a: string, b: string): number {
+    const lum = (hex: string) => {
+      const [r, g, bl] = [1, 3, 5].map((i) => {
+        const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+        return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r! + 0.7152 * g! + 0.0722 * bl!;
+    };
+    const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+    return (hi! + 0.05) / (lo! + 0.05);
+  }
+  it.each(Object.values(BRANDS).map((b) => [b.id, b.theme] as const))('%s: kontras teks ≥ 4.5:1, fokus ≥ 3:1 (WCAG 2.2 AA)', (_id, t) => {
+    for (const bg of [t.surface, t.surfaceAlt, t.accentSoft]) {
+      expect(contrast(t.text, bg)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(t.textMuted, bg)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(t.primary, bg)).toBeGreaterThanOrEqual(4.5); // tautan & judul hero
+      expect(contrast(t.focus, bg)).toBeGreaterThanOrEqual(3);
+    }
+    expect(contrast(t.primaryContrast, t.primary)).toBeGreaterThanOrEqual(4.5); // tombol
+    expect(contrast(t.chromeContrast, t.chrome)).toBeGreaterThanOrEqual(4.5); // header & footer
+    expect(contrast(t.accent, t.chrome)).toBeGreaterThanOrEqual(3); // garis aksen header (non-teks)
+  });
+  it('logo hanya path SVG same-origin di /brands/<id>/', () => {
+    expect(safeLogoSrc(BRANDS.bacha)).toBeNull();
+    expect(safeLogoSrc({ ...BRANDS.bacha, logoSrc: '/brands/bacha/logo.svg' })).toBe('/brands/bacha/logo.svg');
+    expect(safeLogoSrc({ ...BRANDS.bacha, logoSrc: 'https://cdn.example.com/logo.svg' })).toBeNull();
+    expect(safeLogoSrc({ ...BRANDS.bacha, logoSrc: '/brands/../secrets/logo.svg' })).toBeNull();
+    expect(safeLogoSrc({ ...BRANDS.bacha, logoSrc: 'javascript:alert(1)' })).toBeNull();
   });
 });

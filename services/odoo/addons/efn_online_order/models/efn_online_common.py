@@ -30,6 +30,9 @@ ERROR_CODES = frozenset(
         # G22 W-12 (docs/04 §14.C.3 "Place"): porsi Poin EFN di luar kebijakan PT / kanal tanpa redeem -> BFF 409
         # exceeds_max_pct.
         "points_invalid",
+        # G23 W-36 (docs/04 §15.4): slot ambil pre-order penuh/tidak sah saat place -> BFF 409 slot_unavailable.
+        # Dipakai modul efn_online_slot; tanpa modul itu kode ini tidak pernah keluar.
+        "slot_unavailable",
     }
 )
 

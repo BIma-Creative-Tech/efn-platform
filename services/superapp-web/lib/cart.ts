@@ -15,6 +15,8 @@ export const MAX_CART_LINES = 50;
 export const DEFAULT_MAX_QTY = 99;
 export const MAX_CART_BODY_BYTES = 16 * 1024;
 export const GUEST_CART_KEY = 'efn_guest_cart_v1';
+/** G23 §15.4: bentuk `pickup_slot` (sama dengan lib/slots.ts SLOT_ISO_RE; diduplikasi agar cart.ts tetap tanpa import siklik). */
+export const PICKUP_SLOT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/;
 
 export type Fulfilment = 'pickup' | 'delivery';
 
@@ -42,6 +44,11 @@ export interface CartGroup {
   outlet_code: string;
   fulfilment: Fulfilment;
   lines: CartLine[];
+  /**
+   * G23 (docs/04 §15.4): jadwal ambil pre-order (ISO UTC, menit bulat). DIHILANGKAN bila tidak dipilih (= ambil
+   * secepatnya; bentuk keranjang lama tidak berubah). Hanya untuk outlet `slot_enabled`; BFF memvalidasi ulang.
+   */
+  pickup_slot?: string;
 }
 
 export interface Cart {
@@ -99,7 +106,11 @@ export function sanitizeCart(v: unknown, maxQty = 999): Cart | null {
       if (lines.some((x) => lineMatches(x, id, attrs))) return null;
       lines.push(attrs.length > 0 ? { product_id: id, qty, attribute_value_ids: attrs } : { product_id: id, qty });
     }
-    if (lines.length > 0) groups.push({ channel_code: g.channel_code, outlet_code: g.outlet_code, fulfilment: g.fulfilment, lines });
+    // G23: slot hanya untuk pickup + bentuk ISO UTC menit bulat; selain itu dibuang (bukan menolak seluruh keranjang).
+    const slot = g.fulfilment === 'pickup' && typeof g.pickup_slot === 'string' && PICKUP_SLOT_RE.test(g.pickup_slot) && !Number.isNaN(Date.parse(g.pickup_slot)) ? g.pickup_slot : null;
+    if (lines.length > 0) {
+      groups.push({ channel_code: g.channel_code, outlet_code: g.outlet_code, fulfilment: g.fulfilment, lines, ...(slot ? { pickup_slot: slot } : {}) });
+    }
   }
   if (countLines(groups) > MAX_CART_LINES) return null;
   return { version, groups };
@@ -198,7 +209,24 @@ export function setQty(
 
 export function setOutlet(groups: CartGroup[], channel: string, outlet: string): CartGroup[] {
   if (!isOutletCode(outlet)) return cloneGroups(groups);
-  return cloneGroups(groups).map((g) => (g.channel_code === channel ? { ...g, outlet_code: outlet } : g));
+  // Ganti gerai = jadwal ambil lama tidak berlaku lagi (kapasitas per gerai) -> slot dihapus.
+  return cloneGroups(groups).map((g) => {
+    if (g.channel_code !== channel) return g;
+    const { pickup_slot: _drop, ...rest } = g;
+    void _drop;
+    return { ...rest, outlet_code: outlet };
+  });
+}
+
+/** G23 §15.4: pasang/hapus jadwal ambil grup kanal (`null` = ambil secepatnya). Bentuk tidak valid -> tanpa perubahan. */
+export function setPickupSlot(groups: CartGroup[], channel: string, slot: string | null): CartGroup[] {
+  if (slot !== null && (!PICKUP_SLOT_RE.test(slot) || Number.isNaN(Date.parse(slot)))) return cloneGroups(groups);
+  return cloneGroups(groups).map((g) => {
+    if (g.channel_code !== channel) return g;
+    const { pickup_slot: _old, ...rest } = g;
+    void _old;
+    return slot && g.fulfilment === 'pickup' ? { ...rest, pickup_slot: slot } : rest;
+  });
 }
 
 /** Gabungkan keranjang tamu ke keranjang server (qty dijumlahkan; outlet server menang bila sudah ada grup). */
@@ -299,6 +327,8 @@ export interface QuoteGroup {
   amount_total: number;
   amount_payable: number;
   issues: QuoteIssue[];
+  /** G23 §15.4: jadwal ambil yang ikut dihitung di quote (absen = secepatnya). */
+  pickup_slot?: string;
 }
 
 export interface Quote {
@@ -394,6 +424,8 @@ export const KNOWN_ISSUE_CODES = [
   'weight_missing',
   // §14.B B-4: PTAV/atribut F&B tidak valid atau tidak lagi berlaku untuk produk itu.
   'attribute_invalid',
+  // G23 §15.4: jadwal ambil pre-order penuh / di luar jam (product_id null).
+  'slot_unavailable',
 ] as const;
 export const UNKNOWN_ISSUE_CODE = 'unknown_issue';
 
@@ -465,6 +497,7 @@ export function parseQuote(v: unknown): Quote | null {
       amount_total: num(g.amount_total) ?? payable,
       amount_payable: payable,
       issues: parseIssues(g.issues),
+      ...(typeof g.pickup_slot === 'string' && PICKUP_SLOT_RE.test(g.pickup_slot) ? { pickup_slot: g.pickup_slot } : {}),
     });
   }
   return {
@@ -507,6 +540,7 @@ export const ISSUE_LABEL: Record<string, string> = {
   weight_limit: 'Total berat pesanan melebihi batas untuk PT ini. Kurangi jumlah atau hapus beberapa barang, lalu coba lagi.',
   weight_missing: 'Berat barang ini belum tercatat sehingga belum bisa dipesan online. Hapus barang ini atau beli langsung di toko.',
   attribute_invalid: 'Pilihan tambahan (mis. ukuran, topping) tidak berlaku lagi. Hapus barang ini lalu pilih ulang dari menu.',
+  slot_unavailable: 'Jadwal ambil yang dipilih sudah penuh atau tidak berlaku lagi. Pilih jadwal lain.',
 };
 
 export function issueLabel(code: string): string {

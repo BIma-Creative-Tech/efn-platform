@@ -228,6 +228,8 @@ export class AppConfig {
     problems.push(...this.onlineStartupProblems());
     // G22 (docs/04 §14.A.9, §14.C, §14.D.8, L-72 D-22-18, L-73): QR meja, poin online, job hangus
     problems.push(...this.g22StartupProblems());
+    // G23 (docs/04 §15.5, L-90): reservasi meja & slot pre-order
+    problems.push(...this.g23StartupProblems());
     if (problems.length > 0) throw new ConfigError(`Konfigurasi tidak lengkap: ${problems.join('; ')}`);
   }
 
@@ -265,7 +267,7 @@ export class AppConfig {
     // §10.4.1: mTLS ke odoo-rpc-gateway wajib bila kanal online/katalog aktif dan bukan stub dev (tanpa fallback plaintext)
     attempt(() => {
       // G22: QR meja juga memakai json2 lewat gateway yang sama
-      if ((this.onlineEnabled || this.onlineCatalogEnabled || this.fnbQrEnabled) && !this.odooOnlineMock) void this.odooRpcTls;
+      if ((this.onlineEnabled || this.onlineCatalogEnabled || this.fnbQrEnabled || this.bookingEnabled) && !this.odooOnlineMock) void this.odooRpcTls;
     });
     if (problems.length > 0) throw new ConfigError(`Konfigurasi TLS tidak valid: ${problems.join('; ')}`);
     return { plaintextChannels: plaintext };
@@ -1417,6 +1419,8 @@ export class AppConfig {
   get catalogSyncChannels(): string[] {
     const out = [...this.onlineChannels];
     if (this.fnbQrEnabled) for (const c of this.fnbQrCompanies) if (!out.includes(c)) out.push(c);
+    // G23 §15.5: gerai reservasi = outlet kanal katalog PT booking → salinan kanal PT itu ikut disinkron
+    if (this.bookingEnabled) for (const c of this.bookingCompanies) if (!out.includes(c)) out.push(c);
     return out;
   }
   get onlineChannels(): string[] {
@@ -1860,6 +1864,102 @@ export class AppConfig {
       throw new ConfigError(`${envName} masih placeholder 'disabled' — QR ${company} belum boleh aktif`);
     }
     return this.onlineSecret(envName, contractName);
+  }
+
+  // ───────────── G23 — reservasi meja & slot pre-order (docs/04 §15.5, L-85..L-90) ─────────────
+  /** Kill switch reservasi meja. Default `false` di SEMUA lingkungan (L-90; production hanya lewat `EFN_ALLOW_FEATURE_ON`). */
+  get bookingEnabled(): boolean {
+    return this.bool('BOOKING_ENABLED', false);
+  }
+  /** PT yang boleh menerima reservasi (`BOOKING_COMPANIES=PB,BCF`; hanya `PB`/`BCF`). */
+  get bookingCompanies(): FnbCompanyCode[] {
+    const raw = this.str('BOOKING_COMPANIES') ?? 'PB,BCF';
+    const out = [...new Set(raw.split(/[\s,;]+/).filter((s) => s.length > 0))];
+    if (out.length === 0 || out.some((c) => !(FNB_COMPANY_CODES as readonly string[]).includes(c))) {
+      throw new ConfigError('BOOKING_COMPANIES hanya boleh berisi PB|BCF');
+    }
+    return out as FnbCompanyCode[];
+  }
+  /** Maks reservasi aktif (`requested|confirmed`, belum lewat) per member (default 2). */
+  get bookingMaxActivePerMember(): number {
+    return this.int('BOOKING_MAX_ACTIVE_PER_MEMBER', 2, 1, 10);
+  }
+  /** Tautan `member_id` reservasi dilepas N hari setelah `end_at` (default 180, PDP). */
+  get bookingMemberLinkDays(): number {
+    return this.int('BOOKING_MEMBER_LINK_DAYS', 180, 1, 400);
+  }
+  /** Retensi baris `table_booking` (default 400 hari, §15.5). */
+  get bookingRetentionDays(): number {
+    return this.int('BOOKING_RETENTION_DAYS', 400, 30, 3650);
+  }
+  /** Kill switch slot pre-order (§15.4). Default `false`. */
+  get onlineSlotsEnabled(): boolean {
+    return this.bool('ONLINE_SLOTS_ENABLED', false);
+  }
+  /** §15.5: secret `odoo_booking_event_hmac` — wajib beda dari service key & HMAC event online/QR. */
+  get odooBookingEventHmac(): string {
+    const v = this.secret('ODOO_BOOKING_EVENT_HMAC');
+    if (v === this.secretValue('ODOO_BFF_API_KEY')) throw new ConfigError('ODOO_BOOKING_EVENT_HMAC harus berbeda dari ODOO_BFF_API_KEY');
+    for (const [name, get] of [
+      ['ODOO_ONLINE_EVENT_HMAC', () => this.odooOnlineEventHmac],
+      ['ODOO_FNB_EVENT_HMAC', () => this.secretValue('ODOO_FNB_EVENT_HMAC')],
+    ] as const) {
+      let other: string | undefined;
+      try {
+        other = get();
+      } catch {
+        other = undefined;
+      }
+      if (other !== undefined && v === other) throw new ConfigError(`ODOO_BOOKING_EVENT_HMAC harus berbeda dari ${name}`);
+    }
+    return v;
+  }
+  /**
+   * §15.3: API key json2 user teknis booking per PT (`efn_booking_pb`/`efn_booking_bcf`): `ODOO_API_KEY_BOOKING_<PT>_FILE`
+   * → fallback `${SECRETS_DIR:-/run/secrets}/odoo_api_key_booking_<pt>` → literal hanya APP_ENV=dev. Placeholder `disabled` ditolak.
+   */
+  odooApiKeyBooking(company: FnbCompanyCode): string {
+    if (!(FNB_COMPANY_CODES as readonly string[]).includes(company)) throw new ConfigError('kode PT booking tidak valid');
+    const envName = `ODOO_API_KEY_BOOKING_${company}`;
+    const contractName = `odoo_api_key_booking_${company.toLowerCase()}`;
+    const raw = this.onlineSecretRaw(envName, contractName);
+    if (raw !== undefined && raw.trim().toLowerCase() === 'disabled') {
+      throw new ConfigError(`${envName} masih placeholder 'disabled' — reservasi ${company} belum boleh aktif`);
+    }
+    return this.onlineSecret(envName, contractName);
+  }
+
+  private g23StartupProblems(): string[] {
+    const problems: string[] = [];
+    const attempt = (fn: () => void): void => {
+      try {
+        fn();
+      } catch (err) {
+        problems.push(err instanceof Error ? err.message : 'konfigurasi G23 tidak valid');
+      }
+    };
+    for (const getter of [() => this.bookingCompanies, () => this.bookingMaxActivePerMember, () => this.bookingMemberLinkDays, () => this.bookingRetentionDays]) {
+      attempt(() => void getter());
+    }
+    if (!this.isDevEnv) {
+      for (const name of Object.keys(this.env)) {
+        if (/^ODOO_API_KEY_BOOKING_[A-Z0-9_]+$/.test(name) && !name.endsWith('_FILE') && this.str(name) !== undefined) {
+          problems.push(`${name} sebagai env literal ditolak di luar APP_ENV=dev; pakai ${name}_FILE (SEC-29)`);
+        }
+      }
+    }
+    if (this.bookingEnabled) {
+      attempt(() => void this.odooBookingEventHmac);
+      if (!this.odooOnlineMock) {
+        attempt(() => void this.odooRpcUrl);
+        for (const pt of problems.length === 0 ? this.bookingCompanies : []) {
+          attempt(() => void this.odooApiKeyBooking(pt));
+          // daftar gerai reservasi = salinan blok kanal katalog PT itu (ditarik dengan API key kanal online PT)
+          attempt(() => void this.odooApiKeyOnline(pt));
+        }
+      }
+    }
+    return problems;
   }
 
   // ───────────── G22 — poin online (docs/04 §14.C.1 no. 5) ─────────────

@@ -20,6 +20,8 @@
 #     overlay PII me-mount odoo_pii_*; render prod-pii (docker-compose.pii.yml) tanpa ketiga kunci / tanpa
 #     EFN_ODOO_PII_REQUIRED=true
 #   - (G22) fnb_table_token_key di luar api-gateway / odoo_fnb_event_hmac di luar odoo + api-gateway atau tidak di-mount
+#   - (G23) odoo_booking_event_hmac di luar odoo + api-gateway atau tidak di-mount; odoo_api_key_booking_<pt> selain pb/bcf
+#           atau env ODOO_API_KEY_BOOKING_<PT>_FILE tanpa secret ter-mount
 #     dengan env *_FILE yang cocok; secret QR di luar pb/bcf; ODOO_API_KEY_QR_<PT>_FILE tanpa secret ter-mount;
 #     LOYALTY_POINT_EXPIRY_DAYS (dihapus D-22-18) di env BFF; kill switch QR/poin online/hangus bukan false di render prod;
 #     LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT bukan true (SEC-171) / job ETL KDS/region/recon online bukan false di render prod
@@ -168,8 +170,13 @@ check_compose() {
   #    (ADR-036 K-36-3 / §0; dev). G20 (docs/04 §12.1): kanal = kode PT -> hanya gl/pb/bcr/bcf; kode lama ditolak.
   local sec allowed
   local -a secs
-  mapfile -t secs < <(jq -r '.secrets // {} | keys[] | select(test("^(odoo_api_key_online_[a-z0-9_]+|odoo_api_key_qr_[a-z0-9_]+|odoo_pii_[a-z0-9_]+)$"))' <<< "$json")
+  mapfile -t secs < <(jq -r '.secrets // {} | keys[] | select(test("^(odoo_api_key_online_[a-z0-9_]+|odoo_api_key_qr_[a-z0-9_]+|odoo_api_key_booking_[a-z0-9_]+|odoo_pii_[a-z0-9_]+)$"))' <<< "$json")
   for sec in "${secs[@]}"; do
+    if [[ "$sec" == odoo_api_key_booking_* ]]; then
+      # G23 (docs/04 §15.3): user teknis reservasi hanya untuk PT F&B PB/BCF
+      [[ "$sec" =~ ^odoo_api_key_booking_(pb|bcf)$ ]] || err "[$label] secret $sec bukan PT F&B reservasi (pb/bcf, docs/04 §15.3)"
+      continue
+    fi
     if [[ "$sec" == odoo_api_key_qr_* ]]; then
       # G22 (docs/04 §14.A.5): user teknis QR hanya untuk PT F&B PB/BCF
       [[ "$sec" =~ ^odoo_api_key_qr_(pb|bcf)$ ]] || err "[$label] secret $sec bukan PT F&B QR (pb/bcf, docs/04 §14.A.5)"
@@ -200,12 +207,23 @@ check_compose() {
       | (.key | capture("^ODOO_API_KEY_QR_(?<k>[A-Z0-9_]+)_FILE$") | .k) as $k
       | [$k, (.value // ""), (if ($m | index("odoo_api_key_qr_" + ($k | ascii_downcase))) != null then "1" else "0" end)]
       | @tsv' <<< "$json")
+  # G23 (docs/04 §15.3): env BFF ODOO_API_KEY_BOOKING_<PT>_FILE wajib menunjuk secret booking PT itu yang DI-MOUNT ke BFF
+  while IFS=$'\t' read -r key val mounted; do
+    [[ -z "$key" ]] && continue
+    [[ "$val" == "/run/secrets/odoo_api_key_booking_${key,,}" && "$mounted" == 1 ]] \
+      || err "[$label] api-gateway ODOO_API_KEY_BOOKING_${key}_FILE=${val} tidak cocok dengan secret ter-mount odoo_api_key_booking_${key,,}"
+  done < <(jq -r '.services["api-gateway"] // {} | [.secrets[]? | (.source // .)] as $m
+      | (.environment // {}) | to_entries[] | select(.key | test("^ODOO_API_KEY_BOOKING_[A-Z0-9_]+_FILE$"))
+      | (.key | capture("^ODOO_API_KEY_BOOKING_(?<k>[A-Z0-9_]+)_FILE$") | .k) as $k
+      | [$k, (.value // ""), (if ($m | index("odoo_api_key_booking_" + ($k | ascii_downcase))) != null then "1" else "0" end)]
+      | @tsv' <<< "$json")
   # Kanal default GL (base) & HMAC event selalu diperiksa eksplisit (nama tetap), sisanya dari render.
   # G22: kunci token sesi meja (BFF saja) & HMAC event QR (Odoo + BFF).
   for sec in odoo_api_key_online_gl odoo_online_event_hmac loyalty_policy_signing_key fnb_table_token_key \
-             odoo_fnb_event_hmac "${secs[@]}"; do
+             odoo_fnb_event_hmac odoo_booking_event_hmac "${secs[@]}"; do
     allowed='["api-gateway"]'
-    [[ "$sec" == "odoo_online_event_hmac" || "$sec" == "loyalty_policy_signing_key" || "$sec" == "odoo_fnb_event_hmac" ]] \
+    [[ "$sec" == "odoo_online_event_hmac" || "$sec" == "loyalty_policy_signing_key" || "$sec" == "odoo_fnb_event_hmac" \
+       || "$sec" == "odoo_booking_event_hmac" ]] \
       && allowed='["api-gateway","odoo"]'
     [[ "$sec" == odoo_pii_* ]] && allowed='["odoo"]'
     jq -e --arg s "$sec" --argjson ok "$allowed" '
@@ -227,8 +245,11 @@ check_compose() {
   #      odoo_fnb_event_hmac WAJIB di odoo (EFN_FNB_EVENT_HMAC_FILE, penanda tangan) DAN api-gateway
   #      (ODOO_FNB_EVENT_HMAC_FILE, pemverifikasi). Di luar service itu sudah ditolak loop least privilege di atas.
   local spec svc e s
+  #      G23 (docs/04 §15.5): odoo_booking_event_hmac sama (EFN_BOOKING_EVENT_HMAC_FILE / ODOO_BOOKING_EVENT_HMAC_FILE).
   for spec in api-gateway:FNB_TABLE_TOKEN_KEY_FILE:fnb_table_token_key odoo:EFN_FNB_EVENT_HMAC_FILE:odoo_fnb_event_hmac \
-              api-gateway:ODOO_FNB_EVENT_HMAC_FILE:odoo_fnb_event_hmac; do
+              api-gateway:ODOO_FNB_EVENT_HMAC_FILE:odoo_fnb_event_hmac \
+              odoo:EFN_BOOKING_EVENT_HMAC_FILE:odoo_booking_event_hmac \
+              api-gateway:ODOO_BOOKING_EVENT_HMAC_FILE:odoo_booking_event_hmac; do
     IFS=: read -r svc e s <<< "$spec"
     jq -e --arg svc "$svc" --arg e "$e" --arg s "$s" '
         (.services[$svc] == null)
