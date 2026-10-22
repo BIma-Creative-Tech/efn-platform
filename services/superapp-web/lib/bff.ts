@@ -15,6 +15,7 @@
 import 'server-only';
 import { readFileSync } from 'node:fs';
 import { assertBffTransport, type BffTransport } from './bff-config';
+import { logSafe, safeRequestId } from './log-safe';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -69,7 +70,7 @@ export async function bffFetch<T>(path: string, opts: BffRequestOptions = {}): P
   const headers: Record<string, string> = { accept: 'application/json', ...(opts.headers ?? {}) };
   if (opts.token) headers.authorization = `Bearer ${opts.token}`;
 
-  const requestId = opts.incoming?.get('x-request-id') || crypto.randomUUID();
+  const requestId = safeRequestId(opts.incoming?.get('x-request-id'));
   headers['x-request-id'] = requestId;
   // Asumsi: BFF hanya mempercayai X-Forwarded-For dari jaringan internal (untuk rate limit per IP).
   const xff = opts.incoming?.get('x-forwarded-for');
@@ -99,7 +100,9 @@ export async function bffFetch<T>(path: string, opts: BffRequestOptions = {}): P
     baseUrl = bffBaseUrl();
   } catch (err) {
     // Fail-closed: tidak pernah jatuh ke plaintext. Pesan konfigurasi tidak memuat secret.
-    console.error(`[bff] konfigurasi transport ditolak: ${err instanceof Error ? err.message : 'unknown'} req=${requestId}`);
+    console.error(
+      `[bff] konfigurasi transport ditolak: ${err instanceof Error ? logSafe(err.message) : 'unknown'} req=${logSafe(requestId)}`,
+    );
     return {
       ok: false,
       status: 503,
@@ -117,7 +120,9 @@ export async function bffFetch<T>(path: string, opts: BffRequestOptions = {}): P
     // Kode error (mis. UNABLE_TO_VERIFY_LEAF_SIGNATURE, ERR_TLS_CERT_ALTNAME_INVALID) membantu diagnosa TLS; tanpa PII.
     const cause = err instanceof Error ? (err.cause as { code?: unknown } | undefined) : undefined;
     const causeCode = typeof cause?.code === 'string' ? ` cause=${cause.code}` : '';
-    console.error(`[bff] ${init.method} ${path} gagal: ${timedOut ? 'timeout' : 'network'}${causeCode} req=${requestId}`);
+    console.error(
+      `[bff] ${init.method} ${logSafe(path)} gagal: ${timedOut ? 'timeout' : 'network'}${logSafe(causeCode)} req=${logSafe(requestId)}`,
+    );
     return {
       ok: false,
       status: timedOut ? 504 : 503,
@@ -134,7 +139,7 @@ export async function bffFetch<T>(path: string, opts: BffRequestOptions = {}): P
 
   const errBody = (parsed && typeof parsed === 'object' ? parsed : null) as BffErrorBody | null;
   if (res.status >= 500) {
-    console.error(`[bff] ${init.method} ${path} -> ${res.status} req=${requestId}`);
+    console.error(`[bff] ${init.method} ${logSafe(path)} -> ${res.status} req=${logSafe(requestId)}`);
   }
   return {
     ok: false,

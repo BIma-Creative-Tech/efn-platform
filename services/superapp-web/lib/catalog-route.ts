@@ -10,6 +10,7 @@
  */
 import 'server-only';
 import { bffBaseUrl, bffFetch } from './bff';
+import { logSafe, safeRequestId } from './log-safe';
 import { mapOnlineFailure, onlineError } from './orders-route';
 
 export const CATALOG_CACHE = 'public, max-age=60';
@@ -77,7 +78,7 @@ export async function proxyCatalogImage(sha: string, size: number, incoming: Hea
   }
   const headers: Record<string, string> = {
     accept: 'image/jpeg',
-    'x-request-id': incoming.get('x-request-id') || crypto.randomUUID(),
+    'x-request-id': safeRequestId(incoming.get('x-request-id')),
   };
   const xff = incoming.get('x-forwarded-for');
   if (xff) headers['x-forwarded-for'] = xff;
@@ -108,7 +109,7 @@ export async function proxyCatalogImage(sha: string, size: number, incoming: Hea
   };
   if (length > 0) out['content-length'] = String(length);
   const limited = limitStream(res.body, MAX_IMAGE_BYTES, () =>
-    console.warn(`[catalog] gambar melewati batas ${MAX_IMAGE_BYTES} byte, stream diputus req=${headers['x-request-id']}`),
+    console.warn(`[catalog] gambar melewati batas ${MAX_IMAGE_BYTES} byte, stream diputus req=${logSafe(headers['x-request-id'])}`),
   );
   return new Response(limited, { status: 200, headers: out });
 }

@@ -12,7 +12,7 @@ from odoo import Command, fields
 from odoo.exceptions import AccessError, UserError
 from odoo.tests import new_test_user, tagged
 
-from .common import FAKE_TOKEN, POST, QR_URL, SECRET, EfnQrCommon, response
+from .common import FAKE_TOKEN, HMAC_UJI, POST, QR_URL, EfnQrCommon, response
 
 EVENT_KEYS = {
     "schema_version",
@@ -143,7 +143,7 @@ class TestEfnQrSession(EfnQrCommon):
         self.assertEqual(kwargs["headers"]["X-EFN-Service-Key"], "svc-key-uji")
         signature = kwargs["headers"]["X-EFN-Signature"]
         timestamp = signature.split(",")[0].split("=")[1]
-        expected = hmac.new(SECRET.encode(), f"{timestamp}.".encode() + raw, hashlib.sha256).hexdigest()
+        expected = hmac.new(HMAC_UJI.encode(), f"{timestamp}.".encode() + raw, hashlib.sha256).hexdigest()
         self.assertEqual(signature, f"t={timestamp},v1={expected}")
         self.assertNotIn("croissant", raw.decode().lower(), "tanpa isi pesanan")
 

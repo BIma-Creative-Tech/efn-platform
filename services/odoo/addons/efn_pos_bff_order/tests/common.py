@@ -13,7 +13,7 @@ from odoo.tests import new_test_user
 from odoo.addons.point_of_sale.tests.common import TestPoSCommon
 
 POST = "odoo.addons.efn_core.models.efn_bff_client.requests.post"  # objek requests sama untuk outbox
-SECRET = "q" * 48  # HMAC uji (bukan rahasia)
+HMAC_UJI = "q" * 48  # HMAC uji (bukan rahasia)
 # Token uji berbentuk fts1 (bukan token sungguhan). Tidak boleh muncul di DB/log.
 FAKE_TOKEN = "fts1.QUJDREVGR0hJSktMTU5PUA.1760000000.c2lnbmF0dXJlLXVqaS1idWthbi1yYWhhc2lh"
 QR_URL = f"https://pb.example.test/meja#t={FAKE_TOKEN}"
@@ -180,7 +180,7 @@ class EfnQrCommon(TestPoSCommon):
         super().setUp()
         tmp = tempfile.mkdtemp()
         self.paths = {}
-        for name, content in (("hmac", SECRET), ("key", "svc-key-uji"), ("ca", "dummy-ca")):
+        for name, content in (("hmac", HMAC_UJI), ("key", "svc-key-uji"), ("ca", "dummy-ca")):
             path = os.path.join(tmp, name)
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(content)
