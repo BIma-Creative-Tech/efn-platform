@@ -32,7 +32,13 @@ class TestEfnOnlineSlot(EfnOnlineCommon):
                 "attendance_ids": [Command.clear()]
                 + [
                     Command.create(
-                        {"name": f"H{d}", "dayofweek": str(d), "hour_from": 9.0, "hour_to": 17.0, "day_period": "morning"}
+                        {
+                            "name": f"H{d}",
+                            "dayofweek": str(d),
+                            "hour_from": 9.0,
+                            "hour_to": 17.0,
+                            "day_period": "morning",
+                        }
                     )
                     for d in range(7)
                 ],

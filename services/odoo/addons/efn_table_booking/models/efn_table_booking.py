@@ -292,12 +292,12 @@ class EfnTableBooking(models.Model):
         duration = timedelta(minutes=settings.duration_minutes)
         now = self._efn_now()
         earliest = now + timedelta(minutes=settings.lead_minutes)
-        busy = (
-            self._efn_busy_by_table(settings, tables, slots[0], slots[-1] + duration) if slots and tables else {}
-        )
+        busy = self._efn_busy_by_table(settings, tables, slots[0], slots[-1] + duration) if slots and tables else {}
         out = []
         for start in slots:
-            ok = start >= earliest and bool(self._efn_free_table(settings, tables, busy, start, start + duration, party_size))
+            ok = start >= earliest and bool(
+                self._efn_free_table(settings, tables, busy, start, start + duration, party_size)
+            )
             out.append({"start_at": iso_utc(start), "available": ok})
         return {
             "outlet_code": settings.outlet_id.code,
@@ -331,7 +331,10 @@ class EfnTableBooking(models.Model):
         settings = self._efn_booking_check_caller(outlet_code)
         self = self.with_env(settings.env)  # noqa: PLW0642 - sudo + context bersih setelah cek pemanggil
         allowed = {"idempotency_key", "platform_booking_ref", "start_at", "party_size", "guest_label", "note"}
-        require(isinstance(booking, dict) and {"idempotency_key", "platform_booking_ref", "start_at", "party_size"} <= set(booking) <= allowed)
+        require(
+            isinstance(booking, dict)
+            and {"idempotency_key", "platform_booking_ref", "start_at", "party_size"} <= set(booking) <= allowed
+        )
         key = booking["idempotency_key"]
         require(isinstance(key, str) and bool(IDEMPOTENCY_KEY_RE.match(key)))
         ref = booking["platform_booking_ref"]
@@ -396,7 +399,10 @@ class EfnTableBooking(models.Model):
     # ================================================================== cancel
     @api.model
     def efn_booking_cancel(self, outlet_code, platform_booking_ref, idempotency_key):
-        """#18 batal oleh pelanggan: hanya requested/confirmed yang belum mulai. Idempoten (sudah batal -> hasil sama)."""
+        """#18 batal oleh pelanggan: hanya requested/confirmed yang belum mulai.
+
+        Idempoten: reservasi yang sudah batal mengembalikan hasil yang sama.
+        """
         settings = self._efn_booking_check_caller(outlet_code)
         self = self.with_env(settings.env)  # noqa: PLW0642
         require(isinstance(idempotency_key, str) and bool(IDEMPOTENCY_KEY_RE.match(idempotency_key)))
@@ -470,7 +476,9 @@ class EfnTableBooking(models.Model):
         self._efn_check_staff()
         for rec in self:
             if rec.state not in allowed_from:
-                raise ValidationError(_("Status reservasi %(name)s tidak dapat diubah dari '%(state)s'.", name=rec.name, state=rec.state))
+                raise ValidationError(
+                    _("Status reservasi %(name)s tidak dapat diubah dari '%(state)s'.", name=rec.name, state=rec.state)
+                )
         self._efn_transition(state, cancel_reason=cancel_reason)
         return True
 

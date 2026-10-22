@@ -14,7 +14,7 @@ from odoo.tests import new_test_user, tagged
 from odoo.addons.efn_online_order.tests.common import EfnOnlineCommon
 
 POST = "odoo.addons.efn_table_booking.models.efn_booking_event_outbox.requests.post"
-SECRET = "b" * 48  # HMAC uji (bukan rahasia)
+HMAC_UJI = "b" * 48  # HMAC uji (bukan rahasia)
 TZ = pytz.timezone("Asia/Jakarta")
 
 
@@ -41,16 +41,26 @@ class TestEfnTableBooking(EfnOnlineCommon):
                 "attendance_ids": [Command.clear()]
                 + [
                     Command.create(
-                        {"name": f"Hari {d}", "dayofweek": str(d), "hour_from": 10.0, "hour_to": 22.0, "day_period": "morning"}
+                        {
+                            "name": f"Hari {d}",
+                            "dayofweek": str(d),
+                            "hour_from": 10.0,
+                            "hour_to": 22.0,
+                            "day_period": "morning",
+                        }
                     )
                     for d in range(7)
                 ],
             }
         )
-        cls.pos_config = env["pos.config"].with_company(cls.company).create(
-            {"name": "Resto uji reservasi", "module_pos_restaurant": True, "company_id": cls.company.id}
+        cls.pos_config = (
+            env["pos.config"]
+            .with_company(cls.company)
+            .create({"name": "Resto uji reservasi", "module_pos_restaurant": True, "company_id": cls.company.id})
         )
-        cls.floor = env["restaurant.floor"].create({"name": "Lantai", "pos_config_ids": [Command.set(cls.pos_config.ids)]})
+        cls.floor = env["restaurant.floor"].create(
+            {"name": "Lantai", "pos_config_ids": [Command.set(cls.pos_config.ids)]}
+        )
         Table = env["restaurant.table"]
         cls.t2 = Table.create({"floor_id": cls.floor.id, "table_number": 1, "seats": 2})
         cls.t4 = Table.create({"floor_id": cls.floor.id, "table_number": 2, "seats": 4})
@@ -164,7 +174,17 @@ class TestEfnTableBooking(EfnOnlineCommon):
         payload = outbox._efn_payload()
         self.assertEqual(
             set(payload),
-            {"schema_version", "idempotency_key", "seq", "platform_booking_ref", "company_code", "outlet_code", "event", "state", "occurred_at"},
+            {
+                "schema_version",
+                "idempotency_key",
+                "seq",
+                "platform_booking_ref",
+                "company_code",
+                "outlet_code",
+                "event",
+                "state",
+                "occurred_at",
+            },
         )
         self.assertEqual(payload["company_code"], "PB")
 
@@ -193,9 +213,16 @@ class TestEfnTableBooking(EfnOnlineCommon):
         }
         self.assert_code("outside_hours", self.api().efn_booking_create, "TOKO-T1", bad)
         soon = (datetime.now(pytz.utc) + timedelta(minutes=10)).replace(second=0, microsecond=0)
-        bad2 = dict(bad, platform_booking_ref=str(uuid.uuid4()), idempotency_key="booking:create:x-soon-1", start_at=soon.strftime("%Y-%m-%dT%H:%M:%SZ"))
+        bad2 = dict(
+            bad,
+            platform_booking_ref=str(uuid.uuid4()),
+            idempotency_key="booking:create:x-soon-1",
+            start_at=soon.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
         self.assert_code("too_late", self.api().efn_booking_create, "TOKO-T1", bad2)
-        bad3 = dict(bad, platform_booking_ref=str(uuid.uuid4()), idempotency_key="booking:create:x-extra-1", phone="0812")
+        bad3 = dict(
+            bad, platform_booking_ref=str(uuid.uuid4()), idempotency_key="booking:create:x-extra-1", phone="0812"
+        )
         self.assert_code("invalid_input", self.api().efn_booking_create, "TOKO-T1", bad3)
 
     def test_guest_text_pii_filter(self):
@@ -223,7 +250,9 @@ class TestEfnTableBooking(EfnOnlineCommon):
         rec.with_user(self.manager).action_efn_seat()
         ref = res["platform_booking_ref"]
         self.assert_code("invalid_state", self.api().efn_booking_cancel, "TOKO-T1", ref, f"booking:cancel:{ref}")
-        self.assert_code("not_found", self.api().efn_booking_cancel, "TOKO-T1", str(uuid.uuid4()), "booking:cancel:none-1")
+        self.assert_code(
+            "not_found", self.api().efn_booking_cancel, "TOKO-T1", str(uuid.uuid4()), "booking:cancel:none-1"
+        )
 
     # ------------------------------------------------------------------ status
     def test_status_only_own_outlet_refs(self):
@@ -270,7 +299,10 @@ class TestEfnTableBooking(EfnOnlineCommon):
         res, _ = self.create(hour=12)
         rec = self.env["efn.table.booking"].search([("platform_booking_ref", "=", res["platform_booking_ref"])])
         cashier = new_test_user(
-            self.env, login="efn_booking_cashier", groups="base.group_user,point_of_sale.group_pos_user", company_id=self.company.id
+            self.env,
+            login="efn_booking_cashier",
+            groups="base.group_user,point_of_sale.group_pos_user",
+            company_id=self.company.id,
         )
         with self.assertRaises(AccessError):
             rec.with_user(cashier).action_efn_confirm()
@@ -287,16 +319,22 @@ class TestEfnTableBooking(EfnOnlineCommon):
     def test_outbox_signed_post_without_pii(self):
         self.settings.confirm_mode = "auto"
         res, _ = self.create(hour=12, guest_label="Rina", note="kursi bayi")
-        outbox = self.env["efn.booking.event.outbox"].search([("booking_id.platform_booking_ref", "=", res["platform_booking_ref"])])
+        outbox = self.env["efn.booking.event.outbox"].search(
+            [("booking_id.platform_booking_ref", "=", res["platform_booking_ref"])]
+        )
         import tempfile
 
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
-            handle.write(SECRET)
+            handle.write(HMAC_UJI)
         mock = MagicMock(status_code=200)
         client = type(self.env["efn.bff.client"])
-        with patch.dict("os.environ", {"EFN_BOOKING_EVENT_HMAC_FILE": handle.name}), patch(POST, return_value=mock) as post, patch.object(
-            client, "_get_base_url", return_value="https://bff.test"
-        ), patch.object(client, "_get_verify", return_value=True), patch.object(client, "_read_api_key", return_value="k" * 40):
+        with (
+            patch.dict("os.environ", {"EFN_BOOKING_EVENT_HMAC_FILE": handle.name}),
+            patch(POST, return_value=mock) as post,
+            patch.object(client, "_get_base_url", return_value="https://bff.test"),
+            patch.object(client, "_get_verify", return_value=True),
+            patch.object(client, "_read_api_key", return_value="k" * 40),
+        ):
             outbox._efn_send_one()
         self.assertEqual(outbox.state, "done")
         body = post.call_args.kwargs["data"].decode()
@@ -309,11 +347,16 @@ class TestEfnTableBooking(EfnOnlineCommon):
     def test_outbox_without_secret_retries(self):
         self.settings.confirm_mode = "auto"
         res, _ = self.create(hour=12)
-        outbox = self.env["efn.booking.event.outbox"].search([("booking_id.platform_booking_ref", "=", res["platform_booking_ref"])])
+        outbox = self.env["efn.booking.event.outbox"].search(
+            [("booking_id.platform_booking_ref", "=", res["platform_booking_ref"])]
+        )
         client = type(self.env["efn.bff.client"])
-        with patch(POST) as post, patch.object(client, "_get_base_url", return_value="https://bff.test"), patch.object(
-            client, "_get_verify", return_value=True
-        ), patch.object(client, "_read_api_key", return_value="k" * 40):
+        with (
+            patch(POST) as post,
+            patch.object(client, "_get_base_url", return_value="https://bff.test"),
+            patch.object(client, "_get_verify", return_value=True),
+            patch.object(client, "_read_api_key", return_value="k" * 40),
+        ):
             outbox._efn_send_one()
         post.assert_not_called()
         self.assertEqual(outbox.state, "pending")
@@ -322,7 +365,12 @@ class TestEfnTableBooking(EfnOnlineCommon):
     def test_cron_expires_unconfirmed(self):
         res, _ = self.create(hour=12)
         rec = self.env["efn.table.booking"].search([("platform_booking_ref", "=", res["platform_booking_ref"])])
-        rec.sudo().write({"start_at": fields.Datetime.now() - timedelta(minutes=5), "end_at": fields.Datetime.now() + timedelta(minutes=85)})
+        rec.sudo().write(
+            {
+                "start_at": fields.Datetime.now() - timedelta(minutes=5),
+                "end_at": fields.Datetime.now() + timedelta(minutes=85),
+            }
+        )
         self.env["efn.table.booking"]._cron_efn_booking_expire()
         self.assertEqual(rec.state, "cancelled")
         self.assertEqual(rec.cancel_reason, "expired")
@@ -336,7 +384,11 @@ class TestEfnTableBooking(EfnOnlineCommon):
             company_id=self.company_2.id,
             company_ids=[Command.set(self.company_2.ids)],
         )
-        visible = self.env["efn.table.booking"].with_user(other).search([("platform_booking_ref", "=", res["platform_booking_ref"])])
+        visible = (
+            self.env["efn.table.booking"]
+            .with_user(other)
+            .search([("platform_booking_ref", "=", res["platform_booking_ref"])])
+        )
         self.assertFalse(visible)
 
     def test_settings_constraints(self):

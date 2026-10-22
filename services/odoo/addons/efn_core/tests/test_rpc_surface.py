@@ -152,7 +152,10 @@ RPC_ALLOWLIST = {
     ("efn.table.booking", "action_efn_confirm"): "grup POS manager + check_access(write) + company + state",
     ("efn.table.booking", "action_efn_seat"): "grup POS manager + check_access(write) + company + state",
     ("efn.table.booking", "action_efn_done"): "grup POS manager + check_access(write) + company + state",
-    ("efn.table.booking", "action_efn_no_show"): "grup POS manager + check_access(write) + company + state + lewat tahan",
+    (
+        "efn.table.booking",
+        "action_efn_no_show",
+    ): "grup POS manager + check_access(write) + company + state + lewat tahan",
     ("efn.table.booking", "action_efn_cancel"): "grup POS manager + check_access(write) + company + state",
     # efn_online_slot (G23, W-36, docs/04 §15.4 path 20): `_efn_online_check_caller` kanal online (baca).
     ("efn.online.channel", "efn_online_slots"): "_efn_online_check_caller (baca; kapasitas slot outlet)",

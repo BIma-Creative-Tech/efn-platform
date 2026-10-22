@@ -34,7 +34,9 @@ class EfnBookingSettings(models.Model):
     calendar_id = fields.Many2one(
         "resource.calendar", string="Jam buka", required=True, check_company=True, help="Zona waktu = zona kalender."
     )
-    slot_minutes = fields.Selection([("15", "15 menit"), ("30", "30 menit"), ("60", "60 menit")], default="30", required=True)
+    slot_minutes = fields.Selection(
+        [("15", "15 menit"), ("30", "30 menit"), ("60", "60 menit")], default="30", required=True
+    )
     duration_minutes = fields.Integer(string="Durasi (menit)", default=90, required=True)
     lead_minutes = fields.Integer(string="Batas pesan minimal (menit sebelum)", default=60, required=True)
     horizon_days = fields.Integer(string="Maks hari ke depan", default=14, required=True)
@@ -44,7 +46,10 @@ class EfnBookingSettings(models.Model):
         [("staff", "Dikonfirmasi staf"), ("auto", "Otomatis terkonfirmasi")], default="staff", required=True
     )
     hold_minutes = fields.Integer(
-        string="Meja ditahan (menit)", default=15, required=True, help="Toleransi telat sebelum staf boleh 'Tidak datang'."
+        string="Meja ditahan (menit)",
+        default=15,
+        required=True,
+        help="Toleransi telat sebelum staf boleh 'Tidak datang'.",
     )
 
     _outlet_unique = models.Constraint("unique (outlet_id)", "Satu pengaturan reservasi per outlet.")
@@ -85,6 +90,8 @@ class EfnBookingSettings(models.Model):
         """Meja aktif di lantai POS restoran (pos_restaurant standar)."""
         self.ensure_one()
         floors = self.env["restaurant.floor"].sudo().search([("pos_config_ids", "in", self.pos_config_id.ids)])
-        return self.env["restaurant.table"].sudo().search(
-            [("floor_id", "in", floors.ids), ("active", "=", True), ("seats", ">", 0)], order="seats, id"
+        return (
+            self.env["restaurant.table"]
+            .sudo()
+            .search([("floor_id", "in", floors.ids), ("active", "=", True), ("seats", ">", 0)], order="seats, id")
         )

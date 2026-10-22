@@ -199,7 +199,12 @@ class EfnBookingEventOutbox(models.Model):
         status = response.status_code
         if 200 <= status < 300:
             self.write(
-                {"state": "done", "done_at": fields.Datetime.now(), "last_error": False, "attempt_count": self.attempt_count + 1}
+                {
+                    "state": "done",
+                    "done_at": fields.Datetime.now(),
+                    "last_error": False,
+                    "attempt_count": self.attempt_count + 1,
+                }
             )
             return
         if status in FINAL_HTTP:
@@ -224,7 +229,14 @@ class EfnBookingEventOutbox(models.Model):
 
     def _efn_finish(self, state, code):
         self.ensure_one()
-        self.write({"state": state, "last_error": code, "done_at": fields.Datetime.now(), "attempt_count": self.attempt_count + 1})
+        self.write(
+            {
+                "state": state,
+                "last_error": code,
+                "done_at": fields.Datetime.now(),
+                "attempt_count": self.attempt_count + 1,
+            }
+        )
         if state == "failed":
             event = {
                 "event": "EFN_BOOKING_EVENT_FAILED",
