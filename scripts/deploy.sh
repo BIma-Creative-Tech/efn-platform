@@ -42,6 +42,8 @@
 #               EFN_ALLOW_FEATURE_ON di /etc/efn/deploy.conf). LOYALTY_POINT_EXPIRY_DAYS dihapus (D-22-18): production ditolak.
 #               LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT (default true, SEC-171: production false hanya dengan EFN_ALLOW_FEATURE_ON).
 #               ETL_PARTNER_REGION_ENABLED ETL_LOYALTY_RECON_ONLINE_ENABLED ETL_ENABLE_KDS ETL_KDS_ONLINE_ENABLED
+#               G23 (docs/04 §15): BOOKING_ENABLED BOOKING_COMPANIES BOOKING_* (reservasi meja; true -> API key booking
+#               host:* nyata per PT + overlay docker-compose.online-booking-<pt>.yml), ONLINE_SLOTS_ENABLED (pre-order).
 #               (true|false, default false; G21/G22 job ETL opsional, prasyarat dicek deploy-validate)
 set -euo pipefail
 
@@ -164,6 +166,20 @@ if [[ "${FNB_QR_ENABLED:-false}" == true ]]; then
     f="$SECRETS_DIR/odoo_api_key_qr_$(tr '[:upper:]' '[:lower:]' <<< "$co").txt"
     if [[ ! -s "$f" ]] || grep -qx 'disabled' "$f"; then
       die "FNB_QR_ENABLED=true tetapi API key QR ${co} tidak ada/placeholder (docs/runbooks/odoo-qr-api-key.md)"
+    fi
+  done
+fi
+
+# G23 (docs/04 §15.3): reservasi aktif = setiap PT di BOOKING_COMPANIES wajib punya API key Odoo user teknis reservasi
+# nyata (host:*, dibuat efn-rotate-online-key --channel=BOOKING-<PT> --bootstrap). HMAC event selalu random (secrets.list).
+BOOKING_CO_LIST=()
+if [[ "${BOOKING_ENABLED:-false}" == true ]]; then
+  efn_validate_booking_companies "${BOOKING_COMPANIES:-PB,BCF}" || die "BOOKING_COMPANIES tidak valid (G23)"
+  IFS=, read -r -a BOOKING_CO_LIST <<< "${BOOKING_COMPANIES:-PB,BCF}"
+  for co in "${BOOKING_CO_LIST[@]}"; do
+    f="$SECRETS_DIR/odoo_api_key_booking_$(tr '[:upper:]' '[:lower:]' <<< "$co").txt"
+    if [[ ! -s "$f" ]] || grep -qx 'disabled' "$f"; then
+      die "BOOKING_ENABLED=true tetapi API key reservasi ${co} tidak ada/placeholder (docs/runbooks/odoo-booking-api-key.md)"
     fi
   done
 fi
@@ -414,6 +430,13 @@ DOTENV=(
   "LOYALTY_INACTIVE_ANONYMIZE=${LOYALTY_INACTIVE_ANONYMIZE:-false}"
   "LOYALTY_INACTIVE_ANONYMIZE_GRACE_DAYS=${LOYALTY_INACTIVE_ANONYMIZE_GRACE_DAYS:-}"
   "LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=${LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT:-true}"   # SEC-171 r15
+  # G23 (docs/04 §15): kosong = default compose (reservasi & slot pre-order MATI, angka kontrak)
+  "BOOKING_ENABLED=${BOOKING_ENABLED:-false}"
+  "BOOKING_COMPANIES=${BOOKING_COMPANIES:-}"
+  "BOOKING_MAX_ACTIVE_PER_MEMBER=${BOOKING_MAX_ACTIVE_PER_MEMBER:-}"
+  "BOOKING_MEMBER_LINK_DAYS=${BOOKING_MEMBER_LINK_DAYS:-}"
+  "BOOKING_RETENTION_DAYS=${BOOKING_RETENTION_DAYS:-}"
+  "ONLINE_SLOTS_ENABLED=${ONLINE_SLOTS_ENABLED:-false}"
   # G21/G22 job ETL opsional (QA G22 P2-3): default MATI; prasyarat ETL_ENABLE_ODOO + grant terbaru
   "ETL_PARTNER_REGION_ENABLED=${ETL_PARTNER_REGION_ENABLED:-false}"
   "ETL_LOYALTY_RECON_ONLINE_ENABLED=${ETL_LOYALTY_RECON_ONLINE_ENABLED:-false}"
@@ -470,6 +493,12 @@ for co in "${FNB_QR_CO_LIST[@]}"; do
   [[ -f "$ov" ]] || die "PT ${co} di FNB_QR_COMPANIES tanpa overlay infra/compose/${ov} (bundel rilis G22+?)"
   [[ " ${FILES[*]} " == *" ${ov} "* ]] || FILES+=(-f "$ov")
 done
+# G23 (docs/04 §15.3): API key reservasi per PT hanya di-mount saat BOOKING_ENABLED=true (daftar & key dicek di langkah 1)
+for co in "${BOOKING_CO_LIST[@]}"; do
+  ov="docker-compose.online-booking-$(tr '[:upper:]' '[:lower:]' <<< "$co").yml"
+  [[ -f "$ov" ]] || die "PT ${co} di BOOKING_COMPANIES tanpa overlay infra/compose/${ov} (bundel rilis G23+?)"
+  [[ " ${FILES[*]} " == *" ${ov} "* ]] || FILES+=(-f "$ov")
+done
 DC=(docker compose "${FILES[@]}")
 # W-11: daftar file compose untuk skrip host lain (efn-rotate-online-key me-recreate BFF dengan konfigurasi yang SAMA)
 printf '%s\n' "${FILES[@]}" | grep -v '^-f$' > .efn-compose-files.tmp && mv -f .efn-compose-files.tmp .efn-compose-files
@@ -516,7 +545,7 @@ echo "==> Migrasi skema idempoten (infra/postgres/init/[0-9][0-9]-*.sql >= 04)"
 # member.age_confirmed_at; dibutuhkan BFF G18). 09 = G20 (docs/04 §12.1/§12.2: CHECK company_code 6 entitas,
 # online_order.payment_method, status awaiting_counter_payment, counter_code_enc; dibutuhkan BFF G20).
 for req in 04-platform-v3-6.sql 05-platform-loyalty-pos.sql 06-platform-loyalty-guard.sql 07-platform-online.sql \
-           08-platform-g18-privacy.sql 09-platform-g20.sql 10-platform-g21.sql 11-platform-g22.sql; do
+           08-platform-g18-privacy.sql 09-platform-g20.sql 10-platform-g21.sql 11-platform-g22.sql 12-platform-g23.sql; do
   [[ -s "$BASE/postgres/init/$req" ]] || die "migrasi wajib $req tidak ada di $BASE/postgres/init (bundel rilis tidak lengkap)"
 done
 for mig in "$BASE"/postgres/init/[0-9][0-9]-*.sql; do

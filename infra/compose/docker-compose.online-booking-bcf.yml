@@ -1,0 +1,13 @@
+# Override reservasi meja BCF (PT Bacha Coffee F&B; docs/04 §15.3/§15.9 L-85, G23 W-35). Pola docker-compose.online-qr-<pt>.yml:
+# API key Odoo user teknis reservasi `efn_booking_bcf` (secret `odoo_api_key_booking_bcf`, grup
+# efn_table_booking.group_booking_bff, satu company, tanpa ACL dokumen) HANYA di-mount ke BFF saat BOOKING_ENABLED=true dan
+# BOOKING_COMPANIES memuat BCF (scripts/deploy.sh). Selama reservasi mati file ini TIDAK disertakan -> key tidak ada di
+# container mana pun dan BFF memperlakukan PT ini sebagai "reservasi tidak dikonfigurasi". Nama file sengaja
+# `online-booking-<pt>` agar efn-rotate-online-key --channel=BOOKING-BCF --bootstrap, CI (job infra, glob online-*) dan
+# scripts/check-encryption.sh ikut memakainya. Pembuatan & rotasi key: docs/runbooks/odoo-booking-api-key.md.
+services:
+  api-gateway:
+    environment:
+      ODOO_API_KEY_BOOKING_BCF_FILE: /run/secrets/odoo_api_key_booking_bcf
+    secrets:
+      - odoo_api_key_booking_bcf

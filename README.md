@@ -66,7 +66,7 @@ CA `secrets/efn_ca_crt.txt`, impor ke trust store bila ingin akses langsung tanp
 | https://localhost:18443 | ClickHouse HTTPS (CA internal, password user) |
 | `psql "host=localhost sslmode=verify-full sslrootcert=secrets/efn_ca_crt.txt user=efn_bff dbname=efn_platform"` | PostgreSQL (TCP hanya TLS; superuser hanya via `docker compose exec postgres psql`) |
 
-Tambahkan ke hosts file: `127.0.0.1 efn.local erp.efn.local api.efn.local app.efn.local mart.efn.local kitchen.efn.local bi.efn.local ops.efn.local status.efn.local`.
+Tambahkan ke hosts file: `127.0.0.1 efn.local erp.efn.local api.efn.local app.efn.local grandlucky.efn.local parisbaguette.efn.local bacha.efn.local bi.efn.local ops.efn.local status.efn.local`. (Alias lama `mart.efn.local`/`kitchen.efn.local` masih diterima -> GrandLucky/Paris Baguette; tanpa hosts file, coba brand di dev dengan `?brand=grandlucky|parisbaguette|bacha|efn`.)
 
 Volume dev dari scaffold sebelum gelombang 3 (superuser `efn`, Redis/RabbitMQ/MinIO tanpa TLS, ClickHouse tanpa
 disk terenkripsi) tidak kompatibel: jalankan `make clean` sekali lalu `make up`.

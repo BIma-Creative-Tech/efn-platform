@@ -192,13 +192,15 @@ run hdr_auth_bearer_short deny $BFF -X POST -H "$H_CT" -H "Authorization: bearer
 # shellcheck disable=SC2086
 run body_too_large deny $BFF -X POST -H "$H_CT" -H "$H_AUTH" --data-binary @/t/big.json "$GW$OK_PATH"
 
-# ── Positif: 15 path persis LOLOS filter (status dari Odoo, bukan dari gateway) ──────────────────────────
+# ── Positif: 20 path persis LOLOS filter (status dari Odoo, bukan dari gateway) ──────────────────────────
 for p in efn.online.channel/efn_online_catalog efn.online.channel/efn_online_stock efn.online.channel/efn_online_image \
          efn.online.channel/efn_online_quote efn.online.order/efn_online_place efn.online.order/efn_online_mark_paid \
          efn.online.order/efn_online_cancel efn.online.order/efn_online_refund efn.online.order/efn_online_refund_settled \
          efn.online.order/efn_online_status efn.online.order/efn_online_counter_refund_authorize \
          efn.online.order/efn_online_set_invoice_party \
-         efn.pos.qr.order/efn_qr_menu efn.pos.qr.order/efn_qr_submit efn.pos.qr.order/efn_qr_status; do
+         efn.pos.qr.order/efn_qr_menu efn.pos.qr.order/efn_qr_submit efn.pos.qr.order/efn_qr_status \
+         efn.table.booking/efn_booking_availability efn.table.booking/efn_booking_create \
+         efn.table.booking/efn_booking_cancel efn.table.booking/efn_booking_status efn.online.channel/efn_online_slots; do
   post "allowed:$p" pass "/json/2/$p"
 done
 # shellcheck disable=SC2086

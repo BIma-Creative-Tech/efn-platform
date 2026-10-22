@@ -50,6 +50,14 @@
 # {config_id 0, submission_refs []} -> 200 ATAU 422 (galat bisnis UserError = key sah & metode terjangkau); 401/403 =
 # gagal. --all: QR-<PT> ikut bila .env deploy memuat FNB_QR_ENABLED=true (PT dari FNB_QR_COMPANIES, default PB,BCF).
 # Runbook: docs/runbooks/odoo-qr-api-key.md.
+# G23 (docs/04 §15.3, L-85): kode BOOKING-<PT> (BOOKING-PB, BOOKING-BCF) = API key user teknis reservasi meja per PT F&B:
+# secret odoo_api_key_booking_<pt>, user efn_booking_<pt> (grup efn_table_booking.group_booking_bff, SATU company dengan
+# efn_brand_code <PT>, tanpa grup POS/admin, bukan user kanal online), env BFF ODOO_API_KEY_BOOKING_<PT>_FILE, overlay
+# docker-compose.online-booking-<pt>.yml, nama key efn-booking-<PT>-<UTC>. Verifikasi: POST
+# /json/2/efn.table.booking/efn_booking_status {outlet_code "VERIFY-KEY", platform_booking_refs []} -> 200 ATAU 403
+# BUKAN gateway (AccessError outlet tidak dikenal = key sah & metode terjangkau; 403 gateway/401 = gagal).
+# --all: BOOKING-<PT> ikut bila .env deploy memuat BOOKING_ENABLED=true (PT dari BOOKING_COMPANIES, default PB,BCF).
+# Runbook: docs/runbooks/odoo-booking-api-key.md.
 #
 # Langkah rotasi: (1) daftar key user teknis efn_online_<kanal> lewat `odoo shell` di container Odoo yang berjalan;
 # (2) key BARU dibuat `with_user(<user teknis>)._generate(None, 'efn-online-<KANAL>-<UTC>', now+KEY_DAYS)` (scope
@@ -78,7 +86,8 @@ ADMIN_GROUP=efn-superadmin
 
 # G20 (docs/04 §12.1): satu-satunya kode kanal yang dikelola skrip ini; GL = kanal di compose base (tanpa overlay).
 # G22: QR-PB / QR-BCF = user teknis QR meja per PT F&B (overlay docker-compose.online-qr-<pt>.yml).
-ALLOWED_CHANNELS=(GL PB BCR BCF QR-PB QR-BCF)
+# G23: BOOKING-PB / BOOKING-BCF = user teknis reservasi meja per PT F&B (overlay docker-compose.online-booking-<pt>.yml).
+ALLOWED_CHANNELS=(GL PB BCR BCF QR-PB QR-BCF BOOKING-PB BOOKING-BCF)
 BASE_CHANNEL=GL
 ACTOR="?"; CH="?"
 log() {
@@ -134,7 +143,15 @@ fi
 # untuk keamanan bila allowlist kelak memuat kode berhifen; regex menolak '_', '/', '.', spasi -> tetap injektif)
 CH_LC="$(tr 'A-Z-' 'a-z_' <<< "$CH")"
 # Jenis kredensial: kanal online (efn.online.channel) atau QR meja (G22). Semua nama diturunkan dari kode allowlist.
-if [[ "$CH" == QR-* ]]; then
+if [[ "$CH" == BOOKING-* ]]; then
+  KIND=booking; PT="${CH#BOOKING-}"; PT_LC="${PT,,}"
+  SECRET="odoo_api_key_booking_${PT_LC}"
+  LOGIN="efn_booking_${PT_LC}"
+  KEY_PREFIX="efn-booking-${PT}"
+  KEY_ENV="ODOO_API_KEY_BOOKING_${PT}_FILE"
+  RPC_PATH=/json/2/efn.table.booking/efn_booking_status
+  RPC_BODY='{"outlet_code":"VERIFY-KEY","platform_booking_refs":[]}'
+elif [[ "$CH" == QR-* ]]; then
   KIND=qr; PT="${CH#QR-}"; PT_LC="${PT,,}"
   SECRET="odoo_api_key_qr_${PT_LC}"
   LOGIN="efn_qr_${PT_LC}"
@@ -240,8 +257,9 @@ if ((ALL)); then
     [[ "$e_uid" == 0 && $((8#$e_mode & 8#022)) -eq 0 ]] || die "$envf harus milik root dan tidak dapat ditulis grup/lainnya"
     # kosong/tidak ada = default compose GL (sama dengan deploy.sh); nilai lain WAJIB valid (tanpa fallback diam-diam)
     v="$(sed -nE 's/^ONLINE_CHANNELS=(.{0,200})$/\1/p' "$envf" | tail -n1)"
-    # Kanal QR-* bukan kode ONLINE_CHANNELS (allowlist G20 deploy-validate) -> ditolak bila muncul di sana
-    [[ ",${v}," != *,QR-* ]] || die "$envf: ONLINE_CHANNELS tidak valid (QR-* bukan kanal online)"
+    # Kanal QR-*/BOOKING-* bukan kode ONLINE_CHANNELS (allowlist G20 deploy-validate) -> ditolak bila muncul di sana
+    [[ ",${v}," != *,QR-* && ",${v}," != *,BOOKING-* ]] \
+      || die "$envf: ONLINE_CHANNELS tidak valid (QR-*/BOOKING-* bukan kanal online)"
     v="${v:-$BASE_CHANNEL}"
     # G22: QR meja aktif (deploy.sh menulis FNB_QR_ENABLED/FNB_QR_COMPANIES) -> key QR-<PT> ikut dirotasi
     qr_on="$(sed -nE 's/^FNB_QR_ENABLED=(true|false)$/\1/p' "$envf" | tail -n1)"
@@ -251,9 +269,18 @@ if ((ALL)); then
       [[ "$qr_co" =~ ^(PB|BCF)(,(PB|BCF))?$ ]] || die "$envf: FNB_QR_COMPANIES tidak valid (G22: PB, BCF)"
       v="${v},QR-${qr_co//,/,QR-}"
     fi
+    # G23: reservasi aktif (deploy.sh menulis BOOKING_ENABLED/BOOKING_COMPANIES) -> key BOOKING-<PT> ikut dirotasi
+    bk_on="$(sed -nE 's/^BOOKING_ENABLED=(true|false)$/\1/p' "$envf" | tail -n1)"
+    if [[ "$bk_on" == true ]]; then
+      bk_co="$(sed -nE 's/^BOOKING_COMPANIES=(.{0,64})$/\1/p' "$envf" | tail -n1)"
+      bk_co="${bk_co:-PB,BCF}"
+      [[ "$bk_co" =~ ^(PB|BCF)(,(PB|BCF))?$ ]] || die "$envf: BOOKING_COMPANIES tidak valid (G23: PB, BCF)"
+      v="${v},BOOKING-${bk_co//,/,BOOKING-}"
+    fi
     parse_channels "$v" || die "$envf: ONLINE_CHANNELS tidak valid (G20: ${ALLOWED_CHANNELS[*]})"
     CH_SOURCE="$envf ONLINE_CHANNELS"
     if [[ "$qr_on" == true ]]; then CH_SOURCE+=" + FNB_QR_COMPANIES"; fi
+    if [[ "$bk_on" == true ]]; then CH_SOURCE+=" + BOOKING_COMPANIES"; fi
   fi
   ((${#CH_LIST[@]} > 0)) || die "--all: daftar kanal kosong"
   exec 9> "$STATE_DIR/.lock.all"
@@ -368,7 +395,11 @@ OP = os.environ.get("EFN_OP", "list")
 KIND = os.environ.get("EFN_KIND", "online")
 PT = os.environ.get("EFN_PT", "")
 # G22: user teknis QR meja (modul efn_pos_bff_order, L-70/L-74) vs user kanal online (efn_online_order)
-GROUP = "efn_pos_bff_order.group_qr_bff" if KIND == "qr" else "efn_online_order.group_online_channel"
+# G23: user teknis reservasi meja (modul efn_table_booking, L-85)
+GROUP = {
+    "qr": "efn_pos_bff_order.group_qr_bff",
+    "booking": "efn_table_booking.group_booking_bff",
+}.get(KIND, "efn_online_order.group_online_channel")
 def say(*a):
     print("EFN_ROT", *a, flush=True)
 def clean(s):
@@ -381,10 +412,11 @@ K = env["res.users.apikeys"].sudo()
 def precheck_qr():
     # G22 (docs/04 §14.A.5, docs/08 §13.1b no. 5): grup teknis QR, tanpa grup POS/admin, SATU company = PT kode ini,
     # dan bukan sekaligus user kanal online (pencabutan "semua key lain" akan mematikan kanal itu).
+    # G23: pemeriksaan yang sama untuk user teknis reservasi (grup booking).
     if not env.ref(GROUP, raise_if_not_found=False):
         return "group_missing"
     if not U.has_group(GROUP):
-        return "user_not_qr"
+        return "user_not_booking" if KIND == "booking" else "user_not_qr"
     for g in ("base.group_system", "base.group_erp_manager", "point_of_sale.group_pos_user"):
         if env.ref(g, raise_if_not_found=False) and U.has_group(g):
             return "user_privileged"
@@ -399,7 +431,7 @@ def precheck():
         return "user_missing"
     if not U.active:
         return "user_inactive"
-    if KIND == "qr":
+    if KIND in ("qr", "booking"):
         return precheck_qr()
     if not U.has_group(GROUP):
         return "user_not_channel"
@@ -435,7 +467,7 @@ else:
             by_name = os.environ.get("EFN_REVOKE_NAME") or ""
             dom = [("user_id", "=", U.id)]
             if by_name:
-                if not re.fullmatch(r"efn-(online|qr)-[A-Z0-9-]{2,16}-[0-9]{8}T[0-9]{6}Z", by_name):
+                if not re.fullmatch(r"efn-(online|qr|booking)-[A-Z0-9-]{2,16}-[0-9]{8}T[0-9]{6}Z", by_name):
                     raise ValueError("bad_name")
                 dom.append(("name", "=", by_name))
                 if keep:  # jangan pernah mencabut key yang sedang terpasang (nama sama dalam detik yang sama)
@@ -518,11 +550,13 @@ verify_status() { # cid [stdin-key-file] -> cetak kode HTTP (000 = galat jaringa
   else
     out="$(docker exec "${ve[@]}" "$cid" node -e "$JS" < /dev/null 2> /dev/null || true)"
   fi
-  sed -nE 's/^EFN_VERIFY ([0-9]{3}) deny=[01]$/\1/p' <<< "$out" | head -n1 | grep . || echo 000
+  # G23: 403 dari gateway (deny=1, path/peer ditolak) TIDAK pernah dianggap sah -> dilaporkan sebagai 000
+  sed -nE 's/^EFN_VERIFY ([0-9]{3}) deny=0$/\1/p; s/^EFN_VERIFY ([0-9]{3}) deny=1$/000/p' <<< "$out" | head -n1 | grep . || echo 000
 }
 # Key sah = 200; QR (G22) juga 422 (UserError efn_qr:<kode> untuk config_id 0 = sudah lolos auth bearer + akses metode).
-# 401/403/5xx/000 = gagal.
-status_ok() { [[ "$1" == 200 || ( "$KIND" == qr && "$1" == 422 ) ]]; }
+# Booking (G23): outlet VERIFY-KEY tidak ada -> AccessError Odoo (403) = key sah & metode terjangkau, KECUALI 403 dari
+# gateway (header x-efn-gateway-deny, path tidak diizinkan). 401/5xx/000 = gagal.
+status_ok() { [[ "$1" == 200 || ( "$KIND" == qr && "$1" == 422 ) || ( "$KIND" == booking && "$1" == 403 ) ]]; }
 verify_mounted() { # semua container service DIRECT wajib status_ok (dengan percobaan ulang)
   local cids cid st i ok=1 res
   mapfile -t cids < <(running_ids "${DIRECT[@]}")

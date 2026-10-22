@@ -21,6 +21,10 @@
 # efn_qr_<pt>, overlay docker-compose.online-qr-<pt>.yml, nama key efn-qr-<PT>-*, verifikasi path #15 efn_qr_status dengan
 # 422 = key sah HANYA untuk QR), --all dari FNB_QR_ENABLED/FNB_QR_COMPANIES .env, precheck Python QR (company, grup POS,
 # user bersama kanal online, modul belum terpasang).
+# G23 (docs/04 §15.3, kasus 111-122): kunci user teknis reservasi BOOKING-PB/BOOKING-BCF (secret odoo_api_key_booking_<pt>,
+# user efn_booking_<pt>, overlay docker-compose.online-booking-<pt>.yml, nama key efn-booking-<PT>-*, verifikasi path #19
+# efn_booking_status dengan 403 Odoo = key sah HANYA untuk booking; 403 gateway (deny=1) = gagal), --all dari
+# BOOKING_ENABLED/BOOKING_COMPANIES .env, precheck Python booking.
 # Yang TIDAK diuji di sini: Odoo/gateway/BFF sungguhan (uji nyata di stack dev: runbook odoo-online-api-key.md §2),
 # systemd, journald asli.
 set -euo pipefail
@@ -43,10 +47,13 @@ for f in docker-compose.yml docker-compose.prod.yml docker-compose.host.yml; do 
 echo "services: {}" > /opt/efn/compose/docker-compose.online-bcf.yml
 # G22: overlay QR meja PB ada (--bootstrap QR-PB); QR-BCF sengaja TIDAK ada -> kasus overlay hilang
 echo "services: {}" > /opt/efn/compose/docker-compose.online-qr-pb.yml
+# G23: overlay reservasi PB ada (--bootstrap BOOKING-PB); BOOKING-BCF sengaja TIDAK ada -> kasus overlay hilang
+echo "services: {}" > /opt/efn/compose/docker-compose.online-booking-pb.yml
 SECRET=/opt/efn/secrets/odoo_api_key_online_gl.txt
 SEC_PB=/opt/efn/secrets/odoo_api_key_online_pb.txt
 SEC_BCF=/opt/efn/secrets/odoo_api_key_online_bcf.txt
 SEC_QRPB=/opt/efn/secrets/odoo_api_key_qr_pb.txt
+SEC_BKPB=/opt/efn/secrets/odoo_api_key_booking_pb.txt
 
 # Docker palsu: secret GL (base) + PB (overlay; deploy dengan ONLINE_CHANNELS=GL,PB) di-mount api-gateway; BCF hanya
 # bila overlay docker-compose.online-bcf.yml ikut `-f` (--bootstrap); BCR tidak pernah (kanal belum di-deploy).
@@ -62,21 +69,25 @@ if [[ "$cmd" == compose ]]; then
   done
   set -- "${args[@]}"
   sub="$1"; shift
-  fb=0; qp=0
+  fb=0; qp=0; bp=0
   for f in "${files[@]}"; do
     [[ "$f" == */docker-compose.online-bcf.yml ]] && fb=1
+    # G23: overlay reservasi PB -> secret odoo_api_key_booking_pb di-mount api-gateway
+    [[ "$f" == */docker-compose.online-booking-pb.yml ]] && bp=1
     # G22: overlay QR meja PB (docker-compose.online-qr-pb.yml) -> secret odoo_api_key_qr_pb di-mount api-gateway
     [[ "$f" == */docker-compose.online-qr-pb.yml ]] && qp=1
   done
   case "$sub" in
     config)
-      jq -nc --argjson fb "$fb" --argjson qp "$qp" '{secrets:({odoo_api_key_online_gl:{file:"/opt/efn/secrets/odoo_api_key_online_gl.txt"},
+      jq -nc --argjson fb "$fb" --argjson qp "$qp" --argjson bp "$bp" '{secrets:({odoo_api_key_online_gl:{file:"/opt/efn/secrets/odoo_api_key_online_gl.txt"},
                    odoo_api_key_online_pb:{file:"/opt/efn/secrets/odoo_api_key_online_pb.txt"}}
                  + (if $fb == 1 then {odoo_api_key_online_bcf:{file:"/opt/efn/secrets/odoo_api_key_online_bcf.txt"}} else {} end)
-                 + (if $qp == 1 then {odoo_api_key_qr_pb:{file:"/opt/efn/secrets/odoo_api_key_qr_pb.txt"}} else {} end)),
+                 + (if $qp == 1 then {odoo_api_key_qr_pb:{file:"/opt/efn/secrets/odoo_api_key_qr_pb.txt"}} else {} end)
+                 + (if $bp == 1 then {odoo_api_key_booking_pb:{file:"/opt/efn/secrets/odoo_api_key_booking_pb.txt"}} else {} end)),
         services:{"api-gateway":{secrets:([{source:"odoo_api_key_online_gl"},{source:"odoo_api_key_online_pb"},{source:"efn_ca_crt"}]
                     + (if $fb == 1 then [{source:"odoo_api_key_online_bcf"}] else [] end)
-                    + (if $qp == 1 then [{source:"odoo_api_key_qr_pb"}] else [] end))},
+                    + (if $qp == 1 then [{source:"odoo_api_key_qr_pb"}] else [] end)
+                    + (if $bp == 1 then [{source:"odoo_api_key_booking_pb"}] else [] end))},
                   "bff-tls":{network_mode:"service:api-gateway"}, odoo:{secrets:[{source:"odoo_online_event_hmac"}]},
                   "superapp-web":{}}}' ;;
     ps)
@@ -91,7 +102,7 @@ if [[ "$cmd" == compose ]]; then
         for s in "$@"; do printf '{"Service":"%s","State":"running","Health":"%s"}\n' "$s" "$h"; done
       fi ;;
     up) printf '%s\n' "$*" >> $FK/up.log; printf '%s\n' "${files[@]}" >> $FK/files.log
-        for s in /opt/efn/secrets/odoo_api_key_online_*.txt /opt/efn/secrets/odoo_api_key_qr_*.txt; do
+        for s in /opt/efn/secrets/odoo_api_key_online_*.txt /opt/efn/secrets/odoo_api_key_qr_*.txt /opt/efn/secrets/odoo_api_key_booking_*.txt; do
           [[ -f "$s" ]] && cp "$s" "$FK/mounted.$(basename "$s" .txt)"
         done ;;
     *) exit 1 ;;
@@ -145,12 +156,15 @@ lc=$(tr 'A-Z-' 'a-z_' <<< "${E[EFN_CH]:-GL}")
 sec="${E[EFN_SECRET]:-odoo_api_key_online_$lc}"
 echo "${E[EFN_CH]:-} ${E[EFN_RPC_PATH]:-} ${E[EFN_KEY_ENV]:-}" >> $FK/rpc.log
 if [[ "${E[EFN_KEY_STDIN]:-}" == 1 ]]; then k=$(cat); else k=$(cat "$FK/mounted.$sec" 2> /dev/null); fi
-st=401
+st=401; deny=0
 if [[ "$k" =~ ^[0-9a-f]{40}$ ]] && cat $FK/keys*.db 2> /dev/null | grep -q " $k 0$" && ! grep -qx "$k" $FK/bad 2> /dev/null; then
   st=200
   if [[ "${E[EFN_RPC_PATH]:-}" == */efn_qr_status || -e $FK/force-422 ]]; then st=422; fi
+  # G23: outlet VERIFY-KEY tidak dikenal -> AccessError Odoo 403 (deny=0); penanda gateway-deny -> 403 dari gateway
+  if [[ "${E[EFN_RPC_PATH]:-}" == */efn_booking_status || -e $FK/force-403 ]]; then st=403; fi
+  if [[ -e $FK/gateway-deny ]]; then st=403; deny=1; fi
 fi
-echo "EFN_VERIFY $st deny=0"
+echo "EFN_VERIFY $st deny=$deny"
 EOF
 cat > /usr/local/bin/logger <<'EOF'
 #!/usr/bin/env bash
@@ -169,7 +183,7 @@ bad() { echo "FAIL $1 :: rc=$RC :: $(tail -n3 <<< "$OUT" | tr '\n' ' ') :: $(tai
 run() { set +e; OUT=$(env -i PATH=/usr/bin:/bin "$@" 2>&1); RC=$?; set -e; ALL_OUT+="$OUT"$'\n'; }
 rot() { run "$W" --channel=GL "$@"; }
 fresh() { rm -rf /tmp/fk /var/lib/efn/online-key /var/lib/efn/node-exporter/* /opt/efn/compose/.env; mkdir -p /tmp/fk; : > /tmp/fk/keys.db
-  for s in "$SECRET" "$SEC_PB" "$SEC_BCF" "$SEC_QRPB"; do printf 'disabled' > "$s"; chmod 0444 "$s"; done
+  for s in "$SECRET" "$SEC_PB" "$SEC_BCF" "$SEC_QRPB" "$SEC_BKPB"; do printf 'disabled' > "$s"; chmod 0444 "$s"; done
   : > /tmp/journal.log; conf OVERLAP_SECONDS=0; }
 active() { awk '$5 == 0' /tmp/fk/keys.db | wc -l; }
 key_of() { awk -v i="$1" '$1 == i { print $4 }' /tmp/fk/keys.db; }
@@ -469,6 +483,52 @@ run "$W" --all --status;                 expect_deny "101 QR-* di ONLINE_CHANNEL
 rm -f /opt/efn/compose/.env
 conf OVERLAP_SECONDS=0
 
+# ── 11e. G23 (docs/04 §15.3, L-85): API key user teknis reservasi meja per PT (BOOKING-PB / BOOKING-BCF) ────────────
+BKDB=/tmp/fk/keys.efn_booking_pb.db
+BK_FILES=docker-compose.yml,docker-compose.prod.yml,docker-compose.host.yml,docker-compose.online-booking-pb.yml
+printf 'disabled' > "$SEC_BKPB"; chmod 0444 "$SEC_BKPB"
+: > /tmp/journal.log
+run "$W" --channel=BOOKING-PB;           expect_deny "111 BOOKING-PB belum di-deploy tanpa --bootstrap ditolak" "tidak didefinisikan compose"
+run "$W" --channel=BOOKING-GL;           expect_deny "112 kode BOOKING untuk PT non-F&B (BOOKING-GL) ditolak allowlist" "salah satu"
+run "$W" --channel=BOOKING-BCF --bootstrap; expect_deny "113 --bootstrap BOOKING-BCF tanpa file overlay ditolak" "overlay"
+: > /tmp/fk/files.log; : > /tmp/fk/rpc.log; run "$W" --channel=BOOKING-PB --bootstrap
+if [[ $RC -eq 0 && "$(cat "$SEC_BKPB")" == "$(key_in "$BKDB" 1)" && "$(active_in "$BKDB")" == 1 ]] \
+   && grep -q 'docker-compose.online-booking-pb.yml' /tmp/fk/files.log && grep -qx 'efn_booking_pb BOOKING-PB' /tmp/fk/odoo-ch.log \
+   && grep -q 'KEY BARU kanal=BOOKING-PB id=1 nama=efn-booking-PB-' /tmp/journal.log \
+   && grep -q 'VERIFIKASI OK kanal=BOOKING-PB container=bbbbbbbbbbbb status=403' /tmp/journal.log; then
+  ok "114 --bootstrap BOOKING-PB: secret odoo_api_key_booking_pb + user efn_booking_pb, verifikasi 403 Odoo = key sah"
+else bad "114 bootstrap BOOKING-PB"; fi
+if grep -qx 'BOOKING-PB /json/2/efn.table.booking/efn_booking_status ODOO_API_KEY_BOOKING_PB_FILE' /tmp/fk/rpc.log; then
+  ok "115 verifikasi booking memakai path gateway #19 efn_booking_status + env ODOO_API_KEY_BOOKING_PB_FILE"
+else OUT=$(cat /tmp/fk/rpc.log); bad "115 path verifikasi booking"; fi
+if [[ -f /var/lib/efn/online-key/booking_pb.state && "$(metric_ch active_keys BOOKING-PB)" == 1 ]]; then
+  ok "116 state & metrik per kunci booking (booking_pb.state, channel=\"BOOKING-PB\")"; else bad "116 metrik booking"; fi
+conf OVERLAP_SECONDS=0 "COMPOSE_FILES=${BK_FILES}"; : > /tmp/journal.log; run "$W" --channel=BOOKING-PB --force
+if [[ $RC -eq 0 && "$(cat "$SEC_BKPB")" == "$(key_in "$BKDB" 2)" && "$(active_in "$BKDB")" == 1 ]] \
+   && grep -q 'KEY LAMA DITOLAK kanal=BOOKING-PB status=401' /tmp/journal.log; then
+  ok "117 rotasi BOOKING-PB: key 2 terpasang, key 1 dicabut (401 terbukti)"
+else bad "117 rotasi BOOKING-PB"; fi
+# 403 dari GATEWAY (X-EFN-Gateway-Deny) bukan bukti key sah -> rollback
+BEFORE=$(cat "$SEC_BKPB"); touch /tmp/fk/gateway-deny; : > /tmp/journal.log; run "$W" --channel=BOOKING-PB --force; rm -f /tmp/fk/gateway-deny
+if [[ $RC -eq 1 && "$(cat "$SEC_BKPB")" == "$BEFORE" ]] && grep -q 'VERIFIKASI GAGAL kanal=BOOKING-PB .*status=000' /tmp/journal.log; then
+  ok "118 booking: 403 gateway-deny BUKAN key sah -> rollback"; else bad "118 403 gateway booking"; fi
+# 403 hanya diterima untuk booking: kanal online yang dijawab 403 = gagal -> rollback
+conf OVERLAP_SECONDS=0; rot; BEFORE=$(cat "$SECRET"); touch /tmp/fk/force-403; : > /tmp/journal.log; rot --force; rm -f /tmp/fk/force-403
+if [[ $RC -eq 1 && "$(cat "$SECRET")" == "$BEFORE" ]] && grep -q 'VERIFIKASI GAGAL kanal=GL .*status=403' /tmp/journal.log; then
+  ok "119 kanal online: status 403 BUKAN bukti key sah -> rollback (status_ok khusus booking)"; else bad "119 403 online"; fi
+conf OVERLAP_SECONDS=0 "COMPOSE_FILES=${BK_FILES}"
+printf 'APP_ENV=production\nONLINE_CHANNELS=GL\nBOOKING_ENABLED=true\nBOOKING_COMPANIES=PB\n' > /opt/efn/compose/.env; chmod 0640 /opt/efn/compose/.env
+: > /tmp/journal.log; run "$W" --all --status
+if [[ $RC -eq 0 ]] && grep -q '== kanal BOOKING-PB ==' <<< "$OUT" \
+   && grep -q 'sumber=/opt/efn/compose/.env ONLINE_CHANNELS + BOOKING_COMPANIES' /tmp/journal.log && ! grep -qE '[0-9a-f]{40}' <<< "$OUT"; then
+  ok "120 --all: BOOKING_ENABLED=true di .env -> BOOKING-PB ikut (tanpa nilai key)"; else bad "120 --all booking"; fi
+printf 'BOOKING_ENABLED=true\nBOOKING_COMPANIES=GL\n' > /opt/efn/compose/.env; chmod 0640 /opt/efn/compose/.env
+run "$W" --all --status;                 expect_deny "121 BOOKING_COMPANIES .env bukan PT F&B ditolak" "BOOKING_COMPANIES tidak valid"
+printf 'ONLINE_CHANNELS=GL,BOOKING-PB\n' > /opt/efn/compose/.env; chmod 0640 /opt/efn/compose/.env
+run "$W" --all --status;                 expect_deny "122 BOOKING-* di ONLINE_CHANNELS ditolak" "ONLINE_CHANNELS tidak valid"
+rm -f /opt/efn/compose/.env
+conf OVERLAP_SECONDS=0
+
 # Logika Python odoo shell (precheck G19) dijalankan NYATA terhadap env Odoo palsu (bukan hanya grep)
 PYF=/tmp/efn-rot-py.py
 sed -n "/^read -r -d '' PY << 'PYEOF'/,/^PYEOF\$/p" "$W" | sed '1d;$d' > "$PYF"
@@ -584,6 +644,17 @@ pyrun efn_qr_pb QR-PB '{"users":{"efn_qr_pb":{"id":9,'"$QU"',"groups":["efn_onli
 pyok "109 python QR: user tanpa grup QR -> ERR user_not_qr" 'EFN_ROT ERR user_not_qr'
 pyrun efn_qr_pb QR-PB '{"users":{"efn_qr_pb":{"id":9,'"$QU"','"$QG"'}},"missing_models":["efn.online.channel"]}' qr PB
 pyok "110 python QR: tanpa modul kanal online -> cek user_shared dilewati, OK" 'EFN_ROT OK'
+# G23: precheck user teknis reservasi (grup efn_table_booking.group_booking_bff, satu company = PT, tanpa POS/admin)
+BG='"groups":["efn_table_booking.group_booking_bff"]'
+pyrun efn_booking_bcf BOOKING-BCF '{"users":{"efn_booking_bcf":{"id":11,"active":true,"company_ids":[4],"company_id":{"efn_brand_code":"BCF"},'"$BG"'}},
+  "keys":[{"id":6,"user":"efn_booking_bcf","name":"efn-booking-BCF-x"}]}' booking BCF
+pyok "123 python booking: user teknis reservasi BCF satu company -> daftar key + OK" 'EFN_ROT OK'
+pyrun efn_booking_pb BOOKING-PB '{"users":{"efn_booking_pb":{"id":12,'"$QU"','"$QG"'}}}' booking PB
+pyok "124 python booking: user QR (bukan grup booking) -> ERR user_not_booking" 'EFN_ROT ERR user_not_booking'
+pyrun efn_booking_pb BOOKING-PB '{"users":{"efn_booking_pb":{"id":12,'"$QU"',"groups":["efn_table_booking.group_booking_bff","point_of_sale.group_pos_manager","point_of_sale.group_pos_user"]}}}' booking PB
+pyok "125 python booking: user teknis ber-grup POS -> ERR user_privileged" 'EFN_ROT ERR user_privileged'
+pyrun efn_booking_pb BOOKING-PB '{"users":{"efn_booking_pb":{"id":12,'"$QU"','"$BG"'}},"missing_xmlids":["efn_table_booking.group_booking_bff"]}' booking PB
+pyok "126 python booking: modul efn_table_booking belum terpasang -> ERR group_missing" 'EFN_ROT ERR group_missing'
 conf OVERLAP_SECONDS=0
 
 # ── 12. Penjaga independen: nilai key TIDAK PERNAH muncul di journald / keluaran ─────────────────────────────

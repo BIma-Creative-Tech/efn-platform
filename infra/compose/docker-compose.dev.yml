@@ -161,6 +161,8 @@ services:
       - ../../services/superapp-web/lib:/app/lib:ro
       - ../../services/superapp-web/components:/app/components:ro
       - ../../services/superapp-web/proxy.ts:/app/proxy.ts:ro
+      # Aset statis (model 3D landing, poster, logo brand) - tanpa rebuild image saat aset berubah.
+      - ../../services/superapp-web/public:/app/public:ro
     read_only: false
     # `next dev` mengompilasi route sesuai permintaan dan menyimpan cache webpack di memori. Diukur gel. 12
     # (7 Okt 2026): 330 MiB setelah start -> 477 MiB setelah 6 route dikompilasi -> 487 MiB (95 % dari 512M base).

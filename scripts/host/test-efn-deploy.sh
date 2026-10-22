@@ -112,7 +112,7 @@ make_release() {
   cp "$SRC/scripts/lib/deploy-validate.sh" "$d/r/scripts/lib/deploy-validate.sh"
   cat > "$d/r/scripts/deploy.sh" <<'EOF'
 #!/usr/bin/env bash
-{ env | grep -E '^(IMAGE_|APP_ENV=|EFN_RELEASE_|WHATSAPP_OTP_TEMPLATE=|EFN_WG_|EFN_PUBLIC_BIND=|COMPOSE_PROFILES=|TRAEFIK_DOMAIN=|PAYMENT_PROVIDER=|JWT_SECRET=|EFN_ALLOW_FEATURE_ON=|LOYALTY_EXPIRY_ENABLED=|FNB_QR_ENABLED=|LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=|ETL_ENABLE_KDS=)' | sort; } > /tmp/deploy-ran
+{ env | grep -E '^(IMAGE_|APP_ENV=|EFN_RELEASE_|WHATSAPP_OTP_TEMPLATE=|EFN_WG_|EFN_PUBLIC_BIND=|COMPOSE_PROFILES=|TRAEFIK_DOMAIN=|PAYMENT_PROVIDER=|JWT_SECRET=|EFN_ALLOW_FEATURE_ON=|LOYALTY_EXPIRY_ENABLED=|FNB_QR_ENABLED=|LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=|ETL_ENABLE_KDS=|BOOKING_ENABLED=|ONLINE_SLOTS_ENABLED=)' | sort; } > /tmp/deploy-ran
 # SEC-120: kunci host bersama dipegang efn-deploy (fd 8 diwarisi) selama deploy.sh berjalan
 if flock -n /run/efn/deploy.lock true; then echo LOCK=free; else echo LOCK=held; fi >> /tmp/deploy-ran
 EOF
@@ -340,6 +340,20 @@ SEQ=$((SEQ + 1))
 make_release "N$SEQ" "$SEQ" 1.3.0 '.config.FNB_QR_ENABLED = "true" | .config.FNB_QR_COMPANIES = "PB" | .config.FNB_QR_BASE_URL_PB = "https://pb.efn.example"'
 make_env "N$SEQ"; run "N$SEQ"
 expect_ok "181 production FNB_QR_ENABLED=true + PB + URL https diterima (cek API key QR = deploy.sh di host)"
+# G23 (docs/04 §15): reservasi & slot pre-order = kunci config manifest; validasi daftar PT dan rentang angka
+SEQ=$((SEQ + 1))
+make_release "N$SEQ" "$SEQ" 1.3.0 '.config.BOOKING_ENABLED = "true" | .config.BOOKING_COMPANIES = "PB" | .config.ONLINE_SLOTS_ENABLED = "true"'
+make_env "N$SEQ"; run "N$SEQ"
+expect_ok "182 production BOOKING_ENABLED=true + PB + ONLINE_SLOTS_ENABLED=true diterima (cek API key booking = deploy.sh di host)"
+if grep -qxF 'BOOKING_ENABLED=true' /tmp/deploy-ran 2> /dev/null && grep -qxF 'ONLINE_SLOTS_ENABLED=true' /tmp/deploy-ran 2> /dev/null; then
+  ok "183 BOOKING_ENABLED/ONLINE_SLOTS_ENABLED dari manifest diteruskan ke deploy.sh"; else bad "183 BOOKING ke deploy.sh"; fi
+neg_man "184 BOOKING_COMPANIES bukan PT F&B (GL) ditolak" "config manifest rilis tidak valid" '.config.BOOKING_COMPANIES = "PB,GL"'
+neg_man "185 BOOKING_COMPANIES ganda ditolak" "config manifest rilis tidak valid" '.config.BOOKING_COMPANIES = "PB,PB"'
+neg_man "186 BOOKING_ENABLED bukan true|false ditolak" "config manifest rilis tidak valid" '.config.BOOKING_ENABLED = "yes"'
+neg_man "187 BOOKING_MAX_ACTIVE_PER_MEMBER di luar 1..10 ditolak" "config manifest rilis tidak valid" '.config.BOOKING_MAX_ACTIVE_PER_MEMBER = "50"'
+neg_man "188 BOOKING_MEMBER_LINK_DAYS > BOOKING_RETENTION_DAYS ditolak" "config manifest rilis tidak valid" \
+  '.config.BOOKING_MEMBER_LINK_DAYS = "300" | .config.BOOKING_RETENTION_DAYS = "200"'
+neg_env "189 BOOKING_ENABLED lewat stdin ditolak (config manifest)" "variabel tidak diizinkan: BOOKING_ENABLED" "BOOKING_ENABLED=true"
 neg_man "40 config manifest multi-baris ditolak" "skema" '.config.RABBITMQ_STRICT_PERMISSIONS = "true\nIMAGE_ODOO=evil"'
 neg_man "41 kunci config manifest tidak dikenal ditolak" "skema" '.config.IMAGE_ODOO = "evil.example/odoo"'
 neg_man "101 saklar dev ODOO_ONLINE_MOCK di config manifest ditolak (G17)" "skema" '.config.ODOO_ONLINE_MOCK = "true"'
