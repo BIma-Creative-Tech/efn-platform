@@ -1,6 +1,8 @@
 /* Tema per brand lewat CSS custom properties yang di-set di <html style> oleh app/layout.tsx.
    Nilai di bawah hanya fallback (brand default). Jangan duplikasi komponen per brand (R-T14). */
 :root {
+  --color-chrome: #0b5d4b;
+  --color-chrome-contrast: #ffffff;
   --color-primary: #0b5d4b;
   --color-primary-contrast: #ffffff;
   --color-accent: #f2a900;
@@ -9,14 +11,46 @@
   --color-text: #14211d;
   --color-text-muted: #4a5a55;
   --color-border: #cfd8d5;
+  --color-accent-soft: #e7f2ef;
+  --color-focus: #0b5d4b;
   --color-danger: #b42318;
   --color-success: #067647;
   --color-warning-bg: #fffaeb;
   --color-warning-border: #f79009;
   --radius: 10px;
+  --card-shadow: none;
   --space: 1rem;
   --max-width: 64rem;
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  /* Tipografi per brand (lib/brands.ts -> themeToCssVars). Hanya font sistem/terpasang: CSP `font-src 'self'`.
+     Font resmi berlisensi (PB Signature, ITC Quorum, dst.) menyusul lewat @font-face dari public/fonts. */
+  --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-heading: var(--font-body);
+  --heading-weight: 800;
+  --heading-letter-spacing: normal;
+  --logo-transform: none;
+  --logo-letter-spacing: normal;
+  font-family: var(--font-body);
+  color-scheme: light;
+}
+
+/* Skema gelap per brand (BrandTheme.scheme = 'dark', mis. PB: navy resmi #002663). Warna status dicerahkan agar
+   ≥ 4.5:1 di atas surface gelap (#0c3170): danger #ff9e8f 6.2, success #6fe3a1 7.6, stok menipis #fdb022 6.8. */
+html[data-scheme='dark'] {
+  color-scheme: dark;
+  --color-danger: #ff9e8f;
+  --color-success: #6fe3a1;
+  --color-stock-low: #fdb022;
+  --color-warning-bg: color-mix(in oklab, #f79009 14%, var(--color-surface));
+  --color-warning-border: #f79009;
+  --color-danger-bg: color-mix(in oklab, #ff9e8f 12%, var(--color-surface));
+  --color-success-bg: color-mix(in oklab, #6fe3a1 12%, var(--color-surface));
+}
+html[data-scheme='dark'] ::selection {
+  background: var(--color-accent);
+  color: var(--color-chrome);
+}
+html[data-scheme='dark'] img {
+  /* Foto produk berlatar terang: jangan diredupkan oleh color-scheme gelap. */
   color-scheme: light;
 }
 
@@ -32,9 +66,15 @@ body {
   padding: 0;
 }
 
+/* UX-11 (WCAG 2.2 SC 2.4.11): elemen yang difokus/di-scroll tidak tertutup bilah bayar/kirim yang menempel di bawah. */
+html {
+  scroll-padding-bottom: 6rem;
+}
+
 body {
   background: var(--color-surface-alt);
   color: var(--color-text);
+  font-family: var(--font-body);
   line-height: 1.5;
   min-height: 100vh;
   display: flex;
@@ -45,9 +85,23 @@ a {
   color: var(--color-primary);
 }
 
+h1,
+h2,
+h3 {
+  font-family: var(--font-heading);
+  font-weight: var(--heading-weight);
+  letter-spacing: var(--heading-letter-spacing);
+  line-height: 1.25;
+}
+
+/* UX-03: indikator fokus memakai --color-focus (≥ 3:1 terhadap latar brand), bukan --color-accent
+   (kuning/emas < 3:1 di latar terang). Di atas latar primer (header, tombol) dibalik ke warna kontras. */
 :focus-visible {
-  outline: 3px solid var(--color-accent);
+  outline: 3px solid var(--color-focus);
   outline-offset: 2px;
+}
+.site-header :focus-visible {
+  outline-color: var(--color-chrome-contrast);
 }
 
 .skip-link {
@@ -71,8 +125,25 @@ a {
 
 /* Header */
 .site-header {
-  background: var(--color-primary);
-  color: var(--color-primary-contrast);
+  background: var(--color-chrome);
+  color: var(--color-chrome-contrast);
+  border-bottom: 4px solid var(--color-accent);
+}
+html[data-scheme='dark'] .site-header {
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in oklab, var(--color-chrome) 88%, transparent);
+  backdrop-filter: saturate(140%) blur(12px);
+}
+/* Sticky hanya di layar lebar: di ponsel menu membungkus jadi beberapa baris dan akan menutupi konten. */
+@media (min-width: 56rem) {
+  html[data-scheme='dark'] .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }
+}
+html[data-scheme='dark'] .site-header :focus-visible {
+  outline-color: var(--color-focus);
 }
 .site-header .container {
   display: flex;
@@ -84,10 +155,27 @@ a {
   padding-bottom: 0.75rem;
 }
 .brand-logo {
+  font-family: var(--font-heading);
   font-weight: 800;
   font-size: 1.25rem;
-  color: var(--color-primary-contrast);
+  text-transform: var(--logo-transform);
+  letter-spacing: var(--logo-letter-spacing);
+  color: var(--color-chrome-contrast);
   text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+}
+.brand-logo img {
+  display: block;
+  height: 2rem;
+  width: auto;
+}
+/* UX-02: tautan halaman aktif ditandai visual + aria-current (bukan warna saja). */
+.site-nav a[aria-current='page'] {
+  text-decoration: underline;
+  text-decoration-thickness: 3px;
+  text-underline-offset: 0.35em;
 }
 .site-nav ul {
   list-style: none;
@@ -98,12 +186,24 @@ a {
   flex-wrap: wrap;
 }
 .site-nav a {
-  color: var(--color-primary-contrast);
+  color: var(--color-chrome-contrast);
   text-decoration: none;
   font-weight: 600;
   /* Target sentuh ≥ 44px tinggi di ponsel (WCAG 2.5.5); menu membungkus ke baris berikut bila sempit. */
   display: inline-block;
   padding: 0.625rem 0.25rem;
+}
+html[data-scheme='dark'] .site-nav a {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+html[data-scheme='dark'] .site-nav a:hover,
+html[data-scheme='dark'] .site-nav a[aria-current='page'] {
+  color: var(--color-text);
+}
+html[data-scheme='dark'] .site-nav a[aria-current='page'] {
+  text-decoration-color: var(--color-accent);
+  text-decoration-thickness: 2px;
 }
 @media (max-width: 30rem) {
   .site-nav ul {
@@ -119,6 +219,15 @@ main {
   padding: 1.5rem 0 2.5rem;
 }
 
+/* Landing page brand (components/landing) = full-bleed: lepas dari padding <main> & lebar .container layout. */
+main:has(> .container > [data-landing]) {
+  padding: 0;
+}
+main > .container:has(> [data-landing]) {
+  max-width: none;
+  padding: 0;
+}
+
 .site-footer {
   border-top: 1px solid var(--color-border);
   background: var(--color-surface);
@@ -126,12 +235,47 @@ main {
   font-size: 0.875rem;
   padding: 1rem 0;
 }
+.site-footer p {
+  margin: 0.25rem 0;
+}
+
+/* Hero beranda per brand: copy dari lib/brands.ts (Brand.hero), warna dari token. */
+.hero {
+  background: var(--color-accent-soft);
+  border: 1px solid var(--color-border);
+  border-left: 6px solid var(--color-primary);
+  border-radius: var(--radius);
+  padding: 1.5rem 1.25rem;
+}
+.hero-eyebrow {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+}
+.hero h1 {
+  margin: 0.25rem 0 0.5rem;
+  font-size: clamp(1.5rem, 4vw, 2.25rem);
+  color: var(--color-primary);
+}
+.hero p {
+  max-width: 40rem;
+}
+.hero-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin: 1rem 0 0;
+}
 
 /* Kartu & layout */
 .card {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
+  box-shadow: var(--card-shadow);
   padding: 1.25rem;
 }
 .stack > * + * {
@@ -195,7 +339,8 @@ main {
 .field input[type='tel'],
 .field input[type='number'],
 .field input[type='file'],
-.field input[inputmode] {
+.field input[inputmode],
+.field select {
   font: inherit;
   padding: 0.625rem 0.75rem;
   border: 1px solid var(--color-text-muted);
@@ -222,6 +367,7 @@ main {
   font: inherit;
   font-weight: 700;
   display: inline-block;
+  min-height: 2.75rem; /* UX-06: target sentuh ≥ 44px */
   border: 2px solid var(--color-primary);
   background: var(--color-primary);
   color: var(--color-primary-contrast);
@@ -246,6 +392,7 @@ main {
 .btn-small {
   padding: 0.25rem 0.75rem;
   font-size: 0.875rem;
+  min-height: 2.25rem; /* ≥ 24px (WCAG 2.2 SC 2.5.8 AA) */
 }
 
 .alert {
@@ -256,12 +403,12 @@ main {
 .alert-error {
   color: var(--color-danger);
   border-color: var(--color-danger);
-  background: #fef3f2;
+  background: var(--color-danger-bg, #fef3f2);
 }
 .alert-success {
   color: var(--color-success);
   border-color: var(--color-success);
-  background: #ecfdf3;
+  background: var(--color-success-bg, #ecfdf3);
 }
 
 .visually-hidden {
@@ -313,4 +460,181 @@ main {
   max-height: 16rem;
   border-radius: var(--radius);
   border: 1px solid var(--color-border);
+}
+
+/* ==========================================================================
+   Skema gelap (PB): halaman non-landing mengikuti bahasa visual landing —
+   judul serif besar, label mono, kartu navy tipis bergaris, tombol pil kuning.
+   Semua warna dari token brand; berlaku hanya untuk html[data-scheme='dark'].
+   ========================================================================== */
+html[data-scheme='dark'] {
+  --max-width: 74rem;
+  --space: clamp(1.25rem, 4vw, 3rem);
+  --font-mono: 'Geist Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+html[data-scheme='dark'] body {
+  -webkit-font-smoothing: antialiased;
+}
+html[data-scheme='dark'] main {
+  padding: clamp(2rem, 5vw, 3.5rem) 0 clamp(3rem, 7vw, 5rem);
+}
+html[data-scheme='dark'] h1 {
+  font-size: clamp(2.25rem, 5vw, 3.5rem);
+  line-height: 1.04;
+  letter-spacing: -0.03em;
+  font-variation-settings: 'SOFT' 50, 'opsz' 144;
+  text-wrap: balance;
+}
+html[data-scheme='dark'] h2 {
+  font-size: clamp(1.375rem, 2.6vw, 1.875rem);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-variation-settings: 'SOFT' 50, 'opsz' 96;
+}
+html[data-scheme='dark'] h3 {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  font-size: 0.75rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+html[data-scheme='dark'] a {
+  text-underline-offset: 0.22em;
+  text-decoration-thickness: 1px;
+}
+html[data-scheme='dark'] a:hover {
+  text-decoration-thickness: 2px;
+}
+
+html[data-scheme='dark'] .card,
+html[data-scheme='dark'] .cart-group {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+  border-radius: 16px;
+  box-shadow: var(--card-shadow);
+  padding: clamp(1.25rem, 3vw, 1.75rem);
+}
+
+html[data-scheme='dark'] .btn {
+  border-radius: 999px;
+  min-height: 3rem;
+  padding: 0.6875rem 1.5rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow: 0 10px 24px -12px color-mix(in oklab, var(--color-primary) 70%, transparent);
+  transition:
+    transform 160ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 160ms;
+}
+html[data-scheme='dark'] .btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+html[data-scheme='dark'] .btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+html[data-scheme='dark'] .btn-secondary {
+  background: transparent;
+  color: var(--color-text);
+  border-color: var(--color-border);
+  box-shadow: none;
+}
+html[data-scheme='dark'] .btn-secondary:hover:not(:disabled) {
+  border-color: var(--color-text-muted);
+  background: color-mix(in oklab, var(--color-text) 6%, transparent);
+}
+html[data-scheme='dark'] .btn-danger {
+  background: transparent;
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+  box-shadow: none;
+}
+html[data-scheme='dark'] .btn-small {
+  min-height: 2.25rem;
+  padding: 0.25rem 0.875rem;
+}
+
+html[data-scheme='dark'] .field input[type='text'],
+html[data-scheme='dark'] .field input[type='tel'],
+html[data-scheme='dark'] .field input[type='number'],
+html[data-scheme='dark'] .field input[type='file'],
+html[data-scheme='dark'] .field input[inputmode],
+html[data-scheme='dark'] .field select,
+html[data-scheme='dark'] textarea {
+  background: var(--color-surface-alt);
+  border-color: var(--color-border);
+  border-radius: 12px;
+  min-height: 3rem;
+}
+html[data-scheme='dark'] .field input:hover,
+html[data-scheme='dark'] .field select:hover {
+  border-color: var(--color-text-muted);
+}
+html[data-scheme='dark'] ::placeholder {
+  color: var(--color-text-muted);
+  opacity: 0.85;
+}
+html[data-scheme='dark'] .field label {
+  font-weight: 500;
+}
+
+html[data-scheme='dark'] .badge {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.6875rem;
+  padding: 0.25rem 0.625rem;
+  background: transparent;
+  color: var(--color-text-muted);
+}
+html[data-scheme='dark'] .notice {
+  border-left-width: 2px;
+  color: var(--color-text);
+}
+html[data-scheme='dark'] .alert {
+  border-radius: 12px;
+}
+html[data-scheme='dark'] .points {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  color: var(--color-accent);
+  font-variant-numeric: tabular-nums;
+}
+html[data-scheme='dark'] .cart-table,
+html[data-scheme='dark'] .muted,
+html[data-scheme='dark'] .small {
+  font-variant-numeric: tabular-nums;
+}
+html[data-scheme='dark'] .cart-table th {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  font-size: 0.6875rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  padding-bottom: 0.5rem;
+}
+
+html[data-scheme='dark'] .site-footer {
+  background: var(--color-chrome);
+  padding: 2rem 0;
+}
+html[data-scheme='dark'] .site-footer a {
+  color: var(--color-text);
+}
+
+html[data-scheme='dark'] {
+  scrollbar-color: var(--color-border) var(--color-chrome);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-scheme='dark'] .btn {
+    transition: none;
+  }
+  html[data-scheme='dark'] .btn:hover:not(:disabled),
+  html[data-scheme='dark'] .btn:active:not(:disabled) {
+    transform: none;
+  }
 }

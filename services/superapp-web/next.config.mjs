@@ -45,6 +45,9 @@ const nextConfig = {
   output: 'standalone',
   poweredByHeader: false,
   reactStrictMode: true,
+  // Dev saja (Next 16 memblokir /_next/hmr lintas origin): tanpa ini klien dev di https://<brand>.efn.local tidak
+  // pernah terhidrasi (tombol/komponen klien mati). Tidak berpengaruh pada `next build`/produksi.
+  ...(isDev ? { allowedDevOrigins: ['efn.local', '*.efn.local'] } : {}),
   async headers() {
     return [
       { source: '/:path*', headers: securityHeaders },

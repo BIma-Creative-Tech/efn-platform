@@ -1,6 +1,6 @@
 # superapp-web — EFN Super-App & brand sites (Next.js 16 App Router)
 
-**Tujuan:** satu codebase untuk Super-App holding (`app.`) dan situs brand (`mart.`, `kitchen.`), tema per brand lewat CSS custom properties.
+**Tujuan:** satu codebase untuk Super-App holding (`app.`) dan situs brand (`grandlucky.`, `parisbaguette.`, `bacha.`), tema per brand lewat CSS custom properties (token: `docs/design/brand-tokens.md`).
 **ADR terkait (Proposed):** multi-tenant by domain, unified cart lintas PT (cart dipisah per PT: PPN vs PB1), OTP login via BFF, ADR-034/019 (belanja online).
 **Risiko dimitigasi:** R-T14 (duplikasi komponen per brand), kebocoran token (cookie HttpOnly, tidak ada token di JS), PDP (lokasi opt-in per laporan, EXIF dibuang di client).
 
@@ -8,8 +8,8 @@
 
 | Path | Isi |
 |---|---|
-| `proxy.ts` | (Next 16, dulu `middleware.ts`) Host -> brand, set request header `x-efn-brand` (dev: `?brand=efn-mart`) |
-| `lib/brands.ts` | Konfigurasi brand & company (EFN/GL/PB/BCR/BCF/FARM; peta brand Bacha = BCR+BCF) |
+| `proxy.ts` | (Next 16, dulu `middleware.ts`) Host -> brand, set request header `x-efn-brand` (dev: `?brand=grandlucky`) |
+| `lib/brands.ts` | Konfigurasi tenant (`efn`, `grandlucky`, `parisbaguette`, `bacha`), company (EFN/GL/PB/BCR/BCF/FARM; Bacha = BCR+BCF), token tema (warna, font stack, radius, bayangan) + copy hero; `themeToCssVars` memvalidasi setiap nilai sebelum masuk `style` |
 | `lib/bff.ts` | Klien BFF server-side (`BFF_INTERNAL_URL`), tipe kontrak docs/04 |
 | `lib/bff-config.ts` | Guard transport BFF (https wajib, CA internal) — murni, diuji unit |
 | `lib/safe-next.ts` | Validator `?next=` anti open-redirect (SEC-13) |
@@ -24,6 +24,22 @@
 | `app/akun/penghapusan/[id]`, `app/api/dsar/requests/[id]`, `lib/dsar-receipt.ts` | R6 (docs/04 §8.13): status hapus akun tanpa sesi via cookie HttpOnly `efn_dsar_receipt` (Path `/api/dsar`, SameSite=Strict, ≤ 30 hari) |
 | `app/belanja`, `app/belanja/[id]`, `app/keranjang`, `app/pesanan`, `app/pesanan/[id]`, `components/online/**` | Belanja online Fase 3 (lihat bagian di bawah) |
 | `app/api/catalog/**`, `app/api/cart/**`, `app/api/orders/**`, `lib/{catalog,cart,orders}*.ts` | Route Handler & modul belanja online |
+
+## Tenant & cara mencoba brand di dev
+
+| Tenant (`BrandId`) | Host dev | Subdomain prod | Alias lama | Company (PT) | `brandCode` |
+|---|---|---|---|---|---|
+| `efn` (default, holding) | `app.efn.local`, `efn.local`, `localhost` | `app.` | — | GL, PB, BCR, BCF | `null` (semua kanal) |
+| `grandlucky` | `grandlucky.efn.local` | `grandlucky.` | `mart.` | GL | `GL` |
+| `parisbaguette` | `parisbaguette.efn.local` | `parisbaguette.` | `kitchen.` | PB | `PB` |
+| `bacha` | `bacha.efn.local` | `bacha.` | — | BCR (butik) + BCF (kafe) | `BACHA` |
+
+- **Hosts file** (lihat README root): `127.0.0.1 app.efn.local grandlucky.efn.local parisbaguette.efn.local bacha.efn.local`.
+- **Tanpa hosts file (dev saja):** buka `http://localhost:3001/?brand=bacha` — proxy menyimpan cookie `efn_dev_brand` sehingga halaman lain tetap memakai brand itu; kembali dengan `?brand=efn`. Diabaikan saat `NODE_ENV=production`.
+- Host/subdomain tak dikenal → `efn` (bukan error). `brandCode` hanya membatasi kanal di UI; BFF tidak mempercayai domain (L-33 diperbarui 20 Okt 2026). Akibatnya **kanal Odoo tanpa `brand_code` hanya tampil di domain holding** — isi `brand_code` kanal (GL/PB/BACHA) agar katalog muncul di domain brand.
+- Logo: teks bergaya (`logoText`). Logo SVG resmi dari tim brand → `public/brands/<id>/logo.svg` lalu isi `logoSrc` (hanya path same-origin yang lolos `safeLogoSrc`).
+- Font: hanya font stack sistem (CSP `font-src 'self'`). File font berlisensi bisa di-self-host di `public/fonts` + `@font-face` di `globals.css`, lalu nama family-nya sudah ada di stack (`Lato`, `Inter`, `Lora`).
+- Container dev `next dev` dengan bind mount dari Windows **tidak selalu hot-reload** (event file tidak sampai) → `docker restart efn-superapp-web-1` setelah mengubah `lib/`/`app/`.
 
 ## Env
 
@@ -72,6 +88,17 @@ Risiko dimitigasi: kebocoran token sesi meja (R-S03/SEC-73: token hanya di fragm
 Modifier online: keranjang bergaris `{ product_id, qty, attribute_value_ids? }` (identitas = produk + id terurut); `AttributePicker` dipakai di detail produk kanal F&B; harga katalog F&B ditampilkan **sebelum pajak** + label pajak (B-5), rincian di keranjang. Poin: `CartView` menampilkan saldo & nilai, isian poin per PT (min/maks dari `quote.points`), porsi tunai ≥ Rp1; `POST /api/orders` meneruskan `points_redeem`. `app/akun`: poin ditahan + "Poin akan hangus" (hanya bila BFF mengisi `points_expiry.expires_on`).
 
 Catatan penting: token meja **tidak** disimpan di storage (keputusan lead G22, meralat §14.A.2) → memuat ulang halaman berarti pindai ulang QR. Teks "poin akan hangus" adalah DRAF sampai Legal menyetujui syarat program (L-73).
+
+## Landing page brand (scroll story foto)
+
+Desain & aturan: `docs/design/landing-pages.md`. Brand dengan entri di `lib/landing-config.ts` (saat ini **Paris Baguette**) memakai landing animatif di `/` sebelum masuk `/belanja`; brand lain tetap memakai beranda lama.
+
+| Path | Isi |
+|---|---|
+| `lib/landing-config.ts` | Konfigurasi per brand (bab → kategori katalog, produk unggulan, kata penekanan judul, copy DRAF), `pickPhotos`, `categoryHref`, `chapterStats` |
+| `components/landing/*` | `Landing` (server), `PhotoStory` + `Rail` (klien, framer-motion) |
+
+Foto produk, etalase, gerai, menit siap, dan metode bayar diambil dari katalog BFF (foto lewat proxy same-origin `/api/catalog/images/:sha`); katalog mati → landing tetap tampil tanpa foto/etalase. Warna PB = warna resmi situs (navy `#002663`, putih, `#aebcd3`, kuning `#fcb134`) dengan `scheme: 'dark'` → seluruh halaman PB ikut tema gelap via `html[data-scheme='dark']`. `prefers-reduced-motion` → gerakan mati; tanpa gerakan otomatis (semua dipicu scroll/pointer).
 
 ## Skrip
 

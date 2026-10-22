@@ -51,9 +51,10 @@ export default async function ProductPage({
   return (
     <div className="stack">
       <nav aria-label="Remah roti" className="small">
-        <Link href="/belanja">Belanja</Link> ›{' '}
+        {/* UX-09: bawa `channel` agar brand multi-kanal (Bacha: BCR + BCF) kembali ke kanal yang sama, bukan kanal pertama. */}
+        <Link href={`/belanja?${new URLSearchParams({ channel: channel.channel_code })}`}>Belanja</Link> ›{' '}
         {p.category_id !== null ? (
-          <Link href={`/belanja?category=${p.category_id}`}>Kategori</Link>
+          <Link href={`/belanja?${new URLSearchParams({ channel: channel.channel_code, category: String(p.category_id) })}`}>Kategori</Link>
         ) : (
           <span>Produk</span>
         )}

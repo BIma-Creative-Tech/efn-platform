@@ -32,6 +32,12 @@ export interface CatalogOutlet {
   public_name: string;
   pickup_enabled: boolean;
   prep_minutes: number;
+  /**
+   * G23 (§15.4): outlet menerima pre-order berjadwal (slot ambil). Opsional: field TIDAK ada bila BFF belum mengirim
+   * (perilaku keranjang tidak berubah). `slot_minutes` hanya ada bila `slot_enabled`.
+   */
+  slot_enabled?: boolean;
+  slot_minutes?: number;
 }
 
 export interface CatalogChannel {
@@ -46,7 +52,8 @@ export interface CatalogChannel {
   business_type: 'retail' | 'fnb' | null;
   /** G22 (§14.B B-2 / §14.C): kanal boleh earn/redeem poin. null = BFF belum mengirim (tidak diketahui; BFF yang memutuskan). */
   loyalty: { earn: boolean; redeem: boolean } | null;
-  fulfilment: { pickup: boolean; delivery: boolean };
+  /** `scheduled` (G23 §15.4) = ada outlet `slot_enabled`; opsional, tidak ada bila BFF belum mengirim. */
+  fulfilment: { pickup: boolean; delivery: boolean; scheduled?: boolean };
   outlets: CatalogOutlet[];
 }
 
@@ -252,14 +259,23 @@ export function parseChannels(v: unknown): CatalogChannel[] | null {
     if (Array.isArray(c.outlets)) {
       for (const o of c.outlets) {
         if (!isObj(o) || !isOutletCode(o.outlet_code)) continue;
-        outlets.push({
+        const outlet: CatalogOutlet = {
           outlet_code: o.outlet_code,
           public_name: str(o.public_name, 120) ?? o.outlet_code,
           pickup_enabled: o.pickup_enabled === true,
           prep_minutes: Math.max(0, Math.round(num(o.prep_minutes) ?? 0)),
-        });
+        };
+        // G23: toleran — hanya diisi bila BFF mengirim boolean; slot_minutes 5..240 menit (kontrak 30|60).
+        if (typeof o.slot_enabled === 'boolean') {
+          outlet.slot_enabled = o.slot_enabled;
+          const sm = num(o.slot_minutes);
+          if (o.slot_enabled && sm !== null && Number.isInteger(sm) && sm >= 5 && sm <= 240) outlet.slot_minutes = sm;
+        }
+        outlets.push(outlet);
       }
     }
+    const fulfilment: CatalogChannel['fulfilment'] = { pickup: f.pickup === true, delivery: f.delivery === true };
+    if (typeof f.scheduled === 'boolean') fulfilment.scheduled = f.scheduled;
     out.push({
       channel_code: c.channel_code,
       company_code: str(c.company_code, 16) ?? c.channel_code,
@@ -268,7 +284,7 @@ export function parseChannels(v: unknown): CatalogChannel[] | null {
       payment_modes: parsePaymentModes(c.payment_modes),
       business_type: c.business_type === 'retail' || c.business_type === 'fnb' ? c.business_type : null,
       loyalty: isObj(c.loyalty) ? { earn: c.loyalty.earn === true, redeem: c.loyalty.redeem === true } : null,
-      fulfilment: { pickup: f.pickup === true, delivery: f.delivery === true },
+      fulfilment,
       outlets,
     });
   }

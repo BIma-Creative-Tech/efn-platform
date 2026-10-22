@@ -72,12 +72,26 @@
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
+  box-shadow: var(--card-shadow);
   overflow: hidden;
   color: inherit;
   text-decoration: none;
+  transition: border-color 0.15s ease;
+}
+.productCard:hover {
+  border-color: var(--color-primary);
 }
 .productCard:hover .productName {
   text-decoration: underline;
+}
+/* UX-05: kartu adalah tautan; outline fokus jangan terpotong overflow kartu. */
+.productCard:focus-visible {
+  outline-offset: 3px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .productCard {
+    transition: none;
+  }
 }
 .productBody {
   padding: 0.625rem 0.75rem 0.75rem;
@@ -86,6 +100,7 @@
   gap: 0.25rem;
 }
 .productName {
+  font-family: var(--font-heading);
   font-weight: 600;
   margin: 0;
   font-size: 0.9375rem;
@@ -96,7 +111,7 @@
   color: var(--color-text);
 }
 .taxNote {
-  font-size: 0.75rem;
+  font-size: 0.8125rem; /* UX-08: 12px terlalu kecil untuk info pajak */
   color: var(--color-text-muted);
 }
 
@@ -163,7 +178,7 @@
   color: var(--color-success);
 }
 .stock_low {
-  color: #b54708;
+  color: var(--color-stock-low, #b54708);
 }
 .stock_out {
   color: var(--color-danger);
@@ -414,4 +429,119 @@
 .unavailable {
   text-align: center;
   padding: 2rem 1rem;
+}
+
+/* ---------- Skema gelap (PB): mengikuti bahasa visual landing ---------- */
+:global(html[data-scheme='dark']) .search input,
+:global(html[data-scheme='dark']) .promoRow input {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+  border-radius: 999px;
+  min-height: 3rem;
+  padding-inline: 1.25rem;
+}
+:global(html[data-scheme='dark']) .chip {
+  background: transparent;
+  color: var(--color-text-muted);
+  font-weight: 500;
+  min-height: 2.75rem;
+  line-height: 2rem;
+  padding: 0.375rem 1.125rem;
+  transition:
+    background-color 160ms,
+    color 160ms;
+}
+:global(html[data-scheme='dark']) .chip:hover {
+  color: var(--color-text);
+  border-color: var(--color-text-muted);
+}
+:global(html[data-scheme='dark']) .chip[aria-current='page'] {
+  background: var(--color-text);
+  border-color: var(--color-text);
+  color: var(--color-chrome);
+}
+:global(html[data-scheme='dark']) .productGrid {
+  gap: clamp(1rem, 2vw, 1.75rem);
+}
+:global(html[data-scheme='dark']) .productCard {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  overflow: visible;
+  gap: 0.375rem;
+}
+:global(html[data-scheme='dark']) .productCard .imageBox {
+  border-radius: 16px;
+  overflow: hidden;
+  background: #ffffff;
+  aspect-ratio: 4 / 5;
+  box-shadow: 0 24px 48px -26px rgb(0 0 0 / 0.75);
+}
+:global(html[data-scheme='dark']) .productCard .imageBox img {
+  transition: transform 700ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+:global(html[data-scheme='dark']) .productCard:hover .imageBox img {
+  transform: scale(1.05);
+}
+:global(html[data-scheme='dark']) .productBody {
+  padding: 0.75rem 0 0;
+}
+:global(html[data-scheme='dark']) .productName {
+  font-weight: 500;
+  font-size: 1.125rem;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+:global(html[data-scheme='dark']) .productCard:hover .productName {
+  text-decoration: none;
+  color: var(--color-accent);
+}
+:global(html[data-scheme='dark']) .price,
+:global(html[data-scheme='dark']) .countdown {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+:global(html[data-scheme='dark']) .imageBox {
+  background: #ffffff;
+  border-radius: 16px;
+  overflow: hidden;
+}
+:global(html[data-scheme='dark']) .group,
+:global(html[data-scheme='dark']) .outletOption,
+:global(html[data-scheme='dark']) .methodSet {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+  border-radius: 16px;
+}
+:global(html[data-scheme='dark']) .outletOption:has(input:checked) {
+  border-color: var(--color-accent);
+}
+:global(html[data-scheme='dark']) .qty {
+  border-color: var(--color-border);
+  border-radius: 999px;
+}
+:global(html[data-scheme='dark']) .qty button {
+  background: transparent;
+}
+:global(html[data-scheme='dark']) .qty button:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--color-text) 8%, transparent);
+}
+:global(html[data-scheme='dark']) .checkoutBar {
+  background: color-mix(in oklab, var(--color-chrome) 92%, transparent);
+  backdrop-filter: blur(12px);
+}
+:global(html[data-scheme='dark']) .pickupCode {
+  font-family: var(--font-mono);
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: transparent;
+}
+:global(html[data-scheme='dark']) .grand {
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+/* QR tetap hitam di atas putih agar bisa dipindai. */
+:global(html[data-scheme='dark']) .qr {
+  border-color: transparent;
 }

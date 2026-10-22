@@ -129,6 +129,9 @@ export const ONLINE_ERROR_MESSAGES: Record<string, string> = {
   points_cover_full_amount: 'Poin tidak boleh menutup seluruh pembayaran. Sisakan minimal Rp1 untuk dibayar tunai, lalu kurangi poin.',
   // §11.2: satu pesan untuk semua penyebab kode promo tidak berlaku (anti-enumerasi)
   promo_invalid: 'Kode promo tidak dapat digunakan',
+  // G23 §15.4: jadwal ambil pre-order
+  slot_unavailable: 'Jadwal ambil yang dipilih sudah penuh. Pilih jadwal lain lalu bayar lagi.',
+  slots_unavailable: 'Pesan terjadwal sedang tidak tersedia. Anda tetap bisa memesan untuk diambil secepatnya.',
   unauthenticated: 'Sesi berakhir. Silakan masuk kembali.',
 };
 
@@ -202,6 +205,8 @@ export interface OrderPart {
   ready_at: string | null;
   handed_over_at: string | null;
   cancel_reason: string | null;
+  /** G23 §15.4: jadwal ambil pre-order (ISO) atau null = secepatnya. */
+  pickup_slot: string | null;
   /** G22 (§14.C.2): poin yang ditukar untuk bagian ini, nilainya (Rp), dan sisa yang dibayar tunai. */
   points_redeemed: number;
   points_value_idr: number;
@@ -295,6 +300,7 @@ function parsePart(v: unknown): OrderPart | null {
     ready_at: s(v.ready_at, 40),
     handed_over_at: s(v.handed_over_at, 40),
     cancel_reason: s(v.cancel_reason, 40),
+    pickup_slot: typeof v.pickup_slot === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?Z$/.test(v.pickup_slot) ? v.pickup_slot : null,
     points_redeemed: nonNeg(v.points_redeemed),
     points_value_idr: nonNeg(v.points_value_idr),
     amount_cash: typeof v.amount_cash === 'number' && Number.isFinite(v.amount_cash) && v.amount_cash >= 0 ? v.amount_cash : null,

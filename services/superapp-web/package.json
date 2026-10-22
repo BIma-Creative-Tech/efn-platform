@@ -4,7 +4,9 @@
   "private": true,
   "description": "EFN Super-App & multi-brand storefront (Next.js)",
   "license": "UNLICENSED",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "next dev -p 3001",
     "build": "next build",
@@ -14,7 +16,11 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fontsource-variable/fraunces": "^5.3.0",
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
     "altcha": "^3.3.0",
+    "framer-motion": "^14.4.0",
     "next": "^16.4.0",
     "qrcode-generator": "2.0.4",
     "react": "^19.0.0",

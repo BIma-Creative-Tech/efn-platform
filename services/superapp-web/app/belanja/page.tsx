@@ -7,6 +7,8 @@ import { formatRupiah } from '@/lib/format';
 import { OnlineUnavailable } from '@/components/online/OnlineUnavailable';
 import { ProductImage } from '@/components/online/ProductImage';
 import styles from '@/components/online/online.module.css';
+import { OrderModePicker } from '@/components/booking/OrderModePicker';
+import { orderModes, parseModeParam } from '@/lib/order-modes';
 
 export const metadata: Metadata = { title: 'Belanja' };
 export const dynamic = 'force-dynamic';
@@ -50,12 +52,24 @@ export default async function BelanjaPage({ searchParams }: { searchParams: SP }
   if (!products.ok && products.unavailable) return <OnlineUnavailable />;
 
   const base = { channel: channels.data.length > 1 ? channel.channel_code : null };
+  // G23 §15.7: pemilih mode pesan; `?mode=preorder` hanya menambah petunjuk jadwal ambil (katalog sama).
+  const modes = orderModes({ brand, channels: channels.data, channelParam: base.channel });
+  const preorder = parseModeParam(one(sp.mode)) === 'preorder' && channel.outlets.some((o) => o.slot_enabled === true);
   const cats = categories.ok ? categories.data.filter((c) => c.parent_id === null || !categories.data.some((x) => x.category_id === c.parent_id)) : [];
 
   return (
     <div className="stack">
       <section className={styles.toolbar}>
-        <h1 style={{ margin: 0 }}>Belanja</h1>
+        <h1 style={{ margin: 0 }}>{preorder ? 'Pre-order' : 'Belanja'}</h1>
+        <h2 id="mode-pesan" className="visually-hidden">
+          Cara pesan
+        </h2>
+        <OrderModePicker modes={modes} labelledBy="mode-pesan" />
+        {preorder && (
+          <p className="notice" style={{ margin: 0 }}>
+            Pilih menu seperti biasa, lalu atur tanggal dan jam ambil di keranjang.
+          </p>
+        )}
         <p className="small muted" style={{ margin: 0 }}>
           {companyDisplayName(channel.company_code)} · ambil di toko.{' '}
           {channelBusinessType(channel) === 'fnb'
