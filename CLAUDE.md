@@ -58,5 +58,5 @@ Status mesin penulis (per 6 Okt 2026): **Git + Git Bash + OpenSSL + Docker Deskt
 ## Tim agent
 
 Lihat `.claude/agents/`. Ringkas:
-`efn-lead` (koordinator, satu-satunya lawan bicara user), `efn-architect` (ADR, koreksi FSD, audit modul), `efn-odoo-functional` (fit-gap & modul konfigurasi `efn_setup_*`), `efn-odoo-engineer` (hanya untuk gap), `efn-bff-engineer`, `efn-frontend-engineer`, `efn-data-ai-engineer`, `efn-devsecops-engineer`, `efn-security-reviewer` (read-only, review akhir), `efn-qa-engineer`.
+`efn-lead` (koordinator, satu-satunya lawan bicara user), `efn-architect` (ADR, koreksi FSD, audit modul), `efn-odoo-functional` (fit-gap & modul konfigurasi `efn_setup_*`), `efn-odoo-engineer` (hanya untuk gap), `efn-bff-engineer`, `efn-frontend-engineer`, `efn-uiux-designer` (audit UX/a11y, token & panduan visual per brand), `efn-data-ai-engineer`, `efn-devsecops-engineer`, `efn-security-reviewer` (read-only, review akhir), `efn-qa-engineer`.
 Setiap agent menulis laporan kerjanya ke `docs/agent-reports/<agent>.md`.

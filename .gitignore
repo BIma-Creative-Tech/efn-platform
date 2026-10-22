@@ -31,3 +31,6 @@ Thumbs.db
 
 # claude code local
 .claude/settings.local.json
+
+# hasil scrape katalog brand (scripts/brand-catalog/README.md) - tidak di-commit
+data/brand-catalog/
