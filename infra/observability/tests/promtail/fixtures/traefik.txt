@@ -4,3 +4,4 @@
 {"ClientHost":"172.30.0.3","RequestHost":"api.efn.local","RequestMethod":"GET","RequestPath":"/v1/auth/callback?code=SENTINELOAUTHCODE\u0026state=abc","DownstreamStatus":302,"level":"info","msg":"","time":"2026-10-09T01:00:03Z"}
 {"ClientHost":"172.30.0.3","RequestHost":"files.efn.local","RequestMethod":"GET","RequestPath":"/b/a.jpg?X-Amz-Credential=SENTINELCRED%2F20261009\u0026X-Amz-Signature=SENTINELSIGNATURE\u0026X-Amz-Expires=300","DownstreamStatus":200,"level":"info","msg":"","time":"2026-10-09T01:00:04Z"}
 {"ClientHost":"172.30.0.3","RequestHost":"erp.efn.local","RequestMethod":"GET","RequestPath":"/web/login/totp?redirect=%2Fodoo","DownstreamStatus":200,"level":"info","msg":"","time":"2026-10-09T01:00:05Z"}
+{"ClientHost":"172.30.0.3","RequestHost":"api.efn.local","RequestMethod":"GET","RequestPath":"/v1/fnb/session?ts=fts1.SENTINELdHM.1760900000.SENTINELsig&x=1","DownstreamStatus":401,"level":"info","msg":"","time":"2026-10-19T01:00:06Z"}

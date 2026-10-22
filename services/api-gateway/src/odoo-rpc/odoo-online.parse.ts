@@ -7,7 +7,9 @@ import {
   CatalogPage,
   CatalogPrice,
   ImageResult,
+  ItemAttribute,
   MarkPaidResult,
+  RefundPoints,
   OdooRpcError,
   PlaceResult,
   QuoteIssue,
@@ -134,7 +136,47 @@ function parseItem(v: unknown): CatalogItem {
     prices: arr(o.prices, 'prices', 200).map(parsePrice),
     max_qty: o.max_qty === undefined ? 99 : Math.min(999, int(o.max_qty, 'max_qty', 1)),
     weight_kg: parseWeight(o.weight_kg),
+    attributes: parseItemAttributes(o.attributes),
   };
+}
+
+/** G22 §14.B B-2 / A.6: atribut item katalog (absen = []). */
+export function parseItemAttributes(v: unknown): ItemAttribute[] {
+  if (v === undefined || v === null || v === false) return [];
+  return arr(v, 'attributes', 30).map((x) => {
+    const a = obj(x, 'attribute');
+    const dt = a.display_type;
+    if (dt !== 'radio' && dt !== 'select' && dt !== 'multi' && dt !== 'pills') bad('attribute.display_type');
+    return {
+      attribute_id: int(a.attribute_id, 'attribute_id', 1),
+      name: str(a.name, 'attribute.name', 128),
+      display_type: dt,
+      required: a.required === true,
+      values: arr(a.values, 'attribute.values', 50).map((y) => {
+        const val = obj(y, 'attribute.value');
+        return { id: int(val.id, 'value.id', 1), name: str(val.name, 'value.name', 128), price_extra_excl: num(val.price_extra_excl ?? 0, 'price_extra_excl') };
+      }),
+    };
+  });
+}
+
+/** G22 L-78: PTAV id → int[] unik urut naik (≤ 10). Absen → []. */
+export function parsePtavIds(v: unknown): number[] {
+  if (v === undefined || v === null || v === false) return [];
+  const ids = arr(v, 'attribute_value_ids', 10).map((x) => int(x, 'attribute_value_id', 1));
+  if (new Set(ids).size !== ids.length) bad('attribute_value_ids duplikat');
+  return [...ids].sort((a, b) => a - b);
+}
+
+/** G22 §14.C.4: rincian poin refund (opsional; absen = refund tanpa poin). */
+function parseRefundPoints(o: Record<string, unknown>): Partial<RefundPoints> {
+  const out: Partial<RefundPoints> = {};
+  if (o.points_value !== undefined && o.points_value !== null && o.points_value !== false) out.points_value = rupiah(o.points_value, 'points_value');
+  if (o.cash_amount !== undefined && o.cash_amount !== null && o.cash_amount !== false) out.cash_amount = rupiah(o.cash_amount, 'cash_amount');
+  if (o.eligible_amount_refunded !== undefined && o.eligible_amount_refunded !== null && o.eligible_amount_refunded !== false) {
+    out.eligible_amount_refunded = Math.floor(num(o.eligible_amount_refunded, 'eligible_amount_refunded') + 1e-9);
+  }
+  return out;
 }
 
 /**
@@ -193,6 +235,13 @@ function parseChannel(v: unknown): CatalogChannelInfo | null {
     fulfilment: f ? { pickup: f.pickup === true, delivery: f.delivery === true } : { pickup: outlets.some((x) => x.active && x.pickup_enabled), delivery: false },
     outlets,
     payment_modes: parsePaymentModes(o.payment_modes),
+    // G22 B-2: business_type (absen/nilai lain = retail) & flag poin kanal (absen = mati, fail-closed)
+    business_type: o.business_type === 'fnb' ? 'fnb' : 'retail',
+    loyalty: (() => {
+      if (o.loyalty === undefined || o.loyalty === null || o.loyalty === false) return { earn: false, redeem: false };
+      const l = obj(o.loyalty, 'channel.loyalty');
+      return { earn: l.earn === true, redeem: l.redeem === true };
+    })(),
   };
 }
 
@@ -271,6 +320,12 @@ export function parseQuote(v: unknown): QuoteResult {
       tax_labels: labels(l.tax_labels, 'quote.tax_labels'),
       available: l.available === undefined ? true : bool(l.available, 'available'),
       reward,
+      // G22 L-78: identitas baris (product_id, PTAV) + teks atribut dari Odoo
+      attribute_value_ids: parsePtavIds(l.attribute_value_ids),
+      attributes_text: (() => {
+        const t = optStr(l.attributes_text, 'attributes_text', 512);
+        return t === null || t === '' ? null : t;
+      })(),
     };
   });
   let issues: QuoteIssue[];
@@ -313,12 +368,16 @@ export function parsePlace(v: unknown): PlaceResult {
   const amountPayable = rupiah(o.amount_payable, 'amount_payable');
   if (amountPayable < 1) bad('amount_payable < 1'); // L-35: SO Rp0 tidak pernah dibuat payment intent
   // L-56: kode bayar dibuat BFF; field `counter_code` apa pun di respons Odoo DIABAIKAN (tidak dibaca, tidak disimpan)
+  // G22 §14.C.3: amount_due (porsi tunai) — absen (Odoo pra-G22) = amount_payable; wajib 1..amount_payable
+  const amountDue = o.amount_due === undefined || o.amount_due === null || o.amount_due === false ? amountPayable : rupiah(o.amount_due, 'amount_due');
+  if (amountDue < 1 || amountDue > amountPayable) bad('amount_due di luar 1..amount_payable');
   return {
     order_state: str(o.order_state, 'order_state', 32),
     sale_order_name: optStr(o.sale_order_name, 'sale_order_name', 64),
     amount_total: num(o.amount_total, 'amount_total'),
     amount_payable: amountPayable,
     expires_at: date(o.expires_at, 'expires_at'),
+    amount_due: amountDue,
   };
 }
 
@@ -336,18 +395,21 @@ export function parseCancel(v: unknown): CancelResult {
   let refund: CancelResult['refund'] = null;
   if (o.refund !== undefined && o.refund !== null && o.refund !== false) {
     const r = obj(o.refund, 'cancel.refund');
-    refund = { refund_ref: str(r.refund_ref, 'refund_ref', 128), amount: rupiah(r.amount, 'refund.amount') };
+    refund = { refund_ref: str(r.refund_ref, 'refund_ref', 128), amount: rupiah(r.amount, 'refund.amount'), ...parseRefundPoints(r) };
   }
   return { order_state: str(o.order_state, 'order_state', 32), refund };
 }
 
 export function parseRefund(v: unknown): RefundResult {
   const o = obj(v, 'refund');
-  return {
+  const out: RefundResult = {
     refund_ref: str(o.refund_ref, 'refund_ref', 128),
     amount: rupiah(o.amount, 'refund.amount'),
     credit_note: optStr(o.credit_note, 'credit_note', 64),
+    ...parseRefundPoints(o),
   };
+  if ((out.points_value ?? 0) > out.amount) bad('points_value > amount');
+  return out;
 }
 
 export function parseRefundSettled(v: unknown): { state: string } {
@@ -387,6 +449,7 @@ export function parseStatus(v: unknown): StatusRow[] {
       seq: o.seq === undefined || o.seq === null || o.seq === false ? null : int(o.seq, 'seq'),
       ready_at: optStr(o.ready_at, 'ready_at', 64),
       picked_up_at: optStr(o.picked_up_at, 'picked_up_at', 64),
+      eligible_amount: o.eligible_amount === undefined || o.eligible_amount === null || o.eligible_amount === false ? null : Math.floor(num(o.eligible_amount, 'eligible_amount') + 1e-9),
     };
   });
 }

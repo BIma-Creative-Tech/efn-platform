@@ -1,5 +1,6 @@
 from . import (
     test_audit_access,
+    test_audit_eligible,
     test_audit_hook,
     test_audit_origin,
     test_audit_privacy,

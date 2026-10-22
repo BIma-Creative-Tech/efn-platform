@@ -7,6 +7,7 @@
  * Frontend tidak pernah menghitung pajak.
  */
 
+import { parseAttributes, type ProductAttribute } from './attributes';
 import { COMPANIES } from './brands';
 import { parsePaymentModes, type PaymentMethod } from './payment';
 
@@ -41,6 +42,10 @@ export interface CatalogChannel {
   brand_code: string | null;
   /** §12.2: metode bayar yang diizinkan kanal. null = BFF belum mengirim field (tidak diketahui; BFF yang memutuskan). */
   payment_modes: PaymentMethod[] | null;
+  /** G22 (§14.B B-2): jenis usaha kanal. null = BFF belum mengirim -> dipetakan dari `company_code` (`channelBusinessType`). */
+  business_type: 'retail' | 'fnb' | null;
+  /** G22 (§14.B B-2 / §14.C): kanal boleh earn/redeem poin. null = BFF belum mengirim (tidak diketahui; BFF yang memutuskan). */
+  loyalty: { earn: boolean; redeem: boolean } | null;
   fulfilment: { pickup: boolean; delivery: boolean };
   outlets: CatalogOutlet[];
 }
@@ -65,6 +70,8 @@ export interface ProductSummary {
   max_qty: number;
   /** §12.3: berat per satuan (kg); null = belum diisi. Informasi saja — batas berat dihitung server di quote. */
   weight_kg: number | null;
+  /** G22 (§14.B B-2): atribut `no_variant` (modifier) F&B; `[]` untuk ritel. */
+  attributes: ProductAttribute[];
 }
 
 export interface ProductDetail extends ProductSummary {
@@ -217,6 +224,7 @@ export function parseProductSummary(v: unknown): ProductSummary | null {
     tax_labels: labels(v.tax_labels),
     max_qty: maxQty === null ? 99 : Math.min(maxQty, 999),
     weight_kg: typeof v.weight_kg === 'number' && Number.isFinite(v.weight_kg) && v.weight_kg >= 0 ? v.weight_kg : null,
+    attributes: parseAttributes(v.attributes),
   };
 }
 
@@ -258,6 +266,8 @@ export function parseChannels(v: unknown): CatalogChannel[] | null {
       name: str(c.name, 120) ?? c.channel_code,
       brand_code: isBrandCode(c.brand_code) ? c.brand_code : null,
       payment_modes: parsePaymentModes(c.payment_modes),
+      business_type: c.business_type === 'retail' || c.business_type === 'fnb' ? c.business_type : null,
+      loyalty: isObj(c.loyalty) ? { earn: c.loyalty.earn === true, redeem: c.loyalty.redeem === true } : null,
       fulfilment: { pickup: f.pickup === true, delivery: f.delivery === true },
       outlets,
     });
@@ -307,6 +317,29 @@ export const STOCK_LABEL: Record<StockStatus, string> = {
 export function channelsForBrand(channels: CatalogChannel[], companies: readonly string[]): CatalogChannel[] {
   if (companies.length === 0) return channels;
   return channels.filter((c) => companies.includes(c.company_code));
+}
+
+/** Jenis usaha kanal: dari BFF bila ada, kalau tidak dari PT (PB/BCF = F&B). */
+export function channelBusinessType(channel: Pick<CatalogChannel, 'business_type' | 'company_code'>): 'retail' | 'fnb' | null {
+  if (channel.business_type) return channel.business_type;
+  const known = (COMPANIES as Record<string, { businessType: 'retail' | 'fnb' | null } | undefined>)[channel.company_code];
+  return known ? known.businessType : null;
+}
+
+/**
+ * Harga yang ditampilkan di katalog. Ritel: harga termasuk pajak. F&B (docs/04 §14.B B-5): harga SEBELUM pajak +
+ * label pajak dari Odoo ("belum termasuk PB1 10%"); rincian pajak final ada di ringkasan keranjang (quote). Frontend
+ * tidak menghitung pajak.
+ */
+export function priceDisplay(
+  p: Pick<ProductSummary, 'price_incl' | 'price_excl' | 'tax_labels'>,
+  businessType: 'retail' | 'fnb' | null,
+): { amount: number; taxNote: string; excl: boolean } {
+  const labels = p.tax_labels.join(', ');
+  if (businessType === 'fnb') {
+    return { amount: p.price_excl, taxNote: `belum termasuk ${labels || 'pajak'}`, excl: true };
+  }
+  return { amount: p.price_incl, taxNote: labels ? `termasuk ${labels}` : '', excl: false };
 }
 
 /** Nama PT untuk pengelompokan keranjang/pesanan (identitas dari lib/brands.ts; kode tak dikenal -> kode itu sendiri). */

@@ -78,6 +78,8 @@ describe('CatalogService (§10.3.2)', () => {
         fulfilment: { pickup: true, delivery: false },
         outlets: [{ outlet_code: 'TOKO-01', public_name: 'Toko 01', pickup_enabled: true, prep_minutes: 20 }],
         payment_modes: ['qris', 'counter'], // L-52/L-55: channel_data tanpa payment_modes → ONLINE_PAYMENT_METHODS (default test qris,counter)
+        business_type: 'retail', // G22 B-2: salinan lama tanpa field
+        loyalty: { earn: false, redeem: false }, // G22: flag kanal absen / kill switch mati
       },
     ]);
     const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);

@@ -156,7 +156,13 @@ export interface PartLine {
    * field ini). Tidak pernah dikirim ke `efn_online_place` dan tidak dihitung sebagai baris refund.
    */
   reward?: true;
+  /** G22 B-4 / L-78: hanya untuk baris beratribut. */
+  attribute_value_ids?: number[];
+  attributes_text?: string | null;
 }
+
+/** G22 §14.C.6: status earn poin online per bagian. */
+export type PartEarnStatus = 'none' | 'pending' | 'earned' | 'skipped' | 'limited';
 
 export interface OrderRow {
   id: string;
@@ -176,6 +182,18 @@ export interface OrderRow {
   close_reason: CloseReason | null;
   created_at: Date;
   updated_at: Date;
+  /** G22 §14.C.6: Σ nilai Poin EFN (Rupiah) semua bagian; absen/0 = tanpa poin. */
+  amount_points_value?: number;
+  /** G22: Σ porsi tunai (= amount_payable − amount_points_value); null = order pra-G22/tanpa poin. */
+  amount_cash?: number | null;
+}
+
+/** Porsi TUNAI bagian (G22): `amount_cash` bila terisi, selain itu `amount_payable` (tanpa poin). */
+export function partCash(p: Pick<PartRow, 'amount_payable' | 'amount_cash'>): number {
+  return p.amount_cash !== undefined && p.amount_cash !== null ? p.amount_cash : p.amount_payable;
+}
+export function orderCash(o: Pick<OrderRow, 'amount_payable' | 'amount_cash'>): number {
+  return o.amount_cash !== undefined && o.amount_cash !== null ? o.amount_cash : o.amount_payable;
 }
 
 export interface PartRow {
@@ -209,6 +227,18 @@ export interface PartRow {
   cancel_reason: PartCancelReason | null;
   created_at: Date;
   updated_at: Date;
+  // ── G22 §14.C.6 (opsional di tipe: fixture/data pra-G22) ──
+  points_redeemed?: number;
+  points_value_idr?: number;
+  amount_cash?: number | null;
+  loyalty_reservation_id?: string | null;
+  eligible_amount?: number | null;
+  earn_status?: PartEarnStatus;
+  points_earned?: number;
+  /** Nilai Rupiah poin yang sudah dikembalikan (restore). */
+  points_restored_value?: number;
+  /** B-7: tiket dapur pertama `in_progress` (event `preparing`). */
+  kitchen_started_at?: Date | null;
 }
 
 export interface RefundRow {
@@ -236,6 +266,15 @@ export interface RefundRow {
   created_at: Date;
   updated_at: Date;
   settled_at: Date | null;
+  /** G22 §14.C.4: porsi Poin EFN (Rupiah) dalam `amount` (dari Odoo / dihitung BFF untuk kompensasi tanpa dokumen). */
+  points_value?: number;
+  /** G22: porsi tunai ke gateway/POS (= amount − points_value); null = data lama (= amount). */
+  cash_amount?: number | null;
+}
+
+/** Nominal tunai refund (G22): `cash_amount` bila ada, selain itu `amount`. */
+export function refundCash(r: Pick<RefundRow, 'amount' | 'cash_amount'>): number {
+  return r.cash_amount !== undefined && r.cash_amount !== null ? r.cash_amount : (r.amount ?? 0);
 }
 
 export interface PortionRow {
@@ -264,13 +303,28 @@ export type PartPatch = Partial<
     | 'cancel_reason'
     | 'amount_total'
     | 'amount_payable'
+    | 'points_redeemed'
+    | 'points_value_idr'
+    | 'amount_cash'
+    | 'loyalty_reservation_id'
+    | 'eligible_amount'
+    | 'earn_status'
+    | 'points_earned'
+    | 'points_restored_value'
+    | 'kitchen_started_at'
   >
 >;
 export type OrderPatch = Partial<
-  Pick<OrderRow, 'status' | 'payment_intent_id' | 'paid_at' | 'closed_at' | 'close_reason' | 'amount_payable' | 'expires_at'>
+  Pick<
+    OrderRow,
+    'status' | 'payment_intent_id' | 'paid_at' | 'closed_at' | 'close_reason' | 'amount_payable' | 'expires_at' | 'amount_points_value' | 'amount_cash'
+  >
 >;
 export type RefundPatch = Partial<
-  Pick<RefundRow, 'status' | 'amount' | 'odoo_refund_ref' | 'provider_refund_ref' | 'settled_at' | 'failure_reason' | 'claim_token'>
+  Pick<
+    RefundRow,
+    'status' | 'amount' | 'odoo_refund_ref' | 'provider_refund_ref' | 'settled_at' | 'failure_reason' | 'claim_token' | 'points_value' | 'cash_amount'
+  >
 >;
 
 /** Pesan RabbitMQ saga (§10.9), `schema_version: 1`, tanpa PII. */

@@ -121,6 +121,12 @@ export const ONLINE_ERROR_MESSAGES: Record<string, string> = {
   // §13.5 / L-63: PT F&B (PB1) atau efn_pii belum aktif di Odoo
   invoice_not_available: 'Faktur atas nama belum tersedia untuk pesanan ini',
   rate_limited: 'Terlalu banyak permintaan. Tunggu sebentar lalu coba lagi.',
+  // §14.C.2 (G22): poin sebagai alat bayar per PT
+  insufficient_points: 'Saldo poin tidak cukup. Saldo Anda mungkin berubah; kami memperbarui ringkasan, silakan kurangi poin lalu coba lagi.',
+  below_minimum: 'Jumlah poin di bawah minimum penukaran untuk PT ini. Ubah jumlah poin lalu coba lagi.',
+  exceeds_max_pct: 'Jumlah poin melebihi batas penukaran untuk pesanan ini. Kurangi poin lalu coba lagi.',
+  points_unavailable: 'Penukaran poin sedang tidak tersedia untuk pesanan ini. Anda tetap bisa membayar tanpa poin.',
+  points_cover_full_amount: 'Poin tidak boleh menutup seluruh pembayaran. Sisakan minimal Rp1 untuk dibayar tunai, lalu kurangi poin.',
   // §11.2: satu pesan untuk semua penyebab kode promo tidak berlaku (anti-enumerasi)
   promo_invalid: 'Kode promo tidak dapat digunakan',
   unauthenticated: 'Sesi berakhir. Silakan masuk kembali.',
@@ -196,6 +202,14 @@ export interface OrderPart {
   ready_at: string | null;
   handed_over_at: string | null;
   cancel_reason: string | null;
+  /** G22 (§14.C.2): poin yang ditukar untuk bagian ini, nilainya (Rp), dan sisa yang dibayar tunai. */
+  points_redeemed: number;
+  points_value_idr: number;
+  /** null = BFF belum mengirim (tampilan memakai `amount_payable`). */
+  amount_cash: number | null;
+  /** Poin yang diperoleh setelah pesanan diambil, dan nilai poin yang dikembalikan saat refund. */
+  points_earned: number;
+  points_restored: number;
 }
 
 export interface OrderDetail {
@@ -205,6 +219,9 @@ export interface OrderDetail {
   expires_at: string | null;
   paid_at: string | null;
   amount_payable: number;
+  /** G22: Σ nilai poin (Rp) dan Σ porsi tunai. `amount_cash` null = BFF belum mengirim. */
+  amount_points_value: number;
+  amount_cash: number | null;
   payment: OrderPayment | null;
   parts: OrderPart[];
 }
@@ -278,7 +295,21 @@ function parsePart(v: unknown): OrderPart | null {
     ready_at: s(v.ready_at, 40),
     handed_over_at: s(v.handed_over_at, 40),
     cancel_reason: s(v.cancel_reason, 40),
+    points_redeemed: nonNeg(v.points_redeemed),
+    points_value_idr: nonNeg(v.points_value_idr),
+    amount_cash: typeof v.amount_cash === 'number' && Number.isFinite(v.amount_cash) && v.amount_cash >= 0 ? v.amount_cash : null,
+    points_earned: nonNeg(v.points_earned),
+    points_restored: nonNeg(v.points_restored),
   };
+}
+
+function nonNeg(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0;
+}
+
+/** Porsi tunai yang harus dibayar (QRIS/kasir): `amount_cash` bila ada, kalau tidak total tagihan. */
+export function cashDue(order: Pick<OrderDetail, 'amount_cash' | 'amount_payable'>): number {
+  return order.amount_cash ?? order.amount_payable;
 }
 
 /** Allowlist respons `GET /v1/orders/:id`. Field lain (termasuk kode ambil bila BFF keliru) dibuang. */
@@ -297,6 +328,8 @@ export function parseOrderDetail(v: unknown): OrderDetail | null {
     expires_at: s(v.expires_at, 40),
     paid_at: s(v.paid_at, 40),
     amount_payable: n(v.amount_payable),
+    amount_points_value: nonNeg(v.amount_points_value),
+    amount_cash: typeof v.amount_cash === 'number' && Number.isFinite(v.amount_cash) && v.amount_cash >= 0 ? v.amount_cash : null,
     payment,
     parts: v.parts.map(parsePart).filter((p): p is OrderPart => p !== null),
   };

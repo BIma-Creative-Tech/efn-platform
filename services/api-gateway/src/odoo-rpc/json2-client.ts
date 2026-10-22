@@ -47,6 +47,18 @@ import {
   StockRow,
 } from './odoo-online.types';
 
+/** SEC-96/SEC-109: dua pool konkurensi json2 per proses (publik vs saga). */
+export interface OdooRpcGates {
+  public: Semaphore;
+  saga: Semaphore;
+}
+export const ODOO_RPC_GATES = Symbol('ODOO_RPC_GATES');
+export function createOdooRpcGates(config: AppConfig): OdooRpcGates {
+  const pub = config.odooRpcPublicMaxConcurrency;
+  const saga = config.odooRpcSagaMaxConcurrency;
+  return { public: new Semaphore(pub, pub * 8, 2_000), saga: new Semaphore(saga, saga * 8, 2_000) };
+}
+
 export interface TransportResponse {
   status: number;
   body: string;
@@ -150,10 +162,10 @@ export class Json2OdooOnlineClient implements OdooOnlineApi {
     private readonly config: AppConfig,
     private readonly transport: Json2Transport,
     private readonly metrics: OnlineMetrics,
+    /** G22 §14.A.7: semaphore bersama per proses (QR meja memakai pool publik yang sama, L-20). Absen → dibuat sendiri. */
+    gates?: OdooRpcGates,
   ) {
-    const pub = config.odooRpcPublicMaxConcurrency;
-    const saga = config.odooRpcSagaMaxConcurrency;
-    this.gates = { public: new Semaphore(pub, pub * 8, 2_000), saga: new Semaphore(saga, saga * 8, 2_000) };
+    this.gates = gates ?? createOdooRpcGates(config);
   }
 
   isCircuitOpen(channel: string): boolean {

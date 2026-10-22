@@ -709,3 +709,87 @@ Ditambah oleh efn-qa-engineer 2026-10-19. **Belum dijalankan** (QA tanpa shell/r
 - **Negatif — pengaman**: kode transaksi 01 dengan PPN 11 % (selisih ≫ baris × Rp1) → posting berjalan, *Download e-Faktur* ditolak ("bukan pembulatan"), XML tidak dibuat
 - **Negatif — akun belum diatur / periode pajak terkunci**: posting faktur tetap jalan (best-effort, log `not adjusted at posting`); *Download e-Faktur* ditolak sampai akun diatur / kunci dibuka — jurnal tidak pernah dipindah ke tanggal lain
 - **Di luar cakupan**: `out_refund` (nota kredit), kode transaksi 07/08, faktur bukan IDR, B2C POS/online yang digunggung — pastikan tidak ada jurnal penyesuaian palsu dan catat sebagai [B] ke Finance + konsultan pajak
+
+---
+
+## K. Gelombang 22 — QR pesan dari meja (restoran), POS offline, poin QR (docs/04 §14.A, L-70..L-81)
+
+Ditambah oleh efn-qa-engineer 2026-10-19. **Belum dijalankan** (QA tanpa runtime). Staging: `efn_pos_bff_order`, `efn_pos_kds`, `efn_pos_loyalty_ledger` terpasang; BFF `FNB_QR_ENABLED=true`, `FNB_QR_POINTS_ENABLED=true`, `FNB_QR_BASE_URL_PB=https://<domain staging>`; user teknis `efn_qr_pb` + secret `odoo_api_key_qr_pb`, secret `fnb_table_token_key` dan `odoo_fnb_event_hmac` terpasang (nilai acak staging, bukan produksi).
+
+**Data uji khusus K**
+- POS restoran PB "Resto Uji": `efn_qr_enabled`, preset dine-in (PB1 10% + Service 5%), `efn_qr_confirm_mode = waiter` (varian K1b: `auto`), `efn_qr_max_submissions = 10`, meja T12 (area Teras), stasiun KDS "Bar" aktif; sesi POS terbuka. Menu: Latte (atribut *Gula* wajib radio: Normal/Tanpa gula; *Ekstra* multi: Shot espresso +Rp6.000), Croissant, satu menu `self_order_available = False`, satu produk *combo*.
+- Pelayan **Wati** (POS User), kasir **Dedi**, tamu **Tamu-1** dan **Tamu-2** (ponsel berbeda, di meja yang sama), member **M** (login Super-App, punya HP uji `0812-3456-7890`).
+- Pemeriksaan umum: token `fts1.` **tidak** ada di log Odoo/BFF/Traefik, URL setelah halaman terbuka, `localStorage`/`sessionStorage`, analytics, atau tabel Odoo/BFF; nomor HP di log ter-mask; catatan pesanan tidak ada di DB/log BFF.
+
+### K1. Alur utama — pindai → menu → kirim → konfirmasi pelayan → bayar di kasir → poin
+- **Given** Wati membuka meja T12 di POS (order draft tersimpan), menekan *QR Meja* → dialog QR + slip tercetak; Odoo hanya menyimpan id sesi BFF
+- **When** Tamu-1 memindai QR (`https://…/meja#t=fts1.…`)
+- **Then** halaman `/meja` menghapus fragment dari address bar; menampilkan outlet "Resto Uji", meja "T12 / Teras", menu dengan harga **belum termasuk pajak & layanan**; menu `self_order_available = False` tampil tidak tersedia; produk combo **tidak** ada; reload halaman = diminta pindai ulang (token hanya di memori)
+- **When** Tamu-1 memilih Latte (Gula wajib → tombol kirim tertahan sampai dipilih; pilih *Tanpa gula* + *Shot espresso*), qty 2, catatan "tanpa es", lalu kirim
+- **Then** `202` status **Menunggu konfirmasi pelayan**; di POS Wati muncul notifikasi dan **order draft baru** di T12 (order Wati **tidak** berubah: harga/diskon/baris tetap); harga dihitung Odoo (Rp38.000+Rp6.000 per unit → total + PB1 + Service sesuai fiscal position dine-in); daftar kiriman tamu menampilkan nama + pilihan *Gula/Ekstra* (L-78)
+- **When** Wati menekan *Order* (kirim ke dapur) pada order QR
+- **Then** tiket KDS "Bar" dengan modifier dan catatan "tanpa es"; status di ponsel: *Diterima dapur* → *Sedang disiapkan* → *Siap diantar* (event Odoo→BFF, monoton, tanpa mundur)
+- **When** Tamu-2 (token sama, ponsel lain) membuka halaman → melihat semua kiriman sesi; mengirim pesanan kedua → order draft **kedua** terpisah
+- **When** member M (Tamu-1) menekan *Klaim poin* (login) → `claimed`; Tamu-2 mencoba klaim → `409 points_already_claimed`
+- **When** Dedi menggabung/membayar order QR dan order Wati di kasir (tunai/QRIS)
+- **Then** setelah order terakhir meja dibayar: sesi meja `closed (paid)`; event `session_closed` bertanda tangan HMAC berisi `orders[]` **semua** order dibayar (`order_uuid`, `eligible_amount` tanpa pajak/service, `company_code=PB`); BFF meng-earn **per order** dengan kunci `pos_earn:<order_uuid>`; saldo M naik = Σ floor(eligible/earn_idr_per_point); `/meja` kini menjawab `409 table_session_closed` ("Sesi meja ini sudah ditutup")
+- **And** event dikirim ulang (retry outbox/replay): `200 duplicate`, saldo **tidak** bertambah dua kali; order yang juga di-earn kasir POS dengan member yang sama → `replay` (tidak ganda)
+
+### K1b. Mode `auto` — hanya satu terminal yang mengirim ke dapur
+- **Given** `efn_qr_confirm_mode = auto`, dua terminal POS terbuka
+- **When** Tamu kirim pesanan
+- **Then** status awal **Diterima dapur**; tepat satu terminal memenangkan `efn_qr_claim_send` dan mengirim ke dapur → **satu** tiket KDS (bukan dua); terminal kedua mendapat `False`
+- **Negatif — POS yang menang sedang offline**: pengiriman otomatis dilewati; peringatan kasir *pesanan QR belum dikirim* muncul setelah `efn_qr_stale_minutes` (5) dan log `EFN_QR_ORDER_STALE` terbit sekali
+
+### K2. Order pelayan tidak tertimpa kiriman QR (L-70/L-81)
+- **Given** Wati punya order draft T12 berisi diskon manager; Tamu-1 mengirim pesanan QR
+- **When** Wati menambah item ke ordernya lalu sinkron (dan sebaliknya: kiriman QR terjadi saat Wati sedang sinkron)
+- **Then** order Wati dan order QR tetap **dua order terpisah**; tidak ada baris/harga tercampur; sinkron order Wati dengan `uuid` baru memilih draft meja **non-QR**, tidak pernah order QR (`_get_open_order`)
+
+### K3. Pelayan menolak pesanan (mode waiter)
+- **When** Wati menghapus order QR draft sebelum dikirim ke dapur
+- **Then** status kiriman di ponsel **Ditolak pelayan** (final); tidak ada tiket KDS; kuota 10 kiriman/sesi tetap terhitung (kiriman sudah diterima Odoo); bila dihapus **setelah** dikirim ke dapur → **Dibatalkan**
+
+### K4. Negatif — token dan sesi
+- Token diubah satu karakter / header `X-Table-Session` tidak ada / format salah / kedaluwarsa → `401 table_session_invalid` dengan pesan **sama** (tidak membedakan sebab); token di query `?ts=` diabaikan
+- Sesi ditutup staf (*Tutup sesi*) atau Wati *Cetak ulang QR*: ponsel dengan token lama → `409 table_session_closed` (cetak ulang) dan QR baru berfungsi; cetak ulang saat Odoo menganggap sesi sudah `expired` (umur sesi Odoo < TTL BFF): tetap menutup sesi lama di BFF, **tidak** buntu `session_exists`
+- Sesi lewat `expires_at` (≤ 4 jam) → `401`/`409`; kiriman terakhir yang sudah dibayar setelah kedaluwarsa tetap mengirim `session_closed paid` (earn tetap diputuskan BFF)
+- Rotasi `fnb_table_token_key`: token lama diterima sampai kunci lama dicabut (overlap ≤ 4 jam); setelah dicabut → `401`
+
+### K5. Negatif — batas dan input
+- Kiriman ke-11 dalam satu sesi → `422 session_limit_reached` (BFF); ulang langsung ke Odoo (uji kontrak) → `efn_qr:limit_exceeded`; pesan ramah "pesan ke pelayan"
+- 31 baris, qty 21, Σ item > 150, total sesi > Rp3.000.000 (PLACEHOLDER) → ditolak, **tidak ada order setengah jadi** di POS
+- Catatan berisi `0812 3456 7890` / `a@b.com` / 141 karakter → `400 note_invalid`; karakter kontrol/baris baru dibuang
+- Atribut: PTAV produk lain, nilai `is_custom`, dua nilai pada radio, atribut wajib kosong, id tidak ada → ditolak (`invalid_input` → pesan generik); klien mengirim `price_unit`/`table_id`/`config_id` → `400 invalid_request` (API3)
+- Produk combo / `self_order_available=False` / produk PT lain dikirim langsung → `409 item_unavailable`
+- ALTCHA `first_submit`: kiriman pertama tanpa/salah → `400 captcha_required`; mati bila `FNB_CAPTCHA_MODE=off`
+- Rate limit per IP dan per sesi → `429` pesan "Terlalu banyak permintaan"
+
+### K6. Idempotensi dan ketahanan jaringan
+- Ponsel memutus jaringan tepat setelah menekan *Kirim*: tekan lagi (Idempotency-Key sama dari `sessionStorage`) → **satu** order di POS; kunci sama + isi berbeda → `409 idempotency_conflict`
+- Odoo lambat/timeout saat submit → BFF merekonsiliasi lewat `efn_qr_status`: bila Odoo sudah membuat order → `202` status terkini (tanpa pesanan ganda di dapur); bila `absent` → `failed` + `503 ordering_unavailable` dan **kuota dikembalikan**
+- Circuit Odoo terbuka / Odoo mati → `503 ordering_unavailable` ("silakan pesan ke pelayan"); **POS dan kasir tetap berjalan**; QR tidak diantrekan
+- Event Odoo→BFF: body diubah satu byte / `t` > 300 detik / secret salah → `401 invalid_signature`; secret `odoo_fnb_event_hmac` hilang di BFF → `503` (tidak menerima tanpa tanda tangan); di sisi Odoo secret hilang/<32 byte → event `pending` + log ERROR, **tidak pernah** dikirim tanpa tanda tangan
+- Webhook/event **ganda** (replay kunci yang sama) → `duplicate`; seq lebih kecil dari yang sudah diproses → `ignored_stale`; PT/config tidak cocok → `409 company_mismatch` (final)
+- BFF mati saat Wati mencetak QR → POS menampilkan "QR tidak tersedia, terima pesanan secara manual"; **tidak** ada sesi setengah jadi di Odoo
+
+### K7. POS offline — fitur yang butuh server dinonaktifkan (CLAUDE.md, ADR OTP-offline opsi a)
+- **Given** terminal POS Wati/Dedi kehilangan koneksi ke Odoo (offline)
+- **When** Wati membuka order meja
+- **Then** tombol *QR Meja* **nonaktif** (atau menampilkan "POS sedang offline. QR meja membutuhkan koneksi ke server."); tidak ada panggilan `efn_qr_session_open`; tombol *Tutup sesi QR* juga ditolak saat offline
+- **And** penjualan biasa tetap bisa (tunai, cetak dapur cadangan); fitur poin/OTP/MGM nonaktif dengan pesan jelas (skenario A5/A6)
+- **When** QR sudah aktif di meja lalu POS offline: ponsel tamu tetap bisa mengirim selama Odoo server hidup (jalur ponsel tidak lewat POS); Odoo mati → `503` (K6); mode `auto` — kirim ke dapur dilewati di terminal offline, terminal online lain yang mengklaim
+- **When** Dedi membayar order QR **saat offline** lalu koneksi pulih
+- **Then** sinkron order → status `paid` → sesi meja ditutup + event `session_closed` dikirim **setelah** sinkron (poin QR tertunda, bukan hilang; alert earn QR tertunda > 15 menit bila macet); tidak ada earn ganda
+- **Negatif**: perangkat offline tidak boleh membuat sesi QR "lokal"; tidak ada token/QR yang tersimpan di cache POS
+
+### K8. Refund order QR — clawback poin (L-80)
+- **Given** order QR dibayar dan M di-earn
+- **When** kasir me-refund penuh/sebagian order QR di POS
+- **Then** Odoo mengirim `reverse` `earn_channel:"qr"` **tanpa** `member_ref`; BFF menarik poin proporsional dari member yang di-earn (saldo bisa negatif sesuai kebijakan); refund atas order yang tidak pernah di-earn (sesi tidak diklaim) → `200` dengan `points_clawed_back = 0`; event close belum diproses → `409 earn_pending` lalu Odoo mengulang
+
+### K9. Privasi dan akses (UU PDP, API Security)
+- Tamu tidak mengisi nama/HP/email; hanya IP (di-HMAC, TTL Redis) dan catatan pesanan (≤ 90 hari di Odoo, dikosongkan cron)
+- `member_id` pada sesi dilepas 30 hari setelah sesi ditutup; baris `fnb_*` dihapus setelah 180 hari; sesi meja Odoo 400 hari
+- User teknis `efn_qr_pb` **tidak** bisa membaca `pos.order`, `efn.pos.table.session`, dll. lewat ORM; diberi grup tambahan → semua RPC QR ditolak (fail closed); `efn_qr_pb` mengakses config milik PT lain → `AccessError` seragam
+- `/v1/pos/fnb/*` tidak bisa diakses dari internet (Traefik); path gateway `efn.pos.qr.order/efn_qr_*` selain tiga metode (mis. sufiks `_v2`, model lain) → `403` di `odoo-rpc-gateway`

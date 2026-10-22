@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- efn_pos_bff_order (E-27): grup user teknis QR + record rule multi-company.
+     Grup user teknis SENGAJA tanpa ACL dokumen, tanpa grup POS, tanpa menu: BFF hanya memanggil 3 metode
+     efn.pos.qr.order (efn_qr_menu/efn_qr_submit/efn_qr_status, docs/04 §14.A.5) yang memeriksa pemanggil lalu
+     menulis lewat sudo. `/json/2/pos.order/search_read` dengan key ini ditolak ACL. Satu user per PT F&B
+     (efn_qr_pb / efn_qr_bcf, dibuat devsecops/functional), API key `odoo_api_key_qr_<pt>` (rotasi 30 hari).
+     L-74 / E-47d: grup ini ada di efn_role TECHNICAL_GROUP_XMLIDS (akun teknis tidak boleh diberi peran). -->
+<odoo>
+    <record id="res_groups_privilege_efn_qr" model="res.groups.privilege">
+        <field name="name">EFN QR Ponsel</field>
+        <field name="category_id" ref="base.module_category_sales"/>
+    </record>
+
+    <record id="group_qr_bff" model="res.groups">
+        <field name="name">Layanan QR ponsel (user teknis BFF)</field>
+        <field name="comment">User teknis per PT F&amp;B untuk BFF (/json/2 lewat odoo-rpc-gateway). Hanya Internal User + grup ini, tepat satu company, tanpa grup POS/Sales/Accounting. Tanpa akses dokumen langsung.</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_qr"/>
+        <!-- L-76 / pola W-11: key 30 hari + rotasi otomatis, margin 5 hari. Ditegakkan tiap upgrade (bukan noupdate).
+             Odoo memakai MAKSIMUM durasi semua grup user: efektif 35 hari hanya bila base.group_user = 0
+             (dinormalkan efn_setup_online); tanpa modul itu CE memberi Internal User 90 hari. -->
+        <field name="api_key_duration">35</field>
+    </record>
+
+    <data noupdate="1">
+        <record id="efn_pos_table_session_rule_company" model="ir.rule">
+            <field name="name">EFN QR sesi meja: multi-company</field>
+            <field name="model_id" ref="model_efn_pos_table_session"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_pos_qr_order_rule_company" model="ir.rule">
+            <field name="name">EFN QR kiriman: multi-company</field>
+            <field name="model_id" ref="model_efn_pos_qr_order"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_pos_qr_event_outbox_rule_company" model="ir.rule">
+            <field name="name">EFN QR outbox: multi-company</field>
+            <field name="model_id" ref="model_efn_pos_qr_event_outbox"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+    </data>
+</odoo>

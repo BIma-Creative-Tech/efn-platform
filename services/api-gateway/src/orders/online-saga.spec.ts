@@ -441,7 +441,11 @@ describe('Timeout, bayar terlambat, stok kurang, refund (§10.6.5–10.6.6)', ()
     const ctx = setup();
     const { order } = await ctx.checkout();
     const part = ctx.partsOf(order.order_id)[0];
-    ctx.odoo.orders.get(part.id)!.amountPayable += 1; // Odoo melihat nominal berbeda → review
+    // Odoo melihat nominal berbeda → review. Sejak G22 stub membandingkan amount_paid dengan amount_due (= payable − poin),
+    // jadi keduanya digeser agar nominal benar-benar beda dari yang dibayar BFF.
+    const mo = ctx.odoo.orders.get(part.id)!;
+    mo.amountPayable += 1;
+    mo.amountDue += 1;
     await ctx.payments.pay(ctx.orderRow(order.order_id).payment_intent_id!);
     await ctx.drain();
     expect(ctx.partsOf(order.order_id)[0].status).toBe('review');
@@ -591,7 +595,13 @@ describe('Anti-enumeration, privasi, retensi', () => {
     const list = await ctx.orders.list(OTHER, null, 20);
     expect(list.items).toEqual([]);
     const mine = await ctx.orders.list(MEMBER, null, 20);
-    expect(mine.items).toEqual([expect.objectContaining({ order_id: order.order_id, parts: [{ channel_code: 'GL', company_code: 'GL', status: 'placed' }] })]);
+    expect(mine.items).toEqual([
+      expect.objectContaining({
+        order_id: order.order_id,
+        // G22 (aditif): poin per bagian
+        parts: [{ channel_code: 'GL', company_code: 'GL', status: 'placed', points_redeemed: 0, points_earned: 0, points_restored: 0 }],
+      }),
+    ]);
   });
 
   it('L-4: DELETE /v1/me — order belum bayar dibatalkan otomatis; bagian paying/confirmed/ready/review → 409 open_online_orders', async () => {

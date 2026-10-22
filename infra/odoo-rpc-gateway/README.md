@@ -1,7 +1,7 @@
 # odoo-rpc-gateway — filter L7 BFF → Odoo `/json/2` (penjualan online)
 
-- **Tujuan:** satu-satunya jalur BFF (`api-gateway`) ke Odoo untuk kanal online. Hanya `POST` ke **12 path persis** (10 path §10.4.3 + `efn_online_counter_refund_authorize`, L-60 +
-  `efn_online_set_invoice_party`, G21 §13.5 faktur atas nama pembeli, L-63) docs/04 §10.4.3; semua bentuk lain ditolak sebelum menyentuh Odoo. Odoo tetap tidak terjangkau dari internet
+- **Tujuan:** satu-satunya jalur BFF (`api-gateway`) ke Odoo untuk kanal online dan QR order meja. Hanya `POST` ke **15 path persis** (10 path §10.4.3 + `efn_online_counter_refund_authorize`, L-60 +
+  `efn_online_set_invoice_party`, G21 §13.5 faktur atas nama pembeli, L-63 + 3 path QR G22 §14.A.5) docs/04; semua bentuk lain ditolak sebelum menyentuh Odoo. Odoo tetap tidak terjangkau dari internet
   maupun langsung dari BFF (`odoo-tls --allow-cn` tidak memuat `api-gateway`).
 - **ADR:** ADR-034 (Proposed — kanal online = BFF + `/json/2` terfilter), ADR-022 (enkripsi: mTLS dua hop, verify-full
   CA internal), ADR-023 (Odoo privat), ADR-024 (kredensial per kanal), pola ADR-030 (s3-gateway).
@@ -11,7 +11,7 @@
   memori 64M, hanya network `internal`, tanpa label Traefik/port host. `haproxy.cfg` (aturan + alasan),
   `entrypoint.sh` (PEM crt+key ke tmpfs, validasi `ODOO_DB` fail-closed), `test-gateway.sh` (uji nyata).
 - **Aturan (ringkas):** mTLS masuk (CA internal, EKU clientAuth, CN persis `api-gateway`) · HTTP/1.1 origin-form ·
-  `POST` saja · path mentah = salah satu dari 12 path (tolak `%`, `;`, `//`, segmen titik, query, fragment) · allowlist
+  `POST` saja · path mentah = salah satu dari 15 path (tolak `%`, `;`, `//`, segmen titik, query, fragment) · allowlist
   header (`host, content-type, content-length, authorization, accept, accept-encoding, user-agent, connection,
   traceparent, tracestate, x-request-id`; method override/upgrade/transfer-encoding/x-original-url/x-openerp-* ditolak) ·
   Host `odoo-rpc-gateway[:8443]` · `Content-Type: application/json` · `Authorization: bearer <token>` tepat satu ·
@@ -42,6 +42,24 @@
   102 kasus; **belum dijalankan** terhadap stack nyata (lead menjalankan `test-gateway.sh`). Odoo harus memuat metode
   yang sama di `RPC_ALLOWLIST` (efn-odoo-engineer C); tanpa itu Odoo menjawab 403/404 dan kasus positif tetap
   `pass` (status dari Odoo).
+- **G22 (19 Okt 2026, docs/04 §14.A.5, §14.E.2):** path 13–15 untuk QR order dari ponsel (W-07, E-27):
+
+  | # | Path | Pemanggil | Sifat |
+  |---|---|---|---|
+  | 13 | `/json/2/efn.pos.qr.order/efn_qr_menu` | BFF, user teknis `efn_qr_pb`/`efn_qr_bcf` | baca (overlay menu per config) |
+  | 14 | `/json/2/efn.pos.qr.order/efn_qr_submit` | idem | tulis, idempoten `fnb:submit:<submission_id>` |
+  | 15 | `/json/2/efn.pos.qr.order/efn_qr_status` | idem | baca (rekonsiliasi status) |
+
+  API key per PT: secret `odoo_api_key_qr_pb` / `odoo_api_key_qr_bcf` (BFF saja, rotasi `efn-rotate-online-key qr-pb|qr-bcf`).
+  Tidak ada header/aturan baru; batas body 256 KB tetap (kiriman QR ≤ 16 KB di BFF). Konkurensi QR memakai semaphore
+  json2 **publik** BFF (L-20) + `ODOO_RPC_MAXCONN` yang sama di gateway — QR ikut berbagi worker yang disisihkan untuk
+  online; pantau `%Tw` dan `why=busy` saat pilot. `odoo-tls --allow-cn` tidak berubah. Uji nyata bertambah 12 kasus
+  (3 positif + model salah, sufiks, huruf besar, `search_read`, `pos.order/create`, `pos.order/sync_from_ui`,
+  `pos.config/efn_qr_session_open` (RPC POS, bukan BFF), garis miring akhir, encoded) → 114 kasus; **belum dijalankan**
+  terhadap stack nyata. **Catatan nama:** docs/08 §13.1b (fit-gap) memakai `efn.pos.table.session.efn_qr_catalog` /
+  `efn_qr_order_submit` / `efn_qr_order_status`; gateway mengikuti kontrak docs/04 §14.A.5 (sumber kebenaran). Bila modul
+  `efn_pos_bff_order` (L-70) memakai nama lain, kontrak diralat lead lebih dulu, lalu tiga baris `p_allowed` dan
+  kasus uji di sini diubah bersamaan dengan `RPC_ALLOWLIST` Odoo.
 - **Belum / batas:**
   - Tidak ada metrik HAProxy ke Prometheus (log akses → Loki; alert `EfnOdooRpcGatewayDenied`). Kandidat: PROMEX di
     loopback + sidecar mTLS.

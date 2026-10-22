@@ -5,7 +5,8 @@
     "BCF nonaktif).",
     # 19.0.1.5.0 (G20 W-32/E-43, docs/04 §12.1, L-48): kode kanal = kode PT, user teknis efn_online_<kode>,
     # partner/tim per PT baru; kanal RTL/FNB/RTL-GL/RTL-BACHA/FNB-PB/FNB-BACHA dihapus (DB dev dibuat ulang).
-    "version": "19.0.1.5.0",
+    # 19.0.1.6.0 (G22 W-04, docs/08 §13.2): demo outlet kafe BCF (CAFE-01, gudang OL03) ber-FP non-dine-in BCF.
+    "version": "19.0.1.6.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",

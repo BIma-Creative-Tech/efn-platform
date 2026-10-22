@@ -13,6 +13,7 @@
                 <field name="redeem_min_points"/>
                 <field name="redeem_max_pct"/>
                 <field name="point_value_idr" optional="show"/>
+                <field name="inactivity_expiry_months" optional="hide"/>
                 <field name="maker_id" optional="show"/>
                 <field name="approved_by_id" optional="show"/>
                 <field name="state" widget="badge"/>
@@ -71,6 +72,17 @@
                             <field name="redeem_max_pct" readonly="state != 'draft'"/>
                             <field name="point_value_idr" invisible="not is_global" readonly="state != 'draft'"/>
                         </group>
+                    </group>
+                    <group string="Poin hangus karena tidak aktif (global, W-17)" invisible="not is_global">
+                        <group>
+                            <field name="inactivity_expiry_months" readonly="state != 'draft'"/>
+                            <field name="expiry_notice_days" readonly="state != 'draft'"/>
+                            <field name="activity_epoch" readonly="state != 'draft'"/>
+                        </group>
+                        <div class="text-muted" colspan="2">
+                            Job hangus berjalan di BFF dan di production tetap mati sampai syarat program disetujui
+                            Legal dan template WA disetujui Meta (L-73). Nilai di luar plafon env BFF ditolak saat publikasi.
+                        </div>
                     </group>
                     <field name="note" readonly="state != 'draft'" placeholder="Dasar keputusan (nomor memo Finance, dsb.)"/>
                     <field name="outbox_ids" invisible="not outbox_ids">

@@ -70,7 +70,8 @@ patch(ControlButtons.prototype, {
                 {
                     product_tmpl_id: product.product_tmpl_id,
                     product_id: product,
-                    price_unit: found.amount_payable,
+                    // G22 W-12 (docs/04 §14.C.4): porsi tunai; porsi Poin EFN sudah ditahan BFF.
+                    price_unit: found.amount_due,
                     qty: 1,
                     efn_online_order_label: found.order_label,
                 },

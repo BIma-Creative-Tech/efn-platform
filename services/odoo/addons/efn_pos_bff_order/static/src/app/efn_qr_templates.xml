@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="template" xml:space="preserve">
+    <!-- E-27: dialog & slip QR sesi meja. -->
+    <t t-name="efn_pos_bff_order.EfnQrDialog">
+        <Dialog title="'QR pesan dari ponsel — ' + props.table_label" size="'md'">
+            <div class="text-center efn-qr-dialog">
+                <img class="efn-qr-image img-fluid" t-att-src="imageSrc" alt="QR meja" style="max-width: 300px;"/>
+                <p class="mt-2 mb-0">Berlaku sampai <t t-esc="props.expires_at"/> (UTC). QR mati saat meja dibayar atau dicetak ulang.</p>
+                <p class="text-muted small">Tamu memindai QR, memesan di ponsel, lalu membayar di kasir.</p>
+            </div>
+            <t t-set-slot="footer">
+                <button class="btn btn-primary efn-qr-print" t-on-click="() => this.print()">Cetak</button>
+                <button class="btn btn-secondary efn-qr-close-session" t-on-click="() => this.closeSession()">Matikan QR meja</button>
+                <button class="btn btn-light" t-on-click="() => this.props.close()">Tutup</button>
+            </t>
+        </Dialog>
+    </t>
+
+    <t t-name="efn_pos_bff_order.EfnQrSlip">
+        <div class="pos-receipt efn-qr-slip text-center">
+            <div class="pos-receipt-center-align"><t t-esc="props.outlet or ''"/></div>
+            <div class="pos-receipt-center-align fw-bold">Meja <t t-esc="props.table_label"/></div>
+            <img t-att-src="imageSrc" alt="QR meja" style="width: 70%;"/>
+            <div class="pos-receipt-center-align">Pindai untuk memesan dari ponsel.</div>
+            <div class="pos-receipt-center-align">Bayar di kasir.</div>
+            <div class="pos-receipt-center-align small">Berlaku s.d. <t t-esc="props.expires_at"/> UTC</div>
+        </div>
+    </t>
+
+    <!-- Tombol "QR Meja" di menu tombol lain (hanya POS dengan QR aktif dan order di meja). -->
+    <t t-name="efn_pos_bff_order.ControlButtons" t-inherit="point_of_sale.ControlButtons" t-inherit-mode="extension">
+        <xpath expr="//div[hasclass('control-buttons-modal')]" position="inside">
+            <button t-if="efnShowQr" t-att-class="buttonClass" class="efn-qr-table"
+                    t-att-disabled="efnQrDisabled" t-on-click="() => this.efnOpenTableQr()">
+                <i class="fa fa-qrcode me-2" role="img" aria-label="QR Meja" title="QR Meja"/>QR Meja
+            </button>
+        </xpath>
+    </t>
+</templates>

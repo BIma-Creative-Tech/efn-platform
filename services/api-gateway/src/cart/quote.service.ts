@@ -1,9 +1,11 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { MemberService } from '../common/member/member.service';
+import { ONLINE_POINTS, OnlinePointsPort, QuotePoints } from '../orders/online-points';
 import { randomUUID } from 'node:crypto';
 import { AppConfig } from '../config/app-config';
 import { KV_STORE, KvStore } from '../common/redis/kv-store';
 import { redisKeyHash } from '../common/pii/pii';
-import { cartKey } from './cart-store';
+import { cartKey, lineIdentity } from './cart-store';
 import { isUuid } from '../common/validation';
 import { CatalogService } from '../catalog/catalog.service';
 import { ODOO_ONLINE, OdooOnlineApi, OdooRpcError, QuoteIssue, QuoteResult, TaxGroup } from '../odoo-rpc/odoo-online.types';
@@ -37,6 +39,8 @@ export interface QuoteView {
   groups: QuoteGroupView[];
   amount_payable_total: number;
   promo: PromoView;
+  /** G22 §14.C.2: blok informatif poin (tidak mengikat). */
+  points?: QuotePoints;
 }
 export type StoredQuoteGroup = QuoteGroupView & {
   quote_hash: string;
@@ -63,8 +67,11 @@ export function toView(g: StoredQuoteGroup): QuoteGroupView {
 }
 
 /** Baris yang dikirim ke `efn_online_place`: hanya produk cart (baris reward dihitung ulang Odoo dari kode). */
-export function placeLines(g: Pick<QuoteGroupView, 'lines'>): { product_id: number; qty: number }[] {
-  return g.lines.filter((l) => l.reward !== true).map((l) => ({ product_id: l.product_id, qty: l.qty }));
+export function placeLines(g: Pick<QuoteGroupView, 'lines'>): { product_id: number; qty: number; attribute_value_ids?: number[] }[] {
+  // G22 B-4: PTAV ikut HANYA bila ada (payload & payload_sha256 Odoo baris tanpa atribut sama dengan pra-G22)
+  return g.lines
+    .filter((l) => l.reward !== true)
+    .map((l) => (l.attribute_value_ids && l.attribute_value_ids.length > 0 ? { product_id: l.product_id, qty: l.qty, attribute_value_ids: l.attribute_value_ids } : { product_id: l.product_id, qty: l.qty }));
 }
 
 /** Batas jumlah baris reward per grup (pengaman bentuk respons Odoo). */
@@ -120,7 +127,27 @@ export class QuoteService {
     @Inject(ODOO_ONLINE) private readonly odoo: OdooOnlineApi,
     @Inject(KV_STORE) private readonly kv: KvStore,
     private readonly metrics: OnlineMetrics,
+    /** G22 §14.C.2 (opsional di test lama): blok poin quote. */
+    @Optional() @Inject(ONLINE_POINTS) private readonly points: OnlinePointsPort | null = null,
+    @Optional() private readonly members: MemberService | null = null,
   ) {}
+
+  private async pointsBlock(memberId: string, groups: StoredQuoteGroup[]): Promise<QuotePoints | undefined> {
+    if (!this.points) return undefined;
+    try {
+      const member = this.members ? await this.members.findActive(memberId) : null;
+      const flags = await Promise.all(groups.map(async (g) => (await this.catalog.channel(g.channel_code))?.loyalty?.redeem === true));
+      return await this.points.quoteBlock(
+        memberId,
+        member?.memberHash ?? null,
+        groups.map((g, i) => ({ channel_code: g.channel_code, company_code: g.company_code, amount_payable: g.amount_payable, redeem: flags[i] })),
+      );
+    } catch (err) {
+      // blok informatif: kegagalan tidak menggagalkan quote
+      this.logger.warn(`Blok poin quote gagal: ${err instanceof Error ? err.name : 'error'}`);
+      return undefined;
+    }
+  }
 
   /**
    * `promoCodes` = hasil `normalizePromoCodes` (controller). Kode yang sama dikirim ke SETIAP kanal (§11.2 no. 2);
@@ -167,6 +194,7 @@ export class QuoteService {
       prev = [];
     }
     await this.kv.setEx(idx, JSON.stringify([...prev.filter((x) => isUuid(x)), id].slice(-QUOTE_INDEX_MAX)), this.config.onlineQuoteTtlSeconds);
+    const points = await this.pointsBlock(memberId, groups);
     return {
       quote_id: id,
       valid_until: stored.valid_until,
@@ -174,6 +202,7 @@ export class QuoteService {
       groups: groups.map(toView),
       amount_payable_total: stored.amount_payable_total,
       promo,
+      ...(points ? { points } : {}),
     };
   }
 
@@ -194,20 +223,22 @@ export class QuoteService {
     const productLines = q.lines.filter((l) => !l.reward);
     const rewardLines = q.lines.filter((l) => l.reward);
     if (rewardLines.length > MAX_REWARD_LINES) invalid('baris reward terlalu banyak');
-    const want = new Map(g.lines.map((l) => [l.product_id, l.qty]));
+    // G22 B-4 / L-78: identitas baris = (product_id, PTAV terurut) — produk sama dengan modifier berbeda = dua baris
+    const want = new Map(g.lines.map((l) => [lineIdentity(l), l]));
     const issuesById = new Set(q.issues.map((i) => i.product_id));
     // SEC-131: produk ber-issue `qty_limit` boleh dikembalikan dengan qty dipangkas (1..qty cart); quote tetap terblokir
     // (`409 cart_has_issues` saat checkout) sehingga qty itu tidak pernah dipakai untuk place.
     const qtyLimited = new Set(q.issues.filter((i) => i.code === 'qty_limit').map((i) => i.product_id));
-    const seen = new Set<number>();
+    const seen = new Set<string>();
     for (const l of productLines) {
-      const cartQty = want.get(l.product_id);
+      const id = lineIdentity(l);
+      const cartQty = want.get(id)?.qty;
       const qtyOk = cartQty === l.qty || (cartQty !== undefined && qtyLimited.has(l.product_id) && l.qty < cartQty);
-      if (!qtyOk || seen.has(l.product_id)) invalid('baris quote ≠ cart');
-      seen.add(l.product_id);
+      if (!qtyOk || seen.has(id)) invalid('baris quote ≠ cart');
+      seen.add(id);
     }
-    for (const pid of want.keys()) {
-      if (!seen.has(pid) && !issuesById.has(pid)) invalid('baris quote hilang');
+    for (const [id, l] of want) {
+      if (!seen.has(id) && !issuesById.has(l.product_id)) invalid('baris quote hilang');
     }
     // §11.2 no. 3/5: Odoo hanya boleh melaporkan kode yang DIMINTA (kode lain = bug/konfigurasi, fail-closed)
     if (q.promo_applied.some((c) => !codes.includes(c)) || q.promo_rejected.some((c) => !codes.includes(c))) invalid('promo di luar permintaan');
@@ -229,6 +260,8 @@ export class QuoteService {
           tax_labels: l.tax_labels,
           available: l.available,
           ...(l.reward ? { reward: true as const } : {}),
+          // G22 L-78: hanya bila baris beratribut (bentuk baris ritel tidak berubah)
+          ...((l.attribute_value_ids ?? []).length > 0 ? { attribute_value_ids: l.attribute_value_ids, attributes_text: l.attributes_text ?? null } : {}),
         })),
         tax_groups: q.tax_groups,
         amount_total: q.amount_total,

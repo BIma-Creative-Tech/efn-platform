@@ -7,6 +7,7 @@ import { CartModule } from './cart/cart.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { CommonModule } from './common/common.module';
 import { ContractExceptionFilter } from './common/errors/contract-exception.filter';
+import { FnbModule } from './fnb/fnb.module';
 import { HealthController } from './health/health.controller';
 import { LoyaltyModule } from './loyalty/loyalty.module';
 import { MarketScoutModule } from './market-scout/market-scout.module';
@@ -44,6 +45,8 @@ import { PrivacyModule } from './privacy/privacy.module';
     CatalogModule,
     CartModule,
     OrdersModule,
+    // G22 QR meja F&B (docs/04 §14.A, ADR-032 Accepted B): kill switch FNB_QR_ENABLED (default false)
+    FnbModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_FILTER, useClass: ContractExceptionFilter }],

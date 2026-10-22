@@ -84,7 +84,8 @@ class EfnOnlineOrder(models.Model):
                 raise online_error("invalid_state")
             if Auth.search_count([("refund_id", "=", refund.id)], limit=1):
                 raise online_error("idempotency_conflict")
-            if currency.compare_amounts(refund.amount, amount) != 0:
+            # G22 W-12 (§14.C.3): nominal otorisasi = porsi TUNAI refund (= amount bila tanpa Poin EFN).
+            if currency.compare_amounts(refund.cash_amount, amount) != 0:
                 raise online_error("amount_mismatch")
         else:
             if order.state != "cancelled" or order._efn_posted_invoice():

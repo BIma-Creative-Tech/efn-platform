@@ -13,9 +13,10 @@ import { OnlineErrors, mapOdooError } from '../odoo-rpc/online-errors';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
 import { PaymentStatus } from '../payments/payment-gateway';
 import { ONLINE_PAYMENTS, OnlineIntent, OnlinePaymentsPort } from '../payments/online-payments';
-import { OrderRow, OrderStatus, PartRow, PaymentMethod, UNPAID_OPEN, unpaidClosedMessage } from './online.model';
+import { OrderRow, OrderStatus, PartRow, PaymentMethod, UNPAID_OPEN, partCash, unpaidClosedMessage } from './online.model';
 import { ONLINE_REPO, OnlineRepo } from './online.repository';
 import { OnlineSagaService } from './online-saga.service';
+import { ONLINE_POINTS, OnlinePointsPort } from './online-points';
 import {
   decryptCounterCode,
   decryptPickupCode,
@@ -44,6 +45,8 @@ export interface CheckoutInput {
    * `efn_online_set_invoice_party`; TIDAK masuk DB/outbox/Redis/log (K-36-7, L-63).
    */
   invoiceRequest?: InvoiceBuyerProfile;
+  /** G22 §14.C.2: `points_redeem` — maks satu entri per kanal, poin bulat > 0; nilai dihitung server (API3). */
+  pointsRedeem?: { channel_code: string; points: number }[];
 }
 
 /**
@@ -98,7 +101,21 @@ export interface OrderView {
     ready_at: string | null;
     handed_over_at: string | null;
     cancel_reason: string | null;
+    // ── G22 (aditif) ──
+    /** §14.C.2 */
+    points_redeemed: number;
+    points_value_idr: number;
+    amount_cash: number;
+    /** L-78: satuan POIN (int). `points_earned` terisi setelah diambil. */
+    points_earned: number;
+    points_restored: number;
+    /** B-8 */
+    kitchen_started_at: string | null;
+    prep_minutes: number | null;
   }[];
+  /** G22 §14.C.2: Σ nilai Poin EFN & Σ porsi tunai (QRIS/kasir). */
+  amount_points_value: number;
+  amount_cash: number;
 }
 
 const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);
@@ -127,6 +144,10 @@ export function requestSha256(input: CheckoutInput): string {
   // G21 §13.5: HANYA penanda ada/tidaknya permintaan faktur — isi profil (PII, NPWP/NIK berentropi rendah) tidak pernah
   // ikut di-hash/disimpan. Sidik order tanpa faktur sama dengan pra-G21.
   if (input.invoiceRequest) body.invoice_request = true;
+  // G22 §14.C.2: poin ikut sidik HANYA bila ada (key sama + poin beda → 409 idempotency_conflict; sidik lama tetap)
+  if (input.pointsRedeem && input.pointsRedeem.length > 0) {
+    body.points_redeem = [...input.pointsRedeem].sort((a, b) => a.channel_code.localeCompare(b.channel_code)).map((x) => [x.channel_code, x.points]);
+  }
   return createHash('sha256').update(JSON.stringify(body), 'utf8').digest('hex');
 }
 
@@ -166,6 +187,8 @@ export class OrdersService {
     private readonly metrics: OnlineMetrics,
     /** G20: hanya untuk simulasi bayar di kasir (dev, stub Odoo). Opsional agar test lama tetap jalan. */
     @Optional() private readonly saga: OnlineSagaService | null = null,
+    /** G22 §14.C: poin online (opsional agar test lama tetap jalan; tanpa port → redeem 422 points_unavailable). */
+    @Optional() @Inject(ONLINE_POINTS) private readonly points: OnlinePointsPort | null = null,
   ) {}
 
   // ───────────── checkout ─────────────
@@ -191,12 +214,24 @@ export class OrdersService {
     if (input.invoiceRequest && quote.groups.some((g) => !INVOICE_COMPANIES.includes(g.company_code))) {
       throw OnlineErrors.invoiceNotAvailable();
     }
+    const redeemFlags = new Map<string, boolean>();
     for (const g of quote.groups) {
       const ch = await this.catalog.channel(g.channel_code);
       if (!ch) throw OnlineErrors.itemUnavailable();
       if (!(ch.payment_modes ?? this.config.onlinePaymentMethods).includes(method)) throw OnlineErrors.paymentMethodUnavailable();
+      redeemFlags.set(g.channel_code, ch.loyalty?.redeem === true);
     }
     for (const g of quote.groups) if (this.odoo.isCircuitOpen(g.channel_code)) throw OnlineErrors.unavailable();
+    // G22 §14.C.2: validasi poin terhadap kebijakan PT SEBELUM order dibuat (L-79: tanpa fallback env)
+    const requested = input.pointsRedeem ?? [];
+    if (requested.length > 0 && !this.points) throw OnlineErrors.pointsUnavailable();
+    const plans =
+      requested.length > 0 && this.points
+        ? await this.points.plan(
+            quote.groups.map((g) => ({ channel_code: g.channel_code, company_code: g.company_code, amount_payable: g.amount_payable, redeem: redeemFlags.get(g.channel_code) === true })),
+            requested,
+          )
+        : [];
 
     const orderId = randomUUID();
     const expiresAt = new Date(this.now() + this.config.onlinePaymentTimeoutSeconds * 1000);
@@ -252,6 +287,8 @@ export class OrdersService {
             subtotal_incl: l.subtotal_incl,
             tax_labels: l.tax_labels,
             ...(l.reward === true ? { reward: true as const } : {}), // G19 §11.2: baris reward tampil di status order
+            // G22 L-78: identitas & teks atribut (hanya baris beratribut)
+            ...(l.attribute_value_ids && l.attribute_value_ids.length > 0 ? { attribute_value_ids: l.attribute_value_ids, attributes_text: l.attributes_text ?? null } : {}),
           })),
           tax_groups: g.tax_groups,
           amount_total: g.amount_total,
@@ -260,7 +297,21 @@ export class OrdersService {
           pickup_code_enc: encryptPickupCode(this.cipher, code, partId),
           counter_code_enc: counterCode ? encryptCounterCode(this.cipher, counterCode, partId) : null,
         });
+        // G22 §14.C.3: reservasi poin DI TRANSAKSI YANG SAMA dengan order (hold = expires_at + 10 menit)
+        const plan = plans.find((x) => x.channel_code === g.channel_code);
+        if (plan && this.points) {
+          const holdUntil = new Date(expiresAt.getTime() + this.config.onlineRedeemHoldExtraSeconds * 1000);
+          const reservationId = await this.points.reserve(r, memberId, partId, plan, g.amount_payable, holdUntil);
+          await r.updatePart(partId, {
+            points_redeemed: plan.points,
+            points_value_idr: plan.value_idr,
+            amount_cash: g.amount_payable - plan.value_idr,
+            loyalty_reservation_id: reservationId,
+          });
+        }
       }
+      const pointsValue = plans.reduce((s, x) => s + x.value_idr, 0);
+      if (pointsValue > 0) await r.updateOrder(orderId, { amount_points_value: pointsValue, amount_cash: quote.amount_payable_total - pointsValue });
       return null;
     });
     if (created) return this.replay(created, sha);
@@ -336,7 +387,16 @@ export class OrdersService {
           promo_codes: [...(g.promo_applied ?? [])],
           // G20 §12.2 no. 3 + L-56: hanya untuk bayar di kasir (payload QRIS tidak berubah); kode bayar rahasia, tidak di-log
           ...(method === 'counter' && counterCode ? { payment_mode: 'counter' as const, counter_code: counterCode } : {}),
+          // G22 §14.C.3: porsi Poin EFN (hanya bila ada) — Odoo memvalidasi batas kebijakan PT (points_invalid → 409)
+          ...((part.points_redeemed ?? 0) > 0 ? { points_payment: { points: part.points_redeemed ?? 0, value_idr: part.points_value_idr ?? 0 } } : {}),
         });
+        // amount_due Odoo = amount_payable − nilai poin (selain itu respons tidak dipercaya)
+        const due = res.amount_payable - (part.points_value_idr ?? 0);
+        if (res.amount_due !== due || due < 1) {
+          this.metrics.anomaly('online_config_error', 'critical', { order_id: orderId, part_id: part.id, code: 'amount_due_mismatch', expected: due, actual: res.amount_due });
+          failure = OnlineErrors.unavailable();
+          break;
+        }
         results.set(part.id, res);
         await this.repo.updatePart(part.id, {
           status: 'placed',
@@ -344,6 +404,7 @@ export class OrdersService {
           odoo_state: res.order_state.slice(0, 32),
           amount_total: res.amount_total,
           amount_payable: res.amount_payable,
+          ...((part.points_redeemed ?? 0) > 0 ? { amount_cash: res.amount_due } : {}),
         });
         this.metrics.part(part.channel_code, 'placed');
       } catch (err) {
@@ -393,10 +454,11 @@ export class OrdersService {
     if (!failure) {
       const fresh = await this.repo.getParts(orderId);
       try {
+        // G22 §14.C.2: intent QRIS = Σ porsi TUNAI (poin tidak lewat gateway); tanpa poin = acceptTotal (perilaku lama)
         intent = await this.payments.createOnlineIntent({
           orderId,
-          amount: acceptTotal,
-          portions: fresh.map((p) => ({ partId: p.id, channelCode: p.channel_code, companyCode: p.company_code, amount: p.amount_payable })),
+          amount: fresh.reduce((s, p) => s + partCash(p), 0),
+          portions: fresh.map((p) => ({ partId: p.id, channelCode: p.channel_code, companyCode: p.company_code, amount: partCash(p) })),
           expiresAt,
           idempotencyKey: `online:intent:${orderId}`,
         });
@@ -445,6 +507,7 @@ export class OrdersService {
     await this.repo.tx(async (r) => {
       if (await r.transitionOrder(orderId, ['created'], 'failed', { close_reason: 'place_failed', closed_at: new Date(this.now()) })) {
         this.metrics.order('failed');
+        await this.points?.releaseOrder(r, orderId, await r.getParts(orderId)); // G22 C.3 release
       }
       if (pending) {
         const m = unpaidClosedMessage(orderId, 'place_failed');
@@ -467,9 +530,22 @@ export class OrdersService {
         created_at: o.created_at.toISOString(),
         amount_payable: o.amount_payable,
         payment_method: o.payment_method, // G20 (aditif): `qris` | `counter`
+        // G22 §14.C.2 (aditif)
+        amount_points_value: o.amount_points_value ?? 0,
+        amount_cash: o.amount_cash ?? o.amount_payable - (o.amount_points_value ?? 0),
         parts: parts
           .filter((p) => p.order_id === o.id)
-          .map((p) => ({ channel_code: p.channel_code, company_code: p.company_code, status: p.status })),
+          .map((p) => ({
+            channel_code: p.channel_code,
+            company_code: p.company_code,
+            status: p.status,
+            points_redeemed: p.points_redeemed ?? 0,
+            points_earned: p.points_earned ?? 0,
+            points_restored:
+              (p.points_redeemed ?? 0) > 0 && (p.points_value_idr ?? 0) > 0
+                ? Math.floor(((p.points_restored_value ?? 0) * (p.points_redeemed ?? 0)) / (p.points_value_idr ?? 1) + 1e-9)
+                : 0,
+          })),
       })),
       next_cursor: orders.length > limit && page.length > 0 ? encodeOrderCursor(page[page.length - 1]) : null,
     };
@@ -488,6 +564,14 @@ export class OrdersService {
     const channels = await this.catalog.channels().catch(() => []);
     const outletName = (ch: string, code: string): string =>
       channels.find((c) => c.channel_code === ch)?.outlets.find((o) => o.outlet_code === code)?.public_name ?? code;
+    const prepMinutes = (ch: string, code: string): number | null =>
+      channels.find((c) => c.channel_code === ch)?.outlets.find((o) => o.outlet_code === code)?.prep_minutes ?? null;
+    /** L-78: nilai restore (Rupiah) → poin utuh dengan nilai tukar saat redeem (ke bawah). */
+    const restoredPoints = (p: PartRow): number => {
+      const pts = p.points_redeemed ?? 0;
+      const v = p.points_value_idr ?? 0;
+      return pts > 0 && v > 0 ? Math.floor(((p.points_restored_value ?? 0) * pts) / v + 1e-9) : 0;
+    };
     let payment: OrderView['payment'];
     if (order.payment_method === 'counter') {
       payment = this.counterPayment(order, parts);
@@ -520,7 +604,16 @@ export class OrdersService {
         ready_at: iso(p.ready_at),
         handed_over_at: iso(p.handed_over_at),
         cancel_reason: p.cancel_reason,
+        points_redeemed: p.points_redeemed ?? 0,
+        points_value_idr: p.points_value_idr ?? 0,
+        amount_cash: partCash(p),
+        points_earned: p.points_earned ?? 0,
+        points_restored: restoredPoints(p),
+        kitchen_started_at: iso(p.kitchen_started_at ?? null),
+        prep_minutes: prepMinutes(p.channel_code, p.outlet_code),
       })),
+      amount_points_value: order.amount_points_value ?? 0,
+      amount_cash: order.amount_cash ?? order.amount_payable - (order.amount_points_value ?? 0),
     };
   }
 
@@ -571,7 +664,9 @@ export class OrdersService {
         return 'paid' as const; // termasuk event `paid` bayar di kasir yang menang lebih dulu
       }
       // Kode bayar tidak lagi berlaku → hapus segera (retensi juga membersihkan)
-      for (const p of await r.getParts(orderId)) if (p.counter_code_enc) await r.updatePart(p.id, { counter_code_enc: null });
+      const cancelledParts = await r.getParts(orderId);
+      for (const p of cancelledParts) if (p.counter_code_enc) await r.updatePart(p.id, { counter_code_enc: null });
+      await this.points?.releaseOrder(r, orderId, cancelledParts); // G22 C.3 release di transaksi transisi
       const m = unpaidClosedMessage(orderId, 'customer');
       await r.enqueue(QUEUES.ORDER_UNPAID_CLOSED, { ...m }, m.idempotency_key);
       return 'cancelled' as const;

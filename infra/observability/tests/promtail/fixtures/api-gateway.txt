@@ -6,3 +6,7 @@
 [Nest] 41  - 10/09/2026, 1:00:05 AM     LOG [OnlineReconService] EFN_ONLINE_RECON {"status":"ok","checked":3}
 [Nest] 41  - 10/09/2026, 1:00:06 AM    WARN [OrdersService] EFN_ONLINE_ANOMALY {"kind":"palsu","severity":"critical"}
 [Nest] 41  - 10/09/2026, 1:00:07 AM     LOG [OrdersService] kode ambil HJKM-NPQ7 untuk bagian 5d2e7a10-3c4b-4d5e-8f90-a1b2c3d4e5f6
+[Nest] 41  - 10/19/2026, 1:00:08 AM     LOG [FnbService] sesi meja 5d2e7a10-3c4b-4d5e-8f90-a1b2c3d4e5f6 token fts1.SENTINELc2Vzc2lvbg.1760900000.SENTINEL_sig-x_1 header X-Table-Session: fts1.SENTINELaGVhZGVy.1760900000.SENTINELsig
+[Nest] 41  - 10/19/2026, 1:00:09 AM     LOG [LoyaltyInactivityJob] EFN_LOYALTY_EXPIRY_RUN {"status":"dry_run","phase":"expire","candidates":12,"by_issuer":{"GL":3,"PB":9}}
+[Nest] 41  - 10/19/2026, 1:00:10 AM   ERROR [LoyaltyInactivityJob] EFN_LOYALTY_EXPIRY_RUN {"status":"aborted","phase":"expire","candidates":25000,"max_per_run":20000}
+[Nest] 41  - 10/19/2026, 1:00:11 AM     LOG [OrdersService] EFN_LOYALTY_EXPIRY_RUN {"status":"ok","phase":"expire"}

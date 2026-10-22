@@ -1,4 +1,6 @@
-import { Inject, Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnApplicationBootstrap, Optional } from '@nestjs/common';
+import { MetricsService } from '../common/metrics/metrics.service';
+import { recordExpiryNoticeProof, resolveLoyaltyExpirySubject } from './loyalty-expiry-subject';
 import { AppConfig } from '../config/app-config';
 import { AmqpService, MessageMeta, PermanentMessageError } from '../common/amqp/amqp.service';
 import { QUEUES } from '../common/amqp/queues';
@@ -19,12 +21,15 @@ export const NOTIFY_SOURCE_PUBLISHERS: Readonly<Record<string, readonly string[]
   price_hunter: ['efn-ocr', 'efn-bff'],
   // Fase 3 (docs/04 §10.9): hanya BFF sendiri (outbox saga online)
   online_order: ['efn-bff'],
+  // G22 §14.D.4: pemberitahuan poin hangus — publisher hanya efn-bff (job LoyaltyInactivityJob, outbox)
+  loyalty_expiry: ['efn-bff'],
 };
 
 /** Template yang boleh dipakai per sumber (template online tidak bisa dikirim dengan source price_hunter dan sebaliknya). */
 export const SOURCE_TEMPLATES: Readonly<Record<string, readonly string[]>> = {
   price_hunter: ['price_hunter_valid', 'price_hunter_rejected'],
   online_order: ['online_order_ready', 'online_order_cancelled', 'online_order_refunded'],
+  loyalty_expiry: ['loyalty_inactivity_notice'],
 };
 
 /** Payload `notify.push` v2 (kontrak §4): tanpa nomor HP; penerima di-resolve dari baris sumber. */
@@ -95,6 +100,7 @@ export class NotifyPushConsumer implements OnApplicationBootstrap {
     @Inject(WHATSAPP_SENDER) private readonly sender: WhatsAppSender,
     private readonly config: AppConfig,
     private readonly cipher: PiiCipher,
+    @Optional() private readonly metrics: MetricsService | null = null,
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
@@ -113,9 +119,33 @@ export class NotifyPushConsumer implements OnApplicationBootstrap {
     }
     const tpl = NOTIFY_TEMPLATES[msg.template];
     let to = '';
-    const outcome = await this.db.tx(async (q): Promise<NotifyOutcome> => {
+    let outcome: NotifyOutcome;
+    try {
+      outcome = await this.send(msg, tpl, (v) => (to = v));
+    } catch (err) {
+      // G22 §14.D.4: gagal kirim pemberitahuan hangus dihitung (hangus tetap jalan sesuai syarat program)
+      if (msg.source === 'loyalty_expiry') this.metrics?.loyaltyExpiryNoticeFailed.inc();
+      throw err;
+    }
+    this.logger.log(`notify.push ${msg.template}${to ? ` → ${maskMsisdn(to)}` : ''}: ${outcome}`);
+    return outcome;
+  }
+
+  private send(msg: NotifyPushMessage, tpl: (typeof NOTIFY_TEMPLATES)[string], setTo: (v: string) => void): Promise<NotifyOutcome> {
+    let to = '';
+    return this.db.tx(async (q): Promise<NotifyOutcome> => {
       const fresh = await claimMessage(q, NOTIFY_PUSH_CONSUMER, msg.idempotency_key);
       if (!fresh) return 'duplicate';
+      if (msg.source === 'loyalty_expiry') {
+        const ref = await resolveLoyaltyExpirySubject(q, this.cipher, this.config.memberHashPepper, msg.source_ref, msg.member_hash);
+        if (!ref) return 'skipped';
+        to = ref;
+        setTo(ref);
+        await this.sender.sendTemplate(to, tpl.waTemplate, renderTemplateParams(tpl, msg.params));
+        const exp = msg.params.expire_date;
+        await recordExpiryNoticeProof(q, msg.source_ref, typeof exp === 'string' ? exp : null, new Date()); // L-76
+        return 'sent';
+      }
       if (msg.source === 'online_order') {
         const ref = await resolveOnlineOrderSubject(q, this.cipher, this.config.memberHashPepper, msg.source_ref, msg.member_hash);
         if (!ref) return 'skipped'; // tautan member sudah dilepas (retensi/erasure)
@@ -124,10 +154,9 @@ export class NotifyPushConsumer implements OnApplicationBootstrap {
         const subject = await resolvePriceHunterSubject(q, this.cipher, this.config.memberHashPepper, msg.source_ref, msg.member_hash);
         to = subject.memberRef;
       }
+      setTo(to);
       await this.sender.sendTemplate(to, tpl.waTemplate, renderTemplateParams(tpl, msg.params));
       return 'sent';
     });
-    this.logger.log(`notify.push ${msg.template}${to ? ` → ${maskMsisdn(to)}` : ''}: ${outcome}`);
-    return outcome;
   }
 }

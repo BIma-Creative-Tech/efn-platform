@@ -299,6 +299,46 @@ jobs:
           # hanya bila true. Production true wajib EFN_ODOO_PII_REQUIRED=true (deploy-validate); default MATI (L-59).
           CFG_EFN_ODOO_PII_ENABLED: ${{ vars.EFN_ODOO_PII_ENABLED || 'false' }}
           CFG_EFN_ODOO_PII_REQUIRED: ${{ vars.EFN_ODOO_PII_REQUIRED }}
+          # G22 (docs/04 §14). Kosong = default compose (semua MATI, angka kontrak). QR meja: true butuh
+          # FNB_QR_BASE_URL_<PT> https + API key QR host:* nyata (deploy.sh). LOYALTY_EXPIRY_ENABLED /
+          # LOYALTY_INACTIVE_ANONYMIZE = true di production DITOLAK kecuali Superadmin mencantumkannya di
+          # EFN_ALLOW_FEATURE_ON (/etc/efn/deploy.conf, L-73). LOYALTY_POINT_EXPIRY_DAYS dihapus (D-22-18): jangan ditambah.
+          CFG_FNB_QR_ENABLED: ${{ vars.FNB_QR_ENABLED || 'false' }}
+          CFG_FNB_QR_COMPANIES: ${{ vars.FNB_QR_COMPANIES }}
+          CFG_FNB_QR_BASE_URL_PB: ${{ vars.FNB_QR_BASE_URL_PB }}
+          CFG_FNB_QR_BASE_URL_BCF: ${{ vars.FNB_QR_BASE_URL_BCF }}
+          CFG_FNB_QR_POINTS_ENABLED: ${{ vars.FNB_QR_POINTS_ENABLED || 'false' }}
+          CFG_FNB_TABLE_SESSION_TTL_SECONDS: ${{ vars.FNB_TABLE_SESSION_TTL_SECONDS }}
+          CFG_FNB_MAX_SUBMISSIONS_PER_SESSION: ${{ vars.FNB_MAX_SUBMISSIONS_PER_SESSION }}
+          CFG_FNB_MAX_ITEMS_PER_SESSION: ${{ vars.FNB_MAX_ITEMS_PER_SESSION }}
+          CFG_FNB_MAX_LINES: ${{ vars.FNB_MAX_LINES }}
+          CFG_FNB_MAX_LINE_QTY: ${{ vars.FNB_MAX_LINE_QTY }}
+          CFG_FNB_CAPTCHA_MODE: ${{ vars.FNB_CAPTCHA_MODE }}
+          CFG_FNB_MENU_SYNC_SECONDS: ${{ vars.FNB_MENU_SYNC_SECONDS }}
+          CFG_FNB_SESSION_RETENTION_DAYS: ${{ vars.FNB_SESSION_RETENTION_DAYS }}
+          CFG_FNB_SESSION_MEMBER_LINK_DAYS: ${{ vars.FNB_SESSION_MEMBER_LINK_DAYS }}
+          CFG_ONLINE_LOYALTY_REDEEM_ENABLED: ${{ vars.ONLINE_LOYALTY_REDEEM_ENABLED || 'false' }}
+          CFG_ONLINE_LOYALTY_EARN_ENABLED: ${{ vars.ONLINE_LOYALTY_EARN_ENABLED || 'false' }}
+          CFG_LOYALTY_EXPIRY_ENABLED: ${{ vars.LOYALTY_EXPIRY_ENABLED || 'false' }}
+          CFG_LOYALTY_EXPIRY_DRY_RUN: ${{ vars.LOYALTY_EXPIRY_DRY_RUN }}
+          CFG_LOYALTY_INACTIVITY_EXPIRY_MONTHS: ${{ vars.LOYALTY_INACTIVITY_EXPIRY_MONTHS }}
+          CFG_LOYALTY_EXPIRY_NOTICE_DAYS: ${{ vars.LOYALTY_EXPIRY_NOTICE_DAYS }}
+          CFG_LOYALTY_EXPIRY_RUN_HOUR_WIB: ${{ vars.LOYALTY_EXPIRY_RUN_HOUR_WIB }}
+          CFG_LOYALTY_EXPIRY_NOTICE_HOUR_WIB: ${{ vars.LOYALTY_EXPIRY_NOTICE_HOUR_WIB }}
+          CFG_LOYALTY_EXPIRY_BATCH_SIZE: ${{ vars.LOYALTY_EXPIRY_BATCH_SIZE }}
+          CFG_LOYALTY_EXPIRY_MAX_PER_RUN: ${{ vars.LOYALTY_EXPIRY_MAX_PER_RUN }}
+          CFG_LOYALTY_ACTIVITY_EPOCH: ${{ vars.LOYALTY_ACTIVITY_EPOCH }}
+          CFG_LOYALTY_POINT_MAX_AGE_DAYS: ${{ vars.LOYALTY_POINT_MAX_AGE_DAYS }}
+          CFG_LOYALTY_INACTIVE_ANONYMIZE: ${{ vars.LOYALTY_INACTIVE_ANONYMIZE || 'false' }}
+          CFG_LOYALTY_INACTIVE_ANONYMIZE_GRACE_DAYS: ${{ vars.LOYALTY_INACTIVE_ANONYMIZE_GRACE_DAYS }}
+          # SEC-171 (r15): filter consent marketing untuk notice hangus. Production `false` DITOLAK kecuali Superadmin
+          # mencantumkan LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT di EFN_ALLOW_FEATURE_ON (deploy.conf) setelah keputusan Legal.
+          CFG_LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT: ${{ vars.LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT || 'true' }}
+          # G21/G22 job ETL opsional (QA G22 P2-3). Default MATI; prasyarat ETL_ENABLE_ODOO + grant terbaru (deploy-validate)
+          CFG_ETL_PARTNER_REGION_ENABLED: ${{ vars.ETL_PARTNER_REGION_ENABLED || 'false' }}
+          CFG_ETL_LOYALTY_RECON_ONLINE_ENABLED: ${{ vars.ETL_LOYALTY_RECON_ONLINE_ENABLED || 'false' }}
+          CFG_ETL_ENABLE_KDS: ${{ vars.ETL_ENABLE_KDS || 'false' }}
+          CFG_ETL_KDS_ONLINE_ENABLED: ${{ vars.ETL_KDS_ONLINE_ENABLED || 'false' }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/efn-release"

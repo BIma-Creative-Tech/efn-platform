@@ -110,6 +110,15 @@ sudah dicatat bawaan efn_audit.
 RPC publik baru (terdaftar `efn_core/tests/test_rpc_surface.py` `RPC_ALLOWLIST`): `efn.role.action_efn_apply_job_roles`,
 `efn.access.review.action_efn_snapshot` / `action_efn_start_review` / `action_efn_done` / `action_efn_export_csv` (r14).
 
+## E-47d (G22, 19.0.1.2.0; docs/04 §14.7 L-74, docs/08 §13.6)
+- `TECHNICAL_GROUP_XMLIDS` + `efn_pos_bff_order.group_qr_bff` (user teknis QR ponsel per PT F&B): user teknis tidak
+  boleh diberi peran (`efn_role:line_technical_user`) dan grup itu tidak boleh menjadi isi peran
+  (`efn_role:role_technical_group`). Opsional: dilewati bila `efn_pos_bff_order` belum terpasang.
+- Parameter `efn_role.sensitive_group_xmlids` = **parameter kontrol efn_audit**: `models/efn_audit_rule.py`
+  menambah (OR) filter spesifikasi bawaan `ir.config_parameter` sehingga create/write/unlink parameter itu selalu
+  dicatat walau aturan admin diarsipkan, dan lognya tidak ikut GC. Kunci `efn_role.*` tidak cocok filter `efn.%`
+  aturan `efn_setup_audit`. Test: `tests/test_e47d.py`.
+
 ## Perbaikan review keamanan r14 (L-67)
 - **SEC-154 — sinkron jabatan → peran (R-S14, A-5).** `efn.role.sync_from_job` (default **False**). Cron/tombol hanya
   menerapkan peran ber-flag yang **tidak sensitif**. Sensitif = penutup `implied_ids` grup peran memuat salah satu

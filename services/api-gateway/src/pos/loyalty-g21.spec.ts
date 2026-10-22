@@ -187,7 +187,7 @@ describe('earn/redeem memakai kebijakan aktif PT (§13.1 no. 4)', () => {
 
 describe('lot earn FIFO dengan PT penerbit (§13.1 no. 5)', () => {
   async function crossCompany() {
-    const ctx = setup({ LOYALTY_POINT_EXPIRY_DAYS: '30' });
+    const ctx = setup({ LOYALTY_POINT_MAX_AGE_DAYS: '30' });
     await ctx.publish('EFN', {}, 80);
     await ctx.earn(ORDER_B, 300_000, 'GL'); // +30 lot GL, E1 = 5 Nov 00:00 WIB
     ctx.clock.advanceSeconds(10 * DAY);
@@ -227,7 +227,7 @@ describe('lot earn FIFO dengan PT penerbit (§13.1 no. 5)', () => {
 
 describe('akrual harian GET /v1/pos/loyalty/accruals (§13.1 no. 6)', () => {
   it('nilai integer IDR per PT: earn, penukaran per penerbit, saldo penutup; tanggal lampau deterministik', async () => {
-    const ctx = setup({ LOYALTY_POINT_EXPIRY_DAYS: '30' });
+    const ctx = setup({ LOYALTY_POINT_MAX_AGE_DAYS: '30' });
     await ctx.publish('EFN', {}, 80);
     await ctx.earn(ORDER_B, 300_000, 'GL'); // 5 Okt
     ctx.clock.advanceSeconds(10 * DAY); // 15 Okt
@@ -294,7 +294,7 @@ describe('akrual harian GET /v1/pos/loyalty/accruals (§13.1 no. 6)', () => {
   });
 
   it('kedaluwarsa = sisa lot penerbit pada tanggal hangus; clawback ke lot yang sudah hangus tidak menggeser akrual', async () => {
-    const ctx = setup({ LOYALTY_POINT_EXPIRY_DAYS: '30' });
+    const ctx = setup({ LOYALTY_POINT_MAX_AGE_DAYS: '30' });
     await ctx.publish('EFN', {}, 80);
     await ctx.earn(ORDER_D, 100_000, 'GL', OTHER); // +10, hangus 5 Nov 00:00 WIB
     const nov05 = await ctx.accrualAfterClose('GL', '2026-11-05');

@@ -57,6 +57,22 @@ G19 (§11.2, §11.3): kolom kode promo di ringkasan keranjang (maks 3; dikirim h
 
 Catatan: `next.config.mjs` menimpa `Cache-Control` Route Handler, jadi aturan `no-store` default mengecualikan `/api/catalog/**` (diverifikasi di runtime standalone, laporan G17). Kill switch BFF (`ONLINE_ENABLED=false`) -> 503 `online_unavailable` -> pesan ramah.
 
+## Restoran: pesan dari meja, modifier F&B, poin di checkout, info poin hangus (G22)
+
+Kontrak: `docs/04_SERVICE_CONTRACTS.md` §14.A.3 (`/v1/fnb`), §14.B (atribut F&B online), §14.C.2 (poin di checkout), §14.D.6 (info hangus), §14.7 (L-70..L-74). ADR: ADR-032 (QR order), ADR-020.
+Risiko dimitigasi: kebocoran token sesi meja (R-S03/SEC-73: token hanya di fragment → memori → header, tidak di URL/storage/log/analytics), pesanan ganda saat jaringan putus (Idempotency-Key per percobaan), PII di catatan (validasi ≤ 140, tanpa nomor HP/email), manipulasi harga (klien hanya mengirim id, qty, atribut, catatan, jumlah poin).
+
+| Path | Isi |
+|---|---|
+| `app/meja` (`components/fnb/TableOrder.tsx`, `MenuItem`, `AttributePicker`, `PointsClaim`) | QR `/meja#t=<token>`: token → memori (`lib/table-token.ts`), fragment dihapus (`history.replaceState`); menu per kategori, modifier, catatan, keranjang meja, kirim, daftar kiriman (banyak per sesi) dengan polling, klaim poin opsional (login tertanam). Tamu tanpa login boleh memesan |
+| `app/api/fnb/**` | Proxy ke BFF `/v1/fnb/*`: header `X-Table-Session` wajib (bentuk diperiksa), Bearer opsional dari cookie, `Idempotency-Key` dari klien, body di-allowlist, error → pesan Indonesia, `no-store` |
+| `lib/fnb.ts`, `lib/attributes.ts`, `lib/points.ts` | Modul murni: tipe/parser, keranjang meja, catatan, idempotensi, atribut (modifier), alokasi poin, info hangus |
+| `lib/fnb-route.ts`, `lib/fnb-client.ts`, `lib/table-token.ts` | Guard/peta error server; helper browser (header token dari memori, `Idempotency-Key` di `sessionStorage`); penyimpan token di memori |
+
+Modifier online: keranjang bergaris `{ product_id, qty, attribute_value_ids? }` (identitas = produk + id terurut); `AttributePicker` dipakai di detail produk kanal F&B; harga katalog F&B ditampilkan **sebelum pajak** + label pajak (B-5), rincian di keranjang. Poin: `CartView` menampilkan saldo & nilai, isian poin per PT (min/maks dari `quote.points`), porsi tunai ≥ Rp1; `POST /api/orders` meneruskan `points_redeem`. `app/akun`: poin ditahan + "Poin akan hangus" (hanya bila BFF mengisi `points_expiry.expires_on`).
+
+Catatan penting: token meja **tidak** disimpan di storage (keputusan lead G22, meralat §14.A.2) → memuat ulang halaman berarti pindai ulang QR. Teks "poin akan hangus" adalah DRAF sampai Legal menyetujui syarat program (L-73).
+
 ## Skrip
 
 `npm test` (Vitest: `tests/*.test.ts`), `npm run lint` (ESLint 9 flat, `eslint.config.mjs`), `npm run typecheck`.
@@ -65,6 +81,7 @@ Catatan: `next.config.mjs` menimpa `Cache-Control` Route Handler, jadi aturan `n
 
 Teks pelanggan berikut adalah **DRAF**. Tidak boleh dianggap final sebelum disetujui Legal/DPO; ubah hanya di satu tempat:
 - Konfirmasi usia: `AGE_CHECKBOX_LABEL`, `AGE_REQUIRED_MESSAGE` (`lib/auth-age.ts`) dan teks bantuan di `app/masuk/LoginForm.tsx`.
+- Poin akan hangus: `expiryNotice()` (`lib/points.ts`) dan blok "Poin akan hangus" di `app/akun/page.tsx` (G22, menunggu syarat program + Legal, L-73).
 - Hapus akun dengan pesanan online terbuka: `openOrdersExplanation()` (`lib/dsar.ts`), panel "Masih ada pesanan online yang belum selesai" dan catatan batas penghapusan di `app/akun/data-saya/DataSaya.tsx`, label "Paling lambat dihapus" di `app/akun/penghapusan/[id]/DeletionStatus.tsx`.
 
 ## Belum

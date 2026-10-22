@@ -10,6 +10,8 @@
                     <group>
                         <field name="efn_online_channel_ids" widget="many2many_tags"/>
                         <field name="efn_online_sequence"/>
+                        <!-- G22 B-3: toggle menu habis online. -->
+                        <field name="efn_online_sold_out" widget="boolean_toggle"/>
                         <field name="efn_online_description" placeholder="Teks polos, maks. 2.000 karakter"/>
                     </group>
                 </page>

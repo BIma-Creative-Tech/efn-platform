@@ -191,7 +191,8 @@ class TestEfnOnlinePosCounter(TestPoSCommon):
     def test_lookup_returns_label_and_amount_only(self):
         online, _payload, _result = self._place()
         result = self._lookup("hjkm-2345")
-        self.assertEqual(result, {"order_label": online.name, "amount_payable": int(online.amount_payable)})
+        # G22 W-12 (docs/04 §14.C.4): porsi tunai `amount_due` (= amount_payable tanpa Poin EFN).
+        self.assertEqual(result, {"order_label": online.name, "amount_due": int(online.amount_payable)})
         log = self.env["efn.online.counter.lookup"].sudo().search([("online_order_id", "=", online.id)])
         self.assertEqual((log.result, log.user_id, log.session_id), ("ok", self.cashier, self.pos_session))
 
@@ -265,7 +266,7 @@ class TestEfnOnlinePosCounter(TestPoSCommon):
         # Event paid membawa metode saja (tanpa identitas kasir).
         paid_event = online.event_ids.filtered(lambda e: e.event == "paid")
         payload = paid_event._efn_payload()
-        self.assertEqual(payload["payment"], {"method": "counter"})
+        self.assertEqual(payload["payment"], {"method": "counter", "points_value": 0})  # G22 §14.C.4
         self.assertNotIn(self.cashier.login, str(payload))
         self.assertEqual(online.event_ids.sorted("seq").mapped("event"), ["placed", "paid", "confirmed"])
         # Kode bayar tidak bisa dipakai lagi.

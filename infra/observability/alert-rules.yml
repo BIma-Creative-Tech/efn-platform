@@ -186,6 +186,25 @@ groups:
           description: "Job LoyaltyReconService tidak sukses > 2 jam; kontrol detektif fraud poin tidak berjalan."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-anomaly.md#efnloyaltyreconmissing
 
+  # ─────────────────────────── Poin hangus (G22, docs/04 §14.D.4/§14.D.9, data-AI) ───────────────────────────
+  # Alert run (aborted/error/dead-man) berbasis log di loki-rules/efn-loyalty.yml grup efn-loyalty-expiry (devsecops);
+  # di sini hanya kegagalan notifikasi WA T-30 (§14.D.4: hangus TETAP berjalan walau pesan gagal -> member bisa
+  # kehilangan poin tanpa pemberitahuan; risiko keluhan/Legal). Counter BFF baru muncul setelah kegagalan pertama:
+  # increase() melewatkan inkremen pertama seri baru -> BFF diminta menginisialisasi seri dengan 0 (laporan data-AI G22).
+  # Dashboard: grafana efn-loyalty-expiry.json.
+  - name: efn-loyalty-expiry
+    rules:
+      - alert: EfnLoyaltyExpiryNoticeFailed
+        expr: sum(increase(efn_loyalty_expiry_notice_failed_total{job="api-gateway"}[26h])) > 0
+        labels:
+          severity: warning
+          team: finance
+          metric_status: proposed
+        annotations:
+          summary: "Poin hangus: {{ $value | humanize }} notifikasi WA T-30 gagal dalam 26 jam"
+          description: "Pesan pengingat hangus (template efn_loyalty_inactivity_notice) gagal permanen (DLQ notify.push). Member tetap akan kehilangan poin pada due_at; tinjau DLQ/template Meta dan informasikan CRM/Legal."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-inactivity-expiry.md#efnloyaltyexpirynoticefailed
+
   # ─────────────────────────── Penjualan online (G17, docs/04 §10.11) ───────────────────────────
   # Metrik BFF (services/api-gateway/src/odoo-rpc/online-metrics.ts), scrape job api-gateway (mTLS :9464). Selama
   # ONLINE_ENABLED=false seri tidak bertambah -> alert diam. Dead-man rekonsiliasi berbasis log:

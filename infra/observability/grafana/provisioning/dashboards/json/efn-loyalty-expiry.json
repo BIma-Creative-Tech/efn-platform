@@ -1,0 +1,91 @@
+{
+  "uid": "efn-loyalty-expiry",
+  "title": "EFN - Poin Hangus (tidak aktif 12 bulan)",
+  "description": "G22 (docs/04 §14.D.9, W-17): job BFF LoyaltyInactivityJob. Metrik Prometheus efn_loyalty_expiry_total{phase,outcome} (asumsi: satu inkremen per member per fase) dan efn_loyalty_expired_points_total{issuer}; heartbeat log EFN_LOYALTY_EXPIRY_RUN (Loki stream efn_loyalty, loyalty_event=expiry_run; hanya hitungan, tanpa member). Alert (milik devsecops): loki-rules/efn-loyalty.yml grup efn-loyalty-expiry (aborted = critical, error = warning, dead-man 26 jam); kegagalan notifikasi WA: alert-rules.yml grup efn-loyalty-expiry. Production: job OFF sampai Legal/Meta menyetujui (L-73) -> panel kosong itu wajar.",
+  "tags": ["efn", "loyalty", "finance"],
+  "timezone": "Asia/Jakarta",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "graphTooltip": 1,
+  "refresh": "15m",
+  "time": { "from": "now-30d", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Run dibatalkan (kandidat > batas, 26 jam)",
+      "description": "Jumlah baris EFN_LOYALTY_EXPIRY_RUN status aborted (LOYALTY_EXPIRY_MAX_PER_RUN terlampaui; tidak ada poin dihanguskan). > 0 = alert critical EfnLoyaltyExpiryAborted.",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 5 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "refId": "A", "queryType": "instant", "expr": "sum(count_over_time({stream=\"efn_loyalty\", loyalty_event=\"expiry_run\", expiry_status=\"aborted\"} [26h])) or vector(0)" }],
+      "fieldConfig": { "defaults": { "unit": "none", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+    {
+      "id": 2, "type": "stat", "title": "Run gagal (26 jam)",
+      "description": "Baris status error per fase (alert warning EfnLoyaltyExpiryFailed).",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 5 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "refId": "A", "queryType": "instant", "expr": "sum(count_over_time({stream=\"efn_loyalty\", loyalty_event=\"expiry_run\", expiry_status=\"error\"} [26h])) or vector(0)" }],
+      "fieldConfig": { "defaults": { "unit": "none", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+    {
+      "id": 3, "type": "stat", "title": "Kandidat expire run terakhir",
+      "description": "Nilai \"candidates\" baris EFN_LOYALTY_EXPIRY_RUN fase expire terakhir (26 jam), termasuk dry run. Bandingkan dengan LOYALTY_EXPIRY_MAX_PER_RUN (default 20 000).",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 5 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "refId": "A", "queryType": "instant", "expr": "max(last_over_time({stream=\"efn_loyalty\", loyalty_event=\"expiry_run\", expiry_phase=\"expire\"} | regexp `\"candidates\":(?P<candidates>\\d+)` | unwrap candidates | __error__=\"\" [26h]))" }],
+      "fieldConfig": { "defaults": { "unit": "none", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 20001 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+    },
+    {
+      "id": 4, "type": "stat", "title": "Notifikasi WA T-30 gagal (24 jam)",
+      "description": "increase(efn_loyalty_expiry_notice_failed_total) 24 jam. Hangus tetap berjalan walau notifikasi gagal (§14.D.4) -> tindak lanjut CRM/Legal.",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "instant": true, "expr": "sum(increase(efn_loyalty_expiry_notice_failed_total{job=\"api-gateway\"}[24h])) or vector(0)" }],
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Poin hangus per hari per PT penerbit",
+      "description": "increase(efn_loyalty_expired_points_total{issuer}) per 1 hari. Dasar jurnal breakage di PT penerbit (L-67) tetap ledger BFF / akrual Odoo, bukan panel ini.",
+      "gridPos": { "x": 0, "y": 5, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "interval": "1d",
+      "targets": [{ "refId": "A", "legendFormat": "{{issuer}}", "expr": "sum by (issuer) (increase(efn_loyalty_expired_points_total{job=\"api-gateway\"}[1d]))" }],
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 60, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum", "max"] } }
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Member per hari per fase (notice / expire / anonymize)",
+      "description": "increase(efn_loyalty_expiry_total{outcome=\"ok\"}) per fase per 1 hari (asumsi: satu inkremen per member). Anonymize hanya bila LOYALTY_INACTIVE_ANONYMIZE aktif (OFF di production, L-73).",
+      "gridPos": { "x": 12, "y": 5, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "interval": "1d",
+      "targets": [{ "refId": "A", "legendFormat": "{{phase}}", "expr": "sum by (phase) (increase(efn_loyalty_expiry_total{job=\"api-gateway\", outcome=\"ok\"}[1d]))" }],
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 60 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum", "max"] } }
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Hasil run per fase & outcome (per hari)",
+      "description": "Semua outcome efn_loyalty_expiry_total (ok, dry_run, aborted, error, ...) per fase.",
+      "gridPos": { "x": 0, "y": 13, "w": 24, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "interval": "1d",
+      "targets": [{ "refId": "A", "legendFormat": "{{phase}} {{outcome}}", "expr": "sum by (phase, outcome) (increase(efn_loyalty_expiry_total{job=\"api-gateway\"}[1d]))" }],
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 40 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] } }
+    },
+    {
+      "id": 8, "type": "logs", "title": "Heartbeat EFN_LOYALTY_EXPIRY_RUN",
+      "description": "Satu baris per fase per run (hitungan per fase/penerbit; tanpa member, nomor, atau hash - dibatasi regex promtail).",
+      "gridPos": { "x": 0, "y": 20, "w": 24, "h": 10 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "refId": "A", "expr": "{stream=\"efn_loyalty\", loyalty_event=\"expiry_run\"}" }],
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true }
+    }
+  ]
+}

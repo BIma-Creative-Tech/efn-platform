@@ -530,6 +530,7 @@ class PosOrder(models.Model):
         actual_restore = int(round(-self._efn_points_paid()))
         original_has_points = self._efn_currency_compare(original._efn_points_paid(), 0.0) > 0
         if not original._efn_loyalty_original_involved() and not original_has_points:
+            self._efn_loyalty_qr_refund(original, goods)
             return
         # Dasar clawback memakai faktor uang order ASAL.
         refunded_eligible = self._efn_loyalty_eligible_amount(
@@ -568,6 +569,82 @@ class PosOrder(models.Model):
         record = Outbox._efn_enqueue(vals)
         if record.state == "hold":
             record._efn_schedule_activity(hold_reason or record.last_error)
+
+    # ------------------------------------------------------------- refund QR (G22 L-80, r15 K3)
+    def _efn_loyalty_qr_refund(self, original, goods):
+        """K3 r15 (SEC-164): refund atas order yang mungkin di-earn lewat klaim QR (``efn_pos_bff_order``, dibaca
+        tanpa depends lewat ``pos.order._efn_qr_refund_mode``):
+
+        - ``reverse``: event close yang melaporkan order asal sudah diterima BFF (2xx) -> reverse ``earn_channel:"qr"``;
+        - ``deferred``: sesi meja order asal masih open/expired, atau event close masih pending di outbox -> TIDAK ada
+          reverse; refund dikurangkan dari ``eligible_amount`` yang dihitung ulang saat outbox mengirim (baris sesi
+          dikunci, tanpa jendela);
+        - ``netted``: refund sudah dinetokan di event close -> tidak ada reverse (hindari potong dobel);
+        - ``awaiting`` (L-83): snapshot close sudah beku tetapi belum 2xx -> refund ditandai; outbox QR memanggil
+          metode ini lagi saat 2xx (mode lalu ``reverse``).
+        Log hanya uuid order (tanpa PII)."""
+        self.ensure_one()
+        mode = original._efn_qr_refund_mode(self) if hasattr(original, "_efn_qr_refund_mode") else None
+        if mode == "reverse":
+            self._efn_loyalty_enqueue_qr_reverse(original, goods)
+        elif mode in ("deferred", "netted", "awaiting"):
+            _logger.info(
+                "EFN loyalty: refund %s atas order QR %s -> %s (tanpa reverse)", self.uuid, original.uuid, mode
+            )
+        return mode
+
+    def _efn_loyalty_qr_refund_ratio(self, original, goods):
+        """Rasio reverse QR terhadap dasar NETO yang dilaporkan di event close (``efn_qr_eligible_amount``), karena
+        BFF meng-earn atas neto itu dan clawback = ceil(earn × Σ rasio). Refund yang sudah dinetokan tidak ikut;
+        rasio reverse QR sebelumnya untuk order asal mengurangi sisa (kumulatif ≤ 1). Tanpa dasar neto (data lama) ->
+        rumus refund POS (``_efn_loyalty_refund_ratio``)."""
+        self.ensure_one()
+        base = original.efn_qr_eligible_amount if "efn_qr_eligible_amount" in original._fields else 0
+        if not base or base <= 0:
+            return original._efn_loyalty_refund_ratio(
+                self._efn_loyalty_eligible_raw(goods), self._efn_goods_incl_raw(goods), exclude_refund=self
+            )
+        refunded = -self._efn_loyalty_eligible_raw(goods) * original._efn_loyalty_money_factor()
+        previous = sum(
+            self.env["efn.pos.loyalty.outbox"]
+            .sudo()
+            .search(
+                [
+                    ("original_order_id", "=", original.id),
+                    ("kind", "=", "reverse"),
+                    ("state", "!=", "skipped"),
+                    ("order_id", "!=", self.id),
+                ]
+            )
+            .mapped("refund_ratio")
+        )
+        ratio = max(0.0, min(refunded / base, 1.0 - previous, 1.0))
+        return round(ratio, 6)
+
+    def _efn_loyalty_enqueue_qr_reverse(self, original, goods):
+        """Reverse ``earn_channel: "qr"`` tanpa member_ref (docs/04 §14.A.4, L-80). Dasar = rumus refund POS (faktor
+        uang order asal, kategori dikecualikan); rasio terhadap dasar neto close (``_efn_loyalty_qr_refund_ratio``);
+        tanpa restore poin (order QR tidak dibayar poin di jalur ini — order asal berpoin sudah ``involved`` dan
+        memakai jalur POS)."""
+        self.ensure_one()
+        refunded_eligible = self._efn_loyalty_eligible_amount(
+            factor=original._efn_loyalty_money_factor(), lines=goods, refund=True
+        )
+        ratio = self._efn_loyalty_qr_refund_ratio(original, goods)
+        vals = {
+            "company_id": self.company_id.id,
+            "order_id": self.id,
+            "original_order_id": original.id,
+            "kind": "reverse",
+            "earn_channel": "qr",
+            "idempotency_key": f"pos_reverse:{self.uuid}",
+            "eligible_amount": refunded_eligible,
+            "refund_ratio": ratio,
+            "points_restored_value": 0,
+        }
+        if ratio <= 0:
+            vals.update({"state": "skipped", "last_error": "zero_ratio"})
+        return self.env["efn.pos.loyalty.outbox"]._efn_enqueue(vals)
 
     # ------------------------------------------------------------------ hooks
     def _process_saved_order(self, draft):

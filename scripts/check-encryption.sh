@@ -19,6 +19,10 @@
 #   - (G21) loyalty_policy_signing_key di luar odoo + api-gateway atau tidak di-mount ke keduanya; render prod tanpa
 #     overlay PII me-mount odoo_pii_*; render prod-pii (docker-compose.pii.yml) tanpa ketiga kunci / tanpa
 #     EFN_ODOO_PII_REQUIRED=true
+#   - (G22) fnb_table_token_key di luar api-gateway / odoo_fnb_event_hmac di luar odoo + api-gateway atau tidak di-mount
+#     dengan env *_FILE yang cocok; secret QR di luar pb/bcf; ODOO_API_KEY_QR_<PT>_FILE tanpa secret ter-mount;
+#     LOYALTY_POINT_EXPIRY_DAYS (dihapus D-22-18) di env BFF; kill switch QR/poin online/hangus bukan false di render prod;
+#     LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT bukan true (SEC-171) / job ETL KDS/region/recon online bukan false di render prod
 #   - (at rest) service metabase tanpa secret metabase_encryption_key / dengan MB_ENCRYPTION_SECRET_KEY di env /
 #     dengan override entrypoint apa pun termasuk `[]`/`''` / dengan image resmi metabase/metabase (G16b, SEC-86)
 # Pengecualian hanya lewat ADR-022; tambahkan di sini dengan komentar alasan.
@@ -153,7 +157,7 @@ check_compose() {
       || err "[$label] odoo-rpc-gateway: tidak boleh mem-publish port"
     jq -e '[.services["odoo-tls"].command[]? | select(. == "--allow-cn=odoo-rpc-gateway")] | length == 1' <<< "$json" > /dev/null \
       || err "[$label] odoo-tls: --allow-cn=odoo-rpc-gateway hilang (gateway tidak bisa mTLS ke Odoo)"
-    # BFF tidak boleh diizinkan langsung ke sidecar Odoo (melewati filter 10 path)
+    # BFF tidak boleh diizinkan langsung ke sidecar Odoo (melewati filter 15 path)
     if jq -e '[.services | to_entries[] | select(.key | test("^odoo(-ws)?-tls$")) | .value.command[]?
                | select(. == "--allow-cn=api-gateway")] | length > 0' <<< "$json" > /dev/null; then
       err "[$label] odoo-tls/odoo-ws-tls: --allow-cn=api-gateway dilarang (BFF wajib lewat odoo-rpc-gateway)"
@@ -164,8 +168,13 @@ check_compose() {
   #    (ADR-036 K-36-3 / §0; dev). G20 (docs/04 §12.1): kanal = kode PT -> hanya gl/pb/bcr/bcf; kode lama ditolak.
   local sec allowed
   local -a secs
-  mapfile -t secs < <(jq -r '.secrets // {} | keys[] | select(test("^(odoo_api_key_online_[a-z0-9_]+|odoo_pii_[a-z0-9_]+)$"))' <<< "$json")
+  mapfile -t secs < <(jq -r '.secrets // {} | keys[] | select(test("^(odoo_api_key_online_[a-z0-9_]+|odoo_api_key_qr_[a-z0-9_]+|odoo_pii_[a-z0-9_]+)$"))' <<< "$json")
   for sec in "${secs[@]}"; do
+    if [[ "$sec" == odoo_api_key_qr_* ]]; then
+      # G22 (docs/04 §14.A.5): user teknis QR hanya untuk PT F&B PB/BCF
+      [[ "$sec" =~ ^odoo_api_key_qr_(pb|bcf)$ ]] || err "[$label] secret $sec bukan PT F&B QR (pb/bcf, docs/04 §14.A.5)"
+      continue
+    fi
     [[ "$sec" == odoo_api_key_online_* ]] || continue
     [[ "$sec" =~ ^odoo_api_key_online_(gl|pb|bcr|bcf)$ ]] \
       || err "[$label] secret $sec bukan kanal G20 (gl/pb/bcr/bcf; RTL/FNB & kanal G19 dihapus, docs/04 §12.1)"
@@ -181,10 +190,23 @@ check_compose() {
       | (.key | capture("^ODOO_API_KEY_ONLINE_(?<k>[A-Z0-9_]+)_FILE$") | .k) as $k
       | [$k, (.value // ""), (if ($m | index("odoo_api_key_online_" + ($k | ascii_downcase))) != null then "1" else "0" end)]
       | @tsv' <<< "$json")
-  # Kanal default GL (base) & HMAC event selalu diperiksa eksplisit (nama tetap), sisanya dari render
-  for sec in odoo_api_key_online_gl odoo_online_event_hmac loyalty_policy_signing_key "${secs[@]}"; do
+  # G22 (docs/04 §14.A.9): env BFF ODOO_API_KEY_QR_<PT>_FILE wajib menunjuk secret QR PT itu yang DI-MOUNT ke BFF
+  while IFS=$'\t' read -r key val mounted; do
+    [[ -z "$key" ]] && continue
+    [[ "$val" == "/run/secrets/odoo_api_key_qr_${key,,}" && "$mounted" == 1 ]] \
+      || err "[$label] api-gateway ODOO_API_KEY_QR_${key}_FILE=${val} tidak cocok dengan secret ter-mount odoo_api_key_qr_${key,,}"
+  done < <(jq -r '.services["api-gateway"] // {} | [.secrets[]? | (.source // .)] as $m
+      | (.environment // {}) | to_entries[] | select(.key | test("^ODOO_API_KEY_QR_[A-Z0-9_]+_FILE$"))
+      | (.key | capture("^ODOO_API_KEY_QR_(?<k>[A-Z0-9_]+)_FILE$") | .k) as $k
+      | [$k, (.value // ""), (if ($m | index("odoo_api_key_qr_" + ($k | ascii_downcase))) != null then "1" else "0" end)]
+      | @tsv' <<< "$json")
+  # Kanal default GL (base) & HMAC event selalu diperiksa eksplisit (nama tetap), sisanya dari render.
+  # G22: kunci token sesi meja (BFF saja) & HMAC event QR (Odoo + BFF).
+  for sec in odoo_api_key_online_gl odoo_online_event_hmac loyalty_policy_signing_key fnb_table_token_key \
+             odoo_fnb_event_hmac "${secs[@]}"; do
     allowed='["api-gateway"]'
-    [[ "$sec" == "odoo_online_event_hmac" || "$sec" == "loyalty_policy_signing_key" ]] && allowed='["api-gateway","odoo"]'
+    [[ "$sec" == "odoo_online_event_hmac" || "$sec" == "loyalty_policy_signing_key" || "$sec" == "odoo_fnb_event_hmac" ]] \
+      && allowed='["api-gateway","odoo"]'
     [[ "$sec" == odoo_pii_* ]] && allowed='["odoo"]'
     jq -e --arg s "$sec" --argjson ok "$allowed" '
         [.services | to_entries[] | select([.value.secrets[]? | (.source // .)] | index($s) != null) | .key]
@@ -201,6 +223,23 @@ check_compose() {
             and ((.services[$svc].environment // {})[$e] == "/run/secrets/loyalty_policy_signing_key"))' <<< "$json" > /dev/null \
       || err "[$label] ${lp%%:*}: secret loyalty_policy_signing_key tidak di-mount atau ${lp#*:} != /run/secrets/loyalty_policy_signing_key"
   done
+  # 6a2) G22 (docs/04 §14.A.2/§14.A.4): fnb_table_token_key WAJIB di api-gateway (FNB_TABLE_TOKEN_KEY_FILE);
+  #      odoo_fnb_event_hmac WAJIB di odoo (EFN_FNB_EVENT_HMAC_FILE, penanda tangan) DAN api-gateway
+  #      (ODOO_FNB_EVENT_HMAC_FILE, pemverifikasi). Di luar service itu sudah ditolak loop least privilege di atas.
+  local spec svc e s
+  for spec in api-gateway:FNB_TABLE_TOKEN_KEY_FILE:fnb_table_token_key odoo:EFN_FNB_EVENT_HMAC_FILE:odoo_fnb_event_hmac \
+              api-gateway:ODOO_FNB_EVENT_HMAC_FILE:odoo_fnb_event_hmac; do
+    IFS=: read -r svc e s <<< "$spec"
+    jq -e --arg svc "$svc" --arg e "$e" --arg s "$s" '
+        (.services[$svc] == null)
+        or (([.services[$svc].secrets[]? | (.source // .)] | index($s) != null)
+            and ((.services[$svc].environment // {})[$e] == ("/run/secrets/" + $s)))' <<< "$json" > /dev/null \
+      || err "[$label] ${svc}: secret ${s} tidak di-mount atau ${e} != /run/secrets/${s} (docs/04 §14.A.9)"
+  done
+  # 6a3) G22 D-22-18 (docs/04 §14.D.1): LOYALTY_POINT_EXPIRY_DAYS dihapus - tidak boleh diteruskan ke BFF di render mana pun
+  #      (BFF production gagal start; hangus kini karena tidak aktif, LOYALTY_POINT_MAX_AGE_DAYS untuk umur lot).
+  jq -e '(.services["api-gateway"].environment // {}) | has("LOYALTY_POINT_EXPIRY_DAYS") | not' <<< "$json" > /dev/null \
+    || err "[$label] api-gateway: LOYALTY_POINT_EXPIRY_DAYS dihapus (D-22-18); pakai LOYALTY_POINT_MAX_AGE_DAYS"
   # 6b) G20 E-38a (ADR-036 §0, docs/04 §12.5): render dev wajib me-mount KETIGA kunci PII Odoo ke odoo (key ring v1,
   #     blind index, token nama) dengan env *_FILE yang cocok; tanpa kunci token nama pencarian nama terenkripsi gagal.
   #     G21 AC-13: sama untuk render prod-pii (overlay docker-compose.pii.yml) + EFN_ODOO_PII_REQUIRED=true (mode terkunci).
@@ -232,6 +271,21 @@ check_compose() {
       || err "[$label] api-gateway: ODOO_ONLINE_MOCK dilarang di prod (stub json2 hanya dev/test, L-7)"
     jq -e '(.services.etl.environment.ETL_AUDIT_EPOCH_AUTO // "false") == "false"' <<< "$json" > /dev/null \
       || err "[$label] etl: ETL_AUDIT_EPOCH_AUTO dilarang di prod (epoch otomatis hanya dev; restore = penanda efn_audit.chain_epoch)"
+    # G22: kill switch default MATI di render prod (QR meja §14.A.3, poin online §14.C.1, hangus/anonimisasi L-73)
+    local ks
+    for ks in FNB_QR_ENABLED FNB_QR_POINTS_ENABLED ONLINE_LOYALTY_REDEEM_ENABLED ONLINE_LOYALTY_EARN_ENABLED \
+              LOYALTY_EXPIRY_ENABLED LOYALTY_INACTIVE_ANONYMIZE; do
+      jq -e --arg k "$ks" '(.services["api-gateway"].environment[$k] // "false") == "false"' <<< "$json" > /dev/null \
+        || err "[$label] api-gateway: ${ks} harus default false di render prod (aktivasi lewat config rilis, docs/04 §14)"
+    done
+    # SEC-171 (r15): filter consent notice hangus wajib diteruskan dan default true di render prod
+    jq -e '(.services["api-gateway"].environment.LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT // "") == "true"' <<< "$json" > /dev/null \
+      || err "[$label] api-gateway: LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT harus diteruskan dengan default true di render prod (SEC-171)"
+    # G21/G22 (QA G22 P2-3): job ETL opsional default MATI di render prod (aktivasi lewat config rilis)
+    for ks in ETL_PARTNER_REGION_ENABLED ETL_LOYALTY_RECON_ONLINE_ENABLED ETL_ENABLE_KDS ETL_KDS_ONLINE_ENABLED; do
+      jq -e --arg k "$ks" '(.services.etl.environment[$k] // "") == "false"' <<< "$json" > /dev/null \
+        || err "[$label] etl: ${ks} harus diteruskan dengan default false di render prod (QA G22 P2-3)"
+    done
   fi
 
   echo "check-encryption: compose ${label} diperiksa"

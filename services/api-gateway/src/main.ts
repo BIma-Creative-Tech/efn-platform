@@ -14,6 +14,8 @@ async function bootstrap(): Promise<void> {
   // SEC-29: secret dibaca dari file ke memori config (tidak ke env) lalu gagal cepat bila secret wajib tidak ada (pesan hanya memuat nama secret)
   const config = AppConfig.fromProcessEnv();
   config.assertStartupSecrets();
+  // G22 (D-22-18): env lama yang diabaikan di luar production → peringatan (tanpa nilai)
+  for (const w of config.startupWarnings()) logger.warn(w);
   // docs/04 §7.1: semua kanal TLS terverifikasi; CA/sertifikat tidak terbaca → gagal start (tanpa fallback plaintext)
   const { plaintextChannels } = config.assertTransportSecurity();
   if (plaintextChannels.length > 0) {

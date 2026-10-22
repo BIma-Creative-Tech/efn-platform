@@ -1,4 +1,5 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { ONLINE_POINTS, OnlinePointsPort } from './online-points';
 import { ApiError, Errors } from '../common/errors/api-error';
 import { isUuid } from '../common/validation';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
@@ -9,7 +10,20 @@ import { createHash, randomUUID } from 'node:crypto';
 
 export const ORDER_EVENTS_CONSUMER = 'online.order-events';
 /** L-58: `refund_settled` = kasir sudah me-refund order POS pelunasan (pesanan counter). `refunded` = refund DIMINTA saja. */
-export const KNOWN_EVENTS = ['placed', 'paid', 'confirmed', 'stock_short', 'ready', 'picked_up', 'cancelled', 'refunded', 'review', 'refund_settled'] as const;
+export const KNOWN_EVENTS = [
+  'placed',
+  'paid',
+  'confirmed',
+  'stock_short',
+  'ready',
+  'picked_up',
+  'cancelled',
+  'refunded',
+  'review',
+  'refund_settled',
+  // G22 §14.B B-7(b): tiket dapur pertama in_progress → kitchen_started_at, TANPA transisi status
+  'preparing',
+] as const;
 export const EVENT_BODY_LIMIT = 8 * 1024;
 /** Order yang sudah ditutup tanpa pembayaran BFF (L-57: hanya di sini `cancelled → review` boleh untuk counter). */
 const FINAL_UNPAID: readonly string[] = ['cancelled', 'expired', 'failed'];
@@ -27,7 +41,25 @@ export interface OdooOrderEvent {
   event: string;
   state: string;
   occurred_at: Date | null;
-  refund: { refund_ref: string; amount: number; kind: 'full' | 'lines'; initiator: 'bff' | 'odoo'; initiated_by: string | null } | null;
+  refund: {
+    refund_ref: string;
+    amount: number;
+    kind: 'full' | 'lines';
+    initiator: 'bff' | 'odoo';
+    initiated_by: string | null;
+    /** G22 §14.C.4 (opsional): porsi poin, tunai, eligible earn yang direfund. */
+    points_value?: number;
+    cash_amount?: number;
+    eligible_amount_refunded?: number;
+  } | null;
+  /** G22 §14.C.4: `payment.points_value` pada `paid` counter (null = tidak dikirim). */
+  payment_points_value?: number | null;
+  /** G22 B-7(a): `ready_source` (`kds`|`manual`) — informasi saja. */
+  ready_source?: 'kds' | 'manual' | null;
+  /** G22 B-7(b): `kitchen_started_at` event `preparing`. */
+  kitchen_started_at?: Date | null;
+  /** G22 §14.C.4: `picked_up.loyalty.eligible_amount` (hanya bila kanal loyalty_earn). */
+  loyalty_eligible_amount?: number | null;
   /**
    * G20 §12.2 no. 7: `payment: { method }` pada event `paid` (tanpa identitas kasir). `null` = tidak dikirim (event
    * lain / Odoo pra-G20). Field lain di objek `payment` diabaikan (minimisasi: tidak disimpan).
@@ -84,6 +116,12 @@ export function eventFingerprint(ev: OdooOrderEvent): string {
     const s = ev.settlement;
     fields.push(['settlement', s.refund_ref, s.amount, s.provider_refund_ref, s.settled_at ? s.settled_at.toISOString() : null]);
   }
+  // G22: kunci baru ikut sidik HANYA bila ada (sidik event pra-G22 tidak berubah)
+  if (ev.refund && (ev.refund.points_value !== undefined || ev.refund.cash_amount !== undefined || ev.refund.eligible_amount_refunded !== undefined)) {
+    fields.push(['refund_points', ev.refund.points_value ?? null, ev.refund.cash_amount ?? null, ev.refund.eligible_amount_refunded ?? null]);
+  }
+  if (ev.payment_points_value !== undefined && ev.payment_points_value !== null) fields.push(['payment_points', ev.payment_points_value]);
+  if (ev.loyalty_eligible_amount !== undefined && ev.loyalty_eligible_amount !== null) fields.push(['loyalty', ev.loyalty_eligible_amount]);
   const canonical = JSON.stringify(fields);
   return createHash('sha256').update(canonical, 'utf8').digest('hex');
 }
@@ -143,12 +181,43 @@ export function parseOdooEvent(raw: Buffer | undefined): OdooOrderEvent {
     if (typeof rf.initiator_uid === 'number' && Number.isSafeInteger(rf.initiator_uid) && rf.initiator_uid > 0) by = `odoo-uid:${rf.initiator_uid}`;
     else if (typeof rf.initiator_login === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(rf.initiator_login)) by = `odoo-login:${rf.initiator_login.toLowerCase()}`;
     refund = { refund_ref: rf.refund_ref, amount: rf.amount, kind: rf.kind, initiator: rf.initiator, initiated_by: by };
+    // G22 §14.C.4: rincian poin (opsional; bila ada wajib integer Rupiah ≥ 0, points_value ≤ amount)
+    const idr = (k: string): number | undefined => {
+      const v = rf[k];
+      if (v === undefined || v === null || v === false) return undefined;
+      if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1e12) throw Errors.invalidRequest();
+      return Math.floor(v + 1e-9);
+    };
+    const pv = idr('points_value');
+    const cash = idr('cash_amount');
+    const elig = idr('eligible_amount_refunded');
+    if (pv !== undefined && pv > rf.amount) throw Errors.invalidRequest();
+    if (pv !== undefined) refund.points_value = pv;
+    if (cash !== undefined) refund.cash_amount = cash;
+    if (elig !== undefined) refund.eligible_amount_refunded = elig;
   }
   let paymentMethod: OdooOrderEvent['payment_method'] = null;
+  let paymentPoints: number | null = null;
   if (o.payment !== null && o.payment !== undefined && o.payment !== false) {
     const p = o.payment as Record<string, unknown>;
     if (typeof p !== 'object' || Array.isArray(p) || (p.method !== 'counter' && p.method !== 'qris')) throw Errors.invalidRequest();
     paymentMethod = p.method;
+    if (p.points_value !== undefined && p.points_value !== null && p.points_value !== false) {
+      if (typeof p.points_value !== 'number' || !Number.isSafeInteger(p.points_value) || p.points_value < 0) throw Errors.invalidRequest();
+      paymentPoints = p.points_value;
+    }
+  }
+  // G22 B-7 / §14.C.4
+  const readySource = o.ready_source === 'kds' || o.ready_source === 'manual' ? o.ready_source : null;
+  const ksRaw = o.kitchen_started_at;
+  const kitchenStarted = typeof ksRaw === 'string' && !Number.isNaN(Date.parse(ksRaw)) ? new Date(ksRaw) : null;
+  let loyaltyEligible: number | null = null;
+  if (o.loyalty !== undefined && o.loyalty !== null && o.loyalty !== false) {
+    const l = o.loyalty as Record<string, unknown>;
+    if (typeof l !== 'object' || Array.isArray(l)) throw Errors.invalidRequest();
+    const e = l.eligible_amount;
+    if (typeof e !== 'number' || !Number.isFinite(e) || e < 0 || e > 1e12) throw Errors.invalidRequest();
+    loyaltyEligible = Math.floor(e + 1e-9);
   }
   const rr = o.review_reason;
   const reviewReason: ReviewReason | null =
@@ -168,6 +237,10 @@ export function parseOdooEvent(raw: Buffer | undefined): OdooOrderEvent {
     payment_method: paymentMethod,
     review_reason: reviewReason,
     settlement,
+    payment_points_value: paymentPoints,
+    ready_source: readySource,
+    kitchen_started_at: kitchenStarted,
+    loyalty_eligible_amount: loyaltyEligible,
   };
 }
 
@@ -188,6 +261,8 @@ export class OrderEventsService {
     @Inject(ONLINE_REPO) private readonly repo: OnlineRepo,
     private readonly saga: OnlineSagaService,
     private readonly metrics: OnlineMetrics,
+    /** G22 §14.C: earn/clawback poin online (opsional di test lama). */
+    @Optional() @Inject(ONLINE_POINTS) private readonly points: OnlinePointsPort | null = null,
   ) {}
 
   async handle(ev: OdooOrderEvent): Promise<{ ok: true; status: EventOutcome }> {
@@ -248,6 +323,20 @@ export class OrderEventsService {
           this.metrics.anomaly('payment_method_mismatch', 'critical', { order_id: order.id, part_id: part.id, state: ev.event, code: 'qris_on_counter' });
           throw Errors.conflict('payment_method_mismatch', 'Metode bayar tidak cocok dengan pesanan.');
         }
+        // G22 B-7(b): `preparing` = tiket pertama in_progress → kitchen_started_at, TANPA transisi (peringkat §10.6.2 tetap)
+        if (ev.event === 'preparing') {
+          const at = ev.kitchen_started_at ?? ev.occurred_at ?? null;
+          await r.updatePart(part.id, {
+            last_seq: ev.seq,
+            odoo_state: ev.state.slice(0, 32),
+            ...(part.kitchen_started_at ? {} : { kitchen_started_at: at && at.getTime() <= Date.now() ? at : new Date() }),
+          });
+          return record('applied');
+        }
+        // G22 §14.C.4: nilai Poin EFN pelunasan kasir harus = porsi poin bagian (Odoo sendiri me-review bila beda)
+        if (ev.event === 'paid' && ev.payment_points_value !== undefined && ev.payment_points_value !== null && ev.payment_points_value !== (part.points_value_idr ?? 0)) {
+          this.metrics.anomaly('points_value_mismatch', 'critical', { order_id: order.id, part_id: part.id, expected: part.points_value_idr ?? 0, actual: ev.payment_points_value });
+        }
         // L-58: kasir sudah me-refund order POS pelunasan → settle refund counter yang cocok (ref + order + nominal)
         if (ev.event === 'refund_settled') {
           await r.updatePart(part.id, { last_seq: ev.seq, odoo_state: ev.state.slice(0, 32) });
@@ -283,6 +372,10 @@ export class OrderEventsService {
           // L-14: transisi yang tidak diterapkan (mundur/sama) dicatat `ignored_stale`, bukan `applied` (seq tetap maju)
           const applied = await this.saga.applyPart(r, part, target, { source: 'odoo', odooState: ev.state, seq: ev.seq, cancelReason: 'ops' });
           if (!applied) return record('ignored_stale');
+          // G22 §14.C.3: earn saat diambil (eligible dari Odoo, hanya bila kanal loyalty_earn) — transaksi event yang sama
+          if (ev.event === 'picked_up' && ev.loyalty_eligible_amount !== undefined && ev.loyalty_eligible_amount !== null && this.points) {
+            await this.points.earnOnPickup(r, order, part, ev.loyalty_eligible_amount);
+          }
         } else {
           await r.updatePart(part.id, { last_seq: ev.seq, odoo_state: ev.state });
         }
@@ -308,12 +401,24 @@ export class OrderEventsService {
               status: 'approval_required',
               requested_by: 'system',
               initiated_by: ev.refund.initiated_by,
+              // G22 §14.C.4
+              points_value: ev.refund.points_value ?? 0,
+              cash_amount: ev.refund.cash_amount ?? null,
             });
             if (rf.status === 'approval_required') {
               this.metrics.refund('approval_required');
               this.metrics.anomaly('odoo_refund_needs_approval', 'warning', { refund_id: rf.id, part_id: part.id, actual: ev.refund.amount });
             }
           }
+        }
+        // G22 §14.C.3 / D-22-11: clawback earn saat refund DIMINTA (`refunded`), proporsional eligible yang direfund
+        if (ev.event === 'refunded' && ev.refund && (ev.refund.eligible_amount_refunded ?? 0) > 0 && this.points) {
+          const fresh = await r.getPart(part.id, true);
+          const row = (await r.refundsOfPart(part.id)).find((x) => x.odoo_refund_ref === ev.refund?.refund_ref);
+          const key = row
+            ? `online_reverse:${row.id}`
+            : `online_reverse:${part.id}:${createHash('sha256').update(ev.refund.refund_ref, 'utf8').digest('hex').slice(0, 16)}`;
+          if (fresh) await this.points.clawbackOnRefund(r, fresh, key, ev.refund.eligible_amount_refunded ?? 0);
         }
         await this.saga.refreshOrder(r, part.order_id);
         return record('applied');

@@ -29,6 +29,12 @@ export const KNOWN_SECRET_FILES: Readonly<Record<string, string>> = {
   // G21 docs/04 §13.1 no. 3 (L-61): kunci HMAC publikasi kebijakan poin Odoo → BFF; TIDAK wajib saat start
   // (endpoint `PUT /v1/pos/loyalty/policies/*` menjawab 503 bila belum ada)
   LOYALTY_POLICY_SIGNING_KEY: 'loyalty_policy_signing_key',
+  // G22 docs/04 §14.A.9 (QR meja): kunci HKDF token sesi meja `fts1` (+ kunci lama opsional untuk verifikasi saat rotasi)
+  // dan HMAC event Odoo → BFF `/v1/pos/fnb/events`. Wajib hanya bila FNB_QR_ENABLED=true. `ODOO_API_KEY_QR_<PT>` bernama
+  // dinamis per PT (pola ODOO_API_KEY_ONLINE_<KANAL>) → tidak di daftar ini.
+  FNB_TABLE_TOKEN_KEY: 'fnb_table_token_key',
+  FNB_TABLE_TOKEN_KEY_PREV: 'fnb_table_token_key_prev',
+  ODOO_FNB_EVENT_HMAC: 'odoo_fnb_event_hmac',
   // Kredensial per service (docs/04 §7.3, SEC-02) — bukan lagi kredensial bersama/superuser
   PG_PASSWORD: 'pg_password_bff',
   RABBITMQ_PASSWORD: 'rabbitmq_password_bff',

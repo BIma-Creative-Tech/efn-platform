@@ -9,6 +9,7 @@ import { maskMsisdn } from '../common/pii/pii';
 import { resolvePriceHunterSubject } from '../common/pii/price-hunter-subject';
 import { EARN_SOURCE_PUBLISHERS, LoyaltyEarnMessage, parseLoyaltyEarnMessage } from './dto/loyalty-earn.message';
 import { LoyaltyService } from './loyalty.service';
+import { touchActivity } from './loyalty-activity';
 
 export const LOYALTY_EARN_CONSUMER = 'bff.loyalty-earn';
 
@@ -83,6 +84,8 @@ export class LoyaltyEarnConsumer implements OnApplicationBootstrap {
         },
         q,
       );
+      // G22 §14.D.2: laporan Price Hunter valid = aktivitas member
+      if (applied) await touchActivity(q, msg.member_hash, 'price_hunter_valid', new Date());
       if (applied) this.logger.log(`loyalty earn applied: ${msg.points} poin untuk ${maskMsisdn(subject.memberRef)} (${msg.source})`);
       return applied ? 'applied' : 'duplicate';
     });

@@ -24,5 +24,7 @@ import { PosService } from './pos.service';
     LoyaltyAccrualService,
     LoyaltyPolicySignatureGuard,
   ],
+  // G22: earn QR meja (fnb) memakai jalur ledger POS yang sama
+  exports: [PosLoyaltyService],
 })
 export class PosModule {}

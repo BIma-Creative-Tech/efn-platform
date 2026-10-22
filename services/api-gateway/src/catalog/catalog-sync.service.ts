@@ -46,7 +46,7 @@ export class CatalogSyncService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit(): void {
     const s = this.config.onlineCatalogSyncSeconds;
-    if (s > 0 && (this.config.onlineCatalogEnabled || this.config.onlineEnabled)) {
+    if (s > 0 && (this.config.onlineCatalogEnabled || this.config.onlineEnabled || this.config.fnbQrEnabled)) {
       this.timer = setInterval(() => void this.runOnce(), s * 1000);
       this.timer.unref();
       setTimeout(() => void this.runOnce(), 5_000).unref();
@@ -64,7 +64,8 @@ export class CatalogSyncService implements OnModuleInit, OnModuleDestroy {
     this.running = true;
     const out: SyncResult[] = [];
     try {
-      for (const ch of this.config.onlineChannels) out.push(await this.syncChannel(ch));
+      // G22 §14.A.6: + kanal PT QR meja (salinan katalog untuk nama/gambar menu QR)
+      for (const ch of this.config.catalogSyncChannels) out.push(await this.syncChannel(ch));
       this.catalog.invalidateChannels();
       await this.purge().catch((err: unknown) => this.logger.warn(`Purge katalog gagal: ${err instanceof Error ? err.message : 'db'}`));
     } finally {
@@ -155,6 +156,7 @@ export class CatalogSyncService implements OnModuleInit, OnModuleDestroy {
       prices: item.prices,
       max_qty: item.max_qty,
       weight_kg: item.weight_kg, // G20 §12.3 (nullable)
+      attributes: item.attributes ?? [], // G22 B-2
     };
     const search = `${item.name} ${item.categ?.name ?? ''}`.toLowerCase().slice(0, 512);
     await q.query(

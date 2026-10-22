@@ -15,6 +15,7 @@
 -- Koneksi ETL sudah read-only (`default_transaction_read_only=on`), tetapi hak di bawah ini juga hanya SELECT.
 
 \set ON_ERROR_STOP on
+-- G22: bagian KDS memakai \if/\gset (psql >= 10) agar CREATE INDEX CONCURRENTLY tetap di luar transaksi.
 
 GRANT CONNECT ON DATABASE efn_odoo TO efn_etl;
 GRANT USAGE ON SCHEMA public TO efn_etl;
@@ -243,3 +244,120 @@ BEGIN
     EXECUTE 'GRANT SELECT ON efn_etl.region TO efn_etl';
 END
 $grant_g21$;
+
+-- ===================================================================== Gelombang 22 (efn-data-ai-engineer)
+-- (a) Mart KPI dapur (services/etl/efn_etl/kds.py, docs/04 §14.B, docs/08 §7.3 F-54). Kolom DIPILIH: TIDAK di-grant
+--     table_label, tracking_number, internal_note, session_id (tiket) maupun product_name, attribute_text, note,
+--     combo_parent_name, order_line_uuid (baris); stasiun TANPA access_token, device_user_ids, last_seen,
+--     token_rotated_at, fallback_printer_id. Bersyarat (psql \if): dilewati bila efn_pos_kds belum terpasang ->
+--     jalankan ulang skrip setelah `-i efn_pos_kds`. ETL membaca hanya bila ETL_ENABLE_KDS=true.
+SELECT to_regclass('public.efn_kds_ticket') IS NOT NULL
+   AND to_regclass('public.efn_kds_ticket_line') IS NOT NULL
+   AND to_regclass('public.efn_kds_station') IS NOT NULL AS efn_g22_kds \gset
+\if :efn_g22_kds
+GRANT SELECT (id, company_id, station_id, order_id, config_id, preset_name, course_index, sequence_no, state, is_rush,
+              printed_offline, sent_at, started_at, ready_at, served_at, cancelled_at, write_date)
+    ON public.efn_kds_ticket TO efn_etl;
+GRANT SELECT (id, ticket_id, qty_delta) ON public.efn_kds_ticket_line TO efn_etl;
+GRANT SELECT (id, name, company_id, mode, warn_minutes, late_minutes, active, write_date)
+    ON public.efn_kds_station TO efn_etl;
+-- Index cursor (R-O03): efn_kds_ticket.write_date tidak ber-index bawaan (bump/recall menulis ulang tiket).
+CREATE INDEX CONCURRENTLY IF NOT EXISTS efn_etl_efn_kds_ticket_write_date_id_idx
+    ON public.efn_kds_ticket (write_date, id);
+\else
+\echo 'efn_pos_kds belum terpasang: grant G22 KDS dilewati'
+\endif
+
+-- (a2) Kanal online tiket KDS (E-29a efn_online_kds_bridge: efn_kds_ticket.efn_online_order_id). Bersyarat: kolom
+--      baru ada setelah modul jembatan terpasang (ETL_KDS_ONLINE_ENABLED=true hanya setelah itu).
+DO $grant_g22_kds_online$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'efn_kds_ticket' AND column_name = 'efn_online_order_id'
+    ) THEN
+        EXECUTE 'GRANT SELECT (efn_online_order_id) ON public.efn_kds_ticket TO efn_etl';
+    ELSE
+        RAISE NOTICE 'efn_kds_ticket.efn_online_order_id belum ada (E-29a belum terpasang): grant G22 dilewati';
+    END IF;
+END
+$grant_g22_kds_online$;
+
+-- (b) Rekonsiliasi poin online (services/etl/efn_etl/loyalty_recon_online.py, docs/04 §14.C.5). Dua view milik efn_odoo
+--     di skema efn_etl (pola G21; dijalankan dengan hak pemilik, JANGAN security_invoker) sehingga efn_etl TIDAK diberi
+--     akses ke account_payment (memo/partner/rekening), efn_online_order (hash kode ambil/bayar, payment_ref) maupun
+--     efn_online_refund (provider_refund_ref). Kolom sumber yang dibaca view:
+--       account_payment              : id, company_id, journal_id, payment_type, amount, date, state
+--       account_move__account_payment: payment_id, invoice_id (M2M `invoice_ids` account.payment Odoo 18+)
+--       efn_online_order             : id, platform_order_ref (part_id BFF, UUID opak), company_id, state, invoice_id
+--       efn_online_refund            : order_id, credit_note_id, state
+--       jurnal Poin EFN              : account_journal.efn_is_loyalty_points bila E-28 menambahkannya; jika tidak,
+--                                      journal_id metode POS `pos_payment_method.efn_is_loyalty_points` (jurnal PEFN per PT)
+--     Status pembayaran dihitung: in_process | paid (Odoo 18+: draft/canceled/rejected tidak). Tanggal = account_payment.date.
+--     Bersyarat: dilewati (NOTICE) sampai efn_online_order + penanda jurnal Poin EFN ada.
+DO $grant_g22_online$
+DECLARE
+    journals text;
+BEGIN
+    IF to_regclass('public.efn_online_order') IS NULL OR to_regclass('public.efn_online_refund') IS NULL
+       OR to_regclass('public.account_move__account_payment') IS NULL THEN
+        RAISE NOTICE 'efn_online_order / account_move__account_payment belum ada: view G22 poin online dilewati';
+        RETURN;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'account_journal' AND column_name = 'efn_is_loyalty_points'
+    ) THEN
+        journals := 'SELECT j.id FROM public.account_journal j WHERE j.efn_is_loyalty_points';
+    ELSIF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pos_payment_method' AND column_name = 'efn_is_loyalty_points'
+    ) THEN
+        journals := 'SELECT m.journal_id FROM public.pos_payment_method m '
+                    'WHERE m.efn_is_loyalty_points AND m.journal_id IS NOT NULL';
+    ELSE
+        RAISE NOTICE 'penanda jurnal Poin EFN belum ada (E-30/E-28): view G22 poin online dilewati';
+        RETURN;
+    END IF;
+
+    EXECUTE 'CREATE SCHEMA IF NOT EXISTS efn_etl';
+    EXECUTE 'REVOKE ALL ON SCHEMA efn_etl FROM PUBLIC';
+    EXECUTE 'GRANT USAGE ON SCHEMA efn_etl TO efn_etl';
+
+    -- Faktur: pembayaran masuk (+, redeem). Nota kredit refund: pembayaran keluar (−, restore).
+    EXECUTE format(
+        $v$
+        CREATE OR REPLACE VIEW efn_etl.online_points_payment AS
+        SELECT p.id AS payment_id, o.id AS online_order_id, o.platform_order_ref::text AS part_ref, p.company_id,
+               p.date AS paid_on,
+               CASE WHEN p.payment_type = 'outbound' THEN -p.amount ELSE p.amount END AS amount
+        FROM public.account_payment p
+        JOIN public.account_move__account_payment rel ON rel.payment_id = p.id
+        JOIN public.efn_online_order o ON o.invoice_id = rel.invoice_id
+        WHERE p.state IN ('in_process', 'paid') AND p.journal_id IN (%1$s)
+        UNION ALL
+        SELECT p.id, o.id, o.platform_order_ref::text, p.company_id, p.date,
+               CASE WHEN p.payment_type = 'outbound' THEN -p.amount ELSE p.amount END
+        FROM public.account_payment p
+        JOIN public.account_move__account_payment rel ON rel.payment_id = p.id
+        JOIN public.efn_online_refund r ON r.credit_note_id = rel.invoice_id
+        JOIN public.efn_online_order o ON o.id = r.order_id
+        WHERE p.state IN ('in_process', 'paid') AND p.journal_id IN (%1$s)
+        $v$,
+        journals
+    );
+    EXECUTE 'REVOKE ALL ON efn_etl.online_points_payment FROM PUBLIC';
+    EXECUTE 'GRANT SELECT ON efn_etl.online_points_payment TO efn_etl';
+
+    -- Status bagian + jumlah refund yang tidak gagal (cek earn saat picked_up / clawback).
+    EXECUTE $v$
+        CREATE OR REPLACE VIEW efn_etl.online_order_ref AS
+        SELECT o.id AS online_order_id, o.platform_order_ref::text AS part_ref, o.company_id, o.state::text AS state,
+               (SELECT count(*) FROM public.efn_online_refund r WHERE r.order_id = o.id AND r.state <> 'failed')
+                   AS refunds
+        FROM public.efn_online_order o
+    $v$;
+    EXECUTE 'REVOKE ALL ON efn_etl.online_order_ref FROM PUBLIC';
+    EXECUTE 'GRANT SELECT ON efn_etl.online_order_ref TO efn_etl';
+END
+$grant_g22_online$;

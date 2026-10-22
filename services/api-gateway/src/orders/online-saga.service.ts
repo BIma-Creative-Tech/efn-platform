@@ -1,8 +1,9 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { ONLINE_POINTS, OnlinePointsPort } from './online-points';
 import { randomUUID } from 'node:crypto';
 import { PermanentMessageError } from '../common/amqp/amqp.service';
 import { QUEUES } from '../common/amqp/queues';
-import { ODOO_ONLINE, OdooOnlineApi, OdooRpcError } from '../odoo-rpc/odoo-online.types';
+import { CancelRefund, ODOO_ONLINE, OdooOnlineApi, OdooRpcError } from '../odoo-rpc/odoo-online.types';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
 import { PaymentOperationUnsupportedError } from '../payments/payment-gateway';
 import { ONLINE_PAYMENTS, OnlineIntentTransition, OnlinePaymentsPort } from '../payments/online-payments';
@@ -28,9 +29,12 @@ import {
   canTransitionPart,
   compensateMessage,
   deriveOrderStatus,
+  orderCash,
   orderHasPayment,
   orderPaidMessage,
+  partCash,
   partStatusFromOdoo,
+  refundCash,
   refundRequestedMessage,
 } from './online.model';
 import { ONLINE_REPO, OnlineRepo } from './online.repository';
@@ -75,7 +79,20 @@ export class OnlineSagaService {
     @Inject(ODOO_ONLINE) private readonly odoo: OdooOnlineApi,
     @Inject(ONLINE_PAYMENTS) private readonly payments: OnlinePaymentsPort,
     private readonly metrics: OnlineMetrics,
+    /** G22 §14.C: poin online (opsional; test lama tanpa port → tidak ada efek poin). */
+    @Optional() @Inject(ONLINE_POINTS) private readonly points: OnlinePointsPort | null = null,
   ) {}
+
+  /** G22 C.3 restore saat refund `settled` (di transaksi penulisan status settled). */
+  private async restorePoints(r: OnlineRepo, refundId: string): Promise<void> {
+    if (!this.points) return;
+    const rf = await r.getRefund(refundId);
+    if (!rf || (rf.points_value ?? 0) <= 0) return;
+    const part = await r.getPart(rf.part_id, true);
+    if (!part) return;
+    const prior = (await r.refundsOfPart(part.id)).filter((x) => x.id !== rf.id && x.status === 'settled');
+    await this.points.restoreOnSettled(r, part, rf, prior);
+  }
 
   // ───────────── primitif bersama ─────────────
   /** Transisi bagian monoton + timestamp + efek samping (notifikasi). Dipanggil di dalam transaksi `r`. */
@@ -169,6 +186,8 @@ export class OnlineSagaService {
       const paidAt = o.paidAt && o.paidAt.getTime() <= nowMs ? o.paidAt : new Date(nowMs);
       if (!(await r.transitionOrder(order.id, ['awaiting_counter_payment'], 'paid', { paid_at: paidAt }))) return false;
       this.metrics.order('paid');
+      // G22 §14.C.3: commit reservasi poin saat pelunasan kasir (transaksi event yang sama)
+      await this.points?.commitOrder(r, order, await r.getParts(order.id));
       await this.applyPart(r, part, target, { source: o.source, odooState: o.odooState, seq: o.seq, cancelReason: 'ops' });
       if (target === 'stock_short') {
         // Uang sudah di kasir: batal + refund lewat jalur refund online (tanpa gateway, §12.2 no. 8)
@@ -213,13 +232,16 @@ export class OnlineSagaService {
     if (rf.status === 'approval_required' || rf.status === 'odoo_done') return 'unapproved';
     if (rf.status !== 'manual_required') return 'not_found';
     if (rf.failure_reason !== COUNTER_REFUND_REASON) return 'unapproved';
-    if (rf.amount !== s.amount) return 'mismatch';
-    if (s.amount <= 0 || part.refunded_amount + s.amount > part.amount_payable) return 'exceeds';
+    // G22: refund POS = porsi tunai; refunded_amount bagian tetap nilai bruto (tunai + poin)
+    if (refundCash(rf) !== s.amount) return 'mismatch';
+    const gross = rf.amount ?? s.amount;
+    if (s.amount <= 0 || part.refunded_amount + gross > part.amount_payable) return 'exceeds';
     const nowMs = this.now();
     const at = s.settled_at && s.settled_at.getTime() <= nowMs ? s.settled_at : new Date(nowMs);
     await r.updateRefund(rf.id, { status: 'settled', provider_refund_ref: s.provider_refund_ref.slice(0, 128), settled_at: at, claim_token: null });
-    await r.updatePart(part.id, { refunded_amount: part.refunded_amount + s.amount });
-    part.refunded_amount += s.amount;
+    await r.updatePart(part.id, { refunded_amount: part.refunded_amount + gross });
+    part.refunded_amount += gross;
+    await this.restorePoints(r, rf.id); // G22 C.3
     this.metrics.refund('settled');
     await this.notify(r, order, part, 'online_order_refunded');
     return 'settled';
@@ -246,7 +268,8 @@ export class OnlineSagaService {
     const portions = await r.portionsOf(info.paymentId);
     if (order.status === 'created' || order.status === 'awaiting_payment') {
       const sum = portions.reduce((a, p) => a + p.amount, 0);
-      if (portions.length === 0 || sum !== order.amount_payable) {
+      // G22: porsi intent = TUNAI (Σ = amount_payable − nilai poin)
+      if (portions.length === 0 || sum !== orderCash(order)) {
         await r.transitionOrder(order.id, [order.status], 'review', { paid_at: new Date(this.now()), payment_intent_id: info.paymentId });
         this.metrics.mismatch('portion');
         this.metrics.order('review');
@@ -255,6 +278,8 @@ export class OnlineSagaService {
       }
       await r.transitionOrder(order.id, [order.status], 'paid', { paid_at: new Date(this.now()), payment_intent_id: info.paymentId });
       this.metrics.order('paid');
+      // G22 §14.C.3: commit poin DI TRANSAKSI webhook paid (pola §10.7)
+      await this.points?.commitOrder(r, order, await r.getParts(order.id));
       for (const part of await r.getParts(order.id)) {
         if (part.status === 'placed') await this.applyPart(r, part, 'paying', { source: 'bff' });
       }
@@ -285,7 +310,7 @@ export class OnlineSagaService {
     const paidAt = (intent.paidAt ?? order.paid_at ?? new Date(this.now())).toISOString();
     for (const part of (await this.repo.getParts(order.id)).filter((p) => p.status === 'paying')) {
       const portion = portions.get(part.id);
-      if (!portion || portion.amount !== part.amount_payable) {
+      if (!portion || portion.amount !== partCash(part)) {
         this.metrics.mismatch('portion');
         this.metrics.anomaly('portion_mismatch', 'critical', { order_id: order.id, part_id: part.id });
         await this.repo.tx(async (r) => this.withPart(r, part.id, (p) => this.applyPart(r, p, 'review', { source: 'bff' })));
@@ -298,6 +323,8 @@ export class OnlineSagaService {
           amount_paid: portion.amount,
           paid_at: paidAt,
           idempotency_key: `online:paid:${part.id}:${msg.payment_id}`,
+          // G22 §14.C.3: Odoo mencatat dua pembayaran faktur (tunai + Poin EFN); hanya bila ada poin
+          ...((part.points_value_idr ?? 0) > 0 ? { points_value: part.points_value_idr } : {}),
         });
       } catch (err) {
         if (err instanceof OdooRpcError && (err.kind === 'business' || err.kind === 'invalid_response' || err.kind === 'not_found')) {
@@ -352,6 +379,11 @@ export class OnlineSagaService {
         return 'done' as const;
       });
     }
+    // G22 C.3: reservasi poin order yang ditutup tanpa bayar dilepas (idempoten; pengaman bila transisi lain terlewat)
+    if (this.points) {
+      const points = this.points;
+      await this.repo.tx(async (r) => points.releaseOrder(r, order.id, await r.getParts(order.id)));
+    }
     for (const part of (await this.repo.getParts(order.id)).filter((p) => p.status === 'placing' || p.status === 'placed')) {
       try {
         await this.odoo.cancel(part.channel_code, part.id, msg.reason, `online:cancel:${part.id}`);
@@ -388,11 +420,11 @@ export class OnlineSagaService {
     const intentId = order.payment_intent_id;
     const portion = counter
       ? orderHasPayment(order)
-        ? { amount: part.amount_payable }
+        ? { amount: partCash(part) }
         : undefined
       : (await this.repo.portionsOf(intentId as string)).find((p) => p.part_id === part.id);
 
-    let odooRefund: { refund_ref: string; amount: number } | null = null;
+    let odooRefund: CancelRefund | null = null;
     if (msg.reason !== 'late_payment' && part.status !== 'cancelled') {
       try {
         const res = await this.odoo.cancel(part.channel_code, part.id, msg.reason, `online:cancel:${part.id}`);
@@ -427,21 +459,28 @@ export class OnlineSagaService {
           // L-60: refund counter (refund POS) selalu lewat persetujuan approver CS sebelum otorisasi Odoo
           status: counter ? 'approval_required' : 'odoo_done',
           requested_by: 'system',
+          // G22 §14.C.4: porsi poin & tunai dari nota kredit Odoo (absen = tanpa poin)
+          points_value: odooRefund.points_value ?? 0,
+          cash_amount: odooRefund.cash_amount ?? null,
         });
       } else if (paid && portion) {
-        const amount = portion.amount - p.refunded_amount;
+        // G22: bayar terlambat → hanya porsi tunai (reservasi poin sudah dilepas); selain itu sisa tunai + sisa poin
+        const late = msg.reason === 'late_payment';
+        const pointsLeft = late ? 0 : Math.max(0, (p.points_value_idr ?? 0) - (p.points_restored_value ?? 0));
+        const amount = late ? portion.amount - p.refunded_amount : p.amount_payable - p.refunded_amount;
         if (amount > 0) {
           refund = await r.insertRefund({
             id: randomUUID(),
             part_id: p.id,
             payment_intent_id: intentId,
-            kind: msg.reason === 'late_payment' ? 'late_payment' : 'full',
+            kind: late ? 'late_payment' : 'full',
             reason: msg.reason,
             lines: null,
             amount,
             odoo_refund_ref: null,
             status: counter ? 'approval_required' : 'requested', // L-60
             requested_by: 'system',
+            ...(pointsLeft > 0 ? { points_value: Math.min(pointsLeft, amount - 1), cash_amount: amount - Math.min(pointsLeft, amount - 1) } : {}),
           });
         }
       } else if (paid) {
@@ -476,10 +515,10 @@ export class OnlineSagaService {
         idempotency_key: `online:counter_refund_auth:${rf.id}`,
         refund_id: rf.id,
         refund_ref: rf.odoo_refund_ref,
-        amount: rf.amount ?? 0,
+        amount: refundCash(rf), // G22: refund POS = porsi tunai saja
       });
       if (!res.authorized) rejected = 'not_authorized';
-      else if (res.amount !== null && res.amount !== rf.amount) rejected = 'amount_mismatch';
+      else if (res.amount !== null && res.amount !== refundCash(rf)) rejected = 'amount_mismatch';
     } catch (err) {
       if (err instanceof OdooRpcError && (err.kind === 'business' || err.kind === 'invalid_response' || err.kind === 'not_found')) {
         rejected = err.code ?? err.kind;
@@ -575,9 +614,17 @@ export class OnlineSagaService {
         this.metrics.refund('manual_required');
         return this.authorizeCounterRefund(msg, part);
       }
+      // G22 §14.C.3: ke gateway HANYA porsi tunai; refund poin-saja (tunai 0) tidak memanggil gateway
+      const cash = refundCash(claim);
+      if (cash <= 0) {
+        if (!(await this.markGatewayDone(msg.refund_id, `points:${msg.refund_id}`, token))) return 'pending';
+        refund = await this.repo.getRefund(msg.refund_id);
+        if (!refund) throw new PermanentMessageError('refund hilang');
+        return this.finishGatewayDone(msg, part, refund);
+      }
       let res;
       try {
-        res = await this.payments.refund(claim.payment_intent_id, { refundId: claim.id, amount: claim.amount ?? 0, reason: claim.reason });
+        res = await this.payments.refund(claim.payment_intent_id, { refundId: claim.id, amount: cash, reason: claim.reason });
       } catch (err) {
         if (err instanceof PaymentOperationUnsupportedError) {
           if (!(await this.casWrite(msg.refund_id, token, { status: 'manual_required' }))) return 'pending';
@@ -606,25 +653,31 @@ export class OnlineSagaService {
       if (!refund) throw new PermanentMessageError('refund hilang');
     }
 
-    if (refund.status === 'gateway_done') {
-      // L-57: Odoo menolak `efn_online_refund_settled` untuk pesanan counter (`invalid_state`) — uang keluar lewat refund
-      // order POS; BFF hanya mencatat settled (tanpa panggilan Odoo).
-      if (refund.odoo_refund_ref && refund.payment_intent_id !== null) {
-        await this.odoo.refundSettled(part.channel_code, refund.odoo_refund_ref, {
-          provider_refund_ref: refund.provider_refund_ref ?? `gw:${refund.id}`,
-          settled_at: new Date(this.now()).toISOString(),
-          ok: true,
-          idempotency_key: `online:refund_settled:${refund.id}`,
-        });
-      }
-      await this.repo.tx(async (r) => r.updateRefund(msg.refund_id, { status: 'settled', settled_at: new Date(this.now()) }));
-      this.metrics.refund('settled');
-      return this.claimed(CONSUMER.REFUND, msg.idempotency_key);
-    }
+    if (refund.status === 'gateway_done') return this.finishGatewayDone(msg, part, refund);
     if (refund.status === 'failed' || refund.status === 'manual_required' || refund.status === 'settled') {
       return this.claimed(CONSUMER.REFUND, msg.idempotency_key);
     }
     return 'pending';
+  }
+
+  /** `gateway_done` → `efn_online_refund_settled` (bila ada dokumen Odoo) → `settled` + restore poin (G22 D-22-11). */
+  private async finishGatewayDone(msg: RefundRequestedMessage, part: PartRow, refund: RefundRow): Promise<'done'> {
+    // L-57: Odoo menolak `efn_online_refund_settled` untuk pesanan counter (`invalid_state`) — uang keluar lewat refund
+    // order POS; BFF hanya mencatat settled (tanpa panggilan Odoo).
+    if (refund.odoo_refund_ref && refund.payment_intent_id !== null) {
+      await this.odoo.refundSettled(part.channel_code, refund.odoo_refund_ref, {
+        provider_refund_ref: refund.provider_refund_ref ?? `gw:${refund.id}`,
+        settled_at: new Date(this.now()).toISOString(),
+        ok: true,
+        idempotency_key: `online:refund_settled:${refund.id}`,
+      });
+    }
+    await this.repo.tx(async (r) => {
+      await r.updateRefund(msg.refund_id, { status: 'settled', settled_at: new Date(this.now()) });
+      await this.restorePoints(r, msg.refund_id); // G22 C.3: restore saat settled, transaksi yang sama
+    });
+    this.metrics.refund('settled');
+    return this.claimed(CONSUMER.REFUND, msg.idempotency_key);
   }
 
   /**

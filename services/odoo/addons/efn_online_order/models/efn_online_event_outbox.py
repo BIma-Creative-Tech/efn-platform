@@ -35,6 +35,8 @@ from odoo import _, api, fields, models
 
 from odoo.addons.efn_core.models.efn_bff_client import SERVICE_KEY_HEADER, EfnBffError
 
+from .efn_online_channel import iso_utc
+
 _logger = logging.getLogger(__name__)
 
 EVENT_PATH = "/v1/pos/online/order-events"
@@ -43,6 +45,8 @@ EVENTS = [
     ("paid", "paid"),
     ("confirmed", "confirmed"),
     ("stock_short", "stock_short"),
+    # G22 B-7b (docs/04 §14.B): opsional, tiket KDS pertama dikerjakan (tanpa transisi state di BFF).
+    ("preparing", "preparing"),
     ("ready", "ready"),
     ("picked_up", "picked_up"),
     ("cancelled", "cancelled"),
@@ -165,6 +169,8 @@ class EfnOnlineEventOutbox(models.Model):
                 "amount": order._efn_amount_out(refund.amount),
                 "kind": refund.kind,
                 "initiator": refund.initiator,
+                # G22 W-12 (docs/04 §14.C.4): points_value, cash_amount, eligible_amount_refunded (Rupiah bulat).
+                **refund._efn_loyalty_block(),
             }
             if refund.initiator == "odoo" and refund.initiator_user_id:
                 # SEC-95/L-16: identitas pemicu untuk aturan empat mata di BFF. Hanya id + login non-email
@@ -195,8 +201,18 @@ class EfnOnlineEventOutbox(models.Model):
         }
         if self.event == "paid" and order.payment_mode == "counter":
             # G20 E-45 (docs/04 §12.2 no. 7): metode saja, tanpa identitas kasir/sesi/POS. QRIS tidak membawa kunci
-            # ini (payload & sidik event pra-G20 tidak berubah).
-            payload["payment"] = {"method": "counter"}
+            # ini (payload & sidik event pra-G20 tidak berubah). G22 §14.C.4: + nilai Poin EFN (BFF commit redeem).
+            points_value = order._efn_amount_out(order.points_value or 0.0)
+            payload["payment"] = {"method": "counter", "points_value": points_value}
+        if self.event == "ready":
+            # G22 B-7a: siap dari layar dapur (semua tiket KDS) atau tombol staf.
+            payload["ready_source"] = order.ready_source or "manual"
+        if self.event == "preparing":
+            # G22 B-7b: BFF mengisi online_order_part.kitchen_started_at tanpa transisi state.
+            payload["kitchen_started_at"] = iso_utc(order.kitchen_started_at) or payload["occurred_at"]
+        if self.event == "picked_up" and order.channel_id.loyalty_earn:
+            # G22 W-12 (§14.C.3 "Earn"): dasar earn PT bagian; hanya bila kanal mengaktifkan earn (kill switch Odoo).
+            payload["loyalty"] = {"eligible_amount": order.eligible_amount or 0}
         if self.event == "review":
             # L-57 (QA G20): BFF hanya menerima `cancelled -> review` untuk pelunasan kasir terlambat bila event membawa
             # alasannya (`counter_paid_after_cancel|expiry`); BFF mengabaikan kode lain (-> null). Kode saja, tanpa PII.

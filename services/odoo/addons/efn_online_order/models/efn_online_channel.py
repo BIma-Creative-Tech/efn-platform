@@ -26,6 +26,19 @@ G19 (docs/04 §11, docs/08 §10.1-§10.3):
 Putaran perbaikan r12 (docs/04 §11.7 L-40..L-44): kunci kuota promo di place (SEC-130), batas mode confirm
 ``max_order_amount > 0`` + ``max_line_qty`` -> issue ``qty_limit`` (SEC-131), log promo tanpa tag (SEC-132), reward
 produk hadiah tanpa stok dilepas (QA G19 #3).
+
+G22 (docs/04 §14.B W-04 + §14.C W-12; keputusan L-72 D-22-8/D-22-9):
+- B-2: blok ``channel`` katalog bertambah ``business_type`` (``retail``|``fnb``) dan ``loyalty: {earn, redeem}``
+  (flag kanal ``loyalty_earn``/``loyalty_redeem``, default mati); item bertambah ``attributes`` (format A.6, ``[]``
+  untuk produk tanpa atribut ``no_variant``). Produk ``combo`` tidak dikirim (D-22-9; berlaku semua kanal karena SO
+  online tidak membangun baris anak combo).
+- B-3: ``efn_online_sold_out`` (toggle Ops) -> ``efn_online_stock`` ``out`` + issue ``out_of_stock`` di quote; kanal
+  F&B -> ``in_stock`` selain itu, tanpa ``qty``.
+- B-4: baris cart ``{product_id, qty, attribute_value_ids?}``; PTAV harus ``no_variant`` milik template produk, aktif,
+  bukan ``is_custom``, tepat satu nilai per atribut non-``multi`` (``attribute_invalid`` di quote). ``price_extra``
+  dihitung standar ``sale.order.line`` (``product_no_variant_attribute_value_ids`` ->
+  ``_get_product_price_context`` -> ``no_variant_attributes_price_extra``, diverifikasi source 19.0). ``quote_hash``
+  memuat PTAV (hanya bila ada -> hash baris tanpa atribut sama dengan G21).
 """
 
 import base64
@@ -49,10 +62,10 @@ from .efn_online_common import (
     ONLINE_PROGRAM_TYPES,
     OUTLET_CODE_RE,
     canonical_sha256,
+    cart_lines_payload,
     check_int,
     check_str,
     like_escape,
-    lines_payload,
     online_error,
     parse_payment_modes,
     promo_codes_payload,
@@ -201,6 +214,18 @@ class EfnOnlineChannel(models.Model):
         "dibayar + jurnal kliring PT (modul efn_online_pos_counter) dan hanya untuk pesanan satu PT (BFF).",
     )
     invoice_on_paid = fields.Boolean(string="Faktur saat dibayar", default=True)
+    # G22 W-12 (docs/04 §14.C.1 no. 5, B-2): kill switch per kanal (selain env BFF). Default mati.
+    loyalty_earn = fields.Boolean(
+        string="Poin EFN: earn",
+        help="Pesanan online kanal ini menghasilkan Poin EFN saat diambil (event picked_up membawa eligible_amount). "
+        "Juga butuh ONLINE_LOYALTY_EARN_ENABLED di BFF.",
+    )
+    loyalty_redeem = fields.Boolean(
+        string="Poin EFN: tukar",
+        help="Member boleh membayar sebagian pesanan dengan Poin EFN (porsi pembayaran, bukan diskon). Odoo "
+        "memvalidasi batas kebijakan PT yang dipublikasikan; pembayaran dicatat di jurnal metode 'Poin EFN' PT. Juga "
+        "butuh ONLINE_LOYALTY_REDEEM_ENABLED di BFF.",
+    )
     fulfilment_pickup = fields.Boolean(default=True)
     fulfilment_delivery = fields.Boolean(default=False)
     require_outlet_fiscal_position = fields.Boolean(
@@ -415,8 +440,88 @@ class EfnOnlineChannel(models.Model):
                 ("product_tmpl_id.efn_online_channel_ids", "in", self.ids),
                 ("sale_ok", "=", True),
                 ("company_id", "in", [False, self.company_id.id]),
+                # G22 D-22-9: combo ditunda untuk online (SO online tidak membangun baris anak combo).
+                ("type", "!=", "combo"),
             ]
         )
+
+    def _efn_online_is_fnb(self):
+        """Kanal F&B = company kanal ber-jenis usaha ``fnb`` (efn_core, diturunkan dari kode PT)."""
+        self.ensure_one()
+        return self.company_id.efn_business_type == "fnb"
+
+    # ------------------------------------------------------- atribut (G22 B-4)
+    @api.model
+    def _efn_online_attribute_lines(self, template):
+        """Baris atribut ``no_variant`` template yang punya nilai terpilih (urutan baris atribut)."""
+        return template.valid_product_template_attribute_line_ids.filtered(
+            lambda line: line.attribute_id.create_variant == "no_variant"
+        )
+
+    @api.model
+    def _efn_online_selectable_values(self, attribute_line):
+        """PTAV yang boleh dipilih online: aktif dan bukan nilai kustom (teks bebas = risiko PII, docs/08 §13.1 #3)."""
+        return attribute_line.product_template_value_ids.filtered(lambda v: v.ptav_active and not v.is_custom)
+
+    def _efn_online_line_ptavs(self, product, ptav_ids):
+        """PTAV baris cart (B-4) atau ``None`` bila tidak sah: nilai harus milik baris atribut ``no_variant`` template
+        produk, aktif, bukan kustom; atribut non-``multi`` wajib tepat satu nilai (``required`` di katalog); ``multi``
+        boleh nol atau lebih."""
+        self.ensure_one()
+        PTAV = self.env["product.template.attribute.value"]
+        attribute_lines = self._efn_online_attribute_lines(product.product_tmpl_id)
+        allowed = PTAV.browse()
+        for attribute_line in attribute_lines:
+            allowed |= self._efn_online_selectable_values(attribute_line)
+        chosen = PTAV.browse(list(ptav_ids))
+        if set(ptav_ids) - set(allowed.ids):
+            return None
+        for attribute_line in attribute_lines:
+            values = self._efn_online_selectable_values(attribute_line)
+            if not values:
+                continue
+            picked = chosen & values
+            if attribute_line.attribute_id.display_type != "multi" and len(picked) != 1:
+                return None
+        return chosen
+
+    def _efn_online_attributes(self, product):
+        """Blok ``attributes`` katalog (docs/04 §14.A.6): ``[{attribute_id, name, display_type, required, values:
+        [{id (PTAV), name, price_extra_excl}]}]``. ``price_extra_excl`` = ``price_extra`` PTAV setelah pajak produk
+        (tanpa fiscal position; harga final tetap dari quote)."""
+        self.ensure_one()
+        currency = self.currency_id
+        taxes = product.taxes_id._filter_taxes_by_company(self.company_id)
+        result = []
+        for attribute_line in self._efn_online_attribute_lines(product.product_tmpl_id):
+            values = self._efn_online_selectable_values(attribute_line)
+            if not values:
+                continue
+            attribute = attribute_line.attribute_id
+            entries = []
+            for value in values:
+                extra = value.price_extra or 0.0
+                if extra and taxes:
+                    extra = taxes.compute_all(extra, currency=currency, quantity=1.0, product=product)["total_excluded"]
+                entries.append({"id": value.id, "name": value.name, "price_extra_excl": currency.round(extra)})
+            result.append(
+                {
+                    "attribute_id": attribute.id,
+                    "name": attribute.name,
+                    "display_type": attribute.display_type,
+                    "required": attribute.display_type != "multi",
+                    "values": entries,
+                }
+            )
+        return result
+
+    @api.model
+    def _efn_online_attributes_text(self, ptavs):
+        """Teks modifier untuk baris quote: ``Atribut: nilai[, nilai]`` per atribut, dipisah ``; ``."""
+        groups = {}
+        for value in ptavs.sorted(lambda v: (v.attribute_line_id.sequence, v.attribute_line_id.id, v.id)):
+            groups.setdefault(value.attribute_id, []).append(value.name or "")
+        return "; ".join(f"{attribute.name}: {', '.join(names)}" for attribute, names in groups.items())[:500]
 
     def _efn_online_published_products(self, product_ids):
         self.ensure_one()
@@ -544,7 +649,12 @@ class EfnOnlineChannel(models.Model):
         )
         outlets = self.with_context(active_test=False).outlet_ids.filtered(lambda o: o.write_date > since)
         categories = self.env["pos.category"].search_count([("write_date", ">", since)], limit=1)
-        return bool(taxes or outlets or categories)
+        # G22 B-2: perubahan nilai/harga ekstra atribut tidak mengubah write_date template -> katalog penuh.
+        changed = [("write_date", ">", since)]
+        ptav = self.env["product.template.attribute.value"].search_count(changed, limit=1)
+        Lines = self.env["product.template.attribute.line"].with_context(active_test=False)
+        ptal = Lines.search_count(changed, limit=1)
+        return bool(taxes or outlets or categories or ptav or ptal)
 
     @api.model
     def efn_online_catalog(self, channel_code, since=None, cursor=None, limit=DEFAULT_CATALOG_LIMIT):
@@ -600,6 +710,8 @@ class EfnOnlineChannel(models.Model):
                     "max_qty": channel._efn_online_max_qty(),
                     # G20 W-33 (docs/04 §12.3): berat 1 unit dalam kg, None bila produk tanpa berat.
                     "weight_kg": channel._efn_online_weight_kg(product),
+                    # G22 B-2 (docs/04 §14.B, format §14.A.6): modifier `no_variant`; [] bila tidak ada.
+                    "attributes": channel._efn_online_attributes(product),
                 }
             )
         deleted = []
@@ -639,6 +751,9 @@ class EfnOnlineChannel(models.Model):
             "currency": self.currency_id.name,
             # G20 E-45 (docs/04 §12.2 no. 1, L-52): array string kanonik, mis. ["qris", "counter"].
             "payment_modes": self._efn_online_payment_modes(),
+            # G22 B-2 (docs/04 §14.B, §14.C.1 no. 5): jenis kanal + flag Poin EFN kanal (kill switch Odoo).
+            "business_type": "fnb" if self._efn_online_is_fnb() else "retail",
+            "loyalty": {"earn": bool(self.loyalty_earn), "redeem": bool(self.loyalty_redeem)},
             "outlets": [
                 {
                     "code": outlet.code,
@@ -683,13 +798,22 @@ class EfnOnlineChannel(models.Model):
         require(isinstance(product_ids, list) and 0 < len(product_ids) <= MAX_BATCH)
         ids = sorted({check_int(pid, minimum=1) for pid in product_ids})
         products = channel._efn_online_published_products(ids)
+        fnb = channel._efn_online_is_fnb()
         free = (
             channel._efn_online_free_qty(outlet, products)
-            if channel.stock_check == "free_qty"
+            if channel.stock_check == "free_qty" and not fnb
             else dict.fromkeys(products.ids)
         )
         result = []
         for product in products.sorted("id"):
+            if product.product_tmpl_id.efn_online_sold_out:
+                # G22 B-3: ditandai habis oleh Ops (semua kanal).
+                result.append({"product_id": product.id, "status": "out"})
+                continue
+            if fnb:
+                # G22 B-3 (docs/04 §14.B): kanal F&B -> in_stock, tanpa qty.
+                result.append({"product_id": product.id, "status": "in_stock"})
+                continue
             entry = {"product_id": product.id, "status": channel._efn_online_stock_status(free.get(product.id))}
             if channel.stock_expose_qty and free.get(product.id) is not None:
                 entry["qty"] = max(free[product.id], 0.0)
@@ -719,8 +843,19 @@ class EfnOnlineChannel(models.Model):
         }
 
     # -------------------------------------------------------------------- quote
+    @api.model
+    def _efn_online_line_vals(self, product, qty, ptavs):
+        """Baris SO: atribut ``no_variant`` lewat field standar ``product_no_variant_attribute_value_ids`` -> harga
+        ekstra dihitung mesin harga ``sale.order.line`` (G22 B-4, [V] source 19.0)."""
+        vals = {"product_id": product.id, "product_uom_qty": qty}
+        if ptavs:
+            vals["product_no_variant_attribute_value_ids"] = [Command.set(ptavs.ids)]
+        return vals
+
     def _efn_online_so_vals(self, outlet, product_qty):
-        """Nilai sale.order (dipakai quote via ``new()`` dan place via ``create()`` -> hitungan identik)."""
+        """Nilai sale.order (dipakai quote via ``new()`` dan place via ``create()`` -> hitungan identik).
+
+        ``product_qty`` = list ``(product, qty, ptavs)`` (G22 B-4)."""
         self.ensure_one()
         return {
             "partner_id": self.partner_id.id,
@@ -731,7 +866,7 @@ class EfnOnlineChannel(models.Model):
             "team_id": self.team_id.id or False,
             "user_id": False,
             "order_line": [
-                Command.create({"product_id": product.id, "product_uom_qty": qty}) for product, qty in product_qty
+                Command.create(self._efn_online_line_vals(product, qty, ptavs)) for product, qty, ptavs in product_qty
             ],
         }
 
@@ -788,6 +923,13 @@ class EfnOnlineChannel(models.Model):
                 f"{money(line.price_subtotal):.{digits}f}",
                 f"{money(line.price_total):.{digits}f}",
             ]
+            # G22 B-4: modifier baris (kunci tambahan hanya bila ada -> hash baris tanpa atribut sama dengan G21).
+            # `_origin`: pada `sale.order.new()` nilai x2many bisa berupa pembungkus NewId record yang ada.
+            ptavs = line.product_no_variant_attribute_value_ids._origin
+            entry["attribute_value_ids"] = sorted(ptavs.ids)
+            entry["attributes_text"] = self._efn_online_attributes_text(ptavs) if ptavs else ""
+            if ptavs:
+                hash_line.append(["ptav", sorted(ptavs.ids)])
             if reward:
                 entry["reward"] = True
                 hash_line.append(["reward", reward.id])
@@ -1097,38 +1239,56 @@ class EfnOnlineChannel(models.Model):
         """Validasi + hitung cart satu kanal. Kembalikan (outlet, products_qty, issues, summary).
 
         ``for_place`` + mesin promo diperlukan -> ``summary=None`` (place menghitung dari SO tersimpan; menghindari
-        dua SO per place)."""
+        dua SO per place).
+
+        G22 B-4: ``products_qty`` = list ``(product, qty, ptavs)``; satu produk boleh beberapa baris (modifier beda).
+        Batas qty reservasi, stok, dan ``efn_online_sold_out`` dihitung per PRODUK (Σ qty semua barisnya). Atribut
+        tidak sah -> issue ``{product_id, code: "attribute_invalid"}`` (baris tidak dihitung; place ->
+        ``invalid_input``).
+        """
         self.ensure_one()
         outlet = self._efn_online_outlet(outlet_code, fulfilment)
-        requested = lines_payload(lines, self.max_lines)
-        for _pid, qty in requested:
+        requested = cart_lines_payload(lines, self.max_lines)
+        for _pid, _ptav_ids, qty in requested:
             require(qty <= self.max_qty_per_line)
-        products = self._efn_online_published_products([pid for pid, _qty in requested])
+        products = self._efn_online_published_products(sorted({pid for pid, _ptav_ids, _qty in requested}))
         by_id = {p.id: p for p in products}
         issues = []
+
+        def add_issue(product_id, code):
+            issue = {"product_id": product_id, "code": code}
+            if issue not in issues:
+                issues.append(issue)
+
         product_qty = []
-        for pid, qty in requested:
+        totals = {}
+        for pid, ptav_ids, qty in requested:
             product = by_id.get(pid)
             if not product:
-                issues.append({"product_id": pid, "code": "not_found"})
+                add_issue(pid, "not_found")
                 continue
-            product_qty.append((product, qty))
+            ptavs = self._efn_online_line_ptavs(product, ptav_ids)
+            if ptavs is None:
+                add_issue(pid, "attribute_invalid")
+                continue
+            product_qty.append((product, qty, ptavs))
+            totals[product.id] = totals.get(product.id, 0) + qty
         if self.stock_hold_mode == "confirm":
             # L-41 / SEC-131: batas qty per produk saat stok dicadangkan sejak place (anti penimbunan).
-            for product, qty in product_qty:
-                if qty > self.max_line_qty:
-                    issues.append({"product_id": product.id, "code": "qty_limit"})
+            for pid in sorted(totals):
+                if totals[pid] > self.max_line_qty:
+                    add_issue(pid, "qty_limit")
         free = (
             self._efn_online_free_qty(outlet, products)
             if self.stock_check == "free_qty"
             else dict.fromkeys(products.ids)
         )
         unavailable = set()
-        for product, qty in product_qty:
-            available = free.get(product.id)
-            if available is not None and available < qty:
-                unavailable.add(product.id)
-                issues.append({"product_id": product.id, "code": "out_of_stock"})
+        for pid in sorted(totals):
+            available = free.get(pid)
+            if by_id[pid].product_tmpl_id.efn_online_sold_out or (available is not None and available < totals[pid]):
+                unavailable.add(pid)
+                add_issue(pid, "out_of_stock")
         codes = list(promo_codes or [])
         usable, programs, engine = self._efn_online_promo_plan(codes, bool(product_qty))
         if engine and for_place:

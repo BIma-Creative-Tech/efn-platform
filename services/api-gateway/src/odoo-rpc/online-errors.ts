@@ -49,6 +49,13 @@ export const OnlineErrors = {
    */
   invoiceNotAvailable: (): ApiError =>
     ApiError.of(422, 'invoice_not_available', 'Faktur atas nama belum tersedia untuk pesanan ini. Pesan tanpa faktur atau hubungi layanan pelanggan.'),
+  // ── G22 §14.C.2 poin online (kode sama dengan §9) ──
+  insufficientPoints: (): ApiError => ApiError.of(409, 'insufficient_points', 'Poin tidak mencukupi.'),
+  belowMinimum: (): ApiError => ApiError.of(409, 'below_minimum', 'Jumlah poin di bawah minimum penukaran.'),
+  exceedsMaxPct: (): ApiError => ApiError.of(409, 'exceeds_max_pct', 'Nilai poin melebihi batas maksimum per transaksi.'),
+  pointsUnavailable: (): ApiError => ApiError.of(422, 'points_unavailable', 'Penukaran poin belum tersedia untuk pesanan ini.'),
+  pointsCoverFullAmount: (): ApiError =>
+    ApiError.of(422, 'points_cover_full_amount', 'Poin tidak boleh menutup seluruh tagihan; sisakan minimal Rp1 untuk dibayar.'),
 };
 
 /**
@@ -69,6 +76,9 @@ export function mapOdooError(err: unknown, metrics: OnlineMetrics, ctx: { method
         return OnlineErrors.itemUnavailable();
       case 'invalid_state':
         return OnlineErrors.invalidState();
+      // G22 §14.C.3 / L-79: Odoo menolak porsi Poin EFN (kebijakan PT/global) → 409, TANPA fallback env/tanpa poin
+      case 'points_invalid':
+        return OnlineErrors.exceedsMaxPct();
       default:
         metrics.anomaly('online_config_error', 'critical', { method: ctx.method, channel: ctx.channel, part_id: ctx.partId, code: err.code });
         return OnlineErrors.unavailable();

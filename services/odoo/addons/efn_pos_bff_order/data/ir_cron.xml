@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- Outbox event QR -> BFF: dipicu segera (_trigger) saat event dibuat; jadwal ini cadangan. -->
+    <record id="ir_cron_efn_qr_outbox" model="ir.cron">
+        <field name="name">EFN QR: kirim event sesi meja ke BFF</field>
+        <field name="model_id" ref="model_efn_pos_qr_event_outbox"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_qr_outbox_run()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">1</field>
+        <field name="interval_type">minutes</field>
+        <field name="active" eval="True"/>
+    </record>
+    <!-- Sesi meja lewat expires_at -> expired; sesi POS tertutup -> tutup sesi meja. -->
+    <record id="ir_cron_efn_qr_expire" model="ir.cron">
+        <field name="name">EFN QR: kedaluwarsakan sesi meja</field>
+        <field name="model_id" ref="model_efn_pos_table_session"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_qr_expire()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">5</field>
+        <field name="interval_type">minutes</field>
+        <field name="active" eval="True"/>
+    </record>
+    <!-- Pesanan QR belum dikirim ke dapur > efn_qr_stale_minutes -> alert EFN_QR_ORDER_STALE + notifikasi kasir. -->
+    <record id="ir_cron_efn_qr_stale" model="ir.cron">
+        <field name="name">EFN QR: alert pesanan QR belum dikirim ke dapur</field>
+        <field name="model_id" ref="model_efn_pos_qr_order"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_qr_stale()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">1</field>
+        <field name="interval_type">minutes</field>
+        <field name="active" eval="True"/>
+    </record>
+    <!-- L-76: retensi — sesi meja 400 hari (hapus), catatan baris QR dikosongkan setelah 90 hari. -->
+    <record id="ir_cron_efn_qr_retention" model="ir.cron">
+        <field name="name">EFN QR: retensi sesi meja (400 hari)</field>
+        <field name="model_id" ref="model_efn_pos_table_session"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_qr_retention()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="active" eval="True"/>
+    </record>
+    <record id="ir_cron_efn_qr_note_retention" model="ir.cron">
+        <field name="name">EFN QR: kosongkan catatan baris QR (90 hari)</field>
+        <field name="model_id" ref="model_efn_pos_qr_order"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_qr_note_retention()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="active" eval="True"/>
+    </record>
+</odoo>

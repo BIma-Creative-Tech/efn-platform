@@ -54,6 +54,14 @@ const nextConfig = {
       // Stok live tetap dipaksa `no-store` di sini (lapis kedua selain handler). Data member (cart/orders/pickup-code) tetap no-store.
       { source: '/api/:path((?!catalog(?:/|$)).*)', headers: [{ key: 'Cache-Control', value: 'no-store' }] },
       { source: '/api/catalog/stock', headers: [{ key: 'Cache-Control', value: 'no-store' }] },
+      // G22: halaman sesi meja (token di fragment) — jangan di-cache atau diindeks. Header berbeda dari securityHeaders (tanpa duplikasi kunci).
+      {
+        source: '/meja',
+        headers: [
+          { key: 'Cache-Control', value: 'no-store' },
+          { key: 'X-Robots-Tag', value: 'noindex, nofollow' },
+        ],
+      },
     ];
   },
 };

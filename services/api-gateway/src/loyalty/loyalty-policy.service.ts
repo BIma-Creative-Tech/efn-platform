@@ -4,7 +4,9 @@ import { DB, Db, Queryable } from '../common/db/db';
 import { MetricsService } from '../common/metrics/metrics.service';
 import { reportLoyaltyAnomaly } from './loyalty-anomaly';
 import {
+  EXPIRY_POLICY_KEYS,
   GLOBAL_POLICY_COMPANY,
+  parseEpochDate,
   LoyaltyPolicyInput,
   LoyaltyPolicyParams,
   PolicyErrors,
@@ -31,6 +33,16 @@ export interface EffectiveLoyaltyParams {
   posConfigHourlyMax: number;
   companyHourlyMax: number;
   earnOnMoneyOnly: boolean;
+}
+
+/** L-75: parameter job hangus efektif (kebijakan global EFN aktif per kunci, fallback env). */
+export interface ExpiryParams {
+  inactivityMonths: number;
+  noticeDays: number;
+  /** 00:00 WIB tanggal epoch; null = belum diset (job tidak boleh berjalan). */
+  activityEpoch: Date | null;
+  source: 'policy' | 'env';
+  policyVersion: number | null;
 }
 
 export interface PublishResult {
@@ -110,7 +122,7 @@ export class LoyaltyPolicyService {
     const result = await this.db.tx(async (q) => {
       const prev = await this.storedSha(q, input.companyCode, input.version);
       if (prev !== null) return this.compare(prev, sha, input);
-      const violations = policyViolations(input.params, input.pointValueIdr, this.config.loyaltyPolicyCeilings);
+      const violations = policyViolations(input.params, input.pointValueIdr, this.config.loyaltyPolicyCeilings, this.now());
       if (violations.length > 0) {
         this.anomaly('policy_out_of_bounds', { company: input.companyCode, version: input.version, fields: violations.join('.') });
         throw PolicyErrors.outOfBounds();
@@ -173,7 +185,7 @@ export class LoyaltyPolicyService {
     const row = res.rows[0];
     if (!row) return null;
     try {
-      const params = parsePolicyParams(typeof row.params === 'string' ? JSON.parse(row.params) : row.params);
+      const params = parsePolicyParams(typeof row.params === 'string' ? JSON.parse(row.params) : row.params, company);
       return { version: Number(row.version), params };
     } catch {
       this.logger.error(`loyalty_policy ${company} v${String(row.version)}: params tersimpan tidak valid — fallback env`);
@@ -238,7 +250,10 @@ export class LoyaltyPolicyService {
       return withPv(env);
     }
     // Pertahanan berlapis: plafon diturunkan setelah kebijakan disimpan → kebijakan tidak dipakai
-    const violations = policyViolations(active.params, null, this.config.loyaltyPolicyCeilings);
+    // L-75: pelanggaran HANYA pada kunci hangus tidak membatalkan parameter earn/redeem (dinilai terpisah di expiryParams)
+    const violations = policyViolations(active.params, null, this.config.loyaltyPolicyCeilings, this.now()).filter(
+      (v) => !(EXPIRY_POLICY_KEYS as readonly string[]).includes(v),
+    );
     if (violations.length > 0) {
       this.warnOnce(`oob:${company}:${active.version}`, () =>
         this.anomaly('policy_out_of_bounds', { company, version: active.version, fields: violations.join('.'), stage: 'use' }),
@@ -261,6 +276,43 @@ export class LoyaltyPolicyService {
       companyHourlyMax: p.company_hourly_max,
       earnOnMoneyOnly: p.earn_on_money_only,
     });
+  }
+
+  /**
+   * L-75 (G22 §14.D.3 no. 1, D-22-13): parameter job hangus W-17 dari kebijakan global EFN AKTIF, per kunci fallback env
+   * (`LOYALTY_INACTIVITY_EXPIRY_MONTHS`, `LOYALTY_EXPIRY_NOTICE_DAYS`, `LOYALTY_ACTIVITY_EPOCH`). Kunci yang di luar
+   * plafon saat ini (plafon diturunkan setelah disimpan) → env + anomali `policy_out_of_bounds` (stage use).
+   * Kebijakan global aktif = versi EFN tertinggi yang berlaku (bukan hanya yang bernilai tukar).
+   */
+  async expiryParams(q: Queryable = this.db): Promise<ExpiryParams> {
+    const at = new Date(this.now());
+    const active = await this.activeAt(GLOBAL_POLICY_COMPANY, at, q);
+    const env: ExpiryParams = {
+      inactivityMonths: this.config.loyaltyInactivityExpiryMonths,
+      noticeDays: this.config.loyaltyExpiryNoticeDays,
+      activityEpoch: this.config.loyaltyActivityEpoch,
+      source: 'env',
+      policyVersion: null,
+    };
+    if (!active) return env;
+    const bad = new Set(policyViolations(active.params, null, this.config.loyaltyPolicyCeilings, at.getTime()));
+    const p = active.params;
+    const out: ExpiryParams = { ...env };
+    let used = false;
+    for (const k of EXPIRY_POLICY_KEYS) {
+      if (p[k] === undefined) continue;
+      if (bad.has(k)) {
+        this.warnOnce(`oob:${GLOBAL_POLICY_COMPANY}:${active.version}:${k}`, () =>
+          this.anomaly('policy_out_of_bounds', { company: GLOBAL_POLICY_COMPANY, version: active.version, fields: k, stage: 'use' }),
+        );
+        continue;
+      }
+      used = true;
+      if (k === 'inactivity_expiry_months') out.inactivityMonths = p.inactivity_expiry_months as number;
+      if (k === 'expiry_notice_days') out.noticeDays = p.expiry_notice_days as number;
+      if (k === 'activity_epoch') out.activityEpoch = parseEpochDate(p.activity_epoch as string);
+    }
+    return used ? { ...out, source: 'policy', policyVersion: active.version } : env;
   }
 
   private warnOnce(key: string, fn: () => void): void {

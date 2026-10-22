@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G22 (docs/08 §13.4; §12.4; L-64, L-69): aturan SoD bawaan DIRUJUK lewat kode (SOD-01, -02, -03 block; SOD-05, -06
+     report_only), TIDAK dibuat ulang di sini. Definisi aturan ada di efn_role (DEFAULT_SOD_RULES); metode
+     _efn_ensure_default_rules idempoten (kunci = code, termasuk arsip) dan hanya membuat aturan yang kedua grupnya ada.
+
+     Kenapa dipanggil lagi: post_init_hook efn_role berjalan saat efn_role dipasang; bila efn_loyalty_accounting /
+     purchase dipasang SESUDAHNYA, SOD-03 / SOD-05 baru muncul pada cron harian 00:30. Modul ini bergantung pada semua
+     modul pemilik grup sehingga pemanggilan di sini memastikan aturan ada segera (L-69: SOD-03 wajib "block" sebelum
+     kebijakan poin pertama dipublikasikan - diperiksa Superadmin di checklist aktivasi).
+
+     noupdate="0" agar diulang saat upgrade modul (aman: idempoten, tidak mengubah aturan yang sudah ada, termasuk
+     mode yang diubah Superadmin). Aturan block yang saat dibuat sudah punya pelanggaran dibuat report_only oleh
+     efn_role (log EFN_SOD_DEFAULT_REPORT_ONLY). -->
+<odoo noupdate="0">
+    <function model="efn.sod.rule" name="_efn_ensure_default_rules"/>
+</odoo>

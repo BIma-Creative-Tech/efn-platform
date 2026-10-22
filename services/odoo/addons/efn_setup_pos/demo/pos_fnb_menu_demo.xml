@@ -1,0 +1,259 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO W-27 (G22, docs/08 §13.3) - modifier & menu paket F&B dengan fitur STANDAR Odoo CE 19, per PT F&B:
+     PT Paris Baguette (PB, company_fnb) dan Bacha Coffee F&B (BCF, company_bcf). Keputusan pemilik proyek 18-22:
+     daftar modifier menunggu master data klien -> semua di sini CONTOH yang bisa diubah/dihapus pengguna (configurable).
+
+     Empat pola (pilih per modifier, docs/08 §13.3 tabel keputusan):
+     1. Instruksi tanpa harga & tanpa stok   -> atribut create_variant='no_variant' (radio/multi). Tercetak di tiket dapur/KDS.
+     2. Modifier berharga tanpa stok         -> nilai atribut no_variant dengan default_extra_price (mis. ekstra shot).
+     3. Add-on berbahan (memotong stok bahan) -> PRODUK add-on (dijual sebagai baris sendiri) + BoM Kit (phantom):
+        pos_mrp meledakkan kit saat picking POS -> stok BAHAN turun, add-on sendiri tidak di-stok.
+        (Atribut TIDAK pernah memotong stok.) Produk bahan bukan paket kitting CK -> guard efn_kitting tidak berlaku.
+     4. Menu paket pilihan                   -> produk type='combo' + product.combo (combo_item_ids, extra_price);
+        anak combo dirutekan ke stasiun KDS/printer sesuai kategori POS anak; induk combo tidak ditiket.
+     Menu tetap dari paket CK (ADR-018) tetap pola efn_kitting (BoM Kit menu -> paket CK), tidak diulang di sini.
+
+     Pajak: PB1 default PT masing-masing di setiap produk jual (induk & anak combo); SC/PB1 dine-in ditambahkan
+     fiscal position preset dine-in, non-dine-in PB1 0 % (18-1). Harga & tarif = PLACEHOLDER.
+     Kategori POS = stasiun KDS demo (pos_kds_demo.xml): Bakery / Pastry, Bar Kopi. pos.category tanpa company_id.
+
+     Field terverifikasi odoo/odoo 19.0 (WebFetch 2026-10-19): product.combo (name, company_id, combo_item_ids),
+     product.combo.item (product_id domain type != combo, extra_price), product.template (type 'combo', combo_ids,
+     is_storable hanya untuk consu), mrp.bom (product_tmpl_id domain type consu, type 'phantom', product_qty,
+     company_id, bom_line_ids), mrp.bom.line (product_id, product_qty), pos_mrp _get_stock_moves_to_consider
+     (_bom_find bom_type='phantom'). product.attribute(.value) sama dengan pos_fnb_demo.xml (G14).
+     product.combo.item dibuat inline (Command.create) karena constraint "minimal 1 item" pada product.combo. -->
+<odoo>
+    <!-- ===================== Atribut (global; dipasang per produk) ===================== -->
+    <record id="attr_w27_serving" model="product.attribute">
+        <field name="name">Penyajian (DEMO)</field>
+        <field name="create_variant">no_variant</field>
+        <field name="display_type">radio</field>
+    </record>
+    <record id="attr_w27_serving_warm" model="product.attribute.value">
+        <field name="attribute_id" ref="attr_w27_serving"/>
+        <field name="name">Dihangatkan</field>
+        <field name="sequence">1</field>
+    </record>
+    <record id="attr_w27_serving_cold" model="product.attribute.value">
+        <field name="attribute_id" ref="attr_w27_serving"/>
+        <field name="name">Tidak dihangatkan</field>
+        <field name="sequence">2</field>
+    </record>
+
+    <!-- Pola 2: modifier berharga tanpa stok (biji kopi dikelola di level paket/CK, bukan per shot). -->
+    <record id="attr_w27_extra_shot" model="product.attribute">
+        <field name="name">Ekstra (DEMO)</field>
+        <field name="create_variant">no_variant</field>
+        <field name="display_type">multi</field>
+    </record>
+    <record id="attr_w27_extra_shot_one" model="product.attribute.value">
+        <field name="attribute_id" ref="attr_w27_extra_shot"/>
+        <field name="name">Tambah 1 shot espresso</field>
+        <field name="sequence">1</field>
+        <field name="default_extra_price">6000</field>
+    </record>
+
+    <!-- ===================== PT Paris Baguette (PB, company_fnb) ===================== -->
+    <!-- Bahan (storable, tidak dijual di POS). -->
+    <record id="product_w27_cheese_slice_pb" model="product.template">
+        <field name="name">Keju Slice - bahan (DEMO)</field>
+        <field name="type">consu</field>
+        <field name="is_storable" eval="True"/>
+        <field name="sale_ok" eval="False"/>
+        <field name="available_in_pos" eval="False"/>
+        <field name="standard_price">2500</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+    </record>
+    <!-- Pola 3: add-on berbahan = produk jual + BoM Kit -> memotong stok Keju Slice. -->
+    <record id="product_w27_addon_cheese_pb" model="product.template">
+        <field name="name">Tambah Keju (DEMO)</field>
+        <field name="type">consu</field>
+        <field name="available_in_pos" eval="True"/>
+        <field name="list_price">5000</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="pos_categ_ids" eval="[(6, 0, [ref('pos_categ_bakery_pastry')])]"/>
+        <field name="taxes_id" eval="[(6, 0, [ref('efn_setup_company.tax_pb1_10_fnb')])]"/>
+    </record>
+    <record id="bom_w27_addon_cheese_pb" model="mrp.bom">
+        <field name="product_tmpl_id" ref="product_w27_addon_cheese_pb"/>
+        <field name="type">phantom</field>
+        <field name="product_qty">1</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+    </record>
+    <record id="bom_line_w27_addon_cheese_pb" model="mrp.bom.line">
+        <field name="bom_id" ref="bom_w27_addon_cheese_pb"/>
+        <field name="product_id" model="product.template" eval="obj(ref('product_w27_cheese_slice_pb')).product_variant_id.id"/>
+        <field name="product_qty">1</field>
+    </record>
+
+    <!-- Menu dimasak/dipanggang di outlet (consu tanpa stok) + pola 1 (atribut tanpa harga). -->
+    <record id="product_w27_croissant_pb" model="product.template">
+        <field name="name">Croissant Butter (DEMO)</field>
+        <field name="type">consu</field>
+        <field name="available_in_pos" eval="True"/>
+        <field name="list_price">28000</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="pos_categ_ids" eval="[(6, 0, [ref('pos_categ_bakery_pastry')])]"/>
+        <field name="taxes_id" eval="[(6, 0, [ref('efn_setup_company.tax_pb1_10_fnb')])]"/>
+    </record>
+    <record id="ptal_w27_croissant_serving" model="product.template.attribute.line">
+        <field name="product_tmpl_id" ref="product_w27_croissant_pb"/>
+        <field name="attribute_id" ref="attr_w27_serving"/>
+        <field name="value_ids" eval="[(6, 0, [ref('attr_w27_serving_warm'), ref('attr_w27_serving_cold')])]"/>
+    </record>
+    <record id="product_w27_choco_bun_pb" model="product.template">
+        <field name="name">Roti Cokelat (DEMO)</field>
+        <field name="type">consu</field>
+        <field name="available_in_pos" eval="True"/>
+        <field name="list_price">25000</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="pos_categ_ids" eval="[(6, 0, [ref('pos_categ_bakery_pastry')])]"/>
+        <field name="taxes_id" eval="[(6, 0, [ref('efn_setup_company.tax_pb1_10_fnb')])]"/>
+    </record>
+    <record id="product_w27_jasmine_tea_pb" model="product.template">
+        <field name="name">Teh Melati (DEMO)</field>
+        <field name="type">consu</field>
+        <field name="available_in_pos" eval="True"/>
+        <field name="list_price">18000</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="pos_categ_ids" eval="[(6, 0, [ref('pos_categ_coffee_bar')])]"/>
+        <field name="taxes_id" eval="[(6, 0, [ref('efn_setup_company.tax_pb1_10_fnb')])]"/>
+    </record>
+    <record id="product_w27_latte_pb" model="product.template">
+        <field name="name">Caffe Latte PB (DEMO)</field>
+        <field name="type">consu</field>
+        <field name="available_in_pos" eval="True"/>
+        <field name="list_price">32000</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="pos_categ_ids" eval="[(6, 0, [ref('pos_categ_coffee_bar')])]"/>
+        <field name="taxes_id" eval="[(6, 0, [ref('efn_setup_company.tax_pb1_10_fnb')])]"/>
+    </record>
+    <record id="ptal_w27_latte_pb_extra" model="product.template.attribute.line">
+        <field name="product_tmpl_id" ref="product_w27_latte_pb"/>
+        <field name="attribute_id" ref="attr_w27_extra_shot"/>
+        <field name="value_ids" eval="[(6, 0, [ref('attr_w27_extra_shot_one')])]"/>
+    </record>
+
+    <!-- Pola 4: paket pilihan. Croissant +Rp3.000 dibanding roti cokelat (extra_price item). -->
+    <record id="combo_w27_bread_pb" model="product.combo">
+        <field name="name">Pilih Roti - PB (DEMO)</field>
+        <field name="sequence">1</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="combo_item_ids" model="product.template" eval="[
+            Command.create({'product_id': obj(ref('product_w27_choco_bun_pb')).product_variant_id.id, 'extra_price': 0.0}),
+            Command.create({'product_id': obj(ref('product_w27_croissant_pb')).product_variant_id.id, 'extra_price': 3000.0}),
+        ]"/>
+    </record>
+    <record id="combo_w27_drink_pb" model="product.combo">
+        <field name="name">Pilih Minuman - PB (DEMO)</field>
+        <field name="sequence">2</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="combo_item_ids" model="product.template" eval="[
+            Command.create({'product_id': obj(ref('product_w27_jasmine_tea_pb')).product_variant_id.id, 'extra_price': 0.0}),
+            Command.create({'product_id': obj(ref('product_w27_latte_pb')).product_variant_id.id, 'extra_price': 8000.0}),
+        ]"/>
+    </record>
+    <record id="product_w27_breakfast_set_pb" model="product.template">
+        <field name="name">Paket Sarapan PB (DEMO)</field>
+        <field name="type">combo</field>
+        <field name="available_in_pos" eval="True"/>
+        <field name="list_price">40000</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="pos_categ_ids" eval="[(6, 0, [ref('pos_categ_bakery_pastry')])]"/>
+        <field name="taxes_id" eval="[(6, 0, [ref('efn_setup_company.tax_pb1_10_fnb')])]"/>
+        <field name="combo_ids" eval="[(6, 0, [ref('combo_w27_bread_pb'), ref('combo_w27_drink_pb')])]"/>
+    </record>
+
+    <!-- ===================== Bacha Coffee F&B (BCF, company_bcf) ===================== -->
+    <record id="product_w27_oat_milk_bcf" model="product.template">
+        <field name="name">Susu Oat 200 ml - bahan (DEMO)</field>
+        <field name="type">consu</field>
+        <field name="is_storable" eval="True"/>
+        <field name="sale_ok" eval="False"/>
+        <field name="available_in_pos" eval="False"/>
+        <field name="standard_price">6000</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+    </record>
+    <record id="product_w27_addon_oat_bcf" model="product.template">
+        <field name="name">Ganti Susu Oat (DEMO)</field>
+        <field name="type">consu</field>
+        <field name="available_in_pos" eval="True"/>
+        <field name="list_price">9000</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="pos_categ_ids" eval="[(6, 0, [ref('pos_categ_coffee_bar')])]"/>
+        <field name="taxes_id" eval="[(6, 0, [ref('efn_setup_company.tax_pb1_10_bcf')])]"/>
+    </record>
+    <record id="bom_w27_addon_oat_bcf" model="mrp.bom">
+        <field name="product_tmpl_id" ref="product_w27_addon_oat_bcf"/>
+        <field name="type">phantom</field>
+        <field name="product_qty">1</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+    </record>
+    <record id="bom_line_w27_addon_oat_bcf" model="mrp.bom.line">
+        <field name="bom_id" ref="bom_w27_addon_oat_bcf"/>
+        <field name="product_id" model="product.template" eval="obj(ref('product_w27_oat_milk_bcf')).product_variant_id.id"/>
+        <field name="product_qty">1</field>
+    </record>
+
+    <record id="product_w27_latte_bcf" model="product.template">
+        <field name="name">Bacha Latte (DEMO)</field>
+        <field name="type">consu</field>
+        <field name="available_in_pos" eval="True"/>
+        <field name="list_price">55000</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="pos_categ_ids" eval="[(6, 0, [ref('pos_categ_coffee_bar')])]"/>
+        <field name="taxes_id" eval="[(6, 0, [ref('efn_setup_company.tax_pb1_10_bcf')])]"/>
+    </record>
+    <record id="ptal_w27_latte_bcf_sugar" model="product.template.attribute.line">
+        <field name="product_tmpl_id" ref="product_w27_latte_bcf"/>
+        <field name="attribute_id" ref="attr_sugar"/>
+        <field name="value_ids" eval="[(6, 0, [ref('attr_sugar_normal'), ref('attr_sugar_less'), ref('attr_sugar_none')])]"/>
+    </record>
+    <record id="ptal_w27_latte_bcf_extra" model="product.template.attribute.line">
+        <field name="product_tmpl_id" ref="product_w27_latte_bcf"/>
+        <field name="attribute_id" ref="attr_w27_extra_shot"/>
+        <field name="value_ids" eval="[(6, 0, [ref('attr_w27_extra_shot_one')])]"/>
+    </record>
+    <record id="product_w27_coffee_cake_bcf" model="product.template">
+        <field name="name">Kue Kopi Bacha (DEMO)</field>
+        <field name="type">consu</field>
+        <field name="available_in_pos" eval="True"/>
+        <field name="list_price">45000</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="pos_categ_ids" eval="[(6, 0, [ref('pos_categ_bakery_pastry')])]"/>
+        <field name="taxes_id" eval="[(6, 0, [ref('efn_setup_company.tax_pb1_10_bcf')])]"/>
+    </record>
+    <record id="ptal_w27_coffee_cake_serving" model="product.template.attribute.line">
+        <field name="product_tmpl_id" ref="product_w27_coffee_cake_bcf"/>
+        <field name="attribute_id" ref="attr_w27_serving"/>
+        <field name="value_ids" eval="[(6, 0, [ref('attr_w27_serving_warm'), ref('attr_w27_serving_cold')])]"/>
+    </record>
+
+    <record id="combo_w27_drink_bcf" model="product.combo">
+        <field name="name">Pilih Kopi - BCF (DEMO)</field>
+        <field name="sequence">1</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="combo_item_ids" model="product.template" eval="[
+            Command.create({'product_id': obj(ref('product_w27_latte_bcf')).product_variant_id.id, 'extra_price': 0.0}),
+        ]"/>
+    </record>
+    <record id="combo_w27_cake_bcf" model="product.combo">
+        <field name="name">Pilih Kue - BCF (DEMO)</field>
+        <field name="sequence">2</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="combo_item_ids" model="product.template" eval="[
+            Command.create({'product_id': obj(ref('product_w27_coffee_cake_bcf')).product_variant_id.id, 'extra_price': 0.0}),
+        ]"/>
+    </record>
+    <record id="product_w27_coffee_set_bcf" model="product.template">
+        <field name="name">Paket Kopi &amp; Kue Bacha (DEMO)</field>
+        <field name="type">combo</field>
+        <field name="available_in_pos" eval="True"/>
+        <field name="list_price">85000</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="pos_categ_ids" eval="[(6, 0, [ref('pos_categ_coffee_bar')])]"/>
+        <field name="taxes_id" eval="[(6, 0, [ref('efn_setup_company.tax_pb1_10_bcf')])]"/>
+        <field name="combo_ids" eval="[(6, 0, [ref('combo_w27_drink_bcf'), ref('combo_w27_cake_bcf')])]"/>
+    </record>
+</odoo>

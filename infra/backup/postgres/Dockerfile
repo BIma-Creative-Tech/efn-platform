@@ -10,9 +10,9 @@
 # G17 (Trivy image gate PR #36): WAL-G DIBANGUN DARI SOURCE (tag v3.0.9 + commit diverifikasi), bukan binary rilis.
 # Binary rilis v3.0.9 dibangun Go 1.25.11 + golang.org/x/net 0.58.0 + grpc 1.83.0 -> CVE HIGH stdlib/x/net/grpc
 # (CVE-2026-78667/78669/97031 baru 10 Okt + daftar G16 di .trivyignore.yaml) tanpa rilis perbaikan upstream.
-# Build ini: Go 1.27.2 (stdlib terbaru) + bump minimum x/net 0.60.0, grpc 1.83.2 (go.sum diverifikasi proxy Go).
+# Build ini: Go 1.27.3 (stdlib terbaru, CVE-2026-111943; G22) + bump minimum x/net 0.60.0, grpc 1.83.2 (go.sum diverifikasi proxy Go).
 # Build tag hanya `libsodium` (dipakai WALG_LIBSODIUM_KEY); brotli/lzo tidak dipakai (kompresi zstd, efn-walg.sh).
-FROM golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61 AS walg
+FROM golang:1.27.3-bookworm@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5 AS walg
 ARG WALG_VERSION=v3.0.9
 ARG WALG_COMMIT=3e493188db28335fb93a45bd680c6ff8fc3028c1
 ENV CGO_ENABLED=1 GOTOOLCHAIN=local GOFLAGS=-trimpath

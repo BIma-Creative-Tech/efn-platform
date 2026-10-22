@@ -144,7 +144,10 @@ export interface PosReverseDto {
   idempotencyKey: string;
   originalOrderRef: string;
   refundOrderRef: string;
-  memberRef: string;
+  /** `null` HANYA untuk `earnChannel = 'qr'` (G22 §14.A.4: Odoo tidak mengirim member_ref untuk earn QR). */
+  memberRef: string | null;
+  /** G22 §14.A.4: `pos` (default) | `qr` — earn dilakukan BFF dari klaim sesi meja QR. */
+  earnChannel?: 'pos' | 'qr';
   refundedEligibleAmount: number;
   /** 0 < r ≤ 1. Tetap dasar clawback earn (K-18-5). */
   refundRatio: number;
@@ -171,7 +174,11 @@ export interface PosReverseDto {
  */
 export function parsePosReverse(body: unknown): PosReverseDto {
   const o = asRecord(body);
-  const memberRef = requireMemberRef(o.member_ref);
+  // G22 §14.A.4: `earn_channel` "pos" (default) | "qr"; untuk qr `member_ref` TIDAK boleh dikirim
+  const channel = o.earn_channel === undefined || o.earn_channel === null ? 'pos' : o.earn_channel;
+  if (channel !== 'pos' && channel !== 'qr') throw Errors.invalidRequest();
+  if (channel === 'qr' && o.member_ref !== undefined && o.member_ref !== null) throw Errors.invalidRequest();
+  const memberRef = channel === 'qr' ? null : requireMemberRef(o.member_ref);
   const refundRatio = requireNumber(o, 'refund_ratio', 0, 1);
   if (refundRatio <= 0) throw Errors.invalidRequest();
   const originalOrderRef = requireRef(o, 'original_order_ref');
@@ -182,6 +189,7 @@ export function parsePosReverse(body: unknown): PosReverseDto {
     originalOrderRef,
     refundOrderRef,
     memberRef,
+    earnChannel: channel,
     refundedEligibleAmount: floorIdr(o, 'refunded_eligible_amount'),
     refundRatio,
     pointsRestoredValue:

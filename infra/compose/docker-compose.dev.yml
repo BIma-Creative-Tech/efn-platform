@@ -124,6 +124,12 @@ services:
       # G13c: rekonsiliasi loyalty tiap 5 menit di dev (default 1 jam) agar heartbeat EFN_LOYALTY_RECON & anomali
       # rekonsiliasi teramati oleh smoke dalam satu run.
       LOYALTY_RECON_INTERVAL_MS: "300000"
+      # G22 (docs/04 §14.A.9): URL tenant QR meja dev (https; token di fragment). QR tetap MATI kecuali .env
+      # FNB_QR_ENABLED=true + `-f docker-compose.online-qr-pb.yml` (key user teknis efn_qr_pb nyata,
+      # docs/runbooks/odoo-qr-api-key.md §1). Job poin hangus W-17 dev: LOYALTY_EXPIRY_ENABLED=true di .env (DRY_RUN
+      # default true) + LOYALTY_ACTIVITY_EPOCH.
+      FNB_QR_BASE_URL_PB: ${FNB_QR_BASE_URL_PB:-https://app.efn.local}
+      FNB_QR_BASE_URL_BCF: ${FNB_QR_BASE_URL_BCF:-https://app.efn.local}
       # Teks consent DRAFT frontend (services/superapp-web/lib/consent.ts): versi persis + SHA-256 UTF-8 `body`.
       # Dijaga test superapp-web tests/consent.test.ts — ubah teks = ubah keduanya (G6 QA).
       CONSENT_LOCATION_VERSION: location@2026-10-06
@@ -189,6 +195,9 @@ services:
       # G18 (data-AI): epoch rantai salinan audit OTOMATIS saat DB Odoo dev di-reset (KHUSUS dev; staging/production
       # ditolak deploy-validate EFN_DEV_ONLY_SWITCHES + check-encryption + config ETL)
       ETL_AUDIT_EPOCH_AUTO: "true"
+      # G21/G22 (QA G22 P2-3): ETL_PARTNER_REGION_ENABLED, ETL_ENABLE_KDS, ETL_KDS_ONLINE_ENABLED,
+      # ETL_LOYALTY_RECON_ONLINE_ENABLED TIDAK dipaksa true di dev (butuh efn_region / efn_pos_kds / E-29a + grant G21/G22
+      # di DB Odoo dev). Nyalakan lewat .env lokal setelah modul + grant terpasang; base meneruskan `${X:-false}`.
 
   ocr-worker:
     image: efn/ai-ocr-worker:dev

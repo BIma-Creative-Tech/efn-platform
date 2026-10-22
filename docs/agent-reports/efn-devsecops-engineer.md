@@ -1,5 +1,196 @@
 # Laporan Agent: efn-devsecops-engineer
 
+## G22 (19 Okt 2026, branch chore/wave-22, HEAD 852b5fe) — secret QR meja, gateway path 13–15, redaksi `fts1.`, gerbang L-73, D-22-18
+
+Kontrak: docs/04 §14.A.2/§14.A.5/§14.A.9/§14.A.10, §14.D.8–D.9, §14.E.2/E.4, §14.7 L-70/L-72 (D-22-18)/L-73/L-74.
+Tidak ada commit (lead). Tidak ada tes yang saya jalankan (sesi tanpa shell) — semua **belum terverifikasi**; perintah
+uji di bagian akhir.
+
+> **Ringkasan manajemen.** Infrastruktur siap untuk pesan-dari-meja (QR) dan poin hangus: kunci rahasia baru dibuat
+> terpisah per fungsi dan per PT, gerbang server ke Odoo hanya membuka tiga fungsi QR baru, "tiket" QR meja disensor dari
+> semua log, dan fitur poin hangus/anonimisasi **tidak bisa** dinyalakan di production tanpa izin Superadmin di server
+> (sesuai L-73, menunggu Legal/DPO/Meta).
+
+### 1. Secret baru (§14.E.4)
+
+| Secret | Jenis | Service | Env | Catatan |
+|---|---|---|---|---|
+| `fnb_table_token_key` | `random` (GitHub Env `FNB_TABLE_TOKEN_KEY`) | api-gateway | `FNB_TABLE_TOKEN_KEY_FILE` | IKM HKDF token `fts1.`; rotasi docs/runbooks/fnb-table-token-key.md |
+| `odoo_fnb_event_hmac` | `random` (GitHub Env `ODOO_FNB_EVENT_HMAC`) | odoo + api-gateway | Odoo `EFN_FNB_EVENT_HMAC_FILE`, BFF `ODOO_FNB_EVENT_HMAC_FILE` | `X-EFN-Signature` POST /v1/pos/fnb/events |
+| `odoo_api_key_qr_pb` | `host:disabled` | api-gateway (overlay `docker-compose.online-qr-pb.yml`) | `ODOO_API_KEY_QR_PB_FILE` | user `efn_qr_pb`; rotasi `efn-rotate-online-key --channel=QR-PB` |
+| `odoo_api_key_qr_bcf` | `host:disabled` | api-gateway (overlay `docker-compose.online-qr-bcf.yml`) | `ODOO_API_KEY_QR_BCF_FILE` | user `efn_qr_bcf`; `--channel=QR-BCF` |
+
+- `scripts/secrets.list` + top-level `secrets:` compose (sinkron; CI membandingkan). `gen-secrets.sh` tidak perlu
+  diubah (generator `random`/`host:` generik). `deploy.yml` mengirim `random` otomatis dari `toJSON(secrets)` →
+  **Superadmin wajib menambah `FNB_TABLE_TOKEN_KEY` dan `ODOO_FNB_EVENT_HMAC` ke GitHub Environment staging &
+  production sebelum deploy G22** (deploy.sh berhenti "secret ... kosong").
+- Overlay QR dinamai `docker-compose.online-qr-<pt>.yml` dengan sengaja: glob `docker-compose.online-*.yml` di CI
+  (perbandingan secret) dan `check-encryption.sh` (render `prod-online`) otomatis ikut, dan `--bootstrap`
+  efn-rotate-online-key memakai `docker-compose.online-${CH,,}.yml` tanpa kode khusus.
+- `deploy.sh`: `FNB_QR_ENABLED=true` → setiap PT di `FNB_QR_COMPANIES` (default `PB,BCF`) wajib punya key QR nyata
+  (bukan `disabled`) + overlay ada; overlay ditambahkan ke `FILES` (ikut `.efn-compose-files` untuk rotasi).
+- `check-encryption.sh` §6/§6a2/§6a3/§7: secret QR hanya `pb|bcf` dan hanya `api-gateway`; `ODOO_API_KEY_QR_<PT>_FILE`
+  ↔ secret ter-mount; `fnb_table_token_key` hanya & wajib di api-gateway; `odoo_fnb_event_hmac` hanya & wajib di
+  odoo + api-gateway dengan env cocok; `LOYALTY_POINT_EXPIRY_DAYS` dilarang di env BFF semua render; render prod: kill
+  switch `FNB_QR_ENABLED`, `FNB_QR_POINTS_ENABLED`, `ONLINE_LOYALTY_{REDEEM,EARN}_ENABLED`, `LOYALTY_EXPIRY_ENABLED`,
+  `LOYALTY_INACTIVE_ANONYMIZE` = `false`.
+
+### 2. Rotasi API key QR (perluasan `efn-rotate-online-key`, pola sama)
+
+- `ALLOWED_CHANNELS` + `QR-PB QR-BCF`. Pemetaan: secret `odoo_api_key_qr_<pt>`, login `efn_qr_<pt>`, nama key
+  `efn-qr-<PT>-<UTC>` (regex cabut-per-nama diperluas `efn-(online|qr)-...`), env `ODOO_API_KEY_QR_<PT>_FILE`, state
+  `qr_<pt>.*`, metrik label `channel="QR-PB"` → semua alert `EfnOnlineApiKey*` yang ada langsung berlaku (tanpa rule
+  baru = tidak berisik).
+- Verifikasi di setiap replika BFF: path #15 `efn.pos.qr.order/efn_qr_status` body `{"config_id":0,"submission_refs":[]}`;
+  **200 atau 422** = key sah (422 = `UserError efn_qr:*`, bearer + akses metode sudah lolos). 422 untuk kanal online
+  tetap gagal (uji 97). Pembuktian key lama dicabut tetap 401.
+- Precheck Odoo shell (Python) QR: modul/grup `efn_pos_bff_order.group_qr_bff` ada (`group_missing`), user anggota grup
+  (`user_not_qr`), tanpa `base.group_system`/`base.group_erp_manager`/`point_of_sale.group_pos_user`
+  (`user_privileged`, L-74), satu company dengan `efn_brand_code` = PT (`user_company_mismatch`), bukan user kanal online
+  (`user_shared`).
+- `--all`: kanal dari `CHANNELS` atau `.env` deploy (`ONLINE_CHANNELS` + `QR-<PT>` bila `FNB_QR_ENABLED=true`,
+  `FNB_QR_COMPANIES` divalidasi `PB|BCF`); `QR-*` di `ONLINE_CHANNELS` ditolak. Lock per kanal, kunci host bersama
+  deploy, alert per kanal — tidak berubah.
+- JS verifikasi kini menerima nama env/secret/path/body dari skrip (nilai turunan allowlist, bukan input).
+- Runbook: docs/runbooks/odoo-qr-api-key.md. **Skrip host wajib dipasang ulang** (`install ... /usr/local/sbin/efn-rotate-online-key`
+  + sha256 di-review); versi lama menolak `QR-*`.
+
+### 3. odoo-rpc-gateway path 13–15 (§14.A.5/§14.E.2)
+
+- `haproxy.cfg`: `p_allowed` + `/json/2/efn.pos.qr.order/efn_qr_menu`, `/efn_qr_submit`, `/efn_qr_status` (15 path).
+  Tidak ada header/aturan baru; `odoo-tls --allow-cn` tidak berubah.
+- `test-gateway.sh`: +12 kasus (3 positif; negatif: model salah, sufiks `_v2`, huruf besar, `search_read`,
+  `pos.order/create`, `pos.order/sync_from_ui`, `pos.config/efn_qr_session_open` (RPC POS bukan BFF), garis miring akhir,
+  encoded `%61`) → 114 kasus. README diperbarui.
+- **Ketidaksesuaian nama (untuk lead):** docs/04 §14.A.5 = model `efn.pos.qr.order` + `efn_qr_menu/submit/status`;
+  docs/08 §13.1b (fit-gap) = `efn.pos.table.session.efn_qr_catalog`, `efn_qr_order_submit`, `efn_qr_order_status`; L-70
+  mengganti nama modul ke `efn_pos_bff_order` tanpa menyebut model. Gateway mengikuti §14.A.5 sesuai instruksi. Bila
+  efn-odoo-engineer memakai nama docs/08, tiga baris `p_allowed`, kasus uji gateway, dan path verifikasi rotasi
+  (`RPC_PATH` di efn-rotate-online-key) harus diubah bersamaan dengan `RPC_ALLOWLIST` Odoo.
+
+### 4. Redaksi Promtail `fts1.` + alert D.9
+
+- `promtail.yml` & `promtail-journal.yml` tahap **(a0)** (pertama, sebelum (a)): `(fts1\.[A-Za-z0-9_.-]+)` →
+  `[TABLE_TOKEN_REDACTED]`, tanpa batas kiri (bentuk URL-encoded `%3Dfts1.` juga kena). Fixture: api-gateway (token di
+  teks + header), traefik (`?ts=`), generic (fragment `#t=`, juga lewat pipeline journal); expected.txt +7 entri.
+- `traefik.yml`: header `X-Table-Session: drop` eksplisit (defaultMode sudah drop).
+- Heartbeat W-17: promtail tahap (4) baru → `{stream="efn_loyalty", loyalty_event="expiry_run", expiry_status, expiry_phase}`.
+  **Kontrak format untuk efn-bff-engineer:** logger `LoyaltyInactivity<Nama>`, level LOG/WARN/ERROR, baris
+  `EFN_LOYALTY_EXPIRY_RUN {"status":"ok|dry_run|aborted|error","phase":"notice|expire|anonymize",...}` (kunci pertama
+  `status`, kedua `phase`, sisanya jumlah tanpa data member). Fixture: dry_run, aborted, satu baris palsu (logger lain).
+- `loki-rules/efn-loyalty.yml` grup `efn-loyalty-expiry`: `EfnLoyaltyExpiryAborted` (critical, aborted dalam 26 j),
+  `EfnLoyaltyExpiryFailed` (warning, error dalam 26 j), `EfnLoyaltyExpiryHeartbeatMissing` (warning, dead-man 26 j,
+  bersenjata hanya bila ada heartbeat 7 hari terakhir → production yang OFF tidak alarm). Runbook
+  docs/runbooks/loyalty-inactivity-expiry.md. Metrik counter Prometheus (`efn_loyalty_expiry_total`) sengaja belum dipakai
+  alert (deret hilang saat restart).
+
+### 5. deploy-validate (A.10 API8, D-22-18, L-73) + env
+
+- `EFN_RELEASE_CONFIG_VARS` + 28 variabel G22 (FNB_QR_*, FNB_*, ONLINE_LOYALTY_*, LOYALTY_EXPIRY_*, LOYALTY_ACTIVITY_EPOCH,
+  LOYALTY_POINT_MAX_AGE_DAYS, LOYALTY_INACTIVE_ANONYMIZE*); `deploy.sh` menulis ke `.env` (kosong = default compose);
+  `deploy.yml` `CFG_*`.
+- `efn_validate_g22_config`: boolean, `FNB_CAPTCHA_MODE`, rentang (TTL 600..14400, baris 1..30, qty 1..20 = batas keras
+  Odoo, retensi 7..730, link ≤ retensi, bulan 6..36, notice 7..60, jam 0..23, batch 1..5000, `MAX_PER_RUN` 1..999999,
+  `MAX_AGE_DAYS` 0..3650, grace 0..90), `FNB_QR_COMPANIES` ⊆ {PB,BCF} unik, `FNB_QR_BASE_URL_<PT>` = `https://host[/path]`
+  huruf kecil tanpa port/query/fragment/userinfo, `FNB_QR_ENABLED=true` → URL setiap PT wajib.
+- **D-22-18:** `EFN_REMOVED_CONFIG_VARS=(LOYALTY_POINT_EXPIRY_DAYS)` → production ditolak (nilai apa pun, termasuk 0),
+  staging peringatan; manifest yang memuatnya ditolak skema efn-deploy; check-encryption melarang di env BFF.
+- **L-73:** `EFN_GATED_FEATURES=(LOYALTY_EXPIRY_ENABLED LOYALTY_INACTIVE_ANONYMIZE)`; production `true` hanya bila nama ada
+  di **`EFN_ALLOW_FEATURE_ON`** — kunci baru `/etc/efn/deploy.conf` (dipin host, ditolak dari stdin, divalidasi
+  topologi; satu izin tidak membuka yang lain). `LOYALTY_EXPIRY_ENABLED=true` wajib `LOYALTY_ACTIVITY_EPOCH`;
+  anonimisasi tanpa job hangus ditolak. `efn-deploy` mengenal & mengekspor kunci baru → **wajib dipasang ulang** sebelum
+  Superadmin menulis kunci itu (versi lama `die "kunci tidak dikenal"`).
+- Compose base (`api-gateway`): semua env §14.A.9/§14.C.1/§14.D.8 dengan default kontrak; `LOYALTY_EXPIRY_DRY_RUN`
+  default `true`; Odoo `EFN_FNB_EVENT_HMAC_FILE`. Dev: `FNB_QR_BASE_URL_{PB,BCF}=https://app.efn.local`. `.env.example`
+  diperbarui (nilai non-rahasia; nilai kosong tanpa komentar inline karena parser .env compose memotong spasi depan).
+- `FNB_RL_*`, `LOYALTY_POLICY_CEILING_INACTIVITY_MONTHS_MIN/_MAX`, `ONLINE_REDEEM_STEPUP_MIN_POINTS` **tidak** diekspos
+  (default BFF; plafon kebijakan tidak boleh dilonggarkan lewat config rilis).
+
+### 6. Untuk agent lain
+
+- **efn-bff-engineer:** env & file secret persis tabel §1; key QR tidak ada (env tidak diset) = PT "QR tidak
+  dikonfigurasi" (jangan gagal start); heartbeat `EFN_LOYALTY_EXPIRY_RUN` format §4; `LOYALTY_POINT_EXPIRY_DAYS` masih
+  dibaca `app-config.ts:900` (default 365) — harus dihapus/ditolak sesuai D-22-18; `FNB_TABLE_TOKEN_KEY_PREV_FILE` belum
+  di-wire compose.
+- **efn-odoo-engineer (A):** grup `efn_pos_bff_order.group_qr_bff` wajib `api_key_duration` 35 hari (tanpa itu key user
+  non-admin dibatasi 1 hari → rotasi gagal); `RPC_ALLOWLIST` + `test_rpc_surface.py` memuat 3 metode yang sama dengan
+  gateway; `efn_qr_status(config_id=0, submission_refs=[])` harus menjawab 200 atau `UserError` (422), bukan 500.
+  Odoo membaca `EFN_FNB_EVENT_HMAC_FILE`.
+- **efn-data-ai-engineer:** promtail.yml & efn-loyalty.yml disentuh di tahap (a0)/(4) dan grup baru — rekonsiliasi bila
+  ada perubahan paralel.
+- **efn-security-reviewer:** gerbang L-73 di host (bukan manifest), redaksi `fts1.`, least privilege secret QR/HMAC,
+  4 kasus 422 vs 401.
+
+### 7. Belum terverifikasi / risiko
+
+- Semua uji di bawah **belum dijalankan** (tidak ada shell di sesi ini); shellcheck v0.9.0 belum dijalankan — kode ditulis
+  mengikuti pola yang sudah lolos (mis. `${PT,,}` bukan `tr 'A-Z'` untuk menghindari SC2018/2019).
+- `expected.txt` promtail disusun manual (urutan `LC_ALL=C`); bila beda urutan/label, jalankan `--update` dan tinjau diff.
+- Uji nyata gateway (114 kasus) & rotasi QR terhadap Odoo nyata menunggu modul `efn_pos_bff_order`.
+- Nama model RPC QR (lihat §3).
+
+### 8. Perintah uji (Git Bash, root repo)
+
+```bash
+PY=python:3.12-bookworm@sha256:e91fec3d1ac69f04e4eddcd29c327e630ce34658cf31075bfa7e8b0e052bafea
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/src:ro" "$PY" bash /src/scripts/host/test-efn-deploy.sh
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/src:ro" "$PY" bash /src/scripts/host/test-efn-rotate-online-key.sh
+bash scripts/test-promtail-redaction.sh
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/mnt:ro" -w /mnt koalaman/shellcheck:v0.9.0 -x \
+  scripts/*.sh scripts/lib/*.sh scripts/host/efn-deploy scripts/host/efn-online-cs scripts/host/efn-rotate-online-key \
+  scripts/host/*.sh infra/odoo-rpc-gateway/test-gateway.sh infra/odoo-rpc-gateway/test-gateway-load.sh
+bash scripts/gen-secrets.sh && cp -n infra/compose/.env.example infra/compose/.env
+bash scripts/check-encryption.sh
+(cd infra/compose && docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.payment.yml \
+   -f docker-compose.pii.yml $(for f in docker-compose.online-*.yml; do printf -- '-f %s ' "$f"; done) \
+   --profile core --profile data --profile ai --profile observability --profile ops config --format json \
+   | jq -r '.secrets | keys[]' | sort | diff - <(awk '!/^[[:space:]]*#/ && NF {print $1}' ../../scripts/secrets.list | sort))
+# haproxy -c gateway (seperti CI job infra) lalu, dengan stack dev berjalan:
+bash infra/odoo-rpc-gateway/test-gateway.sh
+```
+
+### G22 r15 — QA G22 P2-3 (env ETL opsional) + SEC-171 (saklar consent notice hangus)
+
+Tanpa shell: tidak ada tes yang saya jalankan. Semua di bawah **belum terverifikasi**; lead menjalankan
+`test-efn-deploy.sh`, shellcheck v0.9.0, `check-encryption.sh`, `docker compose config` (perintah di atas).
+
+> **Ringkasan manajemen.** Empat job analitik baru (wilayah pelanggan, KPI dapur, KDS kanal online, rekonsiliasi poin
+> online) kini bisa dinyalakan lewat konfigurasi rilis resmi; default tetap mati. Saklar "WA pengingat poin hangus hanya
+> ke member yang memberi consent" terpasang default **aktif**. Di production, saklar itu hanya bisa dilepas oleh
+> Superadmin di server setelah keputusan Legal, memakai gerbang yang sama dengan fitur poin hangus.
+
+**Perubahan**
+
+| Area | Isi |
+|---|---|
+| compose `etl` | `ETL_PARTNER_REGION_ENABLED`, `ETL_LOYALTY_RECON_ONLINE_ENABLED`, `ETL_ENABLE_KDS`, `ETL_KDS_ONLINE_ENABLED` = `${X:-false}` (nama persis `services/etl/efn_etl/config.py:259-275`) |
+| compose `api-gateway` | `LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT: ${…:-true}` |
+| dev overlay | Hanya komentar: flag ETL baru **tidak** dipaksa `true` (butuh `efn_region`/`efn_pos_kds`/E-29a + grant G21/G22 di DB dev); nyalakan lewat `.env` |
+| `.env.example` | 5 variabel + prasyarat |
+| `deploy-validate.sh` | 5 nama masuk `EFN_RELEASE_CONFIG_VARS`; boolean `true|false`; prasyarat ETL cermin `config.py` (KDS/REGION/RECON_ONLINE + `ETL_ENABLE_ODOO=false` eksplisit ditolak; kosong diterima = aktif setelah grant; KDS_ONLINE butuh KDS; RECON_ONLINE butuh mode `payment`); `LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT` masuk `EFN_GATED_FEATURES` + daftar baru `EFN_GATED_FEATURES_OFF` (nilai berisiko = `false`) |
+| `deploy.sh` | 5 kunci ke `.env` (default `false` / `true`); peringatan bila job ETL opsional `true` sementara `ETL_ENABLE_ODOO` efektif belum `true` (etl restart sampai grant sukses, lalu `up -d etl` yang sudah ada) |
+| `deploy.yml` | `CFG_*` untuk 5 variabel (default `'false'` / `'true'`) |
+| `efn-deploy` | Komentar header: nama izin baru di `EFN_ALLOW_FEATURE_ON` |
+| `check-encryption.sh` | Render prod: `LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT == "true"` (wajib ada), 4 flag ETL `== "false"` (wajib ada) |
+| `test-efn-deploy.sh` | 179b–179h (jalur penuh efn-deploy: manifest, izin deploy.conf, penerusan ke deploy.sh, stdin ditolak) + 251–269 (unit `efn_validate_config`) |
+| runbook | `loyalty-inactivity-expiry.md`: baris kontrol SEC-171 dilengkapi status infra + langkah 4a melepas filter consent |
+
+**Keputusan.** Gerbang `false` memakai `EFN_ALLOW_FEATURE_ON` (bukan `EFN_ALLOW_CONTROL_OFF`): keputusannya jenis yang
+sama dengan L-73 (persetujuan Legal/Meta, bukan izin darurat), dan izin satu nama tidak membuka nama lain (tes 256/257).
+Superadmin menulis `EFN_ALLOW_FEATURE_ON='LOYALTY_EXPIRY_ENABLED LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT'`; arti nama
+kedua = "boleh `false`". Bila lead/security reviewer lebih suka semantik "kontrol off", cukup pindahkan nama ke
+`EFN_SECURITY_CONTROLS` dan hapus dari `EFN_GATED_FEATURES*` (tes 251/252/179b/179c ikut diganti).
+
+**Belum / risiko**
+- BFF belum membaca env ini saat saya memeriksa (`app-config.ts` tanpa `LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT`); env yang
+  belum dibaca tidak berbahaya. Parser BFF harus menerima `true|false` saja (sama dengan deploy-validate).
+- ETL dengan flag opsional `true` dan `ETL_ENABLE_ODOO` belum `true` (deploy pertama sebelum grant) restart terus sampai
+  grant sukses. Tidak ada `--wait` di deploy.sh sehingga deploy tidak gagal, tetapi alert container restart bisa muncul
+  sebentar. Grant G21/G22 (view region/KDS/online) dan modul Odoo prasyarat **tidak** dicek deploy.sh (job ETL hanya
+  mencatat gagal query bila view belum ada); urutan aktivasi ada di `services/etl/README.md`.
+- `check-encryption.sh` sekarang mewajibkan kelima env ada di render prod; `.env` lokal developer yang menyalakan
+  KDS/region akan membuat cek prod lokal gagal (sama dengan kill switch G22 lain). CI memakai `.env.example`.
+
 ## G21 (19 Okt 2026, branch chore/wave-21, HEAD 71aef24) — AC-4 CI PII, AC-13 kunci PII produksi, kunci kebijakan poin, path gateway ke-12
 
 Kontrak: docs/04 §13.1 no. 3 (L-61), §13.2 (AC-4, AC-13, L-59), §13.5 (path ke-12, L-63), §13.6 baris devsecops;

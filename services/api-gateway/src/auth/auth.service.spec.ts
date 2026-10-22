@@ -80,7 +80,21 @@ describe('AuthService', () => {
     expect(await ctx.auth.me({ memberId: payload.sub, memberHash: row.member_hash })).toEqual({
       member_ref_masked: '62812****890',
       points_balance: 1200,
+      // G22 (aditif): tanpa port poin/job di test ini → nilai netral
+      points_reserved: 0,
+      points_expiry: { inactive_since: null, expires_on: null, notice_sent: false },
     });
+  });
+
+  it('G22 §14.D.2: login OTP sukses memperbarui aktivitas member (GREATEST) bila DB tersedia', async () => {
+    const ctx = setup();
+    const auth = new AuthService(ctx.config, (ctx.auth as unknown as { otp: OtpService }).otp, new RateLimiter(ctx.kv), ctx.tokens, new LoyaltyService(ctx.config, ctx.db, ctx.cipher), ctx.altcha, ctx.memberService, ctx.db);
+    const req = await auth.requestOtp({ phone: PHONE, altcha: ctx.captcha('203.0.113.9') }, '203.0.113.9');
+    await auth.verifyOtp({ ageConfirmed: true, challengeId: req.challenge_id, code: ctx.sender.lastCode() }, '203.0.113.9');
+    const q = ctx.db.find('INSERT INTO platform.loyalty_member_activity');
+    expect(q).toHaveLength(1);
+    expect(q[0].params[0]).toBe(memberHash(ctx.config.memberHashPepper, PHONE));
+    expect(q[0].params[2]).toBe('login_otp');
   });
 
   it('login kedua dengan nomor sama → member yang sama (upsert)', async () => {

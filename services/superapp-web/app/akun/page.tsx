@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { bffFetch, type MeResponse } from '@/lib/bff';
 import { formatNumber } from '@/lib/format';
+import { currentExpiryNotice, parsePointsExpiry } from '@/lib/points';
 import { getSessionToken } from '@/lib/session';
 
 export const metadata: Metadata = { title: 'Akun' };
@@ -15,6 +16,11 @@ export default async function AkunPage() {
 
   const me = await bffFetch<MeResponse>('/v1/me', { token });
   if (!me.ok && me.status === 401) redirect('/masuk?next=/akun&expired=1');
+
+  // G22 (§14.D.6): info poin hangus hanya bila BFF mengisi `expires_on` (≤ 60 hari) dan saldo > 0. Teks DRAF (menunggu Legal).
+  const balance = me.ok ? (me.data.points_balance ?? 0) : 0;
+  const reserved = me.ok && typeof me.data.points_reserved === 'number' && me.data.points_reserved > 0 ? me.data.points_reserved : 0;
+  const expiry = me.ok ? currentExpiryNotice(parsePointsExpiry(me.data.points_expiry), balance) : null;
 
   return (
     <div className="stack" style={{ maxWidth: '36rem', margin: '0 auto' }}>
@@ -32,6 +38,23 @@ export default async function AkunPage() {
               Poin berlaku di semua brand EFN. Dapatkan poin tambahan lewat{' '}
               <Link href="/pantau-harga">Pantau Harga</Link>.
             </p>
+            {reserved > 0 && (
+              <p className="small" style={{ margin: 0 }}>
+                {formatNumber(reserved)} poin sedang ditahan untuk pesanan online yang belum dibayar. Poin kembali bila pesanan
+                kedaluwarsa atau dibatalkan.
+              </p>
+            )}
+            {expiry && (
+              <div className={expiry.urgent ? 'alert alert-error' : 'notice'} role="note" aria-labelledby="hangus-judul">
+                <p id="hangus-judul" style={{ margin: 0, fontWeight: 700 }}>
+                  Poin akan hangus
+                </p>
+                <p style={{ margin: '0.25rem 0 0' }}>{expiry.text}</p>
+                <p className="small" style={{ margin: '0.25rem 0 0' }}>
+                  Tanggal hangus: <strong>{expiry.dateLabel}</strong> · Jumlah: <strong>{formatNumber(expiry.points)} poin</strong>
+                </p>
+              </div>
+            )}
           </section>
           <section className="card stack">
             <h2 style={{ margin: 0 }}>Profil</h2>

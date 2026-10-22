@@ -6,6 +6,7 @@ PERSIS ``efn_online:<kode>``), §10.3.6 (kode ambil = rahasia; Odoo hanya menyim
 
 import hashlib
 import json
+import math
 import re
 from contextlib import contextmanager
 
@@ -26,6 +27,9 @@ ERROR_CODES = frozenset(
         "channel_inactive",
         # G21 E-39 (docs/04 §13.5, L-63): PT bukan PPN, atau efn_pii tidak terpasang/aktif -> BFF 422.
         "invoice_not_available",
+        # G22 W-12 (docs/04 §14.C.3 "Place"): porsi Poin EFN di luar kebijakan PT / kanal tanpa redeem -> BFF 409
+        # exceeds_max_pct.
+        "points_invalid",
     }
 )
 
@@ -252,6 +256,70 @@ def lines_payload(lines, max_lines):
         require(product_id not in result)
         result[product_id] = qty
     return sorted(result.items())
+
+
+# G22 W-04 B-4 (docs/04 §14.B, D-22-9): baris cart F&B membawa atribut `no_variant` (PTAV). Batas 10 nilai per baris.
+MAX_ATTRIBUTE_VALUES = 10
+CART_LINE_KEYS = frozenset({"product_id", "qty", "attribute_value_ids"})
+
+
+def cart_lines_payload(lines, max_lines):
+    """Validasi baris cart/quote/place (input BFF, docs/04 §14.B B-4).
+
+    Baris = ``{product_id, qty, attribute_value_ids?: int[] <= 10}``. Identitas baris = ``(product_id,
+    sorted(attribute_value_ids))`` -> produk sama dengan modifier berbeda boleh dua baris; identitas ganda / PTAV ganda
+    dalam satu baris ditolak. ``attribute_value_ids: []`` sama dengan tanpa kunci. Kepemilikan PTAV divalidasi kanal
+    (``_efn_online_line_ptavs``), bukan di sini.
+
+    :returns: list terurut ``(product_id, tuple(ptav_ids terurut), qty)``.
+    """
+    require(isinstance(lines, list) and 0 < len(lines) <= min(max_lines, MAX_LINES_HARD))
+    result = {}
+    for line in lines:
+        require(isinstance(line, dict) and set(line) <= CART_LINE_KEYS)
+        product_id = check_int(line.get("product_id"), minimum=1)
+        qty = check_int(line.get("qty"), minimum=1)
+        raw = line.get("attribute_value_ids", [])
+        require(isinstance(raw, list) and len(raw) <= MAX_ATTRIBUTE_VALUES)
+        ptav_ids = tuple(sorted({check_int(value, minimum=1) for value in raw}))
+        require(len(ptav_ids) == len(raw))
+        key = (product_id, ptav_ids)
+        require(key not in result)
+        result[key] = qty
+    return [(pid, ptav_ids, qty) for (pid, ptav_ids), qty in sorted(result.items())]
+
+
+def cart_lines_canonical(normalized):
+    """Bentuk kanonik baris untuk ``payload_sha256`` place: ``[pid, qty]`` tanpa atribut (hash G17..G21 tidak berubah)
+    atau ``[pid, qty, [ptav...]]``."""
+    return [[pid, qty, list(ptav_ids)] if ptav_ids else [pid, qty] for pid, ptav_ids, qty in normalized]
+
+
+# G22 W-12 (docs/04 §14.C.3 "Place"): porsi Poin EFN per bagian. Klien BFF hanya mengirim jumlah poin; nilai Rupiah
+# dihitung BFF (`points × point_value_idr`) dan DIVALIDASI ulang Odoo terhadap kebijakan PT (pertahanan berlapis).
+POINTS_PAYMENT_KEYS = frozenset({"points", "value_idr"})
+MAX_POINTS = 10**9
+
+
+def points_payment_payload(value):
+    """``points_payment`` place (opsional): ``None`` = tanpa poin; selain itu ``{points, value_idr}`` int > 0."""
+    if value is None:
+        return None
+    require(isinstance(value, dict) and set(value) == POINTS_PAYMENT_KEYS)
+    points = check_int(value["points"], minimum=1, maximum=MAX_POINTS)
+    value_idr = check_amount_int(value["value_idr"])
+    require(value_idr >= 1)
+    return {"points": points, "value_idr": value_idr}
+
+
+def round_half_up(value):
+    """Pembulatan Rupiah setengah ke atas untuk nilai >= 0 (bukan banker's rounding ``round()``)."""
+    return int(math.floor(value + 0.5 + 1e-9)) if value > 0 else 0
+
+
+def floor_idr(value):
+    """Rupiah dibulatkan ke bawah (dasar earn K-1/K-18-4, pola ``efn_pos_loyalty_ledger``); <= 0 -> 0."""
+    return int(math.floor(value + 1e-6)) if value > 0 else 0
 
 
 # SEC-104/L-19: penanda "jalur internal" (melewati guard) TIDAK boleh berbasis context (context RPC dikendalikan

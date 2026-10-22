@@ -76,6 +76,14 @@ GRANT SELECT ON efn_dwh.v_gl_ic_recon TO metabase_reader;
 GRANT SELECT ON efn_dwh.v_pos_sales_region_daily TO metabase_reader;
 GRANT SELECT ON efn_dwh.dim_region TO metabase_reader;
 GRANT SELECT(customer_region_code) ON efn_dwh.fact_sales_line TO metabase_reader;
+-- Gelombang 22: KPI dapur KDS (tanpa label meja/catatan/pelanggan -> grant tabel penuh) dan rekonsiliasi poin per
+-- kanal + total POS+online (nominal agregat per PT, tanpa member/partner/part_id).
+GRANT SELECT ON efn_dwh.v_kds_ticket_daily TO metabase_reader;
+GRANT SELECT ON efn_dwh.v_kds_ticket_hourly TO metabase_reader;
+GRANT SELECT ON efn_dwh.fact_kds_ticket TO metabase_reader;
+GRANT SELECT ON efn_dwh.dim_kds_station TO metabase_reader;
+GRANT SELECT ON efn_dwh.v_loyalty_points_daily_channel TO metabase_reader;
+GRANT SELECT ON efn_dwh.v_loyalty_points_daily_total TO metabase_reader;
 
 GRANT metabase_reader TO efn_metabase;
 SET DEFAULT ROLE metabase_reader TO efn_metabase;

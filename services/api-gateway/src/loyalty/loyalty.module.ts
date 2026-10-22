@@ -1,10 +1,22 @@
 import { Module } from '@nestjs/common';
+import { DB, Db } from '../common/db/db';
+import { ONLINE_POINTS, PgOnlinePoints } from '../orders/online-points';
+import { EXPIRY_STORE, ExpiryStore, LoyaltyInactivityJob, PgExpiryStore } from './loyalty-inactivity.job';
 import { LoyaltyEarnConsumer } from './loyalty-earn.consumer';
 import { LoyaltyPolicyService } from './loyalty-policy.service';
 import { LoyaltyService } from './loyalty.service';
 
 @Module({
-  providers: [LoyaltyService, LoyaltyEarnConsumer, LoyaltyPolicyService],
-  exports: [LoyaltyService, LoyaltyPolicyService],
+  providers: [
+    LoyaltyService,
+    LoyaltyEarnConsumer,
+    LoyaltyPolicyService,
+    // G22 §14.D (W-17): job hangus tidak aktif — OFF kecuali LOYALTY_EXPIRY_ENABLED=true (L-73)
+    { provide: EXPIRY_STORE, inject: [DB, LoyaltyService], useFactory: (db: Db, loyalty: LoyaltyService): ExpiryStore => new PgExpiryStore(db, db, loyalty) },
+    LoyaltyInactivityJob,
+    // G22 §14.C: poin online (dipakai cart/quote, orders/saga, /v1/me) — kill switch ONLINE_LOYALTY_*_ENABLED
+    { provide: ONLINE_POINTS, useClass: PgOnlinePoints },
+  ],
+  exports: [LoyaltyService, LoyaltyPolicyService, LoyaltyInactivityJob, ONLINE_POINTS],
 })
 export class LoyaltyModule {}

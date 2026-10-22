@@ -23,12 +23,15 @@ ADR-027, ADR-031 (semua *Proposed*). Risiko: R-T15 (API key kedaluwarsa), temuan
 | `GL` (`channel_gl`) | PT Grand Lucky (`company_rtl`) | `GL` | aktif | `confirm`, batas Rp5.000.000 / 20 unit (L-41) | `efn_online_gl` | outlet `TOKO-01` (gudang `OL01`), 3 produk PPN `tax_ST4` (berat contoh: beras 5 kg, minyak 1,85 kg, tas tanpa berat) |
 | `PB` (`channel_pb`) | PT Paris Baguette (`company_fnb`) | `PB` | nonaktif (Q-ON2) | `none` | `efn_online_pb` | outlet `RESTO-01` wajib FP non-dine-in kota contoh |
 | `BCR` (`channel_bcr`) | Bacha Coffee Retail (`company_bcr`) | `BACHA` | nonaktif, tanpa outlet | `confirm`, batas L-41 sama | `efn_online_bcr` | ritel PPN |
-| `BCF` (`channel_bcf`) | Bacha Coffee F&B (`company_bcf`) | `BACHA` | nonaktif, tanpa outlet | `none` | `efn_online_bcf` | outlet wajib FP non-dine-in kota BCF (`fiscal_position_bcf_non_dine_in` untuk kota default) |
+| `BCF` (`channel_bcf`) | Bacha Coffee F&B (`company_bcf`) | `BACHA` | nonaktif | `none` | `efn_online_bcf` | **G22 (19.0.1.6.0):** outlet demo `CAFE-01` (gudang `OL03`) ber-FP `fiscal_position_bcf_non_dine_in` (tanpa SC, PB1 0 % — 18-1) |
 
 - Per PT: partner generik & tim (data), pricelist online, jurnal bank "Titipan Online - Holding" (`journal_titipan_<gl|pb|bcr|bcf>`, **demo**; kanal produksi dibuat lewat checklist), pembulatan Rupiah bulat (`biggest_tax`).
 - Dua kanal Bacha berbagi `brand_code` `BACHA` (Super-App satu domain, satu cart, dua PT; ADR-019 opsi A di BFF).
 - User teknis **tanpa API key**; secret BFF `odoo_api_key_online_{gl,pb,bcr,bcf}` (env `ODOO_API_KEY_ONLINE_<KODE>_FILE`, devsecops).
 - Batas berat W-33 (`max_order_weight_kg`) = 0 (mati) di semua kanal demo.
+- **G22 W-04 (docs/08 §13.2):** F&B online = SO per outlet + jembatan KDS **E-29a** (belum dibangun). Outlet kanal F&B
+  (PB, BCF) **wajib** FP non-dine-in kota outlet — jangan memakai FP dine-in (akan menambah SC). Test
+  `test_fnb_channels_outlets_non_dine_in_pb1_zero` (PB1 → 0 %, tanpa SC, FP bukan milik preset dine-in POS).
 - Test: `TestEfnSetupOnline.test_demo_channels` (katalog/quote GL, `weight_kg`), `TestEfnOnlineEntityChannels` (kode kanal = kode PT, brand, user per kanal, batas L-41, kanal lama tidak ada, katalog BCR vs BCF terpisah + user BCR ditolak di BCF).
 
 ### Riwayat G17–G19 (tidak berlaku lagi; untuk jejak keputusan)

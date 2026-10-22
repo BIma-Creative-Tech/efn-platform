@@ -43,8 +43,24 @@ DENY_FIELDS = frozenset(
 # Field teknis yang tidak ikut "semua field" (tracked kosong).
 MAGIC_FIELDS = frozenset({"id", "display_name", "create_uid", "create_date", "write_uid", "write_date"})
 NON_ELIGIBLE_TYPES = frozenset({"one2many", "binary"})
-NON_ELIGIBLE_PREFIXES = ("message_", "activity_")
-NON_ELIGIBLE_NAMES = frozenset({"website_message_ids"})
+NON_ELIGIBLE_PREFIXES = ("message_",)
+# Field mail.activity.mixin dikecualikan per NAMA (bukan prefix "activity_"): prefix ikut membuang field bisnis
+# seperti efn.loyalty.policy.activity_epoch (G22 W-17) dari audit.
+NON_ELIGIBLE_NAMES = frozenset(
+    {
+        "website_message_ids",
+        "activity_ids",
+        "activity_state",
+        "activity_user_id",
+        "activity_type_id",
+        "activity_type_icon",
+        "activity_date_deadline",
+        "activity_summary",
+        "activity_exception_decoration",
+        "activity_exception_icon",
+        "activity_calendar_event_id",
+    }
+)
 # Model log sendiri tidak pernah diaudit (rekursi); model aturan SELALU diaudit (hard-coded).
 SELF_RULE_MODEL = "efn.audit.rule"
 LOG_MODELS = frozenset({"efn.audit.log", "efn.audit.log.line"})

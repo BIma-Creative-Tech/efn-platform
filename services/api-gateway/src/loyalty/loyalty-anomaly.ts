@@ -54,6 +54,17 @@ export const LOYALTY_ANOMALY_KINDS = {
   policy_out_of_bounds: 'warning',
   /** Versi kebijakan sama dengan isi berbeda (409) — outbox Odoo/penyetuju perlu ditinjau. */
   policy_conflict: 'critical',
+  // ── G22 §14.A–§14.D ──
+  /** D-22-5: kunci `pos_earn:<order_uuid>` dipakai earn QR dan POS untuk member berbeda (409 final). */
+  qr_pos_member_conflict: 'critical',
+  /** Reverse `earn_channel: "qr"` untuk order yang tidak dikenal BFF (200 nol; perlu ditinjau). */
+  qr_reverse_unknown_order: 'warning',
+  /** C.3: nilai restore poin online dari Odoo menyimpang > ±Rp1 dari hitungan BFF → refund review. */
+  restore_value_mismatch: 'critical',
+  /** C.3: earn online saat diambil melewati pagar batas kebijakan PT → `earn_status=limited`. */
+  online_earn_limited: 'warning',
+  /** D.3 no. 4: kandidat hangus > LOYALTY_EXPIRY_MAX_PER_RUN → run dibatalkan (alert EfnLoyaltyExpiryAborted). */
+  expiry_run_aborted: 'critical',
 } as const;
 
 export type LoyaltyAnomalyKind = keyof typeof LOYALTY_ANOMALY_KINDS;

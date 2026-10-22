@@ -20,7 +20,7 @@ from odoo.addons.efn_online_order.models import efn_online_order as order_module
 from .common import PICKUP_CODE, EfnOnlineCommon
 
 POST = "odoo.addons.efn_online_order.models.efn_online_event_outbox.requests.post"
-SECRET = "s" * 48
+HMAC_UJI = "s" * 48
 PAYLOAD_KEYS = {
     "schema_version",
     "idempotency_key",
@@ -59,7 +59,7 @@ class TestEfnOnlineHandover(EfnOnlineCommon):
         cls.manager_user = new_test_user(
             cls.env,
             login="efn_online_mgr",
-            groups="base.group_user,sales_team.group_sale_manager",
+            groups="base.group_user,sales_team.group_sale_manager",  # sengaja tanpa stock (uji gerbang ready)
             company_id=cls.company.id,
             company_ids=[Command.set(cls.company.ids)],
         )
@@ -166,7 +166,7 @@ class TestEfnOnlineOutbox(EfnOnlineCommon):
         super().setUp()
         tmp = tempfile.mkdtemp()
         self.paths = {}
-        for name, content in (("hmac", SECRET), ("key", "svc-key-test"), ("ca", "dummy-ca")):
+        for name, content in (("hmac", HMAC_UJI), ("key", "svc-key-test"), ("ca", "dummy-ca")):
             path = os.path.join(tmp, name)
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(content)
@@ -213,7 +213,7 @@ class TestEfnOnlineOutbox(EfnOnlineCommon):
         self.assertEqual(headers["X-EFN-Service-Key"], "svc-key-test")
         signature = headers["X-EFN-Signature"]
         timestamp = signature.split(",")[0].split("=")[1]
-        expected = hmac.new(SECRET.encode(), f"{timestamp}.".encode() + raw, hashlib.sha256).hexdigest()
+        expected = hmac.new(HMAC_UJI.encode(), f"{timestamp}.".encode() + raw, hashlib.sha256).hexdigest()
         self.assertEqual(signature, f"t={timestamp},v1={expected}")
         self.assertEqual(order.event_ids.state, "done")
 
@@ -286,7 +286,7 @@ class TestEfnOnlineOutbox(EfnOnlineCommon):
         manager = new_test_user(
             self.env,
             login="efn_online_mgr_retry",
-            groups="base.group_user,sales_team.group_sale_manager",
+            groups="base.group_user,sales_team.group_sale_manager,stock.group_stock_user",
             company_id=self.company.id,
             company_ids=[Command.set(self.company.ids)],
         )

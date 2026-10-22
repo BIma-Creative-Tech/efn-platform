@@ -462,3 +462,79 @@ Status selesai/dibatalkan tidak menampilkan batas. Label kini menyebut jumlah pe
 **Test**: `tests/g21-invoice.test.ts` (baru): validasi per jenis, normalisasi, kelayakan PT PPN (campuran PB/BCF, kosong, kode tak dikenal), teks privasi, parse buang field tambahan, route meneruskan lima field, tidak ada field tanpa opsi, 400 tanpa BFF dan tanpa echo, 422 -> pesan Indonesia, tidak ada kebocoran ke respons/console.
 
 **Belum diverifikasi**: Vitest/lint/`next build` (tanpa shell; lead menjalankan); tidak ada uji komponen CartView/InvoiceRequestForm (belum ada runner DOM); uji pembaca layar & fokus; tampilan perangkat kecil; teks privasi menunggu Legal; pengujian bahwa pengelola kata sandi/ekstensi browser tidak menyimpan isian (hanya mitigasi `autocomplete="off"`, tanpa `name`); format paspor.
+
+
+## Gelombang 22 — pesan dari meja (QR), modifier F&B online, poin di checkout, info poin hangus (19 Okt 2026; docs/04 §14.A.3, §14.B, §14.C.2, §14.D.6, §14.7)
+
+Tanpa shell: Vitest/lint/typecheck/`next build` belum dijalankan (lead menjalankan). Tidak ada commit.
+
+### 1. Halaman & komponen
+
+**`/meja` (`app/meja/page.tsx` + `components/fnb/*`)**
+- `TableOrder.tsx` (client): token `fts1.…` dibaca dari fragment `#t=` SEKALI → variabel modul (`lib/table-token.ts`) → `history.replaceState` ke `pathname` (fragment dan query dibuang). Token tidak pernah ke `localStorage`/`sessionStorage`/cookie/query/log/analytics (diuji dengan storage jebakan). Seluruh panggilan lewat `/api/fnb/*` dengan header `X-Table-Session` dari memori. Bentuk token hanya diperiksa (anti-sampah); tanda tangan hanya di BFF.
+- Alur: muat `session` + `menu` → kategori (chip `aria-pressed`) → `MenuItem` (panel "Pilih": `AttributePicker`, catatan ≤ 140 dengan hint, jumlah, "Tambah ke pesanan") → keranjang meja di memori (identitas baris = produk + id atribut terurut + catatan) → bilah kirim → "Pesanan terkirim": daftar SEMUA kiriman sesi (L-70: satu kiriman = satu order draft; "Kiriman #n · jam", badge status, ringkasan baris), polling 8 dtk saat ada kiriman belum final / 30 dtk bila tidak, backoff sampai 2 menit, dilewati saat tab tersembunyi, berhenti saat sesi ditutup/tidak valid. `aria-live=polite` untuk pesan & daftar.
+- Keadaan: tanpa token / token ditolak ("Pindai QR di meja Anda"), sesi ditutup (`409 table_session_closed`), `503 ordering_unavailable` ("Silakan pesan ke pelayan"), galat umum + "Coba lagi".
+- Kirim: `Idempotency-Key` = `crypto.randomUUID()` per percobaan, disimpan di `sessionStorage` bersama sidik isi pesanan (cyrb53, BUKAN token dan BUKAN teks catatan). Isi sama → key sama (retry setelah jaringan putus aman); isi berubah → key baru; sukses atau `idempotency_conflict` → dihapus. Jaringan putus → pesan "tekan Kirim lagi (tidak akan terkirim dua kali)".
+- `409 item_unavailable` + `product_ids` → menu ditandai Habis, baris di keranjang diberi tanda, kirim diblokir sampai dihapus. `400 captcha_required` → `AltchaWidget` muncul (payload ikut di body `altcha`, remount setelah dipakai). `session_limit_reached`, `rate_limited`, dll → pesan Indonesia dari peta.
+- `PointsClaim.tsx`: tampil hanya bila `session.points.claimable/claimed`. Tamu: `<details>` "Masuk untuk klaim poin" dengan `LoginForm nextPath="/meja"` TERTANAM (agar token di memori tidak hilang; pindah ke `/masuk` memuat ulang dokumen). Member: tombol klaim / batalkan klaim; klaim akun lain → informasi saja. Tidak ada saldo/nominal poin di layar ini.
+- Aksesibilitas/mobile-first: semua kontrol berlabel (`label`/`legend`/`aria-label`), target sentuh ≥ 44 px, error `role=alert` + fokus ke isian bermasalah, `aria-expanded/controls` pada panel menu, bilah kirim menempel di bawah. `metadata`: `robots noindex`, `referrer no-referrer`; `next.config.mjs`: `/meja` → `Cache-Control: no-store`, `X-Robots-Tag: noindex, nofollow`; `robots.txt` `Disallow: /meja`.
+
+**Route Handler `app/api/fnb/**`** (`lib/fnb-route.ts`): `session` (GET), `menu` (GET), `orders` (GET daftar, POST kirim), `orders/[id]` (GET status; id bukan UUID → 404 tanpa BFF), `points-claim` (POST/DELETE; login wajib). Guard: GET → `isNotCrossSite`, tulis → `isSameOrigin`; header token meja salah → `401 table_session_invalid` tanpa BFF; Bearer dari cookie HttpOnly opsional; Bearer tidak valid di BFF → `unauthenticated` + cookie dihapus (klien mengulang SEKALI sebagai tamu, `fnbApi`); body ≤ 16 KB; POST di-allowlist ulang (`sanitizeSubmitBody`: hanya `product_id, qty, attribute_value_ids, note, altcha`; catatan dinormalisasi dan divalidasi → `400 note_invalid`); respons di-allowlist; semua `no-store`; pesan BFF tidak diteruskan; 503/BFF mati → `503 ordering_unavailable`.
+
+**Checkout poin (`CartView.tsx`, `lib/points.ts`)**: `quote.points` di-parse (`parseQuotePoints`); bagian "Bayar dengan poin (opsional)" muncul bila saldo tersedia > 0 dan ada PT yang `redeem_allowed`: saldo tersedia + nilai (1 poin = Rp…), isian poin per PT (min/maks/nilai dari quote, tombol "Maks" = saldo dikurangi isian PT lain, dibatasi maks PT), porsi tunai per PT ("Dibayar poin Rp…; sisa tunai Rp…"), error per isian (`below_minimum`, `exceeds_max`, `cover_full` = sisa tunai < Rp1, format), error saldo total. Ringkasan: "Total tagihan" − "Dibayar dengan poin" = "Bayar tunai"; tombol "Bayar Rp<tunai>". Teks menegaskan poin = alat bayar bukan diskon (pajak atas harga penuh). `POST /api/orders` meneruskan `points_redeem: [{channel_code, points}]` (validasi ulang: satu entri/kanal, bulat > 0, hanya dua field); `accept_total` tetap Σ `amount_payable`; `Idempotency-Key` tetap dari `quote_id` saja (kontrak: key sama + poin beda → `409 idempotency_conflict`). Error baru dipetakan ke pesan Indonesia: `insufficient_points`, `below_minimum`, `exceeds_max_pct`, `points_unavailable`, `points_cover_full_amount` (empat pertama → quote dihitung ulang; `points_unavailable` → isian dikosongkan). `OrderView`/`CounterPayPanel`: total, "Dibayar dengan poin", "Dibayar tunai" (QRIS & kasir memakai porsi tunai `cashDue`), per PT poin ditukar / tunai / poin diperoleh / poin dikembalikan.
+
+**Modifier F&B online**: `lib/attributes.ts` (parse format A.6, pilihan, validasi, ringkasan, tambahan harga indikatif); `AttributePicker` (dipakai bersama `/meja`): `radio`/`pills` → radio, `select` → `<select>`, `multi` → kotak centang; opsional diberi "Tanpa"; error wajib dengan `role=alert`. `AddToCart` menampilkan picker bila produk punya atribut dan mengirim `attribute_value_ids`. `lib/cart.ts`: `CartLine.attribute_value_ids?` (≤ 10, terurut, dihilangkan bila kosong → ritel tidak berubah); identitas baris = produk + atribut; `addItem/setQty/mergeGroups/sanitizeCart` ikut; keranjang tamu menyimpan ringkasan pilihan (`options`, hanya tampilan); `QuoteLine.attributes_text`; `pairQuoteLines` memasangkan baris keranjang ↔ baris quote menurut urutan kemunculan produk; issue `attribute_invalid` (label + memblokir checkout). Katalog: `ProductSummary.attributes`, `CatalogChannel.business_type/loyalty`, `priceDisplay()`: kanal F&B menampilkan harga SEBELUM pajak + "belum termasuk PB1 10%" (B-5), ritel tetap termasuk pajak; rincian pajak final dari `tax_groups` quote (frontend tidak menghitung pajak).
+
+**Info poin hangus (`app/akun/page.tsx`)**: `MeResponse` + `points_reserved`, `points_expiry`. Bila `expires_on` terisi dan saldo > 0: kotak "Poin akan hangus" berisi tanggal (zona WIB, hari tersisa), jumlah (= seluruh saldo), nada mendesak (≤ 7 hari). Bila `points_reserved > 0`: catatan poin ditahan untuk pesanan belum dibayar. Teks DRAF (L-73).
+
+### 2. Ketergantungan ke endpoint BFF (path + kontrak yang diasumsikan)
+
+| Dari browser | BFF | Dipakai |
+|---|---|---|
+| `GET /api/fnb/session` | `GET /v1/fnb/session` | `outlet_name, table_label, company_code, brand_code, expires_at, confirm_mode, limits{max_lines,max_line_qty,submissions_left}, points{claimable,claimed,claimed_by_me}` |
+| `GET /api/fnb/menu` | `GET /v1/fnb/menu` | `categories[], products[]{product_id,name,category_id,image_sha,price_excl,tax_labels,price_note,available,attributes[A.6]}`; gambar via `/api/catalog/images/:sha` yang sudah ada |
+| `POST /api/fnb/orders` | `POST /v1/fnb/orders` + `Idempotency-Key` | body `{lines[{product_id,qty,attribute_value_ids,note?}], altcha?}` → `202 {submission_id,status,lines[],indicative_subtotal_excl}` (replay `200`) |
+| `GET /api/fnb/orders` | `GET /v1/fnb/orders` | `items[{submission_id,created_at,status,lines[{name,qty}]}]` |
+| `GET /api/fnb/orders/:id` | `GET /v1/fnb/orders/:id` | `{submission_id,status,updated_at}` (dipakai route; UI memakai daftar) |
+| `POST/DELETE /api/fnb/points-claim` | `POST/DELETE /v1/fnb/session/points-claim` | `200 {claimed:true}` / `204`; header `X-Table-Session` + Bearer |
+| `POST /api/cart/quote` (sudah ada) | `POST /v1/cart/quote` | respons + `points{balance_available,point_value_idr,groups[{channel_code,redeem_allowed,min_points,max_points,max_value_idr}]}`; baris quote + `attributes_text`; issue `attribute_invalid` |
+| `PUT /api/cart` (sudah ada) | `PUT /v1/cart` | lines + `attribute_value_ids?` |
+| `POST /api/orders` (sudah ada) | `POST /v1/orders` | + `points_redeem[{channel_code,points}]`; error `insufficient_points, below_minimum, exceeds_max_pct` (409), `points_unavailable, points_cover_full_amount` (422) |
+| `GET /api/orders/:id` (sudah ada) | `GET /v1/orders/:id` | + `amount_points_value, amount_cash`; per bagian `points_redeemed, points_value_idr, amount_cash, points_earned, points_restored` |
+| `GET /v1/catalog/channels`, `/products` | (sudah ada) | channel + `business_type`, `loyalty{earn,redeem}`; produk + `attributes[]` |
+| `GET /v1/me` (halaman akun) | (sudah ada) | + `points_reserved`, `points_expiry{inactive_since,expires_on,notice_sent}` |
+
+Error yang dikenali di `/api/fnb/*`: `table_session_invalid` (401), `unauthorized` (401, Bearer tidak valid), `table_session_closed`, `idempotency_conflict`, `item_unavailable` (+`product_ids`), `points_already_claimed`, `account_deleting` (409), `invalid_request`, `idempotency_key_required`, `note_invalid`, `captcha_required` (400), `session_limit_reached`, `points_unavailable` (422), `rate_limited` (429), `ordering_unavailable` (503), `not_found` (404). Kode lain → `invalid_request`/`not_found`/`rate_limited` menurut status, atau `upstream_error` (5xx).
+
+### 3. Keputusan implementasi & asumsi yang perlu dikonfirmasi
+
+1. **Token di memori, bukan `sessionStorage`** (instruksi lead; meralat kalimat di §14.A.2). Konsekuensi UX: memuat ulang `/meja` (atau navigasi penuh) = pindai ulang QR; keranjang meja ikut hilang. Karena itu login untuk klaim poin dilakukan di halaman (LoginForm tertanam) dan bukan lewat `/masuk`.
+2. **Idempotency-Key kiriman** disimpan di `sessionStorage` (bukan token). Bila lead ingin nol penyimpanan sama sekali, retry setelah reload tidak lagi idempoten (token juga sudah hilang saat reload, jadi dampaknya kecil).
+3. `pills` diperlakukan pilih-satu (stricter dari server); `multi` = pilih banyak. Kontrak hanya menyebut "satu nilai per atribut `radio/select`".
+4. Pemasangan baris keranjang ↔ baris quote untuk produk sama dengan modifier berbeda memakai URUTAN (quote tidak membawa id atribut). BFF/Odoo harus menjaga urutan baris quote = urutan cart, atau menambahkan `attribute_value_ids` ke baris quote.
+5. `points_earned`/`points_restored` pada `GET /v1/orders/:id` diasumsikan per bagian dan berupa JUMLAH POIN (kontrak §14.C.2 tidak merinci level/satuan; kolom DB `points_restored_value` bernilai Rp). Order-level hanya `amount_points_value` + `amount_cash`.
+6. Kanal F&B: harga katalog memakai `price_excl` + `tax_labels`; `business_type` dari BFF, fallback dari kode PT (PB/BCF = fnb).
+7. Tampilan `expires_on`: jumlah yang hangus = seluruh `points_balance` (semantik §14.D.3: semua lot hangus bersamaan). Teks tidak menyebut "12 bulan" karena `/v1/me` tidak membawa nilainya.
+8. Menu `Cache-Control: private, max-age=60` dari BFF tidak dipakai: aturan `/api/*` di `next.config.mjs` memaksa `no-store` (menu diambil sekali per kunjungan).
+9. Idempotency-Key checkout tidak diubah oleh poin (tetap dari `quote_id`): bila percobaan pertama sudah membuat order lalu pelanggan mengganti jumlah poin, BFF menjawab `409 idempotency_conflict` → pesan "sedang diproses, buka daftar pesanan" (sesuai kontrak).
+
+### 4. Test (Vitest; belum dijalankan)
+
+`tests/g22-fnb.test.ts` (token fragment → memori tanpa menyentuh storage, URL dibersihkan, catatan, keranjang meja, sanitasi body, Idempotency-Key, parser, polling, peta pesan), `tests/g22-points.test.ts` (parse `quote.points`, alokasi/porsi tunai ≥ Rp1/saldo lintas PT/"Maks", `sanitizePointsRedeem`, parsing pesanan dengan poin, info hangus: tanggal WIB/hari/teks), `tests/g22-attributes.test.ts` (parse A.6, pilihan, identitas baris keranjang, guest cart, `pairQuoteLines`, `attribute_invalid`, katalog F&B, `priceDisplay`), `tests/g22-routes.test.ts` (route `/api/fnb/*` dengan BFF di-mock: guard/Origin, token hilang, Bearer opsional/dihapus saat 401, Idempotency-Key, allowlist, peta error, `product_ids`, klaim poin wajib login, `points_redeem` + kode error poin). Test lama tidak diubah; keluaran parser lama kompatibel (field baru ditambahkan, `toEqual` lama tetap lolos menurut telaah).
+
+### 5. Belum diverifikasi
+
+- Vitest, ESLint (aturan `react-hooks` v7: sengaja menghindari `setState` sinkron di effect dan `Date.now()` di render), `tsc`, `next build` — belum dijalankan.
+- Perilaku browser nyata: `history.replaceState` menghapus fragment di iOS Safari/Chrome Android; LoginForm tertanam mempertahankan state `/meja` setelah `router.replace('/meja')` + `router.refresh()` (jika remount, token hilang dan pelanggan harus pindai ulang); polling dengan 2+ ponsel di meja yang sama terhadap batas 30/menit/sesi.
+- Tidak ada uji komponen (belum ada runner DOM); uji pembaca layar & fokus pada `MenuItem`, `AttributePicker`, `PointsSection`.
+- Kontrak BFF belum ada saat ini ditulis: semua bentuk di tabel §2 adalah pembacaan dokumen, bukan integrasi nyata.
+- Teks pelanggan (poin hangus, klaim poin, "tamu", syarat program) menunggu Legal.
+- Pembayaran online di ponsel untuk `/meja` = tahap 2 (bukan cakupan G22).
+
+## G22 r15 — perbaikan temuan QA (P3), `/meja`
+
+1. Daftar kiriman (`lib/fnb.ts`): baris kiriman kini `{name, qty, attributes_text, attribute_value_ids}`. `attributes_text` dinormalkan (kontrol dibuang, maks 300); `attribute_value_ids` lewat `normalizeAttributeIds` (tidak valid -> `[]`). Field absen -> `''`/`[]` (kompatibel BFF lama). `TableOrder.tsx` menampilkan `2 × Kopi (Less sugar, Es)` pada daftar "Pesanan terkirim" dan tidak lagi membuang atribut saat kiriman 202 ditambahkan optimistis.
+2. `item_unavailable`: helper murni `itemUnavailableFeedback(ids, lines)`. Hanya `product_ids` yang ada di keranjang yang ditandai (`menu.available=false` -> baris keranjang menampilkan "Tidak tersedia", tombol kirim terkunci) dan teks "Hapus menu yang ditandai" dipakai. `product_ids` kosong/tidak cocok -> `ITEM_UNAVAILABLE_GENERIC` tanpa klaim penandaan. Route Handler `mapFnbFailure` sudah meneruskan `product_ids` (tidak diubah).
+3. Token meja tetap hanya di memori; `lib/table-token.ts` tidak disentuh.
+
+Test (Vitest, `tests/g22-fnb.test.ts`): ekspektasi `lines` lama diperbarui; ditambah uji atribut per baris dan uji `itemUnavailableFeedback`. Belum dijalankan (tanpa shell); lead menjalankan Vitest/tsc/lint. Asumsi kontrak: BFF mengirim `attributes_text` (string) dan `attribute_value_ids` (int[]) per baris `GET /v1/fnb/orders` dan 202 submit.

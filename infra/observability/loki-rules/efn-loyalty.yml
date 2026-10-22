@@ -80,6 +80,9 @@ groups:
     rules:
       # anomalies > 0 = ledger poin vs order POS tidak cocok (earn tanpa order paid, order paid member tanpa earn,
       # nilai baris Poin EFN beda dengan redeem, dst.) -> dugaan manipulasi/bug sampai terbukti sebaliknya.
+      # G22 (docs/04 §14.C.5, ETL_LOYALTY_RECON_ONLINE_ENABLED): anomalies juga memuat kind online_* (pembayaran
+      # Poin EFN faktur SO vs online_redeem, restore nota kredit vs online_restore, earn tanpa picked_up, clawback
+      # tanpa refund). Format baris & kunci awal tidak berubah (points_daily_online ditambahkan di akhir payload).
       - alert: EfnLoyaltyEtlReconAnomaly
         expr: |
           max(
@@ -91,8 +94,8 @@ groups:
           severity: critical
           team: finance
         annotations:
-          summary: "Poin EFN: rekonsiliasi harian ledger vs order POS menemukan {{ $value }} anomali"
-          description: "Ledger poin BFF dan order POS Odoo tidak konsisten (field kinds/sample_* baris EFN_LOYALTY_RECON_ETL; ClickHouse efn_dwh.loyalty_recon_finding). Jangan koreksi ledger tanpa CR Finance."
+          summary: "Poin EFN: rekonsiliasi harian ledger vs order POS/online menemukan {{ $value }} anomali"
+          description: "Ledger poin BFF dan order POS / faktur SO online Odoo tidak konsisten (field kinds/sample_* baris EFN_LOYALTY_RECON_ETL; ClickHouse efn_dwh.loyalty_recon_finding, kind online_* = kanal online). Jangan koreksi ledger tanpa CR Finance."
           runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-anomaly.md#efnloyaltyetlreconanomaly"
       # open_items > 0 = pekerjaan tertunda (order review, outbox hold/pending > 24 jam, outbox failed) -> ringkasan
       # harian Finance/supervisor, bukan page.
@@ -123,6 +126,58 @@ groups:
           summary: "Poin EFN: rekonsiliasi harian ETL (loyalty_recon) tidak sukses > 26 jam (atau baris tidak dikenali)"
           description: "Kontrol detektif ledger poin vs order POS tidak berjalan. Cek log ETL (EFN_LOYALTY_RECON_ETL status error / heartbeat job=loyalty_recon)."
           runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-anomaly.md#efnloyaltyetlreconmissing"
+
+  # G22 (docs/04 §14.D.3/§14.D.9, W-17): job BFF poin hangus karena tidak aktif 12 bulan (LoyaltyInactivityJob).
+  # Heartbeat `EFN_LOYALTY_EXPIRY_RUN {"status":"ok|dry_run|aborted|error","phase":"notice|expire|anonymize",...}` per
+  # fase per run -> promtail.yml tahap (4) -> {stream="efn_loyalty", loyalty_event="expiry_run", expiry_status, expiry_phase}.
+  # Production: job OFF sampai Legal/Meta menyetujui (L-73; deploy-validate menolak LOYALTY_EXPIRY_ENABLED=true tanpa
+  # izin Superadmin) -> tidak ada baris -> dead-man TIDAK bersenjata (pola EfnLoyaltyLiabilityReconMissing: hanya
+  # setelah baris pertama terlihat dalam 7 hari). Runbook: docs/runbooks/loyalty-inactivity-expiry.md.
+  - name: efn-loyalty-expiry
+    interval: 5m
+    rules:
+      # Pengaman massal §14.D.3 no. 4: kandidat expire satu run > LOYALTY_EXPIRY_MAX_PER_RUN -> run dibatalkan TANPA
+      # menghanguskan apa pun. Indikasi bug jangkar aktivitas/epoch atau data migrasi -> page (poin = liabilitas).
+      # Menyala sampai 26 jam (satu siklus harian) agar tidak padam sebelum dibaca on-call pagi.
+      - alert: EfnLoyaltyExpiryAborted
+        expr: |
+          sum by (expiry_phase) (
+            count_over_time({stream="efn_loyalty", loyalty_event="expiry_run", expiry_status="aborted"} [26h])
+          ) > 0
+        labels:
+          severity: critical
+          team: finance
+        annotations:
+          summary: "Poin hangus: run fase {{ $labels.expiry_phase }} DIBATALKAN (kandidat melebihi LOYALTY_EXPIRY_MAX_PER_RUN)"
+          description: "Tidak ada poin yang dihanguskan pada run ini. Jangan menaikkan batas sebelum jumlah kandidat per penerbit diverifikasi (LOYALTY_ACTIVITY_EPOCH, backfill aktivitas, impor migrasi)."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-inactivity-expiry.md#efnloyaltyexpiryaborted"
+      - alert: EfnLoyaltyExpiryFailed
+        expr: |
+          sum by (expiry_phase) (
+            count_over_time({stream="efn_loyalty", loyalty_event="expiry_run", expiry_status="error"} [26h])
+          ) > 0
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Poin hangus: job fase {{ $labels.expiry_phase }} gagal (status error) dalam 26 jam terakhir"
+          description: "Job berhenti di tengah (DB, lock, kebijakan global). Member yang belum diproses dicoba lagi run berikutnya (idempoten: lock member + cek ulang jangkar + status notice)."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-inactivity-expiry.md#efnloyaltyexpiryfailed"
+      # DEAD-MAN 26 jam (kontrak §14.D.9, warning): bersenjata hanya bila ada heartbeat dalam 7 hari terakhir. Job yang
+      # sengaja dimatikan (LOYALTY_EXPIRY_ENABLED=false) -> alert menyala sampai 7 hari: silence + catat di runbook.
+      - alert: EfnLoyaltyExpiryHeartbeatMissing
+        expr: |
+          absent_over_time({stream="efn_loyalty", loyalty_event="expiry_run"} [26h])
+          and
+          sum by (stream, loyalty_event) (count_over_time({stream="efn_loyalty", loyalty_event="expiry_run"} [7d])) > 0
+        for: 30m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Poin hangus: heartbeat EFN_LOYALTY_EXPIRY_RUN tidak terlihat > 26 jam"
+          description: "Job LoyaltyInactivityJob tidak berjalan (BFF mati, advisory lock tertahan, job dimatikan) ATAU format log berubah (alert aborted/error ikut buta)."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-inactivity-expiry.md#efnloyaltyexpiryheartbeatmissing"
 
   # G21 (data-AI, docs/04 §13.1 no. 7, E-44): rekonsiliasi liabilitas poin per PT setelah akrual harian Odoo
   # (efn_loyalty_accounting, cron 02:00 WIB): saldo akun Liabilitas Poin PT (Odoo) vs closing_liability_idr BFF.

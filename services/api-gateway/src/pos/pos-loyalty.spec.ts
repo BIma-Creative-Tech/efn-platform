@@ -171,8 +171,11 @@ describe('PosLoyaltyService — earn (§9.2)', () => {
       source: 'pos_earn',
       source_ref: ORDER_A,
       idempotency_key: `pos_earn:${ORDER_A}`,
-      expires_at: expiryFor(ctx.clock.now(), 365)?.toISOString(),
+      // G22 D-22-18: default LOYALTY_POINT_MAX_AGE_DAYS=0 → lot tanpa expires_at (hangus lewat job tidak aktif W-17)
+      expires_at: null,
+      reason: 'pos_sale',
     });
+    expect(ctx.db.activity.get(ctx.hash)?.last_kind).toBe('pos_earn'); // G22 §14.D.2
     expect(ctx.cipher.decrypt(row.member_ref_enc as Buffer, PII_AAD.LOYALTY_LEDGER_MEMBER_REF)).toBe(MEMBER);
     expect(JSON.stringify(ctx.db.ledger.map((r) => ({ ...r, member_ref_enc: null })))).not.toContain(MEMBER);
   });
@@ -188,10 +191,21 @@ describe('PosLoyaltyService — earn (§9.2)', () => {
     expect(ctx.db.ledger).toHaveLength(points > 0 ? 1 : 0);
   });
 
-  it('parameter dari env: LOYALTY_EARN_IDR_PER_POINT & LOYALTY_POINT_EXPIRY_DAYS=0 (tanpa kedaluwarsa)', async () => {
-    const ctx = setup({ LOYALTY_EARN_IDR_PER_POINT: '1000', LOYALTY_POINT_EXPIRY_DAYS: '0' });
+  it('parameter dari env: LOYALTY_EARN_IDR_PER_POINT & LOYALTY_POINT_MAX_AGE_DAYS=0 (tanpa kedaluwarsa)', async () => {
+    const ctx = setup({ LOYALTY_EARN_IDR_PER_POINT: '1000', LOYALTY_POINT_MAX_AGE_DAYS: '0' });
     expect((await ctx.earn(ORDER_A, 12_345)).points_earned).toBe(12);
     expect(ctx.db.ledger[0].expires_at).toBeNull();
+  });
+
+  it('G22 D-22-18: LOYALTY_POINT_MAX_AGE_DAYS > 0 → lot berumur; LOYALTY_POINT_EXPIRY_DAYS lama DIABAIKAN (dev) / gagal start (production)', async () => {
+    const aged = setup({ LOYALTY_POINT_MAX_AGE_DAYS: '365' });
+    await aged.earn(ORDER_A, 125_000);
+    expect(aged.db.ledger[0].expires_at).toBe(expiryFor(aged.clock.now(), 365)?.toISOString());
+    const legacy = setup({ LOYALTY_POINT_EXPIRY_DAYS: '365' });
+    await legacy.earn(ORDER_A, 125_000);
+    expect(legacy.db.ledger[0].expires_at).toBeNull();
+    expect(testConfig({ LOYALTY_POINT_EXPIRY_DAYS: '365' }).startupWarnings().join(' ')).toMatch(/LOYALTY_POINT_EXPIRY_DAYS/);
+    expect(() => testConfig({ LOYALTY_POINT_EXPIRY_DAYS: '365', APP_ENV: 'production' }).assertStartupSecrets()).toThrow(/LOYALTY_POINT_EXPIRY_DAYS/);
   });
 
   it('idempoten: retry key sama → hasil sama tanpa entri baru; key sama untuk member lain → 409 idempotency_conflict', async () => {
@@ -381,7 +395,7 @@ describe('PosLoyaltyService — commit / release (§9.3)', () => {
   });
 
   it('FIFO: redeem memakai bucket yang paling cepat kedaluwarsa; saldo tetap benar setelah bucket itu kedaluwarsa', async () => {
-    const ctx = setup({ LOYALTY_POINT_EXPIRY_DAYS: '30', LOYALTY_REDEEM_MIN_POINTS: '1' });
+    const ctx = setup({ LOYALTY_POINT_MAX_AGE_DAYS: '30', LOYALTY_REDEEM_MIN_POINTS: '1' });
     await ctx.earn(ORDER_B, 300_000); // 30 poin, kedaluwarsa E1
     ctx.clock.advanceSeconds(10 * DAY);
     await ctx.earn(ORDER_C, 400_000); // 40 poin, kedaluwarsa E2 = E1 + 10 hari
@@ -521,7 +535,7 @@ describe('PosLoyaltyService — reverse (§9.4)', () => {
   });
 
   it('saldo negatif dicatat (utang) dan dilunasi earn berikutnya; utang tidak hidup lagi saat kredit pelunas kedaluwarsa', async () => {
-    const ctx = setup({ LOYALTY_REDEEM_MIN_POINTS: '1', LOYALTY_POINT_EXPIRY_DAYS: '30' });
+    const ctx = setup({ LOYALTY_REDEEM_MIN_POINTS: '1', LOYALTY_POINT_MAX_AGE_DAYS: '30' });
     await ctx.earn(ORDER_A, 200_000); // +20
     const r = await ctx.reserve(ORDER_B, 20, { tok: ctx.token(ORDER_B) });
     await ctx.commit(r.reservation_id, ORDER_B); // −20 → 0
@@ -538,7 +552,7 @@ describe('PosLoyaltyService — reverse (§9.4)', () => {
   });
 
   it('restore ke bucket redeem asal yang sudah kedaluwarsa → masa berlaku baru (poin tidak langsung hangus)', async () => {
-    const ctx = setup({ LOYALTY_REDEEM_MIN_POINTS: '1', LOYALTY_POINT_EXPIRY_DAYS: '30' });
+    const ctx = setup({ LOYALTY_REDEEM_MIN_POINTS: '1', LOYALTY_POINT_MAX_AGE_DAYS: '30' });
     await ctx.earn(ORDER_C, 500_000); // +50 (E1)
     const r = await ctx.reserve(ORDER_A, 50, { tok: ctx.token(ORDER_A) });
     await ctx.commit(r.reservation_id, ORDER_A);
@@ -551,7 +565,7 @@ describe('PosLoyaltyService — reverse (§9.4)', () => {
   });
 
   it('kegagalan di tengah transaksi di-rollback (tidak ada entri setengah jadi)', async () => {
-    const ctx = setup({ LOYALTY_POINT_EXPIRY_DAYS: '30', LOYALTY_REDEEM_MIN_POINTS: '1' });
+    const ctx = setup({ LOYALTY_POINT_MAX_AGE_DAYS: '30', LOYALTY_REDEEM_MIN_POINTS: '1' });
     await ctx.earn(ORDER_B, 300_000);
     ctx.clock.advanceSeconds(10 * DAY);
     await ctx.earn(ORDER_C, 400_000);
@@ -1044,5 +1058,113 @@ describe('Re-review G18 SEC-128 — cek restore berbasis nilai incl pajak, tidak
     }
     await ctx.commit(r.reservation_id, ORDER_A, undefined, { orderGoodsIncl: 120_000 });
     expect(ctx.db.reservations.get(r.reservation_id)?.order_goods_incl).toBe(120_000);
+  });
+});
+
+describe('G22 §14.A.4 — earn QR (D-22-5) & reverse earn_channel "qr"', () => {
+  const qrEarn = (ctx: ReturnType<typeof setup>, orderRef: string, eligible: number, memberRef = MEMBER) =>
+    ctx.db.tx((q) =>
+      ctx.svc.earnQrInTx(q, { idempotencyKey: `pos_earn:${orderRef}`, orderRef, memberRef, companyCode: 'PB', eligibleAmount: eligible }),
+    );
+  const qrReverse = (ctx: ReturnType<typeof setup>, refund: string, original: string, ratio: number) =>
+    ctx.svc.reverse({
+      idempotencyKey: `pos_reverse:${refund}`,
+      originalOrderRef: original,
+      refundOrderRef: refund,
+      memberRef: null,
+      earnChannel: 'qr',
+      refundedEligibleAmount: 0,
+      refundRatio: ratio,
+      pointsRestoredValue: null,
+      refundGoodsIncl: null,
+      restoreApproved: false,
+    });
+
+  it('earn QR: kunci pos_earn:<order_uuid>, ledger source pos_earn + reason pos_qr_sale; replay idempoten', async () => {
+    const ctx = setup();
+    expect(await qrEarn(ctx, ORDER_A, 125_000)).toEqual({ outcome: 'earned', points: 12 });
+    expect(ctx.db.ledger[0]).toMatchObject({ source: 'pos_earn', reason: 'pos_qr_sale', idempotency_key: `pos_earn:${ORDER_A}` });
+    expect(await qrEarn(ctx, ORDER_A, 125_000)).toEqual({ outcome: 'replay', points: 12 });
+    expect(ctx.db.ledger).toHaveLength(1);
+  });
+
+  it('D-22-5: POS meng-earn kunci yang sama untuk member lain → 409 idempotency_conflict + anomali qr_pos_member_conflict', async () => {
+    const ctx = setup();
+    await qrEarn(ctx, ORDER_A, 125_000);
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(await code(ctx.earn(ORDER_A, 125_000, OTHER))).toBe('409 idempotency_conflict');
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('"kind":"qr_pos_member_conflict"'))).toBe(true);
+      // QR untuk member lain setelah POS → hasil `conflict` (final), tanpa entri baru
+      expect(await qrEarn(setup(), ORDER_B, 1, OTHER)).toMatchObject({ outcome: 'earned' });
+    } finally {
+      warn.mockRestore();
+    }
+    expect(ctx.db.ledger).toHaveLength(1);
+  });
+
+  it('earn QR melewati pagar batas → limited (tanpa catatan earn, tanpa melempar)', async () => {
+    const ctx = setup({ LOYALTY_POS_MAX_EARN_POINTS: '5', LOYALTY_POLICY_CEILING_MAX_POINTS_PER_ORDER: '5' });
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(await qrEarn(ctx, ORDER_A, 125_000)).toEqual({ outcome: 'limited', points: 0 });
+    } finally {
+      warn.mockRestore();
+    }
+    expect(ctx.db.earns.size).toBe(0);
+  });
+
+  it('reverse qr: member dari entri earn QR (tanpa member_ref dari Odoo) → clawback proporsional', async () => {
+    const ctx = setup();
+    await qrEarn(ctx, ORDER_A, 200_000); // 20 poin
+    const res = await qrReverse(ctx, REFUND_1, ORDER_A, 0.5);
+    expect(res).toMatchObject({ points_clawed_back: 10, points_restored: 0, points_balance: 10 });
+    expect(ctx.db.ledger.find((l) => l.reason === 'pos_refund_clawback')?.member_ref_hash).toBe(ctx.hash);
+  });
+
+  it('reverse qr: order QR dikenal tetapi belum dibayar (event tertunda) → 409 earn_pending; tanpa earn → 200 nol; order tak dikenal (L-80) → 200 nol', async () => {
+    const ctx = setup();
+    ctx.db.qrOrders.set(ORDER_B, 'draft');
+    expect(await code(qrReverse(ctx, REFUND_1, ORDER_B, 1))).toBe('409 earn_pending');
+    ctx.db.qrOrders.set(ORDER_B, 'paid'); // dibayar, sesi tidak diklaim member → tidak ada earn
+    expect(await qrReverse(ctx, REFUND_1, ORDER_B, 1)).toEqual({ points_clawed_back: 0, points_restored: 0, points_balance: 0 });
+    const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    try {
+      expect(await qrReverse(ctx, REFUND_2, ORDER_C, 1)).toMatchObject({ points_clawed_back: 0 });
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('r15 K3: reverse SEBELUM close diproses → 409 earn_pending (tanpa tulis); setelah earn close → clawback neto; reverse dobel → sekali', async () => {
+    const ctx = setup();
+    ctx.db.qrOrders.set(ORDER_A, 'draft'); // K1: order_uuid dari Odoo tersimpan di fnb_submission, close belum diproses
+    expect(await code(qrReverse(ctx, REFUND_1, ORDER_A, 0.5))).toBe('409 earn_pending');
+    expect(await code(qrReverse(ctx, REFUND_1, ORDER_A, 0.5))).toBe('409 earn_pending'); // retry Odoo: tetap pending
+    expect(ctx.db.ledger).toHaveLength(0);
+    // event session_closed diproses: earn 200 000 → 20 poin, order paid + close_event_at di transaksi yang sama
+    await qrEarn(ctx, ORDER_A, 200_000);
+    ctx.db.qrOrders.set(ORDER_A, 'paid');
+    const first = await qrReverse(ctx, REFUND_1, ORDER_A, 0.5);
+    expect(first).toMatchObject({ points_clawed_back: 10, points_balance: 10 }); // neto = 20 − 10
+    // reverse dobel (kunci sama) → replay, tidak ada clawback kedua
+    expect(await qrReverse(ctx, REFUND_1, ORDER_A, 0.5)).toMatchObject({ points_clawed_back: 10, points_balance: 10 });
+    expect(ctx.db.ledger.filter((l) => l.reason === 'pos_refund_clawback')).toHaveLength(1);
+  });
+
+  it('r15 K3: close sudah diproses tetapi order tidak di orders[] (neto ≤ 0) → 200 nol, bukan earn_pending abadi', async () => {
+    const ctx = setup();
+    ctx.db.qrOrders.set(ORDER_B, 'closed_unlisted');
+    expect(await qrReverse(ctx, REFUND_1, ORDER_B, 1)).toEqual({ points_clawed_back: 0, points_restored: 0, points_balance: 0 });
+    ctx.db.qrOrders.set(ORDER_C, 'cancelled');
+    expect(await qrReverse(ctx, REFUND_2, ORDER_C, 1)).toEqual({ points_clawed_back: 0, points_restored: 0, points_balance: 0 });
+  });
+
+  it('DTO: earn_channel qr menolak member_ref; nilai lain → 400', async () => {
+    const rev = { idempotency_key: `pos_reverse:${REFUND_1}`, original_order_ref: ORDER_A, refund_order_ref: REFUND_1, refunded_eligible_amount: 0, refund_ratio: 1 };
+    expect(parsePosReverse({ ...rev, earn_channel: 'qr' })).toMatchObject({ earnChannel: 'qr', memberRef: null });
+    expect((await catchApiError(() => parsePosReverse({ ...rev, earn_channel: 'qr', member_ref: MEMBER }))).getStatus()).toBe(400);
+    expect((await catchApiError(() => parsePosReverse({ ...rev, earn_channel: 'kiosk', member_ref: MEMBER }))).getStatus()).toBe(400);
+    expect(parsePosReverse({ ...rev, member_ref: MEMBER })).toMatchObject({ earnChannel: 'pos', memberRef: MEMBER });
   });
 });

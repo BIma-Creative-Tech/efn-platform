@@ -72,6 +72,11 @@ scrape_configs:
     # grup dalam non-capturing. G15 (SEC-72/73/78): SALINAN PERSIS tahap redaksi promtail.yml (a)-(d); CI
     # (scripts/test-promtail-redaction.sh) menjalankan kedua pipeline atas fixture yang sama dan menolak perbedaan.
     pipeline_stages:
+      # (a0) G22 (docs/04 §14.A.2): token sesi meja QR `fts1.<b64url sid>.<exp>.<b64url HMAC>` (salinan persis
+      #      promtail.yml (a0); dijalankan pertama).
+      - replace:
+          expression: '(fts1\.[A-Za-z0-9_.-]+)'
+          replace: '[TABLE_TOKEN_REDACTED]'
       # (a) Parameter rahasia di query string / logfmt (SEC-73): token reset password Odoo, access_token
       #     self-order, presigned S3, dll. Traefik JSON menulis "&" sebagai "\u0026" (encoding/json) -> ikut
       #     dikenali; "?"/"&"/"=" boleh URL-encoded (%3F/%26/%3D, mis. redirect=%2Fweb%3Ftoken%3D...). Nilai = sampai &, spasi, kutip, backslash, #.

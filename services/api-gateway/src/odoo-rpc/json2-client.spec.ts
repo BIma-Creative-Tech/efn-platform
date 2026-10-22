@@ -164,6 +164,8 @@ describe('Validasi respons Odoo (§10.4.3)', () => {
       code: 'GL', name: 'Retail', company_code: 'GL', brand_code: null, currency: 'IDR', active: true, fulfilment: { pickup: true, delivery: false },
       outlets: [{ outlet_code: 'TOKO-01', public_name: 'Toko 1', pickup_enabled: true, prep_minutes: 15, active: true }],
       payment_modes: null, // L-52: Odoo pra-G20 tanpa payment_modes → BFF memakai config
+      business_type: 'retail', // G22 B-2: absen = retail
+      loyalty: { earn: false, redeem: false }, // G22 B-2: absen = mati (fail-closed)
     });
     expect(() => parseCatalogPage({ items: [], server_time: 'now', channel: { code: 'GL', name: 'x', company_code: 'GL', outlets: [] } })).toThrow(OdooRpcError);
   });
@@ -223,7 +225,10 @@ describe('G19 §11.2: promo di json2 (quote/place) & baris reward', () => {
 
   it('parse: baris reward negatif diterima (reward:true, field lain dibuang), promo_applied dinormalisasi huruf besar', () => {
     const q = parseQuote(QUOTE_OK);
-    expect(q.lines[1]).toEqual({ product_id: 9001, name: 'Promo Gajian', qty: 1, price_unit_incl: -5_000, subtotal_incl: -5_000, tax_labels: ['PPN 11%'], available: true, reward: true });
+    expect(q.lines[1]).toEqual({
+      product_id: 9001, name: 'Promo Gajian', qty: 1, price_unit_incl: -5_000, subtotal_incl: -5_000, tax_labels: ['PPN 11%'], available: true, reward: true,
+      attribute_value_ids: [], attributes_text: null, // G22 L-78
+    });
     expect(q.lines[0].reward).toBe(false);
     expect(q.promo_applied).toEqual(['GAJIAN']);
     expect(q.promo_rejected).toEqual(['NOPE42']);

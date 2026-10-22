@@ -47,6 +47,9 @@
                             <field name="payment_timeout_minutes"/>
                             <field name="quote_validity_minutes"/>
                             <field name="max_order_amount" required="stock_hold_mode == 'confirm'"/>
+                            <!-- G22 W-12 (docs/04 §14.C.1 no. 5): kill switch Poin EFN per kanal. -->
+                            <field name="loyalty_earn"/>
+                            <field name="loyalty_redeem"/>
                         </group>
                         <group string="Stok">
                             <field name="stock_check"/>

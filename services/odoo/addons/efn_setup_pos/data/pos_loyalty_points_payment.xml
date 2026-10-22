@@ -110,4 +110,7 @@
         <field name="efn_is_loyalty_points" eval="True"/>
     </record>
     <!-- Holding & Farming tidak punya POS -> tidak dibuat. -->
+    <!-- G22 L-79: akun pembayaran baris metode masuk/keluar jurnal Poin EFN tiap PT diisi di
+         data/pos_loyalty_points_link.xml (noupdate=0, setiap install/upgrade; file ini noupdate=1 sehingga record di
+         atas tidak ditimpa). -->
 </odoo>

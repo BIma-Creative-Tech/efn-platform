@@ -67,10 +67,7 @@ class EfnRoleLine(models.Model):
                 raise ValidationError(_("efn_role:line_share_user — peran hanya untuk user internal."))
             if technical and set(user.all_group_ids.ids) & technical:
                 raise ValidationError(
-                    _(
-                        "efn_role:line_technical_user — user teknis (kanal online / perangkat KDS) tidak boleh "
-                        "diberi peran."
-                    )
+                    _("efn_role:line_technical_user — user teknis (kanal online/KDS/QR) tidak boleh diberi peran.")
                 )
 
     @api.constrains("reason", "date_to", "role_id")

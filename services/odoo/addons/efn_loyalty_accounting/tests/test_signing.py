@@ -25,6 +25,26 @@ class TestEfnLoyaltySigning(BaseCase):
         expected = hmac.new(self.key, b"1760000000." + body, hashlib.sha256).hexdigest()
         self.assertEqual(header, f"t=1760000000,v1={expected}")
 
+    def test_w17_params_canonical_and_tamper_detected(self):
+        """G22 W-17: parameter global di ``params`` ikut ditandatangani; mengubah bulan/epoch -> tanda tangan gagal."""
+        payload = {
+            "params": {"inactivity_expiry_months": 12, "expiry_notice_days": 30, "activity_epoch": "2026-11-01"},
+            "company_code": "EFN",
+        }
+        body = signing.canonical_json(payload)
+        self.assertEqual(
+            body,
+            b'{"company_code":"EFN","params":{"activity_epoch":"2026-11-01","expiry_notice_days":30,'
+            b'"inactivity_expiry_months":12}}',
+        )
+        header = signing.sign(self.key, 1_760_000_000, body)
+        for old, new in ((b":12}", b":36}"), (b"2026-11-01", b"2027-11-01")):
+            with self.subTest(old=old):
+                tampered = body.replace(old, new)
+                self.assertNotEqual(tampered, body)
+                result = signing.verify_signature(self.key, header, tampered, now=1_760_000_000)
+                self.assertEqual(result, (False, "bad_signature"))
+
     def test_verify_accepts_valid_and_rejects_tamper_replay_and_wrong_key(self):
         body = signing.canonical_json({"version": 3})
         header = signing.sign(self.key, 1_760_000_000, body)

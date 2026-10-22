@@ -24,6 +24,9 @@ Critical (anomali integritas, alert):
 - `points_payment_daily_mismatch` (G18, K-18-6, hanya mode `payment`): per PT x hari WIB yang sudah settle,
   Σ `pos.payment` metode Poin EFN (Odoo, refund negatif) ≠ Σ `value_idr` redeem committed − Σ `points_restored_value`
   (BFF). Hasil per hari juga ditulis ke `loyalty_points_daily` (dashboard) dan `points_daily` di log.
+- G22 (docs/04 §14.C.5, `ETL_LOYALTY_RECON_ONLINE_ENABLED`): kanal online — `online_points_payment_mismatch`,
+  `online_points_restore_mismatch`, `online_earn_without_picked_up`, `online_reverse_without_refund`
+  (efn_etl/loyalty_recon_online.py); baris harian `loyalty_points_daily.channel='online'`, log `points_daily_online`.
 
 Mode poin (`ETL_LOYALTY_POINTS_MODE`): `product` = redeem berupa baris produk Poin EFN (G13, default sampai E-30
 terpasang); `payment` = redeem berupa pembayaran metode `efn_is_loyalty_points` (docs/04 §9.9 K-18-1). Pada mode
@@ -86,6 +89,11 @@ CRITICAL_KINDS = (
     "reverse_without_refund_order",
     "points_payment_daily_mismatch",
     "points_restore_value_mismatch",
+    # G22 (docs/04 §14.C.5): poin online, efn_etl/loyalty_recon_online.py ONLINE_KINDS (diuji sama).
+    "online_points_payment_mismatch",
+    "online_points_restore_mismatch",
+    "online_earn_without_picked_up",
+    "online_reverse_without_refund",
 )
 WARNING_KINDS = (
     "outbox_hold_aged",
@@ -117,6 +125,8 @@ DAILY_COLUMNS = (
     "orders_mismatched",
     "bff_restored_points_idr",
     "restore_value_mismatched",
+    # G22: `pos` (K-18-6, pos.payment) | `online` (faktur/nota kredit SO, efn_etl/loyalty_recon_online.py).
+    "channel",
 )
 
 # ---------------------------------------------------------------- SQL platform (efn_readonly, kolom non-PII)
@@ -588,6 +598,28 @@ def add_daily_findings(report: ReconReport, days: Iterable[DailyPoints], toleran
                 finding.order_ids.append(oid)
 
 
+class _SampledFinding(Protocol):
+    count: int
+    order_ids: list[int]
+    ledger_ids: list[int]
+
+
+def merge_findings(report: ReconReport, findings: Mapping[tuple[str, str], _SampledFinding]) -> None:
+    """Temuan modul lain (G22 online) -> laporan run (hitungan + sampel, batas SAMPLE_LIMIT per kind+PT)."""
+    for (kind, company), found in sorted(findings.items()):
+        if not found.count:
+            continue
+        report.add(kind, company, count=0)
+        target = report.findings[(kind, company or _UNKNOWN_COMPANY)]
+        target.count += found.count
+        for oid in found.order_ids:
+            if oid and len(target.order_ids) < SAMPLE_LIMIT and oid not in target.order_ids:
+                target.order_ids.append(oid)
+        for lid in found.ledger_ids:
+            if lid and len(target.ledger_ids) < SAMPLE_LIMIT and lid not in target.ledger_ids:
+                target.ledger_ids.append(lid)
+
+
 def add_open_items(
     report: ReconReport, kind: str, rows: Iterable[Mapping[str, Any]], companies: Mapping[int, str]
 ) -> None:
@@ -649,10 +681,15 @@ class LoyaltyReconSettings:
     points_tolerance_idr: Decimal = Decimal(0)
     # SEC-118: nilai 1 poin (Rp), sama dengan BFF `LOYALTY_POINT_VALUE_IDR` (default 100).
     point_value_idr: int = 100
+    # G22 (docs/04 §14.C.5): rekonsiliasi poin online (faktur SO). Butuh view Odoo efn_etl.online_points_payment /
+    # online_order_ref (sql/odoo-readonly-grants.sql G22) -> default mati (ETL_LOYALTY_RECON_ONLINE_ENABLED).
+    online_enabled: bool = False
 
     def __post_init__(self) -> None:
         if self.points_mode not in POINTS_MODES:
             raise ValueError(f"points_mode harus salah satu {POINTS_MODES}")
+        if self.online_enabled and self.points_mode != "payment":
+            raise ValueError("rekonsiliasi poin online membutuhkan points_mode=payment")
         if self.points_tolerance_idr < 0:
             raise ValueError("points_tolerance_idr negatif")
         if self.point_value_idr < 1:
@@ -861,6 +898,7 @@ def daily_rows(days: Sequence[DailyPoints], run_at: datetime) -> list[list[Any]]
             len(d.mismatched),
             d.restored_points_idr,
             len(d.restore_mismatched),
+            "pos",
         ]
         for d in days
     ]
@@ -879,6 +917,27 @@ def run_loyalty_recon(
         )
         daily = run_daily_points(platform, odoo, cfg, now, companies, legacy)
         add_daily_findings(report, daily, cfg.points_tolerance_idr)
+    online_rows: list[list[Any]] = []
+    online_payload: dict[str, Any] | None = None
+    if cfg.payment_mode and cfg.online_enabled:
+        # Import lokal: loyalty_recon_online mengimpor helper WIB dari modul ini.
+        from efn_etl.loyalty_recon_online import load_and_reconcile, online_daily_payload, online_daily_rows
+
+        day_from, day_to = settled_days(cfg.since(now), now, cfg.settle)
+        online = load_and_reconcile(
+            platform,
+            odoo,
+            companies,
+            day_from,
+            day_to,
+            wib_start(day_from),
+            wib_start(day_to),
+            cfg.point_value_idr,
+            cfg.points_tolerance_idr,
+        )
+        merge_findings(report, online.findings)
+        online_rows = online_daily_rows(online.daily, now)
+        online_payload = online_daily_payload(online, cfg.points_tolerance_idr)
     open_since = now - cfg.open_window
     if cfg.not_before:
         open_since = max(to_utc(open_since), to_utc(cfg.not_before))
@@ -890,6 +949,8 @@ def run_loyalty_recon(
     payload = summary_payload(report, cfg.lookback, cfg.settle)
     if cfg.payment_mode:
         payload["points_daily"] = daily_payload(daily, cfg.points_tolerance_idr)
+    if online_payload is not None:
+        payload["points_daily_online"] = online_payload
     level = logging.WARNING if report.anomalies else logging.INFO
     log.log(level, "%s %s", RECON_MARKER, json.dumps(payload, separators=(",", ":"), sort_keys=False))
     rows = [
@@ -901,8 +962,8 @@ def run_loyalty_recon(
     # view membaca run_at terakhir yang punya penanda).
     if rows:
         store.insert(FINDING_TABLE, FINDING_COLUMNS, rows)
-    if daily:
-        store.insert(DAILY_TABLE, DAILY_COLUMNS, daily_rows(daily, now))
+    if daily or online_rows:
+        store.insert(DAILY_TABLE, DAILY_COLUMNS, daily_rows(daily, now) + online_rows)
     store.insert(
         RUN_TABLE,
         RUN_COLUMNS,
