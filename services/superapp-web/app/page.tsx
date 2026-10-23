@@ -3,15 +3,19 @@ import { headers } from 'next/headers';
 import { getBrand } from '@/lib/brand-server';
 import { allPpnCompanies, COMPANIES, type Brand } from '@/lib/brands';
 import { loadCategories, loadChannels, loadProducts, pickChannel } from '@/lib/catalog-server';
-import { channelBusinessType, imageUrl, priceDisplay, type CatalogChannel } from '@/lib/catalog';
+import { channelBusinessType, imageUrl, priceDisplay, type CatalogChannel, type ProductSummary } from '@/lib/catalog';
 import { formatRupiah } from '@/lib/format';
 import { chapterStats, findCategory, landingFor, pickPhotos, type LandingConfig } from '@/lib/landing-config';
 import { orderModes } from '@/lib/order-modes';
-import { BRAND_PANEL_COPY, brandShopHref, brandSiteUrl, groupChannelsByBrand } from '@/lib/superapp';
+import { BRAND_PANEL_COPY, brandShopHref, brandSiteUrl, groupChannelsByBrand, HERO_MAX_ITEMS, interleave } from '@/lib/superapp';
 import { brandHasFnb } from '@/lib/booking';
 import { BrandLanding, type ChapterData } from '@/components/landing/Landing';
 import { SuperAppLanding } from '@/components/landing/SuperAppLanding';
 import type { BrandPanelProps } from '@/components/landing/BrandPanel';
+import type { HeroItem } from '@/components/landing/Hero3D';
+import type { ShelfTab } from '@/components/landing/Shelf';
+import type { WallBrand } from '@/components/landing/BrandWall';
+import { PORTFOLIO } from '@/lib/portfolio';
 import { OrderModePicker } from '@/components/booking/OrderModePicker';
 
 /**
@@ -105,47 +109,109 @@ async function SuperAppHome({ brand }: { brand: Brand }) {
   const channels = await loadChannels(brand);
   const all = channels.ok ? channels.data : [];
   const groups = groupChannelsByBrand(all);
-  const panels: Omit<BrandPanelProps, 'index'>[] = await Promise.all(
+  const loaded = await Promise.all(
     groups.map(async (g) => {
-      const ch = g.channels[0] ?? null;
-      const products = ch ? await loadProducts({ channel: ch.channel_code, limit: 24 }) : null;
-      const items = products?.ok ? products.data.items : [];
-      const bt = ch ? channelBusinessType(ch) : null;
-      const photos = pickPhotos(items, [], 3)
-        .map((p) => {
-          const src = imageUrl(p.image_sha, 512);
-          return src ? { src, name: p.name, price: formatRupiah(priceDisplay(p, bt).amount) } : null;
-        })
-        .filter((v): v is { src: string; name: string; price: string } => v !== null);
-      const t = g.brand.theme;
-      const copy = BRAND_PANEL_COPY[g.brand.id as keyof typeof BRAND_PANEL_COPY];
-      // Panel brand gelap (PB) memakai palet gelapnya; brand terang memakai latar alternatif + teks brand.
-      const palette =
-        t.scheme === 'dark'
-          ? { bg: t.surfaceAlt, text: t.text, muted: t.textMuted, accent: t.accent, card: t.surface, onAccent: t.primaryContrast }
-          : { bg: t.surfaceAlt, text: t.text, muted: t.textMuted, accent: t.primary, card: t.surface, onAccent: t.primaryContrast };
-      return {
-        name: g.brand.name,
-        kind: copy.kind,
-        line: copy.line,
-        palette,
-        photos,
-        facts: channelFacts(g.channels, items.length, Boolean(products?.ok && products.data.next_cursor)),
-        shopHref: brandShopHref(g),
-        siteHref: brandSiteUrl(host, g.brand),
-        reserveHref: brandHasFnb(g.brand) ? '/reservasi' : null,
-      };
+      // Kanal pertama brand yang punya produk (Bacha: butik BCR + kafe BCF; kafe bisa belum punya produk online).
+      for (const ch of g.channels) {
+        const r = await loadProducts({ channel: ch.channel_code, limit: 24 });
+        if (r.ok && r.data.items.length > 0) return { g, ch, items: r.data.items, more: Boolean(r.data.next_cursor) };
+      }
+      return { g, ch: g.channels[0] ?? null, items: [] as ProductSummary[], more: false };
     }),
   );
+  const panels: Omit<BrandPanelProps, 'index'>[] = loaded.map(({ g, ch, items, more }) => {
+    const bt = ch ? channelBusinessType(ch) : null;
+    const photos = pickPhotos(items, [], 3)
+      .map((p) => {
+        const src = imageUrl(p.image_sha, 512);
+        return src ? { src, name: p.name, price: formatRupiah(priceDisplay(p, bt).amount) } : null;
+      })
+      .filter((v): v is { src: string; name: string; price: string } => v !== null);
+    const t = g.brand.theme;
+    const copy = BRAND_PANEL_COPY[g.brand.id as keyof typeof BRAND_PANEL_COPY];
+    // Panel brand gelap (PB) memakai palet gelapnya; brand terang memakai latar alternatif + teks brand.
+    const palette =
+      t.scheme === 'dark'
+        ? { bg: t.surfaceAlt, text: t.text, muted: t.textMuted, accent: t.accent, card: t.surface, onAccent: t.primaryContrast }
+        : { bg: t.surfaceAlt, text: t.text, muted: t.textMuted, accent: t.primary, card: t.surface, onAccent: t.primaryContrast };
+    return {
+      name: g.brand.name,
+      kind: copy.kind,
+      line: copy.line,
+      palette,
+      photos,
+      facts: channelFacts(g.channels, items.length, more),
+      shopHref: ch ? `/belanja?${new URLSearchParams({ channel: ch.channel_code })}` : brandShopHref(g),
+      siteHref: brandSiteUrl(host, g.brand),
+      reserveHref: brandHasFnb(g.brand) ? '/reservasi' : null,
+    };
+  });
+
+  const productHref = (id: number, channel: string) => `/belanja/${id}?${new URLSearchParams({ channel })}`;
+  // Hero 3D: foto produk asli bergiliran antar-brand (bukan satu brand saja).
+  const heroItems: HeroItem[] = interleave(
+    loaded.map(({ g, ch, items }) =>
+      ch
+        ? items
+            .filter((p) => p.image_sha)
+            .map((p) => ({
+              id: p.product_id,
+              name: p.name,
+              brand: g.brand.name,
+              price: formatRupiah(priceDisplay(p, channelBusinessType(ch)).amount),
+              src: imageUrl(p.image_sha, 512) ?? '',
+              href: productHref(p.product_id, ch.channel_code),
+            }))
+            .filter((v) => v.src)
+        : [],
+    ),
+    HERO_MAX_ITEMS,
+    (v) => v.id,
+  );
+  const shelf: ShelfTab[] = loaded
+    .filter(({ ch }) => ch !== null)
+    .map(({ g, ch, items, more }) => {
+      const bt = channelBusinessType(ch!);
+      return {
+        id: g.brand.id,
+        label: g.brand.name,
+        kind: BRAND_PANEL_COPY[g.brand.id as keyof typeof BRAND_PANEL_COPY].kind,
+        shopHref: `/belanja?${new URLSearchParams({ channel: ch!.channel_code })}`,
+        total: items.length > 0 ? `${items.length}${more ? '+' : ''}` : '',
+        products: items.slice(0, 8).map((p) => {
+          const pd = priceDisplay(p, bt);
+          return { id: p.product_id, name: p.name, price: formatRupiah(pd.amount), taxNote: pd.taxNote, src: imageUrl(p.image_sha, 512), href: productHref(p.product_id, ch!.channel_code) };
+        }),
+      };
+    });
+  const total = loaded.reduce((n, l) => n + l.items.length, 0);
+  // Dinding portofolio: semua brand EFN (lib/portfolio.ts); brand dengan katalog online diberi tautan + fakta katalog.
+  const portfolio: WallBrand[] = PORTFOLIO.map((b) => {
+    const l = b.tenant ? loaded.find((x) => x.g.brand.id === b.tenant) : undefined;
+    const online = Boolean(l?.ch && l.items.length > 0);
+    return {
+      ...b,
+      // Brand berlabel online tanpa katalog yang termuat -> diperlakukan "di gerai" (tidak menjanjikan pesan online).
+      status: b.status === 'online' && !online ? 'store' : b.status,
+      href: online && l?.ch ? `/belanja?${new URLSearchParams({ channel: l.ch.channel_code })}` : null,
+      fact: online && l ? `${l.items.length}${l.more ? '+' : ''} produk` : null,
+    };
+  });
+  const outlets = new Set(all.flatMap((c) => c.outlets.filter((o) => o.pickup_enabled).map((o) => o.outlet_code))).size;
   return (
     <SuperAppLanding
       title="Semua rasa favorit, satu akun."
       lead={brand.hero.lead}
       emphasis="satu"
-      brandNames={groups.map((g) => ({ name: g.brand.name, href: `#brand-${groups.indexOf(g)}` }))}
+      brandNames={groups.map((g, i) => ({ name: g.brand.name, href: `#brand-${i}` }))}
       modes={orderModes({ brand, channels: channels.ok ? all : null, channelParam: null })}
       panels={panels}
       loyaltyActive={all.some((c) => c.loyalty?.earn === true || c.loyalty?.redeem === true)}
+      heroItems={heroItems}
+      search={loaded.filter(({ ch }) => ch !== null).map(({ g, ch }) => ({ code: ch!.channel_code, label: g.brand.name }))}
+      stats={{ brands: PORTFOLIO.length, products: total > 0 ? `${total}${loaded.some((l) => l.more) ? '+' : ''}` : null, outlets }}
+      shelf={shelf}
+      portfolio={portfolio}
     />
   );
 }
