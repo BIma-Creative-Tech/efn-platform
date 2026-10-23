@@ -58,7 +58,13 @@ BRANDS = {
             "Accessories": 750000, "Gourmet": 250000, "Gift Sets": 1200000,
         },
     },
-    "grandlucky": {"prefix": "GL", "label": "GrandLucky", "default_price": 25000, "prices": {}},
+    "grandlucky": {
+        "prefix": "GL",
+        "label": "GrandLucky",
+        "default_price": 25000,
+        # Placeholder bila CSV tidak membawa harga/harga referensi (kategori katalog promo PDF, lihat README).
+        "prices": {"Non Food": 45000, "Food": 30000, "Fresh": 40000},
+    },
 }
 
 
@@ -117,6 +123,15 @@ def build_payload(brand: str, args) -> dict:
         extra = p.get("extra") or {}
         pos_categ = extra.get("online_category") or category.split(" / ")[-1]
         has_price = isinstance(p.get("price_idr"), (int, float)) and p["price_idr"] > 0
+        # Harga referensi (mis. harga katalog promo PDF GL) dipakai sebagai harga DEMO yang lebih realistis daripada
+        # placeholder kategori, tetapi TETAP placeholder (tag "DEMO harga") karena bukan master harga.
+        ref_price = extra.get("reference_price_idr")
+        if has_price:
+            list_price = float(p["price_idr"])
+        elif isinstance(ref_price, (int, float)) and ref_price > 0:
+            list_price = float(ref_price)
+        else:
+            list_price = float(placeholder_price(cfg, category))
         image_b64 = None
         if p.get("image_file") and not args.no_images:
             image_b64 = encode_image(DATA_ROOT / brand / p["image_file"])
@@ -127,7 +142,7 @@ def build_payload(brand: str, args) -> dict:
             "categ_path": [c.strip() for c in category.split(" / ") if c.strip()],
             "pos_categ": pos_categ,
             "company_code": p["company_code"],
-            "list_price": float(p["price_idr"]) if has_price else float(placeholder_price(cfg, category)),
+            "list_price": list_price,
             "price_is_placeholder": not has_price,
             "weight": parse_weight_kg(p),
             "image_b64": image_b64,

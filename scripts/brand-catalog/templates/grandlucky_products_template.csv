@@ -1,2 +1,2 @@
-source_id,name,category,description_text,price_idr,weight_kg,barcode,image_file
-CONTOH-0001,Contoh Apel Fuji 1 kg (HAPUS BARIS INI),Fruits / Imported,Baris contoh format - ganti dengan ekspor master data GL.,45000,1.0,,
+source_id,name,category,description_text,price_idr,reference_price_idr,weight_kg,barcode,image_file
+CONTOH-0001,Contoh Apel Fuji 1 kg (HAPUS BARIS INI),Fruits / Imported,Baris contoh format - ganti dengan ekspor master data GL.,45000,,1.0,,

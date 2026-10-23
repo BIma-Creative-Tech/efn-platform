@@ -44,7 +44,8 @@ from catalog_common import (  # noqa: E402
 BASE = "https://www.grandlucky.co.id"
 BRAND = "grandlucky"
 COMPANY_CODE = "GL"
-CSV_COLUMNS = ["source_id", "name", "category", "description_text", "price_idr", "weight_kg", "barcode", "image_file"]
+CSV_COLUMNS = ["source_id", "name", "category", "description_text", "price_idr", "reference_price_idr", "weight_kg",
+               "barcode", "image_file"]
 OUTLET_RE = re.compile(
     r"<a class='accordion-toggle'[^>]*>\s*(?P<name>.*?)\s*</a>.*?<div class='panel-body'>(?P<body>.*?)(?:<script|</div>)",
     re.S,
@@ -104,6 +105,12 @@ def scrape(args) -> int:
     return 0
 
 
+def _int_or_none(value: str | None) -> int | None:
+    """'89.900' / '89900' -> 89900; kosong/bukan angka -> None."""
+    digits = (value or "").replace(".", "").replace(",", "").strip()
+    return int(digits) if digits.isdigit() else None
+
+
 def from_csv(args) -> int:
     src = Path(args.from_csv)
     images_src = Path(args.images_dir) if args.images_dir else src.parent
@@ -143,7 +150,12 @@ def from_csv(args) -> int:
                 description_text=html_to_text(row.get("description_text")),
                 category=(row.get("category") or "").strip() or None,
                 image_file=image_file, source_url=None, company_code=COMPANY_CODE,
-                extra={"weight_kg": float(weight) if weight else None, "barcode": (row.get("barcode") or "").strip() or None},
+                extra={
+                    "weight_kg": float(weight) if weight else None,
+                    "barcode": (row.get("barcode") or "").strip() or None,
+                    # Opsional: harga referensi (mis. katalog promo PDF) -> harga DEMO, tetap bertag "DEMO harga".
+                    "reference_price_idr": _int_or_none(row.get("reference_price_idr")),
+                },
             )
             rec["price_idr"] = int(price) if price.isdigit() else None
             products.append(rec)
