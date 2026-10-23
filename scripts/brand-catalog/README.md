@@ -14,7 +14,8 @@ saja, lalu hapus.
 |---|---|---|---|
 | Paris Baguette | `parisbaguette.co.id` WordPress REST `/wp-json/wp/v2/product` + `/media` | 101 produk, 101 gambar, 13 kategori | `PB` |
 | Bacha Coffee | `bachacoffee.com` endpoint JSON listing situs (`/api/BachaProductApi/GetBachaProductsByCategory`), `Crawl-delay: 5` dihormati | 533 SKU (loose/packed coffee, accessories, gourmet, gift set), 533 gambar | `BCR` (butik). Menu kafe `BCF` tidak dipublikasikan |
-| GrandLucky | `grandlucky.co.id` | **Tidak ada katalog publik.** Hanya profil brand + outlet (`brand_info.json`) | `GL`: isi lewat CSV master data |
+| GrandLucky | `grandlucky.co.id` | **Tidak ada katalog publik** (WordPress, REST API dimatikan). Profil brand + outlet (`brand_info.json`) | `GL`: isi lewat CSV master data |
+| GrandLucky (23 Okt 2026) | PDF promo publik `doc.grandlucky.co.id/catalog_blast/Christmas_2025.pdf` (tautan "latest catalog" di beranda): 11 halaman gambar tanpa teks → render pdfjs → OCR tesseract eng+ind → potong foto per kartu | **88 produk DEMO, 85 foto, 15 kategori**; 43 harga katalog terbaca (2 OCR sepakat) → `reference_price_idr` | `GL` |
 
 ## Pakai
 
@@ -39,7 +40,10 @@ Prasyarat: Python host + Pillow; Docker. DB target harus sudah memasang modul **
 ## Harga
 
 Situs brand **tidak** memuat harga IDR (Bacha hanya USD global, disimpan di `extra.reference_price_usd_global` sebagai
-referensi dan tidak diimpor). Import mengisi **harga placeholder per kategori** (`BRANDS[...]["prices"]` di
+referensi dan tidak diimpor). GL: kolom CSV opsional `reference_price_idr` (harga promo katalog PDF, hasil OCR) dipakai
+sebagai harga DEMO bila `price_idr` kosong; produk tetap bertag **DEMO harga** karena harga promo musiman bukan master
+harga. Harga OCR yang dua bacaannya berbeda dibiarkan kosong (placeholder kategori GL: Non Food 45.000, Food 30.000,
+Fresh 40.000). Import mengisi **harga placeholder per kategori** (`BRANDS[...]["prices"]` di
 `import_odoo.py`). Harga yang sudah diubah manual di Odoo dipertahankan (`price_kept`). **Wajib diganti dari master
 harga resmi sebelum demo ke pihak luar.**
 
@@ -48,4 +52,7 @@ harga resmi sebelum demo ke pihak luar.**
 - Produk masuk Odoo + kanal online PT. Kanal `PB`/`BCR`/`BCF` di demo **nonaktif**, jadi produk baru tampil di Super-App
   setelah kanal diaktifkan dan diberi API key (runbook `odoo-online-api-key.md` §1b) dan `brand_code` kanal diisi.
 - Bacha: satu SKU per varian (Whole/Ground) = satu produk. Ketersediaan butik Indonesia belum difilter (situs global).
+- GL dari PDF promo: nama hasil OCR + koreksi manual salah baca yang jelas; ukuran/varian kadang terpotong. Buah/daging
+  dijual per 100 gr/kg di katalog, di demo = 1 unit. Pipeline OCR (render, tesseract, potong foto, review) ada di
+  scratch, bukan di repo: hasil akhirnya CSV template biasa (`--from-csv`). Ganti dengan ekspor master data GL saat ada.
 - Logo dan font berlisensi tidak diambil; minta file resmi dari tim brand.

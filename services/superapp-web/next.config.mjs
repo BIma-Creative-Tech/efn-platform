@@ -48,6 +48,10 @@ const nextConfig = {
   // Dev saja (Next 16 memblokir /_next/hmr lintas origin): tanpa ini klien dev di https://<brand>.efn.local tidak
   // pernah terhidrasi (tombol/komponen klien mati). Tidak berpengaruh pada `next build`/produksi.
   ...(isDev ? { allowedDevOrigins: ['efn.local', '*.efn.local'] } : {}),
+  // Dev saja: cache file-system Turbopack (default aktif di Next 16.4) yang dipulihkan setelah `docker restart` basi
+  // terhadap bind mount Windows -> server mengirim HMR `restart` terus-menerus dan browser me-reload halaman ~3x/detik
+  // (diukur 22 Okt 2026: 47-54 navigasi/15 dtk; setelah cache dihapus: 2). Kompilasi tetap di-cache di memori.
+  ...(isDev ? { experimental: { turbopackFileSystemCacheForDev: false } } : {}),
   async headers() {
     return [
       { source: '/:path*', headers: securityHeaders },

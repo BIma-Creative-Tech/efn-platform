@@ -1,17 +1,21 @@
 /*
  * Landing Super-App (`app.`). Bahasa visual = landing PB (Fraunces display, Geist UI, Geist Mono label, garis tipis,
- * gerak scroll/pointer). Latar halaman = palet holding gelap berbasis chrome holding (#0b5d4b) agar konsisten dengan
- * landing PB yang gelap; tiap panel brand memakai palet brand itu sendiri (variabel --p-* dari lib/brands.ts).
- * Kontras (diuji tests/superapp.test.ts): teks #ffffff / #0b3b31 ≥ 4,5:1, muted #c9dcd6 / #0b3b31 ≥ 4,5:1,
- * aksen #f2a900 / #0b3b31 ≥ 4,5:1.
+ * gerak scroll/pointer). Palet holding mengikuti logo resmi PT Era Boga Nusantara (EBN = Erajaya Food & Nourishment)
+ * di erajaya.com/line-of-verticals (diukur dari file logo 23 Okt 2026: emas #dfb422, teal #0dab9d) di atas hijau tua
+ * #062e2a; tiap panel brand tetap memakai palet brand itu sendiri (variabel --p-* dari lib/brands.ts).
+ * Kontras (diuji tests/portfolio.test.ts): putih/#062e2a 14.67, muted #bfe0da/#0a3d38 8.57, emas/#0a3d38 6.15,
+ * teal/#062e2a 5.12, #062e2a di atas emas 7.46.
  */
 
 .landing {
-  --l-bg: #0b3b31;
-  --l-card: #0f4a3e;
-  --l-accent: #f2a900;
+  --l-bg: #062e2a;
+  --l-bg-deep: #04241f;
+  --l-card: #0a3d38;
+  --l-accent: #dfb422;
+  --l-teal: #0dab9d;
+  --l-ink: #062e2a;
   --l-text: #ffffff;
-  --l-mute: #c9dcd6;
+  --l-mute: #bfe0da;
   --l-line: color-mix(in oklab, #ffffff 16%, transparent);
   --l-display: 'Fraunces Variable', Georgia, serif;
   --l-ui: 'Geist Variable', system-ui, sans-serif;
@@ -25,7 +29,6 @@
   overflow-x: clip;
 }
 
-/* Mode pesan di atas latar gelap: pakai token lokal (bukan token brand holding yang terang). */
 .landing [data-order-modes] {
   --color-surface: var(--l-card);
   --color-surface-alt: var(--l-bg);
@@ -65,7 +68,8 @@
   background: var(--l-accent);
 }
 
-.h2 {
+/* `.landing` di depan: menang atas html[data-scheme='dark'] h1/h2 (globals.css) sejak tema EFN gelap. */
+.landing .h2 {
   font-family: var(--l-display);
   font-weight: 450;
   font-variation-settings: 'SOFT' 50, 'opsz' 144;
@@ -77,27 +81,58 @@
   text-wrap: balance;
 }
 
-/* ---------- Hero ---------- */
+/* ---------- Hero 3D ---------- */
 
 .hero {
-  min-height: min(88svh, 52rem);
+  position: relative;
+  isolation: isolate;
+  min-height: min(100svh, 58rem);
   display: grid;
   align-items: center;
-  padding-block: clamp(5rem, 12vw, 8rem) clamp(3rem, 6vw, 5rem);
+  padding-block: clamp(3rem, 7vw, 5.5rem) clamp(3rem, 6vw, 5rem);
   background:
-    radial-gradient(60% 70% at 85% 10%, color-mix(in oklab, var(--l-accent) 16%, transparent), transparent 70%),
-    radial-gradient(70% 60% at 0% 100%, color-mix(in oklab, #ffffff 7%, transparent), transparent 70%),
-    var(--l-bg);
+    radial-gradient(55% 60% at 88% 8%, color-mix(in oklab, var(--l-accent) 12%, transparent), transparent 70%),
+    radial-gradient(60% 60% at 0% 100%, color-mix(in oklab, var(--l-teal) 16%, transparent), transparent 70%),
+    linear-gradient(180deg, var(--l-bg-deep) 0%, var(--l-bg) 60%);
+  overflow: clip;
 }
-.title {
+/* Butiran halus (noise SVG inline, data: diizinkan CSP img-src) agar latar tidak datar/plastik. */
+.hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  opacity: 0.07;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.heroGlow {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(42rem circle at 70% 35%, color-mix(in oklab, var(--l-accent) 18%, transparent), transparent 62%);
+}
+.heroGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+  gap: clamp(1.5rem, 4vw, 4rem);
+  align-items: center;
+}
+.heroCopy {
+  min-width: 0;
+  position: relative;
+  z-index: 2;
+}
+.landing .title {
   font-family: var(--l-display);
   font-weight: 450;
   font-variation-settings: 'SOFT' 50, 'WONK' 0, 'opsz' 144;
-  font-size: clamp(3rem, 8vw, 6.5rem);
-  line-height: 0.96;
-  letter-spacing: -0.04em;
-  margin: 0 0 1.75rem;
-  max-width: 14ch;
+  font-size: clamp(3rem, 6.6vw, 6.25rem);
+  line-height: 0.95;
+  letter-spacing: -0.045em;
+  margin: 0 0 1.5rem;
+  max-width: 12ch;
   text-wrap: balance;
 }
 .word {
@@ -135,38 +170,456 @@
   }
 }
 .lead {
-  margin: 0 0 3rem;
-  max-width: 48ch;
+  margin: 0 0 2rem;
+  max-width: 44ch;
   font-size: clamp(1.0625rem, 1.4vw, 1.25rem);
   line-height: 1.6;
   color: var(--l-mute);
   animation: fadeUp 1s var(--l-ease) 0.5s both;
 }
-.marquee {
-  list-style: none;
-  margin: 0;
-  padding: 1.25rem 0 0;
-  border-top: 1px solid var(--l-line);
+/* Cari produk langsung dari hero (marketplace): pilih brand + kata kunci -> /belanja?channel=&q= */
+.heroSearch {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin: 0 0 2rem;
+  max-width: 34rem;
+  padding: 0.375rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, #ffffff 8%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, #ffffff 16%, transparent),
+    0 30px 60px -30px rgb(0 0 0 / 0.6);
+  backdrop-filter: blur(10px);
+  animation: fadeUp 1s var(--l-ease) 0.6s both;
+}
+.heroSearch:focus-within {
+  box-shadow:
+    inset 0 0 0 1.5px var(--l-accent),
+    0 30px 60px -30px rgb(0 0 0 / 0.6);
+}
+.heroSearch select,
+.heroSearch input {
+  font: inherit;
+  color: var(--l-text);
+  background: transparent;
+  border: 0;
+  min-height: 2.75rem;
+  outline: none;
+}
+.heroSearch select {
+  flex: none;
+  max-width: 11rem;
+  padding: 0 0.75rem 0 1rem;
+  font-weight: 600;
+  font-size: 0.875rem;
+  border-right: 1px solid var(--l-line);
+  cursor: pointer;
+}
+.heroSearch select option {
+  color: #14211d;
+}
+.heroSearch input {
+  flex: 1;
+  min-width: 0;
+  padding: 0 1rem;
+}
+.heroSearch input::placeholder {
+  color: var(--l-mute);
+  opacity: 0.85;
+}
+.heroSearch button {
+  flex: none;
+  font: inherit;
+  font-weight: 600;
+  min-height: 2.75rem;
+  padding: 0 1.375rem;
+  border: 0;
+  border-radius: 999px;
+  background: var(--l-accent);
+  color: var(--l-ink);
+  cursor: pointer;
+  transition: transform 180ms var(--l-ease);
+}
+.heroSearch button:hover {
+  transform: translateY(-1px);
+}
+.heroSearch select:focus-visible,
+.heroSearch input:focus-visible,
+.heroSearch button:focus-visible {
+  outline: 3px solid var(--l-accent);
+  outline-offset: 2px;
+  border-radius: 999px;
+}
+
+.heroStats {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem 2.5rem;
-  animation: fadeUp 1s var(--l-ease) 0.7s both;
+  gap: 0.75rem 2.5rem;
+  margin: 1.75rem 0 0;
+  animation: fadeUp 1s var(--l-ease) 0.85s both;
 }
-.marquee a {
+.heroStats div {
+  display: grid;
+  gap: 0.125rem;
+}
+.heroStats dt {
+  order: 2;
+  font-family: var(--l-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--l-mute);
+}
+.heroStats dd {
+  order: 1;
+  margin: 0;
+  font-family: var(--l-display);
+  font-size: clamp(1.75rem, 3vw, 2.5rem);
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Panggung 3D: perspective di induk, scene preserve-3d diputar pointer + scroll; kartu pada translateZ berbeda. */
+.h3dStage {
+  position: relative;
+  min-width: 0;
+  height: clamp(30rem, 46vw, 42rem);
+  perspective: 1400px;
+  perspective-origin: 50% 40%;
+}
+.h3dScene {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+.h3dRing {
+  position: absolute;
+  left: 50%;
+  top: 52%;
+  width: 82%;
+  aspect-ratio: 1;
+  translate: -50% -50%;
+  border-radius: 50%;
+  transform: translateZ(-260px) rotateX(64deg);
+  background:
+    radial-gradient(closest-side, transparent 66%, color-mix(in oklab, var(--l-accent) 40%, transparent) 67%, transparent 68%),
+    radial-gradient(closest-side, transparent 84%, color-mix(in oklab, #ffffff 16%, transparent) 85%, transparent 86%),
+    radial-gradient(closest-side, color-mix(in oklab, var(--l-accent) 10%, transparent), transparent 70%);
+  pointer-events: none;
+}
+.h3dSlot {
+  position: absolute;
+  translate: -50% -50%;
+  transform-style: preserve-3d;
+}
+.h3dCard {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+  transform: translateZ(var(--z)) rotate(var(--r));
+  transform-style: preserve-3d;
+  /* backwards (bukan both): setelah selesai, transform kembali ke aturan biasa sehingga :hover bisa mengangkat kartu. */
+  animation: cardIn 1.2s var(--l-ease) var(--d) backwards;
+  transition: transform 500ms var(--l-ease);
+}
+.h3dCard:hover,
+.h3dCard:focus-visible {
+  transform: translateZ(calc(var(--z) + 90px)) rotate(0deg) scale(1.04);
+}
+.h3dCard:focus-visible {
+  outline: 3px solid var(--l-accent);
+  outline-offset: 4px;
+  border-radius: 20px;
+}
+@keyframes cardIn {
+  from {
+    opacity: 0;
+    transform: translateZ(calc(var(--z) - 380px)) rotate(calc(var(--r) * 3)) translateY(60px);
+  }
+  to {
+    opacity: 1;
+    transform: translateZ(var(--z)) rotate(var(--r));
+  }
+}
+.h3dFrame {
+  position: relative;
+  display: block;
+  padding: 0.5rem;
+  border-radius: 20px;
+  background: linear-gradient(160deg, #ffffff 0%, #f1efe8 100%);
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.8) inset,
+    0 50px 80px -40px rgb(0 0 0 / 0.85),
+    0 18px 30px -18px rgb(0 0 0 / 0.5);
+  overflow: hidden;
+}
+/* Kilau kaca mengikuti hover. */
+.h3dFrame::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(115deg, transparent 30%, rgb(255 255 255 / 0.45) 48%, transparent 62%);
+  translate: -120% 0;
+  transition: translate 900ms var(--l-ease);
+  pointer-events: none;
+}
+.h3dCard:hover .h3dFrame::after {
+  translate: 120% 0;
+}
+.h3dFrame img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 14px;
+}
+.h3dCap {
+  position: absolute;
+  left: 0.5rem;
+  right: 0.5rem;
+  bottom: 0.5rem;
+  display: grid;
+  gap: 0.125rem;
+  padding: 2.25rem 0.75rem 0.625rem;
+  border-radius: 0 0 14px 14px;
+  background: linear-gradient(180deg, transparent, rgb(6 30 25 / 0.92) 55%);
+  color: #ffffff;
+  opacity: 0;
+  translate: 0 8px;
+  transition:
+    opacity 300ms var(--l-ease),
+    translate 300ms var(--l-ease);
+}
+.h3dCard:hover .h3dCap,
+.h3dCard:focus-visible .h3dCap,
+.h3dSlot[data-hero-card='0'] .h3dCap {
+  opacity: 1;
+  translate: 0 0;
+}
+.h3dBrand {
+  font-family: var(--l-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #f7d27a;
+}
+.h3dName {
+  font-weight: 600;
+  font-size: 0.875rem;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.h3dPrice {
+  font-family: var(--l-mono);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Etalase marketplace ---------- */
+
+.shelf {
+  background: linear-gradient(180deg, var(--l-bg), var(--l-bg-deep));
+}
+.shelfHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.5rem 2rem;
+  margin-bottom: 1.5rem;
+}
+.landing .shelfHead .h2 {
+  margin-bottom: 0;
+}
+.tabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.3125rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, #ffffff 6%, transparent);
+  box-shadow: inset 0 0 0 1px var(--l-line);
+}
+.tab {
+  position: relative;
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.875rem;
+  min-height: 2.75rem;
+  padding: 0 1.125rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--l-mute);
+  cursor: pointer;
+  transition: color 200ms var(--l-ease);
+}
+.tab[aria-pressed='true'] {
+  color: var(--l-ink);
+}
+/* Tanpa animasi (reduced motion) pil tidak dirender -> warnai tombol langsung. */
+.tab[aria-pressed='true']:not(:has(.tabPill)) {
+  background: var(--l-accent);
+}
+.tab:hover:not([aria-pressed='true']) {
+  color: var(--l-text);
+}
+.tab:focus-visible {
+  outline: 3px solid var(--l-accent);
+  outline-offset: 2px;
+}
+.tabPill {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--l-accent);
+}
+.tabLabel {
+  position: relative;
+}
+.shelfMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 1rem 0 1.5rem;
+  border-top: 1px solid var(--l-line);
+  color: var(--l-mute);
+  font-size: 0.9375rem;
+}
+.shelfMeta p {
+  margin: 0;
+}
+.shelfMeta strong {
+  color: var(--l-text);
+  font-weight: 600;
+}
+.shelfAll {
   display: inline-flex;
   align-items: center;
+  gap: 0.375rem;
   min-height: 2.75rem;
-  font-family: var(--l-display);
-  font-size: clamp(1.25rem, 2.2vw, 1.75rem);
-  letter-spacing: -0.01em;
-  color: var(--l-text);
+  color: var(--l-accent);
+  font-weight: 600;
   text-decoration: none;
-  transition: color 180ms var(--l-ease);
 }
-.marquee a:hover {
+.shelfAll:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.25em;
+}
+.shelfAll:focus-visible {
+  outline: 3px solid var(--l-accent);
+  outline-offset: 3px;
+}
+.shelfGrid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: clamp(1rem, 2vw, 1.75rem);
+  perspective: 1200px;
+}
+.shelfItem {
+  min-width: 0;
+}
+.shelfTilt {
+  height: 100%;
+  transform-style: preserve-3d;
+}
+.shelfCard {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  color: inherit;
+  text-decoration: none;
+  border-radius: 18px;
+  transition: transform 300ms var(--l-ease);
+}
+.shelfCard:focus-visible {
+  outline: 3px solid var(--l-accent);
+  outline-offset: 4px;
+}
+.shelfImg {
+  position: relative;
+  display: block;
+  aspect-ratio: 4 / 5;
+  border-radius: 18px;
+  overflow: hidden;
+  background: #ffffff;
+  box-shadow: 0 30px 50px -30px rgb(0 0 0 / 0.8);
+}
+.shelfImg img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 800ms var(--l-ease);
+}
+.shelfCard:hover .shelfImg img {
+  transform: scale(1.07);
+}
+.shelfNoImg {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  font-family: var(--l-display);
+  font-size: 4rem;
+  color: var(--l-ink);
+  background: linear-gradient(150deg, #f6f1e4, #e9e2cf);
+}
+.shelfBody {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.875rem 0.125rem 0;
+}
+.shelfName {
+  font-family: var(--l-display);
+  font-weight: 500;
+  font-size: 1.125rem;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+  transition: color 200ms var(--l-ease);
+}
+.shelfCard:hover .shelfName {
   color: var(--l-accent);
 }
-.marquee a:focus-visible,
+.shelfPrice {
+  font-family: var(--l-mono);
+  font-variant-numeric: tabular-nums;
+}
+.shelfTax {
+  font-size: 0.8125rem;
+  color: var(--l-mute);
+}
+.shelfEmpty {
+  margin: 0;
+  padding: 2.5rem 1.5rem;
+  border-radius: 18px;
+  border: 1px dashed var(--l-line);
+  color: var(--l-mute);
+  text-align: center;
+}
+
+/* ---------- Teks pengantar portofolio ---------- */
+
+.profileLead {
+  margin: -1rem 0 0;
+  max-width: 44ch;
+  font-size: 1.0625rem;
+  line-height: 1.7;
+  color: var(--l-mute);
+}
 .pbtn:focus-visible,
 .pghost:focus-visible,
 .plink:focus-visible,
@@ -218,7 +671,7 @@
   height: 1px;
   background: var(--p-accent);
 }
-.ptitle {
+.landing .ptitle {
   font-family: var(--l-display);
   font-weight: 450;
   font-variation-settings: 'SOFT' 50, 'opsz' 144;
@@ -396,7 +849,7 @@
   gap: 2rem;
   align-items: end;
 }
-.finalTitle {
+.landing .finalTitle {
   font-family: var(--l-display);
   font-weight: 420;
   font-variation-settings: 'SOFT' 50, 'opsz' 144;
@@ -417,14 +870,343 @@
 }
 .ctaPrimary {
   background: var(--l-accent);
-  color: #0b3b31;
+  color: var(--l-ink);
 }
 .ctaGhost {
   color: var(--l-text);
   box-shadow: inset 0 0 0 1.5px var(--l-line);
 }
 
+
+/* ---------- Deretan logo semua brand (hero) ---------- */
+
+.logoStrip {
+  position: relative;
+  z-index: 2;
+  margin-top: clamp(2rem, 4vw, 3rem);
+  border-block: 1px solid var(--l-line);
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+.logoTrack {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  width: max-content;
+  animation: logoLoop 46s linear infinite;
+}
+.logoStrip:hover .logoTrack,
+.logoStrip:focus-within .logoTrack {
+  animation-play-state: paused;
+}
+@keyframes logoLoop {
+  to {
+    transform: translateX(-50%);
+  }
+}
+.logoTrack li {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding-inline: clamp(1.5rem, 3vw, 2.75rem);
+  border-right: 1px solid var(--l-line);
+}
+.logoItem {
+  display: inline-flex;
+  align-items: center;
+  min-height: 4.5rem;
+  color: var(--l-text);
+  text-decoration: none;
+  opacity: 0.78;
+  transition:
+    opacity 240ms var(--l-ease),
+    color 240ms var(--l-ease);
+}
+a.logoItem:hover,
+a.logoItem:focus-visible {
+  opacity: 1;
+  color: var(--l-accent);
+}
+a.logoItem:focus-visible {
+  outline: 3px solid var(--l-accent);
+  outline-offset: 2px;
+}
+.logoItem img {
+  display: block;
+  height: 2rem;
+  width: auto;
+  max-width: 9rem;
+  object-fit: contain;
+  filter: brightness(0) invert(1);
+}
+.logoText {
+  font-family: var(--l-display);
+  font-size: clamp(1.25rem, 2vw, 1.625rem);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+.logoSoon {
+  margin-left: 0.625rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  font-family: var(--l-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--l-ink);
+  background: var(--l-teal);
+}
+
+/* ---------- Dinding portofolio brand ---------- */
+
+.wall {
+  background:
+    radial-gradient(45% 60% at 100% 0%, color-mix(in oklab, var(--l-accent) 9%, transparent), transparent 70%),
+    radial-gradient(45% 60% at 0% 100%, color-mix(in oklab, var(--l-teal) 12%, transparent), transparent 70%),
+    var(--l-bg-deep);
+}
+.wallHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.5rem 3rem;
+  margin-bottom: 2rem;
+}
+.wallHead .profileLead {
+  margin-top: -1.25rem;
+}
+.wallGroupLogo {
+  flex: none;
+  width: clamp(7rem, 12vw, 10rem);
+  height: auto;
+  padding: 1rem 1.25rem;
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: 0 30px 60px -36px rgb(0 0 0 / 0.8);
+}
+.tabCount {
+  margin-left: 0.25rem;
+  font-family: var(--l-mono);
+  font-size: 0.75rem;
+  opacity: 0.75;
+}
+.wallGrid {
+  list-style: none;
+  margin: 1.75rem 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: clamp(0.875rem, 1.6vw, 1.25rem);
+  perspective: 1200px;
+}
+.wallItem {
+  min-width: 0;
+}
+.wallTilt {
+  height: 100%;
+  transform-style: preserve-3d;
+}
+.wallCard {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  gap: 0.875rem;
+  height: 100%;
+  min-height: 15.5rem;
+  padding: 1.25rem 1.25rem 1.125rem;
+  border-radius: 20px;
+  background: linear-gradient(160deg, color-mix(in oklab, var(--l-card) 92%, #ffffff), var(--l-card));
+  box-shadow:
+    inset 0 0 0 1px var(--l-line),
+    0 30px 50px -36px rgb(0 0 0 / 0.85);
+  color: var(--l-text);
+  text-decoration: none;
+  overflow: hidden;
+  transition: box-shadow 300ms var(--l-ease);
+}
+a.wallCard:hover {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--l-accent) 60%, transparent),
+    0 40px 60px -36px rgb(0 0 0 / 0.9);
+}
+a.wallCard:focus-visible {
+  outline: 3px solid var(--l-accent);
+  outline-offset: 3px;
+}
+.wallSoon {
+  background: linear-gradient(160deg, color-mix(in oklab, var(--l-teal) 16%, var(--l-card)), var(--l-card));
+}
+.wallSpot {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 300ms var(--l-ease);
+}
+.wallCard:hover .wallSpot {
+  opacity: 1;
+}
+.wallTop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.wallCat {
+  font-family: var(--l-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--l-mute);
+}
+.wallBadge {
+  padding: 0.1875rem 0.5625rem;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.wallBadge_online {
+  background: var(--l-accent);
+  color: var(--l-ink);
+}
+.wallBadge_store {
+  box-shadow: inset 0 0 0 1px var(--l-line);
+  color: var(--l-mute);
+}
+.wallBadge_soon {
+  background: var(--l-teal);
+  color: var(--l-ink);
+}
+.wallLogo {
+  display: flex;
+  align-items: center;
+  min-height: 4.5rem;
+}
+.wallLogo img {
+  display: block;
+  max-height: 3.5rem;
+  max-width: 80%;
+  width: auto;
+  object-fit: contain;
+  filter: brightness(0) invert(1);
+}
+.wallWordmark {
+  font-family: var(--l-display);
+  font-weight: 500;
+  font-size: clamp(1.625rem, 2.4vw, 2.125rem);
+  line-height: 1;
+  letter-spacing: -0.03em;
+  transition: translate 400ms var(--l-ease);
+}
+.wallCard:hover .wallWordmark {
+  translate: 0.25rem 0;
+}
+.wallLine {
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  color: var(--l-mute);
+}
+.wallFoot {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--l-line);
+  font-size: 0.8125rem;
+  color: var(--l-mute);
+}
+.wallOrigin {
+  flex: 1;
+  min-width: 0;
+}
+.wallFact {
+  font-family: var(--l-mono);
+  color: var(--l-accent);
+  white-space: nowrap;
+}
+.wallGo {
+  color: var(--l-accent);
+  font-size: 1.125rem;
+  transition: translate 300ms var(--l-ease);
+}
+.wallCard:hover .wallGo {
+  translate: 0.25rem 0;
+}
+
 /* ---------- Responsif ---------- */
+
+@media (max-width: 64rem) {
+  .shelfGrid,
+  .wallGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 56rem) {
+  .heroGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .hero {
+    min-height: 0;
+    padding-top: 2.5rem;
+  }
+  .landing .title {
+    max-width: 14ch;
+  }
+  /* HP: panggung di bawah teks; kartu tepi diperkecil agar tetap di dalam layar. */
+  .h3dStage {
+    height: clamp(22rem, 96vw, 30rem);
+    perspective: 1000px;
+    margin-top: 0.5rem;
+  }
+  .h3dSlot[data-hero-card='5'],
+  .h3dSlot[data-hero-card='6'] {
+    display: none;
+  }
+  .shelfGrid,
+  .wallGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .wallHead {
+    flex-direction: column-reverse;
+  }
+  .profileLead {
+    margin-top: -1rem;
+  }
+}
+
+@media (max-width: 34rem) {
+  .heroSearch select {
+    max-width: 7.5rem;
+    padding-left: 0.75rem;
+    font-size: 0.8125rem;
+  }
+  .heroSearch button {
+    padding: 0 1rem;
+  }
+  .tabs {
+    width: 100%;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    scrollbar-width: none;
+  }
+  .tab {
+    flex: none;
+  }
+  .wallGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .wallCard {
+    min-height: 0;
+  }
+}
 
 @media (max-width: 56rem) {
   .panelInner,
@@ -448,14 +1230,40 @@
 @media (prefers-reduced-motion: reduce) {
   .word > span,
   .lead,
-  .marquee {
+  .heroSearch,
+  .heroStats,
+  .h3dCard,
+  .logoTrack {
     animation: none;
+  }
+  /* Tanpa animasi: deretan logo jadi baris yang bisa digeser, salinan dekoratif disembunyikan. */
+  .logoStrip {
+    overflow-x: auto;
+  }
+  .logoTrack li[aria-hidden='true'] {
+    display: none;
+  }
+  .h3dCard,
+  .h3dCard:hover,
+  .h3dCard:focus-visible {
+    transition: none;
+    transform: translateZ(var(--z)) rotate(var(--r));
+  }
+  .h3dFrame::after,
+  .shelfImg img,
+  .heroSearch button,
+  .tab,
+  .wallCard,
+  .wallSpot,
+  .wallWordmark,
+  .wallGo,
+  .logoItem {
+    transition: none;
   }
   .pbtn,
   .pghost,
   .ctaPrimary,
-  .ctaGhost,
-  .marquee a {
+  .ctaGhost {
     transition: none;
   }
 }

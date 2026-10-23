@@ -166,11 +166,13 @@ describe('landing Super-App', () => {
       const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
       return (x! + 0.05) / (y! + 0.05);
     };
-    for (const fg of ['#ffffff', '#c9dcd6', '#f2a900']) {
-      expect(ratio(fg, '#0b3b31')).toBeGreaterThanOrEqual(4.5);
-      expect(ratio(fg, '#0f4a3e')).toBeGreaterThanOrEqual(4.5);
+    // Palet EBN (logo PT Era Boga Nusantara, erajaya.com): latar #062e2a, kartu #0a3d38, emas #dfb422.
+    for (const fg of ['#ffffff', '#bfe0da', '#dfb422']) {
+      expect(ratio(fg, '#062e2a')).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(fg, '#0a3d38')).toBeGreaterThanOrEqual(4.5);
     }
-    expect(ratio('#0b3b31', '#f2a900')).toBeGreaterThanOrEqual(4.5); // teks tombol utama
+    expect(ratio('#062e2a', '#dfb422')).toBeGreaterThanOrEqual(4.5); // teks tombol utama
+    expect(ratio('#0dab9d', '#062e2a')).toBeGreaterThanOrEqual(4.5); // teal EBN (aksen sekunder)
   });
 });
 

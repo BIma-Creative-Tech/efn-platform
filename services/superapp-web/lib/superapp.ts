@@ -51,3 +51,28 @@ export function brandShopHref(group: BrandGroup): string {
   const ch = group.channels[0];
   return ch ? `/belanja?${new URLSearchParams({ channel: ch.channel_code })}` : '/belanja';
 }
+
+/** Jumlah kartu produk di hero 3D (= jumlah slot panggung di components/landing/Hero3D.tsx). */
+export const HERO_MAX_ITEMS = 7;
+
+/**
+ * Ambil bergiliran (round-robin) dari beberapa daftar: hero 3D menampilkan campuran brand, bukan satu brand saja.
+ * Duplikat `key` dibuang; berhenti di `max`.
+ */
+export function interleave<T>(lists: readonly (readonly T[])[], max: number, key: (v: T) => string | number): T[] {
+  const out: T[] = [];
+  const seen = new Set<string | number>();
+  const longest = Math.max(0, ...lists.map((l) => l.length));
+  for (let i = 0; i < longest && out.length < max; i++) {
+    for (const l of lists) {
+      const v = l[i];
+      if (v === undefined) continue;
+      const k = key(v);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(v);
+      if (out.length >= max) break;
+    }
+  }
+  return out;
+}

@@ -161,6 +161,8 @@ services:
       - ../../services/superapp-web/lib:/app/lib:ro
       - ../../services/superapp-web/components:/app/components:ro
       - ../../services/superapp-web/proxy.ts:/app/proxy.ts:ro
+      # Config dev (mis. turbopackFileSystemCacheForDev=false) berlaku tanpa rebuild image.
+      - ../../services/superapp-web/next.config.mjs:/app/next.config.mjs:ro
       # Aset statis (model 3D landing, poster, logo brand) - tanpa rebuild image saat aset berubah.
       - ../../services/superapp-web/public:/app/public:ro
     read_only: false

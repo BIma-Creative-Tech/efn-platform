@@ -145,6 +145,40 @@ html[data-scheme='dark'] .site-header {
 html[data-scheme='dark'] .site-header :focus-visible {
   outline-color: var(--color-focus);
 }
+/* Ponsel (Super-App `app.` saja; brand lain tidak berubah): menu satu baris yang bisa digeser, bukan membungkus jadi 3-4 baris (diukur 176 px tinggi
+   header di 390 px). Logo + menu tetap terlihat; target sentuh tetap ≥ 2.75rem. */
+@media (max-width: 55.99rem) {
+  html[data-brand='efn'] .site-header .container {
+    flex-wrap: nowrap;
+    gap: 0.75rem;
+    padding-top: 0.25rem;
+    padding-bottom: 0.25rem;
+  }
+  html[data-brand='efn'] .brand-logo {
+    flex: none;
+  }
+  html[data-brand='efn'] .site-nav {
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent);
+    mask-image: linear-gradient(90deg, #000 85%, transparent);
+  }
+  html[data-brand='efn'] .site-nav::-webkit-scrollbar {
+    display: none;
+  }
+  html[data-brand='efn'] .site-nav ul {
+    flex-wrap: nowrap;
+    gap: 0 1rem;
+    padding-right: 1.5rem;
+  }
+  html[data-brand='efn'] .site-nav a {
+    white-space: nowrap;
+    min-height: 2.75rem;
+    display: inline-flex;
+    align-items: center;
+  }
+}
 .site-header .container {
   display: flex;
   align-items: center;
