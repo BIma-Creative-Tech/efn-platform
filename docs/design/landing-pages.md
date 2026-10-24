@@ -1,6 +1,6 @@
 # Landing page brand — Super-App EFN
 
-Status: **DRAF 21 Okt 2026 (v3: warna resmi + foto produk asli)**. Baru diterapkan untuk **Paris Baguette** (`parisbaguette.*`). Brand lain tetap memakai beranda lama (`app/page.tsx`) sampai konfigurasinya ditambahkan di `lib/landing-config.ts`.
+Status: **DRAF 21 Okt 2026 (v3: warna resmi + foto produk asli)**; G24 (24 Okt 2026) + Wetzel's; **G25 (24 Okt 2026) + Bacha Coffee & GrandLucky** (§8). Brand tanpa entri di `lib/landing-config.ts` tetap memakai beranda lama (`app/page.tsx`); holding `app.` memakai landing Super-App.
 
 ## 1. Tujuan & posisi
 
@@ -76,4 +76,24 @@ Dependency: `framer-motion`, `@fontsource-variable/fraunces`, `@fontsource-varia
 
 - Foto produk resolusi tinggi & font PB Signature berlisensi dari tim brand.
 - Persetujuan copy (judul/lead `Brand.hero` & copy bab masih DRAF).
-- Landing untuk Bacha, GrandLucky & EFN.
+- Copy bab Bacha & GrandLucky (DRAF) menunggu tim brand; katalog GL masih tipis (Buah 4, Daging & Unggas 2 produk).
+
+## 8. Bacha Coffee & GrandLucky (G25, 24 Okt 2026)
+
+Konsep sama dengan PB (scroll story foto produk asli, rak etalase, band mode pesan, cara pesan, penutup); tema & tata letak per brand.
+
+| | Bacha Coffee (`bacha.*`, kanal butik BCR) | GrandLucky (`grandlucky.*`, kanal GL) |
+|---|---|---|
+| Referensi | bachacoffee.com/en (diukur Playwright 24 Okt 2026) | grandlucky.co.id + file logo resmi |
+| Bab (kategori katalog) | Kopi (Loose Coffee), Kemasan (Packed Coffee), Aksesori, Gourmet | Buah, Daging & Unggas, Sarapan Kopi & Teh, Camilan & Cokelat |
+| Band tambahan | "Hadiah" = Gift Sets (pola "Personalise your gifts") | — |
+| Header | navy + lencana unta resmi (`logoKind: 'mark'`) + pita ornamen `line-header.png` | putih + logo resmi berwarna, garis merah `#c42a1c` |
+| Tipografi | ITC Quorum 500 kapital, spasi 0,06em, tanpa miring; nama produk Lora | Lato 900; kata penekanan merah tua + stabilo kuning logo |
+| Bentuk | radius 2px (tombol, kartu, chip) | radius 8px tombol, 14–16px kartu |
+| Penutup | foto kampanye resmi di bawah lapisan navy 86% | foto "Fresh" resmi di bawah lapisan biru 88%, tombol kuning `#f0d000` |
+
+**Palet aksen landing (`LandingConfig.palette`).** Aksen resmi brand terang gagal sebagai teks di latar terang (oranye Bacha `#e07e27` di peach 2,59). Aksen dipisah jadi `ink` (teks), `fill` (tombol/garis) dan `onFill` (teks di tombol) → CSS `--l-ink/--l-fill/--l-on-fill`. Tanpa palet = aksen tema (PB, Wetzel's tidak berubah). Bacha: ink `#9a4a0c` (5,53 di peach, 6,16 di krem), tombol oranye berteks navy 5,12. GL: ink `#c42a1c` (5,13 / 5,68), tombol biru berteks putih 8,57. Band penutup dicek di kasus terburuk (lapisan × putih): Bacha `#3a4462` krem 9,48, `#f5c08f` 5,87; GL `#515aa7` putih 6,23, `#dfe2f5` 4,85, `#ffe14d` 4,79.
+
+Judul band mode pesan kini dari mode yang aktif (`modesHeadline`), bukan kalimat tetap; judul cara pesan & penutup per brand (`howTitle`, `closing`). Keterangan HUD "Foto: katalog <brand>".
+
+Terukur (Playwright, 24 Okt 2026): 1440/1280/1024/390/360 px × scroll turun-naik → teks tertutup foto 0%, kartu saling menimpa 0%, 13–28 keadaan gerak, teks bab terbaca, tanpa scroll horizontal, tanpa error browser, tanpa gambar rusak; PB & Wetzel's tidak berubah.
