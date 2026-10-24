@@ -15,7 +15,12 @@ WORKDIR /app
 # G18 (PR #60, Trivy): `apt-get upgrade` mengambil perbaikan keamanan Debian (debian-security) yang terbit setelah
 # digest base dipin - mis. libexpat1 2.9.0 (CVE-2026-66046/76956/76957/77214/93990) dan libcurl4t64 8.14.1-2+deb13u7
 # (CVE-2026-8286/8927/92392), keduanya dependensi transitif tesseract. Gate Trivy di CI = pemeriksa hasilnya.
-RUN apt-get update \
+# APT_REFRESH: layer ini di-cache build (GHA) -> `apt-get upgrade` tidak berjalan ulang saat Debian merilis perbaikan
+# baru. Ganti tanggalnya untuk memaksa layer dibangun ulang. 2026-10-24 (PR #68, Trivy): libbrotli1 1.1.0-2+deb13u1
+# (CVE-2026-111497, dependensi transitif tesseract via libfreetype).
+ARG APT_REFRESH=2026-10-24
+RUN echo "apt refresh ${APT_REFRESH}" \
+    && apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-ind tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
