@@ -206,6 +206,16 @@ describe('G19 §11.3: kanal per brand', () => {
     expect((await svc.channel('PB'))?.brand_code).toBe('PB');
   });
 
+  it('G24 §16.1: kanal WTZ (PT Wetzels Pretzels, brand WTZ) tampil bila di ONLINE_CHANNELS; ?brand=WTZ hanya WTZ', async () => {
+    const { config, svc } = brandSetup([...ROWS, { code: 'WTZ', brand: 'WTZ', company: 'WTZ' }]);
+    expect(config.onlineChannels).toEqual(['GL', 'PB', 'BCR', 'BCF', 'WTZ']);
+    expect((await svc.channels('WTZ')).map((c) => [c.channel_code, c.company_code, c.brand_code])).toEqual([['WTZ', 'WTZ', 'WTZ']]);
+    expect((await svc.channels()).length).toBe(5);
+    // L-93: tanpa WTZ di ONLINE_CHANNELS kanal tidak tampil walau salinan katalognya ada
+    const off = brandSetup([...ROWS, { code: 'WTZ', brand: 'WTZ', company: 'WTZ' }], { ONLINE_CHANNELS: 'GL,PB,BCR,BCF' });
+    expect(await off.svc.channels('WTZ')).toEqual([]);
+  });
+
   it('G20 §12.1: kode PT lama RTL/FNB (salinan channel_data pra-G20) → kanal disembunyikan (fail-closed)', async () => {
     const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     try {

@@ -5,7 +5,8 @@
         "daftar grup sensitif tambahan, dan pemastian aturan SoD bawaan (dirujuk lewat kode, tidak dibuat ulang)."
     ),
     # 19.0.1.0.0 (G22, docs/08 §13.4; spesifikasi §12.2b, §12.6; kontrak docs/04 §13.3 no. 2-3, L-64, L-65, L-67, L-69).
-    "version": "19.0.1.0.0",
+    # 19.0.1.1.0 (G24 W-40, docs/04 §16.1): peran per jabatan PT ke-7 WTZ (+ Terminal POS; tanpa CK -> tanpa mrp).
+    "version": "19.0.1.1.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",

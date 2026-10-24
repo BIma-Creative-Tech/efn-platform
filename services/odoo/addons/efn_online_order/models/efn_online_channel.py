@@ -122,7 +122,7 @@ class EfnOnlineChannel(models.Model):
     code = fields.Char(
         required=True,
         help="Kode stabil yang dipakai BFF (channel_code), pola ^[A-Z][A-Z0-9-]{1,15}$, tidak berakhiran -FILE (L-46). "
-        "Sejak G20 kode kanal = kode PT: GL, PB, BCR, BCF (docs/04 §12.1).",
+        "Sejak G20 kode kanal = kode PT: GL, PB, BCR, BCF, WTZ (docs/04 §12.1, §16.1).",
     )
     brand_code = fields.Char(
         string="Kode brand",

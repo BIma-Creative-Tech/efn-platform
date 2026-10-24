@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS platform.loyalty_ledger (
   member_ref_hash  char(64)    NOT NULL CHECK (member_ref_hash ~ '^[0-9a-f]{64}$'),
   member_ref_enc   bytea       NOT NULL CHECK (octet_length(member_ref_enc) > 29 AND get_byte(member_ref_enc, 0) >= 1),
   company_code     text        NOT NULL DEFAULT 'EFN'
-                   CHECK (company_code IN ('EFN','GL','PB','BCR','BCF','FARM')),   -- PT penanggung liabilitas (ADR-020; kode G20 §12.1, volume lama: 09)
+                   CHECK (company_code IN ('EFN','GL','PB','BCR','BCF','WTZ','FARM')),   -- PT penanggung liabilitas (ADR-020; kode G20 §12.1 + G24 §16.3, volume lama: 09, 13)
   delta_points     integer     NOT NULL CHECK (delta_points <> 0),
   reason           text        NOT NULL DEFAULT '',
   source           text        NOT NULL,                    -- price_hunter | mgm | pos | adjustment ...

@@ -4,7 +4,9 @@
  *   sekunder #aebcd3 (--color-text-muted), aksen kuning #fcb134 (--color-accent / --color-primary).
  * Tidak ada warna baru kecuali putih kartu foto (foto katalog berlatar terang) dan bayangan.
  * Syarat brand (diuji tests/landing.test.ts): accent/latar ≥ 4,5:1, teks/latar ≥ 4,5:1.
- * Font: Fraunces (display), Geist (UI), Geist Mono (label & angka) — OFL-1.1, self-host (app/layout.tsx).
+ * Font = token brand (lib/brands.ts, app/fonts.css): --font-display (judul besar), --font-heading (judul bagian),
+ * --font-label (label kapital kecil & angka), --font-body (teks). PB: PB Signature Display / PB Special Elite / Roboto;
+ * Wetzel's: Londrina Solid / Roboto. Brand tanpa token baru jatuh ke Fraunces + Geist Mono.
  */
 
 .landing {
@@ -15,8 +17,9 @@
   --l-mute: var(--color-text-muted);
   --l-faint: color-mix(in oklab, var(--color-text-muted) 78%, var(--l-bg));
   --l-line: color-mix(in oklab, var(--color-text) 16%, transparent);
-  --l-display: 'Fraunces Variable', var(--font-heading);
-  --l-mono: 'Geist Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  --l-display: var(--font-display, 'Fraunces Variable');
+  --l-heading: var(--font-heading, 'Fraunces Variable');
+  --l-mono: var(--font-label, 'Geist Mono Variable'), ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
   --l-inner: 74rem;
   --l-gutter: clamp(1.25rem, 4vw, 3rem);
   --l-ease: cubic-bezier(0.16, 1, 0.3, 1);
@@ -353,12 +356,14 @@
 
 .ctaPrimary,
 .ctaGhost {
+  font-family: var(--font-nav, inherit);
+  text-transform: var(--nav-transform, none);
   display: inline-flex;
   align-items: center;
   min-height: 3rem;
   padding: 0.75rem 1.625rem;
   border-radius: 999px;
-  font-weight: 600;
+  font-weight: var(--ui-weight, 600);
   font-size: 0.9375rem;
   letter-spacing: 0.01em;
   text-decoration: none;
@@ -437,7 +442,7 @@
 }
 
 .chapterTitle {
-  font-family: var(--l-display);
+  font-family: var(--l-heading);
   font-weight: 450;
   font-variation-settings: 'SOFT' 50, 'opsz' 144;
   font-size: clamp(2.5rem, 5vw, 4.25rem);
@@ -627,7 +632,7 @@
   margin-bottom: 2rem;
 }
 .h2 {
-  font-family: var(--l-display);
+  font-family: var(--l-heading);
   font-weight: 450;
   font-variation-settings: 'SOFT' 50, 'opsz' 144;
   font-size: clamp(2.5rem, 5vw, 4rem);
@@ -798,6 +803,56 @@
   color: var(--l-faint);
 }
 
+/* ---------- Katering (G24) ---------- */
+
+.catering {
+  background: var(--l-bg);
+  border-top: 1px solid var(--l-line);
+}
+.cateringLead {
+  margin: 0;
+  max-width: 44ch;
+  color: var(--l-mute);
+  line-height: 1.65;
+}
+.occasions {
+  list-style: none;
+  margin: 0 0 3rem;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid var(--l-line);
+}
+.occasions li {
+  display: grid;
+  align-content: start;
+  gap: 0.5rem;
+  padding: 1.5rem 1.5rem 0 0;
+}
+.occasions li + li {
+  padding-left: 1.5rem;
+  border-left: 1px solid var(--l-line);
+}
+@media (max-width: 56rem) {
+  .occasions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .occasions li:nth-child(odd) {
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+@media (max-width: 30rem) {
+  .occasions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .occasions li,
+  .occasions li + li {
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+
 /* ---------- Cara pesan ---------- */
 
 .how {
@@ -840,7 +895,7 @@
   margin-bottom: 1.5rem;
 }
 .stepTitle {
-  font-family: var(--l-display);
+  font-family: var(--l-heading);
   font-weight: 500;
   font-size: 1.5rem;
   line-height: 1.15;
@@ -1015,4 +1070,56 @@
   .railCard:hover .railImage img {
     transform: none;
   }
+}
+
+/* ---------- Tekstur latar resmi brand (G24; aset public/brands/<id>/, sumber di public/brands/README.md) ---------- */
+
+/* PB (parisbaguette.com): tekstur grunge putih tipis di bagian navy ("Rewards"), kertas krem di kartu foto ("Featured"). */
+:global(html[data-brand='parisbaguette']) .catering,
+:global(html[data-brand='parisbaguette']) .final {
+  background-image: url('/brands/parisbaguette/pb-grunge.png'), radial-gradient(70% 90% at 15% 100%, color-mix(in oklab, var(--l-accent) 14%, transparent), transparent 70%);
+  background-repeat: repeat, no-repeat;
+  background-size: 400px, auto;
+}
+:global(html[data-brand='parisbaguette']) .stageBg {
+  background:
+    url('/brands/parisbaguette/pb-grunge.png') repeat 0 0 / 400px,
+    radial-gradient(80% 60% at 50% 110%, color-mix(in oklab, var(--l-card) 85%, transparent) 0%, transparent 70%),
+    var(--l-bg);
+}
+:global(html[data-brand='parisbaguette']) .photoFrame,
+:global(html[data-brand='parisbaguette']) .railImage {
+  background: #fbf6f2 url('/brands/parisbaguette/bg-beige-texture.jpg') center / 800px;
+}
+:global(html[data-brand='parisbaguette']) .frontCard {
+  background: #fbf6f2 url('/brands/parisbaguette/bg-beige-texture.jpg') center / 800px;
+}
+
+/* Wetzel's (wetzels.com): pola pretzel kuning (footer `pattern-yellow`) di band katering & penutup. */
+:global(html[data-brand='wetzels']) .catering {
+  background:
+    linear-gradient(color-mix(in oklab, var(--l-bg) 88%, transparent), color-mix(in oklab, var(--l-bg) 88%, transparent)),
+    url('/brands/wetzels/pattern-pretzels.png') repeat 0 0 / 250px,
+    var(--l-bg);
+}
+:global(html[data-brand='wetzels']) .final {
+  background:
+    linear-gradient(color-mix(in oklab, var(--l-bg) 80%, transparent), color-mix(in oklab, var(--l-bg) 80%, transparent)),
+    url('/brands/wetzels/pattern-pretzels.png') repeat 0 0 / 250px,
+    var(--l-bg);
+}
+/* Font Londrina/PB Signature satu bobot: matikan sumbu variabel Fraunces & tebal palsu. */
+:global(html[data-brand='wetzels']) .landing :is(.title, .chapterTitle, .h2, .finalTitle, .stepTitle, .photoName, .railName),
+:global(html[data-brand='parisbaguette']) .landing :is(.title, .chapterTitle, .h2, .finalTitle, .stepTitle, .photoName, .railName) {
+  font-variation-settings: normal;
+  font-weight: 400;
+  font-synthesis: none;
+}
+:global(html[data-brand='wetzels']) .landing :is(.title, .chapterTitle, .h2, .finalTitle) {
+  text-transform: uppercase;
+  letter-spacing: 0.005em;
+  line-height: 0.95;
+}
+:global(html[data-brand='parisbaguette']) .landing :is(.chapterTitle, .h2, .stepTitle) {
+  letter-spacing: -0.01em;
 }

@@ -19,6 +19,8 @@ describe('Config online G19/G20', () => {
   it('G20 §12.1: default ONLINE_CHANNELS = GL; daftar GL,PB,BCR,BCF diterima; selain regex §10.2 ditolak', () => {
     expect(testConfig().onlineChannels).toEqual(['GL']);
     expect(testConfig({ ONLINE_CHANNELS: 'GL, PB;BCR,BCF' }).onlineChannels).toEqual(['GL', 'PB', 'BCR', 'BCF']);
+    // G24 §16.1 (L-93): WTZ diterima bila dinyalakan eksplisit, tidak masuk default
+    expect(testConfig({ ONLINE_CHANNELS: 'GL,WTZ' }).onlineChannels).toEqual(['GL', 'WTZ']);
     expect(testConfig({ ONLINE_CHANNELS: 'AB-CD' }).onlineChannels).toEqual(['AB-CD']); // berhifen tetap valid secara format
     for (const bad of ['GL_X', 'gl', 'G', '../GL', 'GL/PB', 'GL.PB', '-GL', 'A'.repeat(17), 'GL-FILE']) { // GL-FILE: L-46
       expect(() => testConfig({ ONLINE_CHANNELS: bad }).onlineChannels).toThrow(ConfigError);
@@ -41,6 +43,8 @@ describe('Config online G19/G20', () => {
     expect(onlineApiKeySecretName('PB')).toBe('odoo_api_key_online_pb');
     expect(onlineApiKeySecretName('BCR')).toBe('odoo_api_key_online_bcr');
     expect(onlineApiKeySecretName('BCF')).toBe('odoo_api_key_online_bcf');
+    expect(onlineApiKeyEnvName('WTZ')).toBe('ODOO_API_KEY_ONLINE_WTZ'); // G24 §16.1
+    expect(onlineApiKeySecretName('WTZ')).toBe('odoo_api_key_online_wtz');
     expect(onlineApiKeySecretName('AB-CD')).toBe('odoo_api_key_online_ab_cd');
   });
 

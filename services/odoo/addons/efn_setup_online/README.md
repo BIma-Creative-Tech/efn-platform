@@ -6,7 +6,7 @@ ADR-027, ADR-031 (semua *Proposed*). Risiko: R-T15 (API key kedaluwarsa), temuan
 ## Data (noupdate)
 - `group_online_channel.api_key_duration` = **35 hari** (W-11, keputusan pemilik proyek 10 Okt 2026: key 30 hari + rotasi otomatis Superadmin, margin 5 hari; tanpa ini key user teknis hanya 1 hari). **noupdate=0** sejak 19.0.1.1.0: nilai ditegakkan setiap install/upgrade (nilai lama 90 diturunkan). Key yang sudah dibuat sebelum upgrade tetap memakai `expiration_date` lamanya → rotasi pertama segera setelah upgrade (runbook `odoo-online-api-key.md`, devsecops).
 - **Durasi efektif = maksimum semua grup user** (`_check_expiration_date`: `max(group.api_key_duration for group in all_group_ids)`). CE 19 memberi `base.group_user` 90 hari → user teknis (Internal User + grup kanal) efektif 90. Sejak 19.0.1.1.0 `base.group_user.api_key_duration = 0` (noupdate=0; `-u base` ikut meng-upgrade modul ini sehingga dinormalkan lagi) → efektif **35**. **Dampak staf:** user internal tanpa grup berdurasi kini maksimal **1 hari** (fallback CE); admin/Settings & `sudo()` tetap bebas batas (is_system) — rotasi wajib `with_user(<user teknis>)` (skrip `efn-rotate-online-key` sudah). Test `TestEfnOnlineApiKeyDuration`. Smoke `scripts/smoke/odoo_online_smoke.py` default `SMOKE_KEY_DAYS` 85 → 30.
-- Partner generik "Pelanggan Super-App" per PT berkanal online (GL `_rtl`, PB `_fnb`, BCR `_bcr`, BCF `_bcf`; G20) **tanpa HP/email/NPWP**; tim "Super-App" per PT.
+- Partner generik "Pelanggan Super-App" per PT berkanal online (GL `_rtl`, PB `_fnb`, BCR `_bcr`, BCF `_bcf`; G20; WTZ `_wtz`, G24) **tanpa HP/email/NPWP**; tim "Super-App" per PT.
 - `ir.default loyalty.program.sale_ok = False` (setiap install/upgrade) + `post_init_hook` mematikan `sale_ok` pada
   program yang sudah ada (temuan #37; E-28 tetap membandingkan total saat konfirmasi).
 - Tidak diset: `sale.automatic_invoice` (jalur `payment.transaction` sale tidak dipakai), *Lock Confirmed Sales*
@@ -24,6 +24,7 @@ ADR-027, ADR-031 (semua *Proposed*). Risiko: R-T15 (API key kedaluwarsa), temuan
 | `PB` (`channel_pb`) | PT Paris Baguette (`company_fnb`) | `PB` | nonaktif (Q-ON2) | `none` | `efn_online_pb` | outlet `RESTO-01` wajib FP non-dine-in kota contoh |
 | `BCR` (`channel_bcr`) | Bacha Coffee Retail (`company_bcr`) | `BACHA` | nonaktif, tanpa outlet | `confirm`, batas L-41 sama | `efn_online_bcr` | ritel PPN |
 | `BCF` (`channel_bcf`) | Bacha Coffee F&B (`company_bcf`) | `BACHA` | nonaktif | `none` | `efn_online_bcf` | **G22 (19.0.1.6.0):** outlet demo `CAFE-01` (gudang `OL03`) ber-FP `fiscal_position_bcf_non_dine_in` (tanpa SC, PB1 0 % — 18-1) |
+| `WTZ` (`channel_wtz`) | PT Wetzel's Pretzels (`company_wtz`) | `WTZ` | nonaktif | `none` | `efn_online_wtz` | **G24 (19.0.1.7.0, docs/04 §16):** outlet kios `WTZ-01` (gudang `OL04`) ber-FP non-dine-in WTZ; pickup/bayar di kasir/pre-order saja (tanpa QR meja & reservasi, L-92) |
 
 - Per PT: partner generik & tim (data), pricelist online, jurnal bank "Titipan Online - Holding" (`journal_titipan_<gl|pb|bcr|bcf>`, **demo**; kanal produksi dibuat lewat checklist), pembulatan Rupiah bulat (`biggest_tax`).
 - Dua kanal Bacha berbagi `brand_code` `BACHA` (Super-App satu domain, satu cart, dua PT; ADR-019 opsi A di BFF).
@@ -70,7 +71,7 @@ repo).
 - Checklist go-live: isi **batas nominal** dan **batas qty per baris (reservasi)** kanal produksi mode confirm.
 
 ## Checklist go-live kanal
-**Kode kanal = kode PT** (`GL`, `PB`, `BCR`, `BCF`; docs/04 §12.1; jangan berakhiran `-FILE`, L-46).
+**Kode kanal = kode PT** (`GL`, `PB`, `BCR`, `BCF`, `WTZ`; docs/04 §12.1; jangan berakhiran `-FILE`, L-46).
 **Satu user teknis per kanal** (L-37; hanya Internal User + grup kanal, satu company, 2FA kebijakan) → API key via runbook → secret BFF
 `odoo_api_key_online_<kode huruf kecil>` → kanal (pricelist, partner generik, jurnal titipan, pembulatan, batas; mode confirm:
 `max_order_amount` > 0 + `max_line_qty`, L-41; opsional batas berat `max_order_weight_kg` + `weight_missing_policy`, W-33 — isi `product.weight` produk dulu) → outlet (gudang,

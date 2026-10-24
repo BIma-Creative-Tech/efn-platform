@@ -3,14 +3,14 @@
  * MURNI (dipakai Server Component, client, dan test). Mode hanya tampil bila memang relevan untuk brand/kanal:
  *  - Ambil      : ada kanal katalog dengan `fulfilment.pickup`.
  *  - Pre-order  : ada outlet `slot_enabled` (BFF mengirim hanya bila ONLINE_SLOTS_ENABLED, §15.4).
- *  - Makan di tempat : brand punya PT F&B (PB/BCF) -> panduan pindai QR meja (`/meja` hanya lewat QR; tidak ada
+ *  - Makan di tempat : brand punya PT F&B dengan layanan meja (PB/BCF; bukan kios WTZ) -> panduan pindai QR meja (`/meja` hanya lewat QR; tidak ada
  *    tautan langsung yang menjanjikan pesanan tanpa token meja).
- *  - Reservasi  : brand punya PT F&B. Ketersediaan sebenarnya diputuskan BFF (`BOOKING_ENABLED`); halaman reservasi
+ *  - Reservasi  : brand punya PT F&B dengan layanan meja. Ketersediaan sebenarnya diputuskan BFF (`BOOKING_ENABLED`); halaman reservasi
  *    menampilkan "belum tersedia" bila BFF mematikannya.
  *  - Pesan-antar: SELALU nonaktif ("segera hadir") — delivery belum ada di kontrak (L-88). Tidak bisa diklik.
  * Tidak ada angka/klaim layanan yang ditulis manual (menit siap, metode bayar) — itu dari katalog di tempat lain.
  */
-import { brandHasFnb } from './booking';
+import { brandHasFnb, brandHasTableService } from './booking';
 import type { Brand } from './brands';
 import type { CatalogChannel } from './catalog';
 
@@ -28,7 +28,7 @@ export interface OrderMode {
 }
 
 export interface OrderModeContext {
-  brand: Pick<Brand, 'companies'>;
+  brand: Pick<Brand, 'companies'> & Partial<Pick<Brand, 'preorderHint'>>;
   /** Kanal katalog brand (null = katalog gagal dimuat -> mode katalog tetap ditawarkan, halaman tujuan menjelaskan). */
   channels: CatalogChannel[] | null;
   /** Kanal yang dipakai tautan `/belanja?channel=` (hanya bila brand punya > 1 kanal). */
@@ -56,6 +56,7 @@ function shopHref(channel: string | null | undefined, extra: Record<string, stri
 /** Daftar mode untuk brand ini (urutan tetap; mode yang tidak relevan tidak dimasukkan, delivery selalu terakhir). */
 export function orderModes(ctx: OrderModeContext): OrderMode[] {
   const fnb = brandHasFnb(ctx.brand);
+  const table = brandHasTableService(ctx.brand);
   const channels = ctx.channels;
   const pickupOk = channels === null || channels.some((c) => c.fulfilment.pickup);
   const out: OrderMode[] = [];
@@ -68,12 +69,12 @@ export function orderModes(ctx: OrderModeContext): OrderMode[] {
     out.push({
       id: 'preorder',
       label: 'Pre-order',
-      hint: fnb ? 'Kue & hampers, pilih jadwal ambil' : 'Pilih jadwal ambil',
+      hint: ctx.brand.preorderHint ?? (fnb ? 'Kue & hampers, pilih jadwal ambil' : 'Pilih jadwal ambil'),
       href: shopHref(multi ? sc?.channel_code : ctx.channelParam, { mode: 'preorder' }),
       badge: null,
     });
   }
-  if (fnb) {
+  if (table) {
     out.push({ id: 'dinein', label: 'Makan di tempat', hint: 'Pindai QR di meja, pesan dari ponsel', href: '/meja/cara', badge: null });
     out.push({ id: 'reservation', label: 'Reservasi meja', hint: 'Pilih gerai, tanggal, dan jam', href: '/reservasi', badge: null });
   }

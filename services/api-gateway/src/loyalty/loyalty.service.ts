@@ -8,8 +8,9 @@ import { isMemberHash, memberHash } from '../common/pii/pii';
  * Kode PT (docs/04 §12.1, W-32/L-48, ADR-001 revisi 6 entitas): Holding `EFN`, PT Grand Lucky `GL` (dulu `RTL`),
  * PT Paris Baguette `PB` (dulu `FNB`), Bacha Coffee Retail `BCR`, Bacha Coffee F&B `BCF`, `FARM`. Kode lama `RTL`/`FNB`
  * DIHAPUS (tidak ada alias) — CHECK PostgreSQL ikut diganti di `infra/postgres/init/09-platform-g20.sql`.
+ * G24 (docs/04 §16.1, L-91): + PT Wetzel's Pretzels `WTZ` (fnb) — CHECK diperluas `13-platform-g24.sql`.
  */
-export const COMPANY_CODES = ['EFN', 'GL', 'PB', 'BCR', 'BCF', 'FARM'] as const;
+export const COMPANY_CODES = ['EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM'] as const;
 export type CompanyCode = (typeof COMPANY_CODES)[number];
 
 export function isCompanyCode(v: unknown): v is CompanyCode {

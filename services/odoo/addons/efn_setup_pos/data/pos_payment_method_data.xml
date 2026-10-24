@@ -49,4 +49,13 @@
         <field name="journal_id" model="account.journal"
                search="[('type', '=', 'bank'), ('company_id', '=', ref('efn_setup_company.company_bcf'))]"/>
     </record>
+
+    <!-- G24 W-40 (docs/04 §16.1): PT POS ke-5 PT Wetzel's Pretzels (WTZ, kios F&B). -->
+    <record id="pos_payment_method_edc_wtz" model="pos.payment.method">
+        <field name="name">Kartu Debit/Kredit (EDC manual)</field>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+        <field name="payment_method_type">none</field>
+        <field name="journal_id" model="account.journal"
+               search="[('type', '=', 'bank'), ('company_id', '=', ref('efn_setup_company.company_wtz'))]"/>
+    </record>
 </odoo>

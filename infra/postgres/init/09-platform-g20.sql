@@ -9,6 +9,7 @@
 --
 -- Isi:
 -- 1. (§12.1, L-53) Kode PT EFN/GL/PB/BCR/BCF/FARM menggantikan EFN/RTL/FNB/FARM pada 7 CHECK `company_code`
+--    (G24 §16.3: daftar memuat WTZ juga, agar deploy berulang tidak mengembalikan CHECK ke 6 kode sebelum 13 jalan)
 --    (nama otomatis `<tabel>_company_code_check`): DROP IF EXISTS → ADD ... NOT VALID → VALIDATE bila tidak ada baris lama.
 --    Baris dev lama ber-kode RTL/FNB TIDAK dimigrasi (keputusan §12.1: tidak ada migrasi data, DB dev/CI dibuat ulang,
 --    `docs/runbooks/dev-reset.md`); selama baris itu ada constraint tetap NOT VALID (baris baru tetap dipaksa).
@@ -53,10 +54,10 @@ BEGIN
       EXECUTE format('ALTER TABLE platform.%I DROP CONSTRAINT %I', t, old.conname);
     END LOOP;
     EXECUTE format(
-      'ALTER TABLE platform.%I ADD CONSTRAINT %I CHECK (company_code IN (''EFN'', ''GL'', ''PB'', ''BCR'', ''BCF'', ''FARM'')) NOT VALID',
+      'ALTER TABLE platform.%I ADD CONSTRAINT %I CHECK (company_code IN (''EFN'', ''GL'', ''PB'', ''BCR'', ''BCF'', ''WTZ'', ''FARM'')) NOT VALID',
       t, cname);
     EXECUTE format(
-      'SELECT EXISTS (SELECT 1 FROM platform.%I WHERE company_code NOT IN (''EFN'', ''GL'', ''PB'', ''BCR'', ''BCF'', ''FARM''))', t)
+      'SELECT EXISTS (SELECT 1 FROM platform.%I WHERE company_code NOT IN (''EFN'', ''GL'', ''PB'', ''BCR'', ''BCF'', ''WTZ'', ''FARM''))', t)
       INTO stale;
     IF stale THEN
       RAISE WARNING '09-platform-g20: platform.% masih memuat kode PT lama (RTL/FNB) — constraint % dibiarkan NOT VALID; reset DB dev (docs/runbooks/dev-reset.md)', t, cname;

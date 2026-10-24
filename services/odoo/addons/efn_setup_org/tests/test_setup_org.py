@@ -11,6 +11,7 @@ COMPANIES = {
     "pb": "efn_setup_company.company_fnb",
     "bcr": "efn_setup_company.company_bcr",
     "bcf": "efn_setup_company.company_bcf",
+    "wtz": "efn_setup_company.company_wtz",  # G24 W-40 (docs/04 §16.1)
     "farm": "efn_setup_company.company_farm",
 }
 

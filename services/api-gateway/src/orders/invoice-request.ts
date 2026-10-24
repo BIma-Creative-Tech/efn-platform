@@ -12,7 +12,7 @@ import { InvoiceBuyerProfile } from '../odoo-rpc/odoo-online.types';
  * outbox, Redis, maupun log. Diteruskan sekali ke Odoo `efn_online_set_invoice_party` lalu dilepas.
  */
 export const INVOICE_REQUEST_KEYS = ['buyer_type', 'tax_id', 'name', 'address', 'email'] as const;
-/** §13.5: hanya kanal PT PPN. PT F&B (PB, BCF; PB1) dan PT lain → `422 invoice_not_available`. */
+/** §13.5: hanya kanal PT PPN. PT F&B (PB, BCF, WTZ §16.2; PB1) dan PT lain → `422 invoice_not_available`. */
 export const INVOICE_COMPANIES: readonly string[] = ['GL', 'BCR'];
 
 // Selaras dengan Odoo `efn_online_common.EMAIL_RE` (lokal ≤ 64, TLD ≥ 2): tanpa ini email lolos BFF tetapi ditolak Odoo

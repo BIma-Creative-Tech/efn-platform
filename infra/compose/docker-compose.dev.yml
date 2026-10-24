@@ -117,7 +117,7 @@ services:
       PAYMENT_PROVIDER: mock
       # G17: penjualan online AKTIF di dev terhadap E-28 nyata lewat odoo-rpc-gateway (ODOO_ONLINE_MOCK sengaja tidak
       # diset). Butuh secrets/odoo_api_key_online_gl.txt (kanal default GL, G20) berisi key nyata
-      # (docs/runbooks/odoo-online-api-key.md §1); placeholder `disabled` -> BFF menolak konfigurasi kanal. Kanal PB/BCR/BCF
+      # (docs/runbooks/odoo-online-api-key.md §1); placeholder `disabled` -> BFF menolak konfigurasi kanal. Kanal PB/BCR/BCF/WTZ
       # di dev: ONLINE_CHANNELS di .env + `-f docker-compose.online-<kode>.yml`. Base/prod tetap default false.
       ONLINE_ENABLED: "true"
       ONLINE_CATALOG_ENABLED: "true"

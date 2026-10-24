@@ -1,9 +1,9 @@
 """G20 18-6 (Q-F18-1): pembulatan pajak per dokumen (round_globally) di semua PT; docs/08 §11.1.
-G20 W-32/E-43 (docs/04 §12.1, L-48): 6 entitas root dengan kode GL/PB/BCR/BCF."""
+G20 W-32/E-43 (docs/04 §12.1, L-48): 6 entitas root dengan kode GL/PB/BCR/BCF; G24 (§16.1, L-91): + WTZ (7 entitas)."""
 
 from odoo.tests import TransactionCase, tagged
 
-COMPANIES = ("company_efn", "company_rtl", "company_fnb", "company_bcr", "company_bcf", "company_farm")
+COMPANIES = ("company_efn", "company_rtl", "company_fnb", "company_bcr", "company_bcf", "company_wtz", "company_farm")
 
 
 @tagged("post_install", "-at_install", "efn")
@@ -22,6 +22,7 @@ class TestTaxRounding(TransactionCase):
             "company_fnb": ("PT Paris Baguette", "PB", "fnb"),
             "company_bcr": ("Bacha Coffee Retail", "BCR", "retail"),
             "company_bcf": ("Bacha Coffee F&B", "BCF", "fnb"),
+            "company_wtz": ("PT Wetzel's Pretzels", "WTZ", "fnb"),  # G24 §16.1 (L-91)
             "company_farm": ("FARM", "FARM", "farm"),
         }
         for xmlid, (name_prefix, code, business_type) in expected.items():

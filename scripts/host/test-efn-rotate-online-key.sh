@@ -13,6 +13,7 @@
 # (CHANNELS / fallback ONLINE_CHANNELS .env, kegagalan per kanal + metrik, satu overlap, kunci host, idempoten),
 # --no-wait, --bootstrap (overlay sementara), user teknis bersama ditolak; blok Python `odoo shell` dijalankan nyata
 # terhadap env Odoo palsu (precheck user_shared / user_not_in_channel / user_missing / user_privileged).
+# G24 (docs/04 §16.1, kasus 77b-77g): WTZ di allowlist (overlay online-wtz), QR-WTZ/BOOKING-WTZ ditolak (L-92).
 # G20 (docs/04 §12.1, kasus 55b-55e, 61b, 71b): kode kanal = kode PT (GL base, PB/BCR/BCF overlay); kode lama RTL/FNB
 # dan kanal G19 berhifen (RTL-GL, FNB-BACHA, ...) DITOLAK allowlist ALLOWED_CHANNELS. Pemetaan kasus lama -> baru:
 # RTL -> GL (base), RTL-GL -> PB (overlay ter-deploy), FNB-BACHA -> BCF (--bootstrap), FNB-PB/RTL-BACHA -> BCR (belum
@@ -429,6 +430,15 @@ if [[ $RC -eq 0 && "$(cat "$SEC_BCF")" == "$(key_in "$BCFDB" 1)" ]] && grep -q '
 : > /tmp/journal.log
 run "$W" --channel=BCF --bootstrap;      expect_deny "76 --bootstrap saat secret bukan placeholder ditolak" "hanya untuk key pertama"
 run "$W" --channel=BCR --bootstrap;      expect_deny "77 --bootstrap tanpa file overlay kanal ditolak" "overlay"
+# G24 (docs/04 §16.1, L-91..L-93): WTZ = kode allowlist (kanal online); belum di-deploy (ship OFF) & overlay test tidak ada
+run "$W" --channel=WTZ;                  expect_deny "77b WTZ di allowlist tetapi belum di-deploy tanpa --bootstrap ditolak" "tidak didefinisikan compose"
+run "$W" --channel=WTZ --bootstrap;      expect_deny "77c --bootstrap WTZ tanpa file overlay ditolak" "overlay"
+run "$W" --channel=QR-WTZ;               expect_deny "77d QR-WTZ ditolak allowlist (L-92: WTZ tanpa QR meja)" "salah satu"
+run "$W" --channel=BOOKING-WTZ;          expect_deny "77e BOOKING-WTZ ditolak allowlist (L-92: WTZ tanpa reservasi)" "salah satu"
+conf OVERLAP_SECONDS=0 CHANNELS=GL,QR-WTZ; rot; expect_deny "77f CHANNELS memuat QR-WTZ ditolak (allowlist)" "CHANNELS"
+conf OVERLAP_SECONDS=0 CHANNELS=GL,WTZ; rot --status
+if [[ $RC -eq 0 ]]; then ok "77g CHANNELS=GL,WTZ diterima konfigurasi (WTZ kode allowlist G24)"; else bad "77g CHANNELS GL,WTZ"; fi
+: > /tmp/journal.log; conf OVERLAP_SECONDS=0
 # User teknis bersama beberapa kanal (data demo) -> Odoo shell menolak sebelum key dibuat (fail-closed)
 echo user_shared > /tmp/fk/odoo-err.efn_online_pb; N_PB=$(wc -l < "$PBDB"); : > /tmp/journal.log; run "$W" --channel=PB --force
 rm -f /tmp/fk/odoo-err.efn_online_pb

@@ -48,4 +48,16 @@
         <field name="service_at">counter</field>
         <field name="available_in_self" eval="False"/>
     </record>
+
+    <!-- G24 W-40 (docs/04 §16.1/§16.2): preset PT Wetzel's Pretzels (WTZ, kios takeaway). Hanya bawa pulang (tanpa SC,
+         PB1 non-dine-in); gerai berkursi bisa membuat preset dine-in sendiri dengan fiscal_position_wtz_dine_in.
+         Pasang HANYA di pos.config WTZ (preset tanpa company_id). -->
+    <record id="preset_wtz_takeaway" model="pos.preset">
+        <field name="name">Bawa pulang (Wetzel's)</field>
+        <field name="color">3</field>
+        <field name="identification">none</field>
+        <field name="fiscal_position_id" ref="efn_setup_company.fiscal_position_wtz_non_dine_in"/>
+        <field name="service_at">counter</field>
+        <field name="available_in_self" eval="False"/>
+    </record>
 </odoo>

@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { bffFetch } from '@/lib/bff';
-import { brandHasFnb, parseReservationList } from '@/lib/booking';
+import { brandHasTableService, parseReservationList } from '@/lib/booking';
 import { getBrand } from '@/lib/brand-server';
 import { getSessionToken } from '@/lib/session';
 import { ReservationList } from '@/components/booking/ReservationList';
@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic';
 /** Daftar reservasi milik member (docs/04 §15.5/§15.7). Belum masuk -> /masuk; kill switch -> pesan belum tersedia. */
 export default async function ReservasiSayaPage() {
   const brand = await getBrand();
-  if (!brandHasFnb(brand)) notFound();
+  if (!brandHasTableService(brand)) notFound();
   const token = await getSessionToken();
   if (!token) redirect('/masuk?next=/reservasi/saya');
   const r = await bffFetch<unknown>('/v1/booking/reservations', { token });

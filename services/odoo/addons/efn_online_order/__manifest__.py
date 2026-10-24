@@ -17,7 +17,8 @@
     # (`points_payment`, `amount_due`, pembayaran faktur Poin EFN, `eligible_amount`, alokasi refund). Kolom baru
     # bertipe compute-stored (`amount_due`, `cash_amount`) dihitung otomatis saat upgrade (tanpa skrip migrasi).
     # 19.0.1.8.0 (G23 W-36): kode bisnis baru `slot_unavailable` (dipakai efn_online_slot); perilaku lain tetap.
-    "version": "19.0.1.8.0",
+    # 19.0.1.8.1 (G24 W-40, docs/04 §16.1): teks bantuan kode kanal menyebut WTZ; perilaku tidak berubah.
+    "version": "19.0.1.8.1",
     "category": "EFN/Sales",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031): hanya Odoo CE 19 + efn_*.

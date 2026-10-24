@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- G18 W-01 / E-30: setiap install/upgrade (noupdate=0) tautkan metode Poin EFN PT ke POS redeem-aktif yang belum
      punya (models/pos_config_points.py; POS bersesi terbuka dilewati + log). Hanya menambah, tidak menghapus.
-     G22 L-79 (docs/04 §14.7): baris metode masuk/keluar jurnal Poin EFN tiap PT (GL, PB, BCR, BCF) memakai akun
+     G22 L-79 (docs/04 §14.7): baris metode masuk/keluar jurnal Poin EFN tiap PT (GL, PB, BCR, BCF, WTZ) memakai akun
      liabilitas/kliring Poin EFN PT itu (= outstanding_account_id metode Poin EFN, data/pos_loyalty_points_payment.xml).
      Tanpa akun, account.payment Odoo 19 tidak berjurnal -> pesanan online berpoin ditolak efn_online_order. Hanya baris
      yang masih kosong yang diisi (pilihan Finance tidak ditimpa; models/pos_payment_method_points.py). -->

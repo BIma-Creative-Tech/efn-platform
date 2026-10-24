@@ -39,7 +39,7 @@ tables:
     description: Ringkasan poin harian per PT penanggung, sumber, dan alasan (WIB).
     columns:
       - {name: day, type: Date}
-      - {name: company_code, type: String, description: "PT penanggung liabilitas poin: EFN | GL | PB | BCR | BCF | FARM"}
+      - {name: company_code, type: String, description: "PT penanggung liabilitas poin: EFN | GL | PB | BCR | BCF | WTZ | FARM"}
       - {name: source, type: String, description: "price_hunter | pos | mgm | ..."}
       - {name: reason, type: String}
       - {name: points_issued, type: Int64}
@@ -51,7 +51,7 @@ tables:
     columns:
       - {name: day, type: Date}
       - {name: company_id, type: UInt32}
-      - {name: brand, type: String, description: "Kode PT (docs/04 §12.1): EFN | GL | PB | BCR | BCF | FARM; Bacha = BCR + BCF"}
+      - {name: brand, type: String, description: "Kode PT (docs/04 §12.1, §16.1): EFN | GL | PB | BCR | BCF | WTZ | FARM; Bacha = BCR + BCF; WTZ = Wetzel's Pretzels"}
       - {name: store_id, type: UInt32}
       - {name: category, type: String}
       - {name: qty, type: Decimal}

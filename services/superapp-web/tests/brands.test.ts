@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BRANDS, getBrandById, isBrandId, isSafeThemeValue, normalizeHost, resolveBrandIdFromHost, safeLogoSrc, themeToCssVars } from '../lib/brands';
+import { BRANDS, COMPANIES, getBrandById, isBrandId, isSafeThemeValue, normalizeHost, resolveBrandIdFromHost, safeLogoSrc, themeToCssVars } from '../lib/brands';
 
 describe('normalizeHost', () => {
   it.each([
@@ -27,6 +27,8 @@ describe('resolveBrandIdFromHost', () => {
     ['GrandLucky.Efn.Local:443', 'grandlucky'],
     ['parisbaguette.efn.local', 'parisbaguette'],
     ['bacha.efn.local', 'bacha'],
+    ['wetzels.efn.local', 'wetzels'],
+    ['wetzels.contoh-produksi.co.id', 'wetzels'],
     ['grandlucky.contoh-produksi.co.id', 'grandlucky'], // prefix subdomain di domain apa pun
     ['parisbaguette.contoh-produksi.co.id', 'parisbaguette'],
     ['bacha.contoh-produksi.co.id', 'bacha'],
@@ -73,11 +75,15 @@ describe('isBrandId / getBrandById', () => {
     expect(getBrandById('parisbaguette').companies).toEqual(['PB']);
     expect(getBrandById('grandlucky').companies).toEqual(['GL']);
     expect(getBrandById('bacha').companies).toEqual(['BCR', 'BCF']);
-    expect(getBrandById('efn').companies).toEqual(['GL', 'PB', 'BCR', 'BCF']);
+    expect(getBrandById('wetzels').companies).toEqual(['WTZ']);
+    expect(getBrandById('efn').companies).toEqual(['GL', 'PB', 'BCR', 'BCF', 'WTZ']);
   });
-  it('kode RTL/FNB sudah dihapus dari peta PT; enam entitas §12.1', async () => {
+  it('kode RTL/FNB sudah dihapus dari peta PT; tujuh entitas (§12.1 + G24 §16 WTZ)', async () => {
     const { COMPANIES, BRANDS } = await import('../lib/brands');
-    expect(Object.keys(COMPANIES).sort()).toEqual(['BCF', 'BCR', 'EFN', 'FARM', 'GL', 'PB']);
+    expect(Object.keys(COMPANIES).sort()).toEqual(['BCF', 'BCR', 'EFN', 'FARM', 'GL', 'PB', 'WTZ']);
+    expect(COMPANIES.WTZ.businessType).toBe('fnb');
+    // Layanan meja (QR meja + reservasi) hanya PB/BCF; WTZ kios takeaway.
+    expect(Object.values(COMPANIES).filter((c) => c.tableService).map((c) => c.code).sort()).toEqual(['BCF', 'PB']);
     for (const b of Object.values(BRANDS)) for (const c of b.companies) expect(COMPANIES).toHaveProperty(c);
   });
   it('peta brand Bacha = dua kanal BCR + BCF; kode tak dikenal -> kosong', async () => {
@@ -85,6 +91,7 @@ describe('isBrandId / getBrandById', () => {
     expect(channelsOfBrandCode('BACHA')).toEqual(['BCR', 'BCF']);
     expect(channelsOfBrandCode('GL')).toEqual(['GL']);
     expect(channelsOfBrandCode('PB')).toEqual(['PB']);
+    expect(channelsOfBrandCode('WTZ')).toEqual(['WTZ']);
     expect(channelsOfBrandCode('RTL')).toEqual([]);
     expect(channelsOfBrandCode('__proto__')).toEqual([]);
     expect(channelsOfBrandCode(null)).toEqual([]);
@@ -95,6 +102,7 @@ describe('isBrandId / getBrandById', () => {
     expect(BRANDS.grandlucky.brandCode).toBe('GL');
     expect(BRANDS.parisbaguette.brandCode).toBe('PB');
     expect(BRANDS.bacha.brandCode).toBe('BACHA');
+    expect(BRANDS.wetzels.brandCode).toBe('WTZ');
     for (const b of Object.values(BRANDS)) {
       if (b.brandCode !== null) expect([...channelsOfBrandCode(b.brandCode)]).toEqual(b.companies);
     }
@@ -105,8 +113,10 @@ describe('tema per brand (R-T14, token aman untuk atribut style)', () => {
   it('setiap brand menghasilkan semua CSS var (tidak ada token yang terbuang validasi)', () => {
     for (const b of Object.values(BRANDS)) {
       const vars = themeToCssVars(b.theme);
-      expect(Object.keys(vars)).toHaveLength(20);
+      // G24: + font-display/label/nav, heading-transform, nav-transform, ui-weight, logo-weight (20 -> 27).
+      expect(Object.keys(vars)).toHaveLength(27);
       expect(vars['--font-body']).toBe(b.theme.fontBody);
+      expect(vars['--font-display']).toBe(b.theme.fontDisplay);
       expect(vars['--radius']).toBe(b.theme.radius);
     }
   });
@@ -153,11 +163,53 @@ describe('tema per brand (R-T14, token aman untuk atribut style)', () => {
     expect(contrast(t.chromeContrast, t.chrome)).toBeGreaterThanOrEqual(4.5); // header & footer
     expect(contrast(t.accent, t.chrome)).toBeGreaterThanOrEqual(3); // garis aksen header (non-teks)
   });
-  it('logo hanya path SVG same-origin di /brands/<id>/', () => {
+  it('logo hanya path svg/png same-origin di /brands/<id>/', () => {
     expect(safeLogoSrc(BRANDS.bacha)).toBeNull();
+    expect(safeLogoSrc(BRANDS.parisbaguette)).toBe('/brands/parisbaguette/logo.png');
+    expect(safeLogoSrc(BRANDS.wetzels)).toBe('/brands/wetzels/logo.svg');
     expect(safeLogoSrc({ ...BRANDS.bacha, logoSrc: '/brands/bacha/logo.svg' })).toBe('/brands/bacha/logo.svg');
+    expect(safeLogoSrc({ ...BRANDS.bacha, logoSrc: '/brands/bacha/logo.gif' })).toBeNull();
     expect(safeLogoSrc({ ...BRANDS.bacha, logoSrc: 'https://cdn.example.com/logo.svg' })).toBeNull();
     expect(safeLogoSrc({ ...BRANDS.bacha, logoSrc: '/brands/../secrets/logo.svg' })).toBeNull();
     expect(safeLogoSrc({ ...BRANDS.bacha, logoSrc: 'javascript:alert(1)' })).toBeNull();
+  });
+});
+
+describe('font per brand = font situs resmi (G24, diukur 24 Okt 2026)', () => {
+  const first = (stack: string) => stack.split(',')[0]!.trim().replace(/^'|'$/g, '');
+  it.each([
+    ['parisbaguette', 'PB Signature Display', 'PB Special Elite', 'Roboto'],
+    ['bacha', 'ITC Quorum', 'ITC Quorum', 'Bacha Lora'],
+    ['wetzels', 'Londrina Solid', 'Londrina Solid', 'Roboto'],
+    ['grandlucky', 'Lato', 'Lato', 'Lato'],
+    ['efn', 'Fraunces Variable', 'Fraunces Variable', 'Geist Variable'],
+  ] as const)('%s: display %s, heading %s, body %s', (id, display, heading, body) => {
+    const t = BRANDS[id].theme;
+    expect(first(t.fontDisplay)).toBe(display);
+    expect(first(t.fontHeading)).toBe(heading);
+    expect(first(t.fontBody)).toBe(body);
+  });
+  it('setiap family brand punya @font-face self-host di app/fonts.css dan file-nya ada di public/fonts', async () => {
+    const { readFileSync, existsSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const css = readFileSync(join(__dirname, '../app/fonts.css'), 'utf8');
+    const declared = new Set([...css.matchAll(/font-family: '([^']+)'/g)].map((m) => m[1]));
+    for (const b of Object.values(BRANDS)) {
+      for (const stack of [b.theme.fontDisplay, b.theme.fontHeading, b.theme.fontBody, b.theme.fontLabel, b.theme.fontNav]) {
+        const fam = first(stack);
+        if (fam.endsWith(' Variable')) continue; // @fontsource-variable (EFN)
+        expect(declared.has(fam), fam).toBe(true);
+      }
+    }
+    for (const m of css.matchAll(/url\('\/fonts\/([^']+)'\)/g)) expect(existsSync(join(__dirname, '../public/fonts', m[1]!)), m[1]).toBe(true);
+    expect(css).not.toMatch(/url\(['"]?https?:/); // CSP font-src 'self'
+  });
+  it('wetzels: warna resmi wetzels.com (biru #004089, kuning #fed900, biru muda #b7e5f0), skema gelap', () => {
+    const t = BRANDS.wetzels.theme;
+    expect(t.scheme).toBe('dark');
+    expect([t.chrome, t.surfaceAlt, t.primaryContrast]).toEqual(['#004089', '#004089', '#004089']);
+    expect([t.primary, t.accent]).toEqual(['#fed900', '#fed900']);
+    expect(t.textMuted).toBe('#b7e5f0');
+    expect(COMPANIES[BRANDS.wetzels.companies[0]!].tableService).toBe(false);
   });
 });

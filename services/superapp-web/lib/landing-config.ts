@@ -6,7 +6,7 @@
  * = satu kategori katalog. Tidak ada aset 3D/ilustrasi (keputusan user 21 Okt 2026: pakai gambar real).
  *
  * Satu komponen untuk semua brand (R-T14): perbedaan hanya data di sini + CSS custom properties dari `lib/brands.ts`.
- * Brand tanpa entri -> beranda lama (`app/page.tsx`). Saat ini baru Paris Baguette.
+ * Brand tanpa entri -> beranda lama (`app/page.tsx`). Saat ini Paris Baguette dan Wetzel's Pretzels (G24).
  *
  * Copy bab = DRAF (menunggu tim brand/marketing PB). Angka (harga, jumlah pilihan) & foto TIDAK ditulis di sini:
  * diambil dari katalog BFF saat render.
@@ -34,12 +34,42 @@ export interface LandingChapter {
   linkLabel: string;
 }
 
+/** Satu baris "acara" atau "panduan porsi" di band katering (copy DRAF). */
+export interface CateringRow {
+  title: string;
+  body: string;
+}
+
+/**
+ * Band katering (fitur dari review parisbaguette.com/catering, parisbaguette.co.id/catering, wetzels.com/menu/catering,
+ * 24 Okt 2026): paket katering dari kategori katalog + jenis acara + panduan porsi, CTA ke pre-order berjadwal
+ * (`/belanja?mode=preorder`, G23 §15.4) bila ada outlet pre-order, kalau tidak ke kategori biasa. Tidak ada klaim
+ * layanan baru (antar, minimal pesanan): katering = pesanan ambil di gerai yang dijadwalkan.
+ */
+export interface LandingCatering {
+  title: string;
+  body: string;
+  /** Kategori katalog paket katering (foto & tautan). Tidak ada di katalog -> band tanpa rak foto. */
+  categoryName: string;
+  /** Jenis acara (judul + satu kalimat). */
+  occasions: CateringRow[];
+  /** Panduan porsi per ukuran grup (opsional). */
+  guide: CateringRow[];
+  /** Tautan konsultasi katering di situs resmi brand (https), atau null. */
+  contactHref: string | null;
+  contactLabel: string | null;
+}
+
 export interface LandingConfig {
   /** Satu kata di judul hero (`Brand.hero.title`) yang diberi gaya penekanan; null = tanpa penekanan. */
   emphasis: string | null;
   /** Nama produk untuk kartu foto pembuka (urutan prioritas). Kosong/tidak ada -> foto depan bab pertama. */
   heroFeatured: string[];
   chapters: LandingChapter[];
+  /** Judul langkah 1 "Cara pesan" (DRAF), mis. "Pilih roti, kue, atau minuman". */
+  pickStep: string;
+  /** Band katering; null = tidak ditampilkan. */
+  catering: LandingCatering | null;
 }
 
 export const LANDINGS: Partial<Record<BrandId, LandingConfig>> = {
@@ -75,6 +105,77 @@ export const LANDINGS: Partial<Record<BrandId, LandingConfig>> = {
         linkLabel: 'Lihat semua roti',
       },
     ],
+    pickStep: 'Pilih roti, kue, atau minuman',
+    // parisbaguette.co.id/catering: layanan katering untuk 4 jenis acara, pemesanan lewat kontak. Di Super-App: kue &
+    // pastry dipesan sebagai pre-order berjadwal (ambil di gerai).
+    catering: {
+      title: 'Katering untuk setiap acara.',
+      body: 'Roti, pastry, dan kue yang dipanggang segar setiap hari untuk rapat kantor, arisan, hingga hari bahagia. Pre-order kue dari aplikasi dan pilih jadwal ambil.',
+      categoryName: 'Cakes',
+      occasions: [
+        { title: 'Rapat & kantor', body: 'Roti dan pastry segar untuk rapat pagi hingga acara perusahaan.' },
+        { title: 'Arisan & komunitas', body: 'Kue dan pastry untuk dinikmati bersama.' },
+        { title: 'Pernikahan & lamaran', body: 'Kue perayaan untuk momen paling istimewa.' },
+        { title: 'Seminar & pelatihan', body: 'Camilan yang menjaga peserta tetap bersemangat.' },
+      ],
+      guide: [],
+      contactHref: 'https://parisbaguette.co.id/catering/',
+      contactLabel: 'Konsultasi katering',
+    },
+  },
+  // G24 (docs/04 §16): Wetzel's Pretzels. Kategori = katalog DEMO dari wetzels.com (scripts/brand-catalog/scrape_wetzels.py).
+  wetzels: {
+    emphasis: 'hangat',
+    heroFeatured: ['Original Pretzel', 'Sinful Cinnamon', 'Cheese Meltdown'],
+    chapters: [
+      {
+        id: 'pretzel',
+        label: 'Pretzel',
+        title: 'Dipilin tangan, dipanggang segar.',
+        body: 'Adonan dipilin satu per satu lalu dipanggang sampai keemasan. Asin, kayu manis, atau keju leleh: pilih favorit Anda.',
+        categoryName: 'Pretzels',
+        featured: ['Original Pretzel', 'Sinful Cinnamon', 'Jalaroni'],
+        linkLabel: 'Lihat semua pretzel',
+      },
+      {
+        id: 'bitz',
+        label: 'Bitz & Dogs',
+        title: 'Sekali gigit, susah berhenti.',
+        body: 'Potongan pretzel mungil dan pretzel dog untuk camilan sambil jalan. Lengkapi dengan saus cocolan favorit.',
+        categoryName: 'Bitz',
+        featured: ['Cin-A-Bitz', 'Wetzel', 'Pizza'],
+        linkLabel: 'Lihat semua bitz',
+      },
+      {
+        id: 'minuman',
+        label: 'Minuman',
+        title: 'Segarnya lemonade.',
+        body: 'Lemonade dan granita dingin, pasangan pas untuk pretzel hangat.',
+        categoryName: 'Drinks',
+        featured: ['Strawberry Lemonade', 'Lemonade', 'Blue Raspberry Granita'],
+        linkLabel: 'Lihat semua minuman',
+      },
+    ],
+    pickStep: 'Pilih pretzel, bitz, atau minuman',
+    // wetzels.com/menu/catering: paket & tray ("serves 12"), jenis acara, panduan porsi per ukuran grup.
+    catering: {
+      title: 'Pretzel bikin pesta makin seru.',
+      body: 'Paket pretzel, tray bitz, dan saus cocolan untuk rapat, ulang tahun, acara sekolah, atau nonton bareng. Pre-order dari aplikasi, pilih jadwal ambil, kami siapkan segar.',
+      categoryName: 'Catering',
+      occasions: [
+        { title: 'Rapat kantor', body: 'Camilan praktis yang mudah dibagi.' },
+        { title: 'Ulang tahun', body: 'Pretzel dan lemonade untuk pesta anak hingga dewasa.' },
+        { title: 'Acara sekolah', body: 'Tray bitz yang mudah disajikan.' },
+        { title: 'Nonton bareng', body: 'Pretzel dog dan saus keju untuk pertandingan seru.' },
+      ],
+      guide: [
+        { title: '10–15 orang', body: 'Satu paket pretzel atau tray bitz dengan beberapa saus.' },
+        { title: '25–40 orang', body: 'Beberapa paket atau tray dengan saus beragam.' },
+        { title: '50+ orang', body: 'Beberapa jenis paket agar tamu bisa memilih sendiri.' },
+      ],
+      contactHref: null,
+      contactLabel: null,
+    },
   },
 };
 

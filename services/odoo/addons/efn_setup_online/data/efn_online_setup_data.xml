@@ -10,7 +10,7 @@
      - "Lock Confirmed Sales" (sale.group_auto_done_setting) TIDAK diaktifkan: action_cancel menolak SO terkunci
        (temuan #36). -->
 <odoo>
-    <!-- G20 W-32 (docs/04 §12.1, L-48): satu partner generik + satu tim per PT yang punya kanal online (GL, PB, BCR, BCF).
+    <!-- G20 W-32 (docs/04 §12.1, L-48): satu partner generik + satu tim per PT yang punya kanal online (GL, PB, BCR, BCF; G24: + WTZ).
          xmlid _rtl/_fnb dipertahankan (= PT Grand Lucky / PT Paris Baguette, sama dengan xmlid company). -->
     <data noupdate="1">
         <record id="partner_superapp_rtl" model="res.partner">
@@ -34,6 +34,13 @@
             <field name="is_company" eval="False"/>
         </record>
 
+        <!-- G24 W-40 (docs/04 §16.1, L-91): PT Wetzel's Pretzels (WTZ). -->
+        <record id="partner_superapp_wtz" model="res.partner">
+            <field name="name">Pelanggan Super-App - PT Wetzel's Pretzels</field>
+            <field name="company_id" ref="efn_setup_company.company_wtz"/>
+            <field name="is_company" eval="False"/>
+        </record>
+
         <record id="team_superapp_rtl" model="crm.team">
             <field name="name">Super-App Grand Lucky</field>
             <field name="company_id" ref="efn_setup_company.company_rtl"/>
@@ -49,6 +56,10 @@
         <record id="team_superapp_bcf" model="crm.team">
             <field name="name">Super-App Bacha Coffee (kafe)</field>
             <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        </record>
+        <record id="team_superapp_wtz" model="crm.team">
+            <field name="name">Super-App Wetzel's Pretzels</field>
+            <field name="company_id" ref="efn_setup_company.company_wtz"/>
         </record>
     </data>
 

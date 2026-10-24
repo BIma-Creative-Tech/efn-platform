@@ -14,7 +14,7 @@
 #   - (G17) filter odoo-rpc-gateway tanpa mTLS masuk (CN api-gateway) / mTLS keluar verify ke odoo-tls; BFF ke Odoo
 #     tidak lewat gateway; gateway di-label Traefik / publish port; secret API key online / HMAC event di-mount ke
 #     service selain BFF (+ Odoo untuk HMAC); saklar dev EFN_PAYMENT_SIMULATOR / ODOO_ONLINE_MOCK aktif di render prod
-#   - (G20) secret kanal di luar gl/pb/bcr/bcf; env ODOO_API_KEY_ONLINE_<KODE>_FILE tanpa secret ter-mount yang cocok;
+#   - (G20/G24) secret kanal di luar gl/pb/bcr/bcf/wtz; env ODOO_API_KEY_ONLINE_<KODE>_FILE tanpa secret ter-mount yang cocok;
 #     render dev tanpa ketiga kunci PII Odoo (odoo_pii_key_v1, odoo_pii_bidx_key, odoo_pii_name_key) di service odoo
 #   - (G21) loyalty_policy_signing_key di luar odoo + api-gateway atau tidak di-mount ke keduanya; render prod tanpa
 #     overlay PII me-mount odoo_pii_*; render prod-pii (docker-compose.pii.yml) tanpa ketiga kunci / tanpa
@@ -167,7 +167,7 @@ check_compose() {
   fi
   # 6) Least privilege secret online (docs/04 §10.10): API key Odoo kanal hanya BFF; HMAC event hanya Odoo + BFF.
   #    G19: SEMUA secret odoo_api_key_online_* yang ter-render + kunci PII Odoo odoo_pii_* hanya service odoo
-  #    (ADR-036 K-36-3 / §0; dev). G20 (docs/04 §12.1): kanal = kode PT -> hanya gl/pb/bcr/bcf; kode lama ditolak.
+  #    (ADR-036 K-36-3 / §0; dev). G20 (docs/04 §12.1): kanal = kode PT -> hanya gl/pb/bcr/bcf (G24: + wtz); kode lama ditolak.
   local sec allowed
   local -a secs
   mapfile -t secs < <(jq -r '.secrets // {} | keys[] | select(test("^(odoo_api_key_online_[a-z0-9_]+|odoo_api_key_qr_[a-z0-9_]+|odoo_api_key_booking_[a-z0-9_]+|odoo_pii_[a-z0-9_]+)$"))' <<< "$json")
@@ -183,8 +183,8 @@ check_compose() {
       continue
     fi
     [[ "$sec" == odoo_api_key_online_* ]] || continue
-    [[ "$sec" =~ ^odoo_api_key_online_(gl|pb|bcr|bcf)$ ]] \
-      || err "[$label] secret $sec bukan kanal G20 (gl/pb/bcr/bcf; RTL/FNB & kanal G19 dihapus, docs/04 §12.1)"
+    [[ "$sec" =~ ^odoo_api_key_online_(gl|pb|bcr|bcf|wtz)$ ]] \
+      || err "[$label] secret $sec bukan kanal G20/G24 (gl/pb/bcr/bcf/wtz; RTL/FNB & kanal G19 dihapus, docs/04 §12.1/§16.1)"
   done
   # Env BFF ODOO_API_KEY_ONLINE_<KODE>_FILE wajib menunjuk /run/secrets/odoo_api_key_online_<kode> yang DI-MOUNT ke BFF
   # (env tanpa secret = kanal gagal start; secret tanpa env = key ter-mount tetapi tidak terpakai).

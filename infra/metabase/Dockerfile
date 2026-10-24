@@ -10,9 +10,10 @@
 FROM metabase/metabase:v0.58.35@sha256:a84b5dd5db15edac289af7204ff897e8b2dd441f579db445e0c7579402a5d77d
 
 # G18 (PR #60, Trivy): perbaikan keamanan Alpine yang terbit setelah digest upstream dipin - libexpat 2.9.0-r0
-# (CVE-2026-77214). Hanya paket ber-CVE yang dinaikkan (tidak `apk upgrade` penuh: JRE/libc tetap dari upstream yang
-# diuji Metabase). Bump tag Metabase berikutnya: hapus baris ini bila base sudah memuat versi perbaikan.
-RUN apk add --no-cache --upgrade libexpat
+# (CVE-2026-77214); G24 (PR #68, Trivy): brotli-libs 1.2.1-r0 (CVE-2026-111497). Hanya paket ber-CVE yang dinaikkan
+# (tidak `apk upgrade` penuh: JRE/libc tetap dari upstream yang diuji Metabase). Bump tag Metabase berikutnya: hapus
+# paket dari baris ini bila base sudah memuat versi perbaikan.
+RUN apk add --no-cache --upgrade libexpat brotli-libs
 
 # G16b (efn-devsecops-engineer): enkripsi at rest detail koneksi di DB aplikasi `metabase`. Wrapper membaca Docker
 # secret metabase_encryption_key -> MB_ENCRYPTION_SECRET_KEY (fail-closed) lalu exec /app/run_metabase.sh resmi

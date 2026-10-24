@@ -15,12 +15,13 @@ class TestEfnSetupOnline(TransactionCase):
         self.assertEqual(group.api_key_duration, 35.0)
 
     def test_generic_partners_without_pii(self):
-        # G20 W-32 (docs/04 §12.1): satu partner generik + tim per PT berkanal online (GL, PB, BCR, BCF).
+        # G20 W-32 (docs/04 §12.1): satu partner generik + tim per PT berkanal online (GL, PB, BCR, BCF; G24: + WTZ).
         for suffix, company_xmlid in (
             ("rtl", "company_rtl"),
             ("fnb", "company_fnb"),
             ("bcr", "company_bcr"),
             ("bcf", "company_bcf"),
+            ("wtz", "company_wtz"),  # G24 W-40 (docs/04 §16.1)
         ):
             with self.subTest(pt=suffix):
                 partner = self.env.ref(f"efn_setup_online.partner_superapp_{suffix}")
@@ -122,8 +123,9 @@ class TestEfnSetupOnline(TransactionCase):
 
 @tagged("post_install", "-at_install", "efn")
 class TestEfnOnlineEntityChannels(TransactionCase):
-    """G20 W-32/E-43 (docs/04 §12.1, L-48): kode kanal = kode PT (GL, PB, BCR, BCF); brand_code GL/PB/BACHA;
-    satu user teknis per kanal (L-37); mode confirm + batas L-41. Menggantikan kanal per brand G19 (W-21)."""
+    """G20 W-32/E-43 (docs/04 §12.1, L-48): kode kanal = kode PT (GL, PB, BCR, BCF; G24: WTZ);
+    brand_code GL/PB/BACHA/WTZ; satu user teknis per kanal (L-37); mode confirm + batas L-41. Menggantikan kanal per
+    brand G19 (W-21)."""
 
     CHANNELS = {
         # xmlid: (kode kanal, xmlid company, brand_code, stock_hold_mode, login user teknis)
@@ -131,6 +133,8 @@ class TestEfnOnlineEntityChannels(TransactionCase):
         "channel_pb": ("PB", "company_fnb", "PB", "none", "efn_online_pb"),
         "channel_bcr": ("BCR", "company_bcr", "BACHA", "confirm", "efn_online_bcr"),
         "channel_bcf": ("BCF", "company_bcf", "BACHA", "none", "efn_online_bcf"),
+        # G24 W-40 (docs/04 §16.1, L-91..L-93): PT Wetzel's Pretzels, brand sendiri, nonaktif.
+        "channel_wtz": ("WTZ", "company_wtz", "WTZ", "none", "efn_online_wtz"),
     }
 
     def setUp(self):
@@ -163,10 +167,10 @@ class TestEfnOnlineEntityChannels(TransactionCase):
                     self.assertTrue(channel.require_outlet_fiscal_position)
                 pricelists |= channel.pricelist_id
                 teams |= channel.team_id
-        self.assertEqual(len(pricelists), 4, "pricelist per kanal")
-        self.assertEqual(len(teams), 4, "tim penjualan per PT")
+        self.assertEqual(len(pricelists), 5, "pricelist per kanal")
+        self.assertEqual(len(teams), 5, "tim penjualan per PT")
         self.assertTrue(self._channel("channel_gl").active)
-        for xmlid in ("channel_pb", "channel_bcr", "channel_bcf"):
+        for xmlid in ("channel_pb", "channel_bcr", "channel_bcf", "channel_wtz"):
             with self.subTest(inactive=xmlid):
                 self.assertFalse(self._channel(xmlid).active)  # outlet/SKU dari klien
 
@@ -234,6 +238,35 @@ class TestEfnOnlineEntityChannels(TransactionCase):
         # User teknis satu kanal tidak bisa memakai kanal lain (company/kanal berbeda).
         with self.assertRaises(AccessError):
             Channel.with_user(self.env.ref("efn_setup_online.user_online_bcr")).efn_online_catalog("BCF")
+
+    def test_wetzels_channel_pickup_outlet_and_catalog(self):
+        """G24 W-40 (docs/04 §16.1/§16.2, L-92/L-93): kanal WTZ nonaktif, outlet kios pickup ber-FP non-dine-in WTZ;
+        setelah diaktifkan, katalog WTZ hanya memuat produk PT WTZ (PB1 default, tanpa SC)."""
+        wtz = self._channel("channel_wtz")
+        company = self.env.ref("efn_setup_company.company_wtz")
+        self.assertFalse(wtz.active)
+        outlet = wtz.outlet_ids
+        self.assertEqual(outlet.mapped("code"), ["WTZ-01"])
+        self.assertTrue(outlet.pickup_enabled)
+        self.assertEqual(outlet.fiscal_position_id, self.env.ref("efn_setup_company.fiscal_position_wtz_non_dine_in"))
+        self.assertEqual(outlet.warehouse_id.company_id, company)
+        wtz.active = True
+        product = self.env["product.product"].create(
+            {
+                "name": "Pretzel uji",
+                "type": "consu",
+                "list_price": 35000,
+                "company_id": company.id,
+                "taxes_id": [Command.set(self.env.ref("efn_setup_company.tax_pb1_10_wtz").ids)],
+                "efn_online_channel_ids": [Command.set(wtz.ids)],
+            }
+        )
+        cat = self.env["efn.online.channel"].with_user(self.env.ref("efn_setup_online.user_online_wtz"))
+        catalog = cat.efn_online_catalog("WTZ")
+        self.assertEqual([item["product_id"] for item in catalog["items"]], [product.id])
+        self.assertEqual((catalog["channel"]["company_code"], catalog["channel"]["brand_code"]), ("WTZ", "WTZ"))
+        with self.assertRaises(AccessError):
+            cat.efn_online_catalog("GL")  # kanal PT lain (aktif) -> ditolak
 
 
 @tagged("post_install", "-at_install", "efn")

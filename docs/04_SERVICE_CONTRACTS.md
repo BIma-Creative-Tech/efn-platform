@@ -1,4 +1,4 @@
-# KONTRAK ANTAR-SERVICE (v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
+# KONTRAK ANTAR-SERVICE (v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -885,6 +885,7 @@ Dasar: keputusan pemilik proyek 18 Okt (`docs/decisions/README.md` 18-1..18-42),
 | PT Paris Baguette (+ CK) | **`PB`** (dulu `FNB`) | `company_fnb` (xmlid tetap) | fnb | PB1 + SC (FP dine-in/non-dine-in) | `PB` |
 | Bacha Coffee Retail | **`BCR`** | `company_bcr` (baru) | retail | PPN 11 % incl | `BCR` |
 | Bacha Coffee F&B | **`BCF`** | `company_bcf` (baru) | fnb | PB1 + SC | `BCF` |
+| PT Wetzel's Pretzels (**G24, §16**) | **`WTZ`** | `company_wtz` (baru) | fnb | PB1 + SC | `WTZ` (nonaktif, L-93) |
 | FARM | `FARM` | `company_farm` (tetap) | farm | ⚠ Q-AD1-2 (placeholder tanpa PPN keluaran) | — |
 
 - Semua company **root** (bukan cabang; hierarki Odoo tidak bisa diubah setelah dibuat). Struktur dikunci sebelum DB produksi dibuat.
@@ -1534,3 +1535,70 @@ Ketersediaan dihitung ulang di dalam kunci saat create (klien tidak dipercaya). 
 Q-BK1 deposit/no-show fee (default: tanpa) · Q-BK2 durasi standar per brand (90 menit) · Q-BK3 maks tamu online (8) ·
 Q-BK4 auto-confirm vs staf (staf) · Q-BK5 kapasitas slot pre-order per gerai (10/slot) · Q-BK6 teks syarat reservasi
 (Legal) · Q-BK7 template WA pengingat H-1 (Meta).
+
+## 16. Gelombang 24 — entitas WTZ (Wetzel's Pretzels) (v10.1, 24 Okt 2026)
+
+> **Ringkasan manajemen.** Erajaya (EFN) memegang hak eksklusif Wetzel's Pretzels di Indonesia. Brand ini menjadi
+> **entitas ke-7** dengan kode `WTZ` (F&B, pajak restoran PB1 seperti Paris Baguette dan Bacha kafe). Gerai Wetzel's
+> berupa kios/takeaway: pelanggan memesan online lalu **ambil di gerai** (termasuk pre-order katering berjadwal) dan
+> bisa **bayar di kasir**. QR meja dan reservasi meja **tidak** berlaku untuk WTZ. Kanal online WTZ **mati di
+> produksi** sampai diaktifkan lewat konfigurasi rilis (`ONLINE_CHANNELS`).
+
+Dasar: keputusan user/lead 24 Okt 2026 (L-91..L-94). §16 menang atas §1–§15 bila bertentangan. Nama legal PT
+**menunggu konfirmasi klien** (Q-WTZ1); nama tampilan sementara "PT Wetzel's Pretzels".
+
+### 16.1 Kode entitas & kanal — mengubah §12.1
+Tabel §12.1 bertambah satu baris:
+
+| Entitas | `efn_brand_code` (= `company_code`) | xmlid Odoo | Jenis | Pajak penjualan | Kanal online |
+|---|---|---|---|---|---|
+| PT Wetzel's Pretzels (PLACEHOLDER nama legal, Q-WTZ1) | **`WTZ`** | `efn_setup_company.company_wtz` (baru) | fnb | PB1 + SC (FP dine-in/non-dine-in, pola sama PB/BCF) | `WTZ` |
+
+- Daftar kode entitas menjadi **EFN/GL/PB/BCR/BCF/WTZ/FARM** (7 entitas, semua **root**). Berlaku untuk Selection
+  `efn_core`, BFF (`COMPANY_CODES` loyalty, label metrik `issuer`), ETL (`COMPANY_CODES`, `dim_company`), view
+  ClickHouse `v_gl_consolidated`, semantic layer text2sql, dan **semua** CHECK `company_code` / `issuer_company_code`
+  platform Postgres yang memuat daftar 6 entitas.
+- `business_type`: `WTZ → fnb`. `brand_group` = `WTZ` (brand sendiri). Harga transfer: `WTZ` ↔ Holding = `tp_holding`;
+  `WTZ` ↔ PT lain = `non_tp` (Q-AD1-1). Tidak ada pasangan TP cost-plus baru.
+- Kanal online `WTZ`: `brand_code` `WTZ`; user teknis `efn_online_wtz` (satu user per kanal, L-37); secret
+  `odoo_api_key_online_wtz` (`host:disabled`), env BFF `ODOO_API_KEY_ONLINE_WTZ_FILE`, overlay
+  `infra/compose/docker-compose.online-wtz.yml` (pola `online-bcf`); allowlist `EFN_ONLINE_CHANNEL_CODES`,
+  `ALLOWED_CHANNELS` (`efn-rotate-online-key`), `check-encryption.sh`.
+- Pajak: grup + PB1 default 10 % (PLACEHOLDER Q-22), SC 5 % dine-in, PB1 dine-in, PB1 non-dine-in 0 % (18-1), FP
+  `fiscal_position_wtz_dine_in` / `fiscal_position_wtz_non_dine_in`, harga exclude pajak — record per company (sufiks
+  `_wtz`). Outlet kanal online WTZ **wajib** FP non-dine-in (pickup/takeaway, tanpa SC).
+
+### 16.2 Mode pesan WTZ (L-92)
+- **Boleh:** ambil di gerai (`pickup`), bayar di kasir (`counter`, §12.2), pre-order berjadwal (`efn_online_slot`,
+  §15.4; katering), poin online (§14.C) mengikuti kebijakan PT.
+- **Tidak:** QR meja (§14.A) dan reservasi meja (§15). Daftar PT F&B QR/booking **tetap PB, BCF**:
+  `FNB_COMPANY_CODES` BFF, `FNB_QR_COMPANIES`, `BOOKING_COMPANIES`, `EFN_FNB_QR_COMPANY_CODES`,
+  `EFN_BOOKING_COMPANY_CODES`, `QR_COMPANY_CODES` Odoo, CHECK `company_code IN ('PB','BCF')` tabel `fnb_*` /
+  `table_booking` **tidak berubah**.
+- Faktur atas nama pembeli (§13.5) tidak tersedia (PT PB1, bukan PPN) → `422 invoice_not_available`.
+
+### 16.3 Platform Postgres — migrasi `13-platform-g24.sql`
+Idempoten (DROP IF EXISTS → ADD … NOT VALID → VALIDATE): semua CHECK yang memuat daftar 6 entitas ditulis ulang
+memuat `'WTZ'` — `<tabel>_company_code_check` pada `loyalty_ledger`, `payment_intent`, `loyalty_reservation`,
+`loyalty_pos_earn`, `online_order_part`, `payment_intent_portion`, `loyalty_pos_reverse`, `loyalty_policy`, dan
+`ck_loyalty_ledger_issuer` (`issuer_company_code`). File 02..10 diperbarui agar volume baru konsisten. 13 masuk daftar
+migrasi WAJIB `scripts/deploy.sh`. Tidak ada kolom/tabel baru; tidak ada perubahan payload API.
+
+### 16.4 Kompatibilitas
+Tidak ada field/endpoint baru: payload BFF dan Odoo identik untuk kanal lama. BFF lama tanpa migrasi 13 tetap jalan
+selama `WTZ` tidak ada di `ONLINE_CHANNELS`. Odoo: company baru dibuat saat **install** `efn_setup_company` (blok
+noupdate); DB yang sudah ada mendapat company WTZ lewat upgrade (record noupdate yang belum ada tetap dibuat; fungsi
+`try_loading` CoA hanya jalan saat install → DB lama: jalankan `try_loading` sekali lewat `odoo shell`, runbook
+`odoo-online-api-key.md` §kanal-baru).
+
+### 16.5 Keputusan lead G24 (24 Okt 2026)
+| # | Keputusan |
+|---|---|
+| L-91 | Entitas ke-7 `WTZ` = PT Wetzel's Pretzels (root, fnb, PB1 + SC pola PB/BCF), xmlid `efn_setup_company.company_wtz`; kode entitas EFN/GL/PB/BCR/BCF/WTZ/FARM (mengubah L-48 §12.1). Nama legal menunggu klien (Q-WTZ1). |
+| L-92 | WTZ = kios/takeaway: pickup, bayar di kasir, pre-order berjadwal boleh; QR meja & reservasi meja tidak (daftar PT F&B QR/booking tetap PB, BCF). |
+| L-93 | Kanal `WTZ` ship OFF: tidak di default `ONLINE_CHANNELS`; kanal demo Odoo nonaktif; secret `host:disabled`. |
+| L-94 | CHECK kode PT platform diperluas lewat `13-platform-g24.sql` (idempoten) + file init asli; ETL/BFF/ClickHouse menerima `WTZ`. |
+
+### 16.6 Pertanyaan klien
+Q-WTZ1 nama legal & NPWP PT · Q-WTZ2 lokasi gerai/outlet pertama · Q-WTZ3 harga resmi menu (data demo = harga
+PLACEHOLDER per kategori) · Q-WTZ4 tarif PB1 kota gerai (Q-22).

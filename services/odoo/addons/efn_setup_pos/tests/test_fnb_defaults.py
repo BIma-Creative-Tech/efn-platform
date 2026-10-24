@@ -71,6 +71,18 @@ class TestEfnFnbServicePresets(TransactionCase):
         # Preset PB tidak memetakan pajak BCF (fiscal position per company).
         self.assertEqual(self.dine_in.fiscal_position_id.map_tax(pb1), pb1)
 
+    def test_wetzels_takeaway_preset_uses_wtz_fiscal_position(self):
+        """G24 W-40 (docs/04 §16.1/§16.2): preset bawa pulang WTZ = FP non-dine-in WTZ (tanpa SC, PB1 0 %)."""
+        ref = self.env.ref
+        wtz = ref("efn_setup_company.company_wtz")
+        pb1 = ref("efn_setup_company.tax_pb1_10_wtz")
+        takeaway = ref("efn_setup_pos.preset_wtz_takeaway")
+        self.assertEqual(takeaway.fiscal_position_id, ref("efn_setup_company.fiscal_position_wtz_non_dine_in"))
+        self.assertEqual(takeaway.fiscal_position_id.company_id, wtz)
+        self.assertEqual(takeaway.service_at, "counter")
+        self.assertFalse(takeaway.available_in_self)
+        self.assertNotIn(ref("efn_setup_company.tax_service_charge_5_wtz"), takeaway.fiscal_position_id.map_tax(pb1))
+
 
 @tagged("post_install", "-at_install", "efn")
 class TestEfnG20EntityPosData(TransactionCase):
@@ -82,6 +94,7 @@ class TestEfnG20EntityPosData(TransactionCase):
             ("fnb", "company_fnb"),
             ("bcr", "company_bcr"),
             ("bcf", "company_bcf"),
+            ("wtz", "company_wtz"),  # G24 W-40 (docs/04 §16.1)
         ):
             with self.subTest(pt=suffix):
                 method = self.env.ref(f"efn_setup_pos.pos_payment_method_edc_{suffix}")
@@ -97,6 +110,6 @@ class TestEfnG20EntityPosData(TransactionCase):
         for xmlid in ("company_rtl", "company_bcr"):
             with self.subTest(company=xmlid):
                 self.assertEqual(self.env.ref(f"efn_setup_company.{xmlid}").nomenclature_id, nomenclature)
-        for xmlid in ("company_fnb", "company_bcf"):
+        for xmlid in ("company_fnb", "company_bcf", "company_wtz"):
             with self.subTest(company=xmlid):
                 self.assertNotEqual(self.env.ref(f"efn_setup_company.{xmlid}").nomenclature_id, nomenclature)

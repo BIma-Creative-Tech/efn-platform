@@ -4,9 +4,9 @@ import { PORTFOLIO, portfolioCounts, safePortfolioLogo, STATUS_LABEL } from '@/l
 import { SUPERAPP_BRANDS } from '@/lib/superapp';
 
 describe('portofolio brand EFN (landing app.)', () => {
-  it('memuat 8 brand: 3 online, CHAGEE/Wetzel\'s/Curry Up di gerai, I\'m Donut & Oriental Kopi segera', () => {
+  it('memuat 8 brand: 4 online (G24: + Wetzel\'s), CHAGEE/Curry Up di gerai, I\'m Donut & Oriental Kopi segera', () => {
     expect(PORTFOLIO.map((b) => b.id)).toEqual(['parisbaguette', 'bacha', 'grandlucky', 'chagee', 'wetzels', 'curryup', 'imdonut', 'orientalkopi']);
-    expect(portfolioCounts(PORTFOLIO)).toEqual({ all: 8, online: 3, store: 3, soon: 2 });
+    expect(portfolioCounts(PORTFOLIO)).toEqual({ all: 8, online: 4, store: 2, soon: 2 });
     for (const b of PORTFOLIO) {
       if (b.status === 'soon') expect(b.eta).toBeTruthy();
       else expect(b.eta).toBeNull();

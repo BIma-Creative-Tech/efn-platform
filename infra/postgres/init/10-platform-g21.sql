@@ -30,7 +30,7 @@ SET LOCAL ROLE efn_platform_owner;   -- SEC-39: objek dimiliki role NOLOGIN
 -- ───────────── 1. Kebijakan poin per PT ─────────────
 CREATE TABLE IF NOT EXISTS platform.loyalty_policy (
   id               bigserial   PRIMARY KEY,
-  company_code     text        NOT NULL CHECK (company_code IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'FARM')),
+  company_code     text        NOT NULL CHECK (company_code IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM')),
   version          integer     NOT NULL CHECK (version >= 1),
   effective_from   timestamptz NOT NULL,
   approved_by_uid  integer     NOT NULL CHECK (approved_by_uid >= 1),
@@ -62,7 +62,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_loyalty_ledger_issuer'
                    AND conrelid = 'platform.loyalty_ledger'::regclass) THEN
     ALTER TABLE platform.loyalty_ledger ADD CONSTRAINT ck_loyalty_ledger_issuer
-      CHECK (issuer_company_code IS NULL OR issuer_company_code IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'FARM'));
+      CHECK (issuer_company_code IS NULL OR issuer_company_code IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM'));
   END IF;
 END $$;
 

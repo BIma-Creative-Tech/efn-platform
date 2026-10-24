@@ -5,7 +5,7 @@ DDL: `infra/postgres/init/02-platform-loyalty.sql`.
 
 - Saldo = `SUM(delta_points)` entri dengan `expires_at IS NULL OR expires_at > now`.
 - `member_ref_hash` = member_hash (§1). `member_ref_enc` **wajib** (NOT NULL): AES-256-GCM, AAD `efn:loyalty_ledger.member_ref_enc:v1`.
-- `company_code` = PT penanggung liabilitas (CHECK EFN/GL/PB/BCR/BCF/FARM sejak G20 §12.1; kode lama RTL/FNB dihapus, migrasi `09-platform-g20.sql`), default `EFN`.
+- `company_code` = PT penanggung liabilitas (CHECK EFN/GL/PB/BCR/BCF/FARM sejak G20 §12.1, + `WTZ` sejak G24 §16.1 (migrasi `13-platform-g24.sql`); kode lama RTL/FNB dihapus, migrasi `09-platform-g20.sql`), default `EFN`.
 - `expires_at`: `NULL` (kebijakan kedaluwarsa belum diputuskan).
 
 ## Consumer `loyalty.earn.requested` v2 (SEC-08)

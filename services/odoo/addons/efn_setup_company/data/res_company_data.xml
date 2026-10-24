@@ -17,7 +17,7 @@
         <field name="active" eval="True"/>
     </record>
 
-    <!-- 6 entitas = 6 company terpisah (badan hukum berbeda), SEMUA ROOT. JANGAN memakai parent_id
+    <!-- 7 entitas (G24: + WTZ) = 7 company terpisah (badan hukum berbeda), SEMUA ROOT. JANGAN memakai parent_id
          (fitur "Branches" Odoo): cabang berbagi CoA/pajak induk, tidak cocok untuk PT berbeda, dan hierarki tidak
          bisa diubah setelah dibuat (docs/04 §12.1).
          G20 W-32/E-43 (keputusan pemilik proyek 18-27 + kontrak docs/04 §12.1, L-48; ADR-001 revisi 18 Okt):
@@ -77,9 +77,23 @@
         <field name="vat_check_vies" eval="False"/>
     </record>
 
+    <!-- G24 W-40 (docs/04 §16.1, L-91): entitas ke-7 PT Wetzel's Pretzels (WTZ, F&B PB1 + SC pola PB/BCF; kios/takeaway).
+         Erajaya (EFN) memegang hak eksklusif brand di Indonesia. Nama legal menunggu klien (Q-WTZ1).
+         DB yang sudah memasang versi < 19.0.1.8.0: record ini dibuat saat upgrade (xmlid belum ada), CoA lewat blok
+         noupdate="0" di akhir file (<function> di blok noupdate hanya jalan saat install). -->
+    <record id="company_wtz" model="res.company">
+        <field name="name">PT Wetzel's Pretzels (PLACEHOLDER nama legal)</field>
+        <field name="sequence">6</field>
+        <field name="efn_brand_code">WTZ</field>
+        <field name="country_id" ref="base.id"/>
+        <field name="currency_id" ref="base.IDR"/>
+        <!-- R3: validasi VIES (EU) tidak relevan untuk NPWP dan butuh egress internet. -->
+        <field name="vat_check_vies" eval="False"/>
+    </record>
+
     <record id="company_farm" model="res.company">
         <field name="name">FARM (PLACEHOLDER nama legal)</field>
-        <field name="sequence">6</field>
+        <field name="sequence">7</field>
         <field name="efn_brand_code">FARM</field>
         <field name="country_id" ref="base.id"/>
         <field name="currency_id" ref="base.IDR"/>
@@ -87,9 +101,9 @@
         <field name="vat_check_vies" eval="False"/>
     </record>
 
-    <!-- Admin boleh berpindah ke keenam company (user lain diatur per peran). -->
+    <!-- Admin boleh berpindah ke ketujuh company (user lain diatur per peran; G24: + company_wtz). -->
     <record id="base.user_admin" model="res.users">
-        <field name="company_ids" eval="[(4, ref('company_efn')), (4, ref('company_rtl')), (4, ref('company_fnb')), (4, ref('company_bcr')), (4, ref('company_bcf')), (4, ref('company_farm'))]"/>
+        <field name="company_ids" eval="[(4, ref('company_efn')), (4, ref('company_rtl')), (4, ref('company_fnb')), (4, ref('company_bcr')), (4, ref('company_bcf')), (4, ref('company_wtz')), (4, ref('company_farm'))]"/>
     </record>
 
     <!-- Fiscal localization Indonesia (template 'id' dari l10n_id) per company.
@@ -109,5 +123,17 @@
     <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_fnb'))]"/>
     <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_bcr'))]"/>
     <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_bcf'))]"/>
+    <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_wtz'))]"/>
     <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_farm'))]"/>
+
+    <!-- G24 W-40 (docs/04 §16.4): DB lama yang di-UPGRADE ke 19.0.1.8.0 mendapat company_wtz dari blok noupdate di atas,
+         tetapi <function> di sana tidak jalan saat upgrade. Blok ini (noupdate=0, jalan setiap install/upgrade) memuat
+         CoA l10n_id HANYA bila company WTZ belum punya chart_template (search kosong -> try_loading langsung return),
+         SEBELUM account_tax_pb1_data.xml membuat pajak PB1 WTZ (try_loading pertama menghapus pajak/FP company itu).
+         Idempoten; company lain tidak disentuh. Label pajak, pembulatan, dan akses admin WTZ pada DB lama diisi sekali oleh
+         migrations/19.0.1.8.0/post-migrate.py (fungsi di blok noupdate tidak jalan saat upgrade). -->
+    <data noupdate="0">
+        <function model="account.chart.template" name="try_loading"
+                  eval="[[], 'id', obj().env['res.company'].search([('id', '=', ref('company_wtz')), ('chart_template', '=', False)])]"/>
+    </data>
 </odoo>

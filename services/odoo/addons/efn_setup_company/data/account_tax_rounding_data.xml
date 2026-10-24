@@ -8,8 +8,8 @@
      Selisih Rp1 PPN Odoo vs Coretax (12 % x DPP 11/12 per baris) BUKAN urusan setting ini -> gap E-40
      (docs/08 §11.2): selisih ke akun beban pembulatan per PT.
      noupdate="1": Finance boleh mengubahnya lewat Settings -> Accounting -> Taxes (Rounding Method); upgrade tidak
-     menimpa. Company baru wajib ditambahkan ke daftar di bawah (G20 W-32: company_bcr, company_bcf sudah). -->
+     menimpa. Company baru wajib ditambahkan ke daftar di bawah (G20 W-32: company_bcr, company_bcf; G24: company_wtz sudah; DB lama yang di-upgrade: nilai default CE (round_globally) berlaku). -->
 <odoo noupdate="1">
     <function model="res.company" name="write"
-              eval="[[ref(c) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_bcr', 'company_bcf', 'company_farm')], {'tax_calculation_rounding_method': 'round_globally'}]"/>
+              eval="[[ref(c) for c in ('company_efn', 'company_rtl', 'company_fnb', 'company_bcr', 'company_bcf', 'company_wtz', 'company_farm')], {'tax_calculation_rounding_method': 'round_globally'}]"/>
 </odoo>

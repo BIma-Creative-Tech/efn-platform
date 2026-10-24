@@ -1,12 +1,14 @@
 -- Gelombang 20 (efn-data-ai-engineer, W-32): fondasi 6 entitas root (docs/04 §12.1, ADR-001 revisi 18 Okt 2026).
--- Idempoten (ADD COLUMN IF NOT EXISTS / CREATE OR REPLACE VIEW). Dijalankan clickhouse-init.sh setelah 01..07.
--- Kode PT: EFN (holding) | GL (retail) | PB (fnb) | BCR (retail) | BCF (fnb) | FARM (farm). Kode lama RTL/FNB dihapus;
+-- Idempoten (ADD COLUMN IF NOT EXISTS / CREATE OR REPLACE VIEW). Dijalankan clickhouse-init.sh setelah 01..07 SETIAP
+-- deploy -> perubahan daftar kode (G24 WTZ) cukup di file ini (view diganti ulang).
+-- Kode PT: EFN (holding) | GL (retail) | PB (fnb) | BCR (retail) | BCF (fnb) | WTZ (fnb, G24 docs/04 §16.1) | FARM (farm).
+-- Kode lama RTL/FNB dihapus;
 -- tidak ada migrasi data (DB dev dibuat ulang, docs/runbooks/dev-reset.md). Sumber kebenaran pemetaan & rumus
 -- ic_relation: services/etl/efn_etl/entities.py (test test_entities.py memeriksa view ini tetap selaras).
 
 -- ============================================================== dim_company: atribut entitas (diisi ETL)
 -- business_type: holding | retail | fnb | farm ('' = company tanpa kode PT, mis. company bawaan Odoo).
--- brand_group  : grup laporan brand; BCR + BCF = BACHA, lainnya = kode PT.
+-- brand_group  : grup laporan brand; BCR + BCF = BACHA, lainnya = kode PT (WTZ = WTZ).
 ALTER TABLE efn_dwh.dim_company ADD COLUMN IF NOT EXISTS business_type LowCardinality(String) DEFAULT '';
 ALTER TABLE efn_dwh.dim_company ADD COLUMN IF NOT EXISTS brand_group LowCardinality(String) DEFAULT '';
 
@@ -14,10 +16,10 @@ ALTER TABLE efn_dwh.dim_company ADD COLUMN IF NOT EXISTS brand_group LowCardinal
 -- Per periode (bulan) x company x akun x lawan inter-company, hanya posted.
 -- Konsolidasi grup = SUM(balance_after_elimination) lintas company per account_code (bagan akun sama: l10n_id).
 -- Eliminasi: baris dengan partner = company grup lain (ic_company_id, efn_etl/gl.py) dikeluarkan, untuk SEMUA
--- pasangan dari 6 entitas (6x5 arah). ic_relation hanya memberi label dasar harga untuk rekonsiliasi:
+-- pasangan dari 7 entitas (7x6 arah; G24: + WTZ). ic_relation hanya memberi label dasar harga untuk rekonsiliasi:
 --   tp_holding = Holding EFN <-> PT mana pun (TP cost-plus, 18-3)
 --   tp_bacha   = BCR <-> BCF (TP cost-plus, 18-3)
---   non_tp     = pasangan lain, mis. FARM -> PT, PB <-> GL (harga daftar/pasar, Q-AD1-1 belum diputuskan)
+--   non_tp     = pasangan lain, mis. FARM -> PT, PB <-> GL, WTZ <-> PT (harga daftar/pasar, Q-AD1-1 belum diputuskan)
 --   unknown    = salah satu company tanpa kode PT dikenal / kode sama (konfigurasi company salah; tetap dieliminasi)
 -- Selisih eliminasi (beda kurs/timing/sisi belum dibukukan) per pasangan: v_gl_ic_recon di bawah.
 -- Penanda transaksi efn_intercompany (W-15) belum ada di sumber; eliminasi masih berbasis partner company lawan.
@@ -42,8 +44,8 @@ SELECT
     cp.brand AS counterparty_brand,
     multiIf(
         isNull(l.ic_company_id), '',
-        c.brand NOT IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'FARM')
-            OR cp.brand NOT IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'FARM')
+        c.brand NOT IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM')
+            OR cp.brand NOT IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM')
             OR c.brand = cp.brand, 'unknown',
         c.brand = 'EFN' OR cp.brand = 'EFN', 'tp_holding',
         (c.brand = 'BCR' AND cp.brand = 'BCF') OR (c.brand = 'BCF' AND cp.brand = 'BCR'), 'tp_bacha',

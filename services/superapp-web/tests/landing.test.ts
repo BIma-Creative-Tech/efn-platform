@@ -13,8 +13,9 @@ function contrast(a: string, b: string): number {
 }
 
 describe('landing page brand', () => {
-  it('Paris Baguette punya landing; brand lain tetap beranda lama', () => {
+  it('Paris Baguette & Wetzel\'s punya landing; brand lain tetap beranda lama', () => {
     expect(landingFor('parisbaguette')?.chapters.length).toBeGreaterThan(0);
+    expect(landingFor('wetzels')?.chapters.length).toBeGreaterThan(0);
     expect(landingFor('efn')).toBeNull();
     expect(landingFor('grandlucky')).toBeNull();
     expect(landingFor('bacha')).toBeNull();
@@ -49,6 +50,25 @@ describe('landing page brand', () => {
     expect(t.text).toBe('#ffffff');
     expect(t.textMuted).toBe('#aebcd3');
     expect(t.accent).toBe('#fcb134');
+  });
+
+  it('band katering (G24): judul/isi terisi, 4 jenis acara, tautan kontak hanya https situs resmi', () => {
+    for (const [id, cfg] of Object.entries(LANDINGS)) {
+      const c = cfg?.catering;
+      if (!c) continue;
+      expect(c.title.trim(), id).not.toBe('');
+      expect(c.body.trim(), id).not.toBe('');
+      expect(c.categoryName.trim(), id).not.toBe('');
+      expect(c.occasions).toHaveLength(4);
+      for (const r of [...c.occasions, ...c.guide]) expect(r.title && r.body).toBeTruthy();
+      if (c.contactHref !== null) {
+        expect(c.contactHref).toMatch(/^https:\/\//);
+        expect(c.contactLabel).toBeTruthy();
+      }
+      expect(cfg!.pickStep.trim()).not.toBe('');
+    }
+    expect(LANDINGS.wetzels?.catering?.categoryName).toBe('Catering');
+    expect(LANDINGS.wetzels?.catering?.guide).toHaveLength(3);
   });
 
   it('categoryHref: cocok nama (tak peka huruf) -> ?category=; tidak ada -> /belanja; channel hanya bila diberikan', () => {

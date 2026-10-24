@@ -109,8 +109,8 @@ def test_transform_loyalty_event_with_company_code() -> None:
     assert "company_code" in LOYALTY_EVENTS.sql
 
 
-@pytest.mark.parametrize("code", ["EFN", "GL", "PB", "BCR", "BCF", "FARM", "bcf"])
-def test_transform_loyalty_event_accepts_six_entities(code: str) -> None:
+@pytest.mark.parametrize("code", ["EFN", "GL", "PB", "BCR", "BCF", "WTZ", "FARM", "bcf"])
+def test_transform_loyalty_event_accepts_seven_entities(code: str) -> None:
     row = transform_loyalty_event(_ledger_row(company_code=code), now=NOW)
     out = dict(zip(LOYALTY_EVENTS_COLUMNS, row, strict=True))
     assert out["company_code"] == code.upper()

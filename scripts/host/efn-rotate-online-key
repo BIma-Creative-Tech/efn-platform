@@ -13,7 +13,7 @@
 # Konfigurasi opsional /etc/efn/online-key-rotation.conf (milik root, tidak boleh ditulis grup/lainnya). Baris
 # KUNCI=nilai (TIDAK di-source; kunci allowlist, nilai divalidasi):
 #   CHANNELS=GL,PB           kanal yang dirotasi --all (G20, docs/04 §12.1: kode kanal = kode PT, hanya ALLOWED_CHANNELS
-#                            GL PB BCR BCF + G22 QR-PB QR-BCF; unik). Kosong -> ONLINE_CHANNELS dari $COMPOSE_DIR/.env
+#                            GL PB BCR BCF WTZ + G22 QR-PB QR-BCF; unik). Kosong -> ONLINE_CHANNELS dari $COMPOSE_DIR/.env
 #                            (ditulis deploy.sh = kanal yang di-deploy; kosong = GL) + QR-<PT> bila FNB_QR_ENABLED=true.
 #   KEY_DAYS=30              masa berlaku key baru (2..90; WAJIB <= api_key_duration grup teknis efn_setup_online)
 #   ROTATE_BEFORE_DAYS=10    rotasi bila sisa masa berlaku < N hari (1..KEY_DAYS-1). Timer harian -> N-1 kali coba ulang
@@ -38,7 +38,7 @@
 #   efn-rotate-online-key --channel=BCF --bootstrap     key PERTAMA kanal yang belum ada di ONLINE_CHANNELS (secret masih
 #                            placeholder): overlay docker-compose.online-<kode>.yml ikut di-mount sementara agar key
 #                            bisa diverifikasi di BFF sebelum kanal diaktifkan (runbook odoo-online-api-key.md#kanal-baru)
-# G20 (docs/04 §12.1, L-48): kode kanal = kode PT, HANYA ALLOWED_CHANNELS (GL, PB, BCR, BCF; sama dengan
+# G20 (docs/04 §12.1, L-48): kode kanal = kode PT, HANYA ALLOWED_CHANNELS (GL, PB, BCR, BCF, G24 WTZ; sama dengan
 # EFN_ONLINE_CHANNEL_CODES di scripts/lib/deploy-validate.sh). Kode lama RTL/FNB & kanal G19 berhifen ditolak.
 # Kode -> nama: huruf kecil. PB -> secret odoo_api_key_online_pb, user teknis efn_online_pb, env BFF
 # ODOO_API_KEY_ONLINE_PB_FILE. Satu user teknis = SATU kanal (L-37): user yang terhubung ke kanal lain DITOLAK
@@ -87,7 +87,9 @@ ADMIN_GROUP=efn-superadmin
 # G20 (docs/04 §12.1): satu-satunya kode kanal yang dikelola skrip ini; GL = kanal di compose base (tanpa overlay).
 # G22: QR-PB / QR-BCF = user teknis QR meja per PT F&B (overlay docker-compose.online-qr-<pt>.yml).
 # G23: BOOKING-PB / BOOKING-BCF = user teknis reservasi meja per PT F&B (overlay docker-compose.online-booking-<pt>.yml).
-ALLOWED_CHANNELS=(GL PB BCR BCF QR-PB QR-BCF BOOKING-PB BOOKING-BCF)
+# G24 (docs/04 §16.1, L-91): WTZ = kanal online PT Wetzel's Pretzels (overlay docker-compose.online-wtz.yml); TANPA
+# QR-WTZ/BOOKING-WTZ (L-92: WTZ tidak memakai QR meja/reservasi).
+ALLOWED_CHANNELS=(GL PB BCR BCF WTZ QR-PB QR-BCF BOOKING-PB BOOKING-BCF)
 BASE_CHANNEL=GL
 ACTOR="?"; CH="?"
 log() {

@@ -77,6 +77,7 @@ Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-inciden
 | Pesanan QR meja F&B (G22): cetak ulang QR, cabut sesi, pesanan nyasar, spam, konfirmasi pelayan, gangguan BFF, kill switch, poin QR | [fnb-qr-orders.md](fnb-qr-orders.md) |
 | CLI CS online lewat wrapper `efn-online-cs`: pasang sudoers, grup `efn-cs` / `efn-cs-approver`, alasan via stdin | [online-orders.md](online-orders.md#cli-cs) |
 | API key Odoo kanal online: pemasangan timer rotasi otomatis 30 hari `efn-rotate-online-key`, rotasi darurat, metrik (R-T15, W-11) | [odoo-online-api-key.md](odoo-online-api-key.md) |
+| Mengaktifkan kanal online PT ke-7 WTZ (PT Wetzel's Pretzels, G24 docs/04 §16): overlay `online-wtz`, key `--channel=WTZ --bootstrap`, migrasi 13 | [odoo-online-api-key.md#kanal-baru](odoo-online-api-key.md#kanal-baru) |
 | API key Odoo user teknis QR meja `QR-PB`/`QR-BCF` (G22): key pertama `--bootstrap`, aktivasi `FNB_QR_ENABLED`, rotasi, hentikan | [odoo-qr-api-key.md](odoo-qr-api-key.md) |
 | API key Odoo user teknis reservasi meja `BOOKING-PB`/`BOOKING-BCF` (G23): key pertama `--bootstrap`, aktivasi `BOOKING_ENABLED`, rotasi, hentikan | [odoo-booking-api-key.md](odoo-booking-api-key.md) |
 | Rotasi kunci token sesi meja `fnb_table_token_key` dan HMAC event QR `odoo_fnb_event_hmac` (G22) | [fnb-table-token-key.md](fnb-table-token-key.md) |

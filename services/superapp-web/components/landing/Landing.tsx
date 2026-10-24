@@ -11,6 +11,7 @@
  */
 import Link from 'next/link';
 import { Fragment } from 'react';
+import { brandHasTableService } from '@/lib/booking';
 import type { Brand } from '@/lib/brands';
 import { channelBusinessType, imageUrl, priceDisplay, type CatalogCategory, type CatalogChannel, type ProductSummary } from '@/lib/catalog';
 import { formatRupiah } from '@/lib/format';
@@ -41,6 +42,10 @@ interface Props {
   heroPhotos: ProductSummary[];
   /** G23 §15.7: mode pesan (band tambahan sesudah story; story & geraknya tidak diubah). Kosong -> band disembunyikan. */
   orderModes?: OrderMode[];
+  /** G24: produk kategori katering (landing.catering.categoryName); kosong -> band tanpa rak foto. */
+  cateringProducts?: ProductSummary[];
+  /** true = ada outlet pre-order berjadwal -> CTA katering ke `?mode=preorder`. */
+  preorder?: boolean;
 }
 
 const PAYMENT_LABEL: Record<string, string> = { qris: 'QRIS', counter: 'Bayar di kasir' };
@@ -69,11 +74,25 @@ function Headline({ text, emphasis, id }: { text: string; emphasis: string | nul
   );
 }
 
-export function BrandLanding({ brand, landing, channel, multiChannel, categories, products, chapters, heroPhotos, orderModes = [] }: Props) {
+export function BrandLanding({
+  brand,
+  landing,
+  channel,
+  multiChannel,
+  categories,
+  products,
+  chapters,
+  heroPhotos,
+  orderModes = [],
+  cateringProducts = [],
+  preorder = false,
+}: Props) {
   const ch = channel && multiChannel ? channel.channel_code : null;
   const shop = ch ? `/belanja?channel=${encodeURIComponent(ch)}` : '/belanja';
   const businessType = channel ? channelBusinessType(channel) : null;
   const fnb = businessType === 'fnb';
+  // Kalimat QR meja hanya untuk brand dengan layanan meja (PB/BCF); kios takeaway (WTZ) tidak.
+  const tableService = brandHasTableService(brand);
 
   const toPhoto = (p: ProductSummary): StoryPhoto | null => {
     const src = imageUrl(p.image_sha, 512);
@@ -174,19 +193,29 @@ export function BrandLanding({ brand, landing, channel, multiChannel, categories
     }),
   ];
 
-  const rail: RailItem[] = channel
-    ? products.slice(0, 12).map((p) => {
-        const price = priceDisplay(p, businessType);
-        return {
-          id: p.product_id,
-          name: p.name,
-          href: `/belanja/${p.product_id}?channel=${encodeURIComponent(channel.channel_code)}`,
-          imageSrc: imageUrl(p.image_sha, 512),
-          price: formatRupiah(price.amount),
-          note: price.taxNote,
-        };
-      })
-    : [];
+  const toRail = (list: ProductSummary[]): RailItem[] =>
+    channel
+      ? list.slice(0, 12).map((p) => {
+          const price = priceDisplay(p, businessType);
+          return {
+            id: p.product_id,
+            name: p.name,
+            href: `/belanja/${p.product_id}?channel=${encodeURIComponent(channel.channel_code)}`,
+            imageSrc: imageUrl(p.image_sha, 512),
+            price: formatRupiah(price.amount),
+            note: price.taxNote,
+          };
+        })
+      : [];
+  const rail = toRail(products);
+  const cat = landing.catering;
+  const cateringRail = cat ? toRail(cateringProducts) : [];
+  // CTA katering: pre-order berjadwal bila ada outlet slot (G23 §15.4), kalau tidak kategori katering biasa.
+  const cateringHref = cat
+    ? preorder
+      ? `/belanja?${new URLSearchParams({ ...(ch ? { channel: ch } : {}), mode: 'preorder' })}`
+      : categoryHref(categories, cat.categoryName, ch)
+    : shop;
   const topCats = categories.filter((c) => c.parent_id === null).slice(0, 8);
 
   return (
@@ -259,6 +288,67 @@ export function BrandLanding({ brand, landing, channel, multiChannel, categories
         </section>
       )}
 
+      {cat && (
+        <section id="katering" className={`${styles.band} ${styles.catering}`} aria-labelledby="katering-judul" data-catering="">
+          <div className={styles.inner}>
+            <div className={styles.sectionHead}>
+              <div>
+                <p className={styles.kicker}>
+                  <span>Katering</span>
+                  <span aria-hidden="true" className={styles.kickerRule} />
+                  <span>{preorder ? 'Pre-order, ambil di gerai' : 'Ambil di gerai'}</span>
+                </p>
+                <h2 id="katering-judul" className={styles.h2}>
+                  {cat.title}
+                </h2>
+              </div>
+              <p className={styles.cateringLead}>{cat.body}</p>
+            </div>
+            <ul className={styles.occasions}>
+              {cat.occasions.map((o) => (
+                <li key={o.title}>
+                  <span className={styles.stepTitle}>{o.title}</span>
+                  <span className={styles.stepBody}>{o.body}</span>
+                </li>
+              ))}
+            </ul>
+            {cateringRail.length > 0 && <ShowcaseRail items={cateringRail} labelledBy="katering-judul" />}
+            {cat.guide.length > 0 && (
+              <div className={styles.outlets}>
+                <h3 className={styles.h3}>Berapa banyak yang perlu dipesan?</h3>
+                <table className={styles.specTable}>
+                  <thead>
+                    <tr>
+                      <th scope="col">Jumlah tamu</th>
+                      <th scope="col">Saran</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cat.guide.map((g) => (
+                      <tr key={g.title}>
+                        <td>{g.title}</td>
+                        <td>{g.body}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className={styles.actions} style={{ marginTop: '2.5rem' }}>
+              <Link href={cateringHref} className={styles.ctaPrimary}>
+                {preorder ? 'Pre-order katering' : 'Lihat menu katering'}
+              </Link>
+              {cat.contactHref && cat.contactLabel && (
+                <a href={cat.contactHref} className={styles.ctaGhost} rel="noopener noreferrer" target="_blank">
+                  {cat.contactLabel}
+                  <span className="sr-only"> (membuka situs resmi di tab baru)</span>
+                </a>
+              )}
+            </p>
+          </div>
+        </section>
+      )}
+
       <section id="cara-pesan" className={`${styles.band} ${styles.how}`} aria-labelledby="cara-judul" tabIndex={-1}>
         <div className={styles.inner}>
           <p className={styles.kicker}>
@@ -271,7 +361,7 @@ export function BrandLanding({ brand, landing, channel, multiChannel, categories
           </h2>
           <ol className={styles.steps}>
             <li>
-              <span className={styles.stepTitle}>Pilih roti, kue, atau minuman</span>
+              <span className={styles.stepTitle}>{landing.pickStep}</span>
               <span className={styles.stepBody}>Tentukan gerai tempat Anda mengambil pesanan.</span>
             </li>
             <li>
@@ -317,7 +407,9 @@ export function BrandLanding({ brand, landing, channel, multiChannel, categories
           </h2>
           <div className={styles.finalSide}>
             <p className={styles.finalBody}>
-              Sedang duduk di gerai? Pindai kode QR di meja Anda untuk memesan langsung dari ponsel, tanpa perlu antre di kasir.
+              {tableService
+                ? 'Sedang duduk di gerai? Pindai kode QR di meja Anda untuk memesan langsung dari ponsel, tanpa perlu antre di kasir.'
+                : 'Pesan dari ponsel sebelum tiba, lalu ambil di kasir tanpa perlu antre.'}
             </p>
             <p className={styles.actions}>
               <Link href={shop} className={styles.ctaPrimary}>

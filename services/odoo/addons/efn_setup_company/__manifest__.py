@@ -1,14 +1,17 @@
 {
     "name": "EFN Setup - Company & Pajak",
     "summary": (
-        "Konfigurasi data-only: 6 company (Holding EFN, PT Grand Lucky, PT Paris Baguette, Bacha Coffee Retail, "
-        "Bacha Coffee F&B, FARM), IDR, CoA l10n_id; PB1 configurable (grup + default + fiscal position per "
-        "kota/layanan) di PT F&B; pembulatan pajak per dokumen."
+        "Konfigurasi data-only: 7 company (Holding EFN, PT Grand Lucky, PT Paris Baguette, Bacha Coffee Retail, "
+        "Bacha Coffee F&B, PT Wetzel's Pretzels, FARM), IDR, CoA l10n_id; PB1 configurable (grup + default + "
+        "fiscal position per kota/layanan) di PT F&B; pembulatan pajak per dokumen."
     ),
     # G20 (keputusan pemilik proyek 18 Okt 2026): 18-1 PB1 Non-Dine-in 0 %, 18-6 round_globally eksplisit,
     # 18-27 nama tampilan company. 19.0.1.7.0 = W-32/E-43 (docs/04 §12.1, L-48): kode GL/PB/BCR/BCF, company_bcr &
     # company_bcf (root, IDR, l10n_id), PB1 + SC + FP dine-in/non-dine-in BCF (sufiks _bcf). DB baru saja (noupdate).
-    "version": "19.0.1.7.0",
+    # 19.0.1.8.0 = G24 W-40 (docs/04 §16.1, L-91): company_wtz (WTZ, root, IDR, l10n_id), PB1 + SC + FP dine-in/
+    # non-dine-in (sufiks _wtz). DB lama: company & pajak dibuat saat upgrade, CoA lewat try_loading bersyarat, label/
+    # pembulatan/akses admin WTZ lewat migrations/19.0.1.8.0/post-migrate.py.
+    "version": "19.0.1.8.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",

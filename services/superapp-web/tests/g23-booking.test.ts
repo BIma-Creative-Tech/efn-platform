@@ -70,7 +70,19 @@ describe('mode pesan', () => {
   });
   it('ritel (GrandLucky): tanpa makan di tempat & reservasi', () => {
     expect(orderModes({ brand: BRANDS.grandlucky, channels: [channel('GL', 'GL')] }).map((m) => m.id)).toEqual(['pickup', 'delivery']);
+  });  it('G24 Wetzel\'s (F&B kios takeaway): ambil + pre-order katering, tanpa makan di tempat & reservasi', async () => {
+    const { brandHasFnb, brandHasTableService } = await import('../lib/booking');
+    expect(brandHasFnb(BRANDS.wetzels)).toBe(true);
+    expect(brandHasTableService(BRANDS.wetzels)).toBe(false);
+    expect(brandHasTableService(BRANDS.parisbaguette)).toBe(true);
+    expect(brandHasTableService(BRANDS.bacha)).toBe(true);
+    const ch = channel('WTZ', 'WTZ');
+    const sched = [{ ...ch, outlets: ch.outlets.map((o) => ({ ...o, slot_enabled: true, slot_minutes: 30 })) }];
+    const modes = orderModes({ brand: BRANDS.wetzels, channels: sched });
+    expect(modes.map((m) => m.id)).toEqual(['pickup', 'preorder', 'delivery']);
+    expect(modes.find((m) => m.id === 'preorder')!.hint).toBe('Paket katering, pilih jadwal ambil');
   });
+
   it('pre-order hanya bila ada outlet slot_enabled; tautan ke kanal ber-slot', () => {
     const plain = [channel('GL', 'GL'), channel('PB', 'PB')];
     expect(hasScheduledOutlet(plain)).toBe(false);
@@ -143,11 +155,12 @@ describe('slot pre-order (keranjang)', () => {
 
 describe('landing Super-App', () => {
   it('kanal dikelompokkan per brand (Bacha = BCR + BCF)', () => {
-    const groups = groupChannelsByBrand([channel('GL', 'GL'), channel('BCR', 'BCR'), channel('BCF', 'BCF'), channel('PB', 'PB')]);
+    const groups = groupChannelsByBrand([channel('GL', 'GL'), channel('BCR', 'BCR'), channel('BCF', 'BCF'), channel('PB', 'PB'), channel('WTZ', 'WTZ')]);
     expect(groups.map((g) => [g.brand.id, g.channels.map((c) => c.channel_code)])).toEqual([
       ['parisbaguette', ['PB']],
       ['bacha', ['BCR', 'BCF']],
       ['grandlucky', ['GL']],
+      ['wetzels', ['WTZ']], // G24
     ]);
     expect(brandShopHref(groups[1]!)).toBe('/belanja?channel=BCR');
   });

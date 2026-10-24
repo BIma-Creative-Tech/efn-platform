@@ -8,7 +8,7 @@ import { formatRupiah } from '@/lib/format';
 import { chapterStats, findCategory, landingFor, pickPhotos, type LandingConfig } from '@/lib/landing-config';
 import { orderModes } from '@/lib/order-modes';
 import { BRAND_PANEL_COPY, brandShopHref, brandSiteUrl, groupChannelsByBrand, HERO_MAX_ITEMS, interleave } from '@/lib/superapp';
-import { brandHasFnb } from '@/lib/booking';
+import { brandHasTableService } from '@/lib/booking';
 import { BrandLanding, type ChapterData } from '@/components/landing/Landing';
 import { SuperAppLanding } from '@/components/landing/SuperAppLanding';
 import type { BrandPanelProps } from '@/components/landing/BrandPanel';
@@ -143,7 +143,7 @@ async function SuperAppHome({ brand }: { brand: Brand }) {
       facts: channelFacts(g.channels, items.length, more),
       shopHref: ch ? `/belanja?${new URLSearchParams({ channel: ch.channel_code })}` : brandShopHref(g),
       siteHref: brandSiteUrl(host, g.brand),
-      reserveHref: brandHasFnb(g.brand) ? '/reservasi' : null,
+      reserveHref: brandHasTableService(g.brand) ? '/reservasi' : null,
     };
   });
 
@@ -236,6 +236,9 @@ async function LandingHome({ brand, landing }: { brand: Brand; landing: LandingC
   );
   // Kartu pembuka: produk unggulan, tapi bukan foto depan salah satu bab (agar tidak tampil dua kali);
   // cadangan = foto bab pertama.
+  // G24: band katering — produk kategori katering (mis. PB "Cakes", Wetzel's "Catering"); gagal -> band tanpa rak.
+  const cateringCat = channel && landing.catering ? findCategory(cats, landing.catering.categoryName) : null;
+  const catering = channel && cateringCat ? await loadProducts({ channel: channel.channel_code, category: cateringCat.category_id, limit: 12 }) : null;
   const fronts = new Set(chapters.map((c) => c.photos[0]?.product_id).filter((v) => v !== undefined));
   const pool = [...chapters.flatMap((c) => c.photos), ...(products?.ok ? products.data.items : [])].filter((p) => !fronts.has(p.product_id));
   const heroPhotos = pickPhotos(pool, landing.heroFeatured, 3);
@@ -250,6 +253,8 @@ async function LandingHome({ brand, landing }: { brand: Brand; landing: LandingC
       chapters={chapters}
       heroPhotos={heroPhotos.length > 0 ? heroPhotos : (chapters[0]?.photos ?? [])}
       orderModes={orderModes({ brand, channels: channels.ok ? channels.data : null, channelParam: channels.ok && channels.data.length > 1 ? (channel?.channel_code ?? null) : null })}
+      cateringProducts={catering?.ok ? catering.data.items : []}
+      preorder={Boolean(channel?.outlets.some((o) => o.slot_enabled === true))}
     />
   );
 }

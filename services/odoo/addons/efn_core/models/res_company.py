@@ -10,16 +10,19 @@ EFN_BRAND_CODES = [
     ("PB", "PB - PT Paris Baguette (F&B, PB1)"),
     ("BCR", "BCR - Bacha Coffee Retail (ritel, PPN)"),
     ("BCF", "BCF - Bacha Coffee F&B (F&B, PB1)"),
+    # G24 (docs/04 §16.1, L-91): entitas ke-7, kios/takeaway Wetzel's Pretzels (nama legal menunggu klien, Q-WTZ1).
+    ("WTZ", "WTZ - PT Wetzel's Pretzels (F&B, PB1)"),
     ("FARM", "FARM - Collection Center / Farming"),
 ]
 
-# Kode company -> jenis usaha (relasi tetap, §12.1: GL,BCR -> retail; PB,BCF -> fnb).
+# Kode company -> jenis usaha (relasi tetap, §12.1/§16.1: GL,BCR -> retail; PB,BCF,WTZ -> fnb).
 EFN_BRAND_BUSINESS_TYPE = {
     "EFN": "holding",
     "GL": "retail",
     "PB": "fnb",
     "BCR": "retail",
     "BCF": "fnb",
+    "WTZ": "fnb",
     "FARM": "farm",
 }
 

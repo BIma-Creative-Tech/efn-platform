@@ -78,7 +78,8 @@ EFN_SECURITY_CONTROLS=(RABBITMQ_STRICT_PERMISSIONS ETL_AUDIT_COPY_ENABLED ETL_LO
 # compose base, sisanya lewat infra/compose/docker-compose.online-<kode huruf kecil>.yml (scripts/deploy.sh). Kode lama
 # RTL/FNB dan kanal G19 berhifen DITOLAK. Kanal baru = tambah di sini + scripts/secrets.list + compose + overlay +
 # ALLOWED_CHANNELS di scripts/host/efn-rotate-online-key (runbook odoo-online-api-key.md#kanal-baru).
-EFN_ONLINE_CHANNEL_CODES=(GL PB BCR BCF)
+# G24 (docs/04 §16.1, L-91..L-93): + WTZ (PT Wetzel's Pretzels; kios F&B, tidak di daftar QR/booking).
+EFN_ONLINE_CHANNEL_CODES=(GL PB BCR BCF WTZ)
 EFN_ONLINE_BASE_CHANNEL=GL
 # Profil compose yang dikenal; production wajib memuat core,data,observability (alert/Loki/salinan audit)
 EFN_KNOWN_PROFILES=(core data ai observability ops)

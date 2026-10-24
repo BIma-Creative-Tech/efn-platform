@@ -157,6 +157,8 @@ secrets:
   odoo_api_key_online_pb: { file: ../../secrets/odoo_api_key_online_pb.txt }
   odoo_api_key_online_bcr: { file: ../../secrets/odoo_api_key_online_bcr.txt }
   odoo_api_key_online_bcf: { file: ../../secrets/odoo_api_key_online_bcf.txt }
+  # G24 (docs/04 §16.1): kanal WTZ (PT Wetzel's Pretzels) - overlay docker-compose.online-wtz.yml
+  odoo_api_key_online_wtz: { file: ../../secrets/odoo_api_key_online_wtz.txt }
   odoo_online_event_hmac: { file: ../../secrets/odoo_online_event_hmac.txt }
   # G21 (docs/04 §13.1 no. 3, L-61): HMAC publikasi kebijakan poin Odoo -> BFF (hanya odoo + api-gateway)
   loyalty_policy_signing_key: { file: ../../secrets/loyalty_policy_signing_key.txt }
@@ -1146,7 +1148,7 @@ services:
       # reservasi committed (nilai keuangan, >= 10 th, Q-P2) - rekonsiliasi K-18-6 tidak positif palsu setelah erasure.
       LOYALTY_RESTORE_TOLERANCE_PCT: ${LOYALTY_RESTORE_TOLERANCE_PCT:-10}
       LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS: ${LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS:-3650}
-      # G20 (docs/04 §12.1): kode kanal = kode PT (GL, PB, BCR, BCF); RTL/FNB dan kanal G19 berhifen dihapus
+      # G20 (docs/04 §12.1): kode kanal = kode PT (GL, PB, BCR, BCF; G24 §16.1: WTZ); RTL/FNB dan kanal G19 berhifen dihapus
       ONLINE_CHANNELS: ${ONLINE_CHANNELS:-GL}
       ONLINE_FULFILMENTS: ${ONLINE_FULFILMENTS:-pickup}
       # G19 W-02 (docs/04 §11.1): reservasi stok 1 jam. URUTAN AKTIVASI: payment_timeout_minutes kanal Odoo = 70 DULU,
@@ -1184,7 +1186,7 @@ services:
       ODOO_RPC_CA_FILE: /run/secrets/efn_ca_crt
       ODOO_RPC_CLIENT_CERT_FILE: /run/secrets/tls_api_gateway_crt
       ODOO_RPC_CLIENT_KEY_FILE: /run/secrets/tls_api_gateway_key
-      # API key per kanal (satu key = satu user teknis = satu kanal). Kanal default GL di base; PB/BCR/BCF: env
+      # API key per kanal (satu key = satu user teknis = satu kanal). Kanal default GL di base; PB/BCR/BCF/WTZ: env
       # ODOO_API_KEY_ONLINE_<KODE>_FILE + secret di overlay docker-compose.online-<kode>.yml (docs/04 §12.1).
       ODOO_API_KEY_ONLINE_GL_FILE: /run/secrets/odoo_api_key_online_gl
       ODOO_ONLINE_EVENT_HMAC_FILE: /run/secrets/odoo_online_event_hmac
@@ -1352,7 +1354,7 @@ services:
       traefik.http.routers.web.rule: >-
         Host(`app.${TRAEFIK_DOMAIN:-efn.local}`) || Host(`${TRAEFIK_DOMAIN:-efn.local}`)
         || Host(`grandlucky.${TRAEFIK_DOMAIN:-efn.local}`) || Host(`parisbaguette.${TRAEFIK_DOMAIN:-efn.local}`)
-        || Host(`bacha.${TRAEFIK_DOMAIN:-efn.local}`)
+        || Host(`bacha.${TRAEFIK_DOMAIN:-efn.local}`) || Host(`wetzels.${TRAEFIK_DOMAIN:-efn.local}`)
         || Host(`mart.${TRAEFIK_DOMAIN:-efn.local}`) || Host(`kitchen.${TRAEFIK_DOMAIN:-efn.local}`)
       traefik.http.routers.web.entrypoints: websecure
       traefik.http.routers.web.tls.certresolver: letsencrypt

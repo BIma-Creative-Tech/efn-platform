@@ -10,7 +10,7 @@ Kontrak: `docs/04` §10.3.2, §10.8.2, §10.8.3, **§11.3 (G19)**. ADR-034 (**Pr
 
 ## Kanal per brand (G19, W-21/E-37a, §11.3)
 
-- **G20 §12.1 (L-48)**: kode kanal = kode PT — `GL`, `PB`, `BCR`, `BCF` (`ONLINE_CHANNELS` default `GL`); kanal G19 `RTL-GL`/`RTL-BACHA`/`FNB-PB`/`FNB-BACHA` dihapus. `company_code` blok channel wajib salah satu `EFN|GL|PB|BCR|BCF|FARM` (kode lama `RTL`/`FNB` → kanal disembunyikan, fail-closed). Regex §10.2 `^[A-Z][A-Z0-9-]{1,15}$` tetap (hifen masih valid secara format).
+- **G20 §12.1 (L-48)**: kode kanal = kode PT — `GL`, `PB`, `BCR`, `BCF`, `WTZ` (G24 §16.1, brand `WTZ`, nonaktif default) (`ONLINE_CHANNELS` default `GL`); kanal G19 `RTL-GL`/`RTL-BACHA`/`FNB-PB`/`FNB-BACHA` dihapus. `company_code` blok channel wajib salah satu `EFN|GL|PB|BCR|BCF|FARM` (kode lama `RTL`/`FNB` → kanal disembunyikan, fail-closed). Regex §10.2 `^[A-Z][A-Z0-9-]{1,15}$` tetap (hifen masih valid secara format).
 - Blok `channel` hasil `efn_online_catalog` membawa `brand_code` (`^[A-Z][A-Z0-9]{1,9}$`, tidak unik, `false`/kosong → `null`; bentuk lain → `invalid_response`). Salinan `channel_data` dari sinkron pra-G19 (tanpa field) → `null`.
 - `GET /v1/catalog/channels?brand=<brand_code>` — tanpa parameter = semua kanal aktif; nilai tidak cocok regex (termasuk kosong, huruf kecil, parameter berulang) → `400 invalid_request`; brand tak dikenal → `{ "items": [] }`. Ini **pembatasan UI** — cart/quote/order tidak memakai brand (BFF tidak mempercayai domain).
 

@@ -14,6 +14,7 @@ saja, lalu hapus.
 |---|---|---|---|
 | Paris Baguette | `parisbaguette.co.id` WordPress REST `/wp-json/wp/v2/product` + `/media` | 101 produk, 101 gambar, 13 kategori | `PB` |
 | Bacha Coffee | `bachacoffee.com` endpoint JSON listing situs (`/api/BachaProductApi/GetBachaProductsByCategory`), `Crawl-delay: 5` dihormati | 533 SKU (loose/packed coffee, accessories, gourmet, gift set), 533 gambar | `BCR` (butik). Menu kafe `BCF` tidak dipublikasikan |
+| Wetzel's Pretzels (24 Okt 2026) | `www.wetzels.com` `/sitemap.xml` (halaman `/menu/<kategori>/<item>`) + JSON-LD `MenuItem` tiap halaman (`scripts/brand-catalog/scrape_wetzels.py`, jeda ≥ 1 s, `/menu` diizinkan robots.txt). Situs global AS: tanpa harga IDR → placeholder DEMO per kategori | 39 produk, 39 gambar, 7 kategori (Pretzels, Bitz, Dogs, Stickz, Catering, Drinks, Dips) | `WTZ` (PT Wetzel's Pretzels, G24 docs/04 §16.1; kanal nonaktif default) |
 | GrandLucky | `grandlucky.co.id` | **Tidak ada katalog publik** (WordPress, REST API dimatikan). Profil brand + outlet (`brand_info.json`) | `GL`: isi lewat CSV master data |
 | GrandLucky (23 Okt 2026) | PDF promo publik `doc.grandlucky.co.id/catalog_blast/Christmas_2025.pdf` (tautan "latest catalog" di beranda): 11 halaman gambar tanpa teks → render pdfjs → OCR tesseract eng+ind → potong foto per kartu | **88 produk DEMO, 85 foto, 15 kategori**; 43 harga katalog terbaca (2 OCR sepakat) → `reference_price_idr` | `GL` |
 
@@ -22,6 +23,7 @@ saja, lalu hapus.
 ```bash
 python scripts/brand-catalog/scrape_parisbaguette.py
 python scripts/brand-catalog/scrape_bacha.py            # jeda 5 s per request; gambar yang sudah ada dilewati
+python scripts/brand-catalog/scrape_wetzels.py          # sitemap + JSON-LD MenuItem; gambar yang sudah ada dilewati
 python scripts/brand-catalog/scrape_grandlucky.py       # info brand saja
 python scripts/brand-catalog/scrape_grandlucky.py --from-csv ekspor_gl.csv --images-dir foto_gl/   # katalog GL internal
 
@@ -43,13 +45,14 @@ Situs brand **tidak** memuat harga IDR (Bacha hanya USD global, disimpan di `ext
 referensi dan tidak diimpor). GL: kolom CSV opsional `reference_price_idr` (harga promo katalog PDF, hasil OCR) dipakai
 sebagai harga DEMO bila `price_idr` kosong; produk tetap bertag **DEMO harga** karena harga promo musiman bukan master
 harga. Harga OCR yang dua bacaannya berbeda dibiarkan kosong (placeholder kategori GL: Non Food 45.000, Food 30.000,
-Fresh 40.000). Import mengisi **harga placeholder per kategori** (`BRANDS[...]["prices"]` di
+Fresh 40.000). Wetzel's (placeholder DEMO): Pretzels 35.000, Bitz 32.000, Dogs 42.000, Stickz 38.000, Catering 350.000,
+Drinks 28.000, Dips 8.000. Import mengisi **harga placeholder per kategori** (`BRANDS[...]["prices"]` di
 `import_odoo.py`). Harga yang sudah diubah manual di Odoo dipertahankan (`price_kept`). **Wajib diganti dari master
 harga resmi sebelum demo ke pihak luar.**
 
 ## Batas / belum
 
-- Produk masuk Odoo + kanal online PT. Kanal `PB`/`BCR`/`BCF` di demo **nonaktif**, jadi produk baru tampil di Super-App
+- Produk masuk Odoo + kanal online PT. Kanal `PB`/`BCR`/`BCF`/`WTZ` di demo **nonaktif**, jadi produk baru tampil di Super-App
   setelah kanal diaktifkan dan diberi API key (runbook `odoo-online-api-key.md` §1b) dan `brand_code` kanal diisi.
 - Bacha: satu SKU per varian (Whole/Ground) = satu produk. Ketersediaan butik Indonesia belum difilter (situs global).
 - GL dari PDF promo: nama hasil OCR + koreksi manual salah baca yang jelas; ukuran/varian kadang terpotong. Buah/daging

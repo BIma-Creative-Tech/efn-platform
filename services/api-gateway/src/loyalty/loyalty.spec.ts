@@ -135,10 +135,10 @@ describe('LoyaltyEarnConsumer v2 (idempotency)', () => {
     expect([...ctx.ledger.values()][0].company).toBe('PB');
   });
 
-  it('G20 §12.1: COMPANY_CODES = EFN/GL/PB/BCR/BCF/FARM; kode lama RTL/FNB ditolak', () => {
-    expect(COMPANY_CODES).toEqual(['EFN', 'GL', 'PB', 'BCR', 'BCF', 'FARM']);
-    for (const c of ['GL', 'PB', 'BCR', 'BCF']) expect(isCompanyCode(c)).toBe(true);
-    for (const c of ['RTL', 'FNB', 'gl', '']) expect(isCompanyCode(c)).toBe(false);
+  it('G20 §12.1 + G24 §16.1: COMPANY_CODES = EFN/GL/PB/BCR/BCF/WTZ/FARM; kode lama RTL/FNB ditolak', () => {
+    expect(COMPANY_CODES).toEqual(['EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM']);
+    for (const c of ['GL', 'PB', 'BCR', 'BCF', 'WTZ']) expect(isCompanyCode(c)).toBe(true);
+    for (const c of ['RTL', 'FNB', 'gl', 'wtz', 'WETZELS', '']) expect(isCompanyCode(c)).toBe(false);
   });
 });
 
