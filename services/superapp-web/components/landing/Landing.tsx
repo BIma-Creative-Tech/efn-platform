@@ -10,10 +10,10 @@
  * ke /belanja (yang menampilkan pesan "belum tersedia" sendiri).
  */
 import Link from 'next/link';
-import { Fragment } from 'react';
+import { Fragment, type CSSProperties } from 'react';
 import { brandHasTableService } from '@/lib/booking';
 import type { Brand } from '@/lib/brands';
-import { channelBusinessType, imageUrl, priceDisplay, type CatalogCategory, type CatalogChannel, type ProductSummary } from '@/lib/catalog';
+import { channelBusinessType, imageUrl, photoVars, priceDisplay, type CatalogCategory, type CatalogChannel, type ProductSummary } from '@/lib/catalog';
 import { formatRupiah } from '@/lib/format';
 import { categoryHref, DEFAULT_CLOSING, DEFAULT_HOW_TITLE, modesHeadline, splitEmphasis, type ChapterStats, type LandingConfig } from '@/lib/landing-config';
 import type { OrderMode } from '@/lib/order-modes';
@@ -232,7 +232,7 @@ export function BrandLanding({
   const dark = brand.theme.scheme === 'dark';
 
   return (
-    <div className={styles.landing} data-landing="" style={paletteStyle(landing.palette)}>
+    <div className={styles.landing} data-landing="" style={{ ...paletteStyle(landing.palette), ...photoVars(channel?.company_code) } as CSSProperties}>
       <noscript>
         <style>{'[data-reveal]{opacity:1!important;transform:none!important;filter:none!important;clip-path:none!important}'}</style>
       </noscript>

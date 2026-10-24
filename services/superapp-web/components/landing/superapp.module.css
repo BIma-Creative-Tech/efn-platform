@@ -375,7 +375,9 @@
   width: 100%;
   height: auto;
   aspect-ratio: 1;
-  object-fit: cover;
+  /* Foto campuran brand (lanskap PB, potret Bacha, persegi GL/WTZ): utuh di kotak putih, tidak terpotong. */
+  object-fit: contain;
+  background: #ffffff;
   border-radius: 14px;
 }
 .h3dCap {
@@ -562,7 +564,8 @@
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* Tab brand berganti rasio foto: utuh (contain) di bingkai putih 4:5, tidak terpotong. */
+  object-fit: contain;
   transition: transform 800ms var(--l-ease);
 }
 .shelfCard:hover .shelfImg img {
@@ -780,7 +783,8 @@
   /* height:auto wajib: atribut height=512 pada <img> menjadi tinggi CSS dan mengalahkan aspect-ratio. */
   height: auto;
   aspect-ratio: 1;
-  object-fit: cover;
+  /* Foto utuh (contain) di kartu putih; rasio foto per brand berbeda. */
+  object-fit: contain;
   border-radius: 12px;
 }
 .pcard figcaption {

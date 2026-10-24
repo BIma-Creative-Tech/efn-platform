@@ -97,3 +97,15 @@ Konsep sama dengan PB (scroll story foto produk asli, rak etalase, band mode pes
 Judul band mode pesan kini dari mode yang aktif (`modesHeadline`), bukan kalimat tetap; judul cara pesan & penutup per brand (`howTitle`, `closing`). Keterangan HUD "Foto: katalog <brand>".
 
 Terukur (Playwright, 24 Okt 2026): 1440/1280/1024/390/360 px × scroll turun-naik → teks tertutup foto 0%, kartu saling menimpa 0%, 13–28 keadaan gerak, teks bab terbaca, tanpa scroll horizontal, tanpa error browser, tanpa gambar rusak; PB & Wetzel's tidak berubah.
+
+## 9. Foto utuh, tidak terpotong (G25, 24 Okt 2026)
+
+Foto katalog berbeda rasio per PT: PB 497×347 lanskap, Bacha 410×512 potret 4:5, GrandLucky & Wetzel's persegi. Sebelumnya semua bingkai memakai `object-fit: cover` dengan rasio tetap (kartu etalase 4:5, kartu cerita 497:347, bingkai belanja 1:1 / 4:5), jadi foto PB di etalase hanya terlihat 34–55%, foto Bacha di kartu cerita 63%, detail produk 70–80%.
+
+- `photoVars(company_code)` (lib/catalog.ts) memasang `--photo-ratio` dan `--photo-hw` di landing, `/belanja`, dan detail produk. Bingkai memakai rasio foto PT-nya, gambar `object-fit: contain` di latar putih.
+- Kartu cerita: lebar dihitung dari `--photo-hw` agar kartu potret Bacha tetap muat tinggi layar; parallax foto ±3% di dalam ruang 3% bingkai (gerak scroll tetap ada).
+- Super-App (`app.`) mencampur brand: hero 3D, etalase, dan panel memakai bingkai tetap dengan `contain`.
+- Tes `tests/photo-fit.test.ts` melarang `object-fit: cover` pada CSS foto katalog.
+- BFF: gambar katalog punya kuota rate limit sendiri `IMAGE` 600/menit/IP (docs/04 §10.3.1). Sebelumnya berbagi kuota `CATALOG` 120/menit dengan JSON katalog, sehingga halaman berisi 24–40 foto sebagian gagal dimuat (429, log dev).
+
+Terukur (Playwright, 10 halaman × 1440 & 390 px): semua foto katalog terlihat 100% (sebelumnya minimum 34%); overlap teks/foto tetap 0% di 4 brand.
