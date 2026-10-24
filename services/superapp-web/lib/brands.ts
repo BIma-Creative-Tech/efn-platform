@@ -485,6 +485,20 @@ export function normalizeHost(host: string | null | undefined): string {
 }
 
 /**
+ * Host tempat override brand dev (`?brand=` + cookie `efn_dev_brand`, proxy.ts) boleh MENEMPEL: hanya host tanpa
+ * nama domain brand (localhost, IP, nama tanpa titik). Di domain bernama (`app.efn.local`, `bacha.efn.local`, ...)
+ * cookie lama tidak dipakai — sebelumnya cookie `?brand=parisbaguette` yang tertinggal membuat `app.efn.local`
+ * tampil sebagai situs Paris Baguette tanpa batas waktu.
+ */
+export function isDevOverrideHost(host: string | null | undefined): boolean {
+  const h = normalizeHost(host);
+  if (!h) return true;
+  if (h === 'localhost' || h.startsWith('[')) return true;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return true;
+  return !h.includes('.');
+}
+
+/**
  * Host -> brand. Urutan: host eksplisit, lalu prefix subdomain (agar domain prod
  * seperti `grandlucky.<domain-produksi>` jalan tanpa ubah kode), lalu alias subdomain lama (`mart.`, `kitchen.`), lalu default.
  */
