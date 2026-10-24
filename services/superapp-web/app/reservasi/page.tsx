@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { brandHasFnb } from '@/lib/booking';
+import { brandHasTableService } from '@/lib/booking';
 import { getBrand } from '@/lib/brand-server';
 import { getSessionToken } from '@/lib/session';
 import { BookingFlow } from '@/components/booking/BookingFlow';
@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic';
  */
 export default async function ReservasiPage() {
   const brand = await getBrand();
-  if (!brandHasFnb(brand)) notFound();
+  if (!brandHasTableService(brand)) notFound();
   const loggedIn = Boolean(await getSessionToken());
   return (
     <div className="stack" style={{ maxWidth: '46rem', margin: '0 auto', width: '100%' }}>

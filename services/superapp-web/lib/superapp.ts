@@ -7,7 +7,7 @@ import { BRANDS, type Brand, type BrandId } from './brands';
 import type { CatalogChannel } from './catalog';
 
 /** Brand yang ditampilkan di Super-App (urutan tampil). Holding tidak termasuk. */
-export const SUPERAPP_BRANDS: readonly Exclude<BrandId, 'efn'>[] = ['parisbaguette', 'bacha', 'grandlucky'];
+export const SUPERAPP_BRANDS: readonly Exclude<BrandId, 'efn'>[] = ['parisbaguette', 'bacha', 'grandlucky', 'wetzels'];
 
 /** Copy panel brand (DRAF). `kind` hanya untuk label kategori, bukan klaim layanan. */
 export interface BrandPanelCopy {
@@ -19,6 +19,7 @@ export const BRAND_PANEL_COPY: Record<Exclude<BrandId, 'efn'>, BrandPanelCopy> =
   parisbaguette: { kind: 'Bakery café', line: 'Roti, pastry, dan kue untuk pagi hingga perayaan.' },
   bacha: { kind: 'Kopi & butik', line: 'Kopi arabika pilihan, dari butik hingga kafe.' },
   grandlucky: { kind: 'Supermarket', line: 'Belanja segar harian, lokal hingga impor.' },
+  wetzels: { kind: 'Pretzel', line: 'Pretzel hangat, bitz, dan lemonade; paket katering untuk acara.' },
 };
 
 export interface BrandGroup {

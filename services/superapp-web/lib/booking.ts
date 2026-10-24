@@ -21,6 +21,14 @@ export function brandHasFnb(brand: Pick<Brand, 'companies'>): boolean {
   return brand.companies.some((c) => COMPANIES[c as CompanyCode]?.businessType === 'fnb');
 }
 
+/**
+ * Brand punya PT dengan layanan meja (QR meja G22 + reservasi G23 = PB/BCF). G24: WTZ F&B tetapi kios takeaway ->
+ * tanpa menu Reservasi, panduan QR meja, dan mode "Makan di tempat".
+ */
+export function brandHasTableService(brand: Pick<Brand, 'companies'>): boolean {
+  return brand.companies.some((c) => COMPANIES[c as CompanyCode]?.tableService === true);
+}
+
 // ---------- batas & pola ----------
 
 export const GUEST_LABEL_MAX = 40;

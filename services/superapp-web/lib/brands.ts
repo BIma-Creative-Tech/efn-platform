@@ -2,7 +2,8 @@
  * Konfigurasi brand multi-tenant (host -> brand).
  *
  * ADR terkait: ADR multi-tenant by domain & unified cart lintas PT (status Proposed).
- * Tenant: `efn` (holding), `grandlucky` (PT GL), `parisbaguette` (PT PB), `bacha` (BCR butik + BCF kafe, satu domain).
+ * Tenant: `efn` (holding), `grandlucky` (PT GL), `parisbaguette` (PT PB), `bacha` (BCR butik + BCF kafe, satu domain),
+ * `wetzels` (PT WTZ, G24 docs/04 §16).
  * Token visual: docs/design/brand-tokens.md.
  * Risiko dimitigasi: R-T14 (duplikasi komponen per brand) — tema hanya lewat CSS custom properties.
  *
@@ -10,10 +11,10 @@
  * import Node.js. Brand tidak dikenal -> brand default (`efn`), bukan error.
  */
 
-export type BrandId = 'efn' | 'grandlucky' | 'parisbaguette' | 'bacha';
+export type BrandId = 'efn' | 'grandlucky' | 'parisbaguette' | 'bacha' | 'wetzels';
 
 /** Kode company sesuai kontrak `res.company.efn_brand_code` (docs/04_SERVICE_CONTRACTS.md §1). */
-export type CompanyCode = 'EFN' | 'GL' | 'PB' | 'BCR' | 'BCF' | 'FARM';
+export type CompanyCode = 'EFN' | 'GL' | 'PB' | 'BCR' | 'BCF' | 'WTZ' | 'FARM';
 
 /**
  * Identitas PT saja. Pajak (label, tarif, inklusif/eksklusif) TIDAK di sini — configurable,
@@ -28,15 +29,22 @@ export interface CompanyInfo {
    * null = bukan kanal belanja online / belum ditetapkan -> diperlakukan tidak memenuhi syarat.
    */
   businessType: 'retail' | 'fnb' | null;
+  /**
+   * Layanan meja (QR meja G22 + reservasi G23) — hanya PT F&B dengan area makan (`FNB_QR_COMPANIES`/`BOOKING_COMPANIES`
+   * BFF = PB,BCF). WTZ (kios takeaway, G24) F&B tetapi tanpa layanan meja.
+   */
+  tableService: boolean;
 }
 
 export const COMPANIES: Record<CompanyCode, CompanyInfo> = {
-  EFN: { code: 'EFN', displayName: 'Holding EFN', businessType: null },
-  GL: { code: 'GL', displayName: 'PT Grand Lucky', businessType: 'retail' },
-  PB: { code: 'PB', displayName: 'PT Paris Baguette', businessType: 'fnb' },
-  BCR: { code: 'BCR', displayName: 'Bacha Coffee Retail', businessType: 'retail' },
-  BCF: { code: 'BCF', displayName: 'Bacha Coffee F&B', businessType: 'fnb' },
-  FARM: { code: 'FARM', displayName: 'FARM', businessType: null },
+  EFN: { code: 'EFN', displayName: 'Holding EFN', businessType: null, tableService: false },
+  GL: { code: 'GL', displayName: 'PT Grand Lucky', businessType: 'retail', tableService: false },
+  PB: { code: 'PB', displayName: 'PT Paris Baguette', businessType: 'fnb', tableService: true },
+  BCR: { code: 'BCR', displayName: 'Bacha Coffee Retail', businessType: 'retail', tableService: false },
+  BCF: { code: 'BCF', displayName: 'Bacha Coffee F&B', businessType: 'fnb', tableService: true },
+  // G24 (docs/04 §16): nama badan hukum final menunggu konfirmasi klien.
+  WTZ: { code: 'WTZ', displayName: "PT Wetzel's Pretzels", businessType: 'fnb', tableService: false },
+  FARM: { code: 'FARM', displayName: 'FARM', businessType: null, tableService: false },
 };
 
 /** True bila semua kode PT adalah PT PPN (GL/BCR). Daftar kosong atau kode tak dikenal -> false. */
@@ -57,6 +65,7 @@ export const BRAND_CODE_CHANNELS: Readonly<Record<string, readonly CompanyCode[]
   GL: ['GL'],
   PB: ['PB'],
   BACHA: ['BCR', 'BCF'],
+  WTZ: ['WTZ'],
 };
 
 /** Kanal/PT milik sebuah `brand_code`; kode tak dikenal -> daftar kosong. */
@@ -93,11 +102,28 @@ export interface BrandTheme {
   text: string;
   textMuted: string;
   border: string;
-  /** Font stack TANPA font eksternal (CSP `font-src 'self'`); font resmi berlisensi menyusul lewat @font-face di public/fonts. */
+  /**
+   * Peran font (semua self-host same-origin di public/fonts, @font-face di app/fonts.css; CSP `font-src 'self'`):
+   * `fontDisplay` judul besar (h1, hero, judul penutup), `fontHeading` judul bagian (h2/h3), `fontBody` teks,
+   * `fontLabel` label kecil berhuruf kapital (kicker, kepala tabel, h3 skema gelap, harga di kartu landing).
+   * Sumber per brand: komentar font di atas BRANDS + docs/design/brand-tokens.md §Font.
+   */
+  fontDisplay: string;
   fontBody: string;
   fontHeading: string;
+  fontLabel: string;
+  /** Menu header, tombol, dan logotipe teks. */
+  fontNav: string;
   headingWeight: string;
   headingLetterSpacing: string;
+  /** Huruf judul (Bacha & Wetzel's resmi: kapital). */
+  headingTransform: 'none' | 'uppercase';
+  /** Huruf menu header & tombol (Bacha & Wetzel's resmi: kapital). */
+  navTransform: 'none' | 'uppercase';
+  /** Tebal menu & tombol. Font satu bobot (PB Signature, Londrina) = '400' agar browser tidak membuat tebal palsu. */
+  uiWeight: string;
+  /** Tebal logotipe teks di header. */
+  logoWeight: string;
   logoTransform: 'none' | 'uppercase';
   logoLetterSpacing: string;
   radius: string;
@@ -115,13 +141,17 @@ export interface Brand {
   id: BrandId;
   name: string;
   tagline: string;
-  /** Teks logo (logo grafis resmi menyusul dari tim brand). */
+  /** Teks logo (dipakai bila tanpa logo grafis, atau di samping logo bertipe `mark`). */
   logoText: string;
   /**
-   * Path logo SVG resmi same-origin (mis. `/brands/<id>/logo.svg` di public/). null = pakai `logoText`.
-   * File logo TIDAK disalin dari situs brand; hanya dari tim brand pemegang aset.
+   * Path logo resmi same-origin (`/brands/<id>/<nama>.svg|png` di public/). null = pakai `logoText`.
+   * Sumber file dicatat di public/brands/README.md (file dari tim brand / pemegang hak brand Indonesia).
    */
   logoSrc: string | null;
+  /** `wordmark` = logo berisi nama brand (tampil sendiri); `mark` = lencana/monogram (tampil + `logoText`). */
+  logoKind: 'wordmark' | 'mark';
+  /** Petunjuk mode pre-order (lib/order-modes.ts); tidak ada -> petunjuk bawaan per jenis usaha. */
+  preorderHint?: string;
   /** Prefix subdomain untuk pencocokan di domain apa pun (mis. `grandlucky.` -> grandlucky). null = tidak ada. */
   subdomain: string | null;
   /** Prefix subdomain lama yang masih diterima (mis. `mart.` -> grandlucky) agar tautan/bookmark dev lama tidak putus. */
@@ -146,18 +176,38 @@ export const DEFAULT_BRAND_ID: BrandId = 'efn';
 
 const SANS_SYSTEM = "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
 const SERIF_SYSTEM = "Georgia, 'Times New Roman', Times, serif";
+const MONO_SYSTEM = "ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace";
+
+/*
+ * Font per brand (diukur dari situs resmi lewat getComputedStyle, 24 Okt 2026; detail docs/design/brand-tokens.md §Font).
+ * Semua file self-host di public/fonts/<brand>/ (@font-face: app/fonts.css). Font proprietary (PB Signature,
+ * PB Special Elite, ITC Quorum) disalin dari situs brand atas keputusan user 24 Okt 2026 (EFN pemegang hak brand di
+ * Indonesia; risiko lisensi ditanggung pemilik proyek) — ganti dengan file berlisensi resmi dari tim brand bila ada.
+ *   PB (parisbaguette.com): h1 & menu "PB Signature Bold Display", h2/h3 "PB Special Elite", teks Roboto.
+ *   Bacha (bachacoffee.com): judul ITC Quorum 500/700 kapital, teks & menu Lora.
+ *   Wetzel's (wetzels.com): judul, menu & tombol Londrina Solid kapital (OFL), teks Roboto (OFL).
+ *   GrandLucky (grandlucky.co.id): Lato (OFL) untuk semua peran.
+ */
+const PB_DISPLAY = `'PB Signature Display', 'Fraunces Variable', ${SERIF_SYSTEM}`;
+const PB_SPECIAL = `'PB Special Elite', 'Courier New', ${MONO_SYSTEM}`;
+const QUORUM = `'ITC Quorum', ${SERIF_SYSTEM}`;
+const LORA = `'Bacha Lora', ${SERIF_SYSTEM}`;
+const ROBOTO = `Roboto, ${SANS_SYSTEM}`;
+const LATO = `Lato, ${SANS_SYSTEM}`;
+const LONDRINA = `'Londrina Solid', 'Arial Black', ${SANS_SYSTEM}`;
 
 export const BRANDS: Record<BrandId, Brand> = {
   efn: {
     id: 'efn',
     name: 'EFN Super-App',
-    tagline: 'Belanja GrandLucky, Paris Baguette, dan Bacha Coffee dalam satu aplikasi.',
+    tagline: "Belanja GrandLucky, Paris Baguette, Bacha Coffee, dan Wetzel's Pretzels dalam satu aplikasi.",
     logoText: 'EFN',
     logoSrc: null,
+    logoKind: 'wordmark',
     subdomain: 'app',
     subdomainAliases: [],
     hosts: ['app.efn.local', 'efn.local', 'localhost'],
-    companies: ['GL', 'PB', 'BCR', 'BCF'],
+    companies: ['GL', 'PB', 'BCR', 'BCF', 'WTZ'],
     brandCode: null,
     hero: {
       eyebrow: 'Erajaya Food & Nourishment',
@@ -184,10 +234,17 @@ export const BRANDS: Record<BrandId, Brand> = {
       text: '#ffffff',
       textMuted: '#bfe0da',
       border: '#2a6b63',
+      fontDisplay: `'Fraunces Variable', ${SERIF_SYSTEM}`,
       fontBody: `'Geist Variable', Inter, ${SANS_SYSTEM}`,
       fontHeading: `'Fraunces Variable', ${SERIF_SYSTEM}`,
+      fontLabel: `'Geist Mono Variable', ${MONO_SYSTEM}`,
+      fontNav: `'Geist Variable', Inter, ${SANS_SYSTEM}`,
       headingWeight: '500',
       headingLetterSpacing: '-0.02em',
+      headingTransform: 'none',
+      navTransform: 'none',
+      uiWeight: '600',
+      logoWeight: '800',
       logoTransform: 'uppercase',
       logoLetterSpacing: '0.08em',
       radius: '10px',
@@ -200,6 +257,7 @@ export const BRANDS: Record<BrandId, Brand> = {
     tagline: 'Supermarket premium: buah, sayur, dan seafood segar, lokal maupun impor.',
     logoText: 'GrandLucky',
     logoSrc: null,
+    logoKind: 'wordmark',
     subdomain: 'grandlucky',
     subdomainAliases: ['mart'],
     hosts: ['grandlucky.efn.local'],
@@ -224,10 +282,17 @@ export const BRANDS: Record<BrandId, Brand> = {
       text: '#1c2033',
       textMuted: '#4d5268',
       border: '#d3d6e8',
-      fontBody: `Lato, ${SANS_SYSTEM}`,
-      fontHeading: `Lato, ${SANS_SYSTEM}`,
+      fontDisplay: LATO,
+      fontBody: LATO,
+      fontHeading: LATO,
+      fontLabel: LATO,
+      fontNav: LATO,
       headingWeight: '800',
       headingLetterSpacing: 'normal',
+      headingTransform: 'none',
+      navTransform: 'none',
+      uiWeight: '700',
+      logoWeight: '800',
       logoTransform: 'none',
       logoLetterSpacing: 'normal',
       radius: '8px',
@@ -239,7 +304,9 @@ export const BRANDS: Record<BrandId, Brand> = {
     name: 'Paris Baguette',
     tagline: 'Bakery café: roti, kue, dan minuman yang dibuat segar setiap hari.',
     logoText: 'Paris Baguette',
-    logoSrc: null,
+    // Logo resmi dari user (Downloads/PB Logo, 24 Okt 2026): lencana bulat navy berhuruf PB -> tampil + logoText.
+    logoSrc: '/brands/parisbaguette/logo.png',
+    logoKind: 'mark',
     subdomain: 'parisbaguette',
     subdomainAliases: ['kitchen'],
     hosts: ['parisbaguette.efn.local'],
@@ -252,8 +319,8 @@ export const BRANDS: Record<BrandId, Brand> = {
     },
     // Warna resmi situs parisbaguette.co.id (dicek 21 Okt 2026): navy #002663 (header/footer/judul), putih, biru muda
     // #aebcd3 (teks sekunder), kuning #fcb134 (aksen); tombol radius 10px + garis 2px. Skema GELAP atas keputusan user
-    // 21 Okt 2026: seluruh situs PB berlatar navy resmi, teks putih, aksi kuning. Font resmi "PB Signature" proprietary
-    // -> pengganti Fraunces (OFL, self-host) sampai tim brand memberi file berlisensi.
+    // 21 Okt 2026: seluruh situs PB berlatar navy resmi, teks putih, aksi kuning. Font = font resmi parisbaguette.com
+    // (PB Signature Display / PB Special Elite / Roboto, self-host; lihat komentar font di atas).
     // Kontras WCAG (diuji tests/brands.test.ts): putih/#002663 14.41, #aebcd3/#002663 7.50, kuning/#002663 7.88,
     // navy di atas kuning 7.88, putih/#0c3170 (kartu) 12.43, #aebcd3/#0c3170 6.47, kuning/#0c3170 6.80.
     theme: {
@@ -270,12 +337,19 @@ export const BRANDS: Record<BrandId, Brand> = {
       text: '#ffffff',
       textMuted: '#aebcd3',
       border: '#34548c',
-      fontBody: `'Geist Variable', Inter, ${SANS_SYSTEM}`,
-      fontHeading: `'Fraunces Variable', ${SERIF_SYSTEM}`,
-      headingWeight: '500',
-      headingLetterSpacing: '-0.02em',
+      fontDisplay: PB_DISPLAY,
+      fontBody: ROBOTO,
+      fontHeading: PB_SPECIAL,
+      fontLabel: PB_SPECIAL,
+      fontNav: PB_DISPLAY,
+      headingWeight: '400',
+      headingLetterSpacing: 'normal',
+      headingTransform: 'none',
+      navTransform: 'none',
+      uiWeight: '400',
+      logoWeight: '400',
       logoTransform: 'uppercase',
-      logoLetterSpacing: '0.08em',
+      logoLetterSpacing: '0.04em',
       radius: '10px',
       cardShadow: '0 12px 32px rgba(0, 10, 40, 0.35)',
     },
@@ -286,6 +360,7 @@ export const BRANDS: Record<BrandId, Brand> = {
     tagline: 'Rumah kopi Maroko sejak 1910.',
     logoText: 'Bacha Coffee',
     logoSrc: null,
+    logoKind: 'wordmark',
     subdomain: 'bacha',
     subdomainAliases: [],
     hosts: ['bacha.efn.local'],
@@ -296,28 +371,94 @@ export const BRANDS: Record<BrandId, Brand> = {
       title: 'Kopi pilihan dari rumah kopi bersejarah Maroko',
       lead: 'Belanja kopi dan merchandise dari butik, atau pesan dari kafe Bacha Coffee. Butik dan kafe dikelola dua PT berbeda, jadi rinciannya ditampilkan terpisah di keranjang.',
     },
+    // Warna & font = bachacoffee.com/en (diukur getComputedStyle 24 Okt 2026): latar halaman #ffeee2, navy #1a2548
+    // (header, teks), oranye #e07e27 (tombol, aksen judul kecil); judul ITC Quorum kapital, teks Lora.
+    // Kontras (tests/brands.test.ts): navy/#ffeee2 13.25, #585c6e/#ffeee2 5.86, oranye/navy 5.12 (garis aksen header).
     theme: {
       scheme: 'light',
       chrome: '#1a2548',
       chromeContrast: '#fffef1',
       primary: '#1a2548',
       primaryContrast: '#fffef1',
-      accent: '#ae944d',
+      accent: '#e07e27',
       accentSoft: '#ffe7d5',
       focus: '#1a2548',
       surface: '#fffef1',
-      surfaceAlt: '#fbf6ec',
+      surfaceAlt: '#ffeee2',
       text: '#1a2548',
       textMuted: '#585c6e',
       border: '#e2d6b8',
-      fontBody: `Lora, ${SERIF_SYSTEM}`,
-      fontHeading: SERIF_SYSTEM,
-      headingWeight: '400',
-      headingLetterSpacing: '0.02em',
+      fontDisplay: QUORUM,
+      fontBody: LORA,
+      fontHeading: QUORUM,
+      fontLabel: QUORUM,
+      fontNav: LORA,
+      headingWeight: '500',
+      headingLetterSpacing: '0.03em',
+      headingTransform: 'uppercase',
+      navTransform: 'uppercase',
+      uiWeight: '400',
+      logoWeight: '500',
       logoTransform: 'uppercase',
       logoLetterSpacing: '0.2em',
       radius: '2px',
       cardShadow: 'none',
+    },
+  },
+  wetzels: {
+    id: 'wetzels',
+    name: "Wetzel's Pretzels",
+    tagline: 'Pretzel hangat yang dipilin tangan dan dipanggang segar.',
+    logoText: "Wetzel's Pretzels",
+    // Logo dari wetzels.com (assets/img/nav/logo.svg, biru #003783) — hak eksklusif brand Indonesia dipegang Erajaya
+    // (docs/04 §16). Tampil di header kuning seperti situs resmi.
+    logoSrc: '/brands/wetzels/logo.svg',
+    logoKind: 'wordmark',
+    preorderHint: 'Paket katering, pilih jadwal ambil',
+    subdomain: 'wetzels',
+    subdomainAliases: [],
+    hosts: ['wetzels.efn.local'],
+    companies: ['WTZ'],
+    brandCode: 'WTZ',
+    hero: {
+      eyebrow: 'Pretzel hangat, dibuat di depan Anda',
+      title: 'Pretzel hangat, dipilin dengan tangan',
+      lead: 'Pretzel, bitz, dan lemonade favorit dipanggang segar. Pesan dari ponsel lalu ambil di gerai, atau pre-order paket katering untuk acara Anda.',
+    },
+    // Warna = wetzels.com (diukur getComputedStyle 24 Okt 2026): biru #004089 (bilah atas, footer, tombol biru, judul),
+    // kuning #fed900 (navigasi, latar halaman, tombol kuning berteks biru), biru muda #b7e5f0 (latar judul). Skema GELAP
+    // biru (pola PB: landing & halaman dalam satu bahasa visual), header kuning seperti situs resmi (globals.css
+    // `html[data-brand='wetzels']`). Kontras WCAG (tests/brands.test.ts): putih/#004089 10.03, #b7e5f0/#004089 7.39,
+    // kuning/#004089 7.23, putih/#0a4c97 8.42, #b7e5f0/#0a4c97 6.21, kuning/#0a4c97 6.07.
+    theme: {
+      scheme: 'dark',
+      chrome: '#004089',
+      chromeContrast: '#ffffff',
+      primary: '#fed900',
+      primaryContrast: '#004089',
+      accent: '#fed900',
+      accentSoft: '#08488f',
+      focus: '#fed900',
+      surface: '#0a4c97',
+      surfaceAlt: '#004089',
+      text: '#ffffff',
+      textMuted: '#b7e5f0',
+      border: '#3f72b0',
+      fontDisplay: LONDRINA,
+      fontBody: ROBOTO,
+      fontHeading: LONDRINA,
+      fontLabel: LONDRINA,
+      fontNav: LONDRINA,
+      headingWeight: '400',
+      headingLetterSpacing: '0.01em',
+      headingTransform: 'uppercase',
+      navTransform: 'uppercase',
+      uiWeight: '400',
+      logoWeight: '400',
+      logoTransform: 'uppercase',
+      logoLetterSpacing: 'normal',
+      radius: '10px',
+      cardShadow: '0 12px 32px rgba(0, 20, 60, 0.35)',
     },
   },
 };
@@ -386,10 +527,17 @@ const THEME_VARS: ReadonlyArray<readonly [keyof BrandTheme, string, keyof typeof
   ['text', '--color-text', 'color'],
   ['textMuted', '--color-text-muted', 'color'],
   ['border', '--color-border', 'color'],
+  ['fontDisplay', '--font-display', 'font'],
   ['fontBody', '--font-body', 'font'],
   ['fontHeading', '--font-heading', 'font'],
+  ['fontLabel', '--font-label', 'font'],
+  ['fontNav', '--font-nav', 'font'],
   ['headingWeight', '--heading-weight', 'weight'],
   ['headingLetterSpacing', '--heading-letter-spacing', 'spacing'],
+  ['headingTransform', '--heading-transform', 'transform'],
+  ['navTransform', '--nav-transform', 'transform'],
+  ['uiWeight', '--ui-weight', 'weight'],
+  ['logoWeight', '--logo-weight', 'weight'],
   ['logoTransform', '--logo-transform', 'transform'],
   ['logoLetterSpacing', '--logo-letter-spacing', 'spacing'],
   ['radius', '--radius', 'length'],
@@ -419,9 +567,9 @@ export function safeScheme(theme: BrandTheme): 'light' | 'dark' {
   return theme.scheme === 'dark' ? 'dark' : 'light';
 }
 
-/** Logo hanya dari path same-origin di public/brands/<id>/ (CSP `img-src 'self'`); selain itu null -> logo teks. */
-export function safeLogoSrc(brand: Brand): string | null {
+/** Logo hanya dari path same-origin di public/brands/<id>/ (svg/png; CSP `img-src 'self'`); selain itu null -> logo teks. */
+export function safeLogoSrc(brand: Pick<Brand, 'logoSrc'>): string | null {
   const src = brand.logoSrc;
   if (typeof src !== 'string') return null;
-  return /^\/brands\/[a-z0-9-]{1,32}\/[a-z0-9-]{1,64}\.svg$/.test(src) ? src : null;
+  return /^\/brands\/[a-z0-9-]{1,32}\/[a-z0-9-]{1,64}\.(svg|png)$/.test(src) ? src : null;
 }

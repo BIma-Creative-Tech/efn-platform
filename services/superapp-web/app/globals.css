@@ -21,12 +21,19 @@
   --card-shadow: none;
   --space: 1rem;
   --max-width: 64rem;
-  /* Tipografi per brand (lib/brands.ts -> themeToCssVars). Hanya font sistem/terpasang: CSP `font-src 'self'`.
-     Font resmi berlisensi (PB Signature, ITC Quorum, dst.) menyusul lewat @font-face dari public/fonts. */
+  /* Tipografi per brand (lib/brands.ts -> themeToCssVars): display (h1), heading (h2/h3), body, label (kapital kecil),
+     nav (menu, tombol, logotipe). File font self-host di public/fonts (app/fonts.css); CSP `font-src 'self'`. */
   --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-heading: var(--font-body);
+  --font-display: var(--font-heading);
+  --font-label: var(--font-body);
+  --font-nav: var(--font-body);
   --heading-weight: 800;
   --heading-letter-spacing: normal;
+  --heading-transform: none;
+  --nav-transform: none;
+  --ui-weight: 600;
+  --logo-weight: 800;
   --logo-transform: none;
   --logo-letter-spacing: normal;
   font-family: var(--font-body);
@@ -91,7 +98,11 @@ h3 {
   font-family: var(--font-heading);
   font-weight: var(--heading-weight);
   letter-spacing: var(--heading-letter-spacing);
+  text-transform: var(--heading-transform);
   line-height: 1.25;
+}
+h1 {
+  font-family: var(--font-display);
 }
 
 /* UX-03: indikator fokus memakai --color-focus (≥ 3:1 terhadap latar brand), bukan --color-accent
@@ -189,8 +200,9 @@ html[data-scheme='dark'] .site-header :focus-visible {
   padding-bottom: 0.75rem;
 }
 .brand-logo {
-  font-family: var(--font-heading);
-  font-weight: 800;
+  font-family: var(--font-nav);
+  gap: 0.625rem;
+  font-weight: var(--logo-weight);
   font-size: 1.25rem;
   text-transform: var(--logo-transform);
   letter-spacing: var(--logo-letter-spacing);
@@ -204,6 +216,9 @@ html[data-scheme='dark'] .site-header :focus-visible {
   display: block;
   height: 2rem;
   width: auto;
+}
+.brand-logo img[data-kind='mark'] {
+  height: 2.5rem;
 }
 /* UX-02: tautan halaman aktif ditandai visual + aria-current (bukan warna saja). */
 .site-nav a[aria-current='page'] {
@@ -222,14 +237,16 @@ html[data-scheme='dark'] .site-header :focus-visible {
 .site-nav a {
   color: var(--color-chrome-contrast);
   text-decoration: none;
-  font-weight: 600;
+  font-family: var(--font-nav);
+  text-transform: var(--nav-transform);
+  font-weight: var(--ui-weight);
   /* Target sentuh ≥ 44px tinggi di ponsel (WCAG 2.5.5); menu membungkus ke baris berikut bila sempit. */
   display: inline-block;
   padding: 0.625rem 0.25rem;
 }
 html[data-scheme='dark'] .site-nav a {
   color: var(--color-text-muted);
-  font-weight: 500;
+  font-weight: min(500, var(--ui-weight));
 }
 html[data-scheme='dark'] .site-nav a:hover,
 html[data-scheme='dark'] .site-nav a[aria-current='page'] {
@@ -399,7 +416,10 @@ main > .container:has(> [data-landing]) {
 
 .btn {
   font: inherit;
-  font-weight: 700;
+  font-family: var(--font-nav);
+  text-transform: var(--nav-transform);
+  /* Per brand (--ui-weight): GrandLucky 700, Bacha 400 (Lora kapital, seperti situs resmi), PB/Wetzel's 400. */
+  font-weight: var(--ui-weight);
   display: inline-block;
   min-height: 2.75rem; /* UX-06: target sentuh ≥ 44px */
   border: 2px solid var(--color-primary);
@@ -504,7 +524,8 @@ main > .container:has(> [data-landing]) {
 html[data-scheme='dark'] {
   --max-width: 74rem;
   --space: clamp(1.25rem, 4vw, 3rem);
-  --font-mono: 'Geist Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  /* Label/angka mengikuti font label brand (EFN: Geist Mono; PB: PB Special Elite; Wetzel's: Londrina Solid). */
+  --font-mono: var(--font-label, 'Geist Mono Variable'), ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
 }
 html[data-scheme='dark'] body {
   -webkit-font-smoothing: antialiased;
@@ -554,7 +575,7 @@ html[data-scheme='dark'] .btn {
   border-radius: 999px;
   min-height: 3rem;
   padding: 0.6875rem 1.5rem;
-  font-weight: 600;
+  font-weight: var(--ui-weight);
   letter-spacing: 0.01em;
   box-shadow: 0 10px 24px -12px color-mix(in oklab, var(--color-primary) 70%, transparent);
   transition:
@@ -662,6 +683,59 @@ html[data-scheme='dark'] .site-footer a {
 html[data-scheme='dark'] {
   scrollbar-color: var(--color-border) var(--color-chrome);
 }
+
+/* Wetzel's (wetzels.com, diukur 24 Okt 2026): navigasi berlatar KUNING #fed900 dengan logo & menu biru #004089 (7.23:1),
+   di atas bilah biru; footer biru dengan pita pola pretzel kuning. Hanya brand ini; brand lain tidak berubah. */
+html[data-brand='wetzels'] .site-header {
+  background: var(--color-accent);
+  border-top: 0.5rem solid var(--color-chrome);
+  border-bottom: 0;
+  backdrop-filter: none;
+}
+html[data-brand='wetzels'] .site-header .site-nav a,
+html[data-brand='wetzels'] .site-header .brand-logo {
+  color: var(--color-chrome);
+}
+html[data-brand='wetzels'] .site-header .site-nav a[aria-current='page'] {
+  color: var(--color-chrome);
+  text-decoration-color: var(--color-chrome);
+}
+html[data-brand='wetzels'] .site-header :focus-visible {
+  outline-color: var(--color-chrome);
+}
+html[data-brand='wetzels'] .site-nav a {
+  font-size: 1.125rem;
+  letter-spacing: 0.01em;
+}
+html[data-brand='wetzels'] .brand-logo img {
+  height: 2.75rem;
+}
+html[data-brand='wetzels'] .site-footer {
+  border-top: 0;
+  background:
+    url('/brands/wetzels/pattern-pretzels.png') repeat-x 0 0 / 160px,
+    linear-gradient(var(--color-accent) 0 6.5rem, var(--color-chrome) 6.5rem);
+  padding-top: 8rem;
+}
+/* PB (parisbaguette.com): footer navy dengan tekstur grunge putih tipis. */
+html[data-brand='parisbaguette'] .site-footer {
+  background: url('/brands/parisbaguette/pb-grunge.png') repeat 0 0 / 400px, var(--color-chrome);
+}
+.brand-logo-text {
+  line-height: 1;
+}
+/* Ponsel: lencana logo saja (nama brand tetap di aria-label tautan) agar header tidak bertambah tinggi (diukur PB 217 px). */
+@media (max-width: 30rem) {
+  .brand-logo-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
 
 @media (prefers-reduced-motion: reduce) {
   html[data-scheme='dark'] .btn {

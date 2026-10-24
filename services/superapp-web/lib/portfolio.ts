@@ -9,8 +9,10 @@
  *   PR Newswire (Wetzel's Pretzels: hak eksklusif Indonesia), Bisnis.com 2 Okt 2026 (I'm Donut ? dari Jepang, Q4 2026),
  *   The Star 7 Agu 2026 + CNBC Indonesia (Oriental Kopi dari Malaysia, gerai pertama ditargetkan akhir 2026).
  *
- * Logo: HANYA file resmi dari tim brand / Erajaya, disimpan same-origin di `public/brands/<id>/logo.(svg|png)` lalu
- * diisi di `logo`. Tidak disalin dari situs brand (aturan proyek, lihat Brand.logoSrc). null -> logotipe teks.
+ * Logo: file resmi same-origin di `public/brands/<id>/logo.(svg|png)` (sumber per file: public/brands/README.md) lalu
+ * diisi di `logo`. Dinding & deretan logo merender logo sebagai siluet putih (CSS filter), jadi hanya logo bertipe
+ * wordmark tanpa latar (Wetzel's) yang dipakai di sini; lencana bulat PB tetap logotipe teks. null -> logotipe teks.
+ * G24 (24 Okt 2026): Wetzel's Pretzels kini tenant Super-App (`wetzels.`, PT WTZ) -> status online.
  */
 
 export type PortfolioStatus = 'online' | 'store' | 'soon';
@@ -30,7 +32,7 @@ export interface PortfolioBrand {
   /** Path logo same-origin `/brands/<id>/<nama>.(svg|png)`; null = logotipe teks. */
   logo: string | null;
   /** Tenant/brand Super-App yang punya katalog online (BrandId), atau null. */
-  tenant: 'parisbaguette' | 'bacha' | 'grandlucky' | null;
+  tenant: 'parisbaguette' | 'bacha' | 'grandlucky' | 'wetzels' | null;
 }
 
 export const PORTFOLIO: readonly PortfolioBrand[] = [
@@ -84,10 +86,10 @@ export const PORTFOLIO: readonly PortfolioBrand[] = [
     category: 'Pretzel',
     origin: 'Amerika Serikat',
     line: 'Pretzel hangat yang dipilin tangan, dibuat di depan Anda.',
-    status: 'store',
+    status: 'online',
     eta: null,
-    logo: null,
-    tenant: null,
+    logo: '/brands/wetzels/logo.svg',
+    tenant: 'wetzels',
   },
   {
     id: 'curryup',

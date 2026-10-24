@@ -1,12 +1,13 @@
 import type { CSSProperties, ReactNode } from 'react';
 import type { Metadata, Viewport } from 'next';
 import Link from 'next/link';
-// Font self-host same-origin (CSP `font-src 'self'`), OFL-1.1. Hanya dipakai brand yang menyebutnya di fontBody/fontHeading
-// (saat ini PB); browser hanya mengunduh file bila family dipakai.
+// Font self-host same-origin (CSP `font-src 'self'`). Fraunces/Geist (OFL-1.1, EFN holding) dari @fontsource; font brand
+// (PB, Bacha, Wetzel's, GrandLucky) dari public/fonts lewat app/fonts.css. Browser hanya mengunduh file bila family dipakai.
 import '@fontsource-variable/fraunces/full.css';
 import '@fontsource-variable/fraunces/wght-italic.css';
 import '@fontsource-variable/geist';
 import '@fontsource-variable/geist-mono';
+import './fonts.css';
 import { getBrand } from '@/lib/brand-server';
 import { safeScheme, themeToCssVars } from '@/lib/brands';
 import { SiteHeader } from '@/components/SiteHeader';

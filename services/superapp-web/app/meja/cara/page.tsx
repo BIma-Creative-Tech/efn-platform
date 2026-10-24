@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { brandHasFnb } from '@/lib/booking';
+import { brandHasTableService } from '@/lib/booking';
 import { getBrand } from '@/lib/brand-server';
 
 export const metadata: Metadata = { title: 'Makan di tempat' };
@@ -12,7 +12,7 @@ export const metadata: Metadata = { title: 'Makan di tempat' };
  */
 export default async function CaraMakanDiTempatPage() {
   const brand = await getBrand();
-  if (!brandHasFnb(brand)) notFound();
+  if (!brandHasTableService(brand)) notFound();
   return (
     <div className="stack" style={{ maxWidth: '40rem', margin: '0 auto', width: '100%' }}>
       <h1 style={{ margin: 0 }}>Makan di tempat</h1>
