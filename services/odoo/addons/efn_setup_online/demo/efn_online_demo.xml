@@ -5,12 +5,13 @@
        PB  (PT Paris Baguette, company_fnb)     nonaktif (Q-ON2), outlet RESTO-01 wajib FP non-dine-in kota, brand PB;
        BCR (Bacha Coffee Retail, company_bcr)   nonaktif tanpa outlet, brand BACHA, mode confirm;
        BCF (Bacha Coffee F&B, company_bcf)      nonaktif tanpa outlet, brand BACHA, outlet wajib FP.
+       WTZ (PT Wetzel's Pretzels, company_wtz)  G24: nonaktif, outlet kios WTZ-01 (gudang OL04, FP non-dine-in), brand WTZ.
      Kanal G17-G19 RTL / FNB / RTL-GL / RTL-BACHA / FNB-PB / FNB-BACHA DIHAPUS (DB dev dibuat ulang, §12.1).
      brand_code (E-37a) tetap: GL, PB, BACHA (dua kanal Bacha berbagi brand untuk Super-App satu domain).
      - Batas bayar Odoo 70 menit (G19 W-02: BFF 60 + 10).
-     - L-37: SATU user teknis per kanal (efn_online_gl/pb/bcr/bcf), Internal User + grup kanal (SEC-101), satu
+     - L-37: SATU user teknis per kanal (efn_online_gl/pb/bcr/bcf/wtz), Internal User + grup kanal (SEC-101), satu
        company, TANPA API key (key dibuat lewat runbook, tidak pernah di data/repo). Secret BFF:
-       odoo_api_key_online_{gl,pb,bcr,bcf}.
+       odoo_api_key_online_{gl,pb,bcr,bcf,wtz}.
      - L-41 (SEC-131): kanal mode confirm (GL, BCR) wajib max_order_amount > 0 + max_line_qty (PLACEHOLDER pilot
        Rp5.000.000 / 20 unit).
      - Jurnal bank "Titipan Online - Holding" per PT (ADR-019 A1). Akun default jurnal dibuat otomatis Odoo;
@@ -245,5 +246,54 @@
         <field name="public_name">Kafe Bacha Kota Default (DEMO)</field>
         <field name="warehouse_id" ref="warehouse_online_bcf"/>
         <field name="fiscal_position_id" ref="efn_setup_company.fiscal_position_bcf_non_dine_in"/>
+    </record>
+    <!-- ===== Kanal WTZ - PT Wetzel's Pretzels (G24 W-40, docs/04 §16.1/§16.2, L-91..L-93; kios takeaway, PB1) =====
+         NONAKTIF (L-93: ship OFF). Hanya ambil di gerai (+ bayar di kasir / pre-order berjadwal bila diaktifkan admin);
+         QR meja & reservasi meja tidak berlaku untuk WTZ (L-92). Outlet wajib FP NON-DINE-IN WTZ (tanpa SC, PB1 0 %). -->
+    <record id="journal_titipan_wtz" model="account.journal">
+        <field name="name">Titipan Online - Holding</field>
+        <field name="code">TTPO</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+    </record>
+    <record id="pricelist_online_wtz" model="product.pricelist">
+        <field name="name">Online Wetzel's Pretzels (DEMO)</field>
+        <field name="currency_id" ref="base.IDR"/>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+    </record>
+    <record id="user_online_wtz" model="res.users">
+        <field name="name">Kanal online WTZ (user teknis)</field>
+        <field name="login">efn_online_wtz</field>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+        <field name="company_ids" eval="[Command.set([ref('efn_setup_company.company_wtz')])]"/>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_online_order.group_online_channel')])]"/>
+    </record>
+    <record id="channel_wtz" model="efn.online.channel">
+        <field name="name">Super-App Wetzel's Pretzels</field>
+        <field name="code">WTZ</field>
+        <field name="brand_code">WTZ</field>
+        <field name="active" eval="False"/>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+        <field name="pricelist_id" ref="pricelist_online_wtz"/>
+        <field name="partner_id" ref="partner_superapp_wtz"/>
+        <field name="team_id" ref="team_superapp_wtz"/>
+        <field name="cash_rounding_id" ref="cash_rounding_idr_1"/>
+        <field name="journal_titipan_id" ref="journal_titipan_wtz"/>
+        <field name="require_outlet_fiscal_position" eval="True"/>
+        <field name="stock_check">none</field>
+        <field name="payment_timeout_minutes">70</field>
+        <field name="user_ids" eval="[Command.set([ref('user_online_wtz')])]"/>
+    </record>
+    <record id="warehouse_online_wtz" model="stock.warehouse">
+        <field name="name">Kios Wetzel's Online (DEMO)</field>
+        <field name="code">OL04</field>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+    </record>
+    <record id="outlet_wtz_01" model="efn.online.outlet">
+        <field name="channel_id" ref="channel_wtz"/>
+        <field name="code">WTZ-01</field>
+        <field name="public_name">Kios Wetzel's Pretzels Kota Default (DEMO)</field>
+        <field name="warehouse_id" ref="warehouse_online_wtz"/>
+        <field name="fiscal_position_id" ref="efn_setup_company.fiscal_position_wtz_non_dine_in"/>
     </record>
 </odoo>

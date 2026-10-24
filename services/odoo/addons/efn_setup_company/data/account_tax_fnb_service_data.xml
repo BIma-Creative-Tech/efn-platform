@@ -175,4 +175,75 @@
         <field name="tax_ids" eval="[(6, 0, [ref('tax_pb1_non_dine_in_bcf')])]"/>
         <field name="note">&lt;p&gt;Bawa pulang, 3PL, pickup, online Super-App kota default Bacha Coffee F&amp;amp;B: tanpa service charge, PB1 0 % (18-1; bisa diubah tanpa kode). Dipakai preset POS "Bawa pulang (Bacha F&amp;amp;B)" dan fiscal position outlet kanal online BCF.&lt;/p&gt;</field>
     </record>
+
+    <!-- ===== G24 W-40 (docs/04 §16.1, L-91): PT Wetzel's Pretzels (WTZ) — pola sama PB/BCF, record per company
+         (sufiks _wtz). Gerai kios/takeaway: kanal online & preset POS memakai FP non-dine-in (tanpa SC, PB1 0 %); FP
+         dine-in tetap dibuat agar gerai dengan kursi tidak butuh kode. Akun PB1 / SC: Finance (Q-2). -->
+    <record id="company_wtz" model="res.company">
+        <field name="account_price_include">tax_excluded</field>
+    </record>
+
+    <record id="tax_group_service_charge_wtz" model="account.tax.group">
+        <field name="name">Service Charge</field>
+        <field name="company_id" ref="company_wtz"/>
+        <field name="sequence">15</field>
+    </record>
+    <record id="tax_service_charge_5_wtz" model="account.tax">
+        <field name="name">Service Charge 5% (dine-in)</field>
+        <field name="invoice_label">Service Charge</field>
+        <field name="type_tax_use">sale</field>
+        <field name="amount_type">percent</field>
+        <field name="amount">5.0</field>
+        <field name="sequence">5</field>
+        <field name="include_base_amount" eval="True"/>
+        <field name="company_id" ref="company_wtz"/>
+        <field name="tax_group_id" ref="tax_group_service_charge_wtz"/>
+        <field name="original_tax_ids" eval="[(6, 0, [ref('tax_pb1_10_wtz')])]"/>
+        <field name="description">&lt;p&gt;Service charge dine-in (bukan pajak negara). Hanya lewat fiscal position "Wetzel's F&amp;amp;B Dine-in". Akun pendapatan SC: Finance (Q-2).&lt;/p&gt;</field>
+    </record>
+
+    <record id="tax_pb1_dine_in_wtz" model="account.tax">
+        <field name="name">PB1 Dine-in 10% (PLACEHOLDER)</field>
+        <field name="invoice_label">PB1</field>
+        <field name="type_tax_use">sale</field>
+        <field name="amount_type">percent</field>
+        <field name="amount">10.0</field>
+        <field name="sequence">10</field>
+        <field name="is_base_affected" eval="True"/>
+        <field name="company_id" ref="company_wtz"/>
+        <field name="tax_group_id" ref="tax_group_pb1_wtz"/>
+        <field name="original_tax_ids" eval="[(6, 0, [ref('tax_pb1_10_wtz')])]"/>
+        <field name="description">&lt;p&gt;PB1 dine-in kota default PT Wetzel's Pretzels. Tarif = PB1 default (PLACEHOLDER, Q-22). DPP termasuk service charge.&lt;/p&gt;</field>
+    </record>
+
+    <record id="tax_pb1_non_dine_in_wtz" model="account.tax">
+        <field name="name">PB1 Non-Dine-in 0%</field>
+        <field name="invoice_label">PB1</field>
+        <field name="type_tax_use">sale</field>
+        <field name="amount_type">percent</field>
+        <field name="amount">0.0</field>
+        <field name="sequence">10</field>
+        <field name="is_base_affected" eval="True"/>
+        <field name="company_id" ref="company_wtz"/>
+        <field name="tax_group_id" ref="tax_group_pb1_wtz"/>
+        <field name="original_tax_ids" eval="[(6, 0, [ref('tax_pb1_10_wtz')])]"/>
+        <field name="description">&lt;p&gt;Keputusan pemilik proyek 18 Okt 2026 (18-1): PB1 hanya untuk dine-in; bawa pulang, 3PL, ambil sendiri, dan online tidak dikenakan PB1 (0 %). Bisa diubah tanpa kode (R-L09, risiko diterima pemilik proyek).&lt;/p&gt;</field>
+    </record>
+
+    <record id="fiscal_position_wtz_dine_in" model="account.fiscal.position">
+        <field name="name">Wetzel's F&amp;B Dine-in (PB1 + SC 5%)</field>
+        <field name="company_id" ref="company_wtz"/>
+        <field name="sequence">20</field>
+        <field name="auto_apply" eval="False"/>
+        <field name="tax_ids" eval="[(6, 0, [ref('tax_service_charge_5_wtz'), ref('tax_pb1_dine_in_wtz')])]"/>
+        <field name="note">&lt;p&gt;Dine-in kota default PT Wetzel's Pretzels: PB1 + service charge 5% (SC masuk DPP PB1). Pasang di preset POS "Makan di tempat (Wetzel's F&amp;amp;B)". Jangan dipakai untuk kanal online.&lt;/p&gt;</field>
+    </record>
+    <record id="fiscal_position_wtz_non_dine_in" model="account.fiscal.position">
+        <field name="name">Wetzel's F&amp;B Non-Dine-in (tanpa SC, PB1 0%)</field>
+        <field name="company_id" ref="company_wtz"/>
+        <field name="sequence">21</field>
+        <field name="auto_apply" eval="False"/>
+        <field name="tax_ids" eval="[(6, 0, [ref('tax_pb1_non_dine_in_wtz')])]"/>
+        <field name="note">&lt;p&gt;Bawa pulang, 3PL, pickup, online Super-App kota default PT Wetzel's Pretzels: tanpa service charge, PB1 0 % (18-1; bisa diubah tanpa kode). Dipakai preset POS "Bawa pulang (Wetzel's F&amp;amp;B)" dan fiscal position outlet kanal online WTZ.&lt;/p&gt;</field>
+    </record>
 </odoo>

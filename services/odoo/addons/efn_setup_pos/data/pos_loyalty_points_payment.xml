@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- G18 W-01 / E-30 (docs/08 §9.2; kontrak docs/04 §9.9 K-18-1): metode bayar "Poin EFN" per PT POS (GL, PB; G20 W-32: + BCR, BCF).
+<!-- G18 W-01 / E-30 (docs/08 §9.2; kontrak docs/04 §9.9 K-18-1): metode bayar "Poin EFN" per PT POS (GL, PB; G20 W-32: + BCR, BCF; G24: + WTZ).
      Penanda pos.payment.method.efn_is_loyalty_points milik efn_pos_loyalty_ledger (E-30, depends modul ini): server
      hanya menerima pembayaran poin dari metode ini lewat tombol "Tukar Poin EFN" (OTP + reservasi BFF); kasir tidak
      bisa memilihnya manual. Penautan ke pos.config.payment_method_ids: models/pos_config_points.py (POS redeem-aktif,
@@ -107,6 +107,29 @@
         <field name="payment_method_type">none</field>
         <field name="split_transactions" eval="False"/>
         <field name="outstanding_account_id" ref="account_points_liability_bcf"/>
+        <field name="efn_is_loyalty_points" eval="True"/>
+    </record>
+    <!-- ===== G24 W-40 (docs/04 §16.1): PT Wetzel's Pretzels (WTZ) ===== -->
+    <record id="account_points_liability_wtz" model="account.account">
+        <field name="name">Liabilitas / Kliring Poin EFN (PLACEHOLDER Q-F18-3)</field>
+        <field name="code">21990091</field>
+        <field name="account_type">liability_current</field>
+        <field name="reconcile" eval="False"/>
+        <field name="company_ids" eval="[(6, 0, [ref('efn_setup_company.company_wtz')])]"/>
+    </record>
+    <record id="journal_points_wtz" model="account.journal">
+        <field name="name">Poin EFN</field>
+        <field name="code">PEFN</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+    </record>
+    <record id="pos_payment_method_points_wtz" model="pos.payment.method">
+        <field name="name">Poin EFN</field>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+        <field name="journal_id" ref="journal_points_wtz"/>
+        <field name="payment_method_type">none</field>
+        <field name="split_transactions" eval="False"/>
+        <field name="outstanding_account_id" ref="account_points_liability_wtz"/>
         <field name="efn_is_loyalty_points" eval="True"/>
     </record>
     <!-- Holding & Farming tidak punya POS -> tidak dibuat. -->

@@ -2,7 +2,8 @@
     "name": "EFN Core",
     "summary": "Fondasi addons EFN: atribut multi-company, parameter sistem, klien HTTP ke BFF.",
     # 19.0.1.7.0 (G20 W-32/E-43): kode company EFN/GL/PB/BCR/BCF/FARM (docs/04 §12.1).
-    "version": "19.0.1.7.0",
+    # 19.0.1.8.0 (G24 W-40): kode company ke-7 WTZ (PT Wetzel's Pretzels, fnb; docs/04 §16.1).
+    "version": "19.0.1.8.0",
     "category": "EFN",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031, CLAUDE.md).

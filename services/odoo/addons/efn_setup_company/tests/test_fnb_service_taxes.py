@@ -123,3 +123,26 @@ class TestBcfServiceTaxes(TestFnbServiceTaxes):
                 self.assertEqual(record.company_id, self.company)
                 self.assertNotEqual(record.company_id, pb)
         self.assertNotEqual(self.pb1.tax_group_id, self.env.ref("efn_setup_company.tax_group_pb1_fnb"))
+
+
+@tagged("post_install", "-at_install", "efn")
+class TestWtzServiceTaxes(TestFnbServiceTaxes):
+    """G24 W-40 (docs/04 §16.1, L-91): PT Wetzel's Pretzels = PB1 + SC dengan record sendiri (sufiks _wtz)."""
+
+    COMPANY = "company_wtz"
+    SUFFIX = "wtz"
+
+    def test_records_do_not_leak_across_fnb_companies(self):
+        others = self.env.ref("efn_setup_company.company_fnb") | self.env.ref("efn_setup_company.company_bcf")
+        for record in (self.pb1, self.sc, self.pb1_dine_in, self.pb1_non_dine_in, self.fp_dine_in, self.fp_non_dine_in):
+            with self.subTest(record=record.display_name):
+                self.assertEqual(record.company_id, self.company)
+                self.assertNotIn(record.company_id, others)
+        for suffix in ("fnb", "bcf"):
+            self.assertNotEqual(self.pb1.tax_group_id, self.env.ref(f"efn_setup_company.tax_group_pb1_{suffix}"))
+
+    def test_wtz_is_root_fnb_company_with_chart(self):
+        self.assertFalse(self.company.parent_id)
+        self.assertEqual((self.company.efn_brand_code, self.company.efn_business_type), ("WTZ", "fnb"))
+        self.assertEqual(self.company.chart_template, "id")
+        self.assertIn(self.company, self.env.ref("base.user_admin").company_ids)

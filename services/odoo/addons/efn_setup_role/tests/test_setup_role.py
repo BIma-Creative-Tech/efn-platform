@@ -16,9 +16,10 @@ COMPANIES = {
     "pb": "efn_setup_company.company_fnb",
     "bcr": "efn_setup_company.company_bcr",
     "bcf": "efn_setup_company.company_bcf",
+    "wtz": "efn_setup_company.company_wtz",  # G24 W-40 (docs/04 §16.1)
     "farm": "efn_setup_company.company_farm",
 }
-POS_COMPANIES = ("gl", "pb", "bcr", "bcf")
+POS_COMPANIES = ("gl", "pb", "bcr", "bcf", "wtz")
 CK_COMPANIES = ("pb", "bcf")
 
 # kode jabatan (efn_setup_org) -> grup eksplisit peran (docs/08 §12.2b + §13.4).

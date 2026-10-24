@@ -11,7 +11,7 @@
      (saat install = OdooBot), tidak bermakna untuk templat.
      Nama orang TIDAK ada di data (18-24, 18-40).
 
-     xmlid: job_<kode>_<pt>, pt = efn | gl | pb | bcr | bcf | farm. Kode jabatan (dipakai efn_role & test):
+     xmlid: job_<kode>_<pt>, pt = efn | gl | pb | bcr | bcf | wtz | farm. Kode jabatan (dipakai efn_role & test):
        director, finance_manager, finance_staff, store_manager, cashier, merchandiser, procurement,
        warehouse_staff, courier, cs_agent, cs_refund_approver, sales_manager_online, loyalty_manager,
        superadmin, auditor -->
@@ -623,6 +623,128 @@
         <field name="sequence">150</field>
         <field name="department_id" ref="dept_audit_bcf"/>
         <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+
+    <!-- ===================== PT Wetzel's Pretzels (WTZ; G24 W-40, docs/04 §16.1) ===================== -->
+    <record id="job_director_wtz" model="hr.job">
+        <field name="name">Direktur</field>
+        <field name="sequence">10</field>
+        <field name="department_id" ref="dept_board_wtz"/>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_finance_manager_wtz" model="hr.job">
+        <field name="name">Finance Manager</field>
+        <field name="sequence">20</field>
+        <field name="department_id" ref="dept_finance_wtz"/>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_finance_staff_wtz" model="hr.job">
+        <field name="name">Staf Finance</field>
+        <field name="sequence">30</field>
+        <field name="department_id" ref="dept_finance_wtz"/>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_store_manager_wtz" model="hr.job">
+        <field name="name">Store Manager</field>
+        <field name="sequence">40</field>
+        <field name="department_id" ref="dept_store_wtz"/>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cashier_wtz" model="hr.job">
+        <field name="name">Kasir</field>
+        <field name="sequence">50</field>
+        <field name="department_id" ref="dept_store_wtz"/>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_merchandiser_wtz" model="hr.job">
+        <field name="name">Merchandiser</field>
+        <field name="sequence">60</field>
+        <field name="department_id" ref="dept_merch_wtz"/>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_procurement_wtz" model="hr.job">
+        <field name="name">Staf Pengadaan</field>
+        <field name="sequence">70</field>
+        <field name="department_id" ref="dept_merch_wtz"/>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_warehouse_staff_wtz" model="hr.job">
+        <field name="name">Staf Gudang</field>
+        <field name="sequence">80</field>
+        <field name="department_id" ref="dept_warehouse_wtz"/>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_courier_wtz" model="hr.job">
+        <field name="name">Kurir</field>
+        <field name="sequence">90</field>
+        <field name="department_id" ref="dept_warehouse_wtz"/>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cs_agent_wtz" model="hr.job">
+        <field name="name">Staf CS</field>
+        <field name="sequence">100</field>
+        <field name="department_id" ref="dept_cs_wtz"/>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_cs_refund_approver_wtz" model="hr.job">
+        <field name="name">Approver Refund CS</field>
+        <field name="sequence">110</field>
+        <field name="department_id" ref="dept_cs_wtz"/>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_sales_manager_online_wtz" model="hr.job">
+        <field name="name">Sales Manager Online</field>
+        <field name="sequence">120</field>
+        <field name="department_id" ref="dept_online_wtz"/>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_loyalty_manager_wtz" model="hr.job">
+        <field name="name">Loyalty Manager</field>
+        <field name="sequence">130</field>
+        <field name="department_id" ref="dept_online_wtz"/>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_superadmin_wtz" model="hr.job">
+        <field name="name">Superadmin IT</field>
+        <field name="sequence">140</field>
+        <field name="department_id" ref="dept_it_wtz"/>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+        <field name="no_of_recruitment">0</field>
+        <field name="user_id" eval="False"/>
+    </record>
+    <record id="job_auditor_wtz" model="hr.job">
+        <field name="name">Auditor Internal</field>
+        <field name="sequence">150</field>
+        <field name="department_id" ref="dept_audit_wtz"/>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
         <field name="no_of_recruitment">0</field>
         <field name="user_id" eval="False"/>
     </record>

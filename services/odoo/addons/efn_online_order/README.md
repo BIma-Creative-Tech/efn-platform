@@ -128,8 +128,8 @@ terlalu berat/tidak terlayani), R-B06 (penyalahgunaan reservasi lewat pesanan be
   19.0.1.3.0 (quote yang berjalan saat deploy tetap sah).
 - **Katalog:** item bertambah `weight_kg` (float kg 3 desimal, `null` bila produk tanpa berat).
 - **L-46 / SEC-144 (sisa L-47):** constraint kode kanal kini juga menolak akhiran `-FILE`.
-- Help/pesan kode kanal memakai contoh `GL, PB, BCR, BCF` (kode kanal = kode PT, L-48). `company_code` di katalog,
-  quote, dan event = `efn_brand_code` company (kini `GL`/`PB`/`BCR`/`BCF`/…; tanpa perubahan kode).
+- Help kode kanal memakai contoh `GL, PB, BCR, BCF, WTZ` (kode kanal = kode PT, L-48; WTZ sejak G24 §16.1). `company_code` di katalog,
+  quote, dan event = `efn_brand_code` company (kini `GL`/`PB`/`BCR`/`BCF`/`WTZ`/…; tanpa perubahan kode).
 - Tidak ada migrasi: kolom baru memakai default (0 / `block`) → kanal lama tidak berubah perilaku.
 - **Koordinasi:** builder C (E-45 `payment_mode`) juga menyentuh modul ini; versi berikutnya ≥ 19.0.1.5.0.
 

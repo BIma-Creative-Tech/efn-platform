@@ -12,7 +12,7 @@
      Nama orang TIDAK ada di data (18-24, 18-40): manajer & karyawan diisi klien lewat UI.
      Nama tanpa " / " karena complete_name 19.0 memakai " / " sebagai pemisah hierarki.
 
-     xmlid: dept_<kode>_<pt>, pt = efn | gl | pb | bcr | bcf | farm (kode entitas 18-41; xmlid company lama
+     xmlid: dept_<kode>_<pt>, pt = efn | gl | pb | bcr | bcf | wtz | farm (kode entitas 18-41; xmlid company lama
      company_rtl = GL, company_fnb = PB dipertahankan L-48). -->
 <odoo noupdate="1">
 
@@ -204,6 +204,44 @@
     <record id="dept_audit_bcf" model="hr.department">
         <field name="name">Audit Internal</field>
         <field name="company_id" ref="efn_setup_company.company_bcf"/>
+    </record>
+
+    <!-- ===================== PT Wetzel's Pretzels (WTZ; G24 W-40, docs/04 §16.1) ===================== -->
+    <record id="dept_board_wtz" model="hr.department">
+        <field name="name">Direksi</field>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+    </record>
+    <record id="dept_finance_wtz" model="hr.department">
+        <field name="name">Keuangan &amp; Akuntansi</field>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+    </record>
+    <record id="dept_store_wtz" model="hr.department">
+        <field name="name">Operasional Toko &amp; Outlet</field>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+    </record>
+    <record id="dept_merch_wtz" model="hr.department">
+        <field name="name">Merchandising &amp; Pengadaan</field>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+    </record>
+    <record id="dept_warehouse_wtz" model="hr.department">
+        <field name="name">Gudang &amp; Logistik</field>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+    </record>
+    <record id="dept_cs_wtz" model="hr.department">
+        <field name="name">Layanan Pelanggan (CS)</field>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+    </record>
+    <record id="dept_online_wtz" model="hr.department">
+        <field name="name">Penjualan Online &amp; Loyalty</field>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+    </record>
+    <record id="dept_it_wtz" model="hr.department">
+        <field name="name">IT</field>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+    </record>
+    <record id="dept_audit_wtz" model="hr.department">
+        <field name="name">Audit Internal</field>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
     </record>
 
     <!-- ===================== FARM ===================== -->

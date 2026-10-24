@@ -168,12 +168,13 @@ class TestEfnPointsPaymentMethodData(TransactionCase):
         return self.env["pos.config"].with_company(company).create({"name": "POS Uji Poin", **vals})
 
     def test_points_method_per_pt(self):
-        # G20 W-32 (docs/04 §12.1): 4 PT ber-POS = GL (rtl), PB (fnb), BCR, BCF.
+        # G20 W-32 (docs/04 §12.1): PT ber-POS = GL (rtl), PB (fnb), BCR, BCF; G24 (§16.1): + WTZ.
         for suffix, company_xmlid in (
             ("rtl", "company_rtl"),
             ("fnb", "company_fnb"),
             ("bcr", "company_bcr"),
             ("bcf", "company_bcf"),
+            ("wtz", "company_wtz"),  # G24 W-40 (docs/04 §16.1)
         ):
             with self.subTest(pt=suffix):
                 method = self._method(suffix)
@@ -191,7 +192,7 @@ class TestEfnPointsPaymentMethodData(TransactionCase):
 
     def test_points_journal_payment_lines_use_pt_liability_account(self):
         """G22 L-79: baris metode masuk/keluar jurnal Poin EFN tiap PT = akun liabilitas/kliring Poin EFN PT itu."""
-        for suffix in ("rtl", "fnb", "bcr", "bcf"):
+        for suffix in ("rtl", "fnb", "bcr", "bcf", "wtz"):
             with self.subTest(pt=suffix):
                 journal = self.env.ref(f"efn_setup_pos.journal_points_{suffix}")
                 account = self.env.ref(f"efn_setup_pos.account_points_liability_{suffix}")

@@ -5,7 +5,9 @@
         "tanpa nama orang. Dasar pemetaan jabatan -> peran akses (efn_role, W-31)."
     ),
     # 19.0.1.0.0 (G21 W-31, docs/04 §13.3 no. 1, keputusan 18-24/18-40, L-64).
-    "version": "19.0.1.0.0",
+    # 19.0.1.1.0 (G24 W-40, docs/04 §16.1): templat departemen & jabatan PT ke-7 WTZ (sufiks _wtz; noupdate, dibuat
+    # juga saat upgrade karena xmlid baru).
+    "version": "19.0.1.1.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",
