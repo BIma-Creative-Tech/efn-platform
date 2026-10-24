@@ -17,9 +17,10 @@ adalah partner company grup (dasar eliminasi inter-company). Label baris (`name`
 (bisa memuat nama pelanggan). Semua state (draft/posted/cancel) dimuat agar transisi posted->draft/cancel menimpa
 versi lama; view hanya menjumlah `posted`.
 
-G20 (W-32, docs/04 §12.1, ADR-001 revisi): 6 entitas root EFN/GL/PB/BCR/BCF/FARM. `dim_company` bertambah
-`business_type` (holding|retail|fnb|farm) dan `brand_group` (BCR+BCF = BACHA); view konsolidasi mengklasifikasi
-relasi antar-entitas (`ic_relation`: tp_holding | tp_bacha | non_tp | unknown) dan view rekonsiliasi pasangan
+G20 (W-32, docs/04 §12.1, ADR-001 revisi): 6 entitas root EFN/GL/PB/BCR/BCF/FARM (G24 §16.1: + WTZ).
+`dim_company` bertambah `business_type` (holding|retail|fnb|farm) dan `brand_group` (BCR+BCF = BACHA); view
+konsolidasi mengklasifikasi relasi antar-entitas (`ic_relation`: tp_holding | tp_bacha | non_tp | unknown) dan view
+rekonsiliasi pasangan
 `v_gl_ic_recon` — infra/clickhouse/init/08-g20-entities.sql.
 """
 

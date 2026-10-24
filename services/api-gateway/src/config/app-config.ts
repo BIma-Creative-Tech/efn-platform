@@ -1409,8 +1409,8 @@ export class AppConfig {
     return this.bool('ONLINE_CATALOG_ENABLED', this.onlineEnabled);
   }
   /**
-   * Kanal aktif di BFF (`ONLINE_CHANNELS=GL,PB,BCR,BCF`), format `channel_code` §10.2. G20 §12.1 (L-48): kode kanal =
-   * kode PT; default `GL` (kode lama `RTL`/`FNB` dihapus).
+   * Kanal aktif di BFF (`ONLINE_CHANNELS=GL,PB,BCR,BCF,WTZ`), format `channel_code` §10.2. G20 §12.1 (L-48): kode kanal =
+   * kode PT; default `GL` (kode lama `RTL`/`FNB` dihapus). G24 §16.1: `WTZ` tidak di default (L-93, ship OFF).
    */
   /**
    * G22 §14.A.6: kanal yang katalognya disalin BFF = `ONLINE_CHANNELS` ∪ PT QR meja (`FNB_QR_COMPANIES` bila
@@ -2146,6 +2146,7 @@ export class AppConfig {
 }
 
 /** G22 §14.A.4: PT F&B yang memakai QR meja. */
+// G24 §16.2 (L-92): WTZ (F&B kios/takeaway) SENGAJA tidak di sini — QR meja & reservasi hanya PB/BCF.
 export const FNB_COMPANY_CODES = ['PB', 'BCF'] as const;
 export type FnbCompanyCode = (typeof FNB_COMPANY_CODES)[number];
 export function isFnbCompanyCode(v: unknown): v is FnbCompanyCode {

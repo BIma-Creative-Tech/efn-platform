@@ -1,7 +1,7 @@
 -- Tabel tambahan ETL (services/etl, ADR-003, ADR-020). Dijalankan setelah 01-schema.sql.
 
 -- Event ledger poin (append-only di platform.loyalty_ledger). Hanya hash member (dihitung BFF); tidak ada nomor HP.
--- company_code = PT penanggung liabilitas poin (ADR-020, settlement antar-PT): EFN | GL | PB | BCR | BCF | FARM
+-- company_code = PT penanggung liabilitas poin (ADR-020, settlement antar-PT): EFN | GL | PB | BCR | BCF | WTZ | FARM
 -- (G20, docs/04 §12.1; RTL/FNB dihapus).
 -- G18/W-19 (PDP v7, Q-P7 vs Q-6): member_hash dianonimkan (TTL kolom -> '') setelah CH_PSEUDONYM_RETENTION_YEARS,
 -- baris tetap 10 th. ClickHouse menolak TTL pada kolom kunci ("Trying to set TTL for key column", diuji 24.8.14) ->

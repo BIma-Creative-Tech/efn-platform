@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-# Kode PT (G20: EFN, GL, PB, BCR, BCF, FARM) = efn_etl.entities.COMPANY_CODES.
+# Kode PT (G20: EFN, GL, PB, BCR, BCF, FARM; G24: + WTZ) = efn_etl.entities.COMPANY_CODES.
 from efn_etl.entities import company_code
 from efn_etl.region import (
     REGION_JOIN_OFF,

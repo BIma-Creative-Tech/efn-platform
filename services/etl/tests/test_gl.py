@@ -163,13 +163,14 @@ def test_transform_account_and_company() -> None:
         ("PB", "fnb", "PB"),
         ("BCR", "retail", "BACHA"),
         ("BCF", "fnb", "BACHA"),
+        ("WTZ", "fnb", "WTZ"),  # G24 §16.1
         ("FARM", "farm", "FARM"),
         (" bcf ", "fnb", "BACHA"),  # dinormalisasi
         (None, "", ""),  # company tanpa kode PT (mis. company bawaan Odoo)
         ("", "", ""),
     ],
 )
-def test_transform_company_six_entities(code: object, business_type: str, brand_group: str) -> None:
+def test_transform_company_seven_entities(code: object, business_type: str, brand_group: str) -> None:
     out = dict(zip(COMPANY_COLUMNS, transform_company(_company(brand=code)), strict=True))
     assert (out["business_type"], out["brand_group"]) == (business_type, brand_group)
     assert out["brand"] == ("" if code is None else str(code).strip().upper())

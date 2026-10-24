@@ -42,7 +42,8 @@ import {
  *
  * G20 (docs/04 §12.1): kanal = kode PT — `GL` (brand GL), `PB` (brand PB), `BCR` & `BCF` (brand BACHA). Kode lama
  * `RTL`/`FNB`/`RTL-GL`/… DIHAPUS. Mode bayar demo (§12.2, `paymentModes`): GL qris+counter, PB qris, BCR qris+counter,
- * BCF counter saja (pilot tanpa vendor). Batas berat demo (§12.3, `maxOrderWeightKg`): BCF 10 kg (`block`), kanal lain
+ * BCF counter saja (pilot tanpa vendor); G24 §16.1/§16.2: `WTZ` (brand WTZ, fnb kios) qris+counter, pre-order
+ * berjadwal seperti PB/BCF. Batas berat demo (§12.3, `maxOrderWeightKg`): BCF 10 kg (`block`), kanal lain
  * mati. Bayar di kasir (L-56): `place` mode `counter` WAJIB membawa `order.counter_code` buatan BFF (stub menyimpan
  * hash-nya saja, tidak mengembalikannya); `payAtCounter(ref, code?)` meniru sync POS (E-45) → `confirmed` (+ event
  * `paid` yang dibangun test/simulasi).
@@ -90,6 +91,7 @@ const MOCK_CHANNELS: Readonly<Record<string, { company: string; brand: string | 
   PB: { company: 'PB', brand: 'PB', name: 'Paris Baguette (demo)' },
   BCR: { company: 'BCR', brand: 'BACHA', name: 'Bacha Coffee Butik (demo)' },
   BCF: { company: 'BCF', brand: 'BACHA', name: 'Bacha Coffee Kafe (demo)' },
+  WTZ: { company: 'WTZ', brand: 'WTZ', name: "Wetzel's Pretzels (demo)" },
 };
 /** Mode bayar default kanal demo (§12.2 no. 1) — PLACEHOLDER. */
 const MOCK_PAYMENT_MODES: Readonly<Record<string, ('qris' | 'counter')[]>> = {
@@ -97,6 +99,7 @@ const MOCK_PAYMENT_MODES: Readonly<Record<string, ('qris' | 'counter')[]>> = {
   PB: ['qris'],
   BCR: ['qris', 'counter'],
   BCF: ['counter'],
+  WTZ: ['qris', 'counter'],
 };
 /** Produk reward Odoo (discount line) demo — id di luar katalog. */
 const REWARD_PRODUCT_ID = 9001;
@@ -235,7 +238,7 @@ export class MockOdooOnline implements OdooOnlineApi {
           },
         ],
         payment_modes: [...(this.paymentModes.get(channel) ?? ['qris'])],
-        business_type: channel === 'PB' || channel === 'BCF' ? 'fnb' : 'retail',
+        business_type: channel === 'PB' || channel === 'BCF' || channel === 'WTZ' ? 'fnb' : 'retail',
         loyalty: { ...(this.loyaltyFlags.get(channel) ?? { earn: true, redeem: true }) },
       },
     };
@@ -385,7 +388,7 @@ export class MockOdooOnline implements OdooOnlineApi {
   }
 
   // ───────────── G23 §15.4: slot ambil pre-order (DEMO: 09:00–17:00 WIB, 60 menit, kapasitas 3, min 4 jam, 7 hari) ─────────────
-  readonly slotChannels = new Set<string>(['PB', 'BCF']);
+  readonly slotChannels = new Set<string>(['PB', 'BCF', 'WTZ']);
   slotCapacity = 3;
   /** jumlah order per `${channel}|${slot}` (meniru hitungan Odoo; order batal tidak dikurangi di stub). */
   readonly slotUsed = new Map<string, number>();

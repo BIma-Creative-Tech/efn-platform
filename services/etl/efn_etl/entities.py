@@ -10,23 +10,26 @@ Kode lama `RTL`/`FNB` dihapus (tidak ada migrasi data: DB dev dibuat ulang, §12
 from typing import Final
 
 # Kode `res.company.efn_brand_code` (= `company_code` ledger BFF).
-COMPANY_CODES: Final = frozenset({"EFN", "GL", "PB", "BCR", "BCF", "FARM"})
+# G24 (docs/04 §16.1, L-91): + WTZ (PT Wetzel's Pretzels, fnb).
+COMPANY_CODES: Final = frozenset({"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "FARM"})
 HOLDING_CODE: Final = "EFN"
 
-# docs/04 §12.1: GL,BCR -> retail; PB,BCF -> fnb; EFN -> holding; FARM -> farm.
+# docs/04 §12.1/§16.1: GL,BCR -> retail; PB,BCF,WTZ -> fnb; EFN -> holding; FARM -> farm.
 BUSINESS_TYPES: Final[dict[str, str]] = {
     "EFN": "holding",
     "GL": "retail",
     "PB": "fnb",
     "BCR": "retail",
     "BCF": "fnb",
+    "WTZ": "fnb",
     "FARM": "farm",
 }
 
 # Laporan per brand: Bacha = gabungan BCR + BCF (ADR-001 revisi §6; brand_code kanal E-37a `BACHA`).
 BRAND_GROUPS: Final[dict[str, str]] = {"BCR": "BACHA", "BCF": "BACHA"}
 
-# Pasangan transfer pricing cost-plus (18-3, W-15): hanya BCR <-> BCF dan Holding <-> setiap PT.
+# Pasangan transfer pricing cost-plus (18-3, W-15): hanya BCR <-> BCF dan Holding <-> setiap PT (G24: WTZ <-> PT lain
+# = non_tp, brand_group WTZ sendiri).
 BACHA_TP_PAIR: Final = frozenset({"BCR", "BCF"})
 
 # Nilai `ic_relation` (view konsolidasi). Semua relasi antar-entitas TETAP dieliminasi saat konsolidasi; label hanya
