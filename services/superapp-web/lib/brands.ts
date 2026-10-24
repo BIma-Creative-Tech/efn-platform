@@ -256,7 +256,9 @@ export const BRANDS: Record<BrandId, Brand> = {
     name: 'GrandLucky Superstore',
     tagline: 'Supermarket premium: buah, sayur, dan seafood segar, lokal maupun impor.',
     logoText: 'GrandLucky',
-    logoSrc: null,
+    // Logo resmi grandlucky.co.id (wp-content/uploads/2015/07/GrandLucky-Logo.png, biru/merah/kuning) -> header PUTIH
+    // seperti situs resmi (globals.css `html[data-brand='grandlucky']`), G25.
+    logoSrc: '/brands/grandlucky/logo.png',
     logoKind: 'wordmark',
     subdomain: 'grandlucky',
     subdomainAliases: ['mart'],
@@ -359,8 +361,10 @@ export const BRANDS: Record<BrandId, Brand> = {
     name: 'Bacha Coffee',
     tagline: 'Rumah kopi Maroko sejak 1910.',
     logoText: 'Bacha Coffee',
-    logoSrc: null,
-    logoKind: 'wordmark',
+    // Lencana unta resmi bachacoffee.com (App_Themes/BachaCore/images/icons/logo-bacha.svg, krem #f6eae2) di header navy,
+    // tampil bersama nama brand (G25).
+    logoSrc: '/brands/bacha/logo.svg',
+    logoKind: 'mark',
     subdomain: 'bacha',
     subdomainAliases: [],
     hosts: ['bacha.efn.local'],
@@ -478,6 +482,20 @@ export function normalizeHost(host: string | null | undefined): string {
   // IPv6 literal `[::1]:3001`
   if (first.startsWith('[')) return first.slice(0, first.indexOf(']') + 1);
   return first.replace(/:\d+$/, '').replace(/\.$/, '');
+}
+
+/**
+ * Host tempat override brand dev (`?brand=` + cookie `efn_dev_brand`, proxy.ts) boleh MENEMPEL: hanya host tanpa
+ * nama domain brand (localhost, IP, nama tanpa titik). Di domain bernama (`app.efn.local`, `bacha.efn.local`, ...)
+ * cookie lama tidak dipakai — sebelumnya cookie `?brand=parisbaguette` yang tertinggal membuat `app.efn.local`
+ * tampil sebagai situs Paris Baguette tanpa batas waktu.
+ */
+export function isDevOverrideHost(host: string | null | undefined): boolean {
+  const h = normalizeHost(host);
+  if (!h) return true;
+  if (h === 'localhost' || h.startsWith('[')) return true;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return true;
+  return !h.includes('.');
 }
 
 /**

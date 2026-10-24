@@ -13,6 +13,11 @@
   --l-bg: var(--color-surface-alt);
   --l-card: var(--color-surface);
   --l-accent: var(--color-accent);
+  /* G25: aksen dipisah jadi teks (ink), bidang (fill) & teks di atas bidang (on-fill); bawaan = aksen tema (PB/Wetzel's).
+     Brand terang (Bacha, GrandLucky) mengisi lewat `palette` di lib/landing-config.ts (style inline). */
+  --l-ink: var(--l-accent);
+  --l-fill: var(--l-accent);
+  --l-on-fill: var(--color-chrome);
   --l-text: var(--color-text);
   --l-mute: var(--color-text-muted);
   --l-faint: color-mix(in oklab, var(--color-text-muted) 78%, var(--l-bg));
@@ -53,7 +58,7 @@
 .kickerRule {
   width: 2.5rem;
   height: 1px;
-  background: var(--l-accent);
+  background: var(--l-fill);
 }
 
 /* ---------- Scroll story (v5: desain v3 dipertahankan, kartu foto di zona aman berseberangan dengan teks) ---------- */
@@ -126,7 +131,7 @@
   position: absolute;
   inset: 10% 0;
   border-radius: 50%;
-  background: radial-gradient(closest-side, color-mix(in oklab, var(--l-accent) 22%, transparent), transparent 72%);
+  background: radial-gradient(closest-side, color-mix(in oklab, var(--l-fill) 22%, transparent), transparent 72%);
   filter: blur(30px);
   opacity: 0;
   transition: opacity 600ms var(--l-ease);
@@ -158,7 +163,7 @@
 .frontCard:hover {
   box-shadow:
     0 56px 90px -30px rgb(0 0 0 / 0.72),
-    0 0 0 2px var(--l-accent);
+    0 0 0 2px var(--l-fill);
 }
 .photoFrame {
   position: relative;
@@ -316,7 +321,7 @@
 }
 .wordEm {
   font-style: italic;
-  color: var(--l-accent);
+  color: var(--l-ink);
   font-variation-settings: normal;
 }
 @keyframes wordRise {
@@ -373,13 +378,13 @@
     box-shadow 240ms var(--l-ease);
 }
 .ctaPrimary {
-  background: var(--l-accent);
-  color: var(--color-chrome);
-  box-shadow: 0 12px 30px -12px color-mix(in oklab, var(--l-accent) 70%, transparent);
+  background: var(--l-fill);
+  color: var(--l-on-fill);
+  box-shadow: 0 12px 30px -12px color-mix(in oklab, var(--l-fill) 70%, transparent);
 }
 .ctaPrimary:hover {
   transform: translateY(-1px);
-  box-shadow: 0 18px 40px -14px color-mix(in oklab, var(--l-accent) 85%, transparent);
+  box-shadow: 0 18px 40px -14px color-mix(in oklab, var(--l-fill) 85%, transparent);
 }
 .ctaGhost {
   color: var(--l-text);
@@ -424,7 +429,7 @@
   content: '';
   width: 1px;
   height: 2.25rem;
-  background: linear-gradient(var(--l-accent), transparent);
+  background: linear-gradient(var(--l-fill), transparent);
   transform-origin: top;
   animation: cue 2.4s var(--l-ease) infinite;
 }
@@ -512,7 +517,7 @@
   gap: 0.6em;
   min-height: 2.75rem;
   font-weight: 600;
-  color: var(--l-accent);
+  color: var(--l-ink);
   text-decoration: none;
 }
 .chapterLink span {
@@ -587,8 +592,8 @@
   color: var(--l-text);
 }
 .hudNav a[aria-current='step'] {
-  background: var(--l-accent);
-  color: var(--color-chrome);
+  background: var(--l-fill);
+  color: var(--l-on-fill);
 }
 .hudNum {
   opacity: 0.7;
@@ -607,7 +612,7 @@
 }
 .hudBarFill {
   height: 100%;
-  background: var(--l-accent);
+  background: var(--l-fill);
   transform-origin: left;
 }
 
@@ -676,7 +681,7 @@
 }
 .cat:hover {
   background: var(--l-text);
-  color: var(--color-chrome);
+  color: var(--l-bg);
 }
 
 /* Rak = lebar grid konten (.inner). Tepi kiri & kanan kartu sejajar judul; tombol panah di atas kanan. */
@@ -716,7 +721,7 @@
 }
 .railBtn:hover:not(:disabled) {
   background: var(--l-text);
-  color: var(--color-chrome);
+  color: var(--l-bg);
 }
 .railBtn:disabled {
   opacity: 0.35;
@@ -786,7 +791,7 @@
   color: var(--l-text);
 }
 .railCard:hover .railName {
-  color: var(--l-accent);
+  color: var(--l-ink);
 }
 .railPrice {
   font-family: var(--l-mono);
@@ -891,7 +896,7 @@
   font-family: var(--l-mono);
   font-size: 0.75rem;
   letter-spacing: 0.14em;
-  color: var(--l-accent);
+  color: var(--l-ink);
   margin-bottom: 1.5rem;
 }
 .stepTitle {
@@ -942,7 +947,7 @@
 
 .final {
   background:
-    radial-gradient(70% 90% at 15% 100%, color-mix(in oklab, var(--l-accent) 14%, transparent), transparent 70%),
+    radial-gradient(70% 90% at 15% 100%, color-mix(in oklab, var(--l-fill) 14%, transparent), transparent 70%),
     var(--l-bg);
   border-top: 1px solid var(--l-line);
 }
@@ -964,7 +969,7 @@
   text-wrap: balance;
 }
 .finalTitle em {
-  color: var(--l-accent);
+  color: var(--l-ink);
 }
 .finalBody {
   margin: 0 0 1.75rem;
@@ -1122,4 +1127,159 @@
 }
 :global(html[data-brand='parisbaguette']) .landing :is(.chapterTitle, .h2, .stepTitle) {
   letter-spacing: -0.01em;
+}
+
+/* ---------- G25: Bacha Coffee — butik kopi mewah (bachacoffee.com, diukur 24 Okt 2026) ----------
+ * Latar peach #ffeee2, kartu krem #fffef1, navy #1a2548, tombol oranye #e07e27 berteks navy (5.12), aksen teks #9a4a0c.
+ * Sudut tajam (radius 2px situs resmi), garis tipis emas-krem #e2d6b8, judul ITC Quorum kapital berjarak lebar, tanpa
+ * huruf miring (Quorum tidak punya italic). Penutup = foto kampanye resmi di bawah lapisan navy 86%
+ * (terburuk #3a4462: krem 9.48, #e8d9cc 6.98, #f5c08f 5.87, tombol oranye/navy 5.12). */
+:global(html[data-brand='bacha']) .landing :is(.title, .chapterTitle, .h2, .finalTitle, .stepTitle) {
+  font-variation-settings: normal;
+  font-weight: 500;
+  font-synthesis: none;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  line-height: 1.08;
+}
+:global(html[data-brand='bacha']) .landing .title {
+  font-size: clamp(2.25rem, 4.6vw, 4rem);
+}
+:global(html[data-brand='bacha']) .landing :is(.chapterTitle, .h2) {
+  font-size: clamp(1.875rem, 3.4vw, 3rem);
+}
+:global(html[data-brand='bacha']) .landing .finalTitle {
+  font-size: clamp(2rem, 4vw, 3.5rem);
+}
+:global(html[data-brand='bacha']) .landing .stepTitle {
+  font-size: 1.125rem;
+  letter-spacing: 0.08em;
+}
+:global(html[data-brand='bacha']) .landing :is(.wordEm, .finalTitle em) {
+  font-style: normal;
+}
+:global(html[data-brand='bacha']) .landing :is(.photoName, .railName) {
+  font-family: var(--font-body);
+  font-weight: 500;
+  letter-spacing: 0;
+}
+:global(html[data-brand='bacha']) .landing :is(.ctaPrimary, .ctaGhost) {
+  border-radius: 2px;
+  letter-spacing: 0.14em;
+  font-size: 0.8125rem;
+  box-shadow: none;
+}
+:global(html[data-brand='bacha']) .landing .ctaGhost {
+  box-shadow: inset 0 0 0 1px var(--l-text);
+}
+:global(html[data-brand='bacha']) .landing :is(.cat, .hudNav ol, .hudNav a) {
+  border-radius: 2px;
+}
+:global(html[data-brand='bacha']) .landing .frontCard {
+  border-radius: 2px;
+  padding: 0.625rem;
+  background: var(--l-card);
+  box-shadow:
+    0 40px 70px -40px rgb(26 37 72 / 0.55),
+    0 0 0 1px var(--color-border);
+}
+:global(html[data-brand='bacha']) .landing :is(.photoFrame, .railImage) {
+  border-radius: 1px;
+  background: #ffffff;
+}
+:global(html[data-brand='bacha']) .landing .railImage {
+  box-shadow: 0 0 0 1px var(--color-border);
+}
+/* Panggung: sorot hangat + pita ornamen resmi (bacha-coffee-line-header) di cakrawala. */
+:global(html[data-brand='bacha']) .stageBg {
+  background:
+    radial-gradient(70% 55% at 50% 105%, color-mix(in oklab, var(--l-fill) 16%, transparent) 0%, transparent 70%),
+    var(--l-bg);
+}
+:global(html[data-brand='bacha']) .stageBg::after {
+  height: 12px;
+  background: url('/brands/bacha/line-header.png') repeat-x 0 0 / auto 12px;
+  opacity: 0.35;
+}
+:global(html[data-brand='bacha']) .catering,
+:global(html[data-brand='bacha']) .how {
+  background: var(--l-card);
+}
+:global(html[data-brand='bacha']) .final {
+  --l-text: #fffef1;
+  --l-mute: #e8d9cc;
+  --l-ink: #f5c08f;
+  --l-line: rgb(255 254 241 / 0.22);
+  background:
+    linear-gradient(rgb(26 37 72 / 0.86), rgb(26 37 72 / 0.86)),
+    url('/brands/bacha/bg-hero.jpg') center / cover no-repeat,
+    #1a2548;
+  border-top: 0;
+}
+
+/* ---------- G25: GrandLucky — supermarket segar (grandlucky.co.id + logo resmi, diukur 24 Okt 2026) ----------
+ * Latar #f2f3f9 bertekstur kertas resmi (paper_@2X.png, dilapisi 72% latar), kartu putih membulat, Lato 900, tombol biru
+ * #39439b berteks putih (8.57), aksen teks merah logo diperdalam #c42a1c (5.13 di latar, 5.68 di putih).
+ * Penutup = foto \"Fresh\" resmi di bawah lapisan biru 88% (terburuk #515aa7: putih 6.23, #dfe2f5 4.85, #ffe14d 4.79);
+ * tombol penutup kuning logo #f0d000 berteks biru (5.6). */
+:global(html[data-brand='grandlucky']) .landing :is(.title, .chapterTitle, .h2, .finalTitle) {
+  font-variation-settings: normal;
+  font-weight: 900;
+  font-synthesis: none;
+  letter-spacing: -0.025em;
+  line-height: 1.02;
+}
+:global(html[data-brand='grandlucky']) .landing .title {
+  font-size: clamp(2.75rem, 6vw, 5rem);
+}
+:global(html[data-brand='grandlucky']) .landing :is(.stepTitle, .photoName, .railName) {
+  font-variation-settings: normal;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+:global(html[data-brand='grandlucky']) .landing :is(.wordEm, .finalTitle em) {
+  font-style: normal;
+}
+:global(html[data-brand='grandlucky']) .landing .wordEm {
+  /* Penanda stabilo kuning logo di bawah kata penekanan (dekoratif, teks tetap merah tua di latar terang). */
+  background: linear-gradient(transparent 68%, color-mix(in oklab, #f0d000 55%, transparent) 68% 92%, transparent 92%);
+}
+:global(html[data-brand='grandlucky']) .landing :is(.ctaPrimary, .ctaGhost) {
+  border-radius: 8px;
+}
+:global(html[data-brand='grandlucky']) .landing .ctaGhost {
+  box-shadow: inset 0 0 0 1.5px var(--color-chrome);
+  color: var(--color-chrome);
+}
+:global(html[data-brand='grandlucky']) .landing .frontCard {
+  border-radius: 16px;
+  box-shadow:
+    0 30px 60px -28px rgb(28 32 51 / 0.35),
+    0 0 0 1px var(--color-border);
+}
+:global(html[data-brand='grandlucky']) .landing .railImage {
+  border-radius: 14px;
+  box-shadow: 0 0 0 1px var(--color-border);
+}
+:global(html[data-brand='grandlucky']) .stageBg {
+  background:
+    linear-gradient(rgb(242 243 249 / 0.72), rgb(242 243 249 / 0.72)),
+    url('/brands/grandlucky/paper.jpg') repeat 0 0 / 500px,
+    var(--l-bg);
+}
+:global(html[data-brand='grandlucky']) .how {
+  background: var(--l-card);
+}
+:global(html[data-brand='grandlucky']) .final {
+  --l-text: #ffffff;
+  --l-mute: #dfe2f5;
+  --l-ink: #ffe14d;
+  --l-fill: #f0d000;
+  --l-on-fill: #39439b;
+  --l-line: rgb(255 255 255 / 0.22);
+  background:
+    linear-gradient(rgb(57 67 155 / 0.88), rgb(57 67 155 / 0.88)),
+    url('/brands/grandlucky/bg-fresh.jpg') center / cover no-repeat,
+    #39439b;
+  border-top: 0;
 }

@@ -166,12 +166,24 @@ function PhotoCard({
   );
 }
 
-function Hud({ segments, active, progress, visible }: { segments: StorySegment[]; active: number; progress: MotionValue<number>; visible: boolean }) {
+function Hud({
+  segments,
+  active,
+  progress,
+  visible,
+  note,
+}: {
+  segments: StorySegment[];
+  active: number;
+  progress: MotionValue<number>;
+  visible: boolean;
+  note: string;
+}) {
   const chapters = segments.slice(1);
   const pad = (n: number) => String(n).padStart(2, '0');
   return (
     <div className={styles.hud} data-visible={visible ? 'true' : 'false'} inert={!visible}>
-      <p className={styles.hudNote}>Foto: katalog Paris Baguette</p>
+      <p className={styles.hudNote}>{note}</p>
       <nav aria-label="Bab halaman" className={styles.hudNav}>
         <ol>
           {chapters.map((s, i) => (
@@ -198,7 +210,8 @@ function Hud({ segments, active, progress, visible }: { segments: StorySegment[]
 const GUARD_FADE = 56;
 const GUARD_MARGIN = 12;
 
-export function PhotoStory({ segments }: { segments: StorySegment[] }) {
+/** `note` = keterangan sumber foto di HUD (mis. "Foto: katalog Bacha Coffee"). */
+export function PhotoStory({ segments, note = 'Foto: katalog produk' }: { segments: StorySegment[]; note?: string }) {
   const reduce = useReducedMotionSafe();
   const section = useRef<HTMLElement>(null);
   const n = segments.length;
@@ -316,7 +329,7 @@ export function PhotoStory({ segments }: { segments: StorySegment[] }) {
         ))}
       </div>
 
-      <Hud segments={segments} active={active} progress={scrollYProgress} visible={inView} />
+      <Hud segments={segments} active={active} progress={scrollYProgress} visible={inView} note={note} />
     </section>
   );
 }

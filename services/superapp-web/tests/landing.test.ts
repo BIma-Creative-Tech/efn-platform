@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { BRANDS } from '../lib/brands';
-import { categoryHref, chapterStats, findCategory, LANDINGS, landingFor, pickPhotos } from '../lib/landing-config';
+import {
+  categoryHref,
+  chapterStats,
+  DEFAULT_CLOSING,
+  findCategory,
+  LANDINGS,
+  landingFor,
+  modesHeadline,
+  pickPhotos,
+  resolvePalette,
+  splitEmphasis,
+} from '../lib/landing-config';
 
 /** Rasio kontras WCAG 2.x dari dua warna #rrggbb. */
 function contrast(a: string, b: string): number {
@@ -13,12 +24,9 @@ function contrast(a: string, b: string): number {
 }
 
 describe('landing page brand', () => {
-  it('Paris Baguette & Wetzel\'s punya landing; brand lain tetap beranda lama', () => {
-    expect(landingFor('parisbaguette')?.chapters.length).toBeGreaterThan(0);
-    expect(landingFor('wetzels')?.chapters.length).toBeGreaterThan(0);
+  it('PB, Wetzel\'s, Bacha & GrandLucky punya landing modern (G25); holding efn tetap landing Super-App', () => {
+    for (const id of ['parisbaguette', 'wetzels', 'bacha', 'grandlucky'] as const) expect(landingFor(id)?.chapters.length, id).toBeGreaterThan(0);
     expect(landingFor('efn')).toBeNull();
-    expect(landingFor('grandlucky')).toBeNull();
-    expect(landingFor('bacha')).toBeNull();
   });
 
   it('kata penekanan ada di judul hero brand', () => {
@@ -29,17 +37,46 @@ describe('landing page brand', () => {
     }
   });
 
-  it('syarat token landing: aksen & teks di latar/kartu ≥ 4.5:1, teks tombol di aksen ≥ 4.5:1', () => {
-    for (const id of Object.keys(LANDINGS)) {
+  it('syarat token landing: teks aksen (ink) & teks di latar/kartu ≥ 4.5:1, teks tombol di bidang aksen ≥ 4.5:1', () => {
+    for (const [id, cfg] of Object.entries(LANDINGS)) {
       const t = BRANDS[id as keyof typeof BRANDS].theme;
+      const p = resolvePalette(t, cfg!.palette);
       for (const bg of [t.surfaceAlt, t.surface]) {
-        expect(contrast(t.accent, bg)).toBeGreaterThanOrEqual(4.5);
-        expect(contrast(t.text, bg)).toBeGreaterThanOrEqual(4.5);
-        expect(contrast(t.textMuted, bg)).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(p.ink, bg), `${id} ink`).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(t.text, bg), id).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(t.textMuted, bg), id).toBeGreaterThanOrEqual(4.5);
       }
-      expect(contrast(t.chrome, t.accent)).toBeGreaterThanOrEqual(4.5); // teks navy di tombol kuning
-      expect(contrast(t.chrome, '#ffffff')).toBeGreaterThanOrEqual(4.5); // keterangan di kartu foto putih
+      expect(contrast(p.onFill, p.fill), `${id} tombol`).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(t.chrome, '#ffffff'), id).toBeGreaterThanOrEqual(4.5); // keterangan di kartu foto putih
     }
+  });
+
+  it('palet Bacha & GrandLucky dari situs/logo resmi (oranye #e07e27 & biru #39439b sebagai bidang)', () => {
+    expect(LANDINGS.bacha?.palette).toEqual({ ink: '#9a4a0c', fill: '#e07e27', onFill: '#1a2548' });
+    expect(LANDINGS.grandlucky?.palette).toEqual({ ink: '#c42a1c', fill: '#39439b', onFill: '#ffffff' });
+    // Tanpa palet (PB): aksen tema untuk teks & bidang, chrome di atas bidang.
+    expect(resolvePalette(BRANDS.parisbaguette.theme)).toEqual({ ink: '#fcb134', fill: '#fcb134', onFill: '#002663' });
+    // Penutup bergambar: lapisan Bacha navy 86% / GL biru 88% di atas foto putih (kasus terburuk).
+    expect(contrast('#fffef1', '#3a4462')).toBeGreaterThanOrEqual(4.5);
+    expect(contrast('#f5c08f', '#3a4462')).toBeGreaterThanOrEqual(4.5);
+    expect(contrast('#dfe2f5', '#515aa7')).toBeGreaterThanOrEqual(4.5);
+    expect(contrast('#ffe14d', '#515aa7')).toBeGreaterThanOrEqual(4.5);
+    expect(contrast('#39439b', '#f0d000')).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('judul penutup: kata penekanan ada di judul; splitEmphasis tak peka huruf', () => {
+    for (const [id, cfg] of Object.entries(LANDINGS)) {
+      const c = cfg!.closing ?? DEFAULT_CLOSING;
+      expect(splitEmphasis(c.title, c.emphasis)[1], id).not.toBe('');
+    }
+    expect(splitEmphasis('Ambil di Butik.', 'butik')).toEqual(['Ambil di ', 'Butik', '.']);
+    expect(splitEmphasis('Tanpa', 'x')).toEqual(['Tanpa', '', '']);
+  });
+
+  it('modesHeadline: dari mode aktif (bukan teks tetap)', () => {
+    expect(modesHeadline(['Ambil di gerai', 'Pre-order', 'Reservasi meja'])).toBe('Ambil di gerai, pre-order, atau reservasi meja.');
+    expect(modesHeadline(['Ambil di gerai'])).toBe('Ambil di gerai, bayar di aplikasi.');
+    expect(modesHeadline([])).toBeNull();
   });
 
   it('PB memakai warna resmi parisbaguette.co.id (navy #002663, putih, #aebcd3, kuning #fcb134)', () => {

@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BRANDS, COMPANIES, getBrandById, isBrandId, isSafeThemeValue, normalizeHost, resolveBrandIdFromHost, safeLogoSrc, themeToCssVars } from '../lib/brands';
 
@@ -164,11 +166,13 @@ describe('tema per brand (R-T14, token aman untuk atribut style)', () => {
     expect(contrast(t.accent, t.chrome)).toBeGreaterThanOrEqual(3); // garis aksen header (non-teks)
   });
   it('logo hanya path svg/png same-origin di /brands/<id>/', () => {
-    expect(safeLogoSrc(BRANDS.bacha)).toBeNull();
+    expect(safeLogoSrc(BRANDS.bacha)).toBe('/brands/bacha/logo.svg');
+    expect(safeLogoSrc(BRANDS.grandlucky)).toBe('/brands/grandlucky/logo.png');
     expect(safeLogoSrc(BRANDS.parisbaguette)).toBe('/brands/parisbaguette/logo.png');
     expect(safeLogoSrc(BRANDS.wetzels)).toBe('/brands/wetzels/logo.svg');
     expect(safeLogoSrc({ ...BRANDS.bacha, logoSrc: '/brands/bacha/logo.svg' })).toBe('/brands/bacha/logo.svg');
     expect(safeLogoSrc({ ...BRANDS.bacha, logoSrc: '/brands/bacha/logo.gif' })).toBeNull();
+    for (const b of Object.values(BRANDS)) if (b.logoSrc) expect(existsSync(join(__dirname, '../public', b.logoSrc)), b.logoSrc).toBe(true);
     expect(safeLogoSrc({ ...BRANDS.bacha, logoSrc: 'https://cdn.example.com/logo.svg' })).toBeNull();
     expect(safeLogoSrc({ ...BRANDS.bacha, logoSrc: '/brands/../secrets/logo.svg' })).toBeNull();
     expect(safeLogoSrc({ ...BRANDS.bacha, logoSrc: 'javascript:alert(1)' })).toBeNull();
