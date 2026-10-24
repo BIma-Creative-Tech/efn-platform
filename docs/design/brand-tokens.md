@@ -1,6 +1,6 @@
 # Design token per brand — Super-App EFN
 
-Status: **DRAF 20 Okt 2026** (efn-uiux-designer). Sumber nilai: `services/superapp-web/lib/brands.ts` (`BRANDS[*].theme`) → `themeToCssVars()` → atribut `style` di `<html data-brand>`; fallback di `app/globals.css :root`. Komponen sama untuk semua brand (R-T14).
+Status: **DRAF 20 Okt 2026** (efn-uiux-designer); **§6 (font, Wetzel's, 24 Okt 2026) menggantikan baris font & logo di §2/§5**. Sumber nilai: `services/superapp-web/lib/brands.ts` (`BRANDS[*].theme`) → `themeToCssVars()` → atribut `style` di `<html data-brand>`; fallback di `app/globals.css :root`. Komponen sama untuk semua brand (R-T14).
 
 Warna dasar diambil dari situs resmi brand (riset 20 Okt 2026: grandlucky.co.id, parisbaguette.co.id, bachacoffee.com). Warna turunan (latar lembut, teks muted, border) dipilih desainer agar lolos WCAG — **wajib dikonfirmasi tim brand** sebelum go-live.
 
@@ -47,7 +47,7 @@ Warna status bersama (tidak per brand): `--color-danger #b42318`, `--color-succe
 | radius | 10px | 8px | 12px | 2px |
 | cardShadow | none | none | `0 2px 8px rgba(0, 38, 99, 0.08)` | none |
 
-Font: `Lato`/`Inter`/`Lora` di awal stack **hanya dipakai bila terpasang di perangkat** — tidak diunduh (CSP `font-src 'self'`, tanpa Google Fonts). Font proprietary (PB Signature, ITC Quorum) **tidak disalin**. Bila tim brand memberi file berlisensi: taruh di `public/fonts/<brand>/`, tambah `@font-face` di `globals.css`, lalu tambahkan nama family di depan `fontHeading`.
+Font: lihat §6 (sejak 24 Okt 2026 semua font brand self-host di `public/fonts/`, @font-face di `app/fonts.css`).
 
 ## 3. Kontras (dihitung, rumus WCAG 2.x relative luminance)
 
@@ -86,6 +86,45 @@ Aturan copy lintas brand: pajak dijelaskan jujur (ritel: "harga sudah termasuk p
 
 ## 5. Logo & aset
 
-- Saat ini logo = teks bergaya (`Brand.logoText`). Tidak ada file logo/foto/font yang disalin dari situs brand.
-- Logo SVG resmi dari tim brand → `public/brands/<id>/logo.svg`, isi `Brand.logoSrc` (`/brands/<id>/logo.svg`). `safeLogoSrc()` hanya menerima path same-origin berpola itu (CSP `img-src 'self'`).
-- Brand Erajaya lain (Curry Up, CHAGEE, Wetzel's Pretzels) belum punya company di Odoo → **belum ada tenant**; token disiapkan setelah company & kanal dibuat.
+- Logo & tekstur latar: daftar file + sumber di `services/superapp-web/public/brands/README.md`. PB = file resmi dari user (lencana bulat, `logoKind: 'mark'` → tampil bersama nama brand); Wetzel's = logo wetzels.com (`wordmark`). `safeLogoSrc()` menerima `/brands/<id>/<nama>.(svg|png)` saja (CSP `img-src 'self'`).
+- Curry Up dan CHAGEE belum punya company di Odoo → belum ada tenant. Wetzel's Pretzels = tenant `wetzels.` sejak G24 (PT `WTZ`, docs/04 §16).
+
+## 6. Font per brand (G24, 24 Okt 2026)
+
+Diukur dari situs resmi dengan Playwright (`getComputedStyle` + `document.fonts` yang termuat), lalu dipetakan ke 5 peran token:
+
+| Peran (CSS var) | Paris Baguette (parisbaguette.com) | Bacha Coffee (bachacoffee.com/en) | Wetzel's Pretzels (wetzels.com) | GrandLucky (grandlucky.co.id) | EFN holding |
+|---|---|---|---|---|---|
+| `--font-display` (h1, judul hero/penutup) | PB Signature Bold Display | ITC Quorum 500/700, kapital | Londrina Solid, kapital | Lato 800 | Fraunces |
+| `--font-heading` (h2/h3, judul bab) | PB Special Elite | ITC Quorum, kapital | Londrina Solid, kapital | Lato | Fraunces |
+| `--font-body` (teks) | Roboto 300–700 | Lora (file Bacha, family `Bacha Lora`) | Roboto | Lato | Geist |
+| `--font-label` (label kapital kecil, angka) | PB Special Elite | ITC Quorum | Londrina Solid | Lato | Geist Mono |
+| `--font-nav` (menu, tombol, logotipe) | PB Signature Bold Display | Lora, kapital | Londrina Solid, kapital | Lato | Geist |
+
+Token pendukung: `--heading-transform`, `--nav-transform` (kapital untuk Bacha & Wetzel's), `--ui-weight` (400 untuk font satu bobot PB Signature/Londrina agar tidak ada tebal palsu), `--logo-weight`. Jumlah CSS var tema: 27 (diuji `tests/brands.test.ts`).
+
+Pengukuran situs resmi (ringkas): PB — h1 `pb_signaturebold_display` 90px putih, h2/h3 `pb_special_eliteregular` navy `#001871`, teks Roboto 300 18px; parisbaguette.co.id (Singapura/Indonesia) — judul `PB Signature` 700 kapital, teks Inter. Bacha — h1/h2 `ITC Quorum` 500/700 kapital, teks & menu Lora, latar `#ffeee2`, tombol oranye `#e07e27`. Wetzel's — semua judul & tombol `Londrina Solid` kapital (tombol pil radius 80px), teks Roboto, biru `#004089`, kuning `#fed900`, biru muda `#b7e5f0`.
+
+Lisensi: PB Signature, PB Special Elite, ITC Quorum = proprietary, disalin dari situs brand atas keputusan pemilik proyek 24 Okt 2026 (EFN pemegang hak brand di Indonesia; risiko lisensi ditanggung pemilik proyek) — ganti dengan file berlisensi resmi dari tim brand bila ada. Roboto, Lato, Londrina Solid, Lora = OFL. Rincian: `services/superapp-web/public/fonts/README.md`.
+
+### Wetzel's Pretzels — token
+
+| Token | Nilai | Catatan |
+|---|---|---|
+| scheme | `dark` | pola PB: landing & halaman dalam satu bahasa visual biru |
+| chrome / surfaceAlt | `#004089` | biru resmi (bilah atas, footer, latar) |
+| surface / accentSoft | `#0a4c97` / `#08488f` | kartu (turunan) |
+| primary / accent / focus | `#fed900` | kuning resmi; teks tombol `#004089` (7.23:1) |
+| textMuted | `#b7e5f0` | biru muda resmi (7.39:1 di `#004089`) |
+| header | latar kuning `#fed900`, logo & menu biru | seperti navigasi wetzels.com (`html[data-brand='wetzels']` di globals.css) |
+| footer | pita pola pretzel kuning di atas footer biru | pola `pattern-yellow` wetzels.com |
+
+Kontras teks (dihitung): putih/`#004089` 10.03, putih/`#0a4c97` 8.42, `#b7e5f0`/`#0a4c97` 6.21, kuning/`#0a4c97` 6.07, biru logo `#003783`/kuning 8.08 — semua ≥ 4.5:1.
+
+### Tekstur latar section (dari situs resmi)
+
+| Brand | Aset | Dipakai di |
+|---|---|---|
+| PB | `pb-grunge.png` (bagian "Rewards" parisbaguette.com) | panggung scroll story, band katering, penutup, footer |
+| PB | `bg-beige-texture.jpg` (kartu "Featured items") | bingkai kartu foto & rak etalase landing |
+| Wetzel's | `pattern-pretzels.png` (footer `pattern-yellow`) | band katering, penutup, pita footer |
