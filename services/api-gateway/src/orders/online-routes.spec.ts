@@ -160,6 +160,17 @@ describe('Route online (Fastify nyata, prefix /v1)', () => {
     await app.close();
   });
 
+  it('G25: gambar katalog punya kuota sendiri (IMAGE, default 600/menit) — tidak memakan / terblokir kuota CATALOG', async () => {
+    const { app } = await boot({ ONLINE_RL_CATALOG_LIMIT: '2', ONLINE_RL_IMAGE_LIMIT: '3' });
+    const img = (n: number) => app.inject({ method: 'GET', url: `/v1/catalog/images/${String(n).repeat(40)}?size=512` });
+    for (let i = 1; i <= 3; i += 1) expect((await img(i)).statusCode).toBe(200);
+    expect((await img(4)).statusCode).toBe(429);
+    // kuota katalog utuh walau kuota gambar habis
+    for (let i = 0; i < 2; i += 1) expect((await app.inject({ method: 'GET', url: '/v1/catalog/channels' })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/v1/catalog/channels' })).statusCode).toBe(429);
+    await app.close();
+  });
+
   it('cart/quote/order wajib Bearer; no-store; kill switch ONLINE_ENABLED=false → 503 online_unavailable', async () => {
     const { app, bearer } = await boot();
     expect((await app.inject({ method: 'GET', url: '/v1/cart' })).statusCode).toBe(401);

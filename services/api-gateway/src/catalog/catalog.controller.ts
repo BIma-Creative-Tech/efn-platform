@@ -114,7 +114,8 @@ export class CatalogController {
   ): Promise<void> {
     // G22 §14.A.3: gambar menu QR memakai endpoint ini → juga aktif bila FNB_QR_ENABLED walau katalog online mati
     if (!this.config.fnbQrEnabled) requireCatalog(this.config);
-    await limitByIp(this.limiter, this.config, 'CATALOG', req);
+    // G25 (docs/04 §10.3.1): kuota gambar terpisah dari katalog (24–40 foto per halaman).
+    await limitByIp(this.limiter, this.config, 'IMAGE', req);
     const s = size === undefined || size === '' ? 512 : size === '512' ? 512 : size === '1024' ? 1024 : null;
     if (s === null) throw Errors.invalidRequest();
     const data = await this.catalog.image(sha, s);
