@@ -58,6 +58,19 @@ BRANDS = {
             "Accessories": 750000, "Gourmet": 250000, "Gift Sets": 1200000,
         },
     },
+    # G24 (docs/04 §16.1): PT Wetzel's Pretzels (WTZ, F&B PB1). Sumber: scrape_wetzels.py (sitemap + JSON-LD MenuItem).
+    "wetzels": {
+        "prefix": "WTZ",
+        "label": "Wetzel's Pretzels",
+        # Foto situs = PNG RGBA transparan; BFF me-re-encode gambar katalog ke JPEG tanpa flatten (area transparan jadi
+        # hitam) -> importer menempel ke latar putih dulu. Hanya brand ini (hash gambar brand lain tidak berubah).
+        "flatten_bg": "#ffffff",
+        "default_price": 35000,
+        "prices": {
+            "Pretzels": 35000, "Bitz": 32000, "Dogs": 42000, "Stickz": 38000, "Catering": 350000, "Drinks": 28000,
+            "Dips": 8000,
+        },
+    },
     "grandlucky": {
         "prefix": "GL",
         "label": "GrandLucky",
@@ -93,9 +106,12 @@ def parse_weight_kg(item: dict) -> float | None:
     return round(value / 1000.0 if m.group(2).lower() == "g" else value, 3)
 
 
-def encode_image(path: Path) -> str | None:
-    """Resize maks 1024 px; RGBA -> PNG, lainnya -> JPEG q85 (Odoo membuat image_512/1024 sendiri)."""
-    from PIL import Image, ImageOps  # Pillow di host
+def encode_image(path: Path, flatten_bg: str | None = None) -> str | None:
+    """Resize maks 1024 px; RGBA -> PNG, lainnya -> JPEG q85 (Odoo membuat image_512/1024 sendiri).
+
+    ``flatten_bg`` (opsional per brand, mis. ``"#ffffff"``): gambar beralpha ditempel ke warna itu lalu disimpan JPEG q85
+    (tanpa ini BFF me-re-encode PNG transparan ke JPEG dengan latar hitam)."""
+    from PIL import Image, ImageColor, ImageOps  # Pillow di host
 
     if not path.is_file():
         return None
@@ -104,7 +120,11 @@ def encode_image(path: Path) -> str | None:
         img.thumbnail((MAX_IMAGE_PX, MAX_IMAGE_PX))
         buf = io.BytesIO()
         has_alpha = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
-        if has_alpha:
+        if has_alpha and flatten_bg:
+            rgba = img.convert("RGBA")
+            bg = Image.new("RGBA", rgba.size, ImageColor.getrgb(flatten_bg) + (255,))
+            Image.alpha_composite(bg, rgba).convert("RGB").save(buf, "JPEG", quality=85, optimize=True, progressive=True)
+        elif has_alpha:
             img.convert("RGBA").save(buf, "PNG", optimize=True)
         else:
             img.convert("RGB").save(buf, "JPEG", quality=85, optimize=True, progressive=True)
@@ -134,7 +154,7 @@ def build_payload(brand: str, args) -> dict:
             list_price = float(placeholder_price(cfg, category))
         image_b64 = None
         if p.get("image_file") and not args.no_images:
-            image_b64 = encode_image(DATA_ROOT / brand / p["image_file"])
+            image_b64 = encode_image(DATA_ROOT / brand / p["image_file"], cfg.get("flatten_bg"))
         items.append({
             "default_code": f"{cfg['prefix']}-{p['source_id']}",
             "name": p["name"][:200],
@@ -204,7 +224,7 @@ def main() -> int:
     except (AttributeError, ValueError):
         pass
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--brand", required=True, help="parisbaguette | bacha | grandlucky | all")
+    ap.add_argument("--brand", required=True, help="parisbaguette | bacha | wetzels | grandlucky | all")
     ap.add_argument("--dry-run", action="store_true", help="validasi penuh di Odoo lalu rollback")
     ap.add_argument("--verify-only", action="store_true", help="hanya cetak angka verifikasi")
     ap.add_argument("--archive-missing", action="store_true", help="arsipkan produk prefix brand yang hilang dari JSON")
