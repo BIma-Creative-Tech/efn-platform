@@ -169,6 +169,15 @@ Kontrak: `docs/04 §15` (L-85..L-90). Konsep produk & usulan nama: `docs/design/
 
 Keputusan klien baru: Q-BK1..Q-BK7 (`docs/04 §15.10`), nama produk (`superapp-concept.md §1`).
 
+### A.9 Pembaruan 24 Okt 2026 — G24 entitas WTZ (Wetzel's Pretzels)
+Kontrak: `docs/04 §16` (L-91..L-94). Erajaya (EFN) memegang hak eksklusif Wetzel's Pretzels di Indonesia.
+
+| ID | Paket | Agent | Estimasi kasar (minggu-engineer) | Status 24 Okt |
+|---|---|---|---|---|
+| **W-40** | Entitas ke-7 `WTZ` (F&B PB1, kios/takeaway): company + pajak PB1/SC Odoo, kanal online `WTZ` (nonaktif), peran/org/POS per PT, BFF `COMPANY_CODES`, migrasi `13-platform-g24.sql`, ETL/ClickHouse/text2sql, secret & overlay `online-wtz`, katalog demo dari situs resmi (`scripts/brand-catalog/scrape_wetzels.py`) | odoo + bff + data + devsecops | 1–1,5 | dibangun G24; QR meja & reservasi sengaja tidak (L-92) |
+
+Menunggu klien: Q-WTZ1..Q-WTZ4 (`docs/04 §16.6`).
+
 ---
 
 ## Ringkasan manajemen (10 Okt 2026)
