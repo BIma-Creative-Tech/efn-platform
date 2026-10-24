@@ -1,0 +1,11 @@
+# Override kanal online WTZ (PT Wetzel's Pretzels, F&B kios/takeaway; docs/04 §16.1, G24 L-91..L-93: kode kanal = kode PT).
+# Pola docker-compose.online-bcf.yml: API key Odoo kanal ini (`odoo_api_key_online_wtz`, user teknis efn_online_wtz) HANYA
+# di-mount ke BFF saat ONLINE_CHANNELS memuat WTZ (scripts/deploy.sh). Selama kanal mati (default, L-93) file ini TIDAK
+# disertakan. Pembuatan & rotasi key: docs/runbooks/odoo-online-api-key.md (efn-rotate-online-key --channel=WTZ).
+# CI (job infra) dan scripts/check-encryption.sh menyertakan file ini saat membandingkan secrets / least privilege.
+services:
+  api-gateway:
+    environment:
+      ODOO_API_KEY_ONLINE_WTZ_FILE: /run/secrets/odoo_api_key_online_wtz
+    secrets:
+      - odoo_api_key_online_wtz

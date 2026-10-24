@@ -268,7 +268,7 @@ jobs:
           CFG_LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS: ${{ vars.LOYALTY_COMMITTED_RESERVATION_RETENTION_DAYS }}   # kosong = 3650 (3650..7300)
           CFG_ETL_LOYALTY_POINTS_MODE: ${{ vars.ETL_LOYALTY_POINTS_MODE || 'payment' }}   # SEC-114: product ditolak di production
           CFG_ETL_AUDIT_EPOCH_ANCHORS: ${{ vars.ETL_AUDIT_EPOCH_ANCHORS }}   # G18 epoch salinan audit: kosong = 20 (1..1000)
-          # G20 (docs/04 §12.1): kode kanal = kode PT (GL,PB,BCR,BCF); RTL/FNB/kanal G19 ditolak deploy-validate
+          # G20 (docs/04 §12.1): kode kanal = kode PT (GL,PB,BCR,BCF; G24 §16.1: WTZ); RTL/FNB/kanal G19 ditolak deploy-validate
           CFG_ONLINE_CHANNELS: ${{ vars.ONLINE_CHANNELS || 'GL' }}
           CFG_ONLINE_FULFILMENTS: ${{ vars.ONLINE_FULFILMENTS || 'pickup' }}
           CFG_ONLINE_PAYMENT_TIMEOUT_SECONDS: ${{ vars.ONLINE_PAYMENT_TIMEOUT_SECONDS }}

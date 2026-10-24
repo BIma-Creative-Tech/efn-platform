@@ -502,6 +502,15 @@ vc "92c ONLINE_CHANNELS=GL,FNB-PB (kanal G19) ditolak" 1 production ONLINE_CHANN
 vc "92d ONLINE_CHANNELS kanal tak dikenal (FNB-BAKSO) ditolak" 1 staging ONLINE_CHANNELS=GL,FNB-BAKSO
 vc "92e ONLINE_CHANNELS ganda ditolak" 1 staging ONLINE_CHANNELS=PB,PB
 vc "92f ONLINE_CHANNELS=BCF saja diterima" 0 production ONLINE_CHANNELS=BCF
+# G24 (docs/04 §16.1, L-91..L-93): WTZ = kanal ke-5 (overlay online-wtz); bukan PT QR meja/reservasi (L-92)
+vc "92k ONLINE_CHANNELS=GL,PB,BCR,BCF,WTZ diterima (G24)" 0 production ONLINE_CHANNELS=GL,PB,BCR,BCF,WTZ
+vc "92l ONLINE_CHANNELS=WTZ saja diterima" 0 staging ONLINE_CHANNELS=WTZ
+vc "92m ONLINE_CHANNELS=wtz (huruf kecil) ditolak" 1 staging ONLINE_CHANNELS=wtz
+vc "92n FNB_QR_COMPANIES=PB,WTZ ditolak (L-92)" 1 staging FNB_QR_COMPANIES=PB,WTZ
+vc "92o BOOKING_COMPANIES=WTZ ditolak (L-92)" 1 staging BOOKING_COMPANIES=WTZ
+u "92p efn_validate_online_channels WTZ" 0 efn_validate_online_channels WTZ
+u "92q efn_validate_fnb_qr_companies WTZ ditolak" 1 efn_validate_fnb_qr_companies WTZ
+u "92r efn_validate_booking_companies WTZ ditolak" 1 efn_validate_booking_companies WTZ
 # G20 W-30 (docs/04 §12.2): batas order bayar di kasir per member
 vc "92g ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=1 diterima" 0 production ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=1
 vc "92h ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=0 ditolak" 1 production ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=0

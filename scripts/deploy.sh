@@ -476,7 +476,8 @@ if [[ "${EFN_ODOO_PII_ENABLED:-false}" == true ]]; then
   FILES+=(-f docker-compose.pii.yml)
 fi
 # G17/G19/G20 (docs/04 §12.1): API key kanal selain GL (base) hanya di-mount bila kanal ada di ONLINE_CHANNELS: satu
-# overlay per kanal docker-compose.online-<kode huruf kecil>.yml (PB -> online-pb, BCR -> online-bcr, BCF -> online-bcf).
+# overlay per kanal docker-compose.online-<kode huruf kecil>.yml (PB -> online-pb, BCR -> online-bcr, BCF -> online-bcf,
+# WTZ -> online-wtz, G24).
 # Kode di luar EFN_ONLINE_CHANNEL_CODES (termasuk RTL/FNB/RTL-GL.. lama) atau kanal tanpa overlay = konfigurasi salah ->
 # gagal (BFF akan menolak kanal tanpa key; lebih baik berhenti di sini).
 efn_validate_online_channels "${ONLINE_CHANNELS:-$EFN_ONLINE_BASE_CHANNEL}" || die "ONLINE_CHANNELS tidak valid (G20)"
@@ -543,9 +544,11 @@ echo "==> Migrasi skema idempoten (infra/postgres/init/[0-9][0-9]-*.sql >= 04)"
 # 07 = penjualan online G17 (docs/04 §10.7/§10.8: payment_intent.purpose + tabel online_*; dibutuhkan BFF G17
 # termasuk saat ONLINE_ENABLED=false). 08 = privasi G18 (W-18/W-19: dsar_request.open_orders_ack_at/defer_escalation,
 # member.age_confirmed_at; dibutuhkan BFF G18). 09 = G20 (docs/04 §12.1/§12.2: CHECK company_code 6 entitas,
-# online_order.payment_method, status awaiting_counter_payment, counter_code_enc; dibutuhkan BFF G20).
+# online_order.payment_method, status awaiting_counter_payment, counter_code_enc; dibutuhkan BFF G20). 13 = G24
+# (docs/04 §16.3: CHECK kode PT + WTZ; tanpa 13 order/poin kanal WTZ ditolak CHECK).
 for req in 04-platform-v3-6.sql 05-platform-loyalty-pos.sql 06-platform-loyalty-guard.sql 07-platform-online.sql \
-           08-platform-g18-privacy.sql 09-platform-g20.sql 10-platform-g21.sql 11-platform-g22.sql 12-platform-g23.sql; do
+           08-platform-g18-privacy.sql 09-platform-g20.sql 10-platform-g21.sql 11-platform-g22.sql 12-platform-g23.sql \
+           13-platform-g24.sql; do
   [[ -s "$BASE/postgres/init/$req" ]] || die "migrasi wajib $req tidak ada di $BASE/postgres/init (bundel rilis tidak lengkap)"
 done
 for mig in "$BASE"/postgres/init/[0-9][0-9]-*.sql; do

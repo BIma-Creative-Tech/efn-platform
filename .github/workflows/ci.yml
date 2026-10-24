@@ -622,7 +622,7 @@ jobs:
       - name: Setiap secret yang direferensikan service didefinisikan & ada di secrets.list
         working-directory: infra/compose
         # docker compose config membuang secret top-level yang tak direferensikan service; payment_provider_api_key
-        # hanya di-mount oleh docker-compose.payment.yml (dan odoo_api_key_online_{pb,bcr,bcf} oleh docker-compose.online-*.yml,
+        # hanya di-mount oleh docker-compose.payment.yml (dan odoo_api_key_online_{pb,bcr,bcf,wtz} oleh docker-compose.online-*.yml,
         # G20 §12.1; _gl di base; G22 §14.A.9: odoo_api_key_qr_{pb,bcf} oleh docker-compose.online-qr-*.yml, ikut glob
         # yang sama) -> overlay itu wajib ikut agar perbandingan lengkap.
         run: |
@@ -714,7 +714,7 @@ jobs:
       # G18 (W-11, R-T15): rotasi otomatis API key Odoo kanal online - docker/Odoo/BFF palsu (rotasi, rollback, cabut
       # tertunda, bukti 401, penolakan identitas/argumen/konfigurasi, tanpa kebocoran nilai key; r11 SEC-120: kunci host
       # bersama deploy + cabut key yatim per nama; G19: --all, --bootstrap, user bersama; G20 §12.1: allowlist kanal
-      # GL/PB/BCR/BCF, kode lama RTL/FNB/kanal G19 ditolak; G22 §14.A.5: kunci QR-PB/QR-BCF user teknis QR meja,
+      # GL/PB/BCR/BCF (G24: + WTZ), kode lama RTL/FNB/kanal G19 ditolak; G22 §14.A.5: kunci QR-PB/QR-BCF user teknis QR meja,
       # verifikasi path #15, --all dari FNB_QR_ENABLED, precheck Python QR; G23 §15.3: kunci BOOKING-PB/BOOKING-BCF,
       # verifikasi path #19 (403 Odoo sah, 403 gateway gagal), --all dari BOOKING_ENABLED; 127 kasus).
       - name: efn-rotate-online-key regression (docker palsu)

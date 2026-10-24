@@ -23,7 +23,7 @@ checkout berhenti). Audiens: on-call IT EFN + Superadmin.
   lain milik user teknis (mis. `base.group_user`) punya durasi lebih besar, batas efektifnya ikut lebih besar — jangan
   beri durasi di grup umum. Membuat key lewat `sudo()`/admin **melewati** batas ini — skrip selalu `with_user(<user teknis>)`.
 - Satu key = satu user teknis = **satu kanal** (L-37). G20 (docs/04 §12.1, L-48): kode kanal = kode PT; pemetaan
-  kode → nama = huruf kecil. Hanya empat kode ini yang diterima (`EFN_ONLINE_CHANNEL_CODES` di
+  kode → nama = huruf kecil. Hanya lima kode ini yang diterima (G24 §16.1: + `WTZ`) (`EFN_ONLINE_CHANNEL_CODES` di
   `scripts/lib/deploy-validate.sh`, `ALLOWED_CHANNELS` di `efn-rotate-online-key`, cek `check-encryption.sh`):
 
   | Kanal (= PT) | User teknis | Secret Docker | Env BFF | Overlay compose |
@@ -32,6 +32,7 @@ checkout berhenti). Audiens: on-call IT EFN + Superadmin.
   | `PB` (PT Paris Baguette) | `efn_online_pb` | `odoo_api_key_online_pb` | `ODOO_API_KEY_ONLINE_PB_FILE` | `docker-compose.online-pb.yml` |
   | `BCR` (Bacha Coffee Retail) | `efn_online_bcr` | `odoo_api_key_online_bcr` | `ODOO_API_KEY_ONLINE_BCR_FILE` | `docker-compose.online-bcr.yml` |
   | `BCF` (Bacha Coffee F&B) | `efn_online_bcf` | `odoo_api_key_online_bcf` | `ODOO_API_KEY_ONLINE_BCF_FILE` | `docker-compose.online-bcf.yml` |
+  | `WTZ` (PT Wetzel's Pretzels, G24) | `efn_online_wtz` | `odoo_api_key_online_wtz` | `ODOO_API_KEY_ONLINE_WTZ_FILE` | `docker-compose.online-wtz.yml` |
 
   Kode G17/G19 (`RTL`, `FNB`, `RTL-GL`, `RTL-BACHA`, `FNB-PB`, `FNB-BACHA`) **ditolak** deploy dan skrip rotasi;
   cutover: [§8](#migrasi-g20).
@@ -79,7 +80,7 @@ systemctl daemon-reload && systemctl enable --now efn-rotate-online-key.timer
 `enable --now efn-rotate-online-key.timer`. Jangan menjalankan keduanya untuk kanal yang sama: kunci per kanal membuat
 salah satunya gagal "sedang berjalan" (alert palsu). Unit `@.service/@.timer` tetap ada untuk kebutuhan khusus.
 
-## 1b. Mengaktifkan kanal PT (PB / BCR / BCF) {#kanal-baru}
+## 1b. Mengaktifkan kanal PT (PB / BCR / BCF / WTZ) {#kanal-baru}
 
 Urutan (Superadmin + efn-odoo-functional; contoh `PB`). Prinsip: kunci dibuat dan **terbukti bekerja** sebelum kanal
 masuk `ONLINE_CHANNELS`, karena deploy dengan `ONLINE_ENABLED=true` menolak kanal yang key-nya masih placeholder.
@@ -103,7 +104,14 @@ masuk `ONLINE_CHANNELS`, karena deploy dengan `ONLINE_ENABLED=true` menolak kana
    `.env`; bila `CHANNELS` diisi manual, tambahkan juga di sana).
 6. Verifikasi: `sudo efn-rotate-online-key --all --status`; Grafana/Prometheus `efn_odoo_api_key_expiry_timestamp_seconds{channel="PB"}`.
 
-**PT/kanal baru di luar tabel di atas** (mis. entitas ke-7): butuh perubahan repo dulu — baris `scripts/secrets.list`
+**Kanal WTZ (G24, docs/04 §16):** entitas ke-7 PT Wetzel's Pretzels sudah ada di semua allowlist (tabel di atas); kanal
+demo Odoo `WTZ` nonaktif dengan outlet kios `WTZ-01` (FP non-dine-in). Aktivasi = langkah 1–6 di atas dengan `WTZ`
+(`sudo efn-rotate-online-key --channel=WTZ --bootstrap`). Hanya ambil di gerai / bayar di kasir / pre-order: **tidak ada**
+`QR-WTZ`/`BOOKING-WTZ` (L-92). Platform Postgres wajib sudah menjalankan `13-platform-g24.sql` (CHECK kode PT + WTZ;
+deploy.sh mewajibkannya). DB Odoo lama yang di-upgrade ke `efn_setup_company` 19.0.1.8.0 membuat company WTZ + CoA
+`l10n_id` + pajak PB1/SC otomatis; data demo kanal/outlet WTZ hanya ada di DB ber-demo (`efn_setup_online` demo).
+
+**PT/kanal baru di luar tabel di atas** (mis. entitas ke-8): butuh perubahan repo dulu — baris `scripts/secrets.list`
 (`host:disabled`), secret top-level `infra/compose/docker-compose.yml`, overlay `docker-compose.online-<kode>.yml`
 (pola file yang ada), kode di `EFN_ONLINE_CHANNEL_CODES` (`scripts/lib/deploy-validate.sh`) **dan** `ALLOWED_CHANNELS`
 (`scripts/host/efn-rotate-online-key`; skrip host dipasang ulang + sha256 di-review), regex `check-encryption.sh` §6.
