@@ -110,7 +110,7 @@ function PhotoCard({
   const scrollRotY = useTransform(p, WIN, [first ? 0 : 28 * turn, 0, 0, last ? 0 : -18 * turn]);
   const scale = useTransform(p, WIN, [first ? 1 : 0.86, 1, 1, last ? 1 : 0.92]);
   // Foto bergerak pelan di dalam bingkai sepanjang segmen (parallax), bingkai sendiri bergerak bersama kartu.
-  const imgY = useTransform(p, [0, 1], ['-5%', '5%']);
+  const imgY = useTransform(p, [0, 1], ['-3%', '3%']);
 
   // Kemiringan mouse: rotasi kecil di tempat (tanpa geser ke samping), pegas agar lembut.
   const tx = useMotionValue(0);

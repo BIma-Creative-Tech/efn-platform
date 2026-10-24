@@ -392,7 +392,8 @@ Rate limit (default PLACEHOLDER; key Redis `rl:*`, IP di-HMAC §8.16):
 
 | Endpoint | Batas |
 |---|---|
-| katalog & gambar | 120 / menit / IP |
+| katalog | 120 / menit / IP |
+| gambar katalog (G25: bucket terpisah `ONLINE_RL_IMAGE_*`; satu halaman memuat 24–40 foto beralamat hash yang immutable, jadi berbagi kuota katalog membuat foto gagal dimuat dengan 429) | 600 / menit / IP |
 | stok | 60 / menit / IP |
 | cart tulis | 60 / menit / member |
 | quote | 20 / menit / member |

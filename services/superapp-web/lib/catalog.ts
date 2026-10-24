@@ -7,6 +7,7 @@
  * Frontend tidak pernah menghitung pajak.
  */
 
+import type { CSSProperties } from 'react';
 import { parseAttributes, type ProductAttribute } from './attributes';
 import { COMPANIES } from './brands';
 import { parsePaymentModes, type PaymentMethod } from './payment';
@@ -188,6 +189,27 @@ export function buildProductQuery(input: ProductQuery): string | null {
   if (typeof input.cursor === 'string' && CURSOR_RE.test(input.cursor)) p.set('cursor', input.cursor);
   p.set('limit', String(parseLimit(input.limit)));
   return p.toString();
+}
+
+/**
+ * Bentuk foto katalog per PT (diukur dari file gambar katalog 24 Okt 2026): PB 497×347 lanskap, Bacha (BCR/BCF)
+ * 410×512 potret 4:5, GrandLucky & Wetzel's persegi. Bingkai foto memakai rasio ini lewat CSS `--photo-ratio`
+ * (aspect-ratio) dan `--photo-hw` (tinggi/lebar) + `object-fit: contain`, jadi foto selalu tampil UTUH: foto yang rasionya
+ * beda tampil dengan tepi kosong, tidak terpotong. Kode tak dikenal -> persegi.
+ */
+const PHOTO_SHAPES: Readonly<Record<string, readonly [number, number]>> = {
+  PB: [497, 347],
+  BCR: [4, 5],
+  BCF: [4, 5],
+  GL: [1, 1],
+  WTZ: [1, 1],
+};
+export type PhotoVars = Record<'--photo-ratio' | '--photo-hw', string>;
+/** Hasil bisa langsung dipakai sebagai prop `style` React (custom properties). */
+export function photoVars(companyCode: string | null | undefined): PhotoVars & CSSProperties {
+  const shape = typeof companyCode === 'string' && Object.prototype.hasOwnProperty.call(PHOTO_SHAPES, companyCode) ? PHOTO_SHAPES[companyCode]! : ([1, 1] as const);
+  const [w, h] = shape;
+  return { '--photo-ratio': `${w} / ${h}`, '--photo-hw': (h / w).toFixed(3) } as PhotoVars & CSSProperties;
 }
 
 /** URL gambar lewat proxy origin sendiri (CSP `img-src 'self'`). Tidak pernah URL Odoo/MinIO. */

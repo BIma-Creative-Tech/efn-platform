@@ -266,6 +266,9 @@ describe('Rate limit promo terpisah (§11.2 no. 6)', () => {
     const o = testConfig({ ONLINE_RL_PROMO_MEMBER_LIMIT: '4', ONLINE_RL_PROMO_IP_WINDOW_SECONDS: '60' });
     expect(o.onlineRateLimit('PROMO_MEMBER')).toEqual({ limit: 4, windowSeconds: 900 });
     expect(o.onlineRateLimit('PROMO_IP')).toEqual({ limit: 30, windowSeconds: 60 });
+    // G25: kuota gambar katalog terpisah (docs/04 §10.3.1)
+    expect(c.onlineRateLimit('IMAGE')).toEqual({ limit: 600, windowSeconds: 60 });
+    expect(c.onlineRateLimit('CATALOG')).toEqual({ limit: 120, windowSeconds: 60 });
   });
 
   it('per member: quote berpromo ke-3 → 429 rate_limited; quote tanpa promo tidak memakan kuota promo', async () => {

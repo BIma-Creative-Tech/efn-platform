@@ -1520,7 +1520,8 @@ export class AppConfig {
   }
   /**
    * Rate limit §10.3.1 (PLACEHOLDER): `ONLINE_RL_<NAMA>_LIMIT` & `ONLINE_RL_<NAMA>_WINDOW_SECONDS`.
-   * Nama: CATALOG, STOCK, CART, QUOTE, CHECKOUT, ORDERS, PICKUP, CANCEL, EVENTS, PROMO_MEMBER, PROMO_IP.
+   * Nama: CATALOG, IMAGE, STOCK, CART, QUOTE, CHECKOUT, ORDERS, PICKUP, CANCEL, EVENTS, PROMO_MEMBER, PROMO_IP.
+   * G25: IMAGE = gambar katalog (hash, immutable), terpisah dari CATALOG agar halaman berisi banyak foto tidak 429.
    * G19 §11.2 no. 6: setiap KODE di `promo_codes` dihitung `PROMO_MEMBER` (10 kode / 15 menit / member) dan
    * `PROMO_IP` (30 kode / 15 menit / IP) — terpisah dari `QUOTE` (anti-enumerasi kupon). SEC-134: n kode = n unit.
    */
@@ -2180,6 +2181,7 @@ const FNB_RL_DEFAULTS: Readonly<Record<FnbRateLimitName, readonly [number, numbe
 export const ONLINE_CHANNEL_RE = /^[A-Z][A-Z0-9-]{1,15}$/;
 export type OnlineRateLimitName =
   | 'CATALOG'
+  | 'IMAGE'
   | 'STOCK'
   | 'CART'
   | 'QUOTE'
@@ -2193,6 +2195,7 @@ export type OnlineRateLimitName =
 /** Default §10.3.1 (PLACEHOLDER): [batas, window detik]. EVENTS = pengaman endpoint event Odoo (bukan kontrak). */
 const ONLINE_RL_DEFAULTS: Readonly<Record<OnlineRateLimitName, readonly [number, number]>> = {
   CATALOG: [120, 60],
+  IMAGE: [600, 60],
   STOCK: [60, 60],
   CART: [60, 60],
   QUOTE: [20, 60],

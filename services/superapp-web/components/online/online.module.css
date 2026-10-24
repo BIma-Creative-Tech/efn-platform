@@ -116,8 +116,9 @@
 }
 
 .imageBox {
-  aspect-ratio: 1 / 1;
-  background: var(--color-surface-alt);
+  /* Rasio = foto katalog PT (`--photo-ratio`, lib/catalog.ts photoVars, dipasang di halaman belanja). */
+  aspect-ratio: var(--photo-ratio, 1 / 1);
+  background: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -127,7 +128,8 @@
 .imageBox img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* Foto tampil utuh (tidak terpotong); latar putih bingkai menyatu dengan latar foto katalog. */
+  object-fit: contain;
   display: block;
 }
 
@@ -474,7 +476,6 @@
   border-radius: 16px;
   overflow: hidden;
   background: #ffffff;
-  aspect-ratio: 4 / 5;
   box-shadow: 0 24px 48px -26px rgb(0 0 0 / 0.75);
 }
 :global(html[data-scheme='dark']) .productCard .imageBox img {

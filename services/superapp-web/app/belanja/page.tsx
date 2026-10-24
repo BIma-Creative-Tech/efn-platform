@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { getBrand } from '@/lib/brand-server';
-import { channelBusinessType, companyDisplayName, CURSOR_RE, parsePositiveInt, priceDisplay, sanitizeQuery, type ProductSummary } from '@/lib/catalog';
+import { channelBusinessType, companyDisplayName, CURSOR_RE, parsePositiveInt, photoVars, priceDisplay, sanitizeQuery, type ProductSummary } from '@/lib/catalog';
 import { loadCategories, loadChannels, loadProducts, pickChannel } from '@/lib/catalog-server';
 import { formatRupiah } from '@/lib/format';
 import { OnlineUnavailable } from '@/components/online/OnlineUnavailable';
@@ -58,7 +58,7 @@ export default async function BelanjaPage({ searchParams }: { searchParams: SP }
   const cats = categories.ok ? categories.data.filter((c) => c.parent_id === null || !categories.data.some((x) => x.category_id === c.parent_id)) : [];
 
   return (
-    <div className="stack">
+    <div className="stack" style={photoVars(channel.company_code)}>
       <section className={styles.toolbar}>
         <h1 style={{ margin: 0 }}>{preorder ? 'Pre-order' : 'Belanja'}</h1>
         <h2 id="mode-pesan" className="visually-hidden">

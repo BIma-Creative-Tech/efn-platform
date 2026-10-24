@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getBrand } from '@/lib/brand-server';
-import { channelBusinessType, companyDisplayName, parsePositiveInt, priceDisplay } from '@/lib/catalog';
+import { channelBusinessType, companyDisplayName, parsePositiveInt, photoVars, priceDisplay } from '@/lib/catalog';
 import { loadChannels, loadProduct, pickChannel } from '@/lib/catalog-server';
 import { formatRupiah } from '@/lib/format';
 import { getSessionToken } from '@/lib/session';
@@ -49,7 +49,7 @@ export default async function ProductPage({
   const returnPath = `/belanja/${productId}?channel=${encodeURIComponent(channel.channel_code)}`;
 
   return (
-    <div className="stack">
+    <div className="stack" style={photoVars(channel.company_code)}>
       <nav aria-label="Remah roti" className="small">
         {/* UX-09: bawa `channel` agar brand multi-kanal (Bacha: BCR + BCF) kembali ke kanal yang sama, bukan kanal pertama. */}
         <Link href={`/belanja?${new URLSearchParams({ channel: channel.channel_code })}`}>Belanja</Link> ›{' '}

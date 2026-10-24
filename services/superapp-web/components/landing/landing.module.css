@@ -147,8 +147,9 @@
 .frontCard {
   position: relative;
   margin: 0;
-  /* Tinggi kartu ≈ lebar × 0,7 + 4,5rem -> lebar dibatasi agar muat di tinggi zona. */
-  width: min(100%, 30rem, calc((100svh - 15rem) * 1.43));
+  /* Tinggi kartu ≈ lebar × rasio foto (--photo-hw, tinggi/lebar; PB 0,698, Bacha 1,25, GL/WTZ 1) + 4,5rem -> lebar
+     dibatasi agar muat di tinggi zona. */
+  width: min(100%, 30rem, calc((100svh - 15rem) / var(--photo-hw, 0.698)));
   padding: 0.75rem;
   border-radius: 20px;
   background: #ffffff;
@@ -170,17 +171,19 @@
   display: block;
   border-radius: 12px;
   overflow: hidden;
-  aspect-ratio: 497 / 347;
-  background: #f5f5f5;
+  /* Rasio bingkai = rasio foto katalog PT (photoVars di lib/catalog.ts) -> foto tampil UTUH, tidak terpotong. */
+  aspect-ratio: var(--photo-ratio, 497 / 347);
+  background: #ffffff;
 }
-/* Foto sedikit lebih tinggi dari bingkai: ruang untuk parallax vertikal (±4%) tanpa tepi kosong. */
 .photoFrame img {
+  /* Foto utuh (contain) dengan ruang 3% atas-bawah: parallax ±3% (PhotoStory) bergerak di dalam bingkai tanpa
+     memotong foto. */
   position: absolute;
-  inset: -6% 0;
+  inset: 3% 0;
   display: block;
   width: 100%;
-  height: 112%;
-  object-fit: cover;
+  height: 94%;
+  object-fit: contain;
 }
 .photoCaption {
   display: flex;
@@ -206,7 +209,7 @@
 .photoEmpty {
   display: grid;
   place-items: center;
-  aspect-ratio: 497 / 347;
+  aspect-ratio: var(--photo-ratio, 497 / 347);
   font-family: var(--l-display);
   font-size: 2rem;
   color: var(--color-chrome);
@@ -249,11 +252,11 @@
    menggulir naik (penjaga memudarkan baris yang mendekati kartu). Segmen memanjang bila isinya lebih tinggi. */
 @media (max-aspect-ratio: 19/20) {
   .story {
-    --card-w: min(calc(100vw - 2 * var(--l-gutter)), 24rem, calc((34svh - 4.5rem) * 1.43));
+    --card-w: min(calc(100vw - 2 * var(--l-gutter)), 24rem, calc((34svh - 4.5rem) / var(--photo-hw, 0.698)));
     /* Tepi bawah kartu: diukur klien (`--card-bottom`, tinggi kartu sebenarnya); cadangan sebelum hidrasi = perkiraan
        atas 1rem + foto (lebar × 347/497 + padding 1,5rem) + keterangan ≈ 4rem. Ditambah celah 4,5rem (≥ jarak pudar
        penjaga 12 + 56 px), jadi teks yang diam di bawah kartu tidak ikut pudar. */
-    --card-space: calc(var(--card-bottom, calc(1rem + var(--card-w) * 0.698 + 1.5rem + 4rem)) + 4.5rem);
+    --card-space: calc(var(--card-bottom, calc(1rem + var(--card-w) * var(--photo-hw, 0.698) + 1.5rem + 4rem)) + 4.5rem);
   }
   .stack,
   .stack[data-side='left'],
@@ -758,7 +761,7 @@
 }
 .railImage {
   display: block;
-  aspect-ratio: 4 / 5;
+  aspect-ratio: var(--photo-ratio, 4 / 5);
   border-radius: 20px;
   overflow: hidden;
   margin-bottom: 0.75rem;
@@ -768,7 +771,7 @@
 .railImage img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
   transition: transform 800ms var(--l-ease);
 }
