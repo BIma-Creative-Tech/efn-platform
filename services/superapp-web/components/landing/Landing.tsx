@@ -15,7 +15,7 @@ import { brandHasTableService } from '@/lib/booking';
 import type { Brand } from '@/lib/brands';
 import { channelBusinessType, imageUrl, priceDisplay, type CatalogCategory, type CatalogChannel, type ProductSummary } from '@/lib/catalog';
 import { formatRupiah } from '@/lib/format';
-import { categoryHref, type ChapterStats, type LandingConfig } from '@/lib/landing-config';
+import { categoryHref, DEFAULT_CLOSING, DEFAULT_HOW_TITLE, modesHeadline, splitEmphasis, type ChapterStats, type LandingConfig } from '@/lib/landing-config';
 import type { OrderMode } from '@/lib/order-modes';
 import { OrderModePicker } from '@/components/booking/OrderModePicker';
 import { PhotoStory, type StoryPhoto, type StorySegment } from './PhotoStory';
@@ -49,6 +49,13 @@ interface Props {
 }
 
 const PAYMENT_LABEL: Record<string, string> = { qris: 'QRIS', counter: 'Bayar di kasir' };
+const HEX = /^#[0-9a-f]{6}$/i;
+
+/** Palet aksen landing -> CSS custom properties (hanya hex valid; selain itu pakai bawaan dari token brand). */
+function paletteStyle(p: LandingConfig['palette']): Record<string, string> | undefined {
+  if (!p || ![p.ink, p.fill, p.onFill].every((v) => HEX.test(v))) return undefined;
+  return { '--l-ink': p.ink, '--l-fill': p.fill, '--l-on-fill': p.onFill };
+}
 
 /** Judul dipecah per kata untuk animasi CSS (tanpa JS); kata `emphasis` diberi gaya khusus. */
 function Headline({ text, emphasis, id }: { text: string; emphasis: string | null; id: string }) {
@@ -217,16 +224,22 @@ export function BrandLanding({
       : categoryHref(categories, cat.categoryName, ch)
     : shop;
   const topCats = categories.filter((c) => c.parent_id === null).slice(0, 8);
+  const modesTitle = modesHeadline(orderModes.filter((m) => m.href !== null).map((m) => m.label));
+  const [closeA, closeEm, closeB] = (() => {
+    const c = landing.closing ?? DEFAULT_CLOSING;
+    return splitEmphasis(c.title, c.emphasis);
+  })();
+  const dark = brand.theme.scheme === 'dark';
 
   return (
-    <div className={styles.landing} data-landing="">
+    <div className={styles.landing} data-landing="" style={paletteStyle(landing.palette)}>
       <noscript>
         <style>{'[data-reveal]{opacity:1!important;transform:none!important;filter:none!important;clip-path:none!important}'}</style>
       </noscript>
 
-      <PhotoStory segments={segments} />
+      <PhotoStory segments={segments} note={`Foto: katalog ${brand.name}`} />
 
-      {orderModes.length > 0 && (
+      {orderModes.length > 0 && modesTitle && (
         <section className={`${styles.band} ${styles.modesBand}`} aria-labelledby="mode-judul">
           <div className={styles.inner}>
             <p className={styles.kicker}>
@@ -235,9 +248,9 @@ export function BrandLanding({
               <span>Pilih sesuai kebutuhan</span>
             </p>
             <h2 id="mode-judul" className={styles.h2} style={{ marginBottom: '2.5rem' }}>
-              Ambil, pre-order, makan di tempat, atau reservasi.
+              {modesTitle}
             </h2>
-            <OrderModePicker modes={orderModes} labelledBy="mode-judul" onDark />
+            <OrderModePicker modes={orderModes} labelledBy="mode-judul" onDark={dark} />
           </div>
         </section>
       )}
@@ -294,7 +307,7 @@ export function BrandLanding({
             <div className={styles.sectionHead}>
               <div>
                 <p className={styles.kicker}>
-                  <span>Katering</span>
+                  <span>{cat.label ?? 'Katering'}</span>
                   <span aria-hidden="true" className={styles.kickerRule} />
                   <span>{preorder ? 'Pre-order, ambil di gerai' : 'Ambil di gerai'}</span>
                 </p>
@@ -336,7 +349,7 @@ export function BrandLanding({
             )}
             <p className={styles.actions} style={{ marginTop: '2.5rem' }}>
               <Link href={cateringHref} className={styles.ctaPrimary}>
-                {preorder ? 'Pre-order katering' : 'Lihat menu katering'}
+                {cat.ctaLabel ?? (preorder ? 'Pre-order katering' : 'Lihat menu katering')}
               </Link>
               {cat.contactHref && cat.contactLabel && (
                 <a href={cat.contactHref} className={styles.ctaGhost} rel="noopener noreferrer" target="_blank">
@@ -357,7 +370,7 @@ export function BrandLanding({
             <span>3 langkah</span>
           </p>
           <h2 id="cara-judul" className={styles.h2}>
-            Pesan dari ponsel, ambil di gerai.
+            {landing.howTitle ?? DEFAULT_HOW_TITLE}
           </h2>
           <ol className={styles.steps}>
             <li>
@@ -403,7 +416,9 @@ export function BrandLanding({
       <section className={`${styles.band} ${styles.final}`} aria-labelledby="akhir-judul">
         <div className={`${styles.inner} ${styles.finalGrid}`}>
           <h2 id="akhir-judul" className={styles.finalTitle}>
-            Lapar? Pesan sekarang, ambil saat <em>siap</em>.
+            {closeA}
+            {closeEm && <em>{closeEm}</em>}
+            {closeB}
           </h2>
           <div className={styles.finalSide}>
             <p className={styles.finalBody}>

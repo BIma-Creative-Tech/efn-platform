@@ -6,7 +6,8 @@
  * = satu kategori katalog. Tidak ada aset 3D/ilustrasi (keputusan user 21 Okt 2026: pakai gambar real).
  *
  * Satu komponen untuk semua brand (R-T14): perbedaan hanya data di sini + CSS custom properties dari `lib/brands.ts`.
- * Brand tanpa entri -> beranda lama (`app/page.tsx`). Saat ini Paris Baguette dan Wetzel's Pretzels (G24).
+ * Brand tanpa entri -> beranda lama (`app/page.tsx`). Saat ini Paris Baguette, Wetzel's Pretzels (G24), Bacha Coffee
+ * dan GrandLucky (G25: konsep landing PB, tema & tata letak per brand lewat `palette` + aturan `html[data-brand]`).
  *
  * Copy bab = DRAF (menunggu tim brand/marketing PB). Angka (harga, jumlah pilihan) & foto TIDAK ditulis di sini:
  * diambil dari katalog BFF saat render.
@@ -47,6 +48,10 @@ export interface CateringRow {
  * layanan baru (antar, minimal pesanan): katering = pesanan ambil di gerai yang dijadwalkan.
  */
 export interface LandingCatering {
+  /** Label kicker band (default "Katering"; Bacha: "Hadiah"). */
+  label?: string;
+  /** Teks tombol utama (default "Pre-order katering" / "Lihat menu katering"). */
+  ctaLabel?: string;
   title: string;
   body: string;
   /** Kategori katalog paket katering (foto & tautan). Tidak ada di katalog -> band tanpa rak foto. */
@@ -60,6 +65,27 @@ export interface LandingCatering {
   contactLabel: string | null;
 }
 
+/**
+ * Palet aksen landing (hex). Tanpa palet: ink = fill = `theme.accent`, onFill = `theme.chrome` (PB, Wetzel's: aksen
+ * kuning terang di latar gelap). Brand terang butuh pemisahan: aksen resmi sebagai BIDANG (tombol, garis) dan versi
+ * gelapnya sebagai TEKS agar ≥ 4,5:1 di latar terang (diuji tests/landing.test.ts).
+ */
+export interface LandingPalette {
+  /** Teks beraksen (kata penekanan, tautan bab, nomor langkah) di latar & kartu. */
+  ink: string;
+  /** Bidang aksen (tombol utama, garis kicker, HUD aktif). */
+  fill: string;
+  /** Teks di atas `fill`. */
+  onFill: string;
+}
+
+/** Judul penutup dengan satu kata penekanan (huruf miring/aksen). */
+export interface LandingClosing {
+  title: string;
+  /** Kata di `title` yang diberi penekanan; tidak ditemukan -> tanpa penekanan. */
+  emphasis: string;
+}
+
 export interface LandingConfig {
   /** Satu kata di judul hero (`Brand.hero.title`) yang diberi gaya penekanan; null = tanpa penekanan. */
   emphasis: string | null;
@@ -70,7 +96,21 @@ export interface LandingConfig {
   pickStep: string;
   /** Band katering; null = tidak ditampilkan. */
   catering: LandingCatering | null;
+  /** Palet aksen (opsional; lihat LandingPalette). */
+  palette?: LandingPalette;
+  /** Judul bagian "Cara pesan" (default "Pesan dari ponsel, ambil di gerai."). */
+  howTitle?: string;
+  /** Judul penutup (default "Lapar? Pesan sekarang, ambil saat siap."). */
+  closing?: LandingClosing;
 }
+
+/** Palet efektif: tanpa `palette` -> aksen tema untuk teks & bidang, chrome untuk teks di atas bidang (PB, Wetzel's). */
+export function resolvePalette(theme: { accent: string; chrome: string }, p?: LandingPalette): LandingPalette {
+  return p ?? { ink: theme.accent, fill: theme.accent, onFill: theme.chrome };
+}
+
+export const DEFAULT_HOW_TITLE = 'Pesan dari ponsel, ambil di gerai.';
+export const DEFAULT_CLOSING: LandingClosing = { title: 'Lapar? Pesan sekarang, ambil saat siap.', emphasis: 'siap' };
 
 export const LANDINGS: Partial<Record<BrandId, LandingConfig>> = {
   parisbaguette: {
@@ -177,7 +217,144 @@ export const LANDINGS: Partial<Record<BrandId, LandingConfig>> = {
       contactLabel: null,
     },
   },
+  // G25: Bacha Coffee (butik BCR). Kategori = katalog butik (data/brand-catalog/bacha, dari bachacoffee.com). Tema mewah
+  // bachacoffee.com: latar peach #ffeee2, navy #1a2548, tombol oranye #e07e27 berteks navy (5.12), aksen teks oranye tua
+  // #9a4a0c (5.53 di peach, 6.16 di krem) karena oranye resmi hanya 2.59 di peach. Band "Hadiah" = gift set
+  // (bachacoffee.com "Personalise your gifts"), bukan katering.
+  bacha: {
+    emphasis: 'maroko',
+    heroFeatured: ['Marrakech Morning Coffee', 'Marrakech Press Coffee Pot in Gold, 800ml', 'Night in Moka Decaffeinated Coffee'],
+    chapters: [
+      {
+        id: 'kopi',
+        label: 'Kopi',
+        title: 'Seratus persen Arabika.',
+        body: 'Ratusan racikan dari kebun pilihan di seluruh dunia, dari single origin hingga kopi beraroma. Pilih favorit Anda, ambil di butik.',
+        categoryName: 'Loose Coffee',
+        featured: ['Moroccan Sahara Coffee', 'King of Africa Coffee', 'Marrakech Morning Coffee'],
+        linkLabel: 'Lihat semua kopi',
+      },
+      {
+        id: 'kemasan',
+        label: 'Kemasan',
+        title: 'Biji utuh, bubuk, atau kantong seduh.',
+        body: 'Racikan favorit dalam kemasan siap bawa pulang, sesuai cara seduh Anda di rumah.',
+        categoryName: 'Packed Coffee',
+        featured: ['Birthday Wish Coffee - Whole Beans', 'Rwanda Superior Coffee - Ground Beans', 'King of Africa Coffee Bags'],
+        linkLabel: 'Lihat semua kemasan',
+      },
+      {
+        id: 'aksesori',
+        label: 'Aksesori',
+        title: 'Ritual kopi yang anggun.',
+        body: 'Teko press berlapis emas, cangkir, dan kaleng kopi berwarna khas Marrakech untuk melengkapi meja Anda.',
+        categoryName: 'Accessories',
+        featured: ['Marrakech Press Coffee Pot in Gold, 800ml', 'Tokyo Press Coffee Pot in Gold, 1000ml', 'Fleur du Maroc Scented Candle, 140g'],
+        linkLabel: 'Lihat semua aksesori',
+      },
+      {
+        id: 'gourmet',
+        label: 'Gourmet',
+        title: 'Teman manis secangkir kopi.',
+        body: 'Biji kopi berlapis cokelat, biskuit, dan nougat untuk dinikmati bersama kopi atau dijadikan bingkisan.',
+        categoryName: 'Gourmet',
+        featured: ['Assorted Chocolate Covered Coffee Beans', 'Biscuit Assortment', 'Bacha Coffee Jelly'],
+        linkLabel: 'Lihat semua gourmet',
+      },
+    ],
+    pickStep: 'Pilih kopi, aksesori, atau hadiah',
+    catering: {
+      label: 'Hadiah',
+      ctaLabel: 'Lihat semua gift set',
+      title: 'Hadiah untuk setiap momen.',
+      body: 'Kotak hadiah berisi racikan kopi pilihan dan aksesori Bacha Coffee, dikemas dalam kotak khas berwarna cerah. Pesan dari aplikasi, ambil di butik.',
+      categoryName: 'Gift Sets',
+      occasions: [
+        { title: 'Hadiah korporat', body: 'Bingkisan berkelas untuk klien dan rekan kerja.' },
+        { title: 'Ulang tahun', body: 'Kopi istimewa untuk orang tersayang.' },
+        { title: 'Pernikahan', body: 'Kenang-kenangan yang dinikmati bersama.' },
+        { title: 'Hari raya', body: 'Hampers kopi untuk keluarga dan sahabat.' },
+      ],
+      guide: [],
+      contactHref: null,
+      contactLabel: null,
+    },
+    palette: { ink: '#9a4a0c', fill: '#e07e27', onFill: '#1a2548' },
+    howTitle: 'Pesan dari ponsel, ambil di butik.',
+    closing: { title: 'Kopi favorit Anda, siap diambil di butik.', emphasis: 'butik' },
+  },
+  // G25: GrandLucky Superstore (PT GL, ritel). Kategori = katalog GL (data/brand-catalog/grandlucky). Warna = logo resmi
+  // grandlucky.co.id (biru #39439b, merah #d03020, kuning #f0d000): tombol biru berteks putih (8.57), aksen teks merah
+  // tua #c42a1c (5.13 di #f2f3f9, 5.68 di putih), latar kertas situs resmi (paper_@2X.png).
+  grandlucky: {
+    emphasis: 'segar',
+    heroFeatured: ['Anggur Autumn Royal USA /100 gr', 'Pear Nikkori Jepang /100 gr', 'Pollo Ayam Utuh /kg'],
+    chapters: [
+      {
+        id: 'buah',
+        label: 'Buah',
+        title: 'Buah pilihan, lokal hingga impor.',
+        body: 'Stroberi Korea, pir Jepang, hingga anggur Amerika, dipilih setiap hari. Pesan online, ambil di toko.',
+        categoryName: 'Buah',
+        featured: ['Berry Licious Strawberry Korea 250 gr /pack', 'Anggur Autumn Royal USA /100 gr', 'Pear Nikkori Jepang /100 gr'],
+        linkLabel: 'Lihat semua buah',
+      },
+      {
+        id: 'daging',
+        label: 'Daging',
+        title: 'Daging dan unggas untuk menu keluarga.',
+        body: 'Potongan daging sapi dan ayam utuh, ditimbang per gram sesuai kebutuhan dapur Anda.',
+        categoryName: 'Daging & Unggas',
+        featured: ['GL Prime Beef Shabu Shabu /100 gr', 'Pollo Ayam Utuh /kg'],
+        linkLabel: 'Lihat semua daging',
+      },
+      {
+        id: 'sarapan',
+        label: 'Sarapan',
+        title: 'Mulai pagi dengan lengkap.',
+        body: 'Selai, granola, kopi, dan teh untuk sarapan di rumah maupun bekal ke kantor.',
+        categoryName: 'Sarapan, Kopi & Teh',
+        featured: ['Peanut Butter Creamy/Crunchy 250 gr /jar', 'Verlin Crunchy Granola High Fiber Chia seed 200 gr /pack'],
+        linkLabel: 'Lihat semua sarapan',
+      },
+      {
+        id: 'camilan',
+        label: 'Camilan',
+        title: 'Camilan dan cokelat impor.',
+        body: 'Kacang, keripik, dan cokelat pilihan untuk teman nonton, bekal, atau bingkisan.',
+        categoryName: 'Camilan & Cokelat',
+        featured: ['Lindt Lindor Assorted/Milk Gift Box 168 gr /box', 'Comextra Kacang Mede Sulawesi Goreng 250 gr /pack'],
+        linkLabel: 'Lihat semua camilan',
+      },
+    ],
+    pickStep: 'Pilih buah, daging, atau kebutuhan rumah',
+    catering: null,
+    palette: { ink: '#c42a1c', fill: '#39439b', onFill: '#ffffff' },
+    howTitle: 'Belanja dari ponsel, ambil di toko.',
+    closing: { title: 'Daftar belanja beres, tinggal ambil di toko.', emphasis: 'ambil' },
+  },
 };
+
+/**
+ * Judul band "Cara pesan" dari mode pesan yang aktif (bukan teks tetap: tiap brand punya mode berbeda, mis. Wetzel's
+ * tanpa reservasi). >= 2 mode -> "Ambil di gerai, pre-order, atau reservasi meja."; 1 mode -> "<mode>, bayar di
+ * aplikasi."; 0 -> null (band disembunyikan pemanggil).
+ */
+export function modesHeadline(labels: readonly string[]): string | null {
+  const l = labels.map((s) => s.trim()).filter(Boolean);
+  if (l.length === 0) return null;
+  if (l.length === 1) return `${l[0]}, bayar di aplikasi.`;
+  const lower = l.map((s, i) => (i === 0 ? s : s.charAt(0).toLowerCase() + s.slice(1)));
+  return `${lower.slice(0, -1).join(', ')}, atau ${lower[lower.length - 1]}.`;
+}
+
+/** Pecah judul jadi [sebelum, kata penekanan, sesudah]; penekanan tidak ada -> [judul, '', '']. */
+export function splitEmphasis(title: string, emphasis: string): [string, string, string] {
+  const e = emphasis.trim();
+  const i = e ? title.toLowerCase().indexOf(e.toLowerCase()) : -1;
+  if (i < 0) return [title, '', ''];
+  return [title.slice(0, i), title.slice(i, i + e.length), title.slice(i + e.length)];
+}
 
 /** Konfigurasi landing brand; tanpa bab -> null (beranda lama). */
 export function landingFor(brandId: BrandId): LandingConfig | null {

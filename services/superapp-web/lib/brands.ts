@@ -256,7 +256,9 @@ export const BRANDS: Record<BrandId, Brand> = {
     name: 'GrandLucky Superstore',
     tagline: 'Supermarket premium: buah, sayur, dan seafood segar, lokal maupun impor.',
     logoText: 'GrandLucky',
-    logoSrc: null,
+    // Logo resmi grandlucky.co.id (wp-content/uploads/2015/07/GrandLucky-Logo.png, biru/merah/kuning) -> header PUTIH
+    // seperti situs resmi (globals.css `html[data-brand='grandlucky']`), G25.
+    logoSrc: '/brands/grandlucky/logo.png',
     logoKind: 'wordmark',
     subdomain: 'grandlucky',
     subdomainAliases: ['mart'],
@@ -359,8 +361,10 @@ export const BRANDS: Record<BrandId, Brand> = {
     name: 'Bacha Coffee',
     tagline: 'Rumah kopi Maroko sejak 1910.',
     logoText: 'Bacha Coffee',
-    logoSrc: null,
-    logoKind: 'wordmark',
+    // Lencana unta resmi bachacoffee.com (App_Themes/BachaCore/images/icons/logo-bacha.svg, krem #f6eae2) di header navy,
+    // tampil bersama nama brand (G25).
+    logoSrc: '/brands/bacha/logo.svg',
+    logoKind: 'mark',
     subdomain: 'bacha',
     subdomainAliases: [],
     hosts: ['bacha.efn.local'],

@@ -717,6 +717,34 @@ html[data-brand='wetzels'] .site-footer {
     linear-gradient(var(--color-accent) 0 6.5rem, var(--color-chrome) 6.5rem);
   padding-top: 8rem;
 }
+/* GrandLucky (grandlucky.co.id, G25): header PUTIH seperti situs resmi agar logo berwarna (biru/merah/kuning) terbaca;
+   menu biru #39439b (8.57:1), garis bawah merah logo #c42a1c. Footer tetap biru. */
+html[data-brand='grandlucky'] .site-header {
+  background: #ffffff;
+  border-bottom: 3px solid #c42a1c;
+  box-shadow: 0 1px 0 var(--color-border);
+}
+html[data-brand='grandlucky'] .site-header .site-nav a,
+html[data-brand='grandlucky'] .site-header .brand-logo {
+  color: var(--color-chrome);
+}
+html[data-brand='grandlucky'] .site-header :focus-visible {
+  outline-color: var(--color-chrome);
+}
+html[data-brand='grandlucky'] .brand-logo img {
+  height: 2.25rem;
+}
+/* Bacha (bachacoffee.com, G25): pita ornamen resmi di bawah header navy, lencana unta sedikit lebih besar. */
+html[data-brand='bacha'] .site-header {
+  border-bottom: 0;
+  background:
+    url('/brands/bacha/line-header.png') repeat-x left bottom / auto 6px,
+    var(--color-chrome);
+  padding-bottom: 6px;
+}
+html[data-brand='bacha'] .brand-logo img[data-kind='mark'] {
+  height: 2.75rem;
+}
 /* PB (parisbaguette.com): footer navy dengan tekstur grunge putih tipis. */
 html[data-brand='parisbaguette'] .site-footer {
   background: url('/brands/parisbaguette/pb-grunge.png') repeat 0 0 / 400px, var(--color-chrome);
