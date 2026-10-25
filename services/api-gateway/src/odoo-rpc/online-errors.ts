@@ -57,6 +57,22 @@ export const OnlineErrors = {
   belowMinimum: (): ApiError => ApiError.of(409, 'below_minimum', 'Jumlah poin di bawah minimum penukaran.'),
   exceedsMaxPct: (): ApiError => ApiError.of(409, 'exceeds_max_pct', 'Nilai poin melebihi batas maksimum per transaksi.'),
   pointsUnavailable: (): ApiError => ApiError.of(422, 'points_unavailable', 'Penukaran poin belum tersedia untuk pesanan ini.'),
+  // ── G26 §17 transfer bank + bukti ──
+  /** §17.2: transfer bank hanya untuk pesanan satu PT (rekening tujuan milik PT penjual). */
+  transferSinglePartOnly: (): ApiError =>
+    ApiError.of(422, 'transfer_single_part_only', 'Transfer bank hanya untuk pesanan dari satu toko. Pisahkan keranjang atau pilih metode lain.'),
+  tooManyOpenTransferOrders: (): ApiError =>
+    ApiError.of(429, 'too_many_open_orders', 'Masih ada pesanan yang menunggu transfer. Selesaikan atau batalkan dulu.'),
+  transferNotAwaitingProof: (): ApiError =>
+    ApiError.of(409, 'transfer_not_awaiting_proof', 'Pesanan ini tidak sedang menunggu bukti transfer.'),
+  transferProofLimit: (): ApiError =>
+    ApiError.of(429, 'transfer_proof_limit', 'Batas unggah bukti transfer untuk pesanan ini sudah tercapai. Hubungi layanan pelanggan.'),
+  transferWindowClosed: (): ApiError =>
+    ApiError.of(409, 'transfer_window_closed', 'Waktu unggah bukti transfer sudah habis. Batalkan dan pesan ulang bila perlu.'),
+  transferProofInvalid: (): ApiError =>
+    ApiError.of(415, 'transfer_proof_invalid', 'Foto bukti tidak dapat dibaca. Kirim foto JPG, PNG, atau WebP.'),
+  transferProofUnavailable: (): ApiError =>
+    ApiError.of(503, 'transfer_proof_unavailable', 'Bukti transfer belum dapat dikirim. Silakan coba lagi sebentar lagi.'),
   pointsCoverFullAmount: (): ApiError =>
     ApiError.of(422, 'points_cover_full_amount', 'Poin tidak boleh menutup seluruh tagihan; sisakan minimal Rp1 untuk dibayar.'),
 };

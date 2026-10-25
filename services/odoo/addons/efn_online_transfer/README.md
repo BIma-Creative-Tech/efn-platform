@@ -34,8 +34,10 @@ BFF tidak bisa melunasi pesanan transfer (`efn_online_mark_paid` → `invalid_st
 ## Keamanan & data
 - Model bukti: `company_id` + record rule multi-company. ACL: Verifikator baca/tulis (tanpa create/unlink), Auditor &
   Superadmin baca. User biasa, kasir, dan user teknis BFF tidak bisa membaca foto.
-- Data antrean disalin ke record bukti sehingga Verifikator tidak perlu hak baca pesanan/SO. Tidak ada nama, nomor HP,
-  atau data pribadi pelanggan di record ini; catatan internal Verifikator tidak pernah dikirim ke BFF.
+- Data antrean disalin ke record bukti sehingga Verifikator tidak perlu hak baca pesanan/SO. Field record tidak memuat
+  nama atau nomor HP pelanggan; catatan internal Verifikator tidak pernah dikirim ke BFF.
+- **Foto bukti adalah data pribadi**: biasanya memuat nama dan nomor rekening pengirim. Foto hanya disimpan di Odoo
+  (BFF mengirimnya sinkron dan tidak menyimpannya), dibaca hanya oleh Verifikator + Auditor, dan masuk inventaris PDP.
 - `efn_audit` mencatat create/write/unlink bukti (status, alasan, mutasi, pemutus, waktu). Foto (binary) dan catatan
   bebas dikecualikan.
 - Validasi RPC #12: pemanggil `_efn_online_check_caller`, kunci baris order, kunci idempoten + `proof_id` unik + hash

@@ -3,7 +3,8 @@
 Data antrean (nomor SO, gerai, nominal, batas waktu, rekening tujuan) disalin saat bukti diterima agar Verifikator
 cukup punya hak atas model ini (tanpa hak baca ``efn.online.order``/``sale.order``). Foto disimpan sebagai
 ``ir.attachment`` milik record ini (tidak publik, tidak tampil di chatter); hanya grup Verifikator + Auditor yang
-membaca. Tidak ada data pribadi pelanggan di record ini (nama/nomor HP tidak pernah dikirim BFF).
+membaca. Field record tidak memuat nama/nomor HP pelanggan, tetapi FOTO bukti adalah data pribadi (nama & rekening
+pengirim): BFF tidak menyimpannya, Odoo satu-satunya penyimpan (docs/04 §17.4 no. 4).
 """
 
 from odoo import _, fields, models

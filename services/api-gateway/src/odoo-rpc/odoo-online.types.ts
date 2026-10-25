@@ -22,6 +22,11 @@ export const ODOO_ONLINE_PATHS = {
   setInvoiceParty: 'efn.online.order/efn_online_set_invoice_party',
   /** G23 §15.4 (W-36, L-87): slot ambil pre-order per outlet — path gateway ke-20 (modul efn_online_slot). */
   slots: 'efn.online.channel/efn_online_slots',
+  /**
+   * G26 §17.15 (L-98): foto bukti transfer bank (JPEG base64 ≤ 1,5 MiB) — path gateway ke-21 (modul efn_online_transfer).
+   * Foto = data pribadi pengirim: hanya di memori request ini, tidak pernah di-log/disimpan BFF.
+   */
+  transferSubmit: 'efn.online.order/efn_online_transfer_submit',
 } as const;
 export type OdooOnlineMethod = keyof typeof ODOO_ONLINE_PATHS;
 
@@ -103,8 +108,8 @@ export interface ItemAttribute {
   required: boolean;
   values: { id: number; name: string; price_extra_excl: number }[];
 }
-/** G20 §12.2 no. 1: `efn.online.channel.payment_modes`. */
-export type ChannelPaymentMode = 'qris' | 'counter';
+/** G20 §12.2 no. 1: `efn.online.channel.payment_modes`. G26 §17.15: + `bank_transfer` (va/ewallet: tahap 2). */
+export type ChannelPaymentMode = 'qris' | 'counter' | 'bank_transfer';
 /**
  * L-11 (docs/04 §10.17): blok `channel` WAJIB pada hasil `efn_online_catalog` —
  * `{ code, name, company_code, currency, outlets: [{ code, public_name, pickup_enabled, prep_minutes, active }] }`.
@@ -230,7 +235,7 @@ export interface PlaceInput {
    * G20 §12.2 no. 3: hanya dikirim bila `counter` (mode `qris` = field tidak ada, payload & `payload_sha256` Odoo sama
    * dengan pra-G20).
    */
-  payment_mode?: 'counter';
+  payment_mode?: 'counter' | 'bank_transfer';
   /**
    * L-56: kode BAYAR di kasir dibuat BFF (pola `pickup_code`), hanya bila `payment_mode=counter`. Rahasia: dikirim sekali
    * ke Odoo (TLS + mTLS; Odoo hanya menyimpan hash), tidak pernah di-log. Odoo TIDAK mengembalikannya.
@@ -249,6 +254,21 @@ export interface PlaceResult {
   expires_at: Date | null;
   /** G22 §14.C.3: `amount_payable − value_idr` (tanpa poin = amount_payable). */
   amount_due: number;
+  /** G26 §17.3: rekening PT penjual — HANYA pada place `payment_mode: bank_transfer` (selain itu tidak ada). */
+  transfer_account?: { bank_name: string; account_number: string; account_holder: string };
+}
+/** G26 §17.15: argumen ke-3 `efn_online_transfer_submit` (persis 7 kunci). `image_b64` = PII (foto bukti). */
+export interface TransferSubmitInput {
+  idempotency_key: string;
+  proof_id: string;
+  transfer_ref: string;
+  image_b64: string;
+  sha256: string;
+  duplicate_suspect: boolean;
+  uploaded_at: string;
+}
+export interface TransferSubmitResult {
+  state: string;
 }
 export interface MarkPaidInput {
   payment_ref: string;
@@ -361,6 +381,8 @@ export interface OdooOnlineApi {
   counterRefundAuthorize(channel: string, platformOrderRef: string, authorization: CounterRefundAuthorizeInput): Promise<CounterRefundAuthorizeResult>;
   /** G21 §13.5: setelah place berhasil; idempoten per `idempotencyKey`. Gagal tidak membatalkan order (kecuali invoice_not_available). */
   setInvoiceParty(channel: string, platformOrderRef: string, profile: InvoiceBuyerProfile, idempotencyKey: string): Promise<SetInvoicePartyResult>;
+  /** G26 §17.15: kirim foto bukti transfer (sinkron, idempoten per `proof.idempotency_key`/`proof_id`). */
+  transferSubmit(channel: string, platformOrderRef: string, proof: TransferSubmitInput): Promise<TransferSubmitResult>;
   /** true bila circuit kanal sedang terbuka (quote/checkout langsung 503, katalog tetap dari salinan). */
   isCircuitOpen(channel: string): boolean;
 }

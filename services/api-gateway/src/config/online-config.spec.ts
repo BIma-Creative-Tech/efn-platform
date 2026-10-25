@@ -108,7 +108,7 @@ describe('Config online G19/G20', () => {
           APP_ENV: 'production',
           ONLINE_ENABLED: 'true',
           ONLINE_CHANNELS: 'GL,BCR',
-          ONLINE_PAYMENT_METHODS: 'counter',
+          ONLINE_PAYMENT_METHODS: 'bank_transfer', // G26 L-103: pilot tanpa vendor = transfer bank (counter dibekukan)
           ODOO_ONLINE_EVENT_HMAC_FILE: '/s/hmac',
           ...fileEnv,
         },
@@ -152,25 +152,29 @@ describe('Config online G19/G20', () => {
         reader,
       );
 
-    it('default: dev/test qris,counter; staging/production qris; nilai di luar qris|counter → ConfigError', () => {
-      expect(testConfig().onlinePaymentMethods).toEqual(['qris', 'counter']);
-      expect(testConfig({ APP_ENV: 'dev' }).onlinePaymentMethods).toEqual(['qris', 'counter']);
+    it('G26 default: dev/test qris,bank_transfer (+counter hanya ONLINE_COUNTER_LEGACY); staging/production qris; nilai asing → ConfigError', () => {
+      expect(testConfig().onlinePaymentMethods).toEqual(['qris', 'bank_transfer']);
+      expect(testConfig({ APP_ENV: 'dev' }).onlinePaymentMethods).toEqual(['qris', 'bank_transfer']);
+      expect(testConfig({ ONLINE_COUNTER_LEGACY: 'true' }).onlinePaymentMethods).toEqual(['qris', 'counter', 'bank_transfer']);
       expect(testConfig({ APP_ENV: 'staging' }).onlinePaymentMethods).toEqual(['qris']);
       expect(testConfig({ APP_ENV: 'production' }).onlinePaymentMethods).toEqual(['qris']);
-      expect(testConfig({ ONLINE_PAYMENT_METHODS: 'counter' }).onlinePaymentMethods).toEqual(['counter']);
-      expect(testConfig({ ONLINE_PAYMENT_METHODS: 'counter, qris;counter' }).onlinePaymentMethods).toEqual(['counter', 'qris']);
-      for (const bad of ['cash', 'QRIS', ',', 'qris,va']) {
+      expect(testConfig({ ONLINE_PAYMENT_METHODS: 'bank_transfer' }).onlinePaymentMethods).toEqual(['bank_transfer']);
+      expect(testConfig({ ONLINE_PAYMENT_METHODS: 'bank_transfer, qris;bank_transfer' }).onlinePaymentMethods).toEqual(['bank_transfer', 'qris']);
+      expect(testConfig({ ONLINE_PAYMENT_METHODS: 'counter, qris', ONLINE_COUNTER_LEGACY: 'true' }).onlinePaymentMethods).toEqual(['counter', 'qris']);
+      for (const bad of ['cash', 'QRIS', ',', 'qris,va', 'counter']) {
         expect(() => testConfig({ ONLINE_PAYMENT_METHODS: bad }).onlinePaymentMethods).toThrow(/ONLINE_PAYMENT_METHODS/);
       }
     });
 
-    it('production + counter saja + PAYMENT_PROVIDER=disabled (default production) → start valid', () => {
-      expect(() => prod({ ONLINE_PAYMENT_METHODS: 'counter' }).assertStartupSecrets()).not.toThrow();
-      expect(() => prod({ ONLINE_PAYMENT_METHODS: 'counter', PAYMENT_PROVIDER: 'disabled' }).assertStartupSecrets()).not.toThrow();
+    it('G26 L-103: production + bank_transfer saja + PAYMENT_PROVIDER=disabled (default production) → start valid; counter → gagal', () => {
+      expect(() => prod({ ONLINE_PAYMENT_METHODS: 'bank_transfer' }).assertStartupSecrets()).not.toThrow();
+      expect(() => prod({ ONLINE_PAYMENT_METHODS: 'bank_transfer', PAYMENT_PROVIDER: 'disabled' }).assertStartupSecrets()).not.toThrow();
+      expect(() => prod({ ONLINE_PAYMENT_METHODS: 'counter' }).assertStartupSecrets()).toThrow(/L-95/);
+      expect(() => prod({ ONLINE_PAYMENT_METHODS: 'counter', ONLINE_COUNTER_LEGACY: 'true' }).assertStartupSecrets()).toThrow(/ONLINE_COUNTER_LEGACY/);
     });
 
-    it('production + qris tanpa provider nyata (disabled / default) → gagal start dengan pesan L-55 tanpa nilai rahasia', () => {
-      const cases: Record<string, string>[] = [{}, { ONLINE_PAYMENT_METHODS: 'qris' }, { ONLINE_PAYMENT_METHODS: 'qris,counter', PAYMENT_PROVIDER: 'disabled' }];
+    it('production + qris tanpa provider nyata (disabled / default) → gagal start dengan pesan L-103 tanpa nilai rahasia', () => {
+      const cases: Record<string, string>[] = [{}, { ONLINE_PAYMENT_METHODS: 'qris' }, { ONLINE_PAYMENT_METHODS: 'qris,bank_transfer', PAYMENT_PROVIDER: 'disabled' }];
       for (const over of cases) {
         let msg = '';
         try {
@@ -184,8 +188,8 @@ describe('Config online G19/G20', () => {
       }
     });
 
-    it('production tetap melarang PAYMENT_PROVIDER=mock (juga dengan counter saja)', () => {
-      expect(() => prod({ ONLINE_PAYMENT_METHODS: 'counter', PAYMENT_PROVIDER: 'mock' }).assertStartupSecrets()).toThrow(/PAYMENT_PROVIDER/);
+    it('production tetap melarang PAYMENT_PROVIDER=mock (juga dengan bank_transfer saja)', () => {
+      expect(() => prod({ ONLINE_PAYMENT_METHODS: 'bank_transfer', PAYMENT_PROVIDER: 'mock' }).assertStartupSecrets()).toThrow(/PAYMENT_PROVIDER/);
     });
 
     it('online OFF di production: qris + disabled tidak memblokir start (gerbang hanya saat ONLINE_ENABLED=true)', () => {

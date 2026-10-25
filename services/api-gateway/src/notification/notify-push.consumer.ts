@@ -31,7 +31,7 @@ export const NOTIFY_SOURCE_PUBLISHERS: Readonly<Record<string, readonly string[]
 /** Template yang boleh dipakai per sumber (template online tidak bisa dikirim dengan source price_hunter dan sebaliknya). */
 export const SOURCE_TEMPLATES: Readonly<Record<string, readonly string[]>> = {
   price_hunter: ['price_hunter_valid', 'price_hunter_rejected'],
-  online_order: ['online_order_ready', 'online_order_cancelled', 'online_order_refunded'],
+  online_order: ['online_order_ready', 'online_order_cancelled', 'online_order_refunded', 'online_transfer_rejected'],
   loyalty_expiry: ['loyalty_inactivity_notice'],
   table_booking: ['booking_confirmed', 'booking_cancelled'],
 };

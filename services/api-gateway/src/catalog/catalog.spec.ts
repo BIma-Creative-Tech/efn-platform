@@ -77,7 +77,7 @@ describe('CatalogService (§10.3.2)', () => {
         name: 'EFN Retail',
         fulfilment: { pickup: true, delivery: false },
         outlets: [{ outlet_code: 'TOKO-01', public_name: 'Toko 01', pickup_enabled: true, prep_minutes: 20 }],
-        payment_modes: ['qris', 'counter'], // L-52/L-55: channel_data tanpa payment_modes → ONLINE_PAYMENT_METHODS (default test qris,counter)
+        payment_modes: ['qris', 'bank_transfer'], // L-52/L-55: channel_data tanpa payment_modes → ONLINE_PAYMENT_METHODS (default test G26 qris,bank_transfer)
         business_type: 'retail', // G22 B-2: salinan lama tanpa field
         loyalty: { earn: false, redeem: false }, // G22: flag kanal absen / kill switch mati
       },
@@ -243,7 +243,8 @@ describe('G19 §11.3: kanal per brand', () => {
   });
 
   it('L-52/L-55: payment_modes = (blok channel Odoo ?? ONLINE_PAYMENT_METHODS) ∩ ONLINE_PAYMENT_METHODS; mode tak dikenal dibuang', async () => {
-    const config = testConfig({ ONLINE_ENABLED: 'true', ODOO_ONLINE_MOCK: 'true', ONLINE_CHANNELS: 'GL,PB,BCR,BCF' });
+    // G26: regresi alur counter memakai saklar dev ONLINE_COUNTER_LEGACY (default dev/test = qris,counter,bank_transfer)
+    const config = testConfig({ ONLINE_ENABLED: 'true', ODOO_ONLINE_MOCK: 'true', ONLINE_CHANNELS: 'GL,PB,BCR,BCF', ONLINE_COUNTER_LEGACY: 'true' });
     const data: Record<string, unknown> = {
       GL: { ...CHANNEL_DATA, code: 'GL', company_code: 'GL', payment_modes: ['qris', 'counter'] },
       PB: { ...CHANNEL_DATA, code: 'PB', company_code: 'PB' }, // pra-G20: tanpa payment_modes
@@ -258,12 +259,12 @@ describe('G19 §11.3: kanal per brand', () => {
     const mk = (c = config) => new CatalogService(c, db, new FakeKvStore(), new MockOdooOnline(), memStorage().storage, new OnlineMetrics(new MetricsService()));
     expect((await mk().channels()).map((c) => [c.channel_code, c.payment_modes])).toEqual([
       ['GL', ['qris', 'counter']],
-      ['PB', ['qris', 'counter']], // pra-G20 → daftar BFF (default test qris,counter)
+      ['PB', ['qris', 'counter', 'bank_transfer']], // pra-G20 → daftar BFF (default test + legacy)
       ['BCR', ['counter']],
       ['BCF', ['counter']],
     ]);
     // pilot tanpa vendor: hanya counter → qris Odoo tidak ditawarkan ke klien
-    const pilot = testConfig({ ONLINE_ENABLED: 'true', ODOO_ONLINE_MOCK: 'true', ONLINE_CHANNELS: 'GL,PB,BCR,BCF', ONLINE_PAYMENT_METHODS: 'counter' });
+    const pilot = testConfig({ ONLINE_ENABLED: 'true', ODOO_ONLINE_MOCK: 'true', ONLINE_CHANNELS: 'GL,PB,BCR,BCF', ONLINE_PAYMENT_METHODS: 'counter', ONLINE_COUNTER_LEGACY: 'true' });
     expect((await mk(pilot).channels()).map((c) => [c.channel_code, c.payment_modes])).toEqual([
       ['GL', ['counter']],
       ['PB', ['counter']],
@@ -314,10 +315,11 @@ describe('G19 §11.3: kanal per brand', () => {
 
   it('stub mock G20: kanal = kode PT, brand, payment_modes, weight_kg; kode lama RTL/FNB tidak dikenal', async () => {
     const odoo = new MockOdooOnline();
-    expect((await odoo.catalog('GL', null)).channel).toMatchObject({ code: 'GL', company_code: 'GL', brand_code: 'GL', payment_modes: ['qris', 'counter'] });
-    expect((await odoo.catalog('PB', null)).channel).toMatchObject({ code: 'PB', company_code: 'PB', brand_code: 'PB', payment_modes: ['qris'] });
+    // G26: mock kanal GL/PB/BCF juga menerima bank_transfer (rekening demo)
+    expect((await odoo.catalog('GL', null)).channel).toMatchObject({ code: 'GL', company_code: 'GL', brand_code: 'GL', payment_modes: ['qris', 'counter', 'bank_transfer'] });
+    expect((await odoo.catalog('PB', null)).channel).toMatchObject({ code: 'PB', company_code: 'PB', brand_code: 'PB', payment_modes: ['qris', 'bank_transfer'] });
     expect((await odoo.catalog('BCR', null)).channel).toMatchObject({ code: 'BCR', company_code: 'BCR', brand_code: 'BACHA' });
-    expect((await odoo.catalog('BCF', null)).channel).toMatchObject({ code: 'BCF', company_code: 'BCF', brand_code: 'BACHA', payment_modes: ['counter'] });
+    expect((await odoo.catalog('BCF', null)).channel).toMatchObject({ code: 'BCF', company_code: 'BCF', brand_code: 'BACHA', payment_modes: ['counter', 'bank_transfer'] });
     expect((await odoo.catalog('GL', null)).items.map((i) => [i.product_id, i.weight_kg])).toEqual([
       [11, 5],
       [12, 1.9],

@@ -13,7 +13,10 @@ import { parseInvoiceRequest } from './invoice-request';
 import { isPaymentMethod } from './online.model';
 import { OnlineEventHmacGuard } from './order-events.guard';
 import { EventOutcome, OrderEventsService, parseOdooEvent } from './order-events.service';
-import { CheckoutInput, OrderView, OrdersService } from './orders.service';
+import { CheckoutInput, OrderView, OrdersService, TransferPaymentView } from './orders.service';
+import { ImageProcessor } from '../market-scout/image/image-processor';
+import { MultipartRequest } from '../market-scout/multipart-form';
+import { readTransferProofForm } from './transfer-proof-form';
 
 /** id bukan UUID → 404 (bukan 400), sama dengan order milik member lain (anti-enumeration, §10.3.1). */
 function orderIdParam(id: string): string {
@@ -22,6 +25,9 @@ function orderIdParam(id: string): string {
 }
 
 const CHECKOUT_KEYS = ['quote_id', 'accept_total', 'payment_method', 'invoice_request', 'points_redeem'];
+/** G26 §17.4: bukti transfer cukup 1600 px (teks mutasi terbaca) agar JPEG ≤ 1,5 MiB (batas Odoo). */
+const TRANSFER_MAX_DIMENSION = 1600;
+const TRANSFER_JPEG_QUALITY = 80;
 
 /**
  * G22 §14.C.2 `points_redeem: [{ channel_code, points }]` — maks satu entri per kanal, poin bulat > 0, ≤ 10 entri;
@@ -72,6 +78,7 @@ export class OrdersController {
     private readonly config: AppConfig,
     private readonly orders: OrdersService,
     private readonly limiter: RateLimiter,
+    private readonly images: ImageProcessor,
   ) {}
 
   @Post()
@@ -132,6 +139,31 @@ export class OrdersController {
     noStore(reply);
     await limitByMember(this.limiter, this.config, 'PICKUP', user.memberId);
     return this.orders.pickupCodes(user.memberId, orderIdParam(id));
+  }
+
+  /**
+   * G26 §17.4: unggah foto bukti transfer (multipart, satu berkas `photo`, tanpa field lain). Foto tidak disimpan BFF —
+   * dikirim sinkron ke Odoo. `202 { payment }`.
+   */
+  @Post(':order_id/transfer-proof')
+  @HttpCode(HttpStatus.ACCEPTED)
+  async transferProof(
+    @Param('order_id') id: string,
+    @CurrentUser() user: AuthUser,
+    @Req() req: FastifyRequest,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ): Promise<{ payment: TransferPaymentView }> {
+    requireOnline(this.config);
+    noStore(reply);
+    if (!this.config.onlinePaymentMethods.includes('bank_transfer')) throw Errors.notFound();
+    await limitByMember(this.limiter, this.config, 'TRANSFER_PROOF', user.memberId);
+    const mreq = req as unknown as Partial<MultipartRequest>;
+    if (typeof mreq.isMultipart !== 'function' || typeof mreq.parts !== 'function' || !mreq.isMultipart()) throw Errors.unsupportedMediaType();
+    const photo = await readTransferProofForm(mreq.parts(), { maxFileBytes: this.config.onlineTransferMaxBytes });
+    const payment = await this.orders.submitTransferProof(user.memberId, orderIdParam(id), photo, (b) =>
+      this.images.normalize(b, { maxDimension: TRANSFER_MAX_DIMENSION, quality: TRANSFER_JPEG_QUALITY }),
+    );
+    return { payment };
   }
 
   /** DEV/STAGING SAJA (§10.7): 404 di production atau provider ≠ mock. */

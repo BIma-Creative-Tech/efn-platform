@@ -26,6 +26,8 @@ import {
   SlotsResult,
   StatusRow,
   StockRow,
+  TransferSubmitInput,
+  TransferSubmitResult,
 } from './odoo-online.types';
 
 /**
@@ -74,7 +76,7 @@ interface MockOrder {
   cancelRefund: CancelResult['refund'];
   promoCodes: string[];
   /** G20 §12.2: mode bayar SO. */
-  paymentMode: 'qris' | 'counter';
+  paymentMode: 'qris' | 'counter' | 'bank_transfer';
   /** L-56: SHA-256 kode bayar dari BFF (meniru Odoo yang hanya menyimpan hash); teks asli tidak pernah disimpan. */
   counterSha: string | null;
   /** G22 §14.C.3: porsi Poin EFN (Rupiah) saat place; 0 = tanpa poin. */
@@ -94,13 +96,15 @@ const MOCK_CHANNELS: Readonly<Record<string, { company: string; brand: string | 
   WTZ: { company: 'WTZ', brand: 'WTZ', name: "Wetzel's Pretzels (demo)" },
 };
 /** Mode bayar default kanal demo (§12.2 no. 1) — PLACEHOLDER. */
-const MOCK_PAYMENT_MODES: Readonly<Record<string, ('qris' | 'counter')[]>> = {
-  GL: ['qris', 'counter'],
-  PB: ['qris'],
+const MOCK_PAYMENT_MODES: Readonly<Record<string, ('qris' | 'counter' | 'bank_transfer')[]>> = {
+  GL: ['qris', 'counter', 'bank_transfer'],
+  PB: ['qris', 'bank_transfer'],
   BCR: ['qris', 'counter'],
-  BCF: ['counter'],
+  BCF: ['counter', 'bank_transfer'],
   WTZ: ['qris', 'counter'],
 };
+/** G26 §17.3: rekening DEMO (bukan rekening nyata; nomor berawalan 9999 seperti VA dummy) untuk kanal mock. */
+export const MOCK_TRANSFER_ACCOUNT = { bank_name: 'Bank Demo', account_number: '9999000123', account_holder: 'PT Demo EFN (mock)' } as const;
 /** Produk reward Odoo (discount line) demo — id di luar katalog. */
 const REWARD_PRODUCT_ID = 9001;
 /** `payment_timeout_minutes` default field Odoo G19 (§11.1). */
@@ -154,7 +158,7 @@ export class MockOdooOnline implements OdooOnlineApi {
   /** SEC-131: `max_qty_per_line` kanal demo (default 20 = `max_qty` katalog stub); qty baris > nilai ini → issue `qty_limit`. */
   maxQtyPerLine = MOCK_MAX_QTY_PER_LINE;
   /** G20 §12.2: `payment_modes` per kanal (test boleh mengubah). */
-  readonly paymentModes = new Map<string, ('qris' | 'counter')[]>(Object.entries(MOCK_PAYMENT_MODES).map(([k, v]) => [k, [...v]]));
+  readonly paymentModes = new Map<string, ('qris' | 'counter' | 'bank_transfer')[]>(Object.entries(MOCK_PAYMENT_MODES).map(([k, v]) => [k, [...v]]));
   /** G20 §12.3: `max_order_weight_kg` per kanal (0/absen = mati). */
   readonly maxOrderWeightKg = new Map<string, number>([['BCF', 10]]);
   /** G20 §12.3: `weight_missing_policy` per kanal (default `block` bila batas aktif). */
@@ -450,7 +454,7 @@ export class MockOdooOnline implements OdooOnlineApi {
     if (q.issues.length > 0) throw new OdooRpcError('business', 'out_of_stock');
     if (q.amount_payable < 1) throw new OdooRpcError('invalid_response', null, 'respons Odoo tidak valid: amount_payable < 1'); // = parsePlace
     // G20 §12.2 no. 1/3: mode bayar harus diizinkan kanal (ASUMSI: Odoo menolak `invalid_input`)
-    const mode = order.payment_mode === 'counter' ? 'counter' : 'qris';
+    const mode = order.payment_mode === 'counter' ? 'counter' : order.payment_mode === 'bank_transfer' ? 'bank_transfer' : 'qris';
     if (!(this.paymentModes.get(channel) ?? ['qris']).includes(mode)) throw new OdooRpcError('business', 'invalid_input');
     // L-56: kode bayar dari BFF wajib untuk counter (alfabet §10.2), dilarang untuk qris; ASUMSI Odoo → invalid_input
     const counterOk = order.counter_code !== undefined && /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$/.test(order.counter_code);
@@ -504,7 +508,46 @@ export class MockOdooOnline implements OdooOnlineApi {
       amount_payable: o.amountPayable,
       expires_at: o.expiresAt,
       amount_due: o.amountDue,
+      // G26 §17.3: rekening PT DEMO (bukan rekening nyata) hanya untuk place bank_transfer
+      ...(o.paymentMode === 'bank_transfer' ? { transfer_account: { ...MOCK_TRANSFER_ACCOUNT } } : {}),
     };
+  }
+
+  /** G26 §17.15: bukti per order (meniru Odoo: satu bukti aktif, idempoten per proof_id, payload beda → conflict). */
+  readonly transferProofs = new Map<string, { ref: string; sha: string; state: 'awaiting_verification' | 'approved' | 'rejected' }>();
+  /** Gagal transport berikutnya (uji 503 transfer_proof_unavailable). */
+  failTransferSubmit = false;
+
+  async transferSubmit(channel: string, ref: string, proof: TransferSubmitInput): Promise<TransferSubmitResult> {
+    this.track('transferSubmit', channel);
+    if (this.failTransferSubmit) throw new OdooRpcError('transport', null, 'timeout');
+    const o = this.orders.get(ref);
+    if (!o || o.channel !== channel) throw new OdooRpcError('business', 'not_found');
+    const fp = sha(JSON.stringify({ ref, sha: proof.sha256, dup: proof.duplicate_suspect, at: proof.uploaded_at, tr: proof.transfer_ref }));
+    const prev = this.transferProofs.get(proof.proof_id);
+    if (prev) {
+      if (prev.ref !== ref || prev.sha !== fp) throw new OdooRpcError('business', 'idempotency_conflict');
+      return { state: prev.state };
+    }
+    if (o.paymentMode !== 'bank_transfer' || o.state !== 'placed' || o.expiresAt.getTime() <= this.now()) throw new OdooRpcError('business', 'invalid_state');
+    if ([...this.transferProofs.values()].some((p) => p.ref === ref && p.state === 'awaiting_verification')) throw new OdooRpcError('business', 'invalid_state');
+    if (!/^[A-Za-z0-9+/]+=*$/.test(proof.image_b64) || !proof.image_b64.startsWith('/9j/')) throw new OdooRpcError('business', 'invalid_input');
+    this.transferProofs.set(proof.proof_id, { ref, sha: fp, state: 'awaiting_verification' });
+    return { state: 'awaiting_verification' };
+  }
+
+  /** Dev/test: Verifikator menyetujui bukti terakhir pesanan → `confirmed`/`stock_short` (+ event `paid` dibangun test). */
+  verifyTransfer(ref: string, decision: 'approve' | 'reject'): MockOrder {
+    const o = this.get(ref);
+    const entry = [...this.transferProofs.entries()].find(([, p]) => p.ref === ref && p.state === 'awaiting_verification');
+    if (!entry || o.paymentMode !== 'bank_transfer') throw new OdooRpcError('business', 'invalid_state');
+    entry[1].state = decision === 'approve' ? 'approved' : 'rejected';
+    if (decision === 'approve') {
+      o.paymentRef = entry[0];
+      o.state = o.lines.some((l) => l.product_id === STOCK_SHORT_PRODUCT) ? 'stock_short' : 'confirmed';
+    }
+    o.seq += 1;
+    return o;
   }
 
   /** G22 §14.C.4 (meniru E-28): alokasi poin refund = round(min(ΣR, T) × V ÷ T) − Σ sebelumnya. */

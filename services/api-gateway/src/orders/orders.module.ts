@@ -17,6 +17,7 @@ import { OnlineSagaService } from './online-saga.service';
 import { LoyaltyModule } from '../loyalty/loyalty.module';
 import { OrderEventsController, OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
+import { ImageProcessor } from '../market-scout/image/image-processor';
 
 /**
  * Order online + saga (docs/04 §10.3.5–10.3.6, §10.5–10.7, §10.9; ADR-034 & ADR-019 Proposed): checkout, status,
@@ -36,6 +37,8 @@ import { OrdersService } from './orders.service';
     OnlineJobsService,
     OnlineAdminService,
     OnlinePrivacyService,
+    // G26 §17.4: re-encode bukti transfer (instans per modul; semaphore decode per instans, batas memori SEC-19 per instans)
+    ImageProcessor,
   ],
   exports: [OnlinePrivacyService],
 })

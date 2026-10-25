@@ -488,11 +488,15 @@ vc() { # nama harapan app_env VAR=nilai...
 }
 vc "88 production ONLINE_ENABLED=true dengan PAYMENT_PROVIDER=disabled ditolak" 1 production ONLINE_ENABLED=true
 PP=xendit vc "89 production ONLINE_ENABLED=true dengan provider nyata diterima" 0 production ONLINE_ENABLED=true ONLINE_CHANNELS=GL
-vc "89b L-55 production online counter + provider disabled diterima" 0 production ONLINE_ENABLED=true ONLINE_CHANNELS=GL ONLINE_PAYMENT_METHODS=counter
-vc "89c L-55 production online qris,counter tanpa vendor ditolak" 1 production ONLINE_ENABLED=true ONLINE_CHANNELS=GL ONLINE_PAYMENT_METHODS=qris,counter
+vc "89b L-103 production online bank_transfer + provider disabled diterima" 0 production ONLINE_ENABLED=true ONLINE_CHANNELS=GL ONLINE_PAYMENT_METHODS=bank_transfer
+vc "89b2 L-95 production counter dibekukan ditolak" 1 production ONLINE_ENABLED=true ONLINE_CHANNELS=GL ONLINE_PAYMENT_METHODS=counter
+vc "89b3 L-95 staging counter + ONLINE_COUNTER_LEGACY ditolak (saklar dev)" 1 staging ONLINE_PAYMENT_METHODS=counter ONLINE_COUNTER_LEGACY=true
+vc "89c L-103 production online qris,bank_transfer tanpa vendor ditolak" 1 production ONLINE_ENABLED=true ONLINE_CHANNELS=GL ONLINE_PAYMENT_METHODS=qris,bank_transfer
 PP=xendit vc "89d L-55 production online qris dengan vendor nyata diterima" 0 production ONLINE_ENABLED=true ONLINE_CHANNELS=GL ONLINE_PAYMENT_METHODS=qris
 vc "89e L-55 ONLINE_PAYMENT_METHODS tidak dikenal ditolak" 1 staging ONLINE_PAYMENT_METHODS=card
-vc "89f L-55 ONLINE_PAYMENT_METHODS duplikat ditolak" 1 staging ONLINE_PAYMENT_METHODS=counter,counter
+vc "89f L-55 ONLINE_PAYMENT_METHODS duplikat ditolak" 1 staging ONLINE_PAYMENT_METHODS=bank_transfer,bank_transfer
+vc "89g G26 ONLINE_TRANSFER_MAX_UPLOADS=6 ditolak" 1 staging ONLINE_TRANSFER_MAX_UPLOADS=6
+vc "89h G26 ONLINE_TRANSFER_MIN_VERIFY_SECONDS=600 diterima" 0 staging ONLINE_TRANSFER_MIN_VERIFY_SECONDS=600
 vc "90 ONLINE_ENABLED bukan boolean ditolak" 1 staging ONLINE_ENABLED=yes
 vc "91 ONLINE_CHANNELS huruf kecil ditolak" 1 staging ONLINE_CHANNELS=gl
 vc "92 ONLINE_CHANNELS GL,PB,BCR,BCF diterima (G20 kode kanal = kode PT)" 0 staging ONLINE_CHANNELS=GL,PB,BCR,BCF

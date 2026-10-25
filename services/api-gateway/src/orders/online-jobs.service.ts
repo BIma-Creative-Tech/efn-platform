@@ -98,7 +98,10 @@ export class OnlineJobsService implements OnModuleInit, OnModuleDestroy {
     for (const c of candidates) {
       // G20 §12.2: order bayar di kasir — Odoo sumber kebenaran pelunasan. Sebelum kedaluwarsa, tanya status SO; bila
       // sudah lunas di POS (event belum sampai) → terapkan pelunasan, jangan batalkan.
-      if (c.payment_method === 'counter' && c.status === 'awaiting_counter_payment') {
+      // G26: transfer bank sama — Verifikator Odoo bisa sudah menyetujui (event `paid` belum sampai)
+      const internalWaiting =
+        (c.payment_method === 'counter' && c.status === 'awaiting_counter_payment') || (c.payment_method === 'bank_transfer' && c.status === 'awaiting_payment');
+      if (internalWaiting) {
         const outcome = await this.counterPaidBeforeExpiry(c.id, now);
         if (outcome === 'paid' || outcome === 'retry') {
           skipped += 1;
@@ -121,6 +124,7 @@ export class OnlineJobsService implements OnModuleInit, OnModuleDestroy {
           if (intent?.status === 'paid') return 'skip' as const; // webhook menang
         }
         await r.transitionOrder(o.id, [o.status], 'expired', { close_reason: 'payment_expired', closed_at: new Date(this.now()) });
+        if (o.payment_method === 'bank_transfer') await r.closeTransferProofs(o.id, 'expired', null); // G26 §17.4 no. 6
         await this.points?.releaseOrder(r, o.id, await r.getParts(o.id)); // G22 C.3: release di transaksi transisi
         const m = unpaidClosedMessage(o.id, 'payment_expired');
         await r.enqueue(QUEUES.ORDER_UNPAID_CLOSED, { ...m }, m.idempotency_key);
@@ -242,7 +246,8 @@ export class OnlineJobsService implements OnModuleInit, OnModuleDestroy {
   private async statusPull(): Promise<number> {
     const parts = await this.repo.partsInStatusBefore(['confirmed', 'ready', 'review'], new Date(this.now()), 500);
     // G20 §12.2: bagian bayar-di-kasir yang masih menunggu — event `paid` yang hilang dipulihkan dari status SO
-    const counterParts = await this.repo.counterAwaitingParts(200);
+    // G26: + bagian transfer bank menunggu verifikasi (jalur pelunasan internal yang sama)
+    const counterParts = [...(await this.repo.counterAwaitingParts(200)), ...(await this.repo.transferAwaitingParts(200))];
     const counterIds = new Set(counterParts.map((p) => p.id));
     const byChannel = new Map<string, string[]>();
     for (const p of [...parts, ...counterParts]) byChannel.set(p.channel_code, [...(byChannel.get(p.channel_code) ?? []), p.id]);
@@ -304,7 +309,7 @@ export class OnlineJobsService implements OnModuleInit, OnModuleDestroy {
         adminAuditRetentionDays: this.config.onlineAdminAuditRetentionDays,
       });
       this.metrics.retention(res);
-      const total = res.pickupNulled + res.counterNulled + res.qrNulled + res.unlinked + res.eventsPurged + res.adminAuditPurged;
+      const total = res.pickupNulled + res.counterNulled + res.qrNulled + res.unlinked + res.eventsPurged + res.adminAuditPurged + (res.transferProofsPurged ?? 0);
       if (total > 0) this.logger.log(`Retensi online: ${JSON.stringify(res)}`);
       return res;
     });

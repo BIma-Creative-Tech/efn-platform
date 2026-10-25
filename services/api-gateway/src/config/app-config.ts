@@ -1470,15 +1470,49 @@ export class AppConfig {
    * payment_method_unavailable`. L-52: juga dipakai sebagai `payment_modes` kanal bila blok `channel` Odoo tidak
    * memuatnya; `payment_modes` yang tampil = (mode Odoo ?? daftar ini) ∩ daftar ini.
    */
-  get onlinePaymentMethods(): ('qris' | 'counter')[] {
+  get onlinePaymentMethods(): ('qris' | 'counter' | 'bank_transfer')[] {
     const appEnv = this.str('APP_ENV');
     const devLike = appEnv === 'dev' || appEnv === 'test' || (appEnv === undefined && this.str('NODE_ENV') === 'test');
-    const raw = this.str('ONLINE_PAYMENT_METHODS') ?? (devLike ? 'qris,counter' : 'qris');
+    // G26 L-95: default dev/test = qris,bank_transfer (+ counter hanya bila ONLINE_COUNTER_LEGACY=true, uji regresi)
+    const raw = this.str('ONLINE_PAYMENT_METHODS') ?? (devLike ? (this.onlineCounterLegacy ? 'qris,counter,bank_transfer' : 'qris,bank_transfer') : 'qris');
     const out = [...new Set(raw.split(/[\s,;]+/).filter((s) => s.length > 0))];
-    if (out.length === 0 || out.some((m) => m !== 'qris' && m !== 'counter')) {
-      throw new ConfigError('ONLINE_PAYMENT_METHODS hanya boleh berisi qris|counter');
+    if (out.length === 0 || out.some((m) => m !== 'qris' && m !== 'counter' && m !== 'bank_transfer')) {
+      throw new ConfigError('ONLINE_PAYMENT_METHODS hanya boleh berisi qris|bank_transfer (counter: ONLINE_COUNTER_LEGACY)');
     }
-    return out as ('qris' | 'counter')[];
+    // L-95 (docs/04 §17.1 no. 3): pesanan online wajib lunas sebelum diproses — bayar di kasir dibekukan
+    if (out.includes('counter') && !this.onlineCounterLegacy) {
+      throw new ConfigError('ONLINE_PAYMENT_METHODS memuat counter tetapi ONLINE_COUNTER_LEGACY bukan true (L-95: pesanan online wajib bayar dulu)');
+    }
+    return out as ('qris' | 'counter' | 'bank_transfer')[];
+  }
+  /**
+   * G26 L-95: `true` hanya di dev/test untuk uji regresi alur bayar di kasir lama (pesanan online `counter`). Staging/
+   * production → ConfigError bila true. Default false.
+   */
+  get onlineCounterLegacy(): boolean {
+    const v = this.bool('ONLINE_COUNTER_LEGACY', false);
+    const appEnv = this.str('APP_ENV');
+    const devLike = appEnv === 'dev' || appEnv === 'test' || (appEnv === undefined && this.str('NODE_ENV') === 'test');
+    if (v && !devLike) throw new ConfigError('ONLINE_COUNTER_LEGACY hanya untuk APP_ENV=dev|test');
+    return v;
+  }
+  /** G26 §17.4 no. 1: maks unggahan bukti transfer per order (1..5, default 3). */
+  get onlineTransferMaxUploads(): number {
+    return this.int('ONLINE_TRANSFER_MAX_UPLOADS', 3, 1, 5);
+  }
+  /** G26 §17.4 no. 6: sisa waktu minimum untuk verifikasi staf (detik; unggah ditolak setelah `expires_at − nilai`). */
+  get onlineTransferMinVerifySeconds(): number {
+    const v = this.int('ONLINE_TRANSFER_MIN_VERIFY_SECONDS', 600, 300, 1800);
+    if (v >= this.onlinePaymentTimeoutSeconds) throw new ConfigError('ONLINE_TRANSFER_MIN_VERIFY_SECONDS harus < ONLINE_PAYMENT_TIMEOUT_SECONDS');
+    return v;
+  }
+  /** G26 §17.2: order transfer terbuka per member (1..3, default 1; tetap dihitung di batas order terbuka total). */
+  get onlineMaxOpenTransferOrdersPerMember(): number {
+    return this.int('ONLINE_MAX_OPEN_TRANSFER_ORDERS_PER_MEMBER', 1, 1, 3);
+  }
+  /** G26 §17.4 no. 2: ukuran maks foto bukti sebelum re-encode (byte; default 8 MB, plafon multipart = MARKET_SCOUT_MAX_BYTES). */
+  get onlineTransferMaxBytes(): number {
+    return Math.min(this.int('ONLINE_TRANSFER_MAX_BYTES', 8 * 1024 * 1024, 64 * 1024, 16 * 1024 * 1024), this.marketScoutMaxBytes);
   }
   /** Interval sinkron katalog (detik). 0 = job mati (test). */
   get onlineCatalogSyncSeconds(): number {
@@ -1702,6 +1736,12 @@ export class AppConfig {
       () => this.onlineMaxOpenOrdersPerMember,
       () => this.onlineMaxOpenCounterOrdersPerMember,
       () => this.onlinePaymentMethods,
+      // G26 §17.10
+      () => this.onlineCounterLegacy,
+      () => this.onlineTransferMaxUploads,
+      () => this.onlineTransferMinVerifySeconds,
+      () => this.onlineMaxOpenTransferOrdersPerMember,
+      () => this.onlineTransferMaxBytes,
       () => this.onlineCatalogSyncSeconds,
       () => this.minioCatalogBucket,
       () => this.odooOnlineMock,
@@ -1709,8 +1749,8 @@ export class AppConfig {
       attempt(() => void getter());
     }
     if (problems.length > 0) return problems;
-    // L-55: production + online aktif + `qris` → wajib provider nyata. `mock` sudah ditolak `paymentProvider`; `disabled`
-    // hanya sah bila ONLINE_PAYMENT_METHODS=counter (bayar di kasir tidak pernah memanggil provider). Pesan tanpa nilai rahasia.
+    // L-55 → L-103 (G26): production + online aktif + `qris` → wajib provider nyata. `mock` sudah ditolak `paymentProvider`;
+    // `disabled` hanya sah bila daftar tanpa qris (mis. `bank_transfer` saja — tidak pernah memanggil provider).
     if (this.isProductionDeployment && this.onlineEnabled && this.onlinePaymentMethods.includes('qris')) {
       let provider: string | null = null;
       try {
@@ -1720,7 +1760,7 @@ export class AppConfig {
       }
       if (provider !== null && provider !== 'xendit' && provider !== 'midtrans') {
         problems.push(
-          'ONLINE_PAYMENT_METHODS memuat qris tetapi PAYMENT_PROVIDER bukan xendit|midtrans (L-55); pilot tanpa vendor: ONLINE_PAYMENT_METHODS=counter + PAYMENT_PROVIDER=disabled',
+          'ONLINE_PAYMENT_METHODS memuat qris tetapi PAYMENT_PROVIDER bukan xendit|midtrans (L-103); pilot tanpa vendor: ONLINE_PAYMENT_METHODS=bank_transfer + PAYMENT_PROVIDER=disabled',
         );
       }
     }
@@ -2191,7 +2231,8 @@ export type OnlineRateLimitName =
   | 'CANCEL'
   | 'EVENTS'
   | 'PROMO_MEMBER'
-  | 'PROMO_IP';
+  | 'PROMO_IP'
+  | 'TRANSFER_PROOF';
 /** Default §10.3.1 (PLACEHOLDER): [batas, window detik]. EVENTS = pengaman endpoint event Odoo (bukan kontrak). */
 const ONLINE_RL_DEFAULTS: Readonly<Record<OnlineRateLimitName, readonly [number, number]>> = {
   CATALOG: [120, 60],
@@ -2206,6 +2247,8 @@ const ONLINE_RL_DEFAULTS: Readonly<Record<OnlineRateLimitName, readonly [number,
   EVENTS: [1200, 60],
   PROMO_MEMBER: [10, 900],
   PROMO_IP: [30, 900],
+  // G26 §17.4 no. 2: unggah bukti transfer per member (default 5 per jam)
+  TRANSFER_PROOF: [5, 3600],
 };
 
 /**

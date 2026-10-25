@@ -1628,8 +1628,8 @@ gateway (§10.6.6), saga bagian (§10.6.2).
    menyalakan): selama mati, constraint kanal menolak `payment_modes` yang memuat `counter` dan `efn_online_place`
    menolak `payment_mode: "counter"` (`invalid_input`). Pesanan `counter` lama tetap bisa dilunasi/di-refund di POS.
    Modul `efn_online_pos_counter` tetap terpasang (riwayat/refund order lama; test modul itu menyalakan parameter di
-   setUp). BFF menghapus `counter` dari allowlist `ONLINE_PAYMENT_METHODS`; env yang masih memuat `counter` membuat BFF
-   gagal start (pesan jelas).
+   setUp). BFF: `counter` di `ONLINE_PAYMENT_METHODS` hanya sah bila `ONLINE_COUNTER_LEGACY=true` (dev/test, untuk
+   uji regresi alur lama); tanpa flag itu, atau di production, BFF gagal start dengan pesan jelas.
 4. Reservasi stok tetap 1 jam (§11.1). Batas waktu yang sama berlaku untuk **upload dan verifikasi** transfer (§17.4 no. 6).
 
 ### 17.2 Metode bayar & permintaan checkout — menambah §10.3.5
@@ -1694,11 +1694,12 @@ Order status tetap `awaiting_payment` untuk **semua** metode prabayar; perbedaan
 3. BFF menghitung `sha256` dan dHash 64-bit. Hash yang sama atau dHash berjarak ≤ 6 dengan bukti **order lain** dalam
    90 hari → **tidak** ditolak otomatis, tetapi diberi tanda `duplicate_suspect` untuk Verifikator (bukti yang dipakai
    ulang adalah pola fraud utama; keputusan tetap manusia).
-4. Penyimpanan sementara: object storage bucket `ONLINE_TRANSFER_BUCKET` (default `payment-proof`), key
-   `proofs/<yyyy>/<mm>/<order_id>/<proof_id>.jpg`, SSE, lewat `s3-gateway` (user BFF Put/Get/Delete prefix `proofs/*`).
-   Transaksi DB: `online_transfer_proof(status=uploaded)` + outbox `order.transfer_proof:<proof_id>`.
-5. Consumer outbox mengirim bukti ke Odoo (§17.5, metode #12). Setelah Odoo mengonfirmasi, objek **dihapus** dari object
-   storage (Odoo = penyimpan bukti; BFF hanya menyimpan hash). Gagal → retry + DLQ; objek yatim dihapus lifecycle 7 hari.
+4. **Foto bukti = data pribadi** (biasanya memuat nama dan nomor rekening pengirim). Karena itu BFF **tidak menyimpan**
+   foto di mana pun (tanpa object storage, outbox, Redis, atau log): setelah re-encode, foto dikirim **sinkron** ke Odoo
+   (§17.5, metode #12) dalam request yang sama, lalu dibuang dari memori. Odoo = satu-satunya penyimpan.
+5. BFF menyimpan baris `online_transfer_proof` (hash saja, tanpa gambar) **setelah** Odoo menerima. Odoo gagal
+   (transport/circuit/busy) → `503 transfer_proof_unavailable` (pelanggan mengunggah ulang; `uploads_left` tidak
+   berkurang, kunci idempoten Odoo per `proof_id` mencegah duplikat bila respons hilang).
 6. **Batas waktu:** unggah ditolak bila `now > upload_deadline` (= `expires_at − ONLINE_TRANSFER_MIN_VERIFY_SECONDS`,
    default 600 s) → `409 transfer_window_closed`. Bukti yang belum diputuskan saat `expires_at` → order `expired` lewat
    sweeper biasa (§10.6.5). Odoo membatalkan antrean verifikasinya lewat `efn_online_cancel`. Bila dana ternyata sudah
@@ -1771,14 +1772,15 @@ Order status tetap `awaiting_payment` untuk **semua** metode prabayar; perbedaan
 - `online_order` bertambah `payment_method text NOT NULL DEFAULT 'qris'` CHECK diperluas (`counter` dipertahankan untuk
   baris lama), `transfer_ref text NULL`, `transfer_account jsonb NULL`, `transfer_uploads int NOT NULL DEFAULT 0`.
 - `payment_intent`: kolom §17.7. Masuk daftar migrasi WAJIB `scripts/deploy.sh`.
-- Retensi (masuk `docs/compliance/PDP_DATA_INVENTORY.md`): baris `online_transfer_proof` 730 hari (hash saja); objek di
-  object storage ≤ 7 hari (dihapus setelah Odoo menerima). Bukti di Odoo = dokumen pendukung pembayaran; masa simpan
-  diputuskan Legal/DPO + Finance (**Q-PAY4**, usulan: ikut retensi dokumen akuntansi 10 tahun, akses dibatasi).
+- Retensi (masuk `docs/compliance/PDP_DATA_INVENTORY.md`): baris `online_transfer_proof` 730 hari (hash saja, tanpa
+  gambar). Foto hanya di Odoo (data pribadi pengirim; akses grup Verifikator + Auditor). Bukti di Odoo = dokumen
+  pendukung pembayaran; masa simpan diputuskan Legal/DPO + Finance (**Q-PAY4**, usulan: ikut retensi dokumen akuntansi
+  10 tahun, akses dibatasi).
 
 ### 17.10 Env & kill switch
 | Env | Default dev | Default production | Validasi |
 |---|---|---|---|
-| `ONLINE_PAYMENT_METHODS` | `qris,va,ewallet,bank_transfer` | kosong (checkout online mati) | ⊆ {qris, va, ewallet, bank_transfer}; `counter` → gagal start |
+| `ONLINE_PAYMENT_METHODS` | `qris,bank_transfer` | `qris` (perilaku lama; production wajib menyetel eksplisit) | ⊆ {qris, bank_transfer} di BFF G26 tahap 1 (`va`/`ewallet` → gagal start sampai adapter §17.7 selesai); `counter` hanya dengan `ONLINE_COUNTER_LEGACY` |
 | `ONLINE_VA_BANKS` | `bca,bni,bri,mandiri,permata` | kosong | allowlist §17.2 |
 | `ONLINE_EWALLETS` | `gopay,dana,shopeepay` | kosong | allowlist §17.2; `ovo` hanya setelah DPA |
 | `ONLINE_EWALLET_REDIRECT_HOSTS`, `ONLINE_EWALLET_DEEPLINK_SCHEMES` | host mock | kosong | https saja / skema terdaftar |
@@ -1786,7 +1788,7 @@ Order status tetap `awaiting_payment` untuk **semua** metode prabayar; perbedaan
 | `ONLINE_TRANSFER_MIN_VERIFY_SECONDS` | 600 | 600 | 300..1800, < `ONLINE_PAYMENT_TIMEOUT_SECONDS` |
 | `ONLINE_TRANSFER_UPLOAD_RATE` | 5/jam | 5/jam | — |
 | `ONLINE_MAX_OPEN_TRANSFER_ORDERS_PER_MEMBER` | 1 | 1 | 1..3 |
-| `ONLINE_TRANSFER_BUCKET` | `payment-proof` | `payment-proof` | dibuat `minio-init` |
+| `ONLINE_COUNTER_LEGACY` | `false` | dilarang | `true` hanya dev/test (regresi alur bayar di kasir lama) |
 
 Gerbang production (mengganti L-55): `qris`/`va`/`ewallet` di daftar → wajib `PAYMENT_PROVIDER=xendit|midtrans` (bukan
 mock/disabled). `PAYMENT_PROVIDER=disabled` diizinkan **hanya** bila daftar = `bank_transfer`. Kanal hanya menerima
@@ -1862,6 +1864,12 @@ dapur sebelum `pos.order` lunas** (`efn_pos_kds`: filter `state ∈ {paid, done,
   Semua keputusan teraudit `efn_audit` (tanpa gambar).
 - Batal/kedaluwarsa order → bukti `awaiting_verification` → `expired`.
 
+**BFF tahap 1 (G26)**: `bank_transfer` end-to-end; `va`/`ewallet` menunggu adapter gateway §17.7 (tahap 2).
+Order `bank_transfer` memakai status `awaiting_payment` tanpa intent; sub-status di kolom `transfer_status`
+(`awaiting_proof|awaiting_verification|rejected`). Event `paid`/`review` (`transfer_paid_after_cancel|expiry`)
+memakai jalur pelunasan internal yang sama dengan `counter` (L-57). Refund pesanan transfer: persetujuan approver CS
+(empat mata) → `manual_required` (`transfer_refund_manual`) → Finance mentransfer balik → CLI settle →
+`efn_online_refund_settled` (jurnal transfer kanal).
 **BFF**: menyimpan `payment_method` order; `bank_transfer` tidak membuat payment intent; place mengirim
 `payment_mode`; respons memakai `transfer_account` dari hasil place; event `paid` + `method: "bank_transfer"` →
 alur bagian seperti `counter` (L-52/L-56 tanpa kode bayar); `transfer_rejected` → `payment.status = rejected` +
