@@ -1,4 +1,4 @@
-# KONTRAK ANTAR-SERVICE (v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
+# KONTRAK ANTAR-SERVICE (v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -1603,3 +1603,227 @@ noupdate); DB yang sudah ada mendapat company WTZ lewat upgrade (record noupdate
 ### 16.6 Pertanyaan klien
 Q-WTZ1 nama legal & NPWP PT · Q-WTZ2 lokasi gerai/outlet pertama · Q-WTZ3 harga resmi menu (data demo = harga
 PLACEHOLDER per kategori) · Q-WTZ4 tarif PB1 kota gerai (Q-22).
+
+## 17. Gelombang 26 — pesanan online wajib lunas: VA, e-wallet, transfer bank + bukti; kiosk (v11.0, 25 Okt 2026)
+
+> **Ringkasan manajemen.** Pemilik proyek memutuskan (25 Okt 2026, CLAUDE.md K25-07) bahwa **setiap pesanan online
+> harus lunas sebelum gerai memprosesnya**, termasuk ambil di toko dan pre-order. Akibatnya "bayar di kasir" tidak lagi
+> dipakai untuk pesanan online. Pelanggan membayar dengan **QRIS, Virtual Account, atau e-wallet** lewat payment gateway,
+> atau **transfer bank ke rekening PT penjual lalu mengunggah foto bukti**. Bukti diperiksa staf *Verifikator
+> Pembayaran* di Odoo, dan gerai baru menyiapkan pesanan setelah staf menyetujui. Transfer bank tidak butuh vendor payment
+> gateway, jadi inilah jalur uang nyata pertama untuk pilot online. QRIS/VA/e-wallet produksi tetap menunggu vendor
+> (ADR-016; Xendit punya Test Mode untuk uji di staging). Semua metode baru **mati di produksi** sampai diaktifkan lewat
+> konfigurasi rilis.
+
+Dasar: CLAUDE.md K25-07 dan K25-09 (keputusan pemilik proyek 25 Okt 2026), keputusan lead L-95..L-104. §17 menang atas
+§1–§16 bila bertentangan. Yang **tidak** berubah: QR meja (§14.A, Q-PAY1), poin sebagai alat bayar (§14.C), refund
+gateway (§10.6.6), saga bagian (§10.6.2).
+
+### 17.1 Aturan "lunas sebelum diproses" — meralat §12.2 untuk kanal online
+1. Berlaku untuk semua pesanan lewat `POST /v1/orders` (pickup, pre-order berjadwal §15.4, dan pesan-antar kelak).
+2. Bagian pesanan baru boleh `paying → confirmed` (SO dikonfirmasi, masuk picking/KDS) **setelah** pembayaran
+   terverifikasi: webhook gateway terverifikasi (§10.7) atau persetujuan Verifikator di Odoo (§17.5). Tidak ada jalur lain.
+3. `payment_method: "counter"` untuk kanal online **ditolak**: `422 payment_method_unavailable`. Odoo menolak
+   `payment_mode: "counter"` di `efn_online_place` (`invalid_input`) dan `efn.online.channel.payment_modes` tidak boleh
+   memuat `counter` (constraint). Modul `efn_online_pos_counter` tetap terpasang tetapi tidak menerima pesanan baru
+   (dipertahankan untuk riwayat/refund order lama; dev saja, belum ada data produksi). BFF menghapus `counter` dari
+   allowlist `ONLINE_PAYMENT_METHODS`; nilai env yang masih memuat `counter` membuat BFF gagal start (pesan jelas).
+4. Reservasi stok tetap 1 jam (§11.1). Batas waktu yang sama berlaku untuk **upload dan verifikasi** transfer (§17.4 no. 6).
+
+### 17.2 Metode bayar & permintaan checkout — menambah §10.3.5
+`POST /v1/orders` body (field baru opsional; tanpa field = `qris`, bentuk lama tetap sah):
+```json
+{ "quote_id": "<uuid>", "accept_total": 39800,
+  "payment_method": "qris" | "va" | "ewallet" | "bank_transfer",
+  "va_bank": "bca" | "bni" | "bri" | "mandiri" | "permata" | "bsi" | "cimb",
+  "ewallet": "gopay" | "ovo" | "dana" | "shopeepay" | "linkaja" }
+```
+| Metode | Syarat | Gateway | Penerima dana |
+|---|---|---|---|
+| `qris` | (sama dengan §10.3.5) | ya | Holding sebagai agen penagih (ADR-019) |
+| `va` | `va_bank` wajib, ∈ `ONLINE_VA_BANKS` | ya | sama |
+| `ewallet` | `ewallet` wajib, ∈ `ONLINE_EWALLETS` | ya | sama |
+| `bank_transfer` | **satu PT** (satu bagian) | tidak | rekening bank **PT penjual** (jurnal di kanal, §17.6) |
+
+- Field yang tidak sesuai metode (mis. `va_bank` pada `qris`) → `400 invalid_request`. Nilai di luar allowlist →
+  `422 va_bank_unavailable` / `422 ewallet_unavailable`. Metode di luar env ∩ `payment_modes` semua kanal di quote →
+  `422 payment_method_unavailable`. `bank_transfer` dengan > 1 bagian → `422 transfer_single_part_only`.
+- **OVO** (notifikasi push ke nomor HP): nomor diambil BFF dari identitas member yang sudah diverifikasi OTP
+  (`member_ref_enc`), **tidak pernah** dari body klien, lalu dikirim ke gateway. Ini transfer data pribadi ke vendor
+  (wajib DPA, PDP inventaris). Selama DPA belum ada, `ovo` tidak masuk default `ONLINE_EWALLETS`.
+- Kunci idempotensi checkout tidak berubah. `request_sha256` mencakup field baru, sehingga ganti metode = body beda =
+  `409 idempotency_conflict` (klien membuat key baru per metode, seperti app sekarang).
+- Batas pesanan terbuka: `ONLINE_MAX_OPEN_TRANSFER_ORDERS_PER_MEMBER` (default 1) untuk `bank_transfer` →
+  `429 too_many_open_orders`. Metode gateway tetap memakai batas yang ada.
+
+### 17.3 Blok `payment` di respons — menambah §10.3.5 & §10.3.6
+Order status tetap `awaiting_payment` untuk **semua** metode prabayar; perbedaannya di `payment.method` dan
+`payment.status`. Field ditampilkan hanya selama `awaiting_payment` dan hanya untuk member pemilik (pola L-52).
+```json
+{ "method": "qris", "status": "pending", "qr_string": "<str>", "expires_at": "<iso>" }
+{ "method": "va", "status": "pending", "bank": "bca", "va_number": "<digit 8..20>", "expires_at": "<iso>" }
+{ "method": "ewallet", "status": "pending", "provider": "gopay",
+  "action": { "type": "redirect" | "deeplink" | "push", "url": "<https atau skema allowlist>|null" }, "expires_at": "<iso>" }
+{ "method": "bank_transfer", "status": "awaiting_proof" | "awaiting_verification" | "rejected",
+  "account": { "bank_name": "BCA", "account_number": "<digit>", "account_holder": "PT …" },
+  "transfer_ref": "<8 karakter alfabet §10.2>", "uploads_left": 3,
+  "reject_reason": "amount_mismatch" | "unreadable" | "wrong_account" | "not_received" | "duplicate_proof" | null,
+  "upload_deadline": "<iso>", "expires_at": "<iso>" }
+```
+- `action.url`: hanya `https://` ke host di `ONLINE_EWALLET_REDIRECT_HOSTS` atau skema app di
+  `ONLINE_EWALLET_DEEPLINK_SCHEMES` (allowlist BFF; selain itu `null` + alert). Klien membuka URL dengan browser/OS,
+  tidak pernah WebView ber-cookie.
+- `account` berasal dari Odoo (jurnal bank kanal §17.6), disalin BFF saat place. **Bukan** data pribadi pelanggan.
+- `transfer_ref` = kode yang diminta ditulis di **berita transfer**, untuk membantu Verifikator mencocokkan mutasi.
+  Dibuat BFF (`crypto.randomInt`, alfabet §10.2), disimpan biasa (bukan rahasia; tidak memberi akses apa pun).
+  Kode unik nominal (menambah 3 digit ke total) **tidak** dipakai karena mengubah `amount_payable` Odoo dan pajak.
+- `GET /v1/orders` (daftar) tidak membawa blok `payment` (tidak berubah).
+
+### 17.4 Unggah bukti transfer (BFF)
+`POST /v1/orders/:order_id/transfer-proof` (Bearer pemilik, multipart `photo` satu file, tanpa field lain) →
+`202 { payment }` (blok §17.3 dengan `status: "awaiting_verification"`).
+1. Hanya bila order `awaiting_payment`, metode `bank_transfer`, `payment.status ∈ {awaiting_proof, rejected}`, dan
+   `uploads_left > 0`. Selain itu `409 transfer_not_awaiting_proof` / `429 transfer_proof_limit` (maks 3 unggahan per
+   order, `ONLINE_TRANSFER_MAX_UPLOADS`).
+2. Pipeline gambar **sama dengan market-scout** (README `services/api-gateway/src/market-scout`): ≤ 8 MB per byte
+   (busboy), magic bytes JPEG/PNG/WebP, decode penuh `sharp` (`failOn:'error'`, ≤ 50 MP), rotasi EXIF, resize ≤ 2048 px,
+   JPEG q85, **metadata dibuang**, semaphore/antrean gambar yang sama. Gagal → `415 transfer_proof_invalid` atau
+   `413`. Rate limit per member `ONLINE_TRANSFER_UPLOAD_RATE` (default 5/jam) → `429 rate_limited`.
+3. BFF menghitung `sha256` dan dHash 64-bit. Hash yang sama atau dHash berjarak ≤ 6 dengan bukti **order lain** dalam
+   90 hari → **tidak** ditolak otomatis, tetapi diberi tanda `duplicate_suspect` untuk Verifikator (bukti yang dipakai
+   ulang adalah pola fraud utama; keputusan tetap manusia).
+4. Penyimpanan sementara: object storage bucket `ONLINE_TRANSFER_BUCKET` (default `payment-proof`), key
+   `proofs/<yyyy>/<mm>/<order_id>/<proof_id>.jpg`, SSE, lewat `s3-gateway` (user BFF Put/Get/Delete prefix `proofs/*`).
+   Transaksi DB: `online_transfer_proof(status=uploaded)` + outbox `order.transfer_proof:<proof_id>`.
+5. Consumer outbox mengirim bukti ke Odoo (§17.5, metode #12). Setelah Odoo mengonfirmasi, objek **dihapus** dari object
+   storage (Odoo = penyimpan bukti; BFF hanya menyimpan hash). Gagal → retry + DLQ; objek yatim dihapus lifecycle 7 hari.
+6. **Batas waktu:** unggah ditolak bila `now > upload_deadline` (= `expires_at − ONLINE_TRANSFER_MIN_VERIFY_SECONDS`,
+   default 600 s) → `409 transfer_window_closed`. Bukti yang belum diputuskan saat `expires_at` → order `expired` lewat
+   sweeper biasa (§10.6.5). Odoo membatalkan antrean verifikasinya lewat `efn_online_cancel`. Bila dana ternyata sudah
+   masuk → Verifikator memilih "uang diterima setelah kedaluwarsa" (§17.5 no. 5).
+
+### 17.5 Verifikasi di Odoo — jalur baru `efn_online_transfer`
+- **Metode #12** (path baru `odoo-rpc-gateway`): `efn.online.order/efn_online_transfer_submit`
+  `channel_code, platform_order_ref, proof:{ idempotency_key, proof_id, image_b64 (JPEG ≤ 1,5 MB setelah re-encode),
+  sha256, duplicate_suspect, uploaded_at }` → `{ state: "awaiting_verification" }`. Kunci `online:transfer:<proof_id>`.
+  Bukti baru menggantikan bukti `rejected` sebelumnya untuk order yang sama (yang lama `superseded`, tidak dihapus).
+- Odoo menyimpan bukti sebagai `ir.attachment` milik record `efn.online.transfer.proof` (company = PT penjual,
+  `company_id` + record rule). Akses **hanya** grup baru *Verifikator Pembayaran* (`group_payment_verifier`) dan
+  auditor; tidak tampil di chatter, tidak dimuat POS.
+- **Antrean Verifikator** (menu Odoo per PT): nomor pesanan, gerai, nominal, `transfer_ref`, rekening tujuan, foto,
+  tanda `duplicate_suspect`, sisa waktu. Keputusan lewat wizard:
+  1. **Setujui**: wajib mengisi tanggal mutasi + nominal mutasi (harus = `amount_payable`) + referensi bank → jalur
+     internal `mark_paid` (`method: "bank_transfer"`, `payment_ref` = `proof_id`) → konfirmasi SO, faktur, pembayaran
+     di **jurnal bank kanal** (§17.6). Bila stok kurang saat itu → hasil `stock_short` seperti §10.6.6 (refund manual
+     Finance, §17.8).
+  2. **Tolak**: alasan wajib dari daftar tetap (`amount_mismatch`, `unreadable`, `wrong_account`, `not_received`,
+     `duplicate_proof`) + catatan internal opsional (tidak dikirim ke pelanggan).
+  3. **Uang diterima setelah kedaluwarsa** (order sudah `expired/cancelled`): tidak mengonfirmasi SO; membuat
+     `review` + aktivitas Finance untuk mengembalikan dana (pola `late_counter_payment` L-57).
+- **Pemisahan tugas** (efn_role SoD, matriks §13): *Verifikator Pembayaran* tidak boleh sekaligus kasir POS atau
+  petugas serah terima di company yang sama (aturan SoD `SOD-PAY-01`, mode `block`). Keputusan tercatat append-only di
+  `efn_audit` (siapa, kapan, keputusan, alasan; **tanpa** isi gambar).
+- **Event Odoo → BFF** (§10.5, HMAC + `seq`): `paid` dengan `payment: { method: "bank_transfer" }` (tanpa identitas
+  staf); event baru `transfer_rejected { reason }` → BFF `payment.status = rejected`, `uploads_left` tetap; event
+  `review` untuk kasus no. 3. BFF menerima `transfer_rejected` hanya untuk bagian `placed` dengan metode `bank_transfer`.
+- Notifikasi pelanggan (`notify.push`, template tanpa parameter): `online_transfer_rejected` ("bukti perlu diunggah
+  ulang, buka aplikasi"). Pesanan lunas memakai template yang ada.
+
+### 17.6 Konfigurasi kanal Odoo
+`efn.online.channel` bertambah:
+- `payment_modes` (Selection many): `qris`, `va`, `ewallet`, `bank_transfer` (`counter` dihapus, §17.1 no. 3).
+- `efn_transfer_journal_id` (M2o `account.journal`, `type=bank`, company = kanal, wajib bila `bank_transfer` aktif).
+  Nama bank, nomor rekening, dan pemilik rekening dibaca dari `bank_account_id` jurnal itu dan dikirim di hasil
+  `efn_online_place` → `transfer_account`. Rekening milik PT, bukan data pribadi.
+- `efn_transfer_verify_minutes` tidak ada; batas waktu mengikuti reservasi (§17.4 no. 6) agar stok tidak tertahan
+  lebih lama dari keputusan 1 jam. **Q-PAY2** bila bisnis ingin verifikasi memperpanjang reservasi.
+
+### 17.7 Payment gateway: VA & e-wallet — memperluas §8.3 / §10.7
+- Interface `PaymentGateway.createQris` → **`createPayment(input, method)`** dengan `method = { kind: 'qris' } |
+  { kind: 'va', bank } | { kind: 'ewallet', provider, mobile? }` → `{ providerRef, status, expiresAt, display }`
+  (`display` = `qr_string` | `va_number` | `action`). `createQris` dipertahankan sebagai pembungkus agar jalur POS
+  (§8.3) tidak berubah.
+- `mock` mendukung ketiganya: VA dummy berawalan `9999`, `action.url` = `https://pay.mock.invalid/<id>` (tidak bisa
+  dibuka; app menampilkan simulasi). `simulate-payment` (§10.7) berlaku untuk semua metode gateway.
+- `xendit`: **Test Mode** (API key `xnd_development_…`, endpoint simulasi vendor, tanpa uang nyata) untuk dev/staging
+  setelah akun dibuat. Webhook Test Mode butuh URL publik: tunnel `cloudflared` di dev, atau mengandalkan `getStatus`
+  (§8.11). Tetap di balik `PAYMENT_PROVIDER_EXPERIMENTAL=true` sampai uji sandbox lulus. `midtrans` tidak diperluas di G26.
+- `platform.payment_intent.method` CHECK diperluas `('qris','va','ewallet')` + kolom `method_channel text NULL`
+  (kode bank/e-wallet), `va_number text NULL`, `action_type text NULL`, `action_url text NULL`. `qr_string` tetap.
+  Webhook `POST /v1/webhooks/payments/:provider` tidak berubah bentuk.
+
+### 17.8 Refund
+- Gateway (`qris`/`va`/`ewallet`): alur §10.6.6 tanpa perubahan (refund e-wallet bergantung adapter; tidak didukung →
+  `manual_required`).
+- `bank_transfer`: selalu **manual** oleh Finance PT penjual. Rekening tujuan pengembalian **tidak** dikumpulkan app di
+  G26: CS menghubungi pelanggan lewat kanal resmi dan mencatatnya di Odoo (data pribadi minimal, retensi = dokumen
+  keuangan). Setelah transfer balik: CLI `online-refund-settle --refund <id> --provider-ref manual:<ref>`. **Q-PAY3**
+  bila pelanggan perlu mengisi rekening pengembalian di app.
+
+### 17.9 Tabel & migrasi platform `14-platform-g26.sql` (idempoten, header pola file 13)
+- `platform.online_transfer_proof (id uuid PK, order_id → online_order, part_id → online_order_part, status
+  CHECK IN ('uploaded','submitted','approved','rejected','superseded','expired'), object_key text NULL, sha256 char(64),
+  dhash char(16), duplicate_suspect boolean, reject_reason text NULL CHECK (allowlist §17.3), uploaded_at, submitted_at,
+  decided_at)`; indeks `(sha256)`, `(dhash)`, `(order_id)`.
+- `online_order` bertambah `payment_method text NOT NULL DEFAULT 'qris'` CHECK diperluas (`counter` dipertahankan untuk
+  baris lama), `transfer_ref text NULL`, `transfer_account jsonb NULL`, `transfer_uploads int NOT NULL DEFAULT 0`.
+- `payment_intent`: kolom §17.7. Masuk daftar migrasi WAJIB `scripts/deploy.sh`.
+- Retensi (masuk `docs/compliance/PDP_DATA_INVENTORY.md`): baris `online_transfer_proof` 730 hari (hash saja); objek di
+  object storage ≤ 7 hari (dihapus setelah Odoo menerima). Bukti di Odoo = dokumen pendukung pembayaran; masa simpan
+  diputuskan Legal/DPO + Finance (**Q-PAY4**, usulan: ikut retensi dokumen akuntansi 10 tahun, akses dibatasi).
+
+### 17.10 Env & kill switch
+| Env | Default dev | Default production | Validasi |
+|---|---|---|---|
+| `ONLINE_PAYMENT_METHODS` | `qris,va,ewallet,bank_transfer` | kosong (checkout online mati) | ⊆ {qris, va, ewallet, bank_transfer}; `counter` → gagal start |
+| `ONLINE_VA_BANKS` | `bca,bni,bri,mandiri,permata` | kosong | allowlist §17.2 |
+| `ONLINE_EWALLETS` | `gopay,dana,shopeepay` | kosong | allowlist §17.2; `ovo` hanya setelah DPA |
+| `ONLINE_EWALLET_REDIRECT_HOSTS`, `ONLINE_EWALLET_DEEPLINK_SCHEMES` | host mock | kosong | https saja / skema terdaftar |
+| `ONLINE_TRANSFER_MAX_UPLOADS` | 3 | 3 | 1..5 |
+| `ONLINE_TRANSFER_MIN_VERIFY_SECONDS` | 600 | 600 | 300..1800, < `ONLINE_PAYMENT_TIMEOUT_SECONDS` |
+| `ONLINE_TRANSFER_UPLOAD_RATE` | 5/jam | 5/jam | — |
+| `ONLINE_MAX_OPEN_TRANSFER_ORDERS_PER_MEMBER` | 1 | 1 | 1..3 |
+| `ONLINE_TRANSFER_BUCKET` | `payment-proof` | `payment-proof` | dibuat `minio-init` |
+
+Gerbang production (mengganti L-55): `qris`/`va`/`ewallet` di daftar → wajib `PAYMENT_PROVIDER=xendit|midtrans` (bukan
+mock/disabled). `PAYMENT_PROVIDER=disabled` diizinkan **hanya** bila daftar = `bank_transfer`. Kanal hanya menerima
+`bank_transfer` bila `efn_transfer_journal_id` terisi (Odoo constraint).
+
+### 17.11 Kiosk (K25-09) — POS, bukan kanal online
+Kiosk = `pos_self_order` mode `kiosk` (Odoo POS, ADR-013). Aturan umum: **tiket kiosk tidak dikirim ke KDS/printer
+dapur sebelum `pos.order` lunas** (`efn_pos_kds`: filter `state ∈ {paid, done, invoiced}` untuk order asal kiosk).
+| Cara bayar | Kontrak | Status |
+|---|---|---|
+| (a) Bayar di kasir | Kiosk membuat `pos.order` belum lunas + nomor antre; kasir melunasi di POS (sesi yang sama). Tanpa BFF. | **fit-gap dulu**: perilaku CE 19 kiosk tanpa metode bayar valid belum diverifikasi (`has_valid_self_payment_method`) |
+| (b) Mesin EDC | Metode terminal POS baru `efn_pos_edc` + bridge lokal outlet (serial/USB, Bluetooth, TCP Wi-Fi), satu perangkat dengan `efn-print-bridge` (K25-04). | **terblokir**: spesifikasi protokol ECR/SDK dari bank penerbit EDC |
+| (c) Payment gateway | `POST /v1/pos/payments` (§8.3) tanpa perubahan bentuk; `pos_config_id` kiosk diizinkan; hanya `method: "qris"` di G26. | perluasan `efn_pos_payment_gateway` ke layar kiosk (OWL) |
+
+### 17.12 Dampak klien (Super-App web & mobile)
+- Checkout menawarkan metode = `payment_modes` kanal ∩ env (dari `GET /v1/catalog/channels`); tanpa `counter`.
+- Detail pesanan merender blok `payment` §17.3 per metode; `bank_transfer` memakai unggah §17.4 (kamera/galeri),
+  menampilkan alasan tolak dan sisa unggahan. Polling `awaiting_payment` tetap 3 s (gateway) dan **15 s** untuk
+  `awaiting_verification`.
+- Mockup mobile G26 (`EFN_PAYMENT_MOCKUP`, `efn-mobile` README) dihapus setelah BFF G26 tersedia; layar dan teksnya
+  dipakai ulang.
+
+### 17.13 Keputusan lead G26 (25 Okt 2026)
+| # | Keputusan |
+|---|---|
+| L-95 | Pesanan online wajib lunas sebelum `confirmed`; `counter` ditolak untuk kanal online (BFF, Odoo place, constraint kanal); modul `efn_online_pos_counter` dibekukan, tidak dihapus. |
+| L-96 | Metode online: `qris`, `va`, `ewallet` (gateway, satu intent Holding agen penagih) dan `bank_transfer` (tanpa gateway, satu PT, rekening PT penjual). Order status tetap `awaiting_payment`; sub-status di `payment.status`. |
+| L-97 | Bukti transfer: pipeline gambar market-scout, hash + dHash untuk tanda duplikat (tidak menolak otomatis), maks 3 unggahan, batas unggah = `expires_at − 600 s`. |
+| L-98 | Penyimpan bukti = Odoo (attachment grup Verifikator); object storage hanya transit ≤ 7 hari; BFF menyimpan hash. Path RPC #12 `efn_online_transfer_submit`. |
+| L-99 | Verifikasi transfer di Odoo oleh grup *Verifikator Pembayaran*, SoD `SOD-PAY-01` (bukan kasir/serah terima company yang sama), keputusan teraudit; setuju wajib mencatat tanggal, nominal, dan referensi mutasi; nominal harus sama persis. |
+| L-100 | Event Odoo baru `transfer_rejected { reason }`; `paid` membawa `method: "bank_transfer"`; template notifikasi `online_transfer_rejected` tanpa parameter. |
+| L-101 | `createPayment` menggantikan `createQris` di interface (pembungkus dipertahankan); mock mendukung VA/e-wallet; Xendit diuji di Test Mode dulu; midtrans tidak diperluas. |
+| L-102 | Nomor HP untuk OVO hanya dari identitas member terverifikasi di BFF; `ovo` tidak aktif sebelum DPA vendor. |
+| L-103 | Gerbang production mengganti L-55: `disabled` hanya bila metode = `bank_transfer`; metode gateway wajib provider nyata. Semua metode default kosong di production (ship OFF). |
+| L-104 | Kiosk: tiket ke dapur hanya setelah lunas; tiga cara bayar (kasir, EDC, gateway); EDC terblokir spesifikasi ECR bank; QR meja (§14.A) tidak berubah sampai Q-PAY1. |
+
+### 17.14 Pertanyaan klien
+- **Q-PAY1** Apakah QR order di meja (makan di tempat) juga wajib bayar dulu, atau tetap bayar setelah makan?
+- **Q-PAY2** Bolehkan verifikasi transfer memperpanjang reservasi stok di atas 1 jam (mis. bukti diunggah di menit 55)?
+- **Q-PAY3** Perlukah pelanggan mengisi rekening pengembalian dana di app untuk refund transfer?
+- **Q-PAY4** Masa simpan foto bukti transfer di Odoo (Legal/DPO + Finance).
+- **Q-PAY5** Rekening bank tujuan per PT, jam kerja Verifikator, dan target waktu verifikasi.
+- **Q-PAY6** Bank penerbit EDC per outlet beserta dokumen integrasi ECR (untuk kiosk/POS).
