@@ -847,10 +847,11 @@ export class OrdersService {
   }
 
   // ───────────── simulasi bayar (dev/staging) ─────────────
-  async simulatePayment(memberId: string, orderId: string, status: Exclude<PaymentStatus, 'pending'>): Promise<OrderView> {
+  async simulatePayment(memberId: string, orderId: string, status: Exclude<PaymentStatus, 'pending'>, rejectReason?: TransferRejectReason): Promise<OrderView> {
     if (this.config.isProductionDeployment) throw Errors.notFound();
     const order = await this.repo.getOrderOfMember(orderId, memberId);
     if (order?.payment_method === 'counter') return this.simulateCounter(order, status);
+    if (order?.payment_method === 'bank_transfer') return this.simulateTransfer(order, status, rejectReason ?? 'unreadable');
     if (!order?.payment_intent_id) throw Errors.notFound();
     await this.payments.simulate(order.payment_intent_id, status);
     const fresh = await this.repo.getOrder(orderId);
@@ -880,6 +881,45 @@ export class OrdersService {
         const o = await r.getOrder(order.id, true);
         const p = await r.getPart(part.id, true);
         if (o && p) await saga.applyCounterPaid(r, o, p, { source: 'bff', odooState: res.state, seq: res.seq, paidAt: null });
+      });
+    }
+    const fresh = await this.repo.getOrder(order.id);
+    if (!fresh) throw Errors.notFound();
+    return this.view(fresh);
+  }
+
+  /**
+   * DEV/MOCK SAJA (G26 §17.5, pola `simulateCounter`): meniru keputusan Verifikator di stub Odoo lalu menerapkan efeknya
+   * seperti event `paid` / `transfer_rejected`. `paid` = disetujui, `failed` = ditolak (`reject_reason`), `expired` → 400
+   * (kedaluwarsa = sweeper biasa). Butuh bukti `awaiting_verification`. Stub tanpa `verifyTransfer` (Odoo nyata) → 404.
+   */
+  private async simulateTransfer(order: OrderRow, status: Exclude<PaymentStatus, 'pending'>, reason: TransferRejectReason): Promise<OrderView> {
+    const stub = this.odoo as unknown as { verifyTransfer?: (ref: string, decision: 'approve' | 'reject') => { state: string; seq: number } };
+    if (!this.saga || typeof stub.verifyTransfer !== 'function') throw Errors.notFound();
+    if (status === 'expired') throw Errors.invalidRequest();
+    if (order.status !== 'awaiting_payment' || order.transfer_status !== 'awaiting_verification') throw OnlineErrors.invalidState();
+    const approve = status === 'paid';
+    for (const part of (await this.repo.getParts(order.id)).filter((p) => p.status === 'placed')) {
+      let res: { state: string; seq: number };
+      try {
+        res = stub.verifyTransfer(part.id, approve ? 'approve' : 'reject');
+      } catch {
+        throw OnlineErrors.invalidState();
+      }
+      const saga = this.saga;
+      await this.repo.tx(async (r) => {
+        const o = await r.getOrder(order.id, true);
+        const p = await r.getPart(part.id, true);
+        if (!o || !p) return;
+        if (approve) {
+          await saga.applyCounterPaid(r, o, p, { source: 'bff', odooState: res.state, seq: res.seq, paidAt: null });
+          return;
+        }
+        await r.updatePart(p.id, { last_seq: res.seq, odoo_state: res.state.slice(0, 32) });
+        if (o.status !== 'awaiting_payment' || o.transfer_status !== 'awaiting_verification') return;
+        await r.updateOrder(o.id, { transfer_status: 'rejected', transfer_reject_reason: reason });
+        await r.closeTransferProofs(o.id, 'rejected', reason);
+        await saga.notify(r, o, p, 'online_transfer_rejected');
       });
     }
     const fresh = await this.repo.getOrder(order.id);

@@ -653,6 +653,10 @@ Aturan: refund **selalu** terikat satu bagian (`part_id`) dan ≤ `porsi − ref
 - Interface `PaymentGateway` + `refund(intent, { refundId, amount, reason }) → { status: 'succeeded'|'pending'|'failed', providerRefundRef }`; `mock` mendukung (sinkron, Σ refund ≤ amount); `xendit`/`midtrans` melempar `PaymentOperationUnsupportedError` → `manual_required`. Webhook refund vendor menunggu ADR-016. Endpoint POS `/v1/pos/payments/:id/refund` tetap dicadangkan (§8.8).
 - Webhook `POST /v1/webhooks/payments/:provider` tidak berubah bentuk; setelah intent `purpose=online` bertransisi ke `paid`, **dalam transaksi yang sama** hook orders: kunci order → `awaiting_payment → paid`, bagian `placed → paying`, outbox `order.paid`; atau jalur bayar terlambat (§10.6.5).
 - Dev/staging saja: `POST /v1/orders/:order_id/simulate-payment` (Bearer pemilik) `{ status: "paid"|"expired"|"failed" }` → webhook mock bertanda tangan (pola `simulate` §8.11); `404` di production atau bila provider ≠ mock.
+  **G26 transfer bank** (stub Odoo `ODOO_ONLINE_MOCK` saja, 404 bila Odoo nyata): meniru keputusan Verifikator atas
+  bukti `awaiting_verification`. `paid` = disetujui (jalur `paid` internal), `failed` = ditolak dengan
+  `reject_reason` opsional (allowlist §17.3, default `unreadable`), `expired` → `400`. Status lain → `409 invalid_state`.
+  `reject_reason` pada metode lain / status ≠ `failed` → `400`.
 
 ### 10.8 Tabel BFF baru (migrasi `infra/postgres/init/07-platform-online.sql`, owner `efn_bff`)
 #### 10.8.1 Transaksi

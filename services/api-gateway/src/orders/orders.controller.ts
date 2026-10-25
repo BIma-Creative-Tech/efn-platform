@@ -10,7 +10,7 @@ import { asRecord, isUuid } from '../common/validation';
 import { assertBodySize, limitByMember, noStore, requireOnline } from '../catalog/online-http';
 import { PaymentStatus } from '../payments/payment-gateway';
 import { parseInvoiceRequest } from './invoice-request';
-import { isPaymentMethod } from './online.model';
+import { TRANSFER_REJECT_REASONS, TransferRejectReason, isPaymentMethod } from './online.model';
 import { OnlineEventHmacGuard } from './order-events.guard';
 import { EventOutcome, OrderEventsService, parseOdooEvent } from './order-events.service';
 import { CheckoutInput, OrderView, OrdersService, TransferPaymentView } from './orders.service';
@@ -173,9 +173,13 @@ export class OrdersController {
     if (this.config.isProductionDeployment) throw Errors.notFound();
     requireOnline(this.config);
     noStore(reply);
-    const s = asRecord(body).status;
+    const b = asRecord(body);
+    const s = b.status;
     if (s !== 'paid' && s !== 'expired' && s !== 'failed') throw Errors.invalidRequest();
-    return this.orders.simulatePayment(user.memberId, orderIdParam(id), s as Exclude<PaymentStatus, 'pending'>);
+    // G26 §17.5: simulasi Verifikator menolak bukti transfer membawa alasan allowlist (opsional, default `unreadable`)
+    const reason = b.reject_reason;
+    if (reason !== undefined && (s !== 'failed' || !(TRANSFER_REJECT_REASONS as readonly unknown[]).includes(reason))) throw Errors.invalidRequest();
+    return this.orders.simulatePayment(user.memberId, orderIdParam(id), s as Exclude<PaymentStatus, 'pending'>, reason as TransferRejectReason | undefined);
   }
 }
 

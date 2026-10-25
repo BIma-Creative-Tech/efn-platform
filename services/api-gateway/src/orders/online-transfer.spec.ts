@@ -367,6 +367,28 @@ describe('G26 keputusan Verifikator (event Odoo §17.5)', () => {
   });
 });
 
+describe('G26 simulasi Verifikator (dev/mock, §10.7)', () => {
+  it('failed + alasan → rejected; unggah ulang; paid → fulfilling; expired → 400; sebelum unggah → 409', async () => {
+    const ctx = setup();
+    const order = await ctx.checkout();
+    expect((await catchApiError(() => ctx.orders.simulatePayment(MEMBER, order.order_id, 'paid'))).body).toMatchObject({ error: { code: 'invalid_state' } });
+    await ctx.upload(order.order_id, 1);
+    expect((await catchApiError(() => ctx.orders.simulatePayment(MEMBER, order.order_id, 'expired'))).getStatus()).toBe(400);
+    const rej = await ctx.orders.simulatePayment(MEMBER, order.order_id, 'failed', 'wrong_account');
+    expect(rej.payment).toMatchObject({ method: 'bank_transfer', status: 'rejected', reject_reason: 'wrong_account', uploads_left: 2 });
+    expect(ctx.repo.state.outbox.filter((m) => m.queue === 'notify.push').map((m) => m.payload.template)).toEqual(['online_transfer_rejected']);
+    await ctx.upload(order.order_id, 2);
+    const paid = await ctx.orders.simulatePayment(MEMBER, order.order_id, 'paid');
+    expect(paid.status).toBe('fulfilling');
+    expect(paid.payment).toMatchObject({ method: 'bank_transfer', status: 'none' });
+  });
+
+  it('production → 404', async () => {
+    const ctx = setup({ APP_ENV: 'production' });
+    expect((await catchApiError(() => ctx.orders.simulatePayment(MEMBER, '0f8fad5b-d9cb-469f-a165-70867728950e', 'paid'))).getStatus()).toBe(404);
+  });
+});
+
 describe('G26 refund transfer bank (§17.8)', () => {
   it('stok kurang setelah disetujui → refund approval_required → manual_required (transfer_refund_manual), tanpa gateway/POS', async () => {
     const ctx = setup();
