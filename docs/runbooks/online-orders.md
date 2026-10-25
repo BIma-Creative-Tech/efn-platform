@@ -356,7 +356,10 @@ persetujuan Legal (DPO sementara)**.
 ## Transfer bank + bukti (G26, docs/04 §17) {#transfer-bank}
 **Aktivasi (per kanal, dev/staging dulu):**
 1. Odoo: pasang modul `efn_online_transfer`.
-2. Odoo: buat rekening bank milik partner PT, lalu jurnal Bank yang memakainya.
+2. Odoo: buat rekening bank milik partner PT, lalu jurnal Bank yang memakainya. **Finance (grup *Validate bank
+   account* / admin) wajib menandai rekening itu terverifikasi** (Rekening Bank → *Send Money* / trusted). Rekening
+   untrusted tidak ditampilkan ke pelanggan dan kanal menolak `bank_transfer`. Tanpa langkah ini, faktur ber-rekening
+   untrusted ditolak saat diposting (CE anti-phishing), sehingga persetujuan Verifikator gagal.
 3. Odoo: di **Kanal online**, isi *Jurnal transfer bank* dan tambahkan `bank_transfer` ke *Metode bayar*.
 4. Odoo: beri grup **Verifikator Pembayaran** ke staf Finance/CS yang bukan kasir atau gudang (SoD `SOD-PAY-01/02`).
 5. Postgres: jalankan migrasi `14-platform-g26.sql`. `scripts/deploy.sh` menjalankannya otomatis.

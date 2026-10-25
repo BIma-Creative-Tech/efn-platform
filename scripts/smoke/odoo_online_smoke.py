@@ -695,6 +695,205 @@ def step_counter_refund():
     )
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# G26 transfer bank + bukti (docs/04 §17, tahap `t`):
+#   transfer_setup  : rekening bank FIKTIF milik partner PT GL + jurnal bank SMKBT, kanal GL
+#                     `payment_modes=qris,bank_transfer` + jurnal transfer, user `smoke_payment_verifier` (grup
+#                     Verifikator Pembayaran saja, bukan kasir/gudang -> SoD SOD-PAY-01/02).
+#   transfer_proof  : baca bukti SMOKE_PART (state, lampiran JPEG tanpa EXIF, salinan antrean); foto tidak dicetak.
+#   transfer_decide : keputusan lewat wizard SEBAGAI Verifikator (SMOKE_DECISION approve|reject, SMOKE_REASON,
+#                     SMOKE_AMOUNT_DELTA) -> kirim outbox sekarang.
+#   transfer_outsider: staf outlet (bukan Verifikator) membaca bukti / memutuskan -> ditolak.
+SMOKE_BANK_ACC = "8800123456"  # FIKTIF (dev)
+
+
+def verifier_env():
+    st = load_state()
+    user = env["res.users"].browse(st["verifier_id"])
+    return st, env(user=user, context={"allowed_company_ids": [st["company_id"]]})
+
+
+def proofs_of(su):
+    order = find_order(su)
+    return order, su["efn.online.transfer.proof"].search([("order_id", "=", order.id)], order="id")
+
+
+def step_transfer_setup():
+    st = load_state()
+    company = env["res.company"].browse(st["company_id"])
+    su = env(su=True, context={"allowed_company_ids": [company.id]})
+    bank = su["res.bank"].search([("name", "=", "SMOKE Bank Demo")], limit=1) or su["res.bank"].create(
+        {"name": "SMOKE Bank Demo"}
+    )
+    PB = su["res.partner.bank"].with_context(active_test=False)
+    account = PB.search([("acc_number", "=", SMOKE_BANK_ACC), ("partner_id", "=", company.partner_id.id)], limit=1)
+    if not account:
+        account = PB.create(
+            {
+                "acc_number": SMOKE_BANK_ACC,
+                "partner_id": company.partner_id.id,
+                "bank_id": bank.id,
+                "acc_holder_name": "PT SMOKE Grand Lucky",
+                "company_id": company.id,
+            }
+        )
+    Journal = su["account.journal"]
+    journal = Journal.search([("code", "=", "SMKBT"), ("company_id", "=", company.id)], limit=1) or Journal.create(
+        {
+            "name": "SMOKE Transfer Bank Online GL",
+            "type": "bank",
+            "code": "SMKBT",
+            "company_id": company.id,
+            "bank_account_id": account.id,
+        }
+    )
+    channel = su["efn.online.channel"].browse(st["channel_id"])
+    # Rekening baru = untrusted (CE anti-phishing): kanal tidak boleh menampilkannya / menyalakan bank_transfer.
+    # Trust/untrust hanya boleh oleh user ber-hak (CE melarang OdooBot/superuser shell) -> sebagai admin (= Finance).
+    finance = env(user=env.ref("base.user_admin"), context={"allowed_company_ids": [company.id]})
+    acc_fin = finance["res.partner.bank"].browse(account.id)
+    acc_fin.write({"allow_out_payment": False})
+    untrusted_hidden = channel._efn_online_transfer_account() is None
+    rejected = False
+    try:
+        with env.cr.savepoint():
+            channel.write({"efn_transfer_journal_id": journal.id, "payment_modes": "qris,bank_transfer"})
+    except Exception:  # noqa: BLE001 - ValidationError yang diharapkan
+        rejected = True
+    # Finance memverifikasi rekening PT (Rekening Bank -> Send Money / trusted), baru kanal dinyalakan.
+    acc_fin.write({"allow_out_payment": True})
+    channel.invalidate_recordset()
+    channel.write({"efn_transfer_journal_id": journal.id, "payment_modes": "qris,bank_transfer"})
+    # Outlet TOKO-01 bisa berasal dari data demo efn_setup_online (gudang OL01, bukan SMKOL): stok smoke di gudang
+    # outlet yang sebenarnya dipakai quote/place.
+    outlet = channel.outlet_ids.filtered(lambda o: o.code == "TOKO-01")[:1]
+    for key in ("rice", "oil"):
+        set_stock(
+            su, su["product.product"].browse(st["products"][key]), outlet.warehouse_id, 1000.0, only_if_below=True
+        )
+    group = env.ref("efn_online_transfer.group_payment_verifier")
+    Users = su["res.users"].with_context(active_test=False)
+    verifier = Users.search([("login", "=", "smoke_payment_verifier")], limit=1)
+    if not verifier:
+        verifier = Users.with_context(no_reset_password=True).create(
+            {
+                "name": "SMOKE Verifikator Pembayaran",
+                "login": "smoke_payment_verifier",
+                "company_id": company.id,
+                "company_ids": [Command.set([company.id])],
+                "group_ids": [Command.set([env.ref("base.group_user").id, group.id])],
+            }
+        )
+    st.update({"verifier_id": verifier.id, "transfer_journal_id": journal.id})
+    save_state(st)
+    env.cr.commit()
+    out(
+        ok=True,
+        payment_modes=channel.payment_modes,
+        account=channel._efn_online_transfer_account(),
+        verifier_is_verifier=verifier.has_group("efn_online_transfer.group_payment_verifier"),
+        verifier_is_admin=verifier.has_group("base.group_system"),
+        verifier_pos_user=verifier.has_group("point_of_sale.group_pos_user"),
+        verifier_stock_user=verifier.has_group("stock.group_stock_user"),
+        outlet_warehouse=outlet.warehouse_id.code,
+        untrusted_hidden=untrusted_hidden,
+        untrusted_channel_rejected=rejected,
+        sod_rules=sorted(
+            su["efn.sod.rule"].search([("code", "like", "SOD-PAY-%")]).mapped(lambda r: f"{r.code}:{r.mode}")
+        ),
+    )
+
+
+def step_transfer_proof():
+    su = env(su=True)
+    order, proofs = proofs_of(su)
+    rows = []
+    for p in proofs:
+        att = p.attachment_id
+        raw = base64.b64decode(att.datas) if att and att.datas else b""
+        rows.append(
+            {
+                "state": p.state,
+                "duplicate_suspect": p.duplicate_suspect,
+                "amount_due": p.amount_due,
+                "transfer_ref": p.transfer_ref,
+                "account_label": p.account_label,
+                "reject_reason": p.reject_reason or None,
+                "att_model": att.res_model if att else None,
+                "att_public": bool(att.public) if att else None,
+                "att_mimetype": att.mimetype if att else None,
+                "jpeg": raw[:3] == b"\xff\xd8\xff",
+                "exif": b"Exif\x00" in raw[:4096],
+                "bytes": len(raw),
+            }
+        )
+    out(ok=bool(order), order_state=order.state, proofs=rows, n=len(rows))
+
+
+def step_transfer_decide():
+    st, ve = verifier_env()
+    su = env(su=True)
+    order, proofs = proofs_of(su)
+    proof = proofs.filtered(lambda p: p.state == "awaiting_verification")[-1:]
+    decision = os.environ.get("SMOKE_DECISION", "approve")
+    error = message = None
+    try:
+        vals = {"proof_id": proof.id, "decision": decision}
+        if decision == "reject":
+            vals["reject_reason"] = os.environ.get("SMOKE_REASON", "unreadable")
+        else:
+            vals.update(
+                {
+                    "bank_date": fields.Date.context_today(su["res.users"]),
+                    "bank_amount": proof.amount_due + float(os.environ.get("SMOKE_AMOUNT_DELTA", "0")),
+                    "bank_ref": "SMOKE-MUTASI-" + proof.proof_id[:8],
+                }
+            )
+        ve["efn.online.transfer.decide"].create(vals).action_confirm()
+        env.cr.commit()
+    except Exception as exc:  # noqa: BLE001 - dilaporkan sebagai hasil smoke
+        env.cr.rollback()
+        error, message = type(exc).__name__, str(exc)[:160]
+    process_outbox()
+    su = env(su=True)
+    order = find_order(su)
+    journal = su["account.journal"].browse(st["transfer_journal_id"])
+    pays = (
+        su["account.payment"]
+        .search([("journal_id", "=", journal.id)])
+        .filtered(lambda p: order.sale_order_id.invoice_ids & p.reconciled_invoice_ids)
+    )
+    out(
+        ok=error is None,
+        error=error,
+        message=message,
+        proof_state=proof.state if proof else None,
+        decided_by_verifier=bool(proof) and proof.decided_by.id == st["verifier_id"],
+        transfer_journal_payments=len(pays),
+        invoice_payment_state=sorted(set(order.sale_order_id.invoice_ids.mapped("payment_state"))),
+        **describe(order),
+    )
+
+
+def step_transfer_outsider():
+    se = staff_env()
+    su = env(su=True)
+    _, proofs = proofs_of(su)
+    proof = proofs[-1:]
+    read_err = decide_err = None
+    try:
+        se["efn.online.transfer.proof"].browse(proof.id).read(["amount_due", "image"])
+    except Exception as exc:  # noqa: BLE001
+        read_err = type(exc).__name__
+    env.cr.rollback()
+    try:
+        se["efn.online.transfer.proof"].browse(proof.id)._efn_decide("reject", reason="unreadable")
+    except Exception as exc:  # noqa: BLE001
+        decide_err = type(exc).__name__
+    env.cr.rollback()
+    out(ok=bool(read_err and decide_err), read_error=read_err, decide_error=decide_err)
+
+
 {
     "counter_setup": step_counter_setup,
     "counter_lookup": step_counter_lookup,
@@ -711,4 +910,8 @@ def step_counter_refund():
     "ops_cancel": step_ops_cancel,
     "picking_direct": step_picking_direct,
     "fake_ctx": step_fake_ctx,
+    "transfer_setup": step_transfer_setup,
+    "transfer_proof": step_transfer_proof,
+    "transfer_decide": step_transfer_decide,
+    "transfer_outsider": step_transfer_outsider,
 }[STEP]()

@@ -113,6 +113,18 @@ class TestEfnOnlineTransfer(EfnOnlineCommon):
         )
 
     # -------------------------------------------------------------- konfigurasi
+    def test_channel_requires_trusted_bank_account(self):
+        # Mode test Odoo menandai rekening jurnal bank 'trusted' otomatis (test_enable); di DB nyata rekening baru
+        # untrusted sampai Finance memverifikasinya, dan faktur ber-rekening untrusted gagal diposting (smoke G26 t).
+        account = self.transfer_journal.bank_account_id
+        self.assertTrue(account.allow_out_payment)
+        self.assertTrue(self.channel._efn_online_transfer_account())
+        account.write({"allow_out_payment": False})
+        self.assertIsNone(self.channel._efn_online_transfer_account())
+        with self.assertRaises(ValidationError):
+            self.channel._check_efn_transfer_journal()
+        account.write({"allow_out_payment": True})
+
     def test_channel_requires_complete_transfer_journal(self):
         with self.assertRaises(ValidationError):
             self.channel.write({"efn_transfer_journal_id": False})

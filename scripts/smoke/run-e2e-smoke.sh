@@ -12,7 +12,8 @@
 # Pemakaian (Git Bash/Linux):  bash scripts/smoke/run-e2e-smoke.sh [a b c d e f g l o v]   (default: a b c d f e g l o;
 #   v = jalur VLM nyata, opsional, butuh model OLLAMA_VISION_MODEL di Ollama; o = penjualan online G17, terakhir
 #   karena me-recreate api-gateway untuk uji kill switch; q = G20 bayar di kasir §12.2, butuh o sudah jalan di stack yang sama;
-#   r = G21 kebijakan poin per PT + akrual harian Odoo<->BFF, opsional/tidak di default, butuh efn_loyalty_accounting terpasang)
+#   r = G21 kebijakan poin per PT + akrual harian Odoo<->BFF, opsional/tidak di default, butuh efn_loyalty_accounting terpasang;
+#   t = G26 transfer bank + bukti §17, opsional/tidak di default, butuh o pernah jalan + efn_online_transfer + migrasi 14)
 # Keluaran: baris `SMOKE_RESULT {...}` + ringkasan PASS/FAIL; exit 1 bila ada FAIL.
 set -euo pipefail
 
@@ -1191,6 +1192,106 @@ scenario_r() { # Gelombang 21 (QA): kebijakan poin per PT (docs/04 §13.1 no. 1-
   check "r.accrual_rerun_idempotent" "$([[ "$(field moves "$m1")" == "$(field moves "$m2")" && "$(field ok "$m2")" == true ]] && echo 1 || echo 0)" "jurnal EFN-LOY-* run1=$(field moves "$m1") run2=$(field moves "$m2")"
   # Selisih recon pada data dev BUKAN kegagalan smoke (saldo awal/POS sebelum lookback tidak ikut diakrual): dilaporkan saja.
   record "{\"check\": \"r.info_recon_mismatch_count\", \"ok\": true, \"detail\": \"mismatch=$(field recon_mismatch "$m2") (informasi; nonzero di dev wajar bila ada jurnal POS sebelum jendela lookback)\"}"
+}
+
+scenario_t() { # Gelombang 26: transfer bank + bukti (docs/04 §17, L-95..L-103) — BFF -> Odoo Verifikator -> BFF nyata
+  echo "== t. Transfer bank: checkout -> rekening PT + kode berita -> unggah bukti (EXIF dibuang) -> ditolak -> unggah ulang"
+  echo "      -> Verifikator menyetujui di Odoo -> faktur lunas di jurnal transfer -> kode ambil -> serah terima; PDP & SoD."
+  echo "      Prasyarat: tahap o pernah jalan (kanal GL + API key), modul efn_online_transfer, migrasi 14-platform-g26.sql."
+  local r pt pn toid tpart ncode noid
+  oodoo() {
+    local o
+    o="$(MSYS_NO_PATHCONV=1 docker exec -i "$@" "$ODOO" odoo shell -d efn_odoo --no-http --log-level=warn \
+      < "${SMOKE_DIR}/odoo_online_smoke.py" 2>&1 | grep -E '^SMOKE_RESULT|Error|errors\.' | tail -1 || true)"
+    if [[ -n "$o" ]]; then echo "$o"; else echo 'SMOKE_RESULT {"ok": false, "error": "odoo_shell_no_result"}'; fi
+  }
+  opy() { # <hp> <member> <subperintah> [arg...] (Pillow untuk foto bukti sintetis)
+    local phone="$1" who="$2"; shift 2
+    MSYS_NO_PATHCONV=1 docker run --rm --network efn_edge \
+      --add-host "api.efn.local:${TRAEFIK_IP}" --add-host "app.efn.local:${TRAEFIK_IP}" \
+      -v "${WORK_W}:/work" -v efn-pip-cache:/root/.cache/pip -e SMOKE_PHONE="$phone" -e SMOKE_STATE="/work/online_${who}.json" \
+      -e SMOKE_BFF_LOG=/work/bff.log "$PY_IMAGE" sh -c "pip install -q pillow==11.3.0 > /dev/null 2>&1; python /work/online_smoke.py $*" \
+      2>&1 | grep '^SMOKE_RESULT' | tee -a "$RESULTS" || true
+  }
+  state_of() { grep -oE "\"$2\": \\{[^}]*\"$3\": \"[^\"]+\"" "${WORK}/online_$1.json" | sed -nE "s/.*\"$3\": \"([^\"]+)\"/\\1/p" | head -1; }
+  part_of() { psql_platform -c "select id from platform.online_order_part where order_id='$1' limit 1"; }
+
+  # 0. Kanal GL (idempoten) + jurnal transfer + Verifikator; katalog BFF tersinkron
+  r="$(oodoo -e SMOKE_STEP=setup)"
+  check "t.odoo_channel_setup" "$([[ "$(field ok "$r")" == true ]] && echo 1 || echo 0)" "$r"
+  r="$(oodoo -e SMOKE_STEP=transfer_setup)"
+  check "t.odoo_transfer_setup" "$([[ "$(field ok "$r")" == true && "$(field verifier_is_verifier "$r")" == true && "$(field verifier_is_admin "$r")" == false && "$(field verifier_pos_user "$r")" == false && "$(field verifier_stock_user "$r")" == false && "$r" == *'"account_number": "8800123456"'* ]] && echo 1 || echo 0)" "$r"
+  check "t.untrusted_account_not_offered" "$([[ "$(field untrusted_hidden "$r")" == true && "$(field untrusted_channel_rejected "$r")" == true ]] && echo 1 || echo 0)" "$r"
+  check "t.sod_pay_rules_block" "$([[ "$r" == *'SOD-PAY-01:block'* && "$r" == *'SOD-PAY-02:block'* ]] && echo 1 || echo 0)" "$r"
+  pt="62812$(rand8)"; pn="62812$(rand8)"
+  # katalog BFF tersinkron dari Odoo per ONLINE_CATALOG_SYNC_SECONDS (dev 300 s): tunggu kanal + produk SMOKE dulu
+  opy "$pt" t transfer_channel 420
+  opy "$pt" t login; opy "$pt" t catalog
+
+  # 1. Checkout transfer (member T): rekening PT penjual + kode berita, tanpa intent/QR
+  opy "$pt" t quote rice:1,oil:1 trf
+  opy "$pt" t checkout_transfer trf
+  toid="$(state_of t trf order_id)"; tpart="$(part_of "$toid")"
+  r="$(psql_platform -c "select status || '/' || payment_method || '/' || coalesce(transfer_status,'-') || '/' || (payment_intent_id is null) from platform.online_order where id='$toid'")"
+  check "t.bff_order_row" "$([[ "$r" == awaiting_payment/bank_transfer/awaiting_proof/true ]] && echo 1 || echo 0)" "status/metode/transfer/tanpa intent=$r"
+  r="$(oodoo -e SMOKE_STEP=order -e SMOKE_PART="$tpart")"
+  check "t.odoo_placed_bank_transfer" "$([[ "$(field state "$r")" == placed && "$(field payment_mode "$r")" == bank_transfer && "$(field reserved "$r")" == true ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  opy "$pt" t pickup_unavailable trf
+
+  # 2. Unggah bukti -> antrean Verifikator (lampiran privat JPEG tanpa EXIF), BFF hanya hash
+  opy "$pt" t transfer_upload trf 3 202 2
+  opy "$pt" t transfer_upload trf 4 transfer_not_awaiting_proof
+  r="$(oodoo -e SMOKE_STEP=transfer_proof -e SMOKE_PART="$tpart")"
+  check "t.odoo_proof_queue" "$([[ "$(field n "$r")" == 1 && "$r" == *'"state": "awaiting_verification"'* && "$r" == *'"jpeg": true'* && "$r" == *'"exif": false'* && "$r" == *'"att_public": false'* && "$r" == *'"att_model": "efn.online.transfer.proof"'* && "$r" == *"\"transfer_ref\": \"$(state_of t trf transfer_ref)\""* ]] && echo 1 || echo 0)" "$r"
+  r="$(psql_platform -c "select count(*) || '/' || bool_and(length(sha256)=64 and length(dhash)=16) from platform.online_transfer_proof where order_id='$toid'")"
+  check "t.bff_hash_only_row" "$([[ "$r" == 1/true ]] && echo 1 || echo 0)" "baris/hash=$r"
+  r="$(psql_platform -c "select count(*) from information_schema.columns where table_schema='platform' and table_name='online_transfer_proof' and data_type in ('bytea','text') and column_name not in ('sha256','dhash','status','reject_reason')")"
+  check "t.bff_no_image_column" "$([[ "$r" == 0 ]] && echo 1 || echo 0)" "kolom biner/teks lain=$r"
+  check "t.exif_marker_not_in_logs" "$([[ "$(docker logs --since 30m "$ODOO" 2>&1 | grep -c 'SMOKE-EXIF-MARKER\|SMOKE Pengirim' || true)" == 0 && "$(grep -c 'SMOKE-EXIF-MARKER\|SMOKE Pengirim\|/9j/' "${WORK}/bff.log" || true)" == 0 ]] && echo 1 || echo 0)" "penanda EXIF/base64 foto tidak muncul di log BFF/Odoo"
+
+  # 3. Akses: staf outlet bukan Verifikator tidak bisa membaca/memutuskan bukti
+  r="$(oodoo -e SMOKE_STEP=transfer_outsider -e SMOKE_PART="$tpart")"
+  check "t.outsider_denied" "$([[ "$(field ok "$r")" == true ]] && echo 1 || echo 0)" "$r"
+
+  # 4. Nominal mutasi beda -> wizard menolak; lalu Verifikator menolak (amount_mismatch) -> BFF rejected + notifikasi
+  r="$(oodoo -e SMOKE_STEP=transfer_decide -e SMOKE_PART="$tpart" -e SMOKE_DECISION=approve -e SMOKE_AMOUNT_DELTA=-1000)"
+  check "t.approve_wrong_amount_refused" "$([[ "$(field ok "$r")" == false && "$(field error "$r")" == UserError && "$(field state "$r")" == placed ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  r="$(oodoo -e SMOKE_STEP=transfer_decide -e SMOKE_PART="$tpart" -e SMOKE_DECISION=reject -e SMOKE_REASON=amount_mismatch)"
+  check "t.verifier_reject" "$([[ "$(field ok "$r")" == true && "$(field proof_state "$r")" == rejected && "$(field decided_by_verifier "$r")" == true && "$r" == *'"transfer_rejected:done"'* ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  sleep 3
+  opy "$pt" t transfer_view trf rejected amount_mismatch
+  r="$(psql_platform -c "select count(*) from platform.outbox where queue='notify.push' and payload->>'template'='online_transfer_rejected' and created_at > now() - interval '10 minutes'")"
+  check "t.notify_rejected_enqueued" "$([[ "${r:-0}" -ge 1 ]] && echo 1 || echo 0)" "notify=$r"
+
+  # 5. Unggah ulang -> disetujui -> SO dikonfirmasi, faktur lunas di jurnal transfer -> BFF fulfilling + kode ambil
+  opy "$pt" t transfer_upload trf 5 202 1
+  r="$(oodoo -e SMOKE_STEP=transfer_decide -e SMOKE_PART="$tpart" -e SMOKE_DECISION=approve)"
+  check "t.verifier_approve_invoice_paid" "$([[ "$(field ok "$r")" == true && "$(field proof_state "$r")" == approved && "$(field state "$r")" == confirmed && "$(field transfer_journal_payments "$r")" -ge 1 && "$r" == *'"invoices": ["posted"]'* && ( "$r" == *'"paid:done"'* || "$r" == *'"paid:pending"'* ) ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  opy "$pt" t wait trf fulfilling confirmed
+  opy "$pt" t transfer_view trf none
+  r="$(psql_platform -c "select o.status || '/' || (o.paid_at is not null) || '/' || coalesce(o.transfer_status,'-') || '/' || string_agg(t.status, ',' order by t.uploaded_at) from platform.online_order o join platform.online_transfer_proof t on t.order_id=o.id where o.id='$toid' group by o.status, o.paid_at, o.transfer_status")"
+  check "t.bff_paid_proofs_closed" "$([[ "$r" == fulfilling/true/-/rejected,approved ]] && echo 1 || echo 0)" "order/paid/transfer/bukti=$r"
+  opy "$pt" t pickup trf
+  r="$(oodoo -e SMOKE_STEP=ready -e SMOKE_PART="$tpart")"
+  check "t.staff_ready" "$([[ "$(field ok "$r")" == true && "$(field state "$r")" == ready ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  r="$(oodoo -e SMOKE_STEP=handover -e SMOKE_PART="$tpart" -e SMOKE_CODE="$(state_of t trf pickup_code)")"
+  check "t.staff_handover" "$([[ "$(field done "$r")" == true && "$(field state "$r")" == picked_up ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  opy "$pt" t wait trf completed handed_over
+
+  # 6. Member N: uji negatif multipart (jatah unggah tidak berkurang) + simulasi ditolak dengan Odoo nyata;
+  #    kedaluwarsa tanpa keputusan -> expired, bukti Odoo expired
+  opy "$pn" n login; opy "$pn" n catalog
+  opy "$pn" n quote oil:1 neg
+  opy "$pn" n checkout_transfer neg
+  opy "$pn" n transfer_negative neg
+  noid="$(state_of n neg order_id)"
+  opy "$pn" n transfer_upload neg 6 202 2
+  psql_platform -c "update platform.online_order set expires_at = now() - interval '1 minute' where id='$noid' and status='awaiting_payment'" > /dev/null
+  opy "$pn" n wait neg expired cancelled 150
+  for _ in $(seq 1 20); do r="$(oodoo -e SMOKE_STEP=transfer_proof -e SMOKE_PART="$(part_of "$noid")")"; [[ "$(field order_state "$r")" == cancelled ]] && break; sleep 5; done
+  check "t.expired_proof_closed_in_odoo" "$([[ "$(field order_state "$r")" == cancelled && "$r" == *'"state": "expired"'* ]] && echo 1 || echo 0)" "$r"
+  r="$(psql_platform -c "select string_agg(status, ',') from platform.online_transfer_proof where order_id='$noid'")"
+  check "t.expired_proof_closed_in_bff" "$([[ "$r" == expired ]] && echo 1 || echo 0)" "bukti BFF=$r"
 }
 
 for s in "${SCENARIOS[@]}"; do "scenario_${s}"; done

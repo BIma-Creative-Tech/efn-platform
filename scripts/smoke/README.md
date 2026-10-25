@@ -120,6 +120,26 @@ baru (kanal `GL`, user `efn_online_gl`, `efn_brand_code` `PB`).
   settled); refund CS (`approval_required`, pembuat/peran cs ditolak), settle manual SEC-112; stok non-katalog 404;
   label pajak `PPN 11%`. Identitas/peran CLI disimulasikan lewat env `EFN_CS_OPERATOR`/`EFN_CS_ROLE` (dev).
 
+## Skenario `t` — G26 transfer bank + bukti (docs/04 §17, L-95..L-103) — DIJALANKAN 25 Okt 2026 di stack dev
+`online_smoke.py` `transfer_channel|checkout_transfer|transfer_upload|transfer_negative|transfer_view`;
+`odoo_online_smoke.py` `transfer_setup|transfer_proof|transfer_decide|transfer_outsider`.
+Prasyarat: tahap `o` pernah jalan (kanal GL + API key), modul `efn_online_transfer`, migrasi `14-platform-g26.sql`,
+`odoo-rpc-gateway` memuat path ke-21 (restart gateway setelah mengubah `haproxy.cfg`).
+- Setup: rekening FIKTIF milik PT GL + jurnal SMKBT; rekening **untrusted** tidak ditampilkan dan kanal menolak
+  `bank_transfer`; setelah Finance (admin) menandainya trusted, kanal `qris,bank_transfer`. Verifikator
+  `smoke_payment_verifier` hanya punya grup Verifikator (bukan POS/gudang/admin); SoD `SOD-PAY-01/02` mode `block`.
+- Checkout transfer: rekening PT + kode berita, tanpa intent/QR; replay = order sama; daftar pesanan tanpa rekening.
+- Unggah JPEG sintetis **ber-EXIF**: lampiran Odoo privat, JPEG, **EXIF terbuang**; BFF hanya baris hash; penanda
+  EXIF/base64 foto tidak ada di log BFF/Odoo. Staf outlet bukan Verifikator tidak bisa membaca/memutuskan.
+- Nominal mutasi beda → wizard menolak. Tolak `amount_mismatch` → BFF `rejected` + notifikasi. Unggah ulang →
+  disetujui → SO dikonfirmasi, faktur lunas di jurnal transfer → `fulfilling` → kode ambil → siap → diambil.
+- Member N: multipart salah (bukan gambar 415, field lain 400, JSON 415, nama field salah 400) tidak mengurangi jatah;
+  simulasi dengan Odoo nyata 404; kedaluwarsa → bukti `expired` di Odoo dan BFF.
+- Temuan: (1) rekening jurnal untrusted membuat persetujuan gagal (`RedirectWarning`) → modul kini mensyaratkan
+  rekening trusted; test unit tidak menangkapnya karena mode test CE menandai rekening trusted otomatis. (2) Setelah
+  Odoo restart, sidecar `odoo-tls`/`odoo-ws-tls` (network_mode container Odoo) harus `up -d --force-recreate`;
+  restart saja membuat `odoo-rpc-gateway` 503 untuk semua path.
+
 ## Skenario `q` — G20 bayar di kasir (docs/04 §12.2, L-50..L-58) — ditulis QA, BELUM dijalankan
 
 Dijalankan setelah `o` di stack yang sama (memakai API key kanal GL + gateway; `q` menjalankan ulang `setup` yang idempoten).

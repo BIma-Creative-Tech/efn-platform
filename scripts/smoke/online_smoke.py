@@ -28,6 +28,12 @@ Subperintah (argumen tambahan setelah nama):
   checkout_counter [label]      checkout `payment_method: counter` (negatif: metode asing 400; replay = kode sama)
   counter_view [label]          GET order memuat kode bayar (pemilik); daftar pesanan tanpa kode
   counter_cancel [label]        pelanggan membatalkan pesanan menunggu bayar di kasir
+  G26 transfer bank + bukti (docs/04 §17, tahap `t`):
+  transfer_channel [detik]      tunggu sinkron katalog: kanal GL mengiklankan qris+bank_transfer
+  checkout_transfer [label]     checkout `payment_method: bank_transfer` -> rekening PT + kode berita, tanpa QR/intent
+  transfer_upload [label] [seed] [expect]  unggah JPEG sintetis ber-EXIF (multipart `photo`) -> 202 (atau kode expect)
+  transfer_negative [label]     multipart salah (field lain / bukan gambar / JSON) -> 400/415; simulasi 404
+  transfer_view [label] <status> [reason]  GET order: blok payment transfer (status, sisa unggah, alasan tolak)
 """
 
 import base64
@@ -938,12 +944,190 @@ def cmd_counter_cancel(label="main"):
     )
 
 
+# ------------------------------------------------------------------------------------- G26 transfer bank + bukti
+TRANSFER_REF_RE = re.compile(r"^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$")
+
+
+def multipart(fields):
+    """fields: [(name, filename|None, ctype|None, bytes)] -> (body, content-type). Tanpa dependensi."""
+    boundary = "efnsmoke" + uuid.uuid4().hex
+    out = b""
+    for name, filename, ctype, data in fields:
+        disp = f'form-data; name="{name}"' + (f'; filename="{filename}"' if filename else "")
+        out += f"--{boundary}\r\nContent-Disposition: {disp}\r\n".encode()
+        if ctype:
+            out += f"Content-Type: {ctype}\r\n".encode()
+        out += b"\r\n" + data + b"\r\n"
+    out += f"--{boundary}--\r\n".encode()
+    return out, f"multipart/form-data; boundary={boundary}"
+
+
+def proof_jpeg(seed):
+    """Foto bukti sintetis (Pillow) + EXIF berisi penanda GPS/nama palsu: BFF wajib membuangnya (§17.4 no. 2)."""
+    import io
+
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (900, 1400), (250, 250, 250))
+    d = ImageDraw.Draw(img)
+    for i in range(14):
+        d.rectangle([60, 80 + i * 90, 840, 120 + i * 90], fill=((seed * 37 + i * 17) % 200, 60 + i * 9, 120))
+    exif = Image.Exif()
+    exif[0x010E] = "SMOKE-EXIF-MARKER"  # ImageDescription
+    exif[0x013B] = "SMOKE Pengirim Fiktif"  # Artist
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=90, exif=exif.tobytes())
+    return buf.getvalue()
+
+
+def cmd_transfer_channel(timeout="150"):
+    deadline = time.time() + int(timeout)
+    modes = s = None
+    while time.time() < deadline:
+        s, ch, _, _ = b.req("GET", "/v1/catalog/channels")
+        chan = next((c for c in (ch or {}).get("items", []) if c.get("channel_code") == CHANNEL), None)
+        modes = (chan or {}).get("payment_modes")
+        if s == 200 and isinstance(modes, list) and "bank_transfer" in modes:
+            break
+        time.sleep(5)
+    b.result(
+        "t.channel_payment_modes",
+        s == 200 and isinstance(modes, list) and "bank_transfer" in modes,
+        http=s,
+        modes=modes,
+    )
+
+
+def cmd_checkout_transfer(label="main"):
+    st = load()
+    o = st["orders"][label]
+    h = dict(auth(st))
+    h["Idempotency-Key"] = idem_key(o["quote_id"])
+    req = {"quote_id": o["quote_id"], "accept_total": o["total"], "payment_method": "bank_transfer"}
+    s, body, _, _ = b.req("POST", "/v1/orders", body=req, headers=h)
+    pay = (body or {}).get("payment") or {}
+    acc = pay.get("account") or {}
+    raw = json.dumps(body)
+    ok = (
+        s == 201
+        and body.get("status") == "awaiting_payment"
+        and body.get("amount_payable") == o["total"]
+        and pay.get("method") == "bank_transfer"
+        and pay.get("status") == "awaiting_proof"
+        and acc.get("account_number") == "8800123456"
+        and acc.get("bank_name") == "SMOKE Bank Demo"
+        and bool(acc.get("account_holder"))
+        and bool(TRANSFER_REF_RE.match(pay.get("transfer_ref") or ""))
+        and pay.get("uploads_left") == 3
+        and pay.get("reject_reason") is None
+        and "qr_string" not in raw
+        and "pickup_code" not in raw
+    )
+    b.result(
+        f"t.checkout_transfer_201[{label}]",
+        ok,
+        http=s,
+        code=code_of(body),
+        payment={k: v for k, v in pay.items() if k != "account"},
+        bank=acc.get("bank_name"),
+    )
+    o["order_id"] = (body or {}).get("order_id")
+    o["transfer_ref"] = pay.get("transfer_ref")
+    save(st)
+    s2, b2, _, _ = b.req("POST", "/v1/orders", body=req, headers=h)
+    same = ((b2 or {}).get("payment") or {}).get("transfer_ref") == o["transfer_ref"]
+    b.result(
+        f"t.checkout_transfer_replay[{label}]",
+        s2 in (200, 201) and (b2 or {}).get("order_id") == o["order_id"] and same,
+        http=s2,
+    )
+    s3, lst, _, _ = b.req("GET", "/v1/orders?limit=20", headers=auth(st))
+    item = next((i for i in (lst or {}).get("items", []) if i.get("order_id") == o["order_id"]), None)
+    b.result(
+        f"t.list_no_account[{label}]", s3 == 200 and item is not None and "8800123456" not in json.dumps(item), http=s3
+    )
+
+
+def upload(st, oid, data, ctype="image/jpeg", extra=None, name="photo"):
+    fields = [(name, "bukti.jpg", ctype, data)] + (extra or [])
+    raw, ct = multipart(fields)
+    return b.req("POST", f"/v1/orders/{oid}/transfer-proof", raw=raw, ctype=ct, headers=auth(st))
+
+
+def cmd_transfer_negative(label="main"):
+    st = load()
+    oid = st["orders"][label]["order_id"]
+    s1, b1, _, _ = upload(st, oid, b"bukan gambar sama sekali, hanya teks", ctype="image/jpeg")
+    s2, b2, _, _ = upload(st, oid, proof_jpeg(1), extra=[("note", None, None, b"catatan")])
+    s3, b3, _, _ = b.req("POST", f"/v1/orders/{oid}/transfer-proof", body={"photo": "x"}, headers=auth(st))
+    s4, b4, _, _ = upload(st, oid, proof_jpeg(1), name="file")
+    s5, b5, _, _ = get_order(st, label)
+    left = ((b5 or {}).get("payment") or {}).get("uploads_left")
+    b.result(
+        f"t.upload_negatives[{label}]",
+        s1 == 415 and s2 == 400 and s3 == 415 and s4 == 400 and left == 3,
+        http=[s1, s2, s3, s4],
+        codes=[code_of(b1), code_of(b2), code_of(b3), code_of(b4)],
+        uploads_left_unchanged=left,
+    )
+    s6, b6, _, _ = b.req("POST", f"/v1/orders/{oid}/simulate-payment", body={"status": "paid"}, headers=auth(st))
+    b.result(f"t.simulate_real_odoo_404[{label}]", s6 == 404, http=s6, code=code_of(b6))
+
+
+def cmd_transfer_upload(label="main", seed="3", expect="202", left=""):
+    """Unggah sah (expect 202 + sisa `left`) atau kode galat yang diharapkan (mis. `transfer_not_awaiting_proof`)."""
+    st = load()
+    oid = st["orders"][label]["order_id"]
+    s, body, _, _ = upload(st, oid, proof_jpeg(int(seed)))
+    pay = (body or {}).get("payment") or {}
+    if expect.isdigit():
+        ok = s == int(expect) and (s != 202 or pay.get("status") == "awaiting_verification")
+        if left:
+            ok = ok and pay.get("uploads_left") == int(left)
+    else:
+        ok = code_of(body) == expect
+    b.result(
+        f"t.upload[{label}]#{seed}={expect}",
+        ok,
+        http=s,
+        code=code_of(body),
+        left=pay.get("uploads_left"),
+        status=pay.get("status"),
+    )
+
+
+def cmd_transfer_view(label="main", status="awaiting_proof", reason=""):
+    st = load()
+    s, body, _, _ = get_order(st, label)
+    pay = (body or {}).get("payment") or {}
+    ok = s == 200 and pay.get("method") == "bank_transfer" and pay.get("status") == status
+    if reason:
+        ok = ok and pay.get("reject_reason") == reason
+    if status == "none":
+        ok = ok and "account" not in pay and "transfer_ref" not in pay
+    b.result(
+        f"t.view[{label}]={status}{'/' + reason if reason else ''}",
+        ok,
+        http=s,
+        order=(body or {}).get("status"),
+        payment=pay.get("status"),
+        reason=pay.get("reject_reason"),
+        left=pay.get("uploads_left"),
+        has_account="account" in pay,
+    )
+
+
 if __name__ == "__main__":
     cmds = {
         "counter_channel": cmd_counter_channel,
         "checkout_counter": cmd_checkout_counter,
         "counter_view": cmd_counter_view,
         "counter_cancel": cmd_counter_cancel,
+        "transfer_channel": cmd_transfer_channel,
+        "checkout_transfer": cmd_checkout_transfer,
+        "transfer_negative": cmd_transfer_negative,
+        "transfer_upload": cmd_transfer_upload,
+        "transfer_view": cmd_transfer_view,
         "events": cmd_events,
         "login": cmd_login,
         "catalog": cmd_catalog,

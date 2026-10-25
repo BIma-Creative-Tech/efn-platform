@@ -26,7 +26,8 @@ class EfnOnlineChannel(models.Model):
                 raise ValidationError(
                     _(
                         "Metode 'bank_transfer' membutuhkan jurnal transfer bank dengan Rekening Bank lengkap "
-                        "(bank, nomor rekening, pemilik rekening) milik PT kanal."
+                        "(bank, nomor rekening, pemilik rekening) milik PT kanal yang sudah diverifikasi Finance "
+                        "(Rekening Bank: 'Send Money' / trusted)."
                     )
                 )
 
@@ -45,6 +46,10 @@ class EfnOnlineChannel(models.Model):
         if account.partner_id.commercial_partner_id != self.company_id.partner_id.commercial_partner_id:
             return None
         if not (bank_name and number.isdigit() and 6 <= len(number) <= 20 and holder):
+            return None
+        # Rekening yang belum diverifikasi (CE `allow_out_payment`) tidak boleh ditampilkan ke pelanggan: nomor rekening
+        # palsu adalah pola phishing, dan faktur ber-rekening untrusted ditolak saat posting (persetujuan gagal).
+        if not account.allow_out_payment:
             return None
         return {
             "bank_name": bank_name[:64],
