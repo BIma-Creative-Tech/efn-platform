@@ -106,6 +106,16 @@ Good To Go). Akses screen detail berbayar (Pro); yang dipakai adalah artikel pub
   salah/kedaluwarsa/habis percobaan. Diadopsi di layar OTP semua app.
 - Pola UI elemen: date picker & slot chip (reservasi/pre-order), QR code (kode ambil, scan meja), numeric keypad.
 
+**Referensi tambahan dari user (25 Okt 2026).** Dipakai sebagai inspirasi **pola**, bukan aset: Dribbble shot adalah hak
+cipta desainernya, dan syarat ScreensDesign melarang menyalin/menurunkan layar. Analisis hanya dari teks publik (judul
+chapter, deskripsi shot); gambarnya **belum dilihat** (alat vision tidak tersedia). Fokus: app `superapp` saja (K25-03).
+
+| Referensi | Pola yang diadopsi | Yang tidak diadopsi | Kesenjangan di kode saat ini |
+|---|---|---|---|
+| **Daily Bite** (ScreensDesign, 123 screen; recipe app) | Layar konteks sebelum dialog izin notifikasi sistem; personalisasi singkat (brand favorit, gerai terdekat, mode pesan favorit) lalu langsung tampilkan hasilnya; akun dibuat setelah pengguna melihat nilai; pertanyaan "dari mana tahu kami?" diganti **kolom kode referral** (MGM, K25-10) | Paywall/langganan, maskot (keputusan brand), kuis panjang (onboarding maks ±3 layar sebelum katalog) | Onboarding & layar pra-izin belum ada; input kode referral belum ada (MGM belum dibangun) |
+| **Greeter** (Dribbble; booking meja) | Detail gerai (galeri, jam buka, highlight); form booking jumlah tamu · tanggal · jam · catatan; daftar reservasi saya + pengingat; login OTP; kartu modular | Pembayaran deposit (pilot tanpa deposit, §7); mode gelap global (hanya bila tema brand gelap); dashboard admin terpisah (staf memakai Odoo) | **Pilih meja sendiri di denah**: saat ini Odoo memilih meja otomatis (`efn.table.booking.table_id` readonly). Perlu kontrak baru yang mengirim denah `restaurant.floor/table` (posisi, bentuk, kursi; tanpa PII) + keputusan Ops F&B apakah tamu boleh memilih meja. **Peta gerai**: perlu izin lokasi + MapLibre/OSM (open source) |
+| **Coffee Shop App** (Dribbble; pesan kopi) | Menu digital per kategori; kustomisasi minuman (ukuran, gula, es, shot) sebelum masuk keranjang; promo & poin terlihat di beranda; tombol tambah ke keranjang yang cepat | Rekomendasi AI di versi pertama | **Modifier di mobile: dibangun 25 Okt 2026** (`efn-mobile` superapp, `AttributePicker`). Rekomendasi: mulai berbasis aturan (pesan ulang/favorit, terlaris per gerai dari ClickHouse); AI via 9router (K25-01) menyusul, di luar jalur transaksi |
+
 ## 6. Bahasa visual web Super-App
 
 Mengikuti landing Paris Baguette yang sudah berjalan (`docs/design/landing-pages.md`): tipografi Fraunces/Geist,
