@@ -39,6 +39,8 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -co
   -keyout "${work}/foreign_key" -out "${work}/foreign_crt" 2> /dev/null
 # Body > 256 KB (262144 byte) untuk uji 413
 head -c 300000 /dev/zero | tr '\0' 'a' | sed 's/^/{"x":"/; s/$/"}/' > "${work}/big.json"
+# G26 §17.15: path bukti transfer menerima s.d. 2,5 MiB; > 2 621 440 byte tetap 413
+head -c 2700000 /dev/zero | tr '\0' 'a' | sed 's/^/{"x":"/; s/$/"}/' > "${work}/huge.json"
 chmod 644 "${work}"/*
 
 cat > "${work}/cases.sh" <<'INNER'
@@ -191,8 +193,14 @@ run hdr_auth_basic deny $BFF -X POST -H "$H_CT" -H "Authorization: Basic YWRtaW4
 run hdr_auth_bearer_short deny $BFF -X POST -H "$H_CT" -H "Authorization: bearer abc" --data '{}' "$GW$OK_PATH"
 # shellcheck disable=SC2086
 run body_too_large deny $BFF -X POST -H "$H_CT" -H "$H_AUTH" --data-binary @/t/big.json "$GW$OK_PATH"
+# shellcheck disable=SC2086
+run transfer_body_300k_allowed pass $BFF -X POST -H "$H_CT" -H "$H_AUTH" --data-binary @/t/big.json \
+  "$GW/json/2/efn.online.order/efn_online_transfer_submit"
+# shellcheck disable=SC2086
+run transfer_body_too_large deny $BFF -X POST -H "$H_CT" -H "$H_AUTH" --data-binary @/t/huge.json \
+  "$GW/json/2/efn.online.order/efn_online_transfer_submit"
 
-# ── Positif: 20 path persis LOLOS filter (status dari Odoo, bukan dari gateway) ──────────────────────────
+# ── Positif: 21 path persis LOLOS filter (status dari Odoo, bukan dari gateway) ──────────────────────────
 for p in efn.online.channel/efn_online_catalog efn.online.channel/efn_online_stock efn.online.channel/efn_online_image \
          efn.online.channel/efn_online_quote efn.online.order/efn_online_place efn.online.order/efn_online_mark_paid \
          efn.online.order/efn_online_cancel efn.online.order/efn_online_refund efn.online.order/efn_online_refund_settled \
@@ -200,7 +208,8 @@ for p in efn.online.channel/efn_online_catalog efn.online.channel/efn_online_sto
          efn.online.order/efn_online_set_invoice_party \
          efn.pos.qr.order/efn_qr_menu efn.pos.qr.order/efn_qr_submit efn.pos.qr.order/efn_qr_status \
          efn.table.booking/efn_booking_availability efn.table.booking/efn_booking_create \
-         efn.table.booking/efn_booking_cancel efn.table.booking/efn_booking_status efn.online.channel/efn_online_slots; do
+         efn.table.booking/efn_booking_cancel efn.table.booking/efn_booking_status efn.online.channel/efn_online_slots \
+         efn.online.order/efn_online_transfer_submit; do
   post "allowed:$p" pass "/json/2/$p"
 done
 # shellcheck disable=SC2086

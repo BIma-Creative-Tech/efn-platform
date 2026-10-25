@@ -40,14 +40,26 @@ RPC_ALLOWLIST = {
     ("pos.config", "efn_otp_request"): "_efn_check_otp_caller",
     ("pos.config", "efn_otp_verify"): "_efn_check_otp_caller",
     ("pos.config", "efn_loyalty_balance"): "_efn_check_otp_caller",
-    ("pos.config", "efn_loyalty_redeem_reserve"): "_efn_check_otp_caller + redeem_enabled + OTP pos_redeem",
+    (
+        "pos.config",
+        "efn_loyalty_redeem_reserve",
+    ): "_efn_check_otp_caller + redeem_enabled + OTP pos_redeem",
     ("pos.config", "efn_loyalty_redeem_release"): "_efn_check_otp_caller",
-    ("pos.config", "efn_loyalty_refund_preview"): "_efn_check_otp_caller + check_access order asal + company",
+    (
+        "pos.config",
+        "efn_loyalty_refund_preview",
+    ): "_efn_check_otp_caller + check_access order asal + company",
     # efn_pos_payment_gateway: `_efn_gateway_check_caller` = grup POS user + metode efn_gateway +
     # check_access(read) config + metode milik config + sesi terbuka.
     ("pos.payment.method", "efn_gateway_create"): "_efn_gateway_check_caller",
-    ("pos.payment.method", "efn_gateway_status"): "_efn_intent_for_rpc -> _efn_gateway_check_caller",
-    ("pos.payment.method", "efn_gateway_cancel"): "_efn_intent_for_rpc -> _efn_gateway_check_caller",
+    (
+        "pos.payment.method",
+        "efn_gateway_status",
+    ): "_efn_intent_for_rpc -> _efn_gateway_check_caller",
+    (
+        "pos.payment.method",
+        "efn_gateway_cancel",
+    ): "_efn_intent_for_rpc -> _efn_gateway_check_caller",
     # efn_pos_loyalty_ledger (SEC-60): tombol supervisor = grup POS manager + record rule + company.
     ("efn.pos.loyalty.outbox", "action_efn_hold_approve"): "_efn_check_hold_decider",
     ("efn.pos.loyalty.outbox", "action_efn_hold_cancel"): "_efn_check_hold_decider",
@@ -56,30 +68,60 @@ RPC_ALLOWLIST = {
     # efn_pos_refund_origin (G18, E-31): `_efn_refund_check_caller` = grup POS user + check_access(read) config +
     # company user + sesi terbuka; order asal dibaca dengan hak user (record rule) + cek company; hanya id metode &
     # nominal alokasi (tanpa data pelanggan).
-    ("pos.config", "efn_refund_origin_allocation"): "_efn_refund_check_caller + check_access order asal + company",
+    (
+        "pos.config",
+        "efn_refund_origin_allocation",
+    ): "_efn_refund_check_caller + check_access order asal + company",
     # efn_pos_refund_origin (G20, E-41, docs/04 §12.4, L-51): retur tanpa struk dengan persetujuan Store Manager.
     # approvers: _efn_refund_check_caller + mode manager_approval; hanya {id, name} user internal aktif grup POS
     # manager dengan company config ∈ company user, PIN diatur, bukan pemanggil (tanpa hash/PII pelanggan).
-    ("pos.config", "efn_return_approval_approvers"): "_efn_refund_check_caller + mode manager_approval",
+    (
+        "pos.config",
+        "efn_return_approval_approvers",
+    ): "_efn_refund_check_caller + mode manager_approval",
     # request: _efn_refund_check_caller + mode + validasi input manual + approver sah (grup POS manager, company
     # config, aktif/internal, PIN diatur, != kasir) + touch_row approver + kunci 15 menit setelah 5 PIN salah +
     # verifikasi pbkdf2 server; tulis efn.pos.return.approval via sudo setelah cek (TTL 5 menit, sekali pakai).
-    ("pos.config", "efn_return_approval_request"): "_efn_refund_check_caller + approver sah + lockout + pbkdf2",
+    (
+        "pos.config",
+        "efn_return_approval_request",
+    ): "_efn_refund_check_caller + approver sah + lockout + pbkdf2",
     # PIN Store Manager: @check_identity Odoo (kata sandi ulang) + target = diri sendiri / base.group_system;
     # hanya membuka wizard. Wizard: identity check sesi < 10 menit + target diri sendiri / base.group_system +
     # target grup POS manager; hash pbkdf2 ditulis sudo.
-    ("res.users", "efn_action_return_pin_wizard"): "@check_identity + diri sendiri / base.group_system",
-    ("efn.pos.return.pin.wizard", "action_apply"): "identity check sesi + diri sendiri / base.group_system",
+    (
+        "res.users",
+        "efn_action_return_pin_wizard",
+    ): "@check_identity + diri sendiri / base.group_system",
+    (
+        "efn.pos.return.pin.wizard",
+        "action_apply",
+    ): "identity check sesi + diri sendiri / base.group_system",
     # efn_pos_kds (Gelombang 14, docs/08 §7.3): `_efn_kds_check_device` = grup perangkat KDS
     # (user perangkat stasiun itu) ATAU POS manager + check_access(read) (record rule company +
     # stasiun milik perangkat) + company user; tulis via sudo setelah cek.
     ("efn.kds.station", "efn_kds_load"): "_efn_kds_check_device",
     ("efn.kds.station", "efn_kds_heartbeat"): "_efn_kds_check_device",
-    ("efn.kds.station", "action_open_screen"): "_efn_kds_check_device (URL saja, tanpa token)",
-    ("efn.kds.station", "action_rotate_token"): "grup POS manager + check_access(write)",
-    ("efn.kds.ticket", "efn_kds_bump"): "_efn_kds_check_ticket_access -> _efn_kds_check_device + record rule",
-    ("efn.kds.ticket.line", "efn_kds_line_done"): "_efn_kds_check_ticket_access + check_access(read) baris",
-    ("pos.config", "efn_kds_station_status"): "grup POS user + check_access(read) config + company user",
+    (
+        "efn.kds.station",
+        "action_open_screen",
+    ): "_efn_kds_check_device (URL saja, tanpa token)",
+    (
+        "efn.kds.station",
+        "action_rotate_token",
+    ): "grup POS manager + check_access(write)",
+    (
+        "efn.kds.ticket",
+        "efn_kds_bump",
+    ): "_efn_kds_check_ticket_access -> _efn_kds_check_device + record rule",
+    (
+        "efn.kds.ticket.line",
+        "efn_kds_line_done",
+    ): "_efn_kds_check_ticket_access + check_access(read) baris",
+    (
+        "pos.config",
+        "efn_kds_station_status",
+    ): "grup POS user + check_access(read) config + company user",
     # Override metode publik CE point_of_sale (sudah RPC di standar; efn hanya menambah release).
     ("pos.order", "action_pos_order_cancel"): "override CE",
     ("pos.order", "remove_from_ui"): "override CE",
@@ -89,82 +131,208 @@ RPC_ALLOWLIST = {
     # efn_online_order (Gelombang 17, E-28, docs/04 §10.4.3 + §10.12): 10 metode BFF lewat odoo-rpc-gateway.
     # `_efn_online_check_caller` = grup group_online_channel + user ∈ channel.user_ids + company kanal ∈ company
     # user + kanal aktif; context klien dibuang kecuali lang; tulis via sudo setelah cek; input divalidasi manual.
-    ("efn.online.channel", "efn_online_catalog"): "_efn_online_check_caller (baca, field whitelist)",
+    (
+        "efn.online.channel",
+        "efn_online_catalog",
+    ): "_efn_online_check_caller (baca, field whitelist)",
     ("efn.online.channel", "efn_online_stock"): "_efn_online_check_caller (baca)",
-    ("efn.online.channel", "efn_online_image"): "_efn_online_check_caller (baca, hanya produk kanal)",
-    ("efn.online.channel", "efn_online_quote"): "_efn_online_check_caller; tanpa promo new() tanpa tulis DB; dengan "
+    (
+        "efn.online.channel",
+        "efn_online_image",
+    ): "_efn_online_check_caller (baca, hanya produk kanal)",
+    (
+        "efn.online.channel",
+        "efn_online_quote",
+    ): "_efn_online_check_caller; tanpa promo new() tanpa tulis DB; dengan "
     "promo SO nyata di savepoint yang di-rollback (nomor urut SO terpakai, FOR UPDATE NOWAIT program sale_loyalty, "
     "kartu/poin ikut rollback; SEC-141)",
-    ("efn.online.order", "efn_online_place"): "_efn_online_check_caller + idempotency_key/payload_sha256/quote_hash",
-    ("efn.online.order", "efn_online_mark_paid"): "_efn_online_check_caller + FOR UPDATE + idempotency_key",
-    ("efn.online.order", "efn_online_cancel"): "_efn_online_check_caller + FOR UPDATE (ref asing -> absent)",
-    ("efn.online.order", "efn_online_refund"): "_efn_online_check_caller + idempotency_key + kumulatif <= dibayar",
-    ("efn.online.order", "efn_online_refund_settled"): "_efn_online_check_caller + refund milik kanal + idempotensi",
-    ("efn.online.order", "efn_online_status"): "_efn_online_check_caller (baca, hanya ref kanal itu)",
-    ("efn.online.order", "efn_online_set_invoice_party"): "G21 E-39: _efn_online_check_caller + validasi profil + "
+    (
+        "efn.online.order",
+        "efn_online_place",
+    ): "_efn_online_check_caller + idempotency_key/payload_sha256/quote_hash",
+    (
+        "efn.online.order",
+        "efn_online_mark_paid",
+    ): "_efn_online_check_caller + FOR UPDATE + idempotency_key",
+    (
+        "efn.online.order",
+        "efn_online_cancel",
+    ): "_efn_online_check_caller + FOR UPDATE (ref asing -> absent)",
+    (
+        "efn.online.order",
+        "efn_online_refund",
+    ): "_efn_online_check_caller + idempotency_key + kumulatif <= dibayar",
+    (
+        "efn.online.order",
+        "efn_online_refund_settled",
+    ): "_efn_online_check_caller + refund milik kanal + idempotensi",
+    (
+        "efn.online.order",
+        "efn_online_status",
+    ): "_efn_online_check_caller (baca, hanya ref kanal itu)",
+    (
+        "efn.online.order",
+        "efn_online_set_invoice_party",
+    ): "G21 E-39: _efn_online_check_caller + validasi profil + "
     "FOR UPDATE + PT PPN + efn_pii aktif (L-63) + idempotency_key + hanya placed; hasil {state} tanpa PII",
     # 3 metode UI staf (web client lewat WireGuard, bukan gateway).
-    ("efn.online.order", "action_efn_ready"): "grup stock.group_stock_user + check_access(read) + company user",
-    ("efn.online.order", "action_efn_retry_events"): "grup sales_team.group_sale_manager + check_access + company",
+    (
+        "efn.online.order",
+        "action_efn_ready",
+    ): "grup stock.group_stock_user + check_access(read) + company user",
+    (
+        "efn.online.order",
+        "action_efn_retry_events",
+    ): "grup sales_team.group_sale_manager + check_access + company",
     # efn_online_pos_sale (re-review G17 SEC-105): override metode publik CE pos_sale; hanya MENOLAK SO online
     # lalu super() (hak akses tetap ACL/record rule CE pos_sale).
-    ("sale.order", "load_sale_order_from_pos"): "override CE pos_sale (tolak SO online)",
-    ("efn.online.handover.wizard", "action_confirm"): "grup stock user + check_access(read) order + company; "
-    "kode = verifikasi pbkdf2, 5x salah -> review",
+    (
+        "sale.order",
+        "load_sale_order_from_pos",
+    ): "override CE pos_sale (tolak SO online)",
+    (
+        "efn.online.handover.wizard",
+        "action_confirm",
+    ): "grup stock user + check_access(read) order + company; kode = verifikasi pbkdf2, 5x salah -> review",
     # G21 E-44 (efn_loyalty_accounting): tombol kebijakan poin & retry; cek grup + check_access + company + state.
-    ("efn.loyalty.policy", "action_efn_approve"): "Accounting Manager + check_access(read) + company + draft + "
-    "bukan pembuat/penyunting terakhir",
+    (
+        "efn.loyalty.policy",
+        "action_efn_approve",
+    ): "Accounting Manager + check_access(read) + company + draft + bukan pembuat/penyunting terakhir",
     ("efn.loyalty.policy", "action_efn_reject"): "sama dengan action_efn_approve",
-    ("efn.loyalty.policy.outbox", "action_efn_retry"): "Loyalty Manager/Accounting Manager + check_access + company + "
-    "state failed",
-    ("efn.loyalty.accrual", "action_efn_retry"): "Accounting Manager + check_access + company + state belum final",
-    ("efn.online.order", "efn_online_counter_refund_authorize"): "L-60: _efn_online_check_caller + FOR UPDATE + "
+    (
+        "efn.loyalty.policy.outbox",
+        "action_efn_retry",
+    ): "Loyalty Manager/Accounting Manager + check_access + company + state failed",
+    (
+        "efn.loyalty.accrual",
+        "action_efn_retry",
+    ): "Accounting Manager + check_access + company + state belum final",
+    (
+        "efn.online.order",
+        "efn_online_counter_refund_authorize",
+    ): "L-60: _efn_online_check_caller + FOR UPDATE + "
     "idempotency_key + refund requested/cancel tanpa faktur + nominal persis",
-    ("pos.config", "efn_online_counter_lookup"): "E-45: grup POS user + check_access(read) config + company + sesi "
+    (
+        "pos.config",
+        "efn_online_counter_lookup",
+    ): "E-45: grup POS user + check_access(read) config + company + sesi "
     "terbuka + rate limit sesi/kasir; digest KDF per company + outlet = gudang config; hanya {order_label, amount}",
     # efn_role (G21, E-47/E-47c, docs/08 §12.3-§12.5): tombol UI staf (web client lewat WireGuard, bukan gateway).
-    ("efn.role", "action_efn_apply_job_roles"): "grup base.group_erp_manager + check_access(write) + record rule "
+    (
+        "efn.role",
+        "action_efn_apply_job_roles",
+    ): "grup base.group_erp_manager + check_access(write) + record rule "
     "company + peran admin hanya base.group_system; sinkron baris jabatan via sudo setelah cek",
-    ("efn.access.review", "action_efn_snapshot"): "grup efn_audit.group_auditor / base.group_erp_manager + "
+    (
+        "efn.access.review",
+        "action_efn_snapshot",
+    ): "grup efn_audit.group_auditor / base.group_erp_manager + "
     "check_access(read) + record rule company; hanya draft; snapshot via sudo",
-    ("efn.access.review", "action_efn_start_review"): "grup efn_audit.group_auditor + check_access(write) + record "
-    "rule company; draft -> in_review",
-    ("efn.access.review", "action_efn_done"): "grup efn_audit.group_auditor + check_access(write) + record rule "
-    "company; in_review -> done (read-only)",
-    ("efn.access.review", "action_efn_export_csv"): "grup efn_audit.group_auditor / base.group_system + "
+    (
+        "efn.access.review",
+        "action_efn_start_review",
+    ): "grup efn_audit.group_auditor + check_access(write) + record rule company; draft -> in_review",
+    (
+        "efn.access.review",
+        "action_efn_done",
+    ): "grup efn_audit.group_auditor + check_access(write) + record rule company; in_review -> done (read-only)",
+    (
+        "efn.access.review",
+        "action_efn_export_csv",
+    ): "grup efn_audit.group_auditor / base.group_system + "
     "check_access(read) + record rule company; CSV hanya dari baris snapshot review (tanpa login/kontak) -> attachment",
     # efn_pos_bff_order (G22, E-27, docs/04 §14.A.5 path 13-15 + §14.7 L-70/L-76): 3 metode BFF lewat odoo-rpc-gateway.
     # `_efn_qr_check_caller` = grup group_qr_bff + user internal aktif dengan TEPAT satu company = company config +
     # tanpa grup lain selain Internal User (fail closed) + context klien dibuang kecuali lang; sudo setelah cek.
-    ("efn.pos.qr.order", "efn_qr_menu"): "_efn_qr_check_caller (baca; produk menu POS + harga/pajak dihitung server)",
-    ("efn.pos.qr.order", "efn_qr_submit"): "_efn_qr_check_caller + idempotency_key/payload_sha256 + sesi meja open & "
+    (
+        "efn.pos.qr.order",
+        "efn_qr_menu",
+    ): "_efn_qr_check_caller (baca; produk menu POS + harga/pajak dihitung server)",
+    (
+        "efn.pos.qr.order",
+        "efn_qr_submit",
+    ): "_efn_qr_check_caller + idempotency_key/payload_sha256 + sesi meja open & "
     "belum kedaluwarsa + sesi POS opened + touch_row sesi + batas kiriman/item/nominal; order dibangun server (L-70)",
-    ("efn.pos.qr.order", "efn_qr_status"): "_efn_qr_check_caller (baca; hanya kiriman config itu, ref asing -> absent)",
+    (
+        "efn.pos.qr.order",
+        "efn_qr_status",
+    ): "_efn_qr_check_caller (baca; hanya kiriman config itu, ref asing -> absent)",
     # efn_table_booking (G23, W-35, docs/04 §15.3 path 16-19): `_efn_booking_check_caller` = grup group_booking_bff +
     # user internal aktif TEPAT satu company = company outlet + tanpa grup lain (fail closed) + context dibuang kecuali
     # lang; sudo setelah cek. Tombol staf = grup POS manager + check_access(write) + company.
-    ("efn.table.booking", "efn_booking_availability"): "_efn_booking_check_caller (baca; jam buka + meja + bentrok)",
-    ("efn.table.booking", "efn_booking_create"): "_efn_booking_check_caller + idempotency_key/request_sha256 + "
+    (
+        "efn.table.booking",
+        "efn_booking_availability",
+    ): "_efn_booking_check_caller (baca; jam buka + meja + bentrok)",
+    (
+        "efn.table.booking",
+        "efn_booking_create",
+    ): "_efn_booking_check_caller + idempotency_key/request_sha256 + "
     "FOR UPDATE settings outlet + hitung ulang ketersediaan; teks tamu difilter SEC-168",
-    ("efn.table.booking", "efn_booking_cancel"): "_efn_booking_check_caller + FOR UPDATE + hanya requested/confirmed "
-    "belum mulai; ref asing -> not_found",
-    ("efn.table.booking", "efn_booking_status"): "_efn_booking_check_caller (baca; hanya ref outlet itu)",
-    ("efn.table.booking", "action_efn_confirm"): "grup POS manager + check_access(write) + company + state",
-    ("efn.table.booking", "action_efn_seat"): "grup POS manager + check_access(write) + company + state",
-    ("efn.table.booking", "action_efn_done"): "grup POS manager + check_access(write) + company + state",
+    (
+        "efn.table.booking",
+        "efn_booking_cancel",
+    ): "_efn_booking_check_caller + FOR UPDATE + hanya requested/confirmed belum mulai; ref asing -> not_found",
+    (
+        "efn.table.booking",
+        "efn_booking_status",
+    ): "_efn_booking_check_caller (baca; hanya ref outlet itu)",
+    (
+        "efn.table.booking",
+        "action_efn_confirm",
+    ): "grup POS manager + check_access(write) + company + state",
+    (
+        "efn.table.booking",
+        "action_efn_seat",
+    ): "grup POS manager + check_access(write) + company + state",
+    (
+        "efn.table.booking",
+        "action_efn_done",
+    ): "grup POS manager + check_access(write) + company + state",
     (
         "efn.table.booking",
         "action_efn_no_show",
     ): "grup POS manager + check_access(write) + company + state + lewat tahan",
-    ("efn.table.booking", "action_efn_cancel"): "grup POS manager + check_access(write) + company + state",
+    (
+        "efn.table.booking",
+        "action_efn_cancel",
+    ): "grup POS manager + check_access(write) + company + state",
     # efn_online_slot (G23, W-36, docs/04 §15.4 path 20): `_efn_online_check_caller` kanal online (baca).
-    ("efn.online.channel", "efn_online_slots"): "_efn_online_check_caller (baca; kapasitas slot outlet)",
+    (
+        "efn.online.channel",
+        "efn_online_slots",
+    ): "_efn_online_check_caller (baca; kapasitas slot outlet)",
+    # efn_online_transfer (G26, docs/04 §17.15 path #12 + UI Verifikator lewat web client/WireGuard).
+    (
+        "efn.online.order",
+        "efn_online_transfer_submit",
+    ): "G26: _efn_online_check_caller + FOR UPDATE + "
+    "idempotency_key/proof_id/payload_sha256 + order bank_transfer placed belum kedaluwarsa + JPEG <= 1,5 MiB + sha256",
+    (
+        "efn.online.transfer.proof",
+        "action_efn_open_decide",
+    ): "grup group_payment_verifier + check_access(write) + record rule company; hanya bukti menunggu/kedaluwarsa",
+    (
+        "efn.online.transfer.decide",
+        "action_confirm",
+    ): "wizard -> _efn_decide: grup verifier + check_access(write) "
+    "bukti + FOR UPDATE order + nominal mutasi = amount_due + alasan allowlist",
     # 3 metode POS (kasir/pelayan): `_efn_qr_check_pos_caller` = grup POS user + check_access(read) config + company
     # user + sesi POS opened; BFF dipanggil server-side (service key tidak ke browser); QR dirender server.
-    ("pos.config", "efn_qr_session_open"): "_efn_qr_check_pos_caller + efn_qr_enabled + meja ∈ denah + order draft "
+    (
+        "pos.config",
+        "efn_qr_session_open",
+    ): "_efn_qr_check_pos_caller + efn_qr_enabled + meja ∈ denah + order draft "
     "meja; hanya id sesi BFF disimpan, token tidak disimpan/di-log",
-    ("pos.config", "efn_qr_session_close"): "_efn_qr_check_pos_caller + meja ∈ denah; tutup closed_by_staff + outbox",
-    ("pos.order", "efn_qr_claim_send"): "grup POS user + check_access(read) order + company user + order QR draft + "
+    (
+        "pos.config",
+        "efn_qr_session_close",
+    ): "_efn_qr_check_pos_caller + meja ∈ denah; tutup closed_by_staff + outbox",
+    (
+        "pos.order",
+        "efn_qr_claim_send",
+    ): "grup POS user + check_access(read) order + company user + order QR draft + "
     "mode auto + sesi POS opened; UPDATE ... WHERE claimed IS NULL (satu terminal menang)",
 }
 
@@ -284,7 +452,14 @@ class TestEfnRpcSurfaceRegistry(TransactionCase):
 
     def test_bff_client_has_no_rpc_methods(self):
         self.assertFalse(self._efn_new_public("efn.bff.client"))
-        for name in ("post", "get", "_efn_post", "_efn_get", "_efn_request", "_read_api_key"):
+        for name in (
+            "post",
+            "get",
+            "_efn_post",
+            "_efn_get",
+            "_efn_request",
+            "_read_api_key",
+        ):
             denied = False
             try:
                 get_public_method(self.env["efn.bff.client"], name)
@@ -306,7 +481,12 @@ class TestEfnBffClientRpcDenied(HttpCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.user = new_test_user(cls.env, login="efn_rpc_plain", password="efn_rpc_plain_pw", groups="base.group_user")
+        cls.user = new_test_user(
+            cls.env,
+            login="efn_rpc_plain",
+            password="efn_rpc_plain_pw",
+            groups="base.group_user",
+        )
 
     def setUp(self):
         super().setUp()
@@ -323,7 +503,12 @@ class TestEfnBffClientRpcDenied(HttpCase):
                     "jsonrpc": "2.0",
                     "method": "call",
                     "id": 1,
-                    "params": {"model": "efn.bff.client", "method": method, "args": args, "kwargs": {}},
+                    "params": {
+                        "model": "efn.bff.client",
+                        "method": method,
+                        "args": args,
+                        "kwargs": {},
+                    },
                 }
             ),
             headers={"Content-Type": "application/json"},
@@ -333,7 +518,11 @@ class TestEfnBffClientRpcDenied(HttpCase):
 
     def test_call_kw_denied_for_internal_user(self):
         self.authenticate("efn_rpc_plain", "efn_rpc_plain_pw")
-        earn = {"idempotency_key": "pos_earn:x", "order_ref": "x", "member_ref": "6281200000000"}
+        earn = {
+            "idempotency_key": "pos_earn:x",
+            "order_ref": "x",
+            "member_ref": "6281200000000",
+        }
         for method, args in (
             ("post", ["/v1/pos/loyalty/earn", earn]),
             ("get", ["/v1/pos/privacy/erasures", {"store": "odoo"}]),

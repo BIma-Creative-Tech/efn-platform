@@ -36,7 +36,7 @@ env:
     efn_setup_company efn_setup_pos efn_setup_mrp efn_setup_audit
     efn_online_order efn_setup_online efn_online_pos_sale efn_pos_refund_origin efn_online_pos_counter
     efn_setup_org efn_loyalty_accounting efn_l10n_id_coretax_rounding efn_role efn_region
-    efn_setup_role efn_pos_bff_order efn_online_kds_bridge
+    efn_setup_role efn_pos_bff_order efn_online_kds_bridge efn_online_transfer
   EFN_INSTALL_ONLY_MODULES: efn_setup_security
 
 jobs:

@@ -1,0 +1,5 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_online_transfer_proof_verifier,efn.online.transfer.proof verifier,model_efn_online_transfer_proof,group_payment_verifier,1,1,0,0
+access_efn_online_transfer_proof_auditor,efn.online.transfer.proof auditor,model_efn_online_transfer_proof,efn_audit.group_auditor,1,0,0,0
+access_efn_online_transfer_proof_system,efn.online.transfer.proof system,model_efn_online_transfer_proof,base.group_system,1,0,0,0
+access_efn_online_transfer_decide_verifier,efn.online.transfer.decide verifier,model_efn_online_transfer_decide,group_payment_verifier,1,1,1,0

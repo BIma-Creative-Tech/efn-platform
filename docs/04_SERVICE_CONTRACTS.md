@@ -1623,11 +1623,13 @@ gateway (§10.6.6), saga bagian (§10.6.2).
 1. Berlaku untuk semua pesanan lewat `POST /v1/orders` (pickup, pre-order berjadwal §15.4, dan pesan-antar kelak).
 2. Bagian pesanan baru boleh `paying → confirmed` (SO dikonfirmasi, masuk picking/KDS) **setelah** pembayaran
    terverifikasi: webhook gateway terverifikasi (§10.7) atau persetujuan Verifikator di Odoo (§17.5). Tidak ada jalur lain.
-3. `payment_method: "counter"` untuk kanal online **ditolak**: `422 payment_method_unavailable`. Odoo menolak
-   `payment_mode: "counter"` di `efn_online_place` (`invalid_input`) dan `efn.online.channel.payment_modes` tidak boleh
-   memuat `counter` (constraint). Modul `efn_online_pos_counter` tetap terpasang tetapi tidak menerima pesanan baru
-   (dipertahankan untuk riwayat/refund order lama; dev saja, belum ada data produksi). BFF menghapus `counter` dari
-   allowlist `ONLINE_PAYMENT_METHODS`; nilai env yang masih memuat `counter` membuat BFF gagal start (pesan jelas).
+3. `payment_method: "counter"` untuk kanal online **ditolak**: `422 payment_method_unavailable`. Pembekuan di Odoo
+   lewat kill switch `ir.config_parameter` **`efn_online.counter_enabled`** (default kosong = mati; hanya nilai `1`
+   menyalakan): selama mati, constraint kanal menolak `payment_modes` yang memuat `counter` dan `efn_online_place`
+   menolak `payment_mode: "counter"` (`invalid_input`). Pesanan `counter` lama tetap bisa dilunasi/di-refund di POS.
+   Modul `efn_online_pos_counter` tetap terpasang (riwayat/refund order lama; test modul itu menyalakan parameter di
+   setUp). BFF menghapus `counter` dari allowlist `ONLINE_PAYMENT_METHODS`; env yang masih memuat `counter` membuat BFF
+   gagal start (pesan jelas).
 4. Reservasi stok tetap 1 jam (§11.1). Batas waktu yang sama berlaku untuk **upload dan verifikasi** transfer (§17.4 no. 6).
 
 ### 17.2 Metode bayar & permintaan checkout — menambah §10.3.5
@@ -1704,8 +1706,8 @@ Order status tetap `awaiting_payment` untuk **semua** metode prabayar; perbedaan
 
 ### 17.5 Verifikasi di Odoo — jalur baru `efn_online_transfer`
 - **Metode #12** (path baru `odoo-rpc-gateway`): `efn.online.order/efn_online_transfer_submit`
-  `channel_code, platform_order_ref, proof:{ idempotency_key, proof_id, image_b64 (JPEG ≤ 1,5 MB setelah re-encode),
-  sha256, duplicate_suspect, uploaded_at }` → `{ state: "awaiting_verification" }`. Kunci `online:transfer:<proof_id>`.
+  `channel_code, platform_order_ref, proof:{ idempotency_key, proof_id, transfer_ref, image_b64 (JPEG ≤ 1,5 MB setelah
+  re-encode), sha256, duplicate_suspect, uploaded_at }` → `{ state: "awaiting_verification" }`. Kunci `online:transfer:<proof_id>`.
   Bukti baru menggantikan bukti `rejected` sebelumnya untuk order yang sama (yang lama `superseded`, tidak dihapus).
 - Odoo menyimpan bukti sebagai `ir.attachment` milik record `efn.online.transfer.proof` (company = PT penjual,
   `company_id` + record rule). Akses **hanya** grup baru *Verifikator Pembayaran* (`group_payment_verifier`) dan
@@ -1720,8 +1722,9 @@ Order status tetap `awaiting_payment` untuk **semua** metode prabayar; perbedaan
      `duplicate_proof`) + catatan internal opsional (tidak dikirim ke pelanggan).
   3. **Uang diterima setelah kedaluwarsa** (order sudah `expired/cancelled`): tidak mengonfirmasi SO; membuat
      `review` + aktivitas Finance untuk mengembalikan dana (pola `late_counter_payment` L-57).
-- **Pemisahan tugas** (efn_role SoD, matriks §13): *Verifikator Pembayaran* tidak boleh sekaligus kasir POS atau
-  petugas serah terima di company yang sama (aturan SoD `SOD-PAY-01`, mode `block`). Keputusan tercatat append-only di
+- **Pemisahan tugas** (efn_role SoD, matriks §13): *Verifikator Pembayaran* tidak boleh sekaligus user POS
+  (`SOD-PAY-01`) atau user Inventory/petugas serah terima (`SOD-PAY-02`); keduanya mode `block` (satu aturan SoD =
+  satu pasangan grup). Keputusan tercatat append-only di
   `efn_audit` (siapa, kapan, keputusan, alasan; **tanpa** isi gambar).
 - **Event Odoo → BFF** (§10.5, HMAC + `seq`): `paid` dengan `payment: { method: "bank_transfer" }` (tanpa identitas
   staf); event baru `transfer_rejected { reason }` → BFF `payment.status = rejected`, `uploads_left` tetap; event
@@ -1813,12 +1816,56 @@ dapur sebelum `pos.order` lunas** (`efn_pos_kds`: filter `state ∈ {paid, done,
 | L-96 | Metode online: `qris`, `va`, `ewallet` (gateway, satu intent Holding agen penagih) dan `bank_transfer` (tanpa gateway, satu PT, rekening PT penjual). Order status tetap `awaiting_payment`; sub-status di `payment.status`. |
 | L-97 | Bukti transfer: pipeline gambar market-scout, hash + dHash untuk tanda duplikat (tidak menolak otomatis), maks 3 unggahan, batas unggah = `expires_at − 600 s`. |
 | L-98 | Penyimpan bukti = Odoo (attachment grup Verifikator); object storage hanya transit ≤ 7 hari; BFF menyimpan hash. Path RPC #12 `efn_online_transfer_submit`. |
-| L-99 | Verifikasi transfer di Odoo oleh grup *Verifikator Pembayaran*, SoD `SOD-PAY-01` (bukan kasir/serah terima company yang sama), keputusan teraudit; setuju wajib mencatat tanggal, nominal, dan referensi mutasi; nominal harus sama persis. |
+| L-99 | Verifikasi transfer di Odoo oleh grup *Verifikator Pembayaran*, SoD `SOD-PAY-01`/`SOD-PAY-02` (bukan user POS/Inventory), keputusan teraudit; setuju wajib mencatat tanggal, nominal, dan referensi mutasi; nominal harus sama persis. |
 | L-100 | Event Odoo baru `transfer_rejected { reason }`; `paid` membawa `method: "bank_transfer"`; template notifikasi `online_transfer_rejected` tanpa parameter. |
 | L-101 | `createPayment` menggantikan `createQris` di interface (pembungkus dipertahankan); mock mendukung VA/e-wallet; Xendit diuji di Test Mode dulu; midtrans tidak diperluas. |
 | L-102 | Nomor HP untuk OVO hanya dari identitas member terverifikasi di BFF; `ovo` tidak aktif sebelum DPA vendor. |
 | L-103 | Gerbang production mengganti L-55: `disabled` hanya bila metode = `bank_transfer`; metode gateway wajib provider nyata. Semua metode default kosong di production (ship OFF). |
 | L-104 | Kiosk: tiket ke dapur hanya setelah lunas; tiga cara bayar (kasir, EDC, gateway); EDC terblokir spesifikasi ECR bank; QR meja (§14.A) tidak berubah sampai Q-PAY1. |
+
+### 17.15 Antarmuka antar-builder (mengikat implementasi G26)
+**Odoo `efn_online_order`** (versi 19.0.1.9.0):
+- `PAYMENT_MODES = ("qris", "va", "ewallet", "bank_transfer", "counter")`, `DEFAULT_PAYMENT_MODE = "qris"`. `va` dan
+  `ewallet` diperlakukan seperti `qris` (gateway, jurnal titipan, `mark_paid` dari BFF). Kanal `payment_modes` (Char,
+  dipisah koma) menerima nilai baru; `bank_transfer` hanya bila `efn_transfer_journal_id` terisi (constraint di modul
+  `efn_online_transfer`).
+- `efn_online_place` `order.payment_mode` ∈ mode kanal (selain `counter` saat kill switch mati). Bukan default → ikut
+  `payload_sha256` (pola G20). Untuk `bank_transfer`, hasil place bertambah
+  `transfer_account: { bank_name, account_number, account_holder }` (dari `bank_account_id` jurnal; field kosong →
+  `invalid_input` + log konfigurasi). Mode lain: kunci itu tidak ada (hasil lama byte-identik).
+- `efn_online_mark_paid` dari BFF untuk `bank_transfer` → `invalid_state` (hanya jalur Verifikator, pola `counter`).
+- `_efn_payment_journal`: `bank_transfer` → `channel.efn_transfer_journal_id` (override di `efn_online_transfer`;
+  tanpa modul itu → kosong → `review`).
+- Event `paid` untuk `bank_transfer`: `payment: { method: "bank_transfer", points_value }` (pola `counter`). Event
+  baru `transfer_rejected` (EVENTS) dengan kunci `transfer: { reason }`, `reason` ∈ allowlist §17.3, tanpa catatan staf.
+
+**Odoo modul baru `efn_online_transfer`** (19.0.1.0.0, `depends: efn_online_order, efn_role, efn_audit, account`):
+- Model `efn.online.transfer.proof` (company_id, record rule): `order_id`, `proof_id` (UUID BFF, unik),
+  `idempotency_key` (unik), `payload_sha256`, `sha256`, `duplicate_suspect`, `uploaded_at`, `state` ∈
+  `awaiting_verification|approved|rejected|superseded|expired`, `attachment_id` (`ir.attachment`, `res_model` = model
+  ini, tidak publik), keputusan (`decided_by`, `decided_at`, `reject_reason`, `bank_date`, `bank_amount`, `bank_ref`).
+- RPC #12 `efn.online.order/efn_online_transfer_submit(channel_code, platform_order_ref, proof)` dengan
+  `proof = { idempotency_key, proof_id, transfer_ref, image_b64, sha256, duplicate_suspect, uploaded_at }`
+  (`transfer_ref` = 8 karakter alfabet §10.2; disalin ke antrean Verifikator). Cek: `_efn_online_check_caller`,
+  order `placed` + `payment_mode = bank_transfer` + belum kedaluwarsa; `image_b64` JPEG (magic `FFD8FF`) ≤ 1 572 864
+  byte setelah decode; `sha256` = hash isi. Replay kunci sama + payload sama → hasil sama; beda → `idempotency_conflict`.
+  Hasil `{ state: "awaiting_verification" }`. Error `not_found|invalid_state|invalid_input|idempotency_conflict`.
+- Grup `group_payment_verifier` (privilege EFN Kanal Online). ACL: verifier baca/tulis proof + wizard; auditor baca.
+  SoD `SOD-PAY-01` verifier ⟂ `point_of_sale.group_pos_user`, `SOD-PAY-02` verifier ⟂ `stock.group_stock_user`
+  (mode `block`; dibuat `report_only` bila saat install sudah ada pelanggaran, pola efn_role). Data yang dibutuhkan
+  antrean (nomor SO, gerai, nominal, batas waktu, rekening) disalin ke record bukti saat submit, sehingga Verifikator
+  tidak perlu hak baca `efn.online.order`.
+- Gateway: path #12 menerima body s.d. 2 621 440 byte (bukti base64); path lain tetap ≤ 262 144 byte.
+- Wizard keputusan: setuju (isi `bank_date`, `bank_amount` = `amount_due`, `bank_ref`) → jalur internal
+  `_efn_apply_payment(payment_ref=proof_id, key="transfer:<proof_id>", amount_paid=bank_amount, paid_at=now)`;
+  tolak (alasan allowlist) → event `transfer_rejected`; order sudah `cancelled` → `review` (`transfer_paid_after_cancel`).
+  Semua keputusan teraudit `efn_audit` (tanpa gambar).
+- Batal/kedaluwarsa order → bukti `awaiting_verification` → `expired`.
+
+**BFF**: menyimpan `payment_method` order; `bank_transfer` tidak membuat payment intent; place mengirim
+`payment_mode`; respons memakai `transfer_account` dari hasil place; event `paid` + `method: "bank_transfer"` →
+alur bagian seperti `counter` (L-52/L-56 tanpa kode bayar); `transfer_rejected` → `payment.status = rejected` +
+`reject_reason` + notifikasi `online_transfer_rejected`. VA/e-wallet: intent gateway (`createPayment`).
 
 ### 17.14 Pertanyaan klien
 - **Q-PAY1** Apakah QR order di meja (makan di tempat) juga wajib bayar dulu, atau tetap bayar setelah makan?

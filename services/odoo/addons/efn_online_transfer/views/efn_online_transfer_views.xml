@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_online_transfer_proof_view_list" model="ir.ui.view">
+        <field name="name">efn.online.transfer.proof.list</field>
+        <field name="model">efn.online.transfer.proof</field>
+        <field name="arch" type="xml">
+            <list create="false" delete="false" decoration-warning="duplicate_suspect" decoration-muted="state not in ('awaiting_verification',)">
+                <field name="uploaded_at"/>
+                <field name="sale_order_name"/>
+                <field name="outlet_name"/>
+                <field name="currency_id" column_invisible="1"/>
+                <field name="amount_due"/>
+                <field name="transfer_ref"/>
+                <field name="expires_at"/>
+                <field name="duplicate_suspect"/>
+                <field name="state"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_online_transfer_proof_view_form" model="ir.ui.view">
+        <field name="name">efn.online.transfer.proof.form</field>
+        <field name="model">efn.online.transfer.proof</field>
+        <field name="arch" type="xml">
+            <form create="false" delete="false" edit="false">
+                <header>
+                    <button name="action_efn_open_decide" type="object" string="Putuskan" class="btn-primary"
+                            invisible="state not in ('awaiting_verification', 'expired')"
+                            groups="efn_online_transfer.group_payment_verifier"/>
+                    <field name="state" widget="statusbar"/>
+                </header>
+                <sheet>
+                    <div class="alert alert-warning" role="alert" invisible="not duplicate_suspect">
+                        Foto ini sama/mirip dengan bukti pesanan lain. Cocokkan mutasi bank dengan teliti.
+                    </div>
+                    <group>
+                        <group string="Pesanan">
+                            <field name="sale_order_name"/>
+                            <field name="outlet_name"/>
+                            <field name="currency_id" invisible="1"/>
+                            <field name="amount_due"/>
+                            <field name="transfer_ref"/>
+                            <field name="account_label"/>
+                            <field name="expires_at"/>
+                            <field name="order_state"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                        <group string="Keputusan">
+                            <field name="decided_by"/>
+                            <field name="decided_at"/>
+                            <field name="reject_reason"/>
+                            <field name="bank_date"/>
+                            <field name="bank_amount"/>
+                            <field name="bank_ref"/>
+                            <field name="note"/>
+                        </group>
+                    </group>
+                    <field name="image" widget="image" readonly="1"/>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="efn_online_transfer_proof_view_search" model="ir.ui.view">
+        <field name="name">efn.online.transfer.proof.search</field>
+        <field name="model">efn.online.transfer.proof</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="sale_order_name"/>
+                <field name="transfer_ref"/>
+                <filter name="waiting" string="Menunggu verifikasi" domain="[('state', '=', 'awaiting_verification')]"/>
+                <filter name="dup" string="Diduga duplikat" domain="[('duplicate_suspect', '=', True)]"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_efn_online_transfer_proof" model="ir.actions.act_window">
+        <field name="name">Verifikasi transfer</field>
+        <field name="res_model">efn.online.transfer.proof</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{'search_default_waiting': 1}</field>
+    </record>
+
+    <!-- Menu akar sendiri: Verifikator tidak wajib punya hak Sales/Accounting (menu induk CE butuh grup itu). -->
+    <menuitem id="menu_efn_online_transfer_root"
+              name="Verifikasi Transfer"
+              groups="efn_online_transfer.group_payment_verifier,efn_audit.group_auditor"
+              sequence="45"/>
+    <menuitem id="menu_efn_online_transfer_proof"
+              name="Bukti transfer"
+              parent="menu_efn_online_transfer_root"
+              action="action_efn_online_transfer_proof"
+              groups="efn_online_transfer.group_payment_verifier,efn_audit.group_auditor"
+              sequence="10"/>
+
+    <record id="efn_online_channel_view_form_transfer" model="ir.ui.view">
+        <field name="name">efn.online.channel.form.transfer</field>
+        <field name="model">efn.online.channel</field>
+        <field name="inherit_id" ref="efn_online_order.efn_online_channel_view_form"/>
+        <field name="arch" type="xml">
+            <field name="payment_modes" position="after">
+                <field name="efn_transfer_journal_id"/>
+            </field>
+        </field>
+    </record>
+</odoo>

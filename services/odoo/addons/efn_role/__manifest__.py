@@ -4,7 +4,8 @@
         "Peran per PT (jabatan -> himpunan grup), pemisahan tugas (SoD) ditegakkan pada grup efektif, "
         "pengecualian SoD oleh Superadmin, dan review akses bulanan (snapshot) per PT."
     ),
-    "version": "19.0.1.2.0",
+    # 19.0.1.2.1 (G26): hook _efn_default_rule_specs agar modul lain menambah aturan SoD bawaan (SOD-PAY-*).
+    "version": "19.0.1.2.1",
     "category": "EFN",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency OCA/Cybrosys (ADR-031). OCA `base_user_role` (LGPL-3) hanya dipelajari sebagai

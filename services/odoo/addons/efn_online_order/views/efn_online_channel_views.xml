@@ -39,8 +39,8 @@
                             <field name="team_id"/>
                         </group>
                         <group string="Pembayaran &amp; faktur">
-                            <!-- G20 E-45: qris | counter (dipisah koma). -->
-                            <field name="payment_modes" placeholder="qris,counter"/>
+                            <!-- G26 (docs/04 §17.6): qris | va | ewallet | bank_transfer (dipisah koma). -->
+                            <field name="payment_modes" placeholder="qris,va,ewallet,bank_transfer"/>
                             <field name="cash_rounding_id"/>
                             <field name="invoice_on_paid"/>
                             <field name="journal_titipan_id"/>
