@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_agri_farmer_view_list" model="ir.ui.view">
+        <field name="name">efn.agri.farmer.list</field>
+        <field name="model">efn.agri.farmer</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="code"/>
+                <field name="name"/>
+                <field name="group_name"/>
+                <field name="region"/>
+                <field name="land_area_ha"/>
+                <field name="commodity_ids" widget="many2many_tags"/>
+                <field name="delivered_qty"/>
+                <field name="reject_rate"/>
+                <field name="state" widget="badge"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_agri_farmer_view_form" model="ir.ui.view">
+        <field name="name">efn.agri.farmer.form</field>
+        <field name="model">efn.agri.farmer</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <field name="state" widget="statusbar" options="{'clickable': '1'}"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_view_purchases" type="object" class="oe_stat_button" icon="fa-shopping-cart">
+                            <field name="purchase_count" widget="statinfo" string="PO"/>
+                        </button>
+                    </div>
+                    <div class="oe_title"><h1><field name="partner_id" placeholder="Vendor (kontak mitra tani)"/></h1></div>
+                    <group>
+                        <group>
+                            <field name="code"/>
+                            <field name="group_name"/>
+                            <field name="region"/>
+                            <field name="land_area_ha"/>
+                        </group>
+                        <group>
+                            <field name="commodity_ids" widget="many2many_tags"/>
+                            <field name="contract_start"/>
+                            <field name="contract_end"/>
+                            <field name="delivered_qty"/>
+                            <field name="reject_rate"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Prediksi panen" name="harvests">
+                            <field name="harvest_ids" context="{'default_farmer_id': id}">
+                                <list>
+                                    <field name="commodity_id"/>
+                                    <field name="product_id"/>
+                                    <field name="expected_date"/>
+                                    <field name="expected_qty"/>
+                                    <field name="state" widget="badge"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Riwayat QC" name="inspections">
+                            <field name="inspection_ids" readonly="1">
+                                <list>
+                                    <field name="name"/>
+                                    <field name="product_id"/>
+                                    <field name="qty_received"/>
+                                    <field name="qty_accepted"/>
+                                    <field name="grade_id"/>
+                                    <field name="result"/>
+                                    <field name="state"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+    <record id="efn_agri_farmer_action" model="ir.actions.act_window">
+        <field name="name">Mitra Tani</field>
+        <field name="res_model">efn.agri.farmer</field>
+        <field name="view_mode">list,form</field>
+    </record>
+</odoo>

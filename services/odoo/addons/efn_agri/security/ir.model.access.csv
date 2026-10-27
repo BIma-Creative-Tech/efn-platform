@@ -1,0 +1,22 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_agri_commodity_user,efn.agri.commodity user,model_efn_agri_commodity,group_agri_user,1,0,0,0
+access_efn_agri_commodity_manager,efn.agri.commodity manager,model_efn_agri_commodity,group_agri_manager,1,1,1,1
+access_efn_agri_qc_param_user,efn.agri.qc.param user,model_efn_agri_qc_param,group_agri_user,1,0,0,0
+access_efn_agri_qc_param_manager,efn.agri.qc.param manager,model_efn_agri_qc_param,group_agri_manager,1,1,1,1
+access_efn_agri_grade_user,efn.agri.grade user,model_efn_agri_grade,group_agri_user,1,0,0,0
+access_efn_agri_grade_manager,efn.agri.grade manager,model_efn_agri_grade,group_agri_manager,1,1,1,1
+access_efn_agri_grade_rule_user,efn.agri.grade.rule user,model_efn_agri_grade_rule,group_agri_user,1,0,0,0
+access_efn_agri_grade_rule_manager,efn.agri.grade.rule manager,model_efn_agri_grade_rule,group_agri_manager,1,1,1,1
+access_efn_agri_farmer_user,efn.agri.farmer user,model_efn_agri_farmer,group_agri_user,1,1,1,0
+access_efn_agri_farmer_manager,efn.agri.farmer manager,model_efn_agri_farmer,group_agri_manager,1,1,1,1
+access_efn_agri_farmer_purchase,efn.agri.farmer purchase,model_efn_agri_farmer,purchase.group_purchase_user,1,0,0,0
+access_efn_agri_harvest_user,efn.agri.harvest user,model_efn_agri_harvest,group_agri_user,1,1,1,0
+access_efn_agri_harvest_manager,efn.agri.harvest manager,model_efn_agri_harvest,group_agri_manager,1,1,1,1
+access_efn_agri_inspection_user,efn.agri.inspection user,model_efn_agri_inspection,group_agri_user,1,1,1,0
+access_efn_agri_inspection_manager,efn.agri.inspection manager,model_efn_agri_inspection,group_agri_manager,1,1,1,1
+access_efn_agri_inspection_stock,efn.agri.inspection stock,model_efn_agri_inspection,stock.group_stock_user,1,0,0,0
+access_efn_agri_inspection_line_user,efn.agri.inspection.line user,model_efn_agri_inspection_line,group_agri_user,1,1,1,1
+access_efn_agri_inspection_line_stock,efn.agri.inspection.line stock,model_efn_agri_inspection_line,stock.group_stock_user,1,0,0,0
+access_efn_agri_commodity_stock,efn.agri.commodity stock,model_efn_agri_commodity,stock.group_stock_user,1,0,0,0
+access_efn_agri_grade_stock,efn.agri.grade stock,model_efn_agri_grade,stock.group_stock_user,1,0,0,0
+access_efn_agri_commodity_purchase,efn.agri.commodity purchase,model_efn_agri_commodity,purchase.group_purchase_user,1,0,0,0

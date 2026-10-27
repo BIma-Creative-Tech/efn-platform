@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="action_report_qc_certificate" model="ir.actions.report">
+        <field name="name">Sertifikat QC</field>
+        <field name="model">efn.agri.inspection</field>
+        <field name="report_type">qweb-pdf</field>
+        <field name="report_name">efn_agri.report_qc_certificate</field>
+        <field name="report_file">efn_agri.report_qc_certificate</field>
+        <field name="print_report_name">'Sertifikat QC - %s' % object.name</field>
+        <field name="binding_model_id" ref="model_efn_agri_inspection"/>
+        <field name="binding_type">report</field>
+    </record>
+    <record id="action_report_trace_label" model="ir.actions.report">
+        <field name="name">Label Traceability (QR)</field>
+        <field name="model">stock.lot</field>
+        <field name="report_type">qweb-pdf</field>
+        <field name="report_name">efn_agri.report_trace_label</field>
+        <field name="report_file">efn_agri.report_trace_label</field>
+        <field name="print_report_name">'Label - %s' % object.name</field>
+        <field name="binding_model_id" ref="stock.model_stock_lot"/>
+        <field name="binding_type">report</field>
+    </record>
+
+    <template id="report_qc_certificate">
+        <t t-call="web.html_container">
+            <t t-foreach="docs" t-as="o">
+                <t t-call="web.external_layout">
+                    <div class="page">
+                        <h2>Sertifikat QC <span t-field="o.name"/></h2>
+                        <table class="table table-sm">
+                            <tr><td>Produk</td><td><span t-field="o.product_id"/></td></tr>
+                            <tr><td>Kode mitra tani</td><td><span t-field="o.farmer_id.code"/> (<span t-field="o.farmer_id.region"/>)</td></tr>
+                            <tr><td>Tanggal panen</td><td><span t-field="o.harvest_date"/></td></tr>
+                            <tr><td>Qty diterima / lolos / reject</td>
+                                <td><span t-field="o.qty_received"/> / <span t-field="o.qty_accepted"/> / <span t-field="o.qty_reject"/></td></tr>
+                            <tr><td>Grade</td><td><strong t-field="o.grade_id"/></td></tr>
+                            <tr><td>Hasil</td><td><strong t-field="o.result"/></td></tr>
+                            <tr><td>Inspektur / waktu</td><td><span t-field="o.inspector_id"/> / <span t-field="o.inspected_at"/></td></tr>
+                        </table>
+                        <h4>Pengukuran</h4>
+                        <table class="table table-sm">
+                            <thead><tr><th>Parameter</th><th>Nilai</th><th>Batas</th><th>Memenuhi</th></tr></thead>
+                            <tbody>
+                                <tr t-foreach="o.line_ids" t-as="l">
+                                    <td><span t-field="l.param_id"/></td>
+                                    <td><t t-if="l.kind == 'number'"><span t-field="l.value_num"/> <span t-field="l.unit"/></t>
+                                        <t t-else=""><t t-if="l.value_pass">Lulus</t><t t-else="">Gagal</t></t></td>
+                                    <td><span t-field="l.limit_text"/></td>
+                                    <td><t t-if="l.passed">Ya</t><t t-else="">Tidak</t></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </t>
+            </t>
+        </t>
+    </template>
+
+    <template id="report_trace_label">
+        <t t-call="web.html_container">
+            <t t-foreach="docs" t-as="lot">
+                <div class="page" style="font-size: 11px;">
+                    <div style="border: 1px solid #333; padding: 8px; width: 90mm;">
+                        <div><strong t-field="lot.product_id"/></div>
+                        <div>Lot: <span t-field="lot.name"/></div>
+                        <div>Asal: <span t-esc="lot.efn_farmer_region or '-'"/> · Mitra <span t-esc="lot.efn_farmer_id.code or '-'"/></div>
+                        <div>Panen: <span t-field="lot.efn_harvest_date"/> · Grade <span t-esc="lot.efn_grade_id.name or '-'"/></div>
+                        <div>Sertifikat QC: <span t-esc="lot.efn_inspection_id.name or '-'"/></div>
+                        <!-- QR inline (data URI): tidak bergantung pada web.base.url yang bisa tak terjangkau wkhtmltopdf. -->
+                        <img t-att-src="lot._efn_trace_qr_data_uri()" style="width:28mm;height:28mm;"/>
+                    </div>
+                </div>
+            </t>
+        </t>
+    </template>
+</odoo>

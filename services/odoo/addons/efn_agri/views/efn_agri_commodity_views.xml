@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_agri_commodity_view_list" model="ir.ui.view">
+        <field name="name">efn.agri.commodity.list</field>
+        <field name="model">efn.agri.commodity</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="code"/>
+                <field name="name"/>
+                <field name="product_ids" widget="many2many_tags"/>
+                <field name="floor_price"/>
+                <field name="uom_id"/>
+                <field name="company_id" optional="hide"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_agri_commodity_view_form" model="ir.ui.view">
+        <field name="name">efn.agri.commodity.form</field>
+        <field name="model">efn.agri.commodity</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <div class="oe_title"><h1><field name="name" placeholder="mis. Cabai merah keriting"/></h1></div>
+                    <group>
+                        <group>
+                            <field name="code"/>
+                            <field name="product_ids" widget="many2many_tags"/>
+                            <field name="uom_id"/>
+                        </group>
+                        <group>
+                            <field name="floor_price"/>
+                            <field name="currency_id" invisible="1"/>
+                            <field name="shelf_life_days"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Parameter QC" name="params">
+                            <field name="param_ids">
+                                <list editable="bottom">
+                                    <field name="sequence" widget="handle"/>
+                                    <field name="code"/>
+                                    <field name="name"/>
+                                    <field name="kind"/>
+                                    <field name="unit"/>
+                                    <field name="has_min"/>
+                                    <field name="min_value" readonly="not has_min"/>
+                                    <field name="has_max"/>
+                                    <field name="max_value" readonly="not has_max"/>
+                                    <field name="blocking"/>
+                                </list>
+                            </field>
+                            <div class="text-muted small">Parameter kode <b>REJECT</b> dihitung otomatis dari qty reject (%) bila tidak diisi.</div>
+                        </page>
+                        <page string="Grade &amp; Harga" name="grades">
+                            <field name="grade_ids">
+                                <list>
+                                    <field name="sequence" widget="handle"/>
+                                    <field name="name"/>
+                                    <field name="price"/>
+                                    <field name="is_reject"/>
+                                </list>
+                                <form>
+                                    <group>
+                                        <field name="name"/>
+                                        <field name="price"/>
+                                        <field name="is_reject"/>
+                                        <field name="currency_id" invisible="1"/>
+                                        <field name="commodity_id" invisible="1"/>
+                                    </group>
+                                    <field name="rule_ids">
+                                        <list editable="bottom">
+                                            <field name="param_id"/>
+                                            <field name="has_min"/>
+                                            <field name="min_value" readonly="not has_min"/>
+                                            <field name="has_max"/>
+                                            <field name="max_value" readonly="not has_max"/>
+                                        </list>
+                                    </field>
+                                </form>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+    <record id="efn_agri_commodity_action" model="ir.actions.act_window">
+        <field name="name">Komoditas &amp; Standar Mutu</field>
+        <field name="res_model">efn.agri.commodity</field>
+        <field name="view_mode">list,form</field>
+    </record>
+</odoo>

@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_agri_inspection_view_list" model="ir.ui.view">
+        <field name="name">efn.agri.inspection.list</field>
+        <field name="model">efn.agri.inspection</field>
+        <field name="arch" type="xml">
+            <list decoration-danger="result == 'fail'" decoration-muted="state == 'cancel'">
+                <field name="name"/>
+                <field name="picking_id"/>
+                <field name="farmer_id"/>
+                <field name="product_id"/>
+                <field name="qty_received"/>
+                <field name="qty_reject"/>
+                <field name="qty_accepted"/>
+                <field name="grade_id"/>
+                <field name="price_unit"/>
+                <field name="result"/>
+                <field name="state" widget="badge"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_agri_inspection_view_form" model="ir.ui.view">
+        <field name="name">efn.agri.inspection.form</field>
+        <field name="model">efn.agri.inspection</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_apply_suggested_grade" type="object" string="Pakai grade otomatis"
+                            invisible="state != 'draft' or not suggested_grade_id"/>
+                    <button name="action_done" type="object" string="Selesaikan QC" class="btn-primary"
+                            invisible="state != 'draft'" groups="efn_agri.group_agri_inspector"/>
+                    <button name="action_cancel" type="object" string="Batal" invisible="state != 'draft'"/>
+                    <field name="state" widget="statusbar"/>
+                </header>
+                <sheet>
+                    <div class="oe_title"><h1><field name="name" readonly="1"/></h1></div>
+                    <group>
+                        <group string="Barang">
+                            <field name="picking_id" readonly="1"/>
+                            <field name="move_id" invisible="1"/>
+                            <field name="product_id"/>
+                            <field name="commodity_id" readonly="state != 'draft'"/>
+                            <field name="farmer_id" readonly="state != 'draft'"/>
+                            <field name="harvest_date" readonly="state != 'draft'"/>
+                            <field name="purchase_line_id"/>
+                        </group>
+                        <group string="Hasil">
+                            <field name="qty_received" readonly="state != 'draft'"/>
+                            <field name="qty_reject" readonly="state != 'draft'"/>
+                            <field name="qty_accepted"/>
+                            <field name="reject_pct"/>
+                            <field name="suggested_grade_id"/>
+                            <field name="grade_id" readonly="state != 'draft'"/>
+                            <field name="grade_override_note" readonly="state != 'draft'"
+                                   invisible="not grade_id or grade_id == suggested_grade_id"/>
+                            <field name="price_unit"/>
+                            <field name="currency_id" invisible="1"/>
+                            <field name="result" widget="badge" decoration-success="result == 'pass'" decoration-danger="result == 'fail'"/>
+                        </group>
+                    </group>
+                    <field name="line_ids" readonly="state != 'draft'">
+                        <list editable="bottom" create="0" delete="0" decoration-danger="not passed">
+                            <field name="param_id" readonly="1"/>
+                            <field name="kind" column_invisible="1"/>
+                            <field name="value_num" invisible="kind != 'number'"/>
+                            <field name="value_pass" invisible="kind != 'pass'"/>
+                            <field name="unit"/>
+                            <field name="limit_text"/>
+                            <field name="value_set" column_invisible="1"/>
+                            <field name="passed"/>
+                        </list>
+                    </field>
+                    <group>
+                        <field name="inspector_id"/>
+                        <field name="inspected_at"/>
+                        <field name="lot_id"/>
+                        <field name="scrap_id"/>
+                        <field name="company_id" groups="base.group_multi_company"/>
+                    </group>
+                    <field name="note" placeholder="Catatan inspeksi..."/>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+    <record id="efn_agri_inspection_view_search" model="ir.ui.view">
+        <field name="name">efn.agri.inspection.search</field>
+        <field name="model">efn.agri.inspection</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="farmer_id"/>
+                <field name="product_id"/>
+                <filter name="draft" string="Menunggu QC" domain="[('state', '=', 'draft')]"/>
+                <filter name="fail" string="Ditolak" domain="[('result', '=', 'fail')]"/>
+                <group>
+                    <filter name="by_farmer" string="Mitra tani" context="{'group_by': 'farmer_id'}"/>
+                    <filter name="by_grade" string="Grade" context="{'group_by': 'grade_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+    <record id="efn_agri_inspection_view_pivot" model="ir.ui.view">
+        <field name="name">efn.agri.inspection.pivot</field>
+        <field name="model">efn.agri.inspection</field>
+        <field name="arch" type="xml">
+            <pivot>
+                <field name="farmer_id" type="row"/>
+                <field name="grade_id" type="col"/>
+                <field name="qty_accepted" type="measure"/>
+            </pivot>
+        </field>
+    </record>
+    <record id="efn_agri_inspection_action" model="ir.actions.act_window">
+        <field name="name">Inspeksi QC</field>
+        <field name="res_model">efn.agri.inspection</field>
+        <field name="view_mode">list,form,pivot</field>
+    </record>
+</odoo>
