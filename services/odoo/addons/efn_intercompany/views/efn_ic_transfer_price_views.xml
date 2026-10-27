@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_ic_transfer_price_view_list" model="ir.ui.view">
+        <field name="name">efn.ic.transfer.price.list</field>
+        <field name="model">efn.ic.transfer.price</field>
+        <field name="arch" type="xml">
+            <list editable="bottom">
+                <field name="sequence" widget="handle"/>
+                <field name="company_id"/>
+                <field name="buyer_company_id"/>
+                <field name="categ_id"/>
+                <field name="markup_pct"/>
+                <field name="note"/>
+                <field name="active" widget="boolean_toggle"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_ic_transfer_price_action" model="ir.actions.act_window">
+        <field name="name">Harga Transfer Antar-PT</field>
+        <field name="res_model">efn.ic.transfer.price</field>
+        <field name="view_mode">list</field>
+        <field name="context">{'active_test': False}</field>
+    </record>
+    <menuitem id="menu_efn_ic_transfer_price" name="Harga Transfer Antar-PT" parent="account.account_account_menu"
+              action="efn_ic_transfer_price_action" sequence="90" groups="account.group_account_manager"/>
+</odoo>
