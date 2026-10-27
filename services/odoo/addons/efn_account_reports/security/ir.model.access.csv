@@ -1,0 +1,3 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_financial_report_readonly,efn.financial.report readonly,model_efn_financial_report,account.group_account_readonly,1,1,1,1
+access_efn_financial_report_invoice,efn.financial.report invoice,model_efn_financial_report,account.group_account_invoice,1,1,1,1

@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <template id="efn_financial_report_body">
+        <div class="efn-fin-report">
+            <h3 class="mb-0"><t t-esc="d['title']"/><t t-if="d['consolidated']"> (Konsolidasi)</t></h3>
+            <div class="text-muted"><t t-esc="d['companies']"/></div>
+            <div class="text-muted mb-3">
+                <t t-if="d['report_type'] == 'bs'">Per <t t-esc="d['date_to']"/></t>
+                <t t-else=""><t t-esc="d['date_from']"/> s.d. <t t-esc="d['date_to']"/></t>
+            </div>
+            <t t-set="fmt" t-value="lambda v: '{:,.0f}'.format(v).replace(',', '.')"/>
+            <t t-if="d['report_type'] == 'tb'">
+                <table class="table table-sm o_main_table">
+                    <thead><tr><th>Kode</th><th>Akun</th><th class="text-end">Saldo awal</th><th class="text-end">Debit</th>
+                        <th class="text-end">Kredit</th><th class="text-end">Saldo akhir</th></tr></thead>
+                    <tbody>
+                        <tr t-foreach="d['lines']" t-as="l">
+                            <td t-esc="l['code']"/><td t-esc="l['name']"/>
+                            <td class="text-end" t-esc="fmt(l['opening'])"/><td class="text-end" t-esc="fmt(l['debit'])"/>
+                            <td class="text-end" t-esc="fmt(l['credit'])"/><td class="text-end" t-esc="fmt(l['closing'])"/>
+                        </tr>
+                        <tr class="fw-bold">
+                            <td/><td>Total</td>
+                            <td class="text-end" t-esc="fmt(d['totals']['opening'])"/><td class="text-end" t-esc="fmt(d['totals']['debit'])"/>
+                            <td class="text-end" t-esc="fmt(d['totals']['credit'])"/><td class="text-end" t-esc="fmt(d['totals']['closing'])"/>
+                        </tr>
+                    </tbody>
+                </table>
+            </t>
+            <t t-else="">
+                <table class="table table-sm o_main_table">
+                    <t t-foreach="d['sections']" t-as="s">
+                        <tr class="table-light fw-bold"><td colspan="2" t-esc="s['label']"/><td/></tr>
+                        <tr t-foreach="s['lines']" t-as="l">
+                            <td class="ps-4" t-esc="l['code']"/><td t-esc="l['name']"/><td class="text-end" t-esc="fmt(l['amount'])"/>
+                        </tr>
+                        <tr class="fw-bold"><td/><td>Total <t t-esc="s['label']"/></td><td class="text-end" t-esc="fmt(s['total'])"/></tr>
+                    </t>
+                </table>
+                <table class="table table-sm w-50">
+                    <t t-if="d['report_type'] == 'bs'">
+                        <tr><td>Total aset</td><td class="text-end fw-bold" t-esc="fmt(d['totals'].get('asset', 0))"/></tr>
+                        <tr><td>Total liabilitas</td><td class="text-end" t-esc="fmt(d['totals'].get('liability', 0))"/></tr>
+                        <tr><td>Laba (rugi) tahun berjalan</td><td class="text-end" t-esc="fmt(d['totals']['current_profit'])"/></tr>
+                        <tr><td>Total ekuitas</td><td class="text-end" t-esc="fmt(d['totals']['equity_total'])"/></tr>
+                        <tr><td>Total liabilitas + ekuitas</td><td class="text-end fw-bold" t-esc="fmt(d['totals']['liability_equity'])"/></tr>
+                        <tr t-if="d['totals']['difference']" class="text-danger"><td>Selisih</td><td class="text-end" t-esc="fmt(d['totals']['difference'])"/></tr>
+                    </t>
+                    <t t-else="">
+                        <tr><td>Pendapatan</td><td class="text-end" t-esc="fmt(d['totals']['revenue'])"/></tr>
+                        <tr><td>Laba kotor</td><td class="text-end" t-esc="fmt(d['totals']['gross_profit'])"/></tr>
+                        <tr><td>Laba operasional</td><td class="text-end" t-esc="fmt(d['totals']['operating_profit'])"/></tr>
+                        <tr><td>Laba (rugi) bersih</td><td class="text-end fw-bold" t-esc="fmt(d['totals']['net_profit'])"/></tr>
+                    </t>
+                </table>
+                <t t-if="d.get('eliminations')">
+                    <h5>Eliminasi antar-PT (saldo dikeluarkan dari konsolidasi)</h5>
+                    <table class="table table-sm w-75">
+                        <tr t-foreach="d['eliminations']" t-as="l">
+                            <td t-esc="l['code']"/><td t-esc="l['name']"/><td class="text-end" t-esc="fmt(l['amount'])"/>
+                        </tr>
+                    </table>
+                </t>
+            </t>
+        </div>
+    </template>
+
+    <template id="efn_financial_report_pdf">
+        <t t-call="web.html_container">
+            <t t-foreach="docs" t-as="o">
+                <t t-call="web.internal_layout">
+                    <div class="page">
+                        <t t-call="efn_account_reports.efn_financial_report_body">
+                            <t t-set="d" t-value="o._efn_data()"/>
+                        </t>
+                    </div>
+                </t>
+            </t>
+        </t>
+    </template>
+
+    <record id="action_efn_financial_report_pdf" model="ir.actions.report">
+        <field name="name">Laporan Keuangan EFN</field>
+        <field name="model">efn.financial.report</field>
+        <field name="report_type">qweb-pdf</field>
+        <field name="report_name">efn_account_reports.efn_financial_report_pdf</field>
+        <field name="report_file">efn_account_reports.efn_financial_report_pdf</field>
+        <field name="print_report_name">'Laporan Keuangan EFN'</field>
+    </record>
+</odoo>
