@@ -7,10 +7,12 @@
  * Captcha (docs/04 §8.1): setiap permintaan OTP (termasuk kirim ulang) wajib membawa payload ALTCHA
  * baru — challenge sekali pakai, jadi widget di-remount (`altchaKey`) setelah setiap permintaan.
  */
+import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { AltchaWidget } from '@/components/AltchaWidget';
 import { AGE_CHECKBOX_LABEL, AGE_REQUIRED_MESSAGE, MIN_AGE } from '@/lib/auth-age';
+import { CONSENT_TEXTS, PRIVACY_CONSENT, PRIVACY_REQUIRED_MESSAGE } from '@/lib/consent';
 import { normalizeIndonesianPhone } from '@/lib/phone';
 import { safeNextPath } from '@/lib/safe-next';
 
@@ -33,6 +35,11 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
   const otpRef = useRef<HTMLInputElement>(null);
   // G18 (Q-P3): konfirmasi usia, TIDAK tercentang secara default, diminta di setiap login (login = daftar).
   const [ageConfirmed, setAgeConfirmed] = useState(false);
+  // G27 §18.3 (UU PDP): consent pemasaran OPSIONAL, tidak tercentang default; login tetap jalan tanpanya.
+  const [marketing, setMarketing] = useState(false);
+  // G27 §18.3a (UU PDP): persetujuan Kebijakan Privasi WAJIB, centang terpisah dari usia & promo.
+  const [privacy, setPrivacy] = useState(false);
+  const privacyRef = useRef<HTMLInputElement>(null);
   const ageRef = useRef<HTMLInputElement>(null);
   const onAltchaPayload = useCallback((p: string | null) => setAltchaPayload(p), []);
 
@@ -113,12 +120,17 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
       ageRef.current?.focus();
       return;
     }
+    if (!privacy) {
+      setError(PRIVACY_REQUIRED_MESSAGE);
+      privacyRef.current?.focus();
+      return;
+    }
     setBusy(true);
     try {
       const res = await fetch('/api/auth/otp/verify', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ challenge_id: challengeId, code, age_confirmed: ageConfirmed }),
+        body: JSON.stringify({ challenge_id: challengeId, code, age_confirmed: ageConfirmed, privacy_consent: privacy, marketing_consent: marketing }),
       });
       if (res.ok) {
         // Lapis kedua SEC-13: validasi ulang di client walau server sudah menyaring.
@@ -136,6 +148,9 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
         if (data.error?.code === 'age_confirmation_required') {
           setError(AGE_REQUIRED_MESSAGE);
           ageRef.current?.focus();
+        } else if (data.error?.code === 'privacy_consent_required') {
+          setError(PRIVACY_REQUIRED_MESSAGE);
+          privacyRef.current?.focus();
         } else if (data.reason === 'expired') setError('Kode sudah kedaluwarsa. Silakan minta kode baru.');
         else if (data.reason === 'locked') setError('Terlalu banyak percobaan. Silakan minta kode baru.');
         else
@@ -232,6 +247,41 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
           <span id="age-hint" className="hint" style={{ marginTop: '0.25rem' }}>
             Wajib untuk masuk atau mendaftar. Layanan ini hanya untuk pengguna berusia {MIN_AGE} tahun ke atas; kami tidak
             meminta tanggal lahir.
+          </span>
+          <div className="checkbox" style={{ marginTop: '0.75rem' }}>
+            <input
+              ref={privacyRef}
+              id="privacy-consent"
+              name="privacy_consent"
+              type="checkbox"
+              checked={privacy}
+              onChange={(e) => setPrivacy(e.target.checked)}
+              required
+              aria-required="true"
+              aria-describedby="privacy-hint"
+            />
+            <label htmlFor="privacy-consent">{PRIVACY_CONSENT.body}</label>
+          </div>
+          <span id="privacy-hint" className="hint" style={{ marginTop: '0.25rem' }}>
+            Wajib. Baca{' '}
+            <Link href="/privasi" target="_blank" rel="noopener">
+              Kebijakan Privasi
+            </Link>
+            . Penarikan persetujuan ini dilakukan dengan menghapus akun di Data Saya.
+          </span>
+          <div className="checkbox" style={{ marginTop: '0.75rem' }}>
+            <input
+              id="marketing-consent"
+              name="marketing_consent"
+              type="checkbox"
+              checked={marketing}
+              onChange={(e) => setMarketing(e.target.checked)}
+              aria-describedby="marketing-hint"
+            />
+            <label htmlFor="marketing-consent">{CONSENT_TEXTS.marketing.body}</label>
+          </div>
+          <span id="marketing-hint" className="hint" style={{ marginTop: '0.25rem' }}>
+            Opsional. {CONSENT_TEXTS.marketing.whenOff}
           </span>
           <button type="submit" className="btn" disabled={busy}>
             {busy ? 'Memeriksa…' : 'Masuk'}

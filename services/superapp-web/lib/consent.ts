@@ -38,14 +38,43 @@ export const CONSENT_TEXTS: Readonly<Record<ConsentPurpose, ConsentText>> = {
   },
   marketing: {
     purpose: 'marketing',
-    version: 'marketing@2026-10-06',
-    title: 'Info promo lewat WhatsApp',
+    // G27 §18.3: diperluas ke notifikasi aplikasi (push promo). Teks = DRAFT DPO/Legal; sama persis dengan app.
+    version: 'marketing@2026-10-27',
+    title: 'Info promo lewat WhatsApp & notifikasi aplikasi',
     body:
-      'Saya bersedia menerima informasi promo dan penawaran dari brand EFN lewat WhatsApp ke nomor akun saya. ' +
-      'Saya dapat berhenti kapan saja dari halaman ini.',
+      'Saya bersedia menerima informasi promo dan penawaran dari brand EFN lewat WhatsApp ke nomor akun saya ' +
+      'dan lewat notifikasi aplikasi. Saya dapat berhenti kapan saja dari halaman Akun.',
     whenOff: 'Anda tetap menerima pesan layanan (kode OTP, status laporan, poin).',
   },
 };
+
+/**
+ * G27 §18.3a (UU PDP): persetujuan Kebijakan Privasi + pemrosesan data akun, centang WAJIB terpisah di layar
+ * masuk/daftar. BUKAN toggle di Pengaturan Privasi (akun tidak berjalan tanpa data pribadi): penarikan = penghapusan
+ * akun di Data Saya. Teks DRAFT DPO/Legal; HARUS sama persis dengan app + env BFF `CONSENT_PRIVACY_*` (sha256 body).
+ */
+export const PRIVACY_CONSENT = {
+  purpose: 'privacy',
+  version: 'privacy@2026-10-27',
+  body:
+    'Saya telah membaca dan menyetujui Kebijakan Privasi EFN, termasuk pemrosesan data pribadi saya ' +
+    '(nomor HP, pesanan, poin, dan data teknis perangkat) untuk akun, pesanan, dan program poin di semua brand EFN.',
+} as const;
+
+export const PRIVACY_REQUIRED_MESSAGE = 'Setujui Kebijakan Privasi dan pemrosesan data pribadi untuk masuk atau mendaftar.';
+
+/** Status persetujuan Kebijakan Privasi dari GET /v1/me/consents (null = belum pernah / format lain). */
+export function parsePrivacyRecord(data: unknown): { version: string; updated_at: string | null } | null {
+  const list: unknown[] = Array.isArray(data) ? data : [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const r = item as Record<string, unknown>;
+    if (r.purpose === 'privacy' && r.granted === true && typeof r.version === 'string') {
+      return { version: r.version, updated_at: typeof r.updated_at === 'string' ? r.updated_at : null };
+    }
+  }
+  return null;
+}
 
 export interface ConsentRecord {
   purpose: ConsentPurpose;

@@ -12,6 +12,7 @@ import { OrderModePicker } from '@/components/booking/OrderModePicker';
 import { BrandPanel, type BrandPanelProps } from './BrandPanel';
 import { BrandWall, type WallBrand } from './BrandWall';
 import { Hero3D, type HeroItem, type HeroStats, type SearchChannel } from './Hero3D';
+import { HeroSlider } from './HeroSlider';
 import { Reveal } from './Reveal';
 import { Shelf, type ShelfTab } from './Shelf';
 import styles from './superapp.module.css';
@@ -38,7 +39,10 @@ export function SuperAppLanding({ title, lead, emphasis, brandNames, modes, pane
       <noscript>
         <style>{'[data-reveal]{opacity:1!important;transform:none!important;filter:none!important}'}</style>
       </noscript>
-      <Hero3D title={title} emphasis={emphasis} lead={lead} items={heroItems} search={search} brandNames={brandNames} stats={stats} logos={portfolio} />
+      {/* G27 §18.4: hero lama = slide 1; banner promo Odoo = slide berikutnya (tanpa banner = hero saja). */}
+      <HeroSlider brandChannels={Object.fromEntries(search.map((s) => [s.code, s.code]))}>
+        <Hero3D title={title} emphasis={emphasis} lead={lead} items={heroItems} search={search} brandNames={brandNames} stats={stats} logos={portfolio} />
+      </HeroSlider>
 
       <Shelf tabs={shelf} />
 

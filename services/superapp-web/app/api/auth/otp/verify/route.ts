@@ -9,6 +9,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { bffFetch, type BffErrorBody, type OtpTokenResponse } from '@/lib/bff';
 import { AGE_REQUIRED_MESSAGE, isAgeConfirmed } from '@/lib/auth-age';
 import { setSessionCookie } from '@/lib/session';
+import { CONSENT_TEXTS, PRIVACY_CONSENT, PRIVACY_REQUIRED_MESSAGE } from '@/lib/consent';
 import { isSameOrigin, jsonError } from '@/lib/request-guard';
 
 export const runtime = 'nodejs';
@@ -20,7 +21,7 @@ const CODE_RE = /^\d{6}$/;
 export async function POST(req: NextRequest) {
   if (!isSameOrigin(req)) return jsonError(403, 'forbidden', 'Permintaan ditolak.');
 
-  let body: { challenge_id?: unknown; code?: unknown; age_confirmed?: unknown } | null;
+  let body: { challenge_id?: unknown; code?: unknown; age_confirmed?: unknown; marketing_consent?: unknown; privacy_consent?: unknown } | null;
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -34,10 +35,21 @@ export async function POST(req: NextRequest) {
   if (!isAgeConfirmed(body?.age_confirmed)) {
     return jsonError(400, 'age_confirmation_required', AGE_REQUIRED_MESSAGE);
   }
+  // G27 §18.3a: persetujuan Kebijakan Privasi wajib (centang terpisah); dicek sebelum BFF (challenge tidak hangus).
+  if (body?.privacy_consent !== true) {
+    return jsonError(400, 'privacy_consent_required', PRIVACY_REQUIRED_MESSAGE);
+  }
 
   const result = await bffFetch<OtpTokenResponse>('/v1/auth/otp/verify', {
     method: 'POST',
-    json: { challenge_id: challengeId, code, age_confirmed: true },
+    // G27 §18.3: consent pemasaran opsional saat daftar — hanya versi teks yang ditampilkan halaman ini (lib/consent.ts).
+    json: {
+      challenge_id: challengeId,
+      code,
+      age_confirmed: true,
+      privacy_consent: { granted: true, version: PRIVACY_CONSENT.version },
+      ...(body?.marketing_consent === true ? { marketing_consent: { granted: true, version: CONSENT_TEXTS.marketing.version } } : {}),
+    },
     incoming: req.headers,
   });
 
@@ -50,6 +62,9 @@ export async function POST(req: NextRequest) {
   // G18: BFF menolak konfirmasi usia sebelum memeriksa OTP (challenge tetap berlaku).
   if (!result.ok && result.status === 400 && result.code === 'age_confirmation_required') {
     return jsonError(400, 'age_confirmation_required', AGE_REQUIRED_MESSAGE);
+  }
+  if (!result.ok && result.status === 400 && result.code === 'privacy_consent_required') {
+    return jsonError(400, 'privacy_consent_required', PRIVACY_REQUIRED_MESSAGE);
   }
   if (!result.ok && result.status === 400) {
     // Kontrak §3.1/§3.2: { ok:false, reason: invalid|expired|locked, attempts_left }

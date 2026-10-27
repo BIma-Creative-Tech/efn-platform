@@ -1,0 +1,251 @@
+/* Slider hero + pop-up promo (docs/04 §18.4). Warna dari variabel landing (--l-*) agar mengikuti tema brand. */
+
+.slider {
+  position: relative;
+  overflow: hidden;
+}
+.track {
+  display: flex;
+  transition: transform 600ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+.slide {
+  flex: 0 0 100%;
+  min-width: 0;
+}
+
+.overlayHost {
+  position: relative;
+}
+/* Lapisan banner menutupi layar pertama saja (di atas hero lama); pointer lolos bila tidak ada banner. */
+.overlayLayer {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: var(--promo-h, min(100svh, 58rem));
+  z-index: 5;
+  pointer-events: none;
+}
+.overlayLayer > * {
+  pointer-events: auto;
+}
+.overlaySlide {
+  position: absolute;
+  inset: 0;
+  animation: promoIn 500ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes promoIn {
+  from {
+    opacity: 0;
+    transform: translateX(4%);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.banner {
+  position: relative;
+  isolation: isolate;
+  min-height: var(--promo-h, min(100svh, 58rem));
+  height: 100%;
+  display: grid;
+  align-items: end;
+  background: var(--l-bg-deep, #062e2a);
+  overflow: hidden;
+}
+.bannerImg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: -2;
+}
+.bannerShade {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(180deg, transparent 35%, rgba(4, 22, 20, 0.82) 100%);
+}
+.bannerCopy {
+  width: min(72rem, 100% - 2.5rem);
+  margin-inline: auto;
+  /* Ruang bawah > tinggi header situs + kontrol slider: judul & tombol tetap di layar pertama. */
+  padding-block: clamp(3rem, 8vw, 6rem) clamp(8rem, 18vh, 11rem);
+  color: #fff;
+}
+.bannerTag {
+  display: inline-block;
+  margin: 0 0 0.75rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  background: var(--l-accent, #dfb422);
+  color: #13201c;
+  font-weight: 700;
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.bannerTitle {
+  margin: 0 0 0.75rem;
+  font-family: var(--l-display, inherit);
+  font-size: clamp(2.2rem, 5vw, 4.5rem);
+  line-height: 1;
+  letter-spacing: -0.03em;
+  max-width: 18ch;
+  text-wrap: balance;
+}
+.bannerText {
+  margin: 0 0 1.5rem;
+  max-width: 48ch;
+  font-size: clamp(1rem, 1.4vw, 1.2rem);
+  opacity: 0.9;
+}
+.bannerCta,
+.popupCta {
+  display: inline-flex;
+  align-items: center;
+  min-height: 48px;
+  padding: 0 1.5rem;
+  border-radius: 999px;
+  background: var(--l-accent, #dfb422);
+  color: #13201c;
+  font-weight: 700;
+  text-decoration: none;
+}
+.bannerCta:focus-visible,
+.popupCta:focus-visible,
+.arrow:focus-visible,
+.dot:focus-visible,
+.dotOn:focus-visible,
+.popupClose:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 3px;
+}
+
+.controls {
+  position: absolute;
+  left: 50%;
+  /* Relatif ke viewport, bukan ke slide setinggi 100svh yang tergeser header situs. */
+  top: min(calc(100svh - 10rem), calc(100% - 4rem));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(10, 20, 18, 0.45);
+  backdrop-filter: blur(6px);
+  z-index: 3;
+}
+.arrow {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.dots {
+  display: flex;
+  gap: 0.4rem;
+}
+.dot,
+.dotOn {
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  transition: width 200ms ease;
+}
+.dotOn {
+  width: 26px;
+  background: #fff;
+}
+
+.popupWrap {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: rgba(10, 20, 18, 0.55);
+}
+.popup {
+  position: relative;
+  width: min(28rem, 100%);
+  max-height: calc(100svh - 2.5rem);
+  overflow: auto;
+  border-radius: 1.5rem;
+  background: #fff;
+  color: #13201c;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+}
+.popupImg {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: #f1ede4;
+}
+.popupBody {
+  padding: 1.25rem 1.5rem 1.5rem;
+}
+.popupTitle {
+  margin: 0 0 0.5rem;
+  font-size: 1.4rem;
+  line-height: 1.2;
+}
+.popupText {
+  margin: 0 0 1.25rem;
+  color: #4a5651;
+}
+.popupClose {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(10, 20, 18, 0.6);
+  color: #fff;
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 1;
+}
+
+/* HP: header situs tinggi & panggung hero 100svh -> teks banner di tengah agar judul + tombol terlihat tanpa gulir. */
+@media (max-width: 640px) {
+  .banner {
+    align-items: center;
+  }
+  .bannerCopy {
+    padding-block: 2rem 4.5rem;
+  }
+  .bannerShade {
+    background: linear-gradient(180deg, rgba(4, 22, 20, 0.15) 0%, rgba(4, 22, 20, 0.78) 60%, rgba(4, 22, 20, 0.85) 100%);
+  }
+  /* Header situs di HP tinggi (±200 px): kontrol di atas slide agar selalu terlihat. */
+  .controls {
+    top: 1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .track {
+    transition: none;
+  }
+  .overlaySlide {
+    animation: none;
+  }
+}
