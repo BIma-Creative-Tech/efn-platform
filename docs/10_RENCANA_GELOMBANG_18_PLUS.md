@@ -178,6 +178,22 @@ Kontrak: `docs/04 §16` (L-91..L-94). Erajaya (EFN) memegang hak eksklusif Wetze
 
 Menunggu klien: Q-WTZ1..Q-WTZ4 (`docs/04 §16.6`).
 
+### A.10 Pembaruan 27 Okt 2026 — G28 back-office demo berfungsi penuh
+Permintaan pemilik: DB dev tetap demo, tetapi gap back-office Odoo harus berfungsi end-to-end. Semua modul memakai fitur CE 19 (tanpa Enterprise, tanpa modul pihak ketiga; OCA/Cybrosys hanya dibaca, ADR-031).
+
+| ID | Paket | Modul | Fitur CE yang dipakai | Test | Status 27 Okt |
+|---|---|---|---|---|---|
+| **W-15 / F-03** | PO antar-PT → SO di PT penjual (user teknis), faktur → tagihan draft PT pembeli, harga transfer cost-plus per pasangan PT, pembatalan berantai | `efn_intercompany` | sale_stock, purchase_stock, account | 13 | dibangun, terpasang di dev |
+| **K25-08 / K25-12** | Mode produksi MTO/MTS/keduanya per produk, resupply outlet ← CK, scrap wajib alasan + nilai waste, yield & varians MO + ambang per PT, disassembly by-product, analisis waste/yield | `efn_ck_production` | mrp, stock.scrap.reason.tag, rute MTO, resupply_wh_ids, mrp.bom.byproduct | 9 | dibangun, terpasang di dev |
+| **K25-12 / Q-35** | Kalender musim, forecast v1 (rata-rata × faktor musim × lead time + safety stock), usulan min/max disetujui planner → reorder rule, cron mingguan | `efn_demand_forecast` | stock.warehouse.orderpoint | 6 | dibangun; v2 ML di worker belum |
+| **K25-13 / BRD §5.4** | Komoditas + parameter QC (diatur user), grade → harga beli, mitra tani, prediksi panen → PO, QC gate 3 langkah, inspeksi mengunci transfer QC, reject → scrap, traceability lot + label QR | `efn_agri` | penerimaan 3 langkah, stock.lot, purchase | 8 | dibangun; PWA intake & portal petani belum |
+| **W-16 / Q-V3** | Neraca, Laba Rugi, Neraca Saldo per PT + konsolidasi & eliminasi; layar, PDF, XLSX | `efn_account_reports` | account (jurnal posted) | 4 | dibangun; arus kas & format auditor belum |
+| **K25-09 (a)** | Tiket KDS dari kiosk ditahan sampai `pos.order` lunas, lalu dilepas sekaligus | `efn_pos_kds` 19.0.1.2.0 | pos_self_order (source `kiosk`) | +1 | dibangun; bayar kiosk via gateway (c) & EDC (b) belum |
+
+Seed demo (`odoo shell`, idempoten, ber-tag `[DEMO G28]`): gudang GLCC (3 langkah), PBCK (CK), PBO1 (outlet dipasok PBCK); mitra tani TANI-0001/0002; 2 inspeksi selesai (grade A/B) + 1 menunggu; antar-PT PB→GL; 4 MO (1 boros → alert, 1 disassembly); resupply CK→outlet; 21 hari penjualan; 4 scrap beralasan; usulan forecast menunggu planner; laporan konsolidasi seimbang.
+
+Masih terbuka: markup TP & opini pajak (Finance), parameter QC nyata per komoditas, tanggal musim & faktor nyata, settlement poin lintas PT, mart ClickHouse `fact_scrap`/`fact_mo_yield`, notifikasi WA ambang.
+
 ---
 
 ## Ringkasan manajemen (10 Okt 2026)
