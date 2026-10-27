@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_forecast_run_view_form" model="ir.ui.view">
+        <field name="name">efn.forecast.run.form</field>
+        <field name="model">efn.forecast.run</field>
+        <field name="arch" type="xml">
+            <form>
+                <group>
+                    <field name="warehouse_ids" widget="many2many_tags"/>
+                    <field name="product_ids" widget="many2many_tags"/>
+                    <field name="history_days"/>
+                    <field name="lead_days"/>
+                    <field name="review_days"/>
+                    <field name="service_level"/>
+                </group>
+                <footer>
+                    <button name="action_run" type="object" string="Hitung usulan" class="btn-primary"/>
+                    <button special="cancel" string="Batal"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+    <record id="efn_forecast_run_action" model="ir.actions.act_window">
+        <field name="name">Hitung Forecast</field>
+        <field name="res_model">efn.forecast.run</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+</odoo>

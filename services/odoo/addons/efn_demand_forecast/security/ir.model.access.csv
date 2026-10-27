@@ -1,0 +1,6 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_demand_forecast_user,efn.demand.forecast user,model_efn_demand_forecast,stock.group_stock_user,1,1,1,0
+access_efn_demand_forecast_manager,efn.demand.forecast manager,model_efn_demand_forecast,stock.group_stock_manager,1,1,1,1
+access_efn_forecast_season_user,efn.forecast.season user,model_efn_forecast_season,stock.group_stock_user,1,0,0,0
+access_efn_forecast_season_manager,efn.forecast.season manager,model_efn_forecast_season,stock.group_stock_manager,1,1,1,1
+access_efn_forecast_run_user,efn.forecast.run user,model_efn_forecast_run,stock.group_stock_user,1,1,1,1

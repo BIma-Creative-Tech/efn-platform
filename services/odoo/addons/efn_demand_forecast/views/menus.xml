@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_efn_forecast_root" name="Forecast EFN" parent="stock.menu_stock_root" sequence="95"
+              groups="stock.group_stock_user"/>
+    <menuitem id="menu_efn_forecast_run" name="Hitung Forecast" parent="menu_efn_forecast_root"
+              action="efn_forecast_run_action" sequence="10"/>
+    <menuitem id="menu_efn_demand_forecast" name="Usulan Min/Max" parent="menu_efn_forecast_root"
+              action="efn_demand_forecast_action" sequence="20"/>
+    <menuitem id="menu_efn_forecast_season" name="Kalender Musim" parent="menu_efn_forecast_root"
+              action="efn_forecast_season_action" sequence="30"/>
+</odoo>
