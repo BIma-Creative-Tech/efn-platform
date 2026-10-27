@@ -260,6 +260,21 @@ buat ulang (`odoo_online_smoke.py setup` atau [odoo-online-api-key.md](odoo-onli
 - Git Bash: `docker run -v` dan `docker exec ... <path absolut>` butuh `MSYS_NO_PATHCONV=1` (kalau tidak, `/bin/sh`
   menjadi `C:/Program Files/Git/...`).
 
+## 5b. APK uji dari luar LAN (tunnel + pointer otomatis)
+
+APK uji Super-App memanggil BFF laptop lewat quick tunnel Cloudflare (container `efn-tunnel`, restart `unless-stopped`).
+Alamat `*.trycloudflare.com` berganti setiap tunnel start (laptop nyala, Docker Desktop restart). APK membaca alamat
+terkini dari gist publik `bctech-adm/573f07cbf9b051029976e907f3e274a2` (`efn-api.json`) saat dibuka dan saat tunnel lama
+mati di tengah pemakaian (galat jaringan / HTTP 530 → baca ulang pointer → ulangi sekali).
+
+- Penjaga pointer: `scripts/dev/efn-tunnel-pointer.sh` (loop 30 dtk: Docker jalan? tunnel jalan? `/health` 200? gist beda →
+  perbarui). Log: `%LOCALAPPDATA%\efn\tunnel-pointer.log`. Butuh `gh` login dengan scope `gist`.
+- Pasang sekali per laptop: `bash scripts/dev/install-tunnel-pointer.sh` (folder Startup Windows, jendela tersembunyi,
+  tanpa admin). Lepas: `--remove`. Cek manual: `bash scripts/dev/efn-tunnel-pointer.sh --once`.
+- Syarat agar tanpa sentuhan: Docker Desktop ikut start saat login (Settings → General → *Start Docker Desktop when you
+  sign in*), laptop tidak tidur saat dipakai uji, dan ada internet.
+- Pointer hanya berisi alamat tunnel; APK hanya menerima host `*.trycloudflare.com` dari pointer. Bukan untuk staging/produksi.
+
 ## 6. Matikan
 
 ```bash
