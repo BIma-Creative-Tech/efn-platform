@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { TerminusModule } from '@nestjs/terminus';
 import { AuthModule } from './auth/auth.module';
 import { BookingModule } from './booking/booking.module';
+import { PromoModule } from './promo/promo.module';
 import { CartModule } from './cart/cart.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { CommonModule } from './common/common.module';
@@ -49,6 +50,8 @@ import { PrivacyModule } from './privacy/privacy.module';
     // G22 QR meja F&B (docs/04 §14.A, ADR-032 Accepted B): kill switch FNB_QR_ENABLED (default false)
     FnbModule,
     BookingModule,
+    // G27 promo Super-App (docs/04 §18): kill switch PROMO_ENABLED / PROMO_PUSH_ENABLED (default false)
+    PromoModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_FILTER, useClass: ContractExceptionFilter }],

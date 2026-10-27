@@ -49,7 +49,7 @@ function setup(overrides: Record<string, string> = {}) {
   const altcha = new AltchaService(config, kv);
   altcha.now = clock.now;
   const memberService = new MemberService(config, db, cipher);
-  const auth = new AuthService(config, otp, limiter, tokens, loyalty, altcha, memberService);
+  const auth = new AuthService(config, otp, limiter, tokens, loyalty, altcha, memberService, db, null, null, cipher);
   const captcha = (ip: string | null = null): string => solveAltcha(altcha.createChallenge(ip));
   const request = (phone: string, ip: string | null) => auth.requestOtp({ phone, altcha: captcha(ip) }, ip);
   return { clock, config, kv, sender, tokens, auth, altcha, members, memberService, cipher, captcha, request, db };
@@ -373,5 +373,105 @@ describe('W-19 (Q-P3): pernyataan usia minimum 17 tahun saat masuk/daftar', () =
     expect(upd).toHaveLength(1);
     expect(upd[0].text).toContain('age_confirmed_at IS NULL');
     expect(() => testConfig({ MEMBER_MIN_AGE: '16' }).memberMinAge).toThrow();
+  });
+});
+
+describe('docs/04 §3.2 v5.2: mode uji OTP dev (DEV_OTP_REVEAL_MEMBERS)', () => {
+  const DEV = { APP_ENV: 'dev', NODE_ENV: 'development', WHATSAPP_ENABLED: 'false', DEV_OTP_REVEAL_MEMBERS: PHONE };
+
+  it('nomor uji di dev tanpa WhatsApp → dev_code = kode yang dikirim, dan kode itu bisa dipakai masuk', async () => {
+    const ctx = setup(DEV);
+    const req = await ctx.request(PHONE, '203.0.113.7');
+    expect(req.dev_code).toBe(ctx.sender.lastCode());
+    const res = await ctx.auth.verifyOtp({ ageConfirmed: true, challengeId: req.challenge_id, code: req.dev_code! }, '203.0.113.7');
+    expect(res.token_type).toBe('Bearer');
+  });
+
+  it('nomor lain, atau di luar dev / WhatsApp aktif / tanpa allowlist → field dev_code tidak ada', async () => {
+    const other = await setup(DEV).request('6281299990000', null);
+    expect(other).not.toHaveProperty('dev_code');
+    for (const o of [{ APP_ENV: 'staging' }, { NODE_ENV: 'production' }, { DEV_OTP_REVEAL_MEMBERS: '' }]) {
+      const res = await setup({ ...DEV, ...o }).request(PHONE, null);
+      expect(Object.keys(res).sort()).toEqual(['challenge_id', 'expires_in']);
+    }
+    expect(testConfig({ ...DEV, WHATSAPP_ENABLED: 'true' }).devOtpRevealFor(PHONE)).toBe(false);
+  });
+
+  it('allowlist di luar dev atau format salah → gagal start (assertStartupSecrets)', () => {
+    expect(() => testConfig({ ...DEV, PG_HOST: 'postgres' }).assertStartupSecrets()).not.toThrow();
+    expect(() => testConfig({ ...DEV, APP_ENV: 'staging', PG_HOST: 'postgres' }).assertStartupSecrets()).toThrow('DEV_OTP_REVEAL_MEMBERS hanya boleh');
+    expect(() => testConfig({ ...DEV, DEV_OTP_REVEAL_MEMBERS: '0812345', PG_HOST: 'postgres' }).assertStartupSecrets()).toThrow('DEV_OTP_REVEAL_MEMBERS');
+  });
+});
+
+describe('G27 §18.3: consent pemasaran saat daftar (opsional)', () => {
+  const MKT = { CONSENT_MARKETING_VERSION: 'marketing@2026-10-27', CONSENT_MARKETING_TEXT_SHA256: 'c'.repeat(64) };
+  it('tanpa marketing_consent → respons persis seperti sebelumnya, tidak ada baris consent', async () => {
+    const ctx = setup(MKT);
+    const req = await ctx.request(PHONE, null);
+    const res = await ctx.auth.verifyOtp({ ageConfirmed: true, challengeId: req.challenge_id, code: ctx.sender.lastCode() }, null);
+    expect(Object.keys(res).sort()).toEqual(['access_token', 'expires_in', 'token_type']);
+    expect(ctx.db.find('INSERT INTO platform.consent')).toHaveLength(0);
+  });
+  it('versi aktif → consent tercatat (source signup); versi basi → login tetap sukses, stale_text', async () => {
+    const ctx = setup(MKT);
+    const req = await ctx.request(PHONE, null);
+    const ok = await ctx.auth.verifyOtp(
+      { ageConfirmed: true, challengeId: req.challenge_id, code: ctx.sender.lastCode(), marketingConsent: { version: 'marketing@2026-10-27' } },
+      null,
+    );
+    expect(ok.marketing_consent).toBe('recorded');
+    const ins = ctx.db.find('INSERT INTO platform.consent');
+    expect(ins).toHaveLength(1);
+    expect(ins[0]!.text).toContain("'signup'");
+    expect(ins[0]!.params.slice(1, 4)).toEqual(['marketing', 'marketing@2026-10-27', 'c'.repeat(64)]);
+    const req2 = await ctx.request(PHONE, '198.51.100.20');
+    const stale = await ctx.auth.verifyOtp(
+      { ageConfirmed: true, challengeId: req2.challenge_id, code: ctx.sender.lastCode(), marketingConsent: { version: 'marketing@2026-10-06' } },
+      '198.51.100.20',
+    );
+    expect(stale.token_type).toBe('Bearer');
+    expect(stale.marketing_consent).toBe('stale_text');
+    expect(ctx.db.find('INSERT INTO platform.consent')).toHaveLength(1);
+  });
+  it('parser: marketing_consent harus { granted: true, version }', () => {
+    const base = { challenge_id: '3f2b8c1e-9a4d-4c7e-8b21-5d6e7f8a9b0c', code: '123456', age_confirmed: true };
+    expect(parseAuthOtpVerify(base)).not.toHaveProperty('marketingConsent');
+    expect(parseAuthOtpVerify({ ...base, marketing_consent: { granted: true, version: 'marketing@2026-10-27' } }).marketingConsent).toEqual({ version: 'marketing@2026-10-27' });
+    for (const bad of [{ granted: false, version: 'v' }, { granted: true }, 'yes', { granted: true, version: 'x y' }]) {
+      expect(() => parseAuthOtpVerify({ ...base, marketing_consent: bad })).toThrow();
+    }
+  });
+});
+
+describe('G27 §18.3a: persetujuan Kebijakan Privasi saat masuk/daftar', () => {
+  const PRV = {
+    CONSENT_PRIVACY_VERSION: 'privacy@2026-10-27',
+    CONSENT_PRIVACY_TEXT_SHA256: 'b66c21588d1d7ecd2c9edcde1bc813c4e138f00708f8b3c6004226f80a1593e2',
+  };
+  it('PRIVACY_CONSENT_ENFORCED=true: tanpa privacy_consent → 400 privacy_consent_required, challenge tetap berlaku', async () => {
+    const ctx = setup({ ...PRV, PRIVACY_CONSENT_ENFORCED: 'true' });
+    const req = await ctx.request(PHONE, null);
+    const code = ctx.sender.lastCode();
+    await expect(ctx.auth.verifyOtp({ ageConfirmed: true, challengeId: req.challenge_id, code }, null)).rejects.toMatchObject({ status: 400 });
+    await expect(
+      ctx.auth.verifyOtp({ ageConfirmed: true, challengeId: req.challenge_id, code, privacyConsent: { version: 'privacy@2020-01-01' } }, null),
+    ).rejects.toMatchObject({ status: 400 });
+    const ok = await ctx.auth.verifyOtp({ ageConfirmed: true, challengeId: req.challenge_id, code, privacyConsent: { version: 'privacy@2026-10-27' } }, null);
+    expect(ok.privacy_consent).toBe('recorded');
+    const ins = ctx.db.find('INSERT INTO platform.consent');
+    expect(ins).toHaveLength(1);
+    expect(ins[0]!.params.slice(1, 4)).toEqual(['privacy', 'privacy@2026-10-27', PRV.CONSENT_PRIVACY_TEXT_SHA256]);
+  });
+  it('default (tidak dipaksa): APK lama tanpa privacy_consent tetap bisa masuk; respons tanpa field baru', async () => {
+    const ctx = setup(PRV);
+    const req = await ctx.request(PHONE, null);
+    const res = await ctx.auth.verifyOtp({ ageConfirmed: true, challengeId: req.challenge_id, code: ctx.sender.lastCode() }, null);
+    expect(res).not.toHaveProperty('privacy_consent');
+  });
+  it('parser privacy_consent', () => {
+    const base = { challenge_id: '3f2b8c1e-9a4d-4c7e-8b21-5d6e7f8a9b0c', code: '123456', age_confirmed: true };
+    expect(parseAuthOtpVerify({ ...base, privacy_consent: { granted: true, version: 'privacy@2026-10-27' } }).privacyConsent).toEqual({ version: 'privacy@2026-10-27' });
+    expect(() => parseAuthOtpVerify({ ...base, privacy_consent: { granted: false, version: 'x' } })).toThrow();
   });
 });

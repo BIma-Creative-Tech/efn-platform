@@ -5,7 +5,11 @@ import { DB, Db, Queryable } from '../common/db/db';
 import { ApiError, Errors } from '../common/errors/api-error';
 import { PII_AAD, PiiCipher } from '../common/pii/crypto';
 
-export const CONSENT_PURPOSES = ['location', 'marketing'] as const;
+/**
+ * `privacy` (G27 §18.3a): persetujuan Kebijakan Privasi + pemrosesan data akun, dicentang WAJIB di layar masuk/daftar.
+ * Tidak bisa ditarik lewat toggle (akun tidak berjalan tanpa data pribadi) → penarikan = penghapusan akun (DSAR §8.9).
+ */
+export const CONSENT_PURPOSES = ['location', 'marketing', 'privacy'] as const;
 export type ConsentPurpose = (typeof CONSENT_PURPOSES)[number];
 /** SHA-256 string kosong: penanda "teks tidak diketahui" untuk penarikan saat teks aktif belum dikonfigurasi. */
 export const UNKNOWN_TEXT_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
@@ -73,6 +77,9 @@ export class ConsentService {
   }
 
   async set(memberId: string, purpose: ConsentPurpose, input: SetConsentInput, ip: string | null): Promise<ConsentState> {
+    if (purpose === 'privacy' && !input.granted) {
+      throw Errors.conflict('privacy_withdraw_via_deletion', 'Persetujuan privasi ditarik dengan mengajukan penghapusan akun di Data Saya.');
+    }
     const active = this.config.consentActiveText(purpose);
     let textSha256: string;
     if (input.granted) {

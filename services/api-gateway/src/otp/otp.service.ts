@@ -46,6 +46,8 @@ export interface IssueOtpInput {
 export interface IssueOtpResult {
   challengeId: string;
   expiresIn: number;
+  /** Mode uji dev (`AppConfig.devOtpRevealFor`): kode untuk nomor uji, HANYA purpose `login`. Selain itu tidak ada. */
+  devCode?: string;
 }
 
 export interface VerifyOtpInput {
@@ -155,7 +157,8 @@ export class OtpService {
 
     await this.audit(input.purpose, subject, input.orderRef ?? null, 'sent', input.ip ?? null);
     this.metrics.recordOtpRequest(input.purpose, 'sent');
-    return { challengeId, expiresIn: ttl };
+    const reveal = input.purpose === 'login' && this.config.devOtpRevealFor(input.memberRef);
+    return { challengeId, expiresIn: ttl, ...(reveal ? { devCode: code } : {}) };
   }
 
   async verify(input: VerifyOtpInput): Promise<VerifyOtpResult> {

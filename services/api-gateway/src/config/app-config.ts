@@ -223,6 +223,11 @@ export class AppConfig {
       check('WHATSAPP_TOKEN');
       if (!this.str('WHATSAPP_PHONE_NUMBER_ID')) problems.push('WHATSAPP_PHONE_NUMBER_ID belum dikonfigurasi');
     }
+    // Mode uji OTP: hanya dev lokal tanpa WhatsApp; nilai terisi di staging/prod = salah konfigurasi, gagal start.
+    attempt(() => void this.devOtpRevealMembers, 'DEV_OTP_REVEAL_MEMBERS tidak valid');
+    if (this.str('DEV_OTP_REVEAL_MEMBERS') && (!this.isDevEnv || !this.isDevelopment || this.whatsappEnabled)) {
+      problems.push('DEV_OTP_REVEAL_MEMBERS hanya boleh diisi bila APP_ENV=dev, NODE_ENV=development, WHATSAPP_ENABLED=false');
+    }
     if (!this.str('PG_HOST') && !this.str('DATABASE_URL')) problems.push('PG_HOST (atau DATABASE_URL) belum dikonfigurasi');
     // Fase 3 (docs/04 §10.13): mock json2 ditolak di production; secret kanal & HMAC event wajib bila online aktif
     problems.push(...this.onlineStartupProblems());
@@ -230,6 +235,10 @@ export class AppConfig {
     problems.push(...this.g22StartupProblems());
     // G23 (docs/04 §15.5, L-90): reservasi meja & slot pre-order
     problems.push(...this.g23StartupProblems());
+    // G27 (docs/04 §18.2): promo
+    attempt(() => void this.promoCompanies, 'PROMO_COMPANIES tidak valid');
+    attempt(() => void this.promoSyncSeconds, 'PROMO_SYNC_SECONDS tidak valid');
+    attempt(() => void this.expoPushUrl, 'EXPO_PUSH_URL tidak valid');
     if (problems.length > 0) throw new ConfigError(`Konfigurasi tidak lengkap: ${problems.join('; ')}`);
   }
 
@@ -839,7 +848,7 @@ export class AppConfig {
    * `CONSENT_<PURPOSE>_TEXT_SHA256` (mis. `CONSENT_LOCATION_VERSION=v1`). `null` bila belum dikonfigurasi
    * (grant ditolak 503; penarikan tetap diterima).
    */
-  consentActiveText(purpose: 'location' | 'marketing'): { version: string; textSha256: string } | null {
+  consentActiveText(purpose: 'location' | 'marketing' | 'privacy'): { version: string; textSha256: string } | null {
     const p = purpose.toUpperCase();
     const version = this.str(`CONSENT_${p}_VERSION`);
     const textSha256 = this.str(`CONSENT_${p}_TEXT_SHA256`)?.toLowerCase();
@@ -1147,6 +1156,32 @@ export class AppConfig {
   }
   get whatsappTimeoutMs(): number {
     return this.int('WHATSAPP_TIMEOUT_MS', 4000, 500, 30_000);
+  }
+
+  /**
+   * Mode uji OTP (docs/04 §3.2 v5.2): nomor uji (E.164 tanpa `+`, dipisah koma) yang kode OTP login-nya ikut dikembalikan
+   * di respons `POST /v1/auth/otp/request` (`dev_code`), agar APK uji bisa masuk tanpa WhatsApp Cloud API.
+   * HANYA berlaku bila `APP_ENV=dev` + `NODE_ENV=development` + `WHATSAPP_ENABLED=false`; di luar itu nilai terisi = gagal
+   * start (`assertStartupSecrets`). Kosong (default) = mati.
+   */
+  get devOtpRevealMembers(): ReadonlySet<string> {
+    const raw = this.str('DEV_OTP_REVEAL_MEMBERS');
+    if (!raw) return new Set();
+    const out = new Set<string>();
+    for (const part of raw.split(',')) {
+      const p = part.trim();
+      if (!p) continue;
+      if (!/^62[0-9]{8,13}$/.test(p)) throw new ConfigError('DEV_OTP_REVEAL_MEMBERS harus nomor 62xxxxxxxx dipisah koma');
+      out.add(p);
+    }
+    if (out.size > 10) throw new ConfigError('DEV_OTP_REVEAL_MEMBERS maksimal 10 nomor');
+    return out;
+  }
+
+  /** true bila kode OTP login untuk `memberRef` boleh dikembalikan ke klien (mode uji dev, lihat di atas). */
+  devOtpRevealFor(memberRef: string): boolean {
+    if (!this.isDevEnv || !this.isDevelopment || this.whatsappEnabled) return false;
+    return this.devOtpRevealMembers.has(memberRef);
   }
 
   // ───────────── PostgreSQL ─────────────
@@ -1677,6 +1712,58 @@ export class AppConfig {
     }
     return this.onlineSecret(envName, contractName);
   }
+  /**
+   * G27 §18.3a: persetujuan Kebijakan Privasi WAJIB saat masuk/daftar (`PRIVACY_CONSENT_ENFORCED`, default false agar
+   * APK lama tetap bisa masuk sampai versi baru terpasang). Aktif → `POST /v1/auth/otp/verify` tanpa `privacy_consent`
+   * versi aktif ditolak `400 privacy_consent_required` sebelum OTP diperiksa (challenge tidak hangus).
+   */
+  get privacyConsentEnforced(): boolean {
+    return this.bool('PRIVACY_CONSENT_ENFORCED', false);
+  }
+
+  // ───────────── G27 promo Super-App (docs/04 §18.2) ─────────────
+  /** Kill switch banner slider + pop-up (`PROMO_ENABLED`, default false → `GET /v1/promo` kosong, klien = hero lama). */
+  get promoEnabled(): boolean {
+    return this.bool('PROMO_ENABLED', false);
+  }
+  /** Kill switch push promo (`PROMO_PUSH_ENABLED`, default false). Push hanya ke member ber-consent `marketing`. */
+  get promoPushEnabled(): boolean {
+    return this.promoEnabled && this.bool('PROMO_PUSH_ENABLED', false);
+  }
+  /** PT yang feed promonya ditarik (`PROMO_COMPANIES`, default = kanal online pertama). Kode PT `^[A-Z][A-Z0-9]{1,9}$`. */
+  get promoCompanies(): string[] {
+    const raw = this.str('PROMO_COMPANIES') ?? this.onlineChannels[0] ?? 'GL';
+    const out = [...new Set(raw.split(/[\s,;]+/).filter((s) => s.length > 0))];
+    if (out.length === 0 || out.length > 10 || out.some((c) => !/^[A-Z][A-Z0-9]{1,9}$/.test(c))) {
+      throw new ConfigError('PROMO_COMPANIES harus daftar kode PT ^[A-Z][A-Z0-9]{1,9}$ (maks 10)');
+    }
+    return out;
+  }
+  /** Interval tarik feed promo (`PROMO_SYNC_SECONDS`, 30..3600, default 120). */
+  get promoSyncSeconds(): number {
+    return this.int('PROMO_SYNC_SECONDS', 120, 30, 3600);
+  }
+  /**
+   * API key user teknis promo per PT (`group_promo_bff` saja — Odoo menolak user dengan grup lain):
+   * `ODOO_API_KEY_PROMO_<PT>_FILE` → `/run/secrets/odoo_api_key_promo_<pt>` → (dev) env literal.
+   */
+  odooApiKeyPromo(company: string): string {
+    if (!/^[A-Z][A-Z0-9]{1,9}$/.test(company)) throw new ConfigError('kode PT promo tidak valid');
+    const envName = `ODOO_API_KEY_PROMO_${company}`;
+    const contractName = `odoo_api_key_promo_${company.toLowerCase()}`;
+    const raw = this.onlineSecretRaw(envName, contractName);
+    if (raw !== undefined && raw.trim().toLowerCase() === 'disabled') {
+      throw new ConfigError(`${envName} masih placeholder 'disabled' — promo ${company} belum boleh aktif`);
+    }
+    return this.onlineSecret(envName, contractName);
+  }
+  /** Expo Push API (egress allowlist §18.2). Hanya https; default endpoint resmi Expo. */
+  get expoPushUrl(): string {
+    const v = this.str('EXPO_PUSH_URL') ?? 'https://exp.host/--/api/v2/push/send';
+    if (!/^https:\/\/[a-z0-9.-]+(:\d{1,5})?\/[A-Za-z0-9._~/-]*$/.test(v)) throw new ConfigError('EXPO_PUSH_URL harus https://');
+    return v;
+  }
+
   /** L-2: secret HMAC event Odoo → BFF (`odoo_online_event_hmac`, env `ODOO_ONLINE_EVENT_HMAC_FILE`). */
   get odooOnlineEventHmac(): string {
     const v = this.onlineSecret('ODOO_ONLINE_EVENT_HMAC', 'odoo_online_event_hmac');
