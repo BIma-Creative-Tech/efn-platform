@@ -318,6 +318,20 @@ RPC_ALLOWLIST = {
         "action_confirm",
     ): "wizard -> _efn_decide: grup verifier + check_access(write) "
     "bukti + FOR UPDATE order + nominal mutasi = amount_due + alasan allowlist",
+    # efn_promo (G27, docs/04 §18.1 path #22-#24 + tombol Pengelola Promo di web client).
+    (
+        "efn.promo.banner",
+        "efn_promo_feed",
+    ): "G27: _efn_promo_check_caller (grup BFF promo saja, satu company) + field whitelist",
+    ("efn.promo.banner", "efn_promo_image"): "G27: _efn_promo_check_caller + kind allowlist + record company caller",
+    (
+        "efn.promo.popup",
+        "efn_promo_push_claim",
+    ): "G27: _efn_promo_check_caller + FOR UPDATE SKIP LOCKED queued->sent; tanpa data member",
+    (
+        "efn.promo.popup",
+        "action_efn_queue_push",
+    ): "G27: ACL write (Pengelola Promo) + record rule company + promo sedang tayang",
     # 3 metode POS (kasir/pelayan): `_efn_qr_check_pos_caller` = grup POS user + check_access(read) config + company
     # user + sesi POS opened; BFF dipanggil server-side (service key tidak ke browser); QR dirender server.
     (

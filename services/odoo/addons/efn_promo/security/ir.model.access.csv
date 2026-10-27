@@ -1,0 +1,5 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_promo_banner_manager,efn.promo.banner manager,model_efn_promo_banner,group_promo_manager,1,1,1,1
+access_efn_promo_popup_manager,efn.promo.popup manager,model_efn_promo_popup,group_promo_manager,1,1,1,1
+access_efn_promo_banner_system,efn.promo.banner system,model_efn_promo_banner,base.group_system,1,1,1,1
+access_efn_promo_popup_system,efn.promo.popup system,model_efn_promo_popup,base.group_system,1,1,1,1
