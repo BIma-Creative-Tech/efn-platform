@@ -1,0 +1,4 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_ck_waste_report_stock,efn.ck.waste.report stock,model_efn_ck_waste_report,stock.group_stock_user,1,0,0,0
+access_efn_ck_yield_report_mrp,efn.ck.yield.report mrp,model_efn_ck_yield_report,mrp.group_mrp_user,1,0,0,0
+access_efn_mo_variance_mrp,efn.mo.variance mrp,model_efn_mo_variance,mrp.group_mrp_user,1,1,1,1

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="mrp_production_form_efn_ck" model="ir.ui.view">
+        <field name="name">mrp.production.form.efn.ck</field>
+        <field name="model">mrp.production</field>
+        <field name="inherit_id" ref="mrp.mrp_production_form_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//page[@name='miscellaneous']" position="before">
+                <page string="Yield &amp; Varians" name="efn_yield" invisible="state != 'done'">
+                    <div class="alert alert-warning" role="alert" invisible="not efn_yield_alert">
+                        Yield atau varians konsumsi di luar ambang PT.
+                    </div>
+                    <group>
+                        <group>
+                            <field name="efn_yield_pct"/>
+                            <field name="efn_byproduct_qty"/>
+                        </group>
+                        <group>
+                            <field name="efn_variance_value"/>
+                            <field name="efn_yield_alert"/>
+                            <field name="efn_currency_id" invisible="1"/>
+                        </group>
+                    </group>
+                    <field name="efn_variance_line_ids" readonly="1">
+                        <list decoration-danger="abs(variance_pct) &gt; 5">
+                            <field name="product_id"/>
+                            <field name="expected_qty"/>
+                            <field name="actual_qty"/>
+                            <field name="variance_qty"/>
+                            <field name="variance_pct"/>
+                            <field name="variance_value" sum="Total"/>
+                        </list>
+                    </field>
+                </page>
+            </xpath>
+        </field>
+    </record>
+    <record id="mrp_production_list_efn_ck" model="ir.ui.view">
+        <field name="name">mrp.production.list.efn.ck</field>
+        <field name="model">mrp.production</field>
+        <field name="inherit_id" ref="mrp.mrp_production_tree_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='state']" position="before">
+                <field name="efn_yield_pct" optional="show"/>
+                <field name="efn_yield_alert" optional="hide"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>

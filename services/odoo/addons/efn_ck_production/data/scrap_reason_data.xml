@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- K25-08: alasan waste standar EFN (bisa ditambah/ubah user di Inventory > Configuration > Scrap Reasons). -->
+<odoo noupdate="1">
+    <record id="scrap_reason_susut" model="stock.scrap.reason.tag">
+        <field name="name">Susut</field>
+        <field name="sequence">10</field>
+        <field name="color">#E9A23B</field>
+    </record>
+    <record id="scrap_reason_rusak" model="stock.scrap.reason.tag">
+        <field name="name">Rusak</field>
+        <field name="sequence">20</field>
+        <field name="color">#D9534F</field>
+    </record>
+    <record id="scrap_reason_gagal_masak" model="stock.scrap.reason.tag">
+        <field name="name">Gagal masak</field>
+        <field name="sequence">30</field>
+        <field name="color">#8E44AD</field>
+    </record>
+    <record id="scrap_reason_kedaluwarsa" model="stock.scrap.reason.tag">
+        <field name="name">Kedaluwarsa</field>
+        <field name="sequence">40</field>
+        <field name="color">#3C3C3C</field>
+    </record>
+    <record id="scrap_reason_sisa_produksi" model="stock.scrap.reason.tag">
+        <field name="name">Sisa produksi / trimming</field>
+        <field name="sequence">50</field>
+        <field name="color">#2E86C1</field>
+    </record>
+</odoo>

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="stock_scrap_form_efn_ck" model="ir.ui.view">
+        <field name="name">stock.scrap.form.efn.ck</field>
+        <field name="model">stock.scrap</field>
+        <field name="inherit_id" ref="stock.stock_scrap_form_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='scrap_reason_tag_ids']" position="attributes">
+                <attribute name="required">1</attribute>
+            </xpath>
+            <xpath expr="//field[@name='scrap_reason_tag_ids']" position="after">
+                <field name="efn_waste_value"/>
+                <field name="efn_currency_id" invisible="1"/>
+            </xpath>
+        </field>
+    </record>
+    <record id="stock_scrap_list_efn_ck" model="ir.ui.view">
+        <field name="name">stock.scrap.list.efn.ck</field>
+        <field name="model">stock.scrap</field>
+        <field name="inherit_id" ref="stock.stock_scrap_tree_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='scrap_qty']" position="after">
+                <field name="scrap_reason_tag_ids" widget="many2many_tags" optional="show"/>
+                <field name="efn_waste_value" sum="Total" optional="show"/>
+                <field name="efn_currency_id" column_invisible="1"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>

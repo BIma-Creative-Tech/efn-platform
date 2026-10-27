@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_ck_waste_report_view_pivot" model="ir.ui.view">
+        <field name="name">efn.ck.waste.report.pivot</field>
+        <field name="model">efn.ck.waste.report</field>
+        <field name="arch" type="xml">
+            <pivot string="Waste" sample="1">
+                <field name="warehouse_id" type="row"/>
+                <field name="reason_id" type="col"/>
+                <field name="value" type="measure"/>
+            </pivot>
+        </field>
+    </record>
+    <record id="efn_ck_waste_report_view_graph" model="ir.ui.view">
+        <field name="name">efn.ck.waste.report.graph</field>
+        <field name="model">efn.ck.waste.report</field>
+        <field name="arch" type="xml">
+            <graph string="Waste" type="bar" stacked="1" sample="1">
+                <field name="date" interval="day"/>
+                <field name="reason_id"/>
+                <field name="value" type="measure"/>
+            </graph>
+        </field>
+    </record>
+    <record id="efn_ck_waste_report_view_list" model="ir.ui.view">
+        <field name="name">efn.ck.waste.report.list</field>
+        <field name="model">efn.ck.waste.report</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="date"/>
+                <field name="company_id" optional="hide"/>
+                <field name="warehouse_id"/>
+                <field name="product_id"/>
+                <field name="reason_id"/>
+                <field name="qty" sum="Total"/>
+                <field name="value" sum="Total"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_ck_waste_report_view_search" model="ir.ui.view">
+        <field name="name">efn.ck.waste.report.search</field>
+        <field name="model">efn.ck.waste.report</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="product_id"/>
+                <field name="warehouse_id"/>
+                <field name="reason_id"/>
+                <filter name="this_month" string="Bulan ini" domain="[('date', '&gt;=', context_today().strftime('%Y-%m-01'))]"/>
+                <group>
+                    <filter name="by_warehouse" string="Gudang" context="{'group_by': 'warehouse_id'}"/>
+                    <filter name="by_reason" string="Alasan" context="{'group_by': 'reason_id'}"/>
+                    <filter name="by_categ" string="Kategori" context="{'group_by': 'categ_id'}"/>
+                    <filter name="by_date" string="Tanggal" context="{'group_by': 'date:day'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+    <record id="efn_ck_waste_report_action" model="ir.actions.act_window">
+        <field name="name">Analisis Waste</field>
+        <field name="res_model">efn.ck.waste.report</field>
+        <field name="view_mode">graph,pivot,list</field>
+    </record>
+
+    <record id="efn_ck_yield_report_view_pivot" model="ir.ui.view">
+        <field name="name">efn.ck.yield.report.pivot</field>
+        <field name="model">efn.ck.yield.report</field>
+        <field name="arch" type="xml">
+            <pivot string="Yield" sample="1">
+                <field name="product_id" type="row"/>
+                <field name="planned_qty" type="measure"/>
+                <field name="produced_qty" type="measure"/>
+                <field name="yield_pct" type="measure"/>
+                <field name="variance_value" type="measure"/>
+            </pivot>
+        </field>
+    </record>
+    <record id="efn_ck_yield_report_view_list" model="ir.ui.view">
+        <field name="name">efn.ck.yield.report.list</field>
+        <field name="model">efn.ck.yield.report</field>
+        <field name="arch" type="xml">
+            <list decoration-danger="alert">
+                <field name="date"/>
+                <field name="production_id"/>
+                <field name="warehouse_id"/>
+                <field name="product_id"/>
+                <field name="planned_qty"/>
+                <field name="produced_qty"/>
+                <field name="yield_pct" avg="Rata-rata"/>
+                <field name="byproduct_qty"/>
+                <field name="variance_value" sum="Total"/>
+                <field name="alert"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_ck_yield_report_view_search" model="ir.ui.view">
+        <field name="name">efn.ck.yield.report.search</field>
+        <field name="model">efn.ck.yield.report</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="product_id"/>
+                <field name="warehouse_id"/>
+                <filter name="alert" string="Di luar ambang" domain="[('alert', '=', True)]"/>
+                <group>
+                    <filter name="by_product" string="Produk" context="{'group_by': 'product_id'}"/>
+                    <filter name="by_date" string="Tanggal" context="{'group_by': 'date:day'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+    <record id="efn_ck_yield_report_action" model="ir.actions.act_window">
+        <field name="name">Analisis Yield MO</field>
+        <field name="res_model">efn.ck.yield.report</field>
+        <field name="view_mode">list,pivot</field>
+    </record>
+</odoo>

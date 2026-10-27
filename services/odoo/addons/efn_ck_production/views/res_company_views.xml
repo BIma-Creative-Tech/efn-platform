@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="res_company_form_efn_ck" model="ir.ui.view">
+        <field name="name">res.company.form.efn.ck</field>
+        <field name="model">res.company</field>
+        <field name="inherit_id" ref="base.view_company_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="inside">
+                <page string="Ambang CK EFN" name="efn_ck_production">
+                    <group>
+                        <field name="efn_ck_yield_warn_pct"/>
+                        <field name="efn_ck_variance_warn_pct"/>
+                        <field name="efn_ck_waste_warn_value"/>
+                    </group>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>

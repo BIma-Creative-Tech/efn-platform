@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_efn_ck_waste_report" name="Analisis Waste" parent="stock.menu_warehouse_report"
+              action="efn_ck_waste_report_action" sequence="60"/>
+    <menuitem id="menu_efn_ck_yield_report" name="Analisis Yield" parent="mrp.menu_mrp_reporting"
+              action="efn_ck_yield_report_action" sequence="60"/>
+</odoo>
