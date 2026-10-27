@@ -302,6 +302,34 @@ class TestEfnKdsTickets(TestEfnKdsCommon):
         self.assertEqual(bar.state, "new")
         self.assertFalse(order.efn_kds_printed_offline)
 
+    def test_kiosk_ticket_waits_for_payment(self):
+        """K25-09 (G28): order kiosk belum lunas tidak masuk dapur; setelah kasir melunasi -> tiket dibuat."""
+        if "kiosk" not in dict(self.env["pos.order"]._fields["source"].selection):
+            self.skipTest("pos_self_order tidak terpasang")
+        lines = [self._line(self.p_rice, 1), self._line(self.p_coffee, 2)]
+        order = self._sync(lines, extra={"source": "kiosk"})
+        self.assertEqual(order.source, "kiosk")
+        self.assertEqual(order.state, "draft")
+        self.assertFalse(self._tickets(order), "order kiosk belum lunas tidak boleh masuk KDS")
+        # Kasir melunasi order kiosk (wizard pembayaran CE = jalur _process_saved_order yang sama dengan sinkron POS).
+        payment = (
+            self.env["pos.make.payment"]
+            .with_context(active_id=order.id, active_ids=order.ids)
+            .create({"payment_method_id": self.cash_pm1.id, "amount": order.amount_total})
+        )
+        payment.check()
+        self.assertIn(order.state, ("paid", "done"))
+        self.assertEqual(len(self._tickets(order, self.station_kitchen)), 1)
+        self.assertEqual(self._tickets(order, self.station_bar).line_ids.qty_delta, 2)
+        # Pemrosesan ulang tidak menggandakan tiket.
+        order._efn_kds_release_kiosk()
+        self.assertEqual(len(self._tickets(order)), 2)
+
+    def test_non_kiosk_draft_still_sent(self):
+        order = self._sync([self._line(self.p_rice, 1)])
+        self.assertEqual(order.state, "draft")
+        self.assertEqual(len(self._tickets(order)), 1)
+
     def test_printer_mode_station_creates_no_ticket(self):
         printer = self.env["pos.printer"].create(
             {

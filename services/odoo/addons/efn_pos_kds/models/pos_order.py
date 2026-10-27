@@ -146,12 +146,53 @@ class PosOrder(models.Model):
         specific = stations.filtered(lambda s: s.category_ids and set(s.category_ids.ids) & categ_ids)
         return specific | catch_all
 
+    def _efn_kds_is_kiosk(self):
+        return getattr(self, "source", "pos") == "kiosk"
+
+    def _efn_kds_hold_unpaid(self):
+        """K25-09 / docs/04 §17.11: order kiosk tidak dikirim ke dapur sebelum lunas.
+
+        Kiosk = ``source == 'kiosk'`` (pos_self_order). Tiket ditahan selama ``state`` belum paid/done/invoiced.
+        Saat lunas (kasir melunasi lewat sinkron POS, atau kiosk bernilai 0 diproses controller CE), semua baris yang
+        belum ditiket dikirim sekaligus (``_efn_kds_release_kiosk``), tanpa bergantung tanda "dikirim ke dapur".
+        """
+        return self._efn_kds_is_kiosk() and self.state not in ("paid", "done", "invoiced")
+
+    def _efn_kds_release_kiosk(self):
+        """Kirim baris kiosk yang tertahan. True bila pembuatan tiket dicoba."""
+        self.ensure_one()
+        if not self._efn_kds_is_kiosk() or self._efn_kds_hold_unpaid() or not self._efn_kds_has_unsent():
+            return False
+        stations = self._efn_kds_stations()
+        if not stations:
+            return False
+        with self.env.cr.savepoint():
+            self.sudo().with_context(efn_kds_release_all=True)._efn_kds_make_tickets(
+                stations, True, self.env["restaurant.order.course"]
+            )
+        return True
+
+    def _process_saved_order(self, draft):
+        res = super()._process_saved_order(draft)
+        for order in self.filtered(lambda o: o._efn_kds_is_kiosk() and o.state in ("paid", "done", "invoiced")):
+            try:
+                order._efn_kds_release_kiosk()
+            except PG_CONCURRENCY_EXCEPTIONS_TO_RETRY:
+                raise
+            except Exception as exc:  # noqa: BLE001 - sama dengan _process_order: KDS di luar jalur kas
+                order._efn_kds_mark_ticket_failed(exc)
+        return res
+
     def _efn_kds_after_sync(self, before_sig, before_fired):
         """Buat tiket bila ada pengiriman dapur baru. True = pembuatan tiket dicoba (dan berhasil)."""
         self.ensure_one()
         stations = self._efn_kds_stations()
         if not stations:
             return False
+        if self._efn_kds_hold_unpaid():
+            return False
+        if self._efn_kds_is_kiosk():
+            return self._efn_kds_release_kiosk()
         sig_changed = prep_signature(self.last_order_preparation_change) != before_sig
         newly_fired = self.course_ids.filtered(lambda c: c.fired and c.id not in before_fired)
         if not sig_changed and not newly_fired:
@@ -159,6 +200,14 @@ class PosOrder(models.Model):
         with self.env.cr.savepoint():
             self.sudo()._efn_kds_make_tickets(stations, sig_changed, newly_fired)
         return True
+
+    def _efn_kds_has_unsent(self):
+        precision = self.env["decimal.precision"].precision_get("Product Unit")
+        return any(
+            not float_is_zero(line.qty - line.efn_kds_sent_qty, precision_digits=precision)
+            for line in self.lines
+            if not line.combo_line_ids
+        )
 
     def _efn_kds_sent_by_uuid(self):
         self.env["efn.kds.ticket.line"].flush_model()
@@ -192,7 +241,12 @@ class PosOrder(models.Model):
                 continue  # course belum di-fire tidak dikirim ke dapur
             if not sig_changed and course not in newly_fired:
                 continue
-            if sig_changed and course not in newly_fired and line.uuid not in prep_uuids:
+            if (
+                sig_changed
+                and course not in newly_fired
+                and line.uuid not in prep_uuids
+                and not self.env.context.get("efn_kds_release_all")
+            ):
                 continue  # baris belum dikirim kasir (belum ada di preparation change)
             targets = self._efn_kds_route(line.product_id, stations)
             if not targets:
