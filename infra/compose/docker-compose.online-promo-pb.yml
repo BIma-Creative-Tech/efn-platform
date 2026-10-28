@@ -1,0 +1,10 @@
+# Override promo Super-App PB (docs/04 §18.1, G27). Pola docker-compose.online-booking-<pt>.yml: API key Odoo user
+# teknis promo `efn_promo_pb` (secret `odoo_api_key_promo_pb`, grup efn_promo.group_promo_bff, satu company, tanpa ACL
+# dokumen) HANYA di-mount ke BFF saat PROMO_ENABLED=true dan PROMO_COMPANIES memuat PB. Banner/pop-up PT ini tampil
+# untuk SEMUA brand (target brand diatur per materi di Odoo: Promo Super-App).
+services:
+  api-gateway:
+    environment:
+      ODOO_API_KEY_PROMO_PB_FILE: /run/secrets/odoo_api_key_promo_pb
+    secrets:
+      - odoo_api_key_promo_pb

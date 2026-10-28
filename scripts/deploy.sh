@@ -550,10 +550,10 @@ echo "==> Migrasi skema idempoten (infra/postgres/init/[0-9][0-9]-*.sql >= 04)"
 # online_order.payment_method, status awaiting_counter_payment, counter_code_enc; dibutuhkan BFF G20). 13 = G24
 # (docs/04 §16.3: CHECK kode PT + WTZ; tanpa 13 order/poin kanal WTZ ditolak CHECK).
 # 14 = G26 (docs/04 §17.9: payment_method bank_transfer, kolom transfer_*, tabel online_transfer_proof; dibutuhkan BFF
-# G26).
+# G26). 15 = G27 (docs/04 §18.2: promo_item, promo_sync, push_token; dibutuhkan BFF G27).
 for req in 04-platform-v3-6.sql 05-platform-loyalty-pos.sql 06-platform-loyalty-guard.sql 07-platform-online.sql \
            08-platform-g18-privacy.sql 09-platform-g20.sql 10-platform-g21.sql 11-platform-g22.sql 12-platform-g23.sql \
-           13-platform-g24.sql 14-platform-g26.sql; do
+           13-platform-g24.sql 14-platform-g26.sql 15-platform-g27.sql 16-platform-g27b.sql; do
   [[ -s "$BASE/postgres/init/$req" ]] || die "migrasi wajib $req tidak ada di $BASE/postgres/init (bundel rilis tidak lengkap)"
 done
 for mig in "$BASE"/postgres/init/[0-9][0-9]-*.sql; do

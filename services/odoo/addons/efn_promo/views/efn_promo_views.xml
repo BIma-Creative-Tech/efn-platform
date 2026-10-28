@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_promo_banner_view_list" model="ir.ui.view">
+        <field name="name">efn.promo.banner.list</field>
+        <field name="model">efn.promo.banner</field>
+        <field name="arch" type="xml">
+            <list string="Banner slider">
+                <field name="sequence" widget="handle"/>
+                <field name="image" widget="image" options="{'size': [96, 54]}"/>
+                <field name="name"/>
+                <field name="title"/>
+                <field name="date_start"/>
+                <field name="date_end"/>
+                <field name="channel_web"/>
+                <field name="channel_app"/>
+                <field name="state_label" widget="badge"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_promo_banner_view_form" model="ir.ui.view">
+        <field name="name">efn.promo.banner.form</field>
+        <field name="model">efn.promo.banner</field>
+        <field name="arch" type="xml">
+            <form string="Banner slider">
+                <sheet>
+                    <widget name="web_ribbon" title="Nonaktif" bg_color="text-bg-danger" invisible="active"/>
+                    <field name="active" invisible="1"/>
+                    <field name="image" widget="image" class="oe_avatar" options="{'size': [320, 180]}"/>
+                    <div class="oe_title"><h1><field name="title" placeholder="Judul promo"/></h1></div>
+                    <group>
+                        <group string="Materi">
+                            <field name="name"/>
+                            <field name="title"/>
+                            <field name="subtitle"/>
+                            <field name="cta_label"/>
+                        </group>
+                        <group string="Tayang">
+                            <field name="date_start"/>
+                            <field name="date_end"/>
+                            <field name="sequence"/>
+                            <field name="channel_web"/>
+                            <field name="channel_app"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                    </group>
+                    <group string="Tautan tombol">
+                        <field name="link_type"/>
+                        <field name="link_brand" invisible="link_type != 'brand'" required="link_type == 'brand'"/>
+                        <field name="link_channel" invisible="link_type != 'product'" required="link_type == 'product'"/>
+                        <field name="link_product_id" invisible="link_type != 'product'" required="link_type == 'product'"/>
+                        <field name="link_url" invisible="link_type != 'url'" required="link_type == 'url'" widget="url"/>
+                    </group>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="efn_promo_banner_view_search" model="ir.ui.view">
+        <field name="name">efn.promo.banner.search</field>
+        <field name="model">efn.promo.banner</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="title"/>
+                <filter name="running" string="Sedang tayang" domain="[('date_start', '&lt;=', context_today().strftime('%Y-%m-%d 23:59:59')), ('date_end', '&gt;', context_today().strftime('%Y-%m-%d 00:00:00'))]"/>
+                <filter name="archived" string="Nonaktif" domain="[('active', '=', False)]"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="efn_promo_banner_action" model="ir.actions.act_window">
+        <field name="name">Banner slider</field>
+        <field name="res_model">efn.promo.banner</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html"><p class="o_view_nocontent_smiling_face">Buat banner slider pertama</p><p>Tampil di Super-App web dan aplikasi untuk semua brand selama periode tayang. Gambar landscape 16:9 (mis. 1600×900) agar tidak terpotong.</p></field>
+    </record>
+    <record id="efn_promo_popup_view_list" model="ir.ui.view">
+        <field name="name">efn.promo.popup.list</field>
+        <field name="model">efn.promo.popup</field>
+        <field name="arch" type="xml">
+            <list string="Pop-up promo">
+                <field name="sequence" widget="handle"/>
+                <field name="image" widget="image" options="{'size': [96, 54]}"/>
+                <field name="name"/>
+                <field name="title"/>
+                <field name="date_start"/>
+                <field name="date_end"/>
+                <field name="channel_web"/>
+                <field name="channel_app"/>
+                <field name="frequency"/>
+                <field name="push_state" optional="show"/>
+                <field name="state_label" widget="badge"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_promo_popup_view_form" model="ir.ui.view">
+        <field name="name">efn.promo.popup.form</field>
+        <field name="model">efn.promo.popup</field>
+        <field name="arch" type="xml">
+            <form string="Pop-up promo">
+                <header>
+                    <button name="action_efn_queue_push" type="object" string="Kirim push" class="btn-primary" invisible="not push_enabled or push_state != 'draft'" confirm="Kirim push promo ini ke semua member yang menyetujui info promo?"/>
+                    <field name="push_state" widget="statusbar" invisible="not push_enabled"/>
+                </header>
+                <sheet>
+                    <widget name="web_ribbon" title="Nonaktif" bg_color="text-bg-danger" invisible="active"/>
+                    <field name="active" invisible="1"/>
+                    <field name="image" widget="image" class="oe_avatar" options="{'size': [320, 180]}"/>
+                    <div class="oe_title"><h1><field name="title" placeholder="Judul promo"/></h1></div>
+                    <group>
+                        <group string="Materi">
+                            <field name="name"/>
+                            <field name="title"/>
+                            <field name="subtitle"/>
+                            <field name="cta_label"/>
+                        </group>
+                        <group string="Tayang">
+                            <field name="date_start"/>
+                            <field name="date_end"/>
+                            <field name="sequence"/>
+                            <field name="channel_web"/>
+                            <field name="channel_app"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                    </group>
+                    <group string="Tautan tombol">
+                        <field name="link_type"/>
+                        <field name="link_brand" invisible="link_type != 'brand'" required="link_type == 'brand'"/>
+                        <field name="link_channel" invisible="link_type != 'product'" required="link_type == 'product'"/>
+                        <field name="link_product_id" invisible="link_type != 'product'" required="link_type == 'product'"/>
+                        <field name="link_url" invisible="link_type != 'url'" required="link_type == 'url'" widget="url"/>
+                    </group>
+                    <group string="Pop-up &amp; push">
+                        <field name="frequency"/>
+                        <field name="push_enabled"/>
+                        <field name="push_title" invisible="not push_enabled" required="push_enabled"/>
+                        <field name="push_body" invisible="not push_enabled" required="push_enabled"/>
+                        <field name="push_state" invisible="not push_enabled"/>
+                        <field name="push_sent_at" invisible="not push_sent_at"/>
+                        <div colspan="2" class="text-muted" invisible="not push_enabled">Push hanya dikirim ke member yang menyetujui info promo (consent pemasaran). Member lain tetap melihat pop-up di aplikasi.</div>
+                    </group>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="efn_promo_popup_view_search" model="ir.ui.view">
+        <field name="name">efn.promo.popup.search</field>
+        <field name="model">efn.promo.popup</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="title"/>
+                <filter name="running" string="Sedang tayang" domain="[('date_start', '&lt;=', context_today().strftime('%Y-%m-%d 23:59:59')), ('date_end', '&gt;', context_today().strftime('%Y-%m-%d 00:00:00'))]"/>
+                <filter name="archived" string="Nonaktif" domain="[('active', '=', False)]"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="efn_promo_popup_action" model="ir.actions.act_window">
+        <field name="name">Pop-up promo</field>
+        <field name="res_model">efn.promo.popup</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html"><p class="o_view_nocontent_smiling_face">Buat pop-up promo pertama</p><p>Tampil di Super-App web dan aplikasi untuk semua brand selama periode tayang. Gambar landscape 16:9 (mis. 1600×900) agar tidak terpotong.</p></field>
+    </record>
+
+    <menuitem id="menu_efn_promo_root" name="Promo Super-App" groups="group_promo_manager,base.group_system" sequence="60"/>
+    <menuitem id="menu_efn_promo_banner" name="Banner slider" parent="menu_efn_promo_root" action="efn_promo_banner_action" sequence="10"/>
+    <menuitem id="menu_efn_promo_popup" name="Pop-up promo" parent="menu_efn_promo_root" action="efn_promo_popup_action" sequence="20"/>
+</odoo>

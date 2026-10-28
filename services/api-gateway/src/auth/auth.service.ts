@@ -7,6 +7,8 @@ import { AppConfig } from '../config/app-config';
 import { ApiError, Errors } from '../common/errors/api-error';
 import { MemberService } from '../common/member/member.service';
 import { maskMsisdn, memberHash, redisKeyHash } from '../common/pii/pii';
+import { PII_AAD, PiiCipher } from '../common/pii/crypto';
+import { isIP } from 'node:net';
 import { RateLimiter } from '../common/rate-limit/rate-limiter';
 import { AccessTokenService, AuthUser } from '../common/security/access-token.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
@@ -17,12 +19,18 @@ import { AuthOtpRequestDto, AuthOtpVerifyDto } from './dto/auth.dto';
 export interface AuthOtpRequestResponse {
   challenge_id: string;
   expires_in: number;
+  /** docs/04 §3.2 v5.2: hanya mode uji dev untuk nomor `DEV_OTP_REVEAL_MEMBERS`; di luar itu field tidak ada. */
+  dev_code?: string;
 }
 
 export interface AuthOtpVerifyResponse {
   access_token: string;
   token_type: 'Bearer';
   expires_in: number;
+  /** G27 §18.3: hanya bila klien mengirim `marketing_consent`. */
+  marketing_consent?: 'recorded' | 'stale_text' | 'unavailable';
+  /** G27 §18.3a: hanya bila klien mengirim `privacy_consent`. */
+  privacy_consent?: 'recorded' | 'stale_text' | 'unavailable';
 }
 
 export interface MeResponse {
@@ -67,6 +75,7 @@ export class AuthService {
     @Optional() @Inject(DB) private readonly db: Db | null = null,
     @Optional() @Inject(ONLINE_POINTS) private readonly points: OnlinePointsPort | null = null,
     @Optional() private readonly expiry: LoyaltyInactivityJob | null = null,
+    @Optional() private readonly cipher: PiiCipher | null = null,
   ) {}
 
   /** Pseudonim IP untuk nama key Redis (SEC-24). */
@@ -134,7 +143,7 @@ export class AuthService {
       throw err;
     }
     const res = await this.otp.issue({ purpose: 'login', memberRef: dto.phone, ip });
-    return { challenge_id: res.challengeId, expires_in: res.expiresIn };
+    return { challenge_id: res.challengeId, expires_in: res.expiresIn, ...(res.devCode ? { dev_code: res.devCode } : {}) };
   }
 
   async verifyOtp(dto: AuthOtpVerifyDto, ip: string | null): Promise<AuthOtpVerifyResponse> {
@@ -146,6 +155,13 @@ export class AuthService {
         'age_confirmation_required',
         `Konfirmasi bahwa Anda berusia minimal ${this.config.memberMinAge} tahun untuk melanjutkan.`,
       );
+    }
+    // G27 §18.3a (UU PDP): persetujuan Kebijakan Privasi wajib — dicek sebelum OTP (challenge tidak hangus).
+    if (this.config.privacyConsentEnforced) {
+      const active = this.config.consentActiveText('privacy');
+      if (!dto.privacyConsent || (active && dto.privacyConsent.version !== active.version)) {
+        throw ApiError.of(400, 'privacy_consent_required', 'Setujui Kebijakan Privasi untuk masuk atau mendaftar.');
+      }
     }
     await this.limiter.enforce(
       `otp:login:verify-ip:${this.ipKey(ip)}`,
@@ -175,7 +191,50 @@ export class AuthService {
     }
     const token = this.tokens.issue(member.id);
     this.logger.log(`Login berhasil untuk ${maskMsisdn(res.memberRef)}`);
-    return { access_token: token.accessToken, token_type: 'Bearer', expires_in: token.expiresIn };
+    const pc = dto.privacyConsent ? await this.recordSignupConsent('privacy', member.id, dto.privacyConsent.version, ip) : undefined;
+    const mc = dto.marketingConsent ? await this.recordSignupConsent('marketing', member.id, dto.marketingConsent.version, ip) : undefined;
+    return {
+      access_token: token.accessToken,
+      token_type: 'Bearer',
+      expires_in: token.expiresIn,
+      ...(mc ? { marketing_consent: mc } : {}),
+      ...(pc ? { privacy_consent: pc } : {}),
+    };
+  }
+
+  /**
+   * G27 §18.3/§18.3a: consent yang dicentang di layar masuk/daftar (pemasaran opsional, privasi wajib). Hanya versi teks
+   * AKTIF dicatat (append-only `platform.consent`, source `signup`, IP terenkripsi). Baris baru hanya bila status
+   * terakhir member untuk purpose itu bukan persetujuan atas versi yang sama (login berulang tidak menumpuk baris).
+   * Login tidak pernah gagal karenanya.
+   */
+  private async recordSignupConsent(
+    purpose: 'marketing' | 'privacy',
+    memberId: string,
+    version: string,
+    ip: string | null,
+  ): Promise<'recorded' | 'stale_text' | 'unavailable'> {
+    const active = this.config.consentActiveText(purpose);
+    if (!active || !this.db) return 'unavailable';
+    if (active.version !== version) return 'stale_text';
+    try {
+      const last = await this.db.query<{ granted: boolean; version: string }>(
+        `SELECT granted, version FROM platform.consent WHERE member_id = $1 AND purpose = $2 ORDER BY created_at DESC, id DESC LIMIT 1`,
+        [memberId, purpose],
+      );
+      const prev = last.rows[0];
+      if (prev && prev.granted === true && prev.version === active.version) return 'recorded';
+      const ipEnc = ip && isIP(ip) ? this.cipher?.encrypt(ip, PII_AAD.CONSENT_IP) ?? null : null;
+      await this.db.query(
+        `INSERT INTO platform.consent (member_id, purpose, granted, version, text_sha256, source, ip_enc)
+         VALUES ($1, $2, true, $3, $4, 'signup', $5)`,
+        [memberId, purpose, active.version, active.textSha256, ipEnc],
+      );
+      return 'recorded';
+    } catch {
+      this.logger.warn(`Pencatatan consent ${purpose} saat daftar gagal (login tetap berhasil)`);
+      return 'unavailable';
+    }
   }
 
   /**

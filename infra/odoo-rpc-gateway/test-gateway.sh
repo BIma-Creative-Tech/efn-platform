@@ -200,7 +200,7 @@ run transfer_body_300k_allowed pass $BFF -X POST -H "$H_CT" -H "$H_AUTH" --data-
 run transfer_body_too_large deny $BFF -X POST -H "$H_CT" -H "$H_AUTH" --data-binary @/t/huge.json \
   "$GW/json/2/efn.online.order/efn_online_transfer_submit"
 
-# ── Positif: 21 path persis LOLOS filter (status dari Odoo, bukan dari gateway) ──────────────────────────
+# ── Positif: 24 path persis LOLOS filter (status dari Odoo, bukan dari gateway) ──────────────────────────
 for p in efn.online.channel/efn_online_catalog efn.online.channel/efn_online_stock efn.online.channel/efn_online_image \
          efn.online.channel/efn_online_quote efn.online.order/efn_online_place efn.online.order/efn_online_mark_paid \
          efn.online.order/efn_online_cancel efn.online.order/efn_online_refund efn.online.order/efn_online_refund_settled \
@@ -209,7 +209,8 @@ for p in efn.online.channel/efn_online_catalog efn.online.channel/efn_online_sto
          efn.pos.qr.order/efn_qr_menu efn.pos.qr.order/efn_qr_submit efn.pos.qr.order/efn_qr_status \
          efn.table.booking/efn_booking_availability efn.table.booking/efn_booking_create \
          efn.table.booking/efn_booking_cancel efn.table.booking/efn_booking_status efn.online.channel/efn_online_slots \
-         efn.online.order/efn_online_transfer_submit; do
+         efn.online.order/efn_online_transfer_submit \
+         efn.promo.banner/efn_promo_feed efn.promo.banner/efn_promo_image efn.promo.popup/efn_promo_push_claim; do
   post "allowed:$p" pass "/json/2/$p"
 done
 # shellcheck disable=SC2086

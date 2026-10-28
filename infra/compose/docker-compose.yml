@@ -97,6 +97,7 @@ volumes:
   prometheus-data:
   grafana-data:
   loki-data:
+  promtail-positions:    # posisi baca promtail (positions.yaml) agar restart tidak membaca ulang semua log
   uptime-kuma-data:
   alertmanager-data:
 
@@ -175,6 +176,8 @@ secrets:
   odoo_booking_event_hmac: { file: ../../secrets/odoo_booking_event_hmac.txt }
   odoo_api_key_booking_pb: { file: ../../secrets/odoo_api_key_booking_pb.txt }
   odoo_api_key_booking_bcf: { file: ../../secrets/odoo_api_key_booking_bcf.txt }
+  # G27 (docs/04 §18.1): user teknis promo per PT (group_promo_bff). Di-mount hanya lewat overlay online-promo-<pt>.
+  odoo_api_key_promo_pb: { file: ../../secrets/odoo_api_key_promo_pb.txt }
   # G21 AC-13 (docs/04 §13.2, ADR-036 §0): kunci PII Odoo (host:disabled [SA], dibuat Superadmin di host). Mount HANYA
   # ke odoo oleh docker-compose.pii.yml (deploy.sh bila EFN_ODOO_PII_ENABLED=true) / docker-compose.dev.yml.
   odoo_pii_key_v1: { file: ../../secrets/odoo_pii_key_v1.txt }
@@ -1110,6 +1113,10 @@ services:
       CONSENT_LOCATION_TEXT_SHA256: ${CONSENT_LOCATION_TEXT_SHA256:-}
       CONSENT_MARKETING_VERSION: ${CONSENT_MARKETING_VERSION:-}
       CONSENT_MARKETING_TEXT_SHA256: ${CONSENT_MARKETING_TEXT_SHA256:-}
+      # G27 §18.3a: persetujuan Kebijakan Privasi saat masuk/daftar (teks DRAFT DPO/Legal = web lib/consent.ts + app).
+      CONSENT_PRIVACY_VERSION: ${CONSENT_PRIVACY_VERSION:-}
+      CONSENT_PRIVACY_TEXT_SHA256: ${CONSENT_PRIVACY_TEXT_SHA256:-}
+      PRIVACY_CONSENT_ENFORCED: ${PRIVACY_CONSENT_ENFORCED:-false}
       # DSAR & retensi (docs/04 §8.4; default usulan, menunggu DPO)
       DSAR_DELETE_GRACE_DAYS: ${DSAR_DELETE_GRACE_DAYS:-7}
       # W-18/W-19 (keputusan pemilik proyek 10 Okt 2026, PDP v7): batas tunda erasure karena pesanan online terbuka
@@ -1246,6 +1253,11 @@ services:
       # W-35 reservasi meja PB/BCF. Kill switch default false (/v1/booking/* 503 booking_unavailable). true butuh API key
       # booking nyata per PT (deploy.sh) -> overlay docker-compose.online-booking-<pt>.yml me-mount key PT itu saja.
       BOOKING_ENABLED: ${BOOKING_ENABLED:-false}
+      # G27 (docs/04 §18.2): promo Super-App dari Odoo efn_promo. Default mati (GET /v1/promo kosong -> hero lama).
+      PROMO_ENABLED: ${PROMO_ENABLED:-false}
+      PROMO_PUSH_ENABLED: ${PROMO_PUSH_ENABLED:-false}
+      PROMO_COMPANIES: ${PROMO_COMPANIES:-}
+      PROMO_SYNC_SECONDS: ${PROMO_SYNC_SECONDS:-120}
       BOOKING_COMPANIES: ${BOOKING_COMPANIES:-PB,BCF}
       BOOKING_MAX_ACTIVE_PER_MEMBER: ${BOOKING_MAX_ACTIVE_PER_MEMBER:-2}
       BOOKING_MEMBER_LINK_DAYS: ${BOOKING_MEMBER_LINK_DAYS:-180}
@@ -1987,6 +1999,7 @@ services:
     secrets: [efn_ca_crt, tls_promtail_crt, tls_promtail_key]
     volumes:
       - ../observability/promtail.yml:/etc/promtail/promtail.yml:ro
+      - promtail-positions:/var/lib/promtail
     networks: [internal, socket-proxy]
     read_only: true
     tmpfs: [/tmp]

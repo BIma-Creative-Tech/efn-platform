@@ -45,6 +45,19 @@ export default async function PrivasiAkunPage() {
         />
       )}
 
+      <section className="card stack" aria-labelledby="persetujuan-privasi">
+        <h2 id="persetujuan-privasi" style={{ margin: 0 }}>
+          Kebijakan Privasi &amp; data akun
+        </h2>
+        <p style={{ margin: 0 }}>
+          {consents.privacy
+            ? `Disetujui (versi ${consents.privacy.version}${consents.privacy.updated_at ? `, ${new Date(consents.privacy.updated_at).toLocaleDateString('id-ID', { dateStyle: 'medium' })}` : ''}).`
+            : 'Belum tercatat. Persetujuan diminta saat Anda masuk berikutnya.'}{' '}
+          Persetujuan ini diperlukan agar akun, pesanan, dan poin bisa berjalan. Untuk menariknya, ajukan penghapusan akun
+          di <Link href="/akun/data-saya">Data Saya</Link>.
+        </p>
+      </section>
+
       <section className="card stack" aria-labelledby="hak-lain">
         <h2 id="hak-lain" style={{ margin: 0 }}>
           Hak lainnya

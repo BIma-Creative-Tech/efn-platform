@@ -81,7 +81,9 @@ describe('re-encrypt PII (U2)', () => {
       'consent.ip_enc',
       'online_order_part.pickup_code_enc',
       'online_order_part.counter_code_enc',
+      'push_token.token_enc',
     ]);
+    expect(PII_AAD.PUSH_TOKEN).toBe('efn:push_token.token_enc:v1');
     expect(PII_AAD.ONLINE_COUNTER_CODE).toBe('efn:online_order_part.counter_code_enc:v1');
     expect(findPiiColumns('online_order_part.counter_code_enc')[0].rowAad!('AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA')).toBe(
       'efn:online_order_part.counter_code_enc:v2:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',

@@ -71,6 +71,11 @@ function setup(overrides: Record<string, string> = {}, handler: QueryHandler = (
 }
 
 describe('ConsentService (§8.4/§8.7/§8.9)', () => {
+  it('G27 §18.3a: persetujuan privasi tidak ditarik lewat toggle (→ penghapusan akun)', async () => {
+    const ctx = setup();
+    await expect(ctx.consents.set(MEMBER_ID, 'privacy', { granted: false, version: 'privacy@2026-10-27' }, null)).rejects.toMatchObject({ status: 409 });
+    expect(ctx.db.find('INSERT INTO platform.consent')).toHaveLength(0);
+  });
   it('grant versi aktif → INSERT append-only dengan text_sha256 & ip_enc terenkripsi', async () => {
     const ctx = setup();
     const res = await ctx.consents.set(MEMBER_ID, 'location', { granted: true, version: 'v2' }, '203.0.113.7');
@@ -101,6 +106,7 @@ describe('ConsentService (§8.4/§8.7/§8.9)', () => {
     expect(await ctx.consents.list(MEMBER_ID)).toEqual([
       { purpose: 'location', granted: true, version: 'v2', updated_at: '1970-01-01T00:00:00.000Z' },
       { purpose: 'marketing', granted: false, version: null, updated_at: null },
+      { purpose: 'privacy', granted: false, version: null, updated_at: null },
     ]);
     expect(parseSetConsent({ granted: true, version: 'v2' })).toEqual({ granted: true, version: 'v2' });
     expect((await catchApiError(() => parseSetConsent({ granted: 'ya', version: 'v2' }))).getStatus()).toBe(400);

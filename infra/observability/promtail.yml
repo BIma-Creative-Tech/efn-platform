@@ -6,7 +6,10 @@ server:
   grpc_listen_port: 0
 
 positions:
-  filename: /tmp/positions.yaml
+  # Volume promtail-positions (docker-compose.yml), bukan tmpfs /tmp: posisi baca bertahan saat container/Docker
+  # restart. Di /tmp posisi hilang tiap restart -> semua log container dibaca ulang dari awal (dev: ~1,4 juta baris,
+  # CPU promtail 250-300% selama ~10 menit) dan Loki tetap menolak entri lama ("entry too far behind").
+  filename: /var/lib/promtail/positions.yaml
 
 # Push log ke Loki lewat HTTPS terverifikasi + sertifikat klien promtail (mTLS, docs/04 §8.5)
 clients:

@@ -11,6 +11,8 @@ import { BRAND_PANEL_COPY, brandShopHref, brandSiteUrl, groupChannelsByBrand, HE
 import { brandHasTableService } from '@/lib/booking';
 import { BrandLanding, type ChapterData } from '@/components/landing/Landing';
 import { SuperAppLanding } from '@/components/landing/SuperAppLanding';
+import { HeroSlider } from '@/components/landing/HeroSlider';
+import { brandChannelMap } from '@/lib/promo';
 import type { BrandPanelProps } from '@/components/landing/BrandPanel';
 import type { HeroItem } from '@/components/landing/Hero3D';
 import type { ShelfTab } from '@/components/landing/Shelf';
@@ -39,6 +41,8 @@ export default async function HomePage() {
 
   return (
     <div className="stack">
+      {/* G27 §18.4: hero lama = slide 1; banner promo Odoo menyusul (tanpa promo = hero saja). */}
+      <HeroSlider brandChannels={brandChannelMap(channels.ok ? channels.data : [])} minHeight="22rem">
       <section className="hero" aria-labelledby="hero-judul">
         <p className="hero-eyebrow">{brand.hero.eyebrow}</p>
         <h1 id="hero-judul">{brand.hero.title}</h1>
@@ -52,6 +56,7 @@ export default async function HomePage() {
           </Link>
         </p>
       </section>
+      </HeroSlider>
 
       <section className="stack" aria-labelledby="mode-pesan">
         <h2 id="mode-pesan" style={{ margin: 0 }}>
@@ -243,6 +248,8 @@ async function LandingHome({ brand, landing }: { brand: Brand; landing: LandingC
   const pool = [...chapters.flatMap((c) => c.photos), ...(products?.ok ? products.data.items : [])].filter((p) => !fronts.has(p.product_id));
   const heroPhotos = pickPhotos(pool, landing.heroFeatured, 3);
   return (
+    // G27 §18.4: hero lama (scroll-story) tetap slide utama; banner promo Odoo menutupi layar pertama saat dipilih.
+    <HeroSlider variant="overlay" brandChannels={brandChannelMap(channels.ok ? channels.data : [])}>
     <BrandLanding
       brand={brand}
       landing={landing}
@@ -256,5 +263,6 @@ async function LandingHome({ brand, landing }: { brand: Brand; landing: LandingC
       cateringProducts={catering?.ok ? catering.data.items : []}
       preorder={Boolean(channel?.outlets.some((o) => o.slot_enabled === true))}
     />
+    </HeroSlider>
   );
 }

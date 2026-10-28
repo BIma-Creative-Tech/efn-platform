@@ -59,7 +59,14 @@ export default async function PrivasiPage() {
         <li>Autentikasi dan keamanan akun; pesan layanan (OTP, status laporan, poin) — pelaksanaan perjanjian.</li>
         <li>Pemberian dan penukaran poin loyalitas — pelaksanaan perjanjian.</li>
         <li>Validasi laporan harga dan analisis harga pasar (agregat, tanpa identitas Anda).</li>
-        <li>Lokasi perkiraan dan info promo via WhatsApp — hanya dengan persetujuan Anda, terpisah per tujuan.</li>
+        <li>
+          Lokasi perkiraan dan info promo via WhatsApp &amp; notifikasi aplikasi — hanya dengan persetujuan Anda, terpisah
+          per tujuan.
+        </li>
+        <li>
+          Saat masuk/daftar Anda menyetujui Kebijakan Privasi ini secara terpisah (wajib); versi teks dan waktunya kami
+          catat sebagai bukti. Untuk menariknya, ajukan penghapusan akun di <Link href="/akun/data-saya">Data Saya</Link>.
+        </li>
         <li>Pencegahan kecurangan dan pemenuhan kewajiban hukum (mis. perpajakan).</li>
       </ul>
 

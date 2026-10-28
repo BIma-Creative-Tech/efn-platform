@@ -18,6 +18,7 @@ ADR/keputusan: D-11 (WhatsApp Cloud API resmi, **Baileys dilarang**), ADR OTP-of
 - `CloudApiWhatsAppSender`: `POST {WHATSAPP_GRAPH_BASE_URL}/{WHATSAPP_API_VERSION}/{WHATSAPP_PHONE_NUMBER_ID}/messages`, template `WHATSAPP_OTP_TEMPLATE` (default `efn_otp`, kategori AUTHENTICATION) dengan body param + tombol copy-code (`WHATSAPP_OTP_COPY_CODE_BUTTON`). Timeout `WHATSAPP_TIMEOUT_MS` (4 s, di bawah `efn.pos.otp_timeout_seconds` Odoo = 5 s).
 - `ConsoleWhatsAppSender` saat `WHATSAPP_ENABLED=false`: kode OTP dicetak **hanya** bila `NODE_ENV=development`; di lingkungan lain tidak pernah di-log.
 - Error tidak memuat token, kode, atau nomor utuh.
+- Mode uji dev (docs/04 §3.2 v5.2): `DEV_OTP_REVEAL_MEMBERS` (allowlist nomor) → kode login ikut di respons sebagai `dev_code`, hanya bila `APP_ENV=dev` + `NODE_ENV=development` + `WHATSAPP_ENABLED=false`; diisi di luar itu = gagal start.
 
 ## Risiko
 R-S04 (brute force/enumerasi), R-B02 (biaya WA — rate limit membatasi), R-L01.

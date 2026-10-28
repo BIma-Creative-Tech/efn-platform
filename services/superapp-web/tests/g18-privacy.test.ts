@@ -80,18 +80,18 @@ describe('POST /api/auth/otp/verify — age_confirmed', () => {
 
   it('dicentang -> diteruskan ke BFF sebagai age_confirmed: true; sukses set cookie sesi', async () => {
     bffFetch.mockResolvedValue({ ok: true, status: 200, data: { access_token: 'jwt', token_type: 'Bearer', expires_in: 3600 } });
-    const res = await verify(verifyReq({ challenge_id: CHALLENGE, code: '123456', age_confirmed: true }));
+    const res = await verify(verifyReq({ challenge_id: CHALLENGE, code: '123456', age_confirmed: true, privacy_consent: true }));
     expect(res.status).toBe(200);
     expect(await res.text()).not.toContain('jwt');
     const [path, opts] = bffFetch.mock.calls[0]!;
     expect(path).toBe('/v1/auth/otp/verify');
-    expect(opts.json).toEqual({ challenge_id: CHALLENGE, code: '123456', age_confirmed: true });
+    expect(opts.json).toEqual({ challenge_id: CHALLENGE, code: '123456', age_confirmed: true, privacy_consent: { granted: true, version: 'privacy@2026-10-27' } });
     expect(cookieNamed(res, 'efn_session')).toMatch(/HttpOnly/i);
   });
 
   it('BFF 400 age_confirmation_required -> pesan Indonesia (bukan "kode tidak cocok")', async () => {
     bffFetch.mockResolvedValue({ ok: false, status: 400, code: 'age_confirmation_required', message: 'x', body: null });
-    const res = await verify(verifyReq({ challenge_id: CHALLENGE, code: '123456', age_confirmed: true }));
+    const res = await verify(verifyReq({ challenge_id: CHALLENGE, code: '123456', age_confirmed: true, privacy_consent: true }));
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error.code).toBe('age_confirmation_required');
@@ -100,8 +100,24 @@ describe('POST /api/auth/otp/verify — age_confirmed', () => {
 
   it('OTP salah tetap dipetakan seperti sebelumnya', async () => {
     bffFetch.mockResolvedValue({ ok: false, status: 400, code: 'http_400', message: 'x', body: { ok: false, reason: 'invalid', attempts_left: 2 } });
-    const res = await verify(verifyReq({ challenge_id: CHALLENGE, code: '123456', age_confirmed: true }));
+    const res = await verify(verifyReq({ challenge_id: CHALLENGE, code: '123456', age_confirmed: true, privacy_consent: true }));
     expect(await res.json()).toEqual({ ok: false, reason: 'invalid', attempts_left: 2 });
+  });
+});
+
+describe('POST /api/auth/otp/verify — G27 §18.3a privacy_consent', () => {
+  it('tidak dicentang -> 400 privacy_consent_required TANPA memanggil BFF', async () => {
+    for (const pc of [undefined, false, 'true']) {
+      const res = await verify(verifyReq({ challenge_id: CHALLENGE, code: '123456', age_confirmed: true, privacy_consent: pc }));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.code).toBe('privacy_consent_required');
+    }
+    expect(bffFetch).not.toHaveBeenCalled();
+  });
+  it('promo opsional ikut diteruskan hanya bila dicentang', async () => {
+    bffFetch.mockResolvedValue({ ok: true, status: 200, data: { access_token: 'jwt', token_type: 'Bearer', expires_in: 3600 } });
+    await verify(verifyReq({ challenge_id: CHALLENGE, code: '123456', age_confirmed: true, privacy_consent: true, marketing_consent: true }));
+    expect(bffFetch.mock.calls[0]![1].json.marketing_consent).toEqual({ granted: true, version: 'marketing@2026-10-27' });
   });
 });
 

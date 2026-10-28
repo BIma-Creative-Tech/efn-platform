@@ -114,6 +114,9 @@ services:
       TSC_WATCHFILE: DynamicPriorityPolling
       TSC_WATCHDIRECTORY: RecursiveDirectoryUsingDynamicPriorityPolling
       WHATSAPP_ENABLED: "false"
+      # docs/04 §3.2 v5.2: mode uji OTP (APK uji tanpa WhatsApp) - kode login dikembalikan di respons untuk nomor ini
+      # saja (62xxx, dipisah koma, maks 10). Kosong = mati. BFF menolak start bila diisi di luar APP_ENV=dev.
+      DEV_OTP_REVEAL_MEMBERS: ${DEV_OTP_REVEAL_MEMBERS:-}
       PAYMENT_PROVIDER: mock
       # G17: penjualan online AKTIF di dev terhadap E-28 nyata lewat odoo-rpc-gateway (ODOO_ONLINE_MOCK sengaja tidak
       # diset). Butuh secrets/odoo_api_key_online_gl.txt (kanal default GL, G20) berisi key nyata
@@ -134,8 +137,17 @@ services:
       # Dijaga test superapp-web tests/consent.test.ts — ubah teks = ubah keduanya (G6 QA).
       CONSENT_LOCATION_VERSION: location@2026-10-06
       CONSENT_LOCATION_TEXT_SHA256: 938707dc56c73323db27d0360d69386bf95e290ce0b0a465741de78ca19c96e5
-      CONSENT_MARKETING_VERSION: marketing@2026-10-06
-      CONSENT_MARKETING_TEXT_SHA256: 5a04537c9eacd169d6b899e6da058e8c17da358119ff09d65cd6b8c4309d76ec
+      # G27 §18.3: teks marketing diperluas ke notifikasi aplikasi (DRAFT DPO/Legal) - sama persis dengan web lib/consent.ts + app.
+      CONSENT_MARKETING_VERSION: marketing@2026-10-27
+      CONSENT_MARKETING_TEXT_SHA256: cbf5fd4dddcb361e1512b7b10ae7e0a80799c587db3d9dab951810e65afc750e
+      # G27 §18.3a: persetujuan Kebijakan Privasi (DRAFT DPO/Legal). Dipaksa setelah APK baru terpasang (.env).
+      CONSENT_PRIVACY_VERSION: privacy@2026-10-27
+      CONSENT_PRIVACY_TEXT_SHA256: b66c21588d1d7ecd2c9edcde1bc813c4e138f00708f8b3c6004226f80a1593e2
+      PRIVACY_CONSENT_ENFORCED: ${PRIVACY_CONSENT_ENFORCED:-false}
+      # G27 §18.2: promo Super-App (banner slider + pop-up dari Odoo efn_promo). Default mati; nyalakan di .env.
+      PROMO_ENABLED: ${PROMO_ENABLED:-false}
+      PROMO_PUSH_ENABLED: ${PROMO_PUSH_ENABLED:-false}
+      PROMO_COMPANIES: ${PROMO_COMPANIES:-}
     volumes:
       - ../../services/api-gateway/src:/app/src:ro
     read_only: false

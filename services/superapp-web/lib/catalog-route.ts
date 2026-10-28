@@ -69,7 +69,12 @@ export async function proxyCatalog<T>(
  * Stream gambar katalog dari BFF. `bffFetch` membaca JSON, jadi gambar memakai fetch langsung dengan aturan transport
  * yang sama (base URL tervalidasi https + CA internal dari lib/bff.ts, timeout, tanpa redirect).
  */
-export async function proxyCatalogImage(sha: string, size: number, incoming: Headers): Promise<Response> {
+export function proxyCatalogImage(sha: string, size: number, incoming: Headers): Promise<Response> {
+  return proxyBffImage(`/v1/catalog/images/${sha}?size=${size}`, incoming);
+}
+
+/** Stream gambar JPEG BFF (katalog / promo G27) dengan aturan yang sama. `path` = konstanta tervalidasi pemanggil. */
+export async function proxyBffImage(path: string, incoming: Headers): Promise<Response> {
   let base: string;
   try {
     base = bffBaseUrl();
@@ -85,7 +90,7 @@ export async function proxyCatalogImage(sha: string, size: number, incoming: Hea
 
   let res: Response;
   try {
-    res = await fetch(`${base}/v1/catalog/images/${sha}?size=${size}`, {
+    res = await fetch(`${base}${path}`, {
       headers,
       cache: 'no-store',
       redirect: 'manual',

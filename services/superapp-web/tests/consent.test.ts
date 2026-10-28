@@ -97,10 +97,28 @@ describe('versi & hash teks consent = env BFF (dev compose)', () => {
   const sha = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex');
   it.each([
     ['location', 'location@2026-10-06', '938707dc56c73323db27d0360d69386bf95e290ce0b0a465741de78ca19c96e5'],
-    ['marketing', 'marketing@2026-10-06', '5a04537c9eacd169d6b899e6da058e8c17da358119ff09d65cd6b8c4309d76ec'],
+    ['marketing', 'marketing@2026-10-27', 'cbf5fd4dddcb361e1512b7b10ae7e0a80799c587db3d9dab951810e65afc750e'],
   ] as const)('%s', (purpose, version, hash) => {
     expect(CONSENT_TEXTS[purpose].version).toBe(version);
     expect(CONSENT_TEXTS[purpose].version).toMatch(/^[A-Za-z0-9._@-]{1,32}$/); // regex BFF privacy.dto.ts
     expect(sha(CONSENT_TEXTS[purpose].body)).toBe(hash);
+  });
+});
+describe('G27 §18.3a: persetujuan Kebijakan Privasi', () => {
+  it('teks & versi = env BFF (sha256) dan app', async () => {
+    const { createHash } = await import('node:crypto');
+    const { PRIVACY_CONSENT } = await import('@/lib/consent');
+    expect(PRIVACY_CONSENT.version).toBe('privacy@2026-10-27');
+    expect(createHash('sha256').update(PRIVACY_CONSENT.body, 'utf8').digest('hex')).toBe('b66c21588d1d7ecd2c9edcde1bc813c4e138f00708f8b3c6004226f80a1593e2');
+  });
+  it('parsePrivacyRecord: hanya granted true; purpose privacy tidak masuk toggle', async () => {
+    const { parsePrivacyRecord, parseConsents: pc } = await import('@/lib/consent');
+    const data = [
+      { purpose: 'privacy', granted: true, version: 'privacy@2026-10-27', updated_at: '2026-10-27T00:00:00.000Z' },
+      { purpose: 'marketing', granted: false, version: null },
+    ];
+    expect(parsePrivacyRecord(data)).toEqual({ version: 'privacy@2026-10-27', updated_at: '2026-10-27T00:00:00.000Z' });
+    expect(parsePrivacyRecord([{ purpose: 'privacy', granted: false, version: 'x' }])).toBeNull();
+    expect(Object.keys(pc(data))).toEqual(['location', 'marketing']);
   });
 });

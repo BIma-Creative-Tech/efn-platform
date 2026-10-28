@@ -59,6 +59,7 @@ Aturan OTP: 6 digit `crypto.randomInt`, disimpan sebagai HMAC-SHA256(`otp_pepper
 `POST /v1/auth/otp/verify` `{ "challenge_id": "<uuid>", "code": "123456" }` → `200 { "access_token": "<jwt>", "token_type": "Bearer", "expires_in": 3600 }` | `400` seperti 3.1.
 **(v5.1, L-21b — G18, Q-P3)** Body wajib menyertakan `"age_confirmed": true` (pernyataan usia minimal 17 tahun; diminta setiap login karena login = daftar). Tidak ada/`false` → `400 { error: { code: "age_confirmation_required" } }` dicek **sebelum** OTP (challenge tidak hangus); non-boolean → `400 invalid_request`. BFF mengisi `member.age_confirmed_at` (tanpa tanggal lahir). `MEMBER_MIN_AGE` (17..21) hanya untuk teks. Teks pelanggan menunggu persetujuan Legal.
 `GET /v1/me` (Bearer) → `{ "member_ref_masked": "62812****890", "points_balance": 1200 }`
+**(v5.2 — mode uji OTP dev, 26 Okt 2026)** Selama WhatsApp Cloud API belum aktif, APK uji tidak bisa menerima OTP. Bila `APP_ENV=dev` + `NODE_ENV=development` + `WHATSAPP_ENABLED=false` dan nomor ada di `DEV_OTP_REVEAL_MEMBERS` (allowlist 62xxx, maks 10), respons request menjadi `202 { "challenge_id", "expires_in", "dev_code": "123456" }`. Nomor lain / environment lain: field `dev_code` **tidak ada** (bentuk respons identik dengan sebelumnya). Allowlist terisi di luar kondisi itu = BFF gagal start. Klien menampilkan kode itu dengan label "mode uji"; rate limit, ALTCHA, TTL, dan batas percobaan tetap berlaku.
 
 ### 3.3 Price Hunter (Market Scout)
 
@@ -1886,3 +1887,94 @@ alur bagian seperti `counter` (L-52/L-56 tanpa kode bayar); `transfer_rejected` 
 - **Q-PAY4** Masa simpan foto bukti transfer di Odoo (Legal/DPO + Finance).
 - **Q-PAY5** Rekening bank tujuan per PT, jam kerja Verifikator, dan target waktu verifikasi.
 - **Q-PAY6** Bank penerbit EDC per outlet beserta dokumen integrasi ECR (untuk kiosk/POS).
+
+## 18. Gelombang 27 — promo: banner slider, pop-up, push promo (v12.0, 27 Okt 2026)
+
+Permintaan pemilik proyek 27 Okt 2026 (review APK): (1) hero web & app menjadi slider bahan promo, **hero lama tetap
+slide utama**; (2) pop-up promo di dalam app/web **dan** push notification; (3) keduanya dikelola di **Odoo**; promo
+**untuk semua brand** (bukan per brand). Consent pemasaran diminta **saat member mendaftar** (UU PDP).
+
+### 18.1 Odoo — modul `efn_promo` (baru, depends `efn_core`, `mail`)
+- `efn.promo.banner`: `name`, `title` (≤ 80), `subtitle` (≤ 160), `image` (Image, max 1920 px, wajib), `cta_label`
+  (≤ 24), `link_type` (`none|brand|product|url`), `link_brand` (kode brand `^[A-Z][A-Z0-9]{1,9}$`), `link_product_id`
+  (product.template, opsional), `link_url` (https saja), `channel_web`, `channel_app` (bool), `date_start`, `date_end`
+  (datetime, wajib, end > start), `sequence`, `active`, `company_id` (record rule multi-company).
+- `efn.promo.popup`: field banner + `frequency` (`once|daily|every_open`), `push_enabled` (bool), `push_title` (≤ 48),
+  `push_body` (≤ 120), `push_state` (`draft|queued|sent`, readonly), `push_sent_at`.
+- Grup: `group_promo_manager` (Pengelola Promo: CRUD + tombol "Kirim push") dan `group_promo_bff` (user teknis BFF:
+  tanpa ACL dokumen). Record rule `company_id in company_ids`. Semua perubahan teraudit `efn_audit` bila terpasang.
+- Satu promo = milik satu PT (company), ditampilkan untuk **semua brand** (keputusan 27 Okt). Tidak ada harga/diskon di
+  banner: diskon nyata tetap lewat `sale_loyalty` (§11), banner hanya materi visual + tautan.
+- RPC (lewat `odoo-rpc-gateway`, path baru):
+  - #22 `efn.promo.banner/efn_promo_feed(since)` → `{ banners:[...], popups:[...], server_time }`: hanya `active`,
+    `date_end > now`, maks 20 + 10; field whitelist di atas + `image_sha` (sha256 gambar), `write_date`.
+  - #23 `efn.promo.banner/efn_promo_image(kind, record_id)` → `{ sha, mimetype, data_b64 }` (pola `efn_online_image`).
+  - #24 `efn.promo.popup/efn_promo_push_claim(limit)` → popup `push_state=queued` diubah atomik ke `sent` dan
+    dikembalikan `{ id, push_title, push_body, link }`; BFF mengirim push. Tidak ada data member di Odoo.
+  - Pemanggil: user teknis `group_promo_bff`, tepat satu company, API key `odoo_api_key_promo` (kanal online pertama,
+    pola W-11; di dev boleh memakai key kanal GL).
+
+### 18.2 BFF — konteks `promo`
+- Job pull `PROMO_SYNC_SECONDS` (default 120): feed → `platform.promo_item` (kind, odoo_id, company_code, payload jsonb,
+  image_sha, date_start, date_end) + gambar re-encode sharp (§10.8.2, 1600 px banner / 1024 px pop-up, JPEG q85,
+  metadata dibuang) ke bucket `catalog` key `promo/<sha>/<w>.jpg`.
+- `GET /v1/promo?surface=web|app` (publik, `Cache-Control: public, max-age=60`, rate limit kelas CATALOG) →
+  `{ banners:[{ id, title, subtitle, cta_label, link, image_sha }], popups:[{ id, title, subtitle, cta_label, link,
+  image_sha, frequency }], server_time }`; hanya item dalam periode tayang. `link` = `{ type: "brand", brand }`
+  | `{ type: "product", channel, product_id }` | `{ type: "url", url }` | null.
+- `GET /v1/promo/images/:sha?w=1600|1024` (immutable cache) — hanya sha yang dirujuk item aktif.
+- Push: `POST /v1/me/push-token` `{ token, platform: "android"|"ios" }` (Bearer) simpan token Expo terenkripsi
+  (`platform.push_token`, AAD `efn:push_token.token_enc:v1`); `DELETE /v1/me/push-token`. Job push mengambil popup
+  `queued` (#24) dan mengirim ke **member dengan consent `marketing` aktif saja** lewat Expo Push API
+  (`https://exp.host/--/api/v2/push/send`, egress allowlist). Tanpa consent = tidak dikirim; pop-up in-app tetap tampil.
+- Kill switch: `PROMO_ENABLED` (default false; mati → `GET /v1/promo` 200 `{banners:[],popups:[]}` agar klien tetap
+  menampilkan hero lama), `PROMO_PUSH_ENABLED` (default false).
+- Migrasi `15-platform-g27.sql`: `promo_item`, `promo_sync`, `push_token`.
+
+### 18.3 Consent pemasaran saat daftar
+- Layar masuk/daftar (web & app) menampilkan centang **opsional, tidak tercentang default**: teks consent `marketing`
+  versi aktif (§8.4; teks diperluas ke "WhatsApp dan notifikasi aplikasi", versi baru `marketing@2026-10-27`).
+- `POST /v1/auth/otp/verify` menerima `marketing_consent?: { granted: true, version }` (opsional; tanpa field =
+  perilaku lama, respons identik). Bila ada & versi aktif → baris `platform.consent` (source `signup`) dalam transaksi
+  yang sama dengan login. Versi basi → login tetap sukses, consent tidak dicatat (`marketing_consent: "stale_text"` di
+  respons). Member bisa menarik kapan saja di Akun (§8.4 yang sudah ada).
+
+- **Teks aktif (DRAFT, menunggu DPO/Legal), sama persis di web `lib/consent.ts` dan app:** versi `marketing@2026-10-27`,
+  body = `Saya bersedia menerima informasi promo dan penawaran dari brand EFN lewat WhatsApp ke nomor akun saya dan lewat notifikasi aplikasi. Saya dapat berhenti kapan saja dari halaman Akun.`
+  SHA-256 UTF-8 body = `cbf5fd4dddcb361e1512b7b10ae7e0a80799c587db3d9dab951810e65afc750e` (env dev `CONSENT_MARKETING_*`).
+### 18.3a Persetujuan Kebijakan Privasi saat masuk/daftar (UU PDP, 27 Okt 2026)
+- Layar masuk (web & app) punya **tiga centang terpisah**: usia ≥ 17 (wajib, W-19), **Kebijakan Privasi + pemrosesan
+  data akun (wajib, baru)**, info promo (opsional, §18.3). Tautan ke Kebijakan Privasi (web `/privasi`, app `/privasi`).
+- Purpose consent baru `privacy` (migrasi `16-platform-g27b.sql`: CHECK purpose + `privacy`). Teks DRAFT DPO/Legal,
+  versi `privacy@2026-10-27`, body = `Saya telah membaca dan menyetujui Kebijakan Privasi EFN, termasuk pemrosesan data pribadi saya (nomor HP, pesanan, poin, dan data teknis perangkat) untuk akun, pesanan, dan program poin di semua brand EFN.`
+  SHA-256 = `b66c21588d1d7ecd2c9edcde1bc813c4e138f00708f8b3c6004226f80a1593e2` (env `CONSENT_PRIVACY_*`).
+- `POST /v1/auth/otp/verify` menerima `privacy_consent?: { granted: true, version }` → baris `consent` source `signup`
+  (hanya bila status terakhir bukan persetujuan versi yang sama — login berulang tidak menumpuk baris); respons
+  `privacy_consent: recorded|stale_text|unavailable` hanya bila field dikirim.
+- `PRIVACY_CONSENT_ENFORCED` (default false agar APK lama tetap bisa masuk): true → tanpa `privacy_consent` versi aktif
+  = `400 privacy_consent_required` sebelum OTP diperiksa (challenge tidak hangus). Web route handler selalu mewajibkan.
+- `GET /v1/me/consents` memuat `privacy`. `PUT /v1/me/consents/privacy` `granted:false` → `409
+  privacy_withdraw_via_deletion`: penarikan = penghapusan akun (DSAR §8.9), karena akun tidak berjalan tanpa data.
+
+### 18.4 Klien
+- **Slider hero**: slide 1 = hero lama (tidak berubah), slide berikut = banner `surface` itu (urut `sequence`). Geser
+  otomatis 6 s, berhenti saat disentuh/hover dan bila "kurangi gerakan" aktif; indikator titik; gambar `contain` tanpa
+  dipotong teks. Tanpa banner (atau `PROMO_ENABLED=false`) = hero lama saja.
+- **Pop-up**: satu pop-up (urutan teratas) per pembukaan app / muat halaman beranda, hormati `frequency` (simpan id +
+  tanggal di penyimpanan lokal), bisa ditutup, tombol CTA mengikuti `link`.
+- **Push (app)**: token didaftarkan hanya setelah izin OS **dan** consent marketing aktif; ketuk notifikasi → `link`.
+
+- **Web landing scroll-story (PB, GL, Bacha, WTZ)**: hero lama TIDAK dibungkus wadah geser (panggung sticky + foto
+  bergerak saat scroll tetap utuh); banner menutupi layar pertama saat dipilih (`HeroSlider variant="overlay"`) dan
+  slider kembali ke hero lama begitu halaman digulir. Beranda `app.` & brand tanpa landing: geser horizontal biasa.
+
+### 18.5 Belum / risiko
+- **Diverifikasi dev 27 Okt 2026**: Odoo `efn_promo` 3 banner + 1 pop-up (PT PB, tautan ke PB/GL/BCR) → BFF lewat
+  gateway mTLS (`promo_sync.last_ok_at`, gambar re-encode JPEG 1600×900) → `GET /v1/promo` lewat tunnel & web
+  `/api/promo`; login dengan `marketing_consent` → `consent` source `signup`; token push tersimpan terenkripsi;
+  push antre di Odoo → `queued→sent` → 1/1 perangkat ber-consent (console sender); consent dicabut → 0 penerima.
+- Pengelolaan dev: user teknis `efn_promo_pb` (grup *Layanan promo* saja), secret `odoo_api_key_promo_pb`, overlay
+  `docker-compose.online-promo-pb.yml`, `.env` `PROMO_ENABLED=true PROMO_COMPANIES=PB`. Wiring rilis
+  (deploy-validate/rotate-key/check-encryption/runbook) **belum** — wajib sebelum produksi (pola G23 booking).
+- Teks consent baru & kategori template = **DRAFT menunggu DPO/Legal**. Expo Push butuh `projectId` EAS + kredensial
+  FCM di build (APK uji: belum ada → push dev diuji ke log console; pengiriman nyata setelah FCM dikonfigurasi).

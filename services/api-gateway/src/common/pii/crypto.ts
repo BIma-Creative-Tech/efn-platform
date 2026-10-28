@@ -52,6 +52,8 @@ export const PII_AAD = {
   ONLINE_COUNTER_CODE: piiAad('online_order_part', 'counter_code_enc'),
   /** SEC-24: nomor HP di challenge OTP login (Redis hash `otp:<id>` field `m`) — bukan kolom DB, tidak di-re-encrypt. */
   REDIS_OTP_MEMBER: piiAad('redis_otp', 'm'),
+  /** G27 §18.2: token push Expo (pengenal perangkat = data pribadi). */
+  PUSH_TOKEN: piiAad('push_token', 'token_enc'),
 } as const;
 
 export class PiiCipher {

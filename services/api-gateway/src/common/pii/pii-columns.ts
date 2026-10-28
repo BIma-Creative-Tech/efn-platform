@@ -40,6 +40,8 @@ export const PII_COLUMNS: readonly PiiColumn[] = [
     aad: PII_AAD.ONLINE_COUNTER_CODE,
     rowAad: (pk) => `efn:online_order_part.counter_code_enc:v2:${pk.toLowerCase()}`,
   },
+  // G27 §18.2: token push Expo (pengenal perangkat = data pribadi)
+  { table: 'push_token', column: 'token_enc', pk: 'id', aad: PII_AAD.PUSH_TOKEN },
 ];
 
 const IDENT_RE = /^[a-z_][a-z0-9_]*$/;
