@@ -367,24 +367,24 @@ efn_validate_config() { # app_env
   # ONLINE_PAYMENT_METHODS (L-55 -> G26 L-95/L-103): daftar qris,bank_transfer tanpa duplikat. `counter` (bayar di kasir)
   # dibekukan untuk pesanan online: hanya dev/test dengan ONLINE_COUNTER_LEGACY=true (BFF juga menolak start).
   local pay_methods="${ONLINE_PAYMENT_METHODS:-qris,bank_transfer}"
-  local pm seen=","
+  local pm pm_seen=","
   IFS=',' read -r -a _efn_pms <<< "$pay_methods"
   if [[ -z "$pay_methods" || "$pay_methods" == *,, || "$pay_methods" == ,* || "$pay_methods" == *, ]]; then
     _efn_err "ONLINE_PAYMENT_METHODS harus daftar qris|bank_transfer dipisah koma (bukan ${pay_methods})"; return 1
   fi
   for pm in "${_efn_pms[@]}"; do
-    if [[ ! "$pm" =~ ^(qris|bank_transfer|counter)$ || "$seen" == *",$pm,"* ]]; then
+    if [[ ! "$pm" =~ ^(qris|bank_transfer|counter)$ || "$pm_seen" == *",$pm,"* ]]; then
       _efn_err "ONLINE_PAYMENT_METHODS harus daftar qris|bank_transfer tanpa duplikat (bukan ${pay_methods})"; return 1
     fi
-    seen+="$pm,"
+    pm_seen+="$pm,"
   done
-  if [[ "$seen" == *",counter,"* && ( "${ONLINE_COUNTER_LEGACY:-false}" != true || "$app_env" =~ ^(staging|production)$ ) ]]; then
+  if [[ "$pm_seen" == *",counter,"* && ( "${ONLINE_COUNTER_LEGACY:-false}" != true || "$app_env" =~ ^(staging|production)$ ) ]]; then
     _efn_err "ONLINE_PAYMENT_METHODS memuat counter: bayar di kasir dibekukan untuk pesanan online (L-95)"; return 1
   fi
   # Online di production: qris butuh payment provider nyata (mock ditolak di atas). Pilot tanpa vendor (L-103)
   # boleh HANYA bila daftar tanpa qris (mis. bank_transfer) dan PAYMENT_PROVIDER=disabled.
   if [[ "$app_env" == production && "${ONLINE_ENABLED:-false}" == true && ! "${PAYMENT_PROVIDER}" =~ ^(xendit|midtrans)$ ]]; then
-    if [[ "$seen" == *",qris,"* || "${PAYMENT_PROVIDER}" != disabled ]]; then
+    if [[ "$pm_seen" == *",qris,"* || "${PAYMENT_PROVIDER}" != disabled ]]; then
       _efn_err "production ONLINE_ENABLED=true butuh PAYMENT_PROVIDER xendit|midtrans, atau ONLINE_PAYMENT_METHODS=bank_transfer + PAYMENT_PROVIDER=disabled (L-103)"
       return 1
     fi

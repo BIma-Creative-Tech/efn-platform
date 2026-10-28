@@ -1198,7 +1198,7 @@ scenario_t() { # Gelombang 26: transfer bank + bukti (docs/04 §17, L-95..L-103)
   echo "== t. Transfer bank: checkout -> rekening PT + kode berita -> unggah bukti (EXIF dibuang) -> ditolak -> unggah ulang"
   echo "      -> Verifikator menyetujui di Odoo -> faktur lunas di jurnal transfer -> kode ambil -> serah terima; PDP & SoD."
   echo "      Prasyarat: tahap o pernah jalan (kanal GL + API key), modul efn_online_transfer, migrasi 14-platform-g26.sql."
-  local r pt pn toid tpart ncode noid
+  local r pt pn toid tpart noid
   oodoo() {
     local o
     o="$(MSYS_NO_PATHCONV=1 docker exec -i "$@" "$ODOO" odoo shell -d efn_odoo --no-http --log-level=warn \
@@ -1275,7 +1275,7 @@ scenario_t() { # Gelombang 26: transfer bank + bukti (docs/04 §17, L-95..L-103)
   r="$(oodoo -e SMOKE_STEP=ready -e SMOKE_PART="$tpart")"
   check "t.staff_ready" "$([[ "$(field ok "$r")" == true && "$(field state "$r")" == ready ]] && echo 1 || echo 0)" "$(nomsg "$r")"
   r="$(oodoo -e SMOKE_STEP=handover -e SMOKE_PART="$tpart" -e SMOKE_CODE="$(state_of t trf pickup_code)")"
-  check "t.staff_handover" "$([[ "$(field done "$r")" == true && "$(field state "$r")" == picked_up ]] && echo 1 || echo 0)" "$(nomsg "$r")"
+  check "t.staff_handover" "$([[ "$(field "done" "$r")" == true && "$(field state "$r")" == picked_up ]] && echo 1 || echo 0)" "$(nomsg "$r")"
   opy "$pt" t wait trf completed handed_over
 
   # 6. Member N: uji negatif multipart (jatah unggah tidak berkurang) + simulasi ditolak dengan Odoo nyata;
