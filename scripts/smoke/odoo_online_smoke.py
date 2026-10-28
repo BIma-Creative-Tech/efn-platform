@@ -220,6 +220,9 @@ def step_setup():
             "prep_minutes": 15,
         }
     )
+    # Outlet TOKO-01 bisa sudah ada dari seed demo dengan gudang lain (OL01): stok smoke & cek free_qty harus di gudang
+    # yang benar-benar dipakai outlet, bukan SMKOL (G28 seed demo -> o.quote[short]/g19_stock_drops gagal).
+    wh = outlet.warehouse_id or wh
     tax = env.ref(f"account.{company.id}_tax_ST4")
     ids = {}
     for i, (key, (name, price, storable, qty)) in enumerate(PRODUCTS.items()):

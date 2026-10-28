@@ -2,7 +2,7 @@
     "name": "EFN Antar-PT (Inter-company)",
     "summary": "G28 (F-03/W-15, docs/08 §5.2): PO antar-PT -> SO di PT penjual (user teknis), "
     "faktur -> tagihan draft di PT pembeli, harga transfer cost-plus per pasangan PT, pembatalan berantai.",
-    "version": "19.0.1.0.0",
+    "version": "19.0.1.1.0",  # G29b: batal SO tanpa hak Pembelian (stock_move.py)
     "category": "EFN/Accounting",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",

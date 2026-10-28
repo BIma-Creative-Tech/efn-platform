@@ -8,4 +8,8 @@
               action="action_efn_loyalty_policy_outbox" sequence="20"/>
     <menuitem id="menu_efn_loyalty_accrual" name="Akrual Harian" parent="menu_efn_loyalty_root"
               action="action_efn_loyalty_accrual" sequence="30"/>
+    <menuitem id="menu_efn_loyalty_settlement" name="Settlement Antar-PT" parent="menu_efn_loyalty_root"
+              action="action_efn_loyalty_settlement" sequence="40" groups="account.group_account_manager"/>
+    <menuitem id="menu_efn_loyalty_settlement_wizard" name="Siapkan settlement" parent="menu_efn_loyalty_root"
+              action="action_efn_loyalty_settlement_wizard" sequence="45" groups="account.group_account_manager"/>
 </odoo>

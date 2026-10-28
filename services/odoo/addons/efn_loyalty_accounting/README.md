@@ -136,6 +136,21 @@ Accounting Manager, **tanpa jurnal**; semua komponen 0 → `no_entry` (tanpa aku
 tidak valid/posting gagal (mis. lock date) → `error` + aktivitas; dicoba lagi run berikutnya selama dalam lookback,
 atau tombol *Proses ulang* (Accounting Manager company itu).
 
+## Settlement bulanan antar-PT (W-15, docs/04 §13.1 no. 8, 19.0.1.3.0)
+
+Menu *Poin EFN → Siapkan settlement* (Accounting Manager) → dokumen `efn.loyalty.settlement` per pasangan
+(penerbit → penebus, `YYYY-MM`). Nilai dari akrual harian PT penerbit (`issuer_by_redeemer`: ditukar − dikembalikan).
+
+| Langkah | Siapa | Penjaga |
+|---|---|---|
+| Siapkan (satu pasangan, atau semua pasangan bernilai) | Finance A, akses kedua PT | periode lewat, akrual sebulan lengkap & final |
+| Isi referensi transfer + tanggal bayar, jurnal bank (default bank pertama PT) | Finance A/B | — |
+| Setujui & jurnal | Finance B ≠ A | dihitung ulang (berubah → hitung ulang dulu), akun & jurnal bank ada |
+
+Jurnal: penerbit Dr Utang Poin Antar-PT / Cr Bank; penebus Dr Bank / Cr Kliring Poin Antar-PT, ref
+`EFN-LOYSET-<PENERBIT>-<PENEBUS>-<YYYY-MM> <ref transfer>`. Batal hanya saat draft; yang sudah dijurnal dibatalkan lewat
+pembalikan jurnal CE. Tidak ada netting otomatis dan tidak ada transfer dana otomatis.
+
 ## Rekonsiliasi (§13.1 no. 7) — format log mengikat (lead G21)
 Setiap run, per PT per tanggal (termasuk akrual yang sudah final dan selisih 0 → dead-man), logger
 `odoo.addons.efn_loyalty_accounting.recon`:
@@ -210,7 +225,7 @@ kode yang disalin.
 - L-66: kedua sisi lintas PT dijurnal (penebus: Dr Piutang/Kliring / Cr Liabilitas; penerbit: Dr Liabilitas / Cr
   Utang Poin Antar-PT, restore kebalikannya), sehingga saldo liabilitas kedua PT cocok dengan `closing_liability_idr`
   (diuji: earn GL, tukar BCR). Field L-66 opsional (BFF lama → map kosong); kunci PT sendiri/tidak dikenal → respons
-  ditolak. Settlement piutang/utang antar-PT = W-15 (belum).
+  ditolak. Settlement piutang/utang antar-PT = W-15, lihat §Settlement bulanan.
 - `restored_value_idr` bagian PT sendiri tidak dijurnal (refund POS di PT tempat refund sudah menjurnal). Restore
   poin terbitan PT lain di PT penebus dijurnal (L-68) bila BFF mengirim `restored_value_idr_by_issuer`; BFF lama tanpa
   field → tidak dijurnal (selisih RECON PT penebus seperti sebelum L-68).

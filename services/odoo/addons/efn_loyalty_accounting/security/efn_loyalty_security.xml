@@ -16,4 +16,11 @@
         <field name="model_id" ref="model_efn_loyalty_accrual"/>
         <field name="domain_force">[('company_id', 'in', company_ids)]</field>
     </record>
+    <!-- W-15: settlement melibatkan dua PT -> terlihat bila user punya akses ke salah satunya; menyetujui butuh keduanya
+         (dicek di kode, _efn_check_finance). -->
+    <record id="efn_loyalty_settlement_rule_company" model="ir.rule">
+        <field name="name">EFN loyalty settlement: multi-company (penerbit atau penebus)</field>
+        <field name="model_id" ref="model_efn_loyalty_settlement"/>
+        <field name="domain_force">['|', ('issuer_company_id', 'in', company_ids), ('redeemer_company_id', 'in', company_ids)]</field>
+    </record>
 </odoo>

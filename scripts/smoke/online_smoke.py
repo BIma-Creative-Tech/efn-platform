@@ -643,7 +643,8 @@ def cmd_web_flow():
         "POST",
         "/api/auth/otp/verify",
         host=host,
-        body={"challenge_id": body["challenge_id"], "code": code, "age_confirmed": True},
+        # G27 §18.3a: web mewajibkan centang Kebijakan Privasi
+        body={"challenge_id": body["challenge_id"], "code": code, "age_confirmed": True, "privacy_consent": True},
         headers=origin,
     )
     sess = next((c for c in cookies if c.startswith("efn_session=")), "").split(";")[0]

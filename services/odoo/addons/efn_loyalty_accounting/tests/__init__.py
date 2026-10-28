@@ -1,1 +1,1 @@
-from . import test_accrual, test_policy, test_policy_outbox, test_signing
+from . import test_accrual, test_policy, test_policy_outbox, test_settlement, test_signing

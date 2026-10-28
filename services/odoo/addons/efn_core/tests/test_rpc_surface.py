@@ -395,6 +395,15 @@ RPC_ALLOWLIST = {
         "action_pdf",
     ): "G28: _efn_check_access (grup akuntansi baca + PT dalam company_ids user) sebelum data dibaca sudo",
     ("efn.financial.report", "action_xlsx"): "G28: sama dengan action_pdf",
+    # W-15 (G29c): settlement poin antar-PT. Semua: _efn_check_finance (Accounting Manager + akses KEDUA PT).
+    (
+        "efn.loyalty.settlement",
+        "efn_prepare",
+    ): "W-15: _efn_check_finance (group_account_manager + company_ids memuat kedua PT); hanya periode tertutup",
+    ("efn.loyalty.settlement", "action_approve"): "W-15: _efn_check_finance + empat mata (penyiap != penyetuju)",
+    ("efn.loyalty.settlement", "action_recompute"): "W-15: _efn_check_finance; hanya draft",
+    ("efn.loyalty.settlement", "action_cancel"): "W-15: _efn_check_finance; hanya draft",
+    ("efn.loyalty.settlement.wizard", "action_prepare"): "W-15: wizard -> efn_prepare (cek yang sama)",
 }
 
 MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}
