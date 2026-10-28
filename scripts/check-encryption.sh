@@ -22,6 +22,8 @@
 #   - (G22) fnb_table_token_key di luar api-gateway / odoo_fnb_event_hmac di luar odoo + api-gateway atau tidak di-mount
 #   - (G23) odoo_booking_event_hmac di luar odoo + api-gateway atau tidak di-mount; odoo_api_key_booking_<pt> selain pb/bcf
 #           atau env ODOO_API_KEY_BOOKING_<PT>_FILE tanpa secret ter-mount
+#   - (G27) odoo_api_key_promo_<pt> selain pb, di-mount selain api-gateway, atau env ODOO_API_KEY_PROMO_<PT>_FILE tanpa
+#           secret ter-mount
 #     dengan env *_FILE yang cocok; secret QR di luar pb/bcf; ODOO_API_KEY_QR_<PT>_FILE tanpa secret ter-mount;
 #     LOYALTY_POINT_EXPIRY_DAYS (dihapus D-22-18) di env BFF; kill switch QR/poin online/hangus bukan false di render prod;
 #     LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT bukan true (SEC-171) / job ETL KDS/region/recon online bukan false di render prod
@@ -170,8 +172,13 @@ check_compose() {
   #    (ADR-036 K-36-3 / §0; dev). G20 (docs/04 §12.1): kanal = kode PT -> hanya gl/pb/bcr/bcf (G24: + wtz); kode lama ditolak.
   local sec allowed
   local -a secs
-  mapfile -t secs < <(jq -r '.secrets // {} | keys[] | select(test("^(odoo_api_key_online_[a-z0-9_]+|odoo_api_key_qr_[a-z0-9_]+|odoo_api_key_booking_[a-z0-9_]+|odoo_pii_[a-z0-9_]+)$"))' <<< "$json")
+  mapfile -t secs < <(jq -r '.secrets // {} | keys[] | select(test("^(odoo_api_key_online_[a-z0-9_]+|odoo_api_key_qr_[a-z0-9_]+|odoo_api_key_booking_[a-z0-9_]+|odoo_api_key_promo_[a-z0-9_]+|odoo_pii_[a-z0-9_]+)$"))' <<< "$json")
   for sec in "${secs[@]}"; do
+    if [[ "$sec" == odoo_api_key_promo_* ]]; then
+      # G27 (docs/04 §18.2): user teknis promo hanya untuk PT yang punya overlay promo (EFN_PROMO_COMPANY_CODES)
+      [[ "$sec" =~ ^odoo_api_key_promo_(pb)$ ]] || err "[$label] secret $sec bukan PT promo (pb, docs/04 §18.2)"
+      continue
+    fi
     if [[ "$sec" == odoo_api_key_booking_* ]]; then
       # G23 (docs/04 §15.3): user teknis reservasi hanya untuk PT F&B PB/BCF
       [[ "$sec" =~ ^odoo_api_key_booking_(pb|bcf)$ ]] || err "[$label] secret $sec bukan PT F&B reservasi (pb/bcf, docs/04 §15.3)"
@@ -216,6 +223,16 @@ check_compose() {
       | (.environment // {}) | to_entries[] | select(.key | test("^ODOO_API_KEY_BOOKING_[A-Z0-9_]+_FILE$"))
       | (.key | capture("^ODOO_API_KEY_BOOKING_(?<k>[A-Z0-9_]+)_FILE$") | .k) as $k
       | [$k, (.value // ""), (if ($m | index("odoo_api_key_booking_" + ($k | ascii_downcase))) != null then "1" else "0" end)]
+      | @tsv' <<< "$json")
+  # G27 (docs/04 §18.2): env BFF ODOO_API_KEY_PROMO_<PT>_FILE wajib menunjuk secret promo PT itu yang DI-MOUNT ke BFF
+  while IFS=$'\t' read -r key val mounted; do
+    [[ -z "$key" ]] && continue
+    [[ "$val" == "/run/secrets/odoo_api_key_promo_${key,,}" && "$mounted" == 1 ]] \
+      || err "[$label] api-gateway ODOO_API_KEY_PROMO_${key}_FILE=${val} tidak cocok dengan secret ter-mount odoo_api_key_promo_${key,,}"
+  done < <(jq -r '.services["api-gateway"] // {} | [.secrets[]? | (.source // .)] as $m
+      | (.environment // {}) | to_entries[] | select(.key | test("^ODOO_API_KEY_PROMO_[A-Z0-9_]+_FILE$"))
+      | (.key | capture("^ODOO_API_KEY_PROMO_(?<k>[A-Z0-9_]+)_FILE$") | .k) as $k
+      | [$k, (.value // ""), (if ($m | index("odoo_api_key_promo_" + ($k | ascii_downcase))) != null then "1" else "0" end)]
       | @tsv' <<< "$json")
   # Kanal default GL (base) & HMAC event selalu diperiksa eksplisit (nama tetap), sisanya dari render.
   # G22: kunci token sesi meja (BFF saja) & HMAC event QR (Odoo + BFF).

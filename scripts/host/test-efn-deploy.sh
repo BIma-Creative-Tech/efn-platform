@@ -112,7 +112,7 @@ make_release() {
   cp "$SRC/scripts/lib/deploy-validate.sh" "$d/r/scripts/lib/deploy-validate.sh"
   cat > "$d/r/scripts/deploy.sh" <<'EOF'
 #!/usr/bin/env bash
-{ env | grep -E '^(IMAGE_|APP_ENV=|EFN_RELEASE_|WHATSAPP_OTP_TEMPLATE=|EFN_WG_|EFN_PUBLIC_BIND=|COMPOSE_PROFILES=|TRAEFIK_DOMAIN=|PAYMENT_PROVIDER=|JWT_SECRET=|EFN_ALLOW_FEATURE_ON=|LOYALTY_EXPIRY_ENABLED=|FNB_QR_ENABLED=|LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=|ETL_ENABLE_KDS=|BOOKING_ENABLED=|ONLINE_SLOTS_ENABLED=)' | sort; } > /tmp/deploy-ran
+{ env | grep -E '^(IMAGE_|APP_ENV=|EFN_RELEASE_|WHATSAPP_OTP_TEMPLATE=|EFN_WG_|EFN_PUBLIC_BIND=|COMPOSE_PROFILES=|TRAEFIK_DOMAIN=|PAYMENT_PROVIDER=|JWT_SECRET=|EFN_ALLOW_FEATURE_ON=|LOYALTY_EXPIRY_ENABLED=|FNB_QR_ENABLED=|LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=|ETL_ENABLE_KDS=|BOOKING_ENABLED=|ONLINE_SLOTS_ENABLED=|PROMO_ENABLED=|PRIVACY_CONSENT_ENFORCED=)' | sort; } > /tmp/deploy-ran
 # SEC-120: kunci host bersama dipegang efn-deploy (fd 8 diwarisi) selama deploy.sh berjalan
 if flock -n /run/efn/deploy.lock true; then echo LOCK=free; else echo LOCK=held; fi >> /tmp/deploy-ran
 EOF
@@ -354,6 +354,22 @@ neg_man "187 BOOKING_MAX_ACTIVE_PER_MEMBER di luar 1..10 ditolak" "config manife
 neg_man "188 BOOKING_MEMBER_LINK_DAYS > BOOKING_RETENTION_DAYS ditolak" "config manifest rilis tidak valid" \
   '.config.BOOKING_MEMBER_LINK_DAYS = "300" | .config.BOOKING_RETENTION_DAYS = "200"'
 neg_env "189 BOOKING_ENABLED lewat stdin ditolak (config manifest)" "variabel tidak diizinkan: BOOKING_ENABLED" "BOOKING_ENABLED=true"
+# G27 (docs/04 §18): promo Super-App + persetujuan privasi = kunci config manifest; daftar PT promo & pasangan versi/SHA
+SEQ=$((SEQ + 1))
+make_release "N$SEQ" "$SEQ" 1.3.0 '.config.PROMO_ENABLED = "true" | .config.PROMO_COMPANIES = "PB" | .config.PROMO_SYNC_SECONDS = "300"
+  | .config.CONSENT_PRIVACY_VERSION = "privacy@2026-10-27" | .config.CONSENT_PRIVACY_TEXT_SHA256 = "'"$(printf 'b%.0s' {1..64})"'"
+  | .config.PRIVACY_CONSENT_ENFORCED = "true"'
+make_env "N$SEQ"; run "N$SEQ"
+expect_ok "190 production PROMO_ENABLED=true + PB + privasi wajib dengan versi/SHA diterima (cek API key promo = deploy.sh di host)"
+if grep -qxF 'PROMO_ENABLED=true' /tmp/deploy-ran 2> /dev/null && grep -qxF 'PRIVACY_CONSENT_ENFORCED=true' /tmp/deploy-ran 2> /dev/null; then
+  ok "191 PROMO_ENABLED/PRIVACY_CONSENT_ENFORCED dari manifest diteruskan ke deploy.sh"; else bad "191 PROMO ke deploy.sh"; fi
+neg_man "192 PROMO_ENABLED=true tanpa PROMO_COMPANIES ditolak" "config manifest rilis tidak valid" '.config.PROMO_ENABLED = "true"'
+neg_man "193 PROMO_COMPANIES tanpa overlay promo (GL) ditolak" "config manifest rilis tidak valid" '.config.PROMO_COMPANIES = "PB,GL"'
+neg_man "194 PROMO_PUSH_ENABLED=true tanpa PROMO_ENABLED ditolak" "config manifest rilis tidak valid" '.config.PROMO_PUSH_ENABLED = "true"'
+neg_man "195 PROMO_SYNC_SECONDS di luar 30..3600 ditolak" "config manifest rilis tidak valid" '.config.PROMO_SYNC_SECONDS = "5"'
+neg_man "196 PRIVACY_CONSENT_ENFORCED=true tanpa versi teks privasi ditolak" "config manifest rilis tidak valid" '.config.PRIVACY_CONSENT_ENFORCED = "true"'
+neg_man "197 CONSENT_PRIVACY_VERSION tanpa SHA ditolak" "config manifest rilis tidak valid" '.config.CONSENT_PRIVACY_VERSION = "privacy@2026-10-27"'
+neg_env "198 PROMO_ENABLED lewat stdin ditolak (config manifest)" "variabel tidak diizinkan: PROMO_ENABLED" "PROMO_ENABLED=true"
 neg_man "40 config manifest multi-baris ditolak" "skema" '.config.RABBITMQ_STRICT_PERMISSIONS = "true\nIMAGE_ODOO=evil"'
 neg_man "41 kunci config manifest tidak dikenal ditolak" "skema" '.config.IMAGE_ODOO = "evil.example/odoo"'
 neg_man "101 saklar dev ODOO_ONLINE_MOCK di config manifest ditolak (G17)" "skema" '.config.ODOO_ONLINE_MOCK = "true"'

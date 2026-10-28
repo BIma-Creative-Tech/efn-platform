@@ -44,6 +44,9 @@
 #               ETL_PARTNER_REGION_ENABLED ETL_LOYALTY_RECON_ONLINE_ENABLED ETL_ENABLE_KDS ETL_KDS_ONLINE_ENABLED
 #               G23 (docs/04 §15): BOOKING_ENABLED BOOKING_COMPANIES BOOKING_* (reservasi meja; true -> API key booking
 #               host:* nyata per PT + overlay docker-compose.online-booking-<pt>.yml), ONLINE_SLOTS_ENABLED (pre-order).
+#               G27 (docs/04 §18): PROMO_ENABLED PROMO_PUSH_ENABLED PROMO_COMPANIES PROMO_SYNC_SECONDS (true -> API key
+#               promo host:* nyata per PT + overlay docker-compose.online-promo-<pt>.yml), CONSENT_PRIVACY_VERSION
+#               CONSENT_PRIVACY_TEXT_SHA256 PRIVACY_CONSENT_ENFORCED (persetujuan Kebijakan Privasi, §18.3a).
 #               (true|false, default false; G21/G22 job ETL opsional, prasyarat dicek deploy-validate)
 set -euo pipefail
 
@@ -180,6 +183,20 @@ if [[ "${BOOKING_ENABLED:-false}" == true ]]; then
     f="$SECRETS_DIR/odoo_api_key_booking_$(tr '[:upper:]' '[:lower:]' <<< "$co").txt"
     if [[ ! -s "$f" ]] || grep -qx 'disabled' "$f"; then
       die "BOOKING_ENABLED=true tetapi API key reservasi ${co} tidak ada/placeholder (docs/runbooks/odoo-booking-api-key.md)"
+    fi
+  done
+fi
+
+# G27 (docs/04 §18.2): promo aktif = setiap PT di PROMO_COMPANIES wajib punya API key Odoo user teknis promo nyata
+# (host:*, dibuat efn-rotate-online-key --channel=PROMO-<PT> --bootstrap). Daftar wajib eksplisit (deploy-validate).
+PROMO_CO_LIST=()
+if [[ "${PROMO_ENABLED:-false}" == true ]]; then
+  efn_validate_promo_companies "${PROMO_COMPANIES:-}" || die "PROMO_COMPANIES tidak valid (G27)"
+  IFS=, read -r -a PROMO_CO_LIST <<< "${PROMO_COMPANIES}"
+  for co in "${PROMO_CO_LIST[@]}"; do
+    f="$SECRETS_DIR/odoo_api_key_promo_$(tr '[:upper:]' '[:lower:]' <<< "$co").txt"
+    if [[ ! -s "$f" ]] || grep -qx 'disabled' "$f"; then
+      die "PROMO_ENABLED=true tetapi API key promo ${co} tidak ada/placeholder (docs/runbooks/odoo-promo-api-key.md)"
     fi
   done
 fi
@@ -440,6 +457,14 @@ DOTENV=(
   "BOOKING_MEMBER_LINK_DAYS=${BOOKING_MEMBER_LINK_DAYS:-}"
   "BOOKING_RETENTION_DAYS=${BOOKING_RETENTION_DAYS:-}"
   "ONLINE_SLOTS_ENABLED=${ONLINE_SLOTS_ENABLED:-false}"
+  # G27 (docs/04 §18): promo Super-App + persetujuan Kebijakan Privasi; kosong = default compose (MATI)
+  "PROMO_ENABLED=${PROMO_ENABLED:-false}"
+  "PROMO_PUSH_ENABLED=${PROMO_PUSH_ENABLED:-false}"
+  "PROMO_COMPANIES=${PROMO_COMPANIES:-}"
+  "PROMO_SYNC_SECONDS=${PROMO_SYNC_SECONDS:-}"
+  "CONSENT_PRIVACY_VERSION=${CONSENT_PRIVACY_VERSION:-}"
+  "CONSENT_PRIVACY_TEXT_SHA256=${CONSENT_PRIVACY_TEXT_SHA256:-}"
+  "PRIVACY_CONSENT_ENFORCED=${PRIVACY_CONSENT_ENFORCED:-false}"
   # G21/G22 job ETL opsional (QA G22 P2-3): default MATI; prasyarat ETL_ENABLE_ODOO + grant terbaru
   "ETL_PARTNER_REGION_ENABLED=${ETL_PARTNER_REGION_ENABLED:-false}"
   "ETL_LOYALTY_RECON_ONLINE_ENABLED=${ETL_LOYALTY_RECON_ONLINE_ENABLED:-false}"
@@ -501,6 +526,12 @@ done
 for co in "${BOOKING_CO_LIST[@]}"; do
   ov="docker-compose.online-booking-$(tr '[:upper:]' '[:lower:]' <<< "$co").yml"
   [[ -f "$ov" ]] || die "PT ${co} di BOOKING_COMPANIES tanpa overlay infra/compose/${ov} (bundel rilis G23+?)"
+  [[ " ${FILES[*]} " == *" ${ov} "* ]] || FILES+=(-f "$ov")
+done
+# G27 (docs/04 §18.2): API key promo per PT hanya di-mount saat PROMO_ENABLED=true (daftar & key dicek di langkah 1)
+for co in "${PROMO_CO_LIST[@]}"; do
+  ov="docker-compose.online-promo-$(tr '[:upper:]' '[:lower:]' <<< "$co").yml"
+  [[ -f "$ov" ]] || die "PT ${co} di PROMO_COMPANIES tanpa overlay infra/compose/${ov} (bundel rilis G27+?)"
   [[ " ${FILES[*]} " == *" ${ov} "* ]] || FILES+=(-f "$ov")
 done
 DC=(docker compose "${FILES[@]}")

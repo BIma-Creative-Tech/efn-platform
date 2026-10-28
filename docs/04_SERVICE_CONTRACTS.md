@@ -1975,6 +1975,8 @@ slide utama**; (2) pop-up promo di dalam app/web **dan** push notification; (3) 
   push antre di Odoo → `queued→sent` → 1/1 perangkat ber-consent (console sender); consent dicabut → 0 penerima.
 - Pengelolaan dev: user teknis `efn_promo_pb` (grup *Layanan promo* saja), secret `odoo_api_key_promo_pb`, overlay
   `docker-compose.online-promo-pb.yml`, `.env` `PROMO_ENABLED=true PROMO_COMPANIES=PB`. Wiring rilis
-  (deploy-validate/rotate-key/check-encryption/runbook) **belum** — wajib sebelum produksi (pola G23 booking).
+  **G29 (28 Okt 2026)**: deploy-validate (`PROMO_*`, `CONSENT_PRIVACY_*`, `PRIVACY_CONSENT_ENFORCED`, daftar PT
+  `EFN_PROMO_COMPANY_CODES`), deploy.sh (cek key + overlay `online-promo-<pt>`), `efn-rotate-online-key --channel=PROMO-PB`
+  (verifikasi #22 `efn_promo_feed` 200), check-encryption, `deploy.yml` `CFG_*`, runbook `odoo-promo-api-key.md`.
 - Teks consent baru & kategori template = **DRAFT menunggu DPO/Legal**. Expo Push butuh `projectId` EAS + kredensial
   FCM di build (APK uji: belum ada → push dev diuji ke log console; pengiriman nyata setelah FCM dikonfigurasi).
