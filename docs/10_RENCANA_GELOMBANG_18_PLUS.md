@@ -192,7 +192,15 @@ Permintaan pemilik: DB dev tetap demo, tetapi gap back-office Odoo harus berfung
 
 Seed demo (`odoo shell`, idempoten, ber-tag `[DEMO G28]`): gudang GLCC (3 langkah), PBCK (CK), PBO1 (outlet dipasok PBCK); mitra tani TANI-0001/0002; 2 inspeksi selesai (grade A/B) + 1 menunggu; antar-PT PB→GL; 4 MO (1 boros → alert, 1 disassembly); resupply CK→outlet; 21 hari penjualan; 4 scrap beralasan; usulan forecast menunggu planner; laporan konsolidasi seimbang.
 
-Masih terbuka: markup TP & opini pajak (Finance), parameter QC nyata per komoditas, tanggal musim & faktor nyata, settlement poin lintas PT, mart ClickHouse `fact_scrap`/`fact_mo_yield`, notifikasi WA ambang.
+Masih terbuka: markup TP & opini pajak (Finance), parameter QC nyata per komoditas, tanggal musim & faktor nyata, mart ClickHouse `fact_scrap`/`fact_mo_yield`, notifikasi WA ambang.
+
+### A.11 Pembaruan 28 Okt 2026 — G29 (rilis promo, PII dev, settlement poin)
+
+| Paket | Isi | Status |
+|---|---|---|
+| **G29a** | Wiring rilis promo G27 + persetujuan privasi: deploy-validate, deploy.sh, `efn-rotate-online-key --channel=PROMO-PB`, check-encryption, `deploy.yml`, runbook `odoo-promo-api-key.md` | #74 merged |
+| **G29b** | `efn_pii*` (6 modul) dipasang di DB dev; 9 partner perorangan lama dimigrasi ke terenkripsi (0 plaintext tersisa); smoke E2E a/o/p/t dijalankan ulang; smoke diperbaiki untuk centang privasi web (G27) + gudang outlet seed demo | dev saja; produksi tetap OFF |
+| **G29c** | W-15 settlement poin bulanan antar-PT (`efn.loyalty.settlement`, empat mata, dua jurnal bank) — docs/04 §13.1 no. 8 | dibangun |
 
 ---
 

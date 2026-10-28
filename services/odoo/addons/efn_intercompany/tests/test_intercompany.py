@@ -212,3 +212,42 @@ class TestEfnIntercompany(AccountTestInvoicingCommon):
         )
         with self.assertRaisesRegex(ValidationError, "ic_user_group"):
             self.seller.efn_ic_user_id = plain
+
+
+@tagged("post_install", "-at_install", "efn")
+class TestEfnSaleCancelWithoutPurchaseRights(AccountTestInvoicingCommon):
+    """Regresi G28: manajer penjualan tanpa grup Pembelian membatalkan SO yang move-nya tertaut baris PO (MTO)."""
+
+    def test_sales_manager_cancels_so_linked_to_po(self):
+        company = self.company_data["company"]
+        env = self.env(su=True)
+        product = env["product.product"].create({"name": "Barang uji batal", "type": "consu", "is_storable": True})
+        vendor = env["res.partner"].create({"name": "Vendor uji batal"})
+        po = env["purchase.order"].create(
+            {
+                "partner_id": vendor.id,
+                "company_id": company.id,
+                "order_line": [Command.create({"product_id": product.id, "product_qty": 2, "price_unit": 1000})],
+            }
+        )
+        po.button_confirm()
+        so = env["sale.order"].create(
+            {
+                "partner_id": self.partner_a.id,
+                "company_id": company.id,
+                "order_line": [Command.create({"product_id": product.id, "product_uom_qty": 2, "price_unit": 2000})],
+            }
+        )
+        so.action_confirm()
+        so.picking_ids.move_ids.created_purchase_line_ids = po.order_line
+        manager = new_test_user(
+            self.env,
+            login="efn_ic_sales_mgr",
+            groups="base.group_user,sales_team.group_sale_manager",
+            company_id=company.id,
+            company_ids=[Command.set(company.ids)],
+        )
+        self.assertFalse(manager.has_group("purchase.group_purchase_user"))
+        so.with_user(manager).action_cancel()
+        self.assertEqual(so.state, "cancel")
+        self.assertTrue(po.activity_ids, "aktivitas peringatan CE di PO tetap dibuat")

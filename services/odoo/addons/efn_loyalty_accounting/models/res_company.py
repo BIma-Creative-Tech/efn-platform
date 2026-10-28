@@ -95,6 +95,15 @@ class ResCompany(models.Model):
             if journal and (journal.company_id != company or journal.type != "general"):
                 raise ValidationError(_("Jurnal akrual poin harus jurnal Miscellaneous milik company ini."))
 
+    def _efn_loyalty_bank_journal(self):
+        """W-15: jurnal bank default settlement poin antar-PT (bank pertama PT ini; bisa diganti di dokumen)."""
+        self.ensure_one()
+        return (
+            self.env["account.journal"]
+            .sudo()
+            .search([("company_id", "=", self.id), ("type", "=", "bank")], order="sequence, id", limit=1)
+        )
+
     def _efn_loyalty_journal(self):
         self.ensure_one()
         company = self.sudo()

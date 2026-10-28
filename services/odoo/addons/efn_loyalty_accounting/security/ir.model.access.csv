@@ -7,4 +7,8 @@ access_efn_loyalty_policy_outbox_account_manager,efn.loyalty.policy.outbox accou
 access_efn_loyalty_policy_outbox_system,efn.loyalty.policy.outbox system,model_efn_loyalty_policy_outbox,base.group_system,1,0,0,0
 access_efn_loyalty_accrual_account_manager,efn.loyalty.accrual account manager,model_efn_loyalty_accrual,account.group_account_manager,1,0,0,0
 access_efn_loyalty_accrual_loyalty_manager,efn.loyalty.accrual loyalty manager,model_efn_loyalty_accrual,group_loyalty_manager,1,0,0,0
+access_efn_loyalty_settlement_account_manager,efn.loyalty.settlement account manager,model_efn_loyalty_settlement,account.group_account_manager,1,1,0,0
+access_efn_loyalty_settlement_loyalty_manager,efn.loyalty.settlement loyalty manager,model_efn_loyalty_settlement,group_loyalty_manager,1,0,0,0
+access_efn_loyalty_settlement_system,efn.loyalty.settlement system,model_efn_loyalty_settlement,base.group_system,1,0,0,0
+access_efn_loyalty_settlement_wizard_account_manager,efn.loyalty.settlement.wizard account manager,model_efn_loyalty_settlement_wizard,account.group_account_manager,1,1,1,1
 access_efn_loyalty_accrual_system,efn.loyalty.accrual system,model_efn_loyalty_accrual,base.group_system,1,0,0,0

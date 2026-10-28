@@ -834,6 +834,14 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   # G18-QA-01: kunci event format lama (id lokal Odoo) milik bagian LAIN yang sudah tercatat BFF = simulasi restore
   local legacy
   legacy="$(psql_platform -c "select idempotency_key from platform.online_order_event where idempotency_key ~ '^online:[0-9]+:[a-z_]+:[0-9]+$' and part_id <> '$part' order by received_at desc limit 1")"
+  if [[ -z "$legacy" ]]; then
+    # DB dev yang hanya berisi kunci format baru (odoo-ev:...): tanam satu kunci format lama (simulasi data sebelum
+    # restore) pada bagian LAIN, agar uji G18-QA-01 tetap punya prasyarat. Ditandai seq=0 + id lokal acak.
+    legacy="online:9$(rand8):picked_up:1"
+    psql_platform -c "insert into platform.online_order_event (part_id, source, event, seq, idempotency_key, outcome)
+      select id, 'odoo', 'picked_up', 0, '$legacy', 'applied' from platform.online_order_part where id <> '$part'
+      order by id limit 1" > /dev/null
+  fi
   # 5. Event Odoo -> BFF: HMAC salah / tanpa tanda tangan / di luar window / body diubah -> 401; duplikat & seq lama
   MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal -v "${WORK_W}:/work" \
     -v "${SECRETS_W}/efn_ca_crt.txt:/s/efn_ca_crt.txt:ro" -v "${SECRETS_W}/odoo_bff_api_key.txt:/s/odoo_bff_api_key.txt:ro" \
@@ -883,8 +891,17 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   # G18: overlay yang sama menyalakan MIGRATION_ENABLED sementara untuk uji source_ref opak (L-21c) di jendela ini
   printf 'services:\n  api-gateway:\n    environment:\n      ONLINE_ENABLED: "false"\n      MIGRATION_ENABLED: "true"\n' > "$ov"
   ovw="$ov"; command -v cygpath > /dev/null && ovw="$(cygpath -m "$ov")"
+  # Overlay per-PT (online-*/booking/promo) yang dipakai BFF saat ini ikut dipertahankan: tanpa itu BFF gagal start bila
+  # .env menyalakan fitur ber-secret (BOOKING_ENABLED/PROMO_ENABLED -> "Secret ... belum dikonfigurasi").
+  local -a bff_overlays=()
+  local cf
+  while IFS= read -r cf; do
+    cf="${cf##*[\\/]}"
+    [[ "$cf" == docker-compose.online-*.yml ]] && bff_overlays+=(-f "infra/compose/$cf")
+  done < <(docker inspect "$BFF" --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' | tr ',' '\n')
   kill_bff_recreate() { # [overlay]
-    (cd "$ROOT" && docker compose -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.dev.yml ${1:+-f "$1"} \
+    (cd "$ROOT" && docker compose -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.dev.yml \
+      "${bff_overlays[@]}" ${1:+-f "$1"} \
       --env-file infra/compose/.env --profile core up -d --no-deps --force-recreate api-gateway > /dev/null 2>&1)
     for _ in $(seq 1 60); do [[ "$(docker inspect "$BFF" --format '{{.State.Health.Status}}' 2>/dev/null)" == healthy ]] && break; sleep 5; done
     # Traefik (provider docker): selama transisi status health container (starting -> healthy) router api dilepas
