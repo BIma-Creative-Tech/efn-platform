@@ -162,7 +162,8 @@ Prioritas: **§5.1 `efn_audit` SEGERA** (menggantikan OCA `auditlog` + `patches.
 
 **Setelah merge:** set `installable: True` di `efn_setup_audit`; `efn_privacy` ganti cabang `auditlog.log`; `efn_pos_otp_gate` test `test_manager_change_is_logged` ganti cek `auditlog.log` → `efn.audit.log`; hapus `scripts/fetch-oca.sh` (atau kosongkan daftarnya) dan cabang `auditlog` di `.github/workflows/ci.yml` (`pick()`), `e2e-nightly.yml` tetap memasang `efn_setup_audit`; `git rm` `efn_setup_audit/patches.py` dan `data/auditlog_rule_data.xml`.
 
-### 5.2 `efn_intercompany` (F-03) — fase 1, belum dikerjakan
+### 5.2 `efn_intercompany` (F-03) — dibangun G28 (27 Okt 2026)
+> **Status G28:** dibangun sesuai spesifikasi di bawah + harga transfer cost-plus per pasangan PT (`efn.ic.transfer.price`, W-15) + DPP tagihan = DPP faktur (aman bila pajak penjual *termasuk harga*). 13 test lulus. Markup final & opini pajak TP masih menunggu Finance (data demo = PLACEHOLDER 10 %). Settlement poin lintas PT bulanan belum. Lihat `docs/10` §A.10.
 **Alasan custom:** CE 19 tidak membuat dokumen lawan antar-PT (aturan inter-company = Enterprise); `account_payment_interco` hanya kliring pembayaran online (§2 no. 11).
 **Referensi (tidak disalin, AGPL-3):** OCA `purchase_sale_inter_company` 19.0.1.0.1 + `account_invoice_inter_company` 19.0.1.0.3; Cybrosys `inter_company_synchronization` 19.0.1.0.0 (pencegah loop: PO dengan `origin` tidak disinkron).
 **Identitas:** LGPL-3; `depends: ["sale", "purchase_stock", "sale_stock", "account", "efn_core"]`.
@@ -177,6 +178,7 @@ Prioritas: **§5.1 `efn_audit` SEGERA** (menggantikan OCA `auditlog` + `patches.
 **Test:** PO→SO (harga, partner, tautan, idempoten, produk milik PT lain ditolak), auto-confirm, invoice→bill (pajak RTL, link PO line, selisih → draft), cancel berantai, user teknis tanpa hak → error jelas, tidak ada loop (SO dari PO tidak membuat PO lagi).
 
 ### 5.3 Laporan konsolidasi (F-19) — jalur data, bukan modul Odoo
+> **Pembaruan G28 (27 Okt 2026):** atas permintaan pemilik (demo back-office berfungsi penuh), `efn_account_reports` dibangun di Odoo: Neraca, Laba Rugi, Neraca Saldo per PT + konsolidasi dengan eliminasi antar-PT (pajak antar-PT tidak dieliminasi), layar/PDF/XLSX, dari jurnal *posted* saja. Jalur Metabase/ClickHouse di bawah tetap rencana untuk analitik; format resmi auditor (Q-6) masih terbuka.
 - **Rekomendasi:** konsolidasi & laporan keuangan per PT di **Metabase atas ClickHouse** (docs/01 §3.6; ETL turunan, PostgreSQL tetap sumber kebenaran). Tugas **efn-data-ai-engineer**: ETL `account_move_line` (posted: `account_id`, `company_id`, `partner_id`, `debit/credit/balance`, `date`, `move_id`, `journal_id`), `account_account` (kode/tipe/`company_ids`), `res_company` (+`partner_id` untuk eliminasi: baris dengan `partner_id ∈ res_company.partner_id` = inter-company), periode fiskal; dashboard Neraca, L/R per PT & konsolidasi dengan eliminasi.
 - **Di Odoo (standar):** *Invoice Analysis* pivot multi-company + ekspor Excel `/web/export/xlsx`; *Journal Items* group by company/akun; aktifkan `restrictive_audit_trail` per PT.
 - **Custom Odoo hanya bila Q-6 (auditor) menolak Metabase**; saat itu buat `efn_financial_report` dengan referensi OCA `mis_builder`/`account_financial_report` (AGPL-3) atau Cybrosys `dynamic_accounts_report` (LGPL-3) — **belum dispesifikasikan**.

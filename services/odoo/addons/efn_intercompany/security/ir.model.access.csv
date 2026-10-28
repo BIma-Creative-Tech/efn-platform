@@ -1,0 +1,5 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_ic_transfer_price_purchase,efn.ic.transfer.price purchase,model_efn_ic_transfer_price,purchase.group_purchase_user,1,0,0,0
+access_efn_ic_transfer_price_sale,efn.ic.transfer.price sale,model_efn_ic_transfer_price,sales_team.group_sale_salesman,1,0,0,0
+access_efn_ic_transfer_price_invoice,efn.ic.transfer.price invoice,model_efn_ic_transfer_price,account.group_account_invoice,1,0,0,0
+access_efn_ic_transfer_price_manager,efn.ic.transfer.price manager,model_efn_ic_transfer_price,account.group_account_manager,1,1,1,1

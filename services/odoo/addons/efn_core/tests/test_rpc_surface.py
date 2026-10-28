@@ -348,6 +348,53 @@ RPC_ALLOWLIST = {
         "efn_qr_claim_send",
     ): "grup POS user + check_access(read) order + company user + order QR draft + "
     "mode auto + sesi POS opened; UPDATE ... WHERE claimed IS NULL (satu terminal menang)",
+    # G28 (back-office demo penuh). Override CE (button_*, do_scrap, init, create/write) tidak didaftar (bukan metode
+    # baru). Metode baru di bawah = aksi tombol form; semuanya check_access + record rule company standar.
+    (
+        "efn.demand.forecast",
+        "action_efn_apply",
+    ): "G28: grup stock.group_stock_manager + check_access(write) + record rule company; hanya state draft",
+    (
+        "efn.demand.forecast",
+        "action_efn_reject",
+    ): "G28: grup stock.group_stock_manager + check_access(write) + record rule company",
+    ("efn.demand.forecast", "action_efn_recompute"): "G28: check_access(write) + record rule company; hanya draft",
+    ("efn.forecast.run", "action_run"): "G28: wizard; check_access(create) efn.demand.forecast + gudang terbaca user",
+    # G28: override metode CE (hak akses = ACL + record rule CE; logika tambahan setelah super()).
+    ("stock.picking", "button_validate"): "override CE (efn_agri: tolak validasi transfer QC tanpa inspeksi selesai)",
+    ("stock.scrap", "do_scrap"): "override CE (efn_ck_production: alasan waste wajib)",
+    ("account.move", "button_cancel"): "override CE (efn_intercompany: batalkan tagihan draft antar-PT)",
+    ("account.move", "button_draft"): "override CE (efn_intercompany: batalkan tagihan draft antar-PT)",
+    ("purchase.order", "button_approve"): "override CE (efn_intercompany: SO di PT penjual lewat user teknis)",
+    ("purchase.order", "button_cancel"): "override CE (efn_intercompany: batalkan SO draft antar-PT)",
+    ("purchase.order", "button_confirm"): "override CE (efn_intercompany: harga transfer sebelum konfirmasi)",
+    ("efn.ck.waste.report", "init"): "hook ORM init (buat SQL view); tanpa argumen, idempoten",
+    ("efn.ck.yield.report", "init"): "hook ORM init (buat SQL view); tanpa argumen, idempoten",
+    (
+        "efn.agri.inspection",
+        "action_done",
+    ): "G28: grup efn_agri.group_agri_inspector + check_access(write) + record rule company; hanya draft",
+    ("efn.agri.inspection", "action_cancel"): "G28: check_access(write) + record rule company; hanya draft",
+    (
+        "efn.agri.inspection",
+        "action_apply_suggested_grade",
+    ): "G28: write biasa (ACL + record rule) ke grade_id",
+    ("efn.agri.harvest", "action_create_purchase"): "G28: check_access(write) + ACL create purchase.order user",
+    ("efn.agri.farmer", "action_view_purchases"): "G28: hanya mengembalikan action (baca, ACL purchase)",
+    (
+        "stock.picking",
+        "action_efn_agri_create_inspections",
+    ): "G28: check_access(write) picking + ACL create efn.agri.inspection",
+    ("stock.picking", "action_efn_agri_view_inspections"): "G28: hanya mengembalikan action (baca)",
+    (
+        "stock.warehouse",
+        "action_efn_agri_enable_qc_gate",
+    ): "G28: check_access(write) gudang (Inventory Administrator) + record rule company",
+    (
+        "efn.financial.report",
+        "action_pdf",
+    ): "G28: _efn_check_access (grup akuntansi baca + PT dalam company_ids user) sebelum data dibaca sudo",
+    ("efn.financial.report", "action_xlsx"): "G28: sama dengan action_pdf",
 }
 
 MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}

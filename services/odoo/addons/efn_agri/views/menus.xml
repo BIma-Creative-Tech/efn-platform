@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_efn_agri_root" name="Farming Hub" sequence="145" web_icon="stock,static/description/icon.png"
+              groups="efn_agri.group_agri_user"/>
+    <menuitem id="menu_efn_agri_ops" name="Operasional" parent="menu_efn_agri_root" sequence="10"/>
+    <menuitem id="menu_efn_agri_inspection" name="Inspeksi QC" parent="menu_efn_agri_ops"
+              action="efn_agri_inspection_action" sequence="10"/>
+    <menuitem id="menu_efn_agri_harvest" name="Prediksi Panen" parent="menu_efn_agri_ops"
+              action="efn_agri_harvest_action" sequence="20"/>
+    <menuitem id="menu_efn_agri_farmer" name="Mitra Tani" parent="menu_efn_agri_ops"
+              action="efn_agri_farmer_action" sequence="30"/>
+    <menuitem id="menu_efn_agri_config" name="Konfigurasi" parent="menu_efn_agri_root" sequence="90"
+              groups="efn_agri.group_agri_manager"/>
+    <menuitem id="menu_efn_agri_commodity" name="Komoditas &amp; Standar Mutu" parent="menu_efn_agri_config"
+              action="efn_agri_commodity_action" sequence="10"/>
+</odoo>

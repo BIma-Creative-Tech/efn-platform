@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_agri_harvest_view_list" model="ir.ui.view">
+        <field name="name">efn.agri.harvest.list</field>
+        <field name="model">efn.agri.harvest</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="farmer_id"/>
+                <field name="commodity_id"/>
+                <field name="product_id"/>
+                <field name="expected_date"/>
+                <field name="expected_qty" sum="Total"/>
+                <field name="purchase_id"/>
+                <field name="state" widget="badge"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_agri_harvest_view_form" model="ir.ui.view">
+        <field name="name">efn.agri.harvest.form</field>
+        <field name="model">efn.agri.harvest</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_create_purchase" type="object" string="Buat PO (harga dasar)" class="btn-primary"
+                            invisible="state != 'planned'"/>
+                    <field name="state" widget="statusbar"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="farmer_id"/>
+                            <field name="commodity_id"/>
+                            <field name="commodity_product_ids" invisible="1"/>
+                            <field name="product_id"/>
+                        </group>
+                        <group>
+                            <field name="planting_date"/>
+                            <field name="expected_date"/>
+                            <field name="expected_qty"/>
+                            <field name="uom_id"/>
+                            <field name="land_area_ha"/>
+                            <field name="purchase_id"/>
+                        </group>
+                    </group>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+    <record id="efn_agri_harvest_view_calendar" model="ir.ui.view">
+        <field name="name">efn.agri.harvest.calendar</field>
+        <field name="model">efn.agri.harvest</field>
+        <field name="arch" type="xml">
+            <calendar date_start="expected_date" color="commodity_id" mode="month">
+                <field name="farmer_id"/>
+                <field name="expected_qty"/>
+            </calendar>
+        </field>
+    </record>
+    <record id="efn_agri_harvest_action" model="ir.actions.act_window">
+        <field name="name">Prediksi Panen</field>
+        <field name="res_model">efn.agri.harvest</field>
+        <field name="view_mode">list,calendar,form</field>
+    </record>
+</odoo>

@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_picking_form_efn_agri" model="ir.ui.view">
+        <field name="name">stock.picking.form.efn.agri</field>
+        <field name="model">stock.picking</field>
+        <field name="inherit_id" ref="stock.view_picking_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//header" position="inside">
+                <button name="action_efn_agri_create_inspections" type="object" string="Inspeksi QC" class="btn-primary"
+                        invisible="not efn_agri_qc_gate or not efn_agri_qc_pending or state in ('done', 'cancel')"/>
+            </xpath>
+            <xpath expr="//div[@name='button_box']" position="inside">
+                <button name="action_efn_agri_view_inspections" type="object" class="oe_stat_button" icon="fa-check-square-o"
+                        invisible="not efn_agri_inspection_count">
+                    <field name="efn_agri_inspection_count" widget="statinfo" string="QC"/>
+                </button>
+            </xpath>
+            <xpath expr="//sheet" position="before">
+                <field name="efn_agri_qc_gate" invisible="1"/>
+                <field name="efn_agri_qc_pending" invisible="1"/>
+                <div class="alert alert-info mb-0" role="alert"
+                     invisible="not efn_agri_qc_gate or not efn_agri_qc_pending or state in ('done', 'cancel')">
+                    Gerbang QC: transfer ini baru bisa divalidasi setelah inspeksi QC hasil tani selesai.
+                </div>
+            </xpath>
+        </field>
+    </record>
+    <record id="view_picking_type_form_efn_agri" model="ir.ui.view">
+        <field name="name">stock.picking.type.form.efn.agri</field>
+        <field name="model">stock.picking.type</field>
+        <field name="inherit_id" ref="stock.view_picking_type_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='sequence_code']" position="after">
+                <field name="efn_agri_qc_gate"/>
+            </xpath>
+        </field>
+    </record>
+    <record id="view_warehouse_efn_agri" model="ir.ui.view">
+        <field name="name">stock.warehouse.form.efn.agri</field>
+        <field name="model">stock.warehouse</field>
+        <field name="inherit_id" ref="stock.view_warehouse"/>
+        <field name="arch" type="xml">
+            <xpath expr="//sheet" position="before">
+                <header>
+                    <button name="action_efn_agri_enable_qc_gate" type="object" string="Aktifkan gerbang QC hasil tani"
+                            invisible="efn_agri_collection_center" groups="stock.group_stock_manager"/>
+                </header>
+            </xpath>
+            <xpath expr="//field[@name='code']" position="after">
+                <field name="efn_agri_collection_center" readonly="1"/>
+            </xpath>
+        </field>
+    </record>
+    <record id="view_production_lot_form_efn_agri" model="ir.ui.view">
+        <field name="name">stock.lot.form.efn.agri</field>
+        <field name="model">stock.lot</field>
+        <field name="inherit_id" ref="stock.view_production_lot_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//sheet" position="inside">
+                <group string="Traceability hasil tani" name="efn_trace" invisible="not efn_farmer_id and not efn_inspection_id">
+                    <field name="efn_farmer_id"/>
+                    <field name="efn_farmer_region"/>
+                    <field name="efn_harvest_date"/>
+                    <field name="efn_grade_id"/>
+                    <field name="efn_inspection_id"/>
+                </group>
+            </xpath>
+        </field>
+    </record>
+</odoo>

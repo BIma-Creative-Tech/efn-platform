@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <record id="seq_efn_agri_farmer" model="ir.sequence">
+        <field name="name">EFN mitra tani</field>
+        <field name="code">efn.agri.farmer</field>
+        <field name="prefix">TANI-</field>
+        <field name="padding">4</field>
+        <field name="company_id" eval="False"/>
+    </record>
+    <record id="seq_efn_agri_inspection" model="ir.sequence">
+        <field name="name">EFN sertifikat QC</field>
+        <field name="code">efn.agri.inspection</field>
+        <field name="prefix">QC/%(year)s/</field>
+        <field name="padding">5</field>
+        <field name="company_id" eval="False"/>
+    </record>
+    <record id="scrap_reason_qc_reject" model="stock.scrap.reason.tag">
+        <field name="name">Reject QC</field>
+        <field name="sequence">60</field>
+        <field name="color">#C0392B</field>
+    </record>
+</odoo>

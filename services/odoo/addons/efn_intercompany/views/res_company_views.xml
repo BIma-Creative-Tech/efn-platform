@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="res_company_form_efn_ic" model="ir.ui.view">
+        <field name="name">res.company.form.efn.ic</field>
+        <field name="model">res.company</field>
+        <field name="inherit_id" ref="base.view_company_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="inside">
+                <page string="Antar-PT EFN" name="efn_intercompany">
+                    <group>
+                        <group string="Sebagai penjual">
+                            <field name="efn_ic_so_from_po"/>
+                            <field name="efn_ic_auto_confirm_so" invisible="not efn_ic_so_from_po"/>
+                            <field name="efn_ic_warehouse_id" invisible="not efn_ic_so_from_po"
+                                   domain="[('company_id', '=', id)]"/>
+                        </group>
+                        <group string="Sebagai pembeli">
+                            <field name="efn_ic_bill_from_invoice"/>
+                        </group>
+                        <group string="Pelaksana">
+                            <field name="efn_ic_user_id"/>
+                        </group>
+                    </group>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Kalender musim awal (PLACEHOLDER, diubah planner). Tanggal Ramadan/Lebaran 2027 perkiraan; tetapkan resmi
+     setelah sidang isbat. Faktor = perkiraan awal, dikalibrasi setelah ada data penjualan nyata. -->
+<odoo noupdate="1">
+    <record id="season_weekend" model="efn.forecast.season">
+        <field name="name">Akhir pekan</field>
+        <field name="kind">weekday</field>
+        <field name="weekdays">5,6</field>
+        <field name="factor">1.30</field>
+    </record>
+    <record id="season_payday" model="efn.forecast.season">
+        <field name="name">Gajian (tgl 25 s.d. 5)</field>
+        <field name="kind">monthly</field>
+        <field name="day_from">25</field>
+        <field name="day_to">5</field>
+        <field name="factor">1.15</field>
+    </record>
+    <record id="season_nataru_2026" model="efn.forecast.season">
+        <field name="name">Natal &amp; Tahun Baru 2026/27</field>
+        <field name="date_from">2026-12-20</field>
+        <field name="date_to">2027-01-02</field>
+        <field name="factor">1.40</field>
+    </record>
+    <record id="season_imlek_2027" model="efn.forecast.season">
+        <field name="name">Imlek 2027</field>
+        <field name="date_from">2027-02-03</field>
+        <field name="date_to">2027-02-07</field>
+        <field name="factor">1.25</field>
+    </record>
+    <record id="season_ramadan_2027" model="efn.forecast.season">
+        <field name="name">Ramadan 2027 (perkiraan)</field>
+        <field name="date_from">2027-02-08</field>
+        <field name="date_to">2027-03-09</field>
+        <field name="factor">1.20</field>
+    </record>
+    <record id="season_lebaran_2027" model="efn.forecast.season">
+        <field name="name">Lebaran 2027 (perkiraan)</field>
+        <field name="date_from">2027-03-10</field>
+        <field name="date_to">2027-03-14</field>
+        <field name="factor">0.60</field>
+    </record>
+</odoo>

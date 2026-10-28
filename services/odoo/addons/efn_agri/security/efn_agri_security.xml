@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="res_groups_privilege_efn_agri" model="res.groups.privilege">
+        <field name="name">EFN Farming Hub</field>
+        <field name="category_id" ref="base.module_category_supply_chain"/>
+    </record>
+    <record id="group_agri_user" model="res.groups">
+        <field name="name">Staf collection center</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_agri"/>
+        <field name="implied_ids" eval="[Command.link(ref('stock.group_stock_user'))]"/>
+    </record>
+    <record id="group_agri_inspector" model="res.groups">
+        <field name="name">Inspektur QC</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_agri"/>
+        <field name="implied_ids" eval="[Command.link(ref('group_agri_user'))]"/>
+    </record>
+    <record id="group_agri_manager" model="res.groups">
+        <field name="name">Manajer Farming (standar mutu &amp; harga)</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_agri"/>
+        <field name="implied_ids" eval="[Command.link(ref('group_agri_inspector'))]"/>
+        <field name="user_ids" eval="[Command.link(ref('base.user_root')), Command.link(ref('base.user_admin'))]"/>
+    </record>
+
+    <data noupdate="1">
+        <record id="efn_agri_commodity_rule_company" model="ir.rule">
+            <field name="name">EFN komoditas: global atau PT sendiri</field>
+            <field name="model_id" ref="model_efn_agri_commodity"/>
+            <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_agri_farmer_rule_company" model="ir.rule">
+            <field name="name">EFN mitra tani: multi-company</field>
+            <field name="model_id" ref="model_efn_agri_farmer"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_agri_harvest_rule_company" model="ir.rule">
+            <field name="name">EFN prediksi panen: multi-company</field>
+            <field name="model_id" ref="model_efn_agri_harvest"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_agri_inspection_rule_company" model="ir.rule">
+            <field name="name">EFN inspeksi QC: multi-company</field>
+            <field name="model_id" ref="model_efn_agri_inspection"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+    </data>
+</odoo>

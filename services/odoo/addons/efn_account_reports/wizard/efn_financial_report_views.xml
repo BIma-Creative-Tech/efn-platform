@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_financial_report_view_form" model="ir.ui.view">
+        <field name="name">efn.financial.report.form</field>
+        <field name="model">efn.financial.report</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_pdf" type="object" string="PDF" class="btn-primary" icon="fa-file-pdf-o"/>
+                    <button name="action_xlsx" type="object" string="XLSX" class="btn-secondary" icon="fa-file-excel-o"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="report_type" widget="radio" options="{'horizontal': true}"/>
+                            <field name="company_ids" widget="many2many_tags"/>
+                            <field name="eliminate" invisible="len(company_ids) &lt; 2"/>
+                        </group>
+                        <group>
+                            <field name="date_from" invisible="report_type == 'bs'"/>
+                            <field name="date_to"/>
+                        </group>
+                    </group>
+                    <field name="html" readonly="1" nolabel="1"/>
+                </sheet>
+            </form>
+        </field>
+    </record>
+    <record id="efn_financial_report_action" model="ir.actions.act_window">
+        <field name="name">Laporan Keuangan EFN</field>
+        <field name="res_model">efn.financial.report</field>
+        <field name="view_mode">form</field>
+        <field name="target">current</field>
+    </record>
+    <menuitem id="menu_efn_financial_report" name="Laporan Keuangan EFN" parent="account.account_reports_management_menu"
+              action="efn_financial_report_action" sequence="1"/>
+</odoo>

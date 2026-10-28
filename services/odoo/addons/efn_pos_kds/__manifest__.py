@@ -1,7 +1,8 @@
 {
     "name": "EFN POS Kitchen Display (KDS)",
     "summary": "Layar dapur per stasiun untuk POS restoran CE 19: tiket per stasiun, bump, SLA, cadangan printer.",
-    "version": "19.0.1.1.0",
+    # 19.0.1.2.0 (G28, K25-09): tiket order kiosk ditahan sampai lunas (docs/04 §17.11).
+    "version": "19.0.1.2.0",
     "category": "EFN/Point of Sale",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",
