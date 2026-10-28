@@ -41,14 +41,24 @@ class TestEfnOnlinePaymentMode(EfnOnlineCommon):
     def test_parse_payment_modes(self):
         self.assertEqual(parse_payment_modes("counter, qris"), ["qris", "counter"])
         self.assertEqual(parse_payment_modes("counter"), ["counter"])
-        for bad in ("", "qris,", "qris,qris", "va", "QRIS", None):
+        # G26: va/ewallet/bank_transfer kini sah (docs/04 §17.15).
+        self.assertEqual(parse_payment_modes("bank_transfer,va"), ["va", "bank_transfer"])
+        for bad in ("", "qris,", "qris,qris", "kartu", "QRIS", None):
             with self.subTest(bad=bad):
                 self.assertIsNone(parse_payment_modes(bad))
 
     def test_default_qris_and_constraint(self):
         self.assertEqual(self.channel.payment_modes, "qris")
         self.assertEqual(self.channel._efn_online_payment_modes(), ["qris"])
-        for bad in ("va", "qris,,counter", "qris,qris", " "):
+        # G26 L-95: 'counter' dibekukan (kill switch mati); bank_transfer tanpa modul efn_online_transfer ditolak.
+        for bad in (
+            "kartu",
+            "qris,,counter",
+            "qris,qris",
+            " ",
+            "qris,counter",
+            "bank_transfer",
+        ):
             with self.subTest(bad=bad), self.assertRaises(ValidationError):
                 self.channel.write({"payment_modes": bad})
         with self.assertRaises(ValidationError):
@@ -67,7 +77,10 @@ class TestEfnOnlinePaymentMode(EfnOnlineCommon):
         self.assertEqual(order.payment_mode, "qris")
         self.assertFalse(order.counter_code_hash)
         replay = dict(payload, payment_mode="qris")
-        self.assertEqual(self.order_api().efn_online_place("TST", replay)["sale_order_name"], order.name)
+        self.assertEqual(
+            self.order_api().efn_online_place("TST", replay)["sale_order_name"],
+            order.name,
+        )
 
     def test_place_counter_rejected_when_channel_disallows(self):
         _part, payload = self._payload(payment_mode="counter", counter_code=COUNTER_CODE)
@@ -77,8 +90,11 @@ class TestEfnOnlinePaymentMode(EfnOnlineCommon):
 
     def test_place_input_validation(self):
         for extra in (
-            {"payment_mode": "va"},
-            {"payment_mode": "qris", "counter_code": COUNTER_CODE},  # kode bayar tanpa mode counter
+            {"payment_mode": "va"},  # metode sah, tetapi tidak diizinkan kanal
+            {
+                "payment_mode": "qris",
+                "counter_code": COUNTER_CODE,
+            },  # kode bayar tanpa mode counter
             {"counter_code": COUNTER_CODE},
         ):
             with self.subTest(extra=extra):

@@ -3,7 +3,7 @@ import { ONLINE_POINTS, OnlinePointsPort } from './online-points';
 import { ApiError, Errors } from '../common/errors/api-error';
 import { isUuid } from '../common/validation';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
-import { PartStatus, orderHasPayment, partStatusFromOdoo } from './online.model';
+import { PartStatus, TRANSFER_REJECT_REASONS, TransferRejectReason, isInternalPaid, orderHasPayment, partStatusFromOdoo } from './online.model';
 import { ONLINE_REPO, OnlineRepo } from './online.repository';
 import { OnlineSagaService } from './online-saga.service';
 import { createHash, randomUUID } from 'node:crypto';
@@ -23,6 +23,8 @@ export const KNOWN_EVENTS = [
   'refund_settled',
   // G22 §14.B B-7(b): tiket dapur pertama in_progress → kitchen_started_at, TANPA transisi status
   'preparing',
+  // G26 §17.5 (L-100): Verifikator menolak bukti transfer; bagian tetap `placed`, pelanggan unggah ulang
+  'transfer_rejected',
 ] as const;
 export const EVENT_BODY_LIMIT = 8 * 1024;
 /** Order yang sudah ditutup tanpa pembayaran BFF (L-57: hanya di sini `cancelled → review` boleh untuk counter). */
@@ -64,7 +66,9 @@ export interface OdooOrderEvent {
    * G20 §12.2 no. 7: `payment: { method }` pada event `paid` (tanpa identitas kasir). `null` = tidak dikirim (event
    * lain / Odoo pra-G20). Field lain di objek `payment` diabaikan (minimisasi: tidak disimpan).
    */
-  payment_method: 'qris' | 'counter' | null;
+  payment_method: 'qris' | 'counter' | 'bank_transfer' | null;
+  /** G26 §17.5: alasan `transfer_rejected` (allowlist; nilai lain → 400). */
+  transfer_reason?: TransferRejectReason | null;
   /**
    * L-57: alasan event `review` dari Odoo E-45. Hanya nilai di `REVIEW_REASONS` yang dipakai (nilai lain → null,
    * event tetap diproses seperti review biasa). `counter_paid_after_*` = kasir melunasi pesanan counter yang sudah
@@ -85,7 +89,13 @@ export interface CounterSettlement {
   provider_refund_ref: string;
 }
 
-export const LATE_COUNTER_REVIEW_REASONS = ['counter_paid_after_cancel', 'counter_paid_after_expiry'] as const;
+export const LATE_COUNTER_REVIEW_REASONS = [
+  'counter_paid_after_cancel',
+  'counter_paid_after_expiry',
+  // G26 §17.5 no. 3: Verifikator menyetujui transfer setelah pesanan batal/kedaluwarsa (dana sudah masuk rekening PT)
+  'transfer_paid_after_cancel',
+  'transfer_paid_after_expiry',
+] as const;
 export type ReviewReason = (typeof LATE_COUNTER_REVIEW_REASONS)[number];
 
 export type EventOutcome = 'applied' | 'duplicate' | 'ignored_stale' | 'ignored_unknown_event';
@@ -112,6 +122,7 @@ export function eventFingerprint(ev: OdooOrderEvent): string {
   // G20: metode bayar ikut sidik HANYA bila ada → sidik event pra-G20 tidak berubah (dedup lintas versi tetap cocok)
   if (ev.payment_method !== null) fields.push(['payment', ev.payment_method]);
   if (ev.review_reason !== null) fields.push(['review_reason', ev.review_reason]);
+  if (ev.transfer_reason !== undefined && ev.transfer_reason !== null) fields.push(['transfer', ev.transfer_reason]);
   if (ev.settlement !== null) {
     const s = ev.settlement;
     fields.push(['settlement', s.refund_ref, s.amount, s.provider_refund_ref, s.settled_at ? s.settled_at.toISOString() : null]);
@@ -200,7 +211,7 @@ export function parseOdooEvent(raw: Buffer | undefined): OdooOrderEvent {
   let paymentPoints: number | null = null;
   if (o.payment !== null && o.payment !== undefined && o.payment !== false) {
     const p = o.payment as Record<string, unknown>;
-    if (typeof p !== 'object' || Array.isArray(p) || (p.method !== 'counter' && p.method !== 'qris')) throw Errors.invalidRequest();
+    if (typeof p !== 'object' || Array.isArray(p) || (p.method !== 'counter' && p.method !== 'qris' && p.method !== 'bank_transfer')) throw Errors.invalidRequest();
     paymentMethod = p.method;
     if (p.points_value !== undefined && p.points_value !== null && p.points_value !== false) {
       if (typeof p.points_value !== 'number' || !Number.isSafeInteger(p.points_value) || p.points_value < 0) throw Errors.invalidRequest();
@@ -219,6 +230,13 @@ export function parseOdooEvent(raw: Buffer | undefined): OdooOrderEvent {
     if (typeof e !== 'number' || !Number.isFinite(e) || e < 0 || e > 1e12) throw Errors.invalidRequest();
     loyaltyEligible = Math.floor(e + 1e-9);
   }
+  let transferReason: TransferRejectReason | null = null;
+  if (eventName === 'transfer_rejected') {
+    const t = o.transfer as Record<string, unknown> | null | undefined;
+    if (typeof t !== 'object' || t === null || Array.isArray(t)) throw Errors.invalidRequest();
+    if (typeof t.reason !== 'string' || !(TRANSFER_REJECT_REASONS as readonly string[]).includes(t.reason)) throw Errors.invalidRequest();
+    transferReason = t.reason as TransferRejectReason;
+  }
   const rr = o.review_reason;
   const reviewReason: ReviewReason | null =
     typeof rr === 'string' && (LATE_COUNTER_REVIEW_REASONS as readonly string[]).includes(rr) ? (rr as ReviewReason) : null;
@@ -235,6 +253,7 @@ export function parseOdooEvent(raw: Buffer | undefined): OdooOrderEvent {
     occurred_at: occurred,
     refund,
     payment_method: paymentMethod,
+    transfer_reason: transferReason,
     review_reason: reviewReason,
     settlement,
     payment_points_value: paymentPoints,
@@ -313,15 +332,29 @@ export class OrderEventsService {
         // ── G20 §12.2 no. 7: bayar di kasir ──
         const order = await r.getOrder(part.order_id, true);
         if (!order) throw Errors.notFound();
-        const counterOrder = order.payment_method === 'counter';
-        if (ev.payment_method === 'counter' && !counterOrder) {
-          // Pelunasan kasir untuk order QRIS = bug/serangan: tolak (409 final di Odoo) + alert, tidak mengubah status
-          this.metrics.anomaly('payment_method_mismatch', 'critical', { order_id: order.id, part_id: part.id, state: ev.event, code: 'counter_on_qris' });
+        // G26: `counterOrder` = pelunasan lewat jalur internal Odoo (kasir POS ATAU Verifikator transfer bank)
+        const counterOrder = isInternalPaid(order.payment_method);
+        if ((ev.payment_method === 'counter' || ev.payment_method === 'bank_transfer') && ev.payment_method !== order.payment_method) {
+          // Pelunasan internal untuk order metode lain = bug/serangan: tolak (409 final di Odoo) + alert, tidak mengubah status
+          this.metrics.anomaly('payment_method_mismatch', 'critical', { order_id: order.id, part_id: part.id, state: ev.event, code: `${ev.payment_method}_on_${order.payment_method}` });
           throw Errors.conflict('payment_method_mismatch', 'Metode bayar tidak cocok dengan pesanan.');
         }
-        if (counterOrder && ev.event === 'paid' && ev.payment_method !== 'counter') {
-          this.metrics.anomaly('payment_method_mismatch', 'critical', { order_id: order.id, part_id: part.id, state: ev.event, code: 'qris_on_counter' });
+        if (counterOrder && ev.event === 'paid' && ev.payment_method !== order.payment_method) {
+          this.metrics.anomaly('payment_method_mismatch', 'critical', { order_id: order.id, part_id: part.id, state: ev.event, code: `qris_on_${order.payment_method}` });
           throw Errors.conflict('payment_method_mismatch', 'Metode bayar tidak cocok dengan pesanan.');
+        }
+        // G26 §17.5 (L-100): bukti ditolak Verifikator → sub-status `rejected` + alasan; bagian tetap `placed` (unggah ulang)
+        if (ev.event === 'transfer_rejected') {
+          await r.updatePart(part.id, { last_seq: ev.seq, odoo_state: ev.state.slice(0, 32) });
+          if (order.payment_method !== 'bank_transfer') {
+            this.metrics.anomaly('payment_method_mismatch', 'critical', { order_id: order.id, part_id: part.id, state: ev.event, code: 'transfer_rejected_on_other' });
+            throw Errors.conflict('payment_method_mismatch', 'Metode bayar tidak cocok dengan pesanan.');
+          }
+          if (order.status !== 'awaiting_payment' || part.status !== 'placed' || order.transfer_status !== 'awaiting_verification') return record('ignored_stale');
+          await r.updateOrder(order.id, { transfer_status: 'rejected', transfer_reject_reason: ev.transfer_reason ?? null });
+          await r.closeTransferProofs(order.id, 'rejected', ev.transfer_reason ?? null);
+          await this.saga.notify(r, order, part, 'online_transfer_rejected');
+          return record('applied');
         }
         // G22 B-7(b): `preparing` = tiket pertama in_progress → kitchen_started_at, TANPA transisi (peringkat §10.6.2 tetap)
         if (ev.event === 'preparing') {

@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { QUEUES } from '../common/amqp/queues';
 import { ODOO_ONLINE, OdooOnlineApi, QuoteLineIn } from '../odoo-rpc/odoo-online.types';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
-import { COUNTER_REFUND_REASON, PartRow, RefundRow, orderHasPayment, partStatusFromOdoo, refundRequestedMessage } from './online.model';
+import { COUNTER_REFUND_REASON, TRANSFER_REFUND_REASON, PartRow, RefundRow, orderHasPayment, partStatusFromOdoo, refundRequestedMessage } from './online.model';
 import { ONLINE_REPO, OnlineRepo } from './online.repository';
 import { OnlineSagaService } from './online-saga.service';
 
@@ -250,8 +250,9 @@ export class OnlineAdminService {
     if (!['manual_required', 'failed', 'gateway_pending', 'gateway_done'].includes(rf.status)) throw new AdminError(`status refund ${rf.status} tidak dapat di-settle manual`);
     // SEC-98: refund yang gagal karena melebihi porsi tidak boleh di-settle
     if (rf.failure_reason === 'refund_exceeds_portion') throw new AdminError('refund ditolak karena melebihi porsi; tidak dapat di-settle');
-    // L-60: refund counter hanya bisa di-settle setelah Odoo mengotorisasi refund POS
-    if (rf.payment_intent_id === null && rf.failure_reason !== COUNTER_REFUND_REASON) {
+    // L-60: refund counter hanya bisa di-settle setelah Odoo mengotorisasi refund POS. G26 §17.8: refund transfer bank
+    // (`transfer_refund_manual`) di-settle setelah Finance mentransfer balik.
+    if (rf.payment_intent_id === null && rf.failure_reason !== COUNTER_REFUND_REASON && rf.failure_reason !== TRANSFER_REFUND_REASON) {
       throw new AdminError('refund POS (bayar di kasir) belum diotorisasi Odoo; tidak dapat di-settle');
     }
     const part = await this.repo.getPart(rf.part_id);

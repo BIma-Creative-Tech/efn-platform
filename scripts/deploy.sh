@@ -382,7 +382,10 @@ DOTENV=(
   "ONLINE_QUOTE_TTL_SECONDS=${ONLINE_QUOTE_TTL_SECONDS:-}"
   "ONLINE_MAX_OPEN_ORDERS_PER_MEMBER=${ONLINE_MAX_OPEN_ORDERS_PER_MEMBER:-}"
   "ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=${ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER:-}"   # G20 W-30: kosong = 1
-  "ONLINE_PAYMENT_METHODS=${ONLINE_PAYMENT_METHODS:-}"   # G20 L-55: kosong = qris,counter; pilot tanpa vendor = counter
+  "ONLINE_PAYMENT_METHODS=${ONLINE_PAYMENT_METHODS:-}"   # G26 L-103: kosong = qris,bank_transfer; pilot tanpa vendor = bank_transfer
+  "ONLINE_TRANSFER_MAX_UPLOADS=${ONLINE_TRANSFER_MAX_UPLOADS:-}"   # G26 §17.10: kosong = 3
+  "ONLINE_TRANSFER_MIN_VERIFY_SECONDS=${ONLINE_TRANSFER_MIN_VERIFY_SECONDS:-}"   # G26 §17.10: kosong = 600
+  "ONLINE_MAX_OPEN_TRANSFER_ORDERS_PER_MEMBER=${ONLINE_MAX_OPEN_TRANSFER_ORDERS_PER_MEMBER:-}"   # G26 §17.10: kosong = 1
   "ONLINE_CATALOG_SYNC_SECONDS=${ONLINE_CATALOG_SYNC_SECONDS:-}"
   "ONLINE_PICKUP_CODE_MAX_DAYS=${ONLINE_PICKUP_CODE_MAX_DAYS:-}"
   "ONLINE_ORDER_MEMBER_LINK_DAYS=${ONLINE_ORDER_MEMBER_LINK_DAYS:-}"
@@ -546,9 +549,11 @@ echo "==> Migrasi skema idempoten (infra/postgres/init/[0-9][0-9]-*.sql >= 04)"
 # member.age_confirmed_at; dibutuhkan BFF G18). 09 = G20 (docs/04 §12.1/§12.2: CHECK company_code 6 entitas,
 # online_order.payment_method, status awaiting_counter_payment, counter_code_enc; dibutuhkan BFF G20). 13 = G24
 # (docs/04 §16.3: CHECK kode PT + WTZ; tanpa 13 order/poin kanal WTZ ditolak CHECK).
+# 14 = G26 (docs/04 §17.9: payment_method bank_transfer, kolom transfer_*, tabel online_transfer_proof; dibutuhkan BFF
+# G26).
 for req in 04-platform-v3-6.sql 05-platform-loyalty-pos.sql 06-platform-loyalty-guard.sql 07-platform-online.sql \
            08-platform-g18-privacy.sql 09-platform-g20.sql 10-platform-g21.sql 11-platform-g22.sql 12-platform-g23.sql \
-           13-platform-g24.sql; do
+           13-platform-g24.sql 14-platform-g26.sql; do
   [[ -s "$BASE/postgres/init/$req" ]] || die "migrasi wajib $req tidak ada di $BASE/postgres/init (bundel rilis tidak lengkap)"
 done
 for mig in "$BASE"/postgres/init/[0-9][0-9]-*.sql; do

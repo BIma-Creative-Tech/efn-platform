@@ -18,7 +18,9 @@
     # bertipe compute-stored (`amount_due`, `cash_amount`) dihitung otomatis saat upgrade (tanpa skrip migrasi).
     # 19.0.1.8.0 (G23 W-36): kode bisnis baru `slot_unavailable` (dipakai efn_online_slot); perilaku lain tetap.
     # 19.0.1.8.1 (G24 W-40, docs/04 §16.1): teks bantuan kode kanal menyebut WTZ; perilaku tidak berubah.
-    "version": "19.0.1.8.1",
+    # 19.0.1.9.0 (G26, docs/04 §17.15, L-95..L-100): payment_mode va/ewallet/bank_transfer, kill switch counter
+    # (efn_online.counter_enabled), hook rekening transfer kanal, event transfer_rejected + outbox detail_code.
+    "version": "19.0.1.9.0",
     "category": "EFN/Sales",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031): hanya Odoo CE 19 + efn_*.

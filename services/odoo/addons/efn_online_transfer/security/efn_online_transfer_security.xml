@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G26 L-99 (docs/04 §17.5): grup Verifikator Pembayaran + record rule multi-company bukti transfer. -->
+<odoo>
+    <record id="group_payment_verifier" model="res.groups">
+        <field name="name">Verifikator Pembayaran (transfer bank)</field>
+        <field name="comment">Memeriksa foto bukti transfer pesanan online dan menyetujui/menolaknya. SoD: tidak boleh sekaligus user POS (SOD-PAY-01) atau Inventory (SOD-PAY-02).</field>
+        <field name="privilege_id" ref="efn_online_order.res_groups_privilege_efn_online"/>
+    </record>
+
+    <data noupdate="1">
+        <record id="efn_online_transfer_proof_rule_company" model="ir.rule">
+            <field name="name">EFN bukti transfer: multi-company</field>
+            <field name="model_id" ref="model_efn_online_transfer_proof"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+    </data>
+</odoo>

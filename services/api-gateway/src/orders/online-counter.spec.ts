@@ -62,7 +62,8 @@ function stubCatalog(): CatalogService {
 
 function setup(over: Record<string, string> = {}) {
   const clock = new FakeClock();
-  const config = testConfig({ ONLINE_ENABLED: 'true', ODOO_ONLINE_MOCK: 'true', ONLINE_CHANNELS: 'GL,PB,BCF', ...over });
+  // G26 L-95: bayar di kasir dibekukan untuk pesanan online baru; regresi alur lama memakai saklar dev ONLINE_COUNTER_LEGACY
+  const config = testConfig({ ONLINE_ENABLED: 'true', ODOO_ONLINE_MOCK: 'true', ONLINE_CHANNELS: 'GL,PB,BCF', ONLINE_COUNTER_LEGACY: 'true', ...over });
   const kv = new FakeKvStore(clock.now);
   const repo = new MemoryOnlineRepo();
   repo.now = clock.now;

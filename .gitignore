@@ -34,3 +34,6 @@ Thumbs.db
 
 # hasil scrape katalog brand (scripts/brand-catalog/README.md) - tidak di-commit
 data/brand-catalog/
+
+# dev lokal (APK BlueStacks/LAN): sertifikat + router per mesin
+infra/traefik/dev/local/

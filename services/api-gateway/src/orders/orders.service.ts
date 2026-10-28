@@ -13,7 +13,19 @@ import { OnlineErrors, mapOdooError } from '../odoo-rpc/online-errors';
 import { OnlineMetrics } from '../odoo-rpc/online-metrics';
 import { PaymentStatus } from '../payments/payment-gateway';
 import { ONLINE_PAYMENTS, OnlineIntent, OnlinePaymentsPort } from '../payments/online-payments';
-import { OrderRow, OrderStatus, PartRow, PaymentMethod, UNPAID_OPEN, partCash, unpaidClosedMessage } from './online.model';
+import {
+  OrderRow,
+  OrderStatus,
+  PartRow,
+  PaymentMethod,
+  TransferAccount,
+  TransferRejectReason,
+  TransferStatus,
+  UNPAID_OPEN,
+  isInternalPaid,
+  partCash,
+  unpaidClosedMessage,
+} from './online.model';
 import { ONLINE_REPO, OnlineRepo } from './online.repository';
 import { OnlineSagaService } from './online-saga.service';
 import { ONLINE_POINTS, OnlinePointsPort } from './online-points';
@@ -34,6 +46,10 @@ export const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9_-]{16,128}$/;
  * sudah 3600 → checkout ditolak `503 online_unavailable` + anomali `odoo_expiry_too_short` (urutan aktivasi salah).
  */
 export const ODOO_EXPIRY_MARGIN_MS = 5 * 60_000;
+/** G26 §17.15: batas JPEG hasil re-encode yang dikirim ke Odoo (= batas Odoo 1,5 MiB). */
+export const TRANSFER_PROOF_MAX_JPEG = 1_572_864;
+/** G26 §17.4 no. 3: jarak dHash ≤ 6 bit dengan bukti order lain (90 hari) → tanda `duplicate_suspect` (tidak menolak). */
+export const TRANSFER_DHASH_MAX_DISTANCE = 6;
 
 export interface CheckoutInput {
   quoteId: string;
@@ -75,6 +91,21 @@ export interface CounterPaymentView {
   expires_at: string;
 }
 
+/**
+ * G26 §17.3: transfer bank — rekening PT penjual + kode berita transfer + status bukti. Rekening & kode tampil HANYA
+ * selama order `awaiting_payment` (pola L-52); status lain `{ method, status, expires_at }`.
+ */
+export interface TransferPaymentView {
+  method: 'bank_transfer';
+  status: TransferStatus | 'none';
+  account?: TransferAccount;
+  transfer_ref?: string;
+  uploads_left: number;
+  reject_reason: TransferRejectReason | null;
+  upload_deadline: string;
+  expires_at: string;
+}
+
 export interface OrderView {
   order_id: string;
   status: OrderStatus;
@@ -83,7 +114,7 @@ export interface OrderView {
   paid_at: string | null;
   amount_payable: number;
   currency: 'IDR';
-  payment: QrisPaymentView | CounterPaymentView;
+  payment: QrisPaymentView | CounterPaymentView | TransferPaymentView;
   /** G21 §13.5: hanya pada respons checkout pertama yang membawa `invoice_request`. */
   invoice_request?: InvoiceRequestView;
   parts: {
@@ -132,7 +163,7 @@ export const slotIso = (d: Date | null): string | null => (d ? d.toISOString().r
 export function customerStatus(order: OrderRow, parts: readonly PartRow[]): OrderStatus {
   if ((order.status === 'paid' || order.status === 'fulfilling') && parts.some((p) => p.status === 'review')) return 'review';
   // L-57: pesanan counter yang dilunasi di kasir setelah batal/kedaluwarsa → "sedang diperiksa" (status DB tetap ditutup)
-  if (order.payment_method === 'counter' && (order.status === 'cancelled' || order.status === 'expired' || order.status === 'failed') && parts.some((p) => p.status === 'review')) {
+  if (isInternalPaid(order.payment_method) && (order.status === 'cancelled' || order.status === 'expired' || order.status === 'failed') && parts.some((p) => p.status === 'review')) {
     return 'review';
   }
   return order.status;
@@ -144,7 +175,7 @@ export function customerStatus(order: OrderRow, parts: readonly PartRow[]): Orde
  */
 export function requestSha256(input: CheckoutInput): string {
   const body: Record<string, unknown> = { quote_id: input.quoteId, accept_total: input.acceptTotal };
-  if (input.paymentMethod === 'counter') body.payment_method = 'counter';
+  if (input.paymentMethod === 'counter' || input.paymentMethod === 'bank_transfer') body.payment_method = input.paymentMethod;
   // G21 §13.5: HANYA penanda ada/tidaknya permintaan faktur — isi profil (PII, NPWP/NIK berentropi rendah) tidak pernah
   // ikut di-hash/disimpan. Sidik order tanpa faktur sama dengan pra-G21.
   if (input.invoiceRequest) body.invoice_request = true;
@@ -216,6 +247,8 @@ export class OrdersService {
     // L-55: metode di luar ONLINE_PAYMENT_METHODS → 422 (gerbang deploy pilot; `counter` tidak butuh provider)
     if (!this.config.onlinePaymentMethods.includes(method)) throw OnlineErrors.paymentMethodUnavailable();
     if (method === 'counter' && quote.groups.length > 1) throw OnlineErrors.counterPaymentSinglePartOnly();
+    // G26 §17.2: transfer ke rekening SATU PT penjual → hanya pesanan satu bagian
+    if (method === 'bank_transfer' && quote.groups.length > 1) throw OnlineErrors.transferSinglePartOnly();
     // G21 §13.5: faktur atas nama hanya bila SEMUA bagian kanal PT PPN (GL, BCR); F&B (PB1) → 422 sebelum order dibuat
     if (input.invoiceRequest && quote.groups.some((g) => !INVOICE_COMPANIES.includes(g.company_code))) {
       throw OnlineErrors.invoiceNotAvailable();
@@ -253,6 +286,9 @@ export class OrdersService {
       if (method === 'counter' && (await r.countOpenOrders(memberId, 'counter')) >= this.config.onlineMaxOpenCounterOrdersPerMember) {
         throw OnlineErrors.tooManyOpenCounterOrders();
       }
+      if (method === 'bank_transfer' && (await r.countOpenOrders(memberId, 'bank_transfer')) >= this.config.onlineMaxOpenTransferOrdersPerMember) {
+        throw OnlineErrors.tooManyOpenTransferOrders();
+      }
       await r.insertOrder({
         id: orderId,
         member_id: memberId,
@@ -264,6 +300,8 @@ export class OrdersService {
         currency: 'IDR',
         payment_method: method,
         expires_at: expiresAt,
+        // G26 §17.3: kode berita transfer (bukan rahasia; membantu Verifikator mencocokkan mutasi)
+        transfer_ref: method === 'bank_transfer' ? generatePickupCode() : null,
       });
       for (const g of quote.groups) {
         const partId = randomUUID();
@@ -395,11 +433,19 @@ export class OrdersService {
           promo_codes: [...(g.promo_applied ?? [])],
           // G20 §12.2 no. 3 + L-56: hanya untuk bayar di kasir (payload QRIS tidak berubah); kode bayar rahasia, tidak di-log
           ...(method === 'counter' && counterCode ? { payment_mode: 'counter' as const, counter_code: counterCode } : {}),
+          // G26 §17.15: transfer bank (hasil place membawa rekening PT penjual)
+          ...(method === 'bank_transfer' ? { payment_mode: 'bank_transfer' as const } : {}),
           // G22 §14.C.3: porsi Poin EFN (hanya bila ada) — Odoo memvalidasi batas kebijakan PT (points_invalid → 409)
           ...((part.points_redeemed ?? 0) > 0 ? { points_payment: { points: part.points_redeemed ?? 0, value_idr: part.points_value_idr ?? 0 } } : {}),
           // G23 §15.4: jadwal ambil pre-order (hanya bila dipilih; masuk quote_hash Odoo)
           ...(g.pickup_slot ? { pickup_slot: g.pickup_slot } : {}),
         });
+        // G26 §17.3: place transfer WAJIB membawa rekening tujuan (tanpa itu pelanggan tidak bisa membayar)
+        if (method === 'bank_transfer' && !res.transfer_account) {
+          this.metrics.anomaly('online_config_error', 'critical', { order_id: orderId, part_id: part.id, code: 'transfer_account_missing' });
+          failure = OnlineErrors.unavailable();
+          break;
+        }
         // amount_due Odoo = amount_payable − nilai poin (selain itu respons tidak dipercaya)
         const due = res.amount_payable - (part.points_value_idr ?? 0);
         if (res.amount_due !== due || due < 1) {
@@ -448,16 +494,22 @@ export class OrdersService {
       invoiceView = res.view;
     }
     const withInvoice = (v: OrderView): OrderView => (invoiceView ? { ...v, invoice_request: invoiceView } : v);
-    if (!failure && method === 'counter') {
-      // G20 §12.2 no. 2: TANPA payment intent — pelanggan membayar di kasir dengan kode bayar
+    if (!failure && (method === 'counter' || method === 'bank_transfer')) {
+      // G20 §12.2 no. 2: TANPA payment intent — pelanggan membayar di kasir dengan kode bayar.
+      // G26 §17.3: transfer bank — TANPA intent; status `awaiting_payment` + sub-status `awaiting_proof`.
+      const account = method === 'bank_transfer' ? [...results.values()][0]?.transfer_account ?? null : null;
       await this.repo.tx(async (r) => {
-        if (await r.transitionOrder(orderId, ['created'], 'awaiting_counter_payment')) this.metrics.order('awaiting_counter_payment');
+        if (method === 'bank_transfer') {
+          if (await r.transitionOrder(orderId, ['created'], 'awaiting_payment', { transfer_status: 'awaiting_proof', transfer_account: account })) {
+            this.metrics.order('awaiting_payment');
+          }
+        } else if (await r.transitionOrder(orderId, ['created'], 'awaiting_counter_payment')) this.metrics.order('awaiting_counter_payment');
       });
       await this.cart.clearIfVersion(memberId, quote.cart_version);
       await this.quotes.remove(quoteId).catch(() => undefined);
       const order = await this.repo.getOrder(orderId);
       if (!order) throw OnlineErrors.unavailable();
-      this.logger.log(`Order online ${orderId} menunggu bayar di kasir (${parts.length} bagian)`);
+      this.logger.log(`Order online ${orderId} menunggu ${method === 'counter' ? 'bayar di kasir' : 'bukti transfer'} (${parts.length} bagian)`);
       return withInvoice(await this.view(order));
     }
     let intent: OnlineIntent | null = null;
@@ -539,7 +591,7 @@ export class OrdersService {
         status: customerStatus(o, parts.filter((p) => p.order_id === o.id)),
         created_at: o.created_at.toISOString(),
         amount_payable: o.amount_payable,
-        payment_method: o.payment_method, // G20 (aditif): `qris` | `counter`
+        payment_method: o.payment_method, // G20 (aditif): `qris` | `counter`; G26: `bank_transfer`
         // G22 §14.C.2 (aditif)
         amount_points_value: o.amount_points_value ?? 0,
         amount_cash: o.amount_cash ?? o.amount_payable - (o.amount_points_value ?? 0),
@@ -585,6 +637,8 @@ export class OrdersService {
     let payment: OrderView['payment'];
     if (order.payment_method === 'counter') {
       payment = this.counterPayment(order, parts);
+    } else if (order.payment_method === 'bank_transfer') {
+      payment = this.transferPayment(order);
     } else {
       const qris: QrisPaymentView = { method: 'qris', status: intent?.status ?? 'none', expires_at: iso(intent?.expiresAt ?? order.expires_at) };
       if (order.status === 'awaiting_payment' && intent?.status === 'pending' && intent.qrString) qris.qr_string = intent.qrString;
@@ -647,6 +701,84 @@ export class OrdersService {
     return out;
   }
 
+  /** G26 §17.3: rekening + kode berita transfer hanya selama `awaiting_payment` (pemanggil sudah memastikan pemilik). */
+  private transferPayment(order: OrderRow): TransferPaymentView {
+    const open = order.status === 'awaiting_payment';
+    const deadline = new Date(order.expires_at.getTime() - this.config.onlineTransferMinVerifySeconds * 1000);
+    return {
+      method: 'bank_transfer',
+      status: open ? (order.transfer_status ?? 'awaiting_proof') : 'none',
+      ...(open && order.transfer_account ? { account: { ...order.transfer_account } } : {}),
+      ...(open && order.transfer_ref ? { transfer_ref: order.transfer_ref } : {}),
+      uploads_left: Math.max(0, this.config.onlineTransferMaxUploads - (order.transfer_uploads ?? 0)),
+      reject_reason: open ? (order.transfer_reject_reason ?? null) : null,
+      upload_deadline: deadline.toISOString(),
+      expires_at: order.expires_at.toISOString(),
+    };
+  }
+
+  // ───────────── bukti transfer (G26 §17.4) ─────────────
+  /**
+   * Unggah foto bukti transfer. Foto = data pribadi pengirim (nama & rekening): di-re-encode (metadata dibuang), dikirim
+   * SINKRON ke Odoo, lalu dibuang dari memori — tidak pernah masuk DB/object storage/outbox/log BFF (§17.4 no. 4).
+   * BFF hanya mencatat hash (sha256 + dHash) setelah Odoo menerima. Odoo gagal → 503, unggahan tidak terhitung.
+   */
+  async submitTransferProof(memberId: string, orderId: string, photo: Buffer, normalize: (b: Buffer) => Promise<{ jpeg: Buffer; phash: string }>): Promise<TransferPaymentView> {
+    const order = await this.repo.getOrderOfMember(orderId, memberId);
+    if (!order) throw Errors.notFound();
+    if (order.payment_method !== 'bank_transfer' || order.status !== 'awaiting_payment') throw OnlineErrors.transferNotAwaitingProof();
+    if (order.transfer_status !== 'awaiting_proof' && order.transfer_status !== 'rejected') throw OnlineErrors.transferNotAwaitingProof();
+    if ((order.transfer_uploads ?? 0) >= this.config.onlineTransferMaxUploads) throw OnlineErrors.transferProofLimit();
+    if (this.now() > order.expires_at.getTime() - this.config.onlineTransferMinVerifySeconds * 1000) throw OnlineErrors.transferWindowClosed();
+    const part = (await this.repo.getParts(orderId)).find((p) => p.status === 'placed');
+    if (!part || !order.transfer_ref) throw OnlineErrors.transferNotAwaitingProof();
+    let img: { jpeg: Buffer; phash: string };
+    try {
+      img = await normalize(photo);
+    } catch (err) {
+      if (err instanceof ApiError) throw err; // 429 antrean gambar penuh
+      throw OnlineErrors.transferProofInvalid();
+    }
+    if (img.jpeg.length > TRANSFER_PROOF_MAX_JPEG) throw OnlineErrors.transferProofInvalid();
+    const sha = createHash('sha256').update(img.jpeg).digest('hex');
+    const since = new Date(this.now() - 90 * 86_400_000);
+    const duplicate = await this.repo.findSimilarTransferProof(orderId, sha, img.phash, since, TRANSFER_DHASH_MAX_DISTANCE);
+    const proofId = randomUUID();
+    try {
+      await this.odoo.transferSubmit(part.channel_code, part.id, {
+        idempotency_key: `online:transfer:${proofId}`,
+        proof_id: proofId,
+        transfer_ref: order.transfer_ref,
+        image_b64: img.jpeg.toString('base64'),
+        sha256: sha,
+        duplicate_suspect: duplicate,
+        uploaded_at: new Date(this.now()).toISOString().replace(/\.\d{3}Z$/, 'Z'),
+      });
+    } catch (err) {
+      if (err instanceof OdooRpcError && err.kind === 'business' && err.code === 'invalid_state') throw OnlineErrors.transferNotAwaitingProof();
+      if (err instanceof OdooRpcError && err.kind === 'business') {
+        this.metrics.anomaly('transfer_proof_rejected', 'warning', { order_id: orderId, part_id: part.id, code: err.code });
+        throw OnlineErrors.transferProofInvalid();
+      }
+      this.metrics.anomaly('transfer_proof_failed', 'warning', { order_id: orderId, part_id: part.id, code: err instanceof OdooRpcError ? err.kind : 'error' });
+      throw OnlineErrors.transferProofUnavailable();
+    } finally {
+      img.jpeg.fill(0); // buang foto dari memori sesegera mungkin (best effort)
+      photo.fill(0);
+    }
+    const updated = await this.repo.tx(async (r) => {
+      const o = await r.getOrder(orderId, true);
+      if (!o || o.status !== 'awaiting_payment') return null;
+      await r.insertTransferProof({ id: proofId, order_id: orderId, part_id: part.id, status: 'submitted', sha256: sha, dhash: img.phash, duplicate_suspect: duplicate });
+      await r.updateOrder(orderId, { transfer_status: 'awaiting_verification', transfer_reject_reason: null, transfer_uploads: (o.transfer_uploads ?? 0) + 1 });
+      return r.getOrder(orderId);
+    });
+    if (!updated) throw OnlineErrors.transferNotAwaitingProof();
+    if (duplicate) this.metrics.anomaly('transfer_proof_duplicate_suspect', 'warning', { order_id: orderId, part_id: part.id });
+    this.logger.log(`Bukti transfer order ${orderId} diterima Odoo (dup=${duplicate})`);
+    return this.transferPayment(updated);
+  }
+
   // ───────────── batal (pelanggan) ─────────────
   async cancel(memberId: string, orderId: string): Promise<{ status: 'cancelled' }> {
     const order = await this.repo.getOrderOfMember(orderId, memberId);
@@ -678,6 +810,7 @@ export class OrdersService {
       // Kode bayar tidak lagi berlaku → hapus segera (retensi juga membersihkan)
       const cancelledParts = await r.getParts(orderId);
       for (const p of cancelledParts) if (p.counter_code_enc) await r.updatePart(p.id, { counter_code_enc: null });
+      if (o.payment_method === 'bank_transfer') await r.closeTransferProofs(orderId, 'expired', null); // G26 §17.4
       await this.points?.releaseOrder(r, orderId, cancelledParts); // G22 C.3 release di transaksi transisi
       const m = unpaidClosedMessage(orderId, 'customer');
       await r.enqueue(QUEUES.ORDER_UNPAID_CLOSED, { ...m }, m.idempotency_key);
@@ -714,10 +847,11 @@ export class OrdersService {
   }
 
   // ───────────── simulasi bayar (dev/staging) ─────────────
-  async simulatePayment(memberId: string, orderId: string, status: Exclude<PaymentStatus, 'pending'>): Promise<OrderView> {
+  async simulatePayment(memberId: string, orderId: string, status: Exclude<PaymentStatus, 'pending'>, rejectReason?: TransferRejectReason): Promise<OrderView> {
     if (this.config.isProductionDeployment) throw Errors.notFound();
     const order = await this.repo.getOrderOfMember(orderId, memberId);
     if (order?.payment_method === 'counter') return this.simulateCounter(order, status);
+    if (order?.payment_method === 'bank_transfer') return this.simulateTransfer(order, status, rejectReason ?? 'unreadable');
     if (!order?.payment_intent_id) throw Errors.notFound();
     await this.payments.simulate(order.payment_intent_id, status);
     const fresh = await this.repo.getOrder(orderId);
@@ -747,6 +881,45 @@ export class OrdersService {
         const o = await r.getOrder(order.id, true);
         const p = await r.getPart(part.id, true);
         if (o && p) await saga.applyCounterPaid(r, o, p, { source: 'bff', odooState: res.state, seq: res.seq, paidAt: null });
+      });
+    }
+    const fresh = await this.repo.getOrder(order.id);
+    if (!fresh) throw Errors.notFound();
+    return this.view(fresh);
+  }
+
+  /**
+   * DEV/MOCK SAJA (G26 §17.5, pola `simulateCounter`): meniru keputusan Verifikator di stub Odoo lalu menerapkan efeknya
+   * seperti event `paid` / `transfer_rejected`. `paid` = disetujui, `failed` = ditolak (`reject_reason`), `expired` → 400
+   * (kedaluwarsa = sweeper biasa). Butuh bukti `awaiting_verification`. Stub tanpa `verifyTransfer` (Odoo nyata) → 404.
+   */
+  private async simulateTransfer(order: OrderRow, status: Exclude<PaymentStatus, 'pending'>, reason: TransferRejectReason): Promise<OrderView> {
+    const stub = this.odoo as unknown as { verifyTransfer?: (ref: string, decision: 'approve' | 'reject') => { state: string; seq: number } };
+    if (!this.saga || typeof stub.verifyTransfer !== 'function') throw Errors.notFound();
+    if (status === 'expired') throw Errors.invalidRequest();
+    if (order.status !== 'awaiting_payment' || order.transfer_status !== 'awaiting_verification') throw OnlineErrors.invalidState();
+    const approve = status === 'paid';
+    for (const part of (await this.repo.getParts(order.id)).filter((p) => p.status === 'placed')) {
+      let res: { state: string; seq: number };
+      try {
+        res = stub.verifyTransfer(part.id, approve ? 'approve' : 'reject');
+      } catch {
+        throw OnlineErrors.invalidState();
+      }
+      const saga = this.saga;
+      await this.repo.tx(async (r) => {
+        const o = await r.getOrder(order.id, true);
+        const p = await r.getPart(part.id, true);
+        if (!o || !p) return;
+        if (approve) {
+          await saga.applyCounterPaid(r, o, p, { source: 'bff', odooState: res.state, seq: res.seq, paidAt: null });
+          return;
+        }
+        await r.updatePart(p.id, { last_seq: res.seq, odoo_state: res.state.slice(0, 32) });
+        if (o.status !== 'awaiting_payment' || o.transfer_status !== 'awaiting_verification') return;
+        await r.updateOrder(o.id, { transfer_status: 'rejected', transfer_reject_reason: reason });
+        await r.closeTransferProofs(o.id, 'rejected', reason);
+        await saga.notify(r, o, p, 'online_transfer_rejected');
       });
     }
     const fresh = await this.repo.getOrder(order.id);

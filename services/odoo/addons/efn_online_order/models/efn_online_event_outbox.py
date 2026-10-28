@@ -53,6 +53,8 @@ EVENTS = [
     ("refunded", "refunded"),
     # L-58 (G20): refund pesanan bayar di kasir benar-benar dikembalikan di POS (bukan sekadar diminta).
     ("refund_settled", "refund_settled"),
+    # G26 L-100 (docs/04 §17.5): Verifikator menolak bukti transfer; order tetap `placed` (pelanggan unggah ulang).
+    ("transfer_rejected", "transfer_rejected"),
     ("review", "review"),
 ]
 HMAC_FILE_ENV = "EFN_ONLINE_EVENT_HMAC_FILE"
@@ -103,7 +105,12 @@ class EfnOnlineEventOutbox(models.Model):
 
     company_id = fields.Many2one("res.company", required=True, index=True, readonly=True)
     order_id = fields.Many2one(
-        "efn.online.order", required=True, index=True, readonly=True, ondelete="cascade", check_company=True
+        "efn.online.order",
+        required=True,
+        index=True,
+        readonly=True,
+        ondelete="cascade",
+        check_company=True,
     )
     refund_id = fields.Many2one("efn.online.refund", readonly=True, ondelete="set null", check_company=True)
     event = fields.Selection(EVENTS, required=True, readonly=True)
@@ -125,6 +132,8 @@ class EfnOnlineEventOutbox(models.Model):
     next_attempt_at = fields.Datetime(index=True, readonly=True, default=fields.Datetime.now)
     last_error = fields.Char(readonly=True, help="Kode error saja (tanpa payload).")
     done_at = fields.Datetime(readonly=True)
+    # G26 L-100: kode tambahan event (mis. alasan `transfer_rejected`), dibekukan saat enqueue. Kode allowlist saja.
+    detail_code = fields.Char(readonly=True, help="Kode tambahan event (tanpa teks bebas / PII).")
 
     _idempotency_key_unique = models.Constraint("unique (idempotency_key)", "Kunci idempotensi event harus unik.")
     _event_id_unique = models.Constraint("unique (event_id)", "event_id event harus unik.")
@@ -132,7 +141,7 @@ class EfnOnlineEventOutbox(models.Model):
 
     # ---------------------------------------------------------------- enqueue
     @api.model
-    def _efn_enqueue(self, order, event, seq, refund=None):
+    def _efn_enqueue(self, order, event, seq, refund=None, detail_code=None):
         refund = refund or self.env["efn.online.refund"]
         event_id = str(uuid.uuid4())
         record = self.sudo().create(
@@ -146,6 +155,7 @@ class EfnOnlineEventOutbox(models.Model):
                 "initiator": refund.initiator or False,
                 "event_id": event_id,
                 "idempotency_key": event_key(order.platform_order_ref, event, seq),
+                "detail_code": detail_code or False,
             }
         )
         self._efn_trigger()
@@ -199,11 +209,18 @@ class EfnOnlineEventOutbox(models.Model):
             "occurred_at": self.occurred_at.replace(microsecond=0).isoformat() + "Z",
             "refund": refund_payload,
         }
-        if self.event == "paid" and order.payment_mode == "counter":
+        if self.event == "paid" and order.payment_mode in ("counter", "bank_transfer"):
             # G20 E-45 (docs/04 §12.2 no. 7): metode saja, tanpa identitas kasir/sesi/POS. QRIS tidak membawa kunci
             # ini (payload & sidik event pra-G20 tidak berubah). G22 §14.C.4: + nilai Poin EFN (BFF commit redeem).
+            # G26 L-100: transfer bank memakai bentuk yang sama, tanpa identitas Verifikator.
             points_value = order._efn_amount_out(order.points_value or 0.0)
-            payload["payment"] = {"method": "counter", "points_value": points_value}
+            payload["payment"] = {
+                "method": order.payment_mode,
+                "points_value": points_value,
+            }
+        if self.event == "transfer_rejected":
+            # G26 §17.5: kode alasan dari allowlist saja; catatan internal staf TIDAK pernah dikirim.
+            payload["transfer"] = {"reason": self.detail_code or None}
         if self.event == "ready":
             # G22 B-7a: siap dari layar dapur (semua tiket KDS) atau tombol staf.
             payload["ready_source"] = order.ready_source or "manual"
@@ -270,7 +287,8 @@ class EfnOnlineEventOutbox(models.Model):
             # FP semgrep (G17): yang di-log hanya NAMA env var (konstanta HMAC_FILE_ENV), nilai secret tidak pernah.
             # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
             _logger.error(
-                "EFN online outbox: secret HMAC event tidak terbaca (cek env %s); tidak dikirim", HMAC_FILE_ENV
+                "EFN online outbox: secret HMAC event tidak terbaca (cek env %s); tidak dikirim",
+                HMAC_FILE_ENV,
             )
             self._efn_retry_or_fail("hmac_missing")
             return
@@ -289,7 +307,7 @@ class EfnOnlineEventOutbox(models.Model):
             SIGNATURE_HEADER: f"t={timestamp},v1={sign_body(secret, timestamp, raw)}",
         }
         try:
-            response = requests.post(  # noqa: S113 - timeout di bawah
+            response = requests.post(
                 base_url + EVENT_PATH,
                 data=raw,
                 headers=headers,
@@ -305,7 +323,11 @@ class EfnOnlineEventOutbox(models.Model):
             self._efn_retry_or_fail("bff_timeout")
             return
         except requests.exceptions.RequestException as exc:
-            _logger.warning("EFN online outbox %s: BFF tidak terjangkau (%s)", self.id, type(exc).__name__)
+            _logger.warning(
+                "EFN online outbox %s: BFF tidak terjangkau (%s)",
+                self.id,
+                type(exc).__name__,
+            )
             self._efn_retry_or_fail("bff_unreachable")
             return
         status = response.status_code
@@ -318,7 +340,13 @@ class EfnOnlineEventOutbox(models.Model):
                     "attempt_count": self.attempt_count + 1,
                 }
             )
-            _logger.info("EFN online outbox %s (%s seq %s) -> %s", self.id, self.event, self.seq, status)
+            _logger.info(
+                "EFN online outbox %s (%s seq %s) -> %s",
+                self.id,
+                self.event,
+                self.seq,
+                status,
+            )
             return
         if status == 409 and self._efn_error_code(response) == "event_conflict":
             # G18-QA-01: BFF punya event berkunci sama dengan isi berbeda (mis. Odoo dipulihkan) -> final + review.
@@ -358,7 +386,12 @@ class EfnOnlineEventOutbox(models.Model):
         attempts = self.attempt_count + 1
         delay = min(BACKOFF_BASE_SECONDS * (2 ** (attempts - 1)), BACKOFF_MAX_SECONDS)
         _logger.warning(
-            "EFN online outbox %s (%s) gagal %s, percobaan %d; ulang %ds", self.id, self.event, code, attempts, delay
+            "EFN online outbox %s (%s) gagal %s, percobaan %d; ulang %ds",
+            self.id,
+            self.event,
+            code,
+            attempts,
+            delay,
         )
         self.write(
             {

@@ -46,7 +46,13 @@ export class ImageProcessor {
     this.gate = new Semaphore(config.imageMaxConcurrency, config.imageQueueMax, config.imageQueueTimeoutMs);
   }
 
-  async normalize(input: Buffer): Promise<NormalizedImage> {
+  /**
+   * `opts` (G26 §17.4): bukti transfer memakai sisi maks lebih kecil agar JPEG ≤ 1,5 MiB (batas Odoo); default = Price
+   * Hunter (2048 px, q85). Semaphore/antrean decode sama untuk semua pemakai.
+   */
+  async normalize(input: Buffer, opts: { maxDimension?: number; quality?: number } = {}): Promise<NormalizedImage> {
+    const maxDim = opts.maxDimension ?? MAX_DIMENSION;
+    const quality = opts.quality ?? JPEG_QUALITY;
     let release: () => void;
     try {
       release = await this.gate.acquire();
@@ -59,8 +65,8 @@ export class ImageProcessor {
     try {
       const { data, info } = await sharp(input, { failOn: 'error', limitInputPixels: MAX_INPUT_PIXELS })
         .rotate()
-        .resize({ width: MAX_DIMENSION, height: MAX_DIMENSION, fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: JPEG_QUALITY })
+        .resize({ width: maxDim, height: maxDim, fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality })
         .toBuffer({ resolveWithObject: true });
       const phash = await differenceHash(data);
       return { jpeg: data, width: info.width, height: info.height, phash };

@@ -57,7 +57,14 @@ MAX_PROMO_CODES = 3
 # pesanan berikut ditolak: partner generik kanal akan mengumpulkan kartu/poin.
 ONLINE_PROGRAM_TYPES = ("promotion", "promo_code", "buy_x_get_y", "coupons")
 
-CANCEL_REASONS = ("payment_expired", "customer", "place_failed", "stock_short", "ops", "review")
+CANCEL_REASONS = (
+    "payment_expired",
+    "customer",
+    "place_failed",
+    "stock_short",
+    "ops",
+    "review",
+)
 REFUND_REASONS = ("stock_short", "customer_cs", "ops_cancelled", "review")
 FULFILMENTS = ("pickup", "delivery")
 ALLOWED_LANGS = ("id_ID", "en_US")
@@ -71,8 +78,24 @@ DEFAULT_PICKUP_KDF_ROUNDS = 600_000
 MIN_PICKUP_KDF_ROUNDS = 1_000  # hanya untuk test; produksi memakai default (param sistem, base.group_system)
 
 # G20 E-45 (docs/04 §12.2, L-50, L-56): metode bayar pesanan online. Urutan = urutan kanonik keluaran katalog.
-PAYMENT_MODES = ("qris", "counter")
+# G26 (docs/04 §17.15, L-95/L-96): + `va`, `ewallet` (gateway lewat BFF, sama dengan qris) dan `bank_transfer`
+# (transfer ke rekening PT penjual, diverifikasi staf di modul efn_online_transfer). `counter` dibekukan untuk kanal
+# online (kill switch COUNTER_ENABLED_PARAM, default mati).
+PAYMENT_MODES = ("qris", "va", "ewallet", "bank_transfer", "counter")
 DEFAULT_PAYMENT_MODE = "qris"
+# Metode yang dilunasi lewat webhook payment gateway di BFF (mark_paid BFF + jurnal titipan Holding, ADR-019 A1).
+GATEWAY_PAYMENT_MODES = ("qris", "va", "ewallet")
+# Metode yang dilunasi lewat jalur INTERNAL Odoo (bukan mark_paid BFF): kasir POS (E-45) / Verifikator transfer (G26).
+INTERNAL_PAYMENT_MODES = ("counter", "bank_transfer")
+# L-95: bayar di kasir untuk pesanan online dibekukan. Hanya nilai "1" menyalakan (test modul efn_online_pos_counter).
+COUNTER_ENABLED_PARAM = "efn_online.counter_enabled"
+
+
+def counter_enabled(env):
+    """L-95: True hanya bila parameter sistem ``efn_online.counter_enabled`` = ``"1"`` (default mati)."""
+    return env["ir.config_parameter"].sudo().get_param(COUNTER_ENABLED_PARAM) == "1"
+
+
 # Kode bayar di kasir (dibuat BFF, alfabet §10.2 sama dengan kode ambil). Odoo hanya menyimpan digest KDF
 # DETERMINISTIK per company (bukan salt acak seperti kode ambil) karena kasir mengetik kode TANPA memilih pesanan:
 # pencarian = persamaan digest. Salt = sha256("efn_online_counter:<company_id>:<database.secret>") -> digest tidak

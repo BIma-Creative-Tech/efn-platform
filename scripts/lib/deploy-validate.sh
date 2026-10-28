@@ -23,6 +23,7 @@ EFN_RELEASE_CONFIG_VARS=(ACME_EMAIL PAYMENT_PROVIDER PG_SUPERUSER WHATSAPP_ENABL
   ETL_AUDIT_COPY_ENABLED OLLAMA_VISION_MODEL MIGRATION_ENABLED METABASE_ADMIN_EMAIL ETL_LOYALTY_RECON_NOT_BEFORE
   ONLINE_ENABLED ONLINE_CATALOG_ENABLED ONLINE_CHANNELS ONLINE_FULFILMENTS ONLINE_PAYMENT_TIMEOUT_SECONDS
   ONLINE_QUOTE_TTL_SECONDS ONLINE_MAX_OPEN_ORDERS_PER_MEMBER ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER ONLINE_PAYMENT_METHODS
+  ONLINE_TRANSFER_MAX_UPLOADS ONLINE_TRANSFER_MIN_VERIFY_SECONDS ONLINE_MAX_OPEN_TRANSFER_ORDERS_PER_MEMBER
   ONLINE_CATALOG_SYNC_SECONDS ONLINE_PICKUP_CODE_MAX_DAYS
   ONLINE_ORDER_MEMBER_LINK_DAYS ONLINE_EVENT_RETENTION_DAYS ONLINE_ADMIN_AUDIT_RETENTION_DAYS ODOO_RPC_TIMEOUT_MS ODOO_RPC_MAXCONN
   ODOO_RPC_PUBLIC_MAX_CONCURRENCY ODOO_RPC_SAGA_MAX_CONCURRENCY
@@ -70,7 +71,7 @@ EFN_BOOKING_COMPANY_CODES=(PB BCF)
 EFN_ODOO_PII_KEY_NAMES=(odoo_pii_key_v1 odoo_pii_bidx_key odoo_pii_name_key)
 # G17 (docs/04 §10.13): saklar KHUSUS dev/test. Bukan konfigurasi rilis (kunci manifest tidak dikenal = ditolak
 # efn-deploy); efn_validate_config juga menolak nilai true di staging/production lewat jalur manual deploy.sh.
-EFN_DEV_ONLY_SWITCHES=(ODOO_ONLINE_MOCK EFN_PAYMENT_SIMULATOR ETL_AUDIT_EPOCH_AUTO)
+EFN_DEV_ONLY_SWITCHES=(ODOO_ONLINE_MOCK EFN_PAYMENT_SIMULATOR ETL_AUDIT_EPOCH_AUTO ONLINE_COUNTER_LEGACY)
 # Kontrol keamanan yang di production hanya boleh `false` bila nama-nya ada di EFN_ALLOW_CONTROL_OFF (deploy.conf)
 # (ETL_LOYALTY_RECON_NOT_BEFORE: bukan boolean; izin = boleh MEMAJUKAN cutoff di production, dicek scripts/deploy.sh)
 EFN_SECURITY_CONTROLS=(RABBITMQ_STRICT_PERMISSIONS ETL_AUDIT_COPY_ENABLED ETL_LOYALTY_RECON_NOT_BEFORE)
@@ -315,6 +316,8 @@ efn_validate_config() { # app_env
   local spec name lo hi
   for spec in ONLINE_PAYMENT_TIMEOUT_SECONDS:60:3600 ONLINE_QUOTE_TTL_SECONDS:60:1800 \
               ONLINE_MAX_OPEN_ORDERS_PER_MEMBER:1:20 ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER:1:10 \
+              ONLINE_TRANSFER_MAX_UPLOADS:1:5 ONLINE_TRANSFER_MIN_VERIFY_SECONDS:300:1800 \
+              ONLINE_MAX_OPEN_TRANSFER_ORDERS_PER_MEMBER:1:3 \
               ONLINE_CATALOG_SYNC_SECONDS:60:86400 \
               ONLINE_PICKUP_CODE_MAX_DAYS:1:30 ONLINE_ORDER_MEMBER_LINK_DAYS:30:3650 \
               ONLINE_EVENT_RETENTION_DAYS:7:3650 ONLINE_ADMIN_AUDIT_RETENTION_DAYS:30:3650 ODOO_RPC_TIMEOUT_MS:1000:30000 ODOO_RPC_MAXCONN:1:16 \
@@ -361,16 +364,28 @@ efn_validate_config() { # app_env
     _efn_err "ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER (${ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER:-1}) > ONLINE_MAX_OPEN_ORDERS_PER_MEMBER (${ONLINE_MAX_OPEN_ORDERS_PER_MEMBER:-2})"
     return 1
   fi
-  # ONLINE_PAYMENT_METHODS (L-55): daftar qris,counter tanpa duplikat.
-  local pay_methods="${ONLINE_PAYMENT_METHODS:-qris,counter}"
-  if [[ ! "$pay_methods" =~ ^(qris|counter)(,(qris|counter))?$ || "$pay_methods" == qris,qris || "$pay_methods" == counter,counter ]]; then
-    _efn_err "ONLINE_PAYMENT_METHODS harus qris|counter|qris,counter (bukan ${pay_methods})"; return 1
+  # ONLINE_PAYMENT_METHODS (L-55 -> G26 L-95/L-103): daftar qris,bank_transfer tanpa duplikat. `counter` (bayar di kasir)
+  # dibekukan untuk pesanan online: hanya dev/test dengan ONLINE_COUNTER_LEGACY=true (BFF juga menolak start).
+  local pay_methods="${ONLINE_PAYMENT_METHODS:-qris,bank_transfer}"
+  local pm pm_seen=","
+  IFS=',' read -r -a _efn_pms <<< "$pay_methods"
+  if [[ -z "$pay_methods" || "$pay_methods" == *,, || "$pay_methods" == ,* || "$pay_methods" == *, ]]; then
+    _efn_err "ONLINE_PAYMENT_METHODS harus daftar qris|bank_transfer dipisah koma (bukan ${pay_methods})"; return 1
   fi
-  # Online di production: qris butuh payment provider nyata (mock ditolak di atas). Pilot bayar di kasir (L-55)
-  # boleh tanpa vendor HANYA bila ONLINE_PAYMENT_METHODS=counter dan PAYMENT_PROVIDER=disabled.
+  for pm in "${_efn_pms[@]}"; do
+    if [[ ! "$pm" =~ ^(qris|bank_transfer|counter)$ || "$pm_seen" == *",$pm,"* ]]; then
+      _efn_err "ONLINE_PAYMENT_METHODS harus daftar qris|bank_transfer tanpa duplikat (bukan ${pay_methods})"; return 1
+    fi
+    pm_seen+="$pm,"
+  done
+  if [[ "$pm_seen" == *",counter,"* && ( "${ONLINE_COUNTER_LEGACY:-false}" != true || "$app_env" =~ ^(staging|production)$ ) ]]; then
+    _efn_err "ONLINE_PAYMENT_METHODS memuat counter: bayar di kasir dibekukan untuk pesanan online (L-95)"; return 1
+  fi
+  # Online di production: qris butuh payment provider nyata (mock ditolak di atas). Pilot tanpa vendor (L-103)
+  # boleh HANYA bila daftar tanpa qris (mis. bank_transfer) dan PAYMENT_PROVIDER=disabled.
   if [[ "$app_env" == production && "${ONLINE_ENABLED:-false}" == true && ! "${PAYMENT_PROVIDER}" =~ ^(xendit|midtrans)$ ]]; then
-    if [[ "$pay_methods" != counter || "${PAYMENT_PROVIDER}" != disabled ]]; then
-      _efn_err "production ONLINE_ENABLED=true butuh PAYMENT_PROVIDER xendit|midtrans, atau ONLINE_PAYMENT_METHODS=counter + PAYMENT_PROVIDER=disabled (L-55)"
+    if [[ "$pm_seen" == *",qris,"* || "${PAYMENT_PROVIDER}" != disabled ]]; then
+      _efn_err "production ONLINE_ENABLED=true butuh PAYMENT_PROVIDER xendit|midtrans, atau ONLINE_PAYMENT_METHODS=bank_transfer + PAYMENT_PROVIDER=disabled (L-103)"
       return 1
     fi
   fi

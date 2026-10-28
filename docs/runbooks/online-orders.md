@@ -353,6 +353,35 @@ Konsekuensinya, pelanggan **kehilangan akses kode ambil di aplikasi**.
 **Teks ke pelanggan** (respons 409, layar konfirmasi hapus akun, pernyataan usia 17+) masih **draf** dan **menunggu
 persetujuan Legal (DPO sementara)**.
 
+## Transfer bank + bukti (G26, docs/04 §17) {#transfer-bank}
+**Aktivasi (per kanal, dev/staging dulu):**
+1. Odoo: pasang modul `efn_online_transfer`.
+2. Odoo: buat rekening bank milik partner PT, lalu jurnal Bank yang memakainya. **Finance (grup *Validate bank
+   account* / admin) wajib menandai rekening itu terverifikasi** (Rekening Bank → *Send Money* / trusted). Rekening
+   untrusted tidak ditampilkan ke pelanggan dan kanal menolak `bank_transfer`. Tanpa langkah ini, faktur ber-rekening
+   untrusted ditolak saat diposting (CE anti-phishing), sehingga persetujuan Verifikator gagal.
+3. Odoo: di **Kanal online**, isi *Jurnal transfer bank* dan tambahkan `bank_transfer` ke *Metode bayar*.
+4. Odoo: beri grup **Verifikator Pembayaran** ke staf Finance/CS yang bukan kasir atau gudang (SoD `SOD-PAY-01/02`).
+5. Postgres: jalankan migrasi `14-platform-g26.sql`. `scripts/deploy.sh` menjalankannya otomatis.
+6. BFF: set `ONLINE_PAYMENT_METHODS` memuat `bank_transfer`. Pilot tanpa vendor gateway:
+   `ONLINE_PAYMENT_METHODS=bank_transfer` + `PAYMENT_PROVIDER=disabled`.
+
+**Operasi harian:** Verifikator membuka **Verifikasi Transfer → Bukti transfer** dan mencocokkan setiap bukti dengan
+mutasi rekening PT:
+- nominal harus sama persis;
+- kode berita transfer sebaiknya tertulis di berita transfer;
+- bukti bertanda *diduga duplikat* diperiksa lebih teliti.
+
+Lalu Verifikator memilih **Setujui** (isi tanggal, nominal, dan referensi mutasi) atau **Tolak** (alasan dari daftar
+tetap). Bukti harus diputuskan sebelum batas waktu pesanan; unggah ditutup 10 menit sebelum itu.
+
+| Gejala | Tindakan |
+|---|---|
+| `late_transfer_payment` / `review transfer_paid_after_*` | Dana masuk setelah pesanan batal/kedaluwarsa. Finance mengembalikan dana (CS menghubungi pelanggan lewat kanal resmi). Lalu `efn-online-cs refund ...` → approver → `online-refund-settle --provider-ref manual:<ref mutasi>` |
+| `transfer_proof_failed` (warning) berulang | Odoo/gateway tidak terjangkau saat unggah. Pelanggan mendapat 503 dan bisa mengunggah ulang. Cek `odoo-rpc-gateway` (path 21, batas body 2,5 MiB) |
+| `transfer_proof_duplicate_suspect` | Informasi saja. Keputusan tetap di Verifikator |
+| `refund_transfer_manual` | Refund pesanan transfer menunggu Finance mentransfer balik. Setelah itu jalankan settle manual (approver) |
+
 ## Belum / batas
 - Belum ada gerbang otomatis di deploy yang membandingkan `payment_timeout_minutes` Odoo dengan
   `ONLINE_PAYMENT_TIMEOUT_SECONDS` (urutan aktivasi §[aktivasi](#aktivasi-reservasi-1-jam) masih prosedural; pengaman

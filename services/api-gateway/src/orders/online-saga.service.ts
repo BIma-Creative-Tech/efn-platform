@@ -22,6 +22,7 @@ import {
   PartCancelReason,
   PartRow,
   PartStatus,
+  TRANSFER_REFUND_REASON,
   RefundRequestedMessage,
   RefundRow,
   RefundStatus,
@@ -29,6 +30,7 @@ import {
   canTransitionPart,
   compensateMessage,
   deriveOrderStatus,
+  isInternalPaid,
   orderCash,
   orderHasPayment,
   orderPaidMessage,
@@ -174,17 +176,22 @@ export class OnlineSagaService {
     part: PartRow,
     o: { source: 'odoo' | 'bff'; odooState: string; seq: number | null; paidAt: Date | null },
   ): Promise<boolean> {
-    if (order.payment_method !== 'counter') {
+    // G26 §17.15: transfer bank memakai jalur pelunasan internal yang sama (Verifikator Odoo = sumber kebenaran);
+    // status menunggu bayar order transfer = `awaiting_payment` (tanpa intent), counter = `awaiting_counter_payment`.
+    if (!isInternalPaid(order.payment_method)) {
       this.metrics.anomaly('payment_method_mismatch', 'critical', { order_id: order.id, part_id: part.id, state: o.odooState });
       return false;
     }
+    const waiting = order.payment_method === 'bank_transfer' ? 'awaiting_payment' : 'awaiting_counter_payment';
     const mapped = o.odooState === 'paid' ? 'confirmed' : partStatusFromOdoo(o.odooState);
     if (mapped === 'cancelled' || mapped === 'place_failed') return false; // bukan state pelunasan
     const target: PartStatus = mapped && PART_RANK[mapped] >= PART_RANK.confirmed ? mapped : 'confirmed';
     const nowMs = this.now();
-    if (order.status === 'awaiting_counter_payment') {
+    if (order.status === waiting) {
       const paidAt = o.paidAt && o.paidAt.getTime() <= nowMs ? o.paidAt : new Date(nowMs);
-      if (!(await r.transitionOrder(order.id, ['awaiting_counter_payment'], 'paid', { paid_at: paidAt }))) return false;
+      const transferDone = order.payment_method === 'bank_transfer' ? { transfer_status: null, transfer_reject_reason: null } : {};
+      if (!(await r.transitionOrder(order.id, [waiting], 'paid', { paid_at: paidAt, ...transferDone }))) return false;
+      if (order.payment_method === 'bank_transfer') await r.closeTransferProofs(order.id, 'approved', null);
       this.metrics.order('paid');
       // G22 §14.C.3: commit reservasi poin saat pelunasan kasir (transaksi event yang sama)
       await this.points?.commitOrder(r, order, await r.getParts(order.id));
@@ -194,7 +201,7 @@ export class OnlineSagaService {
         const m = compensateMessage(part.id, 'stock_short');
         await r.enqueue(QUEUES.ORDER_COMPENSATE, { ...m }, m.idempotency_key);
       }
-      if (target === 'review') this.metrics.anomaly('counter_paid_review', 'critical', { order_id: order.id, part_id: part.id });
+      if (target === 'review') this.metrics.anomaly(`${order.payment_method}_paid_review`, 'critical', { order_id: order.id, part_id: part.id });
       await this.refreshOrder(r, order.id);
       return true;
     }
@@ -202,7 +209,11 @@ export class OnlineSagaService {
       return this.applyPart(r, part, target, { source: o.source, odooState: o.odooState, seq: o.seq, cancelReason: 'ops' });
     }
     if (order.status === 'expired' || order.status === 'cancelled' || order.status === 'failed') {
-      this.metrics.anomaly('late_counter_payment', 'critical', { order_id: order.id, part_id: part.id, state: o.odooState });
+      this.metrics.anomaly(order.payment_method === 'bank_transfer' ? 'late_transfer_payment' : 'late_counter_payment', 'critical', {
+        order_id: order.id,
+        part_id: part.id,
+        state: o.odooState,
+      });
       return this.applyPart(r, part, 'review', { source: o.source, odooState: o.odooState, seq: o.seq });
     }
     // `created`: place belum selesai di BFF — jangan menimpa; rekonsiliasi status menerapkannya nanti
@@ -413,10 +424,11 @@ export class OnlineSagaService {
     if (!part) throw new PermanentMessageError('bagian tidak ada');
     const order = await this.repo.getOrder(part.order_id);
     if (!order) throw new PermanentMessageError('order tidak ada');
-    // G20 §12.2 no. 8: order bayar di kasir tidak punya intent; "porsi" = amount_payable bagian (satu bagian per order)
-    const counter = order.payment_method === 'counter';
+    // G20 §12.2 no. 8: order bayar di kasir tidak punya intent; "porsi" = amount_payable bagian (satu bagian per order).
+    // G26 §17.8: transfer bank sama (satu PT, tanpa intent); refund selalu lewat approver lalu manual Finance.
+    const counter = isInternalPaid(order.payment_method);
     if (!counter && !order.payment_intent_id) throw new PermanentMessageError('order tanpa intent');
-    if (counter && msg.reason === 'late_payment') throw new PermanentMessageError('late_payment tidak berlaku untuk bayar di kasir');
+    if (counter && msg.reason === 'late_payment') throw new PermanentMessageError('late_payment tidak berlaku untuk bayar di kasir/transfer');
     const intentId = order.payment_intent_id;
     const portion = counter
       ? orderHasPayment(order)
@@ -539,6 +551,12 @@ export class OnlineSagaService {
     return this.claimed(CONSUMER.REFUND, msg.idempotency_key);
   }
 
+  /** G26: refund tanpa intent milik order transfer bank (bukan counter). */
+  private async isTransferRefund(part: PartRow): Promise<boolean> {
+    const order = await this.repo.getOrder(part.order_id);
+    return order?.payment_method === 'bank_transfer';
+  }
+
   private async claimed(consumer: string, key: string): Promise<'done'> {
     await this.repo.tx(async (r) => r.claim(consumer, key));
     return 'done';
@@ -606,6 +624,14 @@ export class OnlineSagaService {
         this.metrics.refund('failed');
         return this.claimed(CONSUMER.REFUND, msg.idempotency_key);
       }
+      if (claim.payment_intent_id === null && (await this.isTransferRefund(part))) {
+        // G26 §17.8: transfer bank — BFF TIDAK memanggil gateway/POS. Finance mentransfer balik ke rekening pelanggan
+        // (dikumpulkan CS lewat kanal resmi, bukan app), lalu CLI `online-refund-settle --provider-ref manual:<ref>`.
+        if (!(await this.casWrite(msg.refund_id, token, { status: 'manual_required', failure_reason: TRANSFER_REFUND_REASON }))) return 'pending';
+        this.metrics.refund('manual_required');
+        this.metrics.anomaly('refund_transfer_manual', 'warning', { refund_id: msg.refund_id, part_id: part.id });
+        return this.claimed(CONSUMER.REFUND, msg.idempotency_key);
+      }
       if (claim.payment_intent_id === null) {
         // G20 §12.2 no. 8: bayar di kasir — BFF TIDAK memanggil gateway. Uang keluar = refund order POS pelunasan ke
         // metode asal (E-31). L-60: status di sini HANYA dicapai setelah persetujuan approver (`approval_required` →
@@ -663,8 +689,9 @@ export class OnlineSagaService {
   /** `gateway_done` → `efn_online_refund_settled` (bila ada dokumen Odoo) → `settled` + restore poin (G22 D-22-11). */
   private async finishGatewayDone(msg: RefundRequestedMessage, part: PartRow, refund: RefundRow): Promise<'done'> {
     // L-57: Odoo menolak `efn_online_refund_settled` untuk pesanan counter (`invalid_state`) — uang keluar lewat refund
-    // order POS; BFF hanya mencatat settled (tanpa panggilan Odoo).
-    if (refund.odoo_refund_ref && refund.payment_intent_id !== null) {
+    // order POS; BFF hanya mencatat settled (tanpa panggilan Odoo). G26 §17.8: transfer bank tetap memanggil Odoo
+    // (pembayaran keluar di jurnal transfer kanal).
+    if (refund.odoo_refund_ref && (refund.payment_intent_id !== null || refund.failure_reason === TRANSFER_REFUND_REASON)) {
       await this.odoo.refundSettled(part.channel_code, refund.odoo_refund_ref, {
         provider_refund_ref: refund.provider_refund_ref ?? `gw:${refund.id}`,
         settled_at: new Date(this.now()).toISOString(),

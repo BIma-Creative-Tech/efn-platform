@@ -18,6 +18,7 @@ import {
   parseSlots,
   parseStatus,
   parseStock,
+  parseTransferSubmit,
 } from './odoo-online.parse';
 import {
   CancelReason,
@@ -47,6 +48,8 @@ import {
   SetInvoicePartyResult,
   StatusRow,
   StockRow,
+  TransferSubmitInput,
+  TransferSubmitResult,
 } from './odoo-online.types';
 
 /** SEC-96/SEC-109: dua pool konkurensi json2 per proses (publik vs saga). */
@@ -394,6 +397,20 @@ export class Json2OdooOnlineClient implements OdooOnlineApi {
       { timeoutMs: this.config.odooRpcTimeoutMs, deadlineMs: this.config.odooRpcTimeoutMs * 2 },
     );
     return parseSetInvoiceParty(v);
+  }
+  /**
+   * G26 §17.15 (path ke-21): foto bukti transfer. `proof.image_b64` = PII (foto memuat nama & rekening pengirim) → body
+   * hanya di memori request ini; klien ini tidak pernah me-log body. Pool saga (bukan pool publik katalog). Idempoten
+   * di Odoo per `idempotency_key`/`proof_id`, jadi retry jaringan aman.
+   */
+  async transferSubmit(channel: string, platformOrderRef: string, proof: TransferSubmitInput): Promise<TransferSubmitResult> {
+    const v = await this.call(
+      'transferSubmit',
+      channel,
+      { channel_code: channel, platform_order_ref: platformOrderRef, proof: { ...proof } },
+      { timeoutMs: this.config.odooRpcTimeoutMs * 2, deadlineMs: this.config.odooRpcTimeoutMs * 4 },
+    );
+    return parseTransferSubmit(v);
   }
   async status(channel: string, platformOrderRefs: string[]): Promise<StatusRow[]> {
     const v = await this.call('status', channel, { channel_code: channel, platform_order_refs: platformOrderRefs.slice(0, 100) }, {

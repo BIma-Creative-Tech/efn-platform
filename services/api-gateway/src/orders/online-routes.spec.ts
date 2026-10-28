@@ -22,6 +22,7 @@ import { CatalogService } from '../catalog/catalog.service';
 import { OnlineEventHmacGuard } from './order-events.guard';
 import { OrderEventsService } from './order-events.service';
 import { OrderEventsController, OrdersController } from './orders.controller';
+import { ImageProcessor } from '../market-scout/image/image-processor';
 import { OrdersService } from './orders.service';
 
 const MEMBER = '8d7b5a1e-2c3f-4a5b-9c8d-7e6f5a4b3c2d';
@@ -73,6 +74,8 @@ async function boot(over: Record<string, string> = {}) {
       { provide: CartService, useValue: cart },
       { provide: QuoteService, useValue: quotes },
       { provide: OrderEventsService, useValue: events },
+      // G26 §17.4: re-encode bukti transfer (rute transfer-proof; tidak dipanggil test ini)
+      { provide: ImageProcessor, useValue: { normalize: jest.fn() } },
       { provide: APP_FILTER, useClass: ContractExceptionFilter },
     ],
   }).compile();

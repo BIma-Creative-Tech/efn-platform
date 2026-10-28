@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G26 L-99: setiap keputusan Verifikator (state, alasan, mutasi, siapa, kapan) tercatat append-only efn_audit.
+     Foto (Binary) dan catatan bebas tidak dicatat (denylist binary efn_audit; field `note` dikecualikan). -->
+<odoo noupdate="1">
+    <record id="audit_rule_efn_online_transfer_proof" model="efn.audit.rule">
+        <field name="name">EFN - Bukti transfer online</field>
+        <field name="model_id" ref="model_efn_online_transfer_proof"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+        <field name="excluded_field_ids" eval="[(6, 0, [ref('field_efn_online_transfer_proof__note')])]"/>
+    </record>
+</odoo>

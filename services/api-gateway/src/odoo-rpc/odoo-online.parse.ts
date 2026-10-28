@@ -21,6 +21,7 @@ import {
   StatusRow,
   StockRow,
   TaxGroup,
+  TransferSubmitResult,
 } from './odoo-online.types';
 import { PROMO_CODE_RE } from './promo-codes';
 
@@ -199,7 +200,7 @@ export function parsePaymentModes(v: unknown): ChannelPaymentMode[] | null {
   if (v === undefined || v === null || v === false) return null;
   const raw = arr(v, 'channel.payment_modes', 10).map((x) => str(x, 'payment_mode', 32));
   const out: ChannelPaymentMode[] = [];
-  for (const m of raw) if ((m === 'qris' || m === 'counter') && !out.includes(m)) out.push(m);
+  for (const m of raw) if ((m === 'qris' || m === 'counter' || m === 'bank_transfer') && !out.includes(m)) out.push(m);
   return out;
 }
 
@@ -403,7 +404,7 @@ export function parsePlace(v: unknown): PlaceResult {
   // G22 §14.C.3: amount_due (porsi tunai) — absen (Odoo pra-G22) = amount_payable; wajib 1..amount_payable
   const amountDue = o.amount_due === undefined || o.amount_due === null || o.amount_due === false ? amountPayable : rupiah(o.amount_due, 'amount_due');
   if (amountDue < 1 || amountDue > amountPayable) bad('amount_due di luar 1..amount_payable');
-  return {
+  const out: PlaceResult = {
     order_state: str(o.order_state, 'order_state', 32),
     sale_order_name: optStr(o.sale_order_name, 'sale_order_name', 64),
     amount_total: num(o.amount_total, 'amount_total'),
@@ -411,6 +412,21 @@ export function parsePlace(v: unknown): PlaceResult {
     expires_at: date(o.expires_at, 'expires_at'),
     amount_due: amountDue,
   };
+  // G26 §17.3: rekening PT penjual (hanya place bank_transfer). Bentuk ketat — dipakai untuk instruksi ke pelanggan.
+  if (o.transfer_account !== undefined && o.transfer_account !== null && o.transfer_account !== false) {
+    const t = obj(o.transfer_account, 'transfer_account');
+    const bank = str(t.bank_name, 'transfer_account.bank_name', 64).trim();
+    const number = str(t.account_number, 'transfer_account.account_number', 20);
+    const holder = str(t.account_holder, 'transfer_account.account_holder', 128).trim();
+    if (!bank || !holder || !/^\d{6,20}$/.test(number)) bad('transfer_account tidak lengkap');
+    out.transfer_account = { bank_name: bank, account_number: number, account_holder: holder };
+  }
+  return out;
+}
+
+export function parseTransferSubmit(v: unknown): TransferSubmitResult {
+  const o = obj(v, 'transfer_submit');
+  return { state: str(o.state, 'state', 32) };
 }
 
 export function parseMarkPaid(v: unknown): MarkPaidResult {

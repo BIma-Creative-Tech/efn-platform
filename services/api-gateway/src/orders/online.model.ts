@@ -15,12 +15,33 @@ export type OrderStatus =
   | 'expired'
   | 'failed'
   | 'review';
-/** G20 §12.2 no. 2: metode bayar pesanan online (`qris` = gateway, `counter` = bayar di kasir, satu PT saja). */
-export type PaymentMethod = 'qris' | 'counter';
-export const PAYMENT_METHODS: readonly PaymentMethod[] = ['qris', 'counter'];
+/**
+ * G20 §12.2 no. 2: metode bayar pesanan online (`qris` = gateway, `counter` = bayar di kasir, satu PT saja).
+ * G26 §17.2 (L-95/L-96): + `bank_transfer` (transfer ke rekening PT penjual + bukti, diverifikasi staf Odoo; satu PT,
+ * tanpa payment intent). `counter` dibekukan untuk pesanan baru (hanya dengan `ONLINE_COUNTER_LEGACY`).
+ */
+export type PaymentMethod = 'qris' | 'counter' | 'bank_transfer';
+export const PAYMENT_METHODS: readonly PaymentMethod[] = ['qris', 'counter', 'bank_transfer'];
 export function isPaymentMethod(v: unknown): v is PaymentMethod {
-  return v === 'qris' || v === 'counter';
+  return v === 'qris' || v === 'counter' || v === 'bank_transfer';
 }
+/** Metode yang dilunasi lewat jalur INTERNAL Odoo (kasir POS / Verifikator), tanpa payment intent gateway. */
+export function isInternalPaid(m: PaymentMethod): boolean {
+  return m === 'counter' || m === 'bank_transfer';
+}
+/** G26 §17.3: sub-status pembayaran transfer bank selama order `awaiting_payment`. */
+export type TransferStatus = 'awaiting_proof' | 'awaiting_verification' | 'rejected';
+/** G26 §17.5: alasan tolak Verifikator (allowlist; sama dengan Odoo `REJECT_REASONS`). */
+export const TRANSFER_REJECT_REASONS = ['amount_mismatch', 'unreadable', 'wrong_account', 'not_received', 'duplicate_proof'] as const;
+export type TransferRejectReason = (typeof TRANSFER_REJECT_REASONS)[number];
+/** G26 §17.3: rekening tujuan (milik PT penjual, bukan PII pelanggan) dari hasil place Odoo. */
+export interface TransferAccount {
+  bank_name: string;
+  account_number: string;
+  account_holder: string;
+}
+/** G26 §17.8: refund pesanan transfer bank selalu manual (Finance mentransfer balik). */
+export const TRANSFER_REFUND_REASON = 'transfer_refund_manual';
 /** Status bagian per SO (docs/04 §10.6.2). */
 export type PartStatus =
   | 'placing'
@@ -141,7 +162,7 @@ export function deriveOrderStatus(current: OrderStatus, parts: readonly PartStat
  * no. 7). Dipakai untuk refund (CS/Odoo/kompensasi) — order `counter` tidak pernah punya intent gateway.
  */
 export function orderHasPayment(o: Pick<OrderRow, 'payment_intent_id' | 'payment_method' | 'paid_at'>): boolean {
-  return o.payment_intent_id !== null || (o.payment_method === 'counter' && o.paid_at !== null);
+  return o.payment_intent_id !== null || (isInternalPaid(o.payment_method) && o.paid_at !== null);
 }
 
 export interface PartLine {
@@ -186,6 +207,12 @@ export interface OrderRow {
   amount_points_value?: number;
   /** G22: Σ porsi tunai (= amount_payable − amount_points_value); null = order pra-G22/tanpa poin. */
   amount_cash?: number | null;
+  // ── G26 §17.3 (hanya order `bank_transfer`; null/0 untuk metode lain) ──
+  transfer_status?: TransferStatus | null;
+  transfer_ref?: string | null;
+  transfer_account?: TransferAccount | null;
+  transfer_uploads?: number;
+  transfer_reject_reason?: TransferRejectReason | null;
 }
 
 /** Porsi TUNAI bagian (G22): `amount_cash` bila terisi, selain itu `amount_payable` (tanpa poin). */
@@ -319,7 +346,19 @@ export type PartPatch = Partial<
 export type OrderPatch = Partial<
   Pick<
     OrderRow,
-    'status' | 'payment_intent_id' | 'paid_at' | 'closed_at' | 'close_reason' | 'amount_payable' | 'expires_at' | 'amount_points_value' | 'amount_cash'
+    | 'status'
+    | 'payment_intent_id'
+    | 'paid_at'
+    | 'closed_at'
+    | 'close_reason'
+    | 'amount_payable'
+    | 'expires_at'
+    | 'amount_points_value'
+    | 'amount_cash'
+    | 'transfer_status'
+    | 'transfer_account'
+    | 'transfer_uploads'
+    | 'transfer_reject_reason'
   >
 >;
 export type RefundPatch = Partial<
@@ -367,5 +406,5 @@ export function refundRequestedMessage(refundId: string): RefundRequestedMessage
   return { schema_version: 1, idempotency_key: `order.refund.requested:${refundId}`, refund_id: refundId };
 }
 
-export const NOTIFY_TEMPLATES_ONLINE = ['online_order_ready', 'online_order_cancelled', 'online_order_refunded'] as const;
+export const NOTIFY_TEMPLATES_ONLINE = ['online_order_ready', 'online_order_cancelled', 'online_order_refunded', 'online_transfer_rejected'] as const;
 export type OnlineNotifyTemplate = (typeof NOTIFY_TEMPLATES_ONLINE)[number];

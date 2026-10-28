@@ -15,6 +15,8 @@ export const NOTIFY_TEMPLATES: Readonly<Record<string, NotifyTemplate>> = {
   online_order_ready: { waTemplate: 'efn_online_order_ready', params: [] },
   online_order_cancelled: { waTemplate: 'efn_online_order_cancelled', params: [] },
   online_order_refunded: { waTemplate: 'efn_online_order_refunded', params: [] },
+  // G26 §17.5 (L-100): bukti transfer ditolak — TANPA alasan/nominal/rekening; hanya "unggah ulang, buka aplikasi".
+  online_transfer_rejected: { waTemplate: 'efn_online_transfer_rejected', params: [] },
   // G23 §15.5: reservasi meja — TANPA nama tamu/catatan/nomor meja; hanya "buka aplikasi" (UTILITY tanpa parameter).
   booking_confirmed: { waTemplate: 'efn_booking_confirmed', params: [] },
   booking_cancelled: { waTemplate: 'efn_booking_cancelled', params: [] },

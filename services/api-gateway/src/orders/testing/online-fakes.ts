@@ -30,6 +30,7 @@ import {
   OrderExportRow,
   RetentionConfig,
   RetentionResult,
+  TransferProofRow,
 } from '../online.repository';
 import { OnlineSagaService } from '../online-saga.service';
 
@@ -45,6 +46,7 @@ export interface MemState {
   members: Map<string, string>;
   activeDeletes: Set<string>;
   intents: Map<string, OnlineIntent & { onlineOrderId: string }>;
+  transferProofs: TransferProofRow[];
 }
 
 function clone<T>(v: T): T {
@@ -64,6 +66,7 @@ export class MemoryOnlineRepo implements OnlineRepo {
     members: new Map(),
     activeDeletes: new Set(),
     intents: new Map(),
+    transferProofs: [],
   };
   private depth = 0;
   now: () => number = () => Date.now();
@@ -99,8 +102,54 @@ export class MemoryOnlineRepo implements OnlineRepo {
 
   async insertOrder(o: NewOrder): Promise<boolean> {
     if ([...this.state.orders.values()].some((x) => x.member_id === o.member_id && x.idempotency_key === o.idempotency_key)) return false;
-    this.state.orders.set(o.id, { ...o, payment_intent_id: null, paid_at: null, closed_at: null, close_reason: null, created_at: this.d(), updated_at: this.d() });
+    this.state.orders.set(o.id, {
+      ...o,
+      payment_intent_id: null,
+      paid_at: null,
+      closed_at: null,
+      close_reason: null,
+      created_at: this.d(),
+      updated_at: this.d(),
+      transfer_ref: o.transfer_ref ?? null,
+      transfer_status: null,
+      transfer_account: null,
+      transfer_uploads: 0,
+      transfer_reject_reason: null,
+    });
     return true;
+  }
+  async transferAwaitingParts(limit: number): Promise<PartRow[]> {
+    return [...this.state.parts.values()]
+      .filter((p) => {
+        const o = this.state.orders.get(p.order_id);
+        return p.status === 'placed' && o?.payment_method === 'bank_transfer' && o.status === 'awaiting_payment' && o.transfer_status === 'awaiting_verification';
+      })
+      .slice(0, limit)
+      .map(clone);
+  }
+  async insertTransferProof(p: Omit<TransferProofRow, 'uploaded_at' | 'decided_at' | 'reject_reason'>): Promise<void> {
+    if (this.state.transferProofs.some((x) => x.id === p.id)) return;
+    this.state.transferProofs.push({ ...p, reject_reason: null, uploaded_at: this.d(), decided_at: null });
+  }
+  async findSimilarTransferProof(orderId: string, sha256: string, dhash: string, since: Date, maxDistance: number): Promise<boolean> {
+    const dist = (a: string, b: string): number => {
+      let x = BigInt(`0x${a}`) ^ BigInt(`0x${b}`);
+      let n = 0;
+      while (x > 0n) {
+        n += Number(x & 1n);
+        x >>= 1n;
+      }
+      return n;
+    };
+    return this.state.transferProofs.some((p) => p.order_id !== orderId && p.uploaded_at >= since && (p.sha256 === sha256 || dist(p.dhash, dhash) <= maxDistance));
+  }
+  async closeTransferProofs(orderId: string, status: 'approved' | 'rejected' | 'expired', reason: string | null): Promise<void> {
+    for (const p of this.state.transferProofs) {
+      if (p.order_id === orderId && p.status === 'submitted') Object.assign(p, { status, reject_reason: reason, decided_at: this.d() });
+    }
+  }
+  async transferProofsOf(orderId: string): Promise<TransferProofRow[]> {
+    return clone(this.state.transferProofs.filter((p) => p.order_id === orderId));
   }
   async findOrderByKey(memberId: string, key: string): Promise<OrderRow | null> {
     return clone([...this.state.orders.values()].find((x) => x.member_id === memberId && x.idempotency_key === key) ?? null);

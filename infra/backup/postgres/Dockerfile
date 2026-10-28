@@ -35,8 +35,11 @@ FROM postgres:16.15-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d0
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # hadolint ignore=DL3008
+# G26 (PR #71, Trivy image): libssl3/openssl 3.0.22-1~deb12u2 (CVE-2026-84782) terbit setelah digest base dipin ->
+# dinaikkan eksplisit (hanya paket ber-CVE). Hapus dari daftar saat digest postgres berikutnya sudah memuatnya.
 RUN set -eux; \
     apt-get update; \
+    apt-get install -y --no-install-recommends --only-upgrade libssl3 openssl; \
     apt-get install -y --no-install-recommends ca-certificates libsodium23; \
     rm -rf /var/lib/apt/lists/*; \
     # G16 (Trivy image gate): gosu image resmi dibangun dengan Go lama (CVE stdlib HIGH/CRITICAL) dan hanya dipakai

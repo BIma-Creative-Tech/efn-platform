@@ -98,7 +98,10 @@ class EfnSodRule(models.Model):
     group_a_id = fields.Many2one("res.groups", string="Grup A", required=True, ondelete="cascade")
     group_b_id = fields.Many2one("res.groups", string="Grup B", required=True, ondelete="cascade")
     mode = fields.Selection(
-        [("block", "Blokir"), ("report_only", "Laporan saja")], required=True, default="block", string="Mode"
+        [("block", "Blokir"), ("report_only", "Laporan saja")],
+        required=True,
+        default="block",
+        string="Mode",
     )
     active = fields.Boolean(default=True)
     rationale = fields.Text(string="Alasan")
@@ -171,7 +174,13 @@ class EfnSodRule(models.Model):
 
     def _efn_key_state(self):
         return {
-            rule.id: (rule.mode, rule.active, rule.group_a_id.id, rule.group_b_id.id, rule.company_id.id)
+            rule.id: (
+                rule.mode,
+                rule.active,
+                rule.group_a_id.id,
+                rule.group_b_id.id,
+                rule.company_id.id,
+            )
             for rule in self.sudo().with_context(active_test=False)
         }
 
@@ -237,7 +246,9 @@ class EfnSodRule(models.Model):
                 continue
             if not self.pool.ready:
                 _logger.warning(
-                    "EFN_SOD_RULE_BLOCK_WITH_VIOLATIONS rule=%s count=%s (registry loading)", rule.code, count
+                    "EFN_SOD_RULE_BLOCK_WITH_VIOLATIONS rule=%s count=%s (registry loading)",
+                    rule.code,
+                    count,
                 )
                 continue
             raise ValidationError(
@@ -350,6 +361,11 @@ class EfnSodRule(models.Model):
 
     # ------------------------------------------------------------ bawaan
     @api.model
+    def _efn_default_rule_specs(self):
+        """Daftar aturan bawaan. Modul lain menambah aturannya lewat override (G26: efn_online_transfer SOD-PAY-*)."""
+        return DEFAULT_SOD_RULES
+
+    @api.model
     def _efn_ensure_default_rules(self):
         """Buat aturan bawaan yang belum ada (kunci `code`, termasuk arsip) dan kedua grupnya ada.
 
@@ -360,7 +376,14 @@ class EfnSodRule(models.Model):
         Rule = self.sudo().with_context(active_test=False)
         created = Rule.browse()
         uids = None
-        for code, name, xmlid_a, xmlid_b, mode, rationale in DEFAULT_SOD_RULES:
+        for (
+            code,
+            name,
+            xmlid_a,
+            xmlid_b,
+            mode,
+            rationale,
+        ) in self._efn_default_rule_specs():
             if Rule.search_count([("code", "=", code)]):
                 continue
             group_a = self.env.ref(xmlid_a, raise_if_not_found=False)

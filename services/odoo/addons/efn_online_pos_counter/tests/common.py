@@ -14,6 +14,8 @@ def set_test_params(env):
     params = env["ir.config_parameter"].sudo()
     params.set_param("efn_online.pickup_code_kdf_rounds", "1000")
     params.set_param("efn_online.counter_code_kdf_rounds", "1000")
+    # L-95 (G26): bayar di kasir dibekukan untuk pesanan online baru; test modul ini menyalakan kill switch.
+    params.set_param("efn_online.counter_enabled", "1")
     if "sale_ok" in env["loyalty.program"]._fields:
         env["loyalty.program"].sudo().with_context(active_test=False).search([]).write({"sale_ok": False})
 
@@ -38,14 +40,28 @@ def make_counter_channel(env, company, warehouse, code, login):
         }
     )
     rounding = env["account.cash.rounding"].create(
-        {"name": f"Rp1 {code}", "rounding": 1.0, "strategy": "add_invoice_line", "rounding_method": "HALF-UP"}
+        {
+            "name": f"Rp1 {code}",
+            "rounding": 1.0,
+            "strategy": "add_invoice_line",
+            "rounding_method": "HALF-UP",
+        }
     )
     rounding.with_company(company).write({"profit_account_id": income.id, "loss_account_id": expense.id})
     titipan = env["account.journal"].create(
-        {"name": f"Titipan Online {code}", "type": "bank", "code": f"T{code[:3]}", "company_id": company.id}
+        {
+            "name": f"Titipan Online {code}",
+            "type": "bank",
+            "code": f"T{code[:3]}",
+            "company_id": company.id,
+        }
     )
     pricelist = env["product.pricelist"].create(
-        {"name": f"Online {code}", "currency_id": company.currency_id.id, "company_id": company.id}
+        {
+            "name": f"Online {code}",
+            "currency_id": company.currency_id.id,
+            "company_id": company.id,
+        }
     )
     partner = env["res.partner"].create({"name": f"Pelanggan Super-App {code}", "company_id": company.id})
     tech = new_test_user(
@@ -66,7 +82,15 @@ def make_counter_channel(env, company, warehouse, code, login):
             "journal_titipan_id": titipan.id,
             "payment_modes": "qris,counter",
             "user_ids": [Command.set(tech.ids)],
-            "outlet_ids": [Command.create({"code": OUTLET, "public_name": "Toko Kasir", "warehouse_id": warehouse.id})],
+            "outlet_ids": [
+                Command.create(
+                    {
+                        "code": OUTLET,
+                        "public_name": "Toko Kasir",
+                        "warehouse_id": warehouse.id,
+                    }
+                )
+            ],
         }
     )
     product = (
@@ -89,7 +113,15 @@ def make_counter_channel(env, company, warehouse, code, login):
     return {"channel": channel, "tech": tech, "product": product}
 
 
-def place_counter(env, fixture, counter_code, qty=1, pickup_code=PICKUP_CODE, payment_mode="counter", outlet=OUTLET):
+def place_counter(
+    env,
+    fixture,
+    counter_code,
+    qty=1,
+    pickup_code=PICKUP_CODE,
+    payment_mode="counter",
+    outlet=OUTLET,
+):
     """Place pesanan lewat metode BFF (user teknis). Kembalikan (part, payload, hasil)."""
     channel, tech = fixture["channel"], fixture["tech"]
     lines = [{"product_id": fixture["product"].id, "qty": qty}]

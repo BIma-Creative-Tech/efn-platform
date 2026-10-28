@@ -123,3 +123,38 @@ ADR-020, ADR-034; L-72 (D-22-10/11), **L-77**, **L-78**, **L-79**. Risiko: R-B05
 - B-7: event `preparing` (kitchen_started_at, tanpa transisi), `ready_source`; B-4: baris beratribut membawa
   `attribute_value_ids` + `attributes_text` (identitas baris = product_id + PTAV).
 - Belum: step-up `ONLINE_REDEEM_STEPUP_MIN_POINTS` (opsional kontrak, tidak dibangun); test terhadap PostgreSQL nyata.
+
+## G26 — pesanan online wajib lunas: transfer bank + bukti (docs/04 §17, K25-07, L-95..L-103)
+- **Bayar di kasir dibekukan** untuk pesanan online baru (L-95). `counter` di `ONLINE_PAYMENT_METHODS` hanya sah bila
+  `ONLINE_COUNTER_LEGACY=true` (dev/test, uji regresi). Di staging/production BFF menolak start. Default dev/test:
+  `qris,bank_transfer`.
+- **Checkout `payment_method: "bank_transfer"`**: hanya pesanan satu PT (`422 transfer_single_part_only`), batas
+  `ONLINE_MAX_OPEN_TRANSFER_ORDERS_PER_MEMBER` (default 1), tanpa payment intent. Status order `awaiting_payment`
+  dengan sub-status `transfer_status` = `awaiting_proof → awaiting_verification → (rejected → awaiting_verification)`.
+  Kode berita transfer (`transfer_ref`, 8 karakter alfabet §10.2) dibuat BFF. Rekening tujuan berasal dari hasil
+  place Odoo (rekening PT, bukan data pribadi) dan hanya tampil selama `awaiting_payment`.
+- **`POST /v1/orders/:id/transfer-proof`** (multipart, tepat satu berkas `photo`, tanpa field teks) → `202 { payment }`:
+  - magic bytes → re-encode `ImageProcessor` (≤ 1600 px, q80, metadata dibuang) → sha256 + dHash.
+  - Bukti order lain dalam 90 hari dengan hash sama atau jarak dHash ≤ 6 ditandai `duplicate_suspect` (tidak ditolak).
+  - Foto dikirim **sinkron** ke Odoo `efn_online_transfer_submit` (path gateway ke-21), lalu dibuang dari memori.
+  - **Foto tidak pernah disimpan BFF.** Isinya data pribadi pengirim. BFF hanya menyimpan baris hash
+    `online_transfer_proof` setelah Odoo menerima.
+  - Galat: `409 transfer_not_awaiting_proof`, `429 transfer_proof_limit` (maks `ONLINE_TRANSFER_MAX_UPLOADS`),
+    `409 transfer_window_closed` (setelah `expires_at − ONLINE_TRANSFER_MIN_VERIFY_SECONDS`), `415 transfer_proof_invalid`,
+    `503 transfer_proof_unavailable` (Odoo gagal; unggahan tidak terhitung), dan rate limit `TRANSFER_PROOF` (5/jam).
+- **Keputusan Verifikator (event Odoo)**:
+  - `paid` `{ payment: { method: "bank_transfer" } }` memakai jalur pelunasan internal yang sama dengan counter
+    (`applyCounterPaid`).
+  - `transfer_rejected { transfer: { reason } }` → `rejected` + alasan (allowlist) + notifikasi
+    `online_transfer_rejected` tanpa parameter.
+  - `review` `transfer_paid_after_cancel|expiry` → bagian `review` (L-57).
+  - Metode yang tidak cocok → `409 payment_method_mismatch`.
+- **Kedaluwarsa/rekonsiliasi**: sebelum order transfer dikedaluwarsakan, sweeper menanyakan status Odoo, karena
+  Verifikator bisa sudah menyetujui. `statusPull` juga memulihkan pelunasan transfer yang event-nya hilang.
+- **Refund**: selalu lewat approver CS (empat mata) → `manual_required` (`transfer_refund_manual`). Finance
+  mentransfer balik, lalu `online-refund-settle --provider-ref manual:<ref>` → `efn_online_refund_settled` (jurnal
+  transfer kanal).
+- Migrasi `14-platform-g26.sql`. Test: `online-transfer.spec.ts`.
+- **Tahap 2 (belum)**: `va`/`ewallet` lewat adapter gateway `createPayment` (§17.7). Nilai itu di
+  `ONLINE_PAYMENT_METHODS` saat ini → ConfigError.
+

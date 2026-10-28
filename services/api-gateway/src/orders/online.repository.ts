@@ -17,7 +17,10 @@ import {
 
 export const ONLINE_REPO = Symbol('ONLINE_REPO');
 
-export type NewOrder = Omit<OrderRow, 'created_at' | 'updated_at' | 'paid_at' | 'closed_at' | 'close_reason' | 'payment_intent_id'>;
+export type NewOrder = Omit<
+  OrderRow,
+  'created_at' | 'updated_at' | 'paid_at' | 'closed_at' | 'close_reason' | 'payment_intent_id' | 'transfer_status' | 'transfer_account' | 'transfer_uploads' | 'transfer_reject_reason'
+>;
 export type NewPart = Omit<
   PartRow,
   | 'created_at'
@@ -42,6 +45,20 @@ export type NewRefund = Omit<
 > & {
   initiated_by?: string | null;
 };
+
+/** G26 §17.9: riwayat unggahan bukti transfer — hash saja (foto tidak pernah disimpan BFF). */
+export interface TransferProofRow {
+  id: string;
+  order_id: string;
+  part_id: string;
+  status: 'submitted' | 'approved' | 'rejected' | 'superseded' | 'expired';
+  sha256: string;
+  dhash: string;
+  duplicate_suspect: boolean;
+  reject_reason: string | null;
+  uploaded_at: Date;
+  decided_at: Date | null;
+}
 
 export interface OnlineEventRecord {
   part_id: string;
@@ -90,6 +107,8 @@ export interface RetentionResult {
   unlinked: number;
   eventsPurged: number;
   adminAuditPurged: number;
+  /** G26 §17.9: baris hash bukti transfer > 730 hari dihapus (tanpa gambar; hanya untuk deteksi bukti dipakai ulang). */
+  transferProofsPurged?: number;
 }
 
 export interface OrderExportRow {
@@ -160,6 +179,15 @@ export interface OnlineRepo {
   partsInStatusBefore(statuses: readonly PartStatus[], updatedBefore: Date, limit: number): Promise<PartRow[]>;
   /** G20: bagian `placed` milik order `awaiting_counter_payment` (rekonsiliasi status Odoo bila event `paid` hilang). */
   counterAwaitingParts(limit: number): Promise<PartRow[]>;
+  /** G26: bagian `placed` milik order `bank_transfer` `awaiting_payment` (rekonsiliasi pelunasan Verifikator). */
+  transferAwaitingParts(limit: number): Promise<PartRow[]>;
+  // ── G26 §17.4 bukti transfer (hash saja) ──
+  insertTransferProof(p: Omit<TransferProofRow, 'uploaded_at' | 'decided_at' | 'reject_reason'>): Promise<void>;
+  /** Bukti order lain (90 hari) dengan sha256 sama ATAU dHash berjarak ≤ `maxDistance` bit. */
+  findSimilarTransferProof(orderId: string, sha256: string, dhash: string, since: Date, maxDistance: number): Promise<boolean>;
+  /** Tandai bukti `submitted` order ini → status baru (keputusan Verifikator / order ditutup). */
+  closeTransferProofs(orderId: string, status: 'approved' | 'rejected' | 'expired', reason: string | null): Promise<void>;
+  transferProofsOf(orderId: string): Promise<TransferProofRow[]>;
   refundsInStatusBefore(statuses: readonly RefundStatus[], updatedBefore: Date, limit: number): Promise<RefundRow[]>;
   /** Order final belum dibayar (`expired|cancelled|failed`) yang masih punya bagian `placing|placed`. */
   closedOrdersWithOpenParts(updatedBefore: Date, limit: number): Promise<OrderRow[]>;
@@ -178,7 +206,7 @@ export interface OnlineRepo {
 
 const ORDER_COLS = `id::text AS id, member_id::text AS member_id, idempotency_key, request_sha256, quote_id::text AS quote_id, status,
   amount_payable, currency, payment_method, payment_intent_id::text AS payment_intent_id, expires_at, paid_at, closed_at, close_reason, created_at, updated_at,
-  amount_points_value, amount_cash`;
+  amount_points_value, amount_cash, transfer_status, transfer_ref, transfer_account, transfer_uploads, transfer_reject_reason`;
 const PART_COLS = `id::text AS id, order_id::text AS order_id, channel_code, company_code, outlet_code, fulfilment, status, lines, tax_groups,
   amount_total, amount_payable, quote_hash, sale_order_name, odoo_state, last_seq, pickup_code_enc, counter_code_enc, refunded_amount, confirmed_at, ready_at,
   handed_over_at, cancelled_at, cancel_reason, created_at, updated_at, points_redeemed, points_value_idr, amount_cash,
@@ -202,7 +230,7 @@ function toOrder(r: Raw): OrderRow {
     status: r.status as OrderStatus,
     amount_payable: n(r.amount_payable),
     currency: 'IDR',
-    payment_method: r.payment_method === 'counter' ? 'counter' : 'qris',
+    payment_method: r.payment_method === 'counter' ? 'counter' : r.payment_method === 'bank_transfer' ? 'bank_transfer' : 'qris',
     payment_intent_id: r.payment_intent_id === null ? null : String(r.payment_intent_id),
     expires_at: d(r.expires_at) as Date,
     paid_at: d(r.paid_at),
@@ -212,6 +240,11 @@ function toOrder(r: Raw): OrderRow {
     updated_at: d(r.updated_at) as Date,
     amount_points_value: Number(r.amount_points_value ?? 0),
     amount_cash: nn(r.amount_cash),
+    transfer_status: (r.transfer_status ?? null) as OrderRow['transfer_status'],
+    transfer_ref: (r.transfer_ref ?? null) as string | null,
+    transfer_account: (r.transfer_account ?? null) as OrderRow['transfer_account'],
+    transfer_uploads: Number(r.transfer_uploads ?? 0),
+    transfer_reject_reason: (r.transfer_reject_reason ?? null) as OrderRow['transfer_reject_reason'],
   };
 }
 
@@ -279,7 +312,23 @@ function toRefund(r: Raw): RefundRow {
   };
 }
 
-const ORDER_PATCH_COLS = new Set(['status', 'payment_intent_id', 'paid_at', 'closed_at', 'close_reason', 'amount_payable', 'expires_at', 'amount_points_value', 'amount_cash']);
+const ORDER_PATCH_COLS = new Set([
+  'status',
+  'payment_intent_id',
+  'paid_at',
+  'closed_at',
+  'close_reason',
+  'amount_payable',
+  'expires_at',
+  'amount_points_value',
+  'amount_cash',
+  // G26 §17.3 (transfer bank)
+  'transfer_status',
+  'transfer_ref',
+  'transfer_account',
+  'transfer_uploads',
+  'transfer_reject_reason',
+]);
 const PART_PATCH_COLS = new Set([
   'status',
   'sale_order_name',
@@ -315,8 +364,10 @@ function setClause(patch: Record<string, unknown>, allowed: ReadonlySet<string>,
   for (const [k, v] of Object.entries(patch)) {
     if (v === undefined) continue;
     if (!allowed.has(k)) throw new Error(`kolom patch tidak diizinkan: ${k}`);
-    params.push(v instanceof Date ? v.toISOString() : v);
-    parts.push(`${k} = $${offset + params.length}`);
+    // G26: kolom jsonb (`transfer_account`) diserialisasi eksplisit (pola insert lines/tax_groups)
+    const json = k === 'transfer_account' && v !== null;
+    params.push(v instanceof Date ? v.toISOString() : json ? JSON.stringify(v) : v);
+    parts.push(`${k} = $${offset + params.length}${json ? '::jsonb' : ''}`);
   }
   parts.push('updated_at = now()');
   return { sql: parts.join(', '), params };
@@ -362,11 +413,11 @@ export class PgOnlineRepo implements OnlineRepo {
   async insertOrder(o: NewOrder): Promise<boolean> {
     const r = await this.q.query(
       `INSERT INTO platform.online_order
-         (id, member_id, idempotency_key, request_sha256, quote_id, status, amount_payable, currency, expires_at, payment_method)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'IDR', $8, $9)
+         (id, member_id, idempotency_key, request_sha256, quote_id, status, amount_payable, currency, expires_at, payment_method, transfer_ref)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'IDR', $8, $9, $10)
        ON CONFLICT ON CONSTRAINT uq_online_order_member_key DO NOTHING
        RETURNING id`,
-      [o.id, o.member_id, o.idempotency_key, o.request_sha256, o.quote_id, o.status, o.amount_payable, o.expires_at.toISOString(), o.payment_method],
+      [o.id, o.member_id, o.idempotency_key, o.request_sha256, o.quote_id, o.status, o.amount_payable, o.expires_at.toISOString(), o.payment_method, o.transfer_ref ?? null],
     );
     return (r.rowCount ?? 0) > 0;
   }
@@ -611,6 +662,62 @@ export class PgOnlineRepo implements OnlineRepo {
     );
     return r.rows.map(toPart);
   }
+  async transferAwaitingParts(limit: number): Promise<PartRow[]> {
+    const r = await this.q.query<Raw>(
+      `SELECT ${PART_COLS} FROM platform.online_order_part
+        WHERE status = 'placed'
+          AND order_id IN (SELECT id FROM platform.online_order
+                            WHERE payment_method = 'bank_transfer' AND status = 'awaiting_payment'
+                              AND transfer_status = 'awaiting_verification' ORDER BY expires_at LIMIT $1)
+        ORDER BY updated_at LIMIT $1`,
+      [limit],
+    );
+    return r.rows.map(toPart);
+  }
+  async insertTransferProof(p: Omit<TransferProofRow, 'uploaded_at' | 'decided_at' | 'reject_reason'>): Promise<void> {
+    await this.q.query(
+      `INSERT INTO platform.online_transfer_proof (id, order_id, part_id, status, sha256, dhash, duplicate_suspect)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING`,
+      [p.id, p.order_id, p.part_id, p.status, p.sha256, p.dhash, p.duplicate_suspect],
+    );
+  }
+  async findSimilarTransferProof(orderId: string, sha256: string, dhash: string, since: Date, maxDistance: number): Promise<boolean> {
+    // dHash 64-bit (hex) → bit(64); jarak Hamming = bit_count(a # b). Order sendiri dikecualikan (unggah ulang sah).
+    const r = await this.q.query<{ n: string }>(
+      `SELECT count(*) AS n FROM platform.online_transfer_proof
+        WHERE order_id <> $1 AND uploaded_at >= $4
+          AND (sha256 = $2 OR bit_count(('x' || dhash)::bit(64) # ('x' || $3)::bit(64)) <= $5)`,
+      [orderId, sha256, dhash, since.toISOString(), maxDistance],
+    );
+    return Number(r.rows[0]?.n ?? 0) > 0;
+  }
+  async closeTransferProofs(orderId: string, status: 'approved' | 'rejected' | 'expired', reason: string | null): Promise<void> {
+    await this.q.query(
+      `UPDATE platform.online_transfer_proof SET status = $2, reject_reason = $3, decided_at = now()
+        WHERE order_id = $1 AND status = 'submitted'`,
+      [orderId, status, reason],
+    );
+  }
+  async transferProofsOf(orderId: string): Promise<TransferProofRow[]> {
+    const r = await this.q.query<Raw>(
+      `SELECT id::text AS id, order_id::text AS order_id, part_id::text AS part_id, status, sha256, dhash, duplicate_suspect,
+              reject_reason, uploaded_at, decided_at
+         FROM platform.online_transfer_proof WHERE order_id = $1 ORDER BY uploaded_at`,
+      [orderId],
+    );
+    return r.rows.map((x) => ({
+      id: String(x.id),
+      order_id: String(x.order_id),
+      part_id: String(x.part_id),
+      status: x.status as TransferProofRow['status'],
+      sha256: String(x.sha256),
+      dhash: String(x.dhash),
+      duplicate_suspect: x.duplicate_suspect === true,
+      reject_reason: (x.reject_reason ?? null) as string | null,
+      uploaded_at: d(x.uploaded_at) as Date,
+      decided_at: d(x.decided_at),
+    }));
+  }
   async counterAwaitingParts(limit: number): Promise<PartRow[]> {
     const r = await this.q.query<Raw>(
       `SELECT ${PART_COLS} FROM platform.online_order_part
@@ -728,6 +835,11 @@ export class PgOnlineRepo implements OnlineRepo {
       adminAuditPurged += n;
       if (n < 5000) break;
     }
+    const proofs = await this.q.query(
+      `DELETE FROM platform.online_transfer_proof
+        WHERE id IN (SELECT id FROM platform.online_transfer_proof WHERE uploaded_at < $1::timestamptz - interval '730 days' LIMIT 5000)`,
+      [ts],
+    );
     return {
       pickupNulled: pickup.rowCount ?? 0,
       counterNulled: counter.rowCount ?? 0,
@@ -735,6 +847,7 @@ export class PgOnlineRepo implements OnlineRepo {
       unlinked: unlink.rowCount ?? 0,
       eventsPurged: events.rowCount ?? 0,
       adminAuditPurged,
+      transferProofsPurged: proofs.rowCount ?? 0,
     };
   }
 

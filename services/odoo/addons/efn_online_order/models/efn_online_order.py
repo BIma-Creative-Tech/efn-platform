@@ -40,6 +40,11 @@ partner pembeli **terlindungi** (``efn_pii``) sebagai ``partner_invoice_id`` SO 
 terpasang dengan field partner benar-benar terenkripsi, atau PT bukan PPN -> ``efn_online:invoice_not_available``
 (profil tidak pernah masuk Odoo tanpa enkripsi). Profil tidak di-log, tidak masuk hasil/hash/outbox.
 
+G26 (docs/04 §17.15, L-95..L-98): ``payment_mode`` bertambah ``va``/``ewallet`` (gateway, sama dengan ``qris``) dan
+``bank_transfer`` (hasil place membawa ``transfer_account`` rekening PT penjual; dilunasi hanya lewat jalur internal
+Verifikator di ``efn_online_transfer``, BFF ``mark_paid`` -> ``invalid_state``). ``counter`` dibekukan untuk pesanan
+baru (kill switch ``efn_online.counter_enabled``).
+
 G22 (docs/04 §14.B W-04, §14.C W-12; L-72 D-22-8/D-22-9/D-22-11):
 - B-4: place menerima baris ``{product_id, qty, attribute_value_ids?}`` (PTAV ikut ``payload_sha256`` hanya bila ada).
 - B-6/B-7: hook ``_efn_after_confirmed`` / ``_efn_after_cancelled`` / ``_efn_after_refund`` (no-op; diisi jembatan
@@ -76,6 +81,7 @@ from .efn_online_common import (
     FULFILMENTS,
     HANDOVER_SCOPE,
     IDEMPOTENCY_KEY_RE,
+    INTERNAL_PAYMENT_MODES,
     MAX_STATUS_REFS,
     OPAQUE_REF_RE,
     OUTLET_CODE_RE,
@@ -89,6 +95,7 @@ from .efn_online_common import (
     check_amount_int,
     check_str,
     counter_code_digest,
+    counter_enabled,
     counter_kdf_rounds,
     counter_secret,
     floor_idr,
@@ -124,8 +131,11 @@ def _efn_points_account_alert_job(dbname, company_id):
             company = env["res.company"].browse(company_id).exists()
             if company:
                 env["efn.online.order"]._efn_points_account_activity(company)
-    except Exception:  # noqa: BLE001 - alert tidak boleh menggagalkan apa pun; log saja
-        _logger.exception("EFN online: aktivitas Finance akun Poin EFN gagal (company #%s)", company_id)
+    except Exception:
+        _logger.exception(
+            "EFN online: aktivitas Finance akun Poin EFN gagal (company #%s)",
+            company_id,
+        )
 
 
 STATES = [
@@ -157,9 +167,18 @@ PLACE_KEYS = frozenset(
 # pickup_code: sha256 cepat atas 39,6 bit dapat di-brute force).
 # G22 W-12 (docs/04 §14.C.3 "Place"): `points_payment` opsional (ikut payload_sha256 hanya bila ada).
 PLACE_OPTIONAL_KEYS = frozenset({"promo_codes", "payment_mode", "counter_code", "points_payment"})
-PAYMENT_MODE_LABELS = {"qris": "QRIS / gateway (BFF)", "counter": "Bayar di kasir"}
+PAYMENT_MODE_LABELS = {
+    "qris": "QRIS / gateway (BFF)",
+    "va": "Virtual Account (BFF)",
+    "ewallet": "E-wallet (BFF)",
+    "bank_transfer": "Transfer bank + bukti",
+    "counter": "Bayar di kasir",
+}
 # Order bayar di kasir yang tidak lagi bisa dibayar normal (batal/kedaluwarsa) tetapi uangnya sudah diterima kasir.
-COUNTER_LATE_REVIEW = {"cancelled": "counter_paid_after_cancel", "placed": "counter_paid_after_expiry"}
+COUNTER_LATE_REVIEW = {
+    "cancelled": "counter_paid_after_cancel",
+    "placed": "counter_paid_after_expiry",
+}
 # G21 E-39: field partner yang menerima profil pembeli; semuanya WAJIB kelas field terenkripsi efn_pii (EfnPiiChar)
 # sebelum profil ditulis (L-63). NIK/paspor ditulis ke dokumen pembeli Coretax -> butuh enkripsi field itu juga
 # (efn_pii_l10n_id, E-38a sisa).
@@ -209,7 +228,13 @@ class EfnOnlineOrder(models.Model):
 
     name = fields.Char(related="sale_order_id.name", store=True, string="Nomor SO")
     company_id = fields.Many2one("res.company", required=True, index=True, readonly=True)
-    channel_id = fields.Many2one("efn.online.channel", required=True, readonly=True, index=True, check_company=True)
+    channel_id = fields.Many2one(
+        "efn.online.channel",
+        required=True,
+        readonly=True,
+        index=True,
+        check_company=True,
+    )
     outlet_id = fields.Many2one("efn.online.outlet", required=True, readonly=True, check_company=True)
     fulfilment = fields.Selection([(f, f) for f in FULFILMENTS], required=True, readonly=True, default="pickup")
     platform_order_ref = fields.Char(required=True, readonly=True, index=True, help="part_id BFF (UUID, opak).")
@@ -219,7 +244,14 @@ class EfnOnlineOrder(models.Model):
     quote_hash = fields.Char(readonly=True)
     sale_order_id = fields.Many2one("sale.order", readonly=True, ondelete="restrict", index=True, check_company=True)
     currency_id = fields.Many2one(related="company_id.currency_id")
-    state = fields.Selection(STATES, required=True, default="placed", readonly=True, index=True, tracking=True)
+    state = fields.Selection(
+        STATES,
+        required=True,
+        default="placed",
+        readonly=True,
+        index=True,
+        tracking=True,
+    )
     amount_total = fields.Monetary(readonly=True)
     amount_payable = fields.Monetary(readonly=True)
     expires_at = fields.Datetime(readonly=True, index=True)
@@ -271,7 +303,10 @@ class EfnOnlineOrder(models.Model):
         help="K-1/K-18-4: Σ subtotal tanpa pajak baris berhak poin (neto refund) × porsi uang; dibekukan saat diambil.",
     )
     kitchen_started_at = fields.Datetime(
-        string="Mulai dimasak", readonly=True, copy=False, help="G22 B-7: tiket KDS pertama mulai dikerjakan."
+        string="Mulai dimasak",
+        readonly=True,
+        copy=False,
+        help="G22 B-7: tiket KDS pertama mulai dikerjakan.",
     )
     ready_source = fields.Selection(READY_SOURCES, string="Sumber 'siap'", readonly=True, copy=False)
     pickup_attempts = fields.Integer(readonly=True, copy=False)
@@ -281,7 +316,10 @@ class EfnOnlineOrder(models.Model):
     cancel_reason = fields.Selection([(r, r) for r in CANCEL_REASONS], readonly=True)
     cancel_idempotency_key = fields.Char(readonly=True, groups="base.group_system", copy=False)
     review_reason = fields.Char(readonly=True, help="Kode saja (tanpa data pribadi).")
-    short_lines = fields.Text(readonly=True, help="JSON [{product_id, requested, available}] saat stok kurang.")
+    short_lines = fields.Text(
+        readonly=True,
+        help="JSON [{product_id, requested, available}] saat stok kurang.",
+    )
     event_seq = fields.Integer(readonly=True, copy=False)
     reminder_flagged = fields.Boolean(readonly=True, copy=False)
     refund_ids = fields.One2many("efn.online.refund", "order_id", readonly=True)
@@ -291,7 +329,8 @@ class EfnOnlineOrder(models.Model):
     _platform_order_ref_unique = models.Constraint("unique (platform_order_ref)", "platform_order_ref harus unik.")
     _sale_order_unique = models.Constraint("unique (sale_order_id)", "Satu SO hanya untuk satu pesanan online.")
     _points_value_check = models.Constraint(
-        "CHECK (points_value IS NULL OR points_value >= 0)", "Nilai Poin EFN tidak boleh negatif."
+        "CHECK (points_value IS NULL OR points_value >= 0)",
+        "Nilai Poin EFN tidak boleh negatif.",
     )
 
     @api.depends("amount_payable", "points_value")
@@ -316,7 +355,11 @@ class EfnOnlineOrder(models.Model):
     def _efn_find(self, channel, platform_order_ref, lock=True):
         check_str(platform_order_ref, UUID_RE, 36)
         order = self.search(
-            [("platform_order_ref", "=", platform_order_ref.lower()), ("channel_id", "=", channel.id)], limit=1
+            [
+                ("platform_order_ref", "=", platform_order_ref.lower()),
+                ("channel_id", "=", channel.id),
+            ],
+            limit=1,
         )
         if order and lock:
             order._efn_lock()
@@ -348,12 +391,17 @@ class EfnOnlineOrder(models.Model):
         self.ensure_one()
         return max(self.event_seq + 1, _efn_epoch_seconds())
 
-    def _efn_emit(self, event, refund=None):
-        """Antrikan event outbox (seq naik monoton per order, berbasis waktu). Payload dibangun saat kirim."""
+    def _efn_emit(self, event, refund=None, detail_code=None):
+        """Antrikan event outbox (seq naik monoton per order, berbasis waktu). Payload dibangun saat kirim.
+        ``detail_code`` (G26): kode tambahan yang dibekukan di baris outbox (mis. alasan ``transfer_rejected``)."""
         self.ensure_one()
         seq = self._efn_next_seq()
         self.write({"event_seq": seq})
-        return self.env["efn.online.event.outbox"].sudo()._efn_enqueue(self, event, seq, refund=refund)
+        return (
+            self.env["efn.online.event.outbox"]
+            .sudo()
+            ._efn_enqueue(self, event, seq, refund=refund, detail_code=detail_code)
+        )
 
     def _efn_clear_secret(self):
         """Hapus hash kode ambil saat final (delta §10.4.4 no. 1) + digest kode bayar di kasir (E-45)."""
@@ -434,7 +482,12 @@ class EfnOnlineOrder(models.Model):
         if not reason:
             raise online_error("invalid_state")
         order.write(
-            {"payment_ref": payment_ref, "paid_idempotency_key": key, "paid_amount": amount_paid, "paid_at": now}
+            {
+                "payment_ref": payment_ref,
+                "paid_idempotency_key": key,
+                "paid_amount": amount_paid,
+                "paid_at": now,
+            }
         )
         order._efn_set_review(reason)
         return order._efn_paid_result()
@@ -455,7 +508,11 @@ class EfnOnlineOrder(models.Model):
                 "mail.mail_activity_data_todo",
                 user_id=user.id,
                 summary=summary,
-                note=_("Pesanan online %(name)s: %(code)s", name=self.name or self.platform_order_ref, code=code),
+                note=_(
+                    "Pesanan online %(name)s: %(code)s",
+                    name=self.name or self.platform_order_ref,
+                    code=code,
+                ),
             )
 
     def _efn_company_user(self, group_xmlid):
@@ -523,6 +580,14 @@ class EfnOnlineOrder(models.Model):
         # G20 E-45 (L-56): metode bayar + kode bayar di kasir (dibuat BFF). Kanal tidak mengizinkan -> invalid_input.
         payment_mode = order.get("payment_mode", DEFAULT_PAYMENT_MODE)
         require(payment_mode in PAYMENT_MODES and payment_mode in channel._efn_online_payment_modes())
+        # L-95: kanal lama yang masih memuat 'counter' tidak menerima pesanan counter baru selama kill switch mati.
+        require(payment_mode != "counter" or counter_enabled(self.env))
+        transfer_account = None
+        if payment_mode == "bank_transfer":
+            # G26 §17.15: rekening tujuan dari jurnal bank kanal (modul efn_online_transfer). Tidak lengkap -> tolak
+            # sebelum SO dibuat (pelanggan tidak boleh diberi rekening kosong).
+            transfer_account = channel._efn_online_transfer_account()
+            require(transfer_account is not None)
         counter_code = order.get("counter_code")
         if payment_mode == "counter":
             require(isinstance(counter_code, str) and bool(PICKUP_CODE_RE.match(counter_code)))
@@ -555,12 +620,19 @@ class EfnOnlineOrder(models.Model):
         if existing:
             if existing.channel_id != channel or existing.payload_sha256 != payload_sha:
                 raise online_error("idempotency_conflict")
-            return existing._efn_place_result()
+            replay = existing._efn_place_result()
+            if transfer_account:
+                replay["transfer_account"] = transfer_account
+            return replay
         if Orders.search_count([("platform_order_ref", "=", ref)], limit=1):
             raise online_error("idempotency_conflict")
 
         outlet, product_qty, issues, summary = channel._efn_online_evaluate(
-            outlet_code, fulfilment, order["lines"], promo_codes=promo_codes, for_place=True
+            outlet_code,
+            fulfilment,
+            order["lines"],
+            promo_codes=promo_codes,
+            for_place=True,
         )
         codes = {issue["code"] for issue in issues}
         if "not_found" in codes:
@@ -577,7 +649,10 @@ class EfnOnlineOrder(models.Model):
             # Digest deterministik per company (lihat efn_online_common): kode bentrok dengan pesanan lain yang masih
             # menyimpan digest -> tolak (peluang ~n/8,5e11; BFF membuat kode baru dan place ulang dengan part baru).
             counter_hash = counter_code_digest(
-                counter_secret(self.env), channel.company_id.id, counter_code, counter_kdf_rounds(self.env)
+                counter_secret(self.env),
+                channel.company_id.id,
+                counter_code,
+                counter_kdf_rounds(self.env),
             )
             if Orders._efn_counter_find(channel.company_id, counter_code):
                 raise online_error("invalid_input")
@@ -610,9 +685,18 @@ class EfnOnlineOrder(models.Model):
                 # Place paralel dengan kunci yang sama sudah commit: ulangi request -> cabang `existing`.
                 raise ConcurrencyError("EFN online: place paralel, diulang") from exc
             record._efn_place_sale_order(
-                channel, outlet, fulfilment, product_qty, promo_codes, quote_hash, points_payment=points_payment
+                channel,
+                outlet,
+                fulfilment,
+                product_qty,
+                promo_codes,
+                quote_hash,
+                points_payment=points_payment,
             )
             record._efn_emit("placed")
+        result = record._efn_place_result()
+        if transfer_account:
+            result["transfer_account"] = transfer_account
         _logger.info(
             "EFN online place order=%s part=%s so=%s hold=%s pay=%s points=%s",
             record.id,
@@ -622,7 +706,7 @@ class EfnOnlineOrder(models.Model):
             payment_mode,
             bool(points_payment),
         )
-        return record._efn_place_result()
+        return result
 
     def _efn_check_points_payment(self, channel, points_payment, amount_payable):
         """W-12 (docs/04 §14.C.1 no. 2, §14.C.3 "Place"): pertahanan berlapis atas porsi Poin EFN dari BFF.
@@ -690,7 +774,10 @@ class EfnOnlineOrder(models.Model):
                 )
             )
         if not journal or not user:
-            _logger.error("EFN online: aktivitas Finance Poin EFN company #%s tidak dapat dijadwalkan", company.id)
+            _logger.error(
+                "EFN online: aktivitas Finance Poin EFN company #%s tidak dapat dijadwalkan",
+                company.id,
+            )
             return False
         journal.sudo().activity_schedule(
             "mail.mail_activity_data_todo",
@@ -704,7 +791,14 @@ class EfnOnlineOrder(models.Model):
         return True
 
     def _efn_place_sale_order(
-        self, channel, outlet, fulfilment, product_qty, promo_codes, quote_hash, points_payment=None
+        self,
+        channel,
+        outlet,
+        fulfilment,
+        product_qty,
+        promo_codes,
+        quote_hash,
+        points_payment=None,
     ):
         """SO dari cart + promo (E-36) -> cek ``quote_hash`` -> (mode confirm) konfirmasi + reservasi penuh (E-35)."""
         self.ensure_one()
@@ -739,14 +833,24 @@ class EfnOnlineOrder(models.Model):
                 self._efn_confirm_sale_order()
             except _ReviewNeeded as review:
                 # Belum ada pembayaran -> bukan `review`: total berubah / kupon ditolak saat konfirmasi = harga berubah.
-                _logger.warning("EFN online order %s: konfirmasi saat place gagal (%s)", self.id, review.code)
+                _logger.warning(
+                    "EFN online order %s: konfirmasi saat place gagal (%s)",
+                    self.id,
+                    review.code,
+                )
                 raise online_error("price_changed") from None
             if self._efn_reservation_short(assign=True):
                 raise online_error("out_of_stock")
-        values = {"amount_total": stored["amount_total"], "amount_payable": stored["amount_payable"]}
+        values = {
+            "amount_total": stored["amount_total"],
+            "amount_payable": stored["amount_payable"],
+        }
         if points_payment:
             self._efn_check_points_payment(channel, points_payment, stored["amount_payable"])
-            values.update(points_redeemed=points_payment["points"], points_value=points_payment["value_idr"])
+            values.update(
+                points_redeemed=points_payment["points"],
+                points_value=points_payment["value_idr"],
+            )
         self.write(values)
 
     # ================================================================ BFF: mark paid
@@ -763,8 +867,9 @@ class EfnOnlineOrder(models.Model):
         order = self.with_env(channel.env)._efn_find(channel, platform_order_ref)
         if not order:
             raise online_error("not_found")
-        if order.payment_mode == "counter":
-            # E-45 (docs/04 §12.2 no. 2/6): pesanan bayar di kasir hanya dilunasi lewat sync POS (jalur internal).
+        if order.payment_mode in INTERNAL_PAYMENT_MODES:
+            # E-45 (docs/04 §12.2 no. 2/6): bayar di kasir hanya dilunasi lewat sync POS. G26 (§17.15): transfer bank
+            # hanya lewat persetujuan Verifikator (efn_online_transfer). Keduanya jalur internal, bukan BFF.
             raise online_error("invalid_state")
         if order.paid_idempotency_key:
             if order.paid_idempotency_key == key and order.payment_ref == payment_ref:
@@ -850,15 +955,15 @@ class EfnOnlineOrder(models.Model):
     def _efn_after_confirmed(self):
         """Dipanggil setelah order ``confirmed`` (sudah dibayar). No-op; ``efn_online_kds_bridge`` membuat tiket KDS.
         Kegagalan hook tidak boleh membatalkan pembayaran (jembatan menangkap & memberi alert)."""
-        return None
+        return
 
     def _efn_after_cancelled(self):
         """Dipanggil setelah order ``cancelled``. No-op; jembatan KDS membatalkan tiket aktif."""
-        return None
+        return
 
     def _efn_after_refund(self, refund):
         """Dipanggil setelah refund (nota kredit) dibuat. No-op; jembatan KDS membatalkan/mengurangi tiket."""
-        return None
+        return
 
     def _efn_paid_result(self):
         self.ensure_one()
@@ -923,7 +1028,8 @@ class EfnOnlineOrder(models.Model):
         short = {}
         for move in pending:
             entry = short.setdefault(
-                move.product_id.id, {"product_id": move.product_id.id, "requested": 0.0, "available": 0.0}
+                move.product_id.id,
+                {"product_id": move.product_id.id, "requested": 0.0, "available": 0.0},
             )
             entry["requested"] += move.product_uom_qty
             entry["available"] += max(move.quantity, 0.0)
@@ -948,7 +1054,11 @@ class EfnOnlineOrder(models.Model):
             raise
         except (UserError, ValidationError) as exc:
             self.env.invalidate_all()
-            _logger.warning("EFN online order %s: konfirmasi SO gagal (%s)", self.id, type(exc).__name__)
+            _logger.warning(
+                "EFN online order %s: konfirmasi SO gagal (%s)",
+                self.id,
+                type(exc).__name__,
+            )
             raise _ReviewNeeded("confirm_failed") from None
 
     def _efn_invoice_and_register_payment(self):
@@ -978,7 +1088,11 @@ class EfnOnlineOrder(models.Model):
             raise
         except (UserError, ValidationError) as exc:
             self.env.invalidate_all()
-            _logger.warning("EFN online order %s: faktur/pembayaran gagal (%s)", self.id, type(exc).__name__)
+            _logger.warning(
+                "EFN online order %s: faktur/pembayaran gagal (%s)",
+                self.id,
+                type(exc).__name__,
+            )
             raise _ReviewNeeded("invoice_failed") from None
 
     def _efn_payment_journal(self):
@@ -986,7 +1100,8 @@ class EfnOnlineOrder(models.Model):
         jurnal kliring PT penjual — di-override ``efn_online_pos_counter``; tanpa modul itu -> kosong -> ``review``
         (tidak pernah jatuh diam-diam ke titipan)."""
         self.ensure_one()
-        if self.payment_mode == "counter":
+        if self.payment_mode in INTERNAL_PAYMENT_MODES:
+            # counter -> efn_online_pos_counter; bank_transfer -> efn_online_transfer (jurnal bank kanal, G26 §17.6).
             return self.env["account.journal"]
         return self.channel_id.journal_titipan_id
 
@@ -1054,7 +1169,8 @@ class EfnOnlineOrder(models.Model):
         invoice = self._efn_posted_invoice()
         if invoice and not self.sudo().paid_idempotency_key:
             _logger.warning(
-                "EFN online order %s: faktur ter-posting tanpa pembayaran saat batal (tanpa refund)", self.id
+                "EFN online order %s: faktur ter-posting tanpa pembayaran saat batal (tanpa refund)",
+                self.id,
             )
             self._efn_schedule_activity(
                 _("Faktur pesanan online tanpa pembayaran"),
@@ -1117,7 +1233,13 @@ class EfnOnlineOrder(models.Model):
         if not order:
             raise online_error("not_found")
         payload_sha = canonical_sha256(
-            {"order": order.id, "full": full, "lines": lines, "restock": restock, "reason": refund["reason"]}
+            {
+                "order": order.id,
+                "full": full,
+                "lines": lines,
+                "restock": restock,
+                "reason": refund["reason"],
+            }
         )
         # QA G17: pakai env kanal (context klien sudah dibuang, §10.4.4 no. 4) — `self.env` masih membawa `lang` klien;
         # bahasa yang tidak terpasang (id_ID di DB tanpa bahasa Indonesia) -> env.lang -> UserError 422.
@@ -1156,7 +1278,13 @@ class EfnOnlineOrder(models.Model):
         record = (
             channel.env["efn.online.refund"]  # env kanal: tanpa context klien (QA G17, lihat efn_online_refund)
             .sudo()
-            .search([("refund_ref", "=", refund_ref.lower()), ("order_id.channel_id", "=", channel.id)], limit=1)
+            .search(
+                [
+                    ("refund_ref", "=", refund_ref.lower()),
+                    ("order_id.channel_id", "=", channel.id),
+                ],
+                limit=1,
+            )
         )
         if not record:
             raise online_error("not_found")
@@ -1290,7 +1418,10 @@ class EfnOnlineOrder(models.Model):
         self.ensure_one()
         company = self.company_id
         # Pembuatan pembeli diserialkan per company (kunci tanpa PII) -> tidak ada duplikat dari panggilan paralel.
-        self.env.cr.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"efn_online_invoice_buyer:{company.id}",))
+        self.env.cr.execute(
+            "SELECT pg_advisory_xact_lock(hashtext(%s))",
+            (f"efn_online_invoice_buyer:{company.id}",),
+        )
         Partner = self.env["res.partner"].sudo().with_company(company)
         domain = [
             ("efn_online_invoice_buyer", "=", True),
@@ -1336,13 +1467,20 @@ class EfnOnlineOrder(models.Model):
                     raise online_error("invoice_not_available")
         except ValidationError:
             # mis. base_vat menolak format NPWP. Pesan Odoo memuat nilai -> tidak di-log, tidak diteruskan.
-            _logger.warning("EFN online order %s: invoice party rejected by partner validation", self.id)
+            _logger.warning(
+                "EFN online order %s: invoice party rejected by partner validation",
+                self.id,
+            )
             raise online_error("invalid_input") from None
         except UserError as exc:
             if str(exc) == "efn_online:invoice_not_available":
                 raise
             # efn_pii mode terkunci (kunci PII tidak tersedia) / SEC-137 fail-closed -> tidak tersedia.
-            _logger.warning("EFN online order %s: invoice party unavailable (%s)", self.id, type(exc).__name__)
+            _logger.warning(
+                "EFN online order %s: invoice party unavailable (%s)",
+                self.id,
+                type(exc).__name__,
+            )
             raise online_error("invoice_not_available") from None
         return partner, False
 
@@ -1370,7 +1508,13 @@ class EfnOnlineOrder(models.Model):
         siap, docs/04 §14.B B-6/B-7a). Pemanggil sudah mengunci & memeriksa state (jalur internal, sudo)."""
         self.ensure_one()
         self._efn_mark_reserved_picked()
-        self.write({"state": "ready", "ready_at": fields.Datetime.now(), "ready_source": source})
+        self.write(
+            {
+                "state": "ready",
+                "ready_at": fields.Datetime.now(),
+                "ready_source": source,
+            }
+        )
         self._efn_emit("ready")
 
     def _efn_set_kitchen_started(self, started_at=None):
@@ -1428,7 +1572,13 @@ class EfnOnlineOrder(models.Model):
         """Manajer penjualan: kirim ulang event outbox yang gagal untuk pesanan ini."""
         self._efn_check_staff("sales_team.group_sale_manager")
         outbox = self.sudo().event_ids.filtered(lambda e: e.state == "failed")
-        outbox.write({"state": "pending", "next_attempt_at": fields.Datetime.now(), "last_error": False})
+        outbox.write(
+            {
+                "state": "pending",
+                "next_attempt_at": fields.Datetime.now(),
+                "last_error": False,
+            }
+        )
         self.env["efn.online.event.outbox"]._efn_trigger()
         return True
 
@@ -1451,7 +1601,11 @@ class EfnOnlineOrder(models.Model):
         if not valid:
             attempts = self.pickup_attempts + 1
             self.write({"pickup_attempts": attempts})
-            _logger.warning("EFN online order %s: kode ambil salah (percobaan %d)", self.id, attempts)
+            _logger.warning(
+                "EFN online order %s: kode ambil salah (percobaan %d)",
+                self.id,
+                attempts,
+            )
             if attempts >= max_attempts:
                 self._efn_set_review("pickup_code_attempts")
                 return False, _("Kode salah %(n)d kali. Pesanan dikunci untuk ditinjau.", n=attempts)
@@ -1479,7 +1633,12 @@ class EfnOnlineOrder(models.Model):
                     skip_backorder=True, picking_ids_not_to_backorder=picking.ids
                 ).button_validate()
                 if result is not True and picking.state != "done":
-                    raise UserError(_("Pengiriman %(name)s tidak dapat divalidasi otomatis.", name=picking.name))
+                    raise UserError(
+                        _(
+                            "Pengiriman %(name)s tidak dapat divalidasi otomatis.",
+                            name=picking.name,
+                        )
+                    )
         if any(m.state != "done" for m in customer_moves):
             raise UserError(_("Sebagian barang pesanan ini belum dapat dikeluarkan."))
         self.write(
@@ -1501,7 +1660,9 @@ class EfnOnlineOrder(models.Model):
     def _cron_efn_online_expire(self, limit=200):
         """Draf lewat ``expires_at`` (batas bayar Odoo) -> batal + event ``cancelled`` (docs/08 §8.3 D.7)."""
         orders = self.sudo().search(
-            [("state", "=", "placed"), ("expires_at", "<", fields.Datetime.now())], order="id", limit=limit
+            [("state", "=", "placed"), ("expires_at", "<", fields.Datetime.now())],
+            order="id",
+            limit=limit,
         )
         for order in orders:
             order._efn_lock()
@@ -1521,7 +1682,9 @@ class EfnOnlineOrder(models.Model):
             since = order.ready_at or order.paid_at
             if since and since + timedelta(hours=max(order.channel_id.pickup_reminder_hours, 1)) < now:
                 order._efn_schedule_activity(
-                    _("Pesanan online belum diambil"), "not_picked_up", "stock.group_stock_user"
+                    _("Pesanan online belum diambil"),
+                    "not_picked_up",
+                    "stock.group_stock_user",
                 )
                 order.write({"reminder_flagged": True})
         self._efn_expire_pickup_codes(now)
@@ -1542,7 +1705,9 @@ class EfnOnlineOrder(models.Model):
         for order in expired:
             order._efn_clear_secret()
             order._efn_schedule_activity(
-                _("Kode ambil pesanan online kedaluwarsa"), "pickup_code_expired", "stock.group_stock_user"
+                _("Kode ambil pesanan online kedaluwarsa"),
+                "pickup_code_expired",
+                "stock.group_stock_user",
             )
         return expired.ids
 
@@ -1593,7 +1758,11 @@ class EfnOnlineOrder(models.Model):
                     message_type="comment",
                     subtype_xmlid="mail.mt_note",
                 )
-                _logger.warning("EFN online order %s (berbayar) dibatalkan ops oleh uid=%s", order.id, actor.id)
+                _logger.warning(
+                    "EFN online order %s (berbayar) dibatalkan ops oleh uid=%s",
+                    order.id,
+                    actor.id,
+                )
 
     @api.model
     def _efn_new_refund_ref(self):

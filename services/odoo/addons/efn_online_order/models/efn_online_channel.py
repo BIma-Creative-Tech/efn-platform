@@ -65,6 +65,7 @@ from .efn_online_common import (
     cart_lines_payload,
     check_int,
     check_str,
+    counter_enabled,
     like_escape,
     online_error,
     parse_payment_modes,
@@ -156,7 +157,9 @@ class EfnOnlineChannel(models.Model):
         help="ADR-019 A1: pembayaran online dicatat di jurnal bank 'Titipan Online - Holding' milik PT ini.",
     )
     stock_check = fields.Selection(
-        [("none", "Tanpa cek"), ("free_qty", "Stok bebas gudang outlet")], required=True, default="free_qty"
+        [("none", "Tanpa cek"), ("free_qty", "Stok bebas gudang outlet")],
+        required=True,
+        default="free_qty",
     )
     stock_buffer = fields.Float(default=0.0, help="Dikurangkan dari stok bebas sebelum dinyatakan tersedia.")
     stock_low_threshold = fields.Float(string="Ambang stok terbatas", default=5.0)
@@ -209,9 +212,10 @@ class EfnOnlineChannel(models.Model):
         string="Metode bayar",
         required=True,
         default=DEFAULT_PAYMENT_MODE,
-        help="G20 E-45 (docs/04 §12.2): daftar dipisah koma dari 'qris' (gateway lewat BFF) dan 'counter' (bayar "
-        "di kasir dengan kode bayar). Pilot tanpa vendor payment = 'counter' saja (L-55). 'counter' butuh faktur saat "
-        "dibayar + jurnal kliring PT (modul efn_online_pos_counter) dan hanya untuk pesanan satu PT (BFF).",
+        help="Daftar dipisah koma dari 'qris', 'va', 'ewallet' (payment gateway lewat BFF) dan 'bank_transfer' "
+        "(transfer ke rekening PT + bukti, diverifikasi staf; butuh modul efn_online_transfer + jurnal bank kanal). "
+        "G26 (docs/04 §17.1, L-95): pesanan online wajib lunas sebelum diproses; 'counter' (bayar di kasir) dibekukan "
+        "dan hanya bisa dipilih bila parameter sistem efn_online.counter_enabled = 1.",
     )
     invoice_on_paid = fields.Boolean(string="Faktur saat dibayar", default=True)
     # G22 W-12 (docs/04 §14.C.1 no. 5, B-2): kill switch per kanal (selain env BFF). Default mati.
@@ -233,7 +237,8 @@ class EfnOnlineChannel(models.Model):
         help="Aktifkan untuk kanal F&B: pajak (PB1 kota) ditentukan fiscal position outlet pemenuhan (ADR-027 §2).",
     )
     pickup_reminder_hours = fields.Integer(
-        default=48, help="Pesanan siap/terkonfirmasi tidak diambil lewat batas ini -> aktivitas (Q-ON13)."
+        default=48,
+        help="Pesanan siap/terkonfirmasi tidak diambil lewat batas ini -> aktivitas (Q-ON13).",
     )
     pickup_max_attempts = fields.Integer(default=5, help="Kode ambil salah sebanyak ini -> order 'review'.")
     user_ids = fields.Many2many(
@@ -291,7 +296,22 @@ class EfnOnlineChannel(models.Model):
             modes = parse_payment_modes(channel.payment_modes)
             if modes is None:
                 raise ValidationError(
-                    _("Metode bayar kanal harus daftar dipisah koma dari: qris, counter (tanpa duplikat).")
+                    _(
+                        "Metode bayar kanal harus daftar dipisah koma dari: qris, va, ewallet, bank_transfer "
+                        "(tanpa duplikat)."
+                    )
+                )
+            if "counter" in modes and not counter_enabled(self.env):
+                # L-95 (docs/04 §17.1 no. 3): pesanan online wajib lunas sebelum diproses.
+                raise ValidationError(
+                    _("Metode 'counter' (bayar di kasir) tidak lagi dipakai untuk pesanan online (wajib bayar dulu).")
+                )
+            if "bank_transfer" in modes and not channel.invoice_on_paid:
+                raise ValidationError(_("Metode 'bank_transfer' membutuhkan 'Faktur saat dibayar'."))
+            if "bank_transfer" in modes and channel._efn_online_transfer_account() is None:
+                # Tanpa modul efn_online_transfer / rekening PT lengkap tidak ada jalur verifikasi -> tolak di config.
+                raise ValidationError(
+                    _("Metode 'bank_transfer' membutuhkan modul Transfer bank + jurnal bank kanal yang lengkap.")
                 )
             if "counter" in modes and not channel.invoice_on_paid:
                 # Kliring bayar di kasir hanya bersih 0 bila faktur SO dibayar di jurnal kliring (E-45 no. 6).
@@ -302,6 +322,13 @@ class EfnOnlineChannel(models.Model):
         self.ensure_one()
         return parse_payment_modes(self.payment_modes) or []
 
+    def _efn_online_transfer_account(self):
+        """G26 §17.15: ``{bank_name, account_number, account_holder}`` rekening tujuan transfer, atau None.
+
+        Diisi modul ``efn_online_transfer`` (jurnal bank kanal). Tanpa modul itu -> None -> place ``bank_transfer``
+        ditolak ``invalid_input`` (tidak pernah memberi pelanggan rekening kosong/tebakan)."""
+        self.ensure_one()
+
     @api.constrains("fulfilment_delivery", "stock_hold_mode")
     def _check_efn_unsupported(self):
         for channel in self:
@@ -310,7 +337,12 @@ class EfnOnlineChannel(models.Model):
             if channel.stock_hold_mode not in ("none", "confirm"):
                 raise ValidationError(_("Mode reservasi stok tidak dikenal."))
 
-    @api.constrains("payment_timeout_minutes", "quote_validity_minutes", "max_lines", "max_qty_per_line")
+    @api.constrains(
+        "payment_timeout_minutes",
+        "quote_validity_minutes",
+        "max_lines",
+        "max_qty_per_line",
+    )
     def _check_efn_limits(self):
         for channel in self:
             if channel.payment_timeout_minutes < 5 or channel.payment_timeout_minutes > 24 * 60:
@@ -349,16 +381,25 @@ class EfnOnlineChannel(models.Model):
             for user in channel.user_ids.sudo():
                 if not group or group not in user.all_group_ids:
                     raise ValidationError(
-                        _("User %(login)s tidak punya grup user teknis kanal online.", login=user.login)
+                        _(
+                            "User %(login)s tidak punya grup user teknis kanal online.",
+                            login=user.login,
+                        )
                     )
                 if user.company_ids != channel.company_id:
                     raise ValidationError(
-                        _("User teknis %(login)s harus terikat ke tepat satu company (PT kanal ini).", login=user.login)
+                        _(
+                            "User teknis %(login)s harus terikat ke tepat satu company (PT kanal ini).",
+                            login=user.login,
+                        )
                     )
                 other = (
                     self.sudo()
                     .with_context(active_test=False)
-                    .search([("id", "!=", channel.id), ("user_ids", "in", user.ids)], limit=1)
+                    .search(
+                        [("id", "!=", channel.id), ("user_ids", "in", user.ids)],
+                        limit=1,
+                    )
                 )
                 if other:
                     # L-37: satu user teknis = satu kanal (API key per kanal; rotasi/pencabutan per user).
@@ -503,7 +544,13 @@ class EfnOnlineChannel(models.Model):
                 extra = value.price_extra or 0.0
                 if extra and taxes:
                     extra = taxes.compute_all(extra, currency=currency, quantity=1.0, product=product)["total_excluded"]
-                entries.append({"id": value.id, "name": value.name, "price_extra_excl": currency.round(extra)})
+                entries.append(
+                    {
+                        "id": value.id,
+                        "name": value.name,
+                        "price_extra_excl": currency.round(extra),
+                    }
+                )
             result.append(
                 {
                     "attribute_id": attribute.id,
@@ -638,14 +685,18 @@ class EfnOnlineChannel(models.Model):
         if self.pricelist_id.write_date and self.pricelist_id.write_date > since:
             return True
         items = self.env["product.pricelist.item"].search_count(
-            [("pricelist_id", "=", self.pricelist_id.id), ("write_date", ">", since)], limit=1
+            [("pricelist_id", "=", self.pricelist_id.id), ("write_date", ">", since)],
+            limit=1,
         )
         if items:
             return True
         taxes = (
             self.env["account.tax"]
             .with_context(active_test=False)
-            .search_count([("company_id", "=", self.company_id.id), ("write_date", ">", since)], limit=1)
+            .search_count(
+                [("company_id", "=", self.company_id.id), ("write_date", ">", since)],
+                limit=1,
+            )
         )
         outlets = self.with_context(active_test=False).outlet_ids.filtered(lambda o: o.write_date > since)
         categories = self.env["pos.category"].search_count([("write_date", ">", since)], limit=1)
@@ -687,7 +738,10 @@ class EfnOnlineChannel(models.Model):
             prices = [{"outlet_code": None, **channel._efn_online_price(product)}]
             for outlet in outlets_fp:
                 prices.append(
-                    {"outlet_code": outlet.code, **channel._efn_online_price(product, outlet.fiscal_position_id)}
+                    {
+                        "outlet_code": outlet.code,
+                        **channel._efn_online_price(product, outlet.fiscal_position_id),
+                    }
                 )
             items.append(
                 {
@@ -753,7 +807,10 @@ class EfnOnlineChannel(models.Model):
             "payment_modes": self._efn_online_payment_modes(),
             # G22 B-2 (docs/04 §14.B, §14.C.1 no. 5): jenis kanal + flag Poin EFN kanal (kill switch Odoo).
             "business_type": "fnb" if self._efn_online_is_fnb() else "retail",
-            "loyalty": {"earn": bool(self.loyalty_earn), "redeem": bool(self.loyalty_redeem)},
+            "loyalty": {
+                "earn": bool(self.loyalty_earn),
+                "redeem": bool(self.loyalty_redeem),
+            },
             "outlets": [
                 {
                     "code": outlet.code,
@@ -814,7 +871,10 @@ class EfnOnlineChannel(models.Model):
                 # G22 B-3 (docs/04 §14.B): kanal F&B -> in_stock, tanpa qty.
                 result.append({"product_id": product.id, "status": "in_stock"})
                 continue
-            entry = {"product_id": product.id, "status": channel._efn_online_stock_status(free.get(product.id))}
+            entry = {
+                "product_id": product.id,
+                "status": channel._efn_online_stock_status(free.get(product.id)),
+            }
             if channel.stock_expose_qty and free.get(product.id) is not None:
                 entry["qty"] = max(free[product.id], 0.0)
             result.append(entry)
@@ -829,7 +889,8 @@ class EfnOnlineChannel(models.Model):
         size = check_int(size)
         require(size in IMAGE_SIZES)
         products = channel.env["product.product"].search(
-            channel._efn_online_product_domain() & Domain("product_tmpl_id", "=", tmpl_id), limit=1
+            channel._efn_online_product_domain() & Domain("product_tmpl_id", "=", tmpl_id),
+            limit=1,
         )
         tmpl = products.product_tmpl_id
         data = tmpl[IMAGE_SIZES[size]] if tmpl else False
@@ -876,7 +937,11 @@ class EfnOnlineChannel(models.Model):
         amount = currency.round(amount)
         if self.cash_rounding_id:
             rounding = self.cash_rounding_id
-            amount = float_round(amount, precision_rounding=rounding.rounding, rounding_method=rounding.rounding_method)
+            amount = float_round(
+                amount,
+                precision_rounding=rounding.rounding,
+                rounding_method=rounding.rounding_method,
+            )
         return amount
 
     def _efn_online_summarize(self, order, outlet, fulfilment, promo_applied=None):
@@ -1072,7 +1137,8 @@ class EfnOnlineChannel(models.Model):
             return Program
         Program.flush_model()
         self.env.cr.execute(
-            "UPDATE loyalty_program SET write_date = write_date WHERE id IN %s", (tuple(sorted(targets.ids)),)
+            "UPDATE loyalty_program SET write_date = write_date WHERE id IN %s",
+            (tuple(sorted(targets.ids)),),
         )
         Program.invalidate_model(["order_count", "total_order_count"])
         return targets
@@ -1181,12 +1247,18 @@ class EfnOnlineChannel(models.Model):
             # Hanya promo otomatis yang tersisa: konfigurasi Marketing salah (mis. diskon 100 %) -> dicatat, total
             # tetap dihitung Odoo; BFF menolak tagihan < Rp1 / baris tidak valid (online_config_error).
             _logger.warning(
-                "EFN online promo channel=%s: promo otomatis menghasilkan tagihan/baris tidak valid", self.code
+                "EFN online promo channel=%s: promo otomatis menghasilkan tagihan/baris tidak valid",
+                self.code,
             )
         if codes:
             # L-42 / SEC-132: hanya jumlah. Tanpa kode, tanpa tag hash (hash tanpa kunci atas ruang kode kecil bisa
             # dibalik pembaca log).
-            _logger.info("EFN online promo channel=%s codes=%d applied=%d", self.code, len(codes), len(applied))
+            _logger.info(
+                "EFN online promo channel=%s codes=%d applied=%d",
+                self.code,
+                len(codes),
+                len(applied),
+            )
         return applied
 
     def _efn_online_create_sale_order(self, outlet, product_qty, extra_vals=None, quote=False):

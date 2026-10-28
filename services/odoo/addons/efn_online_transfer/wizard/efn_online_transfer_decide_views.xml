@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_online_transfer_decide_view_form" model="ir.ui.view">
+        <field name="name">efn.online.transfer.decide.form</field>
+        <field name="model">efn.online.transfer.decide</field>
+        <field name="arch" type="xml">
+            <form string="Putuskan bukti transfer">
+                <group>
+                    <field name="proof_id"/>
+                    <field name="currency_id" invisible="1"/>
+                    <field name="amount_due"/>
+                    <field name="decision" widget="radio"/>
+                </group>
+                <group invisible="decision != 'approve'">
+                    <field name="bank_date" required="decision == 'approve'"/>
+                    <field name="bank_amount" required="decision == 'approve'"/>
+                    <field name="bank_ref" required="decision == 'approve'"/>
+                </group>
+                <group invisible="decision != 'reject'">
+                    <field name="reject_reason" required="decision == 'reject'"/>
+                </group>
+                <group>
+                    <field name="note"/>
+                </group>
+                <footer>
+                    <button name="action_confirm" type="object" string="Simpan keputusan" class="btn-primary"/>
+                    <button special="cancel" string="Batal"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>
