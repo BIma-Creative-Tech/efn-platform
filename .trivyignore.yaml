@@ -40,6 +40,12 @@ vulnerabilities:
     paths: ["app/metabase.jar"]
     statement: "Metabase v0.58.35 LTS upstream: zookeeper 3.8.4 (tidak dipakai); belum ada rilis perbaikan; BI internal saja. G16."
     expired_at: 2026-11-09
+  # G26 (PR #71, 28 Okt 2026): Trivy image menemukan CVE baru di guava 33.5.0-jre dalam metabase.jar. Rilis LTS terbaru
+  # (v0.58.38, diperiksa 28 Okt) masih memuat 33.5.0, jadi belum ada image perbaikan. Dampaknya DoS pada BI internal saja.
+  - id: CVE-2026-102554
+    paths: ["app/metabase.jar"]
+    statement: "Metabase LTS upstream: guava 33.5.0-jre (perbaikan 33.7.2 belum ada di rilis Metabase mana pun, v0.58.38 dicek 28 Okt); DoS, BI internal saja. G26."
+    expired_at: 2026-11-09
 misconfigurations:
   - id: DS-0002
     paths:
