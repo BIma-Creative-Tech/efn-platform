@@ -52,6 +52,7 @@ Layout host: `/opt/efn/{compose,traefik,observability,backup,minio,clickhouse,po
 | EfnLoyaltyExpiryAborted, EfnLoyaltyExpiryFailed, EfnLoyaltyExpiryHeartbeatMissing (poin hangus tidak aktif W-17, G22 §14.D.9) | critical / warning / warning | [loyalty-inactivity-expiry.md](loyalty-inactivity-expiry.md) |
 | EfnOnlineApiKey* dengan label `channel="QR-PB"` / `"QR-BCF"` (API key user teknis QR meja, G22) | sama dengan kanal online | [odoo-qr-api-key.md](odoo-qr-api-key.md#alert) |
 | EfnOnlineApiKey* dengan label `channel="BOOKING-PB"` / `"BOOKING-BCF"` (API key user teknis reservasi meja, G23) | sama dengan kanal online | [odoo-booking-api-key.md](odoo-booking-api-key.md#alert) |
+| EfnOnlineApiKey* dengan label `channel="PROMO-PB"` (API key user teknis promo Super-App, G27) | sama dengan kanal online | [odoo-promo-api-key.md](odoo-promo-api-key.md#alert) |
 
 Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-incident.md](security-incident.md).
 
@@ -80,6 +81,7 @@ Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-inciden
 | Mengaktifkan kanal online PT ke-7 WTZ (PT Wetzel's Pretzels, G24 docs/04 §16): overlay `online-wtz`, key `--channel=WTZ --bootstrap`, migrasi 13 | [odoo-online-api-key.md#kanal-baru](odoo-online-api-key.md#kanal-baru) |
 | API key Odoo user teknis QR meja `QR-PB`/`QR-BCF` (G22): key pertama `--bootstrap`, aktivasi `FNB_QR_ENABLED`, rotasi, hentikan | [odoo-qr-api-key.md](odoo-qr-api-key.md) |
 | API key Odoo user teknis reservasi meja `BOOKING-PB`/`BOOKING-BCF` (G23): key pertama `--bootstrap`, aktivasi `BOOKING_ENABLED`, rotasi, hentikan | [odoo-booking-api-key.md](odoo-booking-api-key.md) |
+| API key Odoo user teknis promo Super-App `PROMO-PB` (G27): key pertama `--bootstrap`, aktivasi `PROMO_ENABLED`, persetujuan privasi, rotasi, hentikan | [odoo-promo-api-key.md](odoo-promo-api-key.md) |
 | Rotasi kunci token sesi meja `fnb_table_token_key` dan HMAC event QR `odoo_fnb_event_hmac` (G22) | [fnb-table-token-key.md](fnb-table-token-key.md) |
 | Aktivasi poin hangus 12 bulan tidak aktif & anonimisasi (L-73: izin `EFN_ALLOW_FEATURE_ON` di host) | [loyalty-inactivity-expiry.md](loyalty-inactivity-expiry.md#aktivasi) |
 | Retensi data W-19 (env default, deploy pertama G18 / stop ETL, timer housekeeping Metabase) | [retention.md](retention.md) |

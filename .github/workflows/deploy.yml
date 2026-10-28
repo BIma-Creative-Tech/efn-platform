@@ -351,6 +351,15 @@ jobs:
           CFG_BOOKING_MEMBER_LINK_DAYS: ${{ vars.BOOKING_MEMBER_LINK_DAYS }}
           CFG_BOOKING_RETENTION_DAYS: ${{ vars.BOOKING_RETENTION_DAYS }}
           CFG_ONLINE_SLOTS_ENABLED: ${{ vars.ONLINE_SLOTS_ENABLED || 'false' }}
+          # G27 (docs/04 §18). Promo Super-App: true butuh PROMO_COMPANIES + API key promo host:* nyata per PT (deploy.sh,
+          # efn-rotate-online-key --channel=PROMO-<PT> --bootstrap). Privasi: ENFORCED=true wajib versi + SHA teks aktif.
+          CFG_PROMO_ENABLED: ${{ vars.PROMO_ENABLED || 'false' }}
+          CFG_PROMO_PUSH_ENABLED: ${{ vars.PROMO_PUSH_ENABLED || 'false' }}
+          CFG_PROMO_COMPANIES: ${{ vars.PROMO_COMPANIES }}
+          CFG_PROMO_SYNC_SECONDS: ${{ vars.PROMO_SYNC_SECONDS }}
+          CFG_CONSENT_PRIVACY_VERSION: ${{ vars.CONSENT_PRIVACY_VERSION }}
+          CFG_CONSENT_PRIVACY_TEXT_SHA256: ${{ vars.CONSENT_PRIVACY_TEXT_SHA256 }}
+          CFG_PRIVACY_CONSENT_ENFORCED: ${{ vars.PRIVACY_CONSENT_ENFORCED || 'false' }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/efn-release"

@@ -26,6 +26,9 @@
 # user efn_booking_<pt>, overlay docker-compose.online-booking-<pt>.yml, nama key efn-booking-<PT>-*, verifikasi path #19
 # efn_booking_status dengan 403 Odoo = key sah HANYA untuk booking; 403 gateway (deny=1) = gagal), --all dari
 # BOOKING_ENABLED/BOOKING_COMPANIES .env, precheck Python booking.
+# G27 (docs/04 §18.2, kasus 127-136): kunci user teknis promo PROMO-PB (secret odoo_api_key_promo_pb, user efn_promo_pb,
+# overlay docker-compose.online-promo-pb.yml, nama key efn-promo-PB-*, verifikasi path #22 efn_promo_feed 200 saja), --all
+# dari PROMO_ENABLED/PROMO_COMPANIES .env, precheck Python promo.
 # Yang TIDAK diuji di sini: Odoo/gateway/BFF sungguhan (uji nyata di stack dev: runbook odoo-online-api-key.md §2),
 # systemd, journald asli.
 set -euo pipefail
@@ -50,11 +53,14 @@ echo "services: {}" > /opt/efn/compose/docker-compose.online-bcf.yml
 echo "services: {}" > /opt/efn/compose/docker-compose.online-qr-pb.yml
 # G23: overlay reservasi PB ada (--bootstrap BOOKING-PB); BOOKING-BCF sengaja TIDAK ada -> kasus overlay hilang
 echo "services: {}" > /opt/efn/compose/docker-compose.online-booking-pb.yml
+# G27: overlay promo PB ada (--bootstrap PROMO-PB)
+echo "services: {}" > /opt/efn/compose/docker-compose.online-promo-pb.yml
 SECRET=/opt/efn/secrets/odoo_api_key_online_gl.txt
 SEC_PB=/opt/efn/secrets/odoo_api_key_online_pb.txt
 SEC_BCF=/opt/efn/secrets/odoo_api_key_online_bcf.txt
 SEC_QRPB=/opt/efn/secrets/odoo_api_key_qr_pb.txt
 SEC_BKPB=/opt/efn/secrets/odoo_api_key_booking_pb.txt
+SEC_PRPB=/opt/efn/secrets/odoo_api_key_promo_pb.txt
 
 # Docker palsu: secret GL (base) + PB (overlay; deploy dengan ONLINE_CHANNELS=GL,PB) di-mount api-gateway; BCF hanya
 # bila overlay docker-compose.online-bcf.yml ikut `-f` (--bootstrap); BCR tidak pernah (kanal belum di-deploy).
@@ -70,25 +76,29 @@ if [[ "$cmd" == compose ]]; then
   done
   set -- "${args[@]}"
   sub="$1"; shift
-  fb=0; qp=0; bp=0
+  fb=0; qp=0; bp=0; pp=0
   for f in "${files[@]}"; do
     [[ "$f" == */docker-compose.online-bcf.yml ]] && fb=1
     # G23: overlay reservasi PB -> secret odoo_api_key_booking_pb di-mount api-gateway
     [[ "$f" == */docker-compose.online-booking-pb.yml ]] && bp=1
+    # G27: overlay promo PB -> secret odoo_api_key_promo_pb di-mount api-gateway
+    [[ "$f" == */docker-compose.online-promo-pb.yml ]] && pp=1
     # G22: overlay QR meja PB (docker-compose.online-qr-pb.yml) -> secret odoo_api_key_qr_pb di-mount api-gateway
     [[ "$f" == */docker-compose.online-qr-pb.yml ]] && qp=1
   done
   case "$sub" in
     config)
-      jq -nc --argjson fb "$fb" --argjson qp "$qp" --argjson bp "$bp" '{secrets:({odoo_api_key_online_gl:{file:"/opt/efn/secrets/odoo_api_key_online_gl.txt"},
+      jq -nc --argjson fb "$fb" --argjson qp "$qp" --argjson bp "$bp" --argjson pp "$pp" '{secrets:({odoo_api_key_online_gl:{file:"/opt/efn/secrets/odoo_api_key_online_gl.txt"},
                    odoo_api_key_online_pb:{file:"/opt/efn/secrets/odoo_api_key_online_pb.txt"}}
                  + (if $fb == 1 then {odoo_api_key_online_bcf:{file:"/opt/efn/secrets/odoo_api_key_online_bcf.txt"}} else {} end)
                  + (if $qp == 1 then {odoo_api_key_qr_pb:{file:"/opt/efn/secrets/odoo_api_key_qr_pb.txt"}} else {} end)
-                 + (if $bp == 1 then {odoo_api_key_booking_pb:{file:"/opt/efn/secrets/odoo_api_key_booking_pb.txt"}} else {} end)),
+                 + (if $bp == 1 then {odoo_api_key_booking_pb:{file:"/opt/efn/secrets/odoo_api_key_booking_pb.txt"}} else {} end)
+                 + (if $pp == 1 then {odoo_api_key_promo_pb:{file:"/opt/efn/secrets/odoo_api_key_promo_pb.txt"}} else {} end)),
         services:{"api-gateway":{secrets:([{source:"odoo_api_key_online_gl"},{source:"odoo_api_key_online_pb"},{source:"efn_ca_crt"}]
                     + (if $fb == 1 then [{source:"odoo_api_key_online_bcf"}] else [] end)
                     + (if $qp == 1 then [{source:"odoo_api_key_qr_pb"}] else [] end)
-                    + (if $bp == 1 then [{source:"odoo_api_key_booking_pb"}] else [] end))},
+                    + (if $bp == 1 then [{source:"odoo_api_key_booking_pb"}] else [] end)
+                    + (if $pp == 1 then [{source:"odoo_api_key_promo_pb"}] else [] end))},
                   "bff-tls":{network_mode:"service:api-gateway"}, odoo:{secrets:[{source:"odoo_online_event_hmac"}]},
                   "superapp-web":{}}}' ;;
     ps)
@@ -103,7 +113,7 @@ if [[ "$cmd" == compose ]]; then
         for s in "$@"; do printf '{"Service":"%s","State":"running","Health":"%s"}\n' "$s" "$h"; done
       fi ;;
     up) printf '%s\n' "$*" >> $FK/up.log; printf '%s\n' "${files[@]}" >> $FK/files.log
-        for s in /opt/efn/secrets/odoo_api_key_online_*.txt /opt/efn/secrets/odoo_api_key_qr_*.txt /opt/efn/secrets/odoo_api_key_booking_*.txt; do
+        for s in /opt/efn/secrets/odoo_api_key_online_*.txt /opt/efn/secrets/odoo_api_key_qr_*.txt /opt/efn/secrets/odoo_api_key_booking_*.txt /opt/efn/secrets/odoo_api_key_promo_*.txt; do
           [[ -f "$s" ]] && cp "$s" "$FK/mounted.$(basename "$s" .txt)"
         done ;;
     *) exit 1 ;;
@@ -184,7 +194,7 @@ bad() { echo "FAIL $1 :: rc=$RC :: $(tail -n3 <<< "$OUT" | tr '\n' ' ') :: $(tai
 run() { set +e; OUT=$(env -i PATH=/usr/bin:/bin "$@" 2>&1); RC=$?; set -e; ALL_OUT+="$OUT"$'\n'; }
 rot() { run "$W" --channel=GL "$@"; }
 fresh() { rm -rf /tmp/fk /var/lib/efn/online-key /var/lib/efn/node-exporter/* /opt/efn/compose/.env; mkdir -p /tmp/fk; : > /tmp/fk/keys.db
-  for s in "$SECRET" "$SEC_PB" "$SEC_BCF" "$SEC_QRPB" "$SEC_BKPB"; do printf 'disabled' > "$s"; chmod 0444 "$s"; done
+  for s in "$SECRET" "$SEC_PB" "$SEC_BCF" "$SEC_QRPB" "$SEC_BKPB" "$SEC_PRPB"; do printf 'disabled' > "$s"; chmod 0444 "$s"; done
   : > /tmp/journal.log; conf OVERLAP_SECONDS=0; }
 active() { awk '$5 == 0' /tmp/fk/keys.db | wc -l; }
 key_of() { awk -v i="$1" '$1 == i { print $4 }' /tmp/fk/keys.db; }
@@ -539,6 +549,44 @@ run "$W" --all --status;                 expect_deny "122 BOOKING-* di ONLINE_CH
 rm -f /opt/efn/compose/.env
 conf OVERLAP_SECONDS=0
 
+# ── 11f. G27 (docs/04 §18.2): API key user teknis promo Super-App per PT (PROMO-PB) ──────────────────────────────────
+PRDB=/tmp/fk/keys.efn_promo_pb.db
+PR_FILES=docker-compose.yml,docker-compose.prod.yml,docker-compose.host.yml,docker-compose.online-promo-pb.yml
+printf 'disabled' > "$SEC_PRPB"; chmod 0444 "$SEC_PRPB"
+: > /tmp/journal.log
+run "$W" --channel=PROMO-PB;             expect_deny "127 PROMO-PB belum di-deploy tanpa --bootstrap ditolak" "tidak didefinisikan compose"
+run "$W" --channel=PROMO-GL;             expect_deny "128 PROMO-GL (PT tanpa overlay promo) ditolak allowlist" "salah satu"
+: > /tmp/fk/files.log; : > /tmp/fk/rpc.log; run "$W" --channel=PROMO-PB --bootstrap
+if [[ $RC -eq 0 && "$(cat "$SEC_PRPB")" == "$(key_in "$PRDB" 1)" && "$(active_in "$PRDB")" == 1 ]] \
+   && grep -q 'docker-compose.online-promo-pb.yml' /tmp/fk/files.log && grep -qx 'efn_promo_pb PROMO-PB' /tmp/fk/odoo-ch.log \
+   && grep -q 'KEY BARU kanal=PROMO-PB id=1 nama=efn-promo-PB-' /tmp/journal.log \
+   && grep -q 'VERIFIKASI OK kanal=PROMO-PB container=bbbbbbbbbbbb status=200' /tmp/journal.log; then
+  ok "129 --bootstrap PROMO-PB: secret odoo_api_key_promo_pb + user efn_promo_pb, verifikasi 200"
+else bad "129 bootstrap PROMO-PB"; fi
+if grep -qx 'PROMO-PB /json/2/efn.promo.banner/efn_promo_feed ODOO_API_KEY_PROMO_PB_FILE' /tmp/fk/rpc.log; then
+  ok "130 verifikasi promo memakai path gateway #22 efn_promo_feed + env ODOO_API_KEY_PROMO_PB_FILE"
+else OUT=$(cat /tmp/fk/rpc.log); bad "130 path verifikasi promo"; fi
+conf OVERLAP_SECONDS=0 "COMPOSE_FILES=${PR_FILES}"; : > /tmp/journal.log; run "$W" --channel=PROMO-PB --force
+if [[ $RC -eq 0 && "$(cat "$SEC_PRPB")" == "$(key_in "$PRDB" 2)" && "$(active_in "$PRDB")" == 1 ]] \
+   && grep -q 'KEY LAMA DITOLAK kanal=PROMO-PB status=401' /tmp/journal.log; then
+  ok "131 rotasi PROMO-PB: key 2 terpasang, key 1 dicabut (401 terbukti)"
+else bad "131 rotasi PROMO-PB"; fi
+# 403 (Odoo maupun gateway) TIDAK pernah bukti key sah untuk promo -> rollback
+BEFORE=$(cat "$SEC_PRPB"); touch /tmp/fk/force-403; : > /tmp/journal.log; run "$W" --channel=PROMO-PB --force; rm -f /tmp/fk/force-403
+if [[ $RC -eq 1 && "$(cat "$SEC_PRPB")" == "$BEFORE" ]] && grep -q 'VERIFIKASI GAGAL kanal=PROMO-PB .*status=403' /tmp/journal.log; then
+  ok "132 promo: status 403 BUKAN key sah -> rollback"; else bad "132 403 promo"; fi
+printf 'APP_ENV=production\nONLINE_CHANNELS=GL\nPROMO_ENABLED=true\nPROMO_COMPANIES=PB\n' > /opt/efn/compose/.env; chmod 0640 /opt/efn/compose/.env
+: > /tmp/journal.log; run "$W" --all --status
+if [[ $RC -eq 0 ]] && grep -q '== kanal PROMO-PB ==' <<< "$OUT" \
+   && grep -q 'sumber=/opt/efn/compose/.env ONLINE_CHANNELS + PROMO_COMPANIES' /tmp/journal.log && ! grep -qE '[0-9a-f]{40}' <<< "$OUT"; then
+  ok "133 --all: PROMO_ENABLED=true di .env -> PROMO-PB ikut (tanpa nilai key)"; else bad "133 --all promo"; fi
+printf 'PROMO_ENABLED=true\nPROMO_COMPANIES=GL\n' > /opt/efn/compose/.env; chmod 0640 /opt/efn/compose/.env
+run "$W" --all --status;                 expect_deny "134 PROMO_COMPANIES .env di luar PB ditolak" "PROMO_COMPANIES tidak valid"
+printf 'ONLINE_CHANNELS=GL,PROMO-PB\n' > /opt/efn/compose/.env; chmod 0640 /opt/efn/compose/.env
+run "$W" --all --status;                 expect_deny "135 PROMO-* di ONLINE_CHANNELS ditolak" "ONLINE_CHANNELS tidak valid"
+rm -f /opt/efn/compose/.env
+conf OVERLAP_SECONDS=0
+
 # Logika Python odoo shell (precheck G19) dijalankan NYATA terhadap env Odoo palsu (bukan hanya grep)
 PYF=/tmp/efn-rot-py.py
 sed -n "/^read -r -d '' PY << 'PYEOF'/,/^PYEOF\$/p" "$W" | sed '1d;$d' > "$PYF"
@@ -665,6 +713,14 @@ pyrun efn_booking_pb BOOKING-PB '{"users":{"efn_booking_pb":{"id":12,'"$QU"',"gr
 pyok "125 python booking: user teknis ber-grup POS -> ERR user_privileged" 'EFN_ROT ERR user_privileged'
 pyrun efn_booking_pb BOOKING-PB '{"users":{"efn_booking_pb":{"id":12,'"$QU"','"$BG"'}},"missing_xmlids":["efn_table_booking.group_booking_bff"]}' booking PB
 pyok "126 python booking: modul efn_table_booking belum terpasang -> ERR group_missing" 'EFN_ROT ERR group_missing'
+# G27: precheck user teknis promo (grup efn_promo.group_promo_bff, satu company = PT, tanpa POS/admin)
+PG='"groups":["efn_promo.group_promo_bff"]'
+pyrun efn_promo_pb PROMO-PB '{"users":{"efn_promo_pb":{"id":13,'"$QU"','"$PG"'}},"keys":[{"id":7,"user":"efn_promo_pb","name":"efn-promo-PB-x"}]}' promo PB
+pyok "136 python promo: user teknis promo PB satu company -> daftar key + OK" 'EFN_ROT OK'
+pyrun efn_promo_pb PROMO-PB '{"users":{"efn_promo_pb":{"id":13,'"$QU"','"$BG"'}}}' promo PB
+pyok "137 python promo: user booking (bukan grup promo) -> ERR user_not_promo" 'EFN_ROT ERR user_not_promo'
+pyrun efn_promo_pb PROMO-PB '{"users":{"efn_promo_pb":{"id":13,'"$QU"',"groups":["efn_promo.group_promo_bff","base.group_system"]}}}' promo PB
+pyok "138 python promo: user teknis admin -> ERR user_privileged" 'EFN_ROT ERR user_privileged'
 conf OVERLAP_SECONDS=0
 
 # ── 12. Penjaga independen: nilai key TIDAK PERNAH muncul di journald / keluaran ─────────────────────────────

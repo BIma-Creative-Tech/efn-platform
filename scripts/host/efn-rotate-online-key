@@ -58,6 +58,12 @@
 # BUKAN gateway (AccessError outlet tidak dikenal = key sah & metode terjangkau; 403 gateway/401 = gagal).
 # --all: BOOKING-<PT> ikut bila .env deploy memuat BOOKING_ENABLED=true (PT dari BOOKING_COMPANIES, default PB,BCF).
 # Runbook: docs/runbooks/odoo-booking-api-key.md.
+# G27 (docs/04 §18.2): kode PROMO-<PT> (PROMO-PB) = API key user teknis promo Super-App per PT: secret
+# odoo_api_key_promo_<pt>, user efn_promo_<pt> (grup efn_promo.group_promo_bff, SATU company dengan efn_brand_code <PT>,
+# tanpa grup lain, bukan user kanal online), env BFF ODOO_API_KEY_PROMO_<PT>_FILE, overlay
+# docker-compose.online-promo-<pt>.yml, nama key efn-promo-<PT>-<UTC>. Verifikasi: POST
+# /json/2/efn.promo.banner/efn_promo_feed {} -> 200 (feed promo PT itu, tanpa data member). --all: PROMO-<PT> ikut bila
+# .env deploy memuat PROMO_ENABLED=true (PT dari PROMO_COMPANIES). Runbook: docs/runbooks/odoo-promo-api-key.md.
 #
 # Langkah rotasi: (1) daftar key user teknis efn_online_<kanal> lewat `odoo shell` di container Odoo yang berjalan;
 # (2) key BARU dibuat `with_user(<user teknis>)._generate(None, 'efn-online-<KANAL>-<UTC>', now+KEY_DAYS)` (scope
@@ -89,7 +95,8 @@ ADMIN_GROUP=efn-superadmin
 # G23: BOOKING-PB / BOOKING-BCF = user teknis reservasi meja per PT F&B (overlay docker-compose.online-booking-<pt>.yml).
 # G24 (docs/04 §16.1, L-91): WTZ = kanal online PT Wetzel's Pretzels (overlay docker-compose.online-wtz.yml); TANPA
 # QR-WTZ/BOOKING-WTZ (L-92: WTZ tidak memakai QR meja/reservasi).
-ALLOWED_CHANNELS=(GL PB BCR BCF WTZ QR-PB QR-BCF BOOKING-PB BOOKING-BCF)
+# G27: PROMO-PB = user teknis promo Super-App PB (overlay docker-compose.online-promo-pb.yml).
+ALLOWED_CHANNELS=(GL PB BCR BCF WTZ QR-PB QR-BCF BOOKING-PB BOOKING-BCF PROMO-PB)
 BASE_CHANNEL=GL
 ACTOR="?"; CH="?"
 log() {
@@ -145,7 +152,15 @@ fi
 # untuk keamanan bila allowlist kelak memuat kode berhifen; regex menolak '_', '/', '.', spasi -> tetap injektif)
 CH_LC="$(tr 'A-Z-' 'a-z_' <<< "$CH")"
 # Jenis kredensial: kanal online (efn.online.channel) atau QR meja (G22). Semua nama diturunkan dari kode allowlist.
-if [[ "$CH" == BOOKING-* ]]; then
+if [[ "$CH" == PROMO-* ]]; then
+  KIND=promo; PT="${CH#PROMO-}"; PT_LC="${PT,,}"
+  SECRET="odoo_api_key_promo_${PT_LC}"
+  LOGIN="efn_promo_${PT_LC}"
+  KEY_PREFIX="efn-promo-${PT}"
+  KEY_ENV="ODOO_API_KEY_PROMO_${PT}_FILE"
+  RPC_PATH=/json/2/efn.promo.banner/efn_promo_feed
+  RPC_BODY='{}'
+elif [[ "$CH" == BOOKING-* ]]; then
   KIND=booking; PT="${CH#BOOKING-}"; PT_LC="${PT,,}"
   SECRET="odoo_api_key_booking_${PT_LC}"
   LOGIN="efn_booking_${PT_LC}"
@@ -259,9 +274,9 @@ if ((ALL)); then
     [[ "$e_uid" == 0 && $((8#$e_mode & 8#022)) -eq 0 ]] || die "$envf harus milik root dan tidak dapat ditulis grup/lainnya"
     # kosong/tidak ada = default compose GL (sama dengan deploy.sh); nilai lain WAJIB valid (tanpa fallback diam-diam)
     v="$(sed -nE 's/^ONLINE_CHANNELS=(.{0,200})$/\1/p' "$envf" | tail -n1)"
-    # Kanal QR-*/BOOKING-* bukan kode ONLINE_CHANNELS (allowlist G20 deploy-validate) -> ditolak bila muncul di sana
-    [[ ",${v}," != *,QR-* && ",${v}," != *,BOOKING-* ]] \
-      || die "$envf: ONLINE_CHANNELS tidak valid (QR-*/BOOKING-* bukan kanal online)"
+    # Kanal QR-*/BOOKING-*/PROMO-* bukan kode ONLINE_CHANNELS (allowlist G20 deploy-validate) -> ditolak bila muncul di sana
+    [[ ",${v}," != *,QR-* && ",${v}," != *,BOOKING-* && ",${v}," != *,PROMO-* ]] \
+      || die "$envf: ONLINE_CHANNELS tidak valid (QR-*/BOOKING-*/PROMO-* bukan kanal online)"
     v="${v:-$BASE_CHANNEL}"
     # G22: QR meja aktif (deploy.sh menulis FNB_QR_ENABLED/FNB_QR_COMPANIES) -> key QR-<PT> ikut dirotasi
     qr_on="$(sed -nE 's/^FNB_QR_ENABLED=(true|false)$/\1/p' "$envf" | tail -n1)"
@@ -279,10 +294,18 @@ if ((ALL)); then
       [[ "$bk_co" =~ ^(PB|BCF)(,(PB|BCF))?$ ]] || die "$envf: BOOKING_COMPANIES tidak valid (G23: PB, BCF)"
       v="${v},BOOKING-${bk_co//,/,BOOKING-}"
     fi
+    # G27: promo aktif (deploy.sh menulis PROMO_ENABLED/PROMO_COMPANIES) -> key PROMO-<PT> ikut dirotasi
+    pr_on="$(sed -nE 's/^PROMO_ENABLED=(true|false)$/\1/p' "$envf" | tail -n1)"
+    if [[ "$pr_on" == true ]]; then
+      pr_co="$(sed -nE 's/^PROMO_COMPANIES=(.{0,64})$/\1/p' "$envf" | tail -n1)"
+      [[ "$pr_co" =~ ^PB$ ]] || die "$envf: PROMO_COMPANIES tidak valid (G27: PB)"
+      v="${v},PROMO-${pr_co//,/,PROMO-}"
+    fi
     parse_channels "$v" || die "$envf: ONLINE_CHANNELS tidak valid (G20: ${ALLOWED_CHANNELS[*]})"
     CH_SOURCE="$envf ONLINE_CHANNELS"
     if [[ "$qr_on" == true ]]; then CH_SOURCE+=" + FNB_QR_COMPANIES"; fi
     if [[ "$bk_on" == true ]]; then CH_SOURCE+=" + BOOKING_COMPANIES"; fi
+    if [[ "$pr_on" == true ]]; then CH_SOURCE+=" + PROMO_COMPANIES"; fi
   fi
   ((${#CH_LIST[@]} > 0)) || die "--all: daftar kanal kosong"
   exec 9> "$STATE_DIR/.lock.all"
@@ -397,10 +420,11 @@ OP = os.environ.get("EFN_OP", "list")
 KIND = os.environ.get("EFN_KIND", "online")
 PT = os.environ.get("EFN_PT", "")
 # G22: user teknis QR meja (modul efn_pos_bff_order, L-70/L-74) vs user kanal online (efn_online_order)
-# G23: user teknis reservasi meja (modul efn_table_booking, L-85)
+# G23: user teknis reservasi meja (modul efn_table_booking, L-85); G27: user teknis promo (efn_promo)
 GROUP = {
     "qr": "efn_pos_bff_order.group_qr_bff",
     "booking": "efn_table_booking.group_booking_bff",
+    "promo": "efn_promo.group_promo_bff",
 }.get(KIND, "efn_online_order.group_online_channel")
 def say(*a):
     print("EFN_ROT", *a, flush=True)
@@ -418,7 +442,7 @@ def precheck_qr():
     if not env.ref(GROUP, raise_if_not_found=False):
         return "group_missing"
     if not U.has_group(GROUP):
-        return "user_not_booking" if KIND == "booking" else "user_not_qr"
+        return {"booking": "user_not_booking", "promo": "user_not_promo"}.get(KIND, "user_not_qr")
     for g in ("base.group_system", "base.group_erp_manager", "point_of_sale.group_pos_user"):
         if env.ref(g, raise_if_not_found=False) and U.has_group(g):
             return "user_privileged"
@@ -433,7 +457,7 @@ def precheck():
         return "user_missing"
     if not U.active:
         return "user_inactive"
-    if KIND in ("qr", "booking"):
+    if KIND in ("qr", "booking", "promo"):
         return precheck_qr()
     if not U.has_group(GROUP):
         return "user_not_channel"
@@ -469,7 +493,7 @@ else:
             by_name = os.environ.get("EFN_REVOKE_NAME") or ""
             dom = [("user_id", "=", U.id)]
             if by_name:
-                if not re.fullmatch(r"efn-(online|qr|booking)-[A-Z0-9-]{2,16}-[0-9]{8}T[0-9]{6}Z", by_name):
+                if not re.fullmatch(r"efn-(online|qr|booking|promo)-[A-Z0-9-]{2,16}-[0-9]{8}T[0-9]{6}Z", by_name):
                     raise ValueError("bad_name")
                 dom.append(("name", "=", by_name))
                 if keep:  # jangan pernah mencabut key yang sedang terpasang (nama sama dalam detik yang sama)

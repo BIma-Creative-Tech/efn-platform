@@ -42,7 +42,9 @@ EFN_RELEASE_CONFIG_VARS=(ACME_EMAIL PAYMENT_PROVIDER PG_SUPERUSER WHATSAPP_ENABL
   LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT
   ETL_PARTNER_REGION_ENABLED ETL_LOYALTY_RECON_ONLINE_ENABLED ETL_ENABLE_KDS ETL_KDS_ONLINE_ENABLED
   BOOKING_ENABLED BOOKING_COMPANIES BOOKING_MAX_ACTIVE_PER_MEMBER BOOKING_MEMBER_LINK_DAYS BOOKING_RETENTION_DAYS
-  ONLINE_SLOTS_ENABLED)
+  ONLINE_SLOTS_ENABLED
+  PROMO_ENABLED PROMO_PUSH_ENABLED PROMO_COMPANIES PROMO_SYNC_SECONDS
+  CONSENT_PRIVACY_VERSION CONSENT_PRIVACY_TEXT_SHA256 PRIVACY_CONSENT_ENFORCED)
 # G22 (docs/04 §14.D.1, L-72 D-22-18): env yang DIHAPUS kontrak. Bukan konfigurasi rilis (kunci manifest tak dikenal =
 # ditolak efn-deploy); jalur manual `sudo -E bash deploy.sh` -> production DITOLAK, staging peringatan (BFF: gagal start
 # di production, warning di luar production).
@@ -66,6 +68,10 @@ EFN_FNB_QR_COMPANY_CODES=(PB BCF)
 # odoo_api_key_booking_<pt>, overlay infra/compose/docker-compose.online-booking-<pt>.yml (scripts/deploy.sh),
 # efn-rotate-online-key --channel=BOOKING-<PT>.
 EFN_BOOKING_COMPANY_CODES=(PB BCF)
+# G27 (docs/04 §18.1-§18.2): PT yang feed promonya ditarik BFF. API key promo per PT: scripts/secrets.list
+# odoo_api_key_promo_<pt>, overlay infra/compose/docker-compose.online-promo-<pt>.yml (scripts/deploy.sh),
+# efn-rotate-online-key --channel=PROMO-<PT>. PT lain = tambah di sini + secrets.list + compose + overlay + ALLOWED_CHANNELS.
+EFN_PROMO_COMPANY_CODES=(PB)
 # G21 AC-13 (docs/04 §13.2, ADR-036 §0): kunci PII Odoo produksi (scripts/secrets.list host:disabled [SA]) - di-mount ke
 # odoo oleh infra/compose/docker-compose.pii.yml hanya bila EFN_ODOO_PII_ENABLED=true (scripts/deploy.sh).
 EFN_ODOO_PII_KEY_NAMES=(odoo_pii_key_v1 odoo_pii_bidx_key odoo_pii_name_key)
@@ -207,6 +213,22 @@ efn_validate_fnb_qr_companies() { # daftar
     efn_list_has "$c" "${EFN_FNB_QR_COMPANY_CODES[@]}" \
       || _efn_err "FNB_QR_COMPANIES: ${c} bukan PT F&B (${EFN_FNB_QR_COMPANY_CODES[*]}; docs/04 §14.A.4)" || return 1
     [[ -z "${seen[$c]:-}" ]] || _efn_err "FNB_QR_COMPANIES: ${c} ganda" || return 1
+    seen[$c]=1
+  done
+}
+
+# G27 (docs/04 §18.2): daftar PT promo koma -> setiap kode WAJIB di EFN_PROMO_COMPANY_CODES dan unik. Dipakai
+# efn_validate_config dan scripts/deploy.sh (overlay + cek API key promo). rc 1 + alasan di stderr.
+efn_validate_promo_companies() { # daftar
+  local raw="$1" c
+  local -A seen=()
+  local -a list
+  [[ "$raw" =~ ^[A-Z]{2,8}(,[A-Z]{2,8}){0,9}$ ]] || _efn_err "PROMO_COMPANIES tidak valid (kode PT huruf besar dipisah koma)" || return 1
+  IFS=, read -r -a list <<< "$raw"
+  for c in "${list[@]}"; do
+    efn_list_has "$c" "${EFN_PROMO_COMPANY_CODES[@]}" \
+      || _efn_err "PROMO_COMPANIES: ${c} belum punya user teknis/overlay promo (${EFN_PROMO_COMPANY_CODES[*]}; docs/04 §18.2)" || return 1
+    [[ -z "${seen[$c]:-}" ]] || _efn_err "PROMO_COMPANIES: ${c} ganda" || return 1
     seen[$c]=1
   done
 }
@@ -404,7 +426,7 @@ efn_validate_config() { # app_env
     _efn_err "ETL_LOYALTY_RECON_NOT_BEFORE di masa depan (rekonsiliasi poin akan buta)"; return 1
   fi
   local p ver sha
-  for p in LOCATION MARKETING; do
+  for p in LOCATION MARKETING PRIVACY; do
     ver="CONSENT_${p}_VERSION"; sha="CONSENT_${p}_TEXT_SHA256"
     _efn_re "$ver" '^[A-Za-z0-9._@-]{1,32}$' || return 1
     _efn_re "$sha" '^[0-9a-f]{64}$' || return 1
@@ -508,6 +530,26 @@ efn_validate_g22_config() { # app_env
     return 1
   fi
   efn_validate_booking_companies "${BOOKING_COMPANIES:-PB,BCF}" || return 1
+  # G27 (docs/04 §18.2/§18.3a): promo Super-App + persetujuan Kebijakan Privasi. Rentang = BFF app-config.ts.
+  for v in PROMO_ENABLED PROMO_PUSH_ENABLED PRIVACY_CONSENT_ENFORCED; do
+    [[ -z "${!v:-}" || "${!v}" == true || "${!v}" == false ]] || _efn_err "$v harus true|false" || return 1
+  done
+  if [[ -n "${PROMO_SYNC_SECONDS:-}" ]]; then
+    [[ "$PROMO_SYNC_SECONDS" =~ $num_re ]] && (( PROMO_SYNC_SECONDS >= 30 && PROMO_SYNC_SECONDS <= 3600 )) \
+      || _efn_err "PROMO_SYNC_SECONDS harus bilangan bulat 30..3600" || return 1
+  fi
+  if [[ "${PROMO_PUSH_ENABLED:-false}" == true && "${PROMO_ENABLED:-false}" != true ]]; then
+    _efn_err "PROMO_PUSH_ENABLED=true butuh PROMO_ENABLED=true (docs/04 §18.2)"; return 1
+  fi
+  # Default BFF = kanal online pertama; di rilis daftar promo wajib eksplisit saat promo aktif (overlay + API key per PT)
+  if [[ "${PROMO_ENABLED:-false}" == true ]]; then
+    [[ -n "${PROMO_COMPANIES:-}" ]] || _efn_err "PROMO_ENABLED=true wajib PROMO_COMPANIES (mis. PB)" || return 1
+  fi
+  if [[ -n "${PROMO_COMPANIES:-}" ]]; then efn_validate_promo_companies "$PROMO_COMPANIES" || return 1; fi
+  # Persetujuan privasi wajib = teks aktif harus ada (BFF menolak login tanpa versi aktif -> semua login gagal)
+  if [[ "${PRIVACY_CONSENT_ENFORCED:-false}" == true && -z "${CONSENT_PRIVACY_VERSION:-}" ]]; then
+    _efn_err "PRIVACY_CONSENT_ENFORCED=true wajib CONSENT_PRIVACY_VERSION + CONSENT_PRIVACY_TEXT_SHA256 (docs/04 §18.3a)"; return 1
+  fi
   # L-73: job hangus & anonimisasi OFF di production kecuali izin Superadmin di deploy.conf (tidak bisa lewat manifest).
   # SEC-171: filter consent notice hangus (EFN_GATED_FEATURES_OFF) - nilai berisiko `false`, kosong = default compose true.
   if [[ "$app_env" == production ]]; then
