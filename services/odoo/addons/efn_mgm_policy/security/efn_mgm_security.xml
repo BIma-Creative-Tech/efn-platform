@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <record id="efn_mgm_policy_rule_company" model="ir.rule">
+            <field name="name">EFN MGM policy: multi-company</field>
+            <field name="model_id" ref="model_efn_mgm_policy"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+    </data>
+</odoo>

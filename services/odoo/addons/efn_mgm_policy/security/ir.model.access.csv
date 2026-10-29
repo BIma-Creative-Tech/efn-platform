@@ -1,0 +1,4 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_mgm_policy_loyalty_manager,efn.mgm.policy loyalty manager,model_efn_mgm_policy,efn_loyalty_accounting.group_loyalty_manager,1,1,1,1
+access_efn_mgm_policy_account_manager,efn.mgm.policy account manager,model_efn_mgm_policy,account.group_account_manager,1,1,0,0
+access_efn_mgm_policy_system,efn.mgm.policy system,model_efn_mgm_policy,base.group_system,1,0,0,0

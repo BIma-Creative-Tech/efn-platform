@@ -202,6 +202,12 @@ Masih terbuka: markup TP & opini pajak (Finance), parameter QC nyata per komodit
 | **G29b** | `efn_pii*` (6 modul) dipasang di DB dev; 9 partner perorangan lama dimigrasi ke terenkripsi (0 plaintext tersisa); smoke E2E a/o/p/t dijalankan ulang; smoke diperbaiki untuk centang privasi web (G27) + gudang outlet seed demo | dev saja; produksi tetap OFF |
 | **G29c** | W-15 settlement poin bulanan antar-PT (`efn.loyalty.settlement`, empat mata, dua jurnal bank) — docs/04 §13.1 no. 8 | dibangun |
 
+### A.12 Pembaruan 29 Okt 2026 — G30 (kebijakan MGM, K25-10)
+
+| Paket | Isi | Status |
+|---|---|---|
+| **G30** | `efn_mgm_policy`: parameter MGM per PT (L1/L2 persen, L3+ flat, kedalaman maksimum wajib 2..5, cap per referrer, kategori dikecualikan, settle & masa relasi), empat mata, teraudit — docs/04 §19 | dibangun (parameter saja); engine MGM di `loyalty-service` belum |
+
 ---
 
 ## Ringkasan manajemen (10 Okt 2026)

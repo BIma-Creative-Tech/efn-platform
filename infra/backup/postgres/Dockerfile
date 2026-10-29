@@ -11,6 +11,7 @@
 # Binary rilis v3.0.9 dibangun Go 1.25.11 + golang.org/x/net 0.58.0 + grpc 1.83.0 -> CVE HIGH stdlib/x/net/grpc
 # (CVE-2026-78667/78669/97031 baru 10 Okt + daftar G16 di .trivyignore.yaml) tanpa rilis perbaikan upstream.
 # Build ini: Go 1.27.3 (stdlib terbaru, CVE-2026-111943; G22) + bump minimum x/net 0.60.0, grpc 1.83.2 (go.sum diverifikasi proxy Go).
+# G30 (Trivy PR #76): + go-jose/v4 4.1.6 (CVE-2026-116587, DoS parsing JWK RSA; WAL-G v3.0.9 membawa 4.1.4).
 # Build tag hanya `libsodium` (dipakai WALG_LIBSODIUM_KEY); brotli/lzo tidak dipakai (kompresi zstd, efn-walg.sh).
 FROM golang:1.27.3-bookworm@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5 AS walg
 ARG WALG_VERSION=v3.0.9
@@ -25,7 +26,7 @@ WORKDIR /src/wal-g
 # hadolint ignore=DL3062  # bukan `go install`: build dari clone tag + commit yang diverifikasi (hadolint >= 2.13)
 RUN git clone --depth 1 --branch "${WALG_VERSION}" https://github.com/wal-g/wal-g.git . \
     && test "$(git rev-parse HEAD)" = "${WALG_COMMIT}" \
-    && go get golang.org/x/net@v0.60.0 google.golang.org/grpc@v1.83.2 \
+    && go get golang.org/x/net@v0.60.0 google.golang.org/grpc@v1.83.2 github.com/go-jose/go-jose/v4@v4.1.6 \
     && go build -mod=mod -tags libsodium -o /out/wal-g \
          -ldflags "-s -w -X github.com/wal-g/wal-g/cmd/pg.walgVersion=${WALG_VERSION} -X github.com/wal-g/wal-g/cmd/pg.gitRevision=${WALG_COMMIT}" \
          ./main/pg
