@@ -1,4 +1,4 @@
-# KONTRAK ANTAR-SERVICE (v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
+# KONTRAK ANTAR-SERVICE (v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -1981,3 +1981,37 @@ slide utama**; (2) pop-up promo di dalam app/web **dan** push notification; (3) 
   (verifikasi #22 `efn_promo_feed` 200), check-encryption, `deploy.yml` `CFG_*`, runbook `odoo-promo-api-key.md`.
 - Teks consent baru & kategori template = **DRAFT menunggu DPO/Legal**. Expo Push butuh `projectId` EAS + kredensial
   FCM di build (APK uji: belum ada → push dev diuji ke log console; pengiriman nyata setelah FCM dikonfigurasi).
+
+## 19. Gelombang 30 — kebijakan MGM per PT (K25-10, ADR-009) (v13.0, 29 Okt 2026)
+
+Keputusan pemilik K25-10 (CLAUDE.md): level 1 dan 2 = persentase, level 3 dan seterusnya = reward flat; semua
+configurable; **kedalaman maksimum wajib** (tidak ada tak terbatas). G30 hanya membangun **parameter** di Odoo. Engine
+MGM (relasi referral, event, ledger reward, clawback) milik `loyalty-service` (K25-05) dan belum dibangun.
+
+### 19.1 Odoo — modul `efn_mgm_policy` (baru, depends `product`, `efn_audit`, `efn_loyalty_accounting`)
+- `efn.mgm.policy`, satu record per (company, version). Field kebijakan: `level1_pct_bp`, `level2_pct_bp` (basis poin,
+  0..2000, L2 ≤ L1), `flat_points_level3` (≥ 0), `max_depth` (**2..5**, CHECK DB `efn_mgm_policy_depth_bounded`),
+  `cap_points_per_referrer_month` (≥ 1, wajib), `min_order_idr` (≥ 0), `settle_hold_days` (1..60),
+  `relation_months` (1..36), `excluded_categ_ids` (product.category; turunan ikut), `effective_from`, `note`.
+- Tata kelola = `efn.loyalty.policy` (§13.1 no. 2): versi dialokasikan server (advisory lock namespace 704402 +
+  UNIQUE), pembuat/penyunting = *EFN / Loyalty Manager*, penyetuju = *Accounting / Manager* company yang sama dan
+  **bukan** penyunting mana pun (`editor_ids`), `draft → approved | rejected`, read-only setelah diputuskan
+  (perubahan = versi baru), tidak bisa dihapus/disalin setelah diputuskan, field status/jejak hanya ditulis server.
+  Record rule `company_id in company_ids`; teraudit `efn_audit` (aturan data modul) + chatter.
+- Default draft = versi terakhir yang disetujui PT itu, selain itu PLACEHOLDER ADR-009 (L1 200 bp, L2 50 bp, L3+ 5
+  poin, kedalaman 3, cap 1.000 poin/bulan, min Rp50.000, settle H+8, relasi 12 bulan).
+- Menu *Poin EFN → Kebijakan MGM*. Tidak ada path json2 / gateway baru; tidak ada publikasi ke BFF.
+
+### 19.2 Rumus acuan engine
+`efn_active_policy(company)` = versi `approved` tertinggi dengan `effective_from ≤ now`. `_efn_reward_points(level,
+net_amount_idr, point_value_idr)`: level 1/2 = `floor(net × bp / 10.000 / nilai 1 poin)` (nilai poin = kebijakan global
+EFN, L-62); level 3..`max_depth` = `flat_points_level3`; level di luar kedalaman atau belanja < `min_order_idr` = 0.
+Cap bulanan per referrer dan pengecualian kategori dihitung engine (butuh konteks member & baris transaksi).
+"Belanja bersih" = setelah diskon & poin, tanpa pajak (ADR-009 opsi A; definisi final Finance).
+
+### 19.3 Belum / risiko
+- Engine MGM, relasi referral, event RabbitMQ idempoten, settle + clawback retur: **belum ada** (K25-05/K25-10).
+  Persetujuan kebijakan tidak menyalakan reward apa pun.
+- Kontrak publikasi kebijakan ke `loyalty-service` (pola outbox bertanda tangan §13.1) ditulis bersama engine.
+- Semua angka PLACEHOLDER: Finance menetapkan angka (simulasi margin, R-B03), Legal menetapkan struktur & kedalaman
+  (Permendag 70/2019, R-L02) sebelum peluncuran.
