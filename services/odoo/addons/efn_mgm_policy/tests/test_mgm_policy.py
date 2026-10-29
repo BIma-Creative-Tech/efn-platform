@@ -51,11 +51,18 @@ class TestEfnMgmPolicy(TransactionCase):
         self.assertEqual(second.version, 2)
 
     def test_approver_who_edited_cannot_approve(self):
-        both = make_user(self.env, "efn_mgm_both", [LOYALTY_MANAGER, ACCOUNT_MANAGER], [self.company])
+        # Satu user Loyalty Manager + Accounting Manager dicegah SoD efn_role (SOD-03); penyuntingan oleh penyetuju
+        # disimulasikan lewat kode ber-sudo atas namanya (uid asli tercatat di editor_ids), pola test_policy.
+        approver2 = make_user(self.env, "efn_mgm_approver2", [ACCOUNT_MANAGER], [self.company])
         policy = self._draft()
-        policy.with_user(both).write({"note": "disunting"})
-        with self.assertRaisesRegex(AccessError, "Empat mata"):
-            policy.with_user(both).action_efn_approve()
+        policy.with_user(self.approver).sudo().write({"level1_pct_bp": 300})
+        policy.with_user(self.maker).write({"note": "disunting"})
+        self.assertEqual(policy.editor_ids, self.maker | self.approver)
+        for action in ("action_efn_approve", "action_efn_reject"):
+            with self.subTest(action=action), self.assertRaisesRegex(AccessError, "Empat mata"):
+                getattr(policy.with_user(self.approver), action)()
+        policy.with_user(approver2).action_efn_approve()
+        self.assertEqual((policy.state, policy.approved_by_id), ("approved", approver2))
 
     def test_system_fields_and_maker_only(self):
         with self.assertRaises(AccessError):
