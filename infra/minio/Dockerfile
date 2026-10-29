@@ -8,6 +8,8 @@
 # Versi Go: go.mod kedua repo menuntut go 1.27.1; builder 1.27.3 (patch stdlib; G16 1.27.2, G22 22 Okt 2026 CVE-2026-111943).
 # G17 (Trivy PR #36): bump minimum golang.org/x/net 0.59.0 -> 0.60.0 (CVE-2026-78669, HTTP/2 SETTINGS DoS) sebelum
 # build; go.sum diverifikasi proxy/sumdb Go. Hapus `go get` ini bila tag SILO/mc berikutnya sudah memuat >= 0.60.0.
+# G30 (Trivy PR #76): SILO juga bump github.com/go-jose/go-jose/v4 4.1.4 -> 4.1.6 (CVE-2026-116587, DoS parsing JWK
+# RSA). mc tidak terdampak. Hapus bila tag SILO berikutnya sudah memuat >= 4.1.6.
 # SEC-47: base image dipin tag@digest (build reprodusibel); Dependabot `docker` memperbarui digest per tag.
 FROM golang:1.27.3-alpine@sha256:d530cf60723abf1ffae0cd16bb546b379ec0550d2f3815e5b16ed69dbc00fba4 AS build
 ARG SILO_TAG=RELEASE.2026-09-16T00-00-00Z
@@ -22,7 +24,7 @@ WORKDIR /src/silo
 # hadolint ignore=DL3062  # bukan `go install`: build dari clone tag + commit yang diverifikasi (hadolint >= 2.13)
 RUN git clone --depth 1 --branch "${SILO_TAG}" https://github.com/pgsty/silo.git . \
     && test "$(git rev-parse HEAD)" = "${SILO_COMMIT}" \
-    && go get golang.org/x/net@v0.60.0 \
+    && go get golang.org/x/net@v0.60.0 github.com/go-jose/go-jose/v4@v4.1.6 \
     && go build -tags kqueue -ldflags "$(go run buildscripts/gen-ldflags.go)" -o /out/silo .
 WORKDIR /src/mc
 # hadolint ignore=DL3062  # bukan `go install`: build dari clone tag + commit yang diverifikasi (hadolint >= 2.13)
