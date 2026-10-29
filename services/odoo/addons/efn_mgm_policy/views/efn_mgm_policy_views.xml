@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_mgm_policy_view_list" model="ir.ui.view">
+        <field name="name">efn.mgm.policy.list</field>
+        <field name="model">efn.mgm.policy</field>
+        <field name="arch" type="xml">
+            <list decoration-muted="state == 'rejected'" decoration-success="state == 'approved'">
+                <field name="company_id"/>
+                <field name="version"/>
+                <field name="level1_pct_bp"/>
+                <field name="level2_pct_bp"/>
+                <field name="flat_points_level3"/>
+                <field name="max_depth"/>
+                <field name="cap_points_per_referrer_month"/>
+                <field name="effective_from"/>
+                <field name="state" widget="badge"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_mgm_policy_view_form" model="ir.ui.view">
+        <field name="name">efn.mgm.policy.form</field>
+        <field name="model">efn.mgm.policy</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_efn_approve" type="object" string="Setujui" class="btn-primary"
+                            invisible="state != 'draft'" groups="account.group_account_manager"/>
+                    <button name="action_efn_reject" type="object" string="Tolak"
+                            invisible="state != 'draft'" groups="account.group_account_manager"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,approved"/>
+                </header>
+                <div class="alert alert-warning" role="alert">
+                    Angka = PLACEHOLDER (ADR-009) sampai Finance &amp; Legal memutuskan. Persetujuan belum menyalakan
+                    reward apa pun: engine MGM belum ada.
+                </div>
+                <sheet>
+                    <div class="oe_title"><h1><field name="display_label"/></h1></div>
+                    <group>
+                        <group string="Struktur reward (K25-10)">
+                            <field name="company_id" readonly="state != 'draft'"/>
+                            <field name="level1_pct_bp" readonly="state != 'draft'"/>
+                            <field name="level2_pct_bp" readonly="state != 'draft'"/>
+                            <field name="flat_points_level3" readonly="state != 'draft'"/>
+                            <field name="max_depth" readonly="state != 'draft'"/>
+                        </group>
+                        <group string="Batas &amp; waktu (ADR-009)">
+                            <field name="cap_points_per_referrer_month" readonly="state != 'draft'"/>
+                            <field name="min_order_idr" readonly="state != 'draft'"/>
+                            <field name="settle_hold_days" readonly="state != 'draft'"/>
+                            <field name="relation_months" readonly="state != 'draft'"/>
+                            <field name="effective_from" readonly="state != 'draft'"/>
+                        </group>
+                    </group>
+                    <group string="Kategori dikecualikan">
+                        <field name="excluded_categ_ids" widget="many2many_tags" nolabel="1" colspan="2"
+                               readonly="state != 'draft'"/>
+                    </group>
+                    <group>
+                        <group string="Empat mata">
+                            <field name="maker_id"/>
+                            <field name="editor_ids" widget="many2many_tags"/>
+                            <field name="approved_by_id"/>
+                            <field name="approved_at"/>
+                            <field name="rejected_by_id" invisible="state != 'rejected'"/>
+                            <field name="reject_reason" invisible="state != 'rejected'"/>
+                        </group>
+                    </group>
+                    <field name="note" placeholder="Dasar keputusan (memo Finance/Legal)" readonly="state != 'draft'"/>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_efn_mgm_policy" model="ir.actions.act_window">
+        <field name="name">Kebijakan MGM</field>
+        <field name="res_model">efn.mgm.policy</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <menuitem id="menu_efn_mgm_policy" name="Kebijakan MGM" parent="efn_loyalty_accounting.menu_efn_loyalty_root"
+              action="action_efn_mgm_policy" sequence="15"/>
+</odoo>

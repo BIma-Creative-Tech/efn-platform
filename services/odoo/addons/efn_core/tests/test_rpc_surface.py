@@ -404,6 +404,16 @@ RPC_ALLOWLIST = {
     ("efn.loyalty.settlement", "action_recompute"): "W-15: _efn_check_finance; hanya draft",
     ("efn.loyalty.settlement", "action_cancel"): "W-15: _efn_check_finance; hanya draft",
     ("efn.loyalty.settlement.wizard", "action_prepare"): "W-15: wizard -> efn_prepare (cek yang sama)",
+    # G30 K25-10 (efn_mgm_policy): kebijakan MGM per PT, pola efn.loyalty.policy.
+    (
+        "efn.mgm.policy",
+        "action_efn_approve",
+    ): "G30: Accounting Manager + check_access(read) + company + draft + bukan pembuat/penyunting",
+    ("efn.mgm.policy", "action_efn_reject"): "G30: sama dengan action_efn_approve",
+    (
+        "efn.mgm.policy",
+        "efn_active_policy",
+    ): "G30: @api.model baca sudo versi disetujui untuk engine (argumen = record company)",
 }
 
 MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}
