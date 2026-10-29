@@ -13,6 +13,14 @@ FROM odoo:19.0@sha256:dd9013e669caaa23d26765dc55814655eaeecca7cfc2c265dbabae913b
 
 USER root
 
+# G30 (PR #76, Trivy image): libbrotli1 1.1.0-2ubuntu0.1 (CVE-2026-111497, OOB write decoder Brotli) terbit setelah
+# digest base dipin -> dinaikkan eksplisit (hanya paket ber-CVE, pola G26 image postgres). Hapus dari daftar saat
+# digest odoo:19.0 berikutnya sudah memuatnya.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends --only-upgrade libbrotli1; \
+    rm -rf /var/lib/apt/lists/*
+
 # Dependensi Python tambahan untuk addons (pin versi di requirements.txt)
 COPY requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt \
