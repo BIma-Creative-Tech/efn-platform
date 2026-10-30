@@ -53,6 +53,8 @@ export interface OdooOrderEvent {
     points_value?: number;
     cash_amount?: number;
     eligible_amount_refunded?: number;
+    /** G31b §20.10 (opsional): dasar MGM yang direfund (≤ eligible_amount_refunded). */
+    mgm_eligible_amount_refunded?: number;
   } | null;
   /** G22 §14.C.4: `payment.points_value` pada `paid` counter (null = tidak dikirim). */
   payment_points_value?: number | null;
@@ -62,6 +64,8 @@ export interface OdooOrderEvent {
   kitchen_started_at?: Date | null;
   /** G22 §14.C.4: `picked_up.loyalty.eligible_amount` (hanya bila kanal loyalty_earn). */
   loyalty_eligible_amount?: number | null;
+  /** G31b §20.10: `picked_up.loyalty.mgm_eligible_amount` (≤ eligible_amount; null = tidak dikirim). */
+  loyalty_mgm_eligible_amount?: number | null;
   /**
    * G20 §12.2 no. 7: `payment: { method }` pada event `paid` (tanpa identitas kasir). `null` = tidak dikirim (event
    * lain / Odoo pra-G20). Field lain di objek `payment` diabaikan (minimisasi: tidak disimpan).
@@ -133,6 +137,9 @@ export function eventFingerprint(ev: OdooOrderEvent): string {
   }
   if (ev.payment_points_value !== undefined && ev.payment_points_value !== null) fields.push(['payment_points', ev.payment_points_value]);
   if (ev.loyalty_eligible_amount !== undefined && ev.loyalty_eligible_amount !== null) fields.push(['loyalty', ev.loyalty_eligible_amount]);
+  // G31b §20.10: hanya bila ada (sidik event pra-G31b tidak berubah)
+  if (ev.loyalty_mgm_eligible_amount !== undefined && ev.loyalty_mgm_eligible_amount !== null) fields.push(['loyalty_mgm', ev.loyalty_mgm_eligible_amount]);
+  if (ev.refund?.mgm_eligible_amount_refunded !== undefined) fields.push(['refund_mgm', ev.refund.mgm_eligible_amount_refunded]);
   const canonical = JSON.stringify(fields);
   return createHash('sha256').update(canonical, 'utf8').digest('hex');
 }
@@ -202,10 +209,13 @@ export function parseOdooEvent(raw: Buffer | undefined): OdooOrderEvent {
     const pv = idr('points_value');
     const cash = idr('cash_amount');
     const elig = idr('eligible_amount_refunded');
+    const mgmElig = idr('mgm_eligible_amount_refunded');
+    if (mgmElig !== undefined && (elig === undefined || mgmElig > elig)) throw Errors.invalidRequest();
     if (pv !== undefined && pv > rf.amount) throw Errors.invalidRequest();
     if (pv !== undefined) refund.points_value = pv;
     if (cash !== undefined) refund.cash_amount = cash;
     if (elig !== undefined) refund.eligible_amount_refunded = elig;
+    if (mgmElig !== undefined) refund.mgm_eligible_amount_refunded = mgmElig;
   }
   let paymentMethod: OdooOrderEvent['payment_method'] = null;
   let paymentPoints: number | null = null;
@@ -223,12 +233,19 @@ export function parseOdooEvent(raw: Buffer | undefined): OdooOrderEvent {
   const ksRaw = o.kitchen_started_at;
   const kitchenStarted = typeof ksRaw === 'string' && !Number.isNaN(Date.parse(ksRaw)) ? new Date(ksRaw) : null;
   let loyaltyEligible: number | null = null;
+  let loyaltyMgmEligible: number | null = null;
   if (o.loyalty !== undefined && o.loyalty !== null && o.loyalty !== false) {
     const l = o.loyalty as Record<string, unknown>;
     if (typeof l !== 'object' || Array.isArray(l)) throw Errors.invalidRequest();
     const e = l.eligible_amount;
     if (typeof e !== 'number' || !Number.isFinite(e) || e < 0 || e > 1e12) throw Errors.invalidRequest();
     loyaltyEligible = Math.floor(e + 1e-9);
+    const m = l.mgm_eligible_amount;
+    if (m !== undefined && m !== null) {
+      if (typeof m !== 'number' || !Number.isFinite(m) || m < 0 || m > 1e12) throw Errors.invalidRequest();
+      loyaltyMgmEligible = Math.floor(m + 1e-9);
+      if (loyaltyMgmEligible > loyaltyEligible) throw Errors.invalidRequest();
+    }
   }
   let transferReason: TransferRejectReason | null = null;
   if (eventName === 'transfer_rejected') {
@@ -260,6 +277,7 @@ export function parseOdooEvent(raw: Buffer | undefined): OdooOrderEvent {
     ready_source: readySource,
     kitchen_started_at: kitchenStarted,
     loyalty_eligible_amount: loyaltyEligible,
+    ...(loyaltyMgmEligible !== null ? { loyalty_mgm_eligible_amount: loyaltyMgmEligible } : {}),
   };
 }
 
@@ -407,7 +425,7 @@ export class OrderEventsService {
           if (!applied) return record('ignored_stale');
           // G22 §14.C.3: earn saat diambil (eligible dari Odoo, hanya bila kanal loyalty_earn) — transaksi event yang sama
           if (ev.event === 'picked_up' && ev.loyalty_eligible_amount !== undefined && ev.loyalty_eligible_amount !== null && this.points) {
-            await this.points.earnOnPickup(r, order, part, ev.loyalty_eligible_amount);
+            await this.points.earnOnPickup(r, order, part, ev.loyalty_eligible_amount, ev.loyalty_mgm_eligible_amount ?? undefined);
           }
         } else {
           await r.updatePart(part.id, { last_seq: ev.seq, odoo_state: ev.state });
@@ -451,7 +469,7 @@ export class OrderEventsService {
           const key = row
             ? `online_reverse:${row.id}`
             : `online_reverse:${part.id}:${createHash('sha256').update(ev.refund.refund_ref, 'utf8').digest('hex').slice(0, 16)}`;
-          if (fresh) await this.points.clawbackOnRefund(r, fresh, key, ev.refund.eligible_amount_refunded ?? 0);
+          if (fresh) await this.points.clawbackOnRefund(r, fresh, key, ev.refund.eligible_amount_refunded ?? 0, ev.refund.mgm_eligible_amount_refunded);
         }
         await this.saga.refreshOrder(r, part.order_id);
         return record('applied');

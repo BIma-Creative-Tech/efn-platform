@@ -23,6 +23,9 @@ import { MgmEngineService, parseMgmRewardMessage } from './mgm-engine.service';
 import { MgmPolicyService } from './mgm-policy.service';
 import { MgmReferralService } from './mgm-referral.service';
 import { parseClaimBody } from './mgm.controller';
+import { parsePosEarn, parsePosReverse } from '../../pos/dto/pos-loyalty.dto';
+import { eventFingerprint, parseOdooEvent } from '../../orders/order-events.service';
+import { parseFnbEvent } from '../../fnb/fnb-pos.service';
 import { MemoryMgmStore } from './testing/mgm-fakes';
 
 /** G31 docs/04 §20 — engine MGM: kebijakan, referral, akrual, settle, cap, clawback, privasi. */
@@ -426,5 +429,88 @@ describe('MGM akrual → settle → clawback (§20.3–§20.5)', () => {
     expect(w).toMatchObject({ status: 'cancelled', status_reason: 'referrer_erased', referrer_hash: 'f'.repeat(64) });
     // pembeli tanpa upline (tautan tetap ada) → tidak bisa klaim ulang, tidak ada sumber baru
     expect(await ctx.sale(buyer, 'o-2', 1_000_000)).toBe(false);
+  });
+});
+
+describe('G31b dasar MGM per baris (§20.10)', () => {
+  const ORDER = '3f2b8c1e-7d4a-4e0b-9c55-2a1f0e6d9b10';
+  const REFUND = '4a3c9d2f-8e5b-4f1c-8d66-3b2a1f0e7c21';
+  const earn = { idempotency_key: `pos_earn:${ORDER}`, order_ref: ORDER, member_ref: '6281234567890', company_code: 'PB', eligible_amount: 130000 };
+  const rev = {
+    idempotency_key: `pos_reverse:${REFUND}`,
+    original_order_ref: ORDER,
+    refund_order_ref: REFUND,
+    member_ref: '6281234567890',
+    refunded_eligible_amount: 30000,
+    refund_ratio: 0.230769,
+    points_restored_value: 0,
+  };
+
+  it('POS: field opsional (DTO lama tidak berubah), ≤ dasar earn, bukan angka → 400', async () => {
+    expect(parsePosEarn(earn)).not.toHaveProperty('mgmEligibleAmount');
+    expect(parsePosEarn({ ...earn, mgm_eligible_amount: 100000 }).mgmEligibleAmount).toBe(100000);
+    expect(parsePosEarn({ ...earn, mgm_eligible_amount: 0 }).mgmEligibleAmount).toBe(0);
+    expect(parsePosReverse({ ...rev, mgm_refunded_eligible_amount: 0 }).mgmRefundedEligibleAmount).toBe(0);
+    expect(parsePosReverse(rev)).not.toHaveProperty('mgmRefundedEligibleAmount');
+    for (const bad of [{ ...earn, mgm_eligible_amount: 130001 }, { ...earn, mgm_eligible_amount: '1' }, { ...earn, mgm_eligible_amount: -1 }]) {
+      expect(apiErr(() => parsePosEarn(bad)).getStatus()).toBe(400);
+    }
+    expect(apiErr(() => parsePosReverse({ ...rev, mgm_refunded_eligible_amount: 30001 })).getStatus()).toBe(400);
+  });
+
+  it('online: loyalty.mgm_eligible_amount & refund.mgm_eligible_amount_refunded; sidik event lama tidak berubah', () => {
+    const REF = '3f2b8c1e-5d4a-4e7b-9c3d-0a1b2c3d4e5f';
+    const base = {
+      schema_version: 1, idempotency_key: `online:${REF}:picked_up:5`, event_id: '11111111-2222-4333-8444-555555555555', seq: 5,
+      platform_order_ref: REF, checkout_ref: '7a6b5c4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d', channel_code: 'GL', company_code: 'GL',
+      event: 'picked_up', state: 'picked_up', occurred_at: '2026-10-30T03:00:00Z', refund: null,
+    };
+    const buf = (o: Record<string, unknown>): Buffer => Buffer.from(JSON.stringify({ ...base, ...o }));
+    const plain = parseOdooEvent(buf({ loyalty: { eligible_amount: 20998 } }));
+    expect(plain).not.toHaveProperty('loyalty_mgm_eligible_amount');
+    const withMgm = parseOdooEvent(buf({ loyalty: { eligible_amount: 20998, mgm_eligible_amount: 1000 } }));
+    expect(withMgm.loyalty_mgm_eligible_amount).toBe(1000);
+    expect(eventFingerprint(withMgm)).not.toBe(eventFingerprint(plain));
+    expect(() => parseOdooEvent(buf({ loyalty: { eligible_amount: 100, mgm_eligible_amount: 101 } }))).toThrow();
+    const refund = { refund_ref: 'R-1', amount: 1000, kind: 'lines', initiator: 'odoo', eligible_amount_refunded: 500 };
+    const rf = parseOdooEvent(buf({ event: 'refunded', state: 'refunded', idempotency_key: `online:${REF}:refunded:6`, seq: 6, refund: { ...refund, mgm_eligible_amount_refunded: 0 } }));
+    expect(rf.refund?.mgm_eligible_amount_refunded).toBe(0);
+    const rfPlain = parseOdooEvent(buf({ event: 'refunded', state: 'refunded', idempotency_key: `online:${REF}:refunded:6`, seq: 6, refund }));
+    expect(rfPlain.refund).not.toHaveProperty('mgm_eligible_amount_refunded');
+    expect(eventFingerprint(rf)).not.toBe(eventFingerprint(rfPlain));
+    expect(() => parseOdooEvent(buf({ event: 'refunded', state: 'refunded', idempotency_key: `online:${REF}:refunded:6`, seq: 6, refund: { ...refund, mgm_eligible_amount_refunded: 501 } }))).toThrow();
+  });
+
+  it('QR close: orders[].mgm_eligible_amount opsional, ≤ eligible_amount', () => {
+    const SID = '5b4d0e3a-9f6c-4a2d-9e77-4c3b2a1f0d32';
+    const ev = (order: Record<string, unknown>): Buffer =>
+      Buffer.from(JSON.stringify({
+        schema_version: 1, idempotency_key: `fnb:${SID}:session_closed:3`, seq: 3, table_session_id: SID, company_code: 'PB', config_id: 1,
+        event: 'session_closed', occurred_at: '2026-10-30T03:00:00Z', close: { reason: 'paid', orders: [order] },
+      }));
+    const o = { order_uuid: ORDER, reason: 'paid', eligible_amount: 100000, pos_member_attached: false, company_code: 'PB' };
+    expect(parseFnbEvent(ev(o)).close?.orders[0].mgm_eligible_amount).toBeNull();
+    expect(parseFnbEvent(ev({ ...o, mgm_eligible_amount: 40000 })).close?.orders[0].mgm_eligible_amount).toBe(40000);
+    expect(() => parseFnbEvent(ev({ ...o, mgm_eligible_amount: 100001 }))).toThrow();
+  });
+
+  it('engine: basis = dasar MGM; retur dengan dasar MGM → rasio terhadap basis; 0 → tanpa reversal', async () => {
+    const ctx = setup();
+    await ctx.publish();
+    const [ref, buyer] = [ctx.member(), ctx.member()];
+    await ctx.refer(ref, buyer);
+    ctx.clock.ms += 1000;
+    // dasar earn 1,3 jt, dasar MGM 1 jt → L1 200 poin (bukan 260)
+    await ctx.db.tx((q) => ctx.engine.recordSource(q, { kind: 'pos', ref: 'o-m', company: 'PB', buyerHash: buyer.hash, basisIdr: 1_000_000, occurredAt: new Date(ctx.clock.ms) }));
+    await ctx.deliver();
+    expect([...ctx.store.rewards.values()][0]).toMatchObject({ level: 1, points: 200 });
+    expect(await ctx.db.tx((q) => ctx.engine.recordReversal(q, { kind: 'pos', ref: 'o-m', reverseKey: 'k0', ratio: 0.23, refundedBasisIdr: 0 }))).toBe(false);
+    expect(await ctx.db.tx((q) => ctx.engine.recordReversal(q, { kind: 'pos', ref: 'o-m', reverseKey: 'k1', ratio: 0.38, refundedBasisIdr: 500_000 }))).toBe(true);
+    expect(ctx.store.reversals.map((v) => [v.reverse_key, v.ratio])).toEqual([['k1', 0.5]]);
+    expect(await ctx.db.tx((q) => ctx.engine.recordReversal(q, { kind: 'pos', ref: 'o-m', reverseKey: 'k2', ratio: 0.1, refundedBasisIdr: 9_000_000 }))).toBe(true);
+    expect(ctx.store.reversals[1].ratio).toBe(1);
+    ctx.clock.ms += 9 * DAY;
+    await ctx.engine.runOnce();
+    expect([...ctx.store.rewards.values()][0]).toMatchObject({ status: 'cancelled', reversed_points: 200 });
   });
 });

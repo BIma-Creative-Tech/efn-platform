@@ -382,7 +382,7 @@ export class PosLoyaltyService {
             ref: dto.orderRef,
             company: dto.companyCode,
             buyerHash: hash,
-            basisIdr: dto.eligibleAmount,
+            basisIdr: dto.mgmEligibleAmount ?? dto.eligibleAmount,
             occurredAt: new Date(this.now()),
           });
         }
@@ -791,7 +791,13 @@ export class PosLoyaltyService {
         }
         // G31 §20.4: retur sumber MGM (tidak bergantung MGM_ENABLED; no-op bila order bukan sumber MGM)
         if (this.mgm) {
-          await this.mgm.recordReversal(q, { kind: 'pos', ref: dto.originalOrderRef, reverseKey: dto.idempotencyKey, ratio: full ? 1 : dto.refundRatio });
+          await this.mgm.recordReversal(q, {
+            kind: 'pos',
+            ref: dto.originalOrderRef,
+            reverseKey: dto.idempotencyKey,
+            ratio: full ? 1 : dto.refundRatio,
+            ...(dto.mgmRefundedEligibleAmount !== undefined && dto.mgmRefundedEligibleAmount !== null ? { refundedBasisIdr: dto.mgmRefundedEligibleAmount } : {}),
+          });
         }
         // K-18-5/K-18-6: nilai yang dilaporkan Odoo disimpan persisten (rekonsiliasi harian ETL), transaksi yang sama
         if (dto.pointsRestoredValue !== null) {

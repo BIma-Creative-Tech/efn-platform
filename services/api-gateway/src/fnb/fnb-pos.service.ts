@@ -53,6 +53,8 @@ export interface OrderClose {
    */
   pos_member_attached: boolean | null;
   company_code: string | null;
+  /** G31b §20.10: dasar MGM neto (≤ eligible_amount); null = tidak dikirim → dasar earn. */
+  mgm_eligible_amount: number | null;
 }
 export interface FnbEvent {
   idempotency_key: string;
@@ -128,7 +130,7 @@ function parseOrderClose(v: unknown): OrderClose {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) throw Errors.invalidRequest();
   const o = v as Record<string, unknown>;
   // L-80: `company_code` per order (harus = PT sesi, dicek saat diterapkan)
-  if (Object.keys(o).some((k) => !['order_uuid', 'reason', 'eligible_amount', 'pos_member_attached', 'state', 'company_code'].includes(k))) {
+  if (Object.keys(o).some((k) => !['order_uuid', 'reason', 'eligible_amount', 'pos_member_attached', 'state', 'company_code', 'mgm_eligible_amount'].includes(k))) {
     throw Errors.invalidRequest();
   }
   if (o.company_code !== undefined && (typeof o.company_code !== 'string' || !/^[A-Z]{2,8}$/.test(o.company_code))) throw Errors.invalidRequest();
@@ -144,12 +146,20 @@ function parseOrderClose(v: unknown): OrderClose {
     eligible = Math.floor(o.eligible_amount + 1e-9); // Rp1 ke bawah (memihak PT, pola §9.9)
   }
   if (o.pos_member_attached !== undefined && typeof o.pos_member_attached !== 'boolean') throw Errors.invalidRequest();
+  let mgm: number | null = null;
+  if (o.mgm_eligible_amount !== undefined && o.mgm_eligible_amount !== null) {
+    const v = o.mgm_eligible_amount;
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > MAX_AMOUNT) throw Errors.invalidRequest();
+    mgm = Math.floor(v + 1e-9);
+    if (eligible === null || mgm > eligible) throw Errors.invalidRequest();
+  }
   return {
     order_uuid: o.order_uuid,
     reason: (reason ?? 'paid') as 'paid' | 'cancelled',
     eligible_amount: eligible,
     pos_member_attached: typeof o.pos_member_attached === 'boolean' ? o.pos_member_attached : null,
     company_code: typeof o.company_code === 'string' ? o.company_code : null,
+    mgm_eligible_amount: mgm,
   };
 }
 
@@ -410,6 +420,7 @@ export class FnbPosService {
           companyCode: s.company_code,
           eligibleAmount: o.eligible_amount,
           configId: s.config_id,
+          ...(o.mgm_eligible_amount !== null ? { mgmEligibleAmount: o.mgm_eligible_amount } : {}),
         });
         points = res.points;
         earnStatus = res.outcome === 'replay' || res.outcome === 'earned' ? 'earned' : res.outcome === 'limited' ? 'limited' : res.outcome === 'conflict' ? 'conflict' : 'skipped';

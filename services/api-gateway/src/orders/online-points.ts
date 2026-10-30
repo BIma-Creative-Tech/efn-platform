@@ -45,8 +45,10 @@ export interface OnlinePointsPort {
   releaseOrder(r: OnlineRepo, orderId: string, parts: readonly PartRow[]): Promise<void>;
   /** Restore saat refund `settled` (D-22-11); nilai = refund.points_value Odoo, diverifikasi ±Rp1. */
   restoreOnSettled(r: OnlineRepo, part: PartRow, refund: RefundRow, priorSettled: readonly RefundRow[]): Promise<void>;
-  earnOnPickup(r: OnlineRepo, order: OrderRow, part: PartRow, eligibleAmount: number): Promise<void>;
-  clawbackOnRefund(r: OnlineRepo, part: PartRow, key: string, eligibleRefunded: number): Promise<void>;
+  /** G31b §20.10: `mgmEligibleAmount` = dasar MGM (≤ eligible); tidak ada → dasar earn. */
+  earnOnPickup(r: OnlineRepo, order: OrderRow, part: PartRow, eligibleAmount: number, mgmEligibleAmount?: number): Promise<void>;
+  /** G31b §20.10: `mgmEligibleRefunded` = dasar MGM direfund; tidak ada → rasio eligible (v14.0). */
+  clawbackOnRefund(r: OnlineRepo, part: PartRow, key: string, eligibleRefunded: number, mgmEligibleRefunded?: number): Promise<void>;
   /** Saldo tertahan (reservasi aktif) member — `GET /v1/me` (C.2). */
   reservedPoints(memberHash: string): Promise<number>;
 }
@@ -290,7 +292,7 @@ export class PgOnlinePoints implements OnlinePointsPort {
     if (isCompanyCode(row.company_code)) this.metrics.recordLoyaltyPosPoints('restored', row.company_code, points);
   }
 
-  async earnOnPickup(r: OnlineRepo, order: OrderRow, part: PartRow, eligibleAmount: number): Promise<void> {
+  async earnOnPickup(r: OnlineRepo, order: OrderRow, part: PartRow, eligibleAmount: number, mgmEligibleAmount?: number): Promise<void> {
     if ((part.earn_status ?? 'none') !== 'none' && part.earn_status !== 'pending') return;
     if (!this.config.onlineLoyaltyEarnEnabled || !order.member_id || !isCompanyCode(part.company_code)) {
       await r.updatePart(part.id, { earn_status: 'skipped', eligible_amount: eligibleAmount });
@@ -339,7 +341,7 @@ export class PgOnlinePoints implements OnlinePointsPort {
     await touchActivity(q, m.hash, 'online_earn', now);
     // G31 §20.3: sumber akrual MGM (basis = eligible saat diambil; no-op bila MGM mati / tanpa referrer)
     if (this.mgm) {
-      await this.mgm.recordSource(q, { kind: 'online', ref: part.id, company: part.company_code as CompanyCode, buyerHash: m.hash, basisIdr: eligibleAmount, occurredAt: now });
+      await this.mgm.recordSource(q, { kind: 'online', ref: part.id, company: part.company_code as CompanyCode, buyerHash: m.hash, basisIdr: mgmEligibleAmount ?? eligibleAmount, occurredAt: now });
     }
     await r.updatePart(part.id, { earn_status: 'earned', points_earned: points, eligible_amount: eligibleAmount });
     part.earn_status = 'earned';
@@ -347,13 +349,19 @@ export class PgOnlinePoints implements OnlinePointsPort {
     part.eligible_amount = eligibleAmount;
   }
 
-  async clawbackOnRefund(r: OnlineRepo, part: PartRow, key: string, eligibleRefunded: number): Promise<void> {
+  async clawbackOnRefund(r: OnlineRepo, part: PartRow, key: string, eligibleRefunded: number, mgmEligibleRefunded?: number): Promise<void> {
     // refund sebelum diambil → tidak ada clawback (eligible saat picked_up sudah neto)
     if (part.earn_status !== 'earned' || !part.eligible_amount || eligibleRefunded <= 0) return;
     const q = sqlOf(r);
-    // G31 §20.4: retur sumber MGM (juga bila earn 0 poin; tidak bergantung MGM_ENABLED)
+    // G31 §20.4: retur sumber MGM (juga bila earn 0 poin; tidak bergantung MGM_ENABLED); G31b: dasar MGM bila ada
     if (this.mgm) {
-      await this.mgm.recordReversal(q, { kind: 'online', ref: part.id, reverseKey: key, ratio: Math.min(1, eligibleRefunded / part.eligible_amount) });
+      await this.mgm.recordReversal(q, {
+        kind: 'online',
+        ref: part.id,
+        reverseKey: key,
+        ratio: Math.min(1, eligibleRefunded / part.eligible_amount),
+        ...(mgmEligibleRefunded !== undefined ? { refundedBasisIdr: mgmEligibleRefunded } : {}),
+      });
     }
     if ((part.points_earned ?? 0) <= 0) return;
     const rows = await q.query<{ member_ref_hash: string; delta_points: number; reason: string; expires_at: Date | string | null; issuer: string; idempotency_key: string }>(
