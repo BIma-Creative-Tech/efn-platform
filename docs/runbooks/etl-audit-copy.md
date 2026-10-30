@@ -69,6 +69,20 @@ ada, pastikan ada change request. Selain itu ikuti langkah `EfnAuditCopyFailing`
 Jalankan ulang ETL; bila recon gagal terus, eskalasi ke data-AI dan perlakukan jendela tanpa recon sebagai celah
 kontrol di register insiden.
 
+### EfnEtlJobFailing {#efnetljobfailing}
+Satu job (label `etl_job`) menulis heartbeat `status=error` >= 3 kali dalam 1 jam. Siklus (`job=cycle`) tetap `ok`, jadi
+`EfnEtlCycleMissing` tidak menyala; mart job ini saja yang basi.
+1. Penyebab: `docker logs efn-etl-1 | grep -A15 "job=<job> gagal"` (traceback).
+2. Pola dikenal:
+   - `ValueError: company_code tidak dikenal` (job `loyalty_events`): baris BFF berkode PT lama `RTL`/`FNB` (pra-G20).
+     Dev: [dev-reset.md Opsi C](dev-reset.md#opsi-c-buang-hanya-baris-berkode-lama-data-bffodooclickhouse-lain-dipertahankan).
+     Staging/produksi: tidak boleh terjadi (CHECK constraint) - eskalasi ke data-AI + backend.
+   - `permission denied for table/column ...`: grant Odoo belum diterapkan ulang setelah modul baru
+     (`services/etl/sql/odoo-readonly-grants.sql`, deploy langkah grant ETL).
+   - ClickHouse `UNKNOWN_TABLE`/`NO_SUCH_COLUMN`: `clickhouse-init` belum berjalan untuk skema terbaru.
+3. Setelah diperbaiki, siklus berikutnya (<= 15 menit) harus `job=<job> status=ok`; watermark melanjutkan dari titik
+   terakhir yang sukses (tidak ada data hilang).
+
 ## Jangkar eksternal 400 hari (SEC-52 butir 2)
 Baris `EFN_AUDIT_CHAIN_HEAD` dan `EFN_AUDIT_RECON` dari logger `efn_etl.audit_job` diberi label promtail
 `stream="efn_audit_anchor"` (`audit_event=chain_head|recon`) dan disimpan 400 hari (`loki.yml retention_stream`).
