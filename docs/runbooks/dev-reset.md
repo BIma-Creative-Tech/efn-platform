@@ -50,6 +50,27 @@ Ikuti [dev-stack-boot.md §3e](dev-stack-boot.md#reset-db-odoo) **ditambah**: ba
 constraint `*_company_code_check` tetap `NOT VALID` dan rekonsiliasi loyalty/ETL bisa menandai anomali. Gunakan hanya bila
 ada alasan kuat menyimpan data BFF dev; bila ragu, pakai Opsi A.
 
+## Opsi C: buang hanya baris berkode lama (data BFF/Odoo/ClickHouse lain dipertahankan)
+Dipakai bila DB Odoo sudah dibuat ulang (Opsi B) tetapi BFF/ClickHouse masih menyimpan baris `RTL`/`FNB`. Gejala:
+ETL `loyalty_events` gagal tiap siklus dengan `ValueError: company_code tidak dikenal` (fail-closed
+`efn_etl/entities.company_code`), heartbeat `status=error`, dan constraint `*_company_code_check` tetap `NOT VALID`.
+
+```bash
+# 1. Cadangan BFF
+docker exec efn-postgres-1 pg_dump -U postgres -Fc -d efn_platform > <scratch>/efn_platform-pre-purge.dump
+# 2. BFF: hapus baris RTL/FNB (5 tabel) + VALIDATE constraint, satu transaksi. Menolak bila ada baris RTL/FNB setelah
+#    2026-10-19 (bukan data pra-G20) atau payment_intent lama dirujuk pesanan/refund/porsi.
+docker exec -i efn-postgres-1 psql -X -v ON_ERROR_STOP=1 -v confirm=dev-only -U postgres -d efn_platform \
+  -f - < scripts/dev/purge-legacy-company-codes.sql
+# 3. ClickHouse (admin; etl_writer sengaja tanpa DELETE): loyalty_events, loyalty_points_daily, loyalty_recon_finding,
+#    fact_sales_line
+clickhouse-client --config-file <admin.xml> --multiquery < scripts/dev/purge-legacy-company-codes-clickhouse.sql
+```
+
+Verifikasi: kueri "Constraint BFF valid" di Opsi A = `0`; log ETL `job=loyalty_events status=ok` pada siklus berikut.
+Diverifikasi di dev 31 Okt 2026: 20.437 baris ledger + 10.184/10.191 earn POS + 54 reservasi + 28 payment intent +
+18 reverse dihapus, 5 constraint divalidasi, ClickHouse 20.440 event lama dihapus, `loyalty_events` kembali `ok`.
+
 ## Batas / belum
 - Belum diverifikasi di runtime oleh penulis (tanpa Docker di sesi penulisan): perintah mengikuti dev-stack-boot.md
   yang sudah diverifikasi; lead/QA menjalankan dan mencatat hasil.
