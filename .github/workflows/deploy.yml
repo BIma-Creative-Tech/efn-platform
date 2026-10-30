@@ -343,6 +343,7 @@ jobs:
           CFG_ETL_LOYALTY_RECON_ONLINE_ENABLED: ${{ vars.ETL_LOYALTY_RECON_ONLINE_ENABLED || 'false' }}
           CFG_ETL_ENABLE_KDS: ${{ vars.ETL_ENABLE_KDS || 'false' }}
           CFG_ETL_KDS_ONLINE_ENABLED: ${{ vars.ETL_KDS_ONLINE_ENABLED || 'false' }}
+          CFG_ETL_ENABLE_WASTE: ${{ vars.ETL_ENABLE_WASTE || 'false' }}
           # G23 (docs/04 §15). Kosong = default compose (MATI, angka kontrak). Reservasi meja: true butuh API key booking
           # host:* nyata per PT di BOOKING_COMPANIES (deploy.sh, efn-rotate-online-key --channel=BOOKING-<PT> --bootstrap).
           CFG_BOOKING_ENABLED: ${{ vars.BOOKING_ENABLED || 'false' }}

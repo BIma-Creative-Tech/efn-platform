@@ -320,7 +320,8 @@ check_compose() {
     jq -e '(.services["api-gateway"].environment.LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT // "") == "true"' <<< "$json" > /dev/null \
       || err "[$label] api-gateway: LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT harus diteruskan dengan default true di render prod (SEC-171)"
     # G21/G22 (QA G22 P2-3): job ETL opsional default MATI di render prod (aktivasi lewat config rilis)
-    for ks in ETL_PARTNER_REGION_ENABLED ETL_LOYALTY_RECON_ONLINE_ENABLED ETL_ENABLE_KDS ETL_KDS_ONLINE_ENABLED; do
+    for ks in ETL_PARTNER_REGION_ENABLED ETL_LOYALTY_RECON_ONLINE_ENABLED ETL_ENABLE_KDS ETL_KDS_ONLINE_ENABLED \
+              ETL_ENABLE_WASTE; do
       jq -e --arg k "$ks" '(.services.etl.environment[$k] // "") == "false"' <<< "$json" > /dev/null \
         || err "[$label] etl: ${ks} harus diteruskan dengan default false di render prod (QA G22 P2-3)"
     done

@@ -42,6 +42,7 @@
 #               EFN_ALLOW_FEATURE_ON di /etc/efn/deploy.conf). LOYALTY_POINT_EXPIRY_DAYS dihapus (D-22-18): production ditolak.
 #               LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT (default true, SEC-171: production false hanya dengan EFN_ALLOW_FEATURE_ON).
 #               ETL_PARTNER_REGION_ENABLED ETL_LOYALTY_RECON_ONLINE_ENABLED ETL_ENABLE_KDS ETL_KDS_ONLINE_ENABLED
+#               ETL_ENABLE_WASTE (G32 mart waste & yield CK, docs/04 §21)
 #               G23 (docs/04 §15): BOOKING_ENABLED BOOKING_COMPANIES BOOKING_* (reservasi meja; true -> API key booking
 #               host:* nyata per PT + overlay docker-compose.online-booking-<pt>.yml), ONLINE_SLOTS_ENABLED (pre-order).
 #               G27 (docs/04 §18): PROMO_ENABLED PROMO_PUSH_ENABLED PROMO_COMPANIES PROMO_SYNC_SECONDS (true -> API key
@@ -320,7 +321,7 @@ fi
 # G21/G22 (QA G22 P2-3): job ETL opsional butuh ETL_ENABLE_ODOO=true efektif. Kosong = aktif otomatis setelah grant
 # (langkah di bawah, lalu `up -d etl`); sampai saat itu container etl gagal start (efn_etl/config.py) -> peringatan.
 if [[ "$ETL_ENABLE_ODOO_EFF" != true ]]; then
-  for v in ETL_PARTNER_REGION_ENABLED ETL_ENABLE_KDS ETL_LOYALTY_RECON_ONLINE_ENABLED; do
+  for v in ETL_PARTNER_REGION_ENABLED ETL_ENABLE_KDS ETL_LOYALTY_RECON_ONLINE_ENABLED ETL_ENABLE_WASTE; do
     [[ "${!v:-false}" != true ]] \
       || echo "PERINGATAN: ${v}=true tetapi ETL_ENABLE_ODOO belum true - etl restart sampai grant Odoo sukses (langkah grant ETL)" >&2
   done
@@ -474,6 +475,7 @@ DOTENV=(
   "ETL_LOYALTY_RECON_ONLINE_ENABLED=${ETL_LOYALTY_RECON_ONLINE_ENABLED:-false}"
   "ETL_ENABLE_KDS=${ETL_ENABLE_KDS:-false}"
   "ETL_KDS_ONLINE_ENABLED=${ETL_KDS_ONLINE_ENABLED:-false}"
+  "ETL_ENABLE_WASTE=${ETL_ENABLE_WASTE:-false}"
 )
 efn_write_dotenv "$COMPOSE_DIR/.env" "${DOTENV[@]}" || die "gagal menulis .env (SEC-50)"
 
