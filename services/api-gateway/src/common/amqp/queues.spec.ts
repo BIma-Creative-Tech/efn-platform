@@ -57,6 +57,9 @@ describe('topologi RabbitMQ (kontrak §4)', () => {
 
   it('§10.9: queue saga online membawa x-delivery-limit 10; queue lama tidak', () => {
     expect(mainQueueArguments('order.paid')).toMatchObject({ 'x-delivery-limit': 10, 'x-dead-letter-routing-key': 'order.paid.dlq' });
+    // G31 §20.3: queue MGM memakai pola saga (quorum + delivery limit), TIDAK masuk ALL_QUEUES (dicek hanya bila aktif)
+    expect(mainQueueArguments('mgm.reward.requested')).toMatchObject({ 'x-delivery-limit': 10, 'x-dead-letter-routing-key': 'mgm.reward.requested.dlq' });
+    expect([...ALL_QUEUES]).not.toContain('mgm.reward.requested');
     expect(mainQueueArguments('notify.push')).not.toHaveProperty('x-delivery-limit');
   });
 });

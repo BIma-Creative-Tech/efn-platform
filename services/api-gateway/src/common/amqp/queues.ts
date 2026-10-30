@@ -17,6 +17,8 @@ export const QUEUES = {
   ORDER_UNPAID_CLOSED: 'order.unpaid_closed',
   ORDER_COMPENSATE: 'order.compensate',
   ORDER_REFUND_REQUESTED: 'order.refund.requested',
+  /** G31 docs/04 §20.3: akrual reward MGM — publisher & consumer = BFF (outbox → queue → consumer). */
+  MGM_REWARD_REQUESTED: 'mgm.reward.requested',
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
@@ -38,7 +40,14 @@ export const ONLINE_QUEUES: readonly QueueName[] = [
   QUEUES.ORDER_UNPAID_CLOSED,
   QUEUES.ORDER_COMPENSATE,
   QUEUES.ORDER_REFUND_REQUESTED,
+  // G31 §20.3: pola yang sama (quorum + x-delivery-limit 10)
+  QUEUES.MGM_REWARD_REQUESTED,
 ];
+/**
+ * G31 §20.3: queue yang HANYA diperiksa (passive declare) bila fitur aktif (`MGM_ENABLED=true`). Fitur mati = BFF tidak
+ * bergantung pada definitions broker yang baru (rilis tetap bisa start di broker lama).
+ */
+export const MGM_QUEUES: readonly QueueName[] = [QUEUES.MGM_REWARD_REQUESTED];
 export const ONLINE_DELIVERY_LIMIT = 10;
 
 export function dlqName(queue: string): string {

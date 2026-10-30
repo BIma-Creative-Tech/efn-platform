@@ -25,6 +25,8 @@ export const KNOWN_LEDGER_SOURCES: readonly string[] = [
   // G22: poin online (§14.C) dan hangus tidak aktif (§14.D)
   'online',
   'loyalty_expiry',
+  // G31 §20.6: reward & clawback MGM
+  'mgm',
   ...Object.keys(EARN_SOURCE_PUBLISHERS),
 ];
 

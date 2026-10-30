@@ -20,6 +20,7 @@ import { LoyaltyAnomalyKind, reportLoyaltyAnomaly } from '../loyalty/loyalty-ano
 import { touchActivity } from '../loyalty/loyalty-activity';
 import { PiiDecryptError } from '../common/pii/crypto';
 import { EffectiveLoyaltyParams, LoyaltyPolicyService, envLoyaltyParams } from '../loyalty/loyalty-policy.service';
+import { MgmEngineService } from '../loyalty/mgm/mgm-engine.service';
 import { DiscountTokenService, amountWithinBounds } from './discount-token.service';
 import { PosEarnDto, PosReverseDto, RedeemCommitDto, RedeemReserveDto } from './dto/pos-loyalty.dto';
 
@@ -213,6 +214,8 @@ export class PosLoyaltyService {
     private readonly metrics: MetricsService,
     /** G21 §13.1: kebijakan poin per PT. Tidak ada (test lama) → parameter env. */
     @Optional() private readonly policies: LoyaltyPolicyService | null = null,
+    /** G31 §20.3/§20.4: engine MGM (sumber akrual & retur). Tidak ada (test lama) → tanpa MGM. */
+    @Optional() private readonly mgm: MgmEngineService | null = null,
   ) {}
 
   /** Parameter env (kompatibel mundur: `GET /v1/pos/loyalty/params` tanpa `company_code`). */
@@ -372,6 +375,17 @@ export class PosLoyaltyService {
         }
         // G22 §14.D.2: transaksi POS bermember = aktivitas (juga earn 0 poin)
         await touchActivity(q, hash, 'pos_earn', new Date(this.now()));
+        // G31 §20.3: sumber akrual MGM (no-op bila MGM mati / pembeli tanpa referrer); basis = eligible_amount
+        if (this.mgm) {
+          await this.mgm.recordSource(q, {
+            kind: 'pos',
+            ref: dto.orderRef,
+            company: dto.companyCode,
+            buyerHash: hash,
+            basisIdr: dto.eligibleAmount,
+            occurredAt: new Date(this.now()),
+          });
+        }
         return {
           result: { points_earned: points, points_balance: await this.loyalty.balanceByHash(hash, q) },
           outcome: points > 0 ? 'ok' : 'zero',
@@ -774,6 +788,10 @@ export class PosLoyaltyService {
             issuerCompanyCode: part.issuer ?? company,
           }));
           this.metrics.recordLoyaltyPosPoints('clawed_back', company, claw);
+        }
+        // G31 §20.4: retur sumber MGM (tidak bergantung MGM_ENABLED; no-op bila order bukan sumber MGM)
+        if (this.mgm) {
+          await this.mgm.recordReversal(q, { kind: 'pos', ref: dto.originalOrderRef, reverseKey: dto.idempotencyKey, ratio: full ? 1 : dto.refundRatio });
         }
         // K-18-5/K-18-6: nilai yang dilaporkan Odoo disimpan persisten (rekonsiliasi harian ETL), transaksi yang sama
         if (dto.pointsRestoredValue !== null) {

@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Channel, ConfirmChannel, ConsumeMessage, connect, credentials } from 'amqplib';
 import { AppConfig } from '../../config/app-config';
-import { ALL_QUEUES, ONLINE_DELIVERY_LIMIT, ONLINE_QUEUES, QueueMissingError, checkQueueWithDlq } from './queues';
+import { ALL_QUEUES, MGM_QUEUES, ONLINE_DELIVERY_LIMIT, ONLINE_QUEUES, QueueMissingError, checkQueueWithDlq } from './queues';
 
 type AmqpConnection = Awaited<ReturnType<typeof connect>>;
 
@@ -175,6 +175,8 @@ export class AmqpService implements OnModuleInit, OnModuleDestroy {
       const probe = await conn.createChannel();
       probe.on('error', () => undefined);
       for (const q of ALL_QUEUES) await checkQueueWithDlq(probe, q);
+      // G31 §20.3: queue MGM hanya diperiksa saat fitur aktif
+      if (this.config.mgmEnabled) for (const q of MGM_QUEUES) await checkQueueWithDlq(probe, q);
       await probe.close().catch(() => undefined);
 
       const sub = await conn.createChannel();

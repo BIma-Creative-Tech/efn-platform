@@ -19,6 +19,8 @@ export const ONLINE_REASONS = {
   REVERSE: 'online_reverse',
   RESTORE: 'online_restore',
 } as const;
+/** G31 §20.6: clawback reward MGM (source `mgm`) = pembalikan earn PT penerbit (kredit `mgm_reward` = earn). */
+export const MGM_REVERSE_REASON = 'mgm_reverse';
 /** G22 §14.D.3 no. 3: entri eksplisit hangus karena tidak aktif (source `loyalty_expiry`). */
 export const INACTIVITY_EXPIRE_REASON = 'inactivity_expire';
 
@@ -272,7 +274,7 @@ export function classifyFlows(
       if (atCompany) add(out.redeemedByIssuer, r.issuer, pts);
       if (asIssuer) out.redeemedAsIssuer += pts;
       if (asIssuer && !atCompany) add(out.redeemedAsIssuerByRedeemer, r.company_code, pts);
-    } else if (r.reason === REVERSE_REASON.CLAWBACK || r.reason === ONLINE_REASONS.REVERSE) {
+    } else if (r.reason === REVERSE_REASON.CLAWBACK || r.reason === ONLINE_REASONS.REVERSE || r.reason === MGM_REVERSE_REASON) {
       if (asIssuer) out.earnReversed += pts;
     } else if (asIssuer) {
       out.forfeited += pts;
