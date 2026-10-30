@@ -38,7 +38,7 @@ export class MgmPolicyService {
     private readonly config: AppConfig,
     @Inject(DB) private readonly db: Db,
     @Inject(MGM_STORE) private readonly store: MgmStore,
-    @Optional() private readonly metrics: MetricsService | null = null,
+    @Optional() @Inject(MetricsService) private readonly metrics: MetricsService | null = null,
   ) {}
 
   async publish(input: MgmPolicyInput): Promise<MgmPublishResult> {

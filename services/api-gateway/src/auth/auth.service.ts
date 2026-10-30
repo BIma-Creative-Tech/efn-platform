@@ -74,8 +74,8 @@ export class AuthService {
     /** G22 §14.D.2: login OTP sukses = aktivitas (jam tidak aktif W-17). Opsional di test lama. */
     @Optional() @Inject(DB) private readonly db: Db | null = null,
     @Optional() @Inject(ONLINE_POINTS) private readonly points: OnlinePointsPort | null = null,
-    @Optional() private readonly expiry: LoyaltyInactivityJob | null = null,
-    @Optional() private readonly cipher: PiiCipher | null = null,
+    @Optional() @Inject(LoyaltyInactivityJob) private readonly expiry: LoyaltyInactivityJob | null = null,
+    @Optional() @Inject(PiiCipher) private readonly cipher: PiiCipher | null = null,
   ) {}
 
   /** Pseudonim IP untuk nama key Redis (SEC-24). */

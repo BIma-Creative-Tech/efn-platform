@@ -213,9 +213,9 @@ export class PosLoyaltyService {
     private readonly limiter: RateLimiter,
     private readonly metrics: MetricsService,
     /** G21 §13.1: kebijakan poin per PT. Tidak ada (test lama) → parameter env. */
-    @Optional() private readonly policies: LoyaltyPolicyService | null = null,
+    @Optional() @Inject(LoyaltyPolicyService) private readonly policies: LoyaltyPolicyService | null = null,
     /** G31 §20.3/§20.4: engine MGM (sumber akrual & retur). Tidak ada (test lama) → tanpa MGM. */
-    @Optional() private readonly mgm: MgmEngineService | null = null,
+    @Optional() @Inject(MgmEngineService) private readonly mgm: MgmEngineService | null = null,
   ) {}
 
   /** Parameter env (kompatibel mundur: `GET /v1/pos/loyalty/params` tanpa `company_code`). */

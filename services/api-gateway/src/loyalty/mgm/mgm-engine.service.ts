@@ -79,9 +79,10 @@ export class MgmEngineService implements OnApplicationBootstrap, OnModuleInit, O
     private readonly policies: MgmPolicyService,
     private readonly loyalty: LoyaltyService,
     private readonly outbox: OutboxService,
-    @Optional() private readonly loyaltyPolicies: LoyaltyPolicyService | null = null,
-    @Optional() private readonly amqp: AmqpService | null = null,
-    @Optional() private readonly metrics: MetricsService | null = null,
+    // `X | null` memancarkan metadata `Object` (Nest lalu menyuntik null) → token eksplisit wajib (guard: di-spec.ts)
+    @Optional() @Inject(LoyaltyPolicyService) private readonly loyaltyPolicies: LoyaltyPolicyService | null = null,
+    @Optional() @Inject(AmqpService) private readonly amqp: AmqpService | null = null,
+    @Optional() @Inject(MetricsService) private readonly metrics: MetricsService | null = null,
   ) {}
 
   onModuleInit(): void {

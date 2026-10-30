@@ -113,7 +113,7 @@ export class LoyaltyPolicyService {
   constructor(
     private readonly config: AppConfig,
     @Inject(DB) private readonly db: Db,
-    @Optional() private readonly metrics: MetricsService | null = null,
+    @Optional() @Inject(MetricsService) private readonly metrics: MetricsService | null = null,
   ) {}
 
   // ───────────── publikasi Odoo → BFF ─────────────

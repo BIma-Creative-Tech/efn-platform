@@ -131,7 +131,7 @@ export class QuoteService {
     private readonly metrics: OnlineMetrics,
     /** G22 §14.C.2 (opsional di test lama): blok poin quote. */
     @Optional() @Inject(ONLINE_POINTS) private readonly points: OnlinePointsPort | null = null,
-    @Optional() private readonly members: MemberService | null = null,
+    @Optional() @Inject(MemberService) private readonly members: MemberService | null = null,
   ) {}
 
   private async pointsBlock(memberId: string, groups: StoredQuoteGroup[]): Promise<QuotePoints | undefined> {

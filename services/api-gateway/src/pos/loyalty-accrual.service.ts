@@ -118,7 +118,7 @@ export class LoyaltyAccrualService {
   constructor(
     private readonly config: AppConfig,
     @Inject(DB) private readonly db: Db,
-    @Optional() private readonly policies: LoyaltyPolicyService | null = null,
+    @Optional() @Inject(LoyaltyPolicyService) private readonly policies: LoyaltyPolicyService | null = null,
   ) {}
 
   async accrual(companyRaw: unknown, dateRaw: unknown): Promise<LoyaltyAccrualResponse> {

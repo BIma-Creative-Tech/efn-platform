@@ -96,7 +96,7 @@ export class OnlineAdminService {
     @Inject(ODOO_ONLINE) private readonly odoo: OdooOnlineApi,
     private readonly saga: OnlineSagaService,
     private readonly metrics: OnlineMetrics,
-    @Optional() private readonly config: AppConfig | null = null,
+    @Optional() @Inject(AppConfig) private readonly config: AppConfig | null = null,
   ) {}
 
   private get approvalMinIdr(): number {

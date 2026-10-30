@@ -115,7 +115,7 @@ export class LoyaltyInactivityJob implements OnModuleInit, OnModuleDestroy {
     private readonly config: AppConfig,
     @Inject(EXPIRY_STORE) private readonly store: ExpiryStore,
     private readonly metrics: MetricsService,
-    @Optional() private readonly policies: LoyaltyPolicyService | null = null,
+    @Optional() @Inject(LoyaltyPolicyService) private readonly policies: LoyaltyPolicyService | null = null,
   ) {}
 
   onModuleInit(): void {
