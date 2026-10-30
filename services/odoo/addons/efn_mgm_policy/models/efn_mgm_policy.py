@@ -358,6 +358,31 @@ class EfnMgmPolicy(models.Model):
             limit=1,
         )
 
+    @api.model
+    def _efn_mgm_excluded_category_ids(self, company, at=None):
+        """G31b (docs/04 §20.10): id kategori ``excluded_categ_ids`` (+ turunan) kebijakan MGM PT yang berlaku pada
+        ``at`` (versi tertinggi disetujui/terpublikasi dengan ``effective_from`` dan ``approved_at`` <= ``at``).
+
+        ``None`` bila tidak ada kebijakan atau kebijakan tanpa pengecualian -> pemanggil TIDAK mengirim dasar MGM
+        (BFF memakai dasar earn, perilaku v14.0). Dipanggil modul POS/QR/online tanpa depends (``in self.env``)."""
+        if not company:
+            return None
+        at = at or fields.Datetime.now()
+        policy = self.sudo().search(
+            [
+                ("company_id", "=", company.id),
+                ("state", "in", ("approved", "published")),
+                ("effective_from", "<=", at),
+                ("approved_at", "<=", at),
+            ],
+            order="version desc",
+            limit=1,
+        )
+        if not policy or not policy.excluded_categ_ids:
+            return None
+        Category = self.env["product.category"].sudo().with_context(active_test=False)
+        return set(Category.search([("id", "child_of", policy.excluded_categ_ids.ids)]).ids)
+
     def _efn_reward_points(self, level, net_amount_idr, point_value_idr):
         """Rumus kontrak §19.2 (tanpa cap bulanan & pengecualian kategori: dihitung engine dengan konteks member).
 

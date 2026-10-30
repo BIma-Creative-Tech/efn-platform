@@ -6,7 +6,7 @@
     # refund vs close (payload dihitung ulang saat kirim, flag setelah 2xx), SEC-166 (tanpa serap order tamu
     # berikutnya), SEC-167 (print_no MAX+1), SEC-168 (filter PII catatan NFKC + Cf). Kolom baru: pos.order
     # efn_qr_eligible_amount/efn_qr_refund_netted, outbox submission_order_uuid (tanpa migrasi data).
-    "version": "19.0.1.1.0",
+    "version": "19.0.1.2.0",  # G31b: close.orders[].mgm_eligible_amount (docs/04 §20.10)
     "category": "EFN/Point of Sale",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031). Kontrak: docs/04_SERVICE_CONTRACTS.md §14.A + §14.7

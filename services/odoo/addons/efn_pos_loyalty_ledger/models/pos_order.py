@@ -118,12 +118,36 @@ class PosOrder(models.Model):
     def _efn_line_is_eligible(self, line, excluded_categ_ids):
         return line.product_id.categ_id.id not in excluded_categ_ids
 
-    def _efn_loyalty_eligible_raw(self, lines=None):
-        """Σ subtotal tanpa pajak baris yang berhak poin (bertanda; refund -> negatif)."""
+    def _efn_loyalty_eligible_raw(self, lines=None, extra_excluded=None):
+        """Σ subtotal tanpa pajak baris yang berhak poin (bertanda; refund -> negatif). ``extra_excluded`` (G31b) =
+        kategori tambahan yang dikecualikan (pengecualian kebijakan MGM)."""
         self.ensure_one()
         excluded = self.env["product.category"]._efn_loyalty_excluded_ids()
+        if extra_excluded:
+            excluded = excluded | set(extra_excluded)
         lines = self.lines.sudo() if lines is None else lines
         return sum(self._efn_line_raw_amounts(line)[0] for line in lines if self._efn_line_is_eligible(line, excluded))
+
+    def _efn_mgm_excluded_ids(self):
+        """G31b (docs/04 §20.10): kategori pengecualian kebijakan MGM PT order ini (``self`` = order ASAL) pada
+        ``date_order``; ``None`` = tidak ada kebijakan/pengecualian (dasar MGM tidak dikirim). Tanpa depends:
+        efn_mgm_policy opsional."""
+        self.ensure_one()
+        if "efn.mgm.policy" not in self.env:
+            return None
+        return self.env["efn.mgm.policy"]._efn_mgm_excluded_category_ids(self.company_id, self.date_order)
+
+    def _efn_mgm_basis_vals(self, original=None, lines=None, refund=False):
+        """G31b: nilai outbox ``efn_mgm_eligible_amount``/``efn_mgm_basis_set`` (rumus dasar earn + pengecualian MGM,
+        faktor porsi uang order asal). Kosong bila tidak ada pengecualian."""
+        self.ensure_one()
+        origin = original or self
+        mgm_excluded = origin._efn_mgm_excluded_ids()
+        if not mgm_excluded:
+            return {}
+        raw = self._efn_loyalty_eligible_raw(lines, extra_excluded=mgm_excluded)
+        value = (-raw if refund else raw) * origin._efn_loyalty_money_factor()
+        return {"efn_mgm_eligible_amount": int(math.floor(value + 1e-6)) if value > 0 else 0, "efn_mgm_basis_set": True}
 
     def _efn_loyalty_goods_lines(self):
         self.ensure_one()
@@ -439,6 +463,7 @@ class PosOrder(models.Model):
             "kind": "earn",
             "idempotency_key": f"pos_earn:{self.uuid}",
             "eligible_amount": self._efn_loyalty_eligible_amount(),
+            **self._efn_mgm_basis_vals(),
         }
         member, member_error = partner_member_ref(self.partner_id.sudo())
         if not member:
@@ -557,6 +582,7 @@ class PosOrder(models.Model):
             "eligible_amount": refunded_eligible,
             "refund_ratio": ratio,
             "points_restored_value": actual_restore,
+            **self._efn_mgm_basis_vals(original=original, lines=goods, refund=True),
         }
         member, member_error = partner_member_ref(original.partner_id.sudo())
         if ratio <= 0 and actual_restore <= 0:
@@ -641,6 +667,7 @@ class PosOrder(models.Model):
             "eligible_amount": refunded_eligible,
             "refund_ratio": ratio,
             "points_restored_value": 0,
+            **self._efn_mgm_basis_vals(original=original, lines=goods, refund=True),
         }
         if ratio <= 0:
             vals.update({"state": "skipped", "last_error": "zero_ratio"})

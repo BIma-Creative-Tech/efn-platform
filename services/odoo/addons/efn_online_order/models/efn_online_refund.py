@@ -68,6 +68,9 @@ class EfnOnlineRefund(models.Model):
         copy=False,
         help="K-1/K-18-4: subtotal tanpa pajak baris berhak poin di nota kredit × porsi uang (dasar clawback).",
     )
+    # G31b (docs/04 §20.10): dasar MGM direfund (kebijakan MGM saat diambil); hanya bila order punya dasar MGM beku.
+    efn_mgm_eligible_amount_refunded = fields.Integer(string="Dasar MGM direfund", readonly=True, copy=False)
+    efn_mgm_basis_set = fields.Boolean(readonly=True, copy=False)
     credit_note_id = fields.Many2one("account.move", readonly=True, check_company=True)
     state = fields.Selection(
         [("requested", "Menunggu dana keluar"), ("settled", "Selesai"), ("failed", "Gagal")],
@@ -99,6 +102,15 @@ class EfnOnlineRefund(models.Model):
             "cash_amount": order._efn_amount_out(self.cash_amount or 0.0),
             "eligible_amount_refunded": self.eligible_amount_refunded or 0,
         }
+
+    def _efn_mgm_block(self):
+        """G31b (docs/04 §20.10): ``mgm_eligible_amount_refunded`` untuk event ``refunded`` (BUKAN hasil RPC); kosong
+        bila order tanpa dasar MGM beku."""
+        self.ensure_one()
+        if not self.efn_mgm_basis_set:
+            return {}
+        value = min(self.efn_mgm_eligible_amount_refunded or 0, self.eligible_amount_refunded or 0)
+        return {"mgm_eligible_amount_refunded": value}
 
     def _efn_credit_eligible_subtotal(self, excluded):
         """Σ subtotal tanpa pajak baris produk nota kredit yang berhak poin (positif)."""
@@ -174,8 +186,20 @@ class EfnOnlineRefund(models.Model):
             # §14.C.3: Σ refund tunai <= porsi tunai bagian (§10.6.6 diperketat).
             raise online_error("amount_mismatch")
         credit_lines = credit.invoice_line_ids.filtered(lambda line: line.display_type == "product")
-        eligible = loyalty.eligible_subtotal(credit_lines, loyalty.excluded_category_ids(self.env))
+        excluded = loyalty.excluded_category_ids(self.env)
+        eligible = loyalty.eligible_subtotal(credit_lines, excluded)
         eligible_refunded = floor_idr(eligible * order._efn_loyalty_factor())
+        mgm_vals = {}
+        if order.efn_mgm_basis_set:
+            # G31b §20.10: kebijakan MGM yang sama dengan saat diambil (rasio clawback konsisten dengan dasar akrual)
+            mgm_excluded = loyalty.mgm_excluded_category_ids(self.env, order.company_id, order.picked_up_at) or set()
+            mgm = loyalty.eligible_subtotal(credit_lines, excluded | mgm_excluded)
+            mgm_vals = {
+                "efn_mgm_eligible_amount_refunded": min(
+                    floor_idr(mgm * order._efn_loyalty_factor()), eligible_refunded
+                ),
+                "efn_mgm_basis_set": True,
+            }
         record = self.create(
             {
                 "order_id": order.id,
@@ -193,6 +217,7 @@ class EfnOnlineRefund(models.Model):
                 "amount": amount,
                 "points_value": points_value,
                 "eligible_amount_refunded": eligible_refunded,
+                **mgm_vals,
                 "credit_note_id": credit.id,
             }
         )
