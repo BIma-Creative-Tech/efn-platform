@@ -122,6 +122,24 @@ groups:
           summary: "ETL: rekonsiliasi salinan audit (audit_recon) tidak sukses > 26 jam"
           description: "Kontrol detektif tamper log audit tidak berjalan; tamper tidak terdeteksi sampai rekonsiliasi berjalan lagi (SEC-52)."
           runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/etl-audit-copy.md#efnauditreconmissing"
+      # G33: `job=cycle status=ok` tetap keluar walau satu job gagal (runner menangkap per job), dan dead-man di atas
+      # hanya untuk sebagian job -> job lain bisa gagal terus tanpa alert (dev: loyalty_events gagal 189x/26 jam karena
+      # kode PT lama RTL/FNB). Alert generik: job apa pun dengan >= 3 heartbeat status=error dalam 1 jam (siklus 15 m).
+      - alert: EfnEtlJobFailing
+        expr: |
+          sum by (etl_job) (
+            count_over_time({service="etl"}
+              |~ `^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} WARNING efn_etl\.heartbeat EFN_ETL_HEARTBEAT job=[a-z0-9_]{1,64} status=error `
+              | regexp `EFN_ETL_HEARTBEAT job=(?P<etl_job>[a-z0-9_]{1,64}) status=error ` [1h])
+          ) >= 3
+        for: 5m
+        labels:
+          severity: warning
+          team: data
+        annotations:
+          summary: "ETL: job {{ $labels.etl_job }} gagal >= 3 kali dalam 1 jam"
+          description: "Mart ClickHouse untuk job ini berhenti diperbarui walau siklus ETL tetap berjalan. Lihat log efn_etl.runner 'job=<job> gagal'."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/etl-audit-copy.md#efnetljobfailing"
 
   - name: efn-s3-gateway
     interval: 1m
