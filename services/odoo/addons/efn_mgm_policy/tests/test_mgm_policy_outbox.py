@@ -19,6 +19,7 @@ from odoo.addons.efn_loyalty_accounting.tests.common import (
 from odoo.addons.efn_mgm_policy.models.efn_mgm_policy import PARAM_FIELDS
 
 T1 = 1_792_000_000
+OUTBOX_LOGGER = "odoo.addons.efn_loyalty_accounting.models.efn_loyalty_policy_outbox"
 
 
 @tagged("post_install", "-at_install", "efn")
@@ -80,7 +81,9 @@ class TestEfnMgmPolicyOutbox(SigningKeyMixin, FakeBffMixin, TransactionCase):
     def test_out_of_bounds_is_final_and_without_key_is_held(self):
         self.remove_signing_key()
         policy, outbox = self._approved()
-        self.Outbox._efn_process_due()
+        # log ERROR "tertahan" = perilaku yang diharapkan; ditangkap agar gate CI (grep ERROR) tetap bersih
+        with self.assertLogs(OUTBOX_LOGGER, "ERROR"):
+            self.Outbox._efn_process_due()
         self.assertEqual(self.bff_calls, [])
         self.assertEqual((outbox.state, outbox.last_error), ("pending", "signing_key_missing"))
         self.install_signing_key()
