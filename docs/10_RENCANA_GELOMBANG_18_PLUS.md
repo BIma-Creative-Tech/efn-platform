@@ -208,6 +208,12 @@ Masih terbuka: markup TP & opini pajak (Finance), parameter QC nyata per komodit
 |---|---|---|
 | **G30** | `efn_mgm_policy`: parameter MGM per PT (L1/L2 persen, L3+ flat, kedalaman maksimum wajib 2..5, cap per referrer, kategori dikecualikan, settle & masa relasi), empat mata, teraudit — docs/04 §19 | dibangun (parameter saja); engine MGM di `loyalty-service` belum |
 
+### A.13 Pembaruan 30 Okt 2026 — G31 (engine MGM, K25-10)
+
+| Paket | Isi | Status |
+|---|---|---|
+| **G31** | Engine MGM di konteks loyalty BFF: publikasi kebijakan bertanda tangan Odoo→BFF, kode & klaim referral (`/v1/me/referral`), akrual lewat `mgm.reward.requested` (outbox + RabbitMQ, idempoten), settle setelah masa retur + cap bulanan, clawback retur, erasure — docs/04 §20 | dibangun, `MGM_ENABLED=false` |
+
 ---
 
 ## Ringkasan manajemen (10 Okt 2026)
