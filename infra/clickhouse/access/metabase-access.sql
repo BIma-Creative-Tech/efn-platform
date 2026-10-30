@@ -84,6 +84,18 @@ GRANT SELECT ON efn_dwh.fact_kds_ticket TO metabase_reader;
 GRANT SELECT ON efn_dwh.dim_kds_station TO metabase_reader;
 GRANT SELECT ON efn_dwh.v_loyalty_points_daily_channel TO metabase_reader;
 GRANT SELECT ON efn_dwh.v_loyalty_points_daily_total TO metabase_reader;
+-- Gelombang 32 (K25-08): waste & yield CK. Tanpa partner/user/dokumen -> view + tabel dasar penuh (view INVOKER).
+GRANT SELECT ON efn_dwh.v_waste_daily TO metabase_reader;
+GRANT SELECT ON efn_dwh.v_waste_warehouse_daily TO metabase_reader;
+GRANT SELECT ON efn_dwh.v_mo_yield TO metabase_reader;
+GRANT SELECT ON efn_dwh.v_mo_yield_daily TO metabase_reader;
+GRANT SELECT ON efn_dwh.v_mo_component_variance TO metabase_reader;
+GRANT SELECT ON efn_dwh.fact_scrap TO metabase_reader;
+GRANT SELECT ON efn_dwh.dim_scrap_reason TO metabase_reader;
+GRANT SELECT ON efn_dwh.fact_mo_yield TO metabase_reader;
+GRANT SELECT ON efn_dwh.fact_mo_component TO metabase_reader;
+GRANT SELECT ON efn_dwh.dim_ck_threshold TO metabase_reader;
+GRANT SELECT ON efn_dwh.dim_warehouse TO metabase_reader;
 
 GRANT metabase_reader TO efn_metabase;
 SET DEFAULT ROLE metabase_reader TO efn_metabase;
