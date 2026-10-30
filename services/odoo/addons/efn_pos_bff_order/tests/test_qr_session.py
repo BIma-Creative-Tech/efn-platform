@@ -222,6 +222,26 @@ class TestEfnQrSession(EfnQrCommon):
         self.assertTrue(refund.efn_qr_refund_netted)
         self.assertEqual(order.efn_qr_eligible_amount, 25000)
 
+    def test_close_orders_mgm_basis_only_with_policy_exclusion(self):
+        """G31b (docs/04 §20.10): ``orders[].mgm_eligible_amount`` hanya bila kebijakan MGM PT punya pengecualian.
+        efn_mgm_policy opsional -> ``pos.order._efn_mgm_excluded_ids`` di-patch (kebijakan nyata diuji di modul MGM)."""
+        if not hasattr(self.env["pos.order"], "_efn_mgm_excluded_ids"):
+            self.skipTest("efn_pos_loyalty_ledger tidak terpasang")
+        session, anchor, order = self._paid_qr_order()
+        entry = session._efn_close_orders()[0][0]
+        self.assertNotIn("mgm_eligible_amount", entry, "tanpa kebijakan MGM -> payload tidak berubah")
+        croissant_categ = order.lines.product_id.categ_id
+        PosOrder = type(self.env["pos.order"])
+        with patch.object(PosOrder, "_efn_mgm_excluded_ids", return_value={croissant_categ.id}):
+            entry = session._efn_close_orders()[0][0]
+        self.assertEqual((entry["eligible_amount"], entry["mgm_eligible_amount"]), (100000, 0))
+        with patch.object(PosOrder, "_efn_mgm_excluded_ids", return_value={-1}):
+            entry = session._efn_close_orders()[0][0]
+        self.assertEqual(
+            entry["mgm_eligible_amount"], entry["eligible_amount"], "kategori lain -> dasar MGM = dasar earn"
+        )
+        anchor.action_pos_order_cancel()
+
     def test_frozen_snapshot_reused_and_awaiting_refund_reversed_on_2xx(self):
         """L-83: snapshot beku sebelum POST pertama; retry mengirim body yang sama persis; refund setelah percobaan
         pertama TIDAK dinetokan, ditandai menunggu, dan di-enqueue reverse QR saat 2xx (rasio vs snapshot)."""

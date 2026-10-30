@@ -117,6 +117,10 @@ class EfnPosLoyaltyOutbox(models.Model):
         "efn.pos.loyalty.reservation", readonly=True, ondelete="set null", check_company=True
     )
     eligible_amount = fields.Integer(string="Dasar poin (Rp)", readonly=True)
+    # G31b (docs/04 §20.10): dasar MGM beku (tanpa kategori `excluded_categ_ids` kebijakan MGM PT pada waktu order
+    # asal). Dikirim HANYA bila `efn_mgm_basis_set` (kebijakan punya pengecualian); selain itu payload tidak berubah.
+    efn_mgm_eligible_amount = fields.Integer(string="Dasar MGM (Rp)", readonly=True, copy=False)
+    efn_mgm_basis_set = fields.Boolean(readonly=True, copy=False)
     refund_ratio = fields.Float(digits=(16, 6), readonly=True)
     # K-18-5 (G18, E-30): nilai Poin EFN (Rupiah bulat) yang dikembalikan lewat pembayaran Poin EFN negatif refund.
     points_restored_value = fields.Integer(string="Poin dikembalikan (Rp)", readonly=True)
@@ -340,6 +344,13 @@ class EfnPosLoyaltyOutbox(models.Model):
             raise _SkipSend(f"member_missing:{error}")
         return member
 
+    def _efn_mgm_field(self, key):
+        """G31b §20.10: ``{key: dasar MGM}`` bila beku saat enqueue; selain itu kosong (payload v14.0)."""
+        self.ensure_one()
+        if not self.efn_mgm_basis_set:
+            return {}
+        return {key: max(0, min(int(self.efn_mgm_eligible_amount or 0), int(self.eligible_amount or 0)))}
+
     def _efn_build_request(self):
         """(path, payload, log_context). Payload dibangun saat kirim (tidak disimpan)."""
         self.ensure_one()
@@ -368,6 +379,7 @@ class EfnPosLoyaltyOutbox(models.Model):
                     "eligible_amount": self.eligible_amount,
                     # §9.8 (v4.3, SEC-61): mengaktifkan batas earn per kasir/jam di BFF.
                     "pos_config_id": order.config_id.id,
+                    **self._efn_mgm_field("mgm_eligible_amount"),
                 },
                 {"member": mask_phone(member), "order_ref": order.uuid},
             )
@@ -407,6 +419,7 @@ class EfnPosLoyaltyOutbox(models.Model):
                     "refund_ratio": round(self.refund_ratio, 6),
                     "points_restored_value": 0,
                     **self._efn_goods_field("refund_goods_incl", order, minimum=0),
+                    **self._efn_mgm_field("mgm_refunded_eligible_amount"),
                 },
                 {"order_ref": order.uuid, "channel": "qr"},
             )
@@ -425,6 +438,7 @@ class EfnPosLoyaltyOutbox(models.Model):
                     "points_restored_value": max(int(self.points_restored_value or 0), 0),
                     **self._efn_goods_field("refund_goods_incl", order, minimum=0),
                     **({"restore_approved": True} if self.restore_approved else {}),
+                    **self._efn_mgm_field("mgm_refunded_eligible_amount"),
                 },
                 {"member": mask_phone(member), "order_ref": order.uuid},
             )

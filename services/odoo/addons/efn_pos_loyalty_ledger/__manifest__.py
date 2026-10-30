@@ -6,7 +6,7 @@
     # dibaca tanpa depends) -> reverse `earn_channel: "qr"` tanpa member_ref; field outbox `earn_channel`.
     # 19.0.2.4.1 (G22 r15 K3, SEC-164): reverse QR hanya bila sesi meja sudah close (`_efn_qr_refund_mode`); refund
     # saat sesi open/expired dinetokan di event close (tanpa reverse); rasio reverse terhadap dasar neto close.
-    "version": "19.0.2.4.1",
+    "version": "19.0.2.5.0",  # G31b: dasar MGM per baris (docs/04 §20.10)
     "category": "EFN/Point of Sale",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",

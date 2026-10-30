@@ -18,7 +18,7 @@ export class PgFnbEarn implements FnbEarnPort {
 
   async earn(
     r: FnbRepo,
-    input: { memberId: string; orderUuid: string; companyCode: 'PB' | 'BCF'; eligibleAmount: number; configId: number },
+    input: { memberId: string; orderUuid: string; companyCode: 'PB' | 'BCF'; eligibleAmount: number; configId: number; mgmEligibleAmount?: number },
   ): Promise<{ outcome: 'earned' | 'replay' | 'limited' | 'conflict' | 'skipped'; points: number }> {
     const q = r.sql();
     if (!q) throw new Error('earn QR wajib di dalam transaksi PostgreSQL');
@@ -31,6 +31,7 @@ export class PgFnbEarn implements FnbEarnPort {
       companyCode: input.companyCode,
       eligibleAmount: input.eligibleAmount,
       posConfigId: input.configId,
+      ...(input.mgmEligibleAmount !== undefined ? { mgmEligibleAmount: input.mgmEligibleAmount } : {}),
     });
   }
 }

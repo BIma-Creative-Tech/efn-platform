@@ -82,6 +82,14 @@ def excluded_category_ids(env):
     return set(Category.search([("id", "child_of", flagged.ids)]).ids)
 
 
+def mgm_excluded_category_ids(env, company, at):
+    """G31b (docs/04 §20.10): kategori pengecualian kebijakan MGM PT pada ``at`` (efn_mgm_policy opsional, tanpa
+    depends). ``None`` = tidak ada kebijakan/pengecualian -> dasar MGM tidak dikirim (BFF memakai dasar earn)."""
+    if "efn.mgm.policy" not in env:
+        return None
+    return env["efn.mgm.policy"]._efn_mgm_excluded_category_ids(company, at)
+
+
 def eligible_subtotal(lines, excluded):
     """Σ subtotal TANPA pajak baris produk yang berhak poin (baris reward promo ikut, mengurangi dasar; K-1)."""
     total = 0.0

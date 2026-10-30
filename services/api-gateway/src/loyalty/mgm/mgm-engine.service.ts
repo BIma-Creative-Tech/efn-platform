@@ -131,12 +131,20 @@ export class MgmEngineService implements OnApplicationBootstrap, OnModuleInit, O
     return true;
   }
 
-  /** §20.4: catat fakta retur sumber (transaksi pemanggil). Tidak bergantung `MGM_ENABLED`. */
-  async recordReversal(q: Queryable, r: { kind: MgmSourceKind; ref: string; reverseKey: string; ratio: number }): Promise<boolean> {
-    if (!(r.ratio > 0)) return false;
+  /**
+   * §20.4: catat fakta retur sumber (transaksi pemanggil). Tidak bergantung `MGM_ENABLED`. G31b §20.10: `refundedBasisIdr`
+   * (dasar MGM barang retur, Odoo) → `ratio = min(1, refundedBasisIdr / basis_idr)`; 0 = barang yang diretur tidak
+   * termasuk dasar MGM → tanpa reversal. Tanpa field → `ratio` pemanggil (v14.0).
+   */
+  async recordReversal(
+    q: Queryable,
+    r: { kind: MgmSourceKind; ref: string; reverseKey: string; ratio: number; refundedBasisIdr?: number },
+  ): Promise<boolean> {
     const src = await this.store.source(q, r.kind, r.ref, false);
     if (!src) return false;
-    const ratio = Math.min(1, Math.round(r.ratio * 1_000_000) / 1_000_000);
+    const raw = r.refundedBasisIdr !== undefined ? (src.basis_idr > 0 ? r.refundedBasisIdr / src.basis_idr : 0) : r.ratio;
+    if (!(raw > 0)) return false;
+    const ratio = Math.min(1, Math.round(raw * 1_000_000) / 1_000_000);
     if (!(ratio > 0)) return false;
     return this.store.insertReversal(q, { source_kind: r.kind, source_ref: r.ref, reverse_key: r.reverseKey.slice(0, 200), ratio });
   }

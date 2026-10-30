@@ -56,6 +56,21 @@ export interface PosEarnDto {
    * (`LOYALTY_EARN_POS_CONFIG_HOURLY_MAX_POINTS`). Tidak ada → hanya batas per PT per jam yang berlaku.
    */
   posConfigId?: number | null;
+  /** G31b §20.10: dasar MGM (tanpa kategori `excluded_categ_ids` kebijakan MGM), ≤ `eligibleAmount`; tidak ada → dasar earn. */
+  mgmEligibleAmount?: number | null;
+}
+
+/** G31b §20.10: field dasar MGM opsional, integer Rupiah 0..`max` (lebih besar dari dasar earn pasangannya → 400). */
+function optionalMgmBasis(o: Record<string, unknown>, key: string, max: number): number | null {
+  if (o[key] === undefined || o[key] === null) return null;
+  const v = floorIdr(o, key);
+  if (v > max) throw Errors.invalidRequest();
+  return v;
+}
+
+/** Field opsional hanya ada di DTO bila dikirim (bentuk DTO lama tidak berubah). */
+function mgmField<K extends string>(key: K, v: number | null): { [P in K]?: number } {
+  return (v === null ? {} : { [key]: v }) as { [P in K]?: number };
 }
 
 /**
@@ -66,13 +81,15 @@ export function parsePosEarn(body: unknown): PosEarnDto {
   const o = asRecord(body);
   const memberRef = requireMemberRef(o.member_ref);
   if (!isCompanyCode(o.company_code)) throw Errors.invalidRequest();
+  const eligibleAmount = floorIdr(o, 'eligible_amount');
   return {
     idempotencyKey: requireIdempotencyKey(o, 'pos_earn'),
     orderRef: requireOrderRef(o),
     memberRef,
     companyCode: o.company_code,
-    eligibleAmount: floorIdr(o, 'eligible_amount'),
+    eligibleAmount,
     posConfigId: o.pos_config_id === undefined || o.pos_config_id === null ? null : requireInt(o, 'pos_config_id', 1, 2_147_483_647),
+    ...mgmField('mgmEligibleAmount', optionalMgmBasis(o, 'mgm_eligible_amount', eligibleAmount)),
   };
 }
 
@@ -166,6 +183,8 @@ export interface PosReverseDto {
    * melewati cek nilai (restore tetap dibatasi sisa redeem) dan mencatat anomali `restore_value_override`.
    */
   restoreApproved: boolean;
+  /** G31b §20.10: dasar MGM barang refund ini (≤ `refundedEligibleAmount`); tidak ada → rasio `refundRatio`. */
+  mgmRefundedEligibleAmount?: number | null;
 }
 
 /**
@@ -181,6 +200,7 @@ export function parsePosReverse(body: unknown): PosReverseDto {
   const memberRef = channel === 'qr' ? null : requireMemberRef(o.member_ref);
   const refundRatio = requireNumber(o, 'refund_ratio', 0, 1);
   if (refundRatio <= 0) throw Errors.invalidRequest();
+  const refundedEligibleAmount = floorIdr(o, 'refunded_eligible_amount');
   const originalOrderRef = requireRef(o, 'original_order_ref');
   const refundOrderRef = requireRef(o, 'refund_order_ref');
   if (originalOrderRef === refundOrderRef) throw Errors.invalidRequest();
@@ -190,11 +210,12 @@ export function parsePosReverse(body: unknown): PosReverseDto {
     refundOrderRef,
     memberRef,
     earnChannel: channel,
-    refundedEligibleAmount: floorIdr(o, 'refunded_eligible_amount'),
+    refundedEligibleAmount,
     refundRatio,
     pointsRestoredValue:
       o.points_restored_value === undefined || o.points_restored_value === null ? null : requireInt(o, 'points_restored_value', 0, MAX_AMOUNT_IDR),
     refundGoodsIncl: optionalInt(o, 'refund_goods_incl', 0),
     restoreApproved: optionalBool(o, 'restore_approved'),
+    ...mgmField('mgmRefundedEligibleAmount', optionalMgmBasis(o, 'mgm_refunded_eligible_amount', refundedEligibleAmount)),
   };
 }

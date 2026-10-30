@@ -302,6 +302,9 @@ class EfnOnlineOrder(models.Model):
         copy=False,
         help="K-1/K-18-4: Σ subtotal tanpa pajak baris berhak poin (neto refund) × porsi uang; dibekukan saat diambil.",
     )
+    # G31b (docs/04 §20.10): dasar MGM beku saat diambil (rumus eligible + kategori pengecualian kebijakan MGM PT).
+    efn_mgm_eligible_amount = fields.Integer(string="Dasar MGM (Rp)", readonly=True, copy=False)
+    efn_mgm_basis_set = fields.Boolean(readonly=True, copy=False)
     kitchen_started_at = fields.Datetime(
         string="Mulai dimasak",
         readonly=True,
@@ -1538,6 +1541,24 @@ class EfnOnlineOrder(models.Model):
             return 1.0
         return max(0.0, min(1.0, 1.0 - points / payable))
 
+    def _efn_compute_mgm_basis(self, at):
+        """G31b: ``{efn_mgm_eligible_amount, efn_mgm_basis_set}`` bila kebijakan MGM PT pada ``at`` punya pengecualian
+        kategori; selain itu ``{}`` (field tidak dikirim)."""
+        self.ensure_one()
+        mgm_excluded = loyalty.mgm_excluded_category_ids(self.env, self.company_id, at)
+        if not mgm_excluded:
+            return {}
+        excluded = loyalty.excluded_category_ids(self.env) | mgm_excluded
+        so_lines = self.sale_order_id.order_line.filtered(lambda line: not line.display_type and line.product_id)
+        gross = loyalty.eligible_subtotal(so_lines, excluded)
+        refunded = 0.0
+        for refund in self.refund_ids.filtered(lambda r: r.state != "failed" and r.credit_note_id):
+            refunded += refund._efn_credit_eligible_subtotal(excluded)
+        return {
+            "efn_mgm_eligible_amount": floor_idr(max(gross - refunded, 0.0) * self._efn_loyalty_factor()),
+            "efn_mgm_basis_set": True,
+        }
+
     def _efn_compute_eligible_amount(self):
         """K-1/K-2/K-18-4: Σ subtotal tanpa pajak baris SO berhak poin (kategori ``efn_loyalty_earn_excluded``
         dikecualikan; baris reward promo ikut mengurangi) − baris nota kredit refund yang tidak gagal, × porsi uang,
@@ -1641,13 +1662,16 @@ class EfnOnlineOrder(models.Model):
                     )
         if any(m.state != "done" for m in customer_moves):
             raise UserError(_("Sebagian barang pesanan ini belum dapat dikeluarkan."))
+        now = fields.Datetime.now()
         self.write(
             {
                 "state": "picked_up",
-                "picked_up_at": fields.Datetime.now(),
+                "picked_up_at": now,
                 "pickup_attempts": 0,
                 # G22 W-12 (§14.C.3 "Earn"): dasar earn dibekukan saat diambil (event picked_up + status).
                 "eligible_amount": self._efn_compute_eligible_amount(),
+                # G31b §20.10: dasar MGM ikut dibekukan (hanya bila kebijakan MGM PT punya pengecualian kategori)
+                **self._efn_compute_mgm_basis(now),
             }
         )
         self._efn_clear_secret()

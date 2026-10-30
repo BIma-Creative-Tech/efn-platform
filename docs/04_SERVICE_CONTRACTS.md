@@ -1,4 +1,4 @@
-# KONTRAK ANTAR-SERVICE (v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
+# KONTRAK ANTAR-SERVICE (v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -2067,7 +2067,8 @@ lingkungan); produksi tetap OFF sampai Finance menetapkan angka dan Legal menyet
   dicatat. Nilai 1 poin = kebijakan global EFN pada waktu transaksi (fallback env, sama dengan earn POS).
   Baris `platform.mgm_reward` status `pending`, `settle_after = waktu transaksi + settle_hold_days`, menyimpan versi
   kebijakan, nilai poin, dan cap (deterministik).
-- Basis = dasar earn poin (setelah diskon & porsi poin, tanpa pajak, tanpa kategori yang dikecualikan dari poin).
+- Basis = dasar earn poin (setelah diskon & porsi poin, tanpa pajak, tanpa kategori yang dikecualikan dari poin);
+  G31b: dasar MGM per baris bila Odoo mengirimnya (§20.10).
 
 ### 20.4 Retur → clawback
 - Reverse POS (termasuk QR) dan refund online yang meng-clawback earn mencatat fakta `platform.mgm_reversal`
@@ -2103,7 +2104,34 @@ lingkungan); produksi tetap OFF sampai Finance menetapkan angka dan Legal menyet
 `MGM_SETTLE_INTERVAL_MS`, plafon `MGM_POLICY_CEILING_*`. Migrasi `17-platform-g31.sql` (wajib untuk BFF G31).
 
 ### 20.9 Belum / risiko
-- `efn.mgm.policy.excluded_categ_ids` belum ditegakkan engine (BFF tidak menerima rincian baris); basis sudah tanpa
-  kategori yang dikecualikan dari poin. Penegakan = Odoo mengirim `mgm_eligible_amount` (tindak lanjut).
+- ~~`efn.mgm.policy.excluded_categ_ids` belum ditegakkan engine~~ → **G31b §20.10** (v14.1).
 - Notifikasi reward ke referrer, layar Super-App, ekstraksi ke `loyalty-service`.
 - Angka PLACEHOLDER; peluncuran diblokir sign-off Legal (Permendag 70/2019, R-L02) dan simulasi margin Finance (R-B03).
+
+### 20.10 G31b — dasar MGM per baris: pengecualian kategori kebijakan MGM (v14.1, 30 Okt 2026)
+Odoo menghitung dasar reward MGM per baris (BFF tidak menerima rincian baris) dan mengirimnya sebagai field **opsional**
+di samping dasar earn poin. Field hanya dikirim bila PT punya kebijakan MGM disetujui/terpublikasi yang berlaku pada waktu
+transaksi asal **dan** kebijakan itu punya `excluded_categ_ids`; tanpa field → perilaku v14.0 (dasar = dasar earn).
+Payload lain, sidik event, dan respons tidak berubah bila field tidak ada.
+
+- **Rumus** (Odoo, sama dengan dasar earn): Σ subtotal tanpa pajak baris berhak poin (`efn_loyalty_earn_excluded`
+  + turunan dikecualikan) **dan tidak** di kategori `excluded_categ_ids` kebijakan MGM (+ turunan), × porsi non-poin,
+  dibulatkan ke bawah ke Rupiah. Selalu `0 ≤ mgm_* ≤` dasar earn pasangannya (BFF: lebih besar → 400
+  `invalid_request`).
+- **Kebijakan acuan** = versi tertinggi PT yang disetujui/terpublikasi dengan `effective_from ≤` waktu transaksi asal
+  (POS/QR: `date_order` order asal; online: `picked_up_at`). Retur memakai kebijakan transaksi asal → rasio clawback
+  konsisten dengan dasar akrual.
+
+| Jalur | Pemicu (field baru) | Retur (field baru) |
+|---|---|---|
+| POS (§9.2 / §9.4) | `POST /v1/pos/loyalty/earn` `mgm_eligible_amount` | `POST /v1/pos/loyalty/reverse` `mgm_refunded_eligible_amount` (juga `earn_channel:"qr"`) |
+| QR meja (§14.A.4) | event close `orders[].mgm_eligible_amount` (neto refund, ikut snapshot beku) | reverse POS `earn_channel:"qr"` di atas |
+| Online (§14.C.4) | `picked_up.loyalty.mgm_eligible_amount` | `refund.mgm_eligible_amount_refunded` |
+
+- **BFF**: `mgm_source.basis_idr` = `mgm_*` bila ada, selain itu dasar earn (v14.0). Retur dengan field →
+  `ratio = min(1, refunded_mgm ÷ basis_idr)`; `refunded_mgm = 0` (hanya barang dikecualikan MGM yang diretur) → tidak
+  ada `mgm_reversal`. Retur tanpa field → rasio v14.0 (POS `refund_ratio`, online `eligible_refunded ÷ eligible`).
+- Sidik event online (G18-QA-01) memuat kunci baru **hanya bila ada** (sidik event lama tidak berubah).
+- Odoo menyimpan nilai beku: `efn.pos.loyalty.outbox.efn_mgm_eligible_amount` (+ penanda `efn_mgm_basis_set`),
+  `efn.online.order.efn_mgm_eligible_amount`, `efn.online.refund.efn_mgm_eligible_amount_refunded` (+ penanda) —
+  dihitung saat enqueue/pickup/refund, bukan saat kirim.

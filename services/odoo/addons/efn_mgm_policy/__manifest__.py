@@ -2,7 +2,7 @@
     "name": "EFN MGM Policy - kebijakan member-get-member per PT",
     "summary": "K25-10 / ADR-009: L1 & L2 persen, L3+ reward flat, kedalaman maksimum wajib, cap per referrer, "
     "pengecualian kategori, masa tunggu settle; empat mata, read-only setelah disetujui.",
-    "version": "19.0.1.1.0",  # G31: publikasi kebijakan ke BFF (docs/04 §20.1)
+    "version": "19.0.1.2.0",  # G31b: _efn_mgm_excluded_category_ids untuk dasar MGM per baris (§20.10)
     "category": "EFN/Loyalty",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031). Kontrak: docs/04_SERVICE_CONTRACTS.md §19.

@@ -145,6 +145,22 @@ class EfnPosTableSession(models.Model):
         return self.order_ids.sudo().filtered(lambda o: o.state in PAID_STATES and not o._efn_qr_is_refund())
 
     @api.model
+    def _efn_order_mgm_net(self, order, refunds):
+        """G31b (docs/04 §20.10): dasar MGM NETO satu order = rumus ``_efn_order_net_eligible`` + kategori pengecualian
+        kebijakan MGM PT order (``pos.order._efn_mgm_excluded_ids``, efn_pos_loyalty_ledger + efn_mgm_policy opsional).
+        ``None`` = tidak dikirim (tanpa kebijakan/pengecualian, atau modul tidak terpasang)."""
+        if not hasattr(order, "_efn_mgm_excluded_ids"):
+            return None
+        excluded = order._efn_mgm_excluded_ids()
+        if not excluded:
+            return None
+        value = order._efn_loyalty_eligible_raw(order.lines.sudo(), extra_excluded=excluded)
+        for refund, lines in refunds:
+            value += refund._efn_loyalty_eligible_raw(lines, extra_excluded=excluded)
+        value *= order._efn_loyalty_money_factor()
+        return int(math.floor(value + 1e-6)) if value > 0 else 0
+
+    @api.model
     def _efn_order_eligible_raw(self, order, lines=None):
         """Dasar poin (float, bertanda; baris refund negatif) — rumus earn POS bila ``efn_pos_loyalty_ledger``
         terpasang (``_efn_loyalty_eligible_raw``: tanpa pajak, tanpa kategori dikecualikan), selain itu subtotal tanpa
@@ -207,14 +223,17 @@ class EfnPosTableSession(models.Model):
             attached = order._efn_qr_pos_member_attached()
             if not attached:
                 eligible.append((order, net))
-            entries.append(
-                {
-                    "order_uuid": order.uuid,
-                    "eligible_amount": net,
-                    "company_code": order.company_id.efn_brand_code or None,
-                    "pos_member_attached": attached,
-                }
-            )
+            entry = {
+                "order_uuid": order.uuid,
+                "eligible_amount": net,
+                "company_code": order.company_id.efn_brand_code or None,
+                "pos_member_attached": attached,
+            }
+            mgm = self._efn_order_mgm_net(order, refunds)
+            if mgm is not None:
+                # G31b §20.10: hanya bila kebijakan MGM PT punya pengecualian kategori (snapshot beku ikut membawanya)
+                entry["mgm_eligible_amount"] = min(mgm, net)
+            entries.append(entry)
         return entries, refunded, eligible
 
     def _efn_paid_orders_payload(self):

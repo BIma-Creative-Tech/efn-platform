@@ -20,7 +20,7 @@
     # 19.0.1.8.1 (G24 W-40, docs/04 §16.1): teks bantuan kode kanal menyebut WTZ; perilaku tidak berubah.
     # 19.0.1.9.0 (G26, docs/04 §17.15, L-95..L-100): payment_mode va/ewallet/bank_transfer, kill switch counter
     # (efn_online.counter_enabled), hook rekening transfer kanal, event transfer_rejected + outbox detail_code.
-    "version": "19.0.1.9.0",
+    "version": "19.0.1.10.0",  # G31b: dasar MGM per baris (docs/04 §20.10)
     "category": "EFN/Sales",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031): hanya Odoo CE 19 + efn_*.

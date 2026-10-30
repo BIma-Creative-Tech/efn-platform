@@ -570,6 +570,50 @@ class TestEfnOnlineG22Points(EfnOnlineG22Common):
         self.assertEqual(ready["ready_source"], "manual")
         self.assertEqual(order.ready_source, "manual")
 
+    def test_mgm_basis_on_picked_up_and_refund_event(self):
+        """G31b (docs/04 §20.10): kebijakan MGM PT mengecualikan kategori beras -> dasar MGM tanpa beras; kantong tetap.
+        efn_mgm_policy tidak di depends -> ``mgm_excluded_category_ids`` di-patch (kebijakan nyata: modul MGM)."""
+        lines = [{"product_id": self.p_rice.id, "qty": 2}, {"product_id": self.p_bag.id, "qty": 2}]
+        part, _payload, _result = self.place_points(points=None, lines=lines)
+        self.pay(part)
+        rice_categ = self.env["product.category"].create({"name": "Beras MGM (uji)"})
+        self.p_rice.categ_id = rice_categ
+        with patch(f"{LOYALTY}.mgm_excluded_category_ids", return_value={rice_categ.id}) as mocked:
+            order = self._pickup(part)
+            self.assertEqual(mocked.call_args.args[1], order.company_id)
+            so_lines = order.sale_order_id.order_line.filtered("product_id")
+            bag = math.floor(
+                sum(so_lines.filtered(lambda line: line.product_id == self.p_bag).mapped("price_subtotal"))
+            )
+            self.assertTrue(0 < bag < order.eligible_amount)
+            self.assertEqual(order.efn_mgm_eligible_amount, bag, "dasar MGM = kantong saja (beras dikecualikan MGM)")
+            payload = order.event_ids.filtered(lambda e: e.event == "picked_up")._efn_payload()
+            self.assertEqual(payload["loyalty"], {"eligible_amount": order.eligible_amount, "mgm_eligible_amount": bag})
+            refund = self.refund(part, lines=[{"product_id": self.p_bag.id, "qty": 1}])
+            self.assertNotIn("mgm_eligible_amount_refunded", refund, "hasil RPC refund tidak berubah")
+            self.assertEqual(mocked.call_args.args[2], order.picked_up_at, "kebijakan saat diambil")
+        event = order.event_ids.filtered(
+            lambda e: e.event == "refunded" and e.refund_id.refund_ref == refund["refund_ref"]
+        )
+        block = event._efn_payload()["refund"]
+        self.assertGreater(block["eligible_amount_refunded"], 0)
+        self.assertEqual(
+            block["mgm_eligible_amount_refunded"], block["eligible_amount_refunded"], "kantong = dasar MGM"
+        )
+
+    def test_mgm_basis_absent_without_policy(self):
+        part, _payload, _result = self.place_points(points=None)
+        self.pay(part)
+        order = self._pickup(part)
+        self.assertFalse(order.efn_mgm_basis_set)
+        payload = order.event_ids.filtered(lambda e: e.event == "picked_up")._efn_payload()
+        self.assertEqual(set(payload["loyalty"]), {"eligible_amount"})
+        refund = self.refund(part, lines=[{"product_id": self.p_rice.id, "qty": 1}])
+        event = order.event_ids.filtered(
+            lambda e: e.event == "refunded" and e.refund_id.refund_ref == refund["refund_ref"]
+        )
+        self.assertNotIn("mgm_eligible_amount_refunded", event._efn_payload()["refund"])
+
     def test_earn_money_only_off_and_refund_before_pickup_and_channel_flag(self):
         part, _payload, _result = self.place_points()
         self.pay_points(part)

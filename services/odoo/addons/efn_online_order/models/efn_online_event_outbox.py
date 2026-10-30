@@ -181,6 +181,7 @@ class EfnOnlineEventOutbox(models.Model):
                 "initiator": refund.initiator,
                 # G22 W-12 (docs/04 §14.C.4): points_value, cash_amount, eligible_amount_refunded (Rupiah bulat).
                 **refund._efn_loyalty_block(),
+                **refund._efn_mgm_block(),
             }
             if refund.initiator == "odoo" and refund.initiator_user_id:
                 # SEC-95/L-16: identitas pemicu untuk aturan empat mata di BFF. Hanya id + login non-email
@@ -230,6 +231,11 @@ class EfnOnlineEventOutbox(models.Model):
         if self.event == "picked_up" and order.channel_id.loyalty_earn:
             # G22 W-12 (§14.C.3 "Earn"): dasar earn PT bagian; hanya bila kanal mengaktifkan earn (kill switch Odoo).
             payload["loyalty"] = {"eligible_amount": order.eligible_amount or 0}
+            if order.efn_mgm_basis_set:
+                # G31b §20.10: dasar MGM beku (hanya bila kebijakan MGM PT punya pengecualian kategori)
+                payload["loyalty"]["mgm_eligible_amount"] = min(
+                    order.efn_mgm_eligible_amount or 0, order.eligible_amount or 0
+                )
         if self.event == "review":
             # L-57 (QA G20): BFF hanya menerima `cancelled -> review` untuk pelunasan kasir terlambat bila event membawa
             # alasannya (`counter_paid_after_cancel|expiry`); BFF mengabaikan kode lain (-> null). Kode saja, tanpa PII.
