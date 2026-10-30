@@ -32,6 +32,9 @@ class TestEfnTableBooking(EfnOnlineCommon):
         env["res.company"].search([("efn_brand_code", "=", "PB"), ("id", "!=", cls.company.id)]).write(
             {"efn_brand_code": False}
         )
+        # Flush dulu: tanpa ini kedua UPDATE digabung satu statement dan urutan baris (id) menentukan apakah UNIQUE
+        # efn_brand_code bentrok (flaky bila id bergeser; pola test efn_pos_loyalty_ledger).
+        env["res.company"].flush_model(["efn_brand_code"])
         cls.company.efn_brand_code = "PB"  # -> efn_business_type fnb
         cls.calendar = env["resource.calendar"].create(
             {
