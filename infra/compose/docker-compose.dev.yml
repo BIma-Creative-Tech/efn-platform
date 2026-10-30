@@ -148,6 +148,10 @@ services:
       PROMO_ENABLED: ${PROMO_ENABLED:-false}
       PROMO_PUSH_ENABLED: ${PROMO_PUSH_ENABLED:-false}
       PROMO_COMPANIES: ${PROMO_COMPANIES:-}
+      # G31 §20: engine MGM (default mati; nyalakan di .env untuk uji dev)
+      MGM_ENABLED: ${MGM_ENABLED:-false}
+      MGM_CLAIM_WINDOW_DAYS: ${MGM_CLAIM_WINDOW_DAYS:-30}
+      MGM_SETTLE_INTERVAL_MS: ${MGM_SETTLE_INTERVAL_MS:-300000}
     volumes:
       - ../../services/api-gateway/src:/app/src:ro
     read_only: false

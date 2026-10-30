@@ -112,7 +112,7 @@ make_release() {
   cp "$SRC/scripts/lib/deploy-validate.sh" "$d/r/scripts/lib/deploy-validate.sh"
   cat > "$d/r/scripts/deploy.sh" <<'EOF'
 #!/usr/bin/env bash
-{ env | grep -E '^(IMAGE_|APP_ENV=|EFN_RELEASE_|WHATSAPP_OTP_TEMPLATE=|EFN_WG_|EFN_PUBLIC_BIND=|COMPOSE_PROFILES=|TRAEFIK_DOMAIN=|PAYMENT_PROVIDER=|JWT_SECRET=|EFN_ALLOW_FEATURE_ON=|LOYALTY_EXPIRY_ENABLED=|FNB_QR_ENABLED=|LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=|ETL_ENABLE_KDS=|BOOKING_ENABLED=|ONLINE_SLOTS_ENABLED=|PROMO_ENABLED=|PRIVACY_CONSENT_ENFORCED=)' | sort; } > /tmp/deploy-ran
+{ env | grep -E '^(IMAGE_|APP_ENV=|EFN_RELEASE_|WHATSAPP_OTP_TEMPLATE=|EFN_WG_|EFN_PUBLIC_BIND=|COMPOSE_PROFILES=|TRAEFIK_DOMAIN=|PAYMENT_PROVIDER=|JWT_SECRET=|EFN_ALLOW_FEATURE_ON=|LOYALTY_EXPIRY_ENABLED=|FNB_QR_ENABLED=|LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=|ETL_ENABLE_KDS=|BOOKING_ENABLED=|ONLINE_SLOTS_ENABLED=|PROMO_ENABLED=|PRIVACY_CONSENT_ENFORCED=|MGM_ENABLED=)' | sort; } > /tmp/deploy-ran
 # SEC-120: kunci host bersama dipegang efn-deploy (fd 8 diwarisi) selama deploy.sh berjalan
 if flock -n /run/efn/deploy.lock true; then echo LOCK=free; else echo LOCK=held; fi >> /tmp/deploy-ran
 EOF
@@ -370,6 +370,11 @@ neg_man "195 PROMO_SYNC_SECONDS di luar 30..3600 ditolak" "config manifest rilis
 neg_man "196 PRIVACY_CONSENT_ENFORCED=true tanpa versi teks privasi ditolak" "config manifest rilis tidak valid" '.config.PRIVACY_CONSENT_ENFORCED = "true"'
 neg_man "197 CONSENT_PRIVACY_VERSION tanpa SHA ditolak" "config manifest rilis tidak valid" '.config.CONSENT_PRIVACY_VERSION = "privacy@2026-10-27"'
 neg_env "198 PROMO_ENABLED lewat stdin ditolak (config manifest)" "variabel tidak diizinkan: PROMO_ENABLED" "PROMO_ENABLED=true"
+# G31 (docs/04 §20.8): engine MGM = kunci config manifest (default mati); rentang jendela klaim & interval job
+neg_man "270 MGM_ENABLED bukan true/false ditolak" "config manifest rilis tidak valid" '.config.MGM_ENABLED = "yes"'
+neg_man "271 MGM_CLAIM_WINDOW_DAYS di luar 1..365 ditolak" "config manifest rilis tidak valid" '.config.MGM_CLAIM_WINDOW_DAYS = "0"'
+neg_man "272 MGM_SETTLE_INTERVAL_MS di luar 0..86400000 ditolak" "config manifest rilis tidak valid" '.config.MGM_SETTLE_INTERVAL_MS = "90000000"'
+neg_env "273 MGM_ENABLED lewat stdin ditolak (config manifest)" "variabel tidak diizinkan: MGM_ENABLED" "MGM_ENABLED=true"
 neg_man "40 config manifest multi-baris ditolak" "skema" '.config.RABBITMQ_STRICT_PERMISSIONS = "true\nIMAGE_ODOO=evil"'
 neg_man "41 kunci config manifest tidak dikenal ditolak" "skema" '.config.IMAGE_ODOO = "evil.example/odoo"'
 neg_man "101 saklar dev ODOO_ONLINE_MOCK di config manifest ditolak (G17)" "skema" '.config.ODOO_ONLINE_MOCK = "true"'

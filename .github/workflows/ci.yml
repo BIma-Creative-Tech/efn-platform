@@ -698,7 +698,8 @@ jobs:
       # image terikat SHA commit (SEC-91), persetujuan rilis production approved-release (SEC-92); G17: 101 kasus,
       # termasuk config penjualan online ONLINE_* dan penolakan saklar dev ODOO_ONLINE_MOCK/EFN_PAYMENT_SIMULATOR;
       # G21 AC-13: kunci PII host:* ditolak dari stdin, saklar EFN_ODOO_PII_*, validasi kunci host, status modul efn_pii;
-      # G22: secret QR/HMAC FNB, D-22-18 LOYALTY_POINT_EXPIRY_DAYS, L-73 EFN_ALLOW_FEATURE_ON, FNB_QR_*/LOYALTY_EXPIRY_*)
+      # G22: secret QR/HMAC FNB, D-22-18 LOYALTY_POINT_EXPIRY_DAYS, L-73 EFN_ALLOW_FEATURE_ON, FNB_QR_*/LOYALTY_EXPIRY_*;
+      # G31: MGM_* config manifest)
       - name: efn-deploy regression (cosign palsu)
         run: |
           docker run --rm -v "$PWD:/src:ro" \

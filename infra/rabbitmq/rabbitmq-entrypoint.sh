@@ -46,13 +46,14 @@ ETL_HASH="$(hash_pw /run/secrets/rabbitmq_password_etl)"
 #   order.paid, order.unpaid_closed, order.compensate, order.refund.requested (+ .dlq), argumen tambahan
 #   x-delivery-limit 10 (quorum: setelah 10 kali redelivery pesan di-dead-letter ke DLQ, bukan loop poison message).
 #   Diverifikasi di RabbitMQ 3.13.7 (image dipin) - laporan devsecops G17.
-Q='^(ocr\\.requested|loyalty\\.earn\\.requested|notify\\.push|privacy\\.erasure\\.completed|order\\.(paid|unpaid_closed|compensate|refund\\.requested))(\\.dlq)?$'
+# G31 (docs/04 §20.3): mgm.reward.requested (+ .dlq) pola yang sama (publisher & consumer BFF, x-delivery-limit 10).
+Q='^(ocr\\.requested|loyalty\\.earn\\.requested|notify\\.push|privacy\\.erasure\\.completed|order\\.(paid|unpaid_closed|compensate|refund\\.requested)|mgm\\.reward\\.requested)(\\.dlq)?$'
 W='^amq\\.default$'
 # G6 QA (SEC-25): default STRICT. Passive queue.declare tidak memeriksa izin configure di RabbitMQ (handler passive
 # rabbit_channel tidak memanggil check_configure_permitted) - PLAUSIBLE, verifikasi di staging. Bila klien gagal
 # start dengan ACCESS_REFUSED saat checkQueue, set RABBITMQ_STRICT_PERMISSIONS=false (fallback lama).
 if [ "${RABBITMQ_STRICT_PERMISSIONS:-true}" != "false" ]; then
-  BFF_CONF='^$'; BFF_READ='^(loyalty\\.earn\\.requested|notify\\.push|privacy\\.erasure\\.completed|order\\.(paid|unpaid_closed|compensate|refund\\.requested))$'
+  BFF_CONF='^$'; BFF_READ='^(loyalty\\.earn\\.requested|notify\\.push|privacy\\.erasure\\.completed|order\\.(paid|unpaid_closed|compensate|refund\\.requested)|mgm\\.reward\\.requested)$'
   OCR_CONF='^$'; OCR_READ='^ocr\\.requested$'
 else
   BFF_CONF="$Q"; BFF_READ="$Q"
@@ -95,7 +96,8 @@ $(queue_defs privacy.erasure.completed),
 $(queue_defs_limited order.paid 10),
 $(queue_defs_limited order.unpaid_closed 10),
 $(queue_defs_limited order.compensate 10),
-$(queue_defs_limited order.refund.requested 10)
+$(queue_defs_limited order.refund.requested 10),
+$(queue_defs_limited mgm.reward.requested 10)
   ]
 }
 EOF

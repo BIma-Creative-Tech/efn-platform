@@ -312,7 +312,7 @@ check_compose() {
     # G22: kill switch default MATI di render prod (QR meja §14.A.3, poin online §14.C.1, hangus/anonimisasi L-73)
     local ks
     for ks in FNB_QR_ENABLED FNB_QR_POINTS_ENABLED ONLINE_LOYALTY_REDEEM_ENABLED ONLINE_LOYALTY_EARN_ENABLED \
-              LOYALTY_EXPIRY_ENABLED LOYALTY_INACTIVE_ANONYMIZE; do
+              LOYALTY_EXPIRY_ENABLED LOYALTY_INACTIVE_ANONYMIZE MGM_ENABLED; do
       jq -e --arg k "$ks" '(.services["api-gateway"].environment[$k] // "false") == "false"' <<< "$json" > /dev/null \
         || err "[$label] api-gateway: ${ks} harus default false di render prod (aktivasi lewat config rilis, docs/04 §14)"
     done
