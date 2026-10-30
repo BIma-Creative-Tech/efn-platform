@@ -401,6 +401,17 @@ Sumber: `docs/04` §12–§14 (+ L-48..L-74), `docs/08` §13, migrasi `09-platfo
 | Meta (WhatsApp) — template `efn_loyalty_inactivity_notice` (G22) | HP + **jumlah poin + tanggal hangus**; tanpa nama, nominal Rupiah, tautan berparameter | Lintas negara (`PDP_TRANSFER_LINTAS_NEGARA.md`); kategori UTILITY vs MARKETING ditentukan Meta (**belum terverifikasi**); teks final Legal (Q-F22-4) |
 | Staf kasir (bayar di kasir) | Kode bayar diketik, nomor SO + nominal (tanpa data pelanggan) | L-50 |
 
+#### 2.8.6 (v9) Engine MGM — Gelombang 31 (docs/04 §20)
+| Objek | Data pribadi | Dasar & tujuan | Retensi | Hapus/erasure |
+|---|---|---|---|---|
+| `platform.mgm_member` | `member_hash` (pseudonim), kode referral acak 8 karakter, `referrer_hash` (pseudonim upline), waktu tautan | Program referral member-get-member (ADR-009) · perjanjian/persetujuan program loyalty | Selama akun aktif | Baris subjek dihapus; downline kehilangan tautan upline (`referrer_hash = NULL`) |
+| `platform.mgm_source` | `buyer_hash`, PT, basis Rupiah per transaksi (tanpa baris produk/outlet/nama) | Basis reward & clawback | Ikut ledger poin | `buyer_hash` → tombstone acak; nilai keuangan tetap |
+| `platform.mgm_reward` / `mgm_reversal` | `referrer_hash`, level, poin, status | Akrual, settle, cap, clawback | Ikut ledger poin | Reward pending subjek sebagai referrer → `cancelled/referrer_erased`; hash → tombstone |
+| Antrean `mgm.reward.requested` | Hanya `source_kind` + `source_ref` (tanpa hash/member) | Akrual asinkron | Sampai dikonsumsi; DLQ ≤ 7 h | — |
+| `GET /v1/me/referral` | Kode sendiri + **hitungan** jaringan per level; tanpa identitas upline/downline | Transparansi ke member | `no-store` | Ekspor DSAR memuat `referral.code` + `linked_at` |
+
+Kebijakan angka (Odoo `efn.mgm.policy`) tidak berisi data pribadi. Fitur default **mati** (`MGM_ENABLED=false`); aktivasi prod menunggu Finance (angka) + Legal (struktur, Permendag 70/2019, R-L02).
+
 ## 3. Matriks retensi ringkas (default → ditetapkan DPO)
 | Data | Default | Mekanisme (pemilik) | Status |
 |---|---|---|---|

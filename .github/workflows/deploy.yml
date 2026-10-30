@@ -357,6 +357,10 @@ jobs:
           CFG_PROMO_PUSH_ENABLED: ${{ vars.PROMO_PUSH_ENABLED || 'false' }}
           CFG_PROMO_COMPANIES: ${{ vars.PROMO_COMPANIES }}
           CFG_PROMO_SYNC_SECONDS: ${{ vars.PROMO_SYNC_SECONDS }}
+          # G31 (docs/04 §20.8): engine MGM. true hanya setelah Finance (angka) + Legal (struktur, R-L02) menyetujui.
+          CFG_MGM_ENABLED: ${{ vars.MGM_ENABLED || 'false' }}
+          CFG_MGM_CLAIM_WINDOW_DAYS: ${{ vars.MGM_CLAIM_WINDOW_DAYS }}
+          CFG_MGM_SETTLE_INTERVAL_MS: ${{ vars.MGM_SETTLE_INTERVAL_MS }}
           CFG_CONSENT_PRIVACY_VERSION: ${{ vars.CONSENT_PRIVACY_VERSION }}
           CFG_CONSENT_PRIVACY_TEXT_SHA256: ${{ vars.CONSENT_PRIVACY_TEXT_SHA256 }}
           CFG_PRIVACY_CONSENT_ENFORCED: ${{ vars.PRIVACY_CONSENT_ENFORCED || 'false' }}

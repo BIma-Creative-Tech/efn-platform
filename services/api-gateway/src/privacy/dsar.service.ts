@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { OnlinePrivacyService, openOnlineOrders } from '../orders/online-privacy.service';
 import { randomUUID } from 'node:crypto';
+import { PgMgmStore } from '../loyalty/mgm/mgm.repository';
 import { AppConfig } from '../config/app-config';
 import { DB, Db } from '../common/db/db';
 import { ApiError, Errors } from '../common/errors/api-error';
@@ -201,6 +202,8 @@ export class DsarService {
         WHERE t.member_id = $1 ORDER BY t.opened_at DESC LIMIT $2`,
       [user.memberId, EXPORT_ROW_LIMIT],
     );
+    // G31 §20.7: kode referral milik sendiri + waktu tautan (tanpa identitas referrer/downline)
+    const referral = await new PgMgmStore().exportFor(this.db, user.memberHash);
     const truncated = ledger.rows.length > EXPORT_ROW_LIMIT || reports.rows.length > EXPORT_ROW_LIMIT;
 
     await this.db.query(
@@ -252,6 +255,7 @@ export class DsarService {
       },
       // §10.8.3: tanpa kode ambil, QR, id internal Odoo/payment
       online_orders: onlineOrders.items,
+      ...(referral ? { referral: { code: referral.code, linked_at: toIso(referral.linked_at) } } : {}),
       qr_table_sessions: qrSessions.rows.map((r) => ({
         outlet_name: r.outlet_name ?? null,
         company_code: r.company_code,

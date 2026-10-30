@@ -76,6 +76,12 @@ class EfnLoyaltyPolicyOutbox(models.Model):
         "UNIQUE (idempotency_key)", "Kunci idempotensi outbox kebijakan poin harus unik."
     )
 
+    # Titik ekstensi (G31, docs/04 §20.1): model outbox kebijakan lain (mis. ``efn.mgm.policy.outbox``) mewarisi mesin
+    # kirim/retry/backoff ini lewat ``_inherit`` prototipe dan hanya mengganti dua nilai di bawah serta
+    # ``_efn_activity_summary``.
+    _efn_path_template = POLICY_PATH
+    _efn_cron_xmlid = "efn_loyalty_accounting.ir_cron_efn_loyalty_policy_outbox"
+
     # ---------------------------------------------------------------- enqueue
     @api.model
     def _efn_enqueue_policy(self, policy):
@@ -88,7 +94,7 @@ class EfnLoyaltyPolicyOutbox(models.Model):
 
     @api.model
     def _efn_trigger(self):
-        cron = self.env.ref("efn_loyalty_accounting.ir_cron_efn_loyalty_policy_outbox", raise_if_not_found=False)
+        cron = self.env.ref(self._efn_cron_xmlid, raise_if_not_found=False)
         if cron:
             cron.sudo()._trigger()
 
@@ -124,16 +130,17 @@ class EfnLoyaltyPolicyOutbox(models.Model):
         processed = []
         while len(processed) < limit:
             self.flush_model()
+            # nama tabel dari _table model (bukan input pengguna) -- model turunan memakai tabelnya sendiri
             self.env.cr.execute(
-                """
-                SELECT id FROM efn_loyalty_policy_outbox
+                f"""
+                SELECT id FROM {self._table}
                  WHERE state = 'pending'
                    AND (next_attempt_at IS NULL OR next_attempt_at <= %s)
                    AND NOT (id = ANY(%s))
                  ORDER BY id
                  LIMIT 1
                  FOR UPDATE SKIP LOCKED
-                """,
+                """,  # noqa: S608
                 (fields.Datetime.now(), processed or [0]),
             )
             row = self.env.cr.fetchone()
@@ -161,7 +168,7 @@ class EfnLoyaltyPolicyOutbox(models.Model):
         body = signing.canonical_json(policy._efn_publish_body())
         header = signing.sign(key, _now_unix(), body)
         del key
-        path = POLICY_PATH.format(company_code=policy.company_code, version=policy.version)
+        path = self._efn_path_template.format(company_code=policy.company_code, version=policy.version)
         self.write({"body_sha256": hashlib.sha256(body).hexdigest()})
         try:
             response = self.env["efn.bff.client"]._efn_loyalty_request(
@@ -267,7 +274,7 @@ class EfnLoyaltyPolicyOutbox(models.Model):
             self.sudo().activity_schedule(
                 "mail.mail_activity_data_todo",
                 user_id=user.id,
-                summary=_("Publikasi kebijakan Poin EFN"),
+                summary=self._efn_activity_summary(),
                 note=_(
                     "Publikasi kebijakan %(policy)s ke BFF perlu ditinjau (%(reason)s).",
                     policy=self.policy_id.display_label,
@@ -275,6 +282,9 @@ class EfnLoyaltyPolicyOutbox(models.Model):
                 ),
             )
         self.sudo().write({"activity_flagged": reason})
+
+    def _efn_activity_summary(self):
+        return _("Publikasi kebijakan Poin EFN")
 
     def _efn_review_user(self):
         Users = self.env["res.users"].sudo()

@@ -6,6 +6,7 @@ import { AppConfig } from '../config/app-config';
 import { DB, Db, Queryable } from '../common/db/db';
 import { erasureSuppressionTag } from '../common/pii/erasure-suppression';
 import { randomTombstone } from '../common/pii/pii';
+import { PgMgmStore } from '../loyalty/mgm/mgm.repository';
 import { OBJECT_STORAGE, ObjectStorage } from '../market-scout/storage/object-storage';
 import { MetricsService } from '../common/metrics/metrics.service';
 
@@ -340,6 +341,9 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
     // 4b. G22 §14.D.2/D.3/D.7: aktivitas & pemberitahuan hangus subjek dihapus (bukti tanpa identitas L-76 TIDAK disentuh)
     await q.query(`DELETE FROM platform.loyalty_member_activity WHERE member_hash = $1`, [hash]);
     await q.query(`DELETE FROM platform.loyalty_expiry_notice WHERE member_hash = $1`, [hash]);
+    // 4c. G31 §20.7: MGM — kode & relasi subjek dihapus (downline kehilangan upline), reward pending subjek sebagai
+    //     referrer dibatalkan, hash di reward/sumber → tombstone (baris keuangan tetap)
+    await new PgMgmStore().erase(q, hash, tomb, new Date());
     if (memberId === null) return; // retention subjek ledger POS: tidak ada baris akun
     // 5. Consent: bukti dipertahankan tanpa PII
     await q.query(`UPDATE platform.consent SET ip_enc = NULL WHERE member_id = $1 AND ip_enc IS NOT NULL`, [memberId]);

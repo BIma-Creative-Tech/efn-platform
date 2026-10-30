@@ -104,7 +104,7 @@ export class NotifyPushConsumer implements OnApplicationBootstrap {
     @Inject(WHATSAPP_SENDER) private readonly sender: WhatsAppSender,
     private readonly config: AppConfig,
     private readonly cipher: PiiCipher,
-    @Optional() private readonly metrics: MetricsService | null = null,
+    @Optional() @Inject(MetricsService) private readonly metrics: MetricsService | null = null,
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {

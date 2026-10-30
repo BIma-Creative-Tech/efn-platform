@@ -65,6 +65,11 @@ export const LOYALTY_ANOMALY_KINDS = {
   online_earn_limited: 'warning',
   /** D.3 no. 4: kandidat hangus > LOYALTY_EXPIRY_MAX_PER_RUN → run dibatalkan (alert EfnLoyaltyExpiryAborted). */
   expiry_run_aborted: 'critical',
+  // ── G31 §20 engine MGM ──
+  /** §20.4: clawback reward yang sudah settle melebihi sisa lot referrer → sebagian menjadi utang (saldo negatif). */
+  mgm_clawback_debt: 'warning',
+  /** §20.3: pesan akrual tanpa baris sumber (DLQ) — tulis di luar jalur BFF / data hilang. */
+  mgm_source_missing: 'critical',
 } as const;
 
 export type LoyaltyAnomalyKind = keyof typeof LOYALTY_ANOMALY_KINDS;

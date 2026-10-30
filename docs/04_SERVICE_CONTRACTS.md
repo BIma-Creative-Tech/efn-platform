@@ -1,4 +1,4 @@
-# KONTRAK ANTAR-SERVICE (v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
+# KONTRAK ANTAR-SERVICE (v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -2015,3 +2015,95 @@ Cap bulanan per referrer dan pengecualian kategori dihitung engine (butuh kontek
 - Kontrak publikasi kebijakan ke `loyalty-service` (pola outbox bertanda tangan §13.1) ditulis bersama engine.
 - Semua angka PLACEHOLDER: Finance menetapkan angka (simulasi margin, R-B03), Legal menetapkan struktur & kedalaman
   (Permendag 70/2019, R-L02) sebelum peluncuran.
+
+## 20. Gelombang 31 — engine MGM: referral, akrual, settle, clawback (v14.0, 30 Okt 2026)
+
+Lanjutan §19 (K25-10, ADR-009 opsi A). Engine dibangun di konteks `loyalty` BFF (`src/loyalty/mgm/`) dengan batas
+yang siap diekstrak ke `loyalty-service` (K25-05): akrual lewat event RabbitMQ idempoten, settle & clawback lewat job,
+satu-satunya penulis ledger tetap BFF. **Semua jalur mati kecuali `MGM_ENABLED=true`** (default `false` di semua
+lingkungan); produksi tetap OFF sampai Finance menetapkan angka dan Legal menyetujui struktur (ADR-009).
+
+### 20.1 Publikasi kebijakan MGM Odoo → BFF
+- `PUT /v1/pos/loyalty/mgm-policies/{company_code}/{version}` — `X-EFN-Service-Key` POS + `X-EFN-Signature`
+  (kunci `loyalty_policy_signing_key`, replay window 300 s; sama persis dengan §13.1 no. 3). Body (`additionalProperties:
+  false`, semua angka integer):
+  `{ schema_version: 1, company_code, version, effective_from, approved_by_uid, params: { level1_pct_bp, level2_pct_bp,
+  flat_points_level3, max_depth, cap_points_per_referrer_month, min_order_idr, settle_hold_days, relation_months } }`.
+- Respons: `200 { ok, company_code, version, status: stored|duplicate }`; `409 policy_conflict` (versi sama, isi beda);
+  `422 policy_out_of_bounds` (plafon BFF); `400 invalid_request`; `401 invalid_signature`; `503` bila kunci belum ada.
+- Plafon BFF (pertahanan berlapis di atas batas Odoo): `max_depth` 2..5, L2 ≤ L1,
+  `level*_pct_bp` ≤ `MGM_POLICY_CEILING_PCT_BP_MAX` (default 1000 = 10 %), `flat_points_level3` ≤
+  `MGM_POLICY_CEILING_FLAT_POINTS_MAX` (default 1000), `cap_points_per_referrer_month` 1..`MGM_POLICY_CEILING_CAP_POINTS_MAX`
+  (default 100000), `settle_hold_days` 1..60, `relation_months` 1..36, `min_order_idr` ≥ 0.
+- Penyimpanan `platform.mgm_policy` (append-only, UNIQUE company_code+version). Aktif pada `t` = versi tertinggi dengan
+  `GREATEST(effective_from, received_at) ≤ t`. PT tanpa kebijakan aktif = **tidak ada reward** (fail-closed, tanpa env).
+- Odoo: `efn.mgm.policy` mendapat status `published`; persetujuan membuat `efn.mgm.policy.outbox` (pola
+  `efn.loyalty.policy.outbox`: cron + backoff, 409/422 final, tanpa kunci = tertahan).
+
+### 20.2 Relasi referral (member Super-App, Bearer, `Cache-Control: no-store`)
+- `GET /v1/me/referral` → `{ code, referred, linked_at?, claim_until?, network: { level1, level2, level3_plus },
+  rewards: { pending_points, settled_points_month } }`. Kode dibuat saat pertama diminta: 8 karakter dari
+  `ABCDEFGHJKMNPQRSTUVWXYZ23456789`, unik, tidak memuat data member. `network` hanya hitungan (tanpa identitas downline).
+- `POST /v1/me/referral/claim { code }` → `200 { status: "linked", linked_at }`. Error: `400 invalid_request` (bentuk
+  kode), `404 referral_code_not_found`, `409 referral_already_linked`, `409 referral_self`, `409 referral_cycle`,
+  `422 referral_window_closed`, `429 rate_limited`, `503 mgm_unavailable`.
+- Aturan: satu referrer per member, permanen; klaim hanya dalam `MGM_CLAIM_WINDOW_DAYS` (default 30, 1..365) sejak akun
+  dibuat; tidak boleh diri sendiri atau membentuk siklus (graf diserialkan advisory lock); pemilik kode harus member
+  aktif. Batas: klaim 10/jam/member, baca 60/jam/member (anti-enumerasi kode, R-B06).
+
+### 20.3 Akrual reward (event `mgm.reward.requested`)
+- Pemicu (transaksi yang sama, bukan replay): earn POS `pos_sale`/`pos_qr_sale` tercatat (§9.2, §14.A) dan earn online
+  saat diambil berstatus `earned` (§14.C.3), **hanya bila pembeli punya relasi referral** dan `MGM_ENABLED=true` →
+  baris `platform.mgm_source` (sumber, PT, pembeli pseudonim, `basis_idr` = `eligible_amount`, waktu) + outbox
+  `mgm.reward.requested` `{ schema_version: 1, idempotency_key: "mgm:<pos|online>:<source_ref>", source_kind,
+  source_ref }` — **tanpa data member**.
+- Queue `mgm.reward.requested` (+ `.dlq`): quorum, `x-delivery-limit` 10; publisher & consumer `efn-bff` (properti
+  AMQP `user_id`, lain → DLQ). Idempoten: `processed_message('bff.mgm-reward', key)` + UNIQUE reward
+  (`source_kind, source_ref, level`).
+- Perhitungan (kebijakan PT transaksi yang aktif pada waktu transaksi): `basis < min_order_idr` → tidak ada reward.
+  Rantai naik dari pembeli sampai `max_depth`; setiap tautan wajib `linked_at ≤ waktu transaksi < linked_at +
+  relation_months` dan referrer berstatus member aktif — tautan pertama yang gagal menghentikan rantai.
+  Level 1/2 = `floor(basis × bp / 10.000 / nilai 1 poin)`; level 3..`max_depth` = `flat_points_level3`; 0 poin = tidak
+  dicatat. Nilai 1 poin = kebijakan global EFN pada waktu transaksi (fallback env, sama dengan earn POS).
+  Baris `platform.mgm_reward` status `pending`, `settle_after = waktu transaksi + settle_hold_days`, menyimpan versi
+  kebijakan, nilai poin, dan cap (deterministik).
+- Basis = dasar earn poin (setelah diskon & porsi poin, tanpa pajak, tanpa kategori yang dikecualikan dari poin).
+
+### 20.4 Retur → clawback
+- Reverse POS (termasuk QR) dan refund online yang meng-clawback earn mencatat fakta `platform.mgm_reversal`
+  `{ source, reverse_key, ratio }` bila sumber punya `mgm_source` — **tidak bergantung `MGM_ENABLED`** (retur setelah
+  fitur dimatikan tetap ditarik). `ratio` = porsi eligible refund ini (POS `refund_ratio`, online
+  `eligible_amount_refunded / eligible_amount`).
+- Diterapkan job per (reward, reverse_key) satu kali: `pending` → `reversed_points += min(points − reversed,
+  ceil(points × ratio))`, habis = `cancelled`; `settled` → target = `points − reversed`; clawback =
+  `max(0, settled_points − clawed_points − target)` → ledger debit `source=mgm`, `reason=mgm_reverse`, FIFO lot,
+  kekurangan = utang (pola §9.4).
+
+### 20.5 Settle (job `MgmSettleJob`)
+- Interval `MGM_SETTLE_INTERVAL_MS` (default 300000, 0 = mati); satu replika per siklus (`pg_try_advisory_xact_lock`);
+  hanya saat `MGM_ENABLED=true`. Urutan: terapkan reversal dulu, lalu settle reward `pending` yang jatuh tempo dan tidak
+  punya reversal yang belum diterapkan.
+- Referrer bukan member aktif → `cancelled` (`referrer_inactive`). Jumlah = `min(points − reversed, cap − Σ settled
+  referrer di PT yang sama pada bulan WIB transaksi)`; 0 → `capped`. > 0 → ledger kredit `source=mgm`,
+  `reason=mgm_reward`, `idempotency_key=mgm_reward:<id>`, `company_code` = penerbit = PT transaksi, masa berlaku lot
+  `LOYALTY_POINT_MAX_AGE_DAYS`, pelunasan utang lebih dulu (`splitCredit`). Status `settled`.
+
+### 20.6 Akuntansi & rekonsiliasi
+- Akrual harian (§13.1 no. 6): kredit `mgm_reward` = `earned_value_idr` PT penerbit; debit `mgm_reverse` =
+  `earn_reversed_value_idr`. Rekonsiliasi: `mgm` = sumber ledger yang dikenal.
+
+### 20.7 Privasi
+- Payload event tanpa data member; tabel memakai `member_hash` (pseudonim), tidak dibuka ke `efn_readonly`.
+- Erasure (§8.9): kode & relasi subjek dihapus (downline kehilangan upline), reward `pending` milik subjek sebagai
+  referrer dibatalkan, hash subjek di baris reward/sumber diganti tombstone. Ekspor DSAR memuat kode milik sendiri dan
+  waktu tautan (tanpa identitas referrer). Inventaris: `docs/compliance/PDP_DATA_INVENTORY.md`.
+
+### 20.8 Konfigurasi
+`MGM_ENABLED` (default `false`; render prod wajib `false`, `check-encryption.sh`), `MGM_CLAIM_WINDOW_DAYS`,
+`MGM_SETTLE_INTERVAL_MS`, plafon `MGM_POLICY_CEILING_*`. Migrasi `17-platform-g31.sql` (wajib untuk BFF G31).
+
+### 20.9 Belum / risiko
+- `efn.mgm.policy.excluded_categ_ids` belum ditegakkan engine (BFF tidak menerima rincian baris); basis sudah tanpa
+  kategori yang dikecualikan dari poin. Penegakan = Odoo mengirim `mgm_eligible_amount` (tindak lanjut).
+- Notifikasi reward ke referrer, layar Super-App, ekstraksi ke `loyalty-service`.
+- Angka PLACEHOLDER; peluncuran diblokir sign-off Legal (Permendag 70/2019, R-L02) dan simulasi margin Finance (R-B03).

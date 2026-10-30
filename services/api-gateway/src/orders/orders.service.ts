@@ -221,7 +221,7 @@ export class OrdersService {
     private readonly cipher: PiiCipher,
     private readonly metrics: OnlineMetrics,
     /** G20: hanya untuk simulasi bayar di kasir (dev, stub Odoo). Opsional agar test lama tetap jalan. */
-    @Optional() private readonly saga: OnlineSagaService | null = null,
+    @Optional() @Inject(OnlineSagaService) private readonly saga: OnlineSagaService | null = null,
     /** G22 §14.C: poin online (opsional agar test lama tetap jalan; tanpa port → redeem 422 points_unavailable). */
     @Optional() @Inject(ONLINE_POINTS) private readonly points: OnlinePointsPort | null = null,
   ) {}

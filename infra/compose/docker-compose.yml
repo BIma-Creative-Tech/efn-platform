@@ -1258,6 +1258,11 @@ services:
       PROMO_PUSH_ENABLED: ${PROMO_PUSH_ENABLED:-false}
       PROMO_COMPANIES: ${PROMO_COMPANIES:-}
       PROMO_SYNC_SECONDS: ${PROMO_SYNC_SECONDS:-120}
+      # G31 (docs/04 §20): engine MGM (referral, akrual, settle setelah masa retur, clawback). Default MATI (prod wajib
+      # false, check-encryption.sh); /v1/me/referral -> 503 mgm_unavailable. Angka = kebijakan Odoo efn_mgm_policy.
+      MGM_ENABLED: ${MGM_ENABLED:-false}
+      MGM_CLAIM_WINDOW_DAYS: ${MGM_CLAIM_WINDOW_DAYS:-30}
+      MGM_SETTLE_INTERVAL_MS: ${MGM_SETTLE_INTERVAL_MS:-300000}
       BOOKING_COMPANIES: ${BOOKING_COMPANIES:-PB,BCF}
       BOOKING_MAX_ACTIVE_PER_MEMBER: ${BOOKING_MAX_ACTIVE_PER_MEMBER:-2}
       BOOKING_MEMBER_LINK_DAYS: ${BOOKING_MEMBER_LINK_DAYS:-180}

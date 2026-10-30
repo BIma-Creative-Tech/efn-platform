@@ -22,7 +22,19 @@ from odoo.fields import Command
 _logger = logging.getLogger(__name__)
 
 _VERSION_LOCK_NAMESPACE = 704402
-STATES = [("draft", "Draft"), ("approved", "Disetujui"), ("rejected", "Ditolak")]
+STATES = [("draft", "Draft"), ("approved", "Disetujui"), ("published", "Dipublikasikan"), ("rejected", "Ditolak")]
+SCHEMA_VERSION = 1
+# Urutan = urutan kontrak docs/04 §20.1 (body `params`).
+PARAM_FIELDS = (
+    "level1_pct_bp",
+    "level2_pct_bp",
+    "flat_points_level3",
+    "max_depth",
+    "cap_points_per_referrer_month",
+    "min_order_idr",
+    "settle_hold_days",
+    "relation_months",
+)
 MAKER_GROUP = "efn_loyalty_accounting.group_loyalty_manager"
 APPROVER_GROUP = "account.group_account_manager"
 # Batas statis (sanity). Angka final = Finance/Legal.
@@ -54,6 +66,7 @@ SYSTEM_FIELDS = (
     "rejected_by_id",
     "rejected_at",
     "reject_reason",
+    "published_at",
 )
 # ADR-009 usulan simulasi (bukan final): L1 2 %, L2 0,5 %, cap Rp100.000/bulan (= 1.000 poin @Rp100), settle H+8,
 # relasi 12 bulan. L3+ flat & kedalaman 3 = PLACEHOLDER K25-10.
@@ -141,6 +154,8 @@ class EfnMgmPolicy(models.Model):
     rejected_by_id = fields.Many2one("res.users", string="Ditolak oleh", readonly=True, copy=False)
     rejected_at = fields.Datetime(readonly=True, copy=False)
     reject_reason = fields.Char(readonly=True, copy=False)
+    published_at = fields.Datetime(string="Dipublikasikan ke BFF", readonly=True, copy=False)
+    outbox_ids = fields.One2many("efn.mgm.policy.outbox", "policy_id", readonly=True)
 
     _company_version_unique = models.Constraint(
         "UNIQUE (company_id, version)", "Versi kebijakan MGM harus unik per company."
@@ -160,7 +175,9 @@ class EfnMgmPolicy(models.Model):
     @api.model
     def _efn_default(self, name):
         latest = self.sudo().search(
-            [("company_id", "=", self.env.company.id), ("state", "=", "approved")], order="version desc", limit=1
+            [("company_id", "=", self.env.company.id), ("state", "in", ("approved", "published"))],
+            order="version desc",
+            limit=1,
         )
         return latest[name] if latest else DEFAULTS[name]
 
@@ -286,12 +303,15 @@ class EfnMgmPolicy(models.Model):
             if policy.effective_from < now:
                 values["effective_from"] = now
             super(EfnMgmPolicy, policy).write(values)
+            # §20.1: antre publikasi bertanda tangan ke BFF (transaksi yang sama dengan persetujuan)
+            self.env["efn.mgm.policy.outbox"]._efn_enqueue_policy(policy)
             _logger.info(
                 "EFN MGM policy disetujui company=%s version=%s approver_uid=%s",
                 policy.company_code,
                 policy.version,
                 self.env.uid,
             )
+        self.env["efn.mgm.policy.outbox"]._efn_trigger()
         return True
 
     def action_efn_reject(self):
@@ -304,6 +324,25 @@ class EfnMgmPolicy(models.Model):
             )
         return True
 
+    def _efn_mark_published(self):
+        for policy in self.sudo():
+            if policy.state == "approved":
+                super(EfnMgmPolicy, policy).write({"state": "published", "published_at": fields.Datetime.now()})
+                _logger.info("EFN MGM policy dipublikasikan company=%s version=%s", policy.company_code, policy.version)
+
+    def _efn_publish_body(self):
+        """Body kontrak docs/04 §20.1 (``additionalProperties: false``); angka integer."""
+        self.ensure_one()
+        policy = self.sudo()
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "company_code": policy.company_code,
+            "version": policy.version,
+            "effective_from": policy.effective_from.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "approved_by_uid": policy.approved_by_id.id,
+            "params": {name: int(policy[name]) for name in PARAM_FIELDS},
+        }
+
     @api.model
     def efn_active_policy(self, company):
         """Versi tertinggi yang disetujui dan sudah berlaku untuk PT ini (dipakai engine MGM kelak).
@@ -312,7 +351,7 @@ class EfnMgmPolicy(models.Model):
         return self.sudo().search(
             [
                 ("company_id", "=", company.id),
-                ("state", "=", "approved"),
+                ("state", "in", ("approved", "published")),
                 ("effective_from", "<=", fields.Datetime.now()),
             ],
             order="version desc",

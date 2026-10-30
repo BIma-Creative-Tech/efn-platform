@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { AppConfig } from '../config/app-config';
 import { DB, Db, Queryable } from '../common/db/db';
 import { MetricsService } from '../common/metrics/metrics.service';
+import { MgmEngineService } from '../loyalty/mgm/mgm-engine.service';
 import { touchActivity } from '../loyalty/loyalty-activity';
 import { reportLoyaltyAnomaly } from '../loyalty/loyalty-anomaly';
 import { EffectiveLoyaltyParams, LoyaltyPolicyService, envLoyaltyParams } from '../loyalty/loyalty-policy.service';
@@ -72,7 +73,9 @@ export class PgOnlinePoints implements OnlinePointsPort {
     @Inject(DB) private readonly db: Db,
     private readonly loyalty: LoyaltyService,
     private readonly metrics: MetricsService,
-    @Optional() private readonly policies: LoyaltyPolicyService | null = null,
+    @Optional() @Inject(LoyaltyPolicyService) private readonly policies: LoyaltyPolicyService | null = null,
+    /** G31 §20.3/§20.4: engine MGM (sumber akrual & retur). */
+    @Optional() @Inject(MgmEngineService) private readonly mgm: MgmEngineService | null = null,
   ) {}
 
   private async params(company: CompanyCode): Promise<EffectiveLoyaltyParams> {
@@ -334,6 +337,10 @@ export class PgOnlinePoints implements OnlinePointsPort {
       this.metrics.recordLoyaltyPosPoints('earned', part.company_code, points);
     }
     await touchActivity(q, m.hash, 'online_earn', now);
+    // G31 §20.3: sumber akrual MGM (basis = eligible saat diambil; no-op bila MGM mati / tanpa referrer)
+    if (this.mgm) {
+      await this.mgm.recordSource(q, { kind: 'online', ref: part.id, company: part.company_code as CompanyCode, buyerHash: m.hash, basisIdr: eligibleAmount, occurredAt: now });
+    }
     await r.updatePart(part.id, { earn_status: 'earned', points_earned: points, eligible_amount: eligibleAmount });
     part.earn_status = 'earned';
     part.points_earned = points;
@@ -342,8 +349,13 @@ export class PgOnlinePoints implements OnlinePointsPort {
 
   async clawbackOnRefund(r: OnlineRepo, part: PartRow, key: string, eligibleRefunded: number): Promise<void> {
     // refund sebelum diambil → tidak ada clawback (eligible saat picked_up sudah neto)
-    if (part.earn_status !== 'earned' || (part.points_earned ?? 0) <= 0 || !part.eligible_amount || eligibleRefunded <= 0) return;
+    if (part.earn_status !== 'earned' || !part.eligible_amount || eligibleRefunded <= 0) return;
     const q = sqlOf(r);
+    // G31 §20.4: retur sumber MGM (juga bila earn 0 poin; tidak bergantung MGM_ENABLED)
+    if (this.mgm) {
+      await this.mgm.recordReversal(q, { kind: 'online', ref: part.id, reverseKey: key, ratio: Math.min(1, eligibleRefunded / part.eligible_amount) });
+    }
+    if ((part.points_earned ?? 0) <= 0) return;
     const rows = await q.query<{ member_ref_hash: string; delta_points: number; reason: string; expires_at: Date | string | null; issuer: string; idempotency_key: string }>(
       `SELECT member_ref_hash, delta_points, reason, expires_at, COALESCE(issuer_company_code, company_code) AS issuer, idempotency_key
          FROM platform.loyalty_ledger WHERE source = 'online' AND source_ref = $1 AND reason IN ('online_earn', 'online_reverse') ORDER BY id`,

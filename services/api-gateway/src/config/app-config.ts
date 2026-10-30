@@ -113,6 +113,16 @@ export interface MinioConnectionConfig extends MinioTransportConfig {
   secretKey: string;
 }
 
+/** G31 §20.1: plafon keras kebijakan MGM (lihat `AppConfig.mgmPolicyCeilings`). */
+export interface MgmPolicyCeilings {
+  /** Maks. `level1_pct_bp`/`level2_pct_bp` (basis poin). */
+  pctBpMax: number;
+  /** Maks. `flat_points_level3`. */
+  flatPointsMax: number;
+  /** Maks. `cap_points_per_referrer_month`. */
+  capPointsMax: number;
+}
+
 /** G21 §13.1 no. 4: plafon keras kebijakan poin (lihat `AppConfig.loyaltyPolicyCeilings`). */
 export interface LoyaltyPolicyCeilings {
   earnIdrPerPointMin: number;
@@ -239,6 +249,10 @@ export class AppConfig {
     attempt(() => void this.promoCompanies, 'PROMO_COMPANIES tidak valid');
     attempt(() => void this.promoSyncSeconds, 'PROMO_SYNC_SECONDS tidak valid');
     attempt(() => void this.expoPushUrl, 'EXPO_PUSH_URL tidak valid');
+    // G31 (docs/04 §20.8): engine MGM
+    attempt(() => void this.mgmClaimWindowDays, 'MGM_CLAIM_WINDOW_DAYS tidak valid');
+    attempt(() => void this.mgmSettleIntervalMs, 'MGM_SETTLE_INTERVAL_MS tidak valid');
+    attempt(() => void this.mgmPolicyCeilings, 'MGM_POLICY_CEILING_* tidak valid');
     if (problems.length > 0) throw new ConfigError(`Konfigurasi tidak lengkap: ${problems.join('; ')}`);
   }
 
@@ -2088,6 +2102,28 @@ export class AppConfig {
       }
     }
     return problems;
+  }
+
+  // ───────────── G31 — engine MGM (docs/04 §20) ─────────────
+  /** Kill switch engine MGM (`MGM_ENABLED`, default `false` di semua lingkungan; render prod wajib false). */
+  get mgmEnabled(): boolean {
+    return this.bool('MGM_ENABLED', false);
+  }
+  /** §20.2: klaim kode referral hanya dalam N hari sejak akun dibuat (1..365, default 30). */
+  get mgmClaimWindowDays(): number {
+    return this.int('MGM_CLAIM_WINDOW_DAYS', 30, 1, 365);
+  }
+  /** §20.5: interval job settle/clawback MGM (ms; 0 = mati; default 5 menit). */
+  get mgmSettleIntervalMs(): number {
+    return this.int('MGM_SETTLE_INTERVAL_MS', 300_000, 0, 86_400_000);
+  }
+  /** §20.1: plafon keras BFF untuk kebijakan MGM dari Odoo (pertahanan berlapis di atas batas Odoo). */
+  get mgmPolicyCeilings(): MgmPolicyCeilings {
+    return {
+      pctBpMax: this.int('MGM_POLICY_CEILING_PCT_BP_MAX', 1000, 1, 2000),
+      flatPointsMax: this.int('MGM_POLICY_CEILING_FLAT_POINTS_MAX', 1000, 0, 100_000),
+      capPointsMax: this.int('MGM_POLICY_CEILING_CAP_POINTS_MAX', 100_000, 1, 10_000_000),
+    };
   }
 
   // ───────────── G22 — poin online (docs/04 §14.C.1 no. 5) ─────────────

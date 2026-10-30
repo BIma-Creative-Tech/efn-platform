@@ -44,6 +44,7 @@ EFN_RELEASE_CONFIG_VARS=(ACME_EMAIL PAYMENT_PROVIDER PG_SUPERUSER WHATSAPP_ENABL
   BOOKING_ENABLED BOOKING_COMPANIES BOOKING_MAX_ACTIVE_PER_MEMBER BOOKING_MEMBER_LINK_DAYS BOOKING_RETENTION_DAYS
   ONLINE_SLOTS_ENABLED
   PROMO_ENABLED PROMO_PUSH_ENABLED PROMO_COMPANIES PROMO_SYNC_SECONDS
+  MGM_ENABLED MGM_CLAIM_WINDOW_DAYS MGM_SETTLE_INTERVAL_MS
   CONSENT_PRIVACY_VERSION CONSENT_PRIVACY_TEXT_SHA256 PRIVACY_CONSENT_ENFORCED)
 # G22 (docs/04 §14.D.1, L-72 D-22-18): env yang DIHAPUS kontrak. Bukan konfigurasi rilis (kunci manifest tak dikenal =
 # ditolak efn-deploy); jalur manual `sudo -E bash deploy.sh` -> production DITOLAK, staging peringatan (BFF: gagal start
@@ -546,6 +547,16 @@ efn_validate_g22_config() { # app_env
     [[ -n "${PROMO_COMPANIES:-}" ]] || _efn_err "PROMO_ENABLED=true wajib PROMO_COMPANIES (mis. PB)" || return 1
   fi
   if [[ -n "${PROMO_COMPANIES:-}" ]]; then efn_validate_promo_companies "$PROMO_COMPANIES" || return 1; fi
+  # G31 (docs/04 §20.8): engine MGM. Rentang = BFF app-config.ts.
+  [[ -z "${MGM_ENABLED:-}" || "$MGM_ENABLED" == true || "$MGM_ENABLED" == false ]] || _efn_err "MGM_ENABLED harus true|false" || return 1
+  if [[ -n "${MGM_CLAIM_WINDOW_DAYS:-}" ]]; then
+    [[ "$MGM_CLAIM_WINDOW_DAYS" =~ $num_re ]] && (( MGM_CLAIM_WINDOW_DAYS >= 1 && MGM_CLAIM_WINDOW_DAYS <= 365 )) \
+      || _efn_err "MGM_CLAIM_WINDOW_DAYS harus bilangan bulat 1..365" || return 1
+  fi
+  if [[ -n "${MGM_SETTLE_INTERVAL_MS:-}" ]]; then
+    [[ "$MGM_SETTLE_INTERVAL_MS" =~ $num_re ]] && (( MGM_SETTLE_INTERVAL_MS <= 86400000 )) \
+      || _efn_err "MGM_SETTLE_INTERVAL_MS harus bilangan bulat 0..86400000" || return 1
+  fi
   # Persetujuan privasi wajib = teks aktif harus ada (BFF menolak login tanpa versi aktif -> semua login gagal)
   if [[ "${PRIVACY_CONSENT_ENFORCED:-false}" == true && -z "${CONSENT_PRIVACY_VERSION:-}" ]]; then
     _efn_err "PRIVACY_CONSENT_ENFORCED=true wajib CONSENT_PRIVACY_VERSION + CONSENT_PRIVACY_TEXT_SHA256 (docs/04 §18.3a)"; return 1

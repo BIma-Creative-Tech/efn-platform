@@ -1,0 +1,11 @@
+{
+  "name": "decode-uri-component",
+  "version": "0.5.1",
+  "description": "EFN: salinan CommonJS decode-uri-component 0.5.1 (lihat index.js)",
+  "license": "MIT",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "license"
+  ]
+}
