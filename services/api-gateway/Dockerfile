@@ -6,6 +6,8 @@ FROM node:22.23-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8
 WORKDIR /app
 ENV NPM_CONFIG_UPDATE_NOTIFIER=false NPM_CONFIG_FUND=false
 COPY package*.json ./
+# G31: paket yang di-vendor lewat `overrides` (file:) harus ada sebelum npm ci
+COPY vendor ./vendor
 
 FROM base AS deps
 RUN --mount=type=cache,target=/root/.npm \
