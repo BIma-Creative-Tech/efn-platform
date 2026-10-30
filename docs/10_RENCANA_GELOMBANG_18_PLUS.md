@@ -213,6 +213,7 @@ Masih terbuka: markup TP & opini pajak (Finance), parameter QC nyata per komodit
 | Paket | Isi | Status |
 |---|---|---|
 | **G31** | Engine MGM di konteks loyalty BFF: publikasi kebijakan bertanda tangan Odoo→BFF, kode & klaim referral (`/v1/me/referral`), akrual lewat `mgm.reward.requested` (outbox + RabbitMQ, idempoten), settle setelah masa retur + cap bulanan, clawback retur, erasure — docs/04 §20 | dibangun, `MGM_ENABLED=false` |
+| **G31b** | Dasar MGM per baris: Odoo mengirim `mgm_eligible_amount` / `mgm_refunded_eligible_amount` (POS, QR, online) tanpa kategori `excluded_categ_ids` kebijakan MGM; BFF memakai sebagai basis + rasio clawback — docs/04 §20.10 | dibangun |
 
 ---
 
