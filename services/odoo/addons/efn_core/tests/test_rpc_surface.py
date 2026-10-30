@@ -414,6 +414,10 @@ RPC_ALLOWLIST = {
         "efn.mgm.policy",
         "efn_active_policy",
     ): "G30: @api.model baca sudo versi disetujui untuk engine (argumen = record company)",
+    (
+        "efn.mgm.policy.outbox",
+        "action_efn_retry",
+    ): "G31: super() ke efn.loyalty.policy.outbox (Loyalty/Accounting Manager + check_access + company + state failed)",
 }
 
 MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}

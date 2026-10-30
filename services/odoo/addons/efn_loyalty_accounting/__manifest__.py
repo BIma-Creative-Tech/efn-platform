@@ -1,7 +1,7 @@
 {
     "name": "EFN Loyalty Accounting",
     "summary": "Kebijakan Poin EFN per PT (empat mata, publikasi bertanda tangan ke BFF) + akrual liabilitas harian.",
-    "version": "19.0.1.3.0",  # W-15 settlement poin antar-PT bulanan
+    "version": "19.0.1.4.0",  # G31: outbox kebijakan dapat diwarisi (efn.mgm.policy.outbox)
     "category": "EFN/Accounting",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",

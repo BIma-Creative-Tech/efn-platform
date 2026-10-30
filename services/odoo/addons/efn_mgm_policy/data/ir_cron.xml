@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- G31 §20.1: publikasi dipicu segera saat approve (_trigger); jadwal ini cadangan (retry/backoff). -->
+    <record id="ir_cron_efn_mgm_policy_outbox" model="ir.cron">
+        <field name="name">EFN MGM: publikasi kebijakan MGM ke BFF</field>
+        <field name="model_id" ref="model_efn_mgm_policy_outbox"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_mgm_policy_outbox_run()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">5</field>
+        <field name="interval_type">minutes</field>
+        <field name="active" eval="True"/>
+    </record>
+</odoo>
