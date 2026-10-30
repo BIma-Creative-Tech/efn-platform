@@ -1682,6 +1682,8 @@ services:
       ETL_LOYALTY_RECON_ONLINE_ENABLED: ${ETL_LOYALTY_RECON_ONLINE_ENABLED:-false}
       ETL_ENABLE_KDS: ${ETL_ENABLE_KDS:-false}
       ETL_KDS_ONLINE_ENABLED: ${ETL_KDS_ONLINE_ENABLED:-false}
+      # G32 (docs/04 §21, K25-08): mart waste & yield CK; butuh ETL_ENABLE_ODOO + efn_ck_production + grant G32.
+      ETL_ENABLE_WASTE: ${ETL_ENABLE_WASTE:-false}
       LOYALTY_POINT_VALUE_IDR: ${LOYALTY_POINT_VALUE_IDR:-100}   # SEC-118: wajib sama dengan api-gateway
       # W-19: harus sama dengan clickhouse-init (TTL kolom pseudonim / geo; ETL gagal start bila di luar rentang)
       CH_PSEUDONYM_RETENTION_YEARS: ${CH_PSEUDONYM_RETENTION_YEARS:-5}

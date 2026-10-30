@@ -216,7 +216,7 @@ services:
       # ditolak deploy-validate EFN_DEV_ONLY_SWITCHES + check-encryption + config ETL)
       ETL_AUDIT_EPOCH_AUTO: "true"
       # G21/G22 (QA G22 P2-3): ETL_PARTNER_REGION_ENABLED, ETL_ENABLE_KDS, ETL_KDS_ONLINE_ENABLED,
-      # ETL_LOYALTY_RECON_ONLINE_ENABLED TIDAK dipaksa true di dev (butuh efn_region / efn_pos_kds / E-29a + grant G21/G22
+      # ETL_LOYALTY_RECON_ONLINE_ENABLED, ETL_ENABLE_WASTE (G32) TIDAK dipaksa true di dev (butuh efn_region / efn_pos_kds / E-29a + grant G21/G22
       # di DB Odoo dev). Nyalakan lewat .env lokal setelah modul + grant terpasang; base meneruskan `${X:-false}`.
 
   ocr-worker:

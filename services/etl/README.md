@@ -126,6 +126,13 @@ Risiko yang dimitigasi: R-B05/R-B06 (fraud/salah saji poin), SEC-61 (rekonsilias
   `efn_kds_station` -> `dim_kds_station`. Kanal `online` (tiket SO E-29a, kolom `efn_online_order_id`) hanya dibaca bila
   `ETL_KDS_ONLINE_ENABLED=true` (setelah `efn_online_kds_bridge` terpasang). View Metabase `v_kds_ticket_daily`
   (rata-rata/p50/p90 waktu tunggu, tiket terlambat vs `late_minutes` stasiun **saat ini**), `v_kds_ticket_hourly`.
+- **Waste & yield CK** (`efn_etl/waste.py`, `ETL_ENABLE_WASTE=true`, G32 docs/04 §21, K25-08): `stock_scrap` (done +
+  alasan utama, nilai valuasi Odoo) -> `fact_scrap`; `mrp_production` (rencana/aktual, yield/by-product/varians/alert
+  tersimpan Odoo) -> `fact_mo_yield`; bahan baku MO (`stock_move`, rumus `_efn_variance_rows`) -> `fact_mo_component`
+  (kursor `write_date` + kunci `MO:produk`); alasan, ambang `efn_ck_*` PT, gudang -> `dim_scrap_reason`,
+  `dim_ck_threshold`, `dim_warehouse`. Baris yang tidak lagi `done` ditulis `is_done=0`. Tanpa partner/pelaku/dokumen/
+  lot. View `v_waste_daily`, `v_waste_warehouse_daily`, `v_mo_yield`, `v_mo_yield_daily` (yield tertimbang),
+  `v_mo_component_variance`; dashboard Metabase **Waste & Yield CK**. Butuh `efn_ck_production` + grant G32 (bersyarat).
   Odoo menghapus tiket > 90 hari (autovacuum); salinan mart tetap (tanpa PII).
 - **Grant / view Odoo**: `sql/odoo-readonly-grants.sql` bagian G22 (bersyarat; jalankan ulang setelah modul terpasang).
   ClickHouse: `infra/clickhouse/init/10-g22-kds-online-points.sql`, akses di `access/etl-access.sql` +
@@ -236,6 +243,7 @@ PDP (SEC-16, docs/04 §7.2): ETL **tidak memegang `otp_pepper`** dan tidak mengh
 | `ETL_PARTNER_REGION_ENABLED` | `false` (butuh `efn_region` + grant G21 + `ETL_ENABLE_ODOO=true`) |
 | `ETL_LOYALTY_RECON_ONLINE_ENABLED` | `false` (G22; butuh recon aktif + mode `payment` + view G22) |
 | `ETL_ENABLE_KDS`, `ETL_KDS_ONLINE_ENABLED` | `false`, `false` (G22; butuh `ETL_ENABLE_ODOO` + grant G22; online setelah E-29a) |
+| `ETL_ENABLE_WASTE` | `false` (G32; butuh `ETL_ENABLE_ODOO` + `efn_ck_production` + grant G32) |
 | `ETL_AUDIT_COPY_ENABLED`, `ETL_AUDIT_SETTLE_SECONDS`, `ETL_AUDIT_LATE_WINDOW_SECONDS`, `ETL_AUDIT_BATCH_SIZE` | `false`, `600`, `86400`, `2000` |
 | `ETL_AUDIT_RECON_INTERVAL_SECONDS`, `ETL_AUDIT_RECON_CONTENT` | `86400`, `true` (bandingkan hash isi; `false` = hanya id) |
 | `ETL_AUDIT_SINK_ENABLED`, `LOKI_URL`, `LOKI_CA_FILE`, `LOKI_CLIENT_CERT_FILE`, `LOKI_CLIENT_KEY_FILE`, `EFN_AUDIT_SINK_KEY_FILE` | aktif bila audit copy + `LOKI_URL`; secret `tls_etl_crt/key`, `efn_audit_sink_key` |

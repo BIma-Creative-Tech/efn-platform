@@ -1,0 +1,188 @@
+{
+  "key": "waste-yield-ck",
+  "name": "Waste & Yield CK",
+  "description": "G32 (K25-08): waste (scrap beralasan, nilai valuasi Odoo) dan yield/varians produksi Central Kitchen dari efn_ck_production. Ambang = nilai PT saat ini. Sumber: view efn_dwh.v_waste_* / v_mo_*.",
+  "parameters": [
+    {
+      "slug": "date_from",
+      "name": "Dari tanggal",
+      "type": "date/single"
+    },
+    {
+      "slug": "date_to",
+      "name": "Sampai tanggal",
+      "type": "date/single"
+    },
+    {
+      "slug": "company",
+      "name": "PT (kode brand)",
+      "type": "string/="
+    },
+    {
+      "slug": "warehouse",
+      "name": "Gudang / CK",
+      "type": "string/="
+    },
+    {
+      "slug": "product",
+      "name": "Produk",
+      "type": "string/="
+    }
+  ],
+  "cards": [
+    {
+      "key": "kpi-nilai-waste",
+      "name": "Total nilai waste",
+      "display": "scalar",
+      "row": 0,
+      "col": 0,
+      "size_x": 6,
+      "size_y": 3,
+      "description": "Nilai valuasi Odoo (efn_waste_value) scrap selesai pada periode.",
+      "sql": "SELECT sum(waste_value) AS nilai_waste FROM efn_dwh.v_waste_warehouse_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND brand = upper({{company}})]] [[AND positionCaseInsensitive(warehouse_name, {{warehouse}}) > 0]]"
+    },
+    {
+      "key": "kpi-yield",
+      "name": "Yield tertimbang",
+      "display": "scalar",
+      "row": 0,
+      "col": 6,
+      "size_x": 6,
+      "size_y": 3,
+      "description": "Σ hasil aktual / Σ rencana MO selesai x 100 (bukan rata-rata persen).",
+      "sql": "SELECT if(sum(planned_qty) = 0, NULL, round(sum(produced_qty) / sum(planned_qty) * 100, 2)) AS yield_pct FROM efn_dwh.v_mo_yield WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND brand = upper({{company}})]] [[AND positionCaseInsensitive(warehouse_name, {{warehouse}}) > 0]] [[AND positionCaseInsensitive(product_name, {{product}}) > 0]]"
+    },
+    {
+      "key": "kpi-mo-alert",
+      "name": "MO di luar ambang",
+      "display": "scalar",
+      "row": 0,
+      "col": 12,
+      "size_x": 6,
+      "size_y": 3,
+      "description": "Penanda Odoo saat MO selesai (yield < ambang PT atau varians komponen > ambang).",
+      "sql": "SELECT sum(alert) AS mo_di_luar_ambang FROM efn_dwh.v_mo_yield WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND brand = upper({{company}})]] [[AND positionCaseInsensitive(warehouse_name, {{warehouse}}) > 0]] [[AND positionCaseInsensitive(product_name, {{product}}) > 0]]"
+    },
+    {
+      "key": "kpi-varians",
+      "name": "Varians konsumsi (Rp)",
+      "display": "scalar",
+      "row": 0,
+      "col": 18,
+      "size_x": 6,
+      "size_y": 3,
+      "description": "Σ (aktual − BoM) x harga pokok. Positif = boros, negatif = hemat/kurang konsumsi.",
+      "sql": "SELECT sum(variance_value) AS varians_nilai FROM efn_dwh.v_mo_yield WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND brand = upper({{company}})]] [[AND positionCaseInsensitive(warehouse_name, {{warehouse}}) > 0]] [[AND positionCaseInsensitive(product_name, {{product}}) > 0]]"
+    },
+    {
+      "key": "tren-waste-alasan",
+      "name": "Nilai waste harian per alasan",
+      "display": "bar",
+      "row": 3,
+      "col": 0,
+      "size_x": 24,
+      "size_y": 6,
+      "sql": "SELECT day, reason_name AS alasan, sum(waste_value) AS nilai_waste FROM efn_dwh.v_waste_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND brand = upper({{company}})]] [[AND positionCaseInsensitive(warehouse_name, {{warehouse}}) > 0]] GROUP BY day, alasan ORDER BY day",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "day",
+          "alasan"
+        ],
+        "graph.metrics": [
+          "nilai_waste"
+        ],
+        "stackable.stack_type": "stacked"
+      }
+    },
+    {
+      "key": "waste-gudang-ambang",
+      "name": "Waste per gudang vs ambang PT",
+      "display": "table",
+      "row": 9,
+      "col": 0,
+      "size_x": 12,
+      "size_y": 6,
+      "description": "Ambang efn_ck_waste_warn_value per hari (nilai PT saat ini; 0 = nonaktif).",
+      "sql": "SELECT warehouse_name AS gudang, brand AS pt, sum(waste_value) AS nilai_waste, sum(scraps) AS scrap, max(waste_warn_value) AS ambang_harian, sum(over_threshold) AS hari_di_atas_ambang FROM efn_dwh.v_waste_warehouse_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND brand = upper({{company}})]] [[AND positionCaseInsensitive(warehouse_name, {{warehouse}}) > 0]] GROUP BY gudang, pt ORDER BY nilai_waste DESC LIMIT 200"
+    },
+    {
+      "key": "waste-kategori",
+      "name": "Waste per kategori produk",
+      "display": "row",
+      "row": 9,
+      "col": 12,
+      "size_x": 12,
+      "size_y": 6,
+      "sql": "SELECT category AS kategori, sum(waste_value) AS nilai_waste FROM efn_dwh.v_waste_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND brand = upper({{company}})]] [[AND positionCaseInsensitive(warehouse_name, {{warehouse}}) > 0]] GROUP BY kategori ORDER BY nilai_waste DESC LIMIT 20",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "kategori"
+        ],
+        "graph.metrics": [
+          "nilai_waste"
+        ]
+      }
+    },
+    {
+      "key": "tren-yield",
+      "name": "Yield tertimbang harian per gudang",
+      "display": "line",
+      "row": 15,
+      "col": 0,
+      "size_x": 24,
+      "size_y": 6,
+      "sql": "SELECT day, warehouse_name AS gudang, if(sum(planned_qty) = 0, NULL, round(sum(produced_qty) / sum(planned_qty) * 100, 2)) AS yield_pct FROM efn_dwh.v_mo_yield_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND brand = upper({{company}})]] [[AND positionCaseInsensitive(warehouse_name, {{warehouse}}) > 0]] [[AND positionCaseInsensitive(product_name, {{product}}) > 0]] GROUP BY day, gudang ORDER BY day",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "day",
+          "gudang"
+        ],
+        "graph.metrics": [
+          "yield_pct"
+        ]
+      }
+    },
+    {
+      "key": "yield-produk",
+      "name": "Yield per produk",
+      "display": "table",
+      "row": 21,
+      "col": 0,
+      "size_x": 24,
+      "size_y": 6,
+      "sql": "SELECT product_name AS produk, warehouse_name AS gudang, sum(mos) AS mo, sum(planned_qty) AS rencana, sum(produced_qty) AS aktual, if(sum(planned_qty) = 0, NULL, round(sum(produced_qty) / sum(planned_qty) * 100, 2)) AS yield_pct, sum(byproduct_qty) AS by_product, sum(variance_value) AS varians_nilai, sum(mos_alert) AS mo_di_luar_ambang FROM efn_dwh.v_mo_yield_daily WHERE 1 = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND brand = upper({{company}})]] [[AND positionCaseInsensitive(warehouse_name, {{warehouse}}) > 0]] [[AND positionCaseInsensitive(product_name, {{product}}) > 0]] GROUP BY produk, gudang ORDER BY mo_di_luar_ambang DESC, yield_pct LIMIT 500"
+    },
+    {
+      "key": "komponen-varians",
+      "name": "Komponen dengan varians di luar ambang",
+      "display": "table",
+      "row": 27,
+      "col": 0,
+      "size_x": 24,
+      "size_y": 7,
+      "description": "|varians %| > efn_ck_variance_warn_pct PT (nilai saat ini). Rumus sama dengan laporan varians Odoo.",
+      "sql": "SELECT day, production_id AS mo_id, finished_product_name AS produk_jadi, component_name AS komponen, warehouse_name AS gudang, expected_qty AS bom, actual_qty AS aktual, variance_qty AS selisih, variance_pct AS varians_pct, variance_value AS varians_nilai FROM efn_dwh.v_mo_component_variance WHERE over_threshold = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND brand = upper({{company}})]] [[AND positionCaseInsensitive(warehouse_name, {{warehouse}}) > 0]] [[AND positionCaseInsensitive(finished_product_name, {{product}}) > 0]] ORDER BY abs(varians_nilai) DESC LIMIT 500"
+    },
+    {
+      "key": "mo-luar-ambang",
+      "name": "MO di luar ambang",
+      "display": "table",
+      "row": 34,
+      "col": 0,
+      "size_x": 24,
+      "size_y": 6,
+      "sql": "SELECT day, production_id AS mo_id, product_name AS produk, warehouse_name AS gudang, planned_qty AS rencana, produced_qty AS aktual, yield_pct, yield_warn_pct AS ambang_yield, byproduct_qty AS by_product, variance_value AS varians_nilai FROM efn_dwh.v_mo_yield WHERE alert = 1 [[AND day >= {{date_from}}]] [[AND day <= {{date_to}}]] [[AND brand = upper({{company}})]] [[AND positionCaseInsensitive(warehouse_name, {{warehouse}}) > 0]] [[AND positionCaseInsensitive(product_name, {{product}}) > 0]] ORDER BY day DESC LIMIT 500"
+    },
+    {
+      "key": "kesegaran-data",
+      "name": "Kesegaran data ETL",
+      "display": "table",
+      "row": 40,
+      "col": 0,
+      "size_x": 24,
+      "size_y": 4,
+      "description": "Heartbeat ETL (SEC-52). Data dianggap basi bila menit_sejak_sukses > 30.",
+      "sql": "SELECT job, last_ok_at AS sukses_terakhir_utc, minutes_since_ok AS menit_sejak_sukses, last_status AS status_terakhir, failures_24h AS gagal_24_jam FROM efn_dwh.v_etl_freshness WHERE job IN ('cycle', 'waste_scraps', 'mo_yield', 'mo_components') ORDER BY job"
+    }
+  ]
+}

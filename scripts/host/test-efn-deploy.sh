@@ -765,7 +765,11 @@ vc "267 ETL_LOYALTY_RECON_ONLINE_ENABLED=true + ETL_ENABLE_ODOO=false ditolak" 1
 vc "268 production recon online + region + ETL_ENABLE_ODOO=true diterima" 0 production ETL_ENABLE_ODOO=true \
   ETL_LOYALTY_RECON_ONLINE_ENABLED=true ETL_PARTNER_REGION_ENABLED=true
 vc "269 semua job ETL opsional false diterima" 0 production ETL_PARTNER_REGION_ENABLED=false \
-  ETL_LOYALTY_RECON_ONLINE_ENABLED=false ETL_ENABLE_KDS=false ETL_KDS_ONLINE_ENABLED=false
+  ETL_LOYALTY_RECON_ONLINE_ENABLED=false ETL_ENABLE_KDS=false ETL_KDS_ONLINE_ENABLED=false ETL_ENABLE_WASTE=false
+vc "269b G32 ETL_ENABLE_WASTE=1 ditolak (boolean)" 1 staging ETL_ENABLE_WASTE=1
+vc "269c G32 ETL_ENABLE_WASTE=true + ETL_ENABLE_ODOO=false ditolak" 1 staging ETL_ENABLE_WASTE=true ETL_ENABLE_ODOO=false
+vc "269d G32 production ETL_ENABLE_WASTE=true + ETL_ENABLE_ODOO kosong diterima (aktif setelah grant)" 0 production \
+  ETL_ENABLE_WASTE=true
 
 echo "RINGKASAN efn-deploy: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]

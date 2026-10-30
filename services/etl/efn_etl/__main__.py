@@ -237,6 +237,7 @@ def main() -> None:
         partner_region=settings.partner_region_enabled,
         kds=settings.kds_enabled,
         kds_online=settings.kds_online_enabled,
+        waste=settings.waste_enabled,
     )
     if settings.gl_enabled:
         jobs.extend(GL_JOBS)

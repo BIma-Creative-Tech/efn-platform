@@ -268,6 +268,14 @@ def test_g22_flags_fail_closed(tls_env: dict[str, str], override: dict[str, str]
         Settings.from_env({**tls_env, **override})
 
 
+# G32 (docs/04 §21): mart waste & yield CK, default mati, butuh Odoo.
+def test_waste_flag_default_off_and_fail_closed(tls_env: dict[str, str]) -> None:
+    assert Settings.from_env({**tls_env, "ETL_ENABLE_ODOO": "true"}).waste_enabled is False
+    assert Settings.from_env({**tls_env, "ETL_ENABLE_ODOO": "true", "ETL_ENABLE_WASTE": "true"}).waste_enabled is True
+    with pytest.raises(RuntimeError):
+        Settings.from_env({**tls_env, "ETL_ENABLE_WASTE": "true"})  # tanpa Odoo
+
+
 def test_audit_epoch_settings(tls_env: dict[str, str]) -> None:
     # Chain epoch: auto (epoch baru tanpa penanda runbook) hanya non-production; anchor 1..1000.
     settings = Settings.from_env(tls_env)

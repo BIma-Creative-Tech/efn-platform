@@ -49,6 +49,13 @@ GRANT SELECT, INSERT ON efn_dwh.dim_region TO etl_writer;
 -- loyalty_points_daily.channel tercakup grant tabel G18.
 GRANT SELECT, INSERT ON efn_dwh.fact_kds_ticket TO etl_writer;
 GRANT SELECT, INSERT ON efn_dwh.dim_kds_station TO etl_writer;
+-- Gelombang 32 (11-g32-waste-yield.sql, K25-08): mart waste & yield CK (ReplacingMergeTree, tanpa PII).
+GRANT SELECT, INSERT ON efn_dwh.fact_scrap TO etl_writer;
+GRANT SELECT, INSERT ON efn_dwh.dim_scrap_reason TO etl_writer;
+GRANT SELECT, INSERT ON efn_dwh.fact_mo_yield TO etl_writer;
+GRANT SELECT, INSERT ON efn_dwh.fact_mo_component TO etl_writer;
+GRANT SELECT, INSERT ON efn_dwh.dim_ck_threshold TO etl_writer;
+GRANT SELECT, INSERT ON efn_dwh.dim_warehouse TO etl_writer;
 -- Salinan audit tamper-evident: HANYA SELECT + INSERT. Sengaja TANPA ALTER DELETE/UPDATE, TRUNCATE, DROP, OPTIMIZE:
 -- ETL (atau kredensial efn_etl yang bocor) tidak bisa menghapus/mengubah salinan; perubahan hanya oleh admin ClickHouse
 -- (terdeteksi lewat kepala rantai di Loki). Bila suatu saat ada `GRANT ALL`/wildcard ke etl_writer, cabut dulu.

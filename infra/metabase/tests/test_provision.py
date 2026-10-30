@@ -36,7 +36,12 @@ def _dash(**overrides):
 
 def test_repo_dashboards_are_valid() -> None:
     dashboards = p.load_dashboards(ROOT / "dashboards")
-    assert [d.name for d in dashboards] == ["Penjualan Harian Outlet", "Stok & Kedaluwarsa", "Price Hunter"]
+    assert [d.name for d in dashboards] == [
+        "Penjualan Harian Outlet",
+        "Stok & Kedaluwarsa",
+        "Price Hunter",
+        "Waste & Yield CK",  # G32 (K25-08)
+    ]
     for dash in dashboards:
         slugs = {x.slug for x in dash.parameters}
         assert {"date_from", "date_to"} <= slugs

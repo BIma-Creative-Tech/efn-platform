@@ -428,10 +428,12 @@ def enabled_jobs(
     partner_region: bool = False,
     kds: bool = False,
     kds_online: bool = False,
+    waste: bool = False,
 ) -> list[Job]:
     """Job incremental. Odoo: penjualan POS + (Gelombang 13) pembayaran POS, outlet, produk (efn_etl/pos.py) +
     (Gelombang 21, `partner_region`) wilayah pembeli di penjualan dan master `dim_region` (efn_etl/region.py) +
-    (Gelombang 22, `kds`) tiket & stasiun KDS, `kds_online` = kanal online E-29a (efn_etl/kds.py)."""
+    (Gelombang 22, `kds`) tiket & stasiun KDS, `kds_online` = kanal online E-29a (efn_etl/kds.py) +
+    (Gelombang 32, `waste`) waste & yield CK (efn_etl/waste.py)."""
     jobs = [competitor_prices_job(age_out), loyalty_events_job(age_out)]
     if odoo_enabled:
         # Import lokal: pos.py / kds.py mengimpor helper dari modul ini.
@@ -444,4 +446,8 @@ def enabled_jobs(
             jobs.append(regions_job())
         if kds:
             jobs.extend(kds_jobs(kds_online))
+        if waste:
+            from efn_etl.waste import waste_jobs
+
+            jobs.extend(waste_jobs())
     return jobs

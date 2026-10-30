@@ -1,4 +1,4 @@
-# KONTRAK ANTAR-SERVICE (v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
+# KONTRAK ANTAR-SERVICE (v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -2135,3 +2135,49 @@ Payload lain, sidik event, dan respons tidak berubah bila field tidak ada.
 - Odoo menyimpan nilai beku: `efn.pos.loyalty.outbox.efn_mgm_eligible_amount` (+ penanda `efn_mgm_basis_set`),
   `efn.online.order.efn_mgm_eligible_amount`, `efn.online.refund.efn_mgm_eligible_amount_refunded` (+ penanda) —
   dihitung saat enqueue/pickup/refund, bukan saat kirim.
+
+## 21. Gelombang 32 — mart & dashboard waste/yield CK (K25-08) (v15.0, 30 Okt 2026)
+Sumber kebenaran tetap Odoo `efn_ck_production` (G28: `stock.scrap` beralasan + `efn_waste_value`, `mrp.production`
+`efn_yield_pct`/`efn_byproduct_qty`/`efn_variance_value`/`efn_yield_alert`, ambang PT `res.company.efn_ck_*`). ETL
+menyalin ke ClickHouse dan Metabase membaca view `v_*`. **Tanpa data pribadi**: tidak dibaca `owner_id`, `user_id`,
+`create_uid`, `origin`, nama/nomor dokumen, lot, maupun partner.
+
+### 21.1 Job ETL (`efn_etl/waste.py`, kill switch `ETL_ENABLE_WASTE`, default `false`; butuh `ETL_ENABLE_ODOO=true`)
+| Job | Sumber Odoo | Tujuan ClickHouse | Kursor |
+|---|---|---|---|
+| `waste_scraps` | `stock_scrap` state `done` + alasan (`stock_scrap_stock_scrap_reason_tag_rel`, tag id terkecil = alasan utama; >1 tag dihitung sekali) | `fact_scrap` (1 baris/scrap) | `write_date, id` |
+| `waste_reasons` | `stock_scrap_reason_tag` (id, nama) | `dim_scrap_reason` | `write_date, id` |
+| `mo_yield` | `mrp_production` state `done` (`product_qty` rencana, `qty_producing` aktual, yield/by-product/varians/alert tersimpan, gudang = `picking_type.warehouse_id`) | `fact_mo_yield` (1 baris/MO) | `write_date, id` |
+| `mo_components` | `stock_move` bahan baku MO `done` (`raw_material_production_id`), qty dikonversi ke UoM produk | `fact_mo_component` (1 baris/MO×komponen) | `mrp_production.write_date, id` (MO dibaca ulang utuh) |
+| `ck_thresholds` | `res_company.efn_ck_yield_warn_pct`, `efn_ck_variance_warn_pct`, `efn_ck_waste_warn_value` | `dim_ck_threshold` | `write_date, id` |
+| `ck_warehouses` | `stock_warehouse` (id, nama, PT, `efn_is_central_kitchen`, aktif) | `dim_warehouse` | `write_date, id` |
+
+- Rumus komponen (sama dengan Odoo `_efn_variance_rows`): `expected = Σ product_uom_qty (UoM produk) × yield_pct/100`
+  (kebutuhan BoM untuk qty yang benar-benar diproduksi), `actual = Σ quantity` move `done`, `variance_qty = actual −
+  expected`, `variance_pct = variance_qty / expected × 100` (expected 0 → 100 bila ada selisih), `variance_value =
+  variance_qty × standard_price PT`. Σ `variance_value` per MO = `fact_mo_yield.variance_value` (Odoo).
+- Komponen tanpa move `done` (cancel) tetap dicatat dengan `actual = 0` agar kurang-konsumsi terlihat.
+- MO/scrap yang kembali dari `done` (unbuild/batal) → baris versi baru dengan `is_done = 0`; view hanya membaca
+  `is_done = 1` (ReplacingMergeTree, versi `write_date`).
+
+### 21.2 View Metabase (semantic layer, `metabase_reader`)
+- `v_waste_daily` — per hari (WIB) × PT × gudang × alasan × kategori produk: `scraps`, `qty`, `waste_value`.
+- `v_waste_warehouse_daily` — per hari × PT × gudang: `waste_value`, ambang `efn_ck_waste_warn_value` PT **saat ini**,
+  `over_threshold` (ambang 0 = nonaktif).
+- `v_mo_yield` — per MO: rencana, aktual, yield %, by-product, varians nilai, `alert` (Odoo), produk, gudang, hari.
+- `v_mo_yield_daily` — per hari × PT × gudang × produk: MO, rata-rata tertimbang yield (Σ aktual / Σ rencana),
+  Σ varians, MO di luar ambang.
+- `v_mo_component_variance` — per komponen MO + `over_threshold` (|variance_pct| > `efn_ck_variance_warn_pct` PT
+  saat ini).
+- Ambang = nilai PT saat ini (perubahan ambang mengubah tampilan histori; ambang historis tidak disimpan).
+
+### 21.3 Dashboard `Waste & Yield CK` (`infra/metabase/dashboards/04-waste-yield.json`)
+Filter: tanggal, PT, gudang/CK, produk. Kartu: total nilai waste, MO di luar ambang, yield tertimbang, varians
+konsumsi; tren waste harian per alasan; waste per gudang vs ambang; yield per produk; komponen dengan varians di luar
+ambang; daftar MO di luar ambang.
+
+### 21.4 Grant
+- Odoo `efn_etl` (`services/etl/sql/odoo-readonly-grants.sql` bagian G32, bersyarat `efn_ck_production` terpasang):
+  kolom yang dibaca job di §21.1 saja.
+- ClickHouse: `etl_writer` SELECT+INSERT tabel mart G32; `metabase_reader` SELECT view G32 + tabel dasarnya (view INVOKER).
+
