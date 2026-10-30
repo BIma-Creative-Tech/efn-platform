@@ -177,6 +177,9 @@ class Settings:
     # efn_kds_ticket.efn_online_order_id (ada setelah efn_online_kds_bridge E-29a terpasang).
     kds_enabled: bool = False
     kds_online_enabled: bool = False
+    # G32 (docs/04 §21, K25-08): mart waste & yield CK (efn_etl/waste.py). Default mati sampai efn_ck_production
+    # terpasang dan grant G32 (sql/odoo-readonly-grants.sql) diterapkan.
+    waste_enabled: bool = False
 
     @property
     def amqp_user(self) -> str:
@@ -273,6 +276,9 @@ class Settings:
             raise RuntimeError("ETL_ENABLE_KDS membutuhkan ETL_ENABLE_ODOO=true")
         if kds_online and not kds_enabled:
             raise RuntimeError("ETL_KDS_ONLINE_ENABLED membutuhkan ETL_ENABLE_KDS=true")
+        waste_enabled = _bool(e, "ETL_ENABLE_WASTE", False)
+        if waste_enabled and not odoo_enabled:
+            raise RuntimeError("ETL_ENABLE_WASTE membutuhkan ETL_ENABLE_ODOO=true")
         return cls(
             platform_pg=platform,
             odoo_pg=odoo,
@@ -332,4 +338,5 @@ class Settings:
             loyalty_recon_online_enabled=recon_online,
             kds_enabled=kds_enabled,
             kds_online_enabled=kds_online,
+            waste_enabled=waste_enabled,
         )

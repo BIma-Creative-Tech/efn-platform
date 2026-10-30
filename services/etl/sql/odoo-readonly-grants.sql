@@ -361,3 +361,39 @@ BEGIN
     EXECUTE 'GRANT SELECT ON efn_etl.online_order_ref TO efn_etl';
 END
 $grant_g22_online$;
+
+-- ============================================================================================================
+-- Gelombang 32 (efn-data-ai-engineer): mart waste & yield CK (services/etl/efn_etl/waste.py, docs/04 §21, K25-08).
+--     stock_scrap: TANPA owner_id (partner konsinyasi), lot_id, package_id, picking_id, origin, name, create_uid.
+--     mrp_production: TANPA user_id, origin, name, lot_producing_id. stock_move: hanya kolom kuantitas/status MO.
+--     Bersyarat (psql \if): dilewati bila efn_ck_production belum terpasang -> jalankan ulang setelah -i.
+--     ETL membaca hanya bila ETL_ENABLE_WASTE=true.
+SELECT to_regclass('public.stock_scrap_stock_scrap_reason_tag_rel') IS NOT NULL
+   AND EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'mrp_production' AND column_name = 'efn_yield_pct')
+   AND EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'stock_scrap' AND column_name = 'efn_waste_value')
+   AS efn_g32_waste \gset
+\if :efn_g32_waste
+GRANT SELECT (id, company_id, product_id, product_uom_id, production_id, scrap_qty, state, date_done, write_date,
+              efn_warehouse_id, efn_waste_value)
+    ON public.stock_scrap TO efn_etl;
+GRANT SELECT (stock_scrap_id, stock_scrap_reason_tag_id) ON public.stock_scrap_stock_scrap_reason_tag_rel TO efn_etl;
+GRANT SELECT (id, name, write_date) ON public.stock_scrap_reason_tag TO efn_etl;
+GRANT SELECT (id, company_id, product_id, product_uom_id, bom_id, picking_type_id, product_qty, qty_producing, state,
+              date_finished, write_date, efn_yield_pct, efn_byproduct_qty, efn_variance_value, efn_yield_alert)
+    ON public.mrp_production TO efn_etl;
+GRANT SELECT (id, raw_material_production_id, product_id, product_uom, product_uom_qty, quantity, state)
+    ON public.stock_move TO efn_etl;
+GRANT SELECT (id, factor) ON public.uom_uom TO efn_etl;
+GRANT SELECT (uom_id) ON public.product_template TO efn_etl;
+GRANT SELECT (id, warehouse_id) ON public.stock_picking_type TO efn_etl;
+GRANT SELECT (company_id, active, write_date, efn_is_central_kitchen) ON public.stock_warehouse TO efn_etl;
+GRANT SELECT (efn_ck_yield_warn_pct, efn_ck_variance_warn_pct, efn_ck_waste_warn_value) ON public.res_company TO efn_etl;
+-- Index cursor (R-O03): write_date MO & scrap tidak ber-index bawaan.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS efn_etl_stock_scrap_write_date_id_idx ON public.stock_scrap (write_date, id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS efn_etl_mrp_production_write_date_id_idx
+    ON public.mrp_production (write_date, id);
+\else
+\echo 'efn_ck_production belum terpasang: grant G32 waste/yield dilewati'
+\endif
