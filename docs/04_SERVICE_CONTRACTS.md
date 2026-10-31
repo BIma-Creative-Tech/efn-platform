@@ -1,4 +1,4 @@
-# KONTRAK ANTAR-SERVICE (v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
+# KONTRAK ANTAR-SERVICE (v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -2105,7 +2105,7 @@ lingkungan); produksi tetap OFF sampai Finance menetapkan angka dan Legal menyet
 
 ### 20.9 Belum / risiko
 - ~~`efn.mgm.policy.excluded_categ_ids` belum ditegakkan engine~~ → **G31b §20.10** (v14.1).
-- Notifikasi reward ke referrer, layar Super-App, ekstraksi ke `loyalty-service`.
+- ~~Notifikasi reward ke referrer, layar Super-App~~ → **G33 §20.11** (v15.1). Ekstraksi ke `loyalty-service` (K25-05) belum.
 - Angka PLACEHOLDER; peluncuran diblokir sign-off Legal (Permendag 70/2019, R-L02) dan simulasi margin Finance (R-B03).
 
 ### 20.10 G31b — dasar MGM per baris: pengecualian kategori kebijakan MGM (v14.1, 30 Okt 2026)
@@ -2135,6 +2135,34 @@ Payload lain, sidik event, dan respons tidak berubah bila field tidak ada.
 - Odoo menyimpan nilai beku: `efn.pos.loyalty.outbox.efn_mgm_eligible_amount` (+ penanda `efn_mgm_basis_set`),
   `efn.online.order.efn_mgm_eligible_amount`, `efn.online.refund.efn_mgm_eligible_amount_refunded` (+ penanda) —
   dihitung saat enqueue/pickup/refund, bukan saat kirim.
+
+### 20.11 G33 — notifikasi reward MGM + layar referral Super-App (v15.1, 31 Okt 2026)
+**Notifikasi reward (BFF).** Saat job settle (§20.5) mengubah reward menjadi `settled` dengan jumlah > 0, transaksi yang
+sama menulis outbox `notify.push` v2:
+`{ schema_version: 2, idempotency_key: "notify:mgm_reward:<reward_id>", member_hash: <referrer_hash>, source:
+"mgm_reward", source_ref: "<reward_id>", template: "mgm_reward_settled", params: {} }`.
+- **Tanpa parameter**: tidak ada jumlah poin, level, PT, nama/identitas downline, atau nominal belanja. Template WA
+  UTILITY `efn_mgm_reward_settled` = "Poin referral Anda sudah masuk, buka aplikasi". Teks final = Legal.
+- **Hanya bila referrer punya consent `marketing` aktif** (status terbaru `platform.consent`). Program referral adalah
+  komunikasi pemasaran, bukan transaksi member sendiri. Tanpa consent → tidak ada pesan, reward tetap settle.
+- Satu pesan per reward (`idempotency_key`). Reward `capped`/`cancelled`, clawback, dan settle sebagian karena cap
+  tidak mengirim pesan terpisah (yang terakhir tetap satu pesan "sudah masuk").
+- Publisher hanya `efn-bff` (`NOTIFY_SOURCE_PUBLISHERS.mgm_reward`). Resolver penerima:
+  `mgm_reward(id = source_ref)` → `referrer_hash` wajib = `member_hash` pesan → `member` aktif dengan hash itu →
+  `member_ref_enc` (AAD member) → hash hasil dekripsi wajib sama. Reward tidak ada → pesan permanen ditolak (DLQ);
+  referrer bukan member aktif lagi (erasure) → dilewati (`skipped`).
+- Kill switch: hanya ditulis saat `MGM_ENABLED=true` (job settle hanya berjalan saat itu).
+
+**Layar referral Super-App** (`efn-mobile/apps/superapp`, route `/referral`, menu Akun "Ajak teman"). Hanya memakai
+`GET /v1/me/referral` dan `POST /v1/me/referral/claim` (§20.2, tanpa endpoint baru):
+- Kode sendiri + tombol bagikan (lembar bagi OS, teks berisi kode saja, tanpa tautan pelacak).
+- Ringkasan jaringan = **hitungan** level 1/2/3+ (tanpa identitas) dan poin `pending` + `settled` bulan ini.
+- Form klaim kode hanya tampil bila `referred=false` dan `claim_until` ada (dalam jendela). Kode dinormalisasi huruf
+  besar, alfabet §20.2, tepat 8 karakter sebelum dikirim. Setelah berhasil, form diganti status "Terhubung sejak …".
+- `503 mgm_unavailable` → layar menyatakan program belum tersedia dan menu tetap aman (default prod OFF). Semua kode
+  error §20.2 punya pesan Indonesia di app.
+- Ketentuan program (Permendag 70/2019, R-L02) **belum** disetujui Legal: layar menampilkan catatan "Ketentuan program
+  menyusul" dan tidak menampilkan persentase/nilai reward.
 
 ## 21. Gelombang 32 — mart & dashboard waste/yield CK (K25-08) (v15.0, 30 Okt 2026)
 Sumber kebenaran tetap Odoo `efn_ck_production` (G28: `stock.scrap` beralasan + `efn_waste_value`, `mrp.production`
