@@ -217,6 +217,7 @@ Masih terbuka: markup TP & opini pajak (Finance), parameter QC nyata per komodit
 | **G32** | Mart & dashboard waste/yield CK (K25-08): ETL `fact_scrap`, `fact_mo_yield`, `fact_mo_component`, ambang PT → view `v_waste_*`/`v_mo_*` → dashboard Metabase "Waste & Yield CK" — docs/04 §21 | dibangun, `ETL_ENABLE_WASTE=false` |
 | **G33** | Notifikasi reward MGM ke referrer (`notify.push` `mgm_reward`, tanpa parameter, butuh consent marketing) + layar referral Super-App (kode, bagikan, klaim, hitungan jaringan) — docs/04 §20.11 | dibangun, `MGM_ENABLED=false` |
 | **G34** | Laporan arus kas per PT + konsolidasi (sisa W-16, metode tidak langsung, kategori via tag CE, kas & setara kas termasuk akun outstanding) di `efn_account_reports` — layar/PDF/XLSX | dibangun, terpasang di dev |
+| **G35** | Laporan keuangan: kolom pembanding (periode sebelumnya / tahun lalu) + selisih untuk Neraca/L-R/Arus Kas, dan drill-down angka akun ke Journal Items (widget layar, cek akses di server) — `efn_account_reports` 19.0.1.2.0 | dibangun, terpasang di dev |
 
 ---
 
