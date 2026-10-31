@@ -83,6 +83,8 @@ export interface MgmStore {
   /** id member aktif (baris `platform.member` tanpa `deleted_at`) untuk hash; null = tidak aktif / dihapus. */
   activeMemberId(q: Queryable, hash: string): Promise<string | null>;
   memberCreatedAt(q: Queryable, memberId: string): Promise<Date | null>;
+  /** §20.11: consent `marketing` terbaru member aktif = granted (sumber sama dengan ConsentService). */
+  hasMarketingConsent(q: Queryable, hash: string): Promise<boolean>;
   // ── akrual ──
   insertSource(q: Queryable, s: Omit<MgmSourceRow, 'processed_at'>): Promise<boolean>;
   source(q: Queryable, kind: MgmSourceKind, ref: string, forUpdate: boolean): Promise<MgmSourceRow | null>;
@@ -233,6 +235,19 @@ export class PgMgmStore implements MgmStore {
   async activeMemberId(q: Queryable, hash: string): Promise<string | null> {
     const r = await q.query<{ id: string }>(`SELECT id::text AS id FROM platform.member WHERE member_hash = $1 AND deleted_at IS NULL`, [hash]);
     return r.rows[0]?.id ?? null;
+  }
+
+  async hasMarketingConsent(q: Queryable, hash: string): Promise<boolean> {
+    const r = await q.query<{ ok: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM platform.member m
+          WHERE m.member_hash = $1 AND m.deleted_at IS NULL
+            AND (SELECT c.granted FROM platform.consent c
+                  WHERE c.member_id = m.id AND c.purpose = 'marketing'
+                  ORDER BY c.created_at DESC, c.id DESC LIMIT 1) IS TRUE) AS ok`,
+      [hash],
+    );
+    return r.rows[0]?.ok === true;
   }
 
   async memberCreatedAt(q: Queryable, memberId: string): Promise<Date | null> {

@@ -20,6 +20,10 @@ export const MGM_REASON = { REWARD: 'mgm_reward', REVERSE: 'mgm_reverse' } as co
 export const MGM_REWARD_CONSUMER = 'bff.mgm-reward';
 /** Publisher yang diizinkan untuk `mgm.reward.requested` (properti AMQP `user_id`, divalidasi broker). */
 export const MGM_PUBLISHERS: readonly string[] = ['efn-bff'];
+/** §20.11: sumber & template `notify.push` reward settle (publisher hanya efn-bff). */
+export const MGM_NOTIFY_SOURCE = 'mgm_reward';
+export const MGM_NOTIFY_TEMPLATE = 'mgm_reward_settled';
+
 /** Advisory lock job settle (bigint, berbeda dari kunci job lain). */
 export const MGM_SETTLE_LOCK_KEY = 0x45464e53; // 'EFNS'
 const BATCH = 200;
@@ -286,7 +290,31 @@ export class MgmEngineService implements OnApplicationBootstrap, OnModuleInit, O
       at,
     );
     if (this.metrics && isCompanyCode(reward.company_code)) this.metrics.recordLoyaltyPosPoints('earned', reward.company_code, amount);
+    await this.notifySettled(q, reward);
     return 'settled';
+  }
+
+  /**
+   * §20.11: satu `notify.push` per reward settle — TANPA parameter (tanpa poin/level/PT/downline) dan hanya bila
+   * referrer punya consent marketing aktif (referral = komunikasi pemasaran). Transaksi sama dengan settle (outbox).
+   */
+  private async notifySettled(q: Queryable, reward: MgmRewardRow): Promise<void> {
+    if (!(await this.store.hasMarketingConsent(q, reward.referrer_hash))) return;
+    const key = `notify:${MGM_NOTIFY_SOURCE}:${reward.id}`;
+    await this.outbox.enqueue(
+      q,
+      QUEUES.NOTIFY_PUSH,
+      {
+        schema_version: 2,
+        idempotency_key: key,
+        member_hash: reward.referrer_hash,
+        source: MGM_NOTIFY_SOURCE,
+        source_ref: reward.id,
+        template: MGM_NOTIFY_TEMPLATE,
+        params: {},
+      },
+      key,
+    );
   }
 
   /** Entri ledger reward (+) / clawback (−) untuk referrer, lot penerbit = PT transaksi. */

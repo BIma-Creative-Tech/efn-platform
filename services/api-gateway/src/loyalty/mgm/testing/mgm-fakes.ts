@@ -27,6 +27,8 @@ export class MemoryMgmStore implements MgmStore {
   readonly activeMembers = new Map<string, string>();
   /** member.id → created_at akun. */
   readonly memberCreated = new Map<string, Date>();
+  /** §20.11: hash member dengan consent marketing aktif. */
+  readonly marketingConsent = new Set<string>();
   graphLocks = 0;
   private seq = 0;
 
@@ -87,6 +89,9 @@ export class MemoryMgmStore implements MgmStore {
   }
   async activeMemberId(_q: Queryable, hash: string): Promise<string | null> {
     return this.activeMembers.get(hash) ?? null;
+  }
+  async hasMarketingConsent(_q: Queryable, hash: string): Promise<boolean> {
+    return this.activeMembers.has(hash) && this.marketingConsent.has(hash);
   }
   async memberCreatedAt(_q: Queryable, memberId: string): Promise<Date | null> {
     return this.memberCreated.get(memberId) ?? null;

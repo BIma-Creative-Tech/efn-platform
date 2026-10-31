@@ -30,3 +30,8 @@ tidak di-enqueue; consumer belum mengecek ulang.
 
 ## Fase 3 (lanjutan)
 Template `online_order_ready|online_order_cancelled|online_order_refunded` → WA `efn_online_order_*` **tanpa parameter** (tanpa kode ambil/nominal; "buka aplikasi"). Publisher hanya `efn-bff`; template harus sesuai sumber. Penerima: `online_order_part(source_ref) → online_order.member_id → member.member_ref_enc` (hash diverifikasi); tautan sudah dilepas → `skipped` (ack). Template WA perlu didaftarkan di WhatsApp Manager.
+
+## G33 — `source: "mgm_reward"` (docs/04 §20.11)
+Job settle MGM menulis outbox saat reward `settled` (> 0 poin) **dan** referrer punya consent `marketing` aktif.
+Template `mgm_reward_settled` (WA `efn_mgm_reward_settled`, tanpa parameter). Penerima: `mgm_reward(id=source_ref)` →
+`referrer_hash` = `member_hash` pesan → member aktif → `member_ref_enc` (verifikasi hash). Referrer di-erase → `skipped`.
