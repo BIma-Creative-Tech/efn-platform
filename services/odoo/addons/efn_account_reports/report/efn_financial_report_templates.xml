@@ -104,6 +104,15 @@
                         <td>Selisih (pembanding)</td><td/><td class="text-end" t-esc="fmt(tc('difference'))"/>
                     </tr>
                 </table>
+                <t t-if="d.get('adjustments')">
+                    <h5>Penyesuaian konsolidasi (posted, tidak diposting ke buku PT)</h5>
+                    <table class="table table-sm w-75">
+                        <tr t-foreach="d['adjustments']" t-as="a">
+                            <td t-esc="a['date']"/><td t-esc="a['name']"/><td class="text-end" t-esc="fmt(a['amount'])"/>
+                            <td class="text-muted">disetujui <t t-esc="a['approved_by']"/></td>
+                        </tr>
+                    </table>
+                </t>
                 <t t-if="d.get('eliminations')">
                     <h5>Eliminasi antar-PT (saldo dikeluarkan dari konsolidasi)</h5>
                     <table class="table table-sm w-75">

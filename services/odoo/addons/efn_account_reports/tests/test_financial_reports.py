@@ -408,6 +408,220 @@ class TestEfnFinancialReports(AccountTestInvoicingCommon):
         self.assertEqual(arch.xpath("//field[@name='html']")[0].get("widget"), "efn_report_html")
         self.assertTrue(arch.xpath("//field[@name='compare']"))
 
+    # ------------------------------------------------------------------ G36 arus kas langsung
+    def _cfd(self, companies, **kw):
+        start = self._d().replace(month=1, day=1)
+        return self.engine._efn_cash_flow_direct(companies, start, self._d(), **kw)
+
+    def _lines_by_name(self, cf, key):
+        return {line["name"]: line["amount"] for line in self._section(cf, key)["lines"]}
+
+    def test_direct_cash_flow_groups_and_matches_indirect(self):
+        self._pay(self._invoice(self.c1, self.customer, 1000))
+        self._pay(self._invoice(self.c1, self.customer, 300, "in_invoice"))
+        self._invoice(self.c1, self.customer, 200)  # belum dibayar: bukan arus kas
+        direct, indirect = self._cfd(self.c1), self._cf(self.c1)
+        self.assertEqual(direct["totals"]["difference"], 0)
+        op = self._lines_by_name(direct, "operating")
+        self.assertEqual(op["Penerimaan kas dari pelanggan"], 1000)
+        self.assertEqual(op["Pembayaran kas ke pemasok"], -300)
+        for key in ("operating", "investing", "financing", "net_change", "cash_opening", "cash_closing"):
+            self.assertEqual(direct["totals"][key], indirect["totals"][key], key)
+
+    def test_direct_cash_flow_ignores_tags_on_pl_accounts(self):
+        # Regresi: COA demo memberi tag Investing pada akun pendapatan (Cash Difference Gain).
+        income = self.company_data["default_account_revenue"]
+        income.tag_ids = [(4, self.env.ref("account.account_tag_investing").id)]
+        self._pay(self._invoice(self.c1, self.customer, 500))
+        direct, indirect = self._cfd(self.c1), self._cf(self.c1)
+        self.assertEqual(direct["totals"]["investing"], 0)
+        self.assertEqual(self._lines_by_name(direct, "operating")["Penerimaan kas dari pelanggan"], 500)
+        self.assertEqual(direct["totals"]["operating"], indirect["totals"]["operating"])
+
+    def test_direct_cash_flow_investing_financing_and_bank_transfer(self):
+        c = self.c1
+        Account = self.env["account.account"].with_company(c)
+        bank = self.company_data["default_journal_bank"].default_account_id
+        bank2 = Account.create({"name": "Bank kedua uji", "code": "EFNBK2", "account_type": "asset_cash"})
+        fixed = Account.create({"name": "Oven uji G36", "code": "EFNFA36", "account_type": "asset_fixed"})
+        loan = Account.create({"name": "Pinjaman uji G36", "code": "EFNLN36", "account_type": "liability_non_current"})
+        self._entry(c, [(bank, 5000, 0), (loan, 0, 5000)], "pinjaman")
+        self._entry(c, [(fixed, 2000, 0), (bank, 0, 2000)], "beli oven")
+        self._entry(c, [(bank2, 1500, 0), (bank, 0, 1500)], "pindah bank")
+        cf = self._cfd(c)
+        self.assertEqual(cf["totals"]["difference"], 0)
+        self.assertEqual(cf["totals"]["investing"], -2000)
+        self.assertEqual(cf["totals"]["financing"], 5000)
+        self.assertEqual(cf["totals"]["operating"], 0)  # transfer antar-bank bukan arus kas
+        self.assertEqual(cf["totals"]["net_change"], 3000)
+
+    def test_direct_cash_flow_consolidated_eliminates_intercompany(self):
+        self._pay(self._invoice(self.c1, self.customer, 1000))
+        self._pay(self._invoice(self.c1, self.c2.partner_id, 400))
+        self._pay(self._invoice(self.c2, self.c1.partner_id, 400, "in_invoice"))
+        both = self.c1 | self.c2
+        cf = self._cfd(both)
+        self.assertEqual(cf["totals"]["difference"], 0)
+        self.assertEqual(cf["totals"]["net_change"], 1000)
+        op = self._lines_by_name(cf, "operating")
+        self.assertEqual(op["Penerimaan kas dari pelanggan"], 1000)
+        self.assertNotIn("Arus kas antar-PT belum saling hapus", op)
+        self.assertTrue(cf["eliminations"])
+        raw = self._cfd(both, eliminate=False)
+        self.assertEqual(self._lines_by_name(raw, "operating")["Penerimaan kas dari pelanggan"], 1400)
+
+    def test_wizard_direct_method(self):
+        self._pay(self._invoice(self.c1, self.customer, 250))
+        wiz = self._wiz("cf", compare="previous_period")
+        wiz.cf_method = "direct"
+        self.assertIn("Arus Kas (langsung)", wiz.html)
+        self.assertIn("Penerimaan kas dari pelanggan", wiz.html)
+        self.assertNotIn("text-danger", wiz.html)
+        wiz.action_xlsx()
+        self.assertTrue(wiz.xlsx_file)
+
+    # ------------------------------------------------------------------ G36 penyesuaian konsolidasi
+    def _managers(self):
+        from odoo.addons.base.tests.common import new_test_user
+
+        both = self.c1 | self.c2
+        users = []
+        for login in ("efn_g36_maker", "efn_g36_checker"):
+            user = self.env["res.users"].search([("login", "=", login)]) or new_test_user(
+                self.env, login=login, groups="account.group_account_manager", company_id=self.c1.id
+            )
+            user.company_ids = both
+            users.append(user)
+        return users
+
+    def _adjustment(self, user, lines, companies=None, date="2026-10-31"):
+        Adj = self.env["efn.consolidation.adjustment"].with_user(user)
+        return Adj.create(
+            {
+                "name": "Eliminasi laba belum terealisasi persediaan",
+                "date": date,
+                "company_ids": [(6, 0, (companies or (self.c1 | self.c2)).ids)],
+                "line_ids": [
+                    (0, 0, {"company_id": comp.id, "account_id": acc.id, "debit": dr, "credit": cr})
+                    for comp, acc, dr, cr in lines
+                ],
+            }
+        )
+
+    def _unrealised_lines(self, amount=100):
+        income = self.company_data["default_account_revenue"]
+        stock = self.c2_data["default_account_receivable"].copy({"code": "EFNINV2", "account_type": "asset_current"})
+        return [(self.c1, income, amount, 0), (self.c2, stock, 0, amount)]
+
+    def test_adjustment_four_eyes_and_applied_to_consolidation(self):
+        maker, checker = self._managers()
+        self._invoice(self.c1, self.customer, 1000)
+        adj = self._adjustment(maker, self._unrealised_lines(100))
+        both = self.c1 | self.c2
+        start = self._d().replace(month=1, day=1)
+        # Draft belum berlaku.
+        self.assertEqual(self.engine._efn_profit_loss(both, start, self._d(), adjust=True)["totals"]["revenue"], 1000)
+        from odoo.exceptions import UserError
+
+        with self.assertRaisesRegex(UserError, "efn_account_reports:four_eyes"):
+            adj.with_user(maker).action_post()
+        adj.with_user(checker).action_post()
+        self.assertEqual((adj.state, adj.approved_by_id), ("posted", checker))
+        pl = self.engine._efn_profit_loss(both, start, self._d(), adjust=True)
+        self.assertEqual(pl["totals"]["revenue"], 900)
+        bs = self.engine._efn_balance_sheet(both, self._d(), adjust=True)
+        self.assertEqual(bs["totals"]["difference"], 0)
+        tb = self.engine._efn_trial_balance(both, start, self._d(), adjust=True)
+        self.assertEqual(tb["totals"]["debit"], tb["totals"]["credit"])
+        cf = self.engine._efn_cash_flow(both, start, self._d(), adjust=True)
+        self.assertEqual(cf["totals"]["difference"], 0)
+        # Tanpa opsi / laporan satu PT: tidak berlaku.
+        self.assertEqual(self.engine._efn_profit_loss(both, start, self._d())["totals"]["revenue"], 1000)
+        self.assertEqual(
+            self.engine._efn_profit_loss(self.c1, start, self._d(), adjust=True)["totals"]["revenue"], 1000
+        )
+        # Wizard konsolidasi menampilkan daftar penyesuaian.
+        wiz = self._wiz("pl", compare="none", companies=both, date_from="2026-01-01")
+        self.assertIn("Penyesuaian konsolidasi", wiz.html)
+        self.assertEqual(wiz._efn_data()["totals"]["revenue"], 900)
+        # Posted terkunci; batal -> tidak berlaku lagi.
+        with self.assertRaisesRegex(UserError, "efn_account_reports:adjustment"):
+            adj.with_user(maker).write({"name": "ubah"})
+        with self.assertRaisesRegex(UserError, "efn_account_reports:adjustment"):
+            adj.line_ids[0].with_user(maker).write({"debit": 5})
+        with self.assertRaisesRegex(UserError, "efn_account_reports:adjustment"):
+            adj.with_user(maker).unlink()
+        adj.with_user(maker).action_cancel()
+        self.assertEqual(self.engine._efn_profit_loss(both, start, self._d(), adjust=True)["totals"]["revenue"], 1000)
+
+    def test_adjustment_validation(self):
+        from odoo.exceptions import UserError, ValidationError
+
+        maker, checker = self._managers()
+        bank = self.company_data["default_journal_bank"].default_account_id
+        income = self.company_data["default_account_revenue"]
+        cases = [
+            [(self.c1, income, 100, 0), (self.c1, self.company_data["default_account_expense"], 0, 90)],  # tak seimbang
+            [(self.c1, income, 100, 0), (self.c1, bank, 0, 100)],  # akun kas
+            [(self.c1, income, 100, 0)],  # satu baris
+            [(self.c1, income, 100, 0), (self.c2, income, 0, 100)],  # akun bukan milik PT baris
+        ]
+        for lines in cases:
+            adj = self._adjustment(maker, lines)
+            with self.assertRaisesRegex(UserError, "efn_account_reports:adjustment"):
+                adj.with_user(checker).action_post()
+        with self.assertRaises(ValidationError):
+            self._adjustment(maker, self._unrealised_lines(), companies=self.c1)
+        # Editor terakhir menjadi pembuat: checker yang menyunting draft tidak bisa memposting sendiri.
+        adj = self._adjustment(maker, self._unrealised_lines(50))
+        adj.with_user(checker).write({"name": "disunting checker"})
+        with self.assertRaisesRegex(UserError, "efn_account_reports:four_eyes"):
+            adj.with_user(checker).action_post()
+        adj.with_user(maker).action_post()
+        # Field status tidak bisa ditulis langsung.
+        with self.assertRaisesRegex(UserError, "efn_account_reports:adjustment"):
+            adj.with_user(maker).write({"state": "draft"})
+
+    def test_adjustment_requires_manager_and_all_companies(self):
+        from odoo.exceptions import AccessError, UserError
+
+        from odoo.addons.base.tests.common import new_test_user
+
+        maker, checker = self._managers()
+        adj = self._adjustment(maker, self._unrealised_lines())
+        reader = new_test_user(
+            self.env, login="efn_g36_reader", groups="account.group_account_readonly", company_id=self.c1.id
+        )
+        with self.assertRaises(Exception) as cm:
+            adj.with_user(reader).action_post()
+        self.assertIsInstance(cm.exception, (AccessError, UserError))
+        checker.company_ids = self.c1
+        with self.assertRaisesRegex(UserError, "efn_account_reports:company"):
+            adj.with_user(checker).action_post()
+
+    def test_adjustment_only_when_all_companies_in_scope(self):
+        maker, checker = self._managers()
+        c3 = self.setup_other_company(name="PT tiga uji")["company"]
+        self.env.user.company_ids |= c3
+        maker.company_ids |= c3
+        checker.company_ids |= c3
+        three = self.c1 | self.c2 | c3
+        income = self.company_data["default_account_revenue"]
+        stock = self.c2_data["default_account_receivable"].copy({"code": "EFNINV3", "account_type": "asset_current"})
+        adj = self._adjustment(maker, [(self.c1, income, 70, 0), (self.c2, stock, 0, 70)], companies=three)
+        adj.with_user(checker).action_post()
+        self._invoice(self.c1, self.customer, 1000)
+        start = self._d().replace(month=1, day=1)
+        self.assertEqual(
+            self.engine._efn_profit_loss(self.c1 | self.c2, start, self._d(), adjust=True)["totals"]["revenue"], 1000
+        )
+        self.assertEqual(self.engine._efn_profit_loss(three, start, self._d(), adjust=True)["totals"]["revenue"], 930)
+        # Tanggal setelah laporan: belum berlaku.
+        self.assertEqual(
+            self.engine._efn_profit_loss(three, start, self._d().replace(day=30), adjust=True)["totals"]["revenue"],
+            1000,
+        )
+
     def _d(self):
         from datetime import date
 

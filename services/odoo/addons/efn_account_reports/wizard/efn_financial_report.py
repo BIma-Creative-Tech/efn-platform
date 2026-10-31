@@ -11,6 +11,7 @@ from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 
 REPORT_TYPES = [("bs", "Neraca"), ("pl", "Laba Rugi"), ("cf", "Arus Kas"), ("tb", "Neraca Saldo")]
+CF_METHODS = [("indirect", "Tidak langsung"), ("direct", "Langsung")]
 COMPARE_TYPES = [
     ("none", "Tanpa pembanding"),
     ("previous_period", "Periode sebelumnya"),
@@ -117,6 +118,12 @@ class EfnFinancialReport(models.TransientModel):
     date_to = fields.Date(string="Sampai", required=True, default=fields.Date.context_today)
     eliminate = fields.Boolean(string="Eliminasi antar-PT", default=True)
     compare = fields.Selection(COMPARE_TYPES, string="Pembanding", required=True, default="none")
+    cf_method = fields.Selection(CF_METHODS, string="Metode arus kas", required=True, default="indirect")
+    use_adjustments = fields.Boolean(
+        string="Penyesuaian konsolidasi",
+        default=True,
+        help="Sertakan penyesuaian konsolidasi posted (semua PT-nya ada di laporan, tanggal s.d. tanggal laporan).",
+    )
     # Dipakai atribut `invisible` di form: evaluator ekspresi web client Odoo 19 tidak mengenal len().
     is_consolidated = fields.Boolean(compute="_compute_is_consolidated")
     html = fields.Html(string="Hasil", compute="_compute_html", sanitize=False)
@@ -153,13 +160,15 @@ class EfnFinancialReport(models.TransientModel):
 
     def _efn_compute(self, companies, date_from, date_to):
         engine = self.env["efn.financial.report.engine"].sudo()
+        adjust = bool(self.use_adjustments and len(companies) > 1)
         if self.report_type == "bs":
-            return engine._efn_balance_sheet(companies, date_to, self.eliminate)
+            return engine._efn_balance_sheet(companies, date_to, self.eliminate, adjust=adjust)
         if self.report_type == "pl":
-            return engine._efn_profit_loss(companies, date_from, date_to, self.eliminate)
+            return engine._efn_profit_loss(companies, date_from, date_to, self.eliminate, adjust=adjust)
         if self.report_type == "cf":
-            return engine._efn_cash_flow(companies, date_from, date_to, self.eliminate)
-        return engine._efn_trial_balance(companies, date_from, date_to, self.eliminate)
+            method = engine._efn_cash_flow_direct if self.cf_method == "direct" else engine._efn_cash_flow
+            return method(companies, date_from, date_to, self.eliminate, adjust=adjust)
+        return engine._efn_trial_balance(companies, date_from, date_to, self.eliminate, adjust=adjust)
 
     def _efn_compare_range(self):
         """(dari, sampai) pembanding atau None (tanpa pembanding / Neraca Saldo)."""
@@ -183,9 +192,26 @@ class EfnFinancialReport(models.TransientModel):
             }
         else:
             data["compare"] = None
+        adjustments = self.env["efn.consolidation.adjustment"]
+        if self.use_adjustments and len(companies) > 1:
+            adjustments = (
+                self.env["efn.consolidation.adjustment.line"].sudo()._efn_report_adjustments(companies, self.date_to)
+            )
+        title = dict(REPORT_TYPES)[self.report_type]
+        if self.report_type == "cf":
+            title = f"{title} ({dict(CF_METHODS)[self.cf_method].lower()})"
         data.update(
             {
-                "title": dict(REPORT_TYPES)[self.report_type],
+                "title": title,
+                "adjustments": [
+                    {
+                        "date": a.date,
+                        "name": a.name,
+                        "amount": round(a.total_debit, 2),
+                        "approved_by": a.approved_by_id.name,
+                    }
+                    for a in adjustments
+                ],
                 "companies": ", ".join(companies.mapped("name")),
                 "consolidated": len(companies) > 1,
                 "date_from": self.date_from,
@@ -196,7 +222,9 @@ class EfnFinancialReport(models.TransientModel):
         )
         return data
 
-    @api.depends("report_type", "company_ids", "date_from", "date_to", "eliminate", "compare")
+    @api.depends(
+        "report_type", "company_ids", "date_from", "date_to", "eliminate", "compare", "cf_method", "use_adjustments"
+    )
     def _compute_html(self):
         for rec in self:
             if not rec.company_ids or not rec.date_from or not rec.date_to:
@@ -319,6 +347,15 @@ class EfnFinancialReport(models.TransientModel):
                 if cmp_ and key in data.get("totals_cmp", {}):
                     sheet.write_number(row, 3, data["totals_cmp"][key], money_b)
                     sheet.write_number(row, 4, round(value - data["totals_cmp"][key], 2), money_b)
+                row += 1
+            if data.get("adjustments"):
+                row += 1
+                sheet.write(row, 0, "Penyesuaian konsolidasi (posted)", bold)
+                for adj in data["adjustments"]:
+                    row += 1
+                    sheet.write(row, 0, str(adj["date"]))
+                    sheet.write(row, 1, adj["name"])
+                    sheet.write_number(row, 2, adj["amount"], money)
                 row += 1
             if data.get("eliminations"):
                 row += 1

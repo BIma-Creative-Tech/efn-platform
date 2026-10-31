@@ -1,3 +1,7 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_efn_financial_report_readonly,efn.financial.report readonly,model_efn_financial_report,account.group_account_readonly,1,1,1,1
 access_efn_financial_report_invoice,efn.financial.report invoice,model_efn_financial_report,account.group_account_invoice,1,1,1,1
+access_efn_consolidation_adjustment_readonly,efn.consolidation.adjustment readonly,model_efn_consolidation_adjustment,account.group_account_readonly,1,0,0,0
+access_efn_consolidation_adjustment_manager,efn.consolidation.adjustment manager,model_efn_consolidation_adjustment,account.group_account_manager,1,1,1,1
+access_efn_consolidation_adjustment_line_readonly,efn.consolidation.adjustment.line readonly,model_efn_consolidation_adjustment_line,account.group_account_readonly,1,0,0,0
+access_efn_consolidation_adjustment_line_manager,efn.consolidation.adjustment.line manager,model_efn_consolidation_adjustment_line,account.group_account_manager,1,1,1,1
