@@ -29,9 +29,16 @@ class EfnFinancialReport(models.TransientModel):
     )
     date_to = fields.Date(string="Sampai", required=True, default=fields.Date.context_today)
     eliminate = fields.Boolean(string="Eliminasi antar-PT", default=True)
+    # Dipakai atribut `invisible` di form: evaluator ekspresi web client Odoo 19 tidak mengenal len().
+    is_consolidated = fields.Boolean(compute="_compute_is_consolidated")
     html = fields.Html(string="Hasil", compute="_compute_html", sanitize=False)
     xlsx_file = fields.Binary(readonly=True)
     xlsx_name = fields.Char(readonly=True)
+
+    @api.depends("company_ids")
+    def _compute_is_consolidated(self):
+        for rec in self:
+            rec.is_consolidated = len(rec.company_ids) > 1
 
     @api.constrains("date_from", "date_to")
     def _check_dates(self):
