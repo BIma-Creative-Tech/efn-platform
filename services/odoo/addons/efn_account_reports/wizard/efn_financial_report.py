@@ -8,7 +8,18 @@ from markupsafe import Markup
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 
-REPORT_TYPES = [("bs", "Neraca"), ("pl", "Laba Rugi"), ("tb", "Neraca Saldo")]
+REPORT_TYPES = [("bs", "Neraca"), ("pl", "Laba Rugi"), ("cf", "Arus Kas"), ("tb", "Neraca Saldo")]
+
+
+CF_TOTAL_LABELS = {
+    "operating": "Kas bersih dari aktivitas operasi",
+    "investing": "Kas bersih dari aktivitas investasi",
+    "financing": "Kas bersih dari aktivitas pendanaan",
+    "net_change": "Kenaikan (penurunan) bersih kas",
+    "cash_opening": "Kas dan setara kas awal periode",
+    "cash_closing": "Kas dan setara kas akhir periode",
+    "difference": "Selisih",
+}
 
 
 class EfnFinancialReport(models.TransientModel):
@@ -63,6 +74,8 @@ class EfnFinancialReport(models.TransientModel):
             data = engine._efn_balance_sheet(companies, self.date_to, self.eliminate)
         elif self.report_type == "pl":
             data = engine._efn_profit_loss(companies, self.date_from, self.date_to, self.eliminate)
+        elif self.report_type == "cf":
+            data = engine._efn_cash_flow(companies, self.date_from, self.date_to, self.eliminate)
         else:
             data = engine._efn_trial_balance(companies, self.date_from, self.date_to, self.eliminate)
         data.update(
@@ -136,8 +149,9 @@ class EfnFinancialReport(models.TransientModel):
                 sheet.write(row, 1, f"Total {sec['label']}", bold)
                 sheet.write_number(row, 2, sec["total"], money_b)
                 row += 2
+            labels = CF_TOTAL_LABELS if data["report_type"] == "cf" else {}
             for key, value in data["totals"].items():
-                sheet.write(row, 1, key, bold)
+                sheet.write(row, 1, labels.get(key, key), bold)
                 sheet.write_number(row, 2, value, money_b)
                 row += 1
             if data.get("eliminations"):
