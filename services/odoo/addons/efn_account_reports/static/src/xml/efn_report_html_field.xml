@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="efn_account_reports.EfnReportHtmlField">
+        <div class="o_efn_report_html" t-on-click="onClick" t-out="html"/>
+    </t>
+</templates>

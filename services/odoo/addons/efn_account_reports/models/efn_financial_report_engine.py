@@ -154,7 +154,8 @@ class EfnFinancialReportEngine(models.AbstractModel):
     @api.model
     def _efn_balance_sheet(self, companies, date_to, eliminate=True):
         fy_start = self._efn_fy_start(companies[:1], date_to)
-        rows = self._efn_lines(companies, date(1900, 1, 1), date_to, eliminate)
+        rows = self._efn_lines(companies, date(1900, 1, 1), date_to, eliminate, with_account=True)
+        acc_ids = defaultdict(set)
         sections = OrderedDict(
             (key, {"label": label, "group": grp, "lines": defaultdict(float)})
             for key, (grp, label) in BS_SECTIONS.items()
@@ -166,7 +167,7 @@ class EfnFinancialReportEngine(models.AbstractModel):
             if acc_type in PL_TYPES:
                 prior_profit += -opening
                 current_profit += -(debit - credit)
-        for acc_type, code, name, _company, opening, debit, credit, elim in rows:
+        for acc_type, code, name, _company, opening, debit, credit, elim, account in rows:
             balance = opening + debit - credit
             if elim:
                 eliminations[(code, name)] += elim
@@ -174,12 +175,13 @@ class EfnFinancialReportEngine(models.AbstractModel):
                 continue
             sign = 1 if BS_SECTIONS[acc_type][0] == "asset" else -1
             sections[acc_type]["lines"][(code, name)] += sign * balance
+            acc_ids[(code, name)].add(account.id)
         sections["equity_unaffected"]["lines"][("", _("Laba (rugi) tahun-tahun lalu belum ditutup"))] += prior_profit
         totals = defaultdict(float)
         out = []
         for key, sec in sections.items():
             lines = [
-                {"code": c, "name": n, "amount": round(v, 2)}
+                {"code": c, "name": n, "amount": round(v, 2), "account_ids": sorted(acc_ids.get((c, n), ()))}
                 for (c, n), v in sorted(sec["lines"].items())
                 if round(v, 2)
             ]
@@ -203,23 +205,25 @@ class EfnFinancialReportEngine(models.AbstractModel):
 
     @api.model
     def _efn_profit_loss(self, companies, date_from, date_to, eliminate=True):
-        rows = self._efn_lines(companies, date_from, date_to, eliminate)
+        rows = self._efn_lines(companies, date_from, date_to, eliminate, with_account=True)
+        acc_ids = defaultdict(set)
         sections = OrderedDict(
             (key, {"label": label, "group": grp, "lines": defaultdict(float)})
             for key, (grp, label) in PL_SECTIONS.items()
         )
         eliminations = defaultdict(float)
-        for acc_type, code, name, _company, _opening, debit, credit, elim in rows:
+        for acc_type, code, name, _company, _opening, debit, credit, elim, account in rows:
             if acc_type not in PL_SECTIONS:
                 continue
             if elim:
                 eliminations[(code, name)] += elim
             sign = 1 if acc_type in ("income", "income_other") else -1
             sections[acc_type]["lines"][(code, name)] += sign * (credit - debit)
+            acc_ids[(code, name)].add(account.id)
         out, totals = [], defaultdict(float)
         for key, sec in sections.items():
             lines = [
-                {"code": c, "name": n, "amount": round(v, 2)}
+                {"code": c, "name": n, "amount": round(v, 2), "account_ids": sorted(acc_ids.get((c, n), ()))}
                 for (c, n), v in sorted(sec["lines"].items())
                 if round(v, 2)
             ]
@@ -247,11 +251,13 @@ class EfnFinancialReportEngine(models.AbstractModel):
 
     @api.model
     def _efn_trial_balance(self, companies, date_from, date_to, eliminate=True):
-        rows = self._efn_lines(companies, date_from, date_to, eliminate)
+        rows = self._efn_lines(companies, date_from, date_to, eliminate, with_account=True)
         merged = defaultdict(lambda: [0.0, 0.0, 0.0])
         types = {}
-        for acc_type, code, name, _company, opening, debit, credit, _elim in rows:
+        acc_ids = defaultdict(set)
+        for acc_type, code, name, _company, opening, debit, credit, _elim, account in rows:
             key = (code or "", name)
+            acc_ids[key].add(account.id)
             merged[key][0] += opening
             merged[key][1] += debit
             merged[key][2] += credit
@@ -270,6 +276,7 @@ class EfnFinancialReportEngine(models.AbstractModel):
                     "debit": round(debit, 2),
                     "credit": round(credit, 2),
                     "closing": round(closing, 2),
+                    "account_ids": sorted(acc_ids[(code, name)]),
                 }
             )
             for i, v in enumerate((opening, debit, credit, closing)):
@@ -327,6 +334,7 @@ class EfnFinancialReportEngine(models.AbstractModel):
         rows = self._efn_lines(companies, date_from, date_to, eliminate, with_account=True)
         cash_ids = self._efn_cash_equivalent_ids(companies)
         lines = {key: defaultdict(float) for key in CF_SECTIONS}
+        acc_ids = defaultdict(set)
         net_profit = depreciation = cash_opening = cash_move = 0.0
         for acc_type, code, name, _company, opening, debit, credit, _elim, account in rows:
             move = debit - credit
@@ -342,6 +350,7 @@ class EfnFinancialReportEngine(models.AbstractModel):
             category = self._efn_cf_category(account)
             if category and round(move, 2):
                 lines[category][(code, name)] -= move
+                acc_ids[(code, name)].add(account.id)
         out, totals = [], {}
         for key, label in CF_SECTIONS.items():
             sec_lines = []
@@ -356,7 +365,9 @@ class EfnFinancialReportEngine(models.AbstractModel):
                     {"code": "", "name": _("Penyusutan tercatat di aset tetap"), "amount": round(-depreciation, 2)}
                 )
             sec_lines += [
-                {"code": c, "name": n, "amount": round(v, 2)} for (c, n), v in sorted(lines[key].items()) if round(v, 2)
+                {"code": c, "name": n, "amount": round(v, 2), "account_ids": sorted(acc_ids.get((c, n), ()))}
+                for (c, n), v in sorted(lines[key].items())
+                if round(v, 2)
             ]
             total = round(sum(line["amount"] for line in sec_lines), 2)
             totals[key] = total

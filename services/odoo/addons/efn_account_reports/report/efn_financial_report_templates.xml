@@ -1,14 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
+    <!-- G35: kolom pembanding (d['compare']) + tautan drill-down (hanya layar: drill=True dari _compute_html). -->
+    <template id="efn_financial_report_amount">
+        <t t-if="drill and ids">
+            <a href="#" class="efn-drill" t-att-data-efn-accounts="','.join(str(i) for i in ids)" t-att-data-efn-period="period"
+               t-esc="fmt(v)"/>
+        </t>
+        <t t-else="" t-esc="fmt(v)"/>
+    </template>
+
     <template id="efn_financial_report_body">
         <div class="efn-fin-report">
             <h3 class="mb-0"><t t-esc="d['title']"/><t t-if="d['consolidated']"> (Konsolidasi)</t></h3>
             <div class="text-muted"><t t-esc="d['companies']"/></div>
+            <t t-set="cmp" t-value="d.get('compare')"/>
             <div class="text-muted mb-3">
                 <t t-if="d['report_type'] == 'bs'">Per <t t-esc="d['date_to']"/></t>
                 <t t-else=""><t t-esc="d['date_from']"/> s.d. <t t-esc="d['date_to']"/></t>
+                <t t-if="cmp"> — pembanding (<t t-esc="cmp['label']"/>):
+                    <t t-if="d['report_type'] == 'bs'">per <t t-esc="cmp['date_to']"/></t>
+                    <t t-else=""><t t-esc="cmp['date_from']"/> s.d. <t t-esc="cmp['date_to']"/></t>
+                </t>
             </div>
             <t t-set="fmt" t-value="lambda v: '{:,.0f}'.format(v).replace(',', '.')"/>
+            <t t-set="drill" t-value="drill or False"/>
+            <t t-set="tc" t-value="lambda k: (d.get('totals_cmp') or {}).get(k, 0)"/>
             <t t-if="d['report_type'] == 'tb'">
                 <table class="table table-sm o_main_table">
                     <thead><tr><th>Kode</th><th>Akun</th><th class="text-end">Saldo awal</th><th class="text-end">Debit</th>
@@ -17,7 +33,13 @@
                         <tr t-foreach="d['lines']" t-as="l">
                             <td t-esc="l['code']"/><td t-esc="l['name']"/>
                             <td class="text-end" t-esc="fmt(l['opening'])"/><td class="text-end" t-esc="fmt(l['debit'])"/>
-                            <td class="text-end" t-esc="fmt(l['credit'])"/><td class="text-end" t-esc="fmt(l['closing'])"/>
+                            <td class="text-end" t-esc="fmt(l['credit'])"/>
+                            <td class="text-end">
+                                <t t-call="efn_account_reports.efn_financial_report_amount">
+                                    <t t-set="v" t-value="l['closing']"/><t t-set="ids" t-value="l.get('account_ids')"/>
+                                    <t t-set="period" t-value="'current'"/>
+                                </t>
+                            </td>
                         </tr>
                         <tr class="fw-bold">
                             <td/><td>Total</td>
@@ -29,35 +51,58 @@
             </t>
             <t t-else="">
                 <table class="table table-sm o_main_table">
+                    <thead t-if="cmp">
+                        <tr><th/><th/><th class="text-end">Periode ini</th><th class="text-end">Pembanding</th>
+                            <th class="text-end">Selisih</th></tr>
+                    </thead>
                     <t t-foreach="d['sections']" t-as="s">
-                        <tr class="table-light fw-bold"><td colspan="2" t-esc="s['label']"/><td/></tr>
+                        <tr class="table-light fw-bold"><td colspan="2" t-esc="s['label']"/><td/>
+                            <t t-if="cmp"><td/><td/></t></tr>
                         <tr t-foreach="s['lines']" t-as="l">
-                            <td class="ps-4" t-esc="l['code']"/><td t-esc="l['name']"/><td class="text-end" t-esc="fmt(l['amount'])"/>
+                            <td class="ps-4" t-esc="l['code']"/><td t-esc="l['name']"/>
+                            <td class="text-end">
+                                <t t-call="efn_account_reports.efn_financial_report_amount">
+                                    <t t-set="v" t-value="l['amount']"/><t t-set="ids" t-value="l.get('account_ids')"/>
+                                    <t t-set="period" t-value="'current'"/>
+                                </t>
+                            </td>
+                            <t t-if="cmp">
+                                <td class="text-end">
+                                    <t t-call="efn_account_reports.efn_financial_report_amount">
+                                        <t t-set="v" t-value="l['amount_cmp']"/><t t-set="ids" t-value="l.get('account_ids')"/>
+                                        <t t-set="period" t-value="'compare'"/>
+                                    </t>
+                                </td>
+                                <td class="text-end" t-esc="fmt(l['delta'])"/>
+                            </t>
                         </tr>
-                        <tr class="fw-bold"><td/><td>Total <t t-esc="s['label']"/></td><td class="text-end" t-esc="fmt(s['total'])"/></tr>
+                        <tr class="fw-bold"><td/><td>Total <t t-esc="s['label']"/></td><td class="text-end" t-esc="fmt(s['total'])"/>
+                            <t t-if="cmp"><td class="text-end" t-esc="fmt(s['total_cmp'])"/>
+                                <td class="text-end" t-esc="fmt(s['total_delta'])"/></t></tr>
                     </t>
                 </table>
-                <table class="table table-sm w-50">
-                    <t t-if="d['report_type'] == 'bs'">
-                        <tr><td>Total aset</td><td class="text-end fw-bold" t-esc="fmt(d['totals'].get('asset', 0))"/></tr>
-                        <tr><td>Total liabilitas</td><td class="text-end" t-esc="fmt(d['totals'].get('liability', 0))"/></tr>
-                        <tr><td>Laba (rugi) tahun berjalan</td><td class="text-end" t-esc="fmt(d['totals']['current_profit'])"/></tr>
-                        <tr><td>Total ekuitas</td><td class="text-end" t-esc="fmt(d['totals']['equity_total'])"/></tr>
-                        <tr><td>Total liabilitas + ekuitas</td><td class="text-end fw-bold" t-esc="fmt(d['totals']['liability_equity'])"/></tr>
-                        <tr t-if="d['totals']['difference']" class="text-danger"><td>Selisih</td><td class="text-end" t-esc="fmt(d['totals']['difference'])"/></tr>
-                    </t>
-                    <t t-elif="d['report_type'] == 'cf'">
-                        <tr><td>Kenaikan (penurunan) bersih kas</td><td class="text-end fw-bold" t-esc="fmt(d['totals']['net_change'])"/></tr>
-                        <tr><td>Kas dan setara kas awal periode</td><td class="text-end" t-esc="fmt(d['totals']['cash_opening'])"/></tr>
-                        <tr><td>Kas dan setara kas akhir periode</td><td class="text-end fw-bold" t-esc="fmt(d['totals']['cash_closing'])"/></tr>
-                        <tr t-if="d['totals']['difference']" class="text-danger"><td>Selisih</td><td class="text-end" t-esc="fmt(d['totals']['difference'])"/></tr>
-                    </t>
-                    <t t-else="">
-                        <tr><td>Pendapatan</td><td class="text-end" t-esc="fmt(d['totals']['revenue'])"/></tr>
-                        <tr><td>Laba kotor</td><td class="text-end" t-esc="fmt(d['totals']['gross_profit'])"/></tr>
-                        <tr><td>Laba operasional</td><td class="text-end" t-esc="fmt(d['totals']['operating_profit'])"/></tr>
-                        <tr><td>Laba (rugi) bersih</td><td class="text-end fw-bold" t-esc="fmt(d['totals']['net_profit'])"/></tr>
-                    </t>
+                <t t-if="d['report_type'] == 'bs'">
+                    <t t-set="rows" t-value="[('Total aset', d['totals'].get('asset', 0), tc('asset'), True), ('Total liabilitas', d['totals'].get('liability', 0), tc('liability'), False), ('Laba (rugi) tahun berjalan', d['totals']['current_profit'], tc('current_profit'), False), ('Total ekuitas', d['totals']['equity_total'], tc('equity_total'), False), ('Total liabilitas + ekuitas', d['totals']['liability_equity'], tc('liability_equity'), True)]"/>
+                </t>
+                <t t-elif="d['report_type'] == 'cf'">
+                    <t t-set="rows" t-value="[('Kenaikan (penurunan) bersih kas', d['totals']['net_change'], tc('net_change'), True), ('Kas dan setara kas awal periode', d['totals']['cash_opening'], tc('cash_opening'), False), ('Kas dan setara kas akhir periode', d['totals']['cash_closing'], tc('cash_closing'), True)]"/>
+                </t>
+                <t t-else="">
+                    <t t-set="rows" t-value="[('Pendapatan', d['totals']['revenue'], tc('revenue'), False), ('Laba kotor', d['totals']['gross_profit'], tc('gross_profit'), False), ('Laba operasional', d['totals']['operating_profit'], tc('operating_profit'), False), ('Laba (rugi) bersih', d['totals']['net_profit'], tc('net_profit'), True)]"/>
+                </t>
+                <table class="table table-sm w-75">
+                    <tr t-foreach="rows" t-as="r">
+                        <td t-esc="r[0]"/>
+                        <td t-att-class="'text-end fw-bold' if r[3] else 'text-end'" t-esc="fmt(r[1])"/>
+                        <t t-if="cmp"><td class="text-end text-muted" t-esc="fmt(r[2])"/>
+                            <td class="text-end" t-esc="fmt(r[1] - r[2])"/></t>
+                    </tr>
+                    <tr t-if="d['report_type'] in ('bs', 'cf') and d['totals']['difference']" class="text-danger">
+                        <td>Selisih</td><td class="text-end" t-esc="fmt(d['totals']['difference'])"/>
+                    </tr>
+                    <tr t-if="cmp and d['report_type'] in ('bs', 'cf') and tc('difference')" class="text-danger">
+                        <td>Selisih (pembanding)</td><td/><td class="text-end" t-esc="fmt(tc('difference'))"/>
+                    </tr>
                 </table>
                 <t t-if="d.get('eliminations')">
                     <h5>Eliminasi antar-PT (saldo dikeluarkan dari konsolidasi)</h5>

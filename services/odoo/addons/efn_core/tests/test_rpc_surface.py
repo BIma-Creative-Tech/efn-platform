@@ -395,6 +395,10 @@ RPC_ALLOWLIST = {
         "action_pdf",
     ): "G28: _efn_check_access (grup akuntansi baca + PT dalam company_ids user) sebelum data dibaca sudo",
     ("efn.financial.report", "action_xlsx"): "G28: sama dengan action_pdf",
+    (
+        "efn.financial.report",
+        "action_drill",
+    ): "G35: _efn_check_access + akun wajib milik PT laporan; action account.move.line TANPA sudo (ACL user)",
     # W-15 (G29c): settlement poin antar-PT. Semua: _efn_check_finance (Accounting Manager + akses KEDUA PT).
     (
         "efn.loyalty.settlement",
