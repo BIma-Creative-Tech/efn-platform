@@ -81,6 +81,20 @@ class TestEfnFinancialReports(AccountTestInvoicingCommon):
         self.assertTrue(wiz.xlsx_file)
         self.assertIn("/web/content/", action["url"])
 
+    def test_form_view_has_no_python_only_builtins(self):
+        """Regresi: web client Odoo 19 tidak mengenal len() di atribut invisible -> OwlError saat menu dibuka."""
+        from lxml import etree
+
+        arch = self.env.ref("efn_account_reports.efn_financial_report_view_form").arch
+        for node in etree.fromstring(arch.encode()).iter():
+            for attr in ("invisible", "readonly", "required", "column_invisible"):
+                self.assertNotIn("len(", node.get(attr) or "", f"{node.get('name')}.{attr}")
+        Wiz = self.env["efn.financial.report"]
+        one = Wiz.create({"company_ids": [(6, 0, self.c1.ids)]})
+        two = Wiz.create({"company_ids": [(6, 0, (self.c1 | self.c2).ids)]})
+        self.assertFalse(one.is_consolidated)
+        self.assertTrue(two.is_consolidated)
+
     def _d(self):
         from datetime import date
 
