@@ -46,6 +46,12 @@
                         <tr><td>Total liabilitas + ekuitas</td><td class="text-end fw-bold" t-esc="fmt(d['totals']['liability_equity'])"/></tr>
                         <tr t-if="d['totals']['difference']" class="text-danger"><td>Selisih</td><td class="text-end" t-esc="fmt(d['totals']['difference'])"/></tr>
                     </t>
+                    <t t-elif="d['report_type'] == 'cf'">
+                        <tr><td>Kenaikan (penurunan) bersih kas</td><td class="text-end fw-bold" t-esc="fmt(d['totals']['net_change'])"/></tr>
+                        <tr><td>Kas dan setara kas awal periode</td><td class="text-end" t-esc="fmt(d['totals']['cash_opening'])"/></tr>
+                        <tr><td>Kas dan setara kas akhir periode</td><td class="text-end fw-bold" t-esc="fmt(d['totals']['cash_closing'])"/></tr>
+                        <tr t-if="d['totals']['difference']" class="text-danger"><td>Selisih</td><td class="text-end" t-esc="fmt(d['totals']['difference'])"/></tr>
+                    </t>
                     <t t-else="">
                         <tr><td>Pendapatan</td><td class="text-end" t-esc="fmt(d['totals']['revenue'])"/></tr>
                         <tr><td>Laba kotor</td><td class="text-end" t-esc="fmt(d['totals']['gross_profit'])"/></tr>
