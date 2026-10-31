@@ -10,6 +10,7 @@ import { PiiCipher } from '../common/pii/crypto';
 import { isMemberHash, maskMsisdn } from '../common/pii/pii';
 import { resolvePriceHunterSubject } from '../common/pii/price-hunter-subject';
 import { resolveOnlineOrderSubject } from './online-order-subject';
+import { resolveMgmRewardSubject } from './mgm-reward-subject';
 import { resolveTableBookingSubject } from './table-booking-subject';
 import { isUuid } from '../common/validation';
 import { WHATSAPP_SENDER, WhatsAppSender } from '../otp/whatsapp/whatsapp-sender';
@@ -26,6 +27,8 @@ export const NOTIFY_SOURCE_PUBLISHERS: Readonly<Record<string, readonly string[]
   loyalty_expiry: ['efn-bff'],
   // G23 §15.5: reservasi meja — hanya BFF (outbox event booking)
   table_booking: ['efn-bff'],
+  // G33 §20.11: reward MGM settle — hanya BFF (outbox job settle)
+  mgm_reward: ['efn-bff'],
 };
 
 /** Template yang boleh dipakai per sumber (template online tidak bisa dikirim dengan source price_hunter dan sebaliknya). */
@@ -34,6 +37,7 @@ export const SOURCE_TEMPLATES: Readonly<Record<string, readonly string[]>> = {
   online_order: ['online_order_ready', 'online_order_cancelled', 'online_order_refunded', 'online_transfer_rejected'],
   loyalty_expiry: ['loyalty_inactivity_notice'],
   table_booking: ['booking_confirmed', 'booking_cancelled'],
+  mgm_reward: ['mgm_reward_settled'],
 };
 
 /** Payload `notify.push` v2 (kontrak §4): tanpa nomor HP; penerima di-resolve dari baris sumber. */
@@ -157,6 +161,10 @@ export class NotifyPushConsumer implements OnApplicationBootstrap {
       } else if (msg.source === 'table_booking') {
         const ref = await resolveTableBookingSubject(q, this.cipher, this.config.memberHashPepper, msg.source_ref, msg.member_hash);
         if (!ref) return 'skipped';
+        to = ref;
+      } else if (msg.source === 'mgm_reward') {
+        const ref = await resolveMgmRewardSubject(q, this.cipher, this.config.memberHashPepper, msg.source_ref, msg.member_hash);
+        if (!ref) return 'skipped'; // referrer sudah dihapus (erasure)
         to = ref;
       } else {
         const subject = await resolvePriceHunterSubject(q, this.cipher, this.config.memberHashPepper, msg.source_ref, msg.member_hash);

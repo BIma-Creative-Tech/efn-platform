@@ -324,6 +324,52 @@ describe('MGM akrual → settle → clawback (§20.3–§20.5)', () => {
     expect((await ctx.engine.runOnce()).settled).toBe(0); // tidak dobel
   });
 
+  it('G33 §20.11: settle → notify.push tanpa parameter HANYA untuk referrer ber-consent marketing; sekali per reward', async () => {
+    const { ctx, l1, l2, l3, buyer } = await chain();
+    ctx.store.marketingConsent.add(l1.hash);
+    ctx.store.marketingConsent.add(l3.hash);
+    await ctx.sale(buyer, 'o-1', 1_000_000);
+    await ctx.deliver();
+    ctx.db.outbox.length = 0;
+    ctx.clock.ms += 9 * DAY;
+    expect((await ctx.engine.runOnce()).settled).toBe(3);
+    const notes = ctx.db.outbox.filter((m) => m.queue === 'notify.push');
+    const byId = new Map([...ctx.store.rewards.values()].map((r) => [r.id, r]));
+    expect(notes.map((m) => byId.get(String(m.payload.source_ref))?.level).sort()).toEqual([1, 3]); // L2 tanpa consent
+    for (const m of notes) {
+      const reward = byId.get(String(m.payload.source_ref))!;
+      expect(m.payload).toEqual({
+        schema_version: 2,
+        idempotency_key: `notify:mgm_reward:${reward.id}`,
+        member_hash: reward.referrer_hash,
+        source: 'mgm_reward',
+        source_ref: reward.id,
+        template: 'mgm_reward_settled',
+        params: {},
+      });
+      expect(m.messageId).toBe(`notify:mgm_reward:${reward.id}`);
+      expect(JSON.stringify(m.payload)).not.toMatch(/points|"level"|company|buyer/);
+    }
+    expect(notes.some((m) => m.payload.member_hash === l2.hash)).toBe(false);
+    await ctx.engine.runOnce();
+    expect(ctx.db.outbox.filter((m) => m.queue === 'notify.push')).toHaveLength(2); // tidak dobel
+  });
+
+  it('G33 §20.11: reward capped / dibatalkan retur tidak mengirim notifikasi', async () => {
+    const ctx = setup();
+    await ctx.publish({ cap_points_per_referrer_month: 1 });
+    const [ref, buyer] = [ctx.member(), ctx.member()];
+    ctx.store.marketingConsent.add(ref.hash);
+    await ctx.refer(ref, buyer);
+    ctx.clock.ms += 1000;
+    for (const o of ['a', 'b']) await ctx.sale(buyer, o, 1_000_000);
+    await ctx.deliver();
+    ctx.db.outbox.length = 0;
+    ctx.clock.ms += 9 * DAY;
+    expect(await ctx.engine.runOnce()).toMatchObject({ settled: 1, capped: 1 });
+    expect(ctx.db.outbox.filter((m) => m.queue === 'notify.push')).toHaveLength(1); // hanya yang settle (sebagian)
+  });
+
   it('cap bulanan per referrer per PT: sisa di-settle sebagian, berikutnya capped', async () => {
     const ctx = setup();
     await ctx.publish({ cap_points_per_referrer_month: 300 });

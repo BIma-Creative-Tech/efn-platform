@@ -23,6 +23,9 @@ export const NOTIFY_TEMPLATES: Readonly<Record<string, NotifyTemplate>> = {
   // G22 §14.D.4 + L-76: pengingat hangus T−30 — HANYA tanggal hangus (tanpa jumlah poin, nama, nominal, tautan).
   // Kategori diharapkan UTILITY (keputusan Meta, belum terverifikasi); teks final = Legal.
   loyalty_inactivity_notice: { waTemplate: 'efn_loyalty_inactivity_notice', params: ['expire_date'] },
+  // G33 §20.11: poin referral MGM masuk — TANPA jumlah poin/level/PT/identitas downline; hanya "buka aplikasi".
+  // Dikirim hanya dengan consent marketing. Teks final = Legal (Permendag 70/2019).
+  mgm_reward_settled: { waTemplate: 'efn_mgm_reward_settled', params: [] },
 };
 
 const MAX_PARAM_LENGTH = 100;
