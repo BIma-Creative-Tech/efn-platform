@@ -16,6 +16,8 @@
                             <field name="company_ids" widget="many2many_tags"/>
                             <field name="is_consolidated" invisible="1"/>
                             <field name="eliminate" invisible="not is_consolidated"/>
+                            <field name="use_adjustments" invisible="not is_consolidated"/>
+                            <field name="cf_method" widget="radio" options="{'horizontal': true}" invisible="report_type != 'cf'"/>
                         </group>
                         <group>
                             <field name="date_from" invisible="report_type == 'bs'"/>

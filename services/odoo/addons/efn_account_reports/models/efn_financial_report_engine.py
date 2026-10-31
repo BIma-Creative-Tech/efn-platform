@@ -13,6 +13,16 @@ Klasifikasi memakai ``account_type`` CE 19 (bukan kode akun), sehingga berlaku u
   ``asset_cash`` + akun *outstanding receipts/payments* jurnal bank/kas (CE 18+: pembayaran diposting ke akun itu
   sampai direkonsiliasi dengan mutasi bank) + akun transfer likuiditas PT. Kenaikan kas bersih direkonsiliasi ke
   perubahan saldo akun-akun tersebut (baris *Selisih*, harus 0).
+* Arus kas metode langsung (G36): setiap jurnal posted yang menyentuh kas & setara kas dalam periode dipecah per
+  baris lawan (non-kas); pengaruh kas baris lawan = -balance, sehingga jumlahnya per jurnal = mutasi kas jurnal itu
+  (rekonsiliasi eksak, tanpa alokasi proporsional). Lawan dikelompokkan: piutang + pendapatan = penerimaan dari
+  pelanggan; utang + HPP = pembayaran ke pemasok; beban = pembayaran beban; liabilitas lancar = pajak & liabilitas lain;
+  aset lancar/prepaid = uang muka & aset lancar lain; investasi/pendanaan per akun (tag CE tetap berlaku). Jurnal yang
+  hanya berisi akun kas (transfer antar-bank) tidak menghasilkan arus. Konsolidasi: baris lawan berpartner PT lain
+  dalam cakupan = arus antar-PT, dieliminasi (selisih yang tidak saling hapus tampil sebagai baris tersendiri).
+* Penyesuaian konsolidasi manual (G36, ``efn.consolidation.adjustment``): jurnal tingkat grup (tidak diposting ke PT)
+  yang disetujui 4-eyes; hanya dipakai di laporan konsolidasi bila semua PT penyesuaian ada dalam cakupan, dan
+  tidak boleh menyentuh akun kas & setara kas (arus kas tetap seimbang).
 * Konsolidasi (beberapa PT): baris akun digabung per (tipe, kode akun). **Eliminasi**: baris jurnal yang partner-nya
   = partner company lain DALAM cakupan laporan dianggap transaksi antar-PT dan dikeluarkan (piutang/utang dan
   penjualan/pembelian antar-PT). Daftar eliminasi ditampilkan terpisah agar bisa diaudit.
@@ -70,6 +80,30 @@ CF_TAGS = {
     "account.account_tag_investing": "investing",
     "account.account_tag_financing": "financing",
 }
+# Arus kas langsung: kelompok baris lawan operasi per account_type (G36).
+CF_DIRECT_OPERATING = OrderedDict(
+    [
+        ("customers", _("Penerimaan kas dari pelanggan")),
+        ("suppliers", _("Pembayaran kas ke pemasok")),
+        ("expenses", _("Pembayaran beban operasional")),
+        ("taxes", _("Pajak dan liabilitas lancar lain")),
+        ("current", _("Uang muka dan aset lancar lain")),
+        ("other", _("Arus kas operasi lainnya")),
+    ]
+)
+CF_DIRECT_TYPES = {
+    "asset_receivable": "customers",
+    "income": "customers",
+    "income_other": "customers",
+    "liability_payable": "suppliers",
+    "expense_direct_cost": "suppliers",
+    "expense": "expenses",
+    "expense_depreciation": "expenses",
+    "liability_current": "taxes",
+    "liability_credit_card": "taxes",
+    "asset_current": "current",
+    "asset_prepayments": "current",
+}
 CF_SECTIONS = OrderedDict(
     [
         ("operating", _("Arus kas dari aktivitas operasi")),
@@ -85,12 +119,13 @@ class EfnFinancialReportEngine(models.AbstractModel):
 
     # ------------------------------------------------------------------ query dasar
     @api.model
-    def _efn_lines(self, companies, date_from, date_to, eliminate=True, with_account=False):
+    def _efn_lines(self, companies, date_from, date_to, eliminate=True, with_account=False, adjust=False):
         """[(account_type, code, name, company_id, opening, debit, credit, eliminated)] per akun x company.
 
         ``opening`` = saldo sebelum ``date_from``; ``debit/credit`` = mutasi [date_from, date_to].
         Baris dengan partner = company lain dalam cakupan -> dihitung ke ``eliminated`` (bukan ke saldo) bila
         ``eliminate`` dan lebih dari satu company. ``with_account`` menambah record ``account.account`` di akhir tuple.
+        ``adjust`` (G36, hanya konsolidasi): baris penyesuaian konsolidasi posted ditambahkan sebagai baris tambahan.
         """
         self.env["account.move.line"].flush_model()
         self.env["account.account"].flush_model()
@@ -142,6 +177,12 @@ class EfnFinancialReportEngine(models.AbstractModel):
                 eliminated,
             )
             result.append(row + (account,) if with_account else row)
+        if adjust and len(companies) > 1:
+            Adj = self.env["efn.consolidation.adjustment.line"].sudo()
+            for account, company_id, opening, debit, credit in Adj._efn_report_rows(companies, date_from, date_to):
+                acc = account.with_company(company_id)
+                row = (acc.account_type, acc.code or "", acc.name, company_id, opening, debit, credit, 0.0)
+                result.append(row + (acc,) if with_account else row)
         return result
 
     @api.model
@@ -152,9 +193,9 @@ class EfnFinancialReportEngine(models.AbstractModel):
 
     # ------------------------------------------------------------------ laporan
     @api.model
-    def _efn_balance_sheet(self, companies, date_to, eliminate=True):
+    def _efn_balance_sheet(self, companies, date_to, eliminate=True, adjust=False):
         fy_start = self._efn_fy_start(companies[:1], date_to)
-        rows = self._efn_lines(companies, date(1900, 1, 1), date_to, eliminate, with_account=True)
+        rows = self._efn_lines(companies, date(1900, 1, 1), date_to, eliminate, with_account=True, adjust=adjust)
         acc_ids = defaultdict(set)
         sections = OrderedDict(
             (key, {"label": label, "group": grp, "lines": defaultdict(float)})
@@ -162,7 +203,7 @@ class EfnFinancialReportEngine(models.AbstractModel):
         )
         current_profit, prior_profit, eliminations = 0.0, 0.0, defaultdict(float)
         # Laba: pendapatan & beban; dipisah tahun berjalan vs sebelumnya.
-        pl_rows = self._efn_lines(companies, fy_start, date_to, eliminate)
+        pl_rows = self._efn_lines(companies, fy_start, date_to, eliminate, adjust=adjust)
         for acc_type, _code, _name, _company, opening, debit, credit, _elim in pl_rows:
             if acc_type in PL_TYPES:
                 prior_profit += -opening
@@ -204,8 +245,8 @@ class EfnFinancialReportEngine(models.AbstractModel):
         }
 
     @api.model
-    def _efn_profit_loss(self, companies, date_from, date_to, eliminate=True):
-        rows = self._efn_lines(companies, date_from, date_to, eliminate, with_account=True)
+    def _efn_profit_loss(self, companies, date_from, date_to, eliminate=True, adjust=False):
+        rows = self._efn_lines(companies, date_from, date_to, eliminate, with_account=True, adjust=adjust)
         acc_ids = defaultdict(set)
         sections = OrderedDict(
             (key, {"label": label, "group": grp, "lines": defaultdict(float)})
@@ -250,8 +291,8 @@ class EfnFinancialReportEngine(models.AbstractModel):
         }
 
     @api.model
-    def _efn_trial_balance(self, companies, date_from, date_to, eliminate=True):
-        rows = self._efn_lines(companies, date_from, date_to, eliminate, with_account=True)
+    def _efn_trial_balance(self, companies, date_from, date_to, eliminate=True, adjust=False):
+        rows = self._efn_lines(companies, date_from, date_to, eliminate, with_account=True, adjust=adjust)
         merged = defaultdict(lambda: [0.0, 0.0, 0.0])
         types = {}
         acc_ids = defaultdict(set)
@@ -292,6 +333,14 @@ class EfnFinancialReportEngine(models.AbstractModel):
         }
 
     @api.model
+    def _efn_cf_category_tag(self, account):
+        for xmlid, category in CF_TAGS.items():
+            tag = self.env.ref(xmlid, raise_if_not_found=False)
+            if tag and tag in account.tag_ids:
+                return category
+        return None
+
+    @api.model
     def _efn_cf_category(self, account):
         """Kategori arus kas akun neraca: tag CE (operating/investing/financing) mengalahkan default per tipe."""
         for xmlid, category in CF_TAGS.items():
@@ -323,7 +372,7 @@ class EfnFinancialReportEngine(models.AbstractModel):
         return set(accounts.filtered(lambda a: a.account_type in ("asset_cash", "asset_current")).ids)
 
     @api.model
-    def _efn_cash_flow(self, companies, date_from, date_to, eliminate=True):
+    def _efn_cash_flow(self, companies, date_from, date_to, eliminate=True, adjust=False):
         """Arus kas metode tidak langsung untuk periode [date_from, date_to].
 
         Pengaruh kas akun neraca non-kas = -(debit - credit) periode. Penyusutan (``expense_depreciation``) ditambahkan
@@ -331,7 +380,7 @@ class EfnFinancialReportEngine(models.AbstractModel):
         total tidak berubah. ``difference`` = (kas awal + kenaikan bersih) - kas akhir; 0 bila semua jurnal seimbang
         dan (konsolidasi) eliminasi simetris.
         """
-        rows = self._efn_lines(companies, date_from, date_to, eliminate, with_account=True)
+        rows = self._efn_lines(companies, date_from, date_to, eliminate, with_account=True, adjust=adjust)
         cash_ids = self._efn_cash_equivalent_ids(companies)
         lines = {key: defaultdict(float) for key in CF_SECTIONS}
         acc_ids = defaultdict(set)
@@ -384,3 +433,118 @@ class EfnFinancialReportEngine(models.AbstractModel):
             }
         )
         return {"sections": out, "totals": totals, "eliminations": []}
+
+    @api.model
+    def _efn_cash_account_ids(self, companies):
+        """Semua akun kas & setara kas PT: ``asset_cash`` + outstanding/transfer (lihat _efn_cash_equivalent_ids)."""
+        cash = (
+            self.env["account.account"]
+            .sudo()
+            .search([("account_type", "=", "asset_cash"), ("company_ids", "in", companies.ids)])
+        )
+        return set(cash.ids) | self._efn_cash_equivalent_ids(companies)
+
+    @api.model
+    def _efn_cash_flow_direct(self, companies, date_from, date_to, eliminate=True, adjust=False):
+        """Arus kas metode langsung (G36) untuk [date_from, date_to]. Lihat docstring modul.
+
+        ``adjust`` diterima demi antarmuka yang sama; penyesuaian konsolidasi tidak menyentuh kas (dicegah di model).
+        """
+        self.env["account.move.line"].flush_model()
+        cash_ids = tuple(self._efn_cash_account_ids(companies)) or (0,)
+        params = {"companies": tuple(companies.ids), "cash": cash_ids, "d0": date_from, "d1": date_to}
+        self.env.cr.execute(
+            """
+            SELECT COALESCE(SUM(CASE WHEN date < %(d0)s THEN balance END), 0),
+                   COALESCE(SUM(CASE WHEN date >= %(d0)s THEN balance END), 0)
+              FROM account_move_line
+             WHERE parent_state = 'posted' AND company_id IN %(companies)s AND account_id IN %(cash)s
+               AND date <= %(d1)s
+            """,
+            params,
+        )
+        cash_opening, cash_move = self.env.cr.fetchone()
+        self.env.cr.execute(
+            """
+            SELECT aml.account_id, aml.company_id, aml.balance, rp.commercial_partner_id
+              FROM account_move_line aml
+              LEFT JOIN res_partner rp ON rp.id = aml.partner_id
+             WHERE aml.parent_state = 'posted'
+               AND aml.company_id IN %(companies)s
+               AND aml.account_id NOT IN %(cash)s
+               AND aml.move_id IN (
+                    SELECT DISTINCT c.move_id FROM account_move_line c
+                     WHERE c.parent_state = 'posted' AND c.company_id IN %(companies)s
+                       AND c.account_id IN %(cash)s AND c.date BETWEEN %(d0)s AND %(d1)s)
+            """,
+            params,
+        )
+        elim = eliminate and len(companies) > 1
+        partner_of = {c.id: c.partner_id.id for c in companies}
+        group_partners = set(partner_of.values())
+        Account = self.env["account.account"].sudo()
+        operating = defaultdict(float)
+        per_account = {"investing": defaultdict(float), "financing": defaultdict(float)}
+        intercompany = 0.0
+        eliminated = defaultdict(float)
+        for account_id, company_id, balance, partner_id in self.env.cr.fetchall():
+            effect = -balance
+            account = Account.with_company(company_id).browse(account_id)
+            if elim and partner_id in group_partners and partner_id != partner_of[company_id]:
+                intercompany += effect
+                eliminated[(account.code or "", account.name)] += effect
+                continue
+            # Akun L/R selalu operasi (sama dengan metode tidak langsung: masuk laba bersih); tag CE hanya untuk akun
+            # neraca, sehingga total per aktivitas kedua metode identik.
+            tag_category = None if account.account_type in PL_TYPES else self._efn_cf_category_tag(account)
+            category = tag_category or CF_DEFAULT.get(account.account_type) or "operating"
+            if category == "operating":
+                group = CF_DIRECT_TYPES.get(account.account_type, "other") if not tag_category else "other"
+                operating[group] += effect
+            else:
+                per_account[category][(account.code or "", account.name)] += effect
+        out, totals = [], {}
+        for key, label in CF_SECTIONS.items():
+            if key == "operating":
+                sec_lines = [
+                    {"code": "", "name": CF_DIRECT_OPERATING[g], "amount": round(operating[g], 2)}
+                    for g in CF_DIRECT_OPERATING
+                    if round(operating[g], 2)
+                ]
+                if round(intercompany, 2):
+                    sec_lines.append(
+                        {
+                            "code": "",
+                            "name": _("Arus kas antar-PT belum saling hapus"),
+                            "amount": round(intercompany, 2),
+                        }
+                    )
+            else:
+                # Tanpa account_ids (tanpa drill): angka = hanya jurnal yang menyentuh kas, sedangkan drill akun
+                # menampilkan semua mutasi akun di periode (akan tampak tidak cocok).
+                sec_lines = [
+                    {"code": c, "name": n, "amount": round(v, 2)}
+                    for (c, n), v in sorted(per_account[key].items())
+                    if round(v, 2)
+                ]
+            total = round(sum(line["amount"] for line in sec_lines), 2)
+            totals[key] = total
+            if sec_lines:
+                out.append({"key": key, "label": label, "group": key, "lines": sec_lines, "total": total})
+        net_change = round(totals["operating"] + totals["investing"] + totals["financing"], 2)
+        cash_closing = round(cash_opening + cash_move, 2)
+        totals.update(
+            {
+                "net_change": net_change,
+                "cash_opening": round(cash_opening, 2),
+                "cash_closing": cash_closing,
+                "difference": round(cash_opening + net_change - cash_closing, 2),
+            }
+        )
+        return {
+            "sections": out,
+            "totals": totals,
+            "eliminations": [
+                {"code": c, "name": n, "amount": round(v, 2)} for (c, n), v in sorted(eliminated.items()) if round(v, 2)
+            ],
+        }

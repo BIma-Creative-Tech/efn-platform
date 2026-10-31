@@ -5,16 +5,19 @@
     # 1.0.1: form wizard tidak lagi memakai len() di atribut invisible (OwlError di web client).
     # 1.1.0: G34 laporan arus kas metode tidak langsung (per PT + konsolidasi).
     # 1.2.0: G35 kolom pembanding (periode sebelumnya / tahun lalu) + drill-down angka ke Journal Items.
-    "version": "19.0.1.2.0",
+    # 1.3.0: G36 arus kas metode langsung + penyesuaian konsolidasi manual (4-eyes).
+    "version": "19.0.1.3.0",
     "category": "EFN/Accounting",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",
     "website": "https://github.com/efn/efn-platform",
     # CE 19 tanpa account_reports (Enterprise). Referensi desain (dibaca, tidak disalin, ADR-031): OCA
     # account_financial_report / mis_builder (AGPL-3), Cybrosys dynamic_accounts_report (LGPL-3).
-    "depends": ["account", "efn_core"],
+    "depends": ["account", "mail", "efn_core"],
     "data": [
         "security/ir.model.access.csv",
+        "security/efn_account_reports_security.xml",
+        "views/efn_consolidation_adjustment_views.xml",
         "wizard/efn_financial_report_views.xml",
         "report/efn_financial_report_templates.xml",
     ],

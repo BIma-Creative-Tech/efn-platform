@@ -11,6 +11,18 @@ Accounting > Reporting > **Laporan Keuangan EFN**:
   aset tetap/tidak lancar = investasi; liabilitas jangka panjang & ekuitas = pendanaan. Akun bisa dipindah kategori
   dengan tag CE *Operating/Investing/Financing Activities*. Kas & setara kas = akun kas/bank + akun outstanding
   receipts/payments + akun transfer likuiditas; baris *Selisih* merah bila kenaikan kas tidak cocok dengan saldo kas.
+- **Arus Kas metode langsung** (G36, pilihan *Metode arus kas* di wizard): setiap jurnal yang menyentuh kas & setara
+  kas dipecah per baris lawan; operasi dikelompokkan menjadi penerimaan dari pelanggan, pembayaran ke pemasok,
+  pembayaran beban, pajak & liabilitas lancar lain, uang muka & aset lancar lain. Total per aktivitas sama dengan
+  metode tidak langsung (diuji per PT dan konsolidasi). Transfer antar-rekening bank tidak menghasilkan arus; arus kas
+  antar-PT dieliminasi di konsolidasi. Tanpa drill-down (angka hanya dari jurnal kas).
+- **Penyesuaian Konsolidasi EFN** (G36, menu Accounting > Reporting): jurnal tingkat grup (mis. laba belum
+  terealisasi di persediaan antar-PT, eliminasi investasi vs modal, reklasifikasi) yang TIDAK diposting ke buku PT.
+  Seimbang, minimal 2 PT & 2 baris, akun milik PT baris, tanpa akun kas & setara kas. Empat mata: Accounting
+  Manager lain dari pembuat/penyunting terakhir yang memposting; keduanya wajib punya akses ke SEMUA PT-nya. Posted
+  terkunci (hanya bisa dibatalkan). Laporan konsolidasi menyertakan penyesuaian posted bila semua PT-nya ada dalam
+  cakupan dan tanggalnya s.d. tanggal laporan (opsi *Penyesuaian konsolidasi*, default aktif); daftarnya tampil di
+  bawah laporan.
 - **Neraca Saldo**: saldo awal, debit, kredit, saldo akhir per akun.
 - **Pembanding** (G35) untuk Neraca/Laba Rugi/Arus Kas: *Periode sebelumnya* (bulan/kuartal utuh mundur sejumlah bulan
   yang sama, rentang bebas mundur sepanjang jumlah hari; Neraca = posisi akhir bulan lalu) atau *Tahun lalu*. Kolom
@@ -27,5 +39,4 @@ Klasifikasi memakai `account_type` CE 19 (berlaku untuk COA `l10n_id` semua PT),
 **Referensi desain:** OCA `account_financial_report`, `mis_builder`; Cybrosys `dynamic_accounts_report` (dibaca,
 tidak disalin; ADR-031).
 
-**Belum:** arus kas metode langsung, penyesuaian konsolidasi manual (mis.
-eliminasi investasi/ekuitas), format resmi auditor (Q-6).
+**Belum:** format resmi auditor (Q-6), kepentingan non-pengendali (NCI) otomatis.

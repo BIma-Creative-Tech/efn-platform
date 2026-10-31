@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_consolidation_adjustment_view_list" model="ir.ui.view">
+        <field name="name">efn.consolidation.adjustment.list</field>
+        <field name="model">efn.consolidation.adjustment</field>
+        <field name="arch" type="xml">
+            <list decoration-muted="state == 'cancelled'" decoration-info="state == 'draft'">
+                <field name="date"/>
+                <field name="name"/>
+                <field name="company_ids" widget="many2many_tags"/>
+                <field name="total_debit" sum="Total"/>
+                <field name="currency_id" column_invisible="1"/>
+                <field name="maker_id"/>
+                <field name="approved_by_id"/>
+                <field name="state" widget="badge"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_consolidation_adjustment_view_form" model="ir.ui.view">
+        <field name="name">efn.consolidation.adjustment.form</field>
+        <field name="model">efn.consolidation.adjustment</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_post" type="object" string="Posting" class="btn-primary" invisible="state != 'draft'"
+                            groups="account.group_account_manager"/>
+                    <button name="action_cancel" type="object" string="Batalkan" invisible="state != 'posted'"
+                            groups="account.group_account_manager" confirm="Batalkan penyesuaian konsolidasi ini?"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,posted"/>
+                </header>
+                <sheet>
+                    <div class="alert alert-info" role="status" invisible="state != 'draft'">
+                        Penyesuaian hanya berlaku di laporan konsolidasi (tidak diposting ke buku PT). Posting oleh
+                        Accounting Manager lain dari pembuat (empat mata). Akun kas &amp; setara kas tidak diizinkan.
+                    </div>
+                    <group>
+                        <group>
+                            <field name="name" readonly="state != 'draft'"/>
+                            <field name="date" readonly="state != 'draft'"/>
+                            <field name="company_ids" widget="many2many_tags" readonly="state != 'draft'"/>
+                        </group>
+                        <group>
+                            <field name="maker_id"/>
+                            <field name="approved_by_id"/>
+                            <field name="approved_at"/>
+                            <field name="currency_id" invisible="1"/>
+                            <field name="total_debit"/>
+                            <field name="total_credit"/>
+                        </group>
+                    </group>
+                    <field name="line_ids" readonly="state != 'draft'">
+                        <list editable="bottom">
+                            <field name="sequence" widget="handle"/>
+                            <field name="company_id" options="{'no_create': True}"/>
+                            <field name="account_id" options="{'no_create': True}"/>
+                            <field name="name"/>
+                            <field name="debit" sum="Debit"/>
+                            <field name="credit" sum="Kredit"/>
+                        </list>
+                    </field>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+    <record id="efn_consolidation_adjustment_action" model="ir.actions.act_window">
+        <field name="name">Penyesuaian Konsolidasi EFN</field>
+        <field name="res_model">efn.consolidation.adjustment</field>
+        <field name="view_mode">list,form</field>
+    </record>
+    <menuitem id="menu_efn_consolidation_adjustment" name="Penyesuaian Konsolidasi EFN"
+              parent="account.account_reports_management_menu" action="efn_consolidation_adjustment_action"
+              sequence="2" groups="account.group_account_readonly,account.group_account_manager"/>
+</odoo>
