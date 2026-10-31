@@ -14,7 +14,8 @@
                         <group>
                             <field name="report_type" widget="radio" options="{'horizontal': true}"/>
                             <field name="company_ids" widget="many2many_tags"/>
-                            <field name="eliminate" invisible="len(company_ids) &lt; 2"/>
+                            <field name="is_consolidated" invisible="1"/>
+                            <field name="eliminate" invisible="not is_consolidated"/>
                         </group>
                         <group>
                             <field name="date_from" invisible="report_type == 'bs'"/>

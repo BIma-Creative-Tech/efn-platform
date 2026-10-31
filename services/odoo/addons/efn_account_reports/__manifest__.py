@@ -2,7 +2,8 @@
     "name": "EFN Laporan Keuangan (Neraca, Laba Rugi, Neraca Saldo, Konsolidasi)",
     "summary": "G28 (W-16, Q-V3, BRD §5.1): laporan keuangan per PT dan konsolidasi grup dengan eliminasi antar-PT, "
     "dari jurnal posted Odoo CE; tampil di layar, PDF, dan XLSX.",
-    "version": "19.0.1.0.0",
+    # 1.0.1: form wizard tidak lagi memakai len() di atribut invisible (OwlError di web client).
+    "version": "19.0.1.0.1",
     "category": "EFN/Accounting",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",
