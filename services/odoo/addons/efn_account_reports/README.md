@@ -12,6 +12,12 @@ Accounting > Reporting > **Laporan Keuangan EFN**:
   dengan tag CE *Operating/Investing/Financing Activities*. Kas & setara kas = akun kas/bank + akun outstanding
   receipts/payments + akun transfer likuiditas; baris *Selisih* merah bila kenaikan kas tidak cocok dengan saldo kas.
 - **Neraca Saldo**: saldo awal, debit, kredit, saldo akhir per akun.
+- **Pembanding** (G35) untuk Neraca/Laba Rugi/Arus Kas: *Periode sebelumnya* (bulan/kuartal utuh mundur sejumlah bulan
+  yang sama, rentang bebas mundur sepanjang jumlah hari; Neraca = posisi akhir bulan lalu) atau *Tahun lalu*. Kolom
+  Periode ini / Pembanding / Selisih di layar, PDF, XLSX; baris yang hanya ada di pembanding tetap tampil.
+- **Drill-down** (G35, layar): klik angka akun membuka Journal Items posted di balik angka itu (akun, PT laporan,
+  periode atau periode pembanding). Server memeriksa akses laporan + akun milik PT laporan; daftar dibuka tanpa sudo
+  sehingga ACL/record rule akuntansi pengguna tetap berlaku.
 - Pilih **satu PT** = laporan per PT; **beberapa PT** = konsolidasi. *Eliminasi antar-PT*: baris jurnal yang partner-nya
   PT lain dalam cakupan dikeluarkan dan ditampilkan di daftar eliminasi (audit trail).
 - Tampil di layar, **PDF**, **XLSX**.
@@ -21,5 +27,5 @@ Klasifikasi memakai `account_type` CE 19 (berlaku untuk COA `l10n_id` semua PT),
 **Referensi desain:** OCA `account_financial_report`, `mis_builder`; Cybrosys `dynamic_accounts_report` (dibaca,
 tidak disalin; ADR-031).
 
-**Belum:** arus kas metode langsung, perbandingan periode, drill-down ke jurnal, penyesuaian konsolidasi manual (mis.
+**Belum:** arus kas metode langsung, penyesuaian konsolidasi manual (mis.
 eliminasi investasi/ekuitas), format resmi auditor (Q-6).

@@ -20,9 +20,10 @@
                         <group>
                             <field name="date_from" invisible="report_type == 'bs'"/>
                             <field name="date_to"/>
+                            <field name="compare" invisible="report_type == 'tb'"/>
                         </group>
                     </group>
-                    <field name="html" readonly="1" nolabel="1"/>
+                    <field name="html" readonly="1" nolabel="1" widget="efn_report_html"/>
                 </sheet>
             </form>
         </field>
