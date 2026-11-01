@@ -1,4 +1,4 @@
-# KONTRAK ANTAR-SERVICE (v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
+# KONTRAK ANTAR-SERVICE (v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -2252,4 +2252,81 @@ kartu orang lain di latar → tetap dianggap berpotensi data pribadi (PDP P6).
 - `check-encryption`: `ninerouter_api_key` hanya boleh di ocr-worker; ocr-worker di network `egress` **hanya** bila key
   itu di-mount dan `NINEROUTER_API_KEY_FILE=/run/secrets/ninerouter_api_key`.
 - Secret `ninerouter_api_key` (`secrets.list` `host:disabled`) diisi pemilik di host; tidak pernah di repo/log.
+
+## 23. Gelombang 38 — Text-to-SQL "Tanya Data" (K25-01, Q-48, ADR-038) (v16.1, 1 Nov 2026)
+Keputusan pemilik (1 Nov 2026, menjawab **Q-48**): pengguna = **staf internal di Odoo** (menu *Tanya Data*, grup
+`efn_data_ask.group_data_ask`, ditetapkan admin untuk Manager/Finance/Owner); setiap user **hanya data PT yang boleh
+ia akses**; cakupan = **data operasional** (penjualan POS, poin, Price Hunter, waste & yield CK) **tanpa GL/keuangan**;
+yang dikirim ke LLM **hanya skema + pertanyaan** — hasil angka **tidak pernah** dikirim ke LLM (jawaban = tabel + SQL,
+label "AI-generated", R-T06).
+
+### 23.1 Alur
+```
+Odoo (user, menu Tanya Data)  --HTTPS mTLS-less, X-EFN-Service-Key-->  text2sql:8443  POST /v1/ask
+   text2sql: prompt(skema efn_t2s + contoh + pertanyaan) -> LLM (9router /v1/messages | Ollama /api/generate)
+             -> extract_sql -> guard_sql (sqlglot, §R-S05) -> ClickHouse HTTPS 8443 user efn_text2sql
+                SETTINGS SQL_efn_cids / SQL_efn_codes / SQL_efn_sig  (row policy per PT, lapis 2)
+   <- {status, sql, columns, rows, ...}  -> disimpan di efn.data.ask (log per user) -> tabel HTML di Odoo
+```
+- Odoo menghitung cakupan: PT terpilih (`company_ids` di form, default = PT aktif di switcher) ⊆ `env.user.company_ids`
+  (PT di luar akses → `AccessError`);
+  dikirim `company_ids` (int) + `company_codes` (`efn_brand_code`). Pertanyaan ≤ 500 karakter.
+- Kill switch `TEXT2SQL_ENABLED` (default `false`, Odoo + service). Mati → Odoo `UserError` "Tanya Data belum aktif";
+  service → `503 {"status":"unavailable","code":"text2sql_disabled"}`.
+
+### 23.2 API `text2sql` (HTTPS 8443, sertifikat `tls_text2sql`, CA internal)
+`POST /v1/ask` — header `X-EFN-Service-Key` (secret `text2sql_api_key`, hanya Odoo + text2sql; `hmac.compare_digest`).
+Body (JSON, `additionalProperties:false`, ≤ 8 KiB):
+`{"question": str 3..500, "company_ids": [int>0] 1..32, "company_codes": [kode §12.1] 0..32, "request_id": str ≤64 [A-Za-z0-9_-]}`
+
+| Status | Body |
+|---|---|
+| 200 | `{"status":"ok","sql":str,"columns":[str],"rows":[[...]],"row_count":int,"truncated":bool,"engine":"ninerouter:<model>"\|"ollama:<model>","tables":[str]}` |
+| 200 | `{"status":"rejected","code":<guard code \| "llm_no_sql">}` — SQL model ditolak guard (tidak dieksekusi) |
+| 400 | `{"status":"invalid","code":"invalid_request"}` |
+| 401 | `{"status":"unauthorized"}` |
+| 503 | `{"status":"unavailable","code":"text2sql_disabled"\|"llm_unavailable"\|"clickhouse_unavailable"}` |
+
+- Nilai sel: angka → number (Decimal → float bila aman, selain itu string), tanggal → ISO string; maks 1000 baris.
+- Log service: `request_id`, kode hasil, durasi, engine, jumlah baris. **Tidak** di-log: pertanyaan, SQL, hasil.
+- `GET /healthz` → 200 `{"status":"ok"}` (tanpa auth; tidak menyentuh LLM/ClickHouse).
+
+### 23.3 Data mart khusus `efn_t2s` (ClickHouse, lapis kedua SEC-04)
+- Database `efn_t2s` berisi **view `SQL SECURITY DEFINER`** (definer `efn_t2s_definer`, `NOT IDENTIFIED HOST NONE`)
+  di atas view `efn_dwh`: `v_sales_daily` (← v_pos_sales_daily), `v_outlet_daily` (← v_pos_outlet_daily),
+  `v_loyalty_daily`, `v_waste_daily`, `v_mo_yield_daily`, `v_competitor_prices` (tanpa `report_id`/koordinat),
+  `v_price_hunter_quality`.
+  Kolom identitas (member/user hash, customer) tidak ada di view sumber.
+- Role `text2sql_reader`: `SELECT ON efn_t2s.*` saja; grant lama `efn_dwh.*` dicabut. Tanpa GL/audit.
+- **Row policy** `efn_t2s_scope` pada view ber-PT: `company_id ∈ SQL_efn_cids` (atau `company_code ∈ SQL_efn_codes`
+  untuk `v_loyalty_daily`) **dan** `SQL_efn_sig = hex(SHA256(scope_key|cids|codes))` — tanpa setting atau tanda tangan
+  salah = 0 baris / error (fail closed). `scope_key` = secret `text2sql_scope_key` (hex32; hanya clickhouse-init +
+  text2sql). Price Hunter (data kompetitor, bukan per PT) tanpa row policy.
+- Profil `text2sql_readonly` tetap (readonly=2, max 1000 baris, 15 s, kuota per jam).
+
+### 23.4 LLM (`TEXT2SQL_LLM_PROVIDER`, default `ollama`)
+| Nilai | Urutan | Network text2sql | Secret |
+|---|---|---|---|
+| `ollama` (default) | Ollama lokal (`TEXT2SQL_OLLAMA_MODEL`, mTLS ke ollama-tls, CN `text2sql`) | `internal`, `data` | — |
+| `ninerouter` / `ninerouter_ollama` | 9router `/v1/messages` (teks saja, `TEXT2SQL_NINEROUTER_MODEL`, default `cc/claude-haiku-4-5-20251001`) [→ Ollama] | + `egress` (overlay `docker-compose.llm-text2sql.yml`) | `ninerouter_api_key` |
+
+- Yang dikirim: prompt tetap + skema `efn_t2s` + contoh + **teks pertanyaan** (bisa memuat data pribadi yang diketik
+  staf → PDP P7, transfer lintas negara). Hasil query tidak pernah dikirim.
+- 9router wajib `TEXT2SQL_CROSS_BORDER_OK=true`; **production ditolak** deploy-validate sampai DPO (Q-T7, P7).
+- Allowlist host/klien sama dengan §22.2 (https 9router.bimacreative.tech:443, tanpa redirect/proxy env).
+
+### 23.5 Odoo `efn_data_ask`
+- Model `efn.data.ask` (log per user): `user_id`, `company_id`, `company_ids`, `question`, `state`
+  (draft/done/rejected/error), `sql`, `result_json`, `row_count`, `truncated`, `engine`, `error_code`, `asked_at`.
+  Record rule: user hanya melihat pertanyaannya sendiri; grup *Tanya Data: Auditor* membaca semua di PT-nya.
+- Tidak ada `sudo` untuk membaca data; Odoo tidak punya kredensial ClickHouse.
+- Env: `EFN_TEXT2SQL_URL` (default `https://text2sql:8443`), `EFN_TEXT2SQL_API_KEY_FILE`
+  (`/run/secrets/text2sql_api_key`), `TEXT2SQL_ENABLED`, CA `EFN_CA_FILE`; timeout 60 s.
+
+### 23.6 Gerbang konfigurasi
+- `deploy-validate`: `TEXT2SQL_ENABLED` boolean; `TEXT2SQL_LLM_PROVIDER` ∈ {ollama, ninerouter, ninerouter_ollama};
+  9router tanpa `TEXT2SQL_CROSS_BORDER_OK=true` ditolak; production + 9router ditolak (Q-T7).
+- `check-encryption`: `text2sql_api_key` hanya odoo + text2sql; `text2sql_scope_key` hanya clickhouse-init + text2sql;
+  `clickhouse_password_text2sql` hanya clickhouse-init + text2sql; `ninerouter_api_key` hanya ocr-worker + text2sql;
+  text2sql di `egress` hanya bila key 9router di-mount.
 

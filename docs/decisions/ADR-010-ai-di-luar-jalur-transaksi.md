@@ -33,7 +33,7 @@ Opsi A untuk transaksi; opsi C diperbolehkan sebagai fitur analitik non-kritis d
 R-T06 (Text-to-SQL salah), R-S05 (injection), R-L04 (transfer pricing harus konsisten — aturan, bukan AI), R-B09.
 
 ## Pertanyaan terbuka untuk klien
-- **Q-3** metode transfer pricing; **Q-35** produksi CK berbasis forecast atau pesanan; **Q-48** pengguna Text-to-SQL.
+- **Q-3** metode transfer pricing; **Q-35** produksi CK berbasis forecast atau pesanan; **Q-48** pengguna Text-to-SQL (**dijawab 1 Nov 2026**: staf internal di Odoo per PT, data operasional tanpa GL — ADR-038).
 
 ## Kapan ditinjau ulang
 Tidak dijadwalkan. Hanya bila ada regulasi/teknologi yang memungkinkan AI keputusan dapat diaudit setara aturan.
