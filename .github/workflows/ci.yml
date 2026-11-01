@@ -37,7 +37,7 @@ env:
     efn_online_order efn_setup_online efn_online_pos_sale efn_pos_refund_origin efn_online_pos_counter
     efn_setup_org efn_loyalty_accounting efn_l10n_id_coretax_rounding efn_role efn_region
     efn_setup_role efn_pos_bff_order efn_online_kds_bridge efn_online_transfer
-    efn_mgm_policy
+    efn_mgm_policy efn_data_ask
   EFN_INSTALL_ONLY_MODULES: efn_setup_security
 
 jobs:
@@ -632,7 +632,7 @@ jobs:
           # G21 AC-13: odoo_pii_* (secrets.list host:disabled) hanya di-mount docker-compose.pii.yml -> ikut juga.
           # G37: ninerouter_api_key hanya di-mount docker-compose.llm.yml (gateway LLM 9router) -> ikut juga.
           cfg=$(docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.payment.yml \
-            -f docker-compose.pii.yml -f docker-compose.llm.yml "${overlays[@]}" \
+            -f docker-compose.pii.yml -f docker-compose.llm.yml -f docker-compose.llm-text2sql.yml "${overlays[@]}" \
             --profile core --profile data --profile ai --profile observability --profile ops config --format json)
           defined=$(echo "$cfg" | jq -r '.secrets | keys[]' | sort)
           listed=$(awk '!/^[[:space:]]*#/ && NF {print $1}' ../../scripts/secrets.list | sort)

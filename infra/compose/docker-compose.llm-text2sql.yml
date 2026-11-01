@@ -1,0 +1,21 @@
+# G38 (K25-01, docs/04 §23.4, ADR-038): gateway LLM 9router untuk Text-to-SQL (primer), fallback Ollama lokal.
+# Hanya disertakan scripts/deploy.sh bila TEXT2SQL_LLM_PROVIDER = ninerouter|ninerouter_ollama. Tanpa overlay ini
+# text2sql TIDAK punya network egress maupun API key 9router (ADR-014).
+# Yang dikirim ke 9router: prompt tetap + skema efn_t2s + TEKS PERTANYAAN staf (bisa memuat data pribadi yang diketik,
+# PDP P7). Hasil query TIDAK pernah dikirim. Service menolak start tanpa TEXT2SQL_CROSS_BORDER_OK=true; production
+# ditolak deploy-validate sampai DPO memutuskan (Q-T7). Egress dibatasi di aplikasi (allowlist 9router.bimacreative.tech:443).
+services:
+  text2sql:
+    environment:
+      TEXT2SQL_LLM_PROVIDER: ${TEXT2SQL_LLM_PROVIDER:-ninerouter_ollama}
+      TEXT2SQL_CROSS_BORDER_OK: ${TEXT2SQL_CROSS_BORDER_OK:-false}
+      NINEROUTER_URL: https://9router.bimacreative.tech
+      NINEROUTER_API_KEY_FILE: /run/secrets/ninerouter_api_key
+      TEXT2SQL_NINEROUTER_MODEL: ${TEXT2SQL_NINEROUTER_MODEL:-cc/claude-haiku-4-5-20251001}
+      NINEROUTER_TIMEOUT_SECONDS: ${NINEROUTER_TIMEOUT_SECONDS:-45}
+    secrets:
+      - ninerouter_api_key
+    networks: [internal, data, egress]
+
+secrets:
+  ninerouter_api_key: { file: ../../secrets/ninerouter_api_key.txt }

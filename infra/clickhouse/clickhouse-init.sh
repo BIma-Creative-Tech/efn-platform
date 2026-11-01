@@ -223,5 +223,24 @@ SET DEFAULT ROLE text2sql_reader TO efn_text2sql;
 ALTER USER efn_text2sql SETTINGS PROFILE 'text2sql_readonly';
 EOF
 
+# G38 (docs/04 §23.3): row policy cakupan PT pada view efn_t2s. Service text2sql mengirim setting SQL_efn_cids
+# (company_id, dipisah koma), SQL_efn_codes (kode PT §12.1) dan SQL_efn_sig = hex(SHA256(kunci|cids|codes)); kunci =
+# secret text2sql_scope_key (hex). Tanpa setting / tanda tangan salah -> 0 baris atau error (fail closed). Kunci hanya
+# ada di policy (role text2sql_reader tidak bisa membaca system.row_policies) dan di service text2sql.
+SCOPE_KEY="$(cat /run/secrets/text2sql_scope_key)"
+case "$SCOPE_KEY" in
+  ''|*[!0-9a-f]*) echo "clickhouse-init: text2sql_scope_key harus hex huruf kecil" >&2; exit 1 ;;
+esac
+[ "${#SCOPE_KEY}" -ge 32 ] || { echo "clickhouse-init: text2sql_scope_key terlalu pendek" >&2; exit 1; }
+SIG="getSetting('SQL_efn_sig') = lower(hex(SHA256(concat('${SCOPE_KEY}', '|', getSetting('SQL_efn_cids'), '|', getSetting('SQL_efn_codes')))))"
+CIDS="has(arrayMap(x -> toUInt32OrZero(x), splitByChar(',', getSetting('SQL_efn_cids'))), company_id)"
+CODES="has(splitByChar(',', getSetting('SQL_efn_codes')), company_code)"
+for v in v_sales_daily v_outlet_daily v_waste_daily v_mo_yield_daily; do
+  echo "CREATE ROW POLICY OR REPLACE efn_t2s_scope ON efn_t2s.${v} USING ${CIDS} AND ${SIG} TO text2sql_reader;"
+done | $CH --multiquery
+echo "CREATE ROW POLICY OR REPLACE efn_t2s_scope ON efn_t2s.v_loyalty_daily USING ${CODES} AND ${SIG} TO text2sql_reader;" \
+  | $CH --multiquery
+unset SCOPE_KEY SIG
+
 rm -f "$CFG"
 echo "clickhouse-init: skema, user (efn_etl, efn_text2sql, efn_metabase) dan grant diterapkan"

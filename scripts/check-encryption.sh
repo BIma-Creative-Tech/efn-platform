@@ -251,8 +251,25 @@ check_compose() {
   # 6b) G37 (K25-01, docs/04 §22): API key 9router hanya ocr-worker, dengan NINEROUTER_API_KEY_FILE yang cocok; ocr-worker
   #     di network egress HANYA bila key 9router di-mount (overlay docker-compose.llm.yml), selain itu ADR-014 (no egress).
   jq -e '[.services | to_entries[] | select([.value.secrets[]? | (.source // .)] | index("ninerouter_api_key") != null)
-          | .key] - ["ocr-worker"] | length == 0' <<< "$json" > /dev/null \
-    || err "[$label] secret ninerouter_api_key di-mount ke service selain ocr-worker (least privilege, docs/04 §22)"
+          | .key] - ["ocr-worker", "text2sql"] | length == 0' <<< "$json" > /dev/null \
+    || err "[$label] secret ninerouter_api_key di-mount ke service selain ocr-worker/text2sql (least privilege, docs/04 §22/§23)"
+  # 6b2) G38 (docs/04 §23.6): secret Text-to-SQL least privilege; text2sql di egress HANYA bila key 9router di-mount
+  #      (overlay docker-compose.llm-text2sql.yml) dengan NINEROUTER_API_KEY_FILE yang cocok.
+  local t2s
+  for t2s in "text2sql_api_key:odoo,text2sql" "text2sql_scope_key:clickhouse-init,text2sql" \
+             "clickhouse_password_text2sql:clickhouse-init,text2sql" "tls_text2sql_key:text2sql"; do
+    jq -e --arg s "${t2s%%:*}" --arg ok "${t2s#*:}" '
+        [.services | to_entries[] | select([.value.secrets[]? | (.source // .)] | index($s) != null) | .key]
+        - ($ok | split(",")) | length == 0' <<< "$json" > /dev/null \
+      || err "[$label] secret ${t2s%%:*} di-mount ke service selain ${t2s#*:} (least privilege, docs/04 §23.6)"
+  done
+  jq -e '(.services["text2sql"] // null) as $w | $w == null
+         or (([$w.secrets[]? | (.source // .)] | index("ninerouter_api_key") != null) as $k
+             | (($w.networks // {}) | has("egress")) as $e
+             | (($k | not) and ($e | not))
+               or ($k and $e and (($w.environment // {}).NINEROUTER_API_KEY_FILE == "/run/secrets/ninerouter_api_key")))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] text2sql: egress tanpa ninerouter_api_key (ADR-014) atau NINEROUTER_API_KEY_FILE tidak cocok (docs/04 §23)"
   jq -e '(.services["ocr-worker"] // null) as $w | $w == null
          or (([$w.secrets[]? | (.source // .)] | index("ninerouter_api_key") != null) as $k
              | (($w.networks // {}) | has("egress")) as $e
@@ -415,6 +432,9 @@ case "$MODE" in
     check_compose prod-pii -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.pii.yml
     # G37 (K25-01): render prod + overlay gateway LLM 9router (ocr-worker egress + ninerouter_api_key)
     check_compose prod-llm -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml
+    # G38 (K25-01): render prod + overlay 9router Text-to-SQL (text2sql egress + ninerouter_api_key)
+    check_compose prod-llm-text2sql -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml \
+      -f docker-compose.llm-text2sql.yml
     check_files
     ;;
   *) echo "pemakaian: $0 [all|files]" >&2; exit 2 ;;

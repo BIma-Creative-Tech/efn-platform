@@ -132,6 +132,11 @@ secrets:
   minio_prometheus_access_key: { file: ../../secrets/minio_prometheus_access_key.txt }
   clickhouse_password_etl: { file: ../../secrets/clickhouse_password_etl.txt }
   clickhouse_password_text2sql: { file: ../../secrets/clickhouse_password_text2sql.txt }
+  # G38 (docs/04 §23): service key Odoo -> text2sql dan kunci tanda tangan cakupan PT (row policy efn_t2s)
+  text2sql_api_key: { file: ../../secrets/text2sql_api_key.txt }
+  text2sql_scope_key: { file: ../../secrets/text2sql_scope_key.txt }
+  tls_text2sql_crt: { file: ../../secrets/tls_text2sql_crt.txt }
+  tls_text2sql_key: { file: ../../secrets/tls_text2sql_key.txt }
   clickhouse_password_metabase: { file: ../../secrets/clickhouse_password_metabase.txt }
   # kunci aplikasi (docs/04 §2, §7.2)
   jwt_secret: { file: ../../secrets/jwt_secret.txt }
@@ -875,10 +880,14 @@ services:
       EFN_FNB_EVENT_HMAC_FILE: /run/secrets/odoo_fnb_event_hmac
       # G23 (docs/04 §15.5): tanda tangan outbox event reservasi meja -> BFF POST /v1/pos/booking/events (X-EFN-Signature)
       EFN_BOOKING_EVENT_HMAC_FILE: /run/secrets/odoo_booking_event_hmac
+      # G38 (docs/04 §23.5): Tanya Data -> service text2sql (HTTPS 8443, CA internal); kill switch default false
+      TEXT2SQL_ENABLED: ${TEXT2SQL_ENABLED:-false}
+      EFN_TEXT2SQL_URL: https://text2sql:8443
+      EFN_TEXT2SQL_API_KEY_FILE: /run/secrets/text2sql_api_key
     # Kunci PII Odoo (odoo_pii_*) TIDAK di base: overlay docker-compose.pii.yml (production, L-59) / dev compose.
     secrets:
       [pg_password_odoo, odoo_admin_password, odoo_bff_api_key, member_hash_pepper, efn_audit_sink_key, odoo_online_event_hmac,
-       loyalty_policy_signing_key, odoo_fnb_event_hmac, odoo_booking_event_hmac, efn_ca_crt]
+       loyalty_policy_signing_key, odoo_fnb_event_hmac, odoo_booking_event_hmac, text2sql_api_key, efn_ca_crt]
     volumes:
       - odoo-data:/var/lib/odoo
     networks: [internal, data]
@@ -1481,6 +1490,7 @@ services:
       - clickhouse_password_etl
       - clickhouse_password_text2sql
       - clickhouse_password_metabase
+      - text2sql_scope_key   # G38: kunci row policy cakupan PT efn_t2s (docs/04 §23.3)
       - efn_ca_crt
     volumes:
       - ../clickhouse/clickhouse-init.sh:/efn/clickhouse-init.sh:ro
@@ -1763,6 +1773,7 @@ services:
       # SEC-20: Ollama tanpa autentikasi sendiri -> hanya ocr-worker (+ probe handshake blackbox) yang boleh masuk.
       - --cacert=/run/secrets/efn_ca_crt
       - --allow-cn=ocr-worker
+      - --allow-cn=text2sql          # G38: Text-to-SQL (docs/04 §23.4)
       - --allow-cn=blackbox-exporter
       - --status=http://127.0.0.1:6065
       - --quiet=conns
@@ -1850,6 +1861,62 @@ services:
       start_period: 60s
     labels:
       service: ocr-worker
+
+  # G38 (docs/04 §23, K25-01, Q-48): Text-to-SQL "Tanya Data". Dipanggil Odoo (HTTPS 8443, X-EFN-Service-Key);
+  # LLM Ollama lokal (mTLS CN text2sql) atau 9router (overlay docker-compose.llm-text2sql.yml: egress + key);
+  # ClickHouse HTTPS 8443 user efn_text2sql (readonly=2, database efn_t2s, row policy per PT bertanda tangan).
+  # Kill switch TEXT2SQL_ENABLED (default false). Tanpa egress di base (ADR-014).
+  text2sql:
+    <<: *common
+    image: ${IMAGE_TEXT2SQL:-ghcr.io/efn/text2sql:dev}
+    build:
+      context: ../../services/text2sql
+    profiles: ["ai"]
+    depends_on:
+      clickhouse-init:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      TEXT2SQL_ENABLED: ${TEXT2SQL_ENABLED:-false}
+      TEXT2SQL_PORT: "8443"
+      TLS_CERT_FILE: /run/secrets/tls_text2sql_crt
+      TLS_KEY_FILE: /run/secrets/tls_text2sql_key
+      TEXT2SQL_API_KEY_FILE: /run/secrets/text2sql_api_key
+      TEXT2SQL_SCOPE_KEY_FILE: /run/secrets/text2sql_scope_key
+      CH_HOST: clickhouse
+      CH_PORT: "8443"
+      CH_SECURE: "true"
+      CH_CA_FILE: /run/secrets/efn_ca_crt
+      CH_USER: efn_text2sql
+      CH_PASSWORD_FILE: /run/secrets/clickhouse_password_text2sql
+      TEXT2SQL_LLM_PROVIDER: ollama
+      OLLAMA_URL: https://ollama:11434
+      OLLAMA_CA_FILE: /run/secrets/efn_ca_crt
+      OLLAMA_CLIENT_CERT_FILE: /run/secrets/tls_text2sql_crt
+      OLLAMA_CLIENT_KEY_FILE: /run/secrets/tls_text2sql_key
+      TEXT2SQL_OLLAMA_MODEL: ${TEXT2SQL_OLLAMA_MODEL:-qwen2.5-coder:7b}
+    secrets:
+      - text2sql_api_key
+      - text2sql_scope_key
+      - clickhouse_password_text2sql
+      - tls_text2sql_crt
+      - tls_text2sql_key
+      - efn_ca_crt
+    networks: [internal, data]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 512M }
+    healthcheck:
+      test: ["CMD", "python", "-m", "efn_text2sql.healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    labels:
+      service: text2sql
 
   # E12 (ADR-022) ditutup: /metrics worker dari network hanya untuk CN prometheus. Dua sidecar di namespace worker
   # (di-recreate bersama ocr-worker): server mTLS :9100 -> loopback :9102 -> client TLS -> worker 127.0.0.1:9101.
