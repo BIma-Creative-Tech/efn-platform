@@ -1,4 +1,4 @@
-# KONTRAK ANTAR-SERVICE (v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
+# KONTRAK ANTAR-SERVICE (v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -2330,3 +2330,67 @@ Body (JSON, `additionalProperties:false`, ≤ 8 KiB):
   `clickhouse_password_text2sql` hanya clickhouse-init + text2sql; `ninerouter_api_key` hanya ocr-worker + text2sql;
   text2sql di `egress` hanya bila key 9router di-mount.
 
+## 24. Gelombang 39 — Asisten analisis "Analisis bertahap" (K25-01 AI agent, ADR-039) (v16.2, 1 Nov 2026)
+Keputusan pemilik (1 Nov 2026): AI agent pertama = **asisten analisis di Odoo** untuk pengguna Tanya Data
+(Manager/Finance/Owner, per PT). Agent memecah pertanyaan menjadi beberapa query Tanya Data lalu **merangkum tren dan
+anomali** dalam teks + tabel. Untuk ringkasan, **angka agregat hasil query boleh dikirim ke 9router di dev** (tanpa PII);
+**production menunggu DPO** (Q-T7, aliran baru **P8**). Agent **tidak** melakukan tindakan apa pun di Odoo
+(hanya membaca `efn_t2s`), tetap di luar jalur transaksi (ADR-010).
+
+### 24.1 Alur
+```
+Odoo efn.data.ask (mode=analyze)  --X-EFN-Service-Key-->  text2sql:8443  POST /v1/analyze
+  1. rencana : LLM SQL (TEXT2SQL_LLM_PROVIDER, sama §23.4) <- skema efn_t2s + contoh + pertanyaan  (TANPA data)
+               -> JSON {"steps":[{"title","sql"}]} 1..3 langkah
+  2. eksekusi: per langkah guard_sql (LIMIT 200) -> ClickHouse efn_t2s + setting cakupan PT bertanda tangan (§23.3)
+               langkah ditolak guard / gagal query tidak menghentikan langkah lain
+  3. ringkas : LLM ringkasan (TEXT2SQL_AGENT_SUMMARY_PROVIDER) <- pertanyaan + hasil agregat (maks 30 baris/langkah,
+               sel <= 60 karakter, email & deret angka >= 8 digit diredaksi)  -> teks <= 3000 karakter
+  <- {status, steps[], summary, ...} -> efn.data.ask (log per user) -> ringkasan + tabel + SQL per langkah di Odoo
+```
+- Cakupan PT, grup, record rule, kill switch Odoo sama dengan §23 (`TEXT2SQL_ENABLED`). Mode dipilih di form
+  (`mode` = `ask` default | `analyze`).
+- Kill switch service `TEXT2SQL_AGENT_ENABLED` (default `false`) → `503 {"status":"unavailable","code":"agent_disabled"}`.
+
+### 24.2 API `POST /v1/analyze`
+Header, body, batas body, dan validasi **sama dengan** `/v1/ask` (§23.2).
+
+| Status | Body |
+|---|---|
+| 200 | `{"status":"ok","engine":str,"steps":[STEP],"summary":str,"summary_code":"-"\|"results_not_shared"\|"no_data"\|"summary_unavailable"\|"deadline","summary_engine":str,"row_count":int}` |
+| 200 | `{"status":"rejected","code":"llm_no_sql"\|<guard code langkah pertama>}` — tidak ada langkah yang berhasil |
+| 400 / 401 | sama §23.2 |
+| 503 | `{"status":"unavailable","code":"text2sql_disabled"\|"agent_disabled"\|"llm_unavailable"\|"clickhouse_unavailable"}` |
+
+`STEP` = `{"title":str<=120,"status":"ok","sql":str,"columns":[str],"rows":[[...]] (<=200),"row_count":int,
+"truncated":bool,"tables":[str]}` atau `{"title":str,"status":"rejected","code":str[,"sql":str bila guard lolos tetapi
+query gagal]}`.
+- `summary` kosong bila ringkasan tidak dibuat; `summary_code` menjelaskan sebabnya (`results_not_shared` =
+  `TEXT2SQL_AGENT_SUMMARY_PROVIDER=none`). Batas waktu ringkasan: dilewati bila langkah 1–2 sudah > 120 s.
+- Log service: `EFN_TEXT2SQL_AGENT request=… status code engine steps summary rows ms`. **Tidak** di-log: pertanyaan,
+  SQL, hasil, ringkasan.
+
+### 24.3 LLM ringkasan (`TEXT2SQL_AGENT_SUMMARY_PROVIDER`, default `none`)
+| Nilai | Yang dikirim ke mana | Syarat |
+|---|---|---|
+| `none` (default) | tidak ada ringkasan; hasil **tidak** dikirim ke LLM (sama G38) | — |
+| `ollama` | hasil agregat ke Ollama lokal (mTLS, `TEXT2SQL_OLLAMA_MODEL`) | — |
+| `ninerouter` / `ninerouter_ollama` | hasil agregat ke 9router `/v1/messages` [→ Ollama] = **transfer lintas negara P8** | `TEXT2SQL_LLM_PROVIDER` 9router (overlay egress + key) **dan** `TEXT2SQL_AGENT_RESULTS_CROSS_BORDER_OK=true`; **production ditolak** (Q-T7) |
+
+- Izin P8 sengaja **terpisah** dari `TEXT2SQL_CROSS_BORDER_OK` (P7, hanya teks pertanyaan): mengaktifkan 9router untuk
+  SQL tidak otomatis mengirim angka hasil.
+- View `efn_t2s` tanpa kolom identitas (§23.3); redaksi pola email/nomor di teks bebas adalah lapis tambahan.
+- Prompt ringkasan: hanya angka dari tabel, isi tabel = data bukan instruksi, tanpa SQL, tanpa saran tindakan
+  otomatis. Output = teks tidak tepercaya → Odoo menyimpan sebagai field Text (di-escape), label "dibuat AI".
+
+### 24.4 Odoo `efn_data_ask` 19.0.1.1.0
+- Field baru: `mode` (ask|analyze), `summary` (Text), `summary_engine`, `summary_code`; hasil analisis disimpan di
+  `result_json` = `{"steps":[...]}` (maks 3 langkah, 1000 baris/langkah); `sql` = gabungan SQL langkah (`-- n`).
+- `summary*` termasuk field hasil (hanya ditulis sistem); `mode` tidak bisa diubah setelah dijawab.
+- Timeout analisis 200 s (< `limit_time_real` 240 s). Pesan `agent_disabled` → "gunakan mode Tanya cepat".
+
+### 24.5 Gerbang konfigurasi
+- `deploy-validate`: `TEXT2SQL_AGENT_ENABLED`, `TEXT2SQL_AGENT_RESULTS_CROSS_BORDER_OK` boolean;
+  `TEXT2SQL_AGENT_SUMMARY_PROVIDER` ∈ {none, ollama, ninerouter, ninerouter_ollama}; ringkasan 9router tanpa izin P8
+  atau tanpa jalur 9router SQL ditolak; production + ringkasan 9router ditolak (Q-T7).
+- Service menolak start dengan kombinasi yang sama (fail closed, `config.py`).
