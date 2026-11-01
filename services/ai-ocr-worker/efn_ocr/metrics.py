@@ -26,6 +26,11 @@ DELIVERIES = Counter(
     ["action"],
 )
 VLM_CALLS = Counter("efn_ocr_vlm_calls", "Pemanggilan VLM Ollama per hasil (ok|unavailable|disabled).", ["outcome"])
+# G37 (K25-01): per penyedia gateway LLM (ninerouter|ollama) x hasil (ok|unavailable). Fallback terlihat dari
+# kenaikan ninerouter/unavailable + ollama/ok.
+LLM_PROVIDER_CALLS = Counter(
+    "efn_ocr_llm_provider_calls", "Pemanggilan penyedia VLM per penyedia dan hasil.", ["provider", "outcome"]
+)
 LATENCY = Histogram(
     "efn_ocr_processing_seconds",
     "Durasi pemrosesan satu laporan dari klaim sampai commit.",

@@ -201,7 +201,8 @@ class ReportProcessor:
             log.warning("VLM tidak tersedia (%s); laporan akan di-flag untuk review manual", exc)
             return None, "unavailable", Reason.VLM_UNAVAILABLE
         extraction = Extraction(
-            engine=self._vlm.name,
+            # G37: penyedia yang benar-benar menjawab (FallbackVlm menandai raw["engine"]), bukan rantai penyedia.
+            engine=str(result.raw.get("engine") or self._vlm.name),
             name_text=result.product_name,
             price_candidates=(result.price,) if result.price is not None else (),
             ocr_confidence=None,

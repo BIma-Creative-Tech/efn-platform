@@ -149,6 +149,13 @@ class Settings:
     ollama_num_predict: int = 128
     ollama_num_ctx: int = 2048
     ollama_keep_alive: str = "30m"
+    # G37 (K25-01, docs/04 §22): gateway LLM. ollama (default, tanpa egress) | ninerouter | ninerouter_ollama
+    # (primer 9router, fallback Ollama). 9router = transfer lintas negara (PDP P6): wajib OCR_LLM_CROSS_BORDER_OK=true.
+    llm_provider: str = "ollama"
+    ninerouter_url: str = "https://9router.bimacreative.tech"
+    ninerouter_api_key: str = field(default="", repr=False)
+    ninerouter_model: str = "cc/claude-haiku-4-5-20251001"
+    ninerouter_timeout_seconds: float = 45.0
     # Validasi & anti-fraud
     name_similarity_threshold: float = 75.0
     price_tolerance_pct: float = 2.0
@@ -218,6 +225,7 @@ class Settings:
                 raise TlsConfigError("OLLAMA_URL wajib https:// (sidecar TLS)")
 
         vlm_max_side, vlm_quality, num_predict, num_ctx = _vlm_limits(e, d)
+        llm_provider, ninerouter_url, ninerouter_key = _llm_gateway(e, d, vlm_enabled)
 
         metrics_pair = server_cert_pair(e, "METRICS_TLS_CERT_FILE", "METRICS_TLS_KEY_FILE")
         if metrics_pair is None and not allow_plain:
@@ -264,6 +272,11 @@ class Settings:
             ollama_num_predict=num_predict,
             ollama_num_ctx=num_ctx,
             ollama_keep_alive=_str(e, "OLLAMA_KEEP_ALIVE", d.ollama_keep_alive),
+            llm_provider=llm_provider,
+            ninerouter_url=ninerouter_url,
+            ninerouter_api_key=ninerouter_key,
+            ninerouter_model=_str(e, "NINEROUTER_VISION_MODEL", d.ninerouter_model),
+            ninerouter_timeout_seconds=_float(e, "NINEROUTER_TIMEOUT_SECONDS", d.ninerouter_timeout_seconds),
             name_similarity_threshold=_percent_score(
                 _float(e, "NAME_SIMILARITY_THRESHOLD", d.name_similarity_threshold),
             ),
@@ -280,6 +293,35 @@ class Settings:
             metrics_key_file=metrics_pair[1] if metrics_pair else None,
             metrics_client_ca_file=metrics_client_ca,
         )
+
+
+LLM_PROVIDERS = ("ollama", "ninerouter", "ninerouter_ollama")
+
+
+def _llm_gateway(e: Mapping[str, str], d: "Settings", vlm_enabled: bool) -> tuple[str, str, str]:
+    """Validasi gateway LLM G37 (fail-closed saat start).
+
+    * ``OCR_LLM_PROVIDER`` di :data:`LLM_PROVIDERS` (default ``ollama``).
+    * Penyedia 9router wajib ``OCR_LLM_CROSS_BORDER_OK=true`` (keputusan DPO transfer lintas negara, PDP P6) dan API key
+      di ``NINEROUTER_API_KEY_FILE`` (bukan kosong / ``disabled``); URL wajib host allowlist.
+    """
+    from efn_ocr.llm import validate_ninerouter_url  # noqa: PLC0415 - llm mengimpor vlm, bukan config
+
+    provider = _str(e, "OCR_LLM_PROVIDER", d.llm_provider).lower()
+    if provider not in LLM_PROVIDERS:
+        raise ValueError(f"OCR_LLM_PROVIDER harus salah satu {LLM_PROVIDERS}")
+    url = _str(e, "NINEROUTER_URL", d.ninerouter_url)
+    if not vlm_enabled or provider == "ollama":
+        return provider, url, ""
+    if not _bool(e, "OCR_LLM_CROSS_BORDER_OK", False):
+        raise ValueError(
+            "OCR_LLM_PROVIDER 9router mengirim foto ke luar negeri: wajib OCR_LLM_CROSS_BORDER_OK=true "
+            "(keputusan DPO, docs/compliance/PDP_TRANSFER_LINTAS_NEGARA.md P6)"
+        )
+    key = read_secret("NINEROUTER_API_KEY", e)
+    if not key or key == "disabled":
+        raise ValueError("NINEROUTER_API_KEY_FILE wajib berisi API key 9router (bukan kosong/disabled)")
+    return provider, validate_ninerouter_url(url), key
 
 
 def _vlm_limits(e: Mapping[str, str], d: "Settings") -> tuple[int, int, int, int]:

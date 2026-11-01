@@ -19,6 +19,7 @@ from pika.adapters.blocking_connection import BlockingChannel, BlockingConnectio
 
 from efn_ocr.config import Settings
 from efn_ocr.delivery import Settle, handle_delivery
+from efn_ocr.llm import build_vlm
 from efn_ocr.messages import QUEUE_OCR_REQUESTED
 from efn_ocr.ocr_engines import build_engine
 from efn_ocr.processor import ReportProcessor
@@ -26,7 +27,6 @@ from efn_ocr.publisher import PikaPublisher, TopologyMissingError, build_connect
 from efn_ocr.repository import PgRepository
 from efn_ocr.storage import MinioImageStore
 from efn_ocr.tls import client_ssl_context
-from efn_ocr.vlm import OllamaVlm
 
 log = logging.getLogger(__name__)
 RECONNECT_DELAY_SECONDS = 5.0
@@ -57,22 +57,7 @@ def build_processor(settings: Settings, publisher: PikaPublisher) -> ReportProce
         key_prefix=settings.minio_key_prefix,
         max_bytes=settings.max_image_bytes,
     )
-    vlm = None
-    if settings.vlm_enabled:
-        vlm = OllamaVlm(
-            settings.ollama_url,
-            settings.ollama_model,
-            settings.ollama_timeout_seconds,
-            ca_file=settings.ollama_ca_file,
-            client_cert=(
-                (settings.ollama_client_cert_file, settings.ollama_client_key_file)
-                if settings.ollama_client_cert_file and settings.ollama_client_key_file
-                else None
-            ),
-            num_predict=settings.ollama_num_predict,
-            num_ctx=settings.ollama_num_ctx,
-            keep_alive=settings.ollama_keep_alive,
-        )
+    vlm = build_vlm(settings)  # G37: gateway LLM (9router / Ollama / keduanya dengan fallback)
     ocr = build_engine(settings.ocr_engine, settings.tesseract_lang)
     return ReportProcessor(settings, repo, images, ocr, vlm, publisher)
 
