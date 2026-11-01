@@ -1,0 +1,3 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_data_ask_user,efn.data.ask.user,model_efn_data_ask,group_data_ask,1,1,1,0
+access_efn_data_ask_auditor,efn.data.ask.auditor,model_efn_data_ask,group_data_ask_auditor,1,1,1,0

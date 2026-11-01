@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_data_ask_view_form" model="ir.ui.view">
+        <field name="name">efn.data.ask.form</field>
+        <field name="model">efn.data.ask</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_ask" type="object" string="Tanya" class="btn-primary" invisible="state != 'draft'"/>
+                    <button name="action_new_question" type="object" string="Tanya lagi" invisible="state == 'draft'"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,done"/>
+                </header>
+                <sheet>
+                    <div class="alert alert-info" role="alert" invisible="state != 'draft'">
+                        Tulis pertanyaan tentang penjualan POS, transaksi outlet, poin loyalty, waste &amp; yield Central
+                        Kitchen, atau harga kompetitor (Price Hunter). Jangan menulis data pribadi (nama/nomor HP pelanggan).
+                        Laporan keuangan (GL) tidak tersedia di sini.
+                    </div>
+                    <group>
+                        <field name="question" placeholder="Contoh: 5 outlet dengan penjualan bersih tertinggi bulan ini" readonly="state != 'draft'"/>
+                        <!-- Pilihan PT = PT aktif di switcher (record rule res.company); dicek ulang di action_ask. -->
+                        <field name="company_ids" widget="many2many_tags" readonly="state != 'draft'"
+                               options="{'no_create': True}" groups="base.group_multi_company"/>
+                    </group>
+                    <div class="alert alert-warning" role="alert" invisible="state in ('draft', 'done')">
+                        <field name="message" readonly="1"/>
+                    </div>
+                    <div invisible="state != 'done'">
+                        <p class="text-muted"><field name="message" readonly="1"/></p>
+                        <field name="result_html" readonly="1" nolabel="1"/>
+                    </div>
+                    <group string="Detail (AI-generated)" invisible="state == 'draft'">
+                        <field name="engine"/>
+                        <field name="asked_at"/>
+                        <field name="sql" class="font-monospace"/>
+                        <field name="user_id" groups="efn_data_ask.group_data_ask_auditor"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="efn_data_ask_view_list" model="ir.ui.view">
+        <field name="name">efn.data.ask.list</field>
+        <field name="model">efn.data.ask</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="asked_at"/>
+                <field name="question"/>
+                <field name="state" widget="badge" decoration-success="state == 'done'" decoration-warning="state == 'rejected'" decoration-danger="state == 'error'"/>
+                <field name="row_count"/>
+                <field name="user_id" groups="efn_data_ask.group_data_ask_auditor" optional="show"/>
+                <field name="company_ids" widget="many2many_tags" groups="base.group_multi_company" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_data_ask_action" model="ir.actions.act_window">
+        <field name="name">Tanya Data</field>
+        <field name="res_model">efn.data.ask</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Tanyakan data operasional dalam bahasa Indonesia</p>
+            <p>Jawaban berupa tabel dan SQL yang dibuat AI dari gudang data, hanya untuk PT yang boleh Anda akses.</p>
+        </field>
+    </record>
+
+    <menuitem id="menu_efn_data_ask_root" name="Tanya Data" sequence="90" groups="group_data_ask"/>
+    <menuitem id="menu_efn_data_ask" name="Pertanyaan" parent="menu_efn_data_ask_root" action="efn_data_ask_action"
+              sequence="10"/>
+</odoo>
