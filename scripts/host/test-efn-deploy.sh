@@ -97,7 +97,7 @@ EOF
 }
 write_conf
 
-SVCS=(postgres odoo api-gateway superapp-web ai-ocr-worker etl minio metabase)
+SVCS=(postgres odoo api-gateway superapp-web ai-ocr-worker etl text2sql minio metabase)
 dg() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
 : > /etc/fake-cosign/signed
 for s in "${SVCS[@]}"; do echo "${PREFIX}${s}@sha256:$(dg "$s-1")" >> /etc/fake-cosign/signed; done
@@ -775,6 +775,15 @@ vc "270d G37 staging ninerouter_ollama + CROSS_BORDER_OK=true diterima" 0 stagin
 vc "270e G37 production ninerouter ditolak walau CROSS_BORDER_OK=true (Q-T7)" 1 production OCR_LLM_PROVIDER=ninerouter OCR_LLM_CROSS_BORDER_OK=true
 vc "270f G37 OCR_LLM_CROSS_BORDER_OK=ya ditolak (boolean)" 1 staging OCR_LLM_CROSS_BORDER_OK=ya
 vc "270g G37 NINEROUTER_VISION_MODEL berisi spasi ditolak" 1 staging NINEROUTER_VISION_MODEL="cc/x y"
+# G38 (docs/04 §23.6): Text-to-SQL; 9router = transfer lintas negara (PDP P7, Q-T7)
+vc "271a G38 TEXT2SQL default diterima" 0 production
+vc "271b G38 TEXT2SQL_ENABLED=true + ollama diterima di production" 0 production TEXT2SQL_ENABLED=true
+vc "271c G38 TEXT2SQL_ENABLED=ya ditolak (boolean)" 1 staging TEXT2SQL_ENABLED=ya
+vc "271d G38 TEXT2SQL_LLM_PROVIDER tidak dikenal ditolak" 1 staging TEXT2SQL_LLM_PROVIDER=openai
+vc "271e G38 9router tanpa TEXT2SQL_CROSS_BORDER_OK ditolak" 1 staging TEXT2SQL_LLM_PROVIDER=ninerouter_ollama
+vc "271f G38 staging 9router + CROSS_BORDER_OK=true diterima" 0 staging TEXT2SQL_LLM_PROVIDER=ninerouter TEXT2SQL_CROSS_BORDER_OK=true
+vc "271g G38 production 9router ditolak walau CROSS_BORDER_OK=true (Q-T7)" 1 production TEXT2SQL_LLM_PROVIDER=ninerouter_ollama TEXT2SQL_CROSS_BORDER_OK=true
+vc "271h G38 TEXT2SQL_OLLAMA_MODEL berisi spasi ditolak" 1 staging TEXT2SQL_OLLAMA_MODEL="qwen x"
 vc "269c G32 ETL_ENABLE_WASTE=true + ETL_ENABLE_ODOO=false ditolak" 1 staging ETL_ENABLE_WASTE=true ETL_ENABLE_ODOO=false
 vc "269d G32 production ETL_ENABLE_WASTE=true + ETL_ENABLE_ODOO kosong diterima (aktif setelah grant)" 0 production \
   ETL_ENABLE_WASTE=true

@@ -227,6 +227,11 @@ services:
       # @ ±19 tok/s) -> default worker 90 s mepet (ReadTimeout -> flagged/vlm_unavailable). Produksi (GPU) tetap 90 s.
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-240}
 
+  text2sql:
+    image: efn/text2sql:dev
+    environment:
+      APP_ENV: dev
+
   # Docker Desktop (WSL2): "/" bukan shared/slave mount -> propagasi rslave ditolak daemon. Target sama = mengganti
   # entri base (/:/host:ro,rslave). Produksi (Linux) tetap rslave.
   node-exporter:

@@ -167,7 +167,7 @@ jobs:
           # shellcheck disable=SC2153  # OWNER berasal dari env step, bukan salah ketik `owner`
           owner="${OWNER,,}"
           identity="https://github.com/${REPO}/.github/workflows/build-push.yml@${SIGNER_REF}"
-          for svc in postgres odoo api-gateway superapp-web ai-ocr-worker etl minio metabase; do
+          for svc in postgres odoo api-gateway superapp-web ai-ocr-worker etl text2sql minio metabase; do
             ref="ghcr.io/${owner}/${svc}:${TAG}"
             digest=$(cosign verify \
                 --certificate-identity "$identity" \
@@ -218,6 +218,7 @@ jobs:
           IMAGE_SUPERAPP_WEB: ${{ steps.digests.outputs.IMAGE_SUPERAPP_WEB }}
           IMAGE_AI_OCR_WORKER: ${{ steps.digests.outputs.IMAGE_AI_OCR_WORKER }}
           IMAGE_ETL: ${{ steps.digests.outputs.IMAGE_ETL }}
+          IMAGE_TEXT2SQL: ${{ steps.digests.outputs.IMAGE_TEXT2SQL }}
           IMAGE_MINIO: ${{ steps.digests.outputs.IMAGE_MINIO }}
           IMAGE_METABASE: ${{ steps.digests.outputs.IMAGE_METABASE }}
           # SEC-50: konfigurasi non-rahasia ikut DITANDATANGANI (manifest `config`); host menolaknya dari stdin.
@@ -258,6 +259,12 @@ jobs:
           CFG_OCR_LLM_PROVIDER: ${{ vars.OCR_LLM_PROVIDER || 'ollama' }}
           CFG_OCR_LLM_CROSS_BORDER_OK: ${{ vars.OCR_LLM_CROSS_BORDER_OK || 'false' }}
           CFG_NINEROUTER_VISION_MODEL: ${{ vars.NINEROUTER_VISION_MODEL }}
+          # G38 (docs/04 §23): Tanya Data (default mati); 9router = transfer lintas negara (ditolak di production, Q-T7)
+          CFG_TEXT2SQL_ENABLED: ${{ vars.TEXT2SQL_ENABLED || 'false' }}
+          CFG_TEXT2SQL_LLM_PROVIDER: ${{ vars.TEXT2SQL_LLM_PROVIDER || 'ollama' }}
+          CFG_TEXT2SQL_CROSS_BORDER_OK: ${{ vars.TEXT2SQL_CROSS_BORDER_OK || 'false' }}
+          CFG_TEXT2SQL_OLLAMA_MODEL: ${{ vars.TEXT2SQL_OLLAMA_MODEL }}
+          CFG_TEXT2SQL_NINEROUTER_MODEL: ${{ vars.TEXT2SQL_NINEROUTER_MODEL }}
           # K-7: endpoint migrasi BFF; hanya `true` sementara selama jendela migrasi (default false)
           CFG_MIGRATION_ENABLED: ${{ vars.MIGRATION_ENABLED || 'false' }}
           CFG_METABASE_ADMIN_EMAIL: ${{ vars.METABASE_ADMIN_EMAIL }}
@@ -394,10 +401,10 @@ jobs:
           jq -n --arg env "$APP_ENV" --arg ver "$ver" --argjson seq "$SEQ" --arg git "$GIT_SHA" --arg ref "$SIGNER_REF" \
              --arg root "$root_fp" --argjson extra "$extra_json" --argjson config "$config_json" \
              --arg pg "$IMAGE_POSTGRES" --arg odoo "$IMAGE_ODOO" --arg api "$IMAGE_API_GATEWAY" \
-             --arg web "$IMAGE_SUPERAPP_WEB" --arg ocr "$IMAGE_AI_OCR_WORKER" --arg etl "$IMAGE_ETL" --arg minio "$IMAGE_MINIO" --arg mb "$IMAGE_METABASE" \
+             --arg web "$IMAGE_SUPERAPP_WEB" --arg ocr "$IMAGE_AI_OCR_WORKER" --arg etl "$IMAGE_ETL" --arg t2s "$IMAGE_TEXT2SQL" --arg minio "$IMAGE_MINIO" --arg mb "$IMAGE_METABASE" \
              '{schema: 2, app_env: $env, version: $ver, seq: $seq, git_sha: $git, signer_ref: $ref,
                images: {IMAGE_POSTGRES: $pg, IMAGE_ODOO: $odoo, IMAGE_API_GATEWAY: $api, IMAGE_SUPERAPP_WEB: $web,
-                        IMAGE_AI_OCR_WORKER: $ocr, IMAGE_ETL: $etl, IMAGE_MINIO: $minio,
+                        IMAGE_AI_OCR_WORKER: $ocr, IMAGE_ETL: $etl, IMAGE_TEXT2SQL: $t2s, IMAGE_MINIO: $minio,
                         IMAGE_METABASE: $mb},
                pki: {root_sha256: $root, extra_trust_sha256: $extra}, config: $config}' > efn-release.json
           cat efn-release.json

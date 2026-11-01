@@ -220,6 +220,7 @@ Masih terbuka: markup TP & opini pajak (Finance), parameter QC nyata per komodit
 | **G35** | Laporan keuangan: kolom pembanding (periode sebelumnya / tahun lalu) + selisih untuk Neraca/L-R/Arus Kas, dan drill-down angka akun ke Journal Items (widget layar, cek akses di server) — `efn_account_reports` 19.0.1.2.0 | dibangun, terpasang di dev |
 | **G36** | Arus kas metode langsung (per jurnal kas, kelompok penerimaan/pembayaran, eliminasi antar-PT; total = metode tidak langsung) + penyesuaian konsolidasi manual `efn.consolidation.adjustment` (tingkat grup, 4-eyes, tanpa akun kas) — `efn_account_reports` 19.0.1.3.0 | dibangun, terpasang di dev |
 | **G37** | Gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037, docs/04 §22): `efn_ocr/llm.py`, overlay `docker-compose.llm.yml`, gerbang PDP (Q-T7) | dibangun, terpasang di dev |
+| **G38** | Text-to-SQL "Tanya Data" (K25-01, Q-48 dijawab, ADR-038, docs/04 §23): service `text2sql` (HTTPS, guard sqlglot, 9router/Ollama), mart `efn_t2s` (view DEFINER + row policy per PT bertanda tangan), modul Odoo `efn_data_ask` | dibangun |
 
 ---
 

@@ -1,6 +1,7 @@
 # Inventaris Data Pribadi / RoPA (UU PDP No. 27/2022) — EFN Platform
 
 - **Status:** Draf teknis — **keputusan retensi & DPO ditetapkan pemilik proyek 10 Okt 2026** (v7); dasar pemrosesan & nomor pasal tetap wajib diverifikasi **Legal (DPO sementara)**.
+  - **v13 (2026-11-01, Gelombang 38)**: §2.8.9 Text-to-SQL "Tanya Data" (log pertanyaan per user di Odoo, P7, tanpa PII di mart).
   - **v12 (2026-11-01, Gelombang 37)**: §2.8.8 OCR tahap 2 lewat gateway LLM 9router (transfer lintas negara P6, mati default, Q-T7).
   - **v11 (2026-10-31, Gelombang 33)**: §2.8.6 notifikasi reward MGM (consent marketing, tanpa parameter) + layar referral.
   - **v10 (2026-10-30, Gelombang 32)**: §2.8.7 mart waste & yield CK — bukan pemrosesan data pribadi baru (grant kolom tanpa partner/pelaku/dokumen/lot).
@@ -428,6 +429,12 @@ Kebijakan angka (Odoo `efn.mgm.policy`) tidak berisi data pribadi. Fitur default
 
 Catatan: foto bisa memuat data pribadi pihak ketiga di latar (wajah, kartu). Rekomendasi sebelum production: syarat
 Price Hunter meminta pengguna memotret label saja; DPIA ringkas untuk aliran P6.
+
+#### 2.8.9 (v13) Text-to-SQL "Tanya Data" — Gelombang 38 (docs/04 §23, ADR-038)
+| Data | Alur | Lokasi | Retensi | Kontrol |
+|---|---|---|---|---|
+| Pertanyaan staf + SQL + hasil (agregat operasional) | Odoo `efn.data.ask` → text2sql → LLM (pertanyaan saja) → ClickHouse `efn_t2s` → hasil kembali ke Odoo | Odoo DB (`efn_data_ask`), transit di text2sql (tidak di-log) | Mengikuti DB Odoo (**usulan**: hapus otomatis > 1 tahun, menunggu DPO) | Record rule pemilik/auditor PT; mart tanpa kolom identitas; hasil tidak dikirim ke LLM; staf diminta tidak menulis data pribadi; 9router = P7 (mati default, Q-T7) |
+| Kunci `text2sql_api_key`, `text2sql_scope_key` | secret → odoo+text2sql / clickhouse-init+text2sql | host `secrets/` | rotasi deploy | `check-encryption` least privilege |
 
 ## 3. Matriks retensi ringkas (default → ditetapkan DPO)
 | Data | Default | Mekanisme (pemilik) | Status |

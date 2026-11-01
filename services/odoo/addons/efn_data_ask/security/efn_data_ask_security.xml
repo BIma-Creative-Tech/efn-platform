@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="module_category_efn_data_ask" model="ir.module.category">
+        <field name="name">EFN Tanya Data</field>
+        <field name="sequence">93</field>
+    </record>
+
+    <record id="res_groups_privilege_efn_data_ask" model="res.groups.privilege">
+        <field name="name">EFN Tanya Data</field>
+        <field name="category_id" ref="module_category_efn_data_ask"/>
+    </record>
+
+    <!-- docs/04 §23 (Q-48): ditetapkan admin untuk Manager / Finance / Owner. Tidak di-imply grup lain. -->
+    <record id="group_data_ask" model="res.groups">
+        <field name="name">Tanya Data: Pengguna</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_data_ask"/>
+    </record>
+    <record id="group_data_ask_auditor" model="res.groups">
+        <field name="name">Tanya Data: Auditor (baca semua pertanyaan di PT-nya)</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_data_ask"/>
+        <field name="implied_ids" eval="[(4, ref('group_data_ask'))]"/>
+    </record>
+
+    <data noupdate="1">
+        <record id="efn_data_ask_rule_own" model="ir.rule">
+            <field name="name">EFN Tanya Data: hanya pertanyaan sendiri</field>
+            <field name="model_id" ref="model_efn_data_ask"/>
+            <field name="groups" eval="[(4, ref('group_data_ask'))]"/>
+            <field name="domain_force">[('user_id', '=', user.id)]</field>
+        </record>
+        <record id="efn_data_ask_rule_auditor" model="ir.rule">
+            <field name="name">EFN Tanya Data: auditor per PT</field>
+            <field name="model_id" ref="model_efn_data_ask"/>
+            <field name="groups" eval="[(4, ref('group_data_ask_auditor'))]"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+    </data>
+</odoo>

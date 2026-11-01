@@ -74,6 +74,7 @@ PKI_SERVICES=(
   "redis-exporter|server"
   "blackbox-exporter|both"
   "ocr-worker|both"
+  "text2sql|both"       # G38: server HTTPS 8443 (Odoo -> text2sql) + klien mTLS ke ollama-tls (docs/04 §23)
   "cadvisor|both"
   "docker-socket-proxy|server"
 )

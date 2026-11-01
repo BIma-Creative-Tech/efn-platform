@@ -1,14 +1,11 @@
 -- Akses read-only Text-to-SQL (R-S05, R-T06, SEC-04). Lapisan pertahanan KEDUA setelah guard sqlglot.
--- Kontrak: docs/04 §7.3 — user ClickHouse `efn_text2sql` (readonly=2, SELECT view whitelist).
--- SENGAJA tidak di init/: dijalankan saat deploy (idempoten) SETELAH devsecops membuat user dengan password dari
--- secret, mis.:  CREATE USER IF NOT EXISTS efn_text2sql IDENTIFIED WITH sha256_password BY '<secret>'
---                  HOST ANY;   (password tidak pernah ada di repo)
--- Jalankan: clickhouse-client --secure --multiquery < infra/clickhouse/access/text2sql-access.sql
--- Butuh user admin dengan access management (bukan user aplikasi). Service Text-to-SQL WAJIB login sebagai
--- efn_text2sql, tidak pernah sebagai admin/efn_etl.
+-- Kontrak: docs/04 §7.3 + §23.3 (G38) — user ClickHouse `efn_text2sql` (readonly=2) HANYA membaca database `efn_t2s`
+-- (view SQL SECURITY DEFINER). Dijalankan clickhouse-init.sh setiap deploy (idempoten) SETELAH user dibuat dengan
+-- password dari secret. Row policy cakupan PT (`efn_t2s_scope`) memuat kunci rahasia `text2sql_scope_key` -> dibuat
+-- clickhouse-init.sh, BUKAN di file ini. Butuh user admin dengan access management (bukan user aplikasi).
 
--- readonly=2: tidak bisa menulis/DDL/mengubah readonly, tetapi masih boleh SETTINGS per query (guard menambahkan
--- max_execution_time); batas atas dikunci dengan constraint MAX sehingga tidak bisa dinaikkan dari query.
+-- readonly=2: tidak bisa menulis/DDL/mengubah readonly, tetapi masih boleh SETTINGS per query (service mengirim
+-- max_execution_time + setting cakupan SQL_efn_*); batas atas dikunci constraint MAX sehingga tidak bisa dinaikkan.
 CREATE SETTINGS PROFILE IF NOT EXISTS text2sql_readonly SETTINGS
     readonly = 2 CONST,
     max_execution_time = 15 MAX 30,
@@ -22,23 +19,52 @@ CREATE SETTINGS PROFILE IF NOT EXISTS text2sql_readonly SETTINGS
 
 CREATE ROLE IF NOT EXISTS text2sql_reader;
 
--- Hanya view semantic layer (services/text2sql/semantic_layer.yaml).
-GRANT SELECT ON efn_dwh.v_competitor_prices TO text2sql_reader;
-GRANT SELECT ON efn_dwh.v_price_hunter_quality TO text2sql_reader;
-GRANT SELECT ON efn_dwh.v_loyalty_daily TO text2sql_reader;
-GRANT SELECT ON efn_dwh.v_sales_daily TO text2sql_reader;
+-- G38: semua grant lama di efn_dwh (view + kolom tabel dasar, pra-G38) DICABUT. Text-to-SQL hanya melihat efn_t2s.
+REVOKE ALL ON efn_dwh.* FROM text2sql_reader;
 
--- View biasa ClickHouse dieksekusi dengan hak INVOKER, sehingga kolom tabel dasar yang dipakai view juga perlu
--- di-GRANT. Hanya kolom NON-identitas: user_hash, member_hash, customer_id, order_ref, product_id TIDAK di-grant,
--- sehingga bypass guard (SEC-04) pun tidak bisa membaca identitas. Alternatif setelah diverifikasi di 24.8:
--- `CREATE VIEW ... SQL SECURITY DEFINER` lalu cabut grant kolom tabel dasar.
-GRANT SELECT(report_id, reported_at, product_name, product_sku, competitor_name, price, extracted_price,
-             ocr_confidence, geo_lat, geo_lng, status, reason, updated_at) ON efn_dwh.competitor_prices TO text2sql_reader;
--- BELUM DIVERIFIKASI: FINAL mungkin juga memerlukan hak atas kolom sorting key (member_hash). Bila query view
--- gagal ACCESS_DENIED, pilih SQL SECURITY DEFINER, BUKAN grant member_hash.
-GRANT SELECT(created_at, company_code, source, reason, delta_points, event_id) ON efn_dwh.loyalty_events TO text2sql_reader;
-GRANT SELECT(order_date, company_id, brand, store_id, category, qty, subtotal, tax_amount, cost_total,
-             line_id, write_date) ON efn_dwh.fact_sales_line TO text2sql_reader;
+-- Definer view efn_t2s: tidak bisa login (HOST NONE, tanpa password). View SQL SECURITY DEFINER dieksekusi dengan
+-- hak user ini (diverifikasi ClickHouse 24.8: role text2sql_reader tanpa grant efn_dwh tetap bisa membaca view).
+CREATE USER IF NOT EXISTS efn_t2s_definer NOT IDENTIFIED HOST NONE;
+GRANT SELECT ON efn_dwh.* TO efn_t2s_definer;
+
+CREATE DATABASE IF NOT EXISTS efn_t2s;
+
+-- Daftar view = services/text2sql/semantic_layer.yaml (sumber prompt + whitelist guard). Tanpa GL/audit (Q-48), tanpa
+-- kolom identitas (member/user hash, customer, report_id, koordinat Price Hunter).
+CREATE OR REPLACE VIEW efn_t2s.v_sales_daily DEFINER = efn_t2s_definer SQL SECURITY DEFINER AS
+SELECT day, company_id, company_name, brand, store_id, store_name, category, gross_sales, line_discount,
+       promo_discount, points_redeemed_idr, refunds, net_sales, tax, cogs, qty_sold, qty_returned, lines,
+       refund_goods, points_returned_idr
+FROM efn_dwh.v_pos_sales_daily;
+
+CREATE OR REPLACE VIEW efn_t2s.v_outlet_daily DEFINER = efn_t2s_definer SQL SECURITY DEFINER AS
+SELECT day, company_id, company_name, brand, store_id, store_name, orders, refund_orders, net_sales, gross_sales,
+       discounts, points_redeemed_idr, refunds, avg_basket, refund_goods, points_returned_idr
+FROM efn_dwh.v_pos_outlet_daily;
+
+CREATE OR REPLACE VIEW efn_t2s.v_loyalty_daily DEFINER = efn_t2s_definer SQL SECURITY DEFINER AS
+SELECT day, company_code, source, reason, points_issued, points_redeemed_or_reversed, events
+FROM efn_dwh.v_loyalty_daily;
+
+CREATE OR REPLACE VIEW efn_t2s.v_waste_daily DEFINER = efn_t2s_definer SQL SECURITY DEFINER AS
+SELECT day, company_id, brand, warehouse_id, warehouse_name, reason_id, reason_name, category, scraps, qty, waste_value
+FROM efn_dwh.v_waste_daily;
+
+CREATE OR REPLACE VIEW efn_t2s.v_mo_yield_daily DEFINER = efn_t2s_definer SQL SECURITY DEFINER AS
+SELECT day, company_id, brand, warehouse_id, warehouse_name, product_id, product_name, mos, planned_qty, produced_qty,
+       yield_pct, byproduct_qty, variance_value, mos_alert
+FROM efn_dwh.v_mo_yield_daily;
+
+-- Price Hunter = harga kompetitor (bukan data per PT) -> tanpa row policy. report_id & koordinat sengaja tidak ada.
+CREATE OR REPLACE VIEW efn_t2s.v_competitor_prices DEFINER = efn_t2s_definer SQL SECURITY DEFINER AS
+SELECT reported_at, product_name, product_sku, competitor_name, price, extracted_price, ocr_confidence
+FROM efn_dwh.v_competitor_prices;
+
+CREATE OR REPLACE VIEW efn_t2s.v_price_hunter_quality DEFINER = efn_t2s_definer SQL SECURITY DEFINER AS
+SELECT day, status, reason, reports
+FROM efn_dwh.v_price_hunter_quality;
+
+GRANT SELECT ON efn_t2s.* TO text2sql_reader;
 
 -- Kuota per user (DoS / biaya): dihitung per jam.
 CREATE QUOTA IF NOT EXISTS text2sql_quota KEYED BY user_name

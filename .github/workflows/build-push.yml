@@ -68,13 +68,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [odoo, api-gateway, superapp-web, ai-ocr-worker, etl, postgres, minio, metabase]
+        service: [odoo, api-gateway, superapp-web, ai-ocr-worker, etl, text2sql, postgres, minio, metabase]
         include:
           - { service: odoo, context: services/odoo }
           - { service: api-gateway, context: services/api-gateway }
           - { service: superapp-web, context: services/superapp-web }
           - { service: ai-ocr-worker, context: services/ai-ocr-worker }
           - { service: etl, context: services/etl }
+          - { service: text2sql, context: services/text2sql }   # G38 Text-to-SQL (docs/04 §23)
           - { service: postgres, context: infra/backup/postgres }
           - { service: minio, context: infra/minio }
           - { service: metabase, context: infra/metabase }
@@ -156,13 +157,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [odoo, api-gateway, superapp-web, ai-ocr-worker, etl, postgres, minio, metabase]
+        service: [odoo, api-gateway, superapp-web, ai-ocr-worker, etl, text2sql, postgres, minio, metabase]
         include:
           - { service: odoo, context: services/odoo }
           - { service: api-gateway, context: services/api-gateway }
           - { service: superapp-web, context: services/superapp-web }
           - { service: ai-ocr-worker, context: services/ai-ocr-worker }
           - { service: etl, context: services/etl }
+          - { service: text2sql, context: services/text2sql }   # G38 Text-to-SQL (docs/04 §23)
           # PostgreSQL + WAL-G (R-T08): image infra, ikut scan/SBOM/sign seperti image aplikasi
           - { service: postgres, context: infra/backup/postgres }
           # MinIO server + mc dari source upstream (image minio/minio & minio/mc hilang dari Docker Hub, gelombang 7)

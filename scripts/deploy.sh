@@ -18,7 +18,7 @@
 #     production menolak RABBITMQ_STRICT_PERMISSIONS=false / ETL_AUDIT_COPY_ENABLED=false tanpa izin deploy.conf.
 # Env wajib : TRAEFIK_DOMAIN ACME_EMAIL GHCR_USER GHCR_TOKEN APP_ENV PAYMENT_PROVIDER
 #             EFN_PUBLIC_BIND (IP host untuk 80/443 websecure)
-#             IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_MINIO IMAGE_METABASE
+#             IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_TEXT2SQL IMAGE_MINIO IMAGE_METABASE
 #               (= <registry>/<svc>@sha256:<digest>; SEC-10: deploy by digest). Lewat efn-deploy nilainya HANYA dari
 #               manifest rilis bertanda tangan + `cosign verify` di host (SEC-42); env CI tidak bisa mengisinya.
 #             Pin root CA: EFN_PKI_ROOT_SHA256 (dari efn-deploy, atau dibaca dari /etc/efn/deploy.conf saat manual)
@@ -26,6 +26,7 @@
 #             + satu env UPPERCASE per baris scripts/secrets.list yang BUKAN `pki`/`derived:*`/`host:*` (W-11)
 # Env opsional: WHATSAPP_ENABLED WHATSAPP_PHONE_NUMBER_ID WHATSAPP_OTP_TEMPLATE OLLAMA_VISION_MODEL
 #               OCR_LLM_PROVIDER OCR_LLM_CROSS_BORDER_OK NINEROUTER_VISION_MODEL (G37 gateway LLM, docs/04 §22)
+#               TEXT2SQL_ENABLED TEXT2SQL_LLM_PROVIDER TEXT2SQL_CROSS_BORDER_OK TEXT2SQL_*_MODEL (G38, docs/04 §23)
 #               COMPOSE_PROFILES (default core,data,ai,observability,ops; production wajib core,data,observability)
 #               EFN_WG_BIND (default 10.88.0.1; WAJIB IP di interface wg0) EFN_WG_HTTPS_PORT (default 443)
 #               EFN_WG_OUTLET_CIDR EFN_WG_STAFF_CIDR (di dalam 10.88.0.0/15, prefix >= /16)
@@ -85,7 +86,7 @@ fi
 [[ -z "${PKI_SOURCE:-}" || "${PKI_SOURCE}" == "intermediate" ]] \
   || die "PKI_SOURCE=${PKI_SOURCE} sudah dihapus (SEC-23); leaf selalu diterbitkan dari intermediate"
 DIGEST_RE='^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$'
-for v in IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_MINIO IMAGE_METABASE; do
+for v in IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_TEXT2SQL IMAGE_MINIO IMAGE_METABASE; do
   [[ "${!v:-}" =~ $DIGEST_RE ]] || die "$v harus <registry>/<image>@sha256:<64 hex> (dapat: '${!v:-}')"
 done
 [[ "$APP_ENV" =~ ^(production|staging)$ ]] || die "APP_ENV harus production|staging"
@@ -339,6 +340,7 @@ DOTENV=(
   "IMAGE_SUPERAPP_WEB=${IMAGE_SUPERAPP_WEB}"
   "IMAGE_AI_OCR_WORKER=${IMAGE_AI_OCR_WORKER}"
   "IMAGE_ETL=${IMAGE_ETL}"
+  "IMAGE_TEXT2SQL=${IMAGE_TEXT2SQL}"
   "IMAGE_MINIO=${IMAGE_MINIO}"
   "IMAGE_METABASE=${IMAGE_METABASE}"
   "APP_ENV=${APP_ENV}"
@@ -354,6 +356,11 @@ DOTENV=(
   "OCR_LLM_PROVIDER=${OCR_LLM_PROVIDER:-ollama}"
   "OCR_LLM_CROSS_BORDER_OK=${OCR_LLM_CROSS_BORDER_OK:-false}"
   "NINEROUTER_VISION_MODEL=${NINEROUTER_VISION_MODEL:-cc/claude-haiku-4-5-20251001}"
+  "TEXT2SQL_ENABLED=${TEXT2SQL_ENABLED:-false}"
+  "TEXT2SQL_LLM_PROVIDER=${TEXT2SQL_LLM_PROVIDER:-ollama}"
+  "TEXT2SQL_CROSS_BORDER_OK=${TEXT2SQL_CROSS_BORDER_OK:-false}"
+  "TEXT2SQL_OLLAMA_MODEL=${TEXT2SQL_OLLAMA_MODEL:-qwen2.5-coder:7b}"
+  "TEXT2SQL_NINEROUTER_MODEL=${TEXT2SQL_NINEROUTER_MODEL:-cc/claude-haiku-4-5-20251001}"
   "WHATSAPP_ENABLED=${WHATSAPP_ENABLED:-false}"
   "WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID:-}"
   "WHATSAPP_OTP_TEMPLATE=${WHATSAPP_OTP_TEMPLATE:-efn_otp}"
@@ -516,6 +523,15 @@ if [[ "${OCR_LLM_PROVIDER:-ollama}" != ollama ]]; then
   [[ -n "$k" && "$k" != disabled ]] || die "OCR_LLM_PROVIDER=${OCR_LLM_PROVIDER} tetapi secrets/ninerouter_api_key.txt kosong/disabled"
   unset k
   FILES+=(-f docker-compose.llm.yml)
+fi
+# G38 (docs/04 §23.4): egress + key 9router untuk text2sql hanya bila Text-to-SQL memakai 9router (deploy-validate menolak
+# tanpa TEXT2SQL_CROSS_BORDER_OK=true / di production).
+if [[ "${TEXT2SQL_LLM_PROVIDER:-ollama}" != ollama ]]; then
+  [[ -f docker-compose.llm-text2sql.yml ]] || die "TEXT2SQL_LLM_PROVIDER=${TEXT2SQL_LLM_PROVIDER} tetapi docker-compose.llm-text2sql.yml tidak ada di bundel"
+  k="$(tr -d '\r\n' < "${SECRETS_DIR}/ninerouter_api_key.txt" 2>/dev/null || true)"
+  [[ -n "$k" && "$k" != disabled ]] || die "TEXT2SQL_LLM_PROVIDER=${TEXT2SQL_LLM_PROVIDER} tetapi secrets/ninerouter_api_key.txt kosong/disabled"
+  unset k
+  FILES+=(-f docker-compose.llm-text2sql.yml)
 fi
 # G21 AC-13: kunci PII Odoo hanya di-mount (ke odoo saja) bila diaktifkan PO + kunci tervalidasi di langkah 1 (L-59)
 if [[ "${EFN_ODOO_PII_ENABLED:-false}" == true ]]; then

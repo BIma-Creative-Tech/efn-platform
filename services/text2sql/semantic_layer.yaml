@@ -1,75 +1,159 @@
-# Semantic layer Text-to-SQL (contoh, R-T06). Hanya VIEW yang boleh dibaca LLM; tabel dasar & kolom identitas
-# (user_hash, member_hash) sengaja tidak dicantumkan. View didefinisikan di infra/clickhouse/init/0*.sql.
-version: 1
-database: efn_dwh
+# Semantic layer Text-to-SQL (R-T06, docs/04 §23.3, G38). Hanya VIEW database `efn_t2s` (SQL SECURITY DEFINER,
+# row policy per PT) yang boleh dibaca LLM; definisi: infra/clickhouse/access/text2sql-access.sql (WAJIB sama).
+# Tanpa GL/keuangan & audit (keputusan pemilik Q-48, 1 Nov 2026) dan tanpa kolom identitas (member/user hash,
+# customer, report_id, koordinat). Yang dikirim ke LLM: deskripsi ini + contoh + pertanyaan (bukan hasil query).
+version: 2
+database: efn_t2s
 max_limit: 1000
 max_execution_time_seconds: 15
 
-# Tabel dasar efn_dwh yang TIDAK boleh dibaca LLM dan tidak boleh dipakai sebagai nama CTE (anti-shadowing, SEC-04).
-# WAJIB ditambah setiap kali tabel baru dibuat di efn_dwh (infra/clickhouse/init/*.sql).
+# Nama tabel dasar efn_dwh yang tidak boleh dipakai sebagai nama CTE (anti-shadowing, SEC-04). Database efn_t2s hanya
+# berisi view di bawah; nama lain (termasuk efn_dwh.*) ditolak guard dan ditolak hak ClickHouse.
 protected_tables: [competitor_prices, loyalty_events, fact_sales_line, etl_watermark, fact_gl_line, dim_gl_account,
-                   dim_company, audit_log_copy, audit_log_line_copy, audit_recon_run]
-# Sengaja BELUM ada di `tables`: v_gl_consolidated dan v_gl_ic_recon (G20) (tanpa PII, tetapi laporan keuangan lintas PT; Text-to-SQL belum punya
-# pembatasan per company -> butuh keputusan klien/Q-6) dan semua tabel audit (khusus auditor).
+                   dim_company, audit_log_copy, audit_log_line_copy, audit_recon_run, fact_pos_payment,
+                   fact_stock_snapshot, fact_orderpoint_snapshot, stock_snapshot_run, fact_scrap, fact_mo_yield,
+                   fact_mo_component, dim_product, dim_outlet, dim_warehouse, dim_scrap_reason, dim_ck_threshold]
 
 tables:
-  - name: v_competitor_prices
-    description: Harga kompetitor dari laporan Price Hunter yang tervalidasi (status valid).
-    columns:
-      - {name: report_id, type: UUID, description: ID laporan}
-      - {name: reported_at, type: "DateTime('Asia/Jakarta')", description: Waktu laporan dikirim (WIB)}
-      - {name: product_name, type: String, description: Nama produk seperti dilaporkan pelanggan}
-      - {name: product_sku, type: Nullable(String), description: SKU internal bila sudah dipetakan}
-      - {name: competitor_name, type: String, description: Nama toko kompetitor}
-      - {name: price, type: "Decimal(14,2)", description: Harga yang dilaporkan (Rupiah)}
-      - {name: extracted_price, type: "Nullable(Decimal(14,2))", description: Harga hasil OCR yang cocok}
-      - {name: ocr_confidence, type: Nullable(Float32), description: Confidence OCR tahap 1 (0..1)}
-      - {name: geo_lat, type: Nullable(Float64), description: Lintang dibulatkan 3 desimal}
-      - {name: geo_lng, type: Nullable(Float64), description: Bujur dibulatkan 3 desimal}
-
-  - name: v_price_hunter_quality
-    description: Jumlah laporan Price Hunter per hari, status, dan alasan (kualitas pipeline OCR).
+  - name: v_sales_daily
+    description: >-
+      Penjualan POS harian per PT, outlet, dan kategori produk (Rupiah, WIB). net_sales = penjualan bersih setelah
+      diskon & retur, tanpa pajak. Hanya PT yang boleh diakses penanya yang terlihat.
     columns:
       - {name: day, type: Date}
-      - {name: status, type: String, description: "valid | rejected | flagged"}
-      - {name: reason, type: String, description: "Alasan keputusan (mis. price_mismatch, vlm_unavailable)"}
-      - {name: reports, type: UInt64}
+      - {name: company_id, type: UInt32}
+      - {name: company_name, type: String}
+      - {name: brand, type: String, description: "Kode PT: GL=GrandLucky, PB=Paris Baguette, BCR/BCF=Bacha Coffee, WTZ=Wetzel's Pretzels, EFN=holding, FARM"}
+      - {name: store_id, type: UInt32}
+      - {name: store_name, type: String, description: Nama outlet/POS}
+      - {name: category, type: String, description: Kategori produk}
+      - {name: gross_sales, type: Decimal}
+      - {name: line_discount, type: Decimal}
+      - {name: promo_discount, type: Decimal}
+      - {name: points_redeemed_idr, type: Decimal, description: Nilai poin yang ditukar (Rupiah)}
+      - {name: refunds, type: Decimal}
+      - {name: net_sales, type: Decimal}
+      - {name: tax, type: Decimal}
+      - {name: cogs, type: Nullable(Decimal), description: HPP}
+      - {name: qty_sold, type: Decimal}
+      - {name: qty_returned, type: Decimal}
+      - {name: lines, type: UInt64}
+
+  - name: v_outlet_daily
+    description: >-
+      Ringkasan outlet POS per hari: jumlah transaksi (orders), penjualan bersih, rata-rata belanja (avg_basket).
+      Pakai view ini untuk jumlah transaksi/struk (jangan menjumlah lines dari v_sales_daily).
+    columns:
+      - {name: day, type: Date}
+      - {name: company_id, type: UInt32}
+      - {name: company_name, type: String}
+      - {name: brand, type: String}
+      - {name: store_id, type: UInt32}
+      - {name: store_name, type: String}
+      - {name: orders, type: UInt64}
+      - {name: refund_orders, type: UInt64}
+      - {name: net_sales, type: Decimal}
+      - {name: gross_sales, type: Decimal}
+      - {name: discounts, type: Decimal}
+      - {name: points_redeemed_idr, type: Decimal}
+      - {name: refunds, type: Decimal}
+      - {name: avg_basket, type: Nullable(Decimal)}
 
   - name: v_loyalty_daily
-    description: Ringkasan poin harian per PT penanggung, sumber, dan alasan (WIB).
+    description: Poin loyalty harian per PT penanggung (company_code), sumber, dan alasan (WIB).
     columns:
       - {name: day, type: Date}
-      - {name: company_code, type: String, description: "PT penanggung liabilitas poin: EFN | GL | PB | BCR | BCF | WTZ | FARM"}
-      - {name: source, type: String, description: "price_hunter | pos | mgm | ..."}
+      - {name: company_code, type: String, description: "Kode PT: EFN | GL | PB | BCR | BCF | WTZ | FARM"}
+      - {name: source, type: String, description: "pos | online | price_hunter | mgm | ..."}
       - {name: reason, type: String}
       - {name: points_issued, type: Int64}
       - {name: points_redeemed_or_reversed, type: Int64}
       - {name: events, type: UInt64}
 
-  - name: v_sales_daily
-    description: Penjualan harian per company, brand, toko, kategori (dari POS Odoo).
+  - name: v_waste_daily
+    description: Waste (scrap) harian per PT, gudang, alasan, dan kategori produk; waste_value dalam Rupiah.
     columns:
       - {name: day, type: Date}
       - {name: company_id, type: UInt32}
-      - {name: brand, type: String, description: "Kode PT (docs/04 §12.1, §16.1): EFN | GL | PB | BCR | BCF | WTZ | FARM; Bacha = BCR + BCF; WTZ = Wetzel's Pretzels"}
-      - {name: store_id, type: UInt32}
+      - {name: brand, type: String}
+      - {name: warehouse_id, type: UInt32}
+      - {name: warehouse_name, type: String}
+      - {name: reason_id, type: UInt32}
+      - {name: reason_name, type: String}
       - {name: category, type: String}
+      - {name: scraps, type: UInt64}
       - {name: qty, type: Decimal}
-      - {name: revenue, type: Decimal, description: Subtotal sebelum pajak}
-      - {name: tax, type: Decimal}
-      - {name: cogs, type: Decimal}
-      - {name: lines, type: UInt64}
+      - {name: waste_value, type: Decimal}
+
+  - name: v_mo_yield_daily
+    description: Yield produksi Central Kitchen (manufacturing order selesai) per hari, PT, gudang, dan produk jadi.
+    columns:
+      - {name: day, type: Date}
+      - {name: company_id, type: UInt32}
+      - {name: brand, type: String}
+      - {name: warehouse_id, type: UInt32}
+      - {name: warehouse_name, type: String}
+      - {name: product_id, type: UInt32}
+      - {name: product_name, type: String}
+      - {name: mos, type: UInt64, description: Jumlah MO}
+      - {name: planned_qty, type: Decimal}
+      - {name: produced_qty, type: Decimal}
+      - {name: yield_pct, type: Nullable(Decimal), description: produced/planned x 100}
+      - {name: byproduct_qty, type: Decimal}
+      - {name: variance_value, type: Decimal, description: Selisih nilai komponen (Rupiah)}
+      - {name: mos_alert, type: UInt64, description: Jumlah MO di bawah ambang yield}
+
+  - name: v_competitor_prices
+    description: Harga kompetitor dari laporan Price Hunter yang tervalidasi (bukan data per PT).
+    columns:
+      - {name: reported_at, type: "DateTime('Asia/Jakarta')"}
+      - {name: product_name, type: String, description: Nama produk seperti dilaporkan pelanggan}
+      - {name: product_sku, type: Nullable(String)}
+      - {name: competitor_name, type: String, description: Nama toko kompetitor}
+      - {name: price, type: "Decimal(14,2)", description: Harga (Rupiah)}
+      - {name: extracted_price, type: "Nullable(Decimal(14,2))"}
+      - {name: ocr_confidence, type: Nullable(Float32)}
+
+  - name: v_price_hunter_quality
+    description: Jumlah laporan Price Hunter per hari, status (valid | rejected | flagged), dan alasan.
+    columns:
+      - {name: day, type: Date}
+      - {name: status, type: String}
+      - {name: reason, type: String}
+      - {name: reports, type: UInt64}
 
 examples:
+  - question: Penjualan bersih per PT bulan ini
+    sql: |
+      SELECT brand, company_name, sum(net_sales) AS penjualan_bersih
+      FROM v_sales_daily
+      WHERE day >= toStartOfMonth(today())
+      GROUP BY brand, company_name
+      ORDER BY penjualan_bersih DESC
+  - question: 5 outlet dengan transaksi terbanyak minggu lalu
+    sql: |
+      SELECT store_name, sum(orders) AS transaksi, sum(net_sales) AS penjualan_bersih
+      FROM v_outlet_daily
+      WHERE day >= toMonday(today()) - 7 AND day < toMonday(today())
+      GROUP BY store_name
+      ORDER BY transaksi DESC
+      LIMIT 5
+  - question: Total waste per alasan 30 hari terakhir
+    sql: |
+      SELECT reason_name, sum(waste_value) AS nilai_waste, sum(scraps) AS kejadian
+      FROM v_waste_daily
+      WHERE day >= today() - 30
+      GROUP BY reason_name
+      ORDER BY nilai_waste DESC
   - question: Rata-rata harga Indomie Goreng per kompetitor bulan ini
     sql: |
-      SELECT competitor_name, avg(price) AS avg_price, count() AS reports
+      SELECT competitor_name, avg(price) AS harga_rata2, count() AS laporan
       FROM v_competitor_prices
       WHERE product_name ILIKE '%indomie goreng%' AND reported_at >= toStartOfMonth(now())
       GROUP BY competitor_name
-      ORDER BY avg_price
+      ORDER BY harga_rata2
   - question: Berapa persen laporan Price Hunter yang di-flag minggu lalu?
     sql: |
-      SELECT sumIf(reports, status = 'flagged') / sum(reports) AS flagged_ratio
+      SELECT sumIf(reports, status = 'flagged') / sum(reports) AS rasio_flagged
       FROM v_price_hunter_quality
       WHERE day >= today() - 7

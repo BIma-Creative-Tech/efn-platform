@@ -13,8 +13,9 @@ CONFIG = LAYER.guard_config()
 
 
 def test_config_from_semantic_layer() -> None:
-    assert "efn_dwh.v_competitor_prices" in CONFIG.allowed_tables
-    assert "efn_dwh.competitor_prices" not in CONFIG.allowed_tables
+    assert "efn_t2s.v_competitor_prices" in CONFIG.allowed_tables
+    assert "efn_t2s.competitor_prices" not in CONFIG.allowed_tables
+    assert not any(t.startswith("efn_dwh.") for t in CONFIG.allowed_tables)
     assert CONFIG.max_limit == 1000
 
 
@@ -25,7 +26,7 @@ def test_simple_select_is_wrapped_with_limit_and_settings() -> None:
     )
     assert result.sql.startswith("SELECT * FROM (")
     assert result.sql.endswith("LIMIT 1000 SETTINGS max_execution_time = 15")
-    assert result.tables == ("efn_dwh.v_competitor_prices",)
+    assert result.tables == ("efn_t2s.v_competitor_prices",)
 
 
 def test_requested_limit_is_capped() -> None:
@@ -35,13 +36,13 @@ def test_requested_limit_is_capped() -> None:
 
 
 def test_qualified_view_and_cte_and_union_allowed() -> None:
-    guard_sql("SELECT day, revenue FROM efn_dwh.v_sales_daily WHERE brand = 'PB'", CONFIG)
+    guard_sql("SELECT day, net_sales FROM efn_t2s.v_sales_daily WHERE brand = 'PB'", CONFIG)
     guard_sql("WITH t AS (SELECT * FROM v_competitor_prices) SELECT count() FROM t", CONFIG)
     result = guard_sql(
         "SELECT day FROM v_sales_daily UNION ALL SELECT day FROM v_loyalty_daily",
         CONFIG,
     )
-    assert set(result.tables) == {"efn_dwh.v_sales_daily", "efn_dwh.v_loyalty_daily"}
+    assert set(result.tables) == {"efn_t2s.v_sales_daily", "efn_t2s.v_loyalty_daily"}
 
 
 def test_comments_are_stripped_from_executed_sql() -> None:
@@ -86,6 +87,11 @@ NEGATIVE = [
     "SELECT * FROM competitor_prices",
     "SELECT * FROM efn_dwh.loyalty_events",
     "SELECT * FROM otherdb.v_sales_daily",
+    # G38: view lama efn_dwh (INVOKER, tanpa row policy per PT) tidak lagi boleh dibaca
+    "SELECT * FROM efn_dwh.v_sales_daily",
+    "SELECT * FROM efn_dwh.v_pos_sales_daily",
+    "SELECT * FROM efn_dwh.v_gl_consolidated",
+    "SELECT * FROM v_gl_consolidated",
     # union / join / subquery ke tabel terlarang
     "SELECT product_name FROM v_competitor_prices UNION ALL SELECT name FROM system.tables",
     "SELECT * FROM v_competitor_prices AS a JOIN efn_dwh.competitor_prices AS b ON a.report_id = b.report_id",
@@ -227,7 +233,7 @@ def test_protected_tables_loaded_from_semantic_layer() -> None:
 
 
 def test_custom_whitelist() -> None:
-    config = GuardConfig(allowed_tables=frozenset({"efn_dwh.only_this"}))
+    config = GuardConfig(allowed_tables=frozenset({"efn_dwh.only_this"}), default_database="efn_dwh")
     guard_sql("SELECT * FROM only_this", config)
     with pytest.raises(SqlGuardError):
         guard_sql("SELECT * FROM v_sales_daily", config)
