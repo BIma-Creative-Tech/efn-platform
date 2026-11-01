@@ -25,6 +25,7 @@
 #             EFN_PKI_INTERMEDIATE_KEY EFN_PKI_INTERMEDIATE_CRT EFN_PKI_ROOT_CRT (PKI 3 tingkat, ADR-022 W1)
 #             + satu env UPPERCASE per baris scripts/secrets.list yang BUKAN `pki`/`derived:*`/`host:*` (W-11)
 # Env opsional: WHATSAPP_ENABLED WHATSAPP_PHONE_NUMBER_ID WHATSAPP_OTP_TEMPLATE OLLAMA_VISION_MODEL
+#               OCR_LLM_PROVIDER OCR_LLM_CROSS_BORDER_OK NINEROUTER_VISION_MODEL (G37 gateway LLM, docs/04 §22)
 #               COMPOSE_PROFILES (default core,data,ai,observability,ops; production wajib core,data,observability)
 #               EFN_WG_BIND (default 10.88.0.1; WAJIB IP di interface wg0) EFN_WG_HTTPS_PORT (default 443)
 #               EFN_WG_OUTLET_CIDR EFN_WG_STAFF_CIDR (di dalam 10.88.0.0/15, prefix >= /16)
@@ -350,6 +351,9 @@ DOTENV=(
   "CLICKHOUSE_USER=efn"
   "GRAFANA_ADMIN_USER=admin"
   "OLLAMA_VISION_MODEL=${OLLAMA_VISION_MODEL:-qwen2.5vl:7b}"
+  "OCR_LLM_PROVIDER=${OCR_LLM_PROVIDER:-ollama}"
+  "OCR_LLM_CROSS_BORDER_OK=${OCR_LLM_CROSS_BORDER_OK:-false}"
+  "NINEROUTER_VISION_MODEL=${NINEROUTER_VISION_MODEL:-cc/claude-haiku-4-5-20251001}"
   "WHATSAPP_ENABLED=${WHATSAPP_ENABLED:-false}"
   "WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID:-}"
   "WHATSAPP_OTP_TEMPLATE=${WHATSAPP_OTP_TEMPLATE:-efn_otp}"
@@ -504,6 +508,15 @@ cd "$COMPOSE_DIR"
 FILES=(-f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.host.yml)
 # Kunci API payment hanya di-mount bila provider nyata (docs/04 §8.3); mock/disabled tidak me-mount kunci
 if [[ "$PAYMENT_PROVIDER" =~ ^(xendit|midtrans)$ ]]; then FILES+=(-f docker-compose.payment.yml); fi
+# G37 (K25-01): network egress + API key 9router untuk ocr-worker hanya bila gateway 9router dipilih (deploy-validate
+# sudah menolak tanpa OCR_LLM_CROSS_BORDER_OK=true / di production). Key placeholder = gagal (bukan diam-diam Ollama).
+if [[ "${OCR_LLM_PROVIDER:-ollama}" != ollama ]]; then
+  [[ -f docker-compose.llm.yml ]] || die "OCR_LLM_PROVIDER=${OCR_LLM_PROVIDER} tetapi infra/compose/docker-compose.llm.yml tidak ada di bundel"
+  k="$(tr -d '\r\n' < "${SECRETS_DIR}/ninerouter_api_key.txt" 2>/dev/null || true)"
+  [[ -n "$k" && "$k" != disabled ]] || die "OCR_LLM_PROVIDER=${OCR_LLM_PROVIDER} tetapi secrets/ninerouter_api_key.txt kosong/disabled"
+  unset k
+  FILES+=(-f docker-compose.llm.yml)
+fi
 # G21 AC-13: kunci PII Odoo hanya di-mount (ke odoo saja) bila diaktifkan PO + kunci tervalidasi di langkah 1 (L-59)
 if [[ "${EFN_ODOO_PII_ENABLED:-false}" == true ]]; then
   [[ -f docker-compose.pii.yml ]] || die "EFN_ODOO_PII_ENABLED=true tetapi infra/compose/docker-compose.pii.yml tidak ada di bundel"

@@ -27,9 +27,11 @@ def main() -> None:
     )
     log = logging.getLogger("efn_ocr")
     log.info(
-        "ocr-worker mulai: engine=%s vlm=%s model=%s threshold=%.2f",
+        "ocr-worker mulai: engine=%s vlm=%s llm=%s model=%s/%s threshold=%.2f",
         settings.ocr_engine,
         settings.vlm_enabled,
+        settings.llm_provider,
+        settings.ninerouter_model if settings.llm_provider != "ollama" else "-",
         settings.ollama_model,
         settings.ocr_confidence_threshold,
     )

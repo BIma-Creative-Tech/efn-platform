@@ -116,3 +116,13 @@ pytest
 - Belum ada deteksi foto hasil edit/AI atau foto dari internet (R-B05 sisa).
 - TLS belum diuji terhadap broker/DB/MinIO nyata (tidak ada runtime di mesin penulis); test unit memakai CA dummy.
 - Mutual TLS (sertifikat klien) belum dipakai; autentikasi klien tetap password per service.
+
+## Gateway LLM 9router + fallback Ollama (G37, K25-01, docs/04 §22, ADR-037)
+- `OCR_LLM_PROVIDER`: `ollama` (default, tanpa egress) | `ninerouter` | `ninerouter_ollama` (9router dulu, Ollama bila
+  gagal). Selain `ollama` butuh overlay `infra/compose/docker-compose.llm.yml`, secret `ninerouter_api_key`, dan
+  `OCR_LLM_CROSS_BORDER_OK=true` (transfer lintas negara, DPO Q-T7; production ditolak deploy).
+- 9router dipanggil dengan **Anthropic Messages** `POST /v1/messages` (`x-api-key`). Jalur OpenAI-compatible dengan
+  `image_url` diblok WAF 9router (403).
+- Model: `NINEROUTER_VISION_MODEL` (default `cc/claude-haiku-4-5-20251001`), timeout `NINEROUTER_TIMEOUT_SECONDS` (45).
+- Metrik: `efn_ocr_llm_provider_calls_total{provider,outcome}`; `extracted_json.engine` = penyedia yang menjawab.
+

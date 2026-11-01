@@ -767,6 +767,14 @@ vc "268 production recon online + region + ETL_ENABLE_ODOO=true diterima" 0 prod
 vc "269 semua job ETL opsional false diterima" 0 production ETL_PARTNER_REGION_ENABLED=false \
   ETL_LOYALTY_RECON_ONLINE_ENABLED=false ETL_ENABLE_KDS=false ETL_KDS_ONLINE_ENABLED=false ETL_ENABLE_WASTE=false
 vc "269b G32 ETL_ENABLE_WASTE=1 ditolak (boolean)" 1 staging ETL_ENABLE_WASTE=1
+# G37 (K25-01, docs/04 §22): gateway LLM 9router = transfer lintas negara (DPO, Q-T7)
+vc "270a G37 OCR_LLM_PROVIDER default (kosong) diterima" 0 production
+vc "270b G37 OCR_LLM_PROVIDER tidak dikenal ditolak" 1 staging OCR_LLM_PROVIDER=openai
+vc "270c G37 ninerouter tanpa OCR_LLM_CROSS_BORDER_OK ditolak" 1 staging OCR_LLM_PROVIDER=ninerouter_ollama
+vc "270d G37 staging ninerouter_ollama + CROSS_BORDER_OK=true diterima" 0 staging OCR_LLM_PROVIDER=ninerouter_ollama OCR_LLM_CROSS_BORDER_OK=true
+vc "270e G37 production ninerouter ditolak walau CROSS_BORDER_OK=true (Q-T7)" 1 production OCR_LLM_PROVIDER=ninerouter OCR_LLM_CROSS_BORDER_OK=true
+vc "270f G37 OCR_LLM_CROSS_BORDER_OK=ya ditolak (boolean)" 1 staging OCR_LLM_CROSS_BORDER_OK=ya
+vc "270g G37 NINEROUTER_VISION_MODEL berisi spasi ditolak" 1 staging NINEROUTER_VISION_MODEL="cc/x y"
 vc "269c G32 ETL_ENABLE_WASTE=true + ETL_ENABLE_ODOO=false ditolak" 1 staging ETL_ENABLE_WASTE=true ETL_ENABLE_ODOO=false
 vc "269d G32 production ETL_ENABLE_WASTE=true + ETL_ENABLE_ODOO kosong diterima (aktif setelah grant)" 0 production \
   ETL_ENABLE_WASTE=true

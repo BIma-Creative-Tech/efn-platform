@@ -630,8 +630,9 @@ jobs:
           overlays=()
           for f in docker-compose.online-*.yml; do overlays+=(-f "$f"); done
           # G21 AC-13: odoo_pii_* (secrets.list host:disabled) hanya di-mount docker-compose.pii.yml -> ikut juga.
+          # G37: ninerouter_api_key hanya di-mount docker-compose.llm.yml (gateway LLM 9router) -> ikut juga.
           cfg=$(docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.payment.yml \
-            -f docker-compose.pii.yml "${overlays[@]}" \
+            -f docker-compose.pii.yml -f docker-compose.llm.yml "${overlays[@]}" \
             --profile core --profile data --profile ai --profile observability --profile ops config --format json)
           defined=$(echo "$cfg" | jq -r '.secrets | keys[]' | sort)
           listed=$(awk '!/^[[:space:]]*#/ && NF {print $1}' ../../scripts/secrets.list | sort)

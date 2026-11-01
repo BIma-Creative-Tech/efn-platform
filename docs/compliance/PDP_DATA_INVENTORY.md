@@ -1,6 +1,7 @@
 # Inventaris Data Pribadi / RoPA (UU PDP No. 27/2022) — EFN Platform
 
 - **Status:** Draf teknis — **keputusan retensi & DPO ditetapkan pemilik proyek 10 Okt 2026** (v7); dasar pemrosesan & nomor pasal tetap wajib diverifikasi **Legal (DPO sementara)**.
+  - **v12 (2026-11-01, Gelombang 37)**: §2.8.8 OCR tahap 2 lewat gateway LLM 9router (transfer lintas negara P6, mati default, Q-T7).
   - **v11 (2026-10-31, Gelombang 33)**: §2.8.6 notifikasi reward MGM (consent marketing, tanpa parameter) + layar referral.
   - **v10 (2026-10-30, Gelombang 32)**: §2.8.7 mart waste & yield CK — bukan pemrosesan data pribadi baru (grant kolom tanpa partner/pelaku/dokumen/lot).
   - **v8 (2026-10-19, Gelombang 22 — pemrosesan baru G20–G22)**: menambah §0b (keputusan 18 Okt yang meralat v7, terutama **18-14: hangus/anonimisasi 12 bulan**, bukan 24) dan **§2.8** (inventaris pemrosesan baru): bayar di kasir (kode bayar terenkripsi, jejak lookup kasir), **enkripsi PII Odoo E-38a/E-38b sudah dibangun** (pelanggan, pembeli faktur, vendor perorangan, karyawan, rekening — §2.2d bukan lagi "rencana"), faktur atas nama pembeli, **kode wilayah kab/kota** (Odoo → ETL → ClickHouse), persetujuan retur Store Manager, kebijakan poin per PT & peran/SoD (data karyawan), **QR meja** (sesi meja, tautan member opsional, catatan tamu), **poin online**, **notifikasi & hangus poin karena tidak aktif**, **anonimisasi karena retensi** (`dsar_request.type='retention'`). Retensi G22 = **usulan** kontrak `docs/04` §14.E.5 (⚠ DPO **Q-P22..Q-P29**, §4). Dasar hukum anonimisasi: Pasal 16 ayat (2) huruf g, Pasal 43 ayat (1) huruf a, Pasal 44 ayat (1) huruf a — **teks diverifikasi dari pasal.id 19 Okt 2026**, penerapannya tetap penafsiran architect untuk DPO. Item baru/berubah ditandai **(v8)**.
@@ -418,6 +419,15 @@ Kebijakan angka (Odoo `efn.mgm.policy`) tidak berisi data pribadi. Fitur default
 
 #### 2.8.7 (v10) Mart waste & yield CK — Gelombang 32 (docs/04 §21, K25-08)
 **Bukan pemrosesan data pribadi baru.** ETL (`efn_etl/waste.py`, `ETL_ENABLE_WASTE=false` default) menyalin `stock.scrap`, `mrp.production`, bahan baku MO (`stock.move`), alasan scrap, ambang PT dan nama gudang ke ClickHouse (`fact_scrap`, `fact_mo_yield`, `fact_mo_component`, `dim_scrap_reason`, `dim_ck_threshold`, `dim_warehouse`). Grant kolom (`sql/odoo-readonly-grants.sql` G32) sengaja **tidak** mencakup `owner_id` (partner konsinyasi), `user_id`/`create_uid` (pelaku), `origin`, nama/nomor dokumen, lot; test `test_waste.py` menjaga daftar ini. Metabase hanya membaca view `v_waste_*`/`v_mo_*` (agregat per PT/gudang/produk). Retensi mengikuti mart operasional lain (tanpa TTL).
+
+#### 2.8.8 (v12) OCR tahap 2 via gateway LLM 9router — Gelombang 37 (docs/04 §22, ADR-037, K25-01)
+| Data | Alur | Lokasi | Retensi | Kontrol |
+|---|---|---|---|---|
+| Foto label harga Price Hunter (ter-encode ulang, tanpa EXIF/GPS) | ocr-worker → 9router (VPS Indonesia) → penyedia model (Anthropic/Google, luar negeri) → jawaban JSON nama+harga | Transit; penyimpanan di sisi penyedia mengikuti ketentuan penyedia (**belum diverifikasi**) | Tidak disimpan EFN di luar MinIO (retensi foto tetap `MARKET_SCOUT_PHOTO_RETENTION_DAYS`) | Mati default (`OCR_LLM_PROVIDER=ollama`); `OCR_LLM_CROSS_BORDER_OK=true` wajib; production ditolak sampai **Q-T7**; tidak dikirim nama/harga laporan, user_hash/HP, report_id, lokasi; fallback Ollama lokal |
+| API key 9router | secret `ninerouter_api_key` → hanya ocr-worker | host `secrets/` | Rotasi oleh pemilik | `check-encryption` least privilege + egress ↔ key |
+
+Catatan: foto bisa memuat data pribadi pihak ketiga di latar (wajah, kartu). Rekomendasi sebelum production: syarat
+Price Hunter meminta pengguna memotret label saja; DPIA ringkas untuk aliran P6.
 
 ## 3. Matriks retensi ringkas (default → ditetapkan DPO)
 | Data | Default | Mekanisme (pemilik) | Status |

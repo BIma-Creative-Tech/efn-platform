@@ -1,0 +1,21 @@
+# G37 (K25-01, docs/04 §22, ADR-037): gateway LLM 9router untuk OCR tahap 2 (primer), fallback Ollama lokal.
+# Hanya disertakan scripts/deploy.sh bila OCR_LLM_PROVIDER = ninerouter|ninerouter_ollama. Tanpa overlay ini ocr-worker
+# TIDAK punya network egress maupun API key 9router (ADR-014 tetap: AI tanpa egress).
+# 9router = transfer data lintas negara (foto label harga ke penyedia model di luar Indonesia, PDP P6): worker menolak
+# start tanpa OCR_LLM_CROSS_BORDER_OK=true; production juga ditolak deploy-validate sampai DPO memutuskan (Q-T7).
+# Egress dibatasi di aplikasi (allowlist host 9router.bimacreative.tech:443, tanpa redirect/proxy env).
+services:
+  ocr-worker:
+    environment:
+      OCR_LLM_PROVIDER: ${OCR_LLM_PROVIDER:-ninerouter_ollama}
+      OCR_LLM_CROSS_BORDER_OK: ${OCR_LLM_CROSS_BORDER_OK:-false}
+      NINEROUTER_URL: https://9router.bimacreative.tech
+      NINEROUTER_API_KEY_FILE: /run/secrets/ninerouter_api_key
+      NINEROUTER_VISION_MODEL: ${NINEROUTER_VISION_MODEL:-cc/claude-haiku-4-5-20251001}
+      NINEROUTER_TIMEOUT_SECONDS: ${NINEROUTER_TIMEOUT_SECONDS:-45}
+    secrets:
+      - ninerouter_api_key
+    networks: [internal, data, egress]
+
+secrets:
+  ninerouter_api_key: { file: ../../secrets/ninerouter_api_key.txt }
