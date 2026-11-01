@@ -255,6 +255,9 @@ jobs:
           # production menolak false kecuali EFN_ALLOW_CONTROL_OFF di deploy.conf host
           CFG_ETL_AUDIT_COPY_ENABLED: ${{ vars.ETL_AUDIT_COPY_ENABLED }}
           CFG_OLLAMA_VISION_MODEL: ${{ vars.OLLAMA_VISION_MODEL }}
+          CFG_OCR_LLM_PROVIDER: ${{ vars.OCR_LLM_PROVIDER || 'ollama' }}
+          CFG_OCR_LLM_CROSS_BORDER_OK: ${{ vars.OCR_LLM_CROSS_BORDER_OK || 'false' }}
+          CFG_NINEROUTER_VISION_MODEL: ${{ vars.NINEROUTER_VISION_MODEL }}
           # K-7: endpoint migrasi BFF; hanya `true` sementara selama jendela migrasi (default false)
           CFG_MIGRATION_ENABLED: ${{ vars.MIGRATION_ENABLED || 'false' }}
           CFG_METABASE_ADMIN_EMAIL: ${{ vars.METABASE_ADMIN_EMAIL }}

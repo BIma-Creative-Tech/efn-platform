@@ -248,6 +248,18 @@ check_compose() {
         | (. - $ok) | length == 0' <<< "$json" > /dev/null \
       || err "[$label] secret $sec di-mount ke service selain $allowed (least privilege, docs/04 §10.10)"
   done
+  # 6b) G37 (K25-01, docs/04 §22): API key 9router hanya ocr-worker, dengan NINEROUTER_API_KEY_FILE yang cocok; ocr-worker
+  #     di network egress HANYA bila key 9router di-mount (overlay docker-compose.llm.yml), selain itu ADR-014 (no egress).
+  jq -e '[.services | to_entries[] | select([.value.secrets[]? | (.source // .)] | index("ninerouter_api_key") != null)
+          | .key] - ["ocr-worker"] | length == 0' <<< "$json" > /dev/null \
+    || err "[$label] secret ninerouter_api_key di-mount ke service selain ocr-worker (least privilege, docs/04 §22)"
+  jq -e '(.services["ocr-worker"] // null) as $w | $w == null
+         or (([$w.secrets[]? | (.source // .)] | index("ninerouter_api_key") != null) as $k
+             | (($w.networks // {}) | has("egress")) as $e
+             | (($k | not) and ($e | not))
+               or ($k and $e and (($w.environment // {}).NINEROUTER_API_KEY_FILE == "/run/secrets/ninerouter_api_key")))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] ocr-worker: egress tanpa ninerouter_api_key (ADR-014) atau NINEROUTER_API_KEY_FILE tidak cocok (docs/04 §22)"
   # 6a) G21 (docs/04 §13.1 no. 3, L-61): kunci tanda tangan kebijakan poin WAJIB di-mount ke odoo (penanda tangan) DAN
   #     api-gateway (pemverifikasi) dengan env *_FILE yang cocok; di luar keduanya sudah ditolak loop di atas.
   local lp
@@ -401,6 +413,8 @@ case "$MODE" in
     check_compose prod-online -f docker-compose.yml -f docker-compose.prod.yml "${online_overlays[@]}"
     # G21 AC-13: render prod + overlay kunci PII Odoo (hanya odoo, env *_FILE cocok, mode terkunci)
     check_compose prod-pii -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.pii.yml
+    # G37 (K25-01): render prod + overlay gateway LLM 9router (ocr-worker egress + ninerouter_api_key)
+    check_compose prod-llm -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml
     check_files
     ;;
   *) echo "pemakaian: $0 [all|files]" >&2; exit 2 ;;
