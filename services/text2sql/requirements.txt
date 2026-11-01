@@ -1,3 +1,8 @@
-# Guard Text-to-SQL (Python 3.12). Versi di-pin.
+# Service Text-to-SQL (Python 3.12, G38). Versi di-pin; diaudit pip-audit di CI.
 sqlglot==26.0.0
 PyYAML==6.0.2
+# HTTP klien ClickHouse HTTPS 8443 / Ollama mTLS / 9router; versi sama dengan ai-ocr-worker (pip-audit 2026-10).
+requests==2.34.2
+urllib3==2.8.0
+# >= perbaikan GHSA-6q48-6c7w-9gw2 (sama dengan services/etl).
+certifi==2026.10.19

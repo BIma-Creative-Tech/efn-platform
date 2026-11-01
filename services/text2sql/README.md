@@ -1,6 +1,16 @@
-# text2sql — guard SQL read-only (paket Python, belum service HTTP)
+# text2sql — service Text-to-SQL "Tanya Data" (G38, docs/04 §23, ADR-038)
 
-**Tujuan:** memastikan SQL hasil LLM hanya membaca view semantic layer ClickHouse.
+**Tujuan:** staf internal (Odoo `efn_data_ask`) bertanya data operasional; SQL hasil LLM hanya membaca view `efn_t2s`
+dengan cakupan PT yang ditegakkan ClickHouse.
+
+## Service (G38)
+- `python -m efn_text2sql` — HTTPS 8443 (`tls_text2sql`), `POST /v1/ask` (header `X-EFN-Service-Key`), `GET /healthz`.
+- Alur: `service.py` validasi → `prompt.py` (skema `efn_t2s` + contoh + pertanyaan) → `llm.py` (Ollama mTLS / 9router
+  Anthropic Messages, fallback) → `guard.py` → `clickhouse.py` (HTTPS 8443, `efn_text2sql`) dengan setting
+  `SQL_efn_cids/codes/sig` dari `scope.py` (row policy `efn_t2s_scope`, kunci `text2sql_scope_key`).
+- Konfigurasi `config.py` (fail closed): `TEXT2SQL_ENABLED`, `TEXT2SQL_LLM_PROVIDER` (ollama | ninerouter |
+  ninerouter_ollama; 9router butuh `TEXT2SQL_CROSS_BORDER_OK=true` + overlay `docker-compose.llm-text2sql.yml`).
+- Hasil query tidak pernah dikirim ke LLM; pertanyaan/SQL/hasil tidak di-log (hanya `EFN_TEXT2SQL request=... code=...`).
 **Risiko:** R-S05 (injection via Text-to-SQL), R-T06 (jawaban salah dipakai manajemen). ADR-010/ADR-014 (AI di luar jalur transaksi, jaringan privat).
 
 ## Isi
