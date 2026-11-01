@@ -36,11 +36,13 @@ class TestDataAsk(TransactionCase):
             company_id=cls.c1.id,
         )
 
-    def _ask(self, user=None, companies=None, question="Penjualan per outlet bulan ini"):
+    def _ask(self, user=None, companies=None, question="Penjualan per outlet bulan ini", mode=None):
         user = user or self.user
         allowed = [user.company_id.id] + [c for c in user.company_ids.ids if c != user.company_id.id]
         env = self.env(user=user, context={"allowed_company_ids": allowed})
         vals = {"question": question}
+        if mode:
+            vals["mode"] = mode
         if companies is not None:
             vals["company_ids"] = [(6, 0, companies.ids)]
         return env["efn.data.ask"].create(vals)
@@ -174,3 +176,88 @@ class TestDataAsk(TransactionCase):
         with patch.dict("os.environ", env), self.assertLogs(MODEL, "ERROR"):
             status, body = self.env["efn.data.ask"]._efn_text2sql_post({})
         self.assertEqual((status, body["code"]), (0, "connection"))
+
+    # ------------------------------------------------------------------ G39 analisis bertahap (docs/04 §24)
+    ANALYSIS = {
+        "status": "ok",
+        "engine": "ninerouter:cc/x",
+        "steps": [
+            {
+                "title": "Penjualan <b>bulan ini</b>",
+                "status": "ok",
+                "sql": "SELECT a",
+                "columns": ["brand", "net"],
+                "rows": [["PB", 1500.5], ["<script>x</script>", 2]],
+                "row_count": 2,
+            },
+            {"title": "Data GL", "status": "rejected", "code": "table_not_allowed"},
+            {"title": "Bulan lalu", "status": "ok", "sql": "SELECT b", "columns": ["n"], "rows": [[1]], "row_count": 1},
+            {"title": "kelebihan", "status": "ok", "sql": "SELECT c", "columns": ["n"], "rows": [[9]]},
+        ],
+        "summary": "- Penjualan PB naik <img src=x onerror=alert(1)>",
+        "summary_code": "-",
+        "summary_engine": "ninerouter:cc/sum",
+        "row_count": 3,
+    }
+
+    def _run_analyze(self, rec, status=200, body=None):
+        with (
+            patch.dict("os.environ", {"TEXT2SQL_ENABLED": "true"}),
+            patch(f"{MODEL}.EfnDataAsk._efn_text2sql_post", return_value=(status, body or self.ANALYSIS)) as post,
+        ):
+            rec.action_ask()
+        return post
+
+    def test_analyze_posts_to_analyze_path_with_longer_timeout(self):
+        rec = self._ask(mode="analyze", companies=self.c1 | self.c2)
+        post = self._run_analyze(rec)
+        self.assertEqual(post.call_args.kwargs["path"], "/v1/analyze")
+        self.assertGreater(post.call_args.kwargs["timeout"], 60)
+        self.assertEqual(post.call_args.args[0]["company_ids"], sorted((self.c1 | self.c2).ids))
+
+    def test_analyze_stores_steps_summary_and_escapes(self):
+        rec = self._ask(mode="analyze")
+        self._run_analyze(rec)
+        self.assertEqual(rec.state, "done")
+        self.assertEqual(rec.row_count, 3)  # langkah ke-4 dibuang (maks 3)
+        self.assertEqual(rec.summary_engine, "ninerouter:cc/sum")
+        html = rec.result_html
+        self.assertIn("Penjualan &lt;b&gt;bulan ini&lt;/b&gt;", html)
+        self.assertIn("&lt;script&gt;", html)
+        self.assertNotIn("<script>", html)
+        self.assertIn("table_not_allowed", html)
+        self.assertNotIn("SELECT c", html)
+        self.assertIn("-- 1\nSELECT a", rec.sql)
+        self.assertIn("-- 2\nSELECT b", rec.sql)
+        # ringkasan = field Text (plain, di-escape web client), bukan HTML
+        self.assertEqual(type(rec)._fields["summary"].type, "text")
+        self.assertIn("AI", rec.message)
+        self.assertFalse(rec.summary_note)
+
+    def test_analyze_without_summary_shows_note(self):
+        rec = self._ask(mode="analyze")
+        body = dict(self.ANALYSIS, summary="", summary_code="results_not_shared", summary_engine="-")
+        self._run_analyze(rec, body=body)
+        self.assertFalse(rec.summary)
+        self.assertFalse(rec.summary_engine)
+        self.assertIn("tidak dikirim ke AI", rec.summary_note)
+
+    def test_analyze_disabled_agent_is_error_with_message(self):
+        rec = self._ask(mode="analyze")
+        self._run_analyze(rec, status=503, body={"status": "unavailable", "code": "agent_disabled"})
+        self.assertEqual((rec.state, rec.error_code), ("error", "agent_disabled"))
+        self.assertIn("Tanya cepat", rec.message)
+
+    def test_analyze_cannot_forge_summary_or_switch_mode_after_answer(self):
+        rec = self._ask(mode="analyze")
+        with self.assertRaises(AccessError):
+            rec.write({"summary": "palsu"})
+        self._run_analyze(rec)
+        with self.assertRaises(UserError):
+            rec.write({"mode": "ask"})
+        new = self.env["efn.data.ask"].browse(rec.action_new_question()["res_id"])
+        self.assertEqual(new.mode, "analyze")
+
+    def test_post_rejects_unknown_path(self):
+        with self.assertRaises(ValueError):
+            self.env["efn.data.ask"]._efn_text2sql_post({}, path="/v1/admin")

@@ -1,5 +1,8 @@
 """Tanya Data: pertanyaan staf -> service text2sql -> tabel hasil (docs/04 §23, G38).
 
+G39 (docs/04 §24): mode "Analisis bertahap" -> `POST /v1/analyze`: AI memecah pertanyaan jadi 1..3 query, hasil tiap
+langkah ditampilkan sebagai tabel + SQL, lalu ringkasan teks (dibuat AI, di-escape) bila diaktifkan di service.
+
 - Cakupan PT = PT yang dipilih di form ∩ PT yang boleh diakses user (`env.user.company_ids`). Odoo mengirim
   company_id + kode PT; ClickHouse menegakkan cakupan lewat row policy bertanda tangan (lapis kedua).
 - Odoo tidak punya kredensial ClickHouse dan tidak memakai sudo untuk membaca data bisnis. Hasil disimpan sebagai log
@@ -30,9 +33,27 @@ CA_FILE_ENV = "EFN_CA_FILE"
 DEFAULT_CA_FILE = "/run/secrets/efn_ca_crt"
 ENABLED_ENV = "TEXT2SQL_ENABLED"
 TIMEOUT_SECONDS = 60
+# Analisis: rencana + <=3 query + ringkasan; di bawah limit_time_real Odoo (240 s, odoo.conf.tpl).
+ANALYZE_TIMEOUT_SECONDS = 200
+MAX_STEPS = 3
+MAX_SUMMARY_CHARS = 3000
 MAX_QUESTION = 500
 COMPANY_CODES = frozenset({"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "FARM"})
-RESULT_FIELDS = frozenset({"state", "sql", "result_json", "row_count", "truncated", "engine", "error_code", "asked_at"})
+RESULT_FIELDS = frozenset(
+    {
+        "state",
+        "sql",
+        "result_json",
+        "row_count",
+        "truncated",
+        "engine",
+        "error_code",
+        "asked_at",
+        "summary",
+        "summary_engine",
+        "summary_code",
+    }
+)
 ERROR_MESSAGES = {
     "text2sql_disabled": "Tanya Data belum aktif.",
     "llm_unavailable": "Layanan AI sedang tidak tersedia. Coba lagi beberapa saat lagi.",
@@ -46,6 +67,13 @@ ERROR_MESSAGES = {
     "invalid_request": "Pertanyaan tidak valid (3-500 karakter).",
     "unauthorized": "Konfigurasi kunci layanan Tanya Data salah. Hubungi admin.",
     "connection": "Layanan Tanya Data tidak dapat dihubungi. Hubungi admin.",
+    "agent_disabled": "Analisis bertahap belum aktif. Gunakan mode Tanya cepat.",
+}
+SUMMARY_NOTES = {
+    "results_not_shared": "Ringkasan AI tidak aktif (hasil tidak dikirim ke AI). Lihat tabel per langkah.",
+    "no_data": "Tidak ada data untuk diringkas.",
+    "summary_unavailable": "Ringkasan AI sedang tidak tersedia. Lihat tabel per langkah.",
+    "deadline": "Waktu habis sebelum ringkasan dibuat. Lihat tabel per langkah.",
 }
 GUARD_MESSAGE = "Pertanyaan tidak bisa dijawab dengan aman dari data yang tersedia (kode: %s)."
 
@@ -73,6 +101,17 @@ class EfnDataAsk(models.Model):
         help="Data hanya dari PT ini. Aktifkan PT lain lewat pemilih perusahaan di kanan atas untuk menambahkannya.",
     )
     question = fields.Text(string="Pertanyaan", required=True)
+    mode = fields.Selection(
+        [("ask", "Tanya cepat (1 query)"), ("analyze", "Analisis bertahap (AI)")],
+        string="Mode",
+        default="ask",
+        required=True,
+        help="Analisis bertahap: AI memecah pertanyaan menjadi beberapa query lalu merangkum tren/anomali.",
+    )
+    summary = fields.Text(string="Ringkasan (dibuat AI)", readonly=True)
+    summary_engine = fields.Char(string="Model ringkasan", readonly=True)
+    summary_code = fields.Char(readonly=True)
+    summary_note = fields.Char(compute="_compute_result_html")
     state = fields.Selection(
         [("draft", "Draft"), ("done", "Terjawab"), ("rejected", "Tidak bisa dijawab"), ("error", "Gagal")],
         default="draft",
@@ -94,7 +133,8 @@ class EfnDataAsk(models.Model):
     def _compute_result_html(self):
         for rec in self:
             rec.message = rec._efn_message()
-            rec.result_html = rec._efn_render_table()
+            rec.result_html = rec._efn_render_result()
+            rec.summary_note = SUMMARY_NOTES.get(rec.summary_code or "", "") if rec.mode == "analyze" else ""
 
     def _efn_message(self):
         if self.state == "rejected":
@@ -104,16 +144,41 @@ class EfnDataAsk(models.Model):
             return ERROR_MESSAGES.get(self.error_code or "", ERROR_MESSAGES["connection"])
         if self.state == "done":
             note = " (dipotong, maks 1000 baris)" if self.truncated else ""
+            if self.mode == "analyze":
+                return (
+                    f"Analisis {self.row_count} baris dari beberapa langkah. Langkah, SQL, dan ringkasan dibuat AI: "
+                    "periksa angka di tabel sebelum dipakai untuk keputusan."
+                )
             return f"{self.row_count} baris{note}. Jawaban dibuat AI: periksa SQL sebelum dipakai untuk keputusan."
         return ""
 
-    def _efn_render_table(self):
+    def _efn_render_result(self):
         if self.state != "done" or not self.result_json:
             return False
         try:
             data = json.loads(self.result_json)
         except ValueError:
             return False
+        if not isinstance(data, dict):
+            return False
+        if "steps" not in data:
+            return self._efn_render_table(data)
+        parts = []
+        for idx, step in enumerate(data.get("steps") or [], 1):
+            if not isinstance(step, dict):
+                continue
+            title = Markup("<h5 class='mt-3'>%s. %s</h5>") % (idx, escape(str(step.get("title") or "")))
+            if step.get("status") == "ok":
+                body = self._efn_render_table(step)
+                sql = Markup("<pre class='small text-muted text-wrap'>%s</pre>") % escape(str(step.get("sql") or ""))
+            else:
+                code = str(step.get("code") or "-")
+                body = Markup("<p class='text-warning'>%s</p>") % (ERROR_MESSAGES.get(code) or GUARD_MESSAGE % code)
+                sql = Markup("")
+            parts.append(title + body + sql)
+        return Markup("").join(parts)
+
+    def _efn_render_table(self, data):
         columns = data.get("columns") or []
         rows = data.get("rows") or []
         head = Markup("").join(Markup("<th>%s</th>") % escape(str(c)) for c in columns)
@@ -141,7 +206,11 @@ class EfnDataAsk(models.Model):
         # Hasil hanya ditulis action_ask (sudo); user tidak bisa memalsukan jawaban lewat RPC write.
         if not self.env.su and RESULT_FIELDS & set(vals):
             raise AccessError(_("Hasil Tanya Data hanya diisi sistem."))
-        if not self.env.su and ({"question", "company_ids"} & set(vals)) and any(r.state != "draft" for r in self):
+        if (
+            not self.env.su
+            and ({"question", "company_ids", "mode"} & set(vals))
+            and any(r.state != "draft" for r in self)
+        ):
             raise UserError(_("Pertanyaan yang sudah dijawab tidak bisa diubah; buat pertanyaan baru."))
         return super().write(vals)
 
@@ -186,10 +255,15 @@ class EfnDataAsk(models.Model):
             "company_codes": sorted({c.efn_brand_code for c in companies if c.efn_brand_code in COMPANY_CODES}),
             "request_id": f"odoo-{self.id}-{uuid.uuid4().hex[:8]}",
         }
-        status, body = self._efn_text2sql_post(payload)
+        if self.mode == "analyze":
+            status, body = self._efn_text2sql_post(payload, path="/v1/analyze", timeout=ANALYZE_TIMEOUT_SECONDS)
+        else:
+            status, body = self._efn_text2sql_post(payload)
         vals = {"asked_at": fields.Datetime.now()}
         result = body if isinstance(body, dict) else {}
-        if status == 200 and result.get("status") == "ok":
+        if status == 200 and result.get("status") == "ok" and self.mode == "analyze":
+            vals.update(self._efn_analysis_vals(result))
+        elif status == 200 and result.get("status") == "ok":
             columns = result.get("columns") if isinstance(result.get("columns"), list) else []
             rows = result.get("rows") if isinstance(result.get("rows"), list) else []
             vals.update(
@@ -212,12 +286,43 @@ class EfnDataAsk(models.Model):
         )
         return True
 
+    @staticmethod
+    def _efn_analysis_vals(result):
+        """Nilai record dari jawaban `/v1/analyze` (bentuk divalidasi ulang; teks AI dipotong, di-render ter-escape)."""
+        steps = []
+        total = 0
+        for raw in (result.get("steps") if isinstance(result.get("steps"), list) else [])[:MAX_STEPS]:
+            if not isinstance(raw, dict):
+                continue
+            step = {"title": str(raw.get("title") or "")[:120], "status": "ok" if raw.get("status") == "ok" else "x"}
+            if step["status"] == "ok":
+                columns = raw.get("columns") if isinstance(raw.get("columns"), list) else []
+                rows = raw.get("rows") if isinstance(raw.get("rows"), list) else []
+                step.update(sql=str(raw.get("sql") or ""), columns=columns, rows=rows[:1000])
+                total += len(step["rows"])
+            else:
+                step["code"] = str(raw.get("code") or "rejected")[:64]
+            steps.append(step)
+        sqls = [s["sql"] for s in steps if s.get("sql")]
+        return {
+            "state": "done",
+            "sql": "\n\n".join(f"-- {i}\n{q}" for i, q in enumerate(sqls, 1)),
+            "result_json": json.dumps({"steps": steps}, ensure_ascii=False, default=str),
+            "row_count": total,
+            "truncated": False,
+            "engine": str(result.get("engine") or "")[:128],
+            "summary": str(result.get("summary") or "")[:MAX_SUMMARY_CHARS] or False,
+            "summary_engine": str(result.get("summary_engine") or "")[:128] if result.get("summary") else False,
+            "summary_code": str(result.get("summary_code") or "-")[:64],
+            "error_code": False,
+        }
+
     def action_new_question(self):
         """Buat pertanyaan baru dengan PT yang sama (RPC publik; hanya membuat record milik user sendiri)."""
         self.ensure_one()
         if self.user_id != self.env.user:
             raise AccessError(_("Hanya penanya yang bisa menyalin pertanyaan ini."))
-        new = self.create({"question": self.question, "company_ids": [(6, 0, self.company_ids.ids)]})
+        new = self.create({"question": self.question, "mode": self.mode, "company_ids": [(6, 0, self.company_ids.ids)]})
         return {
             "type": "ir.actions.act_window",
             "res_model": self._name,
@@ -228,8 +333,10 @@ class EfnDataAsk(models.Model):
 
     # ------------------------------------------------------------------ HTTP
     @api.model
-    def _efn_text2sql_post(self, payload):
-        """POST /v1/ask. Mengembalikan (status, body). Tidak pernah me-log payload/hasil."""
+    def _efn_text2sql_post(self, payload, path="/v1/ask", timeout=TIMEOUT_SECONDS):
+        """POST /v1/ask atau /v1/analyze. Mengembalikan (status, body). Tidak pernah me-log payload/hasil."""
+        if path not in ("/v1/ask", "/v1/analyze"):
+            raise ValueError(path)
         url = (os.environ.get(URL_ENV) or DEFAULT_URL).strip().rstrip("/")
         lowered = url.lower()
         verify = True
@@ -249,10 +356,10 @@ class EfnDataAsk(models.Model):
             return 0, {"code": "unauthorized"}
         try:
             resp = requests.post(
-                f"{url}/v1/ask",
+                f"{url}{path}",
                 json=payload,
                 headers={"X-EFN-Service-Key": key, "Accept": "application/json"},
-                timeout=TIMEOUT_SECONDS,
+                timeout=timeout,
                 allow_redirects=False,
                 verify=verify,
             )
