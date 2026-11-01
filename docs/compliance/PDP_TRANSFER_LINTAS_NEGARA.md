@@ -17,6 +17,7 @@ UU PDP mengatur transfer ke luar wilayah hukum Indonesia secara bertingkat (ruju
 | P3 | **Payment gateway** (vendor **belum ditentukan**, ADR-026) | QRIS/VA/e-wallet | `order_ref`, nominal; nama/HP/email **hanya bila vendor mewajibkan**; tidak ada data kartu | Setiap pembayaran online/QRIS POS | **Dinilai saat pemilihan vendor** (kriteria "lokasi data/DPA" di ADR-026) — vendor Indonesia berizin BI kemungkinan memproses di Indonesia, tetapi sub-pemroses cloud dapat di luar negeri | Abstraksi mengirim data minimum; secret di `/run/secrets` |
 | P4 | **GitHub** (repo, Actions, Environments) | Kode, CI/CD, secret deploy | **Bukan data pelanggan.** Kode, data uji sintetis (nomor fiktif), secret deploy (terenkripsi GitHub) | — | AS/global | Larangan data produksi di fixture/log CI; gitleaks; secret hanya di Environments (kustodi Superadmin, ADR-022). Catatan: secret = kunci (mis. `pii_encryption_key`) **berada di GitHub** → bukan transfer data pribadi, tetapi relevan untuk risiko (lihat §4) |
 | P5 | 3PL (fase 3) | Pengiriman | Nama, HP, alamat | Per order online | Indonesia (verifikasi) | Di luar cakupan sekarang |
+| P6 | **9router → penyedia model (Anthropic/Google)** (G37, ADR-037) | OCR tahap 2 Price Hunter (baca label harga yang sulit) | **Foto label harga** ter-encode ulang (tanpa EXIF/GPS); bisa memuat latar (wajah/kartu orang lain). **Tidak** dikirim: nama/harga laporan, nomor HP/user_hash, id laporan, lokasi | Hanya laporan yang gagal OCR klasik (tahap 2) | 9router: VPS Indonesia; penyedia model: AS/global | **Mati default** (`OCR_LLM_PROVIDER=ollama`); worker butuh `OCR_LLM_CROSS_BORDER_OK=true`; production ditolak deploy sampai Q-T7; allowlist host; fallback Ollama lokal |
 | — | ALTCHA, Ollama/OCR, Metabase, ClickHouse | — | Self-hosted di VPS Indonesia | — | Indonesia | Tidak ada transfer |
 
 ## 3. Opsi mitigasi per pemroses
@@ -53,6 +54,7 @@ UU PDP mengatur transfer ke luar wilayah hukum Indonesia secara bertingkat (ruju
 - **Q-T4** Wajibkan data payment gateway diproses di Indonesia sebagai syarat vendor?
 - **Q-T5** Setuju H2 (kunci PII/backup tidak disimpan di GitHub)?
 - **Q-T6** Perlu DPIA untuk aliran P1/P2?
+- **Q-T7** (G37) Dasar transfer foto Price Hunter ke penyedia model via 9router (P6)? Opsi: (a) persetujuan eksplisit di syarat Price Hunter + kebijakan privasi, (b) kontrak/DPA penyedia, (c) tetap Ollama lokal saja. Sampai diputuskan: production memakai Ollama (dev boleh dengan foto uji, keputusan pemilik 1 Nov 2026).
 
 ## 7. Yang belum terverifikasi
 Nomor pasal & peraturan pelaksana UU PDP; daftar region Local Storage WhatsApp (sumber sekunder: [Clickatell](https://guides.clickatell.com/release-notes/q3-jul-sep-2024/channel-updates/whatsapp-data-localization), [360dialog](https://docs.360dialog.com/docs/hub/local-storage), [Infobip](https://www.infobip.com/docs/whatsapp/compliance/data-privacy)); ketersediaan & harga Cloudflare Data Localization Suite untuk Indonesia; lokasi pemrosesan vendor payment.

@@ -1,4 +1,4 @@
-# KONTRAK ANTAR-SERVICE (v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
+# KONTRAK ANTAR-SERVICE (v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -2208,4 +2208,48 @@ ambang; daftar MO di luar ambang.
 - Odoo `efn_etl` (`services/etl/sql/odoo-readonly-grants.sql` bagian G32, bersyarat `efn_ck_production` terpasang):
   kolom yang dibaca job di §21.1 saja.
 - ClickHouse: `etl_writer` SELECT+INSERT tabel mart G32; `metabase_reader` SELECT view G32 + tabel dasarnya (view INVOKER).
+
+## 22. Gelombang 37 — gateway LLM 9router + fallback Ollama (K25-01, ADR-037) (v16.0, 1 Nov 2026)
+Cakupan G37: **OCR tahap 2 Price Hunter** (`services/ai-ocr-worker`). Text-to-SQL dan AI agent memakai antarmuka yang
+sama saat dibangun (belum ada service runtime-nya; `services/text2sql` baru guard + prompt).
+
+### 22.1 Penyedia & pemilihan (`OCR_LLM_PROVIDER`, default `ollama`)
+| Nilai | Urutan penyedia | Network ocr-worker | Secret |
+|---|---|---|---|
+| `ollama` (default) | Ollama lokal (`OLLAMA_URL`, mTLS sidecar, §8.5) | `internal`, `data` (tanpa egress, ADR-014) | — |
+| `ninerouter` | 9router saja | + `egress` (overlay `docker-compose.llm.yml`) | `ninerouter_api_key` |
+| `ninerouter_ollama` | 9router → bila gagal Ollama | + `egress` | `ninerouter_api_key` |
+
+- Gagal satu penyedia (timeout, HTTP ≠ 200, JSON rusak, jawaban tanpa JSON) → penyedia berikutnya. Semua gagal →
+  laporan `flagged` / `vlm_unavailable` (perilaku lama), bukan error transaksi.
+- `extracted_json.engine` = penyedia yang **benar-benar menjawab** (`ninerouter:<model>` atau `ollama:<model>`).
+- Metrik baru `efn_ocr_llm_provider_calls_total{provider=ninerouter|ollama, outcome=ok|unavailable}`; fallback =
+  kenaikan `ninerouter/unavailable` + `ollama/ok`.
+
+### 22.2 API 9router
+- `POST https://9router.bimacreative.tech/v1/messages` (format **Anthropic Messages**), header `x-api-key: <key>`,
+  `anthropic-version: 2023-06-01`. Body: `model` (`NINEROUTER_VISION_MODEL`, default `cc/claude-haiku-4-5-20251001`),
+  `max_tokens` 256, `temperature` 0, satu pesan user = blok `image` (base64 JPEG) + blok `text` = prompt tetap
+  `efn_ocr.vlm.PROMPT` (sama dengan Ollama).
+- Jalur OpenAI-compatible `/v1/chat/completions` dengan `image_url` data URI **tidak dipakai**: ditolak 403 oleh WAF
+  9router (diuji 1 Nov 2026; teks biasa lolos).
+- Jawaban: gabungan blok `type=text` → objek JSON pertama (Claude membungkus ```json) → `parse_vlm_response`.
+  Respons > 64 KiB ditolak. Body error penyedia tidak di-log (hanya kode status).
+- Klien: TLS diverifikasi dengan CA publik, `trust_env=False` (proxy env/.netrc diabaikan), redirect tidak diikuti,
+  URL wajib `https://9router.bimacreative.tech` (allowlist host + port 443, tanpa path/kredensial; gagal = tidak start).
+
+### 22.3 Data yang dikirim (minimisasi, PDP)
+Hanya prompt tetap + gambar hasil `encode_for_vlm` (JPEG baru ≤ `OCR_VLM_MAX_SIDE` px; EXIF/GPS hilang). **Tidak**
+dikirim: nama/harga yang dilaporkan, `user_hash`/nomor HP, `report_id`, lokasi, nama toko. Foto bisa memuat wajah/
+kartu orang lain di latar → tetap dianggap berpotensi data pribadi (PDP P6).
+
+### 22.4 Gerbang konfigurasi (fail-closed)
+- Worker: `OCR_LLM_PROVIDER` ≠ `ollama` wajib `OCR_LLM_CROSS_BORDER_OK=true` dan `NINEROUTER_API_KEY_FILE` berisi
+  key (bukan kosong/`disabled`); kalau tidak, **tidak start**.
+- `deploy-validate`: nilai `OCR_LLM_PROVIDER` / `NINEROUTER_VISION_MODEL` divalidasi; 9router tanpa
+  `OCR_LLM_CROSS_BORDER_OK=true` ditolak; **production menolak 9router** sampai DPO memutuskan transfer (Q-T7).
+- `deploy.sh`: overlay `docker-compose.llm.yml` hanya dipasang bila 9router dipilih; key placeholder = deploy gagal.
+- `check-encryption`: `ninerouter_api_key` hanya boleh di ocr-worker; ocr-worker di network `egress` **hanya** bila key
+  itu di-mount dan `NINEROUTER_API_KEY_FILE=/run/secrets/ninerouter_api_key`.
+- Secret `ninerouter_api_key` (`secrets.list` `host:disabled`) diisi pemilik di host; tidak pernah di repo/log.
 
