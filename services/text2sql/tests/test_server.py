@@ -67,3 +67,9 @@ def test_body_limits(port: int) -> None:
     assert call(port, "POST", "/v1/ask", b"x" * 9000)[0] == 400
     assert call(port, "POST", "/v1/ask", b"{bukan json")[0] == 400
     assert call(port, "POST", "/v2/ask", b"{}")[0] == 404
+
+
+def test_analyze_route_requires_key_and_reports_disabled_agent(port: int) -> None:
+    body = json.dumps({"question": "tren penjualan", "company_ids": [1]}).encode()
+    assert call(port, "POST", "/v1/analyze", body, key=None)[0] == 401
+    assert call(port, "POST", "/v1/analyze", body) == (503, {"status": "unavailable", "code": "agent_disabled"})

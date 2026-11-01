@@ -45,7 +45,9 @@ def make_handler(service: AskService, api_key: str) -> type[BaseHTTPRequestHandl
                 self._send(Reply(404, {"status": "not_found"}))
 
         def do_POST(self) -> None:  # noqa: N802 - nama stdlib
-            if self.path != "/v1/ask":
+            routes = {"/v1/ask": service.ask, "/v1/analyze": service.analyze}
+            handler = routes.get(self.path)
+            if handler is None:
                 self._send(Reply(404, {"status": "not_found"}))
                 return
             given = (self.headers.get(SERVICE_KEY_HEADER) or "").encode("utf-8")
@@ -66,7 +68,7 @@ def make_handler(service: AskService, api_key: str) -> type[BaseHTTPRequestHandl
             except ValueError:
                 self._send(Reply(400, {"status": "invalid", "code": "invalid_request"}))
                 return
-            self._send(service.ask(body))
+            self._send(handler(body))
 
     return Handler
 

@@ -94,3 +94,35 @@ def test_plaintext_only_in_dev(files: dict[str, str]) -> None:
         env(files, APP_ENV="test", EFN_ALLOW_PLAINTEXT="true", TLS_CERT_FILE="", TLS_KEY_FILE="", CH_SECURE="false"),
     )
     assert s.ch_url.startswith("http://")
+
+
+def test_agent_defaults_off_and_no_summary(files: dict[str, str]) -> None:
+    s = Settings.from_env(env(files))
+    assert (s.agent_enabled, s.agent_summary_provider, s.agent_results_cross_border_ok) == (False, "none", False)
+    s = Settings.from_env(env(files, TEXT2SQL_AGENT_ENABLED="true", TEXT2SQL_AGENT_SUMMARY_PROVIDER="ollama"))
+    assert s.agent_enabled and s.agent_summary_provider == "ollama"
+
+
+def test_agent_summary_9router_needs_separate_results_consent(files: dict[str, str]) -> None:
+    nr = {
+        "TEXT2SQL_LLM_PROVIDER": "ninerouter_ollama",
+        "TEXT2SQL_CROSS_BORDER_OK": "true",
+        "NINEROUTER_API_KEY_FILE": files["nr"],
+        "TEXT2SQL_AGENT_ENABLED": "true",
+        "TEXT2SQL_AGENT_SUMMARY_PROVIDER": "ninerouter_ollama",
+    }
+    with pytest.raises(ConfigError, match="RESULTS_CROSS_BORDER_OK"):
+        Settings.from_env(env(files, **nr))
+    s = Settings.from_env(env(files, **nr, TEXT2SQL_AGENT_RESULTS_CROSS_BORDER_OK="true"))
+    assert s.agent_summary_provider == "ninerouter_ollama"
+    # izin hasil saja tanpa jalur 9router SQL (tanpa egress/key) ditolak
+    with pytest.raises(ConfigError):
+        Settings.from_env(
+            env(
+                files,
+                TEXT2SQL_AGENT_SUMMARY_PROVIDER="ninerouter",
+                TEXT2SQL_AGENT_RESULTS_CROSS_BORDER_OK="true",
+            ),
+        )
+    with pytest.raises(ConfigError):
+        Settings.from_env(env(files, TEXT2SQL_AGENT_SUMMARY_PROVIDER="openai"))
