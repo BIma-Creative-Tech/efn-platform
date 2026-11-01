@@ -1,5 +1,7 @@
 # Indeks Architecture Decision Records (ADR) — EFN Platform
 
+> **Pembaruan 1 Nov 2026 (Gelombang 39, K25-01).** **ADR-039 (Accepted):** AI agent pertama = asisten analisis "Analisis bertahap" di Tanya Data (rencana ≤3 query → eksekusi per PT → ringkasan AI). Angka hasil agregat ke 9router = izin terpisah (P8), production ditahan sampai **Q-T7**. Total kini **39 ADR**.
+
 > **Pembaruan 1 Nov 2026 (Gelombang 38, Q-48).** **ADR-038 (Accepted):** Text-to-SQL "Tanya Data" di Odoo, per PT (row policy ClickHouse bertanda tangan), tanpa GL; hasil tidak dikirim ke LLM. Total kini **38 ADR**.
 
 > **Pembaruan 1 Nov 2026 (Gelombang 37, K25-01).** **ADR-037 (Accepted, K25-01):** gateway LLM 9router + fallback Ollama untuk OCR tahap 2; merevisi ADR-014 khusus ocr-worker bila 9router dipilih. Mati default; production ditahan sampai DPO menjawab **Q-T7** (transfer foto ke penyedia model luar negeri). Total kini **37 ADR**.
@@ -80,6 +82,7 @@ Sumber: `docs/01_REVIEW_RISK_GAP_ANALYSIS.md` (D-xx, R-xxx, Q-xx). Template: `AD
 | [036](ADR-036-enkripsi-kolom-pii-odoo.md) | Enkripsi kolom PII di Odoo (tahap 1, **S1+**): AES-256-GCM di ORM untuk pelanggan, vendor individu, portal, karyawan (nama, alamat, kota, kode pos, HP, email, NPWP/NIK, `pos.order.email/mobile`, XML Coretax); format `efnpii2:` terikat id record; blind index exact + **token nama awalan ≥ 3 huruf** (`odoo_pii_name_key`); kab/kota via `efn_region` ke DWH; pgcrypto/TDE/vault BFF ditolak/ditunda | Q-E3, W-08, E-38, E14 | **Accepted — pemilik proyek, 18 Okt 2026** (18-34, ralat 18-31..18-33); E-38a G20 / E-38b G21; AC-1..AC-14; konfirmasi Q-PII7..12 | IT + Security; Legal/DPO; Finance + Tax; PO + Ops | R-L01, R-L10, R-T08, R-B11, R-T18, usulan R-T19, R-O07 |
 | [037](ADR-037-gateway-llm-9router-fallback-ollama.md) | Gateway LLM 9router (Anthropic Messages) + fallback Ollama untuk OCR tahap 2; egress hanya via overlay `docker-compose.llm.yml`; revisi ADR-014 | K25-01 | **Accepted — K25-01**; production ditahan sampai Q-T7 (DPO) | Pemilik proyek; DPO/Legal | R-L01 |
 | [038](ADR-038-text-to-sql-tanya-data.md) | Text-to-SQL "Tanya Data": Odoo → service text2sql → 9router/Ollama → guard → ClickHouse `efn_t2s` (view DEFINER + row policy per PT bertanda tangan); tanpa GL | K25-01, Q-48 | **Accepted — Q-48 dijawab**; 9router production ditahan Q-T7 | Pemilik proyek; DPO/Legal | R-S05, R-T06 |
+| [039](ADR-039-asisten-analisis-bertahap.md) | Asisten analisis "Analisis bertahap": text2sql `/v1/analyze` (rencana ≤3 query → eksekusi per PT → ringkasan AI); ringkasan 9router = izin terpisah P8 | K25-01 | **Accepted — K25-01 (1 Nov 2026)**; ringkasan 9router di production ditahan (Q-T7) |
 
 Catatan pemetaan: D-09 dipetakan ke ADR-001 (sudah ada) sehingga ADR-009 dipakai untuk D-08. D-10 dibahas di ADR-010 dan juga disinggung ADR-001.
 

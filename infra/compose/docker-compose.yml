@@ -1895,6 +1895,10 @@ services:
       OLLAMA_CLIENT_CERT_FILE: /run/secrets/tls_text2sql_crt
       OLLAMA_CLIENT_KEY_FILE: /run/secrets/tls_text2sql_key
       TEXT2SQL_OLLAMA_MODEL: ${TEXT2SQL_OLLAMA_MODEL:-qwen2.5-coder:7b}
+      # G39 (docs/04 §24): Analisis bertahap. Ringkasan = angka hasil agregat dikirim ke LLM; di base hanya
+      # none/ollama yang bisa jalan (9router butuh overlay llm-text2sql + TEXT2SQL_AGENT_RESULTS_CROSS_BORDER_OK).
+      TEXT2SQL_AGENT_ENABLED: ${TEXT2SQL_AGENT_ENABLED:-false}
+      TEXT2SQL_AGENT_SUMMARY_PROVIDER: ${TEXT2SQL_AGENT_SUMMARY_PROVIDER:-none}
     secrets:
       - text2sql_api_key
       - text2sql_scope_key

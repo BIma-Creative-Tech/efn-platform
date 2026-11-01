@@ -4,6 +4,8 @@
 # Yang dikirim ke 9router: prompt tetap + skema efn_t2s + TEKS PERTANYAAN staf (bisa memuat data pribadi yang diketik,
 # PDP P7). Hasil query TIDAK pernah dikirim. Service menolak start tanpa TEXT2SQL_CROSS_BORDER_OK=true; production
 # ditolak deploy-validate sampai DPO memutuskan (Q-T7). Egress dibatasi di aplikasi (allowlist 9router.bimacreative.tech:443).
+# G39 (docs/04 §24): ringkasan Analisis bertahap via 9router MENGIRIM ANGKA HASIL agregat (PDP P8) -> izin terpisah
+# TEXT2SQL_AGENT_RESULTS_CROSS_BORDER_OK=true; tanpa itu service menolak start bila SUMMARY_PROVIDER=ninerouter*.
 services:
   text2sql:
     environment:
@@ -13,6 +15,7 @@ services:
       NINEROUTER_API_KEY_FILE: /run/secrets/ninerouter_api_key
       TEXT2SQL_NINEROUTER_MODEL: ${TEXT2SQL_NINEROUTER_MODEL:-cc/claude-haiku-4-5-20251001}
       NINEROUTER_TIMEOUT_SECONDS: ${NINEROUTER_TIMEOUT_SECONDS:-45}
+      TEXT2SQL_AGENT_RESULTS_CROSS_BORDER_OK: ${TEXT2SQL_AGENT_RESULTS_CROSS_BORDER_OK:-false}
     secrets:
       - ninerouter_api_key
     networks: [internal, data, egress]

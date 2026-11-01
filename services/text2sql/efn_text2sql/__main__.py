@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from efn_text2sql.agent import AnalysisAgent
 from efn_text2sql.clickhouse import ClickHouseClient
 from efn_text2sql.config import Settings
 from efn_text2sql.llm import build_llm
@@ -24,7 +25,15 @@ def main() -> None:
         database=layer.database,
     )
     llm = build_llm(settings)
-    service = AskService(layer, llm, executor, settings.scope_key, settings.enabled)
+    agent = None
+    if settings.agent_enabled:
+        summarizer = (
+            None
+            if settings.agent_summary_provider == "none"
+            else build_llm(settings, provider=settings.agent_summary_provider)
+        )
+        agent = AnalysisAgent(layer, llm, executor, summarizer, settings.scope_key)
+    service = AskService(layer, llm, executor, settings.scope_key, settings.enabled, agent=agent)
     httpd = build_server(
         service,
         settings.api_key,
@@ -34,9 +43,11 @@ def main() -> None:
         settings.tls_key_file,
     )
     logging.getLogger("efn_text2sql").info(
-        "text2sql mulai: enabled=%s llm=%s https=%s port=%d",
+        "text2sql mulai: enabled=%s llm=%s agent=%s summary=%s https=%s port=%d",
         settings.enabled,
         llm.name,
+        settings.agent_enabled,
+        settings.agent_summary_provider,
         bool(settings.tls_cert_file),
         settings.port,
     )

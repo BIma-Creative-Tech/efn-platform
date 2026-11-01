@@ -203,7 +203,9 @@ class FallbackLlm:
         raise LlmUnavailableError("semua penyedia gagal: " + ", ".join(reasons))
 
 
-def build_llm(settings: Any) -> FallbackLlm:
+def build_llm(settings: Any, provider: str | None = None) -> FallbackLlm:
+    """`provider` None = `settings.llm_provider` (SQL); G39 ringkasan memakai `agent_summary_provider`."""
+
     def ollama() -> LlmClient:
         cert = (
             (settings.ollama_client_cert_file, settings.ollama_client_key_file)
@@ -226,8 +228,9 @@ def build_llm(settings: Any) -> FallbackLlm:
             settings.ninerouter_timeout_seconds,
         )
 
-    if settings.llm_provider == "ollama":
+    chosen = provider or settings.llm_provider
+    if chosen == "ollama":
         return FallbackLlm([ollama()])
-    if settings.llm_provider == "ninerouter":
+    if chosen == "ninerouter":
         return FallbackLlm([ninerouter()])
     return FallbackLlm([ninerouter(), ollama()])

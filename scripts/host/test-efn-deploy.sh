@@ -784,6 +784,19 @@ vc "271e G38 9router tanpa TEXT2SQL_CROSS_BORDER_OK ditolak" 1 staging TEXT2SQL_
 vc "271f G38 staging 9router + CROSS_BORDER_OK=true diterima" 0 staging TEXT2SQL_LLM_PROVIDER=ninerouter TEXT2SQL_CROSS_BORDER_OK=true
 vc "271g G38 production 9router ditolak walau CROSS_BORDER_OK=true (Q-T7)" 1 production TEXT2SQL_LLM_PROVIDER=ninerouter_ollama TEXT2SQL_CROSS_BORDER_OK=true
 vc "271h G38 TEXT2SQL_OLLAMA_MODEL berisi spasi ditolak" 1 staging TEXT2SQL_OLLAMA_MODEL="qwen x"
+# G39 (docs/04 §24.5): ringkasan agent; 9router = angka hasil lintas negara (PDP P8, Q-T7)
+vc "272a G39 agent + ringkasan ollama diterima di production" 0 production TEXT2SQL_AGENT_ENABLED=true \
+  TEXT2SQL_AGENT_SUMMARY_PROVIDER=ollama
+vc "272b G39 TEXT2SQL_AGENT_ENABLED=ya ditolak (boolean)" 1 staging TEXT2SQL_AGENT_ENABLED=ya
+vc "272c G39 SUMMARY_PROVIDER tidak dikenal ditolak" 1 staging TEXT2SQL_AGENT_SUMMARY_PROVIDER=openai
+vc "272d G39 ringkasan 9router tanpa RESULTS_CROSS_BORDER_OK ditolak" 1 staging TEXT2SQL_LLM_PROVIDER=ninerouter_ollama \
+  TEXT2SQL_CROSS_BORDER_OK=true TEXT2SQL_AGENT_SUMMARY_PROVIDER=ninerouter_ollama
+vc "272e G39 ringkasan 9router tanpa jalur 9router SQL ditolak" 1 staging TEXT2SQL_AGENT_SUMMARY_PROVIDER=ninerouter \
+  TEXT2SQL_AGENT_RESULTS_CROSS_BORDER_OK=true
+vc "272f G39 staging ringkasan 9router + kedua izin diterima" 0 staging TEXT2SQL_LLM_PROVIDER=ninerouter_ollama \
+  TEXT2SQL_CROSS_BORDER_OK=true TEXT2SQL_AGENT_SUMMARY_PROVIDER=ninerouter_ollama TEXT2SQL_AGENT_RESULTS_CROSS_BORDER_OK=true
+vc "272g G39 production ringkasan 9router ditolak (Q-T7)" 1 production TEXT2SQL_AGENT_SUMMARY_PROVIDER=ninerouter \
+  TEXT2SQL_AGENT_RESULTS_CROSS_BORDER_OK=true
 vc "269c G32 ETL_ENABLE_WASTE=true + ETL_ENABLE_ODOO=false ditolak" 1 staging ETL_ENABLE_WASTE=true ETL_ENABLE_ODOO=false
 vc "269d G32 production ETL_ENABLE_WASTE=true + ETL_ENABLE_ODOO kosong diterima (aktif setelah grant)" 0 production \
   ETL_ENABLE_WASTE=true

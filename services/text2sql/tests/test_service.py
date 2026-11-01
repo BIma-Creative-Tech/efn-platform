@@ -156,3 +156,33 @@ def test_question_and_sql_not_logged(caplog: pytest.LogCaptureFixture) -> None:
     assert "EFN_TEXT2SQL request=r1 status=ok" in text
     assert "Rahasia" not in text
     assert "net_sales" not in text
+
+
+class FakeAgent:
+    def __init__(self, reply=(200, {"status": "ok", "steps": [], "row_count": 0}, "e"), boom: bool = False) -> None:  # noqa: ANN001
+        self.reply, self.boom = reply, boom
+        self.calls: list[tuple[str, object]] = []
+
+    def run(self, question, scope):  # noqa: ANN001, ANN201
+        self.calls.append((question, scope))
+        if self.boom:
+            raise RuntimeError("rahasia")
+        return self.reply
+
+
+def test_analyze_disabled_and_agent_missing() -> None:
+    assert svc(FakeLlm(SQL), FakeCh(), enabled=False).analyze(body()).body["code"] == "text2sql_disabled"
+    reply = svc(FakeLlm(SQL), FakeCh()).analyze(body())
+    assert (reply.status, reply.body["code"]) == (503, "agent_disabled")
+
+
+def test_analyze_validates_and_delegates() -> None:
+    ag = FakeAgent()
+    s = AskService(LAYER, FakeLlm(SQL), FakeCh(), KEY, True, agent=ag)  # type: ignore[arg-type]
+    assert s.analyze(body(extra=1)).status == 400
+    assert s.analyze(body(company_ids=[])).status == 400
+    reply = s.analyze(body(question="  Tren   penjualan  "))
+    assert reply.status == 200 and ag.calls[0][0] == "Tren penjualan"
+    boom = AskService(LAYER, FakeLlm(SQL), FakeCh(), KEY, True, agent=FakeAgent(boom=True))  # type: ignore[arg-type]
+    r = boom.analyze(body())
+    assert r.status == 500 and "rahasia" not in str(r.body)

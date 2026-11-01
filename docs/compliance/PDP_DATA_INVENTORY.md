@@ -1,6 +1,7 @@
 # Inventaris Data Pribadi / RoPA (UU PDP No. 27/2022) — EFN Platform
 
 - **Status:** Draf teknis — **keputusan retensi & DPO ditetapkan pemilik proyek 10 Okt 2026** (v7); dasar pemrosesan & nomor pasal tetap wajib diverifikasi **Legal (DPO sementara)**.
+  - **v14 (2026-11-01, Gelombang 39)**: §2.8.10 asisten analisis "Analisis bertahap" (ringkasan AI, P8, agregat tanpa PII).
   - **v13 (2026-11-01, Gelombang 38)**: §2.8.9 Text-to-SQL "Tanya Data" (log pertanyaan per user di Odoo, P7, tanpa PII di mart).
   - **v12 (2026-11-01, Gelombang 37)**: §2.8.8 OCR tahap 2 lewat gateway LLM 9router (transfer lintas negara P6, mati default, Q-T7).
   - **v11 (2026-10-31, Gelombang 33)**: §2.8.6 notifikasi reward MGM (consent marketing, tanpa parameter) + layar referral.
@@ -435,6 +436,13 @@ Price Hunter meminta pengguna memotret label saja; DPIA ringkas untuk aliran P6.
 |---|---|---|---|---|
 | Pertanyaan staf + SQL + hasil (agregat operasional) | Odoo `efn.data.ask` → text2sql → LLM (pertanyaan saja) → ClickHouse `efn_t2s` → hasil kembali ke Odoo | Odoo DB (`efn_data_ask`), transit di text2sql (tidak di-log) | Mengikuti DB Odoo (**usulan**: hapus otomatis > 1 tahun, menunggu DPO) | Record rule pemilik/auditor PT; mart tanpa kolom identitas; hasil tidak dikirim ke LLM; staf diminta tidak menulis data pribadi; 9router = P7 (mati default, Q-T7) |
 | Kunci `text2sql_api_key`, `text2sql_scope_key` | secret → odoo+text2sql / clickhouse-init+text2sql | host `secrets/` | rotasi deploy | `check-encryption` least privilege |
+
+#### 2.8.10 (v14) Asisten analisis "Analisis bertahap" — Gelombang 39 (docs/04 §24, ADR-039, K25-01)
+- **Data:** pertanyaan staf (sama §2.8.9) + hasil query **agregat** dari `efn_t2s` (tanpa kolom identitas) + ringkasan
+  teks buatan AI. Disimpan di `efn.data.ask` (`result_json`, `summary`) per user; record rule pemilik/auditor PT.
+- **Pemroses:** ringkasan ke Ollama lokal atau 9router (P8, `PDP_TRANSFER_LINTAS_NEGARA.md`). Default: tanpa ringkasan
+  (hasil tidak dikirim ke LLM). Redaksi pola email/nomor ≥ 8 digit pada teks bebas sebelum dikirim.
+- **Log service:** tanpa pertanyaan/SQL/hasil/ringkasan. **Retensi:** sama §2.8.9 (usulan > 1 tahun dihapus; DPO).
 
 ## 3. Matriks retensi ringkas (default → ditetapkan DPO)
 | Data | Default | Mekanisme (pemilik) | Status |

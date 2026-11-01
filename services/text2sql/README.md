@@ -11,6 +11,10 @@ dengan cakupan PT yang ditegakkan ClickHouse.
 - Konfigurasi `config.py` (fail closed): `TEXT2SQL_ENABLED`, `TEXT2SQL_LLM_PROVIDER` (ollama | ninerouter |
   ninerouter_ollama; 9router butuh `TEXT2SQL_CROSS_BORDER_OK=true` + overlay `docker-compose.llm-text2sql.yml`).
 - Hasil query tidak pernah dikirim ke LLM; pertanyaan/SQL/hasil tidak di-log (hanya `EFN_TEXT2SQL request=... code=...`).
+- **G39 (docs/04 §24, ADR-039):** `POST /v1/analyze` = asisten analisis (`agent.py`): rencana JSON ≤3 query (LLM SQL,
+  tanpa data) → tiap query lewat guard + row policy (LIMIT 200) → ringkasan (`TEXT2SQL_AGENT_SUMMARY_PROVIDER`: none
+  default | ollama | ninerouter*; 9router mengirim angka agregat = P8, butuh `TEXT2SQL_AGENT_RESULTS_CROSS_BORDER_OK`).
+  Kill switch `TEXT2SQL_AGENT_ENABLED`.
 **Risiko:** R-S05 (injection via Text-to-SQL), R-T06 (jawaban salah dipakai manajemen). ADR-010/ADR-014 (AI di luar jalur transaksi, jaringan privat).
 
 ## Isi

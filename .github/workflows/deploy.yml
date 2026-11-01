@@ -265,6 +265,9 @@ jobs:
           CFG_TEXT2SQL_CROSS_BORDER_OK: ${{ vars.TEXT2SQL_CROSS_BORDER_OK || 'false' }}
           CFG_TEXT2SQL_OLLAMA_MODEL: ${{ vars.TEXT2SQL_OLLAMA_MODEL }}
           CFG_TEXT2SQL_NINEROUTER_MODEL: ${{ vars.TEXT2SQL_NINEROUTER_MODEL }}
+          CFG_TEXT2SQL_AGENT_ENABLED: ${{ vars.TEXT2SQL_AGENT_ENABLED || 'false' }}
+          CFG_TEXT2SQL_AGENT_SUMMARY_PROVIDER: ${{ vars.TEXT2SQL_AGENT_SUMMARY_PROVIDER || 'none' }}
+          CFG_TEXT2SQL_AGENT_RESULTS_CROSS_BORDER_OK: ${{ vars.TEXT2SQL_AGENT_RESULTS_CROSS_BORDER_OK || 'false' }}
           # K-7: endpoint migrasi BFF; hanya `true` sementara selama jendela migrasi (default false)
           CFG_MIGRATION_ENABLED: ${{ vars.MIGRATION_ENABLED || 'false' }}
           CFG_METABASE_ADMIN_EMAIL: ${{ vars.METABASE_ADMIN_EMAIL }}

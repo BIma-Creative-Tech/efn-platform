@@ -102,6 +102,10 @@ class Settings:
     ninerouter_api_key: str
     ninerouter_model: str
     ninerouter_timeout_seconds: int
+    # G39 agent (docs/04 §24)
+    agent_enabled: bool = False
+    agent_summary_provider: str = "none"
+    agent_results_cross_border_ok: bool = False
 
     def __repr__(self) -> str:  # jangan pernah menampilkan key/password
         return f"Settings(app_env={self.app_env!r}, enabled={self.enabled}, llm_provider={self.llm_provider!r})"
@@ -161,6 +165,23 @@ class Settings:
             if not _MODEL_RE.match(model):
                 raise ConfigError(f"model {name} tidak valid")
 
+        # G39: ringkasan agent MENGIRIM angka hasil ke LLM -> persetujuan terpisah dari G38 (yang hanya mengirim
+        # pertanyaan). none = tanpa ringkasan; ollama = lokal; ninerouter* = lintas negara, wajib
+        # TEXT2SQL_AGENT_RESULTS_CROSS_BORDER_OK=true (Q-T7; production ditolak deploy-validate).
+        agent_enabled = _bool(e, "TEXT2SQL_AGENT_ENABLED", False)
+        summary_provider = _get(e, "TEXT2SQL_AGENT_SUMMARY_PROVIDER", "none").lower()
+        if summary_provider not in PROVIDERS | {"none"}:
+            raise ConfigError(f"TEXT2SQL_AGENT_SUMMARY_PROVIDER tidak dikenal: {summary_provider}")
+        results_cross_border = _bool(e, "TEXT2SQL_AGENT_RESULTS_CROSS_BORDER_OK", False)
+        if summary_provider.startswith("ninerouter"):
+            if not results_cross_border:
+                raise ConfigError(
+                    "TEXT2SQL_AGENT_SUMMARY_PROVIDER 9router membutuhkan TEXT2SQL_AGENT_RESULTS_CROSS_BORDER_OK=true "
+                    "(hasil agregat dikirim ke luar negeri, PDP P8, Q-T7)",
+                )
+            if not nr_key:
+                raise ConfigError("ringkasan 9router membutuhkan TEXT2SQL_LLM_PROVIDER 9router (overlay egress + key)")
+
         ollama_url = _get(e, "OLLAMA_URL", "https://ollama:11434")
         if not ollama_url.startswith("https://") and not allow_plain:
             raise ConfigError("OLLAMA_URL wajib https:// (sidecar mTLS)")
@@ -193,4 +214,7 @@ class Settings:
             ninerouter_api_key=nr_key,
             ninerouter_model=models["ninerouter"],
             ninerouter_timeout_seconds=_int(e, "NINEROUTER_TIMEOUT_SECONDS", 45, 5, 300),
+            agent_enabled=agent_enabled,
+            agent_summary_provider=summary_provider,
+            agent_results_cross_border_ok=results_cross_border,
         )
