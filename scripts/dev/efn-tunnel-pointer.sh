@@ -45,7 +45,10 @@ set_state() { # $1 = kunci status, $2 = pesan; log hanya bila status berubah
 }
 
 current_tunnel() {
-  docker logs "$CONTAINER" 2>&1 | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1
+  # Abaikan api.trycloudflare.com: muncul di log error cloudflared ("failed to request quick Tunnel") saat DNS
+  # belum siap, dan /health di sana juga menjawab 200 sehingga pointer sempat diarahkan ke alamat yang salah.
+  docker logs "$CONTAINER" 2>&1 | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' \
+    | grep -v '^https://api\.trycloudflare\.com$' | tail -1
 }
 
 gist_value() {
