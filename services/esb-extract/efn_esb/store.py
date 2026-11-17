@@ -1,0 +1,79 @@
+"""Adapter ClickHouse (pola `services/etl/efn_etl/adapters.py`): HTTPS 8443 + CA internal, user `efn_esb`.
+
+Hak `esb_writer` = SELECT + INSERT saja (infra/clickhouse/access/esb-access.sql); tidak ada DDL/ALTER dari service.
+Semua query berparameter.
+"""
+
+from collections.abc import Sequence
+from datetime import date, datetime
+from typing import Any
+
+import clickhouse_connect
+from clickhouse_connect.driver.client import Client
+
+from efn_esb.config import ClickHouseSettings
+from efn_esb.transform import BomRatio
+
+
+def clickhouse_client_kwargs(settings: ClickHouseSettings) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "host": settings.host,
+        "port": settings.port,
+        "username": settings.user,
+        "password": settings.password,
+        "database": settings.database,
+        "secure": settings.secure,
+        "connect_timeout": 10,
+        "send_receive_timeout": 300,
+    }
+    if settings.secure:
+        if not settings.ca_file:
+            raise ValueError("ClickHouse TLS membutuhkan CH_CA_FILE")
+        kwargs.update(verify=True, ca_cert=settings.ca_file)
+    return kwargs
+
+
+def build_clickhouse_client(settings: ClickHouseSettings) -> Client:
+    return clickhouse_connect.get_client(**clickhouse_client_kwargs(settings))
+
+
+class ClickHouseStore:
+    """Dipakai hanya dari thread utama (worker hanya mengambil data ESB)."""
+
+    def __init__(self, client: Client, mart_db: str, raw_db: str) -> None:
+        self._client = client
+        self._mart = mart_db
+        self._raw = raw_db
+
+    def insert(self, table: str, columns: Sequence[str], rows: list[list[Any]]) -> None:
+        if rows:
+            self._client.insert(table, rows, column_names=list(columns), database=self._mart)
+
+    def insert_control(self, table: str, columns: Sequence[str], rows: list[list[Any]]) -> None:
+        if rows:
+            self._client.insert(table, rows, column_names=list(columns), database=self._raw)
+
+    def checkpoints(self, brand: str, since: date) -> dict[tuple[str, str, date], datetime]:
+        result = self._client.query(
+            f"SELECT entity, scope_key, day, max(finished_at) FROM {self._raw}.extract_checkpoint "  # noqa: S608
+            "WHERE brand = {brand:String} AND day >= {since:Date} AND status = 'done' "
+            "GROUP BY entity, scope_key, day",
+            parameters={"brand": brand, "since": since},
+        )
+        return {(str(e), str(s), d): ts for e, s, d, ts in result.result_rows}
+
+    def load_aliases(self, brand: str) -> dict[str, str]:
+        result = self._client.query(
+            f"SELECT alias_norm, product_code FROM {self._mart}.dim_esb_product_alias FINAL "  # noqa: S608
+            "WHERE brand = {brand:String}",
+            parameters={"brand": brand},
+        )
+        return {str(a): str(c) for a, c in result.result_rows}
+
+    def load_bom_ratios(self, brand: str) -> dict[int, BomRatio]:
+        result = self._client.query(
+            f"SELECT bom_id, product_code, product_name, uom, ratio, sample_doc FROM {self._raw}.bom_ratio FINAL "  # noqa: S608
+            "WHERE brand = {brand:String}",
+            parameters={"brand": brand},
+        )
+        return {int(b): BomRatio(str(c), str(n), float(r), str(u), str(s)) for b, c, n, u, r, s in result.result_rows}

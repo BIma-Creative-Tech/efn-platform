@@ -1,0 +1,155 @@
+# G41 (docs/04 §25, ADR-040 Proposed, K25-02): ekstraksi ESB Core API (POS ESB yang dipakai brand) -> ClickHouse
+# (raw efn_esb.* + mart efn_dwh.*esb*). Runbook: docs/runbooks/esb-extract.md.
+#
+# Mengapa overlay, bukan service di base:
+#   - Pola repo untuk fitur opsional yang memakai kredensial pihak ketiga dan egress (docker-compose.llm.yml G37,
+#     docker-compose.payment.yml): tanpa overlay TIDAK ada service yang memegang password ESB maupun jalur keluar ke ESB.
+#   - Image esb-extract belum masuk rantai rilis bertanda tangan (IMAGE_* di deploy.yml/efn-deploy/deploy.sh, SEC-42).
+#     Bila service ada di base, deploy produksi profil `data` akan mencoba menarik ghcr.io/efn/esb-extract:dev -> gagal.
+#     Wiring rilis (IMAGE_ESB_EXTRACT, ESB_* di EFN_RELEASE_CONFIG_VARS, deploy.sh menyertakan overlay bila
+#     ESB_ENABLED=true) = tindak lanjut, lihat runbook §8.
+#   Dev/staging lokal: docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.esb.yml \
+#                        --profile core --profile data up -d esb-extract
+#
+# Jaringan (least privilege):
+#   - `esb` (internal, baru): HANYA clickhouse <-> esb-extract. esb-extract TIDAK di network `data` (PostgreSQL, RabbitMQ,
+#     MinIO-gateway, Loki): service ini memproses JSON dari internet, jadi bila disusupi tidak bisa menjangkau DB lain.
+#   - `egress-esb` (SEC-183): jalur keluar internet KHUSUS esb-extract (bukan `egress` bersama BFF/acme-dns/ollama),
+#     subnet sendiri, enable_icc=false. Bila esb-extract disusupi tidak ada jalur L3 ke container lain lewat egress.
+#     Repo TIDAK punya egress proxy/firewall per host (sama dengan 9router G37 dan WhatsApp): allowlist
+#     `services.esb.co.id:443` ditegakkan DI APLIKASI (klien HTTP efn_esb: host tetap, https saja, tanpa redirect lintas
+#     host, tanpa proxy dari env). Allowlist tingkat jaringan (nftables subnet egress-esb -> IP ESB:443) = sisa risiko
+#     (runbook §9).
+#
+# Secret: password ESB per brand (esb_core_password_<brand>, `host:disabled` di scripts/secrets.list, diisi operator di
+# host; tidak di GitHub Environment) + clickhouse_password_esb (random; juga di-mount clickhouse-init di base).
+# Username API per brand (SEC-180): TIDAK ditulis di repo (repo publik; akun saat ini berhak admin). Diisi lewat
+# `infra/compose/.env` lokal (gitignored) / config rilis; kosong = brand itu gagal start (fail-closed di config.py).
+# Hanya GET ke ESB (kecuali POST /auth/login), ditegakkan kode efn_esb + test. ESB_ENABLED=false -> service idle.
+services:
+  esb-extract:
+    image: ${IMAGE_ESB_EXTRACT:-ghcr.io/efn/esb-extract:dev}
+    build:
+      context: ../../services/esb-extract
+    profiles: ["data"]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+        labels: "service"
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      clickhouse-init:
+        condition: service_completed_successfully
+    # Non-root eksplisit (nobody). Kode di image milik root dan hanya dibaca; tidak ada tulisan di luar /tmp.
+    user: "65534:65534"
+    command: ["python", "-m", "efn_esb", "run"]
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      # Kill switch. false = proses tetap hidup (sleep) tanpa memanggil ESB/ClickHouse (jangan exit 0: restart loop).
+      ESB_ENABLED: ${ESB_ENABLED:-false}
+      # URL tetap (bukan dari .env): satu-satunya host egress yang diizinkan (dicek scripts/check-encryption.sh).
+      ESB_BASE_URL: https://services.esb.co.id/core
+      # Brand aktif (pb,wtz,bacha,imd,cup). Default pb saja: brand lain menyala setelah secret-nya diisi (runbook §2).
+      ESB_BRANDS: ${ESB_BRANDS:-pb}
+      # Username API ESB per brand (SEC-180): bukan secret, tetapi TIDAK boleh di repo publik. Akun yang dipakai saat ini
+      # berhak ADMIN di ESB; user teknis read-only = permintaan Q-ESB1 (belum tersedia). Nilai dari .env lokal/config
+      # rilis; default kosong (brand aktif tanpa user -> gagal start). Dicek scripts/check-encryption.sh. Password: secret.
+      ESB_USER_PB: ${ESB_USER_PB:-}
+      ESB_USER_WTZ: ${ESB_USER_WTZ:-}
+      ESB_USER_BACHA: ${ESB_USER_BACHA:-}
+      ESB_USER_IMD: ${ESB_USER_IMD:-}
+      ESB_USER_CUP: ${ESB_USER_CUP:-}
+      ESB_PASSWORD_PB_FILE: /run/secrets/esb_core_password_pb
+      ESB_PASSWORD_WTZ_FILE: /run/secrets/esb_core_password_wtz
+      ESB_PASSWORD_BACHA_FILE: /run/secrets/esb_core_password_bacha
+      ESB_PASSWORD_IMD_FILE: /run/secrets/esb_core_password_imd
+      ESB_PASSWORD_CUP_FILE: /run/secrets/esb_core_password_cup
+      # Etika beban ke API produksi ESB (per brand): token bucket, paralel, batas panggilan per run.
+      ESB_RATE_PER_SEC: ${ESB_RATE_PER_SEC:-2.0}
+      ESB_WORKERS: ${ESB_WORKERS:-4}
+      ESB_MAX_CALLS_PER_RUN: ${ESB_MAX_CALLS_PER_RUN:-20000}
+      # Backfill hanya di jendela malam WIB (kecuali --ignore-window); loop incremental tiap N detik.
+      ESB_BACKFILL_WINDOW: ${ESB_BACKFILL_WINDOW:-22:00-05:00}
+      # SEC-185: --ignore-window di production ditolak kecuali true (dan rentang <= 1 hari, ditegakkan kode).
+      # Default false (dicek check-encryption render prod-esb); nyalakan sementara saja, lalu kembalikan false.
+      ESB_ALLOW_IGNORE_WINDOW: ${ESB_ALLOW_IGNORE_WINDOW:-false}
+      # SEC-187: batas ukuran body respons ESB (byte, default 32 MiB) - container dibatasi 512M.
+      ESB_MAX_RESPONSE_BYTES: ${ESB_MAX_RESPONSE_BYTES:-33554432}
+      ESB_INTERVAL_SECONDS: ${ESB_INTERVAL_SECONDS:-3600}
+      # Cabang Central Kitchen per brand (brand:id|id;...) dan override PT per cabang (brand:branch=KODE,...).
+      ESB_CK_BRANCHES: ${ESB_CK_BRANCHES:-pb:4|38}
+      ESB_BRANCH_COMPANY_OVERRIDES: ${ESB_BRANCH_COMPANY_OVERRIDES:-}
+      # Parameter lain docs/04 §25.2 (QA G41: sebelumnya tidak diteruskan -> nilai di .env tidak berpengaruh).
+      # Default = default config.py; kosong = pakai default kode.
+      ESB_NON_STORE_BRANCHES: ${ESB_NON_STORE_BRANCHES:-}
+      ESB_ENTITIES: ${ESB_ENTITIES:-branch,master,sales,fin_sold,payment,production,delivery,transfer}
+      ESB_MAX_RETRIES: ${ESB_MAX_RETRIES:-5}
+      ESB_BACKFILL_MAX_CALLS: ${ESB_BACKFILL_MAX_CALLS:-60000}
+      ESB_SALES_READY_HOUR_WIB: ${ESB_SALES_READY_HOUR_WIB:-3}
+      ESB_CORRECTION_DAYS: ${ESB_CORRECTION_DAYS:-1,7}
+      ESB_GAP_FILL_DAYS: ${ESB_GAP_FILL_DAYS:-7}
+      ESB_BACKFILL_INCLUDE_INACTIVE: ${ESB_BACKFILL_INCLUDE_INACTIVE:-true}
+      ESB_HTTP_TIMEOUT_SECONDS: ${ESB_HTTP_TIMEOUT_SECONDS:-60}
+      ESB_MAX_PAGES: ${ESB_MAX_PAGES:-500}
+      ESB_COMPANY_BACHA: ${ESB_COMPANY_BACHA:-BCF}
+      # ClickHouse HTTPS 8443, CA internal, user efn_esb (role esb_writer: SELECT/INSERT efn_esb.* + efn_dwh.*esb*).
+      CH_HOST: clickhouse
+      CH_PORT: "8443"
+      CH_SECURE: "true"
+      CH_CA_FILE: /run/secrets/efn_ca_crt
+      CH_DATABASE: efn_dwh
+      CH_USER: efn_esb
+      CH_PASSWORD_FILE: /run/secrets/clickhouse_password_esb
+    secrets:
+      - esb_core_password_pb
+      - esb_core_password_wtz
+      - esb_core_password_bacha
+      - esb_core_password_imd
+      - esb_core_password_cup
+      - clickhouse_password_esb
+      - efn_ca_crt
+    networks: [esb, egress-esb]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 512M }
+    # Tanpa port HTTP (pola etl): healthcheck hanya memastikan proses utama hidup. Kesegaran data dipantau lewat
+    # efn_esb.extract_run / v_esb_data_quality (runbook §5).
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    labels:
+      service: esb-extract
+
+  # ClickHouse ikut network `esb` agar esb-extract tidak perlu berada di network `data`. Daftar network digabung
+  # (union) dengan base; sertifikat tls_clickhouse ber-SAN `clickhouse` berlaku di network mana pun.
+  clickhouse:
+    networks: [data, esb]
+
+networks:
+  esb:           # hanya clickhouse <-> esb-extract (dicek scripts/check-encryption.sh)
+    internal: true
+    ipam:
+      config: [{ subnet: 172.30.7.0/24 }]
+  egress-esb:    # SEC-183: keluar internet HANYA esb-extract (dicek check-encryption); tanpa komunikasi antar-container
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "false"
+    ipam:
+      config: [{ subnet: 172.30.8.0/24 }]
+
+secrets:
+  esb_core_password_pb: { file: ../../secrets/esb_core_password_pb.txt }
+  esb_core_password_wtz: { file: ../../secrets/esb_core_password_wtz.txt }
+  esb_core_password_bacha: { file: ../../secrets/esb_core_password_bacha.txt }
+  esb_core_password_imd: { file: ../../secrets/esb_core_password_imd.txt }
+  esb_core_password_cup: { file: ../../secrets/esb_core_password_cup.txt }

@@ -209,6 +209,8 @@ EOF
 create_user efn_etl /run/secrets/clickhouse_password_etl
 create_user efn_text2sql /run/secrets/clickhouse_password_text2sql
 create_user efn_metabase /run/secrets/clickhouse_password_metabase
+# G41 (docs/04 §25.7): user service esb-extract. Secret di-mount ke clickhouse-init di base compose (devsecops).
+create_user efn_esb /run/secrets/clickhouse_password_esb
 
 for f in /init/access/*.sql; do
   [ -e "$f" ] || continue
@@ -221,6 +223,14 @@ $CH --multiquery <<'EOF'
 GRANT text2sql_reader TO efn_text2sql;
 SET DEFAULT ROLE text2sql_reader TO efn_text2sql;
 ALTER USER efn_text2sql SETTINGS PROFILE 'text2sql_readonly';
+EOF
+
+# G41: esb-access.sql membuat role esb_writer & profil; pengikatan ke user di sini (pola text2sql).
+# Row policy efn_t2s untuk v_esb_* sengaja BELUM dibuat (ditunda ke G42, docs/04 §25.7).
+$CH --multiquery <<'EOF'
+GRANT esb_writer TO efn_esb;
+SET DEFAULT ROLE esb_writer TO efn_esb;
+ALTER USER efn_esb SETTINGS PROFILE 'esb_writer_profile';
 EOF
 
 # G38 (docs/04 §23.3): row policy cakupan PT pada view efn_t2s. Service text2sql mengirim setting SQL_efn_cids
@@ -243,4 +253,4 @@ echo "CREATE ROW POLICY OR REPLACE efn_t2s_scope ON efn_t2s.v_loyalty_daily USIN
 unset SCOPE_KEY SIG
 
 rm -f "$CFG"
-echo "clickhouse-init: skema, user (efn_etl, efn_text2sql, efn_metabase) dan grant diterapkan"
+echo "clickhouse-init: skema, user (efn_etl, efn_text2sql, efn_metabase, efn_esb) dan grant diterapkan"

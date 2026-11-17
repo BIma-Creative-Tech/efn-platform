@@ -1094,3 +1094,75 @@ clickhouse-local dijalankan lead).
 - `earn` online yang **hilang** (picked_up + member tertaut tanpa `online_earn`) tidak bisa dideteksi ETL: Odoo tidak
   tahu member dan `online_order_part.earn_status` tidak dibuka ke `efn_readonly` (sengaja). Pengecekan itu tetap di
   recon BFF.
+
+---
+
+## Gelombang 41 — ESB Core → ClickHouse datamart, service `esb-extract` (17 Nov 2026)
+
+Kontrak: `docs/04` §25 (ADR-040 Proposed, K25-02). Dibangun dari prototipe `extract.py`/`aggregate.py` (tidak membaca
+data klien; semua fixture test sintetis).
+
+### File
+- `services/esb-extract/efn_esb/`: `config.py` (env/secret, allowlist host, override PT, CK), `tls.py` (salinan ETL),
+  `http.py` (klien GET-only, login/401, retry+jitter, token bucket, budget, tanpa proxy/redirect), `paging.py`
+  (`count` vs `dataCount`), `normalize.py` (alias, FIN, takeaway, angka, **redaksi L-110**), `planning.py` (slice,
+  jendela WIB, H-1/H-7/gap fill, backfill resumable), `transform.py` (kolom + transform murni), `extract.py`
+  (extractor per entitas), `records.py` (raw/checkpoint/run/bom_ratio), `store.py` (ClickHouse TLS), `runner.py`
+  (orkestrasi), `heartbeat.py`, `__main__.py` (CLI `run|backfill|probe|health`).
+- `services/esb-extract/tests/`: `test_http.py`, `test_paging.py`, `test_normalize.py`, `test_planning.py`,
+  `test_config.py`, `test_transform.py`, `test_runner.py`, `test_ddl.py`, `test_heartbeat.py`.
+- `services/esb-extract/{Dockerfile,requirements.txt,requirements-dev.txt,ruff.toml,pytest.ini,.dockerignore,README.md}`.
+- `infra/clickhouse/init/12-g41-esb.sql`, `infra/clickhouse/access/esb-access.sql`, `infra/clickhouse/clickhouse-init.sh`
+  (user `efn_esb` + ikat role `esb_writer`).
+
+### Asumsi skema / API
+- Bentuk respons dari spec publik (`openapi.json`): `/product` tanpa satuan, `/menu/browse` (`categoryDesc`,
+  `categoryDetailDesc`), `/supplier` (memuat `address`, `cellPhone`, `contactPerson` → whitelist), `/inventory/stock-list`
+  (`stockDate`, `branchID`, per produk × lokasi, 503 = filter terlalu luas), `/branch/list/user` (`page/pageSize`,
+  `dataCount` = baris halaman ini, BUKAN total → paging berhenti saat halaman tidak penuh, limit 20 seperti prototipe).
+- `production-result` qty × `convertionQty` = satuan dasar EA (prototipe); simple-transfer list memuat `statusID`
+  (kalau tidak, detail diambil lalu disaring).
+- Tanggal fakta = hari slice yang diminta, bukan tanggal yang diparse dari dokumen (agar cocok dengan versi slice).
+
+### Keputusan desain
+- **Versi slice**: semua baris fakta slice `_version` = `extract_checkpoint.finished_at`; checkpoint ditulis terakhir;
+  view hanya membaca versi slice terakhir (`IN` ke checkpoint FINAL). Tarik ulang menghapus baris void/terhapus dari view.
+- `line_no` L-113 sesuai §25.5 + pemecah seri (discount, cogs, menuName).
+- `brand` ditambahkan ke ORDER BY fakta setelah `company_code` (branchID hanya unik per akun ESB).
+- Kolom tambahan: `menu_name` (sales), `branch_id` (payment), `uom` + `is_fin` (production/transfer), `is_fin`
+  (delivery), `active` (product). Tabel tambahan `efn_esb.bom_ratio`. `payment_count` (bukan `count`).
+- `v_esb_flow_daily`: `simple_mfg` → `ck_prod`/`store_prod` menurut `dim_esb_branch.is_ck`; `production_result` selalu
+  `ck_prod` (prototipe; asumsi hanya di CK). `NAME:` di-resolve ulang saat query.
+- Row policy `efn_t2s` untuk `v_esb_*` ditunda ke G42 (perlu view `efn_t2s` + whitelist text2sql di luar ownership).
+
+### Belum terverifikasi / risiko sisa
+- **pytest dan ruff BELUM dijalankan** (sesi tanpa akses shell). Jalankan:
+  `docker run --rm -v "$(pwd -W):/w" -w /w/services/esb-extract python:3.12-slim sh -c "pip install -q -r requirements-dev.txt ruff && ruff check . && ruff format --check . && pytest"`
+  (dari root repo; `test_ddl.py` membaca `infra/` → mount root repo, bukan hanya folder service).
+- DDL/view `12-g41-esb.sql` belum dijalankan di ClickHouse 24.8 (tuple `IN` dengan `DateTime64(3)`, window function di
+  `v_esb_menu_mix`, `UNION ALL` LowCardinality vs String di `v_esb_data_quality`).
+- Tidak ada GET nyata ke ESB (sengaja; efn-lead). Baris komponen paket `sales-menu-cogs` mungkin dobel di `gross/cogs`.
+- `ruff format --check` mungkin berbeda pada blok `# fmt: skip` di test; jalankan `ruff format` bila perlu.
+
+### Perbaikan review security G41: SEC-185/186/187 (18 Nov 2026)
+Hanya `services/esb-extract` (+ komentar kolom status `extract_run` di `12-g41-esb.sql`). SEC-181 (`normalize.py`) tidak
+diubah.
+- **SEC-186**: `runner.AuthBreaker` (murni) + `guarded_cycle`. `auth_failed` 2 siklus berturut-turut → brand ditangguhkan
+  di memori; siklus berikutnya tanpa login/GET, hanya baris `extract_run.status='auth_suspended'` + heartbeat INFO;
+  WARNING sekali (kunci brand + nama secret, tanpa user/password/token). Reset hanya oleh `ok|partial|limit`; `error`
+  netral. Kolom `status` = `LowCardinality(String)` → tidak perlu ubah DDL (hanya komentar); `RUN_STATUSES` ditambah.
+- **SEC-187**: `http.read_limited` + `UrllibTransport(max_response_bytes)`. `Content-Length` > batas ditolak sebelum
+  baca; baca maks batas+1 byte; `EsbResponseTooLarge` (subkelas `EsbProtocolError`) tanpa retry, pesan tanpa URL/query.
+  Body respons error (non-2xx, tidak di-parse) dipotong 64 KiB tanpa exception (retry 429/5xx tetap jalan). Env
+  `ESB_MAX_RESPONSE_BYTES` default 33554432 (32 MiB), rentang 1048576..134217728.
+- **SEC-185**: `planning.validate_ignore_window` dipanggil `_cmd_backfill` sebelum I/O; production (fail closed via
+  `tls.is_production`: `APP_ENV` kosong/tidak dikenal/`staging` = production) wajib `ESB_ALLOW_IGNORE_WINDOW=true`
+  (default `false`) **dan** `--from` = `--to`; selain itu exit 2 + pesan di stderr. `validate_backfill_range` yang gagal
+  kini juga exit 2 dengan pesan (sebelumnya traceback).
+- Test baru: `test_http.py` (batas ukuran, Content-Length bohong/tidak valid, body error dipotong, tanpa retry),
+  `test_config.py` (default/rentang, flag, production fail closed), `test_planning.py`, `test_runner.py` (breaker,
+  WARNING sekali, tanpa panggilan setelah ditangguhkan, gerbang CLI sebelum I/O).
+- `test_contract.py` akan merah sampai devsecops menambah `ESB_MAX_RESPONSE_BYTES` + `ESB_ALLOW_IGNORE_WINDOW` ke overlay
+  `docker-compose.esb.yml` dan lead ke `docs/04` §25.2.
+- Belum terverifikasi: pytest/ruff tidak dijalankan di sesi ini (tanpa shell); `Retry-After` dari body error tidak
+  terpengaruh (header). Lockout nyata akun ESB tetap belum diketahui (N=2 = konservatif).

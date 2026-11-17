@@ -4,6 +4,7 @@
 #               --profile core --profile data --profile ai --profile observability --profile ops up -d
 # Profiles: core (edge, odoo, bff, web, pg, redis, mq, minio) | data (clickhouse, metabase, etl) | ai (ollama, ocr-worker)
 #           observability (prometheus, loki, promtail, grafana, uptime-kuma) | ops (alertmanager + exporter)
+# Overlay opsional profil data: docker-compose.esb.yml (G41, ekstraksi ESB Core -> ClickHouse; satu-satunya egress ESB).
 # Semua image di-pin versi. Dependabot (.github/dependabot.yml) mengusulkan bump.
 #
 # ENKRIPSI DI SETIAP TRANSAKSI DATA (docs/04 §7, ADR-022) - gelombang 3:
@@ -138,6 +139,9 @@ secrets:
   tls_text2sql_crt: { file: ../../secrets/tls_text2sql_crt.txt }
   tls_text2sql_key: { file: ../../secrets/tls_text2sql_key.txt }
   clickhouse_password_metabase: { file: ../../secrets/clickhouse_password_metabase.txt }
+  # G41 (docs/04 §25, ADR-040): user ClickHouse efn_esb (role esb_writer). Dibuat clickhouse-init di base; dipakai service
+  # esb-extract yang HANYA ada di overlay docker-compose.esb.yml (password ESB per brand juga hanya di overlay itu).
+  clickhouse_password_esb: { file: ../../secrets/clickhouse_password_esb.txt }
   # kunci aplikasi (docs/04 §2, §7.2)
   jwt_secret: { file: ../../secrets/jwt_secret.txt }
   otp_pepper: { file: ../../secrets/otp_pepper.txt }
@@ -1490,6 +1494,7 @@ services:
       - clickhouse_password_etl
       - clickhouse_password_text2sql
       - clickhouse_password_metabase
+      - clickhouse_password_esb   # G41: user efn_esb (docs/04 §25); service esb-extract di overlay docker-compose.esb.yml
       - text2sql_scope_key   # G38: kunci row policy cakupan PT efn_t2s (docs/04 §23.3)
       - efn_ca_crt
     volumes:

@@ -1,5 +1,84 @@
 # Laporan Agent: efn-devsecops-engineer
 
+## G41 (17 Nov 2026, branch feat/wave-41-esb-datamart, belum di-commit) — infra ekstraksi ESB Core → ClickHouse
+
+Kontrak: G41_CONTRACT (efn-lead), docs/04 §25, ADR-040 (Proposed). Kode service = efn-data-ai-engineer (paralel; saat laporan ini ditulis baru `efn_esb/__init__.py` + `tls.py` yang ada).
+
+### G41.1 File
+
+| File | Perubahan |
+|---|---|
+| `infra/compose/docker-compose.esb.yml` (baru) | Overlay profil `data`: service `esb-extract` (non-root 65534, `read_only`, tmpfs `/tmp`, `cap_drop: [ALL]`, `no-new-privileges`, 1 CPU / 512M, healthcheck proses, `depends_on clickhouse-init: service_completed_successfully`), env non-rahasia `ESB_*` + `CH_*` (user `efn_esb`), 5 secret password brand + `clickhouse_password_esb` + `efn_ca_crt`; network baru `esb` (internal, 172.30.7.0/24, hanya clickhouse ↔ esb-extract) + `egress`; `clickhouse` ditambah ke network `esb`. |
+| `infra/compose/docker-compose.yml` | Top-level secret `clickhouse_password_esb`; di-mount ke `clickhouse-init` (pembuatan user `efn_esb`); komentar header overlay. Tidak ada service baru di base. |
+| `infra/compose/.env.example` | `IMAGE_ESB_EXTRACT`, blok `ESB_ENABLED=false`, `ESB_BRANDS=pb`, `ESB_RATE_PER_SEC`, `ESB_WORKERS`, `ESB_MAX_CALLS_PER_RUN`, `ESB_BACKFILL_WINDOW`, `ESB_INTERVAL_SECONDS`, `ESB_CK_BRANCHES`, `ESB_BRANCH_COMPANY_OVERRIDES` (tanpa nilai rahasia). |
+| `scripts/secrets.list` | `clickhouse_password_esb random`; `esb_core_password_{pb,wtz,bacha,imd,cup} host:disabled` (pola `ninerouter_api_key`: diisi operator, tidak di-generate, tidak di GitHub Environment). `gen-secrets.sh`/`derive-secrets.sh` tidak perlu diubah (membaca secrets.list). |
+| `scripts/check-encryption.sh` | Aturan 6b3 (least privilege secret ESB/CH, network `esb` hanya clickhouse+esb-extract, esb-extract hanya `esb`+`egress`, non-root/read_only/cap_drop, `ESB_BASE_URL` wajib `https://services.esb.co.id/`, `ESB_PASSWORD_<BRAND>_FILE` ↔ secret ter-mount) + aturan 8 (render `prod-esb`: service ter-render, `ESB_ENABLED` default `false`) + render baru `prod-esb`. |
+| `.github/workflows/ci.yml` | Filter `esb-extract` (+ masuk `python`), `pyservices` push, ruff/compile/pip-audit mencakup `services/esb-extract`, matriks `pytest` + `esb-extract`, langkah baru `docker compose config (dev + prod, overlay ESB)`, cek secrets == secrets.list menyertakan overlay esb. Pola permissions (`contents: read`), pin SHA, cache pip tidak berubah. |
+| `.github/workflows/build-push.yml` | `esb-extract` di matriks `scan-pr` (build + Trivy gate HIGH/CRITICAL, PR read-only) dan `build` (push by digest → Trivy → SBOM → cosign). |
+| `.github/dependabot.yml` | `/services/esb-extract` di ekosistem docker & pip. |
+| `Makefile` | `test-py` + `validate` (render dev + overlay esb). |
+| `docs/runbooks/esb-extract.md` (baru), `docs/runbooks/README.md` | Runbook (secret per brand + rename file lama, menyalakan, probe, backfill 24 bulan per brand di jendela malam + perkiraan durasi, memantau `extract_run`/`extract_checkpoint`/`v_esb_data_quality`, 429/401/403/400/5xx/TLS, rotasi, menghentikan, sisa risiko egress); baris Prosedur + baris baseline hardening. |
+
+### G41.2 Keputusan
+
+1. **Overlay `docker-compose.esb.yml`, bukan service di base.** Konsisten dengan pola fitur opsional berkredensial pihak ketiga + egress (`docker-compose.llm.yml` G37, `docker-compose.payment.yml`). Alasan penentu: image esb-extract belum ada di rantai rilis bertanda tangan (`IMAGE_*` di `deploy.yml` → manifest → `efn-deploy` `IMAGE_VARS` → `deploy.sh`, SEC-42). Bila service ada di base, deploy produksi profil `data` akan menarik `ghcr.io/efn/esb-extract:dev` dan gagal. Dengan overlay, deploy tanpa ESB tidak berubah sama sekali.
+2. **`clickhouse_password_esb` di base** (di-mount `clickhouse-init`), agar `clickhouse-init.sh` bisa membuat user `efn_esb` tanpa syarat (pola `create_user`). Konsekuensi: staging/prod butuh GitHub Environment `CLICKHOUSE_PASSWORD_ESB` sebelum deploy berikutnya; tanpa itu `deploy.sh` berhenti `secret CLICKHOUSE_PASSWORD_ESB kosong` (fail-closed, sama seperti G38 `clickhouse_password_text2sql`).
+3. **Jaringan: lebih sempit dari kontrak.** Kontrak menyebut `data`; esb-extract justru **tidak** di `data` tetapi di network baru `esb` (hanya ClickHouse) + `egress`. Service ini satu-satunya yang mem-parse JSON dari internet sambil punya egress; bila disusupi, ia tidak bisa menjangkau PostgreSQL/RabbitMQ/Loki di `data`. ClickHouse ikut `esb` (sertifikat SAN `clickhouse` tetap berlaku). Ditegakkan check-encryption.
+4. **Egress allowlist.** Repo tidak punya egress proxy/firewall per host (9router G37 dan WhatsApp juga hanya network `egress` + allowlist di aplikasi). Diterapkan pola yang sama: `ESB_BASE_URL` tetap di overlay (bukan dari .env, dicek CI), allowlist host di klien `efn_esb.http` (tugas data-AI). Allowlist tingkat jaringan = **sisa risiko lintas service** (runbook §9).
+5. **Password ESB `host:disabled`**, bukan `literal:`/`random`: kredensial pihak ketiga, tidak boleh lewat GitHub Environment/stdin efn-deploy (efn-deploy menolak `host:*` dari stdin secara generik).
+
+### G41.3 Validasi — JUJUR
+
+- **Tidak ada validasi yang dijalankan.** Sesi agent ini tidak punya tool shell (hanya baca/tulis file), jadi `docker compose ... config -q`, `scripts/check-encryption.sh`, `shellcheck`, `yamllint`, dan `gen-secrets.sh` dengan direktori secret dummy **belum dijalankan**. Folder `secrets/` asli tidak dibaca/diubah.
+- Pemeriksaan manual: indentasi YAML overlay & workflow; setiap secret yang direferensikan service didefinisikan di top-level (base atau overlay); 5 password + `clickhouse_password_esb` ada di secrets.list sehingga diff "compose secrets == secrets.list" (dengan overlay esb) seharusnya sama; network `egress` didefinisikan di base, `esb` di overlay; subnet 172.30.7.0/24 tidak dipakai di repo; ekspresi jq dibaca ulang (presedensi `|`/`-`/`//`).
+- Perintah yang harus dijalankan efn-lead/QA (Git Bash, dari root repo; secret dummy di luar `secrets/`):
+
+```bash
+export SECRETS_DIR="$TEMP/efn-g41-secrets"      # BUKAN secrets/ asli
+SECRETS_DIR="$SECRETS_DIR" bash scripts/gen-secrets.sh
+# compose merujuk ../../secrets -> render di salinan repo sementara, atau sementara isi secrets/ dari gen-secrets di CI
+cd infra/compose && cp -n .env.example .env
+for env in dev prod; do
+  docker compose -f docker-compose.yml -f docker-compose.$env.yml -f docker-compose.esb.yml \
+    --profile core --profile data --profile ai --profile observability --profile ops config -q && echo "$env+esb OK"
+done
+cd ../.. && bash scripts/check-encryption.sh && shellcheck -x scripts/check-encryption.sh
+pipx run yamllint -c .yamllint.yml infra .github
+```
+
+  Catatan: path secret di compose tetap `../../secrets/*.txt`; `docker compose config -q` tidak memeriksa keberadaan file secret, tetapi `up` memeriksanya. CI job `infra` menjalankan `gen-secrets.sh` ke `secrets/` runner (sekali pakai) — itu tempat validasi otoritatif.
+- Risiko CI: `docker compose config` dengan `build.context: ../../services/esb-extract` — bila direktori/Dockerfile belum ada saat CI, compose bisa gagal (perilaku compose-go untuk konteks yang hilang tidak saya verifikasi). Dockerfile esb-extract juga ikut gerbang hadolint, Trivy image, checkov.
+
+### G41.4 Untuk efn-lead (rekonsiliasi dengan efn-data-ai-engineer)
+
+Nama di overlay mengikuti kontrak; cocokkan dengan kode `efn_esb` saat selesai:
+
+1. Env yang dipakai overlay: `ESB_ENABLED`, `ESB_BASE_URL` (`https://services.esb.co.id/core`), `ESB_BRANDS`, `ESB_USER_<BRAND>`, `ESB_PASSWORD_<BRAND>_FILE`, `ESB_RATE_PER_SEC`, `ESB_WORKERS`, `ESB_MAX_CALLS_PER_RUN` (default overlay **20000**, angka saya — samakan dengan default kode), `ESB_BACKFILL_WINDOW`, `ESB_INTERVAL_SECONDS`, `ESB_CK_BRANCHES` (`pb:4|38`), `ESB_BRANCH_COMPANY_OVERRIDES`, `CH_HOST/PORT/SECURE/CA_FILE/DATABASE(efn_dwh)/USER(efn_esb)/PASSWORD_FILE`, `APP_ENV`. Bila kode memakai nama lain (mis. URL hard-code tanpa `ESB_BASE_URL`), ubah overlay **dan** aturan check-encryption 6b3.
+2. `command: ["python", "-m", "efn_esb", "run"]` eksplisit di overlay; runbook memakai `docker compose run esb-extract python -m efn_esb probe|backfill ...`. **Dockerfile tidak boleh memakai `ENTRYPOINT`** (CMD saja), kalau tidak perintah jadi ganda.
+3. `user: "65534:65534"` di compose: dependency harus terpasang world-readable (pip ke site-packages sistem seperti etl), bukan venv di home 0700.
+4. `ESB_ENABLED=false` → proses **tidur**, bukan exit 0 (`restart: unless-stopped` akan me-restart terus).
+5. Brand di `ESB_BRANDS` dengan password `disabled`/kosong → gagal jelas (error konfigurasi), jangan mencoba login.
+6. `clickhouse-init.sh` perlu `create_user efn_esb /run/secrets/clickhouse_password_esb` + `GRANT esb_writer` (secret sudah di-mount ke clickhouse-init).
+7. Klien HTTP ESB: allowlist host `services.esb.co.id`, https, tanpa redirect lintas host, `trust_env=False` (abaikan `HTTP(S)_PROXY`), token/password tidak pernah di log/exception.
+
+### G41.5 Belum / tindak lanjut
+
+- **Wiring rilis** (gelombang berikut, perlu uji `test-efn-deploy.sh`): `IMAGE_ESB_EXTRACT` di `deploy.yml` (digest + manifest), `efn-deploy` `IMAGE_VARS`, `deploy.sh` (validasi image, `.env`, menyertakan overlay bila `ESB_ENABLED=true` dan password brand aktif bukan `disabled`), `ESB_*` di `EFN_RELEASE_CONFIG_VARS` + validasi rentang di `deploy-validate.sh`. Sampai itu ada, ESB hanya dijalankan manual di lingkungan lokal (K25-06).
+- **Alert**: belum ada (service tanpa endpoint metrik). Usulan G42: `EfnEsbExtractStale` (warning, data penjualan > 26 jam per brand) dari `v_esb_data_quality` lewat exporter/textfile, + runbook link ke esb-extract.md §6.
+- **Allowlist egress tingkat jaringan** (egress proxy / nftables per subnet `egress`) untuk semua service yang keluar (esb-extract, ocr-worker/text2sql via 9router, api-gateway WhatsApp, acme-dns) — belum ada.
+- Validasi lokal di G41.3 belum dijalankan.
+
+### G41.6 Perbaikan review security (18 Nov 2026, SECURITY_REVIEW_2026-11-18_g41)
+
+| Temuan | Perbaikan | File |
+|---|---|---|
+| SEC-180 (P1) | `ESB_USER_<BRAND>: ${ESB_USER_<BRAND>:-}` (kosong default; brand aktif tanpa user = gagal start di kode); `.env.example` `ESB_USER_*=` kosong; runbook memakai placeholder `<user API brand PB>` dst. + langkah isi di `.env` lokal gitignored / config rilis; komentar overlay diperbaiki (akun saat ini **admin**, read-only = Q-ESB1). `check-encryption.sh` fungsi baru `check_esb_users` (jalan di mode `all` dan `files`): (a) teks `ESB_USER_*` di `infra/compose/docker-compose*.yml` wajib `${ESB_USER_X:-}`/kosong, di `.env.example` wajib kosong; (b) `git ls-files --cached --others --exclude-standard` tidak boleh memuat username lama (pola disusun dari potongan agar skrip tidak cocok dengan dirinya sendiri; kecuali laporan review G41 dan docs/04; `.env` lokal otomatis terkecuali karena di-gitignore). Render `prod-esb`: `ESB_USER_*` ter-render berisi nilai = error bila `CI` di-set (CI menyalin `.env.example`), info saja di lokal. | overlay, `.env.example`, runbook, check-encryption |
+| SEC-183 | Network baru `egress-esb` (bridge non-internal, `enable_icc: "false"`, subnet **172.30.8.0/24** — base memakai 172.30.0–6, overlay `esb` 172.30.7); esb-extract = `esb` + `egress-esb`. Cek: esb-extract hanya `esb`+`egress-esb`, `egress-esb` hanya esb-extract, `enable_icc` wajib `"false"`. | overlay, check-encryption, runbook §0/§4/§9 |
+| SEC-185/187 passthrough | `ESB_ALLOW_IGNORE_WINDOW` (default `false`, dicek di render `prod-esb` seperti `ESB_ENABLED`) dan `ESB_MAX_RESPONSE_BYTES` (default 33554432). `.env.example` kini memuat semua 11 env passthrough yang dilaporkan QA + 2 baru + 5 `ESB_USER_*`. | overlay, `.env.example`, check-encryption |
+| SEC-185/186 runbook | Satu proses per brand (L-111): keluarkan brand dari `ESB_BRANDS`/hentikan loop saat backfill; `--ignore-window` production hanya `ESB_ALLOW_IGNORE_WINDOW=true` + ≤ 1 hari. `auth_suspended` setelah 2 siklus auth gagal → perbaiki password/username, `probe`, restart. 403 → slice `partial` tanpa checkpoint, dicoba ulang tiap siklus. §1a prasyarat aktivasi production: inventaris PDP + tanda tangan DPO (SEC-184), Q-ESB1/Q-ESB7/Q-ESB9, Metabase mart ESB hanya grup Holding sampai row policy G42 (SEC-182), redaksi raw_doc (SEC-181). | runbook |
+
+Validasi: **tidak dijalankan** (sesi tanpa shell). Lead perlu menjalankan `docker compose ... -f docker-compose.esb.yml config -q`, `bash scripts/check-encryption.sh` (lokal: `.env` berisi username nyata hanya memicu info, bukan error), `shellcheck -x scripts/check-encryption.sh`. Dependensi kode: `ESB_ALLOW_IGNORE_WINDOW`, `ESB_MAX_RESPONSE_BYTES`, dan status `auth_suspended` diimplementasi efn-data-ai-engineer (paralel); saat sesi ini config.py belum membaca kedua env itu. Sisa username lama di repo: hanya `docs/04` Q-ESB2 (lead) dan laporan review — selama docs/04 belum diubah, cek (b) mengecualikannya.
+
 ## G22 (19 Okt 2026, branch chore/wave-22, HEAD 852b5fe) — secret QR meja, gateway path 13–15, redaksi `fts1.`, gerbang L-73, D-22-18
 
 Kontrak: docs/04 §14.A.2/§14.A.5/§14.A.9/§14.A.10, §14.D.8–D.9, §14.E.2/E.4, §14.7 L-70/L-72 (D-22-18)/L-73/L-74.

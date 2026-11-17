@@ -1,0 +1,5 @@
+# Runtime esb-extract (Python 3.12). Versi di-pin; diaudit pip-audit di CI. HTTP ke ESB = stdlib urllib (tanpa
+# dependency HTTP tambahan). Versi sama dengan services/etl/requirements.txt.
+clickhouse-connect==0.8.9
+# CA publik untuk TLS ke services.esb.co.id (+ dependensi transitif clickhouse-connect); >= perbaikan GHSA-6q48-6c7w-9gw2.
+certifi==2026.10.19

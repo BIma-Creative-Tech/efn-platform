@@ -27,6 +27,12 @@
 #     dengan env *_FILE yang cocok; secret QR di luar pb/bcf; ODOO_API_KEY_QR_<PT>_FILE tanpa secret ter-mount;
 #     LOYALTY_POINT_EXPIRY_DAYS (dihapus D-22-18) di env BFF; kill switch QR/poin online/hangus bukan false di render prod;
 #     LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT bukan true (SEC-171) / job ETL KDS/region/recon online bukan false di render prod
+#   - (G41) esb_core_password_* di luar esb-extract; clickhouse_password_esb di luar clickhouse-init/esb-extract; network
+#           esb dipakai selain clickhouse/esb-extract; esb-extract di network selain esb/egress-esb, network egress-esb
+#           dipakai selain esb-extract atau tanpa enable_icc=false (SEC-183), root, tanpa read_only/cap_drop ALL,
+#           ESB_BASE_URL bukan https://services.esb.co.id/; ESB_ENABLED / ESB_ALLOW_IGNORE_WINDOW bukan default false di
+#           render prod-esb; ESB_USER_* ter-render berisi nilai di render prod-esb tanpa .env, atau nilai ESB_USER_*
+#           di-hardcode di overlay/.env.example; username akun ESB lama tertulis di repo (SEC-180)
 #   - (at rest) service metabase tanpa secret metabase_encryption_key / dengan MB_ENCRYPTION_SECRET_KEY di env /
 #     dengan override entrypoint apa pun termasuk `[]`/`''` / dengan image resmi metabase/metabase (G16b, SEC-86)
 # Pengecualian hanya lewat ADR-022; tambahkan di sini dengan komentar alasan.
@@ -277,6 +283,45 @@ check_compose() {
                or ($k and $e and (($w.environment // {}).NINEROUTER_API_KEY_FILE == "/run/secrets/ninerouter_api_key")))' \
       <<< "$json" > /dev/null \
     || err "[$label] ocr-worker: egress tanpa ninerouter_api_key (ADR-014) atau NINEROUTER_API_KEY_FILE tidak cocok (docs/04 §22)"
+  # 6b3) G41 (docs/04 §25, ADR-040): ekstraksi ESB Core (overlay docker-compose.esb.yml). Password ESB per brand HANYA
+  #      esb-extract; clickhouse_password_esb hanya clickhouse-init + esb-extract; network `esb` hanya clickhouse +
+  #      esb-extract; esb-extract hanya di network esb + egress-esb (bukan egress bersama/data/internal, SEC-183),
+  #      egress-esb hanya esb-extract dan enable_icc=false, non-root, read_only, cap_drop ALL,
+  #      ESB_BASE_URL wajib host ESB https (satu-satunya tujuan egress yang diizinkan, ditegakkan aplikasi), dan setiap
+  #      ESB_PASSWORD_<BRAND>_FILE menunjuk secret brand itu yang DI-MOUNT.
+  jq -e '[.services | to_entries[]
+          | select([.value.secrets[]? | (.source // .) | startswith("esb_core_password_")] | any) | .key]
+         - ["esb-extract"] | length == 0' <<< "$json" > /dev/null \
+    || err "[$label] secret esb_core_password_* di-mount ke service selain esb-extract (least privilege, docs/04 §25)"
+  jq -e '[.services | to_entries[] | select([.value.secrets[]? | (.source // .)] | index("clickhouse_password_esb") != null)
+          | .key] - ["clickhouse-init", "esb-extract"] | length == 0' <<< "$json" > /dev/null \
+    || err "[$label] secret clickhouse_password_esb di-mount ke service selain clickhouse-init/esb-extract (docs/04 §25)"
+  jq -e '[.services | to_entries[] | select((.value.networks // {}) | has("esb")) | .key]
+         - ["clickhouse", "esb-extract"] | length == 0' <<< "$json" > /dev/null \
+    || err "[$label] network esb dipakai service selain clickhouse/esb-extract (docs/04 §25)"
+  jq -e '[.services | to_entries[] | select((.value.networks // {}) | has("egress-esb")) | .key]
+         - ["esb-extract"] | length == 0' <<< "$json" > /dev/null \
+    || err "[$label] network egress-esb dipakai service selain esb-extract (SEC-183)"
+  jq -e '(.networks["egress-esb"] // null) as $n | $n == null
+         or ((($n.driver_opts // {})["com.docker.network.bridge.enable_icc"] // "" | tostring) == "false")' \
+      <<< "$json" > /dev/null \
+    || err "[$label] network egress-esb wajib driver_opts com.docker.network.bridge.enable_icc=\"false\" (SEC-183)"
+  jq -e '(.services["esb-extract"] // null) as $w | $w == null
+         or (((($w.networks // {}) | keys) - ["esb", "egress-esb"] | length == 0)
+             and ((($w.environment // {}).ESB_BASE_URL // "") | startswith("https://services.esb.co.id/"))
+             and ($w.read_only == true)
+             and ((($w.cap_drop // []) | index("ALL")) != null)
+             and ((($w.user // "") | tostring) | test("^[1-9][0-9]*(:[0-9]+)?$")))' <<< "$json" > /dev/null \
+    || err "[$label] esb-extract: wajib hanya network esb+egress-esb, ESB_BASE_URL https://services.esb.co.id/, read_only, cap_drop ALL, user non-root (docs/04 §25)"
+  while IFS=$'\t' read -r key val mounted; do
+    [[ -z "$key" ]] && continue
+    [[ "$val" == "/run/secrets/esb_core_password_${key,,}" && "$mounted" == 1 ]] \
+      || err "[$label] esb-extract ESB_PASSWORD_${key}_FILE=${val} tidak cocok dengan secret ter-mount esb_core_password_${key,,}"
+  done < <(jq -r '.services["esb-extract"] // {} | [.secrets[]? | (.source // .)] as $m
+      | (.environment // {}) | to_entries[] | select(.key | test("^ESB_PASSWORD_[A-Z0-9]+_FILE$"))
+      | (.key | capture("^ESB_PASSWORD_(?<k>[A-Z0-9]+)_FILE$") | .k) as $k
+      | [$k, (.value // ""), (if ($m | index("esb_core_password_" + ($k | ascii_downcase))) != null then "1" else "0" end)]
+      | @tsv' <<< "$json")
   # 6a) G21 (docs/04 §13.1 no. 3, L-61): kunci tanda tangan kebijakan poin WAJIB di-mount ke odoo (penanda tangan) DAN
   #     api-gateway (pemverifikasi) dengan env *_FILE yang cocok; di luar keduanya sudah ditolak loop di atas.
   local lp
@@ -356,6 +401,28 @@ check_compose() {
     done
   fi
 
+  # 8) G41: kill switch ekstraksi ESB default MATI di render prod + overlay (aktivasi lewat .env/config, runbook esb-extract)
+  if [[ "$label" == prod-esb ]]; then
+    jq -e '.services["esb-extract"] != null' <<< "$json" > /dev/null \
+      || err "[$label] esb-extract tidak ter-render (overlay docker-compose.esb.yml / profil data)"
+    jq -e '(.services["esb-extract"].environment.ESB_ENABLED // "") == "false"' <<< "$json" > /dev/null \
+      || err "[$label] esb-extract: ESB_ENABLED harus diteruskan dengan default false di render prod (docs/04 §25)"
+    # SEC-185: pagar --ignore-window di production default MATI
+    jq -e '(.services["esb-extract"].environment.ESB_ALLOW_IGNORE_WINDOW // "") == "false"' <<< "$json" > /dev/null \
+      || err "[$label] esb-extract: ESB_ALLOW_IGNORE_WINDOW harus diteruskan dengan default false di render prod (SEC-185)"
+    # SEC-180: render dari isi repo (CI menyalin .env.example -> .env) tidak boleh membawa username akun ESB. Di luar CI
+    # .env lokal (gitignored) sah berisi username, jadi hanya peringatan; cek teks file repo ada di check_files.
+    if ! jq -e '[(.services["esb-extract"].environment // {}) | to_entries[]
+                 | select(.key | test("^ESB_USER_")) | select(((.value // "") | tostring) != "")] | length == 0' \
+         <<< "$json" > /dev/null; then
+      if [[ -n "${CI:-}" ]]; then
+        err "[$label] esb-extract: ESB_USER_* ter-render berisi nilai dari file repo (SEC-180: username ESB hanya di .env lokal/config rilis)"
+      else
+        echo "check-encryption: [$label] info: ESB_USER_* berisi nilai (dari .env lokal; pastikan tidak ada di file repo)"
+      fi
+    fi
+  fi
+
   echo "check-encryption: compose ${label} diperiksa"
 }
 
@@ -413,7 +480,49 @@ check_files() {
   if grep -qE 'verify[[:space:]]+none|^[[:space:]]*(stats|option[[:space:]]+forwardfor)' "$hap"; then
     err "infra/odoo-rpc-gateway/haproxy.cfg: verify none / stats / forwardfor dilarang"
   fi
+  check_esb_users
   echo "check-encryption: file konfigurasi infra diperiksa"
+}
+
+# SEC-180 (G41): username akun API ESB (saat ini berhak admin, Q-ESB1) tidak boleh ada di repo publik.
+#   (a) Setiap ESB_USER_<BRAND> di file compose infra/compose/docker-compose*.yml wajib `${ESB_USER_<BRAND>:-}` atau
+#       kosong; di .env.example wajib kosong. Nilai nyata hanya di infra/compose/.env lokal (gitignored) / config rilis.
+#   (b) Username lama yang sempat tertulis tidak boleh muncul lagi di file repo (tracked + untracked yang tidak
+#       di-gitignore). Dikecualikan: laporan review G41 dan docs/04 (ditangani lead/reviewer).
+check_esb_users() {
+  local f line key val expect
+  local -a files=()
+  for f in "$COMPOSE_DIR"/docker-compose*.yml "$COMPOSE_DIR/.env.example"; do
+    [[ -f "$f" ]] && files+=("$f")
+  done
+  for f in "${files[@]}"; do
+    while IFS= read -r line; do
+      [[ "$line" =~ ^[0-9]+:[[:space:]]*-?[[:space:]]*(ESB_USER_[A-Za-z0-9_]+)[:=](.*)$ ]] || continue
+      key="${BASH_REMATCH[1]}"; val="${BASH_REMATCH[2]}"
+      val="${val%%[[:space:]]#*}"                       # buang komentar akhir baris
+      val="${val#"${val%%[![:space:]]*}"}"              # trim kiri
+      val="${val%"${val##*[![:space:]]}"}"              # trim kanan
+      if [[ "$val" =~ ^\"(.*)\"$ || "$val" =~ ^\'(.*)\'$ ]]; then val="${BASH_REMATCH[1]}"; fi
+      expect="\${${key}:-}"
+      if [[ "$f" == */.env.example ]]; then
+        [[ -z "$val" ]] || err "${f#"${ROOT_DIR}"/}: ${key} wajib kosong di .env.example (SEC-180)"
+      else
+        [[ -z "$val" || "$val" == "$expect" ]] \
+          || err "${f#"${ROOT_DIR}"/}: ${key} di-hardcode; wajib ${expect} (SEC-180, username ESB hanya di .env lokal)"
+      fi
+    done < <(grep -nE '^[[:space:]]*-?[[:space:]]*ESB_USER_[A-Za-z0-9_]+[:=]' "$f" || true)
+  done
+
+  # Pola disusun dari potongan agar file ini sendiri tidak cocok.
+  local legacy_re hits
+  legacy_re="$(printf '%s' 'ebpit' 'admin|sar' 'onih')"
+  if git -C "$ROOT_DIR" rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+    hits="$(cd "$ROOT_DIR" && git ls-files -z --cached --others --exclude-standard \
+              | xargs -0 -r grep -IilE "$legacy_re" -- 2> /dev/null || true)"
+    [[ -z "$hits" ]] || err "username akun ESB lama (SEC-180) masih tertulis di: $(tr '\n' ' ' <<< "$hits")"
+  else
+    echo "check-encryption: info: bukan work tree git, cek username ESB lama (SEC-180) dilewati"
+  fi
 }
 
 MODE="${1:-all}"
@@ -435,6 +544,8 @@ case "$MODE" in
     # G38 (K25-01): render prod + overlay 9router Text-to-SQL (text2sql egress + ninerouter_api_key)
     check_compose prod-llm-text2sql -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml \
       -f docker-compose.llm-text2sql.yml
+    # G41 (docs/04 §25): render prod + overlay ekstraksi ESB (esb-extract: network esb + egress, password ESB per brand)
+    check_compose prod-esb -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.esb.yml
     check_files
     ;;
   *) echo "pemakaian: $0 [all|files]" >&2; exit 2 ;;
