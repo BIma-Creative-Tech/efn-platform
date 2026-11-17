@@ -55,7 +55,7 @@ jobs:
       web: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.web }}
       odoo: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.odoo }}
       python: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.python }}
-      pyservices: ${{ github.event_name == 'push' && '["ai-ocr-worker","etl","text2sql"]' || steps.filter.outputs.changes }}
+      pyservices: ${{ github.event_name == 'push' && '["ai-ocr-worker","etl","text2sql","esb-extract"]' || steps.filter.outputs.changes }}
       infra: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.infra }}
     steps:
       # Tanpa checkout: pada pull_request paths-filter membaca daftar file lewat API (pull-requests: read); pada push
@@ -69,10 +69,11 @@ jobs:
             api:    ['services/api-gateway/**', '.github/workflows/ci.yml']
             web:    ['services/superapp-web/**', '.github/workflows/ci.yml']
             odoo:   ['services/odoo/**', 'scripts/check-odoo-deps.sh', '.github/workflows/ci.yml']
-            python: ['services/ai-ocr-worker/**', 'services/etl/**', 'services/text2sql/**', '.github/workflows/ci.yml']
+            python: ['services/ai-ocr-worker/**', 'services/etl/**', 'services/text2sql/**', 'services/esb-extract/**', '.github/workflows/ci.yml']
             ai-ocr-worker: ['services/ai-ocr-worker/**', '.github/workflows/ci.yml']
             etl:           ['services/etl/**', '.github/workflows/ci.yml']
             text2sql:      ['services/text2sql/**', '.github/workflows/ci.yml']
+            esb-extract:   ['services/esb-extract/**', '.github/workflows/ci.yml']   # G41 (docs/04 §25)
             infra:  ['infra/**', 'services/**/Dockerfile', '.github/workflows/**', 'scripts/**', 'Makefile']
 
   node:
@@ -133,7 +134,7 @@ jobs:
         id: dirs
         run: |
           dirs=""
-          for d in services/ai-ocr-worker services/etl services/text2sql services/odoo/addons; do
+          for d in services/ai-ocr-worker services/etl services/text2sql services/esb-extract services/odoo/addons; do
             [ -d "$d" ] && dirs="$dirs $d"
           done
           echo "dirs=${dirs# }" >> "$GITHUB_OUTPUT"
@@ -146,7 +147,7 @@ jobs:
       - name: pip-audit
         run: |
           for f in services/ai-ocr-worker/requirements.txt services/etl/requirements.txt \
-                   services/text2sql/requirements.txt services/odoo/requirements.txt; do
+                   services/text2sql/requirements.txt services/esb-extract/requirements.txt services/odoo/requirements.txt; do
             [ -f "$f" ] || continue
             pip-audit -r "$f" --strict || exit 1
           done
@@ -161,7 +162,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [ai-ocr-worker, etl, text2sql]
+        service: [ai-ocr-worker, etl, text2sql, esb-extract]   # esb-extract: G41 (docs/04 §25), fixture sintetis saja
     defaults:
       run:
         working-directory: services/${{ matrix.service }}
@@ -612,6 +613,16 @@ jobs:
         run: >-
           docker compose -f docker-compose.yml -f docker-compose.prod.yml
           --profile core --profile data --profile ai --profile observability --profile ops config -q
+      # G41 (docs/04 §25): overlay ekstraksi ESB (service esb-extract, network esb, password ESB per brand) harus valid
+      # di atas dev dan prod.
+      - name: docker compose config (dev + prod, overlay ESB)
+        working-directory: infra/compose
+        run: |
+          set -euo pipefail
+          for env in dev prod; do
+            docker compose -f docker-compose.yml -f "docker-compose.${env}.yml" -f docker-compose.esb.yml \
+              --profile core --profile data --profile ai --profile observability --profile ops config -q
+          done
       - name: Prod hanya mem-publish port Traefik
         working-directory: infra/compose
         run: |
@@ -631,8 +642,10 @@ jobs:
           for f in docker-compose.online-*.yml; do overlays+=(-f "$f"); done
           # G21 AC-13: odoo_pii_* (secrets.list host:disabled) hanya di-mount docker-compose.pii.yml -> ikut juga.
           # G37: ninerouter_api_key hanya di-mount docker-compose.llm.yml (gateway LLM 9router) -> ikut juga.
+          # G41: esb_core_password_* hanya di-mount docker-compose.esb.yml (ekstraksi ESB) -> ikut juga.
           cfg=$(docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.payment.yml \
-            -f docker-compose.pii.yml -f docker-compose.llm.yml -f docker-compose.llm-text2sql.yml "${overlays[@]}" \
+            -f docker-compose.pii.yml -f docker-compose.llm.yml -f docker-compose.llm-text2sql.yml \
+            -f docker-compose.esb.yml "${overlays[@]}" \
             --profile core --profile data --profile ai --profile observability --profile ops config --format json)
           defined=$(echo "$cfg" | jq -r '.secrets | keys[]' | sort)
           listed=$(awk '!/^[[:space:]]*#/ && NF {print $1}' ../../scripts/secrets.list | sort)

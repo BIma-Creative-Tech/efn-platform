@@ -760,3 +760,51 @@ Kontrak QR meja cocok pada level path, nama field, kode error, batas, rahasia, d
 7. **(P3) Batas `orders[]` event**: BFF ≤ 50 dan 8 KB, Odoo tanpa batas jumlah order sesi (tiap entri ≈ 110 byte → ~70 muat di 8 KB). Dengan ≤ 10 kiriman + order pelayan hasil gabung ini tidak tercapai; bila terlampaui Odoo `payload_too_large` (final) / BFF 400 → poin sesi itu hilang diam-diam (hanya alert `EFN_QR_EVENT_FAILED`).
 8. **(P3) `pos_member_attached` tidak pernah dikirim Odoo** (selalu default `false`): BFF akan meng-earn juga untuk order yang member POS-nya sudah di-earn kasir → mengandalkan idempotensi kunci `pos_earn:<order_uuid>` (replay bila member sama; `conflict` + anomali `qr_pos_member_conflict` bila beda). Perilaku sesuai kontrak D-22-5, disebut agar UAT K1 memeriksanya.
 9. **Belum terverifikasi runtime**: tanda tangan `_get_open_order(self, order)` dan perilaku `super()` di `pos_restaurant` Odoo 19 (override memanggil `super()._get_open_order(order)` dengan dict yang sama, butuh `session_id`/`table_id`); urutan `order.lines` untuk `test_01d` (diasumsikan = urutan input; bila urut lain, ubah assertion jadi per `product_id`); `sync_from_ui` untuk order pelayan kedua di meja yang sama (mungkin menimpa draft pelayan pertama — standar `pos_restaurant`, diasumsikan bukan order QR); perilaku `bus.bus` dan KDS notifikasi; seluruh ETL/ClickHouse (DDL view dengan alias `c_*`, `FINAL` pada `ReplacingMergeTree`) hanya dibaca, tidak dijalankan.
+
+---
+
+## G41 — QA ESB Core -> datamart (`services/esb-extract`, DDL, overlay, docs/04 §25, runbook)
+
+Metode: baca kode saja (tanpa shell/runtime); test baru ditulis hati-hati dan **belum dijalankan** (lead menjalankan pytest + ruff di container).
+
+### G41.1 Mismatch kontrak
+| # | Sisi A | Sisi B | Status |
+|---|---|---|---|
+| 1 | `config.py:257-272` membaca `ESB_MAX_RETRIES`, `ESB_BACKFILL_MAX_CALLS`, `ESB_SALES_READY_HOUR_WIB`, `ESB_CORRECTION_DAYS`, `ESB_GAP_FILL_DAYS`, `ESB_BACKFILL_INCLUDE_INACTIVE`, `ESB_ENTITIES`, `ESB_NON_STORE_BRANCHES`, `ESB_HTTP_TIMEOUT_SECONDS`, `ESB_MAX_PAGES`, `ESB_COMPANY_<BRAND>`; docs/04 §25.2 dan runbook menyebutnya sebagai env operator | `docker-compose.esb.yml` (sebelum perbaikan) tidak meneruskannya: nilai di `.env` tidak berpengaruh (mis. mengaktifkan `stock`, `ESB_NON_STORE_BRANCHES` untuk `is_store`, budget backfill) | **DIPERBAIKI** (overlay meneruskan dengan default = default kode); dijaga `test_contract.py` |
+| 2 | Runbook §5 langkah 2 menyuruh `--entity flow` | `__main__.py:40` `--entity` hanya entitas harian (`sales, fin_sold, payment, production, delivery, transfer, stock`); `flow` = nama view, `master`/`branch` tidak bisa dipilih | **DIPERBAIKI** (runbook) |
+| 3 | Runbook §3/§6 menyebut run `incremental` | `records.py` / DDL `extract_run.mode` = `run` atau `backfill` | **DIPERBAIKI** (runbook) |
+| 4 | Runbook §7 "403 -> entitas/cabang dilewati + dicatat" | `http.py:329-330` 403 = `EsbHttpError` -> slice error (`partial`), tanpa checkpoint, **dicoba ulang tiap siklus** (bukan dilewati) | Hanya dilaporkan; perilaku aman, redaksi runbook kurang tepat |
+| 5 | `.env.example:192-204` hanya memuat 9 variabel ESB | 11 variabel lain kini diteruskan overlay | Dilaporkan; boleh ditambah komentar di `.env.example` (tidak diubah) |
+
+Cocok (diverifikasi): nama secret `esb_core_password_<brand>` kode/overlay/`secrets.list`/check-encryption; `clickhouse_password_esb` (base `docker-compose.yml:144,1497` + overlay + secrets.list); kolom `MART_TABLES` vs DDL (`test_ddl`); kunci join view (`entity`, `scope_key`) vs `SliceTask.scope` (`'*'` per brand, `branchID` per toko); `substring(..., 6)` untuk `NAME:`; grant `esb_writer` = 17 tabel DDL; view §25.6 = 5 view DDL; user `ESB_USER_*` overlay = runbook = §25.1.
+
+### G41.2 Perbaikan
+- `infra/compose/docker-compose.esb.yml`: tambah passthrough `ESB_NON_STORE_BRANCHES, ESB_ENTITIES, ESB_MAX_RETRIES, ESB_BACKFILL_MAX_CALLS, ESB_SALES_READY_HOUR_WIB, ESB_CORRECTION_DAYS, ESB_GAP_FILL_DAYS, ESB_BACKFILL_INCLUDE_INACTIVE, ESB_HTTP_TIMEOUT_SECONDS, ESB_MAX_PAGES, ESB_COMPANY_BACHA` (default sama dengan `config.py`). `ESB_COMPANY_{PB,WTZ,IMD,CUP}` sengaja tidak ditambah (jarang diubah, §25.2). Bentuk `docker compose config` tidak berubah strukturnya, tetapi **jalankan ulang** `docker compose config` + `check-encryption.sh`.
+- `docs/runbooks/esb-extract.md`: §3, §5 (entitas), §6 (mode `run`).
+
+### G41.3 Test ditambah (belum dijalankan)
+`tests/test_runner.py`: `test_checkpoint_not_written_when_mart_insert_fails`, `test_run_cycle_store_failure_marks_run_error_and_records_it`, `test_budget_exhausted_mid_run_keeps_finished_slices_only`, `test_budget_exhausted_inside_slice_writes_nothing`, `test_company_override_per_branch_for_bacha`, `test_backfill_window_closing_mid_run_across_midnight_stops_scheduling`.
+`tests/test_contract.py` (baru): env config.py -> overlay, env config.py -> docs/04, nama secret per brand lintas kode/overlay/secrets.list, resolusi alias `NAME:` di view flow.
+Sudah tertutup sebelumnya (tidak diulang): 401 dua kali (`test_http`), paging berhenti/guard halaman (`test_paging`), jendela lewat tengah malam (`test_planning`), redaksi bersarang (`test_normalize`).
+
+### G41.4 Sisa risiko (tidak diperbaiki; keputusan desain)
+1. **(P2) Tidak ada backoff antar-siklus setelah `auth_failed`.** `run` mencoba login ulang tiap `ESB_INTERVAL_SECONDS` dengan password salah -> risiko akun brand terkunci di ESB (produksi, dipakai kasir). Runbook hanya menyuruh operator mengeluarkan brand manual. Usul: setelah `auth_failed` brand ditangguhkan di memori sampai restart/N jam.
+2. **(P2) Kegagalan tulis ClickHouse di tengah slice menghentikan seluruh siklus brand** (`runner.py:181`, `write_slice` di luar try -> `run_cycle` catch -> `status=error`); slice lain brand itu tidak dicoba siklus tsb. Aman (checkpoint belum ditulis) tetapi satu tabel yang ditolak (mis. grant) menghentikan semuanya; `raw_doc` yatim tertulis. Diterima bila disengaja.
+3. **(P3) Baris yatim berkunci sama menimpa versi lama** (batasan terdokumentasi §25.4): hari tampak kurang sampai ditarik ulang.
+4. **(P3)** `metabase_reader` tidak punya grant `fact_esb_stock_snapshot` dan `map_esb_odoo` (terdokumentasi untuk stock; G43 harus menambah grant map).
+5. Belum terverifikasi: perilaku `/inventory/stock-list`, `production_result` selalu `ck_prod` untuk semua brand (asumsi L-116), alur `Retry-After` pada ESB nyata, jalankan `test_contract` di container (path `parents[3]`).
+
+### G41.5 UAT ringkas untuk G42 (dashboard) dan G43 (migrasi) yang bergantung pada mart
+Given/When/Then (data sintetis; Metabase memakai `metabase_reader`):
+1. **Penjualan harian tepat.** Given slice sales PB toko 7 H-1 selesai (checkpoint ada). When dashboard "Penjualan" difilter tanggal H-1 + toko 7. Then `gross = Σ total`, `net = gross - discount`, `trx_count` = jumlah `salesNum` unik; baris PACKAGE_COMPONENT (total 0) tidak menggandakan omzet.
+2. **Tarik ulang menghapus void.** Given H-1 sudah tampil 100 transaksi; di ESB 1 transaksi di-void. When siklus berikutnya (H-1/H-7) menarik ulang. Then view menampilkan 99; angka lama tidak tersisa (versi slice baru).
+3. **Slice gagal tidak tampil.** Given tarik ulang H-1 gagal di halaman 10 (budget `limit`). Then dashboard tetap menampilkan versi lama (bukan data separuh) dan `v_esb_data_quality` `last_run_not_ok` muncul.
+4. **Toko tanpa penjualan.** Given toko aktif tanpa transaksi H-1. Then `store_no_sales_h1` memuatnya (bukan error); toko CK/gudang tidak muncul karena `is_store=0`.
+5. **Alias belakangan.** Given transfer berisi nama produk tanpa kode (`NAME:FIN ROTI X`). When master berikutnya mempelajari alias itu. Then `v_esb_flow_daily` memetakan ke kode produk pada data lama tanpa tarik ulang; `alias_unmapped` turun.
+6. **PT Bacha.** Given override `bacha:12=BCR`. Then penjualan cabang 12 muncul di PT BCR, cabang lain BCF; total brand tidak berubah.
+7. **Row policy per PT (G42).** Given user analis terbatas PT PB. When query `v_esb_*`. Then hanya baris PB (saat ini `metabase_reader` melihat semua PT: uji harus gagal sampai policy G42 dibuat — jadikan gerbang rilis).
+8. **Tanpa PII.** When memeriksa `efn_esb.raw_doc` dan view. Then tidak ada nama kasir/pelanggan/telepon/email; supplier hanya kode/nama/status.
+9. **Brand tanpa secret.** Given `ESB_BRANDS=pb,wtz` tetapi secret `wtz` = `disabled`. Then service gagal start (fail closed), bukan hanya PB berjalan diam-diam.
+10. **Rekonsiliasi migrasi (G43).** Given cutover brand X. When total penjualan bulan lalu per PT di mart ESB dibandingkan Odoo hasil impor. Then selisih = 0 setelah `backfill --force` bulan itu; selisih > 0 ditandai dan `map_esb_odoo` memuat setiap `esb_key` yang diimpor tepat sekali (impor ulang tidak menggandakan).
+11. **Kill switch.** Given `ESB_ENABLED=false`. Then tidak ada baris `extract_run` baru, tidak ada login ke ESB, dashboard tetap menampilkan data terakhir dengan `data_age_hours` naik.
+12. **Jendela backfill.** Given backfill dijalankan pukul 12:00 WIB. Then `status=window_closed`, nol panggilan; dijalankan 23:59 dan berlanjut melewati 00:00 tetap berjalan; berhenti menjadwalkan pukul 05:00 dan lanjut dari checkpoint malam berikutnya.

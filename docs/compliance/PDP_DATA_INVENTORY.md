@@ -1,6 +1,7 @@
 # Inventaris Data Pribadi / RoPA (UU PDP No. 27/2022) — EFN Platform
 
 - **Status:** Draf teknis — **keputusan retensi & DPO ditetapkan pemilik proyek 10 Okt 2026** (v7); dasar pemrosesan & nomor pasal tetap wajib diverifikasi **Legal (DPO sementara)**.
+  - **v15 (2026-11-18, Gelombang 41)**: §2.8.11 datamart ESB Core (data legacy klien, redaksi pelaku/teks bebas sebelum `raw_doc`, tanpa customer/member; prasyarat aktivasi production).
   - **v14 (2026-11-01, Gelombang 39)**: §2.8.10 asisten analisis "Analisis bertahap" (ringkasan AI, P8, agregat tanpa PII).
   - **v13 (2026-11-01, Gelombang 38)**: §2.8.9 Text-to-SQL "Tanya Data" (log pertanyaan per user di Odoo, P7, tanpa PII di mart).
   - **v12 (2026-11-01, Gelombang 37)**: §2.8.8 OCR tahap 2 lewat gateway LLM 9router (transfer lintas negara P6, mati default, Q-T7).
@@ -443,6 +444,21 @@ Price Hunter meminta pengguna memotret label saja; DPIA ringkas untuk aliran P6.
 - **Pemroses:** ringkasan ke Ollama lokal atau 9router (P8, `PDP_TRANSFER_LINTAS_NEGARA.md`). Default: tanpa ringkasan
   (hasil tidak dikirim ke LLM). Redaksi pola email/nomor ≥ 8 digit pada teks bebas sebelum dikirim.
 - **Log service:** tanpa pertanyaan/SQL/hasil/ringkasan. **Retensi:** sama §2.8.9 (usulan > 1 tahun dihapus; DPO).
+
+#### 2.8.11 (v15) Datamart ESB Core — Gelombang 41 (docs/04 §25, ADR-040)
+- **Sumber & dasar:** sistem ERP/POS ESB Core milik klien (pengendali = PT masing-masing brand), ditarik GET-only per brand
+  oleh `esb-extract` untuk dashboard, migrasi Odoo (G43), dan forecast (G44). Hak penggunaan API massal = Q-ESB9.
+- **Data:** cabang, produk/menu/BoM, penjualan per baris menu (`salesNum` = ID transaksi, **tanpa** pelanggan/kasir),
+  ringkasan pembayaran per metode (tanpa data kartu), produksi, pengiriman, transfer. **Customer & member tidak ditarik.**
+- **Data pribadi residu:** `supplierName` pemasok perorangan (whitelist supplier: kode, nama, status saja; alamat,
+  telepon, contact person dibuang). Pelaku dokumen (`creator*`, `editor*`, `authorizer*`, `*By`, `*UserID`), teks bebas
+  (`additionalInfo`, `notes`, `remark`, `description`, `memo`) dan lampiran (`image*`, `attachment*`) **dibuang sebelum**
+  `efn_esb.raw_doc` (L-110/SEC-181; diverifikasi pada nama kunci respons nyata 18 Nov 2026).
+- **Penyimpanan & retensi:** ClickHouse (disk terenkripsi, TLS). `raw_doc` 36 bulan (TTL; usulan DPO: cutover + 6 bulan),
+  mart tanpa TTL (usulan 10 tahun, L-109). Akses: `esb_writer` (tulis), `metabase_reader` (view + tabel mart, tanpa
+  `raw_doc`) — **lintas PT sampai row policy G42** (SEC-182): batasi koleksi Metabase ke grup Holding.
+- **Prasyarat `ESB_ENABLED=true` di production:** entri ini disetujui DPO; Q-ESB1 (user API read-only), Q-ESB7 (izin beban
+  backfill), Q-ESB9 (hak data). Dev/staging boleh memakai data nyata hanya di mesin terenkripsi (LUKS/BitLocker).
 
 ## 3. Matriks retensi ringkas (default → ditetapkan DPO)
 | Data | Default | Mekanisme (pemilik) | Status |

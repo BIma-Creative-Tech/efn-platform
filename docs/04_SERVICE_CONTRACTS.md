@@ -1,4 +1,4 @@
-# KONTRAK ANTAR-SERVICE (v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
+# KONTRAK ANTAR-SERVICE (v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -2394,3 +2394,243 @@ query gagal]}`.
   `TEXT2SQL_AGENT_SUMMARY_PROVIDER` ∈ {none, ollama, ninerouter, ninerouter_ollama}; ringkasan 9router tanpa izin P8
   atau tanpa jalur 9router SQL ditolak; production + ringkasan 9router ditolak (Q-T7).
 - Service menolak start dengan kombinasi yang sama (fail closed, `config.py`).
+
+## 25. Gelombang 41 — ESB Core → datamart (ADR-040, Proposed) (v17.0, 17 Nov 2026)
+ESB Core (`https://services.esb.co.id/core`, SaaS) adalah **sistem sumber eksternal** lima brand sampai cutover per brand
+(G43); setelah cutover Odoo menjadi sumber kebenaran (L-105). Service baru `esb-extract` menarik data **GET-only** ke
+ClickHouse: raw JSON (`efn_esb`) → mart (`efn_dwh.*esb*`) → view `v_esb_*` untuk dashboard (G42), migrasi (G43), dan
+forecast (G44). **Tanpa data pelanggan/member.** Kill switch `ESB_ENABLED=false` default. Spec publik:
+`https://developers.esb.co.id/esb-core/openapi.json` (perilaku production diverifikasi prototipe 17 Nov 2026; angka di
+bawah = agregat, tanpa data penjualan klien).
+
+### 25.1 Brand, user API, PT
+| Brand key | Brand | Env user (non-rahasia) | Secret password | `company_code` |
+|---|---|---|---|---|
+| `pb` | Paris Baguette | `ESB_USER_PB` | `esb_core_password_pb` | `PB` |
+| `wtz` | Wetzel's Pretzels ("WP" di ESB, Q-ESB2) | `ESB_USER_WTZ` | `esb_core_password_wtz` | `WTZ` |
+| `bacha` | Bacha Coffee | `ESB_USER_BACHA` | `esb_core_password_bacha` | `BCF` default; per cabang `BCR` lewat `ESB_BRANCH_COMPANY_OVERRIDES` (Q-ESB3) |
+| `imd` | Im Donut | `ESB_USER_IMD` | `esb_core_password_imd` | `IMD` (**belum ada di Odoo**, dibuat G43; Q-ESB5) |
+| `cup` | Curry Up | `ESB_USER_CUP` | `esb_core_password_cup` | `CUP` (**belum ada di Odoo**, dibuat G43; Q-ESB5) |
+
+- Satu brand = satu user API ESB. Nama user = env non-rahasia (diisi di `.env` host, tidak di repo); password hanya dari
+  `/run/secrets/esb_core_password_<brand>` (diisi manual pemilik, **tidak di-generate**). Secret lama
+  `esb_core_password.txt` = brand `pb` → di-rename `esb_core_password_pb.txt` (runbook devsecops).
+- Kode `IMD`/`CUP` dicadangkan di §12.1 (L-48/L-91) untuk G43; sampai G43 hanya hidup di mart ESB (L-108).
+
+### 25.2 Env & secret `esb-extract`
+| Env | Default | Arti |
+|---|---|---|
+| `ESB_ENABLED` | `false` | `false` → proses idle (tidak login, tidak memanggil API, tidak menulis ClickHouse); `run` tidur, CLI lain exit 0 dengan pesan "ESB dinonaktifkan" |
+| `ESB_BASE_URL` | `https://services.esb.co.id/core` | Wajib `https`, host persis `services.esb.co.id`, port 443, tanpa kredensial/query; lain → tidak start |
+| `ESB_BRANDS` | (kosong) | Brand aktif, dipisah koma, subset `pb,wtz,bacha,imd,cup` |
+| `ESB_USER_<BRAND>` / `ESB_PASSWORD_<BRAND>_FILE` | — / `/run/secrets/esb_core_password_<brand>` | Wajib untuk setiap brand aktif; kosong/placeholder → brand itu gagal start (fail closed) |
+| `ESB_BRANCH_COMPANY_OVERRIDES` | (kosong) | `brand:branchID=KODE` dipisah koma, mis. `bacha:12=BCR,bacha:15=BCR`; KODE ∈ §12.1 + `IMD`,`CUP` |
+| `ESB_CK_BRANCHES` | `pb:4\|38` | Cabang dapur pusat per brand (`brand:id\|id`, dipisah koma); Q-ESB8 untuk brand lain |
+| `ESB_COMPANY_<BRAND>` | `PB`/`WTZ`/`BCF`/`IMD`/`CUP` | PT default per brand (jarang diubah) |
+| `ESB_NON_STORE_BRANCHES` | (kosong) | Cabang non-toko tambahan (format sama `ESB_CK_BRANCHES`); `is_store=0` juga untuk CK, gudang, head office (dari nama) |
+| `ESB_RATE_PER_SEC` / `ESB_WORKERS` / `ESB_MAX_RETRIES` | `2.0` / `4` / `5` | Token bucket **per brand per proses** (bukan global); paralel per brand; retry |
+| `ESB_MAX_CALLS_PER_RUN` | `20000` | Batas panggilan satu siklus `run` per brand; tercapai → berhenti rapi, `extract_run.status='limit'` |
+| `ESB_BACKFILL_MAX_CALLS` | `60000` | Batas panggilan satu proses `backfill` (≈ satu malam pada 2 req/dtk) |
+| `ESB_INTERVAL_SECONDS` | `3600` | Jeda loop `run` |
+| `ESB_SALES_READY_HOUR_WIB` / `ESB_CORRECTION_DAYS` / `ESB_GAP_FILL_DAYS` | `3` / `1,7` / `7` | Jam penjualan kemarin siap; hari koreksi (H-1, H-7); isi celah hari tanpa checkpoint |
+| `ESB_BACKFILL_WINDOW` / `ESB_BACKFILL_INCLUDE_INACTIVE` | `22:00-05:00` / `true` | Jendela WIB untuk `backfill`; toko nonaktif ikut backfill (riwayat toko tutup) |
+| `ESB_ENTITIES` | `branch,master,sales,fin_sold,payment,production,delivery,transfer` | `stock` opsional (default mati) |
+| `ESB_HTTP_TIMEOUT_SECONDS` / `ESB_MAX_PAGES` | `60` / `500` | Batas per permintaan / halaman per slice |
+| `ESB_MAX_RESPONSE_BYTES` | `33554432` (32 MiB; rentang 1–128 MiB) | SEC-187: respons lebih besar ditolak tanpa retry (memori container 512 MB) |
+| `ESB_ALLOW_IGNORE_WINDOW` | `false` | SEC-185: di `APP_ENV=production`, `backfill --ignore-window` hanya diizinkan bila `true` **dan** rentang ≤ 1 hari |
+| `ESB_HEARTBEAT_FILE` / `ESB_HEALTH_MAX_AGE_SECONDS` | `/tmp/efn-esb.heartbeat` / `7800` | Healthcheck `python -m efn_esb health` |
+| `CH_HOST`, `CH_PORT`, `CH_USER`, `CH_PASSWORD_FILE`, `CH_SECURE`, `CH_CA_FILE`, `CH_DATABASE`, `CH_RAW_DATABASE` | `clickhouse`, `8443`, `efn_esb`, `/run/secrets/clickhouse_password_esb`, `true`, `/run/secrets/efn_ca_crt`, `efn_dwh`, `efn_esb` | Sama pola ETL (`services/etl/efn_etl/config.py`, `adapters.py`, `tls.py`) |
+| `EFN_ALLOW_PLAINTEXT` | `false` | Hanya dev, sama dengan ETL; production menolak |
+
+- TLS ke ESB: verifikasi CA publik (certifi), TLS ≥ 1.2, `trust_env=False` (proxy env/.netrc diabaikan), redirect
+  **tidak** diikuti. TLS ke ClickHouse: CA internal, HTTPS 8443, tanpa fallback plaintext.
+- **Tidak pernah** dicetak/di-log/dimasukkan ke pesan exception: password, token JWT, header `Authorization`, body login.
+  Log URL = path + nama parameter non-sensitif saja.
+
+### 25.3 Aturan akses API ESB (L-106, L-111)
+- Klien HTTP **hanya** mengizinkan `GET <base>/*` dan `POST <base>/auth/login`; method/path lain → exception sebelum
+  koneksi dibuka (test unit wajib). Tidak ada endpoint `push`, `import`, `authorize`, `upload`, `restore`, `delete`.
+- Login: `POST /auth/login` `{"username","password"}` → `result.accessToken` (Bearer). HTTP 401 pada GET → login ulang
+  sekali lalu ulangi permintaan; 401 lagi → brand ditandai gagal (`extract_run.status='auth_failed'`), brand lain jalan.
+- Retry `429` dan `5xx`: exponential backoff + jitter, maks 5 percobaan, menghormati `Retry-After` bila ada. `4xx` lain →
+  tidak di-retry, dicatat sebagai error dokumen.
+- Paging: `page`/`limit`; total dari `dataCount` (`/branch/list/user`) atau `result.count` (laporan). Laporan
+  `sales-menu-cogs` & `sales-menu-cogs-detail` limit **tetap 20** (`limit` > 20 → HTTP 400 di `-detail`).
+
+### 25.4 Entitas, endpoint, jadwal
+| Entitas (`--entity`) | Endpoint | Grain panggilan | Tujuan mart |
+|---|---|---|---|
+| `branch` | `/branch/list/user` | brand | `dim_esb_branch` |
+| `master` | `/product`, `/product/bom`, `/menu/browse`, `/supplier` | brand | `dim_esb_product`, `dim_esb_menu`, `dim_esb_supplier`, `dim_esb_product_alias` |
+| `sales` | `/report/sales-menu-cogs?salesDate&branchID&salesType=Sales&page` | toko × hari, ±23 hlm | `fact_esb_sales_line` |
+| `fin_sold` | `/report/sales-menu-cogs-detail?mode=recap&productName=FIN` | toko × hari, ±3 hlm | `fact_esb_fin_sold_daily` |
+| `payment` | `/report/sales-payment-summary?salesDate` | brand × hari | `fact_esb_payment_daily` |
+| `production` | `/production/simple-manufacturing` (+`/{num}` → `simpleManufacturingResults`, rasio BATCH→EA per `bomID`), `/production/production-result` (+detail, `qty × convertionQty`) | brand × hari + 1/dokumen | `fact_esb_production`, `dim_esb_product.batch_to_ea_ratio` |
+| `delivery` | `/inventory/goods-delivery` (+detail; status 33 tanpa nomor diabaikan) | brand × hari + 1/dokumen | `fact_esb_delivery` |
+| `transfer` | `/simple-transfer` (+detail; status 3 & 6 dihitung; nama produk tanpa kode → alias) | brand × hari + 1/dokumen | `fact_esb_transfer` |
+| `stock` | `/inventory/stock-list?stockDate&branchID` | toko × hari | `fact_esb_stock_snapshot` (**bila** parameter terbukti memadai di production; bila tidak, ditunda + dicatat) |
+| — | `/customer*`, member, karyawan | — | **Tidak ditarik** (L-110) |
+
+Mode CLI (`python -m efn_esb …`):
+- `run` — loop tiap `ESB_INTERVAL_SECONDS`, brand satu per satu: entitas `branch` **setiap siklus** → `master`
+  **sekali/hari** (WIB) → **H-1** dan koreksi **H-7** (`ESB_CORRECTION_DAYS`, sekali/hari setelah
+  `ESB_SALES_READY_HOUR_WIB`=03:00 WIB) + **gap fill** hingga `ESB_GAP_FILL_DAYS`=7 hari terakhir yang belum punya
+  checkpoint. Budget `ESB_MAX_CALLS_PER_RUN`.
+- `backfill --brand <b> --from YYYY-MM-DD --to YYYY-MM-DD [--entity …] [--force] [--ignore-window]` — satu brand per
+  proses, hari terbaru dulu, slice `done` dilewati kecuali `--force` (resumable); budget `ESB_BACKFILL_MAX_CALLS`=60000.
+  Di luar `ESB_BACKFILL_WINDOW` tidak memanggil apa pun / berhenti menjadwalkan (`status='window_closed'`) → jalankan
+  ulang perintah yang sama malam berikutnya. `--ignore-window` hanya dev/uji. Operasional: **satu brand pada satu waktu**;
+  jangan menjalankan `run` dan `backfill` brand yang sama bersamaan tanpa menurunkan `ESB_RATE_PER_SEC` (bucket per proses).
+- `probe --brand <b>` — login + `/branch/list/user`, cetak **jumlah cabang saja** (tanpa nama, tanpa token).
+- `health` — heartbeat segar? (healthcheck container).
+
+**Slice & versi (teruji ClickHouse 24.8).** Satu slice = `(brand, entity, scope_key, day)`; `scope_key` = `branchID`
+(sales, fin_sold, stock) atau `*` (per brand). Urutan tulis: `raw_doc` → tabel mart → `bom_ratio` →
+`extract_checkpoint` (**terakhir**). Semua baris fakta satu slice membawa `_version` = `extract_checkpoint.finished_at`
+slice itu; **view fakta hanya membaca baris dari versi slice yang punya checkpoint** (filter `IN` ke
+`extract_checkpoint FINAL`). Akibatnya tarik ulang (H-1/H-7, `backfill --force`) mengganti isi hari itu termasuk baris
+yang dihapus/void di ESB, dan slice yang gagal di tengah tidak terlihat. **Tanggal fakta = hari slice yang diminta ke
+ESB** (bukan tanggal yang diparse dari dokumen). Checkpoint hanya ditulis untuk slice sukses (`status='done'`).
+
+> **Batasan teruji:** baris dari slice **tanpa** checkpoint yang kuncinya sama dengan baris versi lama **menimpa** versi
+> lama lewat `FINAL`/merge (ReplacingMergeTree memilih `_version` tertinggi sebelum filter view). Bila tulis checkpoint
+> gagal setelah fakta tertulis, hari itu tampak **kurang** (bukan dobel) sampai ditarik ulang. Jalur harian pulih sendiri
+> (H-1/H-7/gap fill diulang pada siklus berikutnya); `backfill --force` yang gagal **harus dijalankan ulang**. Deteksi:
+> `extract_run.status != 'ok'` / `v_esb_data_quality` `last_run_not_ok`.
+
+Status `extract_run`: `ok` | `partial` | `error` | `limit` | `auth_failed` | `window_closed`.
+
+### 25.5 ClickHouse (`infra/clickhouse/init/12-g41-esb.sql`, idempoten; **DDL menang untuk detail kolom**)
+Database baru **`efn_esb`** (raw + kendali):
+| Tabel | Kolom kunci | Engine / ORDER BY | Partisi / TTL |
+|---|---|---|---|
+| `efn_esb.raw_doc` | `brand, endpoint, doc_key, doc_date Date, payload String CODEC(ZSTD), payload_sha256, fetched_at DateTime64(3,'UTC')` | RMT(`fetched_at`) `(brand, endpoint, doc_key)` | `toYYYYMM(doc_date)`; **TTL `doc_date` + 36 bulan** |
+| `efn_esb.extract_checkpoint` | `brand, entity, scope_key, day Date, status, rows UInt64, calls UInt32, finished_at DateTime64(3,'UTC')` (= versi slice), `written_at DateTime64(3,'UTC') DEFAULT now64(3)` | RMT(`finished_at`) `(brand, entity, scope_key, day)` | — |
+| `efn_esb.extract_run` | `run_id UUID, brand, mode` (`run`\|`backfill`), `started_at, finished_at, calls, rows, errors, status` (§25.4) | MergeTree `(brand, started_at, run_id)` | — |
+| `efn_esb.bom_ratio` | `bom_id UInt64, product_code, product_name, uom, ratio Float64, sample_doc, _version` | RMT(`_version`) `(brand, bom_id)` | — |
+
+`doc_key`: laporan per toko = `<hari>|<branchID>` dengan **semua halaman digabung** dalam satu payload per slice;
+laporan per brand = `<hari>`; detail = nomor dokumen. `payload` = JSON kanonik ter-redaksi (L-110), `CODEC(ZSTD(3))`,
+`ttl_only_drop_parts=1`. `payload_sha256` disimpan tetapi **belum** dipakai untuk melewati transform (transform selalu
+jalan; tetap idempoten). `bom_ratio`: rasio BATCH→EA per BOM dari satu GET detail simple-manufacturing per BOM baru
+(bukan per dokumen).
+
+Mart di **`efn_dwh`** — semua tabel memuat `brand LowCardinality(String)`, `company_code LowCardinality(String)`,
+`_version DateTime64(3,'UTC')` (versi RMT; untuk fakta = versi slice) dan `_loaded_at DEFAULT now64(3)`. Kunci fakta
+memuat **`brand` setelah `company_code`** karena `branchID` hanya unik dalam satu akun ESB (brand):
+| Tabel | Kolom bisnis | ORDER BY (kunci dedup) |
+|---|---|---|
+| `dim_esb_branch` | `branch_id UInt32, branch_code, branch_name, is_ck, is_store, active` | `(brand, branch_id)` |
+| `dim_esb_product` | `product_code, product_name, category, uom` (`''` bila `/product` tanpa satuan), `is_fin, batch_to_ea_ratio Nullable(Float64), active` | `(brand, product_code)` |
+| `dim_esb_menu` | `menu_code, menu_name, menu_category, menu_category_detail, is_takeaway` | `(brand, menu_code)` |
+| `dim_esb_product_alias` | `alias_norm, product_code` | `(brand, alias_norm)` |
+| `dim_esb_supplier` | `supplier_code, supplier_name, active` | `(brand, supplier_code)` |
+| `map_esb_odoo` | `entity, esb_key, odoo_xmlid, odoo_id UInt64` | `(brand, entity, esb_key)` — **kosong di G41**, diisi G43 |
+| `fact_esb_sales_line` | `branch_id, sales_date, sales_num, line_no UInt32, menu_code, menu_name, qty Decimal(18,3), price, total, discount, cogs Decimal(18,2), row_type, is_takeaway` | `(company_code, brand, branch_id, sales_date, sales_num, line_no)`, partisi `toYYYYMM(sales_date)` |
+| `fact_esb_payment_daily` | `branch_id` (0 bila `branchCode` tak dikenal), `branch_code, sales_date, payment_type, payment_method, payment_count UInt32, amount, mdr, net` | `(company_code, brand, branch_code, sales_date, payment_type, payment_method)` |
+| `fact_esb_fin_sold_daily` | `branch_id, sales_date, product_code` (kode atau `NAME:<alias>`), `qty_ea` | `(company_code, brand, branch_id, sales_date, product_code)` |
+| `fact_esb_production` | `branch_id, prod_date, source` (`simple_mfg`\|`production_result`), `doc_num, product_code, uom` (`EA`, atau `NO_RATIO` = simple_mfg tanpa rasio BOM, qty masih batch), `qty_ea, is_ck, is_fin` — semua produk dimuat | `(company_code, brand, branch_id, prod_date, source, doc_num, product_code)` |
+| `fact_esb_delivery` | `delivery_date, doc_num, origin_branch_id, dest_branch_id, product_code, uom, qty_ea, is_fin`; `company_code` = PT cabang asal | `(company_code, brand, delivery_date, doc_num, product_code)` |
+| `fact_esb_transfer` | `transfer_date, doc_num, origin_branch_id, dest_branch_id, product_code, uom, qty_ea, status UInt16, is_fin` (hanya status 3 & 6) | `(company_code, brand, transfer_date, doc_num, product_code)` |
+| `fact_esb_stock_snapshot` | `branch_id, snapshot_date, product_code, uom, qty` | `(company_code, brand, branch_id, snapshot_date, product_code)` (entitas `stock` default mati, §25.4) |
+
+Semua fakta: `ReplacingMergeTree(_version)`, partisi `toYYYYMM(<tanggal>)`.
+
+Aturan transform:
+- `line_no` (L-113, `UInt32`): baris satu `salesNum` diurutkan `(menuCode, rowType, qty, price, total)` lalu pemecah seri
+  `(discount, cogs, menuName)`, kemudian diberi nomor 1..n (tidak bergantung urutan respons API). Baris yang identik
+  di semua kolom itu mendapat nomor berurutan. Tujuannya: tarik ulang hari yang sama menghasilkan kunci yang sama.
+- `is_takeaway` = nama menu berakhiran `" T"`; `menu_code` tetap kode ESB.
+- `product_code` tak terpetakan → `NAME:<alias_norm>` (alias = upper, NFKC, trim, spasi ganda dirapikan, aturan ejaan di
+  kode mis. `YOGHURT→YOGURT`). `v_esb_flow_daily` me-resolve ulang `NAME:` lewat `dim_esb_product_alias` saat query
+  (alias yang dipelajari belakangan berlaku untuk data lama). Sisa tak terpetakan muncul di `v_esb_data_quality`.
+- Produk FIN = kode berawalan `FIN` atau nama memuat token `FIN`/`FINB` (sama dengan prototipe).
+- Satuan non-EA tetap dimuat apa adanya dengan `uom`, dicatat di `v_esb_data_quality` (tidak dikonversi diam-diam).
+
+### 25.6 View (`CREATE OR REPLACE VIEW efn_dwh.*`, `FINAL` di subquery, pola `v_*` §21.2)
+| View | Grain | Kolom |
+|---|---|---|
+| `v_esb_sales_daily` | `sales_date` × brand × PT × cabang × menu | `branch_name, menu_code, menu_name, menu_category, menu_category_detail, is_takeaway, qty`, `gross` (Σ total), `discount`, `net` (gross − discount), `cogs`, `trx_count` (uniqExact `sales_num`) |
+| `v_esb_payment_daily` | `sales_date` × brand × PT × cabang × tipe × metode | `branch_id, branch_code, branch_name, payment_count, amount, mdr, net` |
+| `v_esb_flow_daily` | `day` × brand × PT × cabang × produk FIN (EA) | `branch_name, product_code, product_name, ck_prod, ck_out, in_ck, in_other, store_prod, st_in, st_out, sold` (semantik L-116); PT = PT cabang di `dim_esb_branch` (fallback PT baris fakta) |
+| `v_esb_menu_mix` | `month` × brand × PT × cabang × kategori menu × takeaway | `branch_name, qty, net, share_qty, share_net` (% dalam cabang-bulan; NULL bila total 0); kategori kosong = "Tanpa kategori" |
+| `v_esb_data_quality` | `check_name, brand, company_code, item, value, last_day` | `alias_unmapped` (30 hari, value = qty), `non_ea_lines` (30 hari, item `<tabel>:<uom>`), `store_no_sales_h1` (toko aktif dengan slice H-1 berisi 0 baris), `data_age_hours` (per brand × entitas, dari `written_at`), `last_run_not_ok` (run terakhir per brand × mode) |
+
+Semua view fakta membaca `FINAL` **dan** hanya versi slice yang punya checkpoint (§25.4).
+
+- **`v_esb_sales_hourly` tidak dibuat** (L-112): `sales-menu-cogs` tidak memuat jam. Halaman "per jam" G42 menunggu
+  endpoint lain (belum ditemukan di spec, belum diverifikasi).
+- `v_esb_stock_cover` (rencana induk) ditunda sampai `fact_esb_stock_snapshot` terbukti terisi.
+- **Semantik `v_esb_flow_daily` (L-116, = prototipe `aggregate.py`)**, satuan EA, hanya baris `is_fin=1`, tanggal = hari
+  slice:
+  | Kolom | Sumber | Dicatat di cabang |
+  |---|---|---|
+  | `ck_prod` | `fact_esb_production`: `simple_mfg` (× rasio BATCH→EA per BOM) di cabang `is_ck=1`, **ditambah semua** `production_result` (qty × konversi) | cabang dokumen |
+  | `store_prod` | `simple_mfg` di cabang `is_ck=0` | toko |
+  | `ck_out` | `fact_esb_delivery` dengan `origin` ∈ CK (qty terima bila ada, selain itu qty kirim) | CK asal |
+  | `in_ck` | baris yang sama | toko tujuan |
+  | `in_other` | `fact_esb_delivery` dengan `origin` ∉ CK (mis. gudang) | tujuan (asal tidak dikurangi) |
+  | `st_out` / `st_in` | `fact_esb_transfer` status 3 & 6 | asal / tujuan |
+  | `sold` | `fact_esb_fin_sold_daily` (`salesType=Sales`) | toko |
+  Turunan dashboard (bukan kolom view): tersedia = `in_ck + in_other + store_prod + st_in − st_out`; sell-through =
+  `sold / tersedia`; sisa implisit = `tersedia − sold`. **Asumsi (belum diverifikasi untuk semua brand):**
+  `production_result` hanya terjadi di CK/gudang CK, sehingga selalu dihitung `ck_prod` seperti prototipe.
+
+### 25.7 Akses ClickHouse (`infra/clickhouse/access/esb-access.sql`, `clickhouse-init.sh`)
+- User **`efn_esb`** (secret `clickhouse_password_esb`, di-generate `gen-secrets.sh`, hanya di-mount ke clickhouse-init +
+  esb-extract), role **`esb_writer`**: `SELECT, INSERT` per tabel (bukan wildcard) pada `efn_esb.raw_doc`,
+  `extract_checkpoint`, `extract_run`, `bom_ratio` dan 13 tabel `efn_dwh.*esb*` (§25.5); **tanpa** DDL, `ALTER`, `DROP`,
+  `TRUNCATE`, `OPTIMIZE`, akses tabel non-ESB. DDL hanya dijalankan clickhouse-init.
+- Profil `esb_writer_profile`: `readonly=0`, `allow_ddl=0`, `allow_introspection_functions=0` (CONST),
+  `max_execution_time` 300 s (maks 900), `max_memory_usage` 2 GB (maks 4 GB).
+- `metabase_reader` (opsional, analis): `SELECT` 5 view `v_esb_*` + tabel dasarnya (view INVOKER: dimensi, fakta kecuali
+  `fact_esb_stock_snapshot`, `extract_checkpoint`, `extract_run`); **tanpa** `raw_doc` (payload mentah) dan `bom_ratio`.
+- Row policy per PT pada `v_esb_*` di `efn_t2s` (pola `v_loyalty_daily`, by `company_code`): **ditunda ke G42** (tidak
+  ada di DDL G41). User `efn_insight` (G42) **belum** dibuat. Catatan G42: `metabase_reader` saat ini melihat **semua PT**
+  di mart ESB (sama dengan mart lain untuk Metabase).
+
+### 25.8 Gerbang & operasi
+- `ESB_ENABLED=false` default di semua environment; production `true` hanya setelah **Q-ESB1** (user read-only) dan
+  **Q-ESB7** (izin beban) dijawab (L-115). `deploy-validate` (devsecops) memvalidasi boolean, host `ESB_BASE_URL`,
+  dan brand aktif punya secret non-placeholder.
+- Compose: overlay `infra/compose/docker-compose.esb.yml` (profil `data`; pola overlay G37) — tanpa overlay tidak ada
+  service yang memegang password ESB atau jalur keluar ke ESB. Network: `esb-extract` di **`esb`** (internal baru, hanya
+  clickhouse ↔ esb-extract) + `egress` (internet); **tidak** di `data`/`internal` (tidak menjangkau PostgreSQL,
+  RabbitMQ, storage, Loki). Allowlist `services.esb.co.id:443` di aplikasi; allowlist tingkat jaringan = sisa risiko.
+  `check-encryption`: `esb_core_password_*` hanya di esb-extract; `clickhouse_password_esb` hanya clickhouse-init +
+  esb-extract. Wiring rilis bertanda tangan (`IMAGE_ESB_EXTRACT`) = tindak lanjut (runbook `esb-extract.md`).
+- Hardening sama ETL: non-root, `read_only`, `cap_drop: ALL`, `no-new-privileges`, batas memori 512 MB.
+- Observability: `extract_run` + log terstruktur (brand, entitas, hari, calls, rows, durasi, status) tanpa
+  kredensial/payload; alert umur data (usulan) = `v_esb_data_quality` umur > 36 jam untuk brand aktif.
+
+### 25.9 Keputusan (L-105..L-116) dan pertanyaan klien (Q-ESB1..Q-ESB9)
+| # | Keputusan |
+|---|---|
+| L-105 | ESB Core = sistem sumber eksternal per brand sampai cutover; setelah cutover Odoo sumber kebenaran, brand dikeluarkan dari `ESB_BRANDS` setelah rekonsiliasi akhir; mart ESB = arsip read-only. |
+| L-106 | GET-only (kecuali `POST /auth/login`) ditegakkan di klien + test; satu user API per brand; allowlist host `services.esb.co.id:443`; `esb-extract` satu-satunya egress ke ESB. |
+| L-107 | Landing raw + mart di ClickHouse (`efn_esb`, `efn_dwh.*esb*`) = pengecualian terbatas dari "tanpa tulis langsung ke ClickHouse" karena data milik sistem eksternal dan bukan data transaksi EFN (ADR-040 §3.2). |
+| L-108 | Cakupan mart = `company_code` (bukan `company_id`); Bacha default `BCF`, override per cabang ke `BCR`; `IMD`/`CUP` dicadangkan untuk G43. |
+| L-109 | Retensi raw 36 bulan (TTL); mart mengikuti DWH 10 tahun (#59); checkpoint/run tanpa TTL di G41 (volume kecil, ditinjau G42). |
+| L-110 | PDP: customer/member/karyawan tidak ditarik. Supplier hanya kode, nama perusahaan, status. Field identitas orang di payload (nama/email/telepon user pembuat dokumen, pelanggan) **dibuang sebelum** ditulis ke `raw_doc` (denylist kunci di kode, diuji fixture sintetis). `salesNum` boleh (ID transaksi). |
+| L-111 | Beban: token bucket 2 req/dtk per brand per proses, 4 worker, backoff 429/5xx maks 5; budget `ESB_MAX_CALLS_PER_RUN`=20000 (run) dan `ESB_BACKFILL_MAX_CALLS`=60000 (satu proses backfill); backfill hanya 22:00–05:00 WIB; satu brand per waktu (disiplin operasional, tanpa lock global). |
+| L-112 | `v_esb_sales_hourly` tidak dibuat (tidak ada jam di data). |
+| L-113 | `line_no` stabil per `salesNum`: urut `(menuCode, rowType, qty, price, total)` + pemecah seri `(discount, cogs, menuName)` (§25.5) agar tarik ulang idempoten. |
+| L-114 | Versi slice + checkpoint terakhir (§25.4): tarik ulang mengganti isi hari termasuk baris yang dihapus/void. Koreksi H-1/H-7 + gap fill 7 hari harian; perubahan/hapus dokumen ESB > 7 hari ditangkap lewat backfill ulang (`--force`) bulanan sebelum cutover (rekonsiliasi total per brand). Batasan teruji: checkpoint gagal setelah fakta tertulis → hari itu tampak kurang sampai ditarik ulang. |
+| L-115 | `ESB_ENABLED=false` default; production menunggu Q-ESB1 + Q-ESB7. |
+| L-116 | Semantik `v_esb_flow_daily` = prototipe `aggregate.py` (tabel §25.6). |
+
+- **Q-ESB1** (IT klien) Bisakah dibuat **user API read-only** per brand di ESB (tanpa hak push/import/authorize)? Sampai
+  ada: akun admin saat ini hanya untuk dev/uji, production `ESB_ENABLED=false`.
+- **Q-ESB2** (Ops) Apakah brand "WP" di ESB (user API brand WP) = **Wetzel's Pretzels** → company `WTZ`?
+- **Q-ESB3** (Finance/Ops) Pemetaan **setiap cabang Bacha** ke `BCR` (butik ritel, PPN) atau `BCF` (kafe, PB1)?
+- **Q-ESB4** (Ops PB) **11 cabang PB** tidak punya data produk FIN di laporan resep: memang tidak menjual produk FIN, atau
+  resep menu di ESB belum lengkap? (Memengaruhi `sold` dan sell-through.)
+- **Q-ESB5** (Finance/Legal) Nama PT, NPWP, dan jenis pajak (PB1/PPN) **Im Donut** dan **Curry Up** (pola Q-WTZ1).
+- **Q-ESB6** (PO/Finance) **Tanggal cutover** ESB → Odoo per brand (menentukan saldo awal & akhir ekstraksi).
+- **Q-ESB7** (IT klien / vendor ESB) **Izin beban backfill 24 bulan**: ±26–30 panggilan per toko-hari, 2 req/dtk per
+  brand, jendela 22:00–05:00 WIB, satu brand per waktu. Apakah ESB punya batas rate/ketentuan API yang lebih ketat, dan
+  perlukah vendor ESB diberi tahu?
+- **Q-ESB8** (Ops) Daftar **cabang dapur pusat (CK)** per brand selain PB (branch 4 & 38), dan apakah "WHProd" PB benar
+  bukan lokasi produksi.
+- **Q-ESB9** (Legal/IT) Menurut kontrak ESB: hak EFN atas data dan penggunaan API untuk ekstraksi massal; apakah ESB
+  menyediakan ekspor resmi/feed yang lebih ringan (ADR-040 opsi F)?

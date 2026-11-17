@@ -766,3 +766,52 @@ Branch `chore/wave-22`, tanpa commit, **hanya `docs/**`**. Sumber: `docs/reviews
 ## Terverifikasi / belum terverifikasi
 - **Dibaca:** review r15 (utuh); QA G22 §G22.1–G22.5; `docs/04` §14 (A–E, §14.7); `docs/01` §4.1–4.4; kedua runbook; daftar `docs/reviews/`; grep `services/api-gateway/src` untuk `earn_pending`/`pos_member_attached`/`ONLINE_REDEEM_STEPUP` (README orders mengonfirmasi step-up belum dibangun).
 - **Belum terverifikasi:** implementasi K1–K3, SEC-164..168, SEC-171, SEC-173 (paralel, tidak dibaca); `print_no` monoton di Odoo; batas 100/16 KB di kode; penerusan env `LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT` di compose/deploy-validate; semua estimasi = perkiraan architect; Mermaid tidak dirender; tidak ada test yang dijalankan.
+
+# G41 — ESB Core → datamart ClickHouse: ADR-040, kontrak §25, Q-ESB (2026-11-17)
+Branch `feat/wave-41-esb-datamart`, tanpa commit, hanya `docs/**`. Sumber: kontrak kerja G41 efn-lead, rencana induk
+G41–G44, prototipe `aggregate.py` (kode saja; data klien tidak dibaca), spec publik ESB (`/inventory/stock-list` saja).
+
+## Ringkasan (untuk manajemen)
+- Data ESB kelima brand ditarik **hanya-baca**, satu akun per brand, pada malam hari, ke gudang data EFN. Hasilnya
+  menjadi dasar dashboard (G42), migrasi ke Odoo (G43), dan forecast (G44). Data pelanggan/member tidak ditarik.
+- Biaya ±2,5–3,5 minggu-engineer, Rp0 lisensi. Backfill 24 bulan ±4–5 malam per 10 toko (brand berurutan).
+- Fitur mati secara default. Production menunggu klien: **akun API read-only** (Q-ESB1) dan **izin beban** (Q-ESB7).
+
+## File dibuat / diubah
+| File | Perubahan |
+|---|---|
+| `docs/decisions/ADR-040-integrasi-esb-core-datamart.md` | **Baru (Proposed).** Konteks + tabel pertentangan (prinsip PG/ClickHouse, ADR-003, ADR-014/037, R-O02, rencana induk), opsi A–F dengan biaya, keputusan, alasan tidak melanggar "PG = source of truth" (§3.2), beban API, konsekuensi G42/G43/G44 (ADR-041 menyusul), risiko, Q-ESB1..9, kapan ditinjau ulang |
+| `docs/04_SERVICE_CONTRACTS.md` | **v17.0**, §25 baru: brand↔user↔PT, env/secret, aturan GET-only, entitas/endpoint/mode CLI, tabel `efn_esb` + mart `efn_dwh` (ORDER BY), aturan transform, view `v_esb_*` + semantik `v_esb_flow_daily`, akses ClickHouse, gerbang, **L-105..L-116**, **Q-ESB1..Q-ESB9** |
+| `docs/decisions/README.md` | Baris ADR-040 + catatan pembaruan 17 Nov (total 40 ADR) |
+| `docs/01_REVIEW_RISK_GAP_ANALYSIS.md` | §5.12 baru (Q-ESB1..9); usulan risiko **R-O09** (perubahan API ESB), **R-O10** (beban server ESB), **R-S17** (akun admin ESB); catatan pengecualian di prinsip §6.1 no. 4 |
+| `docs/agent-reports/efn-architect.md` | Bagian ini |
+
+## Keputusan yang butuh tanda tangan klien
+- **ADR-040** (Proposed): pemilik proyek + IT klien + Finance + Legal/DPO.
+- **Q-ESB1** user read-only (pemblokir production) · **Q-ESB7** izin beban backfill (pemblokir backfill production) ·
+  **Q-ESB6** tanggal cutover · **Q-ESB3** pemetaan Bacha BCR/BCF · **Q-ESB5** PT/NPWP/pajak IMD & CUP (pemblokir G43) ·
+  Q-ESB2, Q-ESB4, Q-ESB8, Q-ESB9.
+
+## Temuan untuk lead / agent lain
+1. `CLAUDE.md` prinsip ClickHouse perlu catatan pengecualian ADR-040 (bukan wewenang architect).
+2. **L-110 (data-ai):** field identitas orang di payload (nama/email/telepon user pembuat dokumen) dibuang sebelum
+   `raw_doc`. Kontrak kerja awal tidak menyebut ini; cek implementasi.
+3. **L-113 (data-ai):** definisi `line_no` ditetapkan di §25.5; cek kesesuaian kode.
+4. **ORDER BY mart** di §25.5 adalah usulan architect (kontrak kerja hanya menetapkan `fact_esb_sales_line`); DDL menang.
+5. Usulan: koreksi H-7 cukup sekali sehari di jendela malam (beban incremental 60 toko ±2 jam/hari pada 2 req/dtk).
+6. `docs/compliance/PDP_DATA_INVENTORY.md` belum memuat entri datamart ESB (supplier perorangan) — gelombang berikut.
+7. **Rekonsiliasi DDL (18 Nov, DDL menang):** §25 diselaraskan dengan `12-g41-esb.sql`, `esb-access.sql`,
+   README `esb-extract`, dan overlay `docker-compose.esb.yml`. Yang diubah: `brand` di ORDER BY fakta; kolom tambahan
+   (`menu_name`, `branch_id` payment, `uom`/`is_fin`, `active` produk, `line_no UInt32`); `payment_count`; tabel
+   `efn_esb.bom_ratio`; semantik versi slice + batasan teruji; `doc_key` per slice; status `extract_run`; `written_at`;
+   budget `ESB_BACKFILL_MAX_CALLS`, gap fill, jadwal branch/master; pemecah seri `line_no`; grant `metabase_reader`;
+   network `esb` + `egress` (bukan `data`/`egress-esb`); env tambahan; kolom view. ADR-040: alur versi slice, network,
+   koreksi estimasi incremental (sebelumnya ±8×, kini ±2× beban satu hari), estimasi PB dari engineer.
+
+## Terverifikasi / belum terverifikasi
+- **Dibaca:** kontrak kerja G41, rencana induk, `aggregate.py`, spec `/inventory/stock-list` (param `stockDate`,
+  `branchID`), daftar path `/customer*` di spec, `clickhouse-init.sh` (mekanisme `efn_t2s_scope`), `efn_etl/config.py`
+  (nama env `CH_*`), ClickHouse 24.8 di compose.
+- **Belum terverifikasi:** semua fakta API production berasal dari prototipe (bukan uji ulang saya); `stock-list` di
+  production; tidak ada endpoint penjualan per jam (belum dicari tuntas di spec 9,6 MB); estimasi beban & biaya =
+  perkiraan architect; jumlah toko total per brand tidak diketahui; DDL & kode G41 belum ada; Mermaid tidak dirender.

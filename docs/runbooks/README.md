@@ -85,6 +85,7 @@ Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-inciden
 | Rotasi kunci token sesi meja `fnb_table_token_key` dan HMAC event QR `odoo_fnb_event_hmac` (G22) | [fnb-table-token-key.md](fnb-table-token-key.md) |
 | Aktivasi poin hangus 12 bulan tidak aktif & anonimisasi (L-73: izin `EFN_ALLOW_FEATURE_ON` di host) | [loyalty-inactivity-expiry.md](loyalty-inactivity-expiry.md#aktivasi) |
 | Retensi data W-19 (env default, deploy pertama G18 / stop ETL, timer housekeeping Metabase) | [retention.md](retention.md) |
+| Ekstraksi ESB Core → ClickHouse (G41): secret password per brand, `ESB_ENABLED`, probe, backfill 24 bulan di jendela malam, pantau checkpoint, 429/401, rotasi, hentikan | [esb-extract.md](esb-extract.md) |
 | Deploy gagal: modul Odoo wajib (`efn_pos_refund_origin`) belum `installed` (SEC-129) | [deploy-odoo-modules.md](deploy-odoo-modules.md) |
 | Boot stack dev di laptop (Docker Desktop/WSL2), upgrade modul Odoo dev | [dev-stack-boot.md](dev-stack-boot.md) |
 | CI GitHub di repo privat paket gratis: kuota artifact/menit, code scanning, suppression scanner, Dependabot | [ci-github-free-plan.md](ci-github-free-plan.md) |
@@ -108,6 +109,7 @@ Setiap service: `restart`, logging dibatasi 5×20 MB, `no-new-privileges`, limit
 | `ocr-worker-metrics-tls` + `ocr-worker-metrics-bridge` | dua ghostunnel (server mTLS `--allow-cn=prometheus` → loopback → client TLS) | worker HTTPS hanya di 127.0.0.1:9101; prometheus-client tidak bisa membatasi CN (E12 ditutup, gel. 12) |
 | `acme-dns-init` | root dengan CAP_CHOWN+FOWNER, `network_mode: none`, one-shot | chown volume `acme-dns-*` ke 65532:0 + titik mount `base/`, `dev/` (SEC-37) |
 | `acme-dns` | satu-satunya pemegang token DNS; tanpa port, hanya network `egress`, non-root 65532 | ACME DNS-01 terpisah dari Traefik (SEC-37) |
+| `esb-extract` (G41, overlay `docker-compose.esb.yml`) | tanpa pengecualian hardening; network `esb` (hanya ClickHouse) + `egress`, bukan `data` | satu-satunya service dengan password ESB dan jalur keluar ke ESB; allowlist host di aplikasi ([esb-extract.md](esb-extract.md) §9) |
 | `promtail-journal` (prod) | mount `/var/log/journal` + `/etc/machine-id` read-only, root tanpa capability | journald host (efn-deploy, backup) → Loki |
 
 Di prod hanya Traefik yang mem-publish port (80/443); dicek otomatis di CI job `infra`.
