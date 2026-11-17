@@ -517,8 +517,10 @@ check_esb_users() {
   local legacy_re hits
   legacy_re="$(printf '%s' 'ebpit' 'admin|sar' 'onih')"
   if git -C "$ROOT_DIR" rev-parse --is-inside-work-tree > /dev/null 2>&1; then
-    hits="$(cd "$ROOT_DIR" && git ls-files -z --cached --others --exclude-standard \
-              | xargs -0 -r grep -IilE "$legacy_re" -- 2> /dev/null || true)"
+    hits="$(
+      cd "$ROOT_DIR" || exit 0
+      { git ls-files -z --cached --others --exclude-standard | xargs -0 -r grep -IilE "$legacy_re" -- 2> /dev/null; } || true
+    )"
     [[ -z "$hits" ]] || err "username akun ESB lama (SEC-180) masih tertulis di: $(tr '\n' ' ' <<< "$hits")"
   else
     echo "check-encryption: info: bukan work tree git, cek username ESB lama (SEC-180) dilewati"

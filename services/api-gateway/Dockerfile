@@ -32,7 +32,11 @@ WORKDIR /app
 ENV NODE_ENV=production PORT=3000
 # G16 (Trivy image gate): runtime hanya butuh `node`. npm/npx/corepack/yarn bawaan image membawa dependensi rentan
 # (brace-expansion, picomatch, pacote, ip-address, sigstore - CVE HIGH 2026) dan tidak dipakai saat runtime -> dihapus.
-RUN addgroup -S app && adduser -S app -G app \
+# G41 (PR #90, Trivy image): musl/musl-utils 1.2.6-r3 (CVE-2026-107891) + zlib 1.3.2-r1 (CVE-2026-85091) terbit setelah digest
+# base dipin -> dinaikkan eksplisit. Hapus saat digest node:22.23-alpine berikutnya memuatnya.
+# hadolint ignore=DL3018
+RUN apk add --no-cache --upgrade musl musl-utils zlib \
+    && addgroup -S app && adduser -S app -G app \
     && rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
               /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-v*
 COPY --from=build --chown=app:app /app/dist ./dist
