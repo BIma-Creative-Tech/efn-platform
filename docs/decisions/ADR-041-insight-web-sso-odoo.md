@@ -3,7 +3,7 @@
 - **Status:** Proposed — belum disetujui klien. G42 boleh dibangun mengikuti rekomendasi ini dengan
   `INSIGHT_ENABLED=false` default (Odoo dan insight-web); production menunggu review security, DPO (nama tampilan di
   cookie + log audit), **Q-ESB1/Q-ESB7/Q-ESB9** (G41), dan **Q-INS1/Q-INS4** (ADR ini).
-- **Tanggal:** 2026-11-18 (Gelombang 42)
+- **Tanggal:** 2026-11-18 (Gelombang 42); **revisi 2026-11-18 (Supermarket, §3.3): cakupan level outlet + 5 persona**
 - **Pemutus:** pemilik proyek (lingkup pengguna & grup Holding), IT klien (jaringan staf/outlet), Legal/DPO (data
   pribadi staf di sesi & log), Security (kunci SSO)
 - **Referensi review:** R-L01 (PDP), R-S03 (Odoo tidak terekspos), R-S10 (insider), R-T06 (angka dashboard dipakai
@@ -135,6 +135,38 @@ keamanan G42 menghasilkan keputusan berikut; semuanya sudah diimplementasikan da
    `SHA256(kunci|cids|codes)`) dan DDL policy tanpa `query_log` (SEC-191); berlaku juga untuk `efn_t2s` (text2sql).
 6. **Grup "semua brand" = grup sensitif** (SEC-193): tidak bisa ikut sinkron jabatan; penetapan manual (Q-INS1).
 
+### 3.3 Revisi 18 Nov 2026 — cakupan level outlet & persona supermarket (Proposed, rencana Supermarket G44–G49)
+
+> **Ringkasan manajemen.** Untuk supermarket, dashboard Insight tidak cukup dibatasi per PT: kepala toko hanya boleh
+> melihat **tokonya sendiri**, sedangkan Direksi, Category manager, DC, dan Marketing melihat semua toko PT-nya. Insight
+> juga menjadi satu-satunya tempat dashboard supermarket (lima persona). Mekanisme login dan tanda tangan yang sama
+> diperluas dengan daftar gudang/outlet; halaman ESB lama tidak berubah. Biaya tambahan ±1–1,5 minggu-engineer di atas
+> pembangunan halaman G47.
+
+Keputusan pemilik proyek 18 Nov 2026: "Semua dashboard supermarket di EFN Insight; persona Direksi, Category
+manager/buyer, Kepala toko, DC/logistik, Marketing; row policy **level outlet**." Ini menjawab sebagian **Q-INS6**
+(pembatasan per cabang) untuk PT supermarket.
+
+| # | Opsi cakupan outlet | Kelebihan | Kekurangan | Biaya |
+|---|---|---|---|---|
+| **R1** | **Tambah `wids` (id `stock.warehouse`) ke token & sesi versi baru (`eit2`/`eis2`) + tanda tangan kedua `SQL_efn_sig2 = hex(SHA256(insight_scope_key|cids|codes|wids))`; row policy view supermarket `warehouse_id ∈ SQL_efn_wids`** | View ESB lama tetap memakai `eit1`/sig v1 (tanpa regresi); satu kunci; dua lapis tetap | Dua versi format selama transisi | **±1–1,5 minggu** (Odoo ±2 hari, insight-web ±2–3 hari, ClickHouse ±1 hari) |
+| R2 | Filter outlet di aplikasi saja | Murah (±2 hari) | Satu lapis; bug = kepala toko melihat toko lain | Ditolak |
+| R3 | User ClickHouse per outlet | Isolasi kuat | Rotasi & jumlah user tidak terkendali | Ditolak |
+
+Rekomendasi **R1**:
+1. Grup persona baru di `efn_insight` (implies *Insight: pengguna*): `group_insight_exec` (Direksi),
+   `group_insight_category` (Category manager/buyer), `group_insight_store` (Kepala toko), `group_insight_dc`
+   (DC/logistik), `group_insight_marketing`. Menu/halaman insight-web ditampilkan per persona (klaim `roles`).
+2. `wids`: persona store = warehouse yang ditugaskan eksplisit ke user lewat **`res.users.efn_outlet_warehouse_ids`**
+   (field dari `efn_assortment`, sama dengan record rule kepala toko di `efn_replenishment`/`efn_expiry_monitor` —
+   satu sumber penugasan outlet, fit-gap G45 §5; bukan default warehouse CE agar penugasan disengaja); persona lain = semua warehouse di `cids` (`wids = *` direpresentasikan
+   sebagai daftar eksplisit, bukan wildcard, agar row policy sederhana). Persona store tanpa warehouse → tidak ada token.
+3. Persona Marketing hanya membaca agregat kampanye/funnel (tanpa `subject_key`, ADR-047); persona store tidak melihat
+   margin/harga beli (keputusan bisnis — dikonfirmasi Q-SM29).
+4. Byte-exact `eit2`/`eis2` ditulis di `docs/04` saat G47 (bukan sekarang); kontrak ringkas di `docs/04` §28.11.
+5. Grup persona exec/category/dc/marketing = **grup sensitif** (tidak ikut sinkron jabatan, SEC-193); store boleh ikut
+   sinkron bila jabatan "Kepala toko" dipetakan dengan warehouse.
+
 ## 4. Konsekuensi
 
 ### 4.1 Positif
@@ -188,6 +220,7 @@ CSV untuk semua pengguna atau grup tertentu · **Q-INS8** konfirmasi Metabase ha
 jadwal rotasi kunci SSO/sesi.
 
 ## 7. Kapan ditinjau ulang
+- Revisi §3.3 (outlet & persona supermarket) dibangun di G47 — tinjau format `eit2`/`eis2` dan Q-SM29.
 - Klien memilih identity provider terpusat (opsi 2) atau butuh MFA untuk dashboard.
 - Kebutuhan multi-replika/HA insight-web (→ Redis).
 - G43 (company IMD/CUP dibuat, halaman dari mart Odoo) dan G44 (forecast).

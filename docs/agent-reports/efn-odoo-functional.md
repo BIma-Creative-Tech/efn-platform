@@ -697,3 +697,49 @@ agar text2sql dan insight tidak menyimpang — opsional, bukan blok G42.
 Redirect login `auth='user'` di 19.0 (perilaku lama), deep link `/odoo/action-<xmlid>` untuk act_url, filter PT arsip
 pada `user.company_ids` di 19.0, format token `cross_connect_*` OCA. Tidak ada kode yang ditulis; tidak ada test yang
 dijalankan.
+
+## Gelombang 0/G45 — 2026-11-18 (fit-gap Supermarket: DC + 5 outlet, lot/expiry, markdown, assortment, replenishment)
+
+Dokumen utama: `docs/fit-gap/G45_SUPERMARKET.md` (worktree g44, branch `feat/wave-44-supermarket-foundation`).
+Tidak ada kode yang ditulis dan modul `efn_setup_supermarket` **belum** dibuat (lingkup tugas = fit-gap). Verifikasi
+dilakukan lewat source 19.0 (WebFetch), tidak ada instance yang dijalankan.
+
+### Temuan kunci
+1. **Lot di POS**: lot dari barcode hanya lewat nomenklatur GS1 (AI 10). Syaratnya:
+   - `pos.config.fallback_nomenclature_id` = EFN Retail untuk EAN-13 biasa;
+   - POS tidak punya FEFO otomatis (hanya 1 lot / `fifo` / `lifo`) dan tidak memblokir lot kedaluwarsa;
+   - risiko EAN berawalan `13` gagal parse tanpa fallback (Error biasa, bukan `GS1BarcodeError`).
+2. **Harga per lot**: pricelist dan `loyalty.rule` tanpa field lot, sehingga ini gap. Opsi yang dipilih:
+   `efn.lot.markdown` + aset POS (offline lewat data sesi; FEFO otomatis melewati lot markdown; markdown hanya dari
+   pindaian stiker GS1/pilihan eksplisit).
+3. **Route DC**: CE murni `resupply_wh_ids` (transit internal company, in-transit terlihat). `efn_ck_production` tidak
+   dipakai (syarat CK + depends mrp). DSD = rute Buy per orderpoint outlet.
+4. **Usulan PO**: orderpoint DC manual + `qty_to_order_manual` + supplierinfo → RFQ draft = usulan buyer. `qty_multiple`
+   tidak ada di 19.0 (diganti `replenishment_uom_id`).
+
+### Rekomendasi untuk efn-odoo-engineer
+- **Tambah**:
+  - `efn_assortment` (dibangun **pertama**, karena `efn_replenishment` bergantung padanya; minta lead menggeser ke
+    awal G44);
+  - perluasan `efn_demand_forecast` (`efn.forecast.calendar`, season `payday`/`holiday`);
+  - `efn_replenishment`;
+  - `efn_expiry_monitor` (backend lalu POS);
+  - `efn_setup_supermarket` tahap A (CE-only) lebih awal untuk seed G48, tahap B setelah modul gap;
+  - `efn_campaign` (G46).
+
+  Rincian depends/model/record rule: §5 dokumen.
+- **Sederhanakan**: jangan membuat objek usulan PO sendiri (pakai RFQ draft CE); jangan memperluas `efn_ck_production`
+  untuk DC.
+- **Wajib**: orderpoint yang dikelola `efn_replenishment` dipaksa `trigger=manual` (anti-dobel dengan scheduler CE).
+- **Kontrak untuk architect**:
+  - kode `efn_brand_code` baru (Selection tetap di `efn_core` + docs/04 §12.1);
+  - event `promo.campaign.requested` lewat outbox + klaim BFF (Odoo belum pernah publish RabbitMQ langsung);
+  - `res.users.efn_outlet_warehouse_ids` sebagai sumber cakupan outlet untuk revisi ADR-041.
+
+### Pertanyaan klien
+Q-SM1..Q-SM13 di §7 dokumen. Prioritas: Q-SM3 (timbangan/pemindai GS1), Q-SM4 (wewenang markdown), Q-SM5 (pajak),
+Q-SM2 (outlet).
+
+### Belum terverifikasi
+Daftar §8 dokumen. Yang paling kritis: uji katalog barcode dengan nomenklatur GS1, perilaku server POS untuk lot yang
+tidak ditemukan, kupon personal di kiosk/online, dan perilaku lot pada order kiosk.

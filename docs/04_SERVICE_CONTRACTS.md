@@ -1,4 +1,4 @@
-# KONTRAK ANTAR-SERVICE (v18.0 — 18 Nov 2026, G42 §26 Insight web + SSO Odoo (token eit1 HMAC sekali pakai via POST form, cookie eis1, row policy `efn_insight_scope`, ADR-041 Proposed); v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
+# KONTRAK ANTAR-SERVICE (v20.0 — 18 Nov 2026, Supermarket §28: forecast API worker→Odoo, usulan replenishment DC, assortment, event perilaku `POST /v1/events`, queue `behavior.event`/`promo.campaign.requested`/`notify.restock`/`notify.price_alert`/`notify.email`/`notify.wa_unofficial`, wishlist/notify-me/price alert, flag (ADR-044..048 Proposed, belum dibangun; §27 + L-127..L-143 dicadangkan G43); v18.0 — 18 Nov 2026, G42 §26 Insight web + SSO Odoo (token eit1 HMAC sekali pakai via POST form, cookie eis1, row policy `efn_insight_scope`, ADR-041 Proposed); v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -899,6 +899,13 @@ Dasar: keputusan pemilik proyek 18 Okt (`docs/decisions/README.md` 18-1..18-42),
 - Secret API key: `odoo_api_key_online_{gl,pb,bcr,bcf}` (env `ODOO_API_KEY_ONLINE_<KODE>_FILE`). `brand_code` kanal (E-37a) tetap ada: `GL`, `PB`, `BACHA` (dua kanal Bacha berbagi brand untuk Super-App satu domain).
 - `business_type` per kode: `GL,BCR → retail`, `PB,BCF → fnb`. Harga transfer cost-plus **hanya BCR ↔ BCF** dan Holding ↔ PT (W-15). Produk lintas entitas = **produk kembar per company + pemetaan** (Q-AD1-4 default).
 - Tidak ada migrasi data (belum ada produksi): DB dev/CI dibuat ulang. Event/ledger BFF lama di dev boleh dibuang (`docs/runbooks/dev-reset.md`).
+- **Revisi 18 Nov 2026 (Supermarket, §28, ADR-045 Proposed) — BELUM DIBANGUN:** entitas baru **PT Supermarket Demo**
+  (placeholder) = company root dengan `efn_brand_code` **`SMD`**, xmlid `efn_setup_supermarket.company_smd`, jenis
+  `retail`, PPN incl (kategori bebas PPN = fit-gap Q-SM5), kanal online belum ada. `efn_brand_code` adalah Selection
+  tetap di `efn_core` yang dikunci test kontrak → penambahan `SMD` wajib mengubah Selection `efn_core`, test kontrak,
+  BFF `COMPANY_CODES`, ETL/mart (`company_code`), dan `deploy-validate` dalam satu PR (G44, sebelum
+  `efn_setup_supermarket` tahap A). Nama legal/NPWP/kode final = fit-gap **Q-SM1**. Catatan merge: branch G43 juga
+  menambah kode (IMD/CUP) di tabel ini; rekonsiliasi saat kedua branch masuk `main`.
 
 ### 12.2 Bayar di kasir (W-30, E-45) — menambah §10.3.5, §10.4.3, §10.5
 1. **Kanal:** `efn.online.channel.payment_modes` (kumpulan dari `qris`, `counter`); pilot tanpa vendor = `counter` saja. `counter` hanya untuk pesanan **satu PT** (satu bagian).
@@ -2996,3 +3003,350 @@ Status implementasi (QA G42, baca kode): **C1** `lib/origin-guard.ts` + `sso-han
 | C5 | **Restart = cache `jti` hilang** → token ≤ 60 dtk bisa dipakai ulang sekali setelah restart (L-124). | Diterima di replika tunggal; dicatat; Redis saat multi-replika. |
 | C6 | **Jam lintas mesin** (K25-02): Odoo dan insight-web di host berbeda; toleransi 30 dtk. | NTP wajib di kedua host (runbook devsecops); alert selisih > 10 dtk (usulan). |
 | C7 | **Blast radius insight-web**: container memegang `insight_scope_key` + password ClickHouse → kompromi = semua PT mart ESB; row policy hanya melindungi dari bug aplikasi. | Diterima (sama text2sql); network hanya ke ClickHouse, tanpa egress, `read_only`. |
+
+## 28. Supermarket — forecast, replenishment DC, assortment, perilaku visitor, kampanye, kanal email & WA unofficial (ADR-041 rev, ADR-044..048, Proposed) (v20.0, 18 Nov 2026)
+
+> **Penomoran.** §27 dan **L-127..L-143** dicadangkan untuk G43 (migrasi ESB → Odoo, branch terpisah yang belum masuk
+> `main`); section ini memakai §28 dan **L-144..L-163**. Pertanyaan klien memakai prefix **Q-SM**.
+>
+> **Status: SEMUA BUTIR DI SECTION INI BELUM DIBANGUN** (Gelombang 0 = keputusan & kontrak). Kolom "Gelombang" menunjuk
+> rencana pembangunan. Fit-gap Odoo CE 19: `docs/fit-gap/G45_SUPERMARKET.md` (efn-odoo-functional, S-01..S-19) —
+> **untuk rincian model/field Odoo, fit-gap menang**; section ini sudah diselaraskan dengan fit-gap 18 Nov 2026.
+> Pertanyaan **Q-SM1..Q-SM13 milik fit-gap** (§7 dokumen itu, tidak diduplikasi di sini); architect memakai
+> **Q-SM14..Q-SM29**.
+
+Dasar: keputusan pemilik proyek 18 Nov 2026 (rencana Supermarket G44–G49), ADR-044 (WA unofficial), ADR-045 (DC satu
+PT + assortment), ADR-046 (forecast engine), ADR-047 (tracking perilaku + kampanye), ADR-048 (email SMTP), ADR-041 §3.3
+(Insight level outlet). Prinsip umum tetap: TLS verify-full CA internal, kredensial per service, tanpa PII di payload
+event, consumer idempoten + DLQ, PostgreSQL sumber kebenaran, ClickHouse turunan via ETL.
+
+### 28.1 Komponen & status
+| Komponen | Jenis | Gelombang | Status |
+|---|---|---|---|
+| Kode company `SMD` di `efn_core` + test kontrak (§12.1) | Odoo/BFF/ETL | G44 (pertama) | Belum dibangun |
+| `efn_setup_supermarket` tahap A (company, DC, kategori FEFO, nomenklatur GS1 + fallback; demo: 5 outlet + `resupply_wh_ids`) | Odoo data-only | G44 (awal, agar seed G48 jalan) | Belum dibangun |
+| `efn_assortment` (urutan 1, dependensi `efn_replenishment`) | Odoo | **G44** | Belum dibangun |
+| `efn.forecast.calendar` + perluasan `efn.forecast.season` (`efn_demand_forecast`) | Odoo | G44 | Belum dibangun |
+| `efn_replenishment` (jadwal kirim & supplier, usulan order outlet → DC, qty orderpoint DC → RFQ draft CE, approval, log bias) | Odoo | G44 | Belum dibangun |
+| `services/forecast-worker` (statsforecast, compose `efn-data`) | Python 3.12 | G44 | Belum dibangun |
+| `efn_expiry_monitor` (near-expiry, `efn.lot.markdown`, aset POS FEFO + blok kedaluwarsa, "kirim ke member" via outbox) | Odoo + POS | G45 | Belum dibangun |
+| `efn_setup_supermarket` tahap B (ambang per kategori, capability, jadwal contoh) | Odoo data-only | G45 | Belum dibangun |
+| `efn_campaign` (usulan & approval kampanye, voucher `sale_loyalty`) | Odoo | G46 | Belum dibangun |
+| BFF `src/behavior`, `src/campaign`, `src/wishlist`, `src/notification/email` | NestJS | G46 | Belum dibangun |
+| `segment-worker` (segmentasi harian; boleh image sama dengan forecast-worker, **container & kredensial terpisah**) | Python 3.12 | G46 | Belum dibangun |
+| `services/wa-unofficial` (Baileys, terisolasi) | Node 22 | G46 | Belum dibangun |
+| Mart `fact_forecast_daily`, `fact_forecast_accuracy`, `fact_replenishment`, `fact_lot_expiry`, `fact_visitor_event`, `agg_visitor_*`, `fact_campaign_result`, `fact_dc_fill_rate` | ETL/ClickHouse | G44–G47 | Belum dibangun |
+| Insight persona + scope outlet (`eit2`/`eis2`) | Odoo + insight-web | G47 | Belum dibangun |
+
+### 28.2 Kalender & forecast API (forecast-worker → Odoo)
+Transport: `POST https://odoo-rpc-gateway:8443/json/2/<model>/<metode>` (pola §10.10), TLS verify-full + mTLS
+sertifikat klien CN **`forecast-worker`**; `Authorization: bearer <API key>` dari
+`/run/secrets/odoo_api_key_forecast_<kode PT huruf kecil>` (mis. `odoo_api_key_forecast_smd`). Satu key = satu user
+teknis `efn_forecast_<kode>` = grup `efn_demand_forecast.group_forecast_bot` = **tepat satu company**. Odoo menolak
+`company_code` ≠ company user (`403 company_mismatch`). Antar-mesin (K25-02): lewat WireGuard; gateway menambah
+`forecast-worker` ke `allow-cn` hanya untuk path di bawah.
+
+Metode allowlist (nomor urut gateway ditetapkan saat implementasi, lanjutan daftar §18.1):
+| Metode | Fungsi | Idempotensi |
+|---|---|---|
+| `efn.forecast.calendar/efn_forecast_calendar_upsert` | Seed libur nasional/cuti bersama dari library `holidays` (source `lib`) | kunci unik `(company, date, kind, name)`; entri `manual` tidak pernah ditimpa |
+| `efn.forecast.run/efn_forecast_run_open` | Buka run | `run_id` (UUIDv4 dari worker) unik; buka ulang run yang sama → kembalikan status |
+| `efn.forecast.daily/efn_forecast_ingest` | Proyeksi harian per chunk | `(run_id, chunk_no)` unik; ulang → `duplicate_chunk: true`, tidak ditulis ulang |
+| `efn.demand.forecast.line/efn_minmax_ingest` | Usulan min/max (keluaran 1) | `(run_id, chunk_no)` unik |
+| `efn.forecast.run/efn_forecast_run_close` | Tutup run + metrik; Odoo menandai run aktif per company dan memicu perhitungan usulan (§28.4) | `run_id`; tutup dua kali → no-op |
+
+Skema (JSON Schema ringkas; semua objek `additionalProperties: false`):
+```json
+{
+  "efn_forecast_calendar_upsert": {
+    "schema_version": 1, "company_code": "SMD",
+    "entries": [{ "date": "2027-03-10", "kind": "holiday|cuti_bersama|ramadan|lebaran_window|custom",
+                  "name": "string ≤ 64", "source": "lib" }]
+  },
+  "efn_forecast_run_open": {
+    "schema_version": 1, "run_id": "uuid", "company_code": "SMD", "model_version": "g44-1.0.0",
+    "kind": "daily|weekly_minmax", "generated_at": "RFC3339 UTC", "horizon_days": 28, "chunk_total": 1
+  },
+  "efn_forecast_ingest": {
+    "schema_version": 1, "run_id": "uuid", "chunk_no": 0,
+    "lines": [{ "warehouse_code": "string", "product_id": 123, "date": "YYYY-MM-DD",
+                "yhat": 12.4, "p10": 8.0, "p90": 17.1, "sigma": 2.9,
+                "model": "AutoETS|AutoARIMA|CrostonOptimized|ADIDA|category_mean" }]
+  },
+  "efn_minmax_ingest": {
+    "schema_version": 1, "run_id": "uuid", "chunk_no": 0,
+    "lines": [{ "warehouse_code": "string", "product_id": 123, "min_qty": 10, "max_qty": 40,
+                "service_level": 0.95, "basis_daily_demand": 3.2 }]
+  },
+  "efn_forecast_run_close": {
+    "schema_version": 1, "run_id": "uuid", "status": "ok|failed",
+    "metrics": { "series": 2400, "duration_s": 312, "wape_backtest": 0.27, "failed_series": 3 }
+  }
+}
+```
+- Batas: `entries`/`lines` ≤ **500** per panggilan, body ≤ 512 KB; angka ≥ 0, `p10 ≤ yhat ≤ p90`; `date` dalam
+  [hari ini, hari ini + horizon]; `warehouse_code`/`product_id` harus milik company user (selain itu baris ditolak, bukan
+  seluruh chunk — respons memuat `rejected[{index, code}]`).
+- Respons: `{ "ok": true, "run_id": "...", "chunk_no": 0, "accepted": 498, "rejected": [...], "duplicate_chunk": false }`;
+  galat validasi → `400 { "error": "<code>" }` tanpa detail internal.
+- Run yang tidak ditutup dalam 6 jam → `failed` oleh cron Odoo; proyeksi run aktif sebelumnya tetap dipakai.
+- Worker membaca ClickHouse dengan user `efn_forecast_reader` (view whitelist `efn_forecast.*`: penjualan harian,
+  snapshot stok, scrap, `dim_calendar`, master produk/gudang tanpa partner). Worker **tidak** menulis ke ClickHouse.
+
+### 28.3 Kalender di Odoo
+- `efn.forecast.calendar`: `company_id` (wajib), `warehouse_id` (opsional), `date`, `kind`, `name`, `source`
+  (`lib|manual`), `active`; record rule multi-company; hanya Inventory Administrator / planner mengubah; perubahan
+  teraudit `efn_audit`.
+- Minggu gajian = parameter per company `efn_forecast.payday_tail_days` (default **7**) dan
+  `efn_forecast.payday_head_days` (default **7**); tidak disimpan per tanggal. Weekend = Sabtu–Minggu (configurable).
+- `efn.forecast.season` (v1) mendapat tipe `payday` & `holiday` baru agar v1 tetap memakai kalender yang sama.
+- Sakelar per warehouse `efn_forecast_engine` = `v1|v2` (default `v1`, L-148).
+
+### 28.4 Usulan replenishment (Odoo `efn_replenishment`)
+- Rute & orderpoint = CE standar (fit-gap S-03, S-12, S-13): outlet dipasok DC lewat `stock.warehouse.resupply_wh_ids`
+  (bukan `efn_ck_production`); DSD = orderpoint outlet dengan `route_id` Buy (`efn.assortment.line.supply_mode=dsd`);
+  orderpoint SKU × outlet/DC yang dikelola modul ini **`trigger=manual`** (cegah dobel dengan scheduler CE); kelipatan
+  pack = `replenishment_uom_id` (`qty_multiple` tidak ada di 19.0).
+- `efn.delivery.schedule`: `company_id`, `warehouse_id` (outlet), `supply_warehouse_id` (DC), `product_group`
+  (`product.category`), `weekdays` (bitmask Sen..Min), `lead_days` (≥ 0), `cutoff_time` (jam lokal + TZ), `review_days`.
+  Nilai nyata = fit-gap Q-SM11.
+- `efn.supplier.schedule`: `company_id`, `partner_id`, `warehouse_id` (DC atau outlet DSD), hari kunjungan/order, cut-off.
+- `efn.replenishment.proposal`: `company_id`, `warehouse_id`, `delivery_date`, `cutoff_at` (UTC), `run_id`,
+  `state` (`draft|proposed|approved|rejected|expired`), `approved_by`, `approved_at`, `picking_id`.
+- `.line`: `product_id`, `qty_need`, `qty_shelf_cap`, `qty_rack_cap`, `qty_proposed`, `qty_approved`, `reason_codes`
+  (mis. `shelf_cap`, `rack_cap`, `pack_round`, `assortment:<kode>`), `change_reason`
+  (`local_promo|event|rack_full|other`), `changed_by`.
+- **Usulan PO DC → supplier = CE, tanpa model usulan sendiri** (fit-gap S-13): `efn_replenishment` menulis
+  `qty_to_order_manual` pada orderpoint DC (sudah dibatasi shelf-life cap & jadwal kunjungan `efn.supplier.schedule`),
+  lalu aksi "Order" CE membuat **RFQ draft per vendor** dari `product.supplierinfo` (`delay`, `min_qty`,
+  `product_uom_id`, harga/diskon bertingkat). Approval **buyer DC** = konfirmasi RFQ. Log bias (qty sistem vs qty RFQ
+  dikonfirmasi) disimpan di `efn_replenishment` dan diturunkan ke `fact_replenishment`.
+- Pemicu: `efn_forecast_run_close` status `ok` → job Odoo (queue cron, bukan di request RPC) menghitung usulan untuk
+  jadwal yang cut-off-nya berikutnya; rumus di ADR-046 §3.4. Tanpa run `ok` hari itu → tidak ada usulan baru; reorder
+  rule berlaku (L-147).
+- Approval sebelum `cutoff_at`; lewat cut-off tanpa approval → `expired`, **tidak dikirim otomatis** (default, Q-SM23).
+  Approval → procurement lewat orderpoint/rute resupply CE (tidak membuat picking sendiri), dibungkus satu titik
+  `_efn_create_supply_document()` (agar jalur PT terpisah tetap murah, ADR-045 §3.3).
+- Grup: *Replenishment: kepala toko* (approve usulan warehouse di `res.users.efn_outlet_warehouse_ids`, record rule),
+  *Replenishment: buyer DC*, *Replenishment: administrator*. SoD: kepala toko tidak bisa menyetujui PO supplier.
+- Log bias: setiap perubahan qty tercatat (append-only); ETL → `fact_replenishment`.
+
+### 28.5 Assortment (`efn_assortment`)
+- Model & field: ADR-045 §3.2 = fit-gap §5 (`efn.assortment.capability`, `stock.warehouse.efn_capability_ids` /
+  `efn_assortment_policy`, `product.template.efn_required_capability_ids`, `efn.assortment.line` allow/deny +
+  `supply_mode` + `dsd_partner_id` + `shelf_capacity_qty`, `product.supplierinfo.efn_region_ids`,
+  `res.users.efn_outlet_warehouse_ids`). Fungsi server-side (bukan RPC eksternal):
+  `_efn_assortment_allowed(product, warehouse) → (bool, alasan)`; kode alasan: `not_listed`, `denied`,
+  `missing_capability:<code>`, `supplier_region`, `dsd_only`.
+- Ditegakkan di: (1) perhitungan usulan §28.4 (baris gagal tidak diusulkan, kode dicatat); (2) **konfirmasi
+  `stock.picking` bertipe DC → outlet** (manual/orderpoint) → `UserError` berisi produk + kode; (3) laporan pelanggaran
+  harian. **Tidak** ditegakkan di POS (keputusan pemilik proyek).
+- Override: grup *Assortment Manager*, alasan wajib, teraudit; **tidak tersedia** bila capability yang kurang adalah
+  `alcohol_license` atau `non_halal_allowed` (L-150, Q-SM22; izin alkohol = fit-gap Q-SM13).
+- Parameter `efn_assortment.enforce` default **`true`** begitu modul terpasang.
+
+### 28.5a Near-expiry & markdown per lot (`efn_expiry_monitor`, G45) — ringkas, rinci di fit-gap §2–§3
+- `efn.expiry.alert` (lot × outlet × qty × sisa hari × status) dari cron harian; ambang per kategori
+  (`efn_near_expiry_days`, `efn_markdown_days`, `efn_min_receipt_days`); aktivitas ke kepala toko + ringkasan buyer.
+- **`efn.lot.markdown`**: `lot_id`, `warehouse_id` (outlet), `price` **atau** `discount_pct`, `date_from/to`, `qty_cap`,
+  `state`, `notify_members`. Dimuat ke sesi POS saat dibuka → **tetap berlaku saat offline**; diterapkan hanya bila lot
+  berasal dari pindaian stiker GS1 `(01)(10)` atau dipilih eksplisit; FEFO otomatis tidak pernah memilih lot markdown.
+  **Fase 1 tidak berlaku di kanal online** (lot tidak dipilih saat pesanan online; fit-gap Q-SM12). Batas diskon per
+  peran = fit-gap Q-SM4.
+- Lot di POS lewat nomenklatur **GS1** (AI 01/10/3103) dengan fallback EFN Retail; **FEFO otomatis di POS + blokir lot
+  kedaluwarsa** (override supervisor teraudit) = gap di aset POS `efn_expiry_monitor` (CE 19 tidak menangani `fefo`).
+  Perangkat timbangan/pemindai = fit-gap Q-SM3.
+- "Kirim ke member": centang `notify_members` → baris **outbox Odoo** → BFF klaim (§28.7) → `promo.campaign.requested`
+  `kind: "markdown"`. Odoo **tidak** publish langsung ke RabbitMQ.
+
+### 28.6 Event perilaku `POST /v1/events` (BFF `src/behavior`)
+- Publik (tanpa Bearer) atau dengan Bearer member; rate limit: **120 event/menit per `device_key`**, **600/menit per
+  IP**, kelas CATALOG untuk burst; `429` dengan `Retry-After`.
+- Gerbang: `BEHAVIOR_TRACKING_ENABLED=false` → `202 { "accepted": 0, "disabled": true }` (klien berhenti mengirim;
+  banner tidak ditampilkan, lihat `GET /v1/config` `features.tracking`).
+- **Consent gate**: device harus punya consent tercatat lewat `POST /v1/events/consent`
+  `{ "device_id": "uuid", "granted": true|false, "version": "string" }` (baris `behavior.device_consent(device_key,
+  granted, version, text_sha256, created_at)`, append-only). Dengan Bearer: consent purpose **`tracking`** akun harus
+  aktif (consent device tidak otomatis menjadi consent akun; perlu aksi eksplisit member). Tanpa consent →
+  `403 { "error": "tracking_consent_required" }`.
+- Body:
+```json
+{
+  "schema_version": 1,
+  "device_id": "uuid v4",
+  "channel": "web|app",
+  "events": [{
+    "event_id": "uuid v4",
+    "type": "product_view|wishlist_add|wishlist_remove|cart_add|cart_remove|checkout_start|search|notify_me_request|price_alert_set",
+    "client_ts": "RFC3339",
+    "channel_code": "string ≤ 8",
+    "outlet_code": "string ≤ 16 | null",
+    "product_id": 123,
+    "duration_s": 0,
+    "qty": 1,
+    "query": "string ≤ 64 (hanya type=search)",
+    "result_count": 0
+  }]
+}
+```
+- Batas: ≤ **50** event per batch, body ≤ **32 KB**, `client_ts` dalam ±24 jam dari waktu server (di luar → baris
+  ditolak `stale`), `duration_s` 0..600 (dipotong), `query` NFKC + lowercase, rangkaian ≥ 6 digit dan pola email diganti
+  `[redacted]`. Field lain ditolak (`additionalProperties: false`). Tidak ada IP, user agent mentah, GPS di payload
+  maupun tabel.
+- Pengayaan server: `stock_status` (cache katalog §10, `ocat:stk:*`), `price_idr`, `received_at`, `subject_key`
+  (ADR-047 §3.3). `cart_abandon` diturunkan server (keranjang tanpa `checkout_start` 24 jam), bukan dari klien.
+- Respons `202 { "accepted": n, "duplicates": d, "rejected": [{ "index": i, "code": "invalid|stale|unknown_product" }] }`.
+- Dedup: unik `(subject_key, event_id)` di staging.
+
+### 28.7 Queue RabbitMQ baru
+Konvensi §4 berlaku (quorum, DLQ `<queue>.dlq`, `message_id` = `idempotency_key`, `user_id` publisher diverifikasi
+consumer, `schema_version: 1`, consumer mencatat `processed_message`).
+
+| Queue | Publisher (user RMQ) | Consumer (user RMQ) | `idempotency_key` | Payload ringkas |
+|---|---|---|---|---|
+| `behavior.event` | BFF behavior (`efn-bff`) | BFF behavior-writer (`efn-behavior`) | `behavior:<batch_id>` (UUID per request) | `{ batch_id, received_at, subject_key, subject_kind: "device"|"member", channel, events:[§28.6 + pengayaan] }` → insert batch ke PG `behavior.event_raw` (partisi harian, retensi 7 h) |
+| `promo.campaign.requested` | BFF campaign-sync (`efn-bff`) setelah **klaim outbox Odoo** (Odoo tidak publish ke RabbitMQ) | BFF campaign-dispatcher (`efn-bff`) | `campaign:<company_code>:<odoo_campaign_id>:<approval_rev>` | `{ campaign_id, company_code, kind: "segment"|"markdown", segment_run_id|null, markdown: { product_ids, outlet_codes, valid_to }|null, channels: ["inbox","push","email","wa_unofficial"], voucher_program_ref|null, budget_idr|null, cap_per_member_week|null, valid_from, valid_to }` |
+| `notify.restock` | BFF catalog-sync (status `out`→`in_stock`/`low` per produk × outlet) | BFF alert-dispatcher | `restock:<channel_code>:<outlet_code>:<product_id>:<restock_seq>` | `{ channel_code, outlet_code, product_id, detected_at }` |
+| `notify.price_alert` | BFF catalog-sync (harga turun) | BFF alert-dispatcher | `price:<channel_code>:<product_id>:<price_version>` | `{ channel_code, product_id, new_price_idr, detected_at }` |
+| `notify.email` | BFF dispatcher (campaign/alert/transaksional) | BFF email-sender | `email:<source>:<source_ref>:<member_hash>` | `{ member_hash, source: "campaign"|"restock"|"price_alert"|"transactional", source_ref, template, params }` — **tanpa alamat email** (didekripsi saat kirim, ADR-048) |
+| `notify.wa_unofficial` | BFF dispatcher (hanya bila `WA_UNOFFICIAL_ENABLED=true`) | wa-unofficial (`efn-wa-unofficial`) | `wa:<source>:<source_ref>:<to_hash>` | `{ to_e164, to_hash, category: "promo"|"notify_restock"|"price_alert", template, params, expires_at }`; properti AMQP `expiration` ≤ 24 jam |
+| `notify.wa_unofficial.result` | wa-unofficial | BFF dispatcher | `warslt:<idempotency_key asal>` atau `waoptout:<to_hash>:<ts>` | `{ ref_idempotency_key|null, kind: "result"|"opt_out", status: "sent"|"failed"|"rate_limited"|"banned"|"disconnected", to_hash, at }` |
+
+Catatan:
+- `notify.push` (§4) dipakai ulang untuk push kampanye/alert (`source: "campaign"|"restock"|"price_alert"`).
+- `notify.price_alert` adalah tambahan architect di luar daftar brief (memisahkan price alert dari restock agar
+  idempotency key dan template jelas).
+- `to_e164` hanya ada di `notify.wa_unofficial` (pengecualian dari §4 v2 "tanpa nomor HP di payload", diterima ADR-044
+  §4.2); `to_hash = HMAC-SHA256(wa_unofficial_hash_key, e164)` — kunci hanya BFF + wa-unofficial, dipakai untuk opt-out
+  "STOP". Log kedua sisi memask nomor.
+- wa-unofficial menolak `category` di luar allowlist (ack + `failed`/`invalid_category`, bukan requeue).
+- Fan-out dispatcher memeriksa: flag kanal, consent `marketing` (promo; dan WA/email notify-me sesuai Q-SM25), cap
+  frekuensi/anggaran **bila diaktifkan**, `expires_at`.
+- Segmen: `segment-worker` mengirim anggota segmen ke BFF lewat `POST /internal/v1/segments/{run_id}/members`
+  (`{ schema_version: 1, run_id, segment_code, subject_keys: [...≤ 5000 per panggilan], chunk_no }`, mTLS CN
+  `segment-worker`, idempoten per `(run_id, segment_code, chunk_no)`), dan ringkasan segmen ke Odoo lewat
+  `efn.campaign/efn_campaign_proposal_upsert` (`/json/2`, user teknis `efn_campaign_<kode>`, **tanpa data member**).
+  BFF mengambil kampanye disetujui lewat `efn.campaign/efn_campaign_claim` (pola `efn_promo_push_claim` §18.1).
+- **Event Odoo → BFF memakai pola outbox + klaim, bukan publish langsung** (belum ada modul efn yang publish ke
+  RabbitMQ; fit-gap S-09): model `efn.campaign.outbox` (`company_id`, `kind` `segment|markdown`, `ref_model`, `ref_id`,
+  `approval_rev`, `payload` JSON tanpa data member, `state` `queued|claimed|done|failed`, `claimed_at`, `attempts`).
+  `efn_campaign_claim(limit ≤ 20)` mengubah `queued → claimed` secara atomik (`FOR UPDATE SKIP LOCKED`) dan
+  mengembalikan baris; BFF menerbitkan `promo.campaign.requested` lalu memanggil `efn_campaign_ack(ids)` (`done`).
+  Klaim yang tidak di-ack dalam 10 menit kembali `queued` (maks 5 percobaan → `failed` + aktivitas ke marketing).
+  Idempotensi hilir dijamin `idempotency_key` (`approval_rev` ikut di dalamnya). User teknis `efn_campaign_<kode>`
+  (satu company), API key `/run/secrets/odoo_api_key_campaign_<kode>`, path allowlist gateway.
+- Voucher: rekomendasi architect = kode kupon `loyalty.card` **tanpa partner** (penugasan ke member di BFF); fit-gap
+  G45 §5 mengusulkan kartu per `partner_id`. **Belum diputuskan** — efn-lead + efn-odoo-functional sebelum G46 (ADR-047
+  §3.4).
+
+### 28.8 Wishlist, notify-me, price alert (BFF `src/wishlist`, Bearer member)
+| Endpoint | Body / respons | Batas |
+|---|---|---|
+| `GET /v1/me/wishlist?channel=<kode>` | `{ items: [{ channel_code, product_id, added_at }] }` | — |
+| `PUT /v1/me/wishlist/items` | `{ channel_code, product_id }` → `204` (idempoten) | ≤ 200 item per member |
+| `DELETE /v1/me/wishlist/items/:channel_code/:product_id` | `204` | — |
+| `GET /v1/me/restock-alerts` | `{ items: [{ id, channel_code, outlet_code, product_id, channels, created_at, expires_at }] }` | — |
+| `POST /v1/me/restock-alerts` | `{ channel_code, outlet_code, product_id, channels: ["push"|"email"|"wa_unofficial"] }` → `201 { id }`; produk harus `out` di outlet itu, selain itu `409 already_in_stock` | ≤ 50 aktif; kedaluwarsa 30 hari atau setelah terkirim sekali |
+| `DELETE /v1/me/restock-alerts/:id` | `204` | — |
+| `GET/POST/DELETE /v1/me/price-alerts` | `{ channel_code, product_id, target_price_idr }` (integer > 0 dan < harga saat ini) | ≤ 50 aktif; kedaluwarsa 90 hari |
+
+- Tabel platform `member_wishlist`, `restock_alert`, `price_alert` (FK `member_id`, tanpa PII lain); ikut DSAR export
+  dan erasure. Fitur ini = pelaksanaan permintaan member (tidak butuh consent `tracking`); event perilaku terkait hanya
+  dikirim bila consent `tracking` aktif.
+- Kanal `email`/`wa_unofficial` hanya bisa dipilih bila flag kanal aktif dan member punya email/HP terverifikasi;
+  consent sesuai Q-SM25 (default: `marketing` wajib untuk WA unofficial dan email).
+
+### 28.9 Kanal: email (ADR-048) dan wa-unofficial (ADR-044)
+- **Email**: env `EMAIL_SMTP_HOST`, `EMAIL_SMTP_PORT`, `EMAIL_SMTP_TLS_MODE` (`implicit|starttls`, tanpa nilai plaintext),
+  `EMAIL_SMTP_USER`, `EMAIL_SMTP_CA_FILE` (opsional, CA internal), `EMAIL_FROM`; secret `/run/secrets/email_smtp_password`;
+  `EMAIL_RATE_PER_MIN` (default 60). Dev: Mailpit dengan TLS CA dev. Unsubscribe: token HMAC
+  (`/run/secrets/email_unsubscribe_key`) sekali pakai → `POST /v1/email/unsubscribe` (publik, rate limit) mencabut consent
+  `marketing`; header `List-Unsubscribe`.
+- **wa-unofficial**: hanya consume `notify.wa_unofficial`; endpoint admin `GET /health`, `GET /v1/admin/session`
+  (status `connected|disconnected|banned`, tanpa nomor utuh), `POST /v1/admin/session/pair` (QR/kode pairing) dan
+  `POST /v1/admin/session/logout` — hanya entrypoint `wg-https` + middleware `internal-ops`, autentikasi mTLS CN operator
+  + token admin `/run/secrets/wa_unofficial_admin_token`. Sesi: volume sendiri, AES-256-GCM kunci
+  `/run/secrets/wa_unofficial_session_key`. Network: `wa-egress` (proxy allowlist host WhatsApp, **daftar host belum
+  diverifikasi**) + `rmq` saja. Batas teknis: `WA_UNOFFICIAL_RATE_PER_MIN` 10, `WA_UNOFFICIAL_MAX_PER_DAY` 300,
+  `WA_UNOFFICIAL_MAX_PER_MEMBER_PER_DAY` 1, jitter 2–8 dtk. Alert `EfnWaUnofficialDown`, `EfnWaUnofficialBanned`.
+
+### 28.10 Flag & default
+| Flag | Lokasi | Default (semua env) | Production | Syarat menyalakan di production |
+|---|---|---|---|---|
+| `FORECAST_ENABLED` | forecast-worker | `false` | boleh `true` | Backtest G44 lulus, user teknis per PT dibuat |
+| `efn_forecast_engine` (per warehouse) | Odoo | `v1` | `v2` per gudang | WAPE v2 < v1 dan < seasonal naive (L-148) |
+| `efn_replenishment.enabled` | Odoo param | `false` | boleh `true` | Jadwal kirim & approver ditetapkan Ops |
+| `efn_assortment.enforce` | Odoo param | `true` | `true` | — (mematikan butuh alasan teraudit) |
+| `efn_expiry_monitor.enabled` | Odoo param | `false` | boleh `true` | Ambang per kategori diisi (Q-SM28; fit-gap Q-SM9) |
+| `BEHAVIOR_TRACKING_ENABLED` | BFF | `false` | **OFF** | DPO: dasar, teks banner, DPIA, retensi (Q-SM16/17/26) |
+| `PROMO_CAMPAIGN_ENABLED` | BFF + Odoo `efn_campaign` | `false` | **OFF** | DPO (profiling) + Marketing (approver) + Finance (anggaran voucher) |
+| `CAMPAIGN_FREQUENCY_CAP_ENABLED` / `CAMPAIGN_BUDGET_CAP_ENABLED` | BFF | `false` | configurable | Keputusan pemilik proyek: default nonaktif (Q-SM24) |
+| `WISHLIST_ENABLED`, `RESTOCK_ALERT_ENABLED`, `PRICE_ALERT_ENABLED` | BFF | `false` | boleh `true` | Entri PDP §2.8.12 disetujui DPO |
+| `EMAIL_ENABLED` | BFF | `false` | boleh `true` | Penyedia + DPA + SPF/DKIM/DMARC (Q-SM19) |
+| `WA_UNOFFICIAL_ENABLED` | BFF + wa-unofficial | `false` | **OFF** | `WA_UNOFFICIAL_RISK_ACCEPTANCE_REF` terisi (penerimaan risiko tertulis pemilik proyek + Legal, Q-SM14) + DPO (Q-SM18); `deploy-validate` menolak tanpa ref |
+| `INSIGHT_ENABLED` (halaman supermarket) | Odoo + insight-web | `false` | sesuai §26.12 L-125 | + scope outlet `eit2` lulus review security |
+
+`deploy-validate`/`check-encryption` (devsecops, G49): flag boolean tervalidasi; secret baru hanya di service yang
+tercantum (`odoo_api_key_forecast_*` → forecast-worker; `behavior_device_pepper`, `behavior_subject_pepper` → BFF (+ job
+erasure ETL untuk subject); `wa_unofficial_*` → BFF/wa-unofficial sesuai §28.7/§28.9; `email_*` → BFF).
+
+### 28.11 Insight level outlet (ringkas; byte-exact di G47)
+- Token & sesi versi baru `eit2`/`eis2` = `eit1`/`eis1` + klaim `wids` (daftar id `stock.warehouse`, urut naik, ≤ 200) dan
+  `roles` persona (`exec|category|store|dc|marketing`). Tanda tangan kedua `SQL_efn_wids` + `SQL_efn_sig2 =
+  hex(SHA256(insight_scope_key|cids|codes|wids))` (format kanonik seperti SEC-190). View ESB lama tetap `eit1`/sig v1.
+- Row policy view supermarket `efn_insight.v_sm_*`: `company_id ∈ SQL_efn_cids` **dan** `warehouse_id ∈ SQL_efn_wids`
+  **dan** sig2 valid. Persona store tanpa warehouse → tidak ada token. Lihat ADR-041 §3.3.
+- Sumber `wids` persona store = **`res.users.efn_outlet_warehouse_ids`** (field `efn_assortment`, juga dipakai record rule
+  kepala toko); persona lain = semua warehouse company di `cids`.
+
+### 28.12 Keputusan (L-144..L-163) dan pertanyaan klien (Q-SM14..Q-SM29; Q-SM1..Q-SM13 di fit-gap G45 §7)
+| # | Keputusan |
+|---|---|
+| L-144 | Supermarket = company root placeholder **PT Supermarket Demo** (`SMD`); DC = `stock.warehouse` di PT yang sama, rute resupply CE; jalur alternatif PT terpisah dibungkus `_efn_create_supply_document()` (ADR-045). |
+| L-145 | forecast-worker menulis ke Odoo **hanya** lewat `/json/2` di `odoo-rpc-gateway` (allowlist §28.2, mTLS CN `forecast-worker`, API key per PT); tidak pernah menulis DB Odoo atau ClickHouse. |
+| L-146 | Kalender: Odoo `efn.forecast.calendar` = sumber kebenaran; seed `holidays` (source `lib`) oleh worker; `manual` tidak pernah ditimpa; minggu gajian = parameter 7 + 7 hari per company. |
+| L-147 | Worker menghitung permintaan & min/max; Odoo menghitung usulan order outlet dan `qty_to_order_manual` orderpoint DC (→ RFQ draft CE, tanpa model usulan PO sendiri) dengan stok live setelah run `ok`. Orderpoint terkelola `trigger=manual`; kelipatan `replenishment_uom_id`. Tanpa run `ok` → tidak ada usulan baru. |
+| L-148 | Sakelar `efn_forecast_engine` per warehouse (`v1` default); pindah `v2` hanya bila WAPE backtest 8 minggu lebih baik dari v1 dan seasonal naive. |
+| L-149 | Usulan lewat cut-off tanpa approval = `expired`, tidak dikirim otomatis (sampai Q-SM23 dijawab). Setiap perubahan qty tercatat untuk bias. |
+| L-150 | Assortment ditegakkan di usulan + konfirmasi picking DC → outlet, tidak di POS; override alkohol/halal tidak tersedia. |
+| L-151 | Shelf-life cap: qty usulan ≤ perkiraan terjual sebelum (ED lot terdekat − sisa umur minimum kategori); semua SKU lot + expiry. |
+| L-152 | Event perilaku tanpa PII; device ID dibuat klien hanya setelah consent; server menyimpan `device_key` (HMAC), bukan ID mentah; penautan ke member hanya dengan consent `tracking` akun. |
+| L-153 | Jalur event: BFF → `behavior.event` → PG staging 7 hari → ETL 15 menit → ClickHouse TTL 90 hari; agregat anonim (k ≥ 10, usulan) 2 tahun. Tidak ada tulis BFF → ClickHouse. |
+| L-154 | Erasure: hapus `device_link`, staging, alert/wishlist; ClickHouse DELETE ringan by `subject_key` lewat job harian. |
+| L-155 | Odoo tidak menerima data member untuk kampanye: hanya ringkasan segmen + kode voucher tanpa partner; penugasan voucher ke member di BFF. |
+| L-156 | Kampanye wajib approval marketing di Odoo (4-eyes di atas ambang, Q-SM24). Odoo → BFF = outbox `efn.campaign.outbox` + klaim/ack BFF lewat `/json/2`; BFF yang publish `promo.campaign.requested`. Odoo tidak memegang kredensial RabbitMQ. |
+| L-157 | Cap frekuensi & anggaran configurable, **default nonaktif** (keputusan pemilik proyek); pengaman tersisa = approval + batas teknis kanal. |
+| L-158 | WA unofficial hanya kategori `promo|notify_restock|price_alert`, service & nomor terpisah, OFF prod sampai `WA_UNOFFICIAL_RISK_ACCEPTANCE_REF`; OTP/pesanan/loyalty tetap Cloud API. |
+| L-159 | `to_e164` hanya di `notify.wa_unofficial`; semua queue lain tetap tanpa nomor/email mentah. |
+| L-160 | Email = SMTP generik dengan TLS wajib + verifikasi sertifikat; tanpa mode plaintext; Mailpit di dev. |
+| L-161 | Wishlist/notify-me/price alert disimpan di PG platform (bukan Odoo), ikut DSAR export & erasure. |
+| L-162 | Insight supermarket memakai `eit2`/`eis2` + `wids`; view ESB lama tidak berubah. |
+| L-163 | Semua butir §28 belum dibangun; fit-gap G45 dapat merevisi bagian Odoo bila CE standar menutupnya. |
+
+**Pertanyaan fit-gap (tidak diduplikasi, lihat `docs/fit-gap/G45_SUPERMARKET.md` §7):** Q-SM1 kode/nama/NPWP PT (`SMD`,
+§12.1) · Q-SM2 data outlet & DC · Q-SM3 timbangan & pemindai GS1 · Q-SM4 kewenangan & batas markdown · **Q-SM5 pajak**
+(architect menambahkan: PPN perpindahan DC → outlet dalam satu PT dan NITKU per lokasi di bawah PMK-81/2024 + perubahan;
+PER-07/PJ/2021 yang dirujuk brief menurut sumber sekunder mengatur PPN ekspor/impor, bukan pemusatan) · Q-SM6
+konsinyasi · Q-SM7 transfer antar outlet · Q-SM8 kiosk supermarket · Q-SM9 sisa umur minimum · Q-SM10 cycle count ·
+Q-SM11 jadwal kirim & cut-off · Q-SM12 markdown di online · Q-SM13 izin alkohol per outlet.
+
+**Pertanyaan architect:**
+- **Q-SM14** (Pemilik + Legal) Penerimaan risiko tertulis WA unofficial (ToS, ban, tanpa SLA, potensi klaim); nomor
+  dokumen untuk `WA_UNOFFICIAL_RISK_ACCEPTANCE_REF`.
+- **Q-SM15** (IT klien/Marketing) Nomor WA terpisah atas nama PT, perangkat/SIM, pemegang pairing.
+- **Q-SM16** (DPO) Dasar tracking = consent `tracking` + teks banner; penghitung agregat tanpa pengenal tanpa consent?
+- **Q-SM17** (DPO) Retensi staging 7 h / mentah 90 h / agregat 2 th; ambang k-anonim agregat (usulan ≥ 10).
+- **Q-SM18** (DPO) Transfer nomor + isi promo ke WhatsApp (Meta, lintas negara) tanpa DPA (Baileys).
+- **Q-SM19** (IT klien + DPO) Penyedia SMTP, lokasi pemrosesan, DPA, domain & DNS SPF/DKIM/DMARC.
+- **Q-SM20** (Legal) KBLI (52109 / 52102 / cukup lokasi ritel; KBLI 2025 mengubah 52101) dan pendaftaran gudang DC.
+- **Q-SM21** (Legal/Ops) Kebijakan produk non-halal: outlet mana yang boleh menjual non-halal.
+- **Q-SM22** (Ops/Pemilik) Override restriksi assortment (default: umum boleh oleh Assortment Manager; alkohol/halal tidak).
+- **Q-SM23** (Ops) Usulan tidak disetujui sebelum cut-off: tidak dikirim (default) atau dikirim otomatis?
+- **Q-SM24** (Marketing + Finance) Nilai awal cap frekuensi/anggaran bila diaktifkan; ambang 4-eyes kampanye.
+- **Q-SM25** (DPO) Notify-me/price alert lewat email/WA: cukup permintaan member atau wajib consent `marketing`?
+- **Q-SM26** (DPO) Inferensi alasan tidak beli & segmen = profiling: pemberitahuan khusus & hak keberatan.
+- **Q-SM27** (Ops/Data) Sumber histori penjualan supermarket nyata; target akurasi (mis. WAPE ≤ 30 % fast-moving).
+- **Q-SM28** (Category manager) Nilai awal per kategori: ambang near-expiry dan service level (sisa umur minimum = fit-gap
+  Q-SM9).
+- **Q-SM29** (Pemilik) Penetapan persona Insight (siapa exec/category/dc/marketing; outlet kepala toko di
+  `efn_outlet_warehouse_ids`); apakah kepala toko boleh melihat margin/harga beli.
