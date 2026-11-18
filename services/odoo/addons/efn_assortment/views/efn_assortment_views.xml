@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Capability -->
+    <record id="efn_assortment_capability_view_list" model="ir.ui.view">
+        <field name="name">efn.assortment.capability.list</field>
+        <field name="model">efn.assortment.capability</field>
+        <field name="arch" type="xml">
+            <list editable="bottom">
+                <field name="code"/>
+                <field name="name"/>
+                <field name="is_protected"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="active" widget="boolean_toggle"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_assortment_capability_action" model="ir.actions.act_window">
+        <field name="name">Capability Outlet</field>
+        <field name="res_model">efn.assortment.capability</field>
+        <field name="view_mode">list</field>
+    </record>
+
+    <!-- Baris assortment -->
+    <record id="efn_assortment_line_view_list" model="ir.ui.view">
+        <field name="name">efn.assortment.line.list</field>
+        <field name="model">efn.assortment.line</field>
+        <field name="arch" type="xml">
+            <list editable="bottom" decoration-danger="mode == 'deny'">
+                <field name="warehouse_id"/>
+                <field name="product_tmpl_id"/>
+                <field name="categ_id"/>
+                <field name="mode"/>
+                <field name="supply_mode" invisible="mode == 'deny'"/>
+                <field name="dsd_partner_id" invisible="supply_mode != 'dsd' or mode == 'deny'"
+                       required="supply_mode == 'dsd' and mode == 'allow'"/>
+                <field name="shelf_capacity_qty" optional="show"/>
+                <field name="date_from" optional="show"/>
+                <field name="date_to" optional="show"/>
+                <field name="note" optional="hide"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="active" widget="boolean_toggle"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_assortment_line_view_search" model="ir.ui.view">
+        <field name="name">efn.assortment.line.search</field>
+        <field name="model">efn.assortment.line</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="warehouse_id"/>
+                <field name="product_tmpl_id"/>
+                <field name="categ_id"/>
+                <filter name="deny" string="Larangan" domain="[('mode', '=', 'deny')]"/>
+                <filter name="dsd" string="DSD" domain="[('supply_mode', '=', 'dsd')]"/>
+                <group>
+                    <filter name="by_wh" string="Outlet" context="{'group_by': 'warehouse_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+    <record id="efn_assortment_line_action" model="ir.actions.act_window">
+        <field name="name">Assortment Outlet</field>
+        <field name="res_model">efn.assortment.line</field>
+        <field name="view_mode">list</field>
+    </record>
+
+    <!-- Override & pelanggaran (baca) -->
+    <record id="efn_assortment_override_view_list" model="ir.ui.view">
+        <field name="name">efn.assortment.override.list</field>
+        <field name="model">efn.assortment.override</field>
+        <field name="arch" type="xml">
+            <list create="0" edit="0" delete="0">
+                <field name="create_date"/>
+                <field name="picking_id"/>
+                <field name="warehouse_id"/>
+                <field name="product_id"/>
+                <field name="reason_code"/>
+                <field name="reason"/>
+                <field name="user_id"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_assortment_override_action" model="ir.actions.act_window">
+        <field name="name">Override Assortment</field>
+        <field name="res_model">efn.assortment.override</field>
+        <field name="view_mode">list</field>
+    </record>
+    <record id="efn_assortment_violation_view_list" model="ir.ui.view">
+        <field name="name">efn.assortment.violation.list</field>
+        <field name="model">efn.assortment.violation</field>
+        <field name="arch" type="xml">
+            <list create="0" edit="0" delete="0">
+                <field name="date"/>
+                <field name="warehouse_id"/>
+                <field name="product_id"/>
+                <field name="reason_code"/>
+                <field name="source"/>
+                <field name="qty"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_assortment_violation_action" model="ir.actions.act_window">
+        <field name="name">Pelanggaran Assortment</field>
+        <field name="res_model">efn.assortment.violation</field>
+        <field name="view_mode">list</field>
+    </record>
+
+    <!-- Field di form CE -->
+    <record id="view_warehouse_efn_assortment" model="ir.ui.view">
+        <field name="name">stock.warehouse.form.efn.assortment</field>
+        <field name="model">stock.warehouse</field>
+        <field name="inherit_id" ref="stock.view_warehouse"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='code']" position="after">
+                <field name="efn_is_dc"/>
+                <field name="efn_assortment_policy"/>
+                <field name="efn_capability_ids" widget="many2many_tags"/>
+            </xpath>
+        </field>
+    </record>
+    <record id="product_template_form_efn_assortment" model="ir.ui.view">
+        <field name="name">product.template.form.efn.assortment</field>
+        <field name="model">product.template</field>
+        <field name="inherit_id" ref="product.product_template_form_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='categ_id']" position="after">
+                <field name="efn_required_capability_ids" widget="many2many_tags"/>
+            </xpath>
+        </field>
+    </record>
+    <record id="product_supplierinfo_list_efn_assortment" model="ir.ui.view">
+        <field name="name">product.supplierinfo.list.efn.assortment</field>
+        <field name="model">product.supplierinfo</field>
+        <field name="inherit_id" ref="product.product_supplierinfo_tree_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='partner_id']" position="after">
+                <field name="efn_region_ids" widget="many2many_tags" optional="show"/>
+            </xpath>
+        </field>
+    </record>
+    <record id="view_users_form_efn_outlets" model="ir.ui.view">
+        <field name="name">res.users.form.efn.outlets</field>
+        <field name="model">res.users</field>
+        <field name="inherit_id" ref="base.view_users_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="inside">
+                <page string="Outlet (kepala toko)" name="efn_outlets" groups="base.group_erp_manager">
+                    <field name="efn_outlet_warehouse_ids" widget="many2many_tags"/>
+                </page>
+            </xpath>
+        </field>
+    </record>
+    <record id="view_picking_form_efn_assortment" model="ir.ui.view">
+        <field name="name">stock.picking.form.efn.assortment</field>
+        <field name="model">stock.picking</field>
+        <field name="inherit_id" ref="stock.view_picking_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//header" position="inside">
+                <button name="action_efn_assortment_override" type="object" string="Override assortment"
+                        invisible="state != 'draft'" groups="efn_assortment.group_assortment_manager"/>
+            </xpath>
+        </field>
+    </record>
+
+    <menuitem id="menu_efn_assortment_root" name="Assortment EFN" parent="stock.menu_stock_root" sequence="96"
+              groups="stock.group_stock_user"/>
+    <menuitem id="menu_efn_assortment_line" name="Assortment Outlet" parent="menu_efn_assortment_root"
+              action="efn_assortment_line_action" sequence="10"/>
+    <menuitem id="menu_efn_assortment_capability" name="Capability Outlet" parent="menu_efn_assortment_root"
+              action="efn_assortment_capability_action" sequence="20"/>
+    <menuitem id="menu_efn_assortment_violation" name="Pelanggaran" parent="menu_efn_assortment_root"
+              action="efn_assortment_violation_action" sequence="30"/>
+    <menuitem id="menu_efn_assortment_override" name="Override" parent="menu_efn_assortment_root"
+              action="efn_assortment_override_action" sequence="40"/>
+</odoo>

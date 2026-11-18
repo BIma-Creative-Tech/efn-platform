@@ -8,4 +8,11 @@
               action="efn_demand_forecast_action" sequence="20"/>
     <menuitem id="menu_efn_forecast_season" name="Kalender Musim" parent="menu_efn_forecast_root"
               action="efn_forecast_season_action" sequence="30"/>
+    <!-- G44 -->
+    <menuitem id="menu_efn_forecast_calendar" name="Kalender Forecast" parent="menu_efn_forecast_root"
+              action="efn_forecast_calendar_action" sequence="35"/>
+    <menuitem id="menu_efn_forecast_daily" name="Proyeksi Harian (v2)" parent="menu_efn_forecast_root"
+              action="efn_forecast_daily_action" sequence="40"/>
+    <menuitem id="menu_efn_forecast_run_v2" name="Run Forecast (v2)" parent="menu_efn_forecast_root"
+              action="efn_forecast_run_v2_action" sequence="45"/>
 </odoo>

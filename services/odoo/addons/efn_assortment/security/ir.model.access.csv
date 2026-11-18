@@ -1,0 +1,9 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_assortment_capability_user,efn.assortment.capability user,model_efn_assortment_capability,stock.group_stock_user,1,0,0,0
+access_efn_assortment_capability_manager,efn.assortment.capability manager,model_efn_assortment_capability,group_assortment_manager,1,1,1,1
+access_efn_assortment_line_user,efn.assortment.line user,model_efn_assortment_line,stock.group_stock_user,1,0,0,0
+access_efn_assortment_line_manager,efn.assortment.line manager,model_efn_assortment_line,group_assortment_manager,1,1,1,1
+access_efn_assortment_override_user,efn.assortment.override user,model_efn_assortment_override,stock.group_stock_user,1,0,0,0
+access_efn_assortment_violation_user,efn.assortment.violation user,model_efn_assortment_violation,stock.group_stock_user,1,0,0,0
+access_efn_assortment_violation_manager,efn.assortment.violation manager,model_efn_assortment_violation,group_assortment_manager,1,1,0,0
+access_efn_assortment_override_wizard_manager,efn.assortment.override.wizard manager,model_efn_assortment_override_wizard,group_assortment_manager,1,1,1,1

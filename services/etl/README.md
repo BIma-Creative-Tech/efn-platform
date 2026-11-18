@@ -134,6 +134,15 @@ Risiko yang dimitigasi: R-B05/R-B06 (fraud/salah saji poin), SEC-61 (rekonsilias
   lot. View `v_waste_daily`, `v_waste_warehouse_daily`, `v_mo_yield`, `v_mo_yield_daily` (yield tertimbang),
   `v_mo_component_variance`; dashboard Metabase **Waste & Yield CK**. Butuh `efn_ck_production` + grant G32 (bersyarat).
   Odoo menghapus tiket > 90 hari (autovacuum); salinan mart tetap (tanpa PII).
+- **Forecast supermarket** (`efn_etl/forecast.py`, `ETL_ENABLE_FORECAST=true`, G44 ADR-046 Proposed, docs/04 §28.1,
+  R-T21): `stock_warehouse` (+ kode gudang & kode PT) -> `dim_fc_warehouse`; `efn_forecast_calendar` -> `dim_calendar`;
+  `efn_forecast_run` -> `dim_forecast_run`; `efn_forecast_daily` -> `fact_forecast_daily` (riwayat semua run). Harian:
+  `fact_forecast_accuracy` = per SKU x gudang x minggu (Senin, WIB) dari run `ok` (kind `daily`) TERAKHIR yang dibuat
+  sebelum tanggalnya (lead >= 1 hari) vs penjualan POS `v_fc_sales_daily`; WAPE = Σ|F−A|/ΣA, bias = Σ(F−A)/ΣA, MAPE
+  hanya hari dengan penjualan; jumlah mentah disimpan agar bisa diagregasi ulang. Minggu yang sudah selesai dihitung
+  ulang `ETL_FORECAST_ACCURACY_WEEKS` (default 2) setiap hari (versi `computed_at`). **Skema Odoo v2 = asumsi** (model
+  dibangun paralel; cocokkan SQL di `forecast.py` + grant G44 sebelum flag dinyalakan). Worker forecast membaca view
+  `efn_forecast.*` (user `efn_forecast_reader`, `access/forecast-access.sql`), tidak menulis ClickHouse.
 - **Grant / view Odoo**: `sql/odoo-readonly-grants.sql` bagian G22 (bersyarat; jalankan ulang setelah modul terpasang).
   ClickHouse: `infra/clickhouse/init/10-g22-kds-online-points.sql`, akses di `access/etl-access.sql` +
   `access/metabase-access.sql`.
@@ -149,7 +158,7 @@ Risiko yang dimitigasi: R-B05/R-B06 (fraud/salah saji poin), SEC-61 (rekonsilias
 `efn_etl/gl.py`. Semua state baris jurnal dimuat (draft/posted/cancel, versi `GREATEST(line.write_date, move.write_date)`), dua cursor (baris & header) ke `fact_gl_line` (`ReplacingMergeTree`, partisi per company karena tanggal draft bisa berubah). `partner_id` hanya dipakai untuk menandai inter-company (`ic_company_id` = company grup lawan); label baris/`ref` tidak dibaca. View `v_gl_consolidated` (Metabase): per bulan, tahun fiskal (dari `fiscalyear_last_month/day`), company, akun (kode per company dari `code_store`), `is_intercompany`, `balance` dan `balance_after_elimination`; hanya `posted`. Konsolidasi grup = SUM `balance_after_elimination` per `account_code` lintas company. **Tidak** masuk semantic layer Text-to-SQL (laporan keuangan lintas PT tanpa pembatasan per company; keputusan Q-6).
 
 ### Enam entitas (W-32, docs/04 §12.1, ADR-001 revisi 18 Okt) — Gelombang 20
-`efn_etl/entities.py` (logika murni): `COMPANY_CODES` = `EFN, GL, PB, BCR, BCF, WTZ, FARM` (WTZ sejak G24 §16.1); kode lama `RTL`/`FNB` **ditolak** (fail closed) di `loyalty_events.company_code` dan `dim_company`. `dim_company` bertambah `business_type` (`EFN`→holding, `GL`/`BCR`→retail, `PB`/`BCF`→fnb, `FARM`→farm; company tanpa kode → '') dan `brand_group` (`BCR`+`BCF` = `BACHA`). DDL + view di `infra/clickhouse/init/08-g20-entities.sql` (view `v_gl_consolidated` dipindah dari 03 karena membaca kolom baru):
+`efn_etl/entities.py` (logika murni): `COMPANY_CODES` = `EFN, GL, PB, BCR, BCF, WTZ, FARM, SMD` (WTZ sejak G24 §16.1; SMD = PT Supermarket Demo, retail, G44 §12.1 revisi 18 Nov 2026); kode lama `RTL`/`FNB` **ditolak** (fail closed) di `loyalty_events.company_code` dan `dim_company`. `dim_company` bertambah `business_type` (`EFN`→holding, `GL`/`BCR`→retail, `PB`/`BCF`→fnb, `FARM`→farm; company tanpa kode → '') dan `brand_group` (`BCR`+`BCF` = `BACHA`). DDL + view di `infra/clickhouse/init/08-g20-entities.sql` (view `v_gl_consolidated` dipindah dari 03 karena membaca kolom baru):
 - `v_gl_consolidated` bertambah `business_type`, `brand_group`, `counterparty_brand`, `ic_relation` (`tp_holding` = Holding↔PT, `tp_bacha` = BCR↔BCF, `non_tp` = pasangan lain/Q-AD1-1, `unknown` = kode company lawan tidak dikenal). **Eliminasi tetap untuk semua pasangan** (semua baris ber-`ic_company_id`); label hanya untuk rekonsiliasi dasar harga.
 - `v_gl_ic_recon`: per bulan × pasangan tak berurut, `balance_a`, `balance_b`, `net_balance` (≠ 0 = selisih eliminasi yang perlu dijelaskan Finance).
 - Tidak ada migrasi: DB dev dibuat ulang; ledger dev lama ber-`RTL`/`FNB` membuat halaman `loyalty_events` gagal (buang sesuai `docs/runbooks/dev-reset.md`). Rumus `ic_relation` dicerminkan di SQL; `tests/test_entities.py` memeriksa keselarasan.
@@ -244,6 +253,7 @@ PDP (SEC-16, docs/04 §7.2): ETL **tidak memegang `otp_pepper`** dan tidak mengh
 | `ETL_LOYALTY_RECON_ONLINE_ENABLED` | `false` (G22; butuh recon aktif + mode `payment` + view G22) |
 | `ETL_ENABLE_KDS`, `ETL_KDS_ONLINE_ENABLED` | `false`, `false` (G22; butuh `ETL_ENABLE_ODOO` + grant G22; online setelah E-29a) |
 | `ETL_ENABLE_WASTE` | `false` (G32; butuh `ETL_ENABLE_ODOO` + `efn_ck_production` + grant G32) |
+| `ETL_ENABLE_FORECAST`, `ETL_FORECAST_ACCURACY_WEEKS`, `ETL_FORECAST_ACCURACY_INTERVAL_SECONDS` | `false`, `2` (1..12), `86400` (G44; butuh `ETL_ENABLE_ODOO` + model v2 `efn_demand_forecast` + grant G44) |
 | `ETL_AUDIT_COPY_ENABLED`, `ETL_AUDIT_SETTLE_SECONDS`, `ETL_AUDIT_LATE_WINDOW_SECONDS`, `ETL_AUDIT_BATCH_SIZE` | `false`, `600`, `86400`, `2000` |
 | `ETL_AUDIT_RECON_INTERVAL_SECONDS`, `ETL_AUDIT_RECON_CONTENT` | `86400`, `true` (bandingkan hash isi; `false` = hanya id) |
 | `ETL_AUDIT_SINK_ENABLED`, `LOKI_URL`, `LOKI_CA_FILE`, `LOKI_CLIENT_CERT_FILE`, `LOKI_CLIENT_KEY_FILE`, `EFN_AUDIT_SINK_KEY_FILE` | aktif bila audit copy + `LOKI_URL`; secret `tls_etl_crt/key`, `efn_audit_sink_key` |

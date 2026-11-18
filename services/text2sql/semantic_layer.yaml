@@ -23,7 +23,7 @@ tables:
       - {name: day, type: Date}
       - {name: company_id, type: UInt32}
       - {name: company_name, type: String}
-      - {name: brand, type: String, description: "Kode PT: GL=GrandLucky, PB=Paris Baguette, BCR/BCF=Bacha Coffee, WTZ=Wetzel's Pretzels, EFN=holding, FARM"}
+      - {name: brand, type: String, description: "Kode PT: GL=GrandLucky, PB=Paris Baguette, BCR/BCF=Bacha Coffee, WTZ=Wetzel's Pretzels, SMD=Supermarket, EFN=holding, FARM"}
       - {name: store_id, type: UInt32}
       - {name: store_name, type: String, description: Nama outlet/POS}
       - {name: category, type: String, description: Kategori produk}
@@ -63,7 +63,7 @@ tables:
     description: Poin loyalty harian per PT penanggung (company_code), sumber, dan alasan (WIB).
     columns:
       - {name: day, type: Date}
-      - {name: company_code, type: String, description: "Kode PT: EFN | GL | PB | BCR | BCF | WTZ | FARM"}
+      - {name: company_code, type: String, description: "Kode PT: EFN | GL | PB | BCR | BCF | WTZ | FARM | SMD"}
       - {name: source, type: String, description: "pos | online | price_hunter | mgm | ..."}
       - {name: reason, type: String}
       - {name: points_issued, type: Int64}

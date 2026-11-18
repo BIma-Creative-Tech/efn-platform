@@ -38,6 +38,7 @@ env:
     efn_setup_org efn_loyalty_accounting efn_l10n_id_coretax_rounding efn_role efn_region
     efn_setup_role efn_pos_bff_order efn_online_kds_bridge efn_online_transfer
     efn_mgm_policy efn_data_ask efn_insight
+    efn_demand_forecast efn_assortment efn_replenishment efn_setup_supermarket
   EFN_INSTALL_ONLY_MODULES: efn_setup_security
 
 jobs:
@@ -56,7 +57,7 @@ jobs:
       insight: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.insight }}
       odoo: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.odoo }}
       python: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.python }}
-      pyservices: ${{ github.event_name == 'push' && '["ai-ocr-worker","etl","text2sql","esb-extract"]' || steps.filter.outputs.changes }}
+      pyservices: ${{ github.event_name == 'push' && '["ai-ocr-worker","etl","text2sql","esb-extract","forecast-worker"]' || steps.filter.outputs.changes }}
       infra: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.infra }}
     steps:
       # Tanpa checkout: pada pull_request paths-filter membaca daftar file lewat API (pull-requests: read); pada push
@@ -71,11 +72,12 @@ jobs:
             web:    ['services/superapp-web/**', '.github/workflows/ci.yml']
             insight: ['services/insight-web/**', '.github/workflows/ci.yml']   # G42 dashboard Insight (docs/04 §26)
             odoo:   ['services/odoo/**', 'scripts/check-odoo-deps.sh', '.github/workflows/ci.yml']
-            python: ['services/ai-ocr-worker/**', 'services/etl/**', 'services/text2sql/**', 'services/esb-extract/**', '.github/workflows/ci.yml']
+            python: ['services/ai-ocr-worker/**', 'services/etl/**', 'services/text2sql/**', 'services/esb-extract/**', 'services/forecast-worker/**', '.github/workflows/ci.yml']
             ai-ocr-worker: ['services/ai-ocr-worker/**', '.github/workflows/ci.yml']
             etl:           ['services/etl/**', '.github/workflows/ci.yml']
             text2sql:      ['services/text2sql/**', '.github/workflows/ci.yml']
             esb-extract:   ['services/esb-extract/**', '.github/workflows/ci.yml']   # G41 (docs/04 §25)
+            forecast-worker: ['services/forecast-worker/**', '.github/workflows/ci.yml']   # G44 (docs/04 §28.2, ADR-046)
             infra:  ['infra/**', 'services/**/Dockerfile', '.github/workflows/**', 'scripts/**', 'Makefile']
 
   node:
@@ -150,7 +152,8 @@ jobs:
         id: dirs
         run: |
           dirs=""
-          for d in services/ai-ocr-worker services/etl services/text2sql services/esb-extract services/odoo/addons; do
+          for d in services/ai-ocr-worker services/etl services/text2sql services/esb-extract services/forecast-worker \
+                   services/odoo/addons; do
             [ -d "$d" ] && dirs="$dirs $d"
           done
           echo "dirs=${dirs# }" >> "$GITHUB_OUTPUT"
@@ -163,7 +166,8 @@ jobs:
       - name: pip-audit
         run: |
           for f in services/ai-ocr-worker/requirements.txt services/etl/requirements.txt \
-                   services/text2sql/requirements.txt services/esb-extract/requirements.txt services/odoo/requirements.txt; do
+                   services/text2sql/requirements.txt services/esb-extract/requirements.txt \
+                   services/forecast-worker/requirements.txt services/odoo/requirements.txt; do
             [ -f "$f" ] || continue
             pip-audit -r "$f" --strict || exit 1
           done
@@ -178,7 +182,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [ai-ocr-worker, etl, text2sql, esb-extract]   # esb-extract: G41 (docs/04 §25), fixture sintetis saja
+        # esb-extract: G41 (docs/04 §25), fixture sintetis saja; forecast-worker: G44 (docs/04 §28.2, data sintetis G48)
+        service: [ai-ocr-worker, etl, text2sql, esb-extract, forecast-worker]
     defaults:
       run:
         working-directory: services/${{ matrix.service }}
@@ -299,7 +304,7 @@ jobs:
         run: |
           set -o pipefail
           # Entrypoint resmi dilewati (--entrypoint odoo) agar argumen DB eksplisit. Nama DB efn_* sesuai dbfilter.
-          docker run --rm --network host --entrypoint odoo efn-odoo:ci \
+          docker run --rm --no-healthcheck --network host --entrypoint odoo efn-odoo:ci \
             --db_host=127.0.0.1 --db_port=5432 --db_user=odoo --db_password=odoo-ci-only \
             --addons-path=/mnt/extra-addons,/usr/lib/python3/dist-packages/odoo/addons \
             -d efn_test -i "${{ steps.mods.outputs.modules }}" \
@@ -309,7 +314,7 @@ jobs:
         if: steps.mods.outputs.later != ''
         run: |
           set -o pipefail
-          docker run --rm --network host --entrypoint odoo efn-odoo:ci \
+          docker run --rm --no-healthcheck --network host --entrypoint odoo efn-odoo:ci \
             --db_host=127.0.0.1 --db_port=5432 --db_user=odoo --db_password=odoo-ci-only \
             --addons-path=/mnt/extra-addons,/usr/lib/python3/dist-packages/odoo/addons \
             -d efn_test -i "${{ steps.mods.outputs.later }}" \
@@ -414,7 +419,7 @@ jobs:
       - name: Install + test (--test-tags efn) dengan kunci PII
         run: |
           set -o pipefail
-          docker run --rm --network host --entrypoint odoo \
+          docker run --rm --no-healthcheck --network host --entrypoint odoo \
             -e EFN_ODOO_PII_KEY_DIR="$EFN_PII_KEY_MOUNT" -v "$RUNNER_TEMP/efn-pii-keys:$EFN_PII_KEY_MOUNT:ro" \
             efn-odoo:ci \
             --db_host=127.0.0.1 --db_port=5432 --db_user=odoo --db_password=odoo-ci-only \
@@ -426,7 +431,7 @@ jobs:
         if: steps.mods.outputs.later != ''
         run: |
           set -o pipefail
-          docker run --rm --network host --entrypoint odoo \
+          docker run --rm --no-healthcheck --network host --entrypoint odoo \
             -e EFN_ODOO_PII_KEY_DIR="$EFN_PII_KEY_MOUNT" -v "$RUNNER_TEMP/efn-pii-keys:$EFN_PII_KEY_MOUNT:ro" \
             efn-odoo:ci \
             --db_host=127.0.0.1 --db_port=5432 --db_user=odoo --db_password=odoo-ci-only \
@@ -595,7 +600,7 @@ jobs:
           openssl x509 -in secrets/tls_clickhouse_crt.txt -noout -ext subjectAltName | grep -q 'IP Address:127.0.0.1'
           # Klien mTLS (docs/04 §8.5) punya clientAuth; server murni TIDAK
           for s in traefik prometheus grafana promtail ocr_worker blackbox_exporter cadvisor etl metabase_provision \
-                   api_gateway odoo_rpc_gateway; do
+                   api_gateway odoo_rpc_gateway forecast_worker; do
             openssl x509 -in "secrets/tls_${s}_crt.txt" -noout -ext extendedKeyUsage | grep -q 'Client Authentication'
           done
           if openssl x509 -in secrets/tls_postgres_crt.txt -noout -ext extendedKeyUsage | grep -q 'Client Authentication'; then
@@ -639,6 +644,19 @@ jobs:
             docker compose -f docker-compose.yml -f "docker-compose.${env}.yml" -f docker-compose.esb.yml \
               --profile core --profile data --profile ai --profile observability --profile ops config -q
           done
+      # G44 (docs/04 §28.2): overlay forecast-worker (network forecast-ch/forecast-rpc, API key Odoo + mTLS) harus valid
+      # sendiri dan bersama overlay ESB (keduanya menambah network ke clickhouse) di atas dev dan prod.
+      - name: docker compose config (dev + prod, overlay forecast)
+        working-directory: infra/compose
+        run: |
+          set -euo pipefail
+          for env in dev prod; do
+            docker compose -f docker-compose.yml -f "docker-compose.${env}.yml" -f docker-compose.forecast.yml \
+              --profile core --profile data --profile ai --profile observability --profile ops config -q
+            docker compose -f docker-compose.yml -f "docker-compose.${env}.yml" -f docker-compose.esb.yml \
+              -f docker-compose.forecast.yml \
+              --profile core --profile data --profile ai --profile observability --profile ops config -q
+          done
       - name: Prod hanya mem-publish port Traefik
         working-directory: infra/compose
         run: |
@@ -659,9 +677,10 @@ jobs:
           # G21 AC-13: odoo_pii_* (secrets.list host:disabled) hanya di-mount docker-compose.pii.yml -> ikut juga.
           # G37: ninerouter_api_key hanya di-mount docker-compose.llm.yml (gateway LLM 9router) -> ikut juga.
           # G41: esb_core_password_* hanya di-mount docker-compose.esb.yml (ekstraksi ESB) -> ikut juga.
+          # G44: odoo_api_key_forecast_* + tls_forecast_worker_* hanya di overlay docker-compose.forecast.yml -> ikut juga.
           cfg=$(docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.payment.yml \
             -f docker-compose.pii.yml -f docker-compose.llm.yml -f docker-compose.llm-text2sql.yml \
-            -f docker-compose.esb.yml "${overlays[@]}" \
+            -f docker-compose.esb.yml -f docker-compose.forecast.yml "${overlays[@]}" \
             --profile core --profile data --profile ai --profile observability --profile ops config --format json)
           defined=$(echo "$cfg" | jq -r '.secrets | keys[]' | sort)
           listed=$(awk '!/^[[:space:]]*#/ && NF {print $1}' ../../scripts/secrets.list | sort)

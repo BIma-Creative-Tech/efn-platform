@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-# Kode PT (G20: EFN, GL, PB, BCR, BCF, FARM; G24: + WTZ) = efn_etl.entities.COMPANY_CODES.
+# Kode PT (G20: EFN, GL, PB, BCR, BCF, FARM; G24: + WTZ; G44: + SMD) = efn_etl.entities.COMPANY_CODES.
 from efn_etl.entities import company_code
 from efn_etl.region import (
     REGION_JOIN_OFF,
@@ -429,11 +429,13 @@ def enabled_jobs(
     kds: bool = False,
     kds_online: bool = False,
     waste: bool = False,
+    forecast: bool = False,
 ) -> list[Job]:
     """Job incremental. Odoo: penjualan POS + (Gelombang 13) pembayaran POS, outlet, produk (efn_etl/pos.py) +
     (Gelombang 21, `partner_region`) wilayah pembeli di penjualan dan master `dim_region` (efn_etl/region.py) +
     (Gelombang 22, `kds`) tiket & stasiun KDS, `kds_online` = kanal online E-29a (efn_etl/kds.py) +
-    (Gelombang 32, `waste`) waste & yield CK (efn_etl/waste.py)."""
+    (Gelombang 32, `waste`) waste & yield CK (efn_etl/waste.py) +
+    (Gelombang 44, `forecast`) gudang, kalender, run & proyeksi forecast (efn_etl/forecast.py)."""
     jobs = [competitor_prices_job(age_out), loyalty_events_job(age_out)]
     if odoo_enabled:
         # Import lokal: pos.py / kds.py mengimpor helper dari modul ini.
@@ -450,4 +452,8 @@ def enabled_jobs(
             from efn_etl.waste import waste_jobs
 
             jobs.extend(waste_jobs())
+        if forecast:
+            from efn_etl.forecast import forecast_jobs
+
+            jobs.extend(forecast_jobs())
     return jobs

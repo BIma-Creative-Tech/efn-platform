@@ -40,6 +40,12 @@
 #           (egress/internal/data), tanpa read_only/cap_drop ALL; insight-web-tls --allow-cn selain traefik/blackbox-exporter;
 #           CH_URL / EFN_INSIGHT_ODOO_URL / EFN_INSIGHT_URL bukan https://; INSIGHT_ENABLED bukan boolean, atau bukan
 #           default false di render prod (insight-web + odoo)
+#   - (G44) odoo_api_key_forecast_* selain smd atau di luar forecast-worker; clickhouse_password_forecast di luar
+#           clickhouse-init/forecast-worker (atau tidak di clickhouse-init); tls_forecast_worker_* di luar forecast-worker;
+#           network forecast-ch selain clickhouse/forecast-worker, forecast-rpc selain odoo-rpc-gateway/forecast-worker;
+#           forecast-worker di network lain, root, tanpa read_only/cap_drop ALL, ODOO_RPC_URL bukan
+#           https://odoo-rpc-gateway:8443, env *_FILE tidak cocok; FORECAST_ENABLED bukan default false di render
+#           prod-forecast; ACL CN haproxy odoo-rpc-gateway selain cn_bff=api-gateway / cn_forecast=forecast-worker
 #   - (at rest) service metabase tanpa secret metabase_encryption_key / dengan MB_ENCRYPTION_SECRET_KEY di env /
 #     dengan override entrypoint apa pun termasuk `[]`/`''` / dengan image resmi metabase/metabase (G16b, SEC-86)
 # Pengecualian hanya lewat ADR-022; tambahkan di sini dengan komentar alasan.
@@ -381,6 +387,62 @@ check_compose() {
              and ((($o.environment // {}).INSIGHT_ENABLED // "") | tostring | test("^(true|false)$")))' \
       <<< "$json" > /dev/null \
     || err "[$label] odoo: EFN_INSIGHT_URL wajib https:// dan INSIGHT_ENABLED boolean (docs/04 §26.2)"
+  # 6b5) G44 (docs/04 §28.2/§28.10, ADR-046): forecast-worker (overlay docker-compose.forecast.yml). API key Odoo forecast
+  #      per PT HANYA forecast-worker dan hanya PT yang punya user teknis (smd); clickhouse_password_forecast hanya
+  #      clickhouse-init + forecast-worker (clickhouse-init WAJIB me-mount-nya); kunci klien mTLS hanya forecast-worker;
+  #      network forecast-ch hanya clickhouse + forecast-worker, forecast-rpc hanya odoo-rpc-gateway + forecast-worker;
+  #      forecast-worker hanya di kedua network itu, non-root, read_only, cap_drop ALL, Odoo hanya lewat
+  #      https://odoo-rpc-gateway:8443, env *_FILE cocok dengan secret ter-mount, FORECAST_ENABLED boolean.
+  local fsec
+  while IFS= read -r fsec; do
+    [[ -z "$fsec" ]] && continue
+    [[ "$fsec" =~ ^odoo_api_key_forecast_(smd)$ ]] || err "[$label] secret $fsec bukan PT forecast (smd, docs/04 §28.2)"
+    jq -e --arg s "$fsec" '[.services | to_entries[] | select([.value.secrets[]? | (.source // .)] | index($s) != null)
+            | .key] - ["forecast-worker"] | length == 0' <<< "$json" > /dev/null \
+      || err "[$label] secret $fsec di-mount ke service selain forecast-worker (least privilege, docs/04 §28.10)"
+  done < <(jq -r '.secrets // {} | keys[] | select(startswith("odoo_api_key_forecast_"))' <<< "$json")
+  for ins in "clickhouse_password_forecast:clickhouse-init,forecast-worker" "tls_forecast_worker_key:forecast-worker" \
+             "tls_forecast_worker_crt:forecast-worker"; do
+    jq -e --arg s "${ins%%:*}" --arg ok "${ins#*:}" '
+        [.services | to_entries[] | select([.value.secrets[]? | (.source // .)] | index($s) != null) | .key]
+        - ($ok | split(",")) | length == 0' <<< "$json" > /dev/null \
+      || err "[$label] secret ${ins%%:*} di-mount ke service selain ${ins#*:} (least privilege, docs/04 §28.2)"
+  done
+  jq -e '(.services["clickhouse-init"] // null) as $c | $c == null
+         or ([$c.secrets[]? | (.source // .)] | index("clickhouse_password_forecast") != null)' <<< "$json" > /dev/null \
+    || err "[$label] clickhouse-init: secret clickhouse_password_forecast wajib di-mount (user efn_forecast_reader, G44)"
+  jq -e '[.services | to_entries[] | select((.value.networks // {}) | has("forecast-ch")) | .key]
+         - ["clickhouse", "forecast-worker"] | length == 0' <<< "$json" > /dev/null \
+    || err "[$label] network forecast-ch dipakai service selain clickhouse/forecast-worker (docs/04 §28.2)"
+  jq -e '[.services | to_entries[] | select((.value.networks // {}) | has("forecast-rpc")) | .key]
+         - ["odoo-rpc-gateway", "forecast-worker"] | length == 0' <<< "$json" > /dev/null \
+    || err "[$label] network forecast-rpc dipakai service selain odoo-rpc-gateway/forecast-worker (docs/04 §28.2)"
+  jq -e '(.services["forecast-worker"] // null) as $w | $w == null
+         or (((($w.networks // {}) | keys) - ["forecast-ch", "forecast-rpc"] | length == 0)
+             and ($w.read_only == true)
+             and ((($w.cap_drop // []) | index("ALL")) != null)
+             and ((($w.user // "") | tostring) | test("^[1-9][0-9]*(:[0-9]+)?$"))
+             and ((($w.environment // {}).ODOO_RPC_URL // "") == "https://odoo-rpc-gateway:8443")
+             and ((($w.environment // {}).FORECAST_ENABLED // "") | tostring | test("^(true|false)$")))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] forecast-worker: wajib hanya network forecast-ch+forecast-rpc, read_only, cap_drop ALL, user non-root, ODOO_RPC_URL https://odoo-rpc-gateway:8443, FORECAST_ENABLED boolean (docs/04 §28.2)"
+  for ins in ODOO_RPC_CA_FILE:efn_ca_crt ODOO_RPC_CLIENT_CERT_FILE:tls_forecast_worker_crt \
+             ODOO_RPC_CLIENT_KEY_FILE:tls_forecast_worker_key CH_PASSWORD_FILE:clickhouse_password_forecast \
+             CH_CA_FILE:efn_ca_crt; do
+    jq -e --arg e "${ins%%:*}" --arg s "${ins#*:}" '(.services["forecast-worker"] // null) as $w | $w == null
+        or (([$w.secrets[]? | (.source // .)] | index($s) != null)
+            and (($w.environment // {})[$e] == ("/run/secrets/" + $s)))' <<< "$json" > /dev/null \
+      || err "[$label] forecast-worker: secret ${ins#*:} tidak di-mount atau ${ins%%:*} != /run/secrets/${ins#*:} (docs/04 §28.2)"
+  done
+  while IFS=$'\t' read -r key val mounted; do
+    [[ -z "$key" ]] && continue
+    [[ "$val" == "/run/secrets/odoo_api_key_forecast_${key,,}" && "$mounted" == 1 ]] \
+      || err "[$label] forecast-worker ODOO_API_KEY_FORECAST_${key}_FILE=${val} tidak cocok dengan secret ter-mount odoo_api_key_forecast_${key,,}"
+  done < <(jq -r '.services["forecast-worker"] // {} | [.secrets[]? | (.source // .)] as $m
+      | (.environment // {}) | to_entries[] | select(.key | test("^ODOO_API_KEY_FORECAST_[A-Z0-9]+_FILE$"))
+      | (.key | capture("^ODOO_API_KEY_FORECAST_(?<k>[A-Z0-9]+)_FILE$") | .k) as $k
+      | [$k, (.value // ""), (if ($m | index("odoo_api_key_forecast_" + ($k | ascii_downcase))) != null then "1" else "0" end)]
+      | @tsv' <<< "$json")
   # 6a) G21 (docs/04 §13.1 no. 3, L-61): kunci tanda tangan kebijakan poin WAJIB di-mount ke odoo (penanda tangan) DAN
   #     api-gateway (pemverifikasi) dengan env *_FILE yang cocok; di luar keduanya sudah ditolak loop di atas.
   local lp
@@ -491,6 +553,14 @@ check_compose() {
     fi
   fi
 
+  # 9) G44 (docs/04 §28.10): kill switch forecast default MATI di render prod + overlay (aktivasi lewat .env/config)
+  if [[ "$label" == prod-forecast ]]; then
+    jq -e '.services["forecast-worker"] != null' <<< "$json" > /dev/null \
+      || err "[$label] forecast-worker tidak ter-render (overlay docker-compose.forecast.yml / profil data)"
+    jq -e '(.services["forecast-worker"].environment.FORECAST_ENABLED // "") == "false"' <<< "$json" > /dev/null \
+      || err "[$label] forecast-worker: FORECAST_ENABLED harus diteruskan dengan default false di render prod (docs/04 §28.10)"
+  fi
+
   echo "check-encryption: compose ${label} diperiksa"
 }
 
@@ -543,6 +613,14 @@ check_files() {
     || err "infra/odoo-rpc-gateway/haproxy.cfg: listener :8443 tanpa ssl + 'ca-file ... verify required' (mTLS)"
   grep -qE '^[[:space:]]*acl[[:space:]]+cn_bff[[:space:]]+ssl_c_s_dn\(CN\)[[:space:]]+-m[[:space:]]+str[[:space:]]+api-gateway$' "$hap" \
     || err "infra/odoo-rpc-gateway/haproxy.cfg: allowlist CN klien harus persis api-gateway"
+  # G44 (docs/04 §28.2): hanya dua ACL CN (cn_bff = api-gateway, cn_forecast = forecast-worker), keduanya `-m str`
+  # (persis, bukan sub/beg/reg); CN lain = perubahan kontrak.
+  local cn_acls
+  cn_acls=$(grep -E '^[[:space:]]*acl[[:space:]]+[a-z_]+[[:space:]]+ssl_c_s_dn\(CN\)' "$hap" \
+            | sed -E 's/^[[:space:]]*acl[[:space:]]+//; s/[[:space:]]+/ /g' | sort)
+  [[ "$cn_acls" == "$(printf '%s\n%s' 'cn_bff ssl_c_s_dn(CN) -m str api-gateway' \
+                       'cn_forecast ssl_c_s_dn(CN) -m str forecast-worker')" ]] \
+    || err "infra/odoo-rpc-gateway/haproxy.cfg: ACL CN klien hanya cn_bff=api-gateway dan cn_forecast=forecast-worker (-m str), ditemukan: ${cn_acls//$'\n'/; }"
   grep -qE '^[[:space:]]*server[[:space:]].*[[:space:]]ssl[[:space:]]+verify[[:space:]]+required[[:space:]]+ca-file[[:space:]].*[[:space:]]crt[[:space:]].*[[:space:]]verifyhost[[:space:]]+odoo([[:space:]]|$)' "$hap" \
     || err "infra/odoo-rpc-gateway/haproxy.cfg: backend Odoo tanpa 'ssl verify required ca-file .. crt .. verifyhost odoo'"
   if grep -qE 'verify[[:space:]]+none|^[[:space:]]*(stats|option[[:space:]]+forwardfor)' "$hap"; then
@@ -616,6 +694,9 @@ case "$MODE" in
       -f docker-compose.llm-text2sql.yml
     # G41 (docs/04 §25): render prod + overlay ekstraksi ESB (esb-extract: network esb + egress, password ESB per brand)
     check_compose prod-esb -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.esb.yml
+    # G44 (docs/04 §28.2): render dev/prod + overlay forecast-worker (network forecast-ch/forecast-rpc, API key + mTLS)
+    check_compose dev-forecast -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.forecast.yml
+    check_compose prod-forecast -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.forecast.yml
     check_files
     ;;
   *) echo "pemakaian: $0 [all|files]" >&2; exit 2 ;;

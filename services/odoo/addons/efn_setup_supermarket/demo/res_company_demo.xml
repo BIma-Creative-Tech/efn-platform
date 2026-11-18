@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO — harga jual termasuk pajak di PT Supermarket Demo (pola efn_setup_company/demo/account_tax_demo.xml untuk
+     PT ritel GL/BCR). Keputusan nyata = Q-SM5 (konsultan pajak). res.company.account_price_include
+     ('tax_included'/'tax_excluded', default CE 'tax_excluded') [V 18 Nov 2026]. Ubah SEBELUM harga diisi: mengubahnya
+     kemudian mengubah arti list_price seluruh produk. noupdate: tidak ditimpa saat upgrade. -->
+<odoo noupdate="1">
+    <record id="company_smd" model="res.company">
+        <field name="account_price_include">tax_included</field>
+    </record>
+</odoo>

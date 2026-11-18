@@ -38,7 +38,9 @@ ANALYZE_TIMEOUT_SECONDS = 200
 MAX_STEPS = 3
 MAX_SUMMARY_CHARS = 3000
 MAX_QUESTION = 500
-COMPANY_CODES = frozenset({"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "FARM"})
+# G44 (docs/04 §12.1 rev. 18 Nov 2026): + SMD. Service text2sql/row policy efn_t2s harus menerima kode yang sama
+# (dikerjakan agent data; bila belum, SMD sekadar tidak punya baris di ClickHouse -> hasil kosong, bukan bocor).
+COMPANY_CODES = frozenset({"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "SMD", "FARM"})
 RESULT_FIELDS = frozenset(
     {
         "state",

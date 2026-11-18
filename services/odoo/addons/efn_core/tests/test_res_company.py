@@ -19,7 +19,8 @@ class TestEfnResCompany(TransactionCase):
             Company.create({"name": "EFN Farm Uji B", "efn_brand_code": "FARM"})
 
     def test_business_type_derived_from_brand_code(self):
-        # G20 (docs/04 §12.1) + G24 (§16.1): GL,BCR -> retail; PB,BCF,WTZ -> fnb; EFN -> holding; FARM -> farm.
+        # G20 (docs/04 §12.1) + G24 (§16.1) + G44 (§12.1 rev. 18 Nov, SMD): GL,BCR,SMD -> retail;
+        # PB,BCF,WTZ -> fnb; EFN -> holding; FARM -> farm.
         Company = self.env["res.company"]
         expected = {
             "EFN": "holding",
@@ -28,6 +29,7 @@ class TestEfnResCompany(TransactionCase):
             "BCR": "retail",
             "BCF": "fnb",
             "WTZ": "fnb",
+            "SMD": "retail",
             "FARM": "farm",
         }
         Company.search([("efn_brand_code", "in", list(expected))]).write({"efn_brand_code": False})
@@ -41,10 +43,11 @@ class TestEfnResCompany(TransactionCase):
         self.assertFalse(company.efn_business_type)
 
     def test_selection_matches_contract_codes(self):
-        """W-32/E-43 + G24: Selection = 7 kode kontrak §12.1/§16.1; kode lama RTL/FNB tidak lagi diterima."""
+        """W-32/E-43 + G24 + G44: Selection = 8 kode kontrak §12.1/§16.1 (+ SMD, §12.1 rev. 18 Nov 2026);
+        kode lama RTL/FNB tidak lagi diterima."""
         field = self.env["res.company"]._fields["efn_brand_code"]
         codes = [value for value, _label in field.selection]
-        self.assertEqual(codes, ["EFN", "GL", "PB", "BCR", "BCF", "WTZ", "FARM"])
+        self.assertEqual(codes, ["EFN", "GL", "PB", "BCR", "BCF", "WTZ", "SMD", "FARM"])
         for old in ("RTL", "FNB"):
             with self.subTest(old=old), self.assertRaises(ValueError):
                 self.env["res.company"].create({"name": f"EFN Kode Lama {old}", "efn_brand_code": old})

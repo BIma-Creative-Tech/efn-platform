@@ -21,6 +21,9 @@ describe('Config online G19/G20', () => {
     expect(testConfig({ ONLINE_CHANNELS: 'GL, PB;BCR,BCF' }).onlineChannels).toEqual(['GL', 'PB', 'BCR', 'BCF']);
     // G24 §16.1 (L-93): WTZ diterima bila dinyalakan eksplisit, tidak masuk default
     expect(testConfig({ ONLINE_CHANNELS: 'GL,WTZ' }).onlineChannels).toEqual(['GL', 'WTZ']);
+    // G44 §12.1: PT SMD belum punya kanal online -> tidak pernah masuk default maupun salinan katalog default
+    expect(testConfig().onlineChannels).not.toContain('SMD');
+    expect(testConfig().catalogSyncChannels).not.toContain('SMD');
     expect(testConfig({ ONLINE_CHANNELS: 'AB-CD' }).onlineChannels).toEqual(['AB-CD']); // berhifen tetap valid secara format
     for (const bad of ['GL_X', 'gl', 'G', '../GL', 'GL/PB', 'GL.PB', '-GL', 'A'.repeat(17), 'GL-FILE']) { // GL-FILE: L-46
       expect(() => testConfig({ ONLINE_CHANNELS: bad }).onlineChannels).toThrow(ConfigError);

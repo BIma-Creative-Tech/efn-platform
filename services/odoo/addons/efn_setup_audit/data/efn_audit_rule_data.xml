@@ -131,7 +131,9 @@
         <field name="log_write" eval="True"/>
         <field name="log_unlink" eval="True"/>
         <field name="capture_unlink_values" eval="True"/>
-        <field name="filter_domain">['|', ('key', '=like', 'efn.%'), ('key', 'in', ['auth_totp.policy', 'auth_password_policy.minlength'])]</field>
+        <!-- G44 SEC-207: + kunci berawalan "efn_" (efn_assortment.enforce, efn_replenishment.*, efn_forecast.*).
+             "_" di-escape (\\_) agar bukan wildcard LIKE; DB lama diperbarui migrations/19.0.2.1.0. -->
+        <field name="filter_domain">['|', '|', ('key', '=like', 'efn.%'), ('key', '=like', 'efn\\_%'), ('key', 'in', ['auth_totp.policy', 'auth_password_policy.minlength'])]</field>
         <field name="tracked_field_ids" eval="[(6, 0, [
             ref('base.field_ir_config_parameter__key'),
             ref('base.field_ir_config_parameter__value'),

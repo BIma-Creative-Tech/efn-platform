@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- EFN Setup Supermarket — inventory (fit-gap G45 S-02, S-03, S-05; ADR-045 Proposed, R-L14).
+     noupdate="1": nama/alamat/langkah penerimaan gudang boleh diubah pengguna; upgrade tidak menimpa.
+
+     1. Grup inventory (setara Inventory -> Settings), sama dengan efn_setup_mrp tetapi TANPA bergantung mrp:
+          stock.group_production_lot      "Lots & Serial Numbers"
+          stock.group_stock_multi_locations "Storage Locations"
+          stock.group_adv_location        "Multi-Step Routes" (rute resupply DC -> outlet & DC two_steps/pick_ship)
+        "Expiration Dates" dipenuhi lewat depends product_expiry. (4, id) idempoten bila efn_setup_mrp juga terpasang.
+     2. Gudang DC satu PT (ADR-045): stock.warehouse code SMDDC (field code size=5, unik per company [V]).
+        reception_steps two_steps (Input -> Stock) dan delivery_steps pick_ship (Stock -> Output -> outlet) [V nilai
+        Selection]. Langkah QC (three_steps) = keputusan operasional DC (Q-SM2), ubah lewat UI.
+        Catatan source stock 19.0 [V]: res.company.create TIDAK membuat gudang di luar mode test
+        (create_missing_warehouse hanya untuk company pertama), sehingga DC dibuat eksplisit di sini. Pada mode test
+        (modules.module.current_test) stock otomatis membuat satu gudang tambahan untuk company baru; test modul ini
+        tidak mengasumsikan jumlah gudang.
+        Outlet (SMD01..SMD05) ada di demo/ karena nama/alamat bergantung Q-SM2. -->
+<odoo noupdate="1">
+    <record id="base.group_user" model="res.groups">
+        <field name="implied_ids" eval="[
+            (4, ref('stock.group_production_lot')),
+            (4, ref('stock.group_stock_multi_locations')),
+            (4, ref('stock.group_adv_location')),
+        ]"/>
+    </record>
+
+    <!-- Alamat DC (PLACEHOLDER JELAS FIKTIF, Q-SM2). Kab/kota dipakai efn_region/efn_assortment (region supplier)
+         lewat warehouse.partner_id; efn_region_id TIDAK diisi di sini (modul ini tidak bergantung efn_region). -->
+    <record id="partner_smd_dc" model="res.partner">
+        <field name="name">DC PT Supermarket Demo (PLACEHOLDER alamat)</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="street">Jl. Contoh Fiktif Gudang No. 99 (PLACEHOLDER, Q-SM2)</field>
+        <field name="city">Kabupaten Bekasi</field>
+        <field name="state_id" ref="base.state_id_jb"/>
+        <field name="zip">00000</field>
+        <field name="country_id" ref="base.id"/>
+    </record>
+
+    <record id="warehouse_smd_dc" model="stock.warehouse">
+        <field name="name">SMD - Distribution Center (PLACEHOLDER)</field>
+        <field name="code">SMDDC</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="partner_id" ref="partner_smd_dc"/>
+        <field name="reception_steps">two_steps</field>
+        <field name="delivery_steps">pick_ship</field>
+    </record>
+</odoo>

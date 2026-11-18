@@ -137,6 +137,20 @@ tertinggal ≤ 15 menit + durasi batch, sedangkan usulan harus konsisten dengan 
 - Per warehouse, sakelar `efn_forecast_engine` = `v1|v2` (default `v1`). Pindah ke `v2` hanya bila backtest 8 minggu
   WAPE v2 < v1 dan < seasonal naive. Pengujian G44 dengan data sintetis (G48: Lebaran & gajian harus tertangkap).
 
+### 3.8 Catatan implementasi G44 (19 Nov 2026)
+- **Efek kalender = faktor pengali**, bukan regresor eksogen AutoARIMA: faktor weekend/gajian/libur/cuti bersama/jendela
+  Lebaran diestimasi per warehouse × kategori (fallback warehouse → company), di-*shrink* ke 1, lalu statsforecast
+  dijalankan pada seri yang sudah disesuaikan dan hasilnya dikalikan kembali. Alasan: dapat dijelaskan ke buyer
+  ("Lebaran ×1,8") dan stabil untuk seri pendek. Backtest sintetis G44: WAPE < 0,8 × baseline rata-rata 56 hari (v1)
+  dan < seasonal naive; puncak H-3..H-1 Lebaran tertangkap.
+- Histori < 56 hari / SKU baru → `category_mean` (bukan Croston); intermittent dengan histori cukup → Croston/ADIDA.
+- Forecast DC = penjualan langsung DC + Σ forecast outlet, hanya bila PT punya tepat satu DC (tautan resupply belum
+  ada di mart).
+- Parameter gajian 7+7 dibaca worker dari env dan Odoo dari `ir.config_parameter`; **harus disamakan manual** (utang
+  teknis: worker membaca parameter dari Odoo, G45+).
+- Jendela kebutuhan usulan dimulai dari tanggal pertama proyeksi run aktif (bukan hari ini); hari order supplier =
+  hari kalkulasi + `efn_replenishment.order_day_offset` (default 1, Q-SM11).
+
 ## 4. Konsekuensi
 
 ### 4.1 Positif

@@ -1,7 +1,8 @@
 -- Gelombang 20 (efn-data-ai-engineer, W-32): fondasi 6 entitas root (docs/04 §12.1, ADR-001 revisi 18 Okt 2026).
 -- Idempoten (ADD COLUMN IF NOT EXISTS / CREATE OR REPLACE VIEW). Dijalankan clickhouse-init.sh setelah 01..07 SETIAP
 -- deploy -> perubahan daftar kode (G24 WTZ) cukup di file ini (view diganti ulang).
--- Kode PT: EFN (holding) | GL (retail) | PB (fnb) | BCR (retail) | BCF (fnb) | WTZ (fnb, G24 docs/04 §16.1) | FARM (farm).
+-- Kode PT: EFN (holding) | GL (retail) | PB (fnb) | BCR (retail) | BCF (fnb) | WTZ (fnb, G24 docs/04 §16.1) | FARM (farm)
+-- | SMD (retail, G44 PT Supermarket Demo placeholder, docs/04 §12.1 revisi 18 Nov 2026 / §28, L-144).
 -- Kode lama RTL/FNB dihapus;
 -- tidak ada migrasi data (DB dev dibuat ulang, docs/runbooks/dev-reset.md). Sumber kebenaran pemetaan & rumus
 -- ic_relation: services/etl/efn_etl/entities.py (test test_entities.py memeriksa view ini tetap selaras).
@@ -44,8 +45,8 @@ SELECT
     cp.brand AS counterparty_brand,
     multiIf(
         isNull(l.ic_company_id), '',
-        c.brand NOT IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM')
-            OR cp.brand NOT IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM')
+        c.brand NOT IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM', 'SMD')
+            OR cp.brand NOT IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM', 'SMD')
             OR c.brand = cp.brand, 'unknown',
         c.brand = 'EFN' OR cp.brand = 'EFN', 'tp_holding',
         (c.brand = 'BCR' AND cp.brand = 'BCF') OR (c.brand = 'BCF' AND cp.brand = 'BCR'), 'tp_bacha',

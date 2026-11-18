@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G44 (docs/04 §28.2-§28.3): kalender forecast, run v2, proyeksi harian. Run & proyeksi hanya dibaca di UI. -->
+<odoo>
+    <!-- Kalender -->
+    <record id="efn_forecast_calendar_view_list" model="ir.ui.view">
+        <field name="name">efn.forecast.calendar.list</field>
+        <field name="model">efn.forecast.calendar</field>
+        <field name="arch" type="xml">
+            <list editable="bottom" decoration-muted="not active">
+                <field name="date"/>
+                <field name="kind"/>
+                <field name="name"/>
+                <field name="warehouse_id" optional="show"/>
+                <field name="source" readonly="1"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="active" widget="boolean_toggle"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_forecast_calendar_view_search" model="ir.ui.view">
+        <field name="name">efn.forecast.calendar.search</field>
+        <field name="model">efn.forecast.calendar</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="date"/>
+                <filter name="lib" string="Dari library" domain="[('source', '=', 'lib')]"/>
+                <filter name="manual" string="Manual" domain="[('source', '=', 'manual')]"/>
+                <filter name="inactive" string="Nonaktif" domain="[('active', '=', False)]"/>
+                <group>
+                    <filter name="by_kind" string="Jenis" context="{'group_by': 'kind'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+    <record id="efn_forecast_calendar_action" model="ir.actions.act_window">
+        <field name="name">Kalender Forecast</field>
+        <field name="res_model">efn.forecast.calendar</field>
+        <field name="view_mode">list</field>
+    </record>
+
+    <!-- Run v2 -->
+    <record id="efn_forecast_run_v2_view_list" model="ir.ui.view">
+        <field name="name">efn.forecast.run.list</field>
+        <field name="model">efn.forecast.run</field>
+        <field name="arch" type="xml">
+            <list create="0" edit="0" delete="0" decoration-danger="state == 'failed'" decoration-success="is_active">
+                <field name="opened_at"/>
+                <field name="run_id"/>
+                <field name="kind"/>
+                <field name="model_version"/>
+                <field name="state" widget="badge"/>
+                <field name="is_active"/>
+                <field name="closed_at"/>
+                <field name="metric_series" optional="show"/>
+                <field name="metric_wape_backtest" optional="show"/>
+                <field name="metric_failed_series" optional="hide"/>
+                <field name="chunk_count" optional="hide"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_forecast_run_v2_view_form" model="ir.ui.view">
+        <field name="name">efn.forecast.run.form</field>
+        <field name="model">efn.forecast.run</field>
+        <field name="arch" type="xml">
+            <form create="0" edit="0" delete="0">
+                <header>
+                    <field name="state" widget="statusbar"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="run_id"/>
+                            <field name="kind"/>
+                            <field name="model_version"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="is_active"/>
+                            <field name="fail_reason" invisible="state != 'failed'"/>
+                        </group>
+                        <group>
+                            <field name="generated_at"/>
+                            <field name="opened_at"/>
+                            <field name="closed_at"/>
+                            <field name="horizon_days"/>
+                            <field name="chunk_total"/>
+                            <field name="chunk_count"/>
+                        </group>
+                        <group string="Metrik">
+                            <field name="metric_series"/>
+                            <field name="metric_duration_s"/>
+                            <field name="metric_wape_backtest"/>
+                            <field name="metric_failed_series"/>
+                        </group>
+                    </group>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+    <record id="efn_forecast_run_v2_action" model="ir.actions.act_window">
+        <field name="name">Run Forecast v2</field>
+        <field name="res_model">efn.forecast.run</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <!-- Proyeksi harian -->
+    <record id="efn_forecast_daily_view_list" model="ir.ui.view">
+        <field name="name">efn.forecast.daily.list</field>
+        <field name="model">efn.forecast.daily</field>
+        <field name="arch" type="xml">
+            <list create="0" edit="0" delete="0">
+                <field name="date"/>
+                <field name="warehouse_id"/>
+                <field name="product_id"/>
+                <field name="yhat"/>
+                <field name="p10"/>
+                <field name="p90"/>
+                <field name="sigma" optional="hide"/>
+                <field name="model" optional="show"/>
+                <field name="run_id" optional="hide"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_forecast_daily_view_search" model="ir.ui.view">
+        <field name="name">efn.forecast.daily.search</field>
+        <field name="model">efn.forecast.daily</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="product_id"/>
+                <field name="warehouse_id"/>
+                <field name="run_id"/>
+                <filter name="active_run" string="Run aktif" domain="[('run_id.is_active', '=', True)]"/>
+                <group>
+                    <filter name="by_wh" string="Gudang" context="{'group_by': 'warehouse_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+    <record id="efn_forecast_daily_action" model="ir.actions.act_window">
+        <field name="name">Proyeksi Harian</field>
+        <field name="res_model">efn.forecast.daily</field>
+        <field name="view_mode">list</field>
+        <field name="context">{'search_default_active_run': 1}</field>
+    </record>
+
+    <!-- Gudang: engine v1/v2 -->
+    <record id="view_warehouse_efn_forecast_engine" model="ir.ui.view">
+        <field name="name">stock.warehouse.form.efn.forecast.engine</field>
+        <field name="model">stock.warehouse</field>
+        <field name="inherit_id" ref="efn_demand_forecast.view_warehouse_efn_forecast"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='efn_forecast_enabled']" position="after">
+                <field name="efn_forecast_engine"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>

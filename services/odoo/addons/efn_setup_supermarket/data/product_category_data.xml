@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Kategori produk standar supermarket (fit-gap G45 S-05, S-06; ADR-045). noupdate="1": nama/hierarki boleh diubah
+     category manager; upgrade tidak menimpa.
+
+     Removal strategy FEFO (product_expiry.removal_fefo) diisi di SETIAP kategori, termasuk induk: source stock 19.0
+     stock.quant._get_removal_strategy hanya membaca product.categ_id.removal_strategy_id langsung (TIDAK menelusuri
+     induk kategori), lalu lokasi, lalu fallback 'fifo' [V 18 Nov 2026]. Produk tanpa tanggal kedaluwarsa tetap aman
+     di FEFO (urut removal_date lalu in_date).
+
+     product.category CE tidak punya company_id [V]: kategori dipakai bersama semua PT; nama sengaja generik.
+
+     "Tracking lot/expiry default per kategori" TIDAK ADA di CE (tracking, use_expiration_date, expiration_time,
+     use_time, removal_time, alert_time hanya di product.template [V]). Sengaja TIDAK memakai ir.default per company
+     untuk tracking/is_storable: default itu ikut mengenai produk service/hadiah (produk diskon reward pos_loyalty, tip)
+     -> produk non-stok bertracking lot berisiko memunculkan popup lot di POS. Default per kategori = gap
+     efn_expiry_monitor (G45, fit-gap S-05); sampai itu ada, seed G48 mengisi is_storable=True, tracking='lot',
+     use_expiration_date=True + umur simpan per produk secara eksplisit. Umur contoh per kategori (README) adalah
+     PLACEHOLDER. -->
+<odoo noupdate="1">
+    <record id="product_category_smd_root" model="product.category">
+        <field name="name">Supermarket</field>
+        <field name="removal_strategy_id" ref="product_expiry.removal_fefo"/>
+    </record>
+
+    <!-- Fresh -->
+    <record id="product_category_smd_fresh" model="product.category">
+        <field name="name">Fresh</field>
+        <field name="parent_id" ref="product_category_smd_root"/>
+        <field name="removal_strategy_id" ref="product_expiry.removal_fefo"/>
+    </record>
+    <record id="product_category_smd_fresh_vegetable" model="product.category">
+        <field name="name">Sayur</field>
+        <field name="parent_id" ref="product_category_smd_fresh"/>
+        <field name="removal_strategy_id" ref="product_expiry.removal_fefo"/>
+    </record>
+    <record id="product_category_smd_fresh_fruit" model="product.category">
+        <field name="name">Buah</field>
+        <field name="parent_id" ref="product_category_smd_fresh"/>
+        <field name="removal_strategy_id" ref="product_expiry.removal_fefo"/>
+    </record>
+    <record id="product_category_smd_fresh_meat" model="product.category">
+        <field name="name">Daging</field>
+        <field name="parent_id" ref="product_category_smd_fresh"/>
+        <field name="removal_strategy_id" ref="product_expiry.removal_fefo"/>
+    </record>
+    <record id="product_category_smd_fresh_fish" model="product.category">
+        <field name="name">Ikan &amp; Seafood</field>
+        <field name="parent_id" ref="product_category_smd_fresh"/>
+        <field name="removal_strategy_id" ref="product_expiry.removal_fefo"/>
+    </record>
+    <record id="product_category_smd_fresh_bakery" model="product.category">
+        <field name="name">Bakery</field>
+        <field name="parent_id" ref="product_category_smd_fresh"/>
+        <field name="removal_strategy_id" ref="product_expiry.removal_fefo"/>
+    </record>
+
+    <record id="product_category_smd_dairy_chilled" model="product.category">
+        <field name="name">Dairy &amp; Chilled</field>
+        <field name="parent_id" ref="product_category_smd_root"/>
+        <field name="removal_strategy_id" ref="product_expiry.removal_fefo"/>
+    </record>
+    <record id="product_category_smd_frozen" model="product.category">
+        <field name="name">Frozen</field>
+        <field name="parent_id" ref="product_category_smd_root"/>
+        <field name="removal_strategy_id" ref="product_expiry.removal_fefo"/>
+    </record>
+    <record id="product_category_smd_dry_grocery" model="product.category">
+        <field name="name">Dry Grocery</field>
+        <field name="parent_id" ref="product_category_smd_root"/>
+        <field name="removal_strategy_id" ref="product_expiry.removal_fefo"/>
+    </record>
+    <record id="product_category_smd_beverage" model="product.category">
+        <field name="name">Minuman</field>
+        <field name="parent_id" ref="product_category_smd_root"/>
+        <field name="removal_strategy_id" ref="product_expiry.removal_fefo"/>
+    </record>
+    <record id="product_category_smd_snack" model="product.category">
+        <field name="name">Snack</field>
+        <field name="parent_id" ref="product_category_smd_root"/>
+        <field name="removal_strategy_id" ref="product_expiry.removal_fefo"/>
+    </record>
+    <record id="product_category_smd_personal_care" model="product.category">
+        <field name="name">Personal Care</field>
+        <field name="parent_id" ref="product_category_smd_root"/>
+        <field name="removal_strategy_id" ref="product_expiry.removal_fefo"/>
+    </record>
+    <record id="product_category_smd_household" model="product.category">
+        <field name="name">Household</field>
+        <field name="parent_id" ref="product_category_smd_root"/>
+        <field name="removal_strategy_id" ref="product_expiry.removal_fefo"/>
+    </record>
+    <!-- Alkohol: penjualan per outlet butuh izin (Q-SM13) -> capability "izin alkohol" di efn_assortment (tahap B). -->
+    <record id="product_category_smd_alcohol" model="product.category">
+        <field name="name">Alkohol</field>
+        <field name="parent_id" ref="product_category_smd_root"/>
+        <field name="removal_strategy_id" ref="product_expiry.removal_fefo"/>
+    </record>
+    <record id="product_category_smd_imported_premium" model="product.category">
+        <field name="name">Impor Premium</field>
+        <field name="parent_id" ref="product_category_smd_root"/>
+        <field name="removal_strategy_id" ref="product_expiry.removal_fefo"/>
+    </record>
+</odoo>
