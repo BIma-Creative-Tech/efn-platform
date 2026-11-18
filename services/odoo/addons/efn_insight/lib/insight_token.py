@@ -32,7 +32,7 @@ ISSUER = "odoo"
 TTL_SECONDS = 60
 MAX_NAME = 64
 MIN_KEY_HEX = 64
-# Kode brand mart ESB (G41, docs/04 §25). IMD/CUP belum menjadi company Odoo sampai G43.
+# Kode brand mart ESB (G41, docs/04 §25). IMD/CUP = company Odoo sejak G43 (efn_setup_company 19.0.1.9.0).
 ESB_CODES = frozenset({"PB", "WTZ", "BCF", "BCR", "IMD", "CUP"})
 ROLES = frozenset({"user", "all_brands"})
 PAYLOAD_KEYS = frozenset({"aud", "cids", "codes", "exp", "iat", "iss", "jti", "name", "roles", "sub", "v"})

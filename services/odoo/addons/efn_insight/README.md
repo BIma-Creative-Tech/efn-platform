@@ -82,5 +82,7 @@ per grup → masuk ke aplikasi lain dengan token singkat). Diambil idenya saja; 
 - Pencegahan replay `jti` ada di insight-web (cache memori, replika = 1); multi-replika butuh Redis (G berikutnya).
 - Audit di `ir.logging` bisa dihapus admin sistem; event akses anti-hapus di `efn_audit` = G berikutnya bila Auditor
   memerlukannya.
-- IMD/CUP belum menjadi company Odoo (G43): `all_brands` tetap mengirim kodenya tanpa `cids`.
+- Sejak G43 (`efn_setup_company` 19.0.1.9.0) IMD/CUP adalah company Odoo (`company_imd`/`company_cup`): `all_brands`
+  otomatis memasukkan id-nya ke `cids`, dan user biasa mendapat kode IMD/CUP bila company itu ada di `company_ids`-nya
+  (tanpa perubahan kode modul ini).
 - Batas `cids` maks 32 (§26.3); bila company ber-kode ESB lebih dari itu, pembuatan token gagal (500).

@@ -337,6 +337,20 @@ default sementara ada di `docs/04` §25.9; nomor mengikuti pola per gelombang (Q
 - **Q-ESB8** Daftar cabang **dapur pusat (CK)** per brand selain PB?
 - **Q-ESB9** Hak EFN atas data & penggunaan API massal menurut kontrak ESB; tersedia ekspor resmi yang lebih ringan?
 
+### 5.13 VPS Bima Creative untuk dev & ekstraksi ESB (ADR-043, 18 Nov 2026)
+Rincian di ADR-043 §6. Tahap B (ekstraksi ESB di VPS) diblokir sampai Q-VPS1..Q-VPS4 + Q-ESB1/7/9 terjawab. Usulan
+risiko baru (belum masuk tabel §4): **R-S19** pihak ketiga memegang kredensial & data ESB, **R-S20** agen AI/akun dev
+membaca data/secret klien di host bersama, **R-O11** ketergantungan & penghapusan data di VPS konsultan.
+- **Q-VPS1** Penyedia VPS, negara & kota data center, sub-pemroses, sertifikasi.
+- **Q-VPS2** Spesifikasi (vCPU/RAM/disk/AES-NI), dukungan LUKS/volume terenkripsi, VM terpisah, snapshot otomatis penyedia.
+- **Q-VPS3** Daftar pemegang root/sudo & akses panel penyedia (per orang), MFA, pemegang passphrase LUKS.
+- **Q-VPS4** Persetujuan tertulis klien + DPO dan DPA; pengendali penandatangan (Holding atau tiap PT brand).
+- **Q-VPS5** VPS B atas nama Bima Creative atau atas nama EFN/klien; siapa menanggung sewa.
+- **Q-VPS6** Batas & bukti penghapusan data di VPS (usulan: paling awal dari pindah ke `efn-data` / akhir kontrak / cutover terakhir + 30 hari / permintaan klien).
+- **Q-VPS7** `insight-web` di VPS untuk tim proyek: boleh? siapa penggunanya?
+- **Q-VPS8** Apakah VPS sama dengan host gateway 9router (rekomendasi: tidak satu host dengan B)?
+- **Q-VPS9** Backup B: tujuan off-site & kustodian kunci, atau terima "tanpa backup, bangun ulang dari ESB".
+
 ---
 
 ## 6. ARSITEKTUR TARGET (KONSOLIDASI)

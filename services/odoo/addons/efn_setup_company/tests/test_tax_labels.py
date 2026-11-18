@@ -2,7 +2,17 @@
 
 from odoo.tests import TransactionCase, tagged
 
-COMPANIES = ("company_efn", "company_rtl", "company_fnb", "company_bcr", "company_bcf", "company_wtz", "company_farm")
+COMPANIES = (
+    "company_efn",
+    "company_rtl",
+    "company_fnb",
+    "company_bcr",
+    "company_bcf",
+    "company_wtz",
+    "company_imd",  # G43
+    "company_cup",  # G43
+    "company_farm",
+)
 
 
 @tagged("post_install", "-at_install", "efn")
@@ -42,7 +52,7 @@ class TestTaxLabels(TransactionCase):
                     self.assertEqual(self._tmpl(company, name).name, label)
 
     def test_default_sale_tax_label_per_pt(self):
-        # Pajak penjualan default produk baru: PPN untuk GL/BCR/EFN/FARM, PB1 untuk PB/BCF/WTZ (§12.1, §16.1).
+        # Pajak penjualan default produk baru: PPN untuk GL/BCR/EFN/FARM, PB1 untuk PB/BCF/WTZ/IMD/CUP (§12.1, §16.1, G43).
         for company, label, group in (
             ("company_rtl", "PPN 11%", "PPN 11%"),
             ("company_bcr", "PPN 11%", "PPN 11%"),
@@ -51,6 +61,8 @@ class TestTaxLabels(TransactionCase):
             ("company_fnb", "PB1", "PB1 (Pajak Restoran / PBJT)"),
             ("company_bcf", "PB1", "PB1 (Pajak Restoran / PBJT)"),
             ("company_wtz", "PB1", "PB1 (Pajak Restoran / PBJT)"),  # G24 §16.1
+            ("company_imd", "PB1", "PB1 (Pajak Restoran / PBJT)"),  # G43
+            ("company_cup", "PB1", "PB1 (Pajak Restoran / PBJT)"),  # G43
         ):
             with self.subTest(company=company):
                 tax = self.env.ref(f"efn_setup_company.{company}").account_sale_tax_id

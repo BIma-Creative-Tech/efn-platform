@@ -697,3 +697,47 @@ agar text2sql dan insight tidak menyimpang — opsional, bukan blok G42.
 Redirect login `auth='user'` di 19.0 (perilaku lama), deep link `/odoo/action-<xmlid>` untuk act_url, filter PT arsip
 pada `user.company_ids` di 19.0, format token `cross_connect_*` OCA. Tidak ada kode yang ditulis; tidak ada test yang
 dijalankan.
+
+## Gelombang 43 — 2026-11-18 (fit-gap migrasi ESB Core → Odoo CE 19; dokumen saja)
+
+Dokumen lengkap: `docs/fit-gap/G43_MIGRASI_ESB_ODOO.md` (folder baru; docs/08 tetap untuk fit-gap fitur). Sumber data =
+datamart ClickHouse G41, bukan API ESB langsung. Legenda [V]/[R]/[B] sama dengan G42.
+
+### Temuan utama
+- Datamart G41 **cukup untuk histori** tetapi **belum cukup untuk master & saldo awal**: tanpa komponen BOM (hanya
+  daftar BOM mentah di `raw_doc`), tanpa harga menu & tautan menu → resep, tanpa HPP, UoM produk sering kosong, tanpa
+  customer B2B, tanpa stok opname (stok harian default mati, 0 baris), tanpa AR/AP/TB [R]. Endpoint pengganti
+  ditemukan di spec ESB: `/product/bom/{bomID}` (bomDetails qty/uom/convertionQty/lastHpp/yieldPercent),
+  `/menu/browse-for-product` (price, bomName), `/customer` (memuat address/picName/picPhone → whitelist),
+  `/location*`, `/inventory/stock-opname*`, `/purchase/purchase-invoices`, `/payable-settlement`, `/finance/disbursement`,
+  `/accounting/coa` [V path]; faktur AR B2B, TB/GL, komposisi paket **[B]**.
+- Fakta cabang dari efn-lead dimasukkan sebagai pola (tanpa nama): PB 41 / WTZ 9 / Bacha 13 / IMD 9 / CUP 7; CK PB 4&38,
+  WTZ 5&6, IMD 2, CUP 4&6; Bacha #6 Retail → BCR, #10 B2B Consignment → Q-ESB10; CK bersama WTZ/CUP → Q-ESB11;
+  Q-ESB2 terjawab (WP = WTZ).
+- CE 19 [V]: `stock.warehouse.code` maks 5 karakter unik per company (perlu tabel pemetaan cabang);
+  `stock.quant._apply_inventory(date)` + `accounting_date` (stock_account) untuk stok awal bertanggal cutover;
+  `res.company.account_opening_move_id/_update_opening_move` untuk neraca pembukaan; `product.category` tanpa
+  `company_id`; `mrp.bom.line` tanpa field yield; `pos.order` menghabiskan sequence config dan menolak sesi tertutup.
+- `efn_demand_forecast` v1 membaca `stock_move` done keluar gudang 56 hari [R] → tanpa histori legacy, usulan
+  min/max kosong ±8 minggu setelah cutover.
+
+### Rekomendasi
+1. **Histori: (c) ClickHouse sebagai arsip + (a) ramping** — satu model `efn.legacy.flow.daily` (hari × company ×
+   gudang × produk stok, kolom aliran = `v_esb_flow_daily`, default 400 hari) + hook outflow forecast untuk tanggal <
+   cutover. Model menu bulanan hanya bila Q-ESB20. **(b) ditolak** (valuasi, pajak, penomoran ganda).
+2. External ID `efn_mig_esb.<brand>_<company>_<entity>_<key>` (company ditambahkan karena produk kembar BCF/BCR) +
+   normalisasi/hash; `map_esb_odoo` = salinan, ditulis setelah commit Odoo; alur export (stack data, user CH `efn_mig`)
+   → `odoo shell` → writeback, tanpa jalur jaringan Odoo ↔ ClickHouse.
+3. Menu takeaway `" T"` digabung ke menu dasar (preset POS + fiscal position); BATCH bukan UoM (BoM `product_qty` =
+   rasio EA); paket → combo/kit setelah konfirmasi Ops; resep menu → BoM phantom, resep produksi → BoM normal (ADR-018).
+4. Stok awal = `stock.quant` inventory mode dari opname cutover; neraca pembukaan + AR/AP **per dokumen terbuka** sebagai
+   baris jurnal pembukaan (bukan faktur ulang), lawan akun "Saldo Awal – Kliring" untuk mencegah nilai persediaan ganda.
+5. Tidak ada modul custom yang perlu dihapus; template migrasi lama perlu kode PT baru.
+
+### Pertanyaan klien baru
+Q-ESB10..Q-ESB23 (dokumen §12): Bacha #10, CK bersama WTZ/CUP, komposisi paket, cabang non-toko, produksi di toko,
+harga per cabang & takeaway, metode biaya & akun kliring, BOM bruto/neto, P&L per outlet, sumber member & consent,
+histori di Odoo vs Insight, TB & AR via API, dokumen berjalan saat cutover, urutan cutover per brand.
+
+### Belum terverifikasi
+Lihat dokumen §13. Tidak ada kode yang ditulis; tidak ada test yang dijalankan.

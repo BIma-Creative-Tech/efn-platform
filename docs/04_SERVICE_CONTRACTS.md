@@ -1,4 +1,4 @@
-# KONTRAK ANTAR-SERVICE (v18.0 — 18 Nov 2026, G42 §26 Insight web + SSO Odoo (token eit1 HMAC sekali pakai via POST form, cookie eis1, row policy `efn_insight_scope`, ADR-041 Proposed); v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
+# KONTRAK ANTAR-SERVICE (v19.0 — 18 Nov 2026, G43 §27 migrasi ESB → Odoo (company IMD/CUP, mesin migrasi export/import/writeback/reconcile, bundel terenkripsi, histori ramping `efn.legacy.flow.daily` + hook forecast, user ClickHouse `efn_mig`, ADR-042 Proposed); v18.0 — 18 Nov 2026, G42 §26 Insight web + SSO Odoo (token eit1 HMAC sekali pakai via POST form, cookie eis1, row policy `efn_insight_scope`, ADR-041 Proposed); v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -892,6 +892,8 @@ Dasar: keputusan pemilik proyek 18 Okt (`docs/decisions/README.md` 18-1..18-42),
 | Bacha Coffee Retail | **`BCR`** | `company_bcr` (baru) | retail | PPN 11 % incl | `BCR` |
 | Bacha Coffee F&B | **`BCF`** | `company_bcf` (baru) | fnb | PB1 + SC | `BCF` |
 | PT Wetzel's Pretzels (**G24, §16**) | **`WTZ`** | `company_wtz` (baru) | fnb | PB1 + SC | `WTZ` (nonaktif, L-93) |
+| PT Im Donut (**G43, §27.1**, placeholder Q-ESB5) | **`IMD`** | `company_imd` (baru) | fnb | PB1 + SC | — |
+| PT Curry Up (**G43, §27.1**, placeholder Q-ESB5) | **`CUP`** | `company_cup` (baru) | fnb | PB1 + SC | — |
 | FARM | `FARM` | `company_farm` (tetap) | farm | ⚠ Q-AD1-2 (placeholder tanpa PPN keluaran) | — |
 
 - Semua company **root** (bukan cabang; hierarki Odoo tidak bisa diubah setelah dibuat). Struktur dikunci sebelum DB produksi dibuat.
@@ -959,7 +961,7 @@ Dasar: keputusan 18-5, 18-9..18-11, 18-24, 18-33, 18-40, 18-42 (`docs/decisions/
 3. **Publikasi Odoo → BFF:** outbox `efn.loyalty.policy.outbox` (pola outbox poin yang ada, retry/backoff) → `PUT /v1/pos/loyalty/policies/{company_code}/{version}` lewat klien Odoo→BFF yang ada (mTLS + `X-EFN-Service-Key` POS) dengan header `X-EFN-Signature: t=<unix>,v1=<hex HMAC-SHA256(key, "<t>." + body)>`, kunci baru **`loyalty_policy_signing_key`** (secret Odoo + BFF), replay window 300 s. Body `{ schema_version: 1, company_code, version, effective_from, approved_by_uid, params: {...}, point_value_idr? }` (`point_value_idr` hanya untuk `company_code=EFN`), `additionalProperties: false`.
 4. **BFF:** tabel append-only `platform.loyalty_policy` (migrasi `10-platform-g21.sql`); versi sama + isi beda → `409 policy_conflict`; nilai di luar plafon env `LOYALTY_POLICY_CEILING_*` (env lama menjadi batas keras) → `422 policy_out_of_bounds`; tanda tangan/replay salah → `401`. `GET /v1/pos/loyalty/params?company_code=` mengembalikan kebijakan aktif (versi tertinggi dengan `effective_from ≤ now`); tanpa kebijakan → env lama (fallback, log warning). Earn/redeem memakai kebijakan aktif PT tempat transaksi.
 5. **Lot earn FIFO (ADR-020 revisi, ADR-001 §poin):** ledger BFF mencatat **PT penerbit** per lot earn; redeem/expire/clawback mengonsumsi lot FIFO; setiap konsumsi mencatat `issuer_company_code`. Migrasi data dev tidak diperlukan (dev reset).
-6. **Akrual harian Odoo ← BFF:** cron Odoo harian (02:00 Asia/Jakarta) per company memanggil `GET /v1/pos/loyalty/accruals?company_code=<PT>&date=<YYYY-MM-DD>` (klien Odoo→BFF, mTLS + service key) → `{ company_code, date, earned_value_idr, earn_reversed_value_idr, redeemed_value_idr_by_issuer: { <issuer>: n }, restored_value_idr, expired_value_idr, closing_liability_idr, generated_at }` (integer IDR). Odoo membuat satu `account.move` per (company, tanggal) dengan `ref = EFN-LOY-<company_code>-<date>` (unik, idempoten; sudah ada → lewati): Earn Dr Beban Program Poin / Cr Liabilitas Poin; clawback kebalikannya; penukaran **lintas PT** (issuer ≠ PT penebus): Dr Kliring Poin Antar-PT / Cr Liabilitas (PT penerbit menanggung, settlement W-15); breakage `expired_value` disiapkan (W-17, G22). Penukaran di PT yang sama **tidak** dijurnal di sini (sudah lewat POS §9.2). Akun per PT di `res.config.settings` (PLACEHOLDER; tanpa akun → cron mencatat galat + aktivitas Finance, tidak membuat jurnal).
+6. **Akrual harian Odoo ← BFF:** cron Odoo harian (02:00 Asia/Jakarta) per company memanggil `GET /v1/pos/loyalty/accruals?company_code=<PT>&date=<YYYY-MM-DD>` (klien Odoo→BFF, mTLS + service key) → `{ company_code, date, earned_value_idr, earn_reversed_value_idr, redeemed_value_idr_by_issuer: { <issuer>: n }, restored_value_idr, expired_value_idr, closing_liability_idr, generated_at }` (integer IDR). Odoo membuat satu `account.move` per (company, tanggal) dengan `ref = EFN-LOY-<company_code>-<date>` (unik, idempoten; sudah ada → lewati): Earn Dr Beban Program Poin / Cr Liabilitas Poin; clawback kebalikannya; penukaran **lintas PT** (issuer ≠ PT penebus): Dr Kliring Poin Antar-PT / Cr Liabilitas (PT penerbit menanggung, settlement W-15); breakage `expired_value` disiapkan (W-17, G22). Penukaran di PT yang sama **tidak** dijurnal di sini (sudah lewat POS §9.2). Akun per PT di `res.config.settings` (PLACEHOLDER; tanpa akun → cron mencatat galat + aktivitas Finance, tidak membuat jurnal). `company_code` yang diterima = daftar kode entitas berlaku (sejak G43: §27.1, termasuk `IMD`/`CUP`; sebelumnya cron untuk IMD/CUP mendapat 400 setiap hari).
 7. **Rekonsiliasi:** setelah akrual, saldo akun liabilitas PT vs `closing_liability_idr` BFF; selisih → log `EFN_LOYALTY_RECON` + alert (data-ai) + aktivitas Finance. Tidak ada koreksi otomatis.
 8. **Settlement bulanan antar-PT (W-15, G29c, `efn_loyalty_accounting` 19.0.1.3.0):** dokumen `efn.loyalty.settlement` per (PT penerbit → PT penebus, `YYYY-MM`), nilai = Σ `issuer_by_redeemer.redeemed[penebus]` − Σ `restored[penebus]` dari akrual **PT penerbit** bulan itu. Syarat: periode sudah lewat, akrual setiap tanggal ada dan final (`done`/`no_entry`), selain itu `efn_loyalty_settlement:accrual_incomplete` / `period_open`. Empat mata: penyiap ≠ penyetuju, keduanya Accounting Manager dengan akses **kedua** PT. Saat disetujui nilai dihitung ulang (berubah → `changed`), referensi transfer + tanggal bayar wajib, lalu dua jurnal ber-ref `EFN-LOYSET-<PENERBIT>-<PENEBUS>-<YYYY-MM> <ref transfer>`: penerbit Dr Utang Poin Antar-PT / Cr Bank; penebus Dr Bank / Cr Kliring Poin Antar-PT. Tanpa netting otomatis (dua arah = dua dokumen), tanpa transfer dana otomatis, nilai negatif ditangani manual. Satu dokumen aktif per pasangan & periode (UNIQUE parsial; batal boleh dibuat ulang). Tidak ada RPC baru untuk BFF.
 
@@ -1561,7 +1563,8 @@ Tabel §12.1 bertambah satu baris:
 |---|---|---|---|---|---|
 | PT Wetzel's Pretzels (PLACEHOLDER nama legal, Q-WTZ1) | **`WTZ`** | `efn_setup_company.company_wtz` (baru) | fnb | PB1 + SC (FP dine-in/non-dine-in, pola sama PB/BCF) | `WTZ` |
 
-- Daftar kode entitas menjadi **EFN/GL/PB/BCR/BCF/WTZ/FARM** (7 entitas, semua **root**). Berlaku untuk Selection
+- Daftar kode entitas menjadi **EFN/GL/PB/BCR/BCF/WTZ/FARM** (7 entitas, semua **root**; **sejak G43 menjadi 9 entitas
+  dengan IMD/CUP, §27.1**). Berlaku untuk Selection
   `efn_core`, BFF (`COMPANY_CODES` loyalty, label metrik `issuer`), ETL (`COMPANY_CODES`, `dim_company`), view
   ClickHouse `v_gl_consolidated`, semantic layer text2sql, dan **semua** CHECK `company_code` / `issuer_company_code`
   platform Postgres yang memuat daftar 6 entitas.
@@ -2029,6 +2032,8 @@ lingkungan); produksi tetap OFF sampai Finance menetapkan angka dan Legal menyet
   false`, semua angka integer):
   `{ schema_version: 1, company_code, version, effective_from, approved_by_uid, params: { level1_pct_bp, level2_pct_bp,
   flat_points_level3, max_depth, cap_points_per_referrer_month, min_order_idr, settle_hold_days, relation_months } }`.
+  `company_code` ∈ daftar kode entitas berlaku (sejak G43 §27.1: EFN/GL/PB/BCR/BCF/WTZ/IMD/CUP/FARM; CHECK DB
+  `18-platform-g43.sql`).
 - Respons: `200 { ok, company_code, version, status: stored|duplicate }`; `409 policy_conflict` (versi sama, isi beda);
   `422 policy_out_of_bounds` (plafon BFF); `400 invalid_request`; `401 invalid_signature`; `503` bila kunci belum ada.
 - Plafon BFF (pertahanan berlapis di atas batas Odoo): `max_depth` 2..5, L2 ≤ L1,
@@ -2415,7 +2420,8 @@ bawah = agregat, tanpa data penjualan klien).
 - Satu brand = satu user API ESB. Nama user = env non-rahasia (diisi di `.env` host, tidak di repo); password hanya dari
   `/run/secrets/esb_core_password_<brand>` (diisi manual pemilik, **tidak di-generate**). Secret lama
   `esb_core_password.txt` = brand `pb` → di-rename `esb_core_password_pb.txt` (runbook devsecops).
-- Kode `IMD`/`CUP` dicadangkan di §12.1 (L-48/L-91) untuk G43; sampai G43 hanya hidup di mart ESB (L-108).
+- Kode `IMD`/`CUP` dicadangkan di §12.1 (L-48/L-91) untuk G43; sampai G43 hanya hidup di mart ESB (L-108). **G43:**
+  company Odoo `company_imd`/`company_cup` dibuat (§27.1).
 
 ### 25.2 Env & secret `esb-extract`
 | Env | Default | Arti |
@@ -2996,3 +3002,350 @@ Status implementasi (QA G42, baca kode): **C1** `lib/origin-guard.ts` + `sso-han
 | C5 | **Restart = cache `jti` hilang** → token ≤ 60 dtk bisa dipakai ulang sekali setelah restart (L-124). | Diterima di replika tunggal; dicatat; Redis saat multi-replika. |
 | C6 | **Jam lintas mesin** (K25-02): Odoo dan insight-web di host berbeda; toleransi 30 dtk. | NTP wajib di kedua host (runbook devsecops); alert selisih > 10 dtk (usulan). |
 | C7 | **Blast radius insight-web**: container memegang `insight_scope_key` + password ClickHouse → kompromi = semua PT mart ESB; row policy hanya melindungi dari bug aplikasi. | Diterima (sama text2sql); network hanya ke ClickHouse, tanpa egress, `read_only`. |
+
+## 27. Gelombang 43 — Migrasi ESB → Odoo (ADR-042, Proposed) (v19.0, 18 Nov 2026)
+
+> **Ringkasan manajemen.** Im Donut (IMD) dan Curry Up (CUP) menjadi PT ke-8 dan ke-9 di Odoo (data PT sementara,
+> menunggu Q-ESB5). Data induk dan saldo awal setiap brand dipindah dari ESB ke Odoo dengan satu skrip yang bisa
+> diulang tanpa menggandakan data dan bisa diuji tanpa menyimpan (dry-run). Histori 24 bulan **tidak** menjadi
+> transaksi Odoo; Odoo hanya menyimpan ringkasan harian aliran produk (default 400 hari) untuk forecast stok, sedangkan
+> histori lengkap tetap di gudang data (Dashboard Insight). Setiap brand ditutup dengan laporan rekonsiliasi 7 butir.
+> **Mesin migrasi dan modul histori baru dibangun setelah user menyetujui ADR-042 (fase 2).**
+
+Dasar: keputusan user 18 Nov 2026 (kontrak kerja G43), fit-gap `docs/fit-gap/G43_MIGRASI_ESB_ODOO.md`
+(efn-odoo-functional), ADR-042 (Proposed). §27 menang atas §1–§26 bila bertentangan. Fakta CE 19 yang dikutip berasal
+dari fit-gap (diverifikasi terhadap source 19.0 oleh functional); yang bertanda **[B]** belum terverifikasi dan wajib
+diuji di dry-run. **Status implementasi:** §27.1 dibangun (G43-A); §27.2–§27.11 = kontrak fase 2, **belum ada kode**.
+
+### 27.1 Kode entitas IMD & CUP — mengubah §12.1 / §16.1 (G43-A, dibangun)
+Tabel §12.1 bertambah dua baris:
+
+| Entitas | `efn_brand_code` (= `company_code`) | xmlid Odoo | Jenis | Pajak penjualan | Kanal online |
+|---|---|---|---|---|---|
+| PT Im Donut (PLACEHOLDER nama legal, Q-ESB5) | **`IMD`** | `efn_setup_company.company_imd` | fnb | PB1 10 % PLACEHOLDER + SC 5 % dine-in, PB1 non-dine-in 0 % (pola WTZ, sufiks `_imd`), harga exclude pajak | — (tidak ada) |
+| PT Curry Up (PLACEHOLDER nama legal, Q-ESB5) | **`CUP`** | `efn_setup_company.company_cup` | fnb | idem (sufiks `_cup`) | — (tidak ada) |
+
+- Daftar kode entitas menjadi **EFN/GL/PB/BCR/BCF/WTZ/IMD/CUP/FARM** (9 entitas, semua **root**). Nama tampilan
+  "PT Im Donut (placeholder)" / "PT Curry Up (placeholder)", tanpa NPWP. Dibuat saat install/upgrade
+  `efn_setup_company` 19.0.1.9.0 (butuh `efn_core` 19.0.1.9.0; DB lama dilengkapi `migrations/19.0.1.9.0/post-migrate.py`).
+- Berlaku untuk: Selection `efn_core`; BFF `COMPANY_CODES` (`services/api-gateway/src/loyalty/loyalty.service.ts`,
+  satu sumber `isCompanyCode`) termasuk label metrik `issuer`; ETL `COMPANY_CODES`/`dim_company`
+  (`services/etl/efn_etl/entities.py`) dan view `infra/clickhouse/init/08-g20-entities.sql` — kini **9 entitas, 72 pasangan
+  berarah** (9 × 8), harga transfer `tp_holding` hanya Holding ↔ PT untuk IMD/CUP, ↔ PT lain `non_tp` (tanpa pasangan
+  cost-plus baru); `efn_insight` `ESB_CODES`. Akrual poin (§13.1 no. 6) dan kebijakan poin/MGM (§13.1 no. 3, §20.1)
+  menerima IMD/CUP.
+- `business_type` `IMD, CUP → fnb` (PB1). **Tanpa** kanal online (`ONLINE_CHANNELS`, user/secret kanal), QR meja dan
+  reservasi meja (daftar PT `FNB_*`/`BOOKING_*` tetap PB, BCF); faktur atas nama pembeli §13.5 **tidak tersedia**
+  (PT PB1 → `422 invoice_not_available`); tidak masuk semantic layer text2sql (belum ada mart Odoo IMD/CUP sebelum cutover).
+- **Platform Postgres — migrasi `infra/postgres/init/18-platform-g43.sql`** (pola §16.3 `13-platform-g24.sql`,
+  idempoten DROP IF EXISTS → ADD … NOT VALID → VALIDATE): 11 CHECK `company_code` (8 tabel G24 + `mgm_policy`,
+  `mgm_source`, `mgm_reward`) + `ck_loyalty_ledger_issuer` (`issuer_company_code`) memuat `'IMD','CUP'`. Masuk daftar
+  migrasi **WAJIB** `scripts/deploy.sh`. Tidak ada kolom/tabel baru; **payload API tidak berubah**. BFF tanpa migrasi 18
+  akan ditolak DB saat menulis ledger/kebijakan IMD/CUP (L-137).
+
+### 27.2 Komponen & CLI `scripts/migration/esb_to_odoo.py`
+| Komponen | Lokasi | Jalan di |
+|---|---|---|
+| Mesin migrasi (satu berkas, dua konteks) | `scripts/migration/esb_to_odoo.py` | `export`/`writeback`/`reconcile`: container sekali jalan `esb-migrate` (stack data); `import`: di dalam `odoo shell` (variabel global `env` terdeteksi) |
+| Pembungkus impor | `scripts/migration/run-import.sh <bundel> [--dry-run] [--step …]` | host: `docker compose exec -T -e EFN_MIG_ARGV='<json>' odoo odoo shell -d $DB --no-http < scripts/migration/esb_to_odoo.py` (pola `scripts/brand-catalog/import_odoo.py`; tanpa password di argumen/log) |
+| Validator | `scripts/migration/validate_import.py --source esb-bundle <bundel>` (perluasan `docs/08` §6.4) | container `esb-migrate` |
+| Tabel pemetaan (input disetujui klien) | `branch_map.csv`, `uom_map.csv`, `coa_map.csv`, `payment_map.csv` — **di luar repo** (data klien); contoh sintetis di `docs/templates/migrasi/esb/` | ikut bundel (hash di manifest) |
+| Modul histori | `services/odoo/addons/efn_legacy_history` (§27.8) | Odoo |
+| Overlay | `infra/compose/docker-compose.migration.yml`, profil `migration` (devsecops) | — |
+
+`esb-migrate`: image `esb-extract` (Python 3.12, klien ClickHouse TLS yang sama) + `scripts/migration` di-mount
+read-only; network **hanya `esb`** (tanpa `egress`, tanpa `data`/`internal`); non-root, `read_only`, `tmpfs /work`,
+`cap_drop: ALL`, `no-new-privileges`, memori 1 GB. Overlay juga me-mount `migration_bundle_key` dan direktori pertukaran
+`${MIG_EXCHANGE_DIR}` ke service `odoo` **hanya selama jendela migrasi** (overlay dilepas setelahnya).
+
+Subcommand:
+| Subcommand | Argumen | Keluaran |
+|---|---|---|
+| `export` | `--brand {pb,wtz,bacha,imd,cup}` `--step <langkah\|master\|cutover>` `[--cutover-date YYYY-MM-DD]` `[--legacy-days N]` `--maps <dir>` `--out <dir>` | `<run_id>.efnmig` (bundel terenkripsi, §27.3) |
+| `import` | `--bundle <file>` `--validation <file>` `[--dry-run]` `[--step …]` | `<run_id>.result.efnmig` berisi `map.jsonl`, `odoo_totals.json`, `import_report.json` |
+| `writeback` | `--result <file>` | INSERT `efn_dwh.map_esb_odoo`; menolak hasil `dry_run=true` |
+| `reconcile` | `--bundle <file>` `--result <file>` | `reconcile_<run_id>.md` + `.csv` (§27.5) |
+
+Langkah (`--step`): `branch`, `uom`, `category`, `product`, `menu`, `partner`, `bom`, `supplierinfo`, `cost`
+(grup **`master`** = urutan itu), `stock`, `opening`, `history`, `cutover-param` (grup **`cutover`**). Urutan &
+dependensi = fit-gap §4; langkah yang prasyaratnya belum ada di Odoo → error, bukan dilewati.
+
+Env `esb-migrate`: `CH_HOST`=`clickhouse`, `CH_PORT`=`8443`, `CH_USER`=`efn_mig`,
+`CH_PASSWORD_FILE`=`/run/secrets/clickhouse_password_mig`, `CH_SECURE`=`true`, `CH_CA_FILE`=`/run/secrets/efn_ca_crt`,
+`MIG_BUNDLE_KEY_FILE`=`/run/secrets/migration_bundle_key`, `MIG_WORKDIR`=`/work` (tmpfs), `MIG_OUT_DIR`=`/out` (volume di
+disk terenkripsi), `APP_ENV`, `EFN_MIG_SALDO_BLOCKED`=`IMD,CUP`, `EFN_MIG_LEGACY_DAYS`=`400` (1..730, di luar → error),
+`EFN_ALLOW_PLAINTEXT`=`false` (production menolak). Sisi Odoo: `EFN_MIG_USER_LOGIN`=`efn_migration`, kunci bundel dari
+`/run/secrets/migration_bundle_key`.
+
+Exit code (semua subcommand dan validator): `0` OK · `1` error data (validasi, konflik, selisih rekonsiliasi pemblokir)
+· `2` argumen/konfigurasi · `3` integritas (dekripsi, HMAC, hash, `run_id`/brand tidak cocok) · `4` gerbang ditolak
+(§27.5, company diblokir).
+
+### 27.3 Bundel & manifest
+Berkas `<run_id>.efnmig` = baris header JSON (`{"format":"efn-mig-esb/1","run_id":…,"brand":…,"kind":"bundle"|"result"}`
++ `\n`) → nonce 12 byte → ciphertext AES-256-GCM (tag 16 byte) atas `tar` berisi `manifest.json`, berkas JSONL per
+entitas, dan tabel pemetaan; **AAD = byte header**. Kunci: `migration_bundle_key` (hex ≥ 64, `gen-secrets`) →
+HKDF-SHA256 (salt kosong) `info="efn:mig-esb:enc:v1"` (32 byte, enkripsi) dan `info="efn:mig-esb:mac:v1"` (32 byte,
+HMAC manifest). Library: `cryptography` (versi di-pin; sudah dependency Odoo). Plaintext hanya di `tmpfs`.
+
+`manifest.json`:
+```json
+{
+  "format": "efn-mig-esb/1",
+  "run_id": "uuid4",
+  "brand": "pb",
+  "company_codes": ["PB"],
+  "steps": ["branch", "uom", "category", "product"],
+  "cutover_date": "YYYY-MM-DD | null",
+  "legacy_days": 400,
+  "created_at": "2026-11-18T03:00:00.000Z",
+  "source": {"snapshot": {"dim_esb_product": "<max _version ISO>", "v_esb_flow_daily": "<max day>"}},
+  "maps": [{"name": "branch_map.csv", "sha256": "<hex>", "rows": 0}],
+  "files": [{"name": "product.jsonl", "entity": "product", "rows": 0, "sha256": "<hex>"}],
+  "tool": {"git_sha": "<sha>", "schema": 1},
+  "sig": "<hex HMAC-SHA256(mac_key, canonical JSON tanpa 'sig')>"
+}
+```
+Canonical JSON = `sort_keys`, separator `(",", ":")`, UTF-8, tanpa spasi. `import` memverifikasi header → dekripsi →
+HMAC → SHA-256 & jumlah baris per berkas **sebelum** menyentuh DB; gagal → exit 3.
+
+Satu baris JSONL (UTF-8, satu objek per baris, tanpa NaN):
+```json
+{"entity": "product", "company_code": "PB", "esb_key": "<kode ESB asli>", "xmlid": "efn_mig_esb.pb_pb_product_<key>",
+ "data": {"default_code": "…", "name": "…", "categ_key": "…", "uom_xmlid": "uom.product_uom_unit", "is_storable": true}}
+```
+`xmlid` dihitung `export` dan **dihitung ulang** `import` (beda → exit 3). Referensi antar-entitas memakai `*_key` =
+xmlid tujuan. Isi `data` per entitas = field milik migrasi (§27.4). Berkas: `branch.jsonl`, `uom.jsonl`,
+`category.jsonl`, `pos_category.jsonl`, `product.jsonl`, `menu.jsonl`, `combo.jsonl`, `payment_term.jsonl`,
+`supplier.jsonl`, `customer.jsonl`, `bom.jsonl` (baris komponen & by-product di dalam objek), `supplierinfo.jsonl`,
+`cost.jsonl`, `quant.jsonl`, `opening.jsonl`, `legacy_flow_daily.jsonl`, (`legacy_sales_monthly.jsonl` hanya bila
+Q-ESB20 = ya).
+
+**PDP:** bundel tanpa kunci identitas orang. Validator menolak kunci di luar whitelist per entitas (termasuk `address`,
+`pic*`, `phone`, `email`, `creator*`, `editor*`, `authorizer*`) — fail closed. Retensi: bundel/hasil dihapus setelah
+berita acara brand ditandatangani (maks 90 hari setelah cutover, Q-ESB24); tidak boleh di repo, tiket, atau chat.
+
+### 27.4 External ID, idempotensi, field milik migrasi
+- `ir.model.data`: `module="efn_mig_esb"`, `noupdate=True`, `name = <brand>_<company>_<entity>_<key>`; `company` = kode
+  PT huruf kecil (`pb, wtz, bcf, bcr, imd, cup`).
+- `key` dari kode ESB asli `c`: `n = re.sub(r"[^a-z0-9_]", "_", c.lower())[:48]`; **bila `c` tidak cocok
+  `^[A-Z0-9_]{1,48}$`** → `key = n + "_" + sha1(c.encode()).hexdigest()[:8]`, selain itu `key = n`. (Deterministik;
+  mencegah tabrakan kode yang hanya beda huruf besar/kecil atau tanda baca. Meralat contoh fit-gap §3: `FIN-0123` →
+  `fin_0123_<hash8>`.)
+- Entitas & `key`: `branch_wh`/`branch_loc`/`branch_pos` (`branch_id`), `category` (path ternormalisasi), `pos_category`
+  (path), `uom` (teks ESB), `product` (`product_code`), `menu` (`menu_code`; menu takeaway `" T"` → **xmlid kedua**
+  menunjuk record yang sama), `combo` (kode menu paket), `bom` (`bom_id`), `supplier`, `customer` (kode), `payment_term`
+  (`net_<hari>`), `supplierinfo` (`<supplier>_<product>`). Tanpa xmlid: quant (idempoten lewat `inventory_quantity`
+  absolut), jurnal pembukaan (`ref = EFN-MIG-OPEN/<CODE>/<cutover>`), histori (unik model §27.8).
+
+| Model | Field milik migrasi (ditulis upsert) | Bukan milik migrasi (tidak pernah ditimpa) |
+|---|---|---|
+| `stock.warehouse` | `name`, `code`, `company_id` (hanya create), `efn_is_central_kitchen` | rute, `efn_ck_supplier_wh_id`, alamat |
+| `stock.location` | `name`, `location_id`, `usage` (hanya create) | lainnya |
+| `pos.config` | `name`, `company_id`/`picking_type_id` (hanya create) | metode bayar, printer, preset, KDS, kiosk |
+| `product.category` / `pos.category` | `name`, `parent_id` | akun & metode biaya (Finance), stasiun KDS |
+| `product.template` (bahan/FIN) | `name`, `default_code`, `categ_id`, `uom_id` (hanya create), `type`, `is_storable`, `purchase_ok`, `sale_ok`, `efn_is_kitting_package`, `active` | pajak, rute, `efn_ck_production_mode`, gambar, barcode yang diisi pengguna |
+| `product.template` (menu) | `name`, `pos_categ_ids`, `list_price`, `available_in_pos`, `sale_ok`, `type` | pajak, gambar, atribut, `pricelist` |
+| `mrp.bom` (+ lines/byproducts) | `code`, `type`, `product_tmpl_id`, `product_qty`, `product_uom_id`, baris komponen | operasi/work center, ambang yield `efn_ck_production` |
+| `res.partner` (supplier/customer) | `name`, `ref`, `is_company`, `company_id` (hanya create), `supplier_rank`/`customer_rank`, `category_id`, `property_payment_term_id`, `active` | NPWP, alamat, kontak, rekening (diisi Finance) |
+| `product.supplierinfo` | `price`, `min_qty`, `currency_id` | lainnya |
+| `product.product.standard_price` | per company, langkah `cost` (sebelum `stock`) | — |
+
+Aturan upsert (impor berjalan sebagai user teknis `efn_migration` dengan `env(user=…, su=True)` agar `write_uid` =
+user migrasi):
+1. xmlid tidak ada → `create` + xmlid.
+2. xmlid ada, `record.write_uid` = `efn_migration` → `write` field milik migrasi yang berbeda saja.
+3. xmlid ada, terakhir diubah pengguna lain → bandingkan field milik migrasi: sama → lewati; beda → **konflik**
+   (`conflict_user_edited`, tidak ditulis, dilaporkan). Tidak ada opsi menimpa di `APP_ENV=production`.
+4. Record ada di Odoo tetapi hilang di ESB → `missing_in_source` (dilaporkan, **tidak** diarsip/dihapus).
+5. xmlid menunjuk record yang sudah dihapus → `dangling_xmlid` (error, operator memutuskan).
+6. Keamanan `ir.model.data` dengan modul `efn_mig_esb` yang tidak terpasang sebagai addon (pola `__import__`) **[B]** →
+   uji di dry-run (upgrade/uninstall modul lain tidak boleh menghapus xmlid ini).
+
+### 27.5 Gerbang, dry-run, rekonsiliasi
+- `--dry-run`: seluruh langkah dalam satu transaksi → `env.cr.rollback()`; `import_report.json`/`odoo_totals.json`
+  identik dengan run nyata, `dry_run: true`. Jurnal pembukaan dibuat **draft** (nama `/`), jadi dry-run tidak
+  memakai nomor dokumen; nomor jurnal valuasi otomatis dari `stock` saat apply quant **[B]** (uji).
+- Gerbang `import` (exit 4 bila gagal): (1) laporan validator untuk `manifest` yang sama (SHA-256 cocok) dengan
+  `errors = 0`; (2) langkah `stock`/`opening`/`history`/`cutover-param` ditolak untuk company di
+  `EFN_MIG_SALDO_BLOCKED` (default `IMD,CUP` sampai Q-ESB5); (3) `APP_ENV=production` dan bukan dry-run → wajib
+  argumen `--confirm-brand <brand>` sama dengan manifest **dan** ADR-042 berstatus Accepted (dicek manusia di runbook,
+  bukan kode); (4) langkah `cutover` butuh `cutover_date` di manifest.
+- **Minimal 2 dry-run lengkap per brand** di staging (salinan data production) sebelum run nyata.
+
+Laporan rekonsiliasi `reconcile_<run_id>.md/.csv` (tanpa data pribadi; lampiran berita acara):
+| # | Butir | Pemblokir? |
+|---|---|---|
+| 1 | Jumlah per entitas: sumber ClickHouse vs dibuat/diperbarui/dilewati/konflik/gagal di Odoo | Ya bila gagal > 0 |
+| 2 | Stok: Σ qty per lokasi × produk (opname vs `stock.quant`) = 0 selisih; Σ nilai persediaan vs saldo akun persediaan TB ESB | Ya (qty); nilai = laporan ke Finance |
+| 3 | AR/AP: Σ per partner & total vs TB ESB; jumlah dokumen terbuka | Ya |
+| 4 | Neraca pembukaan seimbang; saldo akun kliring = 0 setelah stok + TB + AR/AP **diposting** (draft → status "menunggu posting") | Ya |
+| 5 | Histori: Σ per bulan × cabang × produk tiap kolom `efn.legacy.flow.daily` vs `v_esb_flow_daily` (setelah pemetaan); selisih 0; baris tak terpetakan dilaporkan | Ya |
+| 6 | Sanity bisnis: Σ(`total − discount`) / Σ pembayaran per cabang-bulan dalam rentang PB1+SC wajar (PB ±89,6 %, G41) | Peringatan |
+| 7 | Kualitas data: snapshot `v_esb_data_quality` (alias tak terpetakan, non-EA, umur data, run terakhir) | Peringatan |
+
+### 27.6 Cutover & saldo awal (tanpa kode Odoo baru)
+- `--cutover-date` = hari pertama transaksi di Odoo; saldo per akhir `cutover − 1`. Bacha: satu tanggal untuk BCF + BCR.
+- `stock`: per lokasi × produk storable → `inventory_quantity` (UoM produk) → `action_apply_inventory()` dengan konteks
+  `force_period_date = cutover − 1`; sumber qty = stock opname cutover (E6) atau `03_stok_awal.csv`;
+  `fact_esb_stock_snapshot` **tidak** dipakai. Lot hanya untuk produk `tracking=lot` (Q-34). Akun valuasi lokasi
+  *Inventory adjustment* (`property_stock_inventory`) per PT diarahkan ke akun **Saldo Awal – Kliring** selama cutover
+  (Q-ESB16); perilaku valuasi otomatis CE 19 bertanggal mundur **[B]**.
+- `opening`: satu `account.move` jurnal Umum per PT tanggal `cutover − 1`, `ref` §27.4, **draft**: baris TB per akun
+  (`coa_map`; akun persediaan & piutang/utang tidak dari TB — diganti quant & baris per dokumen), baris AR/AP per dokumen
+  terbuka (`partner_id`, akun piutang/utang partner, `date_maturity`, `name` = nomor dokumen ESB, sisa), uang muka di
+  akun uang muka, lawan = kliring. Posting oleh Finance (pemosting ≠ pembuat; `efn_migration` tidak pernah memosting).
+- `cutover-param`: tulis `efn_mig_esb.cutover_date.<CODE>` untuk setiap company brand (hanya run nyata).
+
+### 27.7 Validator `validate_import.py --source esb-bundle`
+Aturan error (memblokir) / peringatan = fit-gap §6, ditambah integritas bundel:
+| Pemeriksaan | Tingkat |
+|---|---|
+| Header/HMAC/hash/jumlah baris manifest tidak cocok | Error (exit 3) |
+| Kunci `data` di luar whitelist entitas (PII) | Error |
+| Cabang aktif tanpa baris `branch_map`; `warehouse_code` > 5 atau bentrok per company | Error |
+| `company_code` ∉ kode §12.1 + §27.1 atau company belum ada di Odoo target | Error |
+| Produk tanpa UoM / UoM tak ada di `uom_map` | Error |
+| FIN diproduksi tanpa rasio BATCH (`uom='NO_RATIO'`) | Error (BoM), peringatan (histori) |
+| Alias `NAME:` tak terpetakan dengan qty | Peringatan (histori); error bila berstok awal |
+| Menu tanpa harga/≤ 0; menu `" T"` tanpa menu dasar | Peringatan |
+| BoM: komponen tidak ada, qty ≤ 0, siklus, kit ke produk paket CK ber-BoM kit (`efn_kitting`) | Error |
+| Paket tanpa komposisi terkonfirmasi (Q-ESB12) | Peringatan (paket tidak dibuat) |
+| Pajak produk lintas PT (aturan `docs/08` §6.4 butir 3, kode PT baru) | Error |
+| Stok qty < 0, lokasi bukan milik PT produk, produk lot tanpa lot; `standard_price` kosong untuk produk berstok | Error |
+| `legacy_days` > 730 atau hari histori ≥ `cutover_date` | Error |
+
+Keluaran `validation_<run_id>.json` (`manifest_sha256`, `errors`, `warnings`, daftar temuan dengan kode/entitas/kunci,
+tanpa data pribadi) + `.md`. Test: satu fixture sintetis per aturan (tanpa data klien).
+
+### 27.8 Modul `efn_legacy_history` (19.0.1.0.0; depends `stock`, `efn_core`, `efn_demand_forecast`; LGPL-3)
+Model **`efn.legacy.flow.daily`** ("Histori aliran produk ESB (read-only)"), tanpa `mail.thread`, `_check_company_auto`:
+| Field | Tipe | Catatan |
+|---|---|---|
+| `day` | Date, required, index | < `cutover_date` company |
+| `company_id` | M2o `res.company`, required, index | PT cabang (`dim_esb_branch.company_code`) |
+| `warehouse_id` | M2o `stock.warehouse`, required, `check_company` | dari `branch_wh` |
+| `product_id` | M2o `product.product`, required, `check_company` | produk storable |
+| `uom_id` | related `product_id.uom_id` | qty dalam UoM produk (EA dikonversi saat export) |
+| `sold`, `ck_prod`, `store_prod`, `ck_out`, `in_ck`, `in_other`, `st_in`, `st_out` | Float (16,3), default 0 | semantik L-116 |
+| `outflow` | Float (16,3), compute stored = `sold + st_out + ck_out` | input forecast |
+| `esb_brand`, `esb_branch_id`, `esb_product_code` | Char/Integer/Char | jejak sumber |
+| `run_id` | Char(36) | run migrasi terakhir yang menulis baris |
+
+- Constraint unik `(company_id, warehouse_id, product_id, day)`; indeks `(warehouse_id, product_id, day)`.
+- ACL: `read` untuk `stock.group_stock_user` (dan grup planner forecast bila ada); **tanpa** create/write/unlink untuk
+  grup mana pun. `create/write/unlink` di-override: ditolak kecuali `env.su` **dan** konteks `efn_legacy_import=True`.
+- Record rule global multi-company: `[('company_id', 'in', company_ids)]`.
+- View: list, pivot, graph, search (filter company/gudang/produk/bulan); menu Inventaris › Laporan › "Histori ESB".
+  Tanpa tombol tulis.
+- Impor = upsert per kunci unik (nilai absolut, idempoten); hari di luar `[cutover − legacy_days, cutover − 1]` tidak
+  ditulis; baris lama di luar rentang tidak dihapus otomatis (laporan).
+- Opsional (hanya bila Q-ESB20 = ya, versi 19.0.1.1.0): `efn.legacy.sales.monthly` (`month` Date hari pertama,
+  `company_id`, `pos_config_id`, `product_id` menu, `qty`, `gross`, `discount`, `net`, `cogs`, `trx_count`), aturan ACL/
+  rule sama.
+
+**Hook forecast** (perubahan kecil `efn_demand_forecast`, versi naik; tanpa dependency ke modul legacy):
+```python
+@api.model
+def _efn_legacy_outflow(self, warehouse, product, date_from, date_to):
+    """Hook G43 (ADR-042). Kembalikan (batas: date | None, {date: qty_keluar}). Default: tanpa histori legacy."""
+    return None, {}
+```
+`_efn_daily_outflow`: panggil hook; `batas is None` → perilaku lama persis. Selain itu hasil = entri legacy dengan
+tanggal `< batas` ∪ hasil query `stock.move` untuk `[max(date_from, batas), date_to]` (query dilewati bila rentang
+kosong). `efn_legacy_history` meng-override: `batas` = `efn_mig_esb.cutover_date.<warehouse.company_id.efn_brand_code>`
+(baca `sudo`), nilai kosong/format salah → `(None, {})` + log peringatan; dict = Σ `outflow` per `day` untuk gudang ×
+produk pada `[date_from, min(date_to, batas − 1)]` (SQL langsung, `flush_model` dulu). Test wajib: regresi tanpa
+override, batas di tengah rentang, rentang seluruhnya sebelum/sesudah batas, company tanpa parameter, multi-company.
+
+### 27.9 Parameter Odoo & user teknis
+| Kunci `ir.config_parameter` | Nilai | Diisi oleh |
+|---|---|---|
+| `efn_mig_esb.cutover_date.<CODE>` | `YYYY-MM-DD` (CODE huruf besar, mis. `PB`, `BCF`, `BCR`) | langkah `cutover-param` (run nyata); perubahan manual = perubahan forecast, wajib dicatat di berita acara |
+| `efn_mig_esb.legacy_days` | `400` (1..730) | skrip saat `history` (informasi; batas efektif = manifest) |
+
+User `efn_migration`: user internal, tanpa password/API key, grup minimum untuk menulis master/stok/akuntansi draft di
+company yang dimigrasi (Inventaris/Manufaktur/POS admin, Akuntansi penagih — **bukan** Settings/Administrator),
+`company_ids` = company brand yang dimigrasi, `active=False` di luar jendela migrasi (diaktifkan/dinonaktifkan runbook).
+Tidak pernah memosting jurnal.
+
+### 27.10 ClickHouse: user `efn_mig` dan `map_esb_odoo`
+- DDL `infra/clickhouse/init/13-g43-migration.sql` (idempoten) + `infra/clickhouse/access/mig-access.sql`.
+- **`map_esb_odoo` kunci baru** `ORDER BY (brand, company_code, entity, esb_key)` (kunci G41 tanpa `company_code`
+  membuat produk kembar BCF/BCR saling menimpa) + kolom `odoo_model LowCardinality(String)`, `run_id UUID`.
+  `clickhouse-init`: tabel lama **kosong** → DROP + CREATE; **berisi** → gagal dengan pesan (tindakan manual). `esb_key`
+  = kode ESB asli (bukan `key` ternormalisasi); `odoo_xmlid` lengkap.
+- User **`efn_mig`** (secret `clickhouse_password_mig`, `gen-secrets`, di-mount hanya ke `clickhouse-init` +
+  `esb-migrate`), role **`mig_rw`**: `SELECT` per objek pada `efn_dwh.dim_esb_branch`, `dim_esb_product`,
+  `dim_esb_menu`, `dim_esb_product_alias`, `dim_esb_supplier`, `fact_esb_sales_line`, `fact_esb_payment_daily`,
+  `fact_esb_fin_sold_daily`, `fact_esb_production`, `fact_esb_delivery`, `fact_esb_transfer`, view `v_esb_sales_daily`,
+  `v_esb_payment_daily`, `v_esb_flow_daily`, `v_esb_data_quality`, `efn_esb.extract_checkpoint`, `extract_run`,
+  `bom_ratio`, tabel baru §27.11; **`SELECT, INSERT` hanya `efn_dwh.map_esb_odoo`**. Tanpa `efn_esb.raw_doc`,
+  `fact_esb_stock_snapshot`, mart Odoo/GL/audit; tanpa DDL/`ALTER`/`DROP`/`TRUNCATE`/`OPTIMIZE`.
+- Profil `mig_profile`: `readonly=0`, `allow_ddl=0` CONST, `allow_introspection_functions=0` CONST,
+  `max_execution_time` 600 s, `max_memory_usage` 4 GB.
+- User dibuat **hanya** bila secret ada dan bukan placeholder; selain itu `DROP USER IF EXISTS efn_mig` (aktif hanya
+  selama program migrasi). `esb_writer` (§25.7) **kehilangan** `INSERT` pada `map_esb_odoo` (esb-extract tidak pernah
+  menulisnya). Test akses wajib (`test_mig_access.py`): `efn_mig` tidak bisa INSERT tabel lain, tidak bisa membaca
+  `raw_doc`, tidak bisa DDL.
+
+### 27.11 Entitas tambahan `esb-extract` (pemilik efn-data-ai-engineer; revisi §25.4/§25.5 saat dibangun)
+Semua GET, redaksi L-110 sebelum `raw_doc`, nama tabel = usulan (DDL menang).
+| # | Endpoint (path diverifikasi functional di spec) | Tabel usulan | Redaksi | Prioritas |
+|---|---|---|---|---|
+| E1 | `/product/bom/{bomID}` per BOM aktif | `dim_esb_bom`, `dim_esb_bom_line` (qty, uom, `convertionQty`, `lastHpp`, `yieldPercent`, `bomTypeID/Name`) | buang `createdBy/editedBy` | **P1** (sebelum dry-run master) |
+| E2 | `/menu/browse-for-product` | kolom `price`, `bom_name` di `dim_esb_menu` | — | **P1** |
+| E4 | `/customer` | `dim_esb_customer` | **whitelist** `customerID, customerCode, customerName, customerCategoryName, paymentDueDays, flagActive, lockVat` | **P1** |
+| E5 | `/location`, `/location/branch/{branchID}` | `dim_esb_location` | — | **P1** |
+| E6 | `/inventory/stock-opname` + `/{stockOpnameNum}` (rentang sekitar cutover) | `fact_esb_stock_opname` | buang nama petugas | **P2** (sebelum cutover) |
+| E7 | `/purchase/purchase-invoices`, `/payable-settlement/{num}`, `/finance/disbursement` | `fact_esb_ap_open` | supplier = kode saja | **P2** |
+| E8 | faktur AR B2B (**endpoint [B]**) + `/customer-advance-settlement` | `fact_esb_ar_open` | buang `creator/editor/authorizer` | **P2** (fallback ekspor Finance, Q-ESB21) |
+| E9 | `/accounting/coa` | `dim_esb_coa` | — | **P2** |
+| E10 | TB/GL per tanggal (**endpoint [B]**) | `fact_esb_tb` | — | **P2** (fallback ekspor Finance) |
+| E3 | komposisi paket (**endpoint [B]**) | diturunkan dari `fact_esb_sales_line` + konfirmasi Ops (Q-ESB12) | — | P1 (turunan) |
+| E11–E13 | biaya produk, `/product/{productID}`, pricelist pelanggan/cabang (**[B]**) | — | — | P3 (opsional; HPP dari `lastHpp` E1) |
+
+Juga: default `ESB_CK_BRANCHES` = `pb:4|38,wtz:5|6,imd:2,cup:4|6`; `ESB_BRANCH_COMPANY_OVERRIDES` minimal
+`bacha:6=BCR` (+ cabang #10 setelah Q-ESB10). Migrasi **membaca** `dim_esb_branch.company_code` (tidak punya pemetaan
+PT sendiri). Grant `esb_writer` + `efn_mig` diperluas ke tabel baru; `efn_insight`/`metabase_reader` **tidak** (data
+keuangan per dokumen).
+
+### 27.12 Keputusan (L-127..L-138) dan pertanyaan klien (Q-ESB10..Q-ESB24)
+| # | Keputusan |
+|---|---|
+| L-127 | Histori ESB = ClickHouse (sumber kebenaran histori) + `efn.legacy.flow.daily` ramping di Odoo (400 hari default, maks 730, read-only, rule multi-company); `pos.order`/`sale.order`/`account.move`/`stock.move` histori **ditolak**; model bulanan hanya bila Q-ESB20 (ADR-042, Proposed; fase 2 menunggu persetujuan user). |
+| L-128 | External ID `efn_mig_esb.<brand>_<company>_<entity>_<key>` (normalisasi + hash §27.4) = sumber kebenaran pemetaan; `map_esb_odoo` = salinan. |
+| L-129 | Alur export (stack data) → validasi → impor `odoo shell` → writeback lewat **berkas**; tidak ada jalur jaringan Odoo ↔ ClickHouse (K25-02). |
+| L-130 | `map_esb_odoo` kunci `(brand, company_code, entity, esb_key)` + `odoo_model`, `run_id`; user `efn_mig` (SELECT objek ESB, INSERT hanya `map_esb_odoo`); `esb_writer` kehilangan INSERT map. |
+| L-131 | Upsert hanya field milik migrasi; rekaman yang diubah pengguna = konflik (tidak ditimpa); tidak ada penghapusan otomatis. |
+| L-132 | Bundel AES-256-GCM + manifest HMAC (kunci `migration_bundle_key`, HKDF terpisah), validasi wajib sebelum impor, whitelist PII fail closed, dihapus setelah berita acara (maks 90 hari). |
+| L-133 | Dry-run (rollback) untuk setiap langkah; ≥ 2 dry-run lengkap per brand di staging sebelum run nyata; run production butuh `--confirm-brand` + ADR-042 Accepted. |
+| L-134 | Saldo awal tanpa kode Odoo baru: `stock.quant` mode inventaris (`accounting_date = cutover − 1`) + satu jurnal pembukaan **draft** per PT (AR/AP per dokumen, lawan kliring); posting Finance 4-eyes; kliring wajib 0. |
+| L-135 | Cutover = `efn_mig_esb.cutover_date.<CODE>` per company, diisi skrip; Bacha satu tanggal BCF+BCR; tidak ada konstanta tanggal di kode. |
+| L-136 | Hook forecast `_efn_legacy_outflow` (default `(None, {})`) di `efn_demand_forecast`, di-override `efn_legacy_history`; tanpa parameter = perilaku lama. |
+| L-137 | IMD/CUP = entitas ke-8/9 (§27.1, fnb PB1, tanpa kanal online/QR/booking); CHECK platform Postgres diperluas `18-platform-g43.sql` (wajib di `deploy.sh`); master boleh dimuat setelah Q-ESB23, saldo awal & histori diblokir (`EFN_MIG_SALDO_BLOCKED`) sampai Q-ESB5. |
+| L-138 | `esb-extract` diperluas E1/E2/E4/E5 (P1) sebelum dry-run master dan E6–E10 (P2) sebelum cutover; default CK & override Bacha §27.11. |
+
+- **Q-ESB10** (Finance/Ops) Cabang Bacha "B2B Consignment" (branchID 10) masuk **BCR** atau **BCF**? Barang konsinyasi
+  tetap milik Bacha sampai laporan penjualan mitra?
+- **Q-ESB11** (Ops/Finance) CK yang muncul di akun WTZ **dan** CUP: satu dapur fisik bersama? PT pemiliknya? Default:
+  dua gudang (satu per PT) di alamat sama, tanpa inter-company.
+- **Q-ESB12** (Ops per brand) Komposisi paket menu (isi tetap vs pilihan); kami mengirim kandidat dari pola penjualan.
+- **Q-ESB13** (Ops) Warehouse/Storage = situs terpisah atau ruang di CK/kantor? Stok cabang Damage/Expired/Temporary
+  dimigrasi (karantina) atau dihapusbukukan sebelum cutover?
+- **Q-ESB14** (Ops) Produk FIN buatan toko tetap diproduksi di Odoo toko (MO outlet) atau dipindah ke CK?
+- **Q-ESB15** (Ops/Finance) Harga menu sama di semua cabang atau per cabang/kota? Harga takeaway (`" T"`) = dine-in?
+- **Q-ESB16** (Finance) Metode biaya per kategori (Standard/AVCO/FIFO), valuasi otomatis/manual, dan akun "Saldo Awal –
+  Kliring" untuk stok/AR/AP pembukaan.
+- **Q-ESB17** (CK/QC) Qty komponen BOM ESB bruto (sudah memperhitungkan yield) atau neto? Bahan pengganti perlu?
+- **Q-ESB18** (Finance) Laba-rugi per outlet (analitik per cabang) dibutuhkan sejak cutover?
+- **Q-ESB19** (Marketing/DPO) Data member & poin saat ini di mana (ESB, Eraspace, lain)? Ada bukti consent?
+- **Q-ESB20** (Manajemen) Histori penjualan cukup di Insight, atau wajib terlihat di dalam Odoo (model bulanan)?
+- **Q-ESB21** (Finance/IT) ESB menyediakan TB dan daftar faktur piutang B2B terbuka lewat API, atau Finance menyerahkan
+  ekspor resmi per tanggal cutover?
+- **Q-ESB22** (Ops) PO, transfer, delivery yang masih berjalan saat cutover: diselesaikan di ESB sebelum freeze
+  (rekomendasi) atau dibuat ulang di Odoo?
+- **Q-ESB23** (PO) Urutan cutover per brand (rekomendasi: satu brand pilot lalu brand lain); IMD/CUP boleh migrasi master
+  sebelum Q-ESB5?
+- **Q-ESB24** (Finance/DPO) Siapa penandatangan berita acara rekonsiliasi per brand (usulan: Finance + Ops brand + PO),
+  dan retensi bundel migrasi maks 90 hari setelah cutover diterima?

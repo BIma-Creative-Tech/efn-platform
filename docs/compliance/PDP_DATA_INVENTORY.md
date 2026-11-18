@@ -1,6 +1,7 @@
 # Inventaris Data Pribadi / RoPA (UU PDP No. 27/2022) — EFN Platform
 
 - **Status:** Draf teknis — **keputusan retensi & DPO ditetapkan pemilik proyek 10 Okt 2026** (v7); dasar pemrosesan & nomor pasal tetap wajib diverifikasi **Legal (DPO sementara)**.
+  - **v16 (2026-11-18, ADR-043 — MENUNGGU DPO)**: §2.7 + §2.8.12 pemroses baru **Bima Creative (VPS)** — tahap A (dev, tanpa data/secret klien) dan tahap B (ekstraksi ESB, **diblokir** sampai persetujuan klien/DPO + DPA); pertanyaan Q-P30, Q-P31; draf `PERSETUJUAN_PEMROSESAN_VPS_BIMA.md`.
   - **v15 (2026-11-18, Gelombang 41)**: §2.8.11 datamart ESB Core (data legacy klien, redaksi pelaku/teks bebas sebelum `raw_doc`, tanpa customer/member; prasyarat aktivasi production).
   - **v14 (2026-11-01, Gelombang 39)**: §2.8.10 asisten analisis "Analisis bertahap" (ringkasan AI, P8, agregat tanpa PII).
   - **v13 (2026-11-01, Gelombang 38)**: §2.8.9 Text-to-SQL "Tanya Data" (log pertanyaan per user di Odoo, P7, tanpa PII di mart).
@@ -308,6 +309,7 @@ Akses umum: `metabase_reader` hanya view/tabel tanpa identitas (kolom `customer_
 | **(v4)** Sistem lama (sumber migrasi) | HP, consent, saldo, id lama | Pengendali asal | Indonesia (asumsi) | Pemusnahan data ekspor setelah migrasi & bukti consent = Q-P13, P-9 |
 | 3PL (Q-ON3, **v7**: pickup + 3PL + kurir internal) | Nama & HP penerima, alamat, titik lokasi, catatan kurir | Pemroses (3PL) / internal (kurir sendiri) | Indonesia (wajib, sama dengan Q-P20) | Vendor 3PL belum dipilih; **DPA wajib**; inventaris direvisi saat W-05 |
 | Vendor VPS (ADR-004) | Semua (terenkripsi LUKS) | Pemroses infrastruktur | Indonesia (syarat) | DPA wajib |
+| **(v16)** Bima Creative (VPS) — ADR-043, **MENUNGGU DPO** | Tahap A: **tidak ada** (kode + data sintetis). Tahap B (diblokir): kredensial API ESB read-only + datamart ESB (§2.8.11) | Pemroses (konsultan) + **sub-pemroses** penyedia VPS | **Belum diketahui** (Q-VPS1; di luar Indonesia → Q-T8) | Rinci §2.8.12; DPA + persetujuan tertulis klien wajib sebelum B |
 | GitHub | Kode & data sintetis | — | Lintas negara | Larang data produksi di fixture/log CI |
 | ALTCHA | Tidak ada pihak ketiga | — | — | ADR-028 |
 
@@ -460,6 +462,33 @@ Price Hunter meminta pengguna memotret label saja; DPIA ringkas untuk aliran P6.
 - **Prasyarat `ESB_ENABLED=true` di production:** entri ini disetujui DPO; Q-ESB1 (user API read-only), Q-ESB7 (izin beban
   backfill), Q-ESB9 (hak data). Dev/staging boleh memakai data nyata hanya di mesin terenkripsi (LUKS/BitLocker).
 
+#### 2.8.12 (v16) Pemroses Bima Creative (VPS) — ADR-043 (Proposed) — status: **MENUNGGU DPO**
+- **Pihak:** Bima Creative (konsultan/pengembang, pihak ketiga) sebagai **pemroses** atas perintah pengendali (EFN
+  Holding dan/atau PT pemilik brand — penandatangan ditentukan Legal, Q-VPS4); penyedia VPS = **sub-pemroses** (nama &
+  lokasi belum diketahui, Q-VPS1).
+- **Tahap A — lingkungan pengembangan (boleh segera):** kode repo, data uji sintetis, secret dev yang dibuat baru.
+  **Bukan pemrosesan data pribadi klien.** Larangan: data hasil ekstraksi ESB, dump database, tangkapan layar data
+  nyata, secret klien (repo di-clone bersih dari GitHub; working copy laptop **tidak** disalin karena memuat
+  `secrets/esb_core_password_*`). Pelanggaran = near-miss/insiden (§6).
+- **Tahap B — ekstraksi ESB (DIBLOKIR):** data = isi §2.8.11 (cabang, produk, penjualan per baris tanpa
+  pelanggan/kasir, pembayaran agregat, produksi, pengiriman, transfer; residu data pribadi: nama supplier perorangan) +
+  kredensial user API ESB **read-only** per brand. Data bisnis rahasia lima brand → kerahasiaan dan PDP sama-sama
+  berlaku.
+- **Dasar:** pemrosesan oleh pemroses berdasarkan perjanjian tertulis dengan pengendali (UU PDP; rujukan kerja Pasal
+  51 tentang pemroses — **nomor pasal diverifikasi Legal**). Tanpa DPA + persetujuan tertulis → B tidak boleh jalan.
+- **Enkripsi/kontrol B:** L (LUKS/volume terenkripsi untuk ClickHouse, `secrets/`, backup lokal) · T (TLS verify-full CA
+  internal; WireGuard untuk operator; tanpa port publik selain WG) · egress hanya ESB + GitHub + registry · akun per
+  orang + audit 400 h · agen AI tidak berjalan di VM/user B dan hanya menerima angka agregat (ADR-043 §3.4).
+- **Retensi di VPS:** sementara — hapus (crypto-erase + berita acara) pada yang paling awal: pemindahan ke `efn-data`
+  milik EFN, akhir kontrak Bima Creative, cutover brand terakhir + 30 hari (usulan), atau permintaan klien (**Q-VPS6 /
+  Q-P31**). Retensi raw 36 bulan / mart 10 tahun (§2.8.11) hanya berlaku di infrastruktur EFN.
+- **Transfer lintas negara:** bergantung lokasi DC (Q-VPS1). Di luar Indonesia → `PDP_TRANSFER_LINTAS_NEGARA.md` P9,
+  keputusan DPO **Q-T8**. Rekomendasi architect: DC Indonesia sebagai syarat (selaras ADR-004, Q-P20).
+- **Insiden:** Bima Creative memberi tahu klien/DPO ≤ 24 jam setelah mengetahui (usulan, agar pengendali sempat memenuhi
+  3×24 jam).
+- **Prasyarat B:** persetujuan tertulis klien + DPO (`PERSETUJUAN_PEMROSESAN_VPS_BIMA.md`), DPA, Q-ESB1, Q-ESB7, Q-ESB9,
+  Q-VPS1..Q-VPS3, entri ini disetujui DPO, review security atas kontrol ADR-043 §3.4.
+
 ## 3. Matriks retensi ringkas (default → ditetapkan DPO)
 | Data | Default | Mekanisme (pemilik) | Status |
 |---|---|---|---|
@@ -551,7 +580,19 @@ Default dipakai tim sampai dijawab; semua angka configurable (biaya ubah angka =
 - **Q-P28 — retensi data HR & rekening, erasure karyawan/vendor.** Retensi data pribadi karyawan setelah berhenti kerja (DPIA D-6) dan apakah `efn_privacy` perlu menangani `hr.*`/`res.partner.bank` (L-68 sisa K-36-4; ±1–2 hari odoo-engineer).
 - **Q-P29 — paket retensi QR meja.** Setujui: `fnb_*` 180 h, tautan member 30 h, Odoo `efn.pos.table.session` 400 h (usulan), dan **catatan baris QR** di `pos.order.line.note` dikosongkan setelah 90 h (selaras tiket KDS; ±0,5 hari odoo-engineer) alih-alih ikut 10 th.
 
+### (v16) Pertanyaan baru untuk Legal/DPO — ADR-043 (VPS Bima Creative)
+- **Q-P30 — pemroses Bima Creative.** (a) Setujui/tolak Bima Creative sebagai pemroses untuk tahap B (ekstraksi ESB)
+  dengan DPA; (b) siapa pengendali penandatangan (Holding atau tiap PT brand); (c) apakah kontrak ESB mengizinkan
+  pemrosesan data ESB oleh pihak ketiga (terkait Q-ESB9); (d) bila lokasi DC belum/tidak di Indonesia, lihat Q-T8.
+  Alternatif bila ditolak: mesin milik EFN (ADR-043 opsi 2, ±Rp6–15 juta sekali + 2–4 hari setup, asumsi) atau laptop
+  terenkripsi (opsi 1, Rp0, jadwal lebih lambat).
+- **Q-P31 — retensi & bukti penghapusan di VPS.** Setujui VPS sebagai tempat sementara dengan hapus pada yang paling
+  awal: pindah ke `efn-data` / akhir kontrak / cutover brand terakhir + 30 hari / permintaan klien; bukti = crypto-erase
+  kunci LUKS + berita acara (Q-VPS6). Biaya Rp0 selain waktu operasional ±0,5 hari.
+
 ## 5. Yang belum terverifikasi
+- **(v16)** Penyedia, lokasi data center, spesifikasi, dan pemegang root VPS Bima Creative tidak diketahui architect
+  (Q-VPS1..Q-VPS3); nomor pasal pemroses (rujukan kerja Pasal 51) belum diverifikasi Legal.
 - Nomor pasal UU PDP (wajib Legal), termasuk dasar "efektivitas hak hapus" untuk `erasure_suppression`.
 - Fungsi retensi `loyalty_reservation`/`loyalty_pos_earn` dan autovacuum reservasi Odoo hanya terbukti di unit test, belum diamati berjalan di runtime (perlu data berumur > 30/400 hari).
 - Retensi riwayat query/aktivitas di Metabase v0.52.4 OSS dan apakah ada pengaturannya — belum diperiksa di dokumentasi primer Metabase.

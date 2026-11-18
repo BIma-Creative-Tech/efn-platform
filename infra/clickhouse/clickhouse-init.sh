@@ -270,7 +270,7 @@ unset SIG
 # G42 (kontrak G42 §B): row policy cakupan PT pada SETIAP view efn_insight (semua ber-company_code). insight-web
 # mengirim SQL_efn_cids / SQL_efn_codes / SQL_efn_sig dengan format SAMA dengan text2sql, tetapi kunci = secret
 # insight_scope_key (hex, BEDA dari text2sql_scope_key -> tanda tangan satu service tidak berlaku di service lain).
-# Predikat hanya company_code (kode ESB: PB/WTZ/BCF/BCR/IMD/CUP; IMD/CUP belum punya company_id Odoo) + tanda tangan;
+# Predikat hanya company_code (kode ESB: PB/WTZ/BCF/BCR/IMD/CUP; IMD/CUP = company Odoo sejak G43, tetapi scope tetap per kode ESB) + tanda tangan;
 # cids tetap ikut ditandatangani. `company_code != ''` = defense in depth (C4 §26.13: splitByChar(',', '') = [''] akan
 # mencocokkan baris tanpa PT bila codes kosong ber-sig sah). WAJIB seperti text2sql_scope_key: secret hilang/tidak
 # valid = init gagal.

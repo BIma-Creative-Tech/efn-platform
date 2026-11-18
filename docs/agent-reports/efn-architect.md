@@ -863,3 +863,90 @@ kompromi insight-web = semua PT (diterima, sama text2sql). Juga: kontrak kerja m
   303 per browser; nama query katalog = usulan kanonik (engineer paralel bisa berbeda → selaraskan saat rekonsiliasi);
   estimasi biaya = perkiraan architect; `docs/01` (R-S18, Q-INS) dan inventaris PDP belum diperbarui; Mermaid tidak
   dirender.
+
+---
+
+# ADR-043 — VPS Bima Creative: dev (A) dan ekstraksi ESB (B) (2026-11-18)
+Branch `feat/wave-43-esb-migration`, tanpa commit, hanya `docs/**`. Sumber: keputusan user 18 Nov 2026 (via efn-lead),
+`CLAUDE.md` K25-02/K25-06, ADR-004, ADR-040, ADR-041, `docs/04` §25, inventaris PDP §2.7/§2.8.11, transfer P1–P8.
+
+## Ringkasan (untuk manajemen)
+- Tahap A (tempat kerja pengembang di VPS Bima Creative, tanpa data/password klien) boleh segera.
+- Tahap B (penarikan data ESB dengan password klien di VPS) diblokir sampai persetujuan tertulis klien + DPO, perjanjian
+  pemrosesan data, akun ESB khusus baca, izin beban, dan konfirmasi hak data. Sebelum Q-ESB1/Q-ESB7 dijawab, backfill
+  penuh tidak boleh jalan di mesin mana pun, jadi VPS tidak mempercepat jadwal sebelum itu.
+- Biaya B: ±3–5 hari engineer + sewa VM/VPS terpisah (perkiraan ±Rp0,5–1,5 juta/bulan, asumsi).
+
+## File dibuat / diubah
+| File | Perubahan |
+|---|---|
+| `docs/decisions/ADR-043-vps-bima-creative-dev-dan-ekstraksi-esb.md` | **Baru (Proposed).** Pertentangan K25-06/K25-02/ADR-004/inventaris/ADR-040; opsi 1–6 (+5b VPS atas nama klien) dengan biaya; batas A (A-1..A-7); gerbang B (G-1..G-10); kontrol B; sizing; risiko usulan R-S19/R-S20/R-O11; Q-VPS1..9; tinjau ulang 28 Feb 2027 |
+| `docs/compliance/PDP_DATA_INVENTORY.md` | **v16 (MENUNGGU DPO)**: baris §2.7 Bima Creative, §2.8.12, Q-P30/Q-P31, butir belum terverifikasi |
+| `docs/compliance/PDP_TRANSFER_LINTAS_NEGARA.md` | P9 (lokasi belum diketahui) + Q-T8 |
+| `docs/compliance/PERSETUJUAN_PEMROSESAN_VPS_BIMA.md` | **Baru.** Draf lampiran persetujuan untuk klien/Legal (pihak, tujuan, data, lokasi, kontrol, akses, retensi & hapus, insiden 24 jam, berakhir, prasyarat, tanda tangan) |
+| `docs/decisions/README.md` | Catatan pembaruan + baris ADR-043 |
+| `docs/01_REVIEW_RISK_GAP_ANALYSIS.md` | §5.13 Q-VPS1..9 + catatan usulan risiko |
+
+## Keputusan yang butuh tanda tangan klien
+- Pemilik proyek: pengecualian K25-06 (lalu efn-lead mencatat di `CLAUDE.md`; architect tidak mengubahnya).
+- Direksi + Legal/DPO: persetujuan pemrosesan + DPA (Q-VPS4, Q-P30), retensi & hapus (Q-VPS6/Q-P31), Q-T8 bila DC di
+  luar Indonesia.
+- IT klien: Q-ESB1, Q-ESB7; Legal: Q-ESB9. Bima Creative: Q-VPS1..3, Q-VPS8.
+
+## Temuan untuk lead
+- Working copy laptop memuat `secrets/esb_core_password_<brand>.txt` (5 brand, hanya nama file yang dilihat). VPS A wajib
+  clone bersih dari GitHub; menyalin folder kerja = secret klien pindah ke pihak ketiga.
+- Satu daemon Docker bersama untuk A dan B tidak bisa mengisolasi: anggota grup `docker` setara root.
+- Runbook `vps-bima-dev.md` dan `vps-bima-esb.md` belum ada (devsecops).
+
+## Terverifikasi / belum terverifikasi
+- **Dibaca:** dokumen di atas dan `.gitignore` (`secrets/` diabaikan).
+- **Belum terverifikasi:** penyedia/lokasi/spesifikasi/pemegang root VPS; harga sewa & mini PC (asumsi); dukungan
+  Docker di Claude Code cloud; nomor pasal UU PDP (51 pemroses, 46 insiden, 56 transfer = rujukan kerja); sizing disk
+  ClickHouse (belum diukur); Mermaid tidak dirender.
+
+---
+
+# G43 — Migrasi ESB → Odoo: ADR-042, kontrak §27, IMD/CUP di daftar kode PT (2026-11-18)
+Branch `feat/wave-43-esb-migration`, tanpa commit, hanya `docs/**`. Sumber: kontrak kerja G43 bagian C, fit-gap
+`docs/fit-gap/G43_MIGRASI_ESB_ODOO.md` (efn-odoo-functional), ADR-040/041, `docs/04` §25–§26, kode
+`efn_demand_forecast`, `efn_setup_company` 19.0.1.9.0, pesan efn-lead (catatan BFF G43).
+
+## Ringkasan (untuk manajemen)
+- Data induk + saldo awal dipindah ke Odoo dengan fitur standar dan skrip yang bisa diulang serta diuji tanpa menyimpan.
+- Histori 24 bulan tetap di gudang data (Insight); Odoo hanya ringkasan harian aliran produk (400 hari) untuk forecast.
+  Membuat ulang struk/jurnal histori ditolak (stok, pajak, dan nomor dokumen jadi ganda).
+- Biaya fase 2 ±5–7 minggu-engineer (±3–4 minggu kalender); **fase 2 menunggu persetujuan user atas ADR-042**.
+
+## File dibuat / diubah
+| File | Perubahan |
+|---|---|
+| `docs/decisions/ADR-042-migrasi-esb-odoo-dan-histori.md` | **Baru (Proposed).** Opsi histori a-penuh/a-ramping/b/c + biaya; keputusan (c)+(a-ramping); (b) ditolak dengan 5 alasan; hook forecast; master & saldo awal tanpa kode baru; alur berkas + user CH `efn_mig`; keamanan bundel; cutover; dry-run; risiko usulan R-O12/R-O13/R-L12; tinjau ulang 31 Mar 2027 |
+| `docs/04_SERVICE_CONTRACTS.md` | **v19.0**: §27 (27.1 IMD/CUP + platform `18-platform-g43.sql`; 27.2 CLI; 27.3 bundel/manifest; 27.4 xmlid & field milik migrasi; 27.5 gerbang/dry-run/rekonsiliasi 7 butir; 27.6 cutover; 27.7 validator; 27.8 `efn_legacy_history` + hook; 27.9 parameter & user teknis; 27.10 ClickHouse `efn_mig` + kunci baru `map_esb_odoo`; 27.11 entitas esb-extract E1–E13; 27.12 L-127..L-138, Q-ESB10..24). Baris IMD/CUP di §12.1, catatan 9 entitas di §16.1, kode PT di §13.1 no. 6 dan §20.1, catatan §25.1 |
+| `docs/decisions/README.md` | Catatan pembaruan + baris ADR-042 (sisipan; baris ADR-043 tidak diubah) |
+
+## Penyesuaian atas fit-gap / kontrak kerja
+- Aturan hash key dibuat deterministik (hash bila kode bukan `^[A-Z0-9_]{1,48}$`), sehingga contoh fit-gap §3 diralat.
+- **`map_esb_odoo` G41 berkunci `(brand, entity, esb_key)` tanpa `company_code`** → produk kembar BCF/BCR saling menimpa.
+  Kontrak: kunci baru + `odoo_model`, `run_id`; DROP+CREATE hanya bila tabel kosong.
+- Hook forecast mengembalikan `(batas, dict)` agar `efn_demand_forecast` tidak tahu kunci parameter migrasi.
+- Upsert memakai `write_uid` user teknis `efn_migration` untuk mendeteksi suntingan pengguna (tanpa model status baru).
+
+## Keputusan yang butuh tanda tangan klien
+- **User/pemilik proyek: ADR-042** (syarat fase 2), Q-ESB20 (histori di Odoo?), Q-ESB23 (urutan brand, master IMD/CUP).
+- Finance: Q-ESB6 (cutover), Q-ESB16 (metode biaya, akun kliring), Q-ESB21 (TB/AR), Q-ESB24 (berita acara, retensi).
+- Ops: Q-ESB10..15, Q-ESB17, Q-ESB22. Legal/Finance: Q-ESB5. DPO: Q-ESB19, entri inventaris bundel migrasi.
+
+## Temuan untuk lead
+- `docs/01`: R-O12/R-O13/R-L12 dan Q-ESB10..24 (§5.12) belum ditambahkan (agen ADR-043 sedang mengedit §5.13).
+- `docs/08` §6.4 masih memakai kode PT `RTL/FNB` untuk validator.
+- ADR-040 §3.1/§4.4 masih menyebut "histori 24 bulan masuk `efn_legacy_history`" → perlu dipersempit (tidak saya ubah).
+- Inventaris PDP: entri "Bundel migrasi ESB" belum ada (file sedang diubah agen lain).
+
+## Terverifikasi / belum terverifikasi
+- **Dibaca:** dokumen sumber di atas; `_efn_daily_outflow` (stock.move 56 hari); keberadaan `18-platform-g43.sql`
+  (11 CHECK + issuer, hanya grep); IMD/CUP di ETL/BFF/ClickHouse `08-g20-entities.sql`.
+- **Belum terverifikasi:** fakta CE 19 dikutip dari fit-gap (tidak saya cek ulang di source); valuasi adjustment
+  bertanggal mundur, `ir.model.data` modul non-addon, penomoran jurnal valuasi saat dry-run = **[B]**; endpoint ESB paket/
+  AR/TB; ukuran data (perkiraan); estimasi biaya = perkiraan architect; kecocokan isi `18-platform-g43.sql` dengan
+  daftar 11 CHECK tidak saya baca baris per baris; Mermaid tidak dirender.

@@ -2483,3 +2483,68 @@ query, fragment, userinfo, kutip/`;` ditolak); form action = origin + `/sso`.
 - devsecops: env Odoo `EFN_INSIGHT_URL`, `INSIGHT_ENABLED` (default false), secret `insight_sso_key` →
   `/run/secrets/insight_sso_key` (atau `EFN_INSIGHT_SSO_KEY_FILE`).
 - Q-INS1 (grup per peran, belum ditambahkan ke `efn_setup_role`), Q-INS2, Q-INS3 (retensi `ir.logging`).
+
+# G43 — company PT Im Donut (IMD) & PT Curry Up (CUP) (18 Nov 2026, branch `feat/wave-43-esb-migration`)
+Kontrak: G43 fase 1 bagian A (keputusan user 18 Nov 2026: company baru sekarang, data PT placeholder, Q-ESB5). Pola
+persis G24 WTZ. Tidak di-commit.
+
+## Modul, versi, file
+- `efn_core` **19.0.1.8.0 → 19.0.1.9.0**: `models/res_company.py` (`EFN_BRAND_CODES` + `IMD`, `CUP` sebelum `FARM`;
+  `EFN_BRAND_BUSINESS_TYPE` IMD/CUP → `fnb`), `__manifest__.py`, `README.md`, `tests/test_res_company.py` (Selection 9
+  kode, set kode = set jenis usaha, `test_g43_codes_unique` UNIQUE untuk IMD/CUP, business type).
+- `efn_setup_company` **19.0.1.8.0 → 19.0.1.9.0**:
+  - `data/res_company_data.xml`: `company_imd` "PT Im Donut (placeholder)" seq 8, `company_cup` "PT Curry Up
+    (placeholder)" seq 9 (root, `base.id`, IDR, `vat_check_vies=False`, tanpa NPWP/alamat); admin `company_ids`;
+    `try_loading('id')` install + blok `noupdate=0` bersyarat `chart_template=False` (upgrade). `try_loading` dengan
+    recordset kosong langsung `return` — diverifikasi di source 19.0 `account/models/chart_template.py` (WebFetch).
+  - `data/account_tax_pb1_data.xml`: `tax_group_pb1_{imd,cup}`, `tax_pb1_10_{imd,cup}` = `account_sale_tax_id`; pengaman
+    upgrade `noupdate=0` (pasang PB1 hanya bila default masih `tax_ST4`).
+  - `data/account_tax_fnb_service_data.xml`: SC 5 %, PB1 dine-in, PB1 non-dine-in 0 %, FP dine-in/non-dine-in per company
+    (sufiks `_imd`/`_cup`), `account_price_include=tax_excluded` (WTZ memakai SC → diikuti).
+  - `data/account_tax_label_data.xml`, `data/account_tax_rounding_data.xml`: daftar company + IMD/CUP (install baru).
+  - **Baru** `migrations/19.0.1.9.0/post-migrate.py`: `apply_g43_company_defaults(env)` — label pajak/grup template,
+    `round_globally`, admin `company_ids`, hanya IMD/CUP, menulis nilai tetap (idempoten). `version` kosong → no-op.
+  - Tests: **baru** `tests/test_g43_companies.py` (placeholder root F&B/IDR/CoA/tanpa NPWP & alamat/admin, kode unik
+    per DB, PB1 default per company & tidak berbagi grup, migrasi no-op tanpa versi, migrasi dijalankan 2× idempoten dan
+    tidak menyentuh PB, helper hanya mengembalikan IMD|CUP); `test_fnb_service_taxes.py` + `TestImdServiceTaxes`,
+    `TestCupServiceTaxes` (seluruh uji SC/PB1/FP diwarisi + uji kebocoran lintas 5 PT F&B); daftar company di
+    `test_tax_rounding.py`, `test_tax_labels.py` (+ PB1 default IMD/CUP), `test_currency_idr.py`, `test_no_egress.py`;
+    `tests/__init__.py`.
+  - `__manifest__.py`, `README.md` (baris G43, Q-ESB5, batasan).
+- `efn_insight` (tanpa naik versi, hanya komentar/README): `lib/insight_token.py` komentar ESB_CODES, `README.md`
+  (IMD/CUP kini company → `all_brands` otomatis memberi `cids`). Test insight tidak berubah: setUp mengosongkan semua
+  kode company sehingga IMD/CUP dari data tidak masuk `cids` uji.
+
+## Test — BELUM DIJALANKAN (tanpa shell; lead menjalankan `EFN_TEST_MODULES` di container)
+Titik rawan: (1) `test_migration_idempotent_and_scoped` memanggil `migrate()` dengan `api.Environment` baru pada cursor
+yang sama (cache transaksi bersama; `flush_all` sebelum, `invalidate_all` sesudah) dan melepas IMD/CUP dari admin
+`company_ids` lewat `(3, id)`; (2) memuat skrip migrasi via `importlib` dari path relatif `tests/../migrations/...`;
+(3) `test_g43_codes_unique` mengharapkan `IntegrityError` di dalam loop `subTest` (pola sama `test_brand_code_unique`).
+Jalur upgrade nyata `-u efn_core,efn_setup_company` dari DB 19.0.1.8.0 **belum diuji** — disarankan sekali di DB salinan.
+
+## Dampak lintas modul (grep `WTZ` di `services/odoo/addons` dan `scripts/`)
+Tidak ada test Odoo yang menghitung jumlah company global (semua memakai daftar xmlid eksplisit atau mengosongkan kode
+dulu); `test_accrual.test_cron_dates_and_run_all_companies` menghitung dinamis → tetap lulus.
+**Perlu keputusan lead (tidak diubah):**
+1. **Akrual poin harian** `efn_loyalty_accounting` (`_efn_run_all`: semua company ber-kode) akan memanggil BFF
+   `GET …accruals?company_code=IMD|CUP`; BFF `COMPANY_CODES` (`services/api-gateway/src/loyalty/loyalty.service.ts`) +
+   CHECK platform DB (`infra/postgres/init/13-platform-g24.sql` pola) belum mengenal IMD/CUP → 400 → record akrual
+   `error` tiap hari per PT (log WARNING, bukan ERROR). Opsi: perluas BFF + CHECK (pola G24) atau biarkan sampai
+   IMD/CUP memakai loyalty. Kebijakan poin/MGM (`efn_loyalty_policy`, `efn_mgm_policy`) untuk IMD/CUP akan gagal publish
+   ke BFF dengan alasan yang sama (hanya bila dibuat manual).
+2. **ETL** `services/etl/efn_etl/entities.py` `COMPANY_CODES`/`BUSINESS_TYPES`: `business_type()`/`brand_group()`
+   **melempar `ValueError`** untuk kode tak dikenal dan dipanggil di `gl.py` (dim company GL) → job GL ETL (bila aktif)
+   gagal begitu company IMD/CUP ada di replica. **Disarankan diperbarui dalam gelombang yang sama** (+ test entities).
+3. **text2sql**: `services/text2sql/efn_text2sql/scope.py` `COMPANY_CODES` menolak seluruh request bila ada kode tak
+   dikenal; `efn_data_ask` (Odoo) memfilter kode dengan daftar lokal yang sama (tanpa IMD/CUP) → kode IMD/CUP dibuang,
+   `company_ids` tetap dikirim → Tanya Data **tetap jalan** (view Odoo difilter `company_id`). Kode hanya dipakai row
+   policy `v_loyalty_daily` (ledger poin, belum ada IMD/CUP). Jadi text2sql **tidak wajib** diubah sekarang; bila diubah,
+   `efn_data_ask.COMPANY_CODES` dan `scope.py` harus berubah **bersamaan** (Odoo saja = request ditolak `ScopeError`).
+   `efn_data_ask` sengaja tidak diubah.
+4. insight-web/`efn_insight` `ESB_CODES` sudah memuat IMD/CUP; komentar `infra/clickhouse/clickhouse-init.sh` baris
+   ±273 ("IMD/CUP belum punya company_id Odoo") kini usang (infra, tidak diubah).
+5. Lain-lain (tidak perlu sekarang; IMD/CUP belum punya kanal/POS): metrik BFF `metrics.service.ts` label issuer,
+   `scripts/lib/deploy-validate.sh` `EFN_ONLINE_CHANNEL_CODES`, `efn-rotate-online-key` allowlist, `efn_setup_pos`
+   (metode bayar/Poin EFN/preset), `efn_setup_online` (partner/tim/kanal), `efn_setup_role`/`efn_setup_org`
+   (peran/departemen per PT), `efn_online_order` teks bantuan kanal — semuanya mengikuti fit-gap G43 (efn-odoo-functional).
+6. Kontrak: `docs/04` §12.1/§16.1 (daftar kode PT) perlu revisi menyebut IMD/CUP (efn-architect/lead).

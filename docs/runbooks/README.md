@@ -89,6 +89,7 @@ Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-inciden
 | Dashboard Insight + SSO Odoo (G42, ADR-041): aktivasi (grup, `INSIGHT_ENABLED`, secret), rotasi kunci SSO/sesi/cakupan, NTP, 401 SSO, alert `EfnInsightWebDown` / `EfnHostClockNotSynced`, Metabase hanya Holding | [insight-web.md](insight-web.md) |
 | Deploy gagal: modul Odoo wajib (`efn_pos_refund_origin`) belum `installed` (SEC-129) | [deploy-odoo-modules.md](deploy-odoo-modules.md) |
 | Boot stack dev di laptop (Docker Desktop/WSL2), upgrade modul Odoo dev | [dev-stack-boot.md](dev-stack-boot.md) |
+| VPS Bima Creative (ADR-043, Proposed): **A** lingkungan pengembangan Claude Code + Docker tanpa data/secret klien (SSH key-only, UFW + WireGuard `10.90.0.0/24`, plafon memori dev 8 GiB, validasi CI lokal, tmux); **B** stack ekstraksi ESB + ClickHouse (DIBLOKIR sampai checklist go/no-go: LUKS, egress hanya ESB, backup `age` + uji restore, akses per orang + auditd, crypto-erase saat selesai) | [vps-bima.md](vps-bima.md) |
 | CI GitHub di repo privat paket gratis: kuota artifact/menit, code scanning, suppression scanner, Dependabot | [ci-github-free-plan.md](ci-github-free-plan.md) |
 
 ## Baseline hardening container (`infra/compose/docker-compose.yml`)

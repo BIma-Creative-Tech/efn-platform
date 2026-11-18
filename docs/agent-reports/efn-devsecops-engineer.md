@@ -1,5 +1,55 @@
 # Laporan Agent: efn-devsecops-engineer
 
+## G43-VPS (18 Nov 2026, branch feat/wave-43-esb-migration, belum di-commit) — runbook VPS Bima Creative (ADR-043)
+
+Paket kerja: runbook operator dua bagian untuk VPS milik Bima Creative. ADR-043 ditulis efn-architect paralel; saat
+laporan ini ditulis file ADR-043 **belum ada** di `docs/decisions/` (runbook merujuknya sebagai Proposed). Tidak ada
+VPS/docker yang dijalankan; semua perintah dan skrip inline diperiksa manual.
+
+### File
+- **Baru** `docs/runbooks/vps-bima.md` — A (dev: akun `efnadmin`/`efndev`, sshd `00-efn-hardening.conf`, UFW +
+  WireGuard hub `10.90.0.1/24`, tabel nft `efn_vps` (peer WG hanya ke host + drop DNAT dari antarmuka publik),
+  unattended-upgrades tanpa reboot otomatis, chrony, fail2ban/sshguard, swap, Docker resmi rootful+grup docker atau
+  rootless, plafon memori `efndev.slice` 8 GiB, clone + PAT fine-grained/deploy key, secret DEV + cek "tanpa kredensial
+  klien", tunnel SSH, Claude Code di tmux, validasi CI lokal, backup repo). B (go/no-go 12 butir, host terpisah atau
+  varian satu host bersyarat, LUKS di block volume atau file, data-root Docker di LUKS + `containerd-snapshotter:false`,
+  image cosign, secret/CA dibuat di host B, nft `efn_esb` egress `172.30.8.0/24` → IP `services.esb.co.id:443` + DNS
+  dengan timer refresh, UFW outgoing host, compose `-p efn-esb` hanya `clickhouse clickhouse-init esb-extract`, backfill
+  per esb-extract.md §5, heartbeat systemd, backup logis `FORMAT Native` + `age` (dua penerima) + rclone, restore test
+  ke container sementara `--network none`, akun per orang + auditd + sudo log, crypto-erase + berita acara).
+- **Ubah** `docs/runbooks/README.md` — entri prosedur.
+- Tidak ada perubahan kode/compose/skrip repo.
+
+### Temuan yang memengaruhi desain
+1. **Traefik base mem-publish `${EFN_PUBLIC_BIND:-0.0.0.0}:80/443`** dan port publish Docker melewati UFW. Di VPS,
+   `.env` wajib `EFN_PUBLIC_BIND=127.0.0.1` + penjaga nft DNAT (runbook A3/A8/B7). Tanpa itu stack dev di VPS terbuka
+   ke internet.
+2. **`--profile data` saja tidak lolos validasi compose** (metabase/etl `depends_on: postgres` profil core). Host B
+   memakai `--profile core --profile data` tetapi hanya menyalakan service eksplisit; risiko operator `up -d` tanpa nama
+   service = seluruh core+data menyala. Runbook memberi larangan tertulis; usulan overlay di bawah menghilangkannya.
+3. **Batas memori profil `core` dev ±11,2 GiB** (> target K25-06 8 GB). Ditegakkan sementara lewat cgroup slice host.
+4. **Tidak ada backup ClickHouse di repo** (WAL-G hanya PostgreSQL). `BACKUP TO Disk/File` butuh config server baru →
+   dipakai ekspor logis; skrip inline di runbook (bukan di `scripts/`).
+5. Di A, grup `docker` = root host dan Claude Code berjalan sebagai `efndev` → alasan utama B di host terpisah.
+6. Memori Claude Code laptop memuat detail akun ESB → runbook melarang menyalinnya ke VPS A.
+
+### Usulan (belum dibuat; butuh keputusan lead)
+- `infra/compose/docker-compose.vps-esb.yml` (atau profil compose `esb` baru): clickhouse + clickhouse-init + esb-extract
+  tanpa ketergantungan core, sehingga host B cukup `--profile esb` dan tidak bisa menyalakan Odoo/BFF/Traefik tak sengaja.
+- Overlay dev ramping K25-06 (`docker-compose.dev-slim.yml`): odoo 1,5G, postgres 1G, api-gateway 1G, superapp-web 768M,
+  rabbitmq/minio 512M — lalu ukur.
+- Pindahkan skrip inline B7/B10/B11 ke `scripts/host/` (`efn-esb-egress-refresh`, `efn-esb-heartbeat`,
+  `efn-esb-backup`, `efn-esb-restore-test`) agar ikut shellcheck CI dan test.
+- Konfigurasi `backups` ClickHouse (`config.d/backups.xml`, disk terenkripsi) sebagai pengganti ekspor logis bila
+  volume besar.
+
+### Belum terverifikasi
+- Seluruh runbook di VPS nyata; skrip inline tanpa shellcheck/eksekusi.
+- Rootless Docker dengan stack EFN (IP sumber untuk middleware Traefik, `ulimits` ClickHouse, profil ops).
+- Default `containerd-snapshotter` pada versi Docker yang akan terpasang; jalur DNS embedded Docker (perlu tidaknya set
+  `dns_v4`); hak `SYSTEM STOP MERGES` untuk user admin `efn`; perilaku `SHOW CREATE TABLE` + kebijakan `encrypted` saat
+  restore ke container uji.
+
 ## G42 (18 Nov 2026, branch feat/wave-42-insight-web, belum di-commit) — infra dashboard Insight + SSO Odoo
 
 Kontrak: docs/04 §26 (terutama §26.10–§26.13), ADR-041 (Proposed). Kode `services/insight-web` (frontend) dan

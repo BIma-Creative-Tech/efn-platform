@@ -12,10 +12,14 @@ EFN_BRAND_CODES = [
     ("BCF", "BCF - Bacha Coffee F&B (F&B, PB1)"),
     # G24 (docs/04 §16.1, L-91): entitas ke-7, kios/takeaway Wetzel's Pretzels (nama legal menunggu klien, Q-WTZ1).
     ("WTZ", "WTZ - PT Wetzel's Pretzels (F&B, PB1)"),
+    # G43 (keputusan user 18 Nov 2026): entitas ke-8/ke-9 brand ESB Core (kode = kode brand mart ESB G41, docs/04 §25).
+    # Data PT (nama legal, NPWP, pajak) PLACEHOLDER sampai klien menjawab Q-ESB5.
+    ("IMD", "IMD - PT Im Donut (F&B, PB1)"),
+    ("CUP", "CUP - PT Curry Up (F&B, PB1)"),
     ("FARM", "FARM - Collection Center / Farming"),
 ]
 
-# Kode company -> jenis usaha (relasi tetap, §12.1/§16.1: GL,BCR -> retail; PB,BCF,WTZ -> fnb).
+# Kode company -> jenis usaha (relasi tetap, §12.1/§16.1: GL,BCR -> retail; PB,BCF,WTZ -> fnb; G43: IMD,CUP -> fnb).
 EFN_BRAND_BUSINESS_TYPE = {
     "EFN": "holding",
     "GL": "retail",
@@ -23,6 +27,8 @@ EFN_BRAND_BUSINESS_TYPE = {
     "BCR": "retail",
     "BCF": "fnb",
     "WTZ": "fnb",
+    "IMD": "fnb",
+    "CUP": "fnb",
     "FARM": "farm",
 }
 
