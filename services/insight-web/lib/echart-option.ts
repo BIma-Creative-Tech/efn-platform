@@ -121,7 +121,7 @@ export function buildOption(spec: ChartSpec, t: ThemeColors, o: BuildOpts): ECha
   };
   const valAxis = {
     type: 'value',
-    axisLabel: { color: t.muted, formatter: (v: number) => fmtValue(axisFmt, v) },
+    axisLabel: { color: t.muted, hideOverlap: true, formatter: (v: number) => fmtValue(axisFmt, v) },
     axisLine: { show: false },
     axisTick: { show: false },
     splitLine: horizontal ? { show: false } : { lineStyle: { color: t.grid, width: 1 } },

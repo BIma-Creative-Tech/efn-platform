@@ -48,7 +48,9 @@ export function serializeParam(type: ChType, value: ParamValue): string {
       if (typeof value === 'string' || typeof value === 'number' || value.length > MAX_ITEMS) {
         throw new ParamError('array tidak valid');
       }
-      const items = value.map((v) => `'${checkStr(v).replace(/'/g, "\\'")}'`);
+      // checkStr sudah menolak backslash; escape tetap eksplisit (backslash dulu, lalu kutip) sebagai pertahanan
+      // berlapis dan agar analisis statis (CodeQL js/incomplete-sanitization) terbukti aman.
+      const items = value.map((v) => `'${checkStr(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`);
       return `[${items.join(',')}]`;
     }
   }

@@ -174,7 +174,8 @@ def test_init_script_user_binding_and_scope_key() -> None:
 
 
 def test_every_insight_view_has_row_policy() -> None:
-    loop = re.search(r"for v in ((?:v_esb_\w+[\s\\]*)+); do\n(.+?)\ndone", INIT_SH, re.DOTALL)
+    # Tanpa quantifier bersarang (CodeQL py/redos): daftar view = karakter kata/spasi/backslash sampai "; do".
+    loop = re.search(r"for v in (v_esb_[\w \t\n\\]*?); do\n(.+?)\ndone", INIT_SH, re.DOTALL)
     assert loop, "loop row policy efn_insight tidak ditemukan"
     assert set(re.findall(r"v_esb_\w+", loop.group(1))) == EXPECTED_INSIGHT_VIEWS
     stmt = loop.group(2)
