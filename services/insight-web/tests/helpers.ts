@@ -7,7 +7,7 @@ export const PAYLOAD_JSON =
 export const PAYLOAD_B64 =
   'eyJhdWQiOiJpbnNpZ2h0LXdlYiIsImNpZHMiOlszLDVdLCJjb2RlcyI6WyJCQ0YiLCJQQiJdLCJleHAiOjE3OTUwMDAwNjAsImlhdCI6MTc5NTAwMDAwMCwiaXNzIjoib2RvbyIsImp0aSI6IjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIiwibmFtZSI6IkJ1ZGkgVWppIiwicm9sZXMiOlsidXNlciJdLCJzdWIiOjcsInYiOjF9';
 export const SIG_OK = 'WSDaF4H2YlaMeKTB73SwsefWHIQi8ywZb8DB2HnGBZc';
-export const SIG_HEX_DECODED_KEY = 'i5CARcXxPFdTmGd6vttMWHrYS0VkI0UHJj07imyQJkM';
+export const SIG_HEX_DECODED_KEY = 'i5CARcXxPFdTmGd6vttMWHrYS0VkI0UHJj07imyQJkM'; // gitleaks:allow (vektor uji publik docs/04 §26.3)
 export const VECTOR_TOKEN = `eit1.${PAYLOAD_B64}.${SIG_OK}`;
 export const IAT = 1795000000;
 

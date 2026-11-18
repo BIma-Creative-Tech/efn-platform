@@ -16,7 +16,7 @@ from odoo.tests import HttpCase, new_test_user, tagged
 from odoo.addons.efn_insight.lib import insight_token as it
 
 CTRL = "odoo.addons.efn_insight.controllers.main"
-TEST_KEY = "0123456789abcdef" * 4  # sintetis, 64 hex
+TEST_KEY = "0123456789abcdef" * 4  # sintetis, 64 hex  # gitleaks:allow (kunci uji palsu)
 URL = "https://insight.test"
 TOKEN_RE = re.compile(r'value="(eit1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43})"')
 
