@@ -74,7 +74,9 @@ ALLOW_DOWNGRADE=/etc/efn/allow-downgrade
 # Satu baris per rilis yang disetujui: `<X.Y.Z> <git_sha 40 hex>`; '#' = komentar. Tidak dihapus setelah dipakai
 # (deploy ulang/rollback rilis yang sama tetap boleh). Tanpa file / tanpa baris cocok -> production DITOLAK.
 APPROVED_RELEASE=/etc/efn/approved-release
-IMAGE_VARS=(IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_TEXT2SQL IMAGE_MINIO IMAGE_METABASE)
+# G42: IMAGE_INSIGHT_WEB (dashboard Insight). Menambah image = manifest lama/baru tidak kompatibel (jumlah image dicek
+# skema) -> Superadmin memasang ulang wrapper ini di host SEBELUM deploy rilis yang memuatnya (key-custody.md §4).
+IMAGE_VARS=(IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_INSIGHT_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_TEXT2SQL IMAGE_MINIO IMAGE_METABASE)
 log() { logger -t efn-deploy -- "$*" 2> /dev/null || true; echo "efn-deploy: $*" >&2; }
 die() { log "GAGAL: $*"; exit 1; }
 

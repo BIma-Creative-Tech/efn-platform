@@ -37,7 +37,7 @@ env:
     efn_online_order efn_setup_online efn_online_pos_sale efn_pos_refund_origin efn_online_pos_counter
     efn_setup_org efn_loyalty_accounting efn_l10n_id_coretax_rounding efn_role efn_region
     efn_setup_role efn_pos_bff_order efn_online_kds_bridge efn_online_transfer
-    efn_mgm_policy efn_data_ask
+    efn_mgm_policy efn_data_ask efn_insight
   EFN_INSTALL_ONLY_MODULES: efn_setup_security
 
 jobs:
@@ -53,6 +53,7 @@ jobs:
     outputs:
       api: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.api }}
       web: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.web }}
+      insight: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.insight }}
       odoo: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.odoo }}
       python: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.python }}
       pyservices: ${{ github.event_name == 'push' && '["ai-ocr-worker","etl","text2sql","esb-extract"]' || steps.filter.outputs.changes }}
@@ -68,6 +69,7 @@ jobs:
           filters: |
             api:    ['services/api-gateway/**', '.github/workflows/ci.yml']
             web:    ['services/superapp-web/**', '.github/workflows/ci.yml']
+            insight: ['services/insight-web/**', '.github/workflows/ci.yml']   # G42 dashboard Insight (docs/04 §26)
             odoo:   ['services/odoo/**', 'scripts/check-odoo-deps.sh', '.github/workflows/ci.yml']
             python: ['services/ai-ocr-worker/**', 'services/etl/**', 'services/text2sql/**', 'services/esb-extract/**', '.github/workflows/ci.yml']
             ai-ocr-worker: ['services/ai-ocr-worker/**', '.github/workflows/ci.yml']
@@ -79,37 +81,51 @@ jobs:
   node:
     name: Node (${{ matrix.service }})
     needs: changes
-    if: needs.changes.outputs.api == 'true' || needs.changes.outputs.web == 'true'
+    if: needs.changes.outputs.api == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.insight == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        service: [api-gateway, superapp-web]
+        service: [api-gateway, superapp-web, insight-web]   # insight-web: G42 (docs/04 §26, ADR-041)
     defaults:
       run:
         working-directory: services/${{ matrix.service }}
+    # G42: langkah hanya berjalan untuk service yang berubah (pola job pytest; hemat menit paket gratis). Push ke main /
+    # perubahan ci.yml = semua true (SEC-89). Entri matriks yang dilewati tetap `success` di CI gate.
+    env:
+      CHANGED: >-
+        ${{ (matrix.service == 'api-gateway' && needs.changes.outputs.api == 'true') ||
+        (matrix.service == 'superapp-web' && needs.changes.outputs.web == 'true') ||
+        (matrix.service == 'insight-web' && needs.changes.outputs.insight == 'true') }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        if: env.CHANGED == 'true'
         with:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
-        # Lockfile ada di kedua service (SEC-88): cache npm aktif; `npm ci` satu-satunya jalur install (gagal bila
+        if: env.CHANGED == 'true'
+        # Lockfile wajib ada di setiap service (SEC-88): cache npm aktif; `npm ci` satu-satunya jalur install (gagal bila
         # package-lock.json hilang/tidak sinkron, tidak ada fallback `npm install`).
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: services/${{ matrix.service }}/package-lock.json
       - name: Install
+        if: env.CHANGED == 'true'
         run: npm ci
       - name: Lint
+        if: env.CHANGED == 'true'
         run: npm run lint --if-present
       - name: Test
+        if: env.CHANGED == 'true'
         run: npm test --if-present   # CI=true di-set runner; Jest & Vitest membacanya (vitest tidak menerima --ci)
       - name: Build
+        if: env.CHANGED == 'true'
         run: npm run build
       - name: Audit (prod deps, high+)
+        if: env.CHANGED == 'true'
         run: npm audit --omit=dev --audit-level=high
 
   python:

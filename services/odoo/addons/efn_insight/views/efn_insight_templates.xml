@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G42 (docs/04 §26.2). Halaman mandiri (tanpa bundle aset Odoo). Nilai dinamis hanya lewat t-att-* / t-out
+     (auto-escape); dilarang t-raw/Markup. Tanpa inline script/style (CSP dipasang controller). -->
+<odoo>
+    <template id="sso_post" name="EFN Insight: kirim token SSO">&lt;!DOCTYPE html&gt;
+<html lang="id">
+    <head>
+        <meta charset="utf-8"/>
+        <meta name="viewport" content="width=device-width, initial-scale=1"/>
+        <meta name="referrer" content="strict-origin"/>
+        <meta name="robots" content="noindex, nofollow"/>
+        <title>Membuka Dashboard Insight</title>
+        <script src="/efn_insight/static/src/js/insight_autosubmit.js" defer="defer"></script>
+    </head>
+    <body>
+        <main>
+            <h1>Membuka Dashboard Insight…</h1>
+            <form id="efn-insight-sso" method="post" t-att-action="action">
+                <input type="hidden" name="t" t-att-value="token"/>
+                <noscript>
+                    <p>JavaScript tidak aktif. Tekan tombol di bawah untuk melanjutkan.</p>
+                </noscript>
+                <button type="submit">Lanjut</button>
+            </form>
+        </main>
+    </body>
+</html>
+    </template>
+
+    <template id="info_page" name="EFN Insight: informasi">&lt;!DOCTYPE html&gt;
+<html lang="id">
+    <head>
+        <meta charset="utf-8"/>
+        <meta name="viewport" content="width=device-width, initial-scale=1"/>
+        <meta name="robots" content="noindex, nofollow"/>
+        <title>Dashboard Insight</title>
+    </head>
+    <body>
+        <main t-att-data-efn-insight-state="state">
+            <h1>Dashboard Insight</h1>
+            <p t-out="message"/>
+            <p><a href="/odoo">Kembali ke Odoo</a></p>
+        </main>
+    </body>
+</html>
+    </template>
+</odoo>

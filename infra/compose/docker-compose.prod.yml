@@ -121,6 +121,16 @@ services:
       resources:
         limits: { cpus: "2", memory: 3G }
 
+  # G42 (docs/04 §26, L-124): replika 1 wajib (cache jti + rate limit di memori; sidecar insight-web-tls menempel ke satu
+  # container). Multi-replika butuh Redis (gelombang berikut).
+  insight-web:
+    environment:
+      APP_ENV: ${APP_ENV:-production}   # staging: deploy.sh menulis APP_ENV=staging ke .env
+    deploy:
+      replicas: 1
+      resources:
+        limits: { cpus: "1", memory: 512M }
+
   ollama:
     deploy:
       resources:

@@ -26,3 +26,4 @@ kode tampil ABCD-EFGH, XY23-ZW45; selesai
 MULAI aktor=cs1 peran=cs host=efn-prod-1 cmd=online-refund part=0b6f3c1e-4b6a-4e8e-9d2a-1f0c2b3a4d5e full restock
 DITOLAK: online-refund-approve hanya untuk grup efn-cs-approver (aktor=cs1 peran=cs)
 meja https://app.efn.local/meja#t=fts1.SENTINELZnJhZw.1760900000.SENTINEL-sig_x selesai
+insight sso t=eit1.SENTINELcGF5bG9hZA.SENTINELsig_x sesi eis1.SENTINELcGF5bG9hZA.SENTINEL-sig selesai

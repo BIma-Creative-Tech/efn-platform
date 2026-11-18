@@ -538,3 +538,62 @@ Error yang dikenali di `/api/fnb/*`: `table_session_invalid` (401), `unauthorize
 3. Token meja tetap hanya di memori; `lib/table-token.ts` tidak disentuh.
 
 Test (Vitest, `tests/g22-fnb.test.ts`): ekspektasi `lines` lama diperbarui; ditambah uji atribut per baris dan uji `itemUnavailableFeedback`. Belum dijalankan (tanpa shell); lead menjalankan Vitest/tsc/lint. Asumsi kontrak: BFF mengirim `attributes_text` (string) dan `attribute_value_ids` (int[]) per baris `GET /v1/fnb/orders` dan 202 submit.
+
+## Gelombang 42 — `services/insight-web` (EFN Insight, dashboard staf; ADR-041 Proposed, docs/04 §26) (18 Nov 2026)
+
+Status: kode ditulis TANPA shell. **Belum pernah `npm install`, `tsc`, lint, test, atau build dijalankan.** Tidak ada `package-lock.json` (lead menjalankan `npm install` di container). Tidak ada commit.
+
+### 1. Struktur
+- Konfigurasi: `package.json`, `tsconfig.json`, `next.config.mjs`, `eslint.config.mjs`, `vitest.config.mts` (alias `server-only` -> stub), `Dockerfile` (target `dev`/`build`/`runtime`, `USER app`, PORT 3002, HOSTNAME 127.0.0.1, HEALTHCHECK `/api/health`), `.dockerignore`, `.gitignore`, `README.md`.
+- Gerbang/boot: `proxy.ts` (nonce CSP + gerbang sesi), `instrumentation.ts` + `lib/instrumentation-node.ts` (exit 1 bila kunci tidak hex >= 64 / kembar; saat aktif juga URL/secret/CA/origin Odoo), `lib/config.ts`, `lib/runtime.ts` (config, kunci, state memori), `lib/csp.ts`.
+- Auth: `lib/hmac.ts` (kunci = byte ASCII), `lib/claims.ts`, `lib/token.ts` (eit1), `lib/session.ts` (`__Host-eis`, eis1), `lib/gate.ts`, `lib/auth.ts` (server-only), `lib/origin-guard.ts` (C1), `lib/sso-handler.ts`, `lib/jti-cache.ts`, `lib/rate-limit.ts`, `lib/log.ts`; route `app/sso`, `app/logout`, `app/api/health`, `app/api/export/[name]`.
+- Data: `lib/queries.ts` (katalog, server-only), `lib/ch-params.ts`, `lib/clickhouse.ts` (server-only), `lib/scope.ts`, `lib/filters.ts`, `lib/loaders.ts` (konteks, `settle`, pemuat tabel bersama halaman+CSV), `lib/shell-data.ts`, `lib/page-ctx.ts`, `lib/vm.ts`, `lib/table-defs.ts`, `lib/csv.ts`.
+- UI: `app/layout.tsx`, `app/globals.css` (token spec §2, light/dark/ikuti sistem), `app/(app)/layout.tsx` (cangkang), halaman `app/(app)/{page,flow,sales,payments,distribution,data-quality,forecast}`, halaman publik `belum-aktif`, `sesi-berakhir`, `keluar`, `not-found`; komponen `components/{ui,blocks,ChartCard,EChart,DataTable,FilterBar,MultiSelect,Chrome,FreshnessBadge,InfoPage,FilterNotice,RetryButton}.tsx`; `lib/{format,dates,brands,thresholds,contrast,chart-spec,echart-option,client-nav,page-filters}.ts`; `public/theme-init.js`.
+- Tests (Vitest, `tests/`): `token`, `sso-handler`, `scope-csv`, `filters-format`, `queries`, `config-contrast`, + `helpers.ts`, `stubs/server-only.ts`.
+
+### 2. Dependensi (di-pin)
+Runtime: `next ^16.4.1`, `react ^19.0.0`, `react-dom ^19.0.0`, `echarts 5.6.0` (**exact**, impor modular `echarts/core` + LineChart/BarChart/HeatmapChart + Grid/Tooltip/Legend/Aria/MarkLine + SVGRenderer; dimuat `next/dynamic` ssr:false), `server-only ^0.0.1`, `@fontsource-variable/geist ^5.3.0`, `@fontsource-variable/geist-mono ^5.3.0`. Dev: `typescript ^5.7.2`, `vitest ^5.0.3`, `eslint ^9.17.0`, `eslint-config-next ^16.4.1`, `@types/node ^22.10.2`, `@types/react(-dom) ^19.0.x`. Sama dengan superapp-web kecuali `echarts`; tanpa pustaka UI. ECharts 6 sengaja tidak dipakai (5.6.0 diketahui stabil; ganti bila lead mau).
+
+### 3. Keputusan CSP
+Nonce per request (proxy.ts): `script-src 'self' 'nonce-X' 'strict-dynamic'` (tanpa `unsafe-inline` dan `unsafe-eval` di production); `style-src 'self' 'nonce-X'`; **`style-src-attr 'unsafe-inline'`** (tooltip ECharts memasang `style=""`; satu-satunya pelonggaran). Dev: `unsafe-eval` + `style-src 'unsafe-inline'` (React dev/Turbopack). `img-src 'self' data:`, `font-src 'self'`, `connect-src 'self'`, `object-src 'none'`, `base-uri 'none'`, `form-action 'self'`, `frame-ancestors 'none'`, `upgrade-insecure-requests`. Route `/api/*` memakai `default-src 'none'`. Halaman galat `/sso` memakai CSP statis dengan satu blok `<style>` inline (`style-src 'unsafe-inline'`, tanpa skrip/form). `theme-init.js` dimuat sebagai skrip eksternal ber-nonce. **Risiko belum diuji**: (a) renderer SVG ECharts dapat menyisipkan elemen `<style>` untuk animasi/emphasis CSS yang akan diblokir `style-src` ber-nonce (dampak: kosmetik; bila tampak rusak, fallback = `style-src 'self' 'unsafe-inline'` dan catat); (b) Next harus memasang nonce ke semua skrip; (c) `<style>` Next/fontsource tanpa nonce.
+
+### 4. Test yang ditulis
+- Vektor §26.3: `payload_b64` = base64url(JSON) (cek salin), sig kunci ASCII diterima, sig kunci hex-decode (`i5CARc...`) ditolak (dan dihitung ulang dari `Buffer.from(KEY,'hex')`), sig tidak kanonik ditolak.
+- Token: kedaluwarsa, iat masa depan, umur > 60/< 1, aud/iss/v salah, kunci ekstra/kurang, jti ulang (replay), jti format, codes asing/tak urut/duplikat/kosong, cids tak urut/0/negatif/>32, roles user tanpa cids, roles ganda/salah, sub di luar rentang, name > 64 + karakter kontrol, kunci salah, payload diubah, urutan pemeriksaan, `parseKey`.
+- `POST /sso` (Request/Response nyata): sukses (303, atribut cookie lengkap, nama `__Host-eis`, cookie sah di bawah kunci sesi dan TIDAK di bawah kunci SSO), replay 401 generik, Origin salah / port beda / scheme beda / `null`, tanpa Origin (+ `Sec-Fetch-Site: cross-site`), nonaktif 404, tidak terkonfigurasi 503, token ekstra/aud/codes 401 tanpa cookie, content type/field ekstra/>4 KiB 400, rate limit 429 + `Retry-After` per IP, cookie palsu (kunci lain, payload diubah, kedaluwarsa, format).
+- Scope: vektor text2sql (`"ab"*16`, `1,3`, `BCR,PB`) dihitung ulang dengan `crypto`, kunci ASCII vs hex, all_brands cids kosong, urutan numerik, kode/id invalid.
+- CSV C3 (= + - @ TAB CR), kutip/koma/newline, BOM, null/NaN. Origin guard. Filter (default, WIB, rentang tak valid, pt, branch, cat berulang, product, maks). Format id-ID (contoh spec: `Rp 1,2 jt`, `Rp 12 jt`, `Rp 3,4 M`, delta, tanggal, rentang, umur). Ambang. `trendSeries`/`withOther`/`summarize`.
+- Katalog: setiap query memiliki placeholder = parameter terdeklarasi dengan tipe cocok, filter PT lapis 1, LIMIT literal, hanya `efn_insight.v_esb_*`; serialisasi parameter (escape, tolak backslash/kontrol/injeksi); query string request (setting tetap, `SQL_efn_*`, hanya param terdeklarasi).
+- Konfigurasi/boot (kunci kembar/lemah/hilang, URL http/kredensial, origin Odoo + port, CA/password), gerbang sesi, JtiCache, RateLimiter, `clientIp`, dan **kontras WCAG token `globals.css`** (dibaca dari berkas): teks/status/aksen/chrome/series >= 4,5 atau 3, `textOn` di skala sekuensial.
+
+### 5. Penyimpangan / catatan terhadap kontrak (lead putuskan)
+1. **`/sso` nonaktif = 404** (permintaan lead) bukan 503 (§26.4). Satu konstanta di `lib/sso-handler.ts`.
+2. **Origin `null`**: halaman form Odoo ber-`Referrer-Policy: no-referrer` (§26.2) membuat browser mengirim `Origin: null` pada POST lintas-origin sehingga C1 menolak SEMUA login sah. Odoo harus memakai `strict-origin` (hanya origin) pada halaman form (atau lead menyetujui pengecualian `null`). Perlu dites end-to-end Odoo -> insight-web.
+3. Path halaman mengikuti §26.8 (`/flow`, `/sales`, `/payments`, `/distribution`, `/data-quality`), bukan path Indonesia di spec UI.
+4. `cat` memakai parameter berulang (nama kategori boleh memuat koma); `product` wajib berawalan brand (katalog queries menang atas §26.9).
+5. CH_URL http hanya dengan `EFN_ALLOW_PLAINTEXT=true` dan bukan production (lebih ketat dari §26.10).
+6. `dq_status_board` tidak dipakai; `exec_attention` ada di katalog tetapi tidak dipanggil Ringkasan (cadangan).
+7. Kesegaran di header = max umur `sales`/`payment` per sesi (bukan per filter `pt`).
+
+### 6. Belum dibangun (dari spec)
+Panel samping detail menu (`sales_menu_daily` tidak dipakai), heatmap diverging distribusi (diganti bar neto transfer), Sankey (diganti bar bertahap), ekspor CSV per kartu chart (hanya tabel), fokus-trap drawer mobile (hanya Esc + tombol), skeleton khusus per kartu saat ganti filter (hanya `aria-busy`/opasitas), data contoh sintetis dev, panel "Hanya satu brand: warna merek" khusus, target HPP per brand, toast filter (diganti pemberitahuan di halaman), tooltip pada rail ikon tablet (teks tautan disembunyikan secara visual dengan teknik sr-only, jadi nama aksesibel tetap ada; tooltip visual belum).
+
+### 7. Belum diverifikasi
+Semua: install/typecheck/lint/test/build; hasil Next 16 `proxy.ts` + nonce; hook React `react-hooks` v7 (aturan baru dapat menandai pola efek); kompatibilitas Request header `origin` di undici untuk test; SQL katalog terhadap ClickHouse 24.8 (`wait_end_of_query=1`, `SQL_*` custom settings di profil readonly=2, format `param_*` Array(String), `LIMIT` literal, alias `sales_channel_split`, window function `menu_mix_by_branch`); ECharts SVG di bawah CSP; kontras seluruh pasangan tema (dites otomatis hanya yang tercantum); perilaku `<details>` dropdown dengan pembaca layar; angka KPI dibandingkan Metabase; performa (tiap halaman 5-9 query paralel + 4 query layout per navigasi; tanpa cache).
+
+### 7b. Perbaikan G42 setelah review (SEC-189/194/196, QA risiko 1/5, typecheck)
+Tanpa shell; belum dijalankan. Dibaca dulu versi terkini (proxy rewrite, origin-guard tanpa-Origin-ditolak, `lib/semaphore.ts`).
+1. **SEC-189**: `lib/user-limits.ts` (baru: 300 query/5 menit per `sub` untuk halaman; 5 ekspor/10 menit per `sub`; `exportConcurrencyFromEnv`), limiter disimpan di `lib/runtime.ts` (`getPageQueryLimiter`, `getExportLimiter`). `chQuery(name, session, bag, pool='page')` kini menerima `sub`, menolak `ChError('rate_limited')` bila batas halaman habis, dan memilih semaphore: `page` (12) atau `export` (3, antrean 10, env **`INSIGHT_CH_EXPORT_CONCURRENCY`** baru, 1..8). `Ctx.pool` meneruskan pool lewat `run()`. `settle()` mengembalikan `reason:'rate_limited'`; `ErrorCard`/`Block` menampilkan "Terlalu banyak permintaan. Coba lagi sebentar." Route ekspor: 429 + `Retry-After` setelah auth + validasi nama tabel (401/503/404 tidak memakai jatah), pool `export`.
+2. **SEC-194**: log ekspor `{table, query, pt, from, to, rows, sub}` (`TABLE_QUERIES` di `lib/loaders.ts`); tanpa nama/token/cookie.
+3. **QA risiko 1**: di `handleSso` cek Origin sebelum rate limit.
+4. **SEC-196**: `images: { unoptimized: true }`.
+5. **Typecheck** `tests/session-logout.test.ts`: array kasus diberi tipe `Record<string,string>[]` (test tidak dilemahkan).
+6. **QA risiko 5**: parameter `secFetchSite` dihapus dari `isOriginAllowed(origin, odooOrigin)` beserta pemanggil/test.
+Test baru: `tests/user-limits.test.ts`, `tests/ch-pools.test.ts` (rate_limited per sub, pool ekspor vs halaman tidak saling memblokir), `tests/export-route.test.ts` (429, jatah tidak terpakai oleh 401/404, pool, escape CSV, log audit), kasus baru di `tests/sso-handler.test.ts` (Origin salah tidak memakai jatah login). Belum diverifikasi: `vi.mock` alias `@/lib/runtime` dan impor dinamis `@/lib/clickhouse` dengan env semaphore; batas 300/5 menit terhadap beban nyata (butuh staging).
+
+### 8. Yang lead perlu jalankan
+```
+cd services/insight-web
+docker run --rm -v "$(pwd -W)":/app -w /app node:22.23-alpine sh -c "npm install && npm test && npm run lint && npm run typecheck && npm run build"
+```
+lalu commit `package-lock.json`; `docker build --target runtime services/insight-web`; uji end-to-end SSO dengan Odoo `efn_insight` (Origin/Referrer), dan SQL katalog di ClickHouse 24.8 (`docs/design/insight-web-queries.md`). Bila lint menolak `react-hooks/*`, sesuaikan pola efek di `components/Chrome.tsx`/`EChart.tsx`.

@@ -211,6 +211,9 @@ create_user efn_text2sql /run/secrets/clickhouse_password_text2sql
 create_user efn_metabase /run/secrets/clickhouse_password_metabase
 # G41 (docs/04 §25.7): user service esb-extract. Secret di-mount ke clickhouse-init di base compose (devsecops).
 create_user efn_esb /run/secrets/clickhouse_password_esb
+# G42 (kontrak G42 §B, ADR-041): user service insight-web. WAJIB seperti efn_text2sql (secret di-mount ke
+# clickhouse-init di base compose, devsecops) -> secret hilang = init gagal (fail closed, bukan user tanpa password).
+create_user efn_insight /run/secrets/clickhouse_password_insight
 
 for f in /init/access/*.sql; do
   [ -e "$f" ] || continue
@@ -233,6 +236,13 @@ SET DEFAULT ROLE esb_writer TO efn_esb;
 ALTER USER efn_esb SETTINGS PROFILE 'esb_writer_profile';
 EOF
 
+# G42: insight-access.sql membuat role insight_reader & profil insight_readonly; pengikatan ke user di sini.
+$CH --multiquery <<'EOF'
+GRANT insight_reader TO efn_insight;
+SET DEFAULT ROLE insight_reader TO efn_insight;
+ALTER USER efn_insight SETTINGS PROFILE 'insight_readonly';
+EOF
+
 # G38 (docs/04 §23.3): row policy cakupan PT pada view efn_t2s. Service text2sql mengirim setting SQL_efn_cids
 # (company_id, dipisah koma), SQL_efn_codes (kode PT §12.1) dan SQL_efn_sig = hex(SHA256(kunci|cids|codes)); kunci =
 # secret text2sql_scope_key (hex). Tanpa setting / tanda tangan salah -> 0 baris atau error (fail closed). Kunci hanya
@@ -245,12 +255,52 @@ esac
 SIG="getSetting('SQL_efn_sig') = lower(hex(SHA256(concat('${SCOPE_KEY}', '|', getSetting('SQL_efn_cids'), '|', getSetting('SQL_efn_codes')))))"
 CIDS="has(arrayMap(x -> toUInt32OrZero(x), splitByChar(',', getSetting('SQL_efn_cids'))), company_id)"
 CODES="has(splitByChar(',', getSetting('SQL_efn_codes')), company_code)"
+# SEC-190 (G42): format setting cakupan WAJIB kanonik sebelum tanda tangan dihitung. SHA256(kunci|cids|codes) rentan
+# length-extension (codes = "PB<padding>,WTZ" dengan sig turunan); regex ini menolak byte padding/biner apa pun.
+# Kode PT 2..8 huruf besar (text2sql: EFN/FARM; insight: PB/WTZ/BCF/BCR/IMD/CUP), cids angka dipisah koma (boleh kosong).
+FMT="match(getSetting('SQL_efn_codes'), '^[A-Z]{2,8}(,[A-Z]{2,8})*\$') AND match(getSetting('SQL_efn_cids'), '^([0-9]{1,10}(,[0-9]{1,10})*)?\$')"
 for v in v_sales_daily v_outlet_daily v_waste_daily v_mo_yield_daily; do
-  echo "CREATE ROW POLICY OR REPLACE efn_t2s_scope ON efn_t2s.${v} USING ${CIDS} AND ${SIG} TO text2sql_reader;"
-done | $CH --multiquery
-echo "CREATE ROW POLICY OR REPLACE efn_t2s_scope ON efn_t2s.v_loyalty_daily USING ${CODES} AND ${SIG} TO text2sql_reader;" \
-  | $CH --multiquery
-unset SCOPE_KEY SIG
+  echo "CREATE ROW POLICY OR REPLACE efn_t2s_scope ON efn_t2s.${v} USING ${FMT} AND ${CIDS} AND ${SIG} TO text2sql_reader;"
+done | $CH --log_queries=0 --multiquery
+# SEC-191: --log_queries=0 -> DDL yang memuat kunci tidak tercatat di system.query_log.
+echo "CREATE ROW POLICY OR REPLACE efn_t2s_scope ON efn_t2s.v_loyalty_daily USING ${FMT} AND ${CODES} AND ${SIG} TO text2sql_reader;" \
+  | $CH --log_queries=0 --multiquery
+unset SIG
+
+# G42 (kontrak G42 §B): row policy cakupan PT pada SETIAP view efn_insight (semua ber-company_code). insight-web
+# mengirim SQL_efn_cids / SQL_efn_codes / SQL_efn_sig dengan format SAMA dengan text2sql, tetapi kunci = secret
+# insight_scope_key (hex, BEDA dari text2sql_scope_key -> tanda tangan satu service tidak berlaku di service lain).
+# Predikat hanya company_code (kode ESB: PB/WTZ/BCF/BCR/IMD/CUP; IMD/CUP belum punya company_id Odoo) + tanda tangan;
+# cids tetap ikut ditandatangani. `company_code != ''` = defense in depth (C4 §26.13: splitByChar(',', '') = [''] akan
+# mencocokkan baris tanpa PT bila codes kosong ber-sig sah). WAJIB seperti text2sql_scope_key: secret hilang/tidak
+# valid = init gagal.
+# Kunci = string hex apa adanya (byte ASCII, bukan hex-decode; `$(cat)` membuang newline akhir), [0-9a-fA-F] >= 64
+# karakter (docs/04 §26.7/§26.10) -- divalidasi sebelum disisipkan ke DDL (charset hex = aman sebagai literal SQL).
+INSIGHT_KEY="$(cat /run/secrets/insight_scope_key)"
+case "$INSIGHT_KEY" in
+  ''|*[!0-9a-fA-F]*) echo "clickhouse-init: insight_scope_key harus hex" >&2; exit 1 ;;
+esac
+[ "${#INSIGHT_KEY}" -ge 64 ] || { echo "clickhouse-init: insight_scope_key terlalu pendek (min 64 hex)" >&2; exit 1; }
+[ "$INSIGHT_KEY" != "$SCOPE_KEY" ] || { echo "clickhouse-init: insight_scope_key tidak boleh sama dengan text2sql_scope_key" >&2; exit 1; }
+unset SCOPE_KEY
+INSIGHT_SIG="getSetting('SQL_efn_sig') = lower(hex(SHA256(concat('${INSIGHT_KEY}', '|', getSetting('SQL_efn_cids'), '|', getSetting('SQL_efn_codes')))))"
+# Daftar = semua view di insight-access.sql (diuji test_insight_access.py) + diverifikasi ke system.tables di bawah.
+for v in v_esb_sales_daily v_esb_sales_branch_daily v_esb_payment_daily v_esb_flow_daily v_esb_menu_mix \
+         v_esb_data_quality v_esb_branch_list v_esb_product_list; do
+  echo "CREATE ROW POLICY OR REPLACE efn_insight_scope ON efn_insight.${v} USING company_code != '' AND ${FMT} AND ${CODES} AND ${INSIGHT_SIG} TO insight_reader;"
+done | $CH --log_queries=0 --multiquery
+unset INSIGHT_KEY INSIGHT_SIG
+# Fail closed: view efn_insight tanpa row policy = semua PT terbaca (grant efn_insight.* wildcard). Bila ada, cabut
+# grant role lalu gagalkan init.
+INSIGHT_MISSING="$($CH --query "SELECT name FROM system.tables WHERE database = 'efn_insight' AND name NOT IN
+  (SELECT table FROM system.row_policies WHERE database = 'efn_insight' AND short_name = 'efn_insight_scope')
+  ORDER BY name FORMAT TSV")"
+if [ -n "$INSIGHT_MISSING" ]; then
+  $CH --query "REVOKE SELECT ON efn_insight.* FROM insight_reader" < /dev/null
+  echo "clickhouse-init: view efn_insight tanpa row policy efn_insight_scope (grant insight_reader dicabut):" >&2
+  printf '%s\n' "$INSIGHT_MISSING" >&2
+  exit 1
+fi
 
 rm -f "$CFG"
-echo "clickhouse-init: skema, user (efn_etl, efn_text2sql, efn_metabase, efn_esb) dan grant diterapkan"
+echo "clickhouse-init: skema, user (efn_etl, efn_text2sql, efn_metabase, efn_esb, efn_insight) dan grant diterapkan"

@@ -1,0 +1,569 @@
+/**
+ * KATALOG QUERY insight-web (docs/04 §26.8; SQL & nama view = docs/design/insight-web-queries.md, yang menang
+ * bila berbeda dari §26). Semua SQL terdefinisi di sini sebagai konstanta; TIDAK ada SQL/identifier dari pengguna.
+ * Nilai filter hanya lewat placeholder bertipe ClickHouse `{nama:Tipe}` + parameter HTTP `param_nama`.
+ * Fragmen filter dirakit dari konstanta di bawah (bukan dari input). `LIMIT` ditulis literal.
+ *
+ * Query bertanda "(tambahan)" di luar daftar kanonik §26.8 dicatat di README (kebutuhan komponen UI).
+ * Setiap query tetap memfilter `has({pt:Array(String)}, company_code)` (lapis 1) di samping row policy (lapis 2).
+ *
+ * STATUS: ke-36 query dijalankan terhadap ClickHouse 24.8 oleh lead (G42, 18 Nov 2026); uji row policy per PT lulus.
+ */
+import 'server-only';
+
+export type ParamName =
+  | 'from'
+  | 'to'
+  | 'prev_from'
+  | 'prev_to'
+  | 'pt'
+  | 'branch'
+  | 'cat'
+  | 'product'
+  | 'menus'
+  | 'sort'
+  | 'product_key'
+  | 'weekly'
+  | 'by_branch';
+
+export type ChType = 'Date' | 'Array(String)' | 'String' | 'UInt8';
+
+export const PARAM_TYPES: Record<ParamName, ChType> = {
+  from: 'Date',
+  to: 'Date',
+  prev_from: 'Date',
+  prev_to: 'Date',
+  pt: 'Array(String)',
+  branch: 'Array(String)',
+  cat: 'Array(String)',
+  product: 'Array(String)',
+  menus: 'Array(String)',
+  sort: 'String',
+  product_key: 'String',
+  weekly: 'UInt8',
+  by_branch: 'UInt8',
+};
+
+export interface QueryDef {
+  sql: string;
+  params: readonly ParamName[];
+}
+
+// --- fragmen filter standar ---
+const PT = 'has({pt:Array(String)}, company_code)';
+const BR = "(empty({branch:Array(String)}) OR has({branch:Array(String)}, concat(brand, ':', toString(branch_id))))";
+const PR = "(empty({product:Array(String)}) OR has({product:Array(String)}, concat(brand, ':', product_code)))";
+const CAT = '(empty({cat:Array(String)}) OR has({cat:Array(String)}, menu_category))';
+const DAY_RANGE = 'day BETWEEN {from:Date} AND {to:Date}';
+const DAY_RANGE_PREV = 'day BETWEEN {prev_from:Date} AND {to:Date}';
+const SALES_RANGE = 'sales_date BETWEEN {from:Date} AND {to:Date}';
+const SALES_RANGE_PREV = 'sales_date BETWEEN {prev_from:Date} AND {to:Date}';
+
+const SUPPLY = 'in_ck + in_other + store_prod + st_in - st_out';
+
+export const QUERIES = {
+  // ---------- filter global ----------
+  list_branches: {
+    params: ['pt'],
+    sql: `SELECT brand, company_code, branch_id, branch_name, is_ck, is_store, active
+FROM efn_insight.v_esb_branch_list
+WHERE ${PT}
+ORDER BY brand, branch_name
+LIMIT 500`,
+  },
+  list_categories: {
+    params: ['from', 'to', 'pt'],
+    sql: `SELECT DISTINCT menu_category
+FROM efn_insight.v_esb_sales_daily
+WHERE ${SALES_RANGE} AND ${PT}
+ORDER BY menu_category
+LIMIT 500`,
+  },
+  list_products: {
+    params: ['pt'],
+    sql: `SELECT brand, product_code, any(product_name) AS product_label, any(category) AS category_label
+FROM efn_insight.v_esb_product_list
+WHERE ${PT} AND is_fin = 1 AND active = 1
+GROUP BY brand, product_code
+ORDER BY brand, product_label
+LIMIT 500`,
+  },
+
+  // ---------- Ringkasan (/) ----------
+  exec_kpi: {
+    params: ['from', 'to', 'prev_from', 'prev_to', 'pt', 'branch'],
+    sql: `SELECT
+    toFloat64(sumIf(net, sales_date >= {from:Date}))      AS net_cur,
+    toFloat64(sumIf(net, sales_date <= {prev_to:Date}))   AS net_prev,
+    sumIf(trx_count, sales_date >= {from:Date})           AS trx_cur,
+    sumIf(trx_count, sales_date <= {prev_to:Date})        AS trx_prev,
+    toFloat64(sumIf(cogs, sales_date >= {from:Date}))     AS cogs_cur,
+    toFloat64(sumIf(cogs, sales_date <= {prev_to:Date}))  AS cogs_prev
+FROM efn_insight.v_esb_sales_branch_daily
+WHERE ${SALES_RANGE_PREV}
+  AND ${PT}
+  AND ${BR}`,
+  },
+  exec_trend_daily: {
+    // Satu rentang gabungan periode lalu + sekarang (prev_from..to); pemisahan periode dilakukan di loader.
+    params: ['prev_from', 'to', 'pt', 'branch'],
+    sql: `SELECT sales_date, brand,
+       toFloat64(sum(net)) AS net, sum(trx_count) AS trx
+FROM efn_insight.v_esb_sales_branch_daily
+WHERE ${SALES_RANGE_PREV}
+  AND ${PT}
+  AND ${BR}
+GROUP BY sales_date, brand
+ORDER BY sales_date, brand
+LIMIT 5000`,
+  },
+  exec_branch_rank: {
+    params: ['from', 'to', 'pt', 'branch'],
+    sql: `SELECT brand, company_code, branch_id, any(branch_name) AS branch_label,
+       toFloat64(sum(net)) AS net_sales, sum(trx_count) AS trx,
+       if(sum(trx_count) = 0, NULL, toFloat64(sum(net)) / sum(trx_count)) AS avg_trx,
+       if(sum(net) <= 0, NULL, toFloat64(sum(cogs)) / toFloat64(sum(net)) * 100) AS hpp_pct
+FROM efn_insight.v_esb_sales_branch_daily
+WHERE ${SALES_RANGE}
+  AND ${PT}
+  AND ${BR}
+GROUP BY brand, company_code, branch_id
+ORDER BY net_sales DESC
+LIMIT 500`,
+  },
+  exec_pt_share: {
+    // (tambahan)
+    params: ['from', 'to', 'pt', 'branch'],
+    sql: `SELECT company_code, toFloat64(sum(net)) AS net
+FROM efn_insight.v_esb_sales_branch_daily
+WHERE ${SALES_RANGE}
+  AND ${PT}
+  AND ${BR}
+GROUP BY company_code
+ORDER BY net DESC
+LIMIT 50`,
+  },
+  exec_sell_through: {
+    // (tambahan) KPI tile ke-5 (definisi Q-INS1)
+    params: ['from', 'to', 'pt', 'branch', 'product'],
+    sql: `SELECT toFloat64(sum(sold)) AS sold,
+       toFloat64(sum(${SUPPLY})) AS supply
+FROM efn_insight.v_esb_flow_daily
+WHERE ${DAY_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND ${PR}`,
+  },
+  exec_attention: {
+    // (tambahan)
+    params: ['pt'],
+    sql: `SELECT check_name, brand, item, any(value) AS value, max(last_day) AS last_day
+FROM efn_insight.v_esb_data_quality
+WHERE check_name IN ('store_no_sales_h1', 'last_run_not_ok') AND ${PT}
+GROUP BY check_name, brand, item
+ORDER BY check_name, brand, item
+LIMIT 50`,
+  },
+
+  // ---------- Produksi vs penjualan (/flow) ----------
+  flow_summary: {
+    params: ['from', 'to', 'prev_from', 'prev_to', 'pt', 'branch', 'product'],
+    sql: `SELECT
+    toFloat64(sumIf(ck_prod, day >= {from:Date}))  AS ck_prod_cur,  toFloat64(sumIf(ck_prod, day <= {prev_to:Date}))  AS ck_prod_prev,
+    toFloat64(sumIf(ck_out, day >= {from:Date}))   AS ck_out_cur,   toFloat64(sumIf(ck_out, day <= {prev_to:Date}))   AS ck_out_prev,
+    toFloat64(sumIf(in_ck + in_other, day >= {from:Date}))  AS received_cur,
+    toFloat64(sumIf(in_ck + in_other, day <= {prev_to:Date})) AS received_prev,
+    toFloat64(sumIf(store_prod, day >= {from:Date})) AS store_prod_cur,
+    toFloat64(sumIf(st_in, day >= {from:Date}))      AS st_in_cur,
+    toFloat64(sumIf(st_out, day >= {from:Date}))     AS st_out_cur,
+    toFloat64(sumIf(sold, day >= {from:Date}))     AS sold_cur,     toFloat64(sumIf(sold, day <= {prev_to:Date}))     AS sold_prev,
+    toFloat64(sumIf(${SUPPLY}, day >= {from:Date}))  AS supply_cur,
+    toFloat64(sumIf(${SUPPLY}, day <= {prev_to:Date})) AS supply_prev
+FROM efn_insight.v_esb_flow_daily
+WHERE ${DAY_RANGE_PREV}
+  AND ${PT}
+  AND ${BR}
+  AND ${PR}`,
+  },
+  flow_by_branch: {
+    params: ['from', 'to', 'pt', 'branch', 'product'],
+    sql: `SELECT brand, company_code, branch_id, any(branch_name) AS branch_label,
+       toFloat64(sum(${SUPPLY})) AS supply,
+       toFloat64(sum(sold)) AS sold_qty,
+       if(sum(${SUPPLY}) <= 0, NULL,
+          sum(sold) / sum(${SUPPLY}) * 100) AS sell_through_pct
+FROM efn_insight.v_esb_flow_daily
+WHERE ${DAY_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND ${PR}
+GROUP BY brand, company_code, branch_id
+HAVING supply != 0 OR sold_qty != 0
+ORDER BY sell_through_pct ASC NULLS LAST
+LIMIT 500`,
+  },
+  flow_daily_trend: {
+    // (tambahan)
+    params: ['from', 'to', 'pt', 'branch', 'product', 'weekly'],
+    sql: `SELECT if({weekly:UInt8} = 1, toMonday(day), day) AS period,
+       toFloat64(sum(ck_prod)) AS ck_prod, toFloat64(sum(store_prod)) AS store_prod,
+       toFloat64(sum(ck_out)) AS ck_out, toFloat64(sum(sold)) AS sold
+FROM efn_insight.v_esb_flow_daily
+WHERE ${DAY_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND ${PR}
+GROUP BY period
+ORDER BY period
+LIMIT 1000`,
+  },
+  flow_by_product: {
+    params: ['from', 'to', 'pt', 'branch', 'product'],
+    sql: `SELECT brand, product_code, any(product_name) AS product_label, startsWith(product_code, 'NAME:') AS unmapped,
+       toFloat64(sum(ck_prod)) AS ck_prod_qty, toFloat64(sum(ck_out)) AS ck_out_qty,
+       toFloat64(sum(in_ck + in_other)) AS received, toFloat64(sum(store_prod)) AS store_prod_qty,
+       toFloat64(sum(sold)) AS sold_qty,
+       if(sum(${SUPPLY}) <= 0, NULL,
+          sum(sold) / sum(${SUPPLY}) * 100) AS sell_through_pct
+FROM efn_insight.v_esb_flow_daily
+WHERE ${DAY_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND ${PR}
+GROUP BY brand, product_code
+ORDER BY sold_qty DESC
+LIMIT 500`,
+  },
+  flow_outliers: {
+    params: ['from', 'to', 'pt', 'branch', 'product'],
+    sql: `SELECT brand, company_code, branch_id, any(branch_name) AS branch_label, product_code,
+       any(product_name) AS product_label, startsWith(product_code, 'NAME:') AS unmapped,
+       toFloat64(sum(in_ck + in_other + st_in - st_out)) AS received,
+       toFloat64(sum(store_prod)) AS store_prod_qty,
+       toFloat64(sum(sold)) AS sold_qty,
+       if(sum(${SUPPLY}) <= 0, NULL,
+          sum(sold) / sum(${SUPPLY}) * 100) AS sell_through_pct
+FROM efn_insight.v_esb_flow_daily
+WHERE ${DAY_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND ${PR}
+GROUP BY brand, company_code, branch_id, product_code
+HAVING received != 0 OR sold_qty != 0 OR store_prod_qty != 0
+ORDER BY sell_through_pct ASC NULLS LAST, sold_qty DESC
+LIMIT 500`,
+  },
+  flow_product_daily: {
+    // (tambahan)
+    params: ['from', 'to', 'pt', 'branch', 'product_key'],
+    sql: `SELECT day, toFloat64(sum(ck_prod)) AS ck_prod, toFloat64(sum(ck_out)) AS ck_out,
+       toFloat64(sum(in_ck + in_other)) AS received, toFloat64(sum(sold)) AS sold
+FROM efn_insight.v_esb_flow_daily
+WHERE ${DAY_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND concat(brand, ':', product_code) = {product_key:String}
+GROUP BY day
+ORDER BY day
+LIMIT 1000`,
+  },
+
+  // ---------- Penjualan & menu (/sales) ----------
+  sales_kpi: {
+    // (tambahan)
+    params: ['from', 'to', 'prev_from', 'prev_to', 'pt', 'branch', 'cat'],
+    sql: `SELECT
+    toFloat64(sumIf(net, sales_date >= {from:Date}))       AS net_cur,
+    toFloat64(sumIf(net, sales_date <= {prev_to:Date}))    AS net_prev,
+    toFloat64(sumIf(gross, sales_date >= {from:Date}))     AS gross_cur,
+    toFloat64(sumIf(discount, sales_date >= {from:Date}))  AS discount_cur,
+    toFloat64(sumIf(discount, sales_date <= {prev_to:Date})) AS discount_prev,
+    toFloat64(sumIf(gross, sales_date <= {prev_to:Date}))  AS gross_prev,
+    toFloat64(sumIf(qty, sales_date >= {from:Date}))       AS qty_cur,
+    toFloat64(sumIf(qty, sales_date <= {prev_to:Date}))    AS qty_prev,
+    toFloat64(sumIf(cogs, sales_date >= {from:Date}))      AS cogs_cur,
+    toFloat64(sumIf(cogs, sales_date <= {prev_to:Date}))   AS cogs_prev
+FROM efn_insight.v_esb_sales_daily
+WHERE ${SALES_RANGE_PREV}
+  AND ${PT}
+  AND ${BR}
+  AND ${CAT}`,
+  },
+  sales_by_weekday: {
+    params: ['from', 'to', 'pt', 'branch', 'cat'],
+    sql: `SELECT toDayOfWeek(sales_date) AS dow,
+       toFloat64(sum(net)) / uniqExact(sales_date) AS avg_net,
+       uniqExact(sales_date) AS days
+FROM efn_insight.v_esb_sales_daily
+WHERE ${SALES_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND ${CAT}
+GROUP BY dow
+ORDER BY dow
+LIMIT 7`,
+  },
+  sales_weekday_heatmap: {
+    // (tambahan)
+    params: ['from', 'to', 'pt', 'branch', 'cat'],
+    sql: `SELECT toMonday(sales_date) AS week, toDayOfWeek(sales_date) AS dow, toFloat64(sum(net)) AS net
+FROM efn_insight.v_esb_sales_daily
+WHERE ${SALES_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND ${CAT}
+GROUP BY week, dow
+ORDER BY week, dow
+LIMIT 1000`,
+  },
+  sales_by_category: {
+    params: ['from', 'to', 'pt', 'branch', 'cat'],
+    sql: `SELECT if(menu_category = '', 'Tanpa kategori', menu_category) AS category,
+       toFloat64(sum(net)) AS net_sales, toFloat64(sum(qty)) AS qty_sold,
+       if(sum(net) = 0, NULL, toFloat64(sum(net) - sum(cogs)) / toFloat64(sum(net)) * 100) AS margin_pct
+FROM efn_insight.v_esb_sales_daily
+WHERE ${SALES_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND ${CAT}
+GROUP BY category
+ORDER BY net_sales DESC
+LIMIT 500`,
+  },
+  sales_channel_split: {
+    // Alias sengaja beda dari nama kolom (branch_key/branch_label): alias = nama kolom memicu alias siklik di ClickHouse.
+    params: ['from', 'to', 'pt', 'branch', 'cat', 'by_branch'],
+    sql: `SELECT brand,
+       if({by_branch:UInt8} = 1, branch_id, toUInt32(0)) AS branch_key,
+       if({by_branch:UInt8} = 1, any(branch_name), '') AS branch_label,
+       toFloat64(sumIf(net, is_takeaway = 1)) AS net_takeaway,
+       toFloat64(sumIf(net, is_takeaway = 0)) AS net_dine_in
+FROM efn_insight.v_esb_sales_daily
+WHERE ${SALES_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND ${CAT}
+GROUP BY brand, branch_key
+ORDER BY brand, branch_key
+LIMIT 500`,
+  },
+  sales_top_menu: {
+    params: ['from', 'to', 'pt', 'branch', 'cat', 'sort'],
+    sql: `SELECT brand, menu_code, any(menu_name) AS menu_label, any(menu_category) AS category,
+       toFloat64(sum(net)) AS net_sales, toFloat64(sum(qty)) AS qty_sold,
+       if(sum(net) = 0, NULL, toFloat64(sum(net) - sum(cogs)) / toFloat64(sum(net)) * 100) AS margin_pct
+FROM efn_insight.v_esb_sales_daily
+WHERE ${SALES_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND ${CAT}
+GROUP BY brand, menu_code
+ORDER BY multiIf({sort:String} = 'qty', qty_sold, {sort:String} = 'margin', ifNull(margin_pct, -1e18), net_sales) DESC
+LIMIT 500`,
+  },
+  menu_mix_by_branch: {
+    params: ['from', 'to', 'pt', 'branch'],
+    sql: `SELECT brand, branch_id, any(branch_name) AS branch_label, menu_category,
+       sum(net) AS net_sales,
+       if(sum(sum(net)) OVER (PARTITION BY brand, branch_id) = 0, NULL,
+          round(sum(net) / sum(sum(net)) OVER (PARTITION BY brand, branch_id) * 100, 2)) AS share_pct
+FROM efn_insight.v_esb_menu_mix
+WHERE month BETWEEN toStartOfMonth({from:Date}) AND toStartOfMonth({to:Date})
+  AND ${PT}
+  AND ${BR}
+GROUP BY brand, branch_id, menu_category
+ORDER BY brand, branch_label, share_pct DESC
+LIMIT 5000`,
+  },
+
+  // ---------- Pembayaran (/payments) ----------
+  pay_kpi: {
+    // (tambahan)
+    params: ['from', 'to', 'prev_from', 'prev_to', 'pt', 'branch'],
+    sql: `SELECT
+    toFloat64(sumIf(amount, sales_date >= {from:Date}))     AS amount_cur,
+    toFloat64(sumIf(amount, sales_date <= {prev_to:Date}))  AS amount_prev,
+    sumIf(payment_count, sales_date >= {from:Date})         AS count_cur,
+    sumIf(payment_count, sales_date <= {prev_to:Date})      AS count_prev,
+    toFloat64(sumIf(mdr, sales_date >= {from:Date}))        AS mdr_cur,
+    toFloat64(sumIf(mdr, sales_date <= {prev_to:Date}))     AS mdr_prev
+FROM efn_insight.v_esb_payment_daily
+WHERE ${SALES_RANGE_PREV}
+  AND ${PT}
+  AND ${BR}`,
+  },
+  pay_by_method: {
+    params: ['from', 'to', 'pt', 'branch'],
+    sql: `SELECT payment_type, if(payment_method = '', 'Tidak diketahui', payment_method) AS method,
+       sum(payment_count) AS cnt, toFloat64(sum(amount)) AS amount_total, toFloat64(sum(mdr)) AS mdr_total,
+       if(sum(amount) = 0, NULL, toFloat64(sum(mdr)) / toFloat64(sum(amount)) * 100) AS mdr_pct,
+       if(sum(payment_count) = 0, NULL, toFloat64(sum(amount)) / sum(payment_count)) AS avg_amount
+FROM efn_insight.v_esb_payment_daily
+WHERE ${SALES_RANGE}
+  AND ${PT}
+  AND ${BR}
+GROUP BY payment_type, method
+ORDER BY amount_total DESC
+LIMIT 500`,
+  },
+  pay_trend: {
+    params: ['from', 'to', 'pt', 'branch'],
+    sql: `SELECT sales_date, payment_type, toFloat64(sum(amount)) AS amount, sum(payment_count) AS payment_count
+FROM efn_insight.v_esb_payment_daily
+WHERE ${SALES_RANGE}
+  AND ${PT}
+  AND ${BR}
+GROUP BY sales_date, payment_type
+ORDER BY sales_date, payment_type
+LIMIT 5000`,
+  },
+  pay_by_branch: {
+    // (tambahan) branch_id 0 = branchCode pembayaran tak dikenal di master cabang.
+    params: ['from', 'to', 'pt', 'branch'],
+    sql: `SELECT brand, branch_id, any(b_name) AS branch_name, sum(amt) AS amount, sum(m) AS mdr,
+       argMax(method, amt) AS top_method
+FROM
+(
+    SELECT brand, branch_id, any(branch_name) AS b_name,
+           if(payment_method = '', 'Tidak diketahui', payment_method) AS method,
+           toFloat64(sum(amount)) AS amt, toFloat64(sum(mdr)) AS m
+    FROM efn_insight.v_esb_payment_daily
+    WHERE ${SALES_RANGE}
+      AND ${PT}
+      AND ${BR}
+    GROUP BY brand, branch_id, method
+)
+GROUP BY brand, branch_id
+ORDER BY amount DESC
+LIMIT 500`,
+  },
+
+  // ---------- Distribusi (/distribution) ----------
+  dist_kpi: {
+    // (tambahan)
+    params: ['from', 'to', 'prev_from', 'prev_to', 'pt', 'branch', 'product'],
+    sql: `SELECT
+    toFloat64(sumIf(ck_out, day >= {from:Date}))    AS ck_out_cur,   toFloat64(sumIf(ck_out, day <= {prev_to:Date}))   AS ck_out_prev,
+    toFloat64(sumIf(in_ck, day >= {from:Date}))     AS in_ck_cur,    toFloat64(sumIf(in_ck, day <= {prev_to:Date}))    AS in_ck_prev,
+    toFloat64(sumIf(st_out, day >= {from:Date}))    AS st_out_cur,   toFloat64(sumIf(st_out, day <= {prev_to:Date}))   AS st_out_prev,
+    toFloat64(sumIf(in_other, day >= {from:Date}))  AS in_other_cur, toFloat64(sumIf(in_other, day <= {prev_to:Date})) AS in_other_prev
+FROM efn_insight.v_esb_flow_daily
+WHERE ${DAY_RANGE_PREV}
+  AND ${PT}
+  AND ${BR}
+  AND ${PR}`,
+  },
+  dist_ck_delivery: {
+    params: ['from', 'to', 'pt', 'branch', 'product'],
+    sql: `SELECT day, toFloat64(sum(ck_out)) AS ck_out_qty, toFloat64(sum(in_ck)) AS in_ck_qty,
+       toFloat64(sum(in_other)) AS in_other_qty
+FROM efn_insight.v_esb_flow_daily
+WHERE ${DAY_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND ${PR}
+GROUP BY day
+ORDER BY day
+LIMIT 1000`,
+  },
+  dist_transfer: {
+    params: ['from', 'to', 'pt', 'branch', 'product'],
+    sql: `SELECT brand, company_code, branch_id, any(branch_name) AS branch_label,
+       toFloat64(sum(ck_out)) AS ck_out_qty, toFloat64(sum(in_ck)) AS in_ck_qty, toFloat64(sum(in_other)) AS in_other_qty,
+       toFloat64(sum(st_in)) AS st_in_qty, toFloat64(sum(st_out)) AS st_out_qty,
+       toFloat64(sum(st_in) - sum(st_out)) AS st_net
+FROM efn_insight.v_esb_flow_daily
+WHERE ${DAY_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND ${PR}
+GROUP BY brand, company_code, branch_id
+HAVING ck_out_qty != 0 OR in_ck_qty != 0 OR in_other_qty != 0 OR st_in_qty != 0 OR st_out_qty != 0
+ORDER BY brand, branch_label
+LIMIT 500`,
+  },
+  dist_transfer_top_products: {
+    // (tambahan)
+    params: ['from', 'to', 'pt', 'branch', 'product'],
+    sql: `SELECT brand, product_code, any(product_name) AS product_label,
+       toFloat64(sum(st_in)) AS st_in_qty, toFloat64(sum(st_out)) AS st_out_qty, toFloat64(sum(st_in + st_out)) AS moved
+FROM efn_insight.v_esb_flow_daily
+WHERE ${DAY_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND ${PR}
+GROUP BY brand, product_code
+HAVING moved > 0
+ORDER BY moved DESC
+LIMIT 10`,
+  },
+  dist_ck_gap_by_product: {
+    // (tambahan) pengganti "tabel selisih cabang x produk": ck_out di cabang CK, in_ck di toko -> selisih bermakna per produk-hari.
+    params: ['from', 'to', 'pt', 'product'],
+    sql: `SELECT day, brand, product_code, any(product_name) AS product_label,
+       toFloat64(sum(ck_out)) AS ck_out_qty, toFloat64(sum(in_ck)) AS in_ck_qty, toFloat64(sum(ck_out) - sum(in_ck)) AS gap
+FROM efn_insight.v_esb_flow_daily
+WHERE ${DAY_RANGE}
+  AND ${PT}
+  AND ${PR}
+GROUP BY day, brand, product_code
+HAVING abs(gap) > 0.0005
+ORDER BY abs(gap) DESC
+LIMIT 500`,
+  },
+
+  // ---------- Kualitas data (/data-quality) ----------
+  // dq_status_board (tambahan di katalog data-engineer) TIDAK dipakai: papan status dihitung dari jumlah baris
+  // tiap tabel temuan di bawah (satu sumber kebenaran).
+  dq_freshness: {
+    params: ['pt'],
+    sql: `SELECT brand, item AS entity, min(value) AS age_hours, max(last_day) AS last_day
+FROM efn_insight.v_esb_data_quality
+WHERE check_name = 'data_age_hours' AND ${PT}
+GROUP BY brand, entity
+ORDER BY brand, entity
+LIMIT 500`,
+  },
+  dq_last_run: {
+    params: ['pt'],
+    sql: `SELECT check_name, brand, groupUniqArray(company_code) AS company_codes, item,
+       max(value) AS value_max, max(last_day) AS last_seen
+FROM efn_insight.v_esb_data_quality
+WHERE ${PT} AND check_name = 'last_run_not_ok'
+GROUP BY check_name, brand, item
+ORDER BY value_max DESC
+LIMIT 500`,
+  },
+  dq_alias_unmapped: {
+    params: ['pt'],
+    sql: `SELECT check_name, brand, groupUniqArray(company_code) AS company_codes, item,
+       max(value) AS value_max, max(last_day) AS last_seen
+FROM efn_insight.v_esb_data_quality
+WHERE ${PT} AND check_name = 'alias_unmapped'
+GROUP BY check_name, brand, item
+ORDER BY value_max DESC
+LIMIT 500`,
+  },
+  dq_non_ea: {
+    params: ['pt'],
+    sql: `SELECT check_name, brand, groupUniqArray(company_code) AS company_codes, item,
+       max(value) AS value_max, max(last_day) AS last_seen
+FROM efn_insight.v_esb_data_quality
+WHERE ${PT} AND check_name = 'non_ea_lines'
+GROUP BY check_name, brand, item
+ORDER BY value_max DESC
+LIMIT 500`,
+  },
+  dq_store_no_sales: {
+    params: ['pt'],
+    sql: `SELECT check_name, brand, groupUniqArray(company_code) AS company_codes, item,
+       max(value) AS value_max, max(last_day) AS last_seen
+FROM efn_insight.v_esb_data_quality
+WHERE ${PT} AND check_name = 'store_no_sales_h1'
+GROUP BY check_name, brand, item
+ORDER BY value_max DESC
+LIMIT 500`,
+  },
+} as const satisfies Record<string, QueryDef>;
+
+export type QueryName = keyof typeof QUERIES;

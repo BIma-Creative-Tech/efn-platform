@@ -808,3 +808,63 @@ Given/When/Then (data sintetis; Metabase memakai `metabase_reader`):
 10. **Rekonsiliasi migrasi (G43).** Given cutover brand X. When total penjualan bulan lalu per PT di mart ESB dibandingkan Odoo hasil impor. Then selisih = 0 setelah `backfill --force` bulan itu; selisih > 0 ditandai dan `map_esb_odoo` memuat setiap `esb_key` yang diimpor tepat sekali (impor ulang tidak menggandakan).
 11. **Kill switch.** Given `ESB_ENABLED=false`. Then tidak ada baris `extract_run` baru, tidak ada login ke ESB, dashboard tetap menampilkan data terakhir dengan `data_age_hours` naik.
 12. **Jendela backfill.** Given backfill dijalankan pukul 12:00 WIB. Then `status=window_closed`, nol panggilan; dijalankan 23:59 dan berlanjut melewati 00:00 tetap berjalan; berhenti menjadwalkan pukul 05:00 dan lanjut dari checkpoint malam berikutnya.
+
+---
+
+## G42 — QA Dashboard Insight (`services/insight-web`, `efn_insight`, ClickHouse `efn_insight`, docs/04 §26, ADR-041)
+
+Metode: **baca kode saja** (tanpa shell/runtime). Semua test baru/diubah **belum dijalankan** — lead menjalankan Vitest (+ lint, typecheck), pytest + ruff `services/esb-extract`, dan test Odoo `efn_insight` di container. Yang sudah diverifikasi lead (Odoo 26 test, Vitest 168, E2E 31/31, row policy + 36 query di CH 24.8, compose/encryption/lint) tidak diulang.
+
+### G42.1 Hasil cek kontrak (sisi A ↔ sisi B)
+Cocok (diverifikasi baris per baris):
+- Token `eit1`: `insight_token.py:28-69,111-156` ↔ `token.ts:23-92` ↔ `claims.ts` ↔ docs/04 §26.3 — 11 kunci, urut abjad, `ensure_ascii`, kunci = byte ASCII hex, TTL 60, skew +30, jti 32 hex, `name` ≤ 64 code point, `codes`/`cids` urut naik; regex format, `timingSafeEqual`, vektor uji identik di `helpers.ts` dan `test_insight_token.py`.
+- Cookie `eis1`: `session.ts:25-89` ↔ §26.5 (7 kunci urut abjad, 28800 dtk, atribut, kunci terpisah, prefix HMAC `eis1.` memisahkan domain dari `eit1.`).
+- Scope: `scope.ts:17-32` ↔ `clickhouse-init.sh:281-285` ↔ text2sql — `sha256(key|cids|codes)`, kunci ASCII; `company_code != ''` ada.
+- Secret: `secrets.list:68-71` ↔ `docker-compose.yml:162-165,1678-1688` ↔ `config.ts:76-78` ↔ `clickhouse-init.sh:216,274` ↔ `check-encryption.sh:336-346`; Odoo `controllers/main.py:30-32` ↔ compose `:919-925`.
+- View/kolom: `insight-access.sql:76-111` ↔ `queries.ts` (tiap `FROM efn_insight.v_esb_*` ada; kolom yang dipakai ada di view) ↔ `insight-web-queries.md` §2; 36 query = 36 konstanta.
+- Dev: `EFN_INSIGHT_URL` `docker-compose.dev.yml:99` (`:9443`) ↔ `EFN_INSIGHT_ODOO_URL` `:203` (`:9443`) — Origin C1 cocok.
+
+Ketidakcocokan (semua dokumen tertinggal dari kode terbaru lead; **sudah diperbaiki di dokumen**):
+| # | Sisi A (dokumen) | Sisi B (kode) | Status |
+|---|---|---|---|
+| 1 | docs/04 §26.1 baris 2653, §26.5: cookie `eis`; logout `eis=` | `session.ts:25` `__Host-eis` (C2) | DIPERBAIKI (dokumen) |
+| 2 | §26.4: `INSIGHT_ENABLED` ≠ true → **503** "belum diaktifkan"; runbook & compose komentar sama | `sso-handler.ts:82` **404** teks polos (diuji `sso-handler.test.ts:96`); 503 hanya untuk konfigurasi (`:83`) | DIPERBAIKI (dokumen, runbook, komentar compose `docker-compose.yml:1672`) |
+| 3 | §26.4 tidak memuat cek Origin; urutan 404→503→429→Origin→body | `sso-handler.ts:82-108`, `origin-guard.ts:9-18` (Origin WAJIB, tanpa Origin ditolak, jti tidak terbakar) | DIPERBAIKI (§26.4, runbook §6, README) |
+| 4 | §26.7: definer `GRANT SELECT ON efn_dwh.*`; 7 view; `v_esb_data_quality` dari `efn_dwh.v_esb_data_quality` dengan peta statis; USING tanpa `company_code != ''` | `insight-access.sql:49-70` grant per objek (21 objek), 8 view incl. `v_esb_sales_branch_daily`, sumber `v_esb_data_quality_pt` dinamis, `clickhouse-init.sh:285` | DIPERBAIKI (§26.7 + catatan "yang menang = insight-web-queries.md") |
+| 5 | §26.7 profil tanpa konkurensi | `insight-access.sql:24,37` `max_concurrent_queries_for_user = 24 MAX 24`; `clickhouse.ts:32` semaphore `INSIGHT_CH_MAX_CONCURRENCY` (default 12) tidak ada di §26.10/README/runbook | DIPERBAIKI (§26.7, §26.10, README, runbook §1/§6) |
+| 6 | §26.8: kanonik `pay_mdr`, (draf) `sales_menu_daily`, `dq_status_board` | `queries.ts`: tidak ada ketiganya (`pay_by_method` melayani MDR) | DIPERBAIKI (catatan rekonsiliasi §26.8); `queries.ts:10` dan `insight-web-queries.md:8` masih berkata "belum dijalankan" → diperbarui |
+| 7 | §26.10 tidak memuat `INSIGHT_CH_MAX_CONCURRENCY`, `EFN_ALLOW_PLAINTEXT`, `NODE_TLS_REJECT_UNAUTHORIZED`; `EFN_INSIGHT_ODOO_URL` hanya "tautan kembali" | `config.ts:6-10,51-67`, `semaphore.ts`, `sso-handler.ts:98` (juga dasar cek Origin) | DIPERBAIKI |
+| 8 | §26.11: middleware `secure-headers@file`, "network ke ClickHouse saja" | compose `:1706,1690`: `secure-headers-insight` + `ratelimit-insight`, network `insight-ingress`+`insight-data`; router form Odoo `odoo-insight-open` `:958-963` memakai `secure-headers-insight-sso` | DIPERBAIKI |
+| 9 | runbook §1/§8: "ketiga kunci berbeda tidak dicek otomatis" | `config.ts:93-114` + `instrumentation-node.ts` menolak start bila kembar; `clickhouse-init.sh:279` menolak bila = text2sql | DIPERBAIKI (runbook) |
+| 10 | §26.2: "`INSIGHT_ENABLED` ≠ `true`" (README Odoo: `1/true/yes/on`) | `controllers/main.py:47-48` (`.lower()` ∈ {1,true,yes,on}) vs insight-web `config.ts:70` (`=== 'true'` persis) — nilai `1`/`yes`/`on`/`True`: Odoo **membuat token** tetapi insight-web menolak (404) | **BUG KECIL DIPERBAIKI** (kode): Odoo kini `== "true"` persis; README Odoo + test |
+| 11 | `semaphore.ts` (awal) env 1..64, profil ClickHouse 24 | `INSIGHT_CH_MAX_CONCURRENCY` 25..64 pasti memicu galat 202 | **DIPERBAIKI** (kode): batas atas 24; dijaga `test_concurrency_limit_matches_insight_web_semaphore` |
+| 12 | §26.13 hanya "usulan" C1–C4 | semuanya terimplementasi | DIPERBAIKI (status implementasi) |
+
+Tidak diubah (dilaporkan): **ADR-041** tidak memuat keputusan C1 (Origin wajib), `strict-origin` + varian Traefik, rewrite gerbang sesi, semaphore konkurensi — perlu satu paragraf di ADR (milik architect). Docs/04 §26.8 menyebut hanya path; `insight-web.md` (UI) tidak diperiksa ulang terhadap nama cookie.
+
+### G42.2 Perbaikan kode kecil
+- `services/odoo/addons/efn_insight/controllers/main.py:47-50`: `_enabled()` kini hanya `os.environ.get("INSIGHT_ENABLED") == "true"` (sebelumnya 1/true/yes/on, case-insensitive) — satu saklar, dua sisi identik. README modul Odoo diselaraskan.
+- `services/insight-web/lib/semaphore.ts:60-68`: `concurrencyFromEnv` rentang 1..24 (sebelumnya 1..64) agar tak bisa melampaui `max_concurrent_queries_for_user`.
+- Komentar saja: `docker-compose.yml:1672` (404, bukan 503), `lib/queries.ts:10`.
+
+### G42.3 Test ditambah (belum dijalankan)
+Vitest (`services/insight-web/tests`):
+- `session-logout.test.ts` (baru): `__Host-eis` + atribut; payload `eis1` byte-exact (7 kunci urut, UTF-8) dan sig `eis1.`; kunci ekstra/kurang, `exp-iat` > 28800, `iat` > now+30 (batas 30 dtk sah), klaim tak valid (codes/cids/roles/sub/name), **pemisahan domain** (sig berawalan `eit1.`, kunci SSO, token SSO bukan cookie), format cacat; `readCookie` (cookie tossing: `eis`, `x__Host-eis`); `POST /logout` (303 + hapus cookie; `Sec-Fetch-Site` cross-site/same-site → 403 tanpa menghapus).
+- `sso-handler-flow.test.ts` (baru): Origin salah / tanpa Origin **tidak membakar jti**; token sig-sah-klaim-buruk tidak menyimpan jti; kedaluwarsa/sig salah tidak menyimpan jti; nama non-ASCII utuh sampai cookie; `all_brands` cids kosong; 401 generik (header aman, tanpa alasan, tautan Odoo); content-type dengan charset diterima / text/plain & multipart ditolak; badan kosong / field bukan `t` / `t` ganda → 400; batas tepat 4096 vs 4097; urutan 404 > 503 (limiter tak terpakai); kunci sesi null → 503 tanpa cookie.
+- `proxy-gate.test.ts` (baru): `proxy()` dengan `NextRequest` — cookie sah → next + CSP; tanpa cookie / cookie rusak → **rewrite** `/sesi-berakhir` tanpa `Location` (+ hapus cookie bila rusak); kill switch (`false`, `1`, `True`, `yes`, kosong) → `/belum-aktif`; kunci hilang → `/belum-aktif`; halaman publik tanpa sesi; cookie bernama `eis` ditolak. **Risiko:** satu-satunya test yang memakai `next/server` + env/file sementara + reset `globalThis.__insightRuntime`; bila resolusi `next/server` di Vitest gagal, jalankan terpisah dan laporkan.
+- `semaphore.test.ts` (diubah): rentang env 1..24 (25 → 12, pecahan, negatif), beban 20 tugas tak melewati batas 3, batas tak valid ditolak saat konstruksi.
+pytest (`services/esb-extract/tests/test_insight_access.py`, statis): profil CREATE ≡ ALTER; `max_concurrent_queries_for_user` = `MAX` dan batas env semaphore ≤ batas profil, default < batas; nama secret lintas `secrets.list`/compose/`config.ts`/Odoo/clickhouse-init; port dev Odoo = port insight; varian Traefik `strict-origin` vs `no-referrer` + router yang memakainya + controller Odoo (satu `strict-origin`, default `no-referrer`, kill switch `== "true"`); docs/04 §26 memuat hardening terbaru (`__Host-eis`, `company_code != ''`, konkurensi, strict-origin, varian sso).
+Odoo (`efn_insight/tests`): `test_insight_sso.py` — kill switch untuk `1/yes/on/True/TRUE/""` + `Referrer-Policy: no-referrer` pada halaman info, tanpa token/audit saat mati, `all_brands` + company arsip (codes tetap 6, cids tanpa arsip), company non-aktif-di-pemilih ikut / company asing tidak, POST ke rute tidak menerbitkan token. `test_insight_token.py` — `verify_token` menolak kunci ekstra/kurang, aud/iss/v salah, umur 0/61, iat masa depan, codes asing, sig berpadding/`+`/`/`/kosong.
+
+### G42.4 Sisa risiko (tidak diperbaiki; keputusan desain / belum terverifikasi)
+1. **(P2) Rate limit `/sso` per IP dihitung sebelum cek Origin** (`sso-handler.ts:88` vs `:98`): permintaan lintas situs berulang dari satu IP (mis. NAT kantor) menghabiskan jatah 10/menit dan memblokir login sah di IP itu (429). Dampak rendah (hanya subnet staf), tetapi pertimbangkan menghitung hanya permintaan ber-Origin sah.
+2. **(P2) Semaphore per proses, satu user ClickHouse bersama:** dengan > 1 replika (L-124) atau klien lain di user `efn_insight`, batas efektif melewati 24 → galat 202; antrean 200/tunggu 20 dtk memunculkan kartu "timeout" bila banyak staf serentak. Perlu uji beban nyata (belum ada).
+3. **(P2) Cookie sesi stateless:** pencabutan akses user (Lina) berlaku ≤ 8 jam; pencabutan darurat memutus **semua** sesi (rotasi `insight_session_key`). Sesuai L-119/Q-INS5; harus diketahui pengguna bisnis (UAT L14).
+4. **(P3) Replika tunggal + restart = cache jti hilang** (C5). **(P3) `Sec-Fetch-Site` di `isOriginAllowed` diabaikan** (`void secFetchSite`) — parameter mati; aman, tetapi bersihkan agar tidak menyesatkan.
+5. **(P3) `X-Forwarded-For` paling kanan sebagai IP** (`rate-limit.ts:45-50`) bergantung Traefik menambahkan entri; di dev (tanpa Traefik di depan) semua klien = `unknown` bila header tidak ada — satu ember bersama 10/menit.
+6. **(P3) Ekspor CSV:** `max_result_rows` 200000 + `result_overflow_mode=throw` → CSV yang melebihi gagal 500 tanpa pesan ramah (UAT L24 hanya menguji kasus normal). Q-INS7 (siapa boleh ekspor) belum dijawab; saat ini semua pengguna berhak.
+7. **Belum terverifikasi runtime (oleh saya):** seluruh test baru; CSP + ECharts di browser nyata; perilaku `Origin` di Safari/Firefox untuk form POST lintas-origin dengan `strict-origin` (hanya Chromium diuji E2E); rewrite `proxy.ts` pada `next start` standalone di belakang sidecar TLS; `max_concurrent_queries_for_user` di ClickHouse versi lain.
+8. Production tetap ditahan (L-125): security review, DPO (nama di cookie, log audit Q-INS3), Q-INS1/4/7.
+
+### G42.5 UAT
+28 skenario Given/When/Then untuk pengguna bisnis (SSO, akses per PT, tiap halaman dashboard, kill switch, jaringan, privasi) di `docs/testing/UAT_SCENARIOS.md` bagian **L** (L1-L28), termasuk kasus negatif: tautan dipakai ulang/kedaluwarsa, tanpa grup/PT, Origin salah, cookie palsu, paksa PT lewat URL, ClickHouse mati, rate limit.

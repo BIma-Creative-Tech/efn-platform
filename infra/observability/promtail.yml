@@ -159,6 +159,12 @@ scrape_configs:
             - replace:
                 expression: '(fts1\.[A-Za-z0-9_.-]+)'
                 replace: '[TABLE_TOKEN_REDACTED]'
+            # (a0b) G42 (docs/04 §26.3/§26.5): token SSO Insight `eit1.<payload>.<sig>` (60 dtk) dan cookie sesi
+            #      `eis1.<payload>.<sig>` (8 jam; pemegangnya = sesi dashboard staf). insight-web/Odoo tidak pernah
+            #      me-log keduanya (kontrak); lapis kedua bila salah log body/header Cookie. Prefiks khas, tanpa batas kiri.
+            - replace:
+                expression: '(ei[ts]1\.[A-Za-z0-9_.-]+)'
+                replace: '[INSIGHT_TOKEN_REDACTED]'
             # (a) Parameter rahasia di query string / logfmt (SEC-73): token reset password Odoo, access_token
             #     self-order, presigned S3, dll. Traefik JSON menulis "&" sebagai "\u0026" (encoding/json) -> ikut
             #     dikenali; "?"/"&"/"=" boleh URL-encoded (%3F/%26/%3D, mis. redirect=%2Fweb%3Ftoken%3D...). Nilai = sampai &, spasi, kutip, backslash, #.

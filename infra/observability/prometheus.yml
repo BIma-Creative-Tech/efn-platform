@@ -215,6 +215,30 @@ scrape_configs:
       - target_label: __address__
         replacement: blackbox-exporter:9115
 
+  # G42 (docs/04 §26.6): health dashboard insight-web lewat sidecar mTLS (network insight-ingress). Job terpisah dari
+  # probe-internal: dashboard bukan jalur transaksi -> alert EfnInsightWebDown berderajat warning, bukan critical.
+  # Sertifikat tls_insight_web dipantau metrik textfile efn_internal_cert_expiry_timestamp_seconds (deploy.sh).
+  - job_name: probe-insight
+    metrics_path: /probe
+    scheme: https
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+      cert_file: /run/secrets/tls_server_crt
+      key_file: /run/secrets/tls_server_key
+      server_name: blackbox-exporter
+    params:
+      module: [https_internal]
+    static_configs:
+      - targets:
+          - https://insight-web:3443/api/health
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
   # Handshake TLS ke SETIAP listener internal: membuktikan TLS aktif + sertifikat cocok nama service + masa berlaku
   # (alert EfnInternalCertExpiring*). PostgreSQL (STARTTLS-like SSLRequest) dipantau lewat metrik textfile.
   - job_name: probe-internal-tls

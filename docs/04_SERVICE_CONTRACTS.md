@@ -1,4 +1,4 @@
-# KONTRAK ANTAR-SERVICE (v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
+# KONTRAK ANTAR-SERVICE (v18.0 — 18 Nov 2026, G42 §26 Insight web + SSO Odoo (token eit1 HMAC sekali pakai via POST form, cookie eis1, row policy `efn_insight_scope`, ADR-041 Proposed); v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -2634,3 +2634,365 @@ Semua view fakta membaca `FINAL` **dan** hanya versi slice yang punya checkpoint
   bukan lokasi produksi.
 - **Q-ESB9** (Legal/IT) Menurut kontrak ESB: hak EFN atas data dan penggunaan API untuk ekstraksi massal; apakah ESB
   menyediakan ekspor resmi/feed yang lebih ringan (ADR-040 opsi F)?
+
+## 26. Gelombang 42 — Insight web + SSO Odoo (ADR-041, Proposed) (v18.0, 18 Nov 2026)
+Dashboard staf **`insight-web`** (Next.js, terpisah dari superapp-web, **read-only**) di atas mart ESB (§25.6). Login
+dari Odoo (modul **`efn_insight`**) dengan token HMAC sekali pakai lewat **POST form**; sesi = cookie bertanda tangan;
+data dibatasi PT user Odoo lewat row policy ClickHouse bertanda tangan (pola §23.3, **kunci berbeda**). Odoo tidak
+pernah dihubungi insight-web dan sebaliknya; browser yang membawa token. Kill switch `INSIGHT_ENABLED=false` default.
+Metabase tetap untuk analis Holding (L-126).
+
+### 26.1 Alur
+```
+Browser staf (WireGuard)
+  1. GET  https://erp.<domain>/efn/insight/open            (sesi Odoo, auth='user')
+     Odoo: grup? INSIGHT_ENABLED? konfigurasi? -> codes/cids -> token eit1 (exp 60 dtk) -> audit (tanpa token)
+     <- 200 HTML: <form method="POST" action="{EFN_INSIGHT_URL}/sso"> hidden t=<eit1>, auto-submit + tombol "Lanjut"
+  2. POST https://insight.<domain>/sso   (application/x-www-form-urlencoded, t=<eit1>; header Origin = origin Odoo WAJIB)
+     insight-web: Origin (C1) -> format -> HMAC -> payload -> waktu -> jti -> codes
+     <- 303 Location: /   Set-Cookie: __Host-eis=eis1.<payload>.<sig>; Max-Age=28800; Path=/; HttpOnly; Secure; SameSite=Lax
+  3. GET  https://insight.<domain>/<halaman>?<filter>       (cookie eis)
+     insight-web (server): verifikasi cookie -> validasi filter -> query katalog -> ClickHouse HTTPS 8443
+        user efn_insight, DB efn_insight, SETTINGS SQL_efn_cids / SQL_efn_codes / SQL_efn_sig (dari cookie)
+     <- HTML/JSON halaman (data hanya PT dalam cakupan)
+```
+
+### 26.2 Odoo `efn_insight` (19.0.1.0.0, depends `efn_core`)
+- Grup: `efn_insight.group_insight_user` ("Insight: pengguna"), `efn_insight.group_insight_all_brands` ("Insight: semua
+  brand/Holding", `implied_ids` = pengguna). Tidak ada model data baru (tidak butuh record rule); bila log audit dibuat
+  sebagai model, wajib `company_id` + record rule (konvensi CLAUDE.md).
+- Menu "Dashboard Insight" → action `efn_insight.action_open` (URL action ke `/efn/insight/open`, target `self`).
+  Tautan kembali dari insight-web: **`{EFN_INSIGHT_ODOO_URL}/efn/insight/open`** (bukan deep link `/odoo/action-…`).
+- **`GET /efn/insight/open`** (`type='http'`, `auth='user'`, tanpa `sudo` untuk membaca cakupan selain membaca tabel relasi
+  seperti `efn_data_ask`):
+
+| Kondisi (urut) | Respons |
+|---|---|
+| Belum login | redirect login Odoo (perilaku `auth='user'`) |
+| Tanpa grup `group_insight_user` | **403** halaman Odoo standar |
+| `INSIGHT_ENABLED` ≠ `true` | 200 halaman "Insight belum diaktifkan" (tanpa token) |
+| `EFN_INSIGHT_URL` tidak valid atau kunci tidak terbaca/ < 64 hex | **503** halaman "Insight belum dikonfigurasi" (tanpa detail); log ERROR kode `insight_misconfigured` |
+| Cakupan kosong | 200 halaman "Tidak ada PT yang bisa ditampilkan untuk akun Anda" (tanpa token) |
+| OK | 200 HTML form auto-submit (§26.1) |
+
+- **Cakupan** (`ESB_CODES = {BCF, BCR, CUP, IMD, PB, WTZ}`):
+  - `group_insight_all_brands`: `codes` = keenam kode (tetap, **tidak** diturunkan dari `cids`); `roles =
+    ["all_brands"]`; `cids` = id **semua** company Odoo yang `efn_brand_code ∈ ESB_CODES` (IMD/CUP belum ada sampai G43
+    → tidak ada id-nya; L-120).
+  - lainnya: company = `user.company_ids` (dibaca dari tabel relasi m2m; id di luar `user.company_ids` ditolak) dengan
+    `efn_brand_code ∈ ESB_CODES`; `codes` = kode-kode tsb, `cids` = id-nya; `roles = ["user"]`. Bacha: BCF dan BCR masing-
+    masing kodenya sendiri. Company tanpa kode ESB (EFN, GL, FARM) diabaikan.
+  - `codes` dan `cids` unik, terurut naik (string ASCII / integer).
+- **Header respons halaman form** (dipasang controller sendiri, wajib): `Content-Security-Policy: default-src 'none';
+  script-src 'self'; form-action <origin EFN_INSIGHT_URL>; base-uri 'none'; frame-ancestors 'none'`,
+  `Cache-Control: no-store`, `Referrer-Policy: strict-origin` (**bukan** `no-referrer`: dengan no-referrer/same-origin
+  browser mengirim `Origin: null` pada POST lintas-origin sehingga cek C1 di `/sso` menolak login sah; strict-origin hanya
+  mengirim origin, tanpa path/query; diputuskan efn-lead 18 Nov 2026). Header yang sama dipasang **dua kali**: controller
+  Odoo dan Traefik router `odoo-insight-open` (`Host(erp.<domain>) && Path(/efn/insight/open)`, priority 220) dengan
+  middleware `internal-only` + **`secure-headers-insight-sso`** (`referrerPolicy: strict-origin`; middleware headers Traefik
+  menimpa nilai dari upstream, jadi varian umum `secure-headers` tidak boleh dipakai di router ini). Halaman info Odoo dan
+  semua halaman insight-web (middleware `secure-headers-insight`) tetap `no-referrer`. Auto-submit lewat **file JS statis** modul (tanpa inline
+  script/style); tombol "Lanjut" untuk browser tanpa JS. Token hanya di atribut `value` input tersembunyi `t`
+  (di-escape); tidak di URL, tidak di log, tidak disimpan.
+- **Audit**: setiap token yang dibuat dicatat ke **`ir.logging`** dengan `uid`, `codes`, `cids`, `roles`, `jti` (tanpa
+  token/sig, tanpa nama), waktu. Retensi = **Q-INS3** (usulan 400 hari).
+- **Kill switch**: `INSIGHT_ENABLED` aktif **hanya** bila string persis `true` (Odoo `controllers/main.py:_enabled` dan insight-web
+  `lib/config.ts` memakai aturan yang sama; `1`/`yes`/`on`/`True` = mati di kedua sisi; compose/deploy-validate hanya
+  meneruskan `true|false`). Satu saklar berlaku untuk Odoo dan insight-web.
+- Env Odoo: `EFN_INSIGHT_URL` (wajib `https://` kecuali `plaintext_allowed()` dev; tanpa path selain `/`, tanpa query/
+  kredensial), `EFN_INSIGHT_SSO_KEY_FILE` (default `/run/secrets/insight_sso_key`), `INSIGHT_ENABLED` (default `false`).
+
+### 26.3 Token SSO `eit1` (byte-exact)
+```
+token          = "eit1." + payload_b64 + "." + sig_b64
+payload_bytes  = json.dumps(PAYLOAD, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")  # Python
+payload_b64    = base64url(payload_bytes) tanpa "="            (RFC 4648 §5)
+sig            = HMAC-SHA256(key = KEY, msg = ASCII("eit1." + payload_b64))
+sig_b64        = base64url(sig) tanpa "="                        (selalu 43 karakter)
+```
+**Kunci HMAC (berlaku untuk `insight_sso_key`, `insight_session_key`, `insight_scope_key`)**: `KEY` = **byte ASCII dari
+string hex di file secret apa adanya setelah `strip()`** — **bukan** hasil hex-decode. Validasi saat start/baca: hanya
+`[0-9a-fA-F]`, panjang ≥ 64 karakter; gagal → fail closed (§26.10). (Untuk `insight_scope_key` string itu disisipkan ke
+`concat(...)` row policy, §26.7.)
+
+`PAYLOAD` — tepat 11 kunci berikut, diserialisasi **urut abjad** (`sort_keys=True`), tanpa kunci lain:
+
+| Kunci (urut abjad) | Tipe / nilai |
+|---|---|
+| `aud` | `"insight-web"` |
+| `cids` | array int > 0, unik, urut naik, 0..32 (≥ 1 bila `roles=["user"]`) |
+| `codes` | array string ⊆ `ESB_CODES`, unik, urut naik, 1..6 |
+| `exp` | int = `iat + 60` |
+| `iat` | int epoch detik (UTC) |
+| `iss` | `"odoo"` |
+| `jti` | `uuid4().hex` (32 hex kecil) |
+| `name` | string display name: hapus karakter kategori Unicode Cc/Cf/Zl/Zp, rapikan spasi, trim, potong **maks 64 code point**; kosong → `"-"` (non-ASCII menjadi `\uXXXX` karena `ensure_ascii=True`) |
+| `roles` | tepat `["user"]` atau `["all_brands"]` |
+| `sub` | int `res.users.id` (1..2^31−1) |
+| `v` | `1` |
+
+Penerima **tidak** menserialisasi ulang: HMAC dihitung atas `payload_b64` yang diterima, lalu payload di-decode.
+Tanpa email/login/telepon (PDP).
+
+**Vektor uji bersama (sintetis, bukan secret)** — dipakai test Odoo (pembuat) dan Vitest insight-web (pemverifikasi):
+```
+KEY (ASCII)   = "abababababababababababababababababababababababababababababababab"      ("ab" * 32, 64 karakter)
+payload JSON  = {"aud":"insight-web","cids":[3,5],"codes":["BCF","PB"],"exp":1795000060,"iat":1795000000,"iss":"odoo","jti":"0123456789abcdef0123456789abcdef","name":"Budi Uji","roles":["user"],"sub":7,"v":1}
+payload_b64   = eyJhdWQiOiJpbnNpZ2h0LXdlYiIsImNpZHMiOlszLDVdLCJjb2RlcyI6WyJCQ0YiLCJQQiJdLCJleHAiOjE3OTUwMDAwNjAsImlhdCI6MTc5NTAwMDAwMCwiaXNzIjoib2RvbyIsImp0aSI6IjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIiwibmFtZSI6IkJ1ZGkgVWppIiwicm9sZXMiOlsidXNlciJdLCJzdWIiOjcsInYiOjF9
+sig_b64       = WSDaF4H2YlaMeKTB73SwsefWHIQi8ywZb8DB2HnGBZc
+sig_b64 (NEGATIF, kunci hex-decode, harus DITOLAK) = i5CARcXxPFdTmGd6vttMWHrYS0VkI0UHJj07imyQJkM
+```
+Prosedur (hasil Python dan Node **wajib identik** — diverifikasi efn-lead 18 Nov 2026: Python 3.14 dan Node 22 menghasilkan nilai di atas):
+```python
+import base64, hashlib, hmac, json
+b64 = lambda b: base64.urlsafe_b64encode(b).rstrip(b"=").decode("ascii")
+p = {"v": 1, "aud": "insight-web", "iss": "odoo", "sub": 7, "name": "Budi Uji", "codes": ["BCF", "PB"], "cids": [3, 5],
+     "roles": ["user"], "iat": 1795000000, "exp": 1795000060, "jti": "0123456789abcdef0123456789abcdef"}
+pb = json.dumps(p, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+pl = b64(pb); sig = b64(hmac.new(("ab" * 32).encode("ascii"), ("eit1." + pl).encode("ascii"), hashlib.sha256).digest())
+print(pb.decode()); print(pl); print(sig); print("eit1." + pl + "." + sig)
+```
+```js
+const c = require("node:crypto");
+const pb = Buffer.from('{"aud":"insight-web","cids":[3,5],"codes":["BCF","PB"],"exp":1795000060,"iat":1795000000,"iss":"odoo","jti":"0123456789abcdef0123456789abcdef","name":"Budi Uji","roles":["user"],"sub":7,"v":1}', "ascii");
+const pl = pb.toString("base64url");
+const sig = c.createHmac("sha256", Buffer.from("ab".repeat(32), "ascii")).update("eit1." + pl, "ascii").digest("base64url");
+console.log(pl); console.log(sig); console.log(`eit1.${pl}.${sig}`);
+```
+Baris pertama keluaran Python harus sama persis dengan `payload JSON` di atas. Test negatif dari vektor yang sama:
+kunci hex-decode (`bytes.fromhex("ab"*32)`) harus menghasilkan sig **berbeda** (memastikan tidak ada yang hex-decode).
+
+### 26.4 insight-web `POST /sso`
+- Urutan pemeriksaan sebelum token: (a) `INSIGHT_ENABLED` ≠ `true` → **404** teks polos (bukan 503; kill switch menang atas
+  semua pemeriksaan lain, tidak menyentuh rate limit/jti); (b) kunci SSO/sesi atau `EFN_INSIGHT_ODOO_URL` tidak tersedia →
+  **503** halaman "Insight belum dikonfigurasi" (log `misconfigured`); (c) rate limit → **429**; (d) **Origin (C1)**;
+  (e) content type/ukuran/field.
+- **Origin wajib (C1, diputuskan efn-lead 18 Nov 2026)**: header `Origin` harus **ada** dan sama persis dengan origin
+  `EFN_INSIGHT_ODOO_URL` (skema + host + **port**). Tanpa `Origin`, `Origin: null`, atau origin lain → **401** generik
+  (kode log `bad_origin`), **sebelum** token diperiksa sehingga `jti` tidak terbakar. `Sec-Fetch-Site` tidak dipakai di `/sso`
+  (hanya `POST /logout`: `cross-site`/`same-site` → 403). Syarat sisi Odoo: halaman form memakai `Referrer-Policy:
+  strict-origin` (§26.2), kalau tidak browser mengirim `Origin: null` dan login sah ditolak.
+- Body `application/x-www-form-urlencoded` (boleh `; charset=...`) ≤ 4 KiB, tepat satu field `t` (ganda/tambahan → 400).
+  Method lain → 405; content type/ukuran/field salah → 400.
+- Validasi berurutan (gagal di langkah mana pun → **401** halaman generik "Tautan masuk tidak valid atau sudah dipakai"
+  + tautan ke `{EFN_INSIGHT_ODOO_URL}/efn/insight/open`; alasan rinci hanya di log sebagai kode):
+  1. `t` cocok `^eit1\.[A-Za-z0-9_-]{16,2048}\.[A-Za-z0-9_-]{43}$`.
+  2. HMAC-SHA256(`insight_sso_key`, `"eit1." + payload_b64`) dibandingkan dengan sig hasil decode (32 byte) memakai
+     `crypto.timingSafeEqual`.
+  3. Decode payload → JSON object dengan **tepat 11 kunci** §26.3 (kunci lain/kurang → tolak); tipe & nilai sesuai tabel;
+     `v=1`, `aud="insight-web"`, `iss="odoo"`.
+  4. Waktu (`now` = epoch detik server): `iat ≤ now + 30`, `now < exp`, `1 ≤ exp − iat ≤ 60`.
+  5. `jti` belum ada di cache; bila lolos semua → simpan `jti` dengan TTL 120 dtk (cache memori, **replika = 1**, L-124).
+  6. `codes` ⊆ `ESB_CODES`, `cids` sesuai aturan `roles`.
+- Sukses → **303** `Location: /` + `Set-Cookie` §26.5. Rate limit `/sso`: per IP sumber, usulan 10 permintaan/menit
+  (memori) → **429** + `Retry-After`. `jti` disimpan **hanya** bila seluruh validasi lolos (token yang ditolak tidak
+  membakar `jti`). Halaman/route data (bukan `/sso`) saat `INSIGHT_ENABLED` ≠ `true` → halaman "belum diaktifkan"
+  (`/belum-aktif`), route data 503.
+- Log: kode hasil (`ok`, `bad_format`, `bad_sig`, `bad_claims`, `expired`, `replay`, `rate_limited`, `bad_origin`, `bad_request`,
+  `misconfigured`), `sub`, `jti`
+  (setelah sig valid), durasi. **Tidak pernah**: token, sig, cookie, header `Cookie`.
+
+### 26.5 Cookie sesi `eis1`
+```
+cookie name    = "__Host-eis"                                    // C2: prefix __Host- (Secure, Path=/, tanpa Domain); "eis" polos TIDAK diterima
+cookie value   = "eis1." + payload_b64 + "." + sig_b64
+payload_bytes  = UTF-8(JSON.stringify(PAYLOAD))        // kunci urut abjad: cids, codes, exp, iat, name, roles, sub
+sig            = HMAC-SHA256(key = byte ASCII string hex insight_session_key setelah strip (bukan hex-decode, §26.3),
+                             msg = ASCII("eis1." + payload_b64))
+```
+`PAYLOAD` = `{"cids","codes","exp","iat","name","roles","sub"}` (objek dibangun dalam urutan itu) disalin dari token (`sub`, `name`, `codes`, `cids`,
+`roles`), `iat` = waktu login insight-web, `exp = iat + 28800` (8 jam). Atribut: `Max-Age=28800; Path=/; HttpOnly;
+Secure; SameSite=Lax` (tanpa `Domain`).
+- **Setiap** request halaman/route data memverifikasi: regex `^eis1\.[A-Za-z0-9_-]{16,2048}\.[A-Za-z0-9_-]{43}$`,
+  HMAC (`timingSafeEqual`), tepat 7 kunci, `iat ≤ now + 30`, `now < exp`, `exp − iat ≤ 28800`, `codes` ⊆ `ESB_CODES`.
+  Gagal/kedaluwarsa → halaman "Sesi berakhir, buka lagi dari Odoo" (tautan `{EFN_INSIGHT_ODOO_URL}/efn/insight/open`),
+  cookie dihapus. Route data (JSON/CSV)
+  → 401 tanpa body rinci.
+- **Gerbang sesi = `proxy.ts` (Next 16) memakai REWRITE internal, bukan redirect**: cookie hilang/tidak valid → isi halaman
+  `/sesi-berakhir` (URL browser tetap, tanpa header `Location`; cookie tidak valid dihapus); kill switch mati / kunci sesi
+  tidak terbaca → `/belum-aktif`. Alasan: redirect dengan `Location` relatif membuat proxy Next melempar `Invalid URL`
+  (500, temuan uji E2E G42) dan URL absolut dari `request.url` memuat host internal di belakang sidecar TLS.
+  Halaman dan route data memverifikasi cookie lagi sendiri (lapis kedua). Halaman publik: `/belum-aktif`,
+  `/sesi-berakhir`, `/keluar`; route `/api/*`, `/sso`, `/logout` di luar proxy.
+- `INSIGHT_ENABLED` ≠ `true` → semua halaman/route data **menolak**, termasuk cookie yang masih berlaku.
+- Logout: `POST /logout` (hanya same-origin atau tanpa `Sec-Fetch-Site`; lintas situs → 403) → `Set-Cookie: __Host-eis=;
+  Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax` → 303 ke halaman
+  "Anda sudah keluar". Tidak ada penyimpanan sesi server; pencabutan darurat = rotasi `insight_session_key`.
+
+### 26.6 Endpoint lain insight-web
+| Endpoint | Auth | Respons |
+|---|---|---|
+| `GET /api/health` | tanpa | 200 `{"status":"ok"}`; tidak menyentuh ClickHouse, tanpa versi/detail |
+| Halaman §26.8 | cookie | HTML (server component); data diambil di server |
+| `GET /api/export/<tabel>?<filter>` | cookie | `text/csv; charset=utf-8` (BOM, escape formula C3), filter & cakupan sama dengan halaman; maks `max_result_rows` profil; 401 (cookie), 503 (mati), 404 (nama tabel), 500 (galat) tanpa badan. Tabel: `branch-rank flow-outliers flow-products top-menu menu-mix-branch pay-methods pay-branches dist-matrix dist-gap dq-freshness dq-alias dq-no-sales dq-non-ea dq-last-run` (README insight-web) |
+| `POST /sso`, `POST /logout` | lihat §26.4, §26.5 | — |
+
+Header semua respons: CSP ketat tanpa `unsafe-eval` (gaya ECharts diuji; `unsafe-inline` untuk style hanya bila terbukti
+perlu dan dicatat), `frame-ancestors 'none'`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`.
+
+### 26.7 ClickHouse `efn_insight` (`infra/clickhouse/access/insight-access.sql`, `clickhouse-init.sh`)
+- User **`efn_insight`** (secret `clickhouse_password_insight`), role **`insight_reader`**, profil **`insight_readonly`**:
+  `readonly=2` CONST, `allow_ddl=0`, `allow_introspection_functions=0`, `max_execution_time` 30 s (MAX 60),
+  `max_result_rows` 200000 (`result_overflow_mode=throw`), `max_memory_usage` dibatasi (nilai di DDL), kuota per jam,
+  **`max_concurrent_queries_for_user = 24 MAX 24`**. `REVOKE ALL ON efn_dwh.*` dan `efn_esb.*`.
+  Satu user ClickHouse dipakai **semua staf** dan satu halaman memicu 9–13 query paralel; nilai awal 8 gagal di uji E2E
+  G42 (galat 202 `TOO_MANY_SIMULTANEOUS_QUERIES`). Karena itu insight-web membatasi dirinya sendiri dengan **semaphore per
+  proses** (`INSIGHT_CH_MAX_CONCURRENCY`, 1..24, **default 12**; harus ≤ 24; antrean maks 200, tunggu maks 20 dtk →
+  kartu galat "timeout" pada blok itu, bukan error halaman), sehingga ekspor CSV paralel tetap muat. Profil
+  `CREATE ... IF NOT EXISTS` dan `ALTER SETTINGS PROFILE` di `insight-access.sql` wajib identik (deploy lama vs baru).
+- Definer `efn_insight_definer` `NOT IDENTIFIED HOST NONE` dengan `GRANT SELECT` **per objek** (bukan `efn_dwh.*`): 9 view
+  `efn_dwh.v_esb_*`, 10 tabel `efn_dwh.*esb*`, `efn_esb.extract_checkpoint`, `efn_esb.extract_run` — tanpa mart Odoo/GL/audit,
+  `efn_esb.raw_doc`, `bom_ratio` (daftar diuji `test_insight_access.py`); view
+  `SQL SECURITY DEFINER` dengan kolom eksplisit; `GRANT SELECT ON efn_insight.* TO insight_reader` (wildcard) —
+  `clickhouse-init.sh` memverifikasi **setiap** view `efn_insight` punya row policy dan **mencabut grant + gagal** bila ada yang tidak.
+
+| View `efn_insight.*` | Sumber | Catatan |
+|---|---|---|
+| `v_esb_sales_daily` | `efn_dwh.v_esb_sales_daily` | kolom §25.6; `trx_count` **per menu** — jangan dijumlah lintas menu |
+| `v_esb_sales_branch_daily` | `efn_dwh.v_esb_sales_branch_daily` (baru, G42) | cabang-hari: `trx_count` = struk unik (`uniqExact(sales_num)`), `line_count`, qty, gross, discount, net, cogs; sumber KPI Transaksi / rata-rata per transaksi (Q-INS2) |
+| `v_esb_payment_daily` | `efn_dwh.v_esb_payment_daily` | |
+| `v_esb_flow_daily` | `efn_dwh.v_esb_flow_daily` | semantik L-116 |
+| `v_esb_menu_mix` | `efn_dwh.v_esb_menu_mix` | |
+| `v_esb_data_quality` | `efn_dwh.v_esb_data_quality_pt` (baru, G42) | baris tingkat brand (`company_code=''`: `data_age_hours`, `last_run_not_ok`) **diperluas** ke kode PT brand secara **dinamis** dari `SELECT DISTINCT brand, company_code FROM dim_esb_branch FINAL` (Bacha → BCF dan BCR; ikut override cabang Q-ESB3; brand tanpa cabang → baris tidak muncul = "Tidak diketahui") — L-123. Pemetaan statis `pb→PB…` pada draf diganti ini |
+| `v_esb_branch_list` | view baru `efn_dwh` dari `dim_esb_branch` | `brand, company_code, branch_id, branch_code, branch_name, is_ck, is_store, active` (filter cabang) |
+| `v_esb_product_list` | view baru `efn_dwh` dari `dim_esb_product` × PT cabang brand | `brand, company_code, product_code, product_name, category, uom, is_fin, active`; PT dari `dim_esb_branch` (bukan `dim_esb_product.company_code` = PT default brand); kategori menu dari `list_categories` (sales_daily) |
+
+Delapan view (rinci kolom & grain: `docs/design/insight-web-queries.md` §2, yang menang atas tabel ini).
+
+- **Row policy** (dibuat `clickhouse-init.sh` per view di atas; kunci dari `/run/secrets/insight_scope_key` — string hex
+  apa adanya setelah strip, `[0-9a-fA-F]` ≥ 64 karakter (kontrak kerja menyebut ≥ 32; dipilih yang lebih ketat agar sama
+  dengan §26.10), divalidasi sebelum disisipkan ke DDL):
+```sql
+CREATE ROW POLICY OR REPLACE efn_insight_scope ON efn_insight.<view>
+  USING company_code != ''                                  -- C4: defense in depth (splitByChar(',', '') = [''])
+    AND has(splitByChar(',', getSetting('SQL_efn_codes')), company_code)
+    AND getSetting('SQL_efn_sig') = lower(hex(SHA256(concat('<insight_scope_key>', '|',
+        getSetting('SQL_efn_cids'), '|', getSetting('SQL_efn_codes')))))
+  TO insight_reader;
+```
+- Setting (dihitung server dari cookie, **tidak pernah** dari input browser): `SQL_efn_cids` = `cids` dipisah koma
+  (boleh string kosong untuk `all_brands` tanpa company), `SQL_efn_codes` = `codes` dipisah koma, `SQL_efn_sig` =
+  `hex(SHA256(insight_scope_key + "|" + cids + "|" + codes))` huruf kecil. Format = text2sql
+  (`services/text2sql/efn_text2sql/scope.py`; vektor `"ab"*16 + "|1,3|BCR,PB"` di `tests/test_scope.py` wajib lolos di
+  Vitest), **kunci berbeda**. Tanpa setting / sig salah → error atau 0 baris (fail closed).
+- Test negatif wajib (ClickHouse 24.8): scope {PB} tidak melihat WTZ; sig salah → 0 baris; tanpa setting → error/0 baris;
+  `efn_insight` tidak bisa `SELECT efn_dwh.*`; baris `company_code=''` tidak terlihat oleh cakupan mana pun.
+
+### 26.8 Halaman & katalog query
+Semua query = **konstanta bernama** di `lib/queries` (katalog), parameter hanya lewat placeholder bertipe ClickHouse
+`{name:Type}` + `param_<name>`; tidak ada SQL/identifier dari pengguna; setiap query memfilter `company_code IN {pt:Array(String)}`
+(lapis 1) di samping row policy (lapis 2). Nama di bawah = kanonik; tambahan wajib masuk katalog + README.
+
+| # | Halaman (path) | Query katalog | View |
+|---|---|---|---|
+| 1 | Ringkasan eksekutif (`/`) | `exec_kpi` (net, trx, rata-rata/trx, HPP % = cogs/net, vs periode lalu panjang sama), `exec_trend_daily`, `exec_branch_rank` (top/bottom) | sales_daily |
+| 2 | Produksi vs penjualan (`/flow`) | `flow_summary`, `flow_by_branch`, `flow_by_product`, `flow_outliers` (sell-through ekstrem; turunan §25.6) | flow_daily |
+| 3 | Penjualan & menu mix (`/sales`) | `sales_by_weekday`, `sales_by_category`, `sales_channel_split` (takeaway vs dine-in), `sales_top_menu`, `menu_mix_by_branch` | sales_daily, menu_mix |
+| 4 | Pembayaran (`/payments`) | `pay_by_method`, `pay_mdr`, `pay_trend` | payment_daily |
+| 5 | Distribusi & stok (`/distribution`) | `dist_ck_delivery` (ck_out/in_ck/in_other), `dist_transfer` (st_out/st_in) — hanya produk FIN (batas §25.6) | flow_daily |
+| 6 | Kualitas data (`/data-quality`) | `dq_freshness`, `dq_last_run`, `dq_alias_unmapped`, `dq_non_ea`, `dq_store_no_sales` | data_quality |
+| 7 | Forecast (`/forecast`) | — placeholder "Segera (G44)" | — |
+| — | Filter | `list_branches`, `list_categories`, `list_products` | branch_list, product_list |
+
+Per jam tidak tersedia (L-112).
+
+Rekonsiliasi nama (diverifikasi terhadap `lib/queries.ts`, 36 query, dijalankan di ClickHouse 24.8 oleh lead): `pay_mdr` **tidak**
+ada sebagai query terpisah (satu `pay_by_method` melayani bauran metode dan tabel MDR); `sales_menu_daily` (sparkline/drawer
+di katalog data-engineer) **belum dibuat**; `dq_status_board` tidak dipakai (papan status dihitung dari jumlah baris tabel
+temuan). Query tambahan di luar tabel: `exec_pt_share`, `exec_sell_through`, `exec_attention` (dicadangkan),
+`flow_daily_trend`, `flow_product_daily`, `sales_kpi`, `sales_weekday_heatmap`, `pay_kpi`, `pay_by_branch`, `dist_kpi`,
+`dist_transfer_top_products`, `dist_ck_gap_by_product`. SQL dan nama view menurut `docs/design/insight-web-queries.md`.
+
+### 26.9 Filter global (URL search params, divalidasi server; nilai tidak valid → default, bukan error)
+| Param | Format | Aturan |
+|---|---|---|
+| `from`, `to` | `YYYY-MM-DD` | `from ≤ to ≤ H-1` (WIB); rentang ≤ 366 hari; default 30 hari terakhir s.d. H-1 |
+| `pt` | kode dipisah koma | ⊆ `codes` sesi (di luar sesi dibuang); kosong = semua `codes` sesi |
+| `branch` | `brand:branch_id` dipisah koma, maks 50 | `brand` ∈ {pb,wtz,bacha,imd,cup}, `branch_id` UInt32 (branchID hanya unik per brand, §25.5) |
+| `cat` | string ≤ 64, maks 20 | dicocokkan sebagai parameter, bukan identifier |
+| `product` | `[A-Za-z0-9:_ .-]{1,64}`, maks 20 | termasuk bentuk `NAME:<alias>` |
+
+### 26.10 Env & secret
+| Env (insight-web) | Default | Arti |
+|---|---|---|
+| `INSIGHT_ENABLED` | `false` | kill switch, aktif hanya bila persis `true` (§26.2, §26.4, §26.5); sama di Odoo |
+| `APP_ENV` | — | `production` menolak `CH_URL` non-https |
+| `INSIGHT_CH_MAX_CONCURRENCY` | `12` | batas query ClickHouse bersamaan per proses; 1..24 (≤ `max_concurrent_queries_for_user` profil, §26.7); di luar rentang → 12 |
+| `EFN_ALLOW_PLAINTEXT` | — | hanya dev non-production: izinkan `http://` ke ClickHouse/Odoo; diabaikan bila `APP_ENV`/`NODE_ENV=production` |
+| `NODE_TLS_REJECT_UNAUTHORIZED` | — | `0` ditolak di production |
+| `CH_URL` / `CH_USER` / `CH_PASSWORD_FILE` | `https://clickhouse:8443` / `efn_insight` / `/run/secrets/clickhouse_password_insight` | ClickHouse HTTPS, DB `efn_insight` |
+| `INSIGHT_SCOPE_KEY_FILE` | `/run/secrets/insight_scope_key` | tanda tangan cakupan |
+| `INSIGHT_SSO_KEY_FILE` | `/run/secrets/insight_sso_key` | verifikasi `eit1` |
+| `INSIGHT_SESSION_KEY_FILE` | `/run/secrets/insight_session_key` | cookie `eis1` |
+| `EFN_INSIGHT_ODOO_URL` | — | tautan kembali ke Odoo (https) **dan** origin yang diizinkan untuk `POST /sso` (C1: skema+host+port persis; dev `https://erp.efn.local:9443`); wajib terisi saat `INSIGHT_ENABLED=true` |
+| `NODE_EXTRA_CA_CERTS` | `/run/secrets/efn_ca_crt` | CA internal |
+| `PORT` / `HOSTNAME` | `3002` / `127.0.0.1` | di belakang sidecar `insight-web-tls` |
+
+| Secret (random hex ≥ 64, `gen-secrets`) | Di-mount ke |
+|---|---|
+| `insight_sso_key` | odoo, insight-web |
+| `insight_session_key` | insight-web |
+| `insight_scope_key` | insight-web, clickhouse-init |
+| `clickhouse_password_insight` | insight-web, clickhouse-init |
+
+Kunci yang tidak terbaca, kosong, placeholder, atau < 64 karakter → komponen menolak start / fitur nonaktif (fail closed).
+Ketiga kunci HMAC (`insight_sso_key`, `insight_session_key`, `insight_scope_key`) wajib **saling berbeda**: insight-web menolak
+start (exit 1) bila kembar, dicek selalu untuk file yang ada (juga saat `INSIGHT_ENABLED=false`); `clickhouse-init`
+menolak bila `insight_scope_key` = `text2sql_scope_key`.
+
+### 26.11 Infra & gerbang
+- Service `insight-web` + sidecar ghostunnel `insight-web-tls` (cert PKI `insight-web|server`, `--allow-cn=traefik` dan
+  `blackbox-exporter`), profil `data`; network **hanya** `insight-ingress` (traefik, insight-web, blackbox-exporter) dan
+  `insight-data` (insight-web, clickhouse) — tanpa `egress`, tanpa PostgreSQL/RabbitMQ/Odoo. Hardening sama superapp-web
+  (non-root, `read_only`, `cap_drop: ALL`, `no-new-privileges`), memori 512M, replika 1.
+- Traefik: `Host(insight.${TRAEFIK_DOMAIN})`, entrypoint `wg-https`, middleware **`internal-ops@file` +
+  `secure-headers-insight@file` (`no-referrer`) + `ratelimit-insight@file`** **sampai Q-INS4 dijawab** (kontrak kerja menyebut
+  `internal-only` untuk manajer outlet; usulan architect: mulai dari jaringan staf saja, sama Metabase), serversTransport
+  `efn-insight-web@file`, `ACME_DOMAINS`. Router form Odoo `odoo-insight-open` memakai `secure-headers-insight-sso` (§26.2).
+  Konsekuensi Q-INS4: manajer di jaringan outlet mendapat 403 Traefik di `insight.` setelah Odoo membuat token (disengaja).
+- `deploy-validate`/`check-encryption`: `INSIGHT_ENABLED` boolean, default `false` di prod; secret §26.10 hanya di service
+  yang tercantum; insight-web tidak di `egress`.
+
+### 26.12 Keputusan (L-117..L-126) dan pertanyaan klien (Q-INS1..Q-INS9)
+| # | Keputusan |
+|---|---|
+| L-117 | Dashboard staf = app Next.js `insight-web` terpisah dari superapp-web, read-only, profil `data` (K25-02), hanya jaringan WireGuard. |
+| L-118 | SSO = token `eit1` HMAC-SHA256 (`insight_sso_key`, hanya Odoo + insight-web) umur 60 dtk, `jti` sekali pakai, lewat **POST form** (tidak di query string, tidak via cookie Odoo, tanpa jalur jaringan insight-web ↔ Odoo). OIDC/IdP = opsi masa depan (ADR-041 §2.2). |
+| L-119 | Sesi = cookie stateless `eis1` 8 jam dengan kunci terpisah `insight_session_key`; perubahan grup/PT di Odoo berlaku saat sesi berikutnya; pencabutan darurat = rotasi kunci atau `INSIGHT_ENABLED=false`. |
+| L-120 | Cakupan = kode PT ESB dari **semua** `user.company_ids` (bukan hanya company aktif di switcher; Q-INS2); grup semua brand = `{BCF,BCR,CUP,IMD,PB,WTZ}` tetap (IMD/CUP sebelum G43, tidak diturunkan dari `cids`) dengan `cids` = semua company Odoo berkode ESB; tidak ada kode → tidak ada token. Audit pembukaan di `ir.logging` (uid, codes, roles, jti). |
+| L-121 | Row policy `efn_insight_scope` per `company_code` + tanda tangan format text2sql dengan kunci sendiri `insight_scope_key`; `cids` ikut ditandatangani untuk mart Odoo setelah G43. |
+| L-122 | Query hanya dari katalog bernama dengan parameter bertipe ClickHouse; tidak ada SQL dari pengguna; filter ganda (aplikasi + row policy). |
+| L-123 | `efn_insight.v_esb_data_quality` memetakan baris tingkat brand ke kode PT brand (Bacha → BCF dan BCR); baris `company_code=''` tidak pernah terlihat. |
+| L-124 | Replika insight-web = 1; cache `jti` + rate limit di memori. Multi-replika butuh Redis (gelombang berikut). |
+| L-125 | `INSIGHT_ENABLED=false` default (Odoo + insight-web); production menunggu review security, DPO (nama tampilan di cookie, log audit), Q-ESB1/7/9, Q-INS1, Q-INS4. |
+| L-126 | Metabase tetap untuk analis Holding; SEC-182 ditutup bila akses Metabase dibatasi grup Holding (Q-INS8). |
+
+- **Q-INS1** (Pemilik/HR) Siapa yang mendapat grup *Insight: pengguna* (mis. manajer outlet, operasional, planner per
+  PT) dan grup *Insight: semua brand/Holding* (mis. Direksi, Finance Holding, planner pusat)? Apakah penetapan grup
+  semua brand butuh persetujuan kedua (4-eyes, R-S16)?
+- **Q-INS2** (Pemilik) Cakupan = **semua** PT di `company_ids` user (rekomendasi; satu sesi untuk semua PT yang boleh
+  diakses) atau hanya company yang sedang aktif di switcher Odoo saat menu dibuka?
+- **Q-INS3** (DPO) Retensi log audit pembukaan Insight di `ir.logging` (uid, kode PT, peran, jti, waktu; tanpa nama) —
+  usulan **400 hari** — dan pencatatan di inventaris PDP.
+- **Q-INS4** (IT klien/Ops) Bolehkah manajer outlet membuka Insight dari **jaringan outlet** (`internal-only`), atau
+  hanya dari jaringan staf WireGuard (`internal-ops`, default sementara)?
+- **Q-INS5** (Pemilik/Security) Durasi sesi 8 jam diterima? (Lebih pendek = pencabutan lebih cepat, lebih sering buka
+  ulang dari Odoo.)
+- **Q-INS6** (Ops) Perlukah pembatasan **per cabang** (manajer outlet hanya cabangnya)? Saat ini per PT.
+- **Q-INS7** (Pemilik/DPO) Ekspor CSV untuk semua pengguna Insight atau grup tertentu saja?
+- **Q-INS8** (Pemilik/Finance) Konfirmasi Metabase hanya untuk analis Holding setelah Insight aktif (SEC-182).
+- **Q-INS9** (Security) Jadwal rotasi `insight_sso_key` / `insight_session_key` (usulan 90 hari + segera bila dicurigai bocor).
+
+### 26.13 Celah yang dicatat architect — **keputusan efn-lead 18 Nov 2026: C1–C4 DITERIMA dan wajib diimplementasikan; C5–C7 diterima sebagai risiko tercatat**
+Status implementasi (QA G42, baca kode): **C1** `lib/origin-guard.ts` + `sso-handler.ts` (Origin wajib, lebih ketat dari usulan);
+**C2** `lib/session.ts` (`__Host-eis`); **C3** `lib/csv.ts`; **C4** `clickhouse-init.sh` (`company_code != ''`). Semua bertest
+(Vitest / `test_insight_access.py`).
+| # | Celah | Usulan |
+|---|---|---|
+| C1 | **Login CSRF / tukar sesi**: `POST /sso` menerima POST lintas situs; orang dalam dengan token sah miliknya bisa membuat korban masuk dengan sesi si penyerang (korban melihat cakupan penyerang). Dampak rendah, tetapi membingungkan audit. | Tolak bila header `Origin` ada dan ≠ origin `EFN_INSIGHT_ODOO_URL` (atau `Sec-Fetch-Site` = `cross-site` dari origin lain). |
+| C2 | **Cookie tanpa prefix**: nama `eis` bisa ditimpa subdomain lain di domain yang sama (cookie tossing). | Nama `__Host-eis` (syarat `Secure`, `Path=/`, tanpa `Domain` sudah terpenuhi). |
+| C3 | **CSV/formula injection**: nama menu/cabang/produk dari ESB (data eksternal) diekspor ke CSV. | Sel yang diawali `=`, `+`, `-`, `@`, tab, CR diberi awalan `'`. |
+| C4 | **Defense in depth row policy**: `splitByChar(',', '')` menghasilkan `['']` sehingga baris `company_code=''` cocok bila `codes` kosong ber-sig sah. Saat ini tidak mungkin (codes 1..6), tetapi bergantung pada aplikasi. | Tambah `AND company_code != ''` di `USING`. |
+| C5 | **Restart = cache `jti` hilang** → token ≤ 60 dtk bisa dipakai ulang sekali setelah restart (L-124). | Diterima di replika tunggal; dicatat; Redis saat multi-replika. |
+| C6 | **Jam lintas mesin** (K25-02): Odoo dan insight-web di host berbeda; toleransi 30 dtk. | NTP wajib di kedua host (runbook devsecops); alert selisih > 10 dtk (usulan). |
+| C7 | **Blast radius insight-web**: container memegang `insight_scope_key` + password ClickHouse → kompromi = semua PT mart ESB; row policy hanya melindungi dari bug aplikasi. | Diterima (sama text2sql); network hanya ke ClickHouse, tanpa egress, `read_only`. |

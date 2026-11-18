@@ -95,6 +95,8 @@ services:
       # G20 E-38a (ADR-036 §0.5 Accepted, docs/04 §12.5): kunci HMAC token nama (efn_name_tokens) - kunci KETIGA, terpisah
       # dari bidx (SEC-140 c). Hanya odoo. Default efn_pii juga mencari <EFN_ODOO_PII_KEY_DIR>/odoo_pii_name_key.
       EFN_ODOO_PII_NAME_KEY_FILE: /run/secrets/odoo_pii_name_key
+      # G42 (docs/04 §26.2): URL insight-web lewat wg-https dev (port 9443). INSIGHT_ENABLED dari .env (default false).
+      EFN_INSIGHT_URL: https://insight.efn.local:9443
     secrets: [odoo_pii_key_v1, odoo_pii_bidx_key, odoo_pii_name_key]   # digabung dengan daftar secret base
 
   api-gateway:
@@ -188,6 +190,17 @@ services:
     deploy:
       resources:
         limits: { memory: 1024M }
+
+  # G42 (docs/04 §26): dashboard Insight. Image produksi (target runtime, `next start` standalone) - belum ada stage dev
+  # hot reload; rebuild: `docker compose ... build insight-web`. Akses: https://insight.efn.local:9443 (hosts ->
+  # 127.0.0.1), masuk dari Odoo dev menu "Dashboard Insight". Port sidecar tidak dipublish (mTLS CN traefik saja).
+  # INSIGHT_ENABLED=true di .env lokal untuk uji (runbook insight-web.md §2).
+  insight-web:
+    image: efn/insight-web:dev
+    environment:
+      APP_ENV: dev
+      # Origin Odoo yang diizinkan untuk POST /sso (C1) harus persis origin halaman form Odoo dev (dengan port).
+      EFN_INSIGHT_ODOO_URL: https://erp.efn.local:9443
 
   clickhouse:
     ports: ["127.0.0.1:18443:8443", "127.0.0.1:9440:9440"]    # https (host 18443: 8443 dipakai odoo), native TLS

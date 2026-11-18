@@ -815,3 +815,51 @@ G41–G44, prototipe `aggregate.py` (kode saja; data klien tidak dibaca), spec p
 - **Belum terverifikasi:** semua fakta API production berasal dari prototipe (bukan uji ulang saya); `stock-list` di
   production; tidak ada endpoint penjualan per jam (belum dicari tuntas di spec 9,6 MB); estimasi beban & biaya =
   perkiraan architect; jumlah toko total per brand tidak diketahui; DDL & kode G41 belum ada; Mermaid tidak dirender.
+
+# G42 — Insight web + SSO Odoo: ADR-041, kontrak §26 (2026-11-18)
+Branch `feat/wave-42-insight-web`, tanpa commit, hanya `docs/**`. Sumber: kontrak kerja G42 efn-lead, ADR-038/040,
+`docs/04` §23/§25, `services/text2sql/efn_text2sql/scope.py` (format sig), `12-g41-esb.sql` (`v_esb_data_quality`),
+`infra/traefik/dynamic/middlewares.yml`, pesan lead (hasil fit-gap efn-odoo-functional G42).
+
+## Ringkasan (untuk manajemen)
+- Dashboard web staf "Insight" di atas data ESB; login cukup dari menu Odoo, tanpa password kedua; setiap orang hanya
+  melihat PT yang boleh ia akses (ditegakkan di aplikasi dan di gudang data). Odoo tetap tidak terbuka ke internet.
+- Biaya ±3,5–5 minggu-engineer, Rp0 lisensi. Mati secara default. Metabase tinggal untuk analis Holding.
+- Perlu keputusan klien: siapa yang mendapat akses (terutama semua brand), apakah manajer outlet boleh membuka dari
+  jaringan outlet, retensi log, durasi sesi.
+
+## File dibuat / diubah
+| File | Perubahan |
+|---|---|
+| `docs/decisions/ADR-041-insight-web-sso-odoo.md` | **Baru (Proposed).** Konteks + pertentangan (Odoo tidak terekspos, SEC-182, Metabase OSS tanpa sandboxing, CE `auth_oauth` = klien saja, kunci text2sql, nomor ADR-041/042), opsi tempat dashboard A–D, SSO 1–6 (OIDC/Keycloak = masa depan; query string, cookie Odoo bersama, provider buatan sendiri ditolak), cakupan a–d, dengan biaya; keputusan; sequence Mermaid; konsekuensi (sesi tak bisa dicabut 8 jam, replika tunggal, blast radius); dampak G43/G44; risiko usulan R-S18; Q-INS1..9; tinjau ulang 31 Mar 2027 |
+| `docs/04_SERVICE_CONTRACTS.md` | **v18.0**, §26 baru: alur, Odoo `efn_insight` (grup, respons per kondisi, cakupan, header CSP/no-store, audit `ir.logging`), token `eit1` byte-exact (sort_keys, kunci = ASCII hex bukan hex-decode, vektor uji + prosedur Python/Node), `POST /sso` (validasi berurutan, kode log), cookie `eis1`, `/api/health`, logout, ClickHouse `efn_insight` + row policy, halaman + katalog query bernama, filter, env/secret, infra/gerbang, **L-117..L-126**, **Q-INS1..Q-INS9**, celah C1–C7 (§26.13) |
+| `docs/decisions/ADR-040-integrasi-esb-core-datamart.md` | Rujukan G43 → **ADR-042**; modul `efn_insight_sso` → `efn_insight` (ADR-041) |
+| `docs/decisions/README.md` | Catatan pembaruan 18 Nov (total 41 ADR) + baris ADR-041; rujukan G43 di baris ADR-040 → ADR-042 |
+
+## Penyesuaian atas pesan lead (fit-gap odoo-functional)
+Kunci HMAC = byte ASCII string hex (bukan hex-decode, hex ≥ 64); payload `sort_keys=True` (menggantikan "urutan
+daftar" di kontrak kerja); cookie juga urut abjad; `all_brands`: `cids` = **semua** company berkode ESB, codes tetap
+6; tautan balik `/efn/insight/open`; CSP `script-src 'self'` + JS statis; audit `ir.logging` tanpa nama, retensi Q-INS3
+(400 hari); Q-INS1..3 sesuai pesan lead, sisa digeser ke Q-INS4..9. `insight_scope_key` divalidasi ≥ 64 hex (kontrak
+kerja: ≥ 32) agar seragam.
+
+## Keputusan yang butuh tanda tangan klien
+- **ADR-041** (Proposed): pemilik proyek, IT klien, DPO, Security.
+- **Q-INS1** (siapa mendapat grup), **Q-INS4** (jaringan outlet) = pemblokir production; Q-INS2, Q-INS3 (DPO), Q-INS5..9.
+
+## Celah keamanan yang ditemukan (tidak mengubah kontrak kerja diam-diam; dicatat di §26.13)
+C1 login CSRF di `POST /sso` (usul cek `Origin`); C2 cookie tanpa prefix `__Host-`; C3 CSV/formula injection pada
+ekspor; C4 row policy tanpa `company_code != ''`; C5 restart menghapus cache `jti`; C6 sinkron jam lintas mesin; C7
+kompromi insight-web = semua PT (diterima, sama text2sql). Juga: kontrak kerja menyebut Traefik `internal-only`;
+§26.11 memakai `internal-ops` sampai Q-INS4 (sesuai klausul "bila ragu").
+
+## Terverifikasi / belum terverifikasi
+- **Dibaca:** kontrak kerja G42, ADR-038/039/040, `docs/04` §23–§25, `scope.py` + `test_scope.py` (vektor
+  `"ab"*16|1,3|BCR,PB`), `signing.py` (preseden kunci = byte file setelah strip), DDL `v_esb_data_quality` (baris
+  `data_age_hours`/`last_run_not_ok` ber-`company_code=''`), middleware Traefik.
+- **Belum terverifikasi:** **vektor uji §26.3 (`payload_b64`, `sig_b64`) belum dihitung** — sesi ini tanpa runtime
+  Python/Node; prosedur ditulis, efn-lead wajib mengisi nilainya. Metabase OSS tanpa sandboxing/SSO JWT (dari
+  pengetahuan dokumentasi Metabase, belum dicek ulang untuk versi repo). Perilaku CSP `form-action` terhadap redirect
+  303 per browser; nama query katalog = usulan kanonik (engineer paralel bisa berbeda → selaraskan saat rekonsiliasi);
+  estimasi biaya = perkiraan architect; `docs/01` (R-S18, Q-INS) dan inventaris PDP belum diperbarui; Mermaid tidak
+  dirender.

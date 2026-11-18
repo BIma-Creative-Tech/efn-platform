@@ -75,6 +75,7 @@ PKI_SERVICES=(
   "blackbox-exporter|both"
   "ocr-worker|both"
   "text2sql|both"       # G38: server HTTPS 8443 (Odoo -> text2sql) + klien mTLS ke ollama-tls (docs/04 §23)
+  "insight-web|server"  # G42: sidecar insight-web-tls :3443 (Traefik/blackbox -> insight-web, docs/04 §26.11)
   "cadvisor|both"
   "docker-socket-proxy|server"
 )

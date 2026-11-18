@@ -1166,3 +1166,90 @@ diubah.
   `docker-compose.esb.yml` dan lead ke `docs/04` §25.2.
 - Belum terverifikasi: pytest/ruff tidak dijalankan di sesi ini (tanpa shell); `Retry-After` dari body error tidak
   terpengaruh (header). Lockout nyata akun ESB tetap belum diketahui (N=2 = konservatif).
+
+## Gelombang 42 — Akses ClickHouse `efn_insight` + row policy per PT + katalog query Insight (18 Nov 2026)
+
+Kontrak: kontrak kerja G42 bagian B, docs/04 §26.7–§26.9, §26.13 (C4); ADR-041 (Proposed), ADR-040 (Proposed), K25-02.
+Tidak ada commit (efn-lead).
+
+### File
+- **Baru** `infra/clickhouse/init/13-g42-insight.sql` — view `efn_dwh.v_esb_sales_branch_daily`, `v_esb_branch_list`,
+  `v_esb_product_list`, `v_esb_data_quality_pt` (idempoten, `CREATE OR REPLACE VIEW` saja).
+- **Baru** `infra/clickhouse/access/insight-access.sql` — profil `insight_readonly` (CREATE + ALTER), role
+  `insight_reader` (REVOKE efn_dwh.* dan efn_esb.*), definer `efn_insight_definer NOT IDENTIFIED HOST NONE` dengan
+  grant per objek, DB `efn_insight`, 8 view DEFINER berkolom eksplisit, `GRANT SELECT ON efn_insight.*`, kuota per jam.
+- **Ubah** `infra/clickhouse/clickhouse-init.sh` — `create_user efn_insight` (secret `clickhouse_password_insight`),
+  ikat role/profil, baca `/run/secrets/insight_scope_key` (hex `[0-9a-fA-F]` ≥ 64, tolak bila sama dengan
+  `text2sql_scope_key`), row policy `efn_insight_scope` per view (`company_code != '' AND CODES AND SIG`), lalu
+  verifikasi ke `system.row_policies`: ada view `efn_insight` tanpa policy → `REVOKE SELECT ON efn_insight.*` + exit 1.
+- **Baru** `services/esb-extract/tests/test_insight_access.py` — test statis (lihat di bawah).
+- **Baru** `docs/design/insight-web-queries.md` — daftar view + kolom, aturan parameter, contoh HTTP, katalog query
+  bernama sesuai §26.8 (+ tambahan bertanda), keputusan scope, tabel perbedaan dengan §26.
+
+### View `efn_insight` (kolom)
+| View | Kolom |
+|---|---|
+| `v_esb_sales_daily` | sales_date, brand, company_code, branch_id, branch_name, menu_code, menu_name, menu_category, menu_category_detail, is_takeaway, qty, gross, discount, net, cogs, trx_count (per menu) |
+| `v_esb_sales_branch_daily` | sales_date, brand, company_code, branch_id, branch_name, trx_count (struk unik cabang-hari), line_count, qty, gross, discount, net, cogs |
+| `v_esb_payment_daily` | sales_date, brand, company_code, branch_id, branch_code, branch_name, payment_type, payment_method, payment_count, amount, mdr, net |
+| `v_esb_flow_daily` | day, brand, company_code, branch_id, branch_name, product_code, product_name, ck_prod, ck_out, in_ck, in_other, store_prod, st_in, st_out, sold |
+| `v_esb_menu_mix` | month, brand, company_code, branch_id, branch_name, menu_category, is_takeaway, qty, net, share_qty, share_net |
+| `v_esb_data_quality` | check_name, brand, company_code (selalu terisi), item, value, last_day |
+| `v_esb_branch_list` | brand, company_code, branch_id, branch_code, branch_name, is_ck, is_store, active |
+| `v_esb_product_list` | brand, company_code, product_code, product_name, category, uom, is_fin, active |
+
+### Keputusan
+- **Scope data_quality** (permintaan lead #1, L-123): `efn_dwh.v_esb_data_quality_pt` meneruskan baris ber-PT dan
+  memperluas baris per brand (`data_age_hours`, `last_run_not_ok`) ke setiap `company_code` DISTINCT di
+  `dim_esb_branch` brand itu (Bacha → BCF dan BCR). Tidak ada baris `company_code=''`; selain itu policy menambah
+  `company_code != ''` (C4). Brand tanpa cabang terdaftar → baris brand tidak muncul (fail closed). Metabase tetap
+  memakai `v_esb_data_quality` asli. Beda dengan §26.7 (pemetaan statis) — lihat tabel §5 dokumen katalog.
+- **Scope produk**: `dim_esb_product.company_code` = PT default brand (Bacha → BCF), jadi tidak dipakai. Produk
+  di-JOIN ke DISTINCT (brand, company_code) dari `dim_esb_branch`: user PT melihat katalog brand yang punya cabang
+  PT itu (BCR melihat katalog Bacha), tidak pernah katalog brand lain.
+- **KPI transaksi** (permintaan lead #2, Q-INS2): `v_esb_sales_branch_daily` (`uniqExact(sales_num)` per cabang-hari,
+  filter versi slice sama). Nama mengikuti usulan lead (bukan `v_esb_sales_trx_daily` di spesifikasi UI). Catatan
+  fakta G41 (total ESB belum termasuk PB1/service, ≈ 89,6% pembayaran) dicantumkan di view dan katalog.
+- **Secret wajib** (bukan dilewati): perilaku `text2sql_scope_key` dan `create_user` = `cat` gagal di bawah `set -eu`
+  → init berhenti. Dipilih konsisten: secret insight hilang = clickhouse-init gagal (fail closed; tidak ada user tanpa
+  password atau view tanpa policy). Konsekuensi: **devsecops wajib** menambah `clickhouse_password_insight` dan
+  `insight_scope_key` ke `secrets:` service `clickhouse-init` (base compose) + `scripts/secrets.list` (`hex32` = 64 hex
+  memenuhi ≥ 64) dalam PR yang sama, kalau tidak `clickhouse-init` gagal di semua environment.
+- **Definer least privilege**: grant per objek (9 view + 10 tabel `efn_dwh.*esb*` + `efn_esb.extract_checkpoint`,
+  `extract_run`), bukan `efn_dwh.*` seperti §26.7. `efn_esb.*` wajib karena view v_esb_* membaca checkpoint/run;
+  tanpa `raw_doc`/`bom_ratio`. Test memastikan daftar grant = penutupan rekursif objek yang dirujuk view.
+- Profil: `result_overflow_mode='throw'` (ekspor CSV melebihi 200 000 baris gagal jelas, bukan terpotong);
+  `max_rows_to_read` 500 jt, memori 2 GB (MAX 4 GB), 8 query paralel. Kuota `KEYED BY user_name` = plafon service
+  bersama (20 000 query/jam); per staf = insight-web (atau `client_key` gelombang berikut).
+- Katalog query: nama kanonik §26.8, parameter = filter URL §26.9 (`from,to,pt,branch,cat,product`), cabang/produk
+  dikirim `'<brand>:<id>'` (branch_id/product_code hanya unik per brand), alias keluaran sengaja berbeda dari nama kolom
+  (`net_sales`, `sold_qty`, ...) karena alias = nama kolom yang dipakai ulang dalam agregat lain memicu error
+  "aggregate inside aggregate" di analyzer lama ClickHouse. `LIMIT` literal (parameter di LIMIT belum diverifikasi).
+- Temuan semantik untuk frontend: tabel "selisih kirim vs terima per cabang × produk" (spesifikasi UI §4.5 butir 5)
+  tidak bermakna (`ck_out` tercatat di CK, `in_ck` di toko) → diganti `dist_ck_gap_by_product` (per produk × hari).
+
+### Test (`services/esb-extract/tests/test_insight_access.py`)
+Set view efn_insight = 8 yang diharapkan; kolom eksplisit (tanpa `*`) ⊆ kolom keluaran view sumber (di-parse dari
+12/13) dan memuat `company_code`; data_quality memakai `_pt` dan pemetaan via `dim_esb_branch`; product_list tidak
+memakai `p.company_code`; sales_branch_daily `uniqExact` + checkpoint; 13 hanya `CREATE OR REPLACE VIEW` dan setiap
+kolom teratas ber-`AS`; `insight_reader` hanya `efn_insight.*` (+ REVOKE efn_dwh/efn_esb); grant definer = penutupan
+rekursif objek yang dirujuk (tanpa raw_doc/bom_ratio, tanpa wildcard); profil + kuota; init: user, ikatan, validasi
+kunci (hex, ≥ 64, ≠ text2sql); setiap view punya row policy dengan `company_code != ''`, format SIG identik text2sql
+kecuali variabel kunci; verifikasi `system.row_policies` + REVOKE.
+
+### Belum terverifikasi
+- **Tidak ada yang dijalankan** (sesi tanpa shell): pytest, ruff, `sh -n`/shellcheck, DDL di ClickHouse 24.8, query
+  katalog. Jalankan dari root repo:
+  `docker run --rm -v "$(pwd -W):/w" -w /w/services/esb-extract python:3.12-slim sh -c "pip install -q -r requirements-dev.txt ruff && ruff check . && ruff format --check . && pytest"`.
+- ClickHouse 24.8 (lead): row policy pada view DEFINER berlapis (efn_insight → efn_dwh view INVOKER → tabel) dengan
+  definer ber-grant per objek (bukan wildcard) — pola text2sql diverifikasi dengan `efn_dwh.*`; `ALTER SETTINGS PROFILE`
+  dengan `result_overflow_mode`; `system.row_policies.short_name`/`table`; window function atas agregat
+  (`menu_mix_by_branch`); `UNION ALL` LowCardinality vs String di `v_esb_data_quality_pt`; `NULLS LAST`.
+- Test negatif wajib (§26.7) untuk lead: scope {PB} tidak melihat WTZ; sig salah → 0 baris; tanpa setting → error;
+  `efn_insight` `SELECT efn_dwh.v_esb_sales_daily` → ditolak; baris `company_code=''` tidak terlihat (mis. codes `''`
+  dengan sig sah atas codes kosong → 0 baris); user `BCR` melihat baris `data_age_hours` brand `bacha`; admin `efn`
+  membaca `efn_insight.*` → 0 baris (efek row policy, bukan bug).
+- Katalog query ditulis tanpa eksekusi; type JSON (UInt64 dikutip) bergantung pada setting
+  `output_format_json_quote_64bit_integers=0` yang dikirim insight-web.
+- Belum dikerjakan (di luar ownership): compose/secrets.list/check-encryption (devsecops), docs/04 §26.7 perlu
+  direvisi untuk 8 view, grant definer per objek, dan pemetaan data_quality dinamis (architect/lead).

@@ -6,7 +6,7 @@
 #   10.88.0.0/16        OUTLET  (router outlet / perangkat POS). Satu /32 per peer, mulai 10.88.1.1.
 #                       -> hanya erp. (Odoo/POS). Middleware Traefik `internal-only`.
 #   10.89.0.0/16        STAF back-office/IT/manajemen (laptop). 10.89.0.0/24 = staf IT (boleh SSH ke hub).
-#                       -> erp. + bi. + ops. + status. Middleware `internal-ops` (bi./ops./status.).
+#                       -> erp. + bi. + ops. + status. + insight. Middleware `internal-ops` (bi./ops./status./insight.).
 # Subnet outlet & staf tidak tumpang tindih -> LAN outlet (termasuk Wi-Fi tamu yang salah VLAN) tidak pernah
 # mendapat akses dashboard (SEC-21).
 #

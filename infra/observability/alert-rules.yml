@@ -35,6 +35,33 @@ groups:
           description: "Probe HTTPS publik gagal 5 menit (DNS, Cloudflare, Traefik, atau sertifikat)."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/service-down.md
 
+      # G42 (docs/04 §26, ADR-041): dashboard staf Insight. Bukan jalur transaksi (POS/checkout tidak terdampak) ->
+      # warning jam kerja, `for` 15 menit agar restart/deploy tidak memicu.
+      - alert: EfnInsightWebDown
+        expr: probe_success{job="probe-insight"} == 0
+        for: 15m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Dashboard Insight (insight-web) tidak sehat"
+          description: "Probe https://insight-web:3443/api/health gagal 15 menit. Manajemen/planner tidak bisa membuka dashboard; Odoo dan POS tidak terdampak."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/insight-web.md#6-troubleshooting
+
+      # G42 C6 (docs/04 §26.13): token SSO Odoo -> insight-web hanya toleran selisih jam 30 dtk (host bisa berbeda,
+      # K25-02). Host tidak tersinkron NTP atau selisih > 10 dtk = login Insight mulai gagal (401 expired) dan cap waktu
+      # log/audit tidak bisa dicocokkan. Metrik timex bawaan node-exporter.
+      - alert: EfnHostClockNotSynced
+        expr: node_timex_sync_status == 0 or abs(node_timex_offset_seconds) > 10
+        for: 30m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Jam host {{ $labels.instance }} tidak tersinkron NTP / selisih > 10 dtk"
+          description: "Periksa chrony/systemd-timesyncd di host. Dampak: login Insight 401 (token eit1 kedaluwarsa/belum berlaku), urutan log lintas mesin kacau."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/insight-web.md#5-ntp-wajib-c6
+
       - alert: EfnPostgresDown
         expr: pg_up == 0
         for: 1m

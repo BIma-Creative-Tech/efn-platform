@@ -17,6 +17,41 @@ http:
           Server: ""
           X-Powered-By: ""
 
+    # G42 (docs/04 §26.2/§26.6, ADR-041): varian secure-headers untuk insight. (dashboard) dan halaman form SSO Odoo
+    # /efn/insight/open. Middleware headers Traefik MENIMPA Referrer-Policy dari upstream; kontrak mewajibkan
+    # `no-referrer` (filter halaman dashboard di query string tidak bocor ke situs lain). Kamera/lokasi/mikrofon tidak dipakai.
+    # CSP tetap dikirim aplikasi (Next.js / controller Odoo), tidak disetel di sini.
+    secure-headers-insight:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        forceSTSHeader: true
+        frameDeny: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        referrerPolicy: no-referrer
+        permissionsPolicy: "camera=(), geolocation=(), microphone=()"
+        customResponseHeaders:
+          Server: ""
+    # G42: varian KHUSUS halaman form SSO Odoo /efn/insight/open. strict-origin: browser mengirim header Origin
+    # (tanpa path/query) pada POST lintas-origin ke insight-web /sso; no-referrer/same-origin membuat Origin: null
+    # sehingga cek C1 menolak login sah (docs/04 §26.2). Dashboard insight. tetap memakai secure-headers-insight.
+    secure-headers-insight-sso:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        forceSTSHeader: true
+        frameDeny: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        referrerPolicy: strict-origin
+        permissionsPolicy: "camera=(), geolocation=(), microphone=()"
+        customResponseHeaders:
+          Server: ""
+          X-Powered-By: ""
+
     # Odoo: tutup database manager dari luar (R-S03). Router odoo-* juga internal-only (SEC-01).
     odoo-block-dbmanager:
       replacePathRegex:
@@ -67,6 +102,14 @@ http:
         burst: 100
         period: 1s
 
+    # G42 dashboard insight. (wg-https, RemoteAddr peer WireGuard staf). Lapis kasar; /sso punya rate limit sendiri di
+    # aplikasi (10/menit per IP, docs/04 §26.4). Satu halaman dashboard memicu beberapa request (RSC, aset, CSV).
+    ratelimit-insight:
+      rateLimit:
+        average: 20
+        burst: 60
+        period: 1s
+
     # Allowlist WireGuard (SEC-21, ADR-023 butir 3). Lapisan kedua setelah entrypoint wg-https yang hanya
     # di-bind ke IP WireGuard host. RemoteAddr (tanpa ipStrategy): akses WireGuard langsung tidak membawa XFF.
     # Host internal TIDAK boleh di-proxy Cloudflare; DNS-nya menunjuk IP WireGuard server (split DNS).
@@ -81,8 +124,9 @@ http:
           - '{{ env "EFN_WG_STAFF_CIDR" | default "10.89.0.0/16" }}'
           - '{{ env "EFN_INTERNAL_EXTRA_CIDR" | default "127.0.0.1/32" }}'
 
-    # internal-ops : bi. (Metabase), ops. (Grafana), status. (Uptime Kuma) = subnet staf saja. Perangkat di LAN
-    # outlet (termasuk Wi-Fi tamu bila VLAN tidak dipisah) tidak bisa membuka halaman login dashboard.
+    # internal-ops : bi. (Metabase), ops. (Grafana), status. (Uptime Kuma), insight. (G42, sampai Q-INS4 dijawab)
+    # = subnet staf saja. Perangkat di LAN outlet (termasuk Wi-Fi tamu bila VLAN tidak dipisah) tidak bisa membuka
+    # halaman login dashboard.
     internal-ops:
       ipAllowList:
         sourceRange:

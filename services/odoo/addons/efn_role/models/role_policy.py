@@ -31,6 +31,9 @@ SENSITIVE_GROUP_XMLIDS = (
     "efn_audit.group_manager",
     "efn_role.group_refund_approver",
     "efn_loyalty_accounting.group_loyalty_manager",
+    # SEC-193 (G42, ADR-041): akses dashboard Insight lintas SEMUA PT (termasuk IMD/CUP) -> penetapan manual, bukan
+    # sinkron jabatan (Q-INS1). Dilewati bila efn_insight belum terpasang (xmlid_group_ids).
+    "efn_insight.group_insight_all_brands",
 )
 SENSITIVE_PARAM = "efn_role.sensitive_group_xmlids"
 # E-47d (G22, L-74): parameter di atas = parameter KONTROL efn_audit (selalu diaudit walau aturan admin diarsipkan,
