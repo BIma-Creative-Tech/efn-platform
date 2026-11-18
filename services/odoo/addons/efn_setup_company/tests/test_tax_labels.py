@@ -52,7 +52,7 @@ class TestTaxLabels(TransactionCase):
                     self.assertEqual(self._tmpl(company, name).name, label)
 
     def test_default_sale_tax_label_per_pt(self):
-        # Pajak penjualan default produk baru: PPN untuk GL/BCR/EFN/FARM, PB1 untuk PB/BCF/WTZ/IMD/CUP (§12.1, §16.1, G43).
+        # Pajak penjualan default produk baru: PPN untuk GL/BCR/EFN/FARM, PB1 untuk PB/BCF/WTZ/IMD/CUP (§12.1, §16.1).
         for company, label, group in (
             ("company_rtl", "PPN 11%", "PPN 11%"),
             ("company_bcr", "PPN 11%", "PPN 11%"),

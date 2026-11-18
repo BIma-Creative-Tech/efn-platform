@@ -1,0 +1,15 @@
+# Konteks build image esb-migrate: hanya kode runtime (Dockerfile memakai COPY eksplisit).
+tests/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.ruff_cache/
+*.efnmig
+*.part
+*.jsonl
+*.jsonl.gz
+*.csv
+requirements-dev.txt
+pytest.ini
+ruff.toml
+README.md

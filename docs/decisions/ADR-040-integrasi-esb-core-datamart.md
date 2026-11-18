@@ -2,7 +2,8 @@
 
 - **Status:** Proposed — belum disetujui klien. G41 boleh dibangun mengikuti rekomendasi ini dengan `ESB_ENABLED=false`
   default; ekstraksi production menunggu **Q-ESB1** (user API read-only) dan **Q-ESB7** (izin beban backfill).
-- **Tanggal:** 2026-11-17 (Gelombang 41)
+- **Tanggal:** 2026-11-17 (Gelombang 41) · revisi 2026-11-18: §3.1 butir 1, §3.2, §4.4 dipersempit mengikuti ADR-042
+  (Accepted); keputusan ADR-040 sendiri tetap Proposed
 - **Pemutus:** pemilik proyek (lingkup & cutover), IT klien (user API ESB, beban server), Finance (cutover & saldo awal
   G43), Legal/DPO (kepemilikan data & PDP)
 - **Referensi review:** R-O02 (migrasi data sistem lama), R-O01 (master data), R-L01 (PDP), R-O03 (beban ETL),
@@ -62,8 +63,12 @@
 
 ### 3.1 Pilih opsi A
 1. **ESB Core = sistem sumber eksternal (legacy)** per brand sampai tanggal cutover brand tersebut (Q-ESB6). Setelah
-   cutover, **Odoo menjadi sumber kebenaran**; ekstraksi brand itu dihentikan (brand dikeluarkan dari `ESB_BRANDS`)
-   setelah rekonsiliasi terakhir, dan mart ESB menjadi arsip histori read-only.
+   cutover, **Odoo menjadi sumber kebenaran transaksi**; ekstraksi brand itu dihentikan (brand dikeluarkan dari
+   `ESB_BRANDS`) setelah rekonsiliasi terakhir, dan mart ESB menjadi **arsip histori read-only yang tetap menjadi sumber
+   angka resmi histori pra-cutover**. *(Dipersempit 18 Nov 2026 mengikuti ADR-042 Accepted:)* yang disalin ke Odoo
+   hanya arsip baca-saja `efn_legacy_history` — aliran produk harian (default 400 hari, untuk forecast), penjualan
+   harian outlet × menu (24 bulan), dan baris penjualan (parameter `efn_mig_esb.sales_line_months`, default 24 bulan);
+   dokumen produksi, delivery, transfer, dan pembayaran per dokumen **tidak** disalin ke Odoo (tetap di mart).
 2. **Service `services/esb-extract`** (Python 3.12, paket `efn_esb`) lewat overlay `infra/compose/docker-compose.esb.yml`
    (profil `data`, siap pindah ke project `efn-data`, K25-02). Satu-satunya komponen dengan egress ke
    `services.esb.co.id:443` (allowlist host di aplikasi; network `egress`), dan hanya menjangkau ClickHouse lewat network
@@ -101,7 +106,7 @@ flowchart LR
   X --> MART
   X --> CP
   MART -- "G42 insight-web (SSO Odoo, ADR-041)" --> W["Dashboard"]
-  MART -- "G43 esb_to_odoo.py (master, saldo awal)" --> O["Odoo CE 19<br/>efn_legacy_history (histori)"]
+  MART -- "G43 bundel berkas (master, saldo awal, arsip histori; ADR-042)" --> O["Odoo CE 19<br/>efn_legacy_history (arsip read-only)"]
   MART -- "G44 forecast-worker" --> F["fact_forecast_daily"]
 ```
 
@@ -113,8 +118,10 @@ flowchart LR
 - Larangan "tulis langsung API → ClickHouse" ditujukan ke jalur transaksi (BFF/Odoo menulis ke ClickHouse sehingga
   ClickHouse menjadi satu-satunya catatan). Di sini penulis adalah **job batch ekstraksi**, bukan API transaksi, dan
   isinya bisa dibangun ulang kapan saja dari ESB (sampai cutover) atau dari raw 36 bulan.
-- Setelah cutover, Odoo (PG) kembali menjadi satu-satunya sumber; histori yang dipindah ke Odoo masuk model read-only
-  `efn_legacy_history` (G43), bukan sebaliknya.
+- Setelah cutover, Odoo (PG) kembali menjadi satu-satunya sumber **transaksi**; salinan histori di Odoo hanya arsip
+  read-only `efn_legacy_history` (G43, ADR-042 §3.1) yang tidak pernah menjadi transaksi Odoo, dan selisihnya terhadap
+  mart = cacat migrasi (mart tetap acuan angka histori pra-cutover). Jalur ke Odoo = bundel berkas, bukan koneksi
+  ClickHouse → Odoo.
 - Pengecualian ini **terbatas**: hanya `esb-extract`, hanya database `efn_esb` dan tabel `efn_dwh.*esb*`. Prinsip
   `CLAUDE.md` perlu catatan rujukan ke ADR-040 (tugas efn-lead).
 
@@ -157,7 +164,7 @@ flowchart LR
 | Gelombang | Yang disiapkan G41 | Keputusan menyusul |
 |---|---|---|
 | **G42** insight-web (Next.js) + SSO dari Odoo | View `v_esb_*` stabil (nama di `docs/04` §25.5), kolom `company_code` di semua mart → row policy per PT bisa ditempel tanpa mengubah tabel | User ClickHouse `efn_insight` + row policy bertanda tangan (pola `efn_t2s`, ADR-038) **tidak** dibuat di G41; modul `efn_insight` butuh fit-gap `efn-odoo-functional` + ADR tersendiri (token sekali pakai ≤ 60 dtk) → **ADR-041** (G42, `docs/04` §26) |
-| **G43** migrasi master + saldo awal + histori | `map_esb_odoo` (kosong), `dim_esb_*` sebagai sumber master, `fact_esb_*` sebagai histori | **ADR-042** menyusul (semula disebut ADR-041; nomor itu dipakai SSO Insight G42): histori 24 bulan masuk model read-only `efn_legacy_history` (`company_id` + record rule), **bukan** `stock.move`/`account.move`/`pos.order`; saldo awal = `stock.quant` inventory mode + jurnal pembukaan per tanggal cutover; company IMD/CUP mengikuti pola G24 WTZ |
+| **G43** migrasi master + saldo awal + histori | `map_esb_odoo` (kosong), `dim_esb_*` sebagai sumber master, `fact_esb_*` sebagai histori | **ADR-042 (Accepted 18 Nov 2026, dengan amendemen)** — *dipersempit dari rumusan awal "histori 24 bulan masuk `efn_legacy_history`"*: mart tetap sumber angka resmi histori; Odoo menerima arsip read-only `efn.legacy.flow.daily` (400 hari default, maks 730, input forecast), `efn.legacy.sales.daily` (24 bulan) dan `efn.legacy.sales.line` (parameter `efn_mig_esb.sales_line_months`, default 24), `company_id` + record rule, **bukan** `stock.move`/`account.move`/`pos.order`; produksi/delivery/transfer/pembayaran per dokumen tidak disalin; saldo awal = `stock.quant` inventory mode + jurnal pembukaan draft per tanggal cutover; company IMD/CUP mengikuti pola G24 WTZ (dibangun G43-A); pilot PB |
 | **G44** forecast worker | `v_esb_sales_daily` & `fact_esb_fin_sold_daily` sebagai input harian | Model, kalender libur, output `fact_forecast_daily`; tetap proposal yang disetujui planner (K25-12), AI di luar jalur transaksi (ADR-010) |
 
 ### 4.5 Dampak ke dokumen lain
@@ -179,7 +186,7 @@ flowchart LR
 
 ## 6. Pertanyaan terbuka (dijawab klien)
 Rinci di `docs/04` §25.9 dan `docs/01` §5.12: **Q-ESB1** user API read-only per brand · **Q-ESB2** WP = Wetzel's
-Pretzels (WTZ)? · **Q-ESB3** pemetaan cabang Bacha ke BCR/BCF · **Q-ESB4** 11 cabang PB tanpa data produk FIN ·
+Pretzels (WTZ)? (**terjawab 18 Nov 2026: ya**) · **Q-ESB3** pemetaan cabang Bacha ke BCR/BCF · **Q-ESB4** 11 cabang PB tanpa data produk FIN ·
 **Q-ESB5** nama PT, NPWP, jenis pajak Im Donut & Curry Up · **Q-ESB6** tanggal cutover per brand · **Q-ESB7** izin beban
 backfill 24 bulan (rate, jendela) · **Q-ESB8** daftar cabang CK per brand · **Q-ESB9** hak EFN atas data & penggunaan API
 massal menurut kontrak ESB / ketersediaan ekspor resmi.

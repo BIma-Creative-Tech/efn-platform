@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Parameter histori ESB (docs/04 §27.9, ADR-042). noupdate: nilai yang diubah admin tidak ditimpa upgrade.
+     efn_mig_esb.cutover_date.<KODE PT> SENGAJA tidak di-seed (tanpa konstanta tanggal, L-135): diisi skrip migrasi
+     langkah `cutover-param` pada run nyata; tanpa parameter = forecast memakai perilaku lama. -->
+<odoo noupdate="1">
+    <record id="param_sales_line_months" model="ir.config_parameter">
+        <field name="key">efn_mig_esb.sales_line_months</field>
+        <field name="value">24</field>
+    </record>
+    <record id="param_legacy_days" model="ir.config_parameter">
+        <field name="key">efn_mig_esb.legacy_days</field>
+        <field name="value">400</field>
+    </record>
+</odoo>

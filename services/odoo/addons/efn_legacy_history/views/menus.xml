@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Inventory > Reporting > Histori ESB (arsip). Grup menu = grup ACL baca model (docs/04 §27.8 v19.1). -->
+    <menuitem id="menu_efn_legacy_stock_root" name="Histori ESB (arsip)" parent="stock.menu_warehouse_report"
+              sequence="70" groups="stock.group_stock_user,group_legacy_sales_reader"/>
+    <menuitem id="menu_efn_legacy_stock_flow" name="Aliran produk harian" parent="menu_efn_legacy_stock_root"
+              action="efn_legacy_flow_daily_action" sequence="10" groups="stock.group_stock_user"/>
+    <menuitem id="menu_efn_legacy_stock_sales_daily" name="Penjualan harian per menu" parent="menu_efn_legacy_stock_root"
+              action="efn_legacy_sales_daily_action" sequence="20" groups="group_legacy_sales_reader"/>
+    <menuitem id="menu_efn_legacy_stock_sales_line" name="Baris penjualan" parent="menu_efn_legacy_stock_root"
+              action="efn_legacy_sales_line_action" sequence="30" groups="group_legacy_sales_reader"/>
+
+    <!-- Point of Sale > Reporting > Histori ESB (arsip) -->
+    <menuitem id="menu_efn_legacy_pos_root" name="Histori ESB (arsip)" parent="point_of_sale.menu_point_rep"
+              sequence="70" groups="group_legacy_sales_reader"/>
+    <menuitem id="menu_efn_legacy_pos_sales_daily" name="Penjualan harian per menu" parent="menu_efn_legacy_pos_root"
+              action="efn_legacy_sales_daily_action" sequence="10"/>
+    <menuitem id="menu_efn_legacy_pos_sales_line" name="Baris penjualan" parent="menu_efn_legacy_pos_root"
+              action="efn_legacy_sales_line_action" sequence="20"/>
+</odoo>

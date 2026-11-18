@@ -1,0 +1,4 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_legacy_flow_daily_stock_user,efn.legacy.flow.daily stock user,model_efn_legacy_flow_daily,stock.group_stock_user,1,0,0,0
+access_efn_legacy_sales_daily_reader,efn.legacy.sales.daily reader,model_efn_legacy_sales_daily,group_legacy_sales_reader,1,0,0,0
+access_efn_legacy_sales_line_reader,efn.legacy.sales.line reader,model_efn_legacy_sales_line,group_legacy_sales_reader,1,0,0,0

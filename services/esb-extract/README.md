@@ -51,6 +51,7 @@ baris yang dihapus/void di ESB, dan slice yang gagal di tengah tidak terlihat. T
 ```
 python -m efn_esb run                                    # loop (compose command)
 python -m efn_esb backfill --brand pb --from 2024-11-17 --to 2026-11-16 [--entity sales ...] [--force] [--ignore-window]
+python -m efn_esb snapshot --brand pb --entity bom_detail [...]   # G43, lihat di bawah
 python -m efn_esb probe --brand pb                       # login + jumlah cabang saja
 python -m efn_esb health                                 # file heartbeat segar? (opsional)
 ```
@@ -60,6 +61,28 @@ koreksi H-7 (sekali/hari setelah `ESB_SALES_READY_HOUR_WIB`=03:00) + gap fill `E
 `ESB_BACKFILL_WINDOW` (WIB) tidak memanggil apa pun / berhenti menjadwalkan (`status=window_closed`) → jalankan ulang
 perintah yang sama malam berikutnya. Contoh: `docker compose ... run --rm esb-extract python -m efn_esb backfill ...`.
 `--ignore-window` (dev/uji) di production ditolak kecuali `ESB_ALLOW_IGNORE_WINDOW=true` dan `--from` = `--to`.
+
+**`snapshot` (G43, docs/04 §27.11, ADR-042).** Entitas migrasi ESB → Odoo, dijalankan per kebutuhan (bukan loop `run`):
+```
+python -m efn_esb snapshot --brand pb --entity bom_detail --entity menu_price --entity customer --entity location
+python -m efn_esb snapshot --brand pb --entity stock_opname --entity ap_open --entity ar_open --entity coa \
+  --date <cutover-1> --allow-unverified [--opname-window 3]
+```
+| Entitas | Endpoint (GET) | Tabel (14-g43-migration.sql) | Redaksi | Status |
+|---|---|---|---|---|
+| `bom_detail` (E1) | `/product/bom` → `/product/bom/{bomID}` per BOM aktif | `dim_esb_bom`, `dim_esb_bom_line` | `redact()` (createdBy/editedBy/notes) | P1, belum uji GET nyata |
+| `menu_price` (E2) | `/menu/browse-for-product` | `dim_esb_menu_price` (tabel terpisah dari `dim_esb_menu`: penulis beda) | `redact()` | P1, belum uji GET nyata |
+| `customer` (E4) | `/customer` | `dim_esb_customer` | whitelist `CUSTOMER_FIELDS` (tanpa alamat/PIC/telepon/NPWP) | P1, belum uji GET nyata |
+| `location` (E5) | `/location?branchID=` per cabang | `dim_esb_location` | `redact()` | P1, belum uji GET nyata |
+| `stock_opname` (E6) | `/inventory/stock-opname` (+ `/{num}`) | `fact_esb_stock_opname` | `redact()` (petugas, lampiran) | P2, **default mati** |
+| `ap_open` (E7) | `/supplier-payable/invoice-aging?payableDate=` per cabang | `fact_esb_ap_open` | whitelist `AP_FIELDS` (kode supplier) | P2, **default mati** |
+| `ar_open` (E8) | `/customer-receivable?type=2&receivableDate=` per cabang | `fact_esb_ar_open` | whitelist `AR_FIELDS` (kode pelanggan) | P2, **default mati** |
+| `coa` (E9) | `/accounting/coa` | `dim_esb_coa` | whitelist `COA_FIELDS` | P2, **default mati** |
+
+E10 (neraca saldo/GL) tidak dibangun: di spec ESB `/accounting/general-ledger(/summary)` adalah **POST** (melanggar
+GET-only) → ekspor resmi Finance (Q-ESB21). Snapshot selalu menarik ulang (bukan resumable), anggaran =
+`ESB_BACKFILL_MAX_CALLS`, satu slice/checkpoint per (entitas, `*`, hari), `extract_run.mode='snapshot'`. Grant tabel baru
+hanya `esb_writer` + `mig_rw` (tidak ke Metabase/Insight).
 
 **Brand `auth_suspended` (SEC-186).** Login ESB ditolak 2 siklus berturut-turut → brand tidak login lagi (melindungi akun
 ESB yang juga dipakai kasir dari lockout). Siklus berikutnya hanya menulis `extract_run.status='auth_suspended'`
@@ -76,7 +99,7 @@ brand dari `ESB_BRANDS`) lalu **restart** `esb-extract`; penangguhan tidak disim
 | `ESB_USER_<BRAND>`, `ESB_PASSWORD_<BRAND>_FILE` | — | secret `esb_core_password_<brand>` |
 | `ESB_COMPANY_<BRAND>` | PB/WTZ/BCF/IMD/CUP | jarang perlu diubah |
 | `ESB_BRANCH_COMPANY_OVERRIDES` | (kosong) | `bacha:12=BCR,bacha:15=BCR` (pemisah `,` atau `;`) |
-| `ESB_CK_BRANCHES` | `pb:4\|38` | Q-ESB8 untuk brand lain |
+| `ESB_CK_BRANCHES` | `pb:4\|38,wtz:5\|6,imd:2,cup:4\|6` (G43 §27.11) | overlay compose masih `pb:4\|38` → diselaraskan devsecops |
 | `ESB_NON_STORE_BRANCHES` | (kosong) | cabang non-toko tambahan, format sama |
 | `ESB_RATE_PER_SEC` / `ESB_WORKERS` / `ESB_MAX_RETRIES` | `2.0` / `4` / `5` | per brand |
 | `ESB_MAX_CALLS_PER_RUN` / `ESB_BACKFILL_MAX_CALLS` | `20000` / `60000` | budget run / satu proses backfill |
@@ -124,3 +147,7 @@ disalin karena tidak ada paket bersama antar-service Python.
   `v_esb_stock_cover` ditunda.
 - Retensi mart: tabel ESB belum masuk loop TTL 10 tahun `clickhouse-init.sh` (tanpa PII, tidak mendesak).
 - Tidak ada lock global "satu backfill per brand"; disiplin operasional (runbook).
+- G43 `snapshot`: semua entitas (P1 dan P2) dibangun dari spec publik tanpa uji GET nyata. Arti kolom P2 **[B]**:
+  `qty` vs `stockQty` opname, `receivableTotal`/`payableTotal` = sisa atau nilai faktur, apakah invoice-aging hanya faktur
+  terbuka, status opname yang final. `customer_name` bisa nama orang (pelanggan perorangan) → data pribadi (inventaris
+  PDP). `bomTypeID/Name` arti [B] (Q-ESB17); header BOM ESB tanpa qty hasil (rasio dari `bom_ratio`).

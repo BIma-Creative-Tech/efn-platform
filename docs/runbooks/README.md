@@ -86,6 +86,7 @@ Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-inciden
 | Aktivasi poin hangus 12 bulan tidak aktif & anonimisasi (L-73: izin `EFN_ALLOW_FEATURE_ON` di host) | [loyalty-inactivity-expiry.md](loyalty-inactivity-expiry.md#aktivasi) |
 | Retensi data W-19 (env default, deploy pertama G18 / stop ETL, timer housekeeping Metabase) | [retention.md](retention.md) |
 | Ekstraksi ESB Core → ClickHouse (G41): secret password per brand, `ESB_ENABLED`, probe, backfill 24 bulan di jendela malam, pantau checkpoint, 429/401, rotasi, hentikan | [esb-extract.md](esb-extract.md) |
+| Migrasi ESB → Odoo (G43, ADR-042): jendela migrasi (secret `clickhouse_password_mig`/`migration_bundle_key`, direktori pertukaran), dry-run PB end-to-end di dev, ukuran tabel histori, berita acara, hapus bundel ≤ 90 hari, rollback | [migrasi-esb-odoo.md](migrasi-esb-odoo.md) |
 | Dashboard Insight + SSO Odoo (G42, ADR-041): aktivasi (grup, `INSIGHT_ENABLED`, secret), rotasi kunci SSO/sesi/cakupan, NTP, 401 SSO, alert `EfnInsightWebDown` / `EfnHostClockNotSynced`, Metabase hanya Holding | [insight-web.md](insight-web.md) |
 | Deploy gagal: modul Odoo wajib (`efn_pos_refund_origin`) belum `installed` (SEC-129) | [deploy-odoo-modules.md](deploy-odoo-modules.md) |
 | Boot stack dev di laptop (Docker Desktop/WSL2), upgrade modul Odoo dev | [dev-stack-boot.md](dev-stack-boot.md) |
@@ -112,6 +113,7 @@ Setiap service: `restart`, logging dibatasi 5×20 MB, `no-new-privileges`, limit
 | `acme-dns-init` | root dengan CAP_CHOWN+FOWNER, `network_mode: none`, one-shot | chown volume `acme-dns-*` ke 65532:0 + titik mount `base/`, `dev/` (SEC-37) |
 | `acme-dns` | satu-satunya pemegang token DNS; tanpa port, hanya network `egress`, non-root 65532 | ACME DNS-01 terpisah dari Traefik (SEC-37) |
 | `esb-extract` (G41, overlay `docker-compose.esb.yml`) | tanpa pengecualian hardening; network `esb` (hanya ClickHouse) + `egress`, bukan `data` | satu-satunya service dengan password ESB dan jalur keluar ke ESB; allowlist host di aplikasi ([esb-extract.md](esb-extract.md) §9) |
+| `esb-migrate` (G43, overlay `docker-compose.esb.yml`, profil `migrate`) | sekali jalan: `restart: "no"`, healthcheck dinonaktifkan; uid/gid = user `odoo` (`EFN_MIG_UID/GID`); hanya network `esb` (tanpa egress), `read_only` + tmpfs `/work` 768 MB, limit 1536M | export/writeback/reconcile migrasi; plaintext hanya di tmpfs ([migrasi-esb-odoo.md](migrasi-esb-odoo.md)) |
 | `insight-web` + `insight-web-tls` (G42) | tanpa pengecualian hardening; network `insight-ingress` (Traefik/blackbox) + `insight-data` (hanya ClickHouse), bukan `internal`/`data`/`egress`; replika 1 | dashboard read-only; memegang kunci SSO/sesi/cakupan + password ClickHouse `efn_insight` ([insight-web.md](insight-web.md)) |
 | `promtail-journal` (prod) | mount `/var/log/journal` + `/etc/machine-id` read-only, root tanpa capability | journald host (efn-deploy, backup) → Loki |
 

@@ -1,0 +1,11 @@
+# Mewarisi aturan root; deteksi first-party agar urutan import (rule I) deterministik.
+extend = "../../ruff.toml"
+src = ["."]
+
+[lint.isort]
+known-first-party = ["efn_mig"]
+
+# G43 W3: direktori ini kini ikut job CI `python` (ruff). Importer Odoo dijalankan lewat `odoo shell` dengan variabel
+# global `env` yang disuntik Odoo (pola scripts/brand-catalog/odoo_import_shell.py) -> F821 bukan bug di berkas itu.
+[lint.extend-per-file-ignores]
+"odoo_import_esb.py" = ["F821"]

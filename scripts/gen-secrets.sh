@@ -40,6 +40,8 @@ while read -r name kind _; do
   # G21 AC-13: kunci PII Odoo di secrets.list berjenis host:disabled (produksi = dibuat Superadmin di host). Dev/CI butuh
   # kunci NYATA (32 byte acak) -> dibuat di bagian "PII Odoo" di bawah, bukan placeholder `disabled`.
   [[ "$name" == odoo_pii_* ]] && continue
+  # G43: secret migrasi ESB (host:disabled di produksi) -> nilai nyata dev/CI dibuat di bagian "Migrasi ESB" di bawah.
+  [[ "$name" == clickhouse_password_mig || "$name" == migration_bundle_key ]] && continue
   f="${OUT_DIR}/${name}.txt"
   if [[ -s "$f" ]]; then
     chmod 644 "$f"
@@ -71,6 +73,23 @@ for name in odoo_pii_key_v1 odoo_pii_bidx_key odoo_pii_name_key; do
   ( umask 022; gen_value b64key32 > "$f" )
   chmod 644 "$f"
   echo "dibuat : $f (PII Odoo, dev/test saja)"
+done
+
+# Migrasi ESB -> Odoo (G43, docs/04 §27.2/§27.10): di scripts/secrets.list berjenis host:disabled (staging/prod ditulis
+# operator di host hanya selama jendela migrasi). Dev/CI butuh nilai NYATA agar dry-run & clickhouse-init (user efn_mig)
+# bisa diuji: password acak base64, kunci bundel 32 byte hex (64 karakter, bytes.fromhex di efn_mig/bundle.py).
+# Idempoten: file berisi nilai selain `disabled` TIDAK ditimpa (menimpa kunci bundel = bundel dev lama tak terbaca).
+for spec in clickhouse_password_mig:random migration_bundle_key:hex32; do
+  name="${spec%%:*}"
+  f="${OUT_DIR}/${name}.txt"
+  if [[ -s "$f" ]] && ! grep -qx 'disabled' "$f"; then
+    chmod 644 "$f"
+    echo "ada    : $f"
+    continue
+  fi
+  ( umask 022; gen_value "${spec#*:}" > "$f" )
+  chmod 644 "$f"
+  echo "dibuat : $f (migrasi ESB, dev/test saja)"
 done
 
 # PKI internal (docs/04 §7.1): enkripsi in transit wajib juga di dev/CI (dev = prod, tanpa fallback plaintext).

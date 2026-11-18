@@ -950,3 +950,56 @@ Branch `feat/wave-43-esb-migration`, tanpa commit, hanya `docs/**`. Sumber: kont
   bertanggal mundur, `ir.model.data` modul non-addon, penomoran jurnal valuasi saat dry-run = **[B]**; endpoint ESB paket/
   AR/TB; ukuran data (perkiraan); estimasi biaya = perkiraan architect; kecocokan isi `18-platform-g43.sql` dengan
   daftar 11 CHECK tidak saya baca baris per baris; Mermaid tidak dirender.
+
+---
+
+# G43 fase 2 (W4) — ADR-042 Accepted + amendemen, §27 v19.1, risk register, PDP v17 (2026-11-18)
+Branch `feat/wave-43-esb-migration`, tanpa commit, hanya `docs/**`. Sumber: kontrak kerja fase 2 efn-lead (keputusan
+user 18 Nov: ADR-042 disetujui, Q-ESB20 = histori penjualan di Odoo rinci, Q-ESB23 = pilot PB, supermarket di luar G43),
+DDL `12-g41-esb.sql` (`fact_esb_sales_line`, `v_esb_sales_daily`).
+
+## Ringkasan (untuk manajemen)
+- ADR-042 kini **Accepted**. Histori penjualan 24 bulan bisa dilihat di Odoo (harian per outlet × menu + per baris
+  struk) sebagai arsip baca-saja; tetap bukan transaksi, jadi stok/pajak/nomor dokumen aman. Pilot = Paris Baguette.
+- Dampak: DB Odoo **±2–2,7 GB untuk PB** (±4,5–6,5 GB lima brand, perkiraan) + backup ikut membesar; angka resmi dari
+  uji coba PB. Biaya fase 2 naik dari ±5–7 ke **±6,5–9 minggu-engineer**.
+
+## File diubah
+| File | Perubahan |
+|---|---|
+| `docs/decisions/ADR-042-migrasi-esb-odoo-dan-histori.md` | Status **Accepted 18 Nov 2026** + §0 amendemen A1–A3; §2.2 opsi S0–S3 (ukuran baris/GB, backup, biaya); §3.1 tiga model arsip + bulk load; menu arsip; segmentasi bundel; dry-run ukur `table_bytes`; biaya ±6,5–9; R-T08 ditambah; Q-ESB2/20/23 terjawab |
+| `docs/decisions/README.md` | Catatan pembaruan + baris ADR-042 → Accepted |
+| `docs/04_SERVICE_CONTRACTS.md` | **v19.1**: §27 status Accepted; §27.2 importer `odoo_import_esb.py`, langkah grup `history`, **tabel urutan impor 1–13**, env `EFN_MIG_SALES_LINE_MONTHS`/`EFN_MIG_SEGMENT_MAX_ROWS`, tmpfs ≥ 768 MB; §27.3 manifest `sales_line_months`/`parent_run_id`/`segment`; **§27.3a segmentasi**; §27.5 gerbang (5) + rekonsiliasi 5a–5d; §27.7 aturan validator baru; §27.8 model `sales.daily`/`sales.line` + grup `group_legacy_sales_reader`; **§27.8a bulk load** + perkiraan ukuran; §27.9 parameter `sales_line_months`; §27.10 DDL `14-g43-migration.sql`; L-139..L-143; Q-ESB2 (§25.9), Q-ESB20, Q-ESB23 terjawab |
+| `docs/01_REVIEW_RISK_GAP_ANALYSIS.md` | R-O12, R-O13 (§4.5), R-L12 (§4.3); §5.12 blok Q-ESB10..24 (Q-ESB2/20/23 terjawab). §5.13 tidak disentuh |
+| `docs/decisions/ADR-040-integrasi-esb-core-datamart.md` | §3.1 butir 1, diagram, §3.2, §4.4 dipersempit mengikuti ADR-042; Q-ESB2 terjawab; ADR-040 tetap Proposed |
+| `docs/compliance/PDP_DATA_INVENTORY.md` | **v17** §2.8.13 (bundel migrasi, arsip histori Odoo, partner B2B), 3 baris retensi §3, **Q-P32**, catatan §5 |
+| `docs/08_ODOO_FIT_GAP.md` | §6.4 kode PT `EFN/GL/PB/BCR/BCF/WTZ/IMD/CUP/FARM` (aturan 3 & 6) + rujukan `--source esb-bundle` |
+
+## Temuan/keputusan kontrak yang perlu diketahui W1/W2/W3 (lewat lead)
+1. **Segmentasi bundel histori (§27.3a, L-141)** — kontrak fase 1 satu bundel AES-GCM; PB ±8 juta baris tidak muat di
+   memori 1 GB. Export histori = satu bundel per company × bulan (+ pecah per gudang bila > 500 ribu baris), gzip di
+   dalam tar, batas dekompresi 50× / 512 MB.
+2. `sales.line`: **tanpa constraint unik dan tanpa `run_id` per baris**, `_log_access=False` disarankan; idempotensi =
+   ganti-per-irisan (DELETE + INSERT per company × gudang × bulan, satu transaksi). `product_id` boleh kosong
+   (`esb_menu_code` disimpan).
+3. Field `outflow` (flow.daily) dan `net` (sales.daily) diisi di SQL/export karena compute ORM tidak jalan pada bulk.
+4. Grup baca penjualan = `efn_legacy_history.group_legacy_sales_reader` (imply dari `point_of_sale.group_pos_manager`);
+   modul depends `point_of_sale` ditambahkan.
+5. DDL ClickHouse migrasi = `14-g43-migration.sql` (13 sudah dipakai G42) — §27.10 diralat.
+6. Nama flag pengaktif saldo awal di tabel urutan (`--enable-opening-balances`) = usulan; importer boleh memakai nama
+   lain asalkan default mati dan dicatat di README.
+
+## Keputusan yang butuh tanda tangan klien
+- **Sudah:** ADR-042 (user, 18 Nov), Q-ESB20, Q-ESB23 (pilot PB).
+- User: setelah dry-run PB — terima ukuran DB/backup aktual atau turunkan `sales_line_months`.
+- Finance: Q-ESB6 (cutover PB lebih dulu), Q-ESB16, Q-ESB21, Q-ESB24. Ops: Q-ESB10..15, 17, 22. Legal/Finance:
+  Q-ESB5. DPO: Q-ESB19, **Q-P32** (sales_num bukan PII, retensi bundel & arsip, partner B2B perorangan).
+- PO: urutan brand setelah PB dan master IMD/CUP sebelum Q-ESB5 (default ADR-042 §3.6).
+
+## Terverifikasi / belum terverifikasi
+- **Dibaca:** DDL `fact_esb_sales_line` (kunci, kolom) dan `v_esb_sales_daily` (agregat semua `row_type`) dari repo;
+  tidak ada modul `efn_legacy_history` di repo saat menulis (W2 paralel) → kontrak belum dicocokkan dengan kode.
+- **Belum terverifikasi:** semua angka ukuran (25 toko PB, ±450 baris/toko/hari dari prototipe G41, byte/baris PG =
+  hitungan architect, rasio kompresi WAL-G); akses `COPY` lewat cursor Odoo 19 **[B]**; perilaku Odoo saat model dengan
+  `_log_access=False` dipakai view pivot/list (diasumsikan normal); jumlah toko brand lain; nomor pasal UU PDP (Legal);
+  Mermaid tidak dirender.

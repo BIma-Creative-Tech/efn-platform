@@ -5,6 +5,9 @@
 - `backfill --brand B --from D --to D [--entity E ...] [--force] [--ignore-window]`: satu brand per proses (L-111).
   SEC-185: `--ignore-window` di production hanya dengan `ESB_ALLOW_IGNORE_WINDOW=true` dan rentang 1 hari (exit 2).
 - SEC-186: di `run`, brand yang `auth_failed` 2 siklus berturut-turut ditangguhkan (`auth_suspended`) sampai restart.
+- `snapshot --brand B --entity E [--entity E ...] [--date D] [--allow-unverified]` (G43, docs/04 §27.11): entitas
+  migrasi (bom_detail, menu_price, customer, location; P2 stock_opname/ap_open/ar_open/coa hanya dengan
+  `--allow-unverified`). Bukan bagian loop `run`.
 - `probe --brand B`: login + /branch/list/user, cetak JUMLAH cabang saja.
 - `health`: exit 0 bila file heartbeat masih segar (opsional; compose memakai cek PID).
 CLI selain `run` dengan `ESB_ENABLED=false` -> exit 0 dengan pesan "ESB dinonaktifkan".
@@ -22,6 +25,7 @@ from typing import Any
 
 from efn_esb.config import DAILY_ENTITIES, ENTITIES, BrandConfig, ClickHouseSettings, EsbSettings, esb_enabled
 from efn_esb.extract import BRANCH_LIMIT, BrandRuntime
+from efn_esb.extract_mig import P2_ENTITIES, SNAPSHOT_ENTITIES
 from efn_esb.heartbeat import is_fresh, touch
 from efn_esb.http import EsbClient, TokenBucket, UrllibTransport
 from efn_esb.paging import fetch_all
@@ -46,6 +50,21 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         action="store_true",
         help="abaikan ESB_BACKFILL_WINDOW (dev/uji; production: ESB_ALLOW_IGNORE_WINDOW=true + maks 1 hari)",
     )
+    snapshot = sub.add_parser("snapshot", help="G43: tarik entitas migrasi satu brand (bukan bagian loop run)")
+    snapshot.add_argument("--brand", required=True)
+    snapshot.add_argument("--entity", action="append", required=True, choices=list(SNAPSHOT_ENTITIES))
+    snapshot.add_argument(
+        "--date",
+        dest="day",
+        type=date.fromisoformat,
+        help="hari snapshot (P2: tanggal saldo = cutover - 1); default hari ini WIB",
+    )
+    snapshot.add_argument(
+        "--allow-unverified",
+        action="store_true",
+        help=f"izinkan entitas P2 yang belum diverifikasi ({', '.join(P2_ENTITIES)})",
+    )
+    snapshot.add_argument("--opname-window", type=int, default=3, help="stock_opname: hari ke belakang (0..31)")
     probe = sub.add_parser("probe", help="login + hitung cabang")
     probe.add_argument("--brand", required=True)
     health = sub.add_parser("health", help="cek file heartbeat")
@@ -158,6 +177,53 @@ def _cmd_backfill(settings: EsbSettings, args: argparse.Namespace, stop: threadi
     return 0 if run.status in ("ok", "window_closed", "limit") else 1
 
 
+def validate_snapshot_args(entities: Sequence[str], allow_unverified: bool, opname_window: int) -> None:
+    """G43: entitas P2 default MATI (belum diverifikasi) -> wajib `--allow-unverified`."""
+    blocked = [e for e in entities if e in P2_ENTITIES]
+    if blocked and not allow_unverified:
+        raise ValueError(
+            f"entitas {', '.join(blocked)} belum diverifikasi terhadap ESB nyata (default mati); "
+            "tambahkan --allow-unverified setelah persetujuan lead"
+        )
+    if not 0 <= opname_window <= 31:
+        raise ValueError("--opname-window di luar rentang 0..31")
+
+
+def _cmd_snapshot(settings: EsbSettings, args: argparse.Namespace, stop: threading.Event) -> int:
+    from efn_esb.runner import run_snapshot
+
+    cfg = settings.brand(args.brand.strip().lower())
+    entities = list(dict.fromkeys(args.entity))
+    today = wib_today(datetime.now(UTC))
+    day = args.day or today
+    try:
+        validate_snapshot_args(entities, args.allow_unverified, args.opname_window)
+        if day > today:
+            raise ValueError("--date tidak boleh di masa depan")
+    except ValueError as exc:
+        print(f"snapshot ditolak: {exc}", file=sys.stderr)
+        return 2
+    store = _store(os.environ)
+    rt = BrandRuntime(
+        cfg,
+        max_pages=settings.max_pages,
+        include_inactive=settings.backfill_include_inactive,
+        opname_window_days=args.opname_window,
+    )
+    run = run_snapshot(
+        settings,
+        rt,
+        _client(settings, cfg, settings.backfill_max_calls),
+        store,
+        entities,
+        day,
+        stop,
+        on_written=lambda _r: touch(settings.heartbeat_file),
+    )
+    print(f"snapshot brand={cfg.key} status={run.status} slices={run.slices} calls={run.calls} errors={run.errors}")
+    return 0 if run.status == "ok" else 1
+
+
 def _cmd_probe(settings: EsbSettings, args: argparse.Namespace) -> int:
     cfg = settings.brand(args.brand.strip().lower())
     client = _client(settings, cfg, 200)
@@ -186,6 +252,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_run(settings, stop)
     if args.cmd == "backfill":
         return _cmd_backfill(settings, args, stop)
+    if args.cmd == "snapshot":
+        return _cmd_snapshot(settings, args, stop)
     return _cmd_probe(settings, args)
 
 

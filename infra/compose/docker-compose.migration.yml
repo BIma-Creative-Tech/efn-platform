@@ -1,0 +1,36 @@
+# G43 (docs/04 §27.2, ADR-042 Accepted 18 Nov 2026): sisi Odoo migrasi ESB -> Odoo. Overlay ini HANYA dipasang selama
+# jendela migrasi (dry-run / cutover brand), lalu DILEPAS (recreate odoo tanpa -f ini) setelah berita acara. Tanpa
+# overlay ini kunci bundel dan direktori pertukaran tidak ada di container Odoo mana pun (least privilege, dicek
+# scripts/check-encryption.sh render `prod-migration`). Runbook: docs/runbooks/migrasi-esb-odoo.md.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.<env>.yml -f docker-compose.migration.yml \
+#     --profile core up -d odoo
+#   docker compose ... exec -T -e EFN_MIG_ARGV='<json>' odoo odoo shell -d "$ODOO_DB" --no-http \
+#     < ../../scripts/migration/odoo_import_esb.py
+#
+# Yang ditambahkan ke service `odoo` (digabung dengan base):
+#   - secret migration_bundle_key (verifikasi HMAC/dekripsi bundel dan enkripsi bundel hasil, efn_mig/bundle.py);
+#   - ${MIG_EXCHANGE_DIR} -> /mnt/efn-mig (baca bundel dari esb-migrate, tulis <run_id>.result.efnmig). Direktori yang
+#     SAMA dengan /out di esb-migrate; uid user odoo = EFN_MIG_UID esb-migrate (bundel 0600, runbook §2);
+#   - kode scripts/migration hanya-baca di /opt/efn-migration (importer meng-import efn_mig.bundle / efn_mig.xmlid agar
+#     format & xmlid identik dengan export; cryptography = paket bawaan image Odoo).
+# Tidak menambah network, port, maupun label Traefik. Odoo tetap tanpa jalur ke ClickHouse (L-129).
+services:
+  odoo:
+    environment:
+      EFN_MIG_BUNDLE_KEY_FILE: /run/secrets/migration_bundle_key
+      EFN_MIG_EXCHANGE_DIR: /mnt/efn-mig
+      EFN_MIG_CODE_DIR: /opt/efn-migration
+      # docs/04 §27.2: user Odoo teknis migrasi (create/write/unlink model histori hanya superuser migrasi, §27.8)
+      EFN_MIG_USER_LOGIN: ${EFN_MIG_USER_LOGIN:-efn_migration}
+    secrets: [migration_bundle_key]   # digabung dengan daftar secret base
+    volumes:
+      - type: bind
+        source: ${MIG_EXCHANGE_DIR:-/var/lib/efn/migration/exchange}
+        target: /mnt/efn-mig
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../../scripts/migration
+        target: /opt/efn-migration
+        read_only: true

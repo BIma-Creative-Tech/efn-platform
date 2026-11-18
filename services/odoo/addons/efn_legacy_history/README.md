@@ -1,0 +1,186 @@
+# efn_legacy_history — Arsip histori ESB Core (read-only)
+
+**Gelombang 43 fase 2 (W2).** ADR-042 (Accepted dengan amendemen, 18 Nov 2026), kontrak `docs/04` §27.8, §27.8a,
+§27.9 (v19.1), fit-gap `docs/fit-gap/G43_MIGRASI_ESB_ODOO.md` §7. Versi `19.0.1.0.0`, LGPL-3, depends `efn_core`,
+`stock`, `point_of_sale`, `efn_demand_forecast` (semua CE/efn; tanpa modul pihak ketiga, ADR-031).
+
+## Tujuan
+Menyimpan **arsip sistem lama ESB** di Odoo **tanpa** membuat transaksi Odoo (tidak ada `pos.order`, `account.move`,
+`stock.move`, jurnal, pajak, atau nomor dokumen). Arsip ini dipakai untuk dua hal:
+
+1. **Forecast min/max sejak hari pertama cutover**: `efn.legacy.flow.daily` (aliran produk harian) menjadi input
+   `efn_demand_forecast` untuk hari **sebelum** `efn_mig_esb.cutover_date.<KODE PT>` (tanpa cold start 8 minggu).
+2. **Histori penjualan di dalam Odoo** (keputusan user Q-ESB20): `efn.legacy.sales.daily` (harian per menu) dan
+   `efn.legacy.sales.line` (baris transaksi), dilihat lewat pivot/graph/list.
+
+Angka resmi histori tetap gudang data ClickHouse (Dashboard Insight, retensi 10 tahun, L-109).
+
+## Model
+| Model | Grain | Kunci idempoten | `_log_access` | Grup baca |
+|---|---|---|---|---|
+| `efn.legacy.flow.daily` | hari × company × gudang × produk storable | UNIQUE `(company_id, warehouse_id, product_id, day)` (upsert) | ya | `stock.group_stock_user` (planner = Inventory Admin, implied) |
+| `efn.legacy.sales.daily` | hari × company × outlet × kode menu ESB | UNIQUE `(company_id, warehouse_id, day, esb_menu_code)` (upsert) | ya | `group_legacy_sales_reader` |
+| `efn.legacy.sales.line` | baris transaksi ESB (`sales_num`, `line_no`) | **tanpa** UNIQUE — ganti irisan company × gudang × bulan | **tidak** | `group_legacy_sales_reader` |
+
+Field per model:
+- **flow.daily**: `day`, `company_id`, `warehouse_id`, `product_id` (wajib), `uom_id` (related), `sold`, `ck_prod`,
+  `store_prod`, `ck_out`, `in_ck`, `in_other`, `st_in`, `st_out` (Float 16,3), `outflow` (= `sold + st_out + ck_out`,
+  **disimpan**, bukan compute), `esb_brand`, `esb_branch_id`, `esb_product_code` (wajib), `esb_product_name`, `run_id`.
+- **sales.daily**: `day`, `company_id`, `currency_id` (related), `warehouse_id`, `pos_config_id` (opsional),
+  `product_id` (**opsional** — menu tak terpetakan tetap tersimpan), `esb_brand`, `esb_branch_id`, `esb_menu_code`
+  (wajib), `menu_name`, `menu_category`, `is_takeaway`, `qty`, `gross`, `discount`, `net`, `cogs` (Monetary),
+  `trx_count`, `run_id`. `net` = nilai export; bila kosong diisi `gross − discount`.
+- **sales.line**: `date`, `company_id`, `warehouse_id`, `product_id` (opsional), `esb_menu_code` (wajib, Char 32),
+  `sales_num` (wajib, Char 32), `line_no`, `qty` (Float 16,3), `price`, `total`, `discount`, `cogs` (Float 16,2 —
+  Rupiah tanpa kolom mata uang per baris), `row_type` (`ALACARTE`/`PACKAGE_HEADER`/`PACKAGE_COMPONENT`), `is_takeaway`.
+  Tanpa `run_id` per baris (jejak run = `import_report.json` importer).
+
+Aturan bersama: `company_id` wajib, `_check_company_auto`, record rule **global** `[('company_id', 'in',
+company_ids)]`, ACL hanya `perm_read`, tanpa `mail.thread`. `create`/`write`/`unlink` (juga `copy`) di-override →
+`AccessError` kecuali `env.su` **dan** konteks `efn_legacy_import=True`. Indeks: `(company_id, day|date)`,
+`(company_id, warehouse_id, day|date)`; flow juga `(warehouse_id, product_id, day)` (query forecast).
+`group_legacy_sales_reader` ("Histori ESB — baca penjualan") di-imply `point_of_sale.group_pos_manager`; analis PT
+tanpa hak POS manager ditambahkan manual.
+
+### Keputusan `_log_access`
+- `sales.line` **False**: ±8 juta baris PB; kolom `create/write_uid/date` ±24 byte/baris (≈ 0,2 GB PB) tanpa nilai
+  audit (penulis satu-satunya = skrip migrasi; jejak = laporan impor per irisan + log skrip).
+- `flow.daily` & `sales.daily` **dipertahankan** (kontrak §27.8; volume kecil/sedang): diisi SQL bulk dengan `env.uid`
+  (user teknis `efn_migration` bila importer memakai `env(user=efn_migration, su=True)`) dan `now()`.
+
+## Menu
+- Inventaris › Laporan › **Histori ESB (arsip)**: Aliran produk harian; Penjualan harian per menu; Baris penjualan.
+- Point of Sale › Laporan › **Histori ESB (arsip)**: Penjualan harian per menu; Baris penjualan.
+Semua view tanpa tombol buat/ubah/hapus; judul view dan banner form: "Arsip sistem lama ESB — bukan transaksi Odoo".
+Filter default: penjualan harian 3 bulan terakhir; baris penjualan bulan terakhir (`limit` 80, tanpa graph default).
+
+## API impor (untuk `scripts/migration`, BUKAN RPC)
+Fungsi Python di `efn_legacy_history/bulk.py` (dibungkus metode privat `_efn_*` di model; tidak bisa dipanggil lewat
+`call_kw`/`json2`, SEC-58). Wajib `env.su` + konteks `efn_legacy_import=True`:
+
+```python
+Flow = env["efn.legacy.flow.daily"].sudo().with_context(efn_legacy_import=True)
+Flow._efn_bulk_upsert(rows, run_id, company_ids, batch_size=5000, max_day=None)
+# -> {"rows", "inserted", "updated", "unchanged"}
+Sales = env["efn.legacy.sales.daily"].sudo().with_context(efn_legacy_import=True)
+Sales._efn_bulk_upsert(rows, run_id, company_ids, batch_size=5000, max_day=None)
+Line = env["efn.legacy.sales.line"].sudo().with_context(efn_legacy_import=True)
+Line._efn_bulk_replace_slice(
+    company_id,
+    warehouse_id,
+    date_from,
+    date_to,
+    rows,
+    run_id=None,
+    batch_size=5000,
+    max_day=None,
+    sales_line_months=None,
+)
+# -> {"rows_deleted", "rows_inserted"}; date_to EKSKLUSIF; juga tersedia di flow/sales.daily (run_id wajib)
+```
+- `rows`: iterable `dict` berkunci nama field di atas (Many2one = id int hasil resolve xmlid; tanggal `date` atau
+  `'YYYY-MM-DD'`; angka int/str/Decimal). Kolom tak dikenal (termasuk `outflow`) → error (fail closed).
+- Validasi sebelum menulis (pengganti `check_company` yang dilewati SQL): company ∈ `company_ids` target, gudang &
+  kasir milik company baris, produk milik company itu atau tanpa company, tanggal `<` cutover company (parameter) dan
+  `<` `max_day`; untuk `sales.line` irisan wajib di dalam `[awal bulan(cutover) − N bulan, cutover)`,
+  `N = min(efn_mig_esb.sales_line_months, sales_line_months manifest)`; `N = 0` → `UserError`.
+- SQL: `INSERT … ON CONFLICT … DO UPDATE … WHERE … IS DISTINCT FROM` (upsert; baris sama persis tidak ditulis ulang)
+  atau `DELETE` irisan + `INSERT` multi-baris; disusun dengan `odoo.tools.SQL` (identifier ter-quote, nilai = parameter
+  terikat). `COPY` tidak dipakai (akses cursor mentah Odoo 19 belum diverifikasi, §27.8a [B]).
+- Transaksi milik pemanggil: commit per irisan (run nyata) / rollback (dry-run) = tugas importer.
+- Helper parameter: `get_cutover_date(env, company)`, `get_sales_line_months(env)`, `sales_line_window(env, company,
+  anchor=None, months=None)`.
+
+## Importer bundel ESB (G43 W2b) — `esb_import/`
+Paket Python server-side (bukan model, tidak diimpor `__init__` modul → tanpa RPC, tanpa `cryptography` saat modul
+dimuat). Pemanggil: `scripts/migration/odoo_import_esb.py` di `odoo shell` (pembungkus host
+`scripts/migration/run-import.sh`, overlay `infra/compose/docker-compose.migration.yml`) dan test modul ini.
+
+| Berkas | Isi |
+|---|---|
+| `esb_import/mapping.py` | MURNI (tanpa `odoo`): validasi baris (amplop, xmlid dihitung ulang, referensi satu brand × PT), baris → nilai Odoo (`Plan`: field milik migrasi + hanya-saat-create), konversi qty/HPP via `ea_factor`, BoM normal/phantom, nilai bulk histori. Diuji pytest `scripts/migration/tests/test_odoo_import_mapping.py`. |
+| `esb_import/importer.py` | `run_import(env, bundle, Options, commit)` + `build_result(...)`: gerbang §27.5, urutan §27.2, upsert xmlid §27.4, histori bulk, `odoo_totals` dari tabel, `table_bytes`. |
+| `esb_import/efn_mig/{bundle,xmlid}.py` | **Salinan terkendali** `scripts/migration/efn_mig` (lihat di bawah). |
+
+Keputusan:
+- **Salinan `efn_mig`, bukan import dari path repo.** Image Odoo (`services/odoo/Dockerfile`) hanya memuat
+  `services/odoo/addons`; test CI Odoo tidak melihat `scripts/`. Dua berkas disalin persis dan dijaga
+  `test_vendored_efn_mig_identical` (pytest, abaikan CRLF) + test bahwa hanya `AESGCM`/`HKDF`/`hashes`/`InvalidTag`
+  dari `cryptography` yang dipakai (cryptography = bawaan image Odoo, bukan pin 50.0.2 milik `esb-migrate`). Di
+  `odoo shell`, `odoo_import_esb.py` memakai `efn_mig` resmi dari `EFN_MIG_CODE_DIR` bila ada (overlay), fallback salinan.
+- Upsert berjalan sebagai `EFN_MIG_USER_LOGIN` (`env(user=…, su=True)`): xmlid baru → create + xmlid `noupdate`;
+  xmlid ada & `write_uid` = user migrasi → tulis field yang berbeda; diubah pengguna lain + beda → `conflict` (tidak
+  ditimpa); hilang di sumber → `missing_in_source`; xmlid ke record terhapus → `dangling_xmlid` (gagal).
+- Cabang store → `stock.warehouse` + `pos.config` tanpa sesi & **tanpa metode bayar** (`payment_method_ids` kosong:
+  milik admin/efn_setup_pos; juga mencegah default CE membuat jurnal); `location` → `stock.location` internal di bawah
+  `lot_stock_id` gudang induk; `efn_is_central_kitchen` hanya bila `efn_ck_production` terpasang (dicatat).
+- Kategori produk: `All / <BRAND> / <kategori ESB>` (induk per brand, xmlid `efn_mig_esb.<brand>_category_root`).
+- Produk & menu: xmlid → `product.template`; histori memakai varian tunggal. Menu takeaway `alias_of` → xmlid kedua ke
+  menu dasar (map dua baris, `odoo_id` sama); menu arsip → produk `active=False`; harga hanya bila ada di bundel.
+- BoM: `normal` (produksi CK, ADR-018) `product_qty` = rasio BATCH (EA ÷ `ea_factor` produk); `phantom` = satu kit
+  per menu (`menu_keys` > 1 → xmlid tambahan `<xmlid>_k<sha1(menu_key)[:8]>`, esb_key `<bom_id>|<menu_key>` — asumsi
+  W2b); qty komponen dikonversi ke UoM produk komponen; `yield_percent` tidak dipakai (Q-ESB17). Butuh `mrp`.
+- HPP (`cost`): `standard_price` per PT; produk yang sudah berstok di PT itu → `conflict` (tidak direvaluasi).
+- Histori: flow/sales.daily = `bulk_upsert` per gudang setelah agregasi (cabang `location` → gudang induk);
+  sales.line = `bulk_replace_slice` per gudang × range berkas dipotong `sales_line_window` (di luar → dilewati,
+  `rows_skipped_window`; parameter 0 → `skipped_by_param`). Produk/menu tak terpetakan: flow dilewati
+  (`rows_skipped_unmapped`), penjualan disimpan dengan `product_id` kosong.
+- Dry-run = savepoint di-rollback setelah `odoo_totals`/`table_bytes` dihitung; run nyata commit per entitas/irisan.
+- Saldo awal (`stock`/`opening`) = stub (`import_opening_balances`) — default mati, aktif pun exit 2 dengan pesan.
+
+## Parameter (`ir.config_parameter`)
+| Kunci | Default | Catatan |
+|---|---|---|
+| `efn_mig_esb.cutover_date.<KODE>` | — (tidak di-seed) | diisi langkah `cutover-param`; kosong/format salah → forecast perilaku lama (+ log peringatan) |
+| `efn_mig_esb.sales_line_months` | `24` (`noupdate`) | 0..24; 0 = `sales.line` tidak dimuat; tidak valid → 24 + peringatan |
+| `efn_mig_esb.legacy_days` | `400` (`noupdate`) | informasi (batas efektif = manifest, ditegakkan importer/validator) |
+
+## Hook forecast
+`efn_demand_forecast` 19.0.1.1.0 punya `_efn_legacy_outflow(warehouse, product, date_from, date_to)` → `(None, {})`.
+Modul ini meng-override: batas = cutover company gudang; dict = Σ `outflow` per hari untuk `[date_from, min(date_to,
+batas − 1)]`. `_efn_daily_outflow` mengambil hari `< batas` dari legacy dan hari `≥ batas` dari `stock.move`
+(stock.move sebelum cutover diabaikan — itu artefak migrasi). Signature mengikuti `docs/04` §27.8 / ADR-042 §3.2
+(per gudang × produk), bukan `(company, products)`, karena forecast v1 menghitung per gudang.
+
+## Volume & pengukuran
+Perkiraan (architect §27.8a, belum diukur): `sales.line` PB ±8,2 juta baris ≈ **±1,5–2 GB** (heap ±150 B/baris +
+indeks), `sales.daily` PB ±0,35–0,5 GB, `flow.daily` PB ±0,1 GB; lima brand ±4,5–6,5 GB. WAL sekali muat ≈ ukuran
+tabel + indeks; replica ikut bertambah; backup harian `pg_dump`/basebackup bertambah sebesar itu (R-T08).
+**Angka resmi = dry-run PB**:
+```sql
+SELECT relname, pg_size_pretty(pg_total_relation_size(oid))
+  FROM pg_class WHERE relname IN ('efn_legacy_flow_daily', 'efn_legacy_sales_daily', 'efn_legacy_sales_line');
+```
+(diukur sebelum rollback dry-run; `ANALYZE` setelah run nyata, `VACUUM (ANALYZE)` setelah dry-run besar.) Profil dev
+(K25-06): `sales_line_months = 0` atau 1.
+
+## Retensi & PDP
+Isi = data bisnis (kode/nama menu & produk, angka, `sales_num` = nomor dokumen ESB). **Tanpa data pribadi** (sumber
+tidak memuat pelanggan/kasir). Retensi mengikuti dokumen penjualan (10 tahun, sama dengan ClickHouse L-109) sampai
+keputusan Finance/DPO; hapus = uninstall modul atau ganti irisan oleh skrip migrasi. Ekspor CSV mengikuti
+`base.group_allow_export`. Entri inventaris PDP: tugas efn-architect (W4).
+
+## Risiko yang dimitigasi
+R-L03 (pajak/valuasi ganda — histori bukan transaksi), R-O02/R-O13 (histori bias: validasi company/gudang/produk,
+tanggal < cutover, idempoten, rekonsiliasi butir 5 oleh skrip), R-T08 (volume: indeks minimal, `_log_access=False`
+untuk baris, parameter rentang), SEC-58 (tanpa metode RPC publik baru).
+
+## Uji manual
+1. Install modul; Inventaris › Laporan › Histori ESB (arsip) tampil kosong dengan pesan arsip.
+2. `odoo shell`: `env["efn.legacy.flow.daily"].sudo().with_context(efn_legacy_import=True)._efn_bulk_upsert([...],
+   "<uuid>", [company.id])` dua kali → jumlah baris sama; ubah satu nilai → `updated = 1`.
+3. Login user PB → hanya baris PB; user stok biasa tidak melihat menu penjualan.
+4. Set `efn_mig_esb.cutover_date.PB` → Forecast EFN › Hitung: `history_qty` memuat outflow legacy untuk hari sebelum
+   cutover.
+
+## Batasan / belum
+- Importer ditulis (W2b) tetapi **belum dijalankan** terhadap Odoo 19 nyata maupun bundel PB nyata; `table_bytes`
+  resmi menunggu dry-run PB. Perilaku `pos.config` create di PT tanpa CoA, keamanan xmlid modul `efn_mig_esb` yang
+  tidak terpasang saat upgrade modul lain (§27.4 butir 6) = [B].
+- Test **belum dijalankan** oleh penulis (tanpa shell); lead menjalankan di container Odoo 19.
+- "Wajib ada filter tanggal" pada list `sales.line` hanya berupa filter default (tidak dipaksa server).
+- `sales.daily`: kunci memakai `esb_menu_code` (bukan `(product_id, day, is_takeaway)` kontrak) agar menu tak
+  terpetakan tetap bisa di-upsert; setara bila semua menu terpetakan. Bila dua cabang ESB dipetakan ke satu gudang,
+  export wajib mengagregasi dulu (kunci ganda dalam satu batch → error).
+- Penurunan `sales_line_months` tidak menghapus baris lama (runbook: ganti irisan kosong).
+- Referensi desain: tidak ada modul OCA/Cybrosys yang dipakai/dirujuk (pola upsert = PostgreSQL standar).
