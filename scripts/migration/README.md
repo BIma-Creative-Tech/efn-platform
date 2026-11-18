@@ -58,6 +58,19 @@ python esb_to_odoo.py writeback --result /out/<run_id>.result.efnmig
 python esb_to_odoo.py reconcile --bundle <b1> --bundle <b2> --result <r1> --result <r2> --out /out [--with-source]
 python esb_to_odoo.py reconcile --final --parent-run-id <X> --bundle <semua segmen> --result <hasil totals> --out /out
 ```
+**Pengecualian eksplisit export master** (dry-run data nyata PB 18 Nov 2026; default MATI = ketat, fail closed). Opsi
+tercatat di manifest `export_options` (ditandatangani bersama manifest); validator membaca manifest, bukan flag sendiri,
+dan ringkasan `.md` laporan menampilkan "DRY-RUN DENGAN PENGECUALIAN" (wajib disebut di berita acara):
+| Flag | Efek export | Validator |
+|---|---|---|
+| `--default-uom <xmlid>` | produk tanpa UoM terpetakan (setelah fallback satuan BoM) → `uom_xmlid=<xmlid>`, `data.uom_source="default"` (kunci hanya pada baris itu) | `PRODUCT_UOM_DEFAULT` = peringatan; `uom_source=default` tanpa opsi yang cocok = error `PRODUCT_UOM` |
+| `--skip-unlinked-menu-boms` | BoM tipe `Menu` / tanpa produk hasil yang tidak tertaut menu (`menu_keys` kosong) tidak diekspor; `manifest.skipped.unlinked_menu_boms = {count, bom_ids}` | `BOM_MENU_UNLINKED_SKIPPED` = peringatan |
+| `--allow-default-ratio` | (data sama) BoM normal FIN tanpa `bom_ratio` tetap `product_qty=1`, `ratio_source="default_1"` | `BOM_DEFAULT_RATIO` = peringatan, bukan `BOM_NO_RATIO` |
+| `--drop-zero-qty-components` | komponen qty ≤ 0 dibuang; `manifest.skipped.zero_qty_components = {count, items:[{bom_id, product_code}]}` | `BOM_QTY_DROPPED` = peringatan; tanpa opsi tetap `BOM_QTY` error |
+Pembuangan tercatat di `skipped` tanpa opsi yang cocok = error `BOM_SKIPPED_WITHOUT_OPTION`. Importer Odoo
+mengabaikan kunci data master tambahan (`data.uom_source`) dan kunci manifest baru (`export_options`, `skipped`; ikut
+HMAC manifest) — terverifikasi pada impor master dry-run PB 18 Nov 2026.
+
 Langkah: `branch uom category product menu partner bom supplierinfo cost` (grup `master`), `legacy_flow
 legacy_sales_daily legacy_sales_line` (grup `history`), `cutover` = histori + `cutover-param`. `stock`/`opening` →
 exit 2 "belum dibangun" (menunggu E6–E10 terverifikasi). `supplierinfo` tidak punya sumber ESB (dicatat di manifest).
@@ -213,6 +226,13 @@ Bundel/hasil dihapus ≤ 90 hari setelah berita acara (Q-ESB24); tidak boleh di 
   `has({ids:Array(UInt32)}, …)`) perlu uji di ClickHouse 24.8.
 - Langkah `stock`, `opening`, `supplierinfo`, `combo` (Q-ESB12) belum diekspor. `validate_import.py --source templates`
   belum dibangun. Pemeriksaan "company ada di Odoo target" & pajak lintas PT = tugas importer.
+- **Q-ESB25 (ESB/Ops, terbuka):** di data nyata PB `bomName` pada `/menu/browse-for-product` KOSONG dan kode BoM ≠
+  kode menu (988 BoM tipe Menu tanpa `bom_code`), sehingga tautan menu ↔ resep via nama tidak berfungsi
+  (1.156 `BOM_PRODUCT_MISSING`). Pertanyaan: dari endpoint/field ESB mana tautan menu ↔ BoM resep dibaca
+  (mis. `/menu/{id}`, `/product/bom/{id}` `bomReplacements`/menu mapping, ekspor ESB)? Sampai terjawab, BoM menu hanya
+  bisa dilewati eksplisit (`--skip-unlinked-menu-boms`) dan stok menu tidak terpotong lewat kit di Odoo.
+- Dry-run PB nyata (7 hari, 18 Nov 2026): 2.479 `PRODUCT_UOM` (`/product` tanpa satuan), 170 `BOM_NO_RATIO`, 1 `BOM_QTY`
+  → opsi pengecualian di atas; nilai default UoM & rasio wajib disetujui CK/Finance sebelum run nyata.
 - Penentuan `phantom` vs `normal` dari tautan `bomName` menu dan arti `bomTypeID` = asumsi [B] (Q-ESB17);
   `standard_price` dari `lastHpp` dalam satuan komponen [B]; satuan produk ESB tidak ada di `/product` (fallback satuan
   BOM).

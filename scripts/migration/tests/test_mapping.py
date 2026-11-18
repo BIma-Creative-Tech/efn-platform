@@ -163,3 +163,14 @@ def test_num_rejects_non_finite() -> None:
     assert m.num(Decimal("2.000")) == 2 and m.num(Decimal("2.5")) == 2.5 and m.num(None) == 0
     with pytest.raises(ValueError):
         m.num(Decimal("NaN"))
+
+
+def test_menu_code_of_empty_code_uses_deterministic_name_key() -> None:
+    """Dry-run PB 18 Nov 2026: baris penjualan nyata tanpa menuCode (header paket) tidak boleh menggagalkan export."""
+    from efn_mig.mapping import menu_code_of
+
+    assert menu_code_of({"menu_code": "TB0207", "menu_name": "ROTI"}) == "TB0207"
+    k1 = menu_code_of({"menu_code": "", "menu_name": "Paket  Hemat A"})
+    k2 = menu_code_of({"menu_code": None, "menu_name": "PAKET HEMAT A"})
+    assert k1 == k2 and k1.startswith("NAME:") and len(k1) <= 32
+    assert menu_code_of({"menu_code": "", "menu_name": "Paket B"}) != k1

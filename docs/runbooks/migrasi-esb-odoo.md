@@ -209,9 +209,15 @@ gagal impor) → investigasi sebelum lanjut; peringatan rasio net/pembayaran di 
 Laporan per segmen di atas hanya kontrol antara; yang dilampirkan ke berita acara (§6) adalah laporan `--final`, dan
 exit ≠ 0 dari `--final` = berita acara tidak boleh ditandatangani.
 ```bash
-$MIG python esb_to_odoo.py reconcile --final --bundle /out/<seg1>.efnmig ... --result /out/<seg1>.result.efnmig ... \
-  --out /out --with-source
+# 1) total dari tabel Odoo SETELAH semua segmen dimuat (tanpa tulis DB); parent = parent_run_id export histori
+$RI --totals --company PB --month 2026-10 --month 2026-11 --parent-run-id <parent_run_id>   # -> <run>.totals.result.efnmig
+# 2) Σ semua segmen vs totals; hasil totals tanpa steps=["totals"] / parent lain ditolak
+$MIG python esb_to_odoo.py reconcile --final --parent-run-id <parent_run_id> \
+  --bundle /out/<parent>_PB_202610.efnmig --bundle /out/<parent>_PB_202611.efnmig \
+  --result /out/<run>.totals.result.efnmig --out /out          # -> reconcile_final_<parent>.md/.csv
 ```
+Catatan dry-run PB 18 Nov 2026 (dev, 7 hari): `validation_<run_id>.json` segmen memakai `run_id` **segmen** (header/
+manifest), bukan nama berkas `<parent>_<PT>_<YYYYMM>`; tanpa laporan itu importer menolak (gerbang 1, exit 4).
 
 ### 4.4 Validasi fungsional di Odoo (checklist)
 - [ ] Gudang/lokasi/`pos.config` PB sesuai `branch_map`; tidak ada sesi POS terbuka dibuat.
@@ -342,5 +348,7 @@ Berkas ini berada di `MIG_EXCHANGE_DIR` agar ikut terhapus di §7 (≤ 90 hari s
 | `konfigurasi: CH_CA_FILE ...` / TLS error | CA internal tidak ter-mount atau sertifikat ClickHouse kedaluwarsa (`make pki`). Tidak ada fallback plaintext. |
 | ClickHouse `AUTHENTICATION_FAILED` untuk `efn_mig` | clickhouse-init belum dijalankan ulang setelah secret diisi, atau secret placeholder → user dihapus (§2.2). |
 | Importer `Permission denied` membaca bundel | `EFN_MIG_UID/GID` ≠ uid/gid odoo (§2.3); ekspor ulang setelah diperbaiki. |
+| Scope ClickHouse / kunci bundel ditolak padahal nilai benar (host Windows) | OpenSSL Git Bash menulis CRLF (`\r\n`); buat secret dengan `openssl rand -hex 32 \| tr -d '\r\n'` (dry-run PB 18 Nov 2026). |
+| Baris komponen BoM qty 0 / BoM `updated` terus pada impor ulang | Presisi `Product Unit` Odoo (CE 2 digit) memotong qty resep kecil; importer menskalakan BoM (docs/04 §27, `bom_scale`). Bila masih `failed` "tidak terwakili presisi", periksa data ESB komponen itu. |
 | OOM-kill esb-migrate (exit 137) | Segmen terlalu besar: turunkan `EFN_MIG_SEGMENT_MAX_ROWS` (dipecah per gudang). |
 | `gerbang ditolak` (exit 4) | PT di `EFN_MIG_SALDO_BLOCKED` untuk langkah saldo, atau `writeback` atas hasil dry-run. |

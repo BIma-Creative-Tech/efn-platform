@@ -202,6 +202,34 @@ def _round6(value: Decimal) -> float:
     return float(round(value, 6))
 
 
+BOM_MAX_REL_ERROR = Decimal("0.005")  # galat pembulatan relatif maksimum per qty BoM (0,5%)
+BOM_MAX_SCALE_EXP = 6  # skala BoM maksimum 10^6
+
+
+def _quantize(value: Decimal, digits: int) -> Decimal:
+    return value.quantize(Decimal(1).scaleb(-digits), rounding="ROUND_HALF_UP")
+
+
+def bom_scale(header: Decimal, qtys: Iterable[Decimal], digits: int) -> int | None:
+    """Faktor skala 10^k terkecil (k <= BOM_MAX_SCALE_EXP) agar qty hasil BoM dan SEMUA qty komponen, setelah dikali
+    faktor dan dibulatkan ke presisi `Product Unit` Odoo (`digits`; default CE = 2), tetap > 0 dengan galat relatif
+    <= BOM_MAX_REL_ERROR. Rasio resep tetap (Odoo menskalakan MO terhadap `product_qty` BoM). Dry-run PB 18 Nov 2026:
+    124 baris komponen (mis. 0,0003 EA, 0,0044 g per 1 unit) tersimpan 0 tanpa skala. None = tidak bisa diwakili."""
+    values = [header, *[q for q in qtys if q > 0]]
+    for exp in range(BOM_MAX_SCALE_EXP + 1):
+        factor = 10**exp
+        ok = True
+        for value in values:
+            scaled = value * factor
+            rounded = _quantize(scaled, digits)
+            if rounded <= 0 or abs(rounded - scaled) / scaled > BOM_MAX_REL_ERROR:
+                ok = False
+                break
+        if ok:
+            return factor
+    return None
+
+
 def warehouse_plan(data: Mapping[str, Any], company_id: int) -> Plan:
     code = str(data.get("warehouse_code") or "").strip().upper()
     owned = {
@@ -429,6 +457,7 @@ def bom_targets(
     resolver: Resolver,
     products: Mapping[str, Mapping[str, Any]],
     uoms: Mapping[str, Mapping[str, Any]],
+    qty_digits: int = 6,
 ) -> list[BomTarget]:
     """`bom.jsonl` -> mrp.bom. `normal` (produksi CK, ADR-018) satu BoM; `phantom` (resep menu) satu kit per menu.
 
@@ -437,7 +466,7 @@ def bom_targets(
     tidak dipakai (CE tanpa field yield; Q-ESB17)."""
     data = row["data"]
     missing: list[str] = []
-    lines: list[tuple[int, float, int]] = []
+    raw_lines: list[tuple[int, Decimal, int]] = []
     for line in data.get("lines") or []:
         key = line.get("product_key")
         product_id = resolver.variant_id(key) if key else None
@@ -451,7 +480,7 @@ def bom_targets(
         if qty <= 0 or not uom_id:
             missing.append(f"qty/uom komponen {line.get('product_code')}")
             continue
-        lines.append((product_id, _round6(qty), uom_id))
+        raw_lines.append((product_id, qty, uom_id))
     if not data.get("lines"):
         missing.append("lines (BoM tanpa komponen)")
     bom_type = data.get("type")
@@ -476,6 +505,14 @@ def bom_targets(
         if bom_type == "normal" and data.get("ratio_source") == "bom_ratio":
             info = products.get(key) or {}
             qty = qty / _ea(uoms, info.get("uom_esb"), info.get("ea_factor"))
+        # Skala BoM agar qty kecil tidak terbulatkan ke 0 oleh presisi Odoo (lihat bom_scale).
+        factor = bom_scale(qty, (q for _p, q, _u in raw_lines), qty_digits) if qty > 0 else None
+        if factor is None:
+            factor = 1
+            if qty > 0 and raw_lines:
+                target_missing.append(f"qty BoM tidak terwakili presisi Product Unit ({qty_digits} digit) bahkan x10^6")
+        lines = [(p, float(_quantize(q * factor, qty_digits)), u) for p, q, u in raw_lines]
+        qty = _quantize(qty * factor, qty_digits) if qty > 0 else qty
         owned = {
             "code": str(data.get("code") or row["esb_key"]),
             "type": bom_type if bom_type in ("normal", "phantom") else "normal",

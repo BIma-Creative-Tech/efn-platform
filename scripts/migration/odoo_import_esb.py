@@ -14,7 +14,8 @@ direktori itu (selain itu exit 2):
      "enable_opening_balances": false,         # stock/opening: STUB, selalu exit 2 (data E6+ belum diverifikasi)
      "allow_missing_validation": false}
 Mode totals (tanpa bundel, tanpa tulis; untuk `reconcile --final`):
-    {"steps": ["totals"], "companies": ["PB"], "months": ["2026-09", "2026-10"], "brand": "pb" (opsional)}
+    {"steps": ["totals"], "companies": ["PB"], "months": ["2026-09", "2026-10"], "parent_run_id": "<uuid>",
+     "brand": "pb" (opsional)}  # parent_run_id = run export histori (wajib; reconcile --final mencocokkannya)
     -> `<run_id>.totals.result.efnmig` (kind=result, import_report.mode = "totals").
 
 Env overlay `infra/compose/docker-compose.migration.yml`: `EFN_MIG_BUNDLE_KEY_FILE` (secret `migration_bundle_key`),
@@ -39,6 +40,7 @@ _CODE = re.compile(r"^[A-Z0-9]{2,8}$")
 _STEP = re.compile(r"^[a-z_-]{2,32}$")
 _BRAND = re.compile(r"^[a-z0-9]{2,16}$")
 _MONTH = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _DEFAULT_MAX_BUNDLE = 1024 * 1024 * 1024
 _MAX_VALIDATION = 64 * 1024 * 1024
 
@@ -152,8 +154,11 @@ def _main(env):
                 raise _ArgError("brand tidak valid")
             if not companies or not months:
                 raise _ArgError("mode totals wajib companies dan months")
+            parent = args.get("parent_run_id")
+            if not (isinstance(parent, str) and _UUID.fullmatch(parent)):
+                raise _ArgError("mode totals wajib parent_run_id (UUID run export histori)")
             brand = brand or imp.brand_for_companies(companies)
-            result = imp.run_totals(env, brand, companies, months)
+            result = imp.run_totals(env, brand, companies, months, parent_run_id=parent)
             env.cr.rollback()
             out = exchange / f"{result.report['run_id']}.totals.result.efnmig"
             _write_exclusive(out, imp.build_totals_result(result, keys))

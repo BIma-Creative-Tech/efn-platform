@@ -446,6 +446,8 @@ class _Run:
         self.companies = companies
         self.commit = commit
         self.uid = env.uid
+        # Presisi qty BoM (mrp.bom / mrp.bom.line memakai digits "Product Unit"; CE default 2) -> m.bom_scale.
+        self.qty_digits = int(env["decimal.precision"].precision_get("Product Unit"))
         self.report = {
             "dry_run": bool(opts.dry_run),
             "run_id": self.man["run_id"],
@@ -854,7 +856,7 @@ class _Run:
             code, company, cenv = self._company(row)
             statuses = []
             # Satu baris ESB bisa = beberapa kit (satu per menu); status baris = status terburuk (rekonsiliasi butir 1).
-            for target in m.bom_targets(row, company.id, self, self.products, self.uoms):
+            for target in m.bom_targets(row, company.id, self, self.products, self.uoms, self.qty_digits):
                 status, _rec = self.upsert(None, "bom", code, target.esb_key, target.xmlid, target.plan, cenv)
                 statuses.append(status)
             self._count("bom", next(s for s in order if s in statuses))
@@ -1404,9 +1406,10 @@ def brand_for_companies(codes) -> str:
     return brands.pop()
 
 
-def run_totals(env, brand: str, codes, months) -> ImportResult:
+def run_totals(env, brand: str, codes, months, parent_run_id: str | None = None) -> ImportResult:
     """Mode `totals` (tanpa impor, tanpa tulis): `odoo_totals` dari tabel histori Odoo untuk PT × bulan penuh,
-    semua gudang PT — dipakai `reconcile --final` setelah semua segmen diimpor."""
+    semua gudang PT — dipakai `reconcile --final` setelah semua segmen diimpor. `parent_run_id` = run export histori
+    yang direkonsiliasi (manifest hasil; `reconcile --final` menolak hasil totals tanpa parent yang sama)."""
     codes = sorted(set(codes or ()))
     months = sorted(set(months or ()))
     if not codes or not months or any(not isinstance(mo, str) or not _MONTH_RE.match(mo) for mo in months):
@@ -1436,7 +1439,7 @@ def run_totals(env, brand: str, codes, months) -> ImportResult:
         "mode": "totals",
         "dry_run": False,  # tidak ada yang ditulis; tanpa map.jsonl -> writeback tidak berefek
         "run_id": str(uuid.uuid4()),
-        "parent_run_id": None,
+        "parent_run_id": parent_run_id,
         "brand": brand,
         "company_codes": codes,
         "months": months,
@@ -1461,9 +1464,10 @@ def build_totals_result(result: ImportResult, keys: Keys, now: datetime | None =
         "run_id": result.report["run_id"],
         "brand": result.report["brand"],
         "company_codes": result.report["company_codes"],
-        "parent_run_id": None,
+        "parent_run_id": result.report.get("parent_run_id"),
         "segment": None,
         "mode": "totals",
+        "steps": ["totals"],  # kontrak reconcile_final: kind=result + steps == ["totals"] + parent_run_id
         "months": result.report["months"],
         "dry_run": False,
         "created_at": stamp,

@@ -6,6 +6,7 @@ Kontrak lengkap (kolom, satuan) = `scripts/migration/README.md`.
 """
 
 import csv
+import hashlib
 import io
 import re
 from collections import defaultdict
@@ -56,7 +57,7 @@ DATA_KEYS: dict[str, frozenset[str]] = {
     "product": frozenset(
         {
             "default_code", "name", "categ_key", "uom_esb", "uom_xmlid", "ea_factor", "type", "is_storable",
-            "purchase_ok", "sale_ok", "is_fin", "active", "batch_to_ea_ratio",
+            "purchase_ok", "sale_ok", "is_fin", "active", "batch_to_ea_ratio", "uom_source",
         }
     ),
     "menu": frozenset(
@@ -343,18 +344,72 @@ def product_uoms(
     return out
 
 
+_XMLID_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
+
+
+@dataclass(frozen=True)
+class ExportOptions:
+    """Pengecualian EKSPLISIT export master (dry-run data nyata PB, 18 Nov 2026). Default = ketat (fail closed).
+
+    Dicatat di manifest `export_options`; validator membaca manifest (bukan flag sendiri) dan menurunkan error terkait
+    menjadi peringatan HANYA bila opsi tercatat. Laporan validator menampilkannya (berita acara: dry-run dengan
+    pengecualian)."""
+
+    default_uom: str | None = None  # --default-uom: produk tanpa UoM (setelah fallback BoM) -> xmlid ini
+    skip_unlinked_menu_boms: bool = False  # --skip-unlinked-menu-boms: BoM tipe Menu tanpa tautan tidak diekspor
+    allow_default_ratio: bool = False  # --allow-default-ratio: BoM normal FIN tanpa bom_ratio -> product_qty 1
+    drop_zero_qty_components: bool = False  # --drop-zero-qty-components: komponen qty <= 0 dibuang
+
+    def __post_init__(self) -> None:
+        if self.default_uom is not None and not _XMLID_RE.fullmatch(self.default_uom):
+            raise MapError("--default-uom wajib xmlid UoM (modul.nama)")
+
+    def to_manifest(self) -> dict[str, Any]:
+        return {
+            "default_uom": self.default_uom,
+            "skip_unlinked_menu_boms": self.skip_unlinked_menu_boms,
+            "allow_default_ratio": self.allow_default_ratio,
+            "drop_zero_qty_components": self.drop_zero_qty_components,
+        }
+
+    @property
+    def strict(self) -> bool:
+        return self == ExportOptions()
+
+
+@dataclass
+class BomSkips:
+    """Yang dibuang build_boms karena opsi (dicatat di manifest `skipped`)."""
+
+    unlinked_menu_boms: set[int] = field(default_factory=set)
+    zero_qty_components: set[tuple[int, str]] = field(default_factory=set)
+
+    def to_manifest(self) -> dict[str, Any]:
+        return {
+            "unlinked_menu_boms": {"count": len(self.unlinked_menu_boms), "bom_ids": sorted(self.unlinked_menu_boms)},
+            "zero_qty_components": {
+                "count": len(self.zero_qty_components),
+                "items": [{"bom_id": b, "product_code": c} for b, c in sorted(self.zero_qty_components)],
+            },
+        }
+
+
 def build_products(
     brand: str,
     company: str,
     products: Iterable[Mapping[str, Any]],
     uom_by_code: Mapping[str, str],
     umap: Mapping[str, UomMap],
+    default_uom: str | None = None,
 ) -> list[dict[str, Any]]:
+    """`default_uom` (ExportOptions) dipakai HANYA bila produk tetap tanpa UoM terpetakan setelah fallback BoM;
+    baris itu mendapat `uom_source="default"` (kunci hanya ada bila default dipakai)."""
     out = []
     for p in sorted(products, key=lambda r: str(r["product_code"])):
         code = str(p["product_code"])
         uom = uom_by_code.get(code, "")
         mapped = umap.get(uom)
+        use_default = mapped is None and default_uom is not None
         cat = norm_text(p.get("category"))
         is_fin = bool(p.get("is_fin"))
         ratio = p.get("batch_to_ea_ratio")
@@ -363,7 +418,7 @@ def build_products(
             "name": norm_text(p.get("product_name")) or code,
             "categ_key": category_key(brand, company, cat) if cat else None,
             "uom_esb": uom or None,
-            "uom_xmlid": mapped.uom_xmlid if mapped else None,
+            "uom_xmlid": mapped.uom_xmlid if mapped else (default_uom if use_default else None),
             "ea_factor": num(mapped.ea_factor) if mapped else None,
             "type": "consu",
             "is_storable": True,
@@ -373,6 +428,8 @@ def build_products(
             "active": bool(p.get("active", 1)),
             "batch_to_ea_ratio": num(ratio) if ratio is not None else None,
         }
+        if use_default:
+            data["uom_source"] = "default"
         out.append(record("product", company, code, xmlid(brand, company, "product", code), data))
     return out
 
@@ -384,6 +441,17 @@ class MenuIndex:
     key: dict[str, str] = field(default_factory=dict)
     takeaway: dict[str, bool] = field(default_factory=dict)
     by_bom_name: dict[str, list[str]] = field(default_factory=dict)
+
+
+def menu_code_of(row: Mapping[str, Any]) -> str:
+    """Kode menu ESB; kosong (data nyata: header paket/baris nol tanpa menuCode) -> kunci sintetis deterministik
+    `NAME:<12 hex sha256 nama ternormalisasi>` (<= 32 karakter, muat esb_menu_code). Dipakai SAMA untuk menu
+    master/arsip, sales.daily, dan sales.line agar kunci konsisten (dry-run PB 18 Nov 2026: 8/62.118 baris)."""
+    code = str(row.get("menu_code") or "").strip()
+    if code:
+        return code
+    name = norm_text(row.get("menu_name")).upper()
+    return "NAME:" + hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
 
 
 def build_menus(
@@ -398,12 +466,12 @@ def build_menus(
     Takeaway (nama berakhiran " T"): digabung ke menu dasar dengan nama sama (tanpa " T") -> baris `alias_of` = xmlid
     menu dasar (importer menambah xmlid kedua ke record yang sama). Tanpa menu dasar -> menu berdiri sendiri.
     """
-    price_by_code = {str(r["menu_code"]): r for r in prices}
+    price_by_code = {menu_code_of(r): r for r in prices}
     menus: dict[str, dict[str, Any]] = {}
     for row in archive:
-        menus[str(row["menu_code"])] = {**row, "_archive": True}
+        menus[menu_code_of(row)] = {**row, "_archive": True}
     for row in current:
-        menus[str(row["menu_code"])] = {**row, "_archive": False}
+        menus[menu_code_of(row)] = {**row, "_archive": False}
     base_by_name: dict[str, str] = {}
     for code in sorted(menus):
         name = norm_text(menus[code].get("menu_name")).upper()
@@ -502,9 +570,17 @@ def build_boms(
     menus: MenuIndex,
     ratios: Mapping[str, float],
     umap: Mapping[str, UomMap],
+    options: ExportOptions | None = None,
+    skips: BomSkips | None = None,
 ) -> list[dict[str, Any]]:
     """BOM ESB -> `mrp.bom`. Ditautkan menu (bomName di `/menu/browse-for-product`) -> `phantom` (kit menu), selain itu
-    `normal` (produksi). product_qty = rasio BATCH->EA (`bom_ratio`) bila ada, selain itu 1 (`ratio_source`)."""
+    `normal` (produksi). product_qty = rasio BATCH->EA (`bom_ratio`) bila ada, selain itu 1 (`ratio_source`).
+
+    Opsi (default ketat = tidak ada yang dibuang): `skip_unlinked_menu_boms` -> BoM tipe Menu / tanpa produk hasil yang
+    tidak tertaut menu tidak diekspor; `drop_zero_qty_components` -> komponen qty <= 0 dibuang. Yang dibuang dicatat di
+    `skips` (manifest `skipped`)."""
+    opts = options or ExportOptions()
+    skips = skips if skips is not None else BomSkips()
     by_bom: dict[int, list[Mapping[str, Any]]] = defaultdict(list)
     for line in lines:
         by_bom[int(line["bom_id"])].append(line)
@@ -515,11 +591,19 @@ def build_boms(
         bom_id = int(h["bom_id"])
         code = str(h.get("product_code") or "")
         menu_keys = sorted(set(menus.by_bom_name.get(norm_text(h.get("bom_name")).upper(), [])))
+        menu_type = norm_text(h.get("bom_type_name")).upper() == "MENU"
+        unlinked = not menu_keys and (menu_type or code not in product_codes)
+        if unlinked and opts.skip_unlinked_menu_boms:
+            skips.unlinked_menu_boms.add(bom_id)
+            continue
         ratio = ratios.get(code)
         uom = norm_uom(h.get("uom"))
         comp = []
         for line in sorted(by_bom.get(bom_id, []), key=lambda r: int(r["line_id"])):
             lcode = str(line["product_code"])
+            if opts.drop_zero_qty_components and Decimal(str(line.get("qty") or 0)) <= 0:
+                skips.zero_qty_components.add((bom_id, lcode))
+                continue
             luom = norm_uom(line.get("uom"))
             comp.append(
                 {
@@ -614,7 +698,7 @@ def flow_row(ctx: HistoryContext, row: Mapping[str, Any]) -> dict[str, Any] | No
 
 
 def sales_daily_row(ctx: HistoryContext, row: Mapping[str, Any]) -> dict[str, Any] | None:
-    branch_id, code = int(row["branch_id"]), str(row["menu_code"])
+    branch_id, code = int(row["branch_id"]), menu_code_of(row)
     wh = ctx.branches.wh_key.get(branch_id)
     menu = ctx.menus.key.get(code)
     if not wh or not menu:
@@ -644,7 +728,7 @@ def sales_line_row(ctx: HistoryContext, row: Mapping[str, Any]) -> dict[str, Any
     wh = ctx.branches.wh_key.get(int(row["branch_id"]))
     if not wh:
         return None
-    code = str(row["menu_code"])
+    code = menu_code_of(row)
     return {
         "sales_num": str(row["sales_num"]),
         "line_no": int(row["line_no"]),

@@ -29,7 +29,8 @@ HISTORY_COLUMNS: dict[str, tuple[str, ...]] = {
                           "ck_out", "in_ck", "in_other", "st_in", "st_out"),
     "legacy_sales_daily": ("sales_date", "branch_id", "menu_code", "menu_name", "menu_category", "is_takeaway", "qty",
                            "gross", "discount", "cogs", "trx_count"),
-    "legacy_sales_line": ("sales_date", "branch_id", "sales_num", "line_no", "menu_code", "qty", "price", "total",
+    "legacy_sales_line": ("sales_date", "branch_id", "sales_num", "line_no", "menu_code", "menu_name", "qty", "price",
+                          "total",
                           "discount", "cogs", "row_type", "is_takeaway"),
 }  # fmt: skip
 # (sumber, kolom tanggal). sales_line: versi slice ber-checkpoint (sama dengan v_esb_sales_daily).

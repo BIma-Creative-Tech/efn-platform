@@ -32,7 +32,7 @@ from efn_mig.export import (
     export_history,
     export_master,
 )
-from efn_mig.mapping import MapError
+from efn_mig.mapping import ExportOptions, MapError
 from efn_mig.reconcile import reconcile, reconcile_final
 from efn_mig.results import DryRunResult, map_rows
 from efn_mig.segments import MAX_LEGACY_DAYS, MAX_SALES_LINE_MONTHS, SALES_DAILY_MONTHS, add_months, month_start
@@ -57,6 +57,11 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     exp.add_argument("--sales-line-months", type=int)
     exp.add_argument("--months", help="YYYY-MM[,YYYY-MM...] (langkah histori)")
     exp.add_argument("--maps", required=True, type=Path)
+    # Pengecualian EKSPLISIT (default mati = ketat); dicatat di manifest `export_options` + laporan validator.
+    exp.add_argument("--default-uom", help="xmlid UoM untuk produk tanpa satuan (setelah fallback BoM)")
+    exp.add_argument("--skip-unlinked-menu-boms", action="store_true", help="BoM tipe Menu tanpa tautan tidak diekspor")
+    exp.add_argument("--allow-default-ratio", action="store_true", help="BoM FIN tanpa bom_ratio -> product_qty 1")
+    exp.add_argument("--drop-zero-qty-components", action="store_true", help="buang komponen BoM qty <= 0")
     exp.add_argument("--out", type=Path)
     wb = sub.add_parser("writeback", help="hasil impor -> efn_dwh.map_esb_odoo")
     wb.add_argument("--result", required=True, type=Path)
@@ -93,6 +98,12 @@ def build_params(args: argparse.Namespace, settings: MigSettings) -> RunParams:
         git_sha=settings.git_sha,
         segment_max_rows=settings.segment_max_rows,
         blocked=settings.saldo_blocked,
+        options=ExportOptions(
+            default_uom=args.default_uom,
+            skip_unlinked_menu_boms=args.skip_unlinked_menu_boms,
+            allow_default_ratio=args.allow_default_ratio,
+            drop_zero_qty_components=args.drop_zero_qty_components,
+        ),
     )
 
 

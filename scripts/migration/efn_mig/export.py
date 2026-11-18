@@ -89,6 +89,7 @@ class RunParams:
     git_sha: str = "unknown"
     segment_max_rows: int = 500_000
     blocked: frozenset[str] = frozenset({"IMD", "CUP"})
+    options: m.ExportOptions = field(default_factory=m.ExportOptions)  # default ketat (fail closed)
 
 
 @dataclass
@@ -167,8 +168,12 @@ def master_records(
     brand: str,
     maps: Maps,
     steps: Sequence[str],
+    options: m.ExportOptions | None = None,
+    skips: m.BomSkips | None = None,
 ) -> tuple[dict[str, list[dict[str, Any]]], m.BranchIndex]:
-    """Baris JSONL per entitas untuk langkah master yang diminta (semua company brand; produk/menu kembar per PT)."""
+    """Baris JSONL per entitas untuk langkah master yang diminta (semua company brand; produk/menu kembar per PT).
+    `options` = pengecualian eksplisit (default ketat); yang dibuang dicatat di `skips`."""
+    opts = options or m.ExportOptions()
     branch_records, index = m.build_branches(brand, data.branches, maps.branch)
     uom_by_code = m.product_uoms(data.products, data.bom_headers, data.bom_lines)
     codes = data.product_codes
@@ -184,7 +189,9 @@ def master_records(
             out["category"] += m.build_categories(brand, company, data.products)
             out["pos_category"] += m.build_pos_categories(brand, company, [*data.menus, *data.archive])
         if "product" in out:
-            out["product"] += m.build_products(brand, company, data.products, uom_by_code, maps.uom)
+            out["product"] += m.build_products(
+                brand, company, data.products, uom_by_code, maps.uom, default_uom=opts.default_uom
+            )
         if "menu" in out:
             out["menu"] += menus
         if "supplier" in out:
@@ -193,8 +200,9 @@ def master_records(
                 out[entity] += partners[entity]
         if "bom" in out:
             out["bom"] += m.build_boms(
-                brand, company, data.bom_headers, data.bom_lines, codes, menu_index, data.ratios, maps.uom
-            )
+                brand, company, data.bom_headers, data.bom_lines, codes, menu_index, data.ratios, maps.uom,
+                options=opts, skips=skips,
+            )  # fmt: skip
         if "cost" in out:
             out["cost"] += m.build_costs(brand, company, data.bom_lines, codes)
     return out, index
@@ -221,6 +229,7 @@ def base_manifest(
         "created_at": now.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
         "source": {"snapshot": dict(snapshot)},
         "tool": {"git_sha": params.git_sha, "schema": 1},
+        "export_options": params.options.to_manifest(),
     }
 
 
@@ -236,7 +245,8 @@ def export_master(
 ) -> Path:
     run_id = run_id or str(uuid.uuid4())
     master_steps = [s for s in steps if s in MASTER_STEPS or s == "cutover-param"]
-    records, index = master_records(data, params.brand, maps, master_steps)
+    skips = m.BomSkips()
+    records, index = master_records(data, params.brand, maps, master_steps, params.options, skips)
     manifest = base_manifest(run_id, params, data.companies, master_steps, data.snapshot, now or datetime.now(UTC))
     files: list[dict[str, Any]] = []
     members: dict[str, bytes] = {}
@@ -247,7 +257,7 @@ def export_master(
         members[name] = blob
     map_entries, map_members = maps.entries()
     members.update(map_members)
-    manifest.update(files=files, maps=map_entries, unmapped_branches=index.unmapped)
+    manifest.update(files=files, maps=map_entries, unmapped_branches=index.unmapped, skipped=skips.to_manifest())
     if "supplierinfo" in master_steps:
         manifest["notes"] = ["supplierinfo: belum ada sumber ESB (E11-E13), tidak diekspor"]
     path = out_dir / f"{run_id}.efnmig"

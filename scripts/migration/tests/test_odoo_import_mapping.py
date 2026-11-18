@@ -278,6 +278,30 @@ def test_bom_targets_normal_and_phantom():
     assert m.bom_targets(broken, 7, resolver, products, UOMS)[0].plan.missing
 
 
+def test_bom_scale_keeps_small_quantities_at_odoo_precision():
+    """Dry-run PB: qty komponen 0,0003 EA / 0,0044 g per 1 unit terbulatkan 0 pada presisi CE 2 digit -> skala BoM."""
+    D = m.Decimal
+    assert m.bom_scale(D(1), [D("2.5")], 2) == 1
+    assert m.bom_scale(D(1), [D("0.0003"), D("2.5")], 2) == 100  # 0,03 / 250,00 per 100 unit -> galat 0
+    assert m.bom_scale(D(1), [D("0.015")], 2) == 10  # 0,015 -> 0,01 (33% galat) ditolak; 0,15 tepat
+    assert m.bom_scale(D(1), [D("0.000000001")], 2) is None
+    fin, rm = X("product", "FIN-001"), X("product", "RM001")
+    resolver = FakeResolver(ids={fin: 10, rm: 11}, variants={fin: 110, rm: 111}, uoms={fin: 1, rm: 3})
+    products = {fin: {"uom_esb": "EA", "uom_xmlid": "uom.product_uom_unit", "ea_factor": 1},
+                rm: {"uom_esb": "KG", "uom_xmlid": "uom.product_uom_kgm", "ea_factor": None}}  # fmt: skip
+    line = {"product_key": rm, "product_code": "RM001", "qty": 0.0044, "uom_esb": "KG",
+            "uom_xmlid": "uom.product_uom_kgm", "yield_percent": 100}  # fmt: skip
+    row = _bom_row(7, {"code": "B7", "type": "normal", "product_key": fin, "menu_keys": [], "product_qty": 1,
+                       "ratio_source": "default_1", "lines": [line]})  # fmt: skip
+    (target,) = m.bom_targets(row, 7, resolver, products, UOMS, 2)
+    assert not target.plan.missing
+    assert target.plan.owned["product_qty"] == 100.0 and target.plan.owned["bom_line_ids"] == ((111, 0.44, 3),)
+    (precise,) = m.bom_targets(row, 7, resolver, products, UOMS, 6)  # presisi cukup -> tanpa skala
+    assert precise.plan.owned["product_qty"] == 1.0 and precise.plan.owned["bom_line_ids"] == ((111, 0.0044, 3),)
+    tiny = _bom_row(7, {**row["data"], "lines": [{**line, "qty": 0.000000001}]})
+    assert any("presisi" in x for x in m.bom_targets(tiny, 7, resolver, products, UOMS, 2)[0].plan.missing)
+
+
 # ------------------------------------------------------------------------------------------------ histori
 def test_history_vals_and_aggregate():
     flow = {k: 0 for k in m.HISTORY_KEYS["legacy_flow_daily"]}

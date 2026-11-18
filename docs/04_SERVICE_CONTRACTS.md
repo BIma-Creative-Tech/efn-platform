@@ -3219,6 +3219,14 @@ bukan PIC bisnis) dan menimbulkan inkonsistensi company bila akun itu bukan angg
 `pos.config`) tetap memeriksa konsistensi company terhadap pelaku → **`efn_migration` wajib anggota (`company_ids`)
 semua company yang dimigrasi** (§27.9).
 
+**Skala BoM terhadap presisi Odoo** (dry-run PB 18 Nov 2026): `mrp.bom.product_qty` dan `mrp.bom.line.product_qty`
+memakai presisi `Product Unit` (CE default **2 digit**); resep ESB per 1 unit memuat qty seperti 0,0003 EA / 0,0044 g
+yang terbulatkan **0** (124 baris PB) atau melenceng (0,015 → 0,01). Importer mengalikan qty hasil BoM dan semua
+komponen dengan faktor 10^k terkecil (k ≤ 6) sehingga setiap qty setelah pembulatan > 0 dengan galat relatif ≤ 0,5%
+(`mapping.bom_scale`); rasio resep tetap (MO diskalakan Odoo terhadap `product_qty` BoM). Tidak terwakili bahkan ×10^6
+→ BoM `failed` (bukan qty 0 diam-diam). Presisi global tidak diubah importer; menaikkan `Product Unit` adalah keputusan
+konfigurasi terpisah (efn-odoo-functional) dan cukup membuat skala = 1 pada impor berikutnya.
+
 Aturan upsert (impor berjalan sebagai user teknis `efn_migration` dengan `env(user=…, su=True)` agar `write_uid` =
 user migrasi):
 1. xmlid tidak ada → `create` + xmlid.

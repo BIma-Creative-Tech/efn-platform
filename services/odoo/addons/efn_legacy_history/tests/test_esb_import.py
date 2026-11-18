@@ -656,7 +656,8 @@ class TestEsbImport(TransactionCase):
         segment = self._run(bundle)
         self.assertEqual(imp.brand_for_companies(["BCF", "BCR"]), "bacha")
         with patch.dict(imp.BRAND_COMPANIES, {BRAND: frozenset({"PB"})}):
-            result = imp.run_totals(self.env, BRAND, ["PB"], [MONTH])
+            parent = segment.report.get("parent_run_id")
+            result = imp.run_totals(self.env, BRAND, ["PB"], [MONTH], parent_run_id=parent)
             with self.assertRaises(imp.GateError):
                 imp.run_totals(self.env, BRAND, ["WTZ"], [MONTH])
         with self.assertRaises(imp.ConfigError):
@@ -675,3 +676,7 @@ class TestEsbImport(TransactionCase):
         opened = open_bundle(imp.build_totals_result(result, self.keys), self.keys, expect_kind="result")
         self.assertEqual(set(opened.files), {"import_report.json", "odoo_totals.json"})
         self.assertEqual(opened.manifest["mode"], "totals")
+        # Kontrak reconcile_final (scripts/migration/efn_mig/reconcile.py): kind=result, steps=["totals"], parent sama.
+        self.assertEqual(opened.manifest["steps"], ["totals"])
+        self.assertEqual(opened.manifest["parent_run_id"], segment.report.get("parent_run_id"))
+        self.assertTrue(opened.manifest["parent_run_id"], "segmen histori uji wajib punya parent_run_id")

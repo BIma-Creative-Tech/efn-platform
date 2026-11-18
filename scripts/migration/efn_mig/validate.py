@@ -42,6 +42,13 @@ class Report:
     findings: list[Finding]
     bundle_sha256: str = ""  # sha256 berkas .efnmig (diikat tanda tangan, SEC-201)
     segment_set: dict[str, Any] | None = None  # ringkasan pemeriksaan part sesama parent (SEC-197)
+    export_options: dict[str, Any] | None = None  # pengecualian export yang tercatat di manifest
+
+    @property
+    def exceptions(self) -> list[str]:
+        """Opsi pengecualian yang aktif (kosong = export ketat)."""
+        opts = self.export_options or {}
+        return [f"{k}={v}" for k, v in sorted(opts.items()) if v not in (None, False)]
 
     @property
     def errors(self) -> int:
@@ -62,6 +69,8 @@ class Report:
         }
         if self.segment_set is not None:
             out["segment_set"] = self.segment_set
+        if self.export_options is not None:
+            out["export_options"] = self.export_options
         return out
 
     def to_signed_json(self, keys: Keys) -> dict[str, Any]:
@@ -74,6 +83,11 @@ class Report:
             "",
             f"- manifest_sha256: `{self.manifest_sha256}`",
             f"- error: **{self.errors}**, peringatan: {self.warnings}",
+            (
+                f"- **export_options (DRY-RUN DENGAN PENGECUALIAN):** {', '.join(self.exceptions)}"
+                if self.exceptions
+                else "- export_options: ketat (tanpa pengecualian)"
+            ),
             "",
             "| Tingkat | Kode | Entitas | Kunci | Pesan |",
             "|---|---|---|---|---|",
@@ -176,10 +190,54 @@ def validate_bundle(bundle: Bundle, siblings: Iterable[Mapping[str, Any]] | None
     for branch in man.get("unmapped_branches") or []:
         if branch.get("active"):
             out.error("BRANCH_UNMAPPED", "branch", branch.get("branch_id"), "cabang aktif tanpa baris branch_map.csv")
+    options = read_export_options(man)
     _check_branches(master.get("branch", []), out)
-    _check_products_menus(master, out)
-    _check_boms(master, out)
-    return Report(str(man["run_id"]), bundle.manifest_sha256, out.items, bundle.blob_sha256, segment_set)
+    _check_products_menus(master, out, options)
+    _check_boms(master, out, options)
+    _check_skipped(man, options, out)
+    return Report(
+        str(man["run_id"]), bundle.manifest_sha256, out.items, bundle.blob_sha256, segment_set, options.to_manifest()
+    )
+
+
+def read_export_options(man: Mapping[str, Any]) -> m.ExportOptions:
+    """`export_options` manifest (ditandatangani HMAC bersama manifest) -> ExportOptions. Tidak ada = ketat.
+    Kunci tak dikenal / tipe salah -> IntegrityError (fail closed)."""
+    raw = man.get("export_options")
+    if raw is None:
+        return m.ExportOptions()
+    allowed = set(m.ExportOptions().to_manifest())
+    if not isinstance(raw, dict) or not set(raw) <= allowed:
+        raise IntegrityError("export_options manifest tidak dikenal")
+    flags = {k: raw.get(k, False) for k in allowed - {"default_uom"}}
+    if not all(isinstance(v, bool) for v in flags.values()):
+        raise IntegrityError("export_options: flag wajib boolean")
+    default_uom = raw.get("default_uom")
+    if default_uom is not None and not isinstance(default_uom, str):
+        raise IntegrityError("export_options.default_uom wajib string/null")
+    try:
+        return m.ExportOptions(default_uom=default_uom, **flags)
+    except m.MapError as exc:
+        raise IntegrityError(str(exc)) from None
+
+
+def _check_skipped(man: Mapping[str, Any], options: m.ExportOptions, out: _Collector) -> None:
+    """Yang dibuang export karena opsi (manifest `skipped`) -> peringatan; dibuang TANPA opsi tercatat -> error."""
+    skipped = man.get("skipped") or {}
+    menu = (skipped.get("unlinked_menu_boms") or {}) if isinstance(skipped, dict) else {}
+    zero = (skipped.get("zero_qty_components") or {}) if isinstance(skipped, dict) else {}
+    if int(menu.get("count") or 0):
+        if options.skip_unlinked_menu_boms:
+            out.warn("BOM_MENU_UNLINKED_SKIPPED", "bom", menu["count"],
+                     "BoM tipe Menu tanpa tautan menu tidak diekspor (--skip-unlinked-menu-boms, Q-ESB25)")  # fmt: skip
+        else:
+            out.error("BOM_SKIPPED_WITHOUT_OPTION", "bom", menu["count"], "BoM dibuang tanpa export_options")
+    if int(zero.get("count") or 0):
+        if options.drop_zero_qty_components:
+            out.warn("BOM_QTY_DROPPED", "bom", zero["count"],
+                     "komponen BoM qty <= 0 dibuang (--drop-zero-qty-components)")  # fmt: skip
+        else:
+            out.error("BOM_SKIPPED_WITHOUT_OPTION", "bom", zero["count"], "komponen dibuang tanpa export_options")
 
 
 def _validate_master(
@@ -243,9 +301,20 @@ def _check_branches(rows: list[dict[str, Any]], out: _Collector) -> None:
         seen.setdefault(key, row["esb_key"])
 
 
-def _check_products_menus(records: Mapping[str, list[dict[str, Any]]], out: _Collector) -> None:
+def _check_products_menus(
+    records: Mapping[str, list[dict[str, Any]]], out: _Collector, options: m.ExportOptions | None = None
+) -> None:
+    opts = options or m.ExportOptions()
     for row in records.get("product", []):
-        if not row["data"].get("uom_xmlid"):
+        data = row["data"]
+        if data.get("uom_source") == "default":
+            if opts.default_uom and data.get("uom_xmlid") == opts.default_uom:
+                out.warn("PRODUCT_UOM_DEFAULT", "product", row["esb_key"],
+                         f"UoM default {opts.default_uom} (--default-uom; ESB tanpa satuan)")  # fmt: skip
+            else:
+                out.error("PRODUCT_UOM", "product", row["esb_key"],
+                          "uom_source=default tanpa export_options yang cocok")  # fmt: skip
+        elif not data.get("uom_xmlid"):
             out.error("PRODUCT_UOM", "product", row["esb_key"], "produk tanpa UoM / UoM tidak ada di uom_map.csv")
     for row in records.get("uom", []):
         if not row["data"].get("uom_xmlid"):
@@ -258,7 +327,10 @@ def _check_products_menus(records: Mapping[str, list[dict[str, Any]]], out: _Col
             out.warn("MENU_TAKEAWAY_BASE", "menu", row["esb_key"], "menu takeaway tanpa menu dasar")
 
 
-def _check_boms(records: Mapping[str, list[dict[str, Any]]], out: _Collector) -> None:
+def _check_boms(
+    records: Mapping[str, list[dict[str, Any]]], out: _Collector, options: m.ExportOptions | None = None
+) -> None:
+    opts = options or m.ExportOptions()
     fin = {
         (r["company_code"], r["data"].get("default_code")): bool(r["data"].get("is_fin"))
         for r in records.get("product", [])
@@ -278,7 +350,11 @@ def _check_boms(records: Mapping[str, list[dict[str, Any]]], out: _Collector) ->
             if not data.get("product_key"):
                 out.error("BOM_PRODUCT_MISSING", "bom", key, "produk hasil BoM tidak ada di bundel")
             if fin.get((company, data.get("product_code"))) and data.get("ratio_source") != "bom_ratio":
-                out.error("BOM_NO_RATIO", "bom", key, "FIN diproduksi tanpa rasio BATCH (bom_ratio)")
+                if opts.allow_default_ratio and data.get("ratio_source") == "default_1":
+                    msg = "FIN tanpa bom_ratio -> product_qty 1 (--allow-default-ratio)"
+                    out.warn("BOM_DEFAULT_RATIO", "bom", key, msg)
+                else:
+                    out.error("BOM_NO_RATIO", "bom", key, "FIN diproduksi tanpa rasio BATCH (bom_ratio)")
             if data.get("product_code"):
                 graph[(company, str(data["product_code"]))] |= {str(ln.get("product_code")) for ln in lines}
         elif data.get("type") == "phantom" and not data.get("menu_keys"):
