@@ -1,6 +1,7 @@
 # Inventaris Data Pribadi / RoPA (UU PDP No. 27/2022) — EFN Platform
 
 - **Status:** Draf teknis — **keputusan retensi & DPO ditetapkan pemilik proyek 10 Okt 2026** (v7); dasar pemrosesan & nomor pasal tetap wajib diverifikasi **Legal (DPO sementara)**.
+  - **v16 (2026-11-18, Supermarket Gelombang 0 — rencana, belum dibangun)**: §2.8.12 event perilaku & device ID (consent `tracking`), wishlist/notify-me/price alert, email (SMTP), nomor WA di `wa-unofficial` (transfer ke WhatsApp tanpa DPA), segmen & voucher kampanye, staf supermarket di Insight; baris retensi baru §3 (penanda **(v16)**). Semua menunggu DPO (Q-SM16..Q-SM19, Q-SM25, Q-SM26, `docs/04` §28.12); fitur terkait **OFF di production**.
   - **v15 (2026-11-18, Gelombang 41)**: §2.8.11 datamart ESB Core (data legacy klien, redaksi pelaku/teks bebas sebelum `raw_doc`, tanpa customer/member; prasyarat aktivasi production).
   - **v14 (2026-11-01, Gelombang 39)**: §2.8.10 asisten analisis "Analisis bertahap" (ringkasan AI, P8, agregat tanpa PII).
   - **v13 (2026-11-01, Gelombang 38)**: §2.8.9 Text-to-SQL "Tanya Data" (log pertanyaan per user di Odoo, P7, tanpa PII di mart).
@@ -460,6 +461,33 @@ Price Hunter meminta pengguna memotret label saja; DPIA ringkas untuk aliran P6.
 - **Prasyarat `ESB_ENABLED=true` di production:** entri ini disetujui DPO; Q-ESB1 (user API read-only), Q-ESB7 (izin beban
   backfill), Q-ESB9 (hak data). Dev/staging boleh memakai data nyata hanya di mesin terenkripsi (LUKS/BitLocker).
 
+#### 2.8.12 (v16) Supermarket — perilaku visitor, wishlist & alert, email, WhatsApp tidak resmi, kampanye (docs/04 §28, ADR-044/047/048) — **rencana, belum dibangun**
+> **Ringkasan manajemen.** Bisnis supermarket menambah lima jenis pemrosesan data pribadi: (1) catatan perilaku belanja
+> di aplikasi/web yang hanya dikumpulkan **bila pengunjung setuju**, memakai kode acak perangkat; (2) wishlist dan
+> permintaan "kabari saya" (stok/harga); (3) email promo/notifikasi; (4) promo lewat **WhatsApp tidak resmi** — nomor HP
+> dan isi pesan dikirim ke WhatsApp/Meta **tanpa perjanjian pemrosesan data**; (5) segmen promo hasil tebakan sistem.
+> Semuanya mati di production sampai DPO memutuskan; WhatsApp tidak resmi juga menunggu penerimaan risiko tertulis.
+
+| Data | Lokasi | Tujuan & dasar (usulan, verifikasi Legal) | Retensi (usulan) | Enkripsi / minimisasi | Erasure | Pihak ketiga |
+|---|---|---|---|---|---|---|
+| Consent device `behavior.device_consent` (device_key, versi, `text_sha256`) | PG `efn_platform` | Bukti consent `tracking` sebelum login; persetujuan | Selama device_key aktif + 5 th (selaras consent akun) | **H** (`device_key` = HMAC pepper), L, T | Hapus bila device tertaut ke akun yang dihapus | — |
+| Purpose consent akun `tracking` | PG `platform.consent` | Bukti persetujuan; persetujuan | Akun + 5 th (pola consent) | ip_enc **K**, L, T | Pola consent existing | — |
+| Tautan `behavior.device_link` (member ↔ device_key) | PG `efn_platform` | Menyambungkan perilaku ke akun saat login; persetujuan `tracking` | Sampai cabut consent / erasure / 180 h tanpa aktivitas | **H**, L, T | Dihapus | — |
+| Event perilaku (product_view + durasi, wishlist, cart, checkout_start, pencarian disanitasi, notify-me, price alert; pengayaan stok/harga) | PG `behavior.event_raw` → ClickHouse `fact_visitor_event` | Rekomendasi, inferensi alasan tidak beli, segmen promo; persetujuan `tracking` | Staging **7 h**; ClickHouse **90 h** (TTL) | Tanpa nama/HP/email/IP/UA/GPS; istilah pencarian: angka ≥ 6 digit & email di-redaksi; `subject_key` **H**; C, T | Delete by `subject_key` (job harian) | — |
+| Agregat `agg_visitor_*` | ClickHouse | Analitik funnel/produk; anonim | **2 th** | Tanpa `subject_key`; hanya sel ≥ k subjek (usulan 10) | Tidak perlu (anonim) — **⚠ DPO Q-SM17** | — |
+| Anggota segmen `segment_member` (run, segmen, subject_key) | BFF / ClickHouse | Penargetan kampanye disetujui marketing; persetujuan `tracking` + `marketing` (kirim) | 30 h | **H** | Delete by `subject_key` | — |
+| Voucher member `platform.member_voucher` (kode kupon ↔ member) | PG `efn_platform` | Menjalankan promo; perjanjian (syarat promo) | Sampai kedaluwarsa voucher + 400 h (usulan) | Kode tanpa partner di Odoo (rekomendasi; ⚠ fit-gap mengusulkan `partner_id`, belum diputuskan) | Dihapus / tombstone | — |
+| Wishlist, restock alert, price alert | PG `member_wishlist`, `restock_alert`, `price_alert` | Fitur atas permintaan member; pelaksanaan permintaan/perjanjian | Wishlist selama akun; restock 30 h atau setelah terkirim; price 90 h | Hanya `member_id` + produk/outlet/harga target; L, T | Dihapus; ikut DSAR export | — |
+| Alamat email member (bila diisi) untuk kanal email | PG platform (kolom terenkripsi existing) | Promo (consent `marketing`) & notifikasi alert | Selama akun | **K**; tidak ada alamat di queue `notify.email` (didekripsi saat kirim); log di-mask | Pola akun | **Penyedia SMTP (belum dipilih; DPA & lokasi = Q-SM19)** |
+| Nomor HP (E.164) + isi promo di queue `notify.wa_unofficial` dan di service `wa-unofficial` | RabbitMQ (TTL ≤ 24 jam) + memori service; sesi WA terenkripsi di volume sendiri | Promo & notify-me; consent `marketing` (Q-SM25) | Pesan di queue ≤ 24 jam; service tidak menyimpan nomor setelah kirim (hanya `to_hash`) | T (TLS RabbitMQ), `to_hash` **H**, log di-mask `62812****789`, isi pesan tidak di-log | Opt-out "STOP" mencabut consent `marketing` | **WhatsApp/Meta — lintas negara, tanpa DPA, melanggar ToS (ADR-044)** → `PDP_TRANSFER_LINTAS_NEGARA.md` **belum** diperbarui (**⚠ DPO Q-SM18**) |
+| Staf supermarket di Insight (uid, persona, outlet ditugaskan `efn_outlet_warehouse_ids`) | Odoo + cookie `eis2` | Pembatasan dashboard per outlet; kepentingan sah/hubungan kerja | Sama Q-INS3 (log pembukaan usulan 400 h) | Tanpa email/HP di token | Pola akun Odoo | — |
+
+- **Prasyarat production:** `BEHAVIOR_TRACKING_ENABLED`, `PROMO_CAMPAIGN_ENABLED`, `WA_UNOFFICIAL_ENABLED` tetap `false`
+  sampai DPO menyetujui entri ini + DPIA bagian tracking/profiling (`DPIA_DRAFT.md` — **belum** ditambah) dan teks
+  banner/consent; `WA_UNOFFICIAL_ENABLED` juga butuh `WA_UNOFFICIAL_RISK_ACCEPTANCE_REF` (Q-SM14). Wishlist/alert dan
+  email boleh lebih dulu setelah entri terkait disetujui DPO (dan Q-SM19 untuk email).
+- **Simulasi G48:** member & event sintetis saja, tanpa data nyata.
+
 ## 3. Matriks retensi ringkas (default → ditetapkan DPO)
 | Data | Default | Mekanisme (pemilik) | Status |
 |---|---|---|---|
@@ -512,6 +540,13 @@ Price Hunter meminta pengguna memotret label saja; DPIA ringkas untuk aliran P6.
 | **(v8)** `loyalty_member_activity` | Selama subjek ada; dihapus saat erasure | Erasure BFF | G22 |
 | **(v8)** `loyalty_expiry_notice` | 400 h | Job retensi BFF | Usulan, Q-P26 |
 | **(v8)** Akun member tidak aktif 12 bulan | Anonimisasi setelah hangus (`LOYALTY_INACTIVE_ANONYMIZE`, **OFF prod**) | ErasureService (`dsar_request.type='retention'`) | **Q-P22** (meralat Q-P11 24 bln → 18-14 12 bln) |
+| **(v16)** `behavior.event_raw` (staging) | 7 h (drop partisi harian) | Job BFF | Rencana; **Q-SM17** |
+| **(v16)** ClickHouse `fact_visitor_event` | 90 h | `TTL` + delete by `subject_key` (erasure) | Rencana; **Q-SM17** |
+| **(v16)** ClickHouse `agg_visitor_*` (anonim, k ≥ 10) | 2 th | `TTL` | Rencana; **Q-SM17** |
+| **(v16)** `behavior.device_link` | Cabut consent / erasure / 180 h tanpa aktivitas | Job BFF | Rencana; **Q-SM16** |
+| **(v16)** `segment_member` | 30 h | Job BFF / `TTL` | Rencana |
+| **(v16)** `restock_alert` / `price_alert` / `member_wishlist` | 30 h (atau setelah terkirim) / 90 h / selama akun | Job BFF + erasure | Rencana; **Q-SM25** |
+| **(v16)** Pesan `notify.wa_unofficial` (nomor + isi) | ≤ 24 jam (TTL pesan AMQP) | RabbitMQ `expiration` | Rencana; **Q-SM18** |
 
 ## 4. Pertanyaan untuk Legal/DPO — **(v7) semua Q-P1..Q-P21 dijawab pemilik proyek 10 Okt 2026, lihat §0a**
 Daftar asli dipertahankan sebagai jejak. Yang **masih terbuka** setelah v7: (1) nomor pasal UU PDP untuk setiap dasar pemrosesan (Legal); (2) dasar hukum menyimpan nama/NPWP pembeli di faktur setelah erasure (Q-P21, Legal); (3) DPIA (Q-T6) sebelum go-live publik; (4) penafsiran Q-P7 vs Q-6 (§0a); (5) syarat hangus poin saat anonimisasi (Q-P11, Finance); (6) teks pelanggan untuk penundaan hapus akun ≤ 14 hari (Q-P18); (7) pertanyaan portal Q-PT1..Q-PT6 (ADR-035).
