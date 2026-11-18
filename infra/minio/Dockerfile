@@ -10,6 +10,8 @@
 # build; go.sum diverifikasi proxy/sumdb Go. Hapus `go get` ini bila tag SILO/mc berikutnya sudah memuat >= 0.60.0.
 # G30 (Trivy PR #76): SILO juga bump github.com/go-jose/go-jose/v4 4.1.4 -> 4.1.6 (CVE-2026-116587, DoS parsing JWK
 # RSA). mc tidak terdampak. Hapus bila tag SILO berikutnya sudah memuat >= 4.1.6.
+# G41 (Trivy PR #90): x/net 0.60.0 -> 0.62.0 (CVE-2026-78661) di SILO dan mc; runtime alpine: musl/musl-utils 1.2.6-r3
+# (CVE-2026-107891) + zlib 1.3.2-r1 (CVE-2026-85091) dinaikkan eksplisit. Hapus saat tag/digest berikutnya memuatnya.
 # SEC-47: base image dipin tag@digest (build reprodusibel); Dependabot `docker` memperbarui digest per tag.
 FROM golang:1.27.3-alpine@sha256:d530cf60723abf1ffae0cd16bb546b379ec0550d2f3815e5b16ed69dbc00fba4 AS build
 ARG SILO_TAG=RELEASE.2026-09-16T00-00-00Z
@@ -24,18 +26,19 @@ WORKDIR /src/silo
 # hadolint ignore=DL3062  # bukan `go install`: build dari clone tag + commit yang diverifikasi (hadolint >= 2.13)
 RUN git clone --depth 1 --branch "${SILO_TAG}" https://github.com/pgsty/silo.git . \
     && test "$(git rev-parse HEAD)" = "${SILO_COMMIT}" \
-    && go get golang.org/x/net@v0.60.0 github.com/go-jose/go-jose/v4@v4.1.6 \
+    && go get golang.org/x/net@v0.62.0 github.com/go-jose/go-jose/v4@v4.1.6 \
     && go build -tags kqueue -ldflags "$(go run buildscripts/gen-ldflags.go)" -o /out/silo .
 WORKDIR /src/mc
 # hadolint ignore=DL3062  # bukan `go install`: build dari clone tag + commit yang diverifikasi (hadolint >= 2.13)
 RUN git clone --depth 1 --branch "${MC_TAG}" https://github.com/pgsty/mc.git . \
     && test "$(git rev-parse HEAD)" = "${MC_COMMIT}" \
-    && go get golang.org/x/net@v0.60.0 \
+    && go get golang.org/x/net@v0.62.0 \
     && go build -tags kqueue -ldflags "$(go run buildscripts/gen-ldflags.go)" -o /out/mc .
 
 FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 # hadolint ignore=DL3018
 RUN apk add --no-cache ca-certificates \
+    && apk add --no-cache --upgrade musl musl-utils zlib \
     && addgroup -S -g 1000 minio && adduser -S -D -H -u 1000 -G minio minio \
     && install -d -o minio -g minio -m 0750 /data
 COPY --from=build /out/silo /out/mc /usr/bin/

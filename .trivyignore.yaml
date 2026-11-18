@@ -4,6 +4,9 @@
 # CVE dependency aplikasi (npm/pip) TIDAK di-ignore di sini: perbaiki versinya. Runbook: docs/runbooks/ci-github-free-plan.md
 # Persetujuan: pengecualian WAL-G (FP CVE-2021-38599) dan Metabase v0.58.35 di bawah DISETUJUI pemilik proyek pada 9 Okt 2026
 # (sampai expired_at). Entri baru di luar daftar ini butuh persetujuan baru.
+# G41 (PR #91): pemilik proyek pada 18 Nov 2026 MENYETUJUI bump Metabase ke v0.58.41 + perpanjangan 90 hari (s.d.
+# 2027-02-16) untuk 4 CVE metabase.jar yang belum diperbaiki di rilis Metabase mana pun (guava, mssql-jdbc, zookeeper x2;
+# dicek dengan Trivy 0.69.3 atas v0.58.41). lz4-java/httpcore5/httpcore5-h2 tertutup di v0.58.41 -> entrinya dihapus.
 vulnerabilities:
   # G17 (10 Okt 2026): 10 pengecualian WAL-G v3.0.9 (G16) DIHAPUS - WAL-G kini dibangun dari source (Go 1.27.2,
   # x/net 0.60.0, grpc 1.83.2; infra/backup/postgres/Dockerfile) dan Trivy image bersih. Tersisa false positive di bawah.
@@ -16,36 +19,24 @@ vulnerabilities:
   # Metabase v0.58.35 LTS (image terbaru jalur LTS, 30 Sep 2026): dependency Java upstream di app/metabase.jar, belum
   # ada rilis Metabase yang memperbaikinya. Paparan: Metabase hanya internal (wg-https + allowlist staf, ADR-023),
   # koneksi DB hanya PostgreSQL & ClickHouse (driver mssql/zookeeper tidak dipakai). Tinjau saat bump Metabase.
-  - id: CVE-2026-106451
-    paths: ["app/metabase.jar"]
-    statement: "Metabase v0.58.35 LTS upstream: lz4-java 1.10.1; belum ada rilis perbaikan; BI internal saja. G16."
-    expired_at: 2026-11-09
   - id: CVE-2025-59250
     paths: ["app/metabase.jar"]
-    statement: "Metabase v0.58.35 LTS upstream: mssql-jdbc 13.2.1 (driver tidak dipakai; kemungkinan FP sufiks .jre11); belum ada rilis perbaikan; BI internal saja. G16."
-    expired_at: 2026-11-09
-  - id: CVE-2026-54399
-    paths: ["app/metabase.jar"]
-    statement: "Metabase v0.58.35 LTS upstream: httpcore5 5.3.1; belum ada rilis perbaikan; BI internal saja. G16."
-    expired_at: 2026-11-09
-  - id: CVE-2026-54428
-    paths: ["app/metabase.jar"]
-    statement: "Metabase v0.58.35 LTS upstream: httpcore5-h2 5.2.4; belum ada rilis perbaikan; BI internal saja. G16."
-    expired_at: 2026-11-09
+    statement: "Metabase v0.58.35-v0.58.41 LTS upstream: mssql-jdbc 13.2.1 (driver tidak dipakai; kemungkinan FP sufiks .jre11); belum ada rilis perbaikan; BI internal saja. G16."
+    expired_at: 2027-02-16
   - id: CVE-2026-24281
     paths: ["app/metabase.jar"]
-    statement: "Metabase v0.58.35 LTS upstream: zookeeper 3.8.4 (tidak dipakai); belum ada rilis perbaikan; BI internal saja. G16."
-    expired_at: 2026-11-09
+    statement: "Metabase v0.58.35-v0.58.41 LTS upstream: zookeeper 3.8.4 (tidak dipakai); belum ada rilis perbaikan; BI internal saja. G16."
+    expired_at: 2027-02-16
   - id: CVE-2026-24308
     paths: ["app/metabase.jar"]
-    statement: "Metabase v0.58.35 LTS upstream: zookeeper 3.8.4 (tidak dipakai); belum ada rilis perbaikan; BI internal saja. G16."
-    expired_at: 2026-11-09
+    statement: "Metabase v0.58.35-v0.58.41 LTS upstream: zookeeper 3.8.4 (tidak dipakai); belum ada rilis perbaikan; BI internal saja. G16."
+    expired_at: 2027-02-16
   # G26 (PR #71, 28 Okt 2026): Trivy image menemukan CVE baru di guava 33.5.0-jre dalam metabase.jar. Rilis LTS terbaru
   # (v0.58.38, diperiksa 28 Okt) masih memuat 33.5.0, jadi belum ada image perbaikan. Dampaknya DoS pada BI internal saja.
   - id: CVE-2026-102554
     paths: ["app/metabase.jar"]
     statement: "Metabase LTS upstream: guava 33.5.0-jre (perbaikan 33.7.2 belum ada di rilis Metabase mana pun, v0.58.38 dicek 28 Okt); DoS, BI internal saja. G26."
-    expired_at: 2026-11-09
+    expired_at: 2027-02-16
 misconfigurations:
   - id: DS-0002
     paths:

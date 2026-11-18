@@ -10,7 +10,7 @@ pelanggan di mart/kartu). Daftar dashboard final menunggu **Q-47** (10 dashboard
 
 | File | Fungsi |
 |---|---|
-| `Dockerfile` | `metabase/metabase:v0.58.35@sha256` (LTS). G16: driver ClickHouse BAWAAN Metabase (plugin 1.53.3) -> jar eksternal 1.52.0 dihapus. **Diverifikasi 9 Okt 2026 (G16b, stack dev):** migrasi DB aplikasi 0.52.4 -> 0.58.35 sukses (Liquibase 14,1 s, data lama utuh), `provision.py` exit 0, 33/33 kartu `completed`. Migrasi tidak bisa dibalik -> backup dulu (lihat *Upgrade & rollback*). |
+| `Dockerfile` | `metabase/metabase:v0.58.41@sha256` (LTS; G41 dari v0.58.35). G16: driver ClickHouse BAWAAN Metabase (plugin 1.53.3) -> jar eksternal 1.52.0 dihapus. **Diverifikasi 9 Okt 2026 (G16b, stack dev):** migrasi DB aplikasi 0.52.4 -> 0.58.35 sukses (Liquibase 14,1 s, data lama utuh), `provision.py` exit 0, 33/33 kartu `completed`. Migrasi tidak bisa dibalik -> backup dulu (lihat *Upgrade & rollback*). |
 | `efn-entrypoint.sh` | G16b: ENTRYPOINT image (`/usr/local/bin/efn-metabase-entrypoint`). Membaca `/run/secrets/metabase_encryption_key` → `MB_ENCRYPTION_SECRET_KEY` lalu `exec /app/run_metabase.sh` resmi (root → `su metabase`, uid 2000, tetap). **Fail-closed**: secret tidak ada/kosong/< 32 karakter/berisi CR atau spasi, atau `MB_ENCRYPTION_SECRET_KEY` diset lewat env → exit 1 (semua lingkungan, termasuk dev). |
 | `provision.py` | Skrip idempoten (stdlib saja): setup awal (admin dari file secret), setting (tanpa telemetri, zona Asia/Jakarta, locale id), koneksi `EFN DWH (ClickHouse)`, collection `EFN Fase 1`, kartu & dashboard, lalu menjalankan setiap kartu sekali (`--no-verify-cards` untuk melewati). |
 | `dashboards/*.json` | Definisi dashboard: parameter (tanggal, PT, outlet/gudang, pesaing, produk) + kartu SQL native. |
