@@ -3235,9 +3235,11 @@ Catatan:
   Klaim yang tidak di-ack dalam 10 menit kembali `queued` (maks 5 percobaan → `failed` + aktivitas ke marketing).
   Idempotensi hilir dijamin `idempotency_key` (`approval_rev` ikut di dalamnya). User teknis `efn_campaign_<kode>`
   (satu company), API key `/run/secrets/odoo_api_key_campaign_<kode>`, path allowlist gateway.
-- Voucher: rekomendasi architect = kode kupon `loyalty.card` **tanpa partner** (penugasan ke member di BFF); fit-gap
-  G45 §5 mengusulkan kartu per `partner_id`. **Belum diputuskan** — efn-lead + efn-odoo-functional sebelum G46 (ADR-047
-  §3.4).
+- Voucher: **mode per kampanye** `efn.campaign.voucher_mode` ∈ {`anonymous_code` (default), `public_code`,
+  `member_bound`} (ADR-047 §3.4, L-164). Payload `promo.campaign.requested` membawa `voucher_mode`; untuk
+  `anonymous_code` Odoo mengirim daftar kode tanpa partner dan BFF menugaskannya (`platform.member_voucher`); untuk
+  `public_code` satu kode + kuota; untuk `member_bound` Odoo membuat kartu per `partner_id` dan BFF hanya mengirim
+  notifikasi (tanpa penugasan ulang). Mode dikunci setelah approval.
 
 ### 28.8 Wishlist, notify-me, price alert (BFF `src/wishlist`, Bearer member)
 | Endpoint | Body / respons | Batas |
@@ -3322,6 +3324,7 @@ erasure ETL untuk subject); `wa_unofficial_*` → BFF/wa-unofficial sesuai §28.
 | L-161 | Wishlist/notify-me/price alert disimpan di PG platform (bukan Odoo), ikut DSAR export & erasure. |
 | L-162 | Insight supermarket memakai `eit2`/`eis2` + `wids`; view ESB lama tidak berubah. |
 | L-163 | Semua butir §28 belum dibangun; fit-gap G45 dapat merevisi bagian Odoo bila CE standar menutupnya. |
+| L-164 | Mode voucher kampanye configurable per kampanye: `anonymous_code` (default, kode tanpa partner, penugasan di BFF), `public_code` (kode bersama tanpa member), `member_bound` (kartu per `partner_id`, khusus member; satu-satunya mode yang memasukkan identitas member ke Odoo). L-155 berlaku untuk dua mode pertama; `member_bound` adalah pengecualian yang disengaja. Mode dikunci setelah approval. |
 
 **Pertanyaan fit-gap (tidak diduplikasi, lihat `docs/fit-gap/G45_SUPERMARKET.md` §7):** Q-SM1 kode/nama/NPWP PT (`SMD`,
 §12.1) · Q-SM2 data outlet & DC · Q-SM3 timbangan & pemindai GS1 · Q-SM4 kewenangan & batas markdown · **Q-SM5 pajak**

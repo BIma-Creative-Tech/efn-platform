@@ -173,6 +173,8 @@ Rincian opsi D untuk engineer:
 - **PB1/PBJT (daerah)** hanya bila outlet punya area makan siap saji (deli/kafe) yang dikenai PBJT. Pola fiscal
   position per kota `efn_setup_company` [R]. Tidak dikonfigurasi default.
 
+> **Keputusan 18 Nov 2026 (S-17):** mode voucher configurable per kampanye — `anonymous_code` (default, kartu tanpa partner), `public_code` (kode bersama), `member_bound` (kartu per `partner_id`, khusus member). `efn_campaign` wajib mendukung ketiganya; lihat ADR-047 §3.4 dan `docs/04` L-164.
+
 ## 5. Modul usulan
 
 | Modul | Depends | Model/field utama | Record rule multi-company | Urutan |
