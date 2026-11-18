@@ -3198,7 +3198,7 @@ belum terautentikasi sebelum tag diperiksa.
 - `ir.model.data`: `module="efn_mig_esb"`, `noupdate=True`, `name = <brand>_<company>_<entity>_<key>`; `company` = kode
   PT huruf kecil (`pb, wtz, bcf, bcr, imd, cup`).
 - `key` dari kode ESB asli `c`: `n = re.sub(r"[^a-z0-9_]", "_", c.lower())[:48]`; **bila `c` tidak cocok
-  `^[A-Z0-9_]{1,48}$`** → `key = n + "_" + sha1(c.encode()).hexdigest()[:8]`, selain itu `key = n`. (Deterministik;
+  `^[A-Z0-9_]{1,48}$`** → `key = n + "_" + sha256(c.encode()).hexdigest()[:8]`, selain itu `key = n`. (Deterministik;
   mencegah tabrakan kode yang hanya beda huruf besar/kecil atau tanda baca. Meralat contoh fit-gap §3: `FIN-0123` →
   `fin_0123_<hash8>`.)
 - Entitas & `key`: `branch_wh`/`branch_loc`/`branch_pos` (`branch_id`), `category` (path ternormalisasi), `pos_category`

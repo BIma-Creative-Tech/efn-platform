@@ -26,7 +26,7 @@ REPO = Path(__file__).resolve().parents[3]
 IMPORT_PKG = REPO / "services" / "odoo" / "addons" / "efn_legacy_history" / "esb_import"
 IMPORTER = IMPORT_PKG / "importer.py"
 FUNCS = ("derive_validation_key", "sign_validation_report", "verify_validation_report")
-SECRET = "0123456789abcdef" * 4
+SECRET = bytes(range(32)).hex()  # kunci uji sintetis (64 hex), bukan secret
 
 
 class ConfigError(Exception):

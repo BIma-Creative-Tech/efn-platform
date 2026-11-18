@@ -122,7 +122,7 @@ Keputusan:
 - Produk & menu: xmlid → `product.template`; histori memakai varian tunggal. Menu takeaway `alias_of` → xmlid kedua ke
   menu dasar (map dua baris, `odoo_id` sama); menu arsip → produk `active=False`; harga hanya bila ada di bundel.
 - BoM: `normal` (produksi CK, ADR-018) `product_qty` = rasio BATCH (EA ÷ `ea_factor` produk); `phantom` = satu kit
-  per menu (`menu_keys` > 1 → xmlid tambahan `<xmlid>_k<sha1(menu_key)[:8]>`, esb_key `<bom_id>|<menu_key>` — asumsi
+  per menu (`menu_keys` > 1 → xmlid tambahan `<xmlid>_k<sha256(menu_key)[:8]>`, esb_key `<bom_id>|<menu_key>` — asumsi
   W2b); qty komponen dikonversi ke UoM produk komponen; `yield_percent` tidak dipakai (Q-ESB17). Butuh `mrp`.
 - HPP (`cost`): `standard_price` per PT; produk yang sudah berstok di PT itu → `conflict` (tidak direvaluasi).
 - Histori: flow/sales.daily = `bulk_upsert` per gudang setelah agregasi (cabang `location` → gudang induk);

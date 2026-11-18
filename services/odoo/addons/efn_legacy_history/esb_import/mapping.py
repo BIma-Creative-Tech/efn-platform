@@ -447,7 +447,7 @@ class BomTarget:
 
 def extra_bom_xmlid(base_xmlid: str, menu_key: str) -> str:
     """xmlid BoM kit tambahan bila satu BoM ESB ditautkan > 1 menu (kit per menu; asumsi W2b, README)."""
-    digest = hashlib.sha1(menu_key.encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
+    digest = hashlib.sha256(menu_key.encode("utf-8")).hexdigest()[:8]
     return f"{base_xmlid}_k{digest}"
 
 

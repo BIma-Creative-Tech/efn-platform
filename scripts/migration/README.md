@@ -141,7 +141,7 @@ part ini — informasi), `target_warehouses`, `company_warehouses` (histori, lih
 
 ## Baris JSONL master — `{"entity","company_code","esb_key","xmlid","data"}` (§27.3)
 `xmlid` = `efn_mig_esb.<brand>_<company huruf kecil>_<entitas xmlid>_<key>`, `key` = `xmlid.xmlid_key(esb_key)`
-(§27.4: normalisasi `[^a-z0-9_]`→`_`, potong 48, `+ "_" + sha1[:8]` bila kode tidak cocok `^[A-Z0-9_]{1,48}$`).
+(§27.4: normalisasi `[^a-z0-9_]`→`_`, potong 48, `+ "_" + sha256[:8]` bila kode tidak cocok `^[A-Z0-9_]{1,48}$`).
 Importer **wajib menghitung ulang** (beda → exit 3). Produk/menu/partner/BoM **kembar per company** brand (Bacha:
 BCF + BCR). Referensi antar-entitas = `*_key` (xmlid lengkap). Angka = angka JSON (int bila bulat), Rupiah exclude
 pajak, tanggal ISO `YYYY-MM-DD`.

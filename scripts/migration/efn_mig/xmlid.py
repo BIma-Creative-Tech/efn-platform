@@ -2,7 +2,7 @@
 
 `name = <brand>_<company>_<entity>_<key>` di modul `efn_mig_esb`; `company` = kode PT huruf kecil.
 `key` dari kode ESB asli `c`: `n = re.sub(r"[^a-z0-9_]", "_", c.lower())[:48]`; bila `c` tidak cocok
-`^[A-Z0-9_]{1,48}$` -> `key = n + "_" + sha1(c)[:8]`, selain itu `key = n`.
+`^[A-Z0-9_]{1,48}$` -> `key = n + "_" + sha256(c)[:8]`, selain itu `key = n`.
 """
 
 import hashlib
@@ -29,7 +29,7 @@ def xmlid_key(code: object) -> str:
     normalized = _UNSAFE.sub("_", c.lower())[:48]
     if _CANONICAL.fullmatch(c):
         return normalized
-    digest = hashlib.sha1(c.encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
+    digest = hashlib.sha256(c.encode("utf-8")).hexdigest()[:8]
     return f"{normalized}_{digest}"
 
 

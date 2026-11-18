@@ -8,7 +8,7 @@ from efn_mig.xmlid import xmlid, xmlid_key, xmlid_name
 
 
 def sha8(code: str) -> str:
-    return hashlib.sha1(code.encode(), usedforsecurity=False).hexdigest()[:8]
+    return hashlib.sha256(code.encode()).hexdigest()[:8]
 
 
 def test_canonical_code_without_hash() -> None:

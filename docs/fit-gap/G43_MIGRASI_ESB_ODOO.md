@@ -145,7 +145,7 @@ penentu = produk yang muncul di penjualan/stok cabang BCR. Kunci external ID mem
    - `company` = kode PT huruf kecil (`pb`, `wtz`, `bcf`, `bcr`, `imd`, `cup`) — **ditambahkan** pada usulan
      kontrak (`<brand>_<entity>_<esbid>`) karena Bacha punya produk kembar BCF/BCR dengan kode ESB sama.
    - `key` = kode ESB dinormalkan: huruf kecil, karakter selain `[a-z0-9_]` → `_`, dan bila normalisasi mengubah
-     kode atau panjang > 64 → tambahkan `_` + 8 hex `sha1(kode asli)` (mencegah dua kode berbeda bertabrakan).
+     kode atau panjang > 64 → tambahkan `_` + 8 hex `sha256(kode asli)` (mencegah dua kode berbeda bertabrakan).
    - Contoh: `efn_mig_esb.pb_pb_product_fin_0123`, `efn_mig_esb.bacha_bcr_product_bc_001_a1b2c3d4`,
      `efn_mig_esb.wtz_wtz_branch_5`, `efn_mig_esb.pb_pb_bom_812`, `efn_mig_esb.pb_pb_menu_m1001`.
    - Entitas: `branch_wh`, `branch_loc`, `branch_pos`, `category`, `pos_category`, `uom`, `product`, `menu`
