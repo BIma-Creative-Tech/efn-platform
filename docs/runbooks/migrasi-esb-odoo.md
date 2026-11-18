@@ -13,13 +13,15 @@ Kode sisi data: `scripts/migration` (README = format bundel) · Importer Odoo: `
 
 | Hal | Nilai |
 |---|---|
-| Alur | `esb-extract` (snapshot P1 + backfill) → ClickHouse `efn_dwh` → `esb-migrate export` (bundel `.efnmig` AES-256-GCM) → `validate_import.py` → importer `odoo shell` (dry-run = rollback) → `<run_id>.result.efnmig` → `writeback` (`efn_dwh.map_esb_odoo`) + `reconcile` → berita acara |
+| Alur | `esb-extract` (snapshot P1 + backfill) → ClickHouse `efn_dwh` → `esb-migrate export` (bundel `.efnmig` AES-256-GCM) → `validate_import.py` (laporan bertanda tangan) → `run-import.sh` (importer `odoo shell` di container Odoo **sekali jalan**, dry-run = rollback) → `<run_id>.result.efnmig` → `writeback` (`efn_dwh.map_esb_odoo`) + `reconcile` → `reconcile --final` → berita acara |
+| Lokasi | **Hanya di infrastruktur EFN** (dev/staging/production EFN). **Tidak** dijalankan di VPS pihak ketiga (host B ADR-043 §3.4, [vps-bima.md](vps-bima.md) B6): di sana kedua secret migrasi wajib `disabled` (SEC-199) |
 | Container | `esb-migrate` (overlay `docker-compose.esb.yml`, **profil `migrate`**, sekali jalan `docker compose run --rm`) — hanya network `esb` (ClickHouse HTTPS 8443, CA internal), **tanpa egress**, `read_only`, tmpfs `/work` 768 MB, limit 1536M |
 | Sisi Odoo | overlay `docker-compose.migration.yml` (HANYA selama jendela migrasi): `migration_bundle_key`, direktori pertukaran `/mnt/efn-mig`, kode `scripts/migration` hanya-baca di `/opt/efn-migration`. Odoo tidak pernah terhubung ke ClickHouse (L-129) |
-| Secret | `clickhouse_password_mig` (user ClickHouse `efn_mig`, role `mig_rw`) dan `migration_bundle_key` (64 hex, `[SA]`). Jenis `host:disabled`: produksi diisi operator di host saat jendela dibuka, dikembalikan `disabled` saat ditutup. Dev/CI: nilai nyata dari `gen-secrets.sh` |
+| Secret | `clickhouse_password_mig` (user ClickHouse `efn_mig`, role `mig_rw`) dan `migration_bundle_key` (64 hex, `[SA]`). Jenis `host:disabled`: produksi diisi Superadmin di host saat jendela dibuka ([key-custody.md §4f](key-custody.md#migrasi-esb)), dikembalikan `disabled` saat ditutup. Dev/CI: nilai nyata dari `APP_ENV=dev bash scripts/gen-secrets.sh` (tanpa `APP_ENV` dev/ci/test ditulis `disabled`, SEC-199) |
+| User Odoo | `efn_migration`: tanpa password/API key, grup minimum, anggota company target saja; `active=True` hanya selama jendela (§2.6, §7.4; SEC-205) |
 | Pertukaran | `${MIG_EXCHANGE_DIR}` (host) = `/out` di esb-migrate = `/mnt/efn-mig` di odoo. Disk terenkripsi, mode 0700. Isi = data klien: **tidak boleh** di repo, tiket, chat, e-mail |
 | Exit code | 0 OK · 1 data/selisih rekonsiliasi · 2 argumen/konfigurasi · 3 integritas (dekripsi/HMAC/hash) · 4 gerbang (PT diblokir, hasil dry-run ke writeback) |
-| Retensi | bundel + hasil dihapus **≤ 90 hari setelah berita acara** brand (Q-ESB24); `migration_bundle_key` dirotasi setelah brand terakhir (crypto-erase salinan yang terlewat) |
+| Retensi | bundel, hasil impor, laporan validator, dump `odoo_before_*` dihapus **≤ 90 hari setelah berita acara** brand (Q-ESB24, §7); setelah brand terakhir `migration_bundle_key` = `disabled` + salinan tersegel `[SA]` dimusnahkan (crypto-erase salinan yang terlewat) |
 | Risiko | R-O02 (data induk), R-O12/R-O13 (histori/rekonsiliasi), R-L01 (PDP), R-L12 |
 
 ## 1. Variabel shell
@@ -45,14 +47,13 @@ di host) dan nama project environment yang bersangkutan.
 
 ## 2. Membuka jendela migrasi (sekali per environment)
 
+0. **Lokasi**: hanya lingkungan EFN. Di host VPS pihak ketiga (B, ADR-043) langkah ini **tidak** dilakukan; `export`
+   tidak dijalankan di sana (data dipindah ke infrastruktur EFN lebih dulu).
 1. **Secret** (Superadmin/operator; nilai tidak pernah di-echo ke log/tiket):
-   - Dev/CI: `bash scripts/gen-secrets.sh` (idempoten; file berisi `disabled` diganti nilai acak).
-   - Staging/prod (host): tulis sebagai root, mode 0600, lalu catat di log kustodi ([key-custody.md](key-custody.md)):
-     ```bash
-     umask 077
-     openssl rand -base64 36 | tr -d '\r\n' > /opt/efn/secrets/clickhouse_password_mig.txt
-     openssl rand -hex 32    | tr -d '\r\n' > /opt/efn/secrets/migration_bundle_key.txt   # [SA], salinan tersegel
-     ```
+   - Dev/CI: `APP_ENV=dev bash scripts/gen-secrets.sh` (idempoten; file berisi `disabled` diganti nilai acak). Tanpa
+     `APP_ENV=dev|ci|test` skrip menulis `disabled` (SEC-199) — `APP_ENV` di sini = env shell, bukan `.env` compose.
+   - Staging/prod (host): prosedur [key-custody.md §4f](key-custody.md#migrasi-esb) (dibuat di host, `root:efn-superadmin
+     0444` dalam direktori 0750, hash dicatat di register kunci). **Jangan** menjalankan `gen-secrets.sh` di host.
      `migration_bundle_key` hilang = semua bundel/hasil tidak bisa dibuka lagi (aman, tetapi ekspor harus diulang).
      Satu kunci per environment; **jangan** menyalin kunci dev ke staging/prod atau sebaliknya.
 2. **User ClickHouse `efn_mig`**: `$DC up -d --force-recreate clickhouse-init` → log berisi `create_user efn_mig`
@@ -81,9 +82,43 @@ di host) dan nama project environment yang bersangkutan.
 5. **Image**: dev `$DCM build esb-migrate`. Staging/prod: pakai image bertanda tangan dari `build-push.yml`
    (`IMAGE_ESB_MIGRATE=ghcr.io/<owner>/esb-migrate@sha256:<digest>` di `.env`, verifikasi `cosign verify` seperti
    [esb-extract.md](esb-extract.md) §8); image belum masuk `deploy.yml`/`efn-deploy` (sekali jalan, bukan service).
-6. **Sisi Odoo**: modul `efn_legacy_history` (+ `mrp`) terpasang; user teknis `efn_migration` (`EFN_MIG_USER_LOGIN`) ada
-   dan **anggota semua company target** (`company_ids` memuat PT brand yang dimigrasi, mis. PB). Produk hasil migrasi
-   dibuat tanpa `responsible_id`, tetapi record lain (gudang, POS) tetap memeriksa konsistensi company terhadap pelaku.
+6. **Sisi Odoo**: modul `efn_legacy_history` (+ `mrp`) terpasang. Produk hasil migrasi dibuat tanpa `responsible_id`,
+   tetapi record lain (gudang, POS) tetap memeriksa konsistensi company terhadap pelaku → user teknis harus anggota
+   company target.
+   **User teknis `efn_migration`** (`EFN_MIG_USER_LOGIN`, docs/04 §27.9, ADR-042; SEC-205) — dibuat/diaktifkan SEBELUM
+   impor pertama jendela ini, oleh Admin Odoo (bukan oleh importer):
+   - user internal, **tanpa password** (login interaktif tidak mungkin) dan **tanpa API key**;
+   - grup minimum: Inventaris administrator, Manufaktur administrator, POS administrator, Akuntansi penagih — **bukan**
+     Settings/Administrator; tambahan hanya bila importer menolak dengan pesan grup (catat di berita acara);
+   - `company_ids` = **hanya** company brand yang dimigrasi (mis. PB; Bacha = BCF + BCR), `company_id` = salah satunya;
+   - `active=True` hanya selama jendela (ditutup di §7.4).
+   ```bash
+   $DC exec -T odoo odoo shell -d "$ODOO_DB" --no-http --log-level=warn <<'PY'
+   CODES = ["PB"]   # kode PT brand yang dimigrasi jendela ini
+   Users = env["res.users"].with_context(active_test=False)
+   companies = env["res.company"].search([("efn_brand_code", "in", CODES)])   # sesuaikan bila field kode PT berbeda
+   assert len(companies) == len(CODES), "company target tidak lengkap"
+   groups = [env.ref(x) for x in ("base.group_user", "stock.group_stock_manager", "mrp.group_mrp_manager",
+                                  "point_of_sale.group_pos_manager", "account.group_account_invoice")]
+   gfield = "group_ids" if "group_ids" in Users._fields else "groups_id"   # Odoo 19: group_ids
+   vals = {"name": "EFN Migrasi ESB (teknis)", "company_id": companies[0].id,
+           "company_ids": [(6, 0, companies.ids)], gfield: [(6, 0, [g.id for g in groups])], "active": True}
+   user = Users.search([("login", "=", "efn_migration")], limit=1)
+   if user:
+       user.write(vals)
+   else:
+       user = Users.create(dict(vals, login="efn_migration"))
+   assert env.ref("base.group_system") not in user[gfield], "efn_migration tidak boleh Settings/Administrator"
+   assert not env["res.users.apikeys"].sudo().search_count([("user_id", "=", user.id)]), "hapus API key efn_migration"
+   # field ORM `password` selalu terbaca kosong -> cek kolom DB langsung
+   env.cr.execute("SELECT COALESCE(password, '') = '' FROM res_users WHERE id = %s", [user.id])
+   assert env.cr.fetchone()[0], "efn_migration tidak boleh punya password"
+   env.cr.commit()
+   print("efn_migration aktif; company:", companies.mapped("name"))
+   PY
+   ```
+   (Langkah administratif singkat; impor sendiri **tidak** lewat `exec` ke Odoo live, lihat §4.2.) Bila skema field
+   berbeda di versi Odoo terpasang, lakukan hal yang sama lewat UI Settings → Users dan catat di berita acara.
    Pasang overlay: `$DCM up -d odoo` (recreate odoo + sidecar). Cek: `$DCM exec -T odoo ls /run/secrets/migration_bundle_key /mnt/efn-mig /opt/efn-migration/efn_mig`.
 7. **Prasyarat produksi** (bukan dev): entri PDP "Bundel migrasi ESB" ditandatangani DPO; Q-ESB7 (izin beban API
    ESB) untuk backfill; base backup WAL-G terbaru sukses + uji restore ([backup-restore.md](backup-restore.md)) sebelum
@@ -121,23 +156,30 @@ $MIG python validate_import.py --source esb-bundle /out/$RUN.efnmig --out /out
 ```
 
 ### 4.2 Impor master ke Odoo dev (dry-run lalu nyata)
-Argumen persis = header `scripts/migration/odoo_import_esb.py` (efn-odoo-engineer); bila berbeda dari contoh ini,
-header itu yang berlaku. Cara utama = pembungkus `scripts/migration/run-import.sh <bundel> --validation <file>`
-(default dry-run; `--apply` untuk nyata; hasil dry-run ditulis `<run_id>.dryrun.result.efnmig`). Setara manual:
+Satu-satunya jalur impor = pembungkus `scripts/migration/run-import.sh` (opsi persis: `run-import.sh --help` / header
+skrip; bila berbeda dari contoh ini, skrip yang berlaku). Perilaku yang ditetapkan lead (perbaikan security G43):
+- importer berjalan di **container Odoo sekali jalan** (image + env + overlay migration yang sama dengan service
+  `odoo`, dihapus setelah selesai), **bukan** `docker compose exec` ke container Odoo yang melayani POS — bundel
+  besar tidak bisa meng-OOM worker produksi (SEC-200). **Jangan** memanggil `exec ... odoo shell` manual untuk impor;
+- sebelum menyentuh DB, laporan validator diverifikasi **tanda tangannya** (HMAC kunci bundel) dan `manifest_sha256`-nya
+  harus sama dengan bundel; laporan buatan tangan/diubah ditolak (SEC-201);
+- default **dry-run**; run nyata `--apply`; di **staging dan production** run nyata wajib `--confirm-brand <brand>`
+  (`APP_ENV` kosong/tidak dikenal diperlakukan production).
 
 ```bash
-imp() {  # $1 = JSON argumen importer
-  $DCM exec -T -e EFN_MIG_ARGV="$1" odoo odoo shell -d "$ODOO_DB" --no-http --log-level=warn \
-    < ../../scripts/migration/odoo_import_esb.py
-}
-imp "{\"bundle\":\"/mnt/efn-mig/$RUN.efnmig\",\"validation\":\"/mnt/efn-mig/validation_$RUN.json\",\"dry_run\":true}"
+RI=../../scripts/migration/run-import.sh
+export DCM ODOO_DB   # dipakai run-import.sh
+$RI "$RUN.efnmig" --validation "validation_$RUN.json"                   # dry-run -> <run_id>.dryrun.result.efnmig
 # periksa import_report (created/updated/conflict/failed); bila bersih:
-imp "{\"bundle\":\"/mnt/efn-mig/$RUN.efnmig\",\"validation\":\"/mnt/efn-mig/validation_$RUN.json\",\"dry_run\":false}"
+$RI "$RUN.efnmig" --validation "validation_$RUN.json" --apply             # dev
+# staging/production: ... --apply --confirm-brand pb
 $MIG python esb_to_odoo.py writeback --result /out/$RUN.result.efnmig      # dry_run=true ditolak (exit 4)
 $MIG python esb_to_odoo.py reconcile --bundle /out/$RUN.efnmig --result /out/$RUN.result.efnmig --out /out
 ```
 
 Ulang impor nyata dengan bundel yang sama harus menghasilkan `created = 0` (idempoten lewat xmlid `efn_mig_esb.*`).
+`reconcile` dry-run: beri `--result /out/$RUN.dryrun.result.efnmig` (run_id sama dengan bundel).
+Kategori produk induk brand (`PB`) dibuat sebagai kategori tingkat atas (Odoo 19 tanpa kategori "All").
 
 ### 4.3 Histori (rentang terbatas)
 ```bash
@@ -151,13 +193,25 @@ for f in "$MIG_EXCHANGE_DIR/${PARENT}"_PB_*.efnmig; do   # path host (§1)
 done
 ```
 Impor setiap segmen seperti §4.2 (`run_id` segmen = isi header/manifest; nama `validation_<run_id>.json` dari keluaran
-validator). Ukur WAL & waktu per segmen (§5). Lalu satu laporan rekonsiliasi per `parent_run_id`:
+validator). **Samakan** `--sales-line-months` ekspor dengan parameter Odoo `efn_mig_esb.sales_line_months`: bila
+parameter lebih kecil, baris di luar jendela dilewati importer (`rows_skipped_window`) dan rekonsiliasi 5c hanya
+mengeluarkan peringatan; bila parameter 0, importer melaporkan `skipped_by_param` dan rekonsiliasi memuat baris info
+`5c_dilewati_param` (bukan selisih). Ukur WAL & waktu per segmen (§5). Lalu satu laporan rekonsiliasi per `parent_run_id`:
 ```bash
 $MIG python esb_to_odoo.py reconcile --bundle /out/<seg1>.efnmig --bundle /out/<seg2>.efnmig \
   --result /out/<seg1>.result.efnmig --result /out/<seg2>.result.efnmig --out /out --with-source
 ```
 Exit 1 = ada butir pemblokir (selisih Σ per bulan × gudang × produk/menu di luar toleransi, `bulk_check` ≠ 0,
 gagal impor) → investigasi sebelum lanjut; peringatan rasio net/pembayaran di luar 0,80–0,98 = catat di berita acara.
+
+**Laporan akhir**: setelah SEMUA segmen histori (dan master) satu ekspor selesai diimpor nyata, jalankan sekali
+`reconcile --final` dengan seluruh bundel + hasil `parent_run_id` itu (opsi persis: `esb_to_odoo.py reconcile --help`).
+Laporan per segmen di atas hanya kontrol antara; yang dilampirkan ke berita acara (§6) adalah laporan `--final`, dan
+exit ≠ 0 dari `--final` = berita acara tidak boleh ditandatangani.
+```bash
+$MIG python esb_to_odoo.py reconcile --final --bundle /out/<seg1>.efnmig ... --result /out/<seg1>.result.efnmig ... \
+  --out /out --with-source
+```
 
 ### 4.4 Validasi fungsional di Odoo (checklist)
 - [ ] Gudang/lokasi/`pos.config` PB sesuai `branch_map`; tidak ada sesi POS terbuka dibuat.
@@ -208,22 +262,29 @@ Disimpan di arsip dokumen keuangan (bukan repo). Lampiran = laporan tanpa data p
 | Cutover | `--cutover-date`, rentang histori (`legacy_days`, bulan `sales_daily`, `sales_line_months`) |
 | Run | `run_id` master, `parent_run_id` histori, jumlah segmen; `manifest_sha256` tiap bundel |
 | Hasil impor | per entitas: created/updated/skipped/conflict/failed; baris histori per model |
-| Rekonsiliasi | status butir 1–7 §27.5, selisih + penjelasan, peringatan rasio net/pembayaran |
+| Rekonsiliasi | laporan `reconcile --final` (§4.3): status butir 1–7 §27.5, selisih + penjelasan, peringatan rasio net/pembayaran |
+| User teknis | `efn_migration`: tanggal aktif/nonaktif, grup, company (§2.6, §7.4) |
 | Ukuran & backup | §5 (ukuran tabel, WAL, waktu, dampak base backup) |
 | Pengecualian | baris tak terpetakan, menu arsip, asumsi [B] (Q-ESB17 BoM, `lastHpp`), langkah yang tidak dijalankan (stok/saldo) |
-| Rencana hapus bundel | tanggal ≤ 90 hari setelah tanda tangan + metode (§7) |
+| Rencana hapus bundel | tanggal ≤ 90 hari setelah tanda tangan + metode (§7): bundel, hasil, laporan validator, dump `odoo_before_*` |
+| Crypto-erase (brand terakhir) | tanggal `migration_bundle_key` → `disabled`, hash kunci yang dimusnahkan, pemusnahan salinan tersegel `[SA]` (saksi, log brankas) — [key-custody.md §4f](key-custody.md#migrasi-esb) |
 | Tanda tangan | PIC brand, Finance, operator migrasi, efn-lead; DPO (produksi) |
 
 ## 7. Penghapusan bundel (≤ 90 hari) dan menutup jendela
 
 1. Setelah berita acara ditandatangani, jadwalkan hapus (kalender tim, tanggal di berita acara).
-2. Hapus bundel, hasil, berkas sementara di `MIG_EXCHANGE_DIR` (laporan `.md/.csv` tanpa data pribadi boleh dipindah ke
-   arsip berita acara lebih dulu):
+2. Pindahkan laporan yang dilampirkan ke berita acara (`validation_*.md`, `reconcile_*.md/.csv` — tanpa data pribadi)
+   ke arsip berita acara, lalu hapus **semua** isi `MIG_EXCHANGE_DIR` yang tersisa: bundel (`*.efnmig`), bundel hasil
+   (`*.result.efnmig`, `*.dryrun.result.efnmig`), laporan validator (`validation_*.json/.md`), laporan antara, berkas
+   sementara (`*.part`), dan dump DB `odoo_before_*` (`*.dump`, `*.dump.age`):
    ```bash
-   sudo find "$MIG_EXCHANGE_DIR" -type f \( -name '*.efnmig' -o -name '*.part' -o -name '*.json' \) -print -delete
+   sudo find "$MIG_EXCHANGE_DIR" -type f \( -name '*.efnmig' -o -name '*.part' -o -name '*.json' -o -name '*.md' \
+     -o -name '*.csv' -o -name '*.dump' -o -name '*.dump.age' \) -print -delete
+   sudo find "$MIG_EXCHANGE_DIR" -mindepth 1 -print     # harus kosong; sisa apa pun = periksa & hapus manual
    ```
-   `shred` tidak andal di SSD/LUKS; perlindungan utamanya = enkripsi bundel + rotasi kunci (langkah 4).
-3. Salinan lain (laptop operator, media transfer) dihapus dan dikonfirmasi tertulis.
+   `shred` tidak andal di SSD/LUKS; perlindungan utamanya = enkripsi bundel/dump + pemusnahan kunci (langkah 4).
+3. Salinan lain (laptop operator, media transfer, kunci privat `age` dump bila khusus migrasi) dihapus dan dikonfirmasi
+   tertulis.
 4. **Menutup jendela** (setelah brand terakhir, atau bila jeda migrasi > 30 hari):
    ```bash
    printf 'disabled' | sudo tee /opt/efn/secrets/clickhouse_password_mig.txt > /dev/null
@@ -231,9 +292,25 @@ Disimpan di arsip dokumen keuangan (bukan repo). Lampiran = laporan tanpa data p
    $DC up -d --force-recreate clickhouse-init     # log: "user efn_mig dihapus (migrasi nonaktif)"
    $DC up -d odoo                                  # TANPA -f docker-compose.migration.yml -> kunci & mount lepas
    ```
-   Cek: `$DC exec -T odoo ls /run/secrets | grep -c migration_bundle_key` = 0. Catat tanggal di log kustodi dan
-   inventaris PDP (Q-ESB24 / Q-P32). Dev: sama, atau `rm secrets/migration_bundle_key.txt` lalu `gen-secrets.sh`
-   (kunci baru = bundel dev lama tak terbaca).
+   Cek: `$DC exec -T odoo ls /run/secrets | grep -c migration_bundle_key` = 0 dan `SHOW USERS` ClickHouse tanpa
+   `efn_mig`.
+   - **Arsipkan user `efn_migration`** (SEC-205) — tidak dihapus (jejak `create_uid/write_uid` histori tetap terbaca):
+     ```bash
+     $DC exec -T odoo odoo shell -d "$ODOO_DB" --no-http --log-level=warn <<'PY'
+     u = env["res.users"].with_context(active_test=False).search([("login", "=", "efn_migration")], limit=1)
+     env["res.users.apikeys"].sudo().search([("user_id", "=", u.id)]).unlink()
+     u.active = False
+     env.cr.commit()
+     print("efn_migration active =", u.active)
+     PY
+     ```
+     Di antara brand (jendela tetap terbuka) user boleh tetap aktif; bila jeda > 30 hari arsipkan dan aktifkan lagi
+     lewat §2.6 saat brand berikutnya.
+   - **Crypto-erase**: musnahkan salinan tersegel `[SA]` `migration_bundle_key` (bila dibuat) dan salinan lain sesuai
+     [key-custody.md §4f](key-custody.md#migrasi-esb) langkah 2; catat tanggal, hash kunci, metode, dan saksi di berita
+     acara (§6), log kustodi, dan inventaris PDP (Q-ESB24 / Q-P32).
+   - Dev: sama, atau `rm secrets/migration_bundle_key.txt` lalu `APP_ENV=dev bash scripts/gen-secrets.sh` (kunci baru =
+     bundel dev lama tak terbaca).
 
 ## 8. Rollback
 
@@ -243,21 +320,25 @@ Disimpan di arsip dokumen keuangan (bukan repo). Lampiran = laporan tanpa data p
 | Validator/integritas gagal (exit 1/3) | Jangan impor. Exit 3 = bundel rusak/kunci salah/berkas diubah → ekspor ulang; jangan "memperbaiki" bundel manual. |
 | Impor master nyata salah sebagian | Ulang impor setelah perbaikan (upsert per xmlid; hanya field milik migrasi). Record salah yang tidak boleh ada → arsipkan (`active=False`) lewat Odoo oleh fungsional, bukan hapus massal SQL. |
 | Histori satu irisan salah | Impor ulang segmen yang sama/terbaru: importer mengganti irisan company × gudang × bulan (`DELETE`+`INSERT`, §27.8a), tidak menggandakan. |
-| Kerusakan luas / sebelum go-live | **Pulihkan DB Odoo** ke titik sebelum impor: dev = `pg_dump -Fc` yang diambil sebelum §4.2 (`psqlo` → `pg_restore` ke DB baru lalu ganti `ODOO_DB`); staging/prod = PITR WAL-G ke waktu sebelum impor ([backup-restore.md](backup-restore.md)). Setelah go-live POS Odoo, PITR membuang transaksi baru → hanya dengan keputusan efn-lead + Finance. |
+| Kerusakan luas / sebelum go-live | **Pulihkan DB Odoo** ke titik sebelum impor: dev = dump terenkripsi yang diambil sebelum §4.2 (`age -d` → `pg_restore` ke DB baru lalu ganti `ODOO_DB`); staging/prod = PITR WAL-G ke waktu sebelum impor ([backup-restore.md](backup-restore.md)). Setelah go-live POS Odoo, PITR membuang transaksi baru → hanya dengan keputusan efn-lead + Finance. |
 | `map_esb_odoo` berisi run yang dibatalkan | Admin ClickHouse (bukan `efn_mig`, yang tanpa DELETE): `ALTER TABLE efn_dwh.map_esb_odoo DELETE WHERE run_id = '<run_id>'` lalu catat di berita acara. |
 
-Sebelum impor nyata di dev, ambil cadangan cepat:
+Sebelum impor nyata di dev, ambil cadangan cepat **terenkripsi** (`age`, kunci publik penerima milik EFN; dump DB
+penuh tidak pernah disimpan plaintext). Staging/production memakai WAL-G/PITR, bukan dump ini.
 ```bash
-$DC exec -T postgres pg_dump -U "${PG_SUPERUSER:-postgres}" -Fc "$ODOO_DB" > "$MIG_EXCHANGE_DIR/odoo_before_$(date +%Y%m%d%H%M).dump"
+AGE_RECIPIENT='age1...'   # kunci publik EFN (bukan rahasia); kunci privat tidak berada di host ini
+$DC exec -T postgres pg_dump -U "${PG_SUPERUSER:-postgres}" -Fc "$ODOO_DB" \
+  | age -r "$AGE_RECIPIENT" -o "$MIG_EXCHANGE_DIR/odoo_before_$(date +%Y%m%d%H%M).dump.age"
+# pulih: age -d -i <kunci-privat> odoo_before_<ts>.dump.age | pg_restore -d <db_baru> ...
 ```
-(berisi data dev; ikut aturan hapus §7).
+Berkas ini berada di `MIG_EXCHANGE_DIR` agar ikut terhapus di §7 (≤ 90 hari setelah berita acara).
 
 ## 9. Masalah umum
 
 | Gejala | Penyebab / tindakan |
 |---|---|
 | `run` gagal "bind source path does not exist" | Direktori `MIG_EXCHANGE_DIR`/`MIG_MAPS_DIR` belum dibuat (§2.3). |
-| `konfigurasi: MIG_BUNDLE_KEY_FILE ...` / `migration_bundle_key wajib hex >= 64` | Secret masih `disabled` atau bukan hex → §2.1. |
+| `konfigurasi: MIG_BUNDLE_KEY_FILE ...` / `migration_bundle_key wajib hex >= 64` | Secret masih `disabled` atau bukan hex → §2.1 (dev: `gen-secrets.sh` dijalankan tanpa `APP_ENV=dev` menulis `disabled`). |
 | `konfigurasi: CH_CA_FILE ...` / TLS error | CA internal tidak ter-mount atau sertifikat ClickHouse kedaluwarsa (`make pki`). Tidak ada fallback plaintext. |
 | ClickHouse `AUTHENTICATION_FAILED` untuk `efn_mig` | clickhouse-init belum dijalankan ulang setelah secret diisi, atau secret placeholder → user dihapus (§2.2). |
 | Importer `Permission denied` membaca bundel | `EFN_MIG_UID/GID` ≠ uid/gid odoo (§2.3); ekspor ulang setelah diperbaiki. |

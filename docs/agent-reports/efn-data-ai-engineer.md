@@ -1351,3 +1351,24 @@ P2 (E6–E9) ditolak CLI tanpa `--allow-unverified` (default mati). E10 TB/GL ti
 - PDP: `dim_esb_customer.customer_name` bisa nama orang (pelanggan perorangan) → perlu entri inventaris PDP; definer
   `efn_t2s_definer` punya `SELECT efn_dwh.*` (wildcard G38) sehingga secara teknis bisa membaca tabel G43 — tidak ada
   view `efn_t2s` yang mengeksposnya, tetapi lebih aman dipersempit (security review).
+
+### G43 perbaikan security (SECURITY_REVIEW_2026-11-18_g43) — sisi data
+- **SEC-197**: part histori per GUDANG TUJUAN (`export.plan_warehouse_parts`); manifest `target_warehouses` (gudang part
+  ini, xmlid lengkap `efn_mig_esb.<brand>_<co>_branch_wh_<id>`) + `company_warehouses` (semua gudang PT; gudang tanpa
+  baris di part 1; bulan kosong tetap satu bundel); baris flow/sales.daily dijumlahkan per kunci model
+  (`mapping.aggregate_rows`, sumber diurut hari); lokasi dengan induk PT lain tidak dipetakan; validator
+  `check_segment_set` (tumpang tindih = exit 3, part tidak lengkap = `PARTS_INCOMPLETE`), `HISTORY_KEY_DUP`,
+  `branch_key` di luar target = exit 3; `reconcile --final --parent-run-id` (`reconcile.reconcile_final`) vs hasil
+  importer `steps=["totals"]`.
+- **SEC-201**: `Keys.val` (HKDF `efn:mig-esb:val:v1`), `bundle.sign_validation`/`verify_validation` (mengikat run_id +
+  `bundle_sha256` + `manifest_sha256` + errors); `validate_import.py` menulis laporan bertanda tangan, menerima banyak
+  bundel. Uji lintas-sisi `tests/test_cross_side_validation.py` menjalankan fungsi importer (dari source, tanpa Odoo).
+- **SEC-200**: `EFN_MIG_MAX_BUNDLE_BYTES` (default 1 GiB) dicek via `fstat` sebelum baca (`read_limited`) + di
+  `open_bundle`. **SEC-202**: `write_secure`/`open_secure_write` (O_CREAT|O_EXCL|O_NOFOLLOW 0600 + rename atomik).
+- **SEC-206**: `text2sql-access.sql` grant per objek (8 view + 10 tabel dasar) + `REVOKE ALL ON efn_dwh.*`; test
+  `scripts/migration/tests/test_t2s_access.py` (penutupan rekursif dari 7 view efn_t2s).
+- QA residu: `esb_product_name` (flow), `menu_name`/`menu_category` (sales.daily) sebagai kunci OPSIONAL
+  (`mapping.HISTORY_OPTIONAL_KEYS`, identik importer). README: lokasi dari `branch_map.csv`, kontrak 1/2/5.
+- Salinan `efn_mig/bundle.py` disalin ulang ke `services/odoo/addons/efn_legacy_history/esb_import/efn_mig/`.
+- Belum terverifikasi: tidak ada yang dijalankan (pytest/ruff/ClickHouse); grant per objek efn_t2s perlu uji text2sql
+  nyata di ClickHouse 24.8 (view DEFINER berlapis tanpa wildcard).

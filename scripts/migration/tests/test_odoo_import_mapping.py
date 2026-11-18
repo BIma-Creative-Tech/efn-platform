@@ -80,11 +80,13 @@ class FakeResolver:
         self.variants = variants or {}
         self.uoms = uoms or {}
         self.tags = {}
+        self.std_models = []
 
     def res_id(self, xmlid):
         return self.ids.get(xmlid)
 
-    def std_ref(self, xmlid):
+    def std_ref(self, xmlid, model=None):
+        self.std_models.append(model)
         return self.std.get(xmlid) if xmlid else None
 
     def variant_id(self, xmlid):
@@ -154,6 +156,19 @@ def test_history_row_keys_exact():
     m.check_history_row("legacy_sales_line", row)
     with pytest.raises(vendored_bundle.IntegrityError):
         m.check_history_row("legacy_sales_line", {**row, "customer_phone": "x"})
+    missing = dict(row)
+    missing.pop("sales_num")
+    with pytest.raises(vendored_bundle.IntegrityError):
+        m.check_history_row("legacy_sales_line", missing)
+    # Nama tampilan opsional (data bisnis) diterima dan dipotong ke ukuran kolom.
+    daily = {k: 0 for k in m.HISTORY_KEYS["legacy_sales_daily"]}
+    m.check_history_row("legacy_sales_daily", {**daily, "menu_name": "Roti", "menu_category": "Bakery"})
+    with pytest.raises(vendored_bundle.IntegrityError):
+        m.check_history_row("legacy_flow_daily", {**{k: 0 for k in m.HISTORY_KEYS["legacy_flow_daily"]},
+                                                  "menu_name": "x"})  # fmt: skip
+    vals = m.sales_daily_vals({**daily, "menu_name": "R" * 300, "menu_category": ""}, company_id=1, warehouse_id=2,
+                              pos_config_id=None, product_id=None, brand=BRAND)  # fmt: skip
+    assert len(vals["menu_name"]) == 256 and vals["menu_category"] is None
 
 
 # ------------------------------------------------------------------------------------------------ plan master
@@ -175,6 +190,7 @@ def test_product_and_menu_plans():
             "uom.product_uom_unit", "type": "consu", "is_storable": True, "purchase_ok": False, "sale_ok": False,
             "active": True}  # fmt: skip
     plan = m.product_plan(data, 7, resolver, None)
+    assert resolver.std_models == ["uom.uom"], "UoM di-resolve dengan validasi model (SEC-203)"
     assert plan.owned["categ_id"] == 41
     assert plan.create_only == {"company_id": 7, "uom_id": 1, "responsible_id": False}
     assert not plan.missing

@@ -114,7 +114,11 @@ Keputusan:
 - Cabang store → `stock.warehouse` + `pos.config` tanpa sesi & **tanpa metode bayar** (`payment_method_ids` kosong:
   milik admin/efn_setup_pos; juga mencegah default CE membuat jurnal); `location` → `stock.location` internal di bawah
   `lot_stock_id` gudang induk; `efn_is_central_kitchen` hanya bila `efn_ck_production` terpasang (dicatat).
-- Kategori produk: `All / <BRAND> / <kategori ESB>` (induk per brand, xmlid `efn_mig_esb.<brand>_category_root`).
+- Kategori produk: `<BRAND> / <kategori ESB>` (induk per brand = kategori **tingkat atas**, xmlid
+  `efn_mig_esb.<brand>_category_root`; Odoo 19 tidak memasang kategori "All" — dipakai sebagai induk hanya bila ada).
+- Produk & menu dibuat dengan `responsible_id` kosong; user `efn_migration` wajib anggota semua company target.
+- Gerbang `--confirm-brand`: `APP_ENV` kosong/tidak dikenal = production (fail closed); non-production hanya
+  `dev|development|local|test|ci|staging|stg`.
 - Produk & menu: xmlid → `product.template`; histori memakai varian tunggal. Menu takeaway `alias_of` → xmlid kedua ke
   menu dasar (map dua baris, `odoo_id` sama); menu arsip → produk `active=False`; harga hanya bila ada di bundel.
 - BoM: `normal` (produksi CK, ADR-018) `product_qty` = rasio BATCH (EA ÷ `ea_factor` produk); `phantom` = satu kit
@@ -127,6 +131,19 @@ Keputusan:
   (`rows_skipped_unmapped`), penjualan disimpan dengan `product_id` kosong.
 - Dry-run = savepoint di-rollback setelah `odoo_totals`/`table_bytes` dihitung; run nyata commit per entitas/irisan.
 - Saldo awal (`stock`/`opening`) = stub (`import_opening_balances`) — default mati, aktif pun exit 2 dengan pesan.
+
+### Perbaikan review keamanan G43 (`docs/reviews/SECURITY_REVIEW_2026-11-18_g43.md`)
+| Temuan | Perilaku importer |
+|---|---|
+| SEC-197 | Segmen histori WAJIB `manifest.target_warehouses` (daftar xmlid `branch_wh` company segmen; semua gudang tujuan company × bulan, termasuk tanpa baris). Untuk SETIAP gudang target: flow/sales.daily = agregasi per kunci grain lalu **ganti irisan** gudang × range berkas (`bulk_replace_slice`, baris basi terhapus); sales.line = ganti irisan (dipotong `sales_line_window`). Gudang target tanpa baris → irisan dikosongkan. Tanpa/rusak → exit 3; baris di luar target → exit 3; gudang target belum diimpor / milik PT lain → exit 4 sebelum histori ditulis. Impor ulang = `rows_deleted == rows_inserted` (bukan lagi "0 perubahan" upsert). |
+| SEC-198 | Run nyata sukses penuh mencatat `ir.config_parameter` `efn_mig_esb.last_run.<brand>.<PT>.master` / `.history.<YYYY-MM>` = `{created_at, run_id}` (nilai maks). Bundel dengan `manifest.created_at` lebih tua → exit 4 (juga dry-run), kecuali `allow_older` (laporan `allow_older_used`, wajib dicatat di berita acara). Bundel sama/lebih baru = boleh. |
+| SEC-201 | Laporan validator wajib `sig` = HMAC-SHA256(HKDF(`migration_bundle_key`, info `efn:mig-esb:val:v1`), canonical JSON tanpa `sig`); tidak ada/salah → exit 3. Pengecualian: dry-run non-production + `allow_missing_validation`. Fungsi (`derive_validation_key`, `sign_validation_report`, `verify_validation_report`) sementara di `importer.py` karena `efn_mig/bundle.py` belum memuatnya — **kontrak untuk validator W1**; pindahkan ke `efn_mig` bila data engineer menambahkannya. |
+| SEC-200 | `run-import.sh` = `docker compose run --rm --no-deps -T` (container sekali jalan, label Traefik mati, tanpa port, tanpa cron); bundel > `EFN_MIG_MAX_BUNDLE_BYTES` (default 1 GiB) ditolak sebelum dibaca (exit 2). Batas memori = batas service `odoo` di compose (opsi `--memory` tidak ada di `compose run`). |
+| SEC-202 | Hasil ditulis berkas sementara unik `O_CREAT|O_EXCL|O_NOFOLLOW` 0600 + fsync + `os.replace` atomik; bundel/validasi dibaca `O_NOFOLLOW`. |
+| SEC-203 | `std_ref(xmlid, model)` memvalidasi model: UoM wajib `uom.uom`; salah model → baris gagal dengan pesan "xmlid … menunjuk model …, bukan uom.uom". |
+| Gerbang | `confirm_brand` wajib untuk run nyata di production (fail closed) **dan** staging/stg (`requires_confirm_brand`). |
+| Mode totals | `EFN_MIG_ARGV {"steps":["totals"],"companies":[…],"months":[…]}` → `run_totals` menghitung `odoo_totals` dari tabel (semua gudang PT, bulan penuh, tanpa tulis) → `<run_id>.totals.result.efnmig` (`import_report.mode = "totals"`) untuk `reconcile --final`. |
+| Nama tampilan | Kunci opsional baris histori `esb_product_name` (flow) dan `menu_name`, `menu_category` (sales.daily) diisi bila ada (dipotong ke ukuran kolom). |
 
 ## Parameter (`ir.config_parameter`)
 | Kunci | Default | Catatan |
@@ -180,7 +197,7 @@ untuk baris, parameter rentang), SEC-58 (tanpa metode RPC publik baru).
 - Test **belum dijalankan** oleh penulis (tanpa shell); lead menjalankan di container Odoo 19.
 - "Wajib ada filter tanggal" pada list `sales.line` hanya berupa filter default (tidak dipaksa server).
 - `sales.daily`: kunci memakai `esb_menu_code` (bukan `(product_id, day, is_takeaway)` kontrak) agar menu tak
-  terpetakan tetap bisa di-upsert; setara bila semua menu terpetakan. Bila dua cabang ESB dipetakan ke satu gudang,
-  export wajib mengagregasi dulu (kunci ganda dalam satu batch → error).
+  terpetakan tetap bisa di-upsert; setara bila semua menu terpetakan. Bila dua cabang ESB dipetakan ke satu gudang
+  (cabang `location` → gudang induk), importer mengagregasi dulu sebelum upsert (`mapping.aggregate`).
 - Penurunan `sales_line_months` tidak menghapus baris lama (runbook: ganti irisan kosong).
 - Referensi desain: tidak ada modul OCA/Cybrosys yang dipakai/dirujuk (pola upsert = PostgreSQL standar).

@@ -3,6 +3,7 @@ klien) dibuat dengan `efn_mig.bundle.build_bundle` (salinan terkendali) dan kunc
 
 import secrets
 import uuid
+from unittest.mock import patch
 
 from odoo.tests import TransactionCase, new_test_user, tagged
 
@@ -22,6 +23,9 @@ from odoo.addons.efn_legacy_history.esb_import.efn_mig.xmlid import xmlid
 BRAND = "zzt"  # brand uji (bukan brand nyata) agar tidak bertabrakan dengan xmlid migrasi sungguhan
 CUTOVER = "2026-11-01"
 MONTH = "2026-10"
+CREATED = "2026-11-18T03:00:00.000Z"
+CREATED_OLDER = "2026-11-17T03:00:00.000Z"
+CREATED_NEWER = "2026-11-19T03:00:00.000Z"
 
 
 def X(entity, code, company="PB"):  # noqa: N802
@@ -44,7 +48,9 @@ class TestEsbImport(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.keys = derive_keys(secrets.token_hex(32))
+        secret = secrets.token_hex(32)
+        cls.keys = derive_keys(secret)
+        cls.val_key = imp.derive_validation_key(secret)
         cls.pb = cls._company("PB")
         cls.wtz = cls._company("WTZ")
         cls.mig_user = new_test_user(cls.env, login="efn_mig_esb_test", groups="base.group_user")
@@ -80,6 +86,7 @@ class TestEsbImport(TransactionCase):
             "sales_line_months": 24,
             "parent_run_id": None,
             "segment": None,
+            "created_at": CREATED,
             "files": entries,
             "maps": [],
         }
@@ -177,10 +184,16 @@ class TestEsbImport(TransactionCase):
             "dry_run": False,
             "app_env": "development",
             "migration_login": self.mig_user.login,
-            "validation": {"manifest_sha256": bundle.manifest_sha256, "errors": 0},
+            "validation": self._validation(bundle),
+            "validation_key": self.val_key,
         }
         values.update(kwargs)
         return imp.Options(**values)
+
+    def _validation(self, bundle, **extra):
+        report = {"run_id": bundle.manifest["run_id"], "manifest_sha256": bundle.manifest_sha256, "errors": 0}
+        report.update(extra)
+        return imp.sign_validation_report(report, self.val_key)
 
     def _run(self, bundle, **kwargs):
         return imp.run_import(self.env, bundle, self._options(bundle, **kwargs))
@@ -301,7 +314,9 @@ class TestEsbImport(TransactionCase):
             self._run(self._bundle(rows))
         bundle = self._bundle(self._master_rows())
         with self.assertRaisesRegex(imp.GateError, "validator"):
-            self._run(bundle, validation={"manifest_sha256": "0" * 64, "errors": 0})
+            self._run(bundle, validation=self._validation(bundle, manifest_sha256="0" * 64))
+        with self.assertRaisesRegex(imp.GateError, "validator"):
+            self._run(bundle, validation=self._validation(bundle, errors=2))
         with self.assertRaisesRegex(imp.GateError, "validator"):
             self._run(bundle, validation=None)
         with self.assertRaisesRegex(imp.GateError, "confirm-brand"):
@@ -335,6 +350,8 @@ class TestEsbImport(TransactionCase):
 
         base = X("menu", "ZM01")
         sales = [sale("ZM01", base, False), sale("ZM01T", base, True), sale("ZX", None, False)]
+        sales[0].update(menu_name="ZT Roti Tawar", menu_category="Bakery")  # kunci opsional (butir 9)
+        flows[0]["esb_product_name"] = "ZT FIN Roti"
 
         def line(no, code, menu_key):
             return {"sales_num": "ZS-0001", "line_no": no, "date": "2026-10-06", "branch_key": wh11,
@@ -354,7 +371,10 @@ class TestEsbImport(TransactionCase):
             "parent_run_id": str(uuid.uuid4()),
             "segment": segment,
             "branch_ids": [4, 11],
+            "target_warehouses": [ck, wh11],
         }
+        overrides = manifest.pop("files", {})
+        files.update(overrides)
         values.update(manifest)
         return self._bundle(files, **values)
 
@@ -406,12 +426,18 @@ class TestEsbImport(TransactionCase):
         self.assertGreater(result.report["table_bytes"]["efn_legacy_sales_line"], 0)
         opened = open_bundle(imp.build_result(bundle, result, self.keys), self.keys, expect_kind="result")
         self.assertEqual(set(opened.files), {"import_report.json", "odoo_totals.json"}, "segmen tanpa map.jsonl")
-        # Impor ulang: upsert = 0 perubahan; ganti irisan = jumlah baris sama.
+        self.assertEqual(by_code["ZM01"].menu_name, "ZT Roti Tawar")
+        self.assertEqual(by_code["ZM01"].menu_category, "Bakery")
+        self.assertEqual(flows.filtered(lambda r: r.day.isoformat() == "2026-10-01" and r.warehouse_id != ck)
+                         .esb_product_name, "ZT FIN Roti")  # fmt: skip
+        # Impor ulang = ganti irisan setiap gudang target (SEC-197): jumlah baris sama, tidak menggandakan.
         again = self._run(bundle)
+        self.assertEqual(again.exit_code, imp.EXIT_OK, again.report["slices"])
         for item in again.report["slices"]:
-            if item["model"] != "efn.legacy.sales.line":
-                self.assertEqual((item["rows_inserted"], item.get("rows_updated")), (0, 0), item)
+            if not item.get("rows_skipped_window"):
+                self.assertEqual(item["rows_deleted"], item["rows_inserted"], item)
         self.assertEqual(len(self._legacy("efn.legacy.flow.daily")), 4)
+        self.assertEqual(len(self._legacy("efn.legacy.sales.daily")), 3)
         self.assertEqual(len(self._legacy("efn.legacy.sales.line")), 3)
 
     def test_history_dry_run_and_gates(self):
@@ -434,3 +460,218 @@ class TestEsbImport(TransactionCase):
     def test_history_requires_imported_warehouses(self):
         with self.assertRaisesRegex(imp.GateError, "gudang"):
             self._run(self._history_bundle())
+
+    # ------------------------------------------------------------------------------------------ QA G43: jalur gagal
+    def test_production_gate_is_fail_closed(self):
+        """APP_ENV kosong / typo / asing = production (butuh --confirm-brand); hanya nilai non-produksi yang dikenal
+        melonggarkan gerbang."""
+        for env in ("", "production", "prod", "prodution", "live", None):
+            self.assertTrue(imp.is_production(env), env)
+        for env in ("dev", "development", "DEV", "ci", "staging"):
+            self.assertFalse(imp.is_production(env), env)
+        # Keputusan lead (review G43): staging/stg juga wajib --confirm-brand untuk run nyata.
+        for env in ("", "production", "prodution", "staging", "STG", None):
+            self.assertTrue(imp.requires_confirm_brand(env), env)
+        for env in ("dev", "development", "ci", "test", "local"):
+            self.assertFalse(imp.requires_confirm_brand(env), env)
+        bundle = self._bundle(self._master_rows())
+        for app_env in ("prodution", "staging", "stg"):
+            with self.subTest(app_env=app_env), self.assertRaisesRegex(imp.GateError, "confirm-brand"):
+                self._run(bundle, app_env=app_env)
+        with self.assertRaisesRegex(imp.GateError, "confirm-brand"):
+            self._run(bundle, app_env="production", confirm_brand="wtz")
+        self.assertFalse(self._ref(X("branch_wh", 11)), "gerbang ditolak sebelum DB ditulis")
+        # Dry-run staging tidak butuh confirm-brand; run nyata staging lolos dengan brand yang benar.
+        self.assertEqual(self._run(bundle, app_env="staging", dry_run=True).exit_code, imp.EXIT_OK)
+        self.assertEqual(self._run(bundle, app_env="staging", confirm_brand=BRAND).exit_code, imp.EXIT_OK)
+
+    def test_imd_cup_blocked_for_history_but_target_map_is_complete(self):
+        """IMD/CUP: target impor brand benar; histori/cutover ditolak (EFN_MIG_SALDO_BLOCKED, Q-ESB5) sebelum DB
+        ditulis, juga bila company-nya ada di Odoo."""
+        self.assertEqual(imp.default_targets("imd"), frozenset({"IMD"}))
+        self.assertEqual(imp.default_targets("cup"), frozenset({"CUP"}))
+        self.assertEqual(imp.default_targets("bacha"), frozenset({"BCF", "BCR"}))
+        self.assertEqual(imp.default_targets("tidak-ada"), frozenset())
+        for code in ("IMD", "CUP"):
+            self._company(code)
+            segment = {"company_code": code, "month": MONTH, "part": 1, "parts": 1}
+            bundle = self._history_bundle(companies=(code,), segment=segment)
+            with self.assertRaisesRegex(imp.GateError, "SALDO_BLOCKED"):
+                self._run(bundle, companies=frozenset({code}))
+        # Bundel IMD tetapi target impor hanya PB -> ditolak sebagai company asing (bukan target).
+        segment = {"company_code": "IMD", "month": MONTH, "part": 1, "parts": 1}
+        with self.assertRaisesRegex(imp.GateError, "bukan target"):
+            self._run(self._history_bundle(companies=("IMD",), segment=segment))
+
+    def test_sales_line_segment_outside_window_is_skipped_and_reported(self):
+        """Segmen `sales.line` di luar jendela `sales_line_months` tidak dimuat (bukan error), dilaporkan per irisan."""
+        self._import_master()
+        self.env["ir.config_parameter"].sudo().set_param(bulk.PARAM_SALES_LINE_MONTHS, "1")  # jendela = Okt 2026
+        wh11 = X("branch_wh", 11)
+
+        def line(no, day):
+            return {"sales_num": "ZS-AUG", "line_no": no, "date": day, "branch_key": wh11, "menu_key": None,
+                    "esb_menu_code": "ZX", "qty": 1, "price": 1000, "total": 1000, "discount": 0, "cogs": 100,
+                    "row_type": "ALACARTE", "is_takeaway": False}  # fmt: skip
+
+        rows = [line(1, "2026-08-03"), line(2, "2026-08-04")]
+        files = {"legacy_sales_line": ("legacy_sales_line.jsonl.gz", rows, ("2026-08-01", "2026-09-01"))}
+        segment = {"company_code": "PB", "month": "2026-08", "part": 1, "parts": 1}
+        bundle = self._bundle(files, cutover_date=CUTOVER, parent_run_id=str(uuid.uuid4()), segment=segment,
+                              branch_ids=[11], target_warehouses=[wh11])  # fmt: skip
+        result = self._run(bundle)
+        self.assertEqual(result.exit_code, imp.EXIT_OK, (result.report["errors"], result.report["slices"]))
+        slices = [s for s in result.report["slices"] if s["model"] == "efn.legacy.sales.line"]
+        self.assertEqual([s.get("rows_skipped_window") for s in slices], [2])
+        self.assertEqual(self.env["efn.legacy.sales.line"].sudo().search_count([("sales_num", "=", "ZS-AUG")]), 0)
+        self.assertEqual(result.totals["legacy_sales_line"], [], "tidak ada baris dimuat -> total Odoo kosong")
+        # Di dalam jendela (Okt) dimuat normal dengan parameter yang sama.
+        in_window = self._run(self._history_bundle())
+        self.assertEqual(in_window.exit_code, imp.EXIT_OK, in_window.report["errors"])
+        self.assertEqual(len(self._legacy("efn.legacy.sales.line")), 3)
+
+    # ------------------------------------------------------------------------------------------ review keamanan G43
+    def test_sec197_target_warehouses_replace_and_reject(self):
+        """Setiap gudang target diganti utuh: baris basi terhapus, gudang tanpa baris dikosongkan; gudang target milik
+        PT lain / tanpa target_warehouses / baris di luar target = ditolak."""
+        self._import_master()
+        self.assertEqual(self._run(self._history_bundle()).exit_code, imp.EXIT_OK)
+        wh11 = X("branch_wh", 11)
+        fin = X("product", "ZFIN-1")
+        flow_cols = ("ck_prod", "store_prod", "ck_out", "in_ck", "in_other", "st_in")
+
+        def flow(day, sold):
+            row = dict.fromkeys(flow_cols, 0)
+            row.update(day=day, branch_key=wh11, product_key=fin, esb_branch_id=11, esb_product_code="ZFIN-1",
+                       sold=sold, st_out=0, outflow=sold)  # fmt: skip
+            return row
+
+        rng = ("2026-10-01", "2026-11-01")
+        # Bundel baru: wh11 hanya 2 hari (hari ke-3 hilang di sumber), CK tanpa baris, sales.line kosong.
+        # Dua baris kunci grain sama -> digabung, tidak saling menimpa.
+        files = {
+            "legacy_flow_daily": ("legacy_flow_daily.jsonl.gz", [flow("2026-10-01", 4), flow("2026-10-01", 6),
+                                                                  flow("2026-10-02", 1)], rng),
+            "legacy_sales_daily": ("legacy_sales_daily.jsonl.gz", [], rng),
+            "legacy_sales_line": ("legacy_sales_line.jsonl.gz", [], rng),
+        }  # fmt: skip
+        result = self._run(self._history_bundle(files=files))
+        self.assertEqual(result.exit_code, imp.EXIT_OK, result.report["slices"])
+        flows = self._legacy("efn.legacy.flow.daily")
+        self.assertEqual(sorted((r.day.isoformat(), r.sold) for r in flows), [("2026-10-01", 10), ("2026-10-02", 1)])
+        self.assertFalse(self._legacy("efn.legacy.sales.daily"), "gudang target tanpa baris -> irisan dikosongkan")
+        self.assertFalse(self._legacy("efn.legacy.sales.line"))
+        ck_slices = [s for s in result.report["slices"] if s["branch_key"] == X("branch_wh", 4)]
+        self.assertEqual({s["model"] for s in ck_slices}, set(imp.m.HISTORY_MODEL.values()))
+        # Gudang target yang xmlid-nya menunjuk gudang PT lain -> ditolak sebelum histori ditulis.
+        wh_wtz = (
+            self.env["stock.warehouse"]
+            .with_company(self.wtz)
+            .create({"name": "ZT gudang asing", "code": "ZTX9", "company_id": self.wtz.id})
+        )
+        imd_name = X("branch_wh", 99).split(".")[1]
+        self.env["ir.model.data"].sudo().create(
+            {
+                "module": "efn_mig_esb",
+                "name": imd_name,
+                "model": "stock.warehouse",
+                "res_id": wh_wtz.id,
+                "noupdate": True,
+            }
+        )
+        with self.assertRaisesRegex(imp.GateError, "bukan milik company target"):
+            self._run(self._history_bundle(target_warehouses=[X("branch_wh", 4), wh11, X("branch_wh", 99)]))
+        with self.assertRaises(IntegrityError):
+            self._run(self._history_bundle(target_warehouses=None))
+        with self.assertRaises(IntegrityError):  # baris wh11 tetapi wh11 tidak di target
+            self._run(self._history_bundle(target_warehouses=[X("branch_wh", 4)]))
+        with self.assertRaises(IntegrityError):  # target milik company lain (prefix xmlid)
+            self._run(self._history_bundle(target_warehouses=[X("branch_wh", 4, "WTZ"), wh11]))
+        self.assertEqual(len(self._legacy("efn.legacy.flow.daily")), 2, "bundel ditolak tidak mengubah data")
+
+    def test_sec198_replay_older_bundle_rejected(self):
+        self._import_master()  # created_at = CREATED
+        newer = self._bundle(self._master_rows(), created_at=CREATED_NEWER)
+        self.assertEqual(self._run(newer).exit_code, imp.EXIT_OK)
+        key = f"{imp.PARAM_LAST_RUN_PREFIX}{BRAND}.PB.master"
+        self.assertIn(CREATED_NEWER[:19], self.env["ir.config_parameter"].sudo().get_param(key))
+        older = self._bundle(self._master_rows(), created_at=CREATED_OLDER)
+        with self.assertRaisesRegex(imp.GateError, "replay"):
+            self._run(older)
+        with self.assertRaisesRegex(imp.GateError, "replay"):
+            self._run(older, dry_run=True)
+        allowed = self._run(older, allow_older=True)
+        self.assertEqual(allowed.exit_code, imp.EXIT_OK)
+        self.assertTrue(allowed.report.get("allow_older_used"))
+        self.assertIn(CREATED_NEWER[:19], self.env["ir.config_parameter"].sudo().get_param(key), "tetap yang terbaru")
+        # Bundel yang sama boleh diimpor ulang (idempoten); grup histori terpisah per bulan.
+        self.assertEqual(self._run(newer).exit_code, imp.EXIT_OK)
+        history = self._history_bundle(created_at=CREATED_OLDER)
+        self.assertEqual(self._run(history).exit_code, imp.EXIT_OK, "grup history.2026-10 belum punya run")
+        # Dry-run tidak mencatat run sukses.
+        latest = self._bundle(self._master_rows(), created_at="2026-11-20T03:00:00.000Z")
+        self.assertEqual(self._run(latest, dry_run=True).exit_code, imp.EXIT_OK)
+        self.assertIn(CREATED_NEWER[:19], self.env["ir.config_parameter"].sudo().get_param(key))
+        with self.assertRaises(IntegrityError):
+            self._run(self._bundle(self._master_rows(), created_at="kemarin"))
+
+    def test_sec201_validation_report_signature(self):
+        bundle = self._bundle(self._master_rows())
+        unsigned = {"manifest_sha256": bundle.manifest_sha256, "errors": 0}
+        with self.assertRaisesRegex(IntegrityError, "tanda tangan"):
+            self._run(bundle, validation=unsigned)
+        tampered = dict(self._validation(bundle, errors=3), errors=0)  # diubah setelah ditandatangani
+        with self.assertRaisesRegex(IntegrityError, "tidak cocok"):
+            self._run(bundle, validation=tampered)
+        other_key = imp.derive_validation_key(secrets.token_hex(32))
+        foreign = imp.sign_validation_report(unsigned, other_key)
+        with self.assertRaisesRegex(IntegrityError, "tidak cocok"):
+            self._run(bundle, validation=foreign)
+        with self.assertRaisesRegex(imp.ConfigError, "kunci"):
+            self._run(bundle, validation_key=None)
+        # Dev longgar (dry-run, non-production, allow_missing_validation) menerima laporan tanpa sig.
+        lenient = self._run(bundle, validation=unsigned, dry_run=True, allow_missing_validation=True)
+        self.assertEqual(lenient.exit_code, imp.EXIT_OK)
+        with self.assertRaises(IntegrityError):  # tetapi tidak pada run nyata
+            self._run(bundle, validation=unsigned, allow_missing_validation=True)
+        self.assertFalse(self._ref(X("branch_wh", 11)))
+
+    def test_sec203_std_ref_validates_model(self):
+        rows = self._master_rows()
+        bad = "base.main_company"  # xmlid ada, tetapi res.company (bukan uom.uom)
+        rows["uom"][1][0]["data"]["uom_xmlid"] = bad
+        rows["product"][1][0]["data"]["uom_xmlid"] = bad
+        result = self._run(self._bundle(rows))
+        self.assertEqual(result.exit_code, imp.EXIT_DATA)
+        self.assertEqual(result.report["entities"]["uom"]["failed"], 1)
+        self.assertEqual(result.report["entities"]["product"]["failed"], 1)
+        messages = [e["error"] for e in result.report["errors"] if e["entity"] in ("uom", "product")]
+        self.assertTrue(messages and all("bukan uom.uom" in msg for msg in messages), messages)
+        self.assertFalse(self._ref(X("uom", "EA")))
+        self.assertFalse(self._ref(X("product", "ZFIN-1")))
+
+    def test_totals_mode_from_tables(self):
+        self._import_master()
+        bundle = self._history_bundle()
+        segment = self._run(bundle)
+        self.assertEqual(imp.brand_for_companies(["BCF", "BCR"]), "bacha")
+        with patch.dict(imp.BRAND_COMPANIES, {BRAND: frozenset({"PB"})}):
+            result = imp.run_totals(self.env, BRAND, ["PB"], [MONTH])
+            with self.assertRaises(imp.GateError):
+                imp.run_totals(self.env, BRAND, ["WTZ"], [MONTH])
+        with self.assertRaises(imp.ConfigError):
+            imp.run_totals(self.env, "pb", ["PB"], ["2026-13"])
+        self.assertEqual(result.report["mode"], "totals")
+        totals, seg = result.totals, segment.totals
+        self.assertAlmostEqual(sum(r["sold"] for r in totals["legacy_flow_daily"]), 37)
+        self.assertEqual(totals["legacy_sales_line"], seg["legacy_sales_line"])
+        self.assertEqual(totals["bulk_check"], {"wrong_company_rows": 0, "foreign_product_rows": 0})
+
+        def keys(rows):
+            return sorted((r["menu_key"] or "", r["is_takeaway"], r["qty"]) for r in rows)
+
+        self.assertEqual(keys(totals["legacy_sales_daily"]), keys(seg["legacy_sales_daily"]),
+                         "menu_key dari tabel (xmlid dasar) = menu_key bundel")  # fmt: skip
+        opened = open_bundle(imp.build_totals_result(result, self.keys), self.keys, expect_kind="result")
+        self.assertEqual(set(opened.files), {"import_report.json", "odoo_totals.json"})
+        self.assertEqual(opened.manifest["mode"], "totals")

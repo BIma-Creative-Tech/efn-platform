@@ -5,6 +5,7 @@ Jalan di container sekali jalan `esb-migrate` (image esb-extract, network `esb` 
   python esb_to_odoo.py export --brand pb --step history --cutover-date D --maps /maps --out /out [--months 2025-01,...]
   python esb_to_odoo.py writeback --result /out/<run_id>.result.efnmig
   python esb_to_odoo.py reconcile --bundle <f> [--bundle <f> ...] --result <f> [...] --out /out [--with-source]
+  python esb_to_odoo.py reconcile --final --parent-run-id X --bundle <semua segmen> --result <hasil totals> --out /out
 Impor ke Odoo = `odoo_import_esb.py` (odoo shell, efn-odoo-engineer). Format bundel = README.md (kontrak bersama).
 Exit: 0 OK, 1 error data, 2 argumen/konfigurasi, 3 integritas, 4 gerbang ditolak. Tidak mencetak secret/data pribadi.
 """
@@ -19,7 +20,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from efn_mig.bundle import Bundle, IntegrityError, read_bundle
+from efn_mig.bundle import Bundle, IntegrityError, read_bundle, write_secure
 from efn_mig.export import (
     MASTER_STEPS,
     GateError,
@@ -32,7 +33,7 @@ from efn_mig.export import (
     export_master,
 )
 from efn_mig.mapping import MapError
-from efn_mig.reconcile import reconcile
+from efn_mig.reconcile import reconcile, reconcile_final
 from efn_mig.results import DryRunResult, map_rows
 from efn_mig.segments import MAX_LEGACY_DAYS, MAX_SALES_LINE_MONTHS, SALES_DAILY_MONTHS, add_months, month_start
 from efn_mig.settings import ClickHouseSettings, ConfigError, MigSettings, bundle_keys
@@ -64,6 +65,8 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     rc.add_argument("--result", action="append", required=True, type=Path)
     rc.add_argument("--out", type=Path)
     rc.add_argument("--with-source", action="store_true", help="butir 6/7 dari ClickHouse (v_esb_*)")
+    rc.add_argument("--final", action="store_true", help="rekonsiliasi final lintas segmen vs hasil importer totals")
+    rc.add_argument("--parent-run-id", help="wajib dengan --final")
     return parser.parse_args(argv)
 
 
@@ -126,7 +129,25 @@ def cmd_writeback(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_reconcile_final(args: argparse.Namespace, settings: MigSettings) -> int:
+    """`reconcile --final --parent-run-id X --bundle <semua segmen> --result <hasil importer mode totals>`."""
+    if not args.parent_run_id:
+        raise ConfigError("--final wajib --parent-run-id")
+    keys = bundle_keys()
+    sources = [read_bundle(path, keys, "bundle") for path in args.bundle]
+    totals = [read_bundle(path, keys, "result") for path in args.result]
+    report = reconcile_final(args.parent_run_id, sources, totals)
+    out_dir = args.out or settings.out_dir
+    stem = f"reconcile_final_{report.parent_run_id}"
+    write_secure(out_dir / f"{stem}.md", report.to_markdown().encode("utf-8"))
+    write_secure(out_dir / f"{stem}.csv", report.to_csv().encode("utf-8"))
+    print(f"reconcile final {stem}: pemblokir={report.blocking}")
+    return EXIT_DATA if report.blocking else EXIT_OK
+
+
 def cmd_reconcile(args: argparse.Namespace, settings: MigSettings) -> int:
+    if args.final:
+        return cmd_reconcile_final(args, settings)
     keys = bundle_keys()
     bundles: dict[str, Bundle] = {}
     for path in args.bundle:
@@ -154,8 +175,8 @@ def cmd_reconcile(args: argparse.Namespace, settings: MigSettings) -> int:
     report = reconcile(pairs, sales_payments, quality)
     out_dir = args.out or settings.out_dir
     stem = f"reconcile_{report.parent_run_id}"
-    (out_dir / f"{stem}.md").write_text(report.to_markdown(), encoding="utf-8")
-    (out_dir / f"{stem}.csv").write_text(report.to_csv(), encoding="utf-8")
+    write_secure(out_dir / f"{stem}.md", report.to_markdown().encode("utf-8"))
+    write_secure(out_dir / f"{stem}.csv", report.to_csv().encode("utf-8"))
     print(f"reconcile {stem}: pemblokir={report.blocking}")
     return EXIT_DATA if report.blocking else EXIT_OK
 

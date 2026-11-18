@@ -106,7 +106,8 @@ def test_flow_row_converts_ea_and_derives_outflow(maps: Maps, source: FakeSource
            "st_out": Decimal(3)}  # fmt: skip
     out = m.flow_row(c, row)
     assert out is not None and out["sold"] == 2 and out["ck_out"] == 1 and out["st_out"] == 0.5
-    assert out["outflow"] == 3.5 and set(out) == set(m.HISTORY_KEYS["legacy_flow_daily"])
+    flow_keys = set(m.HISTORY_KEYS["legacy_flow_daily"]) | m.HISTORY_OPTIONAL_KEYS["legacy_flow_daily"]
+    assert out["outflow"] == 3.5 and set(out) == flow_keys
     assert m.flow_row(c, {**row, "product_code": "NAME:X"}) is None
     assert m.flow_row(c, {**row, "branch_id": 77}) is None
 
@@ -116,11 +117,46 @@ def test_sales_rows(maps: Maps, source: FakeSource) -> None:
     daily = m.sales_daily_row(c, source.history["legacy_sales_daily"][0])
     assert daily is not None and daily["net"] == 70000 and daily["menu_key"] == xmlid("pb", "PB", "menu", "M01")
     assert daily["pos_key"] == xmlid("pb", "PB", "branch_pos", 11)
-    assert set(daily) == set(m.HISTORY_KEYS["legacy_sales_daily"])
+    assert set(daily) == set(m.HISTORY_KEYS["legacy_sales_daily"]) | m.HISTORY_OPTIONAL_KEYS["legacy_sales_daily"]
+    assert daily["menu_name"] == "Roti Tawar T" and daily["menu_category"] == "Bakery"
     line = m.sales_line_row(c, source.history["legacy_sales_line"][1])  # menu OLD9 tak terpetakan (tanpa arsip)
     assert line is not None and line["menu_key"] is None and line["esb_menu_code"] == "OLD9"
     assert set(line) == set(m.HISTORY_KEYS["legacy_sales_line"])
     assert m.sales_line_row(c, {**source.history["legacy_sales_line"][0], "branch_id": 99}) is None
+
+
+def test_warehouse_index_for_segmentation(maps: Maps, source: FakeSource) -> None:
+    _, index = m.build_branches("pb", source.dims["dim_esb_branch"], maps.branch)
+    wh = {n: xmlid("pb", "PB", "branch_wh", n) for n in (4, 11, 12)}
+    assert index.warehouses_of("PB") == sorted(wh.values()) and index.warehouses_of("WTZ") == []
+    assert index.branches_by_warehouse(index.wh_key)[wh[4]] == [4, 30]
+
+
+def test_location_with_parent_in_other_company_is_not_mapped(maps: Maps, source: FakeSource) -> None:
+    branches = [dict(r, company_code="BCR") if r["branch_id"] == 30 else r for r in source.dims["dim_esb_branch"]]
+    _, index = m.build_branches("pb", branches, maps.branch)
+    assert 30 not in index.wh_key  # histori lokasi lintas PT tidak ditulis ke gudang PT lain
+
+
+def test_aggregate_rows_sums_same_model_key_per_day() -> None:
+    def frow(day: str, branch: int, sold: float, pos: str | None = None) -> dict:
+        row = {c: 0 for c in m.FLOW_COLUMNS}
+        row.update(day=day, branch_key="W", product_key="P", esb_branch_id=branch, esb_product_code="X",
+                   esb_product_name="X", sold=sold, outflow=sold, pos_key=pos)  # fmt: skip
+        return row
+
+    rows = [frow("2026-10-01", 4, 1.5), None, frow("2026-10-01", 30, 2.25), frow("2026-10-02", 4, 1)]
+    out = list(m.aggregate_rows("legacy_flow_daily", rows))
+    real = [r for r in out if r is not None]
+    assert out.count(None) == 1 and len(real) == 2
+    assert real[0]["sold"] == 3.75 and real[0]["outflow"] == 3.75 and real[0]["esb_branch_id"] == 4
+    daily = {"day": "2026-10-01", "branch_key": "W", "menu_key": "M", "is_takeaway": True, "qty": 1, "gross": 10,
+             "discount": 1, "net": 9, "cogs": 2, "trx_count": 1, "pos_key": None}  # fmt: skip
+    merged = list(m.aggregate_rows("legacy_sales_daily", [daily, {**daily, "pos_key": "POS"}]))
+    assert merged == [{**daily, "qty": 2, "gross": 20, "discount": 2, "net": 18, "cogs": 4, "trx_count": 2,
+                       "pos_key": "POS"}]  # fmt: skip
+    lines = [{"x": 1}, {"x": 1}]
+    assert list(m.aggregate_rows("legacy_sales_line", lines)) == lines  # baris transaksi tidak diagregasi
 
 
 def test_num_rejects_non_finite() -> None:

@@ -15,7 +15,15 @@ from pathlib import Path
 from typing import Any
 
 from efn_mig import mapping as m
-from efn_mig.bundle import Keys, canonical_json, file_entry, jsonl_bytes, sha256_hex, write_bundle
+from efn_mig.bundle import (
+    Keys,
+    canonical_json,
+    file_entry,
+    jsonl_bytes,
+    open_secure_write,
+    sha256_hex,
+    write_bundle,
+)
 from efn_mig.segments import history_months, history_ranges, month_label, plan_parts, segment_filename
 from efn_mig.source import Source
 
@@ -294,14 +302,32 @@ def export_history(
     for company in data.companies:
         _, menu_index = m.build_menus(params.brand, company, data.menus, data.prices, data.archive)
         ctx = m.HistoryContext(params.brand, company, index, data.product_codes, ea, menu_index)
+        company_whs = index.warehouses_of(company)
+        if not company_whs:
+            log.warning("company %s tanpa gudang tujuan di branch_map: histori dilewati", company)
+            continue
+        branches_of_wh = index.branches_by_warehouse(index.wh_key)
         for month in month_list:
             windows = {f: w for f, w in ranges.for_month(month).items() if f in wanted and w is not None}
             per_branch: dict[int, int] = {}
             for file, (start, end) in windows.items():
                 for branch_id, count in src.history_counts(params.brand, company, file, start, end).items():
                     per_branch[branch_id] = per_branch.get(branch_id, 0) + count
-            parts = plan_parts(per_branch, params.segment_max_rows)
-            for part_no, branch_ids in enumerate(parts, start=1):
+            # SEC-197: part per GUDANG TUJUAN (cabang lokasi ikut gudang induk); gudang tanpa baris tetap terdaftar.
+            per_wh = dict.fromkeys(company_whs, 0)
+            stray: list[int] = []  # cabang tanpa gudang tujuan PT ini -> baris dihitung tak terpetakan (part 1)
+            for branch_id, count in per_branch.items():
+                wh = index.wh_key.get(branch_id)
+                if wh in per_wh:
+                    per_wh[wh] += count
+                else:
+                    stray.append(branch_id)
+            parts = plan_warehouse_parts(per_wh, params.segment_max_rows)
+            for part_no, targets in enumerate(parts, start=1):
+                part_branches = {b for wh in targets for b in branches_of_wh.get(wh, [])}
+                if part_no == 1:
+                    part_branches |= set(stray)
+                branch_ids = sorted(part_branches)
                 run_id = run_id_factory()
                 manifest = base_manifest(run_id, params, [company], history_steps, data.snapshot, stamp)
                 files: list[dict[str, Any]] = []
@@ -313,7 +339,8 @@ def export_history(
                     builder = m.HISTORY_BUILDERS[file]
                     source_rows = src.history_rows(params.brand, company, file, start, end, branch_ids)
                     tmp = workdir / f"{run_id}_{name}"
-                    exported, dropped = write_gz(tmp, (builder(ctx, r) for r in source_rows))
+                    built = m.aggregate_rows(file, (builder(ctx, r) for r in source_rows))
+                    exported, dropped = write_gz(tmp, built)
                     blob = tmp.read_bytes()
                     tmp.unlink()
                     entry = file_entry(name, file, blob, exported)
@@ -326,6 +353,8 @@ def export_history(
                     parent_run_id=parent,
                     segment=segment,
                     branch_ids=branch_ids,
+                    target_warehouses=targets,
+                    company_warehouses=company_whs,
                     files=files,
                     maps=map_entries,
                     stats={f: {"rows_exported": rows[f], "rows_skipped_unmapped": skipped[f]} for f in rows},
@@ -340,7 +369,10 @@ def export_history(
 def write_gz(path: Path, rows: Iterable[dict[str, Any] | None]) -> tuple[int, int]:
     """Tulis baris (None = tak terpetakan, dihitung) ke gzip deterministik secara streaming."""
     exported = dropped = 0
-    with path.open("wb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0, compresslevel=6) as gz:
+    with (
+        open_secure_write(path) as raw,
+        gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0, compresslevel=6) as gz,
+    ):
         for row in rows:
             if row is None:
                 dropped += 1
@@ -348,5 +380,15 @@ def write_gz(path: Path, rows: Iterable[dict[str, Any] | None]) -> tuple[int, in
             gz.write(canonical_json(row))
             gz.write(b"\n")
             exported += 1
-    path.chmod(0o600)
     return exported, dropped
+
+
+def plan_warehouse_parts(rows_by_wh: dict[str, int], max_rows: int) -> list[list[str]]:
+    """SEC-197: gudang tujuan -> part. Satu gudang selalu di tepat satu part (tidak terbelah). Gudang berbaris dibagi
+    greedy (urut xmlid) dengan total <= max_rows (kecuali satu gudang sendiri > batas); gudang tanpa baris masuk part 1
+    (agar importer membersihkan irisan lama). Tanpa gudang -> []."""
+    if not rows_by_wh:
+        return []
+    parts = plan_parts({wh: n for wh, n in rows_by_wh.items() if n > 0}, max_rows) or [[]]
+    parts[0] = sorted(parts[0] + [wh for wh, n in rows_by_wh.items() if n <= 0])
+    return parts

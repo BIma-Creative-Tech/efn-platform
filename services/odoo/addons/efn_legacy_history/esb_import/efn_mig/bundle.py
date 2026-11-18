@@ -12,6 +12,13 @@ manifest -> sha256 + rows setiap berkas (gzip dibatasi rasio <= 50x dan <= 512 M
 dipakai. Semua kegagalan
 = `IntegrityError` (exit 3). Satu bundel dienkripsi sekaligus di memori: bundel histori dipecah per company x bulan
 (§27.3a) agar muat di container 1 GB.
+
+Hardening G43 (SECURITY_REVIEW_2026-11-18_g43):
+- SEC-200: ukuran berkas dicek (`os.fstat`) SEBELUM dibaca; batas `EFN_MIG_MAX_BUNDLE_BYTES` (default 1 GiB).
+- SEC-201: laporan validator ditandatangani kunci HKDF ketiga `efn:mig-esb:val:v1` (`sign_validation` /
+  `verify_validation`), mengikat run_id + sha256 berkas bundel + sha256 manifest.
+- SEC-202: semua tulisan lewat `write_secure` (O_CREAT|O_EXCL|O_NOFOLLOW, 0600, lalu rename atomik); pembacaan
+  bundel O_NOFOLLOW.
 """
 
 import gzip
@@ -21,6 +28,7 @@ import io
 import json
 import os
 import re
+import stat
 import tarfile
 import uuid
 from collections.abc import Iterator, Mapping
@@ -39,6 +47,10 @@ NONCE_BYTES = 12
 HEADER_MAX = 4096
 ENC_INFO = b"efn:mig-esb:enc:v1"
 MAC_INFO = b"efn:mig-esb:mac:v1"
+VAL_INFO = b"efn:mig-esb:val:v1"
+DEFAULT_MAX_BUNDLE_BYTES = 1024 * 1024 * 1024
+MAX_BUNDLE_ENV = "EFN_MIG_MAX_BUNDLE_BYTES"
+VALIDATION_FORMAT = "efn-mig-esb-validation/1"
 GZIP_MAX_RATIO = 50
 GZIP_MAX_BYTES = 512 * 1024 * 1024
 # Rasio hanya diperiksa di atas ambang ini (berkas sangat kecil bisa berasio tinggi tanpa bahaya).
@@ -60,10 +72,12 @@ class BundleKeyError(ValueError):
 class Keys:
     enc: bytes = field(repr=False)
     mac: bytes = field(repr=False)
+    val: bytes = field(repr=False)
 
 
 def derive_keys(secret: str) -> Keys:
-    """`migration_bundle_key` (hex >= 64 karakter) -> kunci enkripsi & MAC terpisah (HKDF-SHA256, salt kosong)."""
+    """`migration_bundle_key` (hex >= 64 karakter) -> kunci enkripsi, MAC manifest, dan MAC laporan validator
+    terpisah (HKDF-SHA256, salt kosong)."""
     value = secret.strip()
     if len(value) < 64 or len(value) % 2 or not re.fullmatch(r"[0-9a-fA-F]+", value):
         raise BundleKeyError("migration_bundle_key wajib hex >= 64 karakter")
@@ -72,7 +86,65 @@ def derive_keys(secret: str) -> Keys:
     def _hkdf(info: bytes) -> bytes:
         return HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=info).derive(ikm)
 
-    return Keys(enc=_hkdf(ENC_INFO), mac=_hkdf(MAC_INFO))
+    return Keys(enc=_hkdf(ENC_INFO), mac=_hkdf(MAC_INFO), val=_hkdf(VAL_INFO))
+
+
+def max_bundle_bytes(env: Mapping[str, str] | None = None) -> int:
+    """SEC-200: batas ukuran berkas bundel (byte) dari env; nilai tidak valid -> ValueError (konfigurasi)."""
+    raw = ((os.environ if env is None else env).get(MAX_BUNDLE_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_MAX_BUNDLE_BYTES
+    if not raw.isdigit() or not 1024 <= int(raw) <= 8 * DEFAULT_MAX_BUNDLE_BYTES:
+        raise ValueError(f"{MAX_BUNDLE_ENV} wajib bilangan bulat 1024..{8 * DEFAULT_MAX_BUNDLE_BYTES}")
+    return int(raw)
+
+
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_BINARY = getattr(os, "O_BINARY", 0)
+
+
+def write_secure(path: Path, data: bytes) -> None:
+    """SEC-202: tulis `<path>.part` dengan O_CREAT|O_EXCL|O_NOFOLLOW (0600) -> fsync -> rename atomik ke `path`.
+
+    `.part` yang sudah ada (sisa run gagal / symlink tanaman) -> FileExistsError, tidak pernah diikuti/ditimpa.
+    `os.replace` mengganti entri direktori `path` (bukan target symlink)."""
+    tmp = path.with_name(path.name + ".part")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW | _BINARY, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    os.replace(tmp, path)
+
+
+def open_secure_write(path: Path) -> Any:
+    """Berkas biner baru untuk ditulis streaming: O_CREAT|O_EXCL|O_NOFOLLOW, 0600 (SEC-202)."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW | _BINARY, 0o600)
+    return os.fdopen(fd, "wb")
+
+
+def read_limited(path: Path, limit: int | None = None) -> bytes:
+    """SEC-200/202: buka O_NOFOLLOW, cek ukuran via fstat SEBELUM membaca; > batas atau bukan berkas reguler ->
+    IntegrityError."""
+    cap = max_bundle_bytes() if limit is None else limit
+    try:
+        fd = os.open(path, os.O_RDONLY | _NOFOLLOW | _BINARY)
+    except OSError as exc:
+        raise IntegrityError(f"bundel tidak bisa dibuka: {path.name}") from exc
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise IntegrityError("bundel bukan berkas reguler")
+        if info.st_size > cap:
+            raise IntegrityError(f"bundel {info.st_size} byte melebihi batas {cap} ({MAX_BUNDLE_ENV})")
+        data = handle.read(cap + 1)
+    if len(data) > cap:
+        raise IntegrityError("bundel melebihi batas ukuran")
+    return data
 
 
 def canonical_json(value: Any) -> bytes:
@@ -216,11 +288,7 @@ def build_bundle(manifest: Mapping[str, Any], members: Mapping[str, bytes], keys
 
 
 def write_bundle(path: Path, manifest: Mapping[str, Any], members: Mapping[str, bytes], keys: Keys, kind: str) -> None:
-    data = build_bundle(manifest, members, keys, kind)
-    tmp = path.with_name(path.name + ".part")
-    tmp.write_bytes(data)
-    tmp.chmod(0o600)
-    tmp.replace(path)
+    write_secure(path, build_bundle(manifest, members, keys, kind))
 
 
 @dataclass
@@ -229,6 +297,7 @@ class Bundle:
     manifest: dict[str, Any]
     files: dict[str, bytes]
     manifest_bytes: bytes
+    blob_sha256: str = ""  # sha256 berkas .efnmig utuh (terenkripsi) -- diikat laporan validator (SEC-201)
 
     @property
     def manifest_sha256(self) -> str:
@@ -264,7 +333,10 @@ def parse_header(blob: bytes) -> tuple[dict[str, Any], bytes]:
     return header, raw
 
 
-def open_bundle(blob: bytes, keys: Keys, expect_kind: str | None = None) -> Bundle:
+def open_bundle(blob: bytes, keys: Keys, expect_kind: str | None = None, limit: int | None = None) -> Bundle:
+    cap = max_bundle_bytes() if limit is None else limit
+    if len(blob) > cap:
+        raise IntegrityError(f"bundel melebihi batas {cap} byte ({MAX_BUNDLE_ENV})")
     header, raw = parse_header(blob)
     if expect_kind and header["kind"] != expect_kind:
         raise IntegrityError(f"bundel kind={header['kind']}, diharapkan {expect_kind}")
@@ -290,7 +362,7 @@ def open_bundle(blob: bytes, keys: Keys, expect_kind: str | None = None) -> Bund
         if manifest.get(key) != header.get(key):
             raise IntegrityError(f"{key} manifest tidak sama dengan header")
     _verify_files(manifest, members)
-    return Bundle(header, manifest, members, manifest_bytes)
+    return Bundle(header, manifest, members, manifest_bytes, sha256_hex(blob))
 
 
 def _untar(tar_bytes: bytes) -> dict[str, bytes]:
@@ -327,5 +399,45 @@ def _verify_files(manifest: Mapping[str, Any], members: Mapping[str, bytes]) -> 
                 raise IntegrityError(f"jumlah baris tidak cocok: {name}")
 
 
-def read_bundle(path: Path, keys: Keys, expect_kind: str | None = None) -> Bundle:
-    return open_bundle(path.read_bytes(), keys, expect_kind)
+def read_bundle(path: Path, keys: Keys, expect_kind: str | None = None, limit: int | None = None) -> Bundle:
+    """SEC-200: ukuran dicek via fstat SEBELUM berkas dibaca ke memori."""
+    cap = max_bundle_bytes() if limit is None else limit
+    return open_bundle(read_limited(path, cap), keys, expect_kind, cap)
+
+
+# ================================================================== laporan validator (SEC-201)
+VALIDATION_BINDING = ("format", "run_id", "bundle_sha256", "manifest_sha256", "errors")
+
+
+def sign_validation(report: Mapping[str, Any], keys: Keys) -> dict[str, Any]:
+    """Laporan validator -> + `format` + `sig` = HMAC-SHA256(kunci val, canonical JSON tanpa `sig`).
+
+    Laporan wajib memuat `run_id`, `bundle_sha256` (sha256 berkas .efnmig), `manifest_sha256`, `errors` (int)."""
+    body = {k: v for k, v in report.items() if k != "sig"}
+    body["format"] = VALIDATION_FORMAT
+    for key in VALIDATION_BINDING:
+        if key not in body:
+            raise ValueError(f"laporan validator tanpa {key}")
+    return {**body, "sig": hmac.new(keys.val, canonical_json(body), hashlib.sha256).hexdigest()}
+
+
+def verify_validation(report: Mapping[str, Any], keys: Keys, bundle: Bundle) -> None:
+    """Dipakai importer (gerbang §27.5-1): tanda tangan sah, mengikat bundel ini, dan `errors == 0`.
+
+    Tanda tangan / pengikatan gagal -> IntegrityError (exit 3); errors > 0 -> ValueError (gerbang, exit 4)."""
+    sig = report.get("sig")
+    body = {k: v for k, v in report.items() if k != "sig"}
+    if not isinstance(sig, str) or body.get("format") != VALIDATION_FORMAT:
+        raise IntegrityError("laporan validator tanpa tanda tangan / format salah")
+    expected = hmac.new(keys.val, canonical_json(body), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        raise IntegrityError("tanda tangan laporan validator tidak sah")
+    if str(body.get("run_id")) != str(bundle.manifest.get("run_id")):
+        raise IntegrityError("laporan validator untuk run_id lain")
+    if not bundle.blob_sha256 or not hmac.compare_digest(str(body.get("bundle_sha256")), bundle.blob_sha256):
+        raise IntegrityError("laporan validator untuk berkas bundel lain (bundle_sha256)")
+    if not hmac.compare_digest(str(body.get("manifest_sha256")), bundle.manifest_sha256):
+        raise IntegrityError("laporan validator untuk manifest lain")
+    errors = body.get("errors")
+    if not isinstance(errors, int) or isinstance(errors, bool) or errors != 0:
+        raise ValueError("laporan validator memuat error (gerbang §27.5-1)")

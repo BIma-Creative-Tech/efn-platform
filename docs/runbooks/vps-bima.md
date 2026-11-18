@@ -487,7 +487,7 @@ Ubah di `infra/compose/.env` (editor, bukan `sed` dengan nilai di argumen):
 Cek tidak ada kredensial klien (jalankan setelah setiap `gen-secrets.sh`/perubahan secret):
 
 ```bash
-for f in secrets/esb_core_password_*.txt; do grep -qx disabled "$f" || echo "PERINGATAN: $f bukan placeholder 'disabled' (dilarang di tahap A)"; done
+for f in secrets/esb_core_password_*.txt secrets/clickhouse_password_mig.txt secrets/migration_bundle_key.txt; do grep -qx disabled "$f" || echo "PERINGATAN: $f bukan placeholder 'disabled' (dilarang di tahap A)"; done
 grep -E '^ESB_USER_[A-Z]+=.+' infra/compose/.env && echo "PERINGATAN: ESB_USER_* terisi (dilarang di tahap A)"
 ```
 
@@ -647,6 +647,7 @@ Pulihkan: `git clone efn-<stamp>.bundle efn-platform && cd efn-platform && git a
 | 10 | Kanal alert heartbeat/backup ditetapkan dan diuji (B10) | uji alert |
 | 11 | Kontak insiden: peran Bima dicantumkan di [security-incident.md](security-incident.md) / [breach-response-72h.md](breach-response-72h.md) (laporan 3×24 jam) | daftar kontak |
 | 12 | Rencana & tanggal penghapusan (B14) disepakati; pemegang passphrase LUKS ditetapkan (key-custody.md) | berita acara |
+| 13 | SEC-199: `secrets/clickhouse_password_mig.txt` dan `secrets/migration_bundle_key.txt` di B berisi `disabled`; `SHOW USERS` ClickHouse B **tanpa** `efn_mig` (B8.1). Migrasi G43 (`esb_to_odoo.py export`/`writeback`/`reconcile`, `run-import.sh`) **tidak** dijalankan di B (ADR-043 §3.4) | keluaran B6 + B8.1 |
 
 ## B1. Topologi host B
 
@@ -814,12 +815,23 @@ ClickHouse: `sudo docker pull clickhouse/clickhouse-server:24.8-alpine@sha256:b0
 
 Secret B dibuat **di B** (tidak pernah disalin dari A atau dari laptop). `gen-secrets.sh` tanpa `APP_ENV` di shell
 membuat CA lokal khusus host B (kunci CA di LUKS) + semua leaf; secret service yang tidak dijalankan ikut terbuat
-(tidak dipakai, tidak berbahaya).
+(tidak dipakai). Pengecualian **SEC-199**: secret migrasi G43 (`clickhouse_password_mig`, `migration_bundle_key`)
+hanya bernilai nyata bila `APP_ENV` = dev/ci/test; di B harus `disabled` (tanpa itu `clickhouse-init` membuat user
+`efn_mig` permanen dengan hak baca customer/AR/AP, dan kunci bundel berada di host pihak ketiga).
+
+**Migrasi ESB → Odoo (G43) TIDAK dijalankan di host B**: tidak ada `esb-migrate`, `esb_to_odoo.py export`/`writeback`/
+`reconcile`, maupun `run-import.sh` di B. Data ESB dipindah dulu ke infrastruktur EFN (ADR-043 §3.4 "Pemindahan"),
+lalu migrasi dijalankan di sana sesuai [migrasi-esb-odoo.md](migrasi-esb-odoo.md).
 
 ```bash
 sudo -i
 cd /srv/efn-esb/repo
 env -u APP_ENV bash scripts/gen-secrets.sh            # secrets/ 0700 root, file 0644 (pola gen-secrets.sh)
+# SEC-199: paksa placeholder (juga bila host pernah menjalankan versi gen-secrets lama yang membuat nilai nyata)
+printf disabled > secrets/clickhouse_password_mig.txt
+printf disabled > secrets/migration_bundle_key.txt
+grep -qx disabled secrets/clickhouse_password_mig.txt && grep -qx disabled secrets/migration_bundle_key.txt \
+  && echo "secret migrasi: disabled (OK)" || echo "GAGAL: secret migrasi bukan disabled - jangan lanjut ke B8"
 cp -n infra/compose/.env.example infra/compose/.env && chmod 600 infra/compose/.env
 exit
 ```
@@ -1014,11 +1026,15 @@ sudo ufw delete allow out 443/tcp
 ```bash
 $DC up -d --no-build --pull never clickhouse clickhouse-init
 $DC ps -a clickhouse clickhouse-init          # clickhouse healthy; clickhouse-init Exited (0)
-$DC logs --tail=20 clickhouse-init            # berakhir "... diterapkan"
+$DC logs --tail=20 clickhouse-init            # berakhir "... diterapkan"; memuat "user efn_mig dihapus (migrasi nonaktif)"
 chq <<'SQL'
 SELECT database, name, storage_policy FROM system.tables WHERE database = 'efn_esb';   -- storage_policy = encrypted
+SHOW USERS;                                                                            -- SEC-199: TANPA efn_mig
 SQL
 ```
+
+`efn_mig` muncul di `SHOW USERS` = berhenti: kembalikan kedua secret migrasi ke `disabled` (B6), jalankan ulang
+`$DC up -d --force-recreate --no-build --pull never clickhouse-init`, cek lagi (B0 no. 13).
 
 ### B8.2 Probe lalu loop incremental (esb-extract.md §3–§4)
 

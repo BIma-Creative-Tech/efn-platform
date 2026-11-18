@@ -147,16 +147,40 @@ def check_master_row(brand: str, entity: str, row: Mapping[str, Any], companies:
         raise IntegrityError("cost: product_key tidak sama dengan hasil hitung ulang")
 
 
+# Kunci OPSIONAL per berkas histori (nama tampilan, data bisnis — bukan PII; diisi bila export menyertakannya).
+HISTORY_OPTIONAL_KEYS: dict[str, frozenset[str]] = {
+    "legacy_flow_daily": frozenset({"esb_product_name"}),
+    "legacy_sales_daily": frozenset({"menu_name", "menu_category"}),
+    "legacy_sales_line": frozenset(),
+}
+# Panjang kolom model histori (Char size) -> dipotong agar satu nama panjang tidak menolak satu irisan.
+_NAME_SIZE = {"esb_product_name": 256, "menu_name": 256, "menu_category": 128}
+
+
 def check_history_row(file: str, row: Mapping[str, Any]) -> None:
-    """Kunci baris histori persis (§27.7: kunci lain = PII fail closed -> exit 3)."""
-    if not isinstance(row, Mapping) or set(row) != set(HISTORY_KEYS[file]):
+    """Kunci wajib persis + kunci opsional yang dikenal saja (§27.7: kunci lain = PII fail closed -> exit 3)."""
+    if not isinstance(row, Mapping):
+        raise IntegrityError(f"{file}: baris histori bukan objek")
+    keys, required = set(row), set(HISTORY_KEYS[file])
+    if not required <= keys or keys - required - HISTORY_OPTIONAL_KEYS[file]:
         raise IntegrityError(f"{file}: kunci baris histori tidak sesuai kontrak")
 
 
+def _name(row: Mapping[str, Any], key: str) -> str | None:
+    value = row.get(key)
+    if value in (None, ""):
+        return None
+    return str(value)[: _NAME_SIZE[key]]
+
+
 # ------------------------------------------------------------------------------------------------ resolver & plan
+UOM_MODEL = "uom.uom"
+
+
 class Resolver(Protocol):
     def res_id(self, xmlid: str | None) -> int | None: ...  # xmlid efn_mig_esb -> id record
-    def std_ref(self, xmlid: str | None) -> int | None: ...  # xmlid standar (mis. uom.product_uom_unit)
+    # xmlid standar (mis. uom.product_uom_unit); `model` diisi -> xmlid model lain = None (SEC-203)
+    def std_ref(self, xmlid: str | None, model: str | None = None) -> int | None: ...
     def variant_id(self, xmlid: str | None) -> int | None: ...  # xmlid produk/menu (template) -> product.product
     def uom_of(self, xmlid: str | None) -> int | None: ...  # xmlid produk/menu -> uom_id template
     def tag_id(self, name: str) -> int | None: ...  # nama kategori pelanggan -> res.partner.category
@@ -225,7 +249,7 @@ def product_plan(data: Mapping[str, Any], company_id: int, resolver: Resolver, r
     """Bahan / FIN (storable). `uom_id` hanya saat create (§27.4)."""
     key = data.get("categ_key")
     categ = resolver.res_id(key) if key else root_categ_id
-    uom = resolver.std_ref(data.get("uom_xmlid"))
+    uom = resolver.std_ref(data.get("uom_xmlid"), UOM_MODEL)
     missing = []
     if key and not categ:
         missing.append("categ_key")
@@ -423,7 +447,7 @@ def bom_targets(
         qty, uom_xmlid = convert_qty(
             line.get("qty"), line.get("uom_esb"), line.get("uom_xmlid"), products.get(key), uoms
         )
-        uom_id = resolver.std_ref(uom_xmlid) if uom_xmlid else resolver.uom_of(key)
+        uom_id = resolver.std_ref(uom_xmlid, UOM_MODEL) if uom_xmlid else resolver.uom_of(key)
         if qty <= 0 or not uom_id:
             missing.append(f"qty/uom komponen {line.get('product_code')}")
             continue
@@ -481,6 +505,7 @@ def flow_vals(
         "esb_brand": brand,
         "esb_branch_id": row.get("esb_branch_id"),
         "esb_product_code": row.get("esb_product_code"),
+        "esb_product_name": _name(row, "esb_product_name"),
     }
     vals.update({c: row.get(c) for c in FLOW_COLUMNS})
     return vals
@@ -504,6 +529,8 @@ def sales_daily_vals(
         "esb_brand": brand,
         "esb_branch_id": row.get("esb_branch_id"),
         "esb_menu_code": row.get("esb_menu_code"),
+        "menu_name": _name(row, "menu_name"),
+        "menu_category": _name(row, "menu_category"),
         "is_takeaway": bool(row.get("is_takeaway")),
         "qty": row.get("qty"),
         "gross": row.get("gross"),

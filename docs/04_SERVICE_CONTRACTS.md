@@ -3051,22 +3051,25 @@ Tabel §12.1 bertambah dua baris:
 |---|---|---|
 | Mesin migrasi sisi data | `scripts/migration/esb_to_odoo.py` | `export`/`writeback`/`reconcile`: container sekali jalan `esb-migrate` (stack data) |
 | **(v19.1)** Importer sisi Odoo | `scripts/migration/odoo_import_esb.py` (pola `scripts/brand-catalog/odoo_import_shell.py`) | di dalam `odoo shell` (variabel global `env`); subcommand logis `import` di tabel bawah = berkas ini |
-| Pembungkus impor | `scripts/migration/run-import.sh <bundel> [--dry-run] [--step …]` | host: `docker compose exec -T -e EFN_MIG_ARGV='<json>' odoo odoo shell -d $DB --no-http < scripts/migration/odoo_import_esb.py` (tanpa password di argumen/log) |
+| Pembungkus impor | `scripts/migration/run-import.sh <bundel> [--validation <file>] [--apply] [--company PT]… [--step …]… [--confirm-brand <brand>] [--allow-missing-validation]` — **default DRY-RUN**, run nyata hanya dengan `--apply` | host: `docker compose exec -T -e EFN_MIG_ARGV='<json>' odoo odoo shell -d $DB --no-http < scripts/migration/odoo_import_esb.py` (tanpa password di argumen/log). `<bundel>`/`<validation>` = nama berkas di dalam direktori pertukaran; exit = exit importer |
 | Validator | `scripts/migration/validate_import.py --source esb-bundle <bundel>` (perluasan `docs/08` §6.4) | container `esb-migrate` |
 | Tabel pemetaan (input disetujui klien) | `branch_map.csv`, `uom_map.csv`, `coa_map.csv`, `payment_map.csv` — **di luar repo** (data klien); contoh sintetis di `docs/templates/migrasi/esb/` | ikut bundel (hash di manifest) |
 | Modul histori | `services/odoo/addons/efn_legacy_history` (§27.8) | Odoo |
 | Overlay | `infra/compose/docker-compose.migration.yml`, profil `migration` (devsecops) | — |
 
-`esb-migrate`: image `esb-extract` (Python 3.12, klien ClickHouse TLS yang sama) + `scripts/migration` di-mount
-read-only; network **hanya `esb`** (tanpa `egress`, tanpa `data`/`internal`); non-root, `read_only`, `tmpfs /work`,
-`cap_drop: ALL`, `no-new-privileges`, memori 1 GB. Overlay juga me-mount `migration_bundle_key` dan direktori pertukaran
-`${MIG_EXCHANGE_DIR}` ke service `odoo` **hanya selama jendela migrasi** (overlay dilepas setelahnya).
+`esb-migrate`: **image sendiri** (`scripts/migration/Dockerfile`, Python 3.12, `clickhouse-connect` + `cryptography`
+di-pin di `scripts/migration/requirements.txt`; ikut rantai scan/SBOM/sign `build-push.yml`) — bukan image `esb-extract`
++ mount kode. Network **hanya `esb`** (tanpa `egress`, tanpa `data`/`internal`); non-root (uid/gid = user `odoo`,
+`EFN_MIG_UID/GID`), `read_only`, `tmpfs /work` 768 MB, `cap_drop: ALL`, `no-new-privileges`, batas memori **1536 MB**
+(tmpfs dihitung ke cgroup; 1 GB di draf awal tidak cukup untuk segmen terbesar). Overlay `docker-compose.migration.yml`
+me-mount `migration_bundle_key`, direktori pertukaran `${MIG_EXCHANGE_DIR}` (→ `/mnt/efn-mig`) dan `scripts/migration`
+(hanya-baca → `/opt/efn-migration`) ke service `odoo` **hanya selama jendela migrasi** (overlay dilepas setelahnya).
 
 Subcommand:
 | Subcommand | Argumen | Keluaran |
 |---|---|---|
 | `export` | `--brand {pb,wtz,bacha,imd,cup}` `--step <langkah\|master\|history\|cutover>` `[--cutover-date YYYY-MM-DD]` `[--legacy-days N]` `[--sales-line-months N]` `[--months YYYY-MM[,YYYY-MM…]]` `--maps <dir>` `--out <dir>` | `<run_id>.efnmig` (bundel terenkripsi, §27.3); langkah histori → satu bundel per company × bulan (§27.3a) |
-| `import` | `--bundle <file>` `--validation <file>` `[--dry-run]` `[--step …]` | `<run_id>.result.efnmig` berisi `map.jsonl`, `odoo_totals.json`, `import_report.json` |
+| `import` (= `odoo_import_esb.py`) | JSON `EFN_MIG_ARGV`: `bundle`, `validation`, `dry_run` (default **true**), `companies`, `steps`, `confirm_brand`, `allow_missing_validation` | run nyata: `<run_id>.result.efnmig`; **dry-run: `<run_id>.dryrun.result.efnmig`** (tidak menimpa hasil nyata). Isi: `map.jsonl` (master saja), `odoo_totals.json`, `import_report.json` (+ satu baris `EFN_RESULT {…}` di stdout) |
 | `writeback` | `--result <file>` | INSERT `efn_dwh.map_esb_odoo`; menolak hasil `dry_run=true` |
 | `reconcile` | `--bundle <file>` `--result <file>` | `reconcile_<run_id>.md` + `.csv` (§27.5) |
 
@@ -3080,7 +3083,7 @@ bukan dilewati.
 | # | Langkah | Prasyarat | Mekanisme | Catatan |
 |---|---|---|---|---|
 | 1 | `branch` | company ada (§12.1/§27.1), `branch_map` | ORM | gudang, lokasi, `pos.config` tanpa sesi |
-| 2 | `uom`, `category` | — | ORM | kategori produk global + kategori POS |
+| 2 | `uom`, `category` | — | ORM | kategori produk + kategori POS. Kategori induk per brand `<BRAND>` (xmlid `<brand>_category_root`) = **tingkat atas**: Odoo 19 tidak lagi memasang kategori "All" (`product.product_category_all`; dipakai sebagai induk hanya bila ada) |
 | 3 | `product` | 2 | ORM | bahan & FIN |
 | 4 | `menu` | 2–3 | ORM | termasuk **menu arsip** (`active=False`) yang hanya muncul di histori rentang (ADR-042 §3.3) |
 | 5 | `partner` | 1 | ORM | supplier + customer B2B (whitelist E4) |
@@ -3103,7 +3106,13 @@ disk terenkripsi), `APP_ENV`, `EFN_MIG_SALDO_BLOCKED`=`IMD,CUP`, `EFN_MIG_LEGACY
 **(v19.1)** `EFN_MIG_SALES_LINE_MONTHS`=`24` (0..24, di luar → error; nilai efektif sisi Odoo = parameter §27.9),
 `EFN_MIG_SEGMENT_MAX_ROWS`=`500000` (segmen histori > batas → dipecah per gudang, §27.3a),
 `EFN_ALLOW_PLAINTEXT`=`false` (production menolak). `tmpfs /work` ≥ 768 MB (segmen histori terbesar terdekompresi +
-tar). Sisi Odoo: `EFN_MIG_USER_LOGIN`=`efn_migration`, kunci bundel dari `/run/secrets/migration_bundle_key`.
+tar). **Sisi Odoo** (overlay `docker-compose.migration.yml`, container `odoo`): `EFN_MIG_BUNDLE_KEY_FILE`=
+`/run/secrets/migration_bundle_key`, `EFN_MIG_EXCHANGE_DIR`=`/mnt/efn-mig` (baca bundel + validasi, tulis hasil 0600),
+`EFN_MIG_CODE_DIR`=`/opt/efn-migration` (`efn_mig` resmi; fallback salinan terkendali di modul), `EFN_MIG_USER_LOGIN`=
+`efn_migration`; `APP_ENV` dan `EFN_MIG_SALDO_BLOCKED` (default `IMD,CUP`) dibaca importer dari env container. Gerbang
+`--confirm-brand` **fail closed**: `APP_ENV` kosong/tidak dikenal = production; hanya `dev|development|local|test|ci|
+staging|stg` yang non-production. (`esb-migrate` memakai daftar sendiri `dev|development|local|test|ci`: `staging`
+diperlakukan production = wajib `*_FILE` secret + TLS.)
 
 Exit code (semua subcommand dan validator): `0` OK · `1` error data (validasi, konflik, selisih rekonsiliasi pemblokir)
 · `2` argumen/konfigurasi · `3` integritas (dekripsi, HMAC, hash, `run_id`/brand tidak cocok) · `4` gerbang ditolak
@@ -3114,7 +3123,9 @@ Berkas `<run_id>.efnmig` = baris header JSON (`{"format":"efn-mig-esb/1","run_id
 + `\n`) → nonce 12 byte → ciphertext AES-256-GCM (tag 16 byte) atas `tar` berisi `manifest.json`, berkas JSONL per
 entitas, dan tabel pemetaan; **AAD = byte header**. Kunci: `migration_bundle_key` (hex ≥ 64, `gen-secrets`) →
 HKDF-SHA256 (salt kosong) `info="efn:mig-esb:enc:v1"` (32 byte, enkripsi) dan `info="efn:mig-esb:mac:v1"` (32 byte,
-HMAC manifest). Library: `cryptography` (versi di-pin; sudah dependency Odoo). Plaintext hanya di `tmpfs`.
+HMAC manifest). Library: `cryptography` — `esb-migrate` di-pin `==50.0.2` (`scripts/migration/requirements.txt`, gate pip-audit CI);
+sisi Odoo memakai versi bawaan image Odoo (hanya `AESGCM`, `HKDF`, `hashes`, `InvalidTag`; dijaga test). Plaintext
+hanya di `tmpfs`.
 
 `manifest.json`:
 ```json
@@ -3196,12 +3207,17 @@ belum terautentikasi sebelum tag diperiksa.
 | `stock.location` | `name`, `location_id`, `usage` (hanya create) | lainnya |
 | `pos.config` | `name`, `company_id`/`picking_type_id` (hanya create) | metode bayar, printer, preset, KDS, kiosk |
 | `product.category` / `pos.category` | `name`, `parent_id` | akun & metode biaya (Finance), stasiun KDS |
-| `product.template` (bahan/FIN) | `name`, `default_code`, `categ_id`, `uom_id` (hanya create), `type`, `is_storable`, `purchase_ok`, `sale_ok`, `efn_is_kitting_package`, `active` | pajak, rute, `efn_ck_production_mode`, gambar, barcode yang diisi pengguna |
-| `product.template` (menu) | `name`, `pos_categ_ids`, `list_price`, `available_in_pos`, `sale_ok`, `type` | pajak, gambar, atribut, `pricelist` |
+| `product.template` (bahan/FIN) | `name`, `default_code`, `categ_id`, `uom_id` (hanya create), `type`, `is_storable`, `purchase_ok`, `sale_ok`, `efn_is_kitting_package`, `active`; saat create `company_id` dan **`responsible_id` = kosong** | pajak, rute, `efn_ck_production_mode`, gambar, barcode yang diisi pengguna |
+| `product.template` (menu) | `name`, `pos_categ_ids`, `list_price`, `available_in_pos`, `sale_ok`, `type`; saat create `company_id`, `is_storable=False`, `default_code`, **`responsible_id` = kosong** | pajak, gambar, atribut, `pricelist` |
 | `mrp.bom` (+ lines/byproducts) | `code`, `type`, `product_tmpl_id`, `product_qty`, `product_uom_id`, baris komponen | operasi/work center, ambang yield `efn_ck_production` |
 | `res.partner` (supplier/customer) | `name`, `ref`, `is_company`, `company_id` (hanya create), `supplier_rank`/`customer_rank`, `category_id`, `property_payment_term_id`, `active` | NPWP, alamat, kontak, rekening (diisi Finance) |
 | `product.supplierinfo` | `price`, `min_qty`, `currency_id` | lainnya |
 | `product.product.standard_price` | per company, langkah `cost` (sebelum `stock`) | — |
+
+`responsible_id` dikosongkan pada produk/menu hasil migrasi: default stok = user pelaku (akun teknis `efn_migration`,
+bukan PIC bisnis) dan menimbulkan inkonsistensi company bila akun itu bukan anggota PT target. Record lain (gudang,
+`pos.config`) tetap memeriksa konsistensi company terhadap pelaku → **`efn_migration` wajib anggota (`company_ids`)
+semua company yang dimigrasi** (§27.9).
 
 Aturan upsert (impor berjalan sebagai user teknis `efn_migration` dengan `env(user=…, su=True)` agar `write_uid` =
 user migrasi):
@@ -3222,7 +3238,7 @@ user migrasi):
   `errors = 0`; (2) langkah `stock`/`opening`/`history`/`cutover-param` ditolak untuk company di
   `EFN_MIG_SALDO_BLOCKED` (default `IMD,CUP` sampai Q-ESB5); (3) `APP_ENV=production` dan bukan dry-run → wajib
   argumen `--confirm-brand <brand>` sama dengan manifest **dan** ADR-042 berstatus Accepted (dicek manusia di runbook,
-  bukan kode; **terpenuhi 18 Nov 2026**); (4) langkah `cutover` dan grup `history` butuh `cutover_date` di manifest;
+  bukan kode; **terpenuhi 18 Nov 2026**); "production" = `APP_ENV` kosong/tidak dikenal (fail closed, §27.2); (4) langkah `cutover` dan grup `history` butuh `cutover_date` di manifest;
   **(v19.1)** (5) segmen histori: `segment.month` < bulan `cutover_date`, atau = bulan cutover dengan hari < cutover;
   baris `legacy_sales_line` hanya bila parameter Odoo `efn_mig_esb.sales_line_months` > 0 dan bulan dalam rentang
   (selain itu baris dilewati + dilaporkan, bukan error).
@@ -3236,7 +3252,7 @@ Laporan rekonsiliasi `reconcile_<run_id>.md/.csv` (tanpa data pribadi; lampiran 
 | 2 | Stok: Σ qty per lokasi × produk (opname vs `stock.quant`) = 0 selisih; Σ nilai persediaan vs saldo akun persediaan TB ESB | Ya (qty); nilai = laporan ke Finance |
 | 3 | AR/AP: Σ per partner & total vs TB ESB; jumlah dokumen terbuka | Ya |
 | 4 | Neraca pembukaan seimbang; saldo akun kliring = 0 setelah stok + TB + AR/AP **diposting** (draft → status "menunggu posting") | Ya |
-| 5 | Histori: **(5a)** Σ per bulan × cabang × produk tiap kolom `efn.legacy.flow.daily` vs `v_esb_flow_daily`; **(5b, v19.1)** Σ `qty, gross, discount, net, cogs, trx_count` per bulan × cabang × menu `efn.legacy.sales.daily` vs `v_esb_sales_daily` (semua `row_type`); **(5c, v19.1)** jumlah baris + Σ `qty, total, discount, cogs` per company × bulan × cabang `efn.legacy.sales.line` vs `fact_esb_sales_line` (versi slice ber-checkpoint), bila `sales_line_months` > 0; **(5d, v19.1)** query pemeriksa bulk: 0 baris dengan `warehouse_id.company_id ≠ company_id` atau produk milik company lain; selisih 0; baris tak terpetakan dilaporkan | Ya |
+| 5 | Histori: **(5a)** Σ per bulan × cabang × produk tiap kolom `efn.legacy.flow.daily` vs `v_esb_flow_daily`; **(5b, v19.1)** Σ `qty, gross, discount, net, cogs, trx_count` per bulan × cabang × menu `efn.legacy.sales.daily` vs `v_esb_sales_daily` (semua `row_type`); **(5c, v19.1)** jumlah baris + Σ `qty, total, discount, cogs` per company × bulan × cabang `efn.legacy.sales.line` vs `fact_esb_sales_line` (versi slice ber-checkpoint), bila `sales_line_months` > 0 — baris yang sengaja tidak dimuat dilaporkan importer: parameter 0 (`skipped_by_param`) → baris info `5c_dilewati_param` (bukan selisih), baris di luar jendela (`rows_skipped_window` per irisan) → selisih irisan itu diturunkan menjadi peringatan; **(5d, v19.1)** query pemeriksa bulk: 0 baris dengan `warehouse_id.company_id ≠ company_id` atau produk milik company lain; selisih 0; baris tak terpetakan dilaporkan | Ya |
 | 6 | Sanity bisnis: Σ(`total − discount`) / Σ pembayaran per cabang-bulan dalam rentang PB1+SC wajar (PB ±89,6 %, G41) | Peringatan |
 | 7 | Kualitas data: snapshot `v_esb_data_quality` (alias tak terpetakan, non-EA, umur data, run terakhir) | Peringatan |
 
@@ -3296,7 +3312,7 @@ Model **`efn.legacy.flow.daily`** ("Histori aliran produk ESB (read-only)"), tan
 | `uom_id` | related `product_id.uom_id` | qty dalam UoM produk (EA dikonversi saat export) |
 | `sold`, `ck_prod`, `store_prod`, `ck_out`, `in_ck`, `in_other`, `st_in`, `st_out` | Float (16,3), default 0 | semantik L-116 |
 | `outflow` | Float (16,3), compute stored = `sold + st_out + ck_out` | input forecast |
-| `esb_brand`, `esb_branch_id`, `esb_product_code` | Char/Integer/Char | jejak sumber |
+| `esb_brand`, `esb_branch_id`, `esb_product_code` (required), `esb_product_name` | Char/Integer/Char/Char | jejak sumber (`esb_product_name` disediakan model, belum diisi bundel) |
 | `run_id` | Char(36) | run migrasi terakhir yang menulis baris |
 
 - Constraint unik `(company_id, warehouse_id, product_id, day)`; indeks `(warehouse_id, product_id, day)`.
@@ -3317,15 +3333,19 @@ Model **(v19.1) `efn.legacy.sales.daily`** ("Histori penjualan harian ESB — ar
 | `company_id` | M2o `res.company`, required, index | PT cabang |
 | `warehouse_id` | M2o `stock.warehouse`, required, `check_company` | outlet (`branch_wh`) |
 | `pos_config_id` | M2o `pos.config`, `check_company` | dari `branch_pos` (informasi; boleh kosong) |
-| `product_id` | M2o `product.product`, required, `check_company` | menu POS (menu takeaway `" T"` → produk dasar yang sama, §27.4) |
+| `product_id` | M2o `product.product`, **boleh kosong** (`ondelete set null`), `check_company` | menu POS (menu takeaway `" T"` → produk dasar yang sama, §27.4); kosong = menu tak terpetakan, baris tetap disimpan **(dibangun; keputusan efn-lead 18 Nov)** |
+| `esb_menu_code` | Char(64), **required** | kode menu ESB asli (menu takeaway `" T"` = kode sendiri); bagian kunci unik |
+| `menu_name`, `menu_category` | Char(256/128) | disediakan model, **belum diisi bundel** (kontrak baris tidak membawanya) |
 | `is_takeaway` | Boolean, default False | dari `is_takeaway` ESB |
 | `qty` | Float (16,3) | Σ qty (semua `row_type`, sama dengan `v_esb_sales_daily`) |
 | `gross`, `discount`, `net`, `cogs` | Monetary (`currency_id` related company) | `net = gross − discount` (dihitung saat export, bukan compute) |
 | `trx_count` | Integer | jumlah `sales_num` unik per menu-hari |
 | `esb_brand`, `esb_branch_id`, `esb_menu_code` | Char/Integer/Char | jejak sumber |
 | `run_id` | Char(36) | segmen terakhir yang menulis |
-- Unik `(company_id, warehouse_id, product_id, day, is_takeaway)`; indeks `(company_id, day)`,
-  `(company_id, warehouse_id, day)`.
+- Unik **`(company_id, warehouse_id, day, esb_menu_code)`** (dibangun; menggantikan `(…, product_id, day,
+  is_takeaway)` karena `product_id` boleh kosong dan unik atas kolom NULL tidak menahan duplikat; `v_esb_sales_daily`
+  memang satu baris per cabang × hari × kode menu); indeks `(company_id, day)`, `(company_id, warehouse_id, day)`.
+  Importer mengagregasi dulu baris yang jatuh ke kunci sama (cabang `location` → gudang induk).
 - View: list, **pivot**, **graph**, search (filter company/outlet/menu/bulan/takeaway; filter default 3 bulan terakhir).
 
 Model **(v19.1) `efn.legacy.sales.line`** ("Histori baris transaksi ESB — arsip"), **`_log_access = False`**

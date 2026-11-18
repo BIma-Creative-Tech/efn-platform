@@ -101,6 +101,7 @@ def bom_line(bom_id: int, code: str, qty: str, uom: str, hpp: str) -> dict[str, 
 def flow(day: date, branch_id: int, code: str, sold: int, in_ck: int, st_out: int) -> dict[str, Any]:
     row = {c: D(0) for c in ("ck_prod", "store_prod", "ck_out", "in_other", "st_in")}
     row.update(day=day, company_code="PB", branch_id=branch_id, product_code=code)
+    row.update(product_name="FIN Roti Tawar" if code == "FIN-001" else code)
     row.update(sold=D(sold), in_ck=D(in_ck), st_out=D(st_out))
     return row
 
@@ -111,6 +112,8 @@ def sales_daily(day: date, branch_id: int, code: str) -> dict[str, Any]:
         "company_code": "PB",
         "branch_id": branch_id,
         "menu_code": code,
+        "menu_name": "Roti Tawar T",
+        "menu_category": "Bakery",
         "is_takeaway": 1,
         "qty": D("3.000"),
         "gross": D("75000.00"),

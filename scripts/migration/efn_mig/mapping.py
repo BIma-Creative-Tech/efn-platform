@@ -9,7 +9,7 @@ import csv
 import io
 import re
 from collections import defaultdict
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -38,6 +38,13 @@ HISTORY_KEYS: dict[str, tuple[str, ...]] = {
         "discount", "cogs", "row_type", "is_takeaway",
     ),
 }  # fmt: skip
+# Kunci OPSIONAL histori (nama tampilan, data bisnis -- bukan PII). Export selalu mengisinya (nilai boleh null);
+# identik dengan `HISTORY_OPTIONAL_KEYS` importer Odoo (esb_import/mapping.py).
+HISTORY_OPTIONAL_KEYS: dict[str, frozenset[str]] = {
+    "legacy_flow_daily": frozenset({"esb_product_name"}),
+    "legacy_sales_daily": frozenset({"menu_name", "menu_category"}),
+    "legacy_sales_line": frozenset(),
+}
 # Kunci `data` per entitas master (validator: di luar whitelist = error).
 DATA_KEYS: dict[str, frozenset[str]] = {
     "branch": frozenset(
@@ -193,6 +200,20 @@ class BranchIndex:
     pos_key: dict[int, str] = field(default_factory=dict)
     company: dict[int, str] = field(default_factory=dict)
     unmapped: list[dict[str, Any]] = field(default_factory=list)
+    # SEC-197: gudang tujuan (xmlid branch_wh) -> PT pemilik. Segmen histori dipecah per gudang tujuan.
+    wh_company: dict[str, str] = field(default_factory=dict)
+
+    def warehouses_of(self, company: str) -> list[str]:
+        """Semua gudang tujuan milik `company` (termasuk yang tanpa baris histori), urut xmlid."""
+        return sorted(wh for wh, code in self.wh_company.items() if code == company)
+
+    def branches_by_warehouse(self, branch_ids: Iterable[int]) -> dict[str, list[int]]:
+        out: dict[str, list[int]] = defaultdict(list)
+        for branch_id in sorted(set(branch_ids)):
+            wh = self.wh_key.get(branch_id)
+            if wh:
+                out[wh].append(branch_id)
+        return dict(out)
 
 
 def build_branches(
@@ -218,6 +239,7 @@ def build_branches(
             wh = xmlid(brand, company, "branch_wh", branch_id)
             pos = xmlid(brand, company, "branch_pos", branch_id) if entry.type == "store" else None
             index.wh_key[branch_id] = wh
+            index.wh_company[wh] = company
             if pos:
                 index.pos_key[branch_id] = pos
             data = {
@@ -230,7 +252,8 @@ def build_branches(
                 "pos_xmlid": pos,
             }
             out.append(record("branch", company, branch_id, wh, data))
-    # Lokasi (situs bukan gudang) -> di bawah gudang induk; histori cabang lokasi = gudang induk.
+    # Lokasi (situs bukan gudang) -> di bawah gudang induk; histori cabang lokasi = gudang induk (SEC-197: gudang
+    # tujuan sama -> part segmen sama). Induk milik PT lain -> histori lokasi TIDAK dipetakan (dihitung tak terpetakan).
     for branch_id in sorted(rows):
         entry = bmap.get(branch_id)
         if entry is None or entry.type != "location":
@@ -238,8 +261,11 @@ def build_branches(
         company = index.company[branch_id]
         parent = index.wh_key.get(entry.parent_branch_id or 0)
         loc = xmlid(brand, company, "branch_loc", branch_id)
-        if parent:
+        if parent and index.wh_company.get(parent) == company:
             index.wh_key[branch_id] = parent
+            parent_pos = index.pos_key.get(entry.parent_branch_id or 0)
+            if parent_pos:
+                index.pos_key[branch_id] = parent_pos
         data = {
             "branch_id": branch_id,
             "name": entry.display_name or str(rows[branch_id].get("branch_name") or f"Lokasi #{branch_id}"),
@@ -580,6 +606,7 @@ def flow_row(ctx: HistoryContext, row: Mapping[str, Any]) -> dict[str, Any] | No
         "product_key": xmlid(ctx.brand, ctx.company, "product", code),
         "esb_branch_id": branch_id,
         "esb_product_code": code,
+        "esb_product_name": norm_text(row.get("product_name"))[:128] or None,
     }
     out.update({c: num(round(v, 3)) for c, v in values.items()})
     out["outflow"] = num(round(values["sold"] + values["st_out"] + values["ck_out"], 3))
@@ -600,6 +627,8 @@ def sales_daily_row(ctx: HistoryContext, row: Mapping[str, Any]) -> dict[str, An
         "menu_key": menu,
         "esb_branch_id": branch_id,
         "esb_menu_code": code,
+        "menu_name": norm_text(row.get("menu_name"))[:128] or None,
+        "menu_category": norm_text(row.get("menu_category"))[:128] or None,
         "is_takeaway": bool(row.get("is_takeaway")),
         "qty": num(row.get("qty")),
         "gross": num(gross),
@@ -638,3 +667,62 @@ HISTORY_BUILDERS = {
     "legacy_sales_daily": sales_daily_row,
     "legacy_sales_line": sales_line_row,
 }
+
+# SEC-197: kunci unik model Odoo per berkas (beberapa cabang ESB -> satu gudang tujuan wajib dijumlahkan dulu).
+# sales.line tidak diagregasi (setiap baris transaksi unik; duplikat = error validator).
+AGGREGATE_KEYS: dict[str, tuple[str, ...]] = {
+    "legacy_flow_daily": ("day", "branch_key", "product_key"),
+    "legacy_sales_daily": ("day", "branch_key", "menu_key", "is_takeaway"),
+}
+AGGREGATE_SUMS: dict[str, tuple[str, ...]] = {
+    "legacy_flow_daily": (*FLOW_COLUMNS, "outflow"),
+    "legacy_sales_daily": ("qty", "gross", "discount", "net", "cogs", "trx_count"),
+}
+
+
+def aggregate_rows(file: str, rows: Iterable[dict[str, Any] | None]) -> Iterator[dict[str, Any] | None]:
+    """Jumlahkan baris dengan kunci model yang sama (SEC-197), streaming per hari: sumber WAJIB urut hari
+    (`source.HISTORY_ORDER`). None (tak terpetakan) diteruskan agar tetap dihitung. Kolom non-jumlah (esb_branch_id,
+    esb_*_code, nama, pos_key) = nilai baris pertama, pos_key = yang pertama tidak null.
+    Berkas tanpa agregasi (sales.line) diteruskan apa adanya."""
+    keys = AGGREGATE_KEYS.get(file)
+    if keys is None:
+        yield from rows
+        return
+    sums = AGGREGATE_SUMS[file]
+    day_field = keys[0]
+    bucket: dict[tuple[Any, ...], dict[str, Any]] = {}
+    totals: dict[tuple[Any, ...], dict[str, Decimal]] = {}
+    current_day: Any = None
+
+    def flush() -> Iterator[dict[str, Any]]:
+        for key in sorted(bucket, key=lambda k: tuple(str(x) for x in k)):
+            out = bucket[key]
+            for col in sums:
+                value = totals[key][col]
+                if col == "trx_count":
+                    out[col] = int(value)
+                else:
+                    places = 3 if file == "legacy_flow_daily" or col == "qty" else 2
+                    out[col] = num(round(value, places))
+            yield out
+        bucket.clear()
+        totals.clear()
+
+    for row in rows:
+        if row is None:
+            yield None
+            continue
+        if current_day is not None and row[day_field] != current_day:
+            yield from flush()
+        current_day = row[day_field]
+        key = tuple(row[k] for k in keys)
+        if key not in bucket:
+            bucket[key] = dict(row)
+            totals[key] = {c: Decimal(str(row[c])) for c in sums}
+            continue
+        if bucket[key].get("pos_key") is None and row.get("pos_key"):
+            bucket[key]["pos_key"] = row["pos_key"]
+        for col in sums:
+            totals[key][col] += Decimal(str(row[col]))
+    yield from flush()

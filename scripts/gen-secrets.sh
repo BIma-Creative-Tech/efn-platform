@@ -76,20 +76,40 @@ for name in odoo_pii_key_v1 odoo_pii_bidx_key odoo_pii_name_key; do
 done
 
 # Migrasi ESB -> Odoo (G43, docs/04 §27.2/§27.10): di scripts/secrets.list berjenis host:disabled (staging/prod ditulis
-# operator di host hanya selama jendela migrasi). Dev/CI butuh nilai NYATA agar dry-run & clickhouse-init (user efn_mig)
-# bisa diuji: password acak base64, kunci bundel 32 byte hex (64 karakter, bytes.fromhex di efn_mig/bundle.py).
-# Idempoten: file berisi nilai selain `disabled` TIDAK ditimpa (menimpa kunci bundel = bundel dev lama tak terbaca).
+# operator di host hanya selama jendela migrasi, docs/runbooks/migrasi-esb-odoo.md §2).
+# SEC-199: nilai NYATA (password acak base64; kunci bundel 32 byte hex = 64 karakter, bytes.fromhex di
+# efn_mig/bundle.py) HANYA bila APP_ENV = dev|development|ci|test (env proses saat skrip dijalankan, BUKAN .env compose):
+#   APP_ENV=dev bash scripts/gen-secrets.sh
+# Selain itu (APP_ENV kosong/production/staging, termasuk host VPS B ADR-043 dan gladi prod lokal) file baru ditulis
+# `disabled` -> clickhouse-init menghapus user efn_mig dan esb-migrate/importer gagal tertutup.
+# Idempoten: file berisi nilai nyata TIDAK ditimpa (bisa jadi jendela migrasi sedang dibuka; menimpa kunci bundel =
+# bundel tak terbaca). Di environment non-dev nilai nyata yang ada dilaporkan sebagai PERINGATAN: tutup jendela
+# sesuai runbook migrasi §7 bila memang tidak ada migrasi berjalan.
+case "${APP_ENV:-}" in
+  dev|development|ci|test) mig_real=1 ;;
+  *) mig_real=0 ;;
+esac
 for spec in clickhouse_password_mig:random migration_bundle_key:hex32; do
   name="${spec%%:*}"
   f="${OUT_DIR}/${name}.txt"
   if [[ -s "$f" ]] && ! grep -qx 'disabled' "$f"; then
     chmod 644 "$f"
-    echo "ada    : $f"
+    if (( mig_real )); then
+      echo "ada    : $f"
+    else
+      echo "PERINGATAN: $f berisi nilai NYATA di APP_ENV='${APP_ENV:-}' (bukan dev/ci/test). Bila tidak ada jendela" \
+        "migrasi terbuka: printf disabled > $f (runbook migrasi-esb-odoo §7, SEC-199)" >&2
+    fi
     continue
   fi
-  ( umask 022; gen_value "${spec#*:}" > "$f" )
+  if (( mig_real )); then
+    ( umask 022; gen_value "${spec#*:}" > "$f" )
+    echo "dibuat : $f (migrasi ESB, dev/ci/test saja)"
+  else
+    ( umask 022; printf 'disabled' > "$f" )
+    echo "dibuat : $f (disabled: migrasi ESB nonaktif di APP_ENV='${APP_ENV:-}')"
+  fi
   chmod 644 "$f"
-  echo "dibuat : $f (migrasi ESB, dev/test saja)"
 done
 
 # PKI internal (docs/04 §7.1): enkripsi in transit wajib juga di dev/CI (dev = prod, tanpa fallback plaintext).

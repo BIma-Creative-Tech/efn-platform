@@ -19,6 +19,7 @@ Kontrak: `docs/04_SERVICE_CONTRACTS.md` §8.6 (keputusan user: **kunci hanya dip
 | `odoo_pii_bidx_key`, `odoo_pii_name_key` (G21 AC-13) | 32 byte base64, berbeda satu sama lain | idem | **Wajib** — paket segel (tanpa kunci ini pencarian gagal sampai dihitung ulang) | Pencarian HP/email/NPWP/NIK/nama gagal sampai blind index/token dihitung ulang (data tidak hilang) |
 | `otp_pepper` → `member_hash_pepper` | random; turunan HKDF | `otp_pepper` di GitHub Environment; `member_hash_pepper` **diturunkan di host** (`derive-secrets.sh`), tidak disimpan di GitHub | **Wajib** offline (`otp_pepper`) | Semua `member_hash` berubah → ledger/DSAR tidak tersambung |
 | Passphrase LUKS per node | passphrase | Keyslot disk | **Wajib** offline | Disk tidak terbuka → restore |
+| `migration_bundle_key` (G43, docs/04 §27.3) | 32 byte hex (64 karakter) | **Dibuat Superadmin di host hanya selama jendela migrasi ESB** → `/opt/efn/secrets` → **hanya** `esb-migrate` + odoo lewat overlay `docker-compose.migration.yml`. Di luar jendela berisi `disabled`. Tidak pernah di GitHub/CI ([§4f](#migrasi-esb)) | Opsional (paket segel); **bila dibuat wajib dimusnahkan saat jendela ditutup** | Bundel/hasil migrasi tidak bisa dibuka → ekspor ulang dari ClickHouse (tidak ada data Odoo yang hilang) |
 
 Secret operasional lain (password service, token WhatsApp, kunci API payment, token DNS ACME, G21 `loyalty_policy_signing_key` = HMAC publikasi kebijakan poin Odoo → BFF, hanya odoo + api-gateway) dikelola lewat GitHub Environment yang sama; perubahannya juga butuh approval Superadmin (§3).
 
@@ -277,6 +278,38 @@ render `prod-pii`). Staging dan production memakai kunci **berbeda** (jangan men
 berisi kunci (data terenkripsi dengannya hilang permanen) — rotasi hanya lewat [pii-key-rotation.md](pii-key-rotation.md#kunci-pii-odoo).
 Menonaktifkan (`EFN_ODOO_PII_ENABLED=false`) saat `efn_pii` terpasang **ditolak deploy** (by design); menonaktifkan PII
 berarti uninstall/migrasi-balik modul (keputusan PO + ADR-036), bukan saklar.
+
+### 4f. Kunci bundel migrasi ESB → Odoo (G43, docs/04 §27.3, ADR-042) {#migrasi-esb}
+
+> **Ringkas untuk manajemen.** Kunci ini mengenkripsi berkas pemindahan data dari sistem ESB ke Odoo. Kunci hanya ada
+> selama periode migrasi; setelah berita acara brand terakhir kunci dimusnahkan sehingga salinan berkas yang mungkin
+> tertinggal tidak bisa dibuka lagi (penghapusan kriptografis, UU PDP).
+
+Status di `scripts/secrets.list`: `host:disabled [SA]` (bersama `clickhouse_password_mig`, bukan [SA]). `deploy.sh`
+menulis `disabled` bila file belum ada dan tidak menimpanya; `gen-secrets.sh` hanya membuat nilai nyata di
+`APP_ENV=dev|ci|test` (SEC-199), jadi jangan menjalankannya di host staging/production/VPS pihak ketiga.
+
+1. **Buka jendela** (Superadmin, host target, `sudo -i`; nilai tidak pernah dicetak):
+   ```bash
+   cd /opt/efn/secrets
+   for spec in migration_bundle_key:hex clickhouse_password_mig:b64; do
+     n="${spec%%:*}"; f="$n.txt"
+     if [ -s "$f" ] && ! grep -qx disabled "$f"; then echo "$f sudah berisi nilai (jendela terbuka?) - tidak ditimpa"; continue; fi
+     if [ "${spec#*:}" = hex ]; then ( umask 0277; openssl rand -hex 32 | tr -d '\n' > "$f.new" )
+     else ( umask 0277; openssl rand -base64 36 | tr -d '\n' > "$f.new" ); fi
+     chown root:efn-superadmin "$f.new" && chmod 0444 "$f.new" && mv -f "$f.new" "$f"
+   done
+   sha256sum migration_bundle_key.txt   # HASH saja -> register kunci + berita acara migrasi
+   ```
+   Salinan tersegel **opsional** (kehilangan kunci hanya berarti ekspor ulang). Bila dibuat (mis. agar bundel yang
+   masih dalam masa retensi bisa diaudit): `age -p` seperti §4e langkah 3, masukkan ke paket brankas, catat di log
+   brankas (§8.3).
+2. **Tutup jendela = crypto-erase** (setelah berita acara brand terakhir, atau jeda migrasi > 30 hari):
+   `printf disabled` ke kedua file (runbook [migrasi-esb-odoo.md](migrasi-esb-odoo.md) §7.4), jalankan ulang
+   `clickhouse-init`, lepas overlay migration; **musnahkan salinan tersegel** `migration_bundle_key` (buka segel di
+   hadapan saksi Direksi, hancurkan media/hapus berkas `age`, catat di log brankas §8.3) dan salinan lain bila ada.
+   Catat di berita acara migrasi + register kunci: tanggal, hash kunci yang dimusnahkan, metode, saksi.
+3. Satu kunci per lingkungan; dev/staging/production tidak pernah berbagi kunci.
 
 ### Mekanisme uid: kenapa file secret 0444 di dalam direktori 0750
 

@@ -25,10 +25,10 @@ DIM_COLUMNS: dict[str, tuple[str, ...]] = {
                          "yield_percent"),
 }  # fmt: skip
 HISTORY_COLUMNS: dict[str, tuple[str, ...]] = {
-    "legacy_flow_daily": ("day", "branch_id", "product_code", "sold", "ck_prod", "store_prod", "ck_out", "in_ck",
-                          "in_other", "st_in", "st_out"),
-    "legacy_sales_daily": ("sales_date", "branch_id", "menu_code", "is_takeaway", "qty", "gross", "discount", "cogs",
-                           "trx_count"),
+    "legacy_flow_daily": ("day", "branch_id", "product_code", "product_name", "sold", "ck_prod", "store_prod",
+                          "ck_out", "in_ck", "in_other", "st_in", "st_out"),
+    "legacy_sales_daily": ("sales_date", "branch_id", "menu_code", "menu_name", "menu_category", "is_takeaway", "qty",
+                           "gross", "discount", "cogs", "trx_count"),
     "legacy_sales_line": ("sales_date", "branch_id", "sales_num", "line_no", "menu_code", "qty", "price", "total",
                           "discount", "cogs", "row_type", "is_takeaway"),
 }  # fmt: skip
@@ -43,9 +43,10 @@ _HISTORY_SOURCE = {
         " FROM efn_esb.extract_checkpoint FINAL WHERE entity = 'sales' AND brand = {brand:String})",
     ),
 }
-_HISTORY_ORDER = {
-    "legacy_flow_daily": "branch_id, day, product_code",
-    "legacy_sales_daily": "branch_id, sales_date, menu_code, is_takeaway",
+# Urut HARI dulu: `mapping.aggregate_rows` menjumlahkan beberapa cabang -> satu gudang tujuan per hari (SEC-197).
+HISTORY_ORDER = _HISTORY_ORDER = {
+    "legacy_flow_daily": "day, branch_id, product_code",
+    "legacy_sales_daily": "sales_date, branch_id, menu_code, is_takeaway",
     "legacy_sales_line": "branch_id, sales_date, sales_num, line_no",
 }
 MAP_COLUMNS = (

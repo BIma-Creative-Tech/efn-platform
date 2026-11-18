@@ -95,12 +95,13 @@ def history_months(ranges: HistoryRanges, selected: Iterable[str] | None = None)
     return months
 
 
-def plan_parts(rows_by_branch: Mapping[int, int], max_rows: int) -> list[list[int]]:
-    """Cabang -> part (greedy, urut branch_id). Total part <= max_rows kecuali satu cabang sendiri sudah > max_rows."""
+def plan_parts[K: (int, str)](rows_by_branch: Mapping[K, int], max_rows: int) -> list[list[K]]:
+    """Unit (gudang tujuan; dulu cabang) -> part, greedy urut kunci. Total part <= max_rows kecuali satu unit sendiri
+    sudah > max_rows; unit tidak pernah terbelah. Export memakai kunci gudang tujuan (SEC-197)."""
     if max_rows < 1:
         raise ValueError("max_rows harus >= 1")
-    parts: list[list[int]] = []
-    current: list[int] = []
+    parts: list[list[K]] = []
+    current: list[K] = []
     total = 0
     for branch_id in sorted(b for b, n in rows_by_branch.items() if n > 0):
         rows = rows_by_branch[branch_id]

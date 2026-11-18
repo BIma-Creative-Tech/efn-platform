@@ -8,13 +8,13 @@ importer (efn-odoo-engineer); bundel ESB tidak membawa pajak.
 
 import re
 from collections import defaultdict
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass
 from datetime import date
 from typing import Any
 
 from efn_mig import mapping as m
-from efn_mig.bundle import Bundle, IntegrityError
+from efn_mig.bundle import Bundle, IntegrityError, Keys, sign_validation
 from efn_mig.segments import MAX_LEGACY_DAYS, MAX_SALES_LINE_MONTHS, add_months, parse_month
 from efn_mig.xmlid import xmlid
 
@@ -40,6 +40,8 @@ class Report:
     run_id: str
     manifest_sha256: str
     findings: list[Finding]
+    bundle_sha256: str = ""  # sha256 berkas .efnmig (diikat tanda tangan, SEC-201)
+    segment_set: dict[str, Any] | None = None  # ringkasan pemeriksaan part sesama parent (SEC-197)
 
     @property
     def errors(self) -> int:
@@ -50,13 +52,21 @@ class Report:
         return sum(1 for f in self.findings if f.level == "warning")
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "run_id": self.run_id,
+            "bundle_sha256": self.bundle_sha256,
             "manifest_sha256": self.manifest_sha256,
             "errors": self.errors,
             "warnings": self.warnings,
             "findings": [asdict(f) for f in self.findings],
         }
+        if self.segment_set is not None:
+            out["segment_set"] = self.segment_set
+        return out
+
+    def to_signed_json(self, keys: Keys) -> dict[str, Any]:
+        """Laporan bertanda tangan (kunci HKDF `efn:mig-esb:val:v1`); importer memakai `bundle.verify_validation`."""
+        return sign_validation(self.to_json(), keys)
 
     def to_markdown(self) -> str:
         lines = [
@@ -90,9 +100,64 @@ def _pii_keys(keys: Iterator[str] | list[str]) -> list[str]:
     return [k for k in keys if PII_KEY.search(k)]
 
 
-def validate_bundle(bundle: Bundle) -> Report:
+def check_segment_set(manifests: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """SEC-197: part sesama (parent_run_id, company, bulan) wajib lengkap 1..parts, `target_warehouses` saling lepas,
+    dan gabungannya = `company_warehouses`. Gudang di > 1 part -> IntegrityError (exit 3). Kembalikan ringkasan grup
+    (`complete` False bila ada part yang tidak disertakan)."""
+    groups: dict[tuple[str, str, str], list[Mapping[str, Any]]] = defaultdict(list)
+    for man in manifests:
+        seg = man.get("segment")
+        if isinstance(seg, dict):
+            groups[(str(man.get("parent_run_id")), str(seg.get("company_code")), str(seg.get("month")))].append(man)
+    summary = []
+    for (parent, company, month), mans in sorted(groups.items()):
+        owner: dict[str, int] = {}
+        parts_declared = {int(mn["segment"].get("parts") or 0) for mn in mans}
+        if len(parts_declared) != 1:
+            raise IntegrityError(f"segmen {company} {month}: jumlah part berbeda antar-bundel")
+        parts = parts_declared.pop()
+        seen_parts = sorted(int(mn["segment"].get("part") or 0) for mn in mans)
+        if len(seen_parts) != len(set(seen_parts)):
+            raise IntegrityError(f"segmen {company} {month}: part ganda")
+        company_whs = {tuple(mn.get("company_warehouses") or []) for mn in mans}
+        if len(company_whs) != 1:
+            raise IntegrityError(f"segmen {company} {month}: company_warehouses berbeda antar-part")
+        for mn in mans:
+            for wh in mn.get("target_warehouses") or []:
+                if wh in owner:
+                    raise IntegrityError(
+                        f"gudang {wh} muncul di part {owner[wh]} dan {mn['segment'].get('part')} (parent {parent})"
+                    )
+                owner[wh] = int(mn["segment"].get("part") or 0)
+        complete = seen_parts == list(range(1, parts + 1))
+        if complete and set(owner) != set(next(iter(company_whs))):
+            raise IntegrityError(f"segmen {company} {month}: gabungan target_warehouses != company_warehouses")
+        summary.append(
+            {"parent_run_id": parent, "company_code": company, "month": month, "parts": parts,
+             "parts_seen": seen_parts, "complete": complete, "warehouses_disjoint": True}
+        )  # fmt: skip
+    return summary
+
+
+def validate_bundle(bundle: Bundle, siblings: Iterable[Mapping[str, Any]] | None = None) -> Report:
+    """`siblings` = manifest SEMUA bundel segmen yang divalidasi bersama (termasuk bundel ini). Segmen dengan
+    parts > 1 tanpa semua part -> error PARTS_INCOMPLETE (validasi wajib per set part, SEC-197)."""
     man = bundle.manifest
     out = _Collector()
+    segment_set: dict[str, Any] | None = None
+    if isinstance(man.get("segment"), dict):
+        group = [mn for mn in (siblings or [man]) if mn.get("parent_run_id") == man.get("parent_run_id")]
+        if not any(mn.get("run_id") == man.get("run_id") for mn in group):
+            group.append(man)
+        seg = man["segment"]
+        same = [mn for mn in group if isinstance(mn.get("segment"), dict)
+                and mn["segment"].get("company_code") == seg.get("company_code")
+                and mn["segment"].get("month") == seg.get("month")]  # fmt: skip
+        summary = check_segment_set(same)
+        segment_set = summary[0] if summary else None
+        if segment_set is not None and not segment_set["complete"]:
+            out.error("PARTS_INCOMPLETE", "manifest", seg.get("month"),
+                      "validasi wajib menyertakan semua part company x bulan (SEC-197)")  # fmt: skip
     brand = str(man["brand"])
     companies = [str(c) for c in man.get("company_codes") or []]
     for code in companies:
@@ -114,7 +179,7 @@ def validate_bundle(bundle: Bundle) -> Report:
     _check_branches(master.get("branch", []), out)
     _check_products_menus(master, out)
     _check_boms(master, out)
-    return Report(str(man["run_id"]), bundle.manifest_sha256, out.items)
+    return Report(str(man["run_id"]), bundle.manifest_sha256, out.items, bundle.blob_sha256, segment_set)
 
 
 def _validate_master(
@@ -252,15 +317,24 @@ def _validate_history(bundle: Bundle, entries: list[dict[str, Any]], out: _Colle
     cutover = date.fromisoformat(str(man.get("cutover_date"))) if man.get("cutover_date") else None
     if cutover is None:
         out.error("CUTOVER_MISSING", "manifest", man.get("run_id"), "histori wajib cutover_date")
+    # SEC-197: gudang tujuan part ini (importer mengganti irisan HANYA gudang ini, termasuk yang tanpa baris).
+    targets = man.get("target_warehouses")
+    company_whs = man.get("company_warehouses")
+    if not isinstance(targets, list) or not isinstance(company_whs, list) or not set(targets) <= set(company_whs):
+        raise IntegrityError("bundel histori tanpa target_warehouses/company_warehouses yang konsisten (SEC-197)")
+    if len(targets) != len(set(targets)):
+        raise IntegrityError("target_warehouses ganda")
+    target_set = set(targets)
     for entry in entries:
         entity = str(entry["entity"])
-        allowed = set(m.HISTORY_KEYS[entity])
+        required = set(m.HISTORY_KEYS[entity])
+        allowed = required | m.HISTORY_OPTIONAL_KEYS[entity]
         day_key = "date" if entity == "legacy_sales_line" else "day"
         dup: set[tuple[Any, ...]] = set()
         unmapped_menu = 0
         for row in bundle.rows(str(entry["name"])):
-            if set(row) != allowed:
-                extra = sorted(set(row) - allowed)
+            if not required <= set(row) <= allowed:
+                extra = sorted(set(row) - allowed) + [f"-{k}" for k in sorted(required - set(row))]
                 out.error("HISTORY_KEYS", entity, row.get(day_key), f"kunci di luar whitelist / hilang: {extra}")
                 continue
             try:
@@ -271,6 +345,14 @@ def _validate_history(bundle: Bundle, entries: list[dict[str, Any]], out: _Colle
                 raise IntegrityError(f"{entity}: baris di luar segment.month {segment.get('month')}")
             if cutover is not None and day >= cutover:
                 out.error("HISTORY_AFTER_CUTOVER", entity, row[day_key], "hari histori >= cutover_date")
+            if row["branch_key"] not in target_set:
+                raise IntegrityError(f"{entity}: baris untuk gudang di luar target_warehouses part ini (SEC-197)")
+            agg_keys = m.AGGREGATE_KEYS.get(entity)
+            if agg_keys is not None:
+                key = tuple(row[k] for k in agg_keys)
+                if key in dup:
+                    out.error("HISTORY_KEY_DUP", entity, row[day_key], f"kunci model ganda {agg_keys}")
+                dup.add(key)
             if entity == "legacy_sales_line":
                 if row["row_type"] not in m.ROW_TYPES:
                     out.error("ROW_TYPE", entity, row["sales_num"], f"row_type tidak dikenal: {row['row_type']}")

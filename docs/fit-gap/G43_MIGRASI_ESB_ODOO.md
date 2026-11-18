@@ -88,7 +88,7 @@ PT-nya sendiri — sama dengan perilaku ESB hari ini, tanpa inter-company. Hanya
 
 | ESB | Odoo CE 19 | Aturan |
 |---|---|---|
-| `dim_esb_product.category` | `product.category` (**global, tanpa `company_id`** [V]) path `All / <Brand> / <kategori ESB>` | Akun valuasi/biaya = properti company-dependent pada kategori; metode biaya per kategori (Finance, Q-ESB16) |
+| `dim_esb_product.category` | `product.category` (**global, tanpa `company_id`** [V]) path `<Brand> / <kategori ESB>` (**catatan QA 18 Nov:** Odoo 19 tidak memasang kategori "All" → `<Brand>` = tingkat atas) | Akun valuasi/biaya = properti company-dependent pada kategori; metode biaya per kategori (Finance, Q-ESB16) |
 | `dim_esb_menu.menu_category` / `_detail` | `pos.category` induk = kategori, anak = detail | Kategori POS = juga rute KDS (`efn_pos_kds`) → stasiun diisi Ops |
 | `uom` (teks ESB) | `uom.uom` (Odoo 19 **tanpa kategori UoM**; relasi `relative_uom_id`) [R efn_kitting] | Tabel `uom_map.csv` (teks ESB → xmlid `uom.product_uom_unit`/`kgm`/`litre`/…); teks kosong → error validator, bukan default diam-diam |
 | `BATCH` | **Tidak dibuat sebagai UoM.** Satu BoM = satu batch: `mrp.bom.product_qty` = rasio EA (mis. 24 Unit) [V field] | Rasio berbeda per produk → UoM "Batch" bersama akan salah. Sumber rasio: `bom_ratio`, fallback detail BOM (§9) |

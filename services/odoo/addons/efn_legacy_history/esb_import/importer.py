@@ -12,22 +12,31 @@ Alur `run_import(env, bundle, options, commit)` (bundel SUDAH diverifikasi `efn_
    `efn_migration` (`env(user=…, su=True)`, `write_uid` = user migrasi); upsert xmlid `efn_mig_esb.*` §27.4: hanya field
    milik migrasi; record yang terakhir diubah user lain + nilai beda = `conflict` (tidak ditimpa); tidak ada hapus/arsip
    otomatis (`missing_in_source` dilaporkan); xmlid ke record terhapus = `dangling_xmlid` (gagal).
-4. Histori bulk (`efn_legacy_history.bulk`): flow/sales.daily = upsert per gudang; sales.line = ganti irisan
-   company × gudang × rentang berkas (dipotong ke `sales_line_window`; di luar = dilewati + dilaporkan).
+4. Histori bulk (`efn_legacy_history.bulk`), SEC-197: untuk SETIAP gudang `target_warehouses` manifest, ganti irisan
+   gudang × range berkas (flow/sales.daily: baris digabung per kunci grain; sales.line: dipotong `sales_line_window`,
+   di luar = dilewati + dilaporkan); gudang target tanpa baris = irisan dikosongkan; gudang bukan milik PT = tolak.
 5. `odoo_totals` dihitung dari TABEL Odoo setelah tulis (sebelum rollback dry-run) + `table_bytes`.
 Dry-run = satu savepoint di-rollback di akhir (tanpa commit). Run nyata = `commit()` per entitas / irisan.
+Keamanan tambahan (review G43): laporan validator bertanda tangan (SEC-201), tolak replay bundel lebih tua dari run
+sukses terakhir per brand × PT × grup (SEC-198, `allow_older` eksplisit), xmlid standar divalidasi modelnya (SEC-203),
+`confirm_brand` wajib di production DAN staging. Mode `totals` (`run_totals`) = total dari tabel tanpa impor.
 """
 
-import csv
-import io
+import hashlib
+import hmac
+import json
 import logging
+import re
 import time
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import psycopg2
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from odoo import Command
 from odoo.exceptions import AccessError, UserError, ValidationError
@@ -51,7 +60,17 @@ _logger = logging.getLogger(__name__)
 
 EXIT_OK, EXIT_DATA, EXIT_CONFIG, EXIT_INTEGRITY, EXIT_GATE = 0, 1, 2, 3, 4
 STATUSES = ("created", "updated", "skipped", "conflict", "failed", "missing_in_source", "dangling_xmlid")
-PRODUCTION_ENVS = frozenset({"", "production", "prod"})
+# Fail closed (sama dengan scripts/migration/efn_mig/settings.py): hanya nilai non-produksi yang DIKENAL melonggarkan
+# gerbang production; kosong / typo ("prodution") / nilai asing = production. Staging (K25-06) dianggap non-production
+# untuk gerbang --confirm-brand (docs/04 §27.5 butir 3 hanya menyebut `APP_ENV=production`).
+NON_PRODUCTION_ENVS = frozenset({"dev", "development", "local", "test", "ci", "staging", "stg"})
+# Keputusan efn-lead (review G43): --confirm-brand juga wajib di staging (konsisten dengan efn_mig/settings.py).
+CONFIRM_BRAND_ENVS = frozenset({"staging", "stg"})
+# SEC-201: laporan validator ditandatangani HMAC-SHA256 dengan kunci HKDF(migration_bundle_key, info di bawah).
+VAL_INFO = b"efn:mig-esb:val:v1"
+# SEC-198: run sukses terakhir per (brand, PT, grup) -> ir.config_parameter (bukan RPC; hanya admin yang membaca).
+PARAM_LAST_RUN_PREFIX = "efn_mig_esb.last_run."
+_MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 MAX_ERRORS = 200
 # Pesan error entitas ini tanpa teks exception (nama partner bisa nama orang -> data pribadi, UU PDP).
 QUIET_ENTITIES = frozenset({"customer", "supplier"})
@@ -92,6 +111,8 @@ class Options:
     migration_login: str = "efn_migration"
     validation: dict | None = None
     allow_missing_validation: bool = False
+    validation_key: bytes | None = field(default=None, repr=False)
+    allow_older: bool = False
 
 
 @dataclass
@@ -103,7 +124,42 @@ class ImportResult:
 
 
 def is_production(app_env: str | None) -> bool:
-    return (app_env or "").strip().lower() in PRODUCTION_ENVS
+    return (app_env or "").strip().lower() not in NON_PRODUCTION_ENVS
+
+
+def requires_confirm_brand(app_env: str | None) -> bool:
+    """Run nyata di production (fail closed) DAN staging wajib `confirm_brand` (§27.5 gerbang 3 + keputusan lead)."""
+    return is_production(app_env) or (app_env or "").strip().lower() in CONFIRM_BRAND_ENVS
+
+
+# ======================================================================================= tanda tangan validator
+def derive_validation_key(secret: str) -> bytes:
+    """`migration_bundle_key` (hex) -> kunci HMAC laporan validator (HKDF-SHA256, salt kosong, info `val:v1`).
+
+    Didefinisikan di sini karena `efn_mig.bundle` (salinan terkendali) belum memuatnya; bila efn-data-ai-engineer
+    menambahkan fungsi setara ke `efn_mig/bundle.py`, ganti dengan fungsi itu (kontrak sama, README importer)."""
+    value = (secret or "").strip()
+    if len(value) < 64 or len(value) % 2 or not re.fullmatch(r"[0-9a-fA-F]+", value):
+        raise ConfigError("migration_bundle_key wajib hex >= 64 karakter")
+    return HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=VAL_INFO).derive(bytes.fromhex(value))
+
+
+def sign_validation_report(report: dict, key: bytes) -> dict:
+    """Pasangan `verify_validation_report` (dipakai test; validator W1 menandatangani dengan skema sama)."""
+    body = {k: v for k, v in report.items() if k != "sig"}
+    return {**body, "sig": hmac.new(key, canonical_json(body), hashlib.sha256).hexdigest()}
+
+
+def verify_validation_report(report: dict, key: bytes) -> None:
+    """`sig` = HMAC-SHA256(kunci val, canonical JSON laporan tanpa `sig`); tidak ada / salah -> IntegrityError
+    (exit 3)."""
+    sig = report.get("sig")
+    if not isinstance(sig, str):
+        raise IntegrityError("laporan validator tanpa tanda tangan (sig)")
+    body = {k: v for k, v in report.items() if k != "sig"}
+    expected = hmac.new(key, canonical_json(body), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        raise IntegrityError("tanda tangan laporan validator tidak cocok (laporan diubah / kunci lain)")
 
 
 # ================================================================================================ langkah & gerbang
@@ -184,14 +240,86 @@ def check_gates(env, bundle: Bundle, opts: Options):
             raise GateError(f"company {code} belum ada di Odoo target (§12.1/§27.1)")
         companies[code] = company
     validation = opts.validation
+    dev_lenient = opts.allow_missing_validation and opts.dry_run and not is_production(opts.app_env)
     if validation is None:
-        if not (opts.allow_missing_validation and opts.dry_run and not is_production(opts.app_env)):
+        if not dev_lenient:
             raise GateError("laporan validator (validation_<run_id>.json) wajib untuk impor (§27.5 gerbang 1)")
-    elif validation.get("manifest_sha256") != bundle.manifest_sha256 or validation.get("errors") != 0:
-        raise GateError("laporan validator bukan untuk manifest ini atau errors != 0 (§27.5 gerbang 1)")
-    if is_production(opts.app_env) and not opts.dry_run and opts.confirm_brand != brand:
-        raise GateError("production + run nyata wajib --confirm-brand sama dengan brand manifest (§27.5 gerbang 3)")
+    else:
+        # SEC-201: tanda tangan dulu (exit 3), baru isi (exit 4). Tanpa sig hanya boleh pada dry-run dev longgar.
+        if not (dev_lenient and "sig" not in validation):
+            if opts.validation_key is None:
+                raise ConfigError("kunci verifikasi laporan validator tidak tersedia")
+            verify_validation_report(validation, opts.validation_key)
+        if validation.get("manifest_sha256") != bundle.manifest_sha256 or validation.get("errors") != 0:
+            raise GateError("laporan validator bukan untuk manifest ini atau errors != 0 (§27.5 gerbang 1)")
+        # Pengikatan tambahan (setara efn_mig.bundle.verify_validation): laporan untuk run & berkas bundel ini.
+        if "run_id" in validation and str(validation["run_id"]) != str(bundle.manifest.get("run_id")):
+            raise IntegrityError("laporan validator untuk run_id lain")
+        blob_sha = getattr(bundle, "blob_sha256", None)
+        if blob_sha and "bundle_sha256" in validation and str(validation["bundle_sha256"]) != blob_sha:
+            raise IntegrityError("laporan validator untuk berkas bundel lain (bundle_sha256)")
+    if requires_confirm_brand(opts.app_env) and not opts.dry_run and opts.confirm_brand != brand:
+        raise GateError(
+            "production/staging + run nyata wajib --confirm-brand sama dengan brand manifest (§27.5 gerbang 3)"
+        )
     return companies
+
+
+# ================================================================================================ replay (SEC-198)
+def _parse_created_at(value):
+    try:
+        stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        raise IntegrityError("manifest.created_at tidak valid (ISO-8601)") from None
+    if stamp.tzinfo is None:
+        raise IntegrityError("manifest.created_at wajib ber-zona waktu")
+    return stamp.astimezone(UTC)
+
+
+def replay_keys(bundle: Bundle):
+    """Kunci parameter run terakhir: `<prefix><brand>.<PT>.master` atau `.history.<YYYY-MM>` (per segmen bulan)."""
+    man = bundle.manifest
+    segment = man.get("segment")
+    group = f"history.{segment.get('month')}" if isinstance(segment, dict) else "master"
+    return [f"{PARAM_LAST_RUN_PREFIX}{man['brand']}.{code}.{group}" for code in man.get("company_codes") or []]
+
+
+def check_replay(env, bundle: Bundle, opts: Options):
+    """Tolak bundel yang dibuat SEBELUM bundel run sukses terakhir grup yang sama (replay bundel lama). Bundel yang
+    sama / lebih baru = boleh (impor ulang idempoten). `allow_older` = pengecualian eksplisit (dicatat di laporan)."""
+    created = _parse_created_at(bundle.manifest.get("created_at"))
+    ICP = env["ir.config_parameter"].sudo()
+    older = []
+    for key in replay_keys(bundle):
+        raw = ICP.get_param(key)
+        if not raw:
+            continue
+        try:
+            last = _parse_created_at(json.loads(raw).get("created_at"))
+        except (ValueError, AttributeError, IntegrityError):
+            _logger.warning("efn_mig_esb: parameter %s rusak; dianggap tidak ada", key)
+            continue
+        if created < last:
+            older.append(key)
+    if older and not opts.allow_older:
+        raise GateError(
+            "replay ditolak: bundel lebih tua dari run sukses terakhir untuk grup yang sama "
+            "(pakai allow_older hanya dengan persetujuan tertulis, catat di berita acara)"
+        )
+    return created, older
+
+
+def record_replay(env, bundle: Bundle, created):
+    ICP = env["ir.config_parameter"].sudo()
+    for key in replay_keys(bundle):
+        raw = ICP.get_param(key)
+        try:
+            last = _parse_created_at(json.loads(raw).get("created_at")) if raw else None
+        except (ValueError, AttributeError, IntegrityError):
+            last = None
+        if last is None or created >= last:
+            value = {"created_at": created.isoformat(), "run_id": bundle.manifest["run_id"]}
+            ICP.set_param(key, json.dumps(value, sort_keys=True))
 
 
 def _check_history_gates(bundle: Bundle, opts: Options, history, cutover_param):
@@ -218,6 +346,16 @@ def _check_history_gates(bundle: Bundle, opts: Options, history, cutover_param):
         slm = man.get("sales_line_months")
         if not isinstance(slm, int) or isinstance(slm, bool) or not 0 <= slm <= bulk.MAX_SALES_LINE_MONTHS:
             raise IntegrityError("sales_line_months manifest di luar 0..24")
+        # SEC-197: semua gudang tujuan segmen (termasuk tanpa baris) -> irisan setiap gudang diganti utuh.
+        targets = man.get("target_warehouses")
+        prefix = f"{m.company_prefix(str(man['brand']), codes[0])}branch_wh_"
+        if (
+            not isinstance(targets, list)
+            or not targets
+            or len(set(targets)) != len(targets)
+            or not all(isinstance(t, str) and t.startswith(prefix) and len(t) > len(prefix) for t in targets)
+        ):
+            raise IntegrityError("bundel histori tanpa target_warehouses valid (xmlid branch_wh company segmen)")
         for entry in history:
             start, end = m.parse_range(entry)
             month = segment.get("month")
@@ -334,8 +472,10 @@ class _Run:
         self._tag_cache = {}
         self._dropped = set()
         self.wh_by_key = {}
+        self.target_wh_ids = []
         self.menu_code_key = {}
         self.history_scope = {}
+        self._std_problems = {}
 
     # ------------------------------------------------------------------------------------------ util
     def _load_xmlids(self):
@@ -407,15 +547,35 @@ class _Run:
             return self.env[model]
         return self.env[model].browse(entry[2])
 
-    def std_ref(self, full):
-        if not full:
+    def std_ref(self, full, model=None):
+        """xmlid standar -> id. `model` diisi (SEC-203): xmlid yang menunjuk model lain = None + catatan jelas
+        (mis. `uom_map.csv` memetakan teks ESB ke xmlid produk alih-alih `uom.uom`)."""
+        if not full or not isinstance(full, str):
             return None
         if full.startswith(MODULE + "."):
+            entry = self.xmlids.get(self._name(full))
+            if model and entry and entry[1] != model:
+                return self._wrong_model(full, entry[1], model)
             return self.res_id(full)
         if full not in self._std_cache:
-            rec = self.env.ref(full, raise_if_not_found=False)
-            self._std_cache[full] = rec.id if rec else None
-        return self._std_cache[full]
+            res_model, res_id = (None, None)
+            if "." in full:
+                found = self.env["ir.model.data"]._xmlid_to_res_model_res_id(full, raise_if_not_found=False)
+                if found and found[0] and found[1] and self._exists(found[0], found[1]):
+                    res_model, res_id = found
+            self._std_cache[full] = (res_model, res_id)
+        res_model, res_id = self._std_cache[full]
+        if res_id and model and res_model != model:
+            return self._wrong_model(full, res_model, model)
+        if not res_id:
+            self._std_problems.setdefault(full, f"xmlid {full} tidak ada di Odoo target")
+        return res_id or None
+
+    def _wrong_model(self, full, actual, expected):
+        message = f"xmlid {full} menunjuk model {actual}, bukan {expected}"
+        self._std_problems[full] = message
+        self._note(message)
+        return None
 
     def variant_id(self, full):
         tmpl_id = self.res_id(full)
@@ -532,10 +692,17 @@ class _Run:
         """xmlid kedua ke record yang sudah ada (menu takeaway -> menu dasar; UoM -> UoM standar)."""
         name = self._name(full)
         self.seen.add(name)
-        target = self.res_id(target_full) if target_full.startswith(MODULE + ".") else self.std_ref(target_full)
+        if target_full.startswith(MODULE + "."):
+            entry = self.xmlids.get(self._name(target_full))
+            target = self.res_id(target_full) if entry and entry[1] == model else None
+            if entry and entry[1] != model:
+                self._wrong_model(target_full, entry[1], model)
+        else:
+            target = self.std_ref(target_full, model)
         if not target:
             self._count(count_entity, "failed")
-            self._error(count_entity, esb_key, "prasyarat tidak ada: record tujuan alias belum ada")
+            problem = self._std_problems.get(target_full) or "record tujuan alias belum ada"
+            self._error(count_entity, esb_key, f"prasyarat tidak ada: {problem}")
             return "failed"
         entry = self.xmlids.get(name)
         try:
@@ -646,6 +813,9 @@ class _Run:
             code, company, cenv = self._company(row)
             root = None if row["data"].get("categ_key") else self._category_root()
             plan = m.product_plan(row["data"], company.id, self, root)
+            problem = self._std_problems.get(row["data"].get("uom_xmlid"))
+            if problem:  # SEC-203: pesan jelas (xmlid tidak ada / model salah), bukan sekadar "uom_xmlid"
+                plan.missing = [problem if item == "uom_xmlid" else item for item in plan.missing]
             self.upsert("product", "product", code, row["esb_key"], row["xmlid"], plan, cenv)
             self._variant_cache.pop(self.res_id(row["xmlid"]), None)
 
@@ -705,7 +875,7 @@ class _Run:
                     product = tmpl.with_env(cenv)
                     value = float(price)
                     if source_xmlid:
-                        source_uom = self.env["uom.uom"].browse(self.std_ref(source_xmlid) or 0).exists()
+                        source_uom = self.env["uom.uom"].browse(self.std_ref(source_xmlid, "uom.uom") or 0).exists()
                         if source_uom:
                             value = source_uom._compute_price(value, product.uom_id)
                     tol = _digits_tol(product._fields["standard_price"], cenv)
@@ -732,6 +902,7 @@ class _Run:
         company = self.codes[0]
         prefix = m.company_prefix(self.brand, company)
         refs = {"branch_key": "branch_wh_", "product_key": "product_", "menu_key": "menu_", "pos_key": "branch_pos_"}
+        targets = set(self.man.get("target_warehouses") or ())
         scope = defaultdict(set)
         for entry in history:
             file = str(entry["entity"])
@@ -749,47 +920,35 @@ class _Run:
                     raise IntegrityError(f"{file}: tanggal tidak valid") from None
                 if not start <= day < end:
                     raise IntegrityError(f"{file}: baris di luar range berkas/segmen")
+                if row["branch_key"] not in targets:
+                    raise IntegrityError(f"{file}: branch_key baris tidak ada di target_warehouses manifest")
                 scope[file].add(row["branch_key"])
         self.history_scope = scope
 
     def _resolve_warehouses(self, history):
+        """SEC-197: setiap gudang `target_warehouses` wajib sudah diimpor DAN milik company segmen (selain itu bundel
+        ditolak utuh sebelum histori ditulis)."""
         company = self.companies[self.codes[0]]
-        keys = set().union(*self.history_scope.values()) if self.history_scope else set()
-        keys |= self._segment_branch_keys()
-        missing = []
-        for key in sorted(keys):
+        missing, foreign = [], []
+        for key in self.man["target_warehouses"]:
+            name = self._name(key)
+            entry = self.xmlids.get(name) if name else None
             wh = self.record("stock.warehouse", key)
-            if wh and wh.company_id == company:
-                self.wh_by_key[key] = wh.id
-            elif any(key in s for s in self.history_scope.values()):
+            if not wh:
                 missing.append(key)
+            elif wh.company_id != company:
+                foreign.append(key)
+            else:
+                self.wh_by_key[key] = wh.id
+            if entry and entry[1] != "stock.warehouse":
+                foreign.append(key)
+        if foreign:
+            raise GateError(f"target_warehouses memuat {len(foreign)} gudang yang bukan milik company target")
         if missing:
             raise GateError(
-                f"prasyarat histori: {len(missing)} gudang (branch_key) belum diimpor/bukan milik company "
-                "(jalankan langkah branch dulu, §27.2)"
+                f"prasyarat histori: {len(missing)} gudang target belum diimpor (jalankan langkah branch dulu, §27.2)"
             )
-
-    def _segment_branch_keys(self):
-        """Gudang segmen dari `branch_ids` manifest + `maps/branch_map.csv` (irisan kosong tetap diganti)."""
-        raw = self.bundle.files.get("maps/branch_map.csv")
-        ids = [int(b) for b in self.man.get("branch_ids") or [] if isinstance(b, int) and not isinstance(b, bool)]
-        if raw is None or not ids:
-            return set()
-        company = self.codes[0]
-        rows = {}
-        for row in csv.DictReader(io.StringIO(raw.decode("utf-8-sig"))):
-            branch_id = (row.get("branch_id") or "").strip()
-            if (row.get("brand") or "").strip().lower() == self.brand and branch_id.isdigit():
-                rows[int(branch_id)] = row
-        out = set()
-        for branch_id in ids:
-            row = rows.get(branch_id)
-            kind = (row.get("type") or "").strip().lower() if row else ""
-            if kind in ("store", "ck", "warehouse"):
-                out.add(xmlid(self.brand, company, "branch_wh", branch_id))
-            elif kind == "location" and (row.get("parent_branch_id") or "").strip().isdigit():
-                out.add(xmlid(self.brand, company, "branch_wh", int(row["parent_branch_id"])))
-        return out
+        self.target_wh_ids = sorted(set(self.wh_by_key.values()))
 
     def import_history(self, history, cutover):
         if not history:
@@ -824,15 +983,22 @@ class _Run:
             self.failed += 1
         self.report["slices"].append(item)
 
-    def _upsert_slices(self, file, rows_by_wh, skipped, key, sums, cutover):
+    def _replace_slices(self, entry, rows_by_wh, skipped, key, sums, cutover):
+        """SEC-197: ganti irisan gudang × range berkas (bulan segmen) untuk SETIAP gudang target — baris digabung per
+        kunci grain dulu (cabang `location` -> gudang induk), baris lama yang tidak ada di bundel ikut terhapus,
+        gudang target tanpa baris = irisan dikosongkan. Bukan upsert murni (upsert tidak menghapus baris basi)."""
+        file = str(entry["entity"])
+        start, end = m.parse_range(entry)
         Model = self._hist_model(file)
         company = self.companies[self.codes[0]]
-        for wh_id in sorted(set(rows_by_wh) | set(skipped)):
+        for wh_id in self.target_wh_ids:
             started = time.monotonic()
             vals = m.aggregate(rows_by_wh.get(wh_id, []), key, sums)
             try:
                 with self.cr.savepoint():
-                    stats = bulk.bulk_upsert(Model, vals, self.man["run_id"], company_ids=[company.id], max_day=cutover)
+                    stats = bulk.bulk_replace_slice(
+                        Model, company.id, wh_id, start, end, vals, self.man["run_id"], max_day=cutover
+                    )
             except ROW_ERRORS as exc:
                 self._slice(file, wh_id, started, {}, skipped.get(wh_id, 0), error=_exc_text(exc))
                 continue
@@ -852,7 +1018,7 @@ class _Run:
                 m.flow_vals(row, company_id=company.id, warehouse_id=wh_id, product_id=product_id, brand=self.brand)
             )
         key = ("day", "company_id", "warehouse_id", "product_id")
-        self._upsert_slices("legacy_flow_daily", rows_by_wh, skipped, key, m.FLOW_COLUMNS, cutover)
+        self._replace_slices(entry, rows_by_wh, skipped, key, m.FLOW_COLUMNS, cutover)
 
     def _history_legacy_sales_daily(self, entry, cutover):
         company = self.companies[self.codes[0]]
@@ -873,7 +1039,7 @@ class _Run:
                 )
             )
         key = ("day", "company_id", "warehouse_id", "esb_menu_code")
-        self._upsert_slices("legacy_sales_daily", rows_by_wh, {}, key, m.SALES_DAILY_SUMS, cutover)
+        self._replace_slices(entry, rows_by_wh, {}, key, m.SALES_DAILY_SUMS, cutover)
 
     def _history_legacy_sales_line(self, entry, cutover):
         company = self.companies[self.codes[0]]
@@ -887,9 +1053,7 @@ class _Run:
         start, end = m.parse_range(entry)
         clipped = m.clip_range(start, end, window)
         Model = self._hist_model("legacy_sales_line")
-        warehouses = sorted({self.wh_by_key[k] for k in self.history_scope.get("legacy_sales_line", ())})
-        warehouses = sorted(set(warehouses) | set(self.wh_by_key.values()))
-        for wh_id in warehouses:
+        for wh_id in self.target_wh_ids:  # SEC-197: setiap gudang target, juga yang tanpa baris (irisan dihapus)
             started = time.monotonic()
             counters = {"window": 0}
             if clipped is None:
@@ -941,60 +1105,105 @@ class _Run:
             out[table] = int(self.cr.fetchone()[0] or 0)
         return out
 
-    def _reverse_keys(self, entity):
-        """(model, res_id) -> xmlid lengkap (urut nama) untuk entitas xmlid company segmen."""
-        prefix = f"{self.brand}_{self.codes[0].lower()}_{entity}_"
-        out = {}
-        for name in sorted(self.xmlids):
-            if name.startswith(prefix):
-                _imd, model, res_id = self.xmlids[name]
-                out.setdefault((model, res_id), f"{MODULE}.{name}")
-        return out
-
     def odoo_totals(self, history):
-        totals = {
+        if not history:
+            return _Totals.empty()
+        calc = _Totals(self.env, self.brand, self.codes[0], self.companies[self.codes[0]], self.xmlids)
+        month = self.man["segment"]["month"]
+        specs = [(str(e["entity"]), *m.parse_range(e), month) for e in history]
+        return calc.compute(specs, wh_ids=self.target_wh_ids, code_key=self.menu_code_key)
+
+
+# ================================================================================================ total dari tabel
+def load_xmlids(cr, brand):
+    """{name: [imd_id, model, res_id]} xmlid `efn_mig_esb.<brand>_*` (tanpa ormcache; aman setelah rollback)."""
+    prefix = f"{brand}_"
+    cr.execute(
+        SQL(
+            "SELECT name, id, model, res_id FROM ir_model_data WHERE module = %s AND left(name, %s) = %s",
+            MODULE,
+            len(prefix),
+            prefix,
+        )
+    )
+    return {name: [imd_id, model, res_id] for name, imd_id, model, res_id in cr.fetchall()}
+
+
+class _Totals:
+    """`odoo_totals.json` dari TABEL Odoo (bukan bundel): Σ per bulan × gudang × produk/menu + pemeriksa bulk 5d.
+
+    Dipakai setelah impor segmen (gudang target segmen) dan mode `totals` (`reconcile --final`, semua gudang PT).
+    Label kunci = xmlid migrasi: gudang `branch_wh`, produk `product`, menu = xmlid menu DASAR (xmlid pertama yang
+    dibuat untuk record itu; takeaway `alias_of` = xmlid kedua, sama dengan `menu_key` export)."""
+
+    def __init__(self, env, brand, company_code, company, xmlids):
+        self.env, self.cr, self.brand, self.code, self.company = env, env.cr, brand, company_code, company
+        self.xmlids = xmlids
+        prefix = f"{brand}_{company_code.lower()}_"
+        self.wh_key, self.product_key, menu_base = {}, {}, {}
+        for name in sorted(xmlids):
+            imd_id, model, res_id = xmlids[name]
+            full = f"{MODULE}.{name}"
+            if name.startswith(prefix + "branch_wh_") and model == "stock.warehouse":
+                self.wh_key.setdefault(res_id, full)
+            elif name.startswith(prefix + "product_") and model == "product.template":
+                self.product_key.setdefault(res_id, full)
+            elif name.startswith(prefix + "menu_") and model == "product.template":
+                if res_id not in menu_base or imd_id < menu_base[res_id][0]:
+                    menu_base[res_id] = (imd_id, full)
+        self.menu_base = {res_id: full for res_id, (_imd, full) in menu_base.items()}
+        self._tmpl = {}
+
+    @staticmethod
+    def empty():
+        return {
             "legacy_flow_daily": [],
             "legacy_sales_daily": [],
             "legacy_sales_line": [],
             "bulk_check": {"wrong_company_rows": 0, "foreign_product_rows": 0},
         }
-        if not history:
-            return totals
+
+    def _tmpl_of(self, product_id):
+        if product_id and product_id not in self._tmpl:
+            self._tmpl[product_id] = self.env["product.product"].browse(product_id).product_tmpl_id.id
+        return self._tmpl.get(product_id)
+
+    def menu_key(self, code, product_id, code_key=None):
+        if code_key and code in code_key:
+            return code_key[code]
+        try:
+            own = xmlid(self.brand, self.code, "menu", code) if code else None
+        except ValueError:
+            own = None
+        entry = self.xmlids.get(own.split(".", 1)[1]) if own else None
+        if entry and entry[1] == "product.template":
+            return self.menu_base.get(entry[2])
+        return self.menu_base.get(self._tmpl_of(product_id)) if product_id else None
+
+    def compute(self, specs, wh_ids=None, code_key=None):
+        """`specs` = [(berkas, mulai, akhir_eksklusif, label_bulan)]; `wh_ids` None = semua gudang PT."""
         self.env.flush_all()
-        company = self.companies[self.codes[0]]
-        month = self.man["segment"]["month"]
-        wh_key = {}
-        for key, wh_id in sorted(self.wh_by_key.items()):
-            wh_key.setdefault(wh_id, key)
-        wh_ids = sorted(wh_key)
-        variant_tmpl = {}
-        products = self._reverse_keys("product")
-        menus = self._reverse_keys("menu")
-        lo_all, hi_all = None, None
-        for entry in history:
-            file = str(entry["entity"])
-            start, end = m.parse_range(entry)
-            lo_all = start if lo_all is None else min(lo_all, start)
-            hi_all = end if hi_all is None else max(hi_all, end)
+        totals = self.empty()
+        wh_filter = SQL("AND warehouse_id = ANY(%s)", list(wh_ids)) if wh_ids is not None else SQL()
+        bounds = []
+        for file, start, end, month in specs:
+            bounds.append((start, end))
             table = SQL.identifier(self.env[m.HISTORY_MODEL[file]]._table)
             if file == "legacy_flow_daily":
                 cols = (*m.FLOW_COLUMNS, "outflow")
                 sums = SQL(", ").join(SQL("SUM(%s)", SQL.identifier(c)) for c in cols)
                 self.cr.execute(
                     SQL(
-                        "SELECT warehouse_id, product_id, %s FROM %s WHERE company_id = %s AND warehouse_id = ANY(%s) "
+                        "SELECT warehouse_id, product_id, %s FROM %s WHERE company_id = %s %s "
                         "AND day >= %s AND day < %s GROUP BY warehouse_id, product_id ORDER BY 1, 2",
-                        sums, table, company.id, wh_ids, start, end,
+                        sums, table, self.company.id, wh_filter, start, end,
                     )
                 )  # fmt: skip
                 for wh_id, product_id, *values in self.cr.fetchall():
-                    if product_id not in variant_tmpl:
-                        variant_tmpl[product_id] = self.env["product.product"].browse(product_id).product_tmpl_id.id
-                    tmpl_id = variant_tmpl[product_id]
                     row = {
                         "month": month,
-                        "branch_key": wh_key.get(wh_id),
-                        "product_key": products.get(("product.template", tmpl_id)),
+                        "branch_key": self.wh_key.get(wh_id),
+                        "product_key": self.product_key.get(self._tmpl_of(product_id)),
                     }
                     row.update({c: _num(v) for c, v in zip(cols, values, strict=True)})
                     totals[file].append(row)
@@ -1004,18 +1213,18 @@ class _Run:
                 self.cr.execute(
                     SQL(
                         "SELECT warehouse_id, esb_menu_code, is_takeaway, product_id, %s FROM %s WHERE company_id = %s "
-                        "AND warehouse_id = ANY(%s) AND day >= %s AND day < %s "
+                        "%s AND day >= %s AND day < %s "
                         "GROUP BY warehouse_id, esb_menu_code, is_takeaway, product_id ORDER BY 1, 2, 3",
-                        sums, table, company.id, wh_ids, start, end,
+                        sums, table, self.company.id, wh_filter, start, end,
                     )
                 )  # fmt: skip
                 for wh_id, code, takeaway, product_id, *values in self.cr.fetchall():
-                    menu_key = self.menu_code_key.get(code)
-                    if menu_key is None and product_id:
-                        tmpl_id = self.env["product.product"].browse(product_id).product_tmpl_id.id
-                        menu_key = menus.get(("product.template", tmpl_id))
-                    row = {"month": month, "branch_key": wh_key.get(wh_id), "menu_key": menu_key}
-                    row["is_takeaway"] = bool(takeaway)
+                    row = {
+                        "month": month,
+                        "branch_key": self.wh_key.get(wh_id),
+                        "menu_key": self.menu_key(code, product_id, code_key),
+                        "is_takeaway": bool(takeaway),
+                    }
                     for col, value in zip(cols, values, strict=True):
                         row[col] = int(value or 0) if col == "trx_count" else _num(value)
                     totals[file].append(row)
@@ -1023,16 +1232,15 @@ class _Run:
                 self.cr.execute(
                     SQL(
                         "SELECT warehouse_id, COUNT(*), SUM(qty), SUM(total), SUM(discount), SUM(cogs) FROM %s "
-                        "WHERE company_id = %s AND warehouse_id = ANY(%s) AND date >= %s AND date < %s "
-                        "GROUP BY warehouse_id ORDER BY 1",
-                        table, company.id, wh_ids, start, end,
+                        "WHERE company_id = %s %s AND date >= %s AND date < %s GROUP BY warehouse_id ORDER BY 1",
+                        table, self.company.id, wh_filter, start, end,
                     )
                 )  # fmt: skip
                 for wh_id, count, qty, total, discount, cogs in self.cr.fetchall():
                     totals[file].append(
                         {
                             "month": month,
-                            "branch_key": wh_key.get(wh_id),
+                            "branch_key": self.wh_key.get(wh_id),
                             "rows": int(count),
                             "qty": _num(qty),
                             "total": _num(total),
@@ -1040,11 +1248,12 @@ class _Run:
                             "cogs": _num(cogs),
                         }
                     )
-        totals["bulk_check"] = self._bulk_check(company, lo_all, hi_all)
+        if bounds:
+            totals["bulk_check"] = self.bulk_check(min(b[0] for b in bounds), max(b[1] for b in bounds))
         return totals
 
-    def _bulk_check(self, company, lo, hi):
-        """Rekonsiliasi 5d: baris company ≠ company gudang, atau produk milik company lain (rentang segmen)."""
+    def bulk_check(self, lo, hi):
+        """Rekonsiliasi 5d: baris company ≠ company gudang, atau produk milik company lain (rentang)."""
         wrong = foreign = 0
         for model in m.HISTORY_MODEL.values():
             Model = self.env[model]
@@ -1054,7 +1263,7 @@ class _Run:
                 SQL(
                     "SELECT COUNT(*) FROM %s t JOIN stock_warehouse w ON w.id = t.warehouse_id "
                     "WHERE t.company_id = %s AND t.%s >= %s AND t.%s < %s AND w.company_id <> t.company_id",
-                    table, company.id, day, lo, day, hi,
+                    table, self.company.id, day, lo, day, hi,
                 )
             )  # fmt: skip
             wrong += int(self.cr.fetchone()[0])
@@ -1063,7 +1272,7 @@ class _Run:
                     "SELECT COUNT(*) FROM %s t JOIN product_product pp ON pp.id = t.product_id "
                     "JOIN product_template pt ON pt.id = pp.product_tmpl_id WHERE t.company_id = %s "
                     "AND t.%s >= %s AND t.%s < %s AND pt.company_id IS NOT NULL AND pt.company_id <> t.company_id",
-                    table, company.id, day, lo, day, hi,
+                    table, self.company.id, day, lo, day, hi,
                 )
             )  # fmt: skip
             foreign += int(self.cr.fetchone()[0])
@@ -1100,6 +1309,7 @@ def run_import(env, bundle: Bundle, opts: Options, commit=None) -> ImportResult:
     if history and any(model not in env for model in m.HISTORY_MODEL.values()):
         raise GateError("prasyarat histori: modul efn_legacy_history belum terpasang")
     user = find_migration_user(env, opts.migration_login)
+    created_at, older = check_replay(env, bundle, opts)
     brand = str(bundle.manifest["brand"])
     codes = [str(c) for c in bundle.manifest["company_codes"]]
     for entity, name in master:  # integritas semua baris master sebelum DB ditulis (§27.3: xmlid beda -> exit 3)
@@ -1117,6 +1327,10 @@ def run_import(env, bundle: Bundle, opts: Options, commit=None) -> ImportResult:
     run = _Run(menv, bundle, opts, companies, commit)
     for note in notes:
         run._note(note)
+    run.report["created_at"] = created_at.isoformat()
+    if older:
+        run.report["allow_older_used"] = True
+        run._note("allow_older: bundel LEBIH TUA dari run sukses terakhir diimpor atas izin eksplisit (SEC-198)")
     if history:
         run.prepass_history(history)
     savepoint = env.cr.savepoint() if opts.dry_run else None
@@ -1136,6 +1350,9 @@ def run_import(env, bundle: Bundle, opts: Options, commit=None) -> ImportResult:
     run.report["seconds"] = round(time.monotonic() - started, 3)
     exit_code = EXIT_DATA if run.failed > 0 else EXIT_OK
     run.report["exit_code"] = exit_code
+    if exit_code == EXIT_OK and not opts.dry_run:
+        record_replay(env, bundle, created_at)  # hanya run nyata yang sukses penuh (SEC-198)
+        run._checkpoint()
     _logger.info(
         "efn_mig_esb: run=%s brand=%s dry_run=%s gagal=%s irisan=%s",
         bundle.manifest["run_id"],
@@ -1176,6 +1393,87 @@ def build_result(bundle: Bundle, result: ImportResult, keys: Keys, now: datetime
         "files": files,
         "tool": {"importer": "efn_legacy_history.esb_import", "schema": 1},
     }
+    return build_bundle(manifest, members, keys, kind="result")
+
+
+def brand_for_companies(codes) -> str:
+    """Brand ESB unik untuk daftar PT (mode `totals` tanpa bundel); tidak unik / tidak dikenal -> ConfigError."""
+    brands = {b for b, cs in BRAND_COMPANIES.items() if set(codes) <= cs}
+    if len(brands) != 1:
+        raise ConfigError("mode totals: company harus milik satu brand ESB (sertakan 'brand' bila perlu)")
+    return brands.pop()
+
+
+def run_totals(env, brand: str, codes, months) -> ImportResult:
+    """Mode `totals` (tanpa impor, tanpa tulis): `odoo_totals` dari tabel histori Odoo untuk PT × bulan penuh,
+    semua gudang PT — dipakai `reconcile --final` setelah semua segmen diimpor."""
+    codes = sorted(set(codes or ()))
+    months = sorted(set(months or ()))
+    if not codes or not months or any(not isinstance(mo, str) or not _MONTH_RE.match(mo) for mo in months):
+        raise ConfigError("mode totals wajib companies dan months (YYYY-MM)")
+    if not set(codes) <= default_targets(brand):
+        raise GateError(f"mode totals: company {', '.join(codes)} bukan milik brand {brand}")
+    if any(model not in env for model in m.HISTORY_MODEL.values()):
+        raise GateError("prasyarat: modul efn_legacy_history belum terpasang")
+    xmlids = load_xmlids(env.cr, brand)
+    totals = _Totals.empty()
+    for code in codes:
+        company = env["res.company"].sudo().search([("efn_brand_code", "=", code)], limit=1)
+        if not company:
+            raise GateError(f"company {code} belum ada di Odoo target")
+        specs = []
+        for month in months:
+            year, mon = (int(p) for p in month.split("-"))
+            start = date(year, mon, 1)
+            end = date(year + mon // 12, mon % 12 + 1, 1)
+            specs += [(file, start, end, month) for file in HISTORY_ORDER]
+        part = _Totals(env(su=True), brand, code, company, xmlids).compute(specs)  # Environment tidak punya .sudo()
+        for file in HISTORY_ORDER:
+            totals[file] += part[file]
+        for key, value in part["bulk_check"].items():
+            totals["bulk_check"][key] += value
+    report = {
+        "mode": "totals",
+        "dry_run": False,  # tidak ada yang ditulis; tanpa map.jsonl -> writeback tidak berefek
+        "run_id": str(uuid.uuid4()),
+        "parent_run_id": None,
+        "brand": brand,
+        "company_codes": codes,
+        "months": months,
+        "steps": ["totals"],
+        "entities": {},
+        "slices": [],
+        "table_bytes": {},
+        "notes": [],
+        "errors": [],
+        "skipped_by_param": {},
+        "exit_code": EXIT_OK,
+    }
+    return ImportResult(report, totals, [], EXIT_OK)
+
+
+def build_totals_result(result: ImportResult, keys: Keys, now: datetime | None = None) -> bytes:
+    """Bundel hasil `kind=result` mode totals: import_report.json (`mode=totals`) + odoo_totals.json."""
+    report_bytes = canonical_json(result.report)
+    totals_bytes = canonical_json(result.totals)
+    stamp = (now or datetime.now(UTC)).astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    manifest = {
+        "run_id": result.report["run_id"],
+        "brand": result.report["brand"],
+        "company_codes": result.report["company_codes"],
+        "parent_run_id": None,
+        "segment": None,
+        "mode": "totals",
+        "months": result.report["months"],
+        "dry_run": False,
+        "created_at": stamp,
+        "files": [
+            {"name": "import_report.json", "entity": "import_report", "sha256": sha256_hex(report_bytes)},
+            {"name": "odoo_totals.json", "entity": "odoo_totals", "sha256": sha256_hex(totals_bytes)},
+        ],
+        "tool": {"importer": "efn_legacy_history.esb_import", "schema": 1},
+    }
+    members = {"import_report.json": report_bytes, "odoo_totals.json": totals_bytes}
     return build_bundle(manifest, members, keys, kind="result")
 
 
