@@ -10,7 +10,7 @@
   **R-O11** (§5); Q-ESB1, Q-ESB7, Q-ESB9 (`docs/04` §25.9); pertanyaan baru **Q-VPS1..Q-VPS9** (§6)
 - **Terkait:** ADR-004 (topologi, VPS Indonesia + LUKS), ADR-022 (TLS & enkripsi at rest), ADR-023 (WireGuard),
   ADR-024 (kredensial per service), ADR-037 (egress allowlist), ADR-040 (datamart ESB), ADR-041 (insight-web),
-  K25-02, K25-06, `docs/compliance/PDP_DATA_INVENTORY.md` §2.8.12 (v16), `docs/compliance/PDP_TRANSFER_LINTAS_NEGARA.md`
+  K25-02, K25-06, `docs/compliance/PDP_DATA_INVENTORY.md` §2.8.13 (v17), `docs/compliance/PDP_TRANSFER_LINTAS_NEGARA.md`
   P9, `docs/compliance/PERSETUJUAN_PEMROSESAN_VPS_BIMA.md` (draf lampiran persetujuan)
 
 > **Ringkasan manajemen.** Laptop pengembang tidak bisa menyala terus, padahal penarikan histori ESB 24 bulan butuh
@@ -127,7 +127,7 @@ rotasi secret, hapus salinan, catat di register `PDP_DATA_INVENTORY.md` §6.
 | G-5 | **Q-ESB9**: hak klien atas data & penggunaan API massal menurut kontrak ESB (termasuk apakah pemrosesan oleh pihak ketiga diizinkan kontrak ESB) | Legal klien | Jawaban tertulis |
 | G-6 | **Q-VPS1..Q-VPS3** dijawab: penyedia & lokasi DC, spesifikasi (dukungan LUKS/VM), daftar pemegang root & akses konsol penyedia | Bima Creative | Lembar jawaban |
 | G-7 | Bila DC di luar Indonesia: catatan transfer lintas negara disetujui DPO (`PDP_TRANSFER_LINTAS_NEGARA.md` P9, Q-T8). **Rekomendasi: wajib DC Indonesia** (selaras ADR-004, Q-P20) | DPO | Keputusan Q-T8 |
-| G-8 | Entri `PDP_DATA_INVENTORY.md` §2.8.12 disetujui DPO | DPO | Status entri |
+| G-8 | Entri `PDP_DATA_INVENTORY.md` §2.8.13 disetujui DPO | DPO | Status entri |
 | G-9 | Kontrol teknis §3.4 terpasang dan **diperiksa** (checklist + review `efn-security-reviewer`) | devsecops, security-reviewer | Laporan review |
 | G-10 | Pemilik proyek menyetujui pengecualian K25-06 (lalu efn-lead menambah catatan di `CLAUDE.md`) | Pemilik proyek | Status ADR → Accepted |
 
@@ -181,7 +181,7 @@ rotasi secret, hapus salinan, catat di register `PDP_DATA_INVENTORY.md` §6.
   (contoh rumusan: "Pengecualian ADR-043: VPS Bima Creative untuk lingkungan dev tanpa data/secret klien; ekstraksi ESB
   di VPS hanya setelah gerbang ADR-043 §3.3"). **Architect tidak mengubah `CLAUDE.md`.** Sampai disetujui, bunyi
   K25-06 tetap berlaku untuk B.
-- `PDP_DATA_INVENTORY.md` v16 §2.7 + §2.8.12 + Q-P30/Q-P31 (dibuat bersama ADR ini).
+- `PDP_DATA_INVENTORY.md` v17 §2.7 + §2.8.13 + Q-P30/Q-P31 (dibuat bersama ADR ini).
 - `PDP_TRANSFER_LINTAS_NEGARA.md` P9 + Q-T8 (dibuat bersama ADR ini).
 - `PERSETUJUAN_PEMROSESAN_VPS_BIMA.md` (draf lampiran persetujuan, dibuat bersama ADR ini).
 - `docs/01` §5.13: Q-VPS1..Q-VPS9 + catatan usulan R-S19, R-S20, R-O11 (dibuat bersama ADR ini); baris risiko di

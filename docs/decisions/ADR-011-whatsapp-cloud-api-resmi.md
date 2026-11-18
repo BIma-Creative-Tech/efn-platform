@@ -1,7 +1,13 @@
 # ADR-011: WhatsApp Cloud API Resmi (Meta) via Akun Langsung atau BSP — Baileys Dilarang
 
-- **Status:** Proposed
+- **Status:** Proposed — **diubah sebagian oleh [ADR-044](ADR-044-whatsapp-unofficial-promo-notify-me.md)** (18 Nov 2026)
 - **Tanggal:** 2026-10-05
+
+> **Catatan revisi 18 Nov 2026 (ADR-044, Proposed).** Atas pilihan eksplisit pemilik proyek, larangan Baileys di bagian
+> Keputusan **dibatalkan sebagian**: library tidak resmi boleh dipakai **hanya** untuk promo personal & notify-me/price
+> alert supermarket, di service terisolasi `services/wa-unofficial` dengan nomor terpisah, `WA_UNOFFICIAL_ENABLED=false`
+> default dan OFF di production sampai penerimaan risiko tertulis pemilik proyek + Legal (Q-SM14). OTP, pesanan,
+> pembayaran, loyalty, dan semua pesan transaksional **tetap** Cloud API resmi sesuai ADR ini.
 - **Pemutus (klien):** IT Lead + Finance (biaya per pesan) + Legal (ToS & PDP)
 - **Referensi review:** D-11, R-S04, R-B02, R-L01
 

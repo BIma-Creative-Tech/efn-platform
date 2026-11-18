@@ -4,7 +4,7 @@
   pemrosesan data (DPA); lampiran ini merangkum hal yang perlu disetujui dan menjadi lampiran DPA.
 - **Tanggal draf:** 18 November 2026 · Penyusun: efn-architect (tim proyek EFN Platform)
 - **Rujukan teknis:** `docs/decisions/ADR-043-vps-bima-creative-dev-dan-ekstraksi-esb.md`, ADR-040 (datamart ESB),
-  `docs/compliance/PDP_DATA_INVENTORY.md` §2.8.11–§2.8.12, `docs/compliance/PDP_TRANSFER_LINTAS_NEGARA.md` P9
+  `docs/compliance/PDP_DATA_INVENTORY.md` §2.8.11 dan §2.8.13, `docs/compliance/PDP_TRANSFER_LINTAS_NEGARA.md` P9
 - **Catatan Legal:** rujukan pasal UU No. 27 Tahun 2022 tentang Pelindungan Data Pribadi di bawah adalah rujukan kerja
   tim teknis dan **wajib diverifikasi Legal**. Isian bertanda `[…]` dilengkapi para pihak.
 
@@ -108,7 +108,7 @@ klien dan dilindungi kewajiban kerahasiaan yang sama.
 | 3 | Izin beban penarikan histori dari klien/ESB (Q-ESB7) | [ ] |
 | 4 | Konfirmasi hak klien atas data dan penggunaan API ESB, termasuk oleh pihak ketiga (Q-ESB9) | [ ] |
 | 5 | Lokasi data center, spesifikasi, dan daftar pemegang akses diketahui (Q-VPS1..Q-VPS3) | [ ] |
-| 6 | Persetujuan DPO atas catatan inventaris data (PDP_DATA_INVENTORY §2.8.12) dan, bila perlu, transfer lintas negara (Q-T8) | [ ] |
+| 6 | Persetujuan DPO atas catatan inventaris data (PDP_DATA_INVENTORY §2.8.13) dan, bila perlu, transfer lintas negara (Q-T8) | [ ] |
 | 7 | Pemeriksaan kontrol keamanan butir 5 oleh tim keamanan proyek | [ ] |
 
 ## 11. Persetujuan

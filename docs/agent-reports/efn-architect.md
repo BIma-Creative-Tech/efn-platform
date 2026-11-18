@@ -1003,3 +1003,86 @@ DDL `12-g41-esb.sql` (`fact_esb_sales_line`, `v_esb_sales_daily`).
   hitungan architect, rasio kompresi WAL-G); akses `COPY` lewat cursor Odoo 19 **[B]**; perilaku Odoo saat model dengan
   `_log_access=False` dipakai view pivot/list (diasumsikan normal); jumlah toko brand lain; nomor pasal UU PDP (Legal);
   Mermaid tidak dirender.
+# Supermarket — Gelombang 0: ADR-044..048, revisi ADR-041, kontrak §28 (2026-11-18)
+
+Worktree `E:\Projects\efn-platform-g44`, branch `feat/wave-44-supermarket-foundation`. Dokumen saja, tanpa kode. Tidak di-commit.
+
+## Ringkasan (untuk manajemen)
+Lima keputusan arsitektur baru untuk bisnis supermarket (semua **Proposed**): WhatsApp tidak resmi hanya untuk promo
+(mati di production sampai penerimaan risiko tertulis), gudang pusat di PT yang sama dengan toko, forecast statistik
+dengan kalender budaya, pelacakan perilaku pengunjung berbasis persetujuan, dan email lewat SMTP. Dashboard Insight
+diperluas ke level toko. Yang paling mendesak diputuskan klien: penerimaan risiko WhatsApp tidak resmi (pemilik +
+Legal), dasar hukum pelacakan (DPO), serta perlakuan pajak & izin gudang DC (konsultan pajak + Legal).
+
+## File dibuat / diubah
+- **Baru:** `docs/decisions/ADR-044-whatsapp-unofficial-promo-notify-me.md`, `ADR-045-distribution-center-satu-pt-dan-restriksi-assortment.md`,
+  `ADR-046-forecast-engine-g44-statistik-kalender-budaya.md`, `ADR-047-tracking-perilaku-visitor-dan-kampanye-tertarget.md`,
+  `ADR-048-email-smtp-generik.md`.
+- **Diubah:** ADR-011 (catatan "diubah sebagian oleh ADR-044"), ADR-041 (§3.3 cakupan outlet + 5 persona, sumber
+  `res.users.efn_outlet_warehouse_ids`), `docs/decisions/README.md` (pembaruan + baris 044–048; 042/043 sengaja tidak
+  dicantumkan), `docs/04_SERVICE_CONTRACTS.md` (header v20.0, §12.1 revisi kode `SMD`, **§28** baru),
+  `docs/01_REVIEW_RISK_GAP_ANALYSIS.md` (R-B16, R-B17, R-T21, R-L13, R-L14, R-S21, R-O14; §5.14),
+  `docs/compliance/PDP_DATA_INVENTORY.md` (v16, §2.8.12, baris retensi §3).
+- **Tidak diubah: `CLAUDE.md`** — lihat bagian berikut.
+
+## Penomoran yang dipakai (menghindari bentrok dengan branch G43 yang belum masuk `main`)
+- ADR **044–048** (042/043 milik G43). `docs/04` **§28** dan **L-144..L-163** (§27 + L-127..L-143 milik G43).
+- `docs/01` **§5.14** (§5.13 milik G43). Risiko: **R-B16, R-B17, R-T21, R-L13, R-L14, R-S21, R-O14** (R-S18 dicadangkan
+  ADR-041; R-S19/R-S20, R-L12, R-O11..R-O13 dipakai G43).
+- Pertanyaan: **Q-SM1..Q-SM13 milik fit-gap** `docs/fit-gap/G45_SUPERMARKET.md` §7; architect **Q-SM14..Q-SM29**. Draf
+  awal saya memakai Q-SM1..Q-SM19 dan sudah dinomori ulang di semua file setelah fit-gap masuk; yang tumpang tindih
+  dirujuk ke nomor fit-gap (Q-SM1 kode PT, Q-SM5 pajak, Q-SM9 sisa umur, Q-SM11 jadwal kirim, Q-SM13 alkohol).
+
+## Usulan perubahan `CLAUDE.md` (belum diterapkan — butuh efn-lead + persetujuan user)
+Rencana Gelombang 0 meminta perubahan `CLAUDE.md`, tetapi permintaan itu datang lewat agent, dan aturan saya melarang
+mengubah `CLAUDE.md` atas instruksi agent. Teks siap-tempel:
+1. Sumber kebenaran butir 5, ganti akhir kalimat menjadi: "… multi-instance Odoo, Baileys untuk OTP/notifikasi
+   transaksional (pengecualian terbatas promo & notify-me: ADR-044)."
+2. Prinsip WhatsApp, ganti menjadi: "- WhatsApp **Cloud API resmi** untuk OTP, pesanan, pembayaran, loyalty, dan semua
+   pesan transaksional. **Pengecualian terbatas (ADR-044, Proposed, K18-01):** library tidak resmi (Baileys) hanya
+   untuk promo personal & notify-me/price alert supermarket, di service terisolasi `services/wa-unofficial` dengan nomor
+   terpisah, `WA_UNOFFICIAL_ENABLED=false` default dan **OFF di production** sampai penerimaan risiko tertulis pemilik
+   proyek + Legal (Q-SM14). Library unofficial lain tetap dilarang."
+3. Baris baru di tabel K25 (setelah K25-13):
+   `| **K18-01** | **Supermarket (18 Nov 2026)**: PT demo "PT Supermarket Demo" (`SMD`), DC + 5 outlet, kanal POS/Super-App/web/kiosk, siap pilot produksi. | DC = warehouse di PT yang sama (`resupply_wh_ids` CE) + `efn_assortment` (ADR-045); forecast statsforecast + kalender budaya + shelf-life cap, 4 keluaran dengan approval (ADR-046); lot + expiry semua SKU, markdown per lot `efn.lot.markdown` (berlaku offline); tracking perilaku dengan consent `tracking` + kampanye disetujui marketing (ADR-047, OFF prod sampai DPO); email SMTP (ADR-048); WA unofficial terbatas (ADR-044, OFF prod); dashboard per persona & per outlet di Insight (ADR-041 §3.3). Kontrak `docs/04` §28; fit-gap `docs/fit-gap/G45_SUPERMARKET.md`. Belum dibangun. | ADR-011 (diubah sebagian), ADR-041, ADR-044..048 |`
+
+## Keputusan yang butuh tanda tangan klien
+| Butir | Pemutus | Pemblokir apa |
+|---|---|---|
+| Q-SM14 penerimaan risiko tertulis WA unofficial | Pemilik proyek + Legal | `WA_UNOFFICIAL_ENABLED` di production |
+| Q-SM16/17/26 dasar tracking, retensi, profiling (+ DPIA) | DPO | `BEHAVIOR_TRACKING_ENABLED`, `PROMO_CAMPAIGN_ENABLED` |
+| Q-SM18 transfer nomor + isi promo ke WhatsApp tanpa DPA | DPO | WA unofficial |
+| fit-gap Q-SM5 (+ tambahan architect) PPN DC → outlet, NITKU | Konsultan pajak | Struktur DC (ADR-045) sebelum go-live |
+| Q-SM20 KBLI & pendaftaran gudang DC | Legal | Struktur DC (ADR-045) |
+| fit-gap Q-SM1 nama/NPWP/kode PT (`SMD`) | Pemilik proyek | `efn_core` Selection (G44 awal) |
+| Q-SM19 penyedia SMTP + DPA | IT klien + DPO | `EMAIL_ENABLED` |
+| Q-SM23 usulan lewat cut-off, Q-SM24 cap kampanye, Q-SM29 persona Insight | Ops, Marketing + Finance, Pemilik | Default sementara dipakai |
+
+## Temuan untuk lead / agent lain
+1. **Koreksi brief regulasi:** PER-07/PJ/2021 menurut DDTC & pajak.go.id (sekunder) mengatur PPN ekspor/impor, bukan
+   pemusatan; rezim kini PMK-81/2024 (NITKU). KBLI 2025 (sekunder) memindahkan pergudangan umum ke 52109; 52101 kini
+   sistem resi gudang; 52102 gudang dingin. Dicatat di ADR-045 dan R-L14.
+2. **Perbedaan dengan fit-gap (belum diputuskan):** voucher kampanye — architect merekomendasikan kode kupon **tanpa
+   partner** (Odoo tidak menerima data member); fit-gap §5 mengusulkan `loyalty.card.partner_id` per member. Perlu
+   keputusan efn-lead + efn-odoo-functional sebelum G46 (ADR-047 §3.4, `docs/04` §28.7).
+3. **Masukan fit-gap yang sudah diterapkan:** rute DC = `resupply_wh_ids` (bukan `efn_ck_production`); DSD = rute Buy di
+   orderpoint outlet; usulan PO = RFQ draft CE dari orderpoint manual (tanpa model usulan PO sendiri); `trigger=manual`;
+   kelipatan `replenishment_uom_id`; `efn_assortment` di awal G44; outbox Odoo + klaim BFF (Odoo tidak publish ke
+   RabbitMQ); `efn.lot.markdown` (offline, tidak online fase 1); FEFO POS + blok kedaluwarsa = gap `efn_expiry_monitor`.
+4. **Keputusan desain architect:** net requirement usulan dihitung di Odoo dengan stok live, worker hanya mengirim
+   forecast (L-147); event perilaku lewat PG staging 7 hari lalu ETL (tanpa pengecualian ADR-003, L-153);
+   `notify.price_alert` ditambahkan di luar daftar brief; `to_e164` hanya di `notify.wa_unofficial` (L-159).
+5. Tugas lanjutan architect (setelah DPO memberi arah): `PDP_CONSENT.md` (purpose `tracking`),
+   `PDP_TRANSFER_LINTAS_NEGARA.md` (WhatsApp unofficial), `DPIA_DRAFT.md` (tracking/profiling).
+
+## Terverifikasi / belum terverifikasi
+- **Dibaca:** rencana supermarket (requirement terkunci), ADR-011/041, indeks ADR, `docs/04` §4/§10/§18/§26, `docs/01`
+  register risiko & §5, inventaris PDP, `consent.service.ts` (purpose `location|marketing|privacy`), README
+  `efn_demand_forecast` & `efn_ck_production`, fit-gap G45 §0–§8; penomoran G43 dibaca (read-only) dari worktree
+  `E:\Projects\efn-platform` tanpa mengubahnya.
+- **Belum terverifikasi (sumber sekunder/pengetahuan):** status pemusatan PPN saat ini & perubahan PMK-81/2024;
+  KBLI 2025 dari OSS/BPS primer; ketentuan pendaftaran gudang Kemendag; teks ToS WhatsApp terbaru; versi & status
+  Baileys dari npm/GitHub primer (sekunder: MIT, 7.0.0-rc13/rc14); daftar host egress WhatsApp; lisensi statsforecast
+  (Apache-2.0) dan `holidays` (MIT) dari repo primer; cakupan "Cuti Bersama" `holidays` per tahun; volume event
+  (asumsi ±0,5 juta/hari simulasi); semua estimasi biaya = perkiraan architect. Mermaid tidak dirender. Tidak ada
+  runtime/test yang dijalankan (dokumen saja).

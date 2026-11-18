@@ -218,7 +218,7 @@ flowchart LR
   §27.3a). Kompresi sebelum enkripsi aman di sini (tidak ada masukan penyerang yang dicampur rahasia secara interaktif).
 - Retensi: bundel dan laporan antara **dihapus ≤ 90 hari setelah berita acara rekonsiliasi** brand ditandatangani
   (Q-ESB24); laporan rekonsiliasi (tanpa data pribadi) disimpan sebagai lampiran berita acara. Inventaris PDP: entri
-  "Bundel migrasi ESB" + tabel arsip Odoo (`PDP_DATA_INVENTORY.md` §2.8.13, v17).
+  "Bundel migrasi ESB" + tabel arsip Odoo (`PDP_DATA_INVENTORY.md` §2.8.14, v18).
 - User teknis Odoo `efn_migration` (tanpa password/API key, `active=False` di luar jendela migrasi) agar setiap tulis
   ORM teraudit lewat `create_uid/write_uid`; tulis SQL bulk tercatat di `import_report.json` (jumlah baris per irisan,
   `run_id`) karena tidak melewati ORM.
@@ -320,7 +320,7 @@ TB & daftar AR/AP per tanggal cutover, penandatanganan berita acara.
 - `docs/04` §25.4/§25.5: entitas ekstraktor baru (E1–E10) dan kunci `map_esb_odoo` → revisi saat dibangun (data-ai).
 - `docs/01`: R-O12, R-O13, R-L12 (§4) dan Q-ESB10..24 (§5.12) — **dimasukkan**.
 - `docs/08` §6.4: kode PT validator — **diperbarui**.
-- `docs/compliance/PDP_DATA_INVENTORY.md` v17 §2.8.13 — **ditambahkan** (menunggu DPO).
+- `docs/compliance/PDP_DATA_INVENTORY.md` v18 §2.8.14 — **ditambahkan** (menunggu DPO).
 - ADR-040 §3.1/§3.2/§4.4 — **dipersempit**.
 
 ## 5. Risiko terkait
