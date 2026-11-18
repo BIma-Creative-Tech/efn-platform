@@ -33,6 +33,13 @@
 #           ESB_BASE_URL bukan https://services.esb.co.id/; ESB_ENABLED / ESB_ALLOW_IGNORE_WINDOW bukan default false di
 #           render prod-esb; ESB_USER_* ter-render berisi nilai di render prod-esb tanpa .env, atau nilai ESB_USER_*
 #           di-hardcode di overlay/.env.example; username akun ESB lama tertulis di repo (SEC-180)
+#   - (G42) insight_sso_key di luar odoo/insight-web, insight_session_key di luar insight-web, insight_scope_key /
+#           clickhouse_password_insight di luar clickhouse-init/insight-web, tls_insight_web_key di luar insight-web-tls,
+#           atau secret wajib tidak di-mount / env *_FILE tidak cocok; network insight-ingress dipakai selain
+#           traefik/insight-web/blackbox-exporter, insight-data selain clickhouse/insight-web; insight-web di network lain
+#           (egress/internal/data), tanpa read_only/cap_drop ALL; insight-web-tls --allow-cn selain traefik/blackbox-exporter;
+#           CH_URL / EFN_INSIGHT_ODOO_URL / EFN_INSIGHT_URL bukan https://; INSIGHT_ENABLED bukan boolean, atau bukan
+#           default false di render prod (insight-web + odoo)
 #   - (at rest) service metabase tanpa secret metabase_encryption_key / dengan MB_ENCRYPTION_SECRET_KEY di env /
 #     dengan override entrypoint apa pun termasuk `[]`/`''` / dengan image resmi metabase/metabase (G16b, SEC-86)
 # Pengecualian hanya lewat ADR-022; tambahkan di sini dengan komentar alasan.
@@ -322,6 +329,58 @@ check_compose() {
       | (.key | capture("^ESB_PASSWORD_(?<k>[A-Z0-9]+)_FILE$") | .k) as $k
       | [$k, (.value // ""), (if ($m | index("esb_core_password_" + ($k | ascii_downcase))) != null then "1" else "0" end)]
       | @tsv' <<< "$json")
+  # 6b4) G42 (docs/04 §26.10/§26.11, ADR-041): dashboard insight-web + SSO Odoo. Least privilege secret (kunci SSO bocor =
+  #      pemalsuan sesi semua brand, R-S18), secret wajib ter-mount dengan env *_FILE yang cocok, network khusus
+  #      (insight-ingress: Traefik/blackbox; insight-data: ClickHouse), tanpa egress, https saja.
+  local ins isvc ienv isec
+  for ins in "insight_sso_key:odoo,insight-web" "insight_session_key:insight-web" \
+             "insight_scope_key:clickhouse-init,insight-web" "clickhouse_password_insight:clickhouse-init,insight-web" \
+             "tls_insight_web_key:insight-web-tls"; do
+    jq -e --arg s "${ins%%:*}" --arg ok "${ins#*:}" '
+        [.services | to_entries[] | select([.value.secrets[]? | (.source // .)] | index($s) != null) | .key]
+        - ($ok | split(",")) | length == 0' <<< "$json" > /dev/null \
+      || err "[$label] secret ${ins%%:*} di-mount ke service selain ${ins#*:} (least privilege, docs/04 §26.10)"
+  done
+  for ins in odoo:EFN_INSIGHT_SSO_KEY_FILE:insight_sso_key insight-web:INSIGHT_SSO_KEY_FILE:insight_sso_key \
+             insight-web:INSIGHT_SESSION_KEY_FILE:insight_session_key insight-web:INSIGHT_SCOPE_KEY_FILE:insight_scope_key \
+             insight-web:CH_PASSWORD_FILE:clickhouse_password_insight; do
+    IFS=: read -r isvc ienv isec <<< "$ins"
+    jq -e --arg svc "$isvc" --arg e "$ienv" --arg s "$isec" '
+        (.services[$svc] == null)
+        or (([.services[$svc].secrets[]? | (.source // .)] | index($s) != null)
+            and ((.services[$svc].environment // {})[$e] == ("/run/secrets/" + $s)))' <<< "$json" > /dev/null \
+      || err "[$label] ${isvc}: secret ${isec} tidak di-mount atau ${ienv} != /run/secrets/${isec} (docs/04 §26.10)"
+  done
+  # clickhouse-init WAJIB membawa kedua secret insight (tanpa itu init gagal di semua env, docs/04 §26.7)
+  jq -e '(.services["clickhouse-init"] // null) as $c | $c == null
+         or (([$c.secrets[]? | (.source // .)]) as $m
+             | ($m | index("clickhouse_password_insight")) != null and ($m | index("insight_scope_key")) != null)' \
+      <<< "$json" > /dev/null \
+    || err "[$label] clickhouse-init: secret clickhouse_password_insight + insight_scope_key wajib di-mount (docs/04 §26.7)"
+  jq -e '[.services | to_entries[] | select((.value.networks // {}) | has("insight-ingress")) | .key]
+         - ["traefik", "insight-web", "blackbox-exporter"] | length == 0' <<< "$json" > /dev/null \
+    || err "[$label] network insight-ingress dipakai service selain traefik/insight-web/blackbox-exporter (docs/04 §26.11)"
+  jq -e '[.services | to_entries[] | select((.value.networks // {}) | has("insight-data")) | .key]
+         - ["clickhouse", "insight-web"] | length == 0' <<< "$json" > /dev/null \
+    || err "[$label] network insight-data dipakai service selain clickhouse/insight-web (docs/04 §26.11)"
+  jq -e '(.services["insight-web"] // null) as $w | $w == null
+         or (((($w.networks // {}) | keys) - ["insight-ingress", "insight-data"] | length == 0)
+             and ($w.read_only == true)
+             and ((($w.cap_drop // []) | index("ALL")) != null)
+             and ((($w.environment // {}).CH_URL // "") | startswith("https://"))
+             and ((($w.environment // {}).EFN_INSIGHT_ODOO_URL // "") | startswith("https://"))
+             and ((($w.environment // {}).INSIGHT_ENABLED // "") | tostring | test("^(true|false)$")))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] insight-web: wajib hanya network insight-ingress+insight-data (tanpa egress), read_only, cap_drop ALL, CH_URL & EFN_INSIGHT_ODOO_URL https://, INSIGHT_ENABLED boolean (docs/04 §26.10/§26.11)"
+  jq -e '(.services["insight-web-tls"] // null) as $t | $t == null
+         or ([$t.command[]? | select(startswith("--allow-cn=")) | ltrimstr("--allow-cn=")]
+             - ["traefik", "blackbox-exporter"] | length == 0)' <<< "$json" > /dev/null \
+    || err "[$label] insight-web-tls: --allow-cn hanya traefik/blackbox-exporter (docs/04 §26.11)"
+  jq -e '(.services.odoo // null) as $o | $o == null
+         or (((($o.environment // {}).EFN_INSIGHT_URL // "") | startswith("https://"))
+             and ((($o.environment // {}).INSIGHT_ENABLED // "") | tostring | test("^(true|false)$")))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] odoo: EFN_INSIGHT_URL wajib https:// dan INSIGHT_ENABLED boolean (docs/04 §26.2)"
   # 6a) G21 (docs/04 §13.1 no. 3, L-61): kunci tanda tangan kebijakan poin WAJIB di-mount ke odoo (penanda tangan) DAN
   #     api-gateway (pemverifikasi) dengan env *_FILE yang cocok; di luar keduanya sudah ditolak loop di atas.
   local lp
@@ -399,6 +458,15 @@ check_compose() {
       jq -e --arg k "$ks" '(.services.etl.environment[$k] // "") == "false"' <<< "$json" > /dev/null \
         || err "[$label] etl: ${ks} harus diteruskan dengan default false di render prod (QA G22 P2-3)"
     done
+    # G42 (L-125): kill switch Insight default MATI di render prod (Odoo + insight-web; aktivasi lewat config rilis +
+    # EFN_ALLOW_FEATURE_ON Superadmin, deploy-validate)
+    for ks in odoo insight-web; do
+      jq -e --arg s "$ks" '(.services[$s] == null) or ((.services[$s].environment.INSIGHT_ENABLED // "") == "false")' \
+          <<< "$json" > /dev/null \
+        || err "[$label] ${ks}: INSIGHT_ENABLED harus diteruskan dengan default false di render prod (docs/04 §26.11, L-125)"
+    done
+    jq -e '.services["insight-web"] != null' <<< "$json" > /dev/null \
+      || err "[$label] insight-web tidak ter-render (profil data, docs/04 §26.11)"
   fi
 
   # 8) G41: kill switch ekstraksi ESB default MATI di render prod + overlay (aktivasi lewat .env/config, runbook esb-extract)

@@ -32,6 +32,13 @@ http:
       certificates:
         - certFile: /run/secrets/tls_traefik_crt
           keyFile: /run/secrets/tls_traefik_key
+    # G42 (docs/04 §26.11): sidecar insight-web-tls (--allow-cn=traefik), network insight-ingress
+    efn-insight-web:
+      serverName: insight-web
+      rootCAs: [/run/secrets/efn_ca_crt]
+      certificates:
+        - certFile: /run/secrets/tls_traefik_crt
+          keyFile: /run/secrets/tls_traefik_key
     efn-grafana:
       serverName: grafana
       rootCAs: [/run/secrets/efn_ca_crt]

@@ -1,0 +1,122 @@
+-- Akses read-only Dashboard Insight (G42 bagian B; ADR-041 Proposed, ADR-040 Proposed, K25-02, SEC-04).
+-- User ClickHouse `efn_insight` (service insight-web) HANYA membaca database `efn_insight`: view SQL SECURITY DEFINER
+-- di atas efn_dwh.v_esb_* dengan kolom eksplisit. Row policy cakupan PT `efn_insight_scope` (company_code + tanda tangan
+-- SHA256(kunci|cids|codes), format = text2sql, kunci = secret `insight_scope_key`) memuat kunci rahasia -> dibuat
+-- clickhouse-init.sh, BUKAN di file ini.
+-- clickhouse-init.sh juga membuat user dari secret `clickhouse_password_insight` dan mengikat role/profile ke user.
+-- Dijalankan clickhouse-init.sh setiap deploy (idempoten) SETELAH init/*.sql (view 12-g41-esb.sql + 13-g42-insight.sql).
+-- Butuh user admin dengan access management (bukan user aplikasi).
+
+-- readonly=2: tidak bisa menulis/DDL/mengubah readonly, tetapi boleh SETTINGS per query (insight-web mengirim
+-- SQL_efn_cids/SQL_efn_codes/SQL_efn_sig + param_*). Batas atas dikunci MAX sehingga tidak bisa dinaikkan klien.
+-- result_overflow_mode = 'throw': ekspor CSV yang melebihi batas gagal jelas, bukan terpotong diam-diam.
+CREATE SETTINGS PROFILE IF NOT EXISTS insight_readonly SETTINGS
+    readonly = 2 CONST,
+    allow_ddl = 0 CONST,
+    allow_introspection_functions = 0 CONST,
+    max_execution_time = 30 MAX 60,
+    max_result_rows = 200000 MAX 200000,
+    result_overflow_mode = 'throw',
+    max_rows_to_read = 500000000 MAX 500000000,
+    max_memory_usage = 2000000000 MAX 4000000000,
+    -- 24: SATU user dipakai bersama semua staf; insight-web membatasi 12 query in-flight per proses (semaphore,
+    -- INSIGHT_CH_MAX_CONCURRENCY) sehingga ekspor CSV tetap muat. 8 (awal) gagal di uji E2E G42 (galat 202).
+    max_concurrent_queries_for_user = 24 MAX 24;
+-- Profil dari deploy sebelumnya (CREATE ... IF NOT EXISTS tidak mengubahnya) -- pola esb-access.sql.
+ALTER SETTINGS PROFILE insight_readonly SETTINGS
+    readonly = 2 CONST,
+    allow_ddl = 0 CONST,
+    allow_introspection_functions = 0 CONST,
+    max_execution_time = 30 MAX 60,
+    max_result_rows = 200000 MAX 200000,
+    result_overflow_mode = 'throw',
+    max_rows_to_read = 500000000 MAX 500000000,
+    max_memory_usage = 2000000000 MAX 4000000000,
+    -- 24: SATU user dipakai bersama semua staf; insight-web membatasi 12 query in-flight per proses (semaphore,
+    -- INSIGHT_CH_MAX_CONCURRENCY) sehingga ekspor CSV tetap muat. 8 (awal) gagal di uji E2E G42 (galat 202).
+    max_concurrent_queries_for_user = 24 MAX 24;
+
+CREATE ROLE IF NOT EXISTS insight_reader;
+
+-- Pertahanan berlapis: role ini tidak pernah punya hak di efn_dwh / efn_esb (hanya efn_insight).
+REVOKE ALL ON efn_dwh.* FROM insight_reader;
+REVOKE ALL ON efn_esb.* FROM insight_reader;
+
+-- Definer view efn_insight: tidak bisa login (HOST NONE, tanpa password). Hak MINIMUM: view v_esb_* yang dibaca +
+-- tabel dasarnya (view efn_dwh.v_esb_* bertipe INVOKER -> dieksekusi dengan hak definer ini). Lebih sempit dari pola
+-- text2sql (efn_dwh.*): tanpa mart Odoo/GL/audit, tanpa efn_esb.raw_doc / bom_ratio.
+-- Daftar ini diuji test_insight_access.py terhadap semua tabel yang dirujuk view (rekursif).
+CREATE USER IF NOT EXISTS efn_insight_definer NOT IDENTIFIED HOST NONE;
+GRANT SELECT ON efn_dwh.v_esb_sales_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_payment_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_flow_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_menu_mix TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_data_quality TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_data_quality_pt TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_sales_branch_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_branch_list TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_product_list TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.dim_esb_branch TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.dim_esb_product TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.dim_esb_menu TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.dim_esb_product_alias TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.fact_esb_sales_line TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.fact_esb_payment_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.fact_esb_fin_sold_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.fact_esb_production TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.fact_esb_delivery TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.fact_esb_transfer TO efn_insight_definer;
+GRANT SELECT ON efn_esb.extract_checkpoint TO efn_insight_definer;
+GRANT SELECT ON efn_esb.extract_run TO efn_insight_definer;
+
+CREATE DATABASE IF NOT EXISTS efn_insight;
+
+-- Semua view punya kolom company_code (target row policy). Kolom = katalog docs/design/insight-web-queries.md.
+-- Tanpa kolom identitas (tidak ada di mart ESB: L-110).
+CREATE OR REPLACE VIEW efn_insight.v_esb_sales_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT sales_date, brand, company_code, branch_id, branch_name, menu_code, menu_name, menu_category,
+       menu_category_detail, is_takeaway, qty, gross, discount, net, cogs, trx_count
+FROM efn_dwh.v_esb_sales_daily;
+
+-- KPI Transaksi / rata-rata per transaksi (trx_count unik per cabang-hari; Q-INS2).
+CREATE OR REPLACE VIEW efn_insight.v_esb_sales_branch_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT sales_date, brand, company_code, branch_id, branch_name, trx_count, line_count, qty, gross, discount, net, cogs
+FROM efn_dwh.v_esb_sales_branch_daily;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_payment_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT sales_date, brand, company_code, branch_id, branch_code, branch_name, payment_type, payment_method,
+       payment_count, amount, mdr, net
+FROM efn_dwh.v_esb_payment_daily;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_flow_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT day, brand, company_code, branch_id, branch_name, product_code, product_name, ck_prod, ck_out, in_ck,
+       in_other, store_prod, st_in, st_out, sold
+FROM efn_dwh.v_esb_flow_daily;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_menu_mix DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT month, brand, company_code, branch_id, branch_name, menu_category, is_takeaway, qty, net, share_qty, share_net
+FROM efn_dwh.v_esb_menu_mix;
+
+-- Sumber = v_esb_data_quality_pt (company_code terisi di setiap baris; cek per brand dipetakan ke PT brand itu).
+CREATE OR REPLACE VIEW efn_insight.v_esb_data_quality DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT check_name, brand, company_code, item, value, last_day
+FROM efn_dwh.v_esb_data_quality_pt;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_branch_list DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT brand, company_code, branch_id, branch_code, branch_name, is_ck, is_store, active
+FROM efn_dwh.v_esb_branch_list;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_product_list DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT brand, company_code, product_code, product_name, category, uom, is_fin, active
+FROM efn_dwh.v_esb_product_list;
+
+-- Grant wildcard: view baru di efn_insight otomatis terbaca -> clickhouse-init.sh MEMVERIFIKASI setiap view efn_insight
+-- punya row policy efn_insight_scope dan mencabut grant ini (fail closed) bila ada yang tidak.
+GRANT SELECT ON efn_insight.* TO insight_reader;
+
+-- Kuota per jam (DoS/biaya). KEYED BY user_name: semua staf berbagi satu user ClickHouse `efn_insight`, jadi kuota ini
+-- adalah plafon service; rate-limit per staf = tanggung jawab insight-web (kuota per client_key = gelombang berikutnya).
+CREATE QUOTA IF NOT EXISTS insight_quota KEYED BY user_name
+    FOR INTERVAL 1 hour MAX queries = 20000, errors = 2000, result_rows = 50000000, read_rows = 100000000000,
+        execution_time = 36000
+    TO insight_reader;

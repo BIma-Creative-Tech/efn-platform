@@ -1,5 +1,5 @@
 # WireGuard peer LAPTOP STAF back-office / IT / manajemen (pola B2/B3, ADR-023) - CONTOH, tanpa kunci nyata.
-# Subnet staf 10.89.0.0/16 (staf IT: 10.89.0.0/24, boleh SSH ke hub). Akses: erp. + bi. + ops. + status.
+# Subnet staf 10.89.0.0/16 (staf IT: 10.89.0.0/24, boleh SSH ke hub). Akses: erp. + bi. + ops. + status. + insight. (G42)
 # Klien open source WireGuard (Windows/macOS/Linux). Kunci dibuat di laptop; kirim PUBLIC KEY saja ke ops:
 #   bash gen-peer.sh --pubkey <PUBKEY_LAPTOP> staff ANDI-FINANCE 10.89.1.5/32 vpn.<domain>:51820
 # Laptop hilang / staf keluar -> cabut peer (runbook wireguard-outlet.md §Pencabutan).

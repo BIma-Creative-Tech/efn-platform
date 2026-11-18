@@ -38,6 +38,7 @@
 {container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} hp [PHONE_REDACTED] strip lokal
 {container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} hp [PHONE_REDACTED] tanpa plus
 {container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} hp [PHONE_REDACTED] titik
+{container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} insight sso t=[INSIGHT_TOKEN_REDACTED] sesi [INSIGHT_TOKEN_REDACTED] selesai
 {container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} json {"phone":"[PHONE_REDACTED]","mobile":"[PHONE_REDACTED]"}
 {container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} json-secret {"token": "[REDACTED]", "otp": "[REDACTED]"}
 {container="efn-fixture-1", filename="/fixtures/generic.txt", service="fixture"} kode tampil [PICKUP_REDACTED], [PICKUP_REDACTED]; selesai
@@ -84,6 +85,7 @@
 {filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} hp [PHONE_REDACTED] strip lokal
 {filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} hp [PHONE_REDACTED] tanpa plus
 {filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} hp [PHONE_REDACTED] titik
+{filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} insight sso t=[INSIGHT_TOKEN_REDACTED] sesi [INSIGHT_TOKEN_REDACTED] selesai
 {filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} json {"phone":"[PHONE_REDACTED]","mobile":"[PHONE_REDACTED]"}
 {filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} json-secret {"token": "[REDACTED]", "otp": "[REDACTED]"}
 {filename="/journal/generic.txt", job="host-journal", service="host-efn-deploy"} kode tampil [PICKUP_REDACTED], [PICKUP_REDACTED]; selesai

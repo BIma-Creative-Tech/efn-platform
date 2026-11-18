@@ -571,3 +571,129 @@ Dasar: ADR-032 **Accepted opsi B**; keputusan 18-1, 18-14, 18-18, 18-22, 18-27, 
 
 ### F. Belum terverifikasi (G22)
 Semua test G22 belum dijalankan. [B]: `ir.actions.report.barcode` 19.0, pemilihan order di denah saat > 1 order/meja, keys wajib payload `_process_order`, `source` baru di frontend, cetak gambar QR di Epson ePOS, penurunan stok bahan kit di picking POS (tour), UI combo + atribut, `qty_free`/`qty_max` combo, `<function>` metode privat saat install (source [V]).
+
+## Gelombang 42 — 2026-11-18 (fit-gap SSO akun Odoo → dashboard eksternal `insight-web`)
+
+Kebutuhan (kontrak G42 §A, ADR-041 draf): staf membuka dashboard Next.js `insight-web` memakai akun Odoo CE 19; data
+dibatasi PT yang boleh diakses user; Odoo tetap tidak diekspos ke internet; tanpa dependency pihak ketiga (ADR-031).
+Legenda: [V] diverifikasi di source `odoo/odoo` 19.0 (WebFetch 18 Nov 2026), [R] diverifikasi di repo ini,
+[B] belum terverifikasi.
+
+### A. Fit-gap
+
+| # | Kebutuhan | Standar CE 19 | Cukup? | Keputusan |
+|---|---|---|---|---|
+| 1 | Odoo sebagai *identity provider* untuk aplikasi lain | `auth_oauth` = **klien** OAuth2 saja: model `auth.oauth.provider` menyimpan `auth_endpoint`/`validation_endpoint`/`client_id` IdP eksternal; tidak ada endpoint otorisasi/token yang dilayani Odoo [V]. CE tidak punya OIDC/SAML provider. `auth_signup` = daftar/reset sandi; `portal` = user eksternal (bukan staf) — keduanya tidak relevan. | Tidak | Gap → `efn_insight` (token HMAC sekali pakai, kontrak §A). |
+| 2 | Kredensial mesin per user | `res.users.apikeys` (`name`, `scope`, `expiration_date`; `_generate(scope, name, expiration_date)` menyimpan hash, plaintext sekali; `_check_credentials(scope=, key=)`) [V] | Tidak untuk kasus ini | API key = kredensial jangka panjang untuk RPC ke Odoo; insight-web tidak memanggil Odoo, dan memberi key ke browser/insight-web melanggar least privilege. **Jangan dipakai.** |
+| 3 | Cakupan PT user | `res.users.company_ids` (m2m `res_company_users_rel(user_id, cid)`), `company_id` [V]; `res.company.efn_brand_code` (efn_core) [R]. `env.user` di Odoo = record sudo → `company_ids` lengkap, PT arsip tersaring `active_test` [B untuk 19.0, perilaku lama]. | Ya (data) | Pakai standar; hitung di controller (§C.4). |
+| 4 | Peran "pengguna" vs "semua brand" | `res.groups` + `implied_ids`; `has_group` memakai `all_group_ids` = `group_ids.all_implied_ids` (implied ikut) [V]; `res.groups.privilege` di 19.0 [R pola efn_data_ask]. | Ya | Dua grup baru di `efn_insight` (data XML, bukan logika). |
+| 5 | Menu yang membuka URL | `ir.actions.act_url` (`url`, `target` ∈ `new`/`self`/`download`, default `new`) [V]; web client: `self` → `browser.location.assign(url)`, `new` → `browser.open(url,"_blank")` dengan peringatan bila popup diblok, URL relatif diberi `/` [V `action_service.js`]. `ir.actions.path` unik, regex `[a-z][a-z0-9_-]*`, prefix `action-`/`m-` dan `new` dicadangkan [V]. | Ya | act_url `target="self"` ke `/efn/insight/open`. Client action OWL **tidak perlu**. |
+| 6 | Halaman perantara POST auto-submit | `request.render(template, qcontext)` = respons lazy, dirender di akhir dispatch; header boleh diubah sebelum flatten [V `http.py`]; pola sama di `efn_pos_kds/controllers/main.py` [R]. QWeb `t-att-*` meng-escape atribut. | Ya | Template QWeb + controller `type="http"`. |
+| 7 | CSP halaman controller | Odoo 19 `Application.set_csp`: selalu `X-Content-Type-Options: nosniff`; **CSP hanya dipasang untuk `image/*`** (`default-src 'none'`) dan tidak menimpa CSP yang sudah ada; tidak ada mekanisme nonce [V]. Traefik `secure-headers@file` tidak memasang CSP (hanya HSTS, `frameDeny`, nosniff, referrer, permissions) [R `infra/traefik/dynamic/middlewares.yml`]. | Sebagian | Inline script **saat ini tidak diblok**, tetapi halaman ini wajib memasang CSP ketatnya sendiri (§C.5). |
+| 8 | Audit pembukaan | `efn_audit` hanya mencatat CRUD (`OPERATIONS` = create/write/unlink/purge) per aturan model [R]; tidak ada API event akses. `ir.logging` CE (`name`, `type` client/server, `dbname`, `level`, `message`, `path`, `func`, `line`) [V]. | Cukup untuk G42 | `ir.logging` + `_logger.info` (§C.6). Model log khusus/ event `access` di efn_audit = G berikutnya bila Auditor butuh anti-hapus. |
+| 9 | Kill switch, URL & secret dari env | Pola `efn_data_ask` (`_enabled()`, `plaintext_allowed()` dari `efn_core.models.efn_bff_client`) [R] | Ya (pola) | Ditiru. |
+
+**Referensi desain (bukan dependency):** OCA `server-auth` 19.0 berisi `auth_oidc`, `auth_saml`, `auth_oauth_multi_token`
+(semuanya Odoo sebagai **klien** IdP — arah terbalik), `auth_api_key`/`auth_api_key_group` (key mesin → grup; ide
+"grup menentukan cakupan" sejalan), dan `cross_connect_client` (AGPL-3, Akretion): user lokal dengan grup tertentu
+mendapat menu yang membuka Odoo lain dalam keadaan login — konsep paling mirip (menu + grup → SSO ke aplikasi lain).
+Format/pengiriman token `cross_connect_*` [B] (README tidak menyebut). Ide yang diambil: menu per grup + token singkat
+dari server; yang **tidak** diambil: sinkron grup jarak jauh dan API key per server. Cybrosys: tidak ada modul relevan
+yang diverifikasi. Kesimpulan: **gap kecil, dibangun sendiri** sebagai `efn_insight` (±1–1,5 hari engineer + test).
+
+### B. Ditutup CE standar (tanpa kode)
+Grup + implied, menu + `ir.actions.act_url`, `request.render` QWeb, `company_ids`, `ir.logging`, redirect login untuk
+`auth='user'` (perilaku standar `ir.http` → `/web/login?redirect=…` [B ulang di 19.0]).
+
+### C. Rekomendasi teknis untuk efn-odoo-engineer (`efn_insight`, 19.0.1.0.0, LGPL-3)
+
+1. **Struktur**: `__manifest__.py` (depends `efn_core` saja; `web` ikut lewat base), `security/efn_insight_security.xml`
+   (privilege + 2 grup), `views/efn_insight_actions.xml` (act_url + menu), `views/efn_insight_templates.xml` (QWeb),
+   `controllers/main.py`, `static/src/js/insight_autosubmit.js`, `tests/test_insight_sso.py`, `README.md` (ADR-041,
+   R-xxx, belum: multi-replika jti, efn_audit event). **Tanpa model baru** → tanpa `ir.model.access.csv` (catat di
+   README), tanpa metode model publik (helper di controller/modul fungsi; bila ada di model wajib awalan `_`).
+2. **Grup**: `group_insight_user` ("Insight: pengguna"), `group_insight_all_brands` ("Insight: semua brand/Holding",
+   `implied_ids` → user), keduanya di bawah satu `res.groups.privilege` (pola `efn_data_ask_security.xml`). Catatan
+   untuk lead: user Holding (company EFN) tanpa `all_brands` mendapat 0 kode (EFN ∉ ESB_CODES) → wajib grup all_brands.
+   Tambahkan kedua grup ke data peran `efn_setup_role` hanya bila Q-INS1 dijawab (§E); jangan otomatis.
+3. **Menu/aksi**: `ir.actions.act_url` xmlid `action_open`, `url="/efn/insight/open"`, `target="self"` (bukan `new`:
+   `browser.open` terjadi setelah RPC load action → rawan diblok popup). `path` opsional `"insight"` (lolos regex).
+   `menuitem` "Dashboard Insight" top-level, `groups="group_insight_user"`. Tautan balik dari insight-web sebaiknya
+   langsung `{EFN_INSIGHT_ODOO_URL}/efn/insight/open` (GET `auth='user'` → login dulu bila sesi habis) daripada
+   `/odoo/action-efn_insight.action_open` (deep link act_url via router [B]) → minta architect menyelaraskan §A kontrak.
+4. **Controller** `@http.route("/efn/insight/open", type="http", auth="user", methods=["GET"], sitemap=False)`:
+   urutan: (a) `user = request.env.user`; tanpa `has_group("efn_insight.group_insight_user")` →
+   `raise werkzeug.exceptions.Forbidden()` (403, kontrak). (b) kill switch `INSIGHT_ENABLED` false → render halaman
+   info "Insight belum diaktifkan" (tanpa token). (c) konfigurasi: `EFN_INSIGHT_URL` wajib `https://` (kecuali
+   `plaintext_allowed()`), tanpa query/fragment/userinfo, buang `/` akhir; key dari `EFN_INSIGHT_SSO_KEY_FILE`
+   (default `/run/secrets/insight_sso_key`) dibaca tiap request, `strip()`, valid hanya hex ≥ 64 char; gagal → halaman
+   generik "Konfigurasi Insight belum lengkap, hubungi admin" + `_logger.error` tanpa isi key. (d) cakupan:
+   - default: `companies = user.company_ids` (sudo, PT arsip tidak ikut) — atau SQL `SELECT cid FROM
+     res_company_users_rel WHERE user_id=%s` lalu `browse(...).filtered("active")`; **jangan** membaca m2m sebagai
+     non-sudo (kasus PT "hilang", komentar `efn_data_ask.action_ask` baris 242). Ambil yang
+     `efn_brand_code ∈ ESB_CODES`; `codes = sorted({kode})`, `cids = sorted(id)`. BCF dan BCR terpisah otomatis
+     karena kode per company.
+   - `all_brands`: `codes = sorted(ESB_CODES)` = `["BCF","BCR","CUP","IMD","PB","WTZ"]`; `cids` = id semua company
+     (sudo search) dengan kode ∈ ESB_CODES — **minta architect menegaskan** isi `cids` untuk all_brands di §26 (sig
+     ClickHouse memakai cids).
+   - `roles = ["all_brands"]` bila punya grup itu, selain itu `["user"]`.
+   - `codes` kosong → render "Tidak ada PT yang bisa ditampilkan" (tanpa token).
+   `ESB_CODES = frozenset({"PB","WTZ","BCF","BCR","IMD","CUP"})` konstanta modul (sama dengan G41).
+   (e) token: payload sesuai kontrak; `json.dumps(payload, sort_keys=True, separators=(",", ":"))`,
+   base64url **tanpa padding**; `sig = hmac.new(key.encode("ascii"), ("eit1." + p).encode("ascii"), sha256)`.
+   **Kunci HMAC = byte ASCII string hex apa adanya (bukan hasil hex-decode)** — tuliskan di docs/04 §26 + test vector
+   bersama dengan insight-web (risiko interop terbesar). `name` = `user.name[:64]`; tanpa login/email/telepon;
+   `iat=int(time.time())`, `exp=iat+60`, `jti=uuid.uuid4().hex`.
+5. **Render aman**: `response = request.render("efn_insight.sso_post", {"action": url + "/sso", "token": t})`;
+   template memakai `t-att-action` dan `t-att-value` (auto-escape) — **dilarang** `t-raw`/`Markup`/string HTML di
+   Python. Form `method="post"`, `<input type="hidden" name="t">`, `<button type="submit">Lanjut</button>`, `<noscript>`
+   penjelasan. Auto-submit lewat **file statis** `<script src="/efn_insight/static/src/js/insight_autosubmit.js"
+   defer>` (`document.getElementById("efn-insight-sso").submit()`), tanpa inline script/`onload`/inline style.
+   Header yang dipasang di respons: `Content-Security-Policy: default-src 'none'; script-src 'self';
+   form-action <origin insight>; base-uri 'none'; frame-ancestors 'none'` (origin = skema+host+port dari
+   `EFN_INSIGHT_URL`; `form-action` juga berlaku pada redirect 303 insight → `/`, yang tetap satu origin),
+   `Cache-Control: no-store`, `Referrer-Policy: no-referrer`. Alternatif setara: inline script konstan + `script-src
+   'sha256-…'` dihitung saat import (lebih ketat, tapi hash wajib ikut berubah). Halaman info/gagal memakai template
+   yang sama tanpa form, CSP `default-src 'none'; frame-ancestors 'none'`.
+6. **Audit**: setelah token dibuat, `request.env["ir.logging"].sudo().create({"name": "efn_insight", "type": "server",
+   "dbname": request.env.cr.dbname, "level": "INFO", "message": f"insight_open uid={uid} codes={','.join(codes)}
+   roles={...} jti={jti}", "path": "efn_insight", "func": "open", "line": "0"})` + `_logger.info` baris yang sama
+   (ke Loki). **Jangan** mencatat token/sig/key/nama/login. Retensi `ir.logging` tidak dibersihkan otomatis oleh CE →
+   cantumkan di README (usul 400 hari, keputusan DPO). Penolakan 403 cukup `_logger.info("insight_denied uid=%s")`.
+7. **RPC surface**: controller bukan metode model → tidak menambah entri `RPC_ALLOWLIST`
+   (`efn_core/tests/test_rpc_surface.py`); `TestEfnRpcSurfaceStatic` otomatis memindai `efn_insight/**` dan akan gagal
+   bila ada metode model publik. Jangan menambah model/AbstractModel publik.
+8. **Test** (`HttpCase`, tag `post_install`, `-at_install`, `efn`; env & key file di-patch via `patch.dict(os.environ)`
+   + file sementara berisi key uji non-rahasia):
+   - anonim → redirect ke `/web/login` (tanpa token);
+   - user internal tanpa grup → 403;
+   - `INSIGHT_ENABLED` tidak diset/false → 200, tidak ada `name="t"` di HTML;
+   - grup user dengan company PB + BCF + GL → token: prefix `eit1.`, HMAC valid dengan key uji, `codes=["BCF","PB"]`,
+     `cids` urut = id PB+BCF (GL tidak ikut), `roles=["user"]`, `exp-iat==60`, `aud/iss/v` benar, `jti` 32 hex dan
+     berbeda antar dua request, payload **tanpa** kunci `login`/`email`/`phone`, `name` ≤ 64;
+   - company arsip tidak ikut;
+   - hanya company GL/EFN → halaman "tidak ada PT", tanpa token;
+   - `all_brands` → 6 kode urut, `roles=["all_brands"]`; implied: `has_group(group_insight_user)` True;
+   - key hilang / < 64 hex / `EFN_INSIGHT_URL` http di non-dev → halaman konfigurasi, tanpa token, log tanpa key;
+   - header respons: CSP memuat `form-action https://insight.test` dan `frame-ancestors 'none'`, `Cache-Control:
+     no-store`; `action` form = URL + `/sso` ter-escape (uji URL berisi `"` ditolak di validasi);
+   - satu baris `ir.logging` `name=efn_insight` per pembukaan tanpa token di `message`;
+   - data: menu `groups` = grup user, act_url `target=self`.
+   Tambahkan `efn_insight` ke `EFN_TEST_MODULES` CI (devsecops).
+
+### D. Audit modul existing
+Tidak ada duplikasi fitur standar yang perlu dihapus. `efn_data_ask` tetap (Tanya Data ≠ dashboard); logika
+cakupan PT-nya sebaiknya **diekstrak** nanti ke helper bersama di `efn_core` (`_efn_company_scope(user, allowed_codes)`)
+agar text2sql dan insight tidak menyimpang — opsional, bukan blok G42.
+
+### E. Pertanyaan klien
+- **Q-INS1**: jabatan mana yang mendapat "Insight: pengguna" dan "semua brand/Holding" (default: manajemen PT +
+  planner = pengguna; direksi/analis Holding = semua brand)? Menentukan data `efn_setup_role`.
+- **Q-INS2**: cakupan = semua PT di `company_ids` user (kontrak) atau hanya PT yang sedang aktif di pemilih company
+  Odoo? Rekomendasi: semua `company_ids` (sederhana, sesuai kontrak); filter brand dilakukan di insight-web.
+- **Q-INS3** (DPO): retensi log pembukaan Insight (`ir.logging`) — usul 400 hari.
+
+### F. Belum terverifikasi (G42)
+Redirect login `auth='user'` di 19.0 (perilaku lama), deep link `/odoo/action-<xmlid>` untuk act_url, filter PT arsip
+pada `user.company_ids` di 19.0, format token `cross_connect_*` OCA. Tidak ada kode yang ditulis; tidak ada test yang
+dijalankan.

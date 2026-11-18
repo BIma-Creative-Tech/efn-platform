@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- target self: browser.location.assign(url). `new` (window.open setelah RPC) rawan diblok popup blocker. -->
+    <record id="action_open" model="ir.actions.act_url">
+        <field name="name">Dashboard Insight</field>
+        <field name="url">/efn/insight/open</field>
+        <field name="target">self</field>
+    </record>
+
+    <menuitem id="menu_insight" name="Dashboard Insight" action="action_open" sequence="91"
+              groups="group_insight_user"/>
+</odoo>

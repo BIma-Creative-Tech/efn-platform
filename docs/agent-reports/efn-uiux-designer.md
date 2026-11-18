@@ -38,3 +38,23 @@ Lingkup: `services/superapp-web` (UI saja). Tidak mengubah logika bisnis, kontra
 - Sertifikat edge dev `*.efn.local` sudah mencakup host baru; `docker compose -f infra/compose/docker-compose.yml config -q` tanpa galat, tetapi routing Traefik ke host baru belum diuji lewat HTTPS.
 - Ditunda: UX-11 (sebagian), 12 (sebagian), 13–20.
 - Brand Curry Up, CHAGEE, Wetzel's Pretzels: belum ada company Odoo → tidak ada tenant.
+
+---
+
+# G42 — Spesifikasi UI "EFN Insight" (18 Nov 2026)
+
+**Hasil:** `docs/design/insight-web.md` (untuk efn-frontend-engineer, Next.js + ECharts). Tidak ada kode/CSS aplikasi yang diubah.
+
+## Isi
+Prinsip & format id-ID; token CSS light + dark (netral + aksen holding EFN, status, sekuensial teal, diverging vermilion-biru, palet kategori 7 warna basis Okabe-Ito dengan pemetaan brand tetap PB/WTZ/BCF/BCR/IMD/CUP); shell, filter global (URL params, chip aktif, reset, badge kesegaran); 7 halaman (tujuan, pertanyaan, komponen, view/kolom, interaksi, state, aturan peringatan); aturan visual & aksesibilitas chart; spesifikasi 8 komponen bersama.
+
+## Diverifikasi
+Rasio kontras tokenn utama dihitung manual dengan rumus luminans relatif WCAG (tabel §2.2 dan §2.3), semua lolos. Kolom/semantik view dibaca langsung dari `12-g41-esb.sql`.
+
+## Perlu tindakan / keputusan
+1. **Temuan data (efn-data-ai-engineer):** `v_esb_data_quality` baris `data_age_hours` & `last_run_not_ok` ber-`company_code = ''` -> terbuang oleh row policy `has(codes, company_code)`; FreshnessBadge & halaman Kualitas Data kosong. Isi kode PT per brand di view.
+2. Q-INS1..4 (§8 spesifikasi): definisi/ambang sell-through, `trx_count` per baris menu (KPI Transaksi bisa menghitung ganda), tidak ada view asal-tujuan, status PB1 pada `net` ESB.
+3. Target HPP % per brand dan nama/warna IMD/CUP menunggu pemilik bisnis / G43.
+
+## Belum diverifikasi
+Tidak diuji di browser, pembaca layar, atau perangkat. Kontras token yang disebut "diperiksa test" (border, soft, chrome-muted, c6/c7 gelap) belum dihitung; ambang status dan palet adalah proposal. Interaksi keyboard chart ECharts (dispatchAction) belum dicoba.

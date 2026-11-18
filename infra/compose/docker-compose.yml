@@ -4,6 +4,7 @@
 #               --profile core --profile data --profile ai --profile observability --profile ops up -d
 # Profiles: core (edge, odoo, bff, web, pg, redis, mq, minio) | data (clickhouse, metabase, etl) | ai (ollama, ocr-worker)
 #           observability (prometheus, loki, promtail, grafana, uptime-kuma) | ops (alertmanager + exporter)
+#           data juga memuat insight-web + insight-web-tls (G42, dashboard staf, ADR-041)
 # Overlay opsional profil data: docker-compose.esb.yml (G41, ekstraksi ESB Core -> ClickHouse; satu-satunya egress ESB).
 # Semua image di-pin versi. Dependabot (.github/dependabot.yml) mengusulkan bump.
 #
@@ -81,6 +82,20 @@ networks:
     internal: true
     ipam:
       config: [{ subnet: 172.30.6.0/24 }]
+  # G42 (docs/04 §26.11, ADR-041 C7): insight-web TIDAK di `internal` (RabbitMQ, sidecar Odoo, BFF) maupun `data`
+  # (PostgreSQL, RabbitMQ, s3-gateway, Loki). Dua network khusus, dicek scripts/check-encryption.sh:
+  #   insight-ingress : traefik (-> insight-web-tls :3443) + blackbox-exporter (probe health) + insight-web
+  #   insight-data    : insight-web <-> clickhouse (HTTPS 8443) saja
+  # Traefik dan ClickHouse sengaja tidak berbagi network (edge internet-facing tidak bisa menjangkau gudang data).
+  # Subnet 172.30.7.0/24 dan 172.30.8.0/24 dipakai overlay docker-compose.esb.yml (G41).
+  insight-ingress:
+    internal: true
+    ipam:
+      config: [{ subnet: 172.30.9.0/24 }]
+  insight-data:
+    internal: true
+    ipam:
+      config: [{ subnet: 172.30.10.0/24 }]
 
 volumes:
   traefik-acme:          # acme.json resolver HTTP-01 host publik (Traefik)
@@ -142,6 +157,12 @@ secrets:
   # G41 (docs/04 §25, ADR-040): user ClickHouse efn_esb (role esb_writer). Dibuat clickhouse-init di base; dipakai service
   # esb-extract yang HANYA ada di overlay docker-compose.esb.yml (password ESB per brand juga hanya di overlay itu).
   clickhouse_password_esb: { file: ../../secrets/clickhouse_password_esb.txt }
+  # G42 (docs/04 §26.10, ADR-041): SSO Odoo -> insight-web, cookie sesi, tanda tangan cakupan PT (row policy
+  # efn_insight_scope), user ClickHouse efn_insight. Mount least privilege dicek scripts/check-encryption.sh.
+  insight_sso_key: { file: ../../secrets/insight_sso_key.txt }
+  insight_session_key: { file: ../../secrets/insight_session_key.txt }
+  insight_scope_key: { file: ../../secrets/insight_scope_key.txt }
+  clickhouse_password_insight: { file: ../../secrets/clickhouse_password_insight.txt }
   # kunci aplikasi (docs/04 §2, §7.2)
   jwt_secret: { file: ../../secrets/jwt_secret.txt }
   otp_pepper: { file: ../../secrets/otp_pepper.txt }
@@ -224,6 +245,8 @@ secrets:
   tls_odoo_rpc_gateway_key: { file: ../../secrets/tls_odoo_rpc_gateway_key.txt }
   tls_superapp_web_crt: { file: ../../secrets/tls_superapp_web_crt.txt }
   tls_superapp_web_key: { file: ../../secrets/tls_superapp_web_key.txt }
+  tls_insight_web_crt: { file: ../../secrets/tls_insight_web_crt.txt }   # G42: sidecar insight-web-tls
+  tls_insight_web_key: { file: ../../secrets/tls_insight_web_key.txt }
   tls_ollama_crt: { file: ../../secrets/tls_ollama_crt.txt }
   tls_ollama_key: { file: ../../secrets/tls_ollama_key.txt }
   tls_metabase_crt: { file: ../../secrets/tls_metabase_crt.txt }
@@ -361,7 +384,8 @@ services:
       - traefik-dynamic:/etc/traefik/dynamic:ro
       - ../traefik/dynamic:/etc/traefik/dynamic/base:ro
       - traefik-acme:/acme
-    networks: [edge, internal, socket-proxy]
+    # insight-ingress (G42): satu-satunya jalur ke sidecar insight-web-tls; tanpa akses ke ClickHouse (insight-data)
+    networks: [edge, internal, socket-proxy, insight-ingress]
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
@@ -442,7 +466,8 @@ services:
     init: true
     entrypoint: ["/bin/sh", "/opt/efn-acme/acme-dns.sh"]
     environment:
-      - ACME_DOMAINS=erp.${TRAEFIK_DOMAIN:-efn.local},bi.${TRAEFIK_DOMAIN:-efn.local},ops.${TRAEFIK_DOMAIN:-efn.local},status.${TRAEFIK_DOMAIN:-efn.local}
+      # G42: insight. (dashboard insight-web, wg-https saja) ikut sertifikat SAN yang sama
+      - ACME_DOMAINS=erp.${TRAEFIK_DOMAIN:-efn.local},bi.${TRAEFIK_DOMAIN:-efn.local},ops.${TRAEFIK_DOMAIN:-efn.local},status.${TRAEFIK_DOMAIN:-efn.local},insight.${TRAEFIK_DOMAIN:-efn.local}
       - ACME_EMAIL=${ACME_EMAIL:-ops@example.com}
       - ACME_DNS_PROVIDER=${ACME_DNS_PROVIDER:-cloudflare}
       # Staging ACME: https://acme-staging-v02.api.letsencrypt.org/directory (uji sebelum produksi, runbook §3)
@@ -888,10 +913,16 @@ services:
       TEXT2SQL_ENABLED: ${TEXT2SQL_ENABLED:-false}
       EFN_TEXT2SQL_URL: https://text2sql:8443
       EFN_TEXT2SQL_API_KEY_FILE: /run/secrets/text2sql_api_key
+      # G42 (docs/04 §26.2, ADR-041): menu "Dashboard Insight" -> /efn/insight/open membuat token eit1 (HMAC
+      # insight_sso_key) yang dibawa BROWSER ke insight-web (POST form). Odoo tidak pernah menghubungi insight-web (tanpa
+      # network ke sana). Kill switch default false; URL wajib https (check-encryption.sh).
+      INSIGHT_ENABLED: ${INSIGHT_ENABLED:-false}
+      EFN_INSIGHT_URL: https://insight.${TRAEFIK_DOMAIN:-efn.local}
+      EFN_INSIGHT_SSO_KEY_FILE: /run/secrets/insight_sso_key
     # Kunci PII Odoo (odoo_pii_*) TIDAK di base: overlay docker-compose.pii.yml (production, L-59) / dev compose.
     secrets:
       [pg_password_odoo, odoo_admin_password, odoo_bff_api_key, member_hash_pepper, efn_audit_sink_key, odoo_online_event_hmac,
-       loyalty_policy_signing_key, odoo_fnb_event_hmac, odoo_booking_event_hmac, text2sql_api_key, efn_ca_crt]
+       loyalty_policy_signing_key, odoo_fnb_event_hmac, odoo_booking_event_hmac, text2sql_api_key, insight_sso_key, efn_ca_crt]
     volumes:
       - odoo-data:/var/lib/odoo
     networks: [internal, data]
@@ -922,6 +953,14 @@ services:
       traefik.http.routers.odoo-login.tls: "true"   # sertifikat dari acme-dns (SEC-37), bukan resolver Traefik
       traefik.http.routers.odoo-login.middlewares: internal-only@file,secure-headers@file,ratelimit-odoo-login@file
       traefik.http.routers.odoo-login.service: odoo
+      # G42 (docs/04 §26.2): halaman form SSO Insight. Header keamanan varian strict-origin (Origin harus terkirim ke
+      # insight-web /sso untuk cek C1; no-referrer -> Origin: null); CSP/no-store tetap dari controller.
+      traefik.http.routers.odoo-insight-open.rule: Host(`erp.${TRAEFIK_DOMAIN:-efn.local}`) && Path(`/efn/insight/open`)
+      traefik.http.routers.odoo-insight-open.priority: "220"
+      traefik.http.routers.odoo-insight-open.entrypoints: wg-https
+      traefik.http.routers.odoo-insight-open.tls: "true"   # sertifikat dari acme-dns (SEC-37), bukan resolver Traefik
+      traefik.http.routers.odoo-insight-open.middlewares: internal-only@file,secure-headers-insight-sso@file,ratelimit-odoo@file
+      traefik.http.routers.odoo-insight-open.service: odoo
       # XML-RPC / JSON-RPC / JSON-2 API Odoo 19 (SEC-22) diblok total (403). Integrasi server-to-server tidak
       # lewat Traefik; sidecar odoo-tls hanya menerima klien mTLS CN traefik (+ probe blackbox).
       traefik.http.routers.odoo-rpc-block.rule: >-
@@ -1456,7 +1495,9 @@ services:
       - ../clickhouse/config.d/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
       - ../clickhouse/config.d/encrypted-storage.xml:/etc/clickhouse-server/config.d/encrypted-storage.xml:ro
       - ../clickhouse/client-config.xml:/etc/clickhouse-client/config.xml:ro
-    networks: [data]
+    # insight-data (G42): klien insight-web saja (user efn_insight, HTTPS 8443); sertifikat ber-SAN `clickhouse` berlaku
+    # di network mana pun. Overlay docker-compose.esb.yml menambah `esb` (union).
+    networks: [data, insight-data]
     ulimits:
       nofile: { soft: 262144, hard: 262144 }
     deploy:
@@ -1496,6 +1537,10 @@ services:
       - clickhouse_password_metabase
       - clickhouse_password_esb   # G41: user efn_esb (docs/04 §25); service esb-extract di overlay docker-compose.esb.yml
       - text2sql_scope_key   # G38: kunci row policy cakupan PT efn_t2s (docs/04 §23.3)
+      # G42 (docs/04 §26.7): user efn_insight + row policy efn_insight_scope. WAJIB di setiap env: clickhouse-init gagal
+      # (fail closed) bila salah satu tidak terbaca, sehingga profil `data` tidak naik.
+      - clickhouse_password_insight
+      - insight_scope_key
       - efn_ca_crt
     volumes:
       - ../clickhouse/clickhouse-init.sh:/efn/clickhouse-init.sh:ro
@@ -1599,6 +1644,102 @@ services:
       retries: 3
     labels:
       service: metabase-tls
+
+  # G42 (docs/04 §26, ADR-041 Proposed, K25-02): dashboard staf "Insight" (Next.js standalone, READ-ONLY) di atas mart
+  # ESB. Login dari Odoo (efn_insight) lewat token eit1 POST form; sesi = cookie eis1; data dibatasi PT lewat row policy
+  # ClickHouse efn_insight_scope bertanda tangan. Runbook: docs/runbooks/insight-web.md.
+  # Next.js listen 127.0.0.1:3002 (plaintext hanya di loopback namespace ini); TLS + mTLS oleh sidecar insight-web-tls
+  # (:3443, CN traefik + blackbox-exporter). Network least privilege (C7): insight-ingress (Traefik/blackbox) +
+  # insight-data (ClickHouse) saja - TANPA egress, internal, data (PostgreSQL/RabbitMQ/Odoo tidak terjangkau).
+  # Replika 1 (L-124: cache jti + rate limit di memori; sidecar menempel ke satu container).
+  # Non-root: USER image (services/insight-web/Dockerfile target runtime; gate Trivy DS-0002 di build-push).
+  insight-web:
+    <<: *common
+    image: ${IMAGE_INSIGHT_WEB:-ghcr.io/efn/insight-web:dev}
+    build:
+      context: ../../services/insight-web
+      target: runtime
+    profiles: ["data"]
+    depends_on:
+      clickhouse-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      APP_ENV: ${APP_ENV:-production}
+      HOSTNAME: 127.0.0.1
+      PORT: "3002"
+      NEXT_TELEMETRY_DISABLED: "1"
+      # Kill switch (L-125): hanya "true" persis yang aktif; selain itu /sso 404 dan semua halaman/route data menolak
+      # (halaman -> /belum-aktif, route data 503; termasuk cookie yang masih berlaku). Satu saklar dengan Odoo.
+      INSIGHT_ENABLED: ${INSIGHT_ENABLED:-false}
+      # ClickHouse HTTPS terverifikasi CA internal (NODE_EXTRA_CA_CERTS); APP_ENV=production menolak non-https.
+      CH_URL: https://clickhouse:8443
+      CH_USER: efn_insight
+      CH_PASSWORD_FILE: /run/secrets/clickhouse_password_insight
+      INSIGHT_SCOPE_KEY_FILE: /run/secrets/insight_scope_key
+      INSIGHT_SSO_KEY_FILE: /run/secrets/insight_sso_key
+      INSIGHT_SESSION_KEY_FILE: /run/secrets/insight_session_key
+      # Tautan kembali ke Odoo + origin yang diizinkan untuk POST /sso (C1). Dev: :9443 (docker-compose.dev.yml).
+      EFN_INSIGHT_ODOO_URL: https://erp.${TRAEFIK_DOMAIN:-efn.local}
+      NODE_EXTRA_CA_CERTS: /run/secrets/efn_ca_crt
+    secrets:
+      - insight_sso_key
+      - insight_session_key
+      - insight_scope_key
+      - clickhouse_password_insight
+      - efn_ca_crt
+    networks: [insight-ingress, insight-data]
+    read_only: true
+    tmpfs: [/tmp, /app/.next/cache]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 512M }
+    labels:
+      service: insight-web
+      traefik.enable: "true"
+      traefik.docker.network: efn_insight-ingress
+      # ADR-023/ADR-041: HANYA wg-https + subnet staf (internal-ops) sampai Q-INS4 dijawab (docs/04 §26.11/§26.12).
+      # secure-headers-insight = secure-headers + Referrer-Policy no-referrer (§26.6); CSP dari Next.js sendiri.
+      traefik.http.routers.insight.rule: Host(`insight.${TRAEFIK_DOMAIN:-efn.local}`)
+      traefik.http.routers.insight.entrypoints: wg-https
+      traefik.http.routers.insight.tls: "true"   # sertifikat dari acme-dns (SEC-37), bukan resolver Traefik
+      traefik.http.routers.insight.middlewares: internal-ops@file,secure-headers-insight@file,ratelimit-insight@file
+      traefik.http.services.insight.loadbalancer.server.port: "3443"
+      traefik.http.services.insight.loadbalancer.server.scheme: https
+      traefik.http.services.insight.loadbalancer.serversTransport: efn-insight-web@file
+    healthcheck:
+      # Loopback namespace sendiri; /api/health tidak menyentuh ClickHouse (§26.6)
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  insight-web-tls:
+    <<: *ghostunnel
+    profiles: ["data"]
+    network_mode: "service:insight-web"
+    depends_on: [insight-web]
+    command:
+      - server
+      - --listen=0.0.0.0:3443
+      - --target=127.0.0.1:3002
+      - --cert=/run/secrets/tls_insight_web_crt
+      - --key=/run/secrets/tls_insight_web_key
+      - --cacert=/run/secrets/efn_ca_crt
+      - --allow-cn=traefik
+      - --allow-cn=blackbox-exporter
+      - --status=http://127.0.0.1:6065
+      - --quiet=conns
+    secrets: [efn_ca_crt, tls_insight_web_crt, tls_insight_web_key]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6065/_status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: insight-web-tls
 
   # ETL: user efn_etl (PostgreSQL, grant level kolom) dan efn_etl (ClickHouse, INSERT/SELECT mart).
   # Tidak membaca otp_pepper (SEC-16): hash member sudah dihitung BFF di PostgreSQL.
@@ -2394,7 +2535,8 @@ services:
     volumes:
       - ../observability/blackbox.yml:/etc/blackbox/blackbox.yml:ro
       - ../observability/web-config.yml:/etc/blackbox/web-config.yml:ro
-    networks: [internal, data, cache, egress]
+    # insight-ingress (G42): probe https://insight-web:3443/api/health (mTLS CN blackbox-exporter)
+    networks: [internal, data, cache, egress, insight-ingress]
     read_only: true
     cap_drop: [ALL]
     deploy:

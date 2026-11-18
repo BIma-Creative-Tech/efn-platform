@@ -34,6 +34,11 @@ ROUTE_ALLOWLIST = {
     # account.group_account_invoice + semua lampiran milik l10n_id_efaktur_coretax.document; dekripsi di server.
     ("<override>:EfnEfakturDownloadController.download_invoice_attachments", "user"): "efn_pii_l10n_id/controllers/"
     "download_efaktur.py: check_access + account.group_account_invoice + res_model Coretax",
+    # efn_insight (G42, ADR-041, docs/04 §26.2; ditinjau security G42 - SECURITY_REVIEW_2026-11-18_g42.md): GET saja,
+    # auth user, 403 tanpa group_insight_user, kill switch INSIGHT_ENABLED, cakupan PT dari company_ids user (sudo
+    # terbatas), token HMAC sekali pakai 60 dtk lewat POST form; CSP/no-store/strict-origin; audit ir.logging.
+    ("/efn/insight/open", "user"): "efn_insight/controllers/main.py: group_insight_user + INSIGHT_ENABLED + "
+    "company_ids user",
 }
 # Route pra-autentikasi yang sudah ditinjau: (path, auth) -> ID review. Saat ini kosong.
 PREAUTH_REVIEWED = {}

@@ -793,3 +793,181 @@ Ditambah oleh efn-qa-engineer 2026-10-19. **Belum dijalankan** (QA tanpa runtime
 - `member_id` pada sesi dilepas 30 hari setelah sesi ditutup; baris `fnb_*` dihapus setelah 180 hari; sesi meja Odoo 400 hari
 - User teknis `efn_qr_pb` **tidak** bisa membaca `pos.order`, `efn.pos.table.session`, dll. lewat ORM; diberi grup tambahan → semua RPC QR ditolak (fail closed); `efn_qr_pb` mengakses config milik PT lain → `AccessError` seragam
 - `/v1/pos/fnb/*` tidak bisa diakses dari internet (Traefik); path gateway `efn.pos.qr.order/efn_qr_*` selain tiga metode (mis. sufiks `_v2`, model lain) → `403` di `odoo-rpc-gateway`
+
+---
+
+## L. Gelombang 42 — Dashboard Insight (insight-web) + SSO dari Odoo (docs/04 §26, ADR-041 *Proposed*, L-117..L-126)
+
+Status: **Draft** (efn-qa-engineer, 18 Nov 2026). Untuk pengguna bisnis dan penguji; dijalankan di **staging** (atau dev lokal `https://erp.efn.local:9443`) dari laptop di jaringan **WireGuard staf**, `INSIGHT_ENABLED=true`. Data = mart ESB hasil `esb-extract` (G41); angka di contoh adalah ilustrasi.
+
+**Data uji L**
+- Odoo: PT berkode ESB `PB`, `WTZ`, `BCF`, `BCR` (dan PT non-ESB `GL`, `EFN`). Pengguna: **Budi** (grup *Insight: pengguna*, company `PB`+`BCF`), **Sari** (hanya `WTZ`), **Dewi** (grup *Insight: semua brand/Holding*), **Andi** (hanya `GL`+`EFN`), **Rudi** (tanpa grup Insight). Satu user Odoo yang dinonaktifkan: **Lina** (dulu grup Insight).
+- Mart ESB terisi minimal 35 hari untuk PB, WTZ, Bacha (BCF/BCR) dengan beberapa cabang; ada ≥ 1 cabang tanpa penjualan H-1 dan ≥ 1 alias produk tak terpetakan (`NAME:...`).
+- Seluruh pemeriksaan "tidak boleh memuat" berlaku untuk log, URL, dan respons: **tanpa token `eit1`/cookie `eis1`, tanpa nomor HP, email, atau login**.
+
+### L1. Masuk dari menu Odoo (jalur normal)
+- **Given** Budi login Odoo (sesi 2FA normal) dari jaringan staf
+- **When** Budi memilih menu *Dashboard Insight*
+- **Then** halaman "Membuka Dashboard Insight…" tampil sebentar, lalu halaman **Ringkasan** insight-web terbuka di `https://insight.<domain>/` tanpa meminta password lagi
+- **And** nama Budi tampil di header; filter PT hanya menawarkan `PB` dan `BCF`
+- **And** URL tidak memuat token; Odoo `ir.logging` mencatat satu baris `insight_open` (uid, codes `BCF,PB`, roles `user`, jti) tanpa nama/token
+
+### L2. Tautan masuk hanya sekali pakai dan berumur 60 detik
+- **Given** Budi membuka menu *Dashboard Insight* dan halaman form Odoo sudah tampil
+- **When** (a) Budi menekan tombol *Kembali* browser lalu mengirim ulang form yang sama, atau (b) menunggu > 60 detik di halaman form lalu menekan tombol "Lanjut"
+- **Then** insight-web menampilkan "Tautan masuk tidak valid atau sudah dipakai" + tautan "Buka lagi dari Odoo" (HTTP 401), **tanpa** alasan rinci dan tanpa cookie baru
+- **And** memilih menu Odoo lagi menghasilkan token baru dan login berhasil
+
+### L3. Pengguna tanpa grup Insight
+- **Given** Rudi login Odoo tanpa grup *Insight: pengguna*
+- **When** Rudi membuka `https://erp.<domain>/efn/insight/open` (mengetik URL) atau menu tidak terlihat
+- **Then** Odoo menampilkan **403**; tidak ada token pada halaman; tidak ada baris audit baru
+
+### L4. Pengguna tanpa PT berkode ESB
+- **Given** Andi (grup Insight) hanya memiliki company `GL` dan `EFN`
+- **When** Andi membuka menu *Dashboard Insight*
+- **Then** halaman Odoo "Tidak ada PT yang bisa ditampilkan untuk akun Anda…" tampil; **tidak** ada form/token dan tidak ada baris audit
+
+### L5. Fitur dimatikan (kill switch)
+- **Given** `INSIGHT_ENABLED` bukan `true` (default) di Odoo dan insight-web
+- **When** Budi membuka menu *Dashboard Insight*
+- **Then** Odoo menampilkan "Dashboard Insight belum diaktifkan." tanpa token
+- **Given** Budi **sudah punya sesi insight-web yang masih berlaku**, lalu `INSIGHT_ENABLED` dimatikan dan layanan di-recreate
+- **When** Budi memuat ulang halaman insight-web atau mengunduh CSV
+- **Then** halaman "belum diaktifkan" (CSV: ditolak) — cookie lama **tidak** membuka apa pun
+- **And** Odoo (POS, penjualan) tetap berjalan normal selama insight-web mati
+
+### L6. Nilai saklar yang salah ejaan tidak menyalakan separuh fitur
+- **Given** operator mengisi `INSIGHT_ENABLED=1` (bukan `true`)
+- **When** Budi membuka menu *Dashboard Insight*
+- **Then** Odoo menampilkan "belum diaktifkan" dan insight-web menolak `/sso` (404); tidak ada kondisi "Odoo membuat token tetapi insight-web menolak"
+
+### L7. Permintaan `/sso` tanpa Origin yang benar ditolak
+- **Given** penguji teknis memegang token sah (≤ 60 dtk) dari halaman form Odoo
+- **When** token dikirim ke `POST https://insight.<domain>/sso` dari situs lain / `curl` tanpa header `Origin`, dengan `Origin: null`, atau dengan `Origin` selain origin Odoo
+- **Then** 401 generik, tanpa cookie
+- **And** token **belum terbakar**: dikirim ulang dari halaman Odoo asli (dengan Origin benar) dalam 60 detik berhasil
+- **And** menurunkan `Referrer-Policy` halaman form Odoo menjadi `no-referrer` (uji negatif konfigurasi) membuat login sah gagal 401 — alasan header `strict-origin` dipertahankan
+
+### L8. Sesi 8 jam dan keluar
+- **Given** Budi sudah masuk (L1)
+- **When** Budi menekan *Keluar*
+- **Then** halaman "Anda sudah keluar"; membuka `/sales` langsung memunculkan "Sesi berakhir, buka lagi dari Odoo" dan **tidak** menampilkan data
+- **Given** sesi lama > 8 jam (atau `insight_session_key` dirotasi)
+- **When** Budi memuat halaman mana pun
+- **Then** "Sesi berakhir…" + tautan ke Odoo; setelah masuk lagi data tampil normal
+
+### L9. Cookie palsu atau dari subdomain lain
+- **Given** penguji teknis menyalin cookie sesi Budi lalu mengubah satu karakter, atau membuat cookie bernama `eis` (tanpa `__Host-`) berisi nilai yang sah
+- **When** membuka `/`
+- **Then** "Sesi berakhir…"; tidak ada data; cookie rusak dihapus oleh respons
+
+### L10. Akses per PT — pengguna hanya melihat PT miliknya
+- **Given** Sari hanya memiliki company `WTZ`; Budi `PB`+`BCF`
+- **When** Sari membuka *Ringkasan*, *Penjualan*, *Pembayaran*, *Distribusi*, *Kualitas data*
+- **Then** semua angka/tabel/dropdown hanya memuat WTZ; tidak ada cabang, menu, produk, atau metode bayar PB/BCF/BCR di mana pun (termasuk dropdown filter cabang dan hasil CSV)
+- **And** angka Sari untuk WTZ sama dengan angka Dewi (semua brand) yang difilter PT = WTZ
+
+### L11. Memaksa PT lain lewat URL tidak menembus akses
+- **Given** Sari (hanya WTZ)
+- **When** Sari mengubah URL menjadi `/?pt=PB`, `/sales?pt=PB,WTZ`, `/payments?branch=pb:4`, atau `/api/export/branch-rank?pt=PB`
+- **Then** nilai di luar PT Sari dibuang/diabaikan; yang tampil tetap data WTZ saja (cabang PB tidak ada di hasil); tidak ada galat yang membocorkan nama PT lain
+
+### L12. Satu pengguna, dua PT (termasuk PT yang tidak sedang aktif di Odoo)
+- **Given** Budi punya company `PB` (aktif di pemilih perusahaan Odoo) dan `BCF` (tidak sedang dipilih)
+- **When** Budi membuka *Dashboard Insight*
+- **Then** PT `PB` **dan** `BCF` ada di filter (cakupan = semua company Budi, L-120/Q-INS2); *Ringkasan* menampilkan "Kontribusi PT" untuk kedua PT; `GL` (bila Budi punya) tidak muncul
+
+### L13. Grup semua brand (Holding)
+- **Given** Dewi (grup *Insight: semua brand/Holding*), bahkan bila company Odoo-nya hanya `EFN`
+- **When** Dewi masuk
+- **Then** filter PT menawarkan keenam kode (`BCF, BCR, CUP, IMD, PB, WTZ`); *Ringkasan* menampilkan perbandingan PT; kode tanpa data (IMD/CUP sebelum G43) menampilkan keadaan kosong yang jelas, bukan galat
+
+### L14. Perubahan hak akses baru berlaku saat masuk berikutnya
+- **Given** Budi sedang punya sesi; admin mencabut company `BCF` dari Budi (atau menonaktifkan Lina)
+- **When** Budi/Lina tetap memakai sesi lama
+- **Then** sesi lama tetap memakai cakupan lama **sampai habis (≤ 8 jam)** — perilaku yang dicatat (L-119); pencabutan segera = rotasi `insight_session_key` atau `INSIGHT_ENABLED=false`
+- **And** begitu Budi/Lina memilih menu Odoo lagi: Budi hanya melihat PB; Lina ditolak 403 di Odoo
+
+### L15. Akses dari jaringan di luar subnet staf
+- **Given** Budi berada di Wi-Fi outlet (bukan WireGuard staf)
+- **When** Budi mencoba membuka `https://insight.<domain>`
+- **Then** ditolak (403 dari gerbang jaringan) — perilaku sementara sampai Q-INS4 dijawab klien; dari internet publik: tidak terjangkau
+
+### L16. Ringkasan — pertanyaan "bagaimana kinerja periode ini dan di mana yang perlu perhatian?"
+- **Given** filter bawaan (30 hari terakhir sampai kemarin, semua PT sesi)
+- **When** Budi membuka *Ringkasan*
+- **Then** muncul lima indikator: *Penjualan bersih* (catatan "Sebelum PB1/service"), *Transaksi*, *Rata-rata per transaksi*, *HPP terhadap penjualan bersih*, *Sell-through* — masing-masing dengan perubahan terhadap periode sebelumnya yang **sama panjang**
+- **And** *Transaksi* = jumlah struk unik (bukan jumlah baris menu); rata-rata per transaksi = penjualan bersih ÷ transaksi
+- **And** bagian "Perlu perhatian" menyebut cabang tanpa penjualan kemarin / sell-through < 70% / data basi bila ada, masing-masing dengan tautan "Lihat"
+- **And** klik batang cabang pada *Peringkat cabang* menyaring halaman ke cabang itu
+
+### L17. Penjualan & Menu
+- **Given** rentang 30 hari, kategori "Minuman"
+- **When** Budi membuka *Penjualan & Menu* dan memilih kategori
+- **Then** tren/bauran, pola hari-dalam-minggu, *Takeaway vs dine-in*, *Menu* (10 teratas/terbawah; urut Penjualan/Qty/Margin), dan *Bauran per cabang* hanya berisi kategori itu
+- **And** teks "takeaway = perkiraan dari nama menu ESB" terlihat (bukan tipe pesanan sebenarnya); bauran per cabang dibulatkan ke bulan penuh dan dinyatakan di subjudul
+
+### L18. Pembayaran
+- **Given** rentang 30 hari
+- **When** Budi membuka *Pembayaran*
+- **Then** terlihat bauran metode (QRIS, kartu, tunai, dst.), MDR per metode (nominal dan %), dan tabel per cabang dengan metode dominan; metode kosong tampil "Tidak diketahui"
+- **And** total pembayaran **tidak** diklaim sama dengan *Penjualan bersih* (penjualan bersih belum termasuk PB1/service) — ada catatan yang menjelaskannya
+
+### L19. Produksi vs Penjualan (`/flow`)
+- **Given** produk FIN di mart ada produksi CK, kirim, terima, dan terjual
+- **When** Budi/planner membuka *Produksi vs Penjualan*
+- **Then** muncul alur CK → kirim → diterima → terjual, *Sell-through per cabang* dengan acuan 70% dan 85% (status memakai **warna + ikon + kata**, bukan warna saja), dan detail produk
+- **And** produk belum terpetakan (`NAME:<alias>`) ditandai "belum terpetakan"; cabang CK tanpa penjualan menampilkan "n/a" (bukan 0%)
+
+### L20. Distribusi & Stok
+- **Given** ada pengiriman CK dan transfer antar toko
+- **When** Budi membuka *Distribusi*
+- **Then** muncul *Dikirim CK*, *Diterima dari CK*, *Selisih kirim vs terima*, *Transfer antar toko*, *Diterima dari non-CK*, matriks per cabang, dan selisih **per produk-hari** (bukan per cabang)
+- **And** bila CK dan toko berada di PT berbeda dan pengguna hanya punya salah satu, ikon info pada *Selisih kirim vs terima* menjelaskan bahwa pengguna satu PT hanya melihat satu sisi sehingga selisih tampak besar
+
+### L21. Kualitas Data — "apakah angka ini bisa dipercaya?"
+- **Given** satu cabang aktif tanpa penjualan kemarin, satu alias produk tak terpetakan, ekstraksi terakhir sukses
+- **When** Budi membuka *Kualitas Data*
+- **Then** papan status: *Kesegaran ekstraksi*, *Run terakhir*, *Alias tak terpetakan*, *Baris non-EA*, *Cabang tanpa penjualan kemarin* — cabang itu dan alias itu muncul di tabel temuan; status tidak hanya warna
+- **Given** mart tidak punya baris kesegaran (belum pernah ekstraksi)
+- **Then** status "Tidak diketahui" — **bukan** "Baik"
+- **And** untuk Bacha, pengguna dengan BCF dan BCR melihat satu baris per temuan (tidak ganda)
+
+### L22. Forecast masih placeholder
+- **When** Budi membuka `/forecast`
+- **Then** "Segera hadir (G44)" dengan tombol kembali ke Ringkasan; tidak ada angka palsu
+
+### L23. Filter dan input aneh tidak merusak halaman
+- **Given** Budi di *Penjualan*
+- **When** mengisi `from=2026-13-45`, `to` di masa depan, rentang > 366 hari, `from` > `to`, `cat` berisi `'; DROP TABLE x;--`, `product` berisi karakter terlarang, atau > 50 cabang
+- **Then** halaman tetap terbuka memakai nilai bawaan/yang valid, dengan pemberitahuan bahwa filter disesuaikan; **tidak ada** halaman galat 500 dan tidak ada SQL/identitas server di layar
+- **And** "sampai tanggal" tidak pernah melampaui **kemarin** (WIB); hari ini tidak tersedia (data per hari, L-112)
+
+### L24. Ekspor CSV dan injeksi formula
+- **Given** ada menu/cabang/produk dari ESB bernama `=HYPERLINK("http://x","klik")` atau berawalan `+`, `-`, `@`
+- **When** Budi mengunduh CSV dari tabel *Menu* atau *Peringkat cabang*, lalu membukanya di Excel/LibreOffice
+- **Then** sel berawalan karakter formula dibuka sebagai **teks** (diberi awalan `'`), tidak dihitung sebagai formula; file berenkoding UTF-8 dengan BOM, pemisah koma, tanggal ISO
+- **And** isi CSV = isi tabel pada halaman (filter dan cakupan PT sama); CSV tanpa sesi → ditolak (401)
+
+### L25. ClickHouse/mart mati atau lambat
+- **Given** ClickHouse tidak dapat dihubungi (stack `efn-data` dimatikan)
+- **When** Budi membuka halaman mana pun
+- **Then** tiap blok menampilkan kartu galat generik dengan tombol "Coba lagi" dan kode referensi; **tanpa** SQL, host, atau pesan ClickHouse; header dan navigasi tetap tampil
+- **And** Odoo, POS, dan checkout tidak terdampak sama sekali (Insight bukan jalur transaksi)
+- **When** 10+ staf membuka halaman bersamaan
+- **Then** halaman tetap termuat (antrean query), beberapa blok boleh sedikit lebih lambat; tidak ada galat massal "terlalu banyak query"
+
+### L26. Pembatasan laju login
+- **Given** satu alamat IP memicu > 10 permintaan `/sso` dalam semenit (mis. klik berulang pada tombol "Lanjut")
+- **When** permintaan ke-11 dikirim
+- **Then** HTTP 429 "Terlalu banyak permintaan. Coba lagi sebentar."; setelah ±1 menit login normal kembali
+
+### L27. Aksesibilitas dan tampilan
+- **Given** Budi memakai keyboard saja, atau tampilan HP, atau mode gelap
+- **When** menelusuri *Ringkasan* dan *Penjualan*
+- **Then** semua kontrol (filter, tab chart, tabel, ekspor) dapat dijangkau dengan Tab dan terlihat fokusnya; setiap grafik punya ringkasan teks/tabel alternatif; di HP menu menjadi laci dan tabel dapat digulir; mode gelap tetap terbaca (kontras)
+
+### L28. Privasi
+- **When** penguji memeriksa log insight-web, log Odoo, Loki, respons HTML, dan cookie
+- **Then** tidak ada token `eit1`/cookie `eis1` utuh, password ClickHouse, nomor HP, email, atau login; cookie hanya memuat id user Odoo + nama tampilan (≤ 64 karakter) + kode/ID PT, ber-atribut `HttpOnly; Secure; SameSite=Lax; Path=/` dan tanpa `Domain`

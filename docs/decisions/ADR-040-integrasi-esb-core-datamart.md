@@ -100,7 +100,7 @@ flowchart LR
   X --> RAW --> X
   X --> MART
   X --> CP
-  MART -- "G42 insight-web (SSO Odoo)" --> W["Dashboard"]
+  MART -- "G42 insight-web (SSO Odoo, ADR-041)" --> W["Dashboard"]
   MART -- "G43 esb_to_odoo.py (master, saldo awal)" --> O["Odoo CE 19<br/>efn_legacy_history (histori)"]
   MART -- "G44 forecast-worker" --> F["fact_forecast_daily"]
 ```
@@ -156,8 +156,8 @@ flowchart LR
 ### 4.4 Dampak ke gelombang berikutnya (desain G41 tidak boleh menghalangi)
 | Gelombang | Yang disiapkan G41 | Keputusan menyusul |
 |---|---|---|
-| **G42** insight-web (Next.js) + SSO dari Odoo | View `v_esb_*` stabil (nama di `docs/04` §25.5), kolom `company_code` di semua mart → row policy per PT bisa ditempel tanpa mengubah tabel | User ClickHouse `efn_insight` + row policy bertanda tangan (pola `efn_t2s`, ADR-038) **tidak** dibuat di G41; modul `efn_insight_sso` butuh fit-gap `efn-odoo-functional` + ADR tersendiri (token sekali pakai ≤ 60 dtk) |
-| **G43** migrasi master + saldo awal + histori | `map_esb_odoo` (kosong), `dim_esb_*` sebagai sumber master, `fact_esb_*` sebagai histori | **ADR-041** menyusul: histori 24 bulan masuk model read-only `efn_legacy_history` (`company_id` + record rule), **bukan** `stock.move`/`account.move`/`pos.order`; saldo awal = `stock.quant` inventory mode + jurnal pembukaan per tanggal cutover; company IMD/CUP mengikuti pola G24 WTZ |
+| **G42** insight-web (Next.js) + SSO dari Odoo | View `v_esb_*` stabil (nama di `docs/04` §25.5), kolom `company_code` di semua mart → row policy per PT bisa ditempel tanpa mengubah tabel | User ClickHouse `efn_insight` + row policy bertanda tangan (pola `efn_t2s`, ADR-038) **tidak** dibuat di G41; modul `efn_insight` butuh fit-gap `efn-odoo-functional` + ADR tersendiri (token sekali pakai ≤ 60 dtk) → **ADR-041** (G42, `docs/04` §26) |
+| **G43** migrasi master + saldo awal + histori | `map_esb_odoo` (kosong), `dim_esb_*` sebagai sumber master, `fact_esb_*` sebagai histori | **ADR-042** menyusul (semula disebut ADR-041; nomor itu dipakai SSO Insight G42): histori 24 bulan masuk model read-only `efn_legacy_history` (`company_id` + record rule), **bukan** `stock.move`/`account.move`/`pos.order`; saldo awal = `stock.quant` inventory mode + jurnal pembukaan per tanggal cutover; company IMD/CUP mengikuti pola G24 WTZ |
 | **G44** forecast worker | `v_esb_sales_daily` & `fact_esb_fin_sold_daily` sebagai input harian | Model, kalender libur, output `fact_forecast_daily`; tetap proposal yang disetujui planner (K25-12), AI di luar jalur transaksi (ADR-010) |
 
 ### 4.5 Dampak ke dokumen lain

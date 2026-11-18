@@ -33,8 +33,10 @@ updates:
       - /services/odoo
       - /services/api-gateway
       - /services/superapp-web
+      - /services/insight-web
       - /services/ai-ocr-worker
       - /services/etl
+      - /services/text2sql
       - /services/esb-extract
       - /infra/backup/postgres
       - /infra/minio
@@ -85,6 +87,20 @@ updates:
         update-types: [minor, patch]
         patterns: ["*"]
       superapp-web-security:
+        applies-to: security-updates
+        patterns: ["*"]
+  # G42 (docs/04 §26): dashboard Insight
+  - package-ecosystem: npm
+    directory: /services/insight-web
+    schedule: { interval: weekly, day: monday, time: "03:00", timezone: Asia/Jakarta }
+    open-pull-requests-limit: 2
+    cooldown: { default-days: 7, semver-major-days: 14 }
+    groups:
+      insight-web-minor-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+        patterns: ["*"]
+      insight-web-security:
         applies-to: security-updates
         patterns: ["*"]
 

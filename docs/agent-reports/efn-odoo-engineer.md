@@ -2416,3 +2416,70 @@ L-80/L-82/L-83. Modul `efn_pos_bff_order` (versi tidak dinaikkan: tanpa perubaha
   `earn_pending` reverse BFF untuk sesi yang ditutup `reissued` lalu menerima close `paid` (perlu dicek efn-bff-engineer).
 - Belum ditangani: varian SEC-174 no. 3 (order tertaut dibayar jauh setelah `expired`) dan ralat kontrak §14.A.4
   syarat 3 ("carried = order draft") di docs/04 — untuk lead/architect.
+
+# G42 — `efn_insight` 19.0.1.0.0: SSO akun Odoo → insight-web (18 Nov 2026, branch `feat/wave-42-insight-web`)
+Kontrak: G42 §A, fit-gap efn-odoo-functional "Gelombang 42" §C butir 1–9, docs/04 §26.2–26.3 (final, dibaca setelah
+pesan lead), ADR-041 (Proposed).
+
+## Modul & file (baru, LGPL-3, depends `efn_core` saja)
+- `services/odoo/addons/efn_insight/__manifest__.py`, `__init__.py`, `README.md`
+- `security/efn_insight_security.xml` — kategori + `res.groups.privilege` + `group_insight_user`,
+  `group_insight_all_brands` (implies user). Tanpa model → tanpa `ir.model.access.csv`.
+- `views/efn_insight_actions.xml` — `ir.actions.act_url` `action_open` (`/efn/insight/open`, `target=self`), menu
+  top-level `menu_insight` "Dashboard Insight" `groups=group_insight_user`.
+- `views/efn_insight_templates.xml` — `sso_post` (form POST, `t-att-action`/`t-att-value`, `<noscript>` + tombol
+  "Lanjut", `<script src=/efn_insight/static/... defer>`), `info_page` (`data-efn-insight-state` = disabled/config/
+  no_company). Tanpa `t-raw`/`Markup`/inline script/style.
+- `static/src/js/insight_autosubmit.js` — IIFE statis, tidak di bundle aset (dimuat via route statis modul).
+- `lib/insight_token.py` — fungsi murni: `build_payload`, `clean_name`, `canonical_json`, `encode_token`, `sign`,
+  `verify_token` (rujukan untuk test), `load_key`, `parse_insight_url`. Bukan model → tidak menambah RPC surface.
+- `controllers/main.py` — `GET /efn/insight/open` (`type=http`, `auth=user`, `sitemap=False`).
+- `tests/test_insight_token.py` (unit, `TransactionCase`), `tests/test_insight_sso.py` (`HttpCase`), tag `efn`.
+- `.github/workflows/ci.yml` — `efn_insight` ditambahkan ke `EFN_TEST_MODULES` (satu-satunya daftar terpusat yang
+  ditemukan; compose/scripts tidak punya daftar modul).
+
+## Perilaku (docs/04 §26.2)
+403 tanpa grup (werkzeug `Forbidden`, tidak di-log Odoo) → `INSIGHT_ENABLED` ≠ true: 200 "belum diaktifkan" →
+URL/kunci salah: **503** + `_logger.error("insight_misconfigured: …")` tanpa isi kunci/URL → cakupan kosong: 200
+"tidak ada PT" → token + form. Cakupan non-all_brands: `SELECT cid FROM res_company_users_rel WHERE user_id=%s`
+(flush dulu), lalu `res.company` sudo `browse(...).exists()` difilter `active` dan kode ∈ ESB_CODES (sudo hanya
+untuk membaca kode/aktif id tersebut; non-sudo akan menyaring PT yang tidak aktif di pemilih perusahaan). all_brands:
+6 kode tetap, `cids` = sudo search company ber-kode ESB. Header: CSP §26.2 persis, `Cache-Control: no-store`,
+`Referrer-Policy: no-referrer`, tambahan `X-Frame-Options: DENY`. Halaman info: CSP `default-src 'none'; base-uri
+'none'; form-action 'none'; frame-ancestors 'none'`. Audit: `ir.logging` (`name=efn_insight`, message `insight_open
+uid=… codes=… cids=… roles=… jti=…`) + `_logger.info` baris sama.
+
+## Token (byte-exact §26.3)
+`eit1.<b64url(json.dumps(p, sort_keys=True, separators=(",",":"), ensure_ascii=True))>.<b64url(HMAC-SHA256(
+key.encode("ascii"), ("eit1."+payload_b64).encode("ascii")))>`, tanpa padding. Kunci = string hex dari file setelah
+`strip()`, valid `[0-9a-fA-F]{64,}`, **tidak** di-hex-decode. Payload tepat 11 kunci; `name` = `clean_name` (hapus
+Cc/Cf/Zl/Zp, rapikan spasi, trim, maks 64 code point, kosong → `-`); `cids` ≤ 32 dan ≥ 1 untuk `roles=["user"]`;
+`sub` 1..2^31−1; `jti=uuid4().hex`; `exp=iat+60`. `EFN_INSIGHT_URL`: `https://host[:port]` + `/` opsional (path lain,
+query, fragment, userinfo, kutip/`;` ditolak); form action = origin + `/sso`.
+
+## Test (tag `efn`, post_install) — BELUM DIJALANKAN (tanpa shell; lead menjalankan di container)
+- Unit: vektor §26.3 byte-exact (JSON, payload_b64, sig `WSDaF4H2…`), sig kunci hex-decode = nilai negatif §26.3 dan
+  ≠ sig kita, round-trip + tamper (kunci lain, codes dipalsukan, kedaluwarsa, prefix salah), 11 kunci tanpa PII, aturan
+  `name` (Cc/Cf/Zl dihapus, kosong `-`, 64 code point, `á`), validasi `build_payload`, `load_key`,
+  `parse_insight_url`.
+- HttpCase: anonim → redirect `/web/login`; tanpa grup → 403; kill switch (tidak diset/false/0); user PB+BCF+GL →
+  codes `["BCF","PB"]`, cids, roles, klaim, jti 32 hex, header CSP persis, satu baris `ir.logging` tanpa token/nama/
+  login/kunci; jti beda antar request; company arsip tidak ikut; hanya GL/EFN → "no_company" tanpa token/log; all_brands
+  6 kode + implied; konfigurasi salah (key hilang, key 40 hex, http di production, http + ALLOW_PLAINTEXT di production,
+  URL berisi `"><script>`, URL ber-path, kosong) → 503 + log `insight_misconfigured` tanpa kunci; http diizinkan di
+  development; data menu/aksi/implied; file JS statis tersaji 200.
+
+## Belum terverifikasi / titik rawan test
+- Seluruh test belum dijalankan; ruff check/format belum dijalankan (ditulis manual mengikuti ruff.toml).
+- `Forbidden` → 403 di HttpCase (source 19.0: HTTPException dikembalikan apa adanya, tidak di-log) [WebFetch].
+- Penyajian `/efn_insight/static/src/js/insight_autosubmit.js` oleh server HttpCase tanpa terdaftar di bundle.
+- `request.render` lazy + `response.status_code = 503` sebelum flatten (diasumsikan dari `http.py` 19.0).
+- Mengarsipkan company yang ada di `company_ids` user (bukan `company_id`) — `_check_active` 19.0 hanya cek
+  `company_id` [WebFetch], jadi seharusnya lolos.
+- `&lt;!DOCTYPE html&gt;` di awal template (pola `web.layout` 19.0) menghasilkan doctype mentah.
+- Konsistensi `clean_name` dengan insight-web hanya relevan sisi Odoo (insight-web tidak menserialisasi ulang).
+
+## Untuk lead / tim lain
+- devsecops: env Odoo `EFN_INSIGHT_URL`, `INSIGHT_ENABLED` (default false), secret `insight_sso_key` →
+  `/run/secrets/insight_sso_key` (atau `EFN_INSIGHT_SSO_KEY_FILE`).
+- Q-INS1 (grup per peran, belum ditambahkan ke `efn_setup_role`), Q-INS2, Q-INS3 (retensi `ir.logging`).

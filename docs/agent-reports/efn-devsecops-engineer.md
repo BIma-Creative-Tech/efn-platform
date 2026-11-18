@@ -1,5 +1,97 @@
 # Laporan Agent: efn-devsecops-engineer
 
+## G42 (18 Nov 2026, branch feat/wave-42-insight-web, belum di-commit) — infra dashboard Insight + SSO Odoo
+
+Kontrak: docs/04 §26 (terutama §26.10–§26.13), ADR-041 (Proposed). Kode `services/insight-web` (frontend) dan
+`efn_insight` (Odoo) dikerjakan paralel; saat laporan ini ditulis `services/insight-web/` **belum ada** di repo.
+Tidak ada docker lokal yang dijalankan oleh agent ini: semua YAML/skrip diperiksa manual; lead menjalankan
+`docker compose config`, check-encryption, shellcheck, yamllint, hadolint.
+
+### G42.1 Keputusan jaringan
+
+| Network (baru, `internal: true`) | Anggota | Alasan |
+|---|---|---|
+| `insight-ingress` 172.30.9.0/24 | traefik, insight-web, blackbox-exporter | Ingress ke sidecar `insight-web-tls :3443` + probe health. insight-web **tidak** di `internal` (di sana ada RabbitMQ, sidecar Odoo, BFF) |
+| `insight-data` 172.30.10.0/24 | insight-web, clickhouse | satu-satunya jalur data (HTTPS 8443, user `efn_insight`). insight-web **tidak** di `data` (PostgreSQL, RabbitMQ, s3-gateway, Loki) |
+
+Traefik dan ClickHouse sengaja tidak berbagi network (edge internet-facing tidak menjangkau gudang data). Tanpa
+`egress`. Odoo tidak punya jalur ke insight-web (SSO lewat browser). Pola mengikuti `esb` (G41) tetapi di base,
+karena insight-web masuk rantai rilis bertanda tangan (lihat G42.3). Semua dicek `check-encryption.sh`.
+
+### G42.2 File
+
+| File | Perubahan |
+|---|---|
+| `scripts/secrets.list` | `insight_sso_key`, `insight_session_key`, `insight_scope_key` (hex32 = 64 hex), `clickhouse_password_insight` (random), `tls_insight_web_{crt,key}` (pki) |
+| `scripts/gen-pki.sh` | `insight-web|server` (nameConstraints intermediate berubah) |
+| `infra/compose/docker-compose.yml` | secret top-level; network `insight-ingress`/`insight-data`; traefik + blackbox ikut `insight-ingress`; clickhouse ikut `insight-data`; clickhouse-init me-mount `clickhouse_password_insight` + `insight_scope_key`; odoo: `INSIGHT_ENABLED`, `EFN_INSIGHT_URL=https://insight.${TRAEFIK_DOMAIN}`, `EFN_INSIGHT_SSO_KEY_FILE` + secret `insight_sso_key`, router `odoo-insight-open` (`/efn/insight/open`, no-referrer); service `insight-web` (profil `data`, build target `runtime`, `read_only`, tmpfs `/tmp` + `/app/.next/cache`, `cap_drop ALL`, no-new-privileges, 512M, env §26.10, healthcheck loopback `:3002/api/health`, router `insight.` wg-https) + sidecar `insight-web-tls` (`--allow-cn=traefik`, `--allow-cn=blackbox-exporter`); `ACME_DOMAINS` + `insight.` |
+| `infra/compose/docker-compose.dev.yml` | insight-web `image efn/insight-web:dev`, `APP_ENV dev`, `EFN_INSIGHT_ODOO_URL=https://erp.efn.local:9443`; odoo `EFN_INSIGHT_URL=https://insight.efn.local:9443` (origin C1 harus memuat port dev) |
+| `infra/compose/docker-compose.prod.yml` | insight-web replicas 1 (L-124), 1 CPU / 512M, `APP_ENV` |
+| `infra/compose/.env.example` | `IMAGE_INSIGHT_WEB`, `INSIGHT_ENABLED=false` |
+| `infra/traefik/dynamic/internal-tls.yml` | serversTransport `efn-insight-web` (serverName insight-web, sertifikat klien traefik) |
+| `infra/traefik/dynamic/middlewares.yml` | `secure-headers-insight` (= secure-headers + `Referrer-Policy: no-referrer`), `ratelimit-insight` |
+| `infra/observability/prometheus.yml` | job `probe-insight` (https_internal ke `https://insight-web:3443/api/health`) |
+| `infra/observability/alert-rules.yml` | `EfnInsightWebDown` (warning, 15m), `EfnHostClockNotSynced` (warning, 30m; C6) |
+| `infra/observability/promtail.yml`, `promtail-journal.yml`, `tests/promtail/fixtures/generic.txt`, `tests/promtail/expected.txt` | redaksi `eit1.`/`eis1.` → `[INSIGHT_TOKEN_REDACTED]` (lapis kedua) + fixture regresi |
+| `scripts/check-encryption.sh` | aturan G42 (lihat G42.4) |
+| `.github/workflows/ci.yml` | filter `insight`; matriks node + `insight-web` (lint, test, build, npm audit); langkah per-entri hanya jalan bila service-nya berubah (`env.CHANGED`, pola pytest). `efn_insight` sudah ada di `EFN_TEST_MODULES` (oleh agent lain) |
+| `.github/workflows/build-push.yml` | `insight-web` di scan-pr + build, `target: runtime` |
+| `.github/dependabot.yml` | npm `/services/insight-web`; docker `/services/insight-web` (+ `/services/text2sql` yang sebelumnya terlewat) |
+| `.github/workflows/deploy.yml`, `scripts/deploy.sh`, `scripts/host/efn-deploy`, `scripts/host/test-efn-deploy.sh`, `scripts/lib/deploy-validate.sh` | `IMAGE_INSIGHT_WEB` di rantai rilis bertanda tangan; `INSIGHT_ENABLED` config rilis (boolean) + `EFN_GATED_FEATURES` (production true hanya dengan `EFN_ALLOW_FEATURE_ON`, L-125); 5 kasus uji 273a–e |
+| `docs/runbooks/insight-web.md` (baru), `docs/runbooks/README.md` | runbook aktivasi/rotasi/NTP/troubleshooting/Metabase Holding; indeks + tabel hardening |
+| `docs/runbooks/wireguard-outlet.md`, `infra/wireguard/{wg0-server,peer-staff}.conf.example` | split DNS + akses staf: `insight.` |
+
+### G42.3 Penyimpangan dari paket kerja (dengan alasan)
+
+1. **Middleware `secure-headers-insight` menggantikan `secure-headers`** pada router `insight.` (dan router baru
+   `odoo-insight-open`): middleware headers Traefik menimpa `Referrer-Policy` upstream menjadi
+   `strict-origin-when-cross-origin`, sedangkan §26.2/§26.6 mewajibkan `no-referrer`. Selain itu sama persis.
+   Ditambah `ratelimit-insight` (20/s, burst 60). `internal-ops` tetap (Q-INS4).
+2. **Wiring rilis dikerjakan penuh** (bukan dicatat sebagai sisa seperti G41): polanya sama dengan text2sql G38, dan
+   karena service ada di base profil `data` (production wajib `core,data,observability`), tanpa wiring deploy
+   production akan menarik `ghcr.io/efn/insight-web:dev` dan gagal.
+3. **Alert baru** `EfnInsightWebDown` (warning, bukan critical karena bukan jalur transaksi) dan
+   `EfnHostClockNotSynced` (C6, usulan > 10 dtk) — keduanya dengan runbook.
+4. `user:` tidak di-set di compose (mengikuti superapp-web): non-root bergantung pada `USER` di Dockerfile insight-web
+   (gate Trivy/hadolint). Mohon frontend memakai pola superapp-web (`USER app`).
+
+### G42.4 Aturan check-encryption baru
+
+- `insight_sso_key` ⊆ {odoo, insight-web}; `insight_session_key` ⊆ {insight-web}; `insight_scope_key`,
+  `clickhouse_password_insight` ⊆ {clickhouse-init, insight-web}; `tls_insight_web_key` ⊆ {insight-web-tls}.
+- Wajib ter-mount + env cocok: odoo `EFN_INSIGHT_SSO_KEY_FILE`; insight-web `INSIGHT_SSO_KEY_FILE`,
+  `INSIGHT_SESSION_KEY_FILE`, `INSIGHT_SCOPE_KEY_FILE`, `CH_PASSWORD_FILE`; clickhouse-init kedua secret insight.
+- Network `insight-ingress` ⊆ {traefik, insight-web, blackbox-exporter}; `insight-data` ⊆ {clickhouse, insight-web};
+  insight-web hanya kedua network itu, `read_only`, `cap_drop ALL`; sidecar `--allow-cn` ⊆ {traefik, blackbox-exporter}.
+- `CH_URL`, `EFN_INSIGHT_ODOO_URL`, `EFN_INSIGHT_URL` diawali `https://`; `INSIGHT_ENABLED` boolean di semua render;
+  render `prod`: `INSIGHT_ENABLED == "false"` untuk odoo dan insight-web, dan insight-web wajib ter-render.
+
+### G42.5 Langkah operasional sebelum deploy staging/production pertama (juga di runbook §2)
+
+1. GitHub Environment: `INSIGHT_SSO_KEY`, `INSIGHT_SESSION_KEY`, `INSIGHT_SCOPE_KEY`, `CLICKHOUSE_PASSWORD_INSIGHT`
+   (`openssl rand -hex 32`, terpisah). Tanpa ini deploy berhenti / clickhouse-init gagal.
+2. **Terbitkan ulang intermediate PKI** (nameConstraints + `insight-web`), unggah `EFN_PKI_INTERMEDIATE_*`.
+3. **Pasang ulang `/usr/local/sbin/efn-deploy`** dari rilis ini (manifest kini 10 image; wrapper lama menolak skema).
+
+### G42.6 Belum terverifikasi / sisa
+
+- Belum dijalankan: `docker compose config` (dev, prod, + overlay ESB), `check-encryption.sh`, shellcheck, yamllint,
+  promtool, `test-promtail-redaction.sh` (fixture baru: keluaran diprediksi manual), `test-efn-deploy.sh` (kasus 273a–e).
+- `services/insight-web` belum ada: CI node `npm ci` dan build-push akan gagal sampai Dockerfile (target `runtime`) +
+  `package-lock.json` tersedia. Asumsi kontrak: standalone, `PORT`/`HOSTNAME` dari env, `/api/health` tanpa ClickHouse,
+  `USER` non-root, tulisan hanya ke `/tmp` dan `/app/.next/cache`.
+- Dev overlay memakai image produksi (tanpa stage `dev`/hot reload); bila frontend menambah stage `dev`, overlay bisa
+  diubah ke pola superapp-web.
+- Staging dengan `EFN_WG_HTTPS_PORT` ≠ 443: `EFN_INSIGHT_URL`/`EFN_INSIGHT_ODOO_URL` base tidak memuat port → origin C1
+  dan form-action tidak cocok. Production (443) aman; staging perlu port 443 atau override.
+- K25-02 lintas mesin (stack data di host lain): network Docker `insight-ingress` tidak menjangkau Traefik di host
+  inti → butuh desain edge di mesin data (belum).
+- K25-06: profil `data` bertambah ±576 MB (insight-web 512M + sidecar 64M).
+- Tidak ada cek otomatis bahwa ketiga kunci HMAC insight saling berbeda (usulan: insight-web menolak start bila
+  `sso == session == scope` sebagian sama).
+- Nama project compose tetap `efn` (label `traefik.docker.network: efn_insight-ingress`), sama keterbatasannya dengan
+  `efn_internal` untuk project `efn-dev`/`efn-stg` (K25-06).
+
 ## G41 (17 Nov 2026, branch feat/wave-41-esb-datamart, belum di-commit) — infra ekstraksi ESB Core → ClickHouse
 
 Kontrak: G41_CONTRACT (efn-lead), docs/04 §25, ADR-040 (Proposed). Kode service = efn-data-ai-engineer (paralel; saat laporan ini ditulis baru `efn_esb/__init__.py` + `tls.py` yang ada).

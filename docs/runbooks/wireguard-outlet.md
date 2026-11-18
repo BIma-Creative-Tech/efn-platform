@@ -11,7 +11,7 @@ Kontrak: `docs/04_SERVICE_CONTRACTS.md` §7.4, ADR-023 (A1 + B3), SEC-01/SEC-21/
 | Staf | `10.89.0.0/16` (staf IT `10.89.0.0/24`, boleh SSH ke hub) → `erp.` + `bi.` + `ops.` + `status.` (`internal-ops`) |
 | Traefik | Entrypoint **`wg-https`** di-publish **hanya** ke `10.88.0.1:443` (`EFN_WG_BIND`); publik (`websecure`) hanya di IP publik (`EFN_PUBLIC_BIND`). Router `erp.`/`bi.`/`ops.`/`status.` hanya di `wg-https` |
 | Sertifikat | Let's Encrypt **DNS-01** (resolver `letsencrypt-dns`, secret `acme_dns_api_token`; Cloudflare: token *Zone → DNS → Edit* untuk zona domain saja). Browser POS tidak perlu CA internal; tidak perlu record A publik |
-| DNS | Split DNS: `erp.<domain>`, `bi.`, `ops.`, `status.` → `10.88.0.1` (resolver di hub, dnsmasq OpenWrt, atau hosts file). **Jangan** buat record publik/di-proxy Cloudflare |
+| DNS | Split DNS: `erp.<domain>`, `bi.`, `ops.`, `status.`, `insight.` (G42, subnet staf saja sampai Q-INS4) → `10.88.0.1` (resolver di hub, dnsmasq OpenWrt, atau hosts file). **Jangan** buat record publik/di-proxy Cloudflare |
 | Firewall hub | `infra/wireguard/efn-wg.nft` (SEC-28): peer → hanya `10.88.0.1:443` (+ DNS :53, SSH dari staf IT); peer↔peer, peer→container lain/DB/internet = drop. `ip_forward` tetap 1 (Docker) |
 | Lapisan kedua | 2FA Odoo user internal, rate limit login 10/menit per peer, blok `/xmlrpc`, `/jsonrpc`, `/json/2`, sidecar Odoo hanya mTLS CN `traefik` |
 

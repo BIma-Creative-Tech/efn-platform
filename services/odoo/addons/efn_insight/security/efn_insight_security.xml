@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G42 (ADR-041 Proposed, docs/04 §26). Tanpa model baru -> tanpa ir.model.access.csv / ir.rule.
+     Penetapan grup ke peran (efn_setup_role) menunggu Q-INS1; jangan otomatis. -->
+<odoo>
+    <record id="module_category_efn_insight" model="ir.module.category">
+        <field name="name">EFN Dashboard Insight</field>
+        <field name="sequence">94</field>
+    </record>
+
+    <record id="res_groups_privilege_efn_insight" model="res.groups.privilege">
+        <field name="name">EFN Dashboard Insight</field>
+        <field name="category_id" ref="module_category_efn_insight"/>
+    </record>
+
+    <!-- Cakupan = PT ber-kode ESB di company_ids user (PT arsip tidak ikut). -->
+    <record id="group_insight_user" model="res.groups">
+        <field name="name">Insight: pengguna</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_insight"/>
+    </record>
+    <!-- Holding/direksi/analis: semua kode ESB (PB, WTZ, BCF, BCR, IMD, CUP) tanpa melihat company_ids.
+         User Holding (company EFN) TANPA grup ini mendapat 0 kode. -->
+    <record id="group_insight_all_brands" model="res.groups">
+        <field name="name">Insight: semua brand/Holding</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_insight"/>
+        <field name="implied_ids" eval="[(4, ref('group_insight_user'))]"/>
+    </record>
+</odoo>

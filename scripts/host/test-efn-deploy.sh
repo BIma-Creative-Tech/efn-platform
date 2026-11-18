@@ -97,7 +97,7 @@ EOF
 }
 write_conf
 
-SVCS=(postgres odoo api-gateway superapp-web ai-ocr-worker etl text2sql minio metabase)
+SVCS=(postgres odoo api-gateway superapp-web insight-web ai-ocr-worker etl text2sql minio metabase)
 dg() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
 : > /etc/fake-cosign/signed
 for s in "${SVCS[@]}"; do echo "${PREFIX}${s}@sha256:$(dg "$s-1")" >> /etc/fake-cosign/signed; done
@@ -797,6 +797,13 @@ vc "272f G39 staging ringkasan 9router + kedua izin diterima" 0 staging TEXT2SQL
   TEXT2SQL_CROSS_BORDER_OK=true TEXT2SQL_AGENT_SUMMARY_PROVIDER=ninerouter_ollama TEXT2SQL_AGENT_RESULTS_CROSS_BORDER_OK=true
 vc "272g G39 production ringkasan 9router ditolak (Q-T7)" 1 production TEXT2SQL_AGENT_SUMMARY_PROVIDER=ninerouter \
   TEXT2SQL_AGENT_RESULTS_CROSS_BORDER_OK=true
+# G42 (docs/04 §26.12 L-125): dashboard Insight; production true hanya dengan izin Superadmin (EFN_GATED_FEATURES)
+vc "273a G42 INSIGHT_ENABLED default diterima" 0 production
+vc "273b G42 INSIGHT_ENABLED=ya ditolak (boolean)" 1 staging INSIGHT_ENABLED=ya
+vc "273c G42 staging INSIGHT_ENABLED=true tanpa izin diterima" 0 staging INSIGHT_ENABLED=true
+vc "273d G42 production INSIGHT_ENABLED=true tanpa izin ditolak (L-125)" 1 production INSIGHT_ENABLED=true
+vc "273e G42 production INSIGHT_ENABLED=true + izin Superadmin diterima" 0 production INSIGHT_ENABLED=true \
+  EFN_ALLOW_FEATURE_ON=INSIGHT_ENABLED
 vc "269c G32 ETL_ENABLE_WASTE=true + ETL_ENABLE_ODOO=false ditolak" 1 staging ETL_ENABLE_WASTE=true ETL_ENABLE_ODOO=false
 vc "269d G32 production ETL_ENABLE_WASTE=true + ETL_ENABLE_ODOO kosong diterima (aktif setelah grant)" 0 production \
   ETL_ENABLE_WASTE=true
