@@ -16,3 +16,8 @@ ea30abd1a31f3cde003d64432a5c8ed5c1e3cedf:docs/agent-reports/efn-devsecops-engine
 98469c5569b142ca541cf5ac2f984370557f1d22:services/superapp-web/tests/online-routes.test.ts:generic-api-key:270
 # Squash merge PR #60 (a28096a): fixture uji palsu yang sama (kini juga diberi anotasi inline gitleaks:allow).
 a28096a0d4f543563a7e865f3ba7466190a3855f:scripts/host/test-efn-deploy.sh:generic-api-key:259
+# G42 (diperiksa efn-lead 2026-11-18): vektor uji SSO Insight sintetis yang memang publik di docs/04 §26.3 (sig negatif
+# kunci hex-decode) dan kunci uji palsu "0123456789abcdef"*4 di test Odoo. Bukan secret; commit berikut memberi
+# anotasi inline gitleaks:allow (berlaku juga setelah squash merge).
+2641710b550c39d82e7bd059a4928be3dfcad8a2:services/insight-web/tests/helpers.ts:generic-api-key:10
+2641710b550c39d82e7bd059a4928be3dfcad8a2:services/odoo/addons/efn_insight/tests/test_insight_sso.py:generic-api-key:19
