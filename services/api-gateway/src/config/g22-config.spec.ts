@@ -47,6 +47,9 @@ describe('AppConfig G22', () => {
     // G24 §16.2 (L-92): WTZ (F&B kios) tidak boleh QR meja maupun reservasi
     expect(() => testConfig({ FNB_QR_COMPANIES: 'PB,WTZ' }).fnbQrCompanies).toThrow(ConfigError);
     expect(() => testConfig({ BOOKING_COMPANIES: 'WTZ' }).bookingCompanies).toThrow(ConfigError);
+    // G44 §12.1 (L-144): SMD = PT retail (supermarket) -> bukan QR meja maupun reservasi
+    expect(() => testConfig({ FNB_QR_COMPANIES: 'PB,SMD' }).fnbQrCompanies).toThrow(ConfigError);
+    expect(() => testConfig({ BOOKING_COMPANIES: 'SMD' }).bookingCompanies).toThrow(ConfigError);
     expect(() => testConfig({ ODOO_API_KEY_QR_PB: randomSecret() }).assertStartupSecrets()).toThrow(/ODOO_API_KEY_QR_PB/);
     expect(testConfig({ FNB_QR_ENABLED: 'true', ONLINE_CHANNELS: 'GL' }).catalogSyncChannels).toEqual(['GL', 'PB', 'BCF']);
     expect(testConfig({ ONLINE_CHANNELS: 'GL' }).catalogSyncChannels).toEqual(['GL']);

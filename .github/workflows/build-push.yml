@@ -69,7 +69,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [odoo, api-gateway, superapp-web, insight-web, ai-ocr-worker, etl, text2sql, esb-extract, esb-migrate, postgres, minio, metabase]
+        service: [odoo, api-gateway, superapp-web, insight-web, ai-ocr-worker, etl, text2sql, esb-extract, forecast-worker, esb-migrate,
+                  postgres, minio, metabase]
         include:
           - { service: odoo, context: services/odoo }
           - { service: api-gateway, context: services/api-gateway }
@@ -79,6 +80,7 @@ jobs:
           - { service: etl, context: services/etl }
           - { service: text2sql, context: services/text2sql }   # G38 Text-to-SQL (docs/04 §23)
           - { service: esb-extract, context: services/esb-extract }   # G41 ekstraksi ESB Core (docs/04 §25)
+          - { service: forecast-worker, context: services/forecast-worker }   # G44 forecast statsforecast (docs/04 §28.2)
           - { service: esb-migrate, context: scripts/migration }   # G43 mesin migrasi ESB -> Odoo (docs/04 §27.2)
           - { service: postgres, context: infra/backup/postgres }
           - { service: minio, context: infra/minio }
@@ -161,11 +163,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [odoo, api-gateway, superapp-web, insight-web, ai-ocr-worker, etl, text2sql, esb-extract, esb-migrate, postgres, minio, metabase]
+        service: [odoo, api-gateway, superapp-web, insight-web, ai-ocr-worker, etl, text2sql, esb-extract, forecast-worker, esb-migrate,
+                  postgres, minio, metabase]
         include:
           - { service: odoo, context: services/odoo }
           - { service: api-gateway, context: services/api-gateway }
           - { service: superapp-web, context: services/superapp-web }
+          # G44 (docs/04 §28.2): ditandatangani seperti service lain; BELUM dipakai deploy.yml (overlay forecast, runbook §8)
+          - { service: forecast-worker, context: services/forecast-worker }
           # G42 (docs/04 §26): ikut rantai rilis bertanda tangan (deploy.yml / efn-deploy IMAGE_INSIGHT_WEB)
           - { service: insight-web, context: services/insight-web }
           - { service: ai-ocr-worker, context: services/ai-ocr-worker }

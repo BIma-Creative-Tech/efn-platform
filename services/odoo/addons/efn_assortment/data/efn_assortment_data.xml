@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Capability bersama (company kosong). Kode alcohol_license & non_halal_allowed terlindungi (tanpa override,
+         L-150); dirujuk kode, jangan diganti nama kodenya. Daftar outlet berizin = fit-gap Q-SM13 / Q-SM21. -->
+    <data noupdate="1">
+        <record id="capability_chiller" model="efn.assortment.capability">
+            <field name="name">Chiller</field>
+            <field name="code">chiller</field>
+        </record>
+        <record id="capability_freezer" model="efn.assortment.capability">
+            <field name="name">Freezer</field>
+            <field name="code">freezer</field>
+        </record>
+        <record id="capability_non_halal" model="efn.assortment.capability">
+            <field name="name">Boleh menjual non-halal</field>
+            <field name="code">non_halal_allowed</field>
+        </record>
+        <record id="capability_alcohol" model="efn.assortment.capability">
+            <field name="name">Izin minuman beralkohol</field>
+            <field name="code">alcohol_license</field>
+        </record>
+
+        <!-- docs/04 §28.10: default true begitu modul terpasang; mematikan = nilai persis "false". -->
+        <record id="param_enforce" model="ir.config_parameter">
+            <field name="key">efn_assortment.enforce</field>
+            <field name="value">true</field>
+        </record>
+
+        <record id="ir_cron_efn_assortment_daily" model="ir.cron">
+            <field name="name">EFN assortment: laporan pelanggaran harian</field>
+            <field name="model_id" ref="model_efn_assortment_violation"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_efn_daily_report()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">days</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>

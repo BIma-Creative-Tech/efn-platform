@@ -28,7 +28,7 @@ trap 'rm -rf "$work"' EXIT
 chmod 755 "$work"
 
 for f in efn_ca_crt tls_api_gateway_crt tls_api_gateway_key tls_traefik_crt tls_traefik_key \
-         tls_postgres_crt tls_postgres_key; do
+         tls_postgres_crt tls_postgres_key tls_forecast_worker_crt tls_forecast_worker_key; do
   [[ -s "${sec}/${f}.txt" ]] || { echo "secret ${f} tidak ada (jalankan scripts/gen-secrets.sh)" >&2; exit 2; }
   cp "${sec}/${f}.txt" "${work}/${f}"
 done
@@ -41,6 +41,8 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -co
 head -c 300000 /dev/zero | tr '\0' 'a' | sed 's/^/{"x":"/; s/$/"}/' > "${work}/big.json"
 # G26 §17.15: path bukti transfer menerima s.d. 2,5 MiB; > 2 621 440 byte tetap 413
 head -c 2700000 /dev/zero | tr '\0' 'a' | sed 's/^/{"x":"/; s/$/"}/' > "${work}/huge.json"
+# G44 §28.2: path forecast menerima s.d. 512 KiB (524288 byte); 600 KB tetap 413
+head -c 600000 /dev/zero | tr '\0' 'a' | sed 's/^/{"x":"/; s/$/"}/' > "${work}/fc_big.json"
 chmod 644 "${work}"/*
 
 cat > "${work}/cases.sh" <<'INNER'
@@ -220,6 +222,47 @@ post allowed_xff_stripped pass "$OK_PATH" -H "X-Forwarded-For: 1.2.3.4" -H "X-Fo
 post allowed_db_override_stripped pass "$OK_PATH" -H "X-Odoo-Database: postgres"
 post allowed_host_port pass "$OK_PATH" -H "Host: odoo-rpc-gateway:8443"
 post allowed_traceparent pass "$OK_PATH" -H "traceparent: 00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+
+# ── G44 §28.2: klien forecast-worker (CN forecast-worker) HANYA path #25-#29; CN api-gateway tidak boleh ke sana ──────
+FC="--cert /t/tls_forecast_worker_crt --key /t/tls_forecast_worker_key"
+FC_OK=/json/2/efn.forecast.run/efn_forecast_run_open
+postfc() { # $1 nama, $2 harapan, $3 path, sisa = argumen tambahan
+  n="$1"; w="$2"; p="$3"; shift 3
+  # shellcheck disable=SC2086
+  run "$n" "$w" $FC -X POST -H "$H_CT" -H "$H_AUTH" --data '{"schema_version":1}' "$@" "$GW$p"
+}
+for p in efn.forecast.calendar/efn_forecast_calendar_upsert efn.forecast.run/efn_forecast_run_open \
+         efn.forecast.daily/efn_forecast_ingest efn.demand.forecast.line/efn_minmax_ingest \
+         efn.forecast.run/efn_forecast_run_close; do
+  postfc "forecast_allowed:$p" pass "/json/2/$p"
+  post "bff_to_forecast_path_denied:$p" deny "/json/2/$p"
+done
+postfc forecast_to_bff_path_denied deny "$OK_PATH"
+postfc forecast_to_promo_path_denied deny /json/2/efn.promo.banner/efn_promo_feed
+postfc forecast_search_read_denied deny /json/2/efn.forecast.run/search_read
+postfc forecast_write_denied deny /json/2/efn.demand.forecast.line/write
+postfc forecast_orderpoint_denied deny /json/2/stock.warehouse.orderpoint/write
+postfc forecast_wrong_model deny /json/2/efn.forecast.daily/efn_forecast_run_open
+postfc forecast_suffix deny "${FC_OK}_v2"
+postfc forecast_upper deny /json/2/efn.forecast.run/EFN_FORECAST_RUN_OPEN
+postfc forecast_trailing_slash deny "$FC_OK/"
+postfc forecast_encoded deny /json/2/efn.forecast.run/efn_forecast_run_%6fpen
+postfc forecast_query deny "$FC_OK?db=postgres"
+postfc forecast_hdr_method_override deny "$FC_OK" -H "X-HTTP-Method-Override: GET"
+# shellcheck disable=SC2086
+run forecast_method_get deny $FC -X GET -H "$H_CT" -H "$H_AUTH" "$GW$FC_OK"
+# shellcheck disable=SC2086
+run forecast_body_300k_allowed pass $FC -X POST -H "$H_CT" -H "$H_AUTH" --data-binary @/t/big.json \
+  "$GW/json/2/efn.forecast.daily/efn_forecast_ingest"
+# shellcheck disable=SC2086
+run forecast_body_too_large deny $FC -X POST -H "$H_CT" -H "$H_AUTH" --data-binary @/t/fc_big.json \
+  "$GW/json/2/efn.forecast.daily/efn_forecast_ingest"
+# Batas 512 KiB khusus path forecast, bukan untuk path BFF: BFF 600 KB ke path biasa tetap 413
+# shellcheck disable=SC2086
+run bff_body_600k_denied deny $BFF -X POST -H "$H_CT" -H "$H_AUTH" --data-binary @/t/fc_big.json "$GW$OK_PATH"
+# forecast-worker langsung ke sidecar Odoo (melewati filter) harus ditolak ghostunnel odoo-tls
+# shellcheck disable=SC2086
+run forecast_direct_to_odoo_tls_rejected tls $FC -X POST -H "$H_CT" -H "$H_AUTH" --data '{}' "https://odoo:8443$FC_OK"
 
 echo "TOTAL_FAIL=$fails"
 [ "$fails" -eq 0 ]

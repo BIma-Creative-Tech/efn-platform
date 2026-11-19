@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Jadwal kirim -->
+    <record id="efn_delivery_schedule_view_list" model="ir.ui.view">
+        <field name="name">efn.delivery.schedule.list</field>
+        <field name="model">efn.delivery.schedule</field>
+        <field name="arch" type="xml">
+            <list editable="bottom">
+                <field name="warehouse_id"/>
+                <field name="supply_warehouse_id"/>
+                <field name="product_group"/>
+                <field name="weekdays"/>
+                <field name="weekday_label"/>
+                <field name="lead_days"/>
+                <field name="cutoff_time" widget="float_time"/>
+                <field name="tz" optional="hide"/>
+                <field name="review_days" optional="show"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="active" widget="boolean_toggle"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_delivery_schedule_action" model="ir.actions.act_window">
+        <field name="name">Jadwal Kirim DC → Outlet</field>
+        <field name="res_model">efn.delivery.schedule</field>
+        <field name="view_mode">list</field>
+    </record>
+    <record id="efn_supplier_schedule_view_list" model="ir.ui.view">
+        <field name="name">efn.supplier.schedule.list</field>
+        <field name="model">efn.supplier.schedule</field>
+        <field name="arch" type="xml">
+            <list editable="bottom">
+                <field name="partner_id"/>
+                <field name="warehouse_id"/>
+                <field name="weekdays"/>
+                <field name="weekday_label"/>
+                <field name="cutoff_time" widget="float_time"/>
+                <field name="lead_days"/>
+                <field name="tz" optional="hide"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="active" widget="boolean_toggle"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_supplier_schedule_action" model="ir.actions.act_window">
+        <field name="name">Jadwal Supplier</field>
+        <field name="res_model">efn.supplier.schedule</field>
+        <field name="view_mode">list</field>
+    </record>
+
+    <!-- Usulan -->
+    <record id="efn_replenishment_proposal_view_list" model="ir.ui.view">
+        <field name="name">efn.replenishment.proposal.list</field>
+        <field name="model">efn.replenishment.proposal</field>
+        <field name="arch" type="xml">
+            <list create="0" delete="0" decoration-muted="state in ('rejected', 'expired')"
+                  decoration-success="state == 'approved'" decoration-warning="state == 'proposed'">
+                <field name="delivery_date"/>
+                <field name="warehouse_id"/>
+                <field name="supply_warehouse_id"/>
+                <field name="schedule_id"/>
+                <field name="cutoff_at"/>
+                <field name="state" widget="badge"/>
+                <field name="approved_by" optional="show"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_replenishment_proposal_view_form" model="ir.ui.view">
+        <field name="name">efn.replenishment.proposal.form</field>
+        <field name="model">efn.replenishment.proposal</field>
+        <field name="arch" type="xml">
+            <form create="0" delete="0">
+                <header>
+                    <button name="action_efn_approve" type="object" string="Setujui" class="btn-primary"
+                            invisible="state != 'proposed'" groups="efn_replenishment.group_replenishment_store"/>
+                    <button name="action_efn_reject" type="object" string="Tolak"
+                            invisible="state != 'proposed'" groups="efn_replenishment.group_replenishment_store"/>
+                    <field name="state" widget="statusbar" statusbar_visible="proposed,approved"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="warehouse_id"/>
+                            <field name="supply_warehouse_id"/>
+                            <field name="schedule_id"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                        <group>
+                            <field name="delivery_date"/>
+                            <field name="cutoff_at"/>
+                            <field name="run_id"/>
+                            <field name="approved_by" invisible="not approved_by"/>
+                            <field name="approved_at" invisible="not approved_at"/>
+                            <field name="picking_id" invisible="not picking_id"/>
+                        </group>
+                    </group>
+                    <field name="line_ids" readonly="state != 'proposed'">
+                        <list editable="bottom" create="0" delete="0" decoration-muted="excluded">
+                            <field name="product_id" readonly="1"/>
+                            <field name="forecast_qty" optional="show"/>
+                            <field name="on_hand"/>
+                            <field name="in_transit"/>
+                            <field name="qty_need"/>
+                            <field name="qty_shelf_cap" optional="show"/>
+                            <field name="qty_rack_cap" optional="show"/>
+                            <field name="qty_proposed"/>
+                            <field name="qty_approved" readonly="excluded"/>
+                            <field name="change_reason" readonly="excluded"/>
+                            <field name="reason_codes"/>
+                            <field name="excluded" column_invisible="1"/>
+                            <field name="changed_by" optional="hide"/>
+                            <field name="product_uom_id" optional="hide"/>
+                        </list>
+                    </field>
+                    <field name="note" placeholder="Catatan"/>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+    <record id="efn_replenishment_proposal_view_search" model="ir.ui.view">
+        <field name="name">efn.replenishment.proposal.search</field>
+        <field name="model">efn.replenishment.proposal</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="warehouse_id"/>
+                <filter name="proposed" string="Menunggu approval" domain="[('state', '=', 'proposed')]"/>
+                <filter name="expired" string="Kedaluwarsa" domain="[('state', '=', 'expired')]"/>
+                <group>
+                    <filter name="by_wh" string="Outlet" context="{'group_by': 'warehouse_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+    <record id="efn_replenishment_proposal_action" model="ir.actions.act_window">
+        <field name="name">Usulan Order Outlet</field>
+        <field name="res_model">efn.replenishment.proposal</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{'search_default_proposed': 1}</field>
+    </record>
+
+    <!-- Log bias -->
+    <record id="efn_replenishment_bias_log_view_list" model="ir.ui.view">
+        <field name="name">efn.replenishment.bias.log.list</field>
+        <field name="model">efn.replenishment.bias.log</field>
+        <field name="arch" type="xml">
+            <list create="0" edit="0" delete="0">
+                <field name="create_date"/>
+                <field name="kind"/>
+                <field name="warehouse_id"/>
+                <field name="product_id"/>
+                <field name="qty_system"/>
+                <field name="qty_before"/>
+                <field name="qty_after"/>
+                <field name="change_reason"/>
+                <field name="user_id"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_replenishment_bias_log_action" model="ir.actions.act_window">
+        <field name="name">Log Bias Replenishment</field>
+        <field name="res_model">efn.replenishment.bias.log</field>
+        <field name="view_mode">list</field>
+    </record>
+
+    <menuitem id="menu_efn_replenishment_root" name="Replenishment EFN" parent="stock.menu_stock_root" sequence="97"
+              groups="group_replenishment_store,group_replenishment_buyer,group_replenishment_admin"/>
+    <menuitem id="menu_efn_replenishment_proposal" name="Usulan Order Outlet" parent="menu_efn_replenishment_root"
+              action="efn_replenishment_proposal_action" sequence="10"/>
+    <menuitem id="menu_efn_delivery_schedule" name="Jadwal Kirim" parent="menu_efn_replenishment_root"
+              action="efn_delivery_schedule_action" sequence="20"/>
+    <menuitem id="menu_efn_supplier_schedule" name="Jadwal Supplier" parent="menu_efn_replenishment_root"
+              action="efn_supplier_schedule_action" sequence="30"/>
+    <menuitem id="menu_efn_replenishment_bias" name="Log Bias" parent="menu_efn_replenishment_root"
+              action="efn_replenishment_bias_log_action" sequence="40"/>
+</odoo>

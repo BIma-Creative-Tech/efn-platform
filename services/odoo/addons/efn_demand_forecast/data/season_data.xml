@@ -8,11 +8,12 @@
         <field name="weekdays">5,6</field>
         <field name="factor">1.30</field>
     </record>
+    <!-- G44 (docs/04 §28.3, L-146): minggu gajian = 7 hari terakhir + 7 hari pertama bulan (parameter
+         efn_forecast.payday_tail_days / payday_head_days), menggantikan "tgl 25 s.d. 5". DB lama dikonversi
+         migrations/19.0.2.0.0 hanya bila record masih bernilai bawaan. -->
     <record id="season_payday" model="efn.forecast.season">
-        <field name="name">Gajian (tgl 25 s.d. 5)</field>
-        <field name="kind">monthly</field>
-        <field name="day_from">25</field>
-        <field name="day_to">5</field>
+        <field name="name">Minggu gajian (7 hari terakhir + 7 hari pertama)</field>
+        <field name="kind">payday</field>
         <field name="factor">1.15</field>
     </record>
     <record id="season_nataru_2026" model="efn.forecast.season">

@@ -983,6 +983,30 @@ Tabel baru `fnb_table_session` (order_uuid nullable, unique parsial satu sesi op
 - SEC-166/169 tidak disentuh (Odoo / keputusan lead). Ringkasan sesi `fnb_table_session.earn_status` saat order campuran (`pos_member` lalu `skipped`) menyimpan hasil terakhir non-`earned` (hanya ringkasan; per kiriman akurat).
 - Butir laporan G22 di atas yang menyebut "`FNB_RL_EVENTS` belum dipasang" dan "consent `marketing` tidak dicek" kini usang.
 
+## G44 — kode company `SMD` (PT Supermarket Demo) di BFF, insight-web, superapp-web (docs/04 §12.1 revisi 18 Nov 2026, §28.1, L-144, ADR-045 Proposed; 18 Nov 2026)
+
+> **Build/test BELUM dijalankan lokal** (Node tidak ada di host). Jest api-gateway dan Vitest insight-web/superapp-web dijalankan lead di container.
+
+Prinsip: SMD ditambahkan **di akhir** setiap daftar (setelah `FARM`) agar rekonsiliasi dengan G43 (IMD/CUP disisipkan sebelum `FARM`) hanya menyentuh satu baris per daftar. SMD hanya **pengenal PT untuk validasi**; tidak ada fitur yang dinyalakan (§12.1: kanal online belum ada).
+
+| Titik | Keputusan |
+|---|---|
+| api-gateway `src/loyalty/loyalty.service.ts` `COMPANY_CODES` | **Ditambah** `SMD` (wajib menurut §12.1). Efek: DTO POS earn/redeem, akrual harian (`/v1/pos/loyalty/accrual`), kebijakan loyalty/MGM per PT, earn consumer menerima `SMD` — tanpa ini cron akrual Odoo untuk company SMD akan 400 setiap hari (pola regresi G43). |
+| api-gateway `src/common/metrics/metrics.service.ts` (seri `issuer`) | **Ditambah** `SMD` (harus sama dengan `COMPANY_CODES`). |
+| api-gateway `src/loyalty/loyalty.spec.ts` | Daftar diperbarui; test baru: paritas seri metrik `issuer` = `COMPANY_CODES`, earn payload `company_code: SMD` diterima; negatif `smd`/`SMDX`/`SM`. |
+| api-gateway `src/catalog/catalog.spec.ts` | Test baru: SMD tidak tampil tanpa `ONLINE_CHANNELS` eksplisit; kode PT SMD dikenali bila dinyalakan eksplisit (tidak fail-closed). Kode katalog tidak diubah (set kode diturunkan dari `COMPANY_CODES`). |
+| api-gateway `src/config/online-config.spec.ts` | Test: default `ONLINE_CHANNELS` dan `catalogSyncChannels` tidak memuat SMD. `ONLINE_CHANNELS` default (`GL`) **tidak diubah**. |
+| api-gateway `src/config/g22-config.spec.ts` | Test negatif: `FNB_QR_COMPANIES=PB,SMD` dan `BOOKING_COMPANIES=SMD` ditolak (SMD retail). `FNB_COMPANY_CODES` tidak diubah. |
+| api-gateway `src/odoo-rpc/odoo-online.mock.ts` | **Sengaja tidak** menambah kanal SMD (mock meniru kanal Odoo; kanal SMD belum ada). Hanya komentar. |
+| api-gateway README `src/loyalty/README.md`, `src/catalog/README.md` | Satu butir G44 baru (baris lama tidak diubah). |
+| insight-web `lib/claims.ts` `ESB_CODES` | **Sengaja tidak** — `eit1` `codes ⊆ ESB_CODES` byte-exact dengan Odoo `efn_insight` + signature ClickHouse (§26); SMD bukan brand ESB; scope supermarket = `eit2`/`eis2` + `wids` (§28.11, L-162, G47). Hanya komentar + test negatif di `tests/token.test.ts` (SMD di `eit1` → `bad_claims`). `lib/brands.ts` insight tidak diubah. |
+| superapp-web `lib/brands.ts` | **Ditambah** `SMD` ke tipe `CompanyCode` + entri `COMPANIES` placeholder netral (`PT Supermarket Demo`, `businessType: null` karena belum ada kanal online → tidak memenuhi syarat faktur online, `tableService: false`). **Sengaja tidak**: `BrandId`/tenant/subdomain, `BRAND_CODE_CHANNELS`, `companies` tenant `efn`, tema, aset, `PHOTO_SHAPES`. |
+| superapp-web `tests/brands.test.ts` | Daftar kunci `COMPANIES` = 8 entitas; test baru SMD tanpa kanal/tenant/tema, `allPpnCompanies(['SMD'])` false. |
+
+### Untuk lead / agent lain
+- **Devsecops/infra (wajib sebelum ledger SMD bisa ditulis):** CHECK `company_code`/`issuer_company_code` di skema platform (pola `13-platform-g24.sql`; G43 memakai `18-platform-g43.sql`, juga `loyalty_policy`, `mgm_policy`/`mgm_source`/`mgm_reward`) belum memuat `SMD` — sampai migrasi G44 dibuat, tulis ledger SMD ditolak DB (fail-closed, bukan kebocoran). Nomor file harus direkonsiliasi dengan G43 (`18-…`). Juga `deploy-validate` sesuai §12.1.
+- ETL/text2sql/esb-extract/`efn_data_ask` di luar cakupan saya (masih 7 kode di worktree ini kecuali Odoo `efn_core` yang sudah memuat SMD).
+- Merge G43: setiap daftar akan konflik satu baris → hasil akhir `[..., 'WTZ', 'IMD', 'CUP', 'FARM', 'SMD']`; test paritas metrik G43 dan G44 identik isinya (cukup simpan satu).
 ## Gelombang 43 — kode PT `IMD` (PT Im Donut) dan `CUP` (PT Curry Up) di BFF + CHECK platform (ADR-043 Proposed; 18 Nov 2026)
 
 > **Build/test/lint BELUM dijalankan lokal** (tanpa shell di sesi ini). Semua spec di bawah belum dieksekusi; migrasi SQL belum dijalankan ke PostgreSQL. Lead menjalankan `npm test` / lint / build api-gateway dan `psql -f 18-platform-g43.sql` (dua kali, uji idempoten) di container.

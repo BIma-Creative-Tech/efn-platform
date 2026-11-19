@@ -113,6 +113,12 @@ describe('verifySsoToken - penolakan', () => {
     }
   });
 
+  it('G44 §12.1/§28.11: kode PT SMD (bukan brand ESB) di token eit1 -> bad_claims (scope supermarket = eit2, G47)', () => {
+    for (const codes of [['SMD'], ['PB', 'SMD'], ['BCF', 'BCR', 'CUP', 'IMD', 'PB', 'SMD', 'WTZ']]) {
+      expect(verifySsoToken(makeToken({ codes }), KEY, NOW, never)).toEqual({ ok: false, code: 'bad_claims' });
+    }
+  });
+
   it('cids tak urut / nol / negatif / > 32 butir -> bad_claims', () => {
     for (const cids of [[5, 3], [0], [-1], Array.from({ length: 33 }, (_, i) => i + 1)]) {
       expect(verifySsoToken(makeToken({ cids }), KEY, NOW, never)).toEqual({ ok: false, code: 'bad_claims' });

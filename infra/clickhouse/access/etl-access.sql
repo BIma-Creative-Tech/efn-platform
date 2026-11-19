@@ -56,6 +56,14 @@ GRANT SELECT, INSERT ON efn_dwh.fact_mo_yield TO etl_writer;
 GRANT SELECT, INSERT ON efn_dwh.fact_mo_component TO etl_writer;
 GRANT SELECT, INSERT ON efn_dwh.dim_ck_threshold TO etl_writer;
 GRANT SELECT, INSERT ON efn_dwh.dim_warehouse TO etl_writer;
+-- Gelombang 44 (15-g44-forecast.sql, ADR-046): mart forecast (ReplacingMergeTree, tanpa PII). v_fc_sales_daily = aktual
+-- untuk fact_forecast_accuracy (view INVOKER; tabel dasarnya sudah di-grant di atas).
+GRANT SELECT, INSERT ON efn_dwh.dim_fc_warehouse TO etl_writer;
+GRANT SELECT, INSERT ON efn_dwh.dim_calendar TO etl_writer;
+GRANT SELECT, INSERT ON efn_dwh.dim_forecast_run TO etl_writer;
+GRANT SELECT, INSERT ON efn_dwh.fact_forecast_daily TO etl_writer;
+GRANT SELECT, INSERT ON efn_dwh.fact_forecast_accuracy TO etl_writer;
+GRANT SELECT ON efn_dwh.v_fc_sales_daily TO etl_writer;
 -- Salinan audit tamper-evident: HANYA SELECT + INSERT. Sengaja TANPA ALTER DELETE/UPDATE, TRUNCATE, DROP, OPTIMIZE:
 -- ETL (atau kredensial efn_etl yang bocor) tidak bisa menghapus/mengubah salinan; perubahan hanya oleh admin ClickHouse
 -- (terdeteksi lewat kepala rantai di Loki). Bila suatu saat ada `GRANT ALL`/wildcard ke etl_writer, cabut dulu.

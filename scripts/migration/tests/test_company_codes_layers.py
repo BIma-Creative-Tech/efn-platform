@@ -1,8 +1,9 @@
-"""Kode PT IMD & CUP (docs/04 §27.1, ADR-042/043) harus sama di SEMUA lapisan (QA G43).
+"""Kode PT IMD & CUP (docs/04 §27.1, ADR-042/043) + SMD (G44, §12.1 revisi 18 Nov 2026) sama di SEMUA lapisan.
 
-Satu daftar acuan (9 entitas). Tiap lapisan diurai dari sumber (ast / regex), bukan diimpor, supaya test jalan di
-container `esb-migrate` tanpa Odoo/NestJS. Lapisan yang tertinggal = BFF menolak ledger IMD/CUP (CHECK platform), mart
-ETL salah, Odoo menolak `efn_brand_code`, importer menolak company, dsb. Dilewati bila checkout repo tidak penuh.
+Satu daftar acuan platform (10 entitas); lapisan khusus migrasi ESB memakai 9 kode G43 (tanpa SMD).
+Tiap lapisan diurai dari sumber (ast / regex), bukan diimpor, supaya test jalan di container `esb-migrate` tanpa
+Odoo/NestJS. Lapisan yang tertinggal = BFF menolak ledger IMD/CUP (CHECK platform), mart ETL salah, Odoo menolak
+`efn_brand_code`, importer menolak company, dsb. Dilewati bila checkout repo tidak penuh.
 """
 
 import ast
@@ -18,7 +19,8 @@ REPO = Path(__file__).resolve().parents[3]
 if not (REPO / "services" / "odoo" / "addons").is_dir():
     pytest.skip("checkout repo penuh dibutuhkan", allow_module_level=True)
 
-EXPECTED = frozenset({"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "IMD", "CUP", "FARM"})
+G43_CODES = frozenset({"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "IMD", "CUP", "FARM"})  # migrasi ESB + PG 18
+EXPECTED = G43_CODES | {"SMD"}  # daftar platform setelah merge G43 + G44 (BFF, Odoo, ETL, CH, PG 19, deploy)
 ESB_COMPANIES = frozenset({"PB", "WTZ", "BCF", "BCR", "IMD", "CUP"})  # company hasil migrasi brand ESB
 QUOTED = re.compile(r"""['"]([A-Z]{2,4})['"]""")
 
@@ -52,17 +54,17 @@ def _quoted(text: str) -> frozenset[str]:
     return frozenset(QUOTED.findall(text))
 
 
-def test_reference_list_is_nine_entities() -> None:
-    assert len(EXPECTED) == 9 and {"IMD", "CUP"} <= EXPECTED
+def test_reference_list_is_ten_entities() -> None:
+    assert len(G43_CODES) == 9 and len(EXPECTED) == 10 and {"IMD", "CUP", "SMD"} <= EXPECTED
 
 
 def test_export_mapping_and_settings_know_imd_cup() -> None:
-    assert export_mapping.COMPANY_CODES == EXPECTED
+    assert export_mapping.COMPANY_CODES == G43_CODES  # SMD bukan brand ESB
     assert MigSettings.from_env({"APP_ENV": "dev"}).saldo_blocked == frozenset({"IMD", "CUP"})
 
 
 def test_python_layers() -> None:
-    assert _py_set("services/esb-extract/efn_esb/config.py", "ALLOWED_COMPANY_CODES") == EXPECTED
+    assert _py_set("services/esb-extract/efn_esb/config.py", "ALLOWED_COMPANY_CODES") == G43_CODES
     assert _py_set("services/etl/efn_etl/entities.py", "COMPANY_CODES") == EXPECTED
     codes = [
         t[0]
@@ -111,7 +113,13 @@ def test_insight_web_claims() -> None:
 def test_sql_layers() -> None:
     pg = _read("infra/postgres/init/18-platform-g43.sql")
     match = re.search(r"codes constant text := '(.*?)';\n", pg)
-    assert match and _quoted(match.group(1).replace("''", "'")) == EXPECTED
+    assert match and _quoted(match.group(1).replace("''", "'")) == G43_CODES
+    pg19 = _read("infra/postgres/init/19-platform-g44.sql")  # pagar merge G44: wajib memuat IMD/CUP
+    match = re.search(r"code_list constant text\[\] := ARRAY\[(.*?)\];", pg19)
+    assert match and _quoted(match.group(1)) == EXPECTED
+    deploy = _read("scripts/lib/deploy-validate.sh")
+    match = re.search(r"^EFN_COMPANY_CODES=\((.*?)\)$", deploy, re.M)
+    assert match and frozenset(match.group(1).split()) == EXPECTED
     ch = _read("infra/clickhouse/init/08-g20-entities.sql")
     match = re.search(r"c\.brand NOT IN \((.*?)\)", ch)
     assert match and _quoted(match.group(1)) == EXPECTED

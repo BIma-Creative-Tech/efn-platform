@@ -229,6 +229,10 @@ create_user efn_esb /run/secrets/clickhouse_password_esb
 # G42 (kontrak G42 §B, ADR-041): user service insight-web. WAJIB seperti efn_text2sql (secret di-mount ke
 # clickhouse-init di base compose, devsecops) -> secret hilang = init gagal (fail closed, bukan user tanpa password).
 create_user efn_insight /run/secrets/clickhouse_password_insight
+# G44 (ADR-046, docs/04 §28.2): user forecast-worker (read-only efn_forecast). Devsecops (G44) me-mount secret
+# clickhouse_password_forecast ke clickhouse-init di base compose (semua env; scripts/secrets.list `random`) -> WAJIB
+# seperti efn_insight: secret hilang = init gagal (fail closed, bukan user tanpa password).
+create_user efn_forecast_reader /run/secrets/clickhouse_password_forecast
 # G43 (docs/04 §27.10): user mesin migrasi `efn_mig` HANYA selama program migrasi. Secret tidak di-mount / kosong /
 # placeholder (`disabled`, scripts/secrets.list) -> user dihapus (bukan gagal: stack normal tidak butuh migrasi).
 # Secret ada tetapi tidak valid (charset/panjang) -> init gagal (create_user, fail closed).
@@ -282,6 +286,13 @@ $CH --multiquery <<'EOF'
 GRANT insight_reader TO efn_insight;
 SET DEFAULT ROLE insight_reader TO efn_insight;
 ALTER USER efn_insight SETTINGS PROFILE 'insight_readonly';
+EOF
+
+# G44: forecast-access.sql membuat role forecast_reader & profil forecast_readonly; pengikatan ke user di sini.
+$CH --multiquery <<'EOF'
+GRANT forecast_reader TO efn_forecast_reader;
+SET DEFAULT ROLE forecast_reader TO efn_forecast_reader;
+ALTER USER efn_forecast_reader SETTINGS PROFILE 'forecast_readonly';
 EOF
 
 # G38 (docs/04 §23.3): row policy cakupan PT pada view efn_t2s. Service text2sql mengirim setting SQL_efn_cids
@@ -344,4 +355,4 @@ if [ -n "$INSIGHT_MISSING" ]; then
 fi
 
 rm -f "$CFG"
-echo "clickhouse-init: skema, user (efn_etl, efn_text2sql, efn_metabase, efn_esb, efn_insight, efn_mig bila aktif) dan grant diterapkan"
+echo "clickhouse-init: skema, user (efn_etl, efn_text2sql, efn_metabase, efn_esb, efn_insight, efn_forecast_reader, efn_mig bila aktif) dan grant diterapkan"

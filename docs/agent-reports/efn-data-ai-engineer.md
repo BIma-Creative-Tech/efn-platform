@@ -1254,6 +1254,101 @@ kecuali variabel kunci; verifikasi `system.row_policies` + REVOKE.
 - Belum dikerjakan (di luar ownership): compose/secrets.list/check-encryption (devsecops), docs/04 §26.7 perlu
   direvisi untuk 8 view, grant definer per objek, dan pemetaan data_quality dinamis (architect/lead).
 
+---
+
+## Gelombang 44 — forecast-worker statsforecast + kalender budaya, mart forecast, SMD di ETL (18 Nov 2026)
+
+Kontrak: ADR-046 (Proposed), docs/04 §28.1/§28.2 (byte-exact)/§28.3/§28.10, §12.1 revisi 18 Nov (SMD), L-144..L-148,
+K25-02, ADR-003. Worktree `efn-platform-g44`, branch `feat/wave-44-supermarket-forecast`. Tidak ada commit.
+
+### File
+- **Baru** `services/forecast-worker/` — `efn_forecast/{__init__,__main__,calendar,factors,models,pipeline,contract,
+  odoo,source,runner,schedule,config,tls}.py`, `tests/{conftest,test_calendar,test_factors_models,test_contract,
+  test_odoo,test_runner,test_pipeline_minmax,test_backtest,test_config_schedule,test_access_sql}.py`, `Dockerfile`
+  (pola esb-extract: digest dipin, user 65534, `NUMBA_CACHE_DIR=/tmp/numba`), `requirements.txt`,
+  `requirements-dev.txt`, `ruff.toml`, `pytest.ini` (marker `slow`), `.dockerignore`, `README.md`.
+- **Baru** `infra/clickhouse/init/15-g44-forecast.sql` — DB `efn_forecast`; tabel `dim_fc_warehouse`, `dim_calendar`,
+  `dim_forecast_run`, `fact_forecast_daily` (TTL 3 th), `fact_forecast_accuracy` (TTL 3 th) — semua
+  ReplacingMergeTree; view `efn_dwh.v_fc_{sales_daily,stock_daily,scrap_daily,calendar,product,warehouse}` +
+  `v_forecast_accuracy_weekly` (dashboard).
+- **Baru** `infra/clickhouse/access/forecast-access.sql` — profil `forecast_readonly` (readonly=2, CREATE = ALTER), role
+  `forecast_reader` (REVOKE efn_dwh/efn_esb), definer `efn_forecast_definer` (grant per objek = penutupan view),
+  6 view DEFINER `efn_forecast.v_*` berkolom eksplisit, `GRANT SELECT ON efn_forecast.*`, kuota per jam.
+- **Ubah** `infra/clickhouse/access/etl-access.sql` (grant SELECT/INSERT 5 tabel G44 + SELECT `v_fc_sales_daily`),
+  `infra/clickhouse/init/08-g20-entities.sql` (daftar kode view konsolidasi + `SMD`), `clickhouse-init.sh` (awalnya
+  saya tambahkan blok bersyarat; devsecops lalu menjadikannya wajib — saya hanya merapikan teks `echo` penutup).
+- **Ubah** `services/etl`: `efn_etl/entities.py` (+`SMD` retail), `efn_etl/forecast.py` (baru), `config.py`
+  (`ETL_ENABLE_FORECAST`, `ETL_FORECAST_ACCURACY_WEEKS`, `ETL_FORECAST_ACCURACY_INTERVAL_SECONDS`), `jobs.py`
+  (`enabled_jobs(forecast=)`), `__main__.py` (siklus akurasi harian), `sql/odoo-readonly-grants.sql` (bagian G44
+  bersyarat + `stock_warehouse.code`), `README.md`, `tests/test_entities.py` (8 entitas, 56 pasangan), `tests/test_forecast.py`.
+
+### Env / secret baru (untuk devsecops — sudah selaras dengan `docker-compose.forecast.yml`)
+- forecast-worker membaca persis env compose: `FORECAST_ENABLED`, `FORECAST_DAILY_CRON`, `FORECAST_TZ`,
+  `FORECAST_HORIZON_DAYS`, `FORECAST_CHUNK_SIZE`, `ODOO_RPC_URL`, `ODOO_RPC_CA_FILE`, `ODOO_RPC_CLIENT_CERT_FILE`,
+  `ODOO_RPC_CLIENT_KEY_FILE`, `ODOO_RPC_TIMEOUT_SECONDS`, `ODOO_API_KEY_FORECAST_SMD_FILE` (`disabled` ditolak),
+  `CH_HOST/PORT/SECURE/CA_FILE/DATABASE/USER/PASSWORD_FILE`, `NUMBA_CACHE_DIR`. Opsional (default aman, tidak wajib di
+  compose): `FORECAST_MINMAX_WEEKDAY`, `FORECAST_DC_CODES`, `FORECAST_WAREHOUSE_CODES`, `FORECAST_PAYDAY_*`,
+  `FORECAST_WEEKEND_DAYS`, `FORECAST_LEBARAN_DATES`, `FORECAST_SERVICE_LEVEL*`, `FORECAST_WASTE_*`, `FORECAST_MINMAX_*`,
+  `FORECAST_BACKTEST_*`, `FORECAST_MODELS`, `FORECAST_CV_WINDOWS`, `FORECAST_HISTORY_DAYS`, `FORECAST_STOCK_DAYS`,
+  `FORECAST_FIT_DAYS`, `ODOO_RPC_MAX_RETRIES`, `ODOO_DB`, `CH_QUERY_TIMEOUT_SECONDS`, `LOG_LEVEL`.
+- `FORECAST_ENABLED=false` → proses idle (tidak exit; sesuai komentar compose). Healthcheck compose `os.kill(1,0)` cukup.
+- ETL: `ETL_ENABLE_FORECAST` (default `false`, butuh `ETL_ENABLE_ODOO`), `ETL_FORECAST_ACCURACY_WEEKS` (2),
+  `ETL_FORECAST_ACCURACY_INTERVAL_SECONDS` (86400). Tidak ada secret baru untuk ETL.
+
+### Skema Odoo & rekonsiliasi dengan efn-odoo-engineer (dicocokkan dari source `efn_demand_forecast/models/*`)
+- `efn_forecast_run.run_id` = Char UUID worker (bukan `run_uuid`; mart `dim_forecast_run.run_uuid` diisi dari kolom
+  ini), `state` open|ok|failed, `generated_at`; `efn_forecast_daily` (`run_id` many2one, `date`, `yhat/p10/p90/sigma`,
+  `model`); `efn_forecast_calendar` (`name` Char ≤ 64). SQL ETL + grant G44 disesuaikan. Catatan: wizard v1 TransientModel
+  `efn.forecast.run` di `wizard/` masih ada di tree — konflik nama dengan model v2 harus diselesaikan sisi Odoo.
+- Body json2 = payload §28.2 sebagai argumen bernama (`def efn_forecast_ingest(self, **payload)`) ✓.
+- Galat: 422 `efn_forecast:<kode>` (UserError) / 403 `efn_forecast:company_mismatch|access_denied` → worker tidak retry,
+  run ditandai failed; 429/5xx/timeout → retry backoff. Parser kode error membaca `message` json2 Odoo 19.
+- Odoo menolak `chunk_total < 1` → run gagal sebelum data siap dibuka dengan `chunk_total=1` lalu `run_close failed`
+  (failed tidak menuntut chunk lengkap). `run_close ok` setelah SEMUA chunk terkirim (`incomplete_run` bila tidak).
+- Odoo menolak `wape_backtest: null` (metrik boleh tidak lengkap) → kunci dihilangkan bila backtest tidak ada
+  (Odoo menyimpan 0). Respons open/close/upsert divalidasi longgar (field tambahan diabaikan).
+- text2sql: `COMPANY_CODES` + `SMD` (`efn_text2sql/scope.py`, test `test_scope.py`, deskripsi `semantic_layer.yaml`).
+- Worker menghitung minggu gajian dari env (default 7+7), bukan dari parameter Odoo per company (belum ada jalur baca).
+
+### Keputusan desain
+- "Regressor kalender" = penyesuaian multiplikatif (backfitting X-11, diestimasi di agregat gudang×kategori → gudang →
+  PT, disusutkan n/(n+5)), lalu model statsforecast pada seri yang sudah disesuaikan; berlaku seragam untuk semua model
+  (AutoARIMA exog tidak dipakai — lebih lambat dan tidak membantu Croston/ADIDA).
+- Klasifikasi: histori < 56 hari / SKU baru → `category_mean` (perintah lead), bukan Croston seperti ADR §3.3; hari nol
+  > 60 % → Croston (CV² < 0,49) / ADIDA. DC = Σ outlet + permintaan langsung (hanya bila tepat satu DC).
+- Akurasi (ETL): forecast run `ok` kind `daily` TERAKHIR yang dibuat sebelum tanggalnya (lead ≥ 1 hari); minggu Senin
+  WIB; minggu selesai dihitung ulang setiap hari (versi `computed_at`); jumlah mentah disimpan agar WAPE/bias bisa
+  diagregasi ulang.
+- `dim_fc_warehouse` terpisah dari `dim_warehouse` G32 (yang membaca kolom `efn_ck_production`).
+- ClickHouse tanpa row policy per PT untuk `efn_forecast` (satu worker, tanpa PII); pembatasan PT di sisi tulis Odoo.
+
+### Belum terverifikasi
+- **Tidak ada yang dijalankan** (sesi tanpa shell): pytest, ruff, build image, DDL di ClickHouse 24.8. Perintah:
+  `docker run --rm -v "$(pwd -W):/w" -w /w/services/forecast-worker python:3.12-slim sh -c "pip install -q -r requirements-dev.txt ruff && ruff check . && pytest"`
+  (dan sama untuk `services/etl`). Uji backtest memakai statsforecast nyata (JIT numba; marker `slow`).
+- Versi pin `statsforecast==2.0.1`, `numba==0.61.2`/`llvmlite==0.44.0`, `numpy==2.1.3`, `pandas==2.2.3`,
+  `scipy==1.15.2`, `statsmodels==0.14.4`, `holidays==0.86` belum diuji resolusi pip-nya bersama; lisensi dari metadata,
+  belum dicek ke repo primer. API `model.forecast(y=, h=, level=)` statsforecast dan `holidays.country_holidays(...,
+  categories=("public",)/("government",))` ditulis dari dokumentasi, belum dieksekusi.
+- Ambang test backtest (WAPE < 0,8 × baseline 56 hari, < seasonal naive; lonjakan H−3..H−1 > 1,3 × H−10..H−8) dipilih
+  dari hitungan kasar, belum dijalankan.
+- Durasi batch/RAM untuk 2.400 seri (AutoETS+AutoARIMA, CV 4 jendela, + backtest ≈ 2× kerja) belum diukur terhadap
+  batas compose 1536M/2 CPU; kemungkinan perlu `FORECAST_CV_WINDOWS` lebih kecil atau `FORECAST_MODELS=AutoETS`.
+- View ClickHouse (`assumeNotNull`, GROUP BY alias pada join, predicate pushdown filter `company_code`/`day` ke
+  subquery `FINAL`) belum dieksekusi; `fact_scrap` hanya terisi bila `ETL_ENABLE_WASTE` (butuh `efn_ck_production`).
+- Penambahan `SMD` di sisi lain (BFF `COMPANY_CODES`, Selection `efn_core`, CHECK platform `loyalty_ledger.company_code`,
+  `deploy-validate`) bukan bagian saya; merge dengan G43 (IMD/CUP) perlu rekonsiliasi `entities.py` + view 08.
+
+### Perbaikan QA G44 (setelah pytest/ruff hijau di container)
+- Service level min/max dalam [0,5; 1) seperti Odoo: `contract.SERVICE_LEVEL_MIN/MAX`, `validate_minmax`,
+  `pipeline.service_level`; env `FORECAST_SERVICE_LEVEL(_MIN)` dibatasi 0.5..0.999.
+- `warehouse_code` dikirim persis (tanpa upper/strip): worker `source.py`, `config.py` (DC/warehouse codes), ETL
+  `transform_fc_warehouse`.
+- Plafon nilai per baris `FORECAST_MAX_QTY_PER_LINE` (default 100000 = `efn_forecast.max_qty_per_line`): baris di
+  atasnya dibuang sebelum chunking (`RunReport.rejected_local`, log `EFN_FORECAST_RUN` + `rejected_local`); validator
+  menolak `value_too_large`.
+- Test: `test_contract.py`, `test_runner.py`, `test_config_schedule.py`, `test_odoo_contract_parity.py` (service level;
+  plafon di-skip sampai parameter ada di source Odoo), ETL `test_forecast.py`. Belum dijalankan ulang.
 ## Gelombang 43 fase 2 (W1) — entitas migrasi esb-extract, DDL/akses `efn_mig`, mesin migrasi + validator (18 Nov 2026)
 
 Kontrak: kontrak kerja G43 fase 2 (paket W1), ADR-042 (Accepted 18 Nov 2026), docs/04 §27 **v19.1** (§27.3a segmentasi,

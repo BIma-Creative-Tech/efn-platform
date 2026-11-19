@@ -9,4 +9,14 @@
         <field name="interval_type">weeks</field>
         <field name="active" eval="True"/>
     </record>
+    <!-- G44 (docs/04 §28.2): run forecast v2 yang tidak ditutup dalam 6 jam -> failed; run aktif lama tetap dipakai. -->
+    <record id="ir_cron_efn_forecast_stale_runs" model="ir.cron">
+        <field name="name">EFN forecast: tandai run v2 macet (> 6 jam) gagal</field>
+        <field name="model_id" ref="model_efn_forecast_run"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_fail_stale_runs()</field>
+        <field name="interval_number">1</field>
+        <field name="interval_type">hours</field>
+        <field name="active" eval="True"/>
+    </record>
 </odoo>

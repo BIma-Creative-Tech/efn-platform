@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- efn_replenishment (docs/04 §28.4): 3 grup + SoD (kepala toko tidak mengonfirmasi PO supplier, dicek di
+     purchase.order.button_confirm) + record rule outlet kepala toko (res.users.efn_outlet_warehouse_ids). -->
+<odoo>
+    <record id="res_groups_privilege_efn_replenishment" model="res.groups.privilege">
+        <field name="name">EFN Replenishment</field>
+        <field name="category_id" ref="base.module_category_supply_chain"/>
+    </record>
+    <record id="group_replenishment_store" model="res.groups">
+        <field name="name">Replenishment: kepala toko</field>
+        <field name="comment">Menyetujui/menolak/mengubah usulan order outlet yang ada di cakupan "Outlet dikelola" user, sebelum cut-off. Tidak boleh mengonfirmasi PO supplier (SoD).</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_replenishment"/>
+        <field name="implied_ids" eval="[(4, ref('stock.group_stock_user'))]"/>
+    </record>
+    <record id="group_replenishment_buyer" model="res.groups">
+        <field name="name">Replenishment: buyer DC</field>
+        <field name="comment">Melihat usulan semua outlet PT, menekan "Order" pada orderpoint DC terkelola dan mengonfirmasi RFQ (hak purchase CE terpisah).</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_replenishment"/>
+        <field name="implied_ids" eval="[(4, ref('stock.group_stock_user'))]"/>
+    </record>
+    <record id="group_replenishment_admin" model="res.groups">
+        <field name="name">Replenishment: administrator</field>
+        <field name="comment">Mengelola jadwal kirim DC -> outlet dan jadwal supplier; membaca semua usulan dan log bias. Tidak otomatis kepala toko/buyer.</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_replenishment"/>
+        <field name="implied_ids" eval="[(4, ref('stock.group_stock_user'))]"/>
+    </record>
+
+    <data noupdate="1">
+        <!-- Global (semua user): multi-company. -->
+        <record id="efn_delivery_schedule_rule_company" model="ir.rule">
+            <field name="name">EFN jadwal kirim: multi-company</field>
+            <field name="model_id" ref="model_efn_delivery_schedule"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_supplier_schedule_rule_company" model="ir.rule">
+            <field name="name">EFN jadwal supplier: multi-company</field>
+            <field name="model_id" ref="model_efn_supplier_schedule"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_replenishment_proposal_rule_company" model="ir.rule">
+            <field name="name">EFN usulan replenishment: multi-company</field>
+            <field name="model_id" ref="model_efn_replenishment_proposal"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_replenishment_line_rule_company" model="ir.rule">
+            <field name="name">EFN baris usulan: multi-company</field>
+            <field name="model_id" ref="model_efn_replenishment_proposal_line"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_replenishment_bias_rule_company" model="ir.rule">
+            <field name="name">EFN log bias: multi-company</field>
+            <field name="model_id" ref="model_efn_replenishment_bias_log"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+
+        <!-- Grup: kepala toko hanya outlet cakupannya; buyer & admin semua outlet PT. -->
+        <record id="efn_replenishment_proposal_rule_store" model="ir.rule">
+            <field name="name">EFN usulan: kepala toko hanya outlet sendiri</field>
+            <field name="model_id" ref="model_efn_replenishment_proposal"/>
+            <field name="groups" eval="[(4, ref('group_replenishment_store'))]"/>
+            <field name="domain_force">[('warehouse_id', 'in', user.efn_outlet_warehouse_ids.ids)]</field>
+        </record>
+        <record id="efn_replenishment_proposal_rule_all" model="ir.rule">
+            <field name="name">EFN usulan: buyer/admin semua outlet</field>
+            <field name="model_id" ref="model_efn_replenishment_proposal"/>
+            <field name="groups" eval="[(4, ref('group_replenishment_buyer')), (4, ref('group_replenishment_admin'))]"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+        </record>
+        <record id="efn_replenishment_line_rule_store" model="ir.rule">
+            <field name="name">EFN baris usulan: kepala toko hanya outlet sendiri</field>
+            <field name="model_id" ref="model_efn_replenishment_proposal_line"/>
+            <field name="groups" eval="[(4, ref('group_replenishment_store'))]"/>
+            <field name="domain_force">[('warehouse_id', 'in', user.efn_outlet_warehouse_ids.ids)]</field>
+        </record>
+        <record id="efn_replenishment_line_rule_all" model="ir.rule">
+            <field name="name">EFN baris usulan: buyer/admin semua outlet</field>
+            <field name="model_id" ref="model_efn_replenishment_proposal_line"/>
+            <field name="groups" eval="[(4, ref('group_replenishment_buyer')), (4, ref('group_replenishment_admin'))]"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+        </record>
+        <record id="efn_replenishment_bias_rule_store" model="ir.rule">
+            <field name="name">EFN log bias: kepala toko hanya outlet sendiri</field>
+            <field name="model_id" ref="model_efn_replenishment_bias_log"/>
+            <field name="groups" eval="[(4, ref('group_replenishment_store'))]"/>
+            <field name="domain_force">[('warehouse_id', 'in', user.efn_outlet_warehouse_ids.ids)]</field>
+        </record>
+        <record id="efn_replenishment_bias_rule_all" model="ir.rule">
+            <field name="name">EFN log bias: buyer/admin semua outlet</field>
+            <field name="model_id" ref="model_efn_replenishment_bias_log"/>
+            <field name="groups" eval="[(4, ref('group_replenishment_buyer')), (4, ref('group_replenishment_admin'))]"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+        </record>
+    </data>
+</odoo>

@@ -786,3 +786,63 @@ Q-SM2 (outlet).
 ### Belum terverifikasi
 Daftar §8 dokumen. Yang paling kritis: uji katalog barcode dengan nomenklatur GS1, perilaku server POS untuk lot yang
 tidak ditemukan, kupon personal di kiosk/online, dan perilaku lot pada order kiosk.
+
+## G44 — 2026-11-18 (`efn_setup_supermarket` tahap A, data-only)
+
+Worktree g44, branch `feat/wave-44-supermarket-forecast`. Modul: `services/odoo/addons/efn_setup_supermarket`
+(19.0.1.0.0, LGPL-3). Belum di-commit. Tidak ada instance Odoo yang dijalankan.
+
+### Yang dibangun
+- **Data** (noupdate):
+  - company `company_smd` "PT Supermarket Demo (PLACEHOLDER)", `efn_brand_code=SMD`, root, IDR;
+  - NPWP fiktif 16 nol, alamat "Jl. Contoh Fiktif";
+  - CoA `l10n_id` (PPN `tax_ST4`), label pajak, `round_globally`; admin ditambahkan;
+  - nomenklatur company GS1 + `ir.default` per company `pos.config.fallback_nomenclature_id` = EFN Retail;
+  - grup lot / multi-lokasi / multi-step;
+  - DC `SMDDC` (`two_steps`/`pick_ship`);
+  - 16 kategori dengan FEFO di setiap kategori.
+- **Demo** (noupdate):
+  - outlet `SMD01`..`SMD05` di 5 provinsi, `resupply_wh_ids` = DC;
+  - `pos_type_id` outlet `use_existing_lots=True` / `use_create_lots=False`;
+  - `account_price_include = tax_included`.
+- **Test** `tests/test_setup_supermarket.py` (tag `efn`, post_install): company/kode/business type, PPN, nomenklatur +
+  fallback, DC, grup, FEFO per kategori + `_get_removal_strategy` = `fefo`. Test demo (skip bila tanpa demo): rute
+  resupply lewat transit, kota berbeda, flag lot POS, harga include.
+
+### Keputusan/penyimpangan dari brief
+1. **Tracking lot/expiry default per kategori tidak dipasang.** CE tidak punya field itu di kategori [V].
+   `ir.default` per company untuk `tracking`/`is_storable` ditolak karena ikut mengenai produk service/hadiah POS
+   (produk diskon reward, tip), sehingga produk non-stok bisa memunculkan popup lot. Penggantinya: seed G48 mengisi
+   per produk; default per kategori tetap gap `efn_expiry_monitor` (S-05).
+2. **FEFO diisi di setiap kategori, termasuk induk.** `stock.quant._get_removal_strategy` tidak menelusuri induk
+   kategori [V].
+3. **Ralat fit-gap S-03.** Rute resupply tidak masuk `route_ids` outlet; ia terbaca lewat `resupply_route_ids` [V].
+   Dokumen fit-gap sudah dikoreksi.
+4. **DC dibuat eksplisit.** `res.company.create` (stock 19.0) tidak membuat gudang di luar mode test [V]. Di mode test,
+   stock otomatis membuat 1 gudang tambahan, dan test tidak mengasumsikan jumlah gudang.
+5. **Nomenklatur GS1 di `data/`** (sesuai §28.1). Risikonya prefiks EAN `13/15/17`. Mitigasinya checklist README +
+   noupdate, sehingga admin bisa kembali ke EFN Retail.
+
+### Untuk efn-odoo-engineer / lead
+- `efn_core`: tambah `("SMD", ...)` ke `EFN_BRAND_CODES` **dan** `"SMD": "retail"` ke `EFN_BRAND_BUSINESS_TYPE`.
+  Tanpa keduanya, install modul ini gagal dan test `efn_business_type` merah.
+- CI: tambahkan `efn_setup_supermarket` ke `EFN_TEST_MODULES` (`.github/workflows/ci.yml`) **setelah** SMD masuk
+  `efn_core`. Belum saya ubah, untuk menghindari konflik dengan kerja paralel.
+- Perhatikan modul yang mengiterasi semua company berkode, mis. `efn_loyalty_accounting`
+  (`search([("efn_brand_code","!=",False)])`). Company ke-8 tanpa akun/jurnal Poin EFN bisa memicu galat runtime/test
+  bila modul itu dipasang bersama. Perlu dicek saat CI.
+- Tahap B (G45): depends `efn_assortment`/`efn_replenishment`/`efn_expiry_monitor` + sub-lokasi zona
+  (`cyclic_inventory_frequency`), ambang, capability, jadwal contoh.
+
+### Pertanyaan klien (tetap)
+Q-SM1 (kode/nama legal/NPWP/PKP), Q-SM2 (outlet & DC), Q-SM3 (timbangan/pemindai GS1), Q-SM5 (pajak; R-L14).
+
+### Belum terverifikasi
+- Seluruh install/test belum dijalankan (tidak ada Odoo lokal di sesi ini).
+- NPWP `0000000000000000` lolos `check_vat_id`: dibaca dari source, belum diuji.
+- Comprehension `ref` di `<function>` demo (pola sama dengan `efn_setup_company`).
+- Perilaku `ir.default` fallback saat config dibuat dari UI multi-company.
+- Nama field di test sudah dicek: `stock.rule.location_src_id/location_dest_id` [V], `stock.route.rule_ids` [R],
+  karena dipakai `efn_ck_production`. Bentuk rantai rule resupply (apakah lokasi transit muncul sebagai src/dest)
+  belum diuji runtime.
+- Apakah `current_test` aktif saat install `--test-enable`, sehingga ada gudang auto tambahan.

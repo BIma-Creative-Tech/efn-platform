@@ -105,3 +105,10 @@ Dev: `make pki-rotate`.
 `clientAuth`. nameConstraints intermediate memuat daftar service → **staging/prod: terbitkan ulang intermediate**
 (§service-baru) sebelum deploy G13; `deploy.sh` menolak bila intermediate belum mencakupnya. Dev: `gen-secrets.sh`
 membuat ulang CA dev + semua leaf → `up -d --force-recreate` seluruh stack.
+
+## Gelombang 44: service PKI baru `forecast-worker` (klien mTLS)
+`forecast-worker` (→ `odoo-rpc-gateway`, CN persis `forecast-worker`, docs/04 §28.2) mendapat leaf `clientAuth`
+(`tls_forecast_worker_crt/_key`). Sama dengan G13: **staging/prod terbitkan ulang intermediate** (§service-baru) sebelum
+deploy pertama yang memuat G44 — tanpa itu `deploy.sh` berhenti di langkah PKI untuk SEMUA service, bukan hanya
+forecast. Dev: `gen-secrets.sh` membuat ulang CA dev + semua leaf → `up -d --force-recreate` seluruh stack. Leaf saja
+(setelah intermediate mencakupnya): `bash scripts/gen-pki.sh forecast-worker`. Runbook: [forecast-worker.md](forecast-worker.md).

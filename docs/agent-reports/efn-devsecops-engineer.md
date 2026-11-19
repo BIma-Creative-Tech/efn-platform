@@ -2483,3 +2483,77 @@ shellcheck v0.10.0 (semua skrip CI + baru) bersih · `docker compose config` dev
 - **Dependency review:** butuh "Dependency graph" aktif = **tindakan admin org** (runbook §0). Runbook `ci-github-free-plan.md` §0 baru: tabel perubahan publik/organisasi, deploy.conf host wajib diperbarui ke identitas cosign repo baru (`EFN_SIGNER_IDENTITY_REGEXP`, `EFN_GITHUB_REPO`, `EFN_IMAGE_PREFIX` huruf kecil), GHCR tetap privat, larangan `pull_request_target`, approval run dari kontributor luar.
 - Validasi: actionlint rc 0, yamllint OK (warning lama baris pytest metabase), checkov 0 failed, hadolint lulus (info DL3059 lama).
 - Di luar cakupan (gagal juga di PR #60): job **Odoo addon tests** (ERROR di log install/test) - bukan perubahan devsecops.
+
+## G44 forecast-worker + kode PT SMD (18 Nov 2026, worktree `efn-platform-g44`, branch `feat/wave-44-supermarket-forecast`, belum di-commit)
+
+Dasar: docs/04 §28.2 / §28.10 / §12.1 (revisi 18 Nov), ADR-046 (Proposed), K25-02, K25-06. Tidak ada kode `services/*`
+yang diubah (forecast-worker ditulis efn-data-ai-engineer paralel).
+
+### Keputusan
+- **Overlay `infra/compose/docker-compose.forecast.yml`** (pola `docker-compose.esb.yml` G41), profil `data`: image belum
+  di rantai rilis bertanda tangan; tanpa overlay tidak ada service yang memegang API key Odoo forecast. Repo belum punya
+  compose project `efn-data` terpisah (stack data = profil `data` di project `efn`), jadi overlay = cara paling dekat
+  K25-02 tanpa mengunci desain antar-mesin.
+- **Jadwal = loop internal** (`FORECAST_DAILY_CRON`, default `30 23 * * *` WIB, ADR-046 §3.1), konsisten dengan `etl` /
+  `esb-extract`; tidak ada ofelia/cron container (butuh docker.sock).
+- **Flag = `FORECAST_ENABLED`** (nama kontrak §28.10), bukan `FORECAST_WORKER_ENABLED` dari brief: kontrak menang.
+- **Network**: dua network internal baru, `forecast-ch` (clickhouse ↔ worker, 172.30.11.0/24) dan `forecast-rpc`
+  (odoo-rpc-gateway ↔ worker, 172.30.12.0/24) — gateway (jalur ke ERP) tidak berbagi network dengan ClickHouse.
+- **Gateway**: allowlist **per CN** — `cn_bff` hanya 24 path lama, `cn_forecast` hanya path #25–#29 (§18.1 berakhir di
+  #24); body path forecast ≤ 512 KiB (§28.2; default 256 KiB tetap); backend terpisah `odoo_forecast` `maxconn 1`
+  (antrean 4 × 10 s → 503) agar batch tidak memakan slot `ODOO_RPC_MAXCONN` kanal online.
+- **Hardening**: user 65534, `read_only`, tmpfs `/tmp` 256m (NUMBA_CACHE_DIR/HOME di tmpfs), `cap_drop ALL`,
+  `no-new-privileges`, memori `FORECAST_MEMORY_LIMIT` default 1536M (ADR-046: 1–2 GB batch; dev boleh 768M), CPU 2,
+  healthcheck PID 1 (pola etl).
+
+### Perubahan
+- `infra/compose/docker-compose.forecast.yml` (baru); `docker-compose.yml`: secret `clickhouse_password_forecast` +
+  mount ke `clickhouse-init`, komentar subnet/overlay; `.env.example`: blok `FORECAST_*`, `IMAGE_FORECAST_WORKER`.
+- `infra/odoo-rpc-gateway/haproxy.cfg` (cn_forecast, p_forecast, batas body, backend odoo_forecast), `test-gateway.sh`
+  (+27 kasus), `README.md` (tabel path #25–#29).
+- `infra/clickhouse/clickhouse-init.sh`: `efn_forecast_reader` kini **wajib** (data-AI sebelumnya membuatnya bersyarat
+  menunggu mount secret; mount sudah ada di base) + binding role/profil `forecast_reader`/`forecast_readonly`
+  (role dari `access/forecast-access.sql` milik data-AI).
+- `scripts/secrets.list`: `clickhouse_password_forecast random`, `odoo_api_key_forecast_smd host:disabled`,
+  `tls_forecast_worker_{crt,key} pki`. `scripts/gen-pki.sh`: `forecast-worker|client` (penerbitan leaf saja:
+  `bash scripts/gen-pki.sh forecast-worker`). `gen-secrets.sh` tidak perlu diubah (digerakkan secrets.list).
+- `scripts/check-encryption.sh`: §6b5 least privilege secret/network/hardening forecast-worker, env `*_FILE` cocok,
+  `ODOO_RPC_URL` = gateway; render `dev-forecast` + `prod-forecast` (FORECAST_ENABLED default false); ACL CN haproxy
+  hanya `cn_bff`/`cn_forecast` `-m str`.
+- `.github/workflows/ci.yml`: path-filter `forecast-worker`, ruff/compileall/pip-audit/pytest matrix, PKI EKU klien,
+  `docker compose config` overlay forecast (sendiri + bersama ESB, dev & prod), cek secrets.list ikut overlay forecast.
+  `build-push.yml`: forecast-worker di `scan-pr` (Trivy gate HIGH/CRITICAL) dan `build` (push by digest, Trivy, SBOM,
+  cosign). hadolint otomatis mencakup Dockerfile baru (find).
+- Runbook baru `docs/runbooks/forecast-worker.md`; indeks `docs/runbooks/README.md`; `internal-pki.md` §G44.
+
+### Tambahan koordinator: CHECK kode PT `SMD` di PostgreSQL platform
+- `infra/postgres/init/19-platform-g44.sql` (18 dicadangkan G43): DROP/ADD NOT VALID/VALIDATE 12 CHECK
+  (`loyalty_ledger`, `payment_intent`, `loyalty_reservation`, `loyalty_pos_earn`, `online_order_part`,
+  `payment_intent_portion`, `loyalty_pos_reverse`, `loyalty_policy`, `mgm_policy`, `mgm_source`, `mgm_reward`,
+  `ck_loyalty_ledger_issuer`) dengan daftar `EFN, GL, PB, BCR, BCF, WTZ, FARM, SMD`; idempoten, transaksional, pola 13.
+  **Pagar merge**: bila constraint yang ada memuat kode di luar daftar (mis. IMD/CUP dari `18-platform-g43.sql`),
+  migrasi `RAISE EXCEPTION` (tidak diam-diam menyempitkan). QR/booking (`PB`,`BCF`) tidak diubah.
+- `scripts/deploy.sh`: `19-platform-g44.sql` masuk daftar migrasi WAJIB.
+- `scripts/lib/deploy-validate.sh`: `EFN_COMPANY_CODES=(EFN GL PB BCR BCF WTZ FARM SMD)` (§12.1) +
+  `efn_validate_company_code` + `efn_validate_company_lists` (daftar kanal/QR/booking/promo wajib subset; dipanggil
+  `efn_validate_config`). SMD **tidak** ditambahkan ke kanal online/QR/booking/promo. `test-efn-deploy.sh` +6 kasus
+  (92s–92x).
+- **Saat G43 merge**: `code_list` di `19-platform-g44.sql` dan `EFN_COMPANY_CODES` WAJIB menjadi
+  `'EFN','GL','PB','BCR','BCF','WTZ','IMD','CUP','FARM','SMD'` (pagar merge akan menggagalkan migrasi bila lupa).
+
+### Belum terverifikasi / sisa
+- Tidak ada docker/bash/shellcheck/haproxy yang bisa dijalankan dari sesi ini: `docker compose config`, `haproxy -c`,
+  `check-encryption.sh`, shellcheck, yamllint, `test-gateway.sh`, `test-efn-deploy.sh`, dan migrasi 19 terhadap
+  PostgreSQL nyata **belum dijalankan** — gerbang = CI job `infra` + uji manual di stack dev.
+- Interface env worker (`FORECAST_ENABLED`, `FORECAST_DAILY_CRON`, `FORECAST_TZ`, `FORECAST_HORIZON_DAYS`,
+  `FORECAST_CHUNK_SIZE`, `ODOO_RPC_URL`, `ODOO_RPC_CA_FILE`, `ODOO_RPC_CLIENT_CERT_FILE`, `ODOO_RPC_CLIENT_KEY_FILE`,
+  `ODOO_RPC_TIMEOUT_SECONDS`, `ODOO_API_KEY_FORECAST_SMD_FILE`, `CH_*` dengan `CH_DATABASE=efn_forecast`) ditetapkan di
+  sini; efn-data-ai-engineer harus menyamakan (worker juga wajib menolak placeholder `disabled`, retry 503, berurutan).
+- CI job pytest/build-push gagal bila `services/forecast-worker` (Dockerfile, requirements.txt, tests/) belum ada saat PR.
+- Staging/prod: intermediate PKI **wajib diterbitkan ulang** (nameConstraints) sebelum deploy G44 — tanpa itu deploy.sh
+  berhenti untuk semua service; GitHub Environment `CLICKHOUSE_PASSWORD_FORECAST` wajib diisi.
+- Belum: wiring rilis (IMAGE_FORECAST_WORKER di deploy.yml/efn-deploy/deploy.sh, FORECAST_* di
+  EFN_RELEASE_CONFIG_VARS, overlay otomatis), rotasi otomatis key `FORECAST-SMD` di `efn-rotate-online-key`, alert
+  `EfnForecastRunFailed` (worker tanpa metrik), jalur antar-mesin WireGuard (K25-02), `.github/dependabot.yml` dan
+  `Makefile test-py` (di luar izin path).
+- Odoo `RPC_ALLOWLIST` harus memuat 5 metode yang sama (efn-odoo-engineer); `ODOO_WORKERS` + 1 selama batch.

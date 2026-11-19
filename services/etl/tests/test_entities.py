@@ -25,9 +25,9 @@ ROOT = Path(__file__).resolve().parents[1]
 G20_SQL = ROOT.parents[1] / "infra" / "clickhouse" / "init" / "08-g20-entities.sql"
 
 
-def test_seven_entities_and_legacy_codes_removed() -> None:
-    # G20 §12.1 + G24 §16.1 (WTZ) + G43 (IMD, CUP)
-    assert COMPANY_CODES == {"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "IMD", "CUP", "FARM"}
+def test_ten_entities_and_legacy_codes_removed() -> None:
+    # G20 §12.1 + G24 §16.1 (WTZ) + G43 (IMD, CUP) + G44 (SMD)
+    assert COMPANY_CODES == {"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "IMD", "CUP", "FARM", "SMD"}
     assert set(BUSINESS_TYPES) == COMPANY_CODES
     assert set(BUSINESS_TYPES.values()) == {"holding", "retail", "fnb", "farm"}
     assert {"RTL", "FNB"}.isdisjoint(COMPANY_CODES)
@@ -45,6 +45,7 @@ def test_seven_entities_and_legacy_codes_removed() -> None:
         ("CUP", "fnb"),
         ("EFN", "holding"),
         ("FARM", "farm"),
+        ("SMD", "retail"),
     ],
 )
 def test_business_type(code: str, expected: str) -> None:
@@ -54,7 +55,8 @@ def test_business_type(code: str, expected: str) -> None:
 
 def test_brand_group_bacha_combines_bcr_bcf() -> None:
     assert brand_group("BCR") == brand_group("BCF") == "BACHA"
-    assert [brand_group(c) for c in ("EFN", "GL", "PB", "WTZ", "FARM")] == ["EFN", "GL", "PB", "WTZ", "FARM"]
+    own = ("EFN", "GL", "PB", "WTZ", "FARM", "SMD")
+    assert [brand_group(c) for c in own] == list(own)
     assert brand_group("") == brand_group(None) == ""
 
 
@@ -84,19 +86,22 @@ def _expected_relation(a: str, b: str) -> str:
     return IC_NON_TP
 
 
-def test_ic_relation_all_72_directed_pairs() -> None:
+def test_ic_relation_all_90_directed_pairs() -> None:
     pairs = list(itertools.permutations(sorted(COMPANY_CODES), 2))
-    assert len(pairs) == 72  # 9 entitas (G43: + IMD, CUP) x 8 arah
+    assert len(pairs) == 90  # 10 entitas (G43: + IMD, CUP; G44: + SMD) x 9 arah
     for a, b in pairs:
         assert ic_relation(a, b) == ic_relation(b, a) == _expected_relation(a, b), (a, b)
     tp = {frozenset(p) for p in pairs if ic_relation(*p) in (IC_TP_HOLDING, IC_TP_BACHA)}
-    # TP cost-plus hanya 8 pasangan Holding<->PT + 1 pasangan Bacha (18-3).
-    assert len(tp) == 9
+    # TP cost-plus hanya 9 pasangan Holding<->PT + 1 pasangan Bacha (18-3).
+    assert len(tp) == 10
     assert frozenset({"IMD", "EFN"}) in tp and frozenset({"CUP", "EFN"}) in tp
+    assert frozenset({"SMD", "EFN"}) in tp and frozenset({"SMD", "GL"}) not in tp
     assert frozenset({"IMD", "PB"}) not in tp and frozenset({"CUP", "WTZ"}) not in tp
     assert frozenset({"BCR", "BCF"}) in tp
     assert frozenset({"GL", "PB"}) not in tp and frozenset({"FARM", "PB"}) not in tp
     assert frozenset({"WTZ", "PB"}) not in tp and frozenset({"WTZ", "EFN"}) in tp
+    # SMD (G44): DC dalam PT yang sama (ADR-045) -> tidak ada pasangan antar-PT selain Holding.
+    assert frozenset({"SMD", "EFN"}) in tp and frozenset({"SMD", "GL"}) not in tp
 
 
 def test_ic_relation_edge_cases() -> None:

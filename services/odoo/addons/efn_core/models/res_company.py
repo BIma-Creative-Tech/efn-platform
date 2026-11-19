@@ -16,10 +16,13 @@ EFN_BRAND_CODES = [
     # Data PT (nama legal, NPWP, pajak) PLACEHOLDER sampai klien menjawab Q-ESB5.
     ("IMD", "IMD - PT Im Donut (F&B, PB1)"),
     ("CUP", "CUP - PT Curry Up (F&B, PB1)"),
+    # G44 (docs/04 §12.1 revisi 18 Nov 2026, §28, L-144, ADR-045 Proposed): PT Supermarket Demo (placeholder; nama
+    # legal/NPWP/kode final = fit-gap Q-SM1).
+    ("SMD", "SMD - PT Supermarket Demo (ritel, PPN)"),
     ("FARM", "FARM - Collection Center / Farming"),
 ]
 
-# Kode company -> jenis usaha (relasi tetap, §12.1/§16.1: GL,BCR -> retail; PB,BCF,WTZ -> fnb; G43: IMD,CUP -> fnb).
+# Kode company -> jenis usaha (§12.1/§16.1: GL,BCR,SMD -> retail; PB,BCF,WTZ -> fnb; G43: IMD,CUP -> fnb).
 EFN_BRAND_BUSINESS_TYPE = {
     "EFN": "holding",
     "GL": "retail",
@@ -29,6 +32,7 @@ EFN_BRAND_BUSINESS_TYPE = {
     "WTZ": "fnb",
     "IMD": "fnb",
     "CUP": "fnb",
+    "SMD": "retail",
     "FARM": "farm",
 }
 

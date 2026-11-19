@@ -536,6 +536,16 @@ vc "92o BOOKING_COMPANIES=WTZ ditolak (L-92)" 1 staging BOOKING_COMPANIES=WTZ
 u "92p efn_validate_online_channels WTZ" 0 efn_validate_online_channels WTZ
 u "92q efn_validate_fnb_qr_companies WTZ ditolak" 1 efn_validate_fnb_qr_companies WTZ
 u "92r efn_validate_booking_companies WTZ ditolak" 1 efn_validate_booking_companies WTZ
+# G44 (docs/04 §12.1 revisi 18 Nov 2026): kode PT SMD (PT Supermarket Demo) dikenal; bukan kanal online/QR/reservasi
+u "92s efn_validate_company_code SMD diterima (G44)" 0 efn_validate_company_code SMD
+u "92t efn_validate_company_code smd (huruf kecil) ditolak" 1 efn_validate_company_code smd
+u "92u efn_validate_company_code RTL (kode lama) ditolak" 1 efn_validate_company_code RTL
+u "92v daftar PT turunan subset EFN_COMPANY_CODES" 0 efn_validate_company_lists
+u "92w efn_validate_online_channels SMD ditolak (tanpa kanal online)" 1 efn_validate_online_channels SMD
+u "92x efn_validate_promo_companies SMD ditolak" 1 efn_validate_promo_companies SMD
+# G43 (ADR-043): IMD/CUP dikenal sebagai kode PT (dasar ledger/kebijakan), bukan kanal QR/reservasi
+u "92y efn_validate_company_code IMD diterima (G43)" 0 efn_validate_company_code IMD
+u "92z efn_validate_company_code CUP diterima (G43)" 0 efn_validate_company_code CUP
 # G20 W-30 (docs/04 §12.2): batas order bayar di kasir per member
 vc "92g ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=1 diterima" 0 production ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=1
 vc "92h ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=0 ditolak" 1 production ONLINE_MAX_OPEN_COUNTER_ORDERS_PER_MEMBER=0

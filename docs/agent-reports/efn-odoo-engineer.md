@@ -2484,6 +2484,104 @@ query, fragment, userinfo, kutip/`;` ditolak); form action = origin + `/sso`.
   `/run/secrets/insight_sso_key` (atau `EFN_INSIGHT_SSO_KEY_FILE`).
 - Q-INS1 (grup per peran, belum ditambahkan ke `efn_setup_role`), Q-INS2, Q-INS3 (retensi `ir.logging`).
 
+---
+
+# G44 Supermarket — kode SMD, efn_assortment, perluasan efn_demand_forecast, efn_replenishment (18 Nov 2026)
+
+Worktree `efn-platform-g44`, branch `feat/wave-44-supermarket-forecast`, tanpa commit. Dasar: `docs/04` §12.1 (rev.),
+§28.1–§28.5/§28.10/§28.12, ADR-045, ADR-046, fit-gap G45 §2/§5/§6. **Test BELUM dijalankan** (tidak ada Python/Odoo
+di host dan tidak ada shell di sesi ini); lead menjalankan di container.
+
+## Modul & file
+- `efn_core` 19.0.1.9.0: `SMD` ("PT Supermarket Demo", `retail`) di `EFN_BRAND_CODES` + `EFN_BRAND_BUSINESS_TYPE`
+  (posisi sebelum `FARM`, sama dengan IMD/CUP G43 → rebase mudah); `tests/test_res_company.py` (8 kode);
+  `tests/test_rpc_surface.py` (allowlist: wizard berganti nama + 5 RPC §28.2 + 4 aksi baru); README.
+- `efn_data_ask`: `COMPANY_CODES` + `SMD` (text2sql/row policy harus menerima kode yang sama — agent data).
+- `efn_insight`: **tidak diubah** — `ESB_CODES` = brand mart ESB; SMD bukan ESB (supermarket memakai `eit2`, G47).
+- `efn_loyalty_accounting`: ditinjau, **tidak diubah** — company ke-8 tanpa akun Poin EFN berperilaku seperti FARM
+  (`no_entry` bila 0, `missing_config`/`error` sebagai status record, tanpa exception). `KNOWN_CODES` diturunkan dari
+  `EFN_BRAND_CODES` otomatis.
+- `efn_demand_forecast` 19.0.1.0.0 → **19.0.2.0.0**: `models/forecast_api.py` (cek pemanggil, validasi),
+  `efn_forecast_calendar.py`, `efn_forecast_run.py` (+ `efn.forecast.chunk`), `efn_forecast_daily.py`,
+  `efn_demand_forecast.py` (+ `efn.demand.forecast.line`, `source`, `forecast_run_id`, state `shadow`, cron v1
+  melewati gudang v2, `Season.with_company`), `efn_forecast_season.py` (`payday`, `holiday`),
+  `stock_warehouse_orderpoint.py` (`efn_forecast_engine`), wizard → `efn.forecast.run.wizard`, security (grup
+  `group_forecast_bot`, rule, ACL), data (cron run macet, param 7/7 & retensi, audit kalender, season payday),
+  views, `migrations/19.0.2.0.0/{pre,post}-migrate.py`, `tests/test_forecast_api.py`, README.
+- `efn_assortment` 19.0.1.0.0 (baru): models `efn_assortment.py`, `stock.py`, `product_users.py`; wizard override;
+  security; data (4 capability, param `enforce=true`, cron harian); audit rules; views; `tests/test_assortment.py`; README.
+- `efn_replenishment` 19.0.1.0.0 (baru): models `efn_replenishment.py`, `stock_purchase.py`; security (3 grup + rule
+  outlet); data (param `enabled=false`, `safety_z`, cron antrean & expire); views; `tests/test_replenishment.py`; README.
+
+## Penyimpangan / tafsiran kontrak (mohon dikonfirmasi lead)
+1. **Path min/max sama dengan kontrak** (`efn.demand.forecast.line/efn_minmax_ingest`) — model `efn.demand.forecast.line`
+   dibuat sebagai baris mentah per run yang membuat usulan `efn.demand.forecast` (`source=v2`). Gateway devsecops
+   tidak perlu diubah.
+2. `efn.forecast.run` sebelumnya = wizard v1 (TransientModel). Nama diambil untuk model run v2 (path gateway); wizard
+   → `efn.forecast.run.wizard`; pre-migrate mengosongkan tabel wizard + melepas NOT NULL kolom lama.
+3. Galat validasi = `UserError("efn_forecast:<kode>")` → **HTTP 422** json2 (L-15), bukan 400 seperti teks kontrak;
+   forecast-worker harus memetakan 422 + pesan `efn_forecast:<kode>`. Company mismatch / run PT lain → 403
+   `efn_forecast:company_mismatch`; bukan user teknis sah → 403 `efn_forecast:access_denied`.
+4. Respons open/close menambah `state`, `is_active`, `created` / `duplicate_close`; respons kalender =
+   `{ok, company_code, accepted, unchanged, skipped_manual, rejected}`. Kode tolak baris didokumentasikan di README
+   `efn_demand_forecast`.
+5. `run_close(ok)` ditolak `incomplete_run` bila ada chunk yang belum diterima (run tetap terbuka).
+6. Batas 512 KB dihitung dari JSON argumen di Odoo (gateway tetap batas utama).
+7. Parameter gajian: `ir.config_parameter` global + kunci bersufiks kode PT (per company), bukan field company.
+8. Engine `v1|v2` mengatur sumber **min/max** saja (v1 = cron Odoo; v2 = worker; v2 di gudang v1 = `shadow`). Usulan
+   replenishment tidak digerbang engine (digerbang `efn_replenishment.enabled`).
+9. Rumus usulan: rack cap = kapasitas − on_hand − **in_transit** (ADR menulis − on_hand); pembulatan pack turun bila
+   naik melewati cap shelf/rack (agar L-151 tidak dilanggar); shelf cap tidak mengurangi stok yang sudah ada (literal
+   ADR §3.4). Sisa umur minimum dibaca dari `product.category.efn_min_receipt_days` bila `efn_expiry_monitor` (G45)
+   memasangnya, selain itu 0.
+10. Penegakan picking: hook `stock.move._action_confirm` untuk move dari gudang **`efn_is_dc`** (field baru,
+    tidak ada di fit-gap) ke gudang lain PT yang sama. Override per transfer (record `efn.assortment.override`).
+11. DSD belum dihitung (produk `dsd` dikecualikan dari usulan DC dengan `assortment:dsd_only`).
+
+## Belum diverifikasi / titik rawan test
+- Seluruh test (assortment 8, forecast API 10 + payday 4, replenishment 14) belum pernah jalan.
+- `ir_model.transient` + tabel lama saat upgrade DB yang sudah memasang wizard (pre-migrate ditulis, belum diuji).
+- `stock.warehouse.resupply_route_ids` & `stock.route.supplier_wh_id` (masukan efn-odoo-functional), `action_replenish`
+  untuk rute resupply 2 langkah, dan move pertama keluar DC sebagai `picking_id` (`test_supply_document_through_ce_orderpoint`).
+- `location_final_id` di `stock.move` 19.0 (dipakai bila ada); `uom._compute_quantity(..., round=False)` untuk pack.
+- `stock.lot.expiration_date` bisa diisi saat create (test shelf cap dari lot DC); `product_uom_qty` di PO line 19.0.
+- View inherit: `product.product_template_form_view` `//field[@name='categ_id']`, `base.view_users_form` `//notebook`,
+  `stock.view_picking_form` `//header` (supplierinfo list view diverifikasi WebFetch).
+- `api.Environment(cr, SUPERUSER_ID)` di TransactionCase = `su=True` (dipakai test PO confirm).
+- Konkurensi chunk identik bersamaan: kedua request antre `FOR UPDATE` run; yang kedua bisa gagal unik (500) di
+  REPEATABLE READ — retry worker mendapat `duplicate_chunk`.
+
+## Untuk lead / tim lain
+- CI (`.github/workflows/ci.yml` `EFN_TEST_MODULES`): tambahkan `efn_demand_forecast efn_assortment efn_replenishment`
+  (efn_demand_forecast belum ada di daftar sejak G28).
+- devsecops: user `efn_forecast_smd` = Internal User + `efn_demand_forecast.group_forecast_bot` saja, satu company
+  `SMD`; `api_key_duration` grup 35 hari (pola promo). Allowlist gateway #25–#29 cocok dengan `RPC_ALLOWLIST`.
+- forecast-worker: argumen = kunci objek kontrak sebagai body json2; tangani 422/403 di atas.
+- efn_audit: pertimbangkan menambah `efn_assortment.enforce` ke spesifikasi kontrol `ir.config_parameter`
+  (`audit_policy.CONTROL_SPECS`) agar mematikan penegakan teraudit (§28.10).
+- `efn_setup_supermarket` (functional): set `efn_is_dc=True` di DC `SMDDC`, capability outlet, `efn_outlet_warehouse_ids`
+  kepala toko demo, jadwal kirim contoh (tahap B).
+
+## G44 putaran perbaikan (security review G44 + QA §G44) — belum dijalankan
+- A SEC-207: `efn_setup_audit` 19.0.2.1.0 — filter ir.config_parameter + `('key', '=like', 'efn\\_%')` (XML untuk
+  install baru + `migrations/19.0.2.1.0/post-migrate.py` menambah cabang OR ke domain yang ada; idempoten). Escape
+  `\_` didukung SQL dan `filtered_domain` Python 19.0 (`build_like_regex`, WebFetch). 2 test baru.
+- B SEC-208: guard `create`/`write` `stock.warehouse` (efn_is_dc, efn_assortment_policy, efn_capability_ids) dan
+  `product.template.efn_required_capability_ids` → hanya Assortment Manager (sudo lolos); audit rule
+  `audit_rule_stock_warehouse_assortment` (3 field); produk via `efn_setup_audit.audit_rule_product_template`.
+- C SEC-210: `qty_approved` finite ≥ 0 ≤ maks(qty_proposed × `efn_replenishment.max_approve_factor` (3), cap rak);
+  lewat batas = grup administrator (+ kepala toko outlet itu).
+- D SEC-211: `efn_forecast.max_qty_per_line` (100000) → baris `value_too_large`.
+- E SEC-212: write/create `efn.demand.forecast` atas state/source/forecast_run_id/approved_*/v2_service_level ditolak
+  untuk non-sudo (`efn_demand_forecast:readonly`); aksi memakai sudo setelah cek.
+- F SEC-213: `purchase.order.button_approve` memanggil cek SoD yang sama.
+- G QA-1: post_init_hook di `efn_assortment` dan `efn_setup_supermarket` (xmlid `warehouse_smd_dc`).
+- H QA-2: awal jendela = maks(tanggal proyeksi pertama run, hari ini) untuk usulan outlet & DC.
+- I QA-3: hari order supplier = hari ini + `efn_replenishment.order_day_offset` (1).
+- J: run `ok` dengan Σ accepted = 0 → aktivitas To-Do ke Replenishment administrator (run kini mail.thread + activity
+  mixin); tanpa admin → WARNING. `warehouse_code` tetap dicocokkan persis.
+- Versi: efn_demand_forecast 19.0.2.1.0, efn_assortment 19.0.1.1.0, efn_replenishment 19.0.1.1.0, efn_setup_audit
+  19.0.2.1.0. Tidak ada `_logger.error` baru.
 # G43 — company PT Im Donut (IMD) & PT Curry Up (CUP) (18 Nov 2026, branch `feat/wave-43-esb-migration`)
 Kontrak: G43 fase 1 bagian A (keputusan user 18 Nov 2026: company baru sekarang, data PT placeholder, Q-ESB5). Pola
 persis G24 WTZ. Tidak di-commit.

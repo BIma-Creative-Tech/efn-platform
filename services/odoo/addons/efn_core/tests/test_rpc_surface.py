@@ -359,7 +359,57 @@ RPC_ALLOWLIST = {
         "action_efn_reject",
     ): "G28: grup stock.group_stock_manager + check_access(write) + record rule company",
     ("efn.demand.forecast", "action_efn_recompute"): "G28: check_access(write) + record rule company; hanya draft",
-    ("efn.forecast.run", "action_run"): "G28: wizard; check_access(create) efn.demand.forecast + gudang terbaca user",
+    # G44: wizard v1 berganti nama (efn.forecast.run kini model run v2, docs/04 §28.2).
+    (
+        "efn.forecast.run.wizard",
+        "action_run",
+    ): "G28: wizard; check_access(create) efn.demand.forecast + gudang terbaca user",
+    # G44 (docs/04 §28.2 path gateway #25-#29, L-145): forecast-worker. `forecast_api.check_caller` = grup
+    # group_forecast_bot + Internal User saja + user aktif non-share + TEPAT satu company (fail closed); context klien
+    # dibuang; company_code / run PT lain -> 403 company_mismatch; validasi skema manual (additionalProperties false,
+    # <= 500 item, <= 512 KB); tulis via sudo setelah cek.
+    (
+        "efn.forecast.calendar",
+        "efn_forecast_calendar_upsert",
+    ): "G44: check_caller + company_code + kunci unik (company, date, kind, name); manual tidak ditimpa",
+    (
+        "efn.forecast.run",
+        "efn_forecast_run_open",
+    ): "G44: check_caller + company_code + run_id UUIDv4 unik (buka ulang -> status)",
+    (
+        "efn.forecast.run",
+        "efn_forecast_run_close",
+    ): "G44: check_caller + run milik company + FOR UPDATE; tutup dua kali no-op; ok butuh semua chunk",
+    (
+        "efn.forecast.daily",
+        "efn_forecast_ingest",
+    ): "G44: check_caller + run milik company/open/kind daily + FOR UPDATE + idempotensi (run, chunk_no); "
+    "baris ditolak per baris (gudang/produk PT, tanggal dalam horizon, p10<=yhat<=p90)",
+    (
+        "efn.demand.forecast.line",
+        "efn_minmax_ingest",
+    ): "G44: check_caller + run milik company/open/kind weekly_minmax + FOR UPDATE + idempotensi (run, chunk_no); "
+    "usulan v2 draft (engine v2) / shadow (engine v1), approval planner v1",
+    # G44 efn_assortment (docs/04 §28.5, L-150): override restriksi DC -> outlet.
+    (
+        "stock.picking",
+        "action_efn_assortment_override",
+    ): "G44: grup efn_assortment.group_assortment_manager + check_access(read) picking + company user; buka wizard",
+    (
+        "efn.assortment.override.wizard",
+        "action_confirm",
+    ): "G44: grup Assortment Manager + check_access(read) picking + company + alasan >= 10 karakter; "
+    "hanya kode yang boleh di-override (bukan alcohol_license / non_halal_allowed); override via sudo, teraudit",
+    # G44 efn_replenishment (docs/04 §28.4): approval kepala toko.
+    (
+        "efn.replenishment.proposal",
+        "action_efn_approve",
+    ): "G44: grup group_replenishment_store + check_access(read) + company + outlet ∈ user.efn_outlet_warehouse_ids "
+    "+ state proposed + sebelum cut-off (lewat -> expired, tidak dikirim); procurement CE via sudo",
+    (
+        "efn.replenishment.proposal",
+        "action_efn_reject",
+    ): "G44: sama dengan action_efn_approve (tanpa procurement)",
     # G28: override metode CE (hak akses = ACL + record rule CE; logika tambahan setelah super()).
     ("stock.picking", "button_validate"): "override CE (efn_agri: tolak validasi transfer QC tanpa inspeksi selesai)",
     ("stock.scrap", "do_scrap"): "override CE (efn_ck_production: alasan waste wajib)",

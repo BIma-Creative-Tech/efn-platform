@@ -27,6 +27,7 @@ from efn_etl.amqp import PikaPublisher, build_connection_params
 from efn_etl.audit_job import AuditSettings, SinkCheck, recon_due, run_audit_copy, run_audit_recon
 from efn_etl.config import Settings
 from efn_etl.erasure import SQL_PENDING_ERASURES, excluded_hashes, parse_requests, run_erasure
+from efn_etl.forecast import ACCURACY_JOB, ClickHouseForecastStore, accuracy_due, run_forecast_accuracy
 from efn_etl.gl import GL_JOBS
 from efn_etl.heartbeat import Heartbeat, JobRun, make_heartbeat
 from efn_etl.jobs import AgeOut, enabled_jobs
@@ -116,6 +117,29 @@ def run_stock_cycle(
             watermark=result.snapshot_ts,
         )
     )
+
+
+def run_forecast_accuracy_cycle(
+    store: ClickHouseForecastStore,
+    sink: ClickHouseSink,
+    lookback_weeks: int,
+    interval: timedelta,
+    heartbeat: Heartbeat,
+) -> None:
+    """Akurasi forecast mingguan (G44) bila jatuh tempo. Gagal = heartbeat error; diulang siklus berikutnya."""
+    started = time.monotonic()
+    now = datetime.now(UTC)
+    try:
+        if not accuracy_due(store.last_accuracy_at(), now, interval):
+            return
+        result = run_forecast_accuracy(store, sink, now, lookback_weeks)
+    except Exception as exc:
+        # Tanpa pesan exception mentah (bisa memuat potongan SQL): hanya nama tipe.
+        log.error("job=%s gagal: %s", ACCURACY_JOB, type(exc).__name__)
+        heartbeat(JobRun(ACCURACY_JOB, datetime.now(UTC), "error", duration_ms=_ms(started)))
+        return
+    log.info("job=%s weeks=%s..%s rows=%d", ACCURACY_JOB, result.start, result.end, result.rows)
+    heartbeat(JobRun(ACCURACY_JOB, datetime.now(UTC), "ok", rows=result.rows, duration_ms=_ms(started)))
 
 
 def make_sink_check(
@@ -238,7 +262,9 @@ def main() -> None:
         kds=settings.kds_enabled,
         kds_online=settings.kds_online_enabled,
         waste=settings.waste_enabled,
+        forecast=settings.forecast_enabled,
     )
+    forecast_store = ClickHouseForecastStore(client) if settings.forecast_enabled else None
     if settings.gl_enabled:
         jobs.extend(GL_JOBS)
     overlap = timedelta(seconds=settings.overlap_seconds)
@@ -295,6 +321,14 @@ def main() -> None:
                 timedelta(seconds=settings.stock_snapshot_interval_seconds),
                 settings.batch_size,
                 settings.max_pages_per_run,
+                heartbeat,
+            )
+        if forecast_store is not None:
+            run_forecast_accuracy_cycle(
+                forecast_store,
+                sink,
+                settings.forecast_accuracy_weeks,
+                timedelta(seconds=settings.forecast_accuracy_interval_seconds),
                 heartbeat,
             )
         if audit_store is not None:

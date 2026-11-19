@@ -80,9 +80,10 @@ describe('isBrandId / getBrandById', () => {
     expect(getBrandById('wetzels').companies).toEqual(['WTZ']);
     expect(getBrandById('efn').companies).toEqual(['GL', 'PB', 'BCR', 'BCF', 'WTZ']);
   });
-  it('kode RTL/FNB sudah dihapus dari peta PT; tujuh entitas (§12.1 + G24 §16 WTZ)', async () => {
+  it('kode RTL/FNB sudah dihapus dari peta PT; delapan entitas (§12.1 + G24 §16 WTZ + G44 SMD)', async () => {
     const { COMPANIES, BRANDS } = await import('../lib/brands');
-    expect(Object.keys(COMPANIES).sort()).toEqual(['BCF', 'BCR', 'EFN', 'FARM', 'GL', 'PB', 'WTZ']);
+    // G44 §12.1 (revisi 18 Nov 2026): + SMD (PT Supermarket Demo, placeholder) = delapan entitas
+    expect(Object.keys(COMPANIES).sort()).toEqual(['BCF', 'BCR', 'EFN', 'FARM', 'GL', 'PB', 'SMD', 'WTZ']);
     expect(COMPANIES.WTZ.businessType).toBe('fnb');
     // Layanan meja (QR meja + reservasi) hanya PB/BCF; WTZ kios takeaway.
     expect(Object.values(COMPANIES).filter((c) => c.tableService).map((c) => c.code).sort()).toEqual(['BCF', 'PB']);
@@ -108,6 +109,17 @@ describe('isBrandId / getBrandById', () => {
     for (const b of Object.values(BRANDS)) {
       if (b.brandCode !== null) expect([...channelsOfBrandCode(b.brandCode)]).toEqual(b.companies);
     }
+  });
+  it('G44 §12.1: PT SMD dikenal sebagai kode PT, tetapi tanpa kanal online/tenant/tema (fitur tidak dinyalakan)', async () => {
+    const { allPpnCompanies, channelsOfBrandCode } = await import('../lib/brands');
+    expect(COMPANIES.SMD).toEqual({ code: 'SMD', displayName: 'PT Supermarket Demo', businessType: null, tableService: false });
+    expect(channelsOfBrandCode('SMD')).toEqual([]);
+    for (const b of Object.values(BRANDS)) expect(b.companies).not.toContain('SMD');
+    expect(resolveBrandIdFromHost('smd.efn.local')).toBe('efn'); // tanpa tenant -> default
+    expect(resolveBrandIdFromHost('supermarket.efn.local')).toBe('efn');
+    // belum ada kanal online -> tidak memenuhi syarat faktur PPN online (businessType null)
+    expect(allPpnCompanies(['SMD'])).toBe(false);
+    expect(allPpnCompanies(['GL', 'SMD'])).toBe(false);
   });
 });
 

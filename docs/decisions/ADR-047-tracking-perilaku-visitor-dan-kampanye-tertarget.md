@@ -116,11 +116,15 @@ sequenceDiagram
 - **Odoo tidak publish langsung ke RabbitMQ** (belum ada modul efn yang melakukannya, fit-gap G45 S-09): kampanye
   disetujui dan markdown "kirim ke member" ditulis ke **outbox Odoo** (`efn.campaign.outbox`), BFF mengklaimnya lewat
   `/json/2` (pola `efn_promo_push_claim`, `docs/04` §18.1) lalu BFF yang menerbitkan `promo.campaign.requested`.
-- Odoo **tidak menerima data member** (rekomendasi architect): hanya ringkasan segmen dan kode voucher (`loyalty.program`
-  tipe kupon CE, **kode tanpa partner** — POS CE menerima kupon dengan partner kosong, fit-gap S-17). Penugasan kode ke
-  member di BFF (`platform.member_voucher`). ⚠ Fit-gap G45 §5 mengusulkan `loyalty.card.partner_id` per member (wizard
-  CE mode `selected`); itu memasukkan identitas member ke Odoo dan butuh partner per member. Rekomendasi architect tetap
-  kode tanpa partner; keputusan akhir oleh efn-lead bersama efn-odoo-functional sebelum G46 (dicatat di laporan).
+- **Mode voucher configurable per kampanye** (keputusan pemilik proyek 18 Nov 2026; field `efn.campaign.voucher_mode`,
+  dikunci setelah kampanye disetujui — ganti mode = kampanye baru/revisi dengan approval ulang):
+  | Mode | Bentuk di Odoo (`loyalty.program` tipe kupon CE) | Penugasan & penegakan | Data member di Odoo |
+  |---|---|---|---|
+  | `anonymous_code` (**default**) | `loyalty.card` unik per penerima, **partner kosong** (POS CE menerima, fit-gap S-17) | BFF `platform.member_voucher` (kode ↔ member); checkout online BFF menolak kode yang bukan milik member login; di POS kode bersifat *bearer* (siapa pun yang memegang kode) | Tidak ada |
+  | `public_code` | satu kode bersama (program promo-code CE), kuota pemakaian & batas per transaksi opsional | Tanpa penugasan; disebar lewat banner/push/broadcast; tidak butuh segmen | Tidak ada |
+  | `member_bound` | `loyalty.card.partner_id` = partner member (wizard CE mode `selected`, fit-gap §5) | POS/online CE menegakkan kecocokan partner; member wajib punya `res.partner` di PT kampanye | **Ada** — hanya untuk promo khusus member; dicatat di inventaris PDP; erasure ikut menghapus/menganonimkan kartu |
+  Mode `member_bound` tetap tunduk pada `PROMO_CAMPAIGN_ENABLED` + consent marketing; pengiriman ke member yang
+  tidak punya partner di PT kampanye dilewati (dicatat, tidak membuat partner otomatis).
 - Cap frekuensi (`CAMPAIGN_MAX_PER_MEMBER_PER_WEEK`) dan anggaran (`budget_idr` per kampanye, Σ nilai voucher) =
   **configurable, default nonaktif** (keputusan pemilik proyek). Catatan architect: karena nonaktif, pengaman yang tersisa
   adalah approval marketing per kampanye + batas teknis kanal (ADR-044 §3 no. 9) — dicatat sebagai R-B17.

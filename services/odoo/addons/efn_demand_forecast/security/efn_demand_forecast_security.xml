@@ -1,5 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
+    <!-- G44 (docs/04 §28.2, L-145): user teknis forecast-worker per PT (`efn_forecast_<kode>`). Hanya Internal User + grup
+         ini, TEPAT satu company; tanpa ACL dokumen (RPC menulis via sudo setelah cek pemanggil). API key per PT
+         `/run/secrets/odoo_api_key_forecast_<kode>`. -->
+    <record id="res_groups_privilege_efn_forecast" model="res.groups.privilege">
+        <field name="name">EFN Forecast</field>
+        <field name="category_id" ref="base.module_category_supply_chain"/>
+    </record>
+    <record id="group_forecast_bot" model="res.groups">
+        <field name="name">Layanan forecast (user teknis forecast-worker)</field>
+        <field name="comment">User teknis forecast-worker (/json/2 lewat odoo-rpc-gateway, mTLS CN forecast-worker). Hanya Internal User + grup ini, tepat satu company. Tanpa akses dokumen langsung.</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_forecast"/>
+        <field name="api_key_duration">35</field>
+    </record>
+
     <data noupdate="1">
         <record id="efn_demand_forecast_rule_company" model="ir.rule">
             <field name="name">EFN forecast: multi-company</field>
@@ -10,6 +24,31 @@
             <field name="name">EFN musim forecast: global atau PT sendiri</field>
             <field name="model_id" ref="model_efn_forecast_season"/>
             <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_forecast_calendar_rule_company" model="ir.rule">
+            <field name="name">EFN kalender forecast: multi-company</field>
+            <field name="model_id" ref="model_efn_forecast_calendar"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_forecast_run_rule_company" model="ir.rule">
+            <field name="name">EFN run forecast: multi-company</field>
+            <field name="model_id" ref="model_efn_forecast_run"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_forecast_chunk_rule_company" model="ir.rule">
+            <field name="name">EFN chunk forecast: multi-company</field>
+            <field name="model_id" ref="model_efn_forecast_chunk"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_demand_forecast_line_rule_company" model="ir.rule">
+            <field name="name">EFN baris min/max v2: multi-company</field>
+            <field name="model_id" ref="model_efn_demand_forecast_line"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_forecast_daily_rule_company" model="ir.rule">
+            <field name="name">EFN proyeksi harian: multi-company</field>
+            <field name="model_id" ref="model_efn_forecast_daily"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
         </record>
     </data>
 </odoo>

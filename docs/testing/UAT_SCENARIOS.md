@@ -974,6 +974,118 @@ Status: **Draft** (efn-qa-engineer, 18 Nov 2026). Untuk pengguna bisnis dan peng
 
 ---
 
+## M. Gelombang 44 — Supermarket: forecast harian, usulan order outlet, PO DC, assortment (docs/04 §28.2–§28.5, ADR-045/046 *Proposed*, L-144..L-151)
+
+Status: **Draft** (efn-qa-engineer, 18 Nov 2026; belum dijalankan, tidak ada runtime lokal saat penulisan). Untuk penguji bisnis dan teknis; dijalankan di **dev/staging** (`efn-dev`/`efn-stg`) dengan `FORECAST_ENABLED=true`, `efn_replenishment.enabled=true`, `efn_assortment.enforce=true`. Seluruh data = **demo** PT Supermarket Demo (`SMD`, placeholder; nama/kode final Q-SM1). Angka di contoh = ilustrasi.
+
+**Data uji M**
+- Odoo: company `SMD`; DC `SMDDC` (**centang `efn_is_dc`** pada gudang DC — tidak dicentang otomatis oleh `efn_setup_supermarket`); outlet `SMD01`..`SMD05` dipasok DC (`resupply_wh_ids`); ≥ 120 hari riwayat penjualan POS demo (ETL sudah jalan, `ETL_ENABLE_FORECAST=true`).
+- Pengguna: **Rina** (grup *Replenishment: kepala toko*, `efn_outlet_warehouse_ids` = `SMD01`), **Yoga** (kepala toko `SMD02` saja), **Bayu** (*Replenishment: buyer DC* + pembelian), **Maya** (*Assortment Manager*), **Tono** (Inventory user biasa). User teknis `efn_forecast_smd` (grup bot, satu company `SMD`) + API key di secret `odoo_api_key_forecast_smd`.
+- Jadwal kirim aktif `SMDDC → SMD01` kategori "Segar" (setiap hari, lead 1 hari, cut-off 12:00 WIB); jadwal supplier "PT Susu Demo" ke DC (Senin & Kamis).
+- Produk: **Susu UHT** (tanpa ED, pack 12), **Yoghurt** (`use_expiration_date`, umur 14 hari, pack 6), **Daging beku** (butuh capability `freezer`), **Anggur impor** (butuh `alcohol_license`), **Beras 5 kg** (kapasitas rak `SMD01` = 40).
+- Seluruh pemeriksaan "tidak boleh memuat" berlaku untuk log worker/Odoo/Loki: **tanpa API key, tanpa isi payload, tanpa pesan SQL mentah**.
+
+### M1. Forecast harian berjalan malam hari (jalur normal)
+- **Given** `FORECAST_ENABLED=true`, jadwal `FORECAST_DAILY_CRON=30 23 * * *` (WIB), ClickHouse berisi penjualan s.d. hari ini
+- **When** worker berjalan pukul 23:30 WIB
+- **Then** di Odoo *Forecast EFN → Run Forecast (v2)* muncul satu run `daily` berstatus **Selesai** + **Run aktif** untuk `SMD`, jumlah chunk = jumlah panggilan ingest, run aktif sebelumnya otomatis tidak aktif
+- **And** *Proyeksi Harian (v2)* memuat baris untuk 28 hari ke depan per SKU × gudang (termasuk gudang `SMDDC` sebagai agregat outlet), `p10 ≤ yhat ≤ p90`
+- **And** log worker memuat satu baris ringkasan `EFN_FORECAST_RUN` (status, jumlah seri, durasi) tanpa nilai data
+
+### M2. Chunk dikirim ulang (timeout) tidak menggandakan data
+- **Given** gateway menjawab 503/timeout setelah Odoo sebenarnya sudah menyimpan chunk ke-2
+- **When** worker mengulang chunk yang sama (backoff)
+- **Then** Odoo menjawab `duplicate_chunk: true`; jumlah baris proyeksi run itu **tidak bertambah**; run tetap ditutup `ok`
+
+### M3. Chunk hilang → run tidak boleh jadi aktif
+- **Given** penguji teknis menghentikan worker setelah chunk 0 dari 3 terkirim, lalu mengirim `efn_forecast_run_close(status=ok)` manual
+- **When** Odoo memproses
+- **Then** ditolak **422** `efn_forecast:incomplete_run`; run tetap **Terbuka**; run aktif lama tetap dipakai
+- **And** run yang tidak ditutup > 6 jam menjadi **Gagal** (alasan "Tidak ditutup > 6 jam") oleh cron; usulan order hari itu memakai reorder rule CE (tidak ada usulan baru)
+
+### M4. Worker tidak boleh menulis untuk PT lain
+- **Given** user teknis `efn_forecast_smd` (company `SMD`)
+- **When** payload `run_open` memakai `company_code=PB`, atau `run_id` run milik PT lain dipakai pada `ingest`/`close`
+- **Then** **403** `efn_forecast:company_mismatch`; tidak ada data tertulis
+- **And** user teknis yang ditambahi grup lain (mis. Inventory Manager) atau dua company ditolak **403** `efn_forecast:access_denied` (fail closed); sertifikat klien selain CN `forecast-worker` ditolak gateway (`X-EFN-Gateway-Deny: cn`); path selain 5 metode forecast ditolak `path`
+
+### M5. Baris tidak valid ditolak per baris, bukan seluruh chunk
+- **Given** satu chunk berisi 500 baris: 1 gudang PT lain, 1 produk PT lain, 1 tanggal kemarin, 1 `p10 > yhat`, 1 model `Prophet`, sisanya valid
+- **When** dikirim ke `efn_forecast_ingest`
+- **Then** `accepted = 495`, `rejected` memuat lima `{index, code}` (`unknown_warehouse`, `unknown_product`, `invalid_date`, `invalid_quantile`, `invalid_model`); chunk ke-501 baris atau body > 512 KB ditolak utuh (`too_many_items` / `payload_too_large`; gateway 413 untuk body > 512 KiB)
+
+### M6. Forecast mati → operasi toko tetap jalan
+- **Given** worker/ClickHouse/`efn-data` dimatikan sehari penuh
+- **When** kepala toko membuka *Usulan Order Outlet* keesokan hari
+- **Then** tidak ada usulan baru dari forecast; reorder rule CE lama tetap berlaku; POS, penerimaan, dan transfer manual tetap bisa dipakai; tidak ada galat transaksi (AI/forecast di luar jalur transaksi)
+
+### M7. Usulan order kepala toko — disetujui sebelum cut-off
+- **Given** run M1 selesai pukul 23:40 dan cron antrean sudah menghitung; usulan `SMD01` untuk tanggal kirim berikutnya berstatus **Menunggu approval**, cut-off 12:00 WIB, Susu UHT stok 5 vs kebutuhan 15, pack 12
+- **When** Rina membuka *Replenishment EFN → Usulan Order Outlet* pukul 09:00 dan menekan **Setujui**
+- **Then** usulan menjadi **Disetujui** (approved_by = Rina); Susu UHT diusulkan **24** (naik ke kelipatan pack, kode `pack_round`); satu transfer DC → outlet terbentuk lewat orderpoint/rute resupply CE; log bias mencatat "Usulan outlet disetujui"
+- **And** Rina mengubah qty Yoghurt dari 18 menjadi 12 **dengan alasan** (Promo lokal/Event/Rak penuh/Lainnya) → tersimpan + log bias "Perubahan qty"; mengubah tanpa alasan ditolak ("pilih alasan perubahan qty")
+
+### M8. Usulan order lewat cut-off → kedaluwarsa, tidak dikirim
+- **Given** usulan `SMD01` masih **Menunggu approval**, jam 12:01 WIB
+- **When** Rina menekan **Setujui** (atau cron kedaluwarsa berjalan lebih dulu)
+- **Then** pemberitahuan "Usulan sudah lewat cut-off dan ditandai kedaluwarsa (tidak dikirim)"; status **Kedaluwarsa**; **tidak ada** transfer/picking yang dibuat; mengedit qty baris juga ditolak ("tidak lagi bisa diubah")
+- **And** usulan berikutnya dihitung untuk tanggal kirim sesudahnya (cut-off hari itu sudah lewat → tanggal kirim bergeser)
+
+### M9. Cakupan dan pemisahan tugas (SoD) approval
+- **Given** usulan `SMD01` menunggu approval
+- **When** (a) Yoga (kepala toko `SMD02`) menekan Setujui/Tolak, (b) Bayu (buyer DC) menekan Setujui, (c) Rina menolak lalu mencoba menyetujui lagi
+- **Then** (a) dan (b) ditolak (**scope** / **store_only**); (c) menolak berhasil (status **Ditolak**, tidak ada transfer), menyetujui sesudahnya ditolak ("hanya usulan Menunggu approval")
+- **And** Rina (kepala toko) **tidak bisa** mengonfirmasi RFQ supplier yang berasal dari orderpoint DC terkelola (`efn_replenishment:sod`); Bayu bisa
+
+### M10. Batas umur simpan dan kapasitas rak membatasi usulan
+- **Given** Yoghurt (umur 14 hari; lot DC terdekat kedaluwarsa 6 hari lagi) dan Beras 5 kg (kapasitas rak 40, stok 25, in-transit 5)
+- **When** usulan dihitung
+- **Then** Yoghurt dibatasi sampai perkiraan terjual sebelum tanggal kedaluwarsa (kode `shelf_cap`) walau kebutuhan lebih besar; Beras maksimum 10 (40 − 25 − 5; kode `rack_cap`); pembulatan pack **tidak pernah** melampaui cap (dibulatkan turun, kode `pack_round` ikut tercatat)
+- **And** produk yang gagal assortment tampil sebagai baris **Dikecualikan** dengan kode `assortment:<alasan>` dan qty 0, tidak bisa diedit
+
+### M11. PO DC → supplier oleh buyer (qty orderpoint → RFQ)
+- **Given** run M1 selesai; hari ini hari kunjungan supplier "PT Susu Demo" (Senin) ; orderpoint DC Susu UHT `trigger=manual`
+- **When** Bayu membuka orderpoint DC, melihat `qty_to_order_manual` terisi (cakupan sampai kunjungan berikutnya + lead, dikurangi stok virtual DC termasuk usulan outlet yang sudah disetujui, dibulatkan pack), lalu menekan **Order**
+- **Then** terbentuk **RFQ draft per vendor** dari `product.supplierinfo` (harga/min qty/lead CE); Bayu mengonfirmasi RFQ → log bias "RFQ DC dikonfirmasi" mencatat qty sistem vs qty RFQ
+- **And** hari **bukan** kunjungan supplier → tidak ada qty baru; produk ber-ED tidak dipesan melebihi yang bisa terjual sebelum ED lot baru (cap umur simpan)
+
+### M12. Transfer DC → outlet diblokir karena assortment (+ override)
+- **Given** `SMD01` tidak punya capability `freezer` dan `alcohol_license`; Tono membuat transfer manual `SMDDC → SMD01` berisi Daging beku dan Anggur impor
+- **When** Tono menekan **Konfirmasi**
+- **Then** ditolak dengan pesan `efn_assortment:blocked` memuat tiap produk + kode (`missing_capability:freezer`, `missing_capability:alcohol_license`); transfer tetap draft
+- **When** Maya (Assortment Manager) membuka transfer, menekan **Override assortment**, mengisi alasan **< 10 karakter** → ditolak; mengisi alasan memadai → override dicatat hanya untuk **Daging beku**; konfirmasi masih terblokir untuk **Anggur impor** (izin alkohol **tidak bisa** di-override; sama untuk `non_halal_allowed`)
+- **When** Anggur impor dihapus dari transfer dan transfer dikonfirmasi
+- **Then** berhasil; override tercatat di *Assortment EFN → Override* (append-only, teraudit `efn_audit`) dan muncul di laporan *Pelanggaran* harian (sumber "Override transfer")
+- **And** pengguna tanpa grup Assortment Manager tidak melihat/menjalankan tombol override (403 bila memanggil langsung)
+
+### M13. Saklar penegakan dan transfer non-DC
+- **Given** `efn_assortment.enforce=false` (atau transfer dari gudang yang **bukan** DC, mis. CK/PT lain)
+- **When** transfer berisi produk terlarang dikonfirmasi
+- **Then** lolos dengan peringatan log; nilai selain `false`/`0` (mis. `no`, `off`, `nonaktif`, kosong) **tidak** mematikan penegakan (fail closed)
+
+### M14. Minggu gajian terlihat di proyeksi
+- **Given** riwayat 120+ hari berpola naik pada 7 hari terakhir + 7 hari pertama tiap bulan; parameter `efn_forecast.payday_tail_days`/`payday_head_days` = 7/7 (default)
+- **When** worker menjalankan run harian pada pertengahan bulan (mis. 18 Nov) dan penguji membuka *Proyeksi Harian (v2)* untuk satu SKU
+- **Then** `yhat` untuk 24–30 Nov dan 1–7 Des **lebih tinggi** daripada 8–23 Des yang sebanding (hari dalam minggu yang sama); panjang jendela mengikuti panjang bulan (Februari 28/29 hari)
+- **When** planner mengubah parameter menjadi 3/2 (tail/head) untuk SMD dan run berikutnya berjalan
+- **Then** lonjakan hanya pada 28–30 Nov dan 1–2 Des; nilai di luar 0–15 atau bukan angka diabaikan (kembali 7)
+
+### M15. Lebaran/Ramadan dan libur nasional dari kalender
+- **Given** worker menyemai kalender (`efn_forecast_calendar_upsert`, sumber `lib`) untuk tahun berjalan + 1; *Forecast EFN → Kalender Forecast* memuat libur nasional + cuti bersama; planner menambah entri **manual** `lebaran_window` bila tanggal 1 Syawal berbeda dari library
+- **When** run harian mencakup jendela H-14..H+7 Lebaran (uji di staging dengan tanggal demo yang mendekati Lebaran)
+- **Then** `yhat` naik bertahap menjelang Lebaran (puncak H-3..H-1), turun pada hari H..H+2, dan kembali normal sesudahnya; periode Ramadan (default 30 hari sebelum 1 Syawal) lebih tinggi daripada hari biasa
+- **And** entri **manual** tidak pernah ditimpa seed worker; entri `lib` yang dinonaktifkan planner **tetap nonaktif** setelah seed berikutnya (tidak diaktifkan ulang) dan tidak dipakai worker
+- **And** seed yang diulang tidak membuat entri ganda (kunci company+tanggal+jenis+nama)
+
+### M16. Gudang tanpa kode PT/produk PT lain tidak ikut
+- **Given** ClickHouse berisi gudang/produk PT lain (`PB`, `GL`)
+- **When** run `SMD` berjalan
+- **Then** proyeksi dan min/max hanya untuk gudang & produk `SMD` (atau produk bersama tanpa company); tidak ada baris PT lain di Odoo; kegagalan baca ClickHouse (mati/lambat) → run **Gagal** dengan kode generik (log tanpa SQL/nilai), run aktif lama tetap dipakai, worker tidak crash/restart berulang
+
+### M17. Min/max mingguan v1 vs v2 (sakelar engine)
+- **Given** `SMD01` engine **v1** (default), `SMD02` engine **v2**; run `weekly_minmax` selesai
+- **When** planner membuka *Forecast EFN → Usulan Min/Max*
+- **Then** usulan `SMD02` berstatus **Draft** (bisa diterapkan; menggantikan draft lama), usulan `SMD01` berstatus **Shadow** (pembanding; tombol terapkan ditolak); baris dengan `max < min` atau `service_level` di luar [0,5; 1) ditolak per baris
 ## M. Gelombang 43 — Migrasi ESB → Odoo, dry-run Paris Baguette (PB) (docs/04 §27, ADR-042 *Accepted*, L-127..L-143)
 
 Status: **Draft** (efn-qa-engineer, 18 Nov 2026). Untuk **Finance** dan **Ops/PIC brand PB**, ditemani operator migrasi. Dijalankan di **staging** (salinan data production) atau dev lokal; **bukan run nyata**. Aturan program: minimal **2 dry-run lengkap** per brand sebelum run nyata (L-133) — skenario M1–M13 diulang untuk dry-run kedua, dengan M10 (idempotensi) sebagai penentu. Skrip belum pernah dijalankan end-to-end terhadap ClickHouse/Odoo nyata (runbook `docs/runbooks/migrasi-esb-odoo.md`): setiap penyimpangan dicatat sebagai temuan, bukan dianggap salah penguji.
