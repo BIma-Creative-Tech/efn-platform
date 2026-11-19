@@ -423,3 +423,19 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS efn_etl_efn_forecast_daily_write_date_id
 \else
 \echo 'model v2 efn_demand_forecast belum terpasang: grant G44 forecast dilewati'
 \endif
+
+-- ============================================================================================================
+-- Gelombang 46 (efn-lead): histori penjualan ESB pra-cutover sebagai input forecast (efn_etl/forecast.py
+--     `fc_legacy_sales`, docs/04 §28.2a, L-165). Kolom minimum: tanpa nama menu/cabang, rupiah, run_id, pelaku.
+--     Bersyarat: dilewati bila efn_legacy_history (G43) belum terpasang. ETL membaca hanya bila
+--     ETL_ENABLE_FORECAST_LEGACY=true.
+SELECT to_regclass('public.efn_legacy_sales_daily') IS NOT NULL AS efn_g46_legacy_sales \gset
+\if :efn_g46_legacy_sales
+GRANT SELECT (id, company_id, warehouse_id, day, esb_menu_code, product_id, qty, write_date)
+    ON public.efn_legacy_sales_daily TO efn_etl;
+-- Index cursor (R-O03): 24 bulan x outlet x menu bisa jutaan baris per PT.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS efn_etl_efn_legacy_sales_daily_write_date_id_idx
+    ON public.efn_legacy_sales_daily (write_date, id);
+\else
+\echo 'efn_legacy_history belum terpasang: grant G46 histori penjualan ESB dilewati'
+\endif

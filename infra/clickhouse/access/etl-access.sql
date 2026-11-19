@@ -63,6 +63,8 @@ GRANT SELECT, INSERT ON efn_dwh.dim_calendar TO etl_writer;
 GRANT SELECT, INSERT ON efn_dwh.dim_forecast_run TO etl_writer;
 GRANT SELECT, INSERT ON efn_dwh.fact_forecast_daily TO etl_writer;
 GRANT SELECT, INSERT ON efn_dwh.fact_forecast_accuracy TO etl_writer;
+-- G46 (L-165): histori penjualan ESB pra-cutover dari Odoo efn_legacy_sales_daily (ETL_ENABLE_FORECAST_LEGACY).
+GRANT SELECT, INSERT ON efn_dwh.fact_legacy_sales_daily TO etl_writer;
 GRANT SELECT ON efn_dwh.v_fc_sales_daily TO etl_writer;
 -- Salinan audit tamper-evident: HANYA SELECT + INSERT. Sengaja TANPA ALTER DELETE/UPDATE, TRUNCATE, DROP, OPTIMIZE:
 -- ETL (atau kredensial efn_etl yang bocor) tidak bisa menghapus/mengubah salinan; perubahan hanya oleh admin ClickHouse

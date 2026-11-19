@@ -134,6 +134,12 @@ Risiko yang dimitigasi: R-B05/R-B06 (fraud/salah saji poin), SEC-61 (rekonsilias
   lot. View `v_waste_daily`, `v_waste_warehouse_daily`, `v_mo_yield`, `v_mo_yield_daily` (yield tertimbang),
   `v_mo_component_variance`; dashboard Metabase **Waste & Yield CK**. Butuh `efn_ck_production` + grant G32 (bersyarat).
   Odoo menghapus tiket > 90 hari (autovacuum); salinan mart tetap (tanpa PII).
+- **Histori penjualan ESB untuk forecast** (`efn_etl/forecast.py` job `fc_legacy_sales`,
+  `ETL_ENABLE_FORECAST_LEGACY=true` + `ETL_ENABLE_FORECAST=true`, G46 docs/04 §28.2a, L-165): Odoo
+  `efn_legacy_sales_daily` (G43; menu ESB sudah dipetakan, hari < cutover) -> `fact_legacy_sales_daily` (qty saja,
+  tanpa nama/rupiah) -> bagian dari `v_fc_sales_daily` (hari x gudang yang sudah punya POS Odoo memakai POS saja).
+  Butuh `efn_legacy_history` + grant G46. Setelah impor ulang histori di Odoo: hapus baris PT itu di
+  `fact_legacy_sales_daily` dan reset watermark `fc_legacy_sales` (penghapusan tidak terbaca cursor).
 - **Forecast supermarket** (`efn_etl/forecast.py`, `ETL_ENABLE_FORECAST=true`, G44 ADR-046 Proposed, docs/04 §28.1,
   R-T21): `stock_warehouse` (+ kode gudang & kode PT) -> `dim_fc_warehouse`; `efn_forecast_calendar` -> `dim_calendar`;
   `efn_forecast_run` -> `dim_forecast_run`; `efn_forecast_daily` -> `fact_forecast_daily` (riwayat semua run). Harian:
@@ -253,6 +259,7 @@ PDP (SEC-16, docs/04 §7.2): ETL **tidak memegang `otp_pepper`** dan tidak mengh
 | `ETL_LOYALTY_RECON_ONLINE_ENABLED` | `false` (G22; butuh recon aktif + mode `payment` + view G22) |
 | `ETL_ENABLE_KDS`, `ETL_KDS_ONLINE_ENABLED` | `false`, `false` (G22; butuh `ETL_ENABLE_ODOO` + grant G22; online setelah E-29a) |
 | `ETL_ENABLE_WASTE` | `false` (G32; butuh `ETL_ENABLE_ODOO` + `efn_ck_production` + grant G32) |
+| `ETL_ENABLE_FORECAST_LEGACY` | `false` (G46; butuh `ETL_ENABLE_FORECAST` + `efn_legacy_history` + grant G46) |
 | `ETL_ENABLE_FORECAST`, `ETL_FORECAST_ACCURACY_WEEKS`, `ETL_FORECAST_ACCURACY_INTERVAL_SECONDS` | `false`, `2` (1..12), `86400` (G44; butuh `ETL_ENABLE_ODOO` + model v2 `efn_demand_forecast` + grant G44) |
 | `ETL_AUDIT_COPY_ENABLED`, `ETL_AUDIT_SETTLE_SECONDS`, `ETL_AUDIT_LATE_WINDOW_SECONDS`, `ETL_AUDIT_BATCH_SIZE` | `false`, `600`, `86400`, `2000` |
 | `ETL_AUDIT_RECON_INTERVAL_SECONDS`, `ETL_AUDIT_RECON_CONTENT` | `86400`, `true` (bandingkan hash isi; `false` = hanya id) |

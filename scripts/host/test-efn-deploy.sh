@@ -818,5 +818,13 @@ vc "269c G32 ETL_ENABLE_WASTE=true + ETL_ENABLE_ODOO=false ditolak" 1 staging ET
 vc "269d G32 production ETL_ENABLE_WASTE=true + ETL_ENABLE_ODOO kosong diterima (aktif setelah grant)" 0 production \
   ETL_ENABLE_WASTE=true
 
+# G44/G46 (docs/04 §28.1/§28.2a): mart forecast + histori penjualan ESB pra-cutover
+vc "274a G46 ETL_ENABLE_FORECAST_LEGACY=ya ditolak (boolean)" 1 staging ETL_ENABLE_FORECAST_LEGACY=ya
+vc "274b G46 ETL_ENABLE_FORECAST_LEGACY=true tanpa ETL_ENABLE_FORECAST ditolak" 1 staging ETL_ENABLE_FORECAST_LEGACY=true
+vc "274c G46 ETL_ENABLE_FORECAST + _LEGACY=true diterima" 0 staging ETL_ENABLE_FORECAST=true \
+  ETL_ENABLE_FORECAST_LEGACY=true
+vc "274d G44 ETL_ENABLE_FORECAST=true + ETL_ENABLE_ODOO=false ditolak" 1 staging ETL_ENABLE_FORECAST=true \
+  ETL_ENABLE_ODOO=false
+
 echo "RINGKASAN efn-deploy: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]

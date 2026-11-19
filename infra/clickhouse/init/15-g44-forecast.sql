@@ -120,32 +120,91 @@ ORDER BY (company_id, warehouse_id, product_id, week_start)
 TTL week_start + INTERVAL 3 YEAR
 SETTINGS ttl_only_drop_parts = 1;
 
+-- G46 (L-165, docs/04 §28.2a): histori penjualan ESB sebelum cutover sebagai input forecast. Salinan ETL
+-- (services/etl/efn_etl/forecast.py job `fc_legacy_sales`, ETL_ENABLE_FORECAST_LEGACY=false default) dari Odoo
+-- efn_legacy_sales_daily (G43, ADR-042) -> ADR-003 tetap: PostgreSQL sumber kebenaran, bukan dari efn_esb langsung.
+-- Kunci = grain Odoo (company, gudang, hari, kode menu ESB). product_id 0 = menu belum terpetakan (baris tetap disalin
+-- agar perbaikan pemetaan menimpa kunci yang sama). Tanpa nama menu/cabang/nilai rupiah (hanya qty untuk forecast).
+CREATE TABLE IF NOT EXISTS efn_dwh.fact_legacy_sales_daily
+(
+    company_id     UInt32,
+    warehouse_id   UInt32,
+    day            Date,
+    esb_menu_code  String,
+    product_id     UInt32,                          -- 0 = belum terpetakan
+    qty            Decimal(18, 3),
+    write_date     DateTime64(6, 'UTC'),
+    _loaded_at     DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(write_date)
+PARTITION BY toYYYYMM(day)
+ORDER BY (company_id, warehouse_id, day, esb_menu_code)
+TTL day + INTERVAL 5 YEAR
+SETTINGS ttl_only_drop_parts = 1;
+
 -- ============================================================== View sumber forecast-worker (efn_dwh.v_fc_*)
 -- Dibungkus view DEFINER efn_forecast.* (access/forecast-access.sql). Semua item SELECT teratas memakai AS.
 
--- Permintaan harian per SKU x gudang (POS; online menyusul saat fact_sales_line source='online' ada). qty = qty baris
--- produk non-refund (retur bukan permintaan negatif). Gudang = pos.config.warehouse_id (dim_outlet).
+-- Permintaan harian per SKU x gudang (online menyusul saat fact_sales_line source='online' ada). Dua sumber:
+-- 1. POS Odoo: qty baris produk non-refund (retur bukan permintaan negatif). Gudang = pos.config.warehouse_id
+--    (dim_outlet).
+-- 2. G46 (L-165): histori penjualan ESB sebelum cutover = fact_legacy_sales_daily (salinan efn_legacy_sales_daily G43:
+--    menu ESB sudah dipetakan Odoo ke product.product + stock.warehouse, hari < cutover ditegakkan Odoo). Hanya baris
+--    terpetakan (product_id != 0) dan qty > 0. Anti dobel hitung: hari x gudang yang SUDAH punya penjualan POS memakai
+--    POS saja (paralel ESB + Odoo saat pilot tidak dijumlahkan). company_code legacy = PT gudang (dim_fc_warehouse).
 CREATE OR REPLACE VIEW efn_dwh.v_fc_sales_daily AS
 SELECT
-    s.day AS day, s.company_id AS company_id, s.company_code AS company_code, o.warehouse_id AS warehouse_id,
-    w.code AS warehouse_code, s.product_id AS product_id, toFloat64(sum(s.qty)) AS qty
+    u.day AS day, u.company_id AS company_id, u.company_code AS company_code, u.warehouse_id AS warehouse_id,
+    w.code AS warehouse_code, u.product_id AS product_id, toFloat64(sum(u.qty)) AS qty
 FROM
 (
-    SELECT toDate(order_date) AS day, company_id, brand AS company_code, store_id, product_id,
-           sumIf(qty, line_kind = 'product' AND is_refund = 0) AS qty
-    FROM efn_dwh.fact_sales_line FINAL
-    WHERE source = 'pos'
-    GROUP BY day, company_id, company_code, store_id, product_id
-) AS s
-INNER JOIN
-(
-    SELECT store_id, assumeNotNull(warehouse_id) AS warehouse_id
-    FROM efn_dwh.dim_outlet FINAL
-    WHERE isNotNull(warehouse_id)
-) AS o ON o.store_id = s.store_id
+    SELECT
+        s.day AS day, toUInt32(s.company_id) AS company_id, toString(s.company_code) AS company_code,
+        toUInt32(o.warehouse_id) AS warehouse_id, toUInt32(s.product_id) AS product_id, toFloat64(s.qty) AS qty
+    FROM
+    (
+        SELECT toDate(order_date) AS day, company_id, brand AS company_code, store_id, product_id,
+               sumIf(qty, line_kind = 'product' AND is_refund = 0) AS qty
+        FROM efn_dwh.fact_sales_line FINAL
+        WHERE source = 'pos'
+        GROUP BY day, company_id, company_code, store_id, product_id
+    ) AS s
+    INNER JOIN
+    (
+        SELECT store_id, assumeNotNull(warehouse_id) AS warehouse_id
+        FROM efn_dwh.dim_outlet FINAL
+        WHERE isNotNull(warehouse_id)
+    ) AS o ON o.store_id = s.store_id
+
+    UNION ALL
+
+    SELECT
+        l.day AS day, toUInt32(l.company_id) AS company_id, toString(lw.company_code) AS company_code,
+        toUInt32(l.warehouse_id) AS warehouse_id, toUInt32(l.product_id) AS product_id, toFloat64(l.qty) AS qty
+    FROM
+    (
+        SELECT day, company_id, warehouse_id, product_id, qty
+        FROM efn_dwh.fact_legacy_sales_daily FINAL
+        WHERE product_id != 0 AND qty > 0
+    ) AS l
+    INNER JOIN (SELECT warehouse_id, company_code FROM efn_dwh.dim_fc_warehouse FINAL) AS lw
+        ON lw.warehouse_id = l.warehouse_id
+    WHERE (toUInt32(l.warehouse_id), l.day) NOT IN
+    (
+        SELECT toUInt32(po.warehouse_id), toDate(f.order_date)
+        FROM efn_dwh.fact_sales_line AS f
+        INNER JOIN
+        (
+            SELECT store_id, assumeNotNull(warehouse_id) AS warehouse_id
+            FROM efn_dwh.dim_outlet FINAL
+            WHERE isNotNull(warehouse_id)
+        ) AS po ON po.store_id = f.store_id
+        WHERE f.source = 'pos'
+    )
+) AS u
 INNER JOIN (SELECT warehouse_id, code FROM efn_dwh.dim_fc_warehouse FINAL WHERE code != '') AS w
-    ON w.warehouse_id = o.warehouse_id
-GROUP BY s.day, s.company_id, s.company_code, o.warehouse_id, w.code, s.product_id;
+    ON w.warehouse_id = u.warehouse_id
+GROUP BY u.day, u.company_id, u.company_code, u.warehouse_id, w.code, u.product_id;
 
 -- Stok akhir hari per SKU x gudang = snapshot selesai TERAKHIR per tanggal (pola v_stock_daily). Dipakai worker untuk
 -- censoring OOS (on_hand <= 0 di akhir hari -> penjualan hari itu bukan permintaan nol, ADR-046 §3.3).

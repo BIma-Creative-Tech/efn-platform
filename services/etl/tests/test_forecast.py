@@ -14,16 +14,19 @@ from efn_etl.forecast import (
     CALENDAR_COLUMNS,
     DAILY_COLUMNS,
     FC_WAREHOUSE_COLUMNS,
+    LEGACY_SALES_COLUMNS,
     RUN_COLUMNS,
     ClickHouseForecastStore,
     accuracy_due,
     accuracy_rows,
     accuracy_weeks,
     forecast_jobs,
+    legacy_sales_jobs,
     run_forecast_accuracy,
     transform_calendar,
     transform_daily,
     transform_fc_warehouse,
+    transform_legacy_sales,
     transform_run,
     week_start,
 )
@@ -274,3 +277,66 @@ def test_ddl_idempotent_and_without_pii() -> None:
     for pii in ("customer_id", "member_hash", "user_hash", "partner", "lot_name"):
         assert pii not in code, pii
     assert "CREATE DATABASE IF NOT EXISTS efn_forecast;" in code
+
+
+# ---------------------------------------------------------------- G46: histori penjualan ESB pra-cutover (§28.2a)
+def test_legacy_sales_job_only_with_forecast_flag() -> None:
+    assert "fc_legacy_sales" not in {j.name for j in enabled_jobs(True, forecast=True)}
+    assert "fc_legacy_sales" in {j.name for j in enabled_jobs(True, forecast=True, forecast_legacy=True)}
+    assert "fc_legacy_sales" not in {j.name for j in enabled_jobs(True, forecast_legacy=True)}
+    assert "fc_legacy_sales" not in {j.name for j in enabled_jobs(False, forecast=True, forecast_legacy=True)}
+
+
+def test_legacy_sales_sql_minimum_columns_and_grant() -> None:
+    (job,) = legacy_sales_jobs()
+    sql = job.sql
+    assert "SELECT *" not in sql and job.identity_field is None
+    for needle in ("%(cursor_ts)s", "%(cursor_key)s", "%(limit)s", "_cursor_ts", "_cursor_key", "ORDER BY"):
+        assert needle in sql, needle
+    # Tanpa nama menu/cabang, rupiah, run_id, pelaku (minimisasi; forecast hanya butuh qty).
+    for banned in ("menu_name", "branch", "gross", "net", "cogs", "discount", "run_id", "create_uid", "write_uid"):
+        assert banned not in sql, banned
+    read = set(re.findall(r"\bl\.([a-z_]+)", sql))
+    grants = (ROOT / "services" / "etl" / "sql" / "odoo-readonly-grants.sql").read_text(encoding="utf-8")
+    block = grants.split("Gelombang 46 (efn-lead)", 1)[1]
+    assert r"\if :efn_g46_legacy_sales" in block
+    granted = re.search(r"GRANT SELECT \(([^)]*)\)\s+ON public\.efn_legacy_sales_daily TO efn_etl;", block)
+    assert granted is not None
+    assert read <= {c.strip() for c in granted.group(1).split(",")}
+
+
+def test_legacy_sales_columns_match_ddl_and_grants() -> None:
+    assert _table_columns("fact_legacy_sales_daily") == list(LEGACY_SALES_COLUMNS)
+    assert "GRANT SELECT, INSERT ON efn_dwh.fact_legacy_sales_daily TO etl_writer;" in ETL_ACCESS
+    fc_access = (ROOT / "infra" / "clickhouse" / "access" / "forecast-access.sql").read_text(encoding="utf-8")
+    assert "GRANT SELECT ON efn_dwh.fact_legacy_sales_daily TO efn_forecast_definer;" in fc_access
+    view = DDL.split("CREATE OR REPLACE VIEW efn_dwh.v_fc_sales_daily AS", 1)[1].split(";", 1)[0]
+    assert "efn_dwh.fact_legacy_sales_daily FINAL" in view
+    assert "product_id != 0 AND qty > 0" in view
+    assert "NOT IN" in view  # hari x gudang dengan POS tidak memakai histori ESB (anti dobel hitung)
+
+
+def test_transform_legacy_sales() -> None:
+    row = {
+        "company_id": 3,
+        "warehouse_id": 11,
+        "day": date(2026, 10, 1),
+        "esb_menu_code": " MN-001 ",
+        "product_id": None,
+        "qty": Decimal("12.5"),
+        "write_date": WD,
+    }
+    out = transform_legacy_sales(row)
+    assert out == [3, 11, date(2026, 10, 1), "MN-001", 0, Decimal("12.500"), WD]
+    assert transform_legacy_sales({**row, "product_id": 77, "qty": Decimal("-2")})[4:6] == [77, Decimal("-2.000")]
+    for bad in ({"esb_menu_code": ""}, {"esb_menu_code": "X" * 65}, {"qty": "NaN"}):
+        with pytest.raises(ValueError):
+            transform_legacy_sales({**row, **bad})
+
+
+def test_legacy_flag_requires_forecast(tls_env: dict[str, str]) -> None:
+    on = {**tls_env, "ETL_ENABLE_ODOO": "true", "ETL_ENABLE_FORECAST": "true"}
+    assert Settings.from_env(on).forecast_legacy_enabled is False
+    assert Settings.from_env({**on, "ETL_ENABLE_FORECAST_LEGACY": "true"}).forecast_legacy_enabled is True
+    with pytest.raises(RuntimeError):
+        Settings.from_env({**tls_env, "ETL_ENABLE_ODOO": "true", "ETL_ENABLE_FORECAST_LEGACY": "true"})

@@ -263,6 +263,7 @@ def main() -> None:
         kds_online=settings.kds_online_enabled,
         waste=settings.waste_enabled,
         forecast=settings.forecast_enabled,
+        forecast_legacy=settings.forecast_legacy_enabled,
     )
     forecast_store = ClickHouseForecastStore(client) if settings.forecast_enabled else None
     if settings.gl_enabled:

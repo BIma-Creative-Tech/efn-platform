@@ -3568,7 +3568,7 @@ event, consumer idempoten + DLQ, PostgreSQL sumber kebenaran, ClickHouse turunan
 | BFF `src/behavior`, `src/campaign`, `src/wishlist`, `src/notification/email` | NestJS | G46 | Belum dibangun |
 | `segment-worker` (segmentasi harian; boleh image sama dengan forecast-worker, **container & kredensial terpisah**) | Python 3.12 | G46 | Belum dibangun |
 | `services/wa-unofficial` (Baileys, terisolasi) | Node 22 | G46 | Belum dibangun |
-| Mart `fact_forecast_daily`, `fact_forecast_accuracy`, `fact_replenishment`, `fact_lot_expiry`, `fact_visitor_event`, `agg_visitor_*`, `fact_campaign_result`, `fact_dc_fill_rate` | ETL/ClickHouse | G44–G47 | `fact_forecast_daily` + `fact_forecast_accuracy` dibangun G44 (`ETL_ENABLE_FORECAST=false`); sisanya belum |
+| Mart `fact_forecast_daily`, `fact_forecast_accuracy`, `fact_replenishment`, `fact_lot_expiry`, `fact_visitor_event`, `agg_visitor_*`, `fact_campaign_result`, `fact_dc_fill_rate` | ETL/ClickHouse | G44–G47 | `fact_forecast_daily` + `fact_forecast_accuracy` dibangun G44 (`ETL_ENABLE_FORECAST=false`); `fact_legacy_sales_daily` (histori ESB, §28.2a) G46 (`ETL_ENABLE_FORECAST_LEGACY=false`); sisanya belum |
 | Insight persona + scope outlet (`eit2`/`eis2`) | Odoo + insight-web | G47 | Belum dibangun |
 
 ### 28.2 Kalender & forecast API (forecast-worker → Odoo)
@@ -3633,6 +3633,31 @@ Skema (JSON Schema ringkas; semua objek `additionalProperties: false`):
 - Run yang tidak ditutup dalam 6 jam → `failed` oleh cron Odoo; proyeksi run aktif sebelumnya tetap dipakai.
 - Worker membaca ClickHouse dengan user `efn_forecast_reader` (view whitelist `efn_forecast.*`: penjualan harian,
   snapshot stok, scrap, `dim_calendar`, master produk/gudang tanpa partner). Worker **tidak** menulis ke ClickHouse.
+
+### 28.2a Histori penjualan ESB sebagai input forecast (G46, v20.1, 19 Nov 2026)
+Tujuan: PT yang pindah dari ESB (PB, WTZ, Bacha, IMD, CUP) punya histori penjualan sejak hari pertama di Odoo, sehingga
+forecast v2 tidak mulai dari `category_mean` (histori < 56 hari). Status: **dibangun G46**, default mati.
+
+- **Jalur data** (ADR-003 tetap, tanpa tulis langsung ke ClickHouse dari ESB): ESB → `esb-extract` → `efn_dwh.v_esb_*`
+  → bundel migrasi G43 → Odoo `efn.legacy.sales.daily` (menu ESB sudah dipetakan ke `product.product`, cabang ke
+  `stock.warehouse`, hari `< efn_mig_esb.cutover_date.<KODE>` ditegakkan Odoo, §27.8) → ETL job `fc_legacy_sales`
+  (`ETL_ENABLE_FORECAST_LEGACY=false` default; butuh `ETL_ENABLE_FORECAST=true`, `efn_legacy_history` terpasang, grant
+  G46 di `services/etl/sql/odoo-readonly-grants.sql`) → `efn_dwh.fact_legacy_sales_daily` → `v_fc_sales_daily`.
+  Worker **tidak berubah** (kolom `efn_forecast.v_sales_daily` sama; L-145 tetap).
+- **`fact_legacy_sales_daily`** (ReplacingMergeTree(`write_date`), kunci `(company_id, warehouse_id, day,
+  esb_menu_code)`, TTL 5 tahun): `company_id`, `warehouse_id`, `day`, `esb_menu_code`, `product_id` (0 = belum
+  terpetakan), `qty` Decimal(18,3), `write_date`. Tanpa nama menu/cabang, nilai rupiah, `run_id`, pelaku.
+- **`v_fc_sales_daily`** = POS Odoo (seperti G44) ∪ histori ESB dengan aturan: hanya `product_id != 0` dan `qty > 0`;
+  menu takeaway (`" T"`) yang dialias ke produk dasar dijumlahkan; **hari × gudang yang sudah punya penjualan POS Odoo
+  memakai POS saja** (tidak dijumlahkan dengan ESB saat pilot paralel). `company_code` baris ESB = PT gudang.
+  Akurasi ETL (`fact_forecast_accuracy`) ikut membaca view ini.
+- Akses: `efn_forecast_definer` mendapat `SELECT` tabel baru (view DEFINER); `forecast_reader` tetap hanya
+  `efn_forecast.*`. `etl_writer`: `SELECT, INSERT`.
+- **Batasan:** baris yang dihapus di Odoo (impor ulang irisan dengan menu yang hilang) tidak terhapus di ClickHouse
+  (cursor `write_date` tidak melihat penghapusan) → setelah impor ulang histori, kosongkan
+  `fact_legacy_sales_daily` untuk PT itu dan reset watermark job `fc_legacy_sales` (runbook ETL). Censoring OOS tidak
+  berlaku untuk hari ESB (tidak ada snapshot stok Odoo sebelum cutover). Permintaan = penjualan menu POS ESB; produksi
+  CK/komponen resep tidak ikut (forecast bahan lewat BoM di Odoo).
 
 ### 28.3 Kalender di Odoo
 - `efn.forecast.calendar`: `company_id` (wajib), `warehouse_id` (opsional), `date`, `kind`, `name`, `source`
@@ -3875,6 +3900,7 @@ erasure ETL untuk subject); `wa_unofficial_*` → BFF/wa-unofficial sesuai §28.
 | L-161 | Wishlist/notify-me/price alert disimpan di PG platform (bukan Odoo), ikut DSAR export & erasure. |
 | L-162 | Insight supermarket memakai `eit2`/`eis2` + `wids`; view ESB lama tidak berubah. |
 | L-163 | Semua butir §28 belum dibangun; fit-gap G45 dapat merevisi bagian Odoo bila CE standar menutupnya. |
+| L-165 | G46: histori penjualan ESB pra-cutover masuk forecast v2 lewat Odoo `efn.legacy.sales.daily` → ETL → `fact_legacy_sales_daily` → `v_fc_sales_daily` (bukan dari `efn_esb`/`map_esb_odoo` langsung): pemetaan & cutover satu sumber (Odoo), ADR-003 tetap. Hari × gudang dengan POS Odoo memakai POS saja. Default mati (`ETL_ENABLE_FORECAST_LEGACY`). |
 | L-164 | Mode voucher kampanye configurable per kampanye: `anonymous_code` (default, kode tanpa partner, penugasan di BFF), `public_code` (kode bersama tanpa member), `member_bound` (kartu per `partner_id`, khusus member; satu-satunya mode yang memasukkan identitas member ke Odoo). L-155 berlaku untuk dua mode pertama; `member_bound` adalah pengecualian yang disengaja. Mode dikunci setelah approval. |
 
 **Pertanyaan fit-gap (tidak diduplikasi, lihat `docs/fit-gap/G45_SUPERMARKET.md` §7):** Q-SM1 kode/nama/NPWP PT (`SMD`,
