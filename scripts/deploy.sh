@@ -626,11 +626,12 @@ echo "==> Migrasi skema idempoten (infra/postgres/init/[0-9][0-9]-*.sql >= 04)"
 # (docs/04 §16.3: CHECK kode PT + WTZ; tanpa 13 order/poin kanal WTZ ditolak CHECK).
 # 14 = G26 (docs/04 §17.9: payment_method bank_transfer, kolom transfer_*, tabel online_transfer_proof; dibutuhkan BFF
 # G26). 15 = G27 (docs/04 §18.2: promo_item, promo_sync, push_token; dibutuhkan BFF G27). 17 = G31 (docs/04 §20:
-# tabel mgm_*; earn/reverse POS & online menulis mgm_source/mgm_reversal).
+# tabel mgm_*; earn/reverse POS & online menulis mgm_source/mgm_reversal). 19 = G44 (docs/04 §12.1 revisi 18 Nov 2026:
+# CHECK kode PT + SMD; tanpa 19 ledger/kebijakan/MGM PT SMD ditolak CHECK). 18 dicadangkan G43 (18-platform-g43.sql).
 for req in 04-platform-v3-6.sql 05-platform-loyalty-pos.sql 06-platform-loyalty-guard.sql 07-platform-online.sql \
            08-platform-g18-privacy.sql 09-platform-g20.sql 10-platform-g21.sql 11-platform-g22.sql 12-platform-g23.sql \
            13-platform-g24.sql 14-platform-g26.sql 15-platform-g27.sql 16-platform-g27b.sql \
-           17-platform-g31.sql; do
+           17-platform-g31.sql 19-platform-g44.sql; do
   [[ -s "$BASE/postgres/init/$req" ]] || die "migrasi wajib $req tidak ada di $BASE/postgres/init (bundel rilis tidak lengkap)"
 done
 for mig in "$BASE"/postgres/init/[0-9][0-9]-*.sql; do

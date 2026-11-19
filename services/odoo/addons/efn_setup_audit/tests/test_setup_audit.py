@@ -4,7 +4,9 @@ Termasuk regresi bug OCA auditlog × ORM 19 (create produk saat record lain belu
 jaminan `stock.quant` mutasi stok tidak memicu read audit.
 """
 
+import importlib.util
 import logging
+import pathlib
 import time
 from unittest.mock import patch
 
@@ -108,6 +110,30 @@ class TestEfnSetupAudit(TransactionCase):
         other = ICP.search([("key", "=", "web.base.url.efn_test")])
         self.assertTrue(self._logs(efn))
         self.assertFalse(self._logs(other))
+
+    def test_config_parameter_filter_efn_underscore_keys(self):
+        """G44 SEC-207: kunci "efn_*" (kill switch assortment/replenishment/forecast) ikut diaudit; "_" literal."""
+        ICP = self.env["ir.config_parameter"].sudo()
+        ICP.set_param("efn_test_g44.enforce", "true")
+        ICP.set_param("efnxtest_g44.flag", "x")
+        audited = ICP.search([("key", "=", "efn_test_g44.enforce")])
+        other = ICP.search([("key", "=", "efnxtest_g44.flag")])
+        self.assertTrue(self._logs(audited))
+        self.assertFalse(self._logs(other), "'_' di-escape: efnx... bukan efn_")
+        audited.write({"value": "false"})
+        line = self._logs(audited, "write").line_ids.filtered(lambda line: line.field_name == "value")
+        self.assertEqual((line.old_value, line.new_value), ("true", "false"))
+
+    def test_sec207_migration_extends_custom_domain(self):
+        path = pathlib.Path(__file__).resolve().parents[1] / "migrations" / "19.0.2.1.0" / "post-migrate.py"
+        spec = importlib.util.spec_from_file_location("efn_setup_audit_mig_2_1_0", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        old = "['|', ('key', '=like', 'efn.%'), ('key', 'in', ['auth_totp.policy'])]"
+        new = module.extend_domain(old)
+        self.assertIn("efn\\\\_%", new)
+        self.assertIsNone(module.extend_domain(new), "idempoten")
+        self.assertIsNone(module.extend_domain(""), "domain kosong = semua record")
 
     def test_partner_phone_masked(self):
         partner = self.env["res.partner"].create({"name": "Member Setup Audit", "phone": "0812-3456-7890"})

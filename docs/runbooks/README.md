@@ -87,6 +87,7 @@ Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-inciden
 | Retensi data W-19 (env default, deploy pertama G18 / stop ETL, timer housekeeping Metabase) | [retention.md](retention.md) |
 | Ekstraksi ESB Core → ClickHouse (G41): secret password per brand, `ESB_ENABLED`, probe, backfill 24 bulan di jendela malam, pantau checkpoint, 429/401, rotasi, hentikan | [esb-extract.md](esb-extract.md) |
 | Dashboard Insight + SSO Odoo (G42, ADR-041): aktivasi (grup, `INSIGHT_ENABLED`, secret), rotasi kunci SSO/sesi/cakupan, NTP, 401 SSO, alert `EfnInsightWebDown` / `EfnHostClockNotSynced`, Metabase hanya Holding | [insight-web.md](insight-web.md) |
+| forecast-worker Supermarket (G44, ADR-046): menyalakan di dev/stg (`FORECAST_ENABLED`, overlay `forecast`), user teknis + API key `efn_forecast_smd`, rotasi key/mTLS/password ClickHouse, run gagal (`why=` gateway), sizing worker Odoo | [forecast-worker.md](forecast-worker.md) |
 | Deploy gagal: modul Odoo wajib (`efn_pos_refund_origin`) belum `installed` (SEC-129) | [deploy-odoo-modules.md](deploy-odoo-modules.md) |
 | Boot stack dev di laptop (Docker Desktop/WSL2), upgrade modul Odoo dev | [dev-stack-boot.md](dev-stack-boot.md) |
 | CI GitHub di repo privat paket gratis: kuota artifact/menit, code scanning, suppression scanner, Dependabot | [ci-github-free-plan.md](ci-github-free-plan.md) |
@@ -105,13 +106,14 @@ Setiap service: `restart`, logging dibatasi 5×20 MB, `no-new-privileges`, limit
 | cadvisor | root (tanpa capability) + `cgroup: host`, mount `/sys/fs/cgroup` & `/var/lib/docker/image` ro | statistik cgroup; tanpa docker.sock/rootfs (SEC-09) |
 | loki, prometheus, alertmanager, grafana, exporter | healthcheck Docker dinonaktifkan | endpoint hanya TLS dan image tanpa klien TLS ber-CA; dipantau `up`/probe Prometheus + Uptime Kuma |
 | docker-socket-proxy | satu-satunya yang me-mount `docker.sock` (ro), listen 127.0.0.1 | Traefik, Promtail, cAdvisor lewat sidecar ghostunnel mTLS :2376 (GET only) |
-| odoo-rpc-gateway (G17) | tanpa pengecualian (non-root, `read_only`, `cap_drop: [ALL]`, 64M, hanya network `internal`) | filter L7 BFF → Odoo `/json/2`, `infra/odoo-rpc-gateway/README.md` |
+| odoo-rpc-gateway (G17) | tanpa pengecualian (non-root, `read_only`, `cap_drop: [ALL]`, 64M, network `internal` + `forecast-rpc` bila overlay forecast G44) | filter L7 BFF → Odoo `/json/2`, `infra/odoo-rpc-gateway/README.md` |
 | sidecar `*-tls` (ghostunnel) | `network_mode: service:<app>` | TLS untuk app tanpa TLS native; app listen 127.0.0.1 |
 | `ocr-worker-metrics-tls` + `ocr-worker-metrics-bridge` | dua ghostunnel (server mTLS `--allow-cn=prometheus` → loopback → client TLS) | worker HTTPS hanya di 127.0.0.1:9101; prometheus-client tidak bisa membatasi CN (E12 ditutup, gel. 12) |
 | `acme-dns-init` | root dengan CAP_CHOWN+FOWNER, `network_mode: none`, one-shot | chown volume `acme-dns-*` ke 65532:0 + titik mount `base/`, `dev/` (SEC-37) |
 | `acme-dns` | satu-satunya pemegang token DNS; tanpa port, hanya network `egress`, non-root 65532 | ACME DNS-01 terpisah dari Traefik (SEC-37) |
 | `esb-extract` (G41, overlay `docker-compose.esb.yml`) | tanpa pengecualian hardening; network `esb` (hanya ClickHouse) + `egress`, bukan `data` | satu-satunya service dengan password ESB dan jalur keluar ke ESB; allowlist host di aplikasi ([esb-extract.md](esb-extract.md) §9) |
 | `insight-web` + `insight-web-tls` (G42) | tanpa pengecualian hardening; network `insight-ingress` (Traefik/blackbox) + `insight-data` (hanya ClickHouse), bukan `internal`/`data`/`egress`; replika 1 | dashboard read-only; memegang kunci SSO/sesi/cakupan + password ClickHouse `efn_insight` ([insight-web.md](insight-web.md)) |
+| `forecast-worker` (G44, overlay `docker-compose.forecast.yml`) | tanpa pengecualian hardening (non-root 65534, `read_only` + tmpfs 256m, `cap_drop: [ALL]`); network `forecast-ch` (hanya ClickHouse) + `forecast-rpc` (hanya odoo-rpc-gateway), tanpa egress | satu-satunya pemegang API key Odoo forecast + sertifikat klien CN `forecast-worker` ([forecast-worker.md](forecast-worker.md)) |
 | `promtail-journal` (prod) | mount `/var/log/journal` + `/etc/machine-id` read-only, root tanpa capability | journald host (efn-deploy, backup) → Loki |
 
 Di prod hanya Traefik yang mem-publish port (80/443); dicek otomatis di CI job `infra`.

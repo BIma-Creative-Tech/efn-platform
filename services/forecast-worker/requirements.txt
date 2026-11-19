@@ -1,0 +1,21 @@
+# Runtime forecast-worker (Python 3.12, G44, ADR-046). Versi di-pin; diaudit pip-audit di CI. Lisensi (dari metadata
+# paket, BELUM diverifikasi ulang terhadap repo primer, lihat README): statsforecast Apache-2.0 (Nixtla), holidays MIT,
+# numpy/pandas/scipy/statsmodels BSD-3-Clause, numba/llvmlite BSD-2-Clause, clickhouse-connect Apache-2.0,
+# requests Apache-2.0, urllib3 MIT, certifi MPL-2.0. Dependensi transitif statsforecast (coreforecast Apache-2.0,
+# cloudpickle BSD-3, tqdm MPL-2.0/MIT, threadpoolctl BSD-3) di-resolve pip.
+statsforecast==2.0.1
+numba==0.61.2
+llvmlite==0.44.0
+numpy==2.1.3
+pandas==2.2.3
+scipy==1.15.2
+statsmodels==0.14.4
+# Kalender libur ID + cuti bersama (offline; data di paket). Cakupan tahun berbeda per versi -> override manual Odoo.
+holidays==0.86
+# ClickHouse HTTPS 8443 (sama dengan services/etl).
+clickhouse-connect==0.8.9
+# HTTPS + mTLS ke odoo-rpc-gateway (versi sama dengan text2sql/ai-ocr-worker).
+requests==2.34.2
+urllib3==2.8.0
+# >= perbaikan GHSA-6q48-6c7w-9gw2 (sama dengan services/etl).
+certifi==2026.10.19

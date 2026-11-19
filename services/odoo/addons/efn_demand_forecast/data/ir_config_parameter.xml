@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G44 (docs/04 §28.3, L-146): minggu gajian = N hari terakhir + M hari pertama bulan (0..15; default 7/7).
+     Per company: tambahkan kunci bersufiks kode PT, mis. efn_forecast.payday_tail_days.SMD (menang atas global).
+     Retensi proyeksi harian run non-aktif (hari, minimal 7). -->
+<odoo noupdate="1">
+    <record id="param_payday_tail_days" model="ir.config_parameter">
+        <field name="key">efn_forecast.payday_tail_days</field>
+        <field name="value">7</field>
+    </record>
+    <record id="param_payday_head_days" model="ir.config_parameter">
+        <field name="key">efn_forecast.payday_head_days</field>
+        <field name="value">7</field>
+    </record>
+    <record id="param_daily_retention_days" model="ir.config_parameter">
+        <field name="key">efn_forecast.daily_retention_days</field>
+        <field name="value">35</field>
+    </record>
+    <!-- SEC-211: plafon nilai per baris worker (yhat/p10/p90/sigma/min/max/basis); di atasnya -> value_too_large. -->
+    <record id="param_max_qty_per_line" model="ir.config_parameter">
+        <field name="key">efn_forecast.max_qty_per_line</field>
+        <field name="value">100000</field>
+    </record>
+</odoo>

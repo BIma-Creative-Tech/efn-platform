@@ -13,6 +13,14 @@ def test_settings_sorted_dedup_and_signed() -> None:
     assert s["SQL_efn_sig"] == hashlib.sha256(("ab" * 16 + "|1,3|BCR,PB").encode()).hexdigest()
 
 
+def test_company_codes_include_smd_g44() -> None:
+    from efn_text2sql.scope import COMPANY_CODES
+
+    assert COMPANY_CODES == {"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "FARM", "SMD"}
+    s = Scope.build([7], ["SMD"]).settings("ab" * 16)
+    assert s["SQL_efn_codes"] == "SMD"
+
+
 def test_signature_depends_on_key_and_scope() -> None:
     a = Scope.build([1], ["PB"]).settings("a" * 32)["SQL_efn_sig"]
     assert a != Scope.build([1, 2], ["PB"]).settings("a" * 32)["SQL_efn_sig"]

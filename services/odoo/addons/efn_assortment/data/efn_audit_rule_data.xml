@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ADR-045 / R-O14: master assortment & override teraudit efn_audit (nilai lama/baru).
+     SEC-208: stock.warehouse diaudit HANYA untuk 3 field assortment (belum ada aturan stock.warehouse lain; efn.audit.rule
+     unik per model). product.template.efn_required_capability_ids tercatat oleh efn_setup_audit.audit_rule_product_template
+     (semua field) — tidak dibuat aturan kedua di sini. -->
+<odoo>
+    <record id="audit_rule_efn_assortment_line" model="efn.audit.rule">
+        <field name="name">EFN - Baris assortment outlet</field>
+        <field name="model_id" ref="model_efn_assortment_line"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+    </record>
+    <record id="audit_rule_efn_assortment_capability" model="efn.audit.rule">
+        <field name="name">EFN - Capability outlet</field>
+        <field name="model_id" ref="model_efn_assortment_capability"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+    </record>
+    <record id="audit_rule_efn_assortment_override" model="efn.audit.rule">
+        <field name="name">EFN - Override assortment</field>
+        <field name="model_id" ref="model_efn_assortment_override"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+    </record>
+    <record id="audit_rule_stock_warehouse_assortment" model="efn.audit.rule">
+        <field name="name">EFN - Assortment gudang (DC, kebijakan, capability)</field>
+        <field name="model_id" ref="stock.model_stock_warehouse"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="False"/>
+        <field name="tracked_field_ids" eval="[(6, 0, [
+            ref('efn_assortment.field_stock_warehouse__efn_is_dc'),
+            ref('efn_assortment.field_stock_warehouse__efn_assortment_policy'),
+            ref('efn_assortment.field_stock_warehouse__efn_capability_ids'),
+        ])]"/>
+    </record>
+</odoo>

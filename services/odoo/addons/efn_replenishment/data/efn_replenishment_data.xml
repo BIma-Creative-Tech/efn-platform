@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- docs/04 §28.10: default false; nyalakan setelah jadwal kirim & approver ditetapkan Ops (Q-SM11). -->
+    <record id="param_enabled" model="ir.config_parameter">
+        <field name="key">efn_replenishment.enabled</field>
+        <field name="value">false</field>
+    </record>
+    <!-- Faktor z safety stock usulan outlet/DC (1.65 ≈ service level 95 %; 0..4). Nilai per kategori = Q-SM28. -->
+    <record id="param_safety_z" model="ir.config_parameter">
+        <field name="key">efn_replenishment.safety_z</field>
+        <field name="value">1.65</field>
+    </record>
+    <!-- SEC-210: batas qty_approved = maks(qty_proposed x faktor, cap rak); melewati = Replenishment administrator. -->
+    <record id="param_max_approve_factor" model="ir.config_parameter">
+        <field name="key">efn_replenishment.max_approve_factor</field>
+        <field name="value">3</field>
+    </record>
+    <!-- QA-3: hari order supplier = hari kalkulasi + offset (0..7; default 1 = kalkulasi malam untuk order besok). -->
+    <record id="param_order_day_offset" model="ir.config_parameter">
+        <field name="key">efn_replenishment.order_day_offset</field>
+        <field name="value">1</field>
+    </record>
+
+    <!-- Antrean: dipicu efn_forecast_run_close (cron._trigger); interval = jaring pengaman. -->
+    <record id="ir_cron_efn_replenishment_compute" model="ir.cron">
+        <field name="name">EFN replenishment: hitung usulan dari run forecast</field>
+        <field name="model_id" ref="model_efn_replenishment_proposal"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_compute_pending()</field>
+        <field name="interval_number">30</field>
+        <field name="interval_type">minutes</field>
+        <field name="active" eval="True"/>
+    </record>
+    <record id="ir_cron_efn_replenishment_expire" model="ir.cron">
+        <field name="name">EFN replenishment: usulan lewat cut-off -> kedaluwarsa</field>
+        <field name="model_id" ref="model_efn_replenishment_proposal"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_expire()</field>
+        <field name="interval_number">15</field>
+        <field name="interval_type">minutes</field>
+        <field name="active" eval="True"/>
+    </record>
+</odoo>

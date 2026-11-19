@@ -147,6 +147,12 @@ class TestEfnAuditAccess(EfnAuditCase):
         self.assertEqual(event["audit_op"], "access_grant")
 
     def test_user_active_login_company(self):
+        # Odoo menautkan user pembuat company (env.user = OdooBot) ke company baru dan menambahkannya ke grup
+        # multi-company. Di instalasi minimal (hanya 1 company) itu menambah event access_grant kedua di luar target
+        # -> assertion `grants` di bawah gagal; di instalasi penuh (banyak company) sudah ada. Buat company awal dulu
+        # lalu bersihkan antrean agar test tidak bergantung jumlah company hasil instalasi modul lain.
+        self.env["res.company"].create({"name": "PT Akses A"})
+        self.env.cr.postcommit.clear()
         company_b = self.env["res.company"].create({"name": "PT Akses B"})
         self.target.write({"company_ids": [Command.link(company_b.id)]})
         self.target.write({"login": "budi.baru@example.com"})

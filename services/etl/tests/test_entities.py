@@ -25,9 +25,9 @@ ROOT = Path(__file__).resolve().parents[1]
 G20_SQL = ROOT.parents[1] / "infra" / "clickhouse" / "init" / "08-g20-entities.sql"
 
 
-def test_seven_entities_and_legacy_codes_removed() -> None:
-    # G20 §12.1 + G24 §16.1 (WTZ)
-    assert COMPANY_CODES == {"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "FARM"}
+def test_eight_entities_and_legacy_codes_removed() -> None:
+    # G20 §12.1 + G24 §16.1 (WTZ) + G44 §12.1 revisi 18 Nov 2026 (SMD, PT Supermarket Demo)
+    assert COMPANY_CODES == {"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "FARM", "SMD"}
     assert set(BUSINESS_TYPES) == COMPANY_CODES
     assert set(BUSINESS_TYPES.values()) == {"holding", "retail", "fnb", "farm"}
     assert {"RTL", "FNB"}.isdisjoint(COMPANY_CODES)
@@ -43,6 +43,7 @@ def test_seven_entities_and_legacy_codes_removed() -> None:
         ("WTZ", "fnb"),
         ("EFN", "holding"),
         ("FARM", "farm"),
+        ("SMD", "retail"),
     ],
 )
 def test_business_type(code: str, expected: str) -> None:
@@ -52,7 +53,8 @@ def test_business_type(code: str, expected: str) -> None:
 
 def test_brand_group_bacha_combines_bcr_bcf() -> None:
     assert brand_group("BCR") == brand_group("BCF") == "BACHA"
-    assert [brand_group(c) for c in ("EFN", "GL", "PB", "WTZ", "FARM")] == ["EFN", "GL", "PB", "WTZ", "FARM"]
+    own = ("EFN", "GL", "PB", "WTZ", "FARM", "SMD")
+    assert [brand_group(c) for c in own] == list(own)
     assert brand_group("") == brand_group(None) == ""
 
 
@@ -82,17 +84,19 @@ def _expected_relation(a: str, b: str) -> str:
     return IC_NON_TP
 
 
-def test_ic_relation_all_42_directed_pairs() -> None:
+def test_ic_relation_all_56_directed_pairs() -> None:
     pairs = list(itertools.permutations(sorted(COMPANY_CODES), 2))
-    assert len(pairs) == 42  # 7 entitas (G24) x 6 arah
+    assert len(pairs) == 56  # 8 entitas (G44: + SMD) x 7 arah
     for a, b in pairs:
         assert ic_relation(a, b) == ic_relation(b, a) == _expected_relation(a, b), (a, b)
     tp = {frozenset(p) for p in pairs if ic_relation(*p) in (IC_TP_HOLDING, IC_TP_BACHA)}
-    # TP cost-plus hanya 6 pasangan Holding<->PT + 1 pasangan Bacha (18-3).
-    assert len(tp) == 7
+    # TP cost-plus hanya 7 pasangan Holding<->PT + 1 pasangan Bacha (18-3).
+    assert len(tp) == 8
     assert frozenset({"BCR", "BCF"}) in tp
     assert frozenset({"GL", "PB"}) not in tp and frozenset({"FARM", "PB"}) not in tp
     assert frozenset({"WTZ", "PB"}) not in tp and frozenset({"WTZ", "EFN"}) in tp
+    # SMD (G44): DC dalam PT yang sama (ADR-045) -> tidak ada pasangan antar-PT selain Holding.
+    assert frozenset({"SMD", "EFN"}) in tp and frozenset({"SMD", "GL"}) not in tp
 
 
 def test_ic_relation_edge_cases() -> None:

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_assortment_override_wizard_view_form" model="ir.ui.view">
+        <field name="name">efn.assortment.override.wizard.form</field>
+        <field name="model">efn.assortment.override.wizard</field>
+        <field name="arch" type="xml">
+            <form>
+                <group>
+                    <field name="picking_id"/>
+                    <field name="summary"/>
+                    <field name="reason" placeholder="Alasan bisnis (min. 10 karakter), mis. persetujuan category manager no. ..."/>
+                </group>
+                <footer>
+                    <button name="action_confirm" type="object" string="Catat override" class="btn-primary"/>
+                    <button special="cancel" string="Batal"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

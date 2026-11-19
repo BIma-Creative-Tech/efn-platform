@@ -4,7 +4,8 @@
         "Konfigurasi data-only: aturan efn_audit untuk harga, pricelist, "
         "program promo, penyesuaian stok, kontak, dan parameter efn.*."
     ),
-    "version": "19.0.2.0.0",
+    # 19.0.2.1.0 (G44 SEC-207): aturan ir.config_parameter juga mencakup kunci "efn_*" (migrasi untuk DB lama).
+    "version": "19.0.2.1.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     # LGPL-3: sejak Gelombang 10 tidak lagi bergantung pada OCA auditlog (AGPL-3).

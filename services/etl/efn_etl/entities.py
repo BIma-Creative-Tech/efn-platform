@@ -11,10 +11,12 @@ from typing import Final
 
 # Kode `res.company.efn_brand_code` (= `company_code` ledger BFF).
 # G24 (docs/04 §16.1, L-91): + WTZ (PT Wetzel's Pretzels, fnb).
-COMPANY_CODES: Final = frozenset({"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "FARM"})
+# G44 (docs/04 §12.1 revisi 18 Nov 2026, §28 L-144, ADR-045 Proposed): + SMD (PT Supermarket Demo, placeholder retail;
+# nama legal/kode final = fit-gap Q-SM1). Kode IMD/CUP (G43) belum ada di branch ini -> rekonsiliasi saat merge.
+COMPANY_CODES: Final = frozenset({"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "FARM", "SMD"})
 HOLDING_CODE: Final = "EFN"
 
-# docs/04 §12.1/§16.1: GL,BCR -> retail; PB,BCF,WTZ -> fnb; EFN -> holding; FARM -> farm.
+# docs/04 §12.1/§16.1: GL,BCR,SMD -> retail; PB,BCF,WTZ -> fnb; EFN -> holding; FARM -> farm.
 BUSINESS_TYPES: Final[dict[str, str]] = {
     "EFN": "holding",
     "GL": "retail",
@@ -23,6 +25,7 @@ BUSINESS_TYPES: Final[dict[str, str]] = {
     "BCF": "fnb",
     "WTZ": "fnb",
     "FARM": "farm",
+    "SMD": "retail",
 }
 
 # Laporan per brand: Bacha = gabungan BCR + BCF (ADR-001 revisi §6; brand_code kanal E-37a `BACHA`).

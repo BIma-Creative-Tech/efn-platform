@@ -87,7 +87,10 @@ interface MockOrder {
   pointsRefunded: number;
 }
 
-/** Kanal demo G20: kode kanal = kode PT (§12.1), brand (§11.3). */
+/**
+ * Kanal demo G20: kode kanal = kode PT (§12.1), brand (§11.3). G44: PT Supermarket Demo `SMD` SENGAJA tidak ada di
+ * sini — §12.1 revisi 18 Nov 2026: "kanal online belum ada" untuk SMD (mock meniru kanal Odoo yang benar-benar dibuat).
+ */
 const MOCK_CHANNELS: Readonly<Record<string, { company: string; brand: string | null; name: string }>> = {
   GL: { company: 'GL', brand: 'GL', name: 'Grand Lucky (demo)' },
   PB: { company: 'PB', brand: 'PB', name: 'Paris Baguette (demo)' },

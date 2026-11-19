@@ -72,9 +72,32 @@
   `efn_qr_order_submit` / `efn_qr_order_status`; gateway mengikuti kontrak docs/04 §14.A.5 (sumber kebenaran). Bila modul
   `efn_pos_bff_order` (L-70) memakai nama lain, kontrak diralat lead lebih dulu, lalu tiga baris `p_allowed` dan
   kasus uji di sini diubah bersamaan dengan `RPC_ALLOWLIST` Odoo.
+- **G44 (18 Nov 2026, docs/04 §28.2, ADR-046 Proposed): klien kedua `forecast-worker`.** Path #25–#29, **hanya** untuk
+  CN `forecast-worker` (allowlist per CN: CN `api-gateway` tetap hanya 24 path di atas dan ditolak `why=path` ke path
+  forecast; CN `forecast-worker` ditolak ke path BFF):
+
+  | # | Path | Pemanggil | Sifat |
+  |---|---|---|---|
+  | 25 | `/json/2/efn.forecast.calendar/efn_forecast_calendar_upsert` | forecast-worker, user teknis `efn_forecast_<pt>` | tulis, idempoten `(company, date, kind, name)` |
+  | 26 | `/json/2/efn.forecast.run/efn_forecast_run_open` | idem | tulis, idempoten `run_id` |
+  | 27 | `/json/2/efn.forecast.daily/efn_forecast_ingest` | idem | tulis, idempoten `(run_id, chunk_no)` |
+  | 28 | `/json/2/efn.demand.forecast.line/efn_minmax_ingest` | idem | tulis, idempoten `(run_id, chunk_no)` |
+  | 29 | `/json/2/efn.forecast.run/efn_forecast_run_close` | idem | tulis, no-op bila sudah ditutup |
+
+  Batas body path forecast **512 KiB** (§28.2; path lain tetap 256 KiB / bukti transfer 2,5 MiB). Backend terpisah
+  `odoo_forecast` dengan `maxconn 1` + antrean maks. 4 × 10 s → batch tidak memakai slot `ODOO_RPC_MAXCONN` kanal
+  online, tetapi memakai **1 worker HTTP Odoo tambahan** selama batch (sizing: `docs/runbooks/forecast-worker.md#sizing`).
+  Hop keluar tetap mTLS dengan sertifikat `odoo-rpc-gateway`; `odoo-tls --allow-cn` tidak berubah. Network: compose
+  overlay `docker-compose.forecast.yml` menambahkan gateway ke network `forecast-rpc` (hanya gateway + forecast-worker).
+  Uji nyata `test-gateway.sh` bertambah 27 kasus (5 positif, 5 BFF→path forecast, path/encoded/query/header/method
+  forecast, body 300 KB lolos / 600 KB 413, BFF 600 KB 413, forecast langsung ke `odoo-tls` gagal handshake);
+  **belum dijalankan** terhadap stack nyata (modul Odoo G44 belum ada; kasus positif `pass` karena status dari Odoo).
+  Odoo wajib memuat 5 metode yang sama di `RPC_ALLOWLIST` (efn-odoo-engineer).
 - **Belum / batas:**
   - Tidak ada metrik HAProxy ke Prometheus (log akses → Loki; alert `EfnOdooRpcGatewayDenied`). Kandidat: PROMEX di
     loopback + sidecar mTLS.
   - Isi body tidak diperiksa (validasi argumen & pembersihan context = E-28 Odoo, §10.4.4).
-  - Rate limit tidak ada (BFF satu-satunya klien; circuit breaker di BFF). Uji beban belum.
+  - Rate limit tidak ada (BFF + forecast-worker; circuit breaker di BFF, backend forecast maxconn 1). Uji beban belum.
+  - Antar-mesin (K25-02, stack data di host lain): gateway hanya listen di network Docker host inti; jalur WireGuard
+    ke `odoo-rpc-gateway:8443` dari mesin data belum dibangun (lihat runbook forecast-worker §7).
   - Uji nyata belum masuk CI (butuh stack + Odoo); dijalankan manual/staging.

@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO — 5 outlet PT Supermarket Demo (fit-gap G45 S-02, S-03; §2 butir 1; ADR-045 Proposed).
+     Nama, alamat, dan kota PLACEHOLDER JELAS FIKTIF (Q-SM2); kota sengaja berbeda (5 provinsi) untuk uji region
+     (efn_assortment: region supplier = warehouse.partner_id kab/kota, tahap B). efn_region_id tidak diisi.
+
+     Rute pasok DC -> outlet = CE murni (S-03): resupply_wh_ids = DC. stock.warehouse.create memanggil
+     create_resupply_routes -> satu stock.route per outlet "<outlet>: Supply Product from <DC>"
+     (supplied_wh_id = outlet, supplier_wh_id = DC, warehouse_selectable, lewat company.internal_transit_location_id:
+     dua picking DC -> transit -> outlet sehingga stok in-transit terlihat) [V source 19.0]. Rute itu TIDAK masuk
+     route_ids outlet; ia terbaca lewat warehouse.resupply_route_ids / _get_all_routes [V]. TIDAK memakai
+     efn_ck_production (syarat gudang CK + depends mrp).
+     Outlet one_step + ship_only (default CE).
+
+     Picking type POS outlet (pos_type_id, dibuat point_of_sale per gudang [V]): use_existing_lots=True,
+     use_create_lots=False -> kasir memilih lot yang ada, tidak boleh membuat lot baru (lot dibuat saat penerimaan
+     dari DC/DSD). Default CE kedua flag = True [V]. Gudang outlet PRODUKSI yang dibuat lewat UI wajib diatur sama
+     (README checklist).
+     noupdate="1": perubahan pengguna pada outlet demo tidak ditimpa bila modul di-upgrade di DB demo. -->
+<odoo noupdate="1">
+    <record id="partner_smd01" model="res.partner">
+        <field name="name">SMD01 Outlet Contoh Jakarta (PLACEHOLDER)</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="street">Jl. Contoh Fiktif No. 1</field>
+        <field name="city">Kota Jakarta Selatan</field>
+        <field name="state_id" ref="base.state_id_jk"/>
+        <field name="zip">00000</field>
+        <field name="country_id" ref="base.id"/>
+    </record>
+    <record id="partner_smd02" model="res.partner">
+        <field name="name">SMD02 Outlet Contoh Bandung (PLACEHOLDER)</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="street">Jl. Contoh Fiktif No. 2</field>
+        <field name="city">Kota Bandung</field>
+        <field name="state_id" ref="base.state_id_jb"/>
+        <field name="zip">00000</field>
+        <field name="country_id" ref="base.id"/>
+    </record>
+    <record id="partner_smd03" model="res.partner">
+        <field name="name">SMD03 Outlet Contoh Tangerang (PLACEHOLDER)</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="street">Jl. Contoh Fiktif No. 3</field>
+        <field name="city">Kota Tangerang</field>
+        <field name="state_id" ref="base.state_id_bt"/>
+        <field name="zip">00000</field>
+        <field name="country_id" ref="base.id"/>
+    </record>
+    <record id="partner_smd04" model="res.partner">
+        <field name="name">SMD04 Outlet Contoh Surabaya (PLACEHOLDER)</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="street">Jl. Contoh Fiktif No. 4</field>
+        <field name="city">Kota Surabaya</field>
+        <field name="state_id" ref="base.state_id_ji"/>
+        <field name="zip">00000</field>
+        <field name="country_id" ref="base.id"/>
+    </record>
+    <record id="partner_smd05" model="res.partner">
+        <field name="name">SMD05 Outlet Contoh Denpasar (PLACEHOLDER)</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="street">Jl. Contoh Fiktif No. 5</field>
+        <field name="city">Kota Denpasar</field>
+        <field name="state_id" ref="base.state_id_ba"/>
+        <field name="zip">00000</field>
+        <field name="country_id" ref="base.id"/>
+    </record>
+
+    <record id="warehouse_smd01" model="stock.warehouse">
+        <field name="name">SMD01 - Outlet Jakarta (DEMO)</field>
+        <field name="code">SMD01</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="partner_id" ref="partner_smd01"/>
+        <field name="resupply_wh_ids" eval="[(6, 0, [ref('warehouse_smd_dc')])]"/>
+    </record>
+    <record id="warehouse_smd02" model="stock.warehouse">
+        <field name="name">SMD02 - Outlet Bandung (DEMO)</field>
+        <field name="code">SMD02</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="partner_id" ref="partner_smd02"/>
+        <field name="resupply_wh_ids" eval="[(6, 0, [ref('warehouse_smd_dc')])]"/>
+    </record>
+    <record id="warehouse_smd03" model="stock.warehouse">
+        <field name="name">SMD03 - Outlet Tangerang (DEMO)</field>
+        <field name="code">SMD03</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="partner_id" ref="partner_smd03"/>
+        <field name="resupply_wh_ids" eval="[(6, 0, [ref('warehouse_smd_dc')])]"/>
+    </record>
+    <record id="warehouse_smd04" model="stock.warehouse">
+        <field name="name">SMD04 - Outlet Surabaya (DEMO)</field>
+        <field name="code">SMD04</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="partner_id" ref="partner_smd04"/>
+        <field name="resupply_wh_ids" eval="[(6, 0, [ref('warehouse_smd_dc')])]"/>
+    </record>
+    <record id="warehouse_smd05" model="stock.warehouse">
+        <field name="name">SMD05 - Outlet Denpasar (DEMO)</field>
+        <field name="code">SMD05</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="partner_id" ref="partner_smd05"/>
+        <field name="resupply_wh_ids" eval="[(6, 0, [ref('warehouse_smd_dc')])]"/>
+    </record>
+
+    <!-- Lot di POS (fit-gap §2 butir 1). Python 3.12: comprehension di safe_eval (pola efn_setup_company). -->
+    <function model="stock.picking.type" name="write"
+              eval="[obj().env['stock.warehouse'].browse([ref('warehouse_smd0%d' % i) for i in (1, 2, 3, 4, 5)]).mapped('pos_type_id').ids, {'use_existing_lots': True, 'use_create_lots': False}]"/>
+</odoo>

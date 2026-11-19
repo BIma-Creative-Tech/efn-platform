@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- efn_assortment (ADR-045, docs/04 §28.5): Assortment Manager (category manager / ops) + rule multi-company. -->
+<odoo>
+    <record id="res_groups_privilege_efn_assortment" model="res.groups.privilege">
+        <field name="name">EFN Assortment</field>
+        <field name="category_id" ref="base.module_category_supply_chain"/>
+    </record>
+    <record id="group_assortment_manager" model="res.groups">
+        <field name="name">Assortment Manager</field>
+        <field name="comment">Mengelola capability outlet, baris izin/larangan assortment, region supplier, dan override restriksi transfer DC ke outlet (alasan wajib, teraudit; tidak untuk izin alkohol / non-halal).</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_assortment"/>
+        <field name="implied_ids" eval="[(4, ref('stock.group_stock_user'))]"/>
+    </record>
+
+    <data noupdate="1">
+        <record id="efn_assortment_capability_rule_company" model="ir.rule">
+            <field name="name">EFN capability assortment: bersama atau PT sendiri</field>
+            <field name="model_id" ref="model_efn_assortment_capability"/>
+            <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_assortment_line_rule_company" model="ir.rule">
+            <field name="name">EFN baris assortment: multi-company</field>
+            <field name="model_id" ref="model_efn_assortment_line"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_assortment_override_rule_company" model="ir.rule">
+            <field name="name">EFN override assortment: multi-company</field>
+            <field name="model_id" ref="model_efn_assortment_override"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_assortment_violation_rule_company" model="ir.rule">
+            <field name="name">EFN pelanggaran assortment: multi-company</field>
+            <field name="model_id" ref="model_efn_assortment_violation"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+    </data>
+</odoo>

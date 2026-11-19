@@ -3,4 +3,10 @@ access_efn_demand_forecast_user,efn.demand.forecast user,model_efn_demand_foreca
 access_efn_demand_forecast_manager,efn.demand.forecast manager,model_efn_demand_forecast,stock.group_stock_manager,1,1,1,1
 access_efn_forecast_season_user,efn.forecast.season user,model_efn_forecast_season,stock.group_stock_user,1,0,0,0
 access_efn_forecast_season_manager,efn.forecast.season manager,model_efn_forecast_season,stock.group_stock_manager,1,1,1,1
-access_efn_forecast_run_user,efn.forecast.run user,model_efn_forecast_run,stock.group_stock_user,1,1,1,1
+access_efn_forecast_run_user,efn.forecast.run user (G44: run v2 baca saja),model_efn_forecast_run,stock.group_stock_user,1,0,0,0
+access_efn_forecast_run_wizard_user,efn.forecast.run.wizard user,model_efn_forecast_run_wizard,stock.group_stock_user,1,1,1,1
+access_efn_forecast_calendar_user,efn.forecast.calendar user,model_efn_forecast_calendar,stock.group_stock_user,1,0,0,0
+access_efn_forecast_calendar_manager,efn.forecast.calendar manager,model_efn_forecast_calendar,stock.group_stock_manager,1,1,1,1
+access_efn_forecast_chunk_manager,efn.forecast.chunk manager,model_efn_forecast_chunk,stock.group_stock_manager,1,0,0,0
+access_efn_demand_forecast_line_user,efn.demand.forecast.line user,model_efn_demand_forecast_line,stock.group_stock_user,1,0,0,0
+access_efn_forecast_daily_user,efn.forecast.daily user,model_efn_forecast_daily,stock.group_stock_user,1,0,0,0

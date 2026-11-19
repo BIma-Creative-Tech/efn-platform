@@ -13,6 +13,9 @@
                 <field name="day_from" invisible="kind != 'monthly'"/>
                 <field name="day_to" invisible="kind != 'monthly'"/>
                 <field name="weekdays" invisible="kind != 'weekday'"/>
+                <field name="calendar_kind" required="kind == 'holiday'" invisible="kind != 'holiday'"/>
+                <field name="days_before" invisible="kind != 'holiday'"/>
+                <field name="days_after" invisible="kind != 'holiday'"/>
                 <field name="factor"/>
                 <field name="product_categ_ids" widget="many2many_tags" optional="show"/>
                 <field name="company_id" optional="show"/>
