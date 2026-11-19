@@ -1492,3 +1492,30 @@ Kontrak: docs/04 §28.2a, L-165; ADR-046 §3.8.
 - Belum diuji dengan data Odoo nyata (histori G43 belum diimpor ke DB dev) dan belum end-to-end worker → Odoo.
 - Penghapusan baris di Odoo (impor ulang irisan) tidak terbawa cursor → langkah manual (README ETL).
 - Censoring OOS tidak berlaku untuk hari ESB; forecast bahan/komponen CK tetap lewat BoM Odoo.
+
+## G46 uji end-to-end dengan data nyata (19 Nov 2026, efn-lead) — lingkungan dry-run terisolasi
+Rantai diuji: ESB (backfill G41, 7 hari PB) → bundel migrasi → Odoo `efn_dryrun` (`efn.legacy.sales.daily`) → ETL
+(kode `efn_etl` asli, job sumber Odoo) → ClickHouse (`fact_legacy_sales_daily`, `v_fc_sales_daily`, view DEFINER
+`efn_forecast`) → forecast-worker (`--dry-run`, lalu `--once` ke Odoo `/json/2` dengan user teknis `efn_forecast_pb` +
+API key) → Odoo `efn_forecast_daily` → ETL → `fact_forecast_daily`. Total qty Odoo = total view ClickHouse; jumlah baris
+proyeksi Odoo = ClickHouse; run `ok`, 0 baris ditolak. Angka bisnis klien tidak dicatat di repo.
+
+### Temuan & perbaikan (PR fix/g46-e2e-findings)
+1. **L-166 menu POS tidak lengkap di ESB Core:** sebagian besar kode menu yang terjual tidak ada di `/menu/browse`
+   (termasuk `flagActive=0`; spec tidak punya endpoint menu lain) → G43 mengimpornya sebagai produk **arsip** → POS
+   dan forecast tidak melihatnya. Perbaikan: export `--recent-menu-days` (default 30) → menu histori yang terjual
+   dalam N hari sebelum cutover = aktif; importer mengaktifkan varian tunggal saat template diaktifkan kembali
+   (CE tidak melakukannya).
+2. **L-167 konflik palsu setelah upgrade modul:** importer menganggap `write_uid != efn_migration` = edit pengguna;
+   upgrade modul/recompute menulis sebagai `__system__` → impor ulang menolak semua record. Perbaikan: `__system__`
+   diperlakukan seperti user migrasi.
+3. **Worker cold start:** `category_mean` tanpa seri pembanding di gudang menyusut ke level 0 → ramalan = m/56 dari
+   level (7 hari histori → 1/8). Perbaikan: tanpa pembanding, level seri sendiri.
+
+### Catatan (bukan bug)
+- Hari antara data terakhir dan hari ini tanpa penjualan dihitung nol (dry-run tidak punya POS setelah cutover).
+- Overlap watermark ETL (300 dtk) membaca ulang baris impor bulk yang `write_date`-nya berdekatan setiap siklus sampai
+  ada tulisan baru — benar (ReplacingMergeTree), tetapi impor histori besar perlu dipantau durasi ETL-nya.
+- Histori 7 hari → semua seri `category_mean`, WAPE backtest belum bermakna; butuh backfill ≥ 112 hari.
+- Lingkungan dry-run memakai PostgreSQL tanpa TLS (`EFN_ALLOW_PLAINTEXT`, jaringan Docker lokal terisolasi) dan Odoo
+  HTTP tanpa gateway mTLS; ClickHouse tetap HTTPS + CA internal.

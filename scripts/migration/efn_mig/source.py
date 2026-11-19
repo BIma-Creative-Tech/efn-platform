@@ -126,13 +126,14 @@ class ClickHouseSource:
         return {str(r["product_code"]): float(r["ratio"]) for r in rows if r["product_code"]}
 
     def archive_menus(self, brand: str, start: date, end: date) -> list[dict[str, Any]]:
-        """Menu yang muncul di penjualan rentang histori (termasuk yang sudah tidak ada di master ESB)."""
+        """Menu yang muncul di penjualan rentang histori (termasuk yang tidak ada di master ESB Core) + hari jual
+        terakhir (`last_sold`, dipakai aturan menu aktif L-166)."""
         return self._rows(
-            "SELECT menu_code, any(menu_name), any(menu_category), any(menu_category_detail), max(is_takeaway) "
-            "FROM efn_dwh.v_esb_sales_daily WHERE brand = {brand:String} AND sales_date >= {start:Date} "
-            "AND sales_date < {end:Date} GROUP BY menu_code",
+            "SELECT menu_code, any(menu_name), any(menu_category), any(menu_category_detail), max(is_takeaway), "
+            "max(sales_date) FROM efn_dwh.v_esb_sales_daily WHERE brand = {brand:String} "
+            "AND sales_date >= {start:Date} AND sales_date < {end:Date} GROUP BY menu_code",
             {"brand": brand, "start": start, "end": end},
-            ("menu_code", "menu_name", "menu_category", "menu_category_detail", "is_takeaway"),
+            ("menu_code", "menu_name", "menu_category", "menu_category_detail", "is_takeaway", "last_sold"),
         )
 
     def snapshot(self, brand: str) -> dict[str, str]:
