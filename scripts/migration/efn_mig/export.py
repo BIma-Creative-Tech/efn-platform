@@ -140,9 +140,13 @@ class MasterData:
     bom_lines: list[dict[str, Any]]
     ratios: dict[str, float]
     snapshot: dict[str, str]
+    # L-166: menu histori yang terjual pada/ setelah tanggal ini = aktif (None = semua menu histori arsip).
+    recent_since: date | None = None
 
     @classmethod
-    def load(cls, src: Source, brand: str, archive_from: date, archive_to: date) -> "MasterData":
+    def load(
+        cls, src: Source, brand: str, archive_from: date, archive_to: date, recent_since: date | None = None
+    ) -> "MasterData":
         return cls(
             companies=src.companies(brand),
             branches=src.dim("dim_esb_branch", brand),
@@ -156,6 +160,7 @@ class MasterData:
             bom_lines=src.dim("dim_esb_bom_line", brand),
             ratios=src.bom_ratios(brand),
             snapshot=src.snapshot(brand),
+            recent_since=recent_since,
         )
 
     @property
@@ -181,7 +186,7 @@ def master_records(
     if "branch" in out:
         out["branch"] = branch_records
     for company in data.companies:
-        menus, menu_index = m.build_menus(brand, company, data.menus, data.prices, data.archive)
+        menus, menu_index = m.build_menus(brand, company, data.menus, data.prices, data.archive, data.recent_since)
         if "uom" in out:
             uoms = list(uom_by_code.values()) + [str(ln.get("uom") or "") for ln in data.bom_lines]
             out["uom"] += m.build_uoms(brand, company, uoms, maps.uom)
@@ -310,7 +315,7 @@ def export_history(
     results: list[SegmentResult] = []
     stamp = now or datetime.now(UTC)
     for company in data.companies:
-        _, menu_index = m.build_menus(params.brand, company, data.menus, data.prices, data.archive)
+        _, menu_index = m.build_menus(params.brand, company, data.menus, data.prices, data.archive, data.recent_since)
         ctx = m.HistoryContext(params.brand, company, index, data.product_codes, ea, menu_index)
         company_whs = index.warehouses_of(company)
         if not company_whs:

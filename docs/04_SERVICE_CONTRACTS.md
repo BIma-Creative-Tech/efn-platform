@@ -3092,7 +3092,7 @@ bukan dilewati.
 | 1 | `branch` | company ada (§12.1/§27.1), `branch_map` | ORM | gudang, lokasi, `pos.config` tanpa sesi |
 | 2 | `uom`, `category` | — | ORM | kategori produk + kategori POS. Kategori induk per brand `<BRAND>` (xmlid `<brand>_category_root`) = **tingkat atas**: Odoo 19 tidak lagi memasang kategori "All" (`product.product_category_all`; dipakai sebagai induk hanya bila ada) |
 | 3 | `product` | 2 | ORM | bahan & FIN |
-| 4 | `menu` | 2–3 | ORM | termasuk **menu arsip** (`active=False`) yang hanya muncul di histori rentang (ADR-042 §3.3) |
+| 4 | `menu` | 2–3 | ORM | termasuk **menu arsip** (`active=False`) yang hanya muncul di histori rentang (ADR-042 §3.3); **L-166:** menu histori yang terjual dalam `--recent-menu-days` (default 30) sebelum cutover = **aktif** (menu POS ESB tidak lengkap di `/menu/browse` ESB Core); template yang diaktifkan kembali ikut mengaktifkan varian tunggalnya |
 | 5 | `partner` | 1 | ORM | supplier + customer B2B (whitelist E4) |
 | 6 | `bom` | 3–4 | ORM | `normal` CK / `phantom` menu / combo |
 | 7 | `supplierinfo`, `cost` | 3, 5 | ORM | `standard_price` sebelum stok |
@@ -3237,7 +3237,9 @@ konfigurasi terpisah (efn-odoo-functional) dan cukup membuat skala = 1 pada impo
 Aturan upsert (impor berjalan sebagai user teknis `efn_migration` dengan `env(user=…, su=True)` agar `write_uid` =
 user migrasi):
 1. xmlid tidak ada → `create` + xmlid.
-2. xmlid ada, `record.write_uid` = `efn_migration` → `write` field milik migrasi yang berbeda saja.
+2. xmlid ada, `record.write_uid` = `efn_migration` **atau `__system__` (uid 1)** → `write` field milik migrasi yang
+   berbeda saja. **L-167 (19 Nov 2026):** upgrade modul (`-u`), recompute, dan cron menulis sebagai `__system__`;
+   tanpa pengecualian ini setiap upgrade membuat semua record master "konflik".
 3. xmlid ada, terakhir diubah pengguna lain → bandingkan field milik migrasi: sama → lewati; beda → **konflik**
    (`conflict_user_edited`, tidak ditulis, dilaporkan). Tidak ada opsi menimpa di `APP_ENV=production`.
 4. Record ada di Odoo tetapi hilang di ESB → `missing_in_source` (dilaporkan, **tidak** diarsip/dihapus).
@@ -3901,6 +3903,8 @@ erasure ETL untuk subject); `wa_unofficial_*` → BFF/wa-unofficial sesuai §28.
 | L-162 | Insight supermarket memakai `eit2`/`eis2` + `wids`; view ESB lama tidak berubah. |
 | L-163 | Semua butir §28 belum dibangun; fit-gap G45 dapat merevisi bagian Odoo bila CE standar menutupnya. |
 | L-165 | G46: histori penjualan ESB pra-cutover masuk forecast v2 lewat Odoo `efn.legacy.sales.daily` → ETL → `fact_legacy_sales_daily` → `v_fc_sales_daily` (bukan dari `efn_esb`/`map_esb_odoo` langsung): pemetaan & cutover satu sumber (Odoo), ADR-003 tetap. Hari × gudang dengan POS Odoo memakai POS saja. Default mati (`ETL_ENABLE_FORECAST_LEGACY`). |
+| L-166 | G46 (uji E2E data nyata PB 19 Nov 2026): `/menu/browse` ESB Core tidak memuat sebagian besar menu POS yang terjual (mis. minuman/takeaway; tidak ada endpoint menu lain di spec). Export master: menu histori yang terjual dalam `--recent-menu-days` (default 30, 0 = perilaku lama) sebelum cutover = aktif. Importer: template aktif → varian tunggal ikut aktif (CE tidak mengaktifkan ulang varian). |
+| L-167 | Importer ESB: `write_uid` = `__system__` (upgrade modul/recompute/cron) diperlakukan seperti user migrasi (bukan edit pengguna) → field milik migrasi ditulis ulang; edit oleh user nyata tetap `conflict_user_edited`. |
 | L-164 | Mode voucher kampanye configurable per kampanye: `anonymous_code` (default, kode tanpa partner, penugasan di BFF), `public_code` (kode bersama tanpa member), `member_bound` (kartu per `partner_id`, khusus member; satu-satunya mode yang memasukkan identitas member ke Odoo). L-155 berlaku untuk dua mode pertama; `member_bound` adalah pengecualian yang disengaja. Mode dikunci setelah approval. |
 
 **Pertanyaan fit-gap (tidak diduplikasi, lihat `docs/fit-gap/G45_SUPERMARKET.md` §7):** Q-SM1 kode/nama/NPWP PT (`SMD`,

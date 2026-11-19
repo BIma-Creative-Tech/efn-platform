@@ -283,7 +283,13 @@ def _category_mean(
         cat_level = float(np.mean([v[0] for v in pool])) if pool else 0.0
         cat_sigma = float(np.mean([v[1] for v in pool])) if pool else 0.0
         m = int(history.shape[0])
-        if m >= 7:
+        if not pool and m > 0:
+            # G46 (uji E2E data nyata PB 19 Nov 2026): tanpa seri pembanding di gudang (outlet baru / PT yang baru
+            # dimigrasi dengan histori pendek) penyusutan ke level 0 memotong ramalan menjadi m/56 (7 hari -> 1/8).
+            # Pakai level seri sendiri tanpa penyusutan.
+            level = float(np.mean(history[-cfg.level_days :]))
+            sigma = float(np.std(history)) if m > 1 else 0.0
+        elif m >= 7:
             w = min(1.0, m / max(cfg.min_history_days, 1))
             level = w * float(np.mean(history[-cfg.level_days :])) + (1 - w) * cat_level
             sigma = float(np.std(history))

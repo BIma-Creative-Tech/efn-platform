@@ -62,6 +62,12 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     exp.add_argument("--skip-unlinked-menu-boms", action="store_true", help="BoM tipe Menu tanpa tautan tidak diekspor")
     exp.add_argument("--allow-default-ratio", action="store_true", help="BoM FIN tanpa bom_ratio -> product_qty 1")
     exp.add_argument("--drop-zero-qty-components", action="store_true", help="buang komponen BoM qty <= 0")
+    exp.add_argument(
+        "--recent-menu-days",
+        type=int,
+        default=30,
+        help="L-166: menu histori yang terjual dalam N hari sebelum cutover = aktif (0 = semua arsip; 0..365)",
+    )
     exp.add_argument("--out", type=Path)
     wb = sub.add_parser("writeback", help="hasil impor -> efn_dwh.map_esb_odoo")
     wb.add_argument("--result", required=True, type=Path)
@@ -118,7 +124,10 @@ def cmd_export(args: argparse.Namespace, settings: MigSettings) -> int:
     anchor = args.cutover_date or datetime.now(UTC).date()
     src = _source()
     archive_from = add_months(month_start(anchor), -SALES_DAILY_MONTHS)
-    data = MasterData.load(src, args.brand, archive_from, anchor)
+    if not 0 <= args.recent_menu_days <= 365:
+        raise StepError("--recent-menu-days di luar rentang 0..365")
+    recent_since = anchor - timedelta(days=args.recent_menu_days) if args.recent_menu_days else None
+    data = MasterData.load(src, args.brand, archive_from, anchor, recent_since)
     if any(s in MASTER_STEPS or s == "cutover-param" for s in steps):
         path = export_master(data, params, steps, maps, keys, out_dir)
         print(f"export master: {path.name}")

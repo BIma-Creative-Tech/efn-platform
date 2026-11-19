@@ -5,6 +5,7 @@ import secrets
 import uuid
 from unittest.mock import patch
 
+from odoo import SUPERUSER_ID
 from odoo.tests import TransactionCase, new_test_user, tagged
 
 from odoo.addons.efn_legacy_history import bulk
@@ -276,9 +277,18 @@ class TestEsbImport(TransactionCase):
         for entity, counts in again.report["entities"].items():
             with self.subTest(entity=entity):
                 self.assertEqual((counts["created"], counts["updated"], counts["failed"]), (0, 0, 0), counts)
-        # Field milik migrasi diubah pengguna lain -> konflik, tidak ditimpa.
         fin = self._ref(X("product", "ZFIN-1"))
-        fin.write({"name": "Diubah pengguna"})
+        original = fin.name
+        # L-167: tulisan __system__ (upgrade modul / recompute) bukan edit pengguna -> nilai migrasi dipulihkan.
+        fin.with_user(SUPERUSER_ID).sudo().write({"name": "Ditulis upgrade"})
+        self.assertEqual(fin.write_uid.id, SUPERUSER_ID)
+        restored = self._run(self._bundle(self._master_rows()))
+        self.assertEqual(restored.report["entities"]["product"]["updated"], 1, restored.report["entities"]["product"])
+        fin.invalidate_recordset()
+        self.assertEqual(fin.name, original)
+        # Field milik migrasi diubah pengguna lain -> konflik, tidak ditimpa.
+        editor = new_test_user(self.env, login="efn_mig_editor_test", groups="base.group_user")
+        fin.with_user(editor).sudo().write({"name": "Diubah pengguna"})
         third = self._run(self._bundle(self._master_rows()))
         self.assertEqual(third.report["entities"]["product"]["conflict"], 1)
         self.assertEqual(fin.name, "Diubah pengguna")
@@ -288,6 +298,20 @@ class TestEsbImport(TransactionCase):
         fourth = self._run(self._bundle(rows))
         self.assertEqual(fourth.report["entities"]["supplier"]["missing_in_source"], 1)
         self.assertTrue(self._ref(X("supplier", "ZSUP1")).active)
+
+    def test_reactivated_menu_reactivates_single_variant(self):
+        """L-166: menu yang dulu diimpor arsip lalu aktif lagi -> varian product.product ikut aktif (POS/forecast)."""
+        self._import_master()
+        menu = self._ref(X("menu", "ZM01"))
+        variant = menu.product_variant_id
+        menu.with_user(SUPERUSER_ID).sudo().action_archive()  # = impor lama: template + varian arsip
+        self.assertFalse(variant.with_context(active_test=False).active)
+        again = self._run(self._bundle(self._master_rows()))
+        self.assertEqual(again.exit_code, imp.EXIT_OK, again.report["errors"])
+        menu.invalidate_recordset()
+        variant.invalidate_recordset()
+        self.assertTrue(menu.active)
+        self.assertTrue(variant.with_context(active_test=False).active)
 
     def test_master_dry_run_leaves_no_data(self):
         bundle = self._bundle(self._master_rows())

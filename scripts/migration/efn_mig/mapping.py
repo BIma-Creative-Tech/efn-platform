@@ -454,14 +454,27 @@ def menu_code_of(row: Mapping[str, Any]) -> str:
     return "NAME:" + hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
 
 
+def _sold_since(last_sold: Any, since: date | None) -> bool:
+    if since is None or last_sold in (None, ""):
+        return False
+    day = last_sold if isinstance(last_sold, date) else date.fromisoformat(str(last_sold)[:10])
+    return day >= since
+
+
 def build_menus(
     brand: str,
     company: str,
     current: Iterable[Mapping[str, Any]],
     prices: Iterable[Mapping[str, Any]],
     archive: Iterable[Mapping[str, Any]],
+    recent_since: date | None = None,
 ) -> tuple[list[dict[str, Any]], MenuIndex]:
-    """Menu aktif (dim_esb_menu terbaru) + harga (dim_esb_menu_price) + menu arsip (hanya di histori, active=False).
+    """Menu aktif (dim_esb_menu terbaru) + harga (dim_esb_menu_price) + menu dari histori penjualan.
+
+    Menu yang hanya ada di histori: aktif bila terjual pada/ setelah `recent_since` (L-166: menu POS ESB tidak lengkap
+    di `/menu/browse` ESB Core, mis. minuman/takeaway; uji data nyata 19 Nov 2026: sebagian besar kode terjual
+    tidak ada di master), selain itu arsip (active=False). `recent_since=None` = perilaku lama (semua menu histori
+    = arsip).
 
     Takeaway (nama berakhiran " T"): digabung ke menu dasar dengan nama sama (tanpa " T") -> baris `alias_of` = xmlid
     menu dasar (importer menambah xmlid kedua ke record yang sama). Tanpa menu dasar -> menu berdiri sendiri.
@@ -469,7 +482,7 @@ def build_menus(
     price_by_code = {menu_code_of(r): r for r in prices}
     menus: dict[str, dict[str, Any]] = {}
     for row in archive:
-        menus[menu_code_of(row)] = {**row, "_archive": True}
+        menus[menu_code_of(row)] = {**row, "_archive": not _sold_since(row.get("last_sold"), recent_since)}
     for row in current:
         menus[menu_code_of(row)] = {**row, "_archive": False}
     base_by_name: dict[str, str] = {}

@@ -38,7 +38,7 @@ import psycopg2
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-from odoo import Command
+from odoo import SUPERUSER_ID, Command
 from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tools import SQL
 
@@ -656,7 +656,9 @@ class _Run:
                         diff = {f: v for f, v in owned.items() if not _same(rec, f, v)}
                         if not diff:
                             status = "skipped"
-                        elif rec.write_uid.id == self.uid:
+                        elif rec.write_uid.id in (self.uid, SUPERUSER_ID):
+                            # L-167: tulisan __system__ (upgrade modul -u, recompute, cron) bukan edit pengguna;
+                            # tanpa ini setiap upgrade membuat semua record master "konflik" saat impor ulang.
                             rec.write(_to_write(diff))
                             status = "updated"
                         else:
@@ -818,7 +820,8 @@ class _Run:
             problem = self._std_problems.get(row["data"].get("uom_xmlid"))
             if problem:  # SEC-203: pesan jelas (xmlid tidak ada / model salah), bukan sekadar "uom_xmlid"
                 plan.missing = [problem if item == "uom_xmlid" else item for item in plan.missing]
-            self.upsert("product", "product", code, row["esb_key"], row["xmlid"], plan, cenv)
+            status, rec = self.upsert("product", "product", code, row["esb_key"], row["xmlid"], plan, cenv)
+            _reactivate_single_variant(status, rec)
             self._variant_cache.pop(self.res_id(row["xmlid"]), None)
 
     def _do_menu(self, rows):
@@ -830,7 +833,8 @@ class _Run:
                 self.alias("menu", code, row["esb_key"], row["xmlid"], target, "product.template")
                 continue
             plan = m.menu_plan(row["data"], company.id, self)
-            self.upsert("menu", "menu", code, row["esb_key"], row["xmlid"], plan, cenv)
+            status, rec = self.upsert("menu", "menu", code, row["esb_key"], row["xmlid"], plan, cenv)
+            _reactivate_single_variant(status, rec)
 
     def _do_payment_term(self, rows):
         for row in rows:
@@ -1287,6 +1291,20 @@ def _exc_text(exc):
 
 
 # ================================================================================================ API
+def _reactivate_single_variant(status, rec):
+    """L-166: template diaktifkan kembali (menu arsip -> aktif) -> varian tunggalnya ikut aktif.
+
+    Odoo CE hanya mengarsip varian saat template diarsip; saat template diaktifkan, varian tetap arsip sehingga POS dan
+    forecast (product.product) tidak melihatnya. Hanya template dengan TEPAT satu varian (menu/produk ESB tanpa
+    atribut); varian template beratribut yang diarsip bisa disengaja.
+    """
+    if status not in ("created", "updated", "skipped") or not rec or rec._name != "product.template" or not rec.active:
+        return
+    variants = rec.with_context(active_test=False).product_variant_ids
+    if len(variants) == 1 and not variants.active:
+        variants.write({"active": True})
+
+
 def find_migration_user(env, login):
     user = env["res.users"].sudo().with_context(active_test=False).search([("login", "=", login)], limit=1)
     if not user:

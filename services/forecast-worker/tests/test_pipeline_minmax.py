@@ -109,3 +109,18 @@ def test_minmax_formula() -> None:
     assert dc["min_qty"] > outlet["min_qty"]
     assert zero["min_qty"] == zero["max_qty"] == 0.0
     assert set(outlet) == {"warehouse_code", "product_id", "min_qty", "max_qty", "service_level", "basis_daily_demand"}
+
+
+def test_category_mean_without_peers_uses_own_level() -> None:
+    """G46: semua seri pendek (PT baru dimigrasi, 7 hari) -> tanpa pembanding, level seri sendiri (bukan 7/56 x)."""
+    end = START + timedelta(days=99)
+    sales = [(2, 1, end - timedelta(days=i), 12.0) for i in range(7)]
+    sales += [(2, 2, end - timedelta(days=i), 3.0) for i in range(3)]  # < 7 hari
+    panel = build_panel(START, end, sales, [], {1: "A", 2: "B"}, {2: "PB01"})
+    cfg = PipelineConfig(candidates=("AutoETS",), cv_windows=0, horizon_days=7)
+    result = forecast_panel(panel, [], CalendarConfig(), cfg, FakeRunner())
+    fc = {f.product_id: f for f in result.forecasts}
+    assert fc[1].model == fc[2].model == "category_mean"
+    assert float(np.mean(fc[1].yhat)) == pytest.approx(12.0, rel=0.05)
+    assert float(np.mean(fc[2].yhat)) == pytest.approx(3.0, rel=0.05)
+    assert all(np.all(f.sigma >= 0) for f in result.forecasts)

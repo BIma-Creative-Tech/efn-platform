@@ -67,6 +67,10 @@ dan ringkasan `.md` laporan menampilkan "DRY-RUN DENGAN PENGECUALIAN" (wajib dis
 | `--skip-unlinked-menu-boms` | BoM tipe `Menu` / tanpa produk hasil yang tidak tertaut menu (`menu_keys` kosong) tidak diekspor; `manifest.skipped.unlinked_menu_boms = {count, bom_ids}` | `BOM_MENU_UNLINKED_SKIPPED` = peringatan |
 | `--allow-default-ratio` | (data sama) BoM normal FIN tanpa `bom_ratio` tetap `product_qty=1`, `ratio_source="default_1"` | `BOM_DEFAULT_RATIO` = peringatan, bukan `BOM_NO_RATIO` |
 | `--drop-zero-qty-components` | komponen qty ≤ 0 dibuang; `manifest.skipped.zero_qty_components = {count, items:[{bom_id, product_code}]}` | `BOM_QTY_DROPPED` = peringatan; tanpa opsi tetap `BOM_QTY` error |
+**Menu aktif dari histori (L-166, bukan pengecualian):** `--recent-menu-days N` (default 30, 0..365; 0 = semua menu
+yang hanya ada di histori diarsip seperti G43). `/menu/browse` ESB Core tidak memuat sebagian besar menu POS (uji data
+nyata 19 Nov 2026: sebagian besar kode menu terjual tidak ada), jadi menu yang terjual dalam N hari sebelum cutover dibuat aktif.
+
 Pembuangan tercatat di `skipped` tanpa opsi yang cocok = error `BOM_SKIPPED_WITHOUT_OPTION`. Importer Odoo
 mengabaikan kunci data master tambahan (`data.uom_source`) dan kunci manifest baru (`export_options`, `skipped`; ikut
 HMAC manifest) — terverifikasi pada impor master dry-run PB 18 Nov 2026.

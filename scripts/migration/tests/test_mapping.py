@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from conftest import BRANCH_MAP, FakeSource
+from conftest import BRANCH_MAP, FakeSource, menu
 
 from efn_mig import mapping as m
 from efn_mig.export import Maps
@@ -174,3 +174,23 @@ def test_menu_code_of_empty_code_uses_deterministic_name_key() -> None:
     k2 = menu_code_of({"menu_code": None, "menu_name": "PAKET HEMAT A"})
     assert k1 == k2 and k1.startswith("NAME:") and len(k1) <= 32
     assert menu_code_of({"menu_code": "", "menu_name": "Paket B"}) != k1
+
+
+def test_menus_sold_recently_are_active_l166(source: FakeSource) -> None:
+    """L-166: menu POS yang tidak ada di /menu/browse ESB Core tetapi masih terjual -> aktif, bukan arsip."""
+    d = source.dims
+    archive = [
+        {**menu("NEW1", "Iced Americano", detail=""), "last_sold": date(2026, 11, 16)},
+        {**menu("NEW1T", "Iced Americano T", detail=""), "last_sold": "2026-11-10"},
+        {**menu("OLD9", "Menu Lama", detail=""), "last_sold": date(2026, 9, 1)},
+        menu("NOD", "Tanpa Tanggal", detail=""),
+    ]
+    rows, index = m.build_menus("pb", "PB", d["dim_esb_menu"], d["dim_esb_menu_price"], archive, date(2026, 10, 18))
+    by = {r["esb_key"]: r["data"] for r in rows}
+    assert by["NEW1"]["active"] is True and by["NEW1"]["available_in_pos"] is True
+    assert by["NEW1T"]["active"] is True and by["NEW1T"]["alias_of"] == xmlid("pb", "PB", "menu", "NEW1")
+    assert by["OLD9"]["active"] is False and by["NOD"]["active"] is False
+    assert set(by["NEW1"]) <= m.DATA_KEYS["menu"]
+    # recent_since=None = perilaku lama: semua menu histori arsip
+    rows, _ = m.build_menus("pb", "PB", d["dim_esb_menu"], d["dim_esb_menu_price"], archive)
+    assert not any(r["data"]["active"] for r in rows if r["esb_key"] in {"NEW1", "NEW1T", "OLD9", "NOD"})
