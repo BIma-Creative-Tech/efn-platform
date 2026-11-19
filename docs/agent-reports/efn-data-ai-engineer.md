@@ -1467,3 +1467,28 @@ P2 (E6–E9) ditolak CLI tanpa `--allow-unverified` (default mati). E10 TB/GL ti
 - Salinan `efn_mig/bundle.py` disalin ulang ke `services/odoo/addons/efn_legacy_history/esb_import/efn_mig/`.
 - Belum terverifikasi: tidak ada yang dijalankan (pytest/ruff/ClickHouse); grant per objek efn_t2s perlu uji text2sql
   nyata di ClickHouse 24.8 (view DEFINER berlapis tanpa wildcard).
+
+## G46 — histori penjualan ESB sebagai input forecast (19 Nov 2026, dikerjakan efn-lead)
+Kontrak: docs/04 §28.2a, L-165; ADR-046 §3.8.
+- **Keputusan jalur:** ESB tidak dibaca worker langsung. Sumber = Odoo `efn_legacy_sales_daily` (G43: menu ESB sudah
+  dipetakan ke `product.product`, cabang ke `stock.warehouse`, hari < cutover ditegakkan Odoo) → ETL `fc_legacy_sales`
+  → `efn_dwh.fact_legacy_sales_daily` → `v_fc_sales_daily` (UNION dengan POS). Alasan: pemetaan & cutover satu
+  sumber, ADR-003 tetap (PG → CH), `map_esb_odoo` menyimpan id `product.template` (bukan varian) dan tidak tahu cutover.
+- Worker tidak berubah (kolom view sama). Hari × gudang yang sudah punya POS Odoo memakai POS saja.
+- Flag `ETL_ENABLE_FORECAST_LEGACY=false` (butuh `ETL_ENABLE_FORECAST`); sekalian `ETL_ENABLE_FORECAST` (G44) kini
+  diteruskan compose/deploy.sh/deploy-validate/check-encryption (sebelumnya tidak diteruskan sama sekali → job forecast
+  G44 tidak bisa dinyalakan lewat compose).
+- Grant: PG `odoo-readonly-grants.sql` blok G46 (kolom minimum, index cursor, bersyarat `efn_legacy_history`);
+  CH `etl_writer` SELECT/INSERT, `efn_forecast_definer` SELECT.
+
+### Terverifikasi
+- pytest ETL (semua lolos, +5 test G46), ruff 0.16.10 bersih; test `forecast-worker/tests/test_access_sql.py` lolos.
+- ClickHouse 24.8 sementara: init 01..15 + `forecast-access.sql` jalan; data sintetis → histori ESB dipakai di hari
+  tanpa POS, hari ber-POS memakai POS, menu tak terpetakan & qty negatif dibuang, versi baru menimpa; user
+  `forecast_reader` membaca lewat view DEFINER dan ditolak membaca tabel dasar.
+- `test-efn-deploy.sh` 370/370 (kasus baru 274a–d); render compose: flag default `false`.
+
+### Belum
+- Belum diuji dengan data Odoo nyata (histori G43 belum diimpor ke DB dev) dan belum end-to-end worker → Odoo.
+- Penghapusan baris di Odoo (impor ulang irisan) tidak terbawa cursor → langkah manual (README ETL).
+- Censoring OOS tidak berlaku untuk hari ESB; forecast bahan/komponen CK tetap lewat BoM Odoo.

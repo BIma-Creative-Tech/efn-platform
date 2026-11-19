@@ -48,6 +48,7 @@ GRANT SELECT ON efn_dwh.v_fc_calendar TO efn_forecast_definer;
 GRANT SELECT ON efn_dwh.v_fc_product TO efn_forecast_definer;
 GRANT SELECT ON efn_dwh.v_fc_warehouse TO efn_forecast_definer;
 GRANT SELECT ON efn_dwh.fact_sales_line TO efn_forecast_definer;
+GRANT SELECT ON efn_dwh.fact_legacy_sales_daily TO efn_forecast_definer;
 GRANT SELECT ON efn_dwh.dim_outlet TO efn_forecast_definer;
 GRANT SELECT ON efn_dwh.dim_fc_warehouse TO efn_forecast_definer;
 GRANT SELECT ON efn_dwh.fact_stock_snapshot TO efn_forecast_definer;

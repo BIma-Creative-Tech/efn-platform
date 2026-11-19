@@ -18,6 +18,11 @@ kirim ke Odoo lewat `odoo-rpc-gateway` `/json/2` (mTLS CN `forecast-worker`, API
 Worker **tidak pernah** menulis ClickHouse atau DB Odoo (L-145). Hasil turun ke mart lewat ETL (`ETL_ENABLE_FORECAST`,
 `fact_forecast_daily`, `fact_forecast_accuracy`).
 
+**Histori ESB (G46, docs/04 §28.2a, L-165):** untuk PT eks-ESB, `v_sales_daily` juga memuat penjualan menu ESB
+sebelum cutover (Odoo `efn.legacy.sales.daily` → ETL `ETL_ENABLE_FORECAST_LEGACY` → `fact_legacy_sales_daily`).
+Worker tidak membedakan sumber; hari × gudang yang sudah punya POS Odoo memakai POS saja. Hari ESB tidak kena
+censoring OOS (tidak ada snapshot stok Odoo sebelum cutover).
+
 ## Model (efn_forecast/pipeline.py, factors.py, models.py)
 - **Penyesuaian kalender multiplikatif** (diestimasi pada agregat gudang × kategori → fallback gudang → PT, disusutkan
   ke 1 sebesar n/(n+5)): akhir pekan (configurable), hari dalam pekan, **minggu gajian** (7 hari terakhir + 7 hari

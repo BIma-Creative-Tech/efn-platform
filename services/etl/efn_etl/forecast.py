@@ -223,6 +223,56 @@ def transform_daily(row: dict[str, Any]) -> list[Any]:
     ]
 
 
+# ---------------------------------------------------------------- efn_legacy_sales_daily -> fact_legacy_sales_daily
+# G46 (L-165, docs/04 §28.2a): histori penjualan ESB sebelum cutover (G43, ADR-042) sebagai input forecast-worker lewat
+# v_fc_sales_daily. Pemetaan menu -> product.product dan batas cutover sudah ditegakkan Odoo; ETL hanya menyalin kolom
+# untuk forecast (tanpa nama menu/cabang, tanpa rupiah, tanpa run_id). Bulk SQL G43 mengisi write_date -> cursor biasa.
+SQL_FC_LEGACY_SALES = """
+SELECT l.id, l.company_id, l.warehouse_id, l.day, l.esb_menu_code, l.product_id, l.qty, l.write_date,
+       l.write_date AS _cursor_ts, l.id::text AS _cursor_key
+FROM efn_legacy_sales_daily l
+WHERE l.write_date >= %(cursor_ts)s
+  AND (l.write_date, l.id::text) > (%(cursor_ts)s, %(cursor_key)s)
+ORDER BY l.write_date, l.id::text
+LIMIT %(limit)s
+"""
+LEGACY_SALES_COLUMNS = ("company_id", "warehouse_id", "day", "esb_menu_code", "product_id", "qty", "write_date")
+_MAX_MENU_CODE = 64  # = size Char efn_legacy_sales_daily.esb_menu_code
+
+
+def transform_legacy_sales(row: dict[str, Any]) -> list[Any]:
+    code = str(row.get("esb_menu_code") or "").strip()
+    if not code or len(code) > _MAX_MENU_CODE:
+        raise ValueError("efn_legacy_sales_daily.esb_menu_code kosong/terlalu panjang")
+    qty = Decimal(str(row.get("qty") if row.get("qty") is not None else 0))
+    if not qty.is_finite():
+        raise ValueError("efn_legacy_sales_daily.qty bukan angka")
+    # Qty negatif (koreksi/retur di ESB) disalin apa adanya; view v_fc_sales_daily hanya memakai qty > 0.
+    return [
+        int(row["company_id"]),
+        int(row["warehouse_id"]),
+        _date(row["day"]),
+        code,
+        int(row.get("product_id") or 0),
+        qty.quantize(Q3),
+        to_utc(row["write_date"]),
+    ]
+
+
+def legacy_sales_jobs() -> tuple[Job, ...]:
+    """Job incremental G46 (`ETL_ENABLE_FORECAST_LEGACY`, butuh `efn_legacy_history` + grant G46)."""
+    return (
+        Job(
+            "fc_legacy_sales",
+            "odoo",
+            SQL_FC_LEGACY_SALES,
+            "fact_legacy_sales_daily",
+            LEGACY_SALES_COLUMNS,
+            transform_legacy_sales,
+        ),
+    )
+
+
 def forecast_jobs() -> tuple[Job, ...]:
     """Job incremental G44 (`ETL_ENABLE_FORECAST`, butuh model v2 efn_demand_forecast + grant G44)."""
     return (

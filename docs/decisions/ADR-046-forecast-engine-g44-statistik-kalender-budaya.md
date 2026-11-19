@@ -148,6 +148,9 @@ tertinggal ≤ 15 menit + durasi batch, sedangkan usulan harus konsisten dengan 
   ada di mart).
 - Parameter gajian 7+7 dibaca worker dari env dan Odoo dari `ir.config_parameter`; **harus disamakan manual** (utang
   teknis: worker membaca parameter dari Odoo, G45+).
+- **G46 (19 Nov 2026, docs/04 §28.2a, L-165):** histori penjualan ESB sebelum cutover (G43 `efn.legacy.sales.daily`)
+  menjadi bagian `v_fc_sales_daily` lewat ETL (`ETL_ENABLE_FORECAST_LEGACY`), sehingga PT eks-ESB tidak mulai dari
+  `category_mean`. Worker tidak berubah. Hari × gudang yang sudah punya POS Odoo memakai POS saja.
 - Jendela kebutuhan usulan dimulai dari tanggal pertama proyeksi run aktif (bukan hari ini); hari order supplier =
   hari kalkulasi + `efn_replenishment.order_day_offset` (default 1, Q-SM11).
 

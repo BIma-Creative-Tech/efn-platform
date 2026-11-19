@@ -183,6 +183,9 @@ class Settings:
     # G44 (ADR-046, docs/04 §28.1): mart forecast (efn_etl/forecast.py) + akurasi mingguan. Default mati sampai model v2
     # efn_demand_forecast terpasang dan grant G44 (sql/odoo-readonly-grants.sql) diterapkan.
     forecast_enabled: bool = False
+    # G46 (L-165, docs/04 §28.2a): histori penjualan ESB pra-cutover (efn_legacy_sales_daily) -> v_fc_sales_daily. Butuh
+    # ETL_ENABLE_FORECAST + efn_legacy_history terpasang + grant G46.
+    forecast_legacy_enabled: bool = False
     forecast_accuracy_weeks: int = 2
     forecast_accuracy_interval_seconds: int = 86_400
 
@@ -287,6 +290,9 @@ class Settings:
         forecast_enabled = _bool(e, "ETL_ENABLE_FORECAST", False)
         if forecast_enabled and not odoo_enabled:
             raise RuntimeError("ETL_ENABLE_FORECAST membutuhkan ETL_ENABLE_ODOO=true")
+        forecast_legacy = _bool(e, "ETL_ENABLE_FORECAST_LEGACY", False)
+        if forecast_legacy and not forecast_enabled:
+            raise RuntimeError("ETL_ENABLE_FORECAST_LEGACY membutuhkan ETL_ENABLE_FORECAST=true")
         return cls(
             platform_pg=platform,
             odoo_pg=odoo,
@@ -348,6 +354,7 @@ class Settings:
             kds_online_enabled=kds_online,
             waste_enabled=waste_enabled,
             forecast_enabled=forecast_enabled,
+            forecast_legacy_enabled=forecast_legacy,
             forecast_accuracy_weeks=_int_range(e, "ETL_FORECAST_ACCURACY_WEEKS", 2, 1, 12),
             forecast_accuracy_interval_seconds=_int_range(
                 e, "ETL_FORECAST_ACCURACY_INTERVAL_SECONDS", 86_400, 900, 7 * 86_400
