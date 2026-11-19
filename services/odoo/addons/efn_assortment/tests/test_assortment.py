@@ -256,6 +256,74 @@ class TestEfnAssortment(TransactionCase):
         self.assertIn("Tertutup", line.old_value)
         self.assertIn("Terbuka", line.new_value)
 
+    def _manual_picking(self, picking_type, source, dest, product):
+        return self.env["stock.picking"].with_company(self.company).create(
+            {
+                "picking_type_id": picking_type.id,
+                "location_id": source.id,
+                "location_dest_id": dest.id,
+                "company_id": self.company.id,
+                "move_ids": [
+                    (
+                        0,
+                        0,
+                        {
+                            "product_id": product.id,
+                            "company_id": self.company.id,
+                            "product_uom_qty": 1,
+                            "location_id": source.id,
+                            "location_dest_id": dest.id,
+                        },
+                    )
+                ],
+            }
+        )
+
+    def test_sec209_two_step_manual_transfer_checked_at_transit_leg(self):
+        """SEC-209: DC -> transit (tanpa tujuan akhir) lolos; transit -> outlet dicek terhadap assortment outlet."""
+        transit = self.company.internal_transit_location_id
+        self.assertEqual(transit.usage, "transit")
+        first = self._manual_picking(self.dc.int_type_id, self.dc.lot_stock_id, transit, self.p_denied)
+        first.action_confirm()
+        self.assertNotEqual(first.state, "draft", "langkah pertama tidak punya outlet tujuan -> tidak dinilai")
+        second = self._manual_picking(self.outlet.in_type_id, transit, self.outlet.lot_stock_id, self.p_denied)
+        with self.assertRaisesRegex(UserError, "efn_assortment:blocked") as ctx:
+            second.action_confirm()
+        self.assertIn("AOT1", str(ctx.exception))
+        ok = self._manual_picking(self.outlet.in_type_id, transit, self.outlet.lot_stock_id, self.p_ok)
+        ok.action_confirm()
+        self.assertNotEqual(ok.state, "draft")
+        # Override Assortment Manager berlaku di picking transit -> outlet.
+        frozen = self._manual_picking(self.outlet.in_type_id, transit, self.outlet.lot_stock_id, self.p_frozen)
+        self.env["efn.assortment.override.wizard"].with_user(self.manager).create(
+            {"picking_id": frozen.id, "reason": "Persetujuan category manager no. 13/2026"}
+        ).action_confirm()
+        frozen.action_confirm()
+        self.assertNotEqual(frozen.state, "draft")
+
+    def test_sec221_internal_location_without_warehouse_checked(self):
+        """SEC-221: lokasi antara internal tanpa gudang tidak bisa dipakai untuk melewati cek assortment."""
+        limbo = self.env["stock.location"].create(
+            {
+                "name": "Area antara uji",
+                "usage": "internal",
+                "company_id": self.company.id,
+                # Tanpa induk (xmlid stock.stock_location_locations tidak ada di 19.0) -> tidak punya gudang.
+            }
+        )
+        self.assertFalse(limbo.warehouse_id)
+        picking = self._manual_picking(self.outlet.in_type_id, limbo, self.outlet.lot_stock_id, self.p_denied)
+        with self.assertRaisesRegex(UserError, "efn_assortment:blocked"):
+            picking.action_confirm()
+
+    def test_sec209_transit_leg_ignored_without_dc_in_company(self):
+        """PT tanpa gudang DC (F&B/CK) tidak terpengaruh penegakan langkah transit."""
+        self.dc.efn_is_dc = False
+        transit = self.company.internal_transit_location_id
+        picking = self._manual_picking(self.outlet.in_type_id, transit, self.outlet.lot_stock_id, self.p_denied)
+        picking.action_confirm()
+        self.assertNotEqual(picking.state, "draft")
+
     def test_qa1_post_init_hook_marks_smd_dc(self):
         from odoo.addons.efn_assortment import post_init_hook
 

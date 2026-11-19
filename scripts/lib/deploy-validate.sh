@@ -49,7 +49,9 @@ EFN_RELEASE_CONFIG_VARS=(ACME_EMAIL PAYMENT_PROVIDER PG_SUPERUSER WHATSAPP_ENABL
   ONLINE_SLOTS_ENABLED
   PROMO_ENABLED PROMO_PUSH_ENABLED PROMO_COMPANIES PROMO_SYNC_SECONDS
   MGM_ENABLED MGM_CLAIM_WINDOW_DAYS MGM_SETTLE_INTERVAL_MS
-  CONSENT_PRIVACY_VERSION CONSENT_PRIVACY_TEXT_SHA256 PRIVACY_CONSENT_ENFORCED)
+  CONSENT_PRIVACY_VERSION CONSENT_PRIVACY_TEXT_SHA256 PRIVACY_CONSENT_ENFORCED
+  FORECAST_ENABLED FORECAST_DAILY_CRON FORECAST_TZ FORECAST_HORIZON_DAYS FORECAST_CHUNK_SIZE
+  FORECAST_ODOO_RPC_TIMEOUT_SECONDS FORECAST_MEMORY_LIMIT FORECAST_CPUS CH_FORECAST_READER_HOST_CIDR)
 # G22 (docs/04 §14.D.1, L-72 D-22-18): env yang DIHAPUS kontrak. Bukan konfigurasi rilis (kunci manifest tak dikenal =
 # ditolak efn-deploy); jalur manual `sudo -E bash deploy.sh` -> production DITOLAK, staging peringatan (BFF: gagal start
 # di production, warning di luar production).
@@ -61,8 +63,10 @@ EFN_REMOVED_CONFIG_VARS=(LOYALTY_POINT_EXPIRY_DAYS)
 # hanya bisa dinyalakan di production lewat izin Superadmin, bukan variabel CI/manifest saja.
 # G42 (docs/04 §26.12 L-125, ADR-041): dashboard Insight menunggu review security, DPO (nama staf di cookie + log audit),
 # Q-ESB1/7/9 dan Q-INS1/Q-INS4 -> INSIGHT_ENABLED=true di production juga hanya dengan izin Superadmin.
+# G44 (docs/04 §28.10, ADR-046 Proposed): forecast-worker menulis usulan reorder ke Odoo produksi; aktif di production
+# hanya setelah backtest G44 lulus + user teknis per PT dibuat -> FORECAST_ENABLED=true juga butuh izin Superadmin.
 EFN_GATED_FEATURES=(LOYALTY_EXPIRY_ENABLED LOYALTY_INACTIVE_ANONYMIZE LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT
-  FNB_QR_POINTS_ENABLED ONLINE_LOYALTY_REDEEM_ENABLED INSIGHT_ENABLED)
+  FNB_QR_POINTS_ENABLED ONLINE_LOYALTY_REDEEM_ENABLED INSIGHT_ENABLED FORECAST_ENABLED)
 # Subset EFN_GATED_FEATURES yang nilai berisikonya `false` (default true = filter perlindungan aktif). SEC-171 (r15):
 # melepas filter consent `marketing` untuk notice hangus = keputusan Legal yang sama jenisnya dengan L-73, jadi memakai
 # izin yang sama (EFN_ALLOW_FEATURE_ON), bukan izin darurat EFN_ALLOW_CONTROL_OFF.
@@ -79,6 +83,10 @@ EFN_BOOKING_COMPANY_CODES=(PB BCF)
 # odoo_api_key_promo_<pt>, overlay infra/compose/docker-compose.online-promo-<pt>.yml (scripts/deploy.sh),
 # efn-rotate-online-key --channel=PROMO-<PT>. PT lain = tambah di sini + secrets.list + compose + overlay + ALLOWED_CHANNELS.
 EFN_PROMO_COMPANY_CODES=(PB)
+# G44 (docs/04 §28.2): PT yang punya user teknis forecast (efn_forecast_<pt>) + secret odoo_api_key_forecast_<pt> di
+# overlay infra/compose/docker-compose.forecast.yml. PT baru = tambah di sini + secrets.list + overlay (env + mount) +
+# EFN_FORECAST_COMPANIES di scripts/host/efn-forecast-key-status + check-encryption.sh (regex secret forecast).
+EFN_FORECAST_COMPANY_CODES=(SMD)
 # G21 AC-13 (docs/04 §13.2, ADR-036 §0): kunci PII Odoo produksi (scripts/secrets.list host:disabled [SA]) - di-mount ke
 # odoo oleh infra/compose/docker-compose.pii.yml hanya bila EFN_ODOO_PII_ENABLED=true (scripts/deploy.sh).
 EFN_ODOO_PII_KEY_NAMES=(odoo_pii_key_v1 odoo_pii_bidx_key odoo_pii_name_key)
@@ -276,7 +284,7 @@ efn_validate_company_code() { # kode
 efn_validate_company_lists() {
   local c
   for c in "${EFN_ONLINE_CHANNEL_CODES[@]}" "${EFN_FNB_QR_COMPANY_CODES[@]}" "${EFN_BOOKING_COMPANY_CODES[@]}" \
-           "${EFN_PROMO_COMPANY_CODES[@]}"; do
+           "${EFN_PROMO_COMPANY_CODES[@]}" "${EFN_FORECAST_COMPANY_CODES[@]}"; do
     efn_validate_company_code "$c" || return 1
   done
 }
@@ -504,6 +512,7 @@ efn_validate_config() { # app_env
       _efn_err "$ver dan $sha harus di-set berpasangan"; return 1
     fi
   done
+  efn_validate_forecast_config || return 1
   efn_validate_g22_config "$app_env" || return 1
   # SEC-50c: kontrol keamanan tidak bisa dimatikan di production kecuali izin eksplisit Superadmin di deploy.conf
   if [[ "$app_env" == production ]]; then
@@ -515,6 +524,44 @@ efn_validate_config() { # app_env
         return 1
       fi
     done
+  fi
+}
+
+# ── G44 (docs/04 §28.2/§28.10, ADR-046): forecast-worker (overlay docker-compose.forecast.yml) ─────────────────────
+# Dipanggil efn_validate_config. Kosong = default compose (MATI, 23:30 WIB, 28 hari, 500 baris, 25 s, 1536M, 2 CPU,
+# 172.30.11.0/24). Rentang = services/forecast-worker/efn_forecast/config.py (horizon 7..60, chunk 1..500) dan gateway
+# (timeout < 30 s). Gerbang production FORECAST_ENABLED=true = EFN_GATED_FEATURES (efn_validate_g22_config). Cek API key
+# Odoo nyata + profil data = scripts/deploy.sh (host).
+efn_validate_forecast_config() {
+  local spec name lo hi
+  [[ -z "${FORECAST_ENABLED:-}" || "$FORECAST_ENABLED" == true || "$FORECAST_ENABLED" == false ]] \
+    || _efn_err "FORECAST_ENABLED harus true|false" || return 1
+  # cron 5 kolom: angka, '*', '/', ',', '-' saja (nilai ditulis apa adanya ke .env, dipisah spasi tunggal)
+  [[ -z "${FORECAST_DAILY_CRON:-}" || "$FORECAST_DAILY_CRON" =~ ^[0-9*/,-]{1,20}( [0-9*/,-]{1,20}){4}$ ]] \
+    || _efn_err "FORECAST_DAILY_CRON harus cron 5 kolom (mis. '30 23 * * *')" || return 1
+  [[ -z "${FORECAST_TZ:-}" || "$FORECAST_TZ" =~ ^[A-Z][A-Za-z_]{1,30}(/[A-Z][A-Za-z0-9_+-]{1,30}){1,2}$ ]] \
+    || _efn_err "FORECAST_TZ harus nama zona IANA (mis. Asia/Jakarta)" || return 1
+  for spec in FORECAST_HORIZON_DAYS:7:60 FORECAST_CHUNK_SIZE:1:500 FORECAST_ODOO_RPC_TIMEOUT_SECONDS:5:29; do
+    IFS=: read -r name lo hi <<< "$spec"
+    [[ -z "${!name:-}" ]] && continue
+    [[ "${!name}" =~ ^[1-9][0-9]{0,2}$ ]] && (( ${!name} >= lo && ${!name} <= hi )) \
+      || _efn_err "$name harus bilangan bulat ${lo}..${hi}" || return 1
+  done
+  # K25-06: batas memori/CPU kecil (ADR-046 §4.2: 1-2 GB; > 4 GB = tinjau ulang ADR-046 §7)
+  if [[ -n "${FORECAST_MEMORY_LIMIT:-}" ]]; then
+    [[ "$FORECAST_MEMORY_LIMIT" =~ ^([1-9][0-9]{2,3})M$ ]] && (( BASH_REMATCH[1] >= 256 && BASH_REMATCH[1] <= 4096 )) \
+      || [[ "$FORECAST_MEMORY_LIMIT" =~ ^[1-4]G$ ]] \
+      || _efn_err "FORECAST_MEMORY_LIMIT harus 256M..4096M atau 1G..4G" || return 1
+  fi
+  [[ -z "${FORECAST_CPUS:-}" || "$FORECAST_CPUS" =~ ^(0\.5|[1-4])$ ]] \
+    || _efn_err "FORECAST_CPUS harus 0.5|1|2|3|4" || return 1
+  # SEC-215: HOST user ClickHouse efn_forecast_reader. CIDR privat kanonik /24../32 (clickhouse-init memvalidasi ulang).
+  # SEC-223: /16../23 ditolak (172.30.0.0/16 = semua network EFN -> pembatasan HOST tidak berarti).
+  if [[ -n "${CH_FORECAST_READER_HOST_CIDR:-}" ]]; then
+    efn_is_cidr "$CH_FORECAST_READER_HOST_CIDR" && (( ${CH_FORECAST_READER_HOST_CIDR#*/} >= 24 )) \
+      && { efn_cidr_within "$CH_FORECAST_READER_HOST_CIDR" 10.0.0.0/8 || efn_cidr_within "$CH_FORECAST_READER_HOST_CIDR" 172.16.0.0/12 \
+           || efn_cidr_within "$CH_FORECAST_READER_HOST_CIDR" 192.168.0.0/16; } \
+      || _efn_err "CH_FORECAST_READER_HOST_CIDR harus CIDR IPv4 privat kanonik /24../32 (subnet network forecast-ch, SEC-223)" || return 1
   fi
 }
 

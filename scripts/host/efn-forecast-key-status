@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# efn-forecast-key-status - metrik masa berlaku API key Odoo user teknis forecast (efn_forecast_<pt>) untuk alert
+# pengingat rotasi (SEC-215, R-T15; key bot forecast dibuat MANUAL, durasi <= api_key_duration grup = 35 hari, runbook
+# docs/runbooks/forecast-worker.md §3-§4). HANYA MEMBACA: tidak membuat/mencabut key (rotasi otomatis forecast belum ada;
+# efn-rotate-online-key tidak mendukung FORECAST-*). Pola scripts/host/efn-rotate-online-key: root, fail-closed, nilai key
+# tidak pernah dibaca/dicetak (hanya id + kedaluwarsa dari res.users.apikeys), jejak journald.
+#
+# DIPASANG MANUAL oleh Superadmin (runbook forecast-worker.md §4a):
+#   install -o root -g root -m 0755 scripts/host/efn-forecast-key-status /usr/local/sbin/efn-forecast-key-status
+#   install -o root -g root -m 0644 scripts/host/systemd/efn-forecast-key-status.{service,timer} /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now efn-forecast-key-status.timer
+#
+# PT yang diperiksa: EFN_FORECAST_COMPANIES (allowlist; PT baru = tambah di sini + secrets.list + overlay) HANYA bila
+# $COMPOSE_DIR/.env (ditulis deploy.sh) memuat FORECAST_ENABLED=true. Forecast mati -> metrik per PT tidak ditulis
+# (tidak ada alert pengingat untuk key yang tidak dipakai).
+# Metrik textfile node-exporter ($TEXTFILE_DIR/efn_forecast_api_key.prom; alert-rules.yml grup efn-forecast-key):
+#   efn_forecast_api_key_expiry_timestamp_seconds{company}  kedaluwarsa key aktif TERBARU (0 = tidak ada key aktif)
+#   efn_forecast_api_key_active_keys{company}               jumlah key belum kedaluwarsa
+#   efn_forecast_api_key_no_expiry_keys{company}            jumlah key TANPA kedaluwarsa (wajib 0; SEC-223)
+#   efn_forecast_api_key_check_last_run_timestamp_seconds   waktu run terakhir skrip ini
+#   efn_forecast_api_key_check_last_run_ok                  1 sukses, 0 gagal (container Odoo mati, user hilang, ...)
+# Kode keluar: 0 sukses, 1 pemeriksaan gagal (metrik last_run_ok=0 tetap ditulis), 2 konfigurasi/ditolak.
+set -euo pipefail
+umask 077
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export LC_ALL=C
+
+TAG=efn-forecast-key-status
+COMPOSE_DIR=/opt/efn/compose
+TEXTFILE_DIR=/var/lib/efn/node-exporter
+ODOO_DB=efn_odoo
+COMPOSE_PROJECT=efn
+EFN_FORECAST_COMPANIES=(SMD)
+
+log() {
+  logger -t "$TAG" -- "$*" 2> /dev/null || true
+  [[ -t 2 ]] && printf '%s: %s\n' "$TAG" "$*" >&2
+  return 0
+}
+die() { log "GAGAL: $*"; [[ -t 2 ]] || echo "$TAG: $*" >&2; exit 2; }
+
+[[ "${EUID}" -eq 0 ]] || die "harus root (timer systemd atau sudo oleh Superadmin)"
+(( $# == 0 )) || die "tanpa argumen"
+command -v docker > /dev/null || die "butuh docker"
+
+# Saklar forecast dari .env deploy (root, tidak dapat ditulis grup/lainnya; tidak di-source).
+envf="$COMPOSE_DIR/.env"
+enabled=false
+if [[ -f "$envf" && ! -L "$envf" ]]; then
+  read -r e_uid e_mode < <(stat -c '%u %a' -- "$envf")
+  [[ "$e_uid" == 0 && $((8#$e_mode & 8#022)) -eq 0 ]] || die "$envf harus milik root dan tidak dapat ditulis grup/lainnya"
+  if [[ "$(sed -nE 's/^FORECAST_ENABLED=(true|false)$/\1/p' "$envf" | tail -n1)" == true ]]; then enabled=true; fi
+fi
+
+now=$(date +%s)
+ok=1
+body_exp=""
+body_act=""
+body_noexp=""
+if [[ "$enabled" == true ]]; then
+  cid=$(docker ps -q --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" \
+          --filter "label=com.docker.compose.service=odoo" --filter status=running | head -n1)
+  if [[ ! "$cid" =~ ^[0-9a-f]{12,64}$ ]]; then
+    log "container odoo tidak berjalan - masa berlaku key forecast tidak dapat dibaca"; ok=0
+  else
+    read -r -d '' PY << 'PYEOF' || true
+import datetime, os
+def say(*a):
+    print("EFN_FKS", *a, flush=True)
+U = env["res.users"].sudo().with_context(active_test=False).search([("login", "=", os.environ["EFN_LOGIN"])], limit=1)
+if not U:
+    say("ERR", "user_missing")
+else:
+    for r in env["res.users.apikeys"].sudo().search([("user_id", "=", U.id)], order="id"):
+        exp = r.expiration_date
+        say("KEY", r.id, int(exp.replace(tzinfo=datetime.timezone.utc).timestamp()) if exp else 0)
+    say("OK", 1 if U.active else 0)
+PYEOF
+    for co in "${EFN_FORECAST_COMPANIES[@]}"; do
+      [[ "$co" =~ ^[A-Z]{2,8}$ ]] || die "kode PT tidak valid di skrip: $co"
+      login="efn_forecast_${co,,}"
+      out=$(printf '%s\n' "$PY" | docker exec -i -e "EFN_LOGIN=$login" "$cid" \
+              odoo shell -d "$ODOO_DB" --no-http --log-level=error 2> /dev/null | grep '^EFN_FKS ' || true)
+      if ! grep -qE '^EFN_FKS OK 1$' <<< "$out"; then
+        log "PT ${co}: user ${login} tidak ada/nonaktif atau odoo shell gagal ($(grep -oE '^EFN_FKS ERR [a-z_]{1,32}$' <<< "$out" | head -n1 | cut -d' ' -f3 || true))"
+        ok=0; continue
+      fi
+      active=0; newest=0; noexp=0
+      while read -r _ kind kid kexp; do
+        [[ "$kind" == KEY && "$kid" =~ ^[1-9][0-9]{0,12}$ && "$kexp" =~ ^[0-9]{1,12}$ ]] || continue
+        if (( kexp == 0 )); then noexp=$((noexp + 1)); active=$((active + 1)); continue; fi
+        (( kexp > now )) || continue
+        active=$((active + 1))
+        if (( kexp > newest )); then newest=$kexp; fi
+      done <<< "$out"
+      # SEC-223 (G45): key tanpa kedaluwarsa melanggar kebijakan <= 35 hari -> metrik + alert
+      # EfnForecastApiKeyNoExpiry (bukan hanya journald).
+      (( noexp == 0 )) || log "PERINGATAN PT ${co}: ${noexp} key tanpa kedaluwarsa (wajib berdurasi, runbook §3)"
+      newest_txt="-"
+      if (( newest > 0 )); then newest_txt=$(date -u -d "@$newest" '+%Y-%m-%dT%H:%M:%SZ'); fi
+      log "PT ${co}: key aktif=${active}, kedaluwarsa terbaru=${newest_txt}, tanpa kedaluwarsa=${noexp}"
+      # Sampel dikelompokkan per metrik (format teks Prometheus: satu blok per family, termasuk bila PT > 1).
+      body_exp+="efn_forecast_api_key_expiry_timestamp_seconds{company=\"${co}\"} ${newest}"$'\n'
+      body_act+="efn_forecast_api_key_active_keys{company=\"${co}\"} ${active}"$'\n'
+      body_noexp+="efn_forecast_api_key_no_expiry_keys{company=\"${co}\"} ${noexp}"$'\n'
+    done
+  fi
+fi
+
+if [[ -d "$TEXTFILE_DIR" ]]; then
+  tmp=$(mktemp "$TEXTFILE_DIR/.efn_forecast_api_key.XXXXXX")
+  {
+    echo "# HELP efn_forecast_api_key_expiry_timestamp_seconds Kedaluwarsa API key aktif terbaru user teknis forecast (0 = tidak ada)."
+    echo "# TYPE efn_forecast_api_key_expiry_timestamp_seconds gauge"
+    printf '%s' "$body_exp"
+    echo "# HELP efn_forecast_api_key_active_keys Jumlah API key belum kedaluwarsa user teknis forecast."
+    echo "# TYPE efn_forecast_api_key_active_keys gauge"
+    printf '%s' "$body_act"
+    echo "# HELP efn_forecast_api_key_no_expiry_keys Jumlah API key TANPA tanggal kedaluwarsa user teknis forecast (wajib 0, SEC-223)."
+    echo "# TYPE efn_forecast_api_key_no_expiry_keys gauge"
+    printf '%s' "$body_noexp"
+    echo "# HELP efn_forecast_api_key_check_last_run_timestamp_seconds Waktu run terakhir efn-forecast-key-status."
+    echo "# TYPE efn_forecast_api_key_check_last_run_timestamp_seconds gauge"
+    echo "efn_forecast_api_key_check_last_run_timestamp_seconds ${now}"
+    echo "# HELP efn_forecast_api_key_check_last_run_ok Hasil run terakhir efn-forecast-key-status (1 sukses, 0 gagal)."
+    echo "# TYPE efn_forecast_api_key_check_last_run_ok gauge"
+    echo "efn_forecast_api_key_check_last_run_ok ${ok}"
+  } > "$tmp"
+  chmod 0644 "$tmp" && mv -f "$tmp" "$TEXTFILE_DIR/efn_forecast_api_key.prom"
+else
+  log "TEXTFILE_DIR ${TEXTFILE_DIR} tidak ada - metrik tidak ditulis"
+fi
+log "selesai (forecast_enabled=${enabled}, ok=${ok})"
+(( ok == 1 )) || exit 1
+exit 0

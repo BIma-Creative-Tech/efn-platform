@@ -3562,8 +3562,8 @@ event, consumer idempoten + DLQ, PostgreSQL sumber kebenaran, ClickHouse turunan
 | `efn.forecast.calendar` + perluasan `efn.forecast.season` (`efn_demand_forecast`) | Odoo | G44 | **Dibangun G44** (test lulus di container; belum diuji end-to-end) |
 | `efn_replenishment` (jadwal kirim & supplier, usulan order outlet → DC, qty orderpoint DC → RFQ draft CE, approval, log bias) | Odoo | G44 | **Dibangun G44** (test lulus di container; belum diuji end-to-end) |
 | `services/forecast-worker` (statsforecast, compose `efn-data`) | Python 3.12 | G44 | **Dibangun G44** (test lulus di container; belum diuji end-to-end) |
-| `efn_expiry_monitor` (near-expiry, `efn.lot.markdown`, aset POS FEFO + blok kedaluwarsa, "kirim ke member" via outbox) | Odoo + POS | G45 | Belum dibangun |
-| `efn_setup_supermarket` tahap B (ambang per kategori, capability, jadwal contoh) | Odoo data-only | G45 | Belum dibangun |
+| `efn_expiry_monitor` (near-expiry, `efn.lot.markdown`, aset POS FEFO + blok kedaluwarsa, "kirim ke member" via outbox) | Odoo + POS | G45 | **Dibangun G45** (test server lulus; POS belum diuji di layar) |
+| `efn_setup_supermarket` tahap B (ambang per kategori, capability, jadwal contoh) | Odoo data-only | G45 | **Dibangun G45** (test server lulus; POS belum diuji di layar) |
 | `efn_campaign` (usulan & approval kampanye, voucher `sale_loyalty`) | Odoo | G46 | Belum dibangun |
 | BFF `src/behavior`, `src/campaign`, `src/wishlist`, `src/notification/email` | NestJS | G46 | Belum dibangun |
 | `segment-worker` (segmentasi harian; boleh image sama dengan forecast-worker, **container & kredensial terpisah**) | Python 3.12 | G46 | Belum dibangun |
@@ -3734,6 +3734,22 @@ forecast v2 tidak mulai dari `category_mean` (histori < 56 hari). Status: **diba
   Perangkat timbangan/pemindai = fit-gap Q-SM3.
 - "Kirim ke member": centang `notify_members` → baris **outbox Odoo** → BFF klaim (§28.7) → `promo.campaign.requested`
   `kind: "markdown"`. Odoo **tidak** publish langsung ke RabbitMQ.
+- **Catatan implementasi G45** (kode = `efn_expiry_monitor`; test server lulus, POS belum diuji di layar):
+  - Ambang kategori **mewarisi induk terdekat yang terisi per field** (nilai 0 = kosong, `_efn_effective_days`);
+    `efn_replenishment._efn_min_remaining_days` memakai helper yang sama (fallback ke field mentah bila helper tidak ada).
+    Constraint: 0..3650 hari; `efn_markdown_days` ≤ `efn_near_expiry_days` bila keduanya diisi (nilai sama valid).
+  - `notify_members` hanya disimpan; `notify_state` = `pending` (outbox + `promo.campaign.requested` = **G46**, belum ada).
+  - Parameter tambahan (default di data modul; nilai di luar rentang -> default): `efn_expiry_monitor.max_discount_store_head`
+    (50), `.max_discount_markdown_manager` (90) — batas diskon efektif saat aktivasi (Q-SM4); `.pos_lot_limit` (20000
+    baris lot per sesi POS); `.override_ttl_seconds` (1800, masa berlaku persetujuan PIN supervisor di server).
+  - Server menjadi penentu akhir saat sync order (order lunas **tidak pernah ditolak**, termasuk offline): klaim klien
+    (`efn_lot_source`, `efn_markdown_ref`, `efn_expiry_override`) divalidasi, pelanggaran dicatat di `efn.expiry.event`
+    (`pos_expired_no_override`, `markdown_invalid`, `markdown_price_mismatch`, `markdown_cap_exceeded`, ...).
+  - **Cap tidak memecah baris**: POS membatasi qty baris markdown ke sisa kuota; sisa dijual kasir sebagai baris harga
+    normal terpisah. Server menghitung `qty_sold += min(qty, sisa)` dan mencatat kelebihan; retur (baris
+    `refunded_orderline_id`) mengurangi `qty_sold` dari baris asal.
+  - Bergantung `efn_pos_refund_origin` (hash PIN supervisor `res.users.efn_return_pin_hash`, tidak pernah ke browser).
+  - Override sisa umur penerimaan DC -> outlet: *Markdown Manager* atau *Inventory Administrator*, alasan ≥ 10 karakter.
 
 ### 28.6 Event perilaku `POST /v1/events` (BFF `src/behavior`)
 - Publik (tanpa Bearer) atau dengan Bearer member; rate limit: **120 event/menit per `device_key`**, **600/menit per

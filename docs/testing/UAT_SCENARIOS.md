@@ -1207,3 +1207,127 @@ Status: **Draft** (efn-qa-engineer, 18 Nov 2026). Untuk **Finance** dan **Ops/PI
 - **When** operator menutup jendela (secret `migration_bundle_key` & `clickhouse_password_mig` → `disabled`, overlay `docker-compose.migration.yml` dilepas) dan menghapus bundel/hasil
 - **Then** `ls /run/secrets` di container Odoo **tidak** memuat `migration_bundle_key`; user ClickHouse `efn_mig` hilang; direktori pertukaran tanpa `*.efnmig`/`*.part`/`*.json`; tanggal hapus dicatat di berita acara dan inventaris PDP (≤ 90 hari)
 - **And** Odoo, POS, dan checkout tetap berjalan normal selama dan sesudah jendela (migrasi bukan jalur transaksi)
+
+---
+
+## N. Gelombang 45 — Supermarket: near-expiry, markdown per lot, FEFO & blokir kedaluwarsa di POS, sisa umur terima, restriksi demo (docs/04 §28.5a, §28.10, fit-gap G45 S-05..S-16, ADR-045 *Proposed*, L-144..L-151)
+
+Status: **Draft** (efn-qa-engineer, 19 Nov 2026; belum dijalankan). Bagian **POS (N5–N10) hanya terbukti lewat test server (tanpa browser)**: tour layar kasir belum ada, jadi skenario ini adalah satu-satunya uji layar dan **wajib dijalankan manual di perangkat POS nyata** sebelum pilot. Dijalankan di dev/staging dengan `efn_expiry_monitor.enabled=true` (default `false`; **jangan dinyalakan di production** sebelum Q-SM28/Q-SM9 dijawab), `efn_assortment.enforce=true`. Seluruh data = **demo** (`SMD`, ambang kategori tahap B = placeholder). Angka = ilustrasi.
+
+**Data uji N**
+- Ambang (induk "Dairy & Chilled"): near-expiry 10 hari, markdown 3 hari, sisa umur minimum terima 5 hari; kategori anak "Yoghurt" kosong (mewarisi induk). Kategori tanpa ambang: "Alat tulis" (tidak dikelola).
+- Pengguna (login placeholder demo, password diset admin + 2FA): **Rina** (kepala toko `SMD01`, tanpa grup Markdown Manager), **Yoga** (kepala toko `SMD02`), **Mira** (*Markdown Manager*), **Sari** (kasir `SMD01`, tanpa grup override, punya akses POS), **Oka** (*Supervisor Ops*: grup override kedaluwarsa + PIN supervisor terdaftar), **Bayu** (buyer DC), **Tono** (Inventory user biasa), **Ines** (*Inventory Administrator*).
+- Produk **Yoghurt Plain** (harga Rp20.000, ber-lot + ED) dengan lot di `SMD01`: `Y-OLD` (kedaluwarsa kemarin, qty 6), `Y-MD` (sisa 2 hari, qty 8), `Y-SOON` (sisa 6 hari, qty 10), `Y-LATE` (sisa 20 hari, qty 30). Produk **Alat tulis** ber-lot sisa 1 hari (kontrol). Stok yang sama di `SMD02` untuk `Y-SOON` = 0. Label stiker GS1 dicetak: `(01)<GTIN Yoghurt>(10)Y-MD`, `(10)Y-OLD`, `(10)Y-LATE`; kode EAN-13 biasa produk yang sama.
+- POS `SMD01` (picking type `use_existing_lots`) sudah dibuka dengan jaringan online; sesi baru dibuka **setelah** markdown diaktifkan di N3 (data lot + markdown dimuat saat sesi dibuka).
+
+### N1. Alert near-expiry harian dan notifikasi (jalur normal)
+- **Given** flag menyala, data uji N, cron "EFN expiry: alert near-expiry harian" belum berjalan hari ini
+- **When** cron berjalan (atau penguji menjalankannya manual)
+- **Then** di *Inventory → Kedaluwarsa EFN → Alert* ada tepat tiga alert untuk `SMD01` / Yoghurt: `Y-OLD` tahap **Kedaluwarsa**, `Y-MD` **Perlu markdown**, `Y-SOON` **Mendekati kedaluwarsa**; `Y-LATE`, stok DC, dan produk "Alat tulis" **tidak** muncul
+- **And** Rina menerima **satu** To-Do "3 lot perlu tindakan di SMD01" (bukan satu per lot); Mira dan Bayu menerima satu ringkasan per PT; Yoga **tidak** menerima apa pun (bukan outlet miliknya); lot di kategori terkelola **tidak** juga mendapat To-Do bawaan "Kedaluwarsa" Odoo (tidak ganda)
+- **When** cron dijalankan lagi hari yang sama, dan lagi keesokan harinya
+- **Then** tidak ada alert atau To-Do tambahan (alert lama hanya diperbarui qty/sisa hari); hanya bila tahap **naik** (mis. `Y-SOON` menjadi "Perlu markdown") alert dibuka ulang dan satu notifikasi baru terkirim
+- **And** alert yang stoknya habis menjadi **Ditutup**; bila stok muncul lagi pada hari berikutnya, dibuat alert **baru** (alert lama tetap di riwayat)
+
+### N2. Flag mati / kategori tanpa ambang → tidak ada perubahan perilaku
+- **Given** `efn_expiry_monitor.enabled=false` (atau salah ketik seperti `yes`/`on`/kosong)
+- **When** cron berjalan; kasir memindai produk ber-lot di POS; penerima memvalidasi transfer DC dengan lot sisa 1 hari
+- **Then** tidak ada alert; POS berperilaku bawaan Odoo (tanpa FEFO otomatis/blokir/markdown); transfer lolos tanpa cek sisa umur; hanya nilai persis `true`/`1` menyalakan fitur (fail closed)
+
+### N3. Markdown oleh kepala toko vs Markdown Manager (batas diskon)
+- **Given** alert `Y-MD` (N1); batas bawaan: kepala toko ≤ 50 %, Markdown Manager ≤ 90 % (`efn_expiry_monitor.max_discount_*`)
+- **When** Rina menekan **Buat markdown** pada alert `Y-MD`, mengisi diskon **40 %**, kuota otomatis = qty stok (8), periode hari ini s.d. hari kedaluwarsa, lalu **Aktifkan**
+- **Then** markdown **Aktif**, alert menjadi **Ditindaklanjuti**, aktivasi tercatat di jejak audit (`efn_audit`) dengan Rina sebagai pengaktivasi
+- **When** Rina membuat markdown **60 %** (atau **harga** Rp7.000 = diskon efektif 65 %) untuk lot lain di `SMD01` lalu **Aktifkan**
+- **Then** ditolak `efn_expiry:discount_limit` ("melebihi batas peran Anda (50 %)"); draft tetap draft
+- **When** Mira mengaktifkan draft itu
+- **Then** berhasil; **When** Mira mengisi 95 % lalu **Aktifkan** → ditolak (batas 90 %)
+- **And** mengisi **harga dan** diskon sekaligus, harga ≥ harga normal, diskon 0 atau 100 %, kuota negatif, periode terbalik, atau markdown pada gudang **DC** ditolak saat disimpan; markdown kedua untuk lot × outlet × periode yang tumpang-tindih ditolak (`markdown_overlap`)
+- **And** Yoga tidak melihat markdown/alert `SMD01` dan tidak bisa mengaktifkan (scope); Sari (kasir) tidak bisa mengaktifkan/membatalkan; markdown yang sudah Aktif **tidak bisa diubah** harga/periode/kuota (batalkan lalu buat baru) dan tidak bisa dihapus
+- **And** mencentang **Kirim ke member** hanya menyimpan status "Menunggu outbox (G46)"; **tidak ada** pesan WhatsApp/push/email terkirim di G45 (pengiriman = G46)
+- **And** markdown aktif yang lewat tanggal akhir menjadi **Berakhir** oleh cron berikutnya (tidak lagi dimuat ke sesi POS baru)
+
+### N4. Markdown tidak berlaku di kanal online
+- **Given** markdown aktif `Y-MD` (N3)
+- **When** member memesan Yoghurt Plain lewat Super-App/web
+- **Then** harga = harga normal Rp20.000 (markdown per lot **tidak berlaku** di kanal online, fase 1, Q-SM12); lot tidak dipilih saat pesanan online
+
+### N5. Kasir memindai EAN biasa → FEFO otomatis, lot markdown tidak ikut (layar POS)
+- **Given** sesi POS `SMD01` dibuka setelah N3 (online); Sari login; markdown aktif `Y-MD` 40 %; tanpa pengaturan lot manual
+- **When** Sari memindai **EAN biasa** Yoghurt Plain 2 kali
+- **Then** **tanpa popup lot**; baris terisi lot **`Y-SOON`** (kedaluwarsa terdekat yang belum kedaluwarsa dan **bukan** lot markdown), harga **Rp20.000** penuh; `Y-OLD` (kedaluwarsa) dan `Y-MD` (markdown) **tidak** dipilih otomatis
+- **And** setelah `Y-SOON` habis (10 pindai, atau stok lokal sebelum sync dianggap terpakai), pemindaian berikutnya memilih `Y-LATE`; bila tidak ada kandidat sama sekali, popup lot bawaan Odoo muncul
+- **And** produk tanpa ED/tanpa lot dan produk "Alat tulis" berperilaku seperti biasa
+
+### N6. Kasir memindai stiker GS1 lot markdown → harga markdown terpasang
+- **Given** N5; Sari memegang stiker `(10)Y-MD`
+- **When** Sari memindai stiker GS1 `Y-MD` (qty 1)
+- **Then** baris memakai lot `Y-MD`, **diskon 40 %** (Rp12.000), notifikasi "Markdown lot Y-MD diterapkan"; baris ini **tidak menyatu** dengan baris Yoghurt lain
+- **When** Sari mengubah qty menjadi lebih dari sisa kuota (kuota 8, mis. mengetik 10)
+- **Then** qty dibatasi ke sisa kuota (8) dengan peringatan "kelebihan dijual sebagai baris harga normal"; **baris tidak dipecah otomatis** — Sari memindai EAN lagi untuk 2 sisanya (FEFO, harga normal)
+- **When** Sari memindai stiker `Y-MD` setelah kuota habis
+- **Then** peringatan "Kuota markdown lot Y-MD habis: harga normal"; baris harga normal
+- **When** Sari mengubah lot baris markdown ke lot lain lewat edit lot
+- **Then** ditolak ("Lot baris markdown tidak dapat diganti; hapus baris lalu pindai ulang")
+- **And** setelah order dibayar dan tersinkron, di markdown `Y-MD` kolom **Qty terjual** bertambah sesuai qty baris markdown (maks. sisa kuota); memilih lot `Y-MD` **secara manual dari daftar lot** juga mendapat markdown; **tidak ada** event pelanggaran
+
+### N7. Lot kedaluwarsa diblokir; override supervisor dengan PIN (online)
+- **Given** N5; Sari tidak punya grup override
+- **When** Sari memindai stiker GS1 `(10)Y-OLD` (kedaluwarsa kemarin) — atau memilih `Y-OLD` manual
+- **Then** muncul dialog "Lot kedaluwarsa — butuh persetujuan supervisor"; baris **tidak** ditambahkan sebelum persetujuan
+- **When** Sari memilih Oka dan memasukkan PIN **salah**
+- **Then** ditolak ("PIN tidak valid"), baris tidak ditambahkan; setelah **5 PIN salah dalam 15 menit** Oka terkunci sementara (pesan generik, tanpa membocorkan alasan rinci)
+- **When** alasan diisi terlalu pendek (mis. 1 karakter) → ditolak ("input tidak valid"); Oka memasukkan PIN benar + alasan "dijual sesuai SOP, disetujui Oka"
+- **Then** baris `Y-OLD` ditambahkan dan order bisa dibayar; setelah sync tercatat event `pos_expired_override` dengan Oka sebagai penyetuju di *Kedaluwarsa EFN → Jejak Audit*; persetujuan ditandai terpakai dan **tidak bisa dipakai ulang** untuk order/lot/kasir lain atau setelah 30 menit
+- **And** bila Oka sendiri yang menjadi kasir (grup override), cukup dialog konfirmasi tanpa PIN
+- **And** mengganti lot baris yang sudah ada ke lot kedaluwarsa ditolak ("hapus baris lalu pindai ulang untuk meminta override")
+
+### N8. POS offline: FEFO dan markdown tetap jalan, override PIN tidak
+- **Given** sesi POS `SMD01` sudah dibuka online (data lot + markdown termuat); lalu jaringan perangkat **dimatikan** (cabut kabel/mode pesawat)
+- **When** Sari memindai EAN → FEFO tetap memilih `Y-SOON`; memindai stiker `Y-MD` → harga markdown tetap terpasang; qty dibatasi sisa kuota yang termuat saat sesi dibuka
+- **Then** order bisa dibayar **tunai** dan tersimpan lokal; fitur yang butuh server (OTP/poin/MGM) nonaktif seperti kebijakan offline
+- **When** Sari memindai stiker `Y-OLD` (kedaluwarsa)
+- **Then** dialog persetujuan supervisor **tidak bisa memverifikasi PIN** (online saja): penjualan lot kedaluwarsa **tidak dapat disetujui** kecuali kasir yang login punya grup override (Oka: konfirmasi tanpa PIN, tetap teraudit saat sync)
+- **When** jaringan pulih dan order tersinkron
+- **Then** semua order **lunas dan tidak ditolak** server; markdown divalidasi ulang (periode berdasarkan tanggal order lokal, outlet, produk, lot, sumber GS1/manual): yang sah menambah `qty_sold`; kuota yang ternyata terlampaui oleh kasir lain tercatat event `markdown_cap_exceeded` (sisa qty harga normal tidak diubah); klaim tidak sah tercatat `markdown_invalid`/`markdown_price_mismatch`; lot kedaluwarsa tanpa override sah tercatat `pos_expired_no_override` untuk ditindaklanjuti kepala toko
+- **And** markdown yang berakhir **selama** perangkat offline: order offline bertanggal di dalam periode tetap sah; order bertanggal setelah `date_to` → `markdown_invalid` (harga diskon tetap dibayar pelanggan — menjadi temuan, bukan penolakan)
+
+### N9. Retur baris markdown memulihkan kuota
+- **Given** order N6 (qty markdown 2) sudah tersinkron, markdown `Y-MD` Qty terjual = 2
+- **When** Sari/Store Manager meretur 1 unit lewat alur refund POS (tertaut ke baris asal, sesuai kebijakan retur E-41)
+- **Then** setelah sync, **Qty terjual** turun menjadi 1 (kuota terpakai berkurang, tidak pernah < 0); retur setelah markdown berakhir tetap memulihkan angka (tanpa pengecekan periode)
+
+### N10. Foto/pindai tak lazim — validasi sisi server bukan hanya klien
+- **Given** penguji teknis mengubah data klien (mis. via devtools/replay) pada order POS: (a) klaim markdown `Y-MD` pada lot `Y-LATE`, (b) klaim sumber lot `fefo` dengan referensi markdown, (c) klaim override tanpa persetujuan, (d) diskon 50 % pada baris markdown 40 %
+- **When** order disinkronkan
+- **Then** order **tetap lunas** (tidak ditolak), tetapi tiap klaim tercatat event (`markdown_invalid` / `markdown_invalid` / `pos_expired_no_override` / `markdown_price_mismatch`) dan **tidak** menambah `qty_sold` untuk klaim tidak sah; kepala toko/Markdown Manager melihat temuan di *Jejak Audit*
+
+### N11. Penerimaan outlet dari DC dengan sisa umur kurang
+- **Given** transfer `SMDDC → SMD01` berisi Yoghurt Plain lot `DC-SHORT` sisa **3 hari** (minimum kategori 5 hari, diwarisi induk) dan lot `DC-OK` sisa 12 hari; Tono mengisi jumlah yang dipilih
+- **When** Tono membuka form transfer dan menekan **Validate**
+- **Then** form menampilkan peringatan sisa umur sebelum validasi; validasi ditolak `efn_expiry:short_life` dengan daftar (produk, lot, sisa hari, minimum); transfer hanya berisi `DC-OK` lolos tanpa hambatan
+- **When** Tono (tanpa grup khusus) mencoba **Override sisa umur** → ditolak (peran); Mira atau Ines mengisi alasan **< 10 karakter** → ditolak; alasan memadai → tercatat event `receipt_override` (penyetuju + alasan) dan transfer tertaut ke override
+- **Then** Tono menekan **Validate** → berhasil; override tidak bisa diedit/dihapus (append-only, teraudit)
+- **And** resupply dua langkah via lokasi transit diperlakukan sama (cek terjadi pada penerimaan di outlet); penerimaan dari **PT lain / pemasok luar** tidak dikenai cek ini; flag mati → tidak ada cek
+
+### N12. Usulan transfer antar outlet ditolak assortment
+- **Given** alert `Y-SOON` di `SMD01` (tahap near); laju jual harian `SMD03` (kebijakan `closed`, kategori Yoghurt tidak di daftar allow) terbesar, lalu `SMD04`, `SMD02` terkecil; `SMD01` laju terendah
+- **When** Rina menekan **Usulan transfer** pada alert
+- **Then** wizard **tidak** menyarankan `SMD03` (info kandidat memuat `not_listed`), tetapi `SMD04` (laju tertinggi yang lolos assortment); qty default = stok lot di asal
+- **When** Rina memaksa tujuan `SMD03`, atau tujuan **DC**, atau qty melebihi stok, lalu konfirmasi
+- **Then** ditolak (`transfer_assortment` / `transfer_dest` / `transfer_qty`); tidak ada picking dibuat
+- **When** Rina memilih `SMD04` qty 4 dan konfirmasi
+- **Then** terbentuk transfer internal **draft** `SMD01 → SMD04` terikat lot `Y-SOON` (belum bergerak sebelum divalidasi), alert menjadi Ditindaklanjuti; alert tahap **Kedaluwarsa** tidak bisa diusulkan transfer; bila tidak ada outlet dengan laju lebih tinggi → "tidak ada tujuan"
+
+### N13. Restriksi demo per outlet (assortment SMD01..SMD05)
+- **Given** seed demo tahap B (kebijakan & capability **placeholder**, daftar nyata = Q-SM13/Q-SM21): `SMD01`/`SMD04` punya `alcohol_license` + `non_halal_allowed`; `SMD02` punya chiller+freezer tetapi **deny** kategori "Impor Premium"; `SMD03` kebijakan `closed`; `SMD05` **tanpa freezer**; produk katalog sudah diberi syarat capability (Frozen→freezer, Alkohol→alcohol_license) — **tugas seed G48**, bukan modul setup
+- **When** Tono membuat transfer `SMDDC →` outlet dan menekan **Konfirmasi** untuk: (a) Frozen ke `SMD05`, (b) Impor Premium ke `SMD02`, (c) Alkohol ke `SMD02`/`SMD03`/`SMD05`, (d) Alkohol ke `SMD01` dan `SMD04`, (e) kategori di luar daftar ke `SMD03`
+- **Then** (a) ditolak `missing_capability:freezer`; (b) ditolak `denied`; (c) ditolak `missing_capability:alcohol_license` (SMD03 juga `not_listed`); (d) lolos; (e) ditolak `not_listed`
+- **And** Maya (Assortment Manager) dapat override (a) dengan alasan memadai (teraudit), tetapi **tidak dapat** override kekurangan `alcohol_license`/`non_halal_allowed` (c); pesanan POS untuk produk alkohol di `SMD02` tidak diblokir assortment (assortment tidak ditegakkan di POS — keputusan pemilik proyek) sehingga kontrol izin alkohol di kasir = temuan terbuka Q-SM13
+- **And** mengubah capability/kebijakan hanya oleh Assortment Manager; Rina tidak bisa
+
+### N14. Hak akses dan lintas PT
+- **Given** PT lain (mis. `PB`) punya outlet dan lot sendiri; Rina hanya di company `SMD`
+- **When** Rina mencoba membuka alert/markdown/event PT lain (URL langsung atau RPC POS `efn_expiry_lot_candidates` untuk config PT lain) atau mengaktifkan markdown PT lain
+- **Then** ditolak/tersembunyi (record rule per company; RPC menolak user tanpa akses ke POS config itu); kasir tanpa akses POS config tidak dapat memanggil RPC kandidat lot/PIN
+- **And** log Odoo/Loki tidak memuat PIN, hash PIN, atau token; penguji memeriksa payload preload sesi POS tidak berisi data pribadi (hanya nama lot, tanggal, qty, markdown)

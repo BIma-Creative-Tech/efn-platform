@@ -30,7 +30,11 @@ qty       = round_pack(min(need, cap_shelf, cap_rack))
 - QA-2: run malam (±23:30) berisi proyeksi mulai besok; penjualan hari ini sudah tercermin di stok live sehingga
   jendela dimulai di tanggal proyeksi pertama (tidak mengisi hari ini dengan rata-rata → tidak over-order).
 - Tanpa lot ber-ED di DC → ED = tanggal kirim + `expiration_time`. Sisa umur minimum = field kategori
-  `efn_min_receipt_days` bila `efn_expiry_monitor` terpasang, selain itu 0 (Q-SM9).
+  `efn_min_receipt_days` bila `efn_expiry_monitor` terpasang (kategori kosong mewarisi induk terdekat yang terisi,
+  G45), selain itu 0 (Q-SM9).
+- G45 (19.0.1.2.0): `efn.delivery.schedule` aktif tidak boleh tumpang-tindih per outlet (kategori sama, saling
+  induk/anak, atau salah satu tanpa kategori) → `ValidationError efn_replenishment:schedule_overlap`; mencegah produk
+  terusul dua kali.
 - `round_pack`: kelipatan `replenishment_uom_id` orderpoint outlet; naik, kecuali melewati cap → turun.
 - Gagal assortment → baris `excluded`, `reason_codes = assortment:<kode>`, qty 0.
 - z = `efn_replenishment.safety_z` (default 1,65).

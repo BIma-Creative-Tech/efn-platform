@@ -846,3 +846,96 @@ Q-SM1 (kode/nama legal/NPWP/PKP), Q-SM2 (outlet & DC), Q-SM3 (timbangan/pemindai
   karena dipakai `efn_ck_production`. Bentuk rantai rule resupply (apakah lokasi transit muncul sebagai src/dest)
   belum diuji runtime.
 - Apakah `current_test` aktif saat install `--test-enable`, sehingga ada gudang auto tambahan.
+
+## G45 — 2026-11-19 (`efn_setup_supermarket` tahap B, data-only)
+
+Worktree g44, branch `feat/wave-45-supermarket-expiry`. Modul `services/odoo/addons/efn_setup_supermarket` naik ke
+**19.0.2.0.0**. Belum di-commit. Tidak ada instance Odoo yang dijalankan.
+
+### Yang dibangun
+- **Depends baru**: `efn_assortment`, `efn_replenishment`, `efn_expiry_monitor`.
+- **`post_init_hook` tahap A dihapus.** `efn_is_dc = True` sekarang diisi langsung di record DC
+  (`data/stock_config_data.xml`).
+- **Data** `data/product_category_expiry_data.xml` (noupdate): 16 kategori diisi `efn_near_expiry_days`,
+  `efn_markdown_days`, `efn_min_receipt_days`. Semua nilai placeholder (Q-SM28/Q-SM9). Pola yang dipakai:
+  `markdown <= near` dan `min_receipt >= near`. Root 30/14/30 menjadi fallback.
+- **Demo**:
+  - `efn_assortment_demo.xml`: matriks capability dan kebijakan. Alkohol hanya di SMD01/SMD04. SMD05 tanpa freezer.
+    SMD03 `closed` dengan 8 baris allow. SMD02 punya deny Impor Premium.
+  - `stock_location_demo.xml`: 19 zona dengan `cyclic_inventory_frequency` (Fresh 7, Chiller 14, Freezer 30, Dry 30),
+    49 putaway rule per kategori, dan Stock DC 30 hari.
+  - `efn_replenishment_demo.xml`: 44 jadwal kirim, satu per outlet × kategori yang lolos assortment. Fresh/Chilled
+    harian dengan cut-off 21:00. Frozen Sel+Jum, ambient Sen+Rab+Jum, cut-off 17:00. Lead 1 hari; SMD05 lead 2 hari
+    dan zona waktu `Asia/Makassar`.
+  - `res_users_demo.xml`: 5 kepala toko (`efn_outlet_warehouse_ids` = outlet sendiri), buyer DC (+ Purchase User),
+    markdown manager, dan supervisor ops (override expiry + Assortment Manager). Semua tanpa password.
+  - `ir_config_parameter_demo.xml`: `efn_replenishment.enabled=true` (demo saja).
+- **Migrasi** `migrations/19.0.2.0.0/post-migrate.py`. Data/demo noupdate tidak menulis record lama dan tidak
+  menjalankan `<function>` saat upgrade, karena `tools/convert.py` 19.0 melewatinya [V]. Migrasi ini menerapkan ulang
+  file tahap B lewat `convert_file(..., mode="init", noupdate=True)` [V signature] dengan penjaga idempoten.
+- **Test** (tag `efn`, post_install):
+  - ambang 16 kategori;
+  - `_efn_min_remaining_days` membaca ambang (L-151);
+  - flag DC;
+  - sakelar (`efn_expiry_monitor.enabled` selalu false);
+  - matriks capability;
+  - 8 skenario `_efn_assortment_allowed` (ok/denied/not_listed/missing_capability);
+  - zona + frekuensi + `next_inventory_date`;
+  - putaway per kategori (termasuk rule induk Fresh);
+  - jadwal per outlet (kategori saling lepas, kadens, tz, lead);
+  - scope dan SoD user;
+  - record rule: kepala toko SMD01 hanya melihat usulan SMD01, buyer melihat semua.
+
+### Keputusan/penyimpangan dari brief
+1. **`efn_expiry_monitor.enabled` tetap false, juga di demo.** Syarat §28.10 adalah ambang diisi category manager,
+   sedangkan nilai di modul ini masih placeholder. Hanya `efn_replenishment.enabled` yang dinyalakan di demo.
+2. **Satu jadwal per kategori, bukan satu jadwal "dry".** Alasannya:
+   - `efn.delivery.schedule.product_group` adalah Many2one tunggal dengan `child_of`;
+   - jadwal tanpa kategori yang dipasang bersama jadwal berkategori mengusulkan produk yang sama dua kali.
+3. **Frekuensi cycle count per kategori = zona + putaway rule.** CE 19 tidak punya frekuensi per kategori di
+   `stock.location` [V]. Putaway rule dibuat eksplisit per kategori, tidak memakai satu rule di root, agar tidak
+   bergantung pada tie-break urutan.
+4. **Kapasitas rak (S-16)**: `stock.storage.category.capacity` CE hanya untuk putaway [V]. Tidak ada data kapasitas;
+   cap usulan = `efn.assortment.line.shelf_capacity_qty` per produk (seed G48).
+5. **Capability "halal"** dipetakan ke kode kontrak yang ada, `non_halal_allowed`. Tidak ada kode `halal`.
+6. **Syarat capability produk tidak diisi** (tidak ada produk). Rekomendasi per kategori untuk seed G48 ada di README.
+7. Ditambah persona **Supervisor Ops**, agar override sisa umur dan assortment bisa didemokan tanpa melanggar SoD
+   (bukan kepala toko penerima).
+
+### Untuk efn-odoo-engineer
+- **`efn_replenishment`: cegah jadwal tumpang-tindih.** Tambah constraint per `(warehouse_id, active)`: tidak boleh
+  ada dua jadwal yang `product_group`-nya sama, saling induk/anak, atau kosong bersama berkategori. Pertimbangkan juga
+  `product_group_ids` Many2many untuk mengurangi jumlah jadwal (44 record untuk 5 outlet).
+- **`efn_expiry_monitor`**: modul ini bergantung pada:
+  - field Integer `product.category.efn_near_expiry_days` / `efn_markdown_days` / `efn_min_receipt_days`;
+  - grup `group_markdown_manager` dan `group_expiry_override`;
+  - parameter `efn_expiry_monitor.enabled` dengan default `false` (dibuat modul itu).
+
+  Bila ada constraint antar-field, nilai di sini lolos untuk `markdown <= near`; nilai sama (1/1/1) harus diizinkan.
+  Jelaskan apakah ambang kategori daun dibaca dengan fallback ke induk. Data di sini mengisi induk juga.
+- **Record rule markdown/alert**: bila dibatasi `efn_outlet_warehouse_ids` untuk semua grup, user Markdown Manager
+  demo (tanpa outlet) tidak melihat apa pun. Mohon rule "semua outlet PT" untuk grup manager.
+- **`efn_assortment/__init__.py` + README**: komentar "pasangannya post_init_hook efn_setup_supermarket" sudah usang.
+  Hook efn_assortment tetap berguna untuk urutan install lama.
+
+### Untuk efn-lead / devsecops
+- CI `EFN_TEST_MODULES` (`.github/workflows/ci.yml` baris 41): tambahkan `efn_expiry_monitor` **sebelum**
+  `efn_setup_supermarket`. Tanpa itu install gagal.
+- `docs/04` §28.1: baris "`efn_setup_supermarket` tahap B" bisa diubah ke "Dibangun G45 (belum diuji di container)".
+  Tidak saya ubah agar tidak bentrok dengan kerja paralel.
+
+### Pertanyaan klien
+- Q-SM9 dan Q-SM28: ambang per kategori.
+- Q-SM10: frekuensi per zona dan opname tahunan.
+- Q-SM11: jadwal/cut-off, termasuk kelayakan pasok fresh dari DC Bekasi ke Bali.
+- Q-SM13 dan Q-SM21: outlet alkohol/non-halal; apakah alkohol juga syarat `non_halal_allowed`.
+- Q-SM29 dan Q-SM4: pemetaan persona.
+
+### Belum terverifikasi
+- Install, upgrade (migrasi), dan semua test belum dijalankan.
+- `efn_expiry_monitor` belum ada di worktree saat ditulis; nama field/grup mengikuti kontrak.
+- `obj(ref(...)).lot_stock_id.id` di `<field model="stock.warehouse">`: konteks `obj` diverifikasi di `convert.py`
+  19.0 [V], belum diuji. Comprehension multi-baris di `<function>` (putaway, jadwal) juga belum diuji.
+- `_get_putaway_strategy(product)` mengembalikan zona: alur dibaca dari source [V], belum diuji.
+- `convert_file` dari migrasi untuk file demo.
+- Pemuatan demo saat mode update; migrasi ditulis aman untuk kedua kemungkinan.

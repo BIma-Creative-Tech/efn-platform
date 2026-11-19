@@ -38,7 +38,7 @@ env:
     efn_setup_org efn_loyalty_accounting efn_l10n_id_coretax_rounding efn_role efn_region
     efn_setup_role efn_pos_bff_order efn_online_kds_bridge efn_online_transfer
     efn_mgm_policy efn_data_ask efn_insight efn_legacy_history
-    efn_demand_forecast efn_assortment efn_replenishment efn_setup_supermarket
+    efn_demand_forecast efn_assortment efn_replenishment efn_expiry_monitor efn_setup_supermarket
   EFN_INSTALL_ONLY_MODULES: efn_setup_security
 
 jobs:
@@ -72,13 +72,13 @@ jobs:
             web:    ['services/superapp-web/**', '.github/workflows/ci.yml']
             insight: ['services/insight-web/**', '.github/workflows/ci.yml']   # G42 dashboard Insight (docs/04 §26)
             odoo:   ['services/odoo/**', 'scripts/check-odoo-deps.sh', '.github/workflows/ci.yml']
-            python: ['services/ai-ocr-worker/**', 'services/etl/**', 'services/text2sql/**', 'services/esb-extract/**', 'services/forecast-worker/**', 'scripts/migration/**', '.github/workflows/ci.yml']
+            python: ['services/ai-ocr-worker/**', 'services/etl/**', 'services/text2sql/**', 'services/esb-extract/**', 'services/forecast-worker/**', 'scripts/migration/**', 'scripts/check-py-lock.sh', 'scripts/lock-python-deps.sh', '.github/workflows/ci.yml']
             ai-ocr-worker: ['services/ai-ocr-worker/**', '.github/workflows/ci.yml']
             etl:           ['services/etl/**', '.github/workflows/ci.yml']
             text2sql:      ['services/text2sql/**', '.github/workflows/ci.yml']
             esb-extract:   ['services/esb-extract/**', '.github/workflows/ci.yml']   # G41 (docs/04 §25)
-            forecast-worker: ['services/forecast-worker/**', '.github/workflows/ci.yml']   # G44 (docs/04 §28.2, ADR-046)
             esb-migrate:   ['scripts/migration/**', '.github/workflows/ci.yml']      # G43 (docs/04 §27.2)
+            forecast-worker: ['services/forecast-worker/**', 'scripts/check-py-lock.sh', '.github/workflows/ci.yml']   # G44 (docs/04 §28.2, ADR-046); SEC-214 lock
             infra:  ['infra/**', 'services/**/Dockerfile', '.github/workflows/**', 'scripts/**', 'Makefile']
 
   node:
@@ -149,8 +149,14 @@ jobs:
           cache-dependency-path: |
             services/**/requirements*.txt
             scripts/migration/requirements*.txt
+            services/**/requirements.lock
       - name: Install tooling
         run: pip install ruff==0.16.10 pip-audit==2.10.1   # pin: ruff = hasil format; pip-audit = gate (SEC-88)
+      # SEC-214: lock ber-hash (pin penuh termasuk transitif) wajib sinkron dengan requirements.txt. Placeholder / pin
+      # berubah tanpa lock ulang = GAGAL (perbaikan: bash scripts/lock-python-deps.sh <svc>, runbook
+      # docs/runbooks/python-dependency-lock.md). Tanpa jaringan; bash + awk.
+      - name: Lock dependency Python sinkron & ber-hash (scripts/check-py-lock.sh)
+        run: bash scripts/check-py-lock.sh
       - name: Daftar direktori Python yang ada
         id: dirs
         run: |
@@ -175,6 +181,13 @@ jobs:
                    scripts/migration/requirements.txt; do   # G43: cryptography (bundel AES-GCM) ikut gate pip-audit
             [ -f "$f" ] || continue
             pip-audit -r "$f" --strict || exit 1
+          done
+          # SEC-214: audit SELURUH pohon dependency yang benar-benar ter-install di image (lock: transitif ikut),
+          # tanpa resolve ulang (--disable-pip; hash wajib). Lock placeholder sudah digagalkan langkah check-py-lock.
+          for f in services/*/requirements.lock; do
+            [ -f "$f" ] || continue
+            grep -q 'EFN_LOCK_PLACEHOLDER' "$f" && continue
+            pip-audit -r "$f" --require-hashes --disable-pip --strict || exit 1
           done
 
   pytest:
@@ -221,14 +234,28 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: "${{ matrix.dir }}/requirements*.txt"
+          cache-dependency-path: |
+            ${{ matrix.dir }}/requirements*.txt
+            ${{ matrix.dir }}/requirements.lock
       - name: Dependensi sistem (tesseract untuk ai-ocr-worker)
         if: steps.exists.outputs.ok == 'true' && matrix.service == 'ai-ocr-worker'
         run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends tesseract-ocr tesseract-ocr-ind
       - name: Install
         if: steps.exists.outputs.ok == 'true'
+        # SEC-214: service ber-lock diuji dengan dependency yang SAMA dengan image (hash wajib, tanpa resolve, pip check);
+        # requirements-dev.txt sesudahnya hanya menambah alat uji (pin runtime sudah terpenuhi lock).
         run: |
-          [ -f requirements.txt ] && pip install -r requirements.txt
+          set -euo pipefail
+          if [ -f requirements.lock ]; then
+            if grep -q 'EFN_LOCK_PLACEHOLDER' requirements.lock; then
+              echo "::error::${{ matrix.dir }}/requirements.lock masih placeholder (bash scripts/lock-python-deps.sh ${{ matrix.service }})"
+              exit 1
+            fi
+            pip install --require-hashes --no-deps -r requirements.lock
+            pip check
+          elif [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
           if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; else pip install pytest; fi
       - name: pytest
         if: steps.exists.outputs.ok == 'true'
@@ -735,6 +762,7 @@ jobs:
         run: |
           shellcheck --version
           shellcheck -x scripts/*.sh scripts/lib/*.sh scripts/host/efn-deploy scripts/host/efn-online-cs scripts/host/efn-rotate-online-key \
+            scripts/host/efn-forecast-key-status \
             scripts/host/*.sh scripts/smoke/*.sh tests/load/*.sh infra/backup/postgres/*.sh \
             infra/postgres/init/*.sh infra/wireguard/*.sh
           shellcheck -x infra/odoo-rpc-gateway/test-gateway.sh infra/odoo-rpc-gateway/test-gateway-load.sh

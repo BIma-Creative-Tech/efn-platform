@@ -169,7 +169,9 @@ jobs:
           - { service: odoo, context: services/odoo }
           - { service: api-gateway, context: services/api-gateway }
           - { service: superapp-web, context: services/superapp-web }
-          # G44 (docs/04 §28.2): ditandatangani seperti service lain; BELUM dipakai deploy.yml (overlay forecast, runbook §8)
+          # G44 (docs/04 §28.2): rantai rilis bertanda tangan (deploy.yml / efn-deploy IMAGE_FORECAST_WORKER); compose
+          # memakainya hanya bila FORECAST_ENABLED=true (overlay forecast, deploy.sh). SEC-214: build GAGAL selama
+          # services/forecast-worker/requirements.lock masih placeholder (pip --require-hashes).
           - { service: forecast-worker, context: services/forecast-worker }
           # G42 (docs/04 §26): ikut rantai rilis bertanda tangan (deploy.yml / efn-deploy IMAGE_INSIGHT_WEB)
           - { service: insight-web, context: services/insight-web }

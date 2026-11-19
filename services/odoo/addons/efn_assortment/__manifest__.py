@@ -6,7 +6,9 @@
     "DC/DSD + kapasitas rak, kontrak region supplier, cakupan outlet kepala toko. Ditegakkan saat konfirmasi transfer "
     "DC -> outlet dan di usulan efn_replenishment; override teraudit (tidak untuk alkohol/halal); laporan harian.",
     # 19.0.1.1.0 (G44 perbaikan): SEC-208 guard + audit field assortment gudang/produk; QA-1 post_init_hook DC.
-    "version": "19.0.1.1.0",
+    # 19.0.1.2.0 (G45): SEC-209 langkah transit -> outlet transfer dua langkah ikut dicek (tanpa perubahan skema).
+    # 19.0.1.3.0 (G45 security): SEC-221 lokasi antara internal tanpa gudang / transit antar-PT ikut dicek.
+    "version": "19.0.1.3.0",
     "category": "EFN/Inventory",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031). OCA product_assortment hanya referensi konsep.

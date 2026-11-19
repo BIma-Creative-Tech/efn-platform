@@ -5,7 +5,7 @@ from datetime import datetime, time, timedelta
 from unittest.mock import patch
 
 from odoo import fields
-from odoo.exceptions import AccessError, UserError
+from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tests import TransactionCase, new_test_user, tagged
 
 from odoo.addons.efn_replenishment.models.efn_replenishment import (
@@ -127,6 +127,31 @@ class TestEfnReplenishment(TransactionCase):
         return proposal.line_ids.filtered(lambda line: line.product_id == product)
 
     # ------------------------------------------------------------ rumus
+    def test_g45_delivery_schedule_overlap_rejected(self):
+        """G45: satu produk hanya tercakup satu jadwal aktif per outlet (tidak terusul dua kali)."""
+        Schedule = self.env["efn.delivery.schedule"]
+        base = {"company_id": self.company.id, "supply_warehouse_id": self.dc.id, "weekdays": 127}
+        # cls.schedule (outlet ROT1) tanpa kategori -> jadwal berkategori di outlet yang sama tumpang-tindih.
+        with self.assertRaisesRegex(ValidationError, "schedule_overlap"):
+            Schedule.create(dict(base, warehouse_id=self.outlet.id, product_group=self.categ.id))
+        outlet2 = self.env["stock.warehouse"].create(
+            {"name": "Outlet repl uji 2", "code": "ROT2", "company_id": self.company.id}
+        )
+        Category = self.env["product.category"]
+        parent = Category.create({"name": "Uji Induk Jadwal"})
+        child = Category.create({"name": "Uji Anak Jadwal", "parent_id": parent.id})
+        sibling = Category.create({"name": "Uji Saudara Jadwal", "parent_id": parent.id})
+        Schedule.create(dict(base, warehouse_id=outlet2.id, product_group=child.id))
+        Schedule.create(dict(base, warehouse_id=outlet2.id, product_group=sibling.id))  # saudara: tidak beririsan
+        for group in (child, parent, False):
+            with self.subTest(group=group), self.assertRaisesRegex(ValidationError, "schedule_overlap"):
+                Schedule.create(dict(base, warehouse_id=outlet2.id, product_group=group and group.id))
+        # Jadwal nonaktif tidak dihitung.
+        archived = Schedule.create(dict(base, warehouse_id=outlet2.id, product_group=parent.id, active=False))
+        self.assertFalse(archived.active)
+        with self.assertRaisesRegex(ValidationError, "schedule_overlap"):
+            archived.active = True
+
     def test_round_pack_never_exceeds_cap(self):
         self.assertEqual(round_pack(15, 6), 18)
         self.assertEqual(round_pack(7, 6, cap=7), 6)
@@ -310,7 +335,9 @@ class TestEfnReplenishment(TransactionCase):
         self.assertEqual(day, self.today + timedelta(days=2))
         self.assertEqual(cutoff, datetime.combine(self.today + timedelta(days=1), time(5, 0)))
         # Hanya Senin (bitmask 1), lead 0: tanggal kirim = Senin terdekat yang cut-off-nya belum lewat.
-        monday = self.schedule.copy({"weekdays": 1, "lead_days": 0})
+        # Ubah jadwal yang sama (bukan copy): constraint G45 melarang dua jadwal tumpang-tindih per outlet/kategori.
+        self.schedule.write({"weekdays": 1, "lead_days": 0})
+        monday = self.schedule
         expected = self.today
         while expected.weekday() != 0:
             expected += timedelta(days=1)

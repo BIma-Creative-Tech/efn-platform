@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- EFN Setup Supermarket tahap B (G45; docs/04 §28.1, §28.5a; fit-gap G45 S-08, S-10, L-151). ADR-045 (Proposed).
+     Ambang kedaluwarsa per kategori = field kontrak efn_expiry_monitor pada product.category (dalam HARI):
+       efn_near_expiry_days  : lot dengan sisa umur <= N hari masuk efn.expiry.alert (aktivitas kepala toko + buyer)
+       efn_markdown_days     : sisa umur <= N hari -> diusulkan markdown per lot (efn.lot.markdown)
+       efn_min_receipt_days  : sisa umur minimum saat outlet menerima dari DC/DSD; juga dibaca efn_replenishment
+                               (_efn_min_remaining_days -> shelf-life cap usulan, L-151)
+
+     SEMUA NILAI = PLACEHOLDER sampai category manager menjawab Q-SM28 (nilai awal per kategori) dan fit-gap Q-SM9
+     (hari vs % umur simpan, siapa boleh override). Rasional placeholder (README §Ambang):
+       - Fresh (sayur/buah 2/1/2; daging, ikan, bakery 1/1/1): umur 1-7 hari, dijual habis atau markdown H-1.
+       - Dairy & Chilled 5/3/5: umur 7-21 hari.  Frozen 30/14/60: umur 6-12 bulan.
+       - Dry grocery & minuman 60/30/90, snack 45/21/60: umur 6-24 bulan; snack lebih pendek (minyak/tengik).
+       - Personal care, household, alkohol 90/45/120: umur 1-3 tahun.  Impor premium 30/14/45: lead time impor panjang,
+         sisa umur saat terima sering pendek; penerimaan lebih longgar dari dry grocery agar tidak semua ditolak.
+       - Induk (Supermarket, Fresh) ikut diisi: produk yang keliru dipasang di kategori induk tetap terpantau. Root
+         30/14/30 = fallback konservatif.
+     Pola: markdown_days <= near_expiry_days (markdown hanya untuk lot yang sudah near-expiry) dan
+     min_receipt_days >= near_expiry_days (outlet tidak menerima lot yang langsung near-expiry).
+
+     File terpisah dari product_category_data.xml (tahap A) agar migrasi 19.0.2.0.0 bisa menerapkan ulang HANYA field
+     ambang tanpa menimpa nama/hierarki kategori yang mungkin sudah diubah pengguna.
+     noupdate="1": nilai yang diubah category manager tidak ditimpa saat upgrade. -->
+<odoo noupdate="1">
+    <record id="product_category_smd_root" model="product.category">
+        <field name="efn_near_expiry_days">30</field>
+        <field name="efn_markdown_days">14</field>
+        <field name="efn_min_receipt_days">30</field>
+    </record>
+
+    <record id="product_category_smd_fresh" model="product.category">
+        <field name="efn_near_expiry_days">2</field>
+        <field name="efn_markdown_days">1</field>
+        <field name="efn_min_receipt_days">2</field>
+    </record>
+    <record id="product_category_smd_fresh_vegetable" model="product.category">
+        <field name="efn_near_expiry_days">2</field>
+        <field name="efn_markdown_days">1</field>
+        <field name="efn_min_receipt_days">2</field>
+    </record>
+    <record id="product_category_smd_fresh_fruit" model="product.category">
+        <field name="efn_near_expiry_days">2</field>
+        <field name="efn_markdown_days">1</field>
+        <field name="efn_min_receipt_days">2</field>
+    </record>
+    <record id="product_category_smd_fresh_meat" model="product.category">
+        <field name="efn_near_expiry_days">1</field>
+        <field name="efn_markdown_days">1</field>
+        <field name="efn_min_receipt_days">1</field>
+    </record>
+    <record id="product_category_smd_fresh_fish" model="product.category">
+        <field name="efn_near_expiry_days">1</field>
+        <field name="efn_markdown_days">1</field>
+        <field name="efn_min_receipt_days">1</field>
+    </record>
+    <record id="product_category_smd_fresh_bakery" model="product.category">
+        <field name="efn_near_expiry_days">1</field>
+        <field name="efn_markdown_days">1</field>
+        <field name="efn_min_receipt_days">1</field>
+    </record>
+
+    <record id="product_category_smd_dairy_chilled" model="product.category">
+        <field name="efn_near_expiry_days">5</field>
+        <field name="efn_markdown_days">3</field>
+        <field name="efn_min_receipt_days">5</field>
+    </record>
+    <record id="product_category_smd_frozen" model="product.category">
+        <field name="efn_near_expiry_days">30</field>
+        <field name="efn_markdown_days">14</field>
+        <field name="efn_min_receipt_days">60</field>
+    </record>
+    <record id="product_category_smd_dry_grocery" model="product.category">
+        <field name="efn_near_expiry_days">60</field>
+        <field name="efn_markdown_days">30</field>
+        <field name="efn_min_receipt_days">90</field>
+    </record>
+    <record id="product_category_smd_beverage" model="product.category">
+        <field name="efn_near_expiry_days">60</field>
+        <field name="efn_markdown_days">30</field>
+        <field name="efn_min_receipt_days">90</field>
+    </record>
+    <record id="product_category_smd_snack" model="product.category">
+        <field name="efn_near_expiry_days">45</field>
+        <field name="efn_markdown_days">21</field>
+        <field name="efn_min_receipt_days">60</field>
+    </record>
+    <record id="product_category_smd_personal_care" model="product.category">
+        <field name="efn_near_expiry_days">90</field>
+        <field name="efn_markdown_days">45</field>
+        <field name="efn_min_receipt_days">120</field>
+    </record>
+    <record id="product_category_smd_household" model="product.category">
+        <field name="efn_near_expiry_days">90</field>
+        <field name="efn_markdown_days">45</field>
+        <field name="efn_min_receipt_days">120</field>
+    </record>
+    <record id="product_category_smd_alcohol" model="product.category">
+        <field name="efn_near_expiry_days">90</field>
+        <field name="efn_markdown_days">45</field>
+        <field name="efn_min_receipt_days">120</field>
+    </record>
+    <record id="product_category_smd_imported_premium" model="product.category">
+        <field name="efn_near_expiry_days">30</field>
+        <field name="efn_markdown_days">14</field>
+        <field name="efn_min_receipt_days">45</field>
+    </record>
+</odoo>
