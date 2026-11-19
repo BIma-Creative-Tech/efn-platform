@@ -9,7 +9,8 @@ from .efn_assortment import ENFORCE_PARAM, GROUP_MANAGER, is_overridable
 
 _logger = logging.getLogger(__name__)
 
-# SEC-208: field master assortment hanya boleh ditulis Assortment Manager (guard server-side; view groups= bukan kontrol).
+# SEC-208: field master assortment hanya boleh ditulis Assortment Manager
+# (guard server-side; view groups= bukan kontrol).
 WAREHOUSE_GUARDED_FIELDS = frozenset({"efn_capability_ids", "efn_is_dc", "efn_assortment_policy"})
 NEUTRAL_CREATE_VALUES = (False, None, "open", [], [(6, 0, [])])
 

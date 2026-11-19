@@ -26,8 +26,9 @@ class TestEfnReplenishment(TransactionCase):
         icp.set_param("efn_assortment.enforce", "true")
         cls.company = env["res.company"].create({"name": "PT Uji Replenishment"})
         Warehouse = env["stock.warehouse"]
-        cls.dc = Warehouse.create({"name": "DC repl uji", "code": "RDC1", "company_id": cls.company.id,
-                                   "efn_is_dc": True})
+        cls.dc = Warehouse.create(
+            {"name": "DC repl uji", "code": "RDC1", "company_id": cls.company.id, "efn_is_dc": True}
+        )
         cls.outlet = Warehouse.create(
             {
                 "name": "Outlet repl uji",
@@ -71,11 +72,15 @@ class TestEfnReplenishment(TransactionCase):
         )
         cls.store.sudo().efn_outlet_warehouse_ids = [(6, 0, cls.outlet.ids)]
         cls.store_other = new_test_user(
-            env, login="efn_repl_store2_uji", groups="efn_replenishment.group_replenishment_store",
+            env,
+            login="efn_repl_store2_uji",
+            groups="efn_replenishment.group_replenishment_store",
             company_id=cls.company.id,
         )
         cls.buyer = new_test_user(
-            env, login="efn_repl_buyer_uji", groups="efn_replenishment.group_replenishment_buyer",
+            env,
+            login="efn_repl_buyer_uji",
+            groups="efn_replenishment.group_replenishment_buyer",
             company_id=cls.company.id,
         )
 
@@ -265,16 +270,20 @@ class TestEfnReplenishment(TransactionCase):
                 # gudang tambahan) sehingga tidak konsisten dengan lokasi orderpoint DC.
                 "picking_type_id": self.dc.in_type_id.id,
                 "order_line": [
-                    (0, 0, {"product_id": self.product.id, "product_qty": 10, "price_unit": 1.0,
-                            "orderpoint_id": op.id})
+                    (
+                        0,
+                        0,
+                        {"product_id": self.product.id, "product_qty": 10, "price_unit": 1.0, "orderpoint_id": op.id},
+                    )
                 ],
             }
         )
         with self.assertRaisesRegex(AccessError, "sod"):
             po.with_user(self.store).button_confirm()
         po.button_confirm()
-        confirmed = self.env["efn.replenishment.bias.log"].search([("kind", "=", "dc_confirmed"),
-                                                                    ("orderpoint_id", "=", op.id)])
+        confirmed = self.env["efn.replenishment.bias.log"].search(
+            [("kind", "=", "dc_confirmed"), ("orderpoint_id", "=", op.id)]
+        )
         self.assertAlmostEqual(confirmed.qty_after, 10)
 
     def test_supply_document_through_ce_orderpoint(self):
@@ -387,8 +396,7 @@ class TestEfnReplenishment(TransactionCase):
                 "company_id": self.company.id,
                 "picking_type_id": self.dc.in_type_id.id,
                 "order_line": [
-                    (0, 0, {"product_id": self.product.id, "product_qty": 5, "price_unit": 1.0,
-                            "orderpoint_id": op.id})
+                    (0, 0, {"product_id": self.product.id, "product_qty": 5, "price_unit": 1.0, "orderpoint_id": op.id})
                 ],
             }
         )

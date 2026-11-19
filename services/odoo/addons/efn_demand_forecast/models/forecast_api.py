@@ -56,7 +56,10 @@ DEFAULT_MAX_QTY = 100000.0
 
 
 def max_qty(env):
-    """SEC-211: plafon nilai per baris (yhat/p10/p90/sigma/min/max/basis); di atasnya baris ditolak ``value_too_large``."""
+    """SEC-211: plafon nilai per baris (yhat/p10/p90/sigma/min/max/basis).
+
+    Di atasnya baris ditolak ``value_too_large``.
+    """
     try:
         value = float(env["ir.config_parameter"].sudo().get_param(MAX_QTY_PARAM) or DEFAULT_MAX_QTY)
     except (TypeError, ValueError):

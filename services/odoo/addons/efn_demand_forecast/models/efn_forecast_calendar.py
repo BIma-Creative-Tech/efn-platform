@@ -5,7 +5,8 @@
   entri ``lib`` yang dinonaktifkan user tetap nonaktif (upsert tidak mengaktifkan ulang).
 - Kunci unik ``(company_id, date, kind, name)`` — persis kontrak §28.2 (warehouse tidak ikut kunci).
 - Minggu gajian & akhir pekan TIDAK disimpan per tanggal (parameter, lihat ``efn.forecast.season``).
-- Hanya Inventory Administrator (planner) yang mengubah; perubahan teraudit ``efn_audit`` (data/efn_audit_rule_data.xml).
+- Hanya Inventory Administrator (planner) yang mengubah; perubahan teraudit ``efn_audit``
+  (data/efn_audit_rule_data.xml).
 """
 
 from odoo import _, api, fields, models
@@ -106,9 +107,7 @@ class EfnForecastCalendar(models.Model):
         for day, kind, name in parsed:
             rec = existing.get((day, kind, name))
             if rec is None:
-                to_create.append(
-                    {"company_id": company.id, "date": day, "kind": kind, "name": name, "source": "lib"}
-                )
+                to_create.append({"company_id": company.id, "date": day, "kind": kind, "name": name, "source": "lib"})
             elif rec.source == "manual":
                 skipped_manual += 1
             else:

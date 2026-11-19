@@ -73,8 +73,9 @@ class TestEfnAssortment(TransactionCase):
             groups="efn_assortment.group_assortment_manager,stock.group_stock_manager",
             company_id=cls.company.id,
         )
-        cls.clerk = new_test_user(env, login="efn_assort_clerk_uji", groups="stock.group_stock_user",
-                                  company_id=cls.company.id)
+        cls.clerk = new_test_user(
+            env, login="efn_assort_clerk_uji", groups="stock.group_stock_user", company_id=cls.company.id
+        )
         env["ir.config_parameter"].sudo().set_param("efn_assortment.enforce", "true")
 
     def allowed(self, product, warehouse=None):
@@ -117,27 +118,31 @@ class TestEfnAssortment(TransactionCase):
     def _transfer(self, *products):
         # with_company + company_id per move: tanpa itu move mendapat company env (CE _check_company gagal dan
         # record rule menyembunyikan move dari user PT uji).
-        picking = self.env["stock.picking"].with_company(self.company).create(
-            {
-                "picking_type_id": self.dc.int_type_id.id,
-                "location_id": self.dc.lot_stock_id.id,
-                "location_dest_id": self.outlet.lot_stock_id.id,
-                "company_id": self.company.id,
-                "move_ids": [
-                    (
-                        0,
-                        0,
-                        {
-                            "product_id": p.id,
-                            "company_id": self.company.id,
-                            "product_uom_qty": 1,
-                            "location_id": self.dc.lot_stock_id.id,
-                            "location_dest_id": self.outlet.lot_stock_id.id,
-                        },
-                    )
-                    for p in products
-                ],
-            }
+        picking = (
+            self.env["stock.picking"]
+            .with_company(self.company)
+            .create(
+                {
+                    "picking_type_id": self.dc.int_type_id.id,
+                    "location_id": self.dc.lot_stock_id.id,
+                    "location_dest_id": self.outlet.lot_stock_id.id,
+                    "company_id": self.company.id,
+                    "move_ids": [
+                        (
+                            0,
+                            0,
+                            {
+                                "product_id": p.id,
+                                "company_id": self.company.id,
+                                "product_uom_qty": 1,
+                                "location_id": self.dc.lot_stock_id.id,
+                                "location_dest_id": self.outlet.lot_stock_id.id,
+                            },
+                        )
+                        for p in products
+                    ],
+                }
+            )
         )
         return picking
 
@@ -239,8 +244,12 @@ class TestEfnAssortment(TransactionCase):
         # Assortment Manager boleh; perubahan tercatat efn_audit (nilai lama/baru).
         self.env.registry.clear_cache()
         self.outlet.with_user(self.manager).write({"efn_assortment_policy": "open"})
-        logs = self.env["efn.audit.log"].sudo().search(
-            [("model_name", "=", "stock.warehouse"), ("res_id", "=", self.outlet.id), ("operation", "=", "write")]
+        logs = (
+            self.env["efn.audit.log"]
+            .sudo()
+            .search(
+                [("model_name", "=", "stock.warehouse"), ("res_id", "=", self.outlet.id), ("operation", "=", "write")]
+            )
         )
         line = logs.line_ids.filtered(lambda line: line.field_name == "efn_assortment_policy")
         # efn_audit menyimpan label Selection.

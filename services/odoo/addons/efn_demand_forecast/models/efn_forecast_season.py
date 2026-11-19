@@ -72,7 +72,15 @@ class EfnForecastSeason(models.Model):
     product_categ_ids = fields.Many2many("product.category", string="Kategori", help="Kosong = semua produk.")
 
     @api.constrains(
-        "kind", "date_from", "date_to", "day_from", "day_to", "weekdays", "factor", "calendar_kind", "days_before",
+        "kind",
+        "date_from",
+        "date_to",
+        "day_from",
+        "day_to",
+        "weekdays",
+        "factor",
+        "calendar_kind",
+        "days_before",
         "days_after",
     )
     def _check_season(self):
@@ -88,9 +96,7 @@ class EfnForecastSeason(models.Model):
             if season.kind == "weekday" and not season._efn_weekdays():
                 raise ValidationError(_("efn_demand_forecast:weekday — isi hari 0-6, pisahkan koma."))
             if season.kind == "holiday" and (
-                not season.calendar_kind
-                or not 0 <= season.days_before <= 60
-                or not 0 <= season.days_after <= 60
+                not season.calendar_kind or not 0 <= season.days_before <= 60 or not 0 <= season.days_after <= 60
             ):
                 raise ValidationError(
                     _("efn_demand_forecast:holiday — pilih jenis kalender; H-/H+ masing-masing 0-60 hari.")

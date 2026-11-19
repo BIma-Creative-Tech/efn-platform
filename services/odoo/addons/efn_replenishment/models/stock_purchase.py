@@ -82,7 +82,8 @@ class StockWarehouseOrderpoint(models.Model):
         Proposal = self.env["efn.replenishment.proposal"].sudo()
         Bias = self.env["efn.replenishment.bias.log"].sudo()
         today = local_today(DEFAULT_TZ, now)
-        # QA-2: jendela mulai di tanggal proyeksi pertama run; QA-3: hari order supplier = hari ini + offset (default 1).
+        # QA-2: jendela mulai di tanggal proyeksi pertama run;
+        # QA-3: hari order supplier = hari ini + offset (default 1).
         start = Proposal._efn_window_start(run, today)
         order_day = today + timedelta(days=Proposal._efn_order_day_offset())
         z = Proposal._efn_z()

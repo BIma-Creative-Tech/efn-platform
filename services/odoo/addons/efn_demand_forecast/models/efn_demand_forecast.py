@@ -274,8 +274,10 @@ class EfnDemandForecast(models.Model):
         """Cron mingguan: usulan baru untuk semua orderpoint gudang yang ditandai ikut forecast.
 
         G44 (L-148): gudang dengan ``efn_forecast_engine = v2`` dilewati (min/max datang dari forecast-worker)."""
-        for warehouse in self.env["stock.warehouse"].sudo().search(
-            [("efn_forecast_enabled", "=", True), ("efn_forecast_engine", "!=", "v2")]
+        for warehouse in (
+            self.env["stock.warehouse"]
+            .sudo()
+            .search([("efn_forecast_enabled", "=", True), ("efn_forecast_engine", "!=", "v2")])
         ):
             self.sudo().with_company(warehouse.company_id)._efn_generate(warehouse)
 

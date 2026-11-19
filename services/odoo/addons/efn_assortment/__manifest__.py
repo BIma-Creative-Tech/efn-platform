@@ -1,6 +1,7 @@
 {
     "name": "EFN Assortment Outlet (restriksi DC -> outlet)",
-    "summary": "G44 (ADR-045 Proposed, docs/04 §28.5, fit-gap G45 S-11/S-16): capability outlet (chiller, freezer, izin "
+    "summary": "G44 (ADR-045 Proposed, docs/04 §28.5, fit-gap G45 S-11/S-16): "
+    "capability outlet (chiller, freezer, izin "
     "alkohol, boleh non-halal), kebijakan open/closed per gudang, baris izin/larangan per produk/kategori + mode pasok "
     "DC/DSD + kapasitas rak, kontrak region supplier, cakupan outlet kepala toko. Ditegakkan saat konfirmasi transfer "
     "DC -> outlet dan di usulan efn_replenishment; override teraudit (tidak untuk alkohol/halal); laporan harian.",

@@ -68,8 +68,12 @@ class EfnAssortmentCapability(models.Model):
         for rec in self:
             if not CODE_RE.match(rec.code or ""):
                 raise ValidationError(_("efn_assortment:capability_code — huruf kecil, angka, garis bawah (2-32)."))
-            dup = self.sudo().with_context(active_test=False).search_count(
-                [("id", "!=", rec.id), ("code", "=", rec.code), ("company_id", "in", (False, rec.company_id.id))]
+            dup = (
+                self.sudo()
+                .with_context(active_test=False)
+                .search_count(
+                    [("id", "!=", rec.id), ("code", "=", rec.code), ("company_id", "in", (False, rec.company_id.id))]
+                )
             )
             if dup:
                 raise ValidationError(_("efn_assortment:capability_dup — kode capability %s sudah ada.", rec.code))
@@ -91,15 +95,25 @@ class EfnAssortmentLine(models.Model):
     )
     dsd_partner_id = fields.Many2one("res.partner", string="Supplier DSD", check_company=True)
     shelf_capacity_qty = fields.Float(
-        string="Kapasitas rak (UoM produk)", digits="Product Unit", help="0 = tidak dibatasi (dibaca efn_replenishment)."
+        string="Kapasitas rak (UoM produk)",
+        digits="Product Unit",
+        help="0 = tidak dibatasi (dibaca efn_replenishment).",
     )
     date_from = fields.Date()
     date_to = fields.Date()
     active = fields.Boolean(default=True)
     note = fields.Char()
 
-    @api.constrains("product_tmpl_id", "categ_id", "supply_mode", "dsd_partner_id", "date_from", "date_to",
-                    "shelf_capacity_qty", "mode")
+    @api.constrains(
+        "product_tmpl_id",
+        "categ_id",
+        "supply_mode",
+        "dsd_partner_id",
+        "date_from",
+        "date_to",
+        "shelf_capacity_qty",
+        "mode",
+    )
     def _check_efn_line(self):
         for rec in self:
             if bool(rec.product_tmpl_id) == bool(rec.categ_id):
@@ -184,8 +198,10 @@ class EfnAssortmentLine(models.Model):
         """Lolos bila tidak ada supplier berkontrak region, atau ada supplier tanpa kontrak region, atau region outlet
         (``warehouse.partner_id.efn_region_id``) tercakup salah satu kontrak."""
         sellers = product.seller_ids.filtered(
-            lambda s: (not s.company_id or s.company_id == warehouse.company_id)
-            and (not s.product_id or s.product_id == product)
+            lambda s: (
+                (not s.company_id or s.company_id == warehouse.company_id)
+                and (not s.product_id or s.product_id == product)
+            )
         )
         if not sellers or not sellers.filtered("efn_region_ids"):
             return True
@@ -275,16 +291,29 @@ class EfnAssortmentViolation(models.Model):
         since = fields.Datetime.subtract(fields.Datetime.now(), days=1)
         for override in self.env["efn.assortment.override"].sudo().search([("create_date", ">=", since)]):
             created |= self.sudo()._efn_record(
-                override.company_id, today, override.warehouse_id, override.product_id, override.reason_code,
-                "override", 0.0, override,
+                override.company_id,
+                today,
+                override.warehouse_id,
+                override.product_id,
+                override.reason_code,
+                "override",
+                0.0,
+                override,
             )
         self.sudo()._efn_notify(created, today)
         return len(created)
 
     def _efn_scan_outlet(self, outlet, today):
-        quants = self.env["stock.quant"].sudo().search(
-            [("location_id", "child_of", outlet.view_location_id.id), ("location_id.usage", "=", "internal"),
-             ("quantity", ">", 0)]
+        quants = (
+            self.env["stock.quant"]
+            .sudo()
+            .search(
+                [
+                    ("location_id", "child_of", outlet.view_location_id.id),
+                    ("location_id.usage", "=", "internal"),
+                    ("quantity", ">", 0),
+                ]
+            )
         )
         qty_by_product = {}
         for quant in quants:
@@ -300,8 +329,14 @@ class EfnAssortmentViolation(models.Model):
 
     def _efn_record(self, company, day, warehouse, product, reason, source, qty, override=None):
         existing = self.search(
-            [("company_id", "=", company.id), ("date", "=", day), ("warehouse_id", "=", warehouse.id),
-             ("product_id", "=", product.id), ("source", "=", source), ("reason_code", "=", reason)],
+            [
+                ("company_id", "=", company.id),
+                ("date", "=", day),
+                ("warehouse_id", "=", warehouse.id),
+                ("product_id", "=", product.id),
+                ("source", "=", source),
+                ("reason_code", "=", reason),
+            ],
             limit=1,
         )
         if existing:

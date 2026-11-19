@@ -146,7 +146,9 @@ class EfnDeliverySchedule(models.Model):
     warehouse_id = fields.Many2one("stock.warehouse", string="Outlet", required=True, check_company=True)
     supply_warehouse_id = fields.Many2one("stock.warehouse", string="DC", required=True, check_company=True)
     product_group = fields.Many2one("product.category", string="Kelompok produk", help="Kosong = semua kategori.")
-    lead_days = fields.Integer(string="Lead time (hari)", default=1, help="Hari order (cut-off) = tanggal kirim − lead.")
+    lead_days = fields.Integer(
+        string="Lead time (hari)", default=1, help="Hari order (cut-off) = tanggal kirim − lead."
+    )
     review_days = fields.Integer(default=0, help="Tambahan hari cakupan setelah kiriman berikutnya.")
     active = fields.Boolean(default=True)
 
@@ -225,10 +227,12 @@ class EfnReplenishmentProposal(models.Model):
 
     name = fields.Char(compute="_compute_name", store=True)
     company_id = fields.Many2one("res.company", required=True, index=True, readonly=True)
-    warehouse_id = fields.Many2one("stock.warehouse", string="Outlet", required=True, readonly=True,
-                                   check_company=True, index=True)
-    supply_warehouse_id = fields.Many2one("stock.warehouse", string="DC", required=True, readonly=True,
-                                          check_company=True)
+    warehouse_id = fields.Many2one(
+        "stock.warehouse", string="Outlet", required=True, readonly=True, check_company=True, index=True
+    )
+    supply_warehouse_id = fields.Many2one(
+        "stock.warehouse", string="DC", required=True, readonly=True, check_company=True
+    )
     schedule_id = fields.Many2one("efn.delivery.schedule", required=True, readonly=True, ondelete="restrict")
     delivery_date = fields.Date(required=True, readonly=True, index=True)
     cutoff_at = fields.Datetime(string="Cut-off (UTC)", required=True, readonly=True, index=True)
@@ -347,13 +351,17 @@ class EfnReplenishmentProposal(models.Model):
             orderpoints |= op
         if orderpoints:
             orderpoints.action_replenish()
-        moves = self.env["stock.move"].sudo().search(
-            [
-                ("id", ">", last_move),
-                ("product_id", "in", lines.product_id.ids),
-                ("location_id.warehouse_id", "=", dc.id),
-            ],
-            order="id",
+        moves = (
+            self.env["stock.move"]
+            .sudo()
+            .search(
+                [
+                    ("id", ">", last_move),
+                    ("product_id", "in", lines.product_id.ids),
+                    ("location_id.warehouse_id", "=", dc.id),
+                ],
+                order="id",
+            )
         )
         return moves.picking_id[:1]
 
@@ -444,9 +452,7 @@ class EfnReplenishmentProposal(models.Model):
         if not delivery_date:
             return self.browse()
         Proposal = self.sudo()
-        proposal = Proposal.search(
-            [("schedule_id", "=", schedule.id), ("delivery_date", "=", delivery_date)], limit=1
-        )
+        proposal = Proposal.search([("schedule_id", "=", schedule.id), ("delivery_date", "=", delivery_date)], limit=1)
         if proposal and proposal.state not in ("draft", "proposed"):
             return self.browse()
         vals = {
@@ -548,14 +554,18 @@ class EfnReplenishmentProposal(models.Model):
         tmpl = product.product_tmpl_id
         if "use_expiration_date" not in tmpl._fields or not tmpl.use_expiration_date:
             return None
-        quants = self.env["stock.quant"].sudo().search(
-            [
-                ("product_id", "=", product.id),
-                ("location_id", "child_of", supply_warehouse.view_location_id.id),
-                ("location_id.usage", "=", "internal"),
-                ("quantity", ">", 0),
-                ("lot_id.expiration_date", "!=", False),
-            ]
+        quants = (
+            self.env["stock.quant"]
+            .sudo()
+            .search(
+                [
+                    ("product_id", "=", product.id),
+                    ("location_id", "child_of", supply_warehouse.view_location_id.id),
+                    ("location_id.usage", "=", "internal"),
+                    ("quantity", ">", 0),
+                    ("lot_id.expiration_date", "!=", False),
+                ]
+            )
         )
         if quants:
             nearest = min(quants.mapped("lot_id.expiration_date"))
@@ -573,13 +583,17 @@ class EfnReplenishmentProposal(models.Model):
     def _efn_pack_qty(self, product, warehouse):
         """Kelipatan pack (UoM produk) dari ``replenishment_uom_id`` orderpoint gudang (fit-gap: ``qty_multiple``
         tidak ada di 19.0). Tanpa itu: 1 untuk satuan Unit, rounding UoM untuk lainnya."""
-        op = self.env["stock.warehouse.orderpoint"].sudo().search(
-            [
-                ("product_id", "=", product.id),
-                ("location_id", "=", warehouse.lot_stock_id.id),
-                ("company_id", "=", warehouse.company_id.id),
-            ],
-            limit=1,
+        op = (
+            self.env["stock.warehouse.orderpoint"]
+            .sudo()
+            .search(
+                [
+                    ("product_id", "=", product.id),
+                    ("location_id", "=", warehouse.lot_stock_id.id),
+                    ("company_id", "=", warehouse.company_id.id),
+                ],
+                limit=1,
+            )
         )
         uom = op.replenishment_uom_id if op else self.env["uom.uom"]
         if uom and uom != product.uom_id:
@@ -683,8 +697,7 @@ class EfnReplenishmentProposalLine(models.Model):
         self.ensure_one()
         try:
             factor = float(
-                self.env["ir.config_parameter"].sudo().get_param(MAX_APPROVE_FACTOR_PARAM)
-                or DEFAULT_MAX_APPROVE_FACTOR
+                self.env["ir.config_parameter"].sudo().get_param(MAX_APPROVE_FACTOR_PARAM) or DEFAULT_MAX_APPROVE_FACTOR
             )
         except (TypeError, ValueError):
             factor = DEFAULT_MAX_APPROVE_FACTOR

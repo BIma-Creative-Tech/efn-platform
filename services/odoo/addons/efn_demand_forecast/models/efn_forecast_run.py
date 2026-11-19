@@ -48,9 +48,7 @@ class EfnForecastRun(models.Model):
     is_active = fields.Boolean(string="Run aktif", readonly=True, index=True)
     opened_at = fields.Datetime(readonly=True, default=fields.Datetime.now)
     closed_at = fields.Datetime(readonly=True)
-    fail_reason = fields.Selection(
-        [("worker", "Dilaporkan worker"), ("stale", "Tidak ditutup > 6 jam")], readonly=True
-    )
+    fail_reason = fields.Selection([("worker", "Dilaporkan worker"), ("stale", "Tidak ditutup > 6 jam")], readonly=True)
     metric_series = fields.Integer(readonly=True)
     metric_duration_s = fields.Float(readonly=True)
     metric_wape_backtest = fields.Float(readonly=True, digits=(6, 4))
