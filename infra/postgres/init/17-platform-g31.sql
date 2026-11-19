@@ -25,7 +25,7 @@ SET LOCAL ROLE efn_platform_owner;   -- SEC-39: objek dimiliki role NOLOGIN
 -- ───────────── 1. Kebijakan MGM per PT ─────────────
 CREATE TABLE IF NOT EXISTS platform.mgm_policy (
   id               bigserial   PRIMARY KEY,
-  company_code     text        NOT NULL CHECK (company_code IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM')),
+  company_code     text        NOT NULL CHECK (company_code IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'IMD', 'CUP', 'FARM')),
   version          integer     NOT NULL CHECK (version >= 1),
   effective_from   timestamptz NOT NULL,
   approved_by_uid  integer     NOT NULL CHECK (approved_by_uid >= 1),
@@ -67,7 +67,7 @@ CREATE INDEX IF NOT EXISTS ix_mgm_member_referrer ON platform.mgm_member (referr
 CREATE TABLE IF NOT EXISTS platform.mgm_source (
   source_kind    text        NOT NULL CHECK (source_kind IN ('pos', 'online')),
   source_ref     text        NOT NULL CHECK (length(source_ref) BETWEEN 1 AND 64),
-  company_code   text        NOT NULL CHECK (company_code IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM')),
+  company_code   text        NOT NULL CHECK (company_code IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'IMD', 'CUP', 'FARM')),
   buyer_hash     char(64)    NOT NULL CHECK (buyer_hash ~ '^[0-9a-f]{64}$'),
   basis_idr      bigint      NOT NULL CHECK (basis_idr >= 0),
   occurred_at    timestamptz NOT NULL,
@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS platform.mgm_reward (
   source_ref       text        NOT NULL,
   level            smallint    NOT NULL CHECK (level BETWEEN 1 AND 5),
   referrer_hash    char(64)    NOT NULL CHECK (referrer_hash ~ '^[0-9a-f]{64}$'),
-  company_code     text        NOT NULL CHECK (company_code IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM')),
+  company_code     text        NOT NULL CHECK (company_code IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'IMD', 'CUP', 'FARM')),
   points           integer     NOT NULL CHECK (points > 0),
   reversed_points  integer     NOT NULL DEFAULT 0 CHECK (reversed_points >= 0),
   settled_points   integer     NOT NULL DEFAULT 0 CHECK (settled_points >= 0),

@@ -7,7 +7,8 @@
     # 19.0.2.0.0 (G44, docs/04 §28.2-§28.3, ADR-046, L-145..L-148): efn.forecast.calendar, efn.forecast.run (run v2;
     # wizard lama -> efn.forecast.run.wizard), efn.forecast.chunk, efn.forecast.daily, efn.demand.forecast.line,
     # group_forecast_bot, musim payday (7+7 parameter) & holiday, stock.warehouse.efn_forecast_engine.
-    # Catatan merge: G43 menaikkan ke 19.0.1.1.0 (hook _efn_legacy_outflow) — signature publik v1 tidak diubah di sini.
+    # 19.0.1.1.0 (G43, ADR-042 §3.2, L-136): hook `_efn_legacy_outflow` (default tanpa histori legacy = perilaku
+    # lama), di-override efn_legacy_history untuk hari sebelum cutover ESB -> Odoo; tetap ada di 19.0.2.x.
     # 19.0.2.1.0 (G44 perbaikan): SEC-211 plafon nilai worker (efn_forecast.max_qty_per_line), SEC-212 guard tulis
     # state/source/approved_* efn.demand.forecast, run v2 ber-chatter/aktivitas.
     "version": "19.0.2.1.0",

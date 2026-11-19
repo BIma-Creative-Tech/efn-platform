@@ -66,8 +66,11 @@ teraudit `efn_audit`), *Hitung Forecast* (wizard v1, model kini `efn.forecast.ru
   `efn.demand.forecast` (`source=v2`).
 - Kontrak menulis "400" untuk galat validasi; Odoo json2 memetakan `UserError` ke 422.
 
+**G43 (19.0.1.1.0, ADR-042 §3.2, docs/04 §27.8):** hook `_efn_legacy_outflow(warehouse, product, date_from, date_to)`
+→ `(batas, {tanggal: qty})`, default `(None, {})` = perilaku lama persis. Bila `batas` terisi, hari `< batas` diambil
+dari histori legacy dan hari `≥ batas` dari `stock.move`. Override ada di `efn_legacy_history` (cutover ESB → Odoo per
+PT); modul ini tidak bergantung padanya. Hook tetap berlaku di 19.0.2.x untuk engine v1.
+
 ## Belum
 Akurasi v2 belum bisa dibuktikan sebelum ada histori nyata (R-T21, Q-SM27). Akhir pekan untuk v2 diambil worker dari
 kalender/`dim_calendar` (tidak ada parameter weekend di Odoo; v1 memakai musim `weekday`).
-Catatan merge G43: branch G43 menambah hook `_efn_legacy_outflow` (19.0.1.1.0); signature publik v1 tidak diubah di
-sini — rekonsiliasi versi/migrasi saat rebase.

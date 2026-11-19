@@ -38,6 +38,7 @@ updates:
       - /services/etl
       - /services/text2sql
       - /services/esb-extract
+      - /scripts/migration          # G43 esb-migrate
       - /infra/backup/postgres
       - /infra/minio
       - /infra/metabase
@@ -111,6 +112,7 @@ updates:
       - /services/etl
       - /services/text2sql
       - /services/esb-extract
+      - /scripts/migration          # G43 esb-migrate (cryptography, clickhouse-connect)
       - /services/odoo
     schedule: { interval: weekly, day: monday, time: "03:30", timezone: Asia/Jakarta }
     open-pull-requests-limit: 2

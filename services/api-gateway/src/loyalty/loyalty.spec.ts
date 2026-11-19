@@ -1,7 +1,7 @@
 import { AmqpService, PermanentMessageError } from '../common/amqp/amqp.service';
+import { MetricsService } from '../common/metrics/metrics.service';
 import { PII_AAD } from '../common/pii/crypto';
 import { memberHash } from '../common/pii/pii';
-import { MetricsService } from '../common/metrics/metrics.service';
 import { FakeClock, FakeDb, testCipher, testConfig } from '../common/testing/fakes';
 import { LOYALTY_EARN_CONSUMER, LoyaltyEarnConsumer } from './loyalty-earn.consumer';
 import { COMPANY_CODES, LoyaltyService, isCompanyCode } from './loyalty.service';
@@ -136,13 +136,13 @@ describe('LoyaltyEarnConsumer v2 (idempotency)', () => {
     expect([...ctx.ledger.values()][0].company).toBe('PB');
   });
 
-  it('G20 §12.1 + G24 §16.1 + G44: COMPANY_CODES = EFN/GL/PB/BCR/BCF/WTZ/FARM/SMD; kode lama RTL/FNB ditolak', () => {
-    expect(COMPANY_CODES).toEqual(['EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM', 'SMD']);
-    for (const c of ['GL', 'PB', 'BCR', 'BCF', 'WTZ', 'SMD']) expect(isCompanyCode(c)).toBe(true);
-    for (const c of ['RTL', 'FNB', 'gl', 'wtz', 'WETZELS', 'smd', 'SMDX', 'SM', '']) expect(isCompanyCode(c)).toBe(false);
+  it('G20 §12.1 + G24 §16.1 + G43 + G44: COMPANY_CODES = EFN/GL/PB/BCR/BCF/WTZ/IMD/CUP/FARM/SMD; kode lama RTL/FNB ditolak', () => {
+    expect(COMPANY_CODES).toEqual(['EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'IMD', 'CUP', 'FARM', 'SMD']);
+    for (const c of ['GL', 'PB', 'BCR', 'BCF', 'WTZ', 'IMD', 'CUP', 'SMD']) expect(isCompanyCode(c)).toBe(true);
+    for (const c of ['RTL', 'FNB', 'gl', 'wtz', 'WETZELS', 'imd', 'cup', 'IMDN', 'CURRY', 'smd', 'SMDX', 'SM', '']) expect(isCompanyCode(c)).toBe(false);
   });
 
-  it('G44 §12.1: seri metrik efn_loyalty_expired_points_total{issuer} = persis COMPANY_CODES (termasuk SMD)', async () => {
+  it('G43 + G44: seri metrik efn_loyalty_expired_points_total{issuer} = persis COMPANY_CODES (termasuk IMD/CUP/SMD)', async () => {
     const metrics = new MetricsService();
     metrics.initLoyaltyExpirySeries();
     const text = await metrics.render();
@@ -150,10 +150,12 @@ describe('LoyaltyEarnConsumer v2 (idempotency)', () => {
     expect(issuers.sort()).toEqual([...COMPANY_CODES].sort());
   });
 
-  it('G44 §12.1: payload earn dengan company_code SMD diterima (validasi kode PT; tanpa mengaktifkan fitur)', async () => {
-    const ctx = setup();
-    await ctx.consumer.handle(message(ctx.hash, { company_code: 'SMD' }), OCR);
-    expect([...ctx.ledger.values()][0].company).toBe('SMD');
+  it('G43 + G44: payload earn dengan company_code IMD/CUP/SMD diterima (dasar ledger PT baru; SMD tanpa mengaktifkan fitur)', async () => {
+    for (const code of ['IMD', 'CUP', 'SMD'] as const) {
+      const ctx = setup();
+      await ctx.consumer.handle(message(ctx.hash, { company_code: code }), OCR);
+      expect([...ctx.ledger.values()][0].company).toBe(code);
+    }
   });
 });
 

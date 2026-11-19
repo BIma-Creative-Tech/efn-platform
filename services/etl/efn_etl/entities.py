@@ -11,12 +11,13 @@ from typing import Final
 
 # Kode `res.company.efn_brand_code` (= `company_code` ledger BFF).
 # G24 (docs/04 §16.1, L-91): + WTZ (PT Wetzel's Pretzels, fnb).
+# G43 (ADR-040/042): + IMD (PT Im Donut), CUP (PT Curry Up), keduanya fnb; data PT placeholder (Q-ESB5).
 # G44 (docs/04 §12.1 revisi 18 Nov 2026, §28 L-144, ADR-045 Proposed): + SMD (PT Supermarket Demo, placeholder retail;
-# nama legal/kode final = fit-gap Q-SM1). Kode IMD/CUP (G43) belum ada di branch ini -> rekonsiliasi saat merge.
-COMPANY_CODES: Final = frozenset({"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "FARM", "SMD"})
+# nama legal/kode final = fit-gap Q-SM1).
+COMPANY_CODES: Final = frozenset({"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "IMD", "CUP", "FARM", "SMD"})
 HOLDING_CODE: Final = "EFN"
 
-# docs/04 §12.1/§16.1: GL,BCR,SMD -> retail; PB,BCF,WTZ -> fnb; EFN -> holding; FARM -> farm.
+# docs/04 §12.1/§16.1: GL,BCR,SMD -> retail; PB,BCF,WTZ,IMD,CUP -> fnb; EFN -> holding; FARM -> farm.
 BUSINESS_TYPES: Final[dict[str, str]] = {
     "EFN": "holding",
     "GL": "retail",
@@ -24,6 +25,8 @@ BUSINESS_TYPES: Final[dict[str, str]] = {
     "BCR": "retail",
     "BCF": "fnb",
     "WTZ": "fnb",
+    "IMD": "fnb",
+    "CUP": "fnb",
     "FARM": "farm",
     "SMD": "retail",
 }

@@ -4,6 +4,8 @@ from odoo.exceptions import ValidationError
 from odoo.tests import TransactionCase, tagged
 from odoo.tools import mute_logger
 
+from odoo.addons.efn_core.models.res_company import EFN_BRAND_BUSINESS_TYPE
+
 
 @tagged("post_install", "-at_install", "efn")
 class TestEfnResCompany(TransactionCase):
@@ -19,8 +21,8 @@ class TestEfnResCompany(TransactionCase):
             Company.create({"name": "EFN Farm Uji B", "efn_brand_code": "FARM"})
 
     def test_business_type_derived_from_brand_code(self):
-        # G20 (docs/04 §12.1) + G24 (§16.1) + G44 (§12.1 rev. 18 Nov, SMD): GL,BCR,SMD -> retail;
-        # PB,BCF,WTZ -> fnb; EFN -> holding; FARM -> farm.
+        # G20 (docs/04 §12.1) + G24 (§16.1) + G43 + G44: GL,BCR,SMD -> retail; PB,BCF,WTZ,IMD,CUP -> fnb;
+        # EFN -> holding; FARM -> farm.
         Company = self.env["res.company"]
         expected = {
             "EFN": "holding",
@@ -29,6 +31,8 @@ class TestEfnResCompany(TransactionCase):
             "BCR": "retail",
             "BCF": "fnb",
             "WTZ": "fnb",
+            "IMD": "fnb",
+            "CUP": "fnb",
             "SMD": "retail",
             "FARM": "farm",
         }
@@ -43,11 +47,30 @@ class TestEfnResCompany(TransactionCase):
         self.assertFalse(company.efn_business_type)
 
     def test_selection_matches_contract_codes(self):
-        """W-32/E-43 + G24 + G44: Selection = 8 kode kontrak §12.1/§16.1 (+ SMD, §12.1 rev. 18 Nov 2026);
-        kode lama RTL/FNB tidak lagi diterima."""
+        """W-32/E-43 + G24 + G43 + G44: Selection = 10 kode (§12.1/§16.1 + IMD/CUP + SMD).
+
+        Kode lama RTL/FNB tidak lagi diterima.
+        """
         field = self.env["res.company"]._fields["efn_brand_code"]
         codes = [value for value, _label in field.selection]
-        self.assertEqual(codes, ["EFN", "GL", "PB", "BCR", "BCF", "WTZ", "SMD", "FARM"])
+        self.assertEqual(codes, ["EFN", "GL", "PB", "BCR", "BCF", "WTZ", "IMD", "CUP", "SMD", "FARM"])
+        self.assertEqual(len(codes), len(set(codes)))
+        # Setiap kode punya jenis usaha (compute tidak boleh jatuh ke False untuk kode yang sah).
+        self.assertEqual(set(codes), set(EFN_BRAND_BUSINESS_TYPE))
+
+    def test_g43_codes_unique(self):
+        """G43: IMD/CUP tunduk pada UNIQUE(efn_brand_code) seperti kode lain."""
+        Company = self.env["res.company"]
+        for code in ("IMD", "CUP"):
+            with self.subTest(code=code):
+                Company.with_context(active_test=False).search([("efn_brand_code", "=", code)]).write(
+                    {"efn_brand_code": False}
+                )
+                Company.flush_model(["efn_brand_code"])
+                first = Company.create({"name": f"EFN Uji {code} A", "efn_brand_code": code})
+                self.assertEqual(first.efn_business_type, "fnb")
+                with mute_logger("odoo.sql_db"), self.assertRaises(IntegrityError):
+                    Company.create({"name": f"EFN Uji {code} B", "efn_brand_code": code})
         for old in ("RTL", "FNB"):
             with self.subTest(old=old), self.assertRaises(ValueError):
                 self.env["res.company"].create({"name": f"EFN Kode Lama {old}", "efn_brand_code": old})

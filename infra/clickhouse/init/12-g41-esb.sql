@@ -150,20 +150,8 @@ CREATE TABLE IF NOT EXISTS efn_dwh.dim_esb_supplier
 ENGINE = ReplacingMergeTree(_version)
 ORDER BY (brand, supplier_code);
 
--- Kosong di G41; diisi G43 (migrasi Odoo).
-CREATE TABLE IF NOT EXISTS efn_dwh.map_esb_odoo
-(
-    brand         LowCardinality(String),
-    company_code  LowCardinality(String),
-    entity        LowCardinality(String),
-    esb_key       String,
-    odoo_xmlid    String,
-    odoo_id       UInt64,
-    _version      DateTime64(3, 'UTC'),
-    _loaded_at    DateTime64(3, 'UTC') DEFAULT now64(3)
-)
-ENGINE = ReplacingMergeTree(_version)
-ORDER BY (brand, entity, esb_key);
+-- efn_dwh.map_esb_odoo: dipindah ke 14-g43-migration.sql (kunci baru dengan company_code, docs/04 §27.10). Tabel
+-- versi G41 (kosong) dihapus clickhouse-init.sh sebelum init/*.sql; berisi -> init gagal (tindakan manual).
 
 -- ============================================================== efn_dwh fakta
 -- `brand` ikut kunci setelah company_code: branch_id hanya unik dalam satu akun ESB (brand).

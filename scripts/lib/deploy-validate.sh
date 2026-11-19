@@ -99,9 +99,9 @@ EFN_ONLINE_BASE_CHANNEL=GL
 # G44 (docs/04 §12.1 revisi 18 Nov 2026, §28, L-144): + SMD (PT Supermarket Demo, placeholder; nama/kode final Q-SM1).
 # SMD TIDAK punya kanal online/QR/reservasi/promo (tidak masuk daftar turunan di atas). Setiap daftar PT turunan
 # (EFN_ONLINE_CHANNEL_CODES, EFN_FNB_QR_COMPANY_CODES, EFN_BOOKING_COMPANY_CODES, EFN_PROMO_COMPANY_CODES) WAJIB
-# subset daftar ini (efn_validate_company_lists). Catatan merge G43: daftar menjadi
-# (EFN GL PB BCR BCF WTZ IMD CUP FARM SMD) bersamaan dengan CHECK PostgreSQL.
-EFN_COMPANY_CODES=(EFN GL PB BCR BCF WTZ FARM SMD)
+# subset daftar ini (efn_validate_company_lists). G43 (19 Nov 2026, merge): + IMD, CUP (fnb,
+# placeholder Q-ESB5), sama dengan CHECK PostgreSQL 18-platform-g43.sql + 19-platform-g44.sql.
+EFN_COMPANY_CODES=(EFN GL PB BCR BCF WTZ IMD CUP FARM SMD)
 # Profil compose yang dikenal; production wajib memuat core,data,observability (alert/Loki/salinan audit)
 EFN_KNOWN_PROFILES=(core data ai observability ops)
 EFN_REQUIRED_PROD_PROFILES=(core data observability)

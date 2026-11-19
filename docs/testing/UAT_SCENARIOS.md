@@ -1086,3 +1086,124 @@ Status: **Draft** (efn-qa-engineer, 18 Nov 2026; belum dijalankan, tidak ada run
 - **Given** `SMD01` engine **v1** (default), `SMD02` engine **v2**; run `weekly_minmax` selesai
 - **When** planner membuka *Forecast EFN → Usulan Min/Max*
 - **Then** usulan `SMD02` berstatus **Draft** (bisa diterapkan; menggantikan draft lama), usulan `SMD01` berstatus **Shadow** (pembanding; tombol terapkan ditolak); baris dengan `max < min` atau `service_level` di luar [0,5; 1) ditolak per baris
+## M. Gelombang 43 — Migrasi ESB → Odoo, dry-run Paris Baguette (PB) (docs/04 §27, ADR-042 *Accepted*, L-127..L-143)
+
+Status: **Draft** (efn-qa-engineer, 18 Nov 2026). Untuk **Finance** dan **Ops/PIC brand PB**, ditemani operator migrasi. Dijalankan di **staging** (salinan data production) atau dev lokal; **bukan run nyata**. Aturan program: minimal **2 dry-run lengkap** per brand sebelum run nyata (L-133) — skenario M1–M13 diulang untuk dry-run kedua, dengan M10 (idempotensi) sebagai penentu. Skrip belum pernah dijalankan end-to-end terhadap ClickHouse/Odoo nyata (runbook `docs/runbooks/migrasi-esb-odoo.md`): setiap penyimpangan dicatat sebagai temuan, bukan dianggap salah penguji.
+
+**Data uji M**
+- Company `PB`; cabang ESB PB: ≥ 1 CK (`type=ck`), ≥ 3 toko (`store`), ≥ 1 `location` (mis. Gudang Kering di bawah CK), 1 cabang `skip`, 1 cabang **nonaktif**. `branch_map.csv` dan `uom_map.csv` sudah disetujui Ops + Finance (contoh sintetis: `docs/templates/migrasi/esb/`).
+- Master ESB: ≥ 20 produk (bahan + FIN dengan rasio BATCH), ≥ 20 menu (termasuk 1 menu takeaway `… T`, 1 menu arsip yang hanya ada di histori, 1 menu tanpa harga), BoM `normal` (CK) dan `phantom` (resep menu), ≥ 1 customer B2B.
+- Rentang uji: `--cutover-date` rencana (mis. `2026-12-01`), `--months` 2 bulan tertutup (mis. `2026-09,2026-10`); parameter `efn_mig_esb.sales_line_months` = nilai production untuk PB (staging) atau 1 (dev).
+- Pengguna Odoo: **Ratna** (Finance PB, anggota company `PB`, grup *Inventaris/Point of Sale manager*), **Joko** (Ops PB, grup *Inventaris: pengguna*, company `PB`, **tanpa** grup POS manager), **Bela** (company `BCF` saja, grup POS manager), operator migrasi (user teknis `efn_migration`, anggota company `PB`, diaktifkan hanya selama jendela).
+- **Tidak** boleh ada: data pribadi (nama/telepon/alamat orang) di berita acara, tiket, atau chat; bundel `.efnmig`/hasil di luar `MIG_EXCHANGE_DIR`.
+
+### M1. Master: gudang, lokasi, kasir (POS) sesuai peta cabang
+- **Given** ekspor master PB tervalidasi (`validation_<run>.json`: `errors = 0`) dan impor **dry-run** serta impor nyata di DB dev/staging sudah dijalankan
+- **When** Joko membuka *Inventaris › Konfigurasi › Gudang* dan Ratna membuka *Point of Sale › Konfigurasi › Pengaturan POS*
+- **Then** setiap baris `branch_map.csv` bertipe `store`/`ck`/`warehouse` ada sebagai **satu gudang** milik company `PB` dengan kode gudang = `warehouse_code` (1–5 huruf kapital) dan nama = `display_name`; CK bertanda *Central Kitchen* (bila modul `efn_ck_production` terpasang)
+- **And** baris `type=location` ada sebagai **lokasi internal** di bawah stok gudang induk-nya, bukan gudang baru
+- **And** setiap `store` punya **satu** konfigurasi POS tanpa sesi terbuka, **tanpa metode pembayaran** (metode bayar diisi tim POS), dan jenis operasi dari gudangnya; baris `skip` dan cabang nonaktif tidak membuat gudang aktif
+- **And** tidak ada gudang/POS untuk company selain `PB`
+
+### M2. Master: produk dan menu (bahan, FIN, menu POS, takeaway, arsip)
+- **Given** M1 lulus
+- **When** Ratna dan Joko mengambil sampel **20 produk + 20 menu** (acak, termasuk FIN, 1 menu takeaway, 1 menu arsip, 1 menu tanpa harga) lalu membandingkannya dengan layar ESB/laporan master ESB
+- **Then** nama, kategori, satuan (UoM), harga jual (exclude pajak), status aktif/arsip sama dengan ESB; bahan/FIN = produk **storable** milik `PB`, menu = produk **bukan storable**, **tersedia di POS** bila aktif
+- **And** kategori produk berada di bawah kategori induk `PB` yang berada di **tingkat atas** (tidak ada kategori "All" di Odoo 19); kategori POS mengikuti `kategori/detail` menu ESB
+- **And** menu takeaway ` T` **bukan produk baru**: di Odoo hanya ada satu produk menu dasar; menu arsip berstatus **arsip** (tidak muncul di POS) tetapi muncul di filter "Arsip"
+- **And** menu tanpa harga/harga 0 muncul sebagai **peringatan** di laporan validasi (bukan galat) dan Ratna memutuskan harganya
+- **And** kolom **Penanggung jawab** (`responsible_id`) produk/menu **kosong**; tidak ada nama akun teknis `efn_migration` sebagai penanggung jawab
+- **And** pajak, gambar, dan rute **tidak** terisi oleh migrasi (diisi tim fungsional); Finance memeriksa pajak PB1 + SC pada 5 menu sampel sebelum dipakai
+
+### M3. Master: BoM (resep CK dan resep menu)
+- **Given** M2 lulus
+- **When** Joko membuka *Manufaktur › Daftar Bahan (BoM)* untuk 5 sampel (3 produksi CK, 2 resep menu)
+- **Then** BoM produksi CK bertipe **Manufaktur** dengan produk hasil FIN, jumlah hasil = rasio BATCH→EA (mis. 12 EA/batch), komponen & qty sama dengan ESB (satuan komponen dikonversi bila beda satuan produk)
+- **And** resep menu bertipe **Kit/Phantom** per menu (satu BoM per menu bila resep ESB ditautkan ke > 1 menu); komponen sama dengan ESB
+- **And** BoM FIN yang tidak punya rasio BATCH **tidak** dibuat dan tercantum di laporan validasi sebagai galat yang harus dibereskan Ops (bukan dibuat dengan rasio 1)
+- **And** operasi/work center dan ambang yield **kosong** (bukan milik migrasi)
+- **And** HPP komponen (`standard_price`) terisi untuk bahan yang punya `lastHpp` ESB; produk yang **sudah berstok** tidak direvaluasi (muncul sebagai *conflict* "sudah berstok", diputuskan Finance)
+
+### M4. Histori di menu "Histori ESB (arsip)"
+- **Given** histori `--months 2026-09,2026-10` diimpor (dry-run atau nyata) dan `efn_mig_esb.cutover_date.PB` terisi (run nyata)
+- **When** Ratna membuka *Point of Sale › Laporan › Histori ESB (arsip) › Penjualan harian per menu* (atau *Inventaris › Laporan › Histori ESB (arsip) › …*), lalu *Pivot* per Outlet × Bulan; Joko membuka *Aliran produk harian*
+- **Then** judul layar memuat "arsip sistem lama — bukan transaksi Odoo"; tidak ada tombol Buat/Ubah/Hapus; Σ qty, bruto, diskon, neto, HPP, jumlah transaksi per outlet × bulan sama dengan dashboard ESB/Metabase untuk **3 outlet sampel** (selisih dalam pembulatan Rp 0,01)
+- **And** menu takeaway tampil pada produk menu dasar dengan penanda *Takeaway*; baris yang menunya tidak terpetakan tetap ada (kolom produk kosong, kode menu ESB terisi)
+- **And** *Baris penjualan* (bila `sales_line_months` > 0) menampilkan baris per `sales_num` + `line_no` pada tanggal/outlet terpilih; pencarian nomor transaksi **wajib disertai filter tanggal/outlet** (tanpa filter lambat — dicatat, bukan galat)
+- **And** menu *Penjualan harian per menu* dan *Baris penjualan* **tidak tampak** bagi Joko (hanya *Aliran produk harian*), karena ia tidak punya grup *Histori ESB — baca penjualan*
+- **And** tidak ada `pos.order`, `account.move`, atau `stock.move` baru akibat impor (hitungan baris sebelum = sesudah; bukti query dari operator)
+
+### M5. Forecast min/max sejak hari pertama (tanpa cold start)
+- **Given** `efn_mig_esb.cutover_date.PB` terisi (run nyata `cutover-param`) dan histori aliran produk (`flow.daily`) ≥ 8 minggu untuk 1 toko + 1 produk FIN dimuat
+- **When** Joko membuka *Inventaris › Forecast EFN › Hitung Forecast* untuk gudang toko itu lalu *Usulan Min/Max*
+- **Then** usulan terbentuk dengan kolom *Keluar stok (histori)* **> 0** dari histori ESB (hari sebelum cutover) walaupun belum ada `stock.move` di Odoo; *Usulan min/max* wajar (dibandingkan Ops dengan stok pengaman yang biasa dipakai)
+- **And** usulan berstatus *Draf*; min/max orderpoint **belum** berubah sampai planner menekan *Setujui & Terapkan* (4-eyes tetap)
+- **Given** parameter `efn_mig_esb.cutover_date.PB` **dikosongkan** (atau tanggal salah format)
+- **When** forecast dihitung lagi
+- **Then** perilaku lama persis (hanya `stock.move`, histori ESB diabaikan) dan satu peringatan format dicatat di log Odoo — tidak ada galat
+- **And** untuk hari **sesudah** cutover, qty keluar diambil dari `stock.move` Odoo, bukan dari arsip (tidak dihitung dua kali)
+
+### M6. Rekonsiliasi 7 butir — laporan dan keputusan
+- **Given** semua segmen histori + master PB sudah diimpor dan `reconcile … --with-source` dijalankan (`reconcile_<parent_run_id>.md/.csv`)
+- **When** Ratna dan operator membaca laporan
+- **Then** butir **1** (jumlah per entitas): jumlah baris bundel = dibuat+diperbarui+dilewati+konflik di Odoo, **gagal = 0**; konflik (bila ada) dijelaskan satu per satu
+- **And** butir **2–4** (stok, AR/AP, neraca pembukaan) berstatus **"tidak dijalankan"** karena langkah saldo awal default **mati** (menunggu data opname/AR/AP, Q-ESB21) — dicatat di berita acara sebagai *belum dicakup*, **bukan** lulus
+- **And** butir **5a/5b/5c** (aliran produk, penjualan harian, baris penjualan): setiap baris bulan × cabang × produk/menu **selisih 0** (toleransi qty 0,001; uang 0,01); butir **5d**: `wrong_company_rows = 0` dan `foreign_product_rows = 0`
+- **And** butir **6** (sanity net/pembayaran per cabang-bulan) wajar (PB ±89,6 % karena total ESB belum termasuk PB1+SC; di luar 0,80–0,98 = peringatan yang dijelaskan Finance)
+- **And** butir **7** (kualitas data): alias `NAME:` tak terpetakan, baris non-EA, umur data dilaporkan sebagai peringatan dengan pemilik tindak lanjut
+- **And** baris sumber yang tidak terpetakan (cabang/produk) dilaporkan sebagai **info** per segmen (`5_tak_terpetakan`) dan dijelaskan Ops (mis. cabang `skip`)
+
+### M7. Berita acara dry-run
+- **Given** M1–M6 selesai
+- **When** operator menyusun berita acara (template runbook §6) dan Finance + PIC PB meninjau
+- **Then** memuat: brand/company, environment & tanggal-jam (WIB), `git rev-parse HEAD` (= `tool.git_sha` manifest), digest image `esb-migrate`, versi `efn_legacy_history`, `--cutover-date` + rentang histori, `run_id` master + `parent_run_id` histori + jumlah segmen + `manifest_sha256` tiap bundel, hasil impor per entitas, status 7 butir, **ukuran tabel histori** (`pg_total_relation_size` tiga tabel, WAL per segmen, waktu impor) dan dampaknya ke base backup, daftar pengecualian, rencana hapus bundel (≤ 90 hari setelah berita acara) dan tanda tangan PIC brand + Finance + operator + efn-lead
+- **And** laporan lampiran (`validation_*.md`, `reconcile_*.md/.csv`) **tidak** memuat nama orang, telepon, alamat, atau kunci/token; nama pelanggan B2B perorangan (bila ada) tidak tercetak
+
+### M8. [Negatif] Bundel diubah / kunci salah / berkas tertukar
+- **Given** bundel master `.efnmig` valid
+- **When** operator (a) mengubah satu byte bundel, (b) memakai `migration_bundle_key` lain, (c) menukar `validation_<run>.json` dengan milik bundel lain, atau (d) menyalin bundel PB ke impor dengan `--company BCF`
+- **Then** (a)(b): impor ditolak **exit 3** (integritas), tidak ada data tertulis; (c): ditolak **exit 4** gerbang ("laporan validator bukan untuk manifest ini"); (d): ditolak **exit 4** ("company yang bukan target impor")
+- **And** tidak ada gudang/produk/xmlid `efn_mig_esb.*` baru setelah semua percobaan; pesan galat tidak memuat isi data bisnis atau kunci
+
+### M9. [Negatif] Hasil dry-run tidak boleh masuk gudang data; production butuh konfirmasi
+- **Given** impor **dry-run** selesai (`<run_id>.dryrun.result.efnmig`)
+- **When** operator menjalankan `writeback` memakai hasil dry-run (atau hasil tanpa tanda `dry_run=false`)
+- **Then** ditolak **exit 4**; `efn_dwh.map_esb_odoo` tidak berubah
+- **Given** `APP_ENV` container Odoo = `production` (atau kosong / salah ketik)
+- **When** operator menjalankan impor **nyata** tanpa `--confirm-brand pb` (atau dengan brand lain)
+- **Then** ditolak **exit 4** sebelum satu baris pun ditulis; dengan `--confirm-brand pb` yang benar baru berjalan (hanya di jendela yang disetujui)
+
+### M10. Idempotensi — impor ulang dan perubahan pengguna
+- **Given** impor nyata master PB selesai (di dev/staging)
+- **When** bundel yang sama diimpor lagi, lalu bundel baru dari ekspor ulang tanpa perubahan data ESB
+- **Then** laporan: **dibuat = 0, diperbarui = 0, gagal = 0** untuk semua entitas; jumlah gudang/produk/menu/BoM tidak bertambah; histori diimpor ulang per irisan **tidak menggandakan baris** (jumlah baris tabel arsip sama; butir 5 tetap selisih 0)
+- **Given** Ratna mengubah **nama** satu produk hasil migrasi di Odoo
+- **When** impor diulang
+- **Then** produk itu dilaporkan **konflik** (nama **tidak** ditimpa); Ratna memutuskan; tidak ada produk yang dihapus/diarsip otomatis bila hilang di ESB (hanya dilaporkan `missing_in_source`)
+
+### M11. Isolasi antar PT dan hak akses arsip
+- **Given** impor histori PB selesai
+- **When** Bela (company `BCF` saja) membuka *Histori ESB (arsip)* dan mencoba memilih company `PB` lewat filter/URL
+- **Then** tidak ada satu baris PB pun yang tampak (aturan multi-company); data BCF/BCR tidak tercampur dengan PB
+- **When** Joko mencoba membuat/mengubah/menghapus baris arsip lewat layar, impor Excel, atau tindakan massal
+- **Then** ditolak (arsip read-only; hanya skrip migrasi dengan konteks khusus yang boleh menulis)
+- **And** pengguna biasa tanpa grup *Histori ESB — baca penjualan* tidak melihat menu penjualan arsip
+
+### M12. [Negatif] IMD dan CUP — histori & saldo awal ditolak
+- **Given** PT `IMD` (Im Donut) dan `CUP` (Curry Up) sudah ada di Odoo sebagai PT placeholder (nama legal & NPWP belum, Q-ESB5)
+- **When** operator mengekspor histori atau saldo awal untuk brand `imd`/`cup`, atau mengimpor segmen berkode `IMD`/`CUP`
+- **Then** histori ditolak **exit 4** ("histori ditolak untuk company IMD/CUP … EFN_MIG_SALDO_BLOCKED"); langkah saldo awal (`stock`/`opening`) ditolak **exit 2** ("belum dibangun", berlaku untuk semua brand); hanya master (gudang, produk, menu, BoM) yang boleh dimuat sesudah PO menyatakan urutan brand
+- **And** kode `IMD`/`CUP` diterima di pemilih PT Odoo, dashboard Insight, dan panggilan loyalty/poin (tidak ada "company_code tidak valid"); kasir IMD/CUP tidak punya kanal online/QR meja/reservasi
+
+### M13. Parameter jendela baris penjualan dan rekonsiliasi
+- **Given** `efn_mig_esb.sales_line_months` diturunkan dari 24 menjadi 1 (atau 0) oleh Admin, lalu segmen histori yang sama diimpor
+- **When** impor dan rekonsiliasi dijalankan
+- **Then** baris di luar jendela **tidak** dimuat; laporan impor mencatat `rows_skipped_window` (atau `skipped_by_param` bila 0); rekonsiliasi 5c **tidak** menyebutnya selisih pemblokir — baris info `5c_dilewati_param` atau **peringatan** untuk irisan terkait, dan Finance mencatatnya di berita acara
+- **And** baris lama di luar jendela **tidak** terhapus otomatis (runbook: ganti irisan kosong bila ingin dibersihkan)
+- **And** ekspor yang tidak selaras dengan parameter (mis. ekspor 24 bulan, parameter 1) dijelaskan di berita acara sebagai pengaturan sengaja, bukan kehilangan data
+
+### M14. Jendela migrasi ditutup dan bundel dihapus
+- **Given** berita acara brand ditandatangani
+- **When** operator menutup jendela (secret `migration_bundle_key` & `clickhouse_password_mig` → `disabled`, overlay `docker-compose.migration.yml` dilepas) dan menghapus bundel/hasil
+- **Then** `ls /run/secrets` di container Odoo **tidak** memuat `migration_bundle_key`; user ClickHouse `efn_mig` hilang; direktori pertukaran tanpa `*.efnmig`/`*.part`/`*.json`; tanggal hapus dicatat di berita acara dan inventaris PDP (≤ 90 hari)
+- **And** Odoo, POS, dan checkout tetap berjalan normal selama dan sesudah jendela (migrasi bukan jalur transaksi)

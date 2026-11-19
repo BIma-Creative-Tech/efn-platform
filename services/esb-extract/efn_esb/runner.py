@@ -49,8 +49,11 @@ from efn_esb.records import (
     version_now,
 )
 from efn_esb.transform import MART_TABLES, BomRatio
+from efn_esb.transform_mig import MIG_TABLES
 
 log = logging.getLogger("efn_esb.runner")
+# Tabel mart G41 + tabel migrasi G43 (14-g43-migration.sql).
+ALL_TABLES: dict[str, tuple[str, ...]] = {**MART_TABLES, **MIG_TABLES}
 
 # SEC-186: jumlah siklus `auth_failed` berturut-turut sebelum brand ditangguhkan.
 AUTH_SUSPEND_AFTER = 2
@@ -111,7 +114,7 @@ def write_slice(store: Store, brand: str, result: SliceResult, fetched_at: datet
     """Urutan tulis satu slice; checkpoint TERAKHIR (lihat docstring modul)."""
     store.insert_control("raw_doc", RAW_COLUMNS, raw_rows(brand, result.raw, fetched_at))
     for table, rows in result.tables.items():
-        store.insert(table, MART_TABLES[table], rows)
+        store.insert(table, ALL_TABLES[table], rows)
     if result.bom_ratios:
         store.insert_control("bom_ratio", BOM_RATIO_COLUMNS, bom_ratio_rows(brand, result.bom_ratios, result.version))
     store.insert_control(
@@ -408,5 +411,39 @@ def run_backfill(
             run.status = "error"
     except Exception as exc:
         log.error("brand=%s backfill gagal error=%s", rt.cfg.key, type(exc).__name__)
+        run.status = "error"
+    return _finish(run, client, outcome, store, started)
+
+
+def run_snapshot(
+    settings: EsbSettings,
+    rt: BrandRuntime,
+    client: Budgeted,
+    store: Store,
+    entities: Sequence[str],
+    day: date,
+    stop: threading.Event,
+    *,
+    now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
+    on_written: Callable[[SliceResult], None] | None = None,
+) -> RunRecord:
+    """Snapshot entitas migrasi G43 (`extract_mig.SNAPSHOT_ENTITIES`) satu brand: cabang (+ master bila jatuh tempo)
+    lalu satu slice per entitas (scope '*', `day`). Selalu ditarik ulang (bukan resumable): snapshot = keadaan ESB saat
+    perintah dijalankan. Mode `extract_run` = `snapshot`. Anggaran panggilan = `ESB_BACKFILL_MAX_CALLS`."""
+    started = time.monotonic()
+    run = RunRecord(rt.cfg.key, "snapshot", datetime.now(UTC), uuid.uuid4())
+    outcome = Outcome()
+    client.reset_budget(settings.backfill_max_calls)
+    try:
+        today = wib_today(now_fn())
+        checkpoints = store.checkpoints(rt.cfg.key, today)
+        outcome = prepare_brand(rt, store, client.get, today, checkpoints, stop)
+        if outcome.slices and not (outcome.auth or outcome.budget):
+            tasks = [SliceTask(day, entity, BRAND_SCOPE) for entity in entities]
+            outcome.merge(execute(tasks, rt, store, client.get, 1, stop, on_written=on_written))
+        elif not outcome.slices and not (outcome.auth or outcome.budget):
+            run.status = "error"
+    except Exception as exc:
+        log.error("brand=%s snapshot gagal error=%s", rt.cfg.key, type(exc).__name__)
         run.status = "error"
     return _finish(run, client, outcome, store, started)

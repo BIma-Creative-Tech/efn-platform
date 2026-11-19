@@ -146,3 +146,33 @@ class TestWtzServiceTaxes(TestFnbServiceTaxes):
         self.assertEqual((self.company.efn_brand_code, self.company.efn_business_type), ("WTZ", "fnb"))
         self.assertEqual(self.company.chart_template, "id")
         self.assertIn(self.company, self.env.ref("base.user_admin").company_ids)
+
+
+@tagged("post_install", "-at_install", "efn")
+class TestImdServiceTaxes(TestFnbServiceTaxes):
+    """G43: PT Im Donut = PB1 + SC dengan record sendiri (sufiks _imd); tarif placeholder (Q-ESB5, Q-22)."""
+
+    COMPANY = "company_imd"
+    SUFFIX = "imd"
+    OTHER_SUFFIXES = ("fnb", "bcf", "wtz", "cup")
+
+    def test_records_do_not_leak_across_fnb_companies(self):
+        others = self.env["res.company"]
+        for suffix in self.OTHER_SUFFIXES:
+            others |= self.env.ref(f"efn_setup_company.tax_group_pb1_{suffix}").company_id
+        self.assertEqual(len(others), len(self.OTHER_SUFFIXES))
+        for record in (self.pb1, self.sc, self.pb1_dine_in, self.pb1_non_dine_in, self.fp_dine_in, self.fp_non_dine_in):
+            with self.subTest(record=record.display_name):
+                self.assertEqual(record.company_id, self.company)
+                self.assertNotIn(record.company_id, others)
+        for suffix in self.OTHER_SUFFIXES:
+            self.assertNotEqual(self.pb1.tax_group_id, self.env.ref(f"efn_setup_company.tax_group_pb1_{suffix}"))
+
+
+@tagged("post_install", "-at_install", "efn")
+class TestCupServiceTaxes(TestImdServiceTaxes):
+    """G43: PT Curry Up = PB1 + SC dengan record sendiri (sufiks _cup); tarif placeholder (Q-ESB5, Q-22)."""
+
+    COMPANY = "company_cup"
+    SUFFIX = "cup"
+    OTHER_SUFFIXES = ("fnb", "bcf", "wtz", "imd")

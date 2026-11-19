@@ -179,6 +179,15 @@ describe('MGM kebijakan (§20.1)', () => {
     expect(apiErr(() => parseMgmPolicy(body({ params: missing }), 'PB', '1')).getStatus()).toBe(400);
   });
 
+  it('G43: kebijakan MGM PT baru IMD/CUP diterima; kode tak dikenal tetap 400', () => {
+    for (const company of ['IMD', 'CUP']) {
+      expect(parseMgmPolicy(body({ company_code: company }), company, '1').params).toEqual(PARAMS);
+    }
+    for (const company of ['XX', 'imd', 'RTL']) {
+      expect(apiErr(() => parseMgmPolicy(body({ company_code: company }), company, '1')).getStatus()).toBe(400);
+    }
+  });
+
   it('plafon: kedalaman 2..5 wajib, L2 ≤ L1, cap ≥ 1, plafon env', () => {
     const c = testConfig().mgmPolicyCeilings;
     expect(mgmPolicyViolations(PARAMS, c)).toEqual([]);

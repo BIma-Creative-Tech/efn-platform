@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS platform.online_order_part (
   id               uuid PRIMARY KEY,
   order_id         uuid        NOT NULL REFERENCES platform.online_order (id),
   channel_code     text        NOT NULL CHECK (channel_code ~ '^[A-Z][A-Z0-9-]{1,15}$'),
-  company_code     text        NOT NULL CHECK (company_code IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM')),  -- G20 §12.1 + G24 §16.3 WTZ (volume lama: 09, 13)
+  company_code     text        NOT NULL CHECK (company_code IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'IMD', 'CUP', 'FARM')),  -- G20 §12.1 + G24 §16.3 WTZ + G43 IMD/CUP (volume lama: 09, 13, 18)
   outlet_code      text        NOT NULL CHECK (outlet_code ~ '^[A-Z0-9][A-Z0-9-]{1,23}$'),
   fulfilment       text        NOT NULL CHECK (fulfilment IN ('pickup', 'delivery')),
   status           text        NOT NULL CHECK (status IN ('placing', 'placed', 'place_failed', 'paying', 'confirmed', 'stock_short',
@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS platform.payment_intent_portion (
   payment_intent_id  uuid NOT NULL REFERENCES platform.payment_intent (id),
   part_id            uuid NOT NULL REFERENCES platform.online_order_part (id),
   channel_code       text NOT NULL CHECK (channel_code ~ '^[A-Z][A-Z0-9-]{1,15}$'),
-  company_code       text NOT NULL CHECK (company_code IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM')),  -- G20 §12.1 + G24 §16.3 WTZ (volume lama: 09, 13)
+  company_code       text NOT NULL CHECK (company_code IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'IMD', 'CUP', 'FARM')),  -- G20 §12.1 + G24 §16.3 WTZ + G43 IMD/CUP (volume lama: 09, 13, 18)
   amount             numeric(14,2) NOT NULL CHECK (amount > 0 AND amount = trunc(amount)),
   PRIMARY KEY (payment_intent_id, part_id)
 );

@@ -32,7 +32,8 @@ DECLARE
   t text;
   col text;
   cname text;
-  codes constant text := '''EFN'', ''GL'', ''PB'', ''BCR'', ''BCF'', ''WTZ'', ''FARM''';
+  -- G43/ADR-043: + IMD, CUP agar deploy berulang tidak menyempitkan CHECK kembali sebelum 18-platform-g43.sql jalan
+  codes constant text := '''EFN'', ''GL'', ''PB'', ''BCR'', ''BCF'', ''WTZ'', ''IMD'', ''CUP'', ''FARM''';
   cond text;
   stale boolean;
   old record;

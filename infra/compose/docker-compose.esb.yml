@@ -12,8 +12,9 @@
 #                        --profile core --profile data up -d esb-extract
 #
 # Jaringan (least privilege):
-#   - `esb` (internal, baru): HANYA clickhouse <-> esb-extract. esb-extract TIDAK di network `data` (PostgreSQL, RabbitMQ,
-#     MinIO-gateway, Loki): service ini memproses JSON dari internet, jadi bila disusupi tidak bisa menjangkau DB lain.
+#   - `esb` (internal, baru): HANYA clickhouse <-> esb-extract (+ G43 esb-migrate, profil `migrate`, sekali jalan).
+#     esb-extract TIDAK di network `data` (PostgreSQL, RabbitMQ, MinIO-gateway, Loki): service ini memproses JSON dari
+#     internet, jadi bila disusupi tidak bisa menjangkau DB lain. esb-migrate tidak punya egress sama sekali.
 #   - `egress-esb` (SEC-183): jalur keluar internet KHUSUS esb-extract (bukan `egress` bersama BFF/acme-dns/ollama),
 #     subnet sendiri, enable_icc=false. Bila esb-extract disusupi tidak ada jalur L3 ke container lain lewat egress.
 #     Repo TIDAK punya egress proxy/firewall per host (sama dengan 9router G37 dan WhatsApp): allowlist
@@ -81,7 +82,10 @@ services:
       ESB_MAX_RESPONSE_BYTES: ${ESB_MAX_RESPONSE_BYTES:-33554432}
       ESB_INTERVAL_SECONDS: ${ESB_INTERVAL_SECONDS:-3600}
       # Cabang Central Kitchen per brand (brand:id|id;...) dan override PT per cabang (brand:branch=KODE,...).
-      ESB_CK_BRANCHES: ${ESB_CK_BRANCHES:-pb:4|38}
+      # G43: default = default config.py (pb 4|38, wtz 5|6, imd 2, cup 4|6). Override PT Bacha yang sudah diketahui:
+      # ESB_BRANCH_COMPANY_OVERRIDES=bacha:6=BCR (cabang 6 = Bacha Coffee Retail; cabang 10 menunggu Q-ESB10) - diisi
+      # di .env setelah dikonfirmasi klien, BUKAN default di sini (tanpa override semua cabang Bacha = ESB_COMPANY_BACHA).
+      ESB_CK_BRANCHES: ${ESB_CK_BRANCHES:-pb:4|38,wtz:5|6,imd:2,cup:4|6}
       ESB_BRANCH_COMPANY_OVERRIDES: ${ESB_BRANCH_COMPANY_OVERRIDES:-}
       # Parameter lain docs/04 §25.2 (QA G41: sebelumnya tidak diteruskan -> nilai di .env tidak berpengaruh).
       # Default = default config.py; kosong = pakai default kode.
@@ -130,13 +134,100 @@ services:
     labels:
       service: esb-extract
 
+  # G43 (docs/04 §27.2, ADR-042 Accepted 18 Nov 2026): mesin migrasi ESB -> Odoo sisi data (export bundel terenkripsi,
+  # validate, writeback map_esb_odoo, reconcile). Runbook: docs/runbooks/migrasi-esb-odoo.md.
+  #   - Profil `migrate` (bukan `data`): TIDAK pernah ikut `up`; dijalankan eksplisit sekali jalan:
+  #       docker compose -f docker-compose.yml -f docker-compose.<env>.yml -f docker-compose.esb.yml \
+  #         --profile data --profile migrate run --rm esb-migrate python esb_to_odoo.py export --brand pb ...
+  #   - Network HANYA `esb` (internal: tanpa egress, tanpa data/internal): satu-satunya tujuan = clickhouse:8443 (HTTPS,
+  #     CA internal, user efn_mig role mig_rw: SELECT dim/fact/view ESB + INSERT map_esb_odoo, tanpa DDL). Tidak ada
+  #     jalur jaringan ke Odoo (L-129): pertukaran lewat berkas di MIG_EXCHANGE_DIR.
+  #   - Plaintext hanya di tmpfs /work (TMPDIR); bundel di /out selalu AES-256-GCM (kunci migration_bundle_key).
+  #   - uid/gid = user `odoo` di image Odoo (EFN_MIG_UID/EFN_MIG_GID, runbook §2): bundel ditulis 0600 dan importer Odoo
+  #     (docker-compose.migration.yml) harus bisa membacanya; hasil impor (0600 milik odoo) dibaca balik oleh writeback.
+  #     Default 65534 (nobody) = aman tetapi pertukaran dengan Odoo gagal terlihat sampai diisi.
+  esb-migrate:
+    image: ${IMAGE_ESB_MIGRATE:-ghcr.io/efn/esb-migrate:dev}
+    build:
+      context: ../../scripts/migration
+    profiles: ["migrate"]
+    restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+        labels: "service"
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    user: "${EFN_MIG_UID:-65534}:${EFN_MIG_GID:-65534}"
+    command: ["python", "esb_to_odoo.py", "--help"]
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      # ClickHouse HTTPS 8443, CA internal (verify-full), user efn_mig. CH_SECURE wajib true (check-encryption).
+      CH_HOST: clickhouse
+      CH_PORT: "8443"
+      CH_SECURE: "true"
+      CH_CA_FILE: /run/secrets/efn_ca_crt
+      CH_USER: efn_mig
+      CH_PASSWORD_FILE: /run/secrets/clickhouse_password_mig
+      MIG_BUNDLE_KEY_FILE: /run/secrets/migration_bundle_key
+      MIG_WORKDIR: /work
+      MIG_OUT_DIR: /out
+      TMPDIR: /work
+      # Parameter docs/04 §27.2 (rentang ditegakkan efn_mig/settings.py; di luar rentang -> exit 2).
+      EFN_MIG_SALDO_BLOCKED: ${EFN_MIG_SALDO_BLOCKED:-IMD,CUP}
+      EFN_MIG_LEGACY_DAYS: ${EFN_MIG_LEGACY_DAYS:-400}
+      EFN_MIG_SALES_LINE_MONTHS: ${EFN_MIG_SALES_LINE_MONTHS:-24}
+      EFN_MIG_SEGMENT_MAX_ROWS: ${EFN_MIG_SEGMENT_MAX_ROWS:-500000}
+      # Masuk manifest (tool.git_sha) untuk jejak berita acara; isi dengan `git rev-parse HEAD` saat menjalankan.
+      EFN_GIT_SHA: ${EFN_GIT_SHA:-unknown}
+    secrets:
+      - clickhouse_password_mig
+      - migration_bundle_key
+      - efn_ca_crt
+    networks: [esb]
+    read_only: true
+    # /work = MIG_WORKDIR (segmen histori terbesar terdekompresi + tar, docs/04 §27.2 >= 768 MB). tmpfs dihitung ke
+    # batas memori cgroup -> limit 1536M (bukan 1 GB di §27.2: 768 MB tmpfs penuh + bundel di memori saat enkripsi).
+    tmpfs:
+      - /work:size=768m,mode=1777
+      - /tmp:size=64m,mode=1777
+    volumes:
+      # Direktori host di disk terenkripsi (LUKS, docs/04 §27.2), dibuat operator (runbook §2) - tidak dibuat otomatis
+      # (create_host_path: false) agar tidak muncul direktori milik root di lokasi salah.
+      - type: bind
+        source: ${MIG_EXCHANGE_DIR:-/var/lib/efn/migration/exchange}
+        target: /out
+        bind:
+          create_host_path: false
+      # Tabel pemetaan klien (branch_map.csv, uom_map.csv, ...) - data klien di luar repo, hanya-baca.
+      - type: bind
+        source: ${MIG_MAPS_DIR:-/var/lib/efn/migration/maps}
+        target: /maps
+        read_only: true
+        bind:
+          create_host_path: false
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 1536M }
+    # Sekali jalan: healthcheck tidak bermakna (proses selesai dengan exit code 0..4, docs/04 §27.2).
+    healthcheck:
+      disable: true
+    labels:
+      service: esb-migrate
+
   # ClickHouse ikut network `esb` agar esb-extract tidak perlu berada di network `data`. Daftar network digabung
   # (union) dengan base; sertifikat tls_clickhouse ber-SAN `clickhouse` berlaku di network mana pun.
   clickhouse:
     networks: [data, esb]
 
 networks:
-  esb:           # hanya clickhouse <-> esb-extract (dicek scripts/check-encryption.sh)
+  esb:           # hanya clickhouse <-> esb-extract / esb-migrate (dicek scripts/check-encryption.sh)
     internal: true
     ipam:
       config: [{ subnet: 172.30.7.0/24 }]

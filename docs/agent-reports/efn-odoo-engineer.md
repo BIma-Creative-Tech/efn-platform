@@ -2582,3 +2582,199 @@ di host dan tidak ada shell di sesi ini); lead menjalankan di container.
   mixin); tanpa admin → WARNING. `warehouse_code` tetap dicocokkan persis.
 - Versi: efn_demand_forecast 19.0.2.1.0, efn_assortment 19.0.1.1.0, efn_replenishment 19.0.1.1.0, efn_setup_audit
   19.0.2.1.0. Tidak ada `_logger.error` baru.
+# G43 — company PT Im Donut (IMD) & PT Curry Up (CUP) (18 Nov 2026, branch `feat/wave-43-esb-migration`)
+Kontrak: G43 fase 1 bagian A (keputusan user 18 Nov 2026: company baru sekarang, data PT placeholder, Q-ESB5). Pola
+persis G24 WTZ. Tidak di-commit.
+
+## Modul, versi, file
+- `efn_core` **19.0.1.8.0 → 19.0.1.9.0**: `models/res_company.py` (`EFN_BRAND_CODES` + `IMD`, `CUP` sebelum `FARM`;
+  `EFN_BRAND_BUSINESS_TYPE` IMD/CUP → `fnb`), `__manifest__.py`, `README.md`, `tests/test_res_company.py` (Selection 9
+  kode, set kode = set jenis usaha, `test_g43_codes_unique` UNIQUE untuk IMD/CUP, business type).
+- `efn_setup_company` **19.0.1.8.0 → 19.0.1.9.0**:
+  - `data/res_company_data.xml`: `company_imd` "PT Im Donut (placeholder)" seq 8, `company_cup` "PT Curry Up
+    (placeholder)" seq 9 (root, `base.id`, IDR, `vat_check_vies=False`, tanpa NPWP/alamat); admin `company_ids`;
+    `try_loading('id')` install + blok `noupdate=0` bersyarat `chart_template=False` (upgrade). `try_loading` dengan
+    recordset kosong langsung `return` — diverifikasi di source 19.0 `account/models/chart_template.py` (WebFetch).
+  - `data/account_tax_pb1_data.xml`: `tax_group_pb1_{imd,cup}`, `tax_pb1_10_{imd,cup}` = `account_sale_tax_id`; pengaman
+    upgrade `noupdate=0` (pasang PB1 hanya bila default masih `tax_ST4`).
+  - `data/account_tax_fnb_service_data.xml`: SC 5 %, PB1 dine-in, PB1 non-dine-in 0 %, FP dine-in/non-dine-in per company
+    (sufiks `_imd`/`_cup`), `account_price_include=tax_excluded` (WTZ memakai SC → diikuti).
+  - `data/account_tax_label_data.xml`, `data/account_tax_rounding_data.xml`: daftar company + IMD/CUP (install baru).
+  - **Baru** `migrations/19.0.1.9.0/post-migrate.py`: `apply_g43_company_defaults(env)` — label pajak/grup template,
+    `round_globally`, admin `company_ids`, hanya IMD/CUP, menulis nilai tetap (idempoten). `version` kosong → no-op.
+  - Tests: **baru** `tests/test_g43_companies.py` (placeholder root F&B/IDR/CoA/tanpa NPWP & alamat/admin, kode unik
+    per DB, PB1 default per company & tidak berbagi grup, migrasi no-op tanpa versi, migrasi dijalankan 2× idempoten dan
+    tidak menyentuh PB, helper hanya mengembalikan IMD|CUP); `test_fnb_service_taxes.py` + `TestImdServiceTaxes`,
+    `TestCupServiceTaxes` (seluruh uji SC/PB1/FP diwarisi + uji kebocoran lintas 5 PT F&B); daftar company di
+    `test_tax_rounding.py`, `test_tax_labels.py` (+ PB1 default IMD/CUP), `test_currency_idr.py`, `test_no_egress.py`;
+    `tests/__init__.py`.
+  - `__manifest__.py`, `README.md` (baris G43, Q-ESB5, batasan).
+- `efn_insight` (tanpa naik versi, hanya komentar/README): `lib/insight_token.py` komentar ESB_CODES, `README.md`
+  (IMD/CUP kini company → `all_brands` otomatis memberi `cids`). Test insight tidak berubah: setUp mengosongkan semua
+  kode company sehingga IMD/CUP dari data tidak masuk `cids` uji.
+
+## Test — BELUM DIJALANKAN (tanpa shell; lead menjalankan `EFN_TEST_MODULES` di container)
+Titik rawan: (1) `test_migration_idempotent_and_scoped` memanggil `migrate()` dengan `api.Environment` baru pada cursor
+yang sama (cache transaksi bersama; `flush_all` sebelum, `invalidate_all` sesudah) dan melepas IMD/CUP dari admin
+`company_ids` lewat `(3, id)`; (2) memuat skrip migrasi via `importlib` dari path relatif `tests/../migrations/...`;
+(3) `test_g43_codes_unique` mengharapkan `IntegrityError` di dalam loop `subTest` (pola sama `test_brand_code_unique`).
+Jalur upgrade nyata `-u efn_core,efn_setup_company` dari DB 19.0.1.8.0 **belum diuji** — disarankan sekali di DB salinan.
+
+## Dampak lintas modul (grep `WTZ` di `services/odoo/addons` dan `scripts/`)
+Tidak ada test Odoo yang menghitung jumlah company global (semua memakai daftar xmlid eksplisit atau mengosongkan kode
+dulu); `test_accrual.test_cron_dates_and_run_all_companies` menghitung dinamis → tetap lulus.
+**Perlu keputusan lead (tidak diubah):**
+1. **Akrual poin harian** `efn_loyalty_accounting` (`_efn_run_all`: semua company ber-kode) akan memanggil BFF
+   `GET …accruals?company_code=IMD|CUP`; BFF `COMPANY_CODES` (`services/api-gateway/src/loyalty/loyalty.service.ts`) +
+   CHECK platform DB (`infra/postgres/init/13-platform-g24.sql` pola) belum mengenal IMD/CUP → 400 → record akrual
+   `error` tiap hari per PT (log WARNING, bukan ERROR). Opsi: perluas BFF + CHECK (pola G24) atau biarkan sampai
+   IMD/CUP memakai loyalty. Kebijakan poin/MGM (`efn_loyalty_policy`, `efn_mgm_policy`) untuk IMD/CUP akan gagal publish
+   ke BFF dengan alasan yang sama (hanya bila dibuat manual).
+2. **ETL** `services/etl/efn_etl/entities.py` `COMPANY_CODES`/`BUSINESS_TYPES`: `business_type()`/`brand_group()`
+   **melempar `ValueError`** untuk kode tak dikenal dan dipanggil di `gl.py` (dim company GL) → job GL ETL (bila aktif)
+   gagal begitu company IMD/CUP ada di replica. **Disarankan diperbarui dalam gelombang yang sama** (+ test entities).
+3. **text2sql**: `services/text2sql/efn_text2sql/scope.py` `COMPANY_CODES` menolak seluruh request bila ada kode tak
+   dikenal; `efn_data_ask` (Odoo) memfilter kode dengan daftar lokal yang sama (tanpa IMD/CUP) → kode IMD/CUP dibuang,
+   `company_ids` tetap dikirim → Tanya Data **tetap jalan** (view Odoo difilter `company_id`). Kode hanya dipakai row
+   policy `v_loyalty_daily` (ledger poin, belum ada IMD/CUP). Jadi text2sql **tidak wajib** diubah sekarang; bila diubah,
+   `efn_data_ask.COMPANY_CODES` dan `scope.py` harus berubah **bersamaan** (Odoo saja = request ditolak `ScopeError`).
+   `efn_data_ask` sengaja tidak diubah.
+4. insight-web/`efn_insight` `ESB_CODES` sudah memuat IMD/CUP; komentar `infra/clickhouse/clickhouse-init.sh` baris
+   ±273 ("IMD/CUP belum punya company_id Odoo") kini usang (infra, tidak diubah).
+5. Lain-lain (tidak perlu sekarang; IMD/CUP belum punya kanal/POS): metrik BFF `metrics.service.ts` label issuer,
+   `scripts/lib/deploy-validate.sh` `EFN_ONLINE_CHANNEL_CODES`, `efn-rotate-online-key` allowlist, `efn_setup_pos`
+   (metode bayar/Poin EFN/preset), `efn_setup_online` (partner/tim/kanal), `efn_setup_role`/`efn_setup_org`
+   (peran/departemen per PT), `efn_online_order` teks bantuan kanal — semuanya mengikuti fit-gap G43 (efn-odoo-functional).
+6. Kontrak: `docs/04` §12.1/§16.1 (daftar kode PT) perlu revisi menyebut IMD/CUP (efn-architect/lead).
+
+# G43 W2 — `efn_legacy_history` + hook forecast (18 Nov 2026, branch `feat/wave-43-esb-migration`, tidak di-commit)
+Acuan: kontrak kerja G43 fase 2 (W2), ADR-042, `docs/04` §27.8/§27.8a/§27.9 **v19.1** (pesan efn-lead: sales.line tanpa
+unik & tanpa run_id, ganti irisan; kolom turunan disimpan; validasi company target; `group_legacy_sales_reader`).
+Importer `scripts/migration/odoo_import_esb.py` **sengaja belum ditulis** (menunggu format bundel W1).
+
+## Modul & file
+- **Baru** `services/odoo/addons/efn_legacy_history` 19.0.1.0.0 (depends `efn_core`, `stock`, `point_of_sale`,
+  `efn_demand_forecast`): `__manifest__.py`, `__init__.py`, `bulk.py` (helper impor + parameter), `models/`
+  (`efn_legacy_flow_daily.py`, `efn_legacy_sales_daily.py`, `efn_legacy_sales_line.py`, `efn_demand_forecast.py`
+  override hook), `security/efn_legacy_history_security.xml` (kategori/privilege, `group_legacy_sales_reader` di-imply
+  `point_of_sale.group_pos_manager`, 3 rule global multi-company), `security/ir.model.access.csv` (read-only),
+  `data/ir_config_parameter.xml` (`sales_line_months`=24, `legacy_days`=400; cutover TIDAK di-seed), `views/`
+  (`efn_legacy_flow_daily_views.xml`, `efn_legacy_sales_views.xml`, `menus.xml`), `tests/test_legacy_history.py`,
+  `README.md`.
+- `efn_demand_forecast` **19.0.1.0.0 → 19.0.1.1.0**: `models/efn_demand_forecast.py` (`_efn_legacy_outflow` default
+  `(None, {})`; `_efn_daily_outflow` menggabungkan legacy `< batas` + `stock.move` `≥ batas`; query lama dipindah ke
+  `_efn_stock_outflow` tanpa perubahan), `__manifest__.py`, `README.md`, `tests/test_demand_forecast.py` (+4 test hook).
+- `.github/workflows/ci.yml`: `efn_legacy_history` ditambahkan ke `EFN_TEST_MODULES` (menarik `efn_demand_forecast`;
+  test `efn` forecast kini ikut jalan di CI — sebelumnya modul itu tidak ada di daftar).
+
+## Keputusan / penyimpangan dari teks kontrak
+1. Hook signature = `docs/04` §27.8/ADR-042 `_efn_legacy_outflow(warehouse, product, date_from, date_to)` →
+   `(batas, dict)`, bukan `(company, products)` → `{}` dari brief: forecast v1 per gudang × produk, dan forecast tidak
+   boleh tahu kunci parameter migrasi.
+2. `sales.daily` kunci `(company_id, warehouse_id, day, esb_menu_code)` + `product_id` opsional (pesan lead butir 2),
+   bukan `(product_id, day, is_takeaway)` §27.8 (NULL product tidak bisa di-upsert). Setara bila semua menu terpetakan.
+3. `_log_access`: `sales.line` False; flow & sales.daily dipertahankan (SQL bulk mengisi uid/now).
+4. `outflow` & `net` disimpan (bukan compute); `net` dari export bila ada, selain itu `gross − discount`.
+5. Helper `bulk_replace_slice` juga tersedia untuk flow/sales.daily (bila importer memilih ganti irisan, §27.8a).
+
+## Fungsi untuk importer (signature)
+```python
+bulk.bulk_upsert(model, rows, run_id, *, company_ids, batch_size=5000, max_day=None)
+    # -> {"rows","inserted","updated","unchanged"}; model = flow.daily / sales.daily
+bulk.bulk_replace_slice(model, company_id, warehouse_id, date_from, date_to, rows, run_id=None, *,
+                        batch_size=5000, max_day=None, sales_line_months=None)
+    # -> {"rows_deleted","rows_inserted"}; date_to eksklusif; sales.line wajib dalam sales_line_window
+# pembungkus privat: Model._efn_bulk_upsert(rows, run_id, company_ids, ...) / Model._efn_bulk_replace_slice(...)
+bulk.get_cutover_date(env, company); bulk.get_sales_line_months(env); bulk.sales_line_window(env, company, anchor, months)
+```
+Syarat: `env.su` + konteks `efn_legacy_import=True`; Many2one = id int; kolom tak dikenal → `ValidationError`.
+
+## Test — BELUM DIJALANKAN (tanpa shell; lead menjalankan di container Odoo 19)
+`efn_legacy_history`: parameter default/parsing, window, upsert idempoten (2× = sama, ubah 1 = update 1, log uid),
+penolakan (sudo tanpa konteks, user biasa, company di luar target, gudang/produk/kasir lintas PT, kolom tak dikenal,
+tanggal ≥ cutover/max_day, duplikat batch, run_id), ganti irisan idempoten + irisan lain utuh + irisan kosong, ACL &
+rule (user PB tidak lihat WTZ, stok biasa tidak lihat penjualan, user internal tanpa akses), ORM write/unlink/copy
+ditolak, hook forecast (batas di tengah, seluruh sebelum/sesudah, company tanpa parameter, format salah).
+`efn_demand_forecast`: default no-op (fungsi dasar dipanggil langsung), regresi batas None, gabungan batas, query stok
+dilewati.
+
+Titik rawan: (1) `stock.move` done di company test baru (PB/WTZ dibuat test bila `efn_setup_company` tidak terpasang)
+— valuasi `stock_account` 19 tanpa CoA diasumsikan manual; (2) `RETURNING (tgt.xmax = 0)` untuk membedakan insert/
+update (trik PostgreSQL umum); (3) `odoo.tools.SQL` dengan ±5.000 × 20 parameter per batch (kinerja belum diukur);
+(4) `ruff format --check` belum dijalankan (format ditulis manual mengikuti gaya black, baris ≤ 120); (5) filter
+default search memakai `relativedelta` di domain view; (6) `implied_ids` pada `point_of_sale.group_pos_manager` dari
+modul lain.
+
+## Belum / untuk tim lain
+- Importer sisi Odoo (W2 lanjutan) setelah bundel W1; pengukuran `pg_total_relation_size` di dry-run PB (W3/QA).
+- "Wajib filter tanggal" list `sales.line` hanya filter default (tidak dipaksa server).
+- `efn_core` `test_rpc_surface`: tidak ada metode publik baru (hanya override `create/write/unlink`).
+
+# G43 W2b — importer bundel ESB -> Odoo (18 Nov 2026, branch `feat/wave-43-esb-migration`, tidak di-commit)
+Acuan: kontrak kerja G43 fase 2, `docs/04` §27.2–§27.8a v19.1, `scripts/migration/README.md` (kontrak bundel W1),
+overlay `infra/compose/docker-compose.migration.yml` (pesan efn-lead: `EFN_MIG_BUNDLE_KEY_FILE`, `EFN_MIG_EXCHANGE_DIR`,
+`EFN_MIG_CODE_DIR`, `EFN_MIG_USER_LOGIN`, `EFN_MIG_ARGV`).
+
+## File
+- Baru `services/odoo/addons/efn_legacy_history/esb_import/`: `__init__.py`, `mapping.py` (murni), `importer.py`
+  (`run_import`, `build_result`, `result_filename`, `import_opening_balances` stub), `efn_mig/{__init__,bundle,xmlid}.py`
+  (salinan terkendali `scripts/migration/efn_mig`).
+- Baru `services/odoo/addons/efn_legacy_history/tests/test_esb_import.py` (+ `tests/__init__.py`); `README.md` modul.
+- Baru `scripts/migration/odoo_import_esb.py` (payload `odoo shell`), `scripts/migration/run-import.sh` (host),
+  `scripts/migration/tests/test_odoo_import_mapping.py`; `scripts/migration/README.md` (satu baris tabel).
+- Versi modul tidak dinaikkan (tidak ada perubahan skema/data XML; paket Python baru).
+
+## Keputusan
+1. **Inti importer di modul, salinan `efn_mig`**: image Odoo hanya memuat `services/odoo/addons`, jadi test Odoo CI tidak
+   bisa mengimpor `scripts/migration/efn_mig`. `bundle.py`/`xmlid.py` disalin persis; `test_vendored_efn_mig_identical`
+   (pytest) gagal bila beda. Di `odoo shell` dipakai `efn_mig` resmi dari `EFN_MIG_CODE_DIR` bila ada.
+   Hanya API `AESGCM`, `HKDF`, `hashes`, `InvalidTag` (dites).
+2. `EFN_MIG_ARGV` = `{"bundle","validation","dry_run"}` (bentuk runbook §4.2) + opsional `companies`, `steps`,
+   `confirm_brand`, `enable_opening_balances`, `allow_missing_validation`. Path relatif/absolut wajib di dalam
+   `EFN_MIG_EXCHANGE_DIR`. **Target company default = company brand** (`pb→PB`, `bacha→BCF,BCR`, `wtz/imd/cup`) agar
+   bentuk runbook tetap jalan; bundel dengan company lain → exit 4. Hasil `<run_id>.result.efnmig` (nyata) /
+   `<run_id>.dryrun.result.efnmig` (dry-run) mode 0600 di direktori pertukaran; stdout satu baris `EFN_RESULT`.
+3. Gerbang validator: wajib `validation_<run>.json` (SHA-256 manifest sama, `errors = 0`); pengecualian hanya dry-run
+   non-production + `allow_missing_validation`. Production + run nyata wajib `confirm_brand`.
+4. Status per baris sesuai kontrak reconcile butir 1 (`created/updated/skipped/conflict/failed` = jumlah baris berkas);
+   `pos.config` dihitung terpisah (`branch_pos`, map entity `branch_pos`); BoM multi-menu dihitung satu status per
+   baris (terburuk). Konflik = peringatan (exit 0), gagal → exit 1.
+5. Histori: lihat README modul (agregasi cabang `location`, potong `sales_line_window`, `skipped_by_param`).
+   `odoo_totals` dihitung dari tabel Odoo (label `menu_key` dari `esb_menu_code` segmen, fallback xmlid produk).
+6. `cutover-param` (langkah 13) diimplementasikan kecil: hanya bila diminta eksplisit `steps`, hanya run nyata.
+7. Saldo awal: stub, exit 2 (flag mati: "default MATI"; flag aktif: "belum diimplementasikan").
+
+## Cara dry-run PB (dev; setelah W1 export + validate)
+```bash
+cd infra/compose   # $DCM = stack + overlay migration (runbook §1)
+scripts/migration/run-import.sh <RUN>.efnmig --validation validation_<RUN>.json            # master, dry-run
+scripts/migration/run-import.sh <RUN>.efnmig --validation validation_<RUN>.json --apply    # master, nyata
+for f in <PARENT>_PB_*.efnmig; do                                                          # segmen histori
+  scripts/migration/run-import.sh "$f" --validation "validation_$(basename "$f" .efnmig | ...).json"  # dry-run
+done
+```
+(nama berkas validasi = `validation_<run_id segmen>.json`; `run_id` ada di header bundel/EFN_RESULT). Prasyarat:
+modul `efn_legacy_history` + `mrp` terpasang, user `efn_migration` ada, overlay terpasang. `table_bytes` ada di
+`import_report.json` dry-run segmen.
+
+## Test — BELUM DIJALANKAN (tanpa shell; lead menjalankan)
+- pytest `scripts/migration/tests/test_odoo_import_mapping.py`: salinan identik, HISTORY_KEYS = kontrak W1, validasi
+  baris (xmlid dihitung ulang, company/referensi asing, kunci tambahan), plan cabang/produk/menu/partner, konversi
+  qty/HPP, BoM normal+phantom (multi-menu), nilai histori + agregasi, potong rentang, gerbang bulan segmen, dan
+  end-to-end: bundel hasil `export_master`/`export_history` W1 (FakeSource) lolos validasi importer. Butuh checkout
+  penuh (skip bila `services/odoo/addons` tidak ada).
+- Odoo `test_esb_import.py` (tag efn): master membuat gudang/lokasi/pos.config/produk/menu(+alias, arsip)/partner/
+  payment term/BoM/HPP + bundel hasil; impor ulang = 0 created/updated; edit pengguna → conflict; hilang di sumber →
+  missing_in_source; dry-run tanpa sisa; company asing (gerbang & baris) ditolak; validator/confirm-brand/saldo awal;
+  histori (agregasi lokasi, produk tak terpetakan, menu tak terpetakan, totals, bulk_check, re-impor 0 perubahan),
+  dry-run histori tanpa sisa, SALDO_BLOCKED, cutover, `sales_line_months=0`, prasyarat gudang.
+
+## Belum diverifikasi / titik rawan
+- Tidak ada yang dijalankan di Odoo 19 nyata; ruff belum dijalankan (format manual ≤ 120).
+- `pos.config.create` dengan `payment_method_ids` kosong + default `journal_id` di PT test (bila PT dibuat test tanpa
+  CoA) [B]; constraint modul efn lain atas pos.config.
+- Presisi `product_qty` BoM / `list_price` dibandingkan dengan toleransi digit field (idempotensi) [B].
+- `Savepoint.close(rollback=True)` + `registry.clear_cache()` untuk dry-run di dalam TransactionCase [B].
+- Keamanan xmlid `efn_mig_esb` saat upgrade/uninstall modul lain (§27.4 butir 6) [B]; ukuran memori segmen 500 rb baris
+  (sales.line dibaca ulang per gudang — hemat memori, lebih lambat) [B].
+- Runbook §4.2 perlu disesuaikan: pembungkus `run-import.sh` kini ada (argumen = nama berkas di direktori pertukaran).

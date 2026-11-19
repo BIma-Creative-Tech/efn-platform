@@ -1,7 +1,7 @@
 -- Gelombang 20 (efn-data-ai-engineer, W-32): fondasi 6 entitas root (docs/04 §12.1, ADR-001 revisi 18 Okt 2026).
 -- Idempoten (ADD COLUMN IF NOT EXISTS / CREATE OR REPLACE VIEW). Dijalankan clickhouse-init.sh setelah 01..07 SETIAP
 -- deploy -> perubahan daftar kode (G24 WTZ) cukup di file ini (view diganti ulang).
--- Kode PT: EFN (holding) | GL (retail) | PB (fnb) | BCR (retail) | BCF (fnb) | WTZ (fnb, G24 docs/04 §16.1) | FARM (farm)
+-- Kode PT: EFN (holding) | GL (retail) | PB (fnb) | BCR (retail) | BCF (fnb) | WTZ (fnb, G24 docs/04 §16.1) | IMD, CUP (fnb, G43) | FARM (farm)
 -- | SMD (retail, G44 PT Supermarket Demo placeholder, docs/04 §12.1 revisi 18 Nov 2026 / §28, L-144).
 -- Kode lama RTL/FNB dihapus;
 -- tidak ada migrasi data (DB dev dibuat ulang, docs/runbooks/dev-reset.md). Sumber kebenaran pemetaan & rumus
@@ -17,7 +17,7 @@ ALTER TABLE efn_dwh.dim_company ADD COLUMN IF NOT EXISTS brand_group LowCardinal
 -- Per periode (bulan) x company x akun x lawan inter-company, hanya posted.
 -- Konsolidasi grup = SUM(balance_after_elimination) lintas company per account_code (bagan akun sama: l10n_id).
 -- Eliminasi: baris dengan partner = company grup lain (ic_company_id, efn_etl/gl.py) dikeluarkan, untuk SEMUA
--- pasangan dari 7 entitas (7x6 arah; G24: + WTZ). ic_relation hanya memberi label dasar harga untuk rekonsiliasi:
+-- pasangan dari 9 entitas (9x8 arah; G24: + WTZ; G43: + IMD, CUP). ic_relation hanya memberi label dasar harga untuk rekonsiliasi:
 --   tp_holding = Holding EFN <-> PT mana pun (TP cost-plus, 18-3)
 --   tp_bacha   = BCR <-> BCF (TP cost-plus, 18-3)
 --   non_tp     = pasangan lain, mis. FARM -> PT, PB <-> GL, WTZ <-> PT (harga daftar/pasar, Q-AD1-1 belum diputuskan)
@@ -45,8 +45,8 @@ SELECT
     cp.brand AS counterparty_brand,
     multiIf(
         isNull(l.ic_company_id), '',
-        c.brand NOT IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM', 'SMD')
-            OR cp.brand NOT IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM', 'SMD')
+        c.brand NOT IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'IMD', 'CUP', 'FARM', 'SMD')
+            OR cp.brand NOT IN ('EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'IMD', 'CUP', 'FARM', 'SMD')
             OR c.brand = cp.brand, 'unknown',
         c.brand = 'EFN' OR cp.brand = 'EFN', 'tp_holding',
         (c.brand = 'BCR' AND cp.brand = 'BCF') OR (c.brand = 'BCF' AND cp.brand = 'BCR'), 'tp_bacha',

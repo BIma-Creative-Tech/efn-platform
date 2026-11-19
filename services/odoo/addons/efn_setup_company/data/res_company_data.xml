@@ -101,9 +101,35 @@
         <field name="vat_check_vies" eval="False"/>
     </record>
 
-    <!-- Admin boleh berpindah ke ketujuh company (user lain diatur per peran; G24: + company_wtz). -->
+    <!-- G43 (keputusan user 18 Nov 2026): entitas ke-8 dan ke-9 = brand F&B dari ESB Core (kode IMD/CUP = kode brand mart
+         ESB G41, docs/04 §25). Pola WTZ: root, IDR, l10n_id, PB1 + SC + FP dine-in/non-dine-in. Data PT PLACEHOLDER
+         (nama legal, NPWP, alamat, tarif pajak menyusul, Q-ESB5): tanpa NPWP/alamat. Sequence 8/9 (FARM tetap 7 agar DB
+         lama tidak berubah urutan). DB versi < 19.0.1.9.0: record dibuat saat upgrade (xmlid belum ada), CoA lewat blok
+         noupdate="0" di akhir file. -->
+    <record id="company_imd" model="res.company">
+        <field name="name">PT Im Donut (placeholder)</field>
+        <field name="sequence">8</field>
+        <field name="efn_brand_code">IMD</field>
+        <field name="country_id" ref="base.id"/>
+        <field name="currency_id" ref="base.IDR"/>
+        <!-- R3: validasi VIES (EU) tidak relevan untuk NPWP dan butuh egress internet. -->
+        <field name="vat_check_vies" eval="False"/>
+    </record>
+
+    <record id="company_cup" model="res.company">
+        <field name="name">PT Curry Up (placeholder)</field>
+        <field name="sequence">9</field>
+        <field name="efn_brand_code">CUP</field>
+        <field name="country_id" ref="base.id"/>
+        <field name="currency_id" ref="base.IDR"/>
+        <!-- R3: validasi VIES (EU) tidak relevan untuk NPWP dan butuh egress internet. -->
+        <field name="vat_check_vies" eval="False"/>
+    </record>
+
+    <!-- Admin boleh berpindah ke kesembilan company (user lain diatur per peran; G24: + company_wtz; G43: + company_imd,
+         company_cup). -->
     <record id="base.user_admin" model="res.users">
-        <field name="company_ids" eval="[(4, ref('company_efn')), (4, ref('company_rtl')), (4, ref('company_fnb')), (4, ref('company_bcr')), (4, ref('company_bcf')), (4, ref('company_wtz')), (4, ref('company_farm'))]"/>
+        <field name="company_ids" eval="[(4, ref('company_efn')), (4, ref('company_rtl')), (4, ref('company_fnb')), (4, ref('company_bcr')), (4, ref('company_bcf')), (4, ref('company_wtz')), (4, ref('company_imd')), (4, ref('company_cup')), (4, ref('company_farm'))]"/>
     </record>
 
     <!-- Fiscal localization Indonesia (template 'id' dari l10n_id) per company.
@@ -125,6 +151,8 @@
     <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_bcf'))]"/>
     <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_wtz'))]"/>
     <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_farm'))]"/>
+    <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_imd'))]"/>
+    <function model="account.chart.template" name="try_loading" eval="[[], 'id', obj().env['res.company'].browse(ref('company_cup'))]"/>
 
     <!-- G24 W-40 (docs/04 §16.4): DB lama yang di-UPGRADE ke 19.0.1.8.0 mendapat company_wtz dari blok noupdate di atas,
          tetapi <function> di sana tidak jalan saat upgrade. Blok ini (noupdate=0, jalan setiap install/upgrade) memuat
@@ -135,5 +163,12 @@
     <data noupdate="0">
         <function model="account.chart.template" name="try_loading"
                   eval="[[], 'id', obj().env['res.company'].search([('id', '=', ref('company_wtz')), ('chart_template', '=', False)])]"/>
+        <!-- G43: pola sama untuk DB lama yang di-UPGRADE ke 19.0.1.9.0 (company_imd/company_cup baru dibuat di atas).
+             Satu panggilan per company: try_loading memproses satu company. Label/pembulatan/akses admin lewat
+             migrations/19.0.1.9.0/post-migrate.py. -->
+        <function model="account.chart.template" name="try_loading"
+                  eval="[[], 'id', obj().env['res.company'].search([('id', '=', ref('company_imd')), ('chart_template', '=', False)])]"/>
+        <function model="account.chart.template" name="try_loading"
+                  eval="[[], 'id', obj().env['res.company'].search([('id', '=', ref('company_cup')), ('chart_template', '=', False)])]"/>
     </data>
 </odoo>

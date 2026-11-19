@@ -1349,3 +1349,121 @@ K25-02, ADR-003. Worktree `efn-platform-g44`, branch `feat/wave-44-supermarket-f
   menolak `value_too_large`.
 - Test: `test_contract.py`, `test_runner.py`, `test_config_schedule.py`, `test_odoo_contract_parity.py` (service level;
   plafon di-skip sampai parameter ada di source Odoo), ETL `test_forecast.py`. Belum dijalankan ulang.
+## Gelombang 43 fase 2 (W1) — entitas migrasi esb-extract, DDL/akses `efn_mig`, mesin migrasi + validator (18 Nov 2026)
+
+Kontrak: kontrak kerja G43 fase 2 (paket W1), ADR-042 (Accepted 18 Nov 2026), docs/04 §27 **v19.1** (§27.3a segmentasi,
+§27.8/§27.8a histori penjualan, §27.10, §27.11), fit-gap G43. Tidak ada commit (efn-lead). Tidak ada panggilan ESB nyata.
+
+### File
+- **esb-extract** — baru `efn_esb/transform_mig.py` (kolom + transform E1/E2/E4/E5/E6–E9), `efn_esb/extract_mig.py`
+  (extractor, `P1_ENTITIES`/`P2_ENTITIES`); ubah `normalize.py` (whitelist `CUSTOMER_FIELDS`, `COA_FIELDS`, `AR_FIELDS`,
+  `AP_FIELDS`, fungsi `whitelist`/`redact_customer`; `redact_supplier` kini juga membuang nilai dict/list), `extract.py`
+  (`BrandRuntime.opname_window_days`, `extractor_for` dengan import tertunda), `runner.py` (`ALL_TABLES`, `run_snapshot`),
+  `__main__.py` (subcommand `snapshot`, `validate_snapshot_args`), `config.py` (default `ESB_CK_BRANCHES` =
+  `pb:4|38,wtz:5|6,imd:2,cup:4|6`), `README.md`. Test baru `test_transform_mig.py`, `test_extract_mig.py`,
+  `test_ddl_g43.py`, `test_mig_access.py`; ubah `test_ddl.py`.
+- **ClickHouse** — baru `infra/clickhouse/init/14-g43-migration.sql` (9 tabel + `map_esb_odoo` kunci baru),
+  `infra/clickhouse/access/mig-access.sql` (profil `mig_profile`, role `mig_rw`); ubah `12-g41-esb.sql` (definisi
+  `map_esb_odoo` dipindah ke 14), `esb-access.sql` (grant esb_writer tabel baru + `REVOKE ALL ON map_esb_odoo`),
+  `clickhouse-init.sh` (migrasi kunci map sebelum skema, user `efn_mig` bersyarat, ikat role/profil).
+- **scripts/migration** (baru) — `esb_to_odoo.py`, `validate_import.py`, `efn_mig/{bundle,xmlid,mapping,segments,export,
+  source,settings,validate,reconcile,results}.py`, `README.md` (**kontrak format bundel bersama importer W2**),
+  `requirements.txt`, `requirements-dev.txt`, `pytest.ini`, `ruff.toml`, `tests/{conftest,test_xmlid,test_bundle,
+  test_segments,test_mapping,test_export_flow,test_validate}.py`.
+
+### Entitas esb-extract (`python -m efn_esb snapshot --brand B --entity E ...`, bukan loop `run`)
+| Entitas | Endpoint GET (spec publik) | Tabel | Redaksi |
+|---|---|---|---|
+| `bom_detail` E1 | `/product/bom` → `/product/bom/{bomID}` per BOM aktif | `dim_esb_bom`, `dim_esb_bom_line` | redact |
+| `menu_price` E2 | `/menu/browse-for-product` | `dim_esb_menu_price` | redact |
+| `customer` E4 | `/customer` | `dim_esb_customer` | whitelist §27.11 |
+| `location` E5 | `/location?branchID=` per cabang | `dim_esb_location` | redact |
+| `stock_opname` E6 | `/inventory/stock-opname` + `/{num}` | `fact_esb_stock_opname` | redact |
+| `ap_open` E7 | `/supplier-payable/invoice-aging?payableDate=` per cabang | `fact_esb_ap_open` | whitelist (kode) |
+| `ar_open` E8 | `/customer-receivable?type=2&receivableDate=` per cabang | `fact_esb_ar_open` | whitelist (kode) |
+| `coa` E9 | `/accounting/coa` | `dim_esb_coa` | whitelist |
+P2 (E6–E9) ditolak CLI tanpa `--allow-unverified` (default mati). E10 TB/GL tidak dibangun: di spec ESB
+`/accounting/general-ledger` dan `/summary` = **POST** (melanggar GET-only) → ekspor Finance (Q-ESB21).
+
+### Keputusan / penyimpangan dari usulan §27 (untuk architect/lead)
+1. **E2 tabel terpisah `dim_esb_menu_price`**, bukan kolom di `dim_esb_menu`: dua penulis (master harian vs snapshot)
+   pada satu ReplacingMergeTree saling menimpa kolom (versi terbaru tanpa harga).
+2. **E7/E8 endpoint**: §27.11 menyebut `/purchase/purchase-invoices` + settlement; dipilih
+   `/supplier-payable/invoice-aging` (per faktur, `payableDate`) dan `/customer-receivable?type=2` (per faktur,
+   `receivableDate`) karena langsung memberi saldo per tanggal; respons tanpa cabang → satu panggilan per cabang
+   (PT benar untuk Bacha BCF/BCR).
+3. **NPWP pelanggan tidak ditarik**: tidak ada di daftar `/customer` dan §27.4 menyatakan NPWP diisi Finance (bukan milik
+   migrasi) → minimisasi data. Whitelist = §27.11 persis.
+4. `map_esb_odoo`: definisi dipindah dari 12 ke 14 (§27.10 masih menyebut nama lama di satu tempat — sudah 14 di v19.1);
+   `clickhouse-init.sh` memeriksa `system.tables.sorting_key` SEBELUM `init/*.sql`: kunci lama + kosong → `DROP … SYNC`
+   lalu 14 membuat ulang; berisi → exit 1 dengan pesan (manual). Role bernama `mig_rw` (sesuai §27.10).
+5. User `efn_mig`: secret tidak di-mount/kosong/placeholder (`disabled` dsb.) → `DROP USER IF EXISTS efn_mig` (bukan
+   gagal); secret ada tetapi tidak valid → `create_user` gagal (fail closed).
+6. **Format bundel = §27.3/§27.3a v19.1** (satu AES-GCM per bundel; histori per company × bulan, dipecah per gudang;
+   gzip dalam tar; batas 512 MB / 50×). Penegasan teknis yang belum tertulis di §27 (tercantum di README):
+   kunci hex di-`bytes.fromhex` sebelum HKDF; rasio 50× baru diperiksa setelah > 1 MiB terdekompresi; header wajib
+   kanonik; nama anggota tar di-allowlist; baris histori = objek datar (bukan amplop master) dengan kunci persis;
+   `result` manifest `run_id` = run_id bundel sumber; bentuk `import_report.json`/`odoo_totals.json`/`map.jsonl`.
+7. Master kembar per company brand (Bacha → BCF dan BCR) untuk produk/menu/partner/BoM/biaya; cabang ikut PT
+   `dim_esb_branch`. Dimensi = snapshot terakhir per brand (`_version = max`), sehingga baris yang hilang di ESB tidak
+   diekspor. Menu arsip = menu di `v_esb_sales_daily` rentang 24 bulan yang tidak ada di master → `active=false`.
+8. BoM: `phantom` bila `bomName` dirujuk `/menu/browse-for-product`, selain itu `normal`; `product_qty` = rasio
+   `bom_ratio` (BATCH→EA) bila ada. Satuan produk: `/product` tidak memberi satuan → fallback satuan dari BOM.
+   `standard_price` = `lastHpp` komponen terbesar > 0. Semua asumsi [B].
+9. `stock`/`opening` export → exit 2 "belum dibangun" (selaras default mati importer); `supplierinfo` tanpa sumber.
+10. Validator `--source templates` (aturan barcode/HP docs/08 §6.4) **tidak** dibangun; hanya `esb-bundle`.
+
+### Env / secret baru
+- Secret: `clickhouse_password_mig` (mount ke `clickhouse-init` + `esb-migrate`), `migration_bundle_key` (hex ≥ 64;
+  `esb-migrate` + `odoo` selama jendela migrasi).
+- Env `esb-migrate`: `CH_HOST/CH_PORT/CH_USER=efn_mig/CH_PASSWORD_FILE/CH_SECURE/CH_CA_FILE`, `MIG_BUNDLE_KEY_FILE`,
+  `MIG_WORKDIR`, `MIG_OUT_DIR`, `APP_ENV`, `EFN_MIG_SALDO_BLOCKED`, `EFN_MIG_LEGACY_DAYS`, `EFN_MIG_SALES_LINE_MONTHS`,
+  `EFN_MIG_SEGMENT_MAX_ROWS`, `EFN_ALLOW_PLAINTEXT`, `EFN_GIT_SHA` (opsional). esb-extract: tidak ada env baru (P2 lewat
+  flag CLI agar test kontrak overlay tetap hijau).
+
+### Untuk W2/W3/W4 (diteruskan lead)
+- **W2 (odoo-engineer)**: kontrak = `scripts/migration/README.md`; pakai `efn_mig.bundle.open_bundle/build_bundle` dan
+  `efn_mig.xmlid.xmlid` (stdlib + cryptography) agar format & xmlid identik; takeaway = `alias_of`; `menu_key` sales.line
+  boleh null; `odoo_totals.json` dihitung dari tabel Odoo.
+- **W3 (devsecops)**: image `esb-migrate` butuh `cryptography==46.0.3` (tidak ada di image esb-extract); overlay
+  `docker-compose.esb.yml` + `.env.example` masih default `ESB_CK_BRANCHES=pb:4|38`; mount 2 secret di atas; CI job
+  `scripts/migration` (pytest + ruff + pip-audit).
+- **W4 (architect)**: §27.11 diperbarui dengan butir 1–3 + E10 POST; §27.3 dengan penegasan butir 6.
+
+### Belum terverifikasi
+- **Tidak ada yang dijalankan** (sesi tanpa shell): pytest, `ruff check`, **`ruff format --check`** (gaya multi-baris
+  ditulis tangan; kemungkinan perlu `ruff format .`), `sh -n`/shellcheck `clickhouse-init.sh`, DDL 14 + access di
+  ClickHouse 24.8. Perintah:
+  `docker run --rm -v "$(pwd -W):/w" -w /w/services/esb-extract python:3.12-slim sh -c "pip install -q -r requirements-dev.txt ruff && ruff check . && ruff format --check . && pytest"`
+  dan sama untuk `-w /w/scripts/migration`.
+- ClickHouse 24.8 (lead): `REVOKE ALL ON <tabel belum ada>` saat 14 belum jalan (urutan sudah init → access, jadi tabel
+  ada); `REVOKE ALL ON efn_dwh.* FROM mig_rw` lalu grant per objek; `query_row_block_stream` + `has({ids:Array(UInt32)},
+  branch_id)`; subquery `_version = (SELECT max(_version) …)` pada FINAL. Test negatif `efn_mig`: INSERT tabel lain,
+  SELECT `raw_doc`, CREATE → ditolak.
+- ESB: semua extractor G43 dari spec publik tanpa GET nyata; arti kolom P2 (qty/stockQty, total faktur vs sisa,
+  invoice-aging hanya faktur terbuka?) [B]; paging `/location` (list tanpa count) diasumsikan satu halaman.
+- `cryptography==46.0.3`: versi dipilih tanpa akses PyPI; pastikan tersedia & lolos pip-audit.
+- PDP: `dim_esb_customer.customer_name` bisa nama orang (pelanggan perorangan) → perlu entri inventaris PDP; definer
+  `efn_t2s_definer` punya `SELECT efn_dwh.*` (wildcard G38) sehingga secara teknis bisa membaca tabel G43 — tidak ada
+  view `efn_t2s` yang mengeksposnya, tetapi lebih aman dipersempit (security review).
+
+### G43 perbaikan security (SECURITY_REVIEW_2026-11-18_g43) — sisi data
+- **SEC-197**: part histori per GUDANG TUJUAN (`export.plan_warehouse_parts`); manifest `target_warehouses` (gudang part
+  ini, xmlid lengkap `efn_mig_esb.<brand>_<co>_branch_wh_<id>`) + `company_warehouses` (semua gudang PT; gudang tanpa
+  baris di part 1; bulan kosong tetap satu bundel); baris flow/sales.daily dijumlahkan per kunci model
+  (`mapping.aggregate_rows`, sumber diurut hari); lokasi dengan induk PT lain tidak dipetakan; validator
+  `check_segment_set` (tumpang tindih = exit 3, part tidak lengkap = `PARTS_INCOMPLETE`), `HISTORY_KEY_DUP`,
+  `branch_key` di luar target = exit 3; `reconcile --final --parent-run-id` (`reconcile.reconcile_final`) vs hasil
+  importer `steps=["totals"]`.
+- **SEC-201**: `Keys.val` (HKDF `efn:mig-esb:val:v1`), `bundle.sign_validation`/`verify_validation` (mengikat run_id +
+  `bundle_sha256` + `manifest_sha256` + errors); `validate_import.py` menulis laporan bertanda tangan, menerima banyak
+  bundel. Uji lintas-sisi `tests/test_cross_side_validation.py` menjalankan fungsi importer (dari source, tanpa Odoo).
+- **SEC-200**: `EFN_MIG_MAX_BUNDLE_BYTES` (default 1 GiB) dicek via `fstat` sebelum baca (`read_limited`) + di
+  `open_bundle`. **SEC-202**: `write_secure`/`open_secure_write` (O_CREAT|O_EXCL|O_NOFOLLOW 0600 + rename atomik).
+- **SEC-206**: `text2sql-access.sql` grant per objek (8 view + 10 tabel dasar) + `REVOKE ALL ON efn_dwh.*`; test
+  `scripts/migration/tests/test_t2s_access.py` (penutupan rekursif dari 7 view efn_t2s).
+- QA residu: `esb_product_name` (flow), `menu_name`/`menu_category` (sales.daily) sebagai kunci OPSIONAL
+  (`mapping.HISTORY_OPTIONAL_KEYS`, identik importer). README: lokasi dari `branch_map.csv`, kontrak 1/2/5.
+- Salinan `efn_mig/bundle.py` disalin ulang ke `services/odoo/addons/efn_legacy_history/esb_import/efn_mig/`.
+- Belum terverifikasi: tidak ada yang dijalankan (pytest/ruff/ClickHouse); grant per objek efn_t2s perlu uji text2sql
+  nyata di ClickHouse 24.8 (view DEFINER berlapis tanpa wildcard).

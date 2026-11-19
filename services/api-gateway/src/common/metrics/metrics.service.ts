@@ -155,8 +155,8 @@ export class MetricsService implements OnModuleInit {
       anonymize: ['scheduled', 'skipped', 'error'],
     };
     for (const [phase, list] of Object.entries(outcomes)) for (const outcome of list) this.loyaltyExpiry.inc({ phase, outcome }, 0);
-    // G24 §16.1: label issuer = COMPANY_CODES (+ WTZ); G44 §12.1: + SMD (harus sama dengan COMPANY_CODES loyalty)
-    for (const issuer of ['EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM', 'SMD']) this.loyaltyExpiredPoints.inc({ issuer }, 0);
+    // G24 §16.1: label issuer = COMPANY_CODES (+ WTZ); G43: + IMD, CUP; G44: + SMD (harus sama dengan COMPANY_CODES loyalty)
+    for (const issuer of ['EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'IMD', 'CUP', 'FARM', 'SMD']) this.loyaltyExpiredPoints.inc({ issuer }, 0);
     this.loyaltyExpiryNoticeFailed.inc(0);
   }
 

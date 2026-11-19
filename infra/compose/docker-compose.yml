@@ -5,7 +5,9 @@
 # Profiles: core (edge, odoo, bff, web, pg, redis, mq, minio) | data (clickhouse, metabase, etl) | ai (ollama, ocr-worker)
 #           observability (prometheus, loki, promtail, grafana, uptime-kuma) | ops (alertmanager + exporter)
 #           data juga memuat insight-web + insight-web-tls (G42, dashboard staf, ADR-041)
-# Overlay opsional profil data: docker-compose.esb.yml (G41, ekstraksi ESB Core -> ClickHouse; satu-satunya egress ESB),
+# Overlay opsional profil data: docker-compose.esb.yml (G41, ekstraksi ESB Core -> ClickHouse; satu-satunya egress ESB;
+#   G43: + service sekali jalan esb-migrate di profil `migrate`). docker-compose.migration.yml (G43) = kunci bundel +
+#   direktori pertukaran ke odoo HANYA selama jendela migrasi (docs/runbooks/migrasi-esb-odoo.md).
 #   docker-compose.forecast.yml (G44, forecast-worker: baca ClickHouse, tulis Odoo lewat odoo-rpc-gateway).
 # Semua image di-pin versi. Dependabot (.github/dependabot.yml) mengusulkan bump.
 #
@@ -169,6 +171,12 @@ secrets:
   insight_session_key: { file: ../../secrets/insight_session_key.txt }
   insight_scope_key: { file: ../../secrets/insight_scope_key.txt }
   clickhouse_password_insight: { file: ../../secrets/clickhouse_password_insight.txt }
+  # G43 (docs/04 §27.2/§27.10, ADR-042): migrasi ESB -> Odoo, host:disabled di produksi (aktif hanya selama jendela
+  # migrasi). clickhouse_password_mig: clickhouse-init (base; placeholder -> user efn_mig dihapus) + esb-migrate (overlay
+  # docker-compose.esb.yml, profil migrate). migration_bundle_key: esb-migrate + odoo HANYA lewat overlay
+  # docker-compose.migration.yml. Least privilege dicek scripts/check-encryption.sh.
+  clickhouse_password_mig: { file: ../../secrets/clickhouse_password_mig.txt }
+  migration_bundle_key: { file: ../../secrets/migration_bundle_key.txt }
   # kunci aplikasi (docs/04 §2, §7.2)
   jwt_secret: { file: ../../secrets/jwt_secret.txt }
   otp_pepper: { file: ../../secrets/otp_pepper.txt }
@@ -1549,6 +1557,9 @@ services:
       # (fail closed) bila salah satu tidak terbaca, sehingga profil `data` tidak naik.
       - clickhouse_password_insight
       - insight_scope_key
+      # G43 (docs/04 §27.10): user efn_mig (role mig_rw) HANYA bila secret bukan placeholder `disabled`; selain itu
+      # clickhouse-init menghapus user (migrasi nonaktif). Jendela migrasi: isi secret di host lalu jalankan ulang init.
+      - clickhouse_password_mig
       - efn_ca_crt
     volumes:
       - ../clickhouse/clickhouse-init.sh:/efn/clickhouse-init.sh:ro
