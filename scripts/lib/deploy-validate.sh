@@ -94,6 +94,14 @@ EFN_SECURITY_CONTROLS=(RABBITMQ_STRICT_PERMISSIONS ETL_AUDIT_COPY_ENABLED ETL_LO
 # G24 (docs/04 §16.1, L-91..L-93): + WTZ (PT Wetzel's Pretzels; kios F&B, tidak di daftar QR/booking).
 EFN_ONLINE_CHANNEL_CODES=(GL PB BCR BCF WTZ)
 EFN_ONLINE_BASE_CHANNEL=GL
+# Kode PT (entitas root) docs/04 §12.1 = sumber tunggal di deploy: SAMA dengan Selection efn_core.efn_brand_code, BFF
+# COMPANY_CODES, CHECK company_code PostgreSQL platform (infra/postgres/init, terakhir 19-platform-g44.sql) dan ETL.
+# G44 (docs/04 §12.1 revisi 18 Nov 2026, §28, L-144): + SMD (PT Supermarket Demo, placeholder; nama/kode final Q-SM1).
+# SMD TIDAK punya kanal online/QR/reservasi/promo (tidak masuk daftar turunan di atas). Setiap daftar PT turunan
+# (EFN_ONLINE_CHANNEL_CODES, EFN_FNB_QR_COMPANY_CODES, EFN_BOOKING_COMPANY_CODES, EFN_PROMO_COMPANY_CODES) WAJIB
+# subset daftar ini (efn_validate_company_lists). Catatan merge G43: daftar menjadi
+# (EFN GL PB BCR BCF WTZ IMD CUP FARM SMD) bersamaan dengan CHECK PostgreSQL.
+EFN_COMPANY_CODES=(EFN GL PB BCR BCF WTZ FARM SMD)
 # Profil compose yang dikenal; production wajib memuat core,data,observability (alert/Loki/salinan audit)
 EFN_KNOWN_PROFILES=(core data ai observability ops)
 EFN_REQUIRED_PROD_PROFILES=(core data observability)
@@ -255,6 +263,23 @@ efn_validate_booking_companies() { # daftar
   done
 }
 
+# G44 (docs/04 §12.1): satu kode PT -> WAJIB di EFN_COMPANY_CODES (huruf besar, persis). rc 1 + alasan di stderr.
+efn_validate_company_code() { # kode
+  [[ "${1:-}" =~ ^[A-Z]{2,8}$ ]] || _efn_err "kode PT '${1:-}' tidak valid (huruf besar 2..8)" || return 1
+  efn_list_has "$1" "${EFN_COMPANY_CODES[@]}" \
+    || _efn_err "kode PT ${1} tidak dikenal (docs/04 §12.1: ${EFN_COMPANY_CODES[*]})" || return 1
+}
+
+# G44: konsistensi daftar PT turunan terhadap daftar entitas §12.1 (mencegah kanal/QR/booking/promo untuk kode yang
+# ditolak CHECK PostgreSQL platform). Dipanggil efn_validate_config; rc 1 bila ada kode di luar EFN_COMPANY_CODES.
+efn_validate_company_lists() {
+  local c
+  for c in "${EFN_ONLINE_CHANNEL_CODES[@]}" "${EFN_FNB_QR_COMPANY_CODES[@]}" "${EFN_BOOKING_COMPANY_CODES[@]}" \
+           "${EFN_PROMO_COMPANY_CODES[@]}"; do
+    efn_validate_company_code "$c" || return 1
+  done
+}
+
 # G20 (docs/04 §12.1): daftar kanal koma -> setiap kode WAJIB di EFN_ONLINE_CHANNEL_CODES dan unik. Dipakai
 # efn_validate_config dan scripts/deploy.sh (overlay + cek API key). rc 1 + alasan di stderr.
 efn_validate_online_channels() { # daftar
@@ -277,6 +302,7 @@ efn_validate_online_channels() { # daftar
 efn_validate_config() { # app_env
   local app_env="$1" v
   for v in "${EFN_RELEASE_CONFIG_VARS[@]}"; do efn_no_cntrl "$v" "${!v:-}" || return 1; done
+  efn_validate_company_lists || return 1   # G44: daftar PT turunan subset §12.1 (termasuk SMD)
   _efn_re() { [[ -z "${!1:-}" || "${!1}" =~ $2 ]] || _efn_err "$1 tidak valid"; }
   [[ "${ACME_EMAIL:-}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || _efn_err "ACME_EMAIL tidak valid" || return 1
   [[ "${PAYMENT_PROVIDER:-}" =~ ^(mock|disabled|xendit|midtrans)$ ]] \

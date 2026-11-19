@@ -18,8 +18,9 @@ class TestEfnBarcodeHardening(TransactionCase):
             if not nomenclature:
                 continue
             parsed = nomenclature.parse_barcode("2250")
-            parsed = parsed[0] if isinstance(parsed, list) else parsed
-            self.assertNotEqual(parsed.get("type"), "discount", company.name)
+            parsed = (parsed[0] if parsed else None) if isinstance(parsed, list) else parsed
+            # GS1 (mis. PT SMD, G44) bisa mengembalikan None/[] = tidak di-parse = bukan diskon.
+            self.assertNotEqual((parsed or {}).get("type"), "discount", company.name)
 
     def test_weighed_price_label_filter(self):
         audit = self.env.ref("efn_setup_pos.filter_pos_line_weighed_price_label")

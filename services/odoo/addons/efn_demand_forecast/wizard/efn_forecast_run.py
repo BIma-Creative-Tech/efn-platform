@@ -1,9 +1,10 @@
 from odoo import fields, models
 
 
-class EfnForecastRun(models.TransientModel):
-    _name = "efn.forecast.run"
-    _description = "EFN jalankan forecast"
+class EfnForecastRunWizard(models.TransientModel):
+    # G44: dulu `efn.forecast.run`; nama itu kini model run v2 (docs/04 §28.2, path gateway dikunci kontrak).
+    _name = "efn.forecast.run.wizard"
+    _description = "EFN jalankan forecast v1"
 
     warehouse_ids = fields.Many2many("stock.warehouse", string="Gudang", required=True)
     product_ids = fields.Many2many("product.product", string="Produk", help="Kosong = semua produk ber-reorder rule.")

@@ -5,7 +5,8 @@
 # Profiles: core (edge, odoo, bff, web, pg, redis, mq, minio) | data (clickhouse, metabase, etl) | ai (ollama, ocr-worker)
 #           observability (prometheus, loki, promtail, grafana, uptime-kuma) | ops (alertmanager + exporter)
 #           data juga memuat insight-web + insight-web-tls (G42, dashboard staf, ADR-041)
-# Overlay opsional profil data: docker-compose.esb.yml (G41, ekstraksi ESB Core -> ClickHouse; satu-satunya egress ESB).
+# Overlay opsional profil data: docker-compose.esb.yml (G41, ekstraksi ESB Core -> ClickHouse; satu-satunya egress ESB),
+#   docker-compose.forecast.yml (G44, forecast-worker: baca ClickHouse, tulis Odoo lewat odoo-rpc-gateway).
 # Semua image di-pin versi. Dependabot (.github/dependabot.yml) mengusulkan bump.
 #
 # ENKRIPSI DI SETIAP TRANSAKSI DATA (docs/04 §7, ADR-022) - gelombang 3:
@@ -87,7 +88,8 @@ networks:
   #   insight-ingress : traefik (-> insight-web-tls :3443) + blackbox-exporter (probe health) + insight-web
   #   insight-data    : insight-web <-> clickhouse (HTTPS 8443) saja
   # Traefik dan ClickHouse sengaja tidak berbagi network (edge internet-facing tidak bisa menjangkau gudang data).
-  # Subnet 172.30.7.0/24 dan 172.30.8.0/24 dipakai overlay docker-compose.esb.yml (G41).
+  # Subnet 172.30.7.0/24 dan 172.30.8.0/24 dipakai overlay docker-compose.esb.yml (G41); 172.30.11.0/24 dan
+  # 172.30.12.0/24 dipakai overlay docker-compose.forecast.yml (G44).
   insight-ingress:
     internal: true
     ipam:
@@ -157,6 +159,10 @@ secrets:
   # G41 (docs/04 §25, ADR-040): user ClickHouse efn_esb (role esb_writer). Dibuat clickhouse-init di base; dipakai service
   # esb-extract yang HANYA ada di overlay docker-compose.esb.yml (password ESB per brand juga hanya di overlay itu).
   clickhouse_password_esb: { file: ../../secrets/clickhouse_password_esb.txt }
+  # G44 (docs/04 §28.2, ADR-046): user ClickHouse efn_forecast_reader (baca view efn_forecast.* saja). Dibuat clickhouse-init
+  # di base; dipakai service forecast-worker yang HANYA ada di overlay docker-compose.forecast.yml (API key Odoo per PT +
+  # sertifikat klien mTLS juga hanya di overlay itu).
+  clickhouse_password_forecast: { file: ../../secrets/clickhouse_password_forecast.txt }
   # G42 (docs/04 §26.10, ADR-041): SSO Odoo -> insight-web, cookie sesi, tanda tangan cakupan PT (row policy
   # efn_insight_scope), user ClickHouse efn_insight. Mount least privilege dicek scripts/check-encryption.sh.
   insight_sso_key: { file: ../../secrets/insight_sso_key.txt }
@@ -1043,7 +1049,8 @@ services:
       service: odoo-ws-tls
 
   # Filter L7 BFF -> Odoo /json/2 (G17, docs/04 §10.4.1, ADR-034 Proposed; pola s3-gateway). Aturan di
-  # infra/odoo-rpc-gateway/haproxy.cfg: mTLS masuk hanya CN api-gateway, POST ke 15 path persis (G22), header allowlist,
+  # infra/odoo-rpc-gateway/haproxy.cfg: mTLS masuk hanya CN api-gateway (24 path persis) dan CN forecast-worker (G44
+  # §28.2, 5 path forecast; network forecast-rpc dari overlay docker-compose.forecast.yml), header allowlist,
   # X-Odoo-Database dipaksa; keluar mTLS verify-full ke odoo-tls (CN odoo-rpc-gateway). Tanpa label Traefik, tanpa
   # port host. Non-root (uid image haproxy), read_only, tanpa capability; PEM crt+key hanya di tmpfs /tmp.
   odoo-rpc-gateway:
@@ -1536,6 +1543,7 @@ services:
       - clickhouse_password_text2sql
       - clickhouse_password_metabase
       - clickhouse_password_esb   # G41: user efn_esb (docs/04 §25); service esb-extract di overlay docker-compose.esb.yml
+      - clickhouse_password_forecast   # G44: user efn_forecast_reader (docs/04 §28.2); forecast-worker di overlay forecast
       - text2sql_scope_key   # G38: kunci row policy cakupan PT efn_t2s (docs/04 §23.3)
       # G42 (docs/04 §26.7): user efn_insight + row policy efn_insight_scope. WAJIB di setiap env: clickhouse-init gagal
       # (fail closed) bila salah satu tidak terbaca, sehingga profil `data` tidak naik.

@@ -44,7 +44,7 @@ APP_ENV="${APP_ENV:-dev}"
 #   client : clientAuth saja (tidak punya listener jaringan)
 # Klien mTLS = Traefik, Prometheus, Grafana, Promtail, ocr-worker (ke Ollama), blackbox-exporter (probe), cAdvisor,
 # Loki (ruler -> Alertmanager), etl (-> loki-tls) dan metabase-provision (-> metabase-tls) (G13), api-gateway
-# (-> odoo-rpc-gateway) dan odoo-rpc-gateway (-> odoo-tls) (G17).
+# (-> odoo-rpc-gateway) dan odoo-rpc-gateway (-> odoo-tls) (G17), forecast-worker (-> odoo-rpc-gateway) (G44).
 # Sumber kebenaran SAN + nameConstraints intermediate. Tambah service baru = baris di sini + 2 baris `pki` di
 # scripts/secrets.list + TERBITKAN ULANG INTERMEDIATE (nameConstraints memuat daftar ini; lihat runbook internal-pki).
 PKI_SERVICES=(
@@ -76,6 +76,10 @@ PKI_SERVICES=(
   "ocr-worker|both"
   "text2sql|both"       # G38: server HTTPS 8443 (Odoo -> text2sql) + klien mTLS ke ollama-tls (docs/04 §23)
   "insight-web|server"  # G42: sidecar insight-web-tls :3443 (Traefik/blackbox -> insight-web, docs/04 §26.11)
+  # G44 (docs/04 §28.2): klien mTLS ke odoo-rpc-gateway (CN forecast-worker; haproxy.cfg acl cn_forecast). Tanpa
+  # listener. Service baru -> staging/prod: intermediate WAJIB diterbitkan ulang (runbook internal-pki#service-baru).
+  # Terbitkan/perbarui hanya leaf ini: `bash scripts/gen-pki.sh forecast-worker`.
+  "forecast-worker|client"
   "cadvisor|both"
   "docker-socket-proxy|server"
 )

@@ -3,6 +3,10 @@
  * Modul murni: tanpa I/O, aman dipakai di proxy.ts (runtime Node) maupun test.
  */
 
+/**
+ * Kode PT ber-data ESB (docs/04 §26). PT Supermarket Demo `SMD` (G44, §12.1) SENGAJA tidak di sini: bukan brand ESB, dan
+ * scope Insight supermarket memakai token `eit2`/`eis2` + `wids` (§28.11, L-162, G47) — kontrak `eit1` tidak berubah.
+ */
 export const ESB_CODES = ['BCF', 'BCR', 'CUP', 'IMD', 'PB', 'WTZ'] as const;
 export type EsbCode = (typeof ESB_CODES)[number];
 export type Role = 'user' | 'all_brands';

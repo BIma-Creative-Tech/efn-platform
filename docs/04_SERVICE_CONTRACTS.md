@@ -3023,19 +3023,19 @@ event, consumer idempoten + DLQ, PostgreSQL sumber kebenaran, ClickHouse turunan
 ### 28.1 Komponen & status
 | Komponen | Jenis | Gelombang | Status |
 |---|---|---|---|
-| Kode company `SMD` di `efn_core` + test kontrak (§12.1) | Odoo/BFF/ETL | G44 (pertama) | Belum dibangun |
-| `efn_setup_supermarket` tahap A (company, DC, kategori FEFO, nomenklatur GS1 + fallback; demo: 5 outlet + `resupply_wh_ids`) | Odoo data-only | G44 (awal, agar seed G48 jalan) | Belum dibangun |
-| `efn_assortment` (urutan 1, dependensi `efn_replenishment`) | Odoo | **G44** | Belum dibangun |
-| `efn.forecast.calendar` + perluasan `efn.forecast.season` (`efn_demand_forecast`) | Odoo | G44 | Belum dibangun |
-| `efn_replenishment` (jadwal kirim & supplier, usulan order outlet → DC, qty orderpoint DC → RFQ draft CE, approval, log bias) | Odoo | G44 | Belum dibangun |
-| `services/forecast-worker` (statsforecast, compose `efn-data`) | Python 3.12 | G44 | Belum dibangun |
+| Kode company `SMD` di `efn_core` + test kontrak (§12.1) | Odoo/BFF/ETL | G44 (pertama) | **Dibangun G44** (test lulus di container; belum diuji end-to-end) |
+| `efn_setup_supermarket` tahap A (company, DC, kategori FEFO, nomenklatur GS1 + fallback; demo: 5 outlet + `resupply_wh_ids`) | Odoo data-only | G44 (awal, agar seed G48 jalan) | **Dibangun G44** (test lulus di container; belum diuji end-to-end) |
+| `efn_assortment` (urutan 1, dependensi `efn_replenishment`) | Odoo | **G44** | **Dibangun G44** (test lulus di container; belum diuji end-to-end) |
+| `efn.forecast.calendar` + perluasan `efn.forecast.season` (`efn_demand_forecast`) | Odoo | G44 | **Dibangun G44** (test lulus di container; belum diuji end-to-end) |
+| `efn_replenishment` (jadwal kirim & supplier, usulan order outlet → DC, qty orderpoint DC → RFQ draft CE, approval, log bias) | Odoo | G44 | **Dibangun G44** (test lulus di container; belum diuji end-to-end) |
+| `services/forecast-worker` (statsforecast, compose `efn-data`) | Python 3.12 | G44 | **Dibangun G44** (test lulus di container; belum diuji end-to-end) |
 | `efn_expiry_monitor` (near-expiry, `efn.lot.markdown`, aset POS FEFO + blok kedaluwarsa, "kirim ke member" via outbox) | Odoo + POS | G45 | Belum dibangun |
 | `efn_setup_supermarket` tahap B (ambang per kategori, capability, jadwal contoh) | Odoo data-only | G45 | Belum dibangun |
 | `efn_campaign` (usulan & approval kampanye, voucher `sale_loyalty`) | Odoo | G46 | Belum dibangun |
 | BFF `src/behavior`, `src/campaign`, `src/wishlist`, `src/notification/email` | NestJS | G46 | Belum dibangun |
 | `segment-worker` (segmentasi harian; boleh image sama dengan forecast-worker, **container & kredensial terpisah**) | Python 3.12 | G46 | Belum dibangun |
 | `services/wa-unofficial` (Baileys, terisolasi) | Node 22 | G46 | Belum dibangun |
-| Mart `fact_forecast_daily`, `fact_forecast_accuracy`, `fact_replenishment`, `fact_lot_expiry`, `fact_visitor_event`, `agg_visitor_*`, `fact_campaign_result`, `fact_dc_fill_rate` | ETL/ClickHouse | G44–G47 | Belum dibangun |
+| Mart `fact_forecast_daily`, `fact_forecast_accuracy`, `fact_replenishment`, `fact_lot_expiry`, `fact_visitor_event`, `agg_visitor_*`, `fact_campaign_result`, `fact_dc_fill_rate` | ETL/ClickHouse | G44–G47 | `fact_forecast_daily` + `fact_forecast_accuracy` dibangun G44 (`ETL_ENABLE_FORECAST=false`); sisanya belum |
 | Insight persona + scope outlet (`eit2`/`eis2`) | Odoo + insight-web | G47 | Belum dibangun |
 
 ### 28.2 Kalender & forecast API (forecast-worker → Odoo)
@@ -3088,7 +3088,15 @@ Skema (JSON Schema ringkas; semua objek `additionalProperties: false`):
   [hari ini, hari ini + horizon]; `warehouse_code`/`product_id` harus milik company user (selain itu baris ditolak, bukan
   seluruh chunk — respons memuat `rejected[{index, code}]`).
 - Respons: `{ "ok": true, "run_id": "...", "chunk_no": 0, "accepted": 498, "rejected": [...], "duplicate_chunk": false }`;
-  galat validasi → `400 { "error": "<code>" }` tanpa detail internal.
+  open/close menambah `state`, `is_active`, `created`/`duplicate_close`; calendar upsert mengembalikan `accepted`,
+  `unchanged`, `skipped_manual`, `rejected`. Klien wajib mengabaikan field tambahan.
+- Galat (implementasi G44, mengikuti L-15 json2): validasi → **`422`** `efn_forecast:<code>` (daftar kode di README
+  `efn_demand_forecast`); company lain → `403 efn_forecast:company_mismatch`; bukan bot → `403 efn_forecast:access_denied`.
+  Tanpa detail internal. Worker: 422/403 tidak di-retry; 503/timeout di-retry dengan backoff.
+- `efn_forecast_run_close(status=ok)` ditolak `incomplete_run` bila ada chunk `0..chunk_total−1` yang belum diterima
+  (run tetap terbuka).
+- Wizard v1 "Hitung Forecast" berganti nama model menjadi `efn.forecast.run.wizard` (xmlid view/action tetap);
+  `efn.forecast.run` kini model run v2.
 - Run yang tidak ditutup dalam 6 jam → `failed` oleh cron Odoo; proyeksi run aktif sebelumnya tetap dipakai.
 - Worker membaca ClickHouse dengan user `efn_forecast_reader` (view whitelist `efn_forecast.*`: penjualan harian,
   snapshot stok, scrap, `dim_calendar`, master produk/gudang tanpa partner). Worker **tidak** menulis ke ClickHouse.
@@ -3100,7 +3108,11 @@ Skema (JSON Schema ringkas; semua objek `additionalProperties: false`):
 - Minggu gajian = parameter per company `efn_forecast.payday_tail_days` (default **7**) dan
   `efn_forecast.payday_head_days` (default **7**); tidak disimpan per tanggal. Weekend = Sabtu–Minggu (configurable).
 - `efn.forecast.season` (v1) mendapat tipe `payday` & `holiday` baru agar v1 tetap memakai kalender yang sama.
-- Sakelar per warehouse `efn_forecast_engine` = `v1|v2` (default `v1`, L-148).
+- Sakelar per warehouse `efn_forecast_engine` = `v1|v2` (default `v1`, L-148). Sakelar hanya memilih sumber min/max;
+  baris v2 untuk warehouse yang masih v1 disimpan sebagai `shadow` (tidak bisa diterapkan). Usulan replenishment
+  dikendalikan `efn_replenishment.enabled`, bukan sakelar ini.
+- Implementasi G44: parameter gajian = `ir.config_parameter` global `efn_forecast.payday_tail_days` /
+  `efn_forecast.payday_head_days`, dengan override opsional per company bersufiks kode (mis. `…payday_tail_days.SMD`).
 
 ### 28.4 Usulan replenishment (Odoo `efn_replenishment`)
 - Rute & orderpoint = CE standar (fit-gap S-03, S-12, S-13): outlet dipasok DC lewat `stock.warehouse.resupply_wh_ids`
@@ -3144,6 +3156,12 @@ Skema (JSON Schema ringkas; semua objek `additionalProperties: false`):
 - Override: grup *Assortment Manager*, alasan wajib, teraudit; **tidak tersedia** bila capability yang kurang adalah
   `alcohol_license` atau `non_halal_allowed` (L-150, Q-SM22; izin alkohol = fit-gap Q-SM13).
 - Parameter `efn_assortment.enforce` default **`true`** begitu modul terpasang.
+- Implementasi G44: warehouse DC ditandai `stock.warehouse.efn_is_dc`; penegakan (2) lewat hook
+  `stock.move._action_confirm` hanya untuk move dari warehouse ber-`efn_is_dc` ke warehouse lain di company yang sama.
+  Usulan DSD belum dibangun: produk DSD hanya dikeluarkan dari usulan DC dengan alasan `assortment:dsd_only`.
+- Rumus G44 (penyesuaian ADR-046 §3.4): rack cap dikurangi on-hand **dan** in-transit; pembulatan pack turun bila
+  pembulatan naik melampaui shelf/rack cap; sisa umur minimum saat terima dari `product.category.efn_min_receipt_days`
+  bila disediakan `efn_expiry_monitor` (G45), selain itu 0.
 
 ### 28.5a Near-expiry & markdown per lot (`efn_expiry_monitor`, G45) — ringkas, rinci di fit-gap §2–§3
 - `efn.expiry.alert` (lot × outlet × qty × sisa hari × status) dari cron harian; ambang per kategori

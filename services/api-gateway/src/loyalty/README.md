@@ -6,6 +6,7 @@ DDL: `infra/postgres/init/02-platform-loyalty.sql`.
 - Saldo = `SUM(delta_points)` entri dengan `expires_at IS NULL OR expires_at > now`.
 - `member_ref_hash` = member_hash (§1). `member_ref_enc` **wajib** (NOT NULL): AES-256-GCM, AAD `efn:loyalty_ledger.member_ref_enc:v1`.
 - `company_code` = PT penanggung liabilitas (CHECK EFN/GL/PB/BCR/BCF/FARM sejak G20 §12.1, + `WTZ` sejak G24 §16.1 (migrasi `13-platform-g24.sql`); kode lama RTL/FNB dihapus, migrasi `09-platform-g20.sql`), default `EFN`.
+- **G44 (docs/04 §12.1 revisi 18 Nov 2026, §28 L-144, ADR-045 Proposed):** `COMPANY_CODES` + `SMD` (PT Supermarket Demo, retail/PPN, placeholder; nama/kode final = Q-SM1), ditaruh di akhir daftar. Hanya pengenal PT untuk validasi (earn/redeem POS, akrual harian, kebijakan loyalty/MGM per PT, seri metrik `issuer`); **tidak ada fitur yang dinyalakan** untuk SMD — kebijakan loyalty/MGM SMD tidak ada sampai dipublikasikan 4-eyes, kanal online SMD belum ada. **Risiko terbuka:** CHECK `company_code`/`issuer_company_code` PostgreSQL (dan tabel MGM) belum memuat `SMD` sampai migrasi platform G44 (infra) dibuat; sebelum itu tulis ledger SMD ditolak DB (fail-closed).
 - `expires_at`: `NULL` (kebijakan kedaluwarsa belum diputuskan).
 
 ## Consumer `loyalty.earn.requested` v2 (SEC-08)

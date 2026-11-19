@@ -3,7 +3,7 @@
  *
  * ADR terkait: ADR multi-tenant by domain & unified cart lintas PT (status Proposed).
  * Tenant: `efn` (holding), `grandlucky` (PT GL), `parisbaguette` (PT PB), `bacha` (BCR butik + BCF kafe, satu domain),
- * `wetzels` (PT WTZ, G24 docs/04 §16).
+ * `wetzels` (PT WTZ, G24 docs/04 §16). PT SMD (G44, §12.1) hanya di peta PT (`COMPANIES`), bukan tenant.
  * Token visual: docs/design/brand-tokens.md.
  * Risiko dimitigasi: R-T14 (duplikasi komponen per brand) — tema hanya lewat CSS custom properties.
  *
@@ -14,7 +14,7 @@
 export type BrandId = 'efn' | 'grandlucky' | 'parisbaguette' | 'bacha' | 'wetzels';
 
 /** Kode company sesuai kontrak `res.company.efn_brand_code` (docs/04_SERVICE_CONTRACTS.md §1). */
-export type CompanyCode = 'EFN' | 'GL' | 'PB' | 'BCR' | 'BCF' | 'WTZ' | 'FARM';
+export type CompanyCode = 'EFN' | 'GL' | 'PB' | 'BCR' | 'BCF' | 'WTZ' | 'FARM' | 'SMD';
 
 /**
  * Identitas PT saja. Pajak (label, tarif, inklusif/eksklusif) TIDAK di sini — configurable,
@@ -45,6 +45,10 @@ export const COMPANIES: Record<CompanyCode, CompanyInfo> = {
   // G24 (docs/04 §16): nama badan hukum final menunggu konfirmasi klien.
   WTZ: { code: 'WTZ', displayName: "PT Wetzel's Pretzels", businessType: 'fnb', tableService: false },
   FARM: { code: 'FARM', displayName: 'FARM', businessType: null, tableService: false },
+  // G44 (docs/04 §12.1 revisi 18 Nov 2026, ADR-045 Proposed): PT Supermarket Demo, placeholder (nama/kode final Q-SM1).
+  // Odoo: retail/PPN, tetapi kanal online SMD BELUM ADA -> businessType null (tidak memenuhi syarat belanja/faktur online),
+  // tanpa tenant/domain, tanpa brand_code kanal, tanpa tema/aset brand.
+  SMD: { code: 'SMD', displayName: 'PT Supermarket Demo', businessType: null, tableService: false },
 };
 
 /** True bila semua kode PT adalah PT PPN (GL/BCR). Daftar kosong atau kode tak dikenal -> false. */

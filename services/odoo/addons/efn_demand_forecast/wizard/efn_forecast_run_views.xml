@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
+    <!-- G44: model wizard diganti nama efn.forecast.run -> efn.forecast.run.wizard (xmlid view/action tetap). -->
     <record id="efn_forecast_run_view_form" model="ir.ui.view">
-        <field name="name">efn.forecast.run.form</field>
-        <field name="model">efn.forecast.run</field>
+        <field name="name">efn.forecast.run.wizard.form</field>
+        <field name="model">efn.forecast.run.wizard</field>
         <field name="arch" type="xml">
             <form>
                 <group>
@@ -22,7 +23,7 @@
     </record>
     <record id="efn_forecast_run_action" model="ir.actions.act_window">
         <field name="name">Hitung Forecast</field>
-        <field name="res_model">efn.forecast.run</field>
+        <field name="res_model">efn.forecast.run.wizard</field>
         <field name="view_mode">form</field>
         <field name="target">new</field>
     </record>

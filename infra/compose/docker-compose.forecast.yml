@@ -1,0 +1,138 @@
+# G44 (docs/04 §28.2/§28.10, ADR-046 Proposed, K25-02, K25-06): forecast-worker (statsforecast) - membaca mart ClickHouse
+# (user efn_forecast_reader, view efn_forecast.*) dan MENULIS hasil ke Odoo hanya lewat odoo-rpc-gateway (/json/2, mTLS
+# CN forecast-worker, 5 metode allowlist #25-#29, API key user teknis efn_forecast_<pt> per PT). Tidak menulis ClickHouse.
+# Runbook: docs/runbooks/forecast-worker.md.
+#
+# Mengapa overlay (pola docker-compose.esb.yml G41), bukan service di base:
+#   - Image forecast-worker belum masuk rantai rilis bertanda tangan (IMAGE_* di deploy.yml/efn-deploy/deploy.sh,
+#     SEC-42). Di base, deploy produksi profil `data` akan menarik ghcr.io/efn/forecast-worker:dev -> gagal.
+#   - Tanpa overlay TIDAK ada service yang memegang API key Odoo forecast maupun jalur stack data -> Odoo.
+#   - K25-02: stack data bisa dipisah ke mesin lain; overlay ini memetakan jaringan untuk SATU host (dev/stg/prod
+#     lokal). Jalur antar-mesin (WireGuard ke odoo-rpc-gateway) belum dibangun, lihat runbook §7.
+#   Dev/staging lokal:
+#     docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.forecast.yml \
+#       --profile core --profile data up -d forecast-worker
+#
+# Jadwal: TIDAK ada scheduler terpisah di repo (etl/esb-extract memakai loop internal) -> forecast-worker juga loop
+# internal: `run` tidur sampai jadwal FORECAST_DAILY_CRON (default 23:30 WIB, ADR-046 §3.1), menjalankan batch, lalu
+# tidur lagi. FORECAST_ENABLED=false -> proses tetap hidup (sleep) tanpa memanggil ClickHouse/Odoo (jangan exit 0:
+# restart loop). Tanpa ofelia/cron: tidak ada container tambahan yang butuh docker.sock.
+#
+# Jaringan (least privilege, dicek scripts/check-encryption.sh):
+#   - `forecast-ch`  (internal): HANYA clickhouse <-> forecast-worker (HTTPS 8443, CA internal).
+#   - `forecast-rpc` (internal): HANYA odoo-rpc-gateway <-> forecast-worker (HTTPS 8443 mTLS).
+#   Dua network terpisah agar odoo-rpc-gateway (jalur ke ERP) tidak bisa menjangkau ClickHouse dan sebaliknya.
+#   forecast-worker TIDAK di network data/internal/egress: tanpa akses PostgreSQL, RabbitMQ, Odoo langsung, internet.
+#   (Library `holidays` dipakai offline dari paket ter-install; tidak ada unduhan saat runtime.)
+#
+# Secret (semua lewat /run/secrets, tidak ada di env):
+#   odoo_api_key_forecast_smd     host:disabled (dibuat di Odoo, runbook §3; worker menolak `disabled`)
+#   tls_forecast_worker_crt/_key  pki (gen-pki.sh profil client, CN forecast-worker)
+#   clickhouse_password_forecast  random (juga di-mount clickhouse-init di base untuk CREATE USER)
+#   efn_ca_crt                    bundle CA internal (verifikasi ClickHouse & odoo-rpc-gateway)
+services:
+  forecast-worker:
+    image: ${IMAGE_FORECAST_WORKER:-ghcr.io/efn/forecast-worker:dev}
+    build:
+      context: ../../services/forecast-worker
+    profiles: ["data"]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+        labels: "service"
+    security_opt:
+      - no-new-privileges:true
+    # Tidak depends_on odoo-rpc-gateway: gateway berprofil core (mungkin tidak aktif / di mesin lain, K25-02). Worker
+    # wajib retry/backoff bila gateway belum siap; ClickHouse harus sudah punya user efn_forecast_reader.
+    depends_on:
+      clickhouse-init:
+        condition: service_completed_successfully
+    # Non-root eksplisit (nobody). Kode di image milik root dan hanya dibaca; tulisan hanya ke tmpfs /tmp.
+    user: "65534:65534"
+    command: ["python", "-m", "efn_forecast", "run", "--company", "SMD"]
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      # Kill switch §28.10 (default false di SEMUA env; production boleh true setelah backtest G44 lulus + user teknis
+      # per PT dibuat). Dicek check-encryption render prod-forecast.
+      FORECAST_ENABLED: ${FORECAST_ENABLED:-false}
+      # Jadwal batch harian (cron 5 kolom, zona FORECAST_TZ). ADR-046 §3.1: setelah tutup toko, selesai sebelum cut-off.
+      FORECAST_DAILY_CRON: ${FORECAST_DAILY_CRON:-30 23 * * *}
+      FORECAST_TZ: ${FORECAST_TZ:-Asia/Jakarta}
+      FORECAST_HORIZON_DAYS: ${FORECAST_HORIZON_DAYS:-28}
+      # <= 500 baris per panggilan (§28.2; gateway menolak body > 512 KiB)
+      FORECAST_CHUNK_SIZE: ${FORECAST_CHUNK_SIZE:-500}
+      # Odoo /json/2 HANYA lewat filter (bukan odoo:8443 langsung; odoo-tls tidak mengizinkan CN forecast-worker).
+      # Nama host = SAN sertifikat gateway; antar-mesin tetap nama ini (extra_hosts/WireGuard, runbook §7).
+      ODOO_RPC_URL: https://odoo-rpc-gateway:8443
+      ODOO_RPC_CA_FILE: /run/secrets/efn_ca_crt
+      ODOO_RPC_CLIENT_CERT_FILE: /run/secrets/tls_forecast_worker_crt
+      ODOO_RPC_CLIENT_KEY_FILE: /run/secrets/tls_forecast_worker_key
+      # < timeout server gateway 30 s
+      ODOO_RPC_TIMEOUT_SECONDS: ${FORECAST_ODOO_RPC_TIMEOUT_SECONDS:-25}
+      # Satu key = satu user teknis efn_forecast_<pt> = satu company (§28.2). PT baru = secret + env + mount baru.
+      ODOO_API_KEY_FORECAST_SMD_FILE: /run/secrets/odoo_api_key_forecast_smd
+      # ClickHouse HTTPS 8443, CA internal, user efn_forecast_reader (SELECT efn_forecast.* saja; tanpa INSERT).
+      CH_HOST: clickhouse
+      CH_PORT: "8443"
+      CH_SECURE: "true"
+      CH_CA_FILE: /run/secrets/efn_ca_crt
+      CH_DATABASE: efn_forecast
+      CH_USER: efn_forecast_reader
+      CH_PASSWORD_FILE: /run/secrets/clickhouse_password_forecast
+      # Rootfs read-only: cache JIT numba (statsforecast) & cache lain ke tmpfs.
+      NUMBA_CACHE_DIR: /tmp/numba
+      XDG_CACHE_HOME: /tmp/.cache
+      HOME: /tmp
+    secrets:
+      - odoo_api_key_forecast_smd
+      - tls_forecast_worker_crt
+      - tls_forecast_worker_key
+      - clickhouse_password_forecast
+      - efn_ca_crt
+    networks: [forecast-ch, forecast-rpc]
+    read_only: true
+    # tmpfs dihitung ke batas memori cgroup -> dibatasi.
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        # K25-06: kecil. ADR-046 §4.2: RAM ±1-2 GB saat batch (2.400 seri simulasi). Dev/staging boleh menurunkan lewat
+        # .env (FORECAST_MEMORY_LIMIT=768M dengan data demo kecil); naikkan bila OOM (runbook §6). Tinjau ulang ADR-046 §7
+        # bila > 4 GB.
+        limits: { cpus: "${FORECAST_CPUS:-2}", memory: "${FORECAST_MEMORY_LIMIT:-1536M}" }
+    # Tanpa port HTTP (pola etl/esb-extract): healthcheck hanya memastikan proses utama hidup. Hasil run dipantau di
+    # Odoo (efn.forecast.run: ok/failed; run tak ditutup 6 jam -> failed oleh cron Odoo), runbook §5.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    labels:
+      service: forecast-worker
+
+  # Daftar network digabung (union) dengan base; sertifikat tls_clickhouse / tls_odoo_rpc_gateway ber-SAN nama service,
+  # berlaku di network mana pun.
+  clickhouse:
+    networks: [data, insight-data, forecast-ch]
+  odoo-rpc-gateway:
+    networks: [internal, forecast-rpc]
+
+networks:
+  forecast-ch:     # hanya clickhouse <-> forecast-worker (dicek scripts/check-encryption.sh)
+    internal: true
+    ipam:
+      config: [{ subnet: 172.30.11.0/24 }]
+  forecast-rpc:    # hanya odoo-rpc-gateway <-> forecast-worker (dicek scripts/check-encryption.sh)
+    internal: true
+    ipam:
+      config: [{ subnet: 172.30.12.0/24 }]
+
+secrets:
+  odoo_api_key_forecast_smd: { file: ../../secrets/odoo_api_key_forecast_smd.txt }
+  tls_forecast_worker_crt: { file: ../../secrets/tls_forecast_worker_crt.txt }
+  tls_forecast_worker_key: { file: ../../secrets/tls_forecast_worker_key.txt }

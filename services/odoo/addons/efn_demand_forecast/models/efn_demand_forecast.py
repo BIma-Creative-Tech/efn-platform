@@ -15,9 +15,15 @@ import math
 from datetime import timedelta
 
 from odoo import _, api, fields, models
-from odoo.exceptions import UserError
+from odoo.exceptions import AccessError, UserError
+
+from . import forecast_api as fa
 
 Z_BY_SERVICE = {"90": 1.28, "95": 1.65, "98": 2.05, "99": 2.33}
+# SEC-212: hanya ditulis lewat aksi/RPC internal (sudo setelah cek), tidak lewat write/RPC user stok.
+PROTECTED_FIELDS = frozenset(
+    {"state", "source", "forecast_run_id", "approved_by_id", "approved_at", "v2_service_level"}
+)
 
 
 class EfnDemandForecast(models.Model):
@@ -52,17 +58,47 @@ class EfnDemandForecast(models.Model):
     approved_max = fields.Float(string="Max disetujui")
     orderpoint_id = fields.Many2one("stock.warehouse.orderpoint", readonly=True, check_company=True)
     state = fields.Selection(
-        [("draft", "Usulan"), ("applied", "Diterapkan"), ("rejected", "Ditolak"), ("superseded", "Digantikan")],
+        [
+            ("draft", "Usulan"),
+            ("applied", "Diterapkan"),
+            ("rejected", "Ditolak"),
+            ("superseded", "Digantikan"),
+            # G44 (L-148): usulan v2 untuk gudang yang masih memakai engine v1 -> hanya pembanding, tidak bisa
+            # diterapkan.
+            ("shadow", "Pembanding v2"),
+        ],
         default="draft",
         tracking=True,
     )
     approved_by_id = fields.Many2one("res.users", readonly=True)
     approved_at = fields.Datetime(readonly=True)
+    # G44 (docs/04 §28.2 efn_minmax_ingest, ADR-046 §3.4 keluaran 1): sumber usulan v1 (cron Odoo) / v2 (worker).
+    source = fields.Selection([("v1", "v1 (Odoo)"), ("v2", "v2 (forecast-worker)")], default="v1", readonly=True)
+    forecast_run_id = fields.Many2one("efn.forecast.run", string="Run v2", readonly=True, index="btree_not_null")
+    v2_service_level = fields.Float(string="Service level v2", readonly=True, digits=(4, 3))
 
     @api.depends("warehouse_id", "product_id", "date")
     def _compute_name(self):
         for rec in self:
             rec.name = f"{rec.warehouse_id.code or '?'} / {rec.product_id.display_name or '?'} / {rec.date or ''}"
+
+    # ------------------------------------------------------------------ proteksi (SEC-212)
+    @api.model_create_multi
+    def create(self, vals_list):
+        if not self.env.su:
+            for vals in vals_list:
+                touched = set(vals) & PROTECTED_FIELDS
+                neutral = {"state": "draft", "source": "v1"}
+                if any(vals[name] not in (neutral.get(name), False, None) for name in touched):
+                    raise AccessError(_("efn_demand_forecast:readonly — status/sumber usulan diatur sistem."))
+        return super().create(vals_list)
+
+    def write(self, vals):
+        """Status, sumber, run v2, dan penyetuju hanya berubah lewat aksi (sudo setelah cek); shadow tidak bisa
+        dihidupkan menjadi draft lewat write/RPC (L-148)."""
+        if not self.env.su and set(vals) & PROTECTED_FIELDS:
+            raise AccessError(_("efn_demand_forecast:readonly — status/sumber usulan hanya berubah lewat tombol."))
+        return super().write(vals)
 
     # ------------------------------------------------------------------ perhitungan
     @api.model
@@ -90,7 +126,10 @@ class EfnDemandForecast(models.Model):
     def _efn_compute(self):
         Season = self.env["efn.forecast.season"]
         for rec in self:
-            seasons = Season.search(["|", ("company_id", "=", False), ("company_id", "=", rec.company_id.id)])
+            # G44: with_company -> musim payday/holiday global memakai parameter & kalender PT gudang.
+            seasons = Season.with_company(rec.company_id).search(
+                ["|", ("company_id", "=", False), ("company_id", "=", rec.company_id.id)]
+            )
             end = rec.date - timedelta(days=1)
             start = end - timedelta(days=max(rec.history_days, 7) - 1)
             outflow = rec._efn_daily_outflow(rec.warehouse_id, rec.product_id, start, end)
@@ -181,7 +220,7 @@ class EfnDemandForecast(models.Model):
                     )
                 )
             op.efn_forecast_id = rec.id
-            rec.write(
+            rec.sudo().write(
                 {
                     "state": "applied",
                     "orderpoint_id": op.id,
@@ -202,7 +241,7 @@ class EfnDemandForecast(models.Model):
     def action_efn_reject(self):
         self._efn_check_planner()
         self.check_access("write")
-        self.filtered(lambda r: r.state == "draft").write({"state": "rejected"})
+        self.filtered(lambda r: r.state == "draft").sudo().write({"state": "rejected"})
 
     def action_efn_recompute(self):
         self.check_access("write")
@@ -220,9 +259,10 @@ class EfnDemandForecast(models.Model):
                 ops = self.env["stock.warehouse.orderpoint"].search([("warehouse_id", "=", warehouse.id)])
                 prods = ops.product_id
             for product in prods:
+                # sudo hanya untuk transisi status (SEC-212); pencarian tetap dengan hak user (record rule).
                 self.search(
                     [("warehouse_id", "=", warehouse.id), ("product_id", "=", product.id), ("state", "=", "draft")]
-                ).write({"state": "superseded"})
+                ).sudo().write({"state": "superseded"})
                 created |= self.create(
                     dict(params, company_id=warehouse.company_id.id, warehouse_id=warehouse.id, product_id=product.id)
                 )
@@ -231,6 +271,141 @@ class EfnDemandForecast(models.Model):
 
     @api.model
     def _cron_efn_weekly(self):
-        """Cron mingguan: usulan baru untuk semua orderpoint gudang yang ditandai ikut forecast."""
-        for warehouse in self.env["stock.warehouse"].sudo().search([("efn_forecast_enabled", "=", True)]):
+        """Cron mingguan: usulan baru untuk semua orderpoint gudang yang ditandai ikut forecast.
+
+        G44 (L-148): gudang dengan ``efn_forecast_engine = v2`` dilewati (min/max datang dari forecast-worker)."""
+        for warehouse in self.env["stock.warehouse"].sudo().search(
+            [("efn_forecast_enabled", "=", True), ("efn_forecast_engine", "!=", "v2")]
+        ):
             self.sudo().with_company(warehouse.company_id)._efn_generate(warehouse)
+
+
+class EfnDemandForecastLine(models.Model):
+    """Baris min/max v2 mentah dari forecast-worker (G44, docs/04 §28.2 ``efn.demand.forecast.line``).
+
+    Satu baris per (run, gudang, produk) = jejak apa yang dikirim worker; setiap baris yang diterima membuat satu
+    usulan ``efn.demand.forecast`` (``source = v2``) yang disetujui planner dengan alur v1 yang sama. Hanya ditulis RPC
+    user teknis (sudo setelah cek pemanggil)."""
+
+    _name = "efn.demand.forecast.line"
+    _description = "EFN baris min/max forecast v2 (worker)"
+    _order = "id desc"
+    _check_company_auto = True
+
+    run_id = fields.Many2one("efn.forecast.run", required=True, ondelete="cascade", index=True, readonly=True)
+    company_id = fields.Many2one("res.company", required=True, index=True, readonly=True)
+    warehouse_id = fields.Many2one("stock.warehouse", required=True, check_company=True, readonly=True)
+    product_id = fields.Many2one("product.product", required=True, readonly=True, ondelete="cascade")
+    min_qty = fields.Float(readonly=True)
+    max_qty = fields.Float(readonly=True)
+    service_level = fields.Float(readonly=True, digits=(4, 3))
+    basis_daily_demand = fields.Float(readonly=True, digits=(16, 3))
+    forecast_id = fields.Many2one("efn.demand.forecast", string="Usulan", readonly=True, ondelete="set null")
+
+    _efn_minmax_key_uniq = models.Constraint(
+        "UNIQUE(run_id, warehouse_id, product_id)", "Baris min/max (run, gudang, produk) sudah ada."
+    )
+
+    @api.model
+    def efn_minmax_ingest(self, **payload):
+        """docs/04 §28.2 ``efn_minmax_ingest`` (keluaran 1). Idempoten ``(run_id, chunk_no)``; baris tidak valid
+        ditolak per baris.
+
+        Gudang engine ``v2`` -> usulan ``draft`` (menggantikan draft lama pasangan itu, disetujui planner seperti v1);
+        gudang engine ``v1`` -> ``shadow`` (pembanding, tidak bisa diterapkan; L-148)."""
+        env, company = fa.check_caller(self.env)
+        Chunk = env["efn.forecast.chunk"]
+        run, existing, lines = Chunk._efn_begin_chunk(env, company, payload, "weekly_minmax")
+        if existing:
+            return Chunk._efn_duplicate_response(run, existing)
+        warehouses, products = Chunk._efn_scope(env, company, lines)
+        Forecast = env["efn.demand.forecast"]
+        today = fa.local_today(env)
+        stored = {
+            (rec.warehouse_id.id, rec.product_id.id)
+            for rec in env["efn.demand.forecast.line"].search([("run_id", "=", run.id)])
+        }
+        cap = fa.max_qty(env)
+        rejected, seen, to_create = [], set(), []
+        for index, line in enumerate(lines):
+            code = self._efn_validate_minmax_line(line, warehouses, products, cap=cap)
+            if code is None:
+                key = (warehouses[line["warehouse_code"]].id, line["product_id"])
+                if key in seen or key in stored:
+                    code = "duplicate_line"
+            if code:
+                rejected.append({"index": index, "code": code})
+                continue
+            seen.add(key)
+            to_create.append(line)
+        product_ids = list({line["product_id"] for line in to_create})
+        product_map = {p.id: p for p in env["product.product"].with_context(active_test=False).browse(product_ids)}
+        created = Forecast.browse()
+        for line in to_create:
+            wh = warehouses[line["warehouse_code"]]
+            product = product_map[line["product_id"]]
+            is_v2 = wh.efn_forecast_engine == "v2"
+            old_states = ("draft", "shadow") if is_v2 else ("shadow",)
+            Forecast.search(
+                [("warehouse_id", "=", wh.id), ("product_id", "=", product.id), ("state", "in", old_states)]
+            ).write({"state": "superseded"})
+            level = float(line["service_level"])
+            key = min(Z_BY_SERVICE, key=lambda k: abs(int(k) / 100.0 - level))
+            vals = {
+                "company_id": company.id,
+                "warehouse_id": wh.id,
+                "product_id": product.id,
+                "date": today,
+                "source": "v2",
+                "forecast_run_id": run.id,
+                "state": "draft" if is_v2 else "shadow",
+                "service_level": key,
+                "v2_service_level": level,
+                "base_daily": float(line["basis_daily_demand"]),
+                "forecast_daily": float(line["basis_daily_demand"]),
+                "season_factor": 1.0,
+                "proposed_min": float(line["min_qty"]),
+                "proposed_max": float(line["max_qty"]),
+                "approved_min": float(line["min_qty"]),
+                "approved_max": float(line["max_qty"]),
+            }
+            rec = Forecast.create(vals)
+            op = rec._efn_orderpoint()
+            if op:
+                rec.write(
+                    {"orderpoint_id": op.id, "current_min": op.product_min_qty, "current_max": op.product_max_qty}
+                )
+            env["efn.demand.forecast.line"].create(
+                {
+                    "run_id": run.id,
+                    "company_id": company.id,
+                    "warehouse_id": wh.id,
+                    "product_id": product.id,
+                    "min_qty": float(line["min_qty"]),
+                    "max_qty": float(line["max_qty"]),
+                    "service_level": level,
+                    "basis_daily_demand": float(line["basis_daily_demand"]),
+                    "forecast_id": rec.id,
+                }
+            )
+            created |= rec
+        return Chunk._efn_finish_chunk(env, run, payload["chunk_no"], len(created), rejected)
+
+    @api.model
+    def _efn_validate_minmax_line(self, line, warehouses, products, cap=None):
+        keys = {"warehouse_code", "product_id", "min_qty", "max_qty", "service_level", "basis_daily_demand"}
+        if not isinstance(line, dict) or set(line) != keys:
+            return "invalid_line"
+        if not isinstance(line["warehouse_code"], str) or line["warehouse_code"] not in warehouses:
+            return "unknown_warehouse"
+        if not fa.is_int(line["product_id"]) or line["product_id"] not in products:
+            return "unknown_product"
+        if not all(fa.is_number(line[k]) for k in ("min_qty", "max_qty", "service_level", "basis_daily_demand")):
+            return "invalid_number"
+        if cap is not None and any(float(line[k]) > cap for k in ("min_qty", "max_qty", "basis_daily_demand")):
+            return "value_too_large"
+        if float(line["max_qty"]) < float(line["min_qty"]):
+            return "invalid_minmax"
+        if not 0.5 <= float(line["service_level"]) < 1.0:
+            return "invalid_service_level"
+        return None

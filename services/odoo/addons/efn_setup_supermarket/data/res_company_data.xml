@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- EFN Setup Supermarket — tahap A (G44; docs/04 §28.1; fit-gap G45 S-01). ADR-045 (Proposed), ADR-001.
+     noupdate="1": dimuat SEKALI saat install; nama legal, NPWP, alamat, nomenklatur yang diubah pengguna lewat UI
+     tidak ditimpa saat upgrade. <function> di blok noupdate hanya jalan saat install.
+
+     SEMUA identitas di bawah adalah PLACEHOLDER JELAS FIKTIF sampai klien menjawab Q-SM1 (kode, nama legal, NPWP,
+     status PKP) dan Q-SM2 (alamat):
+       - NPWP "0000000000000000" (16 nol) = nilai fiktif; lolos validasi format base_vat check_vat_id 19.0 (16 digit
+         berawalan 0 -> Luhn atas 9 digit nol) [V source, belum diuji runtime]. JANGAN dipakai untuk e-Faktur/Coretax.
+       - Alamat "Jl. Contoh Fiktif" + kode pos 00000.
+     Pola sama dengan efn_setup_company: company ROOT (tanpa parent_id/Branches), IDR, CoA l10n_id lewat try_loading,
+     vat_check_vies=False (R3 no-egress), label pajak berbahasa Indonesia, pembulatan per dokumen.
+     efn_business_type TIDAK diisi: compute stored dari efn_brand_code (efn_core; SMD -> retail, ditambahkan engineer).
+     R-L14: struktur DC di PT yang sama menunggu konfirmasi konsultan pajak (Q-SM5) & Legal (Q-SM20). -->
+<odoo noupdate="1">
+
+    <record id="company_smd" model="res.company">
+        <field name="name">PT Supermarket Demo (PLACEHOLDER nama legal)</field>
+        <field name="sequence">20</field>
+        <field name="efn_brand_code">SMD</field>
+        <field name="country_id" ref="base.id"/>
+        <field name="currency_id" ref="base.IDR"/>
+        <!-- R3: validasi VIES (EU) tidak relevan untuk NPWP dan butuh egress internet. -->
+        <field name="vat_check_vies" eval="False"/>
+        <field name="street">Jl. Contoh Fiktif No. 1 (PLACEHOLDER alamat, Q-SM2)</field>
+        <field name="city">Jakarta Pusat</field>
+        <field name="state_id" ref="base.state_id_jk"/>
+        <field name="zip">00000</field>
+        <field name="vat">0000000000000000</field>
+    </record>
+
+    <!-- Admin boleh berpindah ke PT Supermarket Demo (user lain diatur per peran, efn_setup_role). -->
+    <record id="base.user_admin" model="res.users">
+        <field name="company_ids" eval="[(4, ref('company_smd'))]"/>
+    </record>
+
+    <!-- Fiscal localization Indonesia (template 'id' dari l10n_id). Company dikirim sebagai RECORDSET (lihat catatan
+         Gelombang 9 di efn_setup_company/data/res_company_data.xml). Template memberi PPN tax_ST4 "12% (Non-Luxury
+         Good)" = 12% x DPP 11/12 (efektif 11%) sebagai pajak penjualan default. Tarif = PLACEHOLDER (Q-SM5, R-L03).
+         Barang kebutuhan pokok bebas PPN -> tax_ST2 per produk/kategori; daftar = keputusan konsultan pajak.
+         PB1/PBJT (pajak daerah) TIDAK dikonfigurasi: hanya relevan bila outlet punya deli/kafe makan di tempat. -->
+    <function model="account.chart.template" name="try_loading"
+              eval="[[], 'id', obj().env['res.company'].browse(ref('company_smd'))]"/>
+
+    <!-- Label pajak ke pelanggan (pola efn_setup_company/data/account_tax_label_data.xml, G17-QA-04, ADR-027).
+         xmlid pajak/grup per company = account.<company_id>_<xmlid template>. -->
+    <function model="account.tax" name="write"
+              eval="[[ref('account.%d_%s' % (ref('company_smd'), t)) for t in ('tax_ST4', 'tax_ST5')], {'invoice_label': 'PPN 11%'}]"/>
+    <function model="account.tax" name="write"
+              eval="[[ref('account.%d_%s' % (ref('company_smd'), t)) for t in ('tax_ST3', 'tax_ST6')], {'invoice_label': 'PPN 12%'}]"/>
+    <function model="account.tax" name="write"
+              eval="[[ref('account.%d_%s' % (ref('company_smd'), t)) for t in ('tax_luxury_sales', 'tax_luxury_sales_pemungut_ppn')], {'invoice_label': 'PPnBM 20%'}]"/>
+    <function model="account.tax" name="write"
+              eval="[[ref('account.%d_%s' % (ref('company_smd'), t)) for t in ('tax_ST0', 'tax_ST7')], {'invoice_label': 'PPN 0%'}]"/>
+    <function model="account.tax" name="write"
+              eval="[[ref('account.%d_tax_ST2' % ref('company_smd'))], {'invoice_label': 'Bebas PPN'}]"/>
+    <function model="account.tax.group" name="write"
+              eval="[[ref('account.%d_l10n_id_tax_group_non_luxury_goods' % ref('company_smd'))], {'name': 'PPN 11%'}]"/>
+    <function model="account.tax.group" name="write"
+              eval="[[ref('account.%d_l10n_id_tax_group_luxury_goods' % ref('company_smd'))], {'name': 'PPN 12%'}]"/>
+    <function model="account.tax.group" name="write"
+              eval="[[ref('account.%d_l10n_id_tax_group_stlg' % ref('company_smd'))], {'name': 'PPnBM'}]"/>
+    <function model="account.tax.group" name="write"
+              eval="[[ref('account.%d_l10n_id_tax_group_0' % ref('company_smd'))], {'name': 'PPN 0%'}]"/>
+    <function model="account.tax.group" name="write"
+              eval="[[ref('account.%d_l10n_id_tax_group_exempt' % ref('company_smd'))], {'name': 'Bebas PPN'}]"/>
+    <function model="account.tax.group" name="write"
+              eval="[[ref('account.%d_default_tax_group' % ref('company_smd'))], {'name': 'Pajak'}]"/>
+
+    <!-- 18-6: pembulatan pajak per dokumen, eksplisit (pola account_tax_rounding_data.xml). -->
+    <function model="res.company" name="write"
+              eval="[[ref('company_smd')], {'tax_calculation_rounding_method': 'round_globally'}]"/>
+
+    <!-- Nomenklatur barcode (fit-gap G45 §0 butir 1, §2 butir 2):
+         - company = GS1 (barcodes_gs1_nomenclature.default_gs1_nomenclature): lot (AI 10) dari label GS1-128 /
+           DataBar Expanded langsung terpasang ke baris POS tanpa popup; qty dari AI 310y bila UoM produk = kg.
+         - pos.config.fallback_nomenclature_id = EFN Retail (IDR) untuk EAN-13 biasa, label harga 23 & berat 21.
+           Diterapkan sebagai ir.default BERCAKUPAN COMPANY SMD: berlaku untuk pos.config BARU yang dibuat saat
+           company aktif = SMD (ir.default._get_model_defaults memakai env.company [V]). Config yang dibuat lewat RPC
+           dengan env.company lain harus mengisi field ini eksplisit (README checklist).
+         PERINGATAN (fit-gap §2 "Risiko nomenklatur GS1 sebagai primer"): EAN-13 berawalan 13/15/17 bisa terbaca
+         sebagai AI tanggal; tanggal tidak valid melempar Error biasa (BUKAN GS1BarcodeError) -> TIDAK jatuh ke fallback
+         dan pindaian gagal. Seed G48 menghindari prefiks itu; katalog nyata WAJIB diuji (Q-SM3) sebelum pilot. Bila uji
+         gagal: ganti nomenklatur company ke "EFN Retail (IDR)" lewat Point of Sale -> Settings -> Barcodes (noupdate,
+         tidak ditimpa upgrade) dan lot fresh mengandalkan FEFO otomatis efn_expiry_monitor (G45). -->
+    <record id="company_smd" model="res.company">
+        <field name="nomenclature_id" ref="barcodes_gs1_nomenclature.default_gs1_nomenclature"/>
+    </record>
+    <function model="ir.default" name="set"
+              eval="['pos.config', 'fallback_nomenclature_id', ref('efn_setup_pos.barcode_nomenclature_efn_retail'), False, ref('company_smd')]"/>
+</odoo>

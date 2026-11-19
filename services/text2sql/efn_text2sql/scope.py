@@ -14,7 +14,8 @@ import hashlib
 import re
 from dataclasses import dataclass
 
-COMPANY_CODES = frozenset({"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "FARM"})
+# docs/04 §12.1 (+ G44 revisi 18 Nov 2026: SMD = PT Supermarket Demo; Odoo efn_data_ask juga mengirim SMD).
+COMPANY_CODES = frozenset({"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "FARM", "SMD"})
 MAX_COMPANIES = 32
 _CODE_RE = re.compile(r"^[A-Z]{2,8}$")
 

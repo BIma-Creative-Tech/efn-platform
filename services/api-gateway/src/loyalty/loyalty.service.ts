@@ -9,8 +9,12 @@ import { isMemberHash, memberHash } from '../common/pii/pii';
  * PT Paris Baguette `PB` (dulu `FNB`), Bacha Coffee Retail `BCR`, Bacha Coffee F&B `BCF`, `FARM`. Kode lama `RTL`/`FNB`
  * DIHAPUS (tidak ada alias) — CHECK PostgreSQL ikut diganti di `infra/postgres/init/09-platform-g20.sql`.
  * G24 (docs/04 §16.1, L-91): + PT Wetzel's Pretzels `WTZ` (fnb) — CHECK diperluas `13-platform-g24.sql`.
+ * G44 (docs/04 §12.1 revisi 18 Nov 2026, §28 L-144, ADR-045 Proposed): + PT Supermarket Demo `SMD` (retail, PPN;
+ * placeholder, nama/kode final = Q-SM1). Hanya pengenal PT yang diterima (validasi); tidak ada kanal online, kebijakan
+ * loyalty, atau MGM yang aktif untuk SMD sampai dikonfigurasi eksplisit. CHECK PostgreSQL wajib diperluas lewat migrasi
+ * platform G44 (infra, di luar file ini). Ditaruh di akhir daftar agar rekonsiliasi dengan G43 (IMD/CUP) minimal.
  */
-export const COMPANY_CODES = ['EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM'] as const;
+export const COMPANY_CODES = ['EFN', 'GL', 'PB', 'BCR', 'BCF', 'WTZ', 'FARM', 'SMD'] as const;
 export type CompanyCode = (typeof COMPANY_CODES)[number];
 
 export function isCompanyCode(v: unknown): v is CompanyCode {

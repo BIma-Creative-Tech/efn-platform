@@ -397,3 +397,29 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS efn_etl_mrp_production_write_date_id_idx
 \else
 \echo 'efn_ck_production belum terpasang: grant G32 waste/yield dilewati'
 \endif
+
+-- ============================================================================================================
+-- Gelombang 44 (efn-data-ai-engineer): mart forecast supermarket (services/etl/efn_etl/forecast.py, ADR-046, §28.1).
+--     Kolom = model v2 efn_demand_forecast G44 (efn_forecast_run.run_id = UUID worker, Char). Tanpa kolom pelaku
+--     (create_uid/write_uid), tanpa partner. Bersyarat (psql \if): dilewati bila tabel v2 belum ada.
+--     ETL membaca hanya bila ETL_ENABLE_FORECAST=true.
+GRANT SELECT (code) ON public.stock_warehouse TO efn_etl;
+GRANT SELECT (company_id, active, write_date) ON public.stock_warehouse TO efn_etl;
+SELECT to_regclass('public.efn_forecast_daily') IS NOT NULL
+   AND to_regclass('public.efn_forecast_calendar') IS NOT NULL
+   AND EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'efn_forecast_run' AND column_name = 'generated_at')
+   AS efn_g44_forecast \gset
+\if :efn_g44_forecast
+GRANT SELECT (id, company_id, warehouse_id, date, kind, name, source, active, write_date)
+    ON public.efn_forecast_calendar TO efn_etl;
+GRANT SELECT (id, run_id, company_id, kind, model_version, state, generated_at, write_date)
+    ON public.efn_forecast_run TO efn_etl;
+GRANT SELECT (id, run_id, company_id, warehouse_id, product_id, date, yhat, p10, p90, sigma, model, write_date)
+    ON public.efn_forecast_daily TO efn_etl;
+-- Index cursor (R-O03): ±67 rb baris/hari (2.400 seri x 28 hari), produksi bisa > 1 jt.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS efn_etl_efn_forecast_daily_write_date_id_idx
+    ON public.efn_forecast_daily (write_date, id);
+\else
+\echo 'model v2 efn_demand_forecast belum terpasang: grant G44 forecast dilewati'
+\endif
