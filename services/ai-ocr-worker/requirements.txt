@@ -1,14 +1,14 @@
 # Runtime OCR worker (Python 3.12). Versi di-pin; diaudit pip-audit di CI.
-pika==1.3.2
-psycopg[binary]==3.2.3
-minio==7.2.12
+pika==1.4.4
+psycopg[binary]==3.3.9
+minio==7.2.20
 requests==2.34.2
 # Dipakai langsung untuk http_client MinIO (TLS + CA internal); kompatibel minio 7.2 & requests 2.34 (pip-audit 2026-10: urllib3 < 2.8 rentan).
 urllib3==2.8.0
 Pillow==13.0.0
-ImageHash==4.3.1
-rapidfuzz==3.10.1
+ImageHash==4.3.2
+rapidfuzz==3.14.6
 pytesseract==0.3.13
 # >= 0.17.0 wajib: start_http_server(certfile=, keyfile=) untuk endpoint metrik HTTPS.
-prometheus-client==0.21.1
+prometheus-client==0.26.0
 # PaddleOCR TIDAK dipasang default (lihat README: image ~1 GB, unduh model saat runtime).
