@@ -1,6 +1,6 @@
 # esb-migrate (G43, docs/04 §27.2): Python 3.12. Versi di-pin; diaudit pip-audit di CI.
 # clickhouse-connect = versi sama dengan services/esb-extract/requirements.txt (image dasar esb-migrate).
-clickhouse-connect==0.8.9
+clickhouse-connect==1.12.0
 certifi==2026.10.19
 # AES-256-GCM + HKDF bundel (§27.3). API yang dipakai (AESGCM, HKDF) stabil sejak 2.x; importer Odoo memakai
 # cryptography bawaan image Odoo. Versi pin wajib lolos pip-audit CI (naikkan bila ada advisori).
